@@ -53,9 +53,7 @@ async def hist_back(callback: CallbackQuery, state: FSMContext):
     await show_history_list(callback, state, data.get("history_page", 0))
 
 
-@router.callback_query(F.data.startswith("hist:item:"))
-async def hist_item(callback: CallbackQuery, state: FSMContext):
-    workout_id = int(callback.data.split(":")[2])
+async def show_history_item(callback: CallbackQuery, workout_id: int):
     workout = await db.get_workout(workout_id)
     user = await db.get_user(callback.from_user.id)
     blocks = await view_builder.build_block_views(workout_id, user["e1rm_formula"])
@@ -66,6 +64,20 @@ async def hist_item(callback: CallbackQuery, state: FSMContext):
         hide_warmups=bool(user["hide_warmups"]), show_extra_stats=bool(user["show_extra_stats"]),
     )
     await callback.message.edit_text(text, reply_markup=keyboards.history_item_keyboard(workout_id))
+
+
+@router.callback_query(F.data.startswith("hist:item:"))
+async def hist_item(callback: CallbackQuery, state: FSMContext):
+    workout_id = int(callback.data.split(":")[2])
+    await show_history_item(callback, workout_id)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("hist:edit:"))
+async def hist_edit(callback: CallbackQuery, state: FSMContext):
+    workout_id = int(callback.data.split(":")[2])
+    from handlers.edit_workout import show_edit_screen
+    await show_edit_screen(callback, state, workout_id)
     await callback.answer()
 
 

@@ -12,6 +12,7 @@ def main_menu(has_active_workout: bool) -> InlineKeyboardMarkup:
         b.button(text="▶️ Продолжить тренировку", callback_data="menu:resume_workout")
     else:
         b.button(text="🏋️ Начать тренировку", callback_data="menu:start_workout")
+    b.button(text="➕ Прошлая тренировка", callback_data="menu:backfill_workout")
     b.button(text="📈 Прогресс", callback_data="menu:progress")
     b.button(text="📚 История", callback_data="menu:history")
     b.button(text="⚙️ Упражнения", callback_data="menu:exercises")
@@ -154,6 +155,7 @@ def history_list_keyboard(workouts, page: int, has_next: bool) -> InlineKeyboard
 
 def history_item_keyboard(workout_id: int) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
+    b.button(text="✏️ Редактировать", callback_data=f"hist:edit:{workout_id}")
     b.button(text="📋 Дублировать как новую", callback_data=f"hist:dup:{workout_id}")
     b.button(text="⬅️ К списку", callback_data="hist:back")
     b.adjust(1)
@@ -171,6 +173,7 @@ def settings_keyboard(unit: str, default_weight_step: float, hide_warmups: bool,
         callback_data="settings:hide_warmups",
     )
     b.button(text="📤 Экспорт CSV", callback_data="settings:export")
+    b.button(text="📥 Импорт CSV", callback_data="settings:import")
     b.adjust(1)
     return b.as_markup()
 
@@ -178,4 +181,65 @@ def settings_keyboard(unit: str, default_weight_step: float, hide_warmups: bool,
 def cancel_keyboard(cb: str = "cancel") -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(text="❌ Отмена", callback_data=cb)
+    return b.as_markup()
+
+
+def date_quick_keyboard(prefix: str) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.button(text="Сегодня", callback_data=f"{prefix}:date:today")
+    b.button(text="Вчера", callback_data=f"{prefix}:date:yesterday")
+    b.button(text="❌ Отмена", callback_data=f"{prefix}:cancel")
+    b.adjust(2, 1)
+    return b.as_markup()
+
+
+def confirm_cancel_keyboard(
+    confirm_cb: str, cancel_cb: str, confirm_text: str = "✅ Сохранить", cancel_text: str = "❌ Отмена"
+) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.button(text=confirm_text, callback_data=confirm_cb)
+    b.button(text=cancel_text, callback_data=cancel_cb)
+    b.adjust(1)
+    return b.as_markup()
+
+
+def exercise_resolve_keyboard(candidates, name: str, prefix: str) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    for ex in candidates[:6]:
+        b.button(text=ex["display_name"], callback_data=f"{prefix}:pick:{ex['id']}")
+    b.button(text=f"➕ Создать «{name}»", callback_data=f"{prefix}:create")
+    b.button(text="❌ Отменить весь ввод", callback_data=f"{prefix}:cancelall")
+    b.adjust(1)
+    return b.as_markup()
+
+
+def edit_workout_keyboard(sets_rows, add_buttons) -> InlineKeyboardMarkup:
+    """sets_rows: list of (set_id, label). add_buttons: list of (block_id, exercise_id, label)."""
+    b = InlineKeyboardBuilder()
+    for set_id, label in sets_rows:
+        b.button(text=label, callback_data=f"editw:set:{set_id}")
+    for block_id, exercise_id, label in add_buttons:
+        b.button(text=f"➕ Сет — {label}", callback_data=f"editw:addset:{block_id}:{exercise_id}")
+    b.button(text="📅 Изменить дату", callback_data="editw:date")
+    b.button(text="✅ Готово", callback_data="editw:done")
+    b.adjust(1)
+    return b.as_markup()
+
+
+def set_actions_keyboard(set_id: int) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.button(text="✏️ Изменить вес/повторы", callback_data=f"editw:editset:{set_id}")
+    b.button(text="🗑 Удалить сет", callback_data=f"editw:delset:{set_id}")
+    b.button(text="⬅️ Назад", callback_data="editw:back")
+    b.adjust(1)
+    return b.as_markup()
+
+
+def csv_column_options_keyboard(headers: list[str], prefix: str, allow_skip: bool = False) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    for idx, header in enumerate(headers):
+        b.button(text=header, callback_data=f"{prefix}:{idx}")
+    if allow_skip:
+        b.button(text="— нет такой колонки —", callback_data=f"{prefix}:skip")
+    b.adjust(1)
     return b.as_markup()
