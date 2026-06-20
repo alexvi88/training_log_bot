@@ -48,6 +48,7 @@ async def _show_exercise_list(callback: CallbackQuery, state: FSMContext):
     b = InlineKeyboardBuilder()
     for ex in exercises:
         b.button(text=ex["display_name"], callback_data=f"exm:ex:{ex['id']}")
+    b.button(text="➕ Новое упражнение", callback_data="exm:newex")
     b.button(text="🗑 Архивировать группу", callback_data=f"exm:archivegrp:{group_id}")
     b.button(text="⬅️ Назад", callback_data="exm:backgroups")
     b.adjust(1)
@@ -60,6 +61,68 @@ async def _show_exercise_list(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "exm:backgroups")
 async def exm_back_to_groups(callback: CallbackQuery, state: FSMContext):
     await show_exercise_groups(callback, state)
+
+
+@router.callback_query(StateFilter(ExerciseManage.picking_exercise), F.data == "exm:newex")
+async def exm_new_exercise(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(ExerciseManage.creating_exercise_name)
+    await callback.message.edit_text(
+        "Напиши название нового упражнения, или выбери из шаблонов:",
+        reply_markup=keyboards.new_exercise_entry_keyboard("exm"),
+    )
+    await callback.answer()
+
+
+@router.callback_query(StateFilter(ExerciseManage.creating_exercise_name), F.data == "exm:templates")
+async def exm_templates(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    templates = await db.list_templates_in_group(data["exm_group_id"])
+    kb = keyboards.templates_keyboard(templates, prefix="exm", back_cb="newback")
+    text = "Шаблоны — выбери подходящий:" if templates else "Для этой группы пока нет шаблонов."
+    await callback.message.edit_text(text, reply_markup=kb)
+    await callback.answer()
+
+
+@router.callback_query(StateFilter(ExerciseManage.creating_exercise_name), F.data == "exm:newback")
+async def exm_new_back(callback: CallbackQuery, state: FSMContext):
+    await callback.message.edit_text(
+        "Напиши название нового упражнения, или выбери из шаблонов:",
+        reply_markup=keyboards.new_exercise_entry_keyboard("exm"),
+    )
+    await callback.answer()
+
+
+@router.callback_query(StateFilter(ExerciseManage.creating_exercise_name), F.data == "exm:cancel")
+async def exm_new_cancel(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(ExerciseManage.picking_exercise)
+    await _show_exercise_list(callback, state)
+
+
+@router.callback_query(StateFilter(ExerciseManage.creating_exercise_name), F.data.startswith("exm:tpl:"))
+async def exm_pick_template(callback: CallbackQuery, state: FSMContext):
+    template_id = int(callback.data.split(":")[2])
+    ex_id = await db.fork_exercise_from_template(callback.from_user.id, template_id)
+    await state.update_data(exm_exercise_id=ex_id)
+    await state.set_state(ExerciseManage.picking_exercise)
+    ex = await db.get_exercise(ex_id)
+    text, kb = _exercise_detail_view(ex)
+    await callback.message.edit_text(text, reply_markup=kb)
+    await callback.answer()
+
+
+@router.message(StateFilter(ExerciseManage.creating_exercise_name))
+async def exm_new_exercise_name_entered(message: Message, state: FSMContext):
+    name = message.text.strip()
+    if not name:
+        await message.reply("Название не может быть пустым")
+        return
+    data = await state.get_data()
+    ex_id = await db.create_exercise(message.from_user.id, name, data["exm_group_id"])
+    await state.update_data(exm_exercise_id=ex_id)
+    await state.set_state(ExerciseManage.picking_exercise)
+    ex = await db.get_exercise(ex_id)
+    text, kb = _exercise_detail_view(ex)
+    await message.answer(text, reply_markup=kb)
 
 
 @router.callback_query(F.data.startswith("exm:archivegrp:"))
