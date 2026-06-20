@@ -1,0 +1,131 @@
+"""CRUD/browsing for muscle groups and exercises (the "⚙️ Упражнения" menu)."""
+
+from aiogram import F, Router
+from aiogram.filters import StateFilter
+from aiogram.fsm.context import FSMContext
+from aiogram.types import CallbackQuery, Message
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+
+import db
+from fsm import ExerciseManage
+
+router = Router(name="exercises")
+
+
+async def show_exercise_groups(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(ExerciseManage.picking_group)
+    groups = await db.list_muscle_groups(callback.from_user.id)
+    b = InlineKeyboardBuilder()
+    for g in groups:
+        label = f"{g['emoji'] or ''} {g['name']}".strip()
+        b.button(text=label, callback_data=f"exm:grp:{g['id']}")
+    b.button(text="➕ Новая группа", callback_data="exm:newgroup")
+    b.button(text="⬅️ Назад", callback_data="exm:back")
+    b.adjust(2)
+    await callback.message.edit_text("⚙️ Упражнения — выбери группу мышц:", reply_markup=b.as_markup())
+    await callback.answer()
+
+
+@router.callback_query(F.data == "exm:back")
+async def exm_back(callback: CallbackQuery, state: FSMContext):
+    from handlers.workout import _show_main_menu
+    await _show_main_menu(callback, state)
+
+
+@router.callback_query(StateFilter(ExerciseManage.picking_group), F.data.startswith("exm:grp:"))
+async def exm_pick_group(callback: CallbackQuery, state: FSMContext):
+    group_id = int(callback.data.split(":")[2])
+    await state.update_data(exm_group_id=group_id)
+    await _show_exercise_list(callback, state)
+
+
+async def _show_exercise_list(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(ExerciseManage.picking_exercise)
+    data = await state.get_data()
+    group_id = data["exm_group_id"]
+    exercises = await db.list_user_exercises_in_group(callback.from_user.id, group_id)
+    group = await db.get_muscle_group(group_id)
+    b = InlineKeyboardBuilder()
+    for ex in exercises:
+        b.button(text=ex["display_name"], callback_data=f"exm:ex:{ex['id']}")
+    b.button(text="🗑 Архивировать группу", callback_data=f"exm:archivegrp:{group_id}")
+    b.button(text="⬅️ Назад", callback_data="exm:backgroups")
+    b.adjust(1)
+    text = f"{group['emoji'] or ''} {group['name']}\n\nТвои упражнения:" if exercises else \
+        f"{group['emoji'] or ''} {group['name']}\n\nПока нет своих упражнений в этой группе."
+    await callback.message.edit_text(text, reply_markup=b.as_markup())
+    await callback.answer()
+
+
+@router.callback_query(F.data == "exm:backgroups")
+async def exm_back_to_groups(callback: CallbackQuery, state: FSMContext):
+    await show_exercise_groups(callback, state)
+
+
+@router.callback_query(F.data.startswith("exm:archivegrp:"))
+async def exm_archive_group(callback: CallbackQuery, state: FSMContext):
+    group_id = int(callback.data.split(":")[2])
+    await db.archive_muscle_group(group_id)
+    await callback.answer("Группа архивирована")
+    await show_exercise_groups(callback, state)
+
+
+@router.callback_query(StateFilter(ExerciseManage.picking_exercise), F.data.startswith("exm:ex:"))
+async def exm_pick_exercise(callback: CallbackQuery, state: FSMContext):
+    ex_id = int(callback.data.split(":")[2])
+    ex = await db.get_exercise(ex_id)
+    b = InlineKeyboardBuilder()
+    b.button(text="🗑 Архивировать", callback_data=f"exm:archive:{ex_id}")
+    b.button(text="⬅️ Назад", callback_data="exm:backlist")
+    b.adjust(1)
+    info = [f"Название: {ex['name']}"]
+    if ex["equipment"]:
+        info.append(f"Оснастка: {ex['equipment']}")
+    if ex["unilateral"]:
+        info.append("Одной рукой/ногой: да")
+    if ex["attachment"]:
+        info.append(f"Хват/насадка: {ex['attachment']}")
+    info.append(f"Создано: {ex['created_at'][:10]}")
+    await callback.message.edit_text("\n".join(info), reply_markup=b.as_markup())
+    await callback.answer()
+
+
+@router.callback_query(F.data == "exm:backlist")
+async def exm_back_to_list(callback: CallbackQuery, state: FSMContext):
+    await _show_exercise_list(callback, state)
+
+
+@router.callback_query(F.data.startswith("exm:archive:"))
+async def exm_archive_exercise(callback: CallbackQuery, state: FSMContext):
+    ex_id = int(callback.data.split(":")[2])
+    await db.archive_exercise(ex_id)
+    await callback.answer("Упражнение архивировано")
+    await _show_exercise_list(callback, state)
+
+
+@router.callback_query(F.data == "exm:newgroup")
+async def exm_new_group(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(ExerciseManage.new_group_name)
+    await callback.message.edit_text("Напиши название новой группы мышц:")
+    await callback.answer()
+
+
+@router.message(StateFilter(ExerciseManage.new_group_name))
+async def exm_new_group_entered(message: Message, state: FSMContext):
+    name = message.text.strip()
+    if not name:
+        await message.reply("Название не может быть пустым")
+        return
+    await db.create_muscle_group(message.from_user.id, name)
+    await message.answer(f"Группа «{name}» создана.")
+    fake_cb_message = await message.answer("⚙️ Упражнения")
+    groups = await db.list_muscle_groups(message.from_user.id)
+    b = InlineKeyboardBuilder()
+    for g in groups:
+        label = f"{g['emoji'] or ''} {g['name']}".strip()
+        b.button(text=label, callback_data=f"exm:grp:{g['id']}")
+    b.button(text="➕ Новая группа", callback_data="exm:newgroup")
+    b.button(text="⬅️ Назад", callback_data="exm:back")
+    b.adjust(2)
+    await fake_cb_message.edit_text("⚙️ Упражнения — выбери группу мышц:", reply_markup=b.as_markup())
+    await state.set_state(ExerciseManage.picking_group)
