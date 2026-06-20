@@ -14,7 +14,7 @@ async def main() -> None:
     logging.basicConfig(level=logging.INFO)
 
     if not config.BOT_TOKEN:
-        raise RuntimeError("BOT_TOKEN env var is not set")
+        raise RuntimeError("TG_TOKEN env var is not set")
 
     await db.init_db()
 
