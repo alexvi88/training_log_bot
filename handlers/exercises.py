@@ -70,12 +70,10 @@ async def exm_archive_group(callback: CallbackQuery, state: FSMContext):
     await show_exercise_groups(callback, state)
 
 
-@router.callback_query(StateFilter(ExerciseManage.picking_exercise), F.data.startswith("exm:ex:"))
-async def exm_pick_exercise(callback: CallbackQuery, state: FSMContext):
-    ex_id = int(callback.data.split(":")[2])
-    ex = await db.get_exercise(ex_id)
+def _exercise_detail_view(ex):
     b = InlineKeyboardBuilder()
-    b.button(text="🗑 Архивировать", callback_data=f"exm:archive:{ex_id}")
+    b.button(text="✏️ Шаг веса", callback_data=f"exm:step:{ex['id']}")
+    b.button(text="🗑 Архивировать", callback_data=f"exm:archive:{ex['id']}")
     b.button(text="⬅️ Назад", callback_data="exm:backlist")
     b.adjust(1)
     info = [f"Название: {ex['name']}"]
@@ -85,9 +83,60 @@ async def exm_pick_exercise(callback: CallbackQuery, state: FSMContext):
         info.append("Одной рукой/ногой: да")
     if ex["attachment"]:
         info.append(f"Хват/насадка: {ex['attachment']}")
+    step_label = f"{ex['weight_step']} кг" if ex["weight_step"] is not None else "по умолчанию"
+    big_label = f"{ex['weight_step_big']} кг" if ex["weight_step_big"] is not None else "×4 от шага"
+    info.append(f"Шаг веса: {step_label} / крупный шаг: {big_label}")
     info.append(f"Создано: {ex['created_at'][:10]}")
-    await callback.message.edit_text("\n".join(info), reply_markup=b.as_markup())
+    return "\n".join(info), b.as_markup()
+
+
+@router.callback_query(StateFilter(ExerciseManage.picking_exercise), F.data.startswith("exm:ex:"))
+async def exm_pick_exercise(callback: CallbackQuery, state: FSMContext):
+    ex_id = int(callback.data.split(":")[2])
+    await state.update_data(exm_exercise_id=ex_id)
+    ex = await db.get_exercise(ex_id)
+    text, kb = _exercise_detail_view(ex)
+    await callback.message.edit_text(text, reply_markup=kb)
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("exm:step:"))
+async def exm_edit_step(callback: CallbackQuery, state: FSMContext):
+    ex_id = int(callback.data.split(":")[2])
+    await state.update_data(exm_exercise_id=ex_id)
+    await state.set_state(ExerciseManage.editing_step)
+    b = InlineKeyboardBuilder()
+    b.button(text="⬅️ Назад", callback_data="exm:backlist")
+    await callback.message.edit_text(
+        "Шаг веса в кг. Один шаг: «2.5». Шаг и крупный шаг: «2.5 10». "
+        "«0» — сбросить на дефолт.",
+        reply_markup=b.as_markup(),
+    )
+    await callback.answer()
+
+
+@router.message(StateFilter(ExerciseManage.editing_step))
+async def exm_step_entered(message: Message, state: FSMContext):
+    data = await state.get_data()
+    ex_id = data["exm_exercise_id"]
+    text = message.text.strip().replace(",", ".")
+    if text == "0":
+        await db.update_exercise_step(ex_id, None, None)
+    else:
+        parts = text.split()
+        try:
+            step = float(parts[0])
+            big = float(parts[1]) if len(parts) > 1 else None
+            if step <= 0 or (big is not None and big <= 0):
+                raise ValueError
+        except (ValueError, IndexError):
+            await message.reply("Нужно число, например 2.5 или «2.5 10»")
+            return
+        await db.update_exercise_step(ex_id, step, big)
+    await state.set_state(ExerciseManage.picking_exercise)
+    ex = await db.get_exercise(ex_id)
+    text, kb = _exercise_detail_view(ex)
+    await message.answer(text, reply_markup=kb)
 
 
 @router.callback_query(F.data == "exm:backlist")
