@@ -8,10 +8,6 @@ class WorkoutFlow(StatesGroup):
     creating_exercise_name = State()
     creating_exercise_attrs = State()
     logging_set = State()
-    picking_superset_exercises = State()
-    logging_superset = State()
-    entering_weight = State()
-    entering_reps = State()
     finishing_note = State()
 
 
