@@ -53,6 +53,13 @@ async def hist_back(callback: CallbackQuery, state: FSMContext):
     await show_history_list(callback, state, data.get("history_page", 0))
 
 
+@router.callback_query(F.data == "hist:menu")
+async def hist_to_menu(callback: CallbackQuery, state: FSMContext):
+    from handlers.workout import _show_main_menu
+    await _show_main_menu(callback, state)
+    await callback.answer()
+
+
 async def show_history_item(callback: CallbackQuery, workout_id: int):
     workout = await db.get_workout(workout_id)
     user = await db.get_user(callback.from_user.id)
@@ -112,8 +119,7 @@ async def show_progress_entry(callback: CallbackQuery, state: FSMContext):
     groups = await db.list_muscle_groups(callback.from_user.id)
     b = InlineKeyboardBuilder()
     for g in groups:
-        label = f"{g['emoji'] or ''} {g['name']}".strip()
-        b.button(text=label, callback_data=f"prog:grp:{g['id']}")
+        b.button(text=g["name"], callback_data=f"prog:grp:{g['id']}")
     b.button(text="⬅️ Назад", callback_data="prog:back")
     b.adjust(2)
     await callback.message.edit_text("📈 Прогресс — выбери группу мышц:", reply_markup=b.as_markup())

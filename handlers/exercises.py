@@ -7,6 +7,7 @@ from aiogram.types import CallbackQuery, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import db
+import keyboards
 from fsm import ExerciseManage
 
 router = Router(name="exercises")
@@ -17,8 +18,7 @@ async def show_exercise_groups(callback: CallbackQuery, state: FSMContext):
     groups = await db.list_muscle_groups(callback.from_user.id)
     b = InlineKeyboardBuilder()
     for g in groups:
-        label = f"{g['emoji'] or ''} {g['name']}".strip()
-        b.button(text=label, callback_data=f"exm:grp:{g['id']}")
+        b.button(text=g["name"], callback_data=f"exm:grp:{g['id']}")
     b.button(text="➕ Новая группа", callback_data="exm:newgroup")
     b.button(text="⬅️ Назад", callback_data="exm:back")
     b.adjust(2)
@@ -51,8 +51,8 @@ async def _show_exercise_list(callback: CallbackQuery, state: FSMContext):
     b.button(text="🗑 Архивировать группу", callback_data=f"exm:archivegrp:{group_id}")
     b.button(text="⬅️ Назад", callback_data="exm:backgroups")
     b.adjust(1)
-    text = f"{group['emoji'] or ''} {group['name']}\n\nТвои упражнения:" if exercises else \
-        f"{group['emoji'] or ''} {group['name']}\n\nПока нет своих упражнений в этой группе."
+    text = f"{group['name']}\n\nТвои упражнения:" if exercises else \
+        f"{group['name']}\n\nПока нет своих упражнений в этой группе."
     await callback.message.edit_text(text, reply_markup=b.as_markup())
     await callback.answer()
 
@@ -155,7 +155,10 @@ async def exm_archive_exercise(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "exm:newgroup")
 async def exm_new_group(callback: CallbackQuery, state: FSMContext):
     await state.set_state(ExerciseManage.new_group_name)
-    await callback.message.edit_text("Напиши название новой группы мышц:")
+    await callback.message.edit_text(
+        "Напиши название новой группы мышц:",
+        reply_markup=keyboards.cancel_keyboard("exm:backgroups"),
+    )
     await callback.answer()
 
 
@@ -171,8 +174,7 @@ async def exm_new_group_entered(message: Message, state: FSMContext):
     groups = await db.list_muscle_groups(message.from_user.id)
     b = InlineKeyboardBuilder()
     for g in groups:
-        label = f"{g['emoji'] or ''} {g['name']}".strip()
-        b.button(text=label, callback_data=f"exm:grp:{g['id']}")
+        b.button(text=g["name"], callback_data=f"exm:grp:{g['id']}")
     b.button(text="➕ Новая группа", callback_data="exm:newgroup")
     b.button(text="⬅️ Назад", callback_data="exm:back")
     b.adjust(2)

@@ -6,6 +6,7 @@ are responsible for turning DB rows into the small view dataclasses below.
 
 import datetime as dt
 from dataclasses import dataclass
+from html import escape
 from typing import Literal, Union
 
 from analytics import e1rm
@@ -46,7 +47,6 @@ def format_duration(started_at: dt.datetime, finished_at: dt.datetime) -> str:
 
 @dataclass
 class ExerciseBlockView:
-    group_emoji: str
     group_name: str
     exercise_name: str
     sets: list[tuple[float, int, bool]]  # weight, reps, is_warmup
@@ -145,7 +145,7 @@ def build_workout_summary(
 
     for block in blocks:
         if isinstance(block, ExerciseBlockView):
-            group_label = f"{block.group_emoji} {block.group_name.upper()}"
+            group_label = block.group_name.upper()
             if group_label != last_group:
                 lines.append(group_label)
                 last_group = group_label
@@ -173,18 +173,22 @@ def build_live_session_text(
     hint: str | None = None,
     hide_warmups: bool = False,
 ) -> str:
-    lines = ["🏋️ Тренировка идёт"]
-    last_group: str | None = None
-    for block in blocks:
+    lines = []
+    for i, block in enumerate(blocks):
+        if i > 0:
+            lines.append("")
         if isinstance(block, ExerciseBlockView):
-            group_label = f"{block.group_emoji} {block.group_name.upper()}"
-            if group_label != last_group:
-                lines.append(group_label)
-                last_group = group_label
-            lines.extend(_render_single_block(block, hide_warmups, show_extra=False))
+            sets = block.working_sets if hide_warmups else block.sets
+            lines.append(f"<b>{escape(block.exercise_name)}</b>")
+            lines.append("  " + " · ".join(format_set(w, r, warm) for w, r, warm in sets))
         else:
-            last_group = None
-            lines.extend(_render_superset_block(block, hide_warmups, show_extra=False))
+            lines.append(" ⇄ ".join(f"<b>{escape(n)}</b>" for n in block.exercise_names))
+            for round_sets in block.rounds:
+                if hide_warmups and all(slot is None or slot[2] for slot in round_sets):
+                    continue
+                lines.append("  " + " / ".join(format_set_slot(slot) for slot in round_sets))
+    if not lines:
+        lines.append("Добавь упражнение, чтобы начать.")
     if hint:
         lines.append("")
         lines.append(hint)
