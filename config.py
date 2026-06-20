@@ -1,6 +1,6 @@
 import os
 
-BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+BOT_TOKEN = os.getenv("TG_TOKEN", "")
 
 DB_PATH = os.getenv("DB_PATH", "training_log.db")
 
