@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS users (
     username TEXT,
     created_at TEXT NOT NULL,
     unit TEXT NOT NULL DEFAULT 'kg',
-    weight_step REAL NOT NULL DEFAULT 2.5,
+    default_weight_step REAL NOT NULL DEFAULT 2.5,
     bodyweight REAL,
     e1rm_formula TEXT NOT NULL DEFAULT 'epley',
     hide_warmups INTEGER NOT NULL DEFAULT 0,
@@ -45,6 +45,8 @@ CREATE TABLE IF NOT EXISTS exercises (
     unilateral INTEGER NOT NULL DEFAULT 0,
     attachment TEXT,
     display_name TEXT NOT NULL,
+    weight_step REAL,
+    weight_step_big REAL,
     is_archived INTEGER NOT NULL DEFAULT 0,
     is_template INTEGER NOT NULL DEFAULT 0,
     notes TEXT,
@@ -52,8 +54,8 @@ CREATE TABLE IF NOT EXISTS exercises (
     last_used_at TEXT,
     FOREIGN KEY (primary_group_id) REFERENCES muscle_groups (id)
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_exercises_user_name
-    ON exercises (user_id, display_name) WHERE is_template = 0;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_exercises_user_name_ci
+    ON exercises (user_id, LOWER(display_name)) WHERE is_template = 0;
 CREATE INDEX IF NOT EXISTS idx_exercises_user_group ON exercises (user_id, primary_group_id);
 
 CREATE TABLE IF NOT EXISTS workouts (
@@ -135,7 +137,30 @@ async def init_db(db_path: str = config.DB_PATH) -> None:
     await _conn.execute("PRAGMA foreign_keys=ON")
     await _conn.executescript(SCHEMA)
     await _conn.commit()
+    await _migrate_schema()
     await _seed_globals()
+
+
+async def _column_names(table: str) -> set[str]:
+    cur = await _conn.execute(f"PRAGMA table_info({table})")
+    rows = await cur.fetchall()
+    return {r["name"] for r in rows}
+
+
+async def _migrate_schema() -> None:
+    """Upgrade older on-disk databases to the current column set in-place."""
+    user_cols = await _column_names("users")
+    if "weight_step" in user_cols and "default_weight_step" not in user_cols:
+        await _conn.execute("ALTER TABLE users RENAME COLUMN weight_step TO default_weight_step")
+
+    exercise_cols = await _column_names("exercises")
+    if "weight_step" not in exercise_cols:
+        await _conn.execute("ALTER TABLE exercises ADD COLUMN weight_step REAL")
+    if "weight_step_big" not in exercise_cols:
+        await _conn.execute("ALTER TABLE exercises ADD COLUMN weight_step_big REAL")
+
+    await _conn.execute("DROP INDEX IF EXISTS idx_exercises_user_name")
+    await _conn.commit()
 
 
 async def close_db() -> None:
@@ -192,7 +217,7 @@ async def get_or_create_user(telegram_id: int, username: Optional[str]) -> aiosq
         return row
     async with _write_lock:
         await db.execute(
-            "INSERT INTO users (telegram_id, username, created_at, unit, weight_step, e1rm_formula) "
+            "INSERT INTO users (telegram_id, username, created_at, unit, default_weight_step, e1rm_formula) "
             "VALUES (?, ?, ?, ?, ?, ?)",
             (
                 telegram_id,
@@ -359,6 +384,17 @@ async def fork_exercise_from_template(
         final_unilateral,
         final_attachment,
     )
+
+
+async def update_exercise_step(
+    exercise_id: int, weight_step: Optional[float], weight_step_big: Optional[float]
+) -> None:
+    async with _write_lock:
+        await conn().execute(
+            "UPDATE exercises SET weight_step = ?, weight_step_big = ? WHERE id = ?",
+            (weight_step, weight_step_big, exercise_id),
+        )
+        await conn().commit()
 
 
 async def touch_exercise_last_used(exercise_id: int) -> None:

@@ -19,7 +19,7 @@ async def show_settings(callback: CallbackQuery, state: FSMContext):
     await state.set_state(SettingsFlow.menu)
     user = await db.get_user(callback.from_user.id)
     kb = keyboards.settings_keyboard(
-        user["unit"], user["weight_step"], bool(user["hide_warmups"]), user["e1rm_formula"]
+        user["unit"], user["default_weight_step"], bool(user["hide_warmups"]), user["e1rm_formula"]
     )
     await callback.message.edit_text("🔧 Настройки:", reply_markup=kb)
     await callback.answer()
@@ -54,7 +54,10 @@ async def settings_formula(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "settings:step")
 async def settings_step(callback: CallbackQuery, state: FSMContext):
     await state.set_state(SettingsFlow.awaiting_weight_step)
-    await callback.message.edit_text("Введи шаг веса в кг (например 2.5):")
+    await callback.message.edit_text(
+        "Введи шаг веса по умолчанию в кг (например 2.5). "
+        "Это дефолт для новых упражнений — у каждого можно потом задать свой в «⚙️ Упражнения»."
+    )
     await callback.answer()
 
 
@@ -67,11 +70,11 @@ async def settings_step_entered(message: Message, state: FSMContext):
     except ValueError:
         await message.reply("Нужно положительное число, например 2.5")
         return
-    await db.update_user(message.from_user.id, weight_step=value)
+    await db.update_user(message.from_user.id, default_weight_step=value)
     await state.set_state(SettingsFlow.menu)
     user = await db.get_user(message.from_user.id)
     kb = keyboards.settings_keyboard(
-        user["unit"], user["weight_step"], bool(user["hide_warmups"]), user["e1rm_formula"]
+        user["unit"], user["default_weight_step"], bool(user["hide_warmups"]), user["e1rm_formula"]
     )
     await message.answer("🔧 Настройки:", reply_markup=kb)
 
@@ -96,7 +99,7 @@ async def settings_bodyweight_entered(message: Message, state: FSMContext):
     await state.set_state(SettingsFlow.menu)
     user = await db.get_user(message.from_user.id)
     kb = keyboards.settings_keyboard(
-        user["unit"], user["weight_step"], bool(user["hide_warmups"]), user["e1rm_formula"]
+        user["unit"], user["default_weight_step"], bool(user["hide_warmups"]), user["e1rm_formula"]
     )
     await message.answer("🔧 Настройки:", reply_markup=kb)
 

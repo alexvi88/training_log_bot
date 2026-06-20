@@ -3,6 +3,8 @@
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+from formatting import format_weight
+
 
 def main_menu(has_active_workout: bool) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
@@ -65,18 +67,28 @@ def yes_no_keyboard(yes_cb: str, no_cb: str, yes_text: str = "Да", no_text: st
     return b.as_markup()
 
 
-def logging_controls_keyboard(can_repeat: bool, in_superset: bool) -> InlineKeyboardMarkup:
+def set_input_keyboard(weight: float, step: float, step_big: float, in_superset: bool) -> InlineKeyboardMarkup:
+    """Primary set-logging keyboard: weight steppers + a 1-20 reps grid (tap = log set)."""
     b = InlineKeyboardBuilder()
-    if can_repeat:
-        b.button(text="🔁 Повторить", callback_data="live:repeat")
-    b.button(text="➕", callback_data="live:plus")
-    b.button(text="➖", callback_data="live:minus")
-    b.button(text="↩️ Удалить последний", callback_data="live:undo")
-    if in_superset:
-        b.button(text="✅ Закончить суперсет", callback_data="live:finish_exercise")
-    else:
-        b.button(text="✅ Закончить упражнение", callback_data="live:finish_exercise")
-    b.adjust(3, 1, 1)
+    b.row(
+        InlineKeyboardButton(text=f"➖{format_weight(step_big)}", callback_data="live:w:bigminus"),
+        InlineKeyboardButton(text=f"➖{format_weight(step)}", callback_data="live:w:minus"),
+        InlineKeyboardButton(text=f"{format_weight(weight)} кг", callback_data="live:w:exact"),
+        InlineKeyboardButton(text=f"➕{format_weight(step)}", callback_data="live:w:plus"),
+        InlineKeyboardButton(text=f"➕{format_weight(step_big)}", callback_data="live:w:bigplus"),
+    )
+    b.row(InlineKeyboardButton(text="✏️ Ввести", callback_data="live:w:exact"))
+    for start in range(1, 21, 5):
+        b.row(*(
+            InlineKeyboardButton(text=str(n), callback_data=f"live:reps:{n}")
+            for n in range(start, start + 5)
+        ))
+    b.row(InlineKeyboardButton(text="Другое", callback_data="live:reps:other"))
+    finish_text = "✅ Закончить суперсет" if in_superset else "✅ Закончить упражнение"
+    b.row(
+        InlineKeyboardButton(text="↩️ Удалить последний сет", callback_data="live:undo"),
+        InlineKeyboardButton(text=finish_text, callback_data="live:finish_exercise"),
+    )
     return b.as_markup()
 
 
@@ -148,10 +160,10 @@ def history_item_keyboard(workout_id: int) -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
-def settings_keyboard(unit: str, weight_step: float, hide_warmups: bool, formula: str) -> InlineKeyboardMarkup:
+def settings_keyboard(unit: str, default_weight_step: float, hide_warmups: bool, formula: str) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(text=f"Единицы: {unit}", callback_data="settings:unit")
-    b.button(text=f"Шаг веса: {weight_step}", callback_data="settings:step")
+    b.button(text=f"Шаг веса по умолчанию: {default_weight_step}", callback_data="settings:step")
     b.button(text="Вес тела", callback_data="settings:bodyweight")
     b.button(text=f"Формула 1ПМ: {formula}", callback_data="settings:formula")
     b.button(
