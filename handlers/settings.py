@@ -51,8 +51,15 @@ async def settings_step(callback: CallbackQuery, state: FSMContext):
     await state.set_state(SettingsFlow.awaiting_weight_step)
     await callback.message.edit_text(
         "Введи шаг веса по умолчанию в кг (например 2.5). "
-        "Это дефолт для новых упражнений — у каждого можно потом задать свой в «⚙️ Упражнения»."
+        "Это дефолт для новых упражнений — у каждого можно потом задать свой в «⚙️ Упражнения».",
+        reply_markup=keyboards.cancel_keyboard("settings:stepcancel"),
     )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "settings:stepcancel")
+async def settings_step_cancel(callback: CallbackQuery, state: FSMContext):
+    await show_settings(callback, state)
     await callback.answer()
 
 

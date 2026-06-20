@@ -1,6 +1,7 @@
 """Workout lifecycle: start, add exercises, switch between them, log sets, finish."""
 
 import datetime as dt
+from html import escape
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
@@ -31,7 +32,7 @@ async def _refresh_live(bot, chat_id: int, message_id: int, user, workout_id: in
     text = formatting.build_live_session_text(blocks, hint, hide_warmups=bool(user["hide_warmups"]))
     try:
         await bot.edit_message_text(
-            chat_id=chat_id, message_id=message_id, text=text, reply_markup=keyboard
+            chat_id=chat_id, message_id=message_id, text=text, reply_markup=keyboard, parse_mode="HTML"
         )
     except TelegramBadRequest as e:
         if "not modified" not in str(e):
@@ -63,10 +64,10 @@ def _short_name(name: str, limit: int = 18) -> str:
 
 
 def _logging_hint(last: tuple[float, int] | None) -> str:
-    base = "Напиши вес и повторы через пробел, например «100 8»"
+    lines = ["Напиши вес и повторы через пробел, например «100 8»"]
     if last:
-        base += f" · 🔁 повторить {formatting.format_set(*last)}"
-    return base
+        lines.append(f"Последний подход: {formatting.format_set(*last)}")
+    return "\n".join(lines)
 
 
 async def _render_logging_screen(bot, state: FSMContext, user):
@@ -82,7 +83,7 @@ async def _render_logging_screen(bot, state: FSMContext, user):
 
     hint_lines = []
     if len(open_ids) > 1:
-        hint_lines.append(f"▶️ {names.get(active, '')}")
+        hint_lines.append(f"▶️ {escape(names.get(active, ''))}")
     hint_lines.append(_logging_hint(last_by.get(active)))
     hint = "\n".join(hint_lines)
 
@@ -207,7 +208,7 @@ async def _picker_screen_groups(callback: CallbackQuery, state: FSMContext):
     hint = "Выбери группу мышц:"
     open_ids = data.get("open_exercises") or []
     if open_ids:
-        names = [(await db.get_exercise(eid))["display_name"] for eid in open_ids]
+        names = [escape((await db.get_exercise(eid))["display_name"]) for eid in open_ids]
         hint = "Открыто сейчас: " + ", ".join(names) + "\n" + hint
     extra = [("❌ Отмена", "pick:cancel")]
     kb = keyboards.groups_keyboard(groups, prefix="pick", extra_buttons=extra)
@@ -371,7 +372,8 @@ async def search_exercise_text(message: Message, state: FSMContext):
     user = await db.get_user(message.from_user.id)
     results = await db.search_exercises(message.from_user.id, query)
     kb = keyboards.exercises_keyboard(results, prefix="pick", show_new_button=True, back_cb="back")
-    hint = f"Результаты поиска «{query}»:" if results else f"Ничего не нашлось по «{query}». Можно создать новое."
+    safe_query = escape(query)
+    hint = f"Результаты поиска «{safe_query}»:" if results else f"Ничего не нашлось по «{safe_query}». Можно создать новое."
     await _refresh_live(
         message.bot, data["live_chat_id"], data["live_message_id"], user, data["workout_id"], hint, kb
     )
@@ -538,7 +540,10 @@ async def cancel_finish(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "finish:note")
 async def finish_ask_note(callback: CallbackQuery, state: FSMContext):
     await state.set_state(WorkoutFlow.finishing_note)
-    await callback.message.edit_text("Напиши заметку (сон, самочувствие, что угодно):")
+    await callback.message.edit_text(
+        "Напиши заметку (сон, самочувствие, что угодно):",
+        reply_markup=keyboards.cancel_keyboard("live:cancel_finish"),
+    )
     await callback.answer()
 
 

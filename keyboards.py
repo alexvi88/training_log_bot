@@ -23,8 +23,7 @@ def main_menu(has_active_workout: bool) -> InlineKeyboardMarkup:
 def groups_keyboard(groups, prefix: str, extra_buttons: list[tuple[str, str]] | None = None) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     for g in groups:
-        label = f"{g['emoji'] or ''} {g['name']}".strip()
-        b.button(text=label, callback_data=f"{prefix}:grp:{g['id']}")
+        b.button(text=g["name"], callback_data=f"{prefix}:grp:{g['id']}")
     for text, cb in extra_buttons or []:
         b.button(text=text, callback_data=cb)
     b.adjust(2)
@@ -117,6 +116,7 @@ def finish_workout_keyboard() -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(text="📝 Добавить заметку", callback_data="finish:note")
     b.button(text="✅ Без заметки", callback_data="finish:skip_note")
+    b.button(text="❌ Отмена", callback_data="live:cancel_finish")
     b.adjust(1)
     return b.as_markup()
 
@@ -142,6 +142,7 @@ def history_list_keyboard(workouts, page: int, has_next: bool) -> InlineKeyboard
     b.adjust(1)
     if nav:
         b.row(*nav)
+    b.row(InlineKeyboardButton(text="⬅️ Главное меню", callback_data="hist:menu"))
     return b.as_markup()
 
 
