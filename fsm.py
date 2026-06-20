@@ -16,6 +16,7 @@ class ExerciseManage(StatesGroup):
     editing = State()
     editing_step = State()
     new_group_name = State()
+    creating_exercise_name = State()
 
 
 class HistoryFlow(StatesGroup):

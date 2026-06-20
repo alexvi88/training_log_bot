@@ -368,6 +368,21 @@ async def list_user_exercises_in_group(user_id: int, group_id: int, limit: Optio
     return await cur.fetchall()
 
 
+async def list_user_exercises(user_id: int) -> list[aiosqlite.Row]:
+    sql = (
+        "SELECT e.*, "
+        "(SELECT COUNT(DISTINCT wb.workout_id) FROM block_exercises be "
+        "   JOIN workout_blocks wb ON wb.id = be.block_id "
+        "   WHERE be.exercise_id = e.id) AS usage_count "
+        "FROM exercises e "
+        "WHERE e.user_id = ? "
+        "AND e.is_archived = 0 AND e.is_template = 0 "
+        "ORDER BY usage_count DESC, e.last_used_at IS NULL, e.last_used_at DESC, e.display_name"
+    )
+    cur = await conn().execute(sql, (user_id,))
+    return await cur.fetchall()
+
+
 async def list_templates_in_group(group_id: int) -> list[aiosqlite.Row]:
     cur = await conn().execute(
         "SELECT * FROM exercises WHERE is_template = 1 AND primary_group_id = ? ORDER BY display_name",

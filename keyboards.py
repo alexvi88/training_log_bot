@@ -7,16 +7,16 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 def main_menu(has_active_workout: bool) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     if has_active_workout:
-        b.button(text="▶️ Продолжить тренировку", callback_data="menu:resume_workout")
+        b.button(text="▶️ ПРОДОЛЖИТЬ ТРЕНИРОВКУ", callback_data="menu:resume_workout")
     else:
-        b.button(text="🏋️ Начать тренировку", callback_data="menu:start_workout")
+        b.button(text="🏋️ НАЧАТЬ ТРЕНИРОВКУ", callback_data="menu:start_workout")
     b.button(text="📈 Прогресс", callback_data="menu:progress")
     b.button(text="📚 История", callback_data="menu:history")
     b.button(text="⚙️ Упражнения", callback_data="menu:exercises")
     b.button(text="⚖️ Дневник веса", callback_data="menu:bodyweight")
     b.button(text="🔧 Настройки", callback_data="menu:settings")
-    b.button(text="🗓 Занести тренировку задним числом", callback_data="menu:backfill_workout")
-    b.adjust(1)
+    b.button(text="🗓 Добавить прошлые тренировки", callback_data="menu:backfill_workout")
+    b.adjust(1, 2)
     return b.as_markup()
 
 
