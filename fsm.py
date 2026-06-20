@@ -31,3 +31,28 @@ class SettingsFlow(StatesGroup):
     menu = State()
     awaiting_weight_step = State()
     awaiting_bodyweight = State()
+
+
+class BackfillFlow(StatesGroup):
+    awaiting_date = State()
+    awaiting_bulk_text = State()
+    confirming = State()
+
+
+class ResolveFlow(StatesGroup):
+    """Shared sub-flow for mapping a free-typed exercise name to an exercise row."""
+    picking = State()
+    picking_new_group = State()
+
+
+class EditWorkoutFlow(StatesGroup):
+    viewing = State()
+    awaiting_date = State()
+    editing_set = State()
+    adding_set = State()
+
+
+class ImportFlow(StatesGroup):
+    awaiting_file = State()
+    mapping_columns = State()
+    confirming = State()
