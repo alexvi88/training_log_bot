@@ -75,14 +75,3 @@ def parse_single_token(token: str) -> list[ParsedSet]:
         raise ParseError("Странное количество подходов")
 
     return [ParsedSet(weight=weight, reps=reps, is_warmup=is_warmup) for _ in range(count)]
-
-
-def parse_superset_line(text: str, expected_exercises: int) -> list[list[ParsedSet]]:
-    """Split a superset round line like '30 12 / 15 10' into per-exercise parsed sets."""
-    parts = [p.strip() for p in text.split("/")]
-    if len(parts) != expected_exercises:
-        raise ParseError(
-            f"В суперсете {expected_exercises} упражнения — введи {expected_exercises} "
-            f"значения через «/», например: 30 12 / 15 10"
-        )
-    return [parse_single_token(part) for part in parts]

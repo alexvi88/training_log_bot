@@ -1,4 +1,4 @@
-"""Workout lifecycle: start, add exercise/superset, log sets, finish."""
+"""Workout lifecycle: start, add exercises, switch between them, log sets, finish."""
 
 import datetime as dt
 
@@ -15,7 +15,7 @@ import formatting
 import keyboards
 import view_builder
 from fsm import WorkoutFlow
-from parser import ParseError, parse_single_token, parse_superset_line
+from parser import ParseError, parse_single_token
 
 router = Router(name="workout")
 
@@ -57,60 +57,54 @@ async def _react_ok(bot, message: Message):
         pass
 
 
-def _current_target_exercise(data: dict) -> int | None:
-    if data.get("current_exercise_id") is not None:
-        return data["current_exercise_id"]
-    ids = data.get("superset_exercise_ids")
-    idx = data.get("current_superset_idx", 0)
-    if ids:
-        return ids[idx]
-    return None
-
-
-async def _log_one(block_id: int, exercise_id: int, weight: float, reps: int, is_warmup: bool, order_in_round: int = 0):
+async def _log_one(block_id: int, exercise_id: int, weight: float, reps: int, is_warmup: bool):
     round_idx = await db.next_round_index(block_id, exercise_id)
-    await db.add_set(block_id, exercise_id, round_idx, order_in_round, weight, reps, is_warmup)
+    await db.add_set(block_id, exercise_id, round_idx, 0, weight, reps, is_warmup)
 
 
-def _effective_steps(ex, user) -> tuple[float, float]:
-    step = ex["weight_step"] if ex["weight_step"] is not None else user["default_weight_step"]
-    step_big = ex["weight_step_big"] if ex["weight_step_big"] is not None else step * 4
-    return step, step_big
+def _short_name(name: str, limit: int = 18) -> str:
+    return name if len(name) <= limit else name[: limit - 1].rstrip() + "…"
 
 
-async def _advance_superset(state: FSMContext, data: dict) -> None:
-    ids = data["superset_exercise_ids"]
-    next_idx = (data.get("current_superset_idx", 0) + 1) % len(ids)
-    await state.update_data(current_superset_idx=next_idx)
-
-
-_LOGGING_HINT = (
-    "Тапни число повторов — запишется сет с текущим весом.\n"
-    "Текстом — fallback: 100 8 · 100x8x3 · +20 8 · 8 (свой вес)"
-)
+def _logging_hint(last: tuple[float, int] | None) -> str:
+    base = "Вес и повторы: 100 8"
+    if last:
+        base += f" · 🔁 повторить {formatting.format_set(*last)}"
+    return base
 
 
 async def _render_logging_screen(bot, state: FSMContext, user):
     data = await state.get_data()
-    in_superset = bool(data.get("superset_exercise_ids"))
+    open_ids: list[int] = data.get("open_exercises") or []
+    active = data.get("active_exercise_id")
     last_by = data.get("last_by_exercise") or {}
-    target = _current_target_exercise(data)
-    ex = await db.get_exercise(target)
-    step, step_big = _effective_steps(ex, user)
-    weight, _ = last_by.get(target, (0.0, 0))
 
-    if in_superset:
-        names = data.get("superset_exercise_names") or []
-        idx = data.get("current_superset_idx", 0)
-        hint = (
-            f"🔗 Суперсет: {' ⇄ '.join(names)}\nСейчас: {names[idx]}.\n{_LOGGING_HINT}\n"
-            f"Весь раунд одной строкой: 30 12 / 15 10"
-        )
-    else:
-        hint = _LOGGING_HINT
+    names: dict[int, str] = {}
+    for ex_id in open_ids:
+        ex = await db.get_exercise(ex_id)
+        names[ex_id] = ex["display_name"]
 
-    kb = keyboards.set_input_keyboard(weight, step, step_big, in_superset=in_superset)
+    hint_lines = []
+    if len(open_ids) > 1:
+        hint_lines.append(f"▶️ {names.get(active, '')}")
+    hint_lines.append(_logging_hint(last_by.get(active)))
+    hint = "\n".join(hint_lines)
+
+    open_items = [(ex_id, _short_name(names[ex_id])) for ex_id in open_ids]
+    kb = keyboards.logging_keyboard(open_items, active, can_repeat=bool(last_by.get(active)))
     await _refresh_live(bot, data["live_chat_id"], data["live_message_id"], user, data["workout_id"], hint, kb)
+
+
+async def _back_after_cancel(bot, state: FSMContext, user):
+    data = await state.get_data()
+    if data.get("open_exercises"):
+        await state.set_state(WorkoutFlow.logging_set)
+        await _render_logging_screen(bot, state, user)
+    else:
+        await state.set_state(WorkoutFlow.idle)
+        await _refresh_live(
+            bot, data["live_chat_id"], data["live_message_id"], user, data["workout_id"], None, _idle_keyboard(data)
+        )
 
 
 # ---------- main menu ----------
@@ -202,31 +196,24 @@ async def _enter_live(callback: CallbackQuery, state: FSMContext, workout_id: in
     await state.set_state(WorkoutFlow.idle)
     await state.update_data(
         workout_id=workout_id, live_chat_id=sent.chat.id, live_message_id=sent.message_id,
-        last_by_exercise={}, current_exercise_id=None, current_block_id=None,
-        superset_exercise_ids=None,
+        last_by_exercise={}, open_exercises=[], open_blocks={}, active_exercise_id=None,
     )
     data = await state.get_data()
     await _refresh_live(callback.bot, sent.chat.id, sent.message_id, user, workout_id, None, _idle_keyboard(data))
 
 
-# ---------- picker: add single exercise / build superset ----------
+# ---------- picker: add an exercise (either to start, or alongside what's already open) ----------
 
 async def _picker_screen_groups(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     user = await db.get_user(callback.from_user.id)
     groups = await db.list_muscle_groups(callback.from_user.id)
-    mode = data.get("picker_mode", "single")
-    if mode == "superset":
-        ids = data.get("superset_exercise_ids") or []
-        names = data.get("superset_exercise_names") or []
-        hint = ("🔗 Суперсет: " + ", ".join(names) + "\nВыбери группу для следующего упражнения:") if names \
-            else "🔗 Суперсет — выбери группу для первого упражнения:"
-        extra = [("❌ Отмена", "pick:cancel")]
-        if len(ids) >= 2:
-            extra.insert(0, ("✅ Готово", "pick:done"))
-    else:
-        hint = "Выбери группу мышц:"
-        extra = [("❌ Отмена", "pick:cancel")]
+    hint = "Выбери группу мышц:"
+    open_ids = data.get("open_exercises") or []
+    if open_ids:
+        names = [(await db.get_exercise(eid))["display_name"] for eid in open_ids]
+        hint = "Открыто сейчас: " + ", ".join(names) + "\n" + hint
+    extra = [("❌ Отмена", "pick:cancel")]
     kb = keyboards.groups_keyboard(groups, prefix="pick", extra_buttons=extra)
     await state.update_data(picker_stage="groups")
     await _refresh_live(
@@ -234,17 +221,8 @@ async def _picker_screen_groups(callback: CallbackQuery, state: FSMContext):
     )
 
 
-@router.callback_query(F.data == "live:add_exercise")
+@router.callback_query(StateFilter(WorkoutFlow.idle, WorkoutFlow.logging_set), F.data == "live:add_exercise")
 async def live_add_exercise(callback: CallbackQuery, state: FSMContext):
-    await state.update_data(picker_mode="single", superset_exercise_ids=None, superset_exercise_names=None)
-    await state.set_state(WorkoutFlow.picking_group)
-    await _picker_screen_groups(callback, state)
-    await callback.answer()
-
-
-@router.callback_query(F.data == "live:add_superset")
-async def live_add_superset(callback: CallbackQuery, state: FSMContext):
-    await state.update_data(picker_mode="superset", superset_exercise_ids=[], superset_exercise_names=[])
     await state.set_state(WorkoutFlow.picking_group)
     await _picker_screen_groups(callback, state)
     await callback.answer()
@@ -252,12 +230,8 @@ async def live_add_superset(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(StateFilter(WorkoutFlow.picking_group, WorkoutFlow.picking_exercise), F.data == "pick:cancel")
 async def pick_cancel(callback: CallbackQuery, state: FSMContext):
-    data = await state.get_data()
     user = await db.get_user(callback.from_user.id)
-    await state.set_state(WorkoutFlow.idle)
-    await _refresh_live(
-        callback.bot, data["live_chat_id"], data["live_message_id"], user, data["workout_id"], None, _idle_keyboard(data)
-    )
+    await _back_after_cancel(callback.bot, state, user)
     await callback.answer()
 
 
@@ -278,12 +252,7 @@ async def _picker_screen_exercises(callback: CallbackQuery, state: FSMContext):
         callback.from_user.id, group_id, limit=config.RECENT_EXERCISES_LIMIT
     )
     kb = keyboards.exercises_keyboard(exercises, prefix="pick", back_cb="back")
-    mode = data.get("picker_mode", "single")
     hint = "Выбери упражнение (можешь просто написать название для поиска):"
-    if mode == "superset":
-        names = data.get("superset_exercise_names") or []
-        if names:
-            hint = "🔗 Суперсет: " + ", ".join(names) + "\n" + hint
     await state.update_data(picker_stage="exercises")
     await _refresh_live(
         callback.bot, data["live_chat_id"], data["live_message_id"], user, data["workout_id"], hint, kb
@@ -442,50 +411,22 @@ async def _seed_last_value(data: dict, ex_id: int) -> dict:
 
 async def _on_exercise_chosen(callback: CallbackQuery, state: FSMContext, ex_id: int):
     data = await state.get_data()
-    mode = data.get("picker_mode", "single")
     await db.touch_exercise_last_used(ex_id)
-    ex = await db.get_exercise(ex_id)
-
-    if mode == "superset":
-        ids = list(data.get("superset_exercise_ids") or [])
-        names = list(data.get("superset_exercise_names") or [])
-        ids.append(ex_id)
-        names.append(ex["display_name"])
-        await state.update_data(superset_exercise_ids=ids, superset_exercise_names=names)
-        await state.set_state(WorkoutFlow.picking_group)
-        await _picker_screen_groups(callback, state)
-        await callback.answer()
-        return
 
     block_id = await db.create_block(data["workout_id"], "single")
     await db.add_block_exercise(block_id, ex_id, 0)
     last_by = await _seed_last_value(data, ex_id)
+
+    open_exercises = list(data.get("open_exercises") or [])
+    open_blocks = dict(data.get("open_blocks") or {})
+    open_exercises.append(ex_id)
+    open_blocks[ex_id] = block_id
+
     await state.update_data(
-        current_block_id=block_id, current_exercise_id=ex_id, last_by_exercise=last_by
+        open_exercises=open_exercises, open_blocks=open_blocks,
+        active_exercise_id=ex_id, last_by_exercise=last_by,
     )
     await state.set_state(WorkoutFlow.logging_set)
-    user = await db.get_user(callback.from_user.id)
-    await _render_logging_screen(callback.bot, state, user)
-    await callback.answer()
-
-
-@router.callback_query(StateFilter(WorkoutFlow.picking_group), F.data == "pick:done")
-async def pick_superset_done(callback: CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    ids = data.get("superset_exercise_ids") or []
-    if len(ids) < 2:
-        await callback.answer("Нужно минимум 2 упражнения", show_alert=True)
-        return
-    block_id = await db.create_block(data["workout_id"], "superset")
-    last_by = dict(data.get("last_by_exercise") or {})
-    for idx, ex_id in enumerate(ids):
-        await db.add_block_exercise(block_id, ex_id, idx)
-        last_by = await _seed_last_value({"last_by_exercise": last_by}, ex_id)
-    await state.update_data(
-        current_block_id=block_id, current_exercise_id=None,
-        superset_exercise_ids=ids, current_superset_idx=0, last_by_exercise=last_by,
-    )
-    await state.set_state(WorkoutFlow.logging_superset)
     user = await db.get_user(callback.from_user.id)
     await _render_logging_screen(callback.bot, state, user)
     await callback.answer()
@@ -511,131 +452,19 @@ async def search_exercise_text(message: Message, state: FSMContext):
     )
 
 
-# ---------- logging sets: buttons are the primary path, text is fallback ----------
+# ---------- logging sets: type "weight reps", switch between open exercises freely ----------
 
-@router.callback_query(StateFilter(WorkoutFlow.logging_set, WorkoutFlow.logging_superset), F.data.startswith("live:reps:"))
-async def live_tap_reps(callback: CallbackQuery, state: FSMContext):
+@router.callback_query(StateFilter(WorkoutFlow.logging_set), F.data.startswith("live:switch:"))
+async def live_switch_exercise(callback: CallbackQuery, state: FSMContext):
+    ex_id = int(callback.data.split(":")[2])
     data = await state.get_data()
-    suffix = callback.data.split(":")[2]
-
-    if suffix == "other":
-        await state.update_data(return_state=await state.get_state())
-        await state.set_state(WorkoutFlow.entering_reps)
-        user = await db.get_user(callback.from_user.id)
-        await _refresh_live(
-            callback.bot, data["live_chat_id"], data["live_message_id"], user, data["workout_id"],
-            "Напиши число повторов:", keyboards.cancel_keyboard("live:cancel_input"),
-        )
+    if ex_id not in (data.get("open_exercises") or []):
         await callback.answer()
         return
-
-    reps = int(suffix)
-    target = _current_target_exercise(data)
-    last_by = dict(data.get("last_by_exercise") or {})
-    weight, _ = last_by.get(target, (0.0, 0))
-    block_id = data["current_block_id"]
-    in_superset = bool(data.get("superset_exercise_ids"))
-    order_in_round = data.get("current_superset_idx", 0) if in_superset else 0
-    await _log_one(block_id, target, weight, reps, False, order_in_round)
-    last_by[target] = (weight, reps)
-    await state.update_data(last_by_exercise=last_by)
-    if in_superset:
-        await _advance_superset(state, data)
-    await callback.answer(f"Записал {formatting.format_set(weight, reps)}")
-    user = await db.get_user(callback.from_user.id)
-    await _render_logging_screen(callback.bot, state, user)
-
-
-@router.callback_query(
-    StateFilter(WorkoutFlow.logging_set, WorkoutFlow.logging_superset),
-    F.data.in_({"live:w:plus", "live:w:minus", "live:w:bigplus", "live:w:bigminus"}),
-)
-async def live_adjust_weight(callback: CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    target = _current_target_exercise(data)
-    user = await db.get_user(callback.from_user.id)
-    ex = await db.get_exercise(target)
-    step, step_big = _effective_steps(ex, user)
-    deltas = {
-        "live:w:plus": step, "live:w:minus": -step,
-        "live:w:bigplus": step_big, "live:w:bigminus": -step_big,
-    }
-    last_by = dict(data.get("last_by_exercise") or {})
-    weight, reps = last_by.get(target, (0.0, 0))
-    weight = max(0.0, weight + deltas[callback.data])
-    last_by[target] = (weight, reps)
-    await state.update_data(last_by_exercise=last_by)
-    await callback.answer(f"{formatting.format_weight(weight)} кг")
-    await _render_logging_screen(callback.bot, state, user)
-
-
-@router.callback_query(StateFilter(WorkoutFlow.logging_set, WorkoutFlow.logging_superset), F.data == "live:w:exact")
-async def live_enter_exact_weight(callback: CallbackQuery, state: FSMContext):
-    await state.update_data(return_state=await state.get_state())
-    await state.set_state(WorkoutFlow.entering_weight)
-    data = await state.get_data()
-    user = await db.get_user(callback.from_user.id)
-    await _refresh_live(
-        callback.bot, data["live_chat_id"], data["live_message_id"], user, data["workout_id"],
-        "Напиши точный вес в кг (например 102.5):", keyboards.cancel_keyboard("live:cancel_input"),
-    )
+    await state.update_data(active_exercise_id=ex_id)
     await callback.answer()
-
-
-@router.message(StateFilter(WorkoutFlow.entering_weight))
-async def exact_weight_entered(message: Message, state: FSMContext):
-    try:
-        weight = float(message.text.strip().replace(",", "."))
-        if weight < 0:
-            raise ValueError
-    except ValueError:
-        await message.reply("Нужно неотрицательное число, например 102.5")
-        return
-    data = await state.get_data()
-    target = _current_target_exercise(data)
-    last_by = dict(data.get("last_by_exercise") or {})
-    _, reps = last_by.get(target, (0.0, 0))
-    last_by[target] = (weight, reps)
-    await state.update_data(last_by_exercise=last_by)
-    await message.delete()
-    await state.set_state(data.get("return_state") or WorkoutFlow.logging_set)
-    user = await db.get_user(message.from_user.id)
-    await _render_logging_screen(message.bot, state, user)
-
-
-@router.message(StateFilter(WorkoutFlow.entering_reps))
-async def other_reps_entered(message: Message, state: FSMContext):
-    text = message.text.strip()
-    if not text.isdigit() or int(text) <= 0:
-        await message.reply("Нужно целое число повторов больше 0")
-        return
-    reps = int(text)
-    data = await state.get_data()
-    target = _current_target_exercise(data)
-    last_by = dict(data.get("last_by_exercise") or {})
-    weight, _ = last_by.get(target, (0.0, 0))
-    block_id = data["current_block_id"]
-    in_superset = bool(data.get("superset_exercise_ids"))
-    order_in_round = data.get("current_superset_idx", 0) if in_superset else 0
-    await _log_one(block_id, target, weight, reps, False, order_in_round)
-    last_by[target] = (weight, reps)
-    await state.update_data(last_by_exercise=last_by)
-    if in_superset:
-        await _advance_superset(state, data)
-    await message.delete()
-    await state.set_state(data.get("return_state") or WorkoutFlow.logging_set)
-    await _react_ok(message.bot, message)
-    user = await db.get_user(message.from_user.id)
-    await _render_logging_screen(message.bot, state, user)
-
-
-@router.callback_query(F.data == "live:cancel_input")
-async def cancel_input(callback: CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    await state.set_state(data.get("return_state") or WorkoutFlow.logging_set)
     user = await db.get_user(callback.from_user.id)
     await _render_logging_screen(callback.bot, state, user)
-    await callback.answer()
 
 
 @router.message(StateFilter(WorkoutFlow.logging_set))
@@ -646,60 +475,39 @@ async def log_set_text(message: Message, state: FSMContext):
     except ParseError as e:
         await message.reply(e.message)
         return
-    block_id = data["current_block_id"]
-    ex_id = data["current_exercise_id"]
+    active = data.get("active_exercise_id")
+    block_id = (data.get("open_blocks") or {}).get(active)
     for ps in parsed:
-        await _log_one(block_id, ex_id, ps.weight, ps.reps, ps.is_warmup)
+        await _log_one(block_id, active, ps.weight, ps.reps, ps.is_warmup)
     last_by = dict(data.get("last_by_exercise") or {})
-    last_by[ex_id] = (parsed[-1].weight, parsed[-1].reps)
+    last_by[active] = (parsed[-1].weight, parsed[-1].reps)
     await state.update_data(last_by_exercise=last_by)
     await _react_ok(message.bot, message)
     user = await db.get_user(message.from_user.id)
     await _render_logging_screen(message.bot, state, user)
 
 
-@router.message(StateFilter(WorkoutFlow.logging_superset))
-async def log_superset_text(message: Message, state: FSMContext):
+@router.callback_query(StateFilter(WorkoutFlow.logging_set), F.data == "live:repeat")
+async def live_repeat(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
-    ids = data["superset_exercise_ids"]
-    block_id = data["current_block_id"]
-    last_by = dict(data.get("last_by_exercise") or {})
-
-    if "/" in message.text:
-        try:
-            parsed_rounds = parse_superset_line(message.text, len(ids))
-        except ParseError as e:
-            await message.reply(e.message)
-            return
-        round_idx = await db.next_round_index(block_id, ids[0])
-        for idx, ex_id in enumerate(ids):
-            ps = parsed_rounds[idx][0]
-            await db.add_set(block_id, ex_id, round_idx, idx, ps.weight, ps.reps, ps.is_warmup)
-            last_by[ex_id] = (ps.weight, ps.reps)
-        next_idx = 0
-    else:
-        try:
-            parsed = parse_single_token(message.text)
-        except ParseError as e:
-            await message.reply(e.message)
-            return
-        idx = data.get("current_superset_idx", 0)
-        ex_id = ids[idx]
-        for ps in parsed:
-            await _log_one(block_id, ex_id, ps.weight, ps.reps, ps.is_warmup, order_in_round=idx)
-        last_by[ex_id] = (parsed[-1].weight, parsed[-1].reps)
-        next_idx = (idx + 1) % len(ids)
-
-    await state.update_data(last_by_exercise=last_by, current_superset_idx=next_idx)
-    await _react_ok(message.bot, message)
-    user = await db.get_user(message.from_user.id)
-    await _render_logging_screen(message.bot, state, user)
+    active = data.get("active_exercise_id")
+    last = (data.get("last_by_exercise") or {}).get(active)
+    if not last:
+        await callback.answer("Сначала введи вес и повторы вручную", show_alert=True)
+        return
+    block_id = data["open_blocks"][active]
+    await _log_one(block_id, active, last[0], last[1], False)
+    await callback.answer(f"Записал {formatting.format_set(*last)}")
+    user = await db.get_user(callback.from_user.id)
+    await _render_logging_screen(callback.bot, state, user)
 
 
-@router.callback_query(StateFilter(WorkoutFlow.logging_set, WorkoutFlow.logging_superset), F.data == "live:undo")
+@router.callback_query(StateFilter(WorkoutFlow.logging_set), F.data == "live:undo")
 async def live_undo(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
-    row = await db.delete_last_set_in_block(data["current_block_id"])
+    active = data.get("active_exercise_id")
+    block_id = (data.get("open_blocks") or {}).get(active)
+    row = await db.delete_last_set_in_block(block_id)
     if row is None:
         await callback.answer("Нет сетов для удаления")
         return
@@ -708,19 +516,27 @@ async def live_undo(callback: CallbackQuery, state: FSMContext):
     await _render_logging_screen(callback.bot, state, user)
 
 
-@router.callback_query(StateFilter(WorkoutFlow.logging_set, WorkoutFlow.logging_superset), F.data == "live:finish_exercise")
+@router.callback_query(StateFilter(WorkoutFlow.logging_set), F.data == "live:finish_exercise")
 async def live_finish_exercise(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
-    await state.update_data(
-        current_block_id=None, current_exercise_id=None,
-        superset_exercise_ids=None, superset_exercise_names=None, current_superset_idx=0,
-    )
-    await state.set_state(WorkoutFlow.idle)
+    active = data.get("active_exercise_id")
+    open_exercises = [eid for eid in (data.get("open_exercises") or []) if eid != active]
+    open_blocks = dict(data.get("open_blocks") or {})
+    open_blocks.pop(active, None)
     user = await db.get_user(callback.from_user.id)
-    await _refresh_live(
-        callback.bot, data["live_chat_id"], data["live_message_id"], user, data["workout_id"],
-        None, _idle_keyboard(data),
-    )
+
+    if open_exercises:
+        await state.update_data(
+            open_exercises=open_exercises, open_blocks=open_blocks, active_exercise_id=open_exercises[0],
+        )
+        await _render_logging_screen(callback.bot, state, user)
+    else:
+        await state.update_data(open_exercises=[], open_blocks={}, active_exercise_id=None)
+        await state.set_state(WorkoutFlow.idle)
+        await _refresh_live(
+            callback.bot, data["live_chat_id"], data["live_message_id"], user, data["workout_id"],
+            None, _idle_keyboard(data),
+        )
     await callback.answer()
 
 
@@ -734,29 +550,24 @@ async def live_next_planned(callback: CallbackQuery, state: FSMContext):
     block_plan = planned.pop(0)
     await state.update_data(planned_blocks=planned)
     workout_id = data["workout_id"]
-    block_id = await db.create_block(workout_id, block_plan["type"])
+
+    open_exercises: list[int] = []
+    open_blocks: dict[int, int] = {}
     last_by = dict(data.get("last_by_exercise") or {})
-    ex_ids = block_plan["exercise_ids"]
-    for idx, ex_id in enumerate(ex_ids):
-        await db.add_block_exercise(block_id, ex_id, idx)
+    for ex_id in block_plan["exercise_ids"]:
+        block_id = await db.create_block(workout_id, "single")
+        await db.add_block_exercise(block_id, ex_id, 0)
         await db.touch_exercise_last_used(ex_id)
         last_by = await _seed_last_value({"last_by_exercise": last_by}, ex_id)
+        open_exercises.append(ex_id)
+        open_blocks[ex_id] = block_id
+
+    await state.update_data(
+        open_exercises=open_exercises, open_blocks=open_blocks,
+        active_exercise_id=open_exercises[0], last_by_exercise=last_by,
+    )
+    await state.set_state(WorkoutFlow.logging_set)
     user = await db.get_user(callback.from_user.id)
-
-    if block_plan["type"] == "single":
-        await state.update_data(
-            current_block_id=block_id, current_exercise_id=ex_ids[0], last_by_exercise=last_by
-        )
-        await state.set_state(WorkoutFlow.logging_set)
-    else:
-        names = [(await db.get_exercise(eid))["display_name"] for eid in ex_ids]
-        await state.update_data(
-            current_block_id=block_id, current_exercise_id=None,
-            superset_exercise_ids=ex_ids, superset_exercise_names=names,
-            current_superset_idx=0, last_by_exercise=last_by,
-        )
-        await state.set_state(WorkoutFlow.logging_superset)
-
     await _render_logging_screen(callback.bot, state, user)
     await callback.answer()
 
@@ -794,16 +605,8 @@ async def finish_discard_empty(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "live:cancel_finish")
 async def cancel_finish(callback: CallbackQuery, state: FSMContext):
-    data = await state.get_data()
     user = await db.get_user(callback.from_user.id)
-    in_progress = data.get("current_block_id") is not None
-    if in_progress:
-        await _render_logging_screen(callback.bot, state, user)
-    else:
-        await _refresh_live(
-            callback.bot, data["live_chat_id"], data["live_message_id"], user, data["workout_id"],
-            None, _idle_keyboard(data),
-        )
+    await _back_after_cancel(callback.bot, state, user)
     await callback.answer()
 
 
