@@ -1,0 +1,603 @@
+"""SQLite (WAL) data access layer.
+
+Single shared connection guarded by a write lock — SQLite allows concurrent
+readers in WAL mode but only one writer at a time, and a personal-bot's
+write volume never justifies a real connection pool.
+"""
+
+import asyncio
+import datetime as dt
+from typing import Any, Iterable, Optional
+
+import aiosqlite
+
+import config
+from seed_data import EXERCISE_TEMPLATES, MUSCLE_GROUP_PRESETS
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS users (
+    telegram_id INTEGER PRIMARY KEY,
+    username TEXT,
+    created_at TEXT NOT NULL,
+    unit TEXT NOT NULL DEFAULT 'kg',
+    weight_step REAL NOT NULL DEFAULT 2.5,
+    bodyweight REAL,
+    e1rm_formula TEXT NOT NULL DEFAULT 'epley',
+    hide_warmups INTEGER NOT NULL DEFAULT 0,
+    show_extra_stats INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS muscle_groups (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    name TEXT NOT NULL,
+    emoji TEXT,
+    sort_order INTEGER NOT NULL DEFAULT 100,
+    is_archived INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS exercises (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    name TEXT NOT NULL,
+    primary_group_id INTEGER,
+    equipment TEXT,
+    unilateral INTEGER NOT NULL DEFAULT 0,
+    attachment TEXT,
+    display_name TEXT NOT NULL,
+    is_archived INTEGER NOT NULL DEFAULT 0,
+    is_template INTEGER NOT NULL DEFAULT 0,
+    notes TEXT,
+    created_at TEXT NOT NULL,
+    last_used_at TEXT,
+    FOREIGN KEY (primary_group_id) REFERENCES muscle_groups (id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_exercises_user_name
+    ON exercises (user_id, display_name) WHERE is_template = 0;
+CREATE INDEX IF NOT EXISTS idx_exercises_user_group ON exercises (user_id, primary_group_id);
+
+CREATE TABLE IF NOT EXISTS workouts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    started_at TEXT NOT NULL,
+    finished_at TEXT,
+    status TEXT NOT NULL DEFAULT 'active',
+    note TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_workouts_user_status ON workouts (user_id, status);
+
+CREATE TABLE IF NOT EXISTS workout_blocks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    workout_id INTEGER NOT NULL,
+    order_index INTEGER NOT NULL,
+    type TEXT NOT NULL DEFAULT 'single',
+    FOREIGN KEY (workout_id) REFERENCES workouts (id)
+);
+CREATE INDEX IF NOT EXISTS idx_blocks_workout ON workout_blocks (workout_id);
+
+CREATE TABLE IF NOT EXISTS block_exercises (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    block_id INTEGER NOT NULL,
+    exercise_id INTEGER NOT NULL,
+    order_in_block INTEGER NOT NULL,
+    FOREIGN KEY (block_id) REFERENCES workout_blocks (id),
+    FOREIGN KEY (exercise_id) REFERENCES exercises (id)
+);
+CREATE INDEX IF NOT EXISTS idx_block_exercises_block ON block_exercises (block_id);
+
+CREATE TABLE IF NOT EXISTS sets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    block_id INTEGER NOT NULL,
+    exercise_id INTEGER NOT NULL,
+    round_index INTEGER NOT NULL,
+    order_in_round INTEGER NOT NULL DEFAULT 0,
+    weight REAL NOT NULL,
+    reps INTEGER NOT NULL,
+    is_warmup INTEGER NOT NULL DEFAULT 0,
+    rpe REAL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (block_id) REFERENCES workout_blocks (id),
+    FOREIGN KEY (exercise_id) REFERENCES exercises (id)
+);
+CREATE INDEX IF NOT EXISTS idx_sets_exercise ON sets (exercise_id);
+CREATE INDEX IF NOT EXISTS idx_sets_block ON sets (block_id);
+"""
+
+_conn: Optional[aiosqlite.Connection] = None
+_write_lock = asyncio.Lock()
+
+
+def now_iso() -> str:
+    return dt.datetime.now().isoformat(timespec="seconds")
+
+
+def build_display_name(
+    name: str,
+    equipment: Optional[str] = None,
+    unilateral: bool = False,
+    attachment: Optional[str] = None,
+) -> str:
+    parts = [name.strip()]
+    if unilateral:
+        parts.append("одной рукой")
+    if attachment:
+        parts.append(attachment.strip())
+    if equipment:
+        parts.append(equipment.strip())
+    return " · ".join(p for p in parts if p)
+
+
+async def init_db(db_path: str = config.DB_PATH) -> None:
+    global _conn
+    _conn = await aiosqlite.connect(db_path)
+    _conn.row_factory = aiosqlite.Row
+    await _conn.execute("PRAGMA journal_mode=WAL")
+    await _conn.execute("PRAGMA foreign_keys=ON")
+    await _conn.executescript(SCHEMA)
+    await _conn.commit()
+    await _seed_globals()
+
+
+async def close_db() -> None:
+    global _conn
+    if _conn is not None:
+        await _conn.close()
+        _conn = None
+
+
+def conn() -> aiosqlite.Connection:
+    assert _conn is not None, "DB not initialized — call init_db() first"
+    return _conn
+
+
+async def _seed_globals() -> None:
+    db = conn()
+    cur = await db.execute("SELECT COUNT(*) FROM muscle_groups WHERE user_id IS NULL")
+    (count,) = await cur.fetchone()
+    if count == 0:
+        async with _write_lock:
+            for name, emoji, sort_order in MUSCLE_GROUP_PRESETS:
+                await db.execute(
+                    "INSERT INTO muscle_groups (user_id, name, emoji, sort_order) "
+                    "VALUES (NULL, ?, ?, ?)",
+                    (name, emoji, sort_order),
+                )
+            await db.commit()
+
+    cur = await db.execute("SELECT COUNT(*) FROM exercises WHERE is_template = 1")
+    (count,) = await cur.fetchone()
+    if count == 0:
+        groups = await list_muscle_groups(user_id=None, global_only=True)
+        group_id_by_name = {g["name"]: g["id"] for g in groups}
+        async with _write_lock:
+            for group_name, ex_name in EXERCISE_TEMPLATES:
+                group_id = group_id_by_name.get(group_name)
+                display_name = build_display_name(ex_name)
+                await db.execute(
+                    "INSERT INTO exercises "
+                    "(user_id, name, primary_group_id, display_name, is_template, created_at) "
+                    "VALUES (NULL, ?, ?, ?, 1, ?)",
+                    (ex_name, group_id, display_name, now_iso()),
+                )
+            await db.commit()
+
+
+# ---------- users ----------
+
+async def get_or_create_user(telegram_id: int, username: Optional[str]) -> aiosqlite.Row:
+    db = conn()
+    cur = await db.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,))
+    row = await cur.fetchone()
+    if row:
+        return row
+    async with _write_lock:
+        await db.execute(
+            "INSERT INTO users (telegram_id, username, created_at, unit, weight_step, e1rm_formula) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                telegram_id,
+                username,
+                now_iso(),
+                config.DEFAULT_UNIT,
+                config.DEFAULT_WEIGHT_STEP,
+                config.DEFAULT_E1RM_FORMULA,
+            ),
+        )
+        await db.commit()
+    cur = await db.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,))
+    return await cur.fetchone()
+
+
+async def get_user(telegram_id: int) -> Optional[aiosqlite.Row]:
+    cur = await conn().execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,))
+    return await cur.fetchone()
+
+
+async def update_user(telegram_id: int, **fields: Any) -> None:
+    if not fields:
+        return
+    cols = ", ".join(f"{k} = ?" for k in fields)
+    async with _write_lock:
+        await conn().execute(
+            f"UPDATE users SET {cols} WHERE telegram_id = ?",
+            (*fields.values(), telegram_id),
+        )
+        await conn().commit()
+
+
+# ---------- muscle groups ----------
+
+async def list_muscle_groups(user_id: Optional[int], global_only: bool = False) -> list[aiosqlite.Row]:
+    db = conn()
+    if global_only or user_id is None:
+        cur = await db.execute(
+            "SELECT * FROM muscle_groups WHERE user_id IS NULL AND is_archived = 0 "
+            "ORDER BY sort_order, name"
+        )
+    else:
+        cur = await db.execute(
+            "SELECT * FROM muscle_groups WHERE (user_id IS NULL OR user_id = ?) AND is_archived = 0 "
+            "ORDER BY sort_order, name",
+            (user_id,),
+        )
+    return await cur.fetchall()
+
+
+async def get_muscle_group(group_id: int) -> Optional[aiosqlite.Row]:
+    cur = await conn().execute("SELECT * FROM muscle_groups WHERE id = ?", (group_id,))
+    return await cur.fetchone()
+
+
+async def create_muscle_group(user_id: int, name: str, emoji: Optional[str] = None) -> int:
+    async with _write_lock:
+        cur = await conn().execute(
+            "INSERT INTO muscle_groups (user_id, name, emoji, sort_order) VALUES (?, ?, ?, 100)",
+            (user_id, name, emoji),
+        )
+        await conn().commit()
+        return cur.lastrowid
+
+
+async def archive_muscle_group(group_id: int) -> None:
+    async with _write_lock:
+        await conn().execute("UPDATE muscle_groups SET is_archived = 1 WHERE id = ?", (group_id,))
+        await conn().commit()
+
+
+# ---------- exercises ----------
+
+async def list_user_exercises_in_group(user_id: int, group_id: int, limit: Optional[int] = None) -> list[aiosqlite.Row]:
+    sql = (
+        "SELECT * FROM exercises WHERE user_id = ? AND primary_group_id = ? "
+        "AND is_archived = 0 AND is_template = 0 "
+        "ORDER BY last_used_at IS NULL, last_used_at DESC, display_name"
+    )
+    params: list[Any] = [user_id, group_id]
+    if limit:
+        sql += " LIMIT ?"
+        params.append(limit)
+    cur = await conn().execute(sql, params)
+    return await cur.fetchall()
+
+
+async def list_templates_in_group(group_id: int) -> list[aiosqlite.Row]:
+    cur = await conn().execute(
+        "SELECT * FROM exercises WHERE is_template = 1 AND primary_group_id = ? ORDER BY display_name",
+        (group_id,),
+    )
+    return await cur.fetchall()
+
+
+async def search_exercises(user_id: int, query: str, limit: int = 20) -> list[aiosqlite.Row]:
+    # SQLite's LOWER()/LIKE only case-fold ASCII, so Cyrillic search is done in Python.
+    cur = await conn().execute(
+        "SELECT * FROM exercises WHERE user_id = ? AND is_archived = 0 AND is_template = 0 "
+        "ORDER BY last_used_at IS NULL, last_used_at DESC, display_name",
+        (user_id,),
+    )
+    rows = await cur.fetchall()
+    needle = query.lower()
+    matches = [r for r in rows if needle in r["display_name"].lower()]
+    return matches[:limit]
+
+
+async def get_exercise(exercise_id: int) -> Optional[aiosqlite.Row]:
+    cur = await conn().execute("SELECT * FROM exercises WHERE id = ?", (exercise_id,))
+    return await cur.fetchone()
+
+
+async def create_exercise(
+    user_id: int,
+    name: str,
+    group_id: Optional[int],
+    equipment: Optional[str] = None,
+    unilateral: bool = False,
+    attachment: Optional[str] = None,
+    notes: Optional[str] = None,
+) -> int:
+    display_name = build_display_name(name, equipment, unilateral, attachment)
+    async with _write_lock:
+        cur = await conn().execute(
+            "INSERT INTO exercises "
+            "(user_id, name, primary_group_id, equipment, unilateral, attachment, "
+            " display_name, notes, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                user_id,
+                name,
+                group_id,
+                equipment,
+                int(unilateral),
+                attachment,
+                display_name,
+                notes,
+                now_iso(),
+            ),
+        )
+        await conn().commit()
+        return cur.lastrowid
+
+
+async def fork_exercise_from_template(
+    user_id: int,
+    template_id: int,
+    equipment: Optional[str] = None,
+    unilateral: Optional[bool] = None,
+    attachment: Optional[str] = None,
+) -> int:
+    template = await get_exercise(template_id)
+    if template is None:
+        raise ValueError("template not found")
+    final_equipment = equipment if equipment is not None else template["equipment"]
+    final_unilateral = unilateral if unilateral is not None else bool(template["unilateral"])
+    final_attachment = attachment if attachment is not None else template["attachment"]
+    return await create_exercise(
+        user_id,
+        template["name"],
+        template["primary_group_id"],
+        final_equipment,
+        final_unilateral,
+        final_attachment,
+    )
+
+
+async def touch_exercise_last_used(exercise_id: int) -> None:
+    async with _write_lock:
+        await conn().execute(
+            "UPDATE exercises SET last_used_at = ? WHERE id = ?", (now_iso(), exercise_id)
+        )
+        await conn().commit()
+
+
+async def archive_exercise(exercise_id: int) -> None:
+    async with _write_lock:
+        await conn().execute("UPDATE exercises SET is_archived = 1 WHERE id = ?", (exercise_id,))
+        await conn().commit()
+
+
+# ---------- workouts ----------
+
+async def get_active_workout(user_id: int) -> Optional[aiosqlite.Row]:
+    cur = await conn().execute(
+        "SELECT * FROM workouts WHERE user_id = ? AND status = 'active'", (user_id,)
+    )
+    return await cur.fetchone()
+
+
+async def create_workout(user_id: int) -> int:
+    async with _write_lock:
+        cur = await conn().execute(
+            "INSERT INTO workouts (user_id, started_at, status) VALUES (?, ?, 'active')",
+            (user_id, now_iso()),
+        )
+        await conn().commit()
+        return cur.lastrowid
+
+
+async def get_workout(workout_id: int) -> Optional[aiosqlite.Row]:
+    cur = await conn().execute("SELECT * FROM workouts WHERE id = ?", (workout_id,))
+    return await cur.fetchone()
+
+
+async def finish_workout(workout_id: int, note: Optional[str] = None) -> None:
+    async with _write_lock:
+        await conn().execute(
+            "UPDATE workouts SET status = 'finished', finished_at = ?, note = ? WHERE id = ?",
+            (now_iso(), note, workout_id),
+        )
+        await conn().commit()
+
+
+async def discard_workout(workout_id: int) -> None:
+    async with _write_lock:
+        db = conn()
+        await db.execute(
+            "DELETE FROM sets WHERE block_id IN "
+            "(SELECT id FROM workout_blocks WHERE workout_id = ?)",
+            (workout_id,),
+        )
+        await db.execute(
+            "DELETE FROM block_exercises WHERE block_id IN "
+            "(SELECT id FROM workout_blocks WHERE workout_id = ?)",
+            (workout_id,),
+        )
+        await db.execute("DELETE FROM workout_blocks WHERE workout_id = ?", (workout_id,))
+        await db.execute("DELETE FROM workouts WHERE id = ?", (workout_id,))
+        await db.commit()
+
+
+async def list_workouts(
+    user_id: int, limit: int = 10, offset: int = 0, status: str = "finished"
+) -> list[aiosqlite.Row]:
+    cur = await conn().execute(
+        "SELECT * FROM workouts WHERE user_id = ? AND status = ? "
+        "ORDER BY started_at DESC LIMIT ? OFFSET ?",
+        (user_id, status, limit, offset),
+    )
+    return await cur.fetchall()
+
+
+async def count_workouts(user_id: int, status: str = "finished") -> int:
+    cur = await conn().execute(
+        "SELECT COUNT(*) FROM workouts WHERE user_id = ? AND status = ?", (user_id, status)
+    )
+    (count,) = await cur.fetchone()
+    return count
+
+
+# ---------- blocks / block exercises ----------
+
+async def create_block(workout_id: int, block_type: str) -> int:
+    db = conn()
+    cur = await db.execute(
+        "SELECT COALESCE(MAX(order_index), -1) + 1 FROM workout_blocks WHERE workout_id = ?",
+        (workout_id,),
+    )
+    (order_index,) = await cur.fetchone()
+    async with _write_lock:
+        cur = await db.execute(
+            "INSERT INTO workout_blocks (workout_id, order_index, type) VALUES (?, ?, ?)",
+            (workout_id, order_index, block_type),
+        )
+        await db.commit()
+        return cur.lastrowid
+
+
+async def add_block_exercise(block_id: int, exercise_id: int, order_in_block: int) -> None:
+    async with _write_lock:
+        await conn().execute(
+            "INSERT INTO block_exercises (block_id, exercise_id, order_in_block) VALUES (?, ?, ?)",
+            (block_id, exercise_id, order_in_block),
+        )
+        await conn().commit()
+
+
+async def get_block(block_id: int) -> Optional[aiosqlite.Row]:
+    cur = await conn().execute("SELECT * FROM workout_blocks WHERE id = ?", (block_id,))
+    return await cur.fetchone()
+
+
+async def get_block_exercises(block_id: int) -> list[aiosqlite.Row]:
+    cur = await conn().execute(
+        "SELECT be.*, e.display_name FROM block_exercises be "
+        "JOIN exercises e ON e.id = be.exercise_id "
+        "WHERE be.block_id = ? ORDER BY be.order_in_block",
+        (block_id,),
+    )
+    return await cur.fetchall()
+
+
+async def list_blocks_for_workout(workout_id: int) -> list[aiosqlite.Row]:
+    cur = await conn().execute(
+        "SELECT * FROM workout_blocks WHERE workout_id = ? ORDER BY order_index", (workout_id,)
+    )
+    return await cur.fetchall()
+
+
+# ---------- sets ----------
+
+async def add_set(
+    block_id: int,
+    exercise_id: int,
+    round_index: int,
+    order_in_round: int,
+    weight: float,
+    reps: int,
+    is_warmup: bool = False,
+    rpe: Optional[float] = None,
+) -> int:
+    async with _write_lock:
+        cur = await conn().execute(
+            "INSERT INTO sets "
+            "(block_id, exercise_id, round_index, order_in_round, weight, reps, is_warmup, rpe, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (block_id, exercise_id, round_index, order_in_round, weight, reps, int(is_warmup), rpe, now_iso()),
+        )
+        await conn().commit()
+        return cur.lastrowid
+
+
+async def next_round_index(block_id: int, exercise_id: int) -> int:
+    cur = await conn().execute(
+        "SELECT COALESCE(MAX(round_index), 0) + 1 FROM sets WHERE block_id = ? AND exercise_id = ?",
+        (block_id, exercise_id),
+    )
+    (idx,) = await cur.fetchone()
+    return idx
+
+
+async def delete_last_set_in_block(block_id: int) -> Optional[aiosqlite.Row]:
+    cur = await conn().execute(
+        "SELECT * FROM sets WHERE block_id = ? ORDER BY id DESC LIMIT 1", (block_id,)
+    )
+    row = await cur.fetchone()
+    if row is None:
+        return None
+    async with _write_lock:
+        await conn().execute("DELETE FROM sets WHERE id = ?", (row["id"],))
+        await conn().commit()
+    return row
+
+
+async def list_sets_for_block(block_id: int) -> list[aiosqlite.Row]:
+    cur = await conn().execute(
+        "SELECT * FROM sets WHERE block_id = ? ORDER BY round_index, order_in_round, id",
+        (block_id,),
+    )
+    return await cur.fetchall()
+
+
+async def list_sets_for_exercise(exercise_id: int, exclude_workout_id: Optional[int] = None) -> list[aiosqlite.Row]:
+    """All working (non-warmup) sets for an exercise across finished workouts, oldest first."""
+    sql = (
+        "SELECT s.*, w.id AS workout_id, w.started_at FROM sets s "
+        "JOIN workout_blocks b ON b.id = s.block_id "
+        "JOIN workouts w ON w.id = b.workout_id "
+        "WHERE s.exercise_id = ? AND s.is_warmup = 0 AND w.status = 'finished'"
+    )
+    params: list[Any] = [exercise_id]
+    if exclude_workout_id is not None:
+        sql += " AND w.id != ?"
+        params.append(exclude_workout_id)
+    sql += " ORDER BY w.started_at, s.id"
+    cur = await conn().execute(sql, params)
+    return await cur.fetchall()
+
+
+async def list_sets_for_workout_exercise(workout_id: int, exercise_id: int) -> list[aiosqlite.Row]:
+    cur = await conn().execute(
+        "SELECT s.* FROM sets s "
+        "JOIN workout_blocks b ON b.id = s.block_id "
+        "WHERE b.workout_id = ? AND s.exercise_id = ? "
+        "ORDER BY s.round_index, s.order_in_round, s.id",
+        (workout_id, exercise_id),
+    )
+    return await cur.fetchall()
+
+
+async def list_exercise_ids_for_workout(workout_id: int) -> list[int]:
+    cur = await conn().execute(
+        "SELECT DISTINCT s.exercise_id FROM sets s "
+        "JOIN workout_blocks b ON b.id = s.block_id WHERE b.workout_id = ?",
+        (workout_id,),
+    )
+    rows = await cur.fetchall()
+    return [r["exercise_id"] for r in rows]
+
+
+# ---------- export ----------
+
+async def export_rows_for_user(user_id: int) -> list[aiosqlite.Row]:
+    cur = await conn().execute(
+        "SELECT w.started_at, w.finished_at, e.display_name AS exercise, "
+        "bt.type AS block_type, s.round_index, s.order_in_round, "
+        "s.weight, s.reps, s.is_warmup, s.rpe "
+        "FROM sets s "
+        "JOIN workout_blocks bt ON bt.id = s.block_id "
+        "JOIN workouts w ON w.id = bt.workout_id "
+        "JOIN exercises e ON e.id = s.exercise_id "
+        "WHERE w.user_id = ? AND w.status = 'finished' "
+        "ORDER BY w.started_at, s.id",
+        (user_id,),
+    )
+    return await cur.fetchall()
