@@ -53,18 +53,6 @@ async def _date_chosen(event, state: FSMContext, date: dt.date):
         await event.answer(BULK_HINT, reply_markup=kb)
 
 
-@router.callback_query(StateFilter(BackfillFlow.awaiting_date), F.data == "bf:date:today")
-async def bf_date_today(callback: CallbackQuery, state: FSMContext):
-    await _date_chosen(callback, state, dt.date.today())
-    await callback.answer()
-
-
-@router.callback_query(StateFilter(BackfillFlow.awaiting_date), F.data == "bf:date:yesterday")
-async def bf_date_yesterday(callback: CallbackQuery, state: FSMContext):
-    await _date_chosen(callback, state, dt.date.today() - dt.timedelta(days=1))
-    await callback.answer()
-
-
 @router.message(StateFilter(BackfillFlow.awaiting_date))
 async def bf_date_text(message: Message, state: FSMContext):
     try:

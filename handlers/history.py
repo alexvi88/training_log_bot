@@ -176,7 +176,9 @@ async def prog_show_exercise(callback: CallbackQuery, state: FSMContext):
     comparison = analytics.compare_to_previous_session(sessions)
     records = analytics.compute_personal_records(sessions)
 
-    text = formatting.format_progress_screen(ex["display_name"], sessions, trend, comparison, records)
+    text = formatting.format_progress_screen(
+        ex["display_name"], sessions, trend, comparison, records, unit=user["unit"]
+    )
     kb = keyboards.progress_charts_keyboard(ex_id) if sessions else None
     await callback.message.edit_text(text, reply_markup=kb)
     await callback.answer()

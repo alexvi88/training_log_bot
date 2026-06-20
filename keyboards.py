@@ -10,11 +10,12 @@ def main_menu(has_active_workout: bool) -> InlineKeyboardMarkup:
         b.button(text="▶️ Продолжить тренировку", callback_data="menu:resume_workout")
     else:
         b.button(text="🏋️ Начать тренировку", callback_data="menu:start_workout")
-    b.button(text="➕ Прошлая тренировка", callback_data="menu:backfill_workout")
     b.button(text="📈 Прогресс", callback_data="menu:progress")
     b.button(text="📚 История", callback_data="menu:history")
     b.button(text="⚙️ Упражнения", callback_data="menu:exercises")
+    b.button(text="⚖️ Дневник веса", callback_data="menu:bodyweight")
     b.button(text="🔧 Настройки", callback_data="menu:settings")
+    b.button(text="🗓 Занести тренировку задним числом", callback_data="menu:backfill_workout")
     b.adjust(1)
     return b.as_markup()
 
@@ -33,15 +34,12 @@ def groups_keyboard(groups, prefix: str, extra_buttons: list[tuple[str, str]] | 
 def exercises_keyboard(
     exercises,
     prefix: str,
-    show_templates_button: bool = True,
     show_new_button: bool = True,
     back_cb: str = "back",
 ) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     for ex in exercises:
         b.button(text=ex["display_name"], callback_data=f"{prefix}:ex:{ex['id']}")
-    if show_templates_button:
-        b.button(text="📋 Шаблоны", callback_data=f"{prefix}:templates")
     if show_new_button:
         b.button(text="➕ Новое упражнение", callback_data=f"{prefix}:new")
     b.button(text="⬅️ Назад", callback_data=f"{prefix}:{back_cb}")
@@ -49,11 +47,19 @@ def exercises_keyboard(
     return b.as_markup()
 
 
-def templates_keyboard(templates, prefix: str) -> InlineKeyboardMarkup:
+def new_exercise_entry_keyboard(prefix: str) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.button(text="📋 Выбрать из шаблона", callback_data=f"{prefix}:templates")
+    b.button(text="❌ Отмена", callback_data=f"{prefix}:cancel")
+    b.adjust(1)
+    return b.as_markup()
+
+
+def templates_keyboard(templates, prefix: str, back_cb: str = "back") -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     for t in templates:
         b.button(text=t["display_name"], callback_data=f"{prefix}:tpl:{t['id']}")
-    b.button(text="⬅️ Назад", callback_data=f"{prefix}:back")
+    b.button(text="⬅️ Назад", callback_data=f"{prefix}:{back_cb}")
     b.adjust(1)
     return b.as_markup()
 
@@ -107,14 +113,6 @@ def exercise_picker_entry_keyboard(has_planned: bool = False) -> InlineKeyboardM
     return b.as_markup()
 
 
-def new_exercise_attrs_keyboard() -> InlineKeyboardMarkup:
-    b = InlineKeyboardBuilder()
-    b.button(text="Одной рукой/ногой", callback_data="attr:unilateral")
-    b.button(text="✅ Готово", callback_data="attr:done")
-    b.adjust(1)
-    return b.as_markup()
-
-
 def finish_workout_keyboard() -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(text="📝 Добавить заметку", callback_data="finish:note")
@@ -156,18 +154,14 @@ def history_item_keyboard(workout_id: int) -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
-def settings_keyboard(unit: str, default_weight_step: float, hide_warmups: bool, formula: str) -> InlineKeyboardMarkup:
+def settings_keyboard(unit: str, default_weight_step: float, formula: str) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(text=f"Единицы: {unit}", callback_data="settings:unit")
     b.button(text=f"Шаг веса по умолчанию: {default_weight_step}", callback_data="settings:step")
-    b.button(text="Вес тела", callback_data="settings:bodyweight")
     b.button(text=f"Формула 1ПМ: {formula}", callback_data="settings:formula")
-    b.button(
-        text=f"Скрывать разминку: {'да' if hide_warmups else 'нет'}",
-        callback_data="settings:hide_warmups",
-    )
     b.button(text="📤 Экспорт CSV", callback_data="settings:export")
     b.button(text="📥 Импорт CSV", callback_data="settings:import")
+    b.button(text="⬅️ Назад", callback_data="settings:back")
     b.adjust(1)
     return b.as_markup()
 
@@ -180,10 +174,7 @@ def cancel_keyboard(cb: str = "cancel") -> InlineKeyboardMarkup:
 
 def date_quick_keyboard(prefix: str) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.button(text="Сегодня", callback_data=f"{prefix}:date:today")
-    b.button(text="Вчера", callback_data=f"{prefix}:date:yesterday")
     b.button(text="❌ Отмена", callback_data=f"{prefix}:cancel")
-    b.adjust(2, 1)
     return b.as_markup()
 
 
@@ -225,6 +216,15 @@ def set_actions_keyboard(set_id: int) -> InlineKeyboardMarkup:
     b.button(text="✏️ Изменить вес/повторы", callback_data=f"editw:editset:{set_id}")
     b.button(text="🗑 Удалить сет", callback_data=f"editw:delset:{set_id}")
     b.button(text="⬅️ Назад", callback_data="editw:back")
+    b.adjust(1)
+    return b.as_markup()
+
+
+def bodyweight_keyboard() -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.button(text="➕ Записать вес", callback_data="bw:add")
+    b.button(text="📈 Динамика", callback_data="bw:chart")
+    b.button(text="⬅️ Назад", callback_data="bw:back")
     b.adjust(1)
     return b.as_markup()
 

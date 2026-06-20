@@ -28,11 +28,7 @@ async def _ensure_user(telegram_id: int, username: str | None):
 
 async def _refresh_live(bot, chat_id: int, message_id: int, user, workout_id: int, hint, keyboard):
     blocks = await view_builder.build_block_views(workout_id, user["e1rm_formula"])
-    workout = await db.get_workout(workout_id)
-    started_at = dt.datetime.fromisoformat(workout["started_at"])
-    text = formatting.build_live_session_text(
-        started_at, blocks, hint, hide_warmups=bool(user["hide_warmups"])
-    )
+    text = formatting.build_live_session_text(blocks, hint, hide_warmups=bool(user["hide_warmups"]))
     try:
         await bot.edit_message_text(
             chat_id=chat_id, message_id=message_id, text=text, reply_markup=keyboard
@@ -67,7 +63,7 @@ def _short_name(name: str, limit: int = 18) -> str:
 
 
 def _logging_hint(last: tuple[float, int] | None) -> str:
-    base = "Вес и повторы: 100 8"
+    base = "Напиши вес и повторы через пробел, например «100 8»"
     if last:
         base += f" · 🔁 повторить {formatting.format_set(*last)}"
     return base
@@ -228,7 +224,10 @@ async def live_add_exercise(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(StateFilter(WorkoutFlow.picking_group, WorkoutFlow.picking_exercise), F.data == "pick:cancel")
+@router.callback_query(
+    StateFilter(WorkoutFlow.picking_group, WorkoutFlow.picking_exercise, WorkoutFlow.creating_exercise_name),
+    F.data == "pick:cancel",
+)
 async def pick_cancel(callback: CallbackQuery, state: FSMContext):
     user = await db.get_user(callback.from_user.id)
     await _back_after_cancel(callback.bot, state, user)
@@ -252,7 +251,7 @@ async def _picker_screen_exercises(callback: CallbackQuery, state: FSMContext):
         callback.from_user.id, group_id, limit=config.RECENT_EXERCISES_LIMIT
     )
     kb = keyboards.exercises_keyboard(exercises, prefix="pick", back_cb="back")
-    hint = "Выбери упражнение (можешь просто написать название для поиска):"
+    hint = "Выбери упражнение из своих — или начни печатать название, чтобы найти:"
     await state.update_data(picker_stage="exercises")
     await _refresh_live(
         callback.bot, data["live_chat_id"], data["live_message_id"], user, data["workout_id"], hint, kb
@@ -266,54 +265,53 @@ async def pick_back_to_groups(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(StateFilter(WorkoutFlow.picking_exercise), F.data == "pick:templates")
-async def pick_templates(callback: CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    user = await db.get_user(callback.from_user.id)
-    templates = await db.list_templates_in_group(data["pending_group_id"])
-    kb = keyboards.templates_keyboard(templates, prefix="pick")
-    await _refresh_live(
-        callback.bot, data["live_chat_id"], data["live_message_id"], user, data["workout_id"],
-        "Шаблоны — выбери, потом можно уточнить вариант:", kb,
-    )
-    await callback.answer()
-
-
-@router.callback_query(StateFilter(WorkoutFlow.picking_exercise), F.data == "pick:back2")
-async def pick_back_from_templates(callback: CallbackQuery, state: FSMContext):
-    await _picker_screen_exercises(callback, state)
-    await callback.answer()
-
-
 @router.callback_query(StateFilter(WorkoutFlow.picking_exercise), F.data.startswith("pick:ex:"))
 async def pick_existing_exercise(callback: CallbackQuery, state: FSMContext):
     ex_id = int(callback.data.split(":")[2])
     await _on_exercise_chosen(callback, state, ex_id)
 
 
-@router.callback_query(StateFilter(WorkoutFlow.picking_exercise), F.data.startswith("pick:tpl:"))
-async def pick_template(callback: CallbackQuery, state: FSMContext):
-    template_id = int(callback.data.split(":")[2])
-    template = await db.get_exercise(template_id)
-    await state.update_data(
-        new_ex_template_id=template_id, new_ex_name=template["name"],
-        new_ex_equipment=None, new_ex_unilateral=False,
+async def _new_exercise_entry_screen(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    user = await db.get_user(callback.from_user.id)
+    await _refresh_live(
+        callback.bot, data["live_chat_id"], data["live_message_id"], user, data["workout_id"],
+        "Напиши название нового упражнения, или выбери из шаблонов:",
+        keyboards.new_exercise_entry_keyboard("pick"),
     )
-    await state.set_state(WorkoutFlow.creating_exercise_attrs)
-    await _attrs_screen(callback, state)
-    await callback.answer()
 
 
 @router.callback_query(StateFilter(WorkoutFlow.picking_exercise), F.data == "pick:new")
 async def pick_new_exercise(callback: CallbackQuery, state: FSMContext):
     await state.set_state(WorkoutFlow.creating_exercise_name)
+    await _new_exercise_entry_screen(callback, state)
+    await callback.answer()
+
+
+@router.callback_query(StateFilter(WorkoutFlow.creating_exercise_name), F.data == "pick:templates")
+async def pick_templates(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     user = await db.get_user(callback.from_user.id)
+    templates = await db.list_templates_in_group(data["pending_group_id"])
+    kb = keyboards.templates_keyboard(templates, prefix="pick", back_cb="newback")
     await _refresh_live(
         callback.bot, data["live_chat_id"], data["live_message_id"], user, data["workout_id"],
-        "Напиши название упражнения:", keyboards.cancel_keyboard("pick:cancel"),
+        "Шаблоны — выбери подходящий:", kb,
     )
     await callback.answer()
+
+
+@router.callback_query(StateFilter(WorkoutFlow.creating_exercise_name), F.data == "pick:newback")
+async def pick_back_from_templates(callback: CallbackQuery, state: FSMContext):
+    await _new_exercise_entry_screen(callback, state)
+    await callback.answer()
+
+
+@router.callback_query(StateFilter(WorkoutFlow.creating_exercise_name), F.data.startswith("pick:tpl:"))
+async def pick_template(callback: CallbackQuery, state: FSMContext):
+    template_id = int(callback.data.split(":")[2])
+    ex_id = await db.fork_exercise_from_template(callback.from_user.id, template_id)
+    await _on_exercise_chosen(callback, state, ex_id)
 
 
 @router.message(StateFilter(WorkoutFlow.creating_exercise_name))
@@ -322,82 +320,10 @@ async def new_exercise_name_entered(message: Message, state: FSMContext):
     if not name:
         await message.reply("Название не может быть пустым")
         return
-    await state.update_data(
-        new_ex_template_id=None, new_ex_name=name, new_ex_equipment=None, new_ex_unilateral=False
-    )
-    await state.set_state(WorkoutFlow.creating_exercise_attrs)
     await message.delete()
     data = await state.get_data()
-    user = await db.get_user(message.from_user.id)
-    await _refresh_live(
-        message.bot, data["live_chat_id"], data["live_message_id"], user, data["workout_id"],
-        f"«{name}» — можешь уточнить оснастку/хват текстом или нажать Готово.",
-        keyboards.new_exercise_attrs_keyboard(),
-    )
-
-
-async def _attrs_screen(callback: CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    user = await db.get_user(callback.from_user.id)
-    name = data.get("new_ex_name", "")
-    equipment = data.get("new_ex_equipment")
-    unilateral = data.get("new_ex_unilateral", False)
-    parts = [name]
-    if unilateral:
-        parts.append("одной рукой")
-    if equipment:
-        parts.append(equipment)
-    hint = "Вариант: " + " · ".join(parts) + "\nНапиши уточнение текстом или нажми Готово."
-    await _refresh_live(
-        callback.bot, data["live_chat_id"], data["live_message_id"], user, data["workout_id"],
-        hint, keyboards.new_exercise_attrs_keyboard(),
-    )
-
-
-@router.callback_query(StateFilter(WorkoutFlow.creating_exercise_attrs), F.data == "attr:unilateral")
-async def attr_toggle_unilateral(callback: CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    await state.update_data(new_ex_unilateral=not data.get("new_ex_unilateral", False))
-    await _attrs_screen(callback, state)
-    await callback.answer()
-
-
-@router.message(StateFilter(WorkoutFlow.creating_exercise_attrs))
-async def attr_text_entered(message: Message, state: FSMContext):
-    await state.update_data(new_ex_equipment=message.text.strip())
-    await message.delete()
-    data = await state.get_data()
-    user = await db.get_user(message.from_user.id)
-    name = data.get("new_ex_name", "")
-    equipment = data.get("new_ex_equipment")
-    unilateral = data.get("new_ex_unilateral", False)
-    parts = [name]
-    if unilateral:
-        parts.append("одной рукой")
-    if equipment:
-        parts.append(equipment)
-    hint = "Вариант: " + " · ".join(parts) + "\nНапиши ещё уточнение или нажми Готово."
-    await _refresh_live(
-        message.bot, data["live_chat_id"], data["live_message_id"], user, data["workout_id"],
-        hint, keyboards.new_exercise_attrs_keyboard(),
-    )
-
-
-@router.callback_query(StateFilter(WorkoutFlow.creating_exercise_attrs), F.data == "attr:done")
-async def attr_done(callback: CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    template_id = data.get("new_ex_template_id")
-    if template_id:
-        ex_id = await db.fork_exercise_from_template(
-            callback.from_user.id, template_id,
-            equipment=data.get("new_ex_equipment"), unilateral=data.get("new_ex_unilateral"),
-        )
-    else:
-        ex_id = await db.create_exercise(
-            callback.from_user.id, data["new_ex_name"], data["pending_group_id"],
-            equipment=data.get("new_ex_equipment"), unilateral=data.get("new_ex_unilateral", False),
-        )
-    await _on_exercise_chosen(callback, state, ex_id)
+    ex_id = await db.create_exercise(message.from_user.id, name, data["pending_group_id"])
+    await _on_exercise_chosen(message, state, ex_id)
 
 
 async def _seed_last_value(data: dict, ex_id: int) -> dict:
@@ -409,7 +335,7 @@ async def _seed_last_value(data: dict, ex_id: int) -> dict:
     return last_by
 
 
-async def _on_exercise_chosen(callback: CallbackQuery, state: FSMContext, ex_id: int):
+async def _on_exercise_chosen(event, state: FSMContext, ex_id: int):
     data = await state.get_data()
     await db.touch_exercise_last_used(ex_id)
 
@@ -427,9 +353,10 @@ async def _on_exercise_chosen(callback: CallbackQuery, state: FSMContext, ex_id:
         active_exercise_id=ex_id, last_by_exercise=last_by,
     )
     await state.set_state(WorkoutFlow.logging_set)
-    user = await db.get_user(callback.from_user.id)
-    await _render_logging_screen(callback.bot, state, user)
-    await callback.answer()
+    user = await db.get_user(event.from_user.id)
+    await _render_logging_screen(event.bot, state, user)
+    if isinstance(event, CallbackQuery):
+        await event.answer()
 
 
 # ---------- search by typing while picking exercise ----------
@@ -443,9 +370,7 @@ async def search_exercise_text(message: Message, state: FSMContext):
     data = await state.get_data()
     user = await db.get_user(message.from_user.id)
     results = await db.search_exercises(message.from_user.id, query)
-    kb = keyboards.exercises_keyboard(
-        results, prefix="pick", show_templates_button=False, show_new_button=True, back_cb="back"
-    )
+    kb = keyboards.exercises_keyboard(results, prefix="pick", show_new_button=True, back_cb="back")
     hint = f"Результаты поиска «{query}»:" if results else f"Ничего не нашлось по «{query}». Можно создать новое."
     await _refresh_live(
         message.bot, data["live_chat_id"], data["live_message_id"], user, data["workout_id"], hint, kb
@@ -666,14 +591,16 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
 
         records = analytics.detect_new_records(prior_sessions, new_session)
         for r in records:
-            pr_lines.append(formatting.format_pr_line(ex["display_name"], r.kind, r.value, r.extra))
+            pr_lines.append(
+                formatting.format_pr_line(ex["display_name"], r.kind, r.value, r.extra, unit=user["unit"])
+            )
 
         if prior_sessions:
             comparison = analytics.compare_to_previous_session(prior_sessions + [new_session])
             if comparison and not new_session.is_bodyweight_mode:
                 comparison_lines.append(
                     f"{ex['display_name']}: " + formatting.format_comparison_line(
-                        comparison.e1rm_delta, comparison.tonnage_delta
+                        comparison.e1rm_delta, comparison.tonnage_delta, unit=user["unit"]
                     )
                 )
 

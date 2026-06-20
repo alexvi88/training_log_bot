@@ -12,6 +12,8 @@ from analytics import e1rm
 
 _WEEKDAYS_RU = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"]
 
+UNIT_LABELS = {"kg": "кг", "lb": "lb"}
+
 
 def format_weight(weight: float) -> str:
     if weight == int(weight):
@@ -167,13 +169,11 @@ def build_workout_summary(
 
 
 def build_live_session_text(
-    started_at: dt.datetime,
     blocks: list[BlockView],
     hint: str | None = None,
     hide_warmups: bool = False,
 ) -> str:
-    now = dt.datetime.now()
-    lines = [f"🏋️ Тренировка идёт · {format_duration(started_at, now)}"]
+    lines = ["🏋️ Тренировка идёт"]
     last_group: str | None = None
     for block in blocks:
         if isinstance(block, ExerciseBlockView):
@@ -191,15 +191,18 @@ def build_live_session_text(
     return "\n".join(lines)
 
 
-def format_pr_line(exercise_name: str, kind: str, value: float, extra: float | None = None) -> str:
+def format_pr_line(
+    exercise_name: str, kind: str, value: float, extra: float | None = None, unit: str = "kg"
+) -> str:
+    u = UNIT_LABELS.get(unit, "кг")
     if kind == "weight":
-        return f"🔥 Новый рекорд в {exercise_name}: {format_weight(value)} кг"
+        return f"🔥 Новый рекорд в {exercise_name}: {format_weight(value)} {u}"
     if kind == "e1rm":
-        return f"🔥 Новый рекорд e1RM в {exercise_name}: {value:.1f} кг"
+        return f"🔥 Новый рекорд e1RM в {exercise_name}: {value:.1f} {u}"
     if kind == "tonnage":
         return f"🔥 Новый рекорд объёма в {exercise_name}: {format_weight(value)}"
     if kind == "reps_at_weight":
-        return f"🔥 Новый рекорд повторов в {exercise_name}: {int(value)} на {format_weight(extra or 0)} кг"
+        return f"🔥 Новый рекорд повторов в {exercise_name}: {int(value)} на {format_weight(extra or 0)} {u}"
     return f"🔥 Новый рекорд в {exercise_name}"
 
 
@@ -210,7 +213,9 @@ def format_progress_screen(
     comparison,  # analytics.ComparisonDelta | None
     records,  # analytics.PersonalRecords
     limit: int = 8,
+    unit: str = "kg",
 ) -> str:
+    u = UNIT_LABELS.get(unit, "кг")
     lines = [f"📈 {exercise_name}"]
     if not sessions:
         lines.append("Пока нет завершённых тренировок с этим упражнением.")
@@ -246,15 +251,16 @@ def format_progress_screen(
         lines.append(f"Рекорд повторов в сете: {records.max_reps_at_weight and max(records.max_reps_at_weight.values())}")
     else:
         lines.append(
-            f"Рекорды: вес {format_weight(records.max_weight)} · e1RM {records.max_e1rm:.1f} · "
+            f"Рекорды: вес {format_weight(records.max_weight)} {u} · e1RM {records.max_e1rm:.1f} {u} · "
             f"объём сессии {format_weight(records.max_session_tonnage)}"
         )
     return "\n".join(lines)
 
 
-def format_comparison_line(e1rm_delta: float, tonnage_delta: float) -> str:
+def format_comparison_line(e1rm_delta: float, tonnage_delta: float, unit: str = "kg") -> str:
+    u = UNIT_LABELS.get(unit, "кг")
     arrow = "↑" if e1rm_delta > 0 else ("↓" if e1rm_delta < 0 else "→")
     return (
-        f"{arrow} e1RM {e1rm_delta:+.1f} кг · объём {tonnage_delta:+.0f} "
+        f"{arrow} e1RM {e1rm_delta:+.1f} {u} · объём {tonnage_delta:+.0f} "
         f"vs прошлой тренировки этого упражнения"
     )

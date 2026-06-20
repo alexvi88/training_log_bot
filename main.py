@@ -7,7 +7,17 @@ from aiogram.fsm.storage.memory import MemoryStorage
 
 import config
 import db
-from handlers import backfill, csv_import, edit_workout, exercise_resolve, exercises, history, settings, workout
+from handlers import (
+    backfill,
+    bodyweight,
+    csv_import,
+    edit_workout,
+    exercise_resolve,
+    exercises,
+    history,
+    settings,
+    workout,
+)
 
 
 async def main() -> None:
@@ -28,6 +38,7 @@ async def main() -> None:
     dp.include_router(history.router)
     dp.include_router(edit_workout.router)
     dp.include_router(settings.router)
+    dp.include_router(bodyweight.router)
 
     try:
         await dp.start_polling(bot)
