@@ -7,7 +7,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 
 import config
 import db
-from handlers import exercises, history, settings, workout
+from handlers import backfill, csv_import, edit_workout, exercise_resolve, exercises, history, settings, workout
 
 
 async def main() -> None:
@@ -21,8 +21,12 @@ async def main() -> None:
     bot = Bot(token=config.BOT_TOKEN, default=DefaultBotProperties())
     dp = Dispatcher(storage=MemoryStorage())
     dp.include_router(workout.router)
+    dp.include_router(backfill.router)
+    dp.include_router(exercise_resolve.router)
+    dp.include_router(csv_import.router)
     dp.include_router(exercises.router)
     dp.include_router(history.router)
+    dp.include_router(edit_workout.router)
     dp.include_router(settings.router)
 
     try:

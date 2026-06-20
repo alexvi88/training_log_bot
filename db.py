@@ -64,7 +64,8 @@ CREATE TABLE IF NOT EXISTS workouts (
     started_at TEXT NOT NULL,
     finished_at TEXT,
     status TEXT NOT NULL DEFAULT 'active',
-    note TEXT
+    note TEXT,
+    source TEXT NOT NULL DEFAULT 'manual'
 );
 CREATE INDEX IF NOT EXISTS idx_workouts_user_status ON workouts (user_id, status);
 
@@ -160,6 +161,11 @@ async def _migrate_schema() -> None:
         await _conn.execute("ALTER TABLE exercises ADD COLUMN weight_step_big REAL")
 
     await _conn.execute("DROP INDEX IF EXISTS idx_exercises_user_name")
+
+    workout_cols = await _column_names("workouts")
+    if "source" not in workout_cols:
+        await _conn.execute("ALTER TABLE workouts ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'")
+
     await _conn.commit()
 
 
@@ -331,6 +337,19 @@ async def get_exercise(exercise_id: int) -> Optional[aiosqlite.Row]:
     return await cur.fetchone()
 
 
+async def find_exercise_by_name(user_id: int, name: str) -> Optional[aiosqlite.Row]:
+    """Exact case-insensitive match on the bare name or full display name (Cyrillic-safe)."""
+    cur = await conn().execute(
+        "SELECT * FROM exercises WHERE user_id = ? AND is_archived = 0 AND is_template = 0", (user_id,)
+    )
+    rows = await cur.fetchall()
+    needle = name.strip().lower()
+    for r in rows:
+        if r["name"].strip().lower() == needle or r["display_name"].strip().lower() == needle:
+            return r
+    return None
+
+
 async def create_exercise(
     user_id: int,
     name: str,
@@ -428,6 +447,29 @@ async def create_workout(user_id: int) -> int:
         )
         await conn().commit()
         return cur.lastrowid
+
+
+async def create_finished_workout(
+    user_id: int, started_at: str, finished_at: str, source: str = "manual", note: Optional[str] = None
+) -> int:
+    """Insert a workout that's already finished — used for backfill/import (no live FSM)."""
+    async with _write_lock:
+        cur = await conn().execute(
+            "INSERT INTO workouts (user_id, started_at, finished_at, status, source, note) "
+            "VALUES (?, ?, ?, 'finished', ?, ?)",
+            (user_id, started_at, finished_at, source, note),
+        )
+        await conn().commit()
+        return cur.lastrowid
+
+
+async def update_workout_date(workout_id: int, started_at: str, finished_at: Optional[str]) -> None:
+    async with _write_lock:
+        await conn().execute(
+            "UPDATE workouts SET started_at = ?, finished_at = ? WHERE id = ?",
+            (started_at, finished_at, workout_id),
+        )
+        await conn().commit()
 
 
 async def get_workout(workout_id: int) -> Optional[aiosqlite.Row]:
@@ -581,6 +623,25 @@ async def list_sets_for_block(block_id: int) -> list[aiosqlite.Row]:
         (block_id,),
     )
     return await cur.fetchall()
+
+
+async def get_set(set_id: int) -> Optional[aiosqlite.Row]:
+    cur = await conn().execute("SELECT * FROM sets WHERE id = ?", (set_id,))
+    return await cur.fetchone()
+
+
+async def update_set(set_id: int, weight: float, reps: int) -> None:
+    async with _write_lock:
+        await conn().execute(
+            "UPDATE sets SET weight = ?, reps = ? WHERE id = ?", (weight, reps, set_id)
+        )
+        await conn().commit()
+
+
+async def delete_set(set_id: int) -> None:
+    async with _write_lock:
+        await conn().execute("DELETE FROM sets WHERE id = ?", (set_id,))
+        await conn().commit()
 
 
 async def list_sets_for_exercise(exercise_id: int, exclude_workout_id: Optional[int] = None) -> list[aiosqlite.Row]:
