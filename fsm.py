@@ -6,7 +6,6 @@ class WorkoutFlow(StatesGroup):
     picking_group = State()
     picking_exercise = State()
     creating_exercise_name = State()
-    creating_exercise_attrs = State()
     logging_set = State()
     finishing_note = State()
 
@@ -26,7 +25,11 @@ class HistoryFlow(StatesGroup):
 class SettingsFlow(StatesGroup):
     menu = State()
     awaiting_weight_step = State()
-    awaiting_bodyweight = State()
+
+
+class BodyweightFlow(StatesGroup):
+    menu = State()
+    awaiting_entry = State()
 
 
 class BackfillFlow(StatesGroup):

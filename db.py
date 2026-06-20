@@ -104,6 +104,15 @@ CREATE TABLE IF NOT EXISTS sets (
 );
 CREATE INDEX IF NOT EXISTS idx_sets_exercise ON sets (exercise_id);
 CREATE INDEX IF NOT EXISTS idx_sets_block ON sets (block_id);
+
+CREATE TABLE IF NOT EXISTS bodyweight_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    date TEXT NOT NULL,
+    weight REAL NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_bodyweight_user ON bodyweight_logs (user_id, date);
 """
 
 _conn: Optional[aiosqlite.Connection] = None
@@ -140,6 +149,7 @@ async def init_db(db_path: str = config.DB_PATH) -> None:
     await _conn.commit()
     await _migrate_schema()
     await _seed_globals()
+    await _migrate_muscle_groups()
 
 
 async def _column_names(table: str) -> set[str]:
@@ -211,6 +221,48 @@ async def _seed_globals() -> None:
                     (ex_name, group_id, display_name, now_iso()),
                 )
             await db.commit()
+
+
+GROUP_MERGE_MAP = {
+    "Ягодицы": "Ноги",
+    "Икры": "Ноги",
+    "Пресс": "Другое",
+    "Предплечья": "Другое",
+    "Трапеции": "Другое",
+}
+
+
+async def _migrate_muscle_groups() -> None:
+    """Merge legacy muscle groups (from older on-disk DBs) into the current 7-group set."""
+    db = conn()
+    cur = await db.execute("SELECT id, name FROM muscle_groups WHERE user_id IS NULL")
+    rows = await cur.fetchall()
+    by_name = {r["name"]: r["id"] for r in rows}
+
+    old_names = [n for n in GROUP_MERGE_MAP if n in by_name]
+    if not old_names:
+        return
+
+    async with _write_lock:
+        for target_name in {"Ноги", "Другое"}:
+            if target_name not in by_name:
+                preset = next((p for p in MUSCLE_GROUP_PRESETS if p[0] == target_name), None)
+                emoji, sort_order = (preset[1], preset[2]) if preset else (None, 100)
+                cur2 = await db.execute(
+                    "INSERT INTO muscle_groups (user_id, name, emoji, sort_order) VALUES (NULL, ?, ?, ?)",
+                    (target_name, emoji, sort_order),
+                )
+                by_name[target_name] = cur2.lastrowid
+
+        for old_name in old_names:
+            old_id = by_name[old_name]
+            target_id = by_name[GROUP_MERGE_MAP[old_name]]
+            await db.execute(
+                "UPDATE exercises SET primary_group_id = ? WHERE primary_group_id = ?",
+                (target_id, old_id),
+            )
+            await db.execute("UPDATE muscle_groups SET is_archived = 1 WHERE id = ?", (old_id,))
+        await db.commit()
 
 
 # ---------- users ----------
@@ -299,9 +351,14 @@ async def archive_muscle_group(group_id: int) -> None:
 
 async def list_user_exercises_in_group(user_id: int, group_id: int, limit: Optional[int] = None) -> list[aiosqlite.Row]:
     sql = (
-        "SELECT * FROM exercises WHERE user_id = ? AND primary_group_id = ? "
-        "AND is_archived = 0 AND is_template = 0 "
-        "ORDER BY last_used_at IS NULL, last_used_at DESC, display_name"
+        "SELECT e.*, "
+        "(SELECT COUNT(DISTINCT wb.workout_id) FROM block_exercises be "
+        "   JOIN workout_blocks wb ON wb.id = be.block_id "
+        "   WHERE be.exercise_id = e.id) AS usage_count "
+        "FROM exercises e "
+        "WHERE e.user_id = ? AND e.primary_group_id = ? "
+        "AND e.is_archived = 0 AND e.is_template = 0 "
+        "ORDER BY usage_count DESC, e.last_used_at IS NULL, e.last_used_at DESC, e.display_name"
     )
     params: list[Any] = [user_id, group_id]
     if limit:
@@ -680,6 +737,36 @@ async def list_exercise_ids_for_workout(workout_id: int) -> list[int]:
     )
     rows = await cur.fetchall()
     return [r["exercise_id"] for r in rows]
+
+
+# ---------- bodyweight diary ----------
+
+async def add_bodyweight_entry(user_id: int, date: str, weight: float) -> int:
+    async with _write_lock:
+        cur = await conn().execute(
+            "INSERT INTO bodyweight_logs (user_id, date, weight, created_at) VALUES (?, ?, ?, ?)",
+            (user_id, date, weight, now_iso()),
+        )
+        await conn().commit()
+        return cur.lastrowid
+
+
+async def list_bodyweight_entries(user_id: int, limit: Optional[int] = None) -> list[aiosqlite.Row]:
+    sql = "SELECT * FROM bodyweight_logs WHERE user_id = ? ORDER BY date, id"
+    params: list[Any] = [user_id]
+    if limit:
+        sql += " LIMIT ?"
+        params.append(limit)
+    cur = await conn().execute(sql, params)
+    return await cur.fetchall()
+
+
+async def get_latest_bodyweight(user_id: int) -> Optional[aiosqlite.Row]:
+    cur = await conn().execute(
+        "SELECT * FROM bodyweight_logs WHERE user_id = ? ORDER BY date DESC, id DESC LIMIT 1",
+        (user_id,),
+    )
+    return await cur.fetchone()
 
 
 # ---------- export ----------
