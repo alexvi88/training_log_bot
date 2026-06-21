@@ -41,16 +41,29 @@ def numbered_list(names: list[str]) -> str:
 
 
 def numbered_buttons(items: list[tuple[str, str]], per_row: int = 5) -> list[list[InlineKeyboardButton]]:
-    """items: list of (callback_data, _) pairs, numbered 1..N and chunked into rows.
+    """items: list of (callback_data, _) pairs, numbered 1..N and chunked into balanced rows.
 
     Numbers avoid the Telegram button-text truncation that long exercise/template
     names hit; the names themselves are shown as a numbered list in the message text.
+    Rows are sized evenly (e.g. 6 items -> 3+3, not 5+1) so the last row never has
+    a single stray button.
     """
     buttons = [
         InlineKeyboardButton(text=str(i + 1), callback_data=cb)
         for i, (cb, _) in enumerate(items)
     ]
-    return [buttons[i:i + per_row] for i in range(0, len(buttons), per_row)]
+    n = len(buttons)
+    if n == 0:
+        return []
+    rows = -(-n // per_row)  # ceil(n / per_row)
+    base, extra = divmod(n, rows)
+    result = []
+    i = 0
+    for r in range(rows):
+        size = base + 1 if r < extra else base
+        result.append(buttons[i:i + size])
+        i += size
+    return result
 
 
 def exercises_keyboard(
