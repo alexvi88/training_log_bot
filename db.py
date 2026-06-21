@@ -7,6 +7,7 @@ write volume never justifies a real connection pool.
 
 import asyncio
 import datetime as dt
+import os
 from typing import Any, Iterable, Optional
 
 import aiosqlite
@@ -138,6 +139,9 @@ def build_display_name(
 
 async def init_db(db_path: str = config.DB_PATH) -> None:
     global _conn
+    parent = os.path.dirname(db_path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
     _conn = await aiosqlite.connect(db_path)
     _conn.row_factory = aiosqlite.Row
     await _conn.execute("PRAGMA journal_mode=WAL")
@@ -823,3 +827,22 @@ async def export_rows_for_user(user_id: int) -> list[aiosqlite.Row]:
         (user_id,),
     )
     return await cur.fetchall()
+
+
+# ---------- admin: daily stats & backup ----------
+
+async def daily_workout_stats(date_str: str) -> dict[str, int]:
+    """Distinct users and total workouts finished on a given calendar day (YYYY-MM-DD)."""
+    cur = await conn().execute(
+        "SELECT COUNT(DISTINCT user_id), COUNT(*) FROM workouts "
+        "WHERE status = 'finished' AND date(finished_at) = ?",
+        (date_str,),
+    )
+    users, workouts = await cur.fetchone()
+    return {"users": users, "workouts": workouts}
+
+
+async def backup_to_file(dest_path: str) -> None:
+    """Write a consistent snapshot of the live database to dest_path (must not already exist)."""
+    async with _write_lock:
+        await conn().execute("VACUUM INTO ?", (dest_path,))

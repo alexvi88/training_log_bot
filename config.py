@@ -2,7 +2,13 @@ import os
 
 BOT_TOKEN = os.getenv("TG_TOKEN", "")
 
-DB_PATH = os.getenv("DB_PATH", "training_log.db")
+DB_PATH = os.getenv("DB_PATH", "/data/training_log.db")
+
+# Telegram user id that receives the daily stats report + DB backup. Unset disables the job.
+ADMIN_ID = int(os.getenv("ADMIN_ID")) if os.getenv("ADMIN_ID") else None
+
+# Local hour (0-23) at which the daily admin report/backup job runs.
+ADMIN_REPORT_HOUR = int(os.getenv("ADMIN_REPORT_HOUR", "9"))
 
 DEFAULT_UNIT = "kg"
 

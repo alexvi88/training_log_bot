@@ -5,6 +5,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.fsm.storage.memory import MemoryStorage
 
+import admin_tasks
 import config
 import db
 from handlers import (
@@ -40,9 +41,11 @@ async def main() -> None:
     dp.include_router(settings.router)
     dp.include_router(bodyweight.router)
 
+    admin_job = asyncio.create_task(admin_tasks.run_daily_admin_jobs(bot))
     try:
         await dp.start_polling(bot)
     finally:
+        admin_job.cancel()
         await db.close_db()
 
 
