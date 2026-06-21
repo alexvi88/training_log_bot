@@ -21,6 +21,7 @@ async def show_exercise_groups(callback: CallbackQuery, state: FSMContext):
     b = InlineKeyboardBuilder()
     for g in groups:
         b.button(text=g["name"], callback_data=f"exm:grp:{g['id']}")
+    b.button(text="📋 Все", callback_data="exm:grp:all")
     b.button(text="➕ Новая группа", callback_data="exm:newgroup")
     b.button(text="⬅️ Назад", callback_data="exm:back")
     b.adjust(2)
@@ -36,7 +37,8 @@ async def exm_back(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(StateFilter(ExerciseManage.picking_group), F.data.startswith("exm:grp:"))
 async def exm_pick_group(callback: CallbackQuery, state: FSMContext):
-    group_id = int(callback.data.split(":")[2])
+    raw = callback.data.split(":")[2]
+    group_id = None if raw == "all" else int(raw)
     await state.update_data(exm_group_id=group_id)
     await _show_exercise_list(callback, state)
 
@@ -45,21 +47,27 @@ async def _show_exercise_list(callback: CallbackQuery, state: FSMContext):
     await state.set_state(ExerciseManage.picking_exercise)
     data = await state.get_data()
     group_id = data["exm_group_id"]
-    exercises = await db.list_user_exercises_in_group(callback.from_user.id, group_id)
-    group = await db.get_muscle_group(group_id)
+    if group_id is None:
+        exercises = await db.list_user_exercises(callback.from_user.id)
+        group = None
+    else:
+        exercises = await db.list_user_exercises_in_group(callback.from_user.id, group_id)
+        group = await db.get_muscle_group(group_id)
     b = InlineKeyboardBuilder()
     items = [(f"exm:ex:{ex['id']}", ex["display_name"]) for ex in exercises]
     for row in keyboards.numbered_buttons(items):
         b.row(*row)
-    b.row(InlineKeyboardButton(text="➕ Новое упражнение", callback_data="exm:newex"))
-    if group["user_id"] is not None:
-        b.row(InlineKeyboardButton(text="🗑 Архивировать группу", callback_data=f"exm:archivegrp:{group_id}"))
+    if group is not None:
+        b.row(InlineKeyboardButton(text="➕ Новое упражнение", callback_data="exm:newex"))
+        if group["user_id"] is not None:
+            b.row(InlineKeyboardButton(text="🗑 Архивировать группу", callback_data=f"exm:archivegrp:{group_id}"))
     b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="exm:backgroups"))
+    title = group["name"] if group is not None else "Все упражнения"
     if exercises:
         names = [ex["display_name"] for ex in exercises]
-        text = f"{group['name']}\n\nТвои упражнения:\n" + keyboards.numbered_list(names)
+        text = f"{title}\n\nТвои упражнения:\n" + keyboards.numbered_list(names)
     else:
-        text = f"{group['name']}\n\nПока нет своих упражнений в этой группе."
+        text = f"{title}\n\nПока нет своих упражнений в этой группе."
     await callback.message.edit_text(text, reply_markup=b.as_markup())
     await callback.answer()
 
@@ -240,6 +248,7 @@ async def exm_new_group_entered(message: Message, state: FSMContext):
     b = InlineKeyboardBuilder()
     for g in groups:
         b.button(text=g["name"], callback_data=f"exm:grp:{g['id']}")
+    b.button(text="📋 Все", callback_data="exm:grp:all")
     b.button(text="➕ Новая группа", callback_data="exm:newgroup")
     b.button(text="⬅️ Назад", callback_data="exm:back")
     b.adjust(2)

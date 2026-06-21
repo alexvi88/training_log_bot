@@ -18,10 +18,17 @@ def main_menu(has_active_workout: bool) -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
-def groups_keyboard(groups, prefix: str, extra_buttons: list[tuple[str, str]] | None = None) -> InlineKeyboardMarkup:
+def groups_keyboard(
+    groups,
+    prefix: str,
+    extra_buttons: list[tuple[str, str]] | None = None,
+    show_all: bool = False,
+) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     for g in groups:
         b.button(text=g["name"], callback_data=f"{prefix}:grp:{g['id']}")
+    if show_all:
+        b.button(text="📋 Все", callback_data=f"{prefix}:grp:all")
     for text, cb in extra_buttons or []:
         b.button(text=text, callback_data=cb)
     b.adjust(2)
@@ -106,7 +113,6 @@ def logging_keyboard(
         ]
         for i in range(0, len(tabs), 3):
             b.row(*tabs[i:i + 3])
-    b.row(InlineKeyboardButton(text="➕ Суперсет", callback_data="live:add_exercise"))
     if has_sets:
         b.row(
             InlineKeyboardButton(text="↩️ Удалить последний", callback_data="live:undo"),
@@ -114,6 +120,7 @@ def logging_keyboard(
         )
     else:
         b.row(InlineKeyboardButton(text="✅ Закончить упражнение", callback_data="live:finish_exercise"))
+    b.row(InlineKeyboardButton(text="➕ Суперсет", callback_data="live:add_exercise"))
     return b.as_markup()
 
 
