@@ -160,7 +160,7 @@ async def menu_settings(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "menu:start_workout")
 async def start_workout(callback: CallbackQuery, state: FSMContext):
-    user = await _ensure_user(callback.from_user.id, callback.from_user.username)
+    await _ensure_user(callback.from_user.id, callback.from_user.username)
     active = await db.get_active_workout(callback.from_user.id)
     if active:
         await _enter_live(callback, state, active["id"])
@@ -168,12 +168,12 @@ async def start_workout(callback: CallbackQuery, state: FSMContext):
     workout_id = await db.create_workout(callback.from_user.id)
     await callback.message.delete()
     sent = await callback.message.answer("🏋️ Тренировка начата")
-    await state.set_state(WorkoutFlow.idle)
     await state.update_data(
         workout_id=workout_id, live_chat_id=sent.chat.id, live_message_id=sent.message_id,
         last_by_exercise={},
     )
-    await _refresh_live(callback.bot, sent.chat.id, sent.message_id, user, workout_id, None, _idle_keyboard())
+    await state.set_state(WorkoutFlow.picking_group)
+    await _picker_screen_groups(callback, state)
 
 
 @router.callback_query(F.data == "menu:resume_workout")
