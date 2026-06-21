@@ -71,10 +71,7 @@ def _short_name(name: str, limit: int = 18) -> str:
 
 
 def _logging_hint(last: tuple[float, int] | None) -> str:
-    lines = ["Напиши вес и повторы через пробел, например «100 8»"]
-    if last:
-        lines.append(f"Последний подход: {formatting.format_set(*last)}")
-    return "\n".join(lines)
+    return "Напиши вес и повторы через пробел, например «100 8»"
 
 
 async def _render_logging_screen(bot, state: FSMContext, user):
