@@ -34,7 +34,7 @@ def format_set_slot(slot: tuple[float, int, bool] | None) -> str:
 
 
 def format_date_ru(d: dt.datetime) -> str:
-    return f"{d.strftime('%d.%m')} ({_WEEKDAYS_RU[d.weekday()]})"
+    return f"{d.strftime('%d.%m.%Y')} ({_WEEKDAYS_RU[d.weekday()]})"
 
 
 def format_duration(started_at: dt.datetime, finished_at: dt.datetime) -> str:
