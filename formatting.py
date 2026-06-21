@@ -100,7 +100,8 @@ BlockView = Union[ExerciseBlockView, SupersetBlockView]
 
 def _render_single_block(block: ExerciseBlockView, hide_warmups: bool, show_extra: bool) -> list[str]:
     sets = block.working_sets if hide_warmups else block.sets
-    lines = [f"<b>{escape(block.exercise_name)}</b>"]
+    label = f"[{block.group_name.upper()}] {escape(block.exercise_name)}"
+    lines = [f"<b>{label}</b>"]
     lines.extend(f"  • {format_set(w, r, warm)}" for w, r, warm in sets)
     if show_extra and block.working_sets:
         if block.is_bodyweight:
@@ -130,21 +131,15 @@ def build_workout_summary(
     if note:
         lines.append(f"📝 {note}")
 
-    last_group: str | None = None
     exercise_count = 0
     working_set_count = 0
 
     for block in blocks:
         if isinstance(block, ExerciseBlockView):
-            group_label = block.group_name.upper()
-            if group_label != last_group:
-                lines.append(group_label)
-                last_group = group_label
             lines.extend(_render_single_block(block, hide_warmups, show_extra_stats))
             exercise_count += 1
             working_set_count += len(block.working_sets)
         else:
-            last_group = None
             lines.extend(_render_superset_block(block, hide_warmups))
             exercise_count += len(block.exercise_names)
             working_set_count += block.working_set_count
@@ -215,19 +210,14 @@ def format_progress_screen(
     is_bw = sessions[-1].is_bodyweight_mode
     for s in sessions[-limit:]:
         d = dt.datetime.fromisoformat(s.started_at)
-        top = s.top_set
-        if top is None:
+        ws = s.working_sets
+        if not ws:
             continue
+        sets_str = ", ".join(format_set(st.weight, st.reps) for st in ws)
         if is_bw:
-            lines.append(
-                f"{format_date_ru(d)} · {format_set(top.weight, top.reps)} · "
-                f"всего повторов {s.total_reps}"
-            )
+            lines.append(f"{format_date_ru(d)} · {sets_str} · всего повторов {s.total_reps}")
         else:
-            lines.append(
-                f"{format_date_ru(d)} · {format_set(top.weight, top.reps)} · e1RM {s.top_e1rm:.1f} · "
-                f"{len(s.working_sets)} сетов"
-            )
+            lines.append(f"{format_date_ru(d)} · {sets_str} · e1RM {s.top_e1rm:.1f}")
 
     lines.append("")
     if trend is not None:
@@ -241,7 +231,7 @@ def format_progress_screen(
     if is_bw:
         lines.append(f"Рекорд повторов в сете: {records.max_reps_at_weight and max(records.max_reps_at_weight.values())}")
     else:
-        lines.append(f"Рекорды: вес {format_weight(records.max_weight)} {u} · e1RM {records.max_e1rm:.1f} {u}")
+        lines.append(f"Рекорд: {format_set(records.best_e1rm_weight, records.best_e1rm_reps)} · e1RM {records.max_e1rm:.1f} {u}")
     return "\n".join(lines)
 
 

@@ -51,33 +51,6 @@ def render_metric_over_sessions(
     return _fig_to_png(fig)
 
 
-def render_scatter_sets(
-    points: list[tuple[dt.datetime, float, int]],
-    title: str = "Сеты: вес × повторы",
-) -> bytes:
-    fig, ax = plt.subplots(figsize=(6, 4))
-    if not points:
-        ax.set_title(title)
-        return _fig_to_png(fig)
-
-    dates = [p[0] for p in points]
-    t_min, t_max = min(dates), max(dates)
-    span = (t_max - t_min).total_seconds() or 1.0
-
-    xs = [p[2] for p in points]
-    ys = [p[1] for p in points]
-    colors = [(t - t_min).total_seconds() / span for t in dates]
-
-    sc = ax.scatter(xs, ys, c=colors, cmap="viridis", alpha=0.75, s=50, edgecolors="none")
-    ax.set_xlabel("повторы")
-    ax.set_ylabel("вес")
-    ax.set_title(title)
-    ax.grid(True, alpha=0.3)
-    cbar = fig.colorbar(sc, ax=ax)
-    cbar.set_label("свежесть (старые → новые)")
-    return _fig_to_png(fig)
-
-
 def render_muscle_group_bar(volumes: dict[str, float], title: str = "Объём по группам мышц") -> bytes:
     fig, ax = plt.subplots(figsize=(6, 3.5))
     labels = list(volumes.keys())

@@ -188,39 +188,16 @@ async def prog_show_exercise(callback: CallbackQuery, state: FSMContext):
     text = formatting.format_progress_screen(
         ex["display_name"], sessions, trend, comparison, records, unit=user["unit"]
     )
-    kb = keyboards.progress_charts_keyboard(ex_id) if sessions else None
+    kb = keyboards.progress_back_keyboard()
     await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
-    await callback.answer()
 
-
-@router.callback_query(F.data.startswith("chart:"))
-async def progress_chart(callback: CallbackQuery, state: FSMContext):
-    _, kind, ex_id_str = callback.data.split(":")
-    ex_id = int(ex_id_str)
-    ex = await db.get_exercise(ex_id)
-    user = await db.get_user(callback.from_user.id)
-    sessions = await _load_sessions(ex_id, user["e1rm_formula"])
-    if not sessions:
-        await callback.answer("Нет данных")
-        return
-    is_bw = sessions[-1].is_bodyweight_mode
-
-    if kind == "e1rm":
+    if sessions:
+        is_bw = sessions[-1].is_bodyweight_mode
         metric = "повторы" if is_bw else "e1RM"
         points = [
             (dt.datetime.fromisoformat(s.started_at), float(s.max_reps_in_set if is_bw else s.top_e1rm))
             for s in sessions
         ]
         png = charts.render_metric_over_sessions(points, f"{ex['display_name']} — {metric}", metric)
-    elif kind == "tonnage":
-        points = [(dt.datetime.fromisoformat(s.started_at), s.tonnage) for s in sessions]
-        png = charts.render_metric_over_sessions(points, f"{ex['display_name']} — тоннаж", "тоннаж")
-    else:
-        scatter_points = [
-            (dt.datetime.fromisoformat(s.started_at), st.weight, st.reps)
-            for s in sessions for st in s.working_sets
-        ]
-        png = charts.render_scatter_sets(scatter_points, f"{ex['display_name']} — сеты")
-
-    await callback.message.answer_photo(BufferedInputFile(png, filename="chart.png"))
+        await callback.message.answer_photo(BufferedInputFile(png, filename="chart.png"))
     await callback.answer()

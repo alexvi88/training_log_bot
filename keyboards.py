@@ -1,5 +1,7 @@
 """Inline keyboard builders. Callback data uses a short `prefix:arg` scheme."""
 
+import datetime as dt
+
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
@@ -150,12 +152,9 @@ def finish_workout_keyboard() -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
-def progress_charts_keyboard(exercise_id: int) -> InlineKeyboardMarkup:
+def progress_back_keyboard() -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.button(text="📈 e1RM", callback_data=f"chart:e1rm:{exercise_id}")
-    b.button(text="📊 Тоннаж", callback_data=f"chart:tonnage:{exercise_id}")
-    b.button(text="🔵 Сеты", callback_data=f"chart:scatter:{exercise_id}")
-    b.adjust(3)
+    b.button(text="⬅️ Назад", callback_data="prog:groups")
     return b.as_markup()
 
 
@@ -204,7 +203,16 @@ def cancel_keyboard(cb: str = "cancel") -> InlineKeyboardMarkup:
 
 def date_quick_keyboard(prefix: str) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
+    today = dt.date.today()
+    quick_dates = [
+        ("Сегодня", today),
+        ("Вчера", today - dt.timedelta(days=1)),
+        ("Позавчера", today - dt.timedelta(days=2)),
+    ]
+    for label, d in quick_dates:
+        b.button(text=label, callback_data=f"{prefix}:date:{d.isoformat()}")
     b.button(text="❌ Отмена", callback_data=f"{prefix}:cancel")
+    b.adjust(3, 1)
     return b.as_markup()
 
 
