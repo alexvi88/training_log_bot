@@ -104,15 +104,9 @@ def logging_keyboard(
     """
     b = InlineKeyboardBuilder()
     if len(open_items) > 1:
-        tabs = [
-            InlineKeyboardButton(
-                text=("▶ " if ex_id == active_id else "") + name,
-                callback_data=f"live:switch:{ex_id}",
-            )
-            for ex_id, name in open_items
-        ]
-        for i in range(0, len(tabs), 3):
-            b.row(*tabs[i:i + 3])
+        for ex_id, name in open_items:
+            text = ("▶ " if ex_id == active_id else "") + name
+            b.row(InlineKeyboardButton(text=text, callback_data=f"live:switch:{ex_id}"))
     if has_sets:
         b.row(
             InlineKeyboardButton(text="↩️ Удалить последний", callback_data="live:undo"),

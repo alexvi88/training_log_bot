@@ -46,6 +46,7 @@ class ExerciseBlockView:
     sets: list[tuple[float, int, bool]]  # weight, reps, is_warmup
     formula: str = "epley"
     type: Literal["single"] = "single"
+    exercise_id: int | None = None
 
     @property
     def working_sets(self) -> list[tuple[float, int, bool]]:
@@ -157,6 +158,7 @@ def build_live_session_text(
     blocks: list[BlockView],
     hint: str | None = None,
     hide_warmups: bool = False,
+    active_exercise_id: int | None = None,
 ) -> str:
     body_lines = []
     for i, block in enumerate(blocks):
@@ -164,7 +166,8 @@ def build_live_session_text(
             body_lines.append("")
         if isinstance(block, ExerciseBlockView):
             sets = block.working_sets if hide_warmups else block.sets
-            body_lines.append(f"<b>{escape(block.exercise_name)}</b>")
+            prefix = "▶ " if active_exercise_id is not None and block.exercise_id == active_exercise_id else ""
+            body_lines.append(f"{prefix}<b>{escape(block.exercise_name)}</b>")
             body_lines.extend(f"  • {format_set(w, r, warm)}" for w, r, warm in sets)
         else:
             body_lines.append(" ⇄ ".join(f"<b>{escape(n)}</b>" for n in block.exercise_names))
