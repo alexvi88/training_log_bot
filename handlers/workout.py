@@ -29,7 +29,11 @@ async def _ensure_user(telegram_id: int, username: str | None):
 
 async def _refresh_live(bot, chat_id: int, message_id: int, user, workout_id: int, hint, keyboard):
     blocks = await view_builder.build_block_views(workout_id, user["e1rm_formula"])
-    text = formatting.build_live_session_text(blocks, hint, hide_warmups=bool(user["hide_warmups"]))
+    workout = await db.get_workout(workout_id)
+    started_at = dt.datetime.fromisoformat(workout["started_at"])
+    text = formatting.build_live_session_text(
+        blocks, hint, hide_warmups=bool(user["hide_warmups"]), started_at=started_at
+    )
     try:
         await bot.edit_message_text(
             chat_id=chat_id, message_id=message_id, text=text, reply_markup=keyboard, parse_mode="HTML"
