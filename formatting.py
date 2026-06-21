@@ -123,7 +123,7 @@ def build_workout_summary(
     hide_warmups: bool = False,
     show_extra_stats: bool = True,
 ) -> str:
-    lines = [f"🏋️ {format_date_ru(started_at)}"]
+    lines = [f"<b>[{format_date_ru(started_at)}]</b>", ""]
     if note:
         lines.append(f"📝 {note}")
 

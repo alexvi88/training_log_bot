@@ -557,6 +557,8 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
 
         records = analytics.detect_new_records(prior_sessions, new_session)
         for r in records:
+            if r.kind == "e1rm":
+                continue
             pr_lines.append(
                 formatting.format_pr_line(ex["display_name"], r.kind, r.value, r.extra, unit=user["unit"])
             )
