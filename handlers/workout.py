@@ -27,16 +27,23 @@ async def _ensure_user(telegram_id: int, username: str | None):
     return await db.get_or_create_user(telegram_id, username)
 
 
-async def _refresh_live(bot, chat_id: int, message_id: int, user, workout_id: int, hint, keyboard):
+async def _refresh_live(bot, state: FSMContext, user, workout_id: int, hint, keyboard):
+    """Re-send the live tracker message so it always sits at the bottom of the chat.
+
+    Telegram doesn't let a bot move an edited message down past newer messages
+    (e.g. the weight/reps the user just typed), so we delete and resend instead
+    of editing in place.
+    """
+    data = await state.get_data()
+    chat_id = data["live_chat_id"]
     blocks = await view_builder.build_block_views(workout_id, user["e1rm_formula"])
     text = formatting.build_live_session_text(blocks, hint, hide_warmups=bool(user["hide_warmups"]))
     try:
-        await bot.edit_message_text(
-            chat_id=chat_id, message_id=message_id, text=text, reply_markup=keyboard, parse_mode="HTML"
-        )
-    except TelegramBadRequest as e:
-        if "not modified" not in str(e):
-            raise
+        await bot.delete_message(chat_id=chat_id, message_id=data["live_message_id"])
+    except TelegramBadRequest:
+        pass
+    sent = await bot.send_message(chat_id=chat_id, text=text, reply_markup=keyboard, parse_mode="HTML")
+    await state.update_data(live_message_id=sent.message_id)
 
 
 def _idle_keyboard(data: dict | None = None):
@@ -89,7 +96,7 @@ async def _render_logging_screen(bot, state: FSMContext, user):
 
     open_items = [(ex_id, _short_name(names[ex_id])) for ex_id in open_ids]
     kb = keyboards.logging_keyboard(open_items, active)
-    await _refresh_live(bot, data["live_chat_id"], data["live_message_id"], user, data["workout_id"], hint, kb)
+    await _refresh_live(bot, state, user, data["workout_id"], hint, kb)
 
 
 async def _back_after_cancel(bot, state: FSMContext, user):
@@ -99,9 +106,7 @@ async def _back_after_cancel(bot, state: FSMContext, user):
         await _render_logging_screen(bot, state, user)
     else:
         await state.set_state(WorkoutFlow.idle)
-        await _refresh_live(
-            bot, data["live_chat_id"], data["live_message_id"], user, data["workout_id"], None, _idle_keyboard(data)
-        )
+        await _refresh_live(bot, state, user, data["workout_id"], None, _idle_keyboard(data))
 
 
 # ---------- main menu ----------
@@ -195,8 +200,7 @@ async def _enter_live(callback: CallbackQuery, state: FSMContext, workout_id: in
         workout_id=workout_id, live_chat_id=sent.chat.id, live_message_id=sent.message_id,
         last_by_exercise={}, open_exercises=[], open_blocks={}, active_exercise_id=None,
     )
-    data = await state.get_data()
-    await _refresh_live(callback.bot, sent.chat.id, sent.message_id, user, workout_id, None, _idle_keyboard(data))
+    await _refresh_live(callback.bot, state, user, workout_id, None, _idle_keyboard(await state.get_data()))
 
 
 # ---------- picker: add an exercise (either to start, or alongside what's already open) ----------
@@ -213,9 +217,7 @@ async def _picker_screen_groups(callback: CallbackQuery, state: FSMContext):
     extra = [("❌ Отмена", "pick:cancel")]
     kb = keyboards.groups_keyboard(groups, prefix="pick", extra_buttons=extra)
     await state.update_data(picker_stage="groups")
-    await _refresh_live(
-        callback.bot, data["live_chat_id"], data["live_message_id"], user, data["workout_id"], hint, kb
-    )
+    await _refresh_live(callback.bot, state, user, data["workout_id"], hint, kb)
 
 
 @router.callback_query(StateFilter(WorkoutFlow.idle, WorkoutFlow.logging_set), F.data == "live:add_exercise")
@@ -254,9 +256,7 @@ async def _picker_screen_exercises(callback: CallbackQuery, state: FSMContext):
     kb = keyboards.exercises_keyboard(exercises, prefix="pick", back_cb="back")
     hint = "Выбери упражнение из своих:"
     await state.update_data(picker_stage="exercises")
-    await _refresh_live(
-        callback.bot, data["live_chat_id"], data["live_message_id"], user, data["workout_id"], hint, kb
-    )
+    await _refresh_live(callback.bot, state, user, data["workout_id"], hint, kb)
 
 
 @router.callback_query(StateFilter(WorkoutFlow.picking_exercise), F.data == "pick:back")
@@ -276,7 +276,7 @@ async def _new_exercise_entry_screen(callback: CallbackQuery, state: FSMContext)
     data = await state.get_data()
     user = await db.get_user(callback.from_user.id)
     await _refresh_live(
-        callback.bot, data["live_chat_id"], data["live_message_id"], user, data["workout_id"],
+        callback.bot, state, user, data["workout_id"],
         "Напиши название нового упражнения, или выбери из шаблонов:",
         keyboards.new_exercise_entry_keyboard("pick"),
     )
@@ -295,10 +295,7 @@ async def pick_templates(callback: CallbackQuery, state: FSMContext):
     user = await db.get_user(callback.from_user.id)
     templates = await db.list_templates_in_group(data["pending_group_id"])
     kb = keyboards.templates_keyboard(templates, prefix="pick", back_cb="newback")
-    await _refresh_live(
-        callback.bot, data["live_chat_id"], data["live_message_id"], user, data["workout_id"],
-        "Шаблоны — выбери подходящий:", kb,
-    )
+    await _refresh_live(callback.bot, state, user, data["workout_id"], "Шаблоны — выбери подходящий:", kb)
     await callback.answer()
 
 
@@ -427,10 +424,7 @@ async def live_finish_exercise(callback: CallbackQuery, state: FSMContext):
     else:
         await state.update_data(open_exercises=[], open_blocks={}, active_exercise_id=None)
         await state.set_state(WorkoutFlow.idle)
-        await _refresh_live(
-            callback.bot, data["live_chat_id"], data["live_message_id"], user, data["workout_id"],
-            None, _idle_keyboard(data),
-        )
+        await _refresh_live(callback.bot, state, user, data["workout_id"], None, _idle_keyboard(data))
     await callback.answer()
 
 
