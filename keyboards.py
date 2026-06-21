@@ -28,6 +28,24 @@ def groups_keyboard(groups, prefix: str, extra_buttons: list[tuple[str, str]] | 
     return b.as_markup()
 
 
+def numbered_list(names: list[str]) -> str:
+    """Render names as "1. foo\n2. bar..." for use alongside a numbered_buttons row."""
+    return "\n".join(f"{i + 1}. {name}" for i, name in enumerate(names))
+
+
+def numbered_buttons(items: list[tuple[str, str]], per_row: int = 5) -> list[list[InlineKeyboardButton]]:
+    """items: list of (callback_data, _) pairs, numbered 1..N and chunked into rows.
+
+    Numbers avoid the Telegram button-text truncation that long exercise/template
+    names hit; the names themselves are shown as a numbered list in the message text.
+    """
+    buttons = [
+        InlineKeyboardButton(text=str(i + 1), callback_data=cb)
+        for i, (cb, _) in enumerate(items)
+    ]
+    return [buttons[i:i + per_row] for i in range(0, len(buttons), per_row)]
+
+
 def exercises_keyboard(
     exercises,
     prefix: str,
@@ -35,12 +53,12 @@ def exercises_keyboard(
     back_cb: str = "back",
 ) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    for ex in exercises:
-        b.button(text=ex["display_name"], callback_data=f"{prefix}:ex:{ex['id']}")
+    items = [(f"{prefix}:ex:{ex['id']}", ex["display_name"]) for ex in exercises]
+    for row in numbered_buttons(items):
+        b.row(*row)
     if show_new_button:
-        b.button(text="➕ Новое упражнение", callback_data=f"{prefix}:new")
-    b.button(text="⬅️ Назад", callback_data=f"{prefix}:{back_cb}")
-    b.adjust(1)
+        b.row(InlineKeyboardButton(text="➕ Новое упражнение", callback_data=f"{prefix}:new"))
+    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"{prefix}:{back_cb}"))
     return b.as_markup()
 
 
@@ -54,10 +72,10 @@ def new_exercise_entry_keyboard(prefix: str) -> InlineKeyboardMarkup:
 
 def templates_keyboard(templates, prefix: str, back_cb: str = "back") -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    for t in templates:
-        b.button(text=t["display_name"], callback_data=f"{prefix}:tpl:{t['id']}")
-    b.button(text="⬅️ Назад", callback_data=f"{prefix}:{back_cb}")
-    b.adjust(1)
+    items = [(f"{prefix}:tpl:{t['id']}", t["display_name"]) for t in templates]
+    for row in numbered_buttons(items):
+        b.row(*row)
+    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"{prefix}:{back_cb}"))
     return b.as_markup()
 
 
@@ -185,11 +203,11 @@ def confirm_cancel_keyboard(
 
 def exercise_resolve_keyboard(candidates, name: str, prefix: str) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    for ex in candidates[:6]:
-        b.button(text=ex["display_name"], callback_data=f"{prefix}:pick:{ex['id']}")
-    b.button(text=f"➕ Создать «{name}»", callback_data=f"{prefix}:create")
-    b.button(text="❌ Отменить весь ввод", callback_data=f"{prefix}:cancelall")
-    b.adjust(1)
+    items = [(f"{prefix}:pick:{ex['id']}", ex["display_name"]) for ex in candidates[:6]]
+    for row in numbered_buttons(items):
+        b.row(*row)
+    b.row(InlineKeyboardButton(text=f"➕ Создать «{name}»", callback_data=f"{prefix}:create"))
+    b.row(InlineKeyboardButton(text="❌ Отменить весь ввод", callback_data=f"{prefix}:cancelall"))
     return b.as_markup()
 
 
