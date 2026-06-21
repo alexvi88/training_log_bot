@@ -358,7 +358,7 @@ async def list_user_exercises_in_group(user_id: int, group_id: int, limit: Optio
     return await cur.fetchall()
 
 
-async def list_user_exercises(user_id: int) -> list[aiosqlite.Row]:
+async def list_user_exercises(user_id: int, limit: Optional[int] = None) -> list[aiosqlite.Row]:
     sql = (
         "SELECT e.*, "
         "(SELECT COUNT(DISTINCT wb.workout_id) FROM block_exercises be "
@@ -369,7 +369,11 @@ async def list_user_exercises(user_id: int) -> list[aiosqlite.Row]:
         "AND e.is_archived = 0 AND e.is_template = 0 "
         "ORDER BY usage_count DESC, e.last_used_at IS NULL, e.last_used_at DESC, e.display_name"
     )
-    cur = await conn().execute(sql, (user_id,))
+    params: list[Any] = [user_id]
+    if limit:
+        sql += " LIMIT ?"
+        params.append(limit)
+    cur = await conn().execute(sql, params)
     return await cur.fetchall()
 
 
