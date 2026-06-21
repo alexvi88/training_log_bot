@@ -53,6 +53,13 @@ async def _date_chosen(event, state: FSMContext, date: dt.date):
         await event.answer(BULK_HINT, reply_markup=kb)
 
 
+@router.callback_query(StateFilter(BackfillFlow.awaiting_date), F.data.startswith("bf:date:"))
+async def bf_date_quick(callback: CallbackQuery, state: FSMContext):
+    date = dt.date.fromisoformat(callback.data.split(":", 2)[2])
+    await _date_chosen(callback, state, date)
+    await callback.answer()
+
+
 @router.message(StateFilter(BackfillFlow.awaiting_date))
 async def bf_date_text(message: Message, state: FSMContext):
     try:
