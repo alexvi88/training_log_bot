@@ -165,24 +165,27 @@ def detect_new_records(
     records: list[NewRecord] = []
 
     for s in new_session.working_sets:
-        if s.weight > prior_pr.max_weight:
-            records.append(NewRecord(kind="weight", value=s.weight))
-            prior_pr.max_weight = s.weight
-
-    for s in new_session.working_sets:
         val = e1rm(s.weight, s.reps, new_session.formula)
         if val > prior_pr.max_e1rm:
             records.append(NewRecord(kind="e1rm", value=val))
             prior_pr.max_e1rm = val
 
-    if new_session.tonnage > prior_pr.max_session_tonnage:
-        records.append(NewRecord(kind="tonnage", value=new_session.tonnage))
-
+    reps_records: list[NewRecord] = []
     for s in new_session.working_sets:
         prev_best = prior_pr.max_reps_at_weight.get(s.weight, 0)
         if s.reps > prev_best:
-            records.append(NewRecord(kind="reps_at_weight", value=s.reps, extra=s.weight))
+            reps_records.append(NewRecord(kind="reps_at_weight", value=s.reps, extra=s.weight))
             prior_pr.max_reps_at_weight[s.weight] = s.reps
+
+    # Drop records dominated by another from the same session (same reps at a
+    # lower weight, or same weight at fewer reps) — only the best one is worth a notification.
+    for r in reps_records:
+        dominated = any(
+            other is not r and other.extra >= r.extra and other.value >= r.value
+            for other in reps_records
+        )
+        if not dominated:
+            records.append(r)
 
     return records
 

@@ -142,11 +142,13 @@ async def bf_save(callback: CallbackQuery, state: FSMContext):
     blocks = await view_builder.build_block_views(workout_id, user["e1rm_formula"])
     started = dt.datetime.fromisoformat(started_at)
     summary = formatting.build_workout_summary(
-        started, started, blocks, None,
+        started, blocks, None,
         hide_warmups=bool(user["hide_warmups"]), show_extra_stats=bool(user["show_extra_stats"]),
     )
     await state.clear()
-    await callback.message.edit_text(f"✅ Сохранено как прошлая тренировка\n\n{summary}")
+    await callback.message.edit_text(
+        f"✅ Сохранено как прошлая тренировка\n\n{summary}", parse_mode="HTML"
+    )
     active = await db.get_active_workout(user_id)
     await callback.message.answer("Что дальше?", reply_markup=keyboards.main_menu(bool(active)))
     await callback.answer()
