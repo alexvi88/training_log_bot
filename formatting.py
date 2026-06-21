@@ -13,11 +13,6 @@ from analytics import e1rm
 
 _WEEKDAYS_RU = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"]
 
-_MONTHS_RU = [
-    "января", "февраля", "марта", "апреля", "мая", "июня",
-    "июля", "августа", "сентября", "октября", "ноября", "декабря",
-]
-
 UNIT_LABELS = {"kg": "кг", "lb": "lb"}
 
 
@@ -40,10 +35,6 @@ def format_set_slot(slot: tuple[float, int, bool] | None) -> str:
 
 def format_date_ru(d: dt.datetime) -> str:
     return f"{d.strftime('%d.%m')} ({_WEEKDAYS_RU[d.weekday()]})"
-
-
-def format_workout_title(started_at: dt.datetime) -> str:
-    return f"[{started_at.day} {_MONTHS_RU[started_at.month - 1]}]"
 
 
 def format_duration(started_at: dt.datetime, finished_at: dt.datetime) -> str:
@@ -181,12 +172,7 @@ def build_live_session_text(
     blocks: list[BlockView],
     hint: str | None = None,
     hide_warmups: bool = False,
-    started_at: dt.datetime | None = None,
 ) -> str:
-    lines = []
-    if started_at is not None:
-        lines.append(format_workout_title(started_at))
-        lines.append("")
     body_lines = []
     for i, block in enumerate(blocks):
         if i > 0:
@@ -201,7 +187,7 @@ def build_live_session_text(
                 if hide_warmups and all(slot is None or slot[2] for slot in round_sets):
                     continue
                 body_lines.append("  " + " / ".join(format_set_slot(slot) for slot in round_sets))
-    lines.extend(body_lines or ["Добавь упражнение, чтобы начать."])
+    lines = list(body_lines) or ["Добавь упражнение, чтобы начать."]
     if hint:
         lines.append("")
         lines.append(hint)
