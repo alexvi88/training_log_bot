@@ -124,7 +124,7 @@ async def cmd_start(message: Message, state: FSMContext):
                 f"забыл закрыть?"
             )
     await message.answer(
-        f"Привет! Что делаем?{extra}", reply_markup=keyboards.main_menu(bool(active))
+        f"Привет АТЛЕТ. Начнем нашу тренировку?{extra}", reply_markup=keyboards.main_menu(bool(active))
     )
 
 
@@ -132,7 +132,7 @@ async def _show_main_menu(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     active = await db.get_active_workout(callback.from_user.id)
     await callback.message.edit_text(
-        "Привет! Что делаем?", reply_markup=keyboards.main_menu(bool(active))
+        "Привет АТЛЕТ. Начнем нашу тренировку?", reply_markup=keyboards.main_menu(bool(active))
     )
 
 
