@@ -594,17 +594,15 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
             comparison = analytics.compare_to_previous_session(prior_sessions + [new_session])
             if comparison and not new_session.is_bodyweight_mode:
                 comparison_lines.append(
-                    f"{ex['display_name']}: " + formatting.format_comparison_line(
-                        comparison.e1rm_delta, comparison.tonnage_delta, unit=user["unit"]
-                    )
+                    f"<b>{escape(ex['display_name'])}</b>: "
+                    + formatting.format_comparison_line(comparison.e1rm_delta, unit=user["unit"])
                 )
 
     await db.finish_workout(workout_id, note)
 
     blocks = await view_builder.build_block_views(workout_id, formula)
-    finished_at = dt.datetime.now()
     summary = formatting.build_workout_summary(
-        started_at, finished_at, blocks, note,
+        started_at, blocks, note,
         hide_warmups=bool(user["hide_warmups"]), show_extra_stats=bool(user["show_extra_stats"]),
     )
     extra_parts = []
@@ -616,10 +614,11 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
 
     try:
         await bot.edit_message_text(
-            chat_id=data["live_chat_id"], message_id=data["live_message_id"], text=full_text
+            chat_id=data["live_chat_id"], message_id=data["live_message_id"], text=full_text,
+            parse_mode="HTML",
         )
     except TelegramBadRequest:
-        await bot.send_message(chat_id=data["live_chat_id"], text=full_text)
+        await bot.send_message(chat_id=data["live_chat_id"], text=full_text, parse_mode="HTML")
 
     await state.clear()
     active = await db.get_active_workout(user_id)

@@ -65,12 +65,13 @@ async def show_history_item(callback: CallbackQuery, workout_id: int):
     user = await db.get_user(callback.from_user.id)
     blocks = await view_builder.build_block_views(workout_id, user["e1rm_formula"])
     started = dt.datetime.fromisoformat(workout["started_at"])
-    finished = dt.datetime.fromisoformat(workout["finished_at"]) if workout["finished_at"] else started
     text = formatting.build_workout_summary(
-        started, finished, blocks, workout["note"],
+        started, blocks, workout["note"],
         hide_warmups=bool(user["hide_warmups"]), show_extra_stats=bool(user["show_extra_stats"]),
     )
-    await callback.message.edit_text(text, reply_markup=keyboards.history_item_keyboard(workout_id))
+    await callback.message.edit_text(
+        text, reply_markup=keyboards.history_item_keyboard(workout_id), parse_mode="HTML"
+    )
 
 
 @router.callback_query(F.data.startswith("hist:item:"))
@@ -168,7 +169,7 @@ async def prog_show_exercise(callback: CallbackQuery, state: FSMContext):
         ex["display_name"], sessions, trend, comparison, records, unit=user["unit"]
     )
     kb = keyboards.progress_charts_keyboard(ex_id) if sessions else None
-    await callback.message.edit_text(text, reply_markup=kb)
+    await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
     await callback.answer()
 
 
