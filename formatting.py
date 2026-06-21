@@ -172,7 +172,7 @@ def build_live_session_text(
                 body_lines.append("  " + " / ".join(format_set_slot(slot) for slot in round_sets))
     lines = list(body_lines) or ["Добавь упражнение, чтобы начать."]
     if hint:
-        lines.append("")
+        lines.append("——————————" if body_lines else "")
         lines.append(hint)
     return "\n".join(lines)
 
