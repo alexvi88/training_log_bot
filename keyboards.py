@@ -13,10 +13,8 @@ def main_menu(has_active_workout: bool) -> InlineKeyboardMarkup:
     b.button(text="📈 Прогресс", callback_data="menu:progress")
     b.button(text="📚 История", callback_data="menu:history")
     b.button(text="⚙️ Упражнения", callback_data="menu:exercises")
-    b.button(text="⚖️ Дневник веса", callback_data="menu:bodyweight")
     b.button(text="🔧 Настройки", callback_data="menu:settings")
-    b.button(text="🗓 Добавить прошлые тренировки", callback_data="menu:backfill_workout")
-    b.adjust(1, 2)
+    b.adjust(1, 2, 2)
     return b.as_markup()
 
 
@@ -162,6 +160,7 @@ def settings_keyboard(unit: str, default_weight_step: float, formula: str) -> In
     b.button(text=f"Формула 1ПМ: {formula}", callback_data="settings:formula")
     b.button(text="📤 Экспорт CSV", callback_data="settings:export")
     b.button(text="📥 Импорт CSV", callback_data="settings:import")
+    b.button(text="🗓 Добавить прошлые тренировки", callback_data="menu:backfill_workout")
     b.button(text="⬅️ Назад", callback_data="settings:back")
     b.adjust(1)
     return b.as_markup()
