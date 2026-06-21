@@ -29,11 +29,7 @@ async def _ensure_user(telegram_id: int, username: str | None):
 
 async def _refresh_live(bot, chat_id: int, message_id: int, user, workout_id: int, hint, keyboard):
     blocks = await view_builder.build_block_views(workout_id, user["e1rm_formula"])
-    workout = await db.get_workout(workout_id)
-    started_at = dt.datetime.fromisoformat(workout["started_at"])
-    text = formatting.build_live_session_text(
-        blocks, hint, hide_warmups=bool(user["hide_warmups"]), started_at=started_at
-    )
+    text = formatting.build_live_session_text(blocks, hint, hide_warmups=bool(user["hide_warmups"]))
     try:
         await bot.edit_message_text(
             chat_id=chat_id, message_id=message_id, text=text, reply_markup=keyboard, parse_mode="HTML"
@@ -256,7 +252,7 @@ async def _picker_screen_exercises(callback: CallbackQuery, state: FSMContext):
         callback.from_user.id, group_id, limit=config.RECENT_EXERCISES_LIMIT
     )
     kb = keyboards.exercises_keyboard(exercises, prefix="pick", back_cb="back")
-    hint = "Выбери упражнение из своих — или начни печатать название, чтобы найти:"
+    hint = "Выбери упражнение из своих:"
     await state.update_data(picker_stage="exercises")
     await _refresh_live(
         callback.bot, data["live_chat_id"], data["live_message_id"], user, data["workout_id"], hint, kb
@@ -363,25 +359,6 @@ async def _on_exercise_chosen(event, state: FSMContext, ex_id: int):
     await _render_logging_screen(event.bot, state, user)
     if isinstance(event, CallbackQuery):
         await event.answer()
-
-
-# ---------- search by typing while picking exercise ----------
-
-@router.message(StateFilter(WorkoutFlow.picking_exercise))
-async def search_exercise_text(message: Message, state: FSMContext):
-    query = message.text.strip()
-    await message.delete()
-    if not query:
-        return
-    data = await state.get_data()
-    user = await db.get_user(message.from_user.id)
-    results = await db.search_exercises(message.from_user.id, query)
-    kb = keyboards.exercises_keyboard(results, prefix="pick", show_new_button=True, back_cb="back")
-    safe_query = escape(query)
-    hint = f"Результаты поиска «{safe_query}»:" if results else f"Ничего не нашлось по «{safe_query}». Можно создать новое."
-    await _refresh_live(
-        message.bot, data["live_chat_id"], data["live_message_id"], user, data["workout_id"], hint, kb
-    )
 
 
 # ---------- logging sets: type "weight reps", switch between open exercises freely ----------
