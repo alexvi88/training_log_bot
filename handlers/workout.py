@@ -74,6 +74,13 @@ def _idle_keyboard(data: dict | None = None):
     return keyboards.exercise_picker_entry_keyboard(has_planned=has_planned)
 
 
+async def _delete_message(message: Message):
+    try:
+        await message.delete()
+    except TelegramBadRequest:
+        pass
+
+
 async def _react_ok(bot, message: Message):
     try:
         await bot.set_message_reaction(
@@ -346,7 +353,7 @@ async def new_exercise_name_entered(message: Message, state: FSMContext):
     if not name:
         await message.reply("Название не может быть пустым")
         return
-    await message.delete()
+    await _delete_message(message)
     data = await state.get_data()
     ex_id = await db.create_exercise(message.from_user.id, name, data["pending_group_id"])
     await _on_exercise_chosen(message, state, ex_id)
@@ -417,6 +424,7 @@ async def log_set_text(message: Message, state: FSMContext):
     last_by[active] = (parsed[-1].weight, parsed[-1].reps)
     await state.update_data(last_by_exercise=last_by)
     await _react_ok(message.bot, message)
+    await _delete_message(message)
     user = await db.get_user(message.from_user.id)
     await _render_logging_screen(message.bot, state, user)
 
