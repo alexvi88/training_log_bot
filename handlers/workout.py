@@ -92,7 +92,9 @@ async def _render_logging_screen(bot, state: FSMContext, user):
     hint = "\n".join(hint_lines)
 
     open_items = [(ex_id, _short_name(names[ex_id])) for ex_id in open_ids]
-    kb = keyboards.logging_keyboard(open_items, active)
+    active_block_id = (data.get("open_blocks") or {}).get(active)
+    has_sets = bool(active_block_id and await db.list_sets_for_block(active_block_id))
+    kb = keyboards.logging_keyboard(open_items, active, has_sets)
     await _refresh_live(bot, state, user, data["workout_id"], hint, kb)
 
 
