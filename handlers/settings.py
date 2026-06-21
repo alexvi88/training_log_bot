@@ -1,12 +1,11 @@
-"""User settings: units, weight step, e1RM formula, CSV export."""
+"""User settings: units, e1RM formula, CSV export."""
 
 import csv
 import io
 
 from aiogram import F, Router
-from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.types import BufferedInputFile, CallbackQuery, Message
+from aiogram.types import BufferedInputFile, CallbackQuery
 
 import db
 import keyboards
@@ -18,7 +17,7 @@ router = Router(name="settings")
 async def show_settings(callback: CallbackQuery, state: FSMContext):
     await state.set_state(SettingsFlow.menu)
     user = await db.get_user(callback.from_user.id)
-    kb = keyboards.settings_keyboard(user["unit"], user["default_weight_step"], user["e1rm_formula"])
+    kb = keyboards.settings_keyboard(user["unit"], user["e1rm_formula"])
     await callback.message.edit_text("🔧 Настройки:", reply_markup=kb)
     await callback.answer()
 
@@ -44,39 +43,6 @@ async def settings_formula(callback: CallbackQuery, state: FSMContext):
     new_formula = "brzycki" if user["e1rm_formula"] == "epley" else "epley"
     await db.update_user(callback.from_user.id, e1rm_formula=new_formula)
     await show_settings(callback, state)
-
-
-@router.callback_query(F.data == "settings:step")
-async def settings_step(callback: CallbackQuery, state: FSMContext):
-    await state.set_state(SettingsFlow.awaiting_weight_step)
-    await callback.message.edit_text(
-        "Введи шаг веса по умолчанию в кг (например 2.5). "
-        "Это дефолт для новых упражнений — у каждого можно потом задать свой в «⚙️ Упражнения».",
-        reply_markup=keyboards.cancel_keyboard("settings:stepcancel"),
-    )
-    await callback.answer()
-
-
-@router.callback_query(F.data == "settings:stepcancel")
-async def settings_step_cancel(callback: CallbackQuery, state: FSMContext):
-    await show_settings(callback, state)
-    await callback.answer()
-
-
-@router.message(StateFilter(SettingsFlow.awaiting_weight_step))
-async def settings_step_entered(message: Message, state: FSMContext):
-    try:
-        value = float(message.text.strip().replace(",", "."))
-        if value <= 0:
-            raise ValueError
-    except ValueError:
-        await message.reply("Нужно положительное число, например 2.5")
-        return
-    await db.update_user(message.from_user.id, default_weight_step=value)
-    await state.set_state(SettingsFlow.menu)
-    user = await db.get_user(message.from_user.id)
-    kb = keyboards.settings_keyboard(user["unit"], user["default_weight_step"], user["e1rm_formula"])
-    await message.answer("🔧 Настройки:", reply_markup=kb)
 
 
 @router.callback_query(F.data == "settings:export")

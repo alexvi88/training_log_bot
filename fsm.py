@@ -14,7 +14,7 @@ class ExerciseManage(StatesGroup):
     picking_group = State()
     picking_exercise = State()
     editing = State()
-    editing_step = State()
+    editing_name = State()
     new_group_name = State()
     creating_exercise_name = State()
 
@@ -25,7 +25,6 @@ class HistoryFlow(StatesGroup):
 
 class SettingsFlow(StatesGroup):
     menu = State()
-    awaiting_weight_step = State()
 
 
 class BodyweightFlow(StatesGroup):

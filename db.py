@@ -20,7 +20,6 @@ CREATE TABLE IF NOT EXISTS users (
     username TEXT,
     created_at TEXT NOT NULL,
     unit TEXT NOT NULL DEFAULT 'kg',
-    default_weight_step REAL NOT NULL DEFAULT 2.5,
     bodyweight REAL,
     e1rm_formula TEXT NOT NULL DEFAULT 'epley',
     hide_warmups INTEGER NOT NULL DEFAULT 0,
@@ -45,8 +44,6 @@ CREATE TABLE IF NOT EXISTS exercises (
     unilateral INTEGER NOT NULL DEFAULT 0,
     attachment TEXT,
     display_name TEXT NOT NULL,
-    weight_step REAL,
-    weight_step_big REAL,
     is_archived INTEGER NOT NULL DEFAULT 0,
     is_template INTEGER NOT NULL DEFAULT 0,
     notes TEXT,
@@ -160,16 +157,6 @@ async def _column_names(table: str) -> set[str]:
 
 async def _migrate_schema() -> None:
     """Upgrade older on-disk databases to the current column set in-place."""
-    user_cols = await _column_names("users")
-    if "weight_step" in user_cols and "default_weight_step" not in user_cols:
-        await _conn.execute("ALTER TABLE users RENAME COLUMN weight_step TO default_weight_step")
-
-    exercise_cols = await _column_names("exercises")
-    if "weight_step" not in exercise_cols:
-        await _conn.execute("ALTER TABLE exercises ADD COLUMN weight_step REAL")
-    if "weight_step_big" not in exercise_cols:
-        await _conn.execute("ALTER TABLE exercises ADD COLUMN weight_step_big REAL")
-
     await _conn.execute("DROP INDEX IF EXISTS idx_exercises_user_name")
 
     workout_cols = await _column_names("workouts")
@@ -275,14 +262,13 @@ async def get_or_create_user(telegram_id: int, username: Optional[str]) -> aiosq
         return row
     async with _write_lock:
         await db.execute(
-            "INSERT INTO users (telegram_id, username, created_at, unit, default_weight_step, e1rm_formula) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO users (telegram_id, username, created_at, unit, e1rm_formula) "
+            "VALUES (?, ?, ?, ?, ?)",
             (
                 telegram_id,
                 username,
                 now_iso(),
                 config.DEFAULT_UNIT,
-                config.DEFAULT_WEIGHT_STEP,
                 config.DEFAULT_E1RM_FORMULA,
             ),
         )
@@ -477,15 +463,20 @@ async def fork_exercise_from_template(
     )
 
 
-async def update_exercise_step(
-    exercise_id: int, weight_step: Optional[float], weight_step_big: Optional[float]
-) -> None:
+async def update_exercise_name(exercise_id: int, name: str) -> bool:
+    """Rename in place (same row/id) so existing sets keep their stats. Returns False on name clash."""
+    ex = await get_exercise(exercise_id)
+    display_name = build_display_name(name, ex["equipment"], bool(ex["unilateral"]), ex["attachment"])
     async with _write_lock:
-        await conn().execute(
-            "UPDATE exercises SET weight_step = ?, weight_step_big = ? WHERE id = ?",
-            (weight_step, weight_step_big, exercise_id),
-        )
+        try:
+            await conn().execute(
+                "UPDATE exercises SET name = ?, display_name = ? WHERE id = ?",
+                (name, display_name, exercise_id),
+            )
+        except aiosqlite.IntegrityError:
+            return False
         await conn().commit()
+        return True
 
 
 async def touch_exercise_last_used(exercise_id: int) -> None:

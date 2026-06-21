@@ -155,10 +155,9 @@ def history_item_keyboard(workout_id: int) -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
-def settings_keyboard(unit: str, default_weight_step: float, formula: str) -> InlineKeyboardMarkup:
+def settings_keyboard(unit: str, formula: str) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(text=f"Единицы: {unit}", callback_data="settings:unit")
-    b.button(text=f"Шаг веса по умолчанию: {default_weight_step}", callback_data="settings:step")
     b.button(text=f"Формула 1ПМ: {formula}", callback_data="settings:formula")
     b.button(text="📤 Экспорт CSV", callback_data="settings:export")
     b.button(text="📥 Импорт CSV", callback_data="settings:import")

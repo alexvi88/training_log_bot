@@ -5,7 +5,6 @@ BOT_TOKEN = os.getenv("TG_TOKEN", "")
 DB_PATH = os.getenv("DB_PATH", "training_log.db")
 
 DEFAULT_UNIT = "kg"
-DEFAULT_WEIGHT_STEP = 2.5
 
 # e1RM formula: "epley" or "brzycki"
 DEFAULT_E1RM_FORMULA = os.getenv("E1RM_FORMULA", "epley")
