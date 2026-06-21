@@ -37,6 +37,10 @@ def format_date_ru(d: dt.datetime) -> str:
     return f"{d.strftime('%d.%m')} ({_WEEKDAYS_RU[d.weekday()]})"
 
 
+def format_workout_title(started_at: dt.datetime) -> str:
+    return f"[Тренировка {started_at.strftime('%d.%m.%Y')}]"
+
+
 def format_duration(started_at: dt.datetime, finished_at: dt.datetime) -> str:
     total_minutes = max(0, int((finished_at - started_at).total_seconds() // 60))
     hours, minutes = divmod(total_minutes, 60)
@@ -172,23 +176,27 @@ def build_live_session_text(
     blocks: list[BlockView],
     hint: str | None = None,
     hide_warmups: bool = False,
+    started_at: dt.datetime | None = None,
 ) -> str:
     lines = []
+    if started_at is not None:
+        lines.append(format_workout_title(started_at))
+        lines.append("")
+    body_lines = []
     for i, block in enumerate(blocks):
         if i > 0:
-            lines.append("")
+            body_lines.append("")
         if isinstance(block, ExerciseBlockView):
             sets = block.working_sets if hide_warmups else block.sets
-            lines.append(f"<b>{escape(block.exercise_name)}</b>")
-            lines.extend(f"  • {format_set(w, r, warm)}" for w, r, warm in sets)
+            body_lines.append(f"<b>{escape(block.exercise_name)}</b>")
+            body_lines.extend(f"  • {format_set(w, r, warm)}" for w, r, warm in sets)
         else:
-            lines.append(" ⇄ ".join(f"<b>{escape(n)}</b>" for n in block.exercise_names))
+            body_lines.append(" ⇄ ".join(f"<b>{escape(n)}</b>" for n in block.exercise_names))
             for round_sets in block.rounds:
                 if hide_warmups and all(slot is None or slot[2] for slot in round_sets):
                     continue
-                lines.append("  " + " / ".join(format_set_slot(slot) for slot in round_sets))
-    if not lines:
-        lines.append("Добавь упражнение, чтобы начать.")
+                body_lines.append("  " + " / ".join(format_set_slot(slot) for slot in round_sets))
+    lines.extend(body_lines or ["Добавь упражнение, чтобы начать."])
     if hint:
         lines.append("")
         lines.append(hint)

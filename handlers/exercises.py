@@ -1,5 +1,7 @@
 """CRUD/browsing for muscle groups and exercises (the "⚙️ Упражнения" menu)."""
 
+from html import escape
+
 from aiogram import F, Router
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
@@ -49,7 +51,8 @@ async def _show_exercise_list(callback: CallbackQuery, state: FSMContext):
     for ex in exercises:
         b.button(text=ex["display_name"], callback_data=f"exm:ex:{ex['id']}")
     b.button(text="➕ Новое упражнение", callback_data="exm:newex")
-    b.button(text="🗑 Архивировать группу", callback_data=f"exm:archivegrp:{group_id}")
+    if group["user_id"] is not None:
+        b.button(text="🗑 Архивировать группу", callback_data=f"exm:archivegrp:{group_id}")
     b.button(text="⬅️ Назад", callback_data="exm:backgroups")
     b.adjust(1)
     text = f"{group['name']}\n\nТвои упражнения:" if exercises else \
@@ -106,7 +109,7 @@ async def exm_pick_template(callback: CallbackQuery, state: FSMContext):
     await state.set_state(ExerciseManage.picking_exercise)
     ex = await db.get_exercise(ex_id)
     text, kb = _exercise_detail_view(ex)
-    await callback.message.edit_text(text, reply_markup=kb)
+    await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
     await callback.answer()
 
 
@@ -122,12 +125,16 @@ async def exm_new_exercise_name_entered(message: Message, state: FSMContext):
     await state.set_state(ExerciseManage.picking_exercise)
     ex = await db.get_exercise(ex_id)
     text, kb = _exercise_detail_view(ex)
-    await message.answer(text, reply_markup=kb)
+    await message.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
 @router.callback_query(F.data.startswith("exm:archivegrp:"))
 async def exm_archive_group(callback: CallbackQuery, state: FSMContext):
     group_id = int(callback.data.split(":")[2])
+    group = await db.get_muscle_group(group_id)
+    if group is None or group["user_id"] is None:
+        await callback.answer("Эту группу нельзя архивировать", show_alert=True)
+        return
     await db.archive_muscle_group(group_id)
     await callback.answer("Группа архивирована")
     await show_exercise_groups(callback, state)
@@ -135,20 +142,17 @@ async def exm_archive_group(callback: CallbackQuery, state: FSMContext):
 
 def _exercise_detail_view(ex):
     b = InlineKeyboardBuilder()
-    b.button(text="✏️ Шаг веса", callback_data=f"exm:step:{ex['id']}")
+    b.button(text="✏️ Название", callback_data=f"exm:editname:{ex['id']}")
     b.button(text="🗑 Архивировать", callback_data=f"exm:archive:{ex['id']}")
     b.button(text="⬅️ Назад", callback_data="exm:backlist")
     b.adjust(1)
-    info = [f"Название: {ex['name']}"]
+    info = [f"Название: <b>{escape(ex['name'])}</b>"]
     if ex["equipment"]:
         info.append(f"Оснастка: {ex['equipment']}")
     if ex["unilateral"]:
         info.append("Одной рукой/ногой: да")
     if ex["attachment"]:
         info.append(f"Хват/насадка: {ex['attachment']}")
-    step_label = f"{ex['weight_step']} кг" if ex["weight_step"] is not None else "по умолчанию"
-    big_label = f"{ex['weight_step_big']} кг" if ex["weight_step_big"] is not None else "×4 от шага"
-    info.append(f"Шаг веса: {step_label} / крупный шаг: {big_label}")
     info.append(f"Создано: {ex['created_at'][:10]}")
     return "\n".join(info), b.as_markup()
 
@@ -159,47 +163,38 @@ async def exm_pick_exercise(callback: CallbackQuery, state: FSMContext):
     await state.update_data(exm_exercise_id=ex_id)
     ex = await db.get_exercise(ex_id)
     text, kb = _exercise_detail_view(ex)
-    await callback.message.edit_text(text, reply_markup=kb)
+    await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("exm:step:"))
-async def exm_edit_step(callback: CallbackQuery, state: FSMContext):
+@router.callback_query(F.data.startswith("exm:editname:"))
+async def exm_edit_name(callback: CallbackQuery, state: FSMContext):
     ex_id = int(callback.data.split(":")[2])
     await state.update_data(exm_exercise_id=ex_id)
-    await state.set_state(ExerciseManage.editing_step)
-    b = InlineKeyboardBuilder()
-    b.button(text="⬅️ Назад", callback_data="exm:backlist")
+    await state.set_state(ExerciseManage.editing_name)
     await callback.message.edit_text(
-        "Шаг веса в кг. Один шаг: «2.5». Шаг и крупный шаг: «2.5 10». "
-        "«0» — сбросить на дефолт.",
-        reply_markup=b.as_markup(),
+        "Напиши новое название упражнения:",
+        reply_markup=keyboards.cancel_keyboard("exm:backlist"),
     )
     await callback.answer()
 
 
-@router.message(StateFilter(ExerciseManage.editing_step))
-async def exm_step_entered(message: Message, state: FSMContext):
+@router.message(StateFilter(ExerciseManage.editing_name))
+async def exm_name_entered(message: Message, state: FSMContext):
+    name = message.text.strip()
+    if not name:
+        await message.reply("Название не может быть пустым")
+        return
     data = await state.get_data()
     ex_id = data["exm_exercise_id"]
-    text = message.text.strip().replace(",", ".")
-    if text == "0":
-        await db.update_exercise_step(ex_id, None, None)
-    else:
-        parts = text.split()
-        try:
-            step = float(parts[0])
-            big = float(parts[1]) if len(parts) > 1 else None
-            if step <= 0 or (big is not None and big <= 0):
-                raise ValueError
-        except (ValueError, IndexError):
-            await message.reply("Нужно число, например 2.5 или «2.5 10»")
-            return
-        await db.update_exercise_step(ex_id, step, big)
+    ok = await db.update_exercise_name(ex_id, name)
+    if not ok:
+        await message.reply("У тебя уже есть упражнение с таким названием.")
+        return
     await state.set_state(ExerciseManage.picking_exercise)
     ex = await db.get_exercise(ex_id)
     text, kb = _exercise_detail_view(ex)
-    await message.answer(text, reply_markup=kb)
+    await message.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
 @router.callback_query(F.data == "exm:backlist")
