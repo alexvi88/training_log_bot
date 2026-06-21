@@ -27,6 +27,25 @@ async def _ensure_user(telegram_id: int, username: str | None):
     return await db.get_or_create_user(telegram_id, username)
 
 
+def _move_open_exercises_last(
+    blocks: list[formatting.BlockView], open_exercises: list[int], active_id: int | None
+) -> list[formatting.BlockView]:
+    """Push still-open exercises to the bottom, active one last, closest to the input hint."""
+    open_set = set(open_exercises)
+    closed = [
+        b for b in blocks
+        if not (isinstance(b, formatting.ExerciseBlockView) and b.exercise_id in open_set)
+    ]
+    open_map = {
+        b.exercise_id: b for b in blocks
+        if isinstance(b, formatting.ExerciseBlockView) and b.exercise_id in open_set
+    }
+    order = [eid for eid in open_exercises if eid != active_id]
+    if active_id in open_map:
+        order.append(active_id)
+    return closed + [open_map[eid] for eid in order if eid in open_map]
+
+
 async def _refresh_live(bot, state: FSMContext, user, workout_id: int, hint, keyboard):
     """Re-send the live tracker message so it always sits at the bottom of the chat.
 
@@ -37,7 +56,11 @@ async def _refresh_live(bot, state: FSMContext, user, workout_id: int, hint, key
     data = await state.get_data()
     chat_id = data["live_chat_id"]
     blocks = await view_builder.build_block_views(workout_id, user["e1rm_formula"])
-    text = formatting.build_live_session_text(blocks, hint, hide_warmups=bool(user["hide_warmups"]))
+    active = data.get("active_exercise_id")
+    blocks = _move_open_exercises_last(blocks, data.get("open_exercises") or [], active)
+    text = formatting.build_live_session_text(
+        blocks, hint, hide_warmups=bool(user["hide_warmups"]), active_exercise_id=active,
+    )
     try:
         await bot.delete_message(chat_id=chat_id, message_id=data["live_message_id"])
     except TelegramBadRequest:
@@ -66,10 +89,6 @@ async def _log_one(block_id: int, exercise_id: int, weight: float, reps: int, is
     await db.add_set(block_id, exercise_id, round_idx, 0, weight, reps, is_warmup)
 
 
-def _short_name(name: str, limit: int = 18) -> str:
-    return name if len(name) <= limit else name[: limit - 1].rstrip() + "…"
-
-
 def _logging_hint(last: tuple[float, int] | None) -> str:
     return "Напиши вес и повторы через пробел, например «100 8»"
 
@@ -85,13 +104,9 @@ async def _render_logging_screen(bot, state: FSMContext, user):
         ex = await db.get_exercise(ex_id)
         names[ex_id] = ex["display_name"]
 
-    hint_lines = []
-    if len(open_ids) > 1:
-        hint_lines.append(f"▶️ {escape(names.get(active, ''))}")
-    hint_lines.append(_logging_hint(last_by.get(active)))
-    hint = "\n".join(hint_lines)
+    hint = _logging_hint(last_by.get(active))
 
-    open_items = [(ex_id, _short_name(names[ex_id])) for ex_id in open_ids]
+    open_items = [(ex_id, names[ex_id]) for ex_id in open_ids]
     active_block_id = (data.get("open_blocks") or {}).get(active)
     has_sets = bool(active_block_id and await db.list_sets_for_block(active_block_id))
     kb = keyboards.logging_keyboard(open_items, active, has_sets)
@@ -259,10 +274,11 @@ async def _picker_screen_exercises(callback: CallbackQuery, state: FSMContext):
     kb = keyboards.exercises_keyboard(
         exercises, prefix="pick", back_cb="back", show_new_button=group_id is not None
     )
-    hint = "Выбери упражнение из своих:"
     if exercises:
         names = [escape(ex["display_name"]) for ex in exercises]
-        hint += "\n" + keyboards.numbered_list(names)
+        hint = "Выбери упражнение из своих:\n" + keyboards.numbered_list(names)
+    else:
+        hint = "У тебя пока нет своих упражнений здесь — добавь новое:"
     await state.update_data(picker_stage="exercises")
     await _refresh_live(callback.bot, state, user, data["workout_id"], hint, kb)
 

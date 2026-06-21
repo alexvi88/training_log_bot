@@ -34,6 +34,7 @@ async def build_block_views(workout_id: int, formula: str = "epley") -> list[Blo
                     exercise_name=ex["display_name"],
                     sets=sets_tuples,
                     formula=formula,
+                    exercise_id=ex_id,
                 )
             )
         else:
