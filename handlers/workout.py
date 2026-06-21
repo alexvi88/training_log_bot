@@ -255,6 +255,9 @@ async def _picker_screen_exercises(callback: CallbackQuery, state: FSMContext):
     )
     kb = keyboards.exercises_keyboard(exercises, prefix="pick", back_cb="back")
     hint = "Выбери упражнение из своих:"
+    if exercises:
+        names = [escape(ex["display_name"]) for ex in exercises]
+        hint += "\n" + keyboards.numbered_list(names)
     await state.update_data(picker_stage="exercises")
     await _refresh_live(callback.bot, state, user, data["workout_id"], hint, kb)
 
@@ -295,7 +298,11 @@ async def pick_templates(callback: CallbackQuery, state: FSMContext):
     user = await db.get_user(callback.from_user.id)
     templates = await db.list_templates_in_group(data["pending_group_id"])
     kb = keyboards.templates_keyboard(templates, prefix="pick", back_cb="newback")
-    await _refresh_live(callback.bot, state, user, data["workout_id"], "Шаблоны — выбери подходящий:", kb)
+    hint = "Шаблоны — выбери подходящий:"
+    if templates:
+        names = [escape(t["display_name"]) for t in templates]
+        hint += "\n" + keyboards.numbered_list(names)
+    await _refresh_live(callback.bot, state, user, data["workout_id"], hint, kb)
     await callback.answer()
 
 

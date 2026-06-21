@@ -5,7 +5,7 @@ from html import escape
 from aiogram import F, Router
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import db
@@ -48,15 +48,18 @@ async def _show_exercise_list(callback: CallbackQuery, state: FSMContext):
     exercises = await db.list_user_exercises_in_group(callback.from_user.id, group_id)
     group = await db.get_muscle_group(group_id)
     b = InlineKeyboardBuilder()
-    for ex in exercises:
-        b.button(text=ex["display_name"], callback_data=f"exm:ex:{ex['id']}")
-    b.button(text="➕ Новое упражнение", callback_data="exm:newex")
+    items = [(f"exm:ex:{ex['id']}", ex["display_name"]) for ex in exercises]
+    for row in keyboards.numbered_buttons(items):
+        b.row(*row)
+    b.row(InlineKeyboardButton(text="➕ Новое упражнение", callback_data="exm:newex"))
     if group["user_id"] is not None:
-        b.button(text="🗑 Архивировать группу", callback_data=f"exm:archivegrp:{group_id}")
-    b.button(text="⬅️ Назад", callback_data="exm:backgroups")
-    b.adjust(1)
-    text = f"{group['name']}\n\nТвои упражнения:" if exercises else \
-        f"{group['name']}\n\nПока нет своих упражнений в этой группе."
+        b.row(InlineKeyboardButton(text="🗑 Архивировать группу", callback_data=f"exm:archivegrp:{group_id}"))
+    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="exm:backgroups"))
+    if exercises:
+        names = [ex["display_name"] for ex in exercises]
+        text = f"{group['name']}\n\nТвои упражнения:\n" + keyboards.numbered_list(names)
+    else:
+        text = f"{group['name']}\n\nПока нет своих упражнений в этой группе."
     await callback.message.edit_text(text, reply_markup=b.as_markup())
     await callback.answer()
 
@@ -81,7 +84,11 @@ async def exm_templates(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     templates = await db.list_templates_in_group(data["exm_group_id"])
     kb = keyboards.templates_keyboard(templates, prefix="exm", back_cb="newback")
-    text = "Шаблоны — выбери подходящий:" if templates else "Для этой группы пока нет шаблонов."
+    if templates:
+        names = [t["display_name"] for t in templates]
+        text = "Шаблоны — выбери подходящий:\n" + keyboards.numbered_list(names)
+    else:
+        text = "Для этой группы пока нет шаблонов."
     await callback.message.edit_text(text, reply_markup=kb)
     await callback.answer()
 
