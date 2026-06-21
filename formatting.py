@@ -172,9 +172,12 @@ def build_live_session_text(
                 if hide_warmups and all(slot is None or slot[2] for slot in round_sets):
                     continue
                 body_lines.append("  " + " / ".join(format_set_slot(slot) for slot in round_sets))
-    lines = list(body_lines) or ["Добавь упражнение, чтобы начать."]
+    lines = list(body_lines)
+    if not lines and not hint:
+        lines = ["Добавь упражнение, чтобы начать."]
     if hint:
-        lines.append(_DIVIDER if body_lines else "")
+        if lines:
+            lines.append(_DIVIDER if body_lines else "")
         lines.append(hint)
     return "\n".join(lines)
 
