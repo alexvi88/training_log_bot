@@ -49,7 +49,8 @@ async def _show_exercise_list(callback: CallbackQuery, state: FSMContext):
     for ex in exercises:
         b.button(text=ex["display_name"], callback_data=f"exm:ex:{ex['id']}")
     b.button(text="➕ Новое упражнение", callback_data="exm:newex")
-    b.button(text="🗑 Архивировать группу", callback_data=f"exm:archivegrp:{group_id}")
+    if group["user_id"] is not None:
+        b.button(text="🗑 Архивировать группу", callback_data=f"exm:archivegrp:{group_id}")
     b.button(text="⬅️ Назад", callback_data="exm:backgroups")
     b.adjust(1)
     text = f"{group['name']}\n\nТвои упражнения:" if exercises else \
@@ -128,6 +129,10 @@ async def exm_new_exercise_name_entered(message: Message, state: FSMContext):
 @router.callback_query(F.data.startswith("exm:archivegrp:"))
 async def exm_archive_group(callback: CallbackQuery, state: FSMContext):
     group_id = int(callback.data.split(":")[2])
+    group = await db.get_muscle_group(group_id)
+    if group is None or group["user_id"] is None:
+        await callback.answer("Эту группу нельзя архивировать", show_alert=True)
+        return
     await db.archive_muscle_group(group_id)
     await callback.answer("Группа архивирована")
     await show_exercise_groups(callback, state)
