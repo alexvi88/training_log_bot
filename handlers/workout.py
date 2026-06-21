@@ -501,7 +501,7 @@ async def live_next_planned(callback: CallbackQuery, state: FSMContext):
 
 # ---------- finishing the workout ----------
 
-@router.callback_query(F.data == "live:finish_workout")
+@router.callback_query(StateFilter(WorkoutFlow.idle), F.data == "live:finish_workout")
 async def live_finish_workout(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     workout_id = data["workout_id"]
@@ -520,7 +520,7 @@ async def live_finish_workout(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(F.data == "finish:discard_empty")
+@router.callback_query(StateFilter(WorkoutFlow.idle), F.data == "finish:discard_empty")
 async def finish_discard_empty(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     await db.discard_workout(data["workout_id"])
@@ -530,14 +530,14 @@ async def finish_discard_empty(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(F.data == "live:cancel_finish")
+@router.callback_query(StateFilter(WorkoutFlow.idle), F.data == "live:cancel_finish")
 async def cancel_finish(callback: CallbackQuery, state: FSMContext):
     user = await db.get_user(callback.from_user.id)
     await _back_after_cancel(callback.bot, state, user)
     await callback.answer()
 
 
-@router.callback_query(F.data == "finish:note")
+@router.callback_query(StateFilter(WorkoutFlow.idle), F.data == "finish:note")
 async def finish_ask_note(callback: CallbackQuery, state: FSMContext):
     await state.set_state(WorkoutFlow.finishing_note)
     await callback.message.edit_text(
@@ -552,7 +552,7 @@ async def finish_note_entered(message: Message, state: FSMContext):
     await _finalize_workout(message, state, note=message.text.strip())
 
 
-@router.callback_query(F.data == "finish:skip_note")
+@router.callback_query(StateFilter(WorkoutFlow.idle), F.data == "finish:skip_note")
 async def finish_skip_note(callback: CallbackQuery, state: FSMContext):
     await _finalize_workout(callback, state, note=None)
 
