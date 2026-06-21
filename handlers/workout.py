@@ -504,26 +504,16 @@ async def live_finish_workout(callback: CallbackQuery, state: FSMContext):
     workout_id = data["workout_id"]
     exercise_ids = await db.list_exercise_ids_for_workout(workout_id)
     if not exercise_ids:
-        await callback.message.edit_text(
-            "Тренировка пустая — удалить её?",
-            reply_markup=keyboards.yes_no_keyboard("finish:discard_empty", "live:cancel_finish"),
-        )
+        await db.discard_workout(workout_id)
+        await state.clear()
+        await callback.message.edit_text("Тренировка была пустая — удалил её.")
+        await _show_main_menu(callback, state)
         await callback.answer()
         return
     await callback.message.edit_text(
         "Завершаем? Можно добавить заметку (сон/самочувствие):",
         reply_markup=keyboards.finish_workout_keyboard(),
     )
-    await callback.answer()
-
-
-@router.callback_query(StateFilter(WorkoutFlow.idle), F.data == "finish:discard_empty")
-async def finish_discard_empty(callback: CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    await db.discard_workout(data["workout_id"])
-    await state.clear()
-    await callback.message.edit_text("Удалил пустую тренировку.")
-    await _show_main_menu(callback, state)
     await callback.answer()
 
 
