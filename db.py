@@ -819,9 +819,8 @@ async def get_latest_bodyweight(user_id: int) -> Optional[aiosqlite.Row]:
 
 async def export_rows_for_user(user_id: int) -> list[aiosqlite.Row]:
     cur = await conn().execute(
-        "SELECT w.started_at, w.finished_at, e.display_name AS exercise, "
-        "bt.type AS block_type, s.round_index, s.order_in_round, "
-        "s.weight, s.reps, s.is_warmup, s.rpe "
+        "SELECT w.started_at, e.display_name AS exercise, "
+        "s.round_index, s.weight, s.reps, s.is_warmup "
         "FROM sets s "
         "JOIN workout_blocks bt ON bt.id = s.block_id "
         "JOIN workouts w ON w.id = bt.workout_id "

@@ -50,14 +50,10 @@ async def settings_export(callback: CallbackQuery, state: FSMContext):
     rows = await db.export_rows_for_user(callback.from_user.id)
     buf = io.StringIO()
     writer = csv.writer(buf)
-    writer.writerow([
-        "started_at", "finished_at", "exercise", "block_type",
-        "round_index", "order_in_round", "weight", "reps", "is_warmup", "rpe",
-    ])
+    writer.writerow(["started_at", "exercise", "round_index", "weight", "reps", "is_warmup"])
     for r in rows:
         writer.writerow([
-            r["started_at"], r["finished_at"], r["exercise"], r["block_type"],
-            r["round_index"], r["order_in_round"], r["weight"], r["reps"], r["is_warmup"], r["rpe"],
+            r["started_at"], r["exercise"], r["round_index"], r["weight"], r["reps"], r["is_warmup"],
         ])
     data = buf.getvalue().encode("utf-8-sig")
     await callback.message.answer_document(

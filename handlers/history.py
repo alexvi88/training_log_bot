@@ -116,14 +116,11 @@ async def hist_duplicate(callback: CallbackQuery, state: FSMContext):
 # ---------- progress ----------
 
 async def show_progress_entry(callback: CallbackQuery, state: FSMContext):
-    exercises = await db.list_user_exercises(callback.from_user.id)
-    b = InlineKeyboardBuilder()
-    for ex in exercises:
-        b.button(text=ex["display_name"], callback_data=f"prog:ex:{ex['id']}")
-    b.button(text="⬅️ Назад", callback_data="prog:back")
-    b.adjust(1)
-    text = "📈 Прогресс — выбери упражнение:" if exercises else "Пока нет своих упражнений с историей."
-    await callback.message.edit_text(text, reply_markup=b.as_markup())
+    groups = await db.list_muscle_groups(callback.from_user.id)
+    kb = keyboards.groups_keyboard(
+        groups, prefix="prog", extra_buttons=[("⬅️ Назад", "prog:back")], show_all=True
+    )
+    await callback.message.edit_text("📈 Прогресс — выбери группу мышц:", reply_markup=kb)
     await callback.answer()
 
 
@@ -131,6 +128,30 @@ async def show_progress_entry(callback: CallbackQuery, state: FSMContext):
 async def prog_back(callback: CallbackQuery, state: FSMContext):
     from handlers.workout import _show_main_menu
     await _show_main_menu(callback, state)
+
+
+@router.callback_query(F.data == "prog:groups")
+async def prog_back_to_groups(callback: CallbackQuery, state: FSMContext):
+    await show_progress_entry(callback, state)
+
+
+@router.callback_query(F.data.startswith("prog:grp:"))
+async def prog_pick_group(callback: CallbackQuery, state: FSMContext):
+    raw = callback.data.split(":")[2]
+    group_id = None if raw == "all" else int(raw)
+    exercises = (
+        await db.list_user_exercises(callback.from_user.id)
+        if group_id is None
+        else await db.list_user_exercises_in_group(callback.from_user.id, group_id)
+    )
+    b = InlineKeyboardBuilder()
+    for ex in exercises:
+        b.button(text=ex["display_name"], callback_data=f"prog:ex:{ex['id']}")
+    b.button(text="⬅️ Назад", callback_data="prog:groups")
+    b.adjust(1)
+    text = "📈 Прогресс — выбери упражнение:" if exercises else "Пока нет своих упражнений с историей в этой группе."
+    await callback.message.edit_text(text, reply_markup=b.as_markup())
+    await callback.answer()
 
 
 async def _load_sessions(exercise_id: int, formula: str) -> list[analytics.SessionStats]:

@@ -26,6 +26,7 @@ SYNONYMS = {
     "weight": {"вес", "weight"},
     "reps": {"повторы", "reps"},
     "round": {"подход", "раунд", "round", "set", "round_index"},
+    "warmup": {"разминка", "warmup", "is_warmup"},
 }
 
 
@@ -151,6 +152,10 @@ def _build_workout_groups(rows: list[list[str]], mapping: dict[str, int]) -> lis
             if "round" in mapping:
                 round_text = row[mapping["round"]].strip()
                 round_val = int(round_text) if round_text else None
+            is_warmup = False
+            if "warmup" in mapping:
+                warmup_text = row[mapping["warmup"]].strip().lower()
+                is_warmup = warmup_text not in ("", "0", "false", "нет")
         except ParseError as e:
             raise ParseError(f"Строка {line_no}: {e.message}")
         except (ValueError, IndexError):
@@ -169,7 +174,7 @@ def _build_workout_groups(rows: list[list[str]], mapping: dict[str, int]) -> lis
         if name not in groups[date_iso]:
             groups[date_iso][name] = []
             name_order[date_iso].append(name)
-        groups[date_iso][name].append((round_val, weight, reps))
+        groups[date_iso][name].append((round_val, weight, reps, is_warmup))
 
     workouts = []
     for date_iso in date_order:
@@ -178,7 +183,7 @@ def _build_workout_groups(rows: list[list[str]], mapping: dict[str, int]) -> lis
             rows_for_ex = groups[date_iso][name]
             if all(r[0] is not None for r in rows_for_ex):
                 rows_for_ex = sorted(rows_for_ex, key=lambda r: r[0])
-            entries.append({"name": name, "sets": [[w, r, False] for _, w, r in rows_for_ex]})
+            entries.append({"name": name, "sets": [[w, r, wu] for _, w, r, wu in rows_for_ex]})
         workouts.append({"date": date_iso, "entries": entries})
     return workouts
 
