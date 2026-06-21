@@ -15,6 +15,8 @@ _WEEKDAYS_RU = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"]
 
 UNIT_LABELS = {"kg": "кг", "lb": "lb"}
 
+_DIVIDER = "─" * 10
+
 
 def format_weight(weight: float) -> str:
     if weight == int(weight):
@@ -146,7 +148,7 @@ def build_workout_summary(
             exercise_count += len(block.exercise_names)
             working_set_count += block.working_set_count
 
-    lines.append("——————————")
+    lines.append(_DIVIDER)
     lines.append(f"{exercise_count} упражнения · {working_set_count} рабочих сетов")
     return "\n".join(lines)
 
@@ -172,7 +174,7 @@ def build_live_session_text(
                 body_lines.append("  " + " / ".join(format_set_slot(slot) for slot in round_sets))
     lines = list(body_lines) or ["Добавь упражнение, чтобы начать."]
     if hint:
-        lines.append("——————————" if body_lines else "")
+        lines.append(_DIVIDER if body_lines else "")
         lines.append(hint)
     return "\n".join(lines)
 
