@@ -32,8 +32,7 @@ async def show_history_list(callback: CallbackQuery, state: FSMContext, page: in
     items = []
     for w in workouts:
         started = dt.datetime.fromisoformat(w["started_at"])
-        n_ex = len(await db.list_exercise_ids_for_workout(w["id"]))
-        items.append({"id": w["id"], "label": f"{formatting.format_date_ru(started)} · {n_ex} упр."})
+        items.append({"id": w["id"], "label": formatting.format_date_ru(started)})
     has_next = (page + 1) * HISTORY_PAGE_SIZE < total
     kb = keyboards.history_list_keyboard(items, page, has_next)
     text = "📚 История тренировок:" if items else "Пока нет завершённых тренировок."
