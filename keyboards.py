@@ -72,7 +72,7 @@ def yes_no_keyboard(yes_cb: str, no_cb: str, yes_text: str = "Да", no_text: st
 
 
 def logging_keyboard(
-    open_items: list[tuple[int, str]], active_id: int | None, can_repeat: bool
+    open_items: list[tuple[int, str]], active_id: int | None
 ) -> InlineKeyboardMarkup:
     """Set-logging keyboard: tabs to switch between exercises open in parallel, plus controls.
 
@@ -90,11 +90,7 @@ def logging_keyboard(
         ]
         for i in range(0, len(tabs), 3):
             b.row(*tabs[i:i + 3])
-    controls = []
-    if can_repeat:
-        controls.append(InlineKeyboardButton(text="🔁 Повторить", callback_data="live:repeat"))
-    controls.append(InlineKeyboardButton(text="➕ Упражнение", callback_data="live:add_exercise"))
-    b.row(*controls)
+    b.row(InlineKeyboardButton(text="➕ Упражнение", callback_data="live:add_exercise"))
     b.row(
         InlineKeyboardButton(text="↩️ Удалить последний", callback_data="live:undo"),
         InlineKeyboardButton(text="✅ Закончить упражнение", callback_data="live:finish_exercise"),
