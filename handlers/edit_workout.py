@@ -3,6 +3,7 @@
 import datetime as dt
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
@@ -14,6 +15,13 @@ from fsm import EditWorkoutFlow
 from parser import ParseError, parse_ru_date, parse_single_token
 
 router = Router(name="edit_workout")
+
+
+async def _delete_message(message: Message):
+    try:
+        await message.delete()
+    except TelegramBadRequest:
+        pass
 
 
 async def _edit_screen_payload(workout_id: int) -> tuple[str, InlineKeyboardMarkup]:
@@ -101,6 +109,7 @@ async def editw_editset_entered(message: Message, state: FSMContext):
     data = await state.get_data()
     await db.update_set(data["edit_set_id"], parsed[0].weight, parsed[0].reps)
     await message.reply("Готово.")
+    await _delete_message(message)
     await show_edit_screen(message, state, data["edit_workout_id"])
 
 
@@ -132,6 +141,7 @@ async def editw_addset_entered(message: Message, state: FSMContext):
         round_idx = await db.next_round_index(block_id, ex_id)
         await db.add_set(block_id, ex_id, round_idx, order_in_round, ps.weight, ps.reps, ps.is_warmup)
     await message.reply("Сет добавлен.")
+    await _delete_message(message)
     await show_edit_screen(message, state, data["edit_workout_id"])
 
 
