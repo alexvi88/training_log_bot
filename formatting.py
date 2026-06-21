@@ -13,6 +13,11 @@ from analytics import e1rm
 
 _WEEKDAYS_RU = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"]
 
+_MONTHS_RU = [
+    "января", "февраля", "марта", "апреля", "мая", "июня",
+    "июля", "августа", "сентября", "октября", "ноября", "декабря",
+]
+
 UNIT_LABELS = {"kg": "кг", "lb": "lb"}
 
 
@@ -38,7 +43,7 @@ def format_date_ru(d: dt.datetime) -> str:
 
 
 def format_workout_title(started_at: dt.datetime) -> str:
-    return f"[Тренировка {started_at.strftime('%d.%m.%Y')}]"
+    return f"[{started_at.day} {_MONTHS_RU[started_at.month - 1]}]"
 
 
 def format_duration(started_at: dt.datetime, finished_at: dt.datetime) -> str:

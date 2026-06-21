@@ -344,14 +344,15 @@ async def _on_exercise_chosen(event, state: FSMContext, ex_id: int):
     data = await state.get_data()
     await db.touch_exercise_last_used(ex_id)
 
-    block_id = await db.create_block(data["workout_id"], "single")
-    await db.add_block_exercise(block_id, ex_id, 0)
-    last_by = await _seed_last_value(data, ex_id)
-
     open_exercises = list(data.get("open_exercises") or [])
     open_blocks = dict(data.get("open_blocks") or {})
-    open_exercises.append(ex_id)
-    open_blocks[ex_id] = block_id
+
+    if ex_id not in open_exercises:
+        block_id = await db.create_block(data["workout_id"], "single")
+        await db.add_block_exercise(block_id, ex_id, 0)
+        open_exercises.append(ex_id)
+        open_blocks[ex_id] = block_id
+    last_by = await _seed_last_value(data, ex_id)
 
     await state.update_data(
         open_exercises=open_exercises, open_blocks=open_blocks,

@@ -408,6 +408,15 @@ async def find_exercise_by_name(user_id: int, name: str) -> Optional[aiosqlite.R
     return None
 
 
+async def find_exercise_by_display_name(user_id: int, display_name: str) -> Optional[aiosqlite.Row]:
+    """Match the unique index (user_id, LOWER(display_name)) exactly, archived or not."""
+    cur = await conn().execute(
+        "SELECT * FROM exercises WHERE user_id = ? AND is_template = 0 AND LOWER(display_name) = LOWER(?)",
+        (user_id, display_name),
+    )
+    return await cur.fetchone()
+
+
 async def create_exercise(
     user_id: int,
     name: str,
@@ -417,27 +426,50 @@ async def create_exercise(
     attachment: Optional[str] = None,
     notes: Optional[str] = None,
 ) -> int:
+    """Create a new exercise, reusing an existing one with the same display name.
+
+    A name collision (e.g. typing the same name twice, or forking the same template
+    a second time) would otherwise hit the unique index and raise an unhandled
+    IntegrityError, silently dropping whatever triggered the creation.
+    """
     display_name = build_display_name(name, equipment, unilateral, attachment)
+
+    existing = await find_exercise_by_display_name(user_id, display_name)
+    if existing:
+        if existing["is_archived"]:
+            async with _write_lock:
+                await conn().execute(
+                    "UPDATE exercises SET is_archived = 0 WHERE id = ?", (existing["id"],)
+                )
+                await conn().commit()
+        return existing["id"]
+
     async with _write_lock:
-        cur = await conn().execute(
-            "INSERT INTO exercises "
-            "(user_id, name, primary_group_id, equipment, unilateral, attachment, "
-            " display_name, notes, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                user_id,
-                name,
-                group_id,
-                equipment,
-                int(unilateral),
-                attachment,
-                display_name,
-                notes,
-                now_iso(),
-            ),
-        )
-        await conn().commit()
-        return cur.lastrowid
+        try:
+            cur = await conn().execute(
+                "INSERT INTO exercises "
+                "(user_id, name, primary_group_id, equipment, unilateral, attachment, "
+                " display_name, notes, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    user_id,
+                    name,
+                    group_id,
+                    equipment,
+                    int(unilateral),
+                    attachment,
+                    display_name,
+                    notes,
+                    now_iso(),
+                ),
+            )
+            await conn().commit()
+            return cur.lastrowid
+        except aiosqlite.IntegrityError:
+            existing = await find_exercise_by_display_name(user_id, display_name)
+            if existing:
+                return existing["id"]
+            raise
 
 
 async def fork_exercise_from_template(
