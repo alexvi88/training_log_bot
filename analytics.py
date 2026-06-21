@@ -105,11 +105,16 @@ class Trend:
 
 
 def linear_trend(points: list[tuple[dt.datetime, float]]) -> Optional[Trend]:
-    """Least-squares slope of y over time, expressed per week."""
+    """Least-squares slope of y over time, expressed per week.
+
+    x is bucketed to calendar days: several sessions logged minutes apart on
+    the same day would otherwise sit at near-identical x, and any y
+    difference between them blows up into an absurd per-week slope.
+    """
     if len(points) < 2:
         return None
-    t0 = points[0][0]
-    xs = [(p[0] - t0).total_seconds() / 604800 for p in points]  # weeks
+    t0 = points[0][0].date()
+    xs = [(p[0].date() - t0).days / 7 for p in points]  # weeks
     ys = [p[1] for p in points]
     n = len(xs)
     mean_x = sum(xs) / n
@@ -130,6 +135,8 @@ def linear_trend(points: list[tuple[dt.datetime, float]]) -> Optional[Trend]:
 class PersonalRecords:
     max_weight: float = 0.0
     max_e1rm: float = 0.0
+    best_e1rm_weight: float = 0.0
+    best_e1rm_reps: int = 0
     max_session_tonnage: float = 0.0
     max_reps_at_weight: dict[float, int] = field(default_factory=dict)
 
@@ -145,6 +152,8 @@ def compute_personal_records(sessions: list[SessionStats]) -> PersonalRecords:
             val = e1rm(s.weight, s.reps, session.formula)
             if val > pr.max_e1rm:
                 pr.max_e1rm = val
+                pr.best_e1rm_weight = s.weight
+                pr.best_e1rm_reps = s.reps
             if s.reps > pr.max_reps_at_weight.get(s.weight, 0):
                 pr.max_reps_at_weight[s.weight] = s.reps
     return pr

@@ -137,12 +137,9 @@ def finish_workout_keyboard() -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
-def progress_charts_keyboard(exercise_id: int) -> InlineKeyboardMarkup:
+def progress_back_keyboard() -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.button(text="📈 e1RM", callback_data=f"chart:e1rm:{exercise_id}")
-    b.button(text="📊 Тоннаж", callback_data=f"chart:tonnage:{exercise_id}")
-    b.button(text="🔵 Сеты", callback_data=f"chart:scatter:{exercise_id}")
-    b.adjust(3)
+    b.button(text="⬅️ Назад", callback_data="prog:groups")
     return b.as_markup()
 
 
