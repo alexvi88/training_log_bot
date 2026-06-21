@@ -92,7 +92,7 @@ async def _render_logging_screen(bot, state: FSMContext, user):
     hint = "\n".join(hint_lines)
 
     open_items = [(ex_id, _short_name(names[ex_id])) for ex_id in open_ids]
-    kb = keyboards.logging_keyboard(open_items, active, can_repeat=bool(last_by.get(active)))
+    kb = keyboards.logging_keyboard(open_items, active)
     await _refresh_live(bot, data["live_chat_id"], data["live_message_id"], user, data["workout_id"], hint, kb)
 
 
@@ -416,21 +416,6 @@ async def log_set_text(message: Message, state: FSMContext):
     await _react_ok(message.bot, message)
     user = await db.get_user(message.from_user.id)
     await _render_logging_screen(message.bot, state, user)
-
-
-@router.callback_query(StateFilter(WorkoutFlow.logging_set), F.data == "live:repeat")
-async def live_repeat(callback: CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    active = data.get("active_exercise_id")
-    last = (data.get("last_by_exercise") or {}).get(active)
-    if not last:
-        await callback.answer("Сначала введи вес и повторы вручную", show_alert=True)
-        return
-    block_id = data["open_blocks"][active]
-    await _log_one(block_id, active, last[0], last[1], False)
-    await callback.answer(f"Записал {formatting.format_set(*last)}")
-    user = await db.get_user(callback.from_user.id)
-    await _render_logging_screen(callback.bot, state, user)
 
 
 @router.callback_query(StateFilter(WorkoutFlow.logging_set), F.data == "live:undo")

@@ -110,7 +110,7 @@ BlockView = Union[ExerciseBlockView, SupersetBlockView]
 def _render_single_block(block: ExerciseBlockView, hide_warmups: bool, show_extra: bool) -> list[str]:
     sets = block.working_sets if hide_warmups else block.sets
     lines = [block.exercise_name]
-    lines.append("  " + " · ".join(format_set(w, r, warm) for w, r, warm in sets))
+    lines.extend(f"  • {format_set(w, r, warm)}" for w, r, warm in sets)
     if show_extra and block.working_sets:
         if block.is_bodyweight:
             lines.append(f"  ↳ повторов всего {sum(r for _, r, _ in block.working_sets)}")
@@ -189,7 +189,7 @@ def build_live_session_text(
         if isinstance(block, ExerciseBlockView):
             sets = block.working_sets if hide_warmups else block.sets
             body_lines.append(f"<b>{escape(block.exercise_name)}</b>")
-            body_lines.append("  " + " · ".join(format_set(w, r, warm) for w, r, warm in sets))
+            body_lines.extend(f"  • {format_set(w, r, warm)}" for w, r, warm in sets)
         else:
             body_lines.append(" ⇄ ".join(f"<b>{escape(n)}</b>" for n in block.exercise_names))
             for round_sets in block.rounds:
