@@ -224,16 +224,42 @@ async def resume_workout(callback: CallbackQuery, state: FSMContext):
     await _enter_live(callback, state, active["id"])
 
 
+async def _reopen_exercises(workout_id: int) -> tuple[list[int], dict[int, int], dict[int, list]]:
+    """Rebuild which exercises are still "open" for a workout from the DB.
+
+    The FSM is the only place that tracks "closed" vs "open" exercises, so when we
+    re-enter a workout (resume, or bot restart) after losing that in-memory state,
+    the best we can do is treat every exercise already logged in this workout as open
+    again — that's what lets the user keep adding sets without re-picking it.
+    """
+    open_exercises: list[int] = []
+    open_blocks: dict[int, int] = {}
+    for block in await db.list_blocks_for_workout(workout_id):
+        for be in await db.get_block_exercises(block["id"]):
+            ex_id = be["exercise_id"]
+            if ex_id not in open_exercises:
+                open_exercises.append(ex_id)
+            open_blocks[ex_id] = block["id"]
+    last_session_sets = {ex_id: await _last_session_sets(ex_id) for ex_id in open_exercises}
+    return open_exercises, open_blocks, last_session_sets
+
+
 async def _enter_live(callback: CallbackQuery, state: FSMContext, workout_id: int):
     user = await _ensure_user(callback.from_user.id, callback.from_user.username)
     await callback.message.delete()
     sent = await callback.message.answer("🏋️ Тренировка")
-    await state.set_state(WorkoutFlow.idle)
+    open_exercises, open_blocks, last_session_sets = await _reopen_exercises(workout_id)
+    active_exercise_id = open_exercises[-1] if open_exercises else None
+    await state.set_state(WorkoutFlow.logging_set if open_exercises else WorkoutFlow.idle)
     await state.update_data(
         workout_id=workout_id, live_chat_id=sent.chat.id, live_message_id=sent.message_id,
-        last_by_exercise={}, open_exercises=[], open_blocks={}, active_exercise_id=None,
+        last_by_exercise={}, open_exercises=open_exercises, open_blocks=open_blocks,
+        active_exercise_id=active_exercise_id, last_session_sets=last_session_sets,
     )
-    await _refresh_live(callback.bot, state, user, workout_id, None, _idle_keyboard(await state.get_data()))
+    if open_exercises:
+        await _render_logging_screen(callback.bot, state, user)
+    else:
+        await _refresh_live(callback.bot, state, user, workout_id, None, _idle_keyboard(await state.get_data()))
 
 
 # ---------- picker: add an exercise (either to start, or alongside what's already open) ----------
