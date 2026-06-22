@@ -664,5 +664,5 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
     await state.clear()
     active = await db.get_active_workout(user_id)
     await bot.send_message(
-        chat_id=data["live_chat_id"], text="Что дальше?", reply_markup=keyboards.main_menu(bool(active))
+        chat_id=data["live_chat_id"], text="Привет АТЛЕТ. Начнем нашу тренировку?", reply_markup=keyboards.main_menu(bool(active))
     )

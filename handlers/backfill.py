@@ -157,7 +157,7 @@ async def bf_save(callback: CallbackQuery, state: FSMContext):
         f"✅ Сохранено как прошлая тренировка\n\n{summary}", parse_mode="HTML"
     )
     active = await db.get_active_workout(user_id)
-    await callback.message.answer("Что дальше?", reply_markup=keyboards.main_menu(bool(active)))
+    await callback.message.answer("Привет АТЛЕТ. Начнем нашу тренировку?", reply_markup=keyboards.main_menu(bool(active)))
     await callback.answer()
 
 
