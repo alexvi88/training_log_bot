@@ -97,7 +97,7 @@ async def _log_one(block_id: int, exercise_id: int, weight: float, reps: int, is
 
 
 def _logging_hint(last_session: list[tuple[float, int]] | None) -> str:
-    base = "Напиши вес и повторы через пробел, например «100 8»"
+    base = "Напиши вес и повторы через пробел, например «100 8» (можно только повторы — вес возьмётся с прошлого подхода)"
     if last_session:
         sets_str = ", ".join(formatting.format_set(w, r) for w, r in last_session)
         return f"В прошлый раз: {sets_str}\n{base}"
@@ -458,10 +458,13 @@ async def log_set_text(message: Message, state: FSMContext):
         return
     active = data.get("active_exercise_id")
     block_id = (data.get("open_blocks") or {}).get(active)
-    for ps in parsed:
-        await _log_one(block_id, active, ps.weight, ps.reps, ps.is_warmup)
     last_by = dict(data.get("last_by_exercise") or {})
-    last_by[active] = (parsed[-1].weight, parsed[-1].reps)
+    prev_weight, _ = last_by.get(active) or (0.0, 0)
+    for ps in parsed:
+        weight = prev_weight if (ps.weight_omitted and prev_weight) else ps.weight
+        await _log_one(block_id, active, weight, ps.reps, ps.is_warmup)
+        prev_weight = weight
+    last_by[active] = (prev_weight, parsed[-1].reps)
     await state.update_data(last_by_exercise=last_by)
     await _react_ok(message.bot, message)
     await _delete_message(message)

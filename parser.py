@@ -18,6 +18,7 @@ class ParsedSet:
     weight: float
     reps: int
     is_warmup: bool = False
+    weight_omitted: bool = False  # bare reps, e.g. "8" — caller may fill weight from the previous set
 
 
 _WARMUP_PREFIX_RE = re.compile(r"^\s*w\s+", re.IGNORECASE)
@@ -60,7 +61,7 @@ def parse_single_token(token: str) -> list[ParsedSet]:
         reps = int(bw_match.group("reps"))
         if reps <= 0:
             raise ParseError("Повторы должны быть больше 0")
-        return [ParsedSet(weight=0.0, reps=reps, is_warmup=is_warmup)]
+        return [ParsedSet(weight=0.0, reps=reps, is_warmup=is_warmup, weight_omitted=True)]
 
     match = _X_SEP_RE.match(text) or _SPACE_SEP_RE.match(text)
     if not match:
