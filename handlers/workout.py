@@ -96,26 +96,38 @@ async def _log_one(block_id: int, exercise_id: int, weight: float, reps: int, is
     await db.add_set(block_id, exercise_id, round_idx, 0, weight, reps, is_warmup)
 
 
-def _logging_hint(last: tuple[float, int] | None) -> str:
-    return "Напиши вес и повторы через пробел, например «100 8»"
+def _logging_hint(last_session: list[tuple[float, int]] | None) -> str:
+    base = "Напиши вес и повторы через пробел, например «100 8»"
+    if last_session:
+        sets_str = ", ".join(formatting.format_set(w, r) for w, r in last_session)
+        return f"В прошлый раз: {sets_str}\n{base}"
+    return base
+
+
+async def _last_session_sets(ex_id: int) -> list[tuple[float, int]]:
+    """Working sets from this exercise's most recent finished workout, for the "last time" hint."""
+    rows = await db.list_sets_for_exercise(ex_id)
+    if not rows:
+        return []
+    last_workout_id = rows[-1]["workout_id"]
+    return [(r["weight"], r["reps"]) for r in rows if r["workout_id"] == last_workout_id]
 
 
 async def _render_logging_screen(bot, state: FSMContext, user):
     data = await state.get_data()
     open_ids: list[int] = data.get("open_exercises") or []
     active = data.get("active_exercise_id")
-    last_by = data.get("last_by_exercise") or {}
+    last_session_sets = data.get("last_session_sets") or {}
 
     names: dict[int, str] = {}
     for ex_id in open_ids:
         ex = await db.get_exercise(ex_id)
         names[ex_id] = ex["display_name"]
 
-    hint = _logging_hint(last_by.get(active))
-
     open_items = [(ex_id, names[ex_id]) for ex_id in open_ids]
     active_block_id = (data.get("open_blocks") or {}).get(active)
     has_sets = bool(active_block_id and await db.list_sets_for_block(active_block_id))
+    hint = _logging_hint(None if has_sets else last_session_sets.get(active))
     kb = keyboards.logging_keyboard(open_items, active, has_sets)
     await _refresh_live(bot, state, user, data["workout_id"], hint, kb)
 
@@ -381,10 +393,12 @@ async def _on_exercise_chosen(event, state: FSMContext, ex_id: int):
         open_exercises.append(ex_id)
         open_blocks[ex_id] = block_id
     last_by = await _seed_last_value(data, ex_id)
+    last_session_sets = dict(data.get("last_session_sets") or {})
+    last_session_sets[ex_id] = await _last_session_sets(ex_id)
 
     await state.update_data(
         open_exercises=open_exercises, open_blocks=open_blocks,
-        active_exercise_id=ex_id, last_by_exercise=last_by,
+        active_exercise_id=ex_id, last_by_exercise=last_by, last_session_sets=last_session_sets,
     )
     await state.set_state(WorkoutFlow.logging_set)
     user = await db.get_user(event.from_user.id)
@@ -478,17 +492,19 @@ async def live_next_planned(callback: CallbackQuery, state: FSMContext):
     open_exercises: list[int] = []
     open_blocks: dict[int, int] = {}
     last_by = dict(data.get("last_by_exercise") or {})
+    last_session_sets = dict(data.get("last_session_sets") or {})
     for ex_id in block_plan["exercise_ids"]:
         block_id = await db.create_block(workout_id, "single")
         await db.add_block_exercise(block_id, ex_id, 0)
         await db.touch_exercise_last_used(ex_id)
         last_by = await _seed_last_value({"last_by_exercise": last_by}, ex_id)
+        last_session_sets[ex_id] = await _last_session_sets(ex_id)
         open_exercises.append(ex_id)
         open_blocks[ex_id] = block_id
 
     await state.update_data(
         open_exercises=open_exercises, open_blocks=open_blocks,
-        active_exercise_id=open_exercises[0], last_by_exercise=last_by,
+        active_exercise_id=open_exercises[0], last_by_exercise=last_by, last_session_sets=last_session_sets,
     )
     await state.set_state(WorkoutFlow.logging_set)
     user = await db.get_user(callback.from_user.id)

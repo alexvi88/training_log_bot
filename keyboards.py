@@ -123,12 +123,8 @@ def logging_keyboard(
             text = ("▶ " if ex_id == active_id else "") + name
             b.row(InlineKeyboardButton(text=text, callback_data=f"live:switch:{ex_id}"))
     if has_sets:
-        b.row(
-            InlineKeyboardButton(text="↩️ Удалить последний", callback_data="live:undo"),
-            InlineKeyboardButton(text="✅ Закончить упражнение", callback_data="live:finish_exercise"),
-        )
-    else:
-        b.row(InlineKeyboardButton(text="✅ Закончить упражнение", callback_data="live:finish_exercise"))
+        b.row(InlineKeyboardButton(text="↩️ Удалить последний", callback_data="live:undo"))
+    b.row(InlineKeyboardButton(text="✅ Закончить упражнение", callback_data="live:finish_exercise"))
     b.row(InlineKeyboardButton(text="➕ Суперсет", callback_data="live:add_exercise"))
     return b.as_markup()
 
