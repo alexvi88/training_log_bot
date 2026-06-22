@@ -173,7 +173,7 @@ def history_list_keyboard(workouts, page: int, has_next: bool) -> InlineKeyboard
 def history_item_keyboard(workout_id: int) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(text="✏️ Редактировать", callback_data=f"hist:edit:{workout_id}")
-    b.button(text="📋 Дублировать как новую", callback_data=f"hist:dup:{workout_id}")
+    b.button(text="🗑 Удалить", callback_data=f"hist:del:{workout_id}")
     b.button(text="⬅️ К списку", callback_data="hist:back")
     b.adjust(1)
     return b.as_markup()

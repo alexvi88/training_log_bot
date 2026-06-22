@@ -96,8 +96,10 @@ async def _log_one(block_id: int, exercise_id: int, weight: float, reps: int, is
     await db.add_set(block_id, exercise_id, round_idx, 0, weight, reps, is_warmup)
 
 
-def _logging_hint(last_session: list[tuple[float, int]] | None) -> str:
-    base = "Напиши вес и повторы через пробел, например «100 8» (можно только повторы — вес возьмётся с прошлого подхода)"
+def _logging_hint(last_session: list[tuple[float, int]] | None, has_sets: bool) -> str:
+    base = "Напиши вес и повторы через пробел, например «100 8»"
+    if has_sets:
+        base += " (можно только повторы — вес возьмётся с прошлого подхода)"
     if last_session:
         sets_str = ", ".join(formatting.format_set(w, r) for w, r in last_session)
         return f"В прошлый раз: {sets_str}\n{base}"
@@ -127,7 +129,7 @@ async def _render_logging_screen(bot, state: FSMContext, user):
     open_items = [(ex_id, names[ex_id]) for ex_id in open_ids]
     active_block_id = (data.get("open_blocks") or {}).get(active)
     has_sets = bool(active_block_id and await db.list_sets_for_block(active_block_id))
-    hint = _logging_hint(None if has_sets else last_session_sets.get(active))
+    hint = _logging_hint(None if has_sets else last_session_sets.get(active), has_sets)
     kb = keyboards.logging_keyboard(open_items, active, has_sets)
     await _refresh_live(bot, state, user, data["workout_id"], hint, kb)
 
