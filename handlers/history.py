@@ -88,29 +88,26 @@ async def hist_edit(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("hist:dup:"))
-async def hist_duplicate(callback: CallbackQuery, state: FSMContext):
-    src_workout_id = int(callback.data.split(":")[2])
-    user_id = callback.from_user.id
-    active = await db.get_active_workout(user_id)
-    if active:
-        await callback.answer("У тебя уже есть активная тренировка — заверши её сначала.", show_alert=True)
-        return
+@router.callback_query(F.data.startswith("hist:del:"))
+async def hist_delete_confirm(callback: CallbackQuery, state: FSMContext):
+    workout_id = int(callback.data.split(":")[2])
+    kb = keyboards.yes_no_keyboard(
+        yes_cb=f"hist:delyes:{workout_id}",
+        no_cb=f"hist:item:{workout_id}",
+        yes_text="🗑 Удалить",
+        no_text="❌ Отмена",
+    )
+    await callback.message.edit_text("Удалить эту тренировку? Это действие нельзя отменить.", reply_markup=kb)
+    await callback.answer()
 
-    planned_blocks = []
-    for block in await db.list_blocks_for_workout(src_workout_id):
-        block_exs = await db.get_block_exercises(block["id"])
-        if not block_exs:
-            continue
-        planned_blocks.append(
-            {"type": block["type"], "exercise_ids": [be["exercise_id"] for be in block_exs]}
-        )
 
-    new_workout_id = await db.create_workout(user_id)
-    await state.update_data(planned_blocks=planned_blocks)
-
-    from handlers.workout import _enter_live
-    await _enter_live(callback, state, new_workout_id)
+@router.callback_query(F.data.startswith("hist:delyes:"))
+async def hist_delete(callback: CallbackQuery, state: FSMContext):
+    workout_id = int(callback.data.split(":")[2])
+    await db.discard_workout(workout_id)
+    data = await state.get_data()
+    await show_history_list(callback, state, data.get("history_page", 0))
+    await callback.answer("Тренировка удалена.")
 
 
 # ---------- progress ----------
