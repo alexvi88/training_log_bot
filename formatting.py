@@ -100,7 +100,7 @@ BlockView = Union[ExerciseBlockView, SupersetBlockView]
 
 def _render_single_block(block: ExerciseBlockView, hide_warmups: bool, show_extra: bool) -> list[str]:
     sets = block.working_sets if hide_warmups else block.sets
-    label = f"[{block.group_name.upper()}] {escape(block.exercise_name)}"
+    label = f"{escape(block.exercise_name)} [{block.group_name.upper()}]"
     lines = [f"<b>{label}</b>"]
     lines.extend(f"  • {format_set(w, r, warm)}" for w, r, warm in sets)
     if show_extra and block.working_sets:
