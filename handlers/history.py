@@ -202,7 +202,6 @@ async def prog_show_exercise(callback: CallbackQuery, state: FSMContext):
         ex["display_name"], sessions, trend, comparison, records, unit=user["unit"]
     )
     kb = keyboards.progress_back_keyboard()
-    await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
 
     if sessions:
         is_bw = sessions[-1].is_bodyweight_mode
@@ -212,5 +211,12 @@ async def prog_show_exercise(callback: CallbackQuery, state: FSMContext):
             for s in sessions
         ]
         png = charts.render_metric_over_sessions(points, f"{ex['display_name']} — {metric}", metric)
-        await callback.message.answer_photo(BufferedInputFile(png, filename="chart.png"))
+        await callback.message.answer_photo(
+            BufferedInputFile(png, filename="chart.png"),
+            caption=text,
+            reply_markup=kb,
+            parse_mode="HTML",
+        )
+    else:
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
     await callback.answer()
