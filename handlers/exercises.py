@@ -187,9 +187,11 @@ async def exm_edit_name(callback: CallbackQuery, state: FSMContext):
     ex_id = int(callback.data.split(":")[2])
     await state.update_data(exm_exercise_id=ex_id)
     await state.set_state(ExerciseManage.editing_name)
+    ex = await db.get_exercise(ex_id)
     await callback.message.edit_text(
-        "Напиши новое название упражнения:",
+        f"Текущее название: <code>{escape(ex['name'])}</code>\n\nНапиши новое название упражнения:",
         reply_markup=keyboards.cancel_keyboard("exm:backlist"),
+        parse_mode="HTML",
     )
     await callback.answer()
 
