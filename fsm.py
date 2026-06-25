@@ -34,8 +34,6 @@ class BodyweightFlow(StatesGroup):
 
 class BackfillFlow(StatesGroup):
     awaiting_date = State()
-    awaiting_bulk_text = State()
-    confirming = State()
 
 
 class ResolveFlow(StatesGroup):

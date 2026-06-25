@@ -61,6 +61,9 @@ async def _refresh_live(bot, state: FSMContext, user, workout_id: int, hint, key
     text = formatting.build_live_session_text(
         blocks, hint, hide_warmups=bool(user["hide_warmups"]), active_exercise_id=active,
     )
+    if data.get("is_backfill") and data.get("bf_date"):
+        date = dt.date.fromisoformat(data["bf_date"])
+        text = f"📅 {formatting.format_date_ru(date)}\n\n{text}"
     try:
         await bot.delete_message(chat_id=chat_id, message_id=data["live_message_id"])
     except TelegramBadRequest:
@@ -657,7 +660,9 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
                     + formatting.format_comparison_line(comparison.e1rm_delta, unit=user["unit"])
                 )
 
-    await db.finish_workout(workout_id, note)
+    is_backfill = bool(data.get("is_backfill"))
+    finished_at = f"{data['bf_date']}T12:00:00" if is_backfill else None
+    await db.finish_workout(workout_id, note, finished_at=finished_at)
 
     blocks = await view_builder.build_block_views(workout_id, formula)
     summary = formatting.build_workout_summary(
@@ -670,6 +675,8 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
     if comparison_lines:
         extra_parts.append("\n".join(comparison_lines))
     full_text = summary + ("\n\n" + "\n\n".join(extra_parts) if extra_parts else "")
+    if is_backfill:
+        full_text = "✅ Сохранено как прошлая тренировка\n\n" + full_text
 
     try:
         await bot.edit_message_text(

@@ -217,7 +217,7 @@ async def _finish_mapping(event, state: FSMContext) -> None:
 
     if unresolved:
         from handlers.exercise_resolve import start as start_resolve
-        await start_resolve(event, state, unresolved, flow="import")
+        await start_resolve(event, state, unresolved)
     else:
         await show_confirmation(event, state)
 

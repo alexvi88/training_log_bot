@@ -2,7 +2,7 @@
 
 import datetime as dt
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 EXAMPLES_HINT = "Не понял ввод. Примеры: 100 8 · 100x8 · 100x8x3 · +20 8 · 8 (свой вес)"
 
@@ -77,44 +77,6 @@ def parse_single_token(token: str) -> list[ParsedSet]:
         raise ParseError("Странное количество подходов")
 
     return [ParsedSet(weight=weight, reps=reps, is_warmup=is_warmup) for _ in range(count)]
-
-
-# ---------- bulk backfill input: "Упражнение: 100x8, 100x7, 90x8" per line ----------
-
-@dataclass
-class BulkExerciseEntry:
-    name: str
-    sets: list[ParsedSet] = field(default_factory=list)
-
-
-def parse_bulk_session(text: str) -> list[BulkExerciseEntry]:
-    """Parse a multi-line bulk session, one exercise per line: 'Имя: сет, сет, ...'."""
-    entries: list[BulkExerciseEntry] = []
-    for line_no, raw_line in enumerate(text.splitlines(), start=1):
-        line = raw_line.strip()
-        if not line:
-            continue
-        if ":" not in line:
-            raise ParseError(
-                f"Строка {line_no}: нужен формат «Упражнение: сеты», например «Присед: 100x8, 100x7»"
-            )
-        name, sets_part = line.split(":", 1)
-        name = name.strip()
-        if not name:
-            raise ParseError(f"Строка {line_no}: не указано название упражнения")
-        tokens = [t.strip() for t in sets_part.split(",") if t.strip()]
-        if not tokens:
-            raise ParseError(f"Строка {line_no}: не указаны сеты для «{name}»")
-        sets: list[ParsedSet] = []
-        for token in tokens:
-            try:
-                sets.extend(parse_single_token(token))
-            except ParseError as e:
-                raise ParseError(f"Строка {line_no} («{name}»): {e.message}")
-        entries.append(BulkExerciseEntry(name=name, sets=sets))
-    if not entries:
-        raise ParseError("Не нашёл ни одного упражнения. Формат: «Упражнение: 100x8, 100x7»")
-    return entries
 
 
 # ---------- date input: дд.мм.гггг ----------

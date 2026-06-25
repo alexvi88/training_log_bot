@@ -48,7 +48,7 @@ async def main() -> None:
 
     await db.init_db()
 
-    bot = Bot(token=config.BOT_TOKEN, default=DefaultBotProperties())
+    bot = Bot(token=config.BOT_TOKEN, default=DefaultBotProperties(disable_notification=True))
     dp = Dispatcher(storage=MemoryStorage())
     dp.callback_query.outer_middleware(IgnoreStaleCallbackMiddleware())
     dp.include_router(workout.router)

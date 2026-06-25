@@ -63,12 +63,13 @@ async def _show_exercise_list(callback: CallbackQuery, state: FSMContext):
             b.row(InlineKeyboardButton(text="🗑 Архивировать группу", callback_data=f"exm:archivegrp:{group_id}"))
     b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="exm:backgroups"))
     title = group["name"] if group is not None else "Все упражнения"
+    title_html = f"<b>{escape(title.upper())}</b>"
     if exercises:
-        names = [ex["display_name"] for ex in exercises]
-        text = f"{title}\n\nТвои упражнения:\n" + keyboards.numbered_list(names)
+        names = [escape(ex["display_name"]) for ex in exercises]
+        text = f"{title_html}\n\nТвои упражнения:\n" + keyboards.numbered_list(names)
     else:
-        text = f"{title}\n\nПока нет своих упражнений в этой группе."
-    await callback.message.edit_text(text, reply_markup=b.as_markup())
+        text = f"{title_html}\n\nПока нет своих упражнений в этой группе."
+    await callback.message.edit_text(text, reply_markup=b.as_markup(), parse_mode="HTML")
     await callback.answer()
 
 
