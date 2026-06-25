@@ -1,8 +1,14 @@
-"""SQLite (WAL) data access layer.
+"""SQLite data access layer.
 
-Single shared connection guarded by a write lock — SQLite allows concurrent
-readers in WAL mode but only one writer at a time, and a personal-bot's
-write volume never justifies a real connection pool.
+Single shared connection guarded by a write lock — a personal-bot's write
+volume never justifies a real connection pool, and since aiosqlite already
+funnels every statement through one dedicated worker thread, there's never
+more than one query in flight regardless of journal mode. Journal mode is
+the default rollback journal rather than WAL: WAL needs the filesystem to
+support shared-memory mmap for its -wal/-shm files, which mounted
+persistent-disk volumes (e.g. Amvera's persistenceMount) often don't,
+causing sporadic "disk I/O error" — and WAL's only upside (concurrent
+readers) doesn't apply to a single-connection app anyway.
 """
 
 import asyncio
@@ -144,7 +150,7 @@ async def init_db(db_path: str = config.DB_PATH) -> None:
         os.makedirs(parent, exist_ok=True)
     _conn = await aiosqlite.connect(db_path)
     _conn.row_factory = aiosqlite.Row
-    await _conn.execute("PRAGMA journal_mode=WAL")
+    await _conn.execute("PRAGMA journal_mode=DELETE")
     await _conn.execute("PRAGMA foreign_keys=ON")
     await _conn.executescript(SCHEMA)
     await _conn.commit()
