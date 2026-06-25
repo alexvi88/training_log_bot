@@ -14,6 +14,7 @@ import config
 import db
 import formatting
 import keyboards
+import ui
 import view_builder
 from fsm import WorkoutFlow
 from parser import ParseError, parse_single_token
@@ -170,8 +171,8 @@ async def cmd_start(message: Message, state: FSMContext):
 async def _show_main_menu(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     active = await db.get_active_workout(callback.from_user.id)
-    await callback.message.edit_text(
-        "Привет АТЛЕТ. Начнем нашу тренировку?", reply_markup=keyboards.main_menu(bool(active))
+    await ui.safe_edit(
+        callback, "Привет АТЛЕТ. Начнем нашу тренировку?", reply_markup=keyboards.main_menu(bool(active))
     )
 
 
@@ -569,11 +570,11 @@ async def live_finish_workout(callback: CallbackQuery, state: FSMContext):
     if not exercise_ids:
         await db.discard_workout(workout_id)
         await state.clear()
-        await callback.message.edit_text("Тренировка была пустая — удалил её.")
         await _show_main_menu(callback, state)
-        await callback.answer()
+        await callback.answer("Тренировка была пустая — удалил её.")
         return
-    await callback.message.edit_text(
+    await ui.safe_edit(
+        callback,
         "Завершаем? Можно добавить заметку (сон/самочувствие):",
         reply_markup=keyboards.finish_workout_keyboard(),
     )
@@ -590,7 +591,8 @@ async def cancel_finish(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(StateFilter(WorkoutFlow.idle), F.data == "finish:note")
 async def finish_ask_note(callback: CallbackQuery, state: FSMContext):
     await state.set_state(WorkoutFlow.finishing_note)
-    await callback.message.edit_text(
+    await ui.safe_edit(
+        callback,
         "Напиши заметку (сон, самочувствие, что угодно):",
         reply_markup=keyboards.cancel_keyboard("live:cancel_finish"),
     )

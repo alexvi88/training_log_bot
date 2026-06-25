@@ -13,6 +13,7 @@ import charts
 import db
 import formatting
 import keyboards
+import ui
 import view_builder
 from fsm import HistoryFlow
 
@@ -36,7 +37,7 @@ async def show_history_list(callback: CallbackQuery, state: FSMContext, page: in
     has_next = (page + 1) * HISTORY_PAGE_SIZE < total
     kb = keyboards.history_list_keyboard(items, page, has_next)
     text = "📚 История тренировок:" if items else "Пока нет завершённых тренировок."
-    await callback.message.edit_text(text, reply_markup=kb)
+    await ui.safe_edit(callback, text, reply_markup=kb)
     await callback.answer()
 
 
@@ -71,8 +72,8 @@ async def show_history_item(callback: CallbackQuery, workout_id: int) -> bool:
         started, blocks, workout["note"],
         hide_warmups=bool(user["hide_warmups"]), show_extra_stats=bool(user["show_extra_stats"]),
     )
-    await callback.message.edit_text(
-        text, reply_markup=keyboards.history_item_keyboard(workout_id), parse_mode="HTML"
+    await ui.safe_edit(
+        callback, text, reply_markup=keyboards.history_item_keyboard(workout_id), parse_mode="HTML"
     )
     return True
 
@@ -109,7 +110,7 @@ async def hist_delete_confirm(callback: CallbackQuery, state: FSMContext):
         yes_text="🗑 Удалить",
         no_text="❌ Отмена",
     )
-    await callback.message.edit_text("Удалить эту тренировку? Это действие нельзя отменить.", reply_markup=kb)
+    await ui.safe_edit(callback, "Удалить эту тренировку? Это действие нельзя отменить.", reply_markup=kb)
     await callback.answer()
 
 
@@ -133,7 +134,7 @@ async def show_progress_entry(callback: CallbackQuery, state: FSMContext):
     kb = keyboards.groups_keyboard(
         groups, prefix="prog", extra_buttons=[("⬅️ Назад", "prog:back")], show_all=True
     )
-    await callback.message.edit_text("📈 Прогресс — выбери группу мышц:", reply_markup=kb)
+    await ui.safe_edit(callback, "📈 Прогресс — выбери группу мышц:", reply_markup=kb)
     await callback.answer()
 
 
@@ -163,7 +164,7 @@ async def prog_pick_group(callback: CallbackQuery, state: FSMContext):
     b.button(text="⬅️ Назад", callback_data="prog:groups")
     b.adjust(1)
     text = "📈 Прогресс — выбери упражнение:" if exercises else "Пока нет своих упражнений с историей в этой группе."
-    await callback.message.edit_text(text, reply_markup=b.as_markup())
+    await ui.safe_edit(callback, text, reply_markup=b.as_markup())
     await callback.answer()
 
 
@@ -218,5 +219,5 @@ async def prog_show_exercise(callback: CallbackQuery, state: FSMContext):
             parse_mode="HTML",
         )
     else:
-        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+        await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML")
     await callback.answer()

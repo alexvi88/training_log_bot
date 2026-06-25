@@ -13,6 +13,7 @@ from aiogram.types import CallbackQuery, Message
 
 import db
 import keyboards
+import ui
 from fsm import ResolveFlow
 
 router = Router(name="exercise_resolve")
@@ -26,7 +27,7 @@ async def start(event, state: FSMContext, names: list[str]) -> None:
 
 async def _render(event, text: str, kb) -> None:
     if isinstance(event, CallbackQuery):
-        await event.message.edit_text(text, reply_markup=kb)
+        await ui.safe_edit(event, text, reply_markup=kb)
     else:
         await event.answer(text, reply_markup=kb)
 
@@ -84,7 +85,7 @@ async def resolve_create(callback: CallbackQuery, state: FSMContext):
     groups = await db.list_muscle_groups(callback.from_user.id)
     kb = keyboards.groups_keyboard(groups, prefix="resolvegrp", extra_buttons=[("⬅️ Назад", "resolve:back")])
     await state.set_state(ResolveFlow.picking_new_group)
-    await callback.message.edit_text(f"«{name}» — выбери группу мышц:", reply_markup=kb)
+    await ui.safe_edit(callback, f"«{name}» — выбери группу мышц:", reply_markup=kb)
     await callback.answer()
 
 

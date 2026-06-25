@@ -10,6 +10,7 @@ from aiogram.types import CallbackQuery, Message
 import db
 import formatting
 import keyboards
+import ui
 from fsm import BackfillFlow, WorkoutFlow
 from parser import ParseError, parse_ru_date
 
@@ -20,7 +21,8 @@ router = Router(name="backfill")
 async def backfill_start(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     await state.set_state(BackfillFlow.awaiting_date)
-    await callback.message.edit_text(
+    await ui.safe_edit(
+        callback,
         "📅 На какую дату занести тренировку?\nВыбери или напиши дату в формате дд.мм.гггг:",
         reply_markup=keyboards.date_quick_keyboard("bf"),
     )
