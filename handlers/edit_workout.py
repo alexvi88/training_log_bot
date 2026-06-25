@@ -49,7 +49,14 @@ async def _edit_screen_payload(workout_id: int) -> tuple[str, InlineKeyboardMark
     return text, kb
 
 
-async def show_edit_screen(event, state: FSMContext, workout_id: int) -> None:
+async def show_edit_screen(event, state: FSMContext, workout_id: int) -> bool:
+    workout = await db.get_workout(workout_id)
+    if workout is None or workout["user_id"] != event.from_user.id:
+        if isinstance(event, CallbackQuery):
+            await event.answer("Тренировка не найдена", show_alert=True)
+        else:
+            await event.reply("Тренировка не найдена")
+        return False
     await state.set_state(EditWorkoutFlow.viewing)
     await state.update_data(edit_workout_id=workout_id)
     text, kb = await _edit_screen_payload(workout_id)
@@ -57,11 +64,15 @@ async def show_edit_screen(event, state: FSMContext, workout_id: int) -> None:
         await event.message.edit_text(text, reply_markup=kb)
     else:
         await event.answer(text, reply_markup=kb)
+    return True
 
 
 @router.callback_query(StateFilter(EditWorkoutFlow.viewing), F.data.startswith("editw:set:"))
 async def editw_pick_set(callback: CallbackQuery, state: FSMContext):
     set_id = int(callback.data.split(":")[2])
+    if await db.get_set_owner(set_id) != callback.from_user.id:
+        await callback.answer("Сет не найден", show_alert=True)
+        return
     row = await db.get_set(set_id)
     ex = await db.get_exercise(row["exercise_id"])
     text = f"{ex['display_name']}: {formatting.format_set(row['weight'], row['reps'], bool(row['is_warmup']))}"
@@ -69,25 +80,43 @@ async def editw_pick_set(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+async def _require_edit_workout_id(callback: CallbackQuery, state: FSMContext) -> int | None:
+    data = await state.get_data()
+    workout_id = data.get("edit_workout_id")
+    if workout_id is None:
+        await callback.answer("Сессия истекла, открой тренировку из истории заново", show_alert=True)
+    return workout_id
+
+
 @router.callback_query(F.data == "editw:back")
 async def editw_back(callback: CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    await show_edit_screen(callback, state, data["edit_workout_id"])
-    await callback.answer()
+    workout_id = await _require_edit_workout_id(callback, state)
+    if workout_id is None:
+        return
+    if await show_edit_screen(callback, state, workout_id):
+        await callback.answer()
 
 
 @router.callback_query(F.data.startswith("editw:delset:"))
 async def editw_delset(callback: CallbackQuery, state: FSMContext):
     set_id = int(callback.data.split(":")[2])
+    if await db.get_set_owner(set_id) != callback.from_user.id:
+        await callback.answer("Сет не найден", show_alert=True)
+        return
+    workout_id = await _require_edit_workout_id(callback, state)
+    if workout_id is None:
+        return
     await db.delete_set(set_id)
-    data = await state.get_data()
     await callback.answer("Сет удалён")
-    await show_edit_screen(callback, state, data["edit_workout_id"])
+    await show_edit_screen(callback, state, workout_id)
 
 
 @router.callback_query(F.data.startswith("editw:editset:"))
 async def editw_editset_prompt(callback: CallbackQuery, state: FSMContext):
     set_id = int(callback.data.split(":")[2])
+    if await db.get_set_owner(set_id) != callback.from_user.id:
+        await callback.answer("Сет не найден", show_alert=True)
+        return
     await state.update_data(edit_set_id=set_id)
     await state.set_state(EditWorkoutFlow.editing_set)
     row = await db.get_set(set_id)
@@ -116,7 +145,11 @@ async def editw_editset_entered(message: Message, state: FSMContext):
 @router.callback_query(F.data.startswith("editw:addset:"))
 async def editw_addset_prompt(callback: CallbackQuery, state: FSMContext):
     _, _, block_id_str, ex_id_str = callback.data.split(":")
-    await state.update_data(add_block_id=int(block_id_str), add_exercise_id=int(ex_id_str))
+    block_id = int(block_id_str)
+    if await db.get_block_owner(block_id) != callback.from_user.id:
+        await callback.answer("Блок не найден", show_alert=True)
+        return
+    await state.update_data(add_block_id=block_id, add_exercise_id=int(ex_id_str))
     await state.set_state(EditWorkoutFlow.adding_set)
     ex = await db.get_exercise(int(ex_id_str))
     await callback.message.edit_text(
@@ -178,8 +211,9 @@ async def editw_date_entered(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == "editw:done")
 async def editw_done(callback: CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    workout_id = data["edit_workout_id"]
+    workout_id = await _require_edit_workout_id(callback, state)
+    if workout_id is None:
+        return
     await state.set_state(None)
     from handlers.history import show_history_item
     await show_history_item(callback, workout_id)

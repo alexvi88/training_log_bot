@@ -59,8 +59,11 @@ async def hist_to_menu(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-async def show_history_item(callback: CallbackQuery, workout_id: int):
+async def show_history_item(callback: CallbackQuery, workout_id: int) -> bool:
     workout = await db.get_workout(workout_id)
+    if workout is None or workout["user_id"] != callback.from_user.id:
+        await callback.answer("Тренировка не найдена", show_alert=True)
+        return False
     user = await db.get_user(callback.from_user.id)
     blocks = await view_builder.build_block_views(workout_id, user["e1rm_formula"])
     started = dt.datetime.fromisoformat(workout["started_at"])
@@ -71,18 +74,23 @@ async def show_history_item(callback: CallbackQuery, workout_id: int):
     await callback.message.edit_text(
         text, reply_markup=keyboards.history_item_keyboard(workout_id), parse_mode="HTML"
     )
+    return True
 
 
 @router.callback_query(F.data.startswith("hist:item:"))
 async def hist_item(callback: CallbackQuery, state: FSMContext):
     workout_id = int(callback.data.split(":")[2])
-    await show_history_item(callback, workout_id)
-    await callback.answer()
+    if await show_history_item(callback, workout_id):
+        await callback.answer()
 
 
 @router.callback_query(F.data.startswith("hist:edit:"))
 async def hist_edit(callback: CallbackQuery, state: FSMContext):
     workout_id = int(callback.data.split(":")[2])
+    workout = await db.get_workout(workout_id)
+    if workout is None or workout["user_id"] != callback.from_user.id:
+        await callback.answer("Тренировка не найдена", show_alert=True)
+        return
     from handlers.edit_workout import show_edit_screen
     await show_edit_screen(callback, state, workout_id)
     await callback.answer()
@@ -91,6 +99,10 @@ async def hist_edit(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith("hist:del:"))
 async def hist_delete_confirm(callback: CallbackQuery, state: FSMContext):
     workout_id = int(callback.data.split(":")[2])
+    workout = await db.get_workout(workout_id)
+    if workout is None or workout["user_id"] != callback.from_user.id:
+        await callback.answer("Тренировка не найдена", show_alert=True)
+        return
     kb = keyboards.yes_no_keyboard(
         yes_cb=f"hist:delyes:{workout_id}",
         no_cb=f"hist:item:{workout_id}",
@@ -104,6 +116,10 @@ async def hist_delete_confirm(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith("hist:delyes:"))
 async def hist_delete(callback: CallbackQuery, state: FSMContext):
     workout_id = int(callback.data.split(":")[2])
+    workout = await db.get_workout(workout_id)
+    if workout is None or workout["user_id"] != callback.from_user.id:
+        await callback.answer("Тренировка не найдена", show_alert=True)
+        return
     await db.discard_workout(workout_id)
     data = await state.get_data()
     await show_history_list(callback, state, data.get("history_page", 0))

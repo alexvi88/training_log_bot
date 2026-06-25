@@ -4,7 +4,9 @@ import db
 from formatting import BlockView, ExerciseBlockView, SupersetBlockView
 
 
-async def build_block_views(workout_id: int, formula: str = "epley") -> list[BlockView]:
+async def build_block_views(
+    workout_id: int, formula: str = "epley", skip_empty: bool = True
+) -> list[BlockView]:
     blocks = await db.list_blocks_for_workout(workout_id)
     views: list[BlockView] = []
     group_cache: dict[int | None, str] = {}
@@ -21,6 +23,8 @@ async def build_block_views(workout_id: int, formula: str = "epley") -> list[Blo
         block_exs = await db.get_block_exercises(block["id"])
         sets = await db.list_sets_for_block(block["id"])
         if not block_exs:
+            continue
+        if skip_empty and not sets:
             continue
 
         if block["type"] == "single":
