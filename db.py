@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS exercises (
     unilateral INTEGER NOT NULL DEFAULT 0,
     attachment TEXT,
     display_name TEXT NOT NULL,
+    original_name TEXT,
     is_archived INTEGER NOT NULL DEFAULT 0,
     is_template INTEGER NOT NULL DEFAULT 0,
     notes TEXT,
@@ -173,6 +174,11 @@ async def _migrate_schema() -> None:
     if "source" not in workout_cols:
         await _conn.execute("ALTER TABLE workouts ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'")
 
+    exercise_cols = await _column_names("exercises")
+    if "original_name" not in exercise_cols:
+        await _conn.execute("ALTER TABLE exercises ADD COLUMN original_name TEXT")
+        await _conn.execute("UPDATE exercises SET original_name = name WHERE original_name IS NULL")
+
     await _conn.commit()
 
 
@@ -213,9 +219,9 @@ async def _seed_globals() -> None:
                 display_name = build_display_name(ex_name)
                 await db.execute(
                     "INSERT INTO exercises "
-                    "(user_id, name, primary_group_id, display_name, is_template, created_at) "
-                    "VALUES (NULL, ?, ?, ?, 1, ?)",
-                    (ex_name, group_id, display_name, now_iso()),
+                    "(user_id, name, primary_group_id, display_name, original_name, is_template, created_at) "
+                    "VALUES (NULL, ?, ?, ?, ?, 1, ?)",
+                    (ex_name, group_id, display_name, ex_name, now_iso()),
                 )
             await db.commit()
 
@@ -463,8 +469,8 @@ async def create_exercise(
             cur = await conn().execute(
                 "INSERT INTO exercises "
                 "(user_id, name, primary_group_id, equipment, unilateral, attachment, "
-                " display_name, notes, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " display_name, original_name, notes, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     user_id,
                     name,
@@ -473,6 +479,7 @@ async def create_exercise(
                     int(unilateral),
                     attachment,
                     display_name,
+                    name,
                     notes,
                     now_iso(),
                 ),
