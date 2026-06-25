@@ -14,6 +14,7 @@ import config
 import db
 import formatting
 import keyboards
+import ui
 import view_builder
 from fsm import WorkoutFlow
 from parser import ParseError, parse_single_token
@@ -61,6 +62,9 @@ async def _refresh_live(bot, state: FSMContext, user, workout_id: int, hint, key
     text = formatting.build_live_session_text(
         blocks, hint, hide_warmups=bool(user["hide_warmups"]), active_exercise_id=active,
     )
+    if data.get("is_backfill") and data.get("bf_date"):
+        date = dt.date.fromisoformat(data["bf_date"])
+        text = f"📅 {formatting.format_date_ru(date)}\n\n{text}"
     try:
         await bot.delete_message(chat_id=chat_id, message_id=data["live_message_id"])
     except TelegramBadRequest:
@@ -167,8 +171,8 @@ async def cmd_start(message: Message, state: FSMContext):
 async def _show_main_menu(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     active = await db.get_active_workout(callback.from_user.id)
-    await callback.message.edit_text(
-        "Привет АТЛЕТ. Начнем нашу тренировку?", reply_markup=keyboards.main_menu(bool(active))
+    await ui.safe_edit(
+        callback, "Привет АТЛЕТ. Начнем нашу тренировку?", reply_markup=keyboards.main_menu(bool(active))
     )
 
 
@@ -566,11 +570,11 @@ async def live_finish_workout(callback: CallbackQuery, state: FSMContext):
     if not exercise_ids:
         await db.discard_workout(workout_id)
         await state.clear()
-        await callback.message.edit_text("Тренировка была пустая — удалил её.")
         await _show_main_menu(callback, state)
-        await callback.answer()
+        await callback.answer("Тренировка была пустая — удалил её.")
         return
-    await callback.message.edit_text(
+    await ui.safe_edit(
+        callback,
         "Завершаем? Можно добавить заметку (сон/самочувствие):",
         reply_markup=keyboards.finish_workout_keyboard(),
     )
@@ -587,7 +591,8 @@ async def cancel_finish(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(StateFilter(WorkoutFlow.idle), F.data == "finish:note")
 async def finish_ask_note(callback: CallbackQuery, state: FSMContext):
     await state.set_state(WorkoutFlow.finishing_note)
-    await callback.message.edit_text(
+    await ui.safe_edit(
+        callback,
         "Напиши заметку (сон, самочувствие, что угодно):",
         reply_markup=keyboards.cancel_keyboard("live:cancel_finish"),
     )
@@ -657,7 +662,9 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
                     + formatting.format_comparison_line(comparison.e1rm_delta, unit=user["unit"])
                 )
 
-    await db.finish_workout(workout_id, note)
+    is_backfill = bool(data.get("is_backfill"))
+    finished_at = f"{data['bf_date']}T12:00:00" if is_backfill else None
+    await db.finish_workout(workout_id, note, finished_at=finished_at)
 
     blocks = await view_builder.build_block_views(workout_id, formula)
     summary = formatting.build_workout_summary(
@@ -670,6 +677,8 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
     if comparison_lines:
         extra_parts.append("\n".join(comparison_lines))
     full_text = summary + ("\n\n" + "\n\n".join(extra_parts) if extra_parts else "")
+    if is_backfill:
+        full_text = "✅ Сохранено как прошлая тренировка\n\n" + full_text
 
     try:
         await bot.edit_message_text(

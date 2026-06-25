@@ -555,11 +555,11 @@ async def get_active_workout(user_id: int) -> Optional[aiosqlite.Row]:
     return await cur.fetchone()
 
 
-async def create_workout(user_id: int) -> int:
+async def create_workout(user_id: int, started_at: Optional[str] = None, status: str = "active") -> int:
     async with _write_lock:
         cur = await conn().execute(
-            "INSERT INTO workouts (user_id, started_at, status) VALUES (?, ?, 'active')",
-            (user_id, now_iso()),
+            "INSERT INTO workouts (user_id, started_at, status) VALUES (?, ?, ?)",
+            (user_id, started_at or now_iso(), status),
         )
         await conn().commit()
         return cur.lastrowid
@@ -593,11 +593,11 @@ async def get_workout(workout_id: int) -> Optional[aiosqlite.Row]:
     return await cur.fetchone()
 
 
-async def finish_workout(workout_id: int, note: Optional[str] = None) -> None:
+async def finish_workout(workout_id: int, note: Optional[str] = None, finished_at: Optional[str] = None) -> None:
     async with _write_lock:
         await conn().execute(
             "UPDATE workouts SET status = 'finished', finished_at = ?, note = ? WHERE id = ?",
-            (now_iso(), note, workout_id),
+            (finished_at or now_iso(), note, workout_id),
         )
         await conn().commit()
 

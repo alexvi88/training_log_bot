@@ -10,6 +10,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import db
 import keyboards
+import ui
 from fsm import ExerciseManage
 
 router = Router(name="exercises")
@@ -25,7 +26,7 @@ async def show_exercise_groups(callback: CallbackQuery, state: FSMContext):
     b.button(text="➕ Новая группа", callback_data="exm:newgroup")
     b.button(text="⬅️ Назад", callback_data="exm:back")
     b.adjust(2)
-    await callback.message.edit_text("⚙️ Упражнения — выбери группу мышц:", reply_markup=b.as_markup())
+    await ui.safe_edit(callback, "⚙️ Упражнения — выбери группу мышц:", reply_markup=b.as_markup())
     await callback.answer()
 
 
@@ -63,12 +64,13 @@ async def _show_exercise_list(callback: CallbackQuery, state: FSMContext):
             b.row(InlineKeyboardButton(text="🗑 Архивировать группу", callback_data=f"exm:archivegrp:{group_id}"))
     b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="exm:backgroups"))
     title = group["name"] if group is not None else "Все упражнения"
+    title_html = f"<b>{escape(title.upper())}</b>"
     if exercises:
-        names = [ex["display_name"] for ex in exercises]
-        text = f"{title}\n\nТвои упражнения:\n" + keyboards.numbered_list(names)
+        names = [escape(ex["display_name"]) for ex in exercises]
+        text = f"{title_html}\n\nТвои упражнения:\n" + keyboards.numbered_list(names)
     else:
-        text = f"{title}\n\nПока нет своих упражнений в этой группе."
-    await callback.message.edit_text(text, reply_markup=b.as_markup())
+        text = f"{title_html}\n\nПока нет своих упражнений в этой группе."
+    await ui.safe_edit(callback, text, reply_markup=b.as_markup(), parse_mode="HTML")
     await callback.answer()
 
 
@@ -80,7 +82,8 @@ async def exm_back_to_groups(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(StateFilter(ExerciseManage.picking_exercise), F.data == "exm:newex")
 async def exm_new_exercise(callback: CallbackQuery, state: FSMContext):
     await state.set_state(ExerciseManage.creating_exercise_name)
-    await callback.message.edit_text(
+    await ui.safe_edit(
+        callback,
         "Напиши название нового упражнения, или выбери из шаблонов:",
         reply_markup=keyboards.new_exercise_entry_keyboard("exm"),
     )
@@ -97,13 +100,14 @@ async def exm_templates(callback: CallbackQuery, state: FSMContext):
         text = "Шаблоны — выбери подходящий:\n" + keyboards.numbered_list(names)
     else:
         text = "Для этой группы пока нет шаблонов."
-    await callback.message.edit_text(text, reply_markup=kb)
+    await ui.safe_edit(callback, text, reply_markup=kb)
     await callback.answer()
 
 
 @router.callback_query(StateFilter(ExerciseManage.creating_exercise_name), F.data == "exm:newback")
 async def exm_new_back(callback: CallbackQuery, state: FSMContext):
-    await callback.message.edit_text(
+    await ui.safe_edit(
+        callback,
         "Напиши название нового упражнения, или выбери из шаблонов:",
         reply_markup=keyboards.new_exercise_entry_keyboard("exm"),
     )
@@ -124,7 +128,7 @@ async def exm_pick_template(callback: CallbackQuery, state: FSMContext):
     await state.set_state(ExerciseManage.picking_exercise)
     ex = await db.get_exercise(ex_id)
     text, kb = _exercise_detail_view(ex)
-    await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML")
     await callback.answer()
 
 
@@ -181,7 +185,7 @@ async def exm_pick_exercise(callback: CallbackQuery, state: FSMContext):
         return
     await state.update_data(exm_exercise_id=ex_id)
     text, kb = _exercise_detail_view(ex)
-    await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML")
     await callback.answer()
 
 
@@ -194,7 +198,8 @@ async def exm_edit_name(callback: CallbackQuery, state: FSMContext):
         return
     await state.update_data(exm_exercise_id=ex_id)
     await state.set_state(ExerciseManage.editing_name)
-    await callback.message.edit_text(
+    await ui.safe_edit(
+        callback,
         f"Текущее название: <b>{escape(ex['name'])}</b>\n\nНапиши новое название упражнения:",
         reply_markup=keyboards.cancel_keyboard("exm:backlist"),
         parse_mode="HTML",
@@ -243,7 +248,8 @@ async def exm_archive_exercise(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "exm:newgroup")
 async def exm_new_group(callback: CallbackQuery, state: FSMContext):
     await state.set_state(ExerciseManage.new_group_name)
-    await callback.message.edit_text(
+    await ui.safe_edit(
+        callback,
         "Напиши название новой группы мышц:",
         reply_markup=keyboards.cancel_keyboard("exm:backgroups"),
     )

@@ -11,6 +11,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 import db
 import formatting
 import keyboards
+import ui
 from fsm import EditWorkoutFlow
 from parser import ParseError, parse_ru_date, parse_single_token
 
@@ -61,7 +62,7 @@ async def show_edit_screen(event, state: FSMContext, workout_id: int) -> bool:
     await state.update_data(edit_workout_id=workout_id)
     text, kb = await _edit_screen_payload(workout_id)
     if isinstance(event, CallbackQuery):
-        await event.message.edit_text(text, reply_markup=kb)
+        await ui.safe_edit(event, text, reply_markup=kb)
     else:
         await event.answer(text, reply_markup=kb)
     return True
@@ -76,7 +77,7 @@ async def editw_pick_set(callback: CallbackQuery, state: FSMContext):
     row = await db.get_set(set_id)
     ex = await db.get_exercise(row["exercise_id"])
     text = f"{ex['display_name']}: {formatting.format_set(row['weight'], row['reps'], bool(row['is_warmup']))}"
-    await callback.message.edit_text(text, reply_markup=keyboards.set_actions_keyboard(set_id))
+    await ui.safe_edit(callback, text, reply_markup=keyboards.set_actions_keyboard(set_id))
     await callback.answer()
 
 
@@ -120,7 +121,8 @@ async def editw_editset_prompt(callback: CallbackQuery, state: FSMContext):
     await state.update_data(edit_set_id=set_id)
     await state.set_state(EditWorkoutFlow.editing_set)
     row = await db.get_set(set_id)
-    await callback.message.edit_text(
+    await ui.safe_edit(
+        callback,
         f"Текущее значение: {formatting.format_set(row['weight'], row['reps'])}\n"
         "Напиши новый вес и повторы (например «100 8»):",
         reply_markup=keyboards.cancel_keyboard("editw:back"),
@@ -152,7 +154,8 @@ async def editw_addset_prompt(callback: CallbackQuery, state: FSMContext):
     await state.update_data(add_block_id=block_id, add_exercise_id=int(ex_id_str))
     await state.set_state(EditWorkoutFlow.adding_set)
     ex = await db.get_exercise(int(ex_id_str))
-    await callback.message.edit_text(
+    await ui.safe_edit(
+        callback,
         f"Новый сет для «{ex['display_name']}» — напиши вес и повторы (например «100 8», можно «100x8x3»):",
         reply_markup=keyboards.cancel_keyboard("editw:back"),
     )
@@ -181,8 +184,8 @@ async def editw_addset_entered(message: Message, state: FSMContext):
 @router.callback_query(F.data == "editw:date")
 async def editw_date_prompt(callback: CallbackQuery, state: FSMContext):
     await state.set_state(EditWorkoutFlow.awaiting_date)
-    await callback.message.edit_text(
-        "Напиши новую дату в формате дд.мм.гггг:", reply_markup=keyboards.cancel_keyboard("editw:back")
+    await ui.safe_edit(
+        callback, "Напиши новую дату в формате дд.мм.гггг:", reply_markup=keyboards.cancel_keyboard("editw:back")
     )
     await callback.answer()
 

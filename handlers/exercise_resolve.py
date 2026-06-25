@@ -1,9 +1,9 @@
 """Shared sub-flow: map a free-typed exercise name to an exercise row.
 
-Used by both the bulk-text backfill entry (§A1) and CSV import (§A3) whenever a
-name in the input doesn't exactly match anything in the user's exercise list.
-Walks through each unmatched name one at a time, then hands control back to
-whichever flow started it via `on_exercises_resolved(event, state)`.
+Used by CSV import (§A3) whenever a name in the input doesn't exactly match
+anything in the user's exercise list. Walks through each unmatched name one
+at a time, then hands control back to the importer via
+`on_exercises_resolved(event, state)`.
 """
 
 from aiogram import F, Router
@@ -13,31 +13,27 @@ from aiogram.types import CallbackQuery, Message
 
 import db
 import keyboards
+import ui
 from fsm import ResolveFlow
 
 router = Router(name="exercise_resolve")
 
 
-async def start(event, state: FSMContext, names: list[str], flow: str) -> None:
+async def start(event, state: FSMContext, names: list[str]) -> None:
     distinct = list(dict.fromkeys(n for n in names if n))
-    await state.update_data(resolve_pending=distinct, resolve_resolved={}, resolve_flow=flow)
+    await state.update_data(resolve_pending=distinct, resolve_resolved={})
     await _next(event, state)
 
 
 async def _render(event, text: str, kb) -> None:
     if isinstance(event, CallbackQuery):
-        await event.message.edit_text(text, reply_markup=kb)
+        await ui.safe_edit(event, text, reply_markup=kb)
     else:
         await event.answer(text, reply_markup=kb)
 
 
 async def _dispatch_done(event, state: FSMContext) -> None:
-    data = await state.get_data()
-    flow = data.get("resolve_flow")
-    if flow == "backfill":
-        from handlers.backfill import on_exercises_resolved
-    else:
-        from handlers.csv_import import on_exercises_resolved
+    from handlers.csv_import import on_exercises_resolved
     await on_exercises_resolved(event, state)
 
 
@@ -89,7 +85,7 @@ async def resolve_create(callback: CallbackQuery, state: FSMContext):
     groups = await db.list_muscle_groups(callback.from_user.id)
     kb = keyboards.groups_keyboard(groups, prefix="resolvegrp", extra_buttons=[("⬅️ Назад", "resolve:back")])
     await state.set_state(ResolveFlow.picking_new_group)
-    await callback.message.edit_text(f"«{name}» — выбери группу мышц:", reply_markup=kb)
+    await ui.safe_edit(callback, f"«{name}» — выбери группу мышц:", reply_markup=kb)
     await callback.answer()
 
 
@@ -114,15 +110,9 @@ async def resolve_pick_group(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(StateFilter(ResolveFlow.picking, ResolveFlow.picking_new_group), F.data == "resolve:cancelall")
 async def resolve_cancel_all(callback: CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    flow = data.get("resolve_flow")
     await state.clear()
-    if flow == "backfill":
-        from handlers.workout import _show_main_menu
-        await _show_main_menu(callback, state)
-    else:
-        from handlers.settings import show_settings
-        await show_settings(callback, state)
+    from handlers.settings import show_settings
+    await show_settings(callback, state)
     await callback.answer("Отменено")
 
 

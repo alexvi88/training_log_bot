@@ -9,6 +9,7 @@ from aiogram.types import BufferedInputFile, CallbackQuery
 
 import db
 import keyboards
+import ui
 from fsm import SettingsFlow
 
 router = Router(name="settings")
@@ -18,7 +19,7 @@ async def show_settings(callback: CallbackQuery, state: FSMContext):
     await state.set_state(SettingsFlow.menu)
     user = await db.get_user(callback.from_user.id)
     kb = keyboards.settings_keyboard(user["unit"], user["e1rm_formula"])
-    await callback.message.edit_text("🔧 Настройки:", reply_markup=kb)
+    await ui.safe_edit(callback, "🔧 Настройки:", reply_markup=kb)
     await callback.answer()
 
 

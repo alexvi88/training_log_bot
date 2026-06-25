@@ -12,6 +12,7 @@ from aiogram.types import CallbackQuery, Message
 import db
 import formatting
 import keyboards
+import ui
 import view_builder
 from fsm import ImportFlow
 from parser import ParseError, parse_ru_date
@@ -33,7 +34,8 @@ SYNONYMS = {
 @router.callback_query(F.data == "settings:import")
 async def import_start(callback: CallbackQuery, state: FSMContext):
     await state.set_state(ImportFlow.awaiting_file)
-    await callback.message.edit_text(
+    await ui.safe_edit(
+        callback,
         "📥 Пришли CSV-файл с колонками «дата, упражнение, вес, повторы» "
         "(можно подойдёт экспорт из этого бота).",
         reply_markup=keyboards.cancel_keyboard("imp:cancel"),
@@ -64,7 +66,7 @@ async def _ask_next_mapping(event, state: FSMContext) -> bool:
     kb = keyboards.csv_column_options_keyboard(headers, prefix=f"impcol:{field}")
     text = f"Какая колонка соответствует полю «{FIELD_LABELS[field]}»?\nКолонки файла: {', '.join(headers)}"
     if isinstance(event, CallbackQuery):
-        await event.message.edit_text(text, reply_markup=kb)
+        await ui.safe_edit(event, text, reply_markup=kb)
     else:
         await event.answer(text, reply_markup=kb)
     return True
@@ -197,7 +199,7 @@ async def _finish_mapping(event, state: FSMContext) -> None:
         await state.set_state(ImportFlow.awaiting_file)
         kb = keyboards.cancel_keyboard("imp:cancel")
         if isinstance(event, CallbackQuery):
-            await event.message.edit_text(text, reply_markup=kb)
+            await ui.safe_edit(event, text, reply_markup=kb)
         else:
             await event.answer(text, reply_markup=kb)
         return
@@ -217,7 +219,7 @@ async def _finish_mapping(event, state: FSMContext) -> None:
 
     if unresolved:
         from handlers.exercise_resolve import start as start_resolve
-        await start_resolve(event, state, unresolved, flow="import")
+        await start_resolve(event, state, unresolved)
     else:
         await show_confirmation(event, state)
 
@@ -246,7 +248,7 @@ async def show_confirmation(event, state: FSMContext) -> None:
     await state.set_state(ImportFlow.confirming)
     kb = keyboards.confirm_cancel_keyboard("imp:save", "imp:cancel", confirm_text="✅ Загрузить")
     if isinstance(event, CallbackQuery):
-        await event.message.edit_text(text, reply_markup=kb)
+        await ui.safe_edit(event, text, reply_markup=kb)
     else:
         await event.answer(text, reply_markup=kb)
 
@@ -270,7 +272,7 @@ async def import_save(callback: CallbackQuery, state: FSMContext):
                 await db.add_set(block_id, ex_id, idx, 0, weight, reps, bool(is_warmup))
 
     await state.clear()
-    await callback.message.edit_text(f"✅ Импортировано {len(workouts)} тренировок.")
+    await ui.safe_edit(callback, f"✅ Импортировано {len(workouts)} тренировок.")
     from handlers.settings import show_settings
     await show_settings(callback, state)
     await callback.answer()

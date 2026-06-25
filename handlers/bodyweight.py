@@ -10,6 +10,7 @@ from aiogram.types import BufferedInputFile, CallbackQuery, Message
 import charts
 import db
 import keyboards
+import ui
 from fsm import BodyweightFlow
 
 router = Router(name="bodyweight")
@@ -27,7 +28,7 @@ async def _menu_text(user_id: int) -> str:
 async def bodyweight_menu(callback: CallbackQuery, state: FSMContext):
     await state.set_state(BodyweightFlow.menu)
     text = await _menu_text(callback.from_user.id)
-    await callback.message.edit_text(text, reply_markup=keyboards.bodyweight_keyboard())
+    await ui.safe_edit(callback, text, reply_markup=keyboards.bodyweight_keyboard())
     await callback.answer()
 
 
@@ -41,7 +42,8 @@ async def bodyweight_back(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "bw:add")
 async def bodyweight_add_prompt(callback: CallbackQuery, state: FSMContext):
     await state.set_state(BodyweightFlow.awaiting_entry)
-    await callback.message.edit_text(
+    await ui.safe_edit(
+        callback,
         "Напиши свой текущий вес в кг (например 82.5):",
         reply_markup=keyboards.cancel_keyboard("bw:cancel"),
     )
