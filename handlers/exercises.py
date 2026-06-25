@@ -214,12 +214,15 @@ async def exm_name_entered(message: Message, state: FSMContext):
     await message.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
-@router.callback_query(F.data == "exm:backlist")
+@router.callback_query(
+    StateFilter(ExerciseManage.picking_exercise, ExerciseManage.editing_name),
+    F.data == "exm:backlist",
+)
 async def exm_back_to_list(callback: CallbackQuery, state: FSMContext):
     await _show_exercise_list(callback, state)
 
 
-@router.callback_query(F.data.startswith("exm:archive:"))
+@router.callback_query(StateFilter(ExerciseManage.picking_exercise), F.data.startswith("exm:archive:"))
 async def exm_archive_exercise(callback: CallbackQuery, state: FSMContext):
     ex_id = int(callback.data.split(":")[2])
     await db.archive_exercise(ex_id)
