@@ -80,10 +80,20 @@ async def editw_pick_set(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+async def _require_edit_workout_id(callback: CallbackQuery, state: FSMContext) -> int | None:
+    data = await state.get_data()
+    workout_id = data.get("edit_workout_id")
+    if workout_id is None:
+        await callback.answer("Сессия истекла, открой тренировку из истории заново", show_alert=True)
+    return workout_id
+
+
 @router.callback_query(F.data == "editw:back")
 async def editw_back(callback: CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    if await show_edit_screen(callback, state, data["edit_workout_id"]):
+    workout_id = await _require_edit_workout_id(callback, state)
+    if workout_id is None:
+        return
+    if await show_edit_screen(callback, state, workout_id):
         await callback.answer()
 
 
@@ -93,10 +103,12 @@ async def editw_delset(callback: CallbackQuery, state: FSMContext):
     if await db.get_set_owner(set_id) != callback.from_user.id:
         await callback.answer("Сет не найден", show_alert=True)
         return
+    workout_id = await _require_edit_workout_id(callback, state)
+    if workout_id is None:
+        return
     await db.delete_set(set_id)
-    data = await state.get_data()
     await callback.answer("Сет удалён")
-    await show_edit_screen(callback, state, data["edit_workout_id"])
+    await show_edit_screen(callback, state, workout_id)
 
 
 @router.callback_query(F.data.startswith("editw:editset:"))
@@ -199,8 +211,9 @@ async def editw_date_entered(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == "editw:done")
 async def editw_done(callback: CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    workout_id = data["edit_workout_id"]
+    workout_id = await _require_edit_workout_id(callback, state)
+    if workout_id is None:
+        return
     await state.set_state(None)
     from handlers.history import show_history_item
     await show_history_item(callback, workout_id)

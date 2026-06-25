@@ -46,7 +46,7 @@ async def exm_pick_group(callback: CallbackQuery, state: FSMContext):
 async def _show_exercise_list(callback: CallbackQuery, state: FSMContext):
     await state.set_state(ExerciseManage.picking_exercise)
     data = await state.get_data()
-    group_id = data["exm_group_id"]
+    group_id = data.get("exm_group_id")
     if group_id is None:
         exercises = await db.list_user_exercises(callback.from_user.id)
         group = None
