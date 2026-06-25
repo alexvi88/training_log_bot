@@ -3,7 +3,6 @@
 import datetime as dt
 
 from aiogram import F, Router
-from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import BufferedInputFile, CallbackQuery, Message
@@ -212,10 +211,6 @@ async def prog_show_exercise(callback: CallbackQuery, state: FSMContext):
             for s in sessions
         ]
         png = charts.render_metric_over_sessions(points, f"{ex['display_name']} — {metric}", metric)
-        try:
-            await callback.message.delete()
-        except TelegramBadRequest:
-            pass
         await callback.message.answer_photo(
             BufferedInputFile(png, filename="chart.png"),
             caption=text,
