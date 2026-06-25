@@ -688,6 +688,15 @@ async def list_blocks_for_workout(workout_id: int) -> list[aiosqlite.Row]:
     return await cur.fetchall()
 
 
+async def get_block_owner(block_id: int) -> Optional[int]:
+    cur = await conn().execute(
+        "SELECT w.user_id FROM workout_blocks b JOIN workouts w ON w.id = b.workout_id WHERE b.id = ?",
+        (block_id,),
+    )
+    row = await cur.fetchone()
+    return row["user_id"] if row else None
+
+
 # ---------- sets ----------
 
 async def add_set(
@@ -744,6 +753,18 @@ async def list_sets_for_block(block_id: int) -> list[aiosqlite.Row]:
 async def get_set(set_id: int) -> Optional[aiosqlite.Row]:
     cur = await conn().execute("SELECT * FROM sets WHERE id = ?", (set_id,))
     return await cur.fetchone()
+
+
+async def get_set_owner(set_id: int) -> Optional[int]:
+    cur = await conn().execute(
+        "SELECT w.user_id FROM sets s "
+        "JOIN workout_blocks b ON b.id = s.block_id "
+        "JOIN workouts w ON w.id = b.workout_id "
+        "WHERE s.id = ?",
+        (set_id,),
+    )
+    row = await cur.fetchone()
+    return row["user_id"] if row else None
 
 
 async def update_set(set_id: int, weight: float, reps: int) -> None:

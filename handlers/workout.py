@@ -55,7 +55,7 @@ async def _refresh_live(bot, state: FSMContext, user, workout_id: int, hint, key
     """
     data = await state.get_data()
     chat_id = data["live_chat_id"]
-    blocks = await view_builder.build_block_views(workout_id, user["e1rm_formula"])
+    blocks = await view_builder.build_block_views(workout_id, user["e1rm_formula"], skip_empty=False)
     active = data.get("active_exercise_id")
     blocks = _move_open_exercises_last(blocks, data.get("open_exercises") or [], active)
     text = formatting.build_live_session_text(
@@ -226,7 +226,9 @@ async def resume_workout(callback: CallbackQuery, state: FSMContext):
     await _enter_live(callback, state, active["id"])
 
 
-async def _reopen_exercises(workout_id: int) -> tuple[list[int], dict[int, int], dict[int, list]]:
+async def _reopen_exercises(
+    workout_id: int,
+) -> tuple[list[int], dict[int, int], dict[int, list], dict[int, tuple]]:
     """Rebuild which exercises are still "open" for a workout from the DB.
 
     The FSM is the only place that tracks "closed" vs "open" exercises, so when we
@@ -243,19 +245,30 @@ async def _reopen_exercises(workout_id: int) -> tuple[list[int], dict[int, int],
                 open_exercises.append(ex_id)
             open_blocks[ex_id] = block["id"]
     last_session_sets = {ex_id: await _last_session_sets(ex_id) for ex_id in open_exercises}
-    return open_exercises, open_blocks, last_session_sets
+    last_by_exercise: dict[int, tuple] = {}
+    for ex_id in open_exercises:
+        current_sets = await db.list_sets_for_workout_exercise(workout_id, ex_id)
+        if current_sets:
+            last = current_sets[-1]
+            last_by_exercise[ex_id] = (last["weight"], last["reps"])
+        else:
+            history = await db.list_sets_for_exercise(ex_id)
+            if history:
+                last = history[-1]
+                last_by_exercise[ex_id] = (last["weight"], last["reps"])
+    return open_exercises, open_blocks, last_session_sets, last_by_exercise
 
 
 async def _enter_live(callback: CallbackQuery, state: FSMContext, workout_id: int):
     user = await _ensure_user(callback.from_user.id, callback.from_user.username)
     await callback.message.delete()
     sent = await callback.message.answer("🏋️ Тренировка")
-    open_exercises, open_blocks, last_session_sets = await _reopen_exercises(workout_id)
+    open_exercises, open_blocks, last_session_sets, last_by_exercise = await _reopen_exercises(workout_id)
     active_exercise_id = open_exercises[-1] if open_exercises else None
     await state.set_state(WorkoutFlow.logging_set if open_exercises else WorkoutFlow.idle)
     await state.update_data(
         workout_id=workout_id, live_chat_id=sent.chat.id, live_message_id=sent.message_id,
-        last_by_exercise={}, open_exercises=open_exercises, open_blocks=open_blocks,
+        last_by_exercise=last_by_exercise, open_exercises=open_exercises, open_blocks=open_blocks,
         active_exercise_id=active_exercise_id, last_session_sets=last_session_sets,
     )
     if open_exercises:

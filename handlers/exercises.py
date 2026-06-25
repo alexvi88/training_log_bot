@@ -147,7 +147,7 @@ async def exm_new_exercise_name_entered(message: Message, state: FSMContext):
 async def exm_archive_group(callback: CallbackQuery, state: FSMContext):
     group_id = int(callback.data.split(":")[2])
     group = await db.get_muscle_group(group_id)
-    if group is None or group["user_id"] is None:
+    if group is None or group["user_id"] != callback.from_user.id:
         await callback.answer("Эту группу нельзя архивировать", show_alert=True)
         return
     await db.archive_muscle_group(group_id)
@@ -175,8 +175,11 @@ def _exercise_detail_view(ex):
 @router.callback_query(StateFilter(ExerciseManage.picking_exercise), F.data.startswith("exm:ex:"))
 async def exm_pick_exercise(callback: CallbackQuery, state: FSMContext):
     ex_id = int(callback.data.split(":")[2])
-    await state.update_data(exm_exercise_id=ex_id)
     ex = await db.get_exercise(ex_id)
+    if ex is None or ex["user_id"] != callback.from_user.id:
+        await callback.answer("Упражнение не найдено", show_alert=True)
+        return
+    await state.update_data(exm_exercise_id=ex_id)
     text, kb = _exercise_detail_view(ex)
     await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
     await callback.answer()
@@ -185,9 +188,12 @@ async def exm_pick_exercise(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith("exm:editname:"))
 async def exm_edit_name(callback: CallbackQuery, state: FSMContext):
     ex_id = int(callback.data.split(":")[2])
+    ex = await db.get_exercise(ex_id)
+    if ex is None or ex["user_id"] != callback.from_user.id:
+        await callback.answer("Упражнение не найдено", show_alert=True)
+        return
     await state.update_data(exm_exercise_id=ex_id)
     await state.set_state(ExerciseManage.editing_name)
-    ex = await db.get_exercise(ex_id)
     await callback.message.edit_text(
         f"Текущее название: <code>{escape(ex['name'])}</code>\n\nНапиши новое название упражнения:",
         reply_markup=keyboards.cancel_keyboard("exm:backlist"),
@@ -222,6 +228,10 @@ async def exm_back_to_list(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith("exm:archive:"))
 async def exm_archive_exercise(callback: CallbackQuery, state: FSMContext):
     ex_id = int(callback.data.split(":")[2])
+    ex = await db.get_exercise(ex_id)
+    if ex is None or ex["user_id"] != callback.from_user.id:
+        await callback.answer("Упражнение не найдено", show_alert=True)
+        return
     await db.archive_exercise(ex_id)
     await callback.answer("Упражнение архивировано")
     await _show_exercise_list(callback, state)
