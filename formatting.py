@@ -202,7 +202,7 @@ def format_progress_screen(
     unit: str = "kg",
 ) -> str:
     u = UNIT_LABELS.get(unit, "кг")
-    lines = [f"📈 <b>{escape(exercise_name)}</b>"]
+    lines = [f"📈 <b>{escape(exercise_name)}</b>", ""]
     if not sessions:
         lines.append("Пока нет завершённых тренировок с этим упражнением.")
         return "\n".join(lines)
@@ -214,12 +214,14 @@ def format_progress_screen(
         if not ws:
             continue
         sets_str = ", ".join(format_set(st.weight, st.reps) for st in ws)
+        lines.append(f"<b>{format_date_ru(d)}</b>")
+        lines.append(sets_str)
         if is_bw:
-            lines.append(f"{format_date_ru(d)} · {sets_str} · всего повторов {s.total_reps}")
+            lines.append(f"всего повторов {s.total_reps}")
         else:
-            lines.append(f"{format_date_ru(d)} · {sets_str} · e1RM {s.top_e1rm:.1f}")
+            lines.append(f"e1RM {s.top_e1rm:.1f}")
+        lines.append("")
 
-    lines.append("")
     if trend is not None:
         arrow = "↑" if trend.direction == "up" else ("↓" if trend.direction == "down" else "→")
         metric = "повторы" if is_bw else "e1RM"
