@@ -319,8 +319,16 @@ async def pick_cancel(callback: CallbackQuery, state: FSMContext):
 async def pick_group(callback: CallbackQuery, state: FSMContext):
     raw = callback.data.split(":")[2]
     group_id = None if raw == "all" else int(raw)
-    await state.update_data(pending_group_id=group_id)
+    await state.update_data(pending_group_id=group_id, pick_page=0)
     await state.set_state(WorkoutFlow.picking_exercise)
+    await _picker_screen_exercises(callback, state)
+    await callback.answer()
+
+
+@router.callback_query(StateFilter(WorkoutFlow.picking_exercise), F.data.startswith("pick:page:"))
+async def pick_page(callback: CallbackQuery, state: FSMContext):
+    page = int(callback.data.split(":")[2])
+    await state.update_data(pick_page=page)
     await _picker_screen_exercises(callback, state)
     await callback.answer()
 
@@ -329,14 +337,22 @@ async def _picker_screen_exercises(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     user = await db.get_user(callback.from_user.id)
     group_id = data["pending_group_id"]
+    page = data.get("pick_page", 0)
+    offset = page * config.RECENT_EXERCISES_LIMIT
     if group_id is None:
-        exercises = await db.list_user_exercises(callback.from_user.id, limit=config.RECENT_EXERCISES_LIMIT)
+        exercises = await db.list_user_exercises(
+            callback.from_user.id, limit=config.RECENT_EXERCISES_LIMIT, offset=offset
+        )
+        total = await db.count_user_exercises(callback.from_user.id)
     else:
         exercises = await db.list_user_exercises_in_group(
-            callback.from_user.id, group_id, limit=config.RECENT_EXERCISES_LIMIT
+            callback.from_user.id, group_id, limit=config.RECENT_EXERCISES_LIMIT, offset=offset
         )
+        total = await db.count_user_exercises_in_group(callback.from_user.id, group_id)
+    has_next = offset + len(exercises) < total
     kb = keyboards.exercises_keyboard(
-        exercises, prefix="pick", back_cb="back", show_new_button=group_id is not None
+        exercises, prefix="pick", back_cb="back", show_new_button=group_id is not None,
+        page=page, has_next=has_next,
     )
     if exercises:
         names = [escape(ex["display_name"]) for ex in exercises]

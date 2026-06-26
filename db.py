@@ -151,6 +151,10 @@ async def init_db(db_path: str = config.DB_PATH) -> None:
         os.makedirs(parent, exist_ok=True)
     _conn = await aiosqlite.connect(db_path)
     _conn.row_factory = aiosqlite.Row
+    # SQLite's built-in LOWER() only case-folds ASCII; register a Python-backed
+    # one so Cyrillic search can be filtered in SQL instead of fetching every
+    # row into the app and filtering there.
+    await _conn.create_function("py_lower", 1, lambda s: s.lower() if s is not None else None)
     await _conn.execute("PRAGMA journal_mode=DELETE")
     await _conn.execute("PRAGMA foreign_keys=ON")
     await _conn.executescript(SCHEMA)
@@ -351,7 +355,9 @@ async def archive_muscle_group(group_id: int) -> None:
 
 # ---------- exercises ----------
 
-async def list_user_exercises_in_group(user_id: int, group_id: int, limit: Optional[int] = None) -> list[aiosqlite.Row]:
+async def list_user_exercises_in_group(
+    user_id: int, group_id: int, limit: Optional[int] = None, offset: int = 0
+) -> list[aiosqlite.Row]:
     sql = (
         "SELECT e.*, "
         "(SELECT COUNT(DISTINCT wb.workout_id) FROM block_exercises be "
@@ -364,13 +370,25 @@ async def list_user_exercises_in_group(user_id: int, group_id: int, limit: Optio
     )
     params: list[Any] = [user_id, group_id]
     if limit:
-        sql += " LIMIT ?"
-        params.append(limit)
+        sql += " LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
     cur = await conn().execute(sql, params)
     return await cur.fetchall()
 
 
-async def list_user_exercises(user_id: int, limit: Optional[int] = None) -> list[aiosqlite.Row]:
+async def count_user_exercises_in_group(user_id: int, group_id: int) -> int:
+    cur = await conn().execute(
+        "SELECT COUNT(*) FROM exercises WHERE user_id = ? AND primary_group_id = ? "
+        "AND is_archived = 0 AND is_template = 0",
+        (user_id, group_id),
+    )
+    (count,) = await cur.fetchone()
+    return count
+
+
+async def list_user_exercises(
+    user_id: int, limit: Optional[int] = None, offset: int = 0
+) -> list[aiosqlite.Row]:
     sql = (
         "SELECT e.*, "
         "(SELECT COUNT(DISTINCT wb.workout_id) FROM block_exercises be "
@@ -383,10 +401,19 @@ async def list_user_exercises(user_id: int, limit: Optional[int] = None) -> list
     )
     params: list[Any] = [user_id]
     if limit:
-        sql += " LIMIT ?"
-        params.append(limit)
+        sql += " LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
     cur = await conn().execute(sql, params)
     return await cur.fetchall()
+
+
+async def count_user_exercises(user_id: int) -> int:
+    cur = await conn().execute(
+        "SELECT COUNT(*) FROM exercises WHERE user_id = ? AND is_archived = 0 AND is_template = 0",
+        (user_id,),
+    )
+    (count,) = await cur.fetchone()
+    return count
 
 
 async def list_templates_in_group(group_id: int) -> list[aiosqlite.Row]:
@@ -398,16 +425,15 @@ async def list_templates_in_group(group_id: int) -> list[aiosqlite.Row]:
 
 
 async def search_exercises(user_id: int, query: str, limit: int = 20) -> list[aiosqlite.Row]:
-    # SQLite's LOWER()/LIKE only case-fold ASCII, so Cyrillic search is done in Python.
+    escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     cur = await conn().execute(
         "SELECT * FROM exercises WHERE user_id = ? AND is_archived = 0 AND is_template = 0 "
-        "ORDER BY last_used_at IS NULL, last_used_at DESC, display_name",
-        (user_id,),
+        "AND py_lower(display_name) LIKE '%' || py_lower(?) || '%' ESCAPE '\\' "
+        "ORDER BY last_used_at IS NULL, last_used_at DESC, display_name "
+        "LIMIT ?",
+        (user_id, escaped, limit),
     )
-    rows = await cur.fetchall()
-    needle = query.lower()
-    matches = [r for r in rows if needle in r["display_name"].lower()]
-    return matches[:limit]
+    return await cur.fetchall()
 
 
 async def get_exercise(exercise_id: int) -> Optional[aiosqlite.Row]:

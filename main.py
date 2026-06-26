@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from contextlib import suppress
 
 from aiogram import BaseMiddleware, Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -21,21 +22,41 @@ from handlers import (
     workout,
 )
 
+logger = logging.getLogger(__name__)
+
+# Substrings (Telegram's error messages, lowercased) that mean "the user's
+# screen is already stale/gone" rather than a real bug — safe to swallow.
+_BENIGN_BAD_REQUEST_SUBSTRINGS = (
+    "query is too old",
+    "query id is invalid",
+    "message is not modified",
+    "message to edit not found",
+    "message to delete not found",
+    "message can't be deleted",
+    "message can't be edited",
+)
+
 
 class IgnoreStaleCallbackMiddleware(BaseMiddleware):
     """Swallow Telegram errors for callback queries that expired before we could answer them.
 
     Handlers do their work (DB calls, message edits) before calling
     callback.answer(), so a slow step can leave the callback query stale by
-    the time answer() runs. Telegram then rejects it; this is harmless to
-    the user and shouldn't surface as an unhandled exception.
+    the time answer() runs, or the underlying message can vanish (deleted by
+    the user, replaced by a newer screen, etc). Telegram then rejects the
+    call; this is harmless to the user and shouldn't surface as an
+    unhandled exception that leaves their tap spinner stuck forever.
     """
 
     async def __call__(self, handler, event, data):
         try:
             return await handler(event, data)
         except TelegramBadRequest as e:
-            if "query is too old" in e.message or "query ID is invalid" in e.message:
+            message = e.message.lower()
+            if any(s in message for s in _BENIGN_BAD_REQUEST_SUBSTRINGS):
+                logger.warning("Swallowed benign TelegramBadRequest: %s", e.message)
+                with suppress(TelegramBadRequest):
+                    await event.answer()
                 return None
             raise
 

@@ -73,11 +73,20 @@ def exercises_keyboard(
     prefix: str,
     show_new_button: bool = True,
     back_cb: str = "back",
+    page: int = 0,
+    has_next: bool = False,
 ) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     items = [(f"{prefix}:ex:{ex['id']}", ex["display_name"]) for ex in exercises]
     for row in numbered_buttons(items):
         b.row(*row)
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"{prefix}:page:{page - 1}"))
+    if has_next:
+        nav.append(InlineKeyboardButton(text="➡️", callback_data=f"{prefix}:page:{page + 1}"))
+    if nav:
+        b.row(*nav)
     if show_new_button:
         b.row(InlineKeyboardButton(text="➕ Новое упражнение", callback_data=f"{prefix}:new"))
     b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"{prefix}:{back_cb}"))
