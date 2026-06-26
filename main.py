@@ -4,11 +4,11 @@ import logging
 from aiogram import BaseMiddleware, Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.fsm.storage.memory import MemoryStorage
 
 import admin_tasks
 import config
 import db
+from fsm_storage import JSONFileStorage
 from handlers import (
     backfill,
     bodyweight,
@@ -49,7 +49,7 @@ async def main() -> None:
     await db.init_db()
 
     bot = Bot(token=config.BOT_TOKEN, default=DefaultBotProperties(disable_notification=True))
-    dp = Dispatcher(storage=MemoryStorage())
+    dp = Dispatcher(storage=JSONFileStorage(config.FSM_STORAGE_PATH))
     dp.callback_query.outer_middleware(IgnoreStaleCallbackMiddleware())
     dp.include_router(workout.router)
     dp.include_router(backfill.router)

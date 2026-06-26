@@ -4,6 +4,9 @@ BOT_TOKEN = os.getenv("TG_TOKEN", "")
 
 DB_PATH = os.getenv("DB_PATH", "/data/training_log.db")
 
+# FSM state survives restarts by persisting to this file instead of memory.
+FSM_STORAGE_PATH = os.getenv("FSM_STORAGE_PATH", "/data/fsm_storage.json")
+
 # Telegram user id that receives the daily stats report + DB backup. Unset disables the job.
 ADMIN_ID = int(os.getenv("ADMIN_ID")) if os.getenv("ADMIN_ID") else None
 
