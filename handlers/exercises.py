@@ -8,6 +8,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+import config
 import db
 import keyboards
 import ui
@@ -40,7 +41,14 @@ async def exm_back(callback: CallbackQuery, state: FSMContext):
 async def exm_pick_group(callback: CallbackQuery, state: FSMContext):
     raw = callback.data.split(":")[2]
     group_id = None if raw == "all" else int(raw)
-    await state.update_data(exm_group_id=group_id)
+    await state.update_data(exm_group_id=group_id, exm_page=0)
+    await _show_exercise_list(callback, state)
+
+
+@router.callback_query(StateFilter(ExerciseManage.picking_exercise), F.data.startswith("exm:page:"))
+async def exm_page(callback: CallbackQuery, state: FSMContext):
+    page = int(callback.data.split(":")[2])
+    await state.update_data(exm_page=page)
     await _show_exercise_list(callback, state)
 
 
@@ -48,16 +56,32 @@ async def _show_exercise_list(callback: CallbackQuery, state: FSMContext):
     await state.set_state(ExerciseManage.picking_exercise)
     data = await state.get_data()
     group_id = data.get("exm_group_id")
+    page = data.get("exm_page", 0)
+    offset = page * config.RECENT_EXERCISES_LIMIT
     if group_id is None:
-        exercises = await db.list_user_exercises(callback.from_user.id)
+        exercises = await db.list_user_exercises(
+            callback.from_user.id, limit=config.RECENT_EXERCISES_LIMIT, offset=offset
+        )
+        total = await db.count_user_exercises(callback.from_user.id)
         group = None
     else:
-        exercises = await db.list_user_exercises_in_group(callback.from_user.id, group_id)
+        exercises = await db.list_user_exercises_in_group(
+            callback.from_user.id, group_id, limit=config.RECENT_EXERCISES_LIMIT, offset=offset
+        )
+        total = await db.count_user_exercises_in_group(callback.from_user.id, group_id)
         group = await db.get_muscle_group(group_id)
+    has_next = offset + len(exercises) < total
     b = InlineKeyboardBuilder()
     items = [(f"exm:ex:{ex['id']}", ex["display_name"]) for ex in exercises]
     for row in keyboards.numbered_buttons(items):
         b.row(*row)
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"exm:page:{page - 1}"))
+    if has_next:
+        nav.append(InlineKeyboardButton(text="➡️", callback_data=f"exm:page:{page + 1}"))
+    if nav:
+        b.row(*nav)
     if group is not None:
         b.row(InlineKeyboardButton(text="➕ Новое упражнение", callback_data="exm:newex"))
         if group["user_id"] is not None:
