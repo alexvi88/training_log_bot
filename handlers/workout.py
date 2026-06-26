@@ -502,6 +502,23 @@ async def live_undo(callback: CallbackQuery, state: FSMContext):
         return
     await callback.answer(f"Удалил {formatting.format_set(row['weight'], row['reps'], bool(row['is_warmup']))}")
     user = await db.get_user(callback.from_user.id)
+
+    remaining = await db.list_sets_for_block(block_id)
+    if not remaining:
+        await db.delete_block(block_id)
+        open_exercises = [eid for eid in (data.get("open_exercises") or []) if eid != active]
+        open_blocks = dict(data.get("open_blocks") or {})
+        open_blocks.pop(active, None)
+        if open_exercises:
+            await state.update_data(
+                open_exercises=open_exercises, open_blocks=open_blocks, active_exercise_id=open_exercises[0],
+            )
+        else:
+            await state.update_data(open_exercises=[], open_blocks={}, active_exercise_id=None)
+            await state.set_state(WorkoutFlow.idle)
+            await _refresh_live(callback.bot, state, user, data["workout_id"], None, _idle_keyboard(data))
+            return
+
     await _render_logging_screen(callback.bot, state, user)
 
 

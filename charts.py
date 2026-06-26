@@ -33,8 +33,8 @@ def render_metric_over_sessions(
 
     trend = linear_trend(points)
     if trend is not None and len(points) >= 2:
-        t0 = dates[0]
-        xs_days = [(d - t0).total_seconds() / 86400 for d in dates]
+        t0 = dates[0].date()
+        xs_days = [(d.date() - t0).days for d in dates]
         slope_per_day = trend.slope_per_week / 7
         intercept = values[0] - slope_per_day * xs_days[0]
         trend_y = [intercept + slope_per_day * x for x in xs_days]

@@ -742,6 +742,13 @@ async def delete_last_set_in_block(block_id: int) -> Optional[aiosqlite.Row]:
     return row
 
 
+async def delete_block(block_id: int) -> None:
+    async with _write_lock:
+        await conn().execute("DELETE FROM block_exercises WHERE block_id = ?", (block_id,))
+        await conn().execute("DELETE FROM workout_blocks WHERE id = ?", (block_id,))
+        await conn().commit()
+
+
 async def list_sets_for_block(block_id: int) -> list[aiosqlite.Row]:
     cur = await conn().execute(
         "SELECT * FROM sets WHERE block_id = ? ORDER BY round_index, order_in_round, id",
