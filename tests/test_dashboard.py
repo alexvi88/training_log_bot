@@ -7,7 +7,7 @@ import pytest
 import analytics
 import charts
 import formatting
-from formatting import ExerciseBlockView, SupersetBlockView
+from formatting import ExerciseBlockView
 
 
 def d(s: str) -> dt.date:
@@ -101,9 +101,10 @@ def test_build_workout_card_text():
             exercise_name="Жим лёжа",
             sets=[(100.0, 8, False), (100.0, 8, False), (60.0, 12, True)],
         ),
-        SupersetBlockView(
-            exercise_names=["Бицепс", "Трицепс"],
-            rounds=[[(20.0, 12, False), (30.0, 12, False)]],
+        ExerciseBlockView(
+            group_name="спина",
+            exercise_name="Тяга",
+            sets=[(80.0, 10, False), (80.0, 10, False)],
         ),
     ]
     title, body, footer, note = formatting.build_workout_card(
@@ -111,11 +112,10 @@ def test_build_workout_card_text():
     )
     assert title.startswith("26.06.2026")
     assert any("Жим лёжа [ГРУДЬ]" in line for line in body)
-    assert any("СУПЕРСЕТ" in line for line in body)
+    assert any("Тяга [СПИНА]" in line for line in body)
     assert note == "Спал хорошо"
-    # 1 single exercise + 2 in superset = 3 exercises
-    assert footer.startswith("3 упражнения")
-    # working sets: 2 (warmup excluded) + 2 superset = 4
+    assert footer.startswith("2 упражнения")
+    # working sets: 2 (warmup excluded) + 2 = 4
     assert "4 рабочих сета" in footer
 
 
