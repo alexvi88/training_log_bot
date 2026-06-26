@@ -665,6 +665,20 @@ async def count_workouts(user_id: int, status: str = "finished") -> int:
     return count
 
 
+async def list_finished_workout_dates(user_id: int) -> list[str]:
+    """Calendar date (YYYY-MM-DD) of each finished workout, ascending — for the dashboard.
+
+    One row per workout (same-day workouts appear twice), so counts reflect
+    workout volume rather than distinct active days.
+    """
+    cur = await conn().execute(
+        "SELECT date(started_at) AS d FROM workouts "
+        "WHERE user_id = ? AND status = 'finished' ORDER BY d",
+        (user_id,),
+    )
+    return [r["d"] for r in await cur.fetchall()]
+
+
 # ---------- blocks / block exercises ----------
 
 async def create_block(workout_id: int, block_type: str) -> int:

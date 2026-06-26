@@ -150,10 +150,24 @@ async def _back_after_cancel(bot, state: FSMContext, user):
 
 # ---------- main menu ----------
 
+_GREETING = "Привет АТЛЕТ. Начнем нашу тренировку?"
+
+
+async def _menu_text(user_id: int, extra: str = "") -> str:
+    """Greeting + at-a-glance dashboard (streak, this week, totals). extra is appended after the greeting line."""
+    dates = [dt.date.fromisoformat(d) for d in await db.list_finished_workout_dates(user_id)]
+    dashboard = analytics.compute_dashboard(dates, dt.date.today())
+    text = _GREETING + extra
+    summary = formatting.format_dashboard(dashboard)
+    if summary:
+        text += "\n\n" + summary
+    return text
+
+
 @router.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
-    user = await _ensure_user(message.from_user.id, message.from_user.username)
+    await _ensure_user(message.from_user.id, message.from_user.username)
     active = await db.get_active_workout(message.from_user.id)
     extra = ""
     if active:
@@ -163,17 +177,15 @@ async def cmd_start(message: Message, state: FSMContext):
                 f"\n\n⚠️ У тебя висит тренировка с {formatting.format_date_ru(started)} — "
                 f"забыл закрыть?"
             )
-    await message.answer(
-        f"Привет АТЛЕТ. Начнем нашу тренировку?{extra}", reply_markup=keyboards.main_menu(bool(active))
-    )
+    text = await _menu_text(message.from_user.id, extra)
+    await message.answer(text, reply_markup=keyboards.main_menu(bool(active)))
 
 
 async def _show_main_menu(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     active = await db.get_active_workout(callback.from_user.id)
-    await ui.safe_edit(
-        callback, "Привет АТЛЕТ. Начнем нашу тренировку?", reply_markup=keyboards.main_menu(bool(active))
-    )
+    text = await _menu_text(callback.from_user.id)
+    await ui.safe_edit(callback, text, reply_markup=keyboards.main_menu(bool(active)))
 
 
 @router.callback_query(F.data == "menu:progress")
@@ -713,16 +725,20 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
     if is_backfill:
         full_text = "✅ Сохранено как прошлая тренировка\n\n" + full_text
 
+    card_kb = keyboards.workout_card_keyboard(workout_id)
     try:
         await bot.edit_message_text(
             chat_id=data["live_chat_id"], message_id=data["live_message_id"], text=full_text,
-            parse_mode="HTML",
+            parse_mode="HTML", reply_markup=card_kb,
         )
     except TelegramBadRequest:
-        await bot.send_message(chat_id=data["live_chat_id"], text=full_text, parse_mode="HTML")
+        await bot.send_message(
+            chat_id=data["live_chat_id"], text=full_text, parse_mode="HTML", reply_markup=card_kb
+        )
 
     await state.clear()
     active = await db.get_active_workout(user_id)
+    menu_text = await _menu_text(user_id)
     await bot.send_message(
-        chat_id=data["live_chat_id"], text="Привет АТЛЕТ. Начнем нашу тренировку?", reply_markup=keyboards.main_menu(bool(active))
+        chat_id=data["live_chat_id"], text=menu_text, reply_markup=keyboards.main_menu(bool(active))
     )

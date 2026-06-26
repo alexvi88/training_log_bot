@@ -18,6 +18,19 @@ UNIT_LABELS = {"kg": "кг", "lb": "lb"}
 _DIVIDER = "─" * 10
 
 
+def plural_ru(n: int, forms: tuple[str, str, str]) -> str:
+    """Russian plural: forms = (1 единица, 2-4 единицы, 5+ единиц)."""
+    m = abs(n) % 100
+    last = m % 10
+    if 11 <= m <= 14:
+        return forms[2]
+    if last == 1:
+        return forms[0]
+    if 2 <= last <= 4:
+        return forms[1]
+    return forms[2]
+
+
 def format_weight(weight: float) -> str:
     if weight == int(weight):
         return str(int(weight))
@@ -147,6 +160,77 @@ def build_workout_summary(
     lines.append(_DIVIDER)
     lines.append(f"{exercise_count} упражнения · {working_set_count} рабочих сетов")
     return "\n".join(lines)
+
+
+def format_dashboard(dashboard) -> str:
+    """One-glance stats block appended under the main-menu greeting.
+
+    Empty string for a brand-new user (nothing to show yet).
+    """
+    if dashboard.total_workouts == 0:
+        return ""
+    lines: list[str] = []
+    if dashboard.week_streak >= 2:
+        weeks = plural_ru(dashboard.week_streak, ("неделю", "недели", "недель"))
+        lines.append(f"🔥 Серия: {dashboard.week_streak} {weeks} подряд")
+
+    days = dashboard.days_since_last
+    if days == 0:
+        last = "сегодня"
+    elif days == 1:
+        last = "вчера"
+    else:
+        last = f"{days} {plural_ru(days, ('день', 'дня', 'дней'))} назад"
+
+    word = plural_ru(dashboard.this_week, ("тренировка", "тренировки", "тренировок"))
+    lines.append(f"📅 Эта неделя: {dashboard.this_week} {word} · последняя — {last}")
+    lines.append(f"🏋️ За 30 дней: {dashboard.last_30_days} · всего {dashboard.total_workouts}")
+    return "\n".join(lines)
+
+
+def build_workout_card(
+    started_at: dt.datetime,
+    blocks: list[BlockView],
+    note: str | None = None,
+    hide_warmups: bool = False,
+    unit: str = "kg",
+) -> tuple[str, list[str], str, str | None]:
+    """Plain-text (no HTML) breakdown of a workout, for rendering to a shareable image.
+
+    Returns (title, body_lines, footer, note) — charts.render_workout_card draws them.
+    """
+    u = UNIT_LABELS.get(unit, "кг")
+    title = format_date_ru(started_at)
+    body: list[str] = []
+    exercise_count = 0
+    working_set_count = 0
+    tonnage = 0.0
+
+    for block in blocks:
+        if isinstance(block, ExerciseBlockView):
+            sets = block.working_sets if hide_warmups else block.sets
+            body.append(f"{block.exercise_name} [{block.group_name.upper()}]")
+            body.append("  " + ", ".join(format_set(w, r, warm) for w, r, warm in sets))
+            exercise_count += 1
+            working_set_count += len(block.working_sets)
+            tonnage += block.tonnage
+        else:
+            body.append("СУПЕРСЕТ: " + " + ".join(block.exercise_names))
+            for round_sets in block.rounds:
+                if hide_warmups and all(slot is None or slot[2] for slot in round_sets):
+                    continue
+                body.append("  " + " / ".join(format_set_slot(slot) for slot in round_sets))
+            exercise_count += len(block.exercise_names)
+            working_set_count += block.working_set_count
+            tonnage += block.tonnage
+
+    ex_word = plural_ru(exercise_count, ("упражнение", "упражнения", "упражнений"))
+    set_word = plural_ru(working_set_count, ("рабочий сет", "рабочих сета", "рабочих сетов"))
+    footer = (
+        f"{exercise_count} {ex_word} · {working_set_count} {set_word} · "
+        f"{format_weight(tonnage)} {u}"
+    )
+    return title, body, footer, note
 
 
 def build_live_session_text(
