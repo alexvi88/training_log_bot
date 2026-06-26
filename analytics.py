@@ -228,3 +228,55 @@ def volume_by_muscle_group(
     for group_label, weight, reps in rows:
         totals[group_label] = totals.get(group_label, 0.0) + weight * reps
     return totals
+
+
+@dataclass
+class Dashboard:
+    total_workouts: int
+    this_week: int  # workouts in the current calendar week (Mon-Sun)
+    last_30_days: int
+    days_since_last: Optional[int]  # None if no workouts yet
+    week_streak: int  # consecutive weeks with >=1 workout, ending at the current week
+
+
+def _week_monday(d: dt.date) -> dt.date:
+    return d - dt.timedelta(days=d.weekday())
+
+
+def compute_dashboard(workout_dates: Iterable[dt.date], today: dt.date) -> Dashboard:
+    """Summary stats for the main-menu dashboard.
+
+    workout_dates: one date per finished workout (duplicates allowed — two
+    workouts on the same day count twice for the totals).
+
+    The weekly streak counts back consecutive Mon-Sun weeks that each have at
+    least one workout. A one-week grace is given: if the current week is still
+    empty but last week had a workout, the streak stays alive (so it doesn't
+    reset to zero just because the user hasn't trained yet this week).
+    """
+    dates = list(workout_dates)
+    if not dates:
+        return Dashboard(0, 0, 0, None, 0)
+
+    total = len(dates)
+    this_monday = _week_monday(today)
+    this_week = sum(1 for d in dates if _week_monday(d) == this_monday)
+    last_30_days = sum(1 for d in dates if 0 <= (today - d).days < 30)
+    days_since_last = (today - max(dates)).days
+
+    weeks = {_week_monday(d) for d in dates}
+    cursor = this_monday
+    if cursor not in weeks:
+        cursor = cursor - dt.timedelta(days=7)  # grace: allow an empty current week
+    streak = 0
+    while cursor in weeks:
+        streak += 1
+        cursor -= dt.timedelta(days=7)
+
+    return Dashboard(
+        total_workouts=total,
+        this_week=this_week,
+        last_30_days=last_30_days,
+        days_since_last=days_since_last,
+        week_streak=streak,
+    )

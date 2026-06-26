@@ -7,7 +7,7 @@ are responsible for turning DB rows into the small view dataclasses below.
 import datetime as dt
 from dataclasses import dataclass
 from html import escape
-from typing import Literal, Union
+from typing import Literal
 
 from analytics import e1rm
 
@@ -16,6 +16,19 @@ _WEEKDAYS_RU = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"]
 UNIT_LABELS = {"kg": "кг", "lb": "lb"}
 
 _DIVIDER = "─" * 10
+
+
+def plural_ru(n: int, forms: tuple[str, str, str]) -> str:
+    """Russian plural: forms = (1 единица, 2-4 единицы, 5+ единиц)."""
+    m = abs(n) % 100
+    last = m % 10
+    if 11 <= m <= 14:
+        return forms[2]
+    if last == 1:
+        return forms[0]
+    if 2 <= last <= 4:
+        return forms[1]
+    return forms[2]
 
 
 def format_weight(weight: float) -> str:
@@ -27,12 +40,6 @@ def format_weight(weight: float) -> str:
 def format_set(weight: float, reps: int, is_warmup: bool = False) -> str:
     text = f"{format_weight(weight)}×{reps}"
     return f"w{text}" if is_warmup else text
-
-
-def format_set_slot(slot: tuple[float, int, bool] | None) -> str:
-    if slot is None:
-        return "—"
-    return format_set(*slot)
 
 
 def format_date_ru(d: dt.datetime) -> str:
@@ -69,33 +76,10 @@ class ExerciseBlockView:
         return max(e1rm(w, r, self.formula) for w, r, _ in ws)
 
 
-@dataclass
-class SupersetBlockView:
-    exercise_names: list[str]
-    # per round: per-exercise (weight, reps, is_warmup), or None if that slot wasn't logged
-    rounds: list[list[tuple[float, int, bool] | None]]
-    type: Literal["superset"] = "superset"
-
-    @property
-    def tonnage(self) -> float:
-        total = 0.0
-        for round_sets in self.rounds:
-            for slot in round_sets:
-                if slot is not None and not slot[2]:
-                    total += slot[0] * slot[1]
-        return total
-
-    @property
-    def working_set_count(self) -> int:
-        return sum(
-            1
-            for round_sets in self.rounds
-            for slot in round_sets
-            if slot is not None and not slot[2]
-        )
-
-
-BlockView = Union[ExerciseBlockView, SupersetBlockView]
+# A workout is rendered as a flat list of exercise blocks. (Exercises logged in
+# parallel — the "superset" entry mechanic — are stored as independent blocks and
+# shown the same as any other exercise; there is no separate superset view type.)
+BlockView = ExerciseBlockView
 
 
 def _render_single_block(block: ExerciseBlockView, hide_warmups: bool, show_extra: bool) -> list[str]:
@@ -108,15 +92,6 @@ def _render_single_block(block: ExerciseBlockView, hide_warmups: bool, show_extr
             lines.append(f"  ↳ повторов всего {sum(r for _, r, _ in block.working_sets)}")
         else:
             lines.append(f"  ↳ e1RM {block.top_e1rm:.1f}")
-    return lines
-
-
-def _render_superset_block(block: SupersetBlockView, hide_warmups: bool) -> list[str]:
-    lines = ["🔗 СУПЕРСЕТ", " ⇄ ".join(f"<b>{escape(n)}</b>" for n in block.exercise_names)]
-    for round_sets in block.rounds:
-        if hide_warmups and all(slot is None or slot[2] for slot in round_sets):
-            continue
-        lines.append("  " + " / ".join(format_set_slot(slot) for slot in round_sets))
     return lines
 
 
@@ -135,18 +110,74 @@ def build_workout_summary(
     working_set_count = 0
 
     for block in blocks:
-        if isinstance(block, ExerciseBlockView):
-            lines.extend(_render_single_block(block, hide_warmups, show_extra_stats))
-            exercise_count += 1
-            working_set_count += len(block.working_sets)
-        else:
-            lines.extend(_render_superset_block(block, hide_warmups))
-            exercise_count += len(block.exercise_names)
-            working_set_count += block.working_set_count
+        lines.extend(_render_single_block(block, hide_warmups, show_extra_stats))
+        exercise_count += 1
+        working_set_count += len(block.working_sets)
 
     lines.append(_DIVIDER)
     lines.append(f"{exercise_count} упражнения · {working_set_count} рабочих сетов")
     return "\n".join(lines)
+
+
+def format_dashboard(dashboard) -> str:
+    """One-glance stats block appended under the main-menu greeting.
+
+    Empty string for a brand-new user (nothing to show yet).
+    """
+    if dashboard.total_workouts == 0:
+        return ""
+    lines: list[str] = []
+    if dashboard.week_streak >= 2:
+        weeks = plural_ru(dashboard.week_streak, ("неделю", "недели", "недель"))
+        lines.append(f"🔥 Серия: {dashboard.week_streak} {weeks} подряд")
+
+    days = dashboard.days_since_last
+    if days == 0:
+        last = "сегодня"
+    elif days == 1:
+        last = "вчера"
+    else:
+        last = f"{days} {plural_ru(days, ('день', 'дня', 'дней'))} назад"
+
+    word = plural_ru(dashboard.this_week, ("тренировка", "тренировки", "тренировок"))
+    lines.append(f"📅 Эта неделя: {dashboard.this_week} {word} · последняя — {last}")
+    lines.append(f"🏋️ За 30 дней: {dashboard.last_30_days} · всего {dashboard.total_workouts}")
+    return "\n".join(lines)
+
+
+def build_workout_card(
+    started_at: dt.datetime,
+    blocks: list[BlockView],
+    note: str | None = None,
+    hide_warmups: bool = False,
+    unit: str = "kg",
+) -> tuple[str, list[str], str, str | None]:
+    """Plain-text (no HTML) breakdown of a workout, for rendering to a shareable image.
+
+    Returns (title, body_lines, footer, note) — charts.render_workout_card draws them.
+    """
+    u = UNIT_LABELS.get(unit, "кг")
+    title = format_date_ru(started_at)
+    body: list[str] = []
+    exercise_count = 0
+    working_set_count = 0
+    tonnage = 0.0
+
+    for block in blocks:
+        sets = block.working_sets if hide_warmups else block.sets
+        body.append(f"{block.exercise_name} [{block.group_name.upper()}]")
+        body.append("  " + ", ".join(format_set(w, r, warm) for w, r, warm in sets))
+        exercise_count += 1
+        working_set_count += len(block.working_sets)
+        tonnage += block.tonnage
+
+    ex_word = plural_ru(exercise_count, ("упражнение", "упражнения", "упражнений"))
+    set_word = plural_ru(working_set_count, ("рабочий сет", "рабочих сета", "рабочих сетов"))
+    footer = (
+        f"{exercise_count} {ex_word} · {working_set_count} {set_word} · "
+        f"{format_weight(tonnage)} {u}"
+    )
+    return title, body, footer, note
 
 
 def build_live_session_text(
@@ -159,17 +190,10 @@ def build_live_session_text(
     for i, block in enumerate(blocks):
         if i > 0:
             body_lines.append("")
-        if isinstance(block, ExerciseBlockView):
-            sets = block.working_sets if hide_warmups else block.sets
-            prefix = "▶ " if active_exercise_id is not None and block.exercise_id == active_exercise_id else ""
-            body_lines.append(f"{prefix}<b>{escape(block.exercise_name)}</b>")
-            body_lines.extend(f"  • {format_set(w, r, warm)}" for w, r, warm in sets)
-        else:
-            body_lines.append(" ⇄ ".join(f"<b>{escape(n)}</b>" for n in block.exercise_names))
-            for round_sets in block.rounds:
-                if hide_warmups and all(slot is None or slot[2] for slot in round_sets):
-                    continue
-                body_lines.append("  " + " / ".join(format_set_slot(slot) for slot in round_sets))
+        sets = block.working_sets if hide_warmups else block.sets
+        prefix = "▶ " if active_exercise_id is not None and block.exercise_id == active_exercise_id else ""
+        body_lines.append(f"{prefix}<b>{escape(block.exercise_name)}</b>")
+        body_lines.extend(f"  • {format_set(w, r, warm)}" for w, r, warm in sets)
     lines = list(body_lines)
     if not lines and not hint:
         lines = ["Добавь упражнение, чтобы начать."]

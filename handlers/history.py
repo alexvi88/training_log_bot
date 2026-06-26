@@ -85,6 +85,27 @@ async def hist_item(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
 
 
+@router.callback_query(F.data.startswith("hist:card:"))
+async def hist_card(callback: CallbackQuery, state: FSMContext):
+    workout_id = int(callback.data.split(":")[2])
+    workout = await db.get_workout(workout_id)
+    if workout is None or workout["user_id"] != callback.from_user.id:
+        await callback.answer("Тренировка не найдена", show_alert=True)
+        return
+    user = await db.get_user(callback.from_user.id)
+    blocks = await view_builder.build_block_views(workout_id, user["e1rm_formula"])
+    started = dt.datetime.fromisoformat(workout["started_at"])
+    title, body, footer, note = formatting.build_workout_card(
+        started, blocks, workout["note"], hide_warmups=bool(user["hide_warmups"]), unit=user["unit"]
+    )
+    png = charts.render_workout_card(title, body, footer, note)
+    await callback.message.answer_photo(
+        BufferedInputFile(png, filename="workout.png"),
+        caption="Готово — можно переслать друзьям 💪",
+    )
+    await callback.answer()
+
+
 @router.callback_query(F.data.startswith("hist:edit:"))
 async def hist_edit(callback: CallbackQuery, state: FSMContext):
     workout_id = int(callback.data.split(":")[2])
