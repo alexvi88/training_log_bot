@@ -36,8 +36,7 @@ def render_metric_over_sessions(
         t0 = dates[0].date()
         xs_days = [(d.date() - t0).days for d in dates]
         slope_per_day = trend.slope_per_week / 7
-        intercept = values[0] - slope_per_day * xs_days[0]
-        trend_y = [intercept + slope_per_day * x for x in xs_days]
+        trend_y = [trend.intercept + slope_per_day * x for x in xs_days]
         ax.plot(dates, trend_y, linestyle="--", color="#cc3333", alpha=0.7)
         arrow = "↑" if trend.direction == "up" else ("↓" if trend.direction == "down" else "→")
         ax.set_title(f"{title}  {arrow} {trend.slope_per_week:+.2f}/нед")

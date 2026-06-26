@@ -102,6 +102,7 @@ def group_sets_by_session(rows: Iterable[SetRow]) -> list[SessionStats]:
 class Trend:
     slope_per_week: float
     direction: str  # "up" | "down" | "flat"
+    intercept: float = 0.0  # y at x=0 (t0, the first point's calendar day)
 
 
 def linear_trend(points: list[tuple[dt.datetime, float]]) -> Optional[Trend]:
@@ -122,13 +123,14 @@ def linear_trend(points: list[tuple[dt.datetime, float]]) -> Optional[Trend]:
     num = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys))
     den = sum((x - mean_x) ** 2 for x in xs)
     if den == 0:
-        return Trend(slope_per_week=0.0, direction="flat")
+        return Trend(slope_per_week=0.0, direction="flat", intercept=mean_y)
     slope = num / den
     if abs(slope) < 1e-6:
         direction = "flat"
     else:
         direction = "up" if slope > 0 else "down"
-    return Trend(slope_per_week=slope, direction=direction)
+    intercept = mean_y - slope * mean_x
+    return Trend(slope_per_week=slope, direction=direction, intercept=intercept)
 
 
 @dataclass
