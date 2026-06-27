@@ -27,7 +27,6 @@ CREATE TABLE IF NOT EXISTS users (
     username TEXT,
     created_at TEXT NOT NULL,
     unit TEXT NOT NULL DEFAULT 'kg',
-    bodyweight REAL,
     e1rm_formula TEXT NOT NULL DEFAULT 'epley',
     show_extra_stats INTEGER NOT NULL DEFAULT 1
 );
@@ -107,15 +106,6 @@ CREATE TABLE IF NOT EXISTS sets (
 );
 CREATE INDEX IF NOT EXISTS idx_sets_exercise ON sets (exercise_id);
 CREATE INDEX IF NOT EXISTS idx_sets_block ON sets (block_id);
-
-CREATE TABLE IF NOT EXISTS bodyweight_logs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
-    date TEXT NOT NULL,
-    weight REAL NOT NULL,
-    created_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_bodyweight_user ON bodyweight_logs (user_id, date);
 """
 
 _conn: Optional[aiosqlite.Connection] = None
@@ -184,10 +174,14 @@ async def _migrate_schema() -> None:
     user_cols = await _column_names("users")
     if "hide_warmups" in user_cols:
         await _conn.execute("ALTER TABLE users DROP COLUMN hide_warmups")
+    if "bodyweight" in user_cols:
+        await _conn.execute("ALTER TABLE users DROP COLUMN bodyweight")
 
     set_cols = await _column_names("sets")
     if "is_warmup" in set_cols:
         await _conn.execute("ALTER TABLE sets DROP COLUMN is_warmup")
+
+    await _conn.execute("DROP TABLE IF EXISTS bodyweight_logs")
 
     await _conn.commit()
 
@@ -869,36 +863,6 @@ async def list_exercise_ids_for_workout(workout_id: int) -> list[int]:
     )
     rows = await cur.fetchall()
     return [r["exercise_id"] for r in rows]
-
-
-# ---------- bodyweight diary ----------
-
-async def add_bodyweight_entry(user_id: int, date: str, weight: float) -> int:
-    async with _write_lock:
-        cur = await conn().execute(
-            "INSERT INTO bodyweight_logs (user_id, date, weight, created_at) VALUES (?, ?, ?, ?)",
-            (user_id, date, weight, now_iso()),
-        )
-        await conn().commit()
-        return cur.lastrowid
-
-
-async def list_bodyweight_entries(user_id: int, limit: Optional[int] = None) -> list[aiosqlite.Row]:
-    sql = "SELECT * FROM bodyweight_logs WHERE user_id = ? ORDER BY date, id"
-    params: list[Any] = [user_id]
-    if limit:
-        sql += " LIMIT ?"
-        params.append(limit)
-    cur = await conn().execute(sql, params)
-    return await cur.fetchall()
-
-
-async def get_latest_bodyweight(user_id: int) -> Optional[aiosqlite.Row]:
-    cur = await conn().execute(
-        "SELECT * FROM bodyweight_logs WHERE user_id = ? ORDER BY date DESC, id DESC LIMIT 1",
-        (user_id,),
-    )
-    return await cur.fetchone()
 
 
 # ---------- export ----------
