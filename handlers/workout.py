@@ -59,9 +59,7 @@ async def _refresh_live(bot, state: FSMContext, user, workout_id: int, hint, key
     blocks = await view_builder.build_block_views(workout_id, user["e1rm_formula"], skip_empty=False)
     active = data.get("active_exercise_id")
     blocks = _move_open_exercises_last(blocks, data.get("open_exercises") or [], active)
-    text = formatting.build_live_session_text(
-        blocks, hint, hide_warmups=bool(user["hide_warmups"]), active_exercise_id=active,
-    )
+    text = formatting.build_live_session_text(blocks, hint, active_exercise_id=active)
     if data.get("is_backfill") and data.get("bf_date"):
         date = dt.date.fromisoformat(data["bf_date"])
         text = f"📅 {formatting.format_date_ru(date)}\n\n{text}"
@@ -95,9 +93,9 @@ async def _react_ok(bot, message: Message):
         pass
 
 
-async def _log_one(block_id: int, exercise_id: int, weight: float, reps: int, is_warmup: bool):
+async def _log_one(block_id: int, exercise_id: int, weight: float, reps: int):
     round_idx = await db.next_round_index(block_id, exercise_id)
-    await db.add_set(block_id, exercise_id, round_idx, 0, weight, reps, is_warmup)
+    await db.add_set(block_id, exercise_id, round_idx, 0, weight, reps)
 
 
 def _logging_hint(last_session: list[tuple[float, int]] | None, has_sets: bool) -> str:
@@ -503,7 +501,7 @@ async def log_set_text(message: Message, state: FSMContext):
     prev_weight, _ = last_by.get(active) or (0.0, 0)
     for ps in parsed:
         weight = prev_weight if (ps.weight_omitted and prev_weight) else ps.weight
-        await _log_one(block_id, active, weight, ps.reps, ps.is_warmup)
+        await _log_one(block_id, active, weight, ps.reps)
         prev_weight = weight
     last_by[active] = (prev_weight, parsed[-1].reps)
     await state.update_data(last_by_exercise=last_by)
@@ -522,7 +520,7 @@ async def live_undo(callback: CallbackQuery, state: FSMContext):
     if row is None:
         await callback.answer("Нет сетов для удаления")
         return
-    await callback.answer(f"Удалил {formatting.format_set(row['weight'], row['reps'], bool(row['is_warmup']))}")
+    await callback.answer(f"Удалил {formatting.format_set(row['weight'], row['reps'])}")
     user = await db.get_user(callback.from_user.id)
 
     remaining = await db.list_sets_for_block(block_id)
@@ -666,7 +664,7 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
         ex = await db.get_exercise(ex_id)
         history_rows = await db.list_sets_for_exercise(ex_id, exclude_workout_id=workout_id)
         history_set_rows = [
-            analytics.SetRow(r["weight"], r["reps"], bool(r["is_warmup"]), r["workout_id"], r["started_at"])
+            analytics.SetRow(r["weight"], r["reps"], r["workout_id"], r["started_at"])
             for r in history_rows
         ]
         prior_sessions = analytics.group_sets_by_session(history_set_rows)
@@ -675,13 +673,13 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
 
         this_rows = await db.list_sets_for_workout_exercise(workout_id, ex_id)
         this_set_rows = [
-            analytics.SetRow(r["weight"], r["reps"], bool(r["is_warmup"]), workout_id, workout["started_at"])
+            analytics.SetRow(r["weight"], r["reps"], workout_id, workout["started_at"])
             for r in this_rows
         ]
         new_session = analytics.SessionStats(
             workout_id=workout_id, started_at=workout["started_at"], sets=this_set_rows, formula=formula
         )
-        if not new_session.working_sets:
+        if not new_session.sets:
             continue
 
         records = analytics.detect_new_records(prior_sessions, new_session)
@@ -706,8 +704,7 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
 
     blocks = await view_builder.build_block_views(workout_id, formula)
     summary = formatting.build_workout_summary(
-        started_at, blocks, note,
-        hide_warmups=bool(user["hide_warmups"]), show_extra_stats=bool(user["show_extra_stats"]),
+        started_at, blocks, note, show_extra_stats=bool(user["show_extra_stats"]),
     )
     highlights = formatting.build_exercise_highlights(highlight_groups)
     full_text = summary + (f"\n\n{formatting.DIVIDER}\n\n{highlights}" if highlights else "")

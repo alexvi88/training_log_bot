@@ -30,7 +30,7 @@ async def build_block_views(
         ex_id = block_exs[0]["exercise_id"]
         ex = await db.get_exercise(ex_id)
         gname = await group_info(ex["primary_group_id"])
-        sets_tuples = [(s["weight"], s["reps"], bool(s["is_warmup"])) for s in sets]
+        sets_tuples = [(s["weight"], s["reps"]) for s in sets]
         views.append(
             ExerciseBlockView(
                 group_name=gname,

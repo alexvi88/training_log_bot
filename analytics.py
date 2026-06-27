@@ -33,7 +33,6 @@ def e1rm(weight: float, reps: int, formula: str = "epley") -> float:
 class SetRow:
     weight: float
     reps: int
-    is_warmup: bool = False
     workout_id: Optional[int] = None
     started_at: Optional[str] = None
 
@@ -46,30 +45,24 @@ class SessionStats:
     formula: str = "epley"
 
     @property
-    def working_sets(self) -> list[SetRow]:
-        return [s for s in self.sets if not s.is_warmup]
-
-    @property
     def tonnage(self) -> float:
-        return sum(s.weight * s.reps for s in self.working_sets)
+        return sum(s.weight * s.reps for s in self.sets)
 
     @property
     def total_reps(self) -> int:
-        return sum(s.reps for s in self.working_sets)
+        return sum(s.reps for s in self.sets)
 
     @property
     def is_bodyweight_mode(self) -> bool:
-        ws = self.working_sets
-        return bool(ws) and all(s.weight == 0 for s in ws)
+        return bool(self.sets) and all(s.weight == 0 for s in self.sets)
 
     @property
     def top_set(self) -> Optional[SetRow]:
-        ws = self.working_sets
-        if not ws:
+        if not self.sets:
             return None
         if self.is_bodyweight_mode:
-            return max(ws, key=lambda s: s.reps)
-        return max(ws, key=lambda s: e1rm(s.weight, s.reps, self.formula))
+            return max(self.sets, key=lambda s: s.reps)
+        return max(self.sets, key=lambda s: e1rm(s.weight, s.reps, self.formula))
 
     @property
     def top_e1rm(self) -> float:
@@ -80,8 +73,7 @@ class SessionStats:
 
     @property
     def max_reps_in_set(self) -> int:
-        ws = self.working_sets
-        return max((s.reps for s in ws), default=0)
+        return max((s.reps for s in self.sets), default=0)
 
 
 def group_sets_by_session(rows: Iterable[SetRow]) -> list[SessionStats]:
@@ -148,7 +140,7 @@ def compute_personal_records(sessions: list[SessionStats]) -> PersonalRecords:
     for session in sessions:
         if session.tonnage > pr.max_session_tonnage:
             pr.max_session_tonnage = session.tonnage
-        for s in session.working_sets:
+        for s in session.sets:
             if s.weight > pr.max_weight:
                 pr.max_weight = s.weight
             val = e1rm(s.weight, s.reps, session.formula)
@@ -175,14 +167,14 @@ def detect_new_records(
     prior_pr = compute_personal_records(history_sessions)
     records: list[NewRecord] = []
 
-    for s in new_session.working_sets:
+    for s in new_session.sets:
         val = e1rm(s.weight, s.reps, new_session.formula)
         if val > prior_pr.max_e1rm:
             records.append(NewRecord(kind="e1rm", value=val))
             prior_pr.max_e1rm = val
 
     reps_records: list[NewRecord] = []
-    for s in new_session.working_sets:
+    for s in new_session.sets:
         prev_best = prior_pr.max_reps_at_weight.get(s.weight, 0)
         if s.reps > prev_best:
             reps_records.append(NewRecord(kind="reps_at_weight", value=s.reps, extra=s.weight))
