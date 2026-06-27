@@ -270,15 +270,6 @@ def set_actions_keyboard(set_id: int) -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
-def bodyweight_keyboard() -> InlineKeyboardMarkup:
-    b = InlineKeyboardBuilder()
-    b.button(text="➕ Записать вес", callback_data="bw:add")
-    b.button(text="📈 Динамика", callback_data="bw:chart")
-    b.button(text="⬅️ Назад", callback_data="bw:back")
-    b.adjust(1)
-    return b.as_markup()
-
-
 def csv_column_options_keyboard(headers: list[str], prefix: str, allow_skip: bool = False) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     for idx, header in enumerate(headers):

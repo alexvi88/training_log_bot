@@ -212,16 +212,6 @@ def compare_to_previous_session(sessions: list[SessionStats]) -> Optional[Compar
     )
 
 
-def volume_by_muscle_group(
-    rows: Iterable[tuple[str, float, int]]
-) -> dict[str, float]:
-    """rows: iterable of (group_label, weight, reps) for working sets in a period."""
-    totals: dict[str, float] = {}
-    for group_label, weight, reps in rows:
-        totals[group_label] = totals.get(group_label, 0.0) + weight * reps
-    return totals
-
-
 @dataclass
 class Dashboard:
     total_workouts: int

@@ -110,15 +110,3 @@ def render_workout_card(
         ax.text(0.05, y, text, family="monospace", va="top", **styles[style])
         y -= line_h
     return _fig_to_png(fig)
-
-
-def render_muscle_group_bar(volumes: dict[str, float], title: str = "Объём по группам мышц") -> bytes:
-    fig, ax = plt.subplots(figsize=(6, 3.5))
-    labels = list(volumes.keys())
-    values = list(volumes.values())
-    ax.bar(labels, values, color="#3366cc")
-    ax.set_ylabel("тоннаж")
-    ax.set_title(title)
-    plt.setp(ax.get_xticklabels(), rotation=30, ha="right")
-    ax.grid(True, axis="y", alpha=0.3)
-    return _fig_to_png(fig)
