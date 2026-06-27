@@ -37,9 +37,8 @@ def format_weight(weight: float) -> str:
     return f"{weight:.1f}".rstrip("0").rstrip(".")
 
 
-def format_set(weight: float, reps: int, is_warmup: bool = False) -> str:
-    text = f"{format_weight(weight)}×{reps}"
-    return f"w{text}" if is_warmup else text
+def format_set(weight: float, reps: int) -> str:
+    return f"{format_weight(weight)}×{reps}"
 
 
 def format_date_ru(d: dt.datetime) -> str:
@@ -50,30 +49,24 @@ def format_date_ru(d: dt.datetime) -> str:
 class ExerciseBlockView:
     group_name: str
     exercise_name: str
-    sets: list[tuple[float, int, bool]]  # weight, reps, is_warmup
+    sets: list[tuple[float, int]]  # weight, reps
     formula: str = "epley"
     type: Literal["single"] = "single"
     exercise_id: int | None = None
 
     @property
-    def working_sets(self) -> list[tuple[float, int, bool]]:
-        return [s for s in self.sets if not s[2]]
-
-    @property
     def tonnage(self) -> float:
-        return sum(w * r for w, r, _ in self.working_sets)
+        return sum(w * r for w, r in self.sets)
 
     @property
     def is_bodyweight(self) -> bool:
-        ws = self.working_sets
-        return bool(ws) and all(w == 0 for w, _, _ in ws)
+        return bool(self.sets) and all(w == 0 for w, _ in self.sets)
 
     @property
     def top_e1rm(self) -> float:
-        ws = self.working_sets
-        if not ws:
+        if not self.sets:
             return 0.0
-        return max(e1rm(w, r, self.formula) for w, r, _ in ws)
+        return max(e1rm(w, r, self.formula) for w, r in self.sets)
 
 
 # A workout is rendered as a flat list of exercise blocks. (Exercises logged in
@@ -82,14 +75,13 @@ class ExerciseBlockView:
 BlockView = ExerciseBlockView
 
 
-def _render_single_block(block: ExerciseBlockView, hide_warmups: bool, show_extra: bool) -> list[str]:
-    sets = block.working_sets if hide_warmups else block.sets
+def _render_single_block(block: ExerciseBlockView, show_extra: bool) -> list[str]:
     label = f"{escape(block.exercise_name)} [{block.group_name.upper()}]"
     lines = [f"<b>{label}</b>"]
-    lines.extend(f"  • {format_set(w, r, warm)}" for w, r, warm in sets)
-    if show_extra and block.working_sets:
+    lines.extend(f"  • {format_set(w, r)}" for w, r in block.sets)
+    if show_extra and block.sets:
         if block.is_bodyweight:
-            lines.append(f"  ↳ повторов всего {sum(r for _, r, _ in block.working_sets)}")
+            lines.append(f"  ↳ повторов всего {sum(r for _, r in block.sets)}")
         else:
             lines.append(f"  ↳ e1RM {block.top_e1rm:.1f}")
     return lines
@@ -99,7 +91,6 @@ def build_workout_summary(
     started_at: dt.datetime,
     blocks: list[BlockView],
     note: str | None = None,
-    hide_warmups: bool = False,
     show_extra_stats: bool = True,
 ) -> str:
     lines = [f"<b>{format_date_ru(started_at)}</b>", ""]
@@ -107,15 +98,15 @@ def build_workout_summary(
         lines.append(f"📝 {note}")
 
     exercise_count = 0
-    working_set_count = 0
+    set_count = 0
 
     for block in blocks:
-        lines.extend(_render_single_block(block, hide_warmups, show_extra_stats))
+        lines.extend(_render_single_block(block, show_extra_stats))
         exercise_count += 1
-        working_set_count += len(block.working_sets)
+        set_count += len(block.sets)
 
     lines.append(DIVIDER)
-    lines.append(f"{exercise_count} упражнения · {working_set_count} рабочих сетов")
+    lines.append(f"{exercise_count} упражнения · {set_count} сетов")
     return "\n".join(lines)
 
 
@@ -149,7 +140,6 @@ def build_workout_card(
     started_at: dt.datetime,
     blocks: list[BlockView],
     note: str | None = None,
-    hide_warmups: bool = False,
     unit: str = "kg",
 ) -> tuple[str, list[str], str, str | None]:
     """Plain-text (no HTML) breakdown of a workout, for rendering to a shareable image.
@@ -160,21 +150,20 @@ def build_workout_card(
     title = format_date_ru(started_at)
     body: list[str] = []
     exercise_count = 0
-    working_set_count = 0
+    set_count = 0
     tonnage = 0.0
 
     for block in blocks:
-        sets = block.working_sets if hide_warmups else block.sets
         body.append(f"{block.exercise_name} [{block.group_name.upper()}]")
-        body.append("  " + ", ".join(format_set(w, r, warm) for w, r, warm in sets))
+        body.append("  " + ", ".join(format_set(w, r) for w, r in block.sets))
         exercise_count += 1
-        working_set_count += len(block.working_sets)
+        set_count += len(block.sets)
         tonnage += block.tonnage
 
     ex_word = plural_ru(exercise_count, ("упражнение", "упражнения", "упражнений"))
-    set_word = plural_ru(working_set_count, ("рабочий сет", "рабочих сета", "рабочих сетов"))
+    set_word = plural_ru(set_count, ("сет", "сета", "сетов"))
     footer = (
-        f"{exercise_count} {ex_word} · {working_set_count} {set_word} · "
+        f"{exercise_count} {ex_word} · {set_count} {set_word} · "
         f"{format_weight(tonnage)} {u}"
     )
     return title, body, footer, note
@@ -183,17 +172,15 @@ def build_workout_card(
 def build_live_session_text(
     blocks: list[BlockView],
     hint: str | None = None,
-    hide_warmups: bool = False,
     active_exercise_id: int | None = None,
 ) -> str:
     body_lines = []
     for i, block in enumerate(blocks):
         if i > 0:
             body_lines.append("")
-        sets = block.working_sets if hide_warmups else block.sets
         prefix = "▶ " if active_exercise_id is not None and block.exercise_id == active_exercise_id else ""
         body_lines.append(f"{prefix}<b>{escape(block.exercise_name)}</b>")
-        body_lines.extend(f"  • {format_set(w, r, warm)}" for w, r, warm in sets)
+        body_lines.extend(f"  • {format_set(w, r)}" for w, r in block.sets)
     lines = list(body_lines)
     if not lines and not hint:
         lines = ["Добавь упражнение, чтобы начать."]
@@ -247,10 +234,9 @@ def format_progress_screen(
     is_bw = sessions[-1].is_bodyweight_mode
     for s in sessions[-limit:]:
         d = dt.datetime.fromisoformat(s.started_at)
-        ws = s.working_sets
-        if not ws:
+        if not s.sets:
             continue
-        sets_str = ", ".join(format_set(st.weight, st.reps) for st in ws)
+        sets_str = ", ".join(format_set(st.weight, st.reps) for st in s.sets)
         lines.append(f"<b>{format_date_ru(d)}</b>")
         lines.append(sets_str)
         if is_bw:

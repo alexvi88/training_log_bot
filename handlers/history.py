@@ -69,8 +69,7 @@ async def show_history_item(callback: CallbackQuery, workout_id: int) -> bool:
     blocks = await view_builder.build_block_views(workout_id, user["e1rm_formula"])
     started = dt.datetime.fromisoformat(workout["started_at"])
     text = formatting.build_workout_summary(
-        started, blocks, workout["note"],
-        hide_warmups=bool(user["hide_warmups"]), show_extra_stats=bool(user["show_extra_stats"]),
+        started, blocks, workout["note"], show_extra_stats=bool(user["show_extra_stats"]),
     )
     await ui.safe_edit(
         callback, text, reply_markup=keyboards.history_item_keyboard(workout_id), parse_mode="HTML"
@@ -96,7 +95,7 @@ async def hist_card(callback: CallbackQuery, state: FSMContext):
     blocks = await view_builder.build_block_views(workout_id, user["e1rm_formula"])
     started = dt.datetime.fromisoformat(workout["started_at"])
     title, body, footer, note = formatting.build_workout_card(
-        started, blocks, workout["note"], hide_warmups=bool(user["hide_warmups"]), unit=user["unit"]
+        started, blocks, workout["note"], unit=user["unit"]
     )
     png = charts.render_workout_card(title, body, footer, note)
     await callback.message.answer_photo(
@@ -192,7 +191,7 @@ async def prog_pick_group(callback: CallbackQuery, state: FSMContext):
 async def _load_sessions(exercise_id: int, formula: str) -> list[analytics.SessionStats]:
     rows = await db.list_sets_for_exercise(exercise_id)
     set_rows = [
-        analytics.SetRow(r["weight"], r["reps"], bool(r["is_warmup"]), r["workout_id"], r["started_at"])
+        analytics.SetRow(r["weight"], r["reps"], r["workout_id"], r["started_at"])
         for r in rows
     ]
     sessions = analytics.group_sets_by_session(set_rows)

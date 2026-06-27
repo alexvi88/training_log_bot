@@ -29,7 +29,6 @@ CREATE TABLE IF NOT EXISTS users (
     unit TEXT NOT NULL DEFAULT 'kg',
     bodyweight REAL,
     e1rm_formula TEXT NOT NULL DEFAULT 'epley',
-    hide_warmups INTEGER NOT NULL DEFAULT 0,
     show_extra_stats INTEGER NOT NULL DEFAULT 1
 );
 
@@ -101,7 +100,6 @@ CREATE TABLE IF NOT EXISTS sets (
     order_in_round INTEGER NOT NULL DEFAULT 0,
     weight REAL NOT NULL,
     reps INTEGER NOT NULL,
-    is_warmup INTEGER NOT NULL DEFAULT 0,
     rpe REAL,
     created_at TEXT NOT NULL,
     FOREIGN KEY (block_id) REFERENCES workout_blocks (id),
@@ -182,6 +180,14 @@ async def _migrate_schema() -> None:
     if "original_name" not in exercise_cols:
         await _conn.execute("ALTER TABLE exercises ADD COLUMN original_name TEXT")
         await _conn.execute("UPDATE exercises SET original_name = name WHERE original_name IS NULL")
+
+    user_cols = await _column_names("users")
+    if "hide_warmups" in user_cols:
+        await _conn.execute("ALTER TABLE users DROP COLUMN hide_warmups")
+
+    set_cols = await _column_names("sets")
+    if "is_warmup" in set_cols:
+        await _conn.execute("ALTER TABLE sets DROP COLUMN is_warmup")
 
     await _conn.commit()
 
@@ -746,15 +752,14 @@ async def add_set(
     order_in_round: int,
     weight: float,
     reps: int,
-    is_warmup: bool = False,
     rpe: Optional[float] = None,
 ) -> int:
     async with _write_lock:
         cur = await conn().execute(
             "INSERT INTO sets "
-            "(block_id, exercise_id, round_index, order_in_round, weight, reps, is_warmup, rpe, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (block_id, exercise_id, round_index, order_in_round, weight, reps, int(is_warmup), rpe, now_iso()),
+            "(block_id, exercise_id, round_index, order_in_round, weight, reps, rpe, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (block_id, exercise_id, round_index, order_in_round, weight, reps, rpe, now_iso()),
         )
         await conn().commit()
         return cur.lastrowid
@@ -829,12 +834,12 @@ async def delete_set(set_id: int) -> None:
 
 
 async def list_sets_for_exercise(exercise_id: int, exclude_workout_id: Optional[int] = None) -> list[aiosqlite.Row]:
-    """All working (non-warmup) sets for an exercise across finished workouts, oldest first."""
+    """All sets for an exercise across finished workouts, oldest first."""
     sql = (
         "SELECT s.*, w.id AS workout_id, w.started_at FROM sets s "
         "JOIN workout_blocks b ON b.id = s.block_id "
         "JOIN workouts w ON w.id = b.workout_id "
-        "WHERE s.exercise_id = ? AND s.is_warmup = 0 AND w.status = 'finished'"
+        "WHERE s.exercise_id = ? AND w.status = 'finished'"
     )
     params: list[Any] = [exercise_id]
     if exclude_workout_id is not None:
@@ -901,7 +906,7 @@ async def get_latest_bodyweight(user_id: int) -> Optional[aiosqlite.Row]:
 async def export_rows_for_user(user_id: int) -> list[aiosqlite.Row]:
     cur = await conn().execute(
         "SELECT w.started_at, e.display_name AS exercise, "
-        "s.round_index, s.weight, s.reps, s.is_warmup "
+        "s.round_index, s.weight, s.reps "
         "FROM sets s "
         "JOIN workout_blocks bt ON bt.id = s.block_id "
         "JOIN workouts w ON w.id = bt.workout_id "

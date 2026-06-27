@@ -38,7 +38,7 @@ async def _edit_screen_payload(workout_id: int) -> tuple[str, InlineKeyboardMark
         sets = await db.list_sets_for_block(block["id"])
         for s in sets:
             ex_name = name_by_ex.get(s["exercise_id"], "?")
-            label = f"{ex_name} · {formatting.format_set(s['weight'], s['reps'], bool(s['is_warmup']))}"
+            label = f"{ex_name} · {formatting.format_set(s['weight'], s['reps'])}"
             sets_rows.append((s["id"], label))
         for be in block_exs:
             add_buttons.append((block["id"], be["exercise_id"], be["display_name"]))
@@ -76,7 +76,7 @@ async def editw_pick_set(callback: CallbackQuery, state: FSMContext):
         return
     row = await db.get_set(set_id)
     ex = await db.get_exercise(row["exercise_id"])
-    text = f"{ex['display_name']}: {formatting.format_set(row['weight'], row['reps'], bool(row['is_warmup']))}"
+    text = f"{ex['display_name']}: {formatting.format_set(row['weight'], row['reps'])}"
     await ui.safe_edit(callback, text, reply_markup=keyboards.set_actions_keyboard(set_id))
     await callback.answer()
 
@@ -175,7 +175,7 @@ async def editw_addset_entered(message: Message, state: FSMContext):
     order_in_round = next((be["order_in_block"] for be in block_exs if be["exercise_id"] == ex_id), 0)
     for ps in parsed:
         round_idx = await db.next_round_index(block_id, ex_id)
-        await db.add_set(block_id, ex_id, round_idx, order_in_round, ps.weight, ps.reps, ps.is_warmup)
+        await db.add_set(block_id, ex_id, round_idx, order_in_round, ps.weight, ps.reps)
     await message.reply("Сет добавлен.")
     await _delete_message(message)
     await show_edit_screen(message, state, data["edit_workout_id"])

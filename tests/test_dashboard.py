@@ -99,12 +99,12 @@ def test_build_workout_card_text():
         ExerciseBlockView(
             group_name="грудь",
             exercise_name="Жим лёжа",
-            sets=[(100.0, 8, False), (100.0, 8, False), (60.0, 12, True)],
+            sets=[(100.0, 8), (100.0, 8), (60.0, 12)],
         ),
         ExerciseBlockView(
             group_name="спина",
             exercise_name="Тяга",
-            sets=[(80.0, 10, False), (80.0, 10, False)],
+            sets=[(80.0, 10), (80.0, 10)],
         ),
     ]
     title, body, footer, note = formatting.build_workout_card(
@@ -115,8 +115,7 @@ def test_build_workout_card_text():
     assert any("Тяга [СПИНА]" in line for line in body)
     assert note == "Спал хорошо"
     assert footer.startswith("2 упражнения")
-    # working sets: 2 (warmup excluded) + 2 = 4
-    assert "4 рабочих сета" in footer
+    assert "5 сетов" in footer
 
 
 def test_render_workout_card_returns_png():

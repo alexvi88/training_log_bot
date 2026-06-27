@@ -17,12 +17,8 @@ class ParseError(Exception):
 class ParsedSet:
     weight: float
     reps: int
-    is_warmup: bool = False
     weight_omitted: bool = False  # bare reps, e.g. "8" — caller may fill weight from the previous set
 
-
-_WARMUP_PREFIX_RE = re.compile(r"^\s*w\s+", re.IGNORECASE)
-_WARMUP_SUFFIX_RE = re.compile(r"\s*разм\.?\s*$", re.IGNORECASE)
 
 _SEP = r"[xXхХ*/]"
 _WEIGHT = r"\+?(?P<weight>\d+(?:[.,]\d+)?)"
@@ -34,25 +30,9 @@ _BODYWEIGHT_RE = re.compile(r"^(?P<reps>\d+)$")
 MAX_SETS_PER_TOKEN = 20
 
 
-def _strip_warmup(text: str) -> tuple[str, bool]:
-    is_warmup = False
-    stripped = text
-    if _WARMUP_PREFIX_RE.search(stripped):
-        stripped = _WARMUP_PREFIX_RE.sub("", stripped)
-        is_warmup = True
-    if _WARMUP_SUFFIX_RE.search(stripped):
-        stripped = _WARMUP_SUFFIX_RE.sub("", stripped)
-        is_warmup = True
-    return stripped.strip(), is_warmup
-
-
 def parse_single_token(token: str) -> list[ParsedSet]:
     """Parse one weight/reps[/count] token, e.g. '100x8x3', '100 8', '8', '+20 8'."""
-    raw = token.strip()
-    if not raw:
-        raise ParseError(EXAMPLES_HINT)
-
-    text, is_warmup = _strip_warmup(raw)
+    text = token.strip()
     if not text:
         raise ParseError(EXAMPLES_HINT)
 
@@ -61,7 +41,7 @@ def parse_single_token(token: str) -> list[ParsedSet]:
         reps = int(bw_match.group("reps"))
         if reps <= 0:
             raise ParseError("Повторы должны быть больше 0")
-        return [ParsedSet(weight=0.0, reps=reps, is_warmup=is_warmup, weight_omitted=True)]
+        return [ParsedSet(weight=0.0, reps=reps, weight_omitted=True)]
 
     match = _X_SEP_RE.match(text) or _SPACE_SEP_RE.match(text)
     if not match:
@@ -76,7 +56,7 @@ def parse_single_token(token: str) -> list[ParsedSet]:
     if not (0 < count <= MAX_SETS_PER_TOKEN):
         raise ParseError("Странное количество подходов")
 
-    return [ParsedSet(weight=weight, reps=reps, is_warmup=is_warmup) for _ in range(count)]
+    return [ParsedSet(weight=weight, reps=reps) for _ in range(count)]
 
 
 # ---------- date input: дд.мм.гггг ----------
