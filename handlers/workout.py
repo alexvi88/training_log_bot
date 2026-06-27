@@ -150,7 +150,7 @@ async def _back_after_cancel(bot, state: FSMContext, user):
 
 # ---------- main menu ----------
 
-_GREETING = "Привет АТЛЕТ. Начнем нашу тренировку?"
+_GREETING = "💪 <b>Привет, атлет!</b> Начнём тренировку?"
 
 
 async def _menu_text(user_id: int, extra: str = "") -> str:
@@ -160,7 +160,7 @@ async def _menu_text(user_id: int, extra: str = "") -> str:
     text = _GREETING + extra
     summary = formatting.format_dashboard(dashboard)
     if summary:
-        text += "\n\n" + summary
+        text += f"\n\n{formatting.DIVIDER}\n\n" + summary
     return text
 
 
@@ -178,14 +178,14 @@ async def cmd_start(message: Message, state: FSMContext):
                 f"забыл закрыть?"
             )
     text = await _menu_text(message.from_user.id, extra)
-    await message.answer(text, reply_markup=keyboards.main_menu(bool(active)))
+    await message.answer(text, reply_markup=keyboards.main_menu(bool(active)), parse_mode="HTML")
 
 
 async def _show_main_menu(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     active = await db.get_active_workout(callback.from_user.id)
     text = await _menu_text(callback.from_user.id)
-    await ui.safe_edit(callback, text, reply_markup=keyboards.main_menu(bool(active)))
+    await ui.safe_edit(callback, text, reply_markup=keyboards.main_menu(bool(active)), parse_mode="HTML")
 
 
 @router.callback_query(F.data == "menu:progress")
@@ -663,8 +663,7 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
     formula = user["e1rm_formula"]
 
     exercise_ids = await db.list_exercise_ids_for_workout(workout_id)
-    pr_lines: list[str] = []
-    comparison_lines: list[str] = []
+    highlight_groups: list[tuple[str, list[str], str | None]] = []
 
     workout = await db.get_workout(workout_id)
     started_at = dt.datetime.fromisoformat(workout["started_at"])
@@ -692,20 +691,20 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
             continue
 
         records = analytics.detect_new_records(prior_sessions, new_session)
-        for r in records:
-            if r.kind == "e1rm":
-                continue
-            pr_lines.append(
-                formatting.format_pr_line(ex["display_name"], r.kind, r.value, r.extra, unit=user["unit"])
-            )
+        pr_details = [
+            formatting.format_pr_detail(r.kind, r.value, r.extra, unit=user["unit"])
+            for r in records
+            if r.kind != "e1rm"
+        ]
 
+        comparison_line = None
         if prior_sessions:
             comparison = analytics.compare_to_previous_session(prior_sessions + [new_session])
             if comparison and not new_session.is_bodyweight_mode:
-                comparison_lines.append(
-                    f"<b>{escape(ex['display_name'])}</b>: "
-                    + formatting.format_comparison_line(comparison.e1rm_delta, unit=user["unit"])
-                )
+                comparison_line = formatting.format_comparison_line(comparison.e1rm_delta, unit=user["unit"])
+
+        if pr_details or comparison_line:
+            highlight_groups.append((ex["display_name"], pr_details, comparison_line))
 
     is_backfill = bool(data.get("is_backfill"))
     finished_at = f"{data['bf_date']}T12:00:00" if is_backfill else None
@@ -716,12 +715,8 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
         started_at, blocks, note,
         hide_warmups=bool(user["hide_warmups"]), show_extra_stats=bool(user["show_extra_stats"]),
     )
-    extra_parts = []
-    if pr_lines:
-        extra_parts.append("\n".join(pr_lines))
-    if comparison_lines:
-        extra_parts.append("\n".join(comparison_lines))
-    full_text = summary + ("\n\n" + "\n\n".join(extra_parts) if extra_parts else "")
+    highlights = formatting.build_exercise_highlights(highlight_groups)
+    full_text = summary + (f"\n\n{formatting.DIVIDER}\n\n{highlights}" if highlights else "")
     if is_backfill:
         full_text = "✅ Сохранено как прошлая тренировка\n\n" + full_text
 
@@ -740,5 +735,6 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
     active = await db.get_active_workout(user_id)
     menu_text = await _menu_text(user_id)
     await bot.send_message(
-        chat_id=data["live_chat_id"], text=menu_text, reply_markup=keyboards.main_menu(bool(active))
+        chat_id=data["live_chat_id"], text=menu_text, reply_markup=keyboards.main_menu(bool(active)),
+        parse_mode="HTML",
     )

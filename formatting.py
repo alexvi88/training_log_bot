@@ -15,7 +15,7 @@ _WEEKDAYS_RU = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"]
 
 UNIT_LABELS = {"kg": "кг", "lb": "lb"}
 
-_DIVIDER = "─" * 10
+DIVIDER = "─" * 10
 
 
 def plural_ru(n: int, forms: tuple[str, str, str]) -> str:
@@ -114,7 +114,7 @@ def build_workout_summary(
         exercise_count += 1
         working_set_count += len(block.working_sets)
 
-    lines.append(_DIVIDER)
+    lines.append(DIVIDER)
     lines.append(f"{exercise_count} упражнения · {working_set_count} рабочих сетов")
     return "\n".join(lines)
 
@@ -129,7 +129,7 @@ def format_dashboard(dashboard) -> str:
     lines: list[str] = []
     if dashboard.week_streak >= 2:
         weeks = plural_ru(dashboard.week_streak, ("неделю", "недели", "недель"))
-        lines.append(f"🔥 Серия: {dashboard.week_streak} {weeks} подряд")
+        lines.append(f"🔥 Серия: <b>{dashboard.week_streak} {weeks}</b> подряд")
 
     days = dashboard.days_since_last
     if days == 0:
@@ -140,8 +140,8 @@ def format_dashboard(dashboard) -> str:
         last = f"{days} {plural_ru(days, ('день', 'дня', 'дней'))} назад"
 
     word = plural_ru(dashboard.this_week, ("тренировка", "тренировки", "тренировок"))
-    lines.append(f"📅 Эта неделя: {dashboard.this_week} {word} · последняя — {last}")
-    lines.append(f"🏋️ За 30 дней: {dashboard.last_30_days} · всего {dashboard.total_workouts}")
+    lines.append(f"📅 Эта неделя: <b>{dashboard.this_week} {word}</b> · последняя — {last}")
+    lines.append(f"🏋️ За 30 дней: <b>{dashboard.last_30_days}</b> · всего <b>{dashboard.total_workouts}</b>")
     return "\n".join(lines)
 
 
@@ -199,21 +199,34 @@ def build_live_session_text(
         lines = ["Добавь упражнение, чтобы начать."]
     if hint:
         if lines:
-            lines.append(_DIVIDER if body_lines else "")
+            lines.append(DIVIDER if body_lines else "")
         lines.append(hint)
     return "\n".join(lines)
 
 
-def format_pr_line(
-    exercise_name: str, kind: str, value: float, extra: float | None = None, unit: str = "kg"
-) -> str:
+def format_pr_detail(kind: str, value: float, extra: float | None = None, unit: str = "kg") -> str:
+    """A single PR line, scoped to an exercise that's already named by its surrounding header."""
     u = UNIT_LABELS.get(unit, "кг")
-    name = f"<b>{escape(exercise_name)}</b>"
     if kind == "e1rm":
-        return f"🔥 Новый рекорд e1RM в {name}: {value:.1f} {u}"
+        return f"🔥 Новый рекорд e1RM: {value:.1f} {u}"
     if kind == "reps_at_weight":
-        return f"🔥 Новый рекорд повторов в {name}: {int(value)} на {format_weight(extra or 0)} {u}"
-    return f"🔥 Новый рекорд в {name}"
+        return f"🔥 Новый рекорд повторов: {int(value)} на {format_weight(extra or 0)} {u}"
+    return "🔥 Новый рекорд"
+
+
+def build_exercise_highlights(groups: list[tuple[str, list[str], str | None]]) -> str:
+    """Render per-exercise PR/comparison call-outs grouped under each exercise name.
+
+    groups: list of (exercise_name, pr_detail_lines, comparison_line_or_None).
+    """
+    blocks = []
+    for name, pr_lines, comparison in groups:
+        lines = [f"<b>{escape(name)}</b>"]
+        lines.extend(pr_lines)
+        if comparison:
+            lines.append(comparison)
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)
 
 
 def format_progress_screen(
