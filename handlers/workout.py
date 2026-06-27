@@ -150,18 +150,12 @@ async def _back_after_cancel(bot, state: FSMContext, user):
 
 # ---------- main menu ----------
 
-_GREETING = "💪 <b>Привет, атлет!</b> Начнём тренировку?"
+_GREETING = "💪 <b>Привет, АТЛЕТ!</b> Начнём тренировку?"
 
 
 async def _menu_text(user_id: int, extra: str = "") -> str:
-    """Greeting + at-a-glance dashboard (streak, this week, totals). extra is appended after the greeting line."""
-    dates = [dt.date.fromisoformat(d) for d in await db.list_finished_workout_dates(user_id)]
-    dashboard = analytics.compute_dashboard(dates, dt.date.today())
-    text = _GREETING + extra
-    summary = formatting.format_dashboard(dashboard)
-    if summary:
-        text += f"\n\n{formatting.DIVIDER}\n\n" + summary
-    return text
+    """Greeting line. extra is appended after it (e.g. stale-workout warning)."""
+    return _GREETING + extra
 
 
 @router.message(Command("start"))
