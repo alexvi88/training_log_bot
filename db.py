@@ -150,6 +150,7 @@ async def init_db(db_path: str = config.DB_PATH) -> None:
     await _migrate_schema()
     await _seed_globals()
     await _migrate_muscle_groups()
+    await _sync_exercise_templates()
 
 
 async def _column_names(table: str) -> set[str]:
@@ -212,22 +213,64 @@ async def _seed_globals() -> None:
                 )
             await db.commit()
 
-    cur = await db.execute("SELECT COUNT(*) FROM exercises WHERE is_template = 1")
-    (count,) = await cur.fetchone()
-    if count == 0:
-        groups = await list_muscle_groups(user_id=None, global_only=True)
-        group_id_by_name = {g["name"]: g["id"] for g in groups}
-        async with _write_lock:
-            for group_name, ex_name in EXERCISE_TEMPLATES:
-                group_id = group_id_by_name.get(group_name)
-                display_name = build_display_name(ex_name)
-                await db.execute(
-                    "INSERT INTO exercises "
-                    "(user_id, name, primary_group_id, display_name, original_name, is_template, created_at) "
-                    "VALUES (NULL, ?, ?, ?, ?, 1, ?)",
-                    (ex_name, group_id, display_name, ex_name, now_iso()),
-                )
-            await db.commit()
+
+async def _sync_exercise_templates() -> None:
+    """Reconcile the global template catalog with EXERCISE_TEMPLATES (idempotent).
+
+    Templates (user_id IS NULL, is_template = 1) are a read-only catalog: picking
+    one forks an independent user-owned copy (fork_exercise_from_template), so the
+    template rows themselves are never referenced by workouts/sets and can be added,
+    renamed or removed without touching anyone's history. Running this on every
+    startup — rather than seeding once when the table is empty — is what lets an
+    edit to EXERCISE_TEMPLATES reach already-deployed databases.
+
+    Reconciliation is declarative: anything in the list but not in the DB is added,
+    any global template no longer in the list is removed, and accidental duplicates
+    (same group + name) left by older seeds are pruned down to a single row.
+    """
+    db = conn()
+    groups = await list_muscle_groups(user_id=None, global_only=True)
+    group_id_by_name = {g["name"]: g["id"] for g in groups}
+
+    # Desired catalog keyed by (group_id, lower(name)) so matching is case-insensitive.
+    desired: dict[tuple[int, str], str] = {}
+    for group_name, ex_name in EXERCISE_TEMPLATES:
+        group_id = group_id_by_name.get(group_name)
+        if group_id is None:
+            continue  # group missing (shouldn't happen for presets) — skip rather than orphan
+        desired[(group_id, ex_name.lower())] = ex_name
+
+    cur = await db.execute(
+        "SELECT id, primary_group_id, name FROM exercises WHERE is_template = 1 AND user_id IS NULL"
+    )
+    existing = await cur.fetchall()
+
+    kept: set[tuple[int, str]] = set()
+    to_delete: list[int] = []
+    for row in existing:
+        key = (row["primary_group_id"], (row["name"] or "").lower())
+        if key in desired and key not in kept:
+            kept.add(key)  # first row for this catalog entry — keep it
+        else:
+            to_delete.append(row["id"])  # obsolete entry, or a duplicate of a kept one
+
+    to_insert = [(gid, name) for (gid, _lname), name in desired.items() if (gid, _lname) not in kept]
+
+    if not to_delete and not to_insert:
+        return
+
+    async with _write_lock:
+        for ex_id in to_delete:
+            await db.execute("DELETE FROM exercises WHERE id = ?", (ex_id,))
+        for group_id, ex_name in to_insert:
+            display_name = build_display_name(ex_name)
+            await db.execute(
+                "INSERT INTO exercises "
+                "(user_id, name, primary_group_id, display_name, original_name, is_template, created_at) "
+                "VALUES (NULL, ?, ?, ?, ?, 1, ?)",
+                (ex_name, group_id, display_name, ex_name, now_iso()),
+            )
+        await db.commit()
 
 
 GROUP_MERGE_MAP = {
