@@ -10,8 +10,8 @@ import os
 from dataclasses import asdict
 from typing import Any
 
-from aiogram.fsm.storage.base import BaseStorage, StorageKey, StateType
 from aiogram.fsm.state import State
+from aiogram.fsm.storage.base import BaseStorage, StateType, StorageKey
 
 
 def _key_to_str(key: StorageKey) -> str:

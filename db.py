@@ -14,7 +14,7 @@ readers) doesn't apply to a single-connection app anyway.
 import asyncio
 import datetime as dt
 import os
-from typing import Any, Iterable, Optional
+from typing import Any, Optional
 
 import aiosqlite
 

@@ -1,5 +1,7 @@
 """Shared helper for keeping bot screens at the bottom of the chat."""
 
+from contextlib import suppress
+
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import CallbackQuery, Message
 
@@ -12,8 +14,6 @@ async def safe_edit(callback: CallbackQuery, text: str, reply_markup=None, parse
     would leave a stale screen stuck above them. Deleting and resending
     keeps every menu screen at the bottom, right where the user just tapped.
     """
-    try:
+    with suppress(TelegramBadRequest):
         await callback.message.delete()
-    except TelegramBadRequest:
-        pass
     return await callback.message.answer(text, reply_markup=reply_markup, parse_mode=parse_mode)

@@ -13,7 +13,6 @@ import db
 import formatting
 import keyboards
 import ui
-import view_builder
 from fsm import ImportFlow
 from parser import ParseError, parse_ru_date
 
@@ -132,7 +131,7 @@ def _parse_row_date(text: str) -> dt.date:
             return dt.datetime.fromisoformat(text).date()
         return dt.date.fromisoformat(text[:10])
     except ValueError:
-        raise ParseError(f"не понял дату «{text}»")
+        raise ParseError(f"не понял дату «{text}»") from None
 
 
 def _build_workout_groups(rows: list[list[str]], mapping: dict[str, int]) -> list[dict]:
@@ -154,9 +153,9 @@ def _build_workout_groups(rows: list[list[str]], mapping: dict[str, int]) -> lis
                 round_text = row[mapping["round"]].strip()
                 round_val = int(round_text) if round_text else None
         except ParseError as e:
-            raise ParseError(f"Строка {line_no}: {e.message}")
+            raise ParseError(f"Строка {line_no}: {e.message}") from None
         except (ValueError, IndexError):
-            raise ParseError(f"Строка {line_no}: не разобрал вес/повторы")
+            raise ParseError(f"Строка {line_no}: не разобрал вес/повторы") from None
 
         if not name:
             raise ParseError(f"Строка {line_no}: пустое название упражнения")

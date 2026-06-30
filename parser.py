@@ -75,7 +75,7 @@ def parse_ru_date(text: str) -> dt.date:
     try:
         date = dt.date(year, month, day)
     except ValueError:
-        raise ParseError("Такой даты не существует")
+        raise ParseError("Такой даты не существует") from None
     if date > dt.date.today():
         raise ParseError("Дата в будущем — для прошлой тренировки нужна дата не позже сегодня")
     return date
