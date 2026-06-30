@@ -102,7 +102,6 @@ async def hist_card(callback: CallbackQuery, state: FSMContext):
     png = charts.render_workout_card(title, body, footer, note)
     await callback.message.answer_photo(
         BufferedInputFile(png, filename="workout.png"),
-        caption="Готово — можно переслать друзьям 💪",
     )
     await callback.answer()
 
