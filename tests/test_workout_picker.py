@@ -72,3 +72,60 @@ async def test_pick_page_first_page_has_no_back_button(fresh_db, user_id):
     ]
     assert "pick:page:-1" not in callback_datas
     assert "pick:page:1" in callback_datas  # next-page button still present
+
+
+async def test_finishing_last_exercise_suggests_what_came_next_last_time(fresh_db, user_id):
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    bench = await db.create_exercise(user_id, "Bench press", group_id)
+    triceps = await db.create_exercise(user_id, "Triceps pushdown", group_id)
+
+    # Prior finished workout: bench, then triceps.
+    prev_workout = await db.create_workout(user_id)
+    b1 = await db.create_block(prev_workout, "single")
+    await db.add_block_exercise(b1, bench, 0)
+    b2 = await db.create_block(prev_workout, "single")
+    await db.add_block_exercise(b2, triceps, 0)
+    await db.finish_workout(prev_workout)
+
+    # Current workout: bench just logged and being finished, nothing else open.
+    workout_id = await db.create_workout(user_id)
+    block_id = await db.create_block(workout_id, "single")
+    await db.add_block_exercise(block_id, bench, 0)
+    await db.add_set(block_id, bench, 1, 0, 100, 8)
+
+    state = await _make_state(
+        user_id, open_exercises=[bench], open_blocks={bench: block_id}, active_exercise_id=bench,
+    )
+    await state.update_data(workout_id=workout_id)
+    await state.set_state(WorkoutFlow.logging_set)
+    callback = _make_callback(user_id, "live:finish_exercise")
+
+    await workout.live_finish_exercise(callback, state)
+
+    sent_text = callback.bot.send_message.await_args.kwargs["text"]
+    assert "Triceps pushdown" in sent_text
+    kb = callback.bot.send_message.await_args.kwargs["reply_markup"]
+    callback_datas = [b.callback_data for row in kb.inline_keyboard for b in row]
+    assert f"live:suggest:{triceps}" in callback_datas
+
+
+async def test_tapping_suggestion_jumps_straight_into_logging_it(fresh_db, user_id):
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    triceps = await db.create_exercise(user_id, "Triceps pushdown", group_id)
+
+    workout_id = await db.create_workout(user_id)
+    state = await _make_state(
+        user_id, open_exercises=[], open_blocks={}, active_exercise_id=None,
+    )
+    await state.update_data(workout_id=workout_id)
+    await state.set_state(WorkoutFlow.idle)
+    callback = _make_callback(user_id, f"live:suggest:{triceps}")
+
+    await workout.live_pick_suggested(callback, state)
+
+    data = await state.get_data()
+    assert data["active_exercise_id"] == triceps
+    assert data["open_exercises"] == [triceps]
+    assert await state.get_state() == WorkoutFlow.logging_set.state
