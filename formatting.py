@@ -53,6 +53,7 @@ class ExerciseBlockView:
     formula: str = "epley"
     type: Literal["single"] = "single"
     exercise_id: int | None = None
+    prev_sets: list[tuple[float, int]] | None = None  # sets from the previous session, if any
 
     @property
     def tonnage(self) -> float:
@@ -78,6 +79,9 @@ BlockView = ExerciseBlockView
 def _render_single_block(block: ExerciseBlockView, show_extra: bool) -> list[str]:
     label = f"{escape(block.exercise_name)} [{block.group_name.upper()}]"
     lines = [f"<b>{label}</b>"]
+    if block.prev_sets:
+        prev_str = ", ".join(format_set(w, r) for w, r in block.prev_sets)
+        lines.append(f"  <i>пред: {prev_str}</i>")
     lines.extend(f"  • {format_set(w, r)}" for w, r in block.sets)
     if show_extra and block.sets:
         if block.is_bodyweight:

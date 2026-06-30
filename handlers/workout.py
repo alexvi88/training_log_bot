@@ -702,7 +702,9 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
     finished_at = f"{data['bf_date']}T12:00:00" if is_backfill else None
     await db.finish_workout(workout_id, note, finished_at=finished_at)
 
-    blocks = await view_builder.build_block_views(workout_id, formula)
+    blocks = await view_builder.build_block_views(
+        workout_id, formula, previous_before=workout["started_at"]
+    )
     summary = formatting.build_workout_summary(
         started_at, blocks, note, show_extra_stats=bool(user["show_extra_stats"]),
     )
