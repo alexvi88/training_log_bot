@@ -7,7 +7,7 @@ from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message, ReactionTypeEmoji
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message, ReactionTypeEmoji
 
 import analytics
 import config
@@ -71,9 +71,34 @@ async def _refresh_live(bot, state: FSMContext, user, workout_id: int, hint, key
     await state.update_data(live_message_id=sent.message_id)
 
 
-def _idle_keyboard(data: dict | None = None):
-    has_planned = bool((data or {}).get("planned_blocks"))
-    return keyboards.exercise_picker_entry_keyboard(has_planned=has_planned)
+async def _suggested_next_exercise(user_id: int, last_finished_id: int | None):
+    """What the user did right after `last_finished_id` last time, for a one-tap suggestion."""
+    if last_finished_id is None:
+        return None
+    workout_id = await db.find_last_finished_workout_with_exercise(user_id, last_finished_id)
+    if workout_id is None:
+        return None
+    nxt = await db.get_next_exercise_in_workout(workout_id, last_finished_id)
+    if nxt is None or nxt["exercise_id"] == last_finished_id:
+        return None
+    ex = await db.get_exercise(nxt["exercise_id"])
+    if ex is None or ex["is_archived"]:
+        return None
+    return ex["id"], ex["display_name"]
+
+
+async def _idle_view(data: dict, user_id: int) -> tuple[str | None, InlineKeyboardMarkup]:
+    has_planned = bool(data.get("planned_blocks"))
+    suggested = await _suggested_next_exercise(user_id, data.get("last_finished_exercise_id"))
+    hint = f"💡 В прошлый раз дальше было: <b>{escape(suggested[1])}</b>" if suggested else None
+    kb = keyboards.exercise_picker_entry_keyboard(has_planned=has_planned, suggested=suggested)
+    return hint, kb
+
+
+async def _enter_idle_screen(bot, state: FSMContext, user, workout_id: int):
+    data = await state.get_data()
+    hint, kb = await _idle_view(data, user["telegram_id"])
+    await _refresh_live(bot, state, user, workout_id, hint, kb)
 
 
 async def _delete_message(message: Message):
@@ -143,7 +168,7 @@ async def _back_after_cancel(bot, state: FSMContext, user):
         await _render_logging_screen(bot, state, user)
     else:
         await state.set_state(WorkoutFlow.idle)
-        await _refresh_live(bot, state, user, data["workout_id"], None, _idle_keyboard(data))
+        await _enter_idle_screen(bot, state, user, data["workout_id"])
 
 
 # ---------- main menu ----------
@@ -282,7 +307,7 @@ async def _enter_live(callback: CallbackQuery, state: FSMContext, workout_id: in
     if open_exercises:
         await _render_logging_screen(callback.bot, state, user)
     else:
-        await _refresh_live(callback.bot, state, user, workout_id, None, _idle_keyboard(await state.get_data()))
+        await _enter_idle_screen(callback.bot, state, user, workout_id)
 
 
 # ---------- picker: add an exercise (either to start, or alongside what's already open) ----------
@@ -536,7 +561,7 @@ async def live_undo(callback: CallbackQuery, state: FSMContext):
         else:
             await state.update_data(open_exercises=[], open_blocks={}, active_exercise_id=None)
             await state.set_state(WorkoutFlow.idle)
-            await _refresh_live(callback.bot, state, user, data["workout_id"], None, _idle_keyboard(data))
+            await _enter_idle_screen(callback.bot, state, user, data["workout_id"])
             return
 
     await _render_logging_screen(callback.bot, state, user)
@@ -557,10 +582,18 @@ async def live_finish_exercise(callback: CallbackQuery, state: FSMContext):
         )
         await _render_logging_screen(callback.bot, state, user)
     else:
-        await state.update_data(open_exercises=[], open_blocks={}, active_exercise_id=None)
+        await state.update_data(
+            open_exercises=[], open_blocks={}, active_exercise_id=None, last_finished_exercise_id=active,
+        )
         await state.set_state(WorkoutFlow.idle)
-        await _refresh_live(callback.bot, state, user, data["workout_id"], None, _idle_keyboard(data))
+        await _enter_idle_screen(callback.bot, state, user, data["workout_id"])
     await callback.answer()
+
+
+@router.callback_query(StateFilter(WorkoutFlow.idle), F.data.startswith("live:suggest:"))
+async def live_pick_suggested(callback: CallbackQuery, state: FSMContext):
+    ex_id = int(callback.data.split(":")[2])
+    await _on_exercise_chosen(callback, state, ex_id)
 
 
 @router.callback_query(StateFilter(WorkoutFlow.idle), F.data == "live:next_planned")

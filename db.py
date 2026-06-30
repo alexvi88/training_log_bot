@@ -908,6 +908,44 @@ async def list_exercise_ids_for_workout(workout_id: int) -> list[int]:
     return [r["exercise_id"] for r in rows]
 
 
+async def find_last_finished_workout_with_exercise(user_id: int, exercise_id: int) -> Optional[int]:
+    """Most recent finished workout that included this exercise, if any."""
+    cur = await conn().execute(
+        "SELECT wb.workout_id FROM block_exercises be "
+        "JOIN workout_blocks wb ON wb.id = be.block_id "
+        "JOIN workouts w ON w.id = wb.workout_id "
+        "WHERE be.exercise_id = ? AND w.user_id = ? AND w.status = 'finished' "
+        "ORDER BY w.started_at DESC LIMIT 1",
+        (exercise_id, user_id),
+    )
+    row = await cur.fetchone()
+    return row["workout_id"] if row else None
+
+
+async def get_next_exercise_in_workout(workout_id: int, exercise_id: int) -> Optional[aiosqlite.Row]:
+    """The exercise from the block right after `exercise_id`'s block, by block creation order.
+
+    Blocks are created in the order exercises were picked during the workout
+    (see create_block), so the next block's exercise is what the user did
+    right after this one last time.
+    """
+    blocks = await list_blocks_for_workout(workout_id)
+    after_order = None
+    for block in blocks:
+        block_exercises = await get_block_exercises(block["id"])
+        if any(be["exercise_id"] == exercise_id for be in block_exercises):
+            after_order = block["order_index"]
+    if after_order is None:
+        return None
+    for block in blocks:
+        if block["order_index"] <= after_order:
+            continue
+        block_exercises = await get_block_exercises(block["id"])
+        if block_exercises:
+            return block_exercises[0]
+    return None
+
+
 # ---------- export ----------
 
 async def export_rows_for_user(user_id: int) -> list[aiosqlite.Row]:

@@ -76,3 +76,48 @@ async def test_search_exercises_respects_limit(fresh_db, user_id):
 
     matches = await db.search_exercises(user_id, "Exercise", limit=3)
     assert len(matches) == 3
+
+
+async def test_get_next_exercise_in_workout_returns_following_block(fresh_db, user_id):
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    bench = await db.create_exercise(user_id, "Bench press", group_id)
+    triceps = await db.create_exercise(user_id, "Triceps pushdown", group_id)
+
+    workout_id = await db.create_workout(user_id)
+    b1 = await db.create_block(workout_id, "single")
+    await db.add_block_exercise(b1, bench, 0)
+    b2 = await db.create_block(workout_id, "single")
+    await db.add_block_exercise(b2, triceps, 0)
+    await db.finish_workout(workout_id)
+
+    found_workout = await db.find_last_finished_workout_with_exercise(user_id, bench)
+    assert found_workout == workout_id
+
+    nxt = await db.get_next_exercise_in_workout(workout_id, bench)
+    assert nxt["exercise_id"] == triceps
+
+
+async def test_get_next_exercise_in_workout_none_when_last_exercise(fresh_db, user_id):
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    bench = await db.create_exercise(user_id, "Bench press", group_id)
+
+    workout_id = await db.create_workout(user_id)
+    b1 = await db.create_block(workout_id, "single")
+    await db.add_block_exercise(b1, bench, 0)
+    await db.finish_workout(workout_id)
+
+    assert await db.get_next_exercise_in_workout(workout_id, bench) is None
+
+
+async def test_find_last_finished_workout_ignores_active_workout(fresh_db, user_id):
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    bench = await db.create_exercise(user_id, "Bench press", group_id)
+
+    active_id = await db.create_workout(user_id)
+    b1 = await db.create_block(active_id, "single")
+    await db.add_block_exercise(b1, bench, 0)
+
+    assert await db.find_last_finished_workout_with_exercise(user_id, bench) is None
