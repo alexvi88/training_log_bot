@@ -18,6 +18,25 @@ def _key_to_str(key: StorageKey) -> str:
     return json.dumps(asdict(key), sort_keys=True)
 
 
+def _restore_int_keys(obj: Any) -> Any:
+    """Undo JSON's stringification of dict keys for FSM data like ``{exercise_id: block_id}``.
+
+    Handlers build these dicts with int keys (exercise/block ids) and look them up
+    the same way, but ``json.dump`` silently turns those keys into strings. Without
+    this, every dict survives a save/load round-trip (e.g. a bot restart) with keys
+    that no longer match an int lookup, so set logging breaks for any in-progress
+    workout.
+    """
+    if isinstance(obj, dict):
+        return {
+            (int(k) if k.lstrip("-").isdigit() else k): _restore_int_keys(v)
+            for k, v in obj.items()
+        }
+    if isinstance(obj, list):
+        return [_restore_int_keys(v) for v in obj]
+    return obj
+
+
 class JSONFileStorage(BaseStorage):
     def __init__(self, path: str):
         self._path = path
@@ -26,7 +45,7 @@ class JSONFileStorage(BaseStorage):
     def _load(self) -> dict[str, dict[str, Any]]:
         if os.path.exists(self._path):
             with open(self._path, "r") as f:
-                return json.load(f)
+                return _restore_int_keys(json.load(f))
         return {}
 
     def _save(self) -> None:
