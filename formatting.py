@@ -101,16 +101,9 @@ def build_workout_summary(
     if note:
         lines.append(f"📝 {note}")
 
-    exercise_count = 0
-    set_count = 0
-
     for block in blocks:
         lines.extend(_render_single_block(block, show_extra_stats))
-        exercise_count += 1
-        set_count += len(block.sets)
 
-    lines.append(DIVIDER)
-    lines.append(f"{exercise_count} упражнения · {set_count} сетов")
     return "\n".join(lines)
 
 

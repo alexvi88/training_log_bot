@@ -692,7 +692,7 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
         comparison_line = None
         if prior_sessions:
             comparison = analytics.compare_to_previous_session(prior_sessions + [new_session])
-            if comparison and not new_session.is_bodyweight_mode:
+            if comparison and not new_session.is_bodyweight_mode and comparison.e1rm_delta > 0:
                 comparison_line = formatting.format_comparison_line(comparison.e1rm_delta, unit=user["unit"])
 
         if pr_details or comparison_line:
