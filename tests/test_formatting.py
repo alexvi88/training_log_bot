@@ -215,3 +215,24 @@ def test_format_progress_screen_skips_sessions_without_sets():
     text = formatting.format_progress_screen("Жим лёжа", sessions, None, None, records)
     assert "01.06.2026" not in text
     assert "08.06.2026" in text
+
+
+def test_format_progress_screen_newest_session_first():
+    sessions = [_weighted_session(i, f"2026-06-{i:02d}T10:00:00", [(100.0, 8)]) for i in range(1, 4)]
+    records = analytics.PersonalRecords()
+    text = formatting.format_progress_screen("Жим лёжа", sessions, None, None, records)
+    assert text.index("03.06.2026") < text.index("02.06.2026") < text.index("01.06.2026")
+
+
+def test_format_progress_screen_shows_count_when_history_exceeds_limit():
+    sessions = [_weighted_session(i, f"2026-06-{i:02d}T10:00:00", [(100.0, 8)]) for i in range(1, 11)]
+    records = analytics.PersonalRecords()
+    text = formatting.format_progress_screen("Жим лёжа", sessions, None, None, records, limit=2)
+    assert "Показано 2 из 10 тренировок" in text
+
+
+def test_format_progress_screen_no_count_line_when_history_fits():
+    sessions = [_weighted_session(i, f"2026-06-{i:02d}T10:00:00", [(100.0, 8)]) for i in range(1, 4)]
+    records = analytics.PersonalRecords()
+    text = formatting.format_progress_screen("Жим лёжа", sessions, None, None, records, limit=8)
+    assert "Показано" not in text
