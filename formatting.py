@@ -229,10 +229,10 @@ def format_progress_screen(
         return "\n".join(lines)
 
     is_bw = sessions[-1].is_bodyweight_mode
-    for s in sessions[-limit:]:
+    window = [s for s in sessions if s.sets]
+    shown = window[-limit:]
+    for s in reversed(shown):
         d = dt.datetime.fromisoformat(s.started_at)
-        if not s.sets:
-            continue
         sets_str = ", ".join(format_set(st.weight, st.reps) for st in s.sets)
         lines.append(f"<b>{format_date_ru(d)}</b>")
         lines.append(sets_str)
@@ -240,6 +240,11 @@ def format_progress_screen(
             lines.append(f"всего повторов {s.total_reps}")
         else:
             lines.append(f"e1RM {s.top_e1rm:.1f}")
+        lines.append("")
+
+    if len(window) > len(shown):
+        n = plural_ru(len(window), ("тренировка", "тренировки", "тренировок"))
+        lines.append(f"Показано {len(shown)} из {len(window)} {n}")
         lines.append("")
 
     if trend is not None:
