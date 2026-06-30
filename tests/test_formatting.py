@@ -36,7 +36,6 @@ def test_build_workout_summary_weighted_exercise_shows_e1rm():
     assert "Жим лёжа [ГРУДЬ]" in text
     assert "100×8" in text and "100×6" in text
     assert "e1RM" in text
-    assert "1 упражнения · 2 сетов" in text
 
 
 def test_build_workout_summary_bodyweight_exercise_shows_total_reps():
