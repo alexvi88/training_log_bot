@@ -66,7 +66,9 @@ async def show_history_item(callback: CallbackQuery, workout_id: int) -> bool:
         await callback.answer("Тренировка не найдена", show_alert=True)
         return False
     user = await db.get_user(callback.from_user.id)
-    blocks = await view_builder.build_block_views(workout_id, user["e1rm_formula"])
+    blocks = await view_builder.build_block_views(
+        workout_id, user["e1rm_formula"], previous_before=workout["started_at"]
+    )
     started = dt.datetime.fromisoformat(workout["started_at"])
     text = formatting.build_workout_summary(
         started, blocks, workout["note"], show_extra_stats=bool(user["show_extra_stats"]),

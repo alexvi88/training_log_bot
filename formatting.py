@@ -53,6 +53,7 @@ class ExerciseBlockView:
     formula: str = "epley"
     type: Literal["single"] = "single"
     exercise_id: int | None = None
+    prev_sets: list[tuple[float, int]] | None = None  # sets from the previous session, if any
 
     @property
     def tonnage(self) -> float:
@@ -84,6 +85,9 @@ def _render_single_block(block: ExerciseBlockView, show_extra: bool) -> list[str
             lines.append(f"  ↳ повторов всего {sum(r for _, r in block.sets)}")
         else:
             lines.append(f"  ↳ e1RM {block.top_e1rm:.1f}")
+    if block.prev_sets:
+        prev_str = ", ".join(format_set(w, r) for w, r in block.prev_sets)
+        lines.append(f"  [прошлая: {prev_str}]")
     return lines
 
 
