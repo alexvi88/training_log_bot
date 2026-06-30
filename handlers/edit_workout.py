@@ -1,6 +1,7 @@
 """§A2 — edit a past (finished) workout: add/remove/edit sets, change date."""
 
 import datetime as dt
+from contextlib import suppress
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
@@ -19,10 +20,8 @@ router = Router(name="edit_workout")
 
 
 async def _delete_message(message: Message):
-    try:
+    with suppress(TelegramBadRequest):
         await message.delete()
-    except TelegramBadRequest:
-        pass
 
 
 async def _edit_screen_payload(workout_id: int) -> tuple[str, InlineKeyboardMarkup]:

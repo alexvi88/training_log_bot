@@ -112,15 +112,12 @@ def linear_trend(points: list[tuple[dt.datetime, float]]) -> Optional[Trend]:
     n = len(xs)
     mean_x = sum(xs) / n
     mean_y = sum(ys) / n
-    num = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys))
+    num = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys, strict=True))
     den = sum((x - mean_x) ** 2 for x in xs)
     if den == 0:
         return Trend(slope_per_week=0.0, direction="flat", intercept=mean_y)
     slope = num / den
-    if abs(slope) < 1e-6:
-        direction = "flat"
-    else:
-        direction = "up" if slope > 0 else "down"
+    direction = "flat" if abs(slope) < 1e-6 else ("up" if slope > 0 else "down")
     intercept = mean_y - slope * mean_x
     return Trend(slope_per_week=slope, direction=direction, intercept=intercept)
 

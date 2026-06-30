@@ -1,0 +1,37 @@
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "W",   # pycodestyle warnings
+    "B",   # flake8-bugbear
+    "I",   # isort
+    "SIM", # flake8-simplify
+]
+ignore = [
+    "E501", # line length: pre-existing code runs well past 120 in places; not worth a reformat-only diff
+]
+# "UP" (pyupgrade) is intentionally not enabled: the codebase mixes
+# `Optional[X]`/`X | None` styles throughout, and turning that on would
+# force a sweeping reformat-only diff unrelated to CI/test work.
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011"]
+
+[tool.coverage.run]
+branch = true
+source = ["."]
+omit = ["tests/*"]
+
+[tool.coverage.report]
+# Pure-logic modules (parser/analytics/formatting/fsm_storage/db) are unit
+# tested directly; the aiogram handlers/main.py are thin Telegram-API glue
+# that would need heavy mocking to cover meaningfully, so the bar tracks the
+# current baseline as a regression guard rather than a 100% target.
+fail_under = 33
+exclude_also = [
+    "if __name__ == .__main__.:",
+]

@@ -1,6 +1,7 @@
 """Workout lifecycle: start, add exercises, switch between them, log sets, finish."""
 
 import datetime as dt
+from contextlib import suppress
 from html import escape
 
 from aiogram import F, Router
@@ -63,10 +64,8 @@ async def _refresh_live(bot, state: FSMContext, user, workout_id: int, hint, key
     if data.get("is_backfill") and data.get("bf_date"):
         date = dt.date.fromisoformat(data["bf_date"])
         text = f"📅 {formatting.format_date_ru(date)}\n\n{text}"
-    try:
+    with suppress(TelegramBadRequest):
         await bot.delete_message(chat_id=chat_id, message_id=data["live_message_id"])
-    except TelegramBadRequest:
-        pass
     sent = await bot.send_message(chat_id=chat_id, text=text, reply_markup=keyboard, parse_mode="HTML")
     await state.update_data(live_message_id=sent.message_id)
 
@@ -77,20 +76,16 @@ def _idle_keyboard(data: dict | None = None):
 
 
 async def _delete_message(message: Message):
-    try:
+    with suppress(TelegramBadRequest):
         await message.delete()
-    except TelegramBadRequest:
-        pass
 
 
 async def _react_ok(bot, message: Message):
-    try:
+    with suppress(TelegramBadRequest):
         await bot.set_message_reaction(
             chat_id=message.chat.id, message_id=message.message_id,
             reaction=[ReactionTypeEmoji(emoji="✅")],
         )
-    except TelegramBadRequest:
-        pass
 
 
 async def _log_one(block_id: int, exercise_id: int, weight: float, reps: int):
