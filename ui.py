@@ -3,7 +3,7 @@
 from contextlib import suppress
 
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import BufferedInputFile, CallbackQuery, Message
 
 
 async def safe_edit(callback: CallbackQuery, text: str, reply_markup=None, parse_mode=None) -> Message:
@@ -17,3 +17,27 @@ async def safe_edit(callback: CallbackQuery, text: str, reply_markup=None, parse
     with suppress(TelegramBadRequest):
         await callback.message.delete()
     return await callback.message.answer(text, reply_markup=reply_markup, parse_mode=parse_mode)
+
+
+async def safe_edit_photo(
+    callback: CallbackQuery,
+    photo: bytes,
+    filename: str,
+    caption: str,
+    reply_markup=None,
+    parse_mode=None,
+) -> Message:
+    """Same idea as safe_edit, but for screens whose current message is a photo.
+
+    Deletes whatever screen the callback's button was attached to (text or
+    photo) and sends the new chart as a fresh message, so repeated navigation
+    doesn't leave a trail of stale photos behind.
+    """
+    with suppress(TelegramBadRequest):
+        await callback.message.delete()
+    return await callback.message.answer_photo(
+        BufferedInputFile(photo, filename=filename),
+        caption=caption,
+        reply_markup=reply_markup,
+        parse_mode=parse_mode,
+    )
