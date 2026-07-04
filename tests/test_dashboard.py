@@ -70,8 +70,7 @@ def test_format_dashboard_hides_short_streak():
     )
     text = formatting.format_dashboard(dash)
     assert "Серия" not in text  # streak < 2 is not motivating, hidden
-    assert "вчера" in text
-    assert "всего <b>3</b>" in text
+    assert "За 30 дней: <b>3 тренировки</b>" in text
 
 
 def test_format_dashboard_shows_streak_and_plurals():
@@ -80,8 +79,8 @@ def test_format_dashboard_shows_streak_and_plurals():
     )
     text = formatting.format_dashboard(dash)
     assert "🔥 Серия: <b>5 недель</b> подряд" in text
-    assert "<b>2 тренировки</b>" in text
-    assert "сегодня" in text
+    assert "Эта неделя: <b>2 тренировки</b>" in text
+    assert "За 30 дней: <b>8 тренировок</b>" in text
 
 
 def test_plural_ru():

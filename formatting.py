@@ -121,17 +121,11 @@ def format_dashboard(dashboard) -> str:
         weeks = plural_ru(dashboard.week_streak, ("неделю", "недели", "недель"))
         lines.append(f"🔥 Серия: <b>{dashboard.week_streak} {weeks}</b> подряд")
 
-    days = dashboard.days_since_last
-    if days == 0:
-        last = "сегодня"
-    elif days == 1:
-        last = "вчера"
-    else:
-        last = f"{days} {plural_ru(days, ('день', 'дня', 'дней'))} назад"
+    week_word = plural_ru(dashboard.this_week, ("тренировка", "тренировки", "тренировок"))
+    lines.append(f"📅 Эта неделя: <b>{dashboard.this_week} {week_word}</b>")
 
-    word = plural_ru(dashboard.this_week, ("тренировка", "тренировки", "тренировок"))
-    lines.append(f"📅 Эта неделя: <b>{dashboard.this_week} {word}</b> · последняя — {last}")
-    lines.append(f"🏋️ За 30 дней: <b>{dashboard.last_30_days}</b> · всего <b>{dashboard.total_workouts}</b>")
+    month_word = plural_ru(dashboard.last_30_days, ("тренировка", "тренировки", "тренировок"))
+    lines.append(f"🏋️ За 30 дней: <b>{dashboard.last_30_days} {month_word}</b>")
     return "\n".join(lines)
 
 
