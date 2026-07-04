@@ -60,9 +60,10 @@ async def test_typing_in_exercise_picker_searches_instead_of_being_ignored(fresh
     await workout.pick_exercise_search(message, state)
 
     message.delete.assert_awaited_once()
-    sent_text = message.bot.send_message.await_args.kwargs["text"]
-    assert "Bench press" in sent_text
-    assert "Triceps" not in sent_text
+    kb = message.bot.send_message.await_args.kwargs["reply_markup"]
+    button_texts = [b.text for row in kb.inline_keyboard for b in row]
+    assert "Bench press" in button_texts
+    assert not any("Triceps" in t for t in button_texts)
 
 
 async def test_typing_no_match_in_exercise_picker_offers_to_create(fresh_db, user_id):

@@ -439,10 +439,7 @@ async def _picker_screen_exercises(callback: CallbackQuery, state: FSMContext):
         page=page, has_next=has_next,
     )
     if exercises:
-        names = [escape(ex["display_name"]) for ex in exercises]
         hint = "Выбери упражнение или напиши название для поиска:"
-        if not keyboards.use_named_buttons(names):
-            hint += "\n" + keyboards.numbered_list(names)
     else:
         hint = "У тебя пока нет своих упражнений здесь — добавь новое или напиши название для поиска:"
     await state.update_data(picker_stage="exercises")
@@ -475,8 +472,7 @@ async def pick_exercise_search(message: Message, state: FSMContext):
     results = await db.search_exercises(message.from_user.id, query)
     kb = keyboards.exercises_keyboard(results, prefix="pick", back_cb="back", show_new_button=group_id is not None)
     if results:
-        names = [escape(ex["display_name"]) for ex in results]
-        hint = f"Результаты поиска «{escape(query)}»:\n" + keyboards.numbered_list(names)
+        hint = f"Результаты поиска «{escape(query)}»:"
     else:
         hint = f"Ничего не нашлось по «{escape(query)}»."
         if group_id is not None:
@@ -509,10 +505,6 @@ async def pick_templates(callback: CallbackQuery, state: FSMContext):
     templates = await db.list_templates_in_group(data["pending_group_id"])
     kb = keyboards.templates_keyboard(templates, prefix="pick", back_cb="newback")
     hint = "Шаблоны — выбери подходящий:"
-    if templates:
-        names = [escape(t["display_name"]) for t in templates]
-        if not keyboards.use_named_buttons(names):
-            hint += "\n" + keyboards.numbered_list(names)
     await _refresh_live(callback.bot, state, user, data["workout_id"], hint, kb)
     await callback.answer()
 

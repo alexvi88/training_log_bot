@@ -73,7 +73,7 @@ async def _show_exercise_list(callback: CallbackQuery, state: FSMContext):
     has_next = offset + len(exercises) < total
     b = InlineKeyboardBuilder()
     items = [(f"exm:ex:{ex['id']}", ex["display_name"]) for ex in exercises]
-    for row in keyboards.numbered_buttons(items):
+    for row in keyboards.named_buttons(items):
         b.row(*row)
     nav = []
     if page > 0:
@@ -90,10 +90,7 @@ async def _show_exercise_list(callback: CallbackQuery, state: FSMContext):
     title = group["name"] if group is not None else "Все упражнения"
     title_html = f"<b>{escape(title.upper())}</b>"
     if exercises:
-        names = [escape(ex["display_name"]) for ex in exercises]
         text = f"{title_html}\n\nТвои упражнения:"
-        if not keyboards.use_named_buttons(names):
-            text += "\n" + keyboards.numbered_list(names)
     else:
         text = f"{title_html}\n\nПока нет своих упражнений в этой группе."
     await ui.safe_edit(callback, text, reply_markup=b.as_markup(), parse_mode="HTML")
@@ -122,10 +119,7 @@ async def exm_templates(callback: CallbackQuery, state: FSMContext):
     templates = await db.list_templates_in_group(data["exm_group_id"])
     kb = keyboards.templates_keyboard(templates, prefix="exm", back_cb="newback")
     if templates:
-        names = [t["display_name"] for t in templates]
         text = "Шаблоны — выбери подходящий:"
-        if not keyboards.use_named_buttons(names):
-            text += "\n" + keyboards.numbered_list(names)
     else:
         text = "Для этой группы пока нет шаблонов."
     await ui.safe_edit(callback, text, reply_markup=kb)
@@ -250,14 +244,13 @@ async def exm_search_text(message: Message, state: FSMContext):
     results = await db.search_exercises(message.from_user.id, query)
     b = InlineKeyboardBuilder()
     items = [(f"exm:ex:{ex['id']}", ex["display_name"]) for ex in results]
-    for row in keyboards.numbered_buttons(items):
+    for row in keyboards.named_buttons(items):
         b.row(*row)
     if group_id is not None:
         b.row(InlineKeyboardButton(text="➕ Новое упражнение", callback_data="exm:newex"))
     b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="exm:backlist"))
     if results:
-        names = [escape(ex["display_name"]) for ex in results]
-        text = f"Результаты поиска «{escape(query)}»:\n" + keyboards.numbered_list(names)
+        text = f"Результаты поиска «{escape(query)}»:"
     else:
         text = f"Ничего не нашлось по «{escape(query)}»."
     await message.answer(text, reply_markup=b.as_markup(), parse_mode="HTML")
