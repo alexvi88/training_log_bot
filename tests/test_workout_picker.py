@@ -39,7 +39,7 @@ async def _make_state(user_id: int, **extra_data) -> FSMContext:
 async def test_pick_page_advances_to_second_page_and_keeps_remainder(fresh_db, user_id):
     db = fresh_db
     group_id = await db.create_muscle_group(user_id, "Грудь")
-    for i in range(10):
+    for i in range(14):
         await db.create_exercise(user_id, f"Exercise {i:02d}", group_id)
 
     state = await _make_state(user_id, pick_page=0)
@@ -58,7 +58,7 @@ async def test_pick_page_advances_to_second_page_and_keeps_remainder(fresh_db, u
 async def test_pick_page_first_page_has_no_back_button(fresh_db, user_id):
     db = fresh_db
     group_id = await db.create_muscle_group(user_id, "Грудь")
-    for i in range(10):
+    for i in range(14):
         await db.create_exercise(user_id, f"Exercise {i:02d}", group_id)
 
     state = await _make_state(user_id, pick_page=1)
