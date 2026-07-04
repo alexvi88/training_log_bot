@@ -103,7 +103,9 @@ def build_workout_summary(
     if note:
         lines.append(f"📝 {note}")
 
-    for block in blocks:
+    for i, block in enumerate(blocks):
+        if i > 0:
+            lines.append("")
         lines.extend(_render_single_block(block, show_extra_stats, italic_prev))
 
     return "\n".join(lines)
