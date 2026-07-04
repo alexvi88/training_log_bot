@@ -103,7 +103,9 @@ def build_workout_summary(
     if note:
         lines.append(f"📝 {note}")
 
-    for block in blocks:
+    for i, block in enumerate(blocks):
+        if i > 0:
+            lines.append("")
         lines.extend(_render_single_block(block, show_extra_stats, italic_prev))
 
     return "\n".join(lines)
@@ -119,13 +121,13 @@ def format_dashboard(dashboard) -> str:
     lines: list[str] = []
     if dashboard.week_streak >= 2:
         weeks = plural_ru(dashboard.week_streak, ("неделю", "недели", "недель"))
-        lines.append(f"🔥 Серия: <b>{dashboard.week_streak} {weeks}</b> подряд")
+        lines.append(f"Серия: {dashboard.week_streak} {weeks} подряд")
 
     week_word = plural_ru(dashboard.this_week, ("тренировка", "тренировки", "тренировок"))
-    lines.append(f"📅 Эта неделя: <b>{dashboard.this_week} {week_word}</b>")
+    lines.append(f"Эта неделя: {dashboard.this_week} {week_word}")
 
     month_word = plural_ru(dashboard.last_30_days, ("тренировка", "тренировки", "тренировок"))
-    lines.append(f"🏋️ За 30 дней: <b>{dashboard.last_30_days} {month_word}</b>")
+    lines.append(f"Последние 30 дней: {dashboard.last_30_days} {month_word}")
     return "\n".join(lines)
 
 
@@ -231,9 +233,7 @@ def format_progress_screen(
     if trend is not None:
         arrow = "↑" if trend.direction == "up" else ("↓" if trend.direction == "down" else "→")
         metric = "повторы" if is_bw else "e1RM"
-        lines.append(f"Тренд {metric}: {arrow} {trend.slope_per_week:+.2f}/нед")
-    if comparison is not None:
-        lines.append(format_comparison_line(comparison.e1rm_delta, unit))
+        lines.append(f"Тренд {metric}: {arrow}{trend.slope_per_week:+.2f}/нед")
 
     if is_bw:
         lines.append(f"Рекорд повторов в сете: {records.max_reps_at_weight and max(records.max_reps_at_weight.values())}")
