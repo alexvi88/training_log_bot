@@ -239,7 +239,7 @@ def format_progress_screen(
         metric = "повторы" if is_bw else "e1RM"
         lines.append(f"Тренд {metric}: {arrow} {trend.slope_per_week:+.2f}/нед")
     if comparison is not None:
-        lines.append(format_comparison_line(comparison.e1rm_delta))
+        lines.append(format_comparison_line(comparison.e1rm_delta, unit))
 
     if is_bw:
         lines.append(f"Рекорд повторов в сете: {records.max_reps_at_weight and max(records.max_reps_at_weight.values())}")
