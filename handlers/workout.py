@@ -172,7 +172,15 @@ _GREETING = "💪 <b>Привет, АТЛЕТ!</b> Начнём трениров
 
 
 async def _menu_text(user_id: int) -> str:
-    return _GREETING
+    """Greeting + dashboard stats (streak, this-week, 30-day counts)."""
+    dates = await db.list_finished_workout_dates(user_id)
+    dashboard = analytics.compute_dashboard(
+        (dt.date.fromisoformat(d) for d in dates), dt.date.today()
+    )
+    stats = formatting.format_dashboard(dashboard)
+    if not stats:
+        return _GREETING
+    return f"{_GREETING}\n\n{stats}"
 
 
 @router.message(Command("start"))
