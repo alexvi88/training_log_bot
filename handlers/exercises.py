@@ -85,7 +85,7 @@ async def _show_exercise_list(callback: CallbackQuery, state: FSMContext):
     if group is not None:
         b.row(InlineKeyboardButton(text="➕ Новое упражнение", callback_data="exm:newex"))
         if group["user_id"] is not None:
-            b.row(InlineKeyboardButton(text="🗑 Архивировать группу", callback_data=f"exm:archivegrp:{group_id}"))
+            b.row(InlineKeyboardButton(text="🗑 Архивировать группу", callback_data=f"exm:archivegrpask:{group_id}"))
     b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="exm:backgroups"))
     title = group["name"] if group is not None else "Все упражнения"
     title_html = f"<b>{escape(title.upper())}</b>"
@@ -171,7 +171,29 @@ async def exm_new_exercise_name_entered(message: Message, state: FSMContext):
     await message.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
-@router.callback_query(F.data.startswith("exm:archivegrp:"))
+@router.callback_query(F.data.startswith("exm:archivegrpask:"))
+async def exm_archive_group_confirm(callback: CallbackQuery, state: FSMContext):
+    group_id = int(callback.data.split(":")[2])
+    group = await db.get_muscle_group(group_id)
+    if group is None or group["user_id"] != callback.from_user.id:
+        await callback.answer("Эту группу нельзя архивировать", show_alert=True)
+        return
+    kb = keyboards.yes_no_keyboard(
+        yes_cb=f"exm:archivegrpyes:{group_id}",
+        no_cb="exm:backlist",
+        yes_text="🗑 Архивировать",
+        no_text="❌ Отмена",
+    )
+    await ui.safe_edit(
+        callback,
+        f"Архивировать группу «{escape(group['name'])}»? "
+        "Все упражнения группы пропадут из списков, но история тренировок сохранится.",
+        reply_markup=kb,
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("exm:archivegrpyes:"))
 async def exm_archive_group(callback: CallbackQuery, state: FSMContext):
     group_id = int(callback.data.split(":")[2])
     group = await db.get_muscle_group(group_id)
@@ -186,7 +208,7 @@ async def exm_archive_group(callback: CallbackQuery, state: FSMContext):
 def _exercise_detail_view(ex):
     b = InlineKeyboardBuilder()
     b.button(text="✏️ Название", callback_data=f"exm:editname:{ex['id']}")
-    b.button(text="🗑 Архивировать", callback_data=f"exm:archive:{ex['id']}")
+    b.button(text="🗑 Архивировать", callback_data=f"exm:archiveask:{ex['id']}")
     b.button(text="⬅️ Назад", callback_data="exm:backlist")
     b.adjust(1)
     info = [f"Название: <b>{escape(ex['name'])}</b>"]
@@ -257,7 +279,29 @@ async def exm_back_to_list(callback: CallbackQuery, state: FSMContext):
     await _show_exercise_list(callback, state)
 
 
-@router.callback_query(StateFilter(ExerciseManage.picking_exercise), F.data.startswith("exm:archive:"))
+@router.callback_query(StateFilter(ExerciseManage.picking_exercise), F.data.startswith("exm:archiveask:"))
+async def exm_archive_exercise_confirm(callback: CallbackQuery, state: FSMContext):
+    ex_id = int(callback.data.split(":")[2])
+    ex = await db.get_exercise(ex_id)
+    if ex is None or ex["user_id"] != callback.from_user.id:
+        await callback.answer("Упражнение не найдено", show_alert=True)
+        return
+    kb = keyboards.yes_no_keyboard(
+        yes_cb=f"exm:archiveyes:{ex_id}",
+        no_cb=f"exm:ex:{ex_id}",
+        yes_text="🗑 Архивировать",
+        no_text="❌ Отмена",
+    )
+    await ui.safe_edit(
+        callback,
+        f"Архивировать упражнение «{escape(ex['name'])}»? "
+        "Оно пропадёт из списков, но история тренировок сохранится.",
+        reply_markup=kb,
+    )
+    await callback.answer()
+
+
+@router.callback_query(StateFilter(ExerciseManage.picking_exercise), F.data.startswith("exm:archiveyes:"))
 async def exm_archive_exercise(callback: CallbackQuery, state: FSMContext):
     ex_id = int(callback.data.split(":")[2])
     ex = await db.get_exercise(ex_id)
