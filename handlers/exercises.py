@@ -118,10 +118,7 @@ async def exm_templates(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     templates = await db.list_templates_in_group(data["exm_group_id"])
     kb = keyboards.templates_keyboard(templates, prefix="exm", back_cb="newback")
-    if templates:
-        text = "Шаблоны — выбери подходящий:"
-    else:
-        text = "Для этой группы пока нет шаблонов."
+    text = "Шаблоны — выбери подходящий:" if templates else "Для этой группы пока нет шаблонов."
     await ui.safe_edit(callback, text, reply_markup=kb)
     await callback.answer()
 
@@ -249,10 +246,7 @@ async def exm_search_text(message: Message, state: FSMContext):
     if group_id is not None:
         b.row(InlineKeyboardButton(text="➕ Новое упражнение", callback_data="exm:newex"))
     b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="exm:backlist"))
-    if results:
-        text = f"Результаты поиска «{escape(query)}»:"
-    else:
-        text = f"Ничего не нашлось по «{escape(query)}»."
+    text = f"Результаты поиска «{escape(query)}»:" if results else f"Ничего не нашлось по «{escape(query)}»."
     await message.answer(text, reply_markup=b.as_markup(), parse_mode="HTML")
 
 
