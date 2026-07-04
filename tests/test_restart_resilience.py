@@ -23,6 +23,7 @@ pytestmark = pytest.mark.asyncio
 def _make_callback(user_id: int, data: str):
     bot = MagicMock()
     bot.delete_message = AsyncMock()
+    bot.edit_message_text = AsyncMock()
     bot.send_message = AsyncMock(return_value=SimpleNamespace(message_id=999))
     message = MagicMock()
     message.delete = AsyncMock()
@@ -41,6 +42,7 @@ def _make_callback(user_id: int, data: str):
 def _make_message(user_id: int, text: str):
     bot = MagicMock()
     bot.delete_message = AsyncMock()
+    bot.edit_message_text = AsyncMock()
     bot.send_message = AsyncMock(return_value=SimpleNamespace(message_id=999))
     bot.set_message_reaction = AsyncMock()
     message = MagicMock()

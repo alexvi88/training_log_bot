@@ -15,6 +15,7 @@ pytestmark = pytest.mark.asyncio
 def _make_callback(user_id: int, data: str):
     bot = MagicMock()
     bot.delete_message = AsyncMock()
+    bot.edit_message_text = AsyncMock()
     bot.send_message = AsyncMock(return_value=SimpleNamespace(message_id=999))
     callback = MagicMock()
     callback.from_user = SimpleNamespace(id=user_id)
@@ -39,6 +40,7 @@ async def _make_state(user_id: int, **extra_data) -> FSMContext:
 def _make_message(user_id: int, text: str):
     bot = MagicMock()
     bot.delete_message = AsyncMock()
+    bot.edit_message_text = AsyncMock()
     bot.send_message = AsyncMock(return_value=SimpleNamespace(message_id=999))
     message = MagicMock()
     message.from_user = SimpleNamespace(id=user_id)
@@ -60,7 +62,7 @@ async def test_typing_in_exercise_picker_searches_instead_of_being_ignored(fresh
     await workout.pick_exercise_search(message, state)
 
     message.delete.assert_awaited_once()
-    kb = message.bot.send_message.await_args.kwargs["reply_markup"]
+    kb = message.bot.edit_message_text.await_args.kwargs["reply_markup"]
     button_texts = [b.text for row in kb.inline_keyboard for b in row]
     assert "Bench press" in button_texts
     assert not any("Triceps" in t for t in button_texts)
@@ -77,9 +79,9 @@ async def test_typing_no_match_in_exercise_picker_offers_to_create(fresh_db, use
 
     await workout.pick_exercise_search(message, state)
 
-    sent_text = message.bot.send_message.await_args.kwargs["text"]
+    sent_text = message.bot.edit_message_text.await_args.kwargs["text"]
     assert "Ничего не нашлось" in sent_text
-    kb = message.bot.send_message.await_args.kwargs["reply_markup"]
+    kb = message.bot.edit_message_text.await_args.kwargs["reply_markup"]
     callback_datas = [b.callback_data for row in kb.inline_keyboard for b in row]
     assert "pick:new" in callback_datas
 
@@ -100,7 +102,7 @@ async def test_pick_page_advances_to_second_page_and_keeps_remainder(fresh_db, u
 
     # Second page should contain the remaining 2 exercises. With only 2 short names left,
     # they're shown directly on the buttons rather than as a numbered list in the text.
-    sent_kwargs = callback.bot.send_message.await_args.kwargs
+    sent_kwargs = callback.bot.edit_message_text.await_args.kwargs
     button_texts = [
         button.text
         for row in sent_kwargs["reply_markup"].inline_keyboard
@@ -120,7 +122,7 @@ async def test_pick_page_first_page_has_no_back_button(fresh_db, user_id):
 
     await workout.pick_page(callback, state)
 
-    kb = callback.bot.send_message.await_args.kwargs["reply_markup"]
+    kb = callback.bot.edit_message_text.await_args.kwargs["reply_markup"]
     callback_datas = [
         button.callback_data for row in kb.inline_keyboard for button in row
     ]
@@ -157,9 +159,9 @@ async def test_finishing_last_exercise_suggests_what_came_next_last_time(fresh_d
 
     await workout.live_finish_exercise(callback, state)
 
-    sent_text = callback.bot.send_message.await_args.kwargs["text"]
+    sent_text = callback.bot.edit_message_text.await_args.kwargs["text"]
     assert "Triceps pushdown" in sent_text
-    kb = callback.bot.send_message.await_args.kwargs["reply_markup"]
+    kb = callback.bot.edit_message_text.await_args.kwargs["reply_markup"]
     callback_datas = [b.callback_data for row in kb.inline_keyboard for b in row]
     assert f"live:suggest:{triceps}" in callback_datas
 

@@ -49,11 +49,11 @@ def _move_open_exercises_last(
 
 
 async def _refresh_live(bot, state: FSMContext, user, workout_id: int, hint, keyboard):
-    """Re-send the live tracker message so it always sits at the bottom of the chat.
+    """Update the live tracker message in place.
 
-    Telegram doesn't let a bot move an edited message down past newer messages
-    (e.g. the weight/reps the user just typed), so we delete and resend instead
-    of editing in place.
+    Editing (rather than delete+resend) avoids Telegram's "new message" sound
+    firing on every set logged. The caller always deletes the user's own text
+    before refreshing, so there's nothing newer left to move below.
     """
     data = await state.get_data()
     chat_id = data["live_chat_id"]
@@ -64,10 +64,18 @@ async def _refresh_live(bot, state: FSMContext, user, workout_id: int, hint, key
     if data.get("is_backfill") and data.get("bf_date"):
         date = dt.date.fromisoformat(data["bf_date"])
         text = f"📅 {formatting.format_date_ru(date)}\n\n{text}"
-    with suppress(TelegramBadRequest):
-        await bot.delete_message(chat_id=chat_id, message_id=data["live_message_id"])
-    sent = await bot.send_message(chat_id=chat_id, text=text, reply_markup=keyboard, parse_mode="HTML")
-    await state.update_data(live_message_id=sent.message_id)
+    try:
+        await bot.edit_message_text(
+            chat_id=chat_id, message_id=data["live_message_id"], text=text,
+            reply_markup=keyboard, parse_mode="HTML",
+        )
+    except TelegramBadRequest as e:
+        if "message is not modified" in e.message.lower():
+            return
+        with suppress(TelegramBadRequest):
+            await bot.delete_message(chat_id=chat_id, message_id=data["live_message_id"])
+        sent = await bot.send_message(chat_id=chat_id, text=text, reply_markup=keyboard, parse_mode="HTML")
+        await state.update_data(live_message_id=sent.message_id)
 
 
 async def _suggested_next_exercise(user_id: int, last_finished_id: int | None):
