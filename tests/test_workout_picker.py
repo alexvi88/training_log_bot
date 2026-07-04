@@ -97,9 +97,15 @@ async def test_pick_page_advances_to_second_page_and_keeps_remainder(fresh_db, u
     data = await state.get_data()
     assert data["pick_page"] == 1
 
-    # Second page should contain the remaining 2 exercises, sent as the new live message.
-    sent_text = callback.bot.send_message.await_args.kwargs["text"]
-    assert sent_text.count("Exercise") == 2
+    # Second page should contain the remaining 2 exercises. With only 2 short names left,
+    # they're shown directly on the buttons rather than as a numbered list in the text.
+    sent_kwargs = callback.bot.send_message.await_args.kwargs
+    button_texts = [
+        button.text
+        for row in sent_kwargs["reply_markup"].inline_keyboard
+        for button in row
+    ]
+    assert sum(text.startswith("Exercise") for text in button_texts) == 2
 
 
 async def test_pick_page_first_page_has_no_back_button(fresh_db, user_id):

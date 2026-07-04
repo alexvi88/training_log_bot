@@ -37,22 +37,49 @@ def groups_keyboard(
     return b.as_markup()
 
 
+_NAMED_BUTTON_MAX_ITEMS = 4
+_NAMED_BUTTON_MAX_LEN = 18
+_NUMBER_HINT_LEN = 6
+
+
+def use_named_buttons(names: list[str]) -> bool:
+    """Whether a list is short/short-named enough to show names on buttons instead of numbers.
+
+    Call this with the same `names` passed to numbered_list() to decide whether that
+    numbered list is still needed next to numbered_buttons(), or whether the buttons
+    already carry the names themselves.
+    """
+    return len(names) <= _NAMED_BUTTON_MAX_ITEMS and all(len(n) <= _NAMED_BUTTON_MAX_LEN for n in names)
+
+
 def numbered_list(names: list[str]) -> str:
     """Render names as "1. foo\n2. bar..." for use alongside a numbered_buttons row."""
     return "\n".join(f"{i + 1}. {name}" for i, name in enumerate(names))
 
 
-def numbered_buttons(items: list[tuple[str, str]], per_row: int = 5) -> list[list[InlineKeyboardButton]]:
-    """items: list of (callback_data, _) pairs, numbered 1..N and chunked into balanced rows.
+def _hint(name: str) -> str:
+    """First few chars of a name, for a number button's at-a-glance hint. Not for disambiguation."""
+    return name if len(name) <= _NUMBER_HINT_LEN else name[:_NUMBER_HINT_LEN].rstrip() + "…"
 
-    Numbers avoid the Telegram button-text truncation that long exercise/template
-    names hit; the names themselves are shown as a numbered list in the message text.
-    Rows are sized evenly (e.g. 6 items -> 3+3, not 5+1) so the last row never has
-    a single stray button.
+
+def numbered_buttons(items: list[tuple[str, str]], per_row: int = 5) -> list[list[InlineKeyboardButton]]:
+    """items: list of (callback_data, name) pairs.
+
+    Short lists with short names (see use_named_buttons) are shown with the name
+    directly on the button, two per row, so there's nothing to look up. Otherwise
+    buttons are numbered 1..N with a truncated name hint ("1 Жим…") — full names still
+    don't fit without Telegram truncating them unpredictably — and chunked into balanced
+    rows (e.g. 6 items -> 3+3, not 5+1); the full names are shown as a numbered list in
+    the message text via numbered_list() for disambiguation.
     """
+    names = [name for _, name in items]
+    if use_named_buttons(names):
+        buttons = [InlineKeyboardButton(text=name, callback_data=cb) for cb, name in items]
+        return [buttons[i:i + 2] for i in range(0, len(buttons), 2)]
+
     buttons = [
-        InlineKeyboardButton(text=str(i + 1), callback_data=cb)
-        for i, (cb, _) in enumerate(items)
+        InlineKeyboardButton(text=f"{i + 1} {_hint(name)}", callback_data=cb)
+        for i, (cb, name) in enumerate(items)
     ]
     n = len(buttons)
     if n == 0:
