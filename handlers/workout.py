@@ -171,9 +171,8 @@ async def _back_after_cancel(bot, state: FSMContext, user):
 _GREETING = "💪 <b>Привет, АТЛЕТ!</b> Начнём тренировку?"
 
 
-async def _menu_text(user_id: int, extra: str = "") -> str:
-    """Greeting line. extra is appended after it (e.g. stale-workout warning)."""
-    return _GREETING + extra
+async def _menu_text(user_id: int) -> str:
+    return _GREETING
 
 
 @router.message(Command("start"))
@@ -181,16 +180,69 @@ async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
     await _ensure_user(message.from_user.id, message.from_user.username)
     active = await db.get_active_workout(message.from_user.id)
-    extra = ""
+    text = await _menu_text(message.from_user.id)
+    await message.answer(text, reply_markup=keyboards.main_menu(bool(active)), parse_mode="HTML")
     if active:
         started = dt.datetime.fromisoformat(active["started_at"])
         if (dt.datetime.now() - started).total_seconds() > config.STALE_WORKOUT_HOURS * 3600:
-            extra = (
-                f"\n\n⚠️ У тебя висит тренировка с {formatting.format_date_ru(started)} — "
+            warning = (
+                f"⚠️ У тебя висит тренировка с {formatting.format_date_ru(started)} — "
                 f"забыл закрыть?"
             )
-    text = await _menu_text(message.from_user.id, extra)
-    await message.answer(text, reply_markup=keyboards.main_menu(bool(active)), parse_mode="HTML")
+            await message.answer(warning, reply_markup=keyboards.stale_workout_keyboard(active["id"]))
+
+
+@router.callback_query(F.data.startswith("stale:finish:"))
+async def stale_finish_workout(callback: CallbackQuery, state: FSMContext):
+    workout_id = int(callback.data.split(":")[2])
+    workout = await db.get_workout(workout_id)
+    if workout is None or workout["user_id"] != callback.from_user.id or workout["status"] != "active":
+        await callback.answer("Тренировка не найдена", show_alert=True)
+        return
+    exercise_ids = await db.list_exercise_ids_for_workout(workout_id)
+    if not exercise_ids:
+        await db.discard_workout(workout_id)
+        await ui.safe_edit(callback, "Тренировка была пустая — удалил её.")
+        await callback.answer()
+        return
+    await db.finish_workout(workout_id, finished_at=workout["started_at"])
+    await ui.safe_edit(callback, "✅ Тренировка завершена задним числом.")
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("stale:delete:"))
+async def stale_delete_confirm(callback: CallbackQuery, state: FSMContext):
+    workout_id = int(callback.data.split(":")[2])
+    workout = await db.get_workout(workout_id)
+    if workout is None or workout["user_id"] != callback.from_user.id or workout["status"] != "active":
+        await callback.answer("Тренировка не найдена", show_alert=True)
+        return
+    kb = keyboards.yes_no_keyboard(
+        yes_cb=f"stale:delyes:{workout_id}",
+        no_cb="stale:delno",
+        yes_text="🗑 Удалить",
+        no_text="❌ Отмена",
+    )
+    await ui.safe_edit(callback, "Удалить эту тренировку? Это действие нельзя отменить.", reply_markup=kb)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("stale:delyes:"))
+async def stale_delete(callback: CallbackQuery, state: FSMContext):
+    workout_id = int(callback.data.split(":")[2])
+    workout = await db.get_workout(workout_id)
+    if workout is None or workout["user_id"] != callback.from_user.id:
+        await callback.answer("Тренировка не найдена", show_alert=True)
+        return
+    await db.discard_workout(workout_id)
+    await ui.safe_edit(callback, "Тренировка удалена.")
+    await callback.answer()
+
+
+@router.callback_query(F.data == "stale:delno")
+async def stale_delete_cancel(callback: CallbackQuery, state: FSMContext):
+    await ui.safe_edit(callback, "Хорошо, оставил как есть.")
+    await callback.answer()
 
 
 async def _show_main_menu(callback: CallbackQuery, state: FSMContext):

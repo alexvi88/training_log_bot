@@ -154,6 +154,14 @@ def exercise_picker_entry_keyboard(
     return b.as_markup()
 
 
+def stale_workout_keyboard(workout_id: int) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.button(text="✅ Завершить задним числом", callback_data=f"stale:finish:{workout_id}")
+    b.button(text="🗑 Удалить", callback_data=f"stale:delete:{workout_id}")
+    b.adjust(1)
+    return b.as_markup()
+
+
 def finish_workout_keyboard() -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(text="📝 Добавить заметку", callback_data="finish:note")
