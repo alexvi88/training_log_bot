@@ -200,6 +200,20 @@ def test_format_progress_screen_weighted_with_trend_and_comparison():
     assert "Рекорд: 105×8 · e1RM 140.0 кг" in text
 
 
+def test_format_progress_screen_comparison_line_uses_lb_unit():
+    sessions = [
+        _weighted_session(1, "2026-06-01T10:00:00", [(100.0, 8)]),
+        _weighted_session(2, "2026-06-08T10:00:00", [(105.0, 8)]),
+    ]
+    comparison = analytics.ComparisonDelta(e1rm_delta=4.2, tonnage_delta=40.0, prev_started_at="2026-06-01T10:00:00")
+    records = analytics.PersonalRecords(best_e1rm_weight=105.0, best_e1rm_reps=8, max_e1rm=140.0)
+
+    text = formatting.format_progress_screen("Жим лёжа", sessions, None, comparison, records, unit="lb")
+
+    assert "e1RM +4.2 lb vs прошлой тренировки" in text
+    assert "кг" not in text
+
+
 def test_format_progress_screen_bodyweight_session():
     sessions = [_weighted_session(1, "2026-06-01T10:00:00", [(0.0, 12), (0.0, 15)])]
     records = analytics.PersonalRecords(max_reps_at_weight={0.0: 15})
