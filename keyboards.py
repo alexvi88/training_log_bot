@@ -169,6 +169,20 @@ def progress_back_keyboard() -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
+PROGRESS_PERIODS = [(8, "8"), (20, "20"), (9999, "Все")]
+DEFAULT_PROGRESS_LIMIT = PROGRESS_PERIODS[0][0]
+
+
+def progress_chart_keyboard(exercise_id: int, limit: int) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    for value, label in PROGRESS_PERIODS:
+        text = f"• {label} •" if value == limit else label
+        b.button(text=text, callback_data=f"prog:per:{exercise_id}:{value}")
+    b.button(text="⬅️ Назад", callback_data="prog:groups")
+    b.adjust(len(PROGRESS_PERIODS), 1)
+    return b.as_markup()
+
+
 def history_list_keyboard(workouts, page: int, has_next: bool) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     for w in workouts:

@@ -4,7 +4,7 @@ import datetime as dt
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
-from aiogram.types import BufferedInputFile, CallbackQuery
+from aiogram.types import BufferedInputFile, CallbackQuery, InputMediaPhoto
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import analytics
@@ -201,15 +201,18 @@ async def _load_sessions(exercise_id: int, formula: str) -> list[analytics.Sessi
     return sessions
 
 
-@router.callback_query(F.data.startswith("prog:ex:"))
-async def prog_show_exercise(callback: CallbackQuery, state: FSMContext):
-    ex_id = int(callback.data.split(":")[2])
-    await state.update_data(prog_exercise_id=ex_id)
+async def _render_progress_view(ex_id: int, user, limit: int):
+    """Build the text/chart/keyboard for an exercise's progress screen.
+
+    Trend/comparison/PRs always look at the full history; `limit` only
+    controls how many recent sessions are shown in the text list and plotted
+    on the chart, so switching periods doesn't change what counts as a record.
+    """
     ex = await db.get_exercise(ex_id)
-    user = await db.get_user(callback.from_user.id)
     sessions = await _load_sessions(ex_id, user["e1rm_formula"])
 
     trend = None
+    points: list[tuple[dt.datetime, float]] = []
     if sessions:
         is_bw = sessions[-1].is_bodyweight_mode
         points = [
@@ -221,24 +224,50 @@ async def prog_show_exercise(callback: CallbackQuery, state: FSMContext):
     records = analytics.compute_personal_records(sessions)
 
     text = formatting.format_progress_screen(
-        ex["display_name"], sessions, trend, comparison, records, unit=user["unit"]
+        ex["display_name"], sessions, trend, comparison, records, limit=limit, unit=user["unit"]
     )
-    kb = keyboards.progress_back_keyboard()
 
+    png = None
     if sessions:
-        is_bw = sessions[-1].is_bodyweight_mode
-        metric = "повторы" if is_bw else "e1RM"
-        points = [
-            (dt.datetime.fromisoformat(s.started_at), float(s.max_reps_in_set if is_bw else s.top_e1rm))
-            for s in sessions
-        ]
-        png = charts.render_metric_over_sessions(points, f"{ex['display_name']} — {metric}", metric)
-        await callback.message.answer_photo(
-            BufferedInputFile(png, filename="chart.png"),
-            caption=text,
-            reply_markup=kb,
-            parse_mode="HTML",
+        metric = "повторы" if sessions[-1].is_bodyweight_mode else "e1RM"
+        png = charts.render_metric_over_sessions(
+            points[-limit:], f"{ex['display_name']} — {metric}", metric
         )
+
+    kb = (
+        keyboards.progress_chart_keyboard(ex_id, limit)
+        if sessions
+        else keyboards.progress_back_keyboard()
+    )
+    return text, png, kb
+
+
+@router.callback_query(F.data.startswith("prog:ex:"))
+async def prog_show_exercise(callback: CallbackQuery, state: FSMContext):
+    ex_id = int(callback.data.split(":")[2])
+    await state.update_data(prog_exercise_id=ex_id)
+    user = await db.get_user(callback.from_user.id)
+    text, png, kb = await _render_progress_view(ex_id, user, keyboards.DEFAULT_PROGRESS_LIMIT)
+
+    if png:
+        await ui.safe_edit_photo(callback, png, "chart.png", text, reply_markup=kb, parse_mode="HTML")
+    else:
+        await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("prog:per:"))
+async def prog_change_period(callback: CallbackQuery, state: FSMContext):
+    _, _, ex_id_raw, limit_raw = callback.data.split(":")
+    ex_id, limit = int(ex_id_raw), int(limit_raw)
+    user = await db.get_user(callback.from_user.id)
+    text, png, kb = await _render_progress_view(ex_id, user, limit)
+
+    if png:
+        media = InputMediaPhoto(
+            media=BufferedInputFile(png, filename="chart.png"), caption=text, parse_mode="HTML"
+        )
+        await callback.message.edit_media(media, reply_markup=kb)
     else:
         await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML")
     await callback.answer()
