@@ -99,9 +99,10 @@ def build_workout_summary(
     show_extra_stats: bool = True,
     italic_prev: bool = False,
 ) -> str:
-    lines = [f"<b>{format_date_ru(started_at)}</b>", ""]
+    lines = [f"<b>{format_date_ru(started_at)}</b>"]
     if note:
         lines.append(f"📝 {note}")
+    lines.append("")
 
     for i, block in enumerate(blocks):
         if i > 0:
