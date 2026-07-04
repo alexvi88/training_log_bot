@@ -380,9 +380,9 @@ async def _picker_screen_exercises(callback: CallbackQuery, state: FSMContext):
     )
     if exercises:
         names = [escape(ex["display_name"]) for ex in exercises]
-        hint = "Выбери упражнение из своих:\n" + keyboards.numbered_list(names)
+        hint = "Выбери упражнение или напиши название для поиска:\n" + keyboards.numbered_list(names)
     else:
-        hint = "У тебя пока нет своих упражнений здесь — добавь новое:"
+        hint = "У тебя пока нет своих упражнений здесь — добавь новое или напиши название для поиска:"
     await state.update_data(picker_stage="exercises")
     await _refresh_live(callback.bot, state, user, data["workout_id"], hint, kb)
 
