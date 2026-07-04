@@ -394,6 +394,29 @@ async def pick_back_to_groups(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+@router.message(StateFilter(WorkoutFlow.picking_exercise))
+async def pick_search_text(message: Message, state: FSMContext):
+    query = message.text.strip()
+    if not query:
+        return
+    await _delete_message(message)
+    data = await state.get_data()
+    user = await db.get_user(message.from_user.id)
+    candidates = await db.search_exercises(
+        message.from_user.id, query, limit=config.RECENT_EXERCISES_LIMIT
+    )
+    kb = keyboards.exercises_keyboard(
+        candidates, prefix="pick", back_cb="back", show_new_button=data["pending_group_id"] is not None,
+    )
+    if candidates:
+        names = [escape(ex["display_name"]) for ex in candidates]
+        hint = f"Результаты поиска «{escape(query)}»:\n" + keyboards.numbered_list(names)
+    else:
+        hint = f"Ничего не нашлось по «{escape(query)}». Можно добавить новое или поискать ещё раз:"
+    await state.update_data(picker_stage="search")
+    await _refresh_live(message.bot, state, user, data["workout_id"], hint, kb)
+
+
 @router.callback_query(StateFilter(WorkoutFlow.picking_exercise), F.data.startswith("pick:ex:"))
 async def pick_existing_exercise(callback: CallbackQuery, state: FSMContext):
     ex_id = int(callback.data.split(":")[2])

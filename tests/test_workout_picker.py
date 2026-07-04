@@ -24,6 +24,18 @@ def _make_callback(user_id: int, data: str):
     return callback
 
 
+def _make_message(user_id: int, text: str):
+    bot = MagicMock()
+    bot.delete_message = AsyncMock()
+    bot.send_message = AsyncMock(return_value=SimpleNamespace(message_id=999))
+    message = MagicMock()
+    message.from_user = SimpleNamespace(id=user_id)
+    message.bot = bot
+    message.text = text
+    message.delete = AsyncMock()
+    return message
+
+
 async def _make_state(user_id: int, **extra_data) -> FSMContext:
     storage = MemoryStorage()
     key = StorageKey(bot_id=1, chat_id=user_id, user_id=user_id)
@@ -108,6 +120,46 @@ async def test_finishing_last_exercise_suggests_what_came_next_last_time(fresh_d
     kb = callback.bot.send_message.await_args.kwargs["reply_markup"]
     callback_datas = [b.callback_data for row in kb.inline_keyboard for b in row]
     assert f"live:suggest:{triceps}" in callback_datas
+
+
+async def test_pick_search_text_finds_matching_exercise_by_substring(fresh_db, user_id):
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    bench = await db.create_exercise(user_id, "Жим лёжа", group_id)
+    await db.create_exercise(user_id, "Приседания", group_id)
+
+    state = await _make_state(user_id)
+    message = _make_message(user_id, "жим")
+
+    await workout.pick_search_text(message, state)
+
+    message.delete.assert_awaited_once()
+    sent_text = message.bot.send_message.await_args.kwargs["text"]
+    assert "Жим лёжа" in sent_text
+    assert "Приседания" not in sent_text
+    kb = message.bot.send_message.await_args.kwargs["reply_markup"]
+    callback_datas = [b.callback_data for row in kb.inline_keyboard for b in row]
+    assert f"pick:ex:{bench}" in callback_datas
+    # Search happened from "Все" (no group selected) — creating a new exercise needs a group.
+    assert not any(cb == "pick:new" for cb in callback_datas)
+
+
+async def test_pick_search_text_reports_no_matches(fresh_db, user_id):
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    await db.create_exercise(user_id, "Жим лёжа", group_id)
+
+    state = await _make_state(user_id)
+    await state.update_data(pending_group_id=group_id)
+    message = _make_message(user_id, "становая")
+
+    await workout.pick_search_text(message, state)
+
+    sent_text = message.bot.send_message.await_args.kwargs["text"]
+    assert "Ничего не нашлось" in sent_text
+    kb = message.bot.send_message.await_args.kwargs["reply_markup"]
+    callback_datas = [b.callback_data for row in kb.inline_keyboard for b in row]
+    assert "pick:new" in callback_datas
 
 
 async def test_tapping_suggestion_jumps_straight_into_logging_it(fresh_db, user_id):
