@@ -317,21 +317,25 @@ async def resume_workout(callback: CallbackQuery, state: FSMContext):
 async def _reopen_exercises(
     workout_id: int,
 ) -> tuple[list[int], dict[int, int], dict[int, list], dict[int, tuple]]:
-    """Rebuild which exercises are still "open" for a workout from the DB.
+    """Rebuild which exercise is still "open" for a workout from the DB.
 
-    The FSM is the only place that tracks "closed" vs "open" exercises, so when we
-    re-enter a workout (resume, or bot restart) after losing that in-memory state,
-    the best we can do is treat every exercise already logged in this workout as open
-    again — that's what lets the user keep adding sets without re-picking it.
+    The FSM is the only place that tracks "finished" vs "open" exercises, so when we
+    re-enter a workout (resume, or bot restart) after losing that in-memory state, we
+    can't tell which earlier exercises the user already finished. Reopening all of
+    them would wrongly resurrect the superset switch-tabs/controls for exercises
+    that are actually done, so we only reopen the most recently logged block and
+    treat everything before it as finished.
     """
     open_exercises: list[int] = []
     open_blocks: dict[int, int] = {}
-    for block in await db.list_blocks_for_workout(workout_id):
-        for be in await db.get_block_exercises(block["id"]):
+    blocks = await db.list_blocks_for_workout(workout_id)
+    if blocks:
+        last_block = blocks[-1]
+        for be in await db.get_block_exercises(last_block["id"]):
             ex_id = be["exercise_id"]
             if ex_id not in open_exercises:
                 open_exercises.append(ex_id)
-            open_blocks[ex_id] = block["id"]
+            open_blocks[ex_id] = last_block["id"]
     last_session_sets = {ex_id: await _last_session_sets(ex_id) for ex_id in open_exercises}
     last_by_exercise: dict[int, tuple] = {}
     for ex_id in open_exercises:

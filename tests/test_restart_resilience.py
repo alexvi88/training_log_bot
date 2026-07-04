@@ -128,3 +128,32 @@ async def test_resume_workout_rebuilds_state_after_total_fsm_loss(fresh_db, user
     sets = await db.list_sets_for_block(block_id)
     assert len(sets) == 2
     assert sets[-1]["weight"] == 85.0 and sets[-1]["reps"] == 8
+
+
+async def test_resume_after_fsm_loss_only_reopens_last_exercise(fresh_db, user_id):
+    """A workout with several already-finished exercises logged before the FSM was
+    lost must not resurrect all of them as parallel "open" tabs on resume — only
+    the most recently logged exercise should come back as active. Reopening every
+    exercise ever logged in the workout would wrongly show the superset switcher
+    for exercises the user already finished (see PR discussion).
+    """
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Ноги")
+    ex1 = await db.create_exercise(user_id, "Становая тяга", group_id)
+    ex2 = await db.create_exercise(user_id, "Тяга блока", group_id)
+    ex3 = await db.create_exercise(user_id, "Разгибания", group_id)
+    workout_id = await db.create_workout(user_id)
+
+    for ex_id in (ex1, ex2, ex3):
+        block_id = await db.create_block(workout_id, "single")
+        await db.add_block_exercise(block_id, ex_id, 0)
+        await db.add_set(block_id, ex_id, 1, 0, 100.0, 8)
+
+    state = FSMContext(storage=MemoryStorage(), key=StorageKey(bot_id=1, chat_id=user_id, user_id=user_id))
+
+    await workout.resume_workout(_make_callback(user_id, "menu:resume_workout"), state)
+
+    data = await state.get_data()
+    assert data["open_exercises"] == [ex3]
+    assert data["active_exercise_id"] == ex3
+    assert list(data["open_blocks"].keys()) == [ex3]
