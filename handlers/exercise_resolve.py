@@ -53,7 +53,8 @@ async def _next(event, state: FSMContext) -> None:
     )
     if candidates:
         names = [ex["display_name"] for ex in candidates[:6]]
-        text += "\n" + keyboards.numbered_list(names)
+        if not keyboards.use_named_buttons(names):
+            text += "\n" + keyboards.numbered_list(names)
     kb = keyboards.exercise_resolve_keyboard(candidates, name, "resolve")
     await _render(event, text, kb)
 
@@ -127,7 +128,9 @@ async def resolve_search_text(message: Message, state: FSMContext):
     kb = keyboards.exercise_resolve_keyboard(candidates, name, "resolve")
     if candidates:
         names = [ex["display_name"] for ex in candidates[:6]]
-        text = f"Результаты поиска «{query}» для «{name}»:\n" + keyboards.numbered_list(names)
+        text = f"Результаты поиска «{query}» для «{name}»:"
+        if not keyboards.use_named_buttons(names):
+            text += "\n" + keyboards.numbered_list(names)
     else:
         text = f"Ничего не нашлось по «{query}». Можно создать новое для «{name}»."
     await message.answer(text, reply_markup=kb)

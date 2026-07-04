@@ -91,7 +91,9 @@ async def _show_exercise_list(callback: CallbackQuery, state: FSMContext):
     title_html = f"<b>{escape(title.upper())}</b>"
     if exercises:
         names = [escape(ex["display_name"]) for ex in exercises]
-        text = f"{title_html}\n\nТвои упражнения:\n" + keyboards.numbered_list(names)
+        text = f"{title_html}\n\nТвои упражнения:"
+        if not keyboards.use_named_buttons(names):
+            text += "\n" + keyboards.numbered_list(names)
     else:
         text = f"{title_html}\n\nПока нет своих упражнений в этой группе."
     await ui.safe_edit(callback, text, reply_markup=b.as_markup(), parse_mode="HTML")
@@ -121,7 +123,9 @@ async def exm_templates(callback: CallbackQuery, state: FSMContext):
     kb = keyboards.templates_keyboard(templates, prefix="exm", back_cb="newback")
     if templates:
         names = [t["display_name"] for t in templates]
-        text = "Шаблоны — выбери подходящий:\n" + keyboards.numbered_list(names)
+        text = "Шаблоны — выбери подходящий:"
+        if not keyboards.use_named_buttons(names):
+            text += "\n" + keyboards.numbered_list(names)
     else:
         text = "Для этой группы пока нет шаблонов."
     await ui.safe_edit(callback, text, reply_markup=kb)

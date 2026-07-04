@@ -380,7 +380,9 @@ async def _picker_screen_exercises(callback: CallbackQuery, state: FSMContext):
     )
     if exercises:
         names = [escape(ex["display_name"]) for ex in exercises]
-        hint = "Выбери упражнение из своих:\n" + keyboards.numbered_list(names)
+        hint = "Выбери упражнение из своих:"
+        if not keyboards.use_named_buttons(names):
+            hint += "\n" + keyboards.numbered_list(names)
     else:
         hint = "У тебя пока нет своих упражнений здесь — добавь новое:"
     await state.update_data(picker_stage="exercises")
@@ -426,7 +428,8 @@ async def pick_templates(callback: CallbackQuery, state: FSMContext):
     hint = "Шаблоны — выбери подходящий:"
     if templates:
         names = [escape(t["display_name"]) for t in templates]
-        hint += "\n" + keyboards.numbered_list(names)
+        if not keyboards.use_named_buttons(names):
+            hint += "\n" + keyboards.numbered_list(names)
     await _refresh_live(callback.bot, state, user, data["workout_id"], hint, kb)
     await callback.answer()
 
