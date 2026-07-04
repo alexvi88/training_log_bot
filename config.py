@@ -25,4 +25,4 @@ PROGRESS_HISTORY_LIMIT = 8
 STALE_WORKOUT_HOURS = 6
 
 # Number of recent exercises to show first when picking from a muscle group.
-RECENT_EXERCISES_LIMIT = 8
+RECENT_EXERCISES_LIMIT = 12

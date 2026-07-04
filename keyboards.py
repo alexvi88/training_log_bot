@@ -181,6 +181,7 @@ def history_list_keyboard(workouts, page: int, has_next: bool) -> InlineKeyboard
     b.adjust(1)
     if nav:
         b.row(*nav)
+    b.row(InlineKeyboardButton(text="🗓 Добавить прошлые тренировки", callback_data="menu:backfill_workout"))
     b.row(InlineKeyboardButton(text="⬅️ Главное меню", callback_data="hist:menu"))
     return b.as_markup()
 
@@ -207,7 +208,6 @@ def settings_keyboard(unit: str, formula: str) -> InlineKeyboardMarkup:
     b.button(text=f"Формула 1ПМ: {formula}", callback_data="settings:formula")
     b.button(text="📤 Экспорт CSV", callback_data="settings:export")
     b.button(text="📥 Импорт CSV", callback_data="settings:import")
-    b.button(text="🗓 Добавить прошлые тренировки", callback_data="menu:backfill_workout")
     b.button(text="⬅️ Назад", callback_data="settings:back")
     b.adjust(1)
     return b.as_markup()

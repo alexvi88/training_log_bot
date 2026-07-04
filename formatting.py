@@ -76,7 +76,7 @@ class ExerciseBlockView:
 BlockView = ExerciseBlockView
 
 
-def _render_single_block(block: ExerciseBlockView, show_extra: bool) -> list[str]:
+def _render_single_block(block: ExerciseBlockView, show_extra: bool, italic_prev: bool = False) -> list[str]:
     label = f"{escape(block.exercise_name)} [{block.group_name.upper()}]"
     lines = [f"<b>{label}</b>"]
     lines.extend(f"  • {format_set(w, r)}" for w, r in block.sets)
@@ -87,7 +87,8 @@ def _render_single_block(block: ExerciseBlockView, show_extra: bool) -> list[str
             lines.append(f"  ↳ e1RM {block.top_e1rm:.1f}")
     if block.prev_sets:
         prev_str = ", ".join(format_set(w, r) for w, r in block.prev_sets)
-        lines.append(f"  [прошлая: {prev_str}]")
+        prev_line = f"  [прошлая: {prev_str}]"
+        lines.append(f"<i>{prev_line}</i>" if italic_prev else prev_line)
     return lines
 
 
@@ -96,13 +97,14 @@ def build_workout_summary(
     blocks: list[BlockView],
     note: str | None = None,
     show_extra_stats: bool = True,
+    italic_prev: bool = False,
 ) -> str:
     lines = [f"<b>{format_date_ru(started_at)}</b>", ""]
     if note:
         lines.append(f"📝 {note}")
 
     for block in blocks:
-        lines.extend(_render_single_block(block, show_extra_stats))
+        lines.extend(_render_single_block(block, show_extra_stats, italic_prev))
 
     return "\n".join(lines)
 
@@ -231,6 +233,20 @@ def format_progress_screen(
     is_bw = sessions[-1].is_bodyweight_mode
     window = [s for s in sessions if s.sets]
     shown = window[-limit:]
+
+    if trend is not None:
+        arrow = "↑" if trend.direction == "up" else ("↓" if trend.direction == "down" else "→")
+        metric = "повторы" if is_bw else "e1RM"
+        lines.append(f"Тренд {metric}: {arrow} {trend.slope_per_week:+.2f}/нед")
+    if comparison is not None:
+        lines.append(format_comparison_line(comparison.e1rm_delta))
+
+    if is_bw:
+        lines.append(f"Рекорд повторов в сете: {records.max_reps_at_weight and max(records.max_reps_at_weight.values())}")
+    else:
+        lines.append(f"Рекорд: {format_set(records.best_e1rm_weight, records.best_e1rm_reps)} · e1RM {records.max_e1rm:.1f} {u}")
+    lines.append("")
+
     for s in reversed(shown):
         d = dt.datetime.fromisoformat(s.started_at)
         sets_str = ", ".join(format_set(st.weight, st.reps) for st in s.sets)
@@ -245,21 +261,8 @@ def format_progress_screen(
     if len(window) > len(shown):
         n = plural_ru(len(window), ("тренировка", "тренировки", "тренировок"))
         lines.append(f"Показано {len(shown)} из {len(window)} {n}")
-        lines.append("")
 
-    if trend is not None:
-        arrow = "↑" if trend.direction == "up" else ("↓" if trend.direction == "down" else "→")
-        metric = "повторы" if is_bw else "e1RM"
-        lines.append(f"Тренд {metric}: {arrow} {trend.slope_per_week:+.2f}/нед")
-    if comparison is not None:
-        lines.append(format_comparison_line(comparison.e1rm_delta))
-
-    lines.append("")
-    if is_bw:
-        lines.append(f"Рекорд повторов в сете: {records.max_reps_at_weight and max(records.max_reps_at_weight.values())}")
-    else:
-        lines.append(f"Рекорд: {format_set(records.best_e1rm_weight, records.best_e1rm_reps)} · e1RM {records.max_e1rm:.1f} {u}")
-    return "\n".join(lines)
+    return "\n".join(lines).rstrip()
 
 
 def format_comparison_line(e1rm_delta: float, unit: str = "kg") -> str:

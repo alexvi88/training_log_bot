@@ -71,6 +71,7 @@ async def show_history_item(callback: CallbackQuery, workout_id: int) -> bool:
     started = dt.datetime.fromisoformat(workout["started_at"])
     text = formatting.build_workout_summary(
         started, blocks, workout["note"], show_extra_stats=bool(user["show_extra_stats"]),
+        italic_prev=True,
     )
     await ui.safe_edit(
         callback, text, reply_markup=keyboards.history_item_keyboard(workout_id), parse_mode="HTML"

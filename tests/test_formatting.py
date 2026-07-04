@@ -72,6 +72,20 @@ def test_build_workout_summary_shows_previous_session_sets():
     assert "[прошлая: 95×8]" in text
 
 
+def test_build_workout_summary_italicizes_previous_session_in_history():
+    started = dt.datetime(2026, 6, 26, 18, 0)
+    blocks = [
+        ExerciseBlockView(
+            group_name="грудь",
+            exercise_name="Жим лёжа",
+            sets=[(100.0, 8)],
+            prev_sets=[(95.0, 8)],
+        )
+    ]
+    text = formatting.build_workout_summary(started, blocks, italic_prev=True)
+    assert "<i>  [прошлая: 95×8]</i>" in text
+
+
 # ---------- build_live_session_text ----------
 
 
