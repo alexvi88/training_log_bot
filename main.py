@@ -16,6 +16,7 @@ from handlers import (
     edit_workout,
     exercise_resolve,
     exercises,
+    fallback,
     history,
     settings,
     workout,
@@ -79,6 +80,7 @@ async def main() -> None:
     dp.include_router(history.router)
     dp.include_router(edit_workout.router)
     dp.include_router(settings.router)
+    dp.include_router(fallback.router)
 
     admin_job = asyncio.create_task(admin_tasks.run_daily_admin_jobs(bot))
     try:

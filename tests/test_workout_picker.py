@@ -36,6 +36,53 @@ async def _make_state(user_id: int, **extra_data) -> FSMContext:
     return state
 
 
+def _make_message(user_id: int, text: str):
+    bot = MagicMock()
+    bot.delete_message = AsyncMock()
+    bot.send_message = AsyncMock(return_value=SimpleNamespace(message_id=999))
+    message = MagicMock()
+    message.from_user = SimpleNamespace(id=user_id)
+    message.bot = bot
+    message.text = text
+    message.delete = AsyncMock()
+    return message
+
+
+async def test_typing_in_exercise_picker_searches_instead_of_being_ignored(fresh_db, user_id):
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    await db.create_exercise(user_id, "Bench press", group_id)
+    await db.create_exercise(user_id, "Triceps pushdown", group_id)
+
+    state = await _make_state(user_id)
+    message = _make_message(user_id, "bench")
+
+    await workout.pick_exercise_search(message, state)
+
+    message.delete.assert_awaited_once()
+    sent_text = message.bot.send_message.await_args.kwargs["text"]
+    assert "Bench press" in sent_text
+    assert "Triceps" not in sent_text
+
+
+async def test_typing_no_match_in_exercise_picker_offers_to_create(fresh_db, user_id):
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    await db.create_exercise(user_id, "Bench press", group_id)
+
+    state = await _make_state(user_id)
+    await state.update_data(pending_group_id=group_id)
+    message = _make_message(user_id, "squat")
+
+    await workout.pick_exercise_search(message, state)
+
+    sent_text = message.bot.send_message.await_args.kwargs["text"]
+    assert "Ничего не нашлось" in sent_text
+    kb = message.bot.send_message.await_args.kwargs["reply_markup"]
+    callback_datas = [b.callback_data for row in kb.inline_keyboard for b in row]
+    assert "pick:new" in callback_datas
+
+
 async def test_pick_page_advances_to_second_page_and_keeps_remainder(fresh_db, user_id):
     db = fresh_db
     group_id = await db.create_muscle_group(user_id, "Грудь")

@@ -213,6 +213,30 @@ async def exm_pick_exercise(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+@router.message(StateFilter(ExerciseManage.picking_exercise))
+async def exm_search_text(message: Message, state: FSMContext):
+    """Typing while browsing the exercise list searches instead of being silently dropped."""
+    query = message.text.strip()
+    if not query:
+        return
+    data = await state.get_data()
+    group_id = data.get("exm_group_id")
+    results = await db.search_exercises(message.from_user.id, query)
+    b = InlineKeyboardBuilder()
+    items = [(f"exm:ex:{ex['id']}", ex["display_name"]) for ex in results]
+    for row in keyboards.numbered_buttons(items):
+        b.row(*row)
+    if group_id is not None:
+        b.row(InlineKeyboardButton(text="➕ Новое упражнение", callback_data="exm:newex"))
+    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="exm:backlist"))
+    if results:
+        names = [escape(ex["display_name"]) for ex in results]
+        text = f"Результаты поиска «{escape(query)}»:\n" + keyboards.numbered_list(names)
+    else:
+        text = f"Ничего не нашлось по «{escape(query)}»."
+    await message.answer(text, reply_markup=b.as_markup(), parse_mode="HTML")
+
+
 @router.callback_query(F.data.startswith("exm:editname:"))
 async def exm_edit_name(callback: CallbackQuery, state: FSMContext):
     ex_id = int(callback.data.split(":")[2])

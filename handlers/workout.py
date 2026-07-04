@@ -400,6 +400,29 @@ async def pick_existing_exercise(callback: CallbackQuery, state: FSMContext):
     await _on_exercise_chosen(callback, state, ex_id)
 
 
+@router.message(StateFilter(WorkoutFlow.picking_exercise))
+async def pick_exercise_search(message: Message, state: FSMContext):
+    """Typing while picking an exercise searches instead of being silently dropped."""
+    query = message.text.strip()
+    await _delete_message(message)
+    if not query:
+        return
+    data = await state.get_data()
+    user = await db.get_user(message.from_user.id)
+    group_id = data.get("pending_group_id")
+    results = await db.search_exercises(message.from_user.id, query)
+    kb = keyboards.exercises_keyboard(results, prefix="pick", back_cb="back", show_new_button=group_id is not None)
+    if results:
+        names = [escape(ex["display_name"]) for ex in results]
+        hint = f"Результаты поиска «{escape(query)}»:\n" + keyboards.numbered_list(names)
+    else:
+        hint = f"Ничего не нашлось по «{escape(query)}»."
+        if group_id is not None:
+            hint += " Можно создать новое:"
+    await state.update_data(picker_stage="exercises")
+    await _refresh_live(message.bot, state, user, data["workout_id"], hint, kb)
+
+
 async def _new_exercise_entry_screen(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     user = await db.get_user(callback.from_user.id)
