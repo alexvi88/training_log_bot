@@ -198,6 +198,47 @@ def workout_card_keyboard(workout_id: int) -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
+def admin_users_keyboard(users, page: int, has_next: bool) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    for u in users:
+        name = f"@{u['username']}" if u["username"] else str(u["telegram_id"])
+        b.button(text=f"{name} ({u['workout_count']})", callback_data=f"admin:u:{u['telegram_id']}")
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"admin:up:{page - 1}"))
+    if has_next:
+        nav.append(InlineKeyboardButton(text="➡️", callback_data=f"admin:up:{page + 1}"))
+    b.adjust(1)
+    if nav:
+        b.row(*nav)
+    return b.as_markup()
+
+
+def admin_history_list_keyboard(
+    workouts, target_user_id: int, page: int, has_next: bool
+) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    for w in workouts:
+        b.button(text=w["label"], callback_data=f"admin:hi:{target_user_id}:{w['id']}")
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"admin:hp:{target_user_id}:{page - 1}"))
+    if has_next:
+        nav.append(InlineKeyboardButton(text="➡️", callback_data=f"admin:hp:{target_user_id}:{page + 1}"))
+    b.adjust(1)
+    if nav:
+        b.row(*nav)
+    b.row(InlineKeyboardButton(text="⬅️ К пользователям", callback_data="admin:back"))
+    return b.as_markup()
+
+
+def admin_history_item_keyboard(target_user_id: int) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.button(text="⬅️ К списку", callback_data=f"admin:hb:{target_user_id}")
+    b.adjust(1)
+    return b.as_markup()
+
+
 def settings_keyboard(unit: str, formula: str) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(text=f"Единицы: {unit}", callback_data="settings:unit")

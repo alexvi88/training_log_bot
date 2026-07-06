@@ -11,6 +11,7 @@ import config
 import db
 from fsm_storage import JSONFileStorage
 from handlers import (
+    admin,
     backfill,
     csv_import,
     edit_workout,
@@ -73,6 +74,7 @@ async def main() -> None:
     dp = Dispatcher(storage=JSONFileStorage(config.FSM_STORAGE_PATH))
     dp.callback_query.outer_middleware(IgnoreStaleCallbackMiddleware())
     dp.include_router(workout.router)
+    dp.include_router(admin.router)
     dp.include_router(backfill.router)
     dp.include_router(exercise_resolve.router)
     dp.include_router(csv_import.router)
