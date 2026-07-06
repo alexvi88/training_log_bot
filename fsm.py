@@ -43,6 +43,11 @@ class EditWorkoutFlow(StatesGroup):
     adding_set = State()
 
 
+class AdminFlow(StatesGroup):
+    browsing_users = State()
+    browsing_history = State()
+
+
 class ImportFlow(StatesGroup):
     awaiting_file = State()
     mapping_columns = State()

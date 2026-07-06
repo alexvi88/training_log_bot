@@ -345,6 +345,25 @@ async def get_user(telegram_id: int) -> Optional[aiosqlite.Row]:
     return await cur.fetchone()
 
 
+async def list_users_with_workout_counts(limit: int = 10, offset: int = 0) -> list[aiosqlite.Row]:
+    """All users with their finished-workout count, most workouts first — for the admin panel."""
+    cur = await conn().execute(
+        "SELECT u.telegram_id, u.username, "
+        "COUNT(w.id) FILTER (WHERE w.status = 'finished') AS workout_count "
+        "FROM users u LEFT JOIN workouts w ON w.user_id = u.telegram_id "
+        "GROUP BY u.telegram_id ORDER BY workout_count DESC, u.telegram_id "
+        "LIMIT ? OFFSET ?",
+        (limit, offset),
+    )
+    return await cur.fetchall()
+
+
+async def count_users() -> int:
+    cur = await conn().execute("SELECT COUNT(*) FROM users")
+    (count,) = await cur.fetchone()
+    return count
+
+
 async def update_user(telegram_id: int, **fields: Any) -> None:
     if not fields:
         return
