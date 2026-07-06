@@ -211,6 +211,7 @@ def admin_users_keyboard(users, page: int, has_next: bool) -> InlineKeyboardMark
     b.adjust(1)
     if nav:
         b.row(*nav)
+    b.row(InlineKeyboardButton(text="⬅️ Главное меню", callback_data="admin:menu"))
     return b.as_markup()
 
 

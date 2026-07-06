@@ -57,6 +57,16 @@ async def admin_users_page(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+@router.callback_query(F.data == "admin:menu")
+async def admin_to_menu(callback: CallbackQuery, state: FSMContext):
+    if not _is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    from handlers.workout import _show_main_menu
+    await _show_main_menu(callback, state)
+    await callback.answer()
+
+
 @router.callback_query(F.data == "admin:back")
 async def admin_back_to_users(callback: CallbackQuery, state: FSMContext):
     if not _is_admin(callback.from_user.id):
