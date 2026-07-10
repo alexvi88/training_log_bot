@@ -207,7 +207,7 @@ def format_pr_detail(kind: str, value: float, extra: float | None = None, unit: 
     if kind == "e1rm":
         return f"🔥 Новый рекорд e1RM: {value:.1f} {u}"
     if kind == "reps_at_weight":
-        return f"🔥 Новый рекорд повторов: {int(value)} на {format_weight(extra or 0)} {u}"
+        return f"🔥 Новый рекорд повторов: {format_weight(extra or 0)} {u} × {int(value)}"
     return "🔥 Новый рекорд"
 
 

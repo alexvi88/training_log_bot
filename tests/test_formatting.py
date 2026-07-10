@@ -149,7 +149,7 @@ def test_format_pr_detail_e1rm():
 
 def test_format_pr_detail_reps_at_weight():
     text = formatting.format_pr_detail("reps_at_weight", 8, extra=100.0)
-    assert text == "🔥 Новый рекорд повторов: 8 на 100 кг"
+    assert text == "🔥 Новый рекорд повторов: 100 кг × 8"
 
 
 def test_format_pr_detail_unknown_kind_falls_back():
