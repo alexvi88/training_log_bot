@@ -428,7 +428,7 @@ async def list_user_exercises_in_group(
         "FROM exercises e "
         "WHERE e.user_id = ? AND e.primary_group_id = ? "
         "AND e.is_archived = 0 AND e.is_template = 0 "
-        "ORDER BY e.last_used_at IS NULL, e.last_used_at DESC, usage_count DESC, e.display_name"
+        "ORDER BY usage_count DESC, e.last_used_at IS NULL, e.last_used_at DESC, e.display_name"
     )
     params: list[Any] = [user_id, group_id]
     if limit:
