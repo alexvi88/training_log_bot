@@ -69,9 +69,10 @@ async def show_history_item(callback: CallbackQuery, workout_id: int) -> bool:
         workout_id, user["e1rm_formula"], previous_before=workout["started_at"]
     )
     started = dt.datetime.fromisoformat(workout["started_at"])
+    duration_seconds = await view_builder.workout_duration_seconds(workout)
     text = formatting.build_workout_summary(
         started, blocks, workout["note"], show_extra_stats=bool(user["show_extra_stats"]),
-        italic_prev=True,
+        italic_prev=True, duration_seconds=duration_seconds,
     )
     await ui.safe_edit(
         callback, text, reply_markup=keyboards.history_item_keyboard(workout_id), parse_mode="HTML"

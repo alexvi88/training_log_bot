@@ -24,6 +24,18 @@ def test_format_date_ru_includes_weekday():
     assert formatting.format_date_ru(d) == "26.06.2026 (пт)"
 
 
+def test_format_duration_minutes_only():
+    assert formatting.format_duration(45 * 60) == "45 мин"
+
+
+def test_format_duration_hours_and_minutes():
+    assert formatting.format_duration(75 * 60) == "1 ч 15 мин"
+
+
+def test_format_duration_whole_hours():
+    assert formatting.format_duration(120 * 60) == "2 ч"
+
+
 # ---------- build_workout_summary ----------
 
 
@@ -56,6 +68,18 @@ def test_build_workout_summary_includes_note():
     started = dt.datetime(2026, 6, 26, 18, 0)
     text = formatting.build_workout_summary(started, [], note="Болело плечо")
     assert "📝 Болело плечо" in text
+
+
+def test_build_workout_summary_shows_duration_when_given():
+    started = dt.datetime(2026, 6, 26, 18, 0)
+    text = formatting.build_workout_summary(started, [], duration_seconds=75 * 60)
+    assert "26.06.2026 (пт)</b> · 1 ч 15 мин" in text
+
+
+def test_build_workout_summary_omits_duration_when_none():
+    started = dt.datetime(2026, 6, 26, 18, 0)
+    text = formatting.build_workout_summary(started, [], duration_seconds=None)
+    assert "·" not in text.splitlines()[0]
 
 
 def test_build_workout_summary_shows_previous_session_sets():
