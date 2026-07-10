@@ -1,5 +1,7 @@
 """Turns raw workout/block/set rows from db.py into formatting.py view objects."""
 
+import datetime as dt
+
 import analytics
 import db
 from formatting import BlockView, ExerciseBlockView
@@ -52,6 +54,30 @@ async def build_block_views(
         )
 
     return views
+
+
+MAX_PLAUSIBLE_DURATION_SECONDS = 6 * 3600
+
+
+async def workout_duration_seconds(workout) -> float | None:
+    """Time from the first logged set to the last, for workouts tracked live.
+
+    Backfilled/imported workouts have started_at == finished_at (no live FSM ran),
+    so the set timestamps only reflect data-entry time, not the actual session —
+    duration is skipped for those. Editing a finished workout can also add a set
+    with a fresh timestamp long after the session; an implausibly long span is
+    treated the same way rather than shown as-is.
+    """
+    if workout["started_at"] == workout["finished_at"]:
+        return None
+    span = await db.get_workout_set_span(workout["id"])
+    if span is None:
+        return None
+    first_at, last_at = span
+    seconds = (dt.datetime.fromisoformat(last_at) - dt.datetime.fromisoformat(first_at)).total_seconds()
+    if seconds > MAX_PLAUSIBLE_DURATION_SECONDS:
+        return None
+    return seconds
 
 
 async def _previous_session_sets(

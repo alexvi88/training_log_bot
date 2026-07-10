@@ -927,6 +927,19 @@ async def list_exercise_ids_for_workout(workout_id: int) -> list[int]:
     return [r["exercise_id"] for r in rows]
 
 
+async def get_workout_set_span(workout_id: int) -> Optional[tuple[str, str]]:
+    """(first_set_created_at, last_set_created_at) for a workout, or None if it has no sets."""
+    cur = await conn().execute(
+        "SELECT MIN(s.created_at) AS first_at, MAX(s.created_at) AS last_at FROM sets s "
+        "JOIN workout_blocks b ON b.id = s.block_id WHERE b.workout_id = ?",
+        (workout_id,),
+    )
+    row = await cur.fetchone()
+    if row is None or row["first_at"] is None:
+        return None
+    return row["first_at"], row["last_at"]
+
+
 async def find_last_finished_workout_with_exercise(user_id: int, exercise_id: int) -> Optional[int]:
     """Most recent finished workout that included this exercise, if any."""
     cur = await conn().execute(

@@ -815,8 +815,10 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
     blocks = await view_builder.build_block_views(
         workout_id, formula, previous_before=workout["started_at"]
     )
+    duration_seconds = await view_builder.workout_duration_seconds(await db.get_workout(workout_id))
     summary = formatting.build_workout_summary(
         started_at, blocks, note, show_extra_stats=bool(user["show_extra_stats"]),
+        duration_seconds=duration_seconds,
     )
     highlights = formatting.build_exercise_highlights(highlight_groups)
     full_text = summary + (f"\n\n{formatting.DIVIDER}\n\n{highlights}" if highlights else "")

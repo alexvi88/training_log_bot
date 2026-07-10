@@ -45,6 +45,16 @@ def format_date_ru(d: dt.datetime) -> str:
     return f"{d.strftime('%d.%m.%Y')} ({_WEEKDAYS_RU[d.weekday()]})"
 
 
+def format_duration(seconds: float) -> str:
+    total_minutes = round(seconds / 60)
+    hours, minutes = divmod(total_minutes, 60)
+    if hours and minutes:
+        return f"{hours} ч {minutes} мин"
+    if hours:
+        return f"{hours} ч"
+    return f"{minutes} мин"
+
+
 @dataclass
 class ExerciseBlockView:
     group_name: str
@@ -98,8 +108,12 @@ def build_workout_summary(
     note: str | None = None,
     show_extra_stats: bool = True,
     italic_prev: bool = False,
+    duration_seconds: float | None = None,
 ) -> str:
-    lines = [f"<b>{format_date_ru(started_at)}</b>"]
+    header = f"<b>{format_date_ru(started_at)}</b>"
+    if duration_seconds is not None:
+        header += f" · {format_duration(duration_seconds)}"
+    lines = [header]
     if note:
         lines.append(f"📝 {note}")
     lines.append("")
