@@ -202,6 +202,7 @@ async def exm_archive_group(callback: CallbackQuery, state: FSMContext):
 
 def _exercise_detail_view(ex):
     b = InlineKeyboardBuilder()
+    b.button(text="📈 Прогресс", callback_data=f"prog:ex:{ex['id']}")
     b.button(text="✏️ Название", callback_data=f"exm:editname:{ex['id']}")
     b.button(text="🗑 Архивировать", callback_data=f"exm:archiveask:{ex['id']}")
     b.button(text="⬅️ Назад", callback_data="exm:backlist")
