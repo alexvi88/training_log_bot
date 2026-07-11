@@ -5,6 +5,7 @@ from contextlib import suppress
 from aiogram import BaseMiddleware, Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.exceptions import TelegramBadRequest
+from aiogram.types import BotCommand, BotCommandScopeChat, BotCommandScopeDefault
 
 import admin_tasks
 import config
@@ -62,6 +63,21 @@ class IgnoreStaleCallbackMiddleware(BaseMiddleware):
             raise
 
 
+async def _setup_commands(bot: Bot) -> None:
+    await bot.set_my_commands(
+        [BotCommand(command="start", description="Открыть главное меню")],
+        scope=BotCommandScopeDefault(),
+    )
+    if config.ADMIN_ID is not None:
+        await bot.set_my_commands(
+            [
+                BotCommand(command="start", description="Открыть главное меню"),
+                BotCommand(command="admin", description="Список пользователей (админ)"),
+            ],
+            scope=BotCommandScopeChat(chat_id=config.ADMIN_ID),
+        )
+
+
 async def main() -> None:
     logging.basicConfig(level=logging.INFO)
 
@@ -71,6 +87,7 @@ async def main() -> None:
     await db.init_db()
 
     bot = Bot(token=config.BOT_TOKEN, default=DefaultBotProperties(disable_notification=True))
+    await _setup_commands(bot)
     dp = Dispatcher(storage=JSONFileStorage(config.FSM_STORAGE_PATH))
     dp.callback_query.outer_middleware(IgnoreStaleCallbackMiddleware())
     dp.include_router(workout.router)
