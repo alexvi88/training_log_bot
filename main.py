@@ -5,12 +5,13 @@ from contextlib import suppress
 from aiogram import BaseMiddleware, Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.types import BotCommand, BotCommandScopeChat, BotCommandScopeDefault
+from aiogram.types import BotCommand, BotCommandScopeChat, BotCommandScopeDefault, CallbackQuery, Message
 
 import admin_tasks
 import config
 import db
 import engagement
+import keyboards
 from fsm_storage import JSONFileStorage
 from handlers import (
     admin,
@@ -22,6 +23,7 @@ from handlers import (
     exercises,
     fallback,
     history,
+    persistent_menu,
     settings,
     workout,
 )
@@ -65,15 +67,43 @@ class IgnoreStaleCallbackMiddleware(BaseMiddleware):
             raise
 
 
+class RefreshPersistentMenuMiddleware(BaseMiddleware):
+    """Catches every user up to the latest persistent-keyboard button set on
+    their very next interaction with the bot — any text message or button
+    tap — rather than only resyncing when they happen to hit /start or the
+    Меню button. Runs after the handler so the normal reply goes out first.
+    """
+
+    async def __call__(self, handler, event, data):
+        result = await handler(event, data)
+        target = event.message if isinstance(event, CallbackQuery) else event
+        if not isinstance(target, Message):
+            return result
+        user = await db.get_user(event.from_user.id)
+        if user is None or user["reply_keyboard_version"] >= keyboards.PERSISTENT_MENU_VERSION:
+            return result
+        with suppress(TelegramBadRequest):
+            await target.answer(
+                "⌨️ Обновил меню под полем ввода.",
+                reply_markup=keyboards.persistent_menu(),
+            )
+        await db.update_user(event.from_user.id, reply_keyboard_version=keyboards.PERSISTENT_MENU_VERSION)
+        return result
+
+
 async def _setup_commands(bot: Bot) -> None:
     await bot.set_my_commands(
-        [BotCommand(command="start", description="Открыть главное меню")],
+        [
+            BotCommand(command="start", description="Открыть главное меню"),
+            BotCommand(command="ai_trainer", description="AI-тренер"),
+        ],
         scope=BotCommandScopeDefault(),
     )
     if config.ADMIN_ID is not None:
         await bot.set_my_commands(
             [
                 BotCommand(command="start", description="Открыть главное меню"),
+                BotCommand(command="ai_trainer", description="AI-тренер"),
                 BotCommand(command="check_users", description="Список пользователей (админ)"),
                 BotCommand(command="pushes", description="Лог отправленных пушей (админ)"),
             ],
@@ -93,6 +123,9 @@ async def main() -> None:
     await _setup_commands(bot)
     dp = Dispatcher(storage=JSONFileStorage(config.FSM_STORAGE_PATH))
     dp.callback_query.outer_middleware(IgnoreStaleCallbackMiddleware())
+    dp.message.outer_middleware(RefreshPersistentMenuMiddleware())
+    dp.callback_query.outer_middleware(RefreshPersistentMenuMiddleware())
+    dp.include_router(persistent_menu.router)
     dp.include_router(workout.router)
     dp.include_router(admin.router)
     dp.include_router(backfill.router)
