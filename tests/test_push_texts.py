@@ -7,10 +7,10 @@ import push_texts
 pytestmark = pytest.mark.asyncio
 
 
-async def test_every_variant_is_a_caps_atlet_address():
+async def test_every_variant_opens_with_privet_atlet():
     for pool in push_texts.TEXTS.values():
         for text in pool:
-            assert "АТЛЕТ" in text
+            assert text.startswith("ПРИВЕТ АТЛЕТ, "), text
             assert "боец" not in text.lower()
 
 
