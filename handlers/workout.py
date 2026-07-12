@@ -176,7 +176,7 @@ async def _back_after_cancel(bot, state: FSMContext, user):
 
 # ---------- main menu ----------
 
-_GREETING = "Привет, атлет. Начнём тренировку?"
+_GREETING = "<b>ПРИВЕТ, АТЛЕТ. НАЧНЁМ ТРЕНИРОВКУ?</b>"
 
 
 async def _menu_view(user_id: int) -> tuple[str, bytes | None]:
