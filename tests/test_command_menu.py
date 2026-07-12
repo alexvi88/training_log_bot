@@ -37,7 +37,7 @@ async def test_admin_scope_targets_only_admin_chat_and_includes_admin_command(mo
     scope: BotCommandScopeChat = admin_call.kwargs["scope"]
     commands: list[BotCommand] = admin_call.args[0]
     assert scope.chat_id == 12345
-    assert {c.command for c in commands} == {"start", "check_users"}
+    assert {c.command for c in commands} == {"start", "check_users", "pushes"}
 
 
 async def test_no_admin_scope_registered_when_admin_id_unset(monkeypatch):
