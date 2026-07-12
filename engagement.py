@@ -47,6 +47,13 @@ PLATEAU_SESSIONS = 3
 DIGEST_LOOKBACK_DAYS = 30
 CHALLENGE_ON_PACE_WORKOUTS = 2  # Thursday nudge fires if fewer than this many workouts logged this week
 
+QUIET_HOURS_START = 23  # no pushes from 23:00...
+QUIET_HOURS_END = 8  # ...through 08:00
+
+
+def in_quiet_hours(now: dt.datetime) -> bool:
+    return now.hour >= QUIET_HOURS_START or now.hour < QUIET_HOURS_END
+
 
 @dataclass
 class PushDecision:
@@ -228,6 +235,8 @@ async def run_daily_engagement_job(bot: Bot) -> None:
 
 
 async def _send_due_followups(bot: Bot) -> None:
+    if in_quiet_hours(dt.datetime.now()):
+        return  # left un-marked, so it's picked up again on the next poll after quiet hours end
     for workout in await db.list_due_followups(db.now_iso()):
         text = await push_texts.pick_text(workout["user_id"], push_texts.FOLLOWUP)
         try:
