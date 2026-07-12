@@ -249,6 +249,18 @@ def test_detect_new_records_dominated_by_a_weight_already_matched_in_history():
     assert reps_records == []
 
 
+def test_detect_new_records_dominated_even_with_fewer_reps_at_the_lighter_weight():
+    # Same as above, but the lighter set also has fewer reps (205x2 vs 210x3) —
+    # still not a record, since 210x3 done in the same session beats it outright.
+    history = [SessionStats(1, "2026-06-01T10:00:00", [SetRow(210, 3)])]
+    new_session = SessionStats(
+        2, "2026-06-08T10:00:00", [SetRow(190, 3), SetRow(205, 2), SetRow(210, 3)]
+    )
+    records = analytics.detect_new_records(history, new_session)
+    reps_records = [r for r in records if r.kind == "reps_at_weight"]
+    assert reps_records == []
+
+
 # ---------- compare_to_previous_session ----------
 
 
