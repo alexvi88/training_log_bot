@@ -104,7 +104,6 @@ async def main() -> None:
     dp.include_router(settings.router)
     dp.include_router(fallback.router)
 
-
     admin_job = asyncio.create_task(admin_tasks.run_daily_admin_jobs(bot))
     engagement_job = asyncio.create_task(engagement.run_daily_engagement_job(bot))
     try:
