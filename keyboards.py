@@ -240,6 +240,19 @@ def admin_history_item_keyboard(target_user_id: int) -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
+def admin_pushes_keyboard(page: int, has_next: bool) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"admin:pp:{page - 1}"))
+    if has_next:
+        nav.append(InlineKeyboardButton(text="➡️", callback_data=f"admin:pp:{page + 1}"))
+    if nav:
+        b.row(*nav)
+    b.row(InlineKeyboardButton(text="⬅️ Главное меню", callback_data="admin:menu"))
+    return b.as_markup()
+
+
 def settings_keyboard(unit: str, formula: str) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(text=f"Единицы: {unit}", callback_data="settings:unit")
@@ -254,6 +267,13 @@ def settings_keyboard(unit: str, formula: str) -> InlineKeyboardMarkup:
 def cancel_keyboard(cb: str = "cancel") -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(text="❌ Отмена", callback_data=cb)
+    return b.as_markup()
+
+
+def push_cta_keyboard() -> InlineKeyboardMarkup:
+    """Attached to daily-rotation push notifications: routes straight into starting a workout."""
+    b = InlineKeyboardBuilder()
+    b.button(text="▶ Начать тренировку", callback_data="menu:start_workout")
     return b.as_markup()
 
 
