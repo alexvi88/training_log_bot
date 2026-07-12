@@ -18,7 +18,7 @@ def test_dashboard_empty():
     dash = analytics.compute_dashboard([], d("2026-06-26"))
     assert dash == analytics.Dashboard(0, 0, 0, None, 0)
     # New user gets no dashboard block at all.
-    assert formatting.format_dashboard(dash) == ""
+    assert formatting.dashboard_stat_lines(dash) == []
 
 
 def test_dashboard_counts_and_last_workout():
@@ -64,23 +64,24 @@ def test_week_streak_breaks_after_two_empty_weeks():
     assert dash.week_streak == 0
 
 
-def test_format_dashboard_hides_short_streak():
+def test_dashboard_stat_lines_hides_short_streak():
     dash = analytics.Dashboard(
         total_workouts=3, this_week=1, last_30_days=3, days_since_last=1, week_streak=1
     )
-    text = formatting.format_dashboard(dash)
-    assert "Серия" not in text  # streak < 2 is not motivating, hidden
-    assert "Последние 30 дней: 3 тренировки" in text
+    lines = formatting.dashboard_stat_lines(dash)
+    labels = [label for label, _ in lines]
+    assert "Серия: " not in labels  # streak < 2 is not motivating, hidden
+    assert ("Последние 30 дней: ", "3 тренировки") in lines
 
 
-def test_format_dashboard_shows_streak_and_plurals():
+def test_dashboard_stat_lines_shows_streak_and_plurals():
     dash = analytics.Dashboard(
         total_workouts=21, this_week=2, last_30_days=8, days_since_last=0, week_streak=5
     )
-    text = formatting.format_dashboard(dash)
-    assert "Серия: 5 недель подряд" in text
-    assert "Эта неделя: 2 тренировки" in text
-    assert "Последние 30 дней: 8 тренировок" in text
+    lines = formatting.dashboard_stat_lines(dash)
+    assert ("Серия: ", "5 недель подряд") in lines
+    assert ("Эта неделя: ", "2 тренировки") in lines
+    assert ("Последние 30 дней: ", "8 тренировок") in lines
 
 
 def test_plural_ru():
@@ -135,12 +136,13 @@ def test_render_year_heatmap_returns_png():
         dt.date(2020, 1, 1): 1,  # far outside the grid, must be ignored
     }
     start = dt.date(2025, 7, 13)  # roughly a year back, snapped to Monday inside the renderer
-    png = charts.render_year_heatmap(counts, today, start, "4 тренировки за последний год")
+    stat_lines = [("Последние 30 дней: ", "4 тренировки")]
+    png = charts.render_year_heatmap(counts, today, start, stat_lines)
     assert png[:8] == b"\x89PNG\r\n\x1a\n"
 
 
 def test_render_year_heatmap_handles_empty_counts():
-    png = charts.render_year_heatmap({}, dt.date(2026, 7, 12), dt.date(2026, 7, 1), "0 тренировок")
+    png = charts.render_year_heatmap({}, dt.date(2026, 7, 12), dt.date(2026, 7, 1), [])
     assert png[:8] == b"\x89PNG\r\n\x1a\n"
 
 
@@ -148,7 +150,8 @@ def test_render_year_heatmap_starts_at_first_workout():
     """A brand-new user shouldn't get 52 empty weeks padded onto the grid."""
     today = dt.date(2026, 7, 12)
     start = dt.date(2026, 7, 6)
-    png = charts.render_year_heatmap({dt.date(2026, 7, 10): 1}, today, start, "1 тренировка с начала тренировок")
+    stat_lines = [("Последние 30 дней: ", "1 тренировка")]
+    png = charts.render_year_heatmap({dt.date(2026, 7, 10): 1}, today, start, stat_lines)
     assert png[:8] == b"\x89PNG\r\n\x1a\n"
 
 
