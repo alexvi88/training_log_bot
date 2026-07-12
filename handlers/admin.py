@@ -41,7 +41,7 @@ async def _show_users_list(target: Message | CallbackQuery, state: FSMContext, p
         await target.answer(text, reply_markup=kb)
 
 
-@router.message(Command("admin"))
+@router.message(Command("check_users"))
 async def cmd_admin(message: Message, state: FSMContext):
     if not _is_admin(message.from_user.id):
         return
