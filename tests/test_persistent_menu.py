@@ -1,6 +1,6 @@
 """Persistent reply-keyboard buttons under the input field: 'Меню', 'Тренировка',
 'AI-тренер'. They must always work, even mid-flow, and the keyboard itself should
-only be (re)sent once per user.
+stay in sync for every user via RefreshPersistentMenuMiddleware.
 """
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -9,17 +9,18 @@ import pytest
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import ReplyKeyboardMarkup
+from aiogram.types import Message, ReplyKeyboardMarkup
 
 import keyboards
 from fsm import AITrainerFlow, WorkoutFlow
-from handlers import persistent_menu, workout
+from handlers import persistent_menu
+from main import RefreshPersistentMenuMiddleware
 
 pytestmark = pytest.mark.asyncio
 
 
 def _make_message(user_id: int):
-    message = MagicMock()
+    message = MagicMock(spec=Message)
     message.from_user = SimpleNamespace(id=user_id, username="tester")
     message.bot = AsyncMock()
     message.bot.send_message = AsyncMock(return_value=SimpleNamespace(message_id=1000))
@@ -34,35 +35,42 @@ async def _make_state(user_id: int) -> FSMContext:
     return FSMContext(storage=storage, key=key)
 
 
-async def test_start_shows_persistent_keyboard_only_once(fresh_db, user_id):
+async def test_middleware_refreshes_keyboard_on_any_message_for_stale_users(fresh_db, user_id):
+    await fresh_db.update_user(user_id, reply_keyboard_version=0)
     message = _make_message(user_id)
-    state = await _make_state(user_id)
+    message.text = "100 8"  # an ordinary set-logging message, not /start or a menu button
+    handler = AsyncMock(return_value="handled")
+    middleware = RefreshPersistentMenuMiddleware()
 
-    await workout.cmd_start(message, state)
+    result = await middleware(handler, message, {})
 
-    onboarding_call = message.answer.await_args_list[1]
-    assert isinstance(onboarding_call.kwargs["reply_markup"], ReplyKeyboardMarkup)
+    assert result == "handled"
+    handler.assert_awaited_once_with(message, {})
+    refresh_call = message.answer.await_args
+    assert isinstance(refresh_call.kwargs["reply_markup"], ReplyKeyboardMarkup)
     user = await fresh_db.get_user(user_id)
     assert user["reply_keyboard_version"] == keyboards.PERSISTENT_MENU_VERSION
 
-    message2 = _make_message(user_id)
-    await workout.cmd_start(message2, state)
-    assert message2.answer.await_count == 1
 
-
-async def test_menu_version_bump_reshows_keyboard_for_existing_users(fresh_db, user_id):
-    await fresh_db.update_user(user_id, reply_keyboard_version=1)
-
+async def test_middleware_is_a_noop_once_up_to_date(fresh_db, user_id):
+    await fresh_db.update_user(user_id, reply_keyboard_version=keyboards.PERSISTENT_MENU_VERSION)
     message = _make_message(user_id)
-    state = await _make_state(user_id)
+    handler = AsyncMock(return_value="handled")
+    middleware = RefreshPersistentMenuMiddleware()
 
-    with patch("keyboards.PERSISTENT_MENU_VERSION", 2):
-        await workout.cmd_start(message, state)
+    await middleware(handler, message, {})
 
-    onboarding_call = message.answer.await_args_list[1]
-    assert isinstance(onboarding_call.kwargs["reply_markup"], ReplyKeyboardMarkup)
-    user = await fresh_db.get_user(user_id)
-    assert user["reply_keyboard_version"] == 2
+    message.answer.assert_not_awaited()
+
+
+async def test_middleware_skips_users_never_seen_before(fresh_db):
+    message = _make_message(999999)
+    handler = AsyncMock(return_value="handled")
+    middleware = RefreshPersistentMenuMiddleware()
+
+    await middleware(handler, message, {})
+
+    message.answer.assert_not_awaited()
 
 
 async def test_menu_button_reuses_cmd_start(fresh_db, user_id):
