@@ -10,6 +10,7 @@ matplotlib.use("Agg")
 
 import matplotlib.dates as mdates  # noqa: E402
 import matplotlib.pyplot as plt  # noqa: E402
+from matplotlib.patches import FancyBboxPatch  # noqa: E402
 
 from analytics import linear_trend  # noqa: E402
 
@@ -51,20 +52,40 @@ def render_metric_over_sessions(
     return _fig_to_png(fig)
 
 
-# Binary marker for the year heatmap: trained that day, or not. No count-based shading.
+# Binary marker for the year heatmap: trained that day, or not. No count-based shading —
+# a day essentially never has more than one workout, so a colour ramp would just be noise.
 HEATMAP_EMPTY = "#1e242e"
-HEATMAP_FILLED = "#39d353"
+HEATMAP_FILLED = "#4f8cff"  # same accent used elsewhere (e.g. render_workout_card)
 
 _MONTHS_RU = ["Янв", "Фев", "Мар", "Апр", "Май", "Июн", "Июл", "Авг", "Сен", "Окт", "Ноя", "Дек"]
 
 
-def render_year_heatmap(day_counts: dict[dt.date, int], today: dt.date, start: dt.date, title: str) -> bytes:
+def _rounded_cell(ax, x: float, y: float, size: float, colour: str) -> None:
+    pad = size * 0.1
+    ax.add_patch(
+        FancyBboxPatch(
+            (x + pad, y + pad), size - 2 * pad, size - 2 * pad,
+            boxstyle="round,pad=0,rounding_size=0.14",
+            linewidth=0, facecolor=colour,
+        )
+    )
+
+
+def render_year_heatmap(
+    day_counts: dict[dt.date, int],
+    today: dt.date,
+    start: dt.date,
+    stat_lines: list[tuple[str, str]],
+) -> bytes:
     """GitHub-style contribution calendar: week columns x 7 day rows, Monday on top.
 
-    Each square just marks "trained" vs "not trained" — no colour ramp. The
-    grid runs from `start` (typically the Monday of the user's first workout,
-    capped at a year back) through `today`, so it doesn't waste columns on
-    weeks before the user began.
+    `stat_lines` is a list of (label, value) pairs (e.g. "Серия: " / "5 недель
+    подряд") rendered as a header above the grid, label in muted ink and value
+    bold — this is the dashboard's streak/this-week/30-day summary, drawn into
+    the image itself rather than as separate caption text. The grid runs from
+    `start` (typically the Monday of the user's first workout, capped at a
+    year back) through `today`, so it doesn't waste columns on weeks before
+    the user began.
     """
     BG = "#12161d"
     FG = "#e6e6e6"
@@ -73,14 +94,35 @@ def render_year_heatmap(day_counts: dict[dt.date, int], today: dt.date, start: d
     start = start - dt.timedelta(days=start.weekday())  # snap to Monday
     columns = (today - start).days // 7 + 1
 
-    fig = plt.figure(figsize=(2.4 + columns * 0.19, 2.4), dpi=150)
+    stats_h = 0.36 + 0.24 * max(len(stat_lines), 1)
+    grid_w = max(6.6, 2.4 + columns * 0.19)
+    grid_h = 2.4
+    fig_w, fig_h = grid_w, stats_h + grid_h
+
+    fig = plt.figure(figsize=(fig_w, fig_h), dpi=150)
     fig.patch.set_facecolor(BG)
-    ax = fig.add_axes([0, 0, 1, 1])
-    ax.set_facecolor(BG)
-    ax.axis("off")
-    ax.set_aspect("equal")
-    ax.set_xlim(-3.2, columns + 0.4)
-    ax.set_ylim(9.2, -3.4)  # inverted so Monday's row sits on top
+
+    text_ax = fig.add_axes([0, 1 - stats_h / fig_h, 1, stats_h / fig_h])
+    text_ax.set_facecolor(BG)
+    text_ax.axis("off")
+    text_ax.set_xlim(0, 1)
+    text_ax.set_ylim(0, 1)
+
+    row_frac = 1 / (len(stat_lines) + 0.6) if stat_lines else 1
+    for i, (label, value) in enumerate(stat_lines):
+        y = 1 - (i + 0.85) * row_frac
+        label_text = text_ax.text(0.04, y, label, color=MUTED, fontsize=10.5, va="center")
+        fig.canvas.draw()
+        bbox = label_text.get_window_extent(renderer=fig.canvas.get_renderer())
+        bbox_axes = bbox.transformed(text_ax.transAxes.inverted())
+        text_ax.text(bbox_axes.x1, y, value, color=FG, fontsize=10.5, fontweight="bold", va="center")
+
+    grid_ax = fig.add_axes([0, 0, 1, grid_h / fig_h])
+    grid_ax.set_facecolor(BG)
+    grid_ax.axis("off")
+    grid_ax.set_aspect("equal")
+    grid_ax.set_xlim(-3.2, columns + 0.4)
+    grid_ax.set_ylim(9.2, -3.4)  # inverted so Monday's row sits on top
 
     for col in range(columns):
         monday = start + dt.timedelta(weeks=col)
@@ -89,14 +131,12 @@ def render_year_heatmap(day_counts: dict[dt.date, int], today: dt.date, start: d
             if day > today:
                 continue
             colour = HEATMAP_FILLED if day_counts.get(day, 0) > 0 else HEATMAP_EMPTY
-            ax.add_patch(plt.Rectangle((col + 0.1, row + 0.1), 0.8, 0.8, color=colour, linewidth=0))
+            _rounded_cell(grid_ax, col, row, 1, colour)
         if col > 0 and monday.month != (monday - dt.timedelta(weeks=1)).month:
-            ax.text(col + 0.1, -0.7, _MONTHS_RU[monday.month - 1], color=MUTED, fontsize=7, va="center")
+            grid_ax.text(col + 0.1, -0.7, _MONTHS_RU[monday.month - 1], color=MUTED, fontsize=7, va="center")
 
     for row, label in ((0, "Пн"), (2, "Ср"), (4, "Пт")):
-        ax.text(-0.5, row + 0.55, label, color=MUTED, fontsize=7, ha="right", va="center")
-
-    ax.text(0.1, -2.3, title, color=FG, fontsize=10, fontweight="bold", va="center")
+        grid_ax.text(-0.5, row + 0.55, label, color=MUTED, fontsize=7, ha="right", va="center")
 
     return _fig_to_png(fig)
 
