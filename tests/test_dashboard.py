@@ -125,6 +125,24 @@ def test_render_workout_card_returns_png():
     assert png[:8] == b"\x89PNG\r\n\x1a\n"
 
 
+def test_render_year_heatmap_returns_png():
+    today = dt.date(2026, 7, 12)
+    counts = {
+        dt.date(2026, 7, 10): 1,
+        dt.date(2026, 7, 8): 2,
+        dt.date(2026, 7, 6): 5,  # above the top level, must clamp instead of crashing
+        dt.date(2025, 7, 20): 1,  # near the year-ago edge of the grid
+        dt.date(2020, 1, 1): 1,  # far outside the grid, must be ignored
+    }
+    png = charts.render_year_heatmap(counts, today, "4 тренировки за последний год")
+    assert png[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_render_year_heatmap_handles_empty_counts():
+    png = charts.render_year_heatmap({}, dt.date(2026, 7, 12), "0 тренировок за последний год")
+    assert png[:8] == b"\x89PNG\r\n\x1a\n"
+
+
 @pytest.mark.asyncio
 async def test_list_finished_workout_dates(user_id, fresh_db):
     db = fresh_db
@@ -134,3 +152,26 @@ async def test_list_finished_workout_dates(user_id, fresh_db):
     await db.create_workout(user_id)
     dates = await db.list_finished_workout_dates(user_id)
     assert dates == ["2026-06-20", "2026-06-26"]
+
+
+@pytest.mark.asyncio
+async def test_menu_view_plain_text_for_new_user(user_id, fresh_db):
+    from handlers.workout import _menu_view
+
+    text, png = await _menu_view(user_id)
+    assert "АТЛЕТ" in text
+    assert png is None
+
+
+@pytest.mark.asyncio
+async def test_menu_view_includes_heatmap_once_history_exists(user_id, fresh_db):
+    db = fresh_db
+    started = dt.datetime.now() - dt.timedelta(days=3)
+    await db.create_finished_workout(
+        user_id, started.isoformat(), (started + dt.timedelta(hours=1)).isoformat()
+    )
+    from handlers.workout import _menu_view
+
+    text, png = await _menu_view(user_id)
+    assert "АТЛЕТ" in text
+    assert png is not None and png[:8] == b"\x89PNG\r\n\x1a\n"
