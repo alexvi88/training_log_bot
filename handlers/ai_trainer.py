@@ -1,4 +1,4 @@
-"""AI-тренер: чат с Claude, у которого есть доступ к данным текущего пользователя."""
+"""AI-тренер: чат с Grok, у которого есть доступ к данным текущего пользователя."""
 
 import asyncio
 import logging
@@ -47,7 +47,7 @@ async def _keep_typing(message: Message) -> None:
 async def menu_ai(callback: CallbackQuery, state: FSMContext):
     if not ai_trainer.is_configured():
         await callback.answer(
-            "AI-тренер не настроен: администратору нужно задать ANTHROPIC_API_KEY.",
+            "AI-тренер не настроен: администратору нужно задать XAI_API_KEY.",
             show_alert=True,
         )
         return

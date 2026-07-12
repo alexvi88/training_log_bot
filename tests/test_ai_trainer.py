@@ -1,4 +1,4 @@
-"""AI-тренер: tool-executor'ы поверх реальной БД и агентный цикл с фейковым клиентом."""
+"""AI-тренер: tool-executor'ы поверх реальной БД и агентный цикл с фейковым Grok-клиентом."""
 
 import json
 from types import SimpleNamespace
@@ -11,9 +11,9 @@ import ai_trainer
 pytestmark = pytest.mark.asyncio
 
 
-async def _seed_bench_history(db, user_id: int, n_sessions: int = 3) -> int:
+async def _seed_bench_history(db, user_id: int, n_sessions: int = 3, exercise: str = "Жим лёжа") -> int:
     group_id = await db.create_muscle_group(user_id, "Грудь")
-    ex_id = await db.create_exercise(user_id, "Жим лёжа", group_id)
+    ex_id = await db.create_exercise(user_id, exercise, group_id)
     for i in range(1, n_sessions + 1):
         workout_id = await db.create_finished_workout(
             user_id, started_at=f"2026-01-{i:02d}T10:00:00", finished_at=f"2026-01-{i:02d}T10:30:00"
@@ -89,7 +89,15 @@ async def test_unknown_tool_returns_error(fresh_db, user_id):
     assert "error" in payload
 
 
-async def test_tools_do_not_leak_other_users_data(fresh_db, user_id):
+# ---------- изоляция данных между пользователями ----------
+#
+# Единственный идентификатор пользователя в ask()/execute_tool() приходит из
+# Telegram (message.from_user.id) — ни один инструмент не принимает user_id
+# параметром, так что модель (и пользователь через промпт-инъекцию) не может
+# запросить чужие данные. Тесты ниже фиксируют это поведение на каждом
+# инструменте.
+
+async def test_overview_does_not_leak_other_users_data(fresh_db, user_id):
     other = await fresh_db.get_or_create_user(telegram_id=222, username="other")
     await _seed_bench_history(fresh_db, other["telegram_id"], 2)
 
@@ -99,46 +107,78 @@ async def test_tools_do_not_leak_other_users_data(fresh_db, user_id):
     assert payload["exercises"] == []
 
 
+async def test_recent_workouts_does_not_leak_other_users_data(fresh_db, user_id):
+    other = await fresh_db.get_or_create_user(telegram_id=222, username="other")
+    await _seed_bench_history(fresh_db, other["telegram_id"], 3)
+
+    payload = json.loads(await ai_trainer.execute_tool(user_id, "list_recent_workouts", {}))
+
+    assert payload["workouts"] == []
+
+
+async def test_exercise_progress_cannot_read_other_users_exercise(fresh_db, user_id):
+    """Даже зная точное название чужого упражнения, получить его историю нельзя."""
+    other = await fresh_db.get_or_create_user(telegram_id=222, username="other")
+    await _seed_bench_history(fresh_db, other["telegram_id"], 3, exercise="Секретный жим")
+
+    payload = json.loads(
+        await ai_trainer.execute_tool(user_id, "get_exercise_progress", {"exercise_name": "Секретный жим"})
+    )
+
+    assert "error" in payload
+    assert payload["did_you_mean"] == []  # и в подсказках чужого тоже нет
+
+
 # ---------- agentic loop ----------
 
-def _text_block(text):
-    return SimpleNamespace(type="text", text=text)
+def _tool_call(name, arguments, call_id="call_1"):
+    return SimpleNamespace(
+        id=call_id,
+        type="function",
+        function=SimpleNamespace(name=name, arguments=json.dumps(arguments)),
+    )
 
 
-def _tool_block(name, tool_input, block_id="toolu_1"):
-    return SimpleNamespace(type="tool_use", name=name, input=tool_input, id=block_id)
+def _response(content=None, tool_calls=None):
+    message = SimpleNamespace(content=content, tool_calls=tool_calls)
+    return SimpleNamespace(choices=[SimpleNamespace(message=message)])
 
 
-def _response(content, stop_reason):
-    return SimpleNamespace(content=content, stop_reason=stop_reason)
+def _fake_client(responses):
+    return SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(create=AsyncMock(side_effect=responses))
+        )
+    )
 
 
 async def test_ask_runs_tool_round_and_returns_text(fresh_db, user_id, monkeypatch):
     await _seed_bench_history(fresh_db, user_id, 1)
 
-    client = SimpleNamespace(messages=SimpleNamespace(create=AsyncMock(side_effect=[
-        _response([_tool_block("get_training_overview", {})], "tool_use"),
-        _response([_text_block("Ты молодец, продолжай!")], "end_turn"),
-    ])))
+    client = _fake_client([
+        _response(tool_calls=[_tool_call("get_training_overview", {})]),
+        _response(content="Ты молодец, продолжай!"),
+    ])
     monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
 
     answer = await ai_trainer.ask(user_id, "Как мои дела?", history=[])
 
     assert answer == "Ты молодец, продолжай!"
-    assert client.messages.create.await_count == 2
+    create = client.chat.completions.create
+    assert create.await_count == 2
     # Второй запрос несёт результат инструмента обратно модели.
-    second_messages = client.messages.create.await_args_list[1].kwargs["messages"]
-    tool_result = second_messages[-1]["content"][0]
-    assert tool_result["type"] == "tool_result"
-    assert tool_result["tool_use_id"] == "toolu_1"
-    assert "total_workouts" in tool_result["content"]
+    second_messages = create.await_args_list[1].kwargs["messages"]
+    tool_msg = second_messages[-1]
+    assert tool_msg["role"] == "tool"
+    assert tool_msg["tool_call_id"] == "call_1"
+    assert "total_workouts" in tool_msg["content"]
 
 
-async def test_ask_tool_failure_is_reported_as_error_result(fresh_db, user_id, monkeypatch):
-    client = SimpleNamespace(messages=SimpleNamespace(create=AsyncMock(side_effect=[
-        _response([_tool_block("get_exercise_progress", {"exercise_name": "Жим"})], "tool_use"),
-        _response([_text_block("ответ")], "end_turn"),
-    ])))
+async def test_ask_tool_failure_is_reported_to_model(fresh_db, user_id, monkeypatch):
+    client = _fake_client([
+        _response(tool_calls=[_tool_call("get_exercise_progress", {"exercise_name": "Жим"})]),
+        _response(content="ответ"),
+    ])
     monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
 
     async def boom(*args, **kwargs):
@@ -149,29 +189,37 @@ async def test_ask_tool_failure_is_reported_as_error_result(fresh_db, user_id, m
     answer = await ai_trainer.ask(user_id, "Прогресс?", history=[])
 
     assert answer == "ответ"
-    second_messages = client.messages.create.await_args_list[1].kwargs["messages"]
-    tool_result = second_messages[-1]["content"][0]
-    assert tool_result["is_error"] is True
-
-
-async def test_ask_refusal_returns_safe_text(fresh_db, user_id, monkeypatch):
-    client = SimpleNamespace(messages=SimpleNamespace(create=AsyncMock(return_value=
-        _response([], "refusal")
-    )))
-    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
-
-    answer = await ai_trainer.ask(user_id, "…", history=[])
-
-    assert "тренировки" in answer
+    second_messages = client.chat.completions.create.await_args_list[1].kwargs["messages"]
+    tool_msg = second_messages[-1]
+    assert tool_msg["role"] == "tool"
+    assert "error" in tool_msg["content"]
 
 
 async def test_ask_stops_after_max_tool_rounds(fresh_db, user_id, monkeypatch):
-    client = SimpleNamespace(messages=SimpleNamespace(create=AsyncMock(return_value=
-        _response([_tool_block("get_training_overview", {})], "tool_use")
-    )))
+    endless = _response(tool_calls=[_tool_call("get_training_overview", {})])
+    client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(create=AsyncMock(return_value=endless))
+        )
+    )
     monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
 
     answer = await ai_trainer.ask(user_id, "Как дела?", history=[])
 
-    assert client.messages.create.await_count == ai_trainer.MAX_TOOL_ROUNDS + 1
+    assert client.chat.completions.create.await_count == ai_trainer.MAX_TOOL_ROUNDS + 1
     assert answer  # даём осмысленный fallback, а не пустую строку
+
+
+async def test_ask_passes_user_question_and_history(fresh_db, user_id, monkeypatch):
+    client = _fake_client([_response(content="ок")])
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+
+    history = [
+        {"role": "user", "content": "прошлый вопрос"},
+        {"role": "assistant", "content": "прошлый ответ"},
+    ]
+    await ai_trainer.ask(user_id, "новый вопрос", history=history)
+
+    messages = client.chat.completions.create.await_args.kwargs["messages"]
+    assert messages[0]["role"] == "system"
+    assert messages[1:] == [*history, {"role": "user", "content": "новый вопрос"}]

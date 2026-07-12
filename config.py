@@ -38,11 +38,12 @@ ENGAGEMENT_HOUR = int(os.getenv("ENGAGEMENT_HOUR", "19"))
 # How often (minutes) the post-workout followup job checks for due reminders.
 FOLLOWUP_POLL_MINUTES = int(os.getenv("FOLLOWUP_POLL_MINUTES", "10"))
 
-# AI trainer (Claude-backed Q&A over the user's own training data). The menu
-# entry stays visible but answers with a hint until this key is set.
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-
-AI_TRAINER_MODEL = os.getenv("AI_TRAINER_MODEL", "claude-opus-4-8")
+# AI trainer (Grok-backed Q&A over the user's own training data). Same xAI
+# key/env names as fun_bot, so one key serves both bots. The menu entry stays
+# visible but answers with a hint until the key is set.
+XAI_API_KEY = os.getenv("XAI_API_KEY", "")
+GROK_MODEL = os.getenv("GROK_MODEL", "grok-4-1-fast")
+GROK_BASE_URL = os.getenv("GROK_BASE_URL", "https://api.x.ai/v1")
 
 # Delay after finishing a workout before the hydration/protein followup push fires.
 FOLLOWUP_DELAY_HOURS = int(os.getenv("FOLLOWUP_DELAY_HOURS", "2"))

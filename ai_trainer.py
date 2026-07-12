@@ -1,10 +1,10 @@
 """AI-тренер: ответы на вопросы пользователя с доступом к его данным в БД.
 
-Claude получает три read-only инструмента, каждый из которых замкнут на
-user_id текущего пользователя на уровне executor'а, поэтому модель физически
-не может прочитать чужие данные. Агентный цикл (запрос → tool_use →
-tool_result → …) написан вручную поверх Messages API, чтобы не тянуть
-бета-зависимость tool_runner и полностью контролировать историю сообщений.
+Grok (xAI) ходит через OpenAI-совместимый endpoint — тот же стек и те же env
+переменные (XAI_API_KEY / GROK_MODEL / GROK_BASE_URL), что и в fun_bot, так что
+один ключ обслуживает оба бота. Модель получает три read-only инструмента
+(function calling), каждый из которых замкнут на user_id текущего пользователя
+на уровне executor'а, поэтому модель физически не может прочитать чужие данные.
 """
 
 import datetime as dt
@@ -12,7 +12,7 @@ import json
 import logging
 from typing import Any, Optional
 
-import anthropic
+from openai import AsyncOpenAI
 
 import analytics
 import config
@@ -20,23 +20,23 @@ import db
 
 logger = logging.getLogger(__name__)
 
-# Сколько раундов tool_use разрешаем за один вопрос, чтобы цикл не завис.
+# Сколько раундов tool-calls разрешаем за один вопрос, чтобы цикл не завис.
 MAX_TOOL_ROUNDS = 6
 
 # Сколько последних сессий отдаём модели в get_exercise_progress.
 PROGRESS_SESSIONS_LIMIT = 10
 
-_client: Optional[anthropic.AsyncAnthropic] = None
+_client: Optional[AsyncOpenAI] = None
 
 
 def is_configured() -> bool:
-    return bool(config.ANTHROPIC_API_KEY)
+    return bool(config.XAI_API_KEY)
 
 
-def _get_client() -> anthropic.AsyncAnthropic:
+def _get_client() -> AsyncOpenAI:
     global _client
     if _client is None:
-        _client = anthropic.AsyncAnthropic(api_key=config.ANTHROPIC_API_KEY)
+        _client = AsyncOpenAI(api_key=config.XAI_API_KEY, base_url=config.GROK_BASE_URL)
     return _client
 
 
@@ -61,54 +61,60 @@ SYSTEM_PROMPT = """\
 
 
 def _system_prompt() -> str:
-    # Дата — отдельной строкой в конце, чтобы стабильная часть промпта кэшировалась.
     return SYSTEM_PROMPT + f"\nСегодня {dt.date.today().isoformat()}."
 
 
 TOOLS: list[dict[str, Any]] = [
     {
-        "name": "get_training_overview",
-        "description": (
-            "Сводка по пользователю: единицы измерения, формула e1RM, статистика "
-            "(всего тренировок, за эту неделю, за 30 дней, дней с последней, недельный стрик) "
-            "и список его упражнений с числом использований. Вызывай первым, чтобы понять контекст "
-            "и узнать точные названия упражнений."
-        ),
-        "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
-    },
-    {
-        "name": "list_recent_workouts",
-        "description": (
-            "Последние завершённые тренировки: дата, заметка и все подходы "
-            "(вес x повторы) по каждому упражнению."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "limit": {
-                    "type": "integer",
-                    "description": "Сколько тренировок вернуть, 1-10 (по умолчанию 5)",
-                }
-            },
-            "additionalProperties": False,
+        "type": "function",
+        "function": {
+            "name": "get_training_overview",
+            "description": (
+                "Сводка по пользователю: единицы измерения, формула e1RM, статистика "
+                "(всего тренировок, за эту неделю, за 30 дней, дней с последней, недельный стрик) "
+                "и список его упражнений с числом использований. Вызывай первым, чтобы понять контекст "
+                "и узнать точные названия упражнений."
+            ),
+            "parameters": {"type": "object", "properties": {}},
         },
     },
     {
-        "name": "get_exercise_progress",
-        "description": (
-            "История одного упражнения: последние сессии (дата, подходы, лучший подход, e1RM, тоннаж), "
-            "личные рекорды и тренд e1RM. Название бери точным display_name из get_training_overview."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "exercise_name": {
-                    "type": "string",
-                    "description": "Точное название упражнения (display_name)",
-                }
+        "type": "function",
+        "function": {
+            "name": "list_recent_workouts",
+            "description": (
+                "Последние завершённые тренировки: дата, заметка и все подходы "
+                "(вес x повторы) по каждому упражнению."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "limit": {
+                        "type": "integer",
+                        "description": "Сколько тренировок вернуть, 1-10 (по умолчанию 5)",
+                    }
+                },
             },
-            "required": ["exercise_name"],
-            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_exercise_progress",
+            "description": (
+                "История одного упражнения: последние сессии (дата, подходы, лучший подход, e1RM, тоннаж), "
+                "личные рекорды и тренд e1RM. Название бери точным display_name из get_training_overview."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "exercise_name": {
+                        "type": "string",
+                        "description": "Точное название упражнения (display_name)",
+                    }
+                },
+                "required": ["exercise_name"],
+            },
         },
     },
 ]
@@ -234,46 +240,50 @@ async def ask(user_id: int, question: str, history: list[dict[str, Any]]) -> str
     """Один вопрос пользователя → готовый текст ответа.
 
     history — прошлые реплики диалога в виде [{"role": ..., "content": <str>}]
-    (только видимый текст, без tool-блоков — их таскать между ходами незачем).
+    (только видимый текст, без tool-сообщений — их таскать между ходами незачем).
     """
     client = _get_client()
-    messages: list[dict[str, Any]] = [*history, {"role": "user", "content": question}]
+    messages: list[dict[str, Any]] = [
+        {"role": "system", "content": _system_prompt()},
+        *history,
+        {"role": "user", "content": question},
+    ]
 
-    response = None
+    message = None
     for _ in range(MAX_TOOL_ROUNDS + 1):
-        response = await client.messages.create(
-            model=config.AI_TRAINER_MODEL,
-            max_tokens=4096,
-            system=_system_prompt(),
-            thinking={"type": "adaptive"},
+        response = await client.chat.completions.create(
+            model=config.GROK_MODEL,
+            max_tokens=2048,
             tools=TOOLS,
             messages=messages,
         )
-        if response.stop_reason != "tool_use":
+        message = response.choices[0].message
+        if not message.tool_calls:
             break
-        messages.append({"role": "assistant", "content": response.content})
-        results = []
-        for block in response.content:
-            if block.type != "tool_use":
-                continue
-            try:
-                content = await execute_tool(user_id, block.name, dict(block.input))
-                results.append(
-                    {"type": "tool_result", "tool_use_id": block.id, "content": content}
-                )
-            except Exception:
-                logger.exception("AI trainer tool %s failed", block.name)
-                results.append(
+        messages.append(
+            {
+                "role": "assistant",
+                "content": message.content,
+                "tool_calls": [
                     {
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": "tool failed, answer from what you already have",
-                        "is_error": True,
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {"name": tc.function.name, "arguments": tc.function.arguments},
                     }
+                    for tc in message.tool_calls
+                ],
+            }
+        )
+        for tc in message.tool_calls:
+            try:
+                args = json.loads(tc.function.arguments or "{}")
+                content = await execute_tool(user_id, tc.function.name, args)
+            except Exception:
+                logger.exception("AI trainer tool %s failed", tc.function.name)
+                content = json.dumps(
+                    {"error": "tool failed, answer from what you already have"}
                 )
-        messages.append({"role": "user", "content": results})
+            messages.append({"role": "tool", "tool_call_id": tc.id, "content": content})
 
-    if response is None or response.stop_reason == "refusal":
-        return "Не могу ответить на этот вопрос. Спроси что-нибудь про твои тренировки 🙂"
-    text = "".join(b.text for b in response.content if b.type == "text").strip()
+    text = (message.content or "").strip() if message else ""
     return text or "Не получилось сформулировать ответ, попробуй переспросить."
