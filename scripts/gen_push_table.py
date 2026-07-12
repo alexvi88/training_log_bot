@@ -25,7 +25,11 @@ END_MARKER = "<!-- PUSH_TABLE_END -->"
 # they describe engagement.py's orchestration logic, not the copy itself.
 TRIGGERS = {
     push_texts.STREAK_AT_RISK: "Сб/вс, `week_streak >= 2`, тренировок на этой неделе — 0",
-    push_texts.SKIP: "Ровно N дней с последней тренировки, N ∈ {3, 5, 7, 10, 14}",
+    push_texts.SKIP_3: "Ровно 3 дня с последней тренировки",
+    push_texts.SKIP_5: "Ровно 5 дней с последней тренировки",
+    push_texts.SKIP_7: "Ровно 7 дней с последней тренировки",
+    push_texts.SKIP_10: "Ровно 10 дней с последней тренировки",
+    push_texts.SKIP_14: "Ровно 14 дней с последней тренировки",
     push_texts.WIN_BACK: "`days_since_last >= 21`, затем каждые 10 дней (21, 31, 41…)",
     push_texts.TIMING: (
         "Сегодня — самый частый день тренировок по истории (нужно ≥10 тренировок), "
@@ -33,24 +37,36 @@ TRIGGERS = {
     ),
     push_texts.PLATEAU: "Вс: тот же рабочий вес 3 тренировки подряд, каждый раз 12+ повторов",
     push_texts.WEEKLY_DIGEST: "Вс, нет активного плато, суммарный тоннаж за 30 дней > 0",
-    push_texts.CHALLENGE: "Пн (старт) или чт при < 2 тренировок за неделю (прогресс)",
-    push_texts.FOLLOWUP: (
-        "Через 2 ч после завершения живой (не задним числом) тренировки — "
-        "транзакционное, не конкурирует за дневной слот"
-    ),
 }
 
-# engagement.build_daily_push()'s actual evaluation order.
+# engagement.build_daily_push()'s actual evaluation order. The five skip_*
+# categories share one priority tier — engagement.py resolves them via a
+# single "which exact day is it" check, not five separate competing checks.
 ORDER = [
     push_texts.STREAK_AT_RISK,
-    push_texts.SKIP,
+    push_texts.SKIP_3,
+    push_texts.SKIP_5,
+    push_texts.SKIP_7,
+    push_texts.SKIP_10,
+    push_texts.SKIP_14,
     push_texts.WIN_BACK,
     push_texts.TIMING,
     push_texts.PLATEAU,
     push_texts.WEEKLY_DIGEST,
-    push_texts.CHALLENGE,
-    push_texts.FOLLOWUP,
 ]
+
+RANK_BY_CATEGORY = {
+    push_texts.STREAK_AT_RISK: "1",
+    push_texts.SKIP_3: "2",
+    push_texts.SKIP_5: "2",
+    push_texts.SKIP_7: "2",
+    push_texts.SKIP_10: "2",
+    push_texts.SKIP_14: "2",
+    push_texts.WIN_BACK: "3",
+    push_texts.TIMING: "4",
+    push_texts.PLATEAU: "5",
+    push_texts.WEEKLY_DIGEST: "6",
+}
 
 # Stand-ins for {placeholder} templates so the table shows readable examples.
 PLACEHOLDER_EXAMPLES = {
@@ -74,10 +90,10 @@ def build_table() -> str:
         "| Ранг | Категория | Триггер | Вариант | Текст пуша (пример) |",
         "|---|---|---|---|---|",
     ]
-    for rank, category in enumerate(ORDER, start=1):
-        rank_label = str(rank) if category != push_texts.FOLLOWUP else "—"
+    for category in ORDER:
         label = push_texts.CATEGORY_LABELS[category]
         trigger = TRIGGERS[category]
+        rank_label = RANK_BY_CATEGORY[category]
         for i, template in enumerate(push_texts.TEXTS[category], start=1):
             cat_cell = f"**{label}**" if i == 1 else ""
             trig_cell = trigger if i == 1 else ""

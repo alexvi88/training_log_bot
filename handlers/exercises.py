@@ -5,11 +5,12 @@ from html import escape
 from aiogram import F, Router
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, InlineKeyboardButton, Message
+from aiogram.types import CallbackQuery, FSInputFile, InlineKeyboardButton, InputMediaPhoto, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import config
 import db
+import exercise_media
 import keyboards
 import ui
 from fsm import ExerciseManage
@@ -146,6 +147,11 @@ async def exm_pick_template(callback: CallbackQuery, state: FSMContext):
     await state.update_data(exm_exercise_id=ex_id)
     await state.set_state(ExerciseManage.picking_exercise)
     ex = await db.get_exercise(ex_id)
+    images = exercise_media.get_images(ex["name"])
+    if images:
+        await callback.message.answer_media_group(
+            [InputMediaPhoto(media=FSInputFile(p)) for p in images]
+        )
     text, kb = _exercise_detail_view(ex)
     await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML")
     await callback.answer()

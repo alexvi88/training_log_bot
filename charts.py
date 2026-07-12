@@ -51,6 +51,62 @@ def render_metric_over_sessions(
     return _fig_to_png(fig)
 
 
+# Sequential ramp for the year heatmap: 0 / 1 / 2 / 3+ workouts per day.
+# Monotonic in lightness on the dark card background (GitHub dark greens).
+HEATMAP_LEVELS = ["#1e242e", "#006d32", "#26a641", "#39d353"]
+
+_MONTHS_RU = ["Янв", "Фев", "Мар", "Апр", "Май", "Июн", "Июл", "Авг", "Сен", "Окт", "Ноя", "Дек"]
+
+
+def render_year_heatmap(day_counts: dict[dt.date, int], today: dt.date, title: str) -> bytes:
+    """GitHub-style contribution calendar: 53 week columns x 7 day rows, Monday on top.
+
+    Colour depth encodes workouts per day. Days after `today` in the current
+    week are left undrawn, so the grid visibly ends at "now".
+    """
+    BG = "#12161d"
+    FG = "#e6e6e6"
+    MUTED = "#9aa4b2"
+
+    this_monday = today - dt.timedelta(days=today.weekday())
+    start = this_monday - dt.timedelta(weeks=52)
+
+    fig = plt.figure(figsize=(10.6, 2.4), dpi=150)
+    fig.patch.set_facecolor(BG)
+    ax = fig.add_axes([0, 0, 1, 1])
+    ax.set_facecolor(BG)
+    ax.axis("off")
+    ax.set_aspect("equal")
+    ax.set_xlim(-3.2, 53.4)
+    ax.set_ylim(9.2, -3.4)  # inverted so Monday's row sits on top
+
+    for col in range(53):
+        monday = start + dt.timedelta(weeks=col)
+        for row in range(7):
+            day = monday + dt.timedelta(days=row)
+            if day > today:
+                continue
+            level = min(day_counts.get(day, 0), len(HEATMAP_LEVELS) - 1)
+            ax.add_patch(
+                plt.Rectangle((col + 0.1, row + 0.1), 0.8, 0.8, color=HEATMAP_LEVELS[level], linewidth=0)
+            )
+        if col > 0 and monday.month != (monday - dt.timedelta(weeks=1)).month:
+            ax.text(col + 0.1, -0.7, _MONTHS_RU[monday.month - 1], color=MUTED, fontsize=7, va="center")
+
+    for row, label in ((0, "Пн"), (2, "Ср"), (4, "Пт")):
+        ax.text(-0.5, row + 0.55, label, color=MUTED, fontsize=7, ha="right", va="center")
+
+    ax.text(0.1, -2.3, title, color=FG, fontsize=10, fontweight="bold", va="center")
+
+    legend_x = 44
+    ax.text(legend_x - 0.4, 8.1, "меньше", color=MUTED, fontsize=7, ha="right", va="center")
+    for i, colour in enumerate(HEATMAP_LEVELS):
+        ax.add_patch(plt.Rectangle((legend_x + i + 0.1, 7.7), 0.8, 0.8, color=colour, linewidth=0))
+    ax.text(legend_x + len(HEATMAP_LEVELS) + 0.5, 8.1, "больше", color=MUTED, fontsize=7, va="center")
+
+    return _fig_to_png(fig)
+
+
 def render_workout_card(
     title: str,
     body_lines: list[str],

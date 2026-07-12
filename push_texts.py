@@ -7,8 +7,14 @@ same category on two different days doesn't see the same line twice in a row.
 
 Voice rules (see PUSH_IDEAS.md for the full writeup):
   - Address is always "АТЛЕТ", capitalized, never "боец"/"пользователь".
-  - Jabs are reserved for the SKIP category only.
+  - Jabs are reserved for the skip-milestone categories only.
   - Every other category stays supportive.
+
+Skip milestones (3/5/7/10/14 days since the last workout) each get their own
+pool rather than one shared pool: the wording references the actual day
+count ("неделя простоя", "две недели"), so a day-3 skip must never draw a
+day-14 line — hence a dedicated category per milestone instead of one big
+"skip" bucket the rotation could hand out regardless of which day fired.
 """
 
 import random
@@ -17,13 +23,24 @@ import db
 
 # Category keys, in daily-job priority order (first eligible one wins).
 STREAK_AT_RISK = "streak_at_risk"
-SKIP = "skip"
+SKIP_3 = "skip_3"
+SKIP_5 = "skip_5"
+SKIP_7 = "skip_7"
+SKIP_10 = "skip_10"
+SKIP_14 = "skip_14"
 WIN_BACK = "win_back"
 TIMING = "timing"
 PLATEAU = "plateau"
 WEEKLY_DIGEST = "weekly_digest"
-CHALLENGE = "challenge"
-FOLLOWUP = "followup"  # transactional, not part of the daily rotation
+
+SKIP_MILESTONE_DAYS = (3, 5, 7, 10, 14)
+SKIP_CATEGORY_BY_DAY: dict[int, str] = {
+    3: SKIP_3,
+    5: SKIP_5,
+    7: SKIP_7,
+    10: SKIP_10,
+    14: SKIP_14,
+}
 
 TEXTS: dict[str, list[str]] = {
     STREAK_AT_RISK: [
@@ -31,19 +48,22 @@ TEXTS: dict[str, list[str]] = {
         "АТЛЕТ, {weeks} недель без срывов висят на волоске. Одна тренировка — и цепь держится. Выбор за тобой.",
         "АТЛЕТ, сутки на то, чтобы серия не превратилась в «когда-то тренировался». {weeks} недель — не шутка.",
     ],
-    SKIP: [
-        # day 2-3
-        "АТЛЕТ, пару дней тишины. Отдых или отмазки — сам разберёшься. Я просто считаю дни.",
-        "АТЛЕТ, второй-третий день без зала. Штанга пока не в обиде. Пока.",
-        # day 4-6
+    SKIP_3: [
+        "АТЛЕТ, третий день без зала. Отдых или отмазки — сам разберёшься. Я просто считаю дни.",
+        "АТЛЕТ, три дня тишины. Пока не повод для лекций — но я заметил.",
+    ],
+    SKIP_5: [
         "АТЛЕТ, пятый день без зала. Мышцы ещё помнят, как работать. Привычка — уже забывает.",
-        "АТЛЕТ, четвёртый-шестой день тишины. Самое время это прервать, а не привыкать.",
-        # day 7
+        "АТЛЕТ, пять дней тишины подряд. Самое время это прервать, а не привыкать.",
+    ],
+    SKIP_7: [
         "АТЛЕТ, неделя простоя. Штанга не обидится — она железная. А форма обидится, и быстро.",
-        "АТЛЕТ, ровно неделя. Не буду читать нотации — просто напомню, где дверь в зал.",
-        # day 10
-        "АТЛЕТ, десятый день. Это уже не пауза, это привычка не приходить. Ломаем её сегодня?",
-        # day 14
+        "АТЛЕТ, ровно неделя тишины. Не буду читать нотации — просто напомню, где дверь в зал.",
+    ],
+    SKIP_10: [
+        "АТЛЕТ, десятый день без тренировки. Это уже не пауза, это привычка не приходить. Ломаем её сегодня?",
+    ],
+    SKIP_14: [
         "АТЛЕТ, две недели. Я не читаю нотации, я считаю дни. Зал на месте. Ты — где?",
         "АТЛЕТ, четырнадцать дней тишины. Хватит уже — приходи, разберёмся на месте.",
     ],
@@ -67,26 +87,19 @@ TEXTS: dict[str, list[str]] = {
         "АТЛЕТ, на этой неделе — {week_count}. Заходи, гляну, что подросло.",
         "АТЛЕТ, понедельник — твой самый продуктивный день по истории. Держим планку?",
     ],
-    CHALLENGE: [
-        "АТЛЕТ, задача недели: три тренировки за семь дней. Погнали.",
-        "АТЛЕТ, мини-квест: побей любой свой рекорд на этой неделе. Приз — самоуважение. Котируется дорого.",
-    ],
-    FOLLOWUP: [
-        "АТЛЕТ, теперь вода, белок и сон — тренировка кончается не в зале, а на кухне.",
-        "АТЛЕТ, работа сделана, но не до конца — без нормального восстановления сегодняшний труд наполовину впустую. Попей воды.",
-        "АТЛЕТ, плюс один в журнал. Теперь дай телу то, что оно заслужило: еду, воду и сон.",
-    ],
 }
 
 CATEGORY_LABELS: dict[str, str] = {
     STREAK_AT_RISK: "Серия на кону",
-    SKIP: "Пропуск",
+    SKIP_3: "Пропуск (3 дня)",
+    SKIP_5: "Пропуск (5 дней)",
+    SKIP_7: "Пропуск (7 дней)",
+    SKIP_10: "Пропуск (10 дней)",
+    SKIP_14: "Пропуск (14 дней)",
     WIN_BACK: "Возвращение",
     TIMING: "Тайминг",
     PLATEAU: "Плато",
     WEEKLY_DIGEST: "Аналитика",
-    CHALLENGE: "Челлендж",
-    FOLLOWUP: "После тренировки",
 }
 
 

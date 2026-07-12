@@ -1,4 +1,4 @@
-"""DB-layer plumbing for pushes: logging, dedup, followup scheduling, tonnage."""
+"""DB-layer plumbing for pushes: logging, dedup, tonnage."""
 
 import pytest
 
@@ -7,7 +7,7 @@ pytestmark = pytest.mark.asyncio
 
 async def test_record_and_list_recent_pushes_most_recent_first(fresh_db, user_id):
     db = fresh_db
-    await db.record_push(user_id, "skip", "первое")
+    await db.record_push(user_id, "skip_3", "первое")
     await db.record_push(user_id, "win_back", "второе")
 
     assert await db.count_pushes() == 2
@@ -16,39 +16,48 @@ async def test_record_and_list_recent_pushes_most_recent_first(fresh_db, user_id
     assert rows[0]["username"] == "tester"
 
 
-async def test_has_push_today_ignores_followup_category(fresh_db, user_id):
+async def test_has_push_today_true_only_after_a_push_is_recorded(fresh_db, user_id):
     db = fresh_db
     today = db.now_iso()[:10]
     assert await db.has_push_today(user_id, today) is False
 
-    await db.record_push(user_id, "followup", "вода и белок")
-    assert await db.has_push_today(user_id, today) is False
-
-    await db.record_push(user_id, "skip", "пятый день")
+    await db.record_push(user_id, "skip_3", "третий день")
     assert await db.has_push_today(user_id, today) is True
 
 
 async def test_rotation_bag_round_trips(fresh_db, user_id):
     db = fresh_db
-    assert await db.get_rotation_bag(user_id, "skip") == []
-    await db.save_rotation_bag(user_id, "skip", [2, 0, 1])
-    assert await db.get_rotation_bag(user_id, "skip") == [2, 0, 1]
-    await db.save_rotation_bag(user_id, "skip", [1])
-    assert await db.get_rotation_bag(user_id, "skip") == [1]
+    assert await db.get_rotation_bag(user_id, "skip_3") == []
+    await db.save_rotation_bag(user_id, "skip_3", [2, 0, 1])
+    assert await db.get_rotation_bag(user_id, "skip_3") == [2, 0, 1]
+    await db.save_rotation_bag(user_id, "skip_3", [1])
+    assert await db.get_rotation_bag(user_id, "skip_3") == [1]
 
 
-async def test_followup_lifecycle(fresh_db, user_id):
+async def test_pushes_enabled_defaults_on_and_is_toggleable(fresh_db, user_id):
     db = fresh_db
-    workout_id = await db.create_workout(user_id)
-    await db.finish_workout(workout_id)
+    user = await db.get_user(user_id)
+    assert user["pushes_enabled"] == 1
 
-    await db.schedule_followup(workout_id, "2026-07-12T10:00:00")
-    assert await db.list_due_followups("2026-07-12T09:00:00") == []
-    due = await db.list_due_followups("2026-07-12T10:00:00")
-    assert [w["id"] for w in due] == [workout_id]
+    await db.update_user(user_id, pushes_enabled=0)
+    user = await db.get_user(user_id)
+    assert user["pushes_enabled"] == 0
 
-    await db.mark_followup_sent(workout_id)
-    assert await db.list_due_followups("2026-07-12T10:00:00") == []
+
+async def test_list_engagement_eligible_user_ids_excludes_opted_out(fresh_db, user_id):
+    db = fresh_db
+    other_id = 333
+    await db.get_or_create_user(telegram_id=other_id, username="other")
+
+    for uid in (user_id, other_id):
+        await db.create_finished_workout(
+            uid, started_at="2026-07-01T10:00:00", finished_at="2026-07-01T11:00:00"
+        )
+
+    assert set(await db.list_engagement_eligible_user_ids()) == {user_id, other_id}
+
+    await db.update_user(other_id, pushes_enabled=0)
+    assert set(await db.list_engagement_eligible_user_ids()) == {user_id}
 
 
 async def test_tonnage_since_sums_weight_times_reps(fresh_db, user_id):

@@ -29,7 +29,8 @@ CREATE TABLE IF NOT EXISTS users (
     created_at TEXT NOT NULL,
     unit TEXT NOT NULL DEFAULT 'kg',
     e1rm_formula TEXT NOT NULL DEFAULT 'epley',
-    show_extra_stats INTEGER NOT NULL DEFAULT 1
+    show_extra_stats INTEGER NOT NULL DEFAULT 1,
+    pushes_enabled INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS muscle_groups (
@@ -184,9 +185,11 @@ async def _migrate_schema() -> None:
     workout_cols = await _column_names("workouts")
     if "source" not in workout_cols:
         await _conn.execute("ALTER TABLE workouts ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'")
-    if "followup_due_at" not in workout_cols:
-        await _conn.execute("ALTER TABLE workouts ADD COLUMN followup_due_at TEXT")
-        await _conn.execute("ALTER TABLE workouts ADD COLUMN followup_sent INTEGER NOT NULL DEFAULT 0")
+    if "followup_due_at" in workout_cols:
+        # Post-workout followup push was removed — drop the columns a DB that
+        # already ran the earlier migration would have.
+        await _conn.execute("ALTER TABLE workouts DROP COLUMN followup_due_at")
+        await _conn.execute("ALTER TABLE workouts DROP COLUMN followup_sent")
 
     exercise_cols = await _column_names("exercises")
     if "original_name" not in exercise_cols:
@@ -198,6 +201,8 @@ async def _migrate_schema() -> None:
         await _conn.execute("ALTER TABLE users DROP COLUMN hide_warmups")
     if "bodyweight" in user_cols:
         await _conn.execute("ALTER TABLE users DROP COLUMN bodyweight")
+    if "pushes_enabled" not in user_cols:
+        await _conn.execute("ALTER TABLE users ADD COLUMN pushes_enabled INTEGER NOT NULL DEFAULT 1")
 
     set_cols = await _column_names("sets")
     if "is_warmup" in set_cols:
@@ -1050,10 +1055,12 @@ async def tonnage_since(user_id: int, since_date: str) -> float:
     return total
 
 
-async def list_user_ids_with_workouts() -> list[int]:
-    """Users with at least one finished workout — the pool the engagement job walks daily."""
+async def list_engagement_eligible_user_ids() -> list[int]:
+    """Users with a finished workout who haven't turned pushes off — the daily job's walk pool."""
     cur = await conn().execute(
-        "SELECT DISTINCT user_id FROM workouts WHERE status = 'finished'"
+        "SELECT DISTINCT w.user_id FROM workouts w "
+        "JOIN users u ON u.telegram_id = w.user_id "
+        "WHERE w.status = 'finished' AND u.pushes_enabled = 1"
     )
     return [r["user_id"] for r in await cur.fetchall()]
 
@@ -1089,13 +1096,9 @@ async def record_push(telegram_id: int, category: str, text: str) -> None:
 
 
 async def has_push_today(telegram_id: int, today: str) -> bool:
-    """Whether this user already got a daily-rotation push on this calendar date (YYYY-MM-DD).
-
-    Excludes the transactional post-workout followup, which doesn't compete
-    for the one-push-a-day slot.
-    """
+    """Whether this user already got a daily-rotation push on this calendar date (YYYY-MM-DD)."""
     cur = await conn().execute(
-        "SELECT 1 FROM pushes WHERE telegram_id = ? AND date(sent_at) = ? AND category != 'followup' LIMIT 1",
+        "SELECT 1 FROM pushes WHERE telegram_id = ? AND date(sent_at) = ? LIMIT 1",
         (telegram_id, today),
     )
     return await cur.fetchone() is not None
@@ -1116,29 +1119,3 @@ async def list_recent_pushes(limit: int = 20, offset: int = 0) -> list[aiosqlite
         (limit, offset),
     )
     return await cur.fetchall()
-
-
-async def schedule_followup(workout_id: int, due_at: str) -> None:
-    async with _write_lock:
-        await conn().execute(
-            "UPDATE workouts SET followup_due_at = ?, followup_sent = 0 WHERE id = ?",
-            (due_at, workout_id),
-        )
-        await conn().commit()
-
-
-async def list_due_followups(now: str) -> list[aiosqlite.Row]:
-    cur = await conn().execute(
-        "SELECT * FROM workouts WHERE followup_due_at IS NOT NULL AND followup_sent = 0 "
-        "AND followup_due_at <= ?",
-        (now,),
-    )
-    return await cur.fetchall()
-
-
-async def mark_followup_sent(workout_id: int) -> None:
-    async with _write_lock:
-        await conn().execute(
-            "UPDATE workouts SET followup_sent = 1 WHERE id = ?", (workout_id,)
-        )
-        await conn().commit()
