@@ -168,7 +168,7 @@ async def test_menu_view_plain_text_for_new_user(user_id, fresh_db):
     from handlers.workout import _menu_view
 
     text, png = await _menu_view(user_id)
-    assert "АТЛЕТ" in text
+    assert "атлет" in text
     assert png is None
 
 
@@ -182,5 +182,5 @@ async def test_menu_view_includes_heatmap_once_history_exists(user_id, fresh_db)
     from handlers.workout import _menu_view
 
     text, png = await _menu_view(user_id)
-    assert "АТЛЕТ" in text
+    assert "атлет" in text
     assert png is not None and png[:8] == b"\x89PNG\r\n\x1a\n"
