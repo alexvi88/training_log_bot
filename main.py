@@ -73,7 +73,7 @@ async def _setup_commands(bot: Bot) -> None:
         await bot.set_my_commands(
             [
                 BotCommand(command="start", description="Открыть главное меню"),
-                BotCommand(command="admin", description="Список пользователей (админ)"),
+                BotCommand(command="check_users", description="Список пользователей (админ)"),
             ],
             scope=BotCommandScopeChat(chat_id=config.ADMIN_ID),
         )
