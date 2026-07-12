@@ -14,9 +14,18 @@ def main_menu(has_active_workout: bool) -> InlineKeyboardMarkup:
         b.button(text="🏋️ НАЧАТЬ ТРЕНИРОВКУ", callback_data="menu:start_workout")
     b.button(text="📈 Прогресс", callback_data="menu:progress")
     b.button(text="📚 История", callback_data="menu:history")
+    b.button(text="🤖 AI-тренер", callback_data="menu:ai")
     b.button(text="⚙️ Упражнения", callback_data="menu:exercises")
     b.button(text="🔧 Настройки", callback_data="menu:settings")
-    b.adjust(1, 2, 2)
+    b.adjust(1, 2, 1, 2)
+    return b.as_markup()
+
+
+def ai_trainer_keyboard() -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.button(text="🗑 Новый диалог", callback_data="ai:reset")
+    b.button(text="⬅️ Меню", callback_data="ai:menu")
+    b.adjust(2)
     return b.as_markup()
 
 

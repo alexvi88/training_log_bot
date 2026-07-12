@@ -14,6 +14,7 @@ import engagement
 from fsm_storage import JSONFileStorage
 from handlers import (
     admin,
+    ai_trainer,
     backfill,
     csv_import,
     edit_workout,
@@ -99,6 +100,7 @@ async def main() -> None:
     dp.include_router(exercises.router)
     dp.include_router(history.router)
     dp.include_router(edit_workout.router)
+    dp.include_router(ai_trainer.router)
     dp.include_router(settings.router)
     dp.include_router(fallback.router)
 
