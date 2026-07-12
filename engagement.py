@@ -12,11 +12,6 @@ match wins, at most one push per user per day):
   4. Тайминг         — today matches the user's usual training weekday
   5. Плато           — Sundays only, weight stuck despite 12+ reps
   6. Аналитика       — Sundays only, weekly digest
-  7. Челлендж        — Mondays (kickoff) or Thursdays if behind pace (progress nudge)
-
-The transactional post-workout followup (hydration/protein reminder, 2h
-after finishing) is handled separately by run_followup_job — it doesn't
-compete for the one-a-day slot.
 """
 
 import asyncio
@@ -38,21 +33,12 @@ import push_texts
 
 logger = logging.getLogger(__name__)
 
-SKIP_MILESTONE_DAYS = (3, 5, 7, 10, 14)
 WIN_BACK_START_DAY = 21
 WIN_BACK_REPEAT_DAYS = 10
 TIMING_MIN_HISTORY = 10
 PLATEAU_MIN_REPS = 12
 PLATEAU_SESSIONS = 3
 DIGEST_LOOKBACK_DAYS = 30
-CHALLENGE_ON_PACE_WORKOUTS = 2  # Thursday nudge fires if fewer than this many workouts logged this week
-
-QUIET_HOURS_START = 23  # no pushes from 23:00...
-QUIET_HOURS_END = 8  # ...through 08:00
-
-
-def in_quiet_hours(now: dt.datetime) -> bool:
-    return now.hour >= QUIET_HOURS_START or now.hour < QUIET_HOURS_END
 
 
 @dataclass
@@ -69,7 +55,7 @@ def is_streak_at_risk(dashboard: analytics.Dashboard, today: dt.date) -> bool:
 
 
 def skip_milestone(days_since_last: Optional[int]) -> Optional[int]:
-    if days_since_last in SKIP_MILESTONE_DAYS:
+    if days_since_last in push_texts.SKIP_MILESTONE_DAYS:
         return days_since_last
     return None
 
@@ -154,9 +140,11 @@ async def build_daily_push(telegram_id: int, today: dt.date) -> Optional[PushDec
         )
         return PushDecision(push_texts.STREAK_AT_RISK, text)
 
-    if skip_milestone(dashboard.days_since_last) is not None:
-        text = await push_texts.pick_text(telegram_id, push_texts.SKIP)
-        return PushDecision(push_texts.SKIP, text)
+    milestone_day = skip_milestone(dashboard.days_since_last)
+    if milestone_day is not None:
+        category = push_texts.SKIP_CATEGORY_BY_DAY[milestone_day]
+        text = await push_texts.pick_text(telegram_id, category)
+        return PushDecision(category, text)
 
     if is_win_back_day(dashboard.days_since_last):
         text = await push_texts.pick_text(telegram_id, push_texts.WIN_BACK)
@@ -182,14 +170,6 @@ async def build_daily_push(telegram_id: int, today: dt.date) -> Optional[PushDec
             )
             return PushDecision(push_texts.WEEKLY_DIGEST, text, with_cta=False)
 
-    if today.weekday() == 0:  # Monday kickoff
-        text = await push_texts.pick_text(telegram_id, push_texts.CHALLENGE)
-        return PushDecision(push_texts.CHALLENGE, text)
-
-    if today.weekday() == 3 and dashboard.this_week < CHALLENGE_ON_PACE_WORKOUTS:  # Thursday progress check
-        text = await push_texts.pick_text(telegram_id, push_texts.CHALLENGE)
-        return PushDecision(push_texts.CHALLENGE, text)
-
     return None
 
 
@@ -205,7 +185,7 @@ async def _deliver(bot: Bot, telegram_id: int, decision: PushDecision) -> None:
 
 async def _send_daily_pushes(bot: Bot) -> None:
     today = dt.date.today()
-    for telegram_id in await db.list_user_ids_with_workouts():
+    for telegram_id in await db.list_engagement_eligible_user_ids():
         try:
             decision = await build_daily_push(telegram_id, today)
         except Exception:
@@ -232,28 +212,3 @@ async def run_daily_engagement_job(bot: Bot) -> None:
             await _send_daily_pushes(bot)
         except Exception:
             logger.exception("Daily engagement job failed")
-
-
-async def _send_due_followups(bot: Bot) -> None:
-    if in_quiet_hours(dt.datetime.now()):
-        return  # left un-marked, so it's picked up again on the next poll after quiet hours end
-    for workout in await db.list_due_followups(db.now_iso()):
-        text = await push_texts.pick_text(workout["user_id"], push_texts.FOLLOWUP)
-        try:
-            await bot.send_message(chat_id=workout["user_id"], text=text)
-        except TelegramForbiddenError:
-            logger.info("User %s blocked the bot, skipping followup", workout["user_id"])
-        else:
-            await db.record_push(workout["user_id"], push_texts.FOLLOWUP, text)
-        await db.mark_followup_sent(workout["id"])
-
-
-async def run_followup_job(bot: Bot) -> None:
-    if not config.ENGAGEMENT_ENABLED:
-        return
-    while True:
-        await asyncio.sleep(config.FOLLOWUP_POLL_MINUTES * 60)
-        try:
-            await _send_due_followups(bot)
-        except Exception:
-            logger.exception("Followup job failed")

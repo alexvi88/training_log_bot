@@ -104,13 +104,11 @@ async def main() -> None:
 
     admin_job = asyncio.create_task(admin_tasks.run_daily_admin_jobs(bot))
     engagement_job = asyncio.create_task(engagement.run_daily_engagement_job(bot))
-    followup_job = asyncio.create_task(engagement.run_followup_job(bot))
     try:
         await dp.start_polling(bot)
     finally:
         admin_job.cancel()
         engagement_job.cancel()
-        followup_job.cancel()
         await db.close_db()
 
 

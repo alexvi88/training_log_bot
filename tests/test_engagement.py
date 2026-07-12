@@ -121,14 +121,3 @@ def test_format_tonnage_switches_units_at_1000kg():
     assert engagement.format_tonnage(850) == "850 кг"
     assert engagement.format_tonnage(1000) == "1.0 т"
     assert engagement.format_tonnage(4200) == "4.2 т"
-
-
-# ---------- quiet hours ----------
-
-
-def test_quiet_hours_span_23_to_8():
-    assert engagement.in_quiet_hours(dt.datetime(2026, 7, 12, 23, 30)) is True
-    assert engagement.in_quiet_hours(dt.datetime(2026, 7, 12, 2, 0)) is True
-    assert engagement.in_quiet_hours(dt.datetime(2026, 7, 12, 7, 59)) is True
-    assert engagement.in_quiet_hours(dt.datetime(2026, 7, 12, 8, 0)) is False
-    assert engagement.in_quiet_hours(dt.datetime(2026, 7, 12, 19, 0)) is False

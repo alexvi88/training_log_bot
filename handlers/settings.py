@@ -18,7 +18,7 @@ router = Router(name="settings")
 async def show_settings(callback: CallbackQuery, state: FSMContext):
     await state.set_state(SettingsFlow.menu)
     user = await db.get_user(callback.from_user.id)
-    kb = keyboards.settings_keyboard(user["unit"], user["e1rm_formula"])
+    kb = keyboards.settings_keyboard(user["unit"], user["e1rm_formula"], bool(user["pushes_enabled"]))
     await ui.safe_edit(callback, "🔧 Настройки:", reply_markup=kb)
     await callback.answer()
 
@@ -43,6 +43,13 @@ async def settings_formula(callback: CallbackQuery, state: FSMContext):
     user = await db.get_user(callback.from_user.id)
     new_formula = "brzycki" if user["e1rm_formula"] == "epley" else "epley"
     await db.update_user(callback.from_user.id, e1rm_formula=new_formula)
+    await show_settings(callback, state)
+
+
+@router.callback_query(F.data == "settings:pushes")
+async def settings_pushes(callback: CallbackQuery, state: FSMContext):
+    user = await db.get_user(callback.from_user.id)
+    await db.update_user(callback.from_user.id, pushes_enabled=0 if user["pushes_enabled"] else 1)
     await show_settings(callback, state)
 
 

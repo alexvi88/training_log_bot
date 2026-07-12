@@ -253,10 +253,12 @@ def admin_pushes_keyboard(page: int, has_next: bool) -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
-def settings_keyboard(unit: str, formula: str) -> InlineKeyboardMarkup:
+def settings_keyboard(unit: str, formula: str, pushes_enabled: bool) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(text=f"Единицы: {unit}", callback_data="settings:unit")
     b.button(text=f"Формула 1ПМ: {formula}", callback_data="settings:formula")
+    pushes_label = "🔔 Пуши: включены" if pushes_enabled else "🔕 Пуши: выключены"
+    b.button(text=pushes_label, callback_data="settings:pushes")
     b.button(text="📤 Экспорт CSV", callback_data="settings:export")
     b.button(text="📥 Импорт CSV", callback_data="settings:import")
     b.button(text="⬅️ Назад", callback_data="settings:back")
