@@ -9,6 +9,7 @@ from aiogram.exceptions import TelegramBadRequest
 import admin_tasks
 import config
 import db
+import engagement
 from fsm_storage import JSONFileStorage
 from handlers import (
     admin,
@@ -85,10 +86,14 @@ async def main() -> None:
     dp.include_router(fallback.router)
 
     admin_job = asyncio.create_task(admin_tasks.run_daily_admin_jobs(bot))
+    engagement_job = asyncio.create_task(engagement.run_daily_engagement_job(bot))
+    followup_job = asyncio.create_task(engagement.run_followup_job(bot))
     try:
         await dp.start_polling(bot)
     finally:
         admin_job.cancel()
+        engagement_job.cancel()
+        followup_job.cancel()
         await db.close_db()
 
 

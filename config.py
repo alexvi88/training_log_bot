@@ -26,3 +26,17 @@ STALE_WORKOUT_HOURS = 6
 
 # Number of recent exercises to show first when picking from a muscle group.
 RECENT_EXERCISES_LIMIT = 12
+
+# Engagement pushes (streaks, skip reminders, plateau nudges, weekly digest — see
+# PUSH_IDEAS.md). Off by default so a fresh deploy doesn't start messaging users
+# until this has been reviewed.
+ENGAGEMENT_ENABLED = os.getenv("ENGAGEMENT_ENABLED", "false").lower() == "true"
+
+# Local hour (0-23) at which the daily engagement job evaluates and sends pushes.
+ENGAGEMENT_HOUR = int(os.getenv("ENGAGEMENT_HOUR", "19"))
+
+# How often (minutes) the post-workout followup job checks for due reminders.
+FOLLOWUP_POLL_MINUTES = int(os.getenv("FOLLOWUP_POLL_MINUTES", "10"))
+
+# Delay after finishing a workout before the hydration/protein followup push fires.
+FOLLOWUP_DELAY_HOURS = int(os.getenv("FOLLOWUP_DELAY_HOURS", "2"))

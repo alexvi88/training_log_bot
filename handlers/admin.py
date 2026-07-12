@@ -11,6 +11,7 @@ import config
 import db
 import formatting
 import keyboards
+import push_texts
 import ui
 import view_builder
 from fsm import AdminFlow
@@ -19,6 +20,7 @@ router = Router(name="admin")
 
 USERS_PAGE_SIZE = 10
 HISTORY_PAGE_SIZE = 8
+PUSHES_PAGE_SIZE = 10
 
 
 def _is_admin(telegram_id: int) -> bool:
@@ -147,4 +149,47 @@ async def admin_history_item(callback: CallbackQuery, state: FSMContext):
     await ui.safe_edit(
         callback, text, reply_markup=keyboards.admin_history_item_keyboard(target_user_id), parse_mode="HTML"
     )
+    await callback.answer()
+
+
+async def _show_pushes_list(target: Message | CallbackQuery, state: FSMContext, page: int):
+    await state.set_state(AdminFlow.browsing_pushes)
+    await state.update_data(admin_pushes_page=page)
+    total = await db.count_pushes()
+    pushes = await db.list_recent_pushes(limit=PUSHES_PAGE_SIZE, offset=page * PUSHES_PAGE_SIZE)
+    has_next = (page + 1) * PUSHES_PAGE_SIZE < total
+
+    if pushes:
+        entries = []
+        for p in pushes:
+            sent = dt.datetime.fromisoformat(p["sent_at"])
+            who = f"@{p['username']}" if p["username"] else str(p["telegram_id"])
+            category = push_texts.CATEGORY_LABELS.get(p["category"], p["category"])
+            entries.append(f"{sent.strftime('%d.%m %H:%M')} · {who} · {category}\n«{p['text']}»")
+        text = f"📬 Пуши ({total}), последние сверху:\n\n" + "\n\n".join(entries)
+    else:
+        text = "Пушей пока не было."
+
+    kb = keyboards.admin_pushes_keyboard(page, has_next)
+    if isinstance(target, CallbackQuery):
+        await ui.safe_edit(target, text, reply_markup=kb)
+    else:
+        await target.answer(text, reply_markup=kb)
+
+
+@router.message(Command("pushes"))
+async def cmd_pushes(message: Message, state: FSMContext):
+    if not _is_admin(message.from_user.id):
+        return
+    await state.clear()
+    await _show_pushes_list(message, state, page=0)
+
+
+@router.callback_query(F.data.startswith("admin:pp:"))
+async def admin_pushes_page(callback: CallbackQuery, state: FSMContext):
+    if not _is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    page = int(callback.data.split(":")[2])
+    await _show_pushes_list(callback, state, page)
     await callback.answer()

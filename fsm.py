@@ -46,6 +46,7 @@ class EditWorkoutFlow(StatesGroup):
 class AdminFlow(StatesGroup):
     browsing_users = State()
     browsing_history = State()
+    browsing_pushes = State()
 
 
 class ImportFlow(StatesGroup):

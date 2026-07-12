@@ -13,6 +13,7 @@ readers) doesn't apply to a single-connection app anyway.
 
 import asyncio
 import datetime as dt
+import json
 import os
 from typing import Any, Optional
 
@@ -106,6 +107,23 @@ CREATE TABLE IF NOT EXISTS sets (
 );
 CREATE INDEX IF NOT EXISTS idx_sets_exercise ON sets (exercise_id);
 CREATE INDEX IF NOT EXISTS idx_sets_block ON sets (block_id);
+
+CREATE TABLE IF NOT EXISTS pushes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    telegram_id INTEGER NOT NULL,
+    category TEXT NOT NULL,
+    text TEXT NOT NULL,
+    sent_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_pushes_sent_at ON pushes (sent_at);
+CREATE INDEX IF NOT EXISTS idx_pushes_telegram_id ON pushes (telegram_id, sent_at);
+
+CREATE TABLE IF NOT EXISTS push_rotation (
+    telegram_id INTEGER NOT NULL,
+    category TEXT NOT NULL,
+    bag TEXT NOT NULL,
+    PRIMARY KEY (telegram_id, category)
+);
 """
 
 _conn: Optional[aiosqlite.Connection] = None
@@ -166,6 +184,9 @@ async def _migrate_schema() -> None:
     workout_cols = await _column_names("workouts")
     if "source" not in workout_cols:
         await _conn.execute("ALTER TABLE workouts ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'")
+    if "followup_due_at" not in workout_cols:
+        await _conn.execute("ALTER TABLE workouts ADD COLUMN followup_due_at TEXT")
+        await _conn.execute("ALTER TABLE workouts ADD COLUMN followup_sent INTEGER NOT NULL DEFAULT 0")
 
     exercise_cols = await _column_names("exercises")
     if "original_name" not in exercise_cols:
@@ -1012,3 +1033,112 @@ async def backup_to_file(dest_path: str) -> None:
     """Write a consistent snapshot of the live database to dest_path (must not already exist)."""
     async with _write_lock:
         await conn().execute("VACUUM INTO ?", (dest_path,))
+
+
+# ---------- push notifications ----------
+
+async def tonnage_since(user_id: int, since_date: str) -> float:
+    """Total weight x reps across all finished-workout sets on/after since_date — for the weekly digest push."""
+    cur = await conn().execute(
+        "SELECT COALESCE(SUM(s.weight * s.reps), 0) FROM sets s "
+        "JOIN workout_blocks b ON b.id = s.block_id "
+        "JOIN workouts w ON w.id = b.workout_id "
+        "WHERE w.user_id = ? AND w.status = 'finished' AND w.started_at >= ?",
+        (user_id, since_date),
+    )
+    (total,) = await cur.fetchone()
+    return total
+
+
+async def list_user_ids_with_workouts() -> list[int]:
+    """Users with at least one finished workout — the pool the engagement job walks daily."""
+    cur = await conn().execute(
+        "SELECT DISTINCT user_id FROM workouts WHERE status = 'finished'"
+    )
+    return [r["user_id"] for r in await cur.fetchall()]
+
+
+async def get_rotation_bag(telegram_id: int, category: str) -> list[int]:
+    cur = await conn().execute(
+        "SELECT bag FROM push_rotation WHERE telegram_id = ? AND category = ?",
+        (telegram_id, category),
+    )
+    row = await cur.fetchone()
+    if row is None:
+        return []
+    return json.loads(row["bag"])
+
+
+async def save_rotation_bag(telegram_id: int, category: str, bag: list[int]) -> None:
+    async with _write_lock:
+        await conn().execute(
+            "INSERT INTO push_rotation (telegram_id, category, bag) VALUES (?, ?, ?) "
+            "ON CONFLICT (telegram_id, category) DO UPDATE SET bag = excluded.bag",
+            (telegram_id, category, json.dumps(bag)),
+        )
+        await conn().commit()
+
+
+async def record_push(telegram_id: int, category: str, text: str) -> None:
+    async with _write_lock:
+        await conn().execute(
+            "INSERT INTO pushes (telegram_id, category, text, sent_at) VALUES (?, ?, ?, ?)",
+            (telegram_id, category, text, now_iso()),
+        )
+        await conn().commit()
+
+
+async def has_push_today(telegram_id: int, today: str) -> bool:
+    """Whether this user already got a daily-rotation push on this calendar date (YYYY-MM-DD).
+
+    Excludes the transactional post-workout followup, which doesn't compete
+    for the one-push-a-day slot.
+    """
+    cur = await conn().execute(
+        "SELECT 1 FROM pushes WHERE telegram_id = ? AND date(sent_at) = ? AND category != 'followup' LIMIT 1",
+        (telegram_id, today),
+    )
+    return await cur.fetchone() is not None
+
+
+async def count_pushes() -> int:
+    cur = await conn().execute("SELECT COUNT(*) FROM pushes")
+    (count,) = await cur.fetchone()
+    return count
+
+
+async def list_recent_pushes(limit: int = 20, offset: int = 0) -> list[aiosqlite.Row]:
+    """Sent pushes joined with the recipient's username, most recent first."""
+    cur = await conn().execute(
+        "SELECT p.id, p.telegram_id, p.category, p.text, p.sent_at, u.username "
+        "FROM pushes p LEFT JOIN users u ON u.telegram_id = p.telegram_id "
+        "ORDER BY p.sent_at DESC, p.id DESC LIMIT ? OFFSET ?",
+        (limit, offset),
+    )
+    return await cur.fetchall()
+
+
+async def schedule_followup(workout_id: int, due_at: str) -> None:
+    async with _write_lock:
+        await conn().execute(
+            "UPDATE workouts SET followup_due_at = ?, followup_sent = 0 WHERE id = ?",
+            (due_at, workout_id),
+        )
+        await conn().commit()
+
+
+async def list_due_followups(now: str) -> list[aiosqlite.Row]:
+    cur = await conn().execute(
+        "SELECT * FROM workouts WHERE followup_due_at IS NOT NULL AND followup_sent = 0 "
+        "AND followup_due_at <= ?",
+        (now,),
+    )
+    return await cur.fetchall()
+
+
+async def mark_followup_sent(workout_id: int) -> None:
+    async with _write_lock:
+        await conn().execute(
+            "UPDATE workouts SET followup_sent = 1 WHERE id = ?", (workout_id,)
+        )
+        await conn().commit()

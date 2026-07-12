@@ -811,6 +811,11 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
     is_backfill = bool(data.get("is_backfill"))
     finished_at = f"{data['bf_date']}T12:00:00" if is_backfill else None
     await db.finish_workout(workout_id, note, finished_at=finished_at)
+    if not is_backfill:
+        # A backfilled workout already happened in the past — "drink water now"
+        # a couple hours after logging it retroactively wouldn't make sense.
+        due_at = (dt.datetime.now() + dt.timedelta(hours=config.FOLLOWUP_DELAY_HOURS)).isoformat(timespec="seconds")
+        await db.schedule_followup(workout_id, due_at)
 
     blocks = await view_builder.build_block_views(
         workout_id, formula, previous_before=workout["started_at"]
