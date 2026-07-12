@@ -12,7 +12,7 @@ match wins, at most one push per user per day):
   4. Тайминг         — today matches the user's usual training weekday
   5. Плато           — Sundays only, weight stuck despite 12+ reps
   6. Аналитика       — Sundays only, weekly digest
-  7. Челлендж        — Mondays only, weekly kickoff
+  7. Челлендж        — Mondays (kickoff) or Thursdays if behind pace (progress nudge)
 
 The transactional post-workout followup (hydration/protein reminder, 2h
 after finishing) is handled separately by run_followup_job — it doesn't
@@ -44,6 +44,7 @@ TIMING_MIN_HISTORY = 10
 PLATEAU_MIN_REPS = 12
 PLATEAU_SESSIONS = 3
 DIGEST_LOOKBACK_DAYS = 30
+CHALLENGE_ON_PACE_WORKOUTS = 2  # Thursday nudge fires if fewer than this many workouts logged this week
 
 
 @dataclass
@@ -172,7 +173,11 @@ async def build_daily_push(telegram_id: int, today: dt.date) -> Optional[PushDec
             )
             return PushDecision(push_texts.WEEKLY_DIGEST, text, with_cta=False)
 
-    if today.weekday() == 0:  # Monday
+    if today.weekday() == 0:  # Monday kickoff
+        text = await push_texts.pick_text(telegram_id, push_texts.CHALLENGE)
+        return PushDecision(push_texts.CHALLENGE, text)
+
+    if today.weekday() == 3 and dashboard.this_week < CHALLENGE_ON_PACE_WORKOUTS:  # Thursday progress check
         text = await push_texts.pick_text(telegram_id, push_texts.CHALLENGE)
         return PushDecision(push_texts.CHALLENGE, text)
 

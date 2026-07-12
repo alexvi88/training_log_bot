@@ -40,3 +40,19 @@ async def test_build_daily_push_respects_one_per_day_dedup(fresh_db, user_id):
 async def test_build_daily_push_none_for_user_without_workouts(fresh_db, user_id):
     decision = await engagement.build_daily_push(user_id, dt.date(2026, 7, 12))
     assert decision is None
+
+
+async def test_build_daily_push_fires_challenge_progress_nudge_on_thursday(fresh_db, user_id):
+    db = fresh_db
+    # 40 days out: not a skip milestone (3/5/7/10/14) and not a win-back day
+    # (40 - 21) % 10 != 0 -- isolates the Thursday challenge-progress branch.
+    await db.create_finished_workout(
+        user_id, started_at="2026-05-30T10:00:00", finished_at="2026-05-30T11:00:00"
+    )
+    thursday = dt.date(2026, 7, 9)
+    assert thursday.weekday() == 3
+
+    decision = await engagement.build_daily_push(user_id, thursday)
+
+    assert decision is not None
+    assert decision.category == push_texts.CHALLENGE
