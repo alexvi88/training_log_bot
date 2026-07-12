@@ -1,6 +1,7 @@
 """Workout lifecycle: start, add exercises, switch between them, log sets, finish."""
 
 import datetime as dt
+from collections import Counter
 from contextlib import suppress
 from html import escape
 
@@ -8,9 +9,16 @@ from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message, ReactionTypeEmoji
+from aiogram.types import (
+    BufferedInputFile,
+    CallbackQuery,
+    InlineKeyboardMarkup,
+    Message,
+    ReactionTypeEmoji,
+)
 
 import analytics
+import charts
 import config
 import db
 import formatting
@@ -171,16 +179,31 @@ async def _back_after_cancel(bot, state: FSMContext, user):
 _GREETING = "💪 <b>Привет, АТЛЕТ!</b> Начнём тренировку?"
 
 
-async def _menu_text(user_id: int) -> str:
-    """Greeting + dashboard stats (streak, this-week, 30-day counts)."""
-    dates = await db.list_finished_workout_dates(user_id)
-    dashboard = analytics.compute_dashboard(
-        (dt.date.fromisoformat(d) for d in dates), dt.date.today()
-    )
+async def _menu_view(user_id: int) -> tuple[str, bytes | None]:
+    """Greeting + dashboard stats (streak, this-week, 30-day counts), plus a
+    GitHub-style year heatmap image once the user has any finished workouts.
+    """
+    today = dt.date.today()
+    dates = [dt.date.fromisoformat(d) for d in await db.list_finished_workout_dates(user_id)]
+    dashboard = analytics.compute_dashboard(dates, today)
     stats = formatting.format_dashboard(dashboard)
-    if not stats:
-        return _GREETING
-    return f"{_GREETING}\n\n{stats}"
+    text = f"{_GREETING}\n\n{stats}" if stats else _GREETING
+    if not dates:
+        return text, None
+    heatmap_start = today - dt.timedelta(days=today.weekday(), weeks=52)
+    shown = sum(1 for d in dates if d >= heatmap_start)
+    word = formatting.plural_ru(shown, ("тренировка", "тренировки", "тренировок"))
+    png = charts.render_year_heatmap(Counter(dates), today, f"{shown} {word} за последний год")
+    return text, png
+
+
+async def _send_menu(message: Message, text: str, png: bytes | None, keyboard) -> Message:
+    if png is None:
+        return await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+    return await message.answer_photo(
+        BufferedInputFile(png, filename="year.png"),
+        caption=text, reply_markup=keyboard, parse_mode="HTML",
+    )
 
 
 @router.message(Command("start"))
@@ -188,8 +211,8 @@ async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
     await _ensure_user(message.from_user.id, message.from_user.username)
     active = await db.get_active_workout(message.from_user.id)
-    text = await _menu_text(message.from_user.id)
-    await message.answer(text, reply_markup=keyboards.main_menu(bool(active)), parse_mode="HTML")
+    text, png = await _menu_view(message.from_user.id)
+    await _send_menu(message, text, png, keyboards.main_menu(bool(active)))
     if active:
         started = dt.datetime.fromisoformat(active["started_at"])
         if (dt.datetime.now() - started).total_seconds() > config.STALE_WORKOUT_HOURS * 3600:
@@ -256,8 +279,12 @@ async def stale_delete_cancel(callback: CallbackQuery, state: FSMContext):
 async def _show_main_menu(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     active = await db.get_active_workout(callback.from_user.id)
-    text = await _menu_text(callback.from_user.id)
-    await ui.safe_edit(callback, text, reply_markup=keyboards.main_menu(bool(active)), parse_mode="HTML")
+    text, png = await _menu_view(callback.from_user.id)
+    kb = keyboards.main_menu(bool(active))
+    if png is None:
+        await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML")
+    else:
+        await ui.safe_edit_photo(callback, png, "year.png", text, reply_markup=kb, parse_mode="HTML")
 
 
 @router.callback_query(F.data == "menu:progress")
@@ -843,8 +870,14 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
 
     await state.clear()
     active = await db.get_active_workout(user_id)
-    menu_text = await _menu_text(user_id)
-    await bot.send_message(
-        chat_id=data["live_chat_id"], text=menu_text, reply_markup=keyboards.main_menu(bool(active)),
-        parse_mode="HTML",
-    )
+    menu_text, menu_png = await _menu_view(user_id)
+    menu_kb = keyboards.main_menu(bool(active))
+    if menu_png is None:
+        await bot.send_message(
+            chat_id=data["live_chat_id"], text=menu_text, reply_markup=menu_kb, parse_mode="HTML"
+        )
+    else:
+        await bot.send_photo(
+            chat_id=data["live_chat_id"], photo=BufferedInputFile(menu_png, filename="year.png"),
+            caption=menu_text, reply_markup=menu_kb, parse_mode="HTML",
+        )
