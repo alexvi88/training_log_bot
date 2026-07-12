@@ -180,25 +180,21 @@ _GREETING = "💪 <b>ПРИВЕТ, АТЛЕТ.</b> НАЧНЁМ ТРЕНИРОВ
 
 
 async def _menu_view(user_id: int) -> tuple[str, bytes | None]:
-    """Greeting + dashboard stats (streak, this-week, 30-day counts), plus a
-    GitHub-style year heatmap image once the user has any finished workouts.
+    """Greeting, plus a year heatmap image (with the streak/this-week/30-day
+    dashboard stats drawn into it) once the user has any finished workouts.
     """
     today = dt.date.today()
     dates = [dt.date.fromisoformat(d) for d in await db.list_finished_workout_dates(user_id)]
-    dashboard = analytics.compute_dashboard(dates, today)
-    stats = formatting.format_dashboard(dashboard)
-    text = f"{_GREETING}\n\n{stats}" if stats else _GREETING
     if not dates:
-        return text, None
+        return _GREETING, None
+    dashboard = analytics.compute_dashboard(dates, today)
     this_monday = today - dt.timedelta(days=today.weekday())
     year_ago = this_monday - dt.timedelta(weeks=52)
     first_monday = min(dates) - dt.timedelta(days=min(dates).weekday())
     heatmap_start = max(first_monday, year_ago)
-    shown = sum(1 for d in dates if d >= heatmap_start)
-    word = formatting.plural_ru(shown, ("тренировка", "тренировки", "тренировок"))
-    period = "за последний год" if heatmap_start <= year_ago else "с начала тренировок"
-    png = charts.render_year_heatmap(Counter(dates), today, heatmap_start, f"{shown} {word} {period}")
-    return text, png
+    stat_lines = formatting.dashboard_stat_lines(dashboard)
+    png = charts.render_year_heatmap(Counter(dates), today, heatmap_start, stat_lines)
+    return _GREETING, png
 
 
 async def _send_menu(message: Message, text: str, png: bytes | None, keyboard) -> Message:

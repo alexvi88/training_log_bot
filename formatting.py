@@ -126,24 +126,24 @@ def build_workout_summary(
     return "\n".join(lines)
 
 
-def format_dashboard(dashboard) -> str:
-    """One-glance stats block appended under the main-menu greeting.
+def dashboard_stat_lines(dashboard) -> list[tuple[str, str]]:
+    """(label, value) pairs drawn inside the main-menu heatmap image.
 
-    Empty string for a brand-new user (nothing to show yet).
+    Empty list for a brand-new user (nothing to show yet).
     """
     if dashboard.total_workouts == 0:
-        return ""
-    lines: list[str] = []
+        return []
+    lines: list[tuple[str, str]] = []
     if dashboard.week_streak >= 2:
         weeks = plural_ru(dashboard.week_streak, ("неделю", "недели", "недель"))
-        lines.append(f"Серия: {dashboard.week_streak} {weeks} подряд")
+        lines.append(("Серия: ", f"{dashboard.week_streak} {weeks} подряд"))
 
     week_word = plural_ru(dashboard.this_week, ("тренировка", "тренировки", "тренировок"))
-    lines.append(f"Эта неделя: {dashboard.this_week} {week_word}")
+    lines.append(("Эта неделя: ", f"{dashboard.this_week} {week_word}"))
 
     month_word = plural_ru(dashboard.last_30_days, ("тренировка", "тренировки", "тренировок"))
-    lines.append(f"Последние 30 дней: {dashboard.last_30_days} {month_word}")
-    return "\n".join(lines)
+    lines.append(("Последние 30 дней: ", f"{dashboard.last_30_days} {month_word}"))
+    return lines
 
 
 def build_workout_card(
