@@ -147,11 +147,7 @@ async def exm_pick_template(callback: CallbackQuery, state: FSMContext):
     await state.update_data(exm_exercise_id=ex_id)
     await state.set_state(ExerciseManage.picking_exercise)
     ex = await db.get_exercise(ex_id)
-    images = exercise_media.get_images(ex["name"])
-    if images:
-        await callback.message.answer_media_group(
-            [InputMediaPhoto(media=FSInputFile(p)) for p in images]
-        )
+    await _send_exercise_images(callback.message, ex)
     text, kb = _exercise_detail_view(ex)
     await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML")
     await callback.answer()
@@ -224,6 +220,12 @@ def _exercise_detail_view(ex):
     return "\n".join(info), b.as_markup()
 
 
+async def _send_exercise_images(message: Message, ex) -> None:
+    images = exercise_media.get_images(ex["name"])
+    if images:
+        await message.answer_media_group([InputMediaPhoto(media=FSInputFile(p)) for p in images])
+
+
 @router.callback_query(StateFilter(ExerciseManage.picking_exercise), F.data.startswith("exm:ex:"))
 async def exm_pick_exercise(callback: CallbackQuery, state: FSMContext):
     ex_id = int(callback.data.split(":")[2])
@@ -232,6 +234,7 @@ async def exm_pick_exercise(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Упражнение не найдено", show_alert=True)
         return
     await state.update_data(exm_exercise_id=ex_id)
+    await _send_exercise_images(callback.message, ex)
     text, kb = _exercise_detail_view(ex)
     await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML")
     await callback.answer()

@@ -159,7 +159,7 @@ async def _render_logging_screen(bot, state: FSMContext, user):
     open_items = [(ex_id, names[ex_id]) for ex_id in open_ids]
     active_block_id = (data.get("open_blocks") or {}).get(active)
     has_sets = bool(active_block_id and await db.list_sets_for_block(active_block_id))
-    hint = _logging_hint(None if has_sets else last_session_sets.get(active), has_sets)
+    hint = _logging_hint(last_session_sets.get(active), has_sets)
     kb = keyboards.logging_keyboard(open_items, active, has_sets)
     await _refresh_live(bot, state, user, data["workout_id"], hint, kb)
 
@@ -190,10 +190,14 @@ async def _menu_view(user_id: int) -> tuple[str, bytes | None]:
     text = f"{_GREETING}\n\n{stats}" if stats else _GREETING
     if not dates:
         return text, None
-    heatmap_start = today - dt.timedelta(days=today.weekday(), weeks=52)
+    this_monday = today - dt.timedelta(days=today.weekday())
+    year_ago = this_monday - dt.timedelta(weeks=52)
+    first_monday = min(dates) - dt.timedelta(days=min(dates).weekday())
+    heatmap_start = max(first_monday, year_ago)
     shown = sum(1 for d in dates if d >= heatmap_start)
     word = formatting.plural_ru(shown, ("тренировка", "тренировки", "тренировок"))
-    png = charts.render_year_heatmap(Counter(dates), today, f"{shown} {word} за последний год")
+    period = "за последний год" if heatmap_start <= year_ago else "с начала тренировок"
+    png = charts.render_year_heatmap(Counter(dates), today, heatmap_start, f"{shown} {word} {period}")
     return text, png
 
 

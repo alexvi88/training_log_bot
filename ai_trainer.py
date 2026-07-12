@@ -17,6 +17,7 @@ from openai import AsyncOpenAI
 import analytics
 import config
 import db
+from seed_data import EXERCISE_TEMPLATES
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,14 @@ SYSTEM_PROMPT = """\
 тренировки и прогресс по конкретному упражнению. Прежде чем отвечать на вопрос
 про его тренировки, нагрузку, прогресс или рекорды — посмотри реальные данные
 через инструменты, не выдумывай цифры. Если данных мало или нет, честно скажи об этом.
+
+Также есть инструмент list_exercise_catalog — полный каталог упражнений-шаблонов
+бота по группам мышц. Используй его вместе со списком упражнений пользователя
+(из get_training_overview), когда советуешь новое упражнение, разбираешь баланс
+программы по группам мышц или ищешь, чего не хватает. Предлагай в первую очередь
+упражнения из каталога (они уже есть в боте и их можно сразу добавить через
+«⚙️ Упражнения → Новое упражнение → Шаблоны»), но можешь называть и упражнения
+вне каталога, если это уместно.
 
 Правила ответа:
 - Отвечай по-русски, на «ты», дружелюбно и по делу, как тренер в зале.
@@ -117,7 +126,25 @@ TOOLS: list[dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_exercise_catalog",
+            "description": (
+                "Полный каталог упражнений-шаблонов бота, сгруппированный по группам мышц. "
+                "Не зависит от пользователя — это готовые упражнения, которые можно добавить "
+                "через «⚙️ Упражнения → Новое упражнение → Шаблоны». Используй, чтобы советовать "
+                "новые упражнения или находить пробелы по группам мышц, сверяясь со списком "
+                "упражнений пользователя из get_training_overview."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
 ]
+
+_CATALOG_BY_GROUP: dict[str, list[str]] = {}
+for _group, _name in EXERCISE_TEMPLATES:
+    _CATALOG_BY_GROUP.setdefault(_group, []).append(_name)
 
 
 # ---------- tool executors (все данные строго по user_id) ----------
@@ -229,6 +256,8 @@ async def execute_tool(user_id: int, name: str, tool_input: dict[str, Any]) -> s
         payload = await _recent_workouts(user_id, limit)
     elif name == "get_exercise_progress":
         payload = await _exercise_progress(user_id, tool_input.get("exercise_name", ""))
+    elif name == "list_exercise_catalog":
+        payload = {"catalog": _CATALOG_BY_GROUP}
     else:
         payload = {"error": f"unknown tool: {name}"}
     return json.dumps(payload, ensure_ascii=False)
