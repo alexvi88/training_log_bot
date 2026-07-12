@@ -14,8 +14,7 @@ BTN_AI = "🤖 AI-тренер"
 def persistent_menu() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text=BTN_WORKOUT)],
-            [KeyboardButton(text=BTN_MENU), KeyboardButton(text=BTN_AI)],
+            [KeyboardButton(text=BTN_WORKOUT), KeyboardButton(text=BTN_MENU), KeyboardButton(text=BTN_AI)],
         ],
         resize_keyboard=True,
         is_persistent=True,
