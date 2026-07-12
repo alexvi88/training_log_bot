@@ -32,6 +32,7 @@ from aiogram.exceptions import TelegramForbiddenError
 import analytics
 import config
 import db
+import formatting
 import keyboards
 import push_texts
 
@@ -167,9 +168,10 @@ async def build_daily_push(telegram_id: int, today: dt.date) -> Optional[PushDec
         since = (today - dt.timedelta(days=DIGEST_LOOKBACK_DAYS)).isoformat()
         tonnage = await db.tonnage_since(telegram_id, since)
         if tonnage > 0:
+            week_word = formatting.plural_ru(dashboard.this_week, ("тренировка", "тренировки", "тренировок"))
             text = await push_texts.pick_text(
                 telegram_id, push_texts.WEEKLY_DIGEST,
-                tonnage=format_tonnage(tonnage), week_count=dashboard.this_week,
+                tonnage=format_tonnage(tonnage), week_count=f"{dashboard.this_week} {week_word}",
             )
             return PushDecision(push_texts.WEEKLY_DIGEST, text, with_cta=False)
 
