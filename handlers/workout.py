@@ -213,10 +213,16 @@ async def _send_menu(message: Message, text: str, png: bytes | None, keyboard) -
 @router.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
-    await _ensure_user(message.from_user.id, message.from_user.username)
+    user = await _ensure_user(message.from_user.id, message.from_user.username)
     active = await db.get_active_workout(message.from_user.id)
     text, png = await _menu_view(message.from_user.id)
     await _send_menu(message, text, png, keyboards.main_menu(bool(active)))
+    if not user["reply_keyboard_shown"]:
+        await message.answer(
+            "⌨️ Меню закреплено под полем ввода — им можно пользоваться в любой момент.",
+            reply_markup=keyboards.persistent_menu(),
+        )
+        await db.update_user(message.from_user.id, reply_keyboard_shown=1)
     if active:
         started = dt.datetime.fromisoformat(active["started_at"])
         if (dt.datetime.now() - started).total_seconds() > config.STALE_WORKOUT_HOURS * 3600:

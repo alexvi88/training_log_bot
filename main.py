@@ -22,6 +22,7 @@ from handlers import (
     exercises,
     fallback,
     history,
+    persistent_menu,
     settings,
     workout,
 )
@@ -67,13 +68,17 @@ class IgnoreStaleCallbackMiddleware(BaseMiddleware):
 
 async def _setup_commands(bot: Bot) -> None:
     await bot.set_my_commands(
-        [BotCommand(command="start", description="Открыть главное меню")],
+        [
+            BotCommand(command="start", description="Открыть главное меню"),
+            BotCommand(command="ai_trainer", description="AI-тренер"),
+        ],
         scope=BotCommandScopeDefault(),
     )
     if config.ADMIN_ID is not None:
         await bot.set_my_commands(
             [
                 BotCommand(command="start", description="Открыть главное меню"),
+                BotCommand(command="ai_trainer", description="AI-тренер"),
                 BotCommand(command="check_users", description="Список пользователей (админ)"),
             ],
             scope=BotCommandScopeChat(chat_id=config.ADMIN_ID),
@@ -92,6 +97,7 @@ async def main() -> None:
     await _setup_commands(bot)
     dp = Dispatcher(storage=JSONFileStorage(config.FSM_STORAGE_PATH))
     dp.callback_query.outer_middleware(IgnoreStaleCallbackMiddleware())
+    dp.include_router(persistent_menu.router)
     dp.include_router(workout.router)
     dp.include_router(admin.router)
     dp.include_router(backfill.router)

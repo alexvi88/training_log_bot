@@ -30,7 +30,8 @@ CREATE TABLE IF NOT EXISTS users (
     unit TEXT NOT NULL DEFAULT 'kg',
     e1rm_formula TEXT NOT NULL DEFAULT 'epley',
     show_extra_stats INTEGER NOT NULL DEFAULT 1,
-    pushes_enabled INTEGER NOT NULL DEFAULT 1
+    pushes_enabled INTEGER NOT NULL DEFAULT 1,
+    reply_keyboard_shown INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS muscle_groups (
@@ -203,6 +204,10 @@ async def _migrate_schema() -> None:
         await _conn.execute("ALTER TABLE users DROP COLUMN bodyweight")
     if "pushes_enabled" not in user_cols:
         await _conn.execute("ALTER TABLE users ADD COLUMN pushes_enabled INTEGER NOT NULL DEFAULT 1")
+    if "reply_keyboard_shown" not in user_cols:
+        await _conn.execute(
+            "ALTER TABLE users ADD COLUMN reply_keyboard_shown INTEGER NOT NULL DEFAULT 0"
+        )
 
     set_cols = await _column_names("sets")
     if "is_warmup" in set_cols:

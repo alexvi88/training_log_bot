@@ -1,5 +1,5 @@
 """Telegram only shows /check_users in the slash-command menu for the admin's own
-chat; everyone else must see just /start. These tests pin that scoping.
+chat; everyone else must see /start and /ai_trainer. These tests pin that scoping.
 """
 from unittest.mock import AsyncMock
 
@@ -22,7 +22,7 @@ async def test_default_scope_only_has_start(monkeypatch):
         c for c in bot.set_my_commands.call_args_list if isinstance(c.kwargs["scope"], BotCommandScopeDefault)
     )
     commands = default_call.args[0]
-    assert [c.command for c in commands] == ["start"]
+    assert [c.command for c in commands] == ["start", "ai_trainer"]
 
 
 async def test_admin_scope_targets_only_admin_chat_and_includes_admin_command(monkeypatch):
@@ -37,7 +37,7 @@ async def test_admin_scope_targets_only_admin_chat_and_includes_admin_command(mo
     scope: BotCommandScopeChat = admin_call.kwargs["scope"]
     commands: list[BotCommand] = admin_call.args[0]
     assert scope.chat_id == 12345
-    assert {c.command for c in commands} == {"start", "check_users"}
+    assert {c.command for c in commands} == {"start", "ai_trainer", "check_users"}
 
 
 async def test_no_admin_scope_registered_when_admin_id_unset(monkeypatch):

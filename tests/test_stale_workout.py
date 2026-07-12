@@ -52,8 +52,9 @@ async def test_start_warns_and_offers_buttons_for_stale_workout(fresh_db, user_i
 
     await workout.cmd_start(message, state)
 
-    assert message.answer.await_count == 2
-    warning_call = message.answer.await_args_list[1]
+    # 3rd call: main menu, then the one-time persistent-keyboard onboarding, then the warning.
+    assert message.answer.await_count == 3
+    warning_call = message.answer.await_args_list[2]
     assert "висит тренировка" in warning_call.args[0]
     kb = warning_call.kwargs["reply_markup"]
     callback_datas = [b.callback_data for row in kb.inline_keyboard for b in row]
@@ -70,7 +71,8 @@ async def test_start_does_not_warn_for_recent_workout(fresh_db, user_id):
 
     await workout.cmd_start(message, state)
 
-    assert message.answer.await_count == 1
+    # main menu + the one-time persistent-keyboard onboarding message.
+    assert message.answer.await_count == 2
 
 
 async def test_stale_finish_marks_workout_finished_with_original_date(fresh_db, user_id):

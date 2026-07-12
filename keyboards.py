@@ -2,8 +2,24 @@
 
 import datetime as dt
 
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+
+# Persistent reply-keyboard buttons, always visible under the input field.
+BTN_WORKOUT = "🏋️ Тренировка"
+BTN_MENU = "☰ Меню"
+BTN_AI = "🤖 AI-тренер"
+
+
+def persistent_menu() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text=BTN_WORKOUT)],
+            [KeyboardButton(text=BTN_MENU), KeyboardButton(text=BTN_AI)],
+        ],
+        resize_keyboard=True,
+        is_persistent=True,
+    )
 
 
 def main_menu(has_active_workout: bool) -> InlineKeyboardMarkup:
@@ -16,8 +32,7 @@ def main_menu(has_active_workout: bool) -> InlineKeyboardMarkup:
     b.button(text="📚 История", callback_data="menu:history")
     b.button(text="⚙️ Упражнения", callback_data="menu:exercises")
     b.button(text="🔧 Настройки", callback_data="menu:settings")
-    b.button(text="🤖 AI-тренер", callback_data="menu:ai")
-    b.adjust(1, 2, 2, 1)
+    b.adjust(1, 2, 2)
     return b.as_markup()
 
 
