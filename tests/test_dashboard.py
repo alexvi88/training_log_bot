@@ -130,16 +130,25 @@ def test_render_year_heatmap_returns_png():
     counts = {
         dt.date(2026, 7, 10): 1,
         dt.date(2026, 7, 8): 2,
-        dt.date(2026, 7, 6): 5,  # above the top level, must clamp instead of crashing
+        dt.date(2026, 7, 6): 5,  # multi-workout day, must render as a single filled square
         dt.date(2025, 7, 20): 1,  # near the year-ago edge of the grid
         dt.date(2020, 1, 1): 1,  # far outside the grid, must be ignored
     }
-    png = charts.render_year_heatmap(counts, today, "4 тренировки за последний год")
+    start = dt.date(2025, 7, 13)  # roughly a year back, snapped to Monday inside the renderer
+    png = charts.render_year_heatmap(counts, today, start, "4 тренировки за последний год")
     assert png[:8] == b"\x89PNG\r\n\x1a\n"
 
 
 def test_render_year_heatmap_handles_empty_counts():
-    png = charts.render_year_heatmap({}, dt.date(2026, 7, 12), "0 тренировок за последний год")
+    png = charts.render_year_heatmap({}, dt.date(2026, 7, 12), dt.date(2026, 7, 1), "0 тренировок")
+    assert png[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_render_year_heatmap_starts_at_first_workout():
+    """A brand-new user shouldn't get 52 empty weeks padded onto the grid."""
+    today = dt.date(2026, 7, 12)
+    start = dt.date(2026, 7, 6)
+    png = charts.render_year_heatmap({dt.date(2026, 7, 10): 1}, today, start, "1 тренировка с начала тренировок")
     assert png[:8] == b"\x89PNG\r\n\x1a\n"
 
 
