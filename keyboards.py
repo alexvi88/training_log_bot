@@ -10,6 +10,10 @@ BTN_WORKOUT = "🏋️ Тренировка"
 BTN_MENU = "☰ Меню"
 BTN_AI = "🤖 AI-тренер"
 
+# Bump whenever persistent_menu()'s button set changes so every user gets the
+# new layout next time cmd_start runs (see users.reply_keyboard_version).
+PERSISTENT_MENU_VERSION = 1
+
 
 def persistent_menu() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(

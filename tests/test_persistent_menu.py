@@ -43,11 +43,26 @@ async def test_start_shows_persistent_keyboard_only_once(fresh_db, user_id):
     onboarding_call = message.answer.await_args_list[1]
     assert isinstance(onboarding_call.kwargs["reply_markup"], ReplyKeyboardMarkup)
     user = await fresh_db.get_user(user_id)
-    assert user["reply_keyboard_shown"] == 1
+    assert user["reply_keyboard_version"] == keyboards.PERSISTENT_MENU_VERSION
 
     message2 = _make_message(user_id)
     await workout.cmd_start(message2, state)
     assert message2.answer.await_count == 1
+
+
+async def test_menu_version_bump_reshows_keyboard_for_existing_users(fresh_db, user_id):
+    await fresh_db.update_user(user_id, reply_keyboard_version=1)
+
+    message = _make_message(user_id)
+    state = await _make_state(user_id)
+
+    with patch("keyboards.PERSISTENT_MENU_VERSION", 2):
+        await workout.cmd_start(message, state)
+
+    onboarding_call = message.answer.await_args_list[1]
+    assert isinstance(onboarding_call.kwargs["reply_markup"], ReplyKeyboardMarkup)
+    user = await fresh_db.get_user(user_id)
+    assert user["reply_keyboard_version"] == 2
 
 
 async def test_menu_button_reuses_cmd_start(fresh_db, user_id):
