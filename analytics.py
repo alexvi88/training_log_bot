@@ -177,12 +177,18 @@ def detect_new_records(
             reps_records.append(NewRecord(kind="reps_at_weight", value=s.reps, extra=s.weight))
             prior_pr.max_reps_at_weight[s.weight] = s.reps
 
-    # Drop records dominated by another from the same session (same reps at a
-    # lower weight, or same weight at fewer reps) — only the best one is worth a notification.
+    # Drop records dominated by any set actually performed in this session (same
+    # reps at a lower weight, or same weight at fewer reps) — only the best one is
+    # worth a notification. This must check against all sets, not just the ones
+    # that individually beat history: a weight already matched historically (so
+    # not itself "new") can still dominate a lighter new-weight-bucket record set
+    # in the same session.
     for r in reps_records:
         dominated = any(
-            other is not r and other.extra >= r.extra and other.value >= r.value
-            for other in reps_records
+            other.weight >= r.extra
+            and other.reps >= r.value
+            and (other.weight, other.reps) != (r.extra, r.value)
+            for other in new_session.sets
         )
         if not dominated:
             records.append(r)
