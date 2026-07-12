@@ -34,9 +34,3 @@ ENGAGEMENT_ENABLED = os.getenv("ENGAGEMENT_ENABLED", "false").lower() == "true"
 
 # Local hour (0-23) at which the daily engagement job evaluates and sends pushes.
 ENGAGEMENT_HOUR = int(os.getenv("ENGAGEMENT_HOUR", "19"))
-
-# How often (minutes) the post-workout followup job checks for due reminders.
-FOLLOWUP_POLL_MINUTES = int(os.getenv("FOLLOWUP_POLL_MINUTES", "10"))
-
-# Delay after finishing a workout before the hydration/protein followup push fires.
-FOLLOWUP_DELAY_HOURS = int(os.getenv("FOLLOWUP_DELAY_HOURS", "2"))
