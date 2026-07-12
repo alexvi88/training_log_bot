@@ -49,6 +49,10 @@ class AdminFlow(StatesGroup):
     browsing_pushes = State()
 
 
+class AITrainerFlow(StatesGroup):
+    chatting = State()
+
+
 class ImportFlow(StatesGroup):
     awaiting_file = State()
     mapping_columns = State()

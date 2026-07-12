@@ -38,5 +38,11 @@ ENGAGEMENT_HOUR = int(os.getenv("ENGAGEMENT_HOUR", "19"))
 # How often (minutes) the post-workout followup job checks for due reminders.
 FOLLOWUP_POLL_MINUTES = int(os.getenv("FOLLOWUP_POLL_MINUTES", "10"))
 
+# AI trainer (Claude-backed Q&A over the user's own training data). The menu
+# entry stays visible but answers with a hint until this key is set.
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+
+AI_TRAINER_MODEL = os.getenv("AI_TRAINER_MODEL", "claude-opus-4-8")
+
 # Delay after finishing a workout before the hydration/protein followup push fires.
 FOLLOWUP_DELAY_HOURS = int(os.getenv("FOLLOWUP_DELAY_HOURS", "2"))
