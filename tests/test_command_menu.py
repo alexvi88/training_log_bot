@@ -1,6 +1,8 @@
 """Telegram only shows /check_users in the slash-command menu for the admin's own
 chat; everyone else must see /start and /ai_trainer. These tests pin that scoping.
 """
+import ast
+from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
@@ -9,9 +11,39 @@ from aiogram.types import BotCommand, BotCommandScopeChat, BotCommandScopeDefaul
 import config
 from main import _setup_commands
 
-pytestmark = pytest.mark.asyncio
+
+def _router_registration_order() -> list[str]:
+    """Router names in the order main() feeds them to dp.include_router(...)."""
+    tree = ast.parse(Path("main.py").read_text())
+    (main_fn,) = [n for n in ast.walk(tree) if isinstance(n, ast.AsyncFunctionDef) and n.name == "main"]
+    order = []
+    for node in ast.walk(main_fn):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "include_router"
+            and isinstance(node.args[0], ast.Attribute)
+            and isinstance(node.args[0].value, ast.Name)
+        ):
+            order.append(node.args[0].value.id)
+    return order
 
 
+def test_admin_router_registered_before_fsm_flow_routers():
+    """Admin-only commands (/check_users, /pushes) must win over any in-progress
+    FSM flow's catch-all message handler (e.g. workout.py's logging_set handler
+    accepts any text as a weight/reps entry), or the admin typing them mid-workout
+    gets "Не понял ввод" instead of the admin screen. aiogram tries routers in
+    registration order, so admin.router has to come before the flow routers.
+    """
+    order = _router_registration_order()
+    flow_routers = {"workout", "backfill", "csv_import", "exercises", "history", "edit_workout", "ai_trainer"}
+    admin_index = order.index("admin")
+    for name in flow_routers & set(order):
+        assert admin_index < order.index(name), f"admin.router must be registered before {name}.router"
+
+
+@pytest.mark.asyncio
 async def test_default_scope_only_has_start(monkeypatch):
     monkeypatch.setattr(config, "ADMIN_ID", 12345)
     bot = AsyncMock()
@@ -25,6 +57,7 @@ async def test_default_scope_only_has_start(monkeypatch):
     assert [c.command for c in commands] == ["start", "ai_trainer"]
 
 
+@pytest.mark.asyncio
 async def test_admin_scope_targets_only_admin_chat_and_includes_admin_command(monkeypatch):
     monkeypatch.setattr(config, "ADMIN_ID", 12345)
     bot = AsyncMock()
@@ -39,6 +72,7 @@ async def test_admin_scope_targets_only_admin_chat_and_includes_admin_command(mo
     assert scope.chat_id == 12345
     assert {c.command for c in commands} == {"start", "ai_trainer", "check_users", "pushes"}
 
+@pytest.mark.asyncio
 async def test_no_admin_scope_registered_when_admin_id_unset(monkeypatch):
     monkeypatch.setattr(config, "ADMIN_ID", None)
     bot = AsyncMock()
