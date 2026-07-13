@@ -130,12 +130,14 @@ def build_workout_summary(
 _MD_BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
 
 
-def _markdown_bold_to_html(text: str) -> str:
-    """Converts **bold** markers from the AI comment into Telegram <b> tags.
+def markdown_bold_to_html(text: str) -> str:
+    """Converts **bold** markers from AI output into Telegram <b> tags.
 
     The model is asked to wrap exercise names in ** using their exact display
     names; everything else is escaped as plain text, so stray * or HTML-special
-    characters elsewhere in the comment can't break the message.
+    characters elsewhere in the text can't break the message. A ** pair split
+    across two chunks (e.g. by Telegram's message-length limit) just falls back
+    to literal escaped asterisks in both chunks rather than an unclosed tag.
     """
     parts = []
     pos = 0
@@ -149,7 +151,7 @@ def _markdown_bold_to_html(text: str) -> str:
 
 def build_ai_comment_block(comment: str) -> str:
     """Rendered as a card section prefixed by DIVIDER — same convention as highlights."""
-    return f"{DIVIDER}\n🤖 <b>Комментарий AI-тренера</b>\n\n{_markdown_bold_to_html(comment)}"
+    return f"{DIVIDER}\n🤖 <b>Комментарий AI-тренера</b>\n\n{markdown_bold_to_html(comment)}"
 
 
 def dashboard_stat_lines(dashboard) -> list[tuple[str, str]]:
