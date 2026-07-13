@@ -22,6 +22,8 @@ import random
 import db
 
 # Category keys, in daily-job priority order (first eligible one wins).
+# NEWBIE_NUDGE sits outside that chain: it fires from a separate walk pool
+# (users with zero finished workouts, disjoint from the priority chain's pool).
 STREAK_AT_RISK = "streak_at_risk"
 SKIP_3 = "skip_3"
 SKIP_5 = "skip_5"
@@ -32,6 +34,7 @@ WIN_BACK = "win_back"
 TIMING = "timing"
 PLATEAU = "plateau"
 WEEKLY_DIGEST = "weekly_digest"
+NEWBIE_NUDGE = "newbie_nudge"
 
 SKIP_MILESTONE_DAYS = (3, 5, 7, 10, 14)
 SKIP_CATEGORY_BY_DAY: dict[int, str] = {
@@ -87,6 +90,11 @@ TEXTS: dict[str, list[str]] = {
         "ПРИВЕТ АТЛЕТ, на этой неделе — {week_count}. Заходи, гляну, что подросло.",
         "ПРИВЕТ АТЛЕТ, понедельник — твой самый продуктивный день по истории. Держим планку?",
     ],
+    NEWBIE_NUDGE: [
+        "ПРИВЕТ АТЛЕТ, аккаунт готов, а дневник пока пустой. Первая запись — самая простая: зайди и залогируй хоть один подход.",
+        "ПРИВЕТ АТЛЕТ, зарегистрировался — уже полдела. Вторая половина ждёт в зале. Погнали?",
+        "ПРИВЕТ АТЛЕТ, я тут, дневник открыт, а тренировок в нём пока ноль. Начни с чего угодно — подсчитаю остальное сам.",
+    ],
 }
 
 CATEGORY_LABELS: dict[str, str] = {
@@ -100,6 +108,7 @@ CATEGORY_LABELS: dict[str, str] = {
     TIMING: "Тайминг",
     PLATEAU: "Плато",
     WEEKLY_DIGEST: "Аналитика",
+    NEWBIE_NUDGE: "Новичок без тренировок",
 }
 
 
