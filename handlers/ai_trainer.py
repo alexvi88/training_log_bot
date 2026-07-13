@@ -3,6 +3,7 @@
 import asyncio
 import base64
 import logging
+import random
 from contextlib import suppress
 from typing import Optional
 
@@ -56,18 +57,63 @@ INTRO_TEXT = (
 # Пользователи, чей вопрос сейчас обрабатывается — защита от параллельных запросов.
 _busy: set[int] = set()
 
+# Крутятся в placeholder-сообщении, пока модель думает — вместо голого "печатает..."
+# на несколько секунд/десятков секунд (особенно с tool-calls и веб-поиском под капотом).
+RUNNING_REPLIES = [
+    "💪 держи паузу, сейчас будет по делу...",
+    "🧠 включаю тренерский мозг, момент...",
+    "🔥 разминаюсь перед ответом...",
+    "🎯 целюсь в точный совет, не спугни...",
+    "🧘 собираю мысли, не гони...",
+    "🏋️ гружу знания, как штангу — по чуть-чуть...",
+    "📖 сверяюсь с методикой, секунду...",
+    "⏱️ отдыхаю между подходами мысли, погоди...",
+    "🥩 перевариваю вопрос, дай времени...",
+    "🧊 остываю от подхода, сейчас отвечу...",
+    "🩹 разбираю по косточкам, момент...",
+    "🚿 после подхода думается чётче, секунду...",
+    "🧢 не гони, тренер думает медленно, но метко...",
+    "🥊 обдумываю удар точнее, чем ты жим...",
+    "🍗 заряжаюсь белком мысли, момент...",
+    "🧱 закладываю фундамент ответа...",
+    "⚡ собираю энергию для ответа...",
+    "🗿 стою как штанга — думаю тяжело, но верно...",
+    "🧭 нахожу верное направление, секунду...",
+    "🛠️ докручиваю ответ, почти готово...",
+]
+
+# Интервал ротации placeholder-текста, секунды.
+RUNNING_INTERVAL = 2.8
+
+
+def _pick(replies: list[str]) -> str:
+    return random.choice(replies)
+
+
+def _pick_different(replies: list[str], exclude: Optional[str]) -> str:
+    """Случайная реплика, отличная от предыдущей — иначе editText упадёт с
+    "message is not modified", да и ротация без этого выглядит нечестно."""
+    if len(replies) <= 1:
+        return _pick(replies)
+    choice = exclude
+    while choice == exclude:
+        choice = _pick(replies)
+    return choice
+
+
+async def _cycle_running_messages(placeholder: Message, initial_text: str) -> None:
+    last_text = initial_text
+    while True:
+        await asyncio.sleep(RUNNING_INTERVAL)
+        last_text = _pick_different(RUNNING_REPLIES, last_text)
+        with suppress(TelegramBadRequest):
+            await placeholder.edit_text(last_text)
+
 
 async def ai_keyboard(user_id: int) -> InlineKeyboardMarkup:
     """AI-trainer reply keyboard: 'К тренировке' instead of 'Меню' while a workout is active."""
     active = await db.get_active_workout(user_id)
     return keyboards.ai_trainer_keyboard(has_active_workout=bool(active))
-
-
-async def _keep_typing(message: Message) -> None:
-    # "typing" в Telegram живёт ~5 секунд, а ответ модели может занять дольше.
-    while True:
-        await message.bot.send_chat_action(message.chat.id, "typing")
-        await asyncio.sleep(4)
 
 
 @router.callback_query(F.data == "menu:ai")
@@ -188,18 +234,23 @@ async def _handle_question(
     history = data.get("ai_history", [])
 
     _busy.add(user_id)
-    typing = asyncio.create_task(_keep_typing(message))
+    running_text = _pick(RUNNING_REPLIES)
+    placeholder = await message.answer(running_text)
+    running_task = asyncio.create_task(_cycle_running_messages(placeholder, running_text))
     try:
         answer = await ai_trainer.ask(user_id, question, history, image_data_url=image_data_url)
     except Exception:
         logger.exception("AI trainer request failed for user %s", user_id)
-        await message.answer(
-            "⚠️ Не получилось получить ответ, попробуй ещё раз чуть позже.",
-            reply_markup=await ai_keyboard(user_id),
-        )
+        with suppress(TelegramBadRequest):
+            await placeholder.edit_text(
+                "⚠️ Не получилось получить ответ, попробуй ещё раз чуть позже.",
+                reply_markup=await ai_keyboard(user_id),
+            )
         return
     finally:
-        typing.cancel()
+        running_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await running_task
         _busy.discard(user_id)
 
     history = (
@@ -221,11 +272,15 @@ async def _handle_question(
     chunks = [answer[i : i + TG_CHUNK] for i in range(0, len(answer), TG_CHUNK)]
     for i, chunk in enumerate(chunks):
         is_last = i == len(chunks) - 1
-        await message.answer(
-            formatting.markdown_bold_to_html(chunk),
-            parse_mode="HTML",
-            reply_markup=reply_markup if is_last else None,
-        )
+        markup = reply_markup if is_last else None
+        html_chunk = formatting.markdown_bold_to_html(chunk)
+        if i == 0:
+            try:
+                await placeholder.edit_text(html_chunk, parse_mode="HTML", reply_markup=markup)
+                continue
+            except TelegramBadRequest:
+                pass  # разошлось с ротацией (например текст не изменился) — просто шлём отдельным сообщением
+        await message.answer(html_chunk, parse_mode="HTML", reply_markup=markup)
 
 
 @router.message(AITrainerFlow.chatting, F.text)
