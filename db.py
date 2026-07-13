@@ -126,6 +126,13 @@ CREATE TABLE IF NOT EXISTS push_rotation (
     bag TEXT NOT NULL,
     PRIMARY KEY (telegram_id, category)
 );
+
+CREATE TABLE IF NOT EXISTS ai_search_usage (
+    telegram_id INTEGER NOT NULL,
+    date TEXT NOT NULL,
+    count INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (telegram_id, date)
+);
 """
 
 _conn: Optional[aiosqlite.Connection] = None
@@ -1098,6 +1105,29 @@ async def save_rotation_bag(telegram_id: int, category: str, bag: list[int]) -> 
             "INSERT INTO push_rotation (telegram_id, category, bag) VALUES (?, ?, ?) "
             "ON CONFLICT (telegram_id, category) DO UPDATE SET bag = excluded.bag",
             (telegram_id, category, json.dumps(bag)),
+        )
+        await conn().commit()
+
+
+# ---------- AI trainer: daily web-search quota ----------
+
+async def get_ai_search_count_today(telegram_id: int) -> int:
+    today = dt.date.today().isoformat()
+    cur = await conn().execute(
+        "SELECT count FROM ai_search_usage WHERE telegram_id = ? AND date = ?",
+        (telegram_id, today),
+    )
+    row = await cur.fetchone()
+    return row["count"] if row else 0
+
+
+async def increment_ai_search_count(telegram_id: int) -> None:
+    today = dt.date.today().isoformat()
+    async with _write_lock:
+        await conn().execute(
+            "INSERT INTO ai_search_usage (telegram_id, date, count) VALUES (?, ?, 1) "
+            "ON CONFLICT (telegram_id, date) DO UPDATE SET count = count + 1",
+            (telegram_id, today),
         )
         await conn().commit()
 
