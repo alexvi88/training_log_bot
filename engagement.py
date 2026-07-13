@@ -12,6 +12,11 @@ match wins, at most one push per user per day):
   4. Тайминг         — today matches the user's usual training weekday
   5. Плато           — Sundays only, weight stuck despite 12+ reps
   6. Аналитика       — Sundays only, weekly digest
+
+A separate track, `build_newbie_push`, walks a disjoint pool: users who signed
+up but never finished a single workout. Since these users have no last-workout
+date, none of the six signals above apply to them (they all key off workout
+history) — they get their own periodic nudge timed off `users.created_at` instead.
 """
 
 import asyncio
@@ -39,6 +44,9 @@ TIMING_MIN_HISTORY = 10
 PLATEAU_MIN_REPS = 12
 PLATEAU_SESSIONS = 3
 DIGEST_LOOKBACK_DAYS = 30
+NEWBIE_START_DAY = 1
+NEWBIE_REPEAT_DAYS = 5
+NEWBIE_STOP_DAY = 30
 
 
 @dataclass
@@ -64,6 +72,16 @@ def is_win_back_day(days_since_last: Optional[int]) -> bool:
     if days_since_last is None or days_since_last < WIN_BACK_START_DAY:
         return False
     return (days_since_last - WIN_BACK_START_DAY) % WIN_BACK_REPEAT_DAYS == 0
+
+
+def is_newbie_nudge_day(days_since_signup: int) -> bool:
+    """First nudge a day after signup, then every NEWBIE_REPEAT_DAYS, capped at NEWBIE_STOP_DAY.
+
+    The cap matters: a user who never starts isn't nagged forever, just for a month.
+    """
+    if days_since_signup < NEWBIE_START_DAY or days_since_signup > NEWBIE_STOP_DAY:
+        return False
+    return (days_since_signup - NEWBIE_START_DAY) % NEWBIE_REPEAT_DAYS == 0
 
 
 def usual_weekday(workout_dates: list[dt.date]) -> Optional[int]:
@@ -173,6 +191,17 @@ async def build_daily_push(telegram_id: int, today: dt.date) -> Optional[PushDec
     return None
 
 
+async def build_newbie_push(telegram_id: int, created_at: str, today: dt.date) -> Optional[PushDecision]:
+    if await db.has_push_today(telegram_id, today.isoformat()):
+        return None
+    signup_date = dt.date.fromisoformat(created_at[:10])
+    days_since_signup = (today - signup_date).days
+    if not is_newbie_nudge_day(days_since_signup):
+        return None
+    text = await push_texts.pick_text(telegram_id, push_texts.NEWBIE_NUDGE)
+    return PushDecision(push_texts.NEWBIE_NUDGE, text)
+
+
 async def _deliver(bot: Bot, telegram_id: int, decision: PushDecision) -> None:
     kb = keyboards.push_cta_keyboard() if decision.with_cta else None
     try:
@@ -192,6 +221,15 @@ async def _send_daily_pushes(bot: Bot) -> None:
             decision = await build_daily_push(telegram_id, today)
         except Exception:
             logger.exception("Failed to build push for user %s", telegram_id)
+            continue
+        if decision is not None:
+            await _deliver(bot, telegram_id, decision)
+
+    for telegram_id, created_at in await db.list_newbie_user_ids():
+        try:
+            decision = await build_newbie_push(telegram_id, created_at, today)
+        except Exception:
+            logger.exception("Failed to build newbie push for user %s", telegram_id)
             continue
         if decision is not None:
             await _deliver(bot, telegram_id, decision)

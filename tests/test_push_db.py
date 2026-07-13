@@ -60,6 +60,21 @@ async def test_list_engagement_eligible_user_ids_excludes_opted_out(fresh_db, us
     assert set(await db.list_engagement_eligible_user_ids()) == {user_id}
 
 
+async def test_list_newbie_user_ids_only_users_without_finished_workouts(fresh_db, user_id):
+    db = fresh_db
+    trained_id = 222
+    await db.get_or_create_user(telegram_id=trained_id, username="trained")
+    await db.create_finished_workout(
+        trained_id, started_at="2026-07-01T10:00:00", finished_at="2026-07-01T11:00:00"
+    )
+
+    newbies = await db.list_newbie_user_ids()
+    assert [uid for uid, _ in newbies] == [user_id]
+
+    await db.update_user(user_id, pushes_enabled=0)
+    assert await db.list_newbie_user_ids() == []
+
+
 async def test_tonnage_since_sums_weight_times_reps(fresh_db, user_id):
     db = fresh_db
     group_id = await db.create_muscle_group(user_id, "Грудь")

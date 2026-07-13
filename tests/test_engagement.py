@@ -114,6 +114,22 @@ def test_plateau_only_looks_at_the_last_three_sessions():
     assert engagement.is_plateau(sessions) is False
 
 
+# ---------- newbie nudge ----------
+
+
+def test_newbie_nudge_fires_day_after_signup_then_every_5_days():
+    assert engagement.is_newbie_nudge_day(0) is False
+    assert engagement.is_newbie_nudge_day(1) is True
+    assert engagement.is_newbie_nudge_day(2) is False
+    assert engagement.is_newbie_nudge_day(6) is True
+    assert engagement.is_newbie_nudge_day(11) is True
+
+
+def test_newbie_nudge_stops_after_30_days():
+    assert engagement.is_newbie_nudge_day(31) is False
+    assert engagement.is_newbie_nudge_day(36) is False
+
+
 # ---------- tonnage formatting ----------
 
 

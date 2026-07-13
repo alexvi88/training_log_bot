@@ -1111,6 +1111,22 @@ async def list_engagement_eligible_user_ids() -> list[int]:
     return [r["user_id"] for r in await cur.fetchall()]
 
 
+async def list_newbie_user_ids() -> list[tuple[int, str]]:
+    """Users who never finished a workout — the separate walk pool for the newbie nudge.
+
+    Disjoint from `list_engagement_eligible_user_ids` by construction (that one requires
+    a finished workout, this one requires the absence of one), so a user is only ever
+    walked by one of the two daily loops. Returns `created_at` alongside the id since
+    the nudge is timed off signup date, not off a last-workout date these users don't have.
+    """
+    cur = await conn().execute(
+        "SELECT u.telegram_id, u.created_at FROM users u "
+        "WHERE u.pushes_enabled = 1 AND NOT EXISTS ("
+        "SELECT 1 FROM workouts w WHERE w.user_id = u.telegram_id AND w.status = 'finished')"
+    )
+    return [(r["telegram_id"], r["created_at"]) for r in await cur.fetchall()]
+
+
 async def get_rotation_bag(telegram_id: int, category: str) -> list[int]:
     cur = await conn().execute(
         "SELECT bag FROM push_rotation WHERE telegram_id = ? AND category = ?",

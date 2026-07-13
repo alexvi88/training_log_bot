@@ -37,6 +37,9 @@ TRIGGERS = {
     ),
     push_texts.PLATEAU: "Вс: тот же рабочий вес 3 тренировки подряд, каждый раз 12+ повторов",
     push_texts.WEEKLY_DIGEST: "Вс, нет активного плато, суммарный тоннаж за 30 дней > 0",
+    push_texts.NEWBIE_NUDGE: (
+        "Ни одной завершённой тренировки; день 1 после регистрации, затем каждые 5 дней, до дня 30"
+    ),
 }
 
 # engagement.build_daily_push()'s actual evaluation order. The five skip_*
@@ -53,6 +56,7 @@ ORDER = [
     push_texts.TIMING,
     push_texts.PLATEAU,
     push_texts.WEEKLY_DIGEST,
+    push_texts.NEWBIE_NUDGE,
 ]
 
 RANK_BY_CATEGORY = {
@@ -66,6 +70,9 @@ RANK_BY_CATEGORY = {
     push_texts.TIMING: "4",
     push_texts.PLATEAU: "5",
     push_texts.WEEKLY_DIGEST: "6",
+    # Not part of the priority chain above — a separate walk pool over users
+    # with zero finished workouts, so it never competes with ranks 1-6.
+    push_texts.NEWBIE_NUDGE: "—",
 }
 
 # Stand-ins for {placeholder} templates so the table shows readable examples.
