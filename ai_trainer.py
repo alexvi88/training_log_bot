@@ -25,6 +25,7 @@ import json
 import logging
 from typing import Any, Optional
 
+import grpc
 from openai import AsyncOpenAI
 from xai_sdk import AsyncClient as AsyncXAIClient
 from xai_sdk.chat import assistant as xai_assistant
@@ -83,6 +84,19 @@ async def _get_sdk_client() -> AsyncXAIClient:
             if _sdk_client is None:
                 _sdk_client = AsyncXAIClient(api_key=config.XAI_API_KEY)
     return _sdk_client
+
+
+# Set once _ask_with_search hits xAI's "client-side tools for multi-agent
+# models require beta access" error — this xAI account can't mix our DB
+# function-tools with the search model's server-side tools in one call, and
+# that's an account-level restriction, not a transient failure. Once seen,
+# skip straight to _ask_plain for the rest of the process instead of paying
+# for a doomed round-trip (and a logged traceback) on every question.
+_search_unavailable = False
+
+
+def _is_beta_access_error(exc: BaseException) -> bool:
+    return isinstance(exc, grpc.RpcError) and "beta access" in (exc.details() or "").lower()
 
 
 SYSTEM_PROMPT = """\
@@ -458,9 +472,23 @@ async def ask(
     инструментам — модель сама решает, нужен ли ей живой поиск. Иначе — обычный
     REST-вызов с теми же инструментами, но без поиска.
     """
-    search_allowed = await db.get_ai_search_count_today(user_id) < config.AI_SEARCH_DAILY_LIMIT
+    global _search_unavailable
+    search_allowed = (
+        not _search_unavailable
+        and await db.get_ai_search_count_today(user_id) < config.AI_SEARCH_DAILY_LIMIT
+    )
     if search_allowed:
-        return await _ask_with_search(user_id, question, history, image_data_url)
+        try:
+            return await _ask_with_search(user_id, question, history, image_data_url)
+        except grpc.RpcError as exc:
+            if not _is_beta_access_error(exc):
+                raise
+            logger.warning(
+                "xAI search model rejected client-side tools (no beta access), "
+                "falling back to plain mode for the rest of this run: %s",
+                exc,
+            )
+            _search_unavailable = True
     return await _ask_plain(user_id, question, history, image_data_url)
 
 
