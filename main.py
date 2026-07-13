@@ -143,8 +143,13 @@ async def main() -> None:
     dp.message.outer_middleware(refresh_menu_middleware)
     dp.callback_query.outer_middleware(refresh_menu_middleware)
     dp.include_router(persistent_menu.router)
-    dp.include_router(workout.router)
+    # admin.router only matches Command("check_users")/Command("pushes") and
+    # "admin:"-prefixed callback data, so it's safe (and necessary) to register
+    # ahead of the FSM flow routers below — otherwise a state's catch-all
+    # message handler (e.g. workout.py's logging_set handler) swallows these
+    # commands as plain text whenever the admin is mid-flow.
     dp.include_router(admin.router)
+    dp.include_router(workout.router)
     dp.include_router(backfill.router)
     dp.include_router(exercise_resolve.router)
     dp.include_router(csv_import.router)
