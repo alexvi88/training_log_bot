@@ -36,14 +36,14 @@ MAX_IMAGE_BYTES = 10 * 1024 * 1024
 DEFAULT_PHOTO_QUESTION = "Посмотри на фото и прокомментируй."
 
 INTRO_TEXT = (
-    "🤖 ПРИВЕТ, АТЛЕТ. ТРЕНЕР НА СВЯЗИ.\n\n"
+    "🤖 <b>ПРИВЕТ, АТЛЕТ. ТРЕНЕР НА СВЯЗИ.</b>\n\n"
     "У меня есть доступ к истории твоих тренировок и многолетний тренерский опыт. "
     "Спрашивай что угодно:\n"
-    "• «Как прогресс в жиме лёжа? Почему не растёт присед?»\n"
-    "• «Дай совет по программе тренировок»\n"
-    "• «Какое упражнение сделать следующим на этой тренировке?»\n"
-    "• «Сколько белка есть, чтобы расти?»\n"
-    "• «Оцени форму по фото»\n\n"
+    "• <i>«Как прогресс в жиме лёжа? Почему не растёт присед?»</i>\n"
+    "• <i>«Дай совет по программе тренировок»</i>\n"
+    "• <i>«Какое упражнение сделать следующим на этой тренировке?»</i>\n"
+    "• <i>«Сколько белка есть, чтобы расти?»</i>\n"
+    "• <i>«Оцени форму по фото»</i>\n\n"
     "Пиши вопрос 👇"
 )
 
@@ -74,7 +74,9 @@ async def menu_ai(callback: CallbackQuery, state: FSMContext):
         return
     await state.set_state(AITrainerFlow.chatting)
     await state.update_data(ai_history=[])
-    await ui.safe_edit(callback, INTRO_TEXT, reply_markup=await ai_keyboard(callback.from_user.id))
+    await ui.safe_edit(
+        callback, INTRO_TEXT, reply_markup=await ai_keyboard(callback.from_user.id), parse_mode="HTML"
+    )
     await callback.answer()
 
 
