@@ -572,6 +572,10 @@ async def ask(
     search_context = None
     if await db.get_ai_search_count_today(user_id) < config.AI_SEARCH_DAILY_LIMIT:
         search_context = await _web_search_findings(user_id, question, history, image_data_url)
+    logger.info(
+        "AI trainer question from user %s: %r (web search used: %s)",
+        user_id, question, bool(search_context),
+    )
     return await _ask_plain(user_id, question, history, image_data_url, search_context)
 
 
