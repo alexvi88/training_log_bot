@@ -3,14 +3,17 @@
 import asyncio
 import base64
 import logging
+from contextlib import suppress
 from typing import Optional
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 
 import ai_trainer
 import db
+import formatting
 import keyboards
 import ui
 from fsm import AITrainerFlow
@@ -85,6 +88,45 @@ async def ai_reset(callback: CallbackQuery, state: FSMContext):
         reply_markup=keyboards.ai_trainer_keyboard(),
     )
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("ai:comment:"))
+async def ai_comment_workout(callback: CallbackQuery, state: FSMContext):
+    """Ручной запрос комментария к тренировке — кнопка на карточке завершённой тренировки.
+
+    Работает и на свежезавершённой карточке, и на карточке из истории: правит то же
+    сообщение на месте, убирая из клавиатуры только саму эту кнопку.
+    """
+    workout_id = int(callback.data.split(":")[2])
+    workout = await db.get_workout(workout_id)
+    if workout is None or workout["user_id"] != callback.from_user.id:
+        await callback.answer("Тренировка не найдена", show_alert=True)
+        return
+    if not ai_trainer.is_configured():
+        await callback.answer("AI-тренер не настроен.", show_alert=True)
+        return
+    await callback.answer()
+
+    comment = workout["ai_comment"]
+    if not comment:
+        try:
+            comment = await ai_trainer.comment_on_workout(callback.from_user.id, workout_id)
+        except Exception:
+            logger.exception("AI trainer workout comment failed for workout %s", workout_id)
+            await callback.message.answer("⚠️ Не получилось получить комментарий, попробуй ещё раз позже.")
+            return
+        await db.set_workout_ai_comment(workout_id, comment)
+
+    new_text = (callback.message.html_text or "") + "\n\n" + formatting.build_ai_comment_block(comment)
+    existing_kb = callback.message.reply_markup
+    rows = existing_kb.inline_keyboard if existing_kb else []
+    new_rows = [
+        [btn for btn in row if not (btn.callback_data or "").startswith("ai:comment:")] for row in rows
+    ]
+    new_rows = [r for r in new_rows if r]
+    new_markup = InlineKeyboardMarkup(inline_keyboard=new_rows) if new_rows else None
+    with suppress(TelegramBadRequest):
+        await callback.message.edit_text(new_text, parse_mode="HTML", reply_markup=new_markup)
 
 
 async def _download_photo_as_data_url(message: Message) -> Optional[str]:

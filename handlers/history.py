@@ -7,6 +7,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import BufferedInputFile, CallbackQuery, InputMediaPhoto
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+import ai_trainer
 import analytics
 import charts
 import db
@@ -74,9 +75,13 @@ async def show_history_item(callback: CallbackQuery, workout_id: int) -> bool:
         started, blocks, workout["note"], show_extra_stats=bool(user["show_extra_stats"]),
         italic_prev=True, duration_seconds=duration_seconds,
     )
-    await ui.safe_edit(
-        callback, text, reply_markup=keyboards.history_item_keyboard(workout_id), parse_mode="HTML"
+    comment = await ai_trainer.ensure_workout_comment(user, workout_id)
+    if comment:
+        text += "\n\n" + formatting.build_ai_comment_block(comment)
+    kb = keyboards.history_item_keyboard(
+        workout_id, show_ai_button=comment is None and ai_trainer.is_configured()
     )
+    await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML")
     return True
 
 

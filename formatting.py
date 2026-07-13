@@ -126,6 +126,11 @@ def build_workout_summary(
     return "\n".join(lines)
 
 
+def build_ai_comment_block(comment: str) -> str:
+    """Rendered as a card section prefixed by DIVIDER — same convention as highlights."""
+    return f"{DIVIDER}\n🤖 <b>Комментарий AI-тренера</b>\n\n{escape(comment)}"
+
+
 def dashboard_stat_lines(dashboard) -> list[tuple[str, str]]:
     """(label, value) pairs drawn inside the main-menu heatmap image.
 

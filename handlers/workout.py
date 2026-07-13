@@ -17,6 +17,7 @@ from aiogram.types import (
     ReactionTypeEmoji,
 )
 
+import ai_trainer
 import analytics
 import charts
 import config
@@ -852,7 +853,12 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
     if is_backfill:
         full_text = "✅ Сохранено как прошлая тренировка\n\n" + full_text
 
-    card_kb = keyboards.workout_card_keyboard(workout_id)
+    comment = await ai_trainer.ensure_workout_comment(user, workout_id)
+    if comment:
+        full_text += "\n\n" + formatting.build_ai_comment_block(comment)
+    card_kb = keyboards.workout_card_keyboard(
+        workout_id, show_ai_button=comment is None and ai_trainer.is_configured()
+    )
     try:
         await bot.edit_message_text(
             chat_id=data["live_chat_id"], message_id=data["live_message_id"], text=full_text,

@@ -31,7 +31,8 @@ CREATE TABLE IF NOT EXISTS users (
     e1rm_formula TEXT NOT NULL DEFAULT 'epley',
     show_extra_stats INTEGER NOT NULL DEFAULT 1,
     pushes_enabled INTEGER NOT NULL DEFAULT 1,
-    reply_keyboard_version INTEGER NOT NULL DEFAULT 0
+    reply_keyboard_version INTEGER NOT NULL DEFAULT 0,
+    ai_comments_enabled INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS muscle_groups (
@@ -71,7 +72,8 @@ CREATE TABLE IF NOT EXISTS workouts (
     finished_at TEXT,
     status TEXT NOT NULL DEFAULT 'active',
     note TEXT,
-    source TEXT NOT NULL DEFAULT 'manual'
+    source TEXT NOT NULL DEFAULT 'manual',
+    ai_comment TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_workouts_user_status ON workouts (user_id, status);
 
@@ -202,6 +204,8 @@ async def _migrate_schema() -> None:
     workout_cols = await _column_names("workouts")
     if "source" not in workout_cols:
         await _conn.execute("ALTER TABLE workouts ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'")
+    if "ai_comment" not in workout_cols:
+        await _conn.execute("ALTER TABLE workouts ADD COLUMN ai_comment TEXT")
     if "followup_due_at" in workout_cols:
         # Post-workout followup push was removed — drop the columns a DB that
         # already ran the earlier migration would have.
@@ -220,6 +224,8 @@ async def _migrate_schema() -> None:
         await _conn.execute("ALTER TABLE users DROP COLUMN bodyweight")
     if "pushes_enabled" not in user_cols:
         await _conn.execute("ALTER TABLE users ADD COLUMN pushes_enabled INTEGER NOT NULL DEFAULT 1")
+    if "ai_comments_enabled" not in user_cols:
+        await _conn.execute("ALTER TABLE users ADD COLUMN ai_comments_enabled INTEGER NOT NULL DEFAULT 0")
     if "reply_keyboard_version" not in user_cols:
         if "reply_keyboard_shown" in user_cols:
             # Superseded by a version counter so future button-set changes can
@@ -744,6 +750,14 @@ async def finish_workout(workout_id: int, note: Optional[str] = None, finished_a
         await conn().execute(
             "UPDATE workouts SET status = 'finished', finished_at = ?, note = ? WHERE id = ?",
             (finished_at or now_iso(), note, workout_id),
+        )
+        await conn().commit()
+
+
+async def set_workout_ai_comment(workout_id: int, comment: str) -> None:
+    async with _write_lock:
+        await conn().execute(
+            "UPDATE workouts SET ai_comment = ? WHERE id = ?", (comment, workout_id)
         )
         await conn().commit()
 
