@@ -45,10 +45,17 @@ SYSTEM_PROMPT = """\
 Ты — персональный AI-тренер в Telegram-боте для ведения дневника силовых тренировок.
 Пользователь логирует в боте тренировки: упражнения, подходы (вес × повторы).
 
-У тебя есть инструменты для чтения данных ЭТОГО пользователя: сводка, последние
-тренировки и прогресс по конкретному упражнению. Прежде чем отвечать на вопрос
-про его тренировки, нагрузку, прогресс или рекорды — посмотри реальные данные
-через инструменты, не выдумывай цифры. Если данных мало или нет, честно скажи об этом.
+У тебя есть инструменты для чтения данных ЭТОГО пользователя: сводка, текущая
+незавершённая тренировка (если есть), последние завершённые тренировки и прогресс
+по конкретному упражнению. Прежде чем отвечать на вопрос про его тренировки,
+нагрузку, прогресс или рекорды — посмотри реальные данные через инструменты,
+не выдумывай цифры. Если данных мало или нет, честно скажи об этом.
+
+Если пользователь спрашивает про «сегодняшнюю», «текущую» или «эту» тренировку —
+сначала вызови get_active_workout. Если он вернул тренировку, она ЕЩЁ НЕ
+ЗАВЕРШЕНА (пользователь может продолжить логировать подходы) — так и говори,
+не называй её законченной. Если инструмент вернул, что активной тренировки нет,
+последняя тренировка из list_recent_workouts уже завершена.
 
 Также есть инструмент list_exercise_catalog — полный каталог упражнений-шаблонов
 бота по группам мышц. Используй его вместе со списком упражнений пользователя
@@ -83,6 +90,20 @@ TOOLS: list[dict[str, Any]] = [
                 "(всего тренировок, за эту неделю, за 30 дней, дней с последней, недельный стрик) "
                 "и список его упражнений с числом использований. Вызывай первым, чтобы понять контекст "
                 "и узнать точные названия упражнений."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_active_workout",
+            "description": (
+                "Текущая незавершённая тренировка пользователя (если он начал её и ещё не "
+                "нажал «Завершить»): дата начала и все подходы, уже залогированные по каждому "
+                "упражнению. Вызывай, когда пользователь спрашивает про сегодняшнюю/текущую "
+                "тренировку. Если активной тренировки нет — вернётся пустой результат, "
+                "значит пользователь сейчас не тренируется."
             ),
             "parameters": {"type": "object", "properties": {}},
         },
@@ -177,6 +198,31 @@ async def _training_overview(user_id: int) -> dict[str, Any]:
     }
 
 
+async def _active_workout(user_id: int) -> dict[str, Any]:
+    workout = await db.get_active_workout(user_id)
+    if workout is None:
+        return {"active": False}
+    exercises = []
+    for block in await db.list_blocks_for_workout(workout["id"]):
+        block_exs = await db.get_block_exercises(block["id"])
+        sets = await db.list_sets_for_block(block["id"])
+        if not block_exs or not sets:
+            continue
+        ex = await db.get_exercise(block_exs[0]["exercise_id"])
+        exercises.append(
+            {
+                "name": ex["display_name"],
+                "sets": [f"{s['weight']:g}x{s['reps']}" for s in sets],
+            }
+        )
+    return {
+        "active": True,
+        "status": "не завершена — пользователь может ещё логировать подходы",
+        "started_at": workout["started_at"][:10],
+        "exercises": exercises,
+    }
+
+
 async def _recent_workouts(user_id: int, limit: int) -> dict[str, Any]:
     workouts = await db.list_workouts(user_id, limit=limit)
     result = []
@@ -250,6 +296,8 @@ async def _exercise_progress(user_id: int, exercise_name: str) -> dict[str, Any]
 async def execute_tool(user_id: int, name: str, tool_input: dict[str, Any]) -> str:
     if name == "get_training_overview":
         payload = await _training_overview(user_id)
+    elif name == "get_active_workout":
+        payload = await _active_workout(user_id)
     elif name == "list_recent_workouts":
         limit = tool_input.get("limit") or 5
         limit = max(1, min(int(limit), 10))
