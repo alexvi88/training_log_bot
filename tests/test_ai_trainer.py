@@ -1,6 +1,7 @@
 """AI-тренер: tool-executor'ы поверх реальной БД и агентный цикл с фейковым Grok-клиентом."""
 
 import json
+import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -369,6 +370,36 @@ async def test_ask_answers_normally_when_search_step_raises(fresh_db, user_id, m
 
     assert answer == "обычный ответ"
     assert await fresh_db.get_ai_search_count_today(user_id) == 0
+
+
+async def test_ask_logs_question_and_search_usage(fresh_db, user_id, monkeypatch, caplog):
+    sdk_client = _fake_sdk_client(_xai_response(content="находки", citations=["http://example.com"]))
+    monkeypatch.setattr(ai_trainer, "_get_sdk_client", AsyncMock(return_value=sdk_client))
+    client = _fake_client([_response(content="ответ")])
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+
+    with caplog.at_level(logging.INFO, logger="ai_trainer"):
+        await ai_trainer.ask(user_id, "Что нового в исследованиях?", history=[])
+
+    [record] = [r for r in caplog.records if "AI trainer question" in r.message]
+    message = record.getMessage()
+    assert "Что нового в исследованиях?" in message
+    assert "web search used: True" in message
+
+
+async def test_ask_logs_question_without_search_usage(fresh_db, user_id, monkeypatch, caplog):
+    sdk_client = _fake_sdk_client(_xai_response(content="NO_SEARCH_NEEDED"))
+    monkeypatch.setattr(ai_trainer, "_get_sdk_client", AsyncMock(return_value=sdk_client))
+    client = _fake_client([_response(content="ответ")])
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+
+    with caplog.at_level(logging.INFO, logger="ai_trainer"):
+        await ai_trainer.ask(user_id, "Как мои дела?", history=[])
+
+    [record] = [r for r in caplog.records if "AI trainer question" in r.message]
+    message = record.getMessage()
+    assert "Как мои дела?" in message
+    assert "web search used: False" in message
 
 
 async def test_web_search_findings_passes_only_server_side_tools(fresh_db, user_id, monkeypatch):
