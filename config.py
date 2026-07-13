@@ -58,3 +58,11 @@ AI_SEARCH_DAILY_LIMIT = int(os.getenv("AI_SEARCH_DAILY_LIMIT", "40"))
 
 # Delay after finishing a workout before the hydration/protein followup push fires.
 FOLLOWUP_DELAY_HOURS = int(os.getenv("FOLLOWUP_DELAY_HOURS", "2"))
+
+# Voice input for the AI trainer chat: Telegram voice messages get transcribed
+# via OpenAI's speech-to-text before being asked to Grok as a normal text
+# question. Separate key from XAI_API_KEY since this hits OpenAI's own API,
+# not xAI's — the menu works without it, voice messages just get a hint to
+# type instead until it's set.
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_TRANSCRIBE_MODEL = os.getenv("OPENAI_TRANSCRIBE_MODEL", "gpt-4o-mini-transcribe")

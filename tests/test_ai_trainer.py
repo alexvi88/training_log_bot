@@ -461,3 +461,40 @@ async def test_to_xai_messages_text_only_without_image():
 
     last = messages[-1]
     assert [c.WhichOneof("content") for c in last.content] == ["text"]
+
+
+# ---------- voice input (transcribe_voice / is_voice_configured) ----------
+
+
+async def test_is_voice_configured_reflects_openai_key(monkeypatch):
+    monkeypatch.setattr(config, "OPENAI_API_KEY", "")
+    assert ai_trainer.is_voice_configured() is False
+
+    monkeypatch.setattr(config, "OPENAI_API_KEY", "sk-test")
+    assert ai_trainer.is_voice_configured() is True
+
+
+async def test_transcribe_voice_returns_stripped_text(monkeypatch):
+    response = SimpleNamespace(text="  привет тренер  ")
+    client = SimpleNamespace(
+        audio=SimpleNamespace(transcriptions=SimpleNamespace(create=AsyncMock(return_value=response)))
+    )
+    monkeypatch.setattr(ai_trainer, "_get_audio_client", lambda: client)
+
+    text = await ai_trainer.transcribe_voice(SimpleNamespace(name="voice.ogg"))
+
+    assert text == "привет тренер"
+    kwargs = client.audio.transcriptions.create.await_args.kwargs
+    assert kwargs["model"] == config.OPENAI_TRANSCRIBE_MODEL
+
+
+async def test_transcribe_voice_returns_empty_string_when_blank(monkeypatch):
+    response = SimpleNamespace(text=None)
+    client = SimpleNamespace(
+        audio=SimpleNamespace(transcriptions=SimpleNamespace(create=AsyncMock(return_value=response)))
+    )
+    monkeypatch.setattr(ai_trainer, "_get_audio_client", lambda: client)
+
+    text = await ai_trainer.transcribe_voice(SimpleNamespace(name="voice.ogg"))
+
+    assert text == ""
