@@ -176,9 +176,23 @@ def finish_workout_keyboard() -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
-def progress_back_keyboard() -> InlineKeyboardMarkup:
+def _progress_back_cb(exercise_id: int, origin: str) -> str:
+    """Where "⬅️ Назад" from a progress screen should go.
+
+    `origin` is either "m" (opened from the exercise-detail card in "⚙️
+    Упражнения" — back should return to that same card) or a group token
+    ("all" or a muscle-group id, as produced by prog:grp:) — back should
+    return to that group's exercise list, not all the way up to the
+    muscle-group picker.
+    """
+    if origin == "m":
+        return f"exm:ex:{exercise_id}"
+    return f"prog:grp:{origin}"
+
+
+def progress_back_keyboard(exercise_id: int = 0, origin: str = "all") -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.button(text="⬅️ Назад", callback_data="prog:groups")
+    b.button(text="⬅️ Назад", callback_data=_progress_back_cb(exercise_id, origin))
     return b.as_markup()
 
 
@@ -186,12 +200,12 @@ PROGRESS_PERIODS = [(8, "8"), (20, "20"), (9999, "Все")]
 DEFAULT_PROGRESS_LIMIT = PROGRESS_PERIODS[0][0]
 
 
-def progress_chart_keyboard(exercise_id: int, limit: int) -> InlineKeyboardMarkup:
+def progress_chart_keyboard(exercise_id: int, limit: int, origin: str = "all") -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     for value, label in PROGRESS_PERIODS:
         text = f"• {label} •" if value == limit else label
-        b.button(text=text, callback_data=f"prog:per:{exercise_id}:{value}")
-    b.button(text="⬅️ Назад", callback_data="prog:groups")
+        b.button(text=text, callback_data=f"prog:per:{exercise_id}:{value}:{origin}")
+    b.button(text="⬅️ Назад", callback_data=_progress_back_cb(exercise_id, origin))
     b.adjust(len(PROGRESS_PERIODS), 1)
     return b.as_markup()
 

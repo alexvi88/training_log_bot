@@ -97,3 +97,49 @@ async def test_prog_change_period_all_shows_every_session(fresh_db, user_id):
     assert "01.01.2026" in text
     assert "10.01.2026" in text
     assert png is not None
+
+
+def _back_button_cb(markup) -> str:
+    for row in markup.inline_keyboard:
+        for button in row:
+            if button.text == "⬅️ Назад":
+                return button.callback_data
+    raise AssertionError("no back button found")
+
+
+async def test_prog_show_exercise_back_returns_to_originating_group(fresh_db, user_id):
+    """Opened via the group exercise list — back must return to that same group, not the top-level group picker."""
+    group_id = await fresh_db.create_muscle_group(user_id, "Грудь")
+    ex_id = await fresh_db.create_exercise(user_id, "Жим лёжа", group_id)
+    state = await _make_state(user_id)
+
+    callback = _make_callback(user_id, f"prog:ex:{ex_id}:{group_id}")
+    await history.prog_show_exercise(callback, state)
+
+    kb = callback.message.answer.await_args.kwargs["reply_markup"]
+    assert _back_button_cb(kb) == f"prog:grp:{group_id}"
+
+
+async def test_prog_show_exercise_back_returns_to_exercise_detail_card(fresh_db, user_id):
+    """Opened from the exercise-manage detail card ("⚙️ Упражнения") — back must return there, not to progress groups."""
+    group_id = await fresh_db.create_muscle_group(user_id, "Грудь")
+    ex_id = await fresh_db.create_exercise(user_id, "Жим лёжа", group_id)
+    state = await _make_state(user_id)
+
+    callback = _make_callback(user_id, f"prog:ex:{ex_id}:m")
+    await history.prog_show_exercise(callback, state)
+
+    kb = callback.message.answer.await_args.kwargs["reply_markup"]
+    assert _back_button_cb(kb) == f"exm:ex:{ex_id}"
+
+
+async def test_prog_change_period_preserves_origin(fresh_db, user_id):
+    """Switching the period must not lose track of where "⬅️ Назад" should return to."""
+    ex_id = await _seed_exercise_with_sessions(fresh_db, user_id, 3)
+    state = await _make_state(user_id)
+
+    callback = _make_callback(user_id, f"prog:per:{ex_id}:20:m")
+    await history.prog_change_period(callback, state)
+
+    kb = callback.message.edit_media.await_args.kwargs["reply_markup"]
+    assert _back_button_cb(kb) == f"exm:ex:{ex_id}"

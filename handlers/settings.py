@@ -15,14 +15,17 @@ from fsm import SettingsFlow
 router = Router(name="settings")
 
 
-async def show_settings(callback: CallbackQuery, state: FSMContext):
+async def show_settings(callback: CallbackQuery, state: FSMContext, alert: str | None = None):
     await state.set_state(SettingsFlow.menu)
     user = await db.get_user(callback.from_user.id)
     kb = keyboards.settings_keyboard(
         user["unit"], user["e1rm_formula"], bool(user["pushes_enabled"]), bool(user["ai_comments_enabled"])
     )
     await ui.safe_edit(callback, "🔧 Настройки:", reply_markup=kb)
-    await callback.answer()
+    if alert:
+        await callback.answer(alert, show_alert=True)
+    else:
+        await callback.answer()
 
 
 @router.callback_query(F.data == "settings:back")
@@ -37,7 +40,13 @@ async def settings_unit(callback: CallbackQuery, state: FSMContext):
     user = await db.get_user(callback.from_user.id)
     new_unit = "lb" if user["unit"] == "kg" else "kg"
     await db.update_user(callback.from_user.id, unit=new_unit)
-    await show_settings(callback, state)
+    await show_settings(
+        callback, state,
+        alert=(
+            "⚠️ Это только смена подписи — вес не пересчитывается. "
+            "Вся история так и останется в старых цифрах."
+        ),
+    )
 
 
 @router.callback_query(F.data == "settings:formula")
