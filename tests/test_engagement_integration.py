@@ -27,12 +27,15 @@ async def test_build_daily_push_fires_the_matching_skip_milestone(fresh_db, user
     assert "четырнадцат" not in decision.text.lower()
 
 
-async def test_build_daily_push_respects_one_per_day_dedup(fresh_db, user_id):
+async def test_build_daily_push_respects_one_per_day_dedup(fresh_db, user_id, monkeypatch):
     db = fresh_db
     await db.create_finished_workout(
         user_id, started_at="2026-07-05T10:00:00", finished_at="2026-07-05T11:00:00"
     )
     today = dt.date(2026, 7, 12)
+    # record_push stamps sent_at with the real wall clock, so pin it to `today`
+    # regardless of which date this test actually runs on.
+    monkeypatch.setattr(db, "now_iso", lambda: today.isoformat() + "T09:00:00")
     await db.record_push(user_id, push_texts.SKIP_7, "already sent today")
 
     decision = await engagement.build_daily_push(user_id, today)
