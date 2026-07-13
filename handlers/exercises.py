@@ -1,8 +1,10 @@
 """CRUD/browsing for muscle groups and exercises (the "⚙️ Упражнения" menu)."""
 
+from contextlib import suppress
 from html import escape
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, FSInputFile, InlineKeyboardButton, InputMediaPhoto, Message
@@ -53,7 +55,19 @@ async def exm_page(callback: CallbackQuery, state: FSMContext):
     await _show_exercise_list(callback, state)
 
 
+async def _clear_exercise_media(bot, chat_id: int, state: FSMContext) -> None:
+    data = await state.get_data()
+    old_ids = data.get("exm_media_msg_ids")
+    if not old_ids:
+        return
+    for mid in old_ids:
+        with suppress(TelegramBadRequest):
+            await bot.delete_message(chat_id, mid)
+    await state.update_data(exm_media_msg_ids=None)
+
+
 async def _show_exercise_list(callback: CallbackQuery, state: FSMContext):
+    await _clear_exercise_media(callback.bot, callback.message.chat.id, state)
     await state.set_state(ExerciseManage.picking_exercise)
     data = await state.get_data()
     group_id = data.get("exm_group_id")
@@ -147,7 +161,7 @@ async def exm_pick_template(callback: CallbackQuery, state: FSMContext):
     await state.update_data(exm_exercise_id=ex_id)
     await state.set_state(ExerciseManage.picking_exercise)
     ex = await db.get_exercise(ex_id)
-    await _send_exercise_images(callback.message, ex)
+    await _send_exercise_images(callback.message, ex, state)
     text, kb = _exercise_detail_view(ex)
     await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML")
     await callback.answer()
@@ -220,10 +234,12 @@ def _exercise_detail_view(ex):
     return "\n".join(info), b.as_markup()
 
 
-async def _send_exercise_images(message: Message, ex) -> None:
+async def _send_exercise_images(message: Message, ex, state: FSMContext) -> None:
+    await _clear_exercise_media(message.bot, message.chat.id, state)
     images = exercise_media.get_images(ex["name"])
     if images:
-        await message.answer_media_group([InputMediaPhoto(media=FSInputFile(p)) for p in images])
+        sent = await message.answer_media_group([InputMediaPhoto(media=FSInputFile(p)) for p in images])
+        await state.update_data(exm_media_msg_ids=[m.message_id for m in sent])
 
 
 @router.callback_query(StateFilter(ExerciseManage.picking_exercise), F.data.startswith("exm:ex:"))
@@ -234,7 +250,7 @@ async def exm_pick_exercise(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Упражнение не найдено", show_alert=True)
         return
     await state.update_data(exm_exercise_id=ex_id)
-    await _send_exercise_images(callback.message, ex)
+    await _send_exercise_images(callback.message, ex, state)
     text, kb = _exercise_detail_view(ex)
     await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML")
     await callback.answer()

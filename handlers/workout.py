@@ -795,13 +795,23 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
     workout_id = data["workout_id"]
     user_id = event.from_user.id
     bot = event.bot
+
+    # Guards against a double-tap on "finish" (e.g. two quick taps on
+    # "✅ Без заметки") racing each other into this function before the
+    # first call's state.clear() lands — without this, both calls would
+    # finalize the same workout and produce duplicate PR messages/menus.
+    workout = await db.get_workout(workout_id)
+    if workout is None or workout["status"] == "finished":
+        if isinstance(event, CallbackQuery):
+            await event.answer()
+        return
+
     user = await db.get_user(user_id)
     formula = user["e1rm_formula"]
 
     exercise_ids = await db.list_exercise_ids_for_workout(workout_id)
     highlight_groups: list[tuple[str, list[str], str | None]] = []
 
-    workout = await db.get_workout(workout_id)
     started_at = dt.datetime.fromisoformat(workout["started_at"])
 
     for ex_id in exercise_ids:
@@ -810,6 +820,7 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
         history_set_rows = [
             analytics.SetRow(r["weight"], r["reps"], r["workout_id"], r["started_at"])
             for r in history_rows
+            if r["started_at"] < workout["started_at"]
         ]
         prior_sessions = analytics.group_sets_by_session(history_set_rows)
         for s in prior_sessions:
