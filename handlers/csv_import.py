@@ -35,7 +35,7 @@ async def import_start(callback: CallbackQuery, state: FSMContext):
     await ui.safe_edit(
         callback,
         "📥 Пришли CSV-файл с колонками «дата, упражнение, вес, повторы» "
-        "(можно подойдёт экспорт из этого бота).",
+        "(подойдёт экспорт из этого бота).",
         reply_markup=keyboards.cancel_keyboard("imp:cancel"),
     )
     await callback.answer()

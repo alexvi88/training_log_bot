@@ -6,13 +6,13 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardBu
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 # Persistent reply-keyboard buttons, always visible under the input field.
-BTN_WORKOUT = "🏋️ Тренировка"
-BTN_MENU = "☰ Меню"
-BTN_AI = "🤖 AI-тренер"
+BTN_WORKOUT = "Тренировка"
+BTN_MENU = "Меню"
+BTN_AI = "AI-тренер"
 
 # Bump whenever persistent_menu()'s button set changes so every user gets the
 # new layout next time cmd_start runs (see users.reply_keyboard_version).
-PERSISTENT_MENU_VERSION = 1
+PERSISTENT_MENU_VERSION = 2
 
 
 def persistent_menu() -> ReplyKeyboardMarkup:
