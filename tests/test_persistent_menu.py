@@ -85,7 +85,7 @@ async def test_menu_button_reuses_cmd_start(fresh_db, user_id):
     assert message.answer.await_count >= 1
 
 
-async def test_workout_button_starts_new_workout_and_interrupts_state(fresh_db, user_id):
+async def test_workout_button_asks_for_confirmation_and_interrupts_state(fresh_db, user_id):
     message = _make_message(user_id)
     message.text = keyboards.BTN_WORKOUT
     state = await _make_state(user_id)
@@ -94,8 +94,10 @@ async def test_workout_button_starts_new_workout_and_interrupts_state(fresh_db, 
     await persistent_menu.persistent_workout_button(message, state)
 
     active = await fresh_db.get_active_workout(user_id)
-    assert active is not None
+    assert active is None
+    assert await state.get_state() is None
     assert message.delete.await_count == 1
+    assert "Начать новую тренировку?" in message.answer.await_args.args[0]
 
 
 async def test_workout_button_resumes_existing_workout(fresh_db, user_id):
