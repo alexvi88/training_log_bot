@@ -279,7 +279,8 @@ def format_progress_screen(
         lines.append(f"Тренд {metric}: {arrow}{trend.slope_per_week:+.2f}/нед")
 
     if is_bw:
-        lines.append(f"Рекорд повторов в сете: {records.max_reps_at_weight and max(records.max_reps_at_weight.values())}")
+        best_reps = max(records.max_reps_at_weight.values()) if records.max_reps_at_weight else 0
+        lines.append(f"Рекорд повторов в сете: {best_reps}")
     else:
         lines.append(f"Рекорд: {format_set(records.best_e1rm_weight, records.best_e1rm_reps)} · e1RM {records.max_e1rm:.1f} {u}")
     lines.append("")

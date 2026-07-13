@@ -1,5 +1,6 @@
 """Workout lifecycle: start, add exercises, switch between them, log sets, finish."""
 
+import asyncio
 import datetime as dt
 from collections import Counter
 from contextlib import suppress
@@ -14,7 +15,6 @@ from aiogram.types import (
     CallbackQuery,
     InlineKeyboardMarkup,
     Message,
-    ReactionTypeEmoji,
 )
 
 import ai_trainer
@@ -114,14 +114,6 @@ async def _delete_message(message: Message):
         await message.delete()
 
 
-async def _react_ok(bot, message: Message):
-    with suppress(TelegramBadRequest):
-        await bot.set_message_reaction(
-            chat_id=message.chat.id, message_id=message.message_id,
-            reaction=[ReactionTypeEmoji(emoji="✅")],
-        )
-
-
 async def _log_one(block_id: int, exercise_id: int, weight: float, reps: int):
     round_idx = await db.next_round_index(block_id, exercise_id)
     await db.add_set(block_id, exercise_id, round_idx, 0, weight, reps)
@@ -194,7 +186,7 @@ async def _menu_view(user_id: int) -> tuple[str, bytes | None]:
     first_monday = min(dates) - dt.timedelta(days=min(dates).weekday())
     heatmap_start = max(first_monday, year_ago)
     stat_lines = formatting.dashboard_stat_lines(dashboard)
-    png = charts.render_year_heatmap(Counter(dates), today, heatmap_start, stat_lines)
+    png = await asyncio.to_thread(charts.render_year_heatmap, Counter(dates), today, heatmap_start, stat_lines)
     return _GREETING, png
 
 
@@ -322,7 +314,7 @@ async def start_workout(callback: CallbackQuery, state: FSMContext):
         await _enter_live(callback, state, active["id"])
         return
     workout_id = await db.create_workout(callback.from_user.id)
-    await callback.message.delete()
+    await _delete_message(callback.message)
     sent = await callback.message.answer("🏋️ Тренировка начата")
     await state.update_data(
         workout_id=workout_id, live_chat_id=sent.chat.id, live_message_id=sent.message_id,
@@ -387,7 +379,7 @@ async def _enter_live(
     # not a disposable menu screen, so it should stay instead of being deleted.
     user = await _ensure_user(callback.from_user.id, callback.from_user.username)
     if delete_message:
-        await callback.message.delete()
+        await _delete_message(callback.message)
     sent = await callback.message.answer("🏋️ Тренировка")
     open_exercises, open_blocks, last_session_sets, last_by_exercise = await _reopen_exercises(workout_id)
     active_exercise_id = open_exercises[-1] if open_exercises else None
@@ -641,7 +633,6 @@ async def log_set_text(message: Message, state: FSMContext):
         prev_weight = weight
     last_by[active] = (prev_weight, parsed[-1].reps)
     await state.update_data(last_by_exercise=last_by)
-    await _react_ok(message.bot, message)
     await _delete_message(message)
     user = await db.get_user(message.from_user.id)
     await _render_logging_screen(message.bot, state, user)

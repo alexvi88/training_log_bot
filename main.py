@@ -72,22 +72,38 @@ class RefreshPersistentMenuMiddleware(BaseMiddleware):
     their very next interaction with the bot — any text message or button
     tap — rather than only resyncing when they happen to hit /start or the
     Меню button. Runs after the handler so the normal reply goes out first.
+
+    Once a user is confirmed current, their id is cached in memory so later
+    taps skip the db.get_user round-trip entirely — the same instance is
+    registered for both messages and callbacks (see main()) so the cache is
+    shared across both.
     """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._up_to_date_ids: set[int] = set()
 
     async def __call__(self, handler, event, data):
         result = await handler(event, data)
         target = event.message if isinstance(event, CallbackQuery) else event
         if not isinstance(target, Message):
             return result
-        user = await db.get_user(event.from_user.id)
-        if user is None or user["reply_keyboard_version"] >= keyboards.PERSISTENT_MENU_VERSION:
+        user_id = event.from_user.id
+        if user_id in self._up_to_date_ids:
+            return result
+        user = await db.get_user(user_id)
+        if user is None:
+            return result
+        if user["reply_keyboard_version"] >= keyboards.PERSISTENT_MENU_VERSION:
+            self._up_to_date_ids.add(user_id)
             return result
         with suppress(TelegramBadRequest):
             await target.answer(
                 "⌨️ Обновил меню под полем ввода.",
                 reply_markup=keyboards.persistent_menu(),
             )
-        await db.update_user(event.from_user.id, reply_keyboard_version=keyboards.PERSISTENT_MENU_VERSION)
+        await db.update_user(user_id, reply_keyboard_version=keyboards.PERSISTENT_MENU_VERSION)
+        self._up_to_date_ids.add(user_id)
         return result
 
 
@@ -123,8 +139,9 @@ async def main() -> None:
     await _setup_commands(bot)
     dp = Dispatcher(storage=JSONFileStorage(config.FSM_STORAGE_PATH))
     dp.callback_query.outer_middleware(IgnoreStaleCallbackMiddleware())
-    dp.message.outer_middleware(RefreshPersistentMenuMiddleware())
-    dp.callback_query.outer_middleware(RefreshPersistentMenuMiddleware())
+    refresh_menu_middleware = RefreshPersistentMenuMiddleware()
+    dp.message.outer_middleware(refresh_menu_middleware)
+    dp.callback_query.outer_middleware(refresh_menu_middleware)
     dp.include_router(persistent_menu.router)
     dp.include_router(workout.router)
     dp.include_router(admin.router)

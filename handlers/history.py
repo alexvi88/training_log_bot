@@ -1,5 +1,6 @@
 """History browsing (§8) and progress/analytics screens (§7)."""
 
+import asyncio
 import datetime as dt
 
 from aiogram import F, Router
@@ -105,7 +106,7 @@ async def hist_card(callback: CallbackQuery, state: FSMContext):
     title, body, footer, note = formatting.build_workout_card(
         started, blocks, workout["note"], unit=user["unit"]
     )
-    png = charts.render_workout_card(title, body, footer, note)
+    png = await asyncio.to_thread(charts.render_workout_card, title, body, footer, note)
     await callback.message.answer_photo(
         BufferedInputFile(png, filename="workout.png"),
     )
@@ -187,7 +188,7 @@ async def prog_pick_group(callback: CallbackQuery, state: FSMContext):
     )
     b = InlineKeyboardBuilder()
     for ex in exercises:
-        b.button(text=ex["display_name"], callback_data=f"prog:ex:{ex['id']}")
+        b.button(text=ex["display_name"], callback_data=f"prog:ex:{ex['id']}:{raw}")
     b.button(text="⬅️ Назад", callback_data="prog:groups")
     b.adjust(1)
     text = "📈 Прогресс — выбери упражнение:" if exercises else "Пока нет своих упражнений с историей в этой группе."
@@ -207,7 +208,7 @@ async def _load_sessions(exercise_id: int, formula: str) -> list[analytics.Sessi
     return sessions
 
 
-async def _render_progress_view(ex_id: int, user, limit: int):
+async def _render_progress_view(ex_id: int, user, limit: int, origin: str = "all"):
     """Build the text/chart/keyboard for an exercise's progress screen.
 
     Trend/comparison/PRs always look at the full history; `limit` only
@@ -236,24 +237,26 @@ async def _render_progress_view(ex_id: int, user, limit: int):
     png = None
     if sessions:
         metric = "повторы" if sessions[-1].is_bodyweight_mode else "e1RM"
-        png = charts.render_metric_over_sessions(
-            points[-limit:], f"{ex['display_name']} — {metric}", metric
+        png = await asyncio.to_thread(
+            charts.render_metric_over_sessions, points[-limit:], f"{ex['display_name']} — {metric}", metric
         )
 
     kb = (
-        keyboards.progress_chart_keyboard(ex_id, limit)
+        keyboards.progress_chart_keyboard(ex_id, limit, origin)
         if sessions
-        else keyboards.progress_back_keyboard()
+        else keyboards.progress_back_keyboard(ex_id, origin)
     )
     return text, png, kb
 
 
 @router.callback_query(F.data.startswith("prog:ex:"))
 async def prog_show_exercise(callback: CallbackQuery, state: FSMContext):
-    ex_id = int(callback.data.split(":")[2])
-    await state.update_data(prog_exercise_id=ex_id)
+    parts = callback.data.split(":")
+    ex_id = int(parts[2])
+    origin = parts[3] if len(parts) > 3 else "all"
+    await state.update_data(prog_exercise_id=ex_id, prog_origin=origin)
     user = await db.get_user(callback.from_user.id)
-    text, png, kb = await _render_progress_view(ex_id, user, keyboards.DEFAULT_PROGRESS_LIMIT)
+    text, png, kb = await _render_progress_view(ex_id, user, keyboards.DEFAULT_PROGRESS_LIMIT, origin)
 
     if png:
         await ui.safe_edit_photo(callback, png, "chart.png", text, reply_markup=kb, parse_mode="HTML")
@@ -264,10 +267,11 @@ async def prog_show_exercise(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("prog:per:"))
 async def prog_change_period(callback: CallbackQuery, state: FSMContext):
-    _, _, ex_id_raw, limit_raw = callback.data.split(":")
-    ex_id, limit = int(ex_id_raw), int(limit_raw)
+    parts = callback.data.split(":")
+    ex_id, limit = int(parts[2]), int(parts[3])
+    origin = parts[4] if len(parts) > 4 else "all"
     user = await db.get_user(callback.from_user.id)
-    text, png, kb = await _render_progress_view(ex_id, user, limit)
+    text, png, kb = await _render_progress_view(ex_id, user, limit, origin)
 
     if png:
         media = InputMediaPhoto(

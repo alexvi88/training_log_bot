@@ -176,7 +176,9 @@ async def build_daily_push(telegram_id: int, today: dt.date) -> Optional[PushDec
 async def _deliver(bot: Bot, telegram_id: int, decision: PushDecision) -> None:
     kb = keyboards.push_cta_keyboard() if decision.with_cta else None
     try:
-        await bot.send_message(chat_id=telegram_id, text=decision.text, reply_markup=kb)
+        await bot.send_message(
+            chat_id=telegram_id, text=decision.text, reply_markup=kb, disable_notification=False
+        )
     except TelegramForbiddenError:
         logger.info("User %s blocked the bot, skipping push", telegram_id)
         return
