@@ -4,6 +4,7 @@ import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import grpc
 import pytest
 
 import ai_trainer
@@ -341,6 +342,65 @@ async def test_ask_falls_back_to_plain_once_quota_exhausted(fresh_db, user_id, m
 
     assert answer == "обычный ответ"
     sdk_getter.assert_not_awaited()
+
+
+class _FakeRpcError(grpc.RpcError):
+    """Stands in for grpc.aio.AioRpcError, whose real constructor needs a lot
+    of internal plumbing we don't have in a test — only `.details()` matters
+    for `_is_beta_access_error`."""
+
+    def __init__(self, details: str):
+        self._details = details
+
+    def details(self):
+        return self._details
+
+
+async def test_ask_falls_back_to_plain_when_search_lacks_beta_access(fresh_db, user_id, monkeypatch):
+    monkeypatch.setattr(ai_trainer, "_search_unavailable", False)
+
+    class _BetaAccessSession:
+        async def sample(self):
+            raise _FakeRpcError("Client-side tools for multi-agent models require beta access")
+
+    monkeypatch.setattr(
+        ai_trainer, "_get_sdk_client", AsyncMock(return_value=_fake_sdk_client(_BetaAccessSession()))
+    )
+    client = _fake_client([_response(content="обычный ответ")])
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+
+    answer = await ai_trainer.ask(user_id, "Вопрос", history=[])
+
+    assert answer == "обычный ответ"
+    assert ai_trainer._search_unavailable is True
+
+
+async def test_ask_skips_search_once_marked_unavailable(fresh_db, user_id, monkeypatch):
+    monkeypatch.setattr(ai_trainer, "_search_unavailable", True)
+    sdk_getter = AsyncMock()
+    monkeypatch.setattr(ai_trainer, "_get_sdk_client", sdk_getter)
+    client = _fake_client([_response(content="обычный ответ")])
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+
+    answer = await ai_trainer.ask(user_id, "Вопрос", history=[])
+
+    assert answer == "обычный ответ"
+    sdk_getter.assert_not_awaited()
+
+
+async def test_ask_reraises_grpc_errors_unrelated_to_beta_access(fresh_db, user_id, monkeypatch):
+    monkeypatch.setattr(ai_trainer, "_search_unavailable", False)
+
+    class _BoomSession:
+        async def sample(self):
+            raise _FakeRpcError("rate limited")
+
+    monkeypatch.setattr(ai_trainer, "_get_sdk_client", AsyncMock(return_value=_fake_sdk_client(_BoomSession())))
+
+    with pytest.raises(grpc.RpcError):
+        await ai_trainer.ask(user_id, "Вопрос", history=[])
+
+    assert ai_trainer._search_unavailable is False
 
 
 async def test_ask_with_search_runs_custom_tool_round(fresh_db, user_id, monkeypatch):
