@@ -72,6 +72,34 @@ def _get_client() -> AsyncOpenAI:
     return _client
 
 
+_audio_client: Optional[AsyncOpenAI] = None
+
+
+def is_voice_configured() -> bool:
+    return bool(config.OPENAI_API_KEY)
+
+
+def _get_audio_client() -> AsyncOpenAI:
+    global _audio_client
+    if _audio_client is None:
+        _audio_client = AsyncOpenAI(api_key=config.OPENAI_API_KEY)
+    return _audio_client
+
+
+async def transcribe_voice(file_obj: Any) -> str:
+    """Голосовое сообщение (файл в формате Telegram, OGG/Opus) → распознанный текст.
+
+    file_obj — объект с методом .read() и атрибутом .name (например BytesIO с
+    выставленным именем), как того требует OpenAI SDK для audio.transcriptions.
+    """
+    client = _get_audio_client()
+    response = await client.audio.transcriptions.create(
+        model=config.OPENAI_TRANSCRIBE_MODEL,
+        file=file_obj,
+    )
+    return (response.text or "").strip()
+
+
 # AsyncXAIClient owns a grpc.aio channel bound to whatever asyncio loop is
 # current at construction time. Building it at import time (before the bot's
 # real loop exists) would bind it to the wrong loop, so it's built lazily on

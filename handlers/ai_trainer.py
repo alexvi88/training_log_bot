@@ -35,6 +35,12 @@ MAX_IMAGE_BYTES = 10 * 1024 * 1024
 # Вопрос по умолчанию, если пользователь прислал фото без подписи.
 DEFAULT_PHOTO_QUESTION = "Посмотри на фото и прокомментируй."
 
+# Лимит на размер голосового (Telegram сам не режет сильнее, но перестрахуемся).
+MAX_VOICE_BYTES = 20 * 1024 * 1024
+
+# Длиннее — явно не короткий вопрос, дороже распознавать и дольше ждать ответ.
+MAX_VOICE_SECONDS = 300
+
 INTRO_TEXT = (
     "🤖 <b>ПРИВЕТ, АТЛЕТ. ТРЕНЕР НА СВЯЗИ.</b>\n\n"
     "У меня есть доступ к истории твоих тренировок и многолетний тренерский опыт. "
@@ -44,7 +50,7 @@ INTRO_TEXT = (
     "• «Какое упражнение сделать следующим на этой тренировке?»\n"
     "• «Сколько белка есть, чтобы расти?»\n"
     "• «Оцени форму по фото»\n\n"
-    "Пиши вопрос 👇"
+    "Пиши вопрос 👇 (можно голосом — жми на 🎤)"
 )
 
 # Пользователи, чей вопрос сейчас обрабатывается — защита от параллельных запросов.
@@ -248,3 +254,43 @@ async def ai_photo_question(message: Message, state: FSMContext):
     await _handle_question(
         message, state, question, history_question=history_question, image_data_url=image_data_url
     )
+
+
+async def _download_voice_as_file(message: Message):
+    voice = message.voice
+    if voice.file_size and voice.file_size > MAX_VOICE_BYTES:
+        return None
+    buf = await message.bot.download(voice)
+    buf.name = "voice.ogg"
+    return buf
+
+
+@router.message(AITrainerFlow.chatting, F.voice)
+async def ai_voice_question(message: Message, state: FSMContext):
+    if message.from_user.id in _busy:
+        await message.reply("Секунду, ещё думаю над прошлым вопросом 😅")
+        return
+    if not ai_trainer.is_voice_configured():
+        await message.reply("Голосовой ввод пока не настроен, напиши вопрос текстом.")
+        return
+    if message.voice.duration and message.voice.duration > MAX_VOICE_SECONDS:
+        await message.reply("Голосовое слишком длинное, запиши покороче.")
+        return
+
+    voice_file = await _download_voice_as_file(message)
+    if voice_file is None:
+        await message.reply("Голосовое слишком большое, запиши покороче.")
+        return
+
+    try:
+        question = await ai_trainer.transcribe_voice(voice_file)
+    except Exception:
+        logger.exception("AI trainer voice transcription failed for user %s", message.from_user.id)
+        await message.reply("⚠️ Не получилось распознать голосовое, попробуй ещё раз или напиши текстом.")
+        return
+
+    if not question:
+        await message.reply("🤐 Не удалось разобрать речь, попробуй ещё раз.")
+        return
+
+    await _handle_question(message, state, question, history_question=question)
