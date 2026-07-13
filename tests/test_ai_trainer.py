@@ -4,7 +4,6 @@ import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-import grpc
 import pytest
 
 import ai_trainer
@@ -182,12 +181,12 @@ async def test_full_chat_history_does_not_leak_other_users_data(fresh_db, user_i
     assert payload["messages"] == []
 
 
-# ---------- agentic loop (no-search path, _ask_plain — REST/OpenAI-compatible) ----------
+# ---------- agentic loop (_ask_plain — REST/OpenAI-compatible) ----------
 #
-# ask() dispatches to _ask_with_search whenever the daily search quota isn't
-# exhausted (see the "search dispatch" section below); these tests exercise
-# the underlying REST tool-calling loop directly so they don't depend on that
-# quota state.
+# ask() always answers through _ask_plain now, optionally preceded by a
+# _web_search_findings step (see the "search step" section below); these
+# tests exercise the REST tool-calling loop directly so they don't depend on
+# quota state or the search step.
 
 def _tool_call(name, arguments, call_id="call_1"):
     return SimpleNamespace(
@@ -283,53 +282,65 @@ async def test_ask_passes_user_question_and_history(fresh_db, user_id, monkeypat
     assert messages[1:] == [*history, {"role": "user", "content": "новый вопрос"}]
 
 
-# ---------- search dispatch (ask() choosing between _ask_plain / _ask_with_search) ----------
+# ---------- search step (_web_search_findings, server-side-only web/X search) ----------
+#
+# _web_search_findings never mixes our DB function-tools with the multi-agent
+# search model (that combination needs xAI beta access this account doesn't
+# have — see the module docstring) — it only ever passes web_search/x_search,
+# so there's no client-side tool round trip to simulate here, unlike the
+# _ask_plain tests above.
 
-def _xai_response(content=None, tool_calls=None, citations=None, server_side_tool_usage=None):
+def _xai_response(content=None, citations=None, server_side_tool_usage=None):
     return SimpleNamespace(
         content=content,
-        tool_calls=tool_calls or [],
         citations=citations or [],
         server_side_tool_usage=server_side_tool_usage or {},
     )
 
 
-class _FakeXaiSession:
-    def __init__(self, responses):
-        self._responses = list(responses)
-        self.appended: list = []
+def _fake_sdk_client(response):
+    session = SimpleNamespace(sample=AsyncMock(return_value=response), create_kwargs=None)
 
-    async def sample(self):
-        return self._responses.pop(0)
+    def create(**kwargs):
+        session.create_kwargs = kwargs
+        return session
 
-    def append(self, message):
-        self.appended.append(message)
-
-
-def _fake_sdk_client(session):
-    return SimpleNamespace(chat=SimpleNamespace(create=lambda **kwargs: session))
+    client = SimpleNamespace(chat=SimpleNamespace(create=create))
+    client.session = session
+    return client
 
 
-async def test_ask_uses_search_path_and_counts_quota_when_search_used(fresh_db, user_id, monkeypatch):
-    session = _FakeXaiSession([_xai_response(content="ответ с поиском", citations=["http://example.com"])])
-    monkeypatch.setattr(ai_trainer, "_get_sdk_client", AsyncMock(return_value=_fake_sdk_client(session)))
+async def test_ask_uses_search_context_and_counts_quota_when_search_used(fresh_db, user_id, monkeypatch):
+    sdk_client = _fake_sdk_client(
+        _xai_response(content="нашёл свежее исследование по протеину", citations=["http://example.com"])
+    )
+    monkeypatch.setattr(ai_trainer, "_get_sdk_client", AsyncMock(return_value=sdk_client))
+    client = _fake_client([_response(content="финальный ответ")])
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
 
     answer = await ai_trainer.ask(user_id, "Что нового в исследованиях по протеину?", history=[])
 
-    assert answer == "ответ с поиском"
+    assert answer == "финальный ответ"
     assert await fresh_db.get_ai_search_count_today(user_id) == 1
+    messages = client.chat.completions.create.await_args.kwargs["messages"]
+    assert any("нашёл свежее исследование по протеину" in m["content"] for m in messages if m["role"] == "system")
 
 
-async def test_ask_search_path_does_not_count_quota_when_search_unused(fresh_db, user_id, monkeypatch):
-    session = _FakeXaiSession([_xai_response(content="ответ без поиска")])
-    monkeypatch.setattr(ai_trainer, "_get_sdk_client", AsyncMock(return_value=_fake_sdk_client(session)))
+async def test_ask_skips_search_context_when_search_unused(fresh_db, user_id, monkeypatch):
+    sdk_client = _fake_sdk_client(_xai_response(content="NO_SEARCH_NEEDED"))
+    monkeypatch.setattr(ai_trainer, "_get_sdk_client", AsyncMock(return_value=sdk_client))
+    client = _fake_client([_response(content="обычный ответ")])
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
 
-    await ai_trainer.ask(user_id, "Как мои дела?", history=[])
+    answer = await ai_trainer.ask(user_id, "Как мои дела?", history=[])
 
+    assert answer == "обычный ответ"
     assert await fresh_db.get_ai_search_count_today(user_id) == 0
+    messages = client.chat.completions.create.await_args.kwargs["messages"]
+    assert [m["role"] for m in messages] == ["system", "user"]
 
 
-async def test_ask_falls_back_to_plain_once_quota_exhausted(fresh_db, user_id, monkeypatch):
+async def test_ask_skips_search_step_once_quota_exhausted(fresh_db, user_id, monkeypatch):
     for _ in range(config.AI_SEARCH_DAILY_LIMIT):
         await fresh_db.increment_ai_search_count(user_id)
 
@@ -344,96 +355,33 @@ async def test_ask_falls_back_to_plain_once_quota_exhausted(fresh_db, user_id, m
     sdk_getter.assert_not_awaited()
 
 
-class _FakeRpcError(grpc.RpcError):
-    """Stands in for grpc.aio.AioRpcError, whose real constructor needs a lot
-    of internal plumbing we don't have in a test — only `.details()` matters
-    for `_is_beta_access_error`."""
+async def test_ask_answers_normally_when_search_step_raises(fresh_db, user_id, monkeypatch):
+    async def boom():
+        raise RuntimeError("xAI search model rejected client-side tools (no beta access)")
 
-    def __init__(self, details: str):
-        self._details = details
-
-    def details(self):
-        return self._details
-
-
-async def test_ask_falls_back_to_plain_when_search_lacks_beta_access(fresh_db, user_id, monkeypatch):
-    monkeypatch.setattr(ai_trainer, "_search_unavailable", False)
-
-    class _BetaAccessSession:
-        async def sample(self):
-            raise _FakeRpcError("Client-side tools for multi-agent models require beta access")
-
-    monkeypatch.setattr(
-        ai_trainer, "_get_sdk_client", AsyncMock(return_value=_fake_sdk_client(_BetaAccessSession()))
-    )
+    session = SimpleNamespace(sample=boom)
+    sdk_client = SimpleNamespace(chat=SimpleNamespace(create=lambda **kwargs: session))
+    monkeypatch.setattr(ai_trainer, "_get_sdk_client", AsyncMock(return_value=sdk_client))
     client = _fake_client([_response(content="обычный ответ")])
     monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
 
     answer = await ai_trainer.ask(user_id, "Вопрос", history=[])
 
     assert answer == "обычный ответ"
-    assert ai_trainer._search_unavailable is True
+    assert await fresh_db.get_ai_search_count_today(user_id) == 0
 
 
-async def test_ask_skips_search_once_marked_unavailable(fresh_db, user_id, monkeypatch):
-    monkeypatch.setattr(ai_trainer, "_search_unavailable", True)
-    sdk_getter = AsyncMock()
-    monkeypatch.setattr(ai_trainer, "_get_sdk_client", sdk_getter)
-    client = _fake_client([_response(content="обычный ответ")])
-    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+async def test_web_search_findings_passes_only_server_side_tools(fresh_db, user_id, monkeypatch):
+    sdk_client = _fake_sdk_client(_xai_response(content="находки", citations=["http://example.com"]))
+    monkeypatch.setattr(ai_trainer, "_get_sdk_client", AsyncMock(return_value=sdk_client))
 
-    answer = await ai_trainer.ask(user_id, "Вопрос", history=[])
+    findings = await ai_trainer._web_search_findings(user_id, "Вопрос", history=[])
 
-    assert answer == "обычный ответ"
-    sdk_getter.assert_not_awaited()
-
-
-async def test_ask_reraises_grpc_errors_unrelated_to_beta_access(fresh_db, user_id, monkeypatch):
-    monkeypatch.setattr(ai_trainer, "_search_unavailable", False)
-
-    class _BoomSession:
-        async def sample(self):
-            raise _FakeRpcError("rate limited")
-
-    monkeypatch.setattr(ai_trainer, "_get_sdk_client", AsyncMock(return_value=_fake_sdk_client(_BoomSession())))
-
-    with pytest.raises(grpc.RpcError):
-        await ai_trainer.ask(user_id, "Вопрос", history=[])
-
-    assert ai_trainer._search_unavailable is False
-
-
-async def test_ask_with_search_runs_custom_tool_round(fresh_db, user_id, monkeypatch):
-    await _seed_bench_history(fresh_db, user_id, 1)
-    session = _FakeXaiSession([
-        _xai_response(tool_calls=[_tool_call("get_training_overview", {})]),
-        _xai_response(content="Погнали дальше", citations=["http://example.com"]),
-    ])
-    monkeypatch.setattr(ai_trainer, "_get_sdk_client", AsyncMock(return_value=_fake_sdk_client(session)))
-
-    answer = await ai_trainer.ask(user_id, "Как мои дела?", history=[])
-
-    assert answer == "Погнали дальше"
-    # assistant(tool_calls) + tool_result + final assistant
-    assert len(session.appended) == 3
-    assert await fresh_db.get_ai_search_count_today(user_id) == 1
-
-
-async def test_ask_with_search_reports_tool_failure_to_model(fresh_db, user_id, monkeypatch):
-    session = _FakeXaiSession([
-        _xai_response(tool_calls=[_tool_call("get_exercise_progress", {"exercise_name": "Жим"})]),
-        _xai_response(content="ответ"),
-    ])
-    monkeypatch.setattr(ai_trainer, "_get_sdk_client", AsyncMock(return_value=_fake_sdk_client(session)))
-
-    async def boom(*args, **kwargs):
-        raise RuntimeError("db exploded")
-
-    monkeypatch.setattr(ai_trainer, "execute_tool", boom)
-
-    answer = await ai_trainer.ask(user_id, "Прогресс?", history=[])
-
-    assert answer == "ответ"
+    assert findings == "находки"
+    assert sdk_client.session.create_kwargs["model"] == config.GROK_SEARCH_MODEL
+    # только web_search + x_search — ни одного нашего DB-инструмента, иначе
+    # это снова смешивание client-side tools с multi-agent моделью, требующее беты.
+    assert len(sdk_client.session.create_kwargs["tools"]) == 2
 
 
 # ---------- image input (text+img and img-only questions) ----------
