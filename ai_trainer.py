@@ -48,6 +48,11 @@ MAX_TOOL_ROUNDS = 6
 # Сколько последних сессий отдаём модели в get_exercise_progress.
 PROGRESS_SESSIONS_LIMIT = 10
 
+# Верхняя граница для get_full_workout_history — не по числу тренировок
+# пользователя (их может быть сколько угодно), а чтобы один вызов инструмента
+# не раздул промпт до неприличия.
+FULL_WORKOUT_HISTORY_LIMIT = 200
+
 _client: Optional[AsyncOpenAI] = None
 
 
@@ -94,6 +99,13 @@ SYSTEM_PROMPT = """\
 ЗАВЕРШЕНА (пользователь может продолжить логировать подходы) — так и говори,
 не называй её законченной. Если инструмент вернул, что активной тренировки нет,
 последняя тренировка из list_recent_workouts уже завершена.
+
+list_recent_workouts отдаёт максимум 10 последних тренировок — этого хватает
+для большинства вопросов. Если вопрос требует смотреть за долгий период
+(сравнить месяцы, найти конкретную давнюю тренировку, оценить динамику по
+многим тренировкам разом) — вызови get_full_workout_history, она отдаёт всю
+историю целиком без этого ограничения. Не вызывай её по умолчанию, только
+когда реально нужен весь массив, а не последние несколько тренировок.
 
 Также есть инструмент list_exercise_catalog — полный каталог упражнений-шаблонов
 бота по группам мышц. Используй его вместе со списком упражнений пользователя
@@ -164,7 +176,9 @@ TOOLS: list[dict[str, Any]] = [
             "name": "list_recent_workouts",
             "description": (
                 "Последние завершённые тренировки: дата, заметка и все подходы "
-                "(вес x повторы) по каждому упражнению."
+                "(вес x повторы) по каждому упражнению. Для быстрой проверки "
+                "последних тренировок — не для вопросов про долгий период "
+                "(тут максимум 10 штук), для этого есть get_full_workout_history."
             ),
             "parameters": {
                 "type": "object",
@@ -175,6 +189,24 @@ TOOLS: list[dict[str, Any]] = [
                     }
                 },
             },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_full_workout_history",
+            "description": (
+                "Вся история завершённых тренировок пользователя без ограничения "
+                "в 10, которое есть у list_recent_workouts: дата, заметка и все "
+                "подходы по каждому упражнению для каждой тренировки. Вызывай, "
+                "когда вопрос требует смотреть за долгий период — сравнить месяцы, "
+                "найти когда что-то было, оценить динамику по многим тренировкам "
+                "и т.п. Для быстрых вопросов про последние тренировки достаточно "
+                "list_recent_workouts, а для истории одного упражнения — "
+                "get_exercise_progress; не вызывай этот инструмент по умолчанию, "
+                "ответ может быть большим."
+            ),
+            "parameters": {"type": "object", "properties": {}},
         },
     },
     {
@@ -384,6 +416,8 @@ async def execute_tool(user_id: int, name: str, tool_input: dict[str, Any]) -> s
         limit = tool_input.get("limit") or 5
         limit = max(1, min(int(limit), 10))
         payload = await _recent_workouts(user_id, limit)
+    elif name == "get_full_workout_history":
+        payload = await _recent_workouts(user_id, FULL_WORKOUT_HISTORY_LIMIT)
     elif name == "get_exercise_progress":
         payload = await _exercise_progress(user_id, tool_input.get("exercise_name", ""))
     elif name == "list_exercise_catalog":

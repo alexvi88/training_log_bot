@@ -61,6 +61,18 @@ async def test_recent_workouts_clamps_limit(fresh_db, user_id):
     assert len(payload["workouts"]) == 2
 
 
+async def test_full_workout_history_is_not_capped_at_ten(fresh_db, user_id):
+    """Unlike list_recent_workouts, this tool must not clip at the recent-window size."""
+    await _seed_bench_history(fresh_db, user_id, 12)
+
+    recent = json.loads(await ai_trainer.execute_tool(user_id, "list_recent_workouts", {}))
+    full = json.loads(await ai_trainer.execute_tool(user_id, "get_full_workout_history", {}))
+
+    assert len(recent["workouts"]) == 5  # default limit, unaffected by this change
+    assert len(full["workouts"]) == 12
+    assert full["workouts"][-1]["date"] == "2026-01-01"  # oldest last, same ordering as list_recent_workouts
+
+
 async def test_exercise_progress_returns_sessions_and_records(fresh_db, user_id):
     await _seed_bench_history(fresh_db, user_id, 3)
 
@@ -133,6 +145,15 @@ async def test_recent_workouts_does_not_leak_other_users_data(fresh_db, user_id)
     await _seed_bench_history(fresh_db, other["telegram_id"], 3)
 
     payload = json.loads(await ai_trainer.execute_tool(user_id, "list_recent_workouts", {}))
+
+    assert payload["workouts"] == []
+
+
+async def test_full_workout_history_does_not_leak_other_users_data(fresh_db, user_id):
+    other = await fresh_db.get_or_create_user(telegram_id=222, username="other")
+    await _seed_bench_history(fresh_db, other["telegram_id"], 12)
+
+    payload = json.loads(await ai_trainer.execute_tool(user_id, "get_full_workout_history", {}))
 
     assert payload["workouts"] == []
 
