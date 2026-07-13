@@ -51,6 +51,12 @@ INTRO_TEXT = (
 _busy: set[int] = set()
 
 
+async def ai_keyboard(user_id: int) -> InlineKeyboardMarkup:
+    """AI-trainer reply keyboard: 'К тренировке' instead of 'Меню' while a workout is active."""
+    active = await db.get_active_workout(user_id)
+    return keyboards.ai_trainer_keyboard(has_active_workout=bool(active))
+
+
 async def _keep_typing(message: Message) -> None:
     # "typing" в Telegram живёт ~5 секунд, а ответ модели может занять дольше.
     while True:
@@ -68,7 +74,7 @@ async def menu_ai(callback: CallbackQuery, state: FSMContext):
         return
     await state.set_state(AITrainerFlow.chatting)
     await state.update_data(ai_history=[])
-    await ui.safe_edit(callback, INTRO_TEXT, reply_markup=keyboards.ai_trainer_keyboard())
+    await ui.safe_edit(callback, INTRO_TEXT, reply_markup=await ai_keyboard(callback.from_user.id))
     await callback.answer()
 
 
@@ -79,13 +85,28 @@ async def ai_to_menu(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+@router.callback_query(F.data == "ai:resume_workout")
+async def ai_resume_workout(callback: CallbackQuery, state: FSMContext):
+    """'К тренировке' from the AI-trainer chat — unlike menu:resume_workout, keeps the
+    AI conversation in the chat instead of deleting the message the button was on.
+    """
+    from handlers.workout import _enter_live
+
+    active = await db.get_active_workout(callback.from_user.id)
+    if not active:
+        await callback.answer("Нет активной тренировки", show_alert=True)
+        return
+    await callback.answer()
+    await _enter_live(callback, state, active["id"], delete_message=False)
+
+
 @router.callback_query(F.data == "ai:reset")
 async def ai_reset(callback: CallbackQuery, state: FSMContext):
     await state.update_data(ai_history=[])
     await ui.safe_edit(
         callback,
         "🗑 Начали с чистого листа. Задавай вопрос!",
-        reply_markup=keyboards.ai_trainer_keyboard(),
+        reply_markup=await ai_keyboard(callback.from_user.id),
     )
     await callback.answer()
 
@@ -166,7 +187,7 @@ async def _handle_question(
         logger.exception("AI trainer request failed for user %s", user_id)
         await message.answer(
             "⚠️ Не получилось получить ответ, попробуй ещё раз чуть позже.",
-            reply_markup=keyboards.ai_trainer_keyboard(),
+            reply_markup=await ai_keyboard(user_id),
         )
         return
     finally:
@@ -188,12 +209,11 @@ async def _handle_question(
     await db.add_ai_chat_message(user_id, "user", history_question)
     await db.add_ai_chat_message(user_id, "assistant", answer)
 
+    reply_markup = await ai_keyboard(user_id)
     chunks = [answer[i : i + TG_CHUNK] for i in range(0, len(answer), TG_CHUNK)]
     for i, chunk in enumerate(chunks):
         is_last = i == len(chunks) - 1
-        await message.answer(
-            chunk, reply_markup=keyboards.ai_trainer_keyboard() if is_last else None
-        )
+        await message.answer(chunk, reply_markup=reply_markup if is_last else None)
 
 
 @router.message(AITrainerFlow.chatting, F.text)

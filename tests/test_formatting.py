@@ -110,6 +110,28 @@ def test_build_workout_summary_italicizes_previous_session_in_history():
     assert "<i>  [прошлая: 95×8]</i>" in text
 
 
+# ---------- build_ai_comment_block ----------
+
+
+def test_build_ai_comment_block_converts_double_star_to_bold():
+    text = formatting.build_ai_comment_block("Хороший прогресс на **conventional deadlift**.")
+    assert "<b>conventional deadlift</b>" in text
+    assert "**" not in text
+
+
+def test_build_ai_comment_block_escapes_html_outside_bold():
+    text = formatting.build_ai_comment_block("Тест <script> & **pull down**.")
+    assert "&lt;script&gt;" in text
+    assert "&amp;" in text
+    assert "<b>pull down</b>" in text
+    assert "<script>" not in text
+
+
+def test_build_ai_comment_block_escapes_html_inside_bold():
+    text = formatting.build_ai_comment_block("**A & B**")
+    assert "<b>A &amp; B</b>" in text
+
+
 # ---------- build_live_session_text ----------
 
 

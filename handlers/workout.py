@@ -379,9 +379,15 @@ async def _reopen_exercises(
     return open_exercises, open_blocks, last_session_sets, last_by_exercise
 
 
-async def _enter_live(callback: CallbackQuery, state: FSMContext, workout_id: int):
+async def _enter_live(
+    callback: CallbackQuery, state: FSMContext, workout_id: int, delete_message: bool = True
+):
+    # delete_message=False when entering from the AI-trainer chat (its "К тренировке"
+    # button) — that message is part of the user's chat history with the AI-тренер,
+    # not a disposable menu screen, so it should stay instead of being deleted.
     user = await _ensure_user(callback.from_user.id, callback.from_user.username)
-    await callback.message.delete()
+    if delete_message:
+        await callback.message.delete()
     sent = await callback.message.answer("🏋️ Тренировка")
     open_exercises, open_blocks, last_session_sets, last_by_exercise = await _reopen_exercises(workout_id)
     active_exercise_id = open_exercises[-1] if open_exercises else None
