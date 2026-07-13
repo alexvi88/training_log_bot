@@ -8,6 +8,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 import ai_trainer
+import db
 import keyboards
 import ui
 from fsm import AITrainerFlow
@@ -108,6 +109,12 @@ async def ai_question(message: Message, state: FSMContext):
         + [{"role": "user", "content": question}, {"role": "assistant", "content": answer}]
     )[-HISTORY_LIMIT:]
     await state.update_data(ai_history=history)
+
+    # Full, permanent log — separate from the live window above, which is
+    # capped and wiped on ai:reset. Lets the model pull it back via the
+    # get_full_chat_history tool if a later question references it.
+    await db.add_ai_chat_message(user_id, "user", question)
+    await db.add_ai_chat_message(user_id, "assistant", answer)
 
     chunks = [answer[i : i + TG_CHUNK] for i in range(0, len(answer), TG_CHUNK)]
     for i, chunk in enumerate(chunks):

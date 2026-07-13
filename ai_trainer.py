@@ -109,6 +109,12 @@ SYSTEM_PROMPT = """\
 выдумывай. Если такого инструмента нет — отвечай по своим знаниям, не
 притворяйся, что искал в интернете.
 
+В контексте разговора тебе передают только последние реплики. Если пользователь
+ссылается на что-то более раннее, чего в контексте нет («я тебе говорил про
+плечо», «мы это уже обсуждали») — вызови get_full_chat_history, чтобы поднять
+всю переписку с ним. Для обычных вопросов про тренировки этот инструмент не
+нужен, не вызывай его на всякий случай.
+
 Правила ответа:
 - Отвечай по-русски, на «ты», дружелюбно и по делу, как тренер в зале.
 - Пиши обычным текстом без markdown-разметки (без **, ##, таблиц) — ответ уходит
@@ -201,6 +207,21 @@ TOOLS: list[dict[str, Any]] = [
                 "через «⚙️ Упражнения → Новое упражнение → Шаблоны». Используй, чтобы советовать "
                 "новые упражнения или находить пробелы по группам мышц, сверяясь со списком "
                 "упражнений пользователя из get_training_overview."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_full_chat_history",
+            "description": (
+                "Полная история переписки с этим пользователем в AI-тренере за всё время — "
+                "не только последние реплики, которые уже есть в контексте этого разговора. "
+                "Вызывай, только если пользователь ссылается на что-то из более раннего диалога "
+                "(«я тебе говорил про травму», «мы это обсуждали»), чего нет в видимом контексте. "
+                "Для обычных вопросов про тренировки эта история не нужна — там нужны инструменты "
+                "с данными тренировок. Реплики идут в хронологическом порядке с датой."
             ),
             "parameters": {"type": "object", "properties": {}},
         },
@@ -344,6 +365,16 @@ async def _exercise_progress(user_id: int, exercise_name: str) -> dict[str, Any]
     }
 
 
+async def _full_chat_history(user_id: int) -> dict[str, Any]:
+    rows = await db.get_ai_chat_history(user_id)
+    return {
+        "messages": [
+            {"role": r["role"], "content": r["content"], "date": r["created_at"][:10]}
+            for r in rows
+        ]
+    }
+
+
 async def execute_tool(user_id: int, name: str, tool_input: dict[str, Any]) -> str:
     if name == "get_training_overview":
         payload = await _training_overview(user_id)
@@ -357,6 +388,8 @@ async def execute_tool(user_id: int, name: str, tool_input: dict[str, Any]) -> s
         payload = await _exercise_progress(user_id, tool_input.get("exercise_name", ""))
     elif name == "list_exercise_catalog":
         payload = {"catalog": _CATALOG_BY_GROUP}
+    elif name == "get_full_chat_history":
+        payload = await _full_chat_history(user_id)
     else:
         payload = {"error": f"unknown tool: {name}"}
     return json.dumps(payload, ensure_ascii=False)

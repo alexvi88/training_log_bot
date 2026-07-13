@@ -90,6 +90,26 @@ async def test_unknown_tool_returns_error(fresh_db, user_id):
     assert "error" in payload
 
 
+async def test_full_chat_history_returns_own_messages_chronologically(fresh_db, user_id):
+    await fresh_db.add_ai_chat_message(user_id, "user", "первый вопрос")
+    await fresh_db.add_ai_chat_message(user_id, "assistant", "первый ответ")
+    await fresh_db.add_ai_chat_message(user_id, "user", "второй вопрос")
+
+    payload = json.loads(await ai_trainer.execute_tool(user_id, "get_full_chat_history", {}))
+
+    assert [m["content"] for m in payload["messages"]] == [
+        "первый вопрос",
+        "первый ответ",
+        "второй вопрос",
+    ]
+    assert payload["messages"][0]["role"] == "user"
+
+
+async def test_full_chat_history_empty_when_no_messages(fresh_db, user_id):
+    payload = json.loads(await ai_trainer.execute_tool(user_id, "get_full_chat_history", {}))
+    assert payload["messages"] == []
+
+
 # ---------- изоляция данных между пользователями ----------
 #
 # Единственный идентификатор пользователя в ask()/execute_tool() приходит из
@@ -128,6 +148,16 @@ async def test_exercise_progress_cannot_read_other_users_exercise(fresh_db, user
 
     assert "error" in payload
     assert payload["did_you_mean"] == []  # и в подсказках чужого тоже нет
+
+
+async def test_full_chat_history_does_not_leak_other_users_data(fresh_db, user_id):
+    other = await fresh_db.get_or_create_user(telegram_id=222, username="other")
+    await fresh_db.add_ai_chat_message(other["telegram_id"], "user", "у меня травма плеча")
+    await fresh_db.add_ai_chat_message(other["telegram_id"], "assistant", "сочувствую, к врачу")
+
+    payload = json.loads(await ai_trainer.execute_tool(user_id, "get_full_chat_history", {}))
+
+    assert payload["messages"] == []
 
 
 # ---------- agentic loop (no-search path, _ask_plain — REST/OpenAI-compatible) ----------
