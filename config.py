@@ -45,5 +45,16 @@ XAI_API_KEY = os.getenv("XAI_API_KEY", "")
 GROK_MODEL = os.getenv("GROK_MODEL", "grok-4-1-fast")
 GROK_BASE_URL = os.getenv("GROK_BASE_URL", "https://api.x.ai/v1")
 
+# Search-capable model used (via xAI's gRPC "Agent Tools" SDK, not the REST
+# endpoint) when a question is allowed web/X search access — same model name
+# as fun_bot's GROK_SEARCH_MODEL. Needs an agentic/multi-agent-capable model,
+# not the plain chat one.
+GROK_SEARCH_MODEL = os.getenv("GROK_SEARCH_MODEL", "grok-4.20-multi-agent")
+
+# Per-user daily cap on AI-trainer questions answered with web/X search access.
+# Guards against runaway search cost; once hit, the AI trainer still answers
+# normally (own tools only, no live search) until the next day.
+AI_SEARCH_DAILY_LIMIT = int(os.getenv("AI_SEARCH_DAILY_LIMIT", "40"))
+
 # Delay after finishing a workout before the hydration/protein followup push fires.
 FOLLOWUP_DELAY_HOURS = int(os.getenv("FOLLOWUP_DELAY_HOURS", "2"))

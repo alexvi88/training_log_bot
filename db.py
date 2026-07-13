@@ -126,6 +126,22 @@ CREATE TABLE IF NOT EXISTS push_rotation (
     bag TEXT NOT NULL,
     PRIMARY KEY (telegram_id, category)
 );
+
+CREATE TABLE IF NOT EXISTS ai_search_usage (
+    telegram_id INTEGER NOT NULL,
+    date TEXT NOT NULL,
+    count INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (telegram_id, date)
+);
+
+CREATE TABLE IF NOT EXISTS ai_chat_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    telegram_id INTEGER NOT NULL,
+    role TEXT NOT NULL,
+    content TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ai_chat_messages_user ON ai_chat_messages (telegram_id, id);
 """
 
 _conn: Optional[aiosqlite.Connection] = None
@@ -1100,6 +1116,61 @@ async def save_rotation_bag(telegram_id: int, category: str, bag: list[int]) -> 
             (telegram_id, category, json.dumps(bag)),
         )
         await conn().commit()
+
+
+# ---------- AI trainer: daily web-search quota ----------
+
+async def get_ai_search_count_today(telegram_id: int) -> int:
+    today = dt.date.today().isoformat()
+    cur = await conn().execute(
+        "SELECT count FROM ai_search_usage WHERE telegram_id = ? AND date = ?",
+        (telegram_id, today),
+    )
+    row = await cur.fetchone()
+    return row["count"] if row else 0
+
+
+async def increment_ai_search_count(telegram_id: int) -> None:
+    today = dt.date.today().isoformat()
+    async with _write_lock:
+        await conn().execute(
+            "INSERT INTO ai_search_usage (telegram_id, date, count) VALUES (?, ?, 1) "
+            "ON CONFLICT (telegram_id, date) DO UPDATE SET count = count + 1",
+            (telegram_id, today),
+        )
+        await conn().commit()
+
+
+# ---------- AI trainer: durable chat history ----------
+#
+# Separate from the live in-FSM window (handlers/ai_trainer.py's ai_history,
+# capped and reset with the conversation) — this is the full, permanent log,
+# queryable on demand via the get_full_chat_history tool (ai_trainer.py) when
+# a question references something older than what's in the live window.
+
+# Hard cap on a single get_full_chat_history read, not on storage — keeps a
+# single tool call bounded regardless of how long the relationship with a
+# user has been going.
+MAX_AI_CHAT_HISTORY_READ = 300
+
+
+async def add_ai_chat_message(telegram_id: int, role: str, content: str) -> None:
+    async with _write_lock:
+        await conn().execute(
+            "INSERT INTO ai_chat_messages (telegram_id, role, content, created_at) VALUES (?, ?, ?, ?)",
+            (telegram_id, role, content, now_iso()),
+        )
+        await conn().commit()
+
+
+async def get_ai_chat_history(telegram_id: int, limit: int = MAX_AI_CHAT_HISTORY_READ) -> list[aiosqlite.Row]:
+    cur = await conn().execute(
+        "SELECT role, content, created_at FROM ai_chat_messages WHERE telegram_id = ? "
+        "ORDER BY id DESC LIMIT ?",
+        (telegram_id, limit),
+    )
+    rows = await cur.fetchall()
+    return list(reversed(rows))
 
 
 async def record_push(telegram_id: int, category: str, text: str) -> None:

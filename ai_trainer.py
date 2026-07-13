@@ -2,17 +2,38 @@
 
 Grok (xAI) ходит через OpenAI-совместимый endpoint — тот же стек и те же env
 переменные (XAI_API_KEY / GROK_MODEL / GROK_BASE_URL), что и в fun_bot, так что
-один ключ обслуживает оба бота. Модель получает три read-only инструмента
-(function calling), каждый из которых замкнут на user_id текущего пользователя
-на уровне executor'а, поэтому модель физически не может прочитать чужие данные.
+один ключ обслуживает оба бота. Модель получает read-only инструменты
+(function calling) поверх данных пользователя, каждый из которых замкнут на
+user_id текущего пользователя на уровне executor'а, поэтому модель физически
+не может прочитать чужие данные.
+
+Пока у пользователя не исчерпана дневная квота (config.AI_SEARCH_DAILY_LIMIT),
+вопрос идёт через xAI's gRPC "Agent Tools" SDK на search-модели
+(config.GROK_SEARCH_MODEL) с тем же набором функций плюс server-side
+web_search/x_search — модель сама решает по ходу ответа, нужен ли ей живой
+поиск (например, по актуальным исследованиям/рекомендациям), так же как в
+fun_bot (см. его grok.py). Реальное использование поиска считается по
+citations/server_side_tool_usage в ответе, а не по факту, что инструмент был
+просто предложен. После исчерпания квоты бот тихо возвращается к обычному
+REST-вызову без поиска — вопрос про его собственные тренировки эту разницу
+не почувствует, инструменты для БД доступны в обоих режимах.
 """
 
+import asyncio
 import datetime as dt
 import json
 import logging
 from typing import Any, Optional
 
 from openai import AsyncOpenAI
+from xai_sdk import AsyncClient as AsyncXAIClient
+from xai_sdk.chat import assistant as xai_assistant
+from xai_sdk.chat import system as xai_system
+from xai_sdk.chat import tool as xai_tool
+from xai_sdk.chat import tool_result as xai_tool_result
+from xai_sdk.chat import user as xai_user
+from xai_sdk.tools import web_search as xai_web_search
+from xai_sdk.tools import x_search as xai_x_search
 
 import analytics
 import config
@@ -27,6 +48,11 @@ MAX_TOOL_ROUNDS = 6
 # Сколько последних сессий отдаём модели в get_exercise_progress.
 PROGRESS_SESSIONS_LIMIT = 10
 
+# Верхняя граница для get_full_workout_history — не по числу тренировок
+# пользователя (их может быть сколько угодно), а чтобы один вызов инструмента
+# не раздул промпт до неприличия.
+FULL_WORKOUT_HISTORY_LIMIT = 200
+
 _client: Optional[AsyncOpenAI] = None
 
 
@@ -39,6 +65,23 @@ def _get_client() -> AsyncOpenAI:
     if _client is None:
         _client = AsyncOpenAI(api_key=config.XAI_API_KEY, base_url=config.GROK_BASE_URL)
     return _client
+
+
+# AsyncXAIClient owns a grpc.aio channel bound to whatever asyncio loop is
+# current at construction time. Building it at import time (before the bot's
+# real loop exists) would bind it to the wrong loop, so it's built lazily on
+# first use instead — same reasoning as fun_bot's grok.py.
+_sdk_client: Optional[AsyncXAIClient] = None
+_sdk_client_lock = asyncio.Lock()
+
+
+async def _get_sdk_client() -> AsyncXAIClient:
+    global _sdk_client
+    if _sdk_client is None:
+        async with _sdk_client_lock:
+            if _sdk_client is None:
+                _sdk_client = AsyncXAIClient(api_key=config.XAI_API_KEY)
+    return _sdk_client
 
 
 SYSTEM_PROMPT = """\
@@ -57,6 +100,13 @@ SYSTEM_PROMPT = """\
 не называй её законченной. Если инструмент вернул, что активной тренировки нет,
 последняя тренировка из list_recent_workouts уже завершена.
 
+list_recent_workouts отдаёт максимум 10 последних тренировок — этого хватает
+для большинства вопросов. Если вопрос требует смотреть за долгий период
+(сравнить месяцы, найти конкретную давнюю тренировку, оценить динамику по
+многим тренировкам разом) — вызови get_full_workout_history, она отдаёт всю
+историю целиком без этого ограничения. Не вызывай её по умолчанию, только
+когда реально нужен весь массив, а не последние несколько тренировок.
+
 Также есть инструмент list_exercise_catalog — полный каталог упражнений-шаблонов
 бота по группам мышц. Используй его вместе со списком упражнений пользователя
 (из get_training_overview), когда советуешь новое упражнение, разбираешь баланс
@@ -64,6 +114,18 @@ SYSTEM_PROMPT = """\
 упражнения из каталога (они уже есть в боте и их можно сразу добавить через
 «⚙️ Упражнения → Новое упражнение → Шаблоны»), но можешь называть и упражнения
 вне каталога, если это уместно.
+
+Если среди доступных инструментов есть веб-поиск — используй его для вопросов,
+выходящих за рамки личных данных пользователя (актуальные исследования,
+рекомендации по питанию/технике, новости фитнес-индустрии и т.п.), а не
+выдумывай. Если такого инструмента нет — отвечай по своим знаниям, не
+притворяйся, что искал в интернете.
+
+В контексте разговора тебе передают только последние реплики. Если пользователь
+ссылается на что-то более раннее, чего в контексте нет («я тебе говорил про
+плечо», «мы это уже обсуждали») — вызови get_full_chat_history, чтобы поднять
+всю переписку с ним. Для обычных вопросов про тренировки этот инструмент не
+нужен, не вызывай его на всякий случай.
 
 Правила ответа:
 - Отвечай по-русски, на «ты», дружелюбно и по делу, как тренер в зале.
@@ -114,7 +176,9 @@ TOOLS: list[dict[str, Any]] = [
             "name": "list_recent_workouts",
             "description": (
                 "Последние завершённые тренировки: дата, заметка и все подходы "
-                "(вес x повторы) по каждому упражнению."
+                "(вес x повторы) по каждому упражнению. Для быстрой проверки "
+                "последних тренировок — не для вопросов про долгий период "
+                "(тут максимум 10 штук), для этого есть get_full_workout_history."
             ),
             "parameters": {
                 "type": "object",
@@ -125,6 +189,24 @@ TOOLS: list[dict[str, Any]] = [
                     }
                 },
             },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_full_workout_history",
+            "description": (
+                "Вся история завершённых тренировок пользователя без ограничения "
+                "в 10, которое есть у list_recent_workouts: дата, заметка и все "
+                "подходы по каждому упражнению для каждой тренировки. Вызывай, "
+                "когда вопрос требует смотреть за долгий период — сравнить месяцы, "
+                "найти когда что-то было, оценить динамику по многим тренировкам "
+                "и т.п. Для быстрых вопросов про последние тренировки достаточно "
+                "list_recent_workouts, а для истории одного упражнения — "
+                "get_exercise_progress; не вызывай этот инструмент по умолчанию, "
+                "ответ может быть большим."
+            ),
+            "parameters": {"type": "object", "properties": {}},
         },
     },
     {
@@ -161,11 +243,33 @@ TOOLS: list[dict[str, Any]] = [
             "parameters": {"type": "object", "properties": {}},
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_full_chat_history",
+            "description": (
+                "Полная история переписки с этим пользователем в AI-тренере за всё время — "
+                "не только последние реплики, которые уже есть в контексте этого разговора. "
+                "Вызывай, только если пользователь ссылается на что-то из более раннего диалога "
+                "(«я тебе говорил про травму», «мы это обсуждали»), чего нет в видимом контексте. "
+                "Для обычных вопросов про тренировки эта история не нужна — там нужны инструменты "
+                "с данными тренировок. Реплики идут в хронологическом порядке с датой."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
 ]
 
 _CATALOG_BY_GROUP: dict[str, list[str]] = {}
 for _group, _name in EXERCISE_TEMPLATES:
     _CATALOG_BY_GROUP.setdefault(_group, []).append(_name)
+
+# Same tool set as TOOLS above, expressed in xai_sdk's function-tool format
+# (used when the question gets web-search access — see ask()/_ask_with_search).
+_XAI_TOOLS = [
+    xai_tool(name=t["function"]["name"], description=t["function"]["description"], parameters=t["function"]["parameters"])
+    for t in TOOLS
+]
 
 
 # ---------- tool executors (все данные строго по user_id) ----------
@@ -293,6 +397,16 @@ async def _exercise_progress(user_id: int, exercise_name: str) -> dict[str, Any]
     }
 
 
+async def _full_chat_history(user_id: int) -> dict[str, Any]:
+    rows = await db.get_ai_chat_history(user_id)
+    return {
+        "messages": [
+            {"role": r["role"], "content": r["content"], "date": r["created_at"][:10]}
+            for r in rows
+        ]
+    }
+
+
 async def execute_tool(user_id: int, name: str, tool_input: dict[str, Any]) -> str:
     if name == "get_training_overview":
         payload = await _training_overview(user_id)
@@ -302,10 +416,14 @@ async def execute_tool(user_id: int, name: str, tool_input: dict[str, Any]) -> s
         limit = tool_input.get("limit") or 5
         limit = max(1, min(int(limit), 10))
         payload = await _recent_workouts(user_id, limit)
+    elif name == "get_full_workout_history":
+        payload = await _recent_workouts(user_id, FULL_WORKOUT_HISTORY_LIMIT)
     elif name == "get_exercise_progress":
         payload = await _exercise_progress(user_id, tool_input.get("exercise_name", ""))
     elif name == "list_exercise_catalog":
         payload = {"catalog": _CATALOG_BY_GROUP}
+    elif name == "get_full_chat_history":
+        payload = await _full_chat_history(user_id)
     else:
         payload = {"error": f"unknown tool: {name}"}
     return json.dumps(payload, ensure_ascii=False)
@@ -318,7 +436,19 @@ async def ask(user_id: int, question: str, history: list[dict[str, Any]]) -> str
 
     history — прошлые реплики диалога в виде [{"role": ..., "content": <str>}]
     (только видимый текст, без tool-сообщений — их таскать между ходами незачем).
+
+    Пока не исчерпана дневная квота поисковых ответов (config.AI_SEARCH_DAILY_LIMIT),
+    вопрос идёт через search-модель с доступом к web/X-поиску впридачу к обычным
+    инструментам — модель сама решает, нужен ли ей живой поиск. Иначе — обычный
+    REST-вызов с теми же инструментами, но без поиска.
     """
+    search_allowed = await db.get_ai_search_count_today(user_id) < config.AI_SEARCH_DAILY_LIMIT
+    if search_allowed:
+        return await _ask_with_search(user_id, question, history)
+    return await _ask_plain(user_id, question, history)
+
+
+async def _ask_plain(user_id: int, question: str, history: list[dict[str, Any]]) -> str:
     client = _get_client()
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": _system_prompt()},
@@ -363,4 +493,54 @@ async def ask(user_id: int, question: str, history: list[dict[str, Any]]) -> str
             messages.append({"role": "tool", "tool_call_id": tc.id, "content": content})
 
     text = (message.content or "").strip() if message else ""
+    return text or "Не получилось сформулировать ответ, попробуй переспросить."
+
+
+def _to_xai_messages(history: list[dict[str, Any]], question: str) -> list:
+    out = [xai_system(_system_prompt())]
+    for msg in history:
+        content = msg.get("content", "")
+        if msg.get("role") == "assistant":
+            out.append(xai_assistant(content))
+        else:
+            out.append(xai_user(content))
+    out.append(xai_user(question))
+    return out
+
+
+async def _ask_with_search(user_id: int, question: str, history: list[dict[str, Any]]) -> str:
+    sdk_client = await _get_sdk_client()
+    chat_session = sdk_client.chat.create(
+        model=config.GROK_SEARCH_MODEL,
+        messages=_to_xai_messages(history, question),
+        tools=[xai_web_search(), xai_x_search(), *_XAI_TOOLS],
+        max_tokens=2048,
+    )
+
+    response = None
+    for _ in range(MAX_TOOL_ROUNDS + 1):
+        response = await chat_session.sample()
+        chat_session.append(response)
+        if not response.tool_calls:
+            break
+        for tc in response.tool_calls:
+            try:
+                args = json.loads(tc.function.arguments or "{}")
+                content = await execute_tool(user_id, tc.function.name, args)
+            except Exception:
+                logger.exception("AI trainer tool %s failed", tc.function.name)
+                content = json.dumps(
+                    {"error": "tool failed, answer from what you already have"}
+                )
+            chat_session.append(xai_tool_result(content, tool_call_id=tc.id))
+
+    # web_search/x_search are server-side: the model calls them and gets
+    # results within a single sample() round, never surfacing as a tool_call
+    # we need to fulfill — so whether search actually ran is only visible
+    # after the fact, via citations/server_side_tool_usage on the final answer.
+    used_search = response is not None and (bool(response.citations) or bool(response.server_side_tool_usage))
+    if used_search:
+        await db.increment_ai_search_count(user_id)
+
+    text = (response.content or "").strip() if response is not None else ""
     return text or "Не получилось сформулировать ответ, попробуй переспросить."
