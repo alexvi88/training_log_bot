@@ -374,3 +374,51 @@ async def test_ask_with_search_reports_tool_failure_to_model(fresh_db, user_id, 
     answer = await ai_trainer.ask(user_id, "Прогресс?", history=[])
 
     assert answer == "ответ"
+
+
+# ---------- image input (text+img and img-only questions) ----------
+
+_FAKE_IMAGE_DATA_URL = "data:image/jpeg;base64,Zm9vYmFy"
+
+
+async def test_ask_plain_sends_multimodal_content_when_image_present(fresh_db, user_id, monkeypatch):
+    client = _fake_client([_response(content="вижу фото")])
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+
+    answer = await ai_trainer._ask_plain(
+        user_id, "что на фото?", history=[], image_data_url=_FAKE_IMAGE_DATA_URL
+    )
+
+    assert answer == "вижу фото"
+    messages = client.chat.completions.create.await_args.kwargs["messages"]
+    user_content = messages[-1]["content"]
+    assert user_content == [
+        {"type": "text", "text": "что на фото?"},
+        {"type": "image_url", "image_url": {"url": _FAKE_IMAGE_DATA_URL}},
+    ]
+
+
+async def test_ask_plain_sends_plain_text_content_without_image(fresh_db, user_id, monkeypatch):
+    client = _fake_client([_response(content="ок")])
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+
+    await ai_trainer._ask_plain(user_id, "просто текст", history=[])
+
+    messages = client.chat.completions.create.await_args.kwargs["messages"]
+    assert messages[-1]["content"] == "просто текст"
+
+
+async def test_to_xai_messages_includes_image_content():
+    messages = ai_trainer._to_xai_messages([], "что на фото?", _FAKE_IMAGE_DATA_URL)
+
+    last = messages[-1]
+    assert [c.WhichOneof("content") for c in last.content] == ["text", "image_url"]
+    assert last.content[0].text == "что на фото?"
+    assert last.content[1].image_url.image_url == _FAKE_IMAGE_DATA_URL
+
+
+async def test_to_xai_messages_text_only_without_image():
+    messages = ai_trainer._to_xai_messages([], "просто текст")
+
+    last = messages[-1]
+    assert [c.WhichOneof("content") for c in last.content] == ["text"]
