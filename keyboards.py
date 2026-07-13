@@ -209,9 +209,11 @@ def history_list_keyboard(workouts, page: int, has_next: bool) -> InlineKeyboard
     return b.as_markup()
 
 
-def history_item_keyboard(workout_id: int) -> InlineKeyboardMarkup:
+def history_item_keyboard(workout_id: int, show_ai_button: bool = False) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(text="🖼 Поделиться картинкой", callback_data=f"hist:card:{workout_id}")
+    if show_ai_button:
+        b.button(text="🤖 Комментарий AI-тренера", callback_data=f"ai:comment:{workout_id}")
     b.button(text="✏️ Редактировать", callback_data=f"hist:edit:{workout_id}")
     b.button(text="🗑 Удалить", callback_data=f"hist:del:{workout_id}")
     b.button(text="⬅️ К списку", callback_data="hist:back")
@@ -219,9 +221,12 @@ def history_item_keyboard(workout_id: int) -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
-def workout_card_keyboard(workout_id: int) -> InlineKeyboardMarkup:
+def workout_card_keyboard(workout_id: int, show_ai_button: bool = False) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(text="🖼 Поделиться картинкой", callback_data=f"hist:card:{workout_id}")
+    if show_ai_button:
+        b.button(text="🤖 Комментарий AI-тренера", callback_data=f"ai:comment:{workout_id}")
+    b.adjust(1)
     return b.as_markup()
 
 
@@ -280,12 +285,20 @@ def admin_pushes_keyboard(page: int, has_next: bool) -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
-def settings_keyboard(unit: str, formula: str, pushes_enabled: bool) -> InlineKeyboardMarkup:
+def settings_keyboard(
+    unit: str, formula: str, pushes_enabled: bool, ai_comments_enabled: bool
+) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(text=f"Единицы: {unit}", callback_data="settings:unit")
     b.button(text=f"Формула 1ПМ: {formula}", callback_data="settings:formula")
     pushes_label = "🔔 Пуши: включены" if pushes_enabled else "🔕 Пуши: выключены"
     b.button(text=pushes_label, callback_data="settings:pushes")
+    ai_label = (
+        "🤖 Комментарии AI-тренера: включены"
+        if ai_comments_enabled
+        else "🤖 Комментарии AI-тренера: выключены"
+    )
+    b.button(text=ai_label, callback_data="settings:ai_comments")
     b.button(text="📤 Экспорт CSV", callback_data="settings:export")
     b.button(text="📥 Импорт CSV", callback_data="settings:import")
     b.button(text="⬅️ Назад", callback_data="settings:back")

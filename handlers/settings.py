@@ -18,7 +18,9 @@ router = Router(name="settings")
 async def show_settings(callback: CallbackQuery, state: FSMContext):
     await state.set_state(SettingsFlow.menu)
     user = await db.get_user(callback.from_user.id)
-    kb = keyboards.settings_keyboard(user["unit"], user["e1rm_formula"], bool(user["pushes_enabled"]))
+    kb = keyboards.settings_keyboard(
+        user["unit"], user["e1rm_formula"], bool(user["pushes_enabled"]), bool(user["ai_comments_enabled"])
+    )
     await ui.safe_edit(callback, "🔧 Настройки:", reply_markup=kb)
     await callback.answer()
 
@@ -50,6 +52,13 @@ async def settings_formula(callback: CallbackQuery, state: FSMContext):
 async def settings_pushes(callback: CallbackQuery, state: FSMContext):
     user = await db.get_user(callback.from_user.id)
     await db.update_user(callback.from_user.id, pushes_enabled=0 if user["pushes_enabled"] else 1)
+    await show_settings(callback, state)
+
+
+@router.callback_query(F.data == "settings:ai_comments")
+async def settings_ai_comments(callback: CallbackQuery, state: FSMContext):
+    user = await db.get_user(callback.from_user.id)
+    await db.update_user(callback.from_user.id, ai_comments_enabled=0 if user["ai_comments_enabled"] else 1)
     await show_settings(callback, state)
 
 
