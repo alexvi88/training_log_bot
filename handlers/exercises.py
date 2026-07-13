@@ -208,7 +208,7 @@ def _exercise_detail_view(ex):
     b.button(text="✏️ Название", callback_data=f"exm:editname:{ex['id']}")
     b.button(text="🗑 Архивировать", callback_data=f"exm:archiveask:{ex['id']}")
     b.button(text="⬅️ Назад", callback_data="exm:backlist")
-    b.adjust(1)
+    b.adjust(2)
     info = [f"Название: <b>{escape(ex['name'])}</b>"]
     if ex["equipment"]:
         info.append(f"Оснастка: {ex['equipment']}")
