@@ -14,7 +14,7 @@ import ai_trainer
 import db
 import keyboards
 from fsm import AITrainerFlow
-from handlers.ai_trainer import INTRO_TEXT
+from handlers.ai_trainer import INTRO_TEXT, ai_keyboard
 
 router = Router(name="persistent_menu")
 
@@ -54,7 +54,7 @@ async def _open_ai_trainer(message: Message, state: FSMContext) -> None:
     await state.clear()
     await state.set_state(AITrainerFlow.chatting)
     await state.update_data(ai_history=[])
-    await message.answer(INTRO_TEXT, reply_markup=keyboards.ai_trainer_keyboard())
+    await message.answer(INTRO_TEXT, reply_markup=await ai_keyboard(message.from_user.id))
 
 
 @router.message(F.text == keyboards.BTN_AI)

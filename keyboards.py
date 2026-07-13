@@ -39,11 +39,15 @@ def main_menu(has_active_workout: bool) -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
-def ai_trainer_keyboard() -> InlineKeyboardMarkup:
+def ai_trainer_keyboard(has_active_workout: bool = False) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(text="🗑 Новый диалог", callback_data="ai:reset")
     b.button(text="⬅️ Меню", callback_data="ai:menu")
-    b.adjust(2)
+    if has_active_workout:
+        b.button(text="🏋️ К тренировке", callback_data="ai:resume_workout")
+        b.adjust(1, 2)
+    else:
+        b.adjust(1, 1)
     return b.as_markup()
 
 

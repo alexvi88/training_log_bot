@@ -5,6 +5,7 @@ are responsible for turning DB rows into the small view dataclasses below.
 """
 
 import datetime as dt
+import re
 from dataclasses import dataclass
 from html import escape
 from typing import Literal
@@ -126,9 +127,29 @@ def build_workout_summary(
     return "\n".join(lines)
 
 
+_MD_BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
+
+
+def _markdown_bold_to_html(text: str) -> str:
+    """Converts **bold** markers from the AI comment into Telegram <b> tags.
+
+    The model is asked to wrap exercise names in ** using their exact display
+    names; everything else is escaped as plain text, so stray * or HTML-special
+    characters elsewhere in the comment can't break the message.
+    """
+    parts = []
+    pos = 0
+    for m in _MD_BOLD_RE.finditer(text):
+        parts.append(escape(text[pos : m.start()]))
+        parts.append(f"<b>{escape(m.group(1))}</b>")
+        pos = m.end()
+    parts.append(escape(text[pos:]))
+    return "".join(parts)
+
+
 def build_ai_comment_block(comment: str) -> str:
     """Rendered as a card section prefixed by DIVIDER — same convention as highlights."""
-    return f"{DIVIDER}\n🤖 <b>Комментарий AI-тренера</b>\n\n{escape(comment)}"
+    return f"{DIVIDER}\n🤖 <b>Комментарий AI-тренера</b>\n\n{_markdown_bold_to_html(comment)}"
 
 
 def dashboard_stat_lines(dashboard) -> list[tuple[str, str]]:
