@@ -27,10 +27,14 @@ def _make_message(user_id: int):
 def _make_callback(user_id: int, data: str):
     message = MagicMock()
     message.delete = AsyncMock()
-    message.answer = AsyncMock(return_value=SimpleNamespace(message_id=1))
+    message.answer = AsyncMock(return_value=SimpleNamespace(message_id=1, chat=SimpleNamespace(id=user_id)))
+    bot = MagicMock()
+    bot.delete_message = AsyncMock()
+    bot.send_message = AsyncMock(return_value=SimpleNamespace(message_id=1))
     callback = MagicMock()
     callback.from_user = SimpleNamespace(id=user_id, username="tester")
     callback.message = message
+    callback.bot = bot
     callback.data = data
     callback.answer = AsyncMock()
     return callback
@@ -105,6 +109,45 @@ async def test_stale_finish_discards_empty_workout(fresh_db, user_id):
     await workout.stale_finish_workout(callback, state)
 
     assert await db.get_workout(workout_id) is None
+
+
+async def test_start_workout_asks_for_confirmation_before_creating(fresh_db, user_id):
+    db = fresh_db
+    state = await _make_state(user_id)
+    callback = _make_callback(user_id, "menu:start_workout")
+
+    await workout.start_workout(callback, state)
+
+    assert await db.get_active_workout(user_id) is None
+    text = callback.message.answer.await_args.args[0]
+    assert "Начать новую тренировку?" in text
+    kb = callback.message.answer.await_args.kwargs["reply_markup"]
+    callback_datas = [b.callback_data for row in kb.inline_keyboard for b in row]
+    assert "menu:confirm_start_workout" in callback_datas
+    assert "menu:cancel_start_workout" in callback_datas
+
+
+async def test_start_workout_confirm_creates_and_enters_picker(fresh_db, user_id):
+    db = fresh_db
+    state = await _make_state(user_id)
+    callback = _make_callback(user_id, "menu:confirm_start_workout")
+
+    await workout.confirm_start_workout(callback, state)
+
+    active = await db.get_active_workout(user_id)
+    assert active is not None
+    data = await state.get_data()
+    assert data["workout_id"] == active["id"]
+
+
+async def test_start_workout_cancel_creates_nothing(fresh_db, user_id):
+    db = fresh_db
+    state = await _make_state(user_id)
+    callback = _make_callback(user_id, "menu:cancel_start_workout")
+
+    await workout.cancel_start_workout(callback, state)
+
+    assert await db.get_active_workout(user_id) is None
 
 
 async def test_stale_delete_requires_confirmation_then_deletes(fresh_db, user_id):
