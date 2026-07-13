@@ -110,6 +110,19 @@ def test_build_workout_summary_italicizes_previous_session_in_history():
     assert "<i>  [прошлая: 95×8]</i>" in text
 
 
+# ---------- markdown_bold_to_html ----------
+
+
+def test_markdown_bold_to_html_converts_pairs():
+    assert formatting.markdown_bold_to_html("**pull down**") == "<b>pull down</b>"
+
+
+def test_markdown_bold_to_html_leaves_unmatched_star_pair_as_literal():
+    # Simulates a ** pair split across two Telegram chunks: neither half should
+    # produce an unclosed <b> tag.
+    assert formatting.markdown_bold_to_html("**pull down") == "**pull down"
+
+
 # ---------- build_ai_comment_block ----------
 
 

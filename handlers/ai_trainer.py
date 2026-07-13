@@ -215,7 +215,11 @@ async def _handle_question(
     chunks = [answer[i : i + TG_CHUNK] for i in range(0, len(answer), TG_CHUNK)]
     for i, chunk in enumerate(chunks):
         is_last = i == len(chunks) - 1
-        await message.answer(chunk, reply_markup=reply_markup if is_last else None)
+        await message.answer(
+            formatting.markdown_bold_to_html(chunk),
+            parse_mode="HTML",
+            reply_markup=reply_markup if is_last else None,
+        )
 
 
 @router.message(AITrainerFlow.chatting, F.text)
