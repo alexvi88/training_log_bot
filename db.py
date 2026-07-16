@@ -144,6 +144,14 @@ CREATE TABLE IF NOT EXISTS ai_chat_messages (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_ai_chat_messages_user ON ai_chat_messages (telegram_id, id);
+
+CREATE TABLE IF NOT EXISTS bodyweight_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    telegram_id INTEGER NOT NULL,
+    weight REAL NOT NULL,
+    logged_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_bodyweight_user ON bodyweight_logs (telegram_id, logged_at);
 """
 
 _conn: Optional[aiosqlite.Connection] = None
@@ -245,8 +253,6 @@ async def _migrate_schema() -> None:
     set_cols = await _column_names("sets")
     if "is_warmup" in set_cols:
         await _conn.execute("ALTER TABLE sets DROP COLUMN is_warmup")
-
-    await _conn.execute("DROP TABLE IF EXISTS bodyweight_logs")
 
     await _conn.commit()
 
@@ -1201,6 +1207,61 @@ async def get_ai_chat_history(telegram_id: int, limit: int = MAX_AI_CHAT_HISTORY
     )
     rows = await cur.fetchall()
     return list(reversed(rows))
+
+
+# ---------- bodyweight log ----------
+
+async def add_bodyweight_log(telegram_id: int, weight: float, logged_at: Optional[str] = None) -> int:
+    async with _write_lock:
+        cur = await conn().execute(
+            "INSERT INTO bodyweight_logs (telegram_id, weight, logged_at) VALUES (?, ?, ?)",
+            (telegram_id, weight, logged_at or now_iso()),
+        )
+        await conn().commit()
+        return cur.lastrowid
+
+
+async def list_bodyweight_logs(telegram_id: int, limit: Optional[int] = None) -> list[aiosqlite.Row]:
+    """Bodyweight entries oldest-first (for charting). With `limit`, the most recent N, still oldest-first."""
+    if limit is None:
+        cur = await conn().execute(
+            "SELECT * FROM bodyweight_logs WHERE telegram_id = ? ORDER BY logged_at, id",
+            (telegram_id,),
+        )
+        return await cur.fetchall()
+    cur = await conn().execute(
+        "SELECT * FROM bodyweight_logs WHERE telegram_id = ? ORDER BY logged_at DESC, id DESC LIMIT ?",
+        (telegram_id, limit),
+    )
+    return list(reversed(await cur.fetchall()))
+
+
+async def get_latest_bodyweight(telegram_id: int) -> Optional[aiosqlite.Row]:
+    cur = await conn().execute(
+        "SELECT * FROM bodyweight_logs WHERE telegram_id = ? ORDER BY logged_at DESC, id DESC LIMIT 1",
+        (telegram_id,),
+    )
+    return await cur.fetchone()
+
+
+async def delete_last_bodyweight(telegram_id: int) -> Optional[aiosqlite.Row]:
+    row = await get_latest_bodyweight(telegram_id)
+    if row is None:
+        return None
+    async with _write_lock:
+        await conn().execute("DELETE FROM bodyweight_logs WHERE id = ?", (row["id"],))
+        await conn().commit()
+    return row
+
+
+async def scale_bodyweight_logs(telegram_id: int, factor: float) -> None:
+    """Multiply every stored bodyweight by `factor` — used when a user switches units."""
+    async with _write_lock:
+        await conn().execute(
+            "UPDATE bodyweight_logs SET weight = weight * ? WHERE telegram_id = ?",
+            (factor, telegram_id),
+        )
+        await conn().commit()
 
 
 async def record_push(telegram_id: int, category: str, text: str) -> None:

@@ -316,6 +316,44 @@ def format_progress_screen(
     return "\n".join(lines).rstrip()
 
 
+def build_bodyweight_screen(logs: list, unit: str = "kg") -> str:
+    """Text for the ⚖️ Вес тела screen: latest value, change vs first/previous, count.
+
+    logs: rows with `weight` and `logged_at`, ascending by date (as db.list_bodyweight_logs returns).
+    """
+    u = UNIT_LABELS.get(unit, "кг")
+    if not logs:
+        return (
+            "⚖️ <b>ВЕС ТЕЛА</b>\n\nПока нет ни одной записи.\n"
+            "Нажми «➕ Записать вес» и введи текущий вес — дальше буду показывать динамику."
+        )
+    latest = logs[-1]
+    latest_weight = latest["weight"]
+    d = dt.datetime.fromisoformat(latest["logged_at"])
+    lines = [
+        "⚖️ <b>ВЕС ТЕЛА</b>",
+        "",
+        f"Сейчас: <b>{format_weight(latest_weight)} {u}</b> ({format_date_ru(d)})",
+    ]
+    if len(logs) >= 2:
+        prev = logs[-2]["weight"]
+        first = logs[0]["weight"]
+        step_delta = latest_weight - prev
+        total_delta = latest_weight - first
+        lines.append(f"С прошлой записи: {_signed_weight(step_delta, u)}")
+        lines.append(f"За всё время: {_signed_weight(total_delta, u)}")
+    n = plural_ru(len(logs), ("запись", "записи", "записей"))
+    lines.append(f"\nВсего {len(logs)} {n}.")
+    return "\n".join(lines)
+
+
+def _signed_weight(delta: float, unit_label: str) -> str:
+    if abs(delta) < 1e-9:
+        return f"→ 0 {unit_label}"
+    arrow = "↑" if delta > 0 else "↓"
+    return f"{arrow} {format_weight(abs(delta))} {unit_label}"
+
+
 def format_progression_hint(suggestion, unit: str = "kg") -> str:
     """One-line "🎯 Цель: …" nudge from analytics.suggest_progression."""
     u = UNIT_LABELS.get(unit, "кг")

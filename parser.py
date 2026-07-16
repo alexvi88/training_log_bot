@@ -73,6 +73,20 @@ def parse_single_token(token: str) -> list[ParsedSet]:
     return [ParsedSet(weight=weight, reps=reps, rpe=rpe) for _ in range(count)]
 
 
+_BODYWEIGHT_VALUE_RE = re.compile(r"^\d+(?:[.,]\d+)?$")
+
+
+def parse_bodyweight(text: str) -> float:
+    """A single positive body weight, e.g. '80', '80.5', '80,5'."""
+    raw = text.strip()
+    if not _BODYWEIGHT_VALUE_RE.match(raw):
+        raise ParseError("Не понял вес. Напиши число, например 80 или 80.5")
+    weight = float(raw.replace(",", "."))
+    if not (0 < weight < 1000):
+        raise ParseError("Странный вес — напиши реальное число в кг/lb")
+    return weight
+
+
 # ---------- date input: дд.мм.гггг ----------
 
 _DATE_RE = re.compile(r"^(?P<d>\d{1,2})[.\-/](?P<m>\d{1,2})[.\-/](?P<y>\d{2,4})$")

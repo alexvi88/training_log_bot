@@ -1,0 +1,111 @@
+"""⚖️ Вес тела — a lightweight bodyweight log with a trend chart.
+
+Only body weight is tracked (no other measurements). Entries are timestamped
+and stored in the user's current unit; switching units rescales them (see
+handlers/settings.py). The screen shows the latest value, change since the
+previous/first entry, and — once there are two points — a line chart.
+"""
+
+import asyncio
+import datetime as dt
+
+from aiogram import F, Router
+from aiogram.filters import StateFilter
+from aiogram.fsm.context import FSMContext
+from aiogram.types import BufferedInputFile, CallbackQuery, Message
+
+import charts
+import db
+import formatting
+import keyboards
+import ui
+from fsm import BodyweightFlow
+from parser import ParseError, parse_bodyweight
+
+router = Router(name="bodyweight")
+
+
+async def _render(event, state: FSMContext) -> None:
+    """Render (or re-render) the bodyweight screen for a Message or CallbackQuery."""
+    user_id = event.from_user.id
+    user = await db.get_user(user_id)
+    logs = await db.list_bodyweight_logs(user_id)
+    await state.set_state(BodyweightFlow.viewing)
+    text = formatting.build_bodyweight_screen(logs, user["unit"])
+    kb = keyboards.bodyweight_keyboard(has_logs=bool(logs))
+
+    png = None
+    if len(logs) >= 2:
+        points = [(dt.datetime.fromisoformat(r["logged_at"]), float(r["weight"])) for r in logs]
+        unit_label = formatting.UNIT_LABELS.get(user["unit"], "кг")
+        png = await asyncio.to_thread(
+            charts.render_metric_over_sessions, points, f"Вес тела, {unit_label}", unit_label
+        )
+
+    message = event.message if isinstance(event, CallbackQuery) else event
+    if png is None:
+        if isinstance(event, CallbackQuery):
+            await ui.safe_edit(event, text, reply_markup=kb, parse_mode="HTML")
+        else:
+            await message.answer(text, reply_markup=kb, parse_mode="HTML")
+    else:
+        photo = BufferedInputFile(png, filename="bodyweight.png")
+        if isinstance(event, CallbackQuery):
+            await ui.safe_edit_photo(event, png, "bodyweight.png", text, reply_markup=kb, parse_mode="HTML")
+        else:
+            await message.answer_photo(photo, caption=text, reply_markup=kb, parse_mode="HTML")
+
+
+async def show_bodyweight(callback: CallbackQuery, state: FSMContext) -> None:
+    await db.get_or_create_user(callback.from_user.id, callback.from_user.username)
+    await _render(callback, state)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "menu:bodyweight")
+async def menu_bodyweight(callback: CallbackQuery, state: FSMContext):
+    await show_bodyweight(callback, state)
+
+
+@router.callback_query(F.data == "bw:menu")
+async def bw_menu(callback: CallbackQuery, state: FSMContext):
+    from handlers.workout import _show_main_menu
+    await _show_main_menu(callback, state)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "bw:add")
+async def bw_add(callback: CallbackQuery, state: FSMContext):
+    user = await db.get_user(callback.from_user.id)
+    unit_label = formatting.UNIT_LABELS.get(user["unit"], "кг")
+    await state.set_state(BodyweightFlow.awaiting_weight)
+    await ui.safe_edit(
+        callback,
+        f"Напиши текущий вес тела в {unit_label} (например 80 или 80.5):",
+        reply_markup=keyboards.cancel_keyboard("bw:back"),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "bw:back")
+async def bw_back(callback: CallbackQuery, state: FSMContext):
+    await _render(callback, state)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "bw:undo")
+async def bw_undo(callback: CallbackQuery, state: FSMContext):
+    removed = await db.delete_last_bodyweight(callback.from_user.id)
+    await callback.answer("Удалил последнюю запись" if removed else "Нет записей")
+    await _render(callback, state)
+
+
+@router.message(StateFilter(BodyweightFlow.awaiting_weight))
+async def bw_weight_entered(message: Message, state: FSMContext):
+    try:
+        weight = parse_bodyweight(message.text)
+    except ParseError as e:
+        await message.reply(e.message)
+        return
+    await db.add_bodyweight_log(message.from_user.id, weight)
+    await _render(message, state)
