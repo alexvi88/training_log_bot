@@ -277,3 +277,35 @@ def test_compare_to_previous_session_computes_deltas():
     assert delta.prev_started_at == "2026-06-01T10:00:00"
     assert delta.e1rm_delta == pytest.approx(curr.top_e1rm - prev.top_e1rm)
     assert delta.tonnage_delta == pytest.approx(curr.tonnage - prev.tonnage)
+
+
+# ---------- suggest_progression ----------
+
+
+def test_suggest_progression_add_reps_below_top_of_range():
+    s = analytics.suggest_progression([(100, 8), (100, 8)], weight_step=2.5)
+    assert s.action == "add_reps"
+    assert (s.target_weight, s.target_reps) == (100, 9)
+
+
+def test_suggest_progression_add_weight_when_top_of_range_reached():
+    s = analytics.suggest_progression([(100, 10), (100, 10)], weight_step=2.5)
+    assert s.action == "add_weight"
+    assert s.target_weight == pytest.approx(102.5)
+    assert s.target_reps == analytics.REP_RANGE_MIN
+
+
+def test_suggest_progression_uses_heaviest_set_reps():
+    # Heaviest set is 100 for 8 reps; lighter warmup-ish sets ignored for the target.
+    s = analytics.suggest_progression([(80, 12), (100, 8)], weight_step=5)
+    assert (s.action, s.target_weight, s.target_reps) == ("add_reps", 100, 9)
+
+
+def test_suggest_progression_bodyweight_chases_one_more_rep():
+    s = analytics.suggest_progression([(0, 12), (0, 10)], weight_step=2.5)
+    assert s.is_bodyweight is True
+    assert s.target_reps == 13
+
+
+def test_suggest_progression_none_when_no_sets():
+    assert analytics.suggest_progression([], weight_step=2.5) is None

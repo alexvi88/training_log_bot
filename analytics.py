@@ -215,6 +215,43 @@ def compare_to_previous_session(sessions: list[SessionStats]) -> Optional[Compar
     )
 
 
+# Default hypertrophy working range the progression assistant nudges toward
+# (matches the AI trainer's methodology: 5-10 reps, double progression).
+REP_RANGE_MIN = 5
+REP_RANGE_MAX = 10
+
+
+@dataclass
+class ProgressionSuggestion:
+    action: str  # "add_weight" | "add_reps"
+    target_weight: float
+    target_reps: int  # add_reps: reps to beat; add_weight: bottom-of-range reps to restart at
+    is_bodyweight: bool = False
+
+
+def suggest_progression(
+    last_sets: list[tuple[float, int]], weight_step: float
+) -> Optional[ProgressionSuggestion]:
+    """Next-session target from last session's sets, by double progression.
+
+    While the top working set is still inside the rep range, add a rep at the
+    same weight; once it crossed the top of the range (>= REP_RANGE_MAX), bump
+    the weight by `weight_step` and restart at the bottom of the range.
+    Bodyweight sets (weight 0) simply chase one more rep.
+    """
+    working = [(w, r) for w, r in last_sets if r > 0]
+    if not working:
+        return None
+    if all(w == 0 for w, _ in working):
+        best_reps = max(r for _, r in working)
+        return ProgressionSuggestion("add_reps", 0.0, best_reps + 1, is_bodyweight=True)
+    top_weight = max(w for w, _ in working)
+    reps_at_top = max(r for w, r in working if w == top_weight)
+    if reps_at_top >= REP_RANGE_MAX:
+        return ProgressionSuggestion("add_weight", top_weight + weight_step, REP_RANGE_MIN)
+    return ProgressionSuggestion("add_reps", top_weight, reps_at_top + 1)
+
+
 @dataclass
 class Dashboard:
     total_workouts: int

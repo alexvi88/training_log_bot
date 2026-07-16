@@ -316,6 +316,20 @@ def format_progress_screen(
     return "\n".join(lines).rstrip()
 
 
+def format_progression_hint(suggestion, unit: str = "kg") -> str:
+    """One-line "🎯 Цель: …" nudge from analytics.suggest_progression."""
+    u = UNIT_LABELS.get(unit, "кг")
+    if suggestion.is_bodyweight:
+        return f"🎯 Цель: {suggestion.target_reps} повторов (на один больше прошлого)"
+    if suggestion.action == "add_weight":
+        top = suggestion.target_reps
+        return (
+            f"🎯 Цель: пора добавить вес — {format_weight(suggestion.target_weight)} {u} "
+            f"× {top}-{top + 1}"
+        )
+    return f"🎯 Цель: {format_set(suggestion.target_weight, suggestion.target_reps)} (тот же вес, +1 повтор)"
+
+
 def format_comparison_line(e1rm_delta: float, unit: str = "kg") -> str:
     u = UNIT_LABELS.get(unit, "кг")
     arrow = "↑" if e1rm_delta > 0 else ("↓" if e1rm_delta < 0 else "→")

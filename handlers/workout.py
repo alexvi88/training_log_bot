@@ -119,13 +119,22 @@ async def _log_one(block_id: int, exercise_id: int, weight: float, reps: int, rp
     await db.add_set(block_id, exercise_id, round_idx, 0, weight, reps, rpe)
 
 
-def _logging_hint(last_session: list[tuple[float, int]] | None, has_sets: bool) -> str:
-    base = "Напиши вес и повторы через пробел, например «100 8»"
+# Smallest sensible plate/step to suggest bumping to when a lift outgrows the
+# rep range — a rough default, since the bot doesn't know the actual increment.
+_WEIGHT_STEP = {"kg": 2.5, "lb": 5.0}
+
+
+def _logging_hint(last_session: list[tuple[float, int]] | None, has_sets: bool, unit: str = "kg") -> str:
+    base = "Напиши вес и повторы через пробел, например «100 8» (RPE — «100 8@9»)"
     if has_sets:
-        base += " (можно только повторы — вес возьмётся с прошлого подхода)"
+        base += "\nМожно только повторы — вес возьмётся с прошлого подхода"
     if last_session:
         sets_str = ", ".join(formatting.format_set(w, r) for w, r in last_session)
-        return f"В прошлый раз: {sets_str}\n{base}"
+        lines = [f"В прошлый раз: {sets_str}"]
+        suggestion = analytics.suggest_progression(last_session, _WEIGHT_STEP.get(unit, 2.5))
+        if suggestion is not None:
+            lines.append(formatting.format_progression_hint(suggestion, unit))
+        return "\n".join(lines) + f"\n{base}"
     return base
 
 
@@ -152,7 +161,7 @@ async def _render_logging_screen(bot, state: FSMContext, user):
     open_items = [(ex_id, names[ex_id]) for ex_id in open_ids]
     active_block_id = (data.get("open_blocks") or {}).get(active)
     has_sets = bool(active_block_id and await db.list_sets_for_block(active_block_id))
-    hint = _logging_hint(last_session_sets.get(active), has_sets)
+    hint = _logging_hint(last_session_sets.get(active), has_sets, user["unit"])
     kb = keyboards.logging_keyboard(open_items, active, has_sets)
     await _refresh_live(bot, state, user, data["workout_id"], hint, kb)
 
