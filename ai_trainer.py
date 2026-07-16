@@ -27,7 +27,7 @@ import asyncio
 import datetime as dt
 import json
 import logging
-from typing import Any, Optional
+from typing import Any, Awaitable, Callable, Optional
 
 from openai import AsyncOpenAI
 from xai_sdk import AsyncClient as AsyncXAIClient
@@ -431,6 +431,23 @@ TOOLS: list[dict[str, Any]] = [
     },
 ]
 
+# Опциональный колбэк для показа реального прогресса в running-сообщении (см.
+# handlers/ai_trainer.py): что сейчас происходит — вместо/вперемешку со
+# случайными фразами-заполнителями. Может не приходить (например, в тестах).
+StatusCallback = Optional[Callable[[str], Awaitable[None]]]
+
+# Человеко-читаемый статус для каждого инструмента — во что реально идёт вызов,
+# а не абстрактное "думаю".
+TOOL_STATUS_TEXTS: dict[str, str] = {
+    "get_training_overview": "📋 смотрю общую картину по тренировкам...",
+    "get_active_workout": "🏋️ проверяю текущую тренировку...",
+    "list_recent_workouts": "📒 поднимаю последние тренировки...",
+    "get_full_workout_history": "📚 просматриваю всю историю тренировок...",
+    "get_exercise_progress": "📈 смотрю прогресс по упражнению...",
+    "list_exercise_catalog": "📋 сверяюсь с каталогом упражнений...",
+    "get_full_chat_history": "🗂️ поднимаю историю переписки...",
+}
+
 _CATALOG_BY_GROUP: dict[str, list[str]] = {}
 for _group, _name in EXERCISE_TEMPLATES:
     _CATALOG_BY_GROUP.setdefault(_group, []).append(_name)
@@ -600,6 +617,7 @@ async def ask(
     question: str,
     history: list[dict[str, Any]],
     image_data_url: Optional[str] = None,
+    on_status: StatusCallback = None,
 ) -> str:
     """Один вопрос пользователя → готовый текст ответа.
 
@@ -610,6 +628,11 @@ async def ask(
     вопросом (data: URL, base64). Передаётся только в текущий ход; в history фото
     не попадают — модель не сможет пересмотреть их позже, только вспомнить по тексту.
 
+    on_status — опциональный колбэк, которому по ходу дела шлём текст того, что
+    реально сейчас происходит (веб-поиск, конкретный tool-call), чтобы вызывающая
+    сторона могла показать это пользователю вместо голого "думаю" (см.
+    handlers/ai_trainer.py).
+
     Пока не исчерпана дневная квота поисковых ответов (config.AI_SEARCH_DAILY_LIMIT),
     перед основным ответом идёт отдельный шаг живого веб/X-поиска (см.
     _web_search_findings) — модель сама решает, нужен ли он вопросу. Найденное (если
@@ -617,12 +640,12 @@ async def ask(
     """
     search_context = None
     if await db.get_ai_search_count_today(user_id) < config.AI_SEARCH_DAILY_LIMIT:
-        search_context = await _web_search_findings(user_id, question, history, image_data_url)
+        search_context = await _web_search_findings(user_id, question, history, image_data_url, on_status)
     logger.info(
         "AI trainer question from user %s: %r (web search used: %s)",
         user_id, question, bool(search_context),
     )
-    return await _ask_plain(user_id, question, history, image_data_url, search_context)
+    return await _ask_plain(user_id, question, history, image_data_url, search_context, on_status)
 
 
 def _plain_user_content(question: str, image_data_url: Optional[str]) -> Any:
@@ -640,6 +663,7 @@ async def _ask_plain(
     history: list[dict[str, Any]],
     image_data_url: Optional[str] = None,
     search_context: Optional[str] = None,
+    on_status: StatusCallback = None,
 ) -> str:
     client = _get_client()
     messages: list[dict[str, Any]] = [
@@ -666,6 +690,11 @@ async def _ask_plain(
         message = response.choices[0].message
         if not message.tool_calls:
             break
+        if on_status:
+            status_text = TOOL_STATUS_TEXTS.get(
+                message.tool_calls[0].function.name, "🔍 копаюсь в данных..."
+            )
+            await on_status(status_text)
         messages.append(
             {
                 "role": "assistant",
@@ -720,6 +749,7 @@ async def _web_search_findings(
     question: str,
     history: list[dict[str, Any]],
     image_data_url: Optional[str] = None,
+    on_status: StatusCallback = None,
 ) -> Optional[str]:
     """Отдельный шаг перед основным ответом: чистый server-side веб/X-поиск, без
     наших DB-инструментов — их смешивание с multi-agent моделью в одном вызове
@@ -730,8 +760,11 @@ async def _web_search_findings(
     web_search/x_search — server-side: модель вызывает их и получает результаты
     в рамках одного sample(), без tool_calls, которые нужно было бы исполнять
     самим — поэтому реальное использование поиска видно только постфактум, по
-    citations/server_side_tool_usage в ответе.
+    citations/server_side_tool_usage в ответе. Сам шаг занимает заметное время
+    независимо от исхода, поэтому статус про поиск шлём заранее, а не постфактум.
     """
+    if on_status:
+        await on_status("🔎 ищу свежую информацию в сети...")
     try:
         sdk_client = await _get_sdk_client()
         chat_session = sdk_client.chat.create(
