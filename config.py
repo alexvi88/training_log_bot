@@ -15,6 +15,10 @@ ADMIN_REPORT_HOUR = int(os.getenv("ADMIN_REPORT_HOUR", "9"))
 
 DEFAULT_UNIT = "kg"
 
+# Pounds per kilogram — used to convert every stored weight when a user
+# switches units, so history stays physically correct instead of just relabeled.
+LB_PER_KG = 2.20462
+
 # e1RM formula: "epley" or "brzycki"
 DEFAULT_E1RM_FORMULA = os.getenv("E1RM_FORMULA", "epley")
 

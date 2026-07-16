@@ -7,6 +7,7 @@ from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import BufferedInputFile, CallbackQuery
 
+import config
 import db
 import formatting
 import keyboards
@@ -38,15 +39,17 @@ async def settings_back(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "settings:unit")
 async def settings_unit(callback: CallbackQuery, state: FSMContext):
-    user = await db.get_user(callback.from_user.id)
-    new_unit = "lb" if user["unit"] == "kg" else "kg"
-    await db.update_user(callback.from_user.id, unit=new_unit)
+    user_id = callback.from_user.id
+    user = await db.get_user(user_id)
+    old_unit = user["unit"]
+    new_unit = "lb" if old_unit == "kg" else "kg"
+    factor = config.LB_PER_KG if new_unit == "lb" else 1 / config.LB_PER_KG
+    await db.scale_user_set_weights(user_id, factor)
+    await db.scale_bodyweight_logs(user_id, factor)
+    await db.update_user(user_id, unit=new_unit)
     await show_settings(
         callback, state,
-        alert=(
-            "⚠️ Это только смена подписи — вес не пересчитывается. "
-            "Вся история так и останется в старых цифрах."
-        ),
+        alert=f"Единицы переключены на {new_unit}. Все веса в истории пересчитаны автоматически.",
     )
 
 

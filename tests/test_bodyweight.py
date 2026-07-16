@@ -63,7 +63,7 @@ async def test_scale_bodyweight_logs(user_id):
     await dbmod.add_bodyweight_log(user_id, 100.0, logged_at="2026-01-01T10:00:00")
     await dbmod.scale_bodyweight_logs(user_id, 2.20462)
     latest = await dbmod.get_latest_bodyweight(user_id)
-    assert latest["weight"] == pytest.approx(220.462)
+    assert latest["weight"] == pytest.approx(220.5)  # rounded to 1 decimal
 
 
 # ---------- screen text ----------
@@ -83,3 +83,23 @@ def test_bodyweight_screen_with_deltas():
     assert "Сейчас: <b>80 кг</b>" in text
     assert "С прошлой записи: ↓ 2 кг" in text
     assert "За всё время: ↓ 2 кг" in text
+
+
+# ---------- unit conversion: set weights ----------
+
+
+@pytest.mark.asyncio
+async def test_scale_user_set_weights_converts_nonzero_only(user_id):
+    groups = await dbmod.list_muscle_groups(None, global_only=True)
+    gid = groups[0]["id"]
+    ex_id = await dbmod.create_exercise(user_id, "Жим", gid)
+    wid = await dbmod.create_finished_workout(user_id, "2026-01-01T10:00:00", "2026-01-01T10:30:00")
+    block_id = await dbmod.create_block(wid, "single")
+    await dbmod.add_block_exercise(block_id, ex_id, 0)
+    await dbmod.add_set(block_id, ex_id, 1, 0, 100.0, 8)
+    await dbmod.add_set(block_id, ex_id, 2, 0, 0.0, 12)  # bodyweight set
+
+    await dbmod.scale_user_set_weights(user_id, dbmod.config.LB_PER_KG)
+
+    weights = sorted(s["weight"] for s in await dbmod.list_sets_for_block(block_id))
+    assert weights == [0.0, pytest.approx(220.5)]  # zero untouched, 100 -> 220.5

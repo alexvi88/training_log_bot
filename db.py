@@ -1380,7 +1380,20 @@ async def scale_bodyweight_logs(telegram_id: int, factor: float) -> None:
     """Multiply every stored bodyweight by `factor` — used when a user switches units."""
     async with _write_lock:
         await conn().execute(
-            "UPDATE bodyweight_logs SET weight = weight * ? WHERE telegram_id = ?",
+            "UPDATE bodyweight_logs SET weight = ROUND(weight * ?, 1) WHERE telegram_id = ?",
+            (factor, telegram_id),
+        )
+        await conn().commit()
+
+
+async def scale_user_set_weights(telegram_id: int, factor: float) -> None:
+    """Convert every logged set weight for a user by `factor` (bodyweight 0-sets untouched)."""
+    async with _write_lock:
+        await conn().execute(
+            "UPDATE sets SET weight = ROUND(weight * ?, 1) "
+            "WHERE weight != 0 AND block_id IN ("
+            "  SELECT b.id FROM workout_blocks b JOIN workouts w ON w.id = b.workout_id "
+            "  WHERE w.user_id = ?)",
             (factor, telegram_id),
         )
         await conn().commit()
