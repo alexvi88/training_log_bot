@@ -892,7 +892,15 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
         duration_seconds=duration_seconds,
     )
     highlights = formatting.build_exercise_highlights(highlight_groups)
-    full_text = summary + (f"\n\n{formatting.DIVIDER}\n\n{highlights}" if highlights else "")
+    full_text = summary
+    # Backfilled/imported past workouts shouldn't fire the "Nth workout" milestone —
+    # they're entered out of order, so the running count isn't meaningful for them.
+    if not is_backfill:
+        total_finished = await db.count_workouts(user_id)
+        if analytics.is_workout_milestone(total_finished):
+            full_text += "\n\n" + formatting.format_milestone_line(total_finished)
+    if highlights:
+        full_text += f"\n\n{formatting.DIVIDER}\n\n{highlights}"
     if is_backfill:
         full_text = "✅ Сохранено как прошлая тренировка\n\n" + full_text
 

@@ -225,6 +225,18 @@ WEEKLY_VOLUME_MIN = 5
 WEEKLY_VOLUME_MAX = 10
 
 
+# Finished-workout counts worth celebrating right on the completion card
+# (not a push — the user is looking at the screen the moment it happens).
+_SMALL_MILESTONES = frozenset({1, 10, 25, 50, 75})
+
+
+def is_workout_milestone(total_finished: int) -> bool:
+    """True on the 1st/10th/25th/50th/75th workout, then every 100th (100, 200, …)."""
+    if total_finished <= 0:
+        return False
+    return total_finished in _SMALL_MILESTONES or total_finished % 100 == 0
+
+
 def classify_weekly_volume(sets_count: int) -> str:
     """Bucket a group's weekly set count vs the target range: none/low/in_range/high."""
     if sets_count <= 0:

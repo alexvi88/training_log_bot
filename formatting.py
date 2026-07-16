@@ -162,6 +162,14 @@ def markdown_bold_to_html(text: str) -> str:
     return "".join(parts)
 
 
+def format_milestone_line(total_finished: int) -> str:
+    """Celebratory one-liner for a round finished-workout count (see analytics.is_workout_milestone)."""
+    if total_finished == 1:
+        return "🎉 <b>Первая тренировка в дневнике — поехали!</b>"
+    word = plural_ru(total_finished, ("тренировка", "тренировки", "тренировок"))
+    return f"🎉 <b>Юбилей: {total_finished} {word}!</b> Так держать."
+
+
 def build_ai_comment_block(comment: str) -> str:
     """Rendered as a card section prefixed by DIVIDER — same convention as highlights."""
     return f"{DIVIDER}\n🤖 <b>Комментарий AI-тренера</b>\n\n{markdown_bold_to_html(comment)}"

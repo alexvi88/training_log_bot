@@ -309,3 +309,16 @@ def test_suggest_progression_bodyweight_chases_one_more_rep():
 
 def test_suggest_progression_none_when_no_sets():
     assert analytics.suggest_progression([], weight_step=2.5) is None
+
+
+# ---------- is_workout_milestone ----------
+
+
+@pytest.mark.parametrize("n", [1, 10, 25, 50, 75, 100, 200, 300, 1000])
+def test_is_workout_milestone_true(n):
+    assert analytics.is_workout_milestone(n) is True
+
+
+@pytest.mark.parametrize("n", [0, 2, 9, 11, 26, 99, 101, 150, 250])
+def test_is_workout_milestone_false(n):
+    assert analytics.is_workout_milestone(n) is False
