@@ -99,13 +99,33 @@ def _pick_different(replies: list[str], exclude: Optional[str]) -> str:
     return choice
 
 
-async def _cycle_running_messages(placeholder: Message, initial_text: str) -> None:
-    last_text = initial_text
-    while True:
-        await asyncio.sleep(RUNNING_INTERVAL)
-        last_text = _pick_different(RUNNING_REPLIES, last_text)
-        with suppress(TelegramBadRequest):
-            await placeholder.edit_text(last_text)
+class _RunningDisplay:
+    """Крутит placeholder, пока модель думает. Реальные статусы от ai_trainer.ask
+    (веб-поиск, конкретный tool-call — см. StatusCallback) идут через set_status и
+    показывают, что происходит на самом деле; в паузах между ними (или если модель
+    отвечает без единого tool-call) cycle_idle крутит случайные фразы-заполнители,
+    чтобы сообщение не выглядело зависшим."""
+
+    def __init__(self, placeholder: Message, initial_text: str) -> None:
+        self._placeholder = placeholder
+        self._last_text = initial_text
+        self._lock = asyncio.Lock()
+
+    async def set_status(self, text: str) -> None:
+        async with self._lock:
+            if text == self._last_text:
+                return
+            self._last_text = text
+            with suppress(TelegramBadRequest):
+                await self._placeholder.edit_text(text)
+
+    async def cycle_idle(self) -> None:
+        while True:
+            await asyncio.sleep(RUNNING_INTERVAL)
+            async with self._lock:
+                self._last_text = _pick_different(RUNNING_REPLIES, self._last_text)
+                with suppress(TelegramBadRequest):
+                    await self._placeholder.edit_text(self._last_text)
 
 
 async def ai_keyboard(user_id: int) -> InlineKeyboardMarkup:
@@ -234,9 +254,12 @@ async def _handle_question(
     _busy.add(user_id)
     running_text = _pick(RUNNING_REPLIES)
     placeholder = await message.answer(running_text)
-    running_task = asyncio.create_task(_cycle_running_messages(placeholder, running_text))
+    display = _RunningDisplay(placeholder, running_text)
+    running_task = asyncio.create_task(display.cycle_idle())
     try:
-        answer = await ai_trainer.ask(user_id, question, history, image_data_url=image_data_url)
+        answer = await ai_trainer.ask(
+            user_id, question, history, image_data_url=image_data_url, on_status=display.set_status
+        )
     except Exception:
         logger.exception("AI trainer request failed for user %s", user_id)
         with suppress(TelegramBadRequest):
