@@ -26,6 +26,7 @@ from handlers import (
     history,
     persistent_menu,
     settings,
+    volume,
     workout,
 )
 
@@ -159,6 +160,7 @@ async def main() -> None:
     dp.include_router(edit_workout.router)
     dp.include_router(ai_trainer.router)
     dp.include_router(bodyweight.router)
+    dp.include_router(volume.router)
     dp.include_router(settings.router)
     dp.include_router(fallback.router)
 

@@ -220,6 +220,21 @@ def compare_to_previous_session(sessions: list[SessionStats]) -> Optional[Compar
 REP_RANGE_MIN = 5
 REP_RANGE_MAX = 10
 
+# Weekly working-set landmarks per muscle group (same methodology: 5-10 sets/week).
+WEEKLY_VOLUME_MIN = 5
+WEEKLY_VOLUME_MAX = 10
+
+
+def classify_weekly_volume(sets_count: int) -> str:
+    """Bucket a group's weekly set count vs the target range: none/low/in_range/high."""
+    if sets_count <= 0:
+        return "none"
+    if sets_count < WEEKLY_VOLUME_MIN:
+        return "low"
+    if sets_count > WEEKLY_VOLUME_MAX:
+        return "high"
+    return "in_range"
+
 
 @dataclass
 class ProgressionSuggestion:

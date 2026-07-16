@@ -819,6 +819,28 @@ async def list_finished_workout_dates(user_id: int) -> list[str]:
     return [r["d"] for r in await cur.fetchall()]
 
 
+async def weekly_volume_by_group(
+    user_id: int, start_date: str, end_date: str
+) -> dict[Optional[int], int]:
+    """Count of working sets per muscle group across finished workouts in [start_date, end_date].
+
+    Keyed by exercises.primary_group_id (None bucketed under the NULL key). Dates
+    are calendar days (YYYY-MM-DD) compared against date(workouts.started_at).
+    """
+    cur = await conn().execute(
+        "SELECT e.primary_group_id AS gid, COUNT(s.id) AS cnt "
+        "FROM sets s "
+        "JOIN workout_blocks b ON b.id = s.block_id "
+        "JOIN workouts w ON w.id = b.workout_id "
+        "JOIN exercises e ON e.id = s.exercise_id "
+        "WHERE w.user_id = ? AND w.status = 'finished' "
+        "AND date(w.started_at) BETWEEN ? AND ? "
+        "GROUP BY e.primary_group_id",
+        (user_id, start_date, end_date),
+    )
+    return {row["gid"]: row["cnt"] for row in await cur.fetchall()}
+
+
 # ---------- blocks / block exercises ----------
 
 async def create_block(workout_id: int, block_type: str) -> int:

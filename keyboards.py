@@ -34,9 +34,10 @@ def main_menu(has_active_workout: bool) -> InlineKeyboardMarkup:
     b.button(text="📈 Прогресс", callback_data="menu:progress")
     b.button(text="📚 История", callback_data="menu:history")
     b.button(text="⚙️ Упражнения", callback_data="menu:exercises")
+    b.button(text="💪 Объём/нед", callback_data="menu:volume")
     b.button(text="⚖️ Вес тела", callback_data="menu:bodyweight")
     b.button(text="🔧 Настройки", callback_data="menu:settings")
-    b.adjust(1, 2, 2, 1)
+    b.adjust(1, 2, 2, 2)
     return b.as_markup()
 
 
@@ -322,6 +323,17 @@ def settings_keyboard(
     b.button(text="📥 Импорт CSV", callback_data="settings:import")
     b.button(text="⬅️ Назад", callback_data="settings:back")
     b.adjust(1)
+    return b.as_markup()
+
+
+def weekly_volume_keyboard(week_offset: int) -> InlineKeyboardMarkup:
+    """week_offset: 0 = current week, 1 = last week, … (older to the left)."""
+    b = InlineKeyboardBuilder()
+    b.button(text="⬅️ Прошлая неделя", callback_data=f"vol:wk:{week_offset + 1}")
+    if week_offset > 0:
+        b.button(text="Следующая ➡️", callback_data=f"vol:wk:{week_offset - 1}")
+    b.button(text="⬅️ Главное меню", callback_data="vol:menu")
+    b.adjust(2, 1) if week_offset > 0 else b.adjust(1, 1)
     return b.as_markup()
 
 
