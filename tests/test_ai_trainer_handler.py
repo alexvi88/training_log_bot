@@ -178,3 +178,38 @@ async def test_ai_voice_question_forwards_transcribed_text_as_question(fresh_db,
     handle_question.assert_awaited_once_with(
         message, state, "как мой прогресс", history_question="как мой прогресс"
     )
+
+
+def _make_message(user_id: int, text: str):
+    message = MagicMock()
+    message.text = text
+    message.from_user = SimpleNamespace(id=user_id, username="tester")
+    message.reply = AsyncMock()
+    message.answer = AsyncMock(return_value=SimpleNamespace(chat=SimpleNamespace(id=user_id), message_id=9))
+    message.bot = MagicMock()
+    return message
+
+
+async def test_ai_question_daily_limit_blocks_before_calling_model(fresh_db, user_id, monkeypatch):
+    import config
+
+    for _ in range(config.AI_QUESTION_DAILY_LIMIT):
+        await fresh_db.increment_ai_question_count(user_id)
+
+    called = False
+
+    async def fake_ask(*args, **kwargs):
+        nonlocal called
+        called = True
+        return "should not run"
+
+    monkeypatch.setattr(ai_trainer.ai_trainer, "ask", fake_ask)
+
+    state = await _make_state(user_id)
+    await state.set_state("AITrainerFlow:chatting")
+    message = _make_message(user_id, "как жим?")
+    await ai_trainer.ai_question(message, state)
+
+    assert called is False
+    message.reply.assert_awaited_once()
+    assert "лимит" in message.reply.await_args.args[0].lower()

@@ -13,6 +13,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 
 import ai_trainer
+import config
 import db
 import formatting
 import keyboards
@@ -248,9 +249,16 @@ async def _handle_question(
         await message.reply("Секунду, ещё думаю над прошлым вопросом 😅")
         return
 
+    if await db.get_ai_question_count_today(user_id) >= config.AI_QUESTION_DAILY_LIMIT:
+        await message.reply(
+            "На сегодня лимит вопросов исчерпан 😮‍💨 Дай тренеру передохнуть — возвращайся завтра."
+        )
+        return
+
     data = await state.get_data()
     history = data.get("ai_history", [])
 
+    await db.increment_ai_question_count(user_id)
     _busy.add(user_id)
     running_text = _pick(RUNNING_REPLIES)
     placeholder = await message.answer(running_text)

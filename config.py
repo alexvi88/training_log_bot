@@ -60,6 +60,11 @@ GROK_SEARCH_MODEL = os.getenv("GROK_SEARCH_MODEL", "grok-4.20-multi-agent")
 # normally (own tools only, no live search) until the next day.
 AI_SEARCH_DAILY_LIMIT = int(os.getenv("AI_SEARCH_DAILY_LIMIT", "40"))
 
+# Soft per-user daily cap on AI-trainer questions overall (any kind). Guards
+# against a single user running up unbounded model cost; when hit, the trainer
+# politely defers until the next day. Generous by default.
+AI_QUESTION_DAILY_LIMIT = int(os.getenv("AI_QUESTION_DAILY_LIMIT", "50"))
+
 # Delay after finishing a workout before the hydration/protein followup push fires.
 FOLLOWUP_DELAY_HOURS = int(os.getenv("FOLLOWUP_DELAY_HOURS", "2"))
 
