@@ -125,7 +125,7 @@ def _logging_hint(last_session: list[tuple[float, int]] | None, has_sets: bool) 
         base += " (можно только повторы — вес возьмётся с прошлого подхода)"
     if last_session:
         sets_str = ", ".join(formatting.format_set(w, r) for w, r in last_session)
-        return f"В прошлый раз: {sets_str}\n{base}"
+        return f"<i>💡 В прошлый раз: {sets_str}</i>\n\n{base}"
     return base
 
 
