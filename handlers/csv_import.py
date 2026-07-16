@@ -26,6 +26,7 @@ SYNONYMS = {
     "weight": {"вес", "weight"},
     "reps": {"повторы", "reps"},
     "round": {"подход", "раунд", "round", "set", "round_index"},
+    "rpe": {"rpe", "рпе"},
 }
 
 
@@ -152,6 +153,13 @@ def _build_workout_groups(rows: list[list[str]], mapping: dict[str, int]) -> lis
             if "round" in mapping:
                 round_text = row[mapping["round"]].strip()
                 round_val = int(round_text) if round_text else None
+            rpe_val = None
+            if "rpe" in mapping and mapping["rpe"] < len(row):
+                rpe_text = row[mapping["rpe"]].strip()
+                if rpe_text:
+                    rpe_val = float(rpe_text.replace(",", "."))
+                    if not (0 < rpe_val <= 10):
+                        raise ParseError(f"RPE вне диапазона 1-10: «{rpe_text}»")
         except ParseError as e:
             raise ParseError(f"Строка {line_no}: {e.message}") from None
         except (ValueError, IndexError):
@@ -170,7 +178,7 @@ def _build_workout_groups(rows: list[list[str]], mapping: dict[str, int]) -> lis
         if name not in groups[date_iso]:
             groups[date_iso][name] = []
             name_order[date_iso].append(name)
-        groups[date_iso][name].append((round_val, weight, reps))
+        groups[date_iso][name].append((round_val, weight, reps, rpe_val))
 
     workouts = []
     for date_iso in date_order:
@@ -179,7 +187,7 @@ def _build_workout_groups(rows: list[list[str]], mapping: dict[str, int]) -> lis
             rows_for_ex = groups[date_iso][name]
             if all(r[0] is not None for r in rows_for_ex):
                 rows_for_ex = sorted(rows_for_ex, key=lambda r: r[0])
-            entries.append({"name": name, "sets": [[w, r] for _, w, r in rows_for_ex]})
+            entries.append({"name": name, "sets": [[w, r, rpe] for _, w, r, rpe in rows_for_ex]})
         workouts.append({"date": date_iso, "entries": entries})
     return workouts
 
@@ -262,8 +270,8 @@ async def import_save(callback: CallbackQuery, state: FSMContext):
             block_id = await db.create_block(workout_id, "single")
             await db.add_block_exercise(block_id, ex_id, 0)
             await db.touch_exercise_last_used(ex_id)
-            for idx, (weight, reps) in enumerate(entry["sets"], start=1):
-                await db.add_set(block_id, ex_id, idx, 0, weight, reps)
+            for idx, (weight, reps, rpe) in enumerate(entry["sets"], start=1):
+                await db.add_set(block_id, ex_id, idx, 0, weight, reps, rpe)
 
     await state.clear()
     await ui.safe_edit(callback, f"✅ Импортировано {len(workouts)} тренировок.")

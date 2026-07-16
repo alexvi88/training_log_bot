@@ -28,9 +28,9 @@ STALE_WORKOUT_HOURS = 6
 RECENT_EXERCISES_LIMIT = 12
 
 # Engagement pushes (streaks, skip reminders, plateau nudges, weekly digest — see
-# PUSH_IDEAS.md). Off by default so a fresh deploy doesn't start messaging users
-# until this has been reviewed.
-ENGAGEMENT_ENABLED = os.getenv("ENGAGEMENT_ENABLED", "false").lower() == "true"
+# PUSH_IDEAS.md). On by default; set ENGAGEMENT_ENABLED=false in the environment
+# to silence the daily job entirely without touching per-user opt-outs.
+ENGAGEMENT_ENABLED = os.getenv("ENGAGEMENT_ENABLED", "true").lower() == "true"
 
 # Local hour (0-23) at which the daily engagement job evaluates and sends pushes.
 ENGAGEMENT_HOUR = int(os.getenv("ENGAGEMENT_HOUR", "19"))

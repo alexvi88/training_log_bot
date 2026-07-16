@@ -114,9 +114,9 @@ async def _delete_message(message: Message):
         await message.delete()
 
 
-async def _log_one(block_id: int, exercise_id: int, weight: float, reps: int):
+async def _log_one(block_id: int, exercise_id: int, weight: float, reps: int, rpe: float | None = None):
     round_idx = await db.next_round_index(block_id, exercise_id)
-    await db.add_set(block_id, exercise_id, round_idx, 0, weight, reps)
+    await db.add_set(block_id, exercise_id, round_idx, 0, weight, reps, rpe)
 
 
 def _logging_hint(last_session: list[tuple[float, int]] | None, has_sets: bool) -> str:
@@ -645,7 +645,7 @@ async def log_set_text(message: Message, state: FSMContext):
     prev_weight, _ = last_by.get(active) or (0.0, 0)
     for ps in parsed:
         weight = prev_weight if (ps.weight_omitted and prev_weight) else ps.weight
-        await _log_one(block_id, active, weight, ps.reps)
+        await _log_one(block_id, active, weight, ps.reps, ps.rpe)
         prev_weight = weight
     last_by[active] = (prev_weight, parsed[-1].reps)
     await state.update_data(last_by_exercise=last_by)

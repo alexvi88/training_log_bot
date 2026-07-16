@@ -137,7 +137,7 @@ async def editw_editset_entered(message: Message, state: FSMContext):
         await message.reply(e.message)
         return
     data = await state.get_data()
-    await db.update_set(data["edit_set_id"], parsed[0].weight, parsed[0].reps)
+    await db.update_set(data["edit_set_id"], parsed[0].weight, parsed[0].reps, parsed[0].rpe)
     await message.reply("Готово.")
     await _delete_message(message)
     await show_edit_screen(message, state, data["edit_workout_id"])
@@ -174,7 +174,7 @@ async def editw_addset_entered(message: Message, state: FSMContext):
     order_in_round = next((be["order_in_block"] for be in block_exs if be["exercise_id"] == ex_id), 0)
     for ps in parsed:
         round_idx = await db.next_round_index(block_id, ex_id)
-        await db.add_set(block_id, ex_id, round_idx, order_in_round, ps.weight, ps.reps)
+        await db.add_set(block_id, ex_id, round_idx, order_in_round, ps.weight, ps.reps, ps.rpe)
     await message.reply("Сет добавлен.")
     await _delete_message(message)
     await show_edit_screen(message, state, data["edit_workout_id"])

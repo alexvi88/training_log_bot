@@ -453,6 +453,13 @@ for _group, _name in EXERCISE_TEMPLATES:
     _CATALOG_BY_GROUP.setdefault(_group, []).append(_name)
 
 
+def _fmt_set(row: Any) -> str:
+    """'100x8' or, when RPE was logged, '100x8@9' — as the model sees a set."""
+    base = f"{row['weight']:g}x{row['reps']}"
+    rpe = row["rpe"]
+    return f"{base}@{rpe:g}" if rpe is not None else base
+
+
 # ---------- tool executors (все данные строго по user_id) ----------
 
 async def _training_overview(user_id: int) -> dict[str, Any]:
@@ -497,7 +504,7 @@ async def _active_workout(user_id: int) -> dict[str, Any]:
         exercises.append(
             {
                 "name": ex["display_name"],
-                "sets": [f"{s['weight']:g}x{s['reps']}" for s in sets],
+                "sets": [_fmt_set(s) for s in sets],
             }
         )
     return {
@@ -522,7 +529,7 @@ async def _recent_workouts(user_id: int, limit: int) -> dict[str, Any]:
             exercises.append(
                 {
                     "name": ex["display_name"],
-                    "sets": [f"{s['weight']:g}x{s['reps']}" for s in sets],
+                    "sets": [_fmt_set(s) for s in sets],
                 }
             )
         result.append(

@@ -38,8 +38,15 @@ def format_weight(weight: float) -> str:
     return f"{weight:.1f}".rstrip("0").rstrip(".")
 
 
-def format_set(weight: float, reps: int) -> str:
-    return f"{format_weight(weight)}×{reps}"
+def format_rpe(rpe: float | None) -> str:
+    """Trailing "@9" / "@8.5" suffix for a set, or empty string when no RPE was logged."""
+    if rpe is None:
+        return ""
+    return f" @{format_weight(rpe)}"
+
+
+def format_set(weight: float, reps: int, rpe: float | None = None) -> str:
+    return f"{format_weight(weight)}×{reps}{format_rpe(rpe)}"
 
 
 def format_date_ru(d: dt.datetime) -> str:
@@ -65,6 +72,12 @@ class ExerciseBlockView:
     type: Literal["single"] = "single"
     exercise_id: int | None = None
     prev_sets: list[tuple[float, int]] | None = None  # sets from the previous session, if any
+    set_rpes: list[float | None] | None = None  # per-set RPE, aligned with `sets`; None = none logged
+
+    def rpe_for(self, index: int) -> float | None:
+        if not self.set_rpes or index >= len(self.set_rpes):
+            return None
+        return self.set_rpes[index]
 
     @property
     def tonnage(self) -> float:
@@ -90,7 +103,7 @@ BlockView = ExerciseBlockView
 def _render_single_block(block: ExerciseBlockView, show_extra: bool, italic_prev: bool = False) -> list[str]:
     label = f"{escape(block.exercise_name)} [{block.group_name.upper()}]"
     lines = [f"<b>{label}</b>"]
-    lines.extend(f"  • {format_set(w, r)}" for w, r in block.sets)
+    lines.extend(f"  • {format_set(w, r, block.rpe_for(i))}" for i, (w, r) in enumerate(block.sets))
     if show_extra and block.sets:
         if block.is_bodyweight:
             lines.append(f"  ↳ повторов всего {sum(r for _, r in block.sets)}")
@@ -193,7 +206,7 @@ def build_workout_card(
 
     for block in blocks:
         body.append(f"{block.exercise_name} [{block.group_name.upper()}]")
-        body.append("  " + ", ".join(format_set(w, r) for w, r in block.sets))
+        body.append("  " + ", ".join(format_set(w, r, block.rpe_for(i)) for i, (w, r) in enumerate(block.sets)))
         exercise_count += 1
         set_count += len(block.sets)
         tonnage += block.tonnage
@@ -218,7 +231,7 @@ def build_live_session_text(
             body_lines.append("")
         prefix = "▶ " if active_exercise_id is not None and block.exercise_id == active_exercise_id else ""
         body_lines.append(f"{prefix}<b>{escape(block.exercise_name)}</b>")
-        body_lines.extend(f"  • {format_set(w, r)}" for w, r in block.sets)
+        body_lines.extend(f"  • {format_set(w, r, block.rpe_for(i))}" for i, (w, r) in enumerate(block.sets))
     lines = list(body_lines)
     if not lines and not hint:
         lines = ["Добавь упражнение, чтобы начать."]

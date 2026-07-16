@@ -174,6 +174,29 @@ def test_build_live_session_text_appends_hint_after_divider():
     assert text.endswith(f"{formatting.DIVIDER}\nЧто дальше?")
 
 
+# ---------- RPE display ----------
+
+
+def test_format_set_with_rpe():
+    assert formatting.format_set(100.0, 8, 9.0) == "100×8 @9"
+    assert formatting.format_set(100.0, 8, 8.5) == "100×8 @8.5"
+
+
+def test_format_set_without_rpe_unchanged():
+    assert formatting.format_set(100.0, 8) == "100×8"
+    assert formatting.format_set(100.0, 8, None) == "100×8"
+
+
+def test_live_session_shows_rpe_only_where_logged():
+    block = ExerciseBlockView(
+        group_name="грудь", exercise_name="Жим", sets=[(100.0, 8), (100.0, 7)],
+        set_rpes=[9.0, None], exercise_id=1,
+    )
+    lines = formatting.build_live_session_text([block]).splitlines()
+    assert "  • 100×8 @9" in lines
+    assert "  • 100×7" in lines
+
+
 # ---------- format_pr_detail ----------
 
 

@@ -39,6 +39,7 @@ async def build_block_views(
         ex = await db.get_exercise(ex_id)
         gname = await group_info(ex["primary_group_id"])
         sets_tuples = [(s["weight"], s["reps"]) for s in sets]
+        set_rpes = [s["rpe"] for s in sets]
         prev_sets = None
         if previous_before is not None:
             prev_sets = await _previous_session_sets(ex_id, workout_id, previous_before)
@@ -50,6 +51,7 @@ async def build_block_views(
                 formula=formula,
                 exercise_id=ex_id,
                 prev_sets=prev_sets,
+                set_rpes=set_rpes if any(r is not None for r in set_rpes) else None,
             )
         )
 

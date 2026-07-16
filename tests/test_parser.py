@@ -43,6 +43,40 @@ def test_x_separator_tolerates_surrounding_spaces():
     assert result == [ParsedSet(weight=100.0, reps=8)] * 3
 
 
+# ---------- parse_single_token: optional @RPE suffix ----------
+
+
+def test_rpe_with_x_separator():
+    assert parse_single_token("100x8@9") == [ParsedSet(weight=100.0, reps=8, rpe=9.0)]
+
+
+def test_rpe_with_space_separator():
+    assert parse_single_token("100 8 @8.5") == [ParsedSet(weight=100.0, reps=8, rpe=8.5)]
+
+
+def test_rpe_applies_to_every_set_in_count():
+    result = parse_single_token("100x8x3@9")
+    assert result == [ParsedSet(weight=100.0, reps=8, rpe=9.0)] * 3
+
+
+def test_rpe_on_bodyweight():
+    assert parse_single_token("8@7") == [ParsedSet(weight=0.0, reps=8, weight_omitted=True, rpe=7.0)]
+
+
+def test_rpe_comma_decimal():
+    assert parse_single_token("100x8@8,5") == [ParsedSet(weight=100.0, reps=8, rpe=8.5)]
+
+
+@pytest.mark.parametrize("bad", ["100x8@0", "100x8@11", "8@12"])
+def test_rpe_out_of_range_rejected(bad):
+    with pytest.raises(ParseError, match="RPE"):
+        parse_single_token(bad)
+
+
+def test_no_rpe_defaults_none():
+    assert parse_single_token("100x8")[0].rpe is None
+
+
 # ---------- parse_single_token: space-separated form ----------
 
 

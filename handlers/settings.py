@@ -8,6 +8,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import BufferedInputFile, CallbackQuery
 
 import db
+import formatting
 import keyboards
 import ui
 from fsm import SettingsFlow
@@ -76,10 +77,11 @@ async def settings_export(callback: CallbackQuery, state: FSMContext):
     rows = await db.export_rows_for_user(callback.from_user.id)
     buf = io.StringIO()
     writer = csv.writer(buf)
-    writer.writerow(["started_at", "exercise", "round_index", "weight", "reps"])
+    writer.writerow(["started_at", "exercise", "round_index", "weight", "reps", "rpe"])
     for r in rows:
         writer.writerow([
             r["started_at"], r["exercise"], r["round_index"], r["weight"], r["reps"],
+            "" if r["rpe"] is None else formatting.format_weight(r["rpe"]),
         ])
     data = buf.getvalue().encode("utf-8-sig")
     await callback.message.answer_document(

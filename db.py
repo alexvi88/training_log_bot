@@ -947,10 +947,10 @@ async def get_set_owner(set_id: int) -> Optional[int]:
     return row["user_id"] if row else None
 
 
-async def update_set(set_id: int, weight: float, reps: int) -> None:
+async def update_set(set_id: int, weight: float, reps: int, rpe: Optional[float] = None) -> None:
     async with _write_lock:
         await conn().execute(
-            "UPDATE sets SET weight = ?, reps = ? WHERE id = ?", (weight, reps, set_id)
+            "UPDATE sets SET weight = ?, reps = ?, rpe = ? WHERE id = ?", (weight, reps, rpe, set_id)
         )
         await conn().commit()
 
@@ -1055,7 +1055,7 @@ async def get_next_exercise_in_workout(workout_id: int, exercise_id: int) -> Opt
 async def export_rows_for_user(user_id: int) -> list[aiosqlite.Row]:
     cur = await conn().execute(
         "SELECT w.started_at, e.display_name AS exercise, "
-        "s.round_index, s.weight, s.reps "
+        "s.round_index, s.weight, s.reps, s.rpe "
         "FROM sets s "
         "JOIN workout_blocks bt ON bt.id = s.block_id "
         "JOIN workouts w ON w.id = bt.workout_id "
