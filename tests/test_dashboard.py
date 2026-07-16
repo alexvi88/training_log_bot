@@ -176,6 +176,15 @@ async def test_menu_view_plain_text_for_new_user(user_id, fresh_db):
 
 
 @pytest.mark.asyncio
+async def test_menu_view_shows_onboarding_steps_for_new_user(user_id, fresh_db):
+    from handlers.workout import _ONBOARDING, _menu_view
+
+    text, _ = await _menu_view(user_id)
+    assert text == _ONBOARDING
+    assert "Выбирай группу мышц" in text
+
+
+@pytest.mark.asyncio
 async def test_menu_view_includes_heatmap_once_history_exists(user_id, fresh_db):
     db = fresh_db
     started = dt.datetime.now() - dt.timedelta(days=3)

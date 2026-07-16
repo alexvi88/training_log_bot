@@ -180,6 +180,17 @@ async def _back_after_cancel(bot, state: FSMContext, user):
 
 _GREETING = "<b>ПРИВЕТ, АТЛЕТ. НАЧНЁМ ТРЕНИРОВКУ?</b>"
 
+# Shown on the main menu until the first workout is logged — a quick "here's how
+# it works" so a brand-new user isn't dropped onto the same screen as a veteran.
+_ONBOARDING = (
+    "<b>ПРИВЕТ, АТЛЕТ! 💪</b>\n\n"
+    "Я — твой дневник силовых тренировок. Работает просто:\n"
+    "1️⃣ Жми «🏋️ НАЧАТЬ ТРЕНИРОВКУ»\n"
+    "2️⃣ Выбирай группу мышц и упражнение\n"
+    "3️⃣ Пиши вес и повторы, например «100 8» (или «8» для своего веса)\n\n"
+    "Дальше я сам посчитаю рекорды, прогресс и объём. Погнали? 👇"
+)
+
 
 async def _menu_view(user_id: int) -> tuple[str, bytes | None]:
     """Greeting, plus a year heatmap image (with the streak/this-week/30-day
@@ -188,7 +199,7 @@ async def _menu_view(user_id: int) -> tuple[str, bytes | None]:
     today = dt.date.today()
     dates = [dt.date.fromisoformat(d) for d in await db.list_finished_workout_dates(user_id)]
     if not dates:
-        return _GREETING, None
+        return _ONBOARDING, None
     dashboard = analytics.compute_dashboard(dates, today)
     this_monday = today - dt.timedelta(days=today.weekday())
     year_ago = this_monday - dt.timedelta(weeks=52)
