@@ -39,6 +39,11 @@ ENGAGEMENT_ENABLED = os.getenv("ENGAGEMENT_ENABLED", "true").lower() == "true"
 # Local hour (0-23) at which the daily engagement job evaluates and sends pushes.
 ENGAGEMENT_HOUR = int(os.getenv("ENGAGEMENT_HOUR", "19"))
 
+# Use an AI-generated personalized weekly digest (Sundays) in place of the static
+# rotation text, when the AI trainer is configured. Falls back to static copy on
+# any failure. Set =false to always use the static digest.
+AI_WEEKLY_DIGEST_ENABLED = os.getenv("AI_WEEKLY_DIGEST_ENABLED", "true").lower() == "true"
+
 # How often (minutes) the post-workout followup job checks for due reminders.
 FOLLOWUP_POLL_MINUTES = int(os.getenv("FOLLOWUP_POLL_MINUTES", "10"))
 

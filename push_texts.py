@@ -34,6 +34,9 @@ WIN_BACK = "win_back"
 TIMING = "timing"
 PLATEAU = "plateau"
 WEEKLY_DIGEST = "weekly_digest"
+# AI-generated weekly digest (text isn't in TEXTS — it's produced per user by the
+# model; this key only tags the push for dedup/logging).
+AI_WEEKLY = "ai_weekly"
 NEWBIE_NUDGE = "newbie_nudge"
 
 SKIP_MILESTONE_DAYS = (3, 5, 7, 10, 14)
@@ -108,6 +111,7 @@ CATEGORY_LABELS: dict[str, str] = {
     TIMING: "Тайминг",
     PLATEAU: "Плато",
     WEEKLY_DIGEST: "Аналитика",
+    AI_WEEKLY: "AI-дайджест",
     NEWBIE_NUDGE: "Новичок без тренировок",
 }
 

@@ -29,6 +29,7 @@ from typing import Optional
 from aiogram import Bot
 from aiogram.exceptions import TelegramForbiddenError
 
+import ai_trainer
 import analytics
 import config
 import db
@@ -181,6 +182,9 @@ async def build_daily_push(telegram_id: int, today: dt.date) -> Optional[PushDec
         since = (today - dt.timedelta(days=DIGEST_LOOKBACK_DAYS)).isoformat()
         tonnage = await db.tonnage_since(telegram_id, since)
         if tonnage > 0:
+            ai_text = await _ai_weekly_digest_text(telegram_id)
+            if ai_text:
+                return PushDecision(push_texts.AI_WEEKLY, ai_text)
             week_word = formatting.plural_ru(dashboard.this_week, ("тренировка", "тренировки", "тренировок"))
             text = await push_texts.pick_text(
                 telegram_id, push_texts.WEEKLY_DIGEST,
@@ -189,6 +193,17 @@ async def build_daily_push(telegram_id: int, today: dt.date) -> Optional[PushDec
             return PushDecision(push_texts.WEEKLY_DIGEST, text, with_cta=False)
 
     return None
+
+
+async def _ai_weekly_digest_text(telegram_id: int) -> Optional[str]:
+    """Personalized AI weekly digest, or None to fall back to the static rotation copy."""
+    if not config.AI_WEEKLY_DIGEST_ENABLED or not ai_trainer.is_configured():
+        return None
+    try:
+        return await ai_trainer.weekly_digest(telegram_id)
+    except Exception:
+        logger.exception("AI weekly digest failed for user %s", telegram_id)
+        return None
 
 
 async def build_newbie_push(telegram_id: int, created_at: str, today: dt.date) -> Optional[PushDecision]:

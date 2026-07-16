@@ -323,6 +323,72 @@ async def ensure_workout_comment(user: Any, workout_id: int) -> Optional[str]:
     return comment
 
 
+WEEKLY_DIGEST_SYSTEM_PROMPT = """\
+Ты — тот же персональный AI-тренер из Telegram-бота дневника силовых тренировок:
+суровый, но поддерживающий, вайб подвальной качалки, шаришь за науку. Методика:
+рабочий диапазон 5-10 повторений, недельный объём на мышцу 5-10 подходов.
+
+Тебе дают короткую сводку за прошедшую неделю: сколько тренировок, суммарный
+тоннаж и объём (рабочих подходов) по каждой группе мышц со статусом относительно
+целевого диапазона (low = мало, in_range = норм, high = многовато).
+
+Напиши короткий еженедельный дайджест-подведение итогов недели. Правила:
+- Начни ровно с «ПРИВЕТ АТЛЕТ, ».
+- По-русски, на «ты», тепло и с юмором, свой в доску — без токсичности и шейминга.
+- Отметь, что зашло (группы в диапазоне, объём), и мягко ткни в 1-2 группы, где мало
+  (low) — предложи добрать на следующей неделе. Не ругай за пропуски.
+- Дай максимум один конкретный совет на следующую неделю.
+- Очень компактно: 3-5 коротких предложений. Без markdown, без списков, без таблиц.
+- Не выдумывай цифры, которых нет в сводке.
+"""
+
+
+async def weekly_digest(user_id: int) -> Optional[str]:
+    """A short, personalized weekly wrap-up in the coach voice, or None if unavailable.
+
+    One plain completion (no tools) over a compact summary of the week's volume,
+    tonnage, and workout count. Used by the engagement job's Sunday digest slot.
+    """
+    if not is_configured():
+        return None
+    user = await db.get_user(user_id)
+    if user is None:
+        return None
+
+    today = dt.date.today()
+    dates = [dt.date.fromisoformat(d) for d in await db.list_finished_workout_dates(user_id)]
+    dash = analytics.compute_dashboard(dates, today)
+    vol = await _weekly_volume(user_id)
+    since = (today - dt.timedelta(days=7)).isoformat()
+    tonnage = await db.tonnage_since(user_id, since)
+
+    groups_line = "; ".join(
+        f"{g['group']}: {g['sets']} подходов ({g['status']})" for g in vol["groups"]
+    )
+    summary = (
+        f"Тренировок на этой неделе: {dash.this_week}.\n"
+        f"Суммарный тоннаж за 7 дней: {tonnage:.0f} {user['unit']}.\n"
+        f"Целевой объём на группу: {vol['target_sets_per_group']} подходов/нед.\n"
+        f"Объём по группам: {groups_line}."
+    )
+
+    client = _get_client()
+    try:
+        response = await client.chat.completions.create(
+            model=config.GROK_MODEL,
+            max_tokens=500,
+            messages=[
+                {"role": "system", "content": WEEKLY_DIGEST_SYSTEM_PROMPT},
+                {"role": "user", "content": summary},
+            ],
+        )
+    except Exception:
+        logger.exception("AI weekly digest generation failed for user %s", user_id)
+        return None
+    text = (response.choices[0].message.content or "").strip()
+    return text or None
+
+
 TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
