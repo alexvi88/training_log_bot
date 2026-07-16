@@ -25,6 +25,7 @@ from handlers import (
     fallback,
     history,
     persistent_menu,
+    routines,
     settings,
     volume,
     workout,
@@ -152,6 +153,7 @@ async def main() -> None:
     # commands as plain text whenever the admin is mid-flow.
     dp.include_router(admin.router)
     dp.include_router(workout.router)
+    dp.include_router(routines.router)
     dp.include_router(backfill.router)
     dp.include_router(exercise_resolve.router)
     dp.include_router(csv_import.router)

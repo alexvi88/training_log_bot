@@ -58,6 +58,11 @@ class BodyweightFlow(StatesGroup):
     awaiting_weight = State()
 
 
+class RoutineFlow(StatesGroup):
+    naming = State()
+    renaming = State()
+
+
 class ImportFlow(StatesGroup):
     awaiting_file = State()
     mapping_columns = State()

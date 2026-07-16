@@ -152,6 +152,24 @@ CREATE TABLE IF NOT EXISTS bodyweight_logs (
     logged_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_bodyweight_user ON bodyweight_logs (telegram_id, logged_at);
+
+CREATE TABLE IF NOT EXISTS routines (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_routines_user ON routines (user_id);
+
+CREATE TABLE IF NOT EXISTS routine_exercises (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    routine_id INTEGER NOT NULL,
+    exercise_id INTEGER NOT NULL,
+    order_index INTEGER NOT NULL,
+    FOREIGN KEY (routine_id) REFERENCES routines (id),
+    FOREIGN KEY (exercise_id) REFERENCES exercises (id)
+);
+CREATE INDEX IF NOT EXISTS idx_routine_exercises_routine ON routine_exercises (routine_id);
 """
 
 _conn: Optional[aiosqlite.Connection] = None
@@ -1076,6 +1094,88 @@ async def get_next_exercise_in_workout(workout_id: int, exercise_id: int) -> Opt
         if block_exercises:
             return block_exercises[0]
     return None
+
+
+# ---------- routines (saved workout templates / splits) ----------
+
+async def create_routine(user_id: int, name: str) -> int:
+    async with _write_lock:
+        cur = await conn().execute(
+            "INSERT INTO routines (user_id, name, created_at) VALUES (?, ?, ?)",
+            (user_id, name, now_iso()),
+        )
+        await conn().commit()
+        return cur.lastrowid
+
+
+async def add_routine_exercise(routine_id: int, exercise_id: int, order_index: int) -> None:
+    async with _write_lock:
+        await conn().execute(
+            "INSERT INTO routine_exercises (routine_id, exercise_id, order_index) VALUES (?, ?, ?)",
+            (routine_id, exercise_id, order_index),
+        )
+        await conn().commit()
+
+
+async def list_routines(user_id: int) -> list[aiosqlite.Row]:
+    cur = await conn().execute(
+        "SELECT r.*, "
+        "(SELECT COUNT(*) FROM routine_exercises re WHERE re.routine_id = r.id) AS exercise_count "
+        "FROM routines r WHERE r.user_id = ? ORDER BY r.created_at DESC, r.id DESC",
+        (user_id,),
+    )
+    return await cur.fetchall()
+
+
+async def get_routine(routine_id: int) -> Optional[aiosqlite.Row]:
+    cur = await conn().execute("SELECT * FROM routines WHERE id = ?", (routine_id,))
+    return await cur.fetchone()
+
+
+async def list_routine_exercises(routine_id: int) -> list[aiosqlite.Row]:
+    """Routine's exercises in order, joined with the (non-archived) exercise display name.
+
+    Exercises archived after being added to the routine are dropped so a routine
+    never resurrects something the user removed from their catalog.
+    """
+    cur = await conn().execute(
+        "SELECT re.*, e.display_name FROM routine_exercises re "
+        "JOIN exercises e ON e.id = re.exercise_id "
+        "WHERE re.routine_id = ? AND e.is_archived = 0 "
+        "ORDER BY re.order_index",
+        (routine_id,),
+    )
+    return await cur.fetchall()
+
+
+async def rename_routine(routine_id: int, name: str) -> None:
+    async with _write_lock:
+        await conn().execute("UPDATE routines SET name = ? WHERE id = ?", (name, routine_id))
+        await conn().commit()
+
+
+async def delete_routine(routine_id: int) -> None:
+    async with _write_lock:
+        db = conn()
+        await db.execute("DELETE FROM routine_exercises WHERE routine_id = ?", (routine_id,))
+        await db.execute("DELETE FROM routines WHERE id = ?", (routine_id,))
+        await db.commit()
+
+
+async def create_routine_from_workout(user_id: int, workout_id: int, name: str) -> int:
+    """Snapshot a finished workout's exercises (in block order, de-duplicated) as a routine."""
+    routine_id = await create_routine(user_id, name)
+    seen: set[int] = set()
+    order = 0
+    for block in await list_blocks_for_workout(workout_id):
+        for be in await get_block_exercises(block["id"]):
+            ex_id = be["exercise_id"]
+            if ex_id in seen:
+                continue
+            seen.add(ex_id)
+            await add_routine_exercise(routine_id, ex_id, order)
+            order += 1
+    return routine_id
 
 
 # ---------- export ----------

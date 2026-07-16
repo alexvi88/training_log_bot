@@ -161,6 +161,39 @@ def exercise_picker_entry_keyboard(
     return b.as_markup()
 
 
+def start_workout_options_keyboard(routines) -> InlineKeyboardMarkup:
+    """Start screen: an empty workout, any saved routine, or manage routines."""
+    b = InlineKeyboardBuilder()
+    b.button(text="🏋️ Начать с нуля", callback_data="menu:confirm_start_workout")
+    for r in routines:
+        b.button(text=f"▶️ {r['name']}", callback_data=f"rt:start:{r['id']}")
+    b.button(text="🗂 Программы", callback_data="rt:manage")
+    b.button(text="❌ Отмена", callback_data="menu:cancel_start_workout")
+    b.adjust(1)
+    return b.as_markup()
+
+
+def routines_manage_keyboard(routines, has_last_workout: bool) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    for r in routines:
+        b.button(text=f"{r['name']} · {r['exercise_count']} упр.", callback_data=f"rt:view:{r['id']}")
+    if has_last_workout:
+        b.button(text="➕ Из последней тренировки", callback_data="rt:createlast")
+    b.button(text="⬅️ Главное меню", callback_data="rt:menu")
+    b.adjust(1)
+    return b.as_markup()
+
+
+def routine_detail_keyboard(routine_id: int) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.button(text="▶️ Начать тренировку", callback_data=f"rt:start:{routine_id}")
+    b.button(text="✏️ Переименовать", callback_data=f"rt:rename:{routine_id}")
+    b.button(text="🗑 Удалить", callback_data=f"rt:delask:{routine_id}")
+    b.button(text="⬅️ К списку", callback_data="rt:manage")
+    b.adjust(1)
+    return b.as_markup()
+
+
 def stale_workout_keyboard(workout_id: int) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(text="✅ Завершить задним числом", callback_data=f"stale:finish:{workout_id}")

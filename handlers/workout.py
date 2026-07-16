@@ -322,11 +322,10 @@ async def start_workout(callback: CallbackQuery, state: FSMContext):
     if active:
         await _enter_live(callback, state, active["id"])
         return
-    kb = keyboards.confirm_cancel_keyboard(
-        "menu:confirm_start_workout", "menu:cancel_start_workout",
-        confirm_text="🏋️ Начать", cancel_text="❌ Отмена",
-    )
-    await ui.safe_edit(callback, "Начать новую тренировку?", reply_markup=kb)
+    routines = await db.list_routines(callback.from_user.id)
+    kb = keyboards.start_workout_options_keyboard(routines)
+    text = "Как начнём тренировку?" if routines else "Начать новую тренировку?"
+    await ui.safe_edit(callback, text, reply_markup=kb)
 
 
 @router.callback_query(F.data == "menu:confirm_start_workout")
@@ -723,13 +722,16 @@ async def live_pick_suggested(callback: CallbackQuery, state: FSMContext):
     await _on_exercise_chosen(callback, state, ex_id)
 
 
-@router.callback_query(StateFilter(WorkoutFlow.idle), F.data == "live:next_planned")
-async def live_next_planned(callback: CallbackQuery, state: FSMContext):
+async def _load_next_planned_block(event, state: FSMContext) -> bool:
+    """Open the next block from a routine's planned_blocks. Returns False if none left.
+
+    Shared by the "▶️ Следующее по шаблону" button and by starting a workout from
+    a routine (handlers/routines.py), so both paths open blocks identically.
+    """
     data = await state.get_data()
     planned = list(data.get("planned_blocks") or [])
     if not planned:
-        await callback.answer("Шаблон закончился")
-        return
+        return False
     block_plan = planned.pop(0)
     await state.update_data(planned_blocks=planned)
     workout_id = data["workout_id"]
@@ -752,8 +754,16 @@ async def live_next_planned(callback: CallbackQuery, state: FSMContext):
         active_exercise_id=open_exercises[0], last_by_exercise=last_by, last_session_sets=last_session_sets,
     )
     await state.set_state(WorkoutFlow.logging_set)
-    user = await db.get_user(callback.from_user.id)
-    await _render_logging_screen(callback.bot, state, user)
+    user = await db.get_user(event.from_user.id)
+    await _render_logging_screen(event.bot, state, user)
+    return True
+
+
+@router.callback_query(StateFilter(WorkoutFlow.idle), F.data == "live:next_planned")
+async def live_next_planned(callback: CallbackQuery, state: FSMContext):
+    if not await _load_next_planned_block(callback, state):
+        await callback.answer("Шаблон закончился")
+        return
     await callback.answer()
 
 
