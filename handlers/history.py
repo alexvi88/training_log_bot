@@ -5,12 +5,13 @@ import datetime as dt
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
-from aiogram.types import BufferedInputFile, CallbackQuery, InputMediaPhoto
+from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton, InputMediaPhoto
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import ai_trainer
 import analytics
 import charts
+import config
 import db
 import formatting
 import keyboards
@@ -177,22 +178,47 @@ async def prog_back_to_groups(callback: CallbackQuery, state: FSMContext):
     await show_progress_entry(callback, state)
 
 
+async def _render_progress_exercise_list(callback: CallbackQuery, raw: str, page: int) -> None:
+    group_id = None if raw == "all" else int(raw)
+    offset = page * config.RECENT_EXERCISES_LIMIT
+    if group_id is None:
+        exercises = await db.list_user_exercises(
+            callback.from_user.id, limit=config.RECENT_EXERCISES_LIMIT, offset=offset
+        )
+        total = await db.count_user_exercises(callback.from_user.id)
+    else:
+        exercises = await db.list_user_exercises_in_group(
+            callback.from_user.id, group_id, limit=config.RECENT_EXERCISES_LIMIT, offset=offset
+        )
+        total = await db.count_user_exercises_in_group(callback.from_user.id, group_id)
+    has_next = offset + len(exercises) < total
+
+    b = InlineKeyboardBuilder()
+    for ex in exercises:
+        b.row(InlineKeyboardButton(text=ex["display_name"], callback_data=f"prog:ex:{ex['id']}:{raw}"))
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"prog:gpage:{raw}:{page - 1}"))
+    if has_next:
+        nav.append(InlineKeyboardButton(text="➡️", callback_data=f"prog:gpage:{raw}:{page + 1}"))
+    if nav:
+        b.row(*nav)
+    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="prog:groups"))
+    text = "📈 Прогресс — выбери упражнение:" if exercises else "Пока нет своих упражнений с историей в этой группе."
+    await ui.safe_edit(callback, text, reply_markup=b.as_markup())
+
+
 @router.callback_query(F.data.startswith("prog:grp:"))
 async def prog_pick_group(callback: CallbackQuery, state: FSMContext):
     raw = callback.data.split(":")[2]
-    group_id = None if raw == "all" else int(raw)
-    exercises = (
-        await db.list_user_exercises(callback.from_user.id)
-        if group_id is None
-        else await db.list_user_exercises_in_group(callback.from_user.id, group_id)
-    )
-    b = InlineKeyboardBuilder()
-    for ex in exercises:
-        b.button(text=ex["display_name"], callback_data=f"prog:ex:{ex['id']}:{raw}")
-    b.button(text="⬅️ Назад", callback_data="prog:groups")
-    b.adjust(1)
-    text = "📈 Прогресс — выбери упражнение:" if exercises else "Пока нет своих упражнений с историей в этой группе."
-    await ui.safe_edit(callback, text, reply_markup=b.as_markup())
+    await _render_progress_exercise_list(callback, raw, page=0)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("prog:gpage:"))
+async def prog_group_page(callback: CallbackQuery, state: FSMContext):
+    _, _, raw, page_str = callback.data.split(":")
+    await _render_progress_exercise_list(callback, raw, page=int(page_str))
     await callback.answer()
 
 
