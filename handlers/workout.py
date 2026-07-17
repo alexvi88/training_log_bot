@@ -203,11 +203,8 @@ _ONBOARDING = (
 
 async def _menu_view(user_id: int) -> tuple[str, bytes | None]:
     """Greeting, plus a year heatmap image (with the streak/this-week/30-day
-    dashboard stats and this week's per-group volume drawn into it) once the
-    user has any finished workouts.
+    dashboard stats drawn into it) once the user has any finished workouts.
     """
-    from handlers.volume import _build_rows, _week_bounds
-
     today = dt.date.today()
     dates = [dt.date.fromisoformat(d) for d in await db.list_finished_workout_dates(user_id)]
     if not dates:
@@ -218,17 +215,7 @@ async def _menu_view(user_id: int) -> tuple[str, bytes | None]:
     first_monday = min(dates) - dt.timedelta(days=min(dates).weekday())
     heatmap_start = max(first_monday, year_ago)
     stat_lines = formatting.dashboard_stat_lines(dashboard)
-    week_start, week_end = _week_bounds(today, offset=0)
-    volume_rows = await _build_rows(user_id, week_start, week_end)
-    png = await asyncio.to_thread(
-        charts.render_year_heatmap,
-        Counter(dates),
-        today,
-        heatmap_start,
-        stat_lines,
-        volume_rows,
-        (analytics.WEEKLY_VOLUME_MIN, analytics.WEEKLY_VOLUME_MAX),
-    )
+    png = await asyncio.to_thread(charts.render_year_heatmap, Counter(dates), today, heatmap_start, stat_lines)
     return _GREETING, png
 
 
