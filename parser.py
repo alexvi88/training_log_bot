@@ -4,7 +4,7 @@ import datetime as dt
 import re
 from dataclasses import dataclass
 
-EXAMPLES_HINT = "Не понял ввод. Примеры: 100 8 · 100x8 · 100x8x3 · +20 8 · 8 (свой вес) · 100x8@9 (RPE)"
+EXAMPLES_HINT = "Не понял ввод. Примеры: 100 8 · 100x8 · 100x8x3 · +20 8 · 8 (свой вес)"
 
 
 class ParseError(Exception):

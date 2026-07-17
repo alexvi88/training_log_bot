@@ -35,7 +35,7 @@ def main_menu(has_active_workout: bool) -> InlineKeyboardMarkup:
     b.button(text="📚 История", callback_data="menu:history")
     b.button(text="⚙️ Упражнения", callback_data="menu:exercises")
     b.button(text="💪 Объём/нед", callback_data="menu:volume")
-    b.button(text="⚖️ Вес тела", callback_data="menu:bodyweight")
+    b.button(text="⚖️ Дневник веса", callback_data="menu:bodyweight")
     b.button(text="🔧 Настройки", callback_data="menu:settings")
     b.adjust(1, 2, 2, 2)
     return b.as_markup()

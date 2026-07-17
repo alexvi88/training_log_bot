@@ -125,7 +125,7 @@ _WEIGHT_STEP = {"kg": 2.5, "lb": 5.0}
 
 
 def _logging_hint(last_session: list[tuple[float, int]] | None, has_sets: bool, unit: str = "kg") -> str:
-    base = "Напиши вес и повторы через пробел, например «100 8» (RPE — «100 8@9»)"
+    base = "Напиши вес и повторы через пробел, например «100 8»"
     if has_sets:
         base += "\nМожно только повторы — вес возьмётся с прошлого подхода"
     if last_session:
