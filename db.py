@@ -32,7 +32,8 @@ CREATE TABLE IF NOT EXISTS users (
     show_extra_stats INTEGER NOT NULL DEFAULT 1,
     pushes_enabled INTEGER NOT NULL DEFAULT 1,
     reply_keyboard_version INTEGER NOT NULL DEFAULT 0,
-    ai_comments_enabled INTEGER NOT NULL DEFAULT 0
+    ai_comments_enabled INTEGER NOT NULL DEFAULT 0,
+    progression_hint_enabled INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS muscle_groups (
@@ -259,6 +260,10 @@ async def _migrate_schema() -> None:
         await _conn.execute("ALTER TABLE users ADD COLUMN pushes_enabled INTEGER NOT NULL DEFAULT 1")
     if "ai_comments_enabled" not in user_cols:
         await _conn.execute("ALTER TABLE users ADD COLUMN ai_comments_enabled INTEGER NOT NULL DEFAULT 0")
+    if "progression_hint_enabled" not in user_cols:
+        await _conn.execute(
+            "ALTER TABLE users ADD COLUMN progression_hint_enabled INTEGER NOT NULL DEFAULT 1"
+        )
     if "reply_keyboard_version" not in user_cols:
         if "reply_keyboard_shown" in user_cols:
             # Superseded by a version counter so future button-set changes can

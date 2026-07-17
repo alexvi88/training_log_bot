@@ -59,3 +59,17 @@ async def test_show_settings_reflects_pushes_state_in_keyboard_labels(fresh_db, 
     sent_text = callback.message.answer.call_args.kwargs["reply_markup"]
     labels_off = [b.text for row in sent_text.inline_keyboard for b in row]
     assert any("выключены" in label for label in labels_off)
+
+
+async def test_settings_progression_toggles_off_then_on(fresh_db, user_id):
+    db = fresh_db
+    state = await _make_state(user_id)
+    assert (await db.get_user(user_id))["progression_hint_enabled"] == 1  # on by default
+
+    callback = _make_callback(user_id, "settings:progression")
+    await settings.settings_progression(callback, state)
+    assert (await db.get_user(user_id))["progression_hint_enabled"] == 0
+
+    callback = _make_callback(user_id, "settings:progression")
+    await settings.settings_progression(callback, state)
+    assert (await db.get_user(user_id))["progression_hint_enabled"] == 1

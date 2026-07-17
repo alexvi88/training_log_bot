@@ -125,7 +125,10 @@ _WEIGHT_STEP = {"kg": 2.5, "lb": 5.0}
 
 
 def _logging_hint(
-    last_session: list[tuple[float, int, float | None]] | None, has_sets: bool, unit: str = "kg"
+    last_session: list[tuple[float, int, float | None]] | None,
+    has_sets: bool,
+    unit: str = "kg",
+    show_progression: bool = True,
 ) -> str:
     base = "Напиши вес и повторы через пробел, например «100 8»"
     if has_sets:
@@ -133,10 +136,11 @@ def _logging_hint(
     if last_session:
         sets_str = ", ".join(formatting.format_set(w, r, rpe) for w, r, rpe in last_session)
         lines = [f"<i>💡 В прошлый раз: {sets_str}</i>"]
-        wr_only = [(w, r) for w, r, _ in last_session]
-        suggestion = analytics.suggest_progression(wr_only, _WEIGHT_STEP.get(unit, 2.5))
-        if suggestion is not None:
-            lines.append(formatting.format_progression_hint(suggestion, unit))
+        if show_progression:
+            wr_only = [(w, r) for w, r, _ in last_session]
+            suggestion = analytics.suggest_progression(wr_only, _WEIGHT_STEP.get(unit, 2.5))
+            if suggestion is not None:
+                lines.append(formatting.format_progression_hint(suggestion, unit))
         return "\n".join(lines) + f"\n\n{base}"
     return base
 
@@ -164,7 +168,9 @@ async def _render_logging_screen(bot, state: FSMContext, user):
     open_items = [(ex_id, names[ex_id]) for ex_id in open_ids]
     active_block_id = (data.get("open_blocks") or {}).get(active)
     has_sets = bool(active_block_id and await db.list_sets_for_block(active_block_id))
-    hint = _logging_hint(last_session_sets.get(active), has_sets, user["unit"])
+    hint = _logging_hint(
+        last_session_sets.get(active), has_sets, user["unit"], bool(user["progression_hint_enabled"])
+    )
     kb = keyboards.logging_keyboard(open_items, active, has_sets)
     await _refresh_live(bot, state, user, data["workout_id"], hint, kb)
 

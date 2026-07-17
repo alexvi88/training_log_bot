@@ -342,3 +342,13 @@ def test_format_progress_screen_no_count_line_when_history_fits():
     records = analytics.PersonalRecords()
     text = formatting.format_progress_screen("Жим лёжа", sessions, None, None, records, limit=8)
     assert "Показано" not in text
+
+
+def test_logging_hint_omits_progression_when_disabled():
+    from handlers.workout import _logging_hint
+    last = [(100.0, 10, None)]
+    with_hint = _logging_hint(last, has_sets=True, unit="kg", show_progression=True)
+    without = _logging_hint(last, has_sets=True, unit="kg", show_progression=False)
+    assert "🎯" in with_hint
+    assert "🎯" not in without
+    assert "В прошлый раз" in without

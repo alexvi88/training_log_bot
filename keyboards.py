@@ -339,11 +339,15 @@ def admin_pushes_keyboard(page: int, has_next: bool) -> InlineKeyboardMarkup:
 
 
 def settings_keyboard(
-    unit: str, formula: str, pushes_enabled: bool, ai_comments_enabled: bool
+    unit: str, formula: str, pushes_enabled: bool, ai_comments_enabled: bool, progression_enabled: bool
 ) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(text=f"Единицы: {unit}", callback_data="settings:unit")
     b.button(text=f"Формула 1ПМ: {formula}", callback_data="settings:formula")
+    progression_label = (
+        "🎯 Подсказки прогрессии: вкл" if progression_enabled else "🎯 Подсказки прогрессии: выкл"
+    )
+    b.button(text=progression_label, callback_data="settings:progression")
     pushes_label = "🔔 Пуши: включены" if pushes_enabled else "🔕 Пуши: выключены"
     b.button(text=pushes_label, callback_data="settings:pushes")
     ai_label = (
