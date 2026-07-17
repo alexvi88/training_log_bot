@@ -18,6 +18,7 @@ import db
 import keyboards
 import ui
 from fsm import RoutineFlow, WorkoutFlow
+from seed_data import PROGRAM_BY_KEY, WORKOUT_PROGRAMS
 
 router = Router(name="routines")
 
@@ -57,6 +58,73 @@ async def rt_menu(callback: CallbackQuery, state: FSMContext):
     from handlers.workout import _show_main_menu
     await _show_main_menu(callback, state)
     await callback.answer()
+
+
+# ---------- ready-made programs ----------
+
+@router.callback_query(F.data == "rt:programs")
+async def rt_programs(callback: CallbackQuery, state: FSMContext):
+    text = (
+        "✨ <b>ГОТОВЫЕ ПРОГРАММЫ</b>\n\n"
+        "Выбери готовую программу — её дни добавятся тебе в «Программы», и ты "
+        "начнёшь тренировку в один тап. Все нужные упражнения появятся в твоём списке."
+    )
+    kb = keyboards.programs_catalog_keyboard(WORKOUT_PROGRAMS)
+    await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("rt:prog:"))
+async def rt_program_detail(callback: CallbackQuery, state: FSMContext):
+    key = callback.data.split(":", 2)[2]
+    program = PROGRAM_BY_KEY.get(key)
+    if program is None:
+        await callback.answer("Программа не найдена", show_alert=True)
+        return
+    days = program["days"]
+    lines = [
+        f"✨ <b>{escape(program['name'])}</b>",
+        f"<i>{escape(program['meta'])}</i>",
+        "",
+        escape(program["description"]),
+        "",
+        f"<b>{len(days)} {_days_word(len(days))}:</b>",
+        "",
+    ]
+    for day_name, exercises in days:
+        lines.append(f"<b>{escape(day_name)}</b>")
+        lines.extend(f"• {escape(ex)}" for ex in exercises)
+        lines.append("")
+    kb = keyboards.program_detail_keyboard(key)
+    await ui.safe_edit(callback, "\n".join(lines).strip(), reply_markup=kb, parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("rt:progadd:"))
+async def rt_program_add(callback: CallbackQuery, state: FSMContext):
+    key = callback.data.split(":", 2)[2]
+    program = PROGRAM_BY_KEY.get(key)
+    if program is None:
+        await callback.answer("Программа не найдена", show_alert=True)
+        return
+    # Create days in reverse so day 1 ends up newest and thus tops the routines
+    # list (list_routines orders by created_at/id DESC).
+    for day_name, exercises in reversed(program["days"]):
+        await db.create_routine_from_program(callback.from_user.id, day_name, exercises)
+    await callback.answer(f"Программа добавлена: {len(program['days'])} дн.")
+    await show_manage(callback, state)
+
+
+def _days_word(n: int) -> str:
+    """Russian plural for «день» (1 день, 2 дня, 5 дней)."""
+    if 11 <= n % 100 <= 14:
+        return "дней"
+    last = n % 10
+    if last == 1:
+        return "день"
+    if 2 <= last <= 4:
+        return "дня"
+    return "дней"
 
 
 async def _owned_routine(event, routine_id: int):
