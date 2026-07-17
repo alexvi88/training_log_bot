@@ -14,7 +14,7 @@ from handlers.volume import _week_bounds
 
 @pytest.mark.parametrize(
     "count,expected",
-    [(0, "none"), (1, "low"), (4, "low"), (5, "in_range"), (10, "in_range"), (11, "high"), (25, "high")],
+    [(0, "none"), (1, "low"), (4, "low"), (5, "in_range"), (12, "in_range"), (13, "high"), (25, "high")],
 )
 def test_classify_weekly_volume(count, expected):
     assert analytics.classify_weekly_volume(count) == expected

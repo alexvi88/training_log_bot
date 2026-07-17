@@ -340,7 +340,7 @@ def build_weekly_volume_screen(
     rows: list[tuple[str, int, str]],
     is_current_week: bool,
 ) -> str:
-    """Weekly working-set volume per muscle group vs the 5-10 target range.
+    """Weekly working-set volume per muscle group vs the 5-12 target range.
 
     rows: (group_name, set_count, status) where status comes from
     analytics.classify_weekly_volume. Groups are shown in the order passed in,
@@ -391,7 +391,7 @@ def build_bodyweight_screen(logs: list, unit: str = "kg") -> str:
     lines = [
         "⚖️ <b>Дневник веса</b>",
         "",
-        f"Сейчас: <b>{format_weight(latest_weight)} {u}</b> ({format_date_ru(d)})",
+        f"Сейчас: <b>{format_weight(latest_weight)} {u}</b> {format_date_ru(d)}",
     ]
     if len(logs) >= 2:
         prev = logs[-2]["weight"]
