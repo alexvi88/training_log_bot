@@ -221,9 +221,9 @@ def compare_to_previous_session(sessions: list[SessionStats]) -> Optional[Compar
 REP_RANGE_MIN = 5
 REP_RANGE_MAX = 10
 
-# Weekly working-set landmarks per muscle group (same methodology: 5-10 sets/week).
+# Weekly working-set landmarks per muscle group (5-12 sets/week).
 WEEKLY_VOLUME_MIN = 5
-WEEKLY_VOLUME_MAX = 10
+WEEKLY_VOLUME_MAX = 12
 
 
 # Finished-workout counts worth celebrating right on the completion card

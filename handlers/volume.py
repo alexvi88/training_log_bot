@@ -1,6 +1,6 @@
-"""💪 Объём/нед — weekly working-set volume per muscle group vs the 5-10 target.
+"""💪 Объём/нед — weekly working-set volume per muscle group vs the 5-12 target.
 
-Closes the gap between the AI trainer's methodology ("5-10 sets/week/muscle")
+Closes the gap between the AI trainer's methodology ("5-12 sets/week/muscle")
 and what the product could actually show: sets are aggregated by
 exercises.primary_group_id over a calendar week (Mon-Sun), and each group is
 flagged low / in-range / high. Every non-archived group the user sees is

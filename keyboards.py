@@ -369,7 +369,7 @@ def weekly_volume_keyboard(week_offset: int) -> InlineKeyboardMarkup:
     b.button(text="⬅️ Прошлая неделя", callback_data=f"vol:wk:{week_offset + 1}")
     if week_offset > 0:
         b.button(text="Следующая ➡️", callback_data=f"vol:wk:{week_offset - 1}")
-    b.button(text="⬅️ К истории", callback_data="menu:history")
+    b.button(text="📜 К истории", callback_data="menu:history")
     b.adjust(2, 1) if week_offset > 0 else b.adjust(1, 1)
     return b.as_markup()
 
