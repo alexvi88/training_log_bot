@@ -391,7 +391,7 @@ def build_bodyweight_screen(logs: list, unit: str = "kg") -> str:
     lines = [
         "⚖️ <b>Дневник веса</b>",
         "",
-        f"Сейчас: <b>{format_weight(latest_weight)} {u}</b> ({format_date_ru(d)})",
+        f"Сейчас: <b>{format_weight(latest_weight)} {u}</b> {format_date_ru(d)}",
     ]
     if len(logs) >= 2:
         prev = logs[-2]["weight"]
