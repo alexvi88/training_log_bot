@@ -52,6 +52,53 @@ async def test_recent_workouts_lists_sets(fresh_db, user_id):
     assert latest["exercises"][0] == {"name": "Жим лёжа", "sets": ["103x8"]}
 
 
+async def test_recent_workouts_includes_rpe_in_set_string(fresh_db, user_id):
+    group_id = await fresh_db.create_muscle_group(user_id, "Грудь")
+    ex_id = await fresh_db.create_exercise(user_id, "Жим", group_id)
+    wid = await fresh_db.create_finished_workout(user_id, "2026-02-01T10:00:00", "2026-02-01T10:30:00")
+    block_id = await fresh_db.create_block(wid, "single")
+    await fresh_db.add_block_exercise(block_id, ex_id, 0)
+    await fresh_db.add_set(block_id, ex_id, 1, 0, 100.0, 8, rpe=9.0)
+    await fresh_db.add_set(block_id, ex_id, 2, 0, 100.0, 7)  # no rpe
+
+    payload = json.loads(await ai_trainer.execute_tool(user_id, "list_recent_workouts", {}))
+    assert payload["workouts"][0]["exercises"][0]["sets"] == ["100x8@9", "100x7"]
+
+
+async def test_overview_includes_latest_bodyweight(fresh_db, user_id):
+    await fresh_db.add_bodyweight_log(user_id, 81.5, logged_at="2026-03-01T08:00:00")
+    payload = json.loads(await ai_trainer.execute_tool(user_id, "get_training_overview", {}))
+    assert payload["latest_bodyweight"] == {"weight": 81.5, "date": "2026-03-01"}
+
+
+async def test_weekly_volume_tool_counts_and_classifies(fresh_db, user_id, monkeypatch):
+    import datetime as dt
+
+    import handlers.volume  # noqa: F401  (ensure import path is fine)
+
+    # Freeze "today" so the seeded workout lands in the current week.
+    class _FixedDate(dt.date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 7, 15)  # Wednesday
+
+    monkeypatch.setattr(ai_trainer.dt, "date", _FixedDate)
+
+    group_id = (await fresh_db.list_muscle_groups(None, global_only=True))[0]["id"]
+    ex_id = await fresh_db.create_exercise(user_id, "Жим", group_id)
+    wid = await fresh_db.create_finished_workout(user_id, "2026-07-14T10:00:00", "2026-07-14T11:00:00")
+    block_id = await fresh_db.create_block(wid, "single")
+    await fresh_db.add_block_exercise(block_id, ex_id, 0)
+    for i in range(6):
+        await fresh_db.add_set(block_id, ex_id, i + 1, 0, 100.0, 8)
+
+    payload = json.loads(await ai_trainer.execute_tool(user_id, "get_weekly_volume_by_group", {}))
+    by_group = {g["group"]: g for g in payload["groups"]}
+    target_group = (await fresh_db.get_muscle_group(group_id))["name"]
+    assert by_group[target_group]["sets"] == 6
+    assert by_group[target_group]["status"] == "in_range"
+
+
 async def test_recent_workouts_clamps_limit(fresh_db, user_id):
     await _seed_bench_history(fresh_db, user_id, 2)
 

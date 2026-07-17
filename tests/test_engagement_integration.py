@@ -78,3 +78,46 @@ async def test_build_newbie_push_respects_one_per_day_dedup(fresh_db, user_id, m
 
     decision = await engagement.build_newbie_push(user_id, "2026-07-11T09:00:00", today)
     assert decision is None
+
+
+async def _seed_recent_workout(db, user_id):
+    # Sunday 2026-07-19; a workout the day before → tonnage>0, day-since-last not a milestone.
+    await db.create_finished_workout(
+        user_id, started_at="2026-07-18T10:00:00", finished_at="2026-07-18T11:00:00"
+    )
+    block = await db.create_block(
+        (await db.list_workouts(user_id))[0]["id"], "single"
+    )
+    gid = (await db.list_muscle_groups(None, global_only=True))[0]["id"]
+    ex_id = await db.create_exercise(user_id, "Жим", gid)
+    await db.add_block_exercise(block, ex_id, 0)
+    await db.add_set(block, ex_id, 1, 0, 100.0, 8)
+
+
+async def test_sunday_digest_uses_ai_when_available(fresh_db, user_id, monkeypatch):
+    await _seed_recent_workout(fresh_db, user_id)
+    monkeypatch.setattr(engagement.ai_trainer, "is_configured", lambda: True)
+
+    async def fake_digest(uid):
+        return "ПРИВЕТ АТЛЕТ, неделя выдалась крепкой."
+
+    monkeypatch.setattr(engagement.ai_trainer, "weekly_digest", fake_digest)
+
+    decision = await engagement.build_daily_push(user_id, dt.date(2026, 7, 19))  # Sunday
+    assert decision is not None
+    assert decision.category == push_texts.AI_WEEKLY
+    assert decision.text.startswith("ПРИВЕТ АТЛЕТ")
+
+
+async def test_sunday_digest_falls_back_to_static_when_ai_returns_none(fresh_db, user_id, monkeypatch):
+    await _seed_recent_workout(fresh_db, user_id)
+    monkeypatch.setattr(engagement.ai_trainer, "is_configured", lambda: True)
+
+    async def no_digest(uid):
+        return None
+
+    monkeypatch.setattr(engagement.ai_trainer, "weekly_digest", no_digest)
+
+    decision = await engagement.build_daily_push(user_id, dt.date(2026, 7, 19))
+    assert decision is not None
+    assert decision.category == push_texts.WEEKLY_DIGEST

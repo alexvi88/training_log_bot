@@ -114,28 +114,44 @@ async def _delete_message(message: Message):
         await message.delete()
 
 
-async def _log_one(block_id: int, exercise_id: int, weight: float, reps: int):
+async def _log_one(block_id: int, exercise_id: int, weight: float, reps: int, rpe: float | None = None):
     round_idx = await db.next_round_index(block_id, exercise_id)
-    await db.add_set(block_id, exercise_id, round_idx, 0, weight, reps)
+    await db.add_set(block_id, exercise_id, round_idx, 0, weight, reps, rpe)
 
 
-def _logging_hint(last_session: list[tuple[float, int]] | None, has_sets: bool) -> str:
+# Smallest sensible plate/step to suggest bumping to when a lift outgrows the
+# rep range — a rough default, since the bot doesn't know the actual increment.
+_WEIGHT_STEP = {"kg": 2.5, "lb": 5.0}
+
+
+def _logging_hint(
+    last_session: list[tuple[float, int, float | None]] | None,
+    has_sets: bool,
+    unit: str = "kg",
+    show_progression: bool = True,
+) -> str:
     base = "Напиши вес и повторы через пробел, например «100 8»"
     if has_sets:
-        base += " (можно только повторы — вес возьмётся с прошлого подхода)"
+        base += "\nМожно только повторы — вес возьмётся с прошлого подхода"
     if last_session:
-        sets_str = ", ".join(formatting.format_set(w, r) for w, r in last_session)
-        return f"<i>💡 В прошлый раз: {sets_str}</i>\n\n{base}"
+        sets_str = ", ".join(formatting.format_set(w, r, rpe) for w, r, rpe in last_session)
+        lines = [f"<i>💡 В прошлый раз: {sets_str}</i>"]
+        if show_progression:
+            wr_only = [(w, r) for w, r, _ in last_session]
+            suggestion = analytics.suggest_progression(wr_only, _WEIGHT_STEP.get(unit, 2.5))
+            if suggestion is not None:
+                lines.append(formatting.format_progression_hint(suggestion, unit))
+        return "\n".join(lines) + f"\n\n{base}"
     return base
 
 
-async def _last_session_sets(ex_id: int) -> list[tuple[float, int]]:
-    """Working sets from this exercise's most recent finished workout, for the "last time" hint."""
+async def _last_session_sets(ex_id: int) -> list[tuple[float, int, float | None]]:
+    """Working sets (weight, reps, rpe) from this exercise's most recent finished workout."""
     rows = await db.list_sets_for_exercise(ex_id)
     if not rows:
         return []
     last_workout_id = rows[-1]["workout_id"]
-    return [(r["weight"], r["reps"]) for r in rows if r["workout_id"] == last_workout_id]
+    return [(r["weight"], r["reps"], r["rpe"]) for r in rows if r["workout_id"] == last_workout_id]
 
 
 async def _render_logging_screen(bot, state: FSMContext, user):
@@ -152,7 +168,9 @@ async def _render_logging_screen(bot, state: FSMContext, user):
     open_items = [(ex_id, names[ex_id]) for ex_id in open_ids]
     active_block_id = (data.get("open_blocks") or {}).get(active)
     has_sets = bool(active_block_id and await db.list_sets_for_block(active_block_id))
-    hint = _logging_hint(last_session_sets.get(active), has_sets)
+    hint = _logging_hint(
+        last_session_sets.get(active), has_sets, user["unit"], bool(user["progression_hint_enabled"])
+    )
     kb = keyboards.logging_keyboard(open_items, active, has_sets)
     await _refresh_live(bot, state, user, data["workout_id"], hint, kb)
 
@@ -171,6 +189,17 @@ async def _back_after_cancel(bot, state: FSMContext, user):
 
 _GREETING = "<b>ПРИВЕТ, АТЛЕТ. НАЧНЁМ ТРЕНИРОВКУ?</b>"
 
+# Shown on the main menu until the first workout is logged — a quick "here's how
+# it works" so a brand-new user isn't dropped onto the same screen as a veteran.
+_ONBOARDING = (
+    "<b>ПРИВЕТ, АТЛЕТ! 💪</b>\n\n"
+    "Я — твой дневник силовых тренировок. Работает просто:\n"
+    "1️⃣ Жми «🏋️ НАЧАТЬ ТРЕНИРОВКУ»\n"
+    "2️⃣ Выбирай группу мышц и упражнение\n"
+    "3️⃣ Пиши вес и повторы, например «100 8» (или «8» для своего веса)\n\n"
+    "Дальше я сам посчитаю рекорды, прогресс и объём. Погнали? 👇"
+)
+
 
 async def _menu_view(user_id: int) -> tuple[str, bytes | None]:
     """Greeting, plus a year heatmap image (with the streak/this-week/30-day
@@ -179,7 +208,7 @@ async def _menu_view(user_id: int) -> tuple[str, bytes | None]:
     today = dt.date.today()
     dates = [dt.date.fromisoformat(d) for d in await db.list_finished_workout_dates(user_id)]
     if not dates:
-        return _GREETING, None
+        return _ONBOARDING, None
     dashboard = analytics.compute_dashboard(dates, today)
     this_monday = today - dt.timedelta(days=today.weekday())
     year_ago = this_monday - dt.timedelta(weeks=52)
@@ -313,11 +342,10 @@ async def start_workout(callback: CallbackQuery, state: FSMContext):
     if active:
         await _enter_live(callback, state, active["id"])
         return
-    kb = keyboards.confirm_cancel_keyboard(
-        "menu:confirm_start_workout", "menu:cancel_start_workout",
-        confirm_text="🏋️ Начать", cancel_text="❌ Отмена",
-    )
-    await ui.safe_edit(callback, "Начать новую тренировку?", reply_markup=kb)
+    routines = await db.list_routines(callback.from_user.id)
+    kb = keyboards.start_workout_options_keyboard(routines)
+    text = "Как начнём тренировку?" if routines else "Начать новую тренировку?"
+    await ui.safe_edit(callback, text, reply_markup=kb)
 
 
 @router.callback_query(F.data == "menu:confirm_start_workout")
@@ -645,7 +673,7 @@ async def log_set_text(message: Message, state: FSMContext):
     prev_weight, _ = last_by.get(active) or (0.0, 0)
     for ps in parsed:
         weight = prev_weight if (ps.weight_omitted and prev_weight) else ps.weight
-        await _log_one(block_id, active, weight, ps.reps)
+        await _log_one(block_id, active, weight, ps.reps, ps.rpe)
         prev_weight = weight
     last_by[active] = (prev_weight, parsed[-1].reps)
     await state.update_data(last_by_exercise=last_by)
@@ -714,13 +742,16 @@ async def live_pick_suggested(callback: CallbackQuery, state: FSMContext):
     await _on_exercise_chosen(callback, state, ex_id)
 
 
-@router.callback_query(StateFilter(WorkoutFlow.idle), F.data == "live:next_planned")
-async def live_next_planned(callback: CallbackQuery, state: FSMContext):
+async def _load_next_planned_block(event, state: FSMContext) -> bool:
+    """Open the next block from a routine's planned_blocks. Returns False if none left.
+
+    Shared by the "▶️ Следующее по шаблону" button and by starting a workout from
+    a routine (handlers/routines.py), so both paths open blocks identically.
+    """
     data = await state.get_data()
     planned = list(data.get("planned_blocks") or [])
     if not planned:
-        await callback.answer("Шаблон закончился")
-        return
+        return False
     block_plan = planned.pop(0)
     await state.update_data(planned_blocks=planned)
     workout_id = data["workout_id"]
@@ -743,8 +774,16 @@ async def live_next_planned(callback: CallbackQuery, state: FSMContext):
         active_exercise_id=open_exercises[0], last_by_exercise=last_by, last_session_sets=last_session_sets,
     )
     await state.set_state(WorkoutFlow.logging_set)
-    user = await db.get_user(callback.from_user.id)
-    await _render_logging_screen(callback.bot, state, user)
+    user = await db.get_user(event.from_user.id)
+    await _render_logging_screen(event.bot, state, user)
+    return True
+
+
+@router.callback_query(StateFilter(WorkoutFlow.idle), F.data == "live:next_planned")
+async def live_next_planned(callback: CallbackQuery, state: FSMContext):
+    if not await _load_next_planned_block(callback, state):
+        await callback.answer("Шаблон закончился")
+        return
     await callback.answer()
 
 
@@ -873,7 +912,15 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
         duration_seconds=duration_seconds,
     )
     highlights = formatting.build_exercise_highlights(highlight_groups)
-    full_text = summary + (f"\n\n{formatting.DIVIDER}\n\n{highlights}" if highlights else "")
+    full_text = summary
+    # Backfilled/imported past workouts shouldn't fire the "Nth workout" milestone —
+    # they're entered out of order, so the running count isn't meaningful for them.
+    if not is_backfill:
+        total_finished = await db.count_workouts(user_id)
+        if analytics.is_workout_milestone(total_finished):
+            full_text += "\n\n" + formatting.format_milestone_line(total_finished)
+    if highlights:
+        full_text += f"\n\n{formatting.DIVIDER}\n\n{highlights}"
     if is_backfill:
         full_text = "✅ Сохранено как прошлая тренировка\n\n" + full_text
 

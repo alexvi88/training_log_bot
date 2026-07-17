@@ -17,6 +17,7 @@ from handlers import (
     admin,
     ai_trainer,
     backfill,
+    bodyweight,
     csv_import,
     edit_workout,
     exercise_resolve,
@@ -24,7 +25,9 @@ from handlers import (
     fallback,
     history,
     persistent_menu,
+    routines,
     settings,
+    volume,
     workout,
 )
 
@@ -150,6 +153,7 @@ async def main() -> None:
     # commands as plain text whenever the admin is mid-flow.
     dp.include_router(admin.router)
     dp.include_router(workout.router)
+    dp.include_router(routines.router)
     dp.include_router(backfill.router)
     dp.include_router(exercise_resolve.router)
     dp.include_router(csv_import.router)
@@ -157,6 +161,8 @@ async def main() -> None:
     dp.include_router(history.router)
     dp.include_router(edit_workout.router)
     dp.include_router(ai_trainer.router)
+    dp.include_router(bodyweight.router)
+    dp.include_router(volume.router)
     dp.include_router(settings.router)
     dp.include_router(fallback.router)
 

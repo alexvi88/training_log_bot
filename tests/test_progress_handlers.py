@@ -143,3 +143,25 @@ async def test_prog_change_period_preserves_origin(fresh_db, user_id):
 
     kb = callback.message.edit_media.await_args.kwargs["reply_markup"]
     assert _back_button_cb(kb) == f"exm:ex:{ex_id}"
+
+
+def _has_button_cb(markup, cb: str) -> bool:
+    return any(b.callback_data == cb for row in markup.inline_keyboard for b in row)
+
+
+async def test_prog_group_list_paginates(fresh_db, user_id):
+    """A group with more than one page of exercises shows a next-page arrow."""
+    group_id = await fresh_db.create_muscle_group(user_id, "Грудь")
+    for i in range(15):  # > RECENT_EXERCISES_LIMIT (12)
+        await fresh_db.create_exercise(user_id, f"Упражнение {i}", group_id)
+    state = await _make_state(user_id)
+
+    callback = _make_callback(user_id, f"prog:grp:{group_id}")
+    await history.prog_pick_group(callback, state)
+    kb = callback.message.answer.await_args.kwargs["reply_markup"]
+    assert _has_button_cb(kb, f"prog:gpage:{group_id}:1")
+
+    page1 = _make_callback(user_id, f"prog:gpage:{group_id}:1")
+    await history.prog_group_page(page1, state)
+    kb1 = page1.message.answer.await_args.kwargs["reply_markup"]
+    assert _has_button_cb(kb1, f"prog:gpage:{group_id}:0")  # back to page 0

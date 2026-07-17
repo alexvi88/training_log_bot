@@ -7,7 +7,9 @@ from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import BufferedInputFile, CallbackQuery
 
+import config
 import db
+import formatting
 import keyboards
 import ui
 from fsm import SettingsFlow
@@ -19,7 +21,8 @@ async def show_settings(callback: CallbackQuery, state: FSMContext, alert: str |
     await state.set_state(SettingsFlow.menu)
     user = await db.get_user(callback.from_user.id)
     kb = keyboards.settings_keyboard(
-        user["unit"], user["e1rm_formula"], bool(user["pushes_enabled"]), bool(user["ai_comments_enabled"])
+        user["unit"], user["e1rm_formula"], bool(user["pushes_enabled"]),
+        bool(user["ai_comments_enabled"]), bool(user["progression_hint_enabled"]),
     )
     await ui.safe_edit(callback, "🔧 Настройки:", reply_markup=kb)
     if alert:
@@ -37,15 +40,17 @@ async def settings_back(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "settings:unit")
 async def settings_unit(callback: CallbackQuery, state: FSMContext):
-    user = await db.get_user(callback.from_user.id)
-    new_unit = "lb" if user["unit"] == "kg" else "kg"
-    await db.update_user(callback.from_user.id, unit=new_unit)
+    user_id = callback.from_user.id
+    user = await db.get_user(user_id)
+    old_unit = user["unit"]
+    new_unit = "lb" if old_unit == "kg" else "kg"
+    factor = config.LB_PER_KG if new_unit == "lb" else 1 / config.LB_PER_KG
+    await db.scale_user_set_weights(user_id, factor)
+    await db.scale_bodyweight_logs(user_id, factor)
+    await db.update_user(user_id, unit=new_unit)
     await show_settings(
         callback, state,
-        alert=(
-            "⚠️ Это только смена подписи — вес не пересчитывается. "
-            "Вся история так и останется в старых цифрах."
-        ),
+        alert=f"Единицы переключены на {new_unit}. Все веса в истории пересчитаны автоматически.",
     )
 
 
@@ -54,6 +59,15 @@ async def settings_formula(callback: CallbackQuery, state: FSMContext):
     user = await db.get_user(callback.from_user.id)
     new_formula = "brzycki" if user["e1rm_formula"] == "epley" else "epley"
     await db.update_user(callback.from_user.id, e1rm_formula=new_formula)
+    await show_settings(callback, state)
+
+
+@router.callback_query(F.data == "settings:progression")
+async def settings_progression(callback: CallbackQuery, state: FSMContext):
+    user = await db.get_user(callback.from_user.id)
+    await db.update_user(
+        callback.from_user.id, progression_hint_enabled=0 if user["progression_hint_enabled"] else 1
+    )
     await show_settings(callback, state)
 
 
@@ -76,10 +90,11 @@ async def settings_export(callback: CallbackQuery, state: FSMContext):
     rows = await db.export_rows_for_user(callback.from_user.id)
     buf = io.StringIO()
     writer = csv.writer(buf)
-    writer.writerow(["started_at", "exercise", "round_index", "weight", "reps"])
+    writer.writerow(["started_at", "exercise", "round_index", "weight", "reps", "rpe"])
     for r in rows:
         writer.writerow([
             r["started_at"], r["exercise"], r["round_index"], r["weight"], r["reps"],
+            "" if r["rpe"] is None else formatting.format_weight(r["rpe"]),
         ])
     data = buf.getvalue().encode("utf-8-sig")
     await callback.message.answer_document(

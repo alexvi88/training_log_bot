@@ -15,6 +15,10 @@ ADMIN_REPORT_HOUR = int(os.getenv("ADMIN_REPORT_HOUR", "9"))
 
 DEFAULT_UNIT = "kg"
 
+# Pounds per kilogram — used to convert every stored weight when a user
+# switches units, so history stays physically correct instead of just relabeled.
+LB_PER_KG = 2.20462
+
 # e1RM formula: "epley" or "brzycki"
 DEFAULT_E1RM_FORMULA = os.getenv("E1RM_FORMULA", "epley")
 
@@ -28,12 +32,17 @@ STALE_WORKOUT_HOURS = 6
 RECENT_EXERCISES_LIMIT = 12
 
 # Engagement pushes (streaks, skip reminders, plateau nudges, weekly digest — see
-# PUSH_IDEAS.md). Off by default so a fresh deploy doesn't start messaging users
-# until this has been reviewed.
-ENGAGEMENT_ENABLED = os.getenv("ENGAGEMENT_ENABLED", "false").lower() == "true"
+# PUSH_IDEAS.md). On by default; set ENGAGEMENT_ENABLED=false in the environment
+# to silence the daily job entirely without touching per-user opt-outs.
+ENGAGEMENT_ENABLED = os.getenv("ENGAGEMENT_ENABLED", "true").lower() == "true"
 
 # Local hour (0-23) at which the daily engagement job evaluates and sends pushes.
 ENGAGEMENT_HOUR = int(os.getenv("ENGAGEMENT_HOUR", "19"))
+
+# Use an AI-generated personalized weekly digest (Sundays) in place of the static
+# rotation text, when the AI trainer is configured. Falls back to static copy on
+# any failure. Set =false to always use the static digest.
+AI_WEEKLY_DIGEST_ENABLED = os.getenv("AI_WEEKLY_DIGEST_ENABLED", "true").lower() == "true"
 
 # How often (minutes) the post-workout followup job checks for due reminders.
 FOLLOWUP_POLL_MINUTES = int(os.getenv("FOLLOWUP_POLL_MINUTES", "10"))
@@ -55,6 +64,11 @@ GROK_SEARCH_MODEL = os.getenv("GROK_SEARCH_MODEL", "grok-4.20-multi-agent")
 # Guards against runaway search cost; once hit, the AI trainer still answers
 # normally (own tools only, no live search) until the next day.
 AI_SEARCH_DAILY_LIMIT = int(os.getenv("AI_SEARCH_DAILY_LIMIT", "40"))
+
+# Soft per-user daily cap on AI-trainer questions overall (any kind). Guards
+# against a single user running up unbounded model cost; when hit, the trainer
+# politely defers until the next day. Generous by default.
+AI_QUESTION_DAILY_LIMIT = int(os.getenv("AI_QUESTION_DAILY_LIMIT", "50"))
 
 # Delay after finishing a workout before the hydration/protein followup push fires.
 FOLLOWUP_DELAY_HOURS = int(os.getenv("FOLLOWUP_DELAY_HOURS", "2"))

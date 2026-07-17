@@ -32,7 +32,8 @@ CREATE TABLE IF NOT EXISTS users (
     show_extra_stats INTEGER NOT NULL DEFAULT 1,
     pushes_enabled INTEGER NOT NULL DEFAULT 1,
     reply_keyboard_version INTEGER NOT NULL DEFAULT 0,
-    ai_comments_enabled INTEGER NOT NULL DEFAULT 0
+    ai_comments_enabled INTEGER NOT NULL DEFAULT 0,
+    progression_hint_enabled INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS muscle_groups (
@@ -136,6 +137,13 @@ CREATE TABLE IF NOT EXISTS ai_search_usage (
     PRIMARY KEY (telegram_id, date)
 );
 
+CREATE TABLE IF NOT EXISTS ai_question_usage (
+    telegram_id INTEGER NOT NULL,
+    date TEXT NOT NULL,
+    count INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (telegram_id, date)
+);
+
 CREATE TABLE IF NOT EXISTS ai_chat_messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     telegram_id INTEGER NOT NULL,
@@ -144,6 +152,32 @@ CREATE TABLE IF NOT EXISTS ai_chat_messages (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_ai_chat_messages_user ON ai_chat_messages (telegram_id, id);
+
+CREATE TABLE IF NOT EXISTS bodyweight_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    telegram_id INTEGER NOT NULL,
+    weight REAL NOT NULL,
+    logged_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_bodyweight_user ON bodyweight_logs (telegram_id, logged_at);
+
+CREATE TABLE IF NOT EXISTS routines (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_routines_user ON routines (user_id);
+
+CREATE TABLE IF NOT EXISTS routine_exercises (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    routine_id INTEGER NOT NULL,
+    exercise_id INTEGER NOT NULL,
+    order_index INTEGER NOT NULL,
+    FOREIGN KEY (routine_id) REFERENCES routines (id),
+    FOREIGN KEY (exercise_id) REFERENCES exercises (id)
+);
+CREATE INDEX IF NOT EXISTS idx_routine_exercises_routine ON routine_exercises (routine_id);
 """
 
 _conn: Optional[aiosqlite.Connection] = None
@@ -226,6 +260,10 @@ async def _migrate_schema() -> None:
         await _conn.execute("ALTER TABLE users ADD COLUMN pushes_enabled INTEGER NOT NULL DEFAULT 1")
     if "ai_comments_enabled" not in user_cols:
         await _conn.execute("ALTER TABLE users ADD COLUMN ai_comments_enabled INTEGER NOT NULL DEFAULT 0")
+    if "progression_hint_enabled" not in user_cols:
+        await _conn.execute(
+            "ALTER TABLE users ADD COLUMN progression_hint_enabled INTEGER NOT NULL DEFAULT 1"
+        )
     if "reply_keyboard_version" not in user_cols:
         if "reply_keyboard_shown" in user_cols:
             # Superseded by a version counter so future button-set changes can
@@ -245,8 +283,6 @@ async def _migrate_schema() -> None:
     set_cols = await _column_names("sets")
     if "is_warmup" in set_cols:
         await _conn.execute("ALTER TABLE sets DROP COLUMN is_warmup")
-
-    await _conn.execute("DROP TABLE IF EXISTS bodyweight_logs")
 
     await _conn.commit()
 
@@ -813,6 +849,28 @@ async def list_finished_workout_dates(user_id: int) -> list[str]:
     return [r["d"] for r in await cur.fetchall()]
 
 
+async def weekly_volume_by_group(
+    user_id: int, start_date: str, end_date: str
+) -> dict[Optional[int], int]:
+    """Count of working sets per muscle group across finished workouts in [start_date, end_date].
+
+    Keyed by exercises.primary_group_id (None bucketed under the NULL key). Dates
+    are calendar days (YYYY-MM-DD) compared against date(workouts.started_at).
+    """
+    cur = await conn().execute(
+        "SELECT e.primary_group_id AS gid, COUNT(s.id) AS cnt "
+        "FROM sets s "
+        "JOIN workout_blocks b ON b.id = s.block_id "
+        "JOIN workouts w ON w.id = b.workout_id "
+        "JOIN exercises e ON e.id = s.exercise_id "
+        "WHERE w.user_id = ? AND w.status = 'finished' "
+        "AND date(w.started_at) BETWEEN ? AND ? "
+        "GROUP BY e.primary_group_id",
+        (user_id, start_date, end_date),
+    )
+    return {row["gid"]: row["cnt"] for row in await cur.fetchall()}
+
+
 # ---------- blocks / block exercises ----------
 
 async def create_block(workout_id: int, block_type: str) -> int:
@@ -947,10 +1005,10 @@ async def get_set_owner(set_id: int) -> Optional[int]:
     return row["user_id"] if row else None
 
 
-async def update_set(set_id: int, weight: float, reps: int) -> None:
+async def update_set(set_id: int, weight: float, reps: int, rpe: Optional[float] = None) -> None:
     async with _write_lock:
         await conn().execute(
-            "UPDATE sets SET weight = ?, reps = ? WHERE id = ?", (weight, reps, set_id)
+            "UPDATE sets SET weight = ?, reps = ?, rpe = ? WHERE id = ?", (weight, reps, rpe, set_id)
         )
         await conn().commit()
 
@@ -1050,12 +1108,94 @@ async def get_next_exercise_in_workout(workout_id: int, exercise_id: int) -> Opt
     return None
 
 
+# ---------- routines (saved workout templates / splits) ----------
+
+async def create_routine(user_id: int, name: str) -> int:
+    async with _write_lock:
+        cur = await conn().execute(
+            "INSERT INTO routines (user_id, name, created_at) VALUES (?, ?, ?)",
+            (user_id, name, now_iso()),
+        )
+        await conn().commit()
+        return cur.lastrowid
+
+
+async def add_routine_exercise(routine_id: int, exercise_id: int, order_index: int) -> None:
+    async with _write_lock:
+        await conn().execute(
+            "INSERT INTO routine_exercises (routine_id, exercise_id, order_index) VALUES (?, ?, ?)",
+            (routine_id, exercise_id, order_index),
+        )
+        await conn().commit()
+
+
+async def list_routines(user_id: int) -> list[aiosqlite.Row]:
+    cur = await conn().execute(
+        "SELECT r.*, "
+        "(SELECT COUNT(*) FROM routine_exercises re WHERE re.routine_id = r.id) AS exercise_count "
+        "FROM routines r WHERE r.user_id = ? ORDER BY r.created_at DESC, r.id DESC",
+        (user_id,),
+    )
+    return await cur.fetchall()
+
+
+async def get_routine(routine_id: int) -> Optional[aiosqlite.Row]:
+    cur = await conn().execute("SELECT * FROM routines WHERE id = ?", (routine_id,))
+    return await cur.fetchone()
+
+
+async def list_routine_exercises(routine_id: int) -> list[aiosqlite.Row]:
+    """Routine's exercises in order, joined with the (non-archived) exercise display name.
+
+    Exercises archived after being added to the routine are dropped so a routine
+    never resurrects something the user removed from their catalog.
+    """
+    cur = await conn().execute(
+        "SELECT re.*, e.display_name FROM routine_exercises re "
+        "JOIN exercises e ON e.id = re.exercise_id "
+        "WHERE re.routine_id = ? AND e.is_archived = 0 "
+        "ORDER BY re.order_index",
+        (routine_id,),
+    )
+    return await cur.fetchall()
+
+
+async def rename_routine(routine_id: int, name: str) -> None:
+    async with _write_lock:
+        await conn().execute("UPDATE routines SET name = ? WHERE id = ?", (name, routine_id))
+        await conn().commit()
+
+
+async def delete_routine(routine_id: int) -> None:
+    async with _write_lock:
+        db = conn()
+        await db.execute("DELETE FROM routine_exercises WHERE routine_id = ?", (routine_id,))
+        await db.execute("DELETE FROM routines WHERE id = ?", (routine_id,))
+        await db.commit()
+
+
+async def create_routine_from_workout(user_id: int, workout_id: int, name: str) -> int:
+    """Snapshot a finished workout's exercises (in block order, de-duplicated) as a routine."""
+    routine_id = await create_routine(user_id, name)
+    seen: set[int] = set()
+    order = 0
+    for block in await list_blocks_for_workout(workout_id):
+        for be in await get_block_exercises(block["id"]):
+            ex_id = be["exercise_id"]
+            if ex_id in seen:
+                continue
+            seen.add(ex_id)
+            await add_routine_exercise(routine_id, ex_id, order)
+            order += 1
+    return routine_id
+
+
 # ---------- export ----------
 
 async def export_rows_for_user(user_id: int) -> list[aiosqlite.Row]:
     cur = await conn().execute(
         "SELECT w.started_at, e.display_name AS exercise, "
-        "s.round_index, s.weight, s.reps "
+        "s.round_index, s.weight, s.reps, s.rpe "
         "FROM sets s "
         "JOIN workout_blocks bt ON bt.id = s.block_id "
         "JOIN workouts w ON w.id = bt.workout_id "
@@ -1171,6 +1311,27 @@ async def increment_ai_search_count(telegram_id: int) -> None:
         await conn().commit()
 
 
+async def get_ai_question_count_today(telegram_id: int) -> int:
+    today = dt.date.today().isoformat()
+    cur = await conn().execute(
+        "SELECT count FROM ai_question_usage WHERE telegram_id = ? AND date = ?",
+        (telegram_id, today),
+    )
+    row = await cur.fetchone()
+    return row["count"] if row else 0
+
+
+async def increment_ai_question_count(telegram_id: int) -> None:
+    today = dt.date.today().isoformat()
+    async with _write_lock:
+        await conn().execute(
+            "INSERT INTO ai_question_usage (telegram_id, date, count) VALUES (?, ?, 1) "
+            "ON CONFLICT (telegram_id, date) DO UPDATE SET count = count + 1",
+            (telegram_id, today),
+        )
+        await conn().commit()
+
+
 # ---------- AI trainer: durable chat history ----------
 #
 # Separate from the live in-FSM window (handlers/ai_trainer.py's ai_history,
@@ -1201,6 +1362,74 @@ async def get_ai_chat_history(telegram_id: int, limit: int = MAX_AI_CHAT_HISTORY
     )
     rows = await cur.fetchall()
     return list(reversed(rows))
+
+
+# ---------- bodyweight log ----------
+
+async def add_bodyweight_log(telegram_id: int, weight: float, logged_at: Optional[str] = None) -> int:
+    async with _write_lock:
+        cur = await conn().execute(
+            "INSERT INTO bodyweight_logs (telegram_id, weight, logged_at) VALUES (?, ?, ?)",
+            (telegram_id, weight, logged_at or now_iso()),
+        )
+        await conn().commit()
+        return cur.lastrowid
+
+
+async def list_bodyweight_logs(telegram_id: int, limit: Optional[int] = None) -> list[aiosqlite.Row]:
+    """Bodyweight entries oldest-first (for charting). With `limit`, the most recent N, still oldest-first."""
+    if limit is None:
+        cur = await conn().execute(
+            "SELECT * FROM bodyweight_logs WHERE telegram_id = ? ORDER BY logged_at, id",
+            (telegram_id,),
+        )
+        return await cur.fetchall()
+    cur = await conn().execute(
+        "SELECT * FROM bodyweight_logs WHERE telegram_id = ? ORDER BY logged_at DESC, id DESC LIMIT ?",
+        (telegram_id, limit),
+    )
+    return list(reversed(await cur.fetchall()))
+
+
+async def get_latest_bodyweight(telegram_id: int) -> Optional[aiosqlite.Row]:
+    cur = await conn().execute(
+        "SELECT * FROM bodyweight_logs WHERE telegram_id = ? ORDER BY logged_at DESC, id DESC LIMIT 1",
+        (telegram_id,),
+    )
+    return await cur.fetchone()
+
+
+async def delete_last_bodyweight(telegram_id: int) -> Optional[aiosqlite.Row]:
+    row = await get_latest_bodyweight(telegram_id)
+    if row is None:
+        return None
+    async with _write_lock:
+        await conn().execute("DELETE FROM bodyweight_logs WHERE id = ?", (row["id"],))
+        await conn().commit()
+    return row
+
+
+async def scale_bodyweight_logs(telegram_id: int, factor: float) -> None:
+    """Multiply every stored bodyweight by `factor` — used when a user switches units."""
+    async with _write_lock:
+        await conn().execute(
+            "UPDATE bodyweight_logs SET weight = ROUND(weight * ?, 1) WHERE telegram_id = ?",
+            (factor, telegram_id),
+        )
+        await conn().commit()
+
+
+async def scale_user_set_weights(telegram_id: int, factor: float) -> None:
+    """Convert every logged set weight for a user by `factor` (bodyweight 0-sets untouched)."""
+    async with _write_lock:
+        await conn().execute(
+            "UPDATE sets SET weight = ROUND(weight * ?, 1) "
+            "WHERE weight != 0 AND block_id IN ("
+            "  SELECT b.id FROM workout_blocks b JOIN workouts w ON w.id = b.workout_id "
+            "  WHERE w.user_id = ?)",
+            (factor, telegram_id),
+        )
+        await conn().commit()
 
 
 async def record_push(telegram_id: int, category: str, text: str) -> None:

@@ -35,6 +35,7 @@ class SetRow:
     reps: int
     workout_id: Optional[int] = None
     started_at: Optional[str] = None
+    rpe: Optional[float] = None  # display-only; never enters e1RM/PR/trend math
 
 
 @dataclass
@@ -213,6 +214,70 @@ def compare_to_previous_session(sessions: list[SessionStats]) -> Optional[Compar
         tonnage_delta=curr.tonnage - prev.tonnage,
         prev_started_at=prev.started_at,
     )
+
+
+# Default hypertrophy working range the progression assistant nudges toward
+# (matches the AI trainer's methodology: 5-10 reps, double progression).
+REP_RANGE_MIN = 5
+REP_RANGE_MAX = 10
+
+# Weekly working-set landmarks per muscle group (same methodology: 5-10 sets/week).
+WEEKLY_VOLUME_MIN = 5
+WEEKLY_VOLUME_MAX = 10
+
+
+# Finished-workout counts worth celebrating right on the completion card
+# (not a push — the user is looking at the screen the moment it happens).
+_SMALL_MILESTONES = frozenset({1, 10, 25, 50, 75})
+
+
+def is_workout_milestone(total_finished: int) -> bool:
+    """True on the 1st/10th/25th/50th/75th workout, then every 100th (100, 200, …)."""
+    if total_finished <= 0:
+        return False
+    return total_finished in _SMALL_MILESTONES or total_finished % 100 == 0
+
+
+def classify_weekly_volume(sets_count: int) -> str:
+    """Bucket a group's weekly set count vs the target range: none/low/in_range/high."""
+    if sets_count <= 0:
+        return "none"
+    if sets_count < WEEKLY_VOLUME_MIN:
+        return "low"
+    if sets_count > WEEKLY_VOLUME_MAX:
+        return "high"
+    return "in_range"
+
+
+@dataclass
+class ProgressionSuggestion:
+    action: str  # "add_weight" | "add_reps"
+    target_weight: float
+    target_reps: int  # add_reps: reps to beat; add_weight: bottom-of-range reps to restart at
+    is_bodyweight: bool = False
+
+
+def suggest_progression(
+    last_sets: list[tuple[float, int]], weight_step: float
+) -> Optional[ProgressionSuggestion]:
+    """Next-session target from last session's sets, by double progression.
+
+    While the top working set is still inside the rep range, add a rep at the
+    same weight; once it crossed the top of the range (>= REP_RANGE_MAX), bump
+    the weight by `weight_step` and restart at the bottom of the range.
+    Bodyweight sets (weight 0) simply chase one more rep.
+    """
+    working = [(w, r) for w, r in last_sets if r > 0]
+    if not working:
+        return None
+    if all(w == 0 for w, _ in working):
+        best_reps = max(r for _, r in working)
+        return ProgressionSuggestion("add_reps", 0.0, best_reps + 1, is_bodyweight=True)
+    top_weight = max(w for w, _ in working)
+    reps_at_top = max(r for w, r in working if w == top_weight)
+    if reps_at_top >= REP_RANGE_MAX:
+        return ProgressionSuggestion("add_weight", top_weight + weight_step, REP_RANGE_MIN)
+    return ProgressionSuggestion("add_reps", top_weight, reps_at_top + 1)
 
 
 @dataclass

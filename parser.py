@@ -18,20 +18,32 @@ class ParsedSet:
     weight: float
     reps: int
     weight_omitted: bool = False  # bare reps, e.g. "8" — caller may fill weight from the previous set
+    rpe: float | None = None  # optional "@9" suffix; applies to every set produced by the token
 
 
 _SEP = r"[xXхХ*/]"
 _WEIGHT = r"\+?(?P<weight>\d+(?:[.,]\d+)?)"
+# Optional trailing "@RPE", e.g. "@9" or "@8.5" — subjective effort 1-10.
+_RPE = r"(?:\s*@\s*(?P<rpe>\d+(?:[.,]\d+)?))?"
 
-_X_SEP_RE = re.compile(rf"^{_WEIGHT}\s*{_SEP}\s*(?P<reps>\d+)(?:\s*{_SEP}\s*(?P<count>\d+))?$")
-_SPACE_SEP_RE = re.compile(rf"^{_WEIGHT}\s+(?P<reps>\d+)(?:\s+(?P<count>\d+))?$")
-_BODYWEIGHT_RE = re.compile(r"^(?P<reps>\d+)$")
+_X_SEP_RE = re.compile(rf"^{_WEIGHT}\s*{_SEP}\s*(?P<reps>\d+)(?:\s*{_SEP}\s*(?P<count>\d+))?{_RPE}$")
+_SPACE_SEP_RE = re.compile(rf"^{_WEIGHT}\s+(?P<reps>\d+)(?:\s+(?P<count>\d+))?{_RPE}$")
+_BODYWEIGHT_RE = re.compile(rf"^(?P<reps>\d+){_RPE}$")
 
 MAX_SETS_PER_TOKEN = 20
 
 
+def _parse_rpe(raw: str | None) -> float | None:
+    if not raw:
+        return None
+    rpe = float(raw.replace(",", "."))
+    if not (0 < rpe <= 10):
+        raise ParseError("RPE должен быть от 1 до 10")
+    return rpe
+
+
 def parse_single_token(token: str) -> list[ParsedSet]:
-    """Parse one weight/reps[/count] token, e.g. '100x8x3', '100 8', '8', '+20 8'."""
+    """Parse one weight/reps[/count][@rpe] token, e.g. '100x8x3', '100 8', '8', '+20 8', '100x8@9'."""
     text = token.strip()
     if not text:
         raise ParseError(EXAMPLES_HINT)
@@ -41,7 +53,8 @@ def parse_single_token(token: str) -> list[ParsedSet]:
         reps = int(bw_match.group("reps"))
         if reps <= 0:
             raise ParseError("Повторы должны быть больше 0")
-        return [ParsedSet(weight=0.0, reps=reps, weight_omitted=True)]
+        rpe = _parse_rpe(bw_match.group("rpe"))
+        return [ParsedSet(weight=0.0, reps=reps, weight_omitted=True, rpe=rpe)]
 
     match = _X_SEP_RE.match(text) or _SPACE_SEP_RE.match(text)
     if not match:
@@ -50,13 +63,28 @@ def parse_single_token(token: str) -> list[ParsedSet]:
     weight = float(match.group("weight").replace(",", "."))
     reps = int(match.group("reps"))
     count = int(match.group("count")) if match.group("count") else 1
+    rpe = _parse_rpe(match.group("rpe"))
 
     if reps <= 0:
         raise ParseError("Повторы должны быть больше 0")
     if not (0 < count <= MAX_SETS_PER_TOKEN):
         raise ParseError("Странное количество подходов")
 
-    return [ParsedSet(weight=weight, reps=reps) for _ in range(count)]
+    return [ParsedSet(weight=weight, reps=reps, rpe=rpe) for _ in range(count)]
+
+
+_BODYWEIGHT_VALUE_RE = re.compile(r"^\d+(?:[.,]\d+)?$")
+
+
+def parse_bodyweight(text: str) -> float:
+    """A single positive body weight, e.g. '80', '80.5', '80,5'."""
+    raw = text.strip()
+    if not _BODYWEIGHT_VALUE_RE.match(raw):
+        raise ParseError("Не понял вес. Напиши число, например 80 или 80.5")
+    weight = float(raw.replace(",", "."))
+    if not (0 < weight < 1000):
+        raise ParseError("Странный вес — напиши реальное число в кг/lb")
+    return weight
 
 
 # ---------- date input: дд.мм.гггг ----------

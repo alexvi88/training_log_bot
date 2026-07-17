@@ -174,6 +174,40 @@ def test_build_live_session_text_appends_hint_after_divider():
     assert text.endswith(f"{formatting.DIVIDER}\nЧто дальше?")
 
 
+# ---------- RPE display ----------
+
+
+def test_format_set_with_rpe():
+    assert formatting.format_set(100.0, 8, 9.0) == "100×8 @9"
+    assert formatting.format_set(100.0, 8, 8.5) == "100×8 @8.5"
+
+
+def test_format_set_without_rpe_unchanged():
+    assert formatting.format_set(100.0, 8) == "100×8"
+    assert formatting.format_set(100.0, 8, None) == "100×8"
+
+
+def test_live_session_shows_rpe_only_where_logged():
+    block = ExerciseBlockView(
+        group_name="грудь", exercise_name="Жим", sets=[(100.0, 8), (100.0, 7)],
+        set_rpes=[9.0, None], exercise_id=1,
+    )
+    lines = formatting.build_live_session_text([block]).splitlines()
+    assert "  • 100×8 @9" in lines
+    assert "  • 100×7" in lines
+
+
+def test_workout_summary_prev_line_shows_rpe():
+    block = ExerciseBlockView(
+        group_name="грудь", exercise_name="Жим", sets=[(100.0, 8)],
+        prev_sets=[(97.5, 8), (97.5, 7)], prev_set_rpes=[8.0, None], exercise_id=1,
+    )
+    text = formatting.build_workout_summary(
+        dt.datetime(2026, 7, 17, 10, 0), [block], show_extra_stats=False
+    )
+    assert "[прошлая: 97.5×8 @8, 97.5×7]" in text
+
+
 # ---------- format_pr_detail ----------
 
 
@@ -308,3 +342,13 @@ def test_format_progress_screen_no_count_line_when_history_fits():
     records = analytics.PersonalRecords()
     text = formatting.format_progress_screen("Жим лёжа", sessions, None, None, records, limit=8)
     assert "Показано" not in text
+
+
+def test_logging_hint_omits_progression_when_disabled():
+    from handlers.workout import _logging_hint
+    last = [(100.0, 10, None)]
+    with_hint = _logging_hint(last, has_sets=True, unit="kg", show_progression=True)
+    without = _logging_hint(last, has_sets=True, unit="kg", show_progression=False)
+    assert "🎯" in with_hint
+    assert "🎯" not in without
+    assert "В прошлый раз" in without

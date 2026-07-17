@@ -34,8 +34,9 @@ def main_menu(has_active_workout: bool) -> InlineKeyboardMarkup:
     b.button(text="📈 Прогресс", callback_data="menu:progress")
     b.button(text="📚 История", callback_data="menu:history")
     b.button(text="⚙️ Упражнения", callback_data="menu:exercises")
+    b.button(text="⚖️ Дневник веса", callback_data="menu:bodyweight")
     b.button(text="🔧 Настройки", callback_data="menu:settings")
-    b.adjust(1, 2, 2)
+    b.adjust(1, 2, 2, 1)
     return b.as_markup()
 
 
@@ -159,6 +160,39 @@ def exercise_picker_entry_keyboard(
     return b.as_markup()
 
 
+def start_workout_options_keyboard(routines) -> InlineKeyboardMarkup:
+    """Start screen: an empty workout, any saved routine, or manage routines."""
+    b = InlineKeyboardBuilder()
+    b.button(text="🏋️ Начать с нуля", callback_data="menu:confirm_start_workout")
+    for r in routines:
+        b.button(text=f"▶️ {r['name']}", callback_data=f"rt:start:{r['id']}")
+    b.button(text="🗂 Программы", callback_data="rt:manage")
+    b.button(text="❌ Отмена", callback_data="menu:cancel_start_workout")
+    b.adjust(1)
+    return b.as_markup()
+
+
+def routines_manage_keyboard(routines, has_last_workout: bool) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    for r in routines:
+        b.button(text=f"{r['name']} · {r['exercise_count']} упр.", callback_data=f"rt:view:{r['id']}")
+    if has_last_workout:
+        b.button(text="➕ Из последней тренировки", callback_data="rt:createlast")
+    b.button(text="⬅️ Главное меню", callback_data="rt:menu")
+    b.adjust(1)
+    return b.as_markup()
+
+
+def routine_detail_keyboard(routine_id: int) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.button(text="▶️ Начать тренировку", callback_data=f"rt:start:{routine_id}")
+    b.button(text="✏️ Переименовать", callback_data=f"rt:rename:{routine_id}")
+    b.button(text="🗑 Удалить", callback_data=f"rt:delask:{routine_id}")
+    b.button(text="⬅️ К списку", callback_data="rt:manage")
+    b.adjust(1)
+    return b.as_markup()
+
+
 def stale_workout_keyboard(workout_id: int) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(text="✅ Завершить задним числом", callback_data=f"stale:finish:{workout_id}")
@@ -222,6 +256,7 @@ def history_list_keyboard(workouts, page: int, has_next: bool) -> InlineKeyboard
     b.adjust(1)
     if nav:
         b.row(*nav)
+    b.row(InlineKeyboardButton(text="💪 Объём за неделю", callback_data="menu:volume"))
     b.row(InlineKeyboardButton(text="🗓 Добавить прошлые тренировки", callback_data="menu:backfill_workout"))
     b.row(InlineKeyboardButton(text="⬅️ Главное меню", callback_data="hist:menu"))
     return b.as_markup()
@@ -304,11 +339,15 @@ def admin_pushes_keyboard(page: int, has_next: bool) -> InlineKeyboardMarkup:
 
 
 def settings_keyboard(
-    unit: str, formula: str, pushes_enabled: bool, ai_comments_enabled: bool
+    unit: str, formula: str, pushes_enabled: bool, ai_comments_enabled: bool, progression_enabled: bool
 ) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(text=f"Единицы: {unit}", callback_data="settings:unit")
     b.button(text=f"Формула 1ПМ: {formula}", callback_data="settings:formula")
+    progression_label = (
+        "🎯 Подсказки прогрессии: вкл" if progression_enabled else "🎯 Подсказки прогрессии: выкл"
+    )
+    b.button(text=progression_label, callback_data="settings:progression")
     pushes_label = "🔔 Пуши: включены" if pushes_enabled else "🔕 Пуши: выключены"
     b.button(text=pushes_label, callback_data="settings:pushes")
     ai_label = (
@@ -321,6 +360,39 @@ def settings_keyboard(
     b.button(text="📥 Импорт CSV", callback_data="settings:import")
     b.button(text="⬅️ Назад", callback_data="settings:back")
     b.adjust(1)
+    return b.as_markup()
+
+
+def weekly_volume_keyboard(week_offset: int) -> InlineKeyboardMarkup:
+    """week_offset: 0 = current week, 1 = last week, … (older to the left)."""
+    b = InlineKeyboardBuilder()
+    b.button(text="⬅️ Прошлая неделя", callback_data=f"vol:wk:{week_offset + 1}")
+    if week_offset > 0:
+        b.button(text="Следующая ➡️", callback_data=f"vol:wk:{week_offset - 1}")
+    b.button(text="⬅️ К истории", callback_data="menu:history")
+    b.adjust(2, 1) if week_offset > 0 else b.adjust(1, 1)
+    return b.as_markup()
+
+
+# Chart window options for the weight diary (weeks; 0 = all history).
+BODYWEIGHT_PERIODS = [(8, "8 нед"), (26, "26 нед"), (0, "Всё")]
+DEFAULT_BODYWEIGHT_WEEKS = 0
+
+
+def bodyweight_keyboard(has_logs: bool, weeks: int = 0, show_periods: bool = False) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    if show_periods:
+        for value, label in BODYWEIGHT_PERIODS:
+            text = f"• {label} •" if value == weeks else label
+            b.button(text=text, callback_data=f"bw:period:{value}")
+    b.button(text="➕ Записать вес", callback_data="bw:add")
+    if has_logs:
+        b.button(text="↩️ Удалить последнюю", callback_data="bw:undo")
+    b.button(text="⬅️ Главное меню", callback_data="bw:menu")
+    if show_periods:
+        b.adjust(len(BODYWEIGHT_PERIODS), 1, 1, 1)
+    else:
+        b.adjust(1)
     return b.as_markup()
 
 

@@ -53,6 +53,16 @@ class AITrainerFlow(StatesGroup):
     chatting = State()
 
 
+class BodyweightFlow(StatesGroup):
+    viewing = State()
+    awaiting_weight = State()
+
+
+class RoutineFlow(StatesGroup):
+    naming = State()
+    renaming = State()
+
+
 class ImportFlow(StatesGroup):
     awaiting_file = State()
     mapping_columns = State()

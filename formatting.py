@@ -38,8 +38,15 @@ def format_weight(weight: float) -> str:
     return f"{weight:.1f}".rstrip("0").rstrip(".")
 
 
-def format_set(weight: float, reps: int) -> str:
-    return f"{format_weight(weight)}×{reps}"
+def format_rpe(rpe: float | None) -> str:
+    """Trailing "@9" / "@8.5" suffix for a set, or empty string when no RPE was logged."""
+    if rpe is None:
+        return ""
+    return f" @{format_weight(rpe)}"
+
+
+def format_set(weight: float, reps: int, rpe: float | None = None) -> str:
+    return f"{format_weight(weight)}×{reps}{format_rpe(rpe)}"
 
 
 def format_date_ru(d: dt.datetime) -> str:
@@ -65,6 +72,18 @@ class ExerciseBlockView:
     type: Literal["single"] = "single"
     exercise_id: int | None = None
     prev_sets: list[tuple[float, int]] | None = None  # sets from the previous session, if any
+    set_rpes: list[float | None] | None = None  # per-set RPE, aligned with `sets`; None = none logged
+    prev_set_rpes: list[float | None] | None = None  # per-set RPE for prev_sets
+
+    def rpe_for(self, index: int) -> float | None:
+        if not self.set_rpes or index >= len(self.set_rpes):
+            return None
+        return self.set_rpes[index]
+
+    def prev_rpe_for(self, index: int) -> float | None:
+        if not self.prev_set_rpes or index >= len(self.prev_set_rpes):
+            return None
+        return self.prev_set_rpes[index]
 
     @property
     def tonnage(self) -> float:
@@ -90,14 +109,16 @@ BlockView = ExerciseBlockView
 def _render_single_block(block: ExerciseBlockView, show_extra: bool, italic_prev: bool = False) -> list[str]:
     label = f"{escape(block.exercise_name)} [{block.group_name.upper()}]"
     lines = [f"<b>{label}</b>"]
-    lines.extend(f"  • {format_set(w, r)}" for w, r in block.sets)
+    lines.extend(f"  • {format_set(w, r, block.rpe_for(i))}" for i, (w, r) in enumerate(block.sets))
     if show_extra and block.sets:
         if block.is_bodyweight:
             lines.append(f"  ↳ повторов всего {sum(r for _, r in block.sets)}")
         else:
             lines.append(f"  ↳ e1RM {block.top_e1rm:.1f}")
     if block.prev_sets:
-        prev_str = ", ".join(format_set(w, r) for w, r in block.prev_sets)
+        prev_str = ", ".join(
+            format_set(w, r, block.prev_rpe_for(i)) for i, (w, r) in enumerate(block.prev_sets)
+        )
         prev_line = f"  [прошлая: {prev_str}]"
         lines.append(f"<i>{prev_line}</i>" if italic_prev else prev_line)
     return lines
@@ -149,6 +170,14 @@ def markdown_bold_to_html(text: str) -> str:
     return "".join(parts)
 
 
+def format_milestone_line(total_finished: int) -> str:
+    """Celebratory one-liner for a round finished-workout count (see analytics.is_workout_milestone)."""
+    if total_finished == 1:
+        return "🎉 <b>Первая тренировка в дневнике — поехали!</b>"
+    word = plural_ru(total_finished, ("тренировка", "тренировки", "тренировок"))
+    return f"🎉 <b>Юбилей: {total_finished} {word}!</b> Так держать."
+
+
 def build_ai_comment_block(comment: str) -> str:
     """Rendered as a card section prefixed by DIVIDER — same convention as highlights."""
     return f"{DIVIDER}\n🤖 <b>Комментарий AI-тренера</b>\n\n{markdown_bold_to_html(comment)}"
@@ -193,7 +222,7 @@ def build_workout_card(
 
     for block in blocks:
         body.append(f"{block.exercise_name} [{block.group_name.upper()}]")
-        body.append("  " + ", ".join(format_set(w, r) for w, r in block.sets))
+        body.append("  " + ", ".join(format_set(w, r, block.rpe_for(i)) for i, (w, r) in enumerate(block.sets)))
         exercise_count += 1
         set_count += len(block.sets)
         tonnage += block.tonnage
@@ -218,7 +247,7 @@ def build_live_session_text(
             body_lines.append("")
         prefix = "▶ " if active_exercise_id is not None and block.exercise_id == active_exercise_id else ""
         body_lines.append(f"{prefix}<b>{escape(block.exercise_name)}</b>")
-        body_lines.extend(f"  • {format_set(w, r)}" for w, r in block.sets)
+        body_lines.extend(f"  • {format_set(w, r, block.rpe_for(i))}" for i, (w, r) in enumerate(block.sets))
     lines = list(body_lines)
     if not lines and not hint:
         lines = ["Добавь упражнение, чтобы начать."]
@@ -287,7 +316,7 @@ def format_progress_screen(
 
     for s in reversed(shown):
         d = dt.datetime.fromisoformat(s.started_at)
-        sets_str = ", ".join(format_set(st.weight, st.reps) for st in s.sets)
+        sets_str = ", ".join(format_set(st.weight, st.reps, st.rpe) for st in s.sets)
         lines.append(f"<b>{format_date_ru(d)}</b>")
         lines.append(sets_str)
         if is_bw:
@@ -301,6 +330,100 @@ def format_progress_screen(
         lines.append(f"Показано {len(shown)} из {len(window)} {n}")
 
     return "\n".join(lines).rstrip()
+
+
+_VOLUME_STATUS_ICON = {"none": "▫️", "low": "🟡", "in_range": "🟢", "high": "🟠"}
+
+
+def build_weekly_volume_screen(
+    week_start: dt.date,
+    rows: list[tuple[str, int, str]],
+    is_current_week: bool,
+) -> str:
+    """Weekly working-set volume per muscle group vs the 5-10 target range.
+
+    rows: (group_name, set_count, status) where status comes from
+    analytics.classify_weekly_volume. Groups are shown in the order passed in,
+    including those with zero sets — the gaps are the point.
+    """
+    from analytics import WEEKLY_VOLUME_MAX, WEEKLY_VOLUME_MIN
+
+    week_end = week_start + dt.timedelta(days=6)
+    period = f"{week_start.strftime('%d.%m')}–{week_end.strftime('%d.%m')}"
+    label = "эта неделя" if is_current_week else "неделя"
+    lines = [f"💪 <b>ОБЪЁМ ПО ГРУППАМ</b> · {period} ({label})", ""]
+
+    total = sum(c for _, c, _ in rows)
+    if total == 0:
+        lines.append("На этой неделе ещё нет ни одного подхода.")
+        lines.append(f"\nЦель — {WEEKLY_VOLUME_MIN}–{WEEKLY_VOLUME_MAX} рабочих подходов на группу за неделю.")
+        return "\n".join(lines)
+
+    for name, count, status in rows:
+        icon = _VOLUME_STATUS_ICON.get(status, "▫️")
+        word = plural_ru(count, ("подход", "подхода", "подходов"))
+        lines.append(f"{icon} {escape(name)}: <b>{count}</b> {word}")
+
+    set_word = plural_ru(total, ("подход", "подхода", "подходов"))
+    lines.append("")
+    lines.append(f"Всего {total} {set_word}.")
+    lines.append(
+        f"Цель — {WEEKLY_VOLUME_MIN}–{WEEKLY_VOLUME_MAX}/нед на группу: "
+        "🟢 в диапазоне, 🟡 мало, 🟠 многовато, ▫️ пусто."
+    )
+    return "\n".join(lines)
+
+
+def build_bodyweight_screen(logs: list, unit: str = "kg") -> str:
+    """Text for the ⚖️ Вес тела screen: latest value, change vs first/previous, count.
+
+    logs: rows with `weight` and `logged_at`, ascending by date (as db.list_bodyweight_logs returns).
+    """
+    u = UNIT_LABELS.get(unit, "кг")
+    if not logs:
+        return (
+            "⚖️ <b>Дневник веса</b>\n\nПока нет ни одной записи.\n"
+            "Нажми «➕ Записать вес» и введи текущий вес — дальше буду показывать динамику."
+        )
+    latest = logs[-1]
+    latest_weight = latest["weight"]
+    d = dt.datetime.fromisoformat(latest["logged_at"])
+    lines = [
+        "⚖️ <b>Дневник веса</b>",
+        "",
+        f"Сейчас: <b>{format_weight(latest_weight)} {u}</b> ({format_date_ru(d)})",
+    ]
+    if len(logs) >= 2:
+        prev = logs[-2]["weight"]
+        first = logs[0]["weight"]
+        step_delta = latest_weight - prev
+        total_delta = latest_weight - first
+        lines.append(f"С прошлой записи: {_signed_weight(step_delta, u)}")
+        lines.append(f"За всё время: {_signed_weight(total_delta, u)}")
+    n = plural_ru(len(logs), ("запись", "записи", "записей"))
+    lines.append(f"\nВсего {len(logs)} {n}.")
+    return "\n".join(lines)
+
+
+def _signed_weight(delta: float, unit_label: str) -> str:
+    if abs(delta) < 1e-9:
+        return f"→ 0 {unit_label}"
+    arrow = "↑" if delta > 0 else "↓"
+    return f"{arrow} {format_weight(abs(delta))} {unit_label}"
+
+
+def format_progression_hint(suggestion, unit: str = "kg") -> str:
+    """One-line "🎯 Цель: …" nudge from analytics.suggest_progression."""
+    u = UNIT_LABELS.get(unit, "кг")
+    if suggestion.is_bodyweight:
+        return f"🎯 Цель: {suggestion.target_reps} повторов (на один больше прошлого)"
+    if suggestion.action == "add_weight":
+        top = suggestion.target_reps
+        return (
+            f"🎯 Цель: пора добавить вес — {format_weight(suggestion.target_weight)} {u} "
+            f"× {top}-{top + 1}"
+        )
+    return f"🎯 Цель: {format_set(suggestion.target_weight, suggestion.target_reps)} (тот же вес, +1 повтор)"
 
 
 def format_comparison_line(e1rm_delta: float, unit: str = "kg") -> str:
