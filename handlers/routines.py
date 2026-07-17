@@ -3,10 +3,11 @@
 A routine is an ordered list of exercises. Starting a workout from a routine
 fills the FSM's `planned_blocks` so the existing "▶️ Следующее по шаблону"
 flow (handlers/workout.py) walks the user through it one exercise at a time.
-Routines are created from the user's most recent finished workout — do the
-session once, then save it as your split.
+Routines can be created from any past finished workout — do the session
+once, then save it as your split.
 """
 
+import datetime as dt
 from html import escape
 
 from aiogram import F, Router
@@ -15,6 +16,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 import db
+import formatting
 import keyboards
 import ui
 from fsm import RoutineFlow, WorkoutFlow
@@ -22,24 +24,21 @@ from seed_data import PROGRAM_BY_KEY, WORKOUT_PROGRAMS
 
 router = Router(name="routines")
 
-
-async def _last_finished_workout_id(user_id: int) -> int | None:
-    workouts = await db.list_workouts(user_id, limit=1)
-    return workouts[0]["id"] if workouts else None
+ROUTINE_SOURCE_PAGE_SIZE = 8
 
 
 async def show_manage(event, state: FSMContext) -> None:
     user_id = event.from_user.id
     routines = await db.list_routines(user_id)
-    has_last = await _last_finished_workout_id(user_id) is not None
+    has_workouts = await db.count_workouts(user_id) > 0
     if routines:
-        text = "🗂 <b>ПРОГРАММЫ</b>\n\nВыбери программу или создай новую из последней тренировки."
+        text = "🗂 <b>ПРОГРАММЫ</b>\n\nВыбери программу или создай новую из тренировки."
     else:
         text = (
             "🗂 <b>ПРОГРАММЫ</b>\n\nУ тебя пока нет сохранённых программ.\n"
             "Проведи тренировку и сохрани её как программу — потом начнёшь такую же в один тап."
         )
-    kb = keyboards.routines_manage_keyboard(routines, has_last_workout=has_last)
+    kb = keyboards.routines_manage_keyboard(routines, has_workouts=has_workouts)
     if isinstance(event, CallbackQuery):
         await ui.safe_edit(event, text, reply_markup=kb, parse_mode="HTML")
     else:
@@ -161,11 +160,33 @@ async def rt_view(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(F.data == "rt:createlast")
-async def rt_create_from_last(callback: CallbackQuery, state: FSMContext):
-    workout_id = await _last_finished_workout_id(callback.from_user.id)
-    if workout_id is None:
-        await callback.answer("Нет завершённых тренировок", show_alert=True)
+async def _show_routine_source_picker(callback: CallbackQuery, state: FSMContext, page: int) -> None:
+    user_id = callback.from_user.id
+    total = await db.count_workouts(user_id)
+    workouts = await db.list_workouts(user_id, limit=ROUTINE_SOURCE_PAGE_SIZE, offset=page * ROUTINE_SOURCE_PAGE_SIZE)
+    items = [
+        {"id": w["id"], "label": formatting.format_date_ru(dt.datetime.fromisoformat(w["started_at"]))}
+        for w in workouts
+    ]
+    has_next = (page + 1) * ROUTINE_SOURCE_PAGE_SIZE < total
+    kb = keyboards.routine_source_picker_keyboard(items, page, has_next)
+    text = "Из какой тренировки создать программу?" if items else "Нет завершённых тренировок."
+    await ui.safe_edit(callback, text, reply_markup=kb)
+
+
+@router.callback_query(F.data.startswith("rt:pickw:page:"))
+async def rt_pickw_page(callback: CallbackQuery, state: FSMContext):
+    page = int(callback.data.split(":")[3])
+    await _show_routine_source_picker(callback, state, page)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("rt:pickw:item:"))
+async def rt_pickw_item(callback: CallbackQuery, state: FSMContext):
+    workout_id = int(callback.data.split(":")[3])
+    workout = await db.get_workout(workout_id)
+    if workout is None or workout["user_id"] != callback.from_user.id:
+        await callback.answer("Тренировка не найдена", show_alert=True)
         return
     await state.set_state(RoutineFlow.naming)
     await state.update_data(routine_source_workout_id=workout_id)
