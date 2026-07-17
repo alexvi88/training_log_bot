@@ -62,10 +62,3 @@ async def vol_week(callback: CallbackQuery, state: FSMContext):
     offset = max(0, int(callback.data.split(":")[2]))
     await show_weekly_volume(callback, offset=offset)
     await callback.answer()
-
-
-@router.callback_query(F.data == "vol:menu")
-async def vol_menu(callback: CallbackQuery, state: FSMContext):
-    from handlers.workout import _show_main_menu
-    await _show_main_menu(callback, state)
-    await callback.answer()
