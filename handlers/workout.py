@@ -342,10 +342,11 @@ async def start_workout(callback: CallbackQuery, state: FSMContext):
     if active:
         await _enter_live(callback, state, active["id"])
         return
-    routines = await db.list_routines(callback.from_user.id)
-    kb = keyboards.start_workout_options_keyboard(routines)
-    text = "Как начнём тренировку?" if routines else "Начать новую тренировку?"
-    await ui.safe_edit(callback, text, reply_markup=kb)
+    kb = keyboards.confirm_cancel_keyboard(
+        "menu:confirm_start_workout", "menu:cancel_start_workout",
+        confirm_text="🏋️ Начать", cancel_text="❌ Отмена",
+    )
+    await ui.safe_edit(callback, "Начать новую тренировку?", reply_markup=kb)
 
 
 @router.callback_query(F.data == "menu:confirm_start_workout")

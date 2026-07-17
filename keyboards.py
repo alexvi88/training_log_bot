@@ -31,12 +31,13 @@ def main_menu(has_active_workout: bool) -> InlineKeyboardMarkup:
         b.button(text="▶️ ПРОДОЛЖИТЬ ТРЕНИРОВКУ", callback_data="menu:resume_workout")
     else:
         b.button(text="🏋️ НАЧАТЬ ТРЕНИРОВКУ", callback_data="menu:start_workout")
+    b.button(text="🗂 Программы", callback_data="rt:manage")
     b.button(text="📈 Прогресс", callback_data="menu:progress")
     b.button(text="📚 История", callback_data="menu:history")
     b.button(text="⚙️ Упражнения", callback_data="menu:exercises")
     b.button(text="⚖️ Дневник веса", callback_data="menu:bodyweight")
     b.button(text="🔧 Настройки", callback_data="menu:settings")
-    b.adjust(1, 2, 2, 1)
+    b.adjust(1, 1, 2, 2, 1)
     return b.as_markup()
 
 
@@ -160,30 +161,32 @@ def exercise_picker_entry_keyboard(
     return b.as_markup()
 
 
-def start_workout_options_keyboard(routines) -> InlineKeyboardMarkup:
-    """Start screen: an empty workout, any saved routine, or manage routines."""
-    b = InlineKeyboardBuilder()
-    b.button(text="🏋️ Начать с нуля", callback_data="menu:confirm_start_workout")
-    for r in routines:
-        b.button(text=f"▶️ {r['name']}", callback_data=f"rt:start:{r['id']}")
-    b.button(text="🗂 Программы", callback_data="rt:manage")
-    b.button(text="❌ Отмена", callback_data="menu:cancel_start_workout")
-    if routines:
-        b.adjust(1)
-    else:
-        b.adjust(2, 1)
-    return b.as_markup()
-
-
-def routines_manage_keyboard(routines, has_last_workout: bool) -> InlineKeyboardMarkup:
+def routines_manage_keyboard(routines, has_workouts: bool) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     for r in routines:
         b.button(text=f"{r['name']} · {r['exercise_count']} упр.", callback_data=f"rt:view:{r['id']}")
-    if has_last_workout:
-        b.button(text="➕ Из последней тренировки", callback_data="rt:createlast")
+    if has_workouts:
+        b.button(text="➕ Из тренировки", callback_data="rt:pickw:page:0")
     b.button(text="✨ Готовые программы", callback_data="rt:programs")
     b.button(text="⬅️ Главное меню", callback_data="rt:menu")
     b.adjust(1)
+    return b.as_markup()
+
+
+def routine_source_picker_keyboard(workouts, page: int, has_next: bool) -> InlineKeyboardMarkup:
+    """Pick a past finished workout to snapshot into a new routine."""
+    b = InlineKeyboardBuilder()
+    for w in workouts:
+        b.button(text=w["label"], callback_data=f"rt:pickw:item:{w['id']}")
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"rt:pickw:page:{page - 1}"))
+    if has_next:
+        nav.append(InlineKeyboardButton(text="➡️", callback_data=f"rt:pickw:page:{page + 1}"))
+    b.adjust(1)
+    if nav:
+        b.row(*nav)
+    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="rt:manage"))
     return b.as_markup()
 
 
