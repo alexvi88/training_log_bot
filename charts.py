@@ -71,11 +71,45 @@ def _rounded_cell(ax, x: float, y: float, size: float, colour: str) -> None:
     )
 
 
+_VOLUME_BAR_COLOUR = {"none": "#3a4250", "low": "#e0c34c", "in_range": "#4fbf6a", "high": "#e08a3c"}
+
+
+def _draw_volume_bars(ax, rows: list[tuple[str, int, str]], target_min: int, target_max: int) -> None:
+    """Horizontal bars: one row per muscle group, coloured by status, with the
+    target range (target_min-target_max sets) shaded as a reference band.
+    """
+    BG = "#12161d"
+    FG = "#e6e6e6"
+    MUTED = "#9aa4b2"
+    TRACK = "#1e242e"
+
+    ax.set_facecolor(BG)
+    ax.axis("off")
+    n = len(rows)
+    scale_max = max(target_max * 1.4, max((c for _, c, _ in rows), default=0) * 1.15, 1)
+    ax.set_xlim(0, scale_max)
+    ax.set_ylim(n, -1)
+
+    ax.axvspan(target_min, target_max, color=FG, alpha=0.08, zorder=0)
+
+    bar_h = 0.6
+    for i, (name, count, status) in enumerate(rows):
+        ax.add_patch(plt.Rectangle((0, i - bar_h / 2), scale_max, bar_h, facecolor=TRACK, linewidth=0, zorder=1))
+        colour = _VOLUME_BAR_COLOUR.get(status, _VOLUME_BAR_COLOUR["none"])
+        width = min(count, scale_max)
+        if width > 0:
+            ax.add_patch(plt.Rectangle((0, i - bar_h / 2), width, bar_h, facecolor=colour, linewidth=0, zorder=2))
+        ax.text(-0.15, i, name, color=MUTED, fontsize=9.5, ha="right", va="center")
+        ax.text(width + scale_max * 0.02, i, str(count), color=FG, fontsize=9.5, va="center", zorder=3)
+
+
 def render_year_heatmap(
     day_counts: dict[dt.date, int],
     today: dt.date,
     start: dt.date,
     stat_lines: list[tuple[str, str]],
+    volume_rows: list[tuple[str, int, str]] | None = None,
+    volume_target: tuple[int, int] | None = None,
 ) -> bytes:
     """GitHub-style contribution calendar: week columns x 7 day rows, Monday on top.
 
@@ -86,6 +120,10 @@ def render_year_heatmap(
     `start` (typically the Monday of the user's first workout, capped at a
     year back) through `today`, so it doesn't waste columns on weeks before
     the user began.
+
+    `volume_rows` (group_name, set_count, status), when given, adds a bar-chart
+    panel for the current week's working-set volume per muscle group, shaded
+    against the `volume_target` (min, max) range.
     """
     BG = "#12161d"
     FG = "#e6e6e6"
@@ -97,7 +135,8 @@ def render_year_heatmap(
     stats_h = 0.36 + 0.24 * max(len(stat_lines), 1)
     grid_w = max(6.6, 2.4 + columns * 0.19)
     grid_h = 2.4
-    fig_w, fig_h = grid_w, stats_h + grid_h
+    volume_h = 0.3 + 0.34 * len(volume_rows) if volume_rows else 0
+    fig_w, fig_h = grid_w, stats_h + volume_h + grid_h
 
     fig = plt.figure(figsize=(fig_w, fig_h), dpi=150)
     fig.patch.set_facecolor(BG)
@@ -116,6 +155,11 @@ def render_year_heatmap(
         bbox = label_text.get_window_extent(renderer=fig.canvas.get_renderer())
         bbox_axes = bbox.transformed(text_ax.transAxes.inverted())
         text_ax.text(bbox_axes.x1, y, value, color=FG, fontsize=10.5, fontweight="bold", va="center")
+
+    if volume_rows:
+        target_min, target_max = volume_target or (0, 0)
+        volume_ax = fig.add_axes([0.14, (grid_h) / fig_h, 0.82, volume_h / fig_h])
+        _draw_volume_bars(volume_ax, volume_rows, target_min, target_max)
 
     grid_ax = fig.add_axes([0, 0, 1, grid_h / fig_h])
     grid_ax.set_facecolor(BG)
