@@ -181,7 +181,26 @@ def routines_manage_keyboard(routines, has_last_workout: bool) -> InlineKeyboard
         b.button(text=f"{r['name']} · {r['exercise_count']} упр.", callback_data=f"rt:view:{r['id']}")
     if has_last_workout:
         b.button(text="➕ Из последней тренировки", callback_data="rt:createlast")
+    b.button(text="✨ Готовые программы", callback_data="rt:programs")
     b.button(text="⬅️ Главное меню", callback_data="rt:menu")
+    b.adjust(1)
+    return b.as_markup()
+
+
+def programs_catalog_keyboard(programs) -> InlineKeyboardMarkup:
+    """List of ready-made programs; picking one opens its detail screen."""
+    b = InlineKeyboardBuilder()
+    for p in programs:
+        b.button(text=p["name"], callback_data=f"rt:prog:{p['key']}")
+    b.button(text="⬅️ К программам", callback_data="rt:manage")
+    b.adjust(1)
+    return b.as_markup()
+
+
+def program_detail_keyboard(program_key: str) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.button(text="➕ Добавить себе", callback_data=f"rt:progadd:{program_key}")
+    b.button(text="⬅️ К каталогу", callback_data="rt:programs")
     b.adjust(1)
     return b.as_markup()
 

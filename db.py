@@ -1174,6 +1174,56 @@ async def delete_routine(routine_id: int) -> None:
         await db.commit()
 
 
+async def _find_global_template_by_name(name: str) -> Optional[aiosqlite.Row]:
+    """Case-insensitive (Cyrillic-safe) match of a global template by its bare name."""
+    cur = await conn().execute(
+        "SELECT * FROM exercises WHERE is_template = 1 AND user_id IS NULL"
+    )
+    rows = await cur.fetchall()
+    needle = name.strip().lower()
+    for r in rows:
+        if (r["name"] or "").strip().lower() == needle:
+            return r
+    return None
+
+
+async def get_or_create_user_exercise_by_name(user_id: int, name: str) -> Optional[int]:
+    """Resolve an exercise name to a user-owned exercise id.
+
+    Returns an existing user exercise if there is one, otherwise forks the global
+    template of that name into the user's catalog and returns the fork. Returns
+    None only if the name matches neither — programs reference template names, so
+    in practice resolution always succeeds.
+    """
+    existing = await find_exercise_by_name(user_id, name)
+    if existing:
+        return existing["id"]
+    template = await _find_global_template_by_name(name)
+    if template is not None:
+        return await fork_exercise_from_template(user_id, template["id"])
+    return None
+
+
+async def create_routine_from_program(user_id: int, name: str, exercise_names: list[str]) -> int:
+    """Instantiate one ready-made program day as a routine.
+
+    Each exercise name is resolved to the user's own copy (forking the global
+    template when missing). Duplicate or unresolvable names are skipped so the
+    routine stays clean.
+    """
+    routine_id = await create_routine(user_id, name)
+    seen: set[int] = set()
+    order = 0
+    for ex_name in exercise_names:
+        ex_id = await get_or_create_user_exercise_by_name(user_id, ex_name)
+        if ex_id is None or ex_id in seen:
+            continue
+        seen.add(ex_id)
+        await add_routine_exercise(routine_id, ex_id, order)
+        order += 1
+    return routine_id
+
+
 async def create_routine_from_workout(user_id: int, workout_id: int, name: str) -> int:
     """Snapshot a finished workout's exercises (in block order, de-duplicated) as a routine."""
     routine_id = await create_routine(user_id, name)
