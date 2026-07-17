@@ -168,7 +168,10 @@ def start_workout_options_keyboard(routines) -> InlineKeyboardMarkup:
         b.button(text=f"▶️ {r['name']}", callback_data=f"rt:start:{r['id']}")
     b.button(text="🗂 Программы", callback_data="rt:manage")
     b.button(text="❌ Отмена", callback_data="menu:cancel_start_workout")
-    b.adjust(1)
+    if routines:
+        b.adjust(1)
+    else:
+        b.adjust(2, 1)
     return b.as_markup()
 
 
