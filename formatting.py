@@ -73,11 +73,17 @@ class ExerciseBlockView:
     exercise_id: int | None = None
     prev_sets: list[tuple[float, int]] | None = None  # sets from the previous session, if any
     set_rpes: list[float | None] | None = None  # per-set RPE, aligned with `sets`; None = none logged
+    prev_set_rpes: list[float | None] | None = None  # per-set RPE for prev_sets
 
     def rpe_for(self, index: int) -> float | None:
         if not self.set_rpes or index >= len(self.set_rpes):
             return None
         return self.set_rpes[index]
+
+    def prev_rpe_for(self, index: int) -> float | None:
+        if not self.prev_set_rpes or index >= len(self.prev_set_rpes):
+            return None
+        return self.prev_set_rpes[index]
 
     @property
     def tonnage(self) -> float:
@@ -110,7 +116,9 @@ def _render_single_block(block: ExerciseBlockView, show_extra: bool, italic_prev
         else:
             lines.append(f"  ↳ e1RM {block.top_e1rm:.1f}")
     if block.prev_sets:
-        prev_str = ", ".join(format_set(w, r) for w, r in block.prev_sets)
+        prev_str = ", ".join(
+            format_set(w, r, block.prev_rpe_for(i)) for i, (w, r) in enumerate(block.prev_sets)
+        )
         prev_line = f"  [прошлая: {prev_str}]"
         lines.append(f"<i>{prev_line}</i>" if italic_prev else prev_line)
     return lines
@@ -308,7 +316,7 @@ def format_progress_screen(
 
     for s in reversed(shown):
         d = dt.datetime.fromisoformat(s.started_at)
-        sets_str = ", ".join(format_set(st.weight, st.reps) for st in s.sets)
+        sets_str = ", ".join(format_set(st.weight, st.reps, st.rpe) for st in s.sets)
         lines.append(f"<b>{format_date_ru(d)}</b>")
         lines.append(sets_str)
         if is_bw:

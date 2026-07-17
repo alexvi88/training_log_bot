@@ -37,7 +37,7 @@ async def _edit_screen_payload(workout_id: int) -> tuple[str, InlineKeyboardMark
         sets = await db.list_sets_for_block(block["id"])
         for s in sets:
             ex_name = name_by_ex.get(s["exercise_id"], "?")
-            label = f"{ex_name} · {formatting.format_set(s['weight'], s['reps'])}"
+            label = f"{ex_name} · {formatting.format_set(s['weight'], s['reps'], s['rpe'])}"
             sets_rows.append((s["id"], label))
         for be in block_exs:
             add_buttons.append((block["id"], be["exercise_id"], be["display_name"]))
@@ -75,7 +75,7 @@ async def editw_pick_set(callback: CallbackQuery, state: FSMContext):
         return
     row = await db.get_set(set_id)
     ex = await db.get_exercise(row["exercise_id"])
-    text = f"{ex['display_name']}: {formatting.format_set(row['weight'], row['reps'])}"
+    text = f"{ex['display_name']}: {formatting.format_set(row['weight'], row['reps'], row['rpe'])}"
     await ui.safe_edit(callback, text, reply_markup=keyboards.set_actions_keyboard(set_id))
     await callback.answer()
 
@@ -122,7 +122,7 @@ async def editw_editset_prompt(callback: CallbackQuery, state: FSMContext):
     row = await db.get_set(set_id)
     await ui.safe_edit(
         callback,
-        f"Текущее значение: {formatting.format_set(row['weight'], row['reps'])}\n"
+        f"Текущее значение: {formatting.format_set(row['weight'], row['reps'], row['rpe'])}\n"
         "Напиши новый вес и повторы (например «100 8»):",
         reply_markup=keyboards.cancel_keyboard("editw:back"),
     )

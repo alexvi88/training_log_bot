@@ -197,6 +197,17 @@ def test_live_session_shows_rpe_only_where_logged():
     assert "  • 100×7" in lines
 
 
+def test_workout_summary_prev_line_shows_rpe():
+    block = ExerciseBlockView(
+        group_name="грудь", exercise_name="Жим", sets=[(100.0, 8)],
+        prev_sets=[(97.5, 8), (97.5, 7)], prev_set_rpes=[8.0, None], exercise_id=1,
+    )
+    text = formatting.build_workout_summary(
+        dt.datetime(2026, 7, 17, 10, 0), [block], show_extra_stats=False
+    )
+    assert "[прошлая: 97.5×8 @8, 97.5×7]" in text
+
+
 # ---------- format_pr_detail ----------
 
 

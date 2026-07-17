@@ -41,8 +41,11 @@ async def build_block_views(
         sets_tuples = [(s["weight"], s["reps"]) for s in sets]
         set_rpes = [s["rpe"] for s in sets]
         prev_sets = None
+        prev_set_rpes = None
         if previous_before is not None:
-            prev_sets = await _previous_session_sets(ex_id, workout_id, previous_before)
+            prev = await _previous_session_sets(ex_id, workout_id, previous_before)
+            if prev is not None:
+                prev_sets, prev_set_rpes = prev
         views.append(
             ExerciseBlockView(
                 group_name=gname,
@@ -52,6 +55,7 @@ async def build_block_views(
                 exercise_id=ex_id,
                 prev_sets=prev_sets,
                 set_rpes=set_rpes if any(r is not None for r in set_rpes) else None,
+                prev_set_rpes=prev_set_rpes,
             )
         )
 
@@ -84,10 +88,11 @@ async def workout_duration_seconds(workout) -> float | None:
 
 async def _previous_session_sets(
     exercise_id: int, workout_id: int, before: str
-) -> list[tuple[float, int]] | None:
+) -> tuple[list[tuple[float, int]], list[float | None]] | None:
+    """The prior session's sets (weights/reps) and their RPEs, or None if there's no prior session."""
     rows = await db.list_sets_for_exercise(exercise_id, exclude_workout_id=workout_id)
     set_rows = [
-        analytics.SetRow(r["weight"], r["reps"], r["workout_id"], r["started_at"])
+        analytics.SetRow(r["weight"], r["reps"], r["workout_id"], r["started_at"], r["rpe"])
         for r in rows
         if r["started_at"] < before
     ]
@@ -95,4 +100,4 @@ async def _previous_session_sets(
         return None
     sessions = analytics.group_sets_by_session(set_rows)
     last = sessions[-1]
-    return [(s.weight, s.reps) for s in last.sets]
+    return [(s.weight, s.reps) for s in last.sets], [s.rpe for s in last.sets]

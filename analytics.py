@@ -35,6 +35,7 @@ class SetRow:
     reps: int
     workout_id: Optional[int] = None
     started_at: Optional[str] = None
+    rpe: Optional[float] = None  # display-only; never enters e1RM/PR/trend math
 
 
 @dataclass

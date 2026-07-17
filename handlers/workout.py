@@ -124,27 +124,30 @@ async def _log_one(block_id: int, exercise_id: int, weight: float, reps: int, rp
 _WEIGHT_STEP = {"kg": 2.5, "lb": 5.0}
 
 
-def _logging_hint(last_session: list[tuple[float, int]] | None, has_sets: bool, unit: str = "kg") -> str:
+def _logging_hint(
+    last_session: list[tuple[float, int, float | None]] | None, has_sets: bool, unit: str = "kg"
+) -> str:
     base = "Напиши вес и повторы через пробел, например «100 8»"
     if has_sets:
         base += "\nМожно только повторы — вес возьмётся с прошлого подхода"
     if last_session:
-        sets_str = ", ".join(formatting.format_set(w, r) for w, r in last_session)
+        sets_str = ", ".join(formatting.format_set(w, r, rpe) for w, r, rpe in last_session)
         lines = [f"<i>💡 В прошлый раз: {sets_str}</i>"]
-        suggestion = analytics.suggest_progression(last_session, _WEIGHT_STEP.get(unit, 2.5))
+        wr_only = [(w, r) for w, r, _ in last_session]
+        suggestion = analytics.suggest_progression(wr_only, _WEIGHT_STEP.get(unit, 2.5))
         if suggestion is not None:
             lines.append(formatting.format_progression_hint(suggestion, unit))
         return "\n".join(lines) + f"\n\n{base}"
     return base
 
 
-async def _last_session_sets(ex_id: int) -> list[tuple[float, int]]:
-    """Working sets from this exercise's most recent finished workout, for the "last time" hint."""
+async def _last_session_sets(ex_id: int) -> list[tuple[float, int, float | None]]:
+    """Working sets (weight, reps, rpe) from this exercise's most recent finished workout."""
     rows = await db.list_sets_for_exercise(ex_id)
     if not rows:
         return []
     last_workout_id = rows[-1]["workout_id"]
-    return [(r["weight"], r["reps"]) for r in rows if r["workout_id"] == last_workout_id]
+    return [(r["weight"], r["reps"], r["rpe"]) for r in rows if r["workout_id"] == last_workout_id]
 
 
 async def _render_logging_screen(bot, state: FSMContext, user):

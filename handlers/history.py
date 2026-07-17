@@ -225,7 +225,7 @@ async def prog_group_page(callback: CallbackQuery, state: FSMContext):
 async def _load_sessions(exercise_id: int, formula: str) -> list[analytics.SessionStats]:
     rows = await db.list_sets_for_exercise(exercise_id)
     set_rows = [
-        analytics.SetRow(r["weight"], r["reps"], r["workout_id"], r["started_at"])
+        analytics.SetRow(r["weight"], r["reps"], r["workout_id"], r["started_at"], r["rpe"])
         for r in rows
     ]
     sessions = analytics.group_sets_by_session(set_rows)
