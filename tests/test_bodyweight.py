@@ -103,3 +103,31 @@ async def test_scale_user_set_weights_converts_nonzero_only(user_id):
 
     weights = sorted(s["weight"] for s in await dbmod.list_sets_for_block(block_id))
     assert weights == [0.0, pytest.approx(220.5)]  # zero untouched, 100 -> 220.5
+
+
+# ---------- chart period window ----------
+
+
+def test_window_all_returns_everything():
+    from handlers.bodyweight import _window
+    logs = [{"logged_at": "2026-01-01T10:00:00", "weight": 80.0}]
+    assert _window(logs, 0) == logs
+
+
+def test_window_filters_by_weeks(monkeypatch):
+    import datetime as dt
+
+    import handlers.bodyweight as bw
+
+    class _FixedDate(dt.date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 3, 1)
+
+    monkeypatch.setattr(bw.dt, "date", _FixedDate)
+    logs = [
+        {"logged_at": "2026-01-01T10:00:00", "weight": 82.0},  # ~8.5 weeks ago
+        {"logged_at": "2026-02-20T10:00:00", "weight": 80.0},  # within 8 weeks
+    ]
+    windowed = bw._window(logs, 8)
+    assert [r["weight"] for r in windowed] == [80.0]

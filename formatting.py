@@ -382,14 +382,14 @@ def build_bodyweight_screen(logs: list, unit: str = "kg") -> str:
     u = UNIT_LABELS.get(unit, "кг")
     if not logs:
         return (
-            "⚖️ <b>ДНЕВНИК ВЕСА</b>\n\nПока нет ни одной записи.\n"
+            "⚖️ <b>Дневник веса</b>\n\nПока нет ни одной записи.\n"
             "Нажми «➕ Записать вес» и введи текущий вес — дальше буду показывать динамику."
         )
     latest = logs[-1]
     latest_weight = latest["weight"]
     d = dt.datetime.fromisoformat(latest["logged_at"])
     lines = [
-        "⚖️ <b>ДНЕВНИК ВЕСА</b>",
+        "⚖️ <b>Дневник веса</b>",
         "",
         f"Сейчас: <b>{format_weight(latest_weight)} {u}</b> ({format_date_ru(d)})",
     ]

@@ -374,13 +374,25 @@ def weekly_volume_keyboard(week_offset: int) -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
-def bodyweight_keyboard(has_logs: bool) -> InlineKeyboardMarkup:
+# Chart window options for the weight diary (weeks; 0 = all history).
+BODYWEIGHT_PERIODS = [(8, "8 нед"), (26, "26 нед"), (0, "Всё")]
+DEFAULT_BODYWEIGHT_WEEKS = 0
+
+
+def bodyweight_keyboard(has_logs: bool, weeks: int = 0, show_periods: bool = False) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
+    if show_periods:
+        for value, label in BODYWEIGHT_PERIODS:
+            text = f"• {label} •" if value == weeks else label
+            b.button(text=text, callback_data=f"bw:period:{value}")
     b.button(text="➕ Записать вес", callback_data="bw:add")
     if has_logs:
         b.button(text="↩️ Удалить последнюю", callback_data="bw:undo")
     b.button(text="⬅️ Главное меню", callback_data="bw:menu")
-    b.adjust(1)
+    if show_periods:
+        b.adjust(len(BODYWEIGHT_PERIODS), 1, 1, 1)
+    else:
+        b.adjust(1)
     return b.as_markup()
 
 

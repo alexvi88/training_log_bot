@@ -25,18 +25,31 @@ from parser import ParseError, parse_bodyweight
 router = Router(name="bodyweight")
 
 
+def _window(logs: list, weeks: int) -> list:
+    """Logs within the last `weeks` weeks (0 = all), for the chart window."""
+    if weeks <= 0:
+        return logs
+    cutoff = (dt.date.today() - dt.timedelta(weeks=weeks)).isoformat()
+    return [r for r in logs if r["logged_at"][:10] >= cutoff]
+
+
 async def _render(event, state: FSMContext) -> None:
     """Render (or re-render) the bodyweight screen for a Message or CallbackQuery."""
     user_id = event.from_user.id
     user = await db.get_user(user_id)
     logs = await db.list_bodyweight_logs(user_id)
+    data = await state.get_data()
+    weeks = data.get("bw_weeks", keyboards.DEFAULT_BODYWEIGHT_WEEKS)
     await state.set_state(BodyweightFlow.viewing)
+    await state.update_data(bw_weeks=weeks)
     text = formatting.build_bodyweight_screen(logs, user["unit"])
-    kb = keyboards.bodyweight_keyboard(has_logs=bool(logs))
+    show_periods = len(logs) >= 2
+    kb = keyboards.bodyweight_keyboard(has_logs=bool(logs), weeks=weeks, show_periods=show_periods)
 
     png = None
-    if len(logs) >= 2:
-        points = [(dt.datetime.fromisoformat(r["logged_at"]), float(r["weight"])) for r in logs]
+    chart_logs = _window(logs, weeks)
+    if len(chart_logs) >= 2:
+        points = [(dt.datetime.fromisoformat(r["logged_at"]), float(r["weight"])) for r in chart_logs]
         unit_label = formatting.UNIT_LABELS.get(user["unit"], "кг")
         png = await asyncio.to_thread(
             charts.render_metric_over_sessions, points, f"Вес тела, {unit_label}", unit_label
@@ -89,6 +102,14 @@ async def bw_add(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "bw:back")
 async def bw_back(callback: CallbackQuery, state: FSMContext):
+    await _render(callback, state)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("bw:period:"))
+async def bw_period(callback: CallbackQuery, state: FSMContext):
+    weeks = int(callback.data.split(":")[2])
+    await state.update_data(bw_weeks=weeks)
     await _render(callback, state)
     await callback.answer()
 
