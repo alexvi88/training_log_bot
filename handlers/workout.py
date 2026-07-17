@@ -130,11 +130,11 @@ def _logging_hint(last_session: list[tuple[float, int]] | None, has_sets: bool, 
         base += "\nМожно только повторы — вес возьмётся с прошлого подхода"
     if last_session:
         sets_str = ", ".join(formatting.format_set(w, r) for w, r in last_session)
-        lines = [f"В прошлый раз: {sets_str}"]
+        lines = [f"<i>💡 В прошлый раз: {sets_str}</i>"]
         suggestion = analytics.suggest_progression(last_session, _WEIGHT_STEP.get(unit, 2.5))
         if suggestion is not None:
             lines.append(formatting.format_progression_hint(suggestion, unit))
-        return "\n".join(lines) + f"\n{base}"
+        return "\n".join(lines) + f"\n\n{base}"
     return base
 
 
