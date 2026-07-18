@@ -47,6 +47,7 @@ class AdminFlow(StatesGroup):
     browsing_users = State()
     browsing_history = State()
     browsing_pushes = State()
+    browsing_ai_users = State()
 
 
 class AITrainerFlow(StatesGroup):
