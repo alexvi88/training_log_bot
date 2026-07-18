@@ -427,6 +427,12 @@ def cancel_keyboard(cb: str = "cancel") -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
+def feedback_keyboard() -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.button(text="✅ Готово", callback_data="feedback:done")
+    return b.as_markup()
+
+
 def push_cta_keyboard() -> InlineKeyboardMarkup:
     """Attached to daily-rotation push notifications: routes straight into starting a workout."""
     b = InlineKeyboardBuilder()
