@@ -21,6 +21,7 @@ router = Router(name="admin")
 USERS_PAGE_SIZE = 10
 HISTORY_PAGE_SIZE = 8
 PUSHES_PAGE_SIZE = 10
+AI_DIALOGS_TG_CHUNK = 4000
 
 
 def _is_admin(telegram_id: int) -> bool:
@@ -193,3 +194,35 @@ async def admin_pushes_page(callback: CallbackQuery, state: FSMContext):
     page = int(callback.data.split(":")[2])
     await _show_pushes_list(callback, state, page)
     await callback.answer()
+
+
+@router.message(Command("ai_dialogs"))
+async def cmd_ai_dialogs(message: Message):
+    if not _is_admin(message.from_user.id):
+        return
+    args = message.text.split(maxsplit=1)
+    if len(args) < 2 or not args[1].strip().lstrip("-").isdigit():
+        await message.answer("Использование: /ai_dialogs <telegram_id>")
+        return
+    target_user_id = int(args[1].strip())
+
+    user = await db.get_user(target_user_id)
+    if user is None:
+        await message.answer("Пользователь с таким telegram_id не найден.")
+        return
+
+    rows = await db.get_ai_chat_history(target_user_id)
+    if not rows:
+        await message.answer("У этого пользователя пока нет диалогов с AI-тренером.")
+        return
+
+    who = f"@{user['username']}" if user["username"] else str(target_user_id)
+    lines = [f"🤖 Диалоги с AI-тренером — {who} ({len(rows)} сообщ.):", ""]
+    for row in rows:
+        sent = dt.datetime.fromisoformat(row["created_at"])
+        speaker = "👤 Юзер" if row["role"] == "user" else "🤖 AI"
+        lines.append(f"{sent.strftime('%d.%m %H:%M')} · {speaker}:\n{row['content']}")
+    text = "\n\n".join(lines)
+
+    for i in range(0, len(text), AI_DIALOGS_TG_CHUNK):
+        await message.answer(text[i : i + AI_DIALOGS_TG_CHUNK])
