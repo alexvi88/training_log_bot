@@ -374,8 +374,24 @@ def build_weekly_volume_screen(
     return "\n".join(lines)
 
 
+def weekly_volume_by_muscle_lines(rows: list[tuple[str, int, str]]) -> list[str]:
+    """Compact per-group "icon name: count" lines for the main-menu greeting.
+
+    rows: same shape as build_weekly_volume_screen's — (group_name, set_count, status).
+    Untrained groups (0 sets) are skipped to keep the greeting short; the full
+    breakdown including gaps lives in the dedicated 💪 Объём/нед screen.
+    """
+    lines = []
+    for name, count, status in rows:
+        if count == 0:
+            continue
+        icon = _VOLUME_STATUS_ICON.get(status, "▫️")
+        lines.append(f"{icon} {escape(name)}: <b>{count}</b>")
+    return lines
+
+
 def build_bodyweight_screen(logs: list, unit: str = "kg") -> str:
-    """Text for the ⚖️ Вес тела screen: latest value, change vs first/previous, count.
+    """Text for the ⚖️ Вес тела screen: latest value and entry count.
 
     logs: rows with `weight` and `logged_at`, ascending by date (as db.list_bodyweight_logs returns).
     """
@@ -393,23 +409,9 @@ def build_bodyweight_screen(logs: list, unit: str = "kg") -> str:
         "",
         f"Сейчас: <b>{format_weight(latest_weight)} {u}</b> {format_date_ru(d)}",
     ]
-    if len(logs) >= 2:
-        prev = logs[-2]["weight"]
-        first = logs[0]["weight"]
-        step_delta = latest_weight - prev
-        total_delta = latest_weight - first
-        lines.append(f"С прошлой записи: {_signed_weight(step_delta, u)}")
-        lines.append(f"За всё время: {_signed_weight(total_delta, u)}")
     n = plural_ru(len(logs), ("запись", "записи", "записей"))
     lines.append(f"\nВсего {len(logs)} {n}.")
     return "\n".join(lines)
-
-
-def _signed_weight(delta: float, unit_label: str) -> str:
-    if abs(delta) < 1e-9:
-        return f"→ 0 {unit_label}"
-    arrow = "↑" if delta > 0 else "↓"
-    return f"{arrow} {format_weight(abs(delta))} {unit_label}"
 
 
 def format_progression_hint(suggestion, unit: str = "kg") -> str:

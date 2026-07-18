@@ -74,15 +74,16 @@ def test_bodyweight_screen_empty():
     assert "Пока нет ни одной записи" in text
 
 
-def test_bodyweight_screen_with_deltas():
+def test_bodyweight_screen_shows_latest_and_count():
     logs = [
         {"weight": 82.0, "logged_at": "2026-01-01T10:00:00"},
         {"weight": 80.0, "logged_at": "2026-02-01T10:00:00"},
     ]
     text = formatting.build_bodyweight_screen(logs, "kg")
     assert "Сейчас: <b>80 кг</b>" in text
-    assert "С прошлой записи: ↓ 2 кг" in text
-    assert "За всё время: ↓ 2 кг" in text
+    assert "Всего 2 записи." in text
+    assert "С прошлой записи" not in text
+    assert "За всё время" not in text
 
 
 # ---------- unit conversion: set weights ----------
