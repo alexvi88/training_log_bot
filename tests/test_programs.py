@@ -92,6 +92,32 @@ async def test_seeded_exercise_stays_visible_once_actually_trained(user_id):
     assert await dbmod.count_user_exercises(user_id) == 1  # real training history -> stays
 
 
+async def _group_id(name: str) -> int:
+    groups = await dbmod.list_muscle_groups(None, global_only=True)
+    return next(g["id"] for g in groups if g["name"] == name)
+
+
+async def test_backfill_hides_pristine_legacy_template_forks(user_id):
+    """Exercises created before the seeded_from_program flag existed (e.g. by a
+    program added pre-migration) default to seeded_from_program = 0 and would
+    otherwise stay visible forever — the backfill re-derives the flag for them."""
+    gid = await _group_id("Грудь")
+    await dbmod.create_exercise(user_id, "Присед со штангой", gid)
+    assert await dbmod.count_user_exercises(user_id) == 1
+
+    await dbmod._backfill_seeded_from_program()
+    assert await dbmod.count_user_exercises(user_id) == 0
+
+
+async def test_backfill_leaves_renamed_exercises_visible(user_id):
+    gid = await _group_id("Грудь")
+    ex_id = await dbmod.create_exercise(user_id, "Присед со штангой", gid)
+    await dbmod.update_exercise_name(ex_id, "Мой присед")
+
+    await dbmod._backfill_seeded_from_program()
+    assert await dbmod.count_user_exercises(user_id) == 1
+
+
 async def test_create_routine_from_program_dedupes_and_skips_unknown(user_id):
     exercises = ["Присед со штангой", "Присед со штангой", "Полёт на Марс", "Жим штанги лёжа"]
     rid = await dbmod.create_routine_from_program(user_id, "Смесь", exercises)
