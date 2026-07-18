@@ -93,12 +93,11 @@ def test_weekly_volume_screen_empty():
 # ---------- greeting summary lines ----------
 
 
-def test_weekly_volume_by_muscle_lines_skips_untrained_groups():
+def test_weekly_volume_by_muscle_lines_includes_untrained_groups():
     rows = [("Грудь", 7, "in_range"), ("Спина", 3, "low"), ("Ноги", 0, "none")]
     lines = formatting.weekly_volume_by_muscle_lines(rows)
-    assert lines == ["🟢 Грудь: <b>7</b>", "🟡 Спина: <b>3</b>"]
+    assert lines == ["🟢 Грудь: <b>7</b>", "🟡 Спина: <b>3</b>", "▫️ Ноги: <b>0</b>"]
 
 
-def test_weekly_volume_by_muscle_lines_empty_when_nothing_trained():
-    rows = [("Грудь", 0, "none"), ("Спина", 0, "none")]
-    assert formatting.weekly_volume_by_muscle_lines(rows) == []
+def test_weekly_volume_by_muscle_lines_empty_when_no_groups():
+    assert formatting.weekly_volume_by_muscle_lines([]) == []
