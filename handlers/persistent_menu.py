@@ -30,6 +30,9 @@ class _MessageAsCallback:
         self.from_user = message.from_user
         self.bot = message.bot
 
+    async def answer(self, *args, **kwargs) -> None:
+        """No-op: there's no real callback query to acknowledge here."""
+
 
 @router.message(F.text == keyboards.BTN_MENU)
 async def persistent_menu_button(message: Message, state: FSMContext) -> None:

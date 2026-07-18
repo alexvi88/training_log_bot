@@ -43,6 +43,17 @@ def test_admin_router_registered_before_fsm_flow_routers():
         assert admin_index < order.index(name), f"admin.router must be registered before {name}.router"
 
 
+def test_feedback_router_registered_before_fsm_flow_routers():
+    """Same reasoning as above: /feedback must win over any in-progress FSM
+    flow's catch-all message handler, so feedback.router has to come first.
+    """
+    order = _router_registration_order()
+    flow_routers = {"workout", "backfill", "csv_import", "exercises", "history", "edit_workout", "ai_trainer"}
+    feedback_index = order.index("feedback")
+    for name in flow_routers & set(order):
+        assert feedback_index < order.index(name), f"feedback.router must be registered before {name}.router"
+
+
 @pytest.mark.asyncio
 async def test_default_scope_only_has_start(monkeypatch):
     monkeypatch.setattr(config, "ADMIN_ID", 12345)
@@ -54,7 +65,7 @@ async def test_default_scope_only_has_start(monkeypatch):
         c for c in bot.set_my_commands.call_args_list if isinstance(c.kwargs["scope"], BotCommandScopeDefault)
     )
     commands = default_call.args[0]
-    assert [c.command for c in commands] == ["start", "ai_trainer"]
+    assert [c.command for c in commands] == ["start", "ai_trainer", "feedback"]
 
 
 @pytest.mark.asyncio
@@ -70,7 +81,7 @@ async def test_admin_scope_targets_only_admin_chat_and_includes_admin_command(mo
     scope: BotCommandScopeChat = admin_call.kwargs["scope"]
     commands: list[BotCommand] = admin_call.args[0]
     assert scope.chat_id == 12345
-    assert {c.command for c in commands} == {"start", "ai_trainer", "check_users", "pushes"}
+    assert {c.command for c in commands} == {"start", "ai_trainer", "feedback", "check_users", "pushes"}
 
 @pytest.mark.asyncio
 async def test_no_admin_scope_registered_when_admin_id_unset(monkeypatch):

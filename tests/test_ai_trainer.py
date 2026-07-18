@@ -71,6 +71,27 @@ async def test_overview_includes_latest_bodyweight(fresh_db, user_id):
     assert payload["latest_bodyweight"] == {"weight": 81.5, "date": "2026-03-01"}
 
 
+async def test_bodyweight_history_returns_full_log(fresh_db, user_id):
+    await fresh_db.add_bodyweight_log(user_id, 82.0, logged_at="2026-01-01T08:00:00")
+    await fresh_db.add_bodyweight_log(user_id, 81.5, logged_at="2026-02-01T08:00:00")
+
+    payload = json.loads(await ai_trainer.execute_tool(user_id, "get_bodyweight_history", {}))
+
+    assert payload["entries"] == [
+        {"weight": 82.0, "date": "2026-01-01"},
+        {"weight": 81.5, "date": "2026-02-01"},
+    ]
+
+
+async def test_bodyweight_history_does_not_leak_other_users_data(fresh_db, user_id):
+    other = await fresh_db.get_or_create_user(telegram_id=222, username="other")
+    await fresh_db.add_bodyweight_log(other["telegram_id"], 90.0, logged_at="2026-01-01T08:00:00")
+
+    payload = json.loads(await ai_trainer.execute_tool(user_id, "get_bodyweight_history", {}))
+
+    assert payload["entries"] == []
+
+
 async def test_weekly_volume_tool_counts_and_classifies(fresh_db, user_id, monkeypatch):
     import datetime as dt
 

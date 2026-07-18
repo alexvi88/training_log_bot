@@ -216,7 +216,12 @@ async def _menu_view(user_id: int) -> tuple[str, bytes | None]:
     heatmap_start = max(first_monday, year_ago)
     stat_lines = formatting.dashboard_stat_lines(dashboard)
     png = await asyncio.to_thread(charts.render_year_heatmap, Counter(dates), today, heatmap_start, stat_lines)
-    return _GREETING, png
+    sunday = this_monday + dt.timedelta(days=6)
+    volume_by_group = await db.weekly_volume_by_group(user_id, this_monday.isoformat(), sunday.isoformat())
+    total_sets = sum(volume_by_group.values())
+    sets_word = formatting.plural_ru(total_sets, ("подход", "подхода", "подходов"))
+    greeting = f"{_GREETING}\n\nОбъём за неделю: <b>{total_sets} {sets_word}</b>"
+    return greeting, png
 
 
 async def _send_menu(message: Message, text: str, png: bytes | None, keyboard) -> Message:
@@ -342,15 +347,6 @@ async def start_workout(callback: CallbackQuery, state: FSMContext):
     if active:
         await _enter_live(callback, state, active["id"])
         return
-    kb = keyboards.confirm_cancel_keyboard(
-        "menu:confirm_start_workout", "menu:cancel_start_workout",
-        confirm_text="🏋️ Начать", cancel_text="❌ Отмена",
-    )
-    await ui.safe_edit(callback, "Начать новую тренировку?", reply_markup=kb)
-
-
-@router.callback_query(F.data == "menu:confirm_start_workout")
-async def confirm_start_workout(callback: CallbackQuery, state: FSMContext):
     workout_id = await db.create_workout(callback.from_user.id)
     await _delete_message(callback.message)
     sent = await callback.message.answer("🏋️ Тренировка начата")
@@ -359,13 +355,7 @@ async def confirm_start_workout(callback: CallbackQuery, state: FSMContext):
         last_by_exercise={},
     )
     await state.set_state(WorkoutFlow.picking_group)
-    await _picker_screen_groups(callback, state)
-    await callback.answer()
-
-
-@router.callback_query(F.data == "menu:cancel_start_workout")
-async def cancel_start_workout(callback: CallbackQuery, state: FSMContext):
-    await _show_main_menu(callback, state)
+    await _picker_screen_groups(callback, state, show_program_button=True)
     await callback.answer()
 
 
@@ -442,7 +432,7 @@ async def _enter_live(
 
 # ---------- picker: add an exercise (either to start, or alongside what's already open) ----------
 
-async def _picker_screen_groups(callback: CallbackQuery, state: FSMContext):
+async def _picker_screen_groups(callback: CallbackQuery, state: FSMContext, show_program_button: bool = False):
     data = await state.get_data()
     user = await db.get_user(callback.from_user.id)
     groups = await db.list_muscle_groups(callback.from_user.id)
@@ -451,7 +441,10 @@ async def _picker_screen_groups(callback: CallbackQuery, state: FSMContext):
     if open_ids:
         names = [escape((await db.get_exercise(eid))["display_name"]) for eid in open_ids]
         hint = "Открыто сейчас: " + ", ".join(names) + "\n" + hint
-    extra = [("❌ Отмена", "pick:cancel")]
+    extra = []
+    if show_program_button:
+        extra.append(("🗂 Выбрать программу", "rt:manage"))
+    extra.append(("❌ Отмена", "pick:cancel"))
     kb = keyboards.groups_keyboard(groups, prefix="pick", extra_buttons=extra, show_all=True)
     await state.update_data(picker_stage="groups")
     await _refresh_live(callback.bot, state, user, data["workout_id"], hint, kb)

@@ -33,6 +33,16 @@ def _window(logs: list, weeks: int) -> list:
     return [r for r in logs if r["logged_at"][:10] >= cutoff]
 
 
+def _daily_average_points(logs: list) -> list[tuple[dt.datetime, float]]:
+    """One point per day (averaging same-day entries), so logging weight
+    several times a day doesn't turn the trend line into noise."""
+    by_date: dict[dt.date, list[float]] = {}
+    for r in logs:
+        d = dt.datetime.fromisoformat(r["logged_at"]).date()
+        by_date.setdefault(d, []).append(float(r["weight"]))
+    return [(dt.datetime.combine(d, dt.time()), sum(ws) / len(ws)) for d, ws in sorted(by_date.items())]
+
+
 async def _render(event, state: FSMContext) -> None:
     """Render (or re-render) the bodyweight screen for a Message or CallbackQuery."""
     user_id = event.from_user.id
@@ -48,8 +58,8 @@ async def _render(event, state: FSMContext) -> None:
 
     png = None
     chart_logs = _window(logs, weeks)
-    if len(chart_logs) >= 2:
-        points = [(dt.datetime.fromisoformat(r["logged_at"]), float(r["weight"])) for r in chart_logs]
+    points = _daily_average_points(chart_logs)
+    if len(points) >= 2:
         unit_label = formatting.UNIT_LABELS.get(user["unit"], "кг")
         png = await asyncio.to_thread(
             charts.render_metric_over_sessions, points, f"Вес тела, {unit_label}", unit_label

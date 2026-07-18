@@ -67,3 +67,7 @@ class ImportFlow(StatesGroup):
     awaiting_file = State()
     mapping_columns = State()
     confirming = State()
+
+
+class FeedbackFlow(StatesGroup):
+    awaiting_message = State()

@@ -31,13 +31,13 @@ def main_menu(has_active_workout: bool) -> InlineKeyboardMarkup:
         b.button(text="▶️ ПРОДОЛЖИТЬ ТРЕНИРОВКУ", callback_data="menu:resume_workout")
     else:
         b.button(text="🏋️ НАЧАТЬ ТРЕНИРОВКУ", callback_data="menu:start_workout")
-    b.button(text="🗂 Программы", callback_data="rt:manage")
     b.button(text="📈 Прогресс", callback_data="menu:progress")
     b.button(text="📚 История", callback_data="menu:history")
     b.button(text="⚙️ Упражнения", callback_data="menu:exercises")
+    b.button(text="🗂 Программы", callback_data="rt:manage")
     b.button(text="⚖️ Дневник веса", callback_data="menu:bodyweight")
     b.button(text="🔧 Настройки", callback_data="menu:settings")
-    b.adjust(1, 1, 2, 2, 1)
+    b.adjust(1, 2, 2, 2)
     return b.as_markup()
 
 
@@ -64,9 +64,9 @@ def groups_keyboard(
         b.button(text=g["name"], callback_data=f"{prefix}:grp:{g['id']}")
     if show_all:
         b.button(text="📋 Все", callback_data=f"{prefix}:grp:all")
-    for text, cb in extra_buttons or []:
-        b.button(text=text, callback_data=cb)
     b.adjust(2)
+    for text, cb in extra_buttons or []:
+        b.row(InlineKeyboardButton(text=text, callback_data=cb))
     return b.as_markup()
 
 
@@ -406,24 +406,30 @@ DEFAULT_BODYWEIGHT_WEEKS = 0
 
 def bodyweight_keyboard(has_logs: bool, weeks: int = 0, show_periods: bool = False) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    if show_periods:
-        for value, label in BODYWEIGHT_PERIODS:
-            text = f"• {label} •" if value == weeks else label
-            b.button(text=text, callback_data=f"bw:period:{value}")
-    b.button(text="➕ Записать вес", callback_data="bw:add")
+    b.row(InlineKeyboardButton(text="➕ ЗАПИСАТЬ ВЕС", callback_data="bw:add"))
     if has_logs:
-        b.button(text="↩️ Удалить последнюю", callback_data="bw:undo")
-    b.button(text="⬅️ Главное меню", callback_data="bw:menu")
+        b.row(InlineKeyboardButton(text="↩️ Удалить последнюю", callback_data="bw:undo"))
     if show_periods:
-        b.adjust(len(BODYWEIGHT_PERIODS), 1, 1, 1)
-    else:
-        b.adjust(1)
+        period_buttons = [
+            InlineKeyboardButton(
+                text=f"• {label} •" if value == weeks else label, callback_data=f"bw:period:{value}"
+            )
+            for value, label in BODYWEIGHT_PERIODS
+        ]
+        b.row(*period_buttons)
+    b.row(InlineKeyboardButton(text="⬅️ Главное меню", callback_data="bw:menu"))
     return b.as_markup()
 
 
 def cancel_keyboard(cb: str = "cancel") -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(text="❌ Отмена", callback_data=cb)
+    return b.as_markup()
+
+
+def feedback_keyboard() -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.button(text="✅ Готово", callback_data="feedback:done")
     return b.as_markup()
 
 
