@@ -406,18 +406,18 @@ DEFAULT_BODYWEIGHT_WEEKS = 0
 
 def bodyweight_keyboard(has_logs: bool, weeks: int = 0, show_periods: bool = False) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    if show_periods:
-        for value, label in BODYWEIGHT_PERIODS:
-            text = f"• {label} •" if value == weeks else label
-            b.button(text=text, callback_data=f"bw:period:{value}")
-    b.button(text="➕ Записать вес", callback_data="bw:add")
+    b.row(InlineKeyboardButton(text="➕ ЗАПИСАТЬ ВЕС", callback_data="bw:add"))
     if has_logs:
-        b.button(text="↩️ Удалить последнюю", callback_data="bw:undo")
-    b.button(text="⬅️ Главное меню", callback_data="bw:menu")
+        b.row(InlineKeyboardButton(text="↩️ Удалить последнюю", callback_data="bw:undo"))
     if show_periods:
-        b.adjust(len(BODYWEIGHT_PERIODS), 1, 1, 1)
-    else:
-        b.adjust(1)
+        period_buttons = [
+            InlineKeyboardButton(
+                text=f"• {label} •" if value == weeks else label, callback_data=f"bw:period:{value}"
+            )
+            for value, label in BODYWEIGHT_PERIODS
+        ]
+        b.row(*period_buttons)
+    b.row(InlineKeyboardButton(text="⬅️ Главное меню", callback_data="bw:menu"))
     return b.as_markup()
 
 

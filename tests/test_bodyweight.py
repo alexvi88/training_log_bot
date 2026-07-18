@@ -114,6 +114,20 @@ def test_window_all_returns_everything():
     assert _window(logs, 0) == logs
 
 
+def test_daily_average_points_collapses_same_day_entries():
+    from handlers.bodyweight import _daily_average_points
+
+    logs = [
+        {"logged_at": "2026-01-01T08:00:00", "weight": 80.0},
+        {"logged_at": "2026-01-01T20:00:00", "weight": 82.0},  # same day as above
+        {"logged_at": "2026-01-02T08:00:00", "weight": 79.0},
+    ]
+    points = _daily_average_points(logs)
+    assert len(points) == 2
+    assert points[0][1] == pytest.approx(81.0)  # average of 80 and 82
+    assert points[1][1] == pytest.approx(79.0)
+
+
 def test_window_filters_by_weeks(monkeypatch):
     import datetime as dt
 
