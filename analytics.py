@@ -221,10 +221,6 @@ def compare_to_previous_session(sessions: list[SessionStats]) -> Optional[Compar
 REP_RANGE_MIN = 5
 REP_RANGE_MAX = 10
 
-# Weekly working-set landmarks per muscle group (5-12 sets/week).
-WEEKLY_VOLUME_MIN = 5
-WEEKLY_VOLUME_MAX = 12
-
 
 # Finished-workout counts worth celebrating right on the completion card
 # (not a push — the user is looking at the screen the moment it happens).
@@ -236,17 +232,6 @@ def is_workout_milestone(total_finished: int) -> bool:
     if total_finished <= 0:
         return False
     return total_finished in _SMALL_MILESTONES or total_finished % 100 == 0
-
-
-def classify_weekly_volume(sets_count: int) -> str:
-    """Bucket a group's weekly set count vs the target range: none/low/in_range/high."""
-    if sets_count <= 0:
-        return "none"
-    if sets_count < WEEKLY_VOLUME_MIN:
-        return "low"
-    if sets_count > WEEKLY_VOLUME_MAX:
-        return "high"
-    return "in_range"
 
 
 @dataclass
