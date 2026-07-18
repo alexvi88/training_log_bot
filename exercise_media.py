@@ -109,6 +109,7 @@ EXERCISE_IMAGE_SLUGS = {
     'Фронтальный присед': 'front_barbell_squat',
     'Шраги с гантелями': 'dumbbell_shrug',
     'Шраги со штангой': 'barbell_shrug',
+    'Ягодичный мостик': 'butt_lift_bridge',
     'Ягодичный мостик со штангой': 'barbell_glute_bridge',
 }
 

@@ -161,8 +161,8 @@ async def exm_pick_template(callback: CallbackQuery, state: FSMContext):
     await state.update_data(exm_exercise_id=ex_id)
     await state.set_state(ExerciseManage.picking_exercise)
     ex = await db.get_exercise(ex_id)
-    await _send_exercise_images(callback.message, ex, state)
-    text, kb = _exercise_detail_view(ex)
+    has_images = await _send_exercise_images(callback.message, ex, state)
+    text, kb = _exercise_detail_view(ex, with_info=not has_images)
     await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML")
     await callback.answer()
 
@@ -216,13 +216,7 @@ async def exm_archive_group(callback: CallbackQuery, state: FSMContext):
     await show_exercise_groups(callback, state)
 
 
-def _exercise_detail_view(ex):
-    b = InlineKeyboardBuilder()
-    b.button(text="📈 Прогресс", callback_data=f"prog:ex:{ex['id']}:m")
-    b.button(text="✏️ Название", callback_data=f"exm:editname:{ex['id']}")
-    b.button(text="🗑 Архивировать", callback_data=f"exm:archiveask:{ex['id']}")
-    b.button(text="⬅️ Назад", callback_data="exm:backlist")
-    b.adjust(2)
+def _exercise_info_text(ex) -> str:
     info = [f"Название: <b>{escape(ex['name'])}</b>"]
     if ex["equipment"]:
         info.append(f"Оснастка: {ex['equipment']}")
@@ -231,15 +225,31 @@ def _exercise_detail_view(ex):
     if ex["attachment"]:
         info.append(f"Хват/насадка: {ex['attachment']}")
     info.append(f"Создано: {ex['created_at'][:10]}")
-    return "\n".join(info), b.as_markup()
+    return "\n".join(info)
 
 
-async def _send_exercise_images(message: Message, ex, state: FSMContext) -> None:
+def _exercise_detail_view(ex, with_info: bool = True):
+    b = InlineKeyboardBuilder()
+    b.button(text="📈 Прогресс", callback_data=f"prog:ex:{ex['id']}:m")
+    b.button(text="✏️ Название", callback_data=f"exm:editname:{ex['id']}")
+    b.button(text="🗑 Архивировать", callback_data=f"exm:archiveask:{ex['id']}")
+    b.button(text="⬅️ Назад", callback_data="exm:backlist")
+    b.adjust(2)
+    text = _exercise_info_text(ex) if with_info else "Управление упражнением:"
+    return text, b.as_markup()
+
+
+async def _send_exercise_images(message: Message, ex, state: FSMContext) -> bool:
+    """Sends the demo photos with the exercise info as their caption. Returns whether any were sent."""
     await _clear_exercise_media(message.bot, message.chat.id, state)
     images = exercise_media.get_images(ex["name"])
-    if images:
-        sent = await message.answer_media_group([InputMediaPhoto(media=FSInputFile(p)) for p in images])
-        await state.update_data(exm_media_msg_ids=[m.message_id for m in sent])
+    if not images:
+        return False
+    media = [InputMediaPhoto(media=FSInputFile(images[0]), caption=_exercise_info_text(ex), parse_mode="HTML")]
+    media += [InputMediaPhoto(media=FSInputFile(p)) for p in images[1:]]
+    sent = await message.answer_media_group(media)
+    await state.update_data(exm_media_msg_ids=[m.message_id for m in sent])
+    return True
 
 
 @router.callback_query(StateFilter(ExerciseManage.picking_exercise), F.data.startswith("exm:ex:"))
@@ -250,8 +260,8 @@ async def exm_pick_exercise(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Упражнение не найдено", show_alert=True)
         return
     await state.update_data(exm_exercise_id=ex_id)
-    await _send_exercise_images(callback.message, ex, state)
-    text, kb = _exercise_detail_view(ex)
+    has_images = await _send_exercise_images(callback.message, ex, state)
+    text, kb = _exercise_detail_view(ex, with_info=not has_images)
     await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML")
     await callback.answer()
 
