@@ -378,13 +378,11 @@ def weekly_volume_by_muscle_lines(rows: list[tuple[str, int, str]]) -> list[str]
     """Compact per-group "icon name: count" lines for the main-menu greeting.
 
     rows: same shape as build_weekly_volume_screen's — (group_name, set_count, status).
-    Untrained groups (0 sets) are skipped to keep the greeting short; the full
-    breakdown including gaps lives in the dedicated 💪 Объём/нед screen.
+    Every group is listed, including untrained ones (0 sets, ▫️), same as the
+    dedicated 💪 Объём/нед screen — the gaps are the whole point.
     """
     lines = []
     for name, count, status in rows:
-        if count == 0:
-            continue
         icon = _VOLUME_STATUS_ICON.get(status, "▫️")
         lines.append(f"{icon} {escape(name)}: <b>{count}</b>")
     return lines
