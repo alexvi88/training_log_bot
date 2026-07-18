@@ -164,7 +164,7 @@ def exercise_picker_entry_keyboard(
 def routines_manage_keyboard(routines, has_workouts: bool) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     for r in routines:
-        b.button(text=f"{r['name']} · {r['exercise_count']} упр.", callback_data=f"rt:view:{r['id']}")
+        b.button(text=r["name"], callback_data=f"rt:view:{r['id']}")
     if has_workouts:
         b.button(text="➕ Из тренировки", callback_data="rt:pickw:page:0")
     b.button(text="✨ Готовые программы", callback_data="rt:programs")
