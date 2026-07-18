@@ -173,17 +173,6 @@ async def ai_resume_workout(callback: CallbackQuery, state: FSMContext):
     await _enter_live(callback, state, active["id"], delete_message=False)
 
 
-@router.callback_query(F.data == "ai:reset")
-async def ai_reset(callback: CallbackQuery, state: FSMContext):
-    await state.update_data(ai_history=[])
-    await ui.safe_edit(
-        callback,
-        "🗑 Начали с чистого листа. Задавай вопрос!",
-        reply_markup=await ai_keyboard(callback.from_user.id),
-    )
-    await callback.answer()
-
-
 @router.callback_query(F.data.startswith("ai:comment:"))
 async def ai_comment_workout(callback: CallbackQuery, state: FSMContext):
     """Ручной запрос комментария к тренировке — кнопка на карточке завершённой тренировки.
@@ -292,8 +281,9 @@ async def _handle_question(
     await state.update_data(ai_history=history)
 
     # Full, permanent log — separate from the live window above, which is
-    # capped and wiped on ai:reset. Lets the model pull it back via the
-    # get_full_chat_history tool if a later question references it.
+    # capped and wiped whenever the user re-enters the AI-trainer (menu:ai).
+    # Lets the model pull it back via the get_full_chat_history tool if a
+    # later question references it.
     await db.add_ai_chat_message(user_id, "user", history_question)
     await db.add_ai_chat_message(user_id, "assistant", answer)
 
