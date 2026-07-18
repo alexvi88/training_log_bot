@@ -272,9 +272,11 @@ async def rt_start(callback: CallbackQuery, state: FSMContext):
 
     active = await db.get_active_workout(callback.from_user.id)
     if active:
-        await callback.answer("У тебя уже есть активная тренировка", show_alert=True)
-        await _enter_live(callback, state, active["id"])
-        return
+        if await db.list_exercise_ids_for_workout(active["id"]):
+            await callback.answer("У тебя уже есть активная тренировка", show_alert=True)
+            await _enter_live(callback, state, active["id"])
+            return
+        await db.discard_workout(active["id"])
 
     exercises = await db.list_routine_exercises(routine_id)
     planned = [{"exercise_ids": [ex["exercise_id"]]} for ex in exercises]

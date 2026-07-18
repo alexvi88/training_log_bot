@@ -64,9 +64,9 @@ def groups_keyboard(
         b.button(text=g["name"], callback_data=f"{prefix}:grp:{g['id']}")
     if show_all:
         b.button(text="📋 Все", callback_data=f"{prefix}:grp:all")
-    for text, cb in extra_buttons or []:
-        b.button(text=text, callback_data=cb)
     b.adjust(2)
+    for text, cb in extra_buttons or []:
+        b.row(InlineKeyboardButton(text=text, callback_data=cb))
     return b.as_markup()
 
 

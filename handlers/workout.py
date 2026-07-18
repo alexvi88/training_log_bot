@@ -342,15 +342,6 @@ async def start_workout(callback: CallbackQuery, state: FSMContext):
     if active:
         await _enter_live(callback, state, active["id"])
         return
-    kb = keyboards.confirm_cancel_keyboard(
-        "menu:confirm_start_workout", "menu:cancel_start_workout",
-        confirm_text="🏋️ Начать", cancel_text="❌ Отмена",
-    )
-    await ui.safe_edit(callback, "Начать новую тренировку?", reply_markup=kb)
-
-
-@router.callback_query(F.data == "menu:confirm_start_workout")
-async def confirm_start_workout(callback: CallbackQuery, state: FSMContext):
     workout_id = await db.create_workout(callback.from_user.id)
     await _delete_message(callback.message)
     sent = await callback.message.answer("🏋️ Тренировка начата")
@@ -359,13 +350,7 @@ async def confirm_start_workout(callback: CallbackQuery, state: FSMContext):
         last_by_exercise={},
     )
     await state.set_state(WorkoutFlow.picking_group)
-    await _picker_screen_groups(callback, state)
-    await callback.answer()
-
-
-@router.callback_query(F.data == "menu:cancel_start_workout")
-async def cancel_start_workout(callback: CallbackQuery, state: FSMContext):
-    await _show_main_menu(callback, state)
+    await _picker_screen_groups(callback, state, show_program_button=True)
     await callback.answer()
 
 
@@ -442,7 +427,7 @@ async def _enter_live(
 
 # ---------- picker: add an exercise (either to start, or alongside what's already open) ----------
 
-async def _picker_screen_groups(callback: CallbackQuery, state: FSMContext):
+async def _picker_screen_groups(callback: CallbackQuery, state: FSMContext, show_program_button: bool = False):
     data = await state.get_data()
     user = await db.get_user(callback.from_user.id)
     groups = await db.list_muscle_groups(callback.from_user.id)
@@ -451,7 +436,10 @@ async def _picker_screen_groups(callback: CallbackQuery, state: FSMContext):
     if open_ids:
         names = [escape((await db.get_exercise(eid))["display_name"]) for eid in open_ids]
         hint = "Открыто сейчас: " + ", ".join(names) + "\n" + hint
-    extra = [("❌ Отмена", "pick:cancel")]
+    extra = []
+    if show_program_button:
+        extra.append(("🗂 Выбрать программу", "rt:manage"))
+    extra.append(("❌ Отмена", "pick:cancel"))
     kb = keyboards.groups_keyboard(groups, prefix="pick", extra_buttons=extra, show_all=True)
     await state.update_data(picker_stage="groups")
     await _refresh_live(callback.bot, state, user, data["workout_id"], hint, kb)
