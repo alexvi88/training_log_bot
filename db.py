@@ -224,6 +224,7 @@ async def init_db(db_path: str = config.DB_PATH) -> None:
     await _seed_globals()
     await _migrate_muscle_groups()
     await _sync_exercise_templates()
+    await _backfill_seeded_from_program()
 
 
 async def _column_names(table: str) -> set[str]:
@@ -376,6 +377,31 @@ async def _sync_exercise_templates() -> None:
                 (ex_name, group_id, display_name, ex_name, now_iso()),
             )
         await db.commit()
+
+
+async def _backfill_seeded_from_program() -> None:
+    """Retroactively flag pristine, untouched, routine-less forks of a global
+    template as seeded_from_program.
+
+    get_or_create_user_exercise_by_name only sets this flag going forward; a
+    user exercise created the same way before that flag existed (e.g. by
+    adding a ready-made program prior to this migration) defaulted to 0 and
+    stays invisible to _VISIBLE_EXERCISE_FILTER's "seeded and orphaned" check
+    forever. Re-deriving it here from display_name (matches only if never
+    renamed — see update_exercise_name) plus "never trained, not in any
+    routine" catches those old leftovers too. Idempotent — cheap to re-run
+    on every startup, and something the user later adds to a routine or
+    trains simply won't match the WHERE clause next time.
+    """
+    await _conn.execute(
+        "UPDATE exercises SET seeded_from_program = 1 "
+        "WHERE is_template = 0 AND seeded_from_program = 0 AND user_id IS NOT NULL "
+        "AND EXISTS (SELECT 1 FROM exercises t WHERE t.is_template = 1 AND t.display_name = exercises.display_name) "
+        "AND NOT EXISTS (SELECT 1 FROM block_exercises be JOIN workout_blocks wb "
+        "                ON wb.id = be.block_id WHERE be.exercise_id = exercises.id) "
+        "AND NOT EXISTS (SELECT 1 FROM routine_exercises re WHERE re.exercise_id = exercises.id)"
+    )
+    await _conn.commit()
 
 
 GROUP_MERGE_MAP = {
