@@ -489,6 +489,19 @@ async def list_users_with_workout_counts(limit: int = 10, offset: int = 0) -> li
     return await cur.fetchall()
 
 
+async def list_users_with_ai_message_counts(limit: int = 10, offset: int = 0) -> list[aiosqlite.Row]:
+    """All users with their AI-trainer message count, most messages first — for the admin panel."""
+    cur = await conn().execute(
+        "SELECT u.telegram_id, u.username, "
+        "COUNT(m.id) AS ai_message_count "
+        "FROM users u LEFT JOIN ai_chat_messages m ON m.telegram_id = u.telegram_id "
+        "GROUP BY u.telegram_id ORDER BY ai_message_count DESC, u.telegram_id "
+        "LIMIT ? OFFSET ?",
+        (limit, offset),
+    )
+    return await cur.fetchall()
+
+
 async def count_users() -> int:
     cur = await conn().execute("SELECT COUNT(*) FROM users")
     (count,) = await cur.fetchone()

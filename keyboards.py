@@ -355,6 +355,30 @@ def admin_history_item_keyboard(target_user_id: int) -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
+def admin_ai_users_keyboard(users, page: int, has_next: bool) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    for u in users:
+        name = f"@{u['username']}" if u["username"] else str(u["telegram_id"])
+        b.button(text=f"{name} ({u['ai_message_count']})", callback_data=f"admin:aiu:{u['telegram_id']}")
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"admin:aip:{page - 1}"))
+    if has_next:
+        nav.append(InlineKeyboardButton(text="➡️", callback_data=f"admin:aip:{page + 1}"))
+    b.adjust(1)
+    if nav:
+        b.row(*nav)
+    b.row(InlineKeyboardButton(text="⬅️ Главное меню", callback_data="admin:menu"))
+    return b.as_markup()
+
+
+def admin_ai_dialogs_back_keyboard(page: int) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.button(text="⬅️ К списку", callback_data=f"admin:aib:{page}")
+    b.adjust(1)
+    return b.as_markup()
+
+
 def admin_pushes_keyboard(page: int, has_next: bool) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     nav = []
