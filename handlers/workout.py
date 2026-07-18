@@ -95,17 +95,18 @@ async def _suggested_next_exercise(user_id: int, last_finished_id: int | None):
     return ex["id"], ex["display_name"]
 
 
-async def _idle_view(data: dict, user_id: int) -> tuple[str | None, InlineKeyboardMarkup]:
+async def _idle_view(data: dict, user_id: int, is_empty: bool = False) -> tuple[str | None, InlineKeyboardMarkup]:
     has_planned = bool(data.get("planned_blocks"))
     suggested = await _suggested_next_exercise(user_id, data.get("last_finished_exercise_id"))
     hint = f"💡 В прошлый раз дальше было: <b>{escape(suggested[1])}</b>" if suggested else None
-    kb = keyboards.exercise_picker_entry_keyboard(has_planned=has_planned, suggested=suggested)
+    kb = keyboards.exercise_picker_entry_keyboard(has_planned=has_planned, suggested=suggested, is_empty=is_empty)
     return hint, kb
 
 
 async def _enter_idle_screen(bot, state: FSMContext, user, workout_id: int):
     data = await state.get_data()
-    hint, kb = await _idle_view(data, user["telegram_id"])
+    is_empty = not await db.list_exercise_ids_for_workout(workout_id)
+    hint, kb = await _idle_view(data, user["telegram_id"], is_empty=is_empty)
     await _refresh_live(bot, state, user, workout_id, hint, kb)
 
 

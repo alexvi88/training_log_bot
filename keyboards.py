@@ -146,9 +146,13 @@ def logging_keyboard(
 
 
 def exercise_picker_entry_keyboard(
-    has_planned: bool = False, suggested: tuple[int, str] | None = None
+    has_planned: bool = False, suggested: tuple[int, str] | None = None, is_empty: bool = False
 ) -> InlineKeyboardMarkup:
-    """suggested: (exercise_id, display_name) of what usually follows the just-finished exercise."""
+    """suggested: (exercise_id, display_name) of what usually follows the just-finished exercise.
+
+    is_empty: nothing logged in this workout yet — "finish" would just discard it
+    (see live_finish_workout), so the button reads as an exit rather than a finish.
+    """
     b = InlineKeyboardBuilder()
     if has_planned:
         b.button(text="▶️ Следующее по шаблону", callback_data="live:next_planned")
@@ -156,7 +160,10 @@ def exercise_picker_entry_keyboard(
     if suggested is not None:
         ex_id, _name = suggested
         b.button(text="⏭ Как в прошлый раз", callback_data=f"live:suggest:{ex_id}")
-    b.button(text="🏁 Завершить тренировку", callback_data="live:finish_workout")
+    if is_empty:
+        b.button(text="⬅️ В меню", callback_data="live:finish_workout")
+    else:
+        b.button(text="🏁 Завершить тренировку", callback_data="live:finish_workout")
     b.adjust(1)
     return b.as_markup()
 

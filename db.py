@@ -60,6 +60,7 @@ CREATE TABLE IF NOT EXISTS exercises (
     notes TEXT,
     created_at TEXT NOT NULL,
     last_used_at TEXT,
+    seeded_from_program INTEGER NOT NULL DEFAULT 0,
     FOREIGN KEY (primary_group_id) REFERENCES muscle_groups (id)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_exercises_user_name_ci
@@ -250,6 +251,10 @@ async def _migrate_schema() -> None:
     if "original_name" not in exercise_cols:
         await _conn.execute("ALTER TABLE exercises ADD COLUMN original_name TEXT")
         await _conn.execute("UPDATE exercises SET original_name = name WHERE original_name IS NULL")
+    if "seeded_from_program" not in exercise_cols:
+        await _conn.execute(
+            "ALTER TABLE exercises ADD COLUMN seeded_from_program INTEGER NOT NULL DEFAULT 0"
+        )
 
     user_cols = await _column_names("users")
     if "hide_warmups" in user_cols:
@@ -517,6 +522,19 @@ async def archive_muscle_group(group_id: int) -> None:
 
 # ---------- exercises ----------
 
+# An exercise auto-created purely as a side effect of adding a ready-made program
+# (see get_or_create_user_exercise_by_name) is hidden from the user's exercise
+# lists again once it's neither actually used nor still referenced by one of
+# their routines — otherwise deleting that program/routine leaves junk behind
+# that the user never manually added and never trained.
+_VISIBLE_EXERCISE_FILTER = (
+    "(e.seeded_from_program = 0 "
+    "OR EXISTS (SELECT 1 FROM block_exercises be JOIN workout_blocks wb "
+    "           ON wb.id = be.block_id WHERE be.exercise_id = e.id) "
+    "OR EXISTS (SELECT 1 FROM routine_exercises re WHERE re.exercise_id = e.id))"
+)
+
+
 async def list_user_exercises_in_group(
     user_id: int, group_id: int, limit: Optional[int] = None, offset: int = 0
 ) -> list[aiosqlite.Row]:
@@ -528,6 +546,7 @@ async def list_user_exercises_in_group(
         "FROM exercises e "
         "WHERE e.user_id = ? AND e.primary_group_id = ? "
         "AND e.is_archived = 0 AND e.is_template = 0 "
+        f"AND {_VISIBLE_EXERCISE_FILTER} "
         "ORDER BY usage_count DESC, e.last_used_at IS NULL, e.last_used_at DESC, e.display_name"
     )
     params: list[Any] = [user_id, group_id]
@@ -540,8 +559,9 @@ async def list_user_exercises_in_group(
 
 async def count_user_exercises_in_group(user_id: int, group_id: int) -> int:
     cur = await conn().execute(
-        "SELECT COUNT(*) FROM exercises WHERE user_id = ? AND primary_group_id = ? "
-        "AND is_archived = 0 AND is_template = 0",
+        "SELECT COUNT(*) FROM exercises e WHERE e.user_id = ? AND e.primary_group_id = ? "
+        "AND e.is_archived = 0 AND e.is_template = 0 "
+        f"AND {_VISIBLE_EXERCISE_FILTER}",
         (user_id, group_id),
     )
     (count,) = await cur.fetchone()
@@ -559,6 +579,7 @@ async def list_user_exercises(
         "FROM exercises e "
         "WHERE e.user_id = ? "
         "AND e.is_archived = 0 AND e.is_template = 0 "
+        f"AND {_VISIBLE_EXERCISE_FILTER} "
         "ORDER BY usage_count DESC, e.last_used_at IS NULL, e.last_used_at DESC, e.display_name"
     )
     params: list[Any] = [user_id]
@@ -571,7 +592,8 @@ async def list_user_exercises(
 
 async def count_user_exercises(user_id: int) -> int:
     cur = await conn().execute(
-        "SELECT COUNT(*) FROM exercises WHERE user_id = ? AND is_archived = 0 AND is_template = 0",
+        "SELECT COUNT(*) FROM exercises e WHERE e.user_id = ? AND e.is_archived = 0 AND e.is_template = 0 "
+        f"AND {_VISIBLE_EXERCISE_FILTER}",
         (user_id,),
     )
     (count,) = await cur.fetchone()
@@ -589,9 +611,10 @@ async def list_templates_in_group(group_id: int) -> list[aiosqlite.Row]:
 async def search_exercises(user_id: int, query: str, limit: int = 20) -> list[aiosqlite.Row]:
     escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     cur = await conn().execute(
-        "SELECT * FROM exercises WHERE user_id = ? AND is_archived = 0 AND is_template = 0 "
-        "AND py_lower(display_name) LIKE '%' || py_lower(?) || '%' ESCAPE '\\' "
-        "ORDER BY last_used_at IS NULL, last_used_at DESC, display_name "
+        "SELECT * FROM exercises e WHERE e.user_id = ? AND e.is_archived = 0 AND e.is_template = 0 "
+        "AND py_lower(e.display_name) LIKE '%' || py_lower(?) || '%' ESCAPE '\\' "
+        f"AND {_VISIBLE_EXERCISE_FILTER} "
+        "ORDER BY e.last_used_at IS NULL, e.last_used_at DESC, e.display_name "
         "LIMIT ?",
         (user_id, escaped, limit),
     )
@@ -1188,19 +1211,30 @@ async def _find_global_template_by_name(name: str) -> Optional[aiosqlite.Row]:
 
 
 async def get_or_create_user_exercise_by_name(user_id: int, name: str) -> Optional[int]:
-    """Resolve an exercise name to a user-owned exercise id.
+    """Resolve an exercise name to a user-owned exercise id, for instantiating a
+    ready-made program (see create_routine_from_program).
 
     Returns an existing user exercise if there is one, otherwise forks the global
     template of that name into the user's catalog and returns the fork. Returns
     None only if the name matches neither — programs reference template names, so
     in practice resolution always succeeds.
+
+    A freshly forked exercise is flagged seeded_from_program so the exercise
+    lists (list_user_exercises*) can hide it again if the program/routine that
+    introduced it gets deleted before the user ever actually trains it.
     """
     existing = await find_exercise_by_name(user_id, name)
     if existing:
         return existing["id"]
     template = await _find_global_template_by_name(name)
     if template is not None:
-        return await fork_exercise_from_template(user_id, template["id"])
+        ex_id = await fork_exercise_from_template(user_id, template["id"])
+        async with _write_lock:
+            await conn().execute(
+                "UPDATE exercises SET seeded_from_program = 1 WHERE id = ?", (ex_id,)
+            )
+            await conn().commit()
+        return ex_id
     return None
 
 

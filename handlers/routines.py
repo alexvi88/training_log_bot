@@ -160,14 +160,38 @@ async def rt_view(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+# Button text has a hard Telegram limit (64 chars) and gets cramped well before
+# that, so the exercise summary is cut short rather than listing everything.
+_SOURCE_PICKER_SUMMARY_MAX = 30
+
+
+async def _workout_exercise_summary(workout_id: int) -> str:
+    """Comma-joined exercise names for a workout, in block order and de-duplicated —
+    same source list create_routine_from_workout snapshots into the routine."""
+    seen: set[int] = set()
+    names: list[str] = []
+    for block in await db.list_blocks_for_workout(workout_id):
+        for be in await db.get_block_exercises(block["id"]):
+            if be["exercise_id"] in seen:
+                continue
+            seen.add(be["exercise_id"])
+            names.append(be["display_name"])
+    summary = ", ".join(names)
+    if len(summary) > _SOURCE_PICKER_SUMMARY_MAX:
+        summary = summary[:_SOURCE_PICKER_SUMMARY_MAX].rstrip() + "…"
+    return summary
+
+
 async def _show_routine_source_picker(callback: CallbackQuery, state: FSMContext, page: int) -> None:
     user_id = callback.from_user.id
     total = await db.count_workouts(user_id)
     workouts = await db.list_workouts(user_id, limit=ROUTINE_SOURCE_PAGE_SIZE, offset=page * ROUTINE_SOURCE_PAGE_SIZE)
-    items = [
-        {"id": w["id"], "label": formatting.format_date_ru(dt.datetime.fromisoformat(w["started_at"]))}
-        for w in workouts
-    ]
+    items = []
+    for w in workouts:
+        date_label = formatting.format_date_ru(dt.datetime.fromisoformat(w["started_at"]))
+        summary = await _workout_exercise_summary(w["id"])
+        label = f"{date_label} — {summary}" if summary else date_label
+        items.append({"id": w["id"], "label": label})
     has_next = (page + 1) * ROUTINE_SOURCE_PAGE_SIZE < total
     kb = keyboards.routine_source_picker_keyboard(items, page, has_next)
     text = "Из какой тренировки создать программу?" if items else "Нет завершённых тренировок."
