@@ -47,6 +47,26 @@ async def test_create_routine_from_workout_dedups_and_orders(user_id):
 
 
 @pytest.mark.asyncio
+async def test_workout_exercise_summary_lists_names_in_order(user_id):
+    from handlers.routines import _workout_exercise_summary
+
+    wid, _ex_ids = await _finished_workout_with(user_id, ["Жим", "Разведение", "Жим"])
+    assert await _workout_exercise_summary(wid) == "Жим, Разведение"
+
+
+@pytest.mark.asyncio
+async def test_workout_exercise_summary_truncates_long_lists(user_id):
+    from handlers.routines import _SOURCE_PICKER_SUMMARY_MAX, _workout_exercise_summary
+
+    wid, _ex_ids = await _finished_workout_with(
+        user_id, ["Приседания со штангой на плечах", "Жим штанги лёжа широким хватом"]
+    )
+    summary = await _workout_exercise_summary(wid)
+    assert summary.endswith("…")
+    assert len(summary) <= _SOURCE_PICKER_SUMMARY_MAX + 1
+
+
+@pytest.mark.asyncio
 async def test_list_routine_exercises_skips_archived(user_id):
     wid, ex_ids = await _finished_workout_with(user_id, ["Жим", "Разведение"])
     rid = await dbmod.create_routine_from_workout(user_id, wid, "Грудь")

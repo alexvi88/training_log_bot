@@ -215,4 +215,5 @@ async def test_menu_view_shows_weekly_volume(user_id, fresh_db):
     from handlers.workout import _menu_view
 
     text, _ = await _menu_view(user_id)
-    assert "Объём за неделю: <b>2 подхода</b>" in text
+    assert "Объём за неделю:" in text
+    assert "Грудь: <b>2</b>" in text

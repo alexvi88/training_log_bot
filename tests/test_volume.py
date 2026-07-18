@@ -88,3 +88,17 @@ def test_weekly_volume_screen_empty():
     rows = [("Грудь", 0, "none"), ("Спина", 0, "none")]
     text = formatting.build_weekly_volume_screen(dt.date(2026, 7, 13), rows, is_current_week=True)
     assert "ещё нет ни одного подхода" in text
+
+
+# ---------- greeting summary lines ----------
+
+
+def test_weekly_volume_by_muscle_lines_skips_untrained_groups():
+    rows = [("Грудь", 7, "in_range"), ("Спина", 3, "low"), ("Ноги", 0, "none")]
+    lines = formatting.weekly_volume_by_muscle_lines(rows)
+    assert lines == ["🟢 Грудь: <b>7</b>", "🟡 Спина: <b>3</b>"]
+
+
+def test_weekly_volume_by_muscle_lines_empty_when_nothing_trained():
+    rows = [("Грудь", 0, "none"), ("Спина", 0, "none")]
+    assert formatting.weekly_volume_by_muscle_lines(rows) == []

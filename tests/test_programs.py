@@ -45,12 +45,11 @@ def test_callback_data_fits_telegram_limit():
 # ---------- DB-level resolution & instantiation ----------
 
 async def test_get_or_create_forks_global_template(user_id):
-    before = await dbmod.count_user_exercises(user_id)
     ex_id = await dbmod.get_or_create_user_exercise_by_name(user_id, "Жим штанги лёжа")
     assert ex_id is not None
     ex = await dbmod.get_exercise(ex_id)
     assert ex["user_id"] == user_id
-    assert await dbmod.count_user_exercises(user_id) == before + 1
+    assert ex["seeded_from_program"] == 1
 
 
 async def test_get_or_create_reuses_existing_exercise(user_id):
@@ -68,6 +67,29 @@ async def test_create_routine_from_program_orders_and_forks(user_id):
     rid = await dbmod.create_routine_from_program(user_id, "Всё тело A", exercises)
     rexs = await dbmod.list_routine_exercises(rid)
     assert [r["display_name"] for r in rexs] == exercises
+
+
+async def test_seeded_exercise_hidden_from_list_once_its_routine_is_deleted(user_id):
+    """Deleting a ready-made program shouldn't leave never-trained exercises cluttering
+    the user's exercise list (see get_or_create_user_exercise_by_name)."""
+    routine_id = await dbmod.create_routine_from_program(user_id, "Пробный день", ["Присед со штангой"])
+    assert await dbmod.count_user_exercises(user_id) == 1  # still referenced by the routine
+
+    await dbmod.delete_routine(routine_id)
+    assert await dbmod.count_user_exercises(user_id) == 0
+
+
+async def test_seeded_exercise_stays_visible_once_actually_trained(user_id):
+    routine_id = await dbmod.create_routine_from_program(user_id, "Пробный день", ["Присед со штангой"])
+    ex_id = (await dbmod.list_routine_exercises(routine_id))[0]["exercise_id"]
+
+    workout_id = await dbmod.create_finished_workout(user_id, "2026-01-01T10:00:00", "2026-01-01T10:30:00")
+    block_id = await dbmod.create_block(workout_id, "single")
+    await dbmod.add_block_exercise(block_id, ex_id, 0)
+    await dbmod.add_set(block_id, ex_id, 1, 0, 60.0, 5)
+
+    await dbmod.delete_routine(routine_id)
+    assert await dbmod.count_user_exercises(user_id) == 1  # real training history -> stays
 
 
 async def test_create_routine_from_program_dedupes_and_skips_unknown(user_id):

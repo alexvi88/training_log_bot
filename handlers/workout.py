@@ -95,17 +95,18 @@ async def _suggested_next_exercise(user_id: int, last_finished_id: int | None):
     return ex["id"], ex["display_name"]
 
 
-async def _idle_view(data: dict, user_id: int) -> tuple[str | None, InlineKeyboardMarkup]:
+async def _idle_view(data: dict, user_id: int, is_empty: bool = False) -> tuple[str | None, InlineKeyboardMarkup]:
     has_planned = bool(data.get("planned_blocks"))
     suggested = await _suggested_next_exercise(user_id, data.get("last_finished_exercise_id"))
     hint = f"💡 В прошлый раз дальше было: <b>{escape(suggested[1])}</b>" if suggested else None
-    kb = keyboards.exercise_picker_entry_keyboard(has_planned=has_planned, suggested=suggested)
+    kb = keyboards.exercise_picker_entry_keyboard(has_planned=has_planned, suggested=suggested, is_empty=is_empty)
     return hint, kb
 
 
 async def _enter_idle_screen(bot, state: FSMContext, user, workout_id: int):
     data = await state.get_data()
-    hint, kb = await _idle_view(data, user["telegram_id"])
+    is_empty = not await db.list_exercise_ids_for_workout(workout_id)
+    hint, kb = await _idle_view(data, user["telegram_id"], is_empty=is_empty)
     await _refresh_live(bot, state, user, workout_id, hint, kb)
 
 
@@ -216,11 +217,15 @@ async def _menu_view(user_id: int) -> tuple[str, bytes | None]:
     heatmap_start = max(first_monday, year_ago)
     stat_lines = formatting.dashboard_stat_lines(dashboard)
     png = await asyncio.to_thread(charts.render_year_heatmap, Counter(dates), today, heatmap_start, stat_lines)
+
+    from handlers.volume import _build_rows as _weekly_volume_rows
+
     sunday = this_monday + dt.timedelta(days=6)
-    volume_by_group = await db.weekly_volume_by_group(user_id, this_monday.isoformat(), sunday.isoformat())
-    total_sets = sum(volume_by_group.values())
-    sets_word = formatting.plural_ru(total_sets, ("подход", "подхода", "подходов"))
-    greeting = f"{_GREETING}\n\nОбъём за неделю: <b>{total_sets} {sets_word}</b>"
+    volume_rows = await _weekly_volume_rows(user_id, this_monday, sunday)
+    volume_lines = formatting.weekly_volume_by_muscle_lines(volume_rows)
+    greeting = _GREETING
+    if volume_lines:
+        greeting = f"{_GREETING}\n\nОбъём за неделю:\n" + "\n".join(volume_lines)
     return greeting, png
 
 
