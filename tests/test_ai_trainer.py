@@ -95,8 +95,6 @@ async def test_bodyweight_history_does_not_leak_other_users_data(fresh_db, user_
 async def test_weekly_volume_tool_counts_and_classifies(fresh_db, user_id, monkeypatch):
     import datetime as dt
 
-    import handlers.volume  # noqa: F401  (ensure import path is fine)
-
     # Freeze "today" so the seeded workout lands in the current week.
     class _FixedDate(dt.date):
         @classmethod

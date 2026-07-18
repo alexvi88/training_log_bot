@@ -198,22 +198,3 @@ async def test_menu_view_includes_heatmap_once_history_exists(user_id, fresh_db)
     assert png is not None and png[:8] == b"\x89PNG\r\n\x1a\n"
 
 
-@pytest.mark.asyncio
-async def test_menu_view_shows_weekly_volume(user_id, fresh_db):
-    db = fresh_db
-    group_id = await db.create_muscle_group(user_id, "Грудь")
-    ex_id = await db.create_exercise(user_id, "Жим лёжа", group_id)
-    today = dt.datetime.now()
-    workout_id = await db.create_finished_workout(
-        user_id, today.isoformat(), (today + dt.timedelta(hours=1)).isoformat()
-    )
-    block_id = await db.create_block(workout_id, "single")
-    await db.add_block_exercise(block_id, ex_id, 0)
-    await db.add_set(block_id, ex_id, 1, 0, 100, 8)
-    await db.add_set(block_id, ex_id, 2, 0, 100, 8)
-
-    from handlers.workout import _menu_view
-
-    text, _ = await _menu_view(user_id)
-    assert "Объём за неделю:" in text
-    assert "Грудь: <b>2</b>" in text

@@ -332,62 +332,6 @@ def format_progress_screen(
     return "\n".join(lines).rstrip()
 
 
-_VOLUME_STATUS_ICON = {"none": "▫️", "low": "🟡", "in_range": "🟢", "high": "🟠"}
-
-
-def build_weekly_volume_screen(
-    week_start: dt.date,
-    rows: list[tuple[str, int, str]],
-    is_current_week: bool,
-) -> str:
-    """Weekly working-set volume per muscle group vs the 5-12 target range.
-
-    rows: (group_name, set_count, status) where status comes from
-    analytics.classify_weekly_volume. Groups are shown in the order passed in,
-    including those with zero sets — the gaps are the point.
-    """
-    from analytics import WEEKLY_VOLUME_MAX, WEEKLY_VOLUME_MIN
-
-    week_end = week_start + dt.timedelta(days=6)
-    period = f"{week_start.strftime('%d.%m')}–{week_end.strftime('%d.%m')}"
-    label = "эта неделя" if is_current_week else "неделя"
-    lines = [f"💪 <b>ОБЪЁМ ПО ГРУППАМ</b> · {period} ({label})", ""]
-
-    total = sum(c for _, c, _ in rows)
-    if total == 0:
-        lines.append("На этой неделе ещё нет ни одного подхода.")
-        lines.append(f"\nЦель — {WEEKLY_VOLUME_MIN}–{WEEKLY_VOLUME_MAX} рабочих подходов на группу за неделю.")
-        return "\n".join(lines)
-
-    for name, count, status in rows:
-        icon = _VOLUME_STATUS_ICON.get(status, "▫️")
-        word = plural_ru(count, ("подход", "подхода", "подходов"))
-        lines.append(f"{icon} {escape(name)}: <b>{count}</b> {word}")
-
-    set_word = plural_ru(total, ("подход", "подхода", "подходов"))
-    lines.append("")
-    lines.append(f"Всего {total} {set_word}.")
-    lines.append(
-        f"Цель — {WEEKLY_VOLUME_MIN}–{WEEKLY_VOLUME_MAX}/нед на группу: "
-        "🟢 в диапазоне, 🟡 мало, 🟠 многовато, ▫️ пусто."
-    )
-    return "\n".join(lines)
-
-
-def weekly_volume_by_muscle_lines(rows: list[tuple[str, int, str]]) -> list[str]:
-    """Compact per-group "icon name: count" lines for the main-menu greeting.
-
-    rows: same shape as build_weekly_volume_screen's — (group_name, set_count, status).
-    Every group is listed, including untrained ones (0 sets, ▫️), same as the
-    dedicated 💪 Объём/нед screen — the gaps are the whole point.
-    """
-    lines = []
-    for name, count, status in rows:
-        icon = _VOLUME_STATUS_ICON.get(status, "▫️")
-        lines.append(f"{icon} {escape(name)}: <b>{count}</b>")
-    return lines
-
-
 def build_bodyweight_screen(logs: list, unit: str = "kg") -> str:
     """Text for the ⚖️ Вес тела screen: latest value and entry count.
 

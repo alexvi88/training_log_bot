@@ -198,7 +198,7 @@ _ONBOARDING = (
     "1️⃣ Жми «🏋️ НАЧАТЬ ТРЕНИРОВКУ»\n"
     "2️⃣ Выбирай группу мышц и упражнение\n"
     "3️⃣ Пиши вес и повторы, например «100 8» (или «8» для своего веса)\n\n"
-    "Дальше я сам посчитаю рекорды, прогресс и объём. Погнали? 👇"
+    "Дальше я сам посчитаю рекорды и прогресс. Погнали? 👇"
 )
 
 
@@ -217,16 +217,7 @@ async def _menu_view(user_id: int) -> tuple[str, bytes | None]:
     heatmap_start = max(first_monday, year_ago)
     stat_lines = formatting.dashboard_stat_lines(dashboard)
     png = await asyncio.to_thread(charts.render_year_heatmap, Counter(dates), today, heatmap_start, stat_lines)
-
-    from handlers.volume import _build_rows as _weekly_volume_rows
-
-    sunday = this_monday + dt.timedelta(days=6)
-    volume_rows = await _weekly_volume_rows(user_id, this_monday, sunday)
-    volume_lines = formatting.weekly_volume_by_muscle_lines(volume_rows)
-    greeting = _GREETING
-    if volume_lines:
-        greeting = f"{_GREETING}\n\nОбъём за неделю:\n" + "\n".join(volume_lines)
-    return greeting, png
+    return _GREETING, png
 
 
 async def _send_menu(message: Message, text: str, png: bytes | None, keyboard) -> Message:
