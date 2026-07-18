@@ -13,7 +13,9 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import (
     BufferedInputFile,
     CallbackQuery,
+    FSInputFile,
     InlineKeyboardMarkup,
+    InputMediaPhoto,
     Message,
 )
 
@@ -22,6 +24,7 @@ import analytics
 import charts
 import config
 import db
+import exercise_media
 import formatting
 import keyboards
 import ui
@@ -579,10 +582,20 @@ async def pick_back_from_templates(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+async def _send_exercise_photos(message: Message, ex) -> None:
+    images = exercise_media.get_images(ex["name"])
+    if images:
+        media = [InputMediaPhoto(media=FSInputFile(images[0]), caption=f"Название: {ex['name']}")]
+        media += [InputMediaPhoto(media=FSInputFile(p)) for p in images[1:]]
+        await message.answer_media_group(media)
+
+
 @router.callback_query(StateFilter(WorkoutFlow.creating_exercise_name), F.data.startswith("pick:tpl:"))
 async def pick_template(callback: CallbackQuery, state: FSMContext):
     template_id = int(callback.data.split(":")[2])
     ex_id = await db.fork_exercise_from_template(callback.from_user.id, template_id)
+    ex = await db.get_exercise(ex_id)
+    await _send_exercise_photos(callback.message, ex)
     await _on_exercise_chosen(callback, state, ex_id)
 
 
