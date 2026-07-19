@@ -70,7 +70,7 @@ async def _refresh_live(bot, state: FSMContext, user, workout_id: int, hint, key
     """
     data = await state.get_data()
     chat_id = data["live_chat_id"]
-    blocks = await view_builder.build_block_views(workout_id, user["e1rm_formula"], skip_empty=False)
+    blocks = await view_builder.build_block_views(workout_id, user["e1rm_formula"])
     active = data.get("active_exercise_id")
     blocks = _move_open_exercises_last(blocks, data.get("open_exercises") or [], active)
     text = formatting.build_live_session_text(blocks, hint, active_exercise_id=active)
@@ -690,6 +690,53 @@ async def live_switch_exercise(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     user = await db.get_user(callback.from_user.id)
     await _render_logging_screen(callback.bot, state, user)
+
+
+async def _send_exercise_card(message: Message, state: FSMContext, ex) -> None:
+    """Sends the exercise's reference photo(s) + technique info as a separate,
+    dismissable card (custom photo takes priority, same as the ⚙️ Упражнения flow),
+    with a button to jump back to the live logging screen."""
+    from handlers.exercises import _exercise_info_text
+
+    text = _exercise_info_text(ex, with_created=False)
+    msg_ids: list[int] = []
+    if ex["custom_photo_file_id"]:
+        sent = await message.answer_photo(ex["custom_photo_file_id"], caption=text, parse_mode="HTML")
+        msg_ids.append(sent.message_id)
+    else:
+        images = exercise_media.get_images(ex["name"])
+        if images:
+            media = [InputMediaPhoto(media=FSInputFile(images[0]), caption=text, parse_mode="HTML")]
+            media += [InputMediaPhoto(media=FSInputFile(p)) for p in images[1:]]
+            sent_group = await message.answer_media_group(media)
+            msg_ids.extend(m.message_id for m in sent_group)
+        else:
+            sent = await message.answer(text, parse_mode="HTML")
+            msg_ids.append(sent.message_id)
+    back = await message.answer("Смотришь технику — жми, когда закончишь.", reply_markup=keyboards.exercise_card_back_keyboard())
+    msg_ids.append(back.message_id)
+    await state.update_data(live_card_msg_ids=msg_ids)
+
+
+@router.callback_query(StateFilter(WorkoutFlow.logging_set), F.data.startswith("live:card:"))
+async def live_card_show(callback: CallbackQuery, state: FSMContext):
+    ex_id = int(callback.data.split(":")[2])
+    ex = await db.get_exercise(ex_id)
+    if ex is None or ex["user_id"] != callback.from_user.id:
+        await callback.answer("Упражнение не найдено", show_alert=True)
+        return
+    await _send_exercise_card(callback.message, state, ex)
+    await callback.answer()
+
+
+@router.callback_query(StateFilter(WorkoutFlow.logging_set), F.data == "live:card_back")
+async def live_card_back(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    for mid in data.get("live_card_msg_ids") or []:
+        with suppress(TelegramBadRequest):
+            await callback.bot.delete_message(callback.message.chat.id, mid)
+    await state.update_data(live_card_msg_ids=None)
+    await callback.answer()
 
 
 @router.message(StateFilter(WorkoutFlow.logging_set))

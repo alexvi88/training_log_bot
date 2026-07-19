@@ -10,7 +10,6 @@ from formatting import BlockView, ExerciseBlockView
 async def build_block_views(
     workout_id: int,
     formula: str = "epley",
-    skip_empty: bool = True,
     previous_before: str | None = None,
 ) -> list[BlockView]:
     """previous_before: if set (a workout's started_at), each block also gets the
@@ -31,8 +30,6 @@ async def build_block_views(
         block_exs = await db.get_block_exercises(block["id"])
         sets = await db.list_sets_for_block(block["id"])
         if not block_exs:
-            continue
-        if skip_empty and not sets:
             continue
 
         ex_id = block_exs[0]["exercise_id"]
