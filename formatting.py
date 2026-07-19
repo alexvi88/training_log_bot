@@ -109,7 +109,10 @@ BlockView = ExerciseBlockView
 def _render_single_block(block: ExerciseBlockView, show_extra: bool, italic_prev: bool = False) -> list[str]:
     label = f"{escape(block.exercise_name)} [{block.group_name.upper()}]"
     lines = [f"<b>{label}</b>"]
-    lines.extend(f"  • {format_set(w, r, block.rpe_for(i))}" for i, (w, r) in enumerate(block.sets))
+    if block.sets:
+        lines.extend(f"  • {format_set(w, r, block.rpe_for(i))}" for i, (w, r) in enumerate(block.sets))
+    else:
+        lines.append("  <i>подходов нет</i>")
     if show_extra and block.sets:
         if block.is_bodyweight:
             lines.append(f"  ↳ повторов всего {sum(r for _, r in block.sets)}")
@@ -222,7 +225,12 @@ def build_workout_card(
 
     for block in blocks:
         body.append(f"{block.exercise_name} [{block.group_name.upper()}]")
-        body.append("  " + ", ".join(format_set(w, r, block.rpe_for(i)) for i, (w, r) in enumerate(block.sets)))
+        if block.sets:
+            body.append(
+                "  " + ", ".join(format_set(w, r, block.rpe_for(i)) for i, (w, r) in enumerate(block.sets))
+            )
+        else:
+            body.append("  — без подходов")
         exercise_count += 1
         set_count += len(block.sets)
         tonnage += block.tonnage
