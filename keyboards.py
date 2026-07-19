@@ -101,7 +101,7 @@ def exercises_keyboard(
 
 def new_exercise_entry_keyboard(prefix: str) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.button(text="📋 Выбрать из шаблона", callback_data=f"{prefix}:templates")
+    b.button(text="📋 Выбрать из шаблонов", callback_data=f"{prefix}:templates")
     b.button(text="❌ Отмена", callback_data=f"{prefix}:cancel")
     b.adjust(1)
     return b.as_markup()
@@ -113,6 +113,13 @@ def templates_keyboard(templates, prefix: str, back_cb: str = "back") -> InlineK
     for row in named_buttons(items):
         b.row(*row)
     b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"{prefix}:{back_cb}"))
+    return b.as_markup()
+
+
+def template_preview_keyboard(template_id: int) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="➕ Добавить", callback_data=f"exm:tpladd:{template_id}"))
+    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="exm:templates"))
     return b.as_markup()
 
 
@@ -241,6 +248,15 @@ def finish_workout_keyboard() -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
+def finish_date_mismatch_keyboard() -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.button(text="✅ Да, всё верно", callback_data="finconfirm:keep")
+    b.button(text="📅 Изменить дату", callback_data="finconfirm:changedate")
+    b.button(text="❌ Отмена", callback_data="live:cancel_finish")
+    b.adjust(1)
+    return b.as_markup()
+
+
 def _progress_back_cb(exercise_id: int, origin: str) -> str:
     """Where "⬅️ Назад" from a progress screen should go.
 
@@ -257,7 +273,8 @@ def _progress_back_cb(exercise_id: int, origin: str) -> str:
 
 def progress_back_keyboard(exercise_id: int = 0, origin: str = "all") -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.button(text="⬅️ Назад", callback_data=_progress_back_cb(exercise_id, origin))
+    b.row(InlineKeyboardButton(text="🗂 Карточка упражнения", callback_data=f"prog:card:{exercise_id}"))
+    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=_progress_back_cb(exercise_id, origin)))
     return b.as_markup()
 
 
@@ -270,8 +287,9 @@ def progress_chart_keyboard(exercise_id: int, limit: int, origin: str = "all") -
     for value, label in PROGRESS_PERIODS:
         text = f"• {label} •" if value == limit else label
         b.button(text=text, callback_data=f"prog:per:{exercise_id}:{value}:{origin}")
-    b.button(text="⬅️ Назад", callback_data=_progress_back_cb(exercise_id, origin))
-    b.adjust(len(PROGRESS_PERIODS), 1)
+    b.adjust(len(PROGRESS_PERIODS))
+    b.row(InlineKeyboardButton(text="🗂 Карточка упражнения", callback_data=f"prog:card:{exercise_id}"))
+    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=_progress_back_cb(exercise_id, origin)))
     return b.as_markup()
 
 
@@ -424,7 +442,6 @@ DEFAULT_BODYWEIGHT_WEEKS = 0
 
 def bodyweight_keyboard(has_logs: bool, weeks: int = 0, show_periods: bool = False) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="➕ ЗАПИСАТЬ ВЕС", callback_data="bw:add"))
     if has_logs:
         b.row(InlineKeyboardButton(text="↩️ Удалить последнюю", callback_data="bw:undo"))
     if show_periods:

@@ -61,6 +61,7 @@ CREATE TABLE IF NOT EXISTS exercises (
     created_at TEXT NOT NULL,
     last_used_at TEXT,
     seeded_from_program INTEGER NOT NULL DEFAULT 0,
+    custom_photo_file_id TEXT,
     FOREIGN KEY (primary_group_id) REFERENCES muscle_groups (id)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_exercises_user_name_ci
@@ -267,6 +268,8 @@ async def _migrate_schema() -> None:
         await _conn.execute(
             "ALTER TABLE exercises ADD COLUMN seeded_from_program INTEGER NOT NULL DEFAULT 0"
         )
+    if "custom_photo_file_id" not in exercise_cols:
+        await _conn.execute("ALTER TABLE exercises ADD COLUMN custom_photo_file_id TEXT")
 
     user_cols = await _column_names("users")
     if "hide_warmups" in user_cols:
@@ -804,6 +807,16 @@ async def touch_exercise_last_used(exercise_id: int) -> None:
 async def archive_exercise(exercise_id: int) -> None:
     async with _write_lock:
         await conn().execute("UPDATE exercises SET is_archived = 1 WHERE id = ?", (exercise_id,))
+        await conn().commit()
+
+
+async def set_exercise_photo(exercise_id: int, file_id: str) -> None:
+    """Store a user-uploaded reference photo (Telegram file_id) for an exercise,
+    replacing whatever custom photo it had before."""
+    async with _write_lock:
+        await conn().execute(
+            "UPDATE exercises SET custom_photo_file_id = ? WHERE id = ?", (file_id, exercise_id)
+        )
         await conn().commit()
 
 

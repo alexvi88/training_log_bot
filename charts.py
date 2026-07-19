@@ -27,7 +27,12 @@ def render_metric_over_sessions(
     points: list[tuple[dt.datetime, float]],
     title: str,
     ylabel: str,
+    show_weekly_rate: bool = True,
 ) -> bytes:
+    """`show_weekly_rate` picks the title annotation: the per-week trend rate
+    (used by the bodyweight diary) or the plain total change across the
+    plotted points (used by the exercise progress chart, where a rate reads
+    as noise next to "how much did it actually grow")."""
     fig, ax = plt.subplots(figsize=(6, 3.5))
     dates = [p[0] for p in points]
     values = [p[1] for p in points]
@@ -40,8 +45,13 @@ def render_metric_over_sessions(
         slope_per_day = trend.slope_per_week / 7
         trend_y = [trend.intercept + slope_per_day * x for x in xs_days]
         ax.plot(dates, trend_y, linestyle="--", color="#cc3333", alpha=0.7)
-        arrow = "↑" if trend.direction == "up" else ("↓" if trend.direction == "down" else "→")
-        ax.set_title(f"{title}  {arrow} {trend.slope_per_week:+.2f}/нед")
+        if show_weekly_rate:
+            arrow = "↑" if trend.direction == "up" else ("↓" if trend.direction == "down" else "→")
+            ax.set_title(f"{title}  {arrow} {trend.slope_per_week:+.2f}/нед")
+        else:
+            delta = values[-1] - values[0]
+            arrow = "↑" if delta > 0 else ("↓" if delta < 0 else "→")
+            ax.set_title(f"{title}  {arrow} {delta:+.1f}")
     else:
         ax.set_title(title)
 

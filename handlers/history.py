@@ -244,7 +244,6 @@ async def _render_progress_view(ex_id: int, user, limit: int, origin: str = "all
     ex = await db.get_exercise(ex_id)
     sessions = await _load_sessions(ex_id, user["e1rm_formula"])
 
-    trend = None
     points: list[tuple[dt.datetime, float]] = []
     if sessions:
         is_bw = sessions[-1].is_bodyweight_mode
@@ -252,19 +251,22 @@ async def _render_progress_view(ex_id: int, user, limit: int, origin: str = "all
             (dt.datetime.fromisoformat(s.started_at), float(s.max_reps_in_set if is_bw else s.top_e1rm))
             for s in sessions
         ]
-        trend = analytics.linear_trend(points)
     comparison = analytics.compare_to_previous_session(sessions)
     records = analytics.compute_personal_records(sessions)
 
     text = formatting.format_progress_screen(
-        ex["display_name"], sessions, trend, comparison, records, limit=limit, unit=user["unit"]
+        ex["display_name"], sessions, comparison, records, limit=limit, unit=user["unit"]
     )
 
     png = None
     if sessions:
         metric = "повторы" if sessions[-1].is_bodyweight_mode else "e1RM"
         png = await asyncio.to_thread(
-            charts.render_metric_over_sessions, points[-limit:], f"{ex['display_name']} — {metric}", metric
+            charts.render_metric_over_sessions,
+            points[-limit:],
+            f"{ex['display_name']} — {metric}",
+            metric,
+            show_weekly_rate=False,
         )
 
     kb = (

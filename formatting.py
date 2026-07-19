@@ -286,7 +286,6 @@ def build_exercise_highlights(groups: list[tuple[str, list[str], str | None]]) -
 def format_progress_screen(
     exercise_name: str,
     sessions: list,  # list[analytics.SessionStats], ascending by date
-    trend,  # analytics.Trend | None
     comparison,  # analytics.ComparisonDelta | None
     records,  # analytics.PersonalRecords
     limit: int = 8,
@@ -302,10 +301,16 @@ def format_progress_screen(
     window = [s for s in sessions if s.sets]
     shown = window[-limit:]
 
-    if trend is not None:
-        arrow = "↑" if trend.direction == "up" else ("↓" if trend.direction == "down" else "→")
-        metric = "повторы" if is_bw else "e1RM"
-        lines.append(f"Тренд {metric}: {arrow}{trend.slope_per_week:+.2f}/нед")
+    if len(window) >= 2:
+        first, last = window[0], window[-1]
+        if is_bw:
+            delta = last.max_reps_in_set - first.max_reps_in_set
+            arrow = "↑" if delta > 0 else ("↓" if delta < 0 else "→")
+            lines.append(f"Повторы: {arrow}{delta:+d} с первой тренировки")
+        else:
+            delta = last.top_e1rm - first.top_e1rm
+            arrow = "↑" if delta > 0 else ("↓" if delta < 0 else "→")
+            lines.append(f"e1RM: {arrow}{delta:+.1f} {u} с первой тренировки")
 
     if is_bw:
         best_reps = max(records.max_reps_at_weight.values()) if records.max_reps_at_weight else 0
@@ -332,16 +337,19 @@ def format_progress_screen(
     return "\n".join(lines).rstrip()
 
 
-def build_bodyweight_screen(logs: list, unit: str = "kg") -> str:
-    """Text for the ⚖️ Вес тела screen: latest value and entry count.
+def build_bodyweight_screen(logs: list, unit: str = "kg", period_logs: list | None = None) -> str:
+    """Text for the ⚖️ Вес тела screen: latest value, entry count, and a
+    date - weight list for the selected period.
 
-    logs: rows with `weight` and `logged_at`, ascending by date (as db.list_bodyweight_logs returns).
+    logs: all rows with `weight` and `logged_at`, ascending by date (as
+    db.list_bodyweight_logs returns). period_logs: the subset to list
+    (defaults to `logs`) — the caller windows this by the selected period.
     """
     u = UNIT_LABELS.get(unit, "кг")
     if not logs:
         return (
             "⚖️ <b>Дневник веса</b>\n\nПока нет ни одной записи.\n"
-            "Нажми «➕ Записать вес» и введи текущий вес — дальше буду показывать динамику."
+            "Напиши вес — дальше буду показывать динамику."
         )
     latest = logs[-1]
     latest_weight = latest["weight"]
@@ -352,7 +360,16 @@ def build_bodyweight_screen(logs: list, unit: str = "kg") -> str:
         f"Сейчас: <b>{format_weight(latest_weight)} {u}</b> {format_date_ru(d)}",
     ]
     n = plural_ru(len(logs), ("запись", "записи", "записей"))
-    lines.append(f"\nВсего {len(logs)} {n}.")
+    lines.append(f"Всего {len(logs)} {n}.")
+    lines.append("")
+
+    entries = logs if period_logs is None else period_logs
+    for r in reversed(entries):
+        rd = dt.datetime.fromisoformat(r["logged_at"])
+        lines.append(f"{rd.strftime('%d.%m.%Y')} — {format_weight(r['weight'])} {u}")
+    lines.append("")
+
+    lines.append("Напиши вес, чтобы добавить новую запись.")
     return "\n".join(lines)
 
 
