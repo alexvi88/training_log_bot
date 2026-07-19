@@ -241,6 +241,15 @@ def finish_workout_keyboard() -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
+def finish_date_mismatch_keyboard() -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.button(text="✅ Да, всё верно", callback_data="finconfirm:keep")
+    b.button(text="📅 Изменить дату", callback_data="finconfirm:changedate")
+    b.button(text="❌ Отмена", callback_data="live:cancel_finish")
+    b.adjust(1)
+    return b.as_markup()
+
+
 def _progress_back_cb(exercise_id: int, origin: str) -> str:
     """Where "⬅️ Назад" from a progress screen should go.
 

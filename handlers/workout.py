@@ -30,7 +30,7 @@ import keyboards
 import ui
 import view_builder
 from fsm import WorkoutFlow
-from parser import ParseError, parse_single_token
+from parser import ParseError, parse_ru_date, parse_single_token
 
 router = Router(name="workout")
 
@@ -792,6 +792,9 @@ async def live_next_planned(callback: CallbackQuery, state: FSMContext):
 
 # ---------- finishing the workout ----------
 
+_FINISH_PROMPT = "Завершаем? Можно добавить заметку (сон/самочувствие):"
+
+
 @router.callback_query(StateFilter(WorkoutFlow.idle), F.data == "live:finish_workout")
 async def live_finish_workout(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
@@ -803,15 +806,89 @@ async def live_finish_workout(callback: CallbackQuery, state: FSMContext):
         await _show_main_menu(callback, state)
         await callback.answer("Тренировка была пустая — удалил её.")
         return
+    workout = await db.get_workout(workout_id)
+    started = dt.datetime.fromisoformat(workout["started_at"])
+    if not data.get("is_backfill") and started.date() != dt.date.today():
+        await state.set_state(WorkoutFlow.confirming_finish_date)
+        await ui.safe_edit(
+            callback,
+            f"⚠️ Тренировка начата {formatting.format_date_ru(started)}, а сегодня "
+            f"{formatting.format_date_ru(dt.date.today())}.\n\nВсё верно?",
+            reply_markup=keyboards.finish_date_mismatch_keyboard(),
+        )
+        await callback.answer()
+        return
+    await ui.safe_edit(callback, _FINISH_PROMPT, reply_markup=keyboards.finish_workout_keyboard())
+    await callback.answer()
+
+
+@router.callback_query(StateFilter(WorkoutFlow.confirming_finish_date), F.data == "finconfirm:keep")
+async def finish_confirm_keep(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(WorkoutFlow.idle)
+    await ui.safe_edit(callback, _FINISH_PROMPT, reply_markup=keyboards.finish_workout_keyboard())
+    await callback.answer()
+
+
+@router.callback_query(StateFilter(WorkoutFlow.confirming_finish_date), F.data == "finconfirm:changedate")
+async def finish_confirm_changedate(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(WorkoutFlow.awaiting_finish_date)
     await ui.safe_edit(
         callback,
-        "Завершаем? Можно добавить заметку (сон/самочувствие):",
+        "На какую дату перенести тренировку?\nВыбери или напиши дату в формате дд.мм.гггг:",
+        reply_markup=keyboards.date_quick_keyboard("findate"),
+    )
+    await callback.answer()
+
+
+async def _apply_finish_date(workout_id: int, new_date: dt.date) -> None:
+    workout = await db.get_workout(workout_id)
+    started = dt.datetime.fromisoformat(workout["started_at"])
+    new_started = dt.datetime.combine(new_date, started.time())
+    await db.update_workout_date(
+        workout_id, new_started.isoformat(timespec="seconds"), workout["finished_at"]
+    )
+
+
+@router.callback_query(StateFilter(WorkoutFlow.awaiting_finish_date), F.data.startswith("findate:date:"))
+async def finish_date_quick(callback: CallbackQuery, state: FSMContext):
+    date = dt.date.fromisoformat(callback.data.split(":", 2)[2])
+    data = await state.get_data()
+    await _apply_finish_date(data["workout_id"], date)
+    await state.set_state(WorkoutFlow.idle)
+    await ui.safe_edit(
+        callback,
+        f"✅ Дата изменена на {formatting.format_date_ru(date)}.\n\n{_FINISH_PROMPT}",
         reply_markup=keyboards.finish_workout_keyboard(),
     )
     await callback.answer()
 
 
-@router.callback_query(StateFilter(WorkoutFlow.idle), F.data == "live:cancel_finish")
+@router.message(StateFilter(WorkoutFlow.awaiting_finish_date))
+async def finish_date_text(message: Message, state: FSMContext):
+    try:
+        date = parse_ru_date(message.text)
+    except ParseError as e:
+        await message.reply(e.message)
+        return
+    data = await state.get_data()
+    await _apply_finish_date(data["workout_id"], date)
+    await state.set_state(WorkoutFlow.idle)
+    await message.answer(
+        f"✅ Дата изменена на {formatting.format_date_ru(date)}.\n\n{_FINISH_PROMPT}",
+        reply_markup=keyboards.finish_workout_keyboard(),
+    )
+
+
+@router.callback_query(StateFilter(WorkoutFlow.awaiting_finish_date), F.data == "findate:cancel")
+async def finish_date_cancel(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(WorkoutFlow.idle)
+    await ui.safe_edit(callback, _FINISH_PROMPT, reply_markup=keyboards.finish_workout_keyboard())
+    await callback.answer()
+
+
+@router.callback_query(
+    StateFilter(WorkoutFlow.idle, WorkoutFlow.confirming_finish_date), F.data == "live:cancel_finish"
+)
 async def cancel_finish(callback: CallbackQuery, state: FSMContext):
     user = await db.get_user(callback.from_user.id)
     await _back_after_cancel(callback.bot, state, user)
