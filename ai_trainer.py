@@ -61,6 +61,21 @@ FULL_WORKOUT_HISTORY_LIMIT = 200
 _client: Optional[AsyncOpenAI] = None
 
 
+async def _log_llm_cost(user_id: Optional[int], model: str, usage: Any) -> None:
+    """Fire-and-forget cost_events row for a chat-completion call (see
+    db.get_llm_cost_breakdown / admin_tasks.py's daily report)."""
+    try:
+        await db.log_cost_event(
+            user_id,
+            "llm_call",
+            model=model,
+            prompt_tokens=usage.prompt_tokens if usage else 0,
+            completion_tokens=usage.completion_tokens if usage else 0,
+        )
+    except Exception:
+        logger.exception("failed to log llm cost event")
+
+
 def is_configured() -> bool:
     return bool(config.XAI_API_KEY)
 
@@ -86,7 +101,7 @@ def _get_audio_client() -> AsyncOpenAI:
     return _audio_client
 
 
-async def transcribe_voice(file_obj: Any) -> str:
+async def transcribe_voice(file_obj: Any, user_id: Optional[int] = None) -> str:
     """Голосовое сообщение (файл в формате Telegram, OGG/Opus) → распознанный текст.
 
     file_obj — объект с методом .read() и атрибутом .name (например BytesIO с
@@ -97,6 +112,10 @@ async def transcribe_voice(file_obj: Any) -> str:
         model=config.OPENAI_TRANSCRIBE_MODEL,
         file=file_obj,
     )
+    try:
+        await db.log_cost_event(user_id, "transcription", model=config.OPENAI_TRANSCRIBE_MODEL)
+    except Exception:
+        logger.exception("failed to log transcription cost event")
     return (response.text or "").strip()
 
 
@@ -302,6 +321,7 @@ async def comment_on_workout(user_id: int, workout_id: int) -> str:
             {"role": "user", "content": card_text},
         ],
     )
+    await _log_llm_cost(user_id, config.GROK_MODEL, getattr(response, "usage", None))
     text = (response.choices[0].message.content or "").strip()
     return text or "Не получилось сформулировать комментарий, попробуй ещё раз позже."
 
@@ -390,6 +410,7 @@ async def weekly_digest(user_id: int) -> Optional[str]:
     except Exception:
         logger.exception("AI weekly digest generation failed for user %s", user_id)
         return None
+    await _log_llm_cost(user_id, config.GROK_MODEL, getattr(response, "usage", None))
     text = (response.choices[0].message.content or "").strip()
     return text or None
 
@@ -843,6 +864,7 @@ async def _ask_plain(
             tools=TOOLS,
             messages=messages,
         )
+        await _log_llm_cost(user_id, config.GROK_MODEL, getattr(response, "usage", None))
         message = response.choices[0].message
         if not message.tool_calls:
             break
@@ -934,6 +956,7 @@ async def _web_search_findings(
         logger.exception("AI trainer web search step failed, answering without live search")
         return None
 
+    await _log_llm_cost(user_id, config.GROK_SEARCH_MODEL, getattr(response, "usage", None))
     if not (response.citations or response.server_side_tool_usage):
         return None
     await db.increment_ai_search_count(user_id)
