@@ -200,7 +200,6 @@ async def test_confirming_template_add_forks_and_shows_full_card(fresh_db, user_
     await exercises.exm_add_template(callback, state)
 
     assert await db.count_user_exercises(user_id) == 1
-    text = callback.message.answer.await_args.args[0]
     kb = callback.message.answer.await_args.kwargs["reply_markup"]
     callback_datas = [b.callback_data for row in kb.inline_keyboard for b in row]
     assert any(cb.startswith("prog:ex:") for cb in callback_datas)
