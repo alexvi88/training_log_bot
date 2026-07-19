@@ -1,3 +1,4 @@
+import json
 import os
 
 BOT_TOKEN = os.getenv("TG_TOKEN", "")
@@ -80,3 +81,30 @@ FOLLOWUP_DELAY_HOURS = int(os.getenv("FOLLOWUP_DELAY_HOURS", "2"))
 # type instead until it's set.
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_TRANSCRIBE_MODEL = os.getenv("OPENAI_TRANSCRIBE_MODEL", "gpt-4o-mini-transcribe")
+
+# --- LLM cost accounting for the daily admin report (see db.cost_events / ---
+# admin_tasks.py). ai_trainer.py logs a cost_events row per real chat-completion
+# call (model + prompt/completion tokens) and per voice transcription; the
+# report prices those against the tables below instead of a flat guess. $/1K
+# tokens as (input, output), keyed by the exact model name sent to the API.
+# Override without a code change via LLM_PRICES_USD_PER_1K_JSON, e.g.
+# '{"grok-4-1-fast": [0.0002, 0.0005]}'.
+LLM_PRICES_USD_PER_1K: dict[str, tuple[float, float]] = {
+    "grok-4-1-fast": (0.0002, 0.0005),
+    "grok-4.20-multi-agent": (0.002, 0.006),
+}
+try:
+    for _model, _price in json.loads(os.getenv("LLM_PRICES_USD_PER_1K_JSON", "{}")).items():
+        LLM_PRICES_USD_PER_1K[_model] = (float(_price[0]), float(_price[1]))
+except (TypeError, ValueError, IndexError, json.JSONDecodeError):
+    pass
+DEFAULT_LLM_PRICE_USD_PER_1K: tuple[float, float] = (0.0002, 0.0005)
+
+# Flat per-call estimate for voice transcription (OPENAI_TRANSCRIBE_MODEL) — the
+# API doesn't return token counts for audio, so this stands in for a real
+# per-second price. Override via TRANSCRIPTION_PRICE_USD_PER_CALL.
+TRANSCRIPTION_PRICE_USD_PER_CALL = float(os.getenv("TRANSCRIPTION_PRICE_USD_PER_CALL", "0.006"))
+
+# How long db.cost_events rows are kept — only the daily admin report reads
+# this table, and only ever one day back.
+COST_EVENTS_RETENTION_DAYS = int(os.getenv("COST_EVENTS_RETENTION_DAYS", "90"))

@@ -180,6 +180,17 @@ CREATE TABLE IF NOT EXISTS routine_exercises (
     FOREIGN KEY (exercise_id) REFERENCES exercises (id)
 );
 CREATE INDEX IF NOT EXISTS idx_routine_exercises_routine ON routine_exercises (routine_id);
+
+CREATE TABLE IF NOT EXISTS cost_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    event_type TEXT NOT NULL,
+    model TEXT,
+    prompt_tokens INTEGER NOT NULL DEFAULT 0,
+    completion_tokens INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_cost_events_created ON cost_events (created_at);
 """
 
 _conn: Optional[aiosqlite.Connection] = None
@@ -1354,6 +1365,64 @@ async def daily_workout_stats(date_str: str) -> dict[str, int]:
     )
     users, workouts = await cur.fetchone()
     return {"users": users, "workouts": workouts}
+
+
+# ---------- admin: AI-trainer cost log (see ai_trainer.py / admin_tasks.py) ----------
+#
+# One row per real LLM call (chat completion or voice transcription), so the
+# daily admin report prices actual token usage instead of a flat per-call
+# guess — same pattern as github.com/alexvi88/fun_bot's cost_events.
+
+async def log_cost_event(
+    user_id: Optional[int],
+    event_type: str,
+    *,
+    model: Optional[str] = None,
+    prompt_tokens: int = 0,
+    completion_tokens: int = 0,
+) -> None:
+    async with _write_lock:
+        await conn().execute(
+            "INSERT INTO cost_events (user_id, event_type, model, prompt_tokens, completion_tokens, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (user_id, event_type, model, prompt_tokens, completion_tokens, now_iso()),
+        )
+        await conn().commit()
+
+
+async def get_llm_cost_breakdown(date_str: str) -> dict[str, dict[str, int]]:
+    """Per-model {calls, prompt_tokens, completion_tokens} for llm_call events on a given calendar day."""
+    cur = await conn().execute(
+        "SELECT model, COUNT(*), COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(completion_tokens), 0) "
+        "FROM cost_events WHERE event_type = 'llm_call' AND date(created_at) = ? "
+        "GROUP BY model",
+        (date_str,),
+    )
+    rows = await cur.fetchall()
+    return {
+        (model or "unknown"): {"calls": calls, "prompt_tokens": pt, "completion_tokens": ct}
+        for model, calls, pt, ct in rows
+    }
+
+
+async def get_transcription_count(date_str: str) -> int:
+    """Voice-message transcription calls (config.OPENAI_TRANSCRIBE_MODEL) on a given calendar day."""
+    cur = await conn().execute(
+        "SELECT COUNT(*) FROM cost_events WHERE event_type = 'transcription' AND date(created_at) = ?",
+        (date_str,),
+    )
+    row = await cur.fetchone()
+    return row[0] if row else 0
+
+
+async def prune_old_cost_events(retention_days: int) -> int:
+    """Drop cost_events older than retention_days — only the daily report/backup job reads
+    this table, and only ever one day back, so nothing needs it to grow forever."""
+    cutoff = (dt.date.today() - dt.timedelta(days=retention_days)).isoformat()
+    async with _write_lock:
+        cur = await conn().execute("DELETE FROM cost_events WHERE date(created_at) < ?", (cutoff,))
+        await conn().commit()
+        return cur.rowcount
 
 
 async def backup_to_file(dest_path: str) -> None:

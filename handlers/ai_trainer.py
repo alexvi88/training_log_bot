@@ -357,7 +357,7 @@ async def ai_voice_question(message: Message, state: FSMContext):
         return
 
     try:
-        question = await ai_trainer.transcribe_voice(voice_file)
+        question = await ai_trainer.transcribe_voice(voice_file, message.from_user.id)
     except Exception:
         logger.exception("AI trainer voice transcription failed for user %s", message.from_user.id)
         await message.reply("⚠️ Не получилось распознать голосовое, попробуй ещё раз или напиши текстом.")
