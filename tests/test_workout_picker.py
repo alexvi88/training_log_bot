@@ -183,3 +183,66 @@ async def test_tapping_suggestion_jumps_straight_into_logging_it(fresh_db, user_
     assert data["active_exercise_id"] == triceps
     assert data["open_exercises"] == [triceps]
     assert await state.get_state() == WorkoutFlow.logging_set.state
+
+
+# ---------- template picking previews before adding ----------
+
+
+def _make_template_callback(user_id: int, data: str):
+    message = MagicMock()
+    message.delete = AsyncMock()
+    message.answer = AsyncMock()
+    message.answer_photo = AsyncMock()
+    message.answer_media_group = AsyncMock()
+    bot = MagicMock()
+    bot.delete_message = AsyncMock()
+    bot.send_message = AsyncMock(return_value=SimpleNamespace(message_id=999))
+    message.bot = bot
+    callback = MagicMock()
+    callback.from_user = SimpleNamespace(id=user_id)
+    callback.message = message
+    callback.bot = bot
+    callback.data = data
+    callback.answer = AsyncMock()
+    return callback
+
+
+async def _template_id(db, group_name: str, exercise_name: str) -> int:
+    groups = await db.list_muscle_groups(None, global_only=True)
+    group_id = next(g["id"] for g in groups if g["name"] == group_name)
+    templates = await db.list_templates_in_group(group_id)
+    return next(t["id"] for t in templates if t["name"] == exercise_name)
+
+
+async def test_pick_template_previews_without_adding_it(fresh_db, user_id):
+    db = fresh_db
+    template_id = await _template_id(db, "Спина", "Тяга гантели в наклоне")
+
+    state = await _make_state(user_id)
+    await state.set_state(WorkoutFlow.creating_exercise_name)
+    callback = _make_template_callback(user_id, f"pick:tpl:{template_id}")
+
+    await workout.pick_template_preview(callback, state)
+
+    callback.message.answer_photo.assert_awaited_once()
+    kb = callback.message.answer_photo.await_args.kwargs["reply_markup"]
+    callback_datas = [b.callback_data for row in kb.inline_keyboard for b in row]
+    assert f"pick:tpladd:{template_id}" in callback_datas
+    assert await db.count_user_exercises(user_id) == 0
+
+
+async def test_pick_template_add_forks_and_enters_logging(fresh_db, user_id):
+    db = fresh_db
+    template_id = await _template_id(db, "Спина", "Тяга гантели в наклоне")
+
+    workout_id = await db.create_workout(user_id)
+    state = await _make_state(user_id, open_exercises=[], open_blocks={}, active_exercise_id=None)
+    await state.update_data(workout_id=workout_id)
+    await state.set_state(WorkoutFlow.creating_exercise_name)
+    callback = _make_template_callback(user_id, f"pick:tpladd:{template_id}")
+
+    await workout.pick_template_add(callback, state)
+
+    assert await db.count_user_exercises(user_id) == 1
+    callback.message.delete.assert_awaited_once()
+    assert await state.get_state() == WorkoutFlow.logging_set.state

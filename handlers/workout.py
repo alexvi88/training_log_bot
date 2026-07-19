@@ -596,10 +596,35 @@ async def _send_exercise_photos(message: Message, ex) -> None:
 
 
 @router.callback_query(StateFilter(WorkoutFlow.creating_exercise_name), F.data.startswith("pick:tpl:"))
-async def pick_template(callback: CallbackQuery, state: FSMContext):
+async def pick_template_preview(callback: CallbackQuery, state: FSMContext):
+    """Preview a template (photo + info, same as the ⚙️ Упражнения flow) before
+    adding it — the user may just want a look before deciding to add it."""
+    from handlers.exercises import _exercise_info_text
+
+    template_id = int(callback.data.split(":")[2])
+    template = await db.get_exercise(template_id)
+    if template is None:
+        await callback.answer("Шаблон не найден", show_alert=True)
+        return
+    text = _exercise_info_text(template, with_created=False)
+    kb = keyboards.template_preview_keyboard(template_id, prefix="pick")
+    images = exercise_media.get_images(template["name"])
+    if images:
+        await callback.message.answer_photo(
+            FSInputFile(images[0]), caption=text, reply_markup=kb, parse_mode="HTML"
+        )
+    else:
+        await callback.message.answer(text, reply_markup=kb, parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(StateFilter(WorkoutFlow.creating_exercise_name), F.data.startswith("pick:tpladd:"))
+async def pick_template_add(callback: CallbackQuery, state: FSMContext):
     template_id = int(callback.data.split(":")[2])
     ex_id = await db.fork_exercise_from_template(callback.from_user.id, template_id)
     ex = await db.get_exercise(ex_id)
+    with suppress(TelegramBadRequest):
+        await callback.message.delete()
     await _send_exercise_photos(callback.message, ex)
     await _on_exercise_chosen(callback, state, ex_id)
 
