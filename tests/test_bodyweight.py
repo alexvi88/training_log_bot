@@ -1,6 +1,12 @@
 """Bodyweight log: db round-trip, ordering, undo, rescale, and the screen text."""
 
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.storage.base import StorageKey
+from aiogram.fsm.storage.memory import MemoryStorage
 
 import db as dbmod
 import formatting
@@ -86,6 +92,30 @@ def test_bodyweight_screen_shows_latest_and_count():
     assert "За всё время" not in text
 
 
+def test_bodyweight_screen_lists_entries_newest_first():
+    logs = [
+        {"weight": 82.0, "logged_at": "2026-01-01T10:00:00"},
+        {"weight": 80.0, "logged_at": "2026-02-01T10:00:00"},
+    ]
+    text = formatting.build_bodyweight_screen(logs, "kg")
+    assert "01.02.2026 — 80 кг" in text
+    assert "01.01.2026 — 82 кг" in text
+    assert text.index("01.02.2026") < text.index("01.01.2026")
+    assert "Напиши вес, чтобы добавить новую запись." in text
+
+
+def test_bodyweight_screen_lists_only_period_logs_when_given():
+    logs = [
+        {"weight": 82.0, "logged_at": "2026-01-01T10:00:00"},
+        {"weight": 80.0, "logged_at": "2026-02-01T10:00:00"},
+    ]
+    text = formatting.build_bodyweight_screen(logs, "kg", period_logs=logs[1:])
+    assert "01.02.2026 — 80 кг" in text
+    assert "01.01.2026" not in text
+    # latest/count still reflect the full history, not just the period
+    assert "Всего 2 записи." in text
+
+
 # ---------- unit conversion: set weights ----------
 
 
@@ -146,3 +176,52 @@ def test_window_filters_by_weeks(monkeypatch):
     ]
     windowed = bw._window(logs, 8)
     assert [r["weight"] for r in windowed] == [80.0]
+
+
+# ---------- typing a weight directly on the viewing screen ----------
+
+
+async def _make_state(user_id: int) -> FSMContext:
+    key = StorageKey(bot_id=1, chat_id=user_id, user_id=user_id)
+    return FSMContext(storage=MemoryStorage(), key=key)
+
+
+def _make_message(user_id: int, text: str):
+    message = MagicMock()
+    message.from_user = SimpleNamespace(id=user_id, username="tester")
+    message.text = text
+    message.answer = AsyncMock()
+    message.answer_photo = AsyncMock()
+    message.reply = AsyncMock()
+    return message
+
+
+@pytest.mark.asyncio
+async def test_typing_weight_while_viewing_adds_log(fresh_db, user_id):
+    import handlers.bodyweight as bw
+    from fsm import BodyweightFlow
+
+    state = await _make_state(user_id)
+    await state.set_state(BodyweightFlow.viewing)
+
+    message = _make_message(user_id, "83.7")
+    await bw.bw_weight_entered(message, state)
+
+    logs = await dbmod.list_bodyweight_logs(user_id)
+    assert [r["weight"] for r in logs] == [83.7]
+    message.answer.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_typing_invalid_text_while_viewing_replies_with_error(fresh_db, user_id):
+    import handlers.bodyweight as bw
+    from fsm import BodyweightFlow
+
+    state = await _make_state(user_id)
+    await state.set_state(BodyweightFlow.viewing)
+
+    message = _make_message(user_id, "not a number")
+    await bw.bw_weight_entered(message, state)
+
+    assert await dbmod.list_bodyweight_logs(user_id) == []
+    message.reply.assert_awaited_once()

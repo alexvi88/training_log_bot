@@ -122,7 +122,7 @@ async def exm_new_exercise(callback: CallbackQuery, state: FSMContext):
     await state.set_state(ExerciseManage.creating_exercise_name)
     await ui.safe_edit(
         callback,
-        "Напиши название нового упражнения, или выбери из шаблонов:",
+        "Напиши название нового упражнения или выбери из шаблонов:",
         reply_markup=keyboards.new_exercise_entry_keyboard("exm"),
     )
     await callback.answer()
@@ -142,7 +142,7 @@ async def exm_templates(callback: CallbackQuery, state: FSMContext):
 async def exm_new_back(callback: CallbackQuery, state: FSMContext):
     await ui.safe_edit(
         callback,
-        "Напиши название нового упражнения, или выбери из шаблонов:",
+        "Напиши название нового упражнения или выбери из шаблонов:",
         reply_markup=keyboards.new_exercise_entry_keyboard("exm"),
     )
     await callback.answer()
@@ -155,15 +155,41 @@ async def exm_new_cancel(callback: CallbackQuery, state: FSMContext):
 
 
 @router.callback_query(StateFilter(ExerciseManage.creating_exercise_name), F.data.startswith("exm:tpl:"))
-async def exm_pick_template(callback: CallbackQuery, state: FSMContext):
+async def exm_preview_template(callback: CallbackQuery, state: FSMContext):
+    """Tapping a template previews it (photo + info) — it isn't added until
+    the user confirms with "➕ Добавить", since they may just want a look at
+    what the exercise is before deciding."""
+    template_id = int(callback.data.split(":")[2])
+    template = await db.get_exercise(template_id)
+    if template is None:
+        await callback.answer("Шаблон не найден", show_alert=True)
+        return
+    text = _exercise_info_text(template, with_created=False)
+    kb = keyboards.template_preview_keyboard(template_id)
+    images = exercise_media.get_images(template["name"])
+    with suppress(TelegramBadRequest):
+        await callback.message.delete()
+    if images:
+        await callback.message.answer_photo(
+            FSInputFile(images[0]), caption=text, reply_markup=kb, parse_mode="HTML"
+        )
+    else:
+        await callback.message.answer(text, reply_markup=kb, parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(StateFilter(ExerciseManage.creating_exercise_name), F.data.startswith("exm:tpladd:"))
+async def exm_add_template(callback: CallbackQuery, state: FSMContext):
     template_id = int(callback.data.split(":")[2])
     ex_id = await db.fork_exercise_from_template(callback.from_user.id, template_id)
     await state.update_data(exm_exercise_id=ex_id)
     await state.set_state(ExerciseManage.picking_exercise)
     ex = await db.get_exercise(ex_id)
+    with suppress(TelegramBadRequest):
+        await callback.message.delete()
     has_images = await _send_exercise_images(callback.message, ex, state)
     text, kb = _exercise_detail_view(ex, with_info=not has_images)
-    await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML")
+    await callback.message.answer(text, reply_markup=kb, parse_mode="HTML")
     await callback.answer()
 
 
@@ -216,7 +242,7 @@ async def exm_archive_group(callback: CallbackQuery, state: FSMContext):
     await show_exercise_groups(callback, state)
 
 
-def _exercise_info_text(ex) -> str:
+def _exercise_info_text(ex, with_created: bool = True) -> str:
     info = [f"Название: <b>{escape(ex['name'])}</b>"]
     if ex["equipment"]:
         info.append(f"Оснастка: {ex['equipment']}")
@@ -224,7 +250,8 @@ def _exercise_info_text(ex) -> str:
         info.append("Одной рукой/ногой: да")
     if ex["attachment"]:
         info.append(f"Хват/насадка: {ex['attachment']}")
-    info.append(f"Создано: {ex['created_at'][:10]}")
+    if with_created:
+        info.append(f"Создано: {ex['created_at'][:10]}")
     return "\n".join(info)
 
 
@@ -233,6 +260,7 @@ def _exercise_detail_view(ex, with_info: bool = True):
     b.button(text="📈 Прогресс", callback_data=f"prog:ex:{ex['id']}:m")
     b.button(text="✏️ Название", callback_data=f"exm:editname:{ex['id']}")
     b.button(text="🗑 Архивировать", callback_data=f"exm:archiveask:{ex['id']}")
+    b.button(text="📷 Добавить фото", callback_data=f"exm:addphoto:{ex['id']}")
     b.button(text="⬅️ Назад", callback_data="exm:backlist")
     b.adjust(2)
     text = _exercise_info_text(ex) if with_info else "Управление упражнением:"
@@ -240,8 +268,16 @@ def _exercise_detail_view(ex, with_info: bool = True):
 
 
 async def _send_exercise_images(message: Message, ex, state: FSMContext) -> bool:
-    """Sends the demo photos with the exercise info as their caption. Returns whether any were sent."""
+    """Sends the exercise's reference photo(s) with the exercise info as
+    caption. A user-uploaded custom photo takes priority over the bundled
+    demo photos. Returns whether any were sent."""
     await _clear_exercise_media(message.bot, message.chat.id, state)
+    if ex["custom_photo_file_id"]:
+        sent = await message.answer_photo(
+            ex["custom_photo_file_id"], caption=_exercise_info_text(ex), parse_mode="HTML"
+        )
+        await state.update_data(exm_media_msg_ids=[sent.message_id])
+        return True
     images = exercise_media.get_images(ex["name"])
     if not images:
         return False
@@ -252,9 +288,7 @@ async def _send_exercise_images(message: Message, ex, state: FSMContext) -> bool
     return True
 
 
-@router.callback_query(StateFilter(ExerciseManage.picking_exercise), F.data.startswith("exm:ex:"))
-async def exm_pick_exercise(callback: CallbackQuery, state: FSMContext):
-    ex_id = int(callback.data.split(":")[2])
+async def _render_exercise_card(callback: CallbackQuery, state: FSMContext, ex_id: int) -> None:
     ex = await db.get_exercise(ex_id)
     if ex is None or ex["user_id"] != callback.from_user.id:
         await callback.answer("Упражнение не найдено", show_alert=True)
@@ -264,6 +298,57 @@ async def exm_pick_exercise(callback: CallbackQuery, state: FSMContext):
     text, kb = _exercise_detail_view(ex, with_info=not has_images)
     await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML")
     await callback.answer()
+
+
+@router.callback_query(
+    StateFilter(ExerciseManage.picking_exercise, ExerciseManage.editing_name, ExerciseManage.awaiting_photo),
+    F.data.startswith("exm:ex:"),
+)
+async def exm_pick_exercise(callback: CallbackQuery, state: FSMContext):
+    ex_id = int(callback.data.split(":")[2])
+    await state.set_state(ExerciseManage.picking_exercise)
+    await _render_exercise_card(callback, state, ex_id)
+
+
+@router.callback_query(StateFilter(ExerciseManage.picking_exercise), F.data.startswith("exm:addphoto:"))
+async def exm_add_photo(callback: CallbackQuery, state: FSMContext):
+    ex_id = int(callback.data.split(":")[2])
+    ex = await db.get_exercise(ex_id)
+    if ex is None or ex["user_id"] != callback.from_user.id:
+        await callback.answer("Упражнение не найдено", show_alert=True)
+        return
+    await state.update_data(exm_exercise_id=ex_id)
+    await state.set_state(ExerciseManage.awaiting_photo)
+    await ui.safe_edit(
+        callback,
+        "Пришли фото упражнения:",
+        reply_markup=keyboards.cancel_keyboard(f"exm:ex:{ex_id}"),
+    )
+    await callback.answer()
+
+
+@router.message(StateFilter(ExerciseManage.awaiting_photo))
+async def exm_photo_entered(message: Message, state: FSMContext):
+    if not message.photo:
+        await message.reply("Пришли именно фото")
+        return
+    data = await state.get_data()
+    ex_id = data["exm_exercise_id"]
+    await db.set_exercise_photo(ex_id, message.photo[-1].file_id)
+    await state.set_state(ExerciseManage.picking_exercise)
+    ex = await db.get_exercise(ex_id)
+    has_images = await _send_exercise_images(message, ex, state)
+    text, kb = _exercise_detail_view(ex, with_info=not has_images)
+    await message.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
+@router.callback_query(F.data.startswith("prog:card:"))
+async def prog_show_exercise_card(callback: CallbackQuery, state: FSMContext):
+    """Jump straight to the exercise's management card from its progress screen,
+    whatever state/flow got the user to that progress screen in the first place."""
+    ex_id = int(callback.data.split(":")[2])
+    await state.set_state(ExerciseManage.picking_exercise)
+    await _render_exercise_card(callback, state, ex_id)
 
 
 @router.message(StateFilter(ExerciseManage.picking_exercise))
@@ -298,7 +383,7 @@ async def exm_edit_name(callback: CallbackQuery, state: FSMContext):
     await ui.safe_edit(
         callback,
         f"Текущее название: <b>{escape(ex['name'])}</b>\n\nНапиши новое название упражнения:",
-        reply_markup=keyboards.cancel_keyboard("exm:backlist"),
+        reply_markup=keyboards.cancel_keyboard(f"exm:ex:{ex_id}"),
         parse_mode="HTML",
     )
     await callback.answer()

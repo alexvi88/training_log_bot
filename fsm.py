@@ -16,6 +16,7 @@ class ExerciseManage(StatesGroup):
     editing_name = State()
     new_group_name = State()
     creating_exercise_name = State()
+    awaiting_photo = State()
 
 
 class HistoryFlow(StatesGroup):
@@ -56,7 +57,6 @@ class AITrainerFlow(StatesGroup):
 
 class BodyweightFlow(StatesGroup):
     viewing = State()
-    awaiting_weight = State()
 
 
 class RoutineFlow(StatesGroup):

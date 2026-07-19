@@ -165,3 +165,34 @@ async def test_prog_group_list_paginates(fresh_db, user_id):
     await history.prog_group_page(page1, state)
     kb1 = page1.message.answer.await_args.kwargs["reply_markup"]
     assert _has_button_cb(kb1, f"prog:gpage:{group_id}:0")  # back to page 0
+
+
+async def test_prog_show_exercise_has_card_button_regardless_of_origin(fresh_db, user_id):
+    """The progress screen always offers a way to jump to the exercise's card,
+    even when it wasn't opened from there (origin is a muscle group, not "m")."""
+    group_id = await fresh_db.create_muscle_group(user_id, "Грудь")
+    ex_id = await fresh_db.create_exercise(user_id, "Жим лёжа", group_id)
+    state = await _make_state(user_id)
+
+    callback = _make_callback(user_id, f"prog:ex:{ex_id}:{group_id}")
+    await history.prog_show_exercise(callback, state)
+
+    kb = callback.message.answer.await_args.kwargs["reply_markup"]
+    assert _has_button_cb(kb, f"prog:card:{ex_id}")
+
+
+async def test_prog_card_button_shows_exercise_card_from_any_state(fresh_db, user_id):
+    """Tapping the card button must render the exercise card even though the
+    FSM state coming from the progress-menu flow isn't ExerciseManage.picking_exercise."""
+    from handlers import exercises
+
+    group_id = await fresh_db.create_muscle_group(user_id, "Грудь")
+    ex_id = await fresh_db.create_exercise(user_id, "Жим лёжа", group_id)
+    state = await _make_state(user_id)  # no FSM state set at all
+
+    callback = _make_callback(user_id, f"prog:card:{ex_id}")
+    await exercises.prog_show_exercise_card(callback, state)
+
+    callback.message.delete.assert_awaited_once()
+    text = callback.message.answer.await_args.args[0]
+    assert "Жим лёжа" in text
