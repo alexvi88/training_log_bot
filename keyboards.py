@@ -116,10 +116,10 @@ def templates_keyboard(templates, prefix: str, back_cb: str = "back") -> InlineK
     return b.as_markup()
 
 
-def template_preview_keyboard(template_id: int) -> InlineKeyboardMarkup:
+def template_preview_keyboard(template_id: int, prefix: str = "exm", back_cb: str | None = None) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="➕ Добавить", callback_data=f"exm:tpladd:{template_id}"))
-    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="exm:templates"))
+    b.row(InlineKeyboardButton(text="➕ Добавить", callback_data=f"{prefix}:tpladd:{template_id}"))
+    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=back_cb or f"{prefix}:templates"))
     return b.as_markup()
 
 
