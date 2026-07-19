@@ -198,7 +198,7 @@ async def exm_archive_group_confirm(callback: CallbackQuery, state: FSMContext):
     await ui.safe_edit(
         callback,
         f"Архивировать группу «{escape(group['name'])}»? "
-        "Все упражнения группы пропадут из списков, но история тренировок сохранится.",
+        "Просто уберём все её упражнения из списка выбора — история тренировок с ними останется.",
         reply_markup=kb,
     )
     await callback.answer()
@@ -346,7 +346,7 @@ async def exm_archive_exercise_confirm(callback: CallbackQuery, state: FSMContex
     await ui.safe_edit(
         callback,
         f"Архивировать упражнение «{escape(ex['name'])}»? "
-        "Оно пропадёт из списков, но история тренировок сохранится.",
+        "Просто уберём его из списка выбора — история тренировок с ним останется.",
         reply_markup=kb,
     )
     await callback.answer()
