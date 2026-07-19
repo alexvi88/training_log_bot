@@ -553,7 +553,7 @@ async def _new_exercise_entry_screen(callback: CallbackQuery, state: FSMContext)
     user = await db.get_user(callback.from_user.id)
     await _refresh_live(
         callback.bot, state, user, data["workout_id"],
-        "Напиши название нового упражнения, или выбери из шаблонов:",
+        "Напиши название нового упражнения или выбери из шаблонов:",
         keyboards.new_exercise_entry_keyboard("pick"),
     )
 
