@@ -271,41 +271,62 @@ def _weighted_session(workout_id, started_at, sets):
 
 
 def test_format_progress_screen_no_sessions():
-    text = formatting.format_progress_screen("Жим лёжа", [], None, None, analytics.PersonalRecords())
+    text = formatting.format_progress_screen("Жим лёжа", [], None, analytics.PersonalRecords())
     assert "Пока нет завершённых тренировок" in text
 
 
-def test_format_progress_screen_weighted_with_trend():
+def test_format_progress_screen_weighted_shows_total_growth():
     sessions = [
         _weighted_session(1, "2026-06-01T10:00:00", [(100.0, 8)]),
         _weighted_session(2, "2026-06-08T10:00:00", [(105.0, 8)]),
     ]
-    trend = analytics.Trend(slope_per_week=2.5, direction="up")
     records = analytics.PersonalRecords(best_e1rm_weight=105.0, best_e1rm_reps=8, max_e1rm=140.0)
 
-    text = formatting.format_progress_screen("Жим лёжа", sessions, trend, None, records)
+    text = formatting.format_progress_screen("Жим лёжа", sessions, None, records)
 
     assert "<b>Жим лёжа</b>" in text
     assert "e1RM" in text
-    assert "Тренд e1RM: ↑+2.50/нед" in text
+    assert "e1RM: ↑+6.3 кг с первой тренировки" in text
+    assert "/нед" not in text
     assert "vs прошлой тренировки" not in text
     assert "Рекорд: 105×8 · e1RM 140.0 кг" in text
+
+
+def test_format_progress_screen_single_session_has_no_growth_line():
+    sessions = [_weighted_session(1, "2026-06-01T10:00:00", [(100.0, 8)])]
+    records = analytics.PersonalRecords(best_e1rm_weight=100.0, best_e1rm_reps=8, max_e1rm=126.7)
+
+    text = formatting.format_progress_screen("Жим лёжа", sessions, None, records)
+
+    assert "с первой тренировки" not in text
 
 
 def test_format_progress_screen_bodyweight_session():
     sessions = [_weighted_session(1, "2026-06-01T10:00:00", [(0.0, 12), (0.0, 15)])]
     records = analytics.PersonalRecords(max_reps_at_weight={0.0: 15})
 
-    text = formatting.format_progress_screen("Подтягивания", sessions, None, None, records)
+    text = formatting.format_progress_screen("Подтягивания", sessions, None, records)
 
     assert "всего повторов 27" in text
     assert "Рекорд повторов в сете: 15" in text
 
 
+def test_format_progress_screen_bodyweight_shows_rep_growth():
+    sessions = [
+        _weighted_session(1, "2026-06-01T10:00:00", [(0.0, 10)]),
+        _weighted_session(2, "2026-06-08T10:00:00", [(0.0, 14)]),
+    ]
+    records = analytics.PersonalRecords(max_reps_at_weight={0.0: 14})
+
+    text = formatting.format_progress_screen("Подтягивания", sessions, None, records)
+
+    assert "Повторы: ↑+4 с первой тренировки" in text
+
+
 def test_format_progress_screen_respects_limit():
     sessions = [_weighted_session(i, f"2026-06-{i:02d}T10:00:00", [(100.0, 8)]) for i in range(1, 11)]
     records = analytics.PersonalRecords()
-    text = formatting.format_progress_screen("Жим лёжа", sessions, None, None, records, limit=2)
+    text = formatting.format_progress_screen("Жим лёжа", sessions, None, records, limit=2)
     # only the last 2 sessions' dates should be rendered
     assert "09.06.2026" in text
     assert "10.06.2026" in text
@@ -318,7 +339,7 @@ def test_format_progress_screen_skips_sessions_without_sets():
         _weighted_session(2, "2026-06-08T10:00:00", [(100.0, 8)]),
     ]
     records = analytics.PersonalRecords(best_e1rm_weight=100.0, best_e1rm_reps=8, max_e1rm=126.7)
-    text = formatting.format_progress_screen("Жим лёжа", sessions, None, None, records)
+    text = formatting.format_progress_screen("Жим лёжа", sessions, None, records)
     assert "01.06.2026" not in text
     assert "08.06.2026" in text
 
@@ -326,21 +347,21 @@ def test_format_progress_screen_skips_sessions_without_sets():
 def test_format_progress_screen_newest_session_first():
     sessions = [_weighted_session(i, f"2026-06-{i:02d}T10:00:00", [(100.0, 8)]) for i in range(1, 4)]
     records = analytics.PersonalRecords()
-    text = formatting.format_progress_screen("Жим лёжа", sessions, None, None, records)
+    text = formatting.format_progress_screen("Жим лёжа", sessions, None, records)
     assert text.index("03.06.2026") < text.index("02.06.2026") < text.index("01.06.2026")
 
 
 def test_format_progress_screen_shows_count_when_history_exceeds_limit():
     sessions = [_weighted_session(i, f"2026-06-{i:02d}T10:00:00", [(100.0, 8)]) for i in range(1, 11)]
     records = analytics.PersonalRecords()
-    text = formatting.format_progress_screen("Жим лёжа", sessions, None, None, records, limit=2)
+    text = formatting.format_progress_screen("Жим лёжа", sessions, None, records, limit=2)
     assert "Показано 2 из 10 тренировок" in text
 
 
 def test_format_progress_screen_no_count_line_when_history_fits():
     sessions = [_weighted_session(i, f"2026-06-{i:02d}T10:00:00", [(100.0, 8)]) for i in range(1, 4)]
     records = analytics.PersonalRecords()
-    text = formatting.format_progress_screen("Жим лёжа", sessions, None, None, records, limit=8)
+    text = formatting.format_progress_screen("Жим лёжа", sessions, None, records, limit=8)
     assert "Показано" not in text
 
 

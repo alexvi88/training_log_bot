@@ -52,12 +52,12 @@ async def _render(event, state: FSMContext) -> None:
     weeks = data.get("bw_weeks", keyboards.DEFAULT_BODYWEIGHT_WEEKS)
     await state.set_state(BodyweightFlow.viewing)
     await state.update_data(bw_weeks=weeks)
-    text = formatting.build_bodyweight_screen(logs, user["unit"])
+    chart_logs = _window(logs, weeks)
+    text = formatting.build_bodyweight_screen(logs, user["unit"], period_logs=chart_logs)
     show_periods = len(logs) >= 2
     kb = keyboards.bodyweight_keyboard(has_logs=bool(logs), weeks=weeks, show_periods=show_periods)
 
     png = None
-    chart_logs = _window(logs, weeks)
     points = _daily_average_points(chart_logs)
     if len(points) >= 2:
         unit_label = formatting.UNIT_LABELS.get(user["unit"], "кг")
@@ -97,25 +97,6 @@ async def bw_menu(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(F.data == "bw:add")
-async def bw_add(callback: CallbackQuery, state: FSMContext):
-    user = await db.get_user(callback.from_user.id)
-    unit_label = formatting.UNIT_LABELS.get(user["unit"], "кг")
-    await state.set_state(BodyweightFlow.awaiting_weight)
-    await ui.safe_edit(
-        callback,
-        f"Напиши текущий вес тела в {unit_label} (например 80 или 80.5):",
-        reply_markup=keyboards.cancel_keyboard("bw:back"),
-    )
-    await callback.answer()
-
-
-@router.callback_query(F.data == "bw:back")
-async def bw_back(callback: CallbackQuery, state: FSMContext):
-    await _render(callback, state)
-    await callback.answer()
-
-
 @router.callback_query(F.data.startswith("bw:period:"))
 async def bw_period(callback: CallbackQuery, state: FSMContext):
     weeks = int(callback.data.split(":")[2])
@@ -131,7 +112,7 @@ async def bw_undo(callback: CallbackQuery, state: FSMContext):
     await _render(callback, state)
 
 
-@router.message(StateFilter(BodyweightFlow.awaiting_weight))
+@router.message(StateFilter(BodyweightFlow.viewing))
 async def bw_weight_entered(message: Message, state: FSMContext):
     try:
         weight = parse_bodyweight(message.text)
