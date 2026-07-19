@@ -24,6 +24,7 @@ import analytics
 import charts
 import config
 import db
+import exercise_descriptions
 import exercise_media
 import formatting
 import keyboards
@@ -585,7 +586,11 @@ async def pick_back_from_templates(callback: CallbackQuery, state: FSMContext):
 async def _send_exercise_photos(message: Message, ex) -> None:
     images = exercise_media.get_images(ex["name"])
     if images:
-        media = [InputMediaPhoto(media=FSInputFile(images[0]), caption=f"Название: {ex['name']}")]
+        caption = f"Название: {ex['name']}"
+        description = exercise_descriptions.get_description(ex["name"])
+        if description:
+            caption += f"\n\n{description}"
+        media = [InputMediaPhoto(media=FSInputFile(images[0]), caption=caption)]
         media += [InputMediaPhoto(media=FSInputFile(p)) for p in images[1:]]
         await message.answer_media_group(media)
 

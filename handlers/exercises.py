@@ -12,6 +12,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import config
 import db
+import exercise_descriptions
 import exercise_media
 import keyboards
 import ui
@@ -225,6 +226,9 @@ def _exercise_info_text(ex) -> str:
     if ex["attachment"]:
         info.append(f"Хват/насадка: {ex['attachment']}")
     info.append(f"Создано: {ex['created_at'][:10]}")
+    description = exercise_descriptions.get_description(ex["name"])
+    if description:
+        info.append(f"\n{escape(description)}")
     return "\n".join(info)
 
 
