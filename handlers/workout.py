@@ -2,6 +2,7 @@
 
 import asyncio
 import datetime as dt
+import logging
 from collections import Counter
 from contextlib import suppress
 from html import escape
@@ -35,8 +36,35 @@ from parser import ParseError, parse_ru_date, parse_single_token
 
 router = Router(name="workout")
 
+logger = logging.getLogger(__name__)
+
 
 # ---------- helpers ----------
+
+async def _attach_ai_comment(
+    bot, chat_id: int, message_id: int, user_id: int, workout_id: int, base_text: str
+) -> None:
+    """Generate the AI-trainer comment in the background and append it to the
+    already-sent summary message, so finishing a workout isn't blocked on the LLM call.
+    """
+    try:
+        comment = await ai_trainer.comment_on_workout(user_id, workout_id)
+    except Exception:
+        logger.exception("AI trainer workout comment failed for workout %s", workout_id)
+        with suppress(TelegramBadRequest):
+            await bot.edit_message_reply_markup(
+                chat_id=chat_id, message_id=message_id,
+                reply_markup=keyboards.workout_card_keyboard(workout_id, show_ai_button=True),
+            )
+        return
+    await db.set_workout_ai_comment(workout_id, comment)
+    new_text = base_text + "\n\n" + formatting.build_ai_comment_block(comment)
+    with suppress(TelegramBadRequest):
+        await bot.edit_message_text(
+            chat_id=chat_id, message_id=message_id, text=new_text, parse_mode="HTML",
+            reply_markup=keyboards.workout_card_keyboard(workout_id, show_ai_button=False),
+        )
+
 
 async def _ensure_user(telegram_id: int, username: str | None):
     return await db.get_or_create_user(telegram_id, username)
@@ -1059,10 +1087,11 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
         ]
 
         comparison_line = None
-        if prior_sessions:
-            comparison = analytics.compare_to_previous_session(prior_sessions + [new_session])
-            if comparison and not new_session.is_bodyweight_mode and comparison.e1rm_delta > 0:
-                comparison_line = formatting.format_comparison_line(comparison.e1rm_delta, unit=user["unit"])
+        if prior_sessions and not new_session.is_bodyweight_mode:
+            prior_pr = analytics.compute_personal_records(prior_sessions)
+            e1rm_delta = new_session.top_e1rm - prior_pr.max_e1rm
+            if e1rm_delta > 0:
+                comparison_line = formatting.format_comparison_line(e1rm_delta, unit=user["unit"])
 
         if pr_details or comparison_line:
             highlight_groups.append((ex["display_name"], pr_details, comparison_line))
@@ -1093,20 +1122,36 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
     if is_backfill:
         full_text = "✅ Сохранено как прошлая тренировка\n\n" + full_text
 
-    comment = await ai_trainer.ensure_workout_comment(user, workout_id)
-    if comment:
-        full_text += "\n\n" + formatting.build_ai_comment_block(comment)
-    card_kb = keyboards.workout_card_keyboard(
-        workout_id, show_ai_button=comment is None and ai_trainer.is_configured()
+    # Existing comment (already generated, e.g. from a backfilled workout) shows right
+    # away; a fresh one is generated in the background so finishing a workout doesn't
+    # block on the LLM call — see _attach_ai_comment below.
+    existing_comment = workout["ai_comment"]
+    if existing_comment:
+        full_text += "\n\n" + formatting.build_ai_comment_block(existing_comment)
+    needs_ai_comment = (
+        existing_comment is None and bool(user["ai_comments_enabled"]) and ai_trainer.is_configured()
     )
+    card_kb = keyboards.workout_card_keyboard(
+        workout_id,
+        show_ai_button=existing_comment is None and not needs_ai_comment and ai_trainer.is_configured(),
+    )
+    message_id = data["live_message_id"]
     try:
-        await bot.edit_message_text(
-            chat_id=data["live_chat_id"], message_id=data["live_message_id"], text=full_text,
+        sent = await bot.edit_message_text(
+            chat_id=data["live_chat_id"], message_id=message_id, text=full_text,
             parse_mode="HTML", reply_markup=card_kb,
         )
+        if isinstance(sent, Message):
+            message_id = sent.message_id
     except TelegramBadRequest:
-        await bot.send_message(
+        sent = await bot.send_message(
             chat_id=data["live_chat_id"], text=full_text, parse_mode="HTML", reply_markup=card_kb
+        )
+        message_id = sent.message_id
+
+    if needs_ai_comment:
+        asyncio.create_task(
+            _attach_ai_comment(bot, data["live_chat_id"], message_id, user_id, workout_id, full_text)
         )
 
     await state.clear()
