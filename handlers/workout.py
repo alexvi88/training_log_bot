@@ -1058,6 +1058,7 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
 
     is_backfill = bool(data.get("is_backfill"))
     finished_at = f"{data['bf_date']}T12:00:00" if is_backfill else None
+    await db.delete_empty_blocks(workout_id)
     await db.finish_workout(workout_id, note, finished_at=finished_at)
 
     blocks = await view_builder.build_block_views(
