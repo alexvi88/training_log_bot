@@ -146,7 +146,7 @@ def logging_keyboard(
             b.row(InlineKeyboardButton(text=text, callback_data=f"live:switch:{ex_id}"))
     if has_sets:
         b.row(InlineKeyboardButton(text="↩️ Удалить последний", callback_data="live:undo"))
-    if active_id is not None:
+    if active_id is not None and not has_sets:
         b.row(InlineKeyboardButton(text="ℹ️ Карточка упражнения", callback_data=f"live:card:{active_id}"))
     b.row(InlineKeyboardButton(text="✅ Закончить упражнение", callback_data="live:finish_exercise"))
     b.row(InlineKeyboardButton(text="➕ Суперсет", callback_data="live:add_exercise"))

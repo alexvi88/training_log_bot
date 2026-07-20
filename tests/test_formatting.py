@@ -373,3 +373,21 @@ def test_logging_hint_omits_progression_when_disabled():
     assert "🎯" in with_hint
     assert "🎯" not in without
     assert "В прошлый раз" in without
+
+
+def test_logging_hint_keeps_goal_on_same_line_as_last_session():
+    from handlers.workout import _logging_hint
+    last = [(100.0, 10, None)]
+    hint = _logging_hint(last, has_sets=True, unit="kg", show_progression=True)
+    line = hint.splitlines()[0]
+    assert "В прошлый раз" in line and "Цель" in line
+
+
+def test_logging_hint_shows_achieved_goal_when_today_sets_meet_target():
+    from handlers.workout import _logging_hint
+    last = [(100.0, 10, None)]  # top of rep range -> next goal is +2.5kg x 8
+    not_yet = _logging_hint(last, has_sets=True, unit="kg", show_progression=True, today_sets=[(100.0, 10)])
+    achieved = _logging_hint(last, has_sets=True, unit="kg", show_progression=True, today_sets=[(102.5, 8)])
+    assert "🎯" in not_yet and "✅" not in not_yet
+    assert "✅" in achieved and "Цель выполнена" in achieved
+    assert "🎯" not in achieved

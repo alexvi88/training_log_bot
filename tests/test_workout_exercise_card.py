@@ -51,13 +51,19 @@ async def _make_state(user_id: int) -> FSMContext:
 
 
 def test_logging_keyboard_has_card_button_for_active_exercise():
-    kb = keyboards.logging_keyboard([(1, "Bench press")], active_id=1)
+    kb = keyboards.logging_keyboard([(1, "Bench press")], active_id=1, has_sets=False)
     callback_datas = [b.callback_data for row in kb.inline_keyboard for b in row]
     assert "live:card:1" in callback_datas
 
 
 def test_logging_keyboard_omits_card_button_without_active_exercise():
-    kb = keyboards.logging_keyboard([], active_id=None)
+    kb = keyboards.logging_keyboard([], active_id=None, has_sets=False)
+    callback_datas = [b.callback_data for row in kb.inline_keyboard for b in row]
+    assert not any(cb.startswith("live:card:") for cb in callback_datas)
+
+
+def test_logging_keyboard_omits_card_button_once_sets_are_logged():
+    kb = keyboards.logging_keyboard([(1, "Bench press")], active_id=1, has_sets=True)
     callback_datas = [b.callback_data for row in kb.inline_keyboard for b in row]
     assert not any(cb.startswith("live:card:") for cb in callback_datas)
 
