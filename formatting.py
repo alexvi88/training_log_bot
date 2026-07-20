@@ -381,20 +381,22 @@ def build_bodyweight_screen(logs: list, unit: str = "kg", period_logs: list | No
     return "\n".join(lines)
 
 
-def format_progression_hint(suggestion, unit: str = "kg") -> str:
-    """One-line "🎯 Цель: …" nudge from analytics.suggest_progression."""
+def format_progression_hint(suggestion, unit: str = "kg", achieved: bool = False) -> str:
+    """"Цель: …" nudge from analytics.suggest_progression, meant to sit inline
+    after the "В прошлый раз" line rather than on its own (no bold — the
+    surrounding line is already italicized).
+    """
     u = UNIT_LABELS.get(unit, "кг")
     if suggestion.is_bodyweight:
-        text = f"🎯 Цель: {suggestion.target_reps} повторов (на один больше прошлого)"
+        goal = f"{suggestion.target_reps} повторов (на один больше прошлого)"
     elif suggestion.action == "add_weight":
         top = suggestion.target_reps
-        text = (
-            f"🎯 Цель: пора добавить вес — {format_weight(suggestion.target_weight)} {u} "
-            f"× {top}-{top + 1}"
-        )
+        goal = f"пора добавить вес — {format_weight(suggestion.target_weight)} {u} × {top}-{top + 1}"
     else:
-        text = f"🎯 Цель: {format_set(suggestion.target_weight, suggestion.target_reps)} (тот же вес, +1 повтор)"
-    return f"<b><i>{text}</i></b>"
+        goal = f"{format_set(suggestion.target_weight, suggestion.target_reps)} (тот же вес, +1 повтор)"
+    if achieved:
+        return f"✅ Цель выполнена: {goal}"
+    return f"🎯 Цель: {goal}"
 
 
 def format_comparison_line(e1rm_delta: float, unit: str = "kg") -> str:

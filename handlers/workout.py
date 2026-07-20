@@ -134,19 +134,24 @@ def _logging_hint(
     has_sets: bool,
     unit: str = "kg",
     show_progression: bool = True,
+    today_sets: list[tuple[float, int]] | None = None,
 ) -> str:
     base = "Напиши вес и повторы через пробел, например «100 8»"
     if has_sets:
         base += "\nМожно только повторы — вес возьмётся с прошлого подхода"
     if last_session:
         sets_str = ", ".join(formatting.format_set(w, r, rpe) for w, r, rpe in last_session)
-        lines = [f"<i>💡 В прошлый раз: {sets_str}</i>"]
+        line = f"💡 В прошлый раз: {sets_str}."
         if show_progression:
             wr_only = [(w, r) for w, r, _ in last_session]
             suggestion = analytics.suggest_progression(wr_only, _WEIGHT_STEP.get(unit, 2.5))
             if suggestion is not None:
-                lines.append(formatting.format_progression_hint(suggestion, unit))
-        return "\n".join(lines) + f"\n\n{base}"
+                achieved = any(
+                    w >= suggestion.target_weight and r >= suggestion.target_reps
+                    for w, r in (today_sets or [])
+                )
+                line += f" {formatting.format_progression_hint(suggestion, unit, achieved)}"
+        return f"<i>{line}</i>\n\n{base}"
     return base
 
 
@@ -172,9 +177,15 @@ async def _render_logging_screen(bot, state: FSMContext, user):
 
     open_items = [(ex_id, names[ex_id]) for ex_id in open_ids]
     active_block_id = (data.get("open_blocks") or {}).get(active)
-    has_sets = bool(active_block_id and await db.list_sets_for_block(active_block_id))
+    active_block_sets = await db.list_sets_for_block(active_block_id) if active_block_id else []
+    has_sets = bool(active_block_sets)
+    today_sets = [(r["weight"], r["reps"]) for r in active_block_sets]
     hint = _logging_hint(
-        last_session_sets.get(active), has_sets, user["unit"], bool(user["progression_hint_enabled"])
+        last_session_sets.get(active),
+        has_sets,
+        user["unit"],
+        bool(user["progression_hint_enabled"]),
+        today_sets,
     )
     kb = keyboards.logging_keyboard(open_items, active, has_sets)
     await _refresh_live(bot, state, user, data["workout_id"], hint, kb)
