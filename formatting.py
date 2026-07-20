@@ -402,4 +402,4 @@ def format_progression_hint(suggestion, unit: str = "kg", achieved: bool = False
 def format_comparison_line(e1rm_delta: float, unit: str = "kg") -> str:
     u = UNIT_LABELS.get(unit, "кг")
     arrow = "↑" if e1rm_delta > 0 else ("↓" if e1rm_delta < 0 else "→")
-    return f"{arrow} e1RM {e1rm_delta:+.1f} {u} vs прошлой тренировки этого упражнения"
+    return f"{arrow} e1RM {e1rm_delta:+.1f} {u} vs предыдущего рекорда этого упражнения"

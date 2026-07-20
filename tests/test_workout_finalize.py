@@ -2,6 +2,7 @@
 record/comparison detection when a workout is backfilled to a date that isn't
 chronologically last.
 """
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -138,3 +139,65 @@ async def test_backfill_does_not_compare_against_later_workout(fresh_db, user_id
     # unrelated workout (w3) is even stronger still.
     assert "рекорд" not in full_text.lower()
     assert "vs прошлой" not in full_text
+
+
+async def test_e1rm_comparison_uses_alltime_max_not_previous_session(fresh_db, user_id):
+    """A session that beats the last one but not the true all-time best e1RM
+    must not be reported as growth."""
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    bench = await db.create_exercise(user_id, "Bench press", group_id)
+
+    w1 = await db.create_workout(user_id, started_at="2026-01-01T12:00:00")
+    await _log_bench_set(db, w1, bench, 100, 5)  # e1RM ~116.7 — the true best
+    await db.finish_workout(w1, finished_at="2026-01-01T12:00:00")
+
+    w2 = await db.create_workout(user_id, started_at="2026-01-05T12:00:00")
+    await _log_bench_set(db, w2, bench, 100, 3)  # e1RM = 110 — weaker than w1
+    await db.finish_workout(w2, finished_at="2026-01-05T12:00:00")
+
+    # w3 beats w2 (the immediately previous session) but not w1 (the all-time max).
+    w3 = await db.create_workout(user_id, started_at="2026-01-10T12:00:00")
+    await _log_bench_set(db, w3, bench, 100, 4)  # e1RM ~113.3
+
+    bot = _make_bot()
+    state = await _make_state(user_id, workout_id=w3)
+    callback = _make_callback(user_id, bot)
+
+    await workout._finalize_workout(callback, state, note=None)
+
+    full_text = bot.edit_message_text.await_args.kwargs["text"]
+    assert "vs предыдущего рекорда" not in full_text
+
+
+async def test_ai_comment_generated_in_background_after_finalize(fresh_db, user_id, monkeypatch):
+    """Finishing a workout must not block on the AI-trainer comment: the summary
+    is sent first, and the comment is appended via a second edit once ready."""
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    bench = await db.create_exercise(user_id, "Bench press", group_id)
+    workout_id = await db.create_workout(user_id)
+    await _log_bench_set(db, workout_id, bench, 100, 5)
+    await db.update_user(user_id, ai_comments_enabled=1)
+
+    monkeypatch.setattr(workout.ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(
+        workout.ai_trainer, "comment_on_workout", AsyncMock(return_value="Отличная работа!")
+    )
+
+    bot = _make_bot()
+    state = await _make_state(user_id, workout_id=workout_id)
+    callback = _make_callback(user_id, bot)
+
+    await workout._finalize_workout(callback, state, note=None)
+
+    first_text = bot.edit_message_text.await_args_list[0].kwargs["text"]
+    assert "Отличная работа!" not in first_text
+
+    pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+    await asyncio.gather(*pending)
+
+    last_text = bot.edit_message_text.await_args_list[-1].kwargs["text"]
+    assert "Отличная работа!" in last_text
+    saved = await db.get_workout(workout_id)
+    assert saved["ai_comment"] == "Отличная работа!"
