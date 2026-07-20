@@ -1074,6 +1074,15 @@ async def list_sets_for_block(block_id: int) -> list[aiosqlite.Row]:
     return await cur.fetchall()
 
 
+async def delete_empty_blocks(workout_id: int) -> None:
+    """Drop blocks that never got a set logged — an exercise added mid-workout
+    and then abandoned shouldn't linger as a "подходов нет" placeholder in the
+    finished summary/history."""
+    for block in await list_blocks_for_workout(workout_id):
+        if not await list_sets_for_block(block["id"]):
+            await delete_block(block["id"])
+
+
 async def get_set(set_id: int) -> Optional[aiosqlite.Row]:
     cur = await conn().execute("SELECT * FROM sets WHERE id = ?", (set_id,))
     return await cur.fetchone()

@@ -77,6 +77,31 @@ async def test_double_tap_finalize_is_idempotent(fresh_db, user_id):
     callback2.answer.assert_awaited_once()
 
 
+async def test_finalize_drops_empty_blocks(fresh_db, user_id):
+    """An exercise added mid-workout but never given a set shouldn't linger as
+    a "подходов нет" placeholder once the workout is finished."""
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Ноги")
+    squat = await db.create_exercise(user_id, "Squat", group_id)
+    empty_ex = await db.create_exercise(user_id, "Abandoned exercise", group_id)
+    workout_id = await db.create_workout(user_id)
+    await _log_bench_set(db, workout_id, squat, 100, 5)
+    empty_block = await db.create_block(workout_id, "single")
+    await db.add_block_exercise(empty_block, empty_ex, 1)
+
+    bot = _make_bot()
+    state = await _make_state(user_id, workout_id=workout_id)
+    callback = _make_callback(user_id, bot)
+
+    await workout._finalize_workout(callback, state, note=None)
+
+    full_text = bot.edit_message_text.await_args.kwargs["text"]
+    assert "Abandoned exercise" not in full_text
+    assert "подходов нет" not in full_text
+    blocks = await db.list_blocks_for_workout(workout_id)
+    assert len(blocks) == 1
+
+
 async def test_backfill_does_not_compare_against_later_workout(fresh_db, user_id):
     db = fresh_db
     group_id = await db.create_muscle_group(user_id, "Грудь")
