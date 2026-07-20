@@ -73,15 +73,15 @@ async def test_live_card_show_sends_info_and_back_button(fresh_db, user_id):
 
     await workout.live_card_show(callback, state)
 
-    assert callback.message.answer.await_count == 2
-    info_call, back_call = callback.message.answer.await_args_list
+    callback.message.answer.assert_awaited_once()
+    info_call = callback.message.answer.await_args
     assert "Совсем новое упражнение XYZ" in info_call.args[0]
-    kb = back_call.kwargs["reply_markup"]
+    kb = info_call.kwargs["reply_markup"]
     callback_datas = [b.callback_data for row in kb.inline_keyboard for b in row]
     assert callback_datas == ["live:card_back"]
 
     data = await state.get_data()
-    assert data["live_card_msg_ids"] == [600, 601]
+    assert data["live_card_msg_ids"] == [600]
 
 
 @pytest.mark.asyncio
@@ -98,10 +98,13 @@ async def test_live_card_show_prefers_custom_photo(fresh_db, user_id):
 
     callback.message.answer_photo.assert_awaited_once()
     assert callback.message.answer_photo.await_args.args[0] == "custom_file_id_123"
-    callback.message.answer.assert_awaited_once()  # the back-button message
+    kb = callback.message.answer_photo.await_args.kwargs["reply_markup"]
+    callback_datas = [b.callback_data for row in kb.inline_keyboard for b in row]
+    assert callback_datas == ["live:card_back"]
+    callback.message.answer.assert_not_awaited()  # button is on the photo itself now
 
     data = await state.get_data()
-    assert data["live_card_msg_ids"] == [501, 600]
+    assert data["live_card_msg_ids"] == [501]
 
 
 @pytest.mark.asyncio
