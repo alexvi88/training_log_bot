@@ -699,22 +699,25 @@ async def _send_exercise_card(message: Message, state: FSMContext, ex) -> None:
     from handlers.exercises import _exercise_info_text
 
     text = _exercise_info_text(ex, with_created=False)
+    back_kb = keyboards.exercise_card_back_keyboard()
     msg_ids: list[int] = []
     if ex["custom_photo_file_id"]:
-        sent = await message.answer_photo(ex["custom_photo_file_id"], caption=text, parse_mode="HTML")
+        sent = await message.answer_photo(ex["custom_photo_file_id"], caption=text, parse_mode="HTML", reply_markup=back_kb)
         msg_ids.append(sent.message_id)
     else:
         images = exercise_media.get_images(ex["name"])
         if images:
+            # Telegram doesn't allow a reply_markup on media group items, so the
+            # back button still needs its own message — kept text-free (zero-width space).
             media = [InputMediaPhoto(media=FSInputFile(images[0]), caption=text, parse_mode="HTML")]
             media += [InputMediaPhoto(media=FSInputFile(p)) for p in images[1:]]
             sent_group = await message.answer_media_group(media)
             msg_ids.extend(m.message_id for m in sent_group)
+            back = await message.answer("​", reply_markup=back_kb)
+            msg_ids.append(back.message_id)
         else:
-            sent = await message.answer(text, parse_mode="HTML")
+            sent = await message.answer(text, parse_mode="HTML", reply_markup=back_kb)
             msg_ids.append(sent.message_id)
-    back = await message.answer("Смотришь технику — жми, когда закончишь.", reply_markup=keyboards.exercise_card_back_keyboard())
-    msg_ids.append(back.message_id)
     await state.update_data(live_card_msg_ids=msg_ids)
 
 
