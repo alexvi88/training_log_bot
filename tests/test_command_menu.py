@@ -81,7 +81,14 @@ async def test_admin_scope_targets_only_admin_chat_and_includes_admin_command(mo
     scope: BotCommandScopeChat = admin_call.kwargs["scope"]
     commands: list[BotCommand] = admin_call.args[0]
     assert scope.chat_id == 12345
-    assert {c.command for c in commands} == {"start", "ai_trainer", "feedback", "check_users", "pushes"}
+    assert {c.command for c in commands} == {
+        "start",
+        "ai_trainer",
+        "feedback",
+        "check_users",
+        "ai_dialogs",
+        "pushes",
+    }
 
 @pytest.mark.asyncio
 async def test_no_admin_scope_registered_when_admin_id_unset(monkeypatch):
