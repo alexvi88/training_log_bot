@@ -126,6 +126,7 @@ async def _setup_commands(bot: Bot) -> None:
                 BotCommand(command="ai_trainer", description="AI-тренер"),
                 BotCommand(command="feedback", description="Отзыв / баг / идея"),
                 BotCommand(command="check_users", description="Список пользователей (админ)"),
+                BotCommand(command="ai_dialogs", description="Диалоги с AI-тренером (админ)"),
                 BotCommand(command="pushes", description="Лог отправленных пушей (админ)"),
             ],
             scope=BotCommandScopeChat(chat_id=config.ADMIN_ID),
