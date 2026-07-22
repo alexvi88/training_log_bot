@@ -166,7 +166,7 @@ def _logging_hint(
 ) -> str:
     base = "Вес и повторы через пробел, например «100 8»"
     if has_sets:
-        base += "\n(можно только повторы — вес возьмётся с последнего подхода)"
+        base += " (можно только повторы — вес возьмётся с последнего подхода)"
     if last_session:
         sets_str = ", ".join(formatting.format_set(w, r, rpe) for w, r, rpe in last_session)
         line = f"💡 В прошлый раз: {sets_str}."
