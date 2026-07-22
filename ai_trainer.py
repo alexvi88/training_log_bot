@@ -8,10 +8,12 @@ user_id текущего пользователя на уровне executor'а,
 не может прочитать чужие данные.
 
 Пока у пользователя не исчерпана дневная квота (config.AI_SEARCH_DAILY_LIMIT),
-перед основным ответом идёт отдельный шаг через xAI's gRPC "Agent Tools" SDK на
-search-модели (config.GROK_SEARCH_MODEL) — ей доступны только server-side
-web_search/x_search, без наших DB-инструментов, и она сама решает, нужен ли
-вопросу живой поиск. Инструменты приходится разводить по разным вызовам:
+перед основным ответом дешёвый гейт-классификатор на быстрой config.GROK_MODEL
+(см. ask/_search_worth_it) решает, нужен ли вопросу живой поиск; и только если
+нужен — поднимается отдельный шаг через xAI's gRPC "Agent Tools" SDK на дорогой
+search-модели (config.GROK_SEARCH_MODEL, ~10× дороже). Ей доступны только
+server-side web_search/x_search, без наших DB-инструментов. Инструменты
+приходится разводить по разным вызовам:
 смешивание client-side function tools (наши DB-инструменты) с multi-agent
 моделью в одном запросе требует xAI beta access, которого у аккаунта нет —
 а server-side-only поиск под это ограничение не попадает (так же как в
@@ -256,6 +258,26 @@ NO_SEARCH_NEEDED
 
 def _search_system_prompt() -> str:
     return SEARCH_SYSTEM_PROMPT + f"\nСегодня {dt.date.today().isoformat()}."
+
+
+SEARCH_DECISION_SYSTEM_PROMPT = """\
+Ты — классификатор в AI-тренере (Telegram-бот дневника силовых тренировок).
+Твоя единственная задача: решить, нужен ли для ответа на последний вопрос
+пользователя живой поиск в интернете (свежие исследования, новости, цены,
+факты о внешнем мире, актуальные рекомендации по питанию/технике из открытых
+источников) — или на него можно ответить из данных самого пользователя и общих
+знаний.
+
+Ответь РОВНО одним словом, без пояснений и знаков препинания:
+YES — если для хорошего ответа нужен свежий веб/X-поиск.
+NO — если не нужен (вопрос про тренировки, прогресс, данные или самочувствие
+самого пользователя, либо ответ не зависит от свежих данных из интернета).
+Если сомневаешься — отвечай NO.
+"""
+
+
+def _search_decision_system_prompt() -> str:
+    return SEARCH_DECISION_SYSTEM_PROMPT + f"\nСегодня {dt.date.today().isoformat()}."
 
 
 WORKOUT_COMMENT_SYSTEM_PROMPT = """\
@@ -811,13 +833,19 @@ async def ask(
     handlers/ai_trainer.py).
 
     Пока не исчерпана дневная квота поисковых ответов (config.AI_SEARCH_DAILY_LIMIT),
-    перед основным ответом идёт отдельный шаг живого веб/X-поиска (см.
-    _web_search_findings) — модель сама решает, нужен ли он вопросу. Найденное (если
-    есть) добавляется контекстом к основному REST-вызову с обычными инструментами.
+    перед основным ответом дешёвый гейт на быстрой модели (см. _search_worth_it)
+    решает, нужен ли вопросу живой веб/X-поиск, и только на «да» поднимается
+    отдельный дорогой шаг multi-agent поиска (см. _web_search_findings). Найденное
+    (если есть) добавляется контекстом к основному REST-вызову с обычными
+    инструментами.
     """
     search_context = None
     if await db.get_ai_search_count_today(user_id) < config.AI_SEARCH_DAILY_LIMIT:
-        search_context = await _web_search_findings(user_id, question, history, image_data_url, on_status)
+        # Дешёвый гейт на быстрой модели решает, стоит ли вообще поднимать дорогой
+        # multi-agent поиск — см. _search_worth_it. Так дорогая модель не дёргается
+        # на каждый вопрос (большинство — про личные данные, поиска не требуют).
+        if await _search_worth_it(user_id, question, history):
+            search_context = await _web_search_findings(user_id, question, history, image_data_url, on_status)
     logger.info(
         "AI trainer question from user %s: %r (web search used: %s)",
         user_id, question, bool(search_context),
@@ -920,6 +948,44 @@ def _to_xai_messages(
     else:
         out.append(xai_user(question))
     return out
+
+
+async def _search_worth_it(
+    user_id: int,
+    question: str,
+    history: list[dict[str, Any]],
+) -> bool:
+    """Дешёвый гейт перед дорогим multi-agent поиском: решаем на быстрой модели
+    (config.GROK_MODEL), нужен ли вопросу живой веб/X-поиск вообще.
+
+    Решение «искать или нет» — обычная классификация, ей не нужны ни веб-доступ,
+    ни агентность, поэтому гонять на каждый вопрос дорогую multi-agent модель
+    (config.GROK_SEARCH_MODEL, ~10× дороже) только ради этого решения — пустой
+    слив бюджета: большинство вопросов к боту-дневнику про личные данные
+    пользователя и поиска не требуют. Дорогую модель поднимаем только когда этот
+    гейт сказал «да». Картинку в решение не передаём — тема поиска считывается по
+    тексту, а фото у нас почти всегда личное (форма, еда), поиска не просит.
+
+    При любой ошибке/неоднозначности возвращаем False: не искать безопаснее и
+    дешевле, чем впустую дёргать дорогую модель.
+    """
+    try:
+        client = _get_client()
+        response = await client.chat.completions.create(
+            model=config.GROK_MODEL,
+            max_tokens=3,
+            messages=[
+                {"role": "system", "content": _search_decision_system_prompt()},
+                *history,
+                {"role": "user", "content": question},
+            ],
+        )
+    except Exception:
+        logger.exception("AI trainer search-decision step failed, skipping live search")
+        return False
+    await _log_llm_cost(user_id, config.GROK_MODEL, getattr(response, "usage", None))
+    verdict = (response.choices[0].message.content or "").strip().upper()
+    return verdict.startswith("YES")
 
 
 async def _web_search_findings(

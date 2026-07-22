@@ -382,7 +382,7 @@ async def test_ask_uses_search_context_and_counts_quota_when_search_used(fresh_d
         _xai_response(content="нашёл свежее исследование по протеину", citations=["http://example.com"])
     )
     monkeypatch.setattr(ai_trainer, "_get_sdk_client", AsyncMock(return_value=sdk_client))
-    client = _fake_client([_response(content="финальный ответ")])
+    client = _fake_client([_response(content="YES"), _response(content="финальный ответ")])
     monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
 
     answer = await ai_trainer.ask(user_id, "Что нового в исследованиях по протеину?", history=[])
@@ -396,7 +396,7 @@ async def test_ask_uses_search_context_and_counts_quota_when_search_used(fresh_d
 async def test_ask_skips_search_context_when_search_unused(fresh_db, user_id, monkeypatch):
     sdk_client = _fake_sdk_client(_xai_response(content="NO_SEARCH_NEEDED"))
     monkeypatch.setattr(ai_trainer, "_get_sdk_client", AsyncMock(return_value=sdk_client))
-    client = _fake_client([_response(content="обычный ответ")])
+    client = _fake_client([_response(content="YES"), _response(content="обычный ответ")])
     monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
 
     answer = await ai_trainer.ask(user_id, "Как мои дела?", history=[])
@@ -405,6 +405,20 @@ async def test_ask_skips_search_context_when_search_unused(fresh_db, user_id, mo
     assert await fresh_db.get_ai_search_count_today(user_id) == 0
     messages = client.chat.completions.create.await_args.kwargs["messages"]
     assert [m["role"] for m in messages] == ["system", "user"]
+
+
+async def test_ask_skips_expensive_search_when_gate_says_no(fresh_db, user_id, monkeypatch):
+    # Дешёвый гейт сказал NO → дорогая multi-agent модель не поднимается вовсе.
+    sdk_getter = AsyncMock()
+    monkeypatch.setattr(ai_trainer, "_get_sdk_client", sdk_getter)
+    client = _fake_client([_response(content="NO"), _response(content="обычный ответ")])
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+
+    answer = await ai_trainer.ask(user_id, "Как мои дела?", history=[])
+
+    assert answer == "обычный ответ"
+    sdk_getter.assert_not_awaited()
+    assert await fresh_db.get_ai_search_count_today(user_id) == 0
 
 
 async def test_ask_skips_search_step_once_quota_exhausted(fresh_db, user_id, monkeypatch):
@@ -429,7 +443,7 @@ async def test_ask_answers_normally_when_search_step_raises(fresh_db, user_id, m
     session = SimpleNamespace(sample=boom)
     sdk_client = SimpleNamespace(chat=SimpleNamespace(create=lambda **kwargs: session))
     monkeypatch.setattr(ai_trainer, "_get_sdk_client", AsyncMock(return_value=sdk_client))
-    client = _fake_client([_response(content="обычный ответ")])
+    client = _fake_client([_response(content="YES"), _response(content="обычный ответ")])
     monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
 
     answer = await ai_trainer.ask(user_id, "Вопрос", history=[])
@@ -441,7 +455,7 @@ async def test_ask_answers_normally_when_search_step_raises(fresh_db, user_id, m
 async def test_ask_logs_question_and_search_usage(fresh_db, user_id, monkeypatch, caplog):
     sdk_client = _fake_sdk_client(_xai_response(content="находки", citations=["http://example.com"]))
     monkeypatch.setattr(ai_trainer, "_get_sdk_client", AsyncMock(return_value=sdk_client))
-    client = _fake_client([_response(content="ответ")])
+    client = _fake_client([_response(content="YES"), _response(content="ответ")])
     monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
 
     with caplog.at_level(logging.INFO, logger="ai_trainer"):
@@ -456,7 +470,7 @@ async def test_ask_logs_question_and_search_usage(fresh_db, user_id, monkeypatch
 async def test_ask_logs_question_without_search_usage(fresh_db, user_id, monkeypatch, caplog):
     sdk_client = _fake_sdk_client(_xai_response(content="NO_SEARCH_NEEDED"))
     monkeypatch.setattr(ai_trainer, "_get_sdk_client", AsyncMock(return_value=sdk_client))
-    client = _fake_client([_response(content="ответ")])
+    client = _fake_client([_response(content="YES"), _response(content="ответ")])
     monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
 
     with caplog.at_level(logging.INFO, logger="ai_trainer"):
@@ -479,6 +493,31 @@ async def test_web_search_findings_passes_only_server_side_tools(fresh_db, user_
     # только web_search + x_search — ни одного нашего DB-инструмента, иначе
     # это снова смешивание client-side tools с multi-agent моделью, требующее беты.
     assert len(sdk_client.session.create_kwargs["tools"]) == 2
+
+
+async def test_search_worth_it_uses_fast_model_and_parses_verdict(fresh_db, user_id, monkeypatch):
+    client = _fake_client([_response(content="YES")])
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+
+    assert await ai_trainer._search_worth_it(user_id, "Что нового?", history=[]) is True
+    # Гейт должен идти на дешёвую модель, а не на дорогую multi-agent.
+    assert client.chat.completions.create.await_args.kwargs["model"] == config.GROK_MODEL
+
+
+async def test_search_worth_it_returns_false_on_no_and_on_error(fresh_db, user_id, monkeypatch):
+    no_client = _fake_client([_response(content="NO")])
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: no_client)
+    assert await ai_trainer._search_worth_it(user_id, "Как мои дела?", history=[]) is False
+
+    def boom():
+        raise RuntimeError("api down")
+
+    err_client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=AsyncMock(side_effect=boom)))
+    )
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: err_client)
+    # Ошибка гейта не должна валить ответ — просто не ищем.
+    assert await ai_trainer._search_worth_it(user_id, "Вопрос", history=[]) is False
 
 
 # ---------- image input (text+img and img-only questions) ----------
