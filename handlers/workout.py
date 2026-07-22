@@ -164,9 +164,9 @@ def _logging_hint(
     show_progression: bool = True,
     today_sets: list[tuple[float, int]] | None = None,
 ) -> str:
-    base = "Напиши вес и повторы через пробел, например «100 8»"
+    base = "Вес и повторы через пробел, например «100 8»"
     if has_sets:
-        base += "\nМожно только повторы — вес возьмётся с прошлого подхода"
+        base += "\nМожно только повторы — вес возьмётся с прошлого"
     if last_session:
         sets_str = ", ".join(formatting.format_set(w, r, rpe) for w, r, rpe in last_session)
         line = f"💡 В прошлый раз: {sets_str}."
