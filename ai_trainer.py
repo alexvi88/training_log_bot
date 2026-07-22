@@ -839,13 +839,17 @@ async def ask(
     (если есть) добавляется контекстом к основному REST-вызову с обычными
     инструментами.
     """
+    # Дешёвый гейт на быстрой модели (_search_worth_it) решает, стоит ли вообще
+    # поднимать дорогой multi-agent поиск, и только на «да» он запускается. Так
+    # дорогая модель не дёргается на каждый вопрос (большинство — про личные данные,
+    # поиска не требуют). Порядок в and важен: короткое замыкание не даёт вызвать
+    # гейт при исчерпанной квоте.
     search_context = None
-    if await db.get_ai_search_count_today(user_id) < config.AI_SEARCH_DAILY_LIMIT:
-        # Дешёвый гейт на быстрой модели решает, стоит ли вообще поднимать дорогой
-        # multi-agent поиск — см. _search_worth_it. Так дорогая модель не дёргается
-        # на каждый вопрос (большинство — про личные данные, поиска не требуют).
-        if await _search_worth_it(user_id, question, history):
-            search_context = await _web_search_findings(user_id, question, history, image_data_url, on_status)
+    if (
+        await db.get_ai_search_count_today(user_id) < config.AI_SEARCH_DAILY_LIMIT
+        and await _search_worth_it(user_id, question, history)
+    ):
+        search_context = await _web_search_findings(user_id, question, history, image_data_url, on_status)
     logger.info(
         "AI trainer question from user %s: %r (web search used: %s)",
         user_id, question, bool(search_context),
