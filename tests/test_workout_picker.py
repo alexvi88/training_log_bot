@@ -66,6 +66,23 @@ async def test_typing_in_exercise_picker_searches_instead_of_being_ignored(fresh
     assert not any("Triceps" in t for t in button_texts)
 
 
+async def test_typing_on_group_screen_searches_and_enters_exercise_picking(fresh_db, user_id):
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    await db.create_exercise(user_id, "Bench press", group_id)
+
+    state = await _make_state(user_id)
+    await state.set_state(WorkoutFlow.picking_group)  # typing from the muscle-group list
+    message = _make_message(user_id, "bench")
+
+    await workout.pick_exercise_search(message, state)
+
+    assert await state.get_state() == WorkoutFlow.picking_exercise
+    kb = message.bot.send_message.await_args.kwargs["reply_markup"]
+    button_texts = [b.text for row in kb.inline_keyboard for b in row]
+    assert "Bench press" in button_texts
+
+
 async def test_typing_no_match_in_exercise_picker_offers_to_create(fresh_db, user_id):
     db = fresh_db
     group_id = await db.create_muscle_group(user_id, "Грудь")

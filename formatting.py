@@ -186,6 +186,48 @@ def build_ai_comment_block(comment: str) -> str:
     return f"{DIVIDER}\n🤖 <b>Комментарий AI-тренера</b>\n\n{markdown_bold_to_html(comment)}"
 
 
+# Fun, shareable size comparisons for a session's total tonnage — (emoji+noun, kg each),
+# light→heavy. The "N × object" phrasing sidesteps Russian count declension entirely.
+_TONNAGE_OBJECTS = [
+    ("🐺 сенбернар", 80),
+    ("🏍 мотоцикл", 200),
+    ("🐻 бурый медведь", 350),
+    ("🎹 рояль", 480),
+    ("🐴 конь", 550),
+    ("🐮 корова", 750),
+    ("🚗 легковушка", 1400),
+    ("🚚 гружёная «Газель»", 3500),
+    ("🐘 слон", 5000),
+    ("🦈 касатка", 5500),
+    ("🚌 автобус", 12000),
+]
+
+
+def format_tonnage_equivalent(total_kg: float, seed: int = 0) -> str | None:
+    """A playful "your session moved N buses" line for the completion card.
+
+    Picks whichever object gives a believable count (2..40); `seed` (e.g. the
+    workout id) rotates the choice so it isn't always the same object. Returns
+    None for a tonnage too small to compare (bodyweight-only or very light days).
+    """
+    if total_kg < 150:
+        return None
+    candidates = [
+        (label, round(total_kg / w))
+        for label, w in _TONNAGE_OBJECTS
+        if 2 <= round(total_kg / w) <= 40
+    ]
+    if not candidates:
+        # Above the heaviest bracket (or in a gap): fall back to the biggest object that fits.
+        fitting = [(label, max(1, round(total_kg / w))) for label, w in _TONNAGE_OBJECTS if w <= total_kg]
+        if not fitting:
+            return None
+        candidates = [fitting[-1]]
+    label, count = candidates[seed % len(candidates)]
+    tonnage = f"{total_kg / 1000:.1f} т" if total_kg >= 1000 else f"{total_kg:.0f} кг"
+    return f"🏋️ Суммарно за тренировку — {tonnage}. Это как {count} × {label}."
+
+
 def dashboard_stat_lines(dashboard) -> list[tuple[str, str]]:
     """(label, value) pairs drawn inside the main-menu heatmap image.
 

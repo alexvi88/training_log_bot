@@ -35,14 +35,17 @@ def _make_callback(user_id: int, data: str):
     return callback
 
 
-def _make_message(user_id: int, text: str):
+def _make_message(user_id: int, text: str, message_id: int = 55):
     msg = MagicMock()
     msg.chat = SimpleNamespace(id=user_id)
+    msg.message_id = message_id
     msg.from_user = SimpleNamespace(id=user_id, username="tester")
     msg.text = text
     msg.delete = AsyncMock()
+    msg.reply = AsyncMock()
     bot = MagicMock()
     bot.delete_message = AsyncMock()
+    bot.set_message_reaction = AsyncMock()
 
     async def _send(*args, **kwargs):
         return SimpleNamespace(message_id=700, chat=SimpleNamespace(id=user_id))
@@ -122,6 +125,45 @@ async def test_note_entered_saves_to_exercise(fresh_db, user_id):
     ex = await db.get_exercise(ex_id)
     assert ex["notes"] == "болит плечо — следи за локтями"
     assert await state.get_state() == WorkoutFlow.logging_set
+
+
+async def _finished_baseline(db, user_id, ex_id, weight, reps):
+    """A prior finished workout with one set, so later PR detection has history."""
+    wid = await db.create_workout(user_id)
+    block_id = await db.create_block(wid, "single")
+    await db.add_block_exercise(block_id, ex_id, 0)
+    await db.add_set(block_id, ex_id, 0, 0, weight, reps, None)
+    await db.finish_workout(wid, None, finished_at="2020-01-01T12:00:05")
+    # Backdate so it sorts before the active workout.
+    await db.update_workout_date(wid, "2020-01-01T12:00:00", "2020-01-01T12:00:05")
+
+
+@pytest.mark.asyncio
+async def test_record_set_reacts_and_keeps_message(fresh_db, user_id):
+    db = fresh_db
+    state, ex_id, block_id = await _setup_logging(db, user_id)
+    await _finished_baseline(db, user_id, ex_id, 100.0, 5)
+    message = _make_message(user_id, "150 5")  # clear e1RM record
+
+    await workout.log_set_text(message, state)
+
+    message.bot.set_message_reaction.assert_awaited_once()
+    react = message.bot.set_message_reaction.await_args.kwargs["reaction"]
+    assert react[0].emoji == "🔥"
+    message.delete.assert_not_awaited()  # trophy message stays in the chat
+
+
+@pytest.mark.asyncio
+async def test_ordinary_set_is_deleted_without_reaction(fresh_db, user_id):
+    db = fresh_db
+    state, ex_id, block_id = await _setup_logging(db, user_id)
+    await _finished_baseline(db, user_id, ex_id, 200.0, 5)  # high baseline
+    message = _make_message(user_id, "60 5")  # nowhere near a record
+
+    await workout.log_set_text(message, state)
+
+    message.bot.set_message_reaction.assert_not_awaited()
+    message.delete.assert_awaited_once()
 
 
 def test_logging_keyboard_has_repeat_and_note_when_sets_present():

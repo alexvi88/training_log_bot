@@ -18,6 +18,7 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     InputMediaPhoto,
     Message,
+    ReactionTypeEmoji,
 )
 
 import ai_trainer
@@ -185,6 +186,46 @@ def _logging_hint(
     if note_line:
         return f"{note_line}\n{base}"
     return base
+
+
+async def _sets_beat_record(
+    ex_id: int, workout_id: int, logged: list[tuple[float, int]], formula: str
+) -> bool:
+    """True if any of the sets just logged is a genuine all-time record for this
+    exercise — a new best e1RM or a new heaviest weight (or, for bodyweight moves,
+    the most reps in a set).
+
+    Deliberately stricter than the completion-card highlights: reps at a
+    never-before-used weight are *not* treated as a record here, or almost every
+    set at a fresh weight would trigger the 🔥. Compared against every prior
+    finished session, so the current workout's own earlier sets are excluded.
+    """
+    workout = await db.get_workout(workout_id)
+    if workout is None:
+        return False
+    started = workout["started_at"]
+    history_rows = await db.list_sets_for_exercise(ex_id, exclude_workout_id=workout_id)
+    history_set_rows = [
+        analytics.SetRow(r["weight"], r["reps"], r["workout_id"], r["started_at"])
+        for r in history_rows
+        if r["started_at"] < started
+    ]
+    prior_sessions = analytics.group_sets_by_session(history_set_rows)
+    for s in prior_sessions:
+        s.formula = formula
+    if not prior_sessions:
+        return False  # first-ever session with this exercise — nothing to beat yet
+    prior = analytics.compute_personal_records(prior_sessions)
+    is_bodyweight = all(w == 0 for w, _ in logged)
+    if is_bodyweight:
+        prior_best_reps = max(prior.max_reps_at_weight.values(), default=0)
+        return any(r > prior_best_reps for w, r in logged)
+    for weight, reps in logged:
+        if weight > prior.max_weight:
+            return True
+        if analytics.e1rm(weight, reps, formula) > prior.max_e1rm:
+            return True
+    return False
 
 
 async def _last_session_sets(ex_id: int) -> list[tuple[float, int, float | None]]:
@@ -483,7 +524,7 @@ async def _picker_screen_groups(callback: CallbackQuery, state: FSMContext, show
     data = await state.get_data()
     user = await db.get_user(callback.from_user.id)
     groups = await db.list_muscle_groups(callback.from_user.id)
-    hint = "Выбери группу мышц:"
+    hint = "Выбери группу мышц или напиши название упражнения для поиска:"
     open_ids = data.get("open_exercises") or []
     if open_ids:
         names = [escape((await db.get_exercise(eid))["display_name"]) for eid in open_ids]
@@ -574,9 +615,11 @@ async def pick_existing_exercise(callback: CallbackQuery, state: FSMContext):
     await _on_exercise_chosen(callback, state, ex_id)
 
 
-@router.message(StateFilter(WorkoutFlow.picking_exercise))
+@router.message(StateFilter(WorkoutFlow.picking_group, WorkoutFlow.picking_exercise))
 async def pick_exercise_search(message: Message, state: FSMContext):
-    """Typing while picking an exercise searches instead of being silently dropped."""
+    """Typing while picking a group or an exercise searches instead of being silently
+    dropped — so the user can jump straight to an exercise by name without first
+    drilling into its muscle group."""
     query = message.text.strip()
     await _delete_message(message)
     if not query:
@@ -584,6 +627,9 @@ async def pick_exercise_search(message: Message, state: FSMContext):
     data = await state.get_data()
     user = await db.get_user(message.from_user.id)
     group_id = data.get("pending_group_id")
+    # Searching from the group screen jumps into exercise-picking so a tap on a
+    # result (pick:ex:*) and the "back" button both resolve correctly.
+    await state.set_state(WorkoutFlow.picking_exercise)
     results = await db.search_exercises(message.from_user.id, query)
     kb = keyboards.exercises_keyboard(results, prefix="pick", back_cb="back", show_new_button=group_id is not None)
     if results:
@@ -840,14 +886,28 @@ async def log_set_text(message: Message, state: FSMContext):
     block_id = (data.get("open_blocks") or {}).get(active)
     last_by = dict(data.get("last_by_exercise") or {})
     prev_weight, _ = last_by.get(active) or (0.0, 0)
+    logged: list[tuple[float, int]] = []
     for ps in parsed:
         weight = prev_weight if (ps.weight_omitted and prev_weight) else ps.weight
         await _log_one(block_id, active, weight, ps.reps, ps.rpe)
+        logged.append((weight, ps.reps))
         prev_weight = weight
     last_by[active] = (prev_weight, parsed[-1].reps)
     await state.update_data(last_by_exercise=last_by)
-    await _delete_message(message)
+
     user = await db.get_user(message.from_user.id)
+    # A record-setting message keeps its place in the chat with a 🔥 reaction —
+    # instant, wordless celebration — instead of being tidied away like a normal set.
+    is_record = await _sets_beat_record(active, data["workout_id"], logged, user["e1rm_formula"])
+    if is_record:
+        with suppress(TelegramBadRequest):
+            await message.bot.set_message_reaction(
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                reaction=[ReactionTypeEmoji(emoji="🔥")],
+            )
+    else:
+        await _delete_message(message)
     await _render_logging_screen(message.bot, state, user)
 
 
@@ -1124,6 +1184,7 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
 
     exercise_ids = await db.list_exercise_ids_for_workout(workout_id)
     highlight_groups: list[tuple[str, list[str], str | None]] = []
+    session_tonnage = 0.0
 
     started_at = dt.datetime.fromisoformat(workout["started_at"])
 
@@ -1149,6 +1210,7 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
         )
         if not new_session.sets:
             continue
+        session_tonnage += new_session.tonnage
 
         records = analytics.detect_new_records(prior_sessions, new_session)
         pr_details = [
@@ -1182,6 +1244,9 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
     )
     highlights = formatting.build_exercise_highlights(highlight_groups)
     full_text = summary
+    tonnage_line = formatting.format_tonnage_equivalent(session_tonnage, seed=workout_id)
+    if tonnage_line:
+        full_text += f"\n\n{tonnage_line}"
     # Backfilled/imported past workouts shouldn't fire the "Nth workout" milestone —
     # they're entered out of order, so the running count isn't meaningful for them.
     if not is_backfill:
