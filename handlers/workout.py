@@ -321,13 +321,18 @@ async def _send_menu(message: Message, text: str, png: bytes | None, keyboard) -
     )
 
 
+async def _main_menu_kb(user_id: int, active) -> InlineKeyboardMarkup:
+    can_repeat = not active and await db.count_workouts(user_id) > 0
+    return keyboards.main_menu(bool(active), can_repeat_last=can_repeat)
+
+
 @router.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
     await _ensure_user(message.from_user.id, message.from_user.username)
     active = await db.get_active_workout(message.from_user.id)
     text, png = await _menu_view(message.from_user.id)
-    await _send_menu(message, text, png, keyboards.main_menu(bool(active)))
+    await _send_menu(message, text, png, await _main_menu_kb(message.from_user.id, active))
     if active:
         started = dt.datetime.fromisoformat(active["started_at"])
         if (dt.datetime.now() - started).total_seconds() > config.STALE_WORKOUT_HOURS * 3600:
@@ -395,7 +400,7 @@ async def _show_main_menu(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     active = await db.get_active_workout(callback.from_user.id)
     text, png = await _menu_view(callback.from_user.id)
-    kb = keyboards.main_menu(bool(active))
+    kb = await _main_menu_kb(callback.from_user.id, active)
     if png is None:
         await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML")
     else:
@@ -444,6 +449,31 @@ async def start_workout(callback: CallbackQuery, state: FSMContext):
     )
     await state.set_state(WorkoutFlow.picking_group)
     await _picker_screen_groups(callback, state, show_program_button=True)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "menu:repeat_last")
+async def repeat_last_workout(callback: CallbackQuery, state: FSMContext):
+    """Start a fresh workout pre-loaded with the exercises (and supersets) of the
+    last finished one — the same planned-blocks machinery a saved program uses."""
+    await _ensure_user(callback.from_user.id, callback.from_user.username)
+    active = await db.get_active_workout(callback.from_user.id)
+    if active:
+        await _enter_live(callback, state, active["id"])
+        return
+    plan = await db.last_finished_workout_plan(callback.from_user.id)
+    if not plan:
+        await callback.answer("Нет прошлой тренировки для повтора")
+        await _show_main_menu(callback, state)
+        return
+    workout_id = await db.create_workout(callback.from_user.id)
+    await _delete_message(callback.message)
+    sent = await callback.message.answer("🔁 Повторяем прошлую тренировку")
+    await state.update_data(
+        workout_id=workout_id, live_chat_id=sent.chat.id, live_message_id=sent.message_id,
+        last_by_exercise={}, planned_blocks=plan,
+    )
+    await _load_next_planned_block(callback, state)
     await callback.answer()
 
 
@@ -1309,7 +1339,7 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
     await state.clear()
     active = await db.get_active_workout(user_id)
     menu_text, menu_png = await _menu_view(user_id)
-    menu_kb = keyboards.main_menu(bool(active))
+    menu_kb = await _main_menu_kb(user_id, active)
     if menu_png is None:
         await bot.send_message(
             chat_id=data["live_chat_id"], text=menu_text, reply_markup=menu_kb, parse_mode="HTML"

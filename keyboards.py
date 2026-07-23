@@ -25,19 +25,27 @@ def persistent_menu() -> ReplyKeyboardMarkup:
     )
 
 
-def main_menu(has_active_workout: bool) -> InlineKeyboardMarkup:
+def main_menu(has_active_workout: bool, can_repeat_last: bool = False) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     if has_active_workout:
         b.button(text="▶️ ПРОДОЛЖИТЬ ТРЕНИРОВКУ", callback_data="menu:resume_workout")
+        adjust = (1, 2, 2, 2)
     else:
         b.button(text="🏋️ НАЧАТЬ ТРЕНИРОВКУ", callback_data="menu:start_workout")
+        # A one-tap re-run of the last session — the most common pattern for
+        # people who train A/B without keeping a saved program.
+        if can_repeat_last:
+            b.button(text="🔁 Повторить прошлую", callback_data="menu:repeat_last")
+            adjust = (1, 1, 2, 2, 2)
+        else:
+            adjust = (1, 2, 2, 2)
     b.button(text="📈 Прогресс", callback_data="menu:progress")
     b.button(text="📚 История", callback_data="menu:history")
     b.button(text="⚙️ Упражнения", callback_data="menu:exercises")
     b.button(text="🗂 Программы", callback_data="rt:manage")
     b.button(text="⚖️ Дневник веса", callback_data="menu:bodyweight")
     b.button(text="🔧 Настройки", callback_data="menu:settings")
-    b.adjust(1, 2, 2, 2)
+    b.adjust(*adjust)
     return b.as_markup()
 
 
