@@ -349,6 +349,78 @@ async def test_ask_passes_user_question_and_history(fresh_db, user_id, monkeypat
     assert messages[1:] == [*history, {"role": "user", "content": "новый вопрос"}]
 
 
+# ---------- streaming (on_delta) ----------
+
+
+def _chunk(content=None, tool_calls=None, usage=None):
+    choices = [] if content is None and tool_calls is None else [
+        SimpleNamespace(delta=SimpleNamespace(content=content, tool_calls=tool_calls))
+    ]
+    return SimpleNamespace(choices=choices, usage=usage)
+
+
+class _FakeStream:
+    def __init__(self, chunks):
+        self._chunks = chunks
+
+    def __aiter__(self):
+        async def gen():
+            for c in self._chunks:
+                yield c
+        return gen()
+
+
+def _stream_delta_tool(index, name="", args="", call_id=None):
+    return SimpleNamespace(
+        index=index, id=call_id,
+        function=SimpleNamespace(name=name, arguments=args),
+    )
+
+
+async def test_streaming_forwards_deltas_and_returns_full_text(fresh_db, user_id, monkeypatch):
+    stream = _FakeStream([_chunk(content="Ты "), _chunk(content="молодец"), _chunk(content="!")])
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=AsyncMock(return_value=stream)))
+    )
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+
+    seen = []
+
+    async def on_delta(acc):
+        seen.append(acc)
+
+    answer = await ai_trainer._ask_plain(user_id, "как я?", history=[], on_delta=on_delta)
+
+    assert answer == "Ты молодец!"
+    assert seen == ["Ты ", "Ты молодец", "Ты молодец!"]  # accumulated, live
+    assert client.chat.completions.create.await_args.kwargs["stream"] is True
+
+
+async def test_streaming_handles_a_tool_round_then_final_answer(fresh_db, user_id, monkeypatch):
+    await _seed_bench_history(fresh_db, user_id, 1)
+    tool_stream = _FakeStream([
+        _chunk(tool_calls=[_stream_delta_tool(0, name="get_training_overview", args="{}", call_id="c1")]),
+    ])
+    final_stream = _FakeStream([_chunk(content="Отлично идёшь!")])
+    client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(create=AsyncMock(side_effect=[tool_stream, final_stream]))
+        )
+    )
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+
+    seen = []
+
+    async def on_delta(acc):
+        seen.append(acc)
+
+    answer = await ai_trainer._ask_plain(user_id, "как я?", history=[], on_delta=on_delta)
+
+    assert answer == "Отлично идёшь!"
+    assert seen == ["Отлично идёшь!"]  # only the final answer streams, not the tool round
+    assert client.chat.completions.create.await_count == 2
+
+
 # ---------- search step (_web_search_findings, server-side-only web/X search) ----------
 #
 # _web_search_findings never mixes our DB function-tools with the multi-agent

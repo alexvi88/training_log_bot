@@ -29,6 +29,7 @@ import asyncio
 import datetime as dt
 import json
 import logging
+from types import SimpleNamespace
 from typing import Any, Awaitable, Callable, Optional
 
 from openai import AsyncOpenAI
@@ -589,6 +590,12 @@ TOOLS: list[dict[str, Any]] = [
 # случайными фразами-заполнителями. Может не приходить (например, в тестах).
 StatusCallback = Optional[Callable[[str], Awaitable[None]]]
 
+# Опциональный колбэк потоковой генерации: получает накопленный текст ответа по
+# мере поступления токенов, чтобы вызывающая сторона печатала ответ вживую вместо
+# ожидания целиком (см. handlers/ai_trainer.py). Только для финального ответа —
+# в раундах с tool-call'ами не дёргается.
+DeltaCallback = Optional[Callable[[str], Awaitable[None]]]
+
 # Человеко-читаемый статус для каждого инструмента — во что реально идёт вызов,
 # а не абстрактное "думаю".
 TOOL_STATUS_TEXTS: dict[str, str] = {
@@ -817,6 +824,7 @@ async def ask(
     history: list[dict[str, Any]],
     image_data_url: Optional[str] = None,
     on_status: StatusCallback = None,
+    on_delta: DeltaCallback = None,
 ) -> str:
     """Один вопрос пользователя → готовый текст ответа.
 
@@ -854,7 +862,7 @@ async def ask(
         "AI trainer question from user %s: %r (web search used: %s)",
         user_id, question, bool(search_context),
     )
-    return await _ask_plain(user_id, question, history, image_data_url, search_context, on_status)
+    return await _ask_plain(user_id, question, history, image_data_url, search_context, on_status, on_delta)
 
 
 def _plain_user_content(question: str, image_data_url: Optional[str]) -> Any:
@@ -866,6 +874,61 @@ def _plain_user_content(question: str, image_data_url: Optional[str]) -> Any:
     ]
 
 
+async def _completion_round(
+    client: AsyncOpenAI,
+    messages: list[dict[str, Any]],
+    user_id: Optional[int],
+    on_delta: DeltaCallback,
+) -> tuple[str, list[Any]]:
+    """One chat-completion turn. Returns (content, tool_calls).
+
+    When `on_delta` is set, the turn is streamed and content deltas are pushed to
+    it live — but only until a tool call appears in the stream (a tool round has
+    no user-facing answer to type out). Cost is logged either way.
+    """
+    if on_delta is None:
+        response = await client.chat.completions.create(
+            model=config.GROK_MODEL, max_tokens=2048, tools=TOOLS, messages=messages,
+        )
+        await _log_llm_cost(user_id, config.GROK_MODEL, getattr(response, "usage", None))
+        m = response.choices[0].message
+        return (m.content or ""), list(m.tool_calls or [])
+
+    stream = await client.chat.completions.create(
+        model=config.GROK_MODEL, max_tokens=2048, tools=TOOLS, messages=messages,
+        stream=True, stream_options={"include_usage": True},
+    )
+    parts: list[str] = []
+    frags: dict[int, dict[str, str]] = {}
+    saw_tool = False
+    usage = None
+    async for chunk in stream:
+        if getattr(chunk, "usage", None):
+            usage = chunk.usage
+        if not chunk.choices:
+            continue
+        delta = chunk.choices[0].delta
+        for tc in getattr(delta, "tool_calls", None) or []:
+            saw_tool = True
+            f = frags.setdefault(tc.index, {"id": "", "name": "", "args": ""})
+            if tc.id:
+                f["id"] = tc.id
+            if tc.function and tc.function.name:
+                f["name"] += tc.function.name
+            if tc.function and tc.function.arguments:
+                f["args"] += tc.function.arguments
+        if getattr(delta, "content", None):
+            parts.append(delta.content)
+            if not saw_tool:
+                await on_delta("".join(parts))
+    await _log_llm_cost(user_id, config.GROK_MODEL, usage)
+    tool_calls = [
+        SimpleNamespace(id=f["id"], function=SimpleNamespace(name=f["name"], arguments=f["args"]))
+        for _, f in sorted(frags.items())
+    ]
+    return "".join(parts), tool_calls
+
+
 async def _ask_plain(
     user_id: int,
     question: str,
@@ -873,6 +936,7 @@ async def _ask_plain(
     image_data_url: Optional[str] = None,
     search_context: Optional[str] = None,
     on_status: StatusCallback = None,
+    on_delta: DeltaCallback = None,
 ) -> str:
     client = _get_client()
     messages: list[dict[str, Any]] = [
@@ -888,49 +952,42 @@ async def _ask_plain(
         )
     messages.append({"role": "user", "content": _plain_user_content(question, image_data_url)})
 
-    message = None
+    content = ""
     for _ in range(MAX_TOOL_ROUNDS + 1):
-        response = await client.chat.completions.create(
-            model=config.GROK_MODEL,
-            max_tokens=2048,
-            tools=TOOLS,
-            messages=messages,
-        )
-        await _log_llm_cost(user_id, config.GROK_MODEL, getattr(response, "usage", None))
-        message = response.choices[0].message
-        if not message.tool_calls:
+        content, tool_calls = await _completion_round(client, messages, user_id, on_delta)
+        if not tool_calls:
             break
         if on_status:
             status_text = TOOL_STATUS_TEXTS.get(
-                message.tool_calls[0].function.name, "🔍 копаюсь в данных..."
+                tool_calls[0].function.name, "🔍 копаюсь в данных..."
             )
             await on_status(status_text)
         messages.append(
             {
                 "role": "assistant",
-                "content": message.content,
+                "content": content,
                 "tool_calls": [
                     {
                         "id": tc.id,
                         "type": "function",
                         "function": {"name": tc.function.name, "arguments": tc.function.arguments},
                     }
-                    for tc in message.tool_calls
+                    for tc in tool_calls
                 ],
             }
         )
-        for tc in message.tool_calls:
+        for tc in tool_calls:
             try:
                 args = json.loads(tc.function.arguments or "{}")
-                content = await execute_tool(user_id, tc.function.name, args)
+                tool_content = await execute_tool(user_id, tc.function.name, args)
             except Exception:
                 logger.exception("AI trainer tool %s failed", tc.function.name)
-                content = json.dumps(
+                tool_content = json.dumps(
                     {"error": "tool failed, answer from what you already have"}
                 )
-            messages.append({"role": "tool", "tool_call_id": tc.id, "content": content})
+            messages.append({"role": "tool", "tool_call_id": tc.id, "content": tool_content})
 
-    text = (message.content or "").strip() if message else ""
+    text = (content or "").strip()
     return text or "Не получилось сформулировать ответ, попробуй переспросить."
 
 
