@@ -8,6 +8,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
 
+import ai_trainer
 import keyboards
 from fsm import WorkoutFlow
 from handlers import workout
@@ -164,6 +165,50 @@ async def test_ordinary_set_is_deleted_without_reaction(fresh_db, user_id):
 
     message.bot.set_message_reaction.assert_not_awaited()
     message.delete.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_voice_logs_a_set(fresh_db, user_id, monkeypatch):
+    db = fresh_db
+    state, ex_id, block_id = await _setup_logging(db, user_id)
+
+    monkeypatch.setattr(ai_trainer, "is_voice_configured", lambda: True)
+
+    async def _fake_transcribe(buf, uid):
+        return "сто на восемь"
+
+    monkeypatch.setattr(ai_trainer, "transcribe_voice", _fake_transcribe)
+
+    message = _make_message(user_id, text=None)
+    message.voice = SimpleNamespace(file_id="v1", duration=2, file_size=1000)
+    message.bot.download = AsyncMock(return_value=SimpleNamespace(name=""))
+
+    await workout.log_set_voice(message, state)
+
+    sets = await db.list_sets_for_block(block_id)
+    assert (sets[-1]["weight"], sets[-1]["reps"]) == (100.0, 8)
+    assert "Записал" in message.reply.await_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_voice_unparseable_asks_to_retry(fresh_db, user_id, monkeypatch):
+    db = fresh_db
+    state, ex_id, block_id = await _setup_logging(db, user_id)
+    monkeypatch.setattr(ai_trainer, "is_voice_configured", lambda: True)
+
+    async def _fake_transcribe(buf, uid):
+        return "давай запиши что-нибудь"
+
+    monkeypatch.setattr(ai_trainer, "transcribe_voice", _fake_transcribe)
+
+    message = _make_message(user_id, text=None)
+    message.voice = SimpleNamespace(file_id="v1", duration=2, file_size=1000)
+    message.bot.download = AsyncMock(return_value=SimpleNamespace(name=""))
+
+    await workout.log_set_voice(message, state)
+
+    assert len(await db.list_sets_for_block(block_id)) == 1  # nothing new logged
+    assert "Не понял" in message.reply.await_args.args[0]
 
 
 def test_logging_keyboard_has_repeat_and_note_when_sets_present():

@@ -32,6 +32,7 @@ import formatting
 import keyboards
 import ui
 import view_builder
+import voice_parse
 from fsm import WorkoutFlow
 from parser import ParseError, parse_ru_date, parse_sets_line
 
@@ -893,7 +894,7 @@ async def live_note_cancel(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(StateFilter(WorkoutFlow.logging_exercise_note))
+@router.message(StateFilter(WorkoutFlow.logging_exercise_note), F.text)
 async def live_note_entered(message: Message, state: FSMContext):
     data = await state.get_data()
     active = data.get("active_exercise_id")
@@ -904,15 +905,9 @@ async def live_note_entered(message: Message, state: FSMContext):
     await _render_logging_screen(message.bot, state, user)
 
 
-@router.message(StateFilter(WorkoutFlow.logging_set))
-async def log_set_text(message: Message, state: FSMContext):
-    data = await state.get_data()
-    try:
-        parsed = parse_sets_line(message.text)
-    except ParseError as e:
-        await message.reply(e.message)
-        return
-    active = data.get("active_exercise_id")
+async def _store_parsed_sets(state: FSMContext, data: dict, active: int, parsed) -> list[tuple[float, int]]:
+    """Write the parsed sets to the active block, carrying weight forward for bare
+    reps, and update last_by_exercise. Returns the (weight, reps) actually logged."""
     block_id = (data.get("open_blocks") or {}).get(active)
     last_by = dict(data.get("last_by_exercise") or {})
     prev_weight, _ = last_by.get(active) or (0.0, 0)
@@ -924,6 +919,19 @@ async def log_set_text(message: Message, state: FSMContext):
         prev_weight = weight
     last_by[active] = (prev_weight, parsed[-1].reps)
     await state.update_data(last_by_exercise=last_by)
+    return logged
+
+
+@router.message(StateFilter(WorkoutFlow.logging_set), F.text)
+async def log_set_text(message: Message, state: FSMContext):
+    data = await state.get_data()
+    try:
+        parsed = parse_sets_line(message.text)
+    except ParseError as e:
+        await message.reply(e.message)
+        return
+    active = data.get("active_exercise_id")
+    logged = await _store_parsed_sets(state, data, active, parsed)
 
     user = await db.get_user(message.from_user.id)
     # A record-setting message keeps its place in the chat with a 🔥 reaction —
@@ -938,6 +946,47 @@ async def log_set_text(message: Message, state: FSMContext):
             )
     else:
         await _delete_message(message)
+    await _render_logging_screen(message.bot, state, user)
+
+
+@router.message(StateFilter(WorkoutFlow.logging_set), F.voice)
+async def log_set_voice(message: Message, state: FSMContext):
+    """Log a set by voice ("сто на восемь") — hands are chalky, typing is slow.
+    Reuses the AI-trainer's transcription, then the same number parser as text."""
+    if not ai_trainer.is_voice_configured():
+        await message.reply("Голосовой ввод пока не настроен, напиши подход текстом.")
+        return
+    try:
+        buf = await message.bot.download(message.voice)
+        buf.name = "voice.ogg"
+        transcript = await ai_trainer.transcribe_voice(buf, message.from_user.id)
+    except Exception:
+        logger.exception("Voice set transcription failed for user %s", message.from_user.id)
+        await message.reply("⚠️ Не разобрал голосовое, попробуй ещё раз или напиши текстом.")
+        return
+
+    line = voice_parse.transcript_to_sets_line(transcript or "")
+    try:
+        parsed = parse_sets_line(line) if line else None
+    except ParseError:
+        parsed = None
+    if not parsed:
+        heard = f" (услышал: «{escape(transcript)}»)" if transcript else ""
+        await message.reply(f"Не понял вес и повторы из голосового{heard}. Скажи, например, «сто на восемь».")
+        return
+
+    data = await state.get_data()
+    active = data.get("active_exercise_id")
+    logged = await _store_parsed_sets(state, data, active, parsed)
+    user = await db.get_user(message.from_user.id)
+    sets_str = ", ".join(formatting.format_set(w, r) for w, r in logged)
+    await message.reply(f"🎙 Записал: {sets_str}")
+    if await _sets_beat_record(active, data["workout_id"], logged, user["e1rm_formula"]):
+        with suppress(TelegramBadRequest):
+            await message.bot.set_message_reaction(
+                chat_id=message.chat.id, message_id=message.message_id,
+                reaction=[ReactionTypeEmoji(emoji="🔥")],
+            )
     await _render_logging_screen(message.bot, state, user)
 
 
