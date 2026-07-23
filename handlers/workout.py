@@ -21,6 +21,7 @@ from aiogram.types import (
     ReactionTypeEmoji,
 )
 
+import achievements
 import ai_trainer
 import analytics
 import charts
@@ -227,6 +228,34 @@ async def _sets_beat_record(
         if analytics.e1rm(weight, reps, formula) > prior.max_e1rm:
             return True
     return False
+
+
+async def _evaluate_achievements(
+    user_id: int, workout_id: int, started_at: dt.datetime, duration_seconds: float | None
+) -> list[str]:
+    """Award any achievements the user just unlocked and return the new codes.
+
+    Called after the workout is marked finished, so lifetime aggregates already
+    include it. Never raises into the finish flow — a badge is a bonus, not a
+    reason to break saving the workout.
+    """
+    try:
+        ctx = achievements.AchievementContext(
+            total_workouts=await db.count_workouts(user_id),
+            lifetime_tonnage_kg=(await db.hall_of_fame_aggregates(user_id))["tonnage"],
+            best_week_streak=analytics.max_week_streak(
+                [dt.date.fromisoformat(d) for d in await db.list_finished_workout_dates(user_id)]
+            ),
+            max_weight_kg=await db.max_weight_ever(user_id),
+            distinct_exercises=await db.count_distinct_exercises_used(user_id),
+            workout_start_hour=started_at.hour,
+            workout_date=started_at.date(),
+            workout_duration_seconds=duration_seconds,
+        )
+        return await db.award_achievements(user_id, achievements.earned_codes(ctx))
+    except Exception:
+        logger.exception("Achievement evaluation failed for workout %s", workout_id)
+        return []
 
 
 async def _last_session_sets(ex_id: int) -> list[tuple[float, int, float | None]]:
@@ -1348,6 +1377,12 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
         total_finished = await db.count_workouts(user_id)
         if analytics.is_workout_milestone(total_finished):
             full_text += "\n\n" + formatting.format_milestone_line(total_finished)
+
+    new_badges = await _evaluate_achievements(user_id, workout_id, started_at, duration_seconds)
+    achievement_line = formatting.format_new_achievements(new_badges)
+    if achievement_line:
+        full_text += "\n\n" + achievement_line
+
     if highlights:
         full_text += f"\n\n{formatting.DIVIDER}\n\n{highlights}"
     if is_backfill:

@@ -62,6 +62,65 @@ async def hist_to_menu(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+async def _top_lifts(user_id: int, formula: str, limit: int = 8) -> list[tuple[str, float, int, float]]:
+    """Best (heaviest-e1RM) working set per exercise, strongest first — for the
+    Hall of Fame. Bodyweight-only exercises (no external load) are skipped."""
+    lifts: list[tuple[str, float, int, float]] = []
+    for ex in await db.list_user_exercises(user_id):
+        rows = await db.list_sets_for_exercise(ex["id"])
+        if not rows:
+            continue
+        set_rows = [analytics.SetRow(r["weight"], r["reps"], r["workout_id"], r["started_at"]) for r in rows]
+        sessions = analytics.group_sets_by_session(set_rows)
+        for s in sessions:
+            s.formula = formula
+        pr = analytics.compute_personal_records(sessions)
+        if pr.max_e1rm > 0 and pr.best_e1rm_weight > 0:
+            lifts.append((ex["display_name"], pr.best_e1rm_weight, pr.best_e1rm_reps, pr.max_e1rm))
+    lifts.sort(key=lambda t: t[3], reverse=True)
+    return lifts[:limit]
+
+
+async def build_hall_of_fame_text(user_id: int) -> str:
+    user = await db.get_user(user_id)
+    formula = user["e1rm_formula"] if user else config.DEFAULT_E1RM_FORMULA
+    unit = user["unit"] if user else "kg"
+    total_workouts = await db.count_workouts(user_id)
+    agg = await db.hall_of_fame_aggregates(user_id)
+    dates = [dt.date.fromisoformat(d) for d in await db.list_finished_workout_dates(user_id)]
+    best_streak = analytics.max_week_streak(dates)
+    top = await _top_lifts(user_id, formula)
+    equivalent = formatting.format_tonnage_equivalent(agg["tonnage"], seed=user_id)
+    return formatting.build_hall_of_fame(
+        total_workouts=total_workouts,
+        tonnage_kg=agg["tonnage"],
+        tonnage_equivalent=equivalent,
+        best_week_streak=best_streak,
+        longest_workout_seconds=agg["longest_workout_seconds"],
+        top_lifts=top,
+        unit=unit,
+    )
+
+
+@router.callback_query(F.data == "menu:hall")
+async def menu_hall_of_fame(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    text = await build_hall_of_fame_text(callback.from_user.id)
+    await ui.safe_edit(callback, text, reply_markup=keyboards.hall_of_fame_keyboard(), parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(F.data == "menu:achievements")
+async def menu_achievements(callback: CallbackQuery, state: FSMContext):
+    earned = await db.list_achievement_codes(callback.from_user.id)
+    text = formatting.build_achievements_screen(earned)
+    kb = InlineKeyboardBuilder()
+    kb.button(text="⬅️ К залу славы", callback_data="menu:hall")
+    kb.adjust(1)
+    await ui.safe_edit(callback, text, reply_markup=kb.as_markup(), parse_mode="HTML")
+    await callback.answer()
+
+
 async def show_history_item(callback: CallbackQuery, workout_id: int) -> bool:
     workout = await db.get_workout(workout_id)
     if workout is None or workout["user_id"] != callback.from_user.id:

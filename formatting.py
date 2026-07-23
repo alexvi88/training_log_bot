@@ -333,6 +333,82 @@ def build_exercise_highlights(groups: list[tuple[str, list[str], str | None]]) -
     return "\n\n".join(blocks)
 
 
+def format_new_achievements(new_codes: list[str]) -> str | None:
+    """Celebratory block for badges earned right now, shown on the completion card."""
+    import achievements
+
+    earned = [achievements.BY_CODE[c] for c in new_codes if c in achievements.BY_CODE]
+    if not earned:
+        return None
+    header = "🏅 <b>Новое достижение!</b>" if len(earned) == 1 else "🏅 <b>Новые достижения!</b>"
+    lines = [header] + [f"{a.emoji} <b>{escape(a.title)}</b> — {escape(a.description)}" for a in earned]
+    return "\n".join(lines)
+
+
+def build_achievements_screen(earned: set[str]) -> str:
+    """The full 🏅 badge grid: everything unlocked, then everything still locked."""
+    import achievements
+
+    got = [a for a in achievements.CATALOG if a.code in earned]
+    locked = [a for a in achievements.CATALOG if a.code not in earned]
+    lines = [f"🏅 <b>ДОСТИЖЕНИЯ</b> — {len(got)}/{len(achievements.CATALOG)}", ""]
+    for a in got:
+        lines.append(f"{a.emoji} <b>{escape(a.title)}</b> — {escape(a.description)}")
+    if locked:
+        lines.append("")
+        lines.append("<b>Ещё не открыты:</b>")
+        for a in locked:
+            lines.append(f"🔒 {escape(a.title)} — {escape(a.description)}")
+    return "\n".join(lines)
+
+
+def format_duration_hm(seconds: float) -> str:
+    """Compact h/m for the Hall of Fame longest-workout line."""
+    minutes = int(seconds // 60)
+    h, m = divmod(minutes, 60)
+    if h:
+        return f"{h} ч {m} мин" if m else f"{h} ч"
+    return f"{m} мин"
+
+
+def build_hall_of_fame(
+    total_workouts: int,
+    tonnage_kg: float,
+    tonnage_equivalent: str | None,
+    best_week_streak: int,
+    longest_workout_seconds: float,
+    top_lifts: list[tuple[str, float, int, float]],  # (name, weight, reps, e1rm)
+    unit: str = "kg",
+) -> str:
+    """The '🏆 Зал славы' screen: lifetime totals plus the user's best lifts."""
+    u = UNIT_LABELS.get(unit, "кг")
+    if total_workouts == 0:
+        return "🏆 <b>Зал славы</b>\n\nПока пусто — заверши первую тренировку, и здесь появятся твои рекорды."
+
+    lines = ["🏆 <b>ЗАЛ СЛАВЫ</b>", ""]
+    w = plural_ru(total_workouts, ("тренировка", "тренировки", "тренировок"))
+    lines.append(f"🗓 Всего тренировок: <b>{total_workouts}</b> {w}")
+
+    tonnage_str = f"{tonnage_kg / 1000:.1f} т" if tonnage_kg >= 1000 else f"{tonnage_kg:.0f} {u}"
+    lines.append(f"🏋️ Поднято за всё время: <b>{tonnage_str}</b>")
+    if tonnage_equivalent:
+        lines.append(f"   <i>{tonnage_equivalent}</i>")
+
+    if best_week_streak >= 2:
+        wk = plural_ru(best_week_streak, ("неделя", "недели", "недель"))
+        lines.append(f"🔥 Лучшая серия: <b>{best_week_streak}</b> {wk} подряд")
+    if longest_workout_seconds > 0:
+        lines.append(f"⏱ Самая длинная тренировка: <b>{format_duration_hm(longest_workout_seconds)}</b>")
+
+    if top_lifts:
+        lines.append("")
+        lines.append("<b>Личные рекорды:</b>")
+        for name, weight, reps, e1 in top_lifts:
+            lines.append(f"• {escape(name)} — {format_set(weight, reps)} · e1RM {e1:.0f} {u}")
+
+    return "\n".join(lines)
+
+
 def format_progress_screen(
     exercise_name: str,
     sessions: list,  # list[analytics.SessionStats], ascending by date

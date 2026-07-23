@@ -191,6 +191,15 @@ CREATE TABLE IF NOT EXISTS cost_events (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_cost_events_created ON cost_events (created_at);
+
+CREATE TABLE IF NOT EXISTS achievements (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    code TEXT NOT NULL,
+    earned_at TEXT NOT NULL,
+    UNIQUE (user_id, code)
+);
+CREATE INDEX IF NOT EXISTS idx_achievements_user ON achievements (user_id);
 """
 
 _conn: Optional[aiosqlite.Connection] = None
@@ -943,6 +952,78 @@ async def list_finished_workout_dates(user_id: int) -> list[str]:
         (user_id,),
     )
     return [r["d"] for r in await cur.fetchall()]
+
+
+async def max_weight_ever(user_id: int) -> float:
+    """Heaviest single set (any exercise) across finished workouts — for weight-club
+    achievements."""
+    cur = await conn().execute(
+        "SELECT COALESCE(MAX(s.weight), 0) AS mx FROM sets s "
+        "JOIN workout_blocks b ON b.id = s.block_id "
+        "JOIN workouts w ON w.id = b.workout_id "
+        "WHERE w.user_id = ? AND w.status = 'finished'",
+        (user_id,),
+    )
+    return (await cur.fetchone())["mx"] or 0.0
+
+
+async def count_distinct_exercises_used(user_id: int) -> int:
+    cur = await conn().execute(
+        "SELECT COUNT(DISTINCT s.exercise_id) AS c FROM sets s "
+        "JOIN workout_blocks b ON b.id = s.block_id "
+        "JOIN workouts w ON w.id = b.workout_id "
+        "WHERE w.user_id = ? AND w.status = 'finished'",
+        (user_id,),
+    )
+    return (await cur.fetchone())["c"] or 0
+
+
+async def list_achievement_codes(user_id: int) -> set[str]:
+    cur = await conn().execute("SELECT code FROM achievements WHERE user_id = ?", (user_id,))
+    return {r["code"] for r in await cur.fetchall()}
+
+
+async def award_achievements(user_id: int, codes: set[str]) -> list[str]:
+    """Record any of `codes` the user doesn't already hold; return the newly added
+    ones (in a stable sorted order) so the caller can celebrate just those."""
+    if not codes:
+        return []
+    existing = await list_achievement_codes(user_id)
+    new = sorted(codes - existing)
+    if not new:
+        return []
+    async with _write_lock:
+        await conn().executemany(
+            "INSERT OR IGNORE INTO achievements (user_id, code, earned_at) VALUES (?, ?, ?)",
+            [(user_id, code, now_iso()) for code in new],
+        )
+        await conn().commit()
+    return new
+
+
+async def hall_of_fame_aggregates(user_id: int) -> dict[str, float]:
+    """Lifetime totals for the Hall of Fame: tonnage moved, total working sets,
+    and the longest single finished workout (seconds). All over finished workouts."""
+    cur = await conn().execute(
+        "SELECT COALESCE(SUM(s.weight * s.reps), 0) AS tonnage, COUNT(s.id) AS sets_count "
+        "FROM sets s "
+        "JOIN workout_blocks b ON b.id = s.block_id "
+        "JOIN workouts w ON w.id = b.workout_id "
+        "WHERE w.user_id = ? AND w.status = 'finished'",
+        (user_id,),
+    )
+    row = await cur.fetchone()
+    cur2 = await conn().execute(
+        "SELECT MAX((julianday(finished_at) - julianday(started_at)) * 86400.0) AS longest "
+        "FROM workouts WHERE user_id = ? AND status = 'finished' AND finished_at IS NOT NULL",
+        (user_id,),
+    )
+    longest = (await cur2.fetchone())["longest"]
+    return {
+        "tonnage": row["tonnage"] or 0.0,
+        "sets_count": row["sets_count"] or 0,
+        "longest_workout_seconds": longest or 0.0,
+    }
 
 
 async def weekly_volume_by_group(
