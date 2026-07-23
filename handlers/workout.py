@@ -18,8 +18,10 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     InputMediaPhoto,
     Message,
+    ReactionTypeEmoji,
 )
 
+import achievements
 import ai_trainer
 import analytics
 import charts
@@ -29,10 +31,12 @@ import exercise_descriptions
 import exercise_media
 import formatting
 import keyboards
+import timeutil
 import ui
 import view_builder
+import voice_parse
 from fsm import WorkoutFlow
-from parser import ParseError, parse_ru_date, parse_single_token
+from parser import ParseError, parse_ru_date, parse_sets_line
 
 router = Router(name="workout")
 
@@ -163,10 +167,12 @@ def _logging_hint(
     unit: str = "kg",
     show_progression: bool = True,
     today_sets: list[tuple[float, int]] | None = None,
+    note: str | None = None,
 ) -> str:
     base = "Вес и повторы через пробел, например «100 8»"
     if has_sets:
         base += " (можно только повторы — вес возьмётся с последнего подхода)"
+    note_line = f"📝 <i>{escape(note)}</i>\n" if note else ""
     if last_session:
         sets_str = ", ".join(formatting.format_set(w, r, rpe) for w, r, rpe in last_session)
         line = f"💡 В прошлый раз: {sets_str}."
@@ -179,8 +185,78 @@ def _logging_hint(
                     for w, r in (today_sets or [])
                 )
                 line += f" {formatting.format_progression_hint(suggestion, unit, achieved)}"
-        return f"<i>{line}</i>\n\n{base}"
+        return f"{note_line}<i>{line}</i>\n\n{base}"
+    if note_line:
+        return f"{note_line}\n{base}"
     return base
+
+
+async def _sets_beat_record(
+    ex_id: int, workout_id: int, logged: list[tuple[float, int]], formula: str
+) -> bool:
+    """True if any of the sets just logged is a genuine all-time record for this
+    exercise — a new best e1RM or a new heaviest weight (or, for bodyweight moves,
+    the most reps in a set).
+
+    Deliberately stricter than the completion-card highlights: reps at a
+    never-before-used weight are *not* treated as a record here, or almost every
+    set at a fresh weight would trigger the 🔥. Compared against every prior
+    finished session, so the current workout's own earlier sets are excluded.
+    """
+    workout = await db.get_workout(workout_id)
+    if workout is None:
+        return False
+    started = workout["started_at"]
+    history_rows = await db.list_sets_for_exercise(ex_id, exclude_workout_id=workout_id)
+    history_set_rows = [
+        analytics.SetRow(r["weight"], r["reps"], r["workout_id"], r["started_at"])
+        for r in history_rows
+        if r["started_at"] < started
+    ]
+    prior_sessions = analytics.group_sets_by_session(history_set_rows)
+    for s in prior_sessions:
+        s.formula = formula
+    if not prior_sessions:
+        return False  # first-ever session with this exercise — nothing to beat yet
+    prior = analytics.compute_personal_records(prior_sessions)
+    is_bodyweight = all(w == 0 for w, _ in logged)
+    if is_bodyweight:
+        prior_best_reps = max(prior.max_reps_at_weight.values(), default=0)
+        return any(r > prior_best_reps for w, r in logged)
+    for weight, reps in logged:
+        if weight > prior.max_weight:
+            return True
+        if analytics.e1rm(weight, reps, formula) > prior.max_e1rm:
+            return True
+    return False
+
+
+async def _evaluate_achievements(
+    user_id: int, workout_id: int, started_at: dt.datetime, duration_seconds: float | None
+) -> list[str]:
+    """Award any achievements the user just unlocked and return the new codes.
+
+    Called after the workout is marked finished, so lifetime aggregates already
+    include it. Never raises into the finish flow — a badge is a bonus, not a
+    reason to break saving the workout.
+    """
+    try:
+        ctx = achievements.AchievementContext(
+            total_workouts=await db.count_workouts(user_id),
+            lifetime_tonnage_kg=(await db.hall_of_fame_aggregates(user_id))["tonnage"],
+            best_week_streak=analytics.max_week_streak(
+                [dt.date.fromisoformat(d) for d in await db.list_finished_workout_dates(user_id)]
+            ),
+            max_weight_kg=await db.max_weight_ever(user_id),
+            distinct_exercises=await db.count_distinct_exercises_used(user_id),
+            workout_start_hour=started_at.hour,
+            workout_date=started_at.date(),
+            workout_duration_seconds=duration_seconds,
+        )
+        return await db.award_achievements(user_id, achievements.earned_codes(ctx))
+    except Exception:
+        logger.exception("Achievement evaluation failed for workout %s", workout_id)
+        return []
 
 
 async def _last_session_sets(ex_id: int) -> list[tuple[float, int, float | None]]:
@@ -199,9 +275,12 @@ async def _render_logging_screen(bot, state: FSMContext, user):
     last_session_sets = data.get("last_session_sets") or {}
 
     names: dict[int, str] = {}
+    active_note: str | None = None
     for ex_id in open_ids:
         ex = await db.get_exercise(ex_id)
         names[ex_id] = ex["display_name"]
+        if ex_id == active:
+            active_note = ex["notes"]
 
     open_items = [(ex_id, names[ex_id]) for ex_id in open_ids]
     active_block_id = (data.get("open_blocks") or {}).get(active)
@@ -214,6 +293,7 @@ async def _render_logging_screen(bot, state: FSMContext, user):
         user["unit"],
         bool(user["progression_hint_enabled"]),
         today_sets,
+        note=active_note,
     )
     kb = keyboards.logging_keyboard(open_items, active, has_sets)
     await _refresh_live(bot, state, user, data["workout_id"], hint, kb)
@@ -249,7 +329,7 @@ async def _menu_view(user_id: int) -> tuple[str, bytes | None]:
     """Greeting, plus a year heatmap image (with the streak/this-week/30-day
     dashboard stats drawn into it) once the user has any finished workouts.
     """
-    today = dt.date.today()
+    today = timeutil.user_today(await db.get_user(user_id))
     dates = [dt.date.fromisoformat(d) for d in await db.list_finished_workout_dates(user_id)]
     if not dates:
         return _ONBOARDING, None
@@ -272,13 +352,18 @@ async def _send_menu(message: Message, text: str, png: bytes | None, keyboard) -
     )
 
 
+async def _main_menu_kb(user_id: int, active) -> InlineKeyboardMarkup:
+    can_repeat = not active and await db.count_workouts(user_id) > 0
+    return keyboards.main_menu(bool(active), can_repeat_last=can_repeat)
+
+
 @router.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
     await _ensure_user(message.from_user.id, message.from_user.username)
     active = await db.get_active_workout(message.from_user.id)
     text, png = await _menu_view(message.from_user.id)
-    await _send_menu(message, text, png, keyboards.main_menu(bool(active)))
+    await _send_menu(message, text, png, await _main_menu_kb(message.from_user.id, active))
     if active:
         started = dt.datetime.fromisoformat(active["started_at"])
         if (dt.datetime.now() - started).total_seconds() > config.STALE_WORKOUT_HOURS * 3600:
@@ -346,7 +431,7 @@ async def _show_main_menu(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     active = await db.get_active_workout(callback.from_user.id)
     text, png = await _menu_view(callback.from_user.id)
-    kb = keyboards.main_menu(bool(active))
+    kb = await _main_menu_kb(callback.from_user.id, active)
     if png is None:
         await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML")
     else:
@@ -395,6 +480,31 @@ async def start_workout(callback: CallbackQuery, state: FSMContext):
     )
     await state.set_state(WorkoutFlow.picking_group)
     await _picker_screen_groups(callback, state, show_program_button=True)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "menu:repeat_last")
+async def repeat_last_workout(callback: CallbackQuery, state: FSMContext):
+    """Start a fresh workout pre-loaded with the exercises (and supersets) of the
+    last finished one — the same planned-blocks machinery a saved program uses."""
+    await _ensure_user(callback.from_user.id, callback.from_user.username)
+    active = await db.get_active_workout(callback.from_user.id)
+    if active:
+        await _enter_live(callback, state, active["id"])
+        return
+    plan = await db.last_finished_workout_plan(callback.from_user.id)
+    if not plan:
+        await callback.answer("Нет прошлой тренировки для повтора")
+        await _show_main_menu(callback, state)
+        return
+    workout_id = await db.create_workout(callback.from_user.id)
+    await _delete_message(callback.message)
+    sent = await callback.message.answer("🔁 Повторяем прошлую тренировку")
+    await state.update_data(
+        workout_id=workout_id, live_chat_id=sent.chat.id, live_message_id=sent.message_id,
+        last_by_exercise={}, planned_blocks=plan,
+    )
+    await _load_next_planned_block(callback, state)
     await callback.answer()
 
 
@@ -475,7 +585,7 @@ async def _picker_screen_groups(callback: CallbackQuery, state: FSMContext, show
     data = await state.get_data()
     user = await db.get_user(callback.from_user.id)
     groups = await db.list_muscle_groups(callback.from_user.id)
-    hint = "Выбери группу мышц:"
+    hint = "Выбери группу мышц или напиши название упражнения для поиска:"
     open_ids = data.get("open_exercises") or []
     if open_ids:
         names = [escape((await db.get_exercise(eid))["display_name"]) for eid in open_ids]
@@ -566,9 +676,11 @@ async def pick_existing_exercise(callback: CallbackQuery, state: FSMContext):
     await _on_exercise_chosen(callback, state, ex_id)
 
 
-@router.message(StateFilter(WorkoutFlow.picking_exercise))
+@router.message(StateFilter(WorkoutFlow.picking_group, WorkoutFlow.picking_exercise))
 async def pick_exercise_search(message: Message, state: FSMContext):
-    """Typing while picking an exercise searches instead of being silently dropped."""
+    """Typing while picking a group or an exercise searches instead of being silently
+    dropped — so the user can jump straight to an exercise by name without first
+    drilling into its muscle group."""
     query = message.text.strip()
     await _delete_message(message)
     if not query:
@@ -576,6 +688,9 @@ async def pick_exercise_search(message: Message, state: FSMContext):
     data = await state.get_data()
     user = await db.get_user(message.from_user.id)
     group_id = data.get("pending_group_id")
+    # Searching from the group screen jumps into exercise-picking so a tap on a
+    # result (pick:ex:*) and the "back" button both resolve correctly.
+    await state.set_state(WorkoutFlow.picking_exercise)
     results = await db.search_exercises(message.from_user.id, query)
     kb = keyboards.exercises_keyboard(results, prefix="pick", back_cb="back", show_new_button=group_id is not None)
     if results:
@@ -781,26 +896,127 @@ async def live_card_back(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(StateFilter(WorkoutFlow.logging_set))
+@router.callback_query(StateFilter(WorkoutFlow.logging_set), F.data.startswith("live:note:"))
+async def live_note_prompt(callback: CallbackQuery, state: FSMContext):
+    """Ask for a free-text note tied to the active exercise (technique cue, injury flag).
+    It resurfaces above "в прошлый раз" on every later session with this exercise."""
+    ex_id = int(callback.data.split(":")[2])
+    ex = await db.get_exercise(ex_id)
+    if ex is None or ex["user_id"] != callback.from_user.id:
+        await callback.answer("Упражнение не найдено", show_alert=True)
+        return
+    await state.set_state(WorkoutFlow.logging_exercise_note)
+    current = f"\n\nСейчас: <i>{escape(ex['notes'])}</i>" if ex["notes"] else ""
+    user = await db.get_user(callback.from_user.id)
+    await _refresh_live(
+        callback.bot, state, user, (await state.get_data())["workout_id"],
+        f"📝 Заметка к «{escape(ex['display_name'])}» — напиши текст (например «болит плечо — следи за локтями»).{current}",
+        keyboards.cancel_keyboard("live:note_cancel"),
+    )
+    await callback.answer()
+
+
+@router.callback_query(StateFilter(WorkoutFlow.logging_exercise_note), F.data == "live:note_cancel")
+async def live_note_cancel(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(WorkoutFlow.logging_set)
+    user = await db.get_user(callback.from_user.id)
+    await _render_logging_screen(callback.bot, state, user)
+    await callback.answer()
+
+
+@router.message(StateFilter(WorkoutFlow.logging_exercise_note), F.text)
+async def live_note_entered(message: Message, state: FSMContext):
+    data = await state.get_data()
+    active = data.get("active_exercise_id")
+    await db.set_exercise_notes(active, message.text.strip())
+    await _delete_message(message)
+    await state.set_state(WorkoutFlow.logging_set)
+    user = await db.get_user(message.from_user.id)
+    await _render_logging_screen(message.bot, state, user)
+
+
+async def _store_parsed_sets(state: FSMContext, data: dict, active: int, parsed) -> list[tuple[float, int]]:
+    """Write the parsed sets to the active block, carrying weight forward for bare
+    reps, and update last_by_exercise. Returns the (weight, reps) actually logged."""
+    block_id = (data.get("open_blocks") or {}).get(active)
+    last_by = dict(data.get("last_by_exercise") or {})
+    prev_weight, _ = last_by.get(active) or (0.0, 0)
+    logged: list[tuple[float, int]] = []
+    for ps in parsed:
+        weight = prev_weight if (ps.weight_omitted and prev_weight) else ps.weight
+        await _log_one(block_id, active, weight, ps.reps, ps.rpe)
+        logged.append((weight, ps.reps))
+        prev_weight = weight
+    last_by[active] = (prev_weight, parsed[-1].reps)
+    await state.update_data(last_by_exercise=last_by)
+    return logged
+
+
+@router.message(StateFilter(WorkoutFlow.logging_set), F.text)
 async def log_set_text(message: Message, state: FSMContext):
     data = await state.get_data()
     try:
-        parsed = parse_single_token(message.text)
+        parsed = parse_sets_line(message.text)
     except ParseError as e:
         await message.reply(e.message)
         return
     active = data.get("active_exercise_id")
-    block_id = (data.get("open_blocks") or {}).get(active)
-    last_by = dict(data.get("last_by_exercise") or {})
-    prev_weight, _ = last_by.get(active) or (0.0, 0)
-    for ps in parsed:
-        weight = prev_weight if (ps.weight_omitted and prev_weight) else ps.weight
-        await _log_one(block_id, active, weight, ps.reps, ps.rpe)
-        prev_weight = weight
-    last_by[active] = (prev_weight, parsed[-1].reps)
-    await state.update_data(last_by_exercise=last_by)
-    await _delete_message(message)
+    logged = await _store_parsed_sets(state, data, active, parsed)
+
     user = await db.get_user(message.from_user.id)
+    # A record-setting message keeps its place in the chat with a 🔥 reaction —
+    # instant, wordless celebration — instead of being tidied away like a normal set.
+    is_record = await _sets_beat_record(active, data["workout_id"], logged, user["e1rm_formula"])
+    if is_record:
+        with suppress(TelegramBadRequest):
+            await message.bot.set_message_reaction(
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                reaction=[ReactionTypeEmoji(emoji="🔥")],
+            )
+    else:
+        await _delete_message(message)
+    await _render_logging_screen(message.bot, state, user)
+
+
+@router.message(StateFilter(WorkoutFlow.logging_set), F.voice)
+async def log_set_voice(message: Message, state: FSMContext):
+    """Log a set by voice ("сто на восемь") — hands are chalky, typing is slow.
+    Reuses the AI-trainer's transcription, then the same number parser as text."""
+    if not ai_trainer.is_voice_configured():
+        await message.reply("Голосовой ввод пока не настроен, напиши подход текстом.")
+        return
+    try:
+        buf = await message.bot.download(message.voice)
+        buf.name = "voice.ogg"
+        transcript = await ai_trainer.transcribe_voice(buf, message.from_user.id)
+    except Exception:
+        logger.exception("Voice set transcription failed for user %s", message.from_user.id)
+        await message.reply("⚠️ Не разобрал голосовое, попробуй ещё раз или напиши текстом.")
+        return
+
+    line = voice_parse.transcript_to_sets_line(transcript or "")
+    try:
+        parsed = parse_sets_line(line) if line else None
+    except ParseError:
+        parsed = None
+    if not parsed:
+        heard = f" (услышал: «{escape(transcript)}»)" if transcript else ""
+        await message.reply(f"Не понял вес и повторы из голосового{heard}. Скажи, например, «сто на восемь».")
+        return
+
+    data = await state.get_data()
+    active = data.get("active_exercise_id")
+    logged = await _store_parsed_sets(state, data, active, parsed)
+    user = await db.get_user(message.from_user.id)
+    sets_str = ", ".join(formatting.format_set(w, r) for w, r in logged)
+    await message.reply(f"🎙 Записал: {sets_str}")
+    if await _sets_beat_record(active, data["workout_id"], logged, user["e1rm_formula"]):
+        with suppress(TelegramBadRequest):
+            await message.bot.set_message_reaction(
+                chat_id=message.chat.id, message_id=message.message_id,
+                reaction=[ReactionTypeEmoji(emoji="🔥")],
+            )
     await _render_logging_screen(message.bot, state, user)
 
 
@@ -832,6 +1048,27 @@ async def live_undo(callback: CallbackQuery, state: FSMContext):
             await _enter_idle_screen(callback.bot, state, user, data["workout_id"])
             return
 
+    await _render_logging_screen(callback.bot, state, user)
+
+
+@router.callback_query(StateFilter(WorkoutFlow.logging_set), F.data == "live:repeat")
+async def live_repeat_set(callback: CallbackQuery, state: FSMContext):
+    """One-tap copy of the last logged set — the "same weight, same reps" case that's
+    the most common in the gym, without retyping it with chalky hands."""
+    data = await state.get_data()
+    active = data.get("active_exercise_id")
+    block_id = (data.get("open_blocks") or {}).get(active)
+    sets = await db.list_sets_for_block(block_id) if block_id else []
+    if not sets:
+        await callback.answer("Нет подхода для повтора")
+        return
+    last = sets[-1]
+    await _log_one(block_id, active, last["weight"], last["reps"], last["rpe"])
+    last_by = dict(data.get("last_by_exercise") or {})
+    last_by[active] = (last["weight"], last["reps"])
+    await state.update_data(last_by_exercise=last_by)
+    await callback.answer(f"➕ {formatting.format_set(last['weight'], last['reps'])}")
+    user = await db.get_user(callback.from_user.id)
     await _render_logging_screen(callback.bot, state, user)
 
 
@@ -926,13 +1163,16 @@ async def live_finish_workout(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Тренировка была пустая — удалил её.")
         return
     workout = await db.get_workout(workout_id)
+    user = await db.get_user(callback.from_user.id)
     started = dt.datetime.fromisoformat(workout["started_at"])
-    if not data.get("is_backfill") and started.date() != dt.date.today():
+    started_local = timeutil.to_user_local(started, user)
+    today_local = timeutil.user_today(user)
+    if not data.get("is_backfill") and started_local.date() != today_local:
         await state.set_state(WorkoutFlow.confirming_finish_date)
         await ui.safe_edit(
             callback,
-            f"⚠️ Тренировка начата {formatting.format_date_ru(started)}, а сегодня "
-            f"{formatting.format_date_ru(dt.date.today())}.\n\nВсё верно?",
+            f"⚠️ Тренировка начата {formatting.format_date_ru(started_local)}, а сегодня "
+            f"{formatting.format_date_ru(today_local)}.\n\nВсё верно?",
             reply_markup=keyboards.finish_date_mismatch_keyboard(),
         )
         await callback.answer()
@@ -951,11 +1191,27 @@ async def finish_confirm_keep(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(StateFilter(WorkoutFlow.confirming_finish_date), F.data == "finconfirm:changedate")
 async def finish_confirm_changedate(callback: CallbackQuery, state: FSMContext):
     await state.set_state(WorkoutFlow.awaiting_finish_date)
+    today = dt.date.today()
     await ui.safe_edit(
         callback,
-        "На какую дату перенести тренировку?\nВыбери или напиши дату в формате дд.мм.гггг:",
-        reply_markup=keyboards.date_quick_keyboard("findate"),
+        "На какую дату перенести тренировку?\nВыбери в календаре или напиши дату в формате дд.мм.гггг:",
+        reply_markup=keyboards.calendar_keyboard("findate", today.year, today.month),
     )
+    await callback.answer()
+
+
+@router.callback_query(StateFilter(WorkoutFlow.awaiting_finish_date), F.data.startswith("findate:cal:"))
+async def finish_date_cal_nav(callback: CallbackQuery, state: FSMContext):
+    year, month = (int(x) for x in callback.data.split(":")[2].split("-"))
+    with suppress(TelegramBadRequest):
+        await callback.message.edit_reply_markup(
+            reply_markup=keyboards.calendar_keyboard("findate", year, month)
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "findate:noop")
+async def finish_date_noop(callback: CallbackQuery):
     await callback.answer()
 
 
@@ -1056,6 +1312,7 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
 
     exercise_ids = await db.list_exercise_ids_for_workout(workout_id)
     highlight_groups: list[tuple[str, list[str], str | None]] = []
+    session_tonnage = 0.0
 
     started_at = dt.datetime.fromisoformat(workout["started_at"])
 
@@ -1081,6 +1338,7 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
         )
         if not new_session.sets:
             continue
+        session_tonnage += new_session.tonnage
 
         records = analytics.detect_new_records(prior_sessions, new_session)
         pr_details = [
@@ -1114,12 +1372,21 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
     )
     highlights = formatting.build_exercise_highlights(highlight_groups)
     full_text = summary
+    tonnage_line = formatting.format_tonnage_equivalent(session_tonnage, seed=workout_id)
+    if tonnage_line:
+        full_text += f"\n\n{tonnage_line}"
     # Backfilled/imported past workouts shouldn't fire the "Nth workout" milestone —
     # they're entered out of order, so the running count isn't meaningful for them.
     if not is_backfill:
         total_finished = await db.count_workouts(user_id)
         if analytics.is_workout_milestone(total_finished):
             full_text += "\n\n" + formatting.format_milestone_line(total_finished)
+
+    new_badges = await _evaluate_achievements(user_id, workout_id, started_at, duration_seconds)
+    achievement_line = formatting.format_new_achievements(new_badges)
+    if achievement_line:
+        full_text += "\n\n" + achievement_line
+
     if highlights:
         full_text += f"\n\n{formatting.DIVIDER}\n\n{highlights}"
     if is_backfill:
@@ -1160,7 +1427,7 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
     await state.clear()
     active = await db.get_active_workout(user_id)
     menu_text, menu_png = await _menu_view(user_id)
-    menu_kb = keyboards.main_menu(bool(active))
+    menu_kb = await _main_menu_kb(user_id, active)
     if menu_png is None:
         await bot.send_message(
             chat_id=data["live_chat_id"], text=menu_text, reply_markup=menu_kb, parse_mode="HTML"

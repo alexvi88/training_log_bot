@@ -25,19 +25,36 @@ def persistent_menu() -> ReplyKeyboardMarkup:
     )
 
 
-def main_menu(has_active_workout: bool) -> InlineKeyboardMarkup:
+def main_menu(has_active_workout: bool, can_repeat_last: bool = False) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
+    top = 1  # buttons on the first (full-width) row(s)
     if has_active_workout:
         b.button(text="▶️ ПРОДОЛЖИТЬ ТРЕНИРОВКУ", callback_data="menu:resume_workout")
     else:
         b.button(text="🏋️ НАЧАТЬ ТРЕНИРОВКУ", callback_data="menu:start_workout")
+        # A one-tap re-run of the last session — the most common pattern for
+        # people who train A/B without keeping a saved program.
+        if can_repeat_last:
+            b.button(text="🔁 Повторить прошлую", callback_data="menu:repeat_last")
+            top = 2
     b.button(text="📈 Прогресс", callback_data="menu:progress")
     b.button(text="📚 История", callback_data="menu:history")
+    b.button(text="🏆 Зал славы", callback_data="menu:hall")
     b.button(text="⚙️ Упражнения", callback_data="menu:exercises")
     b.button(text="🗂 Программы", callback_data="rt:manage")
     b.button(text="⚖️ Дневник веса", callback_data="menu:bodyweight")
     b.button(text="🔧 Настройки", callback_data="menu:settings")
-    b.adjust(1, 2, 2, 2)
+    # first row(s): start/repeat; then Прогресс·История, Зал славы·Упражнения,
+    # Программы·Дневник, Настройки.
+    b.adjust(*([1] * top), 2, 2, 2, 1)
+    return b.as_markup()
+
+
+def hall_of_fame_keyboard() -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.button(text="🏅 Достижения", callback_data="menu:achievements")
+    b.button(text="⬅️ Главное меню", callback_data="hist:menu")
+    b.adjust(1)
     return b.as_markup()
 
 
@@ -138,16 +155,34 @@ def logging_keyboard(
 
     Weight/reps are typed as plain text (e.g. "100 8") — this keyboard only holds
     navigation/utility actions, not numeric input, to keep it short.
+
+    The keyboard is deliberately kept short: the repeat/undo pair share one row,
+    and the per-exercise note button (📝) rides along on an existing row rather
+    than adding a new one, so logging many sets never grows a wall of buttons.
     """
     b = InlineKeyboardBuilder()
     if len(open_items) > 1:
         for ex_id, name in open_items:
             text = ("▶ " if ex_id == active_id else "") + name
             b.row(InlineKeyboardButton(text=text, callback_data=f"live:switch:{ex_id}"))
+    note_btn = (
+        InlineKeyboardButton(text="📝", callback_data=f"live:note:{active_id}")
+        if active_id is not None
+        else None
+    )
     if has_sets:
-        b.row(InlineKeyboardButton(text="↩️ Удалить последний", callback_data="live:undo"))
-    if active_id is not None and not has_sets:
-        b.row(InlineKeyboardButton(text="ℹ️ Карточка упражнения", callback_data=f"live:card:{active_id}"))
+        row = [
+            InlineKeyboardButton(text="🔁 Повторить", callback_data="live:repeat"),
+            InlineKeyboardButton(text="↩️ Удалить", callback_data="live:undo"),
+        ]
+        if note_btn is not None:
+            row.append(note_btn)
+        b.row(*row)
+    elif active_id is not None:
+        row = [InlineKeyboardButton(text="ℹ️ Карточка упражнения", callback_data=f"live:card:{active_id}")]
+        if note_btn is not None:
+            row.append(note_btn)
+        b.row(*row)
     b.row(InlineKeyboardButton(text="✅ Закончить упражнение", callback_data="live:finish_exercise"))
     b.row(InlineKeyboardButton(text="➕ Суперсет", callback_data="live:add_exercise"))
     return b.as_markup()
@@ -418,12 +453,33 @@ def admin_pushes_keyboard(page: int, has_next: bool) -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
+def format_utc_offset(tz_offset: int) -> str:
+    return "UTC" if tz_offset == 0 else f"UTC{tz_offset:+d}"
+
+
+def timezone_picker_keyboard(current: int) -> InlineKeyboardMarkup:
+    """Grid of whole-hour UTC offsets covering the RU/CIS + Europe range."""
+    b = InlineKeyboardBuilder()
+    for off in range(-1, 13):  # UTC-1 … UTC+12
+        label = format_utc_offset(off)
+        b.button(text=f"• {label} •" if off == current else label, callback_data=f"settings:tzset:{off}")
+    b.button(text="⬅️ Назад", callback_data="settings:tzback")
+    b.adjust(4, 4, 4, 2, 1)
+    return b.as_markup()
+
+
 def settings_keyboard(
-    unit: str, formula: str, pushes_enabled: bool, ai_comments_enabled: bool, progression_enabled: bool
+    unit: str,
+    formula: str,
+    pushes_enabled: bool,
+    ai_comments_enabled: bool,
+    progression_enabled: bool,
+    tz_offset: int = 0,
 ) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(text=f"Единицы: {unit}", callback_data="settings:unit")
     b.button(text=f"Формула 1ПМ: {formula}", callback_data="settings:formula")
+    b.button(text=f"🕒 Часовой пояс: {format_utc_offset(tz_offset)}", callback_data="settings:tz")
     progression_label = (
         "🎯 Подсказки прогрессии: вкл" if progression_enabled else "🎯 Подсказки прогрессии: выкл"
     )
@@ -480,6 +536,62 @@ def push_cta_keyboard() -> InlineKeyboardMarkup:
     """Attached to daily-rotation push notifications: routes straight into starting a workout."""
     b = InlineKeyboardBuilder()
     b.button(text="▶ Начать тренировку", callback_data="menu:start_workout")
+    return b.as_markup()
+
+
+_CAL_WEEKDAYS = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+_MONTHS_RU = [
+    "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
+    "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь",
+]
+
+
+def calendar_keyboard(prefix: str, year: int, month: int, today: dt.date | None = None) -> InlineKeyboardMarkup:
+    """Month grid for picking a past date without typing дд.мм.гггг.
+
+    Day taps emit ``{prefix}:date:{iso}`` — the same callback the quick buttons
+    already use, so existing per-flow date handlers catch calendar picks for
+    free. Month arrows emit ``{prefix}:cal:{year}-{month}`` (re-render only),
+    blanks and labels emit ``{prefix}:noop``. Future days and future months are
+    not selectable — a past workout can't be dated ahead of today.
+    """
+    today = today or dt.date.today()
+    b = InlineKeyboardBuilder()
+
+    first = dt.date(year, month, 1)
+    prev_last = first - dt.timedelta(days=1)
+    next_first = dt.date(year + 1, 1, 1) if month == 12 else dt.date(year, month + 1, 1)
+    can_next = next_first <= dt.date(today.year, today.month, 1)
+    b.row(
+        InlineKeyboardButton(text="‹", callback_data=f"{prefix}:cal:{prev_last.year}-{prev_last.month}"),
+        InlineKeyboardButton(text=f"{_MONTHS_RU[month - 1]} {year}", callback_data=f"{prefix}:noop"),
+        InlineKeyboardButton(
+            text="›" if can_next else " ",
+            callback_data=f"{prefix}:cal:{next_first.year}-{next_first.month}" if can_next else f"{prefix}:noop",
+        ),
+    )
+    b.row(*[InlineKeyboardButton(text=w, callback_data=f"{prefix}:noop") for w in _CAL_WEEKDAYS])
+
+    cells = [InlineKeyboardButton(text=" ", callback_data=f"{prefix}:noop") for _ in range(first.weekday())]
+    days_in_month = (next_first - first).days
+    for d in range(1, days_in_month + 1):
+        date = dt.date(year, month, d)
+        if date > today:
+            cells.append(InlineKeyboardButton(text="·", callback_data=f"{prefix}:noop"))
+        else:
+            label = f"·{d}·" if date == today else str(d)
+            cells.append(InlineKeyboardButton(text=label, callback_data=f"{prefix}:date:{date.isoformat()}"))
+    while len(cells) % 7:
+        cells.append(InlineKeyboardButton(text=" ", callback_data=f"{prefix}:noop"))
+    for i in range(0, len(cells), 7):
+        b.row(*cells[i : i + 7])
+
+    yesterday = today - dt.timedelta(days=1)
+    b.row(
+        InlineKeyboardButton(text="Сегодня", callback_data=f"{prefix}:date:{today.isoformat()}"),
+        InlineKeyboardButton(text="Вчера", callback_data=f"{prefix}:date:{yesterday.isoformat()}"),
+    )
+    b.row(InlineKeyboardButton(text="❌ Отмена", callback_data=f"{prefix}:cancel"))
     return b.as_markup()
 
 

@@ -293,6 +293,20 @@ def _week_monday(d: dt.date) -> dt.date:
     return d - dt.timedelta(days=d.weekday())
 
 
+def max_week_streak(workout_dates: Iterable[dt.date]) -> int:
+    """Longest run of consecutive Mon–Sun weeks that each had at least one workout,
+    anywhere in history (for the Hall of Fame — unlike Dashboard.week_streak, which
+    only measures the streak ending now)."""
+    weeks = sorted({_week_monday(d) for d in workout_dates})
+    if not weeks:
+        return 0
+    best = run = 1
+    for prev, cur in zip(weeks, weeks[1:], strict=False):
+        run = run + 1 if cur - prev == dt.timedelta(days=7) else 1
+        best = max(best, run)
+    return best
+
+
 def compute_dashboard(workout_dates: Iterable[dt.date], today: dt.date) -> Dashboard:
     """Summary stats for the main-menu dashboard.
 

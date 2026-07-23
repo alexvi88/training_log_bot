@@ -5,7 +5,15 @@ import re
 
 import pytest
 
-from parser import EXAMPLES_HINT, ParsedSet, ParseError, parse_ru_date, parse_single_token
+from parser import (
+    EXAMPLES_HINT,
+    MAX_SETS_PER_LINE,
+    ParsedSet,
+    ParseError,
+    parse_ru_date,
+    parse_sets_line,
+    parse_single_token,
+)
 
 _HINT_RE = re.escape(EXAMPLES_HINT)
 
@@ -159,6 +167,62 @@ def test_count_over_max_rejected():
 def test_count_zero_rejected():
     with pytest.raises(ParseError, match="Странное количество"):
         parse_single_token("100x8x0")
+
+
+# ---------- parse_sets_line: several sets in one message ----------
+
+
+def test_line_single_set_unchanged():
+    assert parse_sets_line("100 8") == [ParsedSet(weight=100.0, reps=8)]
+
+
+def test_line_comma_separated():
+    assert parse_sets_line("100 8, 100 7, 95 8") == [
+        ParsedSet(weight=100.0, reps=8),
+        ParsedSet(weight=100.0, reps=7),
+        ParsedSet(weight=95.0, reps=8),
+    ]
+
+
+def test_line_newline_and_semicolon_separated():
+    assert parse_sets_line("100x8\n95x8; 90x8") == [
+        ParsedSet(weight=100.0, reps=8),
+        ParsedSet(weight=95.0, reps=8),
+        ParsedSet(weight=90.0, reps=8),
+    ]
+
+
+def test_line_expands_counts_within_chunks():
+    result = parse_sets_line("100x8x2, 90 8")
+    assert result == [ParsedSet(weight=100.0, reps=8)] * 2 + [ParsedSet(weight=90.0, reps=8)]
+
+
+def test_line_keeps_bare_reps_for_weight_carry():
+    # "8" stays weight_omitted so the caller fills in the previous set's weight.
+    assert parse_sets_line("100 8, 8") == [
+        ParsedSet(weight=100.0, reps=8),
+        ParsedSet(weight=0.0, reps=8, weight_omitted=True),
+    ]
+
+
+def test_line_trailing_separators_ignored():
+    assert parse_sets_line("100 8, ,") == [ParsedSet(weight=100.0, reps=8)]
+
+
+def test_line_empty_raises():
+    with pytest.raises(ParseError):
+        parse_sets_line("  ,  ")
+
+
+def test_line_one_bad_chunk_fails_whole_line():
+    with pytest.raises(ParseError):
+        parse_sets_line("100 8, abc")
+
+
+def test_line_over_max_rejected():
+    too_many = ", ".join(["100 8"] * (MAX_SETS_PER_LINE + 1))
+    with pytest.raises(ParseError, match="Слишком много"):
+        parse_sets_line(too_many)
 
 
 # ---------- parse_ru_date ----------

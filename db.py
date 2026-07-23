@@ -33,7 +33,8 @@ CREATE TABLE IF NOT EXISTS users (
     pushes_enabled INTEGER NOT NULL DEFAULT 1,
     reply_keyboard_version INTEGER NOT NULL DEFAULT 0,
     ai_comments_enabled INTEGER NOT NULL DEFAULT 0,
-    progression_hint_enabled INTEGER NOT NULL DEFAULT 1
+    progression_hint_enabled INTEGER NOT NULL DEFAULT 1,
+    tz_offset INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS muscle_groups (
@@ -191,6 +192,15 @@ CREATE TABLE IF NOT EXISTS cost_events (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_cost_events_created ON cost_events (created_at);
+
+CREATE TABLE IF NOT EXISTS achievements (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    code TEXT NOT NULL,
+    earned_at TEXT NOT NULL,
+    UNIQUE (user_id, code)
+);
+CREATE INDEX IF NOT EXISTS idx_achievements_user ON achievements (user_id);
 """
 
 _conn: Optional[aiosqlite.Connection] = None
@@ -284,6 +294,8 @@ async def _migrate_schema() -> None:
         await _conn.execute(
             "ALTER TABLE users ADD COLUMN progression_hint_enabled INTEGER NOT NULL DEFAULT 1"
         )
+    if "tz_offset" not in user_cols:
+        await _conn.execute("ALTER TABLE users ADD COLUMN tz_offset INTEGER NOT NULL DEFAULT 0")
     if "reply_keyboard_version" not in user_cols:
         if "reply_keyboard_shown" in user_cols:
             # Superseded by a version counter so future button-set changes can
@@ -820,6 +832,16 @@ async def set_exercise_photo(exercise_id: int, file_id: str) -> None:
         await conn().commit()
 
 
+async def set_exercise_notes(exercise_id: int, notes: Optional[str]) -> None:
+    """Store a free-text personal note for an exercise (technique cue, injury flag).
+    Passing None/empty clears it."""
+    async with _write_lock:
+        await conn().execute(
+            "UPDATE exercises SET notes = ? WHERE id = ?", (notes or None, exercise_id)
+        )
+        await conn().commit()
+
+
 # ---------- workouts ----------
 
 async def get_active_workout(user_id: int) -> Optional[aiosqlite.Row]:
@@ -935,6 +957,78 @@ async def list_finished_workout_dates(user_id: int) -> list[str]:
     return [r["d"] for r in await cur.fetchall()]
 
 
+async def max_weight_ever(user_id: int) -> float:
+    """Heaviest single set (any exercise) across finished workouts — for weight-club
+    achievements."""
+    cur = await conn().execute(
+        "SELECT COALESCE(MAX(s.weight), 0) AS mx FROM sets s "
+        "JOIN workout_blocks b ON b.id = s.block_id "
+        "JOIN workouts w ON w.id = b.workout_id "
+        "WHERE w.user_id = ? AND w.status = 'finished'",
+        (user_id,),
+    )
+    return (await cur.fetchone())["mx"] or 0.0
+
+
+async def count_distinct_exercises_used(user_id: int) -> int:
+    cur = await conn().execute(
+        "SELECT COUNT(DISTINCT s.exercise_id) AS c FROM sets s "
+        "JOIN workout_blocks b ON b.id = s.block_id "
+        "JOIN workouts w ON w.id = b.workout_id "
+        "WHERE w.user_id = ? AND w.status = 'finished'",
+        (user_id,),
+    )
+    return (await cur.fetchone())["c"] or 0
+
+
+async def list_achievement_codes(user_id: int) -> set[str]:
+    cur = await conn().execute("SELECT code FROM achievements WHERE user_id = ?", (user_id,))
+    return {r["code"] for r in await cur.fetchall()}
+
+
+async def award_achievements(user_id: int, codes: set[str]) -> list[str]:
+    """Record any of `codes` the user doesn't already hold; return the newly added
+    ones (in a stable sorted order) so the caller can celebrate just those."""
+    if not codes:
+        return []
+    existing = await list_achievement_codes(user_id)
+    new = sorted(codes - existing)
+    if not new:
+        return []
+    async with _write_lock:
+        await conn().executemany(
+            "INSERT OR IGNORE INTO achievements (user_id, code, earned_at) VALUES (?, ?, ?)",
+            [(user_id, code, now_iso()) for code in new],
+        )
+        await conn().commit()
+    return new
+
+
+async def hall_of_fame_aggregates(user_id: int) -> dict[str, float]:
+    """Lifetime totals for the Hall of Fame: tonnage moved, total working sets,
+    and the longest single finished workout (seconds). All over finished workouts."""
+    cur = await conn().execute(
+        "SELECT COALESCE(SUM(s.weight * s.reps), 0) AS tonnage, COUNT(s.id) AS sets_count "
+        "FROM sets s "
+        "JOIN workout_blocks b ON b.id = s.block_id "
+        "JOIN workouts w ON w.id = b.workout_id "
+        "WHERE w.user_id = ? AND w.status = 'finished'",
+        (user_id,),
+    )
+    row = await cur.fetchone()
+    cur2 = await conn().execute(
+        "SELECT MAX((julianday(finished_at) - julianday(started_at)) * 86400.0) AS longest "
+        "FROM workouts WHERE user_id = ? AND status = 'finished' AND finished_at IS NOT NULL",
+        (user_id,),
+    )
+    longest = (await cur2.fetchone())["longest"]
+    return {
+        "tonnage": row["tonnage"] or 0.0,
+        "sets_count": row["sets_count"] or 0,
+        "longest_workout_seconds": longest or 0.0,
+    }
+
+
 async def weekly_volume_by_group(
     user_id: int, start_date: str, end_date: str
 ) -> dict[Optional[int], int]:
@@ -1004,6 +1098,26 @@ async def list_blocks_for_workout(workout_id: int) -> list[aiosqlite.Row]:
         "SELECT * FROM workout_blocks WHERE workout_id = ? ORDER BY order_index", (workout_id,)
     )
     return await cur.fetchall()
+
+
+async def last_finished_workout_plan(user_id: int) -> list[dict[str, list[int]]]:
+    """Block-by-block exercise layout of the user's most recent finished workout,
+    as ``[{"exercise_ids": [...]}, ...]`` — the same shape planned_blocks uses, so
+    it can drive the "repeat last workout" flow through _load_next_planned_block.
+
+    Supersets (a block with several exercises) are preserved as multi-id blocks.
+    Empty list if the user has no finished workouts.
+    """
+    recent = await list_workouts(user_id, limit=1)
+    if not recent:
+        return []
+    blocks = await list_blocks_for_workout(recent[0]["id"])
+    plan: list[dict[str, list[int]]] = []
+    for block in blocks:
+        exercise_ids = [be["exercise_id"] for be in await get_block_exercises(block["id"])]
+        if exercise_ids:
+            plan.append({"exercise_ids": exercise_ids})
+    return plan
 
 
 async def get_block_owner(block_id: int) -> Optional[int]:
