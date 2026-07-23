@@ -501,6 +501,62 @@ def push_cta_keyboard() -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
+_CAL_WEEKDAYS = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+_MONTHS_RU = [
+    "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
+    "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь",
+]
+
+
+def calendar_keyboard(prefix: str, year: int, month: int, today: dt.date | None = None) -> InlineKeyboardMarkup:
+    """Month grid for picking a past date without typing дд.мм.гггг.
+
+    Day taps emit ``{prefix}:date:{iso}`` — the same callback the quick buttons
+    already use, so existing per-flow date handlers catch calendar picks for
+    free. Month arrows emit ``{prefix}:cal:{year}-{month}`` (re-render only),
+    blanks and labels emit ``{prefix}:noop``. Future days and future months are
+    not selectable — a past workout can't be dated ahead of today.
+    """
+    today = today or dt.date.today()
+    b = InlineKeyboardBuilder()
+
+    first = dt.date(year, month, 1)
+    prev_last = first - dt.timedelta(days=1)
+    next_first = dt.date(year + 1, 1, 1) if month == 12 else dt.date(year, month + 1, 1)
+    can_next = next_first <= dt.date(today.year, today.month, 1)
+    b.row(
+        InlineKeyboardButton(text="‹", callback_data=f"{prefix}:cal:{prev_last.year}-{prev_last.month}"),
+        InlineKeyboardButton(text=f"{_MONTHS_RU[month - 1]} {year}", callback_data=f"{prefix}:noop"),
+        InlineKeyboardButton(
+            text="›" if can_next else " ",
+            callback_data=f"{prefix}:cal:{next_first.year}-{next_first.month}" if can_next else f"{prefix}:noop",
+        ),
+    )
+    b.row(*[InlineKeyboardButton(text=w, callback_data=f"{prefix}:noop") for w in _CAL_WEEKDAYS])
+
+    cells = [InlineKeyboardButton(text=" ", callback_data=f"{prefix}:noop") for _ in range(first.weekday())]
+    days_in_month = (next_first - first).days
+    for d in range(1, days_in_month + 1):
+        date = dt.date(year, month, d)
+        if date > today:
+            cells.append(InlineKeyboardButton(text="·", callback_data=f"{prefix}:noop"))
+        else:
+            label = f"·{d}·" if date == today else str(d)
+            cells.append(InlineKeyboardButton(text=label, callback_data=f"{prefix}:date:{date.isoformat()}"))
+    while len(cells) % 7:
+        cells.append(InlineKeyboardButton(text=" ", callback_data=f"{prefix}:noop"))
+    for i in range(0, len(cells), 7):
+        b.row(*cells[i : i + 7])
+
+    yesterday = today - dt.timedelta(days=1)
+    b.row(
+        InlineKeyboardButton(text="Сегодня", callback_data=f"{prefix}:date:{today.isoformat()}"),
+        InlineKeyboardButton(text="Вчера", callback_data=f"{prefix}:date:{yesterday.isoformat()}"),
+    )
+    b.row(InlineKeyboardButton(text="❌ Отмена", callback_data=f"{prefix}:cancel"))
+    return b.as_markup()
+
+
 def date_quick_keyboard(prefix: str) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     today = dt.date.today()

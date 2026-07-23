@@ -183,10 +183,58 @@ async def editw_addset_entered(message: Message, state: FSMContext):
 @router.callback_query(F.data == "editw:date")
 async def editw_date_prompt(callback: CallbackQuery, state: FSMContext):
     await state.set_state(EditWorkoutFlow.awaiting_date)
+    today = dt.date.today()
     await ui.safe_edit(
-        callback, "Напиши новую дату в формате дд.мм.гггг:", reply_markup=keyboards.cancel_keyboard("editw:back")
+        callback,
+        "Выбери новую дату в календаре или напиши в формате дд.мм.гггг:",
+        reply_markup=keyboards.calendar_keyboard("editwd", today.year, today.month),
     )
     await callback.answer()
+
+
+@router.callback_query(StateFilter(EditWorkoutFlow.awaiting_date), F.data.startswith("editwd:cal:"))
+async def editw_date_cal_nav(callback: CallbackQuery, state: FSMContext):
+    year, month = (int(x) for x in callback.data.split(":")[2].split("-"))
+    with suppress(TelegramBadRequest):
+        await callback.message.edit_reply_markup(
+            reply_markup=keyboards.calendar_keyboard("editwd", year, month)
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "editwd:noop")
+async def editw_date_noop(callback: CallbackQuery):
+    await callback.answer()
+
+
+@router.callback_query(F.data == "editwd:cancel")
+async def editw_date_cancel(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    await show_edit_screen(callback, state, data["edit_workout_id"])
+    await callback.answer()
+
+
+async def _apply_edit_workout_date(workout_id: int, new_date: dt.date) -> None:
+    """Move a finished workout to a new calendar day, preserving its start time
+    and duration."""
+    workout = await db.get_workout(workout_id)
+    started = dt.datetime.fromisoformat(workout["started_at"])
+    finished = dt.datetime.fromisoformat(workout["finished_at"]) if workout["finished_at"] else started
+    delta = finished - started
+    new_started = dt.datetime.combine(new_date, started.time())
+    new_finished = new_started + delta
+    await db.update_workout_date(
+        workout_id, new_started.isoformat(timespec="seconds"), new_finished.isoformat(timespec="seconds")
+    )
+
+
+@router.callback_query(StateFilter(EditWorkoutFlow.awaiting_date), F.data.startswith("editwd:date:"))
+async def editw_date_calendar_pick(callback: CallbackQuery, state: FSMContext):
+    new_date = dt.date.fromisoformat(callback.data.split(":", 2)[2])
+    data = await state.get_data()
+    await _apply_edit_workout_date(data["edit_workout_id"], new_date)
+    await show_edit_screen(callback, state, data["edit_workout_id"])
+    await callback.answer("Дата обновлена")
 
 
 @router.message(StateFilter(EditWorkoutFlow.awaiting_date))
@@ -198,15 +246,7 @@ async def editw_date_entered(message: Message, state: FSMContext):
         return
     data = await state.get_data()
     workout_id = data["edit_workout_id"]
-    workout = await db.get_workout(workout_id)
-    started = dt.datetime.fromisoformat(workout["started_at"])
-    finished = dt.datetime.fromisoformat(workout["finished_at"]) if workout["finished_at"] else started
-    delta = finished - started
-    new_started = dt.datetime.combine(new_date, started.time())
-    new_finished = new_started + delta
-    await db.update_workout_date(
-        workout_id, new_started.isoformat(timespec="seconds"), new_finished.isoformat(timespec="seconds")
-    )
+    await _apply_edit_workout_date(workout_id, new_date)
     await message.reply("Дата обновлена.")
     await show_edit_screen(message, state, workout_id)
 

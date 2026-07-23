@@ -1,8 +1,10 @@
 """§A1 — manual backfill of a past workout: pick a date, then log it exactly like a live workout."""
 
 import datetime as dt
+from contextlib import suppress
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
@@ -17,15 +19,34 @@ from parser import ParseError, parse_ru_date
 router = Router(name="backfill")
 
 
+_BACKFILL_PROMPT = "📅 На какую дату занести тренировку?\nВыбери в календаре или напиши дату в формате дд.мм.гггг:"
+
+
 @router.callback_query(F.data == "menu:backfill_workout")
 async def backfill_start(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     await state.set_state(BackfillFlow.awaiting_date)
+    today = dt.date.today()
     await ui.safe_edit(
         callback,
-        "📅 На какую дату занести тренировку?\nВыбери или напиши дату в формате дд.мм.гггг:",
-        reply_markup=keyboards.date_quick_keyboard("bf"),
+        _BACKFILL_PROMPT,
+        reply_markup=keyboards.calendar_keyboard("bf", today.year, today.month),
     )
+    await callback.answer()
+
+
+@router.callback_query(StateFilter(BackfillFlow.awaiting_date), F.data.startswith("bf:cal:"))
+async def bf_cal_nav(callback: CallbackQuery, state: FSMContext):
+    year, month = (int(x) for x in callback.data.split(":")[2].split("-"))
+    with suppress(TelegramBadRequest):
+        await callback.message.edit_reply_markup(
+            reply_markup=keyboards.calendar_keyboard("bf", year, month)
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "bf:noop")
+async def bf_noop(callback: CallbackQuery):
     await callback.answer()
 
 

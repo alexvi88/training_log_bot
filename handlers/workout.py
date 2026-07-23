@@ -1079,11 +1079,27 @@ async def finish_confirm_keep(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(StateFilter(WorkoutFlow.confirming_finish_date), F.data == "finconfirm:changedate")
 async def finish_confirm_changedate(callback: CallbackQuery, state: FSMContext):
     await state.set_state(WorkoutFlow.awaiting_finish_date)
+    today = dt.date.today()
     await ui.safe_edit(
         callback,
-        "На какую дату перенести тренировку?\nВыбери или напиши дату в формате дд.мм.гггг:",
-        reply_markup=keyboards.date_quick_keyboard("findate"),
+        "На какую дату перенести тренировку?\nВыбери в календаре или напиши дату в формате дд.мм.гггг:",
+        reply_markup=keyboards.calendar_keyboard("findate", today.year, today.month),
     )
+    await callback.answer()
+
+
+@router.callback_query(StateFilter(WorkoutFlow.awaiting_finish_date), F.data.startswith("findate:cal:"))
+async def finish_date_cal_nav(callback: CallbackQuery, state: FSMContext):
+    year, month = (int(x) for x in callback.data.split(":")[2].split("-"))
+    with suppress(TelegramBadRequest):
+        await callback.message.edit_reply_markup(
+            reply_markup=keyboards.calendar_keyboard("findate", year, month)
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "findate:noop")
+async def finish_date_noop(callback: CallbackQuery):
     await callback.answer()
 
 
