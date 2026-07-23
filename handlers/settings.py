@@ -23,6 +23,7 @@ async def show_settings(callback: CallbackQuery, state: FSMContext, alert: str |
     kb = keyboards.settings_keyboard(
         user["unit"], user["e1rm_formula"], bool(user["pushes_enabled"]),
         bool(user["ai_comments_enabled"]), bool(user["progression_hint_enabled"]),
+        tz_offset=user["tz_offset"],
     )
     await ui.safe_edit(callback, "🔧 Настройки:", reply_markup=kb)
     if alert:
@@ -52,6 +53,30 @@ async def settings_unit(callback: CallbackQuery, state: FSMContext):
         callback, state,
         alert=f"Единицы переключены на {new_unit}. Все веса в истории пересчитаны автоматически.",
     )
+
+
+@router.callback_query(F.data == "settings:tz")
+async def settings_timezone(callback: CallbackQuery, state: FSMContext):
+    user = await db.get_user(callback.from_user.id)
+    await ui.safe_edit(
+        callback,
+        "🕒 Выбери свой часовой пояс (сдвиг от UTC).\n"
+        "Это влияет на «сегодня»/«вчера» и на время, к которому бот считает твой день.",
+        reply_markup=keyboards.timezone_picker_keyboard(user["tz_offset"]),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("settings:tzset:"))
+async def settings_timezone_set(callback: CallbackQuery, state: FSMContext):
+    offset = int(callback.data.split(":")[2])
+    await db.update_user(callback.from_user.id, tz_offset=offset)
+    await show_settings(callback, state, alert=f"Часовой пояс: {keyboards.format_utc_offset(offset)}")
+
+
+@router.callback_query(F.data == "settings:tzback")
+async def settings_timezone_back(callback: CallbackQuery, state: FSMContext):
+    await show_settings(callback, state)
 
 
 @router.callback_query(F.data == "settings:formula")

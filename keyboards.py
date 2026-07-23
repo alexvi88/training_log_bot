@@ -453,12 +453,33 @@ def admin_pushes_keyboard(page: int, has_next: bool) -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
+def format_utc_offset(tz_offset: int) -> str:
+    return "UTC" if tz_offset == 0 else f"UTC{tz_offset:+d}"
+
+
+def timezone_picker_keyboard(current: int) -> InlineKeyboardMarkup:
+    """Grid of whole-hour UTC offsets covering the RU/CIS + Europe range."""
+    b = InlineKeyboardBuilder()
+    for off in range(-1, 13):  # UTC-1 … UTC+12
+        label = format_utc_offset(off)
+        b.button(text=f"• {label} •" if off == current else label, callback_data=f"settings:tzset:{off}")
+    b.button(text="⬅️ Назад", callback_data="settings:tzback")
+    b.adjust(4, 4, 4, 2, 1)
+    return b.as_markup()
+
+
 def settings_keyboard(
-    unit: str, formula: str, pushes_enabled: bool, ai_comments_enabled: bool, progression_enabled: bool
+    unit: str,
+    formula: str,
+    pushes_enabled: bool,
+    ai_comments_enabled: bool,
+    progression_enabled: bool,
+    tz_offset: int = 0,
 ) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(text=f"Единицы: {unit}", callback_data="settings:unit")
     b.button(text=f"Формула 1ПМ: {formula}", callback_data="settings:formula")
+    b.button(text=f"🕒 Часовой пояс: {format_utc_offset(tz_offset)}", callback_data="settings:tz")
     progression_label = (
         "🎯 Подсказки прогрессии: вкл" if progression_enabled else "🎯 Подсказки прогрессии: выкл"
     )

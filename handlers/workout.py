@@ -31,6 +31,7 @@ import exercise_descriptions
 import exercise_media
 import formatting
 import keyboards
+import timeutil
 import ui
 import view_builder
 import voice_parse
@@ -328,7 +329,7 @@ async def _menu_view(user_id: int) -> tuple[str, bytes | None]:
     """Greeting, plus a year heatmap image (with the streak/this-week/30-day
     dashboard stats drawn into it) once the user has any finished workouts.
     """
-    today = dt.date.today()
+    today = timeutil.user_today(await db.get_user(user_id))
     dates = [dt.date.fromisoformat(d) for d in await db.list_finished_workout_dates(user_id)]
     if not dates:
         return _ONBOARDING, None
@@ -1162,13 +1163,16 @@ async def live_finish_workout(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Тренировка была пустая — удалил её.")
         return
     workout = await db.get_workout(workout_id)
+    user = await db.get_user(callback.from_user.id)
     started = dt.datetime.fromisoformat(workout["started_at"])
-    if not data.get("is_backfill") and started.date() != dt.date.today():
+    started_local = timeutil.to_user_local(started, user)
+    today_local = timeutil.user_today(user)
+    if not data.get("is_backfill") and started_local.date() != today_local:
         await state.set_state(WorkoutFlow.confirming_finish_date)
         await ui.safe_edit(
             callback,
-            f"⚠️ Тренировка начата {formatting.format_date_ru(started)}, а сегодня "
-            f"{formatting.format_date_ru(dt.date.today())}.\n\nВсё верно?",
+            f"⚠️ Тренировка начата {formatting.format_date_ru(started_local)}, а сегодня "
+            f"{formatting.format_date_ru(today_local)}.\n\nВсё верно?",
             reply_markup=keyboards.finish_date_mismatch_keyboard(),
         )
         await callback.answer()
