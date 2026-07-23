@@ -32,6 +32,14 @@ _BODYWEIGHT_RE = re.compile(rf"^(?P<reps>\d+){_RPE}$")
 
 MAX_SETS_PER_TOKEN = 20
 
+# Cap on how many sets one multi-token line ("100 8, 100 7, 95 8") may produce,
+# so a pasted wall of text can't spawn hundreds of DB writes in one message.
+MAX_SETS_PER_LINE = 40
+
+# Separators between sets on a single line: comma, semicolon, or newline. Spaces
+# are *not* here on purpose — "100 8" is one set (weight + reps), not two.
+_LINE_SPLIT_RE = re.compile(r"[,;\n]+")
+
 
 def _parse_rpe(raw: str | None) -> float | None:
     if not raw:
@@ -71,6 +79,25 @@ def parse_single_token(token: str) -> list[ParsedSet]:
         raise ParseError("Странное количество подходов")
 
     return [ParsedSet(weight=weight, reps=reps, rpe=rpe) for _ in range(count)]
+
+
+def parse_sets_line(text: str) -> list[ParsedSet]:
+    """Parse one message that may hold several sets, split by comma/semicolon/newline.
+
+    "100 8" stays one set; "100 8, 100 7, 95 8" becomes three. Each chunk goes
+    through parse_single_token, so every per-token form (counts like 100x8x3,
+    bare reps, @RPE, +weight) still works inside a chunk. A single bad chunk
+    fails the whole line — partial logging would be more confusing than a reparse.
+    """
+    chunks = [c.strip() for c in _LINE_SPLIT_RE.split(text) if c.strip()]
+    if not chunks:
+        raise ParseError(EXAMPLES_HINT)
+    sets: list[ParsedSet] = []
+    for chunk in chunks:
+        sets.extend(parse_single_token(chunk))
+    if len(sets) > MAX_SETS_PER_LINE:
+        raise ParseError(f"Слишком много подходов в одной строке (максимум {MAX_SETS_PER_LINE})")
+    return sets
 
 
 _BODYWEIGHT_VALUE_RE = re.compile(r"^\d+(?:[.,]\d+)?$")

@@ -32,7 +32,7 @@ import keyboards
 import ui
 import view_builder
 from fsm import WorkoutFlow
-from parser import ParseError, parse_ru_date, parse_single_token
+from parser import ParseError, parse_ru_date, parse_sets_line
 
 router = Router(name="workout")
 
@@ -163,10 +163,12 @@ def _logging_hint(
     unit: str = "kg",
     show_progression: bool = True,
     today_sets: list[tuple[float, int]] | None = None,
+    note: str | None = None,
 ) -> str:
     base = "Вес и повторы через пробел, например «100 8»"
     if has_sets:
         base += " (можно только повторы — вес возьмётся с последнего подхода)"
+    note_line = f"📝 <i>{escape(note)}</i>\n" if note else ""
     if last_session:
         sets_str = ", ".join(formatting.format_set(w, r, rpe) for w, r, rpe in last_session)
         line = f"💡 В прошлый раз: {sets_str}."
@@ -179,7 +181,9 @@ def _logging_hint(
                     for w, r in (today_sets or [])
                 )
                 line += f" {formatting.format_progression_hint(suggestion, unit, achieved)}"
-        return f"<i>{line}</i>\n\n{base}"
+        return f"{note_line}<i>{line}</i>\n\n{base}"
+    if note_line:
+        return f"{note_line}\n{base}"
     return base
 
 
@@ -199,9 +203,12 @@ async def _render_logging_screen(bot, state: FSMContext, user):
     last_session_sets = data.get("last_session_sets") or {}
 
     names: dict[int, str] = {}
+    active_note: str | None = None
     for ex_id in open_ids:
         ex = await db.get_exercise(ex_id)
         names[ex_id] = ex["display_name"]
+        if ex_id == active:
+            active_note = ex["notes"]
 
     open_items = [(ex_id, names[ex_id]) for ex_id in open_ids]
     active_block_id = (data.get("open_blocks") or {}).get(active)
@@ -214,6 +221,7 @@ async def _render_logging_screen(bot, state: FSMContext, user):
         user["unit"],
         bool(user["progression_hint_enabled"]),
         today_sets,
+        note=active_note,
     )
     kb = keyboards.logging_keyboard(open_items, active, has_sets)
     await _refresh_live(bot, state, user, data["workout_id"], hint, kb)
@@ -781,11 +789,50 @@ async def live_card_back(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+@router.callback_query(StateFilter(WorkoutFlow.logging_set), F.data.startswith("live:note:"))
+async def live_note_prompt(callback: CallbackQuery, state: FSMContext):
+    """Ask for a free-text note tied to the active exercise (technique cue, injury flag).
+    It resurfaces above "в прошлый раз" on every later session with this exercise."""
+    ex_id = int(callback.data.split(":")[2])
+    ex = await db.get_exercise(ex_id)
+    if ex is None or ex["user_id"] != callback.from_user.id:
+        await callback.answer("Упражнение не найдено", show_alert=True)
+        return
+    await state.set_state(WorkoutFlow.logging_exercise_note)
+    current = f"\n\nСейчас: <i>{escape(ex['notes'])}</i>" if ex["notes"] else ""
+    user = await db.get_user(callback.from_user.id)
+    await _refresh_live(
+        callback.bot, state, user, (await state.get_data())["workout_id"],
+        f"📝 Заметка к «{escape(ex['display_name'])}» — напиши текст (например «болит плечо — следи за локтями»).{current}",
+        keyboards.cancel_keyboard("live:note_cancel"),
+    )
+    await callback.answer()
+
+
+@router.callback_query(StateFilter(WorkoutFlow.logging_exercise_note), F.data == "live:note_cancel")
+async def live_note_cancel(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(WorkoutFlow.logging_set)
+    user = await db.get_user(callback.from_user.id)
+    await _render_logging_screen(callback.bot, state, user)
+    await callback.answer()
+
+
+@router.message(StateFilter(WorkoutFlow.logging_exercise_note))
+async def live_note_entered(message: Message, state: FSMContext):
+    data = await state.get_data()
+    active = data.get("active_exercise_id")
+    await db.set_exercise_notes(active, message.text.strip())
+    await _delete_message(message)
+    await state.set_state(WorkoutFlow.logging_set)
+    user = await db.get_user(message.from_user.id)
+    await _render_logging_screen(message.bot, state, user)
+
+
 @router.message(StateFilter(WorkoutFlow.logging_set))
 async def log_set_text(message: Message, state: FSMContext):
     data = await state.get_data()
     try:
-        parsed = parse_single_token(message.text)
+        parsed = parse_sets_line(message.text)
     except ParseError as e:
         await message.reply(e.message)
         return
@@ -832,6 +879,27 @@ async def live_undo(callback: CallbackQuery, state: FSMContext):
             await _enter_idle_screen(callback.bot, state, user, data["workout_id"])
             return
 
+    await _render_logging_screen(callback.bot, state, user)
+
+
+@router.callback_query(StateFilter(WorkoutFlow.logging_set), F.data == "live:repeat")
+async def live_repeat_set(callback: CallbackQuery, state: FSMContext):
+    """One-tap copy of the last logged set — the "same weight, same reps" case that's
+    the most common in the gym, without retyping it with chalky hands."""
+    data = await state.get_data()
+    active = data.get("active_exercise_id")
+    block_id = (data.get("open_blocks") or {}).get(active)
+    sets = await db.list_sets_for_block(block_id) if block_id else []
+    if not sets:
+        await callback.answer("Нет подхода для повтора")
+        return
+    last = sets[-1]
+    await _log_one(block_id, active, last["weight"], last["reps"], last["rpe"])
+    last_by = dict(data.get("last_by_exercise") or {})
+    last_by[active] = (last["weight"], last["reps"])
+    await state.update_data(last_by_exercise=last_by)
+    await callback.answer(f"➕ {formatting.format_set(last['weight'], last['reps'])}")
+    user = await db.get_user(callback.from_user.id)
     await _render_logging_screen(callback.bot, state, user)
 
 

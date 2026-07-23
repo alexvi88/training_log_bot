@@ -14,7 +14,7 @@ import formatting
 import keyboards
 import ui
 from fsm import EditWorkoutFlow
-from parser import ParseError, parse_ru_date, parse_single_token
+from parser import ParseError, parse_ru_date, parse_sets_line, parse_single_token
 
 router = Router(name="edit_workout")
 
@@ -164,7 +164,7 @@ async def editw_addset_prompt(callback: CallbackQuery, state: FSMContext):
 @router.message(StateFilter(EditWorkoutFlow.adding_set))
 async def editw_addset_entered(message: Message, state: FSMContext):
     try:
-        parsed = parse_single_token(message.text)
+        parsed = parse_sets_line(message.text)
     except ParseError as e:
         await message.reply(e.message)
         return

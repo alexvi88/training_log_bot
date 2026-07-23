@@ -820,6 +820,16 @@ async def set_exercise_photo(exercise_id: int, file_id: str) -> None:
         await conn().commit()
 
 
+async def set_exercise_notes(exercise_id: int, notes: Optional[str]) -> None:
+    """Store a free-text personal note for an exercise (technique cue, injury flag).
+    Passing None/empty clears it."""
+    async with _write_lock:
+        await conn().execute(
+            "UPDATE exercises SET notes = ? WHERE id = ?", (notes or None, exercise_id)
+        )
+        await conn().commit()
+
+
 # ---------- workouts ----------
 
 async def get_active_workout(user_id: int) -> Optional[aiosqlite.Row]:
