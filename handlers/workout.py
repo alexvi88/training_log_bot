@@ -1371,9 +1371,10 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
     )
     highlights = formatting.build_exercise_highlights(highlight_groups)
     full_text = summary
-    tonnage_line = formatting.format_tonnage_equivalent(session_tonnage, seed=workout_id)
-    if tonnage_line:
-        full_text += f"\n\n{tonnage_line}"
+    equivalent = formatting.format_tonnage_equivalent(session_tonnage, seed=workout_id)
+    if equivalent:
+        tonnage = f"{session_tonnage / 1000:.1f} т" if session_tonnage >= 1000 else f"{session_tonnage:.0f} кг"
+        full_text += f"\n\n🏋️ Суммарно за тренировку — {tonnage}. {equivalent}"
     # Backfilled/imported past workouts shouldn't fire the "Nth workout" milestone —
     # they're entered out of order, so the running count isn't meaningful for them.
     if not is_backfill:

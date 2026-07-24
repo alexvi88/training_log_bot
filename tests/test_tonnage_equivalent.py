@@ -1,4 +1,4 @@
-"""format_tonnage_equivalent — the playful "N × object" line on the completion card."""
+"""format_tonnage_equivalent — the playful "N объектов" comparison clause."""
 import formatting
 
 
@@ -10,8 +10,7 @@ def test_small_tonnage_returns_none():
 def test_typical_session_names_a_believable_count():
     line = formatting.format_tonnage_equivalent(6400, seed=0)
     assert line is not None
-    assert "6.4 т" in line
-    assert "×" in line
+    assert line.startswith("Это как ")
 
 
 def test_seed_rotates_the_chosen_object():
@@ -24,11 +23,11 @@ def test_count_is_always_in_a_sane_range():
     for kg in (200, 500, 1500, 6400, 20000, 80000):
         line = formatting.format_tonnage_equivalent(kg, seed=kg)
         assert line is not None
-        # The number before "×" is the count; it should never be absurd.
-        count = int(line.split("Это как ")[1].split(" ×")[0])
+        count = int(line.split("Это как ")[1].split(" ")[0])
         assert 1 <= count <= 40
 
 
-def test_kg_shown_below_a_tonne():
-    line = formatting.format_tonnage_equivalent(300, seed=0)
-    assert "кг" in line and "т" not in line.split("—")[1].split("Это")[0]
+def test_declension_matches_count():
+    assert formatting.format_tonnage_equivalent(200, seed=0) == "Это как 2 сенбернара 🐺."
+    assert formatting.format_tonnage_equivalent(750, seed=0) == "Это как 9 сенбернаров 🐺."
+    assert formatting.format_tonnage_equivalent(125000, seed=1) == "Это как 25 слонов 🐘."
