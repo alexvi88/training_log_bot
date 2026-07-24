@@ -102,20 +102,18 @@ async def build_hall_of_fame_text(user_id: int) -> str:
     )
 
 
-@router.callback_query(F.data == "menu:hall")
-async def menu_hall_of_fame(callback: CallbackQuery, state: FSMContext):
-    await state.clear()
-    text = await build_hall_of_fame_text(callback.from_user.id)
-    await ui.safe_edit(callback, text, reply_markup=keyboards.hall_of_fame_keyboard(), parse_mode="HTML")
-    await callback.answer()
-
-
 @router.callback_query(F.data == "menu:achievements")
 async def menu_achievements(callback: CallbackQuery, state: FSMContext):
+    """'🏆 Достижения' — reached from the Progress entry screen. Combines the
+    old standalone Hall of Fame screen (lifetime totals, personal records)
+    with the badge grid into one screen."""
+    await state.clear()
+    hof_text = await build_hall_of_fame_text(callback.from_user.id)
     earned = await db.list_achievement_codes(callback.from_user.id)
-    text = formatting.build_achievements_screen(earned)
+    ach_text = formatting.build_achievements_screen(earned)
+    text = hof_text + "\n\n" + ach_text
     kb = InlineKeyboardBuilder()
-    kb.button(text="⬅️ К залу славы", callback_data="menu:hall")
+    kb.button(text="⬅️ Назад", callback_data="prog:groups")
     kb.adjust(1)
     await ui.safe_edit(callback, text, reply_markup=kb.as_markup(), parse_mode="HTML")
     await callback.answer()
@@ -220,7 +218,9 @@ async def hist_delete(callback: CallbackQuery, state: FSMContext):
 async def show_progress_entry(callback: CallbackQuery, state: FSMContext):
     groups = await db.list_muscle_groups(callback.from_user.id)
     kb = keyboards.groups_keyboard(
-        groups, prefix="prog", extra_buttons=[("⬅️ Назад", "prog:back")], show_all=True
+        groups, prefix="prog",
+        extra_buttons=[("🏆 Достижения", "menu:achievements"), ("⬅️ Назад", "prog:back")],
+        show_all=True,
     )
     await ui.safe_edit(callback, "📈 Прогресс — выбери группу мышц:", reply_markup=kb)
     await callback.answer()
