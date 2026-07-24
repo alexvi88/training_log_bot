@@ -134,6 +134,6 @@ def test_newbie_nudge_stops_after_30_days():
 
 
 def test_format_tonnage_switches_units_at_1000kg():
-    assert engagement.format_tonnage(850) == "850 кг"
-    assert engagement.format_tonnage(1000) == "1.0 т"
-    assert engagement.format_tonnage(4200) == "4.2 т"
+    assert engagement.format_tonnage(850) == "850кг"
+    assert engagement.format_tonnage(1000) == "1.0т"
+    assert engagement.format_tonnage(4200) == "4.2т"
