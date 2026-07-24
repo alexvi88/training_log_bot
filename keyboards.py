@@ -164,10 +164,9 @@ def logging_keyboard(
             row.append(note_btn)
         b.row(*row)
     elif active_id is not None:
-        row = [InlineKeyboardButton(text="ℹ️ Карточка упражнения", callback_data=f"live:card:{active_id}")]
+        b.row(InlineKeyboardButton(text="ℹ️ Упражнение", callback_data=f"live:card:{active_id}"))
         if note_btn is not None:
-            row.append(note_btn)
-        b.row(*row)
+            b.row(note_btn)
     b.row(InlineKeyboardButton(text="✅ Закончить упражнение", callback_data="live:finish_exercise"))
     b.row(InlineKeyboardButton(text="➕ Суперсет", callback_data="live:add_exercise"))
     return b.as_markup()
