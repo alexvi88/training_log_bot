@@ -500,18 +500,17 @@ def build_bodyweight_screen(logs: list, unit: str = "kg", period_logs: list | No
 
 
 def format_progression_hint(suggestion, unit: str = "kg", achieved: bool = False) -> str:
-    """"Цель: …" nudge from analytics.suggest_progression, meant to sit inline
-    after the "В прошлый раз" line rather than on its own (no bold — the
-    surrounding line is already italicized).
+    """"Цель: …" nudge from analytics.suggest_progression, on its own line under
+    the "В прошлый раз" line (no bold — the surrounding line is already italicized).
     """
     u = UNIT_LABELS.get(unit, "кг")
     if suggestion.is_bodyweight:
-        goal = f"{suggestion.target_reps} повторов (на один больше прошлого)"
+        goal = f"{suggestion.target_reps} повторов"
     elif suggestion.action == "add_weight":
         top = suggestion.target_reps
         goal = f"пора добавить вес — {format_weight(suggestion.target_weight)} {u} × {top}-{top + 1}"
     else:
-        goal = f"{format_set(suggestion.target_weight, suggestion.target_reps)} (тот же вес, +1 повтор)"
+        goal = format_set(suggestion.target_weight, suggestion.target_reps)
     if achieved:
         return f"✅ Цель выполнена: {goal}"
     return f"🎯 Цель: {goal}"

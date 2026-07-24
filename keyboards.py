@@ -156,6 +156,7 @@ def logging_keyboard(
         if active_id is not None
         else None
     )
+    superset_btn = InlineKeyboardButton(text="➕ Суперсет", callback_data="live:add_exercise")
     if has_sets:
         row = [
             InlineKeyboardButton(text="🔁 Повторить", callback_data="live:repeat"),
@@ -164,10 +165,14 @@ def logging_keyboard(
         if note_btn is not None:
             row.append(note_btn)
         b.row(*row)
-    elif active_id is not None:
-        b.row(InlineKeyboardButton(text="ℹ️ Упражнение", callback_data=f"live:card:{active_id}"))
-    b.row(InlineKeyboardButton(text="✅ Закончить упражнение", callback_data="live:finish_exercise"))
-    b.row(InlineKeyboardButton(text="➕ Суперсет", callback_data="live:add_exercise"))
+        b.row(InlineKeyboardButton(text="✅ Закончить упражнение", callback_data="live:finish_exercise"))
+        b.row(superset_btn)
+    else:
+        if active_id is not None:
+            b.row(InlineKeyboardButton(text="ℹ️ Упражнение", callback_data=f"live:card:{active_id}"), superset_btn)
+        else:
+            b.row(superset_btn)
+        b.row(InlineKeyboardButton(text="✅ Закончить упражнение", callback_data="live:finish_exercise"))
     return b.as_markup()
 
 
