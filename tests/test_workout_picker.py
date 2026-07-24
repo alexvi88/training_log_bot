@@ -12,10 +12,24 @@ from handlers import workout
 pytestmark = pytest.mark.asyncio
 
 
+def _stub_photo_sends(bot) -> None:
+    """The live tracker pins a photo of the active exercise above itself, so any
+    bot that renders the logging screen needs the photo-sending calls stubbed."""
+    async def _send_media_group(*args, media, **kwargs):
+        return [
+            SimpleNamespace(message_id=700 + i, photo=[SimpleNamespace(file_id=f"fid_{i}")])
+            for i, _ in enumerate(media)
+        ]
+
+    bot.send_media_group = AsyncMock(side_effect=_send_media_group)
+    bot.send_photo = AsyncMock(return_value=SimpleNamespace(message_id=710))
+
+
 def _make_callback(user_id: int, data: str):
     bot = MagicMock()
     bot.delete_message = AsyncMock()
     bot.send_message = AsyncMock(return_value=SimpleNamespace(message_id=999))
+    _stub_photo_sends(bot)
     callback = MagicMock()
     callback.from_user = SimpleNamespace(id=user_id)
     callback.bot = bot
@@ -214,6 +228,7 @@ def _make_template_callback(user_id: int, data: str):
     bot = MagicMock()
     bot.delete_message = AsyncMock()
     bot.send_message = AsyncMock(return_value=SimpleNamespace(message_id=999))
+    _stub_photo_sends(bot)
     message.bot = bot
     callback = MagicMock()
     callback.from_user = SimpleNamespace(id=user_id)
@@ -263,3 +278,7 @@ async def test_pick_template_add_forks_and_enters_logging(fresh_db, user_id):
     assert await db.count_user_exercises(user_id) == 1
     callback.message.delete.assert_awaited_once()
     assert await state.get_state() == WorkoutFlow.logging_set.state
+    # The photos come from the sticky card above the tracker, not from a separate
+    # one-off album that would double up with it.
+    callback.message.answer_media_group.assert_not_awaited()
+    callback.bot.send_media_group.assert_awaited_once()

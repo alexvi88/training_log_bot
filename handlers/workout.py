@@ -115,6 +115,75 @@ async def _refresh_live(bot, state: FSMContext, user, workout_id: int, hint, key
     await state.update_data(live_message_id=sent.message_id)
 
 
+def _sticky_photo_caption(ex) -> str:
+    """Exercise name plus its technique steps, if we have them — the same text the
+    ℹ️ card shows, minus the equipment/attachment metadata that isn't useful mid-set."""
+    caption = f"<b>{escape(ex['display_name'])}</b>"
+    description = exercise_descriptions.get_description(ex["name"])
+    if description:
+        caption += f"\n\n{escape(description)}"
+    return caption
+
+
+async def _send_sticky_photo(bot, chat_id: int, ex) -> list[int]:
+    """Send the active exercise's reference photo(s); returns the sent message ids
+    ([] when the exercise has no photo at all)."""
+    caption = _sticky_photo_caption(ex)
+    if ex["custom_photo_file_id"]:
+        sent = await bot.send_photo(
+            chat_id=chat_id, photo=ex["custom_photo_file_id"], caption=caption, parse_mode="HTML"
+        )
+        return [sent.message_id]
+    images = exercise_media.get_images(ex["name"])
+    if not images:
+        return []
+    media = [
+        InputMediaPhoto(
+            media=exercise_media.cached_file_id(path) or FSInputFile(path),
+            caption=caption if i == 0 else None,
+            parse_mode="HTML" if i == 0 else None,
+        )
+        for i, path in enumerate(images)
+    ]
+    sent_group = await bot.send_media_group(chat_id=chat_id, media=media)
+    for path, msg in zip(images, sent_group, strict=False):
+        photos = getattr(msg, "photo", None)
+        if photos:
+            exercise_media.remember_file_id(path, photos[-1].file_id)
+    return [m.message_id for m in sent_group]
+
+
+async def _clear_sticky_photo(bot, state: FSMContext) -> None:
+    data = await state.get_data()
+    for mid in data.get("sticky_photo_msg_ids") or []:
+        with suppress(TelegramBadRequest):
+            await bot.delete_message(chat_id=data.get("live_chat_id"), message_id=mid)
+    await state.update_data(sticky_photo_msg_ids=None, sticky_photo_ex_id=None)
+
+
+async def _sync_sticky_photo(bot, state: FSMContext, ex_id: int | None) -> None:
+    """Keep a photo of the active exercise pinned right above the live tracker.
+
+    It only needs sending when the active exercise changes: the tracker itself is
+    deleted and re-sent on every refresh (see _refresh_live), so it always lands
+    *below* this photo, and the user's own messages are deleted as they're logged.
+    """
+    data = await state.get_data()
+    chat_id = data.get("live_chat_id")
+    if chat_id is None or data.get("sticky_photo_ex_id") == ex_id:
+        return
+    await _clear_sticky_photo(bot, state)
+    if ex_id is None:
+        return
+    ex = await db.get_exercise(ex_id)
+    if ex is None:
+        return
+    msg_ids = await _send_sticky_photo(bot, chat_id, ex)
+    # ex_id is remembered even with no photo, so an exercise without one doesn't
+    # re-hit the DB and the media lookup on every single set.
+    await state.update_data(sticky_photo_msg_ids=msg_ids, sticky_photo_ex_id=ex_id)
+
+
 async def _suggested_next_exercise(user_id: int, last_finished_id: int | None):
     """What the user did right after `last_finished_id` last time, for a one-tap suggestion."""
     if last_finished_id is None:
@@ -141,6 +210,7 @@ async def _idle_view(data: dict, user_id: int, is_empty: bool = False) -> tuple[
 
 async def _enter_idle_screen(bot, state: FSMContext, user, workout_id: int):
     data = await state.get_data()
+    await _clear_sticky_photo(bot, state)  # no active exercise → nothing to illustrate
     is_empty = not await db.list_exercise_ids_for_workout(workout_id)
     hint, kb = await _idle_view(data, user["telegram_id"], is_empty=is_empty)
     await _refresh_live(bot, state, user, workout_id, hint, kb)
@@ -296,6 +366,7 @@ async def _render_logging_screen(bot, state: FSMContext, user):
         note=active_note,
     )
     kb = keyboards.logging_keyboard(open_items, active, has_sets)
+    await _sync_sticky_photo(bot, state, active)
     await _refresh_live(bot, state, user, data["workout_id"], hint, kb)
 
 
@@ -835,18 +906,6 @@ async def pick_back_from_templates(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-async def _send_exercise_photos(message: Message, ex) -> None:
-    images = exercise_media.get_images(ex["name"])
-    if images:
-        caption = f"Название: {ex['name']}"
-        description = exercise_descriptions.get_description(ex["name"])
-        if description:
-            caption += f"\n\n{description}"
-        media = [InputMediaPhoto(media=FSInputFile(images[0]), caption=caption)]
-        media += [InputMediaPhoto(media=FSInputFile(p)) for p in images[1:]]
-        await message.answer_media_group(media)
-
-
 @router.callback_query(StateFilter(WorkoutFlow.creating_exercise_name), F.data.startswith("pick:tpl:"))
 async def pick_template_preview(callback: CallbackQuery, state: FSMContext):
     """Preview a template (photo + info, same as the ⚙️ Упражнения flow) before
@@ -874,10 +933,10 @@ async def pick_template_preview(callback: CallbackQuery, state: FSMContext):
 async def pick_template_add(callback: CallbackQuery, state: FSMContext):
     template_id = int(callback.data.split(":")[2])
     ex_id = await db.fork_exercise_from_template(callback.from_user.id, template_id)
-    ex = await db.get_exercise(ex_id)
     with suppress(TelegramBadRequest):
         await callback.message.delete()
-    await _send_exercise_photos(callback.message, ex)
+    # No photo send here: the exercise becomes active right away, so the sticky
+    # photo above the tracker shows the same shots (and the same technique text).
     await _on_exercise_chosen(callback, state, ex_id)
 
 
@@ -1256,6 +1315,7 @@ async def live_finish_workout(callback: CallbackQuery, state: FSMContext):
     exercise_ids = await db.list_exercise_ids_for_workout(workout_id)
     if not exercise_ids:
         await db.discard_workout(workout_id)
+        await _clear_sticky_photo(callback.bot, state)
         await state.clear()
         await _show_main_menu(callback, state)
         await callback.answer("Тренировка была пустая — удалил её.")
@@ -1523,6 +1583,7 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
             _attach_ai_comment(bot, data["live_chat_id"], message_id, user_id, workout_id, full_text)
         )
 
+    await _clear_sticky_photo(bot, state)
     await state.clear()
     active = await db.get_active_workout(user_id)
     menu_text, menu_png = await _menu_view(user_id)

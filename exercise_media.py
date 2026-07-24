@@ -121,3 +121,19 @@ def get_images(exercise_name: str) -> list[str]:
         return []
     paths = [os.path.join(MEDIA_DIR, f"{slug}_1.jpg"), os.path.join(MEDIA_DIR, f"{slug}_2.jpg")]
     return paths if all(os.path.exists(p) for p in paths) else []
+
+
+# Telegram hands back a file_id for every uploaded photo, and re-sending that id
+# costs no upload at all. The live tracker shows the same photos over and over
+# (every exercise, every workout, every user), so remembering the ids for the
+# process lifetime turns all but the first send into a plain string.
+_FILE_IDS: dict[str, str] = {}
+
+
+def cached_file_id(path: str) -> str | None:
+    return _FILE_IDS.get(path)
+
+
+def remember_file_id(path: str, file_id: str | None) -> None:
+    if file_id:
+        _FILE_IDS[path] = file_id
