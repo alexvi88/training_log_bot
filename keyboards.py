@@ -142,8 +142,9 @@ def logging_keyboard(
     navigation/utility actions, not numeric input, to keep it short.
 
     The keyboard is deliberately kept short: the repeat/undo pair share one row,
-    and the per-exercise note button (📝) rides along on an existing row rather
-    than adding a new one, so logging many sets never grows a wall of buttons.
+    and the per-exercise note button (📝) rides along on that row rather than
+    adding a new one. It only appears once a set is logged; before that, the
+    exercise-card row is the only extra control.
     """
     b = InlineKeyboardBuilder()
     if len(open_items) > 1:
@@ -165,8 +166,6 @@ def logging_keyboard(
         b.row(*row)
     elif active_id is not None:
         b.row(InlineKeyboardButton(text="ℹ️ Упражнение", callback_data=f"live:card:{active_id}"))
-        if note_btn is not None:
-            b.row(note_btn)
     b.row(InlineKeyboardButton(text="✅ Закончить упражнение", callback_data="live:finish_exercise"))
     b.row(InlineKeyboardButton(text="➕ Суперсет", callback_data="live:add_exercise"))
     return b.as_markup()
