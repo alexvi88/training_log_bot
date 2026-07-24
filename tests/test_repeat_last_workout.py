@@ -52,21 +52,36 @@ async def _finished_workout(db, user_id, exercise_ids):
 
 
 @pytest.mark.asyncio
-async def test_repeat_last_loads_previous_plan(fresh_db, user_id):
+async def test_repeat_picks_a_specific_past_workout(fresh_db, user_id):
     db = fresh_db
     group_id = await db.create_muscle_group(user_id, "Грудь")
     bench = await db.create_exercise(user_id, "Жим лёжа", group_id)
     row = await db.create_exercise(user_id, "Тяга", group_id)
-    await _finished_workout(db, user_id, [bench, row])
+    squat = await db.create_exercise(user_id, "Присед", group_id)
+    # Two finished workouts — the user should be able to repeat the older one,
+    # not just the most recent.
+    older = await _finished_workout(db, user_id, [bench, row])
+    await _finished_workout(db, user_id, [squat])
 
     state = await _state(user_id)
     # Repeat now lives inside the fresh-workout picker: start a workout first,
-    # then tap "🔁 Повторить прошлую".
+    # then tap "🔁 Повторить прошлую" to open the list of past workouts.
     await workout.start_workout(_make_callback(user_id, "menu:start_workout"), state)
     await workout.pick_repeat_last(_make_callback(user_id, "pick:repeat"), state)
 
+    # The list offers a "show preview" button per past workout.
+    list_cb = _make_callback(user_id, "pick:repeat")
+    await workout._repeat_list_screen(list_cb, state, page=0)
+    kb = list_cb.bot.send_message.await_args.kwargs["reply_markup"]
+    cbs = [b.callback_data for row in kb.inline_keyboard for b in row]
+    assert f"pick:rep:show:{older}" in cbs
+
+    # Preview the older workout, then repeat it.
+    await workout.pick_repeat_show(_make_callback(user_id, f"pick:rep:show:{older}"), state)
+    await workout.pick_repeat_use(_make_callback(user_id, f"pick:rep:use:{older}"), state)
+
     data = await state.get_data()
-    # First block opened for logging, the rest queued as planned_blocks.
+    # First block of the CHOSEN workout opened for logging, the rest queued.
     assert await state.get_state() == WorkoutFlow.logging_set
     assert data["open_exercises"] == [bench]
     assert data["planned_blocks"] == [{"exercise_ids": [row]}]

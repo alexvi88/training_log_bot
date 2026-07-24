@@ -211,15 +211,14 @@ async def test_voice_unparseable_asks_to_retry(fresh_db, user_id, monkeypatch):
     assert "Не понял" in message.reply.await_args.args[0]
 
 
-def test_logging_keyboard_has_repeat_and_note_when_sets_present():
+def test_logging_keyboard_omits_repeat_and_note():
+    # The 🔁 Повторить and 📝 note buttons were removed from the live logging
+    # screen; only "↩️ Удалить последний" remains once a set is logged.
+    for has_sets in (True, False):
+        kb = keyboards.logging_keyboard([(1, "Bench")], active_id=1, has_sets=has_sets)
+        cbs = [b.callback_data for row in kb.inline_keyboard for b in row]
+        assert "live:repeat" not in cbs
+        assert "live:note:1" not in cbs
     kb = keyboards.logging_keyboard([(1, "Bench")], active_id=1, has_sets=True)
     cbs = [b.callback_data for row in kb.inline_keyboard for b in row]
-    assert "live:repeat" in cbs
-    assert "live:note:1" in cbs
-
-
-def test_logging_keyboard_repeat_and_note_absent_without_sets():
-    kb = keyboards.logging_keyboard([(1, "Bench")], active_id=1, has_sets=False)
-    cbs = [b.callback_data for row in kb.inline_keyboard for b in row]
-    assert "live:repeat" not in cbs
-    assert "live:note:1" not in cbs
+    assert "live:undo" in cbs

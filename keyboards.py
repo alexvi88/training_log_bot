@@ -141,30 +141,17 @@ def logging_keyboard(
     Weight/reps are typed as plain text (e.g. "100 8") — this keyboard only holds
     navigation/utility actions, not numeric input, to keep it short.
 
-    The keyboard is deliberately kept short: the repeat/undo pair share one row,
-    and the per-exercise note button (📝) rides along on that row rather than
-    adding a new one. It only appears once a set is logged; before that, the
-    exercise-card row is the only extra control.
+    Kept deliberately short: once a set is logged the only control is "↩️ Удалить"
+    (undo the last set); before that, the exercise-card row is the only extra control.
     """
     b = InlineKeyboardBuilder()
     if len(open_items) > 1:
         for ex_id, name in open_items:
             text = ("▶ " if ex_id == active_id else "") + name
             b.row(InlineKeyboardButton(text=text, callback_data=f"live:switch:{ex_id}"))
-    note_btn = (
-        InlineKeyboardButton(text="📝", callback_data=f"live:note:{active_id}")
-        if active_id is not None
-        else None
-    )
     superset_btn = InlineKeyboardButton(text="➕ Суперсет", callback_data="live:add_exercise")
     if has_sets:
-        row = [
-            InlineKeyboardButton(text="🔁 Повторить", callback_data="live:repeat"),
-            InlineKeyboardButton(text="↩️ Удалить", callback_data="live:undo"),
-        ]
-        if note_btn is not None:
-            row.append(note_btn)
-        b.row(*row)
+        b.row(InlineKeyboardButton(text="↩️ Удалить последний", callback_data="live:undo"))
         b.row(InlineKeyboardButton(text="✅ Закончить упражнение", callback_data="live:finish_exercise"))
         b.row(superset_btn)
     else:
@@ -338,6 +325,33 @@ def history_list_keyboard(workouts, page: int, has_next: bool) -> InlineKeyboard
         b.row(*nav)
     b.row(InlineKeyboardButton(text="🗓 Добавить прошлые тренировки", callback_data="menu:backfill_workout"))
     b.row(InlineKeyboardButton(text="⬅️ Главное меню", callback_data="hist:menu"))
+    return b.as_markup()
+
+
+def repeat_list_keyboard(workouts, page: int, has_next: bool) -> InlineKeyboardMarkup:
+    """Pick which past workout to repeat: one button per session, plus paging and
+    a way back to the fresh-workout picker."""
+    b = InlineKeyboardBuilder()
+    for w in workouts:
+        b.button(text=w["label"], callback_data=f"pick:rep:show:{w['id']}")
+    b.adjust(1)
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"pick:rep:page:{page - 1}"))
+    if has_next:
+        nav.append(InlineKeyboardButton(text="➡️", callback_data=f"pick:rep:page:{page + 1}"))
+    if nav:
+        b.row(*nav)
+    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="pick:rep:cancel"))
+    return b.as_markup()
+
+
+def repeat_preview_keyboard(workout_id: int) -> InlineKeyboardMarkup:
+    """On the preview of a past workout: repeat it, or go back to the list."""
+    b = InlineKeyboardBuilder()
+    b.button(text="✅ Повторить эту", callback_data=f"pick:rep:use:{workout_id}")
+    b.button(text="⬅️ К списку", callback_data="pick:rep:list")
+    b.adjust(1)
     return b.as_markup()
 
 
