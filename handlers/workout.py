@@ -237,6 +237,18 @@ async def _delete_message(message: Message):
         await message.delete()
 
 
+# How long a record-setting message lingers (with its 🔥 reaction) before being
+# tidied away — long enough to notice and screenshot, short enough not to clutter
+# the chat like a normal weight message that's deleted immediately.
+_RECORD_MESSAGE_LIFETIME_SECONDS = 60
+
+
+async def _delete_message_later(bot, chat_id: int, message_id: int, delay: float) -> None:
+    await asyncio.sleep(delay)
+    with suppress(TelegramBadRequest):
+        await bot.delete_message(chat_id=chat_id, message_id=message_id)
+
+
 async def _log_one(block_id: int, exercise_id: int, weight: float, reps: int, rpe: float | None = None):
     round_idx = await db.next_round_index(block_id, exercise_id)
     await db.add_set(block_id, exercise_id, round_idx, 0, weight, reps, rpe)
@@ -354,6 +366,18 @@ async def _last_session_sets(ex_id: int) -> list[tuple[float, int, float | None]
     return [(r["weight"], r["reps"], r["rpe"]) for r in rows if r["workout_id"] == last_workout_id]
 
 
+def _exercise_card_has_content(ex) -> bool:
+    """Whether the "ℹ️ Упражнение" card would show anything beyond the bare name."""
+    return bool(
+        ex["custom_photo_file_id"]
+        or exercise_media.get_images(ex["name"])
+        or exercise_descriptions.get_description(ex["name"])
+        or ex["equipment"]
+        or ex["unilateral"]
+        or ex["attachment"]
+    )
+
+
 async def _render_logging_screen(bot, state: FSMContext, user):
     data = await state.get_data()
     open_ids: list[int] = data.get("open_exercises") or []
@@ -362,11 +386,13 @@ async def _render_logging_screen(bot, state: FSMContext, user):
 
     names: dict[int, str] = {}
     active_note: str | None = None
+    show_card = False
     for ex_id in open_ids:
         ex = await db.get_exercise(ex_id)
         names[ex_id] = ex["display_name"]
         if ex_id == active:
             active_note = ex["notes"]
+            show_card = _exercise_card_has_content(ex)
 
     open_items = [(ex_id, names[ex_id]) for ex_id in open_ids]
     active_block_id = (data.get("open_blocks") or {}).get(active)
@@ -381,7 +407,7 @@ async def _render_logging_screen(bot, state: FSMContext, user):
         today_sets,
         note=active_note,
     )
-    kb = keyboards.logging_keyboard(open_items, active, has_sets)
+    kb = keyboards.logging_keyboard(open_items, active, has_sets, show_card)
     await _sync_sticky_photo(bot, state, active)
     await _refresh_live(bot, state, user, data["workout_id"], hint, kb)
 
@@ -443,9 +469,30 @@ async def _main_menu_kb(user_id: int, active) -> InlineKeyboardMarkup:
     return keyboards.main_menu(bool(active))
 
 
+_WORKOUT_SCAFFOLD_KEYS = (
+    "workout_id", "open_exercises", "open_blocks", "active_exercise_id",
+    "last_by_exercise", "last_session_sets",
+)
+
+
+async def _clear_state_keep_workout(state: FSMContext) -> None:
+    """Reset the FSM flow, but keep the in-progress workout's open-exercise
+    scaffolding intact. Leaving to the menu (or elsewhere) doesn't lose any
+    data — it's still sitting untouched in memory — so wiping it on every
+    menu tap would force a lossy DB-only reconstruction (which can only ever
+    recover the single most-recently-touched exercise, see _reopen_exercises)
+    for no reason. Preserved keys let _enter_live restore the exact tabs/
+    weights the user had open before they navigated away."""
+    data = await state.get_data()
+    preserved = {k: data[k] for k in _WORKOUT_SCAFFOLD_KEYS if k in data}
+    await state.clear()
+    if preserved:
+        await state.update_data(**preserved)
+
+
 @router.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext):
-    await state.clear()
+    await _clear_state_keep_workout(state)
     await _ensure_user(message.from_user.id, message.from_user.username)
     active = await db.get_active_workout(message.from_user.id)
     text, png = await _menu_view(message.from_user.id)
@@ -518,7 +565,7 @@ async def _show_main_menu(callback: CallbackQuery, state: FSMContext, delete_cur
     # button — that message is part of the user's conversation with the
     # AI-тренер, not a disposable menu screen, so it should stay in the chat
     # instead of being deleted (same reasoning as _enter_live's delete_message).
-    await state.clear()
+    await _clear_state_keep_workout(state)
     active = await db.get_active_workout(callback.from_user.id)
     text, png = await _menu_view(callback.from_user.id)
     kb = await _main_menu_kb(callback.from_user.id, active)
@@ -742,11 +789,25 @@ async def _enter_live(
     # button) — that message is part of the user's chat history with the AI-тренер,
     # not a disposable menu screen, so it should stay instead of being deleted.
     user = await _ensure_user(callback.from_user.id, callback.from_user.username)
+    data = await state.get_data()
+    if data.get("workout_id") == workout_id and data.get("open_exercises"):
+        # The FSM already knows exactly which exercises/tabs were open (e.g. the
+        # user just detoured through the menu/history and nothing was actually
+        # lost) — trust it instead of _reopen_exercises's lossy DB-only guess,
+        # which can only ever recover the single most-recently-touched exercise.
+        open_exercises = data["open_exercises"]
+        open_blocks = data.get("open_blocks") or {}
+        last_session_sets = data.get("last_session_sets") or {}
+        last_by_exercise = data.get("last_by_exercise") or {}
+        active_exercise_id = data.get("active_exercise_id")
+        if active_exercise_id not in open_exercises:
+            active_exercise_id = open_exercises[-1]
+    else:
+        open_exercises, open_blocks, last_session_sets, last_by_exercise = await _reopen_exercises(workout_id)
+        active_exercise_id = open_exercises[-1] if open_exercises else None
     if delete_message:
         await _delete_message(callback.message)
     sent = await callback.message.answer("🏋️ Тренировка")
-    open_exercises, open_blocks, last_session_sets, last_by_exercise = await _reopen_exercises(workout_id)
-    active_exercise_id = open_exercises[-1] if open_exercises else None
     await state.set_state(WorkoutFlow.logging_set if open_exercises else WorkoutFlow.idle)
     await state.update_data(
         workout_id=workout_id, live_chat_id=sent.chat.id, live_message_id=sent.message_id,
@@ -1035,12 +1096,12 @@ async def _send_exercise_card(message: Message, state: FSMContext, ex) -> None:
         images = exercise_media.get_images(ex["name"])
         if images:
             # Telegram doesn't allow a reply_markup on media group items, so the
-            # back button still needs its own message — kept text-free (zero-width space).
+            # back button still needs its own message below the album.
             media = [InputMediaPhoto(media=FSInputFile(images[0]), caption=text, parse_mode="HTML")]
             media += [InputMediaPhoto(media=FSInputFile(p)) for p in images[1:]]
             sent_group = await message.answer_media_group(media)
             msg_ids.extend(m.message_id for m in sent_group)
-            back = await message.answer("​", reply_markup=back_kb)
+            back = await message.answer("⬇️", reply_markup=back_kb)
             msg_ids.append(back.message_id)
         else:
             sent = await message.answer(text, parse_mode="HTML", reply_markup=back_kb)
@@ -1147,6 +1208,11 @@ async def log_set_text(message: Message, state: FSMContext):
                 message_id=message.message_id,
                 reaction=[ReactionTypeEmoji(emoji="🔥")],
             )
+        asyncio.create_task(
+            _delete_message_later(
+                message.bot, message.chat.id, message.message_id, _RECORD_MESSAGE_LIFETIME_SECONDS
+            )
+        )
     else:
         await _delete_message(message)
     await _render_logging_screen(message.bot, state, user)

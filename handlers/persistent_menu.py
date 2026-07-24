@@ -43,18 +43,20 @@ async def persistent_menu_button(message: Message, state: FSMContext) -> None:
 
 @router.message(F.text == keyboards.BTN_WORKOUT)
 async def persistent_workout_button(message: Message, state: FSMContext) -> None:
-    from handlers.workout import start_workout
+    from handlers.workout import _clear_state_keep_workout, start_workout
 
-    await state.clear()
+    await _clear_state_keep_workout(state)
     await start_workout(_MessageAsCallback(message), state)
 
 
 async def _open_ai_trainer(message: Message, state: FSMContext) -> None:
+    from handlers.workout import _clear_state_keep_workout
+
     if not ai_trainer.is_configured():
         await message.answer("AI-тренер не настроен: администратору нужно задать XAI_API_KEY.")
         return
     await db.get_or_create_user(message.from_user.id, message.from_user.username)
-    await state.clear()
+    await _clear_state_keep_workout(state)
     await state.set_state(AITrainerFlow.chatting)
     await state.update_data(ai_history=[])
     await message.answer(INTRO_TEXT, reply_markup=await ai_keyboard(message.from_user.id), parse_mode="HTML")

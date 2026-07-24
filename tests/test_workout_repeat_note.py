@@ -140,7 +140,7 @@ async def _finished_baseline(db, user_id, ex_id, weight, reps):
 
 
 @pytest.mark.asyncio
-async def test_record_set_reacts_and_keeps_message(fresh_db, user_id):
+async def test_record_set_reacts_and_keeps_message_briefly(fresh_db, user_id):
     db = fresh_db
     state, ex_id, block_id = await _setup_logging(db, user_id)
     await _finished_baseline(db, user_id, ex_id, 100.0, 5)
@@ -151,7 +151,36 @@ async def test_record_set_reacts_and_keeps_message(fresh_db, user_id):
     message.bot.set_message_reaction.assert_awaited_once()
     react = message.bot.set_message_reaction.await_args.kwargs["reaction"]
     assert react[0].emoji == "🔥"
-    message.delete.assert_not_awaited()  # trophy message stays in the chat
+    message.delete.assert_not_awaited()  # not tidied away immediately, unlike a normal set
+
+
+@pytest.mark.asyncio
+async def test_record_set_message_is_deleted_after_delay(fresh_db, user_id, monkeypatch):
+    """The 🔥 reaction message isn't left in the chat forever — it's cleaned up
+    after a delay like everything else, just not instantly (so it can be noticed)."""
+    db = fresh_db
+    state, ex_id, block_id = await _setup_logging(db, user_id)
+    await _finished_baseline(db, user_id, ex_id, 100.0, 5)
+    message = _make_message(user_id, "150 5")  # clear e1RM record
+
+    monkeypatch.setattr(workout, "_RECORD_MESSAGE_LIFETIME_SECONDS", 0)
+    scheduled = []
+    monkeypatch.setattr(workout.asyncio, "create_task", lambda coro: scheduled.append(coro))
+
+    await workout.log_set_text(message, state)
+
+    # log_set_text also re-renders the live tracker (delete-and-resend), which
+    # uses this same bot.delete_message mock for an unrelated message — count
+    # calls rather than asserting zero.
+    assert len(scheduled) == 1
+    calls_before = message.bot.delete_message.await_count
+
+    await scheduled[0]  # let the delayed-delete task run to completion
+
+    assert message.bot.delete_message.await_count == calls_before + 1
+    message.bot.delete_message.assert_awaited_with(
+        chat_id=message.chat.id, message_id=message.message_id
+    )
 
 
 @pytest.mark.asyncio

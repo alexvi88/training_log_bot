@@ -402,7 +402,9 @@ def build_hall_of_fame(
         tonnage_str = f"{tonnage_kg:.0f}{u}"
     tonnage_line = f"🏋️ Поднято за всё время: <b>{tonnage_str}</b>"
     if tonnage_equivalent:
-        tonnage_line += f" {tonnage_equivalent}"
+        clause = tonnage_equivalent.rstrip(".")
+        clause = clause[:1].lower() + clause[1:]
+        tonnage_line += f"  ({clause})"
     lines.append(tonnage_line)
 
     if best_week_streak >= 2:
