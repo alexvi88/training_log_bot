@@ -353,8 +353,7 @@ async def _send_menu(message: Message, text: str, png: bytes | None, keyboard) -
 
 
 async def _main_menu_kb(user_id: int, active) -> InlineKeyboardMarkup:
-    can_repeat = not active and await db.count_workouts(user_id) > 0
-    return keyboards.main_menu(bool(active), can_repeat_last=can_repeat)
+    return keyboards.main_menu(bool(active))
 
 
 @router.message(Command("start"))
@@ -427,15 +426,21 @@ async def stale_delete_cancel(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-async def _show_main_menu(callback: CallbackQuery, state: FSMContext):
+async def _show_main_menu(callback: CallbackQuery, state: FSMContext, delete_current: bool = True):
+    # delete_current=False when reached from the AI-trainer chat's "⬅️ Меню"
+    # button — that message is part of the user's conversation with the
+    # AI-тренер, not a disposable menu screen, so it should stay in the chat
+    # instead of being deleted (same reasoning as _enter_live's delete_message).
     await state.clear()
     active = await db.get_active_workout(callback.from_user.id)
     text, png = await _menu_view(callback.from_user.id)
     kb = await _main_menu_kb(callback.from_user.id, active)
     if png is None:
-        await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML")
+        await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML", delete=delete_current)
     else:
-        await ui.safe_edit_photo(callback, png, "year.png", text, reply_markup=kb, parse_mode="HTML")
+        await ui.safe_edit_photo(
+            callback, png, "year.png", text, reply_markup=kb, parse_mode="HTML", delete=delete_current
+        )
 
 
 @router.callback_query(F.data == "menu:progress")
@@ -483,27 +488,16 @@ async def start_workout(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(F.data == "menu:repeat_last")
-async def repeat_last_workout(callback: CallbackQuery, state: FSMContext):
-    """Start a fresh workout pre-loaded with the exercises (and supersets) of the
-    last finished one — the same planned-blocks machinery a saved program uses."""
-    await _ensure_user(callback.from_user.id, callback.from_user.username)
-    active = await db.get_active_workout(callback.from_user.id)
-    if active:
-        await _enter_live(callback, state, active["id"])
-        return
+@router.callback_query(StateFilter(WorkoutFlow.picking_group), F.data == "pick:repeat")
+async def pick_repeat_last(callback: CallbackQuery, state: FSMContext):
+    """Pre-load the current (already-started) workout with the exercises (and
+    supersets) of the last finished one — the same planned-blocks machinery a
+    saved program uses. Reached from the first picker screen of a fresh workout."""
     plan = await db.last_finished_workout_plan(callback.from_user.id)
     if not plan:
-        await callback.answer("Нет прошлой тренировки для повтора")
-        await _show_main_menu(callback, state)
+        await callback.answer("Нет прошлой тренировки для повтора", show_alert=True)
         return
-    workout_id = await db.create_workout(callback.from_user.id)
-    await _delete_message(callback.message)
-    sent = await callback.message.answer("🔁 Повторяем прошлую тренировку")
-    await state.update_data(
-        workout_id=workout_id, live_chat_id=sent.chat.id, live_message_id=sent.message_id,
-        last_by_exercise={}, planned_blocks=plan,
-    )
+    await state.update_data(planned_blocks=plan)
     await _load_next_planned_block(callback, state)
     await callback.answer()
 
@@ -592,6 +586,11 @@ async def _picker_screen_groups(callback: CallbackQuery, state: FSMContext, show
         hint = "Открыто сейчас: " + ", ".join(names) + "\n" + hint
     extra = []
     if show_program_button:
+        # Offered only on the very first picker screen of a fresh workout: a
+        # one-tap re-run of the last session for people who train A/B without a
+        # saved program, plus the shortcut into saved programs.
+        if await db.count_workouts(callback.from_user.id) > 0:
+            extra.append(("🔁 Повторить прошлую", "pick:repeat"))
         extra.append(("🗂 Выбрать программу", "rt:manage"))
     extra.append(("❌ Отмена", "pick:cancel"))
     kb = keyboards.groups_keyboard(groups, prefix="pick", extra_buttons=extra, show_all=True)

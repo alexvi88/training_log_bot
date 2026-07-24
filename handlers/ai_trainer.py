@@ -182,8 +182,10 @@ async def menu_ai(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "ai:menu")
 async def ai_to_menu(callback: CallbackQuery, state: FSMContext):
+    """Keeps the AI-тренер's last reply in the chat instead of deleting it —
+    unlike other "back to menu" buttons, this one sits on a real conversation."""
     from handlers.workout import _show_main_menu
-    await _show_main_menu(callback, state)
+    await _show_main_menu(callback, state, delete_current=False)
     await callback.answer()
 
 

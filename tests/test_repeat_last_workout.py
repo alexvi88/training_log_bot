@@ -60,9 +60,10 @@ async def test_repeat_last_loads_previous_plan(fresh_db, user_id):
     await _finished_workout(db, user_id, [bench, row])
 
     state = await _state(user_id)
-    callback = _make_callback(user_id, "menu:repeat_last")
-
-    await workout.repeat_last_workout(callback, state)
+    # Repeat now lives inside the fresh-workout picker: start a workout first,
+    # then tap "🔁 Повторить прошлую".
+    await workout.start_workout(_make_callback(user_id, "menu:start_workout"), state)
+    await workout.pick_repeat_last(_make_callback(user_id, "pick:repeat"), state)
 
     data = await state.get_data()
     # First block opened for logging, the rest queued as planned_blocks.
@@ -74,23 +75,46 @@ async def test_repeat_last_loads_previous_plan(fresh_db, user_id):
 @pytest.mark.asyncio
 async def test_repeat_last_without_history_is_gentle(fresh_db, user_id):
     state = await _state(user_id)
-    callback = _make_callback(user_id, "menu:repeat_last")
+    await state.set_state(WorkoutFlow.picking_group)
+    callback = _make_callback(user_id, "pick:repeat")
 
-    await workout.repeat_last_workout(callback, state)
+    await workout.pick_repeat_last(callback, state)
 
-    callback.answer.assert_any_await("Нет прошлой тренировки для повтора")
+    callback.answer.assert_any_await("Нет прошлой тренировки для повтора", show_alert=True)
 
 
-def test_menu_shows_repeat_button_only_when_available():
-    with_btn = keyboards.main_menu(has_active_workout=False, can_repeat_last=True)
-    cbs = [b.callback_data for row in with_btn.inline_keyboard for b in row]
-    assert "menu:repeat_last" in cbs
+@pytest.mark.asyncio
+async def test_repeat_button_offered_in_picker_only_with_history(fresh_db, user_id):
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    bench = await db.create_exercise(user_id, "Жим лёжа", group_id)
 
-    without = keyboards.main_menu(has_active_workout=False, can_repeat_last=False)
-    cbs2 = [b.callback_data for row in without.inline_keyboard for b in row]
-    assert "menu:repeat_last" not in cbs2
+    # No finished workout yet: the fresh-workout picker omits the repeat button.
+    state = await _state(user_id)
+    callback = _make_callback(user_id, "menu:start_workout")
+    await workout.start_workout(callback, state)
+    kb = callback.bot.send_message.await_args.kwargs["reply_markup"]
+    cbs = [b.callback_data for row in kb.inline_keyboard for b in row]
+    assert "pick:repeat" not in cbs
 
-    # Never offered while a workout is already active.
-    active = keyboards.main_menu(has_active_workout=True, can_repeat_last=True)
-    cbs3 = [b.callback_data for row in active.inline_keyboard for b in row]
-    assert "menu:repeat_last" not in cbs3
+    # Discard that still-active workout so the next start_workout call below
+    # goes through the create-and-pick path again instead of resuming it.
+    active = await db.get_active_workout(user_id)
+    await db.discard_workout(active["id"])
+
+    # After a finished workout, the same screen offers it.
+    await _finished_workout(db, user_id, [bench])
+    state2 = await _state(user_id)
+    callback2 = _make_callback(user_id, "menu:start_workout")
+    await workout.start_workout(callback2, state2)
+    kb2 = callback2.bot.send_message.await_args.kwargs["reply_markup"]
+    cbs2 = [b.callback_data for row in kb2.inline_keyboard for b in row]
+    assert "pick:repeat" in cbs2
+
+
+def test_main_menu_no_longer_carries_repeat_or_hall():
+    for active in (False, True):
+        kb = keyboards.main_menu(has_active_workout=active)
+        cbs = [b.callback_data for row in kb.inline_keyboard for b in row]
+        assert "menu:repeat_last" not in cbs
+        assert "menu:hall" not in cbs
