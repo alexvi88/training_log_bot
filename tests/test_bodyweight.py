@@ -86,7 +86,7 @@ def test_bodyweight_screen_shows_latest_and_count():
         {"weight": 80.0, "logged_at": "2026-02-01T10:00:00"},
     ]
     text = formatting.build_bodyweight_screen(logs, "kg")
-    assert "Сейчас: <b>80 кг</b>" in text
+    assert "Сейчас: <b>80кг</b>" in text
     assert "Всего 2 записи." in text
     assert "С прошлой записи" not in text
     assert "За всё время" not in text
@@ -98,8 +98,8 @@ def test_bodyweight_screen_lists_entries_newest_first():
         {"weight": 80.0, "logged_at": "2026-02-01T10:00:00"},
     ]
     text = formatting.build_bodyweight_screen(logs, "kg")
-    assert "01.02.2026 — 80 кг" in text
-    assert "01.01.2026 — 82 кг" in text
+    assert "01.02.2026 — 80кг" in text
+    assert "01.01.2026 — 82кг" in text
     assert text.index("01.02.2026") < text.index("01.01.2026")
     assert "Напиши вес, чтобы добавить новую запись." in text
 
@@ -110,7 +110,7 @@ def test_bodyweight_screen_lists_only_period_logs_when_given():
         {"weight": 80.0, "logged_at": "2026-02-01T10:00:00"},
     ]
     text = formatting.build_bodyweight_screen(logs, "kg", period_logs=logs[1:])
-    assert "01.02.2026 — 80 кг" in text
+    assert "01.02.2026 — 80кг" in text
     assert "01.01.2026" not in text
     # latest/count still reflect the full history, not just the period
     assert "Всего 2 записи." in text

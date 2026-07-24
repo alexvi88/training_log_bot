@@ -120,8 +120,8 @@ def is_plateau(sessions: list[analytics.SessionStats]) -> bool:
 
 def format_tonnage(kg: float) -> str:
     if kg >= 1000:
-        return f"{kg / 1000:.1f} т"
-    return f"{kg:.0f} кг"
+        return f"{kg / 1000:.1f}т"
+    return f"{kg:.0f}кг"
 
 
 # ---------- orchestration (I/O) ----------
