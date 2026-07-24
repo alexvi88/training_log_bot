@@ -25,6 +25,7 @@ import achievements
 import ai_trainer
 import analytics
 import charts
+import chat_bottom
 import config
 import db
 import exercise_descriptions
@@ -94,14 +95,18 @@ def _move_open_exercises_last(
 
 
 async def _refresh_live(bot, state: FSMContext, user, workout_id: int, hint, keyboard):
-    """Re-send the live tracker message so it always sits at the bottom of the chat.
+    """Redraw the live tracker so it always sits at the bottom of the chat.
 
-    Telegram doesn't let a bot move an edited message down past newer messages
-    (e.g. the weight/reps the user just typed), so we delete and resend instead
-    of editing in place.
+    Telegram doesn't let a bot move an edited message down past newer messages,
+    so the tracker can only be edited in place while it's still the last message
+    in the chat — the usual case, since a typed set is deleted before we redraw.
+    When something stayed below it (a record kept with its 🔥, a voice note and
+    its reply, a parse-error hint), editing would strand the buttons above it,
+    so we delete and resend instead. chat_bottom is what tells the two apart.
     """
     data = await state.get_data()
     chat_id = data["live_chat_id"]
+    message_id = data["live_message_id"]
     blocks = await view_builder.build_block_views(workout_id, user["e1rm_formula"])
     active = data.get("active_exercise_id")
     blocks = _move_open_exercises_last(blocks, data.get("open_exercises") or [], active)
@@ -109,8 +114,19 @@ async def _refresh_live(bot, state: FSMContext, user, workout_id: int, hint, key
     if data.get("is_backfill") and data.get("bf_date"):
         date = dt.date.fromisoformat(data["bf_date"])
         text = f"📅 {formatting.format_date_ru(date)}\n\n{text}"
+    if chat_bottom.is_at_bottom(chat_id, message_id):
+        try:
+            await bot.edit_message_text(
+                chat_id=chat_id, message_id=message_id, text=text,
+                reply_markup=keyboard, parse_mode="HTML",
+            )
+            return
+        except TelegramBadRequest as e:
+            # Nothing changed (e.g. a double tap) — the screen is already right.
+            if "message is not modified" in str(e).lower():
+                return
     with suppress(TelegramBadRequest):
-        await bot.delete_message(chat_id=chat_id, message_id=data["live_message_id"])
+        await bot.delete_message(chat_id=chat_id, message_id=message_id)
     sent = await bot.send_message(chat_id=chat_id, text=text, reply_markup=keyboard, parse_mode="HTML")
     await state.update_data(live_message_id=sent.message_id)
 
