@@ -341,6 +341,33 @@ def history_list_keyboard(workouts, page: int, has_next: bool) -> InlineKeyboard
     return b.as_markup()
 
 
+def repeat_list_keyboard(workouts, page: int, has_next: bool) -> InlineKeyboardMarkup:
+    """Pick which past workout to repeat: one button per session, plus paging and
+    a way back to the fresh-workout picker."""
+    b = InlineKeyboardBuilder()
+    for w in workouts:
+        b.button(text=w["label"], callback_data=f"pick:rep:show:{w['id']}")
+    b.adjust(1)
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"pick:rep:page:{page - 1}"))
+    if has_next:
+        nav.append(InlineKeyboardButton(text="➡️", callback_data=f"pick:rep:page:{page + 1}"))
+    if nav:
+        b.row(*nav)
+    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="pick:rep:cancel"))
+    return b.as_markup()
+
+
+def repeat_preview_keyboard(workout_id: int) -> InlineKeyboardMarkup:
+    """On the preview of a past workout: repeat it, or go back to the list."""
+    b = InlineKeyboardBuilder()
+    b.button(text="✅ Повторить эту", callback_data=f"pick:rep:use:{workout_id}")
+    b.button(text="⬅️ К списку", callback_data="pick:rep:list")
+    b.adjust(1)
+    return b.as_markup()
+
+
 def history_item_keyboard(workout_id: int, show_ai_button: bool = False) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(text="🖼 Поделиться картинкой", callback_data=f"hist:card:{workout_id}")

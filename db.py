@@ -1100,18 +1100,15 @@ async def list_blocks_for_workout(workout_id: int) -> list[aiosqlite.Row]:
     return await cur.fetchall()
 
 
-async def last_finished_workout_plan(user_id: int) -> list[dict[str, list[int]]]:
-    """Block-by-block exercise layout of the user's most recent finished workout,
-    as ``[{"exercise_ids": [...]}, ...]`` — the same shape planned_blocks uses, so
-    it can drive the "repeat last workout" flow through _load_next_planned_block.
+async def workout_plan(workout_id: int) -> list[dict[str, list[int]]]:
+    """Block-by-block exercise layout of a single workout, as
+    ``[{"exercise_ids": [...]}, ...]`` — the same shape planned_blocks uses, so it
+    can drive the "repeat workout" flow through _load_next_planned_block.
 
     Supersets (a block with several exercises) are preserved as multi-id blocks.
-    Empty list if the user has no finished workouts.
+    Empty list if the workout has no exercises.
     """
-    recent = await list_workouts(user_id, limit=1)
-    if not recent:
-        return []
-    blocks = await list_blocks_for_workout(recent[0]["id"])
+    blocks = await list_blocks_for_workout(workout_id)
     plan: list[dict[str, list[int]]] = []
     for block in blocks:
         exercise_ids = [be["exercise_id"] for be in await get_block_exercises(block["id"])]

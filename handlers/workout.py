@@ -488,14 +488,113 @@ async def start_workout(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+REPEAT_PAGE_SIZE = 6
+
+
+async def _repeat_label(workout) -> str:
+    """Short scannable line for one past workout in the repeat list: date plus the
+    first couple of exercise names."""
+    started = dt.datetime.fromisoformat(workout["started_at"])
+    date = formatting.format_date_ru(started)
+    plan = await db.workout_plan(workout["id"])
+    names: list[str] = []
+    for block in plan:
+        ex = await db.get_exercise(block["exercise_ids"][0])
+        if ex:
+            names.append(ex["display_name"])
+    if not names:
+        return date
+    summary = ", ".join(names[:2])
+    if len(names) > 2:
+        summary += f" +{len(names) - 2}"
+    return f"{date} · {summary}"
+
+
+async def _repeat_list_screen(callback: CallbackQuery, state: FSMContext, page: int):
+    """List of the user's recent finished workouts to pick one to repeat, rendered
+    into the live tracker message like the rest of the picker."""
+    user = await db.get_user(callback.from_user.id)
+    data = await state.get_data()
+    total = await db.count_workouts(callback.from_user.id)
+    workouts = await db.list_workouts(
+        callback.from_user.id, limit=REPEAT_PAGE_SIZE, offset=page * REPEAT_PAGE_SIZE
+    )
+    items = [{"id": w["id"], "label": await _repeat_label(w)} for w in workouts]
+    has_next = (page + 1) * REPEAT_PAGE_SIZE < total
+    kb = keyboards.repeat_list_keyboard(items, page, has_next)
+    hint = "🔁 Выбери тренировку, чтобы повторить её план:"
+    await state.update_data(repeat_page=page)
+    await _refresh_live(callback.bot, state, user, data["workout_id"], hint, kb)
+
+
 @router.callback_query(StateFilter(WorkoutFlow.picking_group), F.data == "pick:repeat")
 async def pick_repeat_last(callback: CallbackQuery, state: FSMContext):
-    """Pre-load the current (already-started) workout with the exercises (and
-    supersets) of the last finished one — the same planned-blocks machinery a
-    saved program uses. Reached from the first picker screen of a fresh workout."""
-    plan = await db.last_finished_workout_plan(callback.from_user.id)
-    if not plan:
+    """Open the list of past workouts to repeat one of them. Reached from the first
+    picker screen of a fresh (already-started) workout."""
+    if await db.count_workouts(callback.from_user.id) == 0:
         await callback.answer("Нет прошлой тренировки для повтора", show_alert=True)
+        return
+    await _repeat_list_screen(callback, state, page=0)
+    await callback.answer()
+
+
+@router.callback_query(StateFilter(WorkoutFlow.picking_group), F.data.startswith("pick:rep:page:"))
+async def pick_repeat_page(callback: CallbackQuery, state: FSMContext):
+    page = int(callback.data.split(":")[3])
+    await _repeat_list_screen(callback, state, page)
+    await callback.answer()
+
+
+@router.callback_query(StateFilter(WorkoutFlow.picking_group), F.data == "pick:rep:list")
+async def pick_repeat_back_to_list(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    await _repeat_list_screen(callback, state, data.get("repeat_page", 0))
+    await callback.answer()
+
+
+@router.callback_query(StateFilter(WorkoutFlow.picking_group), F.data == "pick:rep:cancel")
+async def pick_repeat_cancel(callback: CallbackQuery, state: FSMContext):
+    """Back from the repeat list to the fresh-workout picker's first screen."""
+    await _picker_screen_groups(callback, state, show_program_button=True)
+    await callback.answer()
+
+
+@router.callback_query(StateFilter(WorkoutFlow.picking_group), F.data.startswith("pick:rep:show:"))
+async def pick_repeat_show(callback: CallbackQuery, state: FSMContext):
+    """Preview a past workout — what was done, with a repeat/back choice."""
+    workout_id = int(callback.data.split(":")[3])
+    workout = await db.get_workout(workout_id)
+    if workout is None or workout["user_id"] != callback.from_user.id:
+        await callback.answer("Тренировка не найдена", show_alert=True)
+        return
+    user = await db.get_user(callback.from_user.id)
+    data = await state.get_data()
+    blocks = await view_builder.build_block_views(workout_id, user["e1rm_formula"])
+    started = dt.datetime.fromisoformat(workout["started_at"])
+    duration_seconds = await view_builder.workout_duration_seconds(workout)
+    summary = formatting.build_workout_summary(
+        started, blocks, workout["note"], show_extra_stats=bool(user["show_extra_stats"]),
+        duration_seconds=duration_seconds,
+    )
+    hint = "🔁 <b>Повторить эту тренировку?</b>\n\n" + summary
+    kb = keyboards.repeat_preview_keyboard(workout_id)
+    await _refresh_live(callback.bot, state, user, data["workout_id"], hint, kb)
+    await callback.answer()
+
+
+@router.callback_query(StateFilter(WorkoutFlow.picking_group), F.data.startswith("pick:rep:use:"))
+async def pick_repeat_use(callback: CallbackQuery, state: FSMContext):
+    """Pre-load the current (already-started) workout with the exercises (and
+    supersets) of the chosen past one — the same planned-blocks machinery a saved
+    program uses."""
+    workout_id = int(callback.data.split(":")[3])
+    workout = await db.get_workout(workout_id)
+    if workout is None or workout["user_id"] != callback.from_user.id:
+        await callback.answer("Тренировка не найдена", show_alert=True)
+        return
+    plan = await db.workout_plan(workout_id)
+    if not plan:
+        await callback.answer("В этой тренировке нет упражнений", show_alert=True)
         return
     await state.update_data(planned_blocks=plan)
     await _load_next_planned_block(callback, state)
@@ -586,11 +685,11 @@ async def _picker_screen_groups(callback: CallbackQuery, state: FSMContext, show
         hint = "Открыто сейчас: " + ", ".join(names) + "\n" + hint
     extra = []
     if show_program_button:
-        # Offered only on the very first picker screen of a fresh workout: a
-        # one-tap re-run of the last session for people who train A/B without a
-        # saved program, plus the shortcut into saved programs.
+        # Offered only on the very first picker screen of a fresh workout: pick
+        # any past session to re-run for people who train A/B without a saved
+        # program, plus the shortcut into saved programs.
         if await db.count_workouts(callback.from_user.id) > 0:
-            extra.append(("🔁 Повторить прошлую", "pick:repeat"))
+            extra.append(("🔁 Повторить тренировку", "pick:repeat"))
         extra.append(("🗂 Выбрать программу", "rt:manage"))
     extra.append(("❌ Отмена", "pick:cancel"))
     kb = keyboards.groups_keyboard(groups, prefix="pick", extra_buttons=extra, show_all=True)
