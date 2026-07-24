@@ -186,25 +186,26 @@ def build_ai_comment_block(comment: str) -> str:
     return f"{DIVIDER}\n🤖 <b>Комментарий AI-тренера</b>\n\n{markdown_bold_to_html(comment)}"
 
 
-# Fun, shareable size comparisons for a session's total tonnage — (emoji+noun, kg each),
-# light→heavy. The "N × object" phrasing sidesteps Russian count declension entirely.
+# Fun, shareable size comparisons for a tonnage total — (emoji, kg each, declensions),
+# light→heavy. Declensions are (1 единица, 2-4 единицы, 5+ единиц), see plural_ru.
 _TONNAGE_OBJECTS = [
-    ("🐺 сенбернар", 80),
-    ("🏍 мотоцикл", 200),
-    ("🐻 бурый медведь", 350),
-    ("🎹 рояль", 480),
-    ("🐴 конь", 550),
-    ("🐮 корова", 750),
-    ("🚗 легковушка", 1400),
-    ("🚚 гружёная «Газель»", 3500),
-    ("🐘 слон", 5000),
-    ("🦈 касатка", 5500),
-    ("🚌 автобус", 12000),
+    ("🐺", 80, ("сенбернар", "сенбернара", "сенбернаров")),
+    ("🏍", 200, ("мотоцикл", "мотоцикла", "мотоциклов")),
+    ("🐻", 350, ("бурый медведь", "бурых медведя", "бурых медведей")),
+    ("🎹", 480, ("рояль", "рояля", "роялей")),
+    ("🐴", 550, ("конь", "коня", "коней")),
+    ("🐮", 750, ("корова", "коровы", "коров")),
+    ("🚗", 1400, ("легковушка", "легковушки", "легковушек")),
+    ("🚚", 3500, ("гружёная «Газель»", "гружёные «Газели»", "гружёных «Газелей»")),
+    ("🐘", 5000, ("слон", "слона", "слонов")),
+    ("🦈", 5500, ("касатка", "касатки", "касаток")),
+    ("🚌", 12000, ("автобус", "автобуса", "автобусов")),
 ]
 
 
 def format_tonnage_equivalent(total_kg: float, seed: int = 0) -> str | None:
-    """A playful "your session moved N buses" line for the completion card.
+    """A playful "это как N слонов 🐘" comparison clause, without restating the tonnage
+    itself — callers fold it into whatever sentence already states the total.
 
     Picks whichever object gives a believable count (2..40); `seed` (e.g. the
     workout id) rotates the choice so it isn't always the same object. Returns
@@ -213,19 +214,23 @@ def format_tonnage_equivalent(total_kg: float, seed: int = 0) -> str | None:
     if total_kg < 150:
         return None
     candidates = [
-        (label, round(total_kg / w))
-        for label, w in _TONNAGE_OBJECTS
+        (emoji, forms, round(total_kg / w))
+        for emoji, w, forms in _TONNAGE_OBJECTS
         if 2 <= round(total_kg / w) <= 40
     ]
     if not candidates:
         # Above the heaviest bracket (or in a gap): fall back to the biggest object that fits.
-        fitting = [(label, max(1, round(total_kg / w))) for label, w in _TONNAGE_OBJECTS if w <= total_kg]
+        fitting = [
+            (emoji, forms, max(1, round(total_kg / w)))
+            for emoji, w, forms in _TONNAGE_OBJECTS
+            if w <= total_kg
+        ]
         if not fitting:
             return None
         candidates = [fitting[-1]]
-    label, count = candidates[seed % len(candidates)]
-    tonnage = f"{total_kg / 1000:.1f} т" if total_kg >= 1000 else f"{total_kg:.0f} кг"
-    return f"🏋️ Суммарно за тренировку — {tonnage}. Это как {count} × {label}."
+    emoji, forms, count = candidates[seed % len(candidates)]
+    noun = plural_ru(count, forms)
+    return f"Это как {count} {noun} {emoji}."
 
 
 def dashboard_stat_lines(dashboard) -> list[tuple[str, str]]:
@@ -380,19 +385,25 @@ def build_hall_of_fame(
     top_lifts: list[tuple[str, float, int, float]],  # (name, weight, reps, e1rm)
     unit: str = "kg",
 ) -> str:
-    """The '🏆 Зал славы' screen: lifetime totals plus the user's best lifts."""
+    """Lifetime totals plus the user's best lifts, shown above the badge grid
+    on the '🏅 Достижения' screen — no heading of its own."""
     u = UNIT_LABELS.get(unit, "кг")
     if total_workouts == 0:
-        return "🏆 <b>Зал славы</b>\n\nПока пусто — заверши первую тренировку, и здесь появятся твои рекорды."
+        return "Пока пусто — заверши первую тренировку, и здесь появятся твои рекорды."
 
-    lines = ["🏆 <b>ЗАЛ СЛАВЫ</b>", ""]
+    lines = []
     w = plural_ru(total_workouts, ("тренировка", "тренировки", "тренировок"))
     lines.append(f"🗓 Всего тренировок: <b>{total_workouts}</b> {w}")
 
-    tonnage_str = f"{tonnage_kg / 1000:.1f} т" if tonnage_kg >= 1000 else f"{tonnage_kg:.0f} {u}"
-    lines.append(f"🏋️ Поднято за всё время: <b>{tonnage_str}</b>")
+    if tonnage_kg >= 1000:
+        tons = round(tonnage_kg / 1000)
+        tonnage_str = f"{tons} {plural_ru(tons, ('тонна', 'тонны', 'тонн'))}"
+    else:
+        tonnage_str = f"{tonnage_kg:.0f} {u}"
+    tonnage_line = f"🏋️ Поднято за всё время: <b>{tonnage_str}</b>"
     if tonnage_equivalent:
-        lines.append(f"   <i>{tonnage_equivalent}</i>")
+        tonnage_line += f" {tonnage_equivalent}"
+    lines.append(tonnage_line)
 
     if best_week_streak >= 2:
         wk = plural_ru(best_week_streak, ("неделя", "недели", "недель"))
@@ -500,18 +511,17 @@ def build_bodyweight_screen(logs: list, unit: str = "kg", period_logs: list | No
 
 
 def format_progression_hint(suggestion, unit: str = "kg", achieved: bool = False) -> str:
-    """"Цель: …" nudge from analytics.suggest_progression, meant to sit inline
-    after the "В прошлый раз" line rather than on its own (no bold — the
-    surrounding line is already italicized).
+    """"Цель: …" nudge from analytics.suggest_progression, on its own line under
+    the "В прошлый раз" line (no bold — the surrounding line is already italicized).
     """
     u = UNIT_LABELS.get(unit, "кг")
     if suggestion.is_bodyweight:
-        goal = f"{suggestion.target_reps} повторов (на один больше прошлого)"
+        goal = f"{suggestion.target_reps} повторов"
     elif suggestion.action == "add_weight":
         top = suggestion.target_reps
         goal = f"пора добавить вес — {format_weight(suggestion.target_weight)} {u} × {top}-{top + 1}"
     else:
-        goal = f"{format_set(suggestion.target_weight, suggestion.target_reps)} (тот же вес, +1 повтор)"
+        goal = format_set(suggestion.target_weight, suggestion.target_reps)
     if achieved:
         return f"✅ Цель выполнена: {goal}"
     return f"🎯 Цель: {goal}"

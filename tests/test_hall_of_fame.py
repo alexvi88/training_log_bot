@@ -29,13 +29,13 @@ def test_hall_of_fame_screen_populated():
     text = formatting.build_hall_of_fame(
         total_workouts=42,
         tonnage_kg=125000,
-        tonnage_equivalent="Это как 25 × 🐘 слон.",
+        tonnage_equivalent="Это как 25 слонов 🐘.",
         best_week_streak=6,
         longest_workout_seconds=5400,
         top_lifts=[("Жим лёжа", 120.0, 3, 132.0)],
     )
     assert "42" in text
-    assert "125.0 т" in text
+    assert "125 тонн" in text
     assert "Жим лёжа" in text
     assert "1 ч 30 мин" in text
 
@@ -60,4 +60,4 @@ async def test_aggregates_and_build_text(fresh_db, user_id):
 
     text = await history.build_hall_of_fame_text(user_id)
     assert "Жим лёжа" in text
-    assert "ЗАЛ СЛАВЫ" in text
+    assert "Поднято за всё время" in text

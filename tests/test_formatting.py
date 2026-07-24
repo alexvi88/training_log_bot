@@ -375,12 +375,13 @@ def test_logging_hint_omits_progression_when_disabled():
     assert "В прошлый раз" in without
 
 
-def test_logging_hint_keeps_goal_on_same_line_as_last_session():
+def test_logging_hint_puts_goal_on_its_own_line():
     from handlers.workout import _logging_hint
     last = [(100.0, 10, None)]
     hint = _logging_hint(last, has_sets=True, unit="kg", show_progression=True)
-    line = hint.splitlines()[0]
-    assert "В прошлый раз" in line and "Цель" in line
+    lines = hint.splitlines()
+    assert "В прошлый раз" in lines[0] and "Цель" not in lines[0]
+    assert "Цель" in lines[1]
 
 
 def test_logging_hint_shows_achieved_goal_when_today_sets_meet_target():

@@ -133,7 +133,7 @@ async def _suggested_next_exercise(user_id: int, last_finished_id: int | None):
 
 async def _idle_view(data: dict, user_id: int, is_empty: bool = False) -> tuple[str | None, InlineKeyboardMarkup]:
     has_planned = bool(data.get("planned_blocks"))
-    suggested = await _suggested_next_exercise(user_id, data.get("last_finished_exercise_id"))
+    suggested = None if has_planned else await _suggested_next_exercise(user_id, data.get("last_finished_exercise_id"))
     hint = f"💡 В прошлый раз дальше было: <b>{escape(suggested[1])}</b>" if suggested else None
     kb = keyboards.exercise_picker_entry_keyboard(has_planned=has_planned, suggested=suggested, is_empty=is_empty)
     return hint, kb
@@ -184,7 +184,7 @@ def _logging_hint(
                     w >= suggestion.target_weight and r >= suggestion.target_reps
                     for w, r in (today_sets or [])
                 )
-                line += f" {formatting.format_progression_hint(suggestion, unit, achieved)}"
+                line += f"\n{formatting.format_progression_hint(suggestion, unit, achieved)}"
         return f"{note_line}<i>{line}</i>\n\n{base}"
     if note_line:
         return f"{note_line}\n{base}"
@@ -1371,9 +1371,10 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
     )
     highlights = formatting.build_exercise_highlights(highlight_groups)
     full_text = summary
-    tonnage_line = formatting.format_tonnage_equivalent(session_tonnage, seed=workout_id)
-    if tonnage_line:
-        full_text += f"\n\n{tonnage_line}"
+    equivalent = formatting.format_tonnage_equivalent(session_tonnage, seed=workout_id)
+    if equivalent:
+        tonnage = f"{session_tonnage / 1000:.1f} т" if session_tonnage >= 1000 else f"{session_tonnage:.0f} кг"
+        full_text += f"\n\n🏋️ Суммарно за тренировку — {tonnage}. {equivalent}"
     # Backfilled/imported past workouts shouldn't fire the "Nth workout" milestone —
     # they're entered out of order, so the running count isn't meaningful for them.
     if not is_backfill:

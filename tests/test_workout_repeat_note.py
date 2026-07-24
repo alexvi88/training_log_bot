@@ -218,8 +218,8 @@ def test_logging_keyboard_has_repeat_and_note_when_sets_present():
     assert "live:note:1" in cbs
 
 
-def test_logging_keyboard_repeat_absent_without_sets():
+def test_logging_keyboard_repeat_and_note_absent_without_sets():
     kb = keyboards.logging_keyboard([(1, "Bench")], active_id=1, has_sets=False)
     cbs = [b.callback_data for row in kb.inline_keyboard for b in row]
     assert "live:repeat" not in cbs
-    assert "live:note:1" in cbs  # note is still reachable from the card row
+    assert "live:note:1" not in cbs
