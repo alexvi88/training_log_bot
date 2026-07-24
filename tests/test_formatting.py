@@ -213,12 +213,12 @@ def test_workout_summary_prev_line_shows_rpe():
 
 def test_format_pr_detail_e1rm():
     text = formatting.format_pr_detail("e1rm", 133.3)
-    assert text == "🔥 Новый рекорд e1RM: 133.3 кг"
+    assert text == "🔥 Новый рекорд e1RM: 133.3кг"
 
 
 def test_format_pr_detail_reps_at_weight():
     text = formatting.format_pr_detail("reps_at_weight", 8, extra=100.0)
-    assert text == "🔥 Новый рекорд повторов: 100 кг × 8"
+    assert text == "🔥 Новый рекорд повторов: 100кг × 8"
 
 
 def test_format_pr_detail_unknown_kind_falls_back():
@@ -286,10 +286,10 @@ def test_format_progress_screen_weighted_shows_total_growth():
 
     assert "<b>Жим лёжа</b>" in text
     assert "e1RM" in text
-    assert "e1RM: ↑+6.3 кг с первой тренировки" in text
+    assert "e1RM: ↑+6.3кг с первой тренировки" in text
     assert "/нед" not in text
     assert "vs прошлой тренировки" not in text
-    assert "Рекорд: 105×8 · e1RM 140.0 кг" in text
+    assert "Рекорд: 105×8 · e1RM 140.0кг" in text
 
 
 def test_format_progress_screen_single_session_has_no_growth_line():
@@ -381,7 +381,13 @@ def test_logging_hint_puts_goal_on_its_own_line():
     hint = _logging_hint(last, has_sets=True, unit="kg", show_progression=True)
     lines = hint.splitlines()
     assert "В прошлый раз" in lines[0] and "Цель" not in lines[0]
+    assert lines[0].endswith("100×10")  # no trailing period
     assert "Цель" in lines[1]
+
+
+def test_progression_hint_add_weight_is_plain_goal_without_nudge():
+    s = analytics.suggest_progression([(100.0, 10)], weight_step=2.5)
+    assert formatting.format_progression_hint(s) == "🎯 Цель: 102.5кг × 5"
 
 
 def test_logging_hint_shows_achieved_goal_when_today_sets_meet_target():

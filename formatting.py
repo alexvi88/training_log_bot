@@ -286,7 +286,7 @@ def build_workout_card(
     set_word = plural_ru(set_count, ("сет", "сета", "сетов"))
     footer = (
         f"{exercise_count} {ex_word} · {set_count} {set_word} · "
-        f"{format_weight(tonnage)} {u}"
+        f"{format_weight(tonnage)}{u}"
     )
     return title, body, footer, note
 
@@ -317,9 +317,9 @@ def format_pr_detail(kind: str, value: float, extra: float | None = None, unit: 
     """A single PR line, scoped to an exercise that's already named by its surrounding header."""
     u = UNIT_LABELS.get(unit, "кг")
     if kind == "e1rm":
-        return f"🔥 Новый рекорд e1RM: {value:.1f} {u}"
+        return f"🔥 Новый рекорд e1RM: {value:.1f}{u}"
     if kind == "reps_at_weight":
-        return f"🔥 Новый рекорд повторов: {format_weight(extra or 0)} {u} × {int(value)}"
+        return f"🔥 Новый рекорд повторов: {format_weight(extra or 0)}{u} × {int(value)}"
     return "🔥 Новый рекорд"
 
 
@@ -399,7 +399,7 @@ def build_hall_of_fame(
         tons = round(tonnage_kg / 1000)
         tonnage_str = f"{tons} {plural_ru(tons, ('тонна', 'тонны', 'тонн'))}"
     else:
-        tonnage_str = f"{tonnage_kg:.0f} {u}"
+        tonnage_str = f"{tonnage_kg:.0f}{u}"
     tonnage_line = f"🏋️ Поднято за всё время: <b>{tonnage_str}</b>"
     if tonnage_equivalent:
         tonnage_line += f" {tonnage_equivalent}"
@@ -415,7 +415,7 @@ def build_hall_of_fame(
         lines.append("")
         lines.append("<b>Личные рекорды:</b>")
         for name, weight, reps, e1 in top_lifts:
-            lines.append(f"• {escape(name)} — {format_set(weight, reps)} · e1RM {e1:.0f} {u}")
+            lines.append(f"• {escape(name)} — {format_set(weight, reps)} · e1RM {e1:.0f}{u}")
 
     return "\n".join(lines)
 
@@ -447,13 +447,13 @@ def format_progress_screen(
         else:
             delta = last.top_e1rm - first.top_e1rm
             arrow = "↑" if delta > 0 else ("↓" if delta < 0 else "→")
-            lines.append(f"e1RM: {arrow}{delta:+.1f} {u} с первой тренировки")
+            lines.append(f"e1RM: {arrow}{delta:+.1f}{u} с первой тренировки")
 
     if is_bw:
         best_reps = max(records.max_reps_at_weight.values()) if records.max_reps_at_weight else 0
         lines.append(f"Рекорд повторов в сете: {best_reps}")
     else:
-        lines.append(f"Рекорд: {format_set(records.best_e1rm_weight, records.best_e1rm_reps)} · e1RM {records.max_e1rm:.1f} {u}")
+        lines.append(f"Рекорд: {format_set(records.best_e1rm_weight, records.best_e1rm_reps)} · e1RM {records.max_e1rm:.1f}{u}")
     lines.append("")
 
     for s in reversed(shown):
@@ -494,7 +494,7 @@ def build_bodyweight_screen(logs: list, unit: str = "kg", period_logs: list | No
     lines = [
         "⚖️ <b>Дневник веса</b>",
         "",
-        f"Сейчас: <b>{format_weight(latest_weight)} {u}</b> {format_date_ru(d)}",
+        f"Сейчас: <b>{format_weight(latest_weight)}{u}</b> {format_date_ru(d)}",
     ]
     n = plural_ru(len(logs), ("запись", "записи", "записей"))
     lines.append(f"Всего {len(logs)} {n}.")
@@ -503,7 +503,7 @@ def build_bodyweight_screen(logs: list, unit: str = "kg", period_logs: list | No
     entries = logs if period_logs is None else period_logs
     for r in reversed(entries):
         rd = dt.datetime.fromisoformat(r["logged_at"])
-        lines.append(f"{rd.strftime('%d.%m.%Y')} — {format_weight(r['weight'])} {u}")
+        lines.append(f"{rd.strftime('%d.%m.%Y')} — {format_weight(r['weight'])}{u}")
     lines.append("")
 
     lines.append("Напиши вес, чтобы добавить новую запись.")
@@ -518,8 +518,7 @@ def format_progression_hint(suggestion, unit: str = "kg", achieved: bool = False
     if suggestion.is_bodyweight:
         goal = f"{suggestion.target_reps} повторов"
     elif suggestion.action == "add_weight":
-        top = suggestion.target_reps
-        goal = f"пора добавить вес — {format_weight(suggestion.target_weight)} {u} × {top}-{top + 1}"
+        goal = f"{format_weight(suggestion.target_weight)}{u} × {suggestion.target_reps}"
     else:
         goal = format_set(suggestion.target_weight, suggestion.target_reps)
     if achieved:
@@ -530,4 +529,4 @@ def format_progression_hint(suggestion, unit: str = "kg", achieved: bool = False
 def format_comparison_line(e1rm_delta: float, unit: str = "kg") -> str:
     u = UNIT_LABELS.get(unit, "кг")
     arrow = "↑" if e1rm_delta > 0 else ("↓" if e1rm_delta < 0 else "→")
-    return f"{arrow} e1RM {e1rm_delta:+.1f} {u} vs предыдущего рекорда этого упражнения"
+    return f"{arrow} e1RM {e1rm_delta:+.1f}{u} vs предыдущего рекорда этого упражнения"

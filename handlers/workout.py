@@ -175,7 +175,7 @@ def _logging_hint(
     note_line = f"📝 <i>{escape(note)}</i>\n" if note else ""
     if last_session:
         sets_str = ", ".join(formatting.format_set(w, r, rpe) for w, r, rpe in last_session)
-        line = f"💡 В прошлый раз: {sets_str}."
+        line = f"💡 В прошлый раз: {sets_str}"
         if show_progression:
             wr_only = [(w, r) for w, r, _ in last_session]
             suggestion = analytics.suggest_progression(wr_only, _WEIGHT_STEP.get(unit, 2.5))
@@ -1472,7 +1472,7 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
     full_text = summary
     equivalent = formatting.format_tonnage_equivalent(session_tonnage, seed=workout_id)
     if equivalent:
-        tonnage = f"{session_tonnage / 1000:.1f} т" if session_tonnage >= 1000 else f"{session_tonnage:.0f} кг"
+        tonnage = f"{session_tonnage / 1000:.1f}т" if session_tonnage >= 1000 else f"{session_tonnage:.0f}кг"
         full_text += f"\n\n🏋️ Суммарно за тренировку — {tonnage}. {equivalent}"
     # Backfilled/imported past workouts shouldn't fire the "Nth workout" milestone —
     # they're entered out of order, so the running count isn't meaningful for them.
