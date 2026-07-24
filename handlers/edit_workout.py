@@ -28,24 +28,25 @@ async def _edit_screen_payload(workout_id: int) -> tuple[str, InlineKeyboardMark
     workout = await db.get_workout(workout_id)
     started = dt.datetime.fromisoformat(workout["started_at"])
 
-    sets_rows: list[tuple[int, str]] = []
-    add_buttons: list[tuple[int, int, str]] = []
+    rows: list[tuple] = []
+    has_sets = False
     blocks = await db.list_blocks_for_workout(workout_id)
     for block in blocks:
         block_exs = await db.get_block_exercises(block["id"])
         name_by_ex = {be["exercise_id"]: be["display_name"] for be in block_exs}
         sets = await db.list_sets_for_block(block["id"])
         for s in sets:
+            has_sets = True
             ex_name = name_by_ex.get(s["exercise_id"], "?")
             label = f"{ex_name} · {formatting.format_set(s['weight'], s['reps'], s['rpe'])}"
-            sets_rows.append((s["id"], label))
+            rows.append(("set", s["id"], label))
         for be in block_exs:
-            add_buttons.append((block["id"], be["exercise_id"], be["display_name"]))
+            rows.append(("add", block["id"], be["exercise_id"], be["display_name"]))
 
     text = f"✏️ Редактирование · {formatting.format_date_ru(started)}\nНажми на сет, чтобы изменить или удалить."
-    if not sets_rows:
+    if not has_sets:
         text += "\n\nВ тренировке пока нет сетов."
-    kb = keyboards.edit_workout_keyboard(sets_rows, add_buttons)
+    kb = keyboards.edit_workout_keyboard(rows)
     return text, kb
 
 

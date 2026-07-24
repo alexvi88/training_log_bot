@@ -134,15 +134,18 @@ def yes_no_keyboard(yes_cb: str, no_cb: str, yes_text: str = "Да", no_text: st
 
 
 def logging_keyboard(
-    open_items: list[tuple[int, str]], active_id: int | None, has_sets: bool = True
+    open_items: list[tuple[int, str]],
+    active_id: int | None,
+    has_sets: bool = True,
+    show_card: bool = True,
 ) -> InlineKeyboardMarkup:
     """Set-logging keyboard: tabs to switch between exercises open in parallel, plus controls.
 
     Weight/reps are typed as plain text (e.g. "100 8") — this keyboard only holds
     navigation/utility actions, not numeric input, to keep it short.
 
-    Kept deliberately short: once a set is logged the only control is "↩️ Удалить"
-    (undo the last set); before that, the exercise-card row is the only extra control.
+    The "➕ Суперсет"/"ℹ️ Упражнение" row is always available; the only thing that
+    changes once a set is logged is "↩️ Удалить последний" appearing above it.
     """
     b = InlineKeyboardBuilder()
     if len(open_items) > 1:
@@ -150,15 +153,16 @@ def logging_keyboard(
             text = ("▶ " if ex_id == active_id else "") + name
             b.row(InlineKeyboardButton(text=text, callback_data=f"live:switch:{ex_id}"))
     superset_btn = InlineKeyboardButton(text="➕ Суперсет", callback_data="live:add_exercise")
+    if active_id is not None and show_card:
+        top_row = [superset_btn, InlineKeyboardButton(text="ℹ️ Упражнение", callback_data=f"live:card:{active_id}")]
+    else:
+        top_row = [superset_btn]
     if has_sets:
         b.row(InlineKeyboardButton(text="↩️ Удалить последний", callback_data="live:undo"))
         b.row(InlineKeyboardButton(text="✅ Закончить упражнение", callback_data="live:finish_exercise"))
-        b.row(superset_btn)
+        b.row(*top_row)
     else:
-        if active_id is not None:
-            b.row(InlineKeyboardButton(text="ℹ️ Упражнение", callback_data=f"live:card:{active_id}"), superset_btn)
-        else:
-            b.row(superset_btn)
+        b.row(*top_row)
         b.row(InlineKeyboardButton(text="✅ Закончить упражнение", callback_data="live:finish_exercise"))
     return b.as_markup()
 
@@ -632,13 +636,17 @@ def exercise_resolve_keyboard(candidates, name: str, prefix: str) -> InlineKeybo
     return b.as_markup()
 
 
-def edit_workout_keyboard(sets_rows, add_buttons) -> InlineKeyboardMarkup:
-    """sets_rows: list of (set_id, label). add_buttons: list of (block_id, exercise_id, label)."""
+def edit_workout_keyboard(rows) -> InlineKeyboardMarkup:
+    """rows: ordered list of ("set", set_id, label) or ("add", block_id, exercise_id, label) —
+    each exercise's "+ Сет" button belongs right after that exercise's own set rows."""
     b = InlineKeyboardBuilder()
-    for set_id, label in sets_rows:
-        b.button(text=label, callback_data=f"editw:set:{set_id}")
-    for block_id, exercise_id, label in add_buttons:
-        b.button(text=f"➕ Сет — {label}", callback_data=f"editw:addset:{block_id}:{exercise_id}")
+    for row in rows:
+        if row[0] == "set":
+            _, set_id, label = row
+            b.button(text=label, callback_data=f"editw:set:{set_id}")
+        else:
+            _, block_id, exercise_id, label = row
+            b.button(text=f"➕ Сет — {label}", callback_data=f"editw:addset:{block_id}:{exercise_id}")
     b.button(text="📅 Изменить дату", callback_data="editw:date")
     b.button(text="✅ Готово", callback_data="editw:done")
     b.adjust(1)

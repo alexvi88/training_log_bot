@@ -67,6 +67,15 @@ async def _clear_exercise_media(bot, chat_id: int, state: FSMContext) -> None:
     await state.update_data(exm_media_msg_ids=None)
 
 
+def _exercise_list_label(ex) -> str:
+    """Marks each exercise button with what its card actually has to show:
+    📷 for a reference photo (custom or bundled), 📝 for a text description."""
+    has_photo = bool(ex["custom_photo_file_id"] or exercise_media.get_images(ex["name"]))
+    has_description = bool(exercise_descriptions.get_description(ex["name"]))
+    marks = ("📷" if has_photo else "") + ("📝" if has_description else "")
+    return f"{marks} {ex['display_name']}" if marks else ex["display_name"]
+
+
 async def _show_exercise_list(callback: CallbackQuery, state: FSMContext):
     await _clear_exercise_media(callback.bot, callback.message.chat.id, state)
     await state.set_state(ExerciseManage.picking_exercise)
@@ -88,7 +97,7 @@ async def _show_exercise_list(callback: CallbackQuery, state: FSMContext):
         group = await db.get_muscle_group(group_id)
     has_next = offset + len(exercises) < total
     b = InlineKeyboardBuilder()
-    items = [(f"exm:ex:{ex['id']}", ex["display_name"]) for ex in exercises]
+    items = [(f"exm:ex:{ex['id']}", _exercise_list_label(ex)) for ex in exercises]
     for row in keyboards.named_buttons(items):
         b.row(*row)
     nav = []

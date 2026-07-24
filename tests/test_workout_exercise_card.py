@@ -62,8 +62,14 @@ def test_logging_keyboard_omits_card_button_without_active_exercise():
     assert not any(cb.startswith("live:card:") for cb in callback_datas)
 
 
-def test_logging_keyboard_omits_card_button_once_sets_are_logged():
+def test_logging_keyboard_keeps_card_button_once_sets_are_logged():
     kb = keyboards.logging_keyboard([(1, "Bench press")], active_id=1, has_sets=True)
+    callback_datas = [b.callback_data for row in kb.inline_keyboard for b in row]
+    assert "live:card:1" in callback_datas
+
+
+def test_logging_keyboard_omits_card_button_when_show_card_false():
+    kb = keyboards.logging_keyboard([(1, "Bench press")], active_id=1, has_sets=True, show_card=False)
     callback_datas = [b.callback_data for row in kb.inline_keyboard for b in row]
     assert not any(cb.startswith("live:card:") for cb in callback_datas)
 
@@ -111,6 +117,33 @@ async def test_live_card_show_prefers_custom_photo(fresh_db, user_id):
 
     data = await state.get_data()
     assert data["live_card_msg_ids"] == [501]
+
+
+@pytest.mark.asyncio
+async def test_live_card_show_bundled_images_sends_visible_back_button(fresh_db, user_id):
+    """Media groups can't carry a reply_markup on any item, so the back button
+    rides on a trailing message. That message's text must actually be visible —
+    an invisible (zero-width-space) placeholder risks Telegram silently dropping
+    or mis-rendering it, which is exactly what looked like a missing button."""
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    crossover = await db.create_exercise(user_id, "Сведение рук в кроссовере", group_id)
+
+    state = await _make_state(user_id)
+    callback = _make_callback(user_id, f"live:card:{crossover}")
+
+    await workout.live_card_show(callback, state)
+
+    callback.message.answer_media_group.assert_awaited_once()
+    callback.message.answer.assert_awaited_once()
+    back_text = callback.message.answer.await_args.args[0]
+    assert back_text.strip() != ""
+    kb = callback.message.answer.await_args.kwargs["reply_markup"]
+    callback_datas = [b.callback_data for row in kb.inline_keyboard for b in row]
+    assert callback_datas == ["live:card_back"]
+
+    data = await state.get_data()
+    assert len(data["live_card_msg_ids"]) == 3  # 2 photos + the back-button message
 
 
 @pytest.mark.asyncio
