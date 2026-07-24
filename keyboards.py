@@ -141,30 +141,17 @@ def logging_keyboard(
     Weight/reps are typed as plain text (e.g. "100 8") — this keyboard only holds
     navigation/utility actions, not numeric input, to keep it short.
 
-    The keyboard is deliberately kept short: the repeat/undo pair share one row,
-    and the per-exercise note button (📝) rides along on that row rather than
-    adding a new one. It only appears once a set is logged; before that, the
-    exercise-card row is the only extra control.
+    Kept deliberately short: once a set is logged the only control is "↩️ Удалить"
+    (undo the last set); before that, the exercise-card row is the only extra control.
     """
     b = InlineKeyboardBuilder()
     if len(open_items) > 1:
         for ex_id, name in open_items:
             text = ("▶ " if ex_id == active_id else "") + name
             b.row(InlineKeyboardButton(text=text, callback_data=f"live:switch:{ex_id}"))
-    note_btn = (
-        InlineKeyboardButton(text="📝", callback_data=f"live:note:{active_id}")
-        if active_id is not None
-        else None
-    )
     superset_btn = InlineKeyboardButton(text="➕ Суперсет", callback_data="live:add_exercise")
     if has_sets:
-        row = [
-            InlineKeyboardButton(text="🔁 Повторить", callback_data="live:repeat"),
-            InlineKeyboardButton(text="↩️ Удалить", callback_data="live:undo"),
-        ]
-        if note_btn is not None:
-            row.append(note_btn)
-        b.row(*row)
+        b.row(InlineKeyboardButton(text="↩️ Удалить последний", callback_data="live:undo"))
         b.row(InlineKeyboardButton(text="✅ Закончить упражнение", callback_data="live:finish_exercise"))
         b.row(superset_btn)
     else:
