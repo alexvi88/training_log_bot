@@ -8,6 +8,7 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import BotCommand, BotCommandScopeChat, BotCommandScopeDefault, CallbackQuery, Message
 
 import admin_tasks
+import chat_bottom
 import config
 import db
 import engagement
@@ -142,8 +143,13 @@ async def main() -> None:
     await db.init_db()
 
     bot = Bot(token=config.BOT_TOKEN, default=DefaultBotProperties(disable_notification=True))
+    # Registered before the first API call so the tracker never misses a message:
+    # together these two let screens be edited in place while they're still at
+    # the bottom of the chat, instead of always being deleted and resent.
+    bot.session.middleware(chat_bottom.TrackOutgoingMessages())
     await _setup_commands(bot)
     dp = Dispatcher(storage=JSONFileStorage(config.FSM_STORAGE_PATH))
+    dp.message.outer_middleware(chat_bottom.TrackIncomingMessages())
     dp.callback_query.outer_middleware(IgnoreStaleCallbackMiddleware())
     refresh_menu_middleware = RefreshPersistentMenuMiddleware()
     dp.message.outer_middleware(refresh_menu_middleware)
