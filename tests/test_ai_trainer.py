@@ -567,6 +567,24 @@ async def test_web_search_findings_passes_only_server_side_tools(fresh_db, user_
     assert len(sdk_client.session.create_kwargs["tools"]) == 2
 
 
+async def test_web_search_step_never_forwards_user_photo(fresh_db, user_id, monkeypatch):
+    # Личное фото пользователя (форма/тело/еда) не должно уходить во внешний
+    # веб/X-поиск — тему модель считывает по тексту вопроса. Гоним полный ask()
+    # с картинкой и включённым поиском и проверяем, что в сообщения поисковой
+    # сессии картинка не попала.
+    sdk_client = _fake_sdk_client(_xai_response(content="находки", citations=["http://example.com"]))
+    monkeypatch.setattr(ai_trainer, "_get_sdk_client", AsyncMock(return_value=sdk_client))
+    client = _fake_client([_response(content="YES"), _response(content="ответ")])
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+
+    await ai_trainer.ask(
+        user_id, "Что нового по протеину?", history=[], image_data_url=_FAKE_IMAGE_DATA_URL
+    )
+
+    search_messages = sdk_client.session.create_kwargs["messages"]
+    assert _FAKE_IMAGE_DATA_URL not in repr(search_messages)
+
+
 async def test_search_worth_it_uses_fast_model_and_parses_verdict(fresh_db, user_id, monkeypatch):
     client = _fake_client([_response(content="YES")])
     monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
