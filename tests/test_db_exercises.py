@@ -121,3 +121,30 @@ async def test_find_last_finished_workout_ignores_active_workout(fresh_db, user_
     await db.add_block_exercise(b1, bench, 0)
 
     assert await db.find_last_finished_workout_with_exercise(user_id, bench) is None
+
+
+async def test_search_exercise_templates_finds_a_catalog_match(fresh_db, user_id):
+    db = fresh_db
+    # A brand-new user has nothing of their own yet — search_exercises alone
+    # would say "ничего не нашлось" even though a matching template exists.
+    matches = await db.search_exercise_templates(user_id, "жим штанги лёжа")
+    names = [r["display_name"] for r in matches]
+    assert "Жим штанги лёжа" in names
+    assert all(r["is_template"] for r in matches)
+
+
+async def test_search_exercise_templates_skips_ones_the_user_already_has(fresh_db, user_id):
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    await db.create_exercise(user_id, "Жим штанги лёжа", group_id)
+
+    # Already forked (or independently created) under the same name — showing
+    # the template again would just be a confusing duplicate suggestion.
+    matches = await db.search_exercise_templates(user_id, "жим штанги лёжа")
+    assert "Жим штанги лёжа" not in [r["display_name"] for r in matches]
+
+
+async def test_search_exercise_templates_respects_limit(fresh_db, user_id):
+    db = fresh_db
+    matches = await db.search_exercise_templates(user_id, "жим", limit=2)
+    assert len(matches) <= 2

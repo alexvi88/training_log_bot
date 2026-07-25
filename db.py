@@ -686,6 +686,31 @@ async def search_exercises(user_id: int, query: str, limit: int = 20) -> list[ai
     return await cur.fetchall()
 
 
+async def search_exercise_templates(user_id: int, query: str, limit: int = 8) -> list[aiosqlite.Row]:
+    """Catalog templates matching `query` that the user hasn't already got under
+    the same name — the other half of exercise search.
+
+    search_exercises only looks at exercises the user has already added, so a
+    brand-new user typing "жим лёжа" gets "ничего не нашлось" even though a
+    template with that exact name (photo, technique notes) exists — the picker
+    routers fork a matching template on tap (see keyboards.exercises_keyboard's
+    `templates` param) instead of leaving them to build one from scratch.
+    """
+    escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    cur = await conn().execute(
+        "SELECT * FROM exercises t WHERE t.is_template = 1 "
+        "AND py_lower(t.display_name) LIKE '%' || py_lower(?) || '%' ESCAPE '\\' "
+        "AND NOT EXISTS ("
+        "   SELECT 1 FROM exercises o WHERE o.user_id = ? AND o.is_template = 0 "
+        "   AND o.is_archived = 0 AND py_lower(o.display_name) = py_lower(t.display_name)"
+        ") "
+        "ORDER BY t.display_name "
+        "LIMIT ?",
+        (escaped, user_id, limit),
+    )
+    return await cur.fetchall()
+
+
 async def get_exercise(exercise_id: int) -> Optional[aiosqlite.Row]:
     cur = await conn().execute("SELECT * FROM exercises WHERE id = ?", (exercise_id,))
     return await cur.fetchone()

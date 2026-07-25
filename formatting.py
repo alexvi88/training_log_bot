@@ -415,22 +415,27 @@ def format_new_achievements(new_codes: list[str]) -> str | None:
 def build_achievements_screen(earned: set[str]) -> str:
     """The full 🏅 badge grid: everything unlocked, then everything still locked.
 
-    What the user earned is the point of the screen, so it stays in the open;
-    the two dozen still-locked badges are a wall of text that would push it off
-    the screen, so they go behind a collapsible fold instead of being cut.
+    Both halves always fold on this screen specifically, short lists included:
+    it's reached from Progress purely to check a number or brag about a single
+    badge, so the header count (11/23) is the answer most taps are actually
+    after — the two lists are supporting detail, not the point of the tap.
     """
     import achievements
 
     got = [a for a in achievements.CATALOG if a.code in earned]
     locked = [a for a in achievements.CATALOG if a.code not in earned]
     lines = [f"🏅 <b>ДОСТИЖЕНИЯ</b> — {len(got)}/{len(achievements.CATALOG)}", ""]
-    for a in got:
-        lines.append(f"{a.emoji} <b>{escape(a.title)}</b> — {escape(a.description)}")
+    if got:
+        lines.append(
+            collapsible(
+                "\n".join(f"{a.emoji} <b>{escape(a.title)}</b> — {escape(a.description)}" for a in got)
+            )
+        )
     if locked:
         lines.append("")
         lines.append(f"<b>Ещё не открыты — {len(locked)}:</b>")
         lines.append(
-            collapsible_if_long(
+            collapsible(
                 "\n".join(f"🔒 {escape(a.title)} — {escape(a.description)}" for a in locked)
             )
         )

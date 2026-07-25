@@ -938,8 +938,11 @@ async def pick_exercise_search(message: Message, state: FSMContext):
     # result (pick:ex:*) and the "back" button both resolve correctly.
     await state.set_state(WorkoutFlow.picking_exercise)
     results = await db.search_exercises(message.from_user.id, query)
-    kb = keyboards.exercises_keyboard(results, prefix="pick", back_cb="back", show_new_button=group_id is not None)
-    if results:
+    templates = await db.search_exercise_templates(message.from_user.id, query)
+    kb = keyboards.exercises_keyboard(
+        results, prefix="pick", back_cb="back", show_new_button=group_id is not None, templates=templates,
+    )
+    if results or templates:
         hint = f"Результаты поиска «{escape(query)}»:"
     else:
         hint = f"Ничего не нашлось по «{escape(query)}»."
@@ -1006,8 +1009,18 @@ async def pick_template_preview(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(StateFilter(WorkoutFlow.creating_exercise_name), F.data.startswith("pick:tpladd:"))
+@router.callback_query(
+    StateFilter(WorkoutFlow.creating_exercise_name, WorkoutFlow.picking_group, WorkoutFlow.picking_exercise),
+    F.data.startswith("pick:tpladd:"),
+)
 async def pick_template_add(callback: CallbackQuery, state: FSMContext):
+    """Reached both from the "📋 Выбрать из шаблонов" preview (a disposable
+    message of its own) and, since search results can include templates too
+    (see keyboards.exercises_keyboard's `templates` param), directly from a
+    search-results screen that *is* the live tracker. Either way the delete
+    below is safe: _refresh_live's stale-message fallback (via chat_bottom)
+    already handles the tracker's own message having just been deleted.
+    """
     template_id = int(callback.data.split(":")[2])
     ex_id = await db.fork_exercise_from_template(callback.from_user.id, template_id)
     with suppress(TelegramBadRequest):

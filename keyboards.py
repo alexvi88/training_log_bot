@@ -83,9 +83,17 @@ def exercises_keyboard(
     back_cb: str = "back",
     page: int = 0,
     has_next: bool = False,
+    templates=None,
 ) -> InlineKeyboardMarkup:
+    """templates: catalog exercises (db.search_exercise_templates) to offer
+    alongside the user's own matches, marked "📋" and routed through
+    `{prefix}:tpladd:{id}` — the same fork-then-open callback the "📋 Выбрать
+    из шаблонов" entry already uses, so tapping one behaves identically to
+    picking it from the template browser instead of from search.
+    """
     b = InlineKeyboardBuilder()
     items = [(f"{prefix}:ex:{ex['id']}", ex["display_name"]) for ex in exercises]
+    items += [(f"{prefix}:tpladd:{t['id']}", f"📋 {t['display_name']}") for t in (templates or [])]
     for row in named_buttons(items):
         b.row(*row)
     nav = []
