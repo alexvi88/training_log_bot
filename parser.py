@@ -81,6 +81,37 @@ def parse_single_token(token: str) -> list[ParsedSet]:
     return [ParsedSet(weight=weight, reps=reps, rpe=rpe) for _ in range(count)]
 
 
+# "2: 100 8" — replace the 2nd already-logged set of the active exercise.
+# No existing token form starts with digits+colon, so this can't collide with
+# a normal weight/reps entry (unlike ':' vs '.', which is why '.' isn't
+# accepted here — "2.5 8" is a legitimate 2.5kg×8 set, not an edit marker).
+_SET_EDIT_RE = re.compile(r"^(?P<index>\d+)\s*:\s*(?P<rest>.+)$")
+
+
+def parse_set_edit(text: str) -> tuple[int, ParsedSet] | None:
+    """Parse "N: 100 8" — replace the Nth already-logged set of the active
+    exercise (1-based, in the order the tracker lists them) with a new
+    weight/reps[@rpe]. Bare reps ("2: 8") keep whatever weight that set
+    already had, exactly like a bare-reps token does when logging fresh.
+
+    Returns None when `text` isn't this form at all, so callers fall through
+    to the normal parse_sets_line path. Raises ParseError once it *is*
+    recognisably this form but malformed: a non-positive index, or a right
+    side that expands to more than one set — editing one set can't fan out
+    into several, so "2: 100x8x3" is rejected rather than silently picking one.
+    """
+    match = _SET_EDIT_RE.match(text.strip())
+    if not match:
+        return None
+    index = int(match["index"])
+    if index <= 0:
+        raise ParseError("Номер подхода должен быть больше 0")
+    sets = parse_single_token(match["rest"])
+    if len(sets) != 1:
+        raise ParseError("Для правки укажи ровно один подход, без счётчика (например «2: 100 8»)")
+    return index, sets[0]
+
+
 def parse_sets_line(text: str) -> list[ParsedSet]:
     """Parse one message that may hold several sets, split by comma/semicolon/newline.
 
