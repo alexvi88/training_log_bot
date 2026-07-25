@@ -20,6 +20,7 @@ def _make_message(user_id: int, text: str, message_id: int = 55):
     msg.text = text
     msg.delete = AsyncMock()
     msg.reply = AsyncMock()
+    msg.answer = AsyncMock()
     bot = MagicMock()
     bot.delete_message = AsyncMock()
     bot.set_message_reaction = AsyncMock()
@@ -222,3 +223,38 @@ async def test_decimal_weight_is_not_mistaken_for_an_edit_command(fresh_db, user
 
     sets = await db.list_sets_for_block(block_id)
     assert [(s["weight"], s["reps"]) for s in sets] == [(100.0, 8), (100.0, 7), (2.5, 8)]
+
+
+# ---------- "/help" and "?" ----------
+
+
+@pytest.mark.asyncio
+async def test_help_command_sends_the_reference(fresh_db, user_id):
+    db = fresh_db
+    state, ex_id, block_id = await _setup_logging(db, user_id, [(100.0, 8)])
+    message = _make_message(user_id, "/help")
+
+    await workout.cmd_help(message, state)
+
+    message.answer.assert_awaited_once()
+    text, kwargs = message.answer.await_args.args[0], message.answer.await_args.kwargs
+    assert kwargs.get("parse_mode") == "HTML"
+    for needle in ("100 8", "100x8x3", "@9", "!текст", "2: 100 8", "-", "="):
+        assert needle in text
+
+
+@pytest.mark.asyncio
+async def test_question_mark_shows_help_without_touching_the_workout(fresh_db, user_id):
+    db = fresh_db
+    state, ex_id, block_id = await _setup_logging(db, user_id, [(100.0, 8)])
+    message = _make_message(user_id, "?")
+
+    await workout.log_set_text(message, state)
+
+    message.reply.assert_awaited_once()
+    text = message.reply.await_args.args[0]
+    assert "СПРАВКА" in text
+    assert message.reply.await_args.kwargs.get("parse_mode") == "HTML"
+    # Nothing about the in-progress exercise changed — it's a pure lookup.
+    assert len(await db.list_sets_for_block(block_id)) == 1
+    message.delete.assert_not_awaited()

@@ -65,7 +65,7 @@ async def test_default_scope_only_has_start(monkeypatch):
         c for c in bot.set_my_commands.call_args_list if isinstance(c.kwargs["scope"], BotCommandScopeDefault)
     )
     commands = default_call.args[0]
-    assert [c.command for c in commands] == ["start", "ai_trainer", "feedback"]
+    assert [c.command for c in commands] == ["start", "help", "ai_trainer", "feedback"]
 
 
 @pytest.mark.asyncio
@@ -83,6 +83,7 @@ async def test_admin_scope_targets_only_admin_chat_and_includes_admin_command(mo
     assert scope.chat_id == 12345
     assert {c.command for c in commands} == {
         "start",
+        "help",
         "ai_trainer",
         "feedback",
         "check_users",

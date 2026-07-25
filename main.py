@@ -115,6 +115,7 @@ async def _setup_commands(bot: Bot) -> None:
     await bot.set_my_commands(
         [
             BotCommand(command="start", description="Открыть главное меню"),
+            BotCommand(command="help", description="Как вводить подходы"),
             BotCommand(command="ai_trainer", description="AI-тренер"),
             BotCommand(command="feedback", description="Отзыв / баг / идея"),
         ],
@@ -124,6 +125,7 @@ async def _setup_commands(bot: Bot) -> None:
         await bot.set_my_commands(
             [
                 BotCommand(command="start", description="Открыть главное меню"),
+                BotCommand(command="help", description="Как вводить подходы"),
                 BotCommand(command="ai_trainer", description="AI-тренер"),
                 BotCommand(command="feedback", description="Отзыв / баг / идея"),
                 BotCommand(command="check_users", description="Список пользователей (админ)"),
