@@ -63,7 +63,7 @@ async def test_aggregates_and_build_text(fresh_db, user_id):
     assert "Поднято за всё время" in text
 
 
-def test_hall_of_fame_folds_all_but_the_strongest_lifts():
+def test_hall_of_fame_folds_the_whole_record_list():
     lifts = [(f"Упражнение {i}", 100.0 + i, 5, 130.0 - i) for i in range(8)]
     text = formatting.build_hall_of_fame(
         total_workouts=42, tonnage_kg=125000, tonnage_equivalent=None,
@@ -71,8 +71,8 @@ def test_hall_of_fame_folds_all_but_the_strongest_lifts():
     )
     open_part, sep, folded = text.partition("<blockquote expandable>")
     assert sep
-    assert open_part.count("• ") == formatting.TOP_LIFTS_OPEN
-    assert folded.count("• ") == len(lifts) - formatting.TOP_LIFTS_OPEN
+    assert open_part.count("• ") == 0, "the list is not split — it folds whole"
+    assert folded.count("• ") == len(lifts)
 
 
 def test_hall_of_fame_short_list_is_not_folded():
@@ -82,3 +82,24 @@ def test_hall_of_fame_short_list_is_not_folded():
         top_lifts=[("Жим лёжа", 120.0, 3, 132.0)],
     )
     assert "blockquote" not in text
+
+
+def test_hall_of_fame_bodyweight_record_counts_reps():
+    text = formatting.build_hall_of_fame(
+        total_workouts=10, tonnage_kg=5000, tonnage_equivalent=None,
+        best_week_streak=0, longest_workout_seconds=0,
+        top_lifts=[("Подтягивания", 0.0, 15, 0.0)],
+    )
+    assert "Подтягивания — 15 повторов" in text
+    assert "e1RM" not in text
+
+
+def test_hall_of_fame_trims_records_to_fit_the_message():
+    lifts = [(f"Очень длинное название упражнения номер {i}", 100.0, 5, 130.0) for i in range(200)]
+    text = formatting.build_hall_of_fame(
+        total_workouts=42, tonnage_kg=125000, tonnage_equivalent=None,
+        best_week_streak=6, longest_workout_seconds=5400, top_lifts=lifts,
+        max_chars=1000,
+    )
+    assert formatting.telegram_length(text) <= 1000
+    assert "показано" in text

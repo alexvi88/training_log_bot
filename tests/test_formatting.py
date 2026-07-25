@@ -424,17 +424,17 @@ def test_telegram_length_ignores_markup_and_counts_emoji_as_two():
     assert formatting.telegram_length("🐘") == 2
 
 
-def test_progress_screen_keeps_recent_sessions_open_and_folds_the_rest():
+def test_progress_screen_folds_the_session_list_as_one_block():
     sessions = [_weighted_session(i, f"2026-06-{i:02d}T10:00:00", [(100.0, 8)]) for i in range(1, 9)]
     text = formatting.format_progress_screen("Жим лёжа", sessions, None, analytics.PersonalRecords())
 
     open_part, sep, folded = text.partition("<blockquote expandable>")
-    assert sep, "older sessions should fold away"
-    # The three newest stay in the open, everything older is inside the fold.
-    for recent in ("08.06.2026", "07.06.2026", "06.06.2026"):
-        assert recent in open_part
-    for older in ("05.06.2026", "01.06.2026"):
-        assert older not in open_part and older in folded
+    assert sep, "the session list should fold"
+    # The whole list goes in one block — no seam splitting it into shown/hidden.
+    assert "2026" not in open_part
+    assert "Рекорд" in open_part
+    assert folded.count("08.06.2026") == 1
+    assert folded.count("01.06.2026") == 1
 
 
 def test_progress_screen_fits_the_caption_limit():
@@ -455,16 +455,23 @@ def test_progress_screen_fits_the_caption_limit():
     assert "Показано" in text  # and it says so rather than silently dropping history
 
 
-def test_progress_screen_short_history_has_nothing_to_fold():
-    sessions = [_weighted_session(i, f"2026-06-{i:02d}T10:00:00", [(100.0, 8)]) for i in range(1, 4)]
+def test_progress_screen_single_session_is_not_worth_folding():
+    sessions = [_weighted_session(1, "2026-06-01T10:00:00", [(100.0, 8)])]
     text = formatting.format_progress_screen("Жим лёжа", sessions, None, analytics.PersonalRecords())
     assert "blockquote" not in text
-    assert "Показано" not in text
 
 
-def test_ai_comment_is_folded_but_keeps_its_heading():
+def test_short_ai_comment_is_left_alone():
     text = formatting.build_ai_comment_block("Хороший прогресс на **жиме**.")
-    heading, sep, folded = text.partition("<blockquote expandable>")
+    assert "blockquote" not in text
+    assert "<b>жиме</b>" in text
+
+
+def test_long_ai_comment_folds_under_its_heading():
+    comment = "Разбор подхода за подходом. " * 15  # well past FOLD_MIN_CHARS
+    heading, sep, folded = formatting.build_ai_comment_block(comment).partition(
+        "<blockquote expandable>"
+    )
     assert sep
     assert "Комментарий AI-тренера" in heading
-    assert "<b>жиме</b>" in folded
+    assert "Разбор подхода" in folded

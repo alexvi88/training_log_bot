@@ -26,6 +26,13 @@ _TAG_RE = re.compile(r"<[^>]+>")
 # the old screen before re-sending, so a too-long caption leaves the user with
 # no screen at all.
 CAPTION_LIMIT = 1024
+MESSAGE_LIMIT = 4096
+
+# Worth folding only above this much content — see collapsible_if_long. Six lines
+# is twice what the collapsed box occupies; the character threshold catches prose,
+# which wraps into many screen lines without containing a single newline.
+FOLD_MIN_LINES = 6
+FOLD_MIN_CHARS = 300
 
 
 def telegram_length(text: str) -> int:
@@ -33,6 +40,19 @@ def telegram_length(text: str) -> int:
     count toward the limit, and characters are measured in UTF-16 code units —
     so an emoji costs two, not one."""
     return len(_TAG_RE.sub("", text).encode("utf-16-le")) // 2
+
+
+def collapsible_if_long(text: str) -> str:
+    """Fold, but only when there is enough to hide.
+
+    A collapsed block is itself a quote box about three lines tall, so folding a
+    short list costs the room it saves — and worse, the box draws the eye to the
+    part that was judged least important. Below the thresholds the text is
+    returned untouched.
+    """
+    if text.count("\n") + 1 >= FOLD_MIN_LINES or telegram_length(text) >= FOLD_MIN_CHARS:
+        return collapsible(text)
+    return text
 
 
 def collapsible(text: str) -> str:
@@ -221,7 +241,7 @@ def build_ai_comment_block(comment: str) -> str:
     costs three lines and still reads as an opening sentence, and unfolding is
     a tap on the client (see collapsible).
     """
-    return f"{DIVIDER}\n🤖 <b>Комментарий AI-тренера</b>\n\n{collapsible(markdown_bold_to_html(comment))}"
+    return f"{DIVIDER}\n🤖 <b>Комментарий AI-тренера</b>\n\n{collapsible_if_long(markdown_bold_to_html(comment))}"
 
 
 # Fun, shareable size comparisons for a tonnage total — (emoji, kg each, declensions),
@@ -410,7 +430,7 @@ def build_achievements_screen(earned: set[str]) -> str:
         lines.append("")
         lines.append(f"<b>Ещё не открыты — {len(locked)}:</b>")
         lines.append(
-            collapsible(
+            collapsible_if_long(
                 "\n".join(f"🔒 {escape(a.title)} — {escape(a.description)}" for a in locked)
             )
         )
@@ -426,14 +446,24 @@ def format_duration_hm(seconds: float) -> str:
     return f"{m} мин"
 
 
+def _hall_of_fame_lift(name: str, weight: float, reps: int, e1rm_value: float, unit_label: str) -> str:
+    """One personal-record line. Bodyweight moves have no load to report, so their
+    record is the best set of reps instead of a weight and an e1RM."""
+    if weight > 0:
+        return f"• {escape(name)} — {format_set(weight, reps)} · e1RM {e1rm_value:.0f}{unit_label}"
+    word = plural_ru(reps, ("повтор", "повтора", "повторов"))
+    return f"• {escape(name)} — {reps} {word}"
+
+
 def build_hall_of_fame(
     total_workouts: int,
     tonnage_kg: float,
     tonnage_equivalent: str | None,
     best_week_streak: int,
     longest_workout_seconds: float,
-    top_lifts: list[tuple[str, float, int, float]],  # (name, weight, reps, e1rm)
+    top_lifts: list[tuple[str, float, int, float]],  # (name, weight, reps, e1rm); weight 0 = bodyweight
     unit: str = "kg",
+    max_chars: int | None = None,
 ) -> str:
     """Lifetime totals plus the user's best lifts, shown above the badge grid
     on the '🏅 Достижения' screen — no heading of its own."""
@@ -463,28 +493,29 @@ def build_hall_of_fame(
     if longest_workout_seconds > 0:
         lines.append(f"⏱ Самая длинная тренировка: <b>{format_duration_hm(longest_workout_seconds)}</b>")
 
-    if top_lifts:
-        entries = [
-            f"• {escape(name)} — {format_set(weight, reps)} · e1RM {e1:.0f}{u}"
-            for name, weight, reps, e1 in top_lifts
-        ]
-        lines.append("")
-        lines.append("<b>Личные рекорды:</b>")
-        lines.extend(entries[:TOP_LIFTS_OPEN])
-        # The strongest few are the point; the rest of the list is reference,
-        # so it folds away instead of pushing the badge grid off the screen.
-        if entries[TOP_LIFTS_OPEN:]:
-            lines.append(collapsible("\n".join(entries[TOP_LIFTS_OPEN:])))
+    if not top_lifts:
+        return "\n".join(lines)
 
-    return "\n".join(lines)
+    entries = [_hall_of_fame_lift(name, weight, reps, e1, u) for name, weight, reps, e1 in top_lifts]
+    lines.append("")
+    lines.append("<b>Личные рекорды:</b>")
+    head = "\n".join(lines)
 
+    # The whole list goes into one fold rather than being split into a visible
+    # head and a hidden tail: collapsed, the block already shows its first lines,
+    # so a manual split only adds a seam in the middle of one list.
+    def assemble(keep: list[str]) -> str:
+        text = f"{head}\n{collapsible_if_long(chr(10).join(keep))}"
+        if len(keep) < len(entries):
+            text += f"\n<i>показано {len(keep)} из {len(entries)}</i>"
+        return text
 
-# How many recent sessions stay open on the progress screen before the rest fold
-# away, and how many personal records stay open in the Hall of Fame. Both sit at
-# three because a collapsed block is itself three lines tall — folding less than
-# that would cost more room than it saves.
-PROGRESS_SESSIONS_OPEN = 3
-TOP_LIFTS_OPEN = 3
+    kept = entries
+    text = assemble(kept)
+    while max_chars is not None and len(kept) > 1 and telegram_length(text) > max_chars:
+        kept = kept[:-1]
+        text = assemble(kept)
+    return text
 
 
 def _progress_session_block(session, is_bodyweight: bool) -> str:
@@ -538,9 +569,7 @@ def format_progress_screen(
     blocks = [_progress_session_block(s, is_bw) for s in reversed(candidates)]  # newest first
 
     def assemble(keep: list[str]) -> str:
-        parts = [header, *keep[:PROGRESS_SESSIONS_OPEN]]
-        if keep[PROGRESS_SESSIONS_OPEN:]:
-            parts.append(collapsible("\n\n".join(keep[PROGRESS_SESSIONS_OPEN:])))
+        parts = [header, collapsible_if_long("\n\n".join(keep))]
         if len(window) > len(keep):
             n = plural_ru(len(window), ("тренировка", "тренировки", "тренировок"))
             parts.append(f"Показано {len(keep)} из {len(window)} {n}")
