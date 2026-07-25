@@ -40,6 +40,23 @@ async def settings_back(callback: CallbackQuery, state: FSMContext):
 
 
 @router.callback_query(F.data == "settings:unit")
+async def settings_unit_confirm(callback: CallbackQuery, state: FSMContext):
+    user = await db.get_user(callback.from_user.id)
+    new_unit = "lb" if user["unit"] == "kg" else "kg"
+    kb = keyboards.yes_no_keyboard(
+        yes_cb="settings:unityes", no_cb="settings:unitno",
+        yes_text=f"Переключить на {new_unit}", no_text="❌ Отмена",
+    )
+    await ui.safe_edit(
+        callback,
+        f"Переключить единицы на {new_unit}? Все веса в истории будут пересчитаны — "
+        "конвертация туда-обратно теряет точность на округлении.",
+        reply_markup=kb,
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "settings:unityes")
 async def settings_unit(callback: CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
     user = await db.get_user(user_id)
@@ -53,6 +70,11 @@ async def settings_unit(callback: CallbackQuery, state: FSMContext):
         callback, state,
         alert=f"Единицы переключены на {new_unit}. Все веса в истории пересчитаны автоматически.",
     )
+
+
+@router.callback_query(F.data == "settings:unitno")
+async def settings_unit_cancel(callback: CallbackQuery, state: FSMContext):
+    await show_settings(callback, state)
 
 
 @router.callback_query(F.data == "settings:tz")

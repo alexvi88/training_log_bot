@@ -889,6 +889,16 @@ async def get_workout(workout_id: int) -> Optional[aiosqlite.Row]:
     return await cur.fetchone()
 
 
+async def update_workout_note(workout_id: int, note: Optional[str]) -> None:
+    """Attach/replace a finished workout's note — used by the "📝 Заметка" button
+    on the completion card, after the workout has already been saved."""
+    async with _write_lock:
+        await conn().execute(
+            "UPDATE workouts SET note = ? WHERE id = ?", (note or None, workout_id)
+        )
+        await conn().commit()
+
+
 async def finish_workout(workout_id: int, note: Optional[str] = None, finished_at: Optional[str] = None) -> None:
     async with _write_lock:
         await conn().execute(
