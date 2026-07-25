@@ -62,10 +62,17 @@ async def hist_to_menu(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-async def _top_lifts(user_id: int, formula: str, limit: int = 8) -> list[tuple[str, float, int, float]]:
-    """Best (heaviest-e1RM) working set per exercise, strongest first — for the
-    Hall of Fame. Bodyweight-only exercises (no external load) are skipped."""
-    lifts: list[tuple[str, float, int, float]] = []
+async def _top_lifts(user_id: int, formula: str) -> list[tuple[str, float, int, float]]:
+    """Best working set per exercise, strongest first — for the Hall of Fame.
+
+    Every exercise the user has ever logged gets a line, including bodyweight
+    ones: those have no load to rank by, so their record is the best set of reps
+    and they follow the weighted lifts (weight 0 marks them for the formatter).
+    The list isn't capped here — build_hall_of_fame folds it and trims whatever
+    doesn't fit the message.
+    """
+    weighted: list[tuple[str, float, int, float]] = []
+    bodyweight: list[tuple[str, float, int, float]] = []
     for ex in await db.list_user_exercises(user_id):
         rows = await db.list_sets_for_exercise(ex["id"])
         if not rows:
@@ -76,12 +83,16 @@ async def _top_lifts(user_id: int, formula: str, limit: int = 8) -> list[tuple[s
             s.formula = formula
         pr = analytics.compute_personal_records(sessions)
         if pr.max_e1rm > 0 and pr.best_e1rm_weight > 0:
-            lifts.append((ex["display_name"], pr.best_e1rm_weight, pr.best_e1rm_reps, pr.max_e1rm))
-    lifts.sort(key=lambda t: t[3], reverse=True)
-    return lifts[:limit]
+            weighted.append((ex["display_name"], pr.best_e1rm_weight, pr.best_e1rm_reps, pr.max_e1rm))
+        elif pr.max_reps_at_weight:
+            best_reps = max(pr.max_reps_at_weight.values())
+            bodyweight.append((ex["display_name"], 0.0, best_reps, 0.0))
+    weighted.sort(key=lambda t: t[3], reverse=True)
+    bodyweight.sort(key=lambda t: t[2], reverse=True)
+    return weighted + bodyweight
 
 
-async def build_hall_of_fame_text(user_id: int) -> str:
+async def build_hall_of_fame_text(user_id: int, max_chars: int | None = None) -> str:
     user = await db.get_user(user_id)
     formula = user["e1rm_formula"] if user else config.DEFAULT_E1RM_FORMULA
     unit = user["unit"] if user else "kg"
@@ -99,6 +110,7 @@ async def build_hall_of_fame_text(user_id: int) -> str:
         longest_workout_seconds=agg["longest_workout_seconds"],
         top_lifts=top,
         unit=unit,
+        max_chars=max_chars,
     )
 
 
@@ -108,9 +120,14 @@ async def menu_achievements(callback: CallbackQuery, state: FSMContext):
     old standalone Hall of Fame screen (lifetime totals, personal records)
     with the badge grid into one screen."""
     await state.clear()
-    hof_text = await build_hall_of_fame_text(callback.from_user.id)
     earned = await db.list_achievement_codes(callback.from_user.id)
     ach_text = formatting.build_achievements_screen(earned)
+    # Records and badges share one message, and the record list is the open-ended
+    # half (one line per exercise ever logged), so it gets whatever room the fixed
+    # badge grid leaves — otherwise a long-time user's screen overflows the 4096
+    # cap and ui.safe_edit deletes it without putting anything back.
+    budget = formatting.MESSAGE_LIMIT - formatting.telegram_length(ach_text) - 2
+    hof_text = await build_hall_of_fame_text(callback.from_user.id, max_chars=budget)
     text = hof_text + "\n\n" + ach_text
     kb = InlineKeyboardBuilder()
     kb.button(text="⬅️ Назад", callback_data="prog:groups")
