@@ -71,6 +71,24 @@ def test_build_achievements_screen_counts():
     assert "🔒" in text  # locked ones listed
 
 
+def test_locked_badges_sit_behind_the_fold():
+    text = formatting.build_achievements_screen({"first"})
+    open_part, sep, folded = text.partition("<blockquote expandable>")
+    assert sep, "locked badges should be collapsible, not a wall of text"
+    # What the user actually earned stays visible above the fold...
+    assert "Первый шаг" in open_part
+    assert "🔒" not in open_part
+    # ...and every remaining badge is inside it, none dropped.
+    assert folded.count("🔒") == len(achievements.CATALOG) - 1
+    assert folded.endswith("</blockquote>")
+
+
+def test_no_fold_when_everything_is_unlocked():
+    text = formatting.build_achievements_screen({a.code for a in achievements.CATALOG})
+    assert "blockquote" not in text
+    assert "🔒" not in text
+
+
 @pytest.mark.asyncio
 async def test_award_returns_only_new(fresh_db, user_id):
     db = fresh_db
