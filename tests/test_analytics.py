@@ -322,3 +322,36 @@ def test_is_workout_milestone_true(n):
 @pytest.mark.parametrize("n", [0, 2, 9, 11, 26, 99, 101, 150, 250])
 def test_is_workout_milestone_false(n):
     assert analytics.is_workout_milestone(n) is False
+
+
+# ---------- is_seasoned ----------
+
+
+def test_is_seasoned_true_at_exactly_the_threshold():
+    today = dt.date(2026, 6, 15)
+    dates = [today, today - dt.timedelta(days=5), today - dt.timedelta(days=10)]
+    assert analytics.is_seasoned(dates, today) is True
+
+
+def test_is_seasoned_false_one_short_of_threshold():
+    today = dt.date(2026, 6, 15)
+    dates = [today, today - dt.timedelta(days=5)]
+    assert analytics.is_seasoned(dates, today) is False
+
+
+def test_is_seasoned_window_edge_is_inclusive():
+    today = dt.date(2026, 6, 15)
+    cutoff = today - dt.timedelta(days=analytics.RECENT_TRAINING_WINDOW_DAYS - 1)
+    dates = [today, today - dt.timedelta(days=3), cutoff]
+    assert analytics.is_seasoned(dates, today) is True
+
+
+def test_is_seasoned_ignores_workouts_just_outside_the_window():
+    today = dt.date(2026, 6, 15)
+    too_old = today - dt.timedelta(days=analytics.RECENT_TRAINING_WINDOW_DAYS)
+    dates = [today, today - dt.timedelta(days=3), too_old]
+    assert analytics.is_seasoned(dates, today) is False
+
+
+def test_is_seasoned_empty_history_is_false():
+    assert analytics.is_seasoned([], dt.date(2026, 6, 15)) is False

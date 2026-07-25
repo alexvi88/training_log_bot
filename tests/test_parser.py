@@ -11,6 +11,7 @@ from parser import (
     ParsedSet,
     ParseError,
     parse_ru_date,
+    parse_set_edit,
     parse_sets_line,
     parse_single_token,
 )
@@ -265,3 +266,51 @@ def test_date_in_future_is_rejected():
     tomorrow = dt.date.today() + dt.timedelta(days=1)
     with pytest.raises(ParseError, match="будущем"):
         parse_ru_date(tomorrow.strftime("%d.%m.%Y"))
+
+
+# ---------- parse_set_edit ----------
+
+
+def test_set_edit_parses_index_and_replacement():
+    result = parse_set_edit("2: 100 8")
+    assert result == (2, ParsedSet(weight=100.0, reps=8))
+
+
+def test_set_edit_supports_the_full_single_token_grammar():
+    index, ps = parse_set_edit("3: 100x8@9")
+    assert index == 3
+    assert ps.weight == 100.0 and ps.reps == 8 and ps.rpe == 9.0
+
+
+def test_set_edit_bare_reps_marks_weight_omitted():
+    index, ps = parse_set_edit("1: 8")
+    assert index == 1
+    assert ps.weight_omitted is True
+    assert ps.reps == 8
+
+
+def test_set_edit_returns_none_for_ordinary_input():
+    # No leading "digits:" — falls through to the normal parse_sets_line path.
+    assert parse_set_edit("100 8") is None
+    assert parse_set_edit("8") is None
+
+
+def test_set_edit_does_not_collide_with_a_decimal_weight():
+    # "2.5 8" is a legitimate 2.5kg set, not "edit set 2" with a stray ".5 8".
+    assert parse_set_edit("2.5 8") is None
+
+
+def test_set_edit_rejects_zero_or_negative_index():
+    with pytest.raises(ParseError, match="больше 0"):
+        parse_set_edit("0: 100 8")
+
+
+def test_set_edit_rejects_a_count_suffix():
+    # Editing one set can't fan out into several.
+    with pytest.raises(ParseError, match="один подход"):
+        parse_set_edit("2: 100x8x3")
+
+
+def test_set_edit_propagates_bad_token_errors():
+    with pytest.raises(ParseError, match=_HINT_RE):
+        parse_set_edit("2: not a set")

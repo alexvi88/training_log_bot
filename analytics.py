@@ -344,3 +344,18 @@ def compute_dashboard(workout_dates: Iterable[dt.date], today: dt.date) -> Dashb
         days_since_last=days_since_last,
         week_streak=streak,
     )
+
+
+# Recent-training window/threshold past which the logging screen stops
+# spelling out "weight and reps, separated by a space" — someone training
+# this often already knows the format, and it costs two lines on every set.
+RECENT_TRAINING_WINDOW_DAYS = 14
+RECENT_TRAINING_THRESHOLD = 3
+
+
+def is_seasoned(workout_dates: Iterable[dt.date], today: dt.date) -> bool:
+    """True once the athlete has finished RECENT_TRAINING_THRESHOLD+ workouts
+    within the last RECENT_TRAINING_WINDOW_DAYS days (today inclusive)."""
+    cutoff = today - dt.timedelta(days=RECENT_TRAINING_WINDOW_DAYS - 1)
+    recent = sum(1 for d in workout_dates if cutoff <= d <= today)
+    return recent >= RECENT_TRAINING_THRESHOLD

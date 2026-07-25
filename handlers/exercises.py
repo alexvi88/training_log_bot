@@ -188,7 +188,10 @@ async def exm_preview_template(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(StateFilter(ExerciseManage.creating_exercise_name), F.data.startswith("exm:tpladd:"))
+@router.callback_query(
+    StateFilter(ExerciseManage.creating_exercise_name, ExerciseManage.picking_exercise),
+    F.data.startswith("exm:tpladd:"),
+)
 async def exm_add_template(callback: CallbackQuery, state: FSMContext):
     template_id = int(callback.data.split(":")[2])
     ex_id = await db.fork_exercise_from_template(callback.from_user.id, template_id)
@@ -373,14 +376,19 @@ async def exm_search_text(message: Message, state: FSMContext):
     data = await state.get_data()
     group_id = data.get("exm_group_id")
     results = await db.search_exercises(message.from_user.id, query)
+    templates = await db.search_exercise_templates(message.from_user.id, query)
     b = InlineKeyboardBuilder()
     items = [(f"exm:ex:{ex['id']}", ex["display_name"]) for ex in results]
+    items += [(f"exm:tpladd:{t['id']}", f"📋 {t['display_name']}") for t in templates]
     for row in keyboards.named_buttons(items):
         b.row(*row)
     if group_id is not None:
         b.row(InlineKeyboardButton(text="➕ Новое упражнение", callback_data="exm:newex"))
     b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="exm:backlist"))
-    text = f"Результаты поиска «{escape(query)}»:" if results else f"Ничего не нашлось по «{escape(query)}»."
+    text = (
+        f"Результаты поиска «{escape(query)}»:" if (results or templates)
+        else f"Ничего не нашлось по «{escape(query)}»."
+    )
     await message.answer(text, reply_markup=b.as_markup(), parse_mode="HTML")
 
 

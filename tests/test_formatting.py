@@ -475,3 +475,22 @@ def test_long_ai_comment_folds_under_its_heading():
     assert sep
     assert "Комментарий AI-тренера" in heading
     assert "Разбор подхода" in folded
+
+
+def test_logging_hint_instruction_can_be_hidden():
+    from handlers.workout import _logging_hint
+
+    with_instruction = _logging_hint(None, has_sets=False, show_instruction=True)
+    without = _logging_hint(None, has_sets=False, show_instruction=False)
+    assert "Вес и повторы" in with_instruction
+    assert without == ""
+
+
+def test_logging_hint_hides_instruction_but_keeps_last_session_and_note():
+    from handlers.workout import _logging_hint
+
+    last = [(100.0, 10, None)]
+    hint = _logging_hint(last, has_sets=True, show_progression=False, note="болит плечо", show_instruction=False)
+    assert "Вес и повторы" not in hint
+    assert "болит плечо" in hint
+    assert "В прошлый раз" in hint

@@ -71,22 +71,27 @@ def test_build_achievements_screen_counts():
     assert "🔒" in text  # locked ones listed
 
 
-def test_locked_badges_sit_behind_the_fold():
+def test_earned_and_locked_badges_each_fold_regardless_of_length():
+    # This screen always folds both lists, short or long: it's reached to check
+    # the count or brag about one badge, not to read the list.
     text = formatting.build_achievements_screen({"first"})
-    open_part, sep, folded = text.partition("<blockquote expandable>")
-    assert sep, "locked badges should be collapsible, not a wall of text"
-    # What the user actually earned stays visible above the fold...
-    assert "Первый шаг" in open_part
-    assert "🔒" not in open_part
-    # ...and every remaining badge is inside it, none dropped.
-    assert folded.count("🔒") == len(achievements.CATALOG) - 1
-    assert folded.endswith("</blockquote>")
+    assert text.count("blockquote expandable") == 2  # one earned block, one locked block
+    first_fold, _, rest = text.partition("<blockquote expandable>")
+    assert "🔒" not in first_fold  # header only above the first fold, no content
+    assert "Первый шаг" in text
+    assert text.count("🔒") == len(achievements.CATALOG) - 1  # every remaining badge, none dropped
 
 
-def test_no_fold_when_everything_is_unlocked():
-    text = formatting.build_achievements_screen({a.code for a in achievements.CATALOG})
-    assert "blockquote" not in text
-    assert "🔒" not in text
+def test_earned_list_folds_even_when_it_is_everything():
+    earned = {a.code for a in achievements.CATALOG}  # every badge, nothing locked
+    text = formatting.build_achievements_screen(earned)
+    assert "🔒" not in text  # nothing locked to list
+    assert text.count("blockquote expandable") == 1  # just the earned block
+
+
+def test_no_badges_earned_yet_has_no_fold_for_that_half():
+    text = formatting.build_achievements_screen(set())
+    assert text.count("blockquote expandable") == 1  # only the locked block, nothing earned to fold
 
 
 @pytest.mark.asyncio
