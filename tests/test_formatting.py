@@ -193,8 +193,24 @@ def test_live_session_shows_rpe_only_where_logged():
         set_rpes=[9.0, None], exercise_id=1,
     )
     lines = formatting.build_live_session_text([block]).splitlines()
-    assert "  • 100×8 @9" in lines
-    assert "  • 100×7" in lines
+    assert "100×8 @9, 100×7" in lines
+
+
+def test_live_session_active_exercise_keeps_bulleted_sets():
+    block = ExerciseBlockView(
+        group_name="спина", exercise_name="Тяга", sets=[(50.0, 5), (5.0, 5), (50.0, 5)], exercise_id=2,
+    )
+    lines = formatting.build_live_session_text([block], active_exercise_id=2).splitlines()
+    assert "  • 50×5" in lines
+    assert "  • 5×5" in lines
+
+
+def test_live_session_finished_exercise_sets_on_one_line():
+    block = ExerciseBlockView(
+        group_name="спина", exercise_name="seated row - cable", sets=[(50.0, 5), (5.0, 5), (50.0, 5)], exercise_id=2,
+    )
+    lines = formatting.build_live_session_text([block]).splitlines()
+    assert "50×5, 5×5, 50×5" in lines
 
 
 def test_workout_summary_prev_line_shows_rpe():

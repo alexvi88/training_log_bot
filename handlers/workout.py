@@ -1080,7 +1080,7 @@ async def live_note_prompt(callback: CallbackQuery, state: FSMContext):
     user = await db.get_user(callback.from_user.id)
     await _refresh_live(
         callback.bot, state, user, (await state.get_data())["workout_id"],
-        f"📝 Заметка к «{escape(ex['display_name'])}» — напиши текст (например «болит плечо — следи за локтями»).{current}",
+        f"📝 Заметка к «{escape(ex['display_name'])}» — напиши текст (например «побаливает правое плечо»).{current}",
         keyboards.cancel_keyboard("live:note_cancel"),
     )
     await callback.answer()

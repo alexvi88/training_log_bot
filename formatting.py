@@ -300,9 +300,13 @@ def build_live_session_text(
     for i, block in enumerate(blocks):
         if i > 0:
             body_lines.append("")
-        prefix = "▶ " if active_exercise_id is not None and block.exercise_id == active_exercise_id else ""
+        is_active = active_exercise_id is not None and block.exercise_id == active_exercise_id
+        prefix = "▶ " if is_active else ""
         body_lines.append(f"{prefix}<b>{escape(block.exercise_name)}</b>")
-        body_lines.extend(f"  • {format_set(w, r, block.rpe_for(i))}" for i, (w, r) in enumerate(block.sets))
+        if is_active:
+            body_lines.extend(f"  • {format_set(w, r, block.rpe_for(i))}" for i, (w, r) in enumerate(block.sets))
+        elif block.sets:
+            body_lines.append(", ".join(format_set(w, r, block.rpe_for(i)) for i, (w, r) in enumerate(block.sets)))
     lines = list(body_lines)
     if not lines and not hint:
         lines = ["Добавь упражнение, чтобы начать."]
