@@ -1265,6 +1265,9 @@ async def live_repeat_set(callback: CallbackQuery, state: FSMContext):
 async def live_finish_exercise(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     active = data.get("active_exercise_id")
+    active_block_id = (data.get("open_blocks") or {}).get(active)
+    if active_block_id is not None and not await db.list_sets_for_block(active_block_id):
+        await db.delete_block(active_block_id)
     open_exercises = [eid for eid in (data.get("open_exercises") or []) if eid != active]
     open_blocks = dict(data.get("open_blocks") or {})
     open_blocks.pop(active, None)
