@@ -143,8 +143,8 @@ def logging_keyboard(
     Weight/reps are typed as plain text (e.g. "100 8") — this keyboard only holds
     navigation/utility actions, not numeric input, to keep it short.
 
-    The "➕ Суперсет"/"📝" row is always available; the only thing that changes
-    once a set is logged is "↩️ Удалить последний" appearing above it.
+    The "➕ Суперсет"/"📝" row is always available; once a set is logged,
+    "↩️ Удалить последний" appears above it and "✅ Закончить упражнение" below it.
     """
     b = InlineKeyboardBuilder()
     if len(open_items) > 1:
@@ -156,8 +156,8 @@ def logging_keyboard(
         top_row.append(InlineKeyboardButton(text="📝", callback_data=f"live:note:{active_id}"))
     if has_sets:
         b.row(InlineKeyboardButton(text="↩️ Удалить последний", callback_data="live:undo"))
-        b.row(InlineKeyboardButton(text="✅ Закончить упражнение", callback_data="live:finish_exercise"))
         b.row(*top_row)
+        b.row(InlineKeyboardButton(text="✅ Закончить упражнение", callback_data="live:finish_exercise"))
     else:
         b.row(*top_row)
         b.row(InlineKeyboardButton(text="✅ Закончить упражнение", callback_data="live:finish_exercise"))
