@@ -137,26 +137,23 @@ def logging_keyboard(
     open_items: list[tuple[int, str]],
     active_id: int | None,
     has_sets: bool = True,
-    show_card: bool = True,
 ) -> InlineKeyboardMarkup:
     """Set-logging keyboard: tabs to switch between exercises open in parallel, plus controls.
 
     Weight/reps are typed as plain text (e.g. "100 8") — this keyboard only holds
     navigation/utility actions, not numeric input, to keep it short.
 
-    The "➕ Суперсет"/"ℹ️ Упражнение" row is always available; the only thing that
-    changes once a set is logged is "↩️ Удалить последний" appearing above it.
+    The "➕ Суперсет"/"📝" row is always available; the only thing that changes
+    once a set is logged is "↩️ Удалить последний" appearing above it.
     """
     b = InlineKeyboardBuilder()
     if len(open_items) > 1:
         for ex_id, name in open_items:
             text = ("▶ " if ex_id == active_id else "") + name
             b.row(InlineKeyboardButton(text=text, callback_data=f"live:switch:{ex_id}"))
-    superset_btn = InlineKeyboardButton(text="➕ Суперсет", callback_data="live:add_exercise")
-    if active_id is not None and show_card:
-        top_row = [superset_btn, InlineKeyboardButton(text="ℹ️ Упражнение", callback_data=f"live:card:{active_id}")]
-    else:
-        top_row = [superset_btn]
+    top_row = [InlineKeyboardButton(text="➕ Суперсет", callback_data="live:add_exercise")]
+    if active_id is not None:
+        top_row.append(InlineKeyboardButton(text="📝", callback_data=f"live:note:{active_id}"))
     if has_sets:
         b.row(InlineKeyboardButton(text="↩️ Удалить последний", callback_data="live:undo"))
         b.row(InlineKeyboardButton(text="✅ Закончить упражнение", callback_data="live:finish_exercise"))
@@ -164,12 +161,6 @@ def logging_keyboard(
     else:
         b.row(*top_row)
         b.row(InlineKeyboardButton(text="✅ Закончить упражнение", callback_data="live:finish_exercise"))
-    return b.as_markup()
-
-
-def exercise_card_back_keyboard() -> InlineKeyboardMarkup:
-    b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="◀️ Назад к тренировке", callback_data="live:card_back"))
     return b.as_markup()
 
 
@@ -257,15 +248,6 @@ def stale_workout_keyboard(workout_id: int) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(text="✅ Завершить задним числом", callback_data=f"stale:finish:{workout_id}")
     b.button(text="🗑 Удалить", callback_data=f"stale:delete:{workout_id}")
-    b.adjust(1)
-    return b.as_markup()
-
-
-def finish_workout_keyboard() -> InlineKeyboardMarkup:
-    b = InlineKeyboardBuilder()
-    b.button(text="📝 Добавить заметку", callback_data="finish:note")
-    b.button(text="✅ Без заметки", callback_data="finish:skip_note")
-    b.button(text="❌ Отмена", callback_data="live:cancel_finish")
     b.adjust(1)
     return b.as_markup()
 
@@ -374,6 +356,7 @@ def history_item_keyboard(workout_id: int, show_ai_button: bool = False) -> Inli
 def workout_card_keyboard(workout_id: int, show_ai_button: bool = False) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(text="🖼 Поделиться картинкой", callback_data=f"hist:card:{workout_id}")
+    b.button(text="📝 Заметка", callback_data=f"live:addnote:{workout_id}")
     if show_ai_button:
         b.button(text="🤖 Комментарий AI-тренера", callback_data=f"ai:comment:{workout_id}")
     b.adjust(1)
