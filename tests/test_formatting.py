@@ -414,3 +414,57 @@ def test_logging_hint_shows_achieved_goal_when_today_sets_meet_target():
     assert "🎯" in not_yet and "✅" not in not_yet
     assert "✅" in achieved and "Цель выполнена" in achieved
     assert "🎯" not in achieved
+
+
+# ---------- collapsible folds ----------
+
+
+def test_telegram_length_ignores_markup_and_counts_emoji_as_two():
+    assert formatting.telegram_length("<b>абв</b>") == 3
+    assert formatting.telegram_length("🐘") == 2
+
+
+def test_progress_screen_keeps_recent_sessions_open_and_folds_the_rest():
+    sessions = [_weighted_session(i, f"2026-06-{i:02d}T10:00:00", [(100.0, 8)]) for i in range(1, 9)]
+    text = formatting.format_progress_screen("Жим лёжа", sessions, None, analytics.PersonalRecords())
+
+    open_part, sep, folded = text.partition("<blockquote expandable>")
+    assert sep, "older sessions should fold away"
+    # The three newest stay in the open, everything older is inside the fold.
+    for recent in ("08.06.2026", "07.06.2026", "06.06.2026"):
+        assert recent in open_part
+    for older in ("05.06.2026", "01.06.2026"):
+        assert older not in open_part and older in folded
+
+
+def test_progress_screen_fits_the_caption_limit():
+    # A long history with heavy sets: without trimming this blows past 1024 and
+    # ui.safe_edit_photo would delete the screen without putting one back.
+    sets = [(100.0 + i, r) for i, r in enumerate(range(12, 4, -1))]
+    sessions = [
+        _weighted_session(i, f"2026-{1 + i // 28:02d}-{1 + i % 28:02d}T10:00:00", sets)
+        for i in range(60)
+    ]
+    text = formatting.format_progress_screen(
+        "Разгибание на трицепс на блоке с канатом", sessions, None,
+        analytics.PersonalRecords(best_e1rm_weight=107.0, best_e1rm_reps=5, max_e1rm=125.0),
+        limit=9999,
+    )
+
+    assert formatting.telegram_length(text) <= formatting.CAPTION_LIMIT
+    assert "Показано" in text  # and it says so rather than silently dropping history
+
+
+def test_progress_screen_short_history_has_nothing_to_fold():
+    sessions = [_weighted_session(i, f"2026-06-{i:02d}T10:00:00", [(100.0, 8)]) for i in range(1, 4)]
+    text = formatting.format_progress_screen("Жим лёжа", sessions, None, analytics.PersonalRecords())
+    assert "blockquote" not in text
+    assert "Показано" not in text
+
+
+def test_ai_comment_is_folded_but_keeps_its_heading():
+    text = formatting.build_ai_comment_block("Хороший прогресс на **жиме**.")
+    heading, sep, folded = text.partition("<blockquote expandable>")
+    assert sep
+    assert "Комментарий AI-тренера" in heading
+    assert "<b>жиме</b>" in folded

@@ -81,21 +81,21 @@ async def rt_program_detail(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Программа не найдена", show_alert=True)
         return
     days = program["days"]
-    lines = [
-        f"✨ <b>{escape(program['name'])}</b>",
-        f"<i>{escape(program['meta'])}</i>",
-        "",
-        escape(program["description"]),
-        "",
-        f"<b>{len(days)} {_days_word(len(days))}:</b>",
-        "",
+    # Name, pitch and day count decide whether the program is for you; the
+    # exercise-by-exercise breakdown is 20+ lines of detail, so it folds away
+    # and the catalog stays scannable.
+    day_blocks = [
+        "\n".join([f"<b>{escape(day_name)}</b>", *(f"• {escape(ex)}" for ex in exercises)])
+        for day_name, exercises in days
     ]
-    for day_name, exercises in days:
-        lines.append(f"<b>{escape(day_name)}</b>")
-        lines.extend(f"• {escape(ex)}" for ex in exercises)
-        lines.append("")
+    text = "\n\n".join([
+        f"✨ <b>{escape(program['name'])}</b>\n<i>{escape(program['meta'])}</i>",
+        escape(program["description"]),
+        f"<b>{len(days)} {_days_word(len(days))}:</b>",
+        formatting.collapsible("\n\n".join(day_blocks)),
+    ])
     kb = keyboards.program_detail_keyboard(key)
-    await ui.safe_edit(callback, "\n".join(lines).strip(), reply_markup=kb, parse_mode="HTML")
+    await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML")
     await callback.answer()
 
 

@@ -61,3 +61,24 @@ async def test_aggregates_and_build_text(fresh_db, user_id):
     text = await history.build_hall_of_fame_text(user_id)
     assert "Жим лёжа" in text
     assert "Поднято за всё время" in text
+
+
+def test_hall_of_fame_folds_all_but_the_strongest_lifts():
+    lifts = [(f"Упражнение {i}", 100.0 + i, 5, 130.0 - i) for i in range(8)]
+    text = formatting.build_hall_of_fame(
+        total_workouts=42, tonnage_kg=125000, tonnage_equivalent=None,
+        best_week_streak=6, longest_workout_seconds=5400, top_lifts=lifts,
+    )
+    open_part, sep, folded = text.partition("<blockquote expandable>")
+    assert sep
+    assert open_part.count("• ") == formatting.TOP_LIFTS_OPEN
+    assert folded.count("• ") == len(lifts) - formatting.TOP_LIFTS_OPEN
+
+
+def test_hall_of_fame_short_list_is_not_folded():
+    text = formatting.build_hall_of_fame(
+        total_workouts=3, tonnage_kg=1000, tonnage_equivalent=None,
+        best_week_streak=0, longest_workout_seconds=0,
+        top_lifts=[("Жим лёжа", 120.0, 3, 132.0)],
+    )
+    assert "blockquote" not in text
