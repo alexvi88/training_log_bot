@@ -14,6 +14,15 @@ def d(s: str) -> dt.date:
     return dt.date.fromisoformat(s)
 
 
+@pytest.fixture(autouse=True)
+def _clear_heatmap_cache():
+    from handlers.workout import _heatmap_cache
+
+    _heatmap_cache.clear()
+    yield
+    _heatmap_cache.clear()
+
+
 def test_dashboard_empty():
     dash = analytics.compute_dashboard([], d("2026-06-26"))
     assert dash == analytics.Dashboard(0, 0, 0, None, 0)
@@ -196,5 +205,39 @@ async def test_menu_view_includes_heatmap_once_history_exists(user_id, fresh_db)
     text, png = await _menu_view(user_id)
     assert "АТЛЕТ" in text
     assert png is not None and png[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+@pytest.mark.asyncio
+async def test_menu_view_heatmap_cached_across_calls(user_id, fresh_db, monkeypatch):
+    db = fresh_db
+    started = dt.datetime.now() - dt.timedelta(days=3)
+    await db.create_finished_workout(
+        user_id, started.isoformat(), (started + dt.timedelta(hours=1)).isoformat()
+    )
+    from handlers.workout import _menu_view
+
+    calls = 0
+    real_render = charts.render_year_heatmap
+
+    def _counting_render(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return real_render(*args, **kwargs)
+
+    monkeypatch.setattr(charts, "render_year_heatmap", _counting_render)
+
+    _, png1 = await _menu_view(user_id)
+    _, png2 = await _menu_view(user_id)
+    assert calls == 1  # second call is served from cache, no re-render
+    assert png1 == png2
+
+    # A new finished workout invalidates the cache.
+    started2 = dt.datetime.now() - dt.timedelta(days=1)
+    await db.create_finished_workout(
+        user_id, started2.isoformat(), (started2 + dt.timedelta(hours=1)).isoformat()
+    )
+    _, png3 = await _menu_view(user_id)
+    assert calls == 2
+    assert png3 != png1
 
 
