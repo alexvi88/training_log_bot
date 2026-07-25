@@ -195,6 +195,32 @@ async def test_finishing_last_exercise_suggests_what_came_next_last_time(fresh_d
     assert f"live:suggest:{triceps}" in callback_datas
 
 
+async def test_finishing_exercise_with_no_sets_deletes_its_empty_block(fresh_db, user_id):
+    """Tapping "закончить упражнение" before logging anything shouldn't leave a
+    dangling empty block behind — reopening the exercise later would otherwise
+    create a second block for it, showing up as a duplicate empty header."""
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Спина")
+    rdl = await db.create_exercise(user_id, "Румынская тяга", group_id)
+
+    workout_id = await db.create_workout(user_id)
+    block_id = await db.create_block(workout_id, "single")
+    await db.add_block_exercise(block_id, rdl, 0)
+
+    state = await _make_state(
+        user_id, open_exercises=[rdl], open_blocks={rdl: block_id}, active_exercise_id=rdl,
+    )
+    await state.update_data(workout_id=workout_id)
+    await state.set_state(WorkoutFlow.logging_set)
+    callback = _make_callback(user_id, "live:finish_exercise")
+
+    await workout.live_finish_exercise(callback, state)
+
+    assert await db.get_block(block_id) is None
+    blocks = await db.list_blocks_for_workout(workout_id)
+    assert blocks == []
+
+
 async def test_tapping_suggestion_jumps_straight_into_logging_it(fresh_db, user_id):
     db = fresh_db
     group_id = await db.create_muscle_group(user_id, "Грудь")
