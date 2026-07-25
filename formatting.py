@@ -342,6 +342,20 @@ def build_exercise_highlights(groups: list[tuple[str, list[str], str | None]]) -
     return "\n\n".join(blocks)
 
 
+def collapsible(text: str) -> str:
+    """Fold a block behind Telegram's expandable blockquote (Bot API 7.4+).
+
+    It renders collapsed with an expand chevron, and unfolding happens entirely
+    on the client — no callback, no edit, no screen re-send — which is what
+    makes it cheaper than an inline button for hiding bulk text. Clients too old
+    to know the entity draw it as a plain quote, so nothing is ever unreachable.
+
+    Callers pass text that is already escaped/marked up: the tags are added
+    around it, never to it.
+    """
+    return f"<blockquote expandable>{text}</blockquote>"
+
+
 def format_new_achievements(new_codes: list[str]) -> str | None:
     """Celebratory block for badges earned right now, shown on the completion card."""
     import achievements
@@ -355,7 +369,12 @@ def format_new_achievements(new_codes: list[str]) -> str | None:
 
 
 def build_achievements_screen(earned: set[str]) -> str:
-    """The full 🏅 badge grid: everything unlocked, then everything still locked."""
+    """The full 🏅 badge grid: everything unlocked, then everything still locked.
+
+    What the user earned is the point of the screen, so it stays in the open;
+    the two dozen still-locked badges are a wall of text that would push it off
+    the screen, so they go behind a collapsible fold instead of being cut.
+    """
     import achievements
 
     got = [a for a in achievements.CATALOG if a.code in earned]
@@ -365,9 +384,12 @@ def build_achievements_screen(earned: set[str]) -> str:
         lines.append(f"{a.emoji} <b>{escape(a.title)}</b> — {escape(a.description)}")
     if locked:
         lines.append("")
-        lines.append("<b>Ещё не открыты:</b>")
-        for a in locked:
-            lines.append(f"🔒 {escape(a.title)} — {escape(a.description)}")
+        lines.append(f"<b>Ещё не открыты — {len(locked)}:</b>")
+        lines.append(
+            collapsible(
+                "\n".join(f"🔒 {escape(a.title)} — {escape(a.description)}" for a in locked)
+            )
+        )
     return "\n".join(lines)
 
 
