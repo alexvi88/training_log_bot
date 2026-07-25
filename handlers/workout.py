@@ -424,6 +424,15 @@ _ONBOARDING = (
 )
 
 
+# The heatmap picture only depends on `today` plus the set of finished-workout
+# dates, and changes at most once a day (a new workout, or the daily rollover
+# of "days since last"/"last 30 days"/the grid's today-column). Keyed by
+# (today, workout count, last workout date) so a render is skipped on every
+# menu view except the first one after something actually changed — matplotlib
+# is the expensive part of _menu_view, not the DB lookups above it.
+_heatmap_cache: dict[int, tuple[tuple, bytes]] = {}
+
+
 async def _menu_view(user_id: int) -> tuple[str, bytes | None]:
     """Greeting, plus a year heatmap image (with the streak/this-week/30-day
     dashboard stats drawn into it) once the user has any finished workouts.
@@ -432,6 +441,10 @@ async def _menu_view(user_id: int) -> tuple[str, bytes | None]:
     dates = [dt.date.fromisoformat(d) for d in await db.list_finished_workout_dates(user_id)]
     if not dates:
         return _ONBOARDING, None
+    cache_key = (today, len(dates), max(dates))
+    cached = _heatmap_cache.get(user_id)
+    if cached is not None and cached[0] == cache_key:
+        return _GREETING, cached[1]
     dashboard = analytics.compute_dashboard(dates, today)
     this_monday = today - dt.timedelta(days=today.weekday())
     year_ago = this_monday - dt.timedelta(weeks=52)
@@ -439,6 +452,7 @@ async def _menu_view(user_id: int) -> tuple[str, bytes | None]:
     heatmap_start = max(first_monday, year_ago)
     stat_lines = formatting.dashboard_stat_lines(dashboard)
     png = await asyncio.to_thread(charts.render_year_heatmap, Counter(dates), today, heatmap_start, stat_lines)
+    _heatmap_cache[user_id] = (cache_key, png)
     return _GREETING, png
 
 
