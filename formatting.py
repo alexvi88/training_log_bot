@@ -18,6 +18,38 @@ UNIT_LABELS = {"kg": "кг", "lb": "lb"}
 
 DIVIDER = "─" * 10
 
+_TAG_RE = re.compile(r"<[^>]+>")
+
+# A photo caption tops out at 1024 characters where a plain message gets 4096,
+# and screens that ride along with a chart (the progress screen) live under the
+# smaller cap. Overflowing it isn't a soft failure: ui.safe_edit_photo deletes
+# the old screen before re-sending, so a too-long caption leaves the user with
+# no screen at all.
+CAPTION_LIMIT = 1024
+
+
+def telegram_length(text: str) -> int:
+    """Length as Telegram counts it: markup is parsed into entities and doesn't
+    count toward the limit, and characters are measured in UTF-16 code units —
+    so an emoji costs two, not one."""
+    return len(_TAG_RE.sub("", text).encode("utf-16-le")) // 2
+
+
+def collapsible(text: str) -> str:
+    """Fold a block behind Telegram's expandable blockquote (Bot API 7.4+).
+
+    It renders collapsed to three lines with an expand chevron, and unfolding
+    happens entirely on the client — no callback, no edit, no screen re-send —
+    which is what makes it cheaper than an inline button for hiding bulk text.
+    Clients too old to know the entity draw it as a plain quote, so nothing is
+    ever unreachable. Folding does not shorten the message: hidden text still
+    counts toward the 4096/1024 limits.
+
+    Callers pass text that is already escaped/marked up: the tags are added
+    around it, never to it.
+    """
+    return f"<blockquote expandable>{text}</blockquote>"
+
 
 def plural_ru(n: int, forms: tuple[str, str, str]) -> str:
     """Russian plural: forms = (1 единица, 2-4 единицы, 5+ единиц)."""
@@ -182,8 +214,14 @@ def format_milestone_line(total_finished: int) -> str:
 
 
 def build_ai_comment_block(comment: str) -> str:
-    """Rendered as a card section prefixed by DIVIDER — same convention as highlights."""
-    return f"{DIVIDER}\n🤖 <b>Комментарий AI-тренера</b>\n\n{markdown_bold_to_html(comment)}"
+    """Rendered as a card section prefixed by DIVIDER — same convention as highlights.
+
+    The comment itself is folded: it's a paragraph of prose sitting under the
+    workout card, where the numbers are what the user came for. Collapsed it
+    costs three lines and still reads as an opening sentence, and unfolding is
+    a tap on the client (see collapsible).
+    """
+    return f"{DIVIDER}\n🤖 <b>Комментарий AI-тренера</b>\n\n{collapsible(markdown_bold_to_html(comment))}"
 
 
 # Fun, shareable size comparisons for a tonnage total — (emoji, kg each, declensions),
@@ -342,20 +380,6 @@ def build_exercise_highlights(groups: list[tuple[str, list[str], str | None]]) -
     return "\n\n".join(blocks)
 
 
-def collapsible(text: str) -> str:
-    """Fold a block behind Telegram's expandable blockquote (Bot API 7.4+).
-
-    It renders collapsed with an expand chevron, and unfolding happens entirely
-    on the client — no callback, no edit, no screen re-send — which is what
-    makes it cheaper than an inline button for hiding bulk text. Clients too old
-    to know the entity draw it as a plain quote, so nothing is ever unreachable.
-
-    Callers pass text that is already escaped/marked up: the tags are added
-    around it, never to it.
-    """
-    return f"<blockquote expandable>{text}</blockquote>"
-
-
 def format_new_achievements(new_codes: list[str]) -> str | None:
     """Celebratory block for badges earned right now, shown on the completion card."""
     import achievements
@@ -440,12 +464,39 @@ def build_hall_of_fame(
         lines.append(f"⏱ Самая длинная тренировка: <b>{format_duration_hm(longest_workout_seconds)}</b>")
 
     if top_lifts:
+        entries = [
+            f"• {escape(name)} — {format_set(weight, reps)} · e1RM {e1:.0f}{u}"
+            for name, weight, reps, e1 in top_lifts
+        ]
         lines.append("")
         lines.append("<b>Личные рекорды:</b>")
-        for name, weight, reps, e1 in top_lifts:
-            lines.append(f"• {escape(name)} — {format_set(weight, reps)} · e1RM {e1:.0f}{u}")
+        lines.extend(entries[:TOP_LIFTS_OPEN])
+        # The strongest few are the point; the rest of the list is reference,
+        # so it folds away instead of pushing the badge grid off the screen.
+        if entries[TOP_LIFTS_OPEN:]:
+            lines.append(collapsible("\n".join(entries[TOP_LIFTS_OPEN:])))
 
     return "\n".join(lines)
+
+
+# How many recent sessions stay open on the progress screen before the rest fold
+# away, and how many personal records stay open in the Hall of Fame. Both sit at
+# three because a collapsed block is itself three lines tall — folding less than
+# that would cost more room than it saves.
+PROGRESS_SESSIONS_OPEN = 3
+TOP_LIFTS_OPEN = 3
+
+
+def _progress_session_block(session, is_bodyweight: bool) -> str:
+    """One dated session on the progress screen: date, its sets, and the metric."""
+    d = dt.datetime.fromisoformat(session.started_at)
+    sets_str = ", ".join(format_set(st.weight, st.reps, st.rpe) for st in session.sets)
+    tail = (
+        f"всего повторов {session.total_reps}"
+        if is_bodyweight
+        else f"e1RM {session.top_e1rm:.1f}"
+    )
+    return f"<b>{format_date_ru(d)}</b>\n{sets_str}\n{tail}"
 
 
 def format_progress_screen(
@@ -464,7 +515,7 @@ def format_progress_screen(
 
     is_bw = sessions[-1].is_bodyweight_mode
     window = [s for s in sessions if s.sets]
-    shown = window[-limit:]
+    candidates = window[-limit:]
 
     if len(window) >= 2:
         first, last = window[0], window[-1]
@@ -482,24 +533,29 @@ def format_progress_screen(
         lines.append(f"Рекорд повторов в сете: {best_reps}")
     else:
         lines.append(f"Рекорд: {format_set(records.best_e1rm_weight, records.best_e1rm_reps)} · e1RM {records.max_e1rm:.1f}{u}")
-    lines.append("")
 
-    for s in reversed(shown):
-        d = dt.datetime.fromisoformat(s.started_at)
-        sets_str = ", ".join(format_set(st.weight, st.reps, st.rpe) for st in s.sets)
-        lines.append(f"<b>{format_date_ru(d)}</b>")
-        lines.append(sets_str)
-        if is_bw:
-            lines.append(f"всего повторов {s.total_reps}")
-        else:
-            lines.append(f"e1RM {s.top_e1rm:.1f}")
-        lines.append("")
+    header = "\n".join(lines)
+    blocks = [_progress_session_block(s, is_bw) for s in reversed(candidates)]  # newest first
 
-    if len(window) > len(shown):
-        n = plural_ru(len(window), ("тренировка", "тренировки", "тренировок"))
-        lines.append(f"Показано {len(shown)} из {len(window)} {n}")
+    def assemble(keep: list[str]) -> str:
+        parts = [header, *keep[:PROGRESS_SESSIONS_OPEN]]
+        if keep[PROGRESS_SESSIONS_OPEN:]:
+            parts.append(collapsible("\n\n".join(keep[PROGRESS_SESSIONS_OPEN:])))
+        if len(window) > len(keep):
+            n = plural_ru(len(window), ("тренировка", "тренировки", "тренировок"))
+            parts.append(f"Показано {len(keep)} из {len(window)} {n}")
+        return "\n\n".join(parts).rstrip()
 
-    return "\n".join(lines).rstrip()
+    # Drop the oldest sessions until the whole thing fits the caption cap. The
+    # finished text is what gets measured (folding doesn't shrink it, and the
+    # "Показано N из M" tail grows as sessions are dropped), so this can't be a
+    # length estimate — it has to be the real string.
+    kept = blocks
+    text = assemble(kept)
+    while len(kept) > 1 and telegram_length(text) > CAPTION_LIMIT:
+        kept = kept[:-1]
+        text = assemble(kept)
+    return text
 
 
 def build_bodyweight_screen(logs: list, unit: str = "kg", period_logs: list | None = None) -> str:
