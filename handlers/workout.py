@@ -516,6 +516,33 @@ async def cmd_start(message: Message, state: FSMContext):
             await message.answer(warning, reply_markup=keyboards.stale_workout_keyboard(active["id"]))
 
 
+_HELP_TEXT = (
+    "🆘 <b>СПРАВКА ПО ВВОДУ</b>\n\n"
+    "<b>Подход — вес и повторы через пробел или «x»:</b>\n"
+    "• <code>100 8</code> или <code>100x8</code> — 100кг × 8 повторов\n"
+    "• <code>100x8x3</code> или <code>100 8 3</code> — то же самое, но сразу 3 подхода\n"
+    "• <code>8</code> — только повторы, вес возьмётся с последнего подхода "
+    "(для своего веса — подтягивания, отжимания и т.п.)\n"
+    "• <code>+20 8</code> — то же, что <code>20 8</code>; «+» просто для себя, "
+    "если считаешь довеском к своему весу\n"
+    "• <code>100x8@9</code> или <code>100 8 @8.5</code> — с RPE (сложность подхода, 1–10)\n\n"
+    "<b>Несколько подходов одним сообщением</b> — через запятую, точку с запятой "
+    "или с новой строки:\n<code>100 8, 100 7, 95 8</code>\n\n"
+    "<b>Быстрые команды</b> (пока открыто упражнение):\n"
+    "• <code>-</code> — удалить последний подход\n"
+    "• <code>=</code> — повторить последний подход\n"
+    "• <code>!текст</code> — заметка к упражнению, например «!болит плечо»\n"
+    "• <code>2: 100 8</code> — исправить 2-й уже залогированный подход\n"
+    "• <code>?</code> или /help — эта справка\n\n"
+    "🎙 Можно и голосом: запиши войс «сто на восемь»."
+)
+
+
+@router.message(Command("help"))
+async def cmd_help(message: Message, state: FSMContext):
+    await message.answer(_HELP_TEXT, parse_mode="HTML")
+
+
 @router.callback_query(F.data.startswith("stale:finish:"))
 async def stale_finish_workout(callback: CallbackQuery, state: FSMContext):
     workout_id = int(callback.data.split(":")[2])
@@ -1250,10 +1277,15 @@ async def log_set_text(message: Message, state: FSMContext):
       =          repeat the last logged set
       !text      set a note on the active exercise
       N: 100 8   overwrite the Nth already-logged set (fix a typo mid-session)
+      ?          show the /help reference without leaving the keyboard
     """
     text = message.text.strip()
     data = await state.get_data()
     active = data.get("active_exercise_id")
+
+    if text == "?":
+        await message.reply(_HELP_TEXT, parse_mode="HTML")
+        return
 
     if text == "-":
         user = await db.get_user(message.from_user.id)
