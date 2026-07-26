@@ -308,7 +308,7 @@ def build_ai_comment_block(comment: str) -> str:
     costs three lines and still reads as an opening sentence, and unfolding is
     a tap on the client (see collapsible).
     """
-    return f"{DIVIDER}\n🤖 <b>Комментарий AI-тренера</b>\n\n{collapsible_if_long(markdown_bold_to_html(comment))}"
+    return f"{DIVIDER}\n🤖 <b>Комментарий AI-тренера</b>\n{collapsible_if_long(markdown_bold_to_html(comment))}"
 
 
 # Fun, shareable size comparisons for a tonnage total — (emoji, kg each, declensions),
