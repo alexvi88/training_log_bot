@@ -317,3 +317,93 @@ async def test_custom_photo_overrides_bundled_demo_photos(fresh_db, user_id):
     callback.message.answer_photo.assert_awaited_once()
     assert callback.message.answer_photo.await_args.args[0] == "CUSTOM_FILE_ID"
     callback.message.answer_media_group.assert_not_awaited()
+
+
+# ---------- own exercise description (same role as exercise_descriptions.py for templates) ----------
+
+
+async def test_card_offers_add_description_for_a_plain_custom_exercise():
+    ex = {"id": 1, "name": "pull down", "display_name": "pull down", "description": None}
+    text, kb = exercises._exercise_detail_view(ex, with_info=False)
+    labels = [b.text for row in kb.inline_keyboard for b in row]
+    assert "📝 Добавить описание" in labels
+
+
+async def test_card_offers_write_own_when_a_template_default_already_shows():
+    ex = {"id": 1, "name": "Присед со штангой", "display_name": "Присед со штангой", "description": None}
+    text, kb = exercises._exercise_detail_view(ex, with_info=False)
+    labels = [b.text for row in kb.inline_keyboard for b in row]
+    assert "📝 Своё описание" in labels
+    assert "📝 Добавить описание" not in labels
+
+
+async def test_card_offers_edit_description_once_the_user_has_one():
+    ex = {"id": 1, "name": "pull down", "display_name": "pull down", "description": "Тяни к низу груди"}
+    text, kb = exercises._exercise_detail_view(ex, with_info=False)
+    labels = [b.text for row in kb.inline_keyboard for b in row]
+    assert "📝 Изменить описание" in labels
+
+
+async def test_edit_description_button_prompts_and_sets_state(fresh_db, user_id):
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    ex_id = await db.create_exercise(user_id, "pull down", group_id)
+
+    state = await _make_state(user_id, exm_group_id=group_id)
+    callback = _make_exercise_callback(user_id, f"exm:editdesc:{ex_id}")
+    await exercises.exm_edit_description(callback, state)
+
+    assert await state.get_state() == ExerciseManage.editing_description
+    kb = callback.message.answer.await_args.kwargs["reply_markup"]
+    callback_datas = [b.callback_data for row in kb.inline_keyboard for b in row]
+    assert callback_datas == [f"exm:ex:{ex_id}"]
+
+
+async def test_sending_description_stores_it_and_returns_to_card(fresh_db, user_id):
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    ex_id = await db.create_exercise(user_id, "pull down", group_id)
+
+    state = await _make_state(user_id, exm_group_id=group_id, exm_exercise_id=ex_id)
+    await state.set_state(ExerciseManage.editing_description)
+    message = _make_message(user_id, "Тяни рукоять к низу груди, локти вниз")
+
+    await exercises.exm_description_entered(message, state)
+
+    ex = await db.get_exercise(ex_id)
+    assert ex["description"] == "Тяни рукоять к низу груди, локти вниз"
+    assert await state.get_state() == ExerciseManage.picking_exercise
+    text = message.answer.await_args.args[0]
+    assert "Тяни рукоять к низу груди" in text
+
+
+async def test_sending_dash_clears_the_description(fresh_db, user_id):
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    ex_id = await db.create_exercise(user_id, "pull down", group_id)
+    await db.set_exercise_description(ex_id, "Старое описание")
+
+    state = await _make_state(user_id, exm_group_id=group_id, exm_exercise_id=ex_id)
+    await state.set_state(ExerciseManage.editing_description)
+    message = _make_message(user_id, "-")
+
+    await exercises.exm_description_entered(message, state)
+
+    ex = await db.get_exercise(ex_id)
+    assert ex["description"] is None
+
+
+async def test_own_description_overrides_template_default_in_the_card_text(fresh_db, user_id):
+    """"Присед со штангой" has a built-in template description — a personal
+    override must win over it, not just add to it."""
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    ex_id = await db.create_exercise(user_id, "Присед со штангой", group_id)
+    default_text = exercises._exercise_info_text(await db.get_exercise(ex_id))
+    assert "1." in default_text  # sanity check: the template default was actually shown
+
+    await db.set_exercise_description(ex_id, "Моя версия — колени наружу")
+    overridden_text = exercises._exercise_info_text(await db.get_exercise(ex_id))
+
+    assert "Моя версия — колени наружу" in overridden_text
+    assert "1." not in overridden_text  # the numbered template steps are gone, not appended

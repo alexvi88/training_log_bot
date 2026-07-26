@@ -136,7 +136,7 @@ def _sticky_photo_caption(ex) -> str:
     """Exercise name plus its technique steps, if we have them — the same text the
     ℹ️ card shows, minus the equipment/attachment metadata that isn't useful mid-set."""
     caption = f"<b>{escape(ex['display_name'])}</b>"
-    description = exercise_descriptions.get_description(ex["name"])
+    description = exercise_descriptions.effective_description(ex)
     if description:
         caption += f"\n\n{escape(description)}"
     return caption

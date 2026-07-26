@@ -20,3 +20,20 @@ def test_get_description_returns_text_for_known_exercise():
 
 def test_get_description_returns_none_for_unknown_exercise():
     assert exercise_descriptions.get_description("Совсем не упражнение") is None
+
+
+def test_effective_description_prefers_users_own_text_over_template_default():
+    ex = {"name": "Присед со штангой", "description": "Моя версия техники"}
+    assert exercise_descriptions.effective_description(ex) == "Моя версия техники"
+
+
+def test_effective_description_falls_back_to_template_default():
+    ex = {"name": "Присед со штангой", "description": None}
+    assert exercise_descriptions.effective_description(ex) == exercise_descriptions.get_description(
+        "Присед со штангой"
+    )
+
+
+def test_effective_description_none_for_custom_exercise_with_no_override():
+    ex = {"name": "pull down", "description": None}
+    assert exercise_descriptions.effective_description(ex) is None
