@@ -92,9 +92,10 @@ async def test_repeat_picks_a_specific_past_workout(fresh_db, user_id):
 
 @pytest.mark.asyncio
 async def test_repeat_list_keeps_button_labels_short_with_dash_separator(fresh_db, user_id):
-    """Buttons carry only a number + date ("1 - <date>") — full exercise names
-    don't fit into a button label — and the matching text line above them gives
-    a count plus a short, truncated preview instead of spelling every name out."""
+    """Buttons carry only a number + date ("1 - <date>") since full exercise
+    names don't fit into a button label. The text above them still lists every
+    exercise (bulleted, muscle group in brackets) under a bold number+date title
+    — nothing is truncated, just laid out so it's scannable."""
     db = fresh_db
     group_id = await db.create_muscle_group(user_id, "Грудь")
     a = await db.create_exercise(user_id, "Приседания со штангой на плечах", group_id)
@@ -116,12 +117,11 @@ async def test_repeat_list_keeps_button_labels_short_with_dash_separator(fresh_d
     assert button.text == f"1 - {expected_date}"
 
     text = list_cb.bot.send_message.await_args.kwargs["text"]
-    assert "Приседания со штангой на плечах" in text
-    assert "Жим штанги лёжа широким хватом" in text
-    # Third exercise is folded behind a "+1" count, not spelled out too.
-    assert "Тяга штанги в наклоне" not in text
-    assert "3 упражнения" in text
-    assert "+1" in text
+    assert f"<b>1 · {expected_date}</b>" in text
+    assert "• Приседания со штангой на плечах [ГРУДЬ]" in text
+    assert "• Жим штанги лёжа широким хватом [ГРУДЬ]" in text
+    # Nothing gets folded behind a "+N" anymore — every exercise gets its own line.
+    assert "• Тяга штанги в наклоне [ГРУДЬ]" in text
     assert text.startswith("🔁 Выбери тренировку, чтобы повторить её план:")
 
 
