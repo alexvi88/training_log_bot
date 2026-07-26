@@ -948,7 +948,7 @@ async def finish_workout(workout_id: int, note: Optional[str] = None, finished_a
         await conn().commit()
 
 
-async def set_workout_ai_comment(workout_id: int, comment: str) -> None:
+async def set_workout_ai_comment(workout_id: int, comment: Optional[str]) -> None:
     async with _write_lock:
         await conn().execute(
             "UPDATE workouts SET ai_comment = ? WHERE id = ?", (comment, workout_id)

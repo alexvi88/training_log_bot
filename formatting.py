@@ -126,6 +126,7 @@ class ExerciseBlockView:
     prev_sets: list[tuple[float, int]] | None = None  # sets from the previous session, if any
     set_rpes: list[float | None] | None = None  # per-set RPE, aligned with `sets`; None = none logged
     prev_set_rpes: list[float | None] | None = None  # per-set RPE for prev_sets
+    prev_started_at: dt.datetime | None = None  # date of the previous session, for the delta line
 
     def rpe_for(self, index: int) -> float | None:
         if not self.set_rpes or index >= len(self.set_rpes):
@@ -151,6 +152,16 @@ class ExerciseBlockView:
             return 0.0
         return max(e1rm(w, r, self.formula) for w, r in self.sets)
 
+    @property
+    def prev_top_e1rm(self) -> float:
+        if not self.prev_sets:
+            return 0.0
+        return max(e1rm(w, r, self.formula) for w, r in self.prev_sets)
+
+    @property
+    def prev_total_reps(self) -> int:
+        return sum(r for _, r in self.prev_sets) if self.prev_sets else 0
+
 
 # A workout is rendered as a flat list of exercise blocks. (Exercises logged in
 # parallel — the "superset" entry mechanic — are stored as independent blocks and
@@ -158,7 +169,19 @@ class ExerciseBlockView:
 BlockView = ExerciseBlockView
 
 
-def _render_single_block(block: ExerciseBlockView, show_extra: bool, italic_prev: bool = False) -> list[str]:
+def format_date_short(d: dt.datetime) -> str:
+    """Compact dd.mm for the inline e1RM-delta annotation — the year and weekday
+    only add width there, since the comparison is always to the most recent prior
+    session."""
+    return d.strftime("%d.%m")
+
+
+def _delta_arrow(delta: float) -> str:
+    return "↑" if delta > 0 else ("↓" if delta < 0 else "→")
+
+
+def _render_single_block(block: ExerciseBlockView, show_extra: bool, unit: str = "kg") -> list[str]:
+    u = UNIT_LABELS.get(unit, "кг")
     label = f"{escape(block.exercise_name)} [{block.group_name.upper()}]"
     lines = [f"<b>{label}</b>"]
     if block.sets:
@@ -166,16 +189,24 @@ def _render_single_block(block: ExerciseBlockView, show_extra: bool, italic_prev
     else:
         lines.append("  <i>подходов нет</i>")
     if show_extra and block.sets:
+        vs_prev = ""
+        if block.prev_sets and block.prev_started_at is not None:
+            when = format_date_short(block.prev_started_at)
+            if block.is_bodyweight:
+                delta = sum(r for _, r in block.sets) - block.prev_total_reps
+                vs_prev = f" ({_delta_arrow(delta)}{delta:+d} vs {when})"
+            else:
+                delta = block.top_e1rm - block.prev_top_e1rm
+                vs_prev = f" ({_delta_arrow(delta)}{delta:+.1f}{u} vs {when})"
         if block.is_bodyweight:
-            lines.append(f"  ↳ повторов всего {sum(r for _, r in block.sets)}")
+            lines.append(f"  ↳ повторов всего {sum(r for _, r in block.sets)}{vs_prev}")
         else:
-            lines.append(f"  ↳ e1RM {block.top_e1rm:.1f}")
+            lines.append(f"  ↳ e1RM {block.top_e1rm:.1f}{u}{vs_prev}")
     if block.prev_sets:
         prev_str = ", ".join(
             format_set(w, r, block.prev_rpe_for(i)) for i, (w, r) in enumerate(block.prev_sets)
         )
-        prev_line = f"  [прошлая: {prev_str}]"
-        lines.append(f"<i>{prev_line}</i>" if italic_prev else prev_line)
+        lines.append(f"<i>  [прошлая: {prev_str}]</i>")
     return lines
 
 
@@ -184,23 +215,59 @@ def build_workout_summary(
     blocks: list[BlockView],
     note: str | None = None,
     show_extra_stats: bool = True,
-    italic_prev: bool = False,
     duration_seconds: float | None = None,
+    unit: str = "kg",
+    max_chars: int | None = None,
 ) -> str:
+    """max_chars: if the rendered text would exceed this, oldest exercises are
+    dropped from the tail (with a "показано N из M" marker) until it fits —
+    see fit_workout_text for why this can't be a simple truncate.
+    """
     header = f"<b>{format_date_ru(started_at)}</b>"
     if duration_seconds is not None:
         header += f" · {format_duration(duration_seconds)}"
-    lines = [header]
+    head_lines = [header]
     if note:
-        lines.append(f"📝 {note}")
-    lines.append("")
+        head_lines.append(f"📝 {note}")
+    head_lines.append("")
 
-    for i, block in enumerate(blocks):
-        if i > 0:
-            lines.append("")
-        lines.extend(_render_single_block(block, show_extra_stats, italic_prev))
+    def assemble(keep: list[BlockView]) -> str:
+        lines = list(head_lines)
+        for i, block in enumerate(keep):
+            if i > 0:
+                lines.append("")
+            lines.extend(_render_single_block(block, show_extra_stats, unit))
+        text = "\n".join(lines)
+        if len(keep) < len(blocks):
+            text += f"\n\n<i>Показано {len(keep)} из {len(blocks)} упражнений — карточка слишком большая.</i>"
+        return text
 
-    return "\n".join(lines)
+    kept = blocks
+    text = assemble(kept)
+    while max_chars is not None and len(kept) > 1 and telegram_length(text) > max_chars:
+        kept = kept[:-1]
+        text = assemble(kept)
+    return text
+
+
+def fit_workout_text(build_summary, suffix: str, limit: int = MESSAGE_LIMIT) -> str:
+    """Guards a workout card against Telegram's 4096-char message cap.
+
+    `build_summary` is a callable(max_chars) -> str producing the header+sets
+    portion (see build_workout_summary's max_chars). `suffix` is everything
+    else already assembled (tonnage, PR highlights, achievements, AI comment)
+    — it doesn't depend on the summary, so its length is known up front and
+    becomes the summary's budget. This can't be a length estimate on the
+    combined text either: ui.safe_edit deletes the old screen before sending
+    the new one, so overflowing silently would leave the user with nothing.
+    """
+    text = build_summary(None)
+    full = text + suffix
+    if telegram_length(full) <= limit:
+        return full
+    reserve = telegram_length(full) - telegram_length(text)
+    budget = max(limit - reserve - 20, 200)
+    return build_summary(budget) + suffix
 
 
 _MD_BOLD_RE = re.compile(r"\*\*(.+?)\*\*")

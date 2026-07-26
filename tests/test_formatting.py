@@ -96,7 +96,7 @@ def test_build_workout_summary_shows_previous_session_sets():
     assert "[прошлая: 95×8]" in text
 
 
-def test_build_workout_summary_italicizes_previous_session_in_history():
+def test_build_workout_summary_always_italicizes_previous_session():
     started = dt.datetime(2026, 6, 26, 18, 0)
     blocks = [
         ExerciseBlockView(
@@ -106,8 +106,73 @@ def test_build_workout_summary_italicizes_previous_session_in_history():
             prev_sets=[(95.0, 8)],
         )
     ]
-    text = formatting.build_workout_summary(started, blocks, italic_prev=True)
+    text = formatting.build_workout_summary(started, blocks)
     assert "<i>  [прошлая: 95×8]</i>" in text
+
+
+def test_build_workout_summary_shows_e1rm_delta_and_previous_date():
+    started = dt.datetime(2026, 6, 26, 18, 0)
+    blocks = [
+        ExerciseBlockView(
+            group_name="грудь",
+            exercise_name="Жим лёжа",
+            sets=[(100.0, 8)],
+            prev_sets=[(95.0, 8)],
+            prev_started_at=dt.datetime(2026, 6, 19, 18, 0),
+        )
+    ]
+    text = formatting.build_workout_summary(started, blocks)
+    assert "vs 19.06" in text
+    assert "↑" in text
+
+
+def test_build_workout_summary_e1rm_line_uses_unit():
+    started = dt.datetime(2026, 6, 26, 18, 0)
+    blocks = [ExerciseBlockView(group_name="грудь", exercise_name="Жим лёжа", sets=[(100.0, 8)])]
+    text = formatting.build_workout_summary(started, blocks, unit="lb")
+    assert "e1RM" in text
+    assert "lb" in text
+
+
+def test_build_workout_summary_bodyweight_delta_shows_reps_diff():
+    started = dt.datetime(2026, 6, 26, 18, 0)
+    blocks = [
+        ExerciseBlockView(
+            group_name="пресс", exercise_name="Пресс", sets=[(0.0, 20)],
+            prev_sets=[(0.0, 15)], prev_started_at=dt.datetime(2026, 6, 19, 18, 0),
+        )
+    ]
+    text = formatting.build_workout_summary(started, blocks)
+    assert "↑+5 vs 19.06" in text
+
+
+def test_build_workout_summary_max_chars_drops_oldest_exercises():
+    started = dt.datetime(2026, 6, 26, 18, 0)
+    blocks = [
+        ExerciseBlockView(group_name="грудь", exercise_name=f"Упражнение {i}", sets=[(100.0, 8)])
+        for i in range(20)
+    ]
+    full_text = formatting.build_workout_summary(started, blocks)
+    trimmed = formatting.build_workout_summary(started, blocks, max_chars=400)
+    assert formatting.telegram_length(trimmed) <= 400 or "Показано" in trimmed
+    assert len(trimmed) < len(full_text)
+    assert "Показано" in trimmed
+
+
+def test_fit_workout_text_shrinks_summary_to_leave_room_for_suffix():
+    started = dt.datetime(2026, 6, 26, 18, 0)
+    blocks = [
+        ExerciseBlockView(group_name="грудь", exercise_name=f"Упражнение {i}", sets=[(100.0, 8)])
+        for i in range(30)
+    ]
+
+    def build_summary(max_chars):
+        return formatting.build_workout_summary(started, blocks, max_chars=max_chars)
+
+    suffix = "x" * 3000
+    text = formatting.fit_workout_text(build_summary, suffix, limit=4096)
+    assert formatting.telegram_length(text) <= 4096
+    assert text.endswith(suffix)
 
 
 # ---------- markdown_bold_to_html ----------

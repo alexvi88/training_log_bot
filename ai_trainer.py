@@ -340,7 +340,7 @@ async def comment_on_workout(user_id: int, workout_id: int) -> str:
     duration_seconds = await view_builder.workout_duration_seconds(workout)
     card_text = formatting.build_workout_summary(
         started_at, blocks, workout["note"], show_extra_stats=bool(user["show_extra_stats"]),
-        duration_seconds=duration_seconds,
+        duration_seconds=duration_seconds, unit=user["unit"],
     )
 
     client = _get_client()

@@ -26,6 +26,17 @@ async def _delete_message(message: Message):
         await message.delete()
 
 
+async def _on_workout_edited(workout_id: int) -> None:
+    """Common housekeeping after any change to a past workout's sets or date:
+    drop blocks a delete_set/rmex left with no sets (they'd otherwise linger
+    as a "подходов нет" row forever, since delete_empty_blocks is normally
+    only run once, at the moment a workout finishes), and drop the cached
+    AI-trainer comment — it describes numbers that just changed underneath it.
+    """
+    await db.delete_empty_blocks(workout_id)
+    await db.set_workout_ai_comment(workout_id, None)
+
+
 async def _edit_screen_payload(workout_id: int) -> tuple[str, InlineKeyboardMarkup]:
     workout = await db.get_workout(workout_id)
     started = dt.datetime.fromisoformat(workout["started_at"])
@@ -111,6 +122,7 @@ async def editw_delset(callback: CallbackQuery, state: FSMContext):
     if workout_id is None:
         return
     await db.delete_set(set_id)
+    await _on_workout_edited(workout_id)
     await callback.answer("Сет удалён")
     await show_edit_screen(callback, state, workout_id)
 
@@ -142,6 +154,7 @@ async def editw_editset_entered(message: Message, state: FSMContext):
         return
     data = await state.get_data()
     await db.update_set(data["edit_set_id"], parsed[0].weight, parsed[0].reps, parsed[0].rpe)
+    await _on_workout_edited(data["edit_workout_id"])
     await message.reply("Готово.")
     await _delete_message(message)
     await show_edit_screen(message, state, data["edit_workout_id"])
@@ -189,6 +202,7 @@ async def editw_addset_entered(message: Message, state: FSMContext):
     for ps in parsed:
         round_idx = await db.next_round_index(block_id, ex_id)
         await db.add_set(block_id, ex_id, round_idx, order_in_round, ps.weight, ps.reps, ps.rpe)
+    await _on_workout_edited(data["edit_workout_id"])
     await message.reply("Сет добавлен.")
     await _delete_message(message)
     await show_edit_screen(message, state, data["edit_workout_id"])
@@ -207,6 +221,7 @@ async def editw_remove_exercise(callback: CallbackQuery, state: FSMContext):
     if workout_id is None:
         return
     await db.delete_block_and_sets(block_id)
+    await db.set_workout_ai_comment(workout_id, None)
     await callback.answer("Упражнение убрано из тренировки")
     await show_edit_screen(callback, state, workout_id)
 
@@ -393,6 +408,10 @@ async def _apply_edit_workout_date(workout_id: int, new_date: dt.date) -> None:
     await db.update_workout_date(
         workout_id, new_started.isoformat(timespec="seconds"), new_finished.isoformat(timespec="seconds")
     )
+    # The date shift changes which prior session counts as "previous" for every
+    # exercise in the workout, so a cached AI comment describing the old
+    # comparison would go stale.
+    await db.set_workout_ai_comment(workout_id, None)
 
 
 @router.callback_query(StateFilter(EditWorkoutFlow.awaiting_date), F.data.startswith("editwd:date:"))

@@ -139,23 +139,20 @@ async def menu_achievements(callback: CallbackQuery, state: FSMContext):
 
 
 async def show_history_item(callback: CallbackQuery, workout_id: int) -> bool:
+    """The history detail screen — same body as the just-finished completion
+    card (sets, e1RM deltas, tonnage-equivalent, PR highlights, AI comment),
+    so a past workout doesn't read as a stripped-down version of the one you
+    just logged. See handlers.workout._finished_workout_card_text.
+    """
+    from handlers.workout import _finished_workout_card_text
+
     workout = await db.get_workout(workout_id)
     if workout is None or workout["user_id"] != callback.from_user.id:
         await callback.answer("Тренировка не найдена", show_alert=True)
         return False
     user = await db.get_user(callback.from_user.id)
-    blocks = await view_builder.build_block_views(
-        workout_id, user["e1rm_formula"], previous_before=workout["started_at"]
-    )
-    started = dt.datetime.fromisoformat(workout["started_at"])
-    duration_seconds = await view_builder.workout_duration_seconds(workout)
-    text = formatting.build_workout_summary(
-        started, blocks, workout["note"], show_extra_stats=bool(user["show_extra_stats"]),
-        italic_prev=True, duration_seconds=duration_seconds,
-    )
     comment = await ai_trainer.ensure_workout_comment(user, workout_id)
-    if comment:
-        text += "\n\n" + formatting.build_ai_comment_block(comment)
+    text = await _finished_workout_card_text(workout, user, workout["note"], comment=comment)
     kb = keyboards.history_item_keyboard(
         workout_id, show_ai_button=comment is None and ai_trainer.is_configured()
     )
@@ -172,6 +169,10 @@ async def hist_item(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("hist:card:"))
 async def hist_card(callback: CallbackQuery, state: FSMContext):
+    """Shares the workout as a picture. This necessarily leaves the picture as
+    the new bottom-of-chat message (a photo can't carry the text card's
+    keyboard), so it gets its own caption and a way back to the text card,
+    rather than landing as a bare, dead-end image."""
     workout_id = int(callback.data.split(":")[2])
     workout = await db.get_workout(workout_id)
     if workout is None or workout["user_id"] != callback.from_user.id:
@@ -184,8 +185,13 @@ async def hist_card(callback: CallbackQuery, state: FSMContext):
         started, blocks, workout["note"], unit=user["unit"]
     )
     png = await asyncio.to_thread(charts.render_workout_card, title, body, footer, note)
+    kb = InlineKeyboardBuilder()
+    kb.button(text="⬅️ Назад к тренировке", callback_data=f"hist:item:{workout_id}")
+    kb.adjust(1)
     await callback.message.answer_photo(
         BufferedInputFile(png, filename="workout.png"),
+        caption=f"{title} · {footer}",
+        reply_markup=kb.as_markup(),
     )
     await callback.answer()
 
