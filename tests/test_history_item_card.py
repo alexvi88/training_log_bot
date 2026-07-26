@@ -72,3 +72,27 @@ async def test_history_item_includes_pr_highlight_vs_prior_session(fresh_db, use
 
     text = callback.message.answer.await_args.args[0]
     assert "vs предыдущего рекорда" in text
+
+
+async def test_history_item_folds_pr_highlights_when_long(fresh_db, user_id):
+    """A workout with several new-PR exercises produces a long highlights block
+    — in history (unlike the just-finished celebration screen) that goes behind
+    a tap, not straight into the reader's face."""
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Разное")
+    workout_id = await db.create_workout(user_id)
+    for i in range(6):
+        ex = await db.create_exercise(user_id, f"Упражнение {i}", group_id)
+        block_id = await db.create_block(workout_id, "single")
+        await db.add_block_exercise(block_id, ex, 0)
+        await db.add_set(block_id, ex, 1, 0, 40.0 + i, 8)
+    await db.finish_workout(workout_id)
+
+    callback = _make_callback(user_id, f"hist:item:{workout_id}")
+
+    assert await history.show_history_item(callback, workout_id)
+
+    text = callback.message.answer.await_args.args[0]
+    assert "🔥 <b>Рекорды и сравнения</b>" in text
+    assert "<blockquote expandable>" in text
+    assert "Новый рекорд" in text
