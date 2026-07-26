@@ -662,26 +662,49 @@ async def start_workout(callback: CallbackQuery, state: FSMContext):
 REPEAT_PAGE_SIZE = 6
 
 
-async def _repeat_summary(workout) -> tuple[str, str]:
-    """Date (short — safe as a button label) and full exercise-name list (no width
-    limit in message text, unlike a button) for one past workout in the repeat list."""
+async def _repeat_summary(workout) -> tuple[str, list[tuple[str, str]]]:
+    """Date (short — safe as a button label) and this workout's exercises as
+    (name, muscle group) pairs, in block order, for one past workout in the
+    repeat list."""
     started = dt.datetime.fromisoformat(workout["started_at"])
     date = formatting.format_date_ru(started)
     plan = await db.workout_plan(workout["id"])
-    names: list[str] = []
+    exercises: list[tuple[str, str]] = []
     for block in plan:
         ex = await db.get_exercise(block["exercise_ids"][0])
-        if ex:
-            names.append(ex["display_name"])
-    return date, ", ".join(names) if names else "—"
+        if ex is None:
+            continue
+        group = await db.get_muscle_group(ex["primary_group_id"]) if ex["primary_group_id"] else None
+        exercises.append((ex["display_name"], group["name"] if group else ""))
+    return date, exercises
+
+
+def _repeat_workout_block(i: int, date: str, exercises: list[tuple[str, str]]) -> str:
+    """Bold number+date title, then every exercise as its own bulleted line,
+    muscle group in brackets — same "Name [GROUP]" convention the live tracker
+    uses (see formatting._render_single_block).
+
+    A comma-joined summary still read as a wall of text even truncated — one
+    bullet per exercise is longer overall but each line is short and the eye
+    can actually scan it, so nothing gets cut this time.
+    """
+    header = f"<b>{i} · {date}</b>"
+    if not exercises:
+        return f"{header}\nнет упражнений"
+    bullets = "\n".join(
+        f"• {escape(name)} [{escape(group.upper())}]" if group else f"• {escape(name)}"
+        for name, group in exercises
+    )
+    return f"{header}\n{bullets}"
 
 
 async def _repeat_list_screen(callback: CallbackQuery, state: FSMContext, page: int):
     """List of the user's recent finished workouts to pick one to repeat, rendered
     into the live tracker message like the rest of the picker.
 
-    Exercise names are long and don't fit into a button label, so buttons only carry
-    a number + date and the matching numbered exercise list goes into the message text.
+    Exercise names don't fit into a button label, so buttons only carry a number
+    + date; the message text above them spells out each workout's full exercise
+    list under its own bold number+date title.
     """
     user = await db.get_user(callback.from_user.id)
     data = await state.get_data()
@@ -690,14 +713,14 @@ async def _repeat_list_screen(callback: CallbackQuery, state: FSMContext, page: 
         callback.from_user.id, limit=REPEAT_PAGE_SIZE, offset=page * REPEAT_PAGE_SIZE
     )
     items = []
-    lines = []
+    blocks = []
     for i, w in enumerate(workouts, start=1 + page * REPEAT_PAGE_SIZE):
-        date, summary = await _repeat_summary(w)
-        items.append({"id": w["id"], "label": f"{i}. {date}"})
-        lines.append(f"{i}. {date} — {summary}")
+        date, exercises = await _repeat_summary(w)
+        items.append({"id": w["id"], "label": f"{i} - {date}"})
+        blocks.append(_repeat_workout_block(i, date, exercises))
     has_next = (page + 1) * REPEAT_PAGE_SIZE < total
     kb = keyboards.repeat_list_keyboard(items, page, has_next)
-    hint = "🔁 Выбери тренировку, чтобы повторить её план:\n\n" + "\n".join(lines)
+    hint = "🔁 Выбери тренировку, чтобы повторить её план:\n\n" + "\n\n".join(blocks)
     await state.update_data(repeat_page=page)
     await _refresh_live(callback.bot, state, user, data["workout_id"], hint, kb)
 
