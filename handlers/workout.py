@@ -1751,7 +1751,7 @@ async def _finished_workout_card_text(workout, user, note: str | None, comment=_
         suffix += f"\n\n🏋️ Суммарно за тренировку — {tonnage}. {equivalent}"
     if highlights:
         header = "🔥 <b>Рекорды и сравнения</b>"
-        suffix += f"\n\n{formatting.DIVIDER}\n\n{header}\n\n{formatting.collapsible_if_long(highlights)}"
+        suffix += f"\n\n{formatting.DIVIDER}\n\n{header}\n{formatting.collapsible_if_long(highlights)}"
     effective_comment = workout["ai_comment"] if comment is _UNSET else comment
     if effective_comment:
         suffix += "\n\n" + formatting.build_ai_comment_block(effective_comment)
