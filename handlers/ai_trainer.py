@@ -231,7 +231,7 @@ async def ai_comment_workout(callback: CallbackQuery, state: FSMContext):
             return
         await db.set_workout_ai_comment(workout_id, comment)
 
-    new_text = (callback.message.html_text or "") + "\n\n" + formatting.build_ai_comment_block(comment)
+    new_text = (callback.message.html_text or "") + "\n" + formatting.build_ai_comment_block(comment)
     existing_kb = callback.message.reply_markup
     rows = existing_kb.inline_keyboard if existing_kb else []
     new_rows = [
