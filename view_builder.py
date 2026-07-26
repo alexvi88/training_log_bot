@@ -13,9 +13,17 @@ async def build_block_views(
     previous_before: str | None = None,
 ) -> list[BlockView]:
     """previous_before: if set (a workout's started_at), each block also gets the
-    set breakdown from that exercise's last session strictly before that date."""
+    set breakdown from that exercise's last session strictly before that date.
+
+    An exercise logged as more than one block in the same workout (e.g. 2 sets
+    up front and 2 more at the end) is deliberately allowed at entry time — but
+    everything downstream (the summary card, its e1RM/tonnage, PR detection)
+    should see it as one exercise, not two "подходов нет"-adjacent duplicates.
+    Blocks are merged here, in encounter order, keyed by exercise_id.
+    """
     blocks = await db.list_blocks_for_workout(workout_id)
-    views: list[BlockView] = []
+    order: list[int] = []
+    merged: dict[int, dict] = {}
     group_cache: dict[int | None, str] = {}
 
     async def group_info(group_id: int | None) -> str:
@@ -33,26 +41,41 @@ async def build_block_views(
             continue
 
         ex_id = block_exs[0]["exercise_id"]
-        ex = await db.get_exercise(ex_id)
+        if ex_id not in merged:
+            order.append(ex_id)
+            ex = await db.get_exercise(ex_id)
+            merged[ex_id] = {
+                "exercise": ex,
+                "sets": [],
+                "rpes": [],
+            }
+        entry = merged[ex_id]
+        entry["sets"].extend((s["weight"], s["reps"]) for s in sets)
+        entry["rpes"].extend(s["rpe"] for s in sets)
+
+    views: list[BlockView] = []
+    for ex_id in order:
+        entry = merged[ex_id]
+        ex = entry["exercise"]
         gname = await group_info(ex["primary_group_id"])
-        sets_tuples = [(s["weight"], s["reps"]) for s in sets]
-        set_rpes = [s["rpe"] for s in sets]
         prev_sets = None
         prev_set_rpes = None
+        prev_started_at = None
         if previous_before is not None:
             prev = await _previous_session_sets(ex_id, workout_id, previous_before)
             if prev is not None:
-                prev_sets, prev_set_rpes = prev
+                prev_sets, prev_set_rpes, prev_started_at = prev
         views.append(
             ExerciseBlockView(
                 group_name=gname,
                 exercise_name=ex["display_name"],
-                sets=sets_tuples,
+                sets=entry["sets"],
                 formula=formula,
                 exercise_id=ex_id,
                 prev_sets=prev_sets,
-                set_rpes=set_rpes if any(r is not None for r in set_rpes) else None,
+                set_rpes=entry["rpes"] if any(r is not None for r in entry["rpes"]) else None,
                 prev_set_rpes=prev_set_rpes,
+                prev_started_at=prev_started_at,
             )
         )
 
@@ -85,8 +108,9 @@ async def workout_duration_seconds(workout) -> float | None:
 
 async def _previous_session_sets(
     exercise_id: int, workout_id: int, before: str
-) -> tuple[list[tuple[float, int]], list[float | None]] | None:
-    """The prior session's sets (weights/reps) and their RPEs, or None if there's no prior session."""
+) -> tuple[list[tuple[float, int]], list[float | None], dt.datetime] | None:
+    """The prior session's sets (weights/reps), their RPEs, and that session's
+    date — or None if there's no prior session."""
     rows = await db.list_sets_for_exercise(exercise_id, exclude_workout_id=workout_id)
     set_rows = [
         analytics.SetRow(r["weight"], r["reps"], r["workout_id"], r["started_at"], r["rpe"])
@@ -97,4 +121,8 @@ async def _previous_session_sets(
         return None
     sessions = analytics.group_sets_by_session(set_rows)
     last = sessions[-1]
-    return [(s.weight, s.reps) for s in last.sets], [s.rpe for s in last.sets]
+    return (
+        [(s.weight, s.reps) for s in last.sets],
+        [s.rpe for s in last.sets],
+        dt.datetime.fromisoformat(last.started_at),
+    )

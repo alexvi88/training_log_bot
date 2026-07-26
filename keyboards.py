@@ -356,23 +356,27 @@ def repeat_preview_keyboard(workout_id: int) -> InlineKeyboardMarkup:
 
 def history_item_keyboard(workout_id: int, show_ai_button: bool = False) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.button(text="🖼 Поделиться картинкой", callback_data=f"hist:card:{workout_id}")
     if show_ai_button:
-        b.button(text="🤖 Комментарий AI-тренера", callback_data=f"ai:comment:{workout_id}")
-    b.button(text="✏️ Редактировать", callback_data=f"hist:edit:{workout_id}")
-    b.button(text="🗑 Удалить", callback_data=f"hist:del:{workout_id}")
-    b.button(text="⬅️ К списку", callback_data="hist:back")
-    b.adjust(1)
+        b.row(InlineKeyboardButton(text="🤖 Комментарий AI-тренера", callback_data=f"ai:comment:{workout_id}"))
+    b.row(
+        InlineKeyboardButton(text="🖼 Картинка", callback_data=f"hist:card:{workout_id}"),
+        InlineKeyboardButton(text="✏️ Редактировать", callback_data=f"hist:edit:{workout_id}"),
+    )
+    b.row(
+        InlineKeyboardButton(text="🗑 Удалить", callback_data=f"hist:del:{workout_id}"),
+        InlineKeyboardButton(text="⬅️ К списку", callback_data="hist:back"),
+    )
     return b.as_markup()
 
 
 def workout_card_keyboard(workout_id: int, show_ai_button: bool = False) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.button(text="🖼 Поделиться картинкой", callback_data=f"hist:card:{workout_id}")
-    b.button(text="📝 Заметка", callback_data=f"live:addnote:{workout_id}")
     if show_ai_button:
-        b.button(text="🤖 Комментарий AI-тренера", callback_data=f"ai:comment:{workout_id}")
-    b.adjust(1)
+        b.row(InlineKeyboardButton(text="🤖 Комментарий AI-тренера", callback_data=f"ai:comment:{workout_id}"))
+    b.row(
+        InlineKeyboardButton(text="🖼 Картинка", callback_data=f"hist:card:{workout_id}"),
+        InlineKeyboardButton(text="📝 Заметка", callback_data=f"live:addnote:{workout_id}"),
+    )
     return b.as_markup()
 
 

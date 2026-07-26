@@ -7,6 +7,7 @@ from collections import Counter
 from contextlib import suppress
 from dataclasses import dataclass
 from html import escape
+from typing import Callable
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
@@ -1615,9 +1616,15 @@ async def cancel_finish(callback: CallbackQuery, state: FSMContext):
 
 async def _record_highlights_and_summary(
     workout, user, note: str | None
-) -> tuple[str, str, float, float | None]:
+) -> tuple[Callable[[int | None], str], str, float, float | None]:
     """Recomputes the per-exercise PR/comparison highlights, this session's total
-    tonnage, and the header+sets summary text for a finished workout.
+    tonnage, and a builder for the header+sets summary text of a finished workout.
+
+    The summary comes back as a callable(max_chars) rather than a finished
+    string: callers combine it with tonnage/highlights/achievements/AI-comment
+    text they assemble themselves, and only once all of that is known can the
+    summary's own length budget be computed (see formatting.fit_workout_text) —
+    building the final string here would be measuring the wrong thing.
 
     Split out of _finalize_workout so the same computation can re-render the
     completion card later when a note is attached via "📝 Заметка" — it only
@@ -1675,12 +1682,18 @@ async def _record_highlights_and_summary(
         workout_id, formula, previous_before=workout["started_at"]
     )
     duration_seconds = await view_builder.workout_duration_seconds(workout)
-    summary = formatting.build_workout_summary(
-        started_at, blocks, note, show_extra_stats=bool(user["show_extra_stats"]),
-        duration_seconds=duration_seconds,
-    )
+
+    def summary_fn(max_chars: int | None) -> str:
+        return formatting.build_workout_summary(
+            started_at, blocks, note, show_extra_stats=bool(user["show_extra_stats"]),
+            duration_seconds=duration_seconds, unit=user["unit"], max_chars=max_chars,
+        )
+
     highlights = formatting.build_exercise_highlights(highlight_groups)
-    return summary, highlights, session_tonnage, duration_seconds
+    return summary_fn, highlights, session_tonnage, duration_seconds
+
+
+_UNSET = object()
 
 
 def _finished_workout_ai_button_visible(workout, user) -> bool:
@@ -1689,25 +1702,33 @@ def _finished_workout_ai_button_visible(workout, user) -> bool:
     return existing_comment is None and not needs_ai_comment and ai_trainer.is_configured()
 
 
-async def _finished_workout_card_text(workout, user, note: str | None) -> str:
+async def _finished_workout_card_text(workout, user, note: str | None, comment=_UNSET) -> str:
     """The completion card's body for an already-finished workout: sets, PR
     highlights, tonnage-equivalent and any AI-trainer comment — everything
     that's still true if you look at the workout again later, e.g. right after
-    attaching a note via "📝 Заметка". Deliberately excludes the milestone/
-    achievement banners, which only belong to the moment of finishing."""
-    summary, highlights, session_tonnage, _duration = await _record_highlights_and_summary(
+    attaching a note via "📝 Заметка", or when reopening it from history.
+    Deliberately excludes the milestone/achievement banners, which only belong
+    to the moment of finishing.
+
+    `comment` defaults to whatever's already saved on the workout row; pass an
+    explicit value (including None) when the caller has just resolved one
+    itself, e.g. history's show_history_item generating a fresh comment via
+    ai_trainer.ensure_workout_comment.
+    """
+    summary_fn, highlights, session_tonnage, _duration = await _record_highlights_and_summary(
         workout, user, note
     )
-    full_text = summary
+    suffix = ""
     equivalent = formatting.format_tonnage_equivalent(session_tonnage, seed=workout["id"])
     if equivalent:
         tonnage = f"{session_tonnage / 1000:.1f}т" if session_tonnage >= 1000 else f"{session_tonnage:.0f}кг"
-        full_text += f"\n\n🏋️ Суммарно за тренировку — {tonnage}. {equivalent}"
+        suffix += f"\n\n🏋️ Суммарно за тренировку — {tonnage}. {equivalent}"
     if highlights:
-        full_text += f"\n\n{formatting.DIVIDER}\n\n{highlights}"
-    if workout["ai_comment"]:
-        full_text += "\n\n" + formatting.build_ai_comment_block(workout["ai_comment"])
-    return full_text
+        suffix += f"\n\n{formatting.DIVIDER}\n\n{highlights}"
+    effective_comment = workout["ai_comment"] if comment is _UNSET else comment
+    if effective_comment:
+        suffix += "\n\n" + formatting.build_ai_comment_block(effective_comment)
+    return formatting.fit_workout_text(summary_fn, suffix)
 
 
 @router.callback_query(F.data.startswith("live:addnote:"))
@@ -1784,40 +1805,41 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
     await db.finish_workout(workout_id, note, finished_at=finished_at)
     workout = await db.get_workout(workout_id)
 
-    summary, highlights, session_tonnage, duration_seconds = await _record_highlights_and_summary(
+    summary_fn, highlights, session_tonnage, duration_seconds = await _record_highlights_and_summary(
         workout, user, note
     )
-    full_text = summary
+    suffix = ""
     equivalent = formatting.format_tonnage_equivalent(session_tonnage, seed=workout_id)
     if equivalent:
         tonnage = f"{session_tonnage / 1000:.1f}т" if session_tonnage >= 1000 else f"{session_tonnage:.0f}кг"
-        full_text += f"\n\n🏋️ Суммарно за тренировку — {tonnage}. {equivalent}"
+        suffix += f"\n\n🏋️ Суммарно за тренировку — {tonnage}. {equivalent}"
     # Backfilled/imported past workouts shouldn't fire the "Nth workout" milestone —
     # they're entered out of order, so the running count isn't meaningful for them.
     if not is_backfill:
         total_finished = await db.count_workouts(user_id)
         if analytics.is_workout_milestone(total_finished):
-            full_text += "\n\n" + formatting.format_milestone_line(total_finished)
+            suffix += "\n\n" + formatting.format_milestone_line(total_finished)
 
     new_badges = await _evaluate_achievements(user_id, workout_id, started_at, duration_seconds)
     achievement_line = formatting.format_new_achievements(new_badges)
     if achievement_line:
-        full_text += "\n\n" + achievement_line
+        suffix += "\n\n" + achievement_line
 
     if highlights:
-        full_text += f"\n\n{formatting.DIVIDER}\n\n{highlights}"
-    if is_backfill:
-        full_text = "✅ Сохранено как прошлая тренировка\n\n" + full_text
+        suffix += f"\n\n{formatting.DIVIDER}\n\n{highlights}"
 
     # Existing comment (already generated, e.g. from a backfilled workout) shows right
     # away; a fresh one is generated in the background so finishing a workout doesn't
     # block on the LLM call — see _attach_ai_comment below.
     existing_comment = workout["ai_comment"]
     if existing_comment:
-        full_text += "\n\n" + formatting.build_ai_comment_block(existing_comment)
+        suffix += "\n\n" + formatting.build_ai_comment_block(existing_comment)
     needs_ai_comment = (
         existing_comment is None and bool(user["ai_comments_enabled"]) and ai_trainer.is_configured()
     )
+
+    prefix = "✅ Сохранено как прошлая тренировка\n\n" if is_backfill else ""
+    full_text = formatting.fit_workout_text(lambda mc: prefix + summary_fn(mc), suffix)
     card_kb = keyboards.workout_card_keyboard(
         workout_id,
         show_ai_button=existing_comment is None and not needs_ai_comment and ai_trainer.is_configured(),

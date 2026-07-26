@@ -50,3 +50,28 @@ def test_exercises_keyboard_without_templates_is_unchanged():
     owned = [{"id": 1, "display_name": "Присед"}]
     kb = keyboards.exercises_keyboard(owned, prefix="pick")
     assert "pick:tpladd:" not in "".join(_callback_datas(kb))
+
+
+def test_history_item_keyboard_packs_core_actions_into_two_rows():
+    kb = keyboards.history_item_keyboard(7)
+    rows = kb.inline_keyboard
+    assert len(rows) == 2
+    assert len(rows[0]) == 2 and len(rows[1]) == 2
+    texts = _button_texts(kb)
+    assert "🖼 Картинка" in texts
+    assert "Поделиться картинкой" not in "".join(texts)
+
+
+def test_history_item_keyboard_ai_button_gets_its_own_row():
+    kb = keyboards.history_item_keyboard(7, show_ai_button=True)
+    rows = kb.inline_keyboard
+    assert len(rows) == 3
+    assert [b.text for b in rows[0]] == ["🤖 Комментарий AI-тренера"]
+
+
+def test_workout_card_keyboard_packs_actions_into_one_row():
+    kb = keyboards.workout_card_keyboard(7)
+    rows = kb.inline_keyboard
+    assert len(rows) == 1
+    assert len(rows[0]) == 2
+    assert "🖼 Картинка" in _button_texts(kb)
