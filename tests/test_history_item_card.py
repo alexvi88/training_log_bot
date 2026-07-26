@@ -6,9 +6,6 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.storage.base import StorageKey
-from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import CallbackQuery
 
 from handlers import history
@@ -32,11 +29,6 @@ def _make_callback(user_id: int, data: str):
     return callback
 
 
-async def _make_state(user_id: int) -> FSMContext:
-    key = StorageKey(bot_id=1, chat_id=user_id, user_id=user_id)
-    return FSMContext(storage=MemoryStorage(), key=key)
-
-
 async def test_history_item_includes_tonnage_equivalent(fresh_db, user_id):
     db = fresh_db
     group_id = await db.create_muscle_group(user_id, "Ноги")
@@ -48,7 +40,6 @@ async def test_history_item_includes_tonnage_equivalent(fresh_db, user_id):
     await db.add_set(block_id, squat, 1, 0, 200.0, 10)
     await db.finish_workout(workout_id)
 
-    state = await _make_state(user_id)
     callback = _make_callback(user_id, f"hist:item:{workout_id}")
 
     assert await history.show_history_item(callback, workout_id)
@@ -75,7 +66,6 @@ async def test_history_item_includes_pr_highlight_vs_prior_session(fresh_db, use
     await db.add_set(b2, bench, 1, 0, 90.0, 5)
     await db.finish_workout(w2, finished_at="2026-01-08T12:00:00")
 
-    state = await _make_state(user_id)
     callback = _make_callback(user_id, f"hist:item:{w2}")
 
     assert await history.show_history_item(callback, w2)
