@@ -662,9 +662,12 @@ async def start_workout(callback: CallbackQuery, state: FSMContext):
 REPEAT_PAGE_SIZE = 6
 
 
-async def _repeat_summary(workout) -> tuple[str, str]:
-    """Date (short — safe as a button label) and full exercise-name list (no width
-    limit in message text, unlike a button) for one past workout in the repeat list."""
+_REPEAT_SUMMARY_NAMES = 2  # how many exercise names spelled out before "+N"
+
+
+async def _repeat_summary(workout) -> tuple[str, list[str]]:
+    """Date (short — safe as a button label) and this workout's exercise names,
+    in block order, for one past workout in the repeat list."""
     started = dt.datetime.fromisoformat(workout["started_at"])
     date = formatting.format_date_ru(started)
     plan = await db.workout_plan(workout["id"])
@@ -673,15 +676,30 @@ async def _repeat_summary(workout) -> tuple[str, str]:
         ex = await db.get_exercise(block["exercise_ids"][0])
         if ex:
             names.append(ex["display_name"])
-    return date, ", ".join(names) if names else "—"
+    return date, names
+
+
+def _repeat_summary_line(i: int, date: str, names: list[str]) -> str:
+    """One scannable line: bold number+date, then a count and just the first
+    couple of names — a workout can easily run 8-10 exercises, and spelling
+    all of them out turns the list into an unreadable wall of text."""
+    if not names:
+        return f"<b>{i} · {date}</b> — нет упражнений"
+    shown = ", ".join(escape(n) for n in names[:_REPEAT_SUMMARY_NAMES])
+    if len(names) > _REPEAT_SUMMARY_NAMES:
+        shown += f" +{len(names) - _REPEAT_SUMMARY_NAMES}"
+    count_word = formatting.plural_ru(len(names), ("упражнение", "упражнения", "упражнений"))
+    return f"<b>{i} · {date}</b> — {len(names)} {count_word}: {shown}"
 
 
 async def _repeat_list_screen(callback: CallbackQuery, state: FSMContext, page: int):
     """List of the user's recent finished workouts to pick one to repeat, rendered
     into the live tracker message like the rest of the picker.
 
-    Exercise names are long and don't fit into a button label, so buttons only carry
-    a number + date and the matching numbered exercise list goes into the message text.
+    Exercise names don't fit into a button label, so buttons only carry a number
+    + date; the message text above them lists the same numbers with a short,
+    truncated exercise summary — the full breakdown is one more tap away, on
+    that workout's own preview screen (pick_repeat_show).
     """
     user = await db.get_user(callback.from_user.id)
     data = await state.get_data()
@@ -692,9 +710,9 @@ async def _repeat_list_screen(callback: CallbackQuery, state: FSMContext, page: 
     items = []
     lines = []
     for i, w in enumerate(workouts, start=1 + page * REPEAT_PAGE_SIZE):
-        date, summary = await _repeat_summary(w)
-        items.append({"id": w["id"], "label": f"{i}. {date}"})
-        lines.append(f"{i}. {date} — {summary}")
+        date, names = await _repeat_summary(w)
+        items.append({"id": w["id"], "label": f"{i} - {date}"})
+        lines.append(_repeat_summary_line(i, date, names))
     has_next = (page + 1) * REPEAT_PAGE_SIZE < total
     kb = keyboards.repeat_list_keyboard(items, page, has_next)
     hint = "🔁 Выбери тренировку, чтобы повторить её план:\n\n" + "\n".join(lines)

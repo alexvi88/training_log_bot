@@ -91,15 +91,16 @@ async def test_repeat_picks_a_specific_past_workout(fresh_db, user_id):
 
 
 @pytest.mark.asyncio
-async def test_repeat_list_keeps_button_labels_short_and_names_in_the_text(fresh_db, user_id):
-    """Long exercise names don't fit into a button label (Telegram truncates/wraps
-    it), so the list only puts a number + date on the button and moves the full,
-    matching numbered exercise list into the message text above it."""
+async def test_repeat_list_keeps_button_labels_short_with_dash_separator(fresh_db, user_id):
+    """Buttons carry only a number + date ("1 - <date>") — full exercise names
+    don't fit into a button label — and the matching text line above them gives
+    a count plus a short, truncated preview instead of spelling every name out."""
     db = fresh_db
     group_id = await db.create_muscle_group(user_id, "Грудь")
     a = await db.create_exercise(user_id, "Приседания со штангой на плечах", group_id)
     b = await db.create_exercise(user_id, "Жим штанги лёжа широким хватом", group_id)
-    wid = await _finished_workout(db, user_id, [a, b])
+    c = await db.create_exercise(user_id, "Тяга штанги в наклоне", group_id)
+    wid = await _finished_workout(db, user_id, [a, b, c])
 
     state = await _state(user_id)
     await workout.start_workout(_make_callback(user_id, "menu:start_workout"), state)
@@ -112,11 +113,15 @@ async def test_repeat_list_keeps_button_labels_short_and_names_in_the_text(fresh
 
     kb = list_cb.bot.send_message.await_args.kwargs["reply_markup"]
     button = next(b for row in kb.inline_keyboard for b in row if b.callback_data == f"pick:rep:show:{wid}")
-    assert button.text == f"1. {expected_date}"
+    assert button.text == f"1 - {expected_date}"
 
     text = list_cb.bot.send_message.await_args.kwargs["text"]
     assert "Приседания со штангой на плечах" in text
     assert "Жим штанги лёжа широким хватом" in text
+    # Third exercise is folded behind a "+1" count, not spelled out too.
+    assert "Тяга штанги в наклоне" not in text
+    assert "3 упражнения" in text
+    assert "+1" in text
     assert text.startswith("🔁 Выбери тренировку, чтобы повторить её план:")
 
 
