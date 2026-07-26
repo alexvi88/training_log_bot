@@ -19,6 +19,13 @@ def test_format_set():
     assert formatting.format_set(100.0, 8) == "100×8"
 
 
+def test_format_tonnage_never_abbreviates():
+    assert formatting.format_tonnage(11000) == "11 тонн"
+    assert formatting.format_tonnage(11500) == "11.5 тонны"
+    assert formatting.format_tonnage(21000) == "21 тонна"
+    assert formatting.format_tonnage(500) == "500кг"
+
+
 def test_format_date_ru_includes_weekday():
     d = dt.datetime(2026, 6, 26)  # Friday
     assert formatting.format_date_ru(d) == "26.06.2026 (пт)"

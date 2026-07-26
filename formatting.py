@@ -180,6 +180,23 @@ def _delta_arrow(delta: float) -> str:
     return "↑" if delta > 0 else ("↓" if delta < 0 else "→")
 
 
+def format_tonnage(total_kg: float, unit: str = "kg") -> str:
+    """Session/lifetime tonnage as a full word ("тонны"/"тонн"), never abbreviated.
+
+    Russian grammar: a non-whole amount (e.g. "1.5 тонны") always takes the
+    2-4 form regardless of the leading digit, so only a whole number of tons
+    goes through the normal plural_ru rules.
+    """
+    u = UNIT_LABELS.get(unit, "кг")
+    if total_kg >= 1000:
+        tons = round(total_kg / 1000, 1)
+        tons_str = format_weight(tons)
+        forms = ("тонна", "тонны", "тонн")
+        word = plural_ru(int(tons), forms) if tons == int(tons) else forms[1]
+        return f"{tons_str} {word}"
+    return f"{total_kg:.0f}{u}"
+
+
 def _render_single_block(block: ExerciseBlockView, show_extra: bool, unit: str = "kg") -> list[str]:
     u = UNIT_LABELS.get(unit, "кг")
     label = f"{escape(block.exercise_name)} [{block.group_name.upper()}]"
@@ -355,7 +372,7 @@ def format_tonnage_equivalent(total_kg: float, seed: int = 0) -> str | None:
         candidates = [fitting[-1]]
     emoji, forms, count = candidates[seed % len(candidates)]
     noun = plural_ru(count, forms)
-    return f"Это как {count} {noun} {emoji}."
+    return f"Это как {count} {noun} {emoji}"
 
 
 def dashboard_stat_lines(dashboard) -> list[tuple[str, str]]:

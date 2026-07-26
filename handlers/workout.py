@@ -65,7 +65,7 @@ async def _attach_ai_comment(
             )
         return
     await db.set_workout_ai_comment(workout_id, comment)
-    new_text = base_text + "\n\n" + formatting.build_ai_comment_block(comment)
+    new_text = base_text + "\n" + formatting.build_ai_comment_block(comment)
     with suppress(TelegramBadRequest):
         await bot.edit_message_text(
             chat_id=chat_id, message_id=message_id, text=new_text, parse_mode="HTML",
@@ -1747,14 +1747,14 @@ async def _finished_workout_card_text(workout, user, note: str | None, comment=_
     suffix = ""
     equivalent = formatting.format_tonnage_equivalent(session_tonnage, seed=workout["id"])
     if equivalent:
-        tonnage = f"{session_tonnage / 1000:.1f}т" if session_tonnage >= 1000 else f"{session_tonnage:.0f}кг"
+        tonnage = formatting.format_tonnage(session_tonnage)
         suffix += f"\n\n🏋️ Суммарно за тренировку — {tonnage}. {equivalent}"
     if highlights:
         header = "🔥 <b>Рекорды и сравнения</b>"
-        suffix += f"\n\n{formatting.DIVIDER}\n{header}\n{formatting.collapsible_if_long(highlights)}"
+        suffix += f"\n{formatting.DIVIDER}\n{header}\n{formatting.collapsible_if_long(highlights)}"
     effective_comment = workout["ai_comment"] if comment is _UNSET else comment
     if effective_comment:
-        suffix += "\n\n" + formatting.build_ai_comment_block(effective_comment)
+        suffix += "\n" + formatting.build_ai_comment_block(effective_comment)
     return formatting.fit_workout_text(summary_fn, suffix)
 
 
@@ -1838,7 +1838,7 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
     suffix = ""
     equivalent = formatting.format_tonnage_equivalent(session_tonnage, seed=workout_id)
     if equivalent:
-        tonnage = f"{session_tonnage / 1000:.1f}т" if session_tonnage >= 1000 else f"{session_tonnage:.0f}кг"
+        tonnage = formatting.format_tonnage(session_tonnage)
         suffix += f"\n\n🏋️ Суммарно за тренировку — {tonnage}. {equivalent}"
     # Backfilled/imported past workouts shouldn't fire the "Nth workout" milestone —
     # they're entered out of order, so the running count isn't meaningful for them.
@@ -1853,14 +1853,15 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
         suffix += "\n\n" + achievement_line
 
     if highlights:
-        suffix += f"\n\n{formatting.DIVIDER}\n\n{highlights}"
+        header = "🔥 <b>Рекорды и сравнения</b>"
+        suffix += f"\n{formatting.DIVIDER}\n{header}\n{formatting.collapsible_if_long(highlights)}"
 
     # Existing comment (already generated, e.g. from a backfilled workout) shows right
     # away; a fresh one is generated in the background so finishing a workout doesn't
     # block on the LLM call — see _attach_ai_comment below.
     existing_comment = workout["ai_comment"]
     if existing_comment:
-        suffix += "\n\n" + formatting.build_ai_comment_block(existing_comment)
+        suffix += "\n" + formatting.build_ai_comment_block(existing_comment)
     needs_ai_comment = (
         existing_comment is None and bool(user["ai_comments_enabled"]) and ai_trainer.is_configured()
     )
