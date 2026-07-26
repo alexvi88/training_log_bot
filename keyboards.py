@@ -242,13 +242,18 @@ def program_detail_keyboard(program_key: str) -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
-def routine_detail_keyboard(routine_id: int) -> InlineKeyboardMarkup:
+def routine_detail_keyboard(routine_id: int, exercises=()) -> InlineKeyboardMarkup:
+    """exercises: (routine_exercise_id, display_name) rows, in routine order —
+    each gets its own one-tap remove button, no confirmation (trivially
+    reversible via "➕ Добавить упражнение", unlike deleting the whole program)."""
     b = InlineKeyboardBuilder()
-    b.button(text="▶️ Начать тренировку", callback_data=f"rt:start:{routine_id}")
-    b.button(text="✏️ Переименовать", callback_data=f"rt:rename:{routine_id}")
-    b.button(text="🗑 Удалить", callback_data=f"rt:delask:{routine_id}")
-    b.button(text="⬅️ К списку", callback_data="rt:manage")
-    b.adjust(1)
+    b.row(InlineKeyboardButton(text="▶️ Начать тренировку", callback_data=f"rt:start:{routine_id}"))
+    for re_id, name in exercises:
+        b.row(InlineKeyboardButton(text=f"🗑 {name}", callback_data=f"rt:rmex:{routine_id}:{re_id}"))
+    b.row(InlineKeyboardButton(text="➕ Добавить упражнение", callback_data=f"rt:addex:{routine_id}"))
+    b.row(InlineKeyboardButton(text="✏️ Переименовать", callback_data=f"rt:rename:{routine_id}"))
+    b.row(InlineKeyboardButton(text="🗑 Удалить программу", callback_data=f"rt:delask:{routine_id}"))
+    b.row(InlineKeyboardButton(text="⬅️ К списку", callback_data="rt:manage"))
     return b.as_markup()
 
 
@@ -628,16 +633,21 @@ def exercise_resolve_keyboard(candidates, name: str, prefix: str) -> InlineKeybo
 
 
 def edit_workout_keyboard(rows) -> InlineKeyboardMarkup:
-    """rows: ordered list of ("set", set_id, label) or ("add", block_id, exercise_id, label) —
-    each exercise's "+ Сет" button belongs right after that exercise's own set rows."""
+    """rows: ordered list of ("set", set_id, label), ("add", block_id, exercise_id, label),
+    or ("remove", block_id, label) — each exercise's "+ Сет"/"🗑 Убрать" buttons belong
+    right after that exercise's own set rows."""
     b = InlineKeyboardBuilder()
     for row in rows:
         if row[0] == "set":
             _, set_id, label = row
             b.button(text=label, callback_data=f"editw:set:{set_id}")
-        else:
+        elif row[0] == "add":
             _, block_id, exercise_id, label = row
             b.button(text=f"➕ Сет — {label}", callback_data=f"editw:addset:{block_id}:{exercise_id}")
+        else:
+            _, block_id, label = row
+            b.button(text=f"🗑 Убрать «{label}» целиком", callback_data=f"editw:rmex:{block_id}")
+    b.button(text="➕ Новое упражнение", callback_data="editw:newex")
     b.button(text="📅 Изменить дату", callback_data="editw:date")
     b.button(text="✅ Готово", callback_data="editw:done")
     b.adjust(1)

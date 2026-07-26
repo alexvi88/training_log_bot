@@ -1212,6 +1212,18 @@ async def delete_block(block_id: int) -> None:
         await conn().commit()
 
 
+async def delete_block_and_sets(block_id: int) -> None:
+    """Drop a block along with every set it holds — "remove this exercise from
+    a past workout entirely". delete_block on its own assumes the block is
+    already empty (every existing caller empties it first); this is for the
+    one case where it isn't."""
+    async with _write_lock:
+        await conn().execute("DELETE FROM sets WHERE block_id = ?", (block_id,))
+        await conn().execute("DELETE FROM block_exercises WHERE block_id = ?", (block_id,))
+        await conn().execute("DELETE FROM workout_blocks WHERE id = ?", (block_id,))
+        await conn().commit()
+
+
 async def list_sets_for_block(block_id: int) -> list[aiosqlite.Row]:
     cur = await conn().execute(
         "SELECT * FROM sets WHERE block_id = ? ORDER BY round_index, order_in_round, id",
@@ -1368,6 +1380,32 @@ async def add_routine_exercise(routine_id: int, exercise_id: int, order_index: i
             (routine_id, exercise_id, order_index),
         )
         await conn().commit()
+
+
+async def append_routine_exercise(routine_id: int, exercise_id: int) -> None:
+    """Add an exercise to the end of a routine that already exists — the "✏️ edit
+    an already-saved program" path, as opposed to add_routine_exercise's use
+    building a fresh routine where the caller tracks order_index itself.
+    """
+    cur = await conn().execute(
+        "SELECT COALESCE(MAX(order_index), -1) + 1 FROM routine_exercises WHERE routine_id = ?",
+        (routine_id,),
+    )
+    row = await cur.fetchone()
+    await add_routine_exercise(routine_id, exercise_id, row[0])
+
+
+async def remove_routine_exercise(routine_exercise_id: int) -> None:
+    async with _write_lock:
+        await conn().execute("DELETE FROM routine_exercises WHERE id = ?", (routine_exercise_id,))
+        await conn().commit()
+
+
+async def get_routine_exercise(routine_exercise_id: int) -> Optional[aiosqlite.Row]:
+    cur = await conn().execute(
+        "SELECT * FROM routine_exercises WHERE id = ?", (routine_exercise_id,)
+    )
+    return await cur.fetchone()
 
 
 async def list_routines(user_id: int) -> list[aiosqlite.Row]:

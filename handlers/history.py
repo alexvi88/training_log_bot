@@ -2,10 +2,12 @@
 
 import asyncio
 import datetime as dt
+from html import escape
 
 from aiogram import F, Router
+from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton, InputMediaPhoto
+from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton, InputMediaPhoto, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import ai_trainer
@@ -17,7 +19,7 @@ import formatting
 import keyboards
 import ui
 import view_builder
-from fsm import HistoryFlow
+from fsm import HistoryFlow, ProgressFlow
 
 router = Router(name="history")
 
@@ -233,13 +235,15 @@ async def hist_delete(callback: CallbackQuery, state: FSMContext):
 # ---------- progress ----------
 
 async def show_progress_entry(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(ProgressFlow.picking_group)
     groups = await db.list_muscle_groups(callback.from_user.id)
     kb = keyboards.groups_keyboard(
         groups, prefix="prog",
         extra_buttons=[("🏆 Достижения", "menu:achievements"), ("⬅️ Назад", "prog:back")],
         show_all=True,
     )
-    await ui.safe_edit(callback, "📈 Прогресс — выбери группу мышц:", reply_markup=kb)
+    text = "📈 Прогресс — выбери группу мышц или напиши название упражнения для поиска:"
+    await ui.safe_edit(callback, text, reply_markup=kb)
     await callback.answer()
 
 
@@ -254,7 +258,8 @@ async def prog_back_to_groups(callback: CallbackQuery, state: FSMContext):
     await show_progress_entry(callback, state)
 
 
-async def _render_progress_exercise_list(callback: CallbackQuery, raw: str, page: int) -> None:
+async def _render_progress_exercise_list(callback: CallbackQuery, state: FSMContext, raw: str, page: int) -> None:
+    await state.set_state(ProgressFlow.picking_exercise)
     group_id = None if raw == "all" else int(raw)
     offset = page * config.RECENT_EXERCISES_LIMIT
     if group_id is None:
@@ -280,22 +285,45 @@ async def _render_progress_exercise_list(callback: CallbackQuery, raw: str, page
     if nav:
         b.row(*nav)
     b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="prog:groups"))
-    text = "📈 Прогресс — выбери упражнение:" if exercises else "Пока нет своих упражнений с историей в этой группе."
+    if exercises:
+        text = "📈 Прогресс — выбери упражнение или напиши название для поиска:"
+    else:
+        text = "Пока нет своих упражнений с историей в этой группе. Можно написать название для поиска."
     await ui.safe_edit(callback, text, reply_markup=b.as_markup())
 
 
 @router.callback_query(F.data.startswith("prog:grp:"))
 async def prog_pick_group(callback: CallbackQuery, state: FSMContext):
     raw = callback.data.split(":")[2]
-    await _render_progress_exercise_list(callback, raw, page=0)
+    await _render_progress_exercise_list(callback, state, raw, page=0)
     await callback.answer()
 
 
 @router.callback_query(F.data.startswith("prog:gpage:"))
 async def prog_group_page(callback: CallbackQuery, state: FSMContext):
     _, _, raw, page_str = callback.data.split(":")
-    await _render_progress_exercise_list(callback, raw, page=int(page_str))
+    await _render_progress_exercise_list(callback, state, raw, page=int(page_str))
     await callback.answer()
+
+
+@router.message(StateFilter(ProgressFlow.picking_group, ProgressFlow.picking_exercise))
+async def prog_search_text(message: Message, state: FSMContext):
+    """Typing while browsing Progress searches the user's own exercises instead
+    of falling through to the fallback router's "Не понял" — same pattern as
+    the workout picker and ⚙️ Упражнения, minus template suggestions: Progress
+    is about history you already have, and a never-trained template would just
+    show "Пока нет завершённых тренировок с этим упражнением" if picked."""
+    query = message.text.strip()
+    if not query:
+        return
+    results = await db.search_exercises(message.from_user.id, query)
+    b = InlineKeyboardBuilder()
+    for ex in results:
+        b.row(InlineKeyboardButton(text=ex["display_name"], callback_data=f"prog:ex:{ex['id']}:all"))
+    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="prog:groups"))
+    text = f"Результаты поиска «{escape(query)}»:" if results else f"Ничего не нашлось по «{escape(query)}»."
+    await state.set_state(ProgressFlow.picking_exercise)
+    await message.answer(text, reply_markup=b.as_markup(), parse_mode="HTML")
 
 
 async def _load_sessions(exercise_id: int, formula: str) -> list[analytics.SessionStats]:

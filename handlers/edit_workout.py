@@ -2,6 +2,7 @@
 
 import datetime as dt
 from contextlib import suppress
+from html import escape
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
@@ -9,6 +10,7 @@ from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 
+import config
 import db
 import formatting
 import keyboards
@@ -42,6 +44,7 @@ async def _edit_screen_payload(workout_id: int) -> tuple[str, InlineKeyboardMark
             rows.append(("set", s["id"], label))
         for be in block_exs:
             rows.append(("add", block["id"], be["exercise_id"], be["display_name"]))
+            rows.append(("remove", block["id"], be["display_name"]))
 
     text = f"✏️ Редактирование · {formatting.format_date_ru(started)}\nНажми на сет, чтобы изменить или удалить."
     if not has_sets:
@@ -170,15 +173,178 @@ async def editw_addset_entered(message: Message, state: FSMContext):
         await message.reply(e.message)
         return
     data = await state.get_data()
-    block_id, ex_id = data["add_block_id"], data["add_exercise_id"]
-    block_exs = await db.get_block_exercises(block_id)
-    order_in_round = next((be["order_in_block"] for be in block_exs if be["exercise_id"] == ex_id), 0)
+    ex_id = data["add_exercise_id"]
+    block_id = data.get("add_block_id")
+    if block_id is None:
+        # A brand-new exercise for this workout (via "➕ Новое упражнение") — the
+        # block is only created now, on the first real set, so cancelling the
+        # weight/reps prompt never leaves an empty exercise behind.
+        block_id = await db.create_block(data["edit_workout_id"], "single")
+        await db.add_block_exercise(block_id, ex_id, 0)
+        await db.touch_exercise_last_used(ex_id)
+        order_in_round = 0
+    else:
+        block_exs = await db.get_block_exercises(block_id)
+        order_in_round = next((be["order_in_block"] for be in block_exs if be["exercise_id"] == ex_id), 0)
     for ps in parsed:
         round_idx = await db.next_round_index(block_id, ex_id)
         await db.add_set(block_id, ex_id, round_idx, order_in_round, ps.weight, ps.reps, ps.rpe)
     await message.reply("Сет добавлен.")
     await _delete_message(message)
     await show_edit_screen(message, state, data["edit_workout_id"])
+
+
+@router.callback_query(F.data.startswith("editw:rmex:"))
+async def editw_remove_exercise(callback: CallbackQuery, state: FSMContext):
+    """Drop an exercise from a past workout entirely — every set it has, in one
+    tap, no confirmation (same risk tolerance as editw:delset for a single set;
+    this is the edit screen, not the "🗑 delete the whole workout" action)."""
+    block_id = int(callback.data.split(":")[2])
+    if await db.get_block_owner(block_id) != callback.from_user.id:
+        await callback.answer("Упражнение не найдено", show_alert=True)
+        return
+    workout_id = await _require_edit_workout_id(callback, state)
+    if workout_id is None:
+        return
+    await db.delete_block_and_sets(block_id)
+    await callback.answer("Упражнение убрано из тренировки")
+    await show_edit_screen(callback, state, workout_id)
+
+
+# ---------- adding a wholly new exercise to a past workout ----------
+#
+# Same groups → exercises (+ search, + template forking) picker shape as the
+# routine editor's "➕ Добавить упражнение", under yet another prefix
+# ("editwex") so its callback data can't collide. Landing state is the
+# existing EditWorkoutFlow.adding_set with add_block_id left None — see
+# editw_addset_entered for why the block itself waits for a real set.
+
+async def _editwex_groups_screen(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(EditWorkoutFlow.adding_exercise_group)
+    groups = await db.list_muscle_groups(callback.from_user.id)
+    kb = keyboards.groups_keyboard(
+        groups, prefix="editwex", extra_buttons=[("❌ Отмена", "editwex:cancel")], show_all=True
+    )
+    await ui.safe_edit(
+        callback, "Выбери группу мышц или напиши название упражнения для поиска:", reply_markup=kb
+    )
+
+
+@router.callback_query(F.data == "editw:newex")
+async def editw_new_exercise_start(callback: CallbackQuery, state: FSMContext):
+    workout_id = await _require_edit_workout_id(callback, state)
+    if workout_id is None:
+        return
+    await state.update_data(editwex_group_id=None, editwex_page=0)
+    await _editwex_groups_screen(callback, state)
+    await callback.answer()
+
+
+@router.callback_query(
+    StateFilter(EditWorkoutFlow.adding_exercise_group, EditWorkoutFlow.adding_exercise_pick),
+    F.data == "editwex:cancel",
+)
+async def editwex_cancel(callback: CallbackQuery, state: FSMContext):
+    workout_id = await _require_edit_workout_id(callback, state)
+    if workout_id is None:
+        return
+    await show_edit_screen(callback, state, workout_id)
+    await callback.answer()
+
+
+async def _editwex_exercise_list_screen(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(EditWorkoutFlow.adding_exercise_pick)
+    data = await state.get_data()
+    group_id = data.get("editwex_group_id")
+    page = data.get("editwex_page", 0)
+    offset = page * config.RECENT_EXERCISES_LIMIT
+    if group_id is None:
+        exercises = await db.list_user_exercises(
+            callback.from_user.id, limit=config.RECENT_EXERCISES_LIMIT, offset=offset
+        )
+        total = await db.count_user_exercises(callback.from_user.id)
+    else:
+        exercises = await db.list_user_exercises_in_group(
+            callback.from_user.id, group_id, limit=config.RECENT_EXERCISES_LIMIT, offset=offset
+        )
+        total = await db.count_user_exercises_in_group(callback.from_user.id, group_id)
+    has_next = offset + len(exercises) < total
+    kb = keyboards.exercises_keyboard(
+        exercises, prefix="editwex", show_new_button=False, back_cb="back", page=page, has_next=has_next,
+    )
+    text = "Выбери упражнение или напиши название для поиска:" if exercises else "Пусто здесь — напиши название для поиска."
+    await ui.safe_edit(callback, text, reply_markup=kb)
+
+
+@router.callback_query(StateFilter(EditWorkoutFlow.adding_exercise_group), F.data.startswith("editwex:grp:"))
+async def editwex_pick_group(callback: CallbackQuery, state: FSMContext):
+    raw = callback.data.split(":")[2]
+    group_id = None if raw == "all" else int(raw)
+    await state.update_data(editwex_group_id=group_id, editwex_page=0)
+    await _editwex_exercise_list_screen(callback, state)
+    await callback.answer()
+
+
+@router.callback_query(StateFilter(EditWorkoutFlow.adding_exercise_pick), F.data.startswith("editwex:page:"))
+async def editwex_page(callback: CallbackQuery, state: FSMContext):
+    page = int(callback.data.split(":")[2])
+    await state.update_data(editwex_page=page)
+    await _editwex_exercise_list_screen(callback, state)
+    await callback.answer()
+
+
+@router.callback_query(StateFilter(EditWorkoutFlow.adding_exercise_pick), F.data == "editwex:back")
+async def editwex_back_to_groups(callback: CallbackQuery, state: FSMContext):
+    await _editwex_groups_screen(callback, state)
+    await callback.answer()
+
+
+async def _editwex_finish(event, state: FSMContext, ex_id: int) -> None:
+    await state.update_data(add_block_id=None, add_exercise_id=ex_id)
+    await state.set_state(EditWorkoutFlow.adding_set)
+    ex = await db.get_exercise(ex_id)
+    text = (
+        f"«{ex['display_name']}» — напиши вес и повторы для первого сета "
+        "(например «100 8», можно «100x8x3»):"
+    )
+    kb = keyboards.cancel_keyboard("editw:back")
+    if isinstance(event, CallbackQuery):
+        await ui.safe_edit(event, text, reply_markup=kb)
+        await event.answer()
+    else:
+        await event.answer(text, reply_markup=kb)
+
+
+@router.callback_query(StateFilter(EditWorkoutFlow.adding_exercise_pick), F.data.startswith("editwex:ex:"))
+async def editwex_pick_exercise(callback: CallbackQuery, state: FSMContext):
+    ex_id = int(callback.data.split(":")[2])
+    await _editwex_finish(callback, state, ex_id)
+
+
+@router.callback_query(
+    StateFilter(EditWorkoutFlow.adding_exercise_group, EditWorkoutFlow.adding_exercise_pick),
+    F.data.startswith("editwex:tpladd:"),
+)
+async def editwex_pick_template(callback: CallbackQuery, state: FSMContext):
+    template_id = int(callback.data.split(":")[2])
+    ex_id = await db.fork_exercise_from_template(callback.from_user.id, template_id)
+    await _editwex_finish(callback, state, ex_id)
+
+
+@router.message(StateFilter(EditWorkoutFlow.adding_exercise_group, EditWorkoutFlow.adding_exercise_pick))
+async def editwex_search_text(message: Message, state: FSMContext):
+    query = message.text.strip()
+    if not query:
+        return
+    results = await db.search_exercises(message.from_user.id, query)
+    templates = await db.search_exercise_templates(message.from_user.id, query)
+    kb = keyboards.exercises_keyboard(results, prefix="editwex", show_new_button=False, templates=templates)
+    if results or templates:
+        text = f"Результаты поиска «{escape(query)}»:"
+    else:
+        text = f"Ничего не нашлось по «{escape(query)}»."
+    await state.set_state(EditWorkoutFlow.adding_exercise_pick)
+    await message.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
 @router.callback_query(F.data == "editw:date")
