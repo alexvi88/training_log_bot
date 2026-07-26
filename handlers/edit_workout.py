@@ -226,7 +226,7 @@ async def _editwex_groups_screen(callback: CallbackQuery, state: FSMContext) -> 
         groups, prefix="editwex", extra_buttons=[("❌ Отмена", "editwex:cancel")], show_all=True
     )
     await ui.safe_edit(
-        callback, "Выбери группу мышц или напиши название упражнения для поиска:", reply_markup=kb
+        callback, "Выбери группу мышц или найди упражнение по названию:", reply_markup=kb
     )
 
 

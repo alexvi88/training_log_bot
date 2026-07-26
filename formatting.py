@@ -349,6 +349,30 @@ def build_workout_card(
     return title, body, footer, note
 
 
+def build_workout_preview(
+    started_at: dt.datetime, blocks: list[BlockView], note: str | None = None,
+    duration_seconds: float | None = None,
+) -> str:
+    """Compact preview of a past workout before repeating it: one line per
+    exercise plus a single comma-joined line of its sets — the same terse style
+    the live tracker uses for already-finished exercises, no e1RM/group tag/prev-set
+    clutter, since this is about scanning what was done, not analysing it."""
+    header = f"<b>{format_date_ru(started_at)}</b>"
+    if duration_seconds is not None:
+        header += f" · {format_duration(duration_seconds)}"
+    lines = [header]
+    if note:
+        lines.append(f"📝 {note}")
+    lines.append("")
+    for block in blocks:
+        lines.append(f"<b>{escape(block.exercise_name)}</b>")
+        if block.sets:
+            lines.append(", ".join(format_set(w, r, block.rpe_for(i)) for i, (w, r) in enumerate(block.sets)))
+        else:
+            lines.append("<i>подходов нет</i>")
+    return "\n".join(lines)
+
+
 def build_live_session_text(
     blocks: list[BlockView],
     hint: str | None = None,
@@ -553,16 +577,21 @@ def format_progress_screen(
     window = [s for s in sessions if s.sets]
     candidates = window[-limit:]
 
-    if len(window) >= 2:
-        first, last = window[0], window[-1]
+    if len(candidates) >= 2:
+        # Anchored to the same window the chart plots (points[-limit:]), not the
+        # full history — otherwise this delta and the chart's own title delta
+        # (which is computed from that same limited window) disagree whenever a
+        # shorter period is selected, and "с первой тренировки" would be a lie.
+        first, last = candidates[0], candidates[-1]
+        since = "с первой тренировки" if len(candidates) == len(window) else "за период"
         if is_bw:
             delta = last.max_reps_in_set - first.max_reps_in_set
             arrow = "↑" if delta > 0 else ("↓" if delta < 0 else "→")
-            lines.append(f"Повторы: {arrow}{delta:+d} с первой тренировки")
+            lines.append(f"Повторы: {arrow}{delta:+d} {since}")
         else:
             delta = last.top_e1rm - first.top_e1rm
             arrow = "↑" if delta > 0 else ("↓" if delta < 0 else "→")
-            lines.append(f"e1RM: {arrow}{delta:+.1f}{u} с первой тренировки")
+            lines.append(f"e1RM: {arrow}{delta:+.1f}{u} {since}")
 
     if is_bw:
         best_reps = max(records.max_reps_at_weight.values()) if records.max_reps_at_weight else 0

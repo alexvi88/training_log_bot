@@ -242,7 +242,7 @@ async def show_progress_entry(callback: CallbackQuery, state: FSMContext):
         extra_buttons=[("🏆 Достижения", "menu:achievements"), ("⬅️ Назад", "prog:back")],
         show_all=True,
     )
-    text = "📈 Прогресс — выбери группу мышц или напиши название упражнения для поиска:"
+    text = "📈 Прогресс — выбери группу мышц или найди упражнение по названию:"
     await ui.safe_edit(callback, text, reply_markup=kb)
     await callback.answer()
 
@@ -341,9 +341,10 @@ async def _load_sessions(exercise_id: int, formula: str) -> list[analytics.Sessi
 async def _render_progress_view(ex_id: int, user, limit: int, origin: str = "all"):
     """Build the text/chart/keyboard for an exercise's progress screen.
 
-    Trend/comparison/PRs always look at the full history; `limit` only
-    controls how many recent sessions are shown in the text list and plotted
-    on the chart, so switching periods doesn't change what counts as a record.
+    PRs always look at the full history, so switching periods doesn't change
+    what counts as a record. The headline delta and the chart both scope to
+    the selected `limit` instead, so they stay consistent with each other and
+    with what's actually plotted.
     """
     ex = await db.get_exercise(ex_id)
     sessions = await _load_sessions(ex_id, user["e1rm_formula"])

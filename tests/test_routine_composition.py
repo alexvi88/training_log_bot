@@ -174,3 +174,73 @@ async def test_cancel_returns_to_routine_detail_without_changes(fresh_db, user_i
 
     names = [r["display_name"] for r in await db.list_routine_exercises(routine_id)]
     assert names == ["Жим лёжа"]  # unchanged
+
+
+# ---------- create from workout: tap-to-preview before naming ----------
+
+
+async def _finished_workout_with(db, user_id: int, ex_names: list[str], started_at: str = "2026-07-15T10:00:00") -> int:
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    wid = await db.create_finished_workout(user_id, started_at, "2026-07-15T11:00:00")
+    for name in ex_names:
+        ex_id = await db.create_exercise(user_id, name, group_id)
+        block_id = await db.create_block(wid, "single")
+        await db.add_block_exercise(block_id, ex_id, 0)
+        await db.add_set(block_id, ex_id, 1, 0, 100.0, 8)
+    return wid
+
+
+async def test_tapping_a_workout_previews_its_full_exercise_list_before_naming(fresh_db, user_id):
+    db = fresh_db
+    wid = await _finished_workout_with(
+        db, user_id, ["Приседания со штангой на плечах", "Жим штанги лёжа широким хватом"]
+    )
+    state = await _make_state(user_id)
+
+    callback = _make_callback(user_id, f"rt:pickw:item:{wid}")
+    await routines.rt_pickw_item(callback, state)
+
+    # Both full names show up untruncated — unlike the picker button label, which
+    # is capped and would otherwise hide half of a long exercise name.
+    text = callback.message.answer.await_args.args[0]
+    assert "Приседания со штангой на плечах" in text
+    assert "Жим штанги лёжа широким хватом" in text
+    # Naming hasn't started yet — the preview asks for confirmation first.
+    assert await state.get_state() != RoutineFlow.naming
+    kb = callback.message.answer.await_args.kwargs["reply_markup"]
+    cbs = [b.callback_data for row in kb.inline_keyboard for b in row]
+    assert f"rt:pickw:use:{wid}" in cbs
+    assert "rt:pickw:back" in cbs
+
+
+async def test_confirming_the_preview_moves_to_naming(fresh_db, user_id):
+    db = fresh_db
+    wid = await _finished_workout_with(db, user_id, ["Жим лёжа"])
+    state = await _make_state(user_id)
+
+    await routines.rt_pickw_use(_make_callback(user_id, f"rt:pickw:use:{wid}"), state)
+
+    assert await state.get_state() == RoutineFlow.naming
+    assert (await state.get_data())["routine_source_workout_id"] == wid
+
+
+async def test_back_from_preview_returns_to_the_stored_list_page(fresh_db, user_id):
+    db = fresh_db
+    # 9 workouts so page 1 (ROUTINE_SOURCE_PAGE_SIZE=8) actually holds one — the
+    # 9th and oldest, since list_workouts orders newest-first. Distinct dates
+    # (rather than 9 identical ones) so that ordering doesn't depend on however
+    # SQLite happens to break ties.
+    for day in range(8, 0, -1):
+        await _finished_workout_with(db, user_id, ["Жим лёжа"], started_at=f"2026-07-{day:02d}T10:00:00")
+    oldest_wid = await _finished_workout_with(db, user_id, ["Тяга"], started_at="2026-06-01T10:00:00")
+    state = await _make_state(user_id)
+
+    await routines.rt_pickw_page(_make_callback(user_id, "rt:pickw:page:1"), state)
+    assert (await state.get_data())["routine_source_page"] == 1
+
+    callback = _make_callback(user_id, "rt:pickw:back")
+    await routines.rt_pickw_back(callback, state)
+
+    kb = callback.message.answer.await_args.kwargs["reply_markup"]
+    cbs = [b.callback_data for row in kb.inline_keyboard for b in row]
+    assert f"rt:pickw:item:{oldest_wid}" in cbs
