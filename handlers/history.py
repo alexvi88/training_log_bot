@@ -242,7 +242,7 @@ async def show_progress_entry(callback: CallbackQuery, state: FSMContext):
         extra_buttons=[("🏆 Достижения", "menu:achievements"), ("⬅️ Назад", "prog:back")],
         show_all=True,
     )
-    text = "📈 Прогресс — выбери группу мышц или напиши название упражнения для поиска:"
+    text = "📈 Прогресс — выбери группу мышц или найди упражнение по названию:"
     await ui.safe_edit(callback, text, reply_markup=kb)
     await callback.answer()
 
@@ -338,40 +338,70 @@ async def _load_sessions(exercise_id: int, formula: str) -> list[analytics.Sessi
     return sessions
 
 
+# Cached (text, png) per period for whatever exercise a user is currently
+# looking at — one entry per user, not one per (user, exercise), so rapidly
+# flipping 8 -> 20 -> 8 back and forth skips the matplotlib re-render and
+# re-encode (the expensive part of this screen) instead of growing unbounded
+# over every exercise ever viewed. The fingerprint hashes every set of every
+# session (not just the latest one), so editing or deleting a set anywhere in
+# the exercise's history — not only appending a new one — invalidates it; this
+# is cheap since `sessions` is already loaded for the text/analytics below,
+# same pattern as _menu_view's heatmap cache in handlers/workout.py.
+_progress_view_cache: dict[int, tuple[int, tuple, dict[int, tuple[str, bytes | None]]]] = {}
+
+
 async def _render_progress_view(ex_id: int, user, limit: int, origin: str = "all"):
     """Build the text/chart/keyboard for an exercise's progress screen.
 
-    Trend/comparison/PRs always look at the full history; `limit` only
-    controls how many recent sessions are shown in the text list and plotted
-    on the chart, so switching periods doesn't change what counts as a record.
+    PRs always look at the full history, so switching periods doesn't change
+    what counts as a record. The headline delta and the chart both scope to
+    the selected `limit` instead, so they stay consistent with each other and
+    with what's actually plotted.
     """
     ex = await db.get_exercise(ex_id)
     sessions = await _load_sessions(ex_id, user["e1rm_formula"])
-
-    points: list[tuple[dt.datetime, float]] = []
-    if sessions:
-        is_bw = sessions[-1].is_bodyweight_mode
-        points = [
-            (dt.datetime.fromisoformat(s.started_at), float(s.max_reps_in_set if is_bw else s.top_e1rm))
+    fingerprint = (
+        tuple(
+            (s.started_at, tuple((r.weight, r.reps, r.rpe) for r in s.sets))
             for s in sessions
-        ]
-    comparison = analytics.compare_to_previous_session(sessions)
-    records = analytics.compute_personal_records(sessions)
-
-    text = formatting.format_progress_screen(
-        ex["display_name"], sessions, comparison, records, limit=limit, unit=user["unit"]
+        ),
+        user["e1rm_formula"], user["unit"],
+    )
+    cached_user = _progress_view_cache.get(user["telegram_id"])
+    by_limit = (
+        cached_user[2] if cached_user and cached_user[:2] == (ex_id, fingerprint) else {}
     )
 
-    png = None
-    if sessions:
-        metric = "повторы" if sessions[-1].is_bodyweight_mode else "e1RM"
-        png = await asyncio.to_thread(
-            charts.render_metric_over_sessions,
-            points[-limit:],
-            f"{ex['display_name']} — {metric}",
-            metric,
-            show_weekly_rate=False,
+    cached = by_limit.get(limit)
+    if cached is not None:
+        text, png = cached
+    else:
+        points: list[tuple[dt.datetime, float]] = []
+        if sessions:
+            is_bw = sessions[-1].is_bodyweight_mode
+            points = [
+                (dt.datetime.fromisoformat(s.started_at), float(s.max_reps_in_set if is_bw else s.top_e1rm))
+                for s in sessions
+            ]
+        comparison = analytics.compare_to_previous_session(sessions)
+        records = analytics.compute_personal_records(sessions)
+
+        text = formatting.format_progress_screen(
+            ex["display_name"], sessions, comparison, records, limit=limit, unit=user["unit"]
         )
+
+        png = None
+        if sessions:
+            metric = "повторы" if sessions[-1].is_bodyweight_mode else "e1RM"
+            png = await asyncio.to_thread(
+                charts.render_metric_over_sessions,
+                points[-limit:],
+                f"{ex['display_name']} — {metric}",
+                metric,
+                show_weekly_rate=False,
+            )
+        by_limit[limit] = (text, png)
+        _progress_view_cache[user["telegram_id"]] = (ex_id, fingerprint, by_limit)
 
     kb = (
         keyboards.progress_chart_keyboard(ex_id, limit, origin)

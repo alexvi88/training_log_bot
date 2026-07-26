@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS exercises (
     last_used_at TEXT,
     seeded_from_program INTEGER NOT NULL DEFAULT 0,
     custom_photo_file_id TEXT,
+    description TEXT,
     FOREIGN KEY (primary_group_id) REFERENCES muscle_groups (id)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_exercises_user_name_ci
@@ -280,6 +281,8 @@ async def _migrate_schema() -> None:
         )
     if "custom_photo_file_id" not in exercise_cols:
         await _conn.execute("ALTER TABLE exercises ADD COLUMN custom_photo_file_id TEXT")
+    if "description" not in exercise_cols:
+        await _conn.execute("ALTER TABLE exercises ADD COLUMN description TEXT")
 
     user_cols = await _column_names("users")
     if "hide_warmups" in user_cols:
@@ -863,6 +866,18 @@ async def set_exercise_notes(exercise_id: int, notes: Optional[str]) -> None:
     async with _write_lock:
         await conn().execute(
             "UPDATE exercises SET notes = ? WHERE id = ?", (notes or None, exercise_id)
+        )
+        await conn().commit()
+
+
+async def set_exercise_description(exercise_id: int, description: Optional[str]) -> None:
+    """Store the user's own technique description for an exercise — the same
+    role exercise_descriptions.EXERCISE_DESCRIPTIONS plays for catalog templates,
+    but per-user and editable, since a custom exercise has no template entry to
+    fall back on. Passing None/empty clears it."""
+    async with _write_lock:
+        await conn().execute(
+            "UPDATE exercises SET description = ? WHERE id = ?", (description or None, exercise_id)
         )
         await conn().commit()
 

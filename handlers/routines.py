@@ -166,9 +166,9 @@ async def rt_view(callback: CallbackQuery, state: FSMContext):
 _SOURCE_PICKER_SUMMARY_MAX = 30
 
 
-async def _workout_exercise_summary(workout_id: int) -> str:
-    """Comma-joined exercise names for a workout, in block order and de-duplicated —
-    same source list create_routine_from_workout snapshots into the routine."""
+async def _workout_exercise_names(workout_id: int) -> list[str]:
+    """Exercise names for a workout, in block order and de-duplicated — same
+    source list create_routine_from_workout snapshots into the routine."""
     seen: set[int] = set()
     names: list[str] = []
     for block in await db.list_blocks_for_workout(workout_id):
@@ -177,7 +177,12 @@ async def _workout_exercise_summary(workout_id: int) -> str:
                 continue
             seen.add(be["exercise_id"])
             names.append(be["display_name"])
-    summary = ", ".join(names)
+    return names
+
+
+async def _workout_exercise_summary(workout_id: int) -> str:
+    """Comma-joined, truncated version of _workout_exercise_names for a button label."""
+    summary = ", ".join(await _workout_exercise_names(workout_id))
     if len(summary) > _SOURCE_PICKER_SUMMARY_MAX:
         summary = summary[:_SOURCE_PICKER_SUMMARY_MAX].rstrip() + "…"
     return summary
@@ -196,6 +201,7 @@ async def _show_routine_source_picker(callback: CallbackQuery, state: FSMContext
     has_next = (page + 1) * ROUTINE_SOURCE_PAGE_SIZE < total
     kb = keyboards.routine_source_picker_keyboard(items, page, has_next)
     text = "Из какой тренировки создать программу?" if items else "Нет завершённых тренировок."
+    await state.update_data(routine_source_page=page)
     await ui.safe_edit(callback, text, reply_markup=kb)
 
 
@@ -206,8 +212,43 @@ async def rt_pickw_page(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+async def _show_routine_source_preview(callback: CallbackQuery, workout_id: int) -> None:
+    """Full exercise list of the tapped workout, with a confirm/back choice — the
+    picker's button label is truncated, so this is where the user actually sees
+    what they're about to base a program on."""
+    workout = await db.get_workout(workout_id)
+    if workout is None or workout["user_id"] != callback.from_user.id:
+        await callback.answer("Тренировка не найдена", show_alert=True)
+        return
+    date_label = formatting.format_date_ru(dt.datetime.fromisoformat(workout["started_at"]))
+    names = await _workout_exercise_names(workout_id)
+    lines = [f"📋 <b>{escape(date_label)}</b>", ""]
+    if names:
+        lines.extend(f"{i}. {escape(n)}" for i, n in enumerate(names, start=1))
+    else:
+        lines.append("В тренировке нет упражнений.")
+    lines.append("")
+    lines.append("Создать программу из этой тренировки?")
+    kb = keyboards.routine_source_preview_keyboard(workout_id)
+    await ui.safe_edit(callback, "\n".join(lines), reply_markup=kb, parse_mode="HTML")
+
+
 @router.callback_query(F.data.startswith("rt:pickw:item:"))
 async def rt_pickw_item(callback: CallbackQuery, state: FSMContext):
+    workout_id = int(callback.data.split(":")[3])
+    await _show_routine_source_preview(callback, workout_id)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "rt:pickw:back")
+async def rt_pickw_back(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    await _show_routine_source_picker(callback, state, data.get("routine_source_page", 0))
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("rt:pickw:use:"))
+async def rt_pickw_use(callback: CallbackQuery, state: FSMContext):
     workout_id = int(callback.data.split(":")[3])
     workout = await db.get_workout(workout_id)
     if workout is None or workout["user_id"] != callback.from_user.id:
@@ -353,7 +394,7 @@ async def _rtadd_groups_screen(callback: CallbackQuery, state: FSMContext) -> No
         groups, prefix="rtadd", extra_buttons=[("❌ Отмена", "rtadd:cancel")], show_all=True
     )
     await ui.safe_edit(
-        callback, "Выбери группу мышц или напиши название упражнения для поиска:", reply_markup=kb
+        callback, "Выбери группу мышц или найди упражнение по названию:", reply_markup=kb
     )
 
 

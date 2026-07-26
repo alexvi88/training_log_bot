@@ -1,4 +1,5 @@
 """'🔁 Повторить прошлую' — start a new workout pre-loaded with the last one's plan."""
+import datetime as dt
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -7,6 +8,8 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
 
+import db as dbmod
+import formatting
 import keyboards
 from fsm import WorkoutFlow
 from handlers import workout
@@ -85,6 +88,36 @@ async def test_repeat_picks_a_specific_past_workout(fresh_db, user_id):
     assert await state.get_state() == WorkoutFlow.logging_set
     assert data["open_exercises"] == [bench]
     assert data["planned_blocks"] == [{"exercise_ids": [row]}]
+
+
+@pytest.mark.asyncio
+async def test_repeat_list_keeps_button_labels_short_and_names_in_the_text(fresh_db, user_id):
+    """Long exercise names don't fit into a button label (Telegram truncates/wraps
+    it), so the list only puts a number + date on the button and moves the full,
+    matching numbered exercise list into the message text above it."""
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    a = await db.create_exercise(user_id, "Приседания со штангой на плечах", group_id)
+    b = await db.create_exercise(user_id, "Жим штанги лёжа широким хватом", group_id)
+    wid = await _finished_workout(db, user_id, [a, b])
+
+    state = await _state(user_id)
+    await workout.start_workout(_make_callback(user_id, "menu:start_workout"), state)
+
+    list_cb = _make_callback(user_id, "pick:repeat")
+    await workout._repeat_list_screen(list_cb, state, page=0)
+
+    workout_row = await dbmod.get_workout(wid)
+    expected_date = formatting.format_date_ru(dt.datetime.fromisoformat(workout_row["started_at"]))
+
+    kb = list_cb.bot.send_message.await_args.kwargs["reply_markup"]
+    button = next(b for row in kb.inline_keyboard for b in row if b.callback_data == f"pick:rep:show:{wid}")
+    assert button.text == f"1. {expected_date}"
+
+    text = list_cb.bot.send_message.await_args.kwargs["text"]
+    assert "Приседания со штангой на плечах" in text
+    assert "Жим штанги лёжа широким хватом" in text
+    assert text.startswith("🔁 Выбери тренировку, чтобы повторить её план:")
 
 
 @pytest.mark.asyncio

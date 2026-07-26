@@ -136,7 +136,7 @@ def _sticky_photo_caption(ex) -> str:
     """Exercise name plus its technique steps, if we have them — the same text the
     ℹ️ card shows, minus the equipment/attachment metadata that isn't useful mid-set."""
     caption = f"<b>{escape(ex['display_name'])}</b>"
-    description = exercise_descriptions.get_description(ex["name"])
+    description = exercise_descriptions.effective_description(ex)
     if description:
         caption += f"\n\n{escape(description)}"
     return caption
@@ -661,9 +661,9 @@ async def start_workout(callback: CallbackQuery, state: FSMContext):
 REPEAT_PAGE_SIZE = 6
 
 
-async def _repeat_label(workout) -> str:
-    """Short scannable line for one past workout in the repeat list: date plus the
-    first couple of exercise names."""
+async def _repeat_summary(workout) -> tuple[str, str]:
+    """Date (short — safe as a button label) and full exercise-name list (no width
+    limit in message text, unlike a button) for one past workout in the repeat list."""
     started = dt.datetime.fromisoformat(workout["started_at"])
     date = formatting.format_date_ru(started)
     plan = await db.workout_plan(workout["id"])
@@ -672,27 +672,31 @@ async def _repeat_label(workout) -> str:
         ex = await db.get_exercise(block["exercise_ids"][0])
         if ex:
             names.append(ex["display_name"])
-    if not names:
-        return date
-    summary = ", ".join(names[:2])
-    if len(names) > 2:
-        summary += f" +{len(names) - 2}"
-    return f"{date} · {summary}"
+    return date, ", ".join(names) if names else "—"
 
 
 async def _repeat_list_screen(callback: CallbackQuery, state: FSMContext, page: int):
     """List of the user's recent finished workouts to pick one to repeat, rendered
-    into the live tracker message like the rest of the picker."""
+    into the live tracker message like the rest of the picker.
+
+    Exercise names are long and don't fit into a button label, so buttons only carry
+    a number + date and the matching numbered exercise list goes into the message text.
+    """
     user = await db.get_user(callback.from_user.id)
     data = await state.get_data()
     total = await db.count_workouts(callback.from_user.id)
     workouts = await db.list_workouts(
         callback.from_user.id, limit=REPEAT_PAGE_SIZE, offset=page * REPEAT_PAGE_SIZE
     )
-    items = [{"id": w["id"], "label": await _repeat_label(w)} for w in workouts]
+    items = []
+    lines = []
+    for i, w in enumerate(workouts, start=1 + page * REPEAT_PAGE_SIZE):
+        date, summary = await _repeat_summary(w)
+        items.append({"id": w["id"], "label": f"{i}. {date}"})
+        lines.append(f"{i}. {date} — {summary}")
     has_next = (page + 1) * REPEAT_PAGE_SIZE < total
     kb = keyboards.repeat_list_keyboard(items, page, has_next)
-    hint = "🔁 Выбери тренировку, чтобы повторить её план:"
+    hint = "🔁 Выбери тренировку, чтобы повторить её план:\n\n" + "\n".join(lines)
     await state.update_data(repeat_page=page)
     await _refresh_live(callback.bot, state, user, data["workout_id"], hint, kb)
 
@@ -742,9 +746,8 @@ async def pick_repeat_show(callback: CallbackQuery, state: FSMContext):
     blocks = await view_builder.build_block_views(workout_id, user["e1rm_formula"])
     started = dt.datetime.fromisoformat(workout["started_at"])
     duration_seconds = await view_builder.workout_duration_seconds(workout)
-    summary = formatting.build_workout_summary(
-        started, blocks, workout["note"], show_extra_stats=bool(user["show_extra_stats"]),
-        duration_seconds=duration_seconds,
+    summary = formatting.build_workout_preview(
+        started, blocks, workout["note"], duration_seconds=duration_seconds,
     )
     hint = "🔁 <b>Повторить эту тренировку?</b>\n\n" + summary
     kb = keyboards.repeat_preview_keyboard(workout_id)
@@ -862,7 +865,7 @@ async def _picker_screen_groups(callback: CallbackQuery, state: FSMContext, show
     data = await state.get_data()
     user = await db.get_user(callback.from_user.id)
     groups = await db.list_muscle_groups(callback.from_user.id)
-    hint = "Выбери группу мышц или напиши название упражнения для поиска:"
+    hint = "Выбери группу мышц или найди упражнение по названию:"
     open_ids = data.get("open_exercises") or []
     if open_ids:
         names = [escape((await db.get_exercise(eid))["display_name"]) for eid in open_ids]

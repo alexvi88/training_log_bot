@@ -224,6 +224,27 @@ def test_workout_summary_prev_line_shows_rpe():
     assert "[прошлая: 97.5×8 @8, 97.5×7]" in text
 
 
+def test_build_workout_preview_is_compact_no_1rm():
+    """The 'repeat this workout?' preview should read like the live tracker's
+    already-finished exercises — name plus one comma-joined line of sets — not
+    the full workout-summary style with a [GROUP] tag, bulleted sets, and e1RM."""
+    blocks = [
+        ExerciseBlockView(
+            group_name="грудь", exercise_name="Жим лёжа", sets=[(100.0, 8), (100.0, 7)], exercise_id=1,
+        ),
+        ExerciseBlockView(group_name="спина", exercise_name="Тяга", sets=[], exercise_id=2),
+    ]
+    text = formatting.build_workout_preview(dt.datetime(2026, 7, 17, 10, 0), blocks)
+    lines = text.splitlines()
+
+    assert "<b>Жим лёжа</b>" in lines
+    assert "100×8, 100×7" in lines
+    assert "[ГРУДЬ]" not in text
+    assert "e1RM" not in text
+    assert "  •" not in text
+    assert "<i>подходов нет</i>" in lines  # exercise with no sets logged
+
+
 # ---------- format_pr_detail ----------
 
 
@@ -379,6 +400,28 @@ def test_format_progress_screen_no_count_line_when_history_fits():
     records = analytics.PersonalRecords()
     text = formatting.format_progress_screen("Жим лёжа", sessions, None, records, limit=8)
     assert "Показано" not in text
+
+
+def test_format_progress_screen_delta_scopes_to_selected_period_not_all_time():
+    """A shorter period must show the same delta the chart itself plots for that
+    period (points[-limit:]) — comparing to the very first session ever, no
+    matter which period button is selected, would silently disagree with the
+    chart's own title and mislabel it "с первой тренировки"."""
+    sessions = [
+        _weighted_session(i, f"2026-06-{i:02d}T10:00:00", [(100.0 + i, 8)]) for i in range(1, 11)
+    ]
+    records = analytics.PersonalRecords()
+
+    expected_period_delta = analytics.e1rm(110.0, 8, "epley") - analytics.e1rm(109.0, 8, "epley")
+    text = formatting.format_progress_screen("Жим лёжа", sessions, None, records, limit=2)
+    assert f"e1RM: ↑+{expected_period_delta:.1f}кг за период" in text
+    assert "с первой тренировки" not in text
+
+    # Selecting "Все" (limit covers the whole history) goes back to the
+    # from-the-beginning framing, since the window and the full history now match.
+    expected_all_time_delta = analytics.e1rm(110.0, 8, "epley") - analytics.e1rm(101.0, 8, "epley")
+    text_all = formatting.format_progress_screen("Жим лёжа", sessions, None, records, limit=10)
+    assert f"e1RM: ↑+{expected_all_time_delta:.1f}кг с первой тренировки" in text_all
 
 
 def test_logging_hint_omits_progression_when_disabled():

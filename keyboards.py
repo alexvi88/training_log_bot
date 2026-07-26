@@ -224,6 +224,15 @@ def routine_source_picker_keyboard(workouts, page: int, has_next: bool) -> Inlin
     return b.as_markup()
 
 
+def routine_source_preview_keyboard(workout_id: int) -> InlineKeyboardMarkup:
+    """Confirm using this past workout as the routine source, or go back to the list."""
+    b = InlineKeyboardBuilder()
+    b.button(text="✅ Создать из этой", callback_data=f"rt:pickw:use:{workout_id}")
+    b.button(text="⬅️ К списку", callback_data="rt:pickw:back")
+    b.adjust(1)
+    return b.as_markup()
+
+
 def programs_catalog_keyboard(programs) -> InlineKeyboardMarkup:
     """List of ready-made programs; picking one opens its detail screen."""
     b = InlineKeyboardBuilder()

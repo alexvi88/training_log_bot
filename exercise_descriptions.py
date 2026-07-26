@@ -737,3 +737,11 @@ EXERCISE_DESCRIPTIONS: dict[str, str] = {
 
 def get_description(exercise_name: str) -> str | None:
     return EXERCISE_DESCRIPTIONS.get(exercise_name)
+
+
+def effective_description(ex) -> str | None:
+    """The description to actually show for an exercise row: the user's own
+    text if they wrote one, else the built-in template description for an
+    exact name match (a forked exercise keeps the template's name verbatim,
+    same convention exercise_media.py's EXERCISE_IMAGE_SLUGS relies on)."""
+    return ex["description"] or get_description(ex["name"])

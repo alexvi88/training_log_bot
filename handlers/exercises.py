@@ -71,7 +71,7 @@ def _exercise_list_label(ex) -> str:
     """Marks each exercise button with what its card actually has to show:
     📷 for a reference photo (custom or bundled), 📝 for a text description."""
     has_photo = bool(ex["custom_photo_file_id"] or exercise_media.get_images(ex["name"]))
-    has_description = bool(exercise_descriptions.get_description(ex["name"]))
+    has_description = bool(exercise_descriptions.effective_description(ex))
     marks = ("📷" if has_photo else "") + ("📝" if has_description else "")
     return f"{marks} {ex['display_name']}" if marks else ex["display_name"]
 
@@ -265,18 +265,27 @@ def _exercise_info_text(ex, with_created: bool = True) -> str:
         info.append(f"Хват/насадка: {ex['attachment']}")
     if with_created:
         info.append(f"Создано: {ex['created_at'][:10]}")
-    description = exercise_descriptions.get_description(ex["name"])
+    description = exercise_descriptions.effective_description(ex)
     if description:
         info.append(f"\n{escape(description)}")
     return "\n".join(info)
 
 
 def _exercise_detail_view(ex, with_info: bool = True):
+    if ex["description"]:
+        description_label = "📝 Изменить описание"
+    elif exercise_descriptions.get_description(ex["name"]):
+        # A template default is already shown above — this writes a personal
+        # override, so "Добавить" (as if nothing were there) would be misleading.
+        description_label = "📝 Своё описание"
+    else:
+        description_label = "📝 Добавить описание"
     b = InlineKeyboardBuilder()
     b.button(text="📈 Прогресс", callback_data=f"prog:ex:{ex['id']}:m")
     b.button(text="✏️ Название", callback_data=f"exm:editname:{ex['id']}")
     b.button(text="🗑 Архивировать", callback_data=f"exm:archiveask:{ex['id']}")
     b.button(text="📷 Добавить фото", callback_data=f"exm:addphoto:{ex['id']}")
+    b.button(text=description_label, callback_data=f"exm:editdesc:{ex['id']}")
     b.button(text="⬅️ Назад", callback_data="exm:backlist")
     b.adjust(2)
     text = _exercise_info_text(ex) if with_info else "Управление упражнением:"
@@ -317,7 +326,10 @@ async def _render_exercise_card(callback: CallbackQuery, state: FSMContext, ex_i
 
 
 @router.callback_query(
-    StateFilter(ExerciseManage.picking_exercise, ExerciseManage.editing_name, ExerciseManage.awaiting_photo),
+    StateFilter(
+        ExerciseManage.picking_exercise, ExerciseManage.editing_name,
+        ExerciseManage.editing_description, ExerciseManage.awaiting_photo,
+    ),
     F.data.startswith("exm:ex:"),
 )
 async def exm_pick_exercise(callback: CallbackQuery, state: FSMContext):
@@ -428,8 +440,45 @@ async def exm_name_entered(message: Message, state: FSMContext):
     await message.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
+@router.callback_query(F.data.startswith("exm:editdesc:"))
+async def exm_edit_description(callback: CallbackQuery, state: FSMContext):
+    """Own exercises had nowhere to carry a technique description — only catalog
+    templates did, via the static exercise_descriptions.py dict. This lets a
+    user write one on their own exercise, same as a forked template already shows."""
+    ex_id = int(callback.data.split(":")[2])
+    ex = await db.get_exercise(ex_id)
+    if ex is None or ex["user_id"] != callback.from_user.id:
+        await callback.answer("Упражнение не найдено", show_alert=True)
+        return
+    await state.update_data(exm_exercise_id=ex_id)
+    await state.set_state(ExerciseManage.editing_description)
+    current = f"\n\nТекущее описание:\n<i>{escape(ex['description'])}</i>" if ex["description"] else ""
+    await ui.safe_edit(
+        callback,
+        f"Напиши описание/технику выполнения для «{escape(ex['display_name'])}».{current}\n\n"
+        "Пришли «-», чтобы убрать своё описание.",
+        reply_markup=keyboards.cancel_keyboard(f"exm:ex:{ex_id}"),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.message(StateFilter(ExerciseManage.editing_description))
+async def exm_description_entered(message: Message, state: FSMContext):
+    description = message.text.strip()
+    data = await state.get_data()
+    ex_id = data["exm_exercise_id"]
+    await db.set_exercise_description(ex_id, None if description == "-" else description)
+    await state.set_state(ExerciseManage.picking_exercise)
+    ex = await db.get_exercise(ex_id)
+    text, kb = _exercise_detail_view(ex)
+    await message.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
 @router.callback_query(
-    StateFilter(ExerciseManage.picking_exercise, ExerciseManage.editing_name),
+    StateFilter(
+        ExerciseManage.picking_exercise, ExerciseManage.editing_name, ExerciseManage.editing_description,
+    ),
     F.data == "exm:backlist",
 )
 async def exm_back_to_list(callback: CallbackQuery, state: FSMContext):

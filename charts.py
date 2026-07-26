@@ -15,9 +15,9 @@ from matplotlib.patches import FancyBboxPatch  # noqa: E402
 from analytics import linear_trend  # noqa: E402
 
 
-def _fig_to_png(fig) -> bytes:
+def _fig_to_png(fig, dpi: int = 150) -> bytes:
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
+    fig.savefig(buf, format="png", dpi=dpi, bbox_inches="tight", facecolor=fig.get_facecolor())
     plt.close(fig)
     buf.seek(0)
     return buf.read()
@@ -59,7 +59,11 @@ def render_metric_over_sessions(
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%d.%m"))
     fig.autofmt_xdate()
     ax.grid(True, alpha=0.3)
-    return _fig_to_png(fig)
+    # Lower dpi than the other charts here: this one gets re-rendered and
+    # re-uploaded to Telegram on every period-switch tap, so shaving ~35% off
+    # the PNG (barely visible at this chart's small chat-embedded size) trims
+    # both the encode and the upload time.
+    return _fig_to_png(fig, dpi=100)
 
 
 # Binary marker for the year heatmap: trained that day, or not. No count-based shading —
