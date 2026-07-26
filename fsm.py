@@ -26,6 +26,11 @@ class HistoryFlow(StatesGroup):
     browsing = State()
 
 
+class ProgressFlow(StatesGroup):
+    picking_group = State()
+    picking_exercise = State()
+
+
 class SettingsFlow(StatesGroup):
     menu = State()
 
@@ -45,6 +50,8 @@ class EditWorkoutFlow(StatesGroup):
     awaiting_date = State()
     editing_set = State()
     adding_set = State()
+    adding_exercise_group = State()
+    adding_exercise_pick = State()
 
 
 class AdminFlow(StatesGroup):
@@ -65,6 +72,8 @@ class BodyweightFlow(StatesGroup):
 class RoutineFlow(StatesGroup):
     naming = State()
     renaming = State()
+    adding_exercise_group = State()
+    adding_exercise_pick = State()
 
 
 class ImportFlow(StatesGroup):

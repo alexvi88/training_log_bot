@@ -15,6 +15,7 @@ from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
+import config
 import db
 import formatting
 import keyboards
@@ -145,7 +146,7 @@ async def _show_routine_detail(event, state: FSMContext, routine_id: int) -> Non
         lines.extend(f"{i}. {escape(ex['display_name'])}" for i, ex in enumerate(exercises, start=1))
     else:
         lines.append("В программе нет упражнений (возможно, они были архивированы).")
-    kb = keyboards.routine_detail_keyboard(routine_id)
+    kb = keyboards.routine_detail_keyboard(routine_id, [(ex["id"], ex["display_name"]) for ex in exercises])
     text = "\n".join(lines)
     if isinstance(event, CallbackQuery):
         await ui.safe_edit(event, text, reply_markup=kb, parse_mode="HTML")
@@ -318,3 +319,154 @@ async def rt_start(callback: CallbackQuery, state: FSMContext):
         await state.set_state(WorkoutFlow.picking_group)
         await _picker_screen_groups(callback, state)
     await callback.answer()
+
+
+# ---------- editing a saved routine's exercise list ----------
+#
+# Adding reuses the same shape as the live-workout picker (groups → exercises,
+# with search and template forking) — a different prefix ("rtadd") targeting
+# db.append_routine_exercise instead of opening a live block. Removing is a
+# single tap with no confirmation: unlike deleting the whole program, dropping
+# one exercise is trivially undone with "➕ Добавить упражнение".
+
+@router.callback_query(F.data.startswith("rt:rmex:"))
+async def rt_remove_exercise(callback: CallbackQuery, state: FSMContext):
+    _, _, routine_id_s, re_id_s = callback.data.split(":")
+    routine_id, re_id = int(routine_id_s), int(re_id_s)
+    routine = await _owned_routine(callback, routine_id)
+    if routine is None:
+        return
+    entry = await db.get_routine_exercise(re_id)
+    if entry is None or entry["routine_id"] != routine_id:
+        await callback.answer("Упражнение уже убрано", show_alert=True)
+        await _show_routine_detail(callback, state, routine_id)
+        return
+    await db.remove_routine_exercise(re_id)
+    await callback.answer("Убрал из программы")
+    await _show_routine_detail(callback, state, routine_id)
+
+
+async def _rtadd_groups_screen(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(RoutineFlow.adding_exercise_group)
+    groups = await db.list_muscle_groups(callback.from_user.id)
+    kb = keyboards.groups_keyboard(
+        groups, prefix="rtadd", extra_buttons=[("❌ Отмена", "rtadd:cancel")], show_all=True
+    )
+    await ui.safe_edit(
+        callback, "Выбери группу мышц или напиши название упражнения для поиска:", reply_markup=kb
+    )
+
+
+@router.callback_query(F.data.startswith("rt:addex:"))
+async def rt_add_exercise_start(callback: CallbackQuery, state: FSMContext):
+    routine_id = int(callback.data.split(":")[2])
+    if await _owned_routine(callback, routine_id) is None:
+        return
+    await state.update_data(rtadd_routine_id=routine_id, rtadd_group_id=None, rtadd_page=0)
+    await _rtadd_groups_screen(callback, state)
+    await callback.answer()
+
+
+@router.callback_query(
+    StateFilter(RoutineFlow.adding_exercise_group, RoutineFlow.adding_exercise_pick),
+    F.data == "rtadd:cancel",
+)
+async def rtadd_cancel(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    routine_id = data.get("rtadd_routine_id")
+    await state.set_state(None)
+    if routine_id is not None:
+        await _show_routine_detail(callback, state, routine_id)
+    await callback.answer()
+
+
+async def _rtadd_exercise_list_screen(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(RoutineFlow.adding_exercise_pick)
+    data = await state.get_data()
+    group_id = data.get("rtadd_group_id")
+    page = data.get("rtadd_page", 0)
+    offset = page * config.RECENT_EXERCISES_LIMIT
+    if group_id is None:
+        exercises = await db.list_user_exercises(
+            callback.from_user.id, limit=config.RECENT_EXERCISES_LIMIT, offset=offset
+        )
+        total = await db.count_user_exercises(callback.from_user.id)
+    else:
+        exercises = await db.list_user_exercises_in_group(
+            callback.from_user.id, group_id, limit=config.RECENT_EXERCISES_LIMIT, offset=offset
+        )
+        total = await db.count_user_exercises_in_group(callback.from_user.id, group_id)
+    has_next = offset + len(exercises) < total
+    kb = keyboards.exercises_keyboard(
+        exercises, prefix="rtadd", show_new_button=False, back_cb="back", page=page, has_next=has_next,
+    )
+    text = "Выбери упражнение или напиши название для поиска:" if exercises else "Пусто здесь — напиши название для поиска."
+    await ui.safe_edit(callback, text, reply_markup=kb)
+
+
+@router.callback_query(StateFilter(RoutineFlow.adding_exercise_group), F.data.startswith("rtadd:grp:"))
+async def rtadd_pick_group(callback: CallbackQuery, state: FSMContext):
+    raw = callback.data.split(":")[2]
+    group_id = None if raw == "all" else int(raw)
+    await state.update_data(rtadd_group_id=group_id, rtadd_page=0)
+    await _rtadd_exercise_list_screen(callback, state)
+    await callback.answer()
+
+
+@router.callback_query(StateFilter(RoutineFlow.adding_exercise_pick), F.data.startswith("rtadd:page:"))
+async def rtadd_page(callback: CallbackQuery, state: FSMContext):
+    page = int(callback.data.split(":")[2])
+    await state.update_data(rtadd_page=page)
+    await _rtadd_exercise_list_screen(callback, state)
+    await callback.answer()
+
+
+@router.callback_query(StateFilter(RoutineFlow.adding_exercise_pick), F.data == "rtadd:back")
+async def rtadd_back_to_groups(callback: CallbackQuery, state: FSMContext):
+    await _rtadd_groups_screen(callback, state)
+    await callback.answer()
+
+
+async def _rtadd_finish(event, state: FSMContext, exercise_id: int) -> None:
+    data = await state.get_data()
+    routine_id = data["rtadd_routine_id"]
+    await db.append_routine_exercise(routine_id, exercise_id)
+    await db.touch_exercise_last_used(exercise_id)
+    await state.set_state(None)
+    await _show_routine_detail(event, state, routine_id)
+    if isinstance(event, CallbackQuery):
+        await event.answer("Добавил в программу")
+
+
+@router.callback_query(StateFilter(RoutineFlow.adding_exercise_pick), F.data.startswith("rtadd:ex:"))
+async def rtadd_pick_exercise(callback: CallbackQuery, state: FSMContext):
+    ex_id = int(callback.data.split(":")[2])
+    await _rtadd_finish(callback, state, ex_id)
+
+
+@router.callback_query(
+    StateFilter(RoutineFlow.adding_exercise_group, RoutineFlow.adding_exercise_pick),
+    F.data.startswith("rtadd:tpladd:"),
+)
+async def rtadd_pick_template(callback: CallbackQuery, state: FSMContext):
+    template_id = int(callback.data.split(":")[2])
+    ex_id = await db.fork_exercise_from_template(callback.from_user.id, template_id)
+    await _rtadd_finish(callback, state, ex_id)
+
+
+@router.message(StateFilter(RoutineFlow.adding_exercise_group, RoutineFlow.adding_exercise_pick))
+async def rtadd_search_text(message: Message, state: FSMContext):
+    """Typing while picking what to add searches — own exercises plus catalog
+    templates (forked on tap), same merge as the live-workout picker."""
+    query = message.text.strip()
+    if not query:
+        return
+    results = await db.search_exercises(message.from_user.id, query)
+    templates = await db.search_exercise_templates(message.from_user.id, query)
+    kb = keyboards.exercises_keyboard(results, prefix="rtadd", show_new_button=False, templates=templates)
+    if results or templates:
+        text = f"Результаты поиска «{escape(query)}»:"
+    else:
+        text = f"Ничего не нашлось по «{escape(query)}»."
+    await state.set_state(RoutineFlow.adding_exercise_pick)
+    await message.answer(text, reply_markup=kb, parse_mode="HTML")
