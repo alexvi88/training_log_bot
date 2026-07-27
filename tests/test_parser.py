@@ -7,7 +7,9 @@ import pytest
 
 from parser import (
     EXAMPLES_HINT,
+    MAX_REPS,
     MAX_SETS_PER_LINE,
+    MAX_WEIGHT,
     ParsedSet,
     ParseError,
     parse_ru_date,
@@ -30,6 +32,19 @@ def test_bodyweight_bare_reps():
 def test_bodyweight_zero_reps_rejected():
     with pytest.raises(ParseError, match="больше 0"):
         parse_single_token("0")
+
+
+def test_bodyweight_reps_over_ceiling_rejected():
+    """A dropped decimal point ("8000" meaning "8.0"? a stray extra digit) reads
+    as 8000 reps — implausible for a bodyweight set, and left unchecked it would
+    quietly become an all-time rep record."""
+    with pytest.raises(ParseError, match="Подозрительно много повторов"):
+        parse_single_token(str(MAX_REPS + 1))
+
+
+def test_bodyweight_reps_at_ceiling_is_accepted():
+    result = parse_single_token(str(MAX_REPS))
+    assert result == [ParsedSet(weight=0.0, reps=MAX_REPS, weight_omitted=True)]
 
 
 # ---------- parse_single_token: "x"-style separators ----------
@@ -153,6 +168,33 @@ def test_negative_numbers_are_unparseable():
 def test_zero_reps_rejected_in_weight_form():
     with pytest.raises(ParseError, match="больше 0"):
         parse_single_token("100x0")
+
+
+def test_weight_over_ceiling_rejected():
+    """An extra zero is the commonest numeric typo ("1000 8" meaning "100 8"),
+    and left unchecked it silently becomes a permanent all-time record, unlocks
+    every weight-club achievement, and skews lifetime tonnage — none of which
+    gets undone even after the set is corrected."""
+    with pytest.raises(ParseError, match="Подозрительно большой вес"):
+        parse_single_token(f"{MAX_WEIGHT + 1:.0f} 8")
+
+
+def test_weight_at_ceiling_is_accepted():
+    result = parse_single_token(f"{MAX_WEIGHT:.0f} 8")
+    assert result == [ParsedSet(weight=MAX_WEIGHT, reps=8)]
+
+
+def test_reps_over_ceiling_rejected_in_weight_form():
+    with pytest.raises(ParseError, match="Подозрительно много повторов"):
+        parse_single_token(f"100 {MAX_REPS + 1}")
+
+
+def test_ceilings_apply_to_every_set_in_a_multi_set_token():
+    """"100x8x3" fans out to three ParsedSets — the ceiling has to be checked
+    before fan-out, not just on the first one, or a bad weight/reps would slip
+    through in sets 2 and 3."""
+    with pytest.raises(ParseError, match="Подозрительно большой вес"):
+        parse_single_token(f"{MAX_WEIGHT + 1:.0f}x8x3")
 
 
 def test_count_at_max_boundary_is_accepted():

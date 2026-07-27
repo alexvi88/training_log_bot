@@ -299,3 +299,22 @@ def test_suspicious_weight_warning_exempt_for_bodyweight():
 def test_suspicious_weight_warning_none_without_history():
     assert workout._suspicious_weight_warning(None, today_sets=[(1.0, 1)]) is None
     assert workout._suspicious_weight_warning([(140.0, 6, None)], today_sets=None) is None
+
+
+def test_suspicious_weight_warning_flags_an_extra_digit_too():
+    """The check used to be one-directional — only a suspiciously *low* weight
+    was flagged, so "1400" typed for "140" (parser.MAX_WEIGHT's 1500 ceiling
+    doesn't catch this one, since 1400 is still a "plausible" absolute weight)
+    passed through silently."""
+    last_session = [(140.0, 6, None)]
+    warning = workout._suspicious_weight_warning(last_session, today_sets=[(1400.0, 6)])
+    assert warning is not None
+    assert "1400кг?" in warning
+    assert "140кг" in warning
+
+
+def test_suspicious_weight_warning_silent_for_plausible_progression():
+    """A real jump in working weight — not a typo — shouldn't get flagged just
+    because it's well above last session's."""
+    last_session = [(140.0, 6, None)]
+    assert workout._suspicious_weight_warning(last_session, today_sets=[(200.0, 5)]) is None
