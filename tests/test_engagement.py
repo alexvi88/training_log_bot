@@ -55,22 +55,6 @@ def test_win_back_starts_at_21_then_every_10_days():
     assert engagement.is_win_back_day(None) is False
 
 
-# ---------- usual training weekday ----------
-
-
-def test_usual_weekday_needs_enough_history():
-    few_tuesdays = [d("2026-06-30"), d("2026-07-07")]
-    assert engagement.usual_weekday(few_tuesdays) is None
-
-
-def test_usual_weekday_picks_the_mode():
-    # 6 Tuesdays, 4 Fridays -> Tuesday (weekday() == 1) wins
-    tuesdays = [d(f"2026-06-{day:02d}") for day in (2, 9, 16, 23, 30)]
-    fridays = [d(f"2026-06-{day:02d}") for day in (5, 12, 19, 26)]
-    extra_tuesday = [d("2026-07-07")]
-    dates = tuesdays + fridays + extra_tuesday
-    assert engagement.usual_weekday(dates) == dt.date(2026, 6, 2).weekday()
-
 
 # ---------- plateau ----------
 

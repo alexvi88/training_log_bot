@@ -31,10 +31,6 @@ TRIGGERS = {
     push_texts.SKIP_10: "Ровно 10 дней с последней тренировки",
     push_texts.SKIP_14: "Ровно 14 дней с последней тренировки",
     push_texts.WIN_BACK: "`days_since_last >= 21`, затем каждые 10 дней (21, 31, 41…)",
-    push_texts.TIMING: (
-        "Сегодня — самый частый день тренировок по истории (нужно ≥10 тренировок), "
-        "сегодня ещё не тренировался"
-    ),
     push_texts.PLATEAU: "Вс: тот же рабочий вес 3 тренировки подряд, каждый раз 12+ повторов",
     push_texts.WEEKLY_DIGEST: "Вс, нет активного плато, суммарный тоннаж за 30 дней > 0",
     push_texts.NEWBIE_NUDGE: (
@@ -53,7 +49,6 @@ ORDER = [
     push_texts.SKIP_10,
     push_texts.SKIP_14,
     push_texts.WIN_BACK,
-    push_texts.TIMING,
     push_texts.PLATEAU,
     push_texts.WEEKLY_DIGEST,
     push_texts.NEWBIE_NUDGE,
@@ -67,9 +62,8 @@ RANK_BY_CATEGORY = {
     push_texts.SKIP_10: "2",
     push_texts.SKIP_14: "2",
     push_texts.WIN_BACK: "3",
-    push_texts.TIMING: "4",
-    push_texts.PLATEAU: "5",
-    push_texts.WEEKLY_DIGEST: "6",
+    push_texts.PLATEAU: "4",
+    push_texts.WEEKLY_DIGEST: "5",
     # Not part of the priority chain above — a separate walk pool over users
     # with zero finished workouts, so it never competes with ranks 1-6.
     push_texts.NEWBIE_NUDGE: "—",
