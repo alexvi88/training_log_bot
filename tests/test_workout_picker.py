@@ -98,7 +98,7 @@ async def test_a_logged_set_typed_as_a_name_asks_for_confirmation(fresh_db, user
     assert await db.count_user_exercises(user_id) == 0
     assert (await state.get_data())["pending_long_exercise_name"] == "50 12"
     hint = message.bot.send_message.await_args.kwargs["text"]
-    assert "вес и повторы" in hint
+    assert "ни одной буквы" in hint
 
 
 async def test_confirming_a_long_exercise_name_creates_it(fresh_db, user_id):

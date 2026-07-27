@@ -467,7 +467,7 @@ async def test_a_logged_set_typed_as_a_name_asks_for_confirmation(fresh_db, user
     message.reply.assert_awaited_once()
     assert (await state.get_data())["exm_pending_long_name"] == "50 12"
     text = message.reply.await_args.args[0]
-    assert "вес и повторы" in text
+    assert "ни одной буквы" in text
 
 
 async def test_confirming_a_long_name_creates_the_exercise(fresh_db, user_id):

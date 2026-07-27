@@ -15,7 +15,6 @@ import db
 import exercise_descriptions
 import exercise_media
 import keyboards
-import parser
 import ui
 from fsm import ExerciseManage
 
@@ -250,12 +249,12 @@ async def _exm_finish_new_exercise_name(answerer, state: FSMContext, user_id: in
 def _suspicious_name_reason(name: str) -> str | None:
     """None if `name` looks like a plausible exercise name; otherwise a short
     Russian phrase for the "are you sure?" prompt explaining why it doesn't —
-    either a stray message (too long) or an actual logged set ("50 12") typed
-    while the bot happened to be waiting for a name instead."""
+    either a stray message (too long) or something with no letters at all
+    ("50 12", a logged set typed while the bot was waiting for a name instead)."""
     if len(name) > config.MAX_EXERCISE_NAME_LENGTH:
         return f"длинновато для упражнения ({len(name)} символов)"
-    if parser.looks_like_set_input(name):
-        return "похоже на вес и повторы, а не на название упражнения"
+    if not any(ch.isalpha() for ch in name):
+        return "в названии нет ни одной буквы — не похоже на упражнение"
     return None
 
 
