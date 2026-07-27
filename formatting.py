@@ -176,6 +176,55 @@ def format_date_short(d: dt.datetime) -> str:
     return d.strftime("%d.%m")
 
 
+HISTORY_LINE_MAX = 84
+
+
+def _history_summary(names: list[str]) -> str:
+    """Exercise names joined to fit one line, cut on a name boundary rather than
+    mid-word — "…, leg p…" reads like a bug, "… +2" reads like a summary."""
+    kept: list[str] = []
+    used = 0
+    for name in names:
+        extra = len(name) + (2 if kept else 0)
+        if kept and used + extra > HISTORY_LINE_MAX:
+            break
+        kept.append(name)
+        used += extra
+    summary = ", ".join(kept)
+    if len(kept) < len(names):
+        summary += f" +{len(names) - len(kept)}"
+    return summary
+
+
+def build_history_list(
+    entries: list[tuple[dt.datetime, list[str], int]],
+    header: str = "📚 <b>История тренировок</b>",
+    footer: str = "<i>Напиши название упражнения, чтобы найти тренировку с ним.</i>",
+    empty: str = "Пока нет завершённых тренировок.",
+) -> str:
+    """The history list's body: date + set count, then what was in that session.
+
+    The exercise names live here rather than on the buttons because real ones
+    ("conventional deadlift", "abs - pull down block") run 20-30 characters —
+    two of them already overflow a button label, while the message body has
+    thousands of characters going spare.
+    """
+    if not entries:
+        return empty
+    lines = [header]
+    for started, names, set_count in entries:
+        head = format_date_ru(started)
+        if set_count:
+            head += f" · {set_count} {plural_ru(set_count, ('сет', 'сета', 'сетов'))}"
+        lines.append("")
+        lines.append(f"<b>{head}</b>")
+        lines.append(f"<i>{escape(_history_summary(names))}</i>" if names else "<i>пусто</i>")
+    if footer:
+        lines.append("")
+        lines.append(footer)
+    return "\n".join(lines)
+
+
 def _delta_arrow(delta: float) -> str:
     return "↑" if delta > 0 else ("↓" if delta < 0 else "→")
 

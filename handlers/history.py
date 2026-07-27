@@ -36,18 +36,19 @@ async def show_history_list(callback: CallbackQuery, state: FSMContext, page: in
     user_id = callback.from_user.id
     total = await db.count_workouts(user_id)
     workouts = await db.list_workouts(user_id, limit=HISTORY_PAGE_SIZE, offset=page * HISTORY_PAGE_SIZE)
+    contents = await db.list_workout_contents([w["id"] for w in workouts])
     items = []
+    entries = []
     for w in workouts:
         started = dt.datetime.fromisoformat(w["started_at"])
+        names, set_count = contents.get(w["id"], ([], 0))
         items.append({"id": w["id"], "label": formatting.format_date_ru(started)})
+        entries.append((started, names, set_count))
     has_next = (page + 1) * HISTORY_PAGE_SIZE < total
     kb = keyboards.history_list_keyboard(items, page, has_next)
-    text = (
-        "📚 История тренировок:\n<i>Напиши название упражнения, чтобы найти тренировку с ним.</i>"
-        if items
-        else "Пока нет завершённых тренировок."
+    await ui.safe_edit(
+        callback, formatting.build_history_list(entries), reply_markup=kb, parse_mode="HTML"
     )
-    await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML")
     await callback.answer()
 
 
@@ -65,18 +66,20 @@ async def hist_search(message: Message, state: FSMContext):
     if not query:
         return
     workouts = await db.search_workouts_by_exercise(message.from_user.id, query)
-    items = [
-        {
-            "id": w["id"],
-            "label": formatting.format_date_ru(dt.datetime.fromisoformat(w["started_at"])),
-        }
-        for w in workouts
-    ]
+    contents = await db.list_workout_contents([w["id"] for w in workouts])
+    items = []
+    entries = []
+    for w in workouts:
+        started = dt.datetime.fromisoformat(w["started_at"])
+        names, set_count = contents.get(w["id"], ([], 0))
+        items.append({"id": w["id"], "label": formatting.format_date_ru(started)})
+        entries.append((started, names, set_count))
     kb = keyboards.history_list_keyboard(items, page=0, has_next=False)
-    text = (
-        f"🔎 Тренировки с «{escape(query)}»: {len(items)}"
-        if items
-        else f"🔎 Ничего не нашёл по «{escape(query)}»."
+    text = formatting.build_history_list(
+        entries,
+        header=f"🔎 <b>Тренировки с «{escape(query)}»: {len(entries)}</b>",
+        footer="",
+        empty=f"🔎 Ничего не нашёл по «{escape(query)}».",
     )
     await message.answer(text, reply_markup=kb, parse_mode="HTML")
 

@@ -150,7 +150,7 @@ def parse_bodyweight(text: str) -> float:
 _DATE_RE = re.compile(r"^(?P<d>\d{1,2})[.\-/](?P<m>\d{1,2})[.\-/](?P<y>\d{2,4})$")
 
 
-def parse_ru_date(text: str) -> dt.date:
+def parse_ru_date(text: str, today: dt.date | None = None) -> dt.date:
     raw = text.strip()
     match = _DATE_RE.match(raw)
     if not match:
@@ -162,6 +162,9 @@ def parse_ru_date(text: str) -> dt.date:
         date = dt.date(year, month, day)
     except ValueError:
         raise ParseError("Такой даты не существует") from None
-    if date > dt.date.today():
+    # today is passed in by callers that know the user's timezone — at the far
+    # ends of the world the server's date is a day off, and typing your own
+    # today's date shouldn't be rejected as "в будущем".
+    if date > (today or dt.date.today()):
         raise ParseError("Дата в будущем — для прошлой тренировки нужна дата не позже сегодня")
     return date

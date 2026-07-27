@@ -14,6 +14,7 @@ import config
 import db
 import formatting
 import keyboards
+import timeutil
 import ui
 from fsm import EditWorkoutFlow
 from parser import ParseError, parse_ru_date, parse_sets_line, parse_single_token
@@ -503,11 +504,11 @@ async def editwex_search_text(message: Message, state: FSMContext):
 @router.callback_query(F.data == "editw:date")
 async def editw_date_prompt(callback: CallbackQuery, state: FSMContext):
     await state.set_state(EditWorkoutFlow.awaiting_date)
-    today = dt.date.today()
+    today = timeutil.user_today(await db.get_user(callback.from_user.id))
     await ui.safe_edit(
         callback,
         "Выбери новую дату в календаре или напиши в формате дд.мм.гггг:",
-        reply_markup=keyboards.calendar_keyboard("editwd", today.year, today.month),
+        reply_markup=keyboards.calendar_keyboard("editwd", today.year, today.month, today=today),
     )
     await callback.answer()
 
@@ -515,9 +516,10 @@ async def editw_date_prompt(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(StateFilter(EditWorkoutFlow.awaiting_date), F.data.startswith("editwd:cal:"))
 async def editw_date_cal_nav(callback: CallbackQuery, state: FSMContext):
     year, month = (int(x) for x in callback.data.split(":")[2].split("-"))
+    today = timeutil.user_today(await db.get_user(callback.from_user.id))
     with suppress(TelegramBadRequest):
         await callback.message.edit_reply_markup(
-            reply_markup=keyboards.calendar_keyboard("editwd", year, month)
+            reply_markup=keyboards.calendar_keyboard("editwd", year, month, today=today)
         )
     await callback.answer()
 
@@ -564,7 +566,9 @@ async def editw_date_calendar_pick(callback: CallbackQuery, state: FSMContext):
 @router.message(StateFilter(EditWorkoutFlow.awaiting_date))
 async def editw_date_entered(message: Message, state: FSMContext):
     try:
-        new_date = parse_ru_date(message.text)
+        new_date = parse_ru_date(
+            message.text, today=timeutil.user_today(await db.get_user(message.from_user.id))
+        )
     except ParseError as e:
         await message.reply(e.message)
         return

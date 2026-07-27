@@ -1030,6 +1030,46 @@ async def list_workouts(
     return await cur.fetchall()
 
 
+async def list_workout_contents(workout_ids: list[int]) -> dict[int, tuple[list[str], int]]:
+    """{workout_id: ([exercise names in block order], total set count)} for a page
+    of workouts, in two queries rather than a couple per workout.
+
+    Feeds the history list, where the exercise names go in the message body —
+    they're far too long for button labels.
+    """
+    if not workout_ids:
+        return {}
+    placeholders = ",".join("?" * len(workout_ids))
+
+    cur = await conn().execute(
+        "SELECT wb.workout_id, be.exercise_id, e.display_name "
+        "FROM workout_blocks wb "
+        "JOIN block_exercises be ON be.block_id = wb.id "
+        "JOIN exercises e ON e.id = be.exercise_id "
+        f"WHERE wb.workout_id IN ({placeholders}) "
+        "ORDER BY wb.workout_id, wb.order_index, be.order_in_block",
+        workout_ids,
+    )
+    names: dict[int, list[str]] = {}
+    seen: dict[int, set[int]] = {}
+    for r in await cur.fetchall():
+        wid = r["workout_id"]
+        if r["exercise_id"] in seen.setdefault(wid, set()):
+            continue
+        seen[wid].add(r["exercise_id"])
+        names.setdefault(wid, []).append(r["display_name"])
+
+    cur = await conn().execute(
+        "SELECT wb.workout_id, COUNT(*) AS n FROM sets s "
+        "JOIN workout_blocks wb ON wb.id = s.block_id "
+        f"WHERE wb.workout_id IN ({placeholders}) GROUP BY wb.workout_id",
+        workout_ids,
+    )
+    counts = {r["workout_id"]: r["n"] for r in await cur.fetchall()}
+
+    return {wid: (names.get(wid, []), counts.get(wid, 0)) for wid in workout_ids}
+
+
 async def search_workouts_by_exercise(user_id: int, query: str, limit: int = 20) -> list[aiosqlite.Row]:
     """Finished workouts containing an exercise whose name matches `query`,
     most recent first — the "в какой тренировке был жим" lookup, which the
@@ -1741,14 +1781,20 @@ async def tonnage_since(user_id: int, since_date: str) -> float:
     return total
 
 
-async def list_engagement_eligible_user_ids() -> list[int]:
-    """Users with a finished workout who haven't turned pushes off — the daily job's walk pool."""
+async def list_engagement_eligible_user_ids() -> list[tuple[int, int]]:
+    """(telegram_id, tz_offset) for users with a finished workout who haven't
+    turned pushes off — the daily job's walk pool.
+
+    The offset comes along because the job now runs hourly and sends to each user
+    when it's ENGAGEMENT_HOUR *for them*; without it everyone got their "evening"
+    push at the server's evening.
+    """
     cur = await conn().execute(
-        "SELECT DISTINCT w.user_id FROM workouts w "
+        "SELECT DISTINCT w.user_id, u.tz_offset FROM workouts w "
         "JOIN users u ON u.telegram_id = w.user_id "
         "WHERE w.status = 'finished' AND u.pushes_enabled = 1"
     )
-    return [r["user_id"] for r in await cur.fetchall()]
+    return [(r["user_id"], r["tz_offset"]) for r in await cur.fetchall()]
 
 
 async def list_newbie_user_ids() -> list[tuple[int, str]]:
@@ -1757,14 +1803,15 @@ async def list_newbie_user_ids() -> list[tuple[int, str]]:
     Disjoint from `list_engagement_eligible_user_ids` by construction (that one requires
     a finished workout, this one requires the absence of one), so a user is only ever
     walked by one of the two daily loops. Returns `created_at` alongside the id since
-    the nudge is timed off signup date, not off a last-workout date these users don't have.
+    the nudge is timed off signup date, not off a last-workout date these users don't have,
+    and `tz_offset` so the send lands at the user's own evening (see the engagement job).
     """
     cur = await conn().execute(
-        "SELECT u.telegram_id, u.created_at FROM users u "
+        "SELECT u.telegram_id, u.created_at, u.tz_offset FROM users u "
         "WHERE u.pushes_enabled = 1 AND NOT EXISTS ("
         "SELECT 1 FROM workouts w WHERE w.user_id = u.telegram_id AND w.status = 'finished')"
     )
-    return [(r["telegram_id"], r["created_at"]) for r in await cur.fetchall()]
+    return [(r["telegram_id"], r["created_at"], r["tz_offset"]) for r in await cur.fetchall()]
 
 
 async def get_rotation_bag(telegram_id: int, category: str) -> list[int]:
