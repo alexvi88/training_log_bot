@@ -6,6 +6,7 @@ import logging
 import random
 import time
 from contextlib import suppress
+from html import escape
 from typing import Optional
 
 from aiogram import F, Router
@@ -32,6 +33,9 @@ HISTORY_LIMIT = 12
 # Telegram обрезает сообщения на 4096 символах; режем с запасом.
 TG_CHUNK = 4000
 
+# С какого остатка начинаем показывать, сколько вопросов осталось на сегодня.
+_QUOTA_WARN_AT = 3
+
 # Лимит xAI на размер одного изображения (см. xai_sdk.chat.image).
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 
@@ -53,6 +57,11 @@ INTRO_TEXT = (
     "• «Сколько белка есть, чтобы расти?»\n\n"
     "Пиши вопрос 👇 (можно голосом — жми на 🎤)"
 )
+
+# Shown instead of the full intro when returning to a conversation that's already
+# going — repeating the whole "привет, вот что я умею" would read as if the
+# trainer had forgotten the last few messages.
+RESUME_TEXT = "🤖 <b>ТРЕНЕР НА СВЯЗИ.</b> Продолжаем — пиши вопрос 👇"
 
 # Пользователи, чей вопрос сейчас обрабатывается — защита от параллельных запросов.
 _busy: set[int] = set()
@@ -173,9 +182,13 @@ async def menu_ai(callback: CallbackQuery, state: FSMContext):
         )
         return
     await state.set_state(AITrainerFlow.chatting)
-    await state.update_data(ai_history=[])
+    # The conversation is deliberately NOT cleared here: stepping out to look at
+    # a workout and coming back used to reset the trainer to its intro with no
+    # memory of what was just discussed.
+    data = await state.get_data()
+    text = INTRO_TEXT if not data.get("ai_history") else RESUME_TEXT
     await ui.safe_edit(
-        callback, INTRO_TEXT, reply_markup=await ai_keyboard(callback.from_user.id), parse_mode="HTML"
+        callback, text, reply_markup=await ai_keyboard(callback.from_user.id), parse_mode="HTML"
     )
     await callback.answer()
 
@@ -269,7 +282,8 @@ async def _handle_question(
         await message.reply("Секунду, ещё думаю над прошлым вопросом 😅")
         return
 
-    if await db.get_ai_question_count_today(user_id) >= config.AI_QUESTION_DAILY_LIMIT:
+    asked_today = await db.get_ai_question_count_today(user_id)
+    if asked_today >= config.AI_QUESTION_DAILY_LIMIT:
         await message.reply(
             "На сегодня лимит вопросов исчерпан 😮‍💨 Дай тренеру передохнуть — возвращайся завтра."
         )
@@ -278,7 +292,8 @@ async def _handle_question(
     data = await state.get_data()
     history = data.get("ai_history", [])
 
-    await db.increment_ai_question_count(user_id)
+    # The daily counter is charged only once there's an answer to show for it —
+    # a provider outage shouldn't cost the user one of their questions.
     _busy.add(user_id)
     running_text = _pick(RUNNING_REPLIES)
     placeholder = await message.answer(running_text)
@@ -311,6 +326,12 @@ async def _handle_question(
             await running_task
         _busy.discard(user_id)
 
+    await db.increment_ai_question_count(user_id)
+    # Warn before the wall, not at it — the old behaviour only ever mentioned the
+    # limit by refusing.
+    left = config.AI_QUESTION_DAILY_LIMIT - (asked_today + 1)
+    quota_note = f"\n\n<i>Осталось вопросов сегодня: {left}</i>" if 0 < left <= _QUOTA_WARN_AT else ""
+
     history = (
         history
         + [
@@ -320,10 +341,9 @@ async def _handle_question(
     )[-HISTORY_LIMIT:]
     await state.update_data(ai_history=history)
 
-    # Full, permanent log — separate from the live window above, which is
-    # capped and wiped whenever the user re-enters the AI-trainer (menu:ai).
-    # Lets the model pull it back via the get_full_chat_history tool if a
-    # later question references it.
+    # Full, permanent log — separate from the live window above, which is capped
+    # (and lost on a restart, unlike this). Lets the model pull it back via the
+    # get_full_chat_history tool if a later question references it.
     await db.add_ai_chat_message(user_id, "user", history_question)
     await db.add_ai_chat_message(user_id, "assistant", answer)
 
@@ -333,6 +353,8 @@ async def _handle_question(
         is_last = i == len(chunks) - 1
         markup = reply_markup if is_last else None
         html_chunk = formatting.markdown_bold_to_html(chunk)
+        if is_last:
+            html_chunk += quota_note
         if i == 0:
             try:
                 await placeholder.edit_text(html_chunk, parse_mode="HTML", reply_markup=markup)
@@ -407,4 +429,8 @@ async def ai_voice_question(message: Message, state: FSMContext):
         await message.reply("🤐 Не удалось разобрать речь, попробуй ещё раз.")
         return
 
+    # Echo what was heard: on a misheard question the answer otherwise looks like
+    # the trainer hallucinating, with nothing pointing at the transcription. Set
+    # logging already does this ("🎙 Записал: …").
+    await message.reply(f"🎙 <i>{escape(question)}</i>", parse_mode="HTML")
     await _handle_question(message, state, question, history_question=question)

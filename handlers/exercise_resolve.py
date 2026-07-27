@@ -21,7 +21,9 @@ router = Router(name="exercise_resolve")
 
 async def start(event, state: FSMContext, names: list[str]) -> None:
     distinct = list(dict.fromkeys(n for n in names if n))
-    await state.update_data(resolve_pending=distinct, resolve_resolved={})
+    await state.update_data(
+        resolve_pending=distinct, resolve_resolved={}, resolve_total=len(distinct)
+    )
     await _next(event, state)
 
 
@@ -47,11 +49,14 @@ async def _next(event, state: FSMContext) -> None:
     await state.update_data(resolve_current_name=name)
     await state.set_state(ResolveFlow.picking)
     candidates = await db.search_exercises(event.from_user.id, name)
+    total = data.get("resolve_total") or len(pending)
+    position = total - len(pending) + 1
     text = (
-        f"Не нашёл упражнение «{name}» в твоём списке.\n"
+        f"Упражнение {position} из {total}.\n"
+        f"Не нашёл «{name}» в твоём списке.\n"
         "Выбери похожее, создай новое, или напиши другое название для поиска:"
     )
-    kb = keyboards.exercise_resolve_keyboard(candidates, name, "resolve")
+    kb = keyboards.exercise_resolve_keyboard(candidates, name, "resolve", remaining=len(pending) - 1)
     await _render(event, text, kb)
 
 
@@ -105,6 +110,31 @@ async def resolve_pick_group(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+_BULK_GROUP_NAME = "Другое"
+
+
+@router.callback_query(StateFilter(ResolveFlow.picking), F.data == "resolve:createall")
+async def resolve_create_all(callback: CallbackQuery, state: FSMContext):
+    """Create every remaining unmatched name as-is, under «Другое».
+
+    The per-name flow costs a pick plus a muscle-group choice each; on a foreign
+    CSV with dozens of new names that's the difference between importing and
+    giving up. The group can be changed later in ⚙️ Упражнения.
+    """
+    data = await state.get_data()
+    pending = list(data.get("resolve_pending") or [])
+    resolved = dict(data.get("resolve_resolved") or {})
+    groups = await db.list_muscle_groups(callback.from_user.id)
+    fallback = next((g for g in groups if g["name"] == _BULK_GROUP_NAME), None) or groups[0]
+    for name in pending:
+        ex_id = await db.create_exercise(callback.from_user.id, name, fallback["id"])
+        await db.touch_exercise_last_used(ex_id)
+        resolved[name] = ex_id
+    await state.update_data(resolve_resolved=resolved, resolve_pending=[])
+    await callback.answer(f"Создал {len(pending)} — группа «{fallback['name']}»")
+    await _next(callback, state)
+
+
 @router.callback_query(StateFilter(ResolveFlow.picking, ResolveFlow.picking_new_group), F.data == "resolve:cancelall")
 async def resolve_cancel_all(callback: CallbackQuery, state: FSMContext):
     await state.clear()
@@ -121,7 +151,8 @@ async def resolve_search_text(message: Message, state: FSMContext):
     data = await state.get_data()
     name = data["resolve_current_name"]
     candidates = await db.search_exercises(message.from_user.id, query)
-    kb = keyboards.exercise_resolve_keyboard(candidates, name, "resolve")
+    remaining = max(len(data.get("resolve_pending") or []) - 1, 0)
+    kb = keyboards.exercise_resolve_keyboard(candidates, name, "resolve", remaining=remaining)
     if candidates:
         text = f"Результаты поиска «{query}» для «{name}»:"
     else:

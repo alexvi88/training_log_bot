@@ -21,9 +21,8 @@ from fsm import ExerciseManage
 router = Router(name="exercises")
 
 
-async def show_exercise_groups(callback: CallbackQuery, state: FSMContext):
-    await state.set_state(ExerciseManage.picking_group)
-    groups = await db.list_muscle_groups(callback.from_user.id)
+async def _groups_payload(user_id: int):
+    groups = await db.list_muscle_groups(user_id)
     b = InlineKeyboardBuilder()
     for g in groups:
         b.button(text=g["name"], callback_data=f"exm:grp:{g['id']}")
@@ -31,7 +30,13 @@ async def show_exercise_groups(callback: CallbackQuery, state: FSMContext):
     b.button(text="➕ Новая группа", callback_data="exm:newgroup")
     b.button(text="⬅️ Назад", callback_data="exm:back")
     b.adjust(2)
-    await ui.safe_edit(callback, "⚙️ Упражнения — выбери группу мышц:", reply_markup=b.as_markup())
+    return "⚙️ Упражнения — выбери группу мышц:", b.as_markup()
+
+
+async def show_exercise_groups(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(ExerciseManage.picking_group)
+    text, kb = await _groups_payload(callback.from_user.id)
+    await ui.safe_edit(callback, text, reply_markup=kb)
     await callback.answer()
 
 
@@ -107,10 +112,12 @@ async def _show_exercise_list(callback: CallbackQuery, state: FSMContext):
         nav.append(InlineKeyboardButton(text="➡️", callback_data=f"exm:page:{page + 1}"))
     if nav:
         b.row(*nav)
-    if group is not None:
-        b.row(InlineKeyboardButton(text="➕ Новое упражнение", callback_data="exm:newex"))
-        if group["user_id"] is not None:
-            b.row(InlineKeyboardButton(text="🗑 Архивировать группу", callback_data=f"exm:archivegrpask:{group_id}"))
+    # Offered under "📋 Все" too: not having it there made that screen a dead end
+    # for anyone who browsed all exercises, didn't find theirs, and had no way to
+    # add it without backing out and guessing a group.
+    b.row(InlineKeyboardButton(text="➕ Новое упражнение", callback_data="exm:newex"))
+    if group is not None and group["user_id"] is not None:
+        b.row(InlineKeyboardButton(text="🗑 Архивировать группу", callback_data=f"exm:archivegrpask:{group_id}"))
     b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="exm:backgroups"))
     title = group["name"] if group is not None else "Все упражнения"
     title_html = f"<b>{escape(title.upper())}</b>"
@@ -129,11 +136,16 @@ async def exm_back_to_groups(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(StateFilter(ExerciseManage.picking_exercise), F.data == "exm:newex")
 async def exm_new_exercise(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    has_group = data.get("exm_group_id") is not None
     await state.set_state(ExerciseManage.creating_exercise_name)
+    text = (
+        "Напиши название нового упражнения или выбери из шаблонов:"
+        if has_group
+        else "Напиши название нового упражнения — группу мышц выберешь следом:"
+    )
     await ui.safe_edit(
-        callback,
-        "Напиши название нового упражнения или выбери из шаблонов:",
-        reply_markup=keyboards.new_exercise_entry_keyboard("exm"),
+        callback, text, reply_markup=keyboards.new_exercise_entry_keyboard("exm", show_templates=has_group)
     )
     await callback.answer()
 
@@ -158,8 +170,12 @@ async def exm_new_back(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(StateFilter(ExerciseManage.creating_exercise_name), F.data == "exm:cancel")
+@router.callback_query(
+    StateFilter(ExerciseManage.creating_exercise_name, ExerciseManage.new_exercise_group),
+    F.data == "exm:cancel",
+)
 async def exm_new_cancel(callback: CallbackQuery, state: FSMContext):
+    await state.update_data(exm_new_name=None)
     await state.set_state(ExerciseManage.picking_exercise)
     await _show_exercise_list(callback, state)
 
@@ -213,12 +229,46 @@ async def exm_new_exercise_name_entered(message: Message, state: FSMContext):
         await message.reply("Название не может быть пустым")
         return
     data = await state.get_data()
-    ex_id = await db.create_exercise(message.from_user.id, name, data["exm_group_id"])
+    group_id = data.get("exm_group_id")
+    if group_id is None:
+        # Reached from "📋 Все", where no group is selected — ask for it now that
+        # the name is known, instead of refusing to offer creation at all.
+        await state.update_data(exm_new_name=name)
+        await state.set_state(ExerciseManage.new_exercise_group)
+        groups = await db.list_muscle_groups(message.from_user.id)
+        kb = keyboards.groups_keyboard(
+            groups, prefix="exmnewgrp", extra_buttons=[("❌ Отмена", "exm:cancel")]
+        )
+        await message.answer(
+            f"«{escape(name)}» — выбери группу мышц:", reply_markup=kb, parse_mode="HTML"
+        )
+        return
+    ex_id = await db.create_exercise(message.from_user.id, name, group_id)
     await state.update_data(exm_exercise_id=ex_id)
     await state.set_state(ExerciseManage.picking_exercise)
     ex = await db.get_exercise(ex_id)
     text, kb = _exercise_detail_view(ex)
     await message.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
+@router.callback_query(
+    StateFilter(ExerciseManage.new_exercise_group), F.data.startswith("exmnewgrp:grp:")
+)
+async def exm_new_exercise_group_picked(callback: CallbackQuery, state: FSMContext):
+    group_id = int(callback.data.split(":")[2])
+    data = await state.get_data()
+    name = data.get("exm_new_name")
+    if not name:
+        await callback.answer("Название потерялось, начни заново", show_alert=True)
+        await show_exercise_groups(callback, state)
+        return
+    ex_id = await db.create_exercise(callback.from_user.id, name, group_id)
+    await state.update_data(exm_exercise_id=ex_id, exm_new_name=None)
+    await state.set_state(ExerciseManage.picking_exercise)
+    ex = await db.get_exercise(ex_id)
+    text, kb = _exercise_detail_view(ex)
+    await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML")
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("exm:archivegrpask:"))
@@ -288,7 +338,14 @@ def _exercise_detail_view(ex, with_info: bool = True):
     b.button(text=description_label, callback_data=f"exm:editdesc:{ex['id']}")
     b.button(text="⬅️ Назад", callback_data="exm:backlist")
     b.adjust(2)
-    text = _exercise_info_text(ex) if with_info else "Управление упражнением:"
+    # Even when the details went out as a photo caption, the button screen keeps
+    # the name: the photo can scroll out of view, and a bare "Управление
+    # упражнением:" doesn't say which exercise the buttons act on.
+    text = (
+        _exercise_info_text(ex)
+        if with_info
+        else f"<b>{escape(ex['display_name'])}</b>\nУправление упражнением:"
+    )
     return text, b.as_markup()
 
 
@@ -385,8 +442,6 @@ async def exm_search_text(message: Message, state: FSMContext):
     query = message.text.strip()
     if not query:
         return
-    data = await state.get_data()
-    group_id = data.get("exm_group_id")
     results = await db.search_exercises(message.from_user.id, query)
     templates = await db.search_exercise_templates(message.from_user.id, query)
     b = InlineKeyboardBuilder()
@@ -394,8 +449,7 @@ async def exm_search_text(message: Message, state: FSMContext):
     items += [(f"exm:tpladd:{t['id']}", f"📋 {t['display_name']}") for t in templates]
     for row in keyboards.named_buttons(items):
         b.row(*row)
-    if group_id is not None:
-        b.row(InlineKeyboardButton(text="➕ Новое упражнение", callback_data="exm:newex"))
+    b.row(InlineKeyboardButton(text="➕ Новое упражнение", callback_data="exm:newex"))
     b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="exm:backlist"))
     text = (
         f"Результаты поиска «{escape(query)}»:" if (results or templates)
@@ -537,15 +591,9 @@ async def exm_new_group_entered(message: Message, state: FSMContext):
         await message.reply("Название не может быть пустым")
         return
     await db.create_muscle_group(message.from_user.id, name)
-    await message.answer(f"Группа «{name}» создана.")
-    fake_cb_message = await message.answer("⚙️ Упражнения")
-    groups = await db.list_muscle_groups(message.from_user.id)
-    b = InlineKeyboardBuilder()
-    for g in groups:
-        b.button(text=g["name"], callback_data=f"exm:grp:{g['id']}")
-    b.button(text="📋 Все", callback_data="exm:grp:all")
-    b.button(text="➕ Новая группа", callback_data="exm:newgroup")
-    b.button(text="⬅️ Назад", callback_data="exm:back")
-    b.adjust(2)
-    await fake_cb_message.edit_text("⚙️ Упражнения — выбери группу мышц:", reply_markup=b.as_markup())
+    # One screen, not three: the group list itself shows the new group, so the
+    # separate "Группа «X» создана." and the placeholder it used to edit were
+    # both just litter left in the chat.
+    text, kb = await _groups_payload(message.from_user.id)
+    await message.answer(text, reply_markup=kb)
     await state.set_state(ExerciseManage.picking_group)

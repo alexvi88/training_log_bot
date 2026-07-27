@@ -727,6 +727,12 @@ def build_bodyweight_screen(logs: list, unit: str = "kg", period_logs: list | No
     logs: all rows with `weight` and `logged_at`, ascending by date (as
     db.list_bodyweight_logs returns). period_logs: the subset to list
     (defaults to `logs`) — the caller windows this by the selected period.
+
+    The entry list is trimmed to fit CAPTION_LIMIT: this text is sent as a photo
+    caption, and an over-long one doesn't truncate — safe_edit_photo has already
+    deleted the previous screen by the time the send fails, so the whole screen
+    would vanish from the chat. Same guard, and same reason, as
+    format_progress_screen.
     """
     u = UNIT_LABELS.get(unit, "кг")
     if not logs:
@@ -737,23 +743,36 @@ def build_bodyweight_screen(logs: list, unit: str = "kg", period_logs: list | No
     latest = logs[-1]
     latest_weight = latest["weight"]
     d = dt.datetime.fromisoformat(latest["logged_at"])
-    lines = [
+    n = plural_ru(len(logs), ("запись", "записи", "записей"))
+    head = [
         "⚖️ <b>Дневник веса</b>",
         "",
         f"Сейчас: <b>{format_weight(latest_weight)}{u}</b> {format_date_ru(d)}",
+        f"Всего {len(logs)} {n}.",
+        "",
     ]
-    n = plural_ru(len(logs), ("запись", "записи", "записей"))
-    lines.append(f"Всего {len(logs)} {n}.")
-    lines.append("")
 
-    entries = logs if period_logs is None else period_logs
-    for r in reversed(entries):
-        rd = dt.datetime.fromisoformat(r["logged_at"])
-        lines.append(f"{rd.strftime('%d.%m.%Y')} — {format_weight(r['weight'])}{u}")
-    lines.append("")
+    entries = list(reversed(logs if period_logs is None else period_logs))
+    rendered = [
+        f"{dt.datetime.fromisoformat(r['logged_at']).strftime('%d.%m.%Y')} — "
+        f"{format_weight(r['weight'])}{u}"
+        for r in entries
+    ]
 
-    lines.append("Напиши вес, чтобы добавить новую запись.")
-    return "\n".join(lines)
+    def assemble(keep: list[str]) -> str:
+        lines = list(head) + keep
+        if len(keep) < len(rendered):
+            lines.append(f"<i>Показано {len(keep)} из {len(rendered)}</i>")
+        lines.append("")
+        lines.append("Напиши вес, чтобы добавить новую запись.")
+        return "\n".join(lines)
+
+    kept = rendered
+    text = assemble(kept)
+    while len(kept) > 1 and telegram_length(text) > CAPTION_LIMIT:
+        kept = kept[:-1]  # oldest first — the recent entries are the interesting ones
+        text = assemble(kept)
+    return text
 
 
 def format_progression_hint(suggestion, unit: str = "kg", achieved: bool = False) -> str:

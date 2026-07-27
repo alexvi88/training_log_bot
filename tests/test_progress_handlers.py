@@ -13,17 +13,34 @@ from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
 
 import charts
+import chat_bottom
 from handlers import history
 
 pytestmark = pytest.mark.asyncio
 
 
-def _make_callback(user_id: int, data: str):
+@pytest.fixture(autouse=True)
+def clean_chat_tracker():
+    chat_bottom.reset()
+    yield
+    chat_bottom.reset()
+
+
+def _make_callback(user_id: int, data: str, *, chart_on_screen: bool = False):
+    """chart_on_screen: the current screen already is a chart photo sitting at the
+    bottom of the chat — the case where ui.safe_edit_photo can swap media in place
+    instead of deleting and resending."""
     message = MagicMock()
+    message.chat = SimpleNamespace(id=user_id)
+    message.message_id = 500
+    message.text = None if chart_on_screen else "экран"
+    message.photo = [SimpleNamespace(file_id="x")] if chart_on_screen else None
     message.delete = AsyncMock()
     message.answer = AsyncMock(return_value=SimpleNamespace(message_id=1))
     message.answer_photo = AsyncMock(return_value=SimpleNamespace(message_id=2))
-    message.edit_media = AsyncMock()
+    message.edit_media = AsyncMock(return_value=True)
+    if chart_on_screen:
+        chat_bottom.note_message(user_id, message.message_id)
     callback = MagicMock()
     callback.from_user = SimpleNamespace(id=user_id, username="tester")
     callback.message = message
@@ -81,12 +98,29 @@ async def test_prog_change_period_edits_chart_in_place(fresh_db, user_id):
     ex_id = await _seed_exercise_with_sessions(fresh_db, user_id, 3)
     state = await _make_state(user_id)
 
-    callback = _make_callback(user_id, f"prog:per:{ex_id}:20")
+    callback = _make_callback(user_id, f"prog:per:{ex_id}:20", chart_on_screen=True)
     await history.prog_change_period(callback, state)
 
     callback.message.edit_media.assert_awaited_once()
     callback.message.delete.assert_not_awaited()
     callback.message.answer_photo.assert_not_awaited()
+
+
+async def test_prog_change_period_resends_when_something_landed_below(fresh_db, user_id):
+    """Going through ui.safe_edit_photo means an editable-in-place chart is only
+    edited while it's still the bottom message — otherwise the refreshed chart
+    would be stranded above whatever arrived after it."""
+    ex_id = await _seed_exercise_with_sessions(fresh_db, user_id, 3)
+    state = await _make_state(user_id)
+
+    callback = _make_callback(user_id, f"prog:per:{ex_id}:20", chart_on_screen=True)
+    chat_bottom.note_message(user_id, callback.message.message_id + 1)  # a push, say
+
+    await history.prog_change_period(callback, state)
+
+    callback.message.edit_media.assert_not_awaited()
+    callback.message.delete.assert_awaited_once()
+    callback.message.answer_photo.assert_awaited_once()
 
 
 async def test_prog_change_period_all_shows_every_session(fresh_db, user_id):
@@ -226,7 +260,7 @@ async def test_prog_change_period_preserves_origin(fresh_db, user_id):
     ex_id = await _seed_exercise_with_sessions(fresh_db, user_id, 3)
     state = await _make_state(user_id)
 
-    callback = _make_callback(user_id, f"prog:per:{ex_id}:20:m")
+    callback = _make_callback(user_id, f"prog:per:{ex_id}:20:m", chart_on_screen=True)
     await history.prog_change_period(callback, state)
 
     kb = callback.message.edit_media.await_args.kwargs["reply_markup"]

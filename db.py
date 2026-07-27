@@ -1030,6 +1030,25 @@ async def list_workouts(
     return await cur.fetchall()
 
 
+async def search_workouts_by_exercise(user_id: int, query: str, limit: int = 20) -> list[aiosqlite.Row]:
+    """Finished workouts containing an exercise whose name matches `query`,
+    most recent first — the "в какой тренировке был жим" lookup, which the
+    date-only history list can't answer.
+    """
+    escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    cur = await conn().execute(
+        "SELECT DISTINCT w.* FROM workouts w "
+        "JOIN workout_blocks b ON b.workout_id = w.id "
+        "JOIN block_exercises be ON be.block_id = b.id "
+        "JOIN exercises e ON e.id = be.exercise_id "
+        "WHERE w.user_id = ? AND w.status = 'finished' "
+        "  AND py_lower(e.display_name) LIKE '%' || py_lower(?) || '%' ESCAPE '\\' "
+        "ORDER BY w.started_at DESC LIMIT ?",
+        (user_id, escaped, limit),
+    )
+    return await cur.fetchall()
+
+
 async def count_workouts(user_id: int, status: str = "finished") -> int:
     cur = await conn().execute(
         "SELECT COUNT(*) FROM workouts WHERE user_id = ? AND status = ?", (user_id, status)
@@ -1346,6 +1365,29 @@ async def list_sets_for_exercise(exercise_id: int, exclude_workout_id: Optional[
         params.append(exclude_workout_id)
     sql += " ORDER BY w.started_at, s.id"
     cur = await conn().execute(sql, params)
+    return await cur.fetchall()
+
+
+async def list_all_sets_by_exercise(user_id: int) -> list[aiosqlite.Row]:
+    """Every set this user has logged across finished workouts, oldest first,
+    carrying its exercise's display name.
+
+    One query for the whole hall-of-fame screen: computing it per exercise means
+    a DB round-trip per exercise the user has ever created, which on a long-lived
+    account is slow enough for the tapped button's callback to time out.
+    """
+    cur = await conn().execute(
+        "SELECT s.weight, s.reps, e.id AS exercise_id, e.display_name, "
+        "       w.id AS workout_id, w.started_at "
+        "FROM sets s "
+        "JOIN workout_blocks b ON b.id = s.block_id "
+        "JOIN workouts w ON w.id = b.workout_id "
+        "JOIN exercises e ON e.id = s.exercise_id "
+        "WHERE w.user_id = ? AND w.status = 'finished' "
+        "  AND e.is_archived = 0 AND e.is_template = 0 "
+        "ORDER BY e.id, w.started_at, s.id",
+        (user_id,),
+    )
     return await cur.fetchall()
 
 

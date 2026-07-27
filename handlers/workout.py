@@ -526,6 +526,9 @@ async def _main_menu_kb(user_id: int, active) -> InlineKeyboardMarkup:
 _WORKOUT_SCAFFOLD_KEYS = (
     "workout_id", "open_exercises", "open_blocks", "active_exercise_id",
     "last_by_exercise", "last_session_sets",
+    # Not workout scaffolding, but the same reasoning: stepping out to the menu
+    # and back shouldn't make the AI-тренер forget the conversation in progress.
+    "ai_history",
 )
 
 

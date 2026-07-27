@@ -63,7 +63,14 @@ async def _ask_next_mapping(event, state: FSMContext) -> bool:
     headers = data["imp_headers"]
     await state.set_state(ImportFlow.mapping_columns)
     kb = keyboards.csv_column_options_keyboard(headers, prefix=f"impcol:{field}")
-    text = f"Какая колонка соответствует полю «{FIELD_LABELS[field]}»?\nКолонки файла: {', '.join(headers)}"
+    # "шаг N из M" so the flow has a visible end — REQUIRED_FIELDS minus the ones
+    # auto-detected from the header row.
+    total = len(data.get("imp_mapping_total") or pending)
+    step = total - len(pending) + 1
+    text = (
+        f"Шаг {step} из {total}. Какая колонка соответствует полю «{FIELD_LABELS[field]}»?\n"
+        f"Колонки файла: {', '.join(headers)}"
+    )
     if isinstance(event, CallbackQuery):
         await ui.safe_edit(event, text, reply_markup=kb)
     else:
@@ -98,6 +105,7 @@ async def import_file_received(message: Message, state: FSMContext):
     pending = [f for f in REQUIRED_FIELDS if f not in mapping]
     await state.update_data(
         imp_headers=headers, imp_rows=data_rows, imp_mapping=mapping, imp_pending_fields=pending,
+        imp_mapping_total=len(pending), imp_answered_fields=[],
     )
     if not await _ask_next_mapping(message, state):
         await _finish_mapping(message, state)
@@ -115,9 +123,31 @@ async def import_column_picked(callback: CallbackQuery, state: FSMContext):
     mapping = dict(data["imp_mapping"])
     mapping[field] = int(idx_str)
     pending = [f for f in data.get("imp_pending_fields") or [] if f != field]
-    await state.update_data(imp_mapping=mapping, imp_pending_fields=pending)
+    answered = list(data.get("imp_answered_fields") or []) + [field]
+    await state.update_data(
+        imp_mapping=mapping, imp_pending_fields=pending, imp_answered_fields=answered
+    )
     if not await _ask_next_mapping(callback, state):
         await _finish_mapping(callback, state)
+    await callback.answer()
+
+
+@router.callback_query(StateFilter(ImportFlow.mapping_columns), F.data == "imp:mapback")
+async def import_mapping_back(callback: CallbackQuery, state: FSMContext):
+    """Undo the last column choice and ask it again — a mistap here used to be
+    unrecoverable."""
+    data = await state.get_data()
+    answered = list(data.get("imp_answered_fields") or [])
+    if not answered:
+        await callback.answer("Это первый вопрос — выйти можно кнопкой «Отмена»")
+        return
+    field = answered.pop()
+    mapping = {k: v for k, v in dict(data["imp_mapping"]).items() if k != field}
+    pending = [field] + list(data.get("imp_pending_fields") or [])
+    await state.update_data(
+        imp_mapping=mapping, imp_pending_fields=pending, imp_answered_fields=answered
+    )
+    await _ask_next_mapping(callback, state)
     await callback.answer()
 
 
@@ -274,10 +304,12 @@ async def import_save(callback: CallbackQuery, state: FSMContext):
                 await db.add_set(block_id, ex_id, idx, 0, weight, reps, rpe)
 
     await state.clear()
-    await ui.safe_edit(callback, f"✅ Импортировано {len(workouts)} тренировок.")
+    # show_settings redraws this very message, so a "✅ Импортировано N" written
+    # here would live for milliseconds — it goes in the alert instead.
+    n = len(workouts)
+    word = formatting.plural_ru(n, ("тренировка", "тренировки", "тренировок"))
     from handlers.settings import show_settings
-    await show_settings(callback, state)
-    await callback.answer()
+    await show_settings(callback, state, alert=f"✅ Импортировано {n} {word}")
 
 
 @router.callback_query(F.data == "imp:cancel")

@@ -109,9 +109,12 @@ def exercises_keyboard(
     return b.as_markup()
 
 
-def new_exercise_entry_keyboard(prefix: str) -> InlineKeyboardMarkup:
+def new_exercise_entry_keyboard(prefix: str, show_templates: bool = True) -> InlineKeyboardMarkup:
+    """show_templates=False when no muscle group is selected — the template
+    browser lists one group's templates, so there'd be nothing to show."""
     b = InlineKeyboardBuilder()
-    b.button(text="📋 Выбрать из шаблонов", callback_data=f"{prefix}:templates")
+    if show_templates:
+        b.button(text="📋 Выбрать из шаблонов", callback_data=f"{prefix}:templates")
     b.button(text="❌ Отмена", callback_data=f"{prefix}:cancel")
     b.adjust(1)
     return b.as_markup()
@@ -283,18 +286,32 @@ def program_detail_keyboard(program_key: str) -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
-def routine_detail_keyboard(routine_id: int, exercises=()) -> InlineKeyboardMarkup:
-    """exercises: (routine_exercise_id, display_name) rows, in routine order —
-    each gets its own one-tap remove button, no confirmation (trivially
-    reversible via "➕ Добавить упражнение", unlike deleting the whole program)."""
+def routine_detail_keyboard(routine_id: int) -> InlineKeyboardMarkup:
+    """The program's own screen — start it, or go edit it.
+
+    The per-exercise "🗑 {name}" rows used to sit directly under "▶️ Начать
+    тренировку": one row's mistap on the way to starting a session silently
+    dropped an exercise, and putting it back appends it to the end, losing the
+    program's order. They live behind "✏️ Изменить состав" now.
+    """
     b = InlineKeyboardBuilder()
     b.row(InlineKeyboardButton(text="▶️ Начать тренировку", callback_data=f"rt:start:{routine_id}"))
-    for re_id, name in exercises:
-        b.row(InlineKeyboardButton(text=f"🗑 {name}", callback_data=f"rt:rmex:{routine_id}:{re_id}"))
-    b.row(InlineKeyboardButton(text="➕ Добавить упражнение", callback_data=f"rt:addex:{routine_id}"))
+    b.row(InlineKeyboardButton(text="✏️ Изменить состав", callback_data=f"rt:edit:{routine_id}"))
     b.row(InlineKeyboardButton(text="✏️ Переименовать", callback_data=f"rt:rename:{routine_id}"))
     b.row(InlineKeyboardButton(text="🗑 Удалить программу", callback_data=f"rt:delask:{routine_id}"))
     b.row(InlineKeyboardButton(text="⬅️ К списку", callback_data="rt:manage"))
+    return b.as_markup()
+
+
+def routine_edit_keyboard(routine_id: int, exercises=()) -> InlineKeyboardMarkup:
+    """The program's composition editor: exercises: (routine_exercise_id,
+    display_name) rows in program order, each with a remove button. Reached
+    deliberately, so removal stays one tap here without a confirmation."""
+    b = InlineKeyboardBuilder()
+    for re_id, name in exercises:
+        b.row(InlineKeyboardButton(text=f"🗑 {name}", callback_data=f"rt:rmex:{routine_id}:{re_id}"))
+    b.row(InlineKeyboardButton(text="➕ Добавить упражнение", callback_data=f"rt:addex:{routine_id}"))
+    b.row(InlineKeyboardButton(text="⬅️ Готово", callback_data=f"rt:view:{routine_id}"))
     return b.as_markup()
 
 
@@ -555,7 +572,9 @@ def settings_keyboard(
 
 # Chart window options for the weight diary (weeks; 0 = all history).
 BODYWEIGHT_PERIODS = [(8, "8 нед"), (26, "26 нед"), (0, "Всё")]
-DEFAULT_BODYWEIGHT_WEEKS = 0
+# Recent weeks, not all history: the screen lists every entry in the window, and
+# on a daily weigh-in "Всё" grows without bound. "Всё" stays one tap away.
+DEFAULT_BODYWEIGHT_WEEKS = 8
 
 
 def bodyweight_keyboard(has_logs: bool, weeks: int = 0, show_periods: bool = False) -> InlineKeyboardMarkup:
@@ -674,34 +693,58 @@ def confirm_cancel_keyboard(
     return b.as_markup()
 
 
-def exercise_resolve_keyboard(candidates, name: str, prefix: str) -> InlineKeyboardMarkup:
+def exercise_resolve_keyboard(
+    candidates, name: str, prefix: str, remaining: int = 0
+) -> InlineKeyboardMarkup:
+    """remaining: how many unmatched names are still queued after this one. With
+    a foreign CSV that's dozens of names, each needing a pick plus a muscle-group
+    choice — "создать все остальные" is the escape hatch that isn't throwing the
+    whole import away."""
     b = InlineKeyboardBuilder()
     items = [(f"{prefix}:pick:{ex['id']}", ex["display_name"]) for ex in candidates[:6]]
     for row in named_buttons(items):
         b.row(*row)
     b.row(InlineKeyboardButton(text=f"➕ Создать «{name}»", callback_data=f"{prefix}:create"))
+    if remaining > 0:
+        b.row(
+            InlineKeyboardButton(
+                text=f"➕ Создать все остальные ({remaining + 1})",
+                callback_data=f"{prefix}:createall",
+            )
+        )
     b.row(InlineKeyboardButton(text="❌ Отменить весь ввод", callback_data=f"{prefix}:cancelall"))
     return b.as_markup()
 
 
-def edit_workout_keyboard(rows) -> InlineKeyboardMarkup:
-    """rows: ordered list of ("set", set_id, label), ("add", block_id, exercise_id, label),
-    or ("remove", block_id, label) — each exercise's "+ Сет"/"🗑 Убрать" buttons belong
-    right after that exercise's own set rows."""
+def edit_workout_keyboard(exercises) -> InlineKeyboardMarkup:
+    """Top level of editing a past workout: one button per exercise.
+
+    exercises: ordered (block_id, exercise_id, label) rows, label already
+    pluralised by the caller.
+    A button per *set* here (with the exercise name repeated in every label, plus
+    a "+ Сет" and a "🗑 Убрать" row each) ran to 30+ single-column rows on an
+    ordinary 5-exercise session — the sets live one level down instead, where the
+    exercise is already named by the screen's own header.
+    """
     b = InlineKeyboardBuilder()
-    for row in rows:
-        if row[0] == "set":
-            _, set_id, label = row
-            b.button(text=label, callback_data=f"editw:set:{set_id}")
-        elif row[0] == "add":
-            _, block_id, exercise_id, label = row
-            b.button(text=f"➕ Сет — {label}", callback_data=f"editw:addset:{block_id}:{exercise_id}")
-        else:
-            _, block_id, label = row
-            b.button(text=f"🗑 Убрать «{label}» целиком", callback_data=f"editw:rmex:{block_id}")
+    for block_id, exercise_id, label in exercises:
+        b.button(text=label, callback_data=f"editw:ex:{block_id}:{exercise_id}")
     b.button(text="➕ Новое упражнение", callback_data="editw:newex")
     b.button(text="📅 Изменить дату", callback_data="editw:date")
     b.button(text="✅ Готово", callback_data="editw:done")
+    b.adjust(1)
+    return b.as_markup()
+
+
+def edit_exercise_keyboard(block_id: int, exercise_id: int, sets) -> InlineKeyboardMarkup:
+    """One exercise's sets inside the edit flow. sets: (set_id, label) pairs —
+    labels carry no exercise name, the screen header already does."""
+    b = InlineKeyboardBuilder()
+    for set_id, label in sets:
+        b.button(text=label, callback_data=f"editw:set:{set_id}")
+    b.button(text="➕ Сет", callback_data=f"editw:addset:{block_id}:{exercise_id}")
+    b.button(text="🗑 Убрать упражнение целиком", callback_data=f"editw:rmexask:{block_id}")
+    b.button(text="⬅️ К упражнениям", callback_data="editw:top")
     b.adjust(1)
     return b.as_markup()
 
@@ -722,4 +765,10 @@ def csv_column_options_keyboard(headers: list[str], prefix: str, allow_skip: boo
     if allow_skip:
         b.button(text="— нет такой колонки —", callback_data=f"{prefix}:skip")
     b.adjust(1)
+    # Without these, a mistapped column can't be undone and the only way out of
+    # the import is /start.
+    b.row(
+        InlineKeyboardButton(text="⬅️ Назад", callback_data="imp:mapback"),
+        InlineKeyboardButton(text="❌ Отмена", callback_data="imp:cancel"),
+    )
     return b.as_markup()

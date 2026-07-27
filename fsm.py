@@ -20,6 +20,7 @@ class ExerciseManage(StatesGroup):
     editing_description = State()
     new_group_name = State()
     creating_exercise_name = State()
+    new_exercise_group = State()  # name typed from "📋 Все", group still to pick
     awaiting_photo = State()
 
 
@@ -47,7 +48,8 @@ class ResolveFlow(StatesGroup):
 
 
 class EditWorkoutFlow(StatesGroup):
-    viewing = State()
+    viewing = State()          # the workout's exercise list
+    viewing_exercise = State()  # one exercise's sets
     awaiting_date = State()
     editing_set = State()
     adding_set = State()

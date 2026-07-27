@@ -407,3 +407,66 @@ async def test_own_description_overrides_template_default_in_the_card_text(fresh
 
     assert "Моя версия — колени наружу" in overridden_text
     assert "1." not in overridden_text  # the numbered template steps are gone, not appended
+
+
+# ---------- creating an exercise from "📋 Все" (no group selected) ----------
+
+
+async def test_new_exercise_from_all_asks_for_the_group_after_the_name(fresh_db, user_id):
+    """"📋 Все" used to be a dead end: no "➕ Новое упражнение" at all, so the
+    only way to add one was backing out and guessing which group it belongs to."""
+    state = await _make_state(user_id)  # exm_group_id is None — the "Все" view
+    message = _make_message(user_id, "Barbell Row")
+
+    await exercises.exm_new_exercise_name_entered(message, state)
+
+    assert await state.get_state() == ExerciseManage.new_exercise_group
+    assert (await state.get_data())["exm_new_name"] == "Barbell Row"
+    # Nothing created yet — the group question comes first.
+    assert not [e for e in await fresh_db.list_user_exercises(user_id)]
+    sent = message.answer.await_args
+    text = sent.args[0] if sent.args else sent.kwargs["text"]
+    assert "Barbell Row" in text and "группу мышц" in text
+
+
+async def test_picking_the_group_creates_the_exercise(fresh_db, user_id):
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Спина")
+    state = await _make_state(user_id)
+    await state.set_state(ExerciseManage.new_exercise_group)
+    await state.update_data(exm_new_name="Barbell Row")
+
+    callback = MagicMock()
+    callback.from_user = SimpleNamespace(id=user_id, username="tester")
+    callback.data = f"exmnewgrp:grp:{group_id}"
+    callback.answer = AsyncMock()
+    msg = MagicMock()
+    msg.chat = SimpleNamespace(id=user_id)
+    msg.message_id = 7
+    msg.text = "экран"
+    msg.delete = AsyncMock()
+    msg.answer = AsyncMock(return_value=SimpleNamespace(message_id=8))
+    callback.message = msg
+
+    await exercises.exm_new_exercise_group_picked(callback, state)
+
+    created = [e for e in await db.list_user_exercises(user_id) if e["display_name"] == "Barbell Row"]
+    assert len(created) == 1
+    assert created[0]["primary_group_id"] == group_id
+    assert await state.get_state() == ExerciseManage.picking_exercise
+
+
+async def test_group_creation_leaves_a_single_screen(fresh_db, user_id):
+    """It used to send "Группа «X» создана." plus a placeholder it then edited —
+    two stray messages per group."""
+    state = await _make_state(user_id)
+    await state.set_state(ExerciseManage.new_group_name)
+    message = _make_message(user_id, "Предплечья")
+
+    await exercises.exm_new_group_entered(message, state)
+
+    assert message.answer.await_count == 1
+    text = message.answer.await_args.args[0]
+    assert "выбери группу мышц" in text
+    groups = {g["name"] for g in await fresh_db.list_muscle_groups(user_id)}
+    assert "Предплечья" in groups

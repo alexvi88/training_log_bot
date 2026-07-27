@@ -8,8 +8,10 @@ previous/first entry, and — once there are two points — a line chart.
 
 import asyncio
 import datetime as dt
+from contextlib import suppress
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import BufferedInputFile, CallbackQuery, Message
@@ -43,6 +45,17 @@ def _daily_average_points(logs: list) -> list[tuple[dt.datetime, float]]:
     return [(dt.datetime.combine(d, dt.time()), sum(ws) / len(ws)) for d, ws in sorted(by_date.items())]
 
 
+async def _clear_previous_screen(message: Message, state: FSMContext) -> None:
+    """Delete the bodyweight screen this flow last sent, if it's still around."""
+    data = await state.get_data()
+    screen_id = data.get("bw_screen_id")
+    if screen_id is None:
+        return
+    with suppress(TelegramBadRequest):
+        await message.bot.delete_message(chat_id=message.chat.id, message_id=screen_id)
+    await state.update_data(bw_screen_id=None)
+
+
 async def _render(event, state: FSMContext) -> None:
     """Render (or re-render) the bodyweight screen for a Message or CallbackQuery."""
     user_id = event.from_user.id
@@ -68,15 +81,21 @@ async def _render(event, state: FSMContext) -> None:
     message = event.message if isinstance(event, CallbackQuery) else event
     if png is None:
         if isinstance(event, CallbackQuery):
-            await ui.safe_edit(event, text, reply_markup=kb, parse_mode="HTML")
+            sent = await ui.safe_edit(event, text, reply_markup=kb, parse_mode="HTML")
         else:
-            await message.answer(text, reply_markup=kb, parse_mode="HTML")
+            sent = await message.answer(text, reply_markup=kb, parse_mode="HTML")
     else:
         photo = BufferedInputFile(png, filename="bodyweight.png")
         if isinstance(event, CallbackQuery):
-            await ui.safe_edit_photo(event, png, "bodyweight.png", text, reply_markup=kb, parse_mode="HTML")
+            sent = await ui.safe_edit_photo(
+                event, png, "bodyweight.png", text, reply_markup=kb, parse_mode="HTML"
+            )
         else:
-            await message.answer_photo(photo, caption=text, reply_markup=kb, parse_mode="HTML")
+            sent = await message.answer_photo(photo, caption=text, reply_markup=kb, parse_mode="HTML")
+    # Remembered so the next typed weight can clear this screen instead of
+    # stacking another one under it (see _clear_previous_screen).
+    if sent is not None:
+        await state.update_data(bw_screen_id=getattr(sent, "message_id", None))
 
 
 async def show_bodyweight(callback: CallbackQuery, state: FSMContext) -> None:
@@ -120,4 +139,10 @@ async def bw_weight_entered(message: Message, state: FSMContext):
         await message.reply(e.message)
         return
     await db.add_bodyweight_log(message.from_user.id, weight)
+    # Tidy up like the live tracker does: the typed number and the previous
+    # screen both go, so a week of daily weigh-ins leaves one screen in the chat
+    # rather than seven charts and seven bare numbers.
+    await _clear_previous_screen(message, state)
+    with suppress(TelegramBadRequest):
+        await message.delete()
     await _render(message, state)

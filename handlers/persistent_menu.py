@@ -14,7 +14,7 @@ import ai_trainer
 import db
 import keyboards
 from fsm import AITrainerFlow
-from handlers.ai_trainer import INTRO_TEXT, ai_keyboard
+from handlers.ai_trainer import INTRO_TEXT, RESUME_TEXT, ai_keyboard
 
 router = Router(name="persistent_menu")
 
@@ -56,10 +56,13 @@ async def _open_ai_trainer(message: Message, state: FSMContext) -> None:
         await message.answer("AI-тренер не настроен: администратору нужно задать XAI_API_KEY.")
         return
     await db.get_or_create_user(message.from_user.id, message.from_user.username)
+    # _clear_state_keep_workout preserves ai_history, so tapping "AI-тренер"
+    # after a detour resumes the conversation rather than starting over.
     await _clear_state_keep_workout(state)
     await state.set_state(AITrainerFlow.chatting)
-    await state.update_data(ai_history=[])
-    await message.answer(INTRO_TEXT, reply_markup=await ai_keyboard(message.from_user.id), parse_mode="HTML")
+    data = await state.get_data()
+    text = INTRO_TEXT if not data.get("ai_history") else RESUME_TEXT
+    await message.answer(text, reply_markup=await ai_keyboard(message.from_user.id), parse_mode="HTML")
 
 
 @router.message(F.text == keyboards.BTN_AI)
