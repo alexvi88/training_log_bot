@@ -1186,6 +1186,18 @@ async def pick_template_add(callback: CallbackQuery, state: FSMContext):
     await _on_exercise_chosen(callback, state, ex_id)
 
 
+def _suspicious_exercise_name_reason(name: str) -> str | None:
+    """None if `name` looks like a plausible exercise name; otherwise a short
+    Russian phrase for the "are you sure?" prompt explaining why it doesn't —
+    either a stray message (too long) or something with no letters at all
+    ("50 12", a logged set typed while the bot was waiting for a name instead)."""
+    if len(name) > config.MAX_EXERCISE_NAME_LENGTH:
+        return f"длинновато для упражнения ({len(name)} символов)"
+    if not any(ch.isalpha() for ch in name):
+        return "в названии нет ни одной буквы — не похоже на упражнение"
+    return None
+
+
 @router.message(StateFilter(WorkoutFlow.creating_exercise_name))
 async def new_exercise_name_entered(message: Message, state: FSMContext):
     name = message.text.strip()
@@ -1193,9 +1205,43 @@ async def new_exercise_name_entered(message: Message, state: FSMContext):
         await message.reply("Название не может быть пустым")
         return
     await _delete_message(message)
+    reason = _suspicious_exercise_name_reason(name)
+    if reason:
+        # A stray message typed while the bot happened to be waiting for a name
+        # doesn't look like an exercise — but it might genuinely be intended,
+        # so ask instead of silently blocking it.
+        await state.update_data(pending_long_exercise_name=name)
+        data = await state.get_data()
+        user = await db.get_user(message.from_user.id)
+        kb = keyboards.yes_no_keyboard(
+            yes_cb="pick:longname:yes", no_cb="pick:longname:no",
+            yes_text="✅ Да, создать", no_text="✏️ Написать заново",
+        )
+        hint = f"«{escape(name)}» — {reason}. Всё верно, создать такое?"
+        await _refresh_live(message.bot, state, user, data["workout_id"], hint, kb)
+        return
     data = await state.get_data()
     ex_id = await db.create_exercise(message.from_user.id, name, data["pending_group_id"])
     await _on_exercise_chosen(message, state, ex_id)
+
+
+@router.callback_query(StateFilter(WorkoutFlow.creating_exercise_name), F.data == "pick:longname:yes")
+async def pick_longname_confirmed(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    name = data.get("pending_long_exercise_name")
+    if not name:
+        await callback.answer("Название потерялось, напиши заново", show_alert=True)
+        return
+    await state.update_data(pending_long_exercise_name=None)
+    ex_id = await db.create_exercise(callback.from_user.id, name, data["pending_group_id"])
+    await _on_exercise_chosen(callback, state, ex_id)
+
+
+@router.callback_query(StateFilter(WorkoutFlow.creating_exercise_name), F.data == "pick:longname:no")
+async def pick_longname_declined(callback: CallbackQuery, state: FSMContext):
+    await state.update_data(pending_long_exercise_name=None)
+    await _new_exercise_entry_screen(callback, state)
+    await callback.answer()
 
 
 async def _seed_last_value(data: dict, ex_id: int) -> dict:
