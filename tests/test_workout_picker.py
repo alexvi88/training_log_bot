@@ -118,7 +118,7 @@ async def test_typing_no_match_in_exercise_picker_offers_to_create(fresh_db, use
 async def test_pick_page_advances_to_second_page_and_keeps_remainder(fresh_db, user_id):
     db = fresh_db
     group_id = await db.create_muscle_group(user_id, "Грудь")
-    for i in range(14):
+    for i in range(10):  # RECENT_EXERCISES_LIMIT (8) + 2 left over on page 2
         await db.create_exercise(user_id, f"Exercise {i:02d}", group_id)
 
     state = await _make_state(user_id, pick_page=0)

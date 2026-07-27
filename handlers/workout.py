@@ -697,6 +697,11 @@ async def menu_settings(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "menu:start_workout")
 async def start_workout(callback: CallbackQuery, state: FSMContext):
+    # Answered up front: neither branch below has anything to tell Telegram about
+    # the tap itself, and _enter_live doesn't answer internally — left this way,
+    # the active-workout branch used to leave the button spinning until Telegram
+    # gave up on its own, ~10s later.
+    await callback.answer()
     await _ensure_user(callback.from_user.id, callback.from_user.username)
     active = await db.get_active_workout(callback.from_user.id)
     if active:
@@ -711,7 +716,6 @@ async def start_workout(callback: CallbackQuery, state: FSMContext):
     )
     await state.set_state(WorkoutFlow.picking_group)
     await _picker_screen_groups(callback, state, show_program_button=True)
-    await callback.answer()
 
 
 REPEAT_PAGE_SIZE = 6
@@ -860,6 +864,7 @@ async def resume_workout(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Нет активной тренировки")
         await _show_main_menu(callback, state)
         return
+    await callback.answer()  # _enter_live doesn't answer internally
     await _enter_live(callback, state, active["id"])
 
 

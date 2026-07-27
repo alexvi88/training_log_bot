@@ -325,6 +325,20 @@ async def hist_delete(callback: CallbackQuery, state: FSMContext):
 
 async def show_progress_entry(callback: CallbackQuery, state: FSMContext):
     await state.set_state(ProgressFlow.picking_group)
+    if await db.count_workouts(callback.from_user.id) == 0:
+        # Without this, a new user picks a group, sees "пусто", and backs out —
+        # the picker itself can't tell them that until they've already drilled in.
+        kb = InlineKeyboardBuilder()
+        kb.button(text="🏋️ Начать тренировку", callback_data="menu:start_workout")
+        kb.button(text="⬅️ Назад", callback_data="prog:back")
+        kb.adjust(1)
+        await ui.safe_edit(
+            callback,
+            "📈 Прогресс появится после первой завершённой тренировки.",
+            reply_markup=kb.as_markup(),
+        )
+        await callback.answer()
+        return
     groups = await db.list_muscle_groups(callback.from_user.id)
     kb = keyboards.groups_keyboard(
         groups, prefix="prog",

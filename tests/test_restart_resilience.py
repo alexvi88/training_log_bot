@@ -157,3 +157,41 @@ async def test_resume_after_fsm_loss_only_reopens_last_exercise(fresh_db, user_i
     assert data["open_exercises"] == [ex3]
     assert data["active_exercise_id"] == ex3
     assert list(data["open_blocks"].keys()) == [ex3]
+
+
+async def test_resume_workout_answers_the_callback(fresh_db, user_id):
+    """resume_workout used to never call callback.answer() at all — the tapped
+    button spun until Telegram gave up on it, silently, ~10s later."""
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Спина")
+    ex_id = await db.create_exercise(user_id, "Тяга штанги", group_id)
+    workout_id = await db.create_workout(user_id)
+    block_id = await db.create_block(workout_id, "single")
+    await db.add_block_exercise(block_id, ex_id, 0)
+    await db.add_set(block_id, ex_id, 1, 0, 80.0, 10)
+
+    state = FSMContext(storage=MemoryStorage(), key=StorageKey(bot_id=1, chat_id=user_id, user_id=user_id))
+    callback = _make_callback(user_id, "menu:resume_workout")
+
+    await workout.resume_workout(callback, state)
+
+    callback.answer.assert_awaited_once()
+
+
+async def test_start_workout_answers_the_callback_when_resuming_active(fresh_db, user_id):
+    """Same gap on the other entry point: tapping "Начать тренировку" while one is
+    already active takes the _enter_live branch, which doesn't answer on its own."""
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Спина")
+    ex_id = await db.create_exercise(user_id, "Тяга штанги", group_id)
+    workout_id = await db.create_workout(user_id)
+    block_id = await db.create_block(workout_id, "single")
+    await db.add_block_exercise(block_id, ex_id, 0)
+    await db.add_set(block_id, ex_id, 1, 0, 80.0, 10)
+
+    state = FSMContext(storage=MemoryStorage(), key=StorageKey(bot_id=1, chat_id=user_id, user_id=user_id))
+    callback = _make_callback(user_id, "menu:start_workout")
+
+    await workout.start_workout(callback, state)
+
+    callback.answer.assert_awaited_once()

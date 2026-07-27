@@ -30,7 +30,10 @@ PROGRESS_HISTORY_LIMIT = 8
 STALE_WORKOUT_HOURS = 6
 
 # Number of recent exercises to show first when picking from a muscle group.
-RECENT_EXERCISES_LIMIT = 12
+# One button per row (the name needs reading, unlike the history list's dates),
+# so this doubles as the picker's page length — 12 meant 15 rows of keyboard
+# once paging/new-exercise/back are added.
+RECENT_EXERCISES_LIMIT = 8
 
 # Engagement pushes (streaks, skip reminders, plateau nudges, weekly digest — see
 # PUSH_IDEAS.md). On by default; set ENGAGEMENT_ENABLED=false in the environment
@@ -45,8 +48,6 @@ ENGAGEMENT_HOUR = int(os.getenv("ENGAGEMENT_HOUR", "19"))
 # any failure. Set =false to always use the static digest.
 AI_WEEKLY_DIGEST_ENABLED = os.getenv("AI_WEEKLY_DIGEST_ENABLED", "true").lower() == "true"
 
-# How often (minutes) the post-workout followup job checks for due reminders.
-FOLLOWUP_POLL_MINUTES = int(os.getenv("FOLLOWUP_POLL_MINUTES", "10"))
 
 # AI trainer (Grok-backed Q&A over the user's own training data). Same xAI
 # key/env names as fun_bot, so one key serves both bots. The menu entry stays
@@ -71,8 +72,6 @@ AI_SEARCH_DAILY_LIMIT = int(os.getenv("AI_SEARCH_DAILY_LIMIT", "40"))
 # politely defers until the next day. Generous by default.
 AI_QUESTION_DAILY_LIMIT = int(os.getenv("AI_QUESTION_DAILY_LIMIT", "50"))
 
-# Delay after finishing a workout before the hydration/protein followup push fires.
-FOLLOWUP_DELAY_HOURS = int(os.getenv("FOLLOWUP_DELAY_HOURS", "2"))
 
 # Voice input for the AI trainer chat: Telegram voice messages get transcribed
 # via OpenAI's speech-to-text before being asked to Grok as a normal text
