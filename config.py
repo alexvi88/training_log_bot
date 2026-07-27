@@ -35,9 +35,10 @@ STALE_WORKOUT_HOURS = 6
 # once paging/new-exercise/back are added.
 RECENT_EXERCISES_LIMIT = 8
 
-# Guards against a stray message (typed while the bot happened to be waiting for
-# an exercise name) getting recorded as an exercise — no real exercise name comes
-# close to this, so anything longer is almost certainly a misfire.
+# A name longer than this triggers a "are you sure?" confirmation instead of
+# creating/renaming outright — guards against a stray message (typed while the
+# bot happened to be waiting for an exercise name) silently becoming an exercise.
+# No real exercise name comes close to this, but it might genuinely be intended.
 MAX_EXERCISE_NAME_LENGTH = 60
 
 # Engagement pushes (streaks, skip reminders, plateau nudges, weekly digest — see

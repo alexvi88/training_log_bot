@@ -430,37 +430,108 @@ async def test_new_exercise_from_all_asks_for_the_group_after_the_name(fresh_db,
     assert "Barbell Row" in text and "группу мышц" in text
 
 
-async def test_absurdly_long_name_is_rejected_instead_of_creating_an_exercise(fresh_db, user_id):
+_STRAY_MESSAGE = "Саня я буквально сейчас иду в зал купить protein bar по дороге"
+
+
+async def test_absurdly_long_name_asks_for_confirmation_instead_of_creating(fresh_db, user_id):
     """A stray message typed while the bot happened to be waiting for an exercise
     name (e.g. meant for someone else in the chat) shouldn't silently become a
-    logged exercise — it doesn't look anything like a real exercise name."""
+    logged exercise — but it might genuinely be a long name, so ask first."""
     db = fresh_db
     group_id = await db.create_muscle_group(user_id, "Грудь")
     state = await _make_state(user_id, exm_group_id=group_id)
     await state.set_state(ExerciseManage.creating_exercise_name)
-    message = _make_message(user_id, "Саня я буквально сейчас иду в зал купить protein bar по дороге")
+    message = _make_message(user_id, _STRAY_MESSAGE)
 
     await exercises.exm_new_exercise_name_entered(message, state)
 
     assert await db.count_user_exercises(user_id) == 0
     message.reply.assert_awaited_once()
     assert await state.get_state() == ExerciseManage.creating_exercise_name
+    assert (await state.get_data())["exm_pending_long_name"] == _STRAY_MESSAGE
 
 
-async def test_absurdly_long_rename_is_rejected(fresh_db, user_id):
+async def test_confirming_a_long_name_creates_the_exercise(fresh_db, user_id):
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    state = await _make_state(
+        user_id, exm_group_id=group_id, exm_pending_long_name=_STRAY_MESSAGE,
+    )
+    await state.set_state(ExerciseManage.creating_exercise_name)
+    callback = _make_exercise_callback(user_id, "exm:longname:yes")
+
+    await exercises.exm_new_exercise_longname_confirmed(callback, state)
+
+    ex = await db.get_exercise((await state.get_data())["exm_exercise_id"])
+    assert ex["name"] == _STRAY_MESSAGE
+
+
+async def test_declining_a_long_name_reprompts_without_creating(fresh_db, user_id):
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    state = await _make_state(
+        user_id, exm_group_id=group_id, exm_pending_long_name=_STRAY_MESSAGE,
+    )
+    await state.set_state(ExerciseManage.creating_exercise_name)
+    callback = _make_exercise_callback(user_id, "exm:longname:no")
+
+    await exercises.exm_new_exercise_longname_declined(callback, state)
+
+    assert await db.count_user_exercises(user_id) == 0
+    assert (await state.get_data())["exm_pending_long_name"] is None
+    assert await state.get_state() == ExerciseManage.creating_exercise_name
+
+
+async def test_absurdly_long_rename_asks_for_confirmation(fresh_db, user_id):
     db = fresh_db
     group_id = await db.create_muscle_group(user_id, "Грудь")
     ex_id = await db.create_exercise(user_id, "pull down", group_id)
 
     state = await _make_state(user_id, exm_group_id=group_id, exm_exercise_id=ex_id)
     await state.set_state(ExerciseManage.editing_name)
-    message = _make_message(user_id, "Саня я буквально сейчас иду в зал купить protein bar по дороге")
+    message = _make_message(user_id, _STRAY_MESSAGE)
 
     await exercises.exm_name_entered(message, state)
 
     ex = await db.get_exercise(ex_id)
     assert ex["name"] == "pull down"
     message.reply.assert_awaited_once()
+    assert (await state.get_data())["exm_pending_long_rename"] == _STRAY_MESSAGE
+
+
+async def test_confirming_a_long_rename_applies_it(fresh_db, user_id):
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    ex_id = await db.create_exercise(user_id, "pull down", group_id)
+
+    state = await _make_state(
+        user_id, exm_group_id=group_id, exm_exercise_id=ex_id, exm_pending_long_rename=_STRAY_MESSAGE,
+    )
+    await state.set_state(ExerciseManage.editing_name)
+    callback = _make_exercise_callback(user_id, "exm:longrename:yes")
+
+    await exercises.exm_rename_longname_confirmed(callback, state)
+
+    ex = await db.get_exercise(ex_id)
+    assert ex["name"] == _STRAY_MESSAGE
+
+
+async def test_declining_a_long_rename_keeps_the_old_name(fresh_db, user_id):
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    ex_id = await db.create_exercise(user_id, "pull down", group_id)
+
+    state = await _make_state(
+        user_id, exm_group_id=group_id, exm_exercise_id=ex_id, exm_pending_long_rename=_STRAY_MESSAGE,
+    )
+    await state.set_state(ExerciseManage.editing_name)
+    callback = _make_exercise_callback(user_id, "exm:longrename:no")
+
+    await exercises.exm_rename_longname_declined(callback, state)
+
+    ex = await db.get_exercise(ex_id)
+    assert ex["name"] == "pull down"
+    assert (await state.get_data())["exm_pending_long_rename"] is None
 
 
 async def test_picking_the_group_creates_the_exercise(fresh_db, user_id):

@@ -223,17 +223,7 @@ async def exm_add_template(callback: CallbackQuery, state: FSMContext):
 
 
 @router.message(StateFilter(ExerciseManage.creating_exercise_name))
-async def exm_new_exercise_name_entered(message: Message, state: FSMContext):
-    name = message.text.strip()
-    if not name:
-        await message.reply("Название не может быть пустым")
-        return
-    if len(name) > config.MAX_EXERCISE_NAME_LENGTH:
-        await message.reply(
-            f"Слишком длинное название (максимум {config.MAX_EXERCISE_NAME_LENGTH} символов) — "
-            "похоже на случайное сообщение. Напиши короткое название упражнения."
-        )
-        return
+async def _exm_finish_new_exercise_name(answerer, state: FSMContext, user_id: int, name: str):
     data = await state.get_data()
     group_id = data.get("exm_group_id")
     if group_id is None:
@@ -241,20 +231,70 @@ async def exm_new_exercise_name_entered(message: Message, state: FSMContext):
         # the name is known, instead of refusing to offer creation at all.
         await state.update_data(exm_new_name=name)
         await state.set_state(ExerciseManage.new_exercise_group)
-        groups = await db.list_muscle_groups(message.from_user.id)
+        groups = await db.list_muscle_groups(user_id)
         kb = keyboards.groups_keyboard(
             groups, prefix="exmnewgrp", extra_buttons=[("❌ Отмена", "exm:cancel")]
         )
-        await message.answer(
+        await answerer.answer(
             f"«{escape(name)}» — выбери группу мышц:", reply_markup=kb, parse_mode="HTML"
         )
         return
-    ex_id = await db.create_exercise(message.from_user.id, name, group_id)
+    ex_id = await db.create_exercise(user_id, name, group_id)
     await state.update_data(exm_exercise_id=ex_id)
     await state.set_state(ExerciseManage.picking_exercise)
     ex = await db.get_exercise(ex_id)
     text, kb = _exercise_detail_view(ex)
-    await message.answer(text, reply_markup=kb, parse_mode="HTML")
+    await answerer.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
+@router.message(StateFilter(ExerciseManage.creating_exercise_name))
+async def exm_new_exercise_name_entered(message: Message, state: FSMContext):
+    name = message.text.strip()
+    if not name:
+        await message.reply("Название не может быть пустым")
+        return
+    if len(name) > config.MAX_EXERCISE_NAME_LENGTH:
+        # A stray message typed while the bot happened to be waiting for a name
+        # doesn't look like an exercise — but it might genuinely be a long one,
+        # so ask instead of silently blocking it.
+        await state.update_data(exm_pending_long_name=name)
+        kb = keyboards.yes_no_keyboard(
+            yes_cb="exm:longname:yes", no_cb="exm:longname:no",
+            yes_text="✅ Да, создать", no_text="✏️ Написать заново",
+        )
+        await message.reply(
+            f"«{escape(name)}» — длинновато для упражнения ({len(name)} символов). "
+            "Всё верно, создать такое?",
+            reply_markup=kb, parse_mode="HTML",
+        )
+        return
+    await _exm_finish_new_exercise_name(message, state, message.from_user.id, name)
+
+
+@router.callback_query(StateFilter(ExerciseManage.creating_exercise_name), F.data == "exm:longname:yes")
+async def exm_new_exercise_longname_confirmed(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    name = data.get("exm_pending_long_name")
+    if not name:
+        await callback.answer("Название потерялось, напиши заново", show_alert=True)
+        return
+    await state.update_data(exm_pending_long_name=None)
+    with suppress(TelegramBadRequest):
+        await callback.message.delete()
+    await _exm_finish_new_exercise_name(callback.message, state, callback.from_user.id, name)
+    await callback.answer()
+
+
+@router.callback_query(StateFilter(ExerciseManage.creating_exercise_name), F.data == "exm:longname:no")
+async def exm_new_exercise_longname_declined(callback: CallbackQuery, state: FSMContext):
+    await state.update_data(exm_pending_long_name=None)
+    with suppress(TelegramBadRequest):
+        await callback.message.delete()
+    await callback.message.answer(
+        "Напиши название нового упражнения или выбери из шаблонов:",
+        reply_markup=keyboards.new_exercise_entry_keyboard("exm"),
+    )
+    await callback.answer()
 
 
 @router.callback_query(
@@ -482,6 +522,17 @@ async def exm_edit_name(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+async def _exm_finish_rename(answerer, state: FSMContext, ex_id: int, name: str):
+    ok = await db.update_exercise_name(ex_id, name)
+    if not ok:
+        await answerer.answer("У тебя уже есть упражнение с таким названием.")
+        return
+    await state.set_state(ExerciseManage.picking_exercise)
+    ex = await db.get_exercise(ex_id)
+    text, kb = _exercise_detail_view(ex)
+    await answerer.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
 @router.message(StateFilter(ExerciseManage.editing_name))
 async def exm_name_entered(message: Message, state: FSMContext):
     name = message.text.strip()
@@ -489,21 +540,49 @@ async def exm_name_entered(message: Message, state: FSMContext):
         await message.reply("Название не может быть пустым")
         return
     if len(name) > config.MAX_EXERCISE_NAME_LENGTH:
+        await state.update_data(exm_pending_long_rename=name)
+        kb = keyboards.yes_no_keyboard(
+            yes_cb="exm:longrename:yes", no_cb="exm:longrename:no",
+            yes_text="✅ Да, переименовать", no_text="✏️ Написать заново",
+        )
         await message.reply(
-            f"Слишком длинное название (максимум {config.MAX_EXERCISE_NAME_LENGTH} символов) — "
-            "похоже на случайное сообщение. Напиши короткое название упражнения."
+            f"«{escape(name)}» — длинновато для упражнения ({len(name)} символов). "
+            "Всё верно, переименовать?",
+            reply_markup=kb, parse_mode="HTML",
         )
         return
     data = await state.get_data()
-    ex_id = data["exm_exercise_id"]
-    ok = await db.update_exercise_name(ex_id, name)
-    if not ok:
-        await message.reply("У тебя уже есть упражнение с таким названием.")
+    await _exm_finish_rename(message, state, data["exm_exercise_id"], name)
+
+
+@router.callback_query(StateFilter(ExerciseManage.editing_name), F.data == "exm:longrename:yes")
+async def exm_rename_longname_confirmed(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    name = data.get("exm_pending_long_rename")
+    if not name:
+        await callback.answer("Название потерялось, напиши заново", show_alert=True)
         return
-    await state.set_state(ExerciseManage.picking_exercise)
+    await state.update_data(exm_pending_long_rename=None)
+    with suppress(TelegramBadRequest):
+        await callback.message.delete()
+    await _exm_finish_rename(callback.message, state, data["exm_exercise_id"], name)
+    await callback.answer()
+
+
+@router.callback_query(StateFilter(ExerciseManage.editing_name), F.data == "exm:longrename:no")
+async def exm_rename_longname_declined(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    await state.update_data(exm_pending_long_rename=None)
+    ex_id = data["exm_exercise_id"]
     ex = await db.get_exercise(ex_id)
-    text, kb = _exercise_detail_view(ex)
-    await message.answer(text, reply_markup=kb, parse_mode="HTML")
+    with suppress(TelegramBadRequest):
+        await callback.message.delete()
+    await callback.message.answer(
+        f"Текущее название: <b>{escape(ex['name'])}</b>\n\nНапиши новое название упражнения:",
+        reply_markup=keyboards.cancel_keyboard(f"exm:ex:{ex_id}"),
+        parse_mode="HTML",
+    )
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("exm:editdesc:"))
