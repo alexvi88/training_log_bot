@@ -109,9 +109,12 @@ def exercises_keyboard(
     return b.as_markup()
 
 
-def new_exercise_entry_keyboard(prefix: str) -> InlineKeyboardMarkup:
+def new_exercise_entry_keyboard(prefix: str, show_templates: bool = True) -> InlineKeyboardMarkup:
+    """show_templates=False when no muscle group is selected — the template
+    browser lists one group's templates, so there'd be nothing to show."""
     b = InlineKeyboardBuilder()
-    b.button(text="📋 Выбрать из шаблонов", callback_data=f"{prefix}:templates")
+    if show_templates:
+        b.button(text="📋 Выбрать из шаблонов", callback_data=f"{prefix}:templates")
     b.button(text="❌ Отмена", callback_data=f"{prefix}:cancel")
     b.adjust(1)
     return b.as_markup()
@@ -690,12 +693,25 @@ def confirm_cancel_keyboard(
     return b.as_markup()
 
 
-def exercise_resolve_keyboard(candidates, name: str, prefix: str) -> InlineKeyboardMarkup:
+def exercise_resolve_keyboard(
+    candidates, name: str, prefix: str, remaining: int = 0
+) -> InlineKeyboardMarkup:
+    """remaining: how many unmatched names are still queued after this one. With
+    a foreign CSV that's dozens of names, each needing a pick plus a muscle-group
+    choice — "создать все остальные" is the escape hatch that isn't throwing the
+    whole import away."""
     b = InlineKeyboardBuilder()
     items = [(f"{prefix}:pick:{ex['id']}", ex["display_name"]) for ex in candidates[:6]]
     for row in named_buttons(items):
         b.row(*row)
     b.row(InlineKeyboardButton(text=f"➕ Создать «{name}»", callback_data=f"{prefix}:create"))
+    if remaining > 0:
+        b.row(
+            InlineKeyboardButton(
+                text=f"➕ Создать все остальные ({remaining + 1})",
+                callback_data=f"{prefix}:createall",
+            )
+        )
     b.row(InlineKeyboardButton(text="❌ Отменить весь ввод", callback_data=f"{prefix}:cancelall"))
     return b.as_markup()
 
@@ -749,4 +765,10 @@ def csv_column_options_keyboard(headers: list[str], prefix: str, allow_skip: boo
     if allow_skip:
         b.button(text="— нет такой колонки —", callback_data=f"{prefix}:skip")
     b.adjust(1)
+    # Without these, a mistapped column can't be undone and the only way out of
+    # the import is /start.
+    b.row(
+        InlineKeyboardButton(text="⬅️ Назад", callback_data="imp:mapback"),
+        InlineKeyboardButton(text="❌ Отмена", callback_data="imp:cancel"),
+    )
     return b.as_markup()

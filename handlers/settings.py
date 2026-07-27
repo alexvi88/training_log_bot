@@ -102,10 +102,35 @@ async def settings_timezone_back(callback: CallbackQuery, state: FSMContext):
 
 
 @router.callback_query(F.data == "settings:formula")
+async def settings_formula_confirm(callback: CallbackQuery, state: FSMContext):
+    """Switching the formula recomputes every e1RM, record and chart in the app's
+    history. That's a bigger change than switching units (which at least keeps the
+    numbers meaning the same thing), so it asks the same way."""
+    user = await db.get_user(callback.from_user.id)
+    new_formula = "brzycki" if user["e1rm_formula"] == "epley" else "epley"
+    kb = keyboards.yes_no_keyboard(
+        yes_cb="settings:formulayes", no_cb="settings:formulano",
+        yes_text=f"Переключить на {new_formula}", no_text="❌ Отмена",
+    )
+    await ui.safe_edit(
+        callback,
+        f"Переключить формулу 1ПМ на {new_formula}? Все расчётные максимумы, "
+        "рекорды и графики пересчитаются — сами подходы не изменятся.",
+        reply_markup=kb,
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "settings:formulayes")
 async def settings_formula(callback: CallbackQuery, state: FSMContext):
     user = await db.get_user(callback.from_user.id)
     new_formula = "brzycki" if user["e1rm_formula"] == "epley" else "epley"
     await db.update_user(callback.from_user.id, e1rm_formula=new_formula)
+    await show_settings(callback, state, alert=f"Формула 1ПМ: {new_formula}")
+
+
+@router.callback_query(F.data == "settings:formulano")
+async def settings_formula_cancel(callback: CallbackQuery, state: FSMContext):
     await show_settings(callback, state)
 
 

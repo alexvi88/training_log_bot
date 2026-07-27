@@ -174,7 +174,10 @@ async def test_ai_voice_question_forwards_transcribed_text_as_question(fresh_db,
 
     await ai_trainer.ai_voice_question(message, state)
 
-    message.reply.assert_not_awaited()
+    # What was heard is echoed back, so a misheard question doesn't make the
+    # answer look like the trainer inventing things.
+    message.reply.assert_awaited_once()
+    assert "как мой прогресс" in message.reply.await_args.args[0]
     handle_question.assert_awaited_once_with(
         message, state, "как мой прогресс", history_question="как мой прогресс"
     )
@@ -213,3 +216,107 @@ async def test_ai_question_daily_limit_blocks_before_calling_model(fresh_db, use
     assert called is False
     message.reply.assert_awaited_once()
     assert "лимит" in message.reply.await_args.args[0].lower()
+
+
+def _make_chat_message(user_id: int, text: str):
+    """_make_message with a placeholder that can actually be edited — the answer
+    path edits the "думаю…" message in place."""
+    message = _make_message(user_id, text)
+    placeholder = MagicMock()
+    placeholder.edit_text = AsyncMock()
+    placeholder.chat = SimpleNamespace(id=user_id)
+    placeholder.message_id = 9
+    message.answer = AsyncMock(return_value=placeholder)
+    return message
+
+
+async def test_failed_question_does_not_spend_the_daily_quota(fresh_db, user_id, monkeypatch):
+    """A provider outage shouldn't cost the user one of their daily questions —
+    the counter used to be charged before the request and never refunded."""
+    async def failing_ask(*args, **kwargs):
+        raise RuntimeError("provider is down")
+
+    monkeypatch.setattr(ai_trainer.ai_trainer, "ask", failing_ask)
+
+    state = await _make_state(user_id)
+    await state.set_state("AITrainerFlow:chatting")
+    message = _make_chat_message(user_id, "как жим?")
+
+    await ai_trainer.ai_question(message, state)
+
+    assert await fresh_db.get_ai_question_count_today(user_id) == 0
+
+
+async def test_successful_question_spends_exactly_one(fresh_db, user_id, monkeypatch):
+    monkeypatch.setattr(ai_trainer.ai_trainer, "ask", AsyncMock(return_value="растёт"))
+
+    state = await _make_state(user_id)
+    await state.set_state("AITrainerFlow:chatting")
+    message = _make_chat_message(user_id, "как жим?")
+
+    await ai_trainer.ai_question(message, state)
+
+    assert await fresh_db.get_ai_question_count_today(user_id) == 1
+
+
+async def test_reentering_the_trainer_keeps_the_conversation(fresh_db, user_id, monkeypatch):
+    """Stepping out to the menu and back used to reset the trainer to its intro
+    with no memory of what was just discussed."""
+    from aiogram.types import CallbackQuery
+
+    monkeypatch.setattr(ai_trainer.ai_trainer, "is_configured", lambda: True)
+    state = await _make_state(user_id)
+    history = [
+        {"role": "user", "content": "как жим?"},
+        {"role": "assistant", "content": "растёт"},
+    ]
+    await state.update_data(ai_history=history)
+
+    message = MagicMock()
+    message.chat = SimpleNamespace(id=user_id)
+    message.message_id = 3
+    message.text = "меню"
+    message.photo = None
+    message.delete = AsyncMock()
+    message.edit_text = AsyncMock(return_value=True)
+    message.answer = AsyncMock(return_value=SimpleNamespace(message_id=4))
+    callback = MagicMock(spec=CallbackQuery)
+    callback.from_user = SimpleNamespace(id=user_id, username="tester")
+    callback.message = message
+    callback.data = "menu:ai"
+    callback.answer = AsyncMock()
+
+    await ai_trainer.menu_ai(callback, state)
+
+    assert (await state.get_data())["ai_history"] == history
+    sent = message.answer.await_args
+    text = sent.args[0] if sent.args else sent.kwargs["text"]
+    assert "Продолжаем" in text  # the resume line, not the full intro
+
+
+async def test_first_entry_still_shows_the_intro(fresh_db, user_id, monkeypatch):
+    from aiogram.types import CallbackQuery
+
+    monkeypatch.setattr(ai_trainer.ai_trainer, "is_configured", lambda: True)
+    state = await _make_state(user_id)
+
+    message = MagicMock()
+    message.chat = SimpleNamespace(id=user_id)
+    message.message_id = 3
+    message.text = "меню"
+    message.photo = None
+    message.delete = AsyncMock()
+    message.edit_text = AsyncMock(return_value=True)
+    message.answer = AsyncMock(return_value=SimpleNamespace(message_id=4))
+    callback = MagicMock(spec=CallbackQuery)
+    callback.from_user = SimpleNamespace(id=user_id, username="tester")
+    callback.message = message
+    callback.data = "menu:ai"
+    callback.answer = AsyncMock()
+
+    await ai_trainer.menu_ai(callback, state)
+
+    sent = message.answer.await_args
+    text = sent.args[0] if sent.args else sent.kwargs["text"]
+    assert "ТРЕНЕР НА СВЯЗИ" in text
+    assert "Спрашивай что угодно" in text
