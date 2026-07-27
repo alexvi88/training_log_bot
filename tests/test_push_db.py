@@ -54,10 +54,22 @@ async def test_list_engagement_eligible_user_ids_excludes_opted_out(fresh_db, us
             uid, started_at="2026-07-01T10:00:00", finished_at="2026-07-01T11:00:00"
         )
 
-    assert set(await db.list_engagement_eligible_user_ids()) == {user_id, other_id}
+    assert {uid for uid, _tz in await db.list_engagement_eligible_user_ids()} == {user_id, other_id}
 
     await db.update_user(other_id, pushes_enabled=0)
-    assert set(await db.list_engagement_eligible_user_ids()) == {user_id}
+    assert {uid for uid, _tz in await db.list_engagement_eligible_user_ids()} == {user_id}
+
+
+async def test_engagement_pool_carries_the_timezone_offset(fresh_db, user_id):
+    """The job runs hourly and sends at each user's own ENGAGEMENT_HOUR, so the
+    pool has to say which zone they're in."""
+    db = fresh_db
+    await db.create_finished_workout(
+        user_id, started_at="2026-07-01T10:00:00", finished_at="2026-07-01T11:00:00"
+    )
+    await db.update_user(user_id, tz_offset=5)
+
+    assert await db.list_engagement_eligible_user_ids() == [(user_id, 5)]
 
 
 async def test_list_newbie_user_ids_only_users_without_finished_workouts(fresh_db, user_id):
@@ -69,7 +81,7 @@ async def test_list_newbie_user_ids_only_users_without_finished_workouts(fresh_d
     )
 
     newbies = await db.list_newbie_user_ids()
-    assert [uid for uid, _ in newbies] == [user_id]
+    assert [uid for uid, _created, _tz in newbies] == [user_id]
 
     await db.update_user(user_id, pushes_enabled=0)
     assert await db.list_newbie_user_ids() == []

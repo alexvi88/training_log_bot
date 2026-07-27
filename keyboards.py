@@ -369,6 +369,9 @@ def progress_chart_keyboard(exercise_id: int, limit: int, origin: str = "all") -
 
 
 def history_list_keyboard(workouts, page: int, has_next: bool) -> InlineKeyboardMarkup:
+    """Dates only, two per row — what each session contained is spelled out in the
+    message body (formatting.build_history_list), so these are just tap targets
+    and don't need the full width."""
     b = InlineKeyboardBuilder()
     for w in workouts:
         b.button(text=w["label"], callback_data=f"hist:item:{w['id']}")
@@ -377,7 +380,7 @@ def history_list_keyboard(workouts, page: int, has_next: bool) -> InlineKeyboard
         nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"hist:page:{page - 1}"))
     if has_next:
         nav.append(InlineKeyboardButton(text="➡️", callback_data=f"hist:page:{page + 1}"))
-    b.adjust(1)
+    b.adjust(2)
     if nav:
         b.row(*nav)
     b.row(InlineKeyboardButton(text="🗓 Добавить прошлые тренировки", callback_data="menu:backfill_workout"))
@@ -668,9 +671,11 @@ def calendar_keyboard(prefix: str, year: int, month: int, today: dt.date | None 
     return b.as_markup()
 
 
-def date_quick_keyboard(prefix: str) -> InlineKeyboardMarkup:
+def date_quick_keyboard(prefix: str, today: dt.date | None = None) -> InlineKeyboardMarkup:
+    """today: the user's own date — "Сегодня" must mean their today, not the
+    server's, or it silently logs to the wrong day near midnight."""
     b = InlineKeyboardBuilder()
-    today = dt.date.today()
+    today = today or dt.date.today()
     quick_dates = [
         ("Сегодня", today),
         ("Вчера", today - dt.timedelta(days=1)),

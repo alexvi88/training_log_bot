@@ -1634,11 +1634,14 @@ async def finish_confirm_keep(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(StateFilter(WorkoutFlow.confirming_finish_date), F.data == "finconfirm:changedate")
 async def finish_confirm_changedate(callback: CallbackQuery, state: FSMContext):
     await state.set_state(WorkoutFlow.awaiting_finish_date)
-    today = dt.date.today()
+    # The user's own today, matching the mismatch warning that led here — a
+    # calendar built on the server's date would mark a different day as "сегодня"
+    # than the message just named.
+    today = timeutil.user_today(await db.get_user(callback.from_user.id))
     await ui.safe_edit(
         callback,
         "На какую дату перенести тренировку?\nВыбери в календаре или напиши дату в формате дд.мм.гггг:",
-        reply_markup=keyboards.calendar_keyboard("findate", today.year, today.month),
+        reply_markup=keyboards.calendar_keyboard("findate", today.year, today.month, today=today),
     )
     await callback.answer()
 
@@ -1646,9 +1649,10 @@ async def finish_confirm_changedate(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(StateFilter(WorkoutFlow.awaiting_finish_date), F.data.startswith("findate:cal:"))
 async def finish_date_cal_nav(callback: CallbackQuery, state: FSMContext):
     year, month = (int(x) for x in callback.data.split(":")[2].split("-"))
+    today = timeutil.user_today(await db.get_user(callback.from_user.id))
     with suppress(TelegramBadRequest):
         await callback.message.edit_reply_markup(
-            reply_markup=keyboards.calendar_keyboard("findate", year, month)
+            reply_markup=keyboards.calendar_keyboard("findate", year, month, today=today)
         )
     await callback.answer()
 
@@ -1678,7 +1682,7 @@ async def finish_date_quick(callback: CallbackQuery, state: FSMContext):
 @router.message(StateFilter(WorkoutFlow.awaiting_finish_date))
 async def finish_date_text(message: Message, state: FSMContext):
     try:
-        date = parse_ru_date(message.text)
+        date = parse_ru_date(message.text, today=timeutil.user_today(await db.get_user(message.from_user.id)))
     except ParseError as e:
         await message.reply(e.message)
         return

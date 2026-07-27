@@ -12,6 +12,7 @@ from aiogram.types import CallbackQuery, Message
 import db
 import formatting
 import keyboards
+import timeutil
 import ui
 from fsm import BackfillFlow, WorkoutFlow
 from parser import ParseError, parse_ru_date
@@ -26,11 +27,11 @@ _BACKFILL_PROMPT = "📅 На какую дату занести трениро�
 async def backfill_start(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     await state.set_state(BackfillFlow.awaiting_date)
-    today = dt.date.today()
+    today = timeutil.user_today(await db.get_user(callback.from_user.id))
     await ui.safe_edit(
         callback,
         _BACKFILL_PROMPT,
-        reply_markup=keyboards.calendar_keyboard("bf", today.year, today.month),
+        reply_markup=keyboards.calendar_keyboard("bf", today.year, today.month, today=today),
     )
     await callback.answer()
 
@@ -38,9 +39,10 @@ async def backfill_start(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(StateFilter(BackfillFlow.awaiting_date), F.data.startswith("bf:cal:"))
 async def bf_cal_nav(callback: CallbackQuery, state: FSMContext):
     year, month = (int(x) for x in callback.data.split(":")[2].split("-"))
+    today = timeutil.user_today(await db.get_user(callback.from_user.id))
     with suppress(TelegramBadRequest):
         await callback.message.edit_reply_markup(
-            reply_markup=keyboards.calendar_keyboard("bf", year, month)
+            reply_markup=keyboards.calendar_keyboard("bf", year, month, today=today)
         )
     await callback.answer()
 
@@ -80,7 +82,9 @@ async def bf_date_quick(callback: CallbackQuery, state: FSMContext):
 @router.message(StateFilter(BackfillFlow.awaiting_date))
 async def bf_date_text(message: Message, state: FSMContext):
     try:
-        date = parse_ru_date(message.text)
+        date = parse_ru_date(
+            message.text, today=timeutil.user_today(await db.get_user(message.from_user.id))
+        )
     except ParseError as e:
         await message.reply(e.message)
         return

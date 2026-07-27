@@ -645,3 +645,52 @@ def test_logging_hint_hides_instruction_but_keeps_last_session_and_note():
     assert "Вес и повторы" not in hint
     assert "болит плечо" in hint
     assert "В прошлый раз" in hint
+
+
+# ---------- build_history_list ----------
+
+
+def test_history_list_puts_exercise_names_in_the_body():
+    """Real names run 20-30 chars, so two of them already overflow a button
+    label — the list carries them in the message text instead."""
+    entries = [
+        (dt.datetime(2026, 7, 26, 13), ["conventional deadlift", "pull down"], 13),
+    ]
+    text = formatting.build_history_list(entries)
+    assert "26.07.2026 (вс) · 13 сетов" in text
+    assert "conventional deadlift, pull down" in text
+
+
+def test_history_list_cuts_on_a_name_boundary_not_mid_word():
+    long_names = [
+        "bench press - flat - machine",
+        "chest press - horizontal machine",
+        "seated row - 1hand - cable",
+        "overhead press - machine",
+    ]
+    entries = [(dt.datetime(2026, 7, 24, 18), long_names, 9)]
+    text = formatting.build_history_list(entries)
+    assert "+2" in text  # two names folded away
+    assert "chest press - horizontal machine" in text  # last kept name is whole
+    assert "seated" not in text  # nothing half-rendered
+
+
+def test_history_list_keeps_a_full_page_well_inside_the_message_cap():
+    entries = [
+        (dt.datetime(2026, 7, d, 18), ["conventional deadlift", "abs - pull down block"], 12)
+        for d in range(1, 9)
+    ]
+    text = formatting.build_history_list(entries)
+    assert formatting.telegram_length(text) < formatting.MESSAGE_LIMIT
+
+
+def test_history_list_empty_state():
+    assert formatting.build_history_list([]) == "Пока нет завершённых тренировок."
+    assert formatting.build_history_list([], empty="ничего") == "ничего"
+
+
+def test_history_list_marks_a_workout_with_no_exercises():
+    entries = [(dt.datetime(2026, 7, 26, 13), [], 0)]
+    text = formatting.build_history_list(entries)
+    assert "пусто" in text
+    assert "сет" not in text  # no set count when there are none

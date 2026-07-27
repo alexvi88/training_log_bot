@@ -229,20 +229,47 @@ async def _deliver(bot: Bot, telegram_id: int, decision: PushDecision) -> None:
     await db.record_push(telegram_id, decision.category, decision.text)
 
 
+def _utc_now() -> dt.datetime:
+    """Naive UTC — split out so tests can pin the clock."""
+    return dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
+
+
+def _local_now(tz_offset: int) -> dt.datetime:
+    """Wall clock for a user at `tz_offset`, matching timeutil's UTC-based model."""
+    return _utc_now() + dt.timedelta(hours=tz_offset or 0)
+
+
+def is_send_hour(tz_offset: int, hour: int) -> bool:
+    return _local_now(tz_offset).hour == hour
+
+
 async def _send_daily_pushes(bot: Bot) -> None:
-    today = dt.date.today()
-    for telegram_id in await db.list_engagement_eligible_user_ids():
+    """One hourly tick: send to whoever it's ENGAGEMENT_HOUR for right now.
+
+    Everyone used to be pushed at the server's ENGAGEMENT_HOUR, so a user five
+    zones over got their "обычно в это время ты под грифом" nudge in the middle
+    of the afternoon — even though they'd set their timezone in Settings and
+    everything else in the bot already respected it. build_daily_push's own
+    has_push_today guard is keyed on the date it's given, so passing each user's
+    local date also keeps the one-per-day promise per user.
+    """
+    hour = config.ENGAGEMENT_HOUR
+    for telegram_id, tz_offset in await db.list_engagement_eligible_user_ids():
+        if not is_send_hour(tz_offset, hour):
+            continue
         try:
-            decision = await build_daily_push(telegram_id, today)
+            decision = await build_daily_push(telegram_id, _local_now(tz_offset).date())
         except Exception:
             logger.exception("Failed to build push for user %s", telegram_id)
             continue
         if decision is not None:
             await _deliver(bot, telegram_id, decision)
 
-    for telegram_id, created_at in await db.list_newbie_user_ids():
+    for telegram_id, created_at, tz_offset in await db.list_newbie_user_ids():
+        if not is_send_hour(tz_offset, hour):
+            continue
         try:
-            decision = await build_newbie_push(telegram_id, created_at, today)
+            decision = await build_newbie_push(telegram_id, created_at, _local_now(tz_offset).date())
         except Exception:
             logger.exception("Failed to build newbie push for user %s", telegram_id)
             continue
@@ -250,19 +277,17 @@ async def _send_daily_pushes(bot: Bot) -> None:
             await _deliver(bot, telegram_id, decision)
 
 
-def _seconds_until_next_run(hour: int) -> float:
+def _seconds_until_next_hour() -> float:
     now = dt.datetime.now()
-    target = now.replace(hour=hour, minute=0, second=0, microsecond=0)
-    if target <= now:
-        target += dt.timedelta(days=1)
-    return (target - now).total_seconds()
+    nxt = (now + dt.timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
+    return (nxt - now).total_seconds()
 
 
 async def run_daily_engagement_job(bot: Bot) -> None:
     if not config.ENGAGEMENT_ENABLED:
         return
     while True:
-        await asyncio.sleep(_seconds_until_next_run(config.ENGAGEMENT_HOUR))
+        await asyncio.sleep(_seconds_until_next_hour())
         try:
             await _send_daily_pushes(bot)
         except Exception:
