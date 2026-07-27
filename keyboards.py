@@ -684,24 +684,35 @@ def exercise_resolve_keyboard(candidates, name: str, prefix: str) -> InlineKeybo
     return b.as_markup()
 
 
-def edit_workout_keyboard(rows) -> InlineKeyboardMarkup:
-    """rows: ordered list of ("set", set_id, label), ("add", block_id, exercise_id, label),
-    or ("remove", block_id, label) — each exercise's "+ Сет"/"🗑 Убрать" buttons belong
-    right after that exercise's own set rows."""
+def edit_workout_keyboard(exercises) -> InlineKeyboardMarkup:
+    """Top level of editing a past workout: one button per exercise.
+
+    exercises: ordered (block_id, exercise_id, label) rows, label already
+    pluralised by the caller.
+    A button per *set* here (with the exercise name repeated in every label, plus
+    a "+ Сет" and a "🗑 Убрать" row each) ran to 30+ single-column rows on an
+    ordinary 5-exercise session — the sets live one level down instead, where the
+    exercise is already named by the screen's own header.
+    """
     b = InlineKeyboardBuilder()
-    for row in rows:
-        if row[0] == "set":
-            _, set_id, label = row
-            b.button(text=label, callback_data=f"editw:set:{set_id}")
-        elif row[0] == "add":
-            _, block_id, exercise_id, label = row
-            b.button(text=f"➕ Сет — {label}", callback_data=f"editw:addset:{block_id}:{exercise_id}")
-        else:
-            _, block_id, label = row
-            b.button(text=f"🗑 Убрать «{label}» целиком", callback_data=f"editw:rmex:{block_id}")
+    for block_id, exercise_id, label in exercises:
+        b.button(text=label, callback_data=f"editw:ex:{block_id}:{exercise_id}")
     b.button(text="➕ Новое упражнение", callback_data="editw:newex")
     b.button(text="📅 Изменить дату", callback_data="editw:date")
     b.button(text="✅ Готово", callback_data="editw:done")
+    b.adjust(1)
+    return b.as_markup()
+
+
+def edit_exercise_keyboard(block_id: int, exercise_id: int, sets) -> InlineKeyboardMarkup:
+    """One exercise's sets inside the edit flow. sets: (set_id, label) pairs —
+    labels carry no exercise name, the screen header already does."""
+    b = InlineKeyboardBuilder()
+    for set_id, label in sets:
+        b.button(text=label, callback_data=f"editw:set:{set_id}")
+    b.button(text="➕ Сет", callback_data=f"editw:addset:{block_id}:{exercise_id}")
+    b.button(text="🗑 Убрать упражнение целиком", callback_data=f"editw:rmexask:{block_id}")
+    b.button(text="⬅️ К упражнениям", callback_data="editw:top")
     b.adjust(1)
     return b.as_markup()
 

@@ -47,7 +47,8 @@ class ResolveFlow(StatesGroup):
 
 
 class EditWorkoutFlow(StatesGroup):
-    viewing = State()
+    viewing = State()          # the workout's exercise list
+    viewing_exercise = State()  # one exercise's sets
     awaiting_date = State()
     editing_set = State()
     adding_set = State()

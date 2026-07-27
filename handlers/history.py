@@ -2,12 +2,14 @@
 
 import asyncio
 import datetime as dt
+from contextlib import suppress
 from html import escape
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton, InputMediaPhoto, Message
+from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import ai_trainer
@@ -40,9 +42,43 @@ async def show_history_list(callback: CallbackQuery, state: FSMContext, page: in
         items.append({"id": w["id"], "label": formatting.format_date_ru(started)})
     has_next = (page + 1) * HISTORY_PAGE_SIZE < total
     kb = keyboards.history_list_keyboard(items, page, has_next)
-    text = "📚 История тренировок:" if items else "Пока нет завершённых тренировок."
-    await ui.safe_edit(callback, text, reply_markup=kb)
+    text = (
+        "📚 История тренировок:\n<i>Напиши название упражнения, чтобы найти тренировку с ним.</i>"
+        if items
+        else "Пока нет завершённых тренировок."
+    )
+    await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML")
     await callback.answer()
+
+
+@router.message(StateFilter(HistoryFlow.browsing))
+async def hist_search(message: Message, state: FSMContext):
+    """Typing while browsing history filters it by exercise name.
+
+    The list itself can only show dates — exercise names are far too long for a
+    button label — so search is the only way to answer "в какой тренировке был
+    жим" without opening sessions one by one.
+    """
+    query = message.text.strip() if message.text else ""
+    with suppress(TelegramBadRequest):
+        await message.delete()
+    if not query:
+        return
+    workouts = await db.search_workouts_by_exercise(message.from_user.id, query)
+    items = [
+        {
+            "id": w["id"],
+            "label": formatting.format_date_ru(dt.datetime.fromisoformat(w["started_at"])),
+        }
+        for w in workouts
+    ]
+    kb = keyboards.history_list_keyboard(items, page=0, has_next=False)
+    text = (
+        f"🔎 Тренировки с «{escape(query)}»: {len(items)}"
+        if items
+        else f"🔎 Ничего не нашёл по «{escape(query)}»."
+    )
+    await message.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
 @router.callback_query(F.data.startswith("hist:page:"))
@@ -75,20 +111,26 @@ async def _top_lifts(user_id: int, formula: str) -> list[tuple[str, float, int, 
     """
     weighted: list[tuple[str, float, int, float]] = []
     bodyweight: list[tuple[str, float, int, float]] = []
-    for ex in await db.list_user_exercises(user_id):
-        rows = await db.list_sets_for_exercise(ex["id"])
-        if not rows:
-            continue
-        set_rows = [analytics.SetRow(r["weight"], r["reps"], r["workout_id"], r["started_at"]) for r in rows]
+
+    # One query for every set the user owns, then grouped here — the per-exercise
+    # version cost a round-trip per exercise ever created (see list_all_sets_by_exercise).
+    by_exercise: dict[int, tuple[str, list[analytics.SetRow]]] = {}
+    for r in await db.list_all_sets_by_exercise(user_id):
+        entry = by_exercise.get(r["exercise_id"])
+        if entry is None:
+            entry = by_exercise[r["exercise_id"]] = (r["display_name"], [])
+        entry[1].append(analytics.SetRow(r["weight"], r["reps"], r["workout_id"], r["started_at"]))
+
+    for display_name, set_rows in by_exercise.values():
         sessions = analytics.group_sets_by_session(set_rows)
         for s in sessions:
             s.formula = formula
         pr = analytics.compute_personal_records(sessions)
         if pr.max_e1rm > 0 and pr.best_e1rm_weight > 0:
-            weighted.append((ex["display_name"], pr.best_e1rm_weight, pr.best_e1rm_reps, pr.max_e1rm))
+            weighted.append((display_name, pr.best_e1rm_weight, pr.best_e1rm_reps, pr.max_e1rm))
         elif pr.max_reps_at_weight:
             best_reps = max(pr.max_reps_at_weight.values())
-            bodyweight.append((ex["display_name"], 0.0, best_reps, 0.0))
+            bodyweight.append((display_name, 0.0, best_reps, 0.0))
     weighted.sort(key=lambda t: t[3], reverse=True)
     bodyweight.sort(key=lambda t: t[2], reverse=True)
     return weighted + bodyweight
@@ -122,6 +164,10 @@ async def menu_achievements(callback: CallbackQuery, state: FSMContext):
     old standalone Hall of Fame screen (lifetime totals, personal records)
     with the badge grid into one screen."""
     await state.clear()
+    # Acknowledged up front: assembling this screen reads the user's whole set
+    # history, and Telegram spins the tapped button until the callback is answered
+    # (and gives up entirely after ~10s).
+    await callback.answer()
     earned = await db.list_achievement_codes(callback.from_user.id)
     ach_text = formatting.build_achievements_screen(earned)
     # Records and badges share one message, and the record list is the open-ended
@@ -135,7 +181,6 @@ async def menu_achievements(callback: CallbackQuery, state: FSMContext):
     kb.button(text="⬅️ Назад", callback_data="prog:groups")
     kb.adjust(1)
     await ui.safe_edit(callback, text, reply_markup=kb.as_markup(), parse_mode="HTML")
-    await callback.answer()
 
 
 async def show_history_item(callback: CallbackQuery, workout_id: int) -> bool:
@@ -208,6 +253,38 @@ async def hist_edit(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+_DELETE_CONFIRM_SUMMARY_MAX = 120
+
+
+async def _delete_confirm_text(workout) -> str:
+    """Names the workout about to be destroyed: date, duration and what was in it."""
+    started = dt.datetime.fromisoformat(workout["started_at"])
+    header = formatting.format_date_ru(started)
+    duration = await view_builder.workout_duration_seconds(workout)
+    if duration is not None:
+        header += f" · {formatting.format_duration(duration)}"
+
+    names: list[str] = []
+    seen: set[int] = set()
+    set_count = 0
+    for block in await db.list_blocks_for_workout(workout["id"]):
+        set_count += len(await db.list_sets_for_block(block["id"]))
+        for be in await db.get_block_exercises(block["id"]):
+            if be["exercise_id"] not in seen:
+                seen.add(be["exercise_id"])
+                names.append(be["display_name"])
+    summary = ", ".join(names)
+    if len(summary) > _DELETE_CONFIRM_SUMMARY_MAX:
+        summary = summary[:_DELETE_CONFIRM_SUMMARY_MAX].rstrip(" ,") + "…"
+
+    lines = [f"Удалить тренировку\n<b>{escape(header)}</b>"]
+    if summary:
+        set_word = formatting.plural_ru(set_count, ("сет", "сета", "сетов"))
+        lines.append(f"<i>{escape(summary)} — {set_count} {set_word}</i>")
+    lines.append("\nЭто действие нельзя отменить.")
+    return "\n".join(lines)
+
+
 @router.callback_query(F.data.startswith("hist:del:"))
 async def hist_delete_confirm(callback: CallbackQuery, state: FSMContext):
     workout_id = int(callback.data.split(":")[2])
@@ -221,7 +298,10 @@ async def hist_delete_confirm(callback: CallbackQuery, state: FSMContext):
         yes_text="🗑 Удалить",
         no_text="❌ Отмена",
     )
-    await ui.safe_edit(callback, "Удалить эту тренировку? Это действие нельзя отменить.", reply_markup=kb)
+    # safe_edit replaces the card being deleted, so the question has to carry the
+    # date and contents itself — otherwise the one screen that identifies the
+    # workout disappears exactly when the user is deciding whether to destroy it.
+    await ui.safe_edit(callback, await _delete_confirm_text(workout), reply_markup=kb, parse_mode="HTML")
     await callback.answer()
 
 
@@ -441,11 +521,12 @@ async def prog_change_period(callback: CallbackQuery, state: FSMContext):
     user = await db.get_user(callback.from_user.id)
     text, png, kb = await _render_progress_view(ex_id, user, limit, origin)
 
+    # Same path as prog_show_exercise: edit_media directly would strand the chart
+    # above anything that landed under it (a push, the user's own message), since
+    # Telegram can't move an edited message back down — that's what safe_edit_photo
+    # exists to decide.
     if png:
-        media = InputMediaPhoto(
-            media=BufferedInputFile(png, filename="chart.png"), caption=text, parse_mode="HTML"
-        )
-        await callback.message.edit_media(media, reply_markup=kb)
+        await ui.safe_edit_photo(callback, png, "chart.png", text, reply_markup=kb, parse_mode="HTML")
     else:
         await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML")
     await callback.answer()
