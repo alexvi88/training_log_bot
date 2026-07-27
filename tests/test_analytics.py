@@ -283,13 +283,13 @@ def test_compare_to_previous_session_computes_deltas():
 
 
 def test_suggest_progression_add_reps_below_top_of_range():
-    s = analytics.suggest_progression([(100, 8), (100, 8)], weight_step=2.5)
+    s = analytics.suggest_progression([(100, 8), (100, 8)])
     assert s.action == "add_reps"
     assert (s.target_weight, s.target_reps) == (100, 9)
 
 
 def test_suggest_progression_add_weight_when_top_of_range_reached():
-    s = analytics.suggest_progression([(100, 10), (100, 10)], weight_step=2.5)
+    s = analytics.suggest_progression([(100, 10), (100, 10)])
     assert s.action == "add_weight"
     assert s.target_weight == pytest.approx(102.5)
     assert s.target_reps == analytics.REP_RANGE_MIN
@@ -297,18 +297,68 @@ def test_suggest_progression_add_weight_when_top_of_range_reached():
 
 def test_suggest_progression_uses_heaviest_set_reps():
     # Heaviest set is 100 for 8 reps; lighter warmup-ish sets ignored for the target.
-    s = analytics.suggest_progression([(80, 12), (100, 8)], weight_step=5)
+    s = analytics.suggest_progression([(80, 12), (100, 8)])
     assert (s.action, s.target_weight, s.target_reps) == ("add_reps", 100, 9)
 
 
 def test_suggest_progression_bodyweight_chases_one_more_rep():
-    s = analytics.suggest_progression([(0, 12), (0, 10)], weight_step=2.5)
+    s = analytics.suggest_progression([(0, 12), (0, 10)])
     assert s.is_bodyweight is True
     assert s.target_reps == 13
 
 
 def test_suggest_progression_none_when_no_sets():
-    assert analytics.suggest_progression([], weight_step=2.5) is None
+    assert analytics.suggest_progression([]) is None
+
+
+def test_suggest_progression_heavy_lift_jumps_by_five():
+    s = analytics.suggest_progression([(200, 10)])
+    assert s.target_weight == pytest.approx(205)
+
+
+def test_suggest_progression_uses_inferred_step_when_finer_than_default():
+    s = analytics.suggest_progression([(50, 10)], inferred_step=2.0)
+    assert s.target_weight == pytest.approx(52.0)
+
+
+def test_suggest_progression_ignores_inferred_step_coarser_than_default():
+    # A 20kg gap is a backoff set, not the rack's increment.
+    s = analytics.suggest_progression([(100, 10)], inferred_step=20.0)
+    assert s.target_weight == pytest.approx(102.5)
+
+
+# ---------- infer_weight_step / weight_step_for ----------
+
+
+def test_infer_weight_step_reads_gap_between_two_heaviest():
+    assert analytics.infer_weight_step([20, 22, 24, 24, 26]) == pytest.approx(2.0)
+
+
+def test_infer_weight_step_ignores_bodyweight_and_repeats():
+    assert analytics.infer_weight_step([0, 0, 40, 40]) is None
+    assert analytics.infer_weight_step([100]) is None
+    assert analytics.infer_weight_step([]) is None
+
+
+def test_infer_weight_step_survives_float_noise():
+    assert analytics.infer_weight_step([100.0, 102.5]) == pytest.approx(2.5)
+
+
+def test_weight_step_for_defaults_per_unit():
+    assert analytics.weight_step_for(100, "kg") == pytest.approx(2.5)
+    assert analytics.weight_step_for(100, "lb") == pytest.approx(5.0)
+
+
+def test_weight_step_for_heavy_thresholds_per_unit():
+    assert analytics.weight_step_for(199.9, "kg") == pytest.approx(2.5)
+    assert analytics.weight_step_for(200, "kg") == pytest.approx(5.0)
+    assert analytics.weight_step_for(449, "lb") == pytest.approx(5.0)
+    assert analytics.weight_step_for(450, "lb") == pytest.approx(10.0)
+
+
+def test_weight_step_for_micro_plates_beat_the_heavy_rule():
+    # Someone micro-loading a 210kg pull means it: don't force a 5kg jump on them.
+    assert analytics.weight_step_for(210, "kg", inferred_step=1.25) == pytest.approx(1.25)
 
 
 # ---------- is_workout_milestone ----------
