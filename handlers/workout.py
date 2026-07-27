@@ -267,10 +267,6 @@ async def _log_one(block_id: int, exercise_id: int, weight: float, reps: int, rp
     await db.add_set(block_id, exercise_id, round_idx, 0, weight, reps, rpe)
 
 
-# Smallest sensible plate/step to suggest bumping to when a lift outgrows the
-# rep range — a rough default, since the bot doesn't know the actual increment.
-_WEIGHT_STEP = {"kg": 2.5, "lb": 5.0}
-
 # Below this fraction of last session's heaviest set, a just-logged weight is
 # flagged as a likely typo (e.g. "1 1" meant "140 6") rather than a deliberate
 # drop — a real backoff set rarely goes below this.
@@ -310,6 +306,7 @@ def _logging_hint(
     today_sets: list[tuple[float, int]] | None = None,
     note: str | None = None,
     show_instruction: bool = True,
+    inferred_step: float | None = None,
 ) -> str:
     base = None
     if show_instruction:
@@ -324,7 +321,9 @@ def _logging_hint(
         line = f"💡 В прошлый раз: {sets_str}"
         if show_progression:
             wr_only = [(w, r) for w, r, _ in last_session]
-            suggestion = analytics.suggest_progression(wr_only, _WEIGHT_STEP.get(unit, 2.5))
+            suggestion = analytics.suggest_progression(
+                wr_only, unit=unit, inferred_step=inferred_step
+            )
             if suggestion is not None:
                 achieved = any(
                     w >= suggestion.target_weight and r >= suggestion.target_reps
@@ -406,13 +405,23 @@ async def _evaluate_achievements(
         return []
 
 
-async def _last_session_sets(ex_id: int) -> list[tuple[float, int, float | None]]:
-    """Working sets (weight, reps, rpe) from this exercise's most recent finished workout."""
+async def _exercise_history(
+    ex_id: int,
+) -> tuple[list[tuple[float, int, float | None]], float | None]:
+    """Two things off one history query, both cached in the FSM so the logging
+    screen doesn't rescan an exercise's whole history on every render:
+
+    - working sets (weight, reps, rpe) from its most recent finished workout;
+    - the increment this exercise is actually loaded in (analytics.infer_weight_step).
+    """
     rows = await db.list_sets_for_exercise(ex_id)
     if not rows:
-        return []
+        return [], None
     last_workout_id = rows[-1]["workout_id"]
-    return [(r["weight"], r["reps"], r["rpe"]) for r in rows if r["workout_id"] == last_workout_id]
+    last_session = [
+        (r["weight"], r["reps"], r["rpe"]) for r in rows if r["workout_id"] == last_workout_id
+    ]
+    return last_session, analytics.infer_weight_step(r["weight"] for r in rows)
 
 
 async def _render_logging_screen(bot, state: FSMContext, user):
@@ -420,6 +429,7 @@ async def _render_logging_screen(bot, state: FSMContext, user):
     open_ids: list[int] = data.get("open_exercises") or []
     active = data.get("active_exercise_id")
     last_session_sets = data.get("last_session_sets") or {}
+    weight_steps = data.get("weight_steps") or {}
 
     names: dict[int, str] = {}
     active_note: str | None = None
@@ -446,6 +456,7 @@ async def _render_logging_screen(bot, state: FSMContext, user):
         today_sets,
         note=active_note,
         show_instruction=show_instruction,
+        inferred_step=weight_steps.get(active),
     )
     kb = keyboards.logging_keyboard(open_items, active, has_sets)
     await _sync_sticky_photo(bot, state, active)
@@ -525,7 +536,7 @@ async def _main_menu_kb(user_id: int, active) -> InlineKeyboardMarkup:
 
 _WORKOUT_SCAFFOLD_KEYS = (
     "workout_id", "open_exercises", "open_blocks", "active_exercise_id",
-    "last_by_exercise", "last_session_sets",
+    "last_by_exercise", "last_session_sets", "weight_steps",
     # Not workout scaffolding, but the same reasoning: stepping out to the menu
     # and back shouldn't make the AI-тренер forget the conversation in progress.
     "ai_history",
@@ -865,7 +876,7 @@ async def resume_workout(callback: CallbackQuery, state: FSMContext):
 
 async def _reopen_exercises(
     workout_id: int,
-) -> tuple[list[int], dict[int, int], dict[int, list], dict[int, tuple]]:
+) -> tuple[list[int], dict[int, int], dict[int, list], dict[int, tuple], dict[int, float]]:
     """Rebuild which exercise is still "open" for a workout from the DB.
 
     The FSM is the only place that tracks "finished" vs "open" exercises, so when we
@@ -885,7 +896,12 @@ async def _reopen_exercises(
             if ex_id not in open_exercises:
                 open_exercises.append(ex_id)
             open_blocks[ex_id] = last_block["id"]
-    last_session_sets = {ex_id: await _last_session_sets(ex_id) for ex_id in open_exercises}
+    last_session_sets: dict[int, list] = {}
+    weight_steps: dict[int, float] = {}
+    for ex_id in open_exercises:
+        last_session_sets[ex_id], step = await _exercise_history(ex_id)
+        if step is not None:
+            weight_steps[ex_id] = step
     last_by_exercise: dict[int, tuple] = {}
     for ex_id in open_exercises:
         current_sets = await db.list_sets_for_workout_exercise(workout_id, ex_id)
@@ -897,7 +913,7 @@ async def _reopen_exercises(
             if history:
                 last = history[-1]
                 last_by_exercise[ex_id] = (last["weight"], last["reps"])
-    return open_exercises, open_blocks, last_session_sets, last_by_exercise
+    return open_exercises, open_blocks, last_session_sets, last_by_exercise, weight_steps
 
 
 async def _enter_live(
@@ -917,11 +933,14 @@ async def _enter_live(
         open_blocks = data.get("open_blocks") or {}
         last_session_sets = data.get("last_session_sets") or {}
         last_by_exercise = data.get("last_by_exercise") or {}
+        weight_steps = data.get("weight_steps") or {}
         active_exercise_id = data.get("active_exercise_id")
         if active_exercise_id not in open_exercises:
             active_exercise_id = open_exercises[-1]
     else:
-        open_exercises, open_blocks, last_session_sets, last_by_exercise = await _reopen_exercises(workout_id)
+        (
+            open_exercises, open_blocks, last_session_sets, last_by_exercise, weight_steps,
+        ) = await _reopen_exercises(workout_id)
         active_exercise_id = open_exercises[-1] if open_exercises else None
     if delete_message:
         await _delete_message(callback.message)
@@ -931,6 +950,7 @@ async def _enter_live(
         workout_id=workout_id, live_chat_id=sent.chat.id, live_message_id=sent.message_id,
         last_by_exercise=last_by_exercise, open_exercises=open_exercises, open_blocks=open_blocks,
         active_exercise_id=active_exercise_id, last_session_sets=last_session_sets,
+        weight_steps=weight_steps,
     )
     if open_exercises:
         await _render_logging_screen(callback.bot, state, user)
@@ -1187,11 +1207,15 @@ async def _on_exercise_chosen(event, state: FSMContext, ex_id: int):
         open_blocks[ex_id] = block_id
     last_by = await _seed_last_value(data, ex_id)
     last_session_sets = dict(data.get("last_session_sets") or {})
-    last_session_sets[ex_id] = await _last_session_sets(ex_id)
+    weight_steps = dict(data.get("weight_steps") or {})
+    last_session_sets[ex_id], step = await _exercise_history(ex_id)
+    if step is not None:
+        weight_steps[ex_id] = step
 
     await state.update_data(
         open_exercises=open_exercises, open_blocks=open_blocks,
         active_exercise_id=ex_id, last_by_exercise=last_by, last_session_sets=last_session_sets,
+        weight_steps=weight_steps,
     )
     await state.set_state(WorkoutFlow.logging_set)
     user = await db.get_user(event.from_user.id)
@@ -1566,18 +1590,22 @@ async def _load_next_planned_block(event, state: FSMContext) -> bool:
     open_blocks: dict[int, int] = {}
     last_by = dict(data.get("last_by_exercise") or {})
     last_session_sets = dict(data.get("last_session_sets") or {})
+    weight_steps = dict(data.get("weight_steps") or {})
     for ex_id in block_plan["exercise_ids"]:
         block_id = await db.create_block(workout_id, "single")
         await db.add_block_exercise(block_id, ex_id, 0)
         await db.touch_exercise_last_used(ex_id)
         last_by = await _seed_last_value({"last_by_exercise": last_by}, ex_id)
-        last_session_sets[ex_id] = await _last_session_sets(ex_id)
+        last_session_sets[ex_id], step = await _exercise_history(ex_id)
+        if step is not None:
+            weight_steps[ex_id] = step
         open_exercises.append(ex_id)
         open_blocks[ex_id] = block_id
 
     await state.update_data(
         open_exercises=open_exercises, open_blocks=open_blocks,
         active_exercise_id=open_exercises[0], last_by_exercise=last_by, last_session_sets=last_session_sets,
+        weight_steps=weight_steps,
     )
     await state.set_state(WorkoutFlow.logging_set)
     user = await db.get_user(event.from_user.id)

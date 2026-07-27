@@ -257,15 +257,64 @@ class ProgressionSuggestion:
     is_bodyweight: bool = False
 
 
+# Fallback increment per unit, used when the exercise's own history says nothing
+# about how it's loaded — the bot has no idea whether it's a barbell, a dumbbell
+# rack or a stack.
+DEFAULT_WEIGHT_STEP = {"kg": 2.5, "lb": 5.0}
+
+# Past this load the default step stops reading as progress (+2.5kg on a 200kg
+# pull is ~1%, well inside week-to-week noise) and the equipment jumps in bigger
+# increments anyway, so the target moves by a bigger plate.
+HEAVY_WEIGHT_THRESHOLD = {"kg": 200.0, "lb": 450.0}
+HEAVY_WEIGHT_STEP = {"kg": 5.0, "lb": 10.0}
+
+
+def infer_weight_step(history_weights: Iterable[float]) -> Optional[float]:
+    """The gap between the two heaviest distinct weights this exercise was ever
+    loaded with — the athlete's own evidence of what increments the equipment
+    actually offers (2kg dumbbells, 1.25kg micro plates, a 5kg stack pin).
+
+    Returns None when there's nothing to compare (fewer than two distinct
+    weights). The caller decides whether the gap is believable: a big gap
+    usually just means a backoff or warm-up set, not the equipment's step.
+    """
+    heaviest = sorted({round(w, 3) for w in history_weights if w > 0}, reverse=True)
+    if len(heaviest) < 2:
+        return None
+    return round(heaviest[0] - heaviest[1], 2)
+
+
+def weight_step_for(
+    top_weight: float, unit: str = "kg", inferred_step: Optional[float] = None
+) -> float:
+    """How much weight to add when a lift outgrows the rep range.
+
+    A step inferred from the exercise's own history wins whenever it's *finer*
+    than the default — it means this exercise is loaded in smaller increments
+    than a barbell, and suggesting a weight that doesn't exist on the rack is
+    the failure mode worth avoiding. A coarser inferred gap is ignored: it's far
+    more likely a backoff set than a real increment.
+    """
+    base = DEFAULT_WEIGHT_STEP.get(unit, 2.5)
+    if inferred_step is not None and 0 < inferred_step < base:
+        return inferred_step
+    if top_weight >= HEAVY_WEIGHT_THRESHOLD.get(unit, 200.0):
+        return HEAVY_WEIGHT_STEP.get(unit, 5.0)
+    return base
+
+
 def suggest_progression(
-    last_sets: list[tuple[float, int]], weight_step: float
+    last_sets: list[tuple[float, int]],
+    *,
+    unit: str = "kg",
+    inferred_step: Optional[float] = None,
 ) -> Optional[ProgressionSuggestion]:
     """Next-session target from last session's sets, by double progression.
 
     While the top working set is still inside the rep range, add a rep at the
     same weight; once it crossed the top of the range (>= REP_RANGE_MAX), bump
-    the weight by `weight_step` and restart at the bottom of the range.
-    Bodyweight sets (weight 0) simply chase one more rep.
+    the weight by one step (see weight_step_for) and restart at the bottom of
+    the range. Bodyweight sets (weight 0) simply chase one more rep.
     """
     working = [(w, r) for w, r in last_sets if r > 0]
     if not working:
@@ -276,7 +325,8 @@ def suggest_progression(
     top_weight = max(w for w, _ in working)
     reps_at_top = max(r for w, r in working if w == top_weight)
     if reps_at_top >= REP_RANGE_MAX:
-        return ProgressionSuggestion("add_weight", top_weight + weight_step, REP_RANGE_MIN)
+        step = weight_step_for(top_weight, unit, inferred_step)
+        return ProgressionSuggestion("add_weight", round(top_weight + step, 2), REP_RANGE_MIN)
     return ProgressionSuggestion("add_reps", top_weight, reps_at_top + 1)
 
 
