@@ -271,10 +271,12 @@ async def _log_one(block_id: int, exercise_id: int, weight: float, reps: int, rp
 # rep range — a rough default, since the bot doesn't know the actual increment.
 _WEIGHT_STEP = {"kg": 2.5, "lb": 5.0}
 
-# Below this fraction of last session's heaviest set, a just-logged weight is
-# flagged as a likely typo (e.g. "1 1" meant "140 6") rather than a deliberate
-# drop — a real backoff set rarely goes below this.
-_SUSPICIOUS_WEIGHT_FRACTION = 0.4
+# Below this fraction (or above this multiple) of last session's heaviest set,
+# a just-logged weight is flagged as a likely typo rather than a deliberate
+# change — a real backoff set rarely goes below the fraction, and nobody
+# doubles their working weight between sessions.
+_SUSPICIOUS_WEIGHT_LOW_FRACTION = 0.4
+_SUSPICIOUS_WEIGHT_HIGH_MULTIPLE = 3.0
 
 
 def _suspicious_weight_warning(
@@ -282,10 +284,13 @@ def _suspicious_weight_warning(
     today_sets: list[tuple[float, int]] | None,
     unit: str = "kg",
 ) -> str | None:
-    """A soft nudge — never blocks logging — when the just-logged set's weight
-    looks like a typo next to what this exercise was loaded with last time.
-    Bodyweight exercises (0 kg either time) are exempt: a light set there is
-    normal, not a typo.
+    """A soft nudge — never blocks logging, unlike parser.MAX_WEIGHT's hard
+    ceiling — when the just-logged set's weight looks like a typo next to what
+    this exercise was loaded with last time, in *either* direction: a dropped
+    digit ("1 1" meant "140 6") reads the same as an extra one ("1400" meant
+    "140") relative to history, even though only the low end used to be
+    checked here. Bodyweight exercises (0 kg either time) are exempt: a light
+    set there is normal, not a typo.
     """
     if not last_session or not today_sets:
         return None
@@ -293,7 +298,11 @@ def _suspicious_weight_warning(
     if last_weight <= 0:
         return None
     prev_max_weight = max((w for w, _r, _rpe in last_session), default=0)
-    if prev_max_weight <= 0 or last_weight >= _SUSPICIOUS_WEIGHT_FRACTION * prev_max_weight:
+    if prev_max_weight <= 0:
+        return None
+    too_low = last_weight < _SUSPICIOUS_WEIGHT_LOW_FRACTION * prev_max_weight
+    too_high = last_weight > _SUSPICIOUS_WEIGHT_HIGH_MULTIPLE * prev_max_weight
+    if not (too_low or too_high):
         return None
     u = formatting.UNIT_LABELS.get(unit, "кг")
     return (

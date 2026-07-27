@@ -32,6 +32,22 @@ _BODYWEIGHT_RE = re.compile(rf"^(?P<reps>\d+){_RPE}$")
 
 MAX_SETS_PER_TOKEN = 20
 
+# Sanity ceilings on a single set. Deliberately far above anything a human logs
+# (the heaviest competition deadlift ever is ~500kg; a plate-loaded sled tops out
+# well under this) — the job here is to reject the physically impossible, not to
+# second-guess a real lift.
+#
+# Why this matters more than it looks: an extra zero is the commonest numeric
+# typo, and an over-large set is silently permanent. It becomes the exercise's
+# all-time record, so every later "vs предыдущего рекорда" is measured against
+# it; it lands in lifetime tonnage and the Hall of Fame; and it unlocks the
+# weight-club achievements, which are never revoked even after the set is fixed.
+# Typos in the other direction are merely odd-looking, which is why the softer
+# history-based nudge (handlers/workout._suspicious_weight_warning) was not
+# enough on its own.
+MAX_WEIGHT = 1500.0
+MAX_REPS = 500
+
 # Cap on how many sets one multi-token line ("100 8, 100 7, 95 8") may produce,
 # so a pasted wall of text can't spawn hundreds of DB writes in one message.
 MAX_SETS_PER_LINE = 40
@@ -61,6 +77,8 @@ def parse_single_token(token: str) -> list[ParsedSet]:
         reps = int(bw_match.group("reps"))
         if reps <= 0:
             raise ParseError("Повторы должны быть больше 0")
+        if reps > MAX_REPS:
+            raise ParseError(f"Подозрительно много повторов (максимум {MAX_REPS}) — опечатка?")
         rpe = _parse_rpe(bw_match.group("rpe"))
         return [ParsedSet(weight=0.0, reps=reps, weight_omitted=True, rpe=rpe)]
 
@@ -75,6 +93,10 @@ def parse_single_token(token: str) -> list[ParsedSet]:
 
     if reps <= 0:
         raise ParseError("Повторы должны быть больше 0")
+    if reps > MAX_REPS:
+        raise ParseError(f"Подозрительно много повторов (максимум {MAX_REPS}) — опечатка?")
+    if weight > MAX_WEIGHT:
+        raise ParseError(f"Подозрительно большой вес (максимум {MAX_WEIGHT:.0f}) — лишний ноль?")
     if not (0 < count <= MAX_SETS_PER_TOKEN):
         raise ParseError("Странное количество подходов")
 

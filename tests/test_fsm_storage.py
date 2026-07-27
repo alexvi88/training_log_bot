@@ -115,3 +115,58 @@ async def test_int_dict_keys_survive_a_restart(tmp_path):
     data = await restarted.get_data(key)
 
     assert data["open_blocks"].get(data["active_exercise_id"]) == 99
+
+
+# ---------- corrupt/empty state file on disk ----------
+
+
+async def test_corrupt_json_does_not_crash_startup(tmp_path):
+    """This constructor runs from Dispatcher(storage=...) in main() — an
+    unguarded exception here used to take the whole bot down before it could
+    serve a single update. A bad file (truncated write, full disk, a botched
+    restore) is recoverable: FSM state is disposable, workout.py rebuilds an
+    active workout straight from the DB (see _reopen_exercises)."""
+    path = tmp_path / "fsm.json"
+    path.write_text('{"garbage": "truncated mid-str')
+
+    storage = JSONFileStorage(str(path))
+
+    assert await storage.get_state(_key()) is None
+    assert await storage.get_data(_key()) == {}
+
+
+async def test_empty_file_does_not_crash_startup(tmp_path):
+    """An empty file (0 bytes) is what a failed write can leave behind, and
+    json.load rejects it just as hard as garbage content."""
+    path = tmp_path / "fsm.json"
+    path.write_text("")
+
+    storage = JSONFileStorage(str(path))
+
+    assert await storage.get_data(_key()) == {}
+
+
+async def test_corrupt_file_is_quarantined_not_silently_lost(tmp_path):
+    path = tmp_path / "fsm.json"
+    path.write_text("not json at all")
+
+    JSONFileStorage(str(path))
+
+    assert not path.exists()  # moved aside, not left in place to fail again
+    quarantined = list(tmp_path.glob("fsm.json.corrupt.*"))
+    assert len(quarantined) == 1
+    assert quarantined[0].read_text() == "not json at all"
+
+
+async def test_storage_works_normally_after_recovering_from_corruption(tmp_path):
+    """Recovering from a bad file must leave a fully usable storage, not just
+    one that avoids crashing."""
+    path = tmp_path / "fsm.json"
+    path.write_text("{broken")
+
+    storage = JSONFileStorage(str(path))
+    await storage.set_state(_key(), _Flow.waiting)
+    await storage.set_data(_key(), {"workout_id": 5})
+
+    assert await storage.get_state(_key()) == "_Flow:waiting"
+    assert await storage.get_data(_key()) == {"workout_id": 5}

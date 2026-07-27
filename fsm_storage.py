@@ -6,12 +6,16 @@ longer match any StateFilter. This storage persists state/data to disk so
 restarts don't silently break buttons mid-flow.
 """
 import json
+import logging
 import os
+import time
 from dataclasses import asdict
 from typing import Any
 
 from aiogram.fsm.state import State
 from aiogram.fsm.storage.base import BaseStorage, StateType, StorageKey
+
+logger = logging.getLogger(__name__)
 
 
 def _key_to_str(key: StorageKey) -> str:
@@ -43,10 +47,36 @@ class JSONFileStorage(BaseStorage):
         self._data: dict[str, dict[str, Any]] = self._load()
 
     def _load(self) -> dict[str, dict[str, Any]]:
-        if os.path.exists(self._path):
+        if not os.path.exists(self._path):
+            return {}
+        try:
             with open(self._path, "r") as f:
                 return _restore_int_keys(json.load(f))
-        return {}
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+            # A truncated write (kill mid-save, full disk, a bad restore) leaves
+            # a file that will never parse — and this runs from __init__, called
+            # from Dispatcher(storage=...) in main(), so an unguarded raise here
+            # takes the whole bot down before it can serve a single update.
+            # Losing in-flight FSM state is recoverable (workout.py rebuilds an
+            # active workout's open exercises/blocks straight from the DB, see
+            # _reopen_exercises); refusing to start over it is not.
+            logger.exception(
+                "FSM state file %s is corrupt — starting with empty state. "
+                "Renaming it aside so this doesn't repeat silently.",
+                self._path,
+            )
+            self._quarantine_corrupt_file()
+            return {}
+
+    def _quarantine_corrupt_file(self) -> None:
+        # Timestamped rather than a fixed ".corrupt" suffix so a second failure
+        # (e.g. corruption recurring after a restart) doesn't silently clobber
+        # the evidence of the first one.
+        quarantine_path = f"{self._path}.corrupt.{int(time.time())}"
+        try:
+            os.replace(self._path, quarantine_path)
+        except OSError:
+            logger.exception("Could not move aside corrupt FSM file %s", self._path)
 
     def _save(self) -> None:
         tmp_path = self._path + ".tmp"
