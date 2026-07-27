@@ -155,6 +155,26 @@ def render_year_heatmap(
     return _fig_to_png(fig)
 
 
+# At the card's fixed 6.6in width, monospace 12pt fits ~59 characters between the
+# margins; wrapping a little short of that leaves room for glyphs wider than the
+# measured average.
+_CARD_BODY_WIDTH = 52
+
+
+def _wrap_card_line(line: str) -> list[str]:
+    """Wrap one body line to the card's width, keeping a set line's two-space
+    indent on its continuations so it stays visually attached to its exercise."""
+    if len(line) <= _CARD_BODY_WIDTH:
+        return [line]
+    indent = "  " if line.startswith("  ") else ""
+    return textwrap.wrap(
+        line,
+        width=_CARD_BODY_WIDTH,
+        subsequent_indent=indent + "  ",
+        break_long_words=True,
+    ) or [line]
+
+
 def render_workout_card(
     title: str,
     body_lines: list[str],
@@ -183,7 +203,13 @@ def render_workout_card(
         rows.append(("", "normal"))
     for line in body_lines:
         # exercise headers start at column 0; set lines are indented with two spaces.
-        rows.append((line, "exercise" if line and not line.startswith(" ") else "normal"))
+        style = "exercise" if line and not line.startswith(" ") else "normal"
+        # Wrapped for the same reason the note above is: the figure is a fixed
+        # 6.6in wide and nothing clips text, so an over-long line (a long exercise
+        # name, or an exercise with many distinct sets) just ran off the right
+        # edge of the shared image.
+        for chunk in _wrap_card_line(line):
+            rows.append((chunk, style))
     rows.append(("─" * 28, "muted"))
     rows.append((footer, "accent"))
 

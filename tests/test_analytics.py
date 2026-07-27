@@ -23,11 +23,33 @@ def test_brzycki_e1rm_single_rep_returns_weight():
     assert analytics.brzycki_e1rm(100, 1) == 100
 
 
-def test_brzycki_e1rm_at_or_above_37_reps_returns_weight():
-    # formula divides by (37 - reps); the function special-cases reps >= 37
-    # instead of blowing up or going negative.
-    assert analytics.brzycki_e1rm(100, 37) == 100
-    assert analytics.brzycki_e1rm(100, 50) == 100
+def test_brzycki_hands_over_to_epley_past_its_range():
+    """The old `reps >= 37` guard sat just past the formula's blow-up, so the
+    worst values sailed through: 36 reps returned 36x the weight, then 37
+    dropped back to 1x. Above BRZYCKI_MAX_REPS it defers to Epley instead."""
+    for reps in (11, 20, 36, 37, 50):
+        assert analytics.brzycki_e1rm(100, reps) == analytics.epley_e1rm(100, reps)
+
+
+def test_brzycki_never_explodes_near_its_old_asymptote():
+    # 20kg x 36 used to come out as 720kg and become a permanent e1RM record.
+    assert analytics.brzycki_e1rm(20, 36) == pytest.approx(44.0)
+    assert analytics.brzycki_e1rm(20, 35) < analytics.brzycki_e1rm(20, 36)
+
+
+def test_brzycki_is_monotonic_in_reps():
+    """No cliff and no dip anywhere — more reps at the same weight can only mean
+    an equal or higher estimated max."""
+    values = [analytics.brzycki_e1rm(100, r) for r in range(1, 200)]
+    # strict=False on purpose: the offset slice is one shorter than `values`.
+    assert all(b >= a for a, b in zip(values, values[1:], strict=False))
+
+
+def test_brzycki_and_epley_agree_exactly_at_the_handover():
+    # 1 + 10/30 == 36/27 == 4/3, which is why the handover is seamless.
+    assert analytics.brzycki_e1rm(100, analytics.BRZYCKI_MAX_REPS) == pytest.approx(
+        analytics.epley_e1rm(100, analytics.BRZYCKI_MAX_REPS)
+    )
 
 
 def test_brzycki_e1rm_formula():

@@ -707,3 +707,34 @@ def test_history_list_marks_a_workout_with_no_exercises():
     text = formatting.build_history_list(entries)
     assert "пусто" in text
     assert "сет" not in text  # no set count when there are none
+
+
+# ---------- build_workout_card (the shareable image's text) ----------
+
+
+def test_workout_card_collapses_identical_sets_like_the_text_card():
+    """The image is what gets posted, and it was still spelling out every set
+    long after the message card learned to fold them — which is also what pushed
+    its lines past the card's fixed width."""
+    blocks = [
+        ExerciseBlockView(
+            group_name="грудь", exercise_name="chest press - horizontal machine",
+            sets=[(83.6, 8)] * 10,
+        )
+    ]
+    _title, body, _footer, _note = formatting.build_workout_card(
+        dt.datetime(2026, 7, 26, 13), blocks
+    )
+    sets_line = body[1]
+    assert "83.6×8 ×10" in sets_line
+    assert sets_line.count("83.6×8") == 1
+
+
+def test_workout_card_footer_counts_every_set_not_the_collapsed_ones():
+    blocks = [
+        ExerciseBlockView(group_name="грудь", exercise_name="Жим", sets=[(100.0, 8)] * 5)
+    ]
+    _title, _body, footer, _note = formatting.build_workout_card(
+        dt.datetime(2026, 7, 26, 13), blocks
+    )
+    assert "5 сетов" in footer

@@ -250,3 +250,63 @@ async def test_idle_view_offers_recent_exercises_excluding_suggested(fresh_db, u
     texts = [b.text for r in kb.inline_keyboard for b in r]
     assert "🕘 Seated row" in texts
     assert "🕘 Pull down" in texts
+
+
+# ---------- concurrent set logging ----------
+
+
+async def test_append_set_numbers_rounds_sequentially(fresh_db, user_id):
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Спина")
+    ex_id = await db.create_exercise(user_id, "Тяга", group_id)
+    workout_id = await db.create_workout(user_id)
+    block_id = await db.create_block(workout_id, "single")
+    await db.add_block_exercise(block_id, ex_id, 0)
+
+    for _ in range(3):
+        await db.append_set(block_id, ex_id, 0, 100.0, 8)
+
+    assert [s["round_index"] for s in await db.list_sets_for_block(block_id)] == [1, 2, 3]
+
+
+async def test_concurrent_appends_get_distinct_round_indexes(fresh_db, user_id):
+    """aiogram handles updates concurrently, so two sets logged in quick
+    succession used to read the same next_round_index before either inserted —
+    20 racing writers all landed on round_index 1."""
+    import asyncio
+
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Спина")
+    ex_id = await db.create_exercise(user_id, "Тяга", group_id)
+    workout_id = await db.create_workout(user_id)
+    block_id = await db.create_block(workout_id, "single")
+    await db.add_block_exercise(block_id, ex_id, 0)
+
+    await asyncio.gather(*[db.append_set(block_id, ex_id, 0, 100.0, 5) for _ in range(20)])
+
+    indexes = [s["round_index"] for s in await db.list_sets_for_block(block_id)]
+    assert len(indexes) == 20
+    assert sorted(indexes) == list(range(1, 21))
+
+
+async def test_append_set_counts_only_its_own_exercise(fresh_db, user_id):
+    """A superset shares nothing: each exercise in the block numbers its own rounds."""
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Спина")
+    a = await db.create_exercise(user_id, "Тяга", group_id)
+    b = await db.create_exercise(user_id, "Подтягивания", group_id)
+    workout_id = await db.create_workout(user_id)
+    block_id = await db.create_block(workout_id, "single")
+    await db.add_block_exercise(block_id, a, 0)
+    await db.add_block_exercise(block_id, b, 1)
+
+    await db.append_set(block_id, a, 0, 100.0, 8)
+    await db.append_set(block_id, b, 1, 0.0, 10)
+    await db.append_set(block_id, a, 0, 100.0, 8)
+
+    sets = await db.list_sets_for_block(block_id)
+    by_ex = {}
+    for s in sets:
+        by_ex.setdefault(s["exercise_id"], []).append(s["round_index"])
+    assert by_ex[a] == [1, 2]
+    assert by_ex[b] == [1]

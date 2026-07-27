@@ -479,9 +479,11 @@ def build_workout_card(
     for block in blocks:
         body.append(f"{block.exercise_name} [{block.group_name.upper()}]")
         if block.sets:
-            body.append(
-                "  " + ", ".join(format_set(w, r, block.rpe_for(i)) for i, (w, r) in enumerate(block.sets))
-            )
+            # Same "190×5 ×3" collapsing the text card uses — a straight run of
+            # work sets otherwise spells every one of them out, which on the image
+            # is what pushes the line past the card's width.
+            formatted = [format_set(w, r, block.rpe_for(i)) for i, (w, r) in enumerate(block.sets)]
+            body.append("  " + ", ".join(_collapse_formatted_sets(formatted)))
         else:
             body.append("  — без подходов")
         exercise_count += 1

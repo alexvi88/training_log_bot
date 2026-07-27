@@ -15,11 +15,21 @@ def epley_e1rm(weight: float, reps: int) -> float:
     return weight * (1 + reps / 30)
 
 
+# Brzycki is only meaningful in the low-rep range it was fitted on. Its
+# denominator (37 - reps) collapses as reps climb: at 30 reps it already returns
+# 5x the weight, at 36 reps it returns 36x, and the old `reps >= 37` guard sat
+# just past the peak — so a burnout set like 20kg x 36 produced a 720kg e1RM that
+# became the exercise's permanent record. Epley stays monotone and gentle at any
+# rep count, and the two formulas agree *exactly* at 10 reps
+# (1 + 10/30 == 36/27 == 4/3), so handing over there is seamless rather than a step.
+BRZYCKI_MAX_REPS = 10
+
+
 def brzycki_e1rm(weight: float, reps: int) -> float:
     if reps <= 1:
         return weight
-    if reps >= 37:
-        return weight
+    if reps > BRZYCKI_MAX_REPS:
+        return epley_e1rm(weight, reps)
     return weight * 36 / (37 - reps)
 
 

@@ -272,8 +272,7 @@ async def editw_addset_entered(message: Message, state: FSMContext):
         block_exs = await db.get_block_exercises(block_id)
         order_in_round = next((be["order_in_block"] for be in block_exs if be["exercise_id"] == ex_id), 0)
     for ps in parsed:
-        round_idx = await db.next_round_index(block_id, ex_id)
-        await db.add_set(block_id, ex_id, round_idx, order_in_round, ps.weight, ps.reps, ps.rpe)
+        await db.append_set(block_id, ex_id, order_in_round, ps.weight, ps.reps, ps.rpe)
     await _on_workout_edited(data["edit_workout_id"])
     await _delete_message(message)
     # Land on the exercise the set belongs to, so several sets can be typed in a
@@ -301,8 +300,7 @@ async def editw_typed_set(message: Message, state: FSMContext):
     block_exs = await db.get_block_exercises(block_id)
     order_in_round = next((be["order_in_block"] for be in block_exs if be["exercise_id"] == ex_id), 0)
     for ps in parsed:
-        round_idx = await db.next_round_index(block_id, ex_id)
-        await db.add_set(block_id, ex_id, round_idx, order_in_round, ps.weight, ps.reps, ps.rpe)
+        await db.append_set(block_id, ex_id, order_in_round, ps.weight, ps.reps, ps.rpe)
     await _on_workout_edited(workout_id)
     await _delete_message(message)
     await show_exercise_screen(message, state, workout_id, block_id, ex_id)
