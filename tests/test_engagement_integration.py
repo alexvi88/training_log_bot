@@ -53,6 +53,49 @@ async def test_build_daily_push_two_days_out_is_silent(fresh_db, user_id):
     assert decision is None
 
 
+async def test_build_daily_push_timing_fires_on_usual_weekday(fresh_db, user_id):
+    db = fresh_db
+    mondays = [
+        "2026-05-18", "2026-05-25", "2026-06-01", "2026-06-08", "2026-06-15",
+        "2026-06-22", "2026-06-29", "2026-07-06", "2026-07-13", "2026-07-20",
+    ]
+    for day in mondays:
+        await db.create_finished_workout(
+            user_id, started_at=f"{day}T10:00:00", finished_at=f"{day}T11:00:00"
+        )
+    # a non-Monday workout so days_since_last (6) doesn't land on a skip milestone
+    await db.create_finished_workout(
+        user_id, started_at="2026-07-21T10:00:00", finished_at="2026-07-21T11:00:00"
+    )
+
+    today = dt.date(2026, 7, 27)  # Monday — the usual training weekday
+    decision = await engagement.build_daily_push(user_id, today)
+
+    assert decision is not None
+    assert decision.category == push_texts.TIMING
+
+
+async def test_build_daily_push_timing_silent_if_trained_yesterday(fresh_db, user_id):
+    db = fresh_db
+    mondays = [
+        "2026-05-18", "2026-05-25", "2026-06-01", "2026-06-08", "2026-06-15",
+        "2026-06-22", "2026-06-29", "2026-07-06", "2026-07-13", "2026-07-20",
+    ]
+    for day in mondays:
+        await db.create_finished_workout(
+            user_id, started_at=f"{day}T10:00:00", finished_at=f"{day}T11:00:00"
+        )
+    # trained yesterday (Sunday), even though today is the usual Monday slot
+    await db.create_finished_workout(
+        user_id, started_at="2026-07-26T10:00:00", finished_at="2026-07-26T11:00:00"
+    )
+
+    today = dt.date(2026, 7, 27)  # Monday
+    decision = await engagement.build_daily_push(user_id, today)
+
+    assert decision is None
+
+
 async def test_build_daily_push_none_for_user_without_workouts(fresh_db, user_id):
     decision = await engagement.build_daily_push(user_id, dt.date(2026, 7, 12))
     assert decision is None

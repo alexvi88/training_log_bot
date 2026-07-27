@@ -169,7 +169,11 @@ async def build_daily_push(telegram_id: int, today: dt.date) -> Optional[PushDec
         text = await push_texts.pick_text(telegram_id, push_texts.WIN_BACK)
         return PushDecision(push_texts.WIN_BACK, text)
 
-    if dates[-1] != today and usual_weekday(dates) == today.weekday():
+    if (
+        dates[-1] != today
+        and dashboard.days_since_last != 1
+        and usual_weekday(dates) == today.weekday()
+    ):
         text = await push_texts.pick_text(telegram_id, push_texts.TIMING)
         return PushDecision(push_texts.TIMING, text)
 
