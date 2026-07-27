@@ -148,3 +148,105 @@ async def test_search_exercise_templates_respects_limit(fresh_db, user_id):
     db = fresh_db
     matches = await db.search_exercise_templates(user_id, "жим", limit=2)
     assert len(matches) <= 2
+
+
+async def test_list_recent_exercises_orders_by_last_used(fresh_db, user_id):
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Спина")
+    a = await db.create_exercise(user_id, "Pull down", group_id)
+    b = await db.create_exercise(user_id, "Seated row", group_id)
+    c = await db.create_exercise(user_id, "Lat pulldown", group_id)
+
+    # touch_exercise_last_used stamps second-resolution "now", so setting the
+    # timestamps directly (a full minute apart) is what actually exercises the
+    # ordering — three real touches in a row could tie within the same second.
+    await db.conn().execute("UPDATE exercises SET last_used_at = ? WHERE id = ?", ("2026-01-01T10:00:00", a))
+    await db.conn().execute("UPDATE exercises SET last_used_at = ? WHERE id = ?", ("2026-01-01T10:01:00", b))
+    await db.conn().execute("UPDATE exercises SET last_used_at = ? WHERE id = ?", ("2026-01-01T10:02:00", c))
+    await db.conn().commit()
+
+    recent = await db.list_recent_exercises(user_id, limit=2)
+    assert [r["id"] for r in recent] == [c, b]
+
+
+async def test_list_recent_exercises_excludes_given_ids(fresh_db, user_id):
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Спина")
+    a = await db.create_exercise(user_id, "Pull down", group_id)
+    b = await db.create_exercise(user_id, "Seated row", group_id)
+    await db.touch_exercise_last_used(a)
+    await db.touch_exercise_last_used(b)
+
+    recent = await db.list_recent_exercises(user_id, limit=5, exclude_ids=(b,))
+    assert [r["id"] for r in recent] == [a]
+
+
+async def test_list_recent_exercises_skips_never_used(fresh_db, user_id):
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Спина")
+    await db.create_exercise(user_id, "Never touched", group_id)
+    assert await db.list_recent_exercises(user_id, limit=5) == []
+
+
+async def _log_set(db, user_id, exercise_id, weight=100.0, reps=5):
+    workout_id = await db.create_workout(user_id)
+    block_id = await db.create_block(workout_id, "single")
+    await db.add_block_exercise(block_id, exercise_id, 0)
+    await db.add_set(block_id, exercise_id, 0, 0, weight, reps, None)
+
+
+async def test_list_muscle_groups_order_by_usage_ranks_most_trained_first(fresh_db, user_id):
+    db = fresh_db
+    legs = await db.create_muscle_group(user_id, "Ноги")
+    back = await db.create_muscle_group(user_id, "Спина")
+    await db.create_muscle_group(user_id, "Грудь")  # never trained
+
+    leg_ex = await db.create_exercise(user_id, "Squat", legs)
+    back_ex = await db.create_exercise(user_id, "Row", back)
+    await _log_set(db, user_id, back_ex)
+    await _log_set(db, user_id, back_ex)
+    await _log_set(db, user_id, back_ex)
+    await _log_set(db, user_id, leg_ex)
+
+    groups = await db.list_muscle_groups(user_id, order_by_usage=True)
+    names = [g["name"] for g in groups]
+    assert names.index("Спина") < names.index("Ноги") < names.index("Грудь")
+
+
+async def test_list_muscle_groups_default_order_unaffected_by_usage(fresh_db, user_id):
+    db = fresh_db
+    await db.create_muscle_group(user_id, "Ноги нестандарт")
+    back = await db.create_muscle_group(user_id, "Спина нестандарт")
+    back_ex = await db.create_exercise(user_id, "Row", back)
+    # Heavily used, but without order_by_usage this must not jump ahead of
+    # "Ноги нестандарт" — both share the default sort_order, so plain name
+    # order decides, same as before this exercise was ever logged.
+    for _ in range(5):
+        await _log_set(db, user_id, back_ex)
+
+    groups = await db.list_muscle_groups(user_id)
+    names = [g["name"] for g in groups]
+    assert names.index("Ноги нестандарт") < names.index("Спина нестандарт")
+
+
+async def test_idle_view_offers_recent_exercises_excluding_suggested(fresh_db, user_id):
+    """The between-exercises pause screen should surface a couple of recently
+    logged exercises as a one-tap shortcut, without repeating whatever is
+    already offered as the "как в прошлый раз" suggestion."""
+    from handlers import workout
+
+    group_id = await fresh_db.create_muscle_group(user_id, "Спина")
+    pull = await fresh_db.create_exercise(user_id, "Pull down", group_id)
+    row = await fresh_db.create_exercise(user_id, "Seated row", group_id)
+    await fresh_db.conn().execute(
+        "UPDATE exercises SET last_used_at = ? WHERE id = ?", ("2026-01-01T10:00:00", pull)
+    )
+    await fresh_db.conn().execute(
+        "UPDATE exercises SET last_used_at = ? WHERE id = ?", ("2026-01-01T10:01:00", row)
+    )
+    await fresh_db.conn().commit()
+
+    hint, kb = await workout._idle_view({}, user_id, is_empty=False)
+    texts = [b.text for r in kb.inline_keyboard for b in r]
+    assert "🕘 Seated row" in texts
+    assert "🕘 Pull down" in texts

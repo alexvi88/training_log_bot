@@ -29,6 +29,20 @@ def test_exercise_picker_entry_keyboard_offers_menu_exit_when_empty():
     assert "🏁 Завершить тренировку" not in _button_texts(kb)
 
 
+def test_exercise_picker_entry_keyboard_offers_recent_exercises_in_one_row():
+    kb = keyboards.exercise_picker_entry_keyboard(recent=[(5, "Pull down"), (6, "Seated row")])
+    texts = _button_texts(kb)
+    assert "🕘 Pull down" in texts
+    assert "🕘 Seated row" in texts
+    cbs = _callback_datas(kb)
+    assert "live:suggest:5" in cbs and "live:suggest:6" in cbs
+
+
+def test_exercise_picker_entry_keyboard_no_recent_row_when_none_given():
+    kb = keyboards.exercise_picker_entry_keyboard(recent=None)
+    assert not any(t.startswith("🕘") for t in _button_texts(kb))
+
+
 def _callback_datas(kb):
     return [btn.callback_data for row in kb.inline_keyboard for btn in row]
 
@@ -72,6 +86,9 @@ def test_history_item_keyboard_ai_button_gets_its_own_row():
 def test_workout_card_keyboard_packs_actions_into_one_row():
     kb = keyboards.workout_card_keyboard(7)
     rows = kb.inline_keyboard
-    assert len(rows) == 1
+    assert len(rows) == 2
     assert len(rows[0]) == 2
+    assert len(rows[1]) == 2
     assert "🖼 Картинка" in _button_texts(kb)
+    assert "✏️ Редактировать" in _button_texts(kb)
+    assert "⬅️ В меню" in _button_texts(kb)

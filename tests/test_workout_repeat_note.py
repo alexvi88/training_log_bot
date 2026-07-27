@@ -251,3 +251,51 @@ def test_logging_keyboard_omits_repeat_but_keeps_note():
     kb = keyboards.logging_keyboard([(1, "Bench")], active_id=1, has_sets=True)
     cbs = [b.callback_data for row in kb.inline_keyboard for b in row]
     assert "live:undo" in cbs
+
+
+def test_logging_keyboard_note_button_is_labelled():
+    # A bare "📝" reads as "draft"/"edit" next to "➕ Суперсет" — it needs the word.
+    kb = keyboards.logging_keyboard([(1, "Bench")], active_id=1, has_sets=True)
+    texts = [b.text for row in kb.inline_keyboard for b in row]
+    assert "📝 Заметка" in texts
+
+
+def test_logging_keyboard_packs_superset_tabs_two_per_row():
+    open_items = [(1, "Bench press"), (2, "Overhead press - machine"), (3, "Row")]
+    kb = keyboards.logging_keyboard(open_items, active_id=1, has_sets=True)
+    tab_rows = [
+        row for row in kb.inline_keyboard
+        if any(b.callback_data.startswith("live:switch:") for b in row)
+    ]
+    assert len(tab_rows) == 2  # 3 tabs -> two per row, then the odd one alone
+    assert len(tab_rows[0]) == 2
+    assert len(tab_rows[1]) == 1
+    # The long name is shortened — it's already fully visible in the tracker text.
+    long_tab_text = next(
+        b.text for row in tab_rows for b in row if b.callback_data == "live:switch:2"
+    )
+    assert len(long_tab_text) < len("Overhead press - machine")
+
+
+def test_suspicious_weight_warning_flags_likely_typo():
+    last_session = [(140.0, 6, None), (130.0, 8, None)]
+    warning = workout._suspicious_weight_warning(last_session, today_sets=[(1.0, 1)])
+    assert warning is not None
+    assert "1кг?" in warning
+    assert "140кг" in warning
+
+
+def test_suspicious_weight_warning_silent_for_real_backoff_set():
+    last_session = [(140.0, 6, None)]
+    # 70kg is a plausible deliberate backoff set, not a typo.
+    assert workout._suspicious_weight_warning(last_session, today_sets=[(70.0, 8)]) is None
+
+
+def test_suspicious_weight_warning_exempt_for_bodyweight():
+    last_session = [(0.0, 12, None)]
+    assert workout._suspicious_weight_warning(last_session, today_sets=[(0.0, 3)]) is None
+
+
+def test_suspicious_weight_warning_none_without_history():
+    assert workout._suspicious_weight_warning(None, today_sets=[(1.0, 1)]) is None
+    assert workout._suspicious_weight_warning([(140.0, 6, None)], today_sets=None) is None

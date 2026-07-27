@@ -197,12 +197,28 @@ def format_tonnage(total_kg: float, unit: str = "kg") -> str:
     return f"{total_kg:.0f}{u}"
 
 
+def _collapse_formatted_sets(formatted: list[str]) -> list[str]:
+    """Merges a run of consecutive, identically-formatted sets into one entry
+    with an "×N" suffix — the same notation the parser already accepts on input
+    (e.g. "100x8x3"), so a straight run of work sets reads as one line instead
+    of N on the finished-workout card.
+    """
+    collapsed: list[tuple[str, int]] = []
+    for s in formatted:
+        if collapsed and collapsed[-1][0] == s:
+            collapsed[-1] = (s, collapsed[-1][1] + 1)
+        else:
+            collapsed.append((s, 1))
+    return [f"{s} ×{n}" if n > 1 else s for s, n in collapsed]
+
+
 def _render_single_block(block: ExerciseBlockView, show_extra: bool, unit: str = "kg") -> list[str]:
     u = UNIT_LABELS.get(unit, "кг")
     label = f"{escape(block.exercise_name)} [{block.group_name.upper()}]"
     lines = [f"<b>{label}</b>"]
     if block.sets:
-        lines.extend(f"  • {format_set(w, r, block.rpe_for(i))}" for i, (w, r) in enumerate(block.sets))
+        formatted = [format_set(w, r, block.rpe_for(i)) for i, (w, r) in enumerate(block.sets)]
+        lines.extend(f"  • {s}" for s in _collapse_formatted_sets(formatted))
     else:
         lines.append("  <i>подходов нет</i>")
     if show_extra and block.sets:
@@ -220,9 +236,8 @@ def _render_single_block(block: ExerciseBlockView, show_extra: bool, unit: str =
         else:
             lines.append(f"  ↳ e1RM {block.top_e1rm:.1f}{u}{vs_prev}")
     if block.prev_sets:
-        prev_str = ", ".join(
-            format_set(w, r, block.prev_rpe_for(i)) for i, (w, r) in enumerate(block.prev_sets)
-        )
+        formatted_prev = [format_set(w, r, block.prev_rpe_for(i)) for i, (w, r) in enumerate(block.prev_sets)]
+        prev_str = ", ".join(_collapse_formatted_sets(formatted_prev))
         lines.append(f"<i>  [прошлая: {prev_str}]</i>")
     return lines
 

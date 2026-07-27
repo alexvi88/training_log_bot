@@ -218,11 +218,22 @@ async def _suggested_next_exercise(user_id: int, last_finished_id: int | None):
     return ex["id"], ex["display_name"]
 
 
+_IDLE_RECENT_EXERCISES = 2
+
+
 async def _idle_view(data: dict, user_id: int, is_empty: bool = False) -> tuple[str | None, InlineKeyboardMarkup]:
     has_planned = bool(data.get("planned_blocks"))
     suggested = None if has_planned else await _suggested_next_exercise(user_id, data.get("last_finished_exercise_id"))
     hint = f"💡 В прошлый раз дальше было: <b>{escape(suggested[1])}</b>" if suggested else None
-    kb = keyboards.exercise_picker_entry_keyboard(has_planned=has_planned, suggested=suggested, is_empty=is_empty)
+    recent: list[tuple[int, str]] = []
+    if not has_planned:
+        # Skip the already-offered "suggested" exercise so the two rows never repeat.
+        exclude = (suggested[0],) if suggested else ()
+        rows = await db.list_recent_exercises(user_id, limit=_IDLE_RECENT_EXERCISES, exclude_ids=exclude)
+        recent = [(r["id"], r["display_name"]) for r in rows]
+    kb = keyboards.exercise_picker_entry_keyboard(
+        has_planned=has_planned, suggested=suggested, is_empty=is_empty, recent=recent,
+    )
     return hint, kb
 
 
@@ -260,6 +271,36 @@ async def _log_one(block_id: int, exercise_id: int, weight: float, reps: int, rp
 # rep range — a rough default, since the bot doesn't know the actual increment.
 _WEIGHT_STEP = {"kg": 2.5, "lb": 5.0}
 
+# Below this fraction of last session's heaviest set, a just-logged weight is
+# flagged as a likely typo (e.g. "1 1" meant "140 6") rather than a deliberate
+# drop — a real backoff set rarely goes below this.
+_SUSPICIOUS_WEIGHT_FRACTION = 0.4
+
+
+def _suspicious_weight_warning(
+    last_session: list[tuple[float, int, float | None]] | None,
+    today_sets: list[tuple[float, int]] | None,
+    unit: str = "kg",
+) -> str | None:
+    """A soft nudge — never blocks logging — when the just-logged set's weight
+    looks like a typo next to what this exercise was loaded with last time.
+    Bodyweight exercises (0 kg either time) are exempt: a light set there is
+    normal, not a typo.
+    """
+    if not last_session or not today_sets:
+        return None
+    last_weight, _last_reps = today_sets[-1]
+    if last_weight <= 0:
+        return None
+    prev_max_weight = max((w for w, _r, _rpe in last_session), default=0)
+    if prev_max_weight <= 0 or last_weight >= _SUSPICIOUS_WEIGHT_FRACTION * prev_max_weight:
+        return None
+    u = formatting.UNIT_LABELS.get(unit, "кг")
+    return (
+        f"⚠️ {formatting.format_weight(last_weight)}{u}? "
+        f"в прошлый раз {formatting.format_weight(prev_max_weight)}{u}"
+    )
+
 
 def _logging_hint(
     last_session: list[tuple[float, int, float | None]] | None,
@@ -276,6 +317,8 @@ def _logging_hint(
         if has_sets:
             base += " (можно только повторы — вес возьмётся с последнего подхода)"
     note_line = f"📝 <i>{escape(note)}</i>\n" if note else ""
+    warning = _suspicious_weight_warning(last_session, today_sets, unit)
+    warning_line = f"{warning}\n" if warning else ""
     if last_session:
         sets_str = ", ".join(formatting.format_set(w, r, rpe) for w, r, rpe in last_session)
         line = f"💡 В прошлый раз: {sets_str}"
@@ -288,9 +331,10 @@ def _logging_hint(
                     for w, r in (today_sets or [])
                 )
                 line += f"\n{formatting.format_progression_hint(suggestion, unit, achieved)}"
-        return f"{note_line}<i>{line}</i>\n\n{base}" if base else f"{note_line}<i>{line}</i>"
-    if note_line:
-        return f"{note_line}\n{base}" if base else note_line.rstrip("\n")
+        return f"{warning_line}{note_line}<i>{line}</i>\n\n{base}" if base else f"{warning_line}{note_line}<i>{line}</i>"
+    if note_line or warning_line:
+        head = f"{warning_line}{note_line}"
+        return f"{head}\n{base}" if base else head.rstrip("\n")
     return base or ""
 
 
@@ -614,6 +658,14 @@ async def _show_main_menu(callback: CallbackQuery, state: FSMContext, delete_cur
         )
 
 
+@router.callback_query(F.data == "live:back_to_menu")
+async def live_back_to_menu(callback: CallbackQuery, state: FSMContext):
+    """"⬅️ В меню" on the just-finished workout card — see _finalize_workout,
+    which stopped auto-sending the menu so the card isn't buried under it."""
+    await _show_main_menu(callback, state)
+    await callback.answer()
+
+
 @router.callback_query(F.data == "menu:progress")
 async def menu_progress(callback: CallbackQuery, state: FSMContext):
     from handlers.history import show_progress_entry
@@ -888,7 +940,9 @@ async def _enter_live(
 async def _picker_screen_groups(callback: CallbackQuery, state: FSMContext, show_program_button: bool = False):
     data = await state.get_data()
     user = await db.get_user(callback.from_user.id)
-    groups = await db.list_muscle_groups(callback.from_user.id)
+    # Mid-workout, adding an exercise is time pressure — the groups the user
+    # actually trains most should be first, not alphabetical/catalog order.
+    groups = await db.list_muscle_groups(callback.from_user.id, order_by_usage=True)
     hint = "Выбери группу мышц или найди упражнение по названию:"
     open_ids = data.get("open_exercises") or []
     if open_ids:
@@ -902,7 +956,9 @@ async def _picker_screen_groups(callback: CallbackQuery, state: FSMContext, show
         if await db.count_workouts(callback.from_user.id) > 0:
             extra.append(("🔁 Повторить тренировку", "pick:repeat"))
         extra.append(("🗂 Выбрать программу", "rt:manage"))
-    extra.append(("❌ Отмена", "pick:cancel"))
+    # Not a "cancel the workout" — pick:cancel just returns to whatever screen was
+    # open before (see _back_after_cancel), so it reads as "⬅️ Назад", not "❌ Отмена".
+    extra.append(("⬅️ Назад", "pick:cancel"))
     kb = keyboards.groups_keyboard(groups, prefix="pick", extra_buttons=extra, show_all=True)
     await state.update_data(picker_stage="groups")
     await _refresh_live(callback.bot, state, user, data["workout_id"], hint, kb)
@@ -1893,15 +1949,7 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
 
     await _clear_sticky_photo(bot, state)
     await state.clear()
-    active = await db.get_active_workout(user_id)
-    menu_text, menu_png = await _menu_view(user_id)
-    menu_kb = await _main_menu_kb(user_id, active)
-    if menu_png is None:
-        await bot.send_message(
-            chat_id=data["live_chat_id"], text=menu_text, reply_markup=menu_kb, parse_mode="HTML"
-        )
-    else:
-        await bot.send_photo(
-            chat_id=data["live_chat_id"], photo=BufferedInputFile(menu_png, filename="year.png"),
-            caption=menu_text, reply_markup=menu_kb, parse_mode="HTML",
-        )
+    # No auto-sent menu message here on purpose: it used to bury the card (the
+    # PR/comparison highlights, the AI comment) the instant it appeared. The
+    # card's own "⬅️ В меню" button (live:back_to_menu below) opens the menu
+    # in its place instead, so it's a beat the user chooses, not one forced on them.
