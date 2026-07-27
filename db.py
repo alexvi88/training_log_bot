@@ -1303,12 +1303,45 @@ async def add_set(
 
 
 async def next_round_index(block_id: int, exercise_id: int) -> int:
+    """The round_index a new set would take. Callers that are about to insert
+    should use append_set instead — reading here and inserting afterwards leaves
+    a gap two concurrent writers can both read through (see append_set)."""
     cur = await conn().execute(
         "SELECT COALESCE(MAX(round_index), 0) + 1 FROM sets WHERE block_id = ? AND exercise_id = ?",
         (block_id, exercise_id),
     )
     (idx,) = await cur.fetchone()
     return idx
+
+
+async def append_set(
+    block_id: int,
+    exercise_id: int,
+    order_in_round: int,
+    weight: float,
+    reps: int,
+    rpe: Optional[float] = None,
+) -> int:
+    """Insert a set with the next round_index, choosing it under the write lock.
+
+    aiogram handles updates concurrently, so two sets logged in quick succession
+    (a typed set racing the "=" repeat, say) could both read the same
+    next_round_index and insert with it. The INSERT itself does the SELECT, so
+    there's no window between them.
+    """
+    async with _write_lock:
+        cur = await conn().execute(
+            "INSERT INTO sets "
+            "(block_id, exercise_id, round_index, order_in_round, weight, reps, rpe, created_at) "
+            "SELECT ?, ?, COALESCE(MAX(round_index), 0) + 1, ?, ?, ?, ?, ? "
+            "FROM sets WHERE block_id = ? AND exercise_id = ?",
+            (
+                block_id, exercise_id, order_in_round, weight, reps, rpe, now_iso(),
+                block_id, exercise_id,
+            ),
+        )
+        await conn().commit()
+        return cur.lastrowid
 
 
 async def delete_last_set_in_block(block_id: int) -> Optional[aiosqlite.Row]:

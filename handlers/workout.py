@@ -263,8 +263,7 @@ async def _delete_message_later(bot, chat_id: int, message_id: int, delay: float
 
 
 async def _log_one(block_id: int, exercise_id: int, weight: float, reps: int, rpe: float | None = None):
-    round_idx = await db.next_round_index(block_id, exercise_id)
-    await db.add_set(block_id, exercise_id, round_idx, 0, weight, reps, rpe)
+    await db.append_set(block_id, exercise_id, 0, weight, reps, rpe)
 
 
 # Below this fraction (or above this multiple) of last session's heaviest set,
