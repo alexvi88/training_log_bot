@@ -71,10 +71,10 @@ async def test_double_tap_finalize_is_idempotent(fresh_db, user_id):
 
     saved = await db.get_workout(workout_id)
     assert saved["status"] == "finished"
-    # The second call must be a no-op: only one edit of the live message and
-    # one menu message, not duplicates.
+    # The second call must be a no-op: only one edit of the live message, and no
+    # menu message (the card no longer auto-sends one — see live:back_to_menu).
     assert bot.edit_message_text.await_count == 1
-    assert bot.send_message.await_count + bot.send_photo.await_count == 1
+    assert bot.send_message.await_count + bot.send_photo.await_count == 0
     callback2.answer.assert_awaited_once()
 
 

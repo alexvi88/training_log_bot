@@ -141,6 +141,16 @@ def yes_no_keyboard(yes_cb: str, no_cb: str, yes_text: str = "Да", no_text: st
     return b.as_markup()
 
 
+_TAB_NAME_MAX = 18
+
+
+def _truncate_tab_name(name: str) -> str:
+    """Shortens a superset tab label — the full name is already visible in the
+    tracker text above (with ▶ marking the active one), so the tab only needs
+    to be recognizable, not complete."""
+    return name if len(name) <= _TAB_NAME_MAX else name[: _TAB_NAME_MAX - 1].rstrip() + "…"
+
+
 def logging_keyboard(
     open_items: list[tuple[int, str]],
     active_id: int | None,
@@ -151,17 +161,25 @@ def logging_keyboard(
     Weight/reps are typed as plain text (e.g. "100 8") — this keyboard only holds
     navigation/utility actions, not numeric input, to keep it short.
 
-    The "➕ Суперсет"/"📝" row is always available; once a set is logged,
+    The "➕ Суперсет"/"📝 Заметка" row is always available; once a set is logged,
     "↩️ Удалить последний" appears above it and "✅ Закончить упражнение" below it.
     """
     b = InlineKeyboardBuilder()
     if len(open_items) > 1:
-        for ex_id, name in open_items:
-            text = ("▶ " if ex_id == active_id else "") + name
-            b.row(InlineKeyboardButton(text=text, callback_data=f"live:switch:{ex_id}"))
+        # Two per row (not one, as with a single open exercise) so 3+ parallel
+        # exercises don't push the tracker's own text off the bottom of the screen.
+        tabs = [
+            InlineKeyboardButton(
+                text=("▶ " if ex_id == active_id else "") + _truncate_tab_name(name),
+                callback_data=f"live:switch:{ex_id}",
+            )
+            for ex_id, name in open_items
+        ]
+        for i in range(0, len(tabs), 2):
+            b.row(*tabs[i : i + 2])
     top_row = [InlineKeyboardButton(text="➕ Суперсет", callback_data="live:add_exercise")]
     if active_id is not None:
-        top_row.append(InlineKeyboardButton(text="📝", callback_data=f"live:note:{active_id}"))
+        top_row.append(InlineKeyboardButton(text="📝 Заметка", callback_data=f"live:note:{active_id}"))
     if has_sets:
         b.row(InlineKeyboardButton(text="↩️ Удалить последний", callback_data="live:undo"))
         b.row(*top_row)
@@ -173,9 +191,16 @@ def logging_keyboard(
 
 
 def exercise_picker_entry_keyboard(
-    has_planned: bool = False, suggested: tuple[int, str] | None = None, is_empty: bool = False
+    has_planned: bool = False,
+    suggested: tuple[int, str] | None = None,
+    is_empty: bool = False,
+    recent: list[tuple[int, str]] | None = None,
 ) -> InlineKeyboardMarkup:
     """suggested: (exercise_id, display_name) of what usually follows the just-finished exercise.
+
+    recent: up to a couple of (exercise_id, display_name) most-recently-logged
+    exercises (never including `suggested`), offered as a one-tap shortcut so
+    re-opening something from earlier in the session skips the group→list picker.
 
     is_empty: nothing logged in this workout yet — "finish" would just discard it
     (see live_finish_workout), so the button reads as an exit rather than a finish.
@@ -187,11 +212,18 @@ def exercise_picker_entry_keyboard(
     if suggested is not None:
         ex_id, _name = suggested
         b.button(text="⏭ Как в прошлый раз", callback_data=f"live:suggest:{ex_id}")
-    if is_empty:
-        b.button(text="⬅️ В меню", callback_data="live:finish_workout")
-    else:
-        b.button(text="🏁 Завершить тренировку", callback_data="live:finish_workout")
     b.adjust(1)
+    if recent:
+        b.row(
+            *(
+                InlineKeyboardButton(text=f"🕘 {name}", callback_data=f"live:suggest:{ex_id}")
+                for ex_id, name in recent
+            )
+        )
+    if is_empty:
+        b.row(InlineKeyboardButton(text="⬅️ В меню", callback_data="live:finish_workout"))
+    else:
+        b.row(InlineKeyboardButton(text="🏁 Завершить тренировку", callback_data="live:finish_workout"))
     return b.as_markup()
 
 
@@ -385,6 +417,13 @@ def workout_card_keyboard(workout_id: int, show_ai_button: bool = False) -> Inli
     b.row(
         InlineKeyboardButton(text="🖼 Картинка", callback_data=f"hist:card:{workout_id}"),
         InlineKeyboardButton(text="📝 Заметка", callback_data=f"live:addnote:{workout_id}"),
+    )
+    # A typo caught right here (still fresh in memory) would otherwise mean
+    # Меню → История → find this workout → редактировать — same hist:edit
+    # callback the history screen's card already uses.
+    b.row(
+        InlineKeyboardButton(text="✏️ Редактировать", callback_data=f"hist:edit:{workout_id}"),
+        InlineKeyboardButton(text="⬅️ В меню", callback_data="live:back_to_menu"),
     )
     return b.as_markup()
 

@@ -551,19 +551,41 @@ async def update_user(telegram_id: int, **fields: Any) -> None:
 
 # ---------- muscle groups ----------
 
-async def list_muscle_groups(user_id: Optional[int], global_only: bool = False) -> list[aiosqlite.Row]:
+async def list_muscle_groups(
+    user_id: Optional[int], global_only: bool = False, order_by_usage: bool = False
+) -> list[aiosqlite.Row]:
+    """order_by_usage: put the groups this user actually trains most (by sets
+    logged) first, so the exercise-adding picker doesn't make everyone scan past
+    groups they never touch — falls back to the fixed sort_order/name for ties
+    and for anyone with no history yet.
+    """
     db = conn()
     if global_only or user_id is None:
         cur = await db.execute(
             "SELECT * FROM muscle_groups WHERE user_id IS NULL AND is_archived = 0 "
             "ORDER BY sort_order, name"
         )
-    else:
+        return await cur.fetchall()
+    if order_by_usage:
         cur = await db.execute(
-            "SELECT * FROM muscle_groups WHERE (user_id IS NULL OR user_id = ?) AND is_archived = 0 "
-            "ORDER BY sort_order, name",
-            (user_id,),
+            "SELECT mg.*, COALESCE(uc.cnt, 0) AS usage_count FROM muscle_groups mg "
+            "LEFT JOIN ("
+            "  SELECT e.primary_group_id AS gid, COUNT(*) AS cnt FROM sets s "
+            "  JOIN exercises e ON e.id = s.exercise_id "
+            "  JOIN workout_blocks wb ON wb.id = s.block_id "
+            "  JOIN workouts w ON w.id = wb.workout_id "
+            "  WHERE w.user_id = ? GROUP BY e.primary_group_id"
+            ") uc ON uc.gid = mg.id "
+            "WHERE (mg.user_id IS NULL OR mg.user_id = ?) AND mg.is_archived = 0 "
+            "ORDER BY usage_count DESC, mg.sort_order, mg.name",
+            (user_id, user_id),
         )
+        return await cur.fetchall()
+    cur = await db.execute(
+        "SELECT * FROM muscle_groups WHERE (user_id IS NULL OR user_id = ?) AND is_archived = 0 "
+        "ORDER BY sort_order, name",
+        (user_id,),
+    )
     return await cur.fetchall()
 
 
@@ -654,6 +676,29 @@ async def list_user_exercises(
     if limit:
         sql += " LIMIT ? OFFSET ?"
         params.extend([limit, offset])
+    cur = await conn().execute(sql, params)
+    return await cur.fetchall()
+
+
+async def list_recent_exercises(
+    user_id: int, limit: int, exclude_ids: tuple[int, ...] = ()
+) -> list[aiosqlite.Row]:
+    """The user's most recently logged exercises, strictly by recency (unlike
+    list_user_exercises, which ranks by usage_count first) — for a one-tap
+    shortcut row so re-opening what was just done doesn't need the
+    group-then-list picker.
+    """
+    sql = (
+        "SELECT * FROM exercises e WHERE e.user_id = ? "
+        "AND e.is_archived = 0 AND e.is_template = 0 AND e.last_used_at IS NOT NULL "
+        f"AND {_VISIBLE_EXERCISE_FILTER} "
+    )
+    params: list[Any] = [user_id]
+    if exclude_ids:
+        sql += f"AND e.id NOT IN ({','.join('?' * len(exclude_ids))}) "
+        params.extend(exclude_ids)
+    sql += "ORDER BY e.last_used_at DESC LIMIT ?"
+    params.append(limit)
     cur = await conn().execute(sql, params)
     return await cur.fetchall()
 

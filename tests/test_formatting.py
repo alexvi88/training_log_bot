@@ -153,6 +153,42 @@ def test_build_workout_summary_bodyweight_delta_shows_reps_diff():
     assert "↑+5 vs 19.06" in text
 
 
+def test_build_workout_summary_collapses_identical_consecutive_sets():
+    started = dt.datetime(2026, 6, 26, 18, 0)
+    blocks = [
+        ExerciseBlockView(
+            group_name="спина", exercise_name="Становая", sets=[(190.0, 5), (190.0, 5), (190.0, 5)]
+        )
+    ]
+    text = formatting.build_workout_summary(started, blocks)
+    assert "190×5 ×3" in text
+    assert "190×5, 190×5" not in text
+
+
+def test_build_workout_summary_does_not_collapse_non_consecutive_matches():
+    started = dt.datetime(2026, 6, 26, 18, 0)
+    blocks = [
+        ExerciseBlockView(
+            group_name="спина", exercise_name="Тяга", sets=[(100.0, 8), (90.0, 8), (100.0, 8)]
+        )
+    ]
+    text = formatting.build_workout_summary(started, blocks)
+    assert "×2" not in text
+    assert "100×8" in text and "90×8" in text
+
+
+def test_build_workout_summary_collapses_previous_session_sets_too():
+    started = dt.datetime(2026, 6, 26, 18, 0)
+    blocks = [
+        ExerciseBlockView(
+            group_name="спина", exercise_name="Становая",
+            sets=[(190.0, 5)], prev_sets=[(180.0, 6), (180.0, 6), (180.0, 6)],
+        )
+    ]
+    text = formatting.build_workout_summary(started, blocks)
+    assert "[прошлая: 180×6 ×3]" in text
+
+
 def test_build_workout_summary_max_chars_drops_oldest_exercises():
     started = dt.datetime(2026, 6, 26, 18, 0)
     blocks = [
