@@ -26,12 +26,6 @@ _WORD_HUNDREDS = {
     "шестьсот": 600, "семьсот": 700, "восемьсот": 800, "девятьсот": 900,
 }
 
-# Words that end the current number and start the next one (weight → reps).
-_SEPARATORS = {
-    "на", "по", "и", "раз", "раза", "разок", "повтор", "повтора", "повторов",
-    "повторений", "повторения", "подход", "подхода", "подходов", "сет", "сета", "сетов",
-}
-
 # Chunk boundaries between separate sets in one utterance.
 _CHUNK_SPLIT_RE = re.compile(r"[,\n]|потом|затем|далее|дальше|ещё|еще", re.IGNORECASE)
 
@@ -40,17 +34,40 @@ _TOKEN_RE = re.compile(r"[а-яёa-z]+|\d+", re.IGNORECASE)
 
 _RANK_NONE = 4  # sentinel above hundreds so the first component is always accepted
 
+# A plate-loaded stack's real increments are commonly one decimal digit
+# (29.6кг, 39.3, 83.6, 95.3, 97.6 kg — a fixed lb-per-plate step converted to
+# kg), so a fractional weight is routine here, not an edge case. Read as
+# "девяносто семь и шесть" (whole + connector + fraction) or with an explicit
+# "запятая"/"точка". Before this, "и" fell into the generic separator branch
+# below like any other word — which didn't just mis-parse the weight, it lost
+# the *reps* entirely: "97 и 6 на 8" flushed into two top-level numbers (97, 6)
+# before "8" was even reached, and transcript_to_sets_line only keeps the
+# first two numbers of a chunk.
+_DECIMAL_MARKERS = {"и", "запятая", "точка"}
+# "два с половиной" — "с" is the bare preposition and mustn't flush the number
+# in progress; "половиной"/etc. supplies the ".5".
+_IGNORED_TOKENS = {"с", "со"}
+_HALF_WORDS = {"половина", "половиной", "половину"}
 
-def _chunk_to_numbers(chunk: str) -> list[int]:
+
+def _decimal_fraction(value: int) -> float:
+    """1-9 spoken/typed after a decimal marker is tenths (…97.6), 10-99 is
+    hundredths (…97.65) — matches how many digits would follow the point if
+    written out."""
+    return value / 10 if value < 10 else value / 100
+
+
+def _chunk_to_numbers(chunk: str) -> list[float]:
     """Read the numbers out of one chunk, in order.
 
     Number words accumulate only while their magnitude strictly decreases
     (hundreds → tens → units), so "сто двадцать пять" is 125 but "восемь три"
     (two units in a row — never one number in Russian) splits into 8 and 3.
     """
-    numbers: list[int] = []
-    current = 0
+    numbers: list[float] = []
+    current: float = 0
     last_rank = _RANK_NONE
+    awaiting_decimal = False
 
     def flush() -> None:
         nonlocal current, last_rank
@@ -67,6 +84,33 @@ def _chunk_to_numbers(chunk: str) -> list[int]:
         last_rank = rank
 
     for tok in _TOKEN_RE.findall(chunk.lower()):
+        if tok in _IGNORED_TOKENS:
+            continue
+        if tok in _HALF_WORDS:
+            if last_rank != _RANK_NONE:
+                current += 0.5
+            flush()
+            continue
+        if tok in _DECIMAL_MARKERS:
+            # Only a decimal point if it's actually gluing onto a number —
+            # otherwise (stray "и" with nothing before it) fall back to the
+            # old boundary behaviour.
+            awaiting_decimal = last_rank != _RANK_NONE
+            if not awaiting_decimal:
+                flush()
+            continue
+        if awaiting_decimal:
+            awaiting_decimal = False
+            frac_value = int(tok) if tok.isdigit() else _WORD_UNITS.get(tok)
+            if frac_value is not None:
+                current += _decimal_fraction(frac_value)
+                flush()
+                continue
+            # Whatever followed the marker wasn't a plausible fraction digit —
+            # treat the marker as if it had just been an ordinary boundary and
+            # fall through to parse this token normally.
+            flush()
+
         if tok.isdigit():
             flush()
             numbers.append(int(tok))
@@ -84,6 +128,14 @@ def _chunk_to_numbers(chunk: str) -> list[int]:
     return numbers
 
 
+def _format_number(n: float) -> str:
+    """Whole numbers print bare ("100"); fractions keep only as many decimal
+    digits as they actually have ("97.6", not "97.60")."""
+    if n == int(n):
+        return str(int(n))
+    return f"{n:.2f}".rstrip("0").rstrip(".")
+
+
 def transcript_to_sets_line(text: str) -> str | None:
     """Best-effort "100 8, 95 8"-style line from a transcript, or None if no
     numbers were found. Only weight+reps are taken per chunk — spoken set counts
@@ -97,7 +149,7 @@ def transcript_to_sets_line(text: str) -> str | None:
             continue
         nums = nums[:2]  # weight, reps — ignore any trailing "three sets"
         if len(nums) == 1:
-            lines.append(str(nums[0]))  # a lone number = bodyweight reps
+            lines.append(_format_number(nums[0]))  # a lone number = bodyweight reps
         else:
-            lines.append(f"{nums[0]} {nums[1]}")
+            lines.append(f"{_format_number(nums[0])} {_format_number(nums[1])}")
     return ", ".join(lines) if lines else None
