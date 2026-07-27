@@ -103,6 +103,17 @@ def parse_single_token(token: str) -> list[ParsedSet]:
     return [ParsedSet(weight=weight, reps=reps, rpe=rpe) for _ in range(count)]
 
 
+def looks_like_set_input(text: str) -> bool:
+    """True if `text` parses as a weight/reps token (e.g. "50 12", "100x8", "8") —
+    catches a logged set typed while the bot happened to be waiting for an
+    exercise name instead, so it can be caught before it becomes one."""
+    try:
+        parse_single_token(text)
+    except ParseError:
+        return False
+    return True
+
+
 # "2: 100 8" — replace the 2nd already-logged set of the active exercise.
 # No existing token form starts with digits+colon, so this can't collide with
 # a normal weight/reps entry (unlike ':' vs '.', which is why '.' isn't

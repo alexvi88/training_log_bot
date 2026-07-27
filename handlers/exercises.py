@@ -15,6 +15,7 @@ import db
 import exercise_descriptions
 import exercise_media
 import keyboards
+import parser
 import ui
 from fsm import ExerciseManage
 
@@ -222,7 +223,6 @@ async def exm_add_template(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(StateFilter(ExerciseManage.creating_exercise_name))
 async def _exm_finish_new_exercise_name(answerer, state: FSMContext, user_id: int, name: str):
     data = await state.get_data()
     group_id = data.get("exm_group_id")
@@ -247,24 +247,33 @@ async def _exm_finish_new_exercise_name(answerer, state: FSMContext, user_id: in
     await answerer.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
+def _suspicious_name_reason(name: str) -> str | None:
+    """None if `name` looks like a plausible exercise name; otherwise a short
+    Russian phrase for the "are you sure?" prompt explaining why it doesn't —
+    either a stray message (too long) or an actual logged set ("50 12") typed
+    while the bot happened to be waiting for a name instead."""
+    if len(name) > config.MAX_EXERCISE_NAME_LENGTH:
+        return f"длинновато для упражнения ({len(name)} символов)"
+    if parser.looks_like_set_input(name):
+        return "похоже на вес и повторы, а не на название упражнения"
+    return None
+
+
 @router.message(StateFilter(ExerciseManage.creating_exercise_name))
 async def exm_new_exercise_name_entered(message: Message, state: FSMContext):
     name = message.text.strip()
     if not name:
         await message.reply("Название не может быть пустым")
         return
-    if len(name) > config.MAX_EXERCISE_NAME_LENGTH:
-        # A stray message typed while the bot happened to be waiting for a name
-        # doesn't look like an exercise — but it might genuinely be a long one,
-        # so ask instead of silently blocking it.
+    reason = _suspicious_name_reason(name)
+    if reason:
         await state.update_data(exm_pending_long_name=name)
         kb = keyboards.yes_no_keyboard(
             yes_cb="exm:longname:yes", no_cb="exm:longname:no",
             yes_text="✅ Да, создать", no_text="✏️ Написать заново",
         )
         await message.reply(
-            f"«{escape(name)}» — длинновато для упражнения ({len(name)} символов). "
-            "Всё верно, создать такое?",
+            f"«{escape(name)}» — {reason}. Всё верно, создать такое?",
             reply_markup=kb, parse_mode="HTML",
         )
         return
@@ -539,15 +548,15 @@ async def exm_name_entered(message: Message, state: FSMContext):
     if not name:
         await message.reply("Название не может быть пустым")
         return
-    if len(name) > config.MAX_EXERCISE_NAME_LENGTH:
+    reason = _suspicious_name_reason(name)
+    if reason:
         await state.update_data(exm_pending_long_rename=name)
         kb = keyboards.yes_no_keyboard(
             yes_cb="exm:longrename:yes", no_cb="exm:longrename:no",
             yes_text="✅ Да, переименовать", no_text="✏️ Написать заново",
         )
         await message.reply(
-            f"«{escape(name)}» — длинновато для упражнения ({len(name)} символов). "
-            "Всё верно, переименовать?",
+            f"«{escape(name)}» — {reason}. Всё верно, переименовать?",
             reply_markup=kb, parse_mode="HTML",
         )
         return

@@ -85,6 +85,22 @@ async def test_absurdly_long_exercise_name_asks_for_confirmation(fresh_db, user_
     assert _STRAY_MESSAGE in hint
 
 
+async def test_a_logged_set_typed_as_a_name_asks_for_confirmation(fresh_db, user_id):
+    """A set like "50 12" typed while the bot was waiting for a new exercise
+    name shouldn't silently become an exercise called "50 12"."""
+    db = fresh_db
+    state = await _make_state(user_id)
+    await state.set_state(WorkoutFlow.creating_exercise_name)
+    message = _make_message(user_id, "50 12")
+
+    await workout.new_exercise_name_entered(message, state)
+
+    assert await db.count_user_exercises(user_id) == 0
+    assert (await state.get_data())["pending_long_exercise_name"] == "50 12"
+    hint = message.bot.send_message.await_args.kwargs["text"]
+    assert "вес и повторы" in hint
+
+
 async def test_confirming_a_long_exercise_name_creates_it(fresh_db, user_id):
     db = fresh_db
     workout_id = await db.create_workout(user_id)

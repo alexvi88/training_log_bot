@@ -451,6 +451,25 @@ async def test_absurdly_long_name_asks_for_confirmation_instead_of_creating(fres
     assert (await state.get_data())["exm_pending_long_name"] == _STRAY_MESSAGE
 
 
+async def test_a_logged_set_typed_as_a_name_asks_for_confirmation(fresh_db, user_id):
+    """A set like "50 12" typed while the bot was waiting for an exercise name
+    (meant to log a set on an already-open exercise, or a stray "5x5"-style
+    program note) shouldn't silently become an exercise called "50 12"."""
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Ноги")
+    state = await _make_state(user_id, exm_group_id=group_id)
+    await state.set_state(ExerciseManage.creating_exercise_name)
+    message = _make_message(user_id, "50 12")
+
+    await exercises.exm_new_exercise_name_entered(message, state)
+
+    assert await db.count_user_exercises(user_id) == 0
+    message.reply.assert_awaited_once()
+    assert (await state.get_data())["exm_pending_long_name"] == "50 12"
+    text = message.reply.await_args.args[0]
+    assert "вес и повторы" in text
+
+
 async def test_confirming_a_long_name_creates_the_exercise(fresh_db, user_id):
     db = fresh_db
     group_id = await db.create_muscle_group(user_id, "Грудь")

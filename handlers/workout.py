@@ -39,7 +39,14 @@ import ui
 import view_builder
 import voice_parse
 from fsm import WorkoutFlow
-from parser import ParsedSet, ParseError, parse_ru_date, parse_set_edit, parse_sets_line
+from parser import (
+    ParsedSet,
+    ParseError,
+    looks_like_set_input,
+    parse_ru_date,
+    parse_set_edit,
+    parse_sets_line,
+)
 
 router = Router(name="workout")
 
@@ -1186,6 +1193,18 @@ async def pick_template_add(callback: CallbackQuery, state: FSMContext):
     await _on_exercise_chosen(callback, state, ex_id)
 
 
+def _suspicious_exercise_name_reason(name: str) -> str | None:
+    """None if `name` looks like a plausible exercise name; otherwise a short
+    Russian phrase for the "are you sure?" prompt explaining why it doesn't —
+    either a stray message (too long) or an actual logged set ("50 12") typed
+    while the bot happened to be waiting for a name instead."""
+    if len(name) > config.MAX_EXERCISE_NAME_LENGTH:
+        return f"длинновато для упражнения ({len(name)} символов)"
+    if looks_like_set_input(name):
+        return "похоже на вес и повторы, а не на название упражнения"
+    return None
+
+
 @router.message(StateFilter(WorkoutFlow.creating_exercise_name))
 async def new_exercise_name_entered(message: Message, state: FSMContext):
     name = message.text.strip()
@@ -1193,9 +1212,10 @@ async def new_exercise_name_entered(message: Message, state: FSMContext):
         await message.reply("Название не может быть пустым")
         return
     await _delete_message(message)
-    if len(name) > config.MAX_EXERCISE_NAME_LENGTH:
+    reason = _suspicious_exercise_name_reason(name)
+    if reason:
         # A stray message typed while the bot happened to be waiting for a name
-        # doesn't look like an exercise — but it might genuinely be a long one,
+        # doesn't look like an exercise — but it might genuinely be intended,
         # so ask instead of silently blocking it.
         await state.update_data(pending_long_exercise_name=name)
         data = await state.get_data()
@@ -1204,10 +1224,7 @@ async def new_exercise_name_entered(message: Message, state: FSMContext):
             yes_cb="pick:longname:yes", no_cb="pick:longname:no",
             yes_text="✅ Да, создать", no_text="✏️ Написать заново",
         )
-        hint = (
-            f"«{escape(name)}» — длинновато для упражнения ({len(name)} символов). "
-            "Всё верно, создать такое?"
-        )
+        hint = f"«{escape(name)}» — {reason}. Всё верно, создать такое?"
         await _refresh_live(message.bot, state, user, data["workout_id"], hint, kb)
         return
     data = await state.get_data()
