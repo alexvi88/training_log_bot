@@ -146,7 +146,27 @@ async def _show_routine_detail(event, state: FSMContext, routine_id: int) -> Non
         lines.extend(f"{i}. {escape(ex['display_name'])}" for i, ex in enumerate(exercises, start=1))
     else:
         lines.append("В программе нет упражнений (возможно, они были архивированы).")
-    kb = keyboards.routine_detail_keyboard(routine_id, [(ex["id"], ex["display_name"]) for ex in exercises])
+    kb = keyboards.routine_detail_keyboard(routine_id)
+    text = "\n".join(lines)
+    if isinstance(event, CallbackQuery):
+        await ui.safe_edit(event, text, reply_markup=kb, parse_mode="HTML")
+    else:
+        await event.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
+async def _show_routine_editor(event, state: FSMContext, routine_id: int) -> None:
+    routine = await _owned_routine(event, routine_id)
+    if routine is None:
+        return
+    exercises = await db.list_routine_exercises(routine_id)
+    lines = [f"✏️ <b>{escape(routine['name'])}</b>", ""]
+    if exercises:
+        lines.append("Нажми на упражнение, чтобы убрать его из программы.")
+    else:
+        lines.append("В программе нет упражнений.")
+    kb = keyboards.routine_edit_keyboard(
+        routine_id, [(ex["id"], ex["display_name"]) for ex in exercises]
+    )
     text = "\n".join(lines)
     if isinstance(event, CallbackQuery):
         await ui.safe_edit(event, text, reply_markup=kb, parse_mode="HTML")
@@ -158,6 +178,13 @@ async def _show_routine_detail(event, state: FSMContext, routine_id: int) -> Non
 async def rt_view(callback: CallbackQuery, state: FSMContext):
     routine_id = int(callback.data.split(":")[2])
     await _show_routine_detail(callback, state, routine_id)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("rt:edit:"))
+async def rt_edit(callback: CallbackQuery, state: FSMContext):
+    routine_id = int(callback.data.split(":")[2])
+    await _show_routine_editor(callback, state, routine_id)
     await callback.answer()
 
 
@@ -328,9 +355,6 @@ async def rt_delete(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("rt:start:"))
 async def rt_start(callback: CallbackQuery, state: FSMContext):
-    from handlers.workout import _delete_message as wk_delete
-    from handlers.workout import _enter_live, _load_next_planned_block, _picker_screen_groups
-
     routine_id = int(callback.data.split(":")[2])
     routine = await _owned_routine(callback, routine_id)
     if routine is None:
@@ -339,12 +363,38 @@ async def rt_start(callback: CallbackQuery, state: FSMContext):
     active = await db.get_active_workout(callback.from_user.id)
     if active:
         if await db.list_exercise_ids_for_workout(active["id"]):
-            await callback.answer("У тебя уже есть активная тренировка", show_alert=True)
-            await _enter_live(callback, state, active["id"])
+            # Dropping into the old session here would lose the program the user
+            # just chose, and tapping "▶️ Начать" again would do the same thing —
+            # a loop with no way forward. Offer the two real choices instead.
+            started = dt.datetime.fromisoformat(active["started_at"])
+            kb = keyboards.yes_no_keyboard(
+                yes_cb=f"rt:finishprev:{routine_id}",
+                no_cb=f"rt:resumeprev:{routine_id}",
+                yes_text="🏁 Завершить и начать",
+                no_text="↩️ Вернуться к ней",
+            )
+            await ui.safe_edit(
+                callback,
+                f"У тебя не закрыта тренировка от <b>{formatting.format_date_ru(started)}</b>.\n"
+                f"Завершить её и начать по программе «{escape(routine['name'])}»?",
+                reply_markup=kb,
+                parse_mode="HTML",
+            )
+            await callback.answer()
             return
         await db.discard_workout(active["id"])
 
-    exercises = await db.list_routine_exercises(routine_id)
+    await _begin_routine_workout(callback, state, routine)
+    await callback.answer()
+
+
+async def _begin_routine_workout(callback: CallbackQuery, state: FSMContext, routine) -> None:
+    """Create the workout and load the routine's first block. Assumes any
+    previously active workout has already been dealt with."""
+    from handlers.workout import _delete_message as wk_delete
+    from handlers.workout import _load_next_planned_block, _picker_screen_groups
+
+    exercises = await db.list_routine_exercises(routine["id"])
     planned = [{"exercise_ids": [ex["exercise_id"]]} for ex in exercises]
 
     workout_id = await db.create_workout(callback.from_user.id)
@@ -359,6 +409,35 @@ async def rt_start(callback: CallbackQuery, state: FSMContext):
     else:
         await state.set_state(WorkoutFlow.picking_group)
         await _picker_screen_groups(callback, state)
+
+
+@router.callback_query(F.data.startswith("rt:finishprev:"))
+async def rt_finish_previous_and_start(callback: CallbackQuery, state: FSMContext):
+    """"🏁 Завершить и начать" — close the stale session (keeping what's in it)
+    and start the chosen program straight away."""
+    routine_id = int(callback.data.split(":")[2])
+    routine = await _owned_routine(callback, routine_id)
+    if routine is None:
+        return
+    active = await db.get_active_workout(callback.from_user.id)
+    if active:
+        await db.delete_empty_blocks(active["id"])
+        await db.finish_workout(active["id"])
+    await _begin_routine_workout(callback, state, routine)
+    await callback.answer("Прошлая тренировка завершена")
+
+
+@router.callback_query(F.data.startswith("rt:resumeprev:"))
+async def rt_resume_previous(callback: CallbackQuery, state: FSMContext):
+    """"↩️ Вернуться к ней" — the other half of the same choice."""
+    from handlers.workout import _enter_live
+
+    active = await db.get_active_workout(callback.from_user.id)
+    if active is None:
+        await callback.answer("Активной тренировки уже нет")
+        await _show_routine_detail(callback, state, int(callback.data.split(":")[2]))
+        return
+    await _enter_live(callback, state, active["id"])
     await callback.answer()
 
 
@@ -380,11 +459,11 @@ async def rt_remove_exercise(callback: CallbackQuery, state: FSMContext):
     entry = await db.get_routine_exercise(re_id)
     if entry is None or entry["routine_id"] != routine_id:
         await callback.answer("Упражнение уже убрано", show_alert=True)
-        await _show_routine_detail(callback, state, routine_id)
+        await _show_routine_editor(callback, state, routine_id)
         return
     await db.remove_routine_exercise(re_id)
     await callback.answer("Убрал из программы")
-    await _show_routine_detail(callback, state, routine_id)
+    await _show_routine_editor(callback, state, routine_id)
 
 
 async def _rtadd_groups_screen(callback: CallbackQuery, state: FSMContext) -> None:
@@ -417,7 +496,7 @@ async def rtadd_cancel(callback: CallbackQuery, state: FSMContext):
     routine_id = data.get("rtadd_routine_id")
     await state.set_state(None)
     if routine_id is not None:
-        await _show_routine_detail(callback, state, routine_id)
+        await _show_routine_editor(callback, state, routine_id)
     await callback.answer()
 
 
@@ -474,7 +553,9 @@ async def _rtadd_finish(event, state: FSMContext, exercise_id: int) -> None:
     await db.append_routine_exercise(routine_id, exercise_id)
     await db.touch_exercise_last_used(exercise_id)
     await state.set_state(None)
-    await _show_routine_detail(event, state, routine_id)
+    # Back to the composition editor the "➕" was tapped from, so several
+    # exercises can be added in a row.
+    await _show_routine_editor(event, state, routine_id)
     if isinstance(event, CallbackQuery):
         await event.answer("Добавил в программу")
 

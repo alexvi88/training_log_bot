@@ -283,18 +283,32 @@ def program_detail_keyboard(program_key: str) -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
-def routine_detail_keyboard(routine_id: int, exercises=()) -> InlineKeyboardMarkup:
-    """exercises: (routine_exercise_id, display_name) rows, in routine order —
-    each gets its own one-tap remove button, no confirmation (trivially
-    reversible via "➕ Добавить упражнение", unlike deleting the whole program)."""
+def routine_detail_keyboard(routine_id: int) -> InlineKeyboardMarkup:
+    """The program's own screen — start it, or go edit it.
+
+    The per-exercise "🗑 {name}" rows used to sit directly under "▶️ Начать
+    тренировку": one row's mistap on the way to starting a session silently
+    dropped an exercise, and putting it back appends it to the end, losing the
+    program's order. They live behind "✏️ Изменить состав" now.
+    """
     b = InlineKeyboardBuilder()
     b.row(InlineKeyboardButton(text="▶️ Начать тренировку", callback_data=f"rt:start:{routine_id}"))
-    for re_id, name in exercises:
-        b.row(InlineKeyboardButton(text=f"🗑 {name}", callback_data=f"rt:rmex:{routine_id}:{re_id}"))
-    b.row(InlineKeyboardButton(text="➕ Добавить упражнение", callback_data=f"rt:addex:{routine_id}"))
+    b.row(InlineKeyboardButton(text="✏️ Изменить состав", callback_data=f"rt:edit:{routine_id}"))
     b.row(InlineKeyboardButton(text="✏️ Переименовать", callback_data=f"rt:rename:{routine_id}"))
     b.row(InlineKeyboardButton(text="🗑 Удалить программу", callback_data=f"rt:delask:{routine_id}"))
     b.row(InlineKeyboardButton(text="⬅️ К списку", callback_data="rt:manage"))
+    return b.as_markup()
+
+
+def routine_edit_keyboard(routine_id: int, exercises=()) -> InlineKeyboardMarkup:
+    """The program's composition editor: exercises: (routine_exercise_id,
+    display_name) rows in program order, each with a remove button. Reached
+    deliberately, so removal stays one tap here without a confirmation."""
+    b = InlineKeyboardBuilder()
+    for re_id, name in exercises:
+        b.row(InlineKeyboardButton(text=f"🗑 {name}", callback_data=f"rt:rmex:{routine_id}:{re_id}"))
+    b.row(InlineKeyboardButton(text="➕ Добавить упражнение", callback_data=f"rt:addex:{routine_id}"))
+    b.row(InlineKeyboardButton(text="⬅️ Готово", callback_data=f"rt:view:{routine_id}"))
     return b.as_markup()
 
 
@@ -555,7 +569,9 @@ def settings_keyboard(
 
 # Chart window options for the weight diary (weeks; 0 = all history).
 BODYWEIGHT_PERIODS = [(8, "8 нед"), (26, "26 нед"), (0, "Всё")]
-DEFAULT_BODYWEIGHT_WEEKS = 0
+# Recent weeks, not all history: the screen lists every entry in the window, and
+# on a daily weigh-in "Всё" grows without bound. "Всё" stays one tap away.
+DEFAULT_BODYWEIGHT_WEEKS = 8
 
 
 def bodyweight_keyboard(has_logs: bool, weeks: int = 0, show_periods: bool = False) -> InlineKeyboardMarkup:

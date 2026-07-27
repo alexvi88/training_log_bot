@@ -92,3 +92,40 @@ def test_workout_card_keyboard_packs_actions_into_one_row():
     assert "🖼 Картинка" in _button_texts(kb)
     assert "✏️ Редактировать" in _button_texts(kb)
     assert "⬅️ В меню" in _button_texts(kb)
+
+
+def test_routine_detail_keyboard_has_no_per_exercise_delete_rows():
+    """The 🗑-per-exercise rows used to sit directly under "▶️ Начать тренировку",
+    so a mistap on the way into a session silently dropped an exercise."""
+    kb = keyboards.routine_detail_keyboard(7)
+    cbs = _callback_datas(kb)
+    assert not any(cb.startswith("rt:rmex:") for cb in cbs)
+    assert "rt:start:7" in cbs
+    assert "rt:edit:7" in cbs
+    # The one destructive action left on this screen asks for confirmation.
+    assert "rt:delask:7" in cbs
+
+
+def test_routine_edit_keyboard_carries_the_removals():
+    kb = keyboards.routine_edit_keyboard(7, [(11, "Жим"), (12, "Тяга")])
+    cbs = _callback_datas(kb)
+    assert "rt:rmex:7:11" in cbs
+    assert "rt:rmex:7:12" in cbs
+    assert "rt:addex:7" in cbs
+    assert "rt:view:7" in cbs  # "готово" back to the program screen
+
+
+def test_edit_workout_keyboard_is_one_row_per_exercise():
+    kb = keyboards.edit_workout_keyboard([(1, 10, "Становая · 3 сета"), (2, 11, "Тяга · 2 сета")])
+    rows = kb.inline_keyboard
+    assert len(rows) == 5  # 2 exercises + новое/дата/готово
+    assert _callback_datas(kb)[:2] == ["editw:ex:1:10", "editw:ex:2:11"]
+
+
+def test_edit_exercise_keyboard_lists_sets_and_a_way_back():
+    kb = keyboards.edit_exercise_keyboard(1, 10, [(100, "1) 190×5"), (101, "2) 190×5")])
+    cbs = _callback_datas(kb)
+    assert "editw:set:100" in cbs and "editw:set:101" in cbs
+    assert "editw:addset:1:10" in cbs
+    assert "editw:rmexask:1" in cbs  # confirmed removal, not the bare rmex
+    assert "editw:top" in cbs

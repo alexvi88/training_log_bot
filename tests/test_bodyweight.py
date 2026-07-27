@@ -189,10 +189,15 @@ async def _make_state(user_id: int) -> FSMContext:
 def _make_message(user_id: int, text: str):
     message = MagicMock()
     message.from_user = SimpleNamespace(id=user_id, username="tester")
+    message.chat = SimpleNamespace(id=user_id)
+    message.message_id = 42
     message.text = text
-    message.answer = AsyncMock()
-    message.answer_photo = AsyncMock()
+    message.answer = AsyncMock(return_value=SimpleNamespace(message_id=43))
+    message.answer_photo = AsyncMock(return_value=SimpleNamespace(message_id=43))
     message.reply = AsyncMock()
+    message.delete = AsyncMock()
+    message.bot = MagicMock()
+    message.bot.delete_message = AsyncMock()
     return message
 
 
@@ -225,3 +230,53 @@ async def test_typing_invalid_text_while_viewing_replies_with_error(fresh_db, us
 
     assert await dbmod.list_bodyweight_logs(user_id) == []
     message.reply.assert_awaited_once()
+
+
+def test_bodyweight_screen_fits_the_caption_cap_on_a_long_history():
+    """The screen is sent as a photo caption. An over-long one doesn't truncate —
+    safe_edit_photo has already deleted the old screen when the send fails, so
+    the whole screen would disappear from the chat."""
+    import datetime as dt
+
+    import formatting
+
+    start = dt.date(2026, 1, 1)
+    logs = [
+        {
+            "weight": 82.5 + (i % 7) * 0.1,
+            "logged_at": f"{start + dt.timedelta(days=i)}T08:00:00",
+        }
+        for i in range(120)
+    ]
+    text = formatting.build_bodyweight_screen(logs)
+
+    assert formatting.telegram_length(text) <= formatting.CAPTION_LIMIT
+    assert "Показано" in text  # and it says the list was cut
+    assert "Напиши вес" in text  # the call to action survives the trim
+
+
+def test_bodyweight_screen_keeps_the_most_recent_entries():
+    import datetime as dt
+
+    import formatting
+
+    start = dt.date(2026, 1, 1)
+    logs = [
+        {"weight": 80.0 + i * 0.1, "logged_at": f"{start + dt.timedelta(days=i)}T08:00:00"}
+        for i in range(60)
+    ]
+    text = formatting.build_bodyweight_screen(logs)
+
+    assert "01.03.2026" in text  # newest entry (day 60) kept
+    assert "01.01.2026" not in text  # oldest trimmed away
+
+
+def test_bodyweight_screen_short_history_lists_everything():
+    import formatting
+
+    logs = [{"weight": 82.5, "logged_at": "2026-01-01T08:00:00"},
+            {"weight": 82.1, "logged_at": "2026-01-02T08:00:00"}]
+    text = formatting.build_bodyweight_screen(logs)
+
+    assert "01.01.2026" in text and "02.01.2026" in text
+    assert "Показано" not in text
