@@ -62,6 +62,23 @@ def _make_message(user_id: int, text: str):
     return message
 
 
+async def test_absurdly_long_exercise_name_is_rejected(fresh_db, user_id):
+    """A stray message typed while the bot happened to be waiting for a new
+    exercise name (e.g. meant for someone else in the chat) shouldn't silently
+    get recorded as an exercise — it doesn't look anything like a real one."""
+    db = fresh_db
+    state = await _make_state(user_id)
+    await state.set_state(WorkoutFlow.creating_exercise_name)
+    message = _make_message(user_id, "Саня я буквально сейчас иду в зал купить protein bar по дороге")
+    message.reply = AsyncMock()
+
+    await workout.new_exercise_name_entered(message, state)
+
+    assert await db.count_user_exercises(user_id) == 0
+    message.reply.assert_awaited_once()
+    assert await state.get_state() == WorkoutFlow.creating_exercise_name
+
+
 async def test_typing_in_exercise_picker_searches_instead_of_being_ignored(fresh_db, user_id):
     db = fresh_db
     group_id = await db.create_muscle_group(user_id, "Грудь")

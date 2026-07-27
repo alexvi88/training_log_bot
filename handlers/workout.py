@@ -1192,6 +1192,12 @@ async def new_exercise_name_entered(message: Message, state: FSMContext):
     if not name:
         await message.reply("Название не может быть пустым")
         return
+    if len(name) > config.MAX_EXERCISE_NAME_LENGTH:
+        await message.reply(
+            f"Слишком длинное название (максимум {config.MAX_EXERCISE_NAME_LENGTH} символов) — "
+            "похоже на случайное сообщение. Напиши короткое название упражнения."
+        )
+        return
     await _delete_message(message)
     data = await state.get_data()
     ex_id = await db.create_exercise(message.from_user.id, name, data["pending_group_id"])

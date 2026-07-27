@@ -17,6 +17,7 @@ def _make_message(user_id: int, text: str):
     message.from_user = SimpleNamespace(id=user_id)
     message.text = text
     message.answer = AsyncMock()
+    message.reply = AsyncMock()
     return message
 
 
@@ -427,6 +428,39 @@ async def test_new_exercise_from_all_asks_for_the_group_after_the_name(fresh_db,
     sent = message.answer.await_args
     text = sent.args[0] if sent.args else sent.kwargs["text"]
     assert "Barbell Row" in text and "группу мышц" in text
+
+
+async def test_absurdly_long_name_is_rejected_instead_of_creating_an_exercise(fresh_db, user_id):
+    """A stray message typed while the bot happened to be waiting for an exercise
+    name (e.g. meant for someone else in the chat) shouldn't silently become a
+    logged exercise — it doesn't look anything like a real exercise name."""
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    state = await _make_state(user_id, exm_group_id=group_id)
+    await state.set_state(ExerciseManage.creating_exercise_name)
+    message = _make_message(user_id, "Саня я буквально сейчас иду в зал купить protein bar по дороге")
+
+    await exercises.exm_new_exercise_name_entered(message, state)
+
+    assert await db.count_user_exercises(user_id) == 0
+    message.reply.assert_awaited_once()
+    assert await state.get_state() == ExerciseManage.creating_exercise_name
+
+
+async def test_absurdly_long_rename_is_rejected(fresh_db, user_id):
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    ex_id = await db.create_exercise(user_id, "pull down", group_id)
+
+    state = await _make_state(user_id, exm_group_id=group_id, exm_exercise_id=ex_id)
+    await state.set_state(ExerciseManage.editing_name)
+    message = _make_message(user_id, "Саня я буквально сейчас иду в зал купить protein bar по дороге")
+
+    await exercises.exm_name_entered(message, state)
+
+    ex = await db.get_exercise(ex_id)
+    assert ex["name"] == "pull down"
+    message.reply.assert_awaited_once()
 
 
 async def test_picking_the_group_creates_the_exercise(fresh_db, user_id):

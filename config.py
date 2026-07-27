@@ -35,6 +35,11 @@ STALE_WORKOUT_HOURS = 6
 # once paging/new-exercise/back are added.
 RECENT_EXERCISES_LIMIT = 8
 
+# Guards against a stray message (typed while the bot happened to be waiting for
+# an exercise name) getting recorded as an exercise — no real exercise name comes
+# close to this, so anything longer is almost certainly a misfire.
+MAX_EXERCISE_NAME_LENGTH = 60
+
 # Engagement pushes (streaks, skip reminders, plateau nudges, weekly digest — see
 # PUSH_IDEAS.md). On by default; set ENGAGEMENT_ENABLED=false in the environment
 # to silence the daily job entirely without touching per-user opt-outs.
