@@ -5,6 +5,7 @@ on a redeploy leaves users with stale inline keyboards whose callbacks no
 longer match any StateFilter. This storage persists state/data to disk so
 restarts don't silently break buttons mid-flow.
 """
+import asyncio
 import json
 import logging
 import os
@@ -45,6 +46,14 @@ class JSONFileStorage(BaseStorage):
     def __init__(self, path: str):
         self._path = path
         self._data: dict[str, dict[str, Any]] = self._load()
+        # Guards the actual disk write. The original code ran open()/json.dump()/
+        # os.replace() synchronously with no `await` inside it, so — cooperative
+        # scheduling being what it is — two calls could never interleave. Moving
+        # the write to a worker thread (see _save) drops that guarantee for free:
+        # without this lock, two concurrent writers race on the same *shared*
+        # ".tmp" path, and whichever calls os.replace() second raises
+        # FileNotFoundError because the first already moved it away.
+        self._save_lock = asyncio.Lock()
 
     def _load(self) -> dict[str, dict[str, Any]]:
         if not os.path.exists(self._path):
@@ -78,32 +87,59 @@ class JSONFileStorage(BaseStorage):
         except OSError:
             logger.exception("Could not move aside corrupt FSM file %s", self._path)
 
-    def _save(self) -> None:
+    def _prune_if_empty(self, key_str: str) -> None:
+        """Drop an entry once it carries neither a state nor any data.
+
+        state.clear() at the end of every flow (finishing a workout, backing
+        out to the menu, ...) leaves exactly this behind — a key with
+        state=None, data={}. Without pruning, every user who has ever
+        interacted with the bot even once stays in the file forever: it only
+        ever grows, and every single write (set_state/set_data — one per
+        logged set) rewrites the whole thing.
+        """
+        entry = self._data.get(key_str)
+        if entry is not None and not entry.get("state") and not entry.get("data"):
+            del self._data[key_str]
+
+    def _write_to_disk(self, snapshot: dict[str, dict[str, Any]]) -> None:
         tmp_path = self._path + ".tmp"
         with open(tmp_path, "w") as f:
-            json.dump(self._data, f)
+            json.dump(snapshot, f)
         os.replace(tmp_path, self._path)
 
+    async def _save(self) -> None:
+        # The snapshot is taken outside the lock (mutations to self._data are
+        # synchronous with no `await`, so it's always current) but the actual
+        # write is serialized by it — see _save_lock's docstring for why that
+        # matters once the write moved to a worker thread.
+        snapshot = {k: dict(v) for k, v in self._data.items()}
+        async with self._save_lock:
+            await asyncio.to_thread(self._write_to_disk, snapshot)
+
     async def set_state(self, key: StorageKey, state: StateType = None) -> None:
-        entry = self._data.setdefault(_key_to_str(key), {})
+        key_str = _key_to_str(key)
+        entry = self._data.setdefault(key_str, {})
         if state is None:
             entry["state"] = None
         elif isinstance(state, State):
             entry["state"] = state.state
         else:
             entry["state"] = str(state)
-        self._save()
+        self._prune_if_empty(key_str)
+        await self._save()
 
     async def get_state(self, key: StorageKey) -> str | None:
         return self._data.get(_key_to_str(key), {}).get("state")
 
     async def set_data(self, key: StorageKey, data: dict) -> None:
-        entry = self._data.setdefault(_key_to_str(key), {})
+        key_str = _key_to_str(key)
+        entry = self._data.setdefault(key_str, {})
         entry["data"] = dict(data)
-        self._save()
+        self._prune_if_empty(key_str)
+        await self._save()
 
     async def get_data(self, key: StorageKey) -> dict:
         return dict(self._data.get(_key_to_str(key), {}).get("data", {}))
 
     async def close(self) -> None:
-        self._save()
+        await self._save()

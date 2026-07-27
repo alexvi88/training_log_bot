@@ -1,5 +1,6 @@
 """JSONFileStorage: aiogram FSM storage persisted to a JSON file on disk."""
 
+import asyncio
 import json
 
 import pytest
@@ -170,3 +171,90 @@ async def test_storage_works_normally_after_recovering_from_corruption(tmp_path)
 
     assert await storage.get_state(_key()) == "_Flow:waiting"
     assert await storage.get_data(_key()) == {"workout_id": 5}
+
+
+# ---------- pruning dead entries, so the file doesn't grow forever ----------
+
+
+async def test_state_clear_sequence_prunes_the_entry(tmp_path):
+    """aiogram's state.clear() calls set_state(None) then set_data({}) — the
+    end of every flow (finishing a workout, backing out to the menu, ...).
+    Without pruning, every user who ever interacted with the bot even once
+    stays in the file forever."""
+    path = tmp_path / "fsm.json"
+    storage = JSONFileStorage(str(path))
+    key = _key()
+    await storage.set_data(key, {"workout_id": 5})
+    await storage.set_state(key, _Flow.waiting)
+
+    # The clear sequence:
+    await storage.set_state(key, None)
+    await storage.set_data(key, {})
+
+    assert json.loads(path.read_text()) == {}
+
+
+async def test_pruning_does_not_touch_other_keys(tmp_path):
+    path = tmp_path / "fsm.json"
+    storage = JSONFileStorage(str(path))
+    active, finished = _key(1), _key(2)
+    await storage.set_data(active, {"workout_id": 1})
+    await storage.set_state(active, _Flow.waiting)
+    await storage.set_data(finished, {"workout_id": 2})
+    await storage.set_state(finished, _Flow.waiting)
+
+    await storage.set_state(finished, None)
+    await storage.set_data(finished, {})
+
+    assert await storage.get_data(active) == {"workout_id": 1}
+    assert await storage.get_data(finished) == {}
+    on_disk = json.loads(path.read_text())
+    assert len(on_disk) == 1  # only the active one survives
+
+
+async def test_state_alone_without_data_is_not_pruned(tmp_path):
+    """A state with no data yet (e.g. mid-flow before the first set_data call)
+    must not be mistaken for a finished session."""
+    path = tmp_path / "fsm.json"
+    storage = JSONFileStorage(str(path))
+    key = _key()
+    await storage.set_state(key, _Flow.waiting)
+
+    assert await storage.get_state(key) == "_Flow:waiting"
+    assert len(json.loads(path.read_text())) == 1
+
+
+async def test_data_alone_without_state_is_not_pruned(tmp_path):
+    path = tmp_path / "fsm.json"
+    storage = JSONFileStorage(str(path))
+    key = _key()
+    await storage.set_data(key, {"workout_id": 5})
+
+    assert await storage.get_data(key) == {"workout_id": 5}
+    assert len(json.loads(path.read_text())) == 1
+
+
+# ---------- concurrent writes: the actual disk write must be serialized ----------
+
+
+async def test_many_concurrent_writers_do_not_crash_or_lose_updates(tmp_path):
+    """The write moved to a worker thread (asyncio.to_thread) so the event
+    loop isn't blocked on file I/O for every set logged. Without a lock
+    serializing the actual write, two concurrent writers race on the same
+    shared ".tmp" path and whichever calls os.replace() second raises
+    FileNotFoundError — and even if that didn't crash, an unordered write
+    could silently drop an update.
+    """
+    path = tmp_path / "fsm.json"
+    storage = JSONFileStorage(str(path))
+
+    async def writer(uid: int) -> None:
+        key = _key(uid)
+        for i in range(20):
+            await storage.set_data(key, {"n": i})
+
+    await asyncio.gather(*(writer(uid) for uid in range(30)))
+
+    for uid in range(30):
+        assert await storage.get_data(_key(uid)) == {"n": 19}
+    assert len(json.loads(path.read_text())) == 30
