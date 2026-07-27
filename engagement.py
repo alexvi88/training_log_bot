@@ -9,20 +9,18 @@ match wins, at most one push per user per day):
   1. Серия на кону   — weekend only, a running week-streak about to break
   2. Пропуск         — exact day-since-last-workout milestones (jabs live here)
   3. Возвращение     — 21+ days gone, then every 10 days
-  4. Тайминг         — today matches the user's usual training weekday
-  5. Плато           — Sundays only, weight stuck despite 12+ reps
-  6. Аналитика       — Sundays only, weekly digest
+  4. Плато           — Sundays only, weight stuck despite 12+ reps
+  5. Аналитика       — Sundays only, weekly digest
 
 A separate track, `build_newbie_push`, walks a disjoint pool: users who signed
 up but never finished a single workout. Since these users have no last-workout
-date, none of the six signals above apply to them (they all key off workout
+date, none of the five signals above apply to them (they all key off workout
 history) — they get their own periodic nudge timed off `users.created_at` instead.
 """
 
 import asyncio
 import datetime as dt
 import logging
-from collections import Counter
 from dataclasses import dataclass
 from typing import Optional
 
@@ -41,7 +39,6 @@ logger = logging.getLogger(__name__)
 
 WIN_BACK_START_DAY = 21
 WIN_BACK_REPEAT_DAYS = 10
-TIMING_MIN_HISTORY = 10
 PLATEAU_MIN_REPS = 12
 PLATEAU_SESSIONS = 3
 DIGEST_LOOKBACK_DAYS = 30
@@ -83,14 +80,6 @@ def is_newbie_nudge_day(days_since_signup: int) -> bool:
     if days_since_signup < NEWBIE_START_DAY or days_since_signup > NEWBIE_STOP_DAY:
         return False
     return (days_since_signup - NEWBIE_START_DAY) % NEWBIE_REPEAT_DAYS == 0
-
-
-def usual_weekday(workout_dates: list[dt.date]) -> Optional[int]:
-    if len(workout_dates) < TIMING_MIN_HISTORY:
-        return None
-    counts = Counter(d.weekday() for d in workout_dates)
-    weekday, _ = counts.most_common(1)[0]
-    return weekday
 
 
 def _session_top_weight_and_min_reps(session: analytics.SessionStats) -> tuple[float, int]:
@@ -168,10 +157,6 @@ async def build_daily_push(telegram_id: int, today: dt.date) -> Optional[PushDec
     if is_win_back_day(dashboard.days_since_last):
         text = await push_texts.pick_text(telegram_id, push_texts.WIN_BACK)
         return PushDecision(push_texts.WIN_BACK, text)
-
-    if dates[-1] != today and usual_weekday(dates) == today.weekday():
-        text = await push_texts.pick_text(telegram_id, push_texts.TIMING)
-        return PushDecision(push_texts.TIMING, text)
 
     if today.weekday() == 6:  # Sunday
         exercise_name = await _find_plateau_exercise(telegram_id)
