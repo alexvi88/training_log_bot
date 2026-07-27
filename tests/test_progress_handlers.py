@@ -274,7 +274,7 @@ def _has_button_cb(markup, cb: str) -> bool:
 async def test_prog_group_list_paginates(fresh_db, user_id):
     """A group with more than one page of exercises shows a next-page arrow."""
     group_id = await fresh_db.create_muscle_group(user_id, "Грудь")
-    for i in range(15):  # > RECENT_EXERCISES_LIMIT (12)
+    for i in range(15):  # > RECENT_EXERCISES_LIMIT (8)
         await fresh_db.create_exercise(user_id, f"Упражнение {i}", group_id)
     state = await _make_state(user_id)
 
@@ -318,3 +318,44 @@ async def test_prog_card_button_shows_exercise_card_from_any_state(fresh_db, use
     callback.message.delete.assert_awaited_once()
     text = callback.message.answer.await_args.args[0]
     assert "Жим лёжа" in text
+
+
+# ---------- progress entry with no workout history yet ----------
+
+
+async def test_progress_entry_offers_start_workout_when_no_history(fresh_db, user_id):
+    """A brand-new user used to pick a group, see "пусто", and back out — the
+    picker itself couldn't say there was nothing to show until already drilled in."""
+    state = await _make_state(user_id)
+    callback = _make_callback(user_id, "menu:progress")
+
+    await history.show_progress_entry(callback, state)
+
+    # No chart on screen and chat_bottom hasn't seen this message, so ui.safe_edit
+    # takes the delete-and-resend path — the screen goes out via message.answer.
+    sent = callback.message.answer.await_args
+    assert "первой завершённой тренировки" in sent.args[0]
+    kb = sent.kwargs["reply_markup"]
+    cbs = [b.callback_data for row in kb.inline_keyboard for b in row]
+    assert "menu:start_workout" in cbs
+
+
+async def test_progress_entry_shows_groups_once_a_workout_exists(fresh_db, user_id):
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    ex_id = await db.create_exercise(user_id, "Жим лёжа", group_id)
+    workout_id = await db.create_workout(user_id)
+    block_id = await db.create_block(workout_id, "single")
+    await db.add_block_exercise(block_id, ex_id, 0)
+    await db.add_set(block_id, ex_id, 1, 0, 100.0, 8)
+    await db.finish_workout(workout_id)
+
+    state = await _make_state(user_id)
+    callback = _make_callback(user_id, "menu:progress")
+
+    await history.show_progress_entry(callback, state)
+
+    kb = callback.message.answer.await_args.kwargs["reply_markup"]
+    cbs = [b.callback_data for row in kb.inline_keyboard for b in row]
+    assert any(cb.startswith("prog:grp:") for cb in cbs)
+    assert "menu:start_workout" not in cbs

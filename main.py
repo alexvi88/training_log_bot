@@ -5,7 +5,14 @@ from contextlib import suppress
 from aiogram import BaseMiddleware, Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.types import BotCommand, BotCommandScopeChat, BotCommandScopeDefault, CallbackQuery, Message
+from aiogram.types import (
+    BotCommand,
+    BotCommandScopeChat,
+    BotCommandScopeDefault,
+    CallbackQuery,
+    ErrorEvent,
+    Message,
+)
 
 import admin_tasks
 import chat_bottom
@@ -69,6 +76,31 @@ class IgnoreStaleCallbackMiddleware(BaseMiddleware):
                     await event.answer()
                 return None
             raise
+
+
+_GENERIC_ERROR_TEXT = "⚠️ Что-то пошло не так. Нажми /start, чтобы вернуться в меню."
+
+
+async def on_unhandled_error(event: ErrorEvent) -> bool:
+    """Last-resort net for anything a handler didn't catch — a DB error, a bad
+    assumption about FSM data, matplotlib choking on a chart, etc.
+
+    Without this, dp has no dp.errors() handler registered at all: the
+    exception is logged by aiogram and nothing else happens. A tapped button's
+    callback never gets answered, so Telegram spins it for ~10s and gives up
+    silently — no screen change, no message, nothing pointing at what to do.
+    In the gym that reads as "the bot is broken", not as a recoverable error.
+    """
+    logger.exception(
+        "Unhandled error processing update %s", event.update.update_id, exc_info=event.exception
+    )
+    update = event.update
+    with suppress(Exception):
+        if update.callback_query is not None:
+            await update.callback_query.answer(_GENERIC_ERROR_TEXT, show_alert=True)
+        elif update.message is not None:
+            await update.message.reply(_GENERIC_ERROR_TEXT)
+    return True
 
 
 class RefreshPersistentMenuMiddleware(BaseMiddleware):
@@ -151,6 +183,7 @@ async def main() -> None:
     bot.session.middleware(chat_bottom.TrackOutgoingMessages())
     await _setup_commands(bot)
     dp = Dispatcher(storage=JSONFileStorage(config.FSM_STORAGE_PATH))
+    dp.errors.register(on_unhandled_error)
     dp.message.outer_middleware(chat_bottom.TrackIncomingMessages())
     dp.callback_query.outer_middleware(IgnoreStaleCallbackMiddleware())
     refresh_menu_middleware = RefreshPersistentMenuMiddleware()
