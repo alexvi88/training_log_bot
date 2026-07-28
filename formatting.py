@@ -196,7 +196,7 @@ def build_history_list(
     footer: str = "<i>Напиши название упражнения, чтобы найти тренировку с ним.</i>",
     empty: str = "Пока нет завершённых тренировок.",
 ) -> str:
-    """The history list's body: date + set count, then what was in that session.
+    """The history list's body: date, then what was in that session.
 
     The exercise names live here rather than on the buttons because real ones
     ("conventional deadlift", "abs - pull down block") run 20-30 characters —
@@ -206,10 +206,8 @@ def build_history_list(
     if not entries:
         return empty
     lines = [header]
-    for started, names, set_count in entries:
+    for started, names, _set_count in entries:
         head = format_date_ru(started)
-        if set_count:
-            head += f" · {set_count} {plural_ru(set_count, ('сет', 'сета', 'сетов'))}"
         lines.append("")
         lines.append(f"<b>{head}</b>")
         if names:

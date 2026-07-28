@@ -670,7 +670,8 @@ def test_history_list_puts_exercise_names_in_the_body():
         (dt.datetime(2026, 7, 26, 13), ["conventional deadlift", "pull down"], 13),
     ]
     text = formatting.build_history_list(entries)
-    assert "26.07.2026 (вс) · 13 сетов" in text
+    assert "26.07.2026 (вс)" in text
+    assert "сет" not in text  # set count no longer shown on the date line
     assert "• conventional deadlift" in text
     assert "• pull down" in text
 
