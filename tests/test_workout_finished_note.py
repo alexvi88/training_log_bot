@@ -72,6 +72,24 @@ async def test_addnote_prompt_asks_for_text(fresh_db, user_id):
 
 
 @pytest.mark.asyncio
+async def test_addnote_prompt_shows_clear_hint_only_when_a_note_exists(fresh_db, user_id):
+    db = fresh_db
+    workout_id = await _finished_workout(db, user_id)
+    state = await _make_state(user_id)
+    callback = _make_callback(user_id, f"live:addnote:{workout_id}")
+
+    await workout.workout_card_note_prompt(callback, state)
+    text = callback.message.answer.await_args.args[0]
+    assert "Пришли «-»" not in text
+
+    await db.update_workout_note(workout_id, "болело плечо")
+    callback2 = _make_callback(user_id, f"live:addnote:{workout_id}")
+    await workout.workout_card_note_prompt(callback2, state)
+    text2 = callback2.message.answer.await_args.args[0]
+    assert "Пришли «-»" in text2
+
+
+@pytest.mark.asyncio
 async def test_addnote_entered_saves_and_edits_card_in_place(fresh_db, user_id):
     db = fresh_db
     workout_id = await _finished_workout(db, user_id)
@@ -97,6 +115,29 @@ async def test_addnote_entered_saves_and_edits_card_in_place(fresh_db, user_id):
     assert kwargs["message_id"] == 42
     assert "болело плечо" in kwargs["text"]
     assert await state.get_state() is None
+
+
+@pytest.mark.asyncio
+async def test_addnote_dash_clears_an_existing_note(fresh_db, user_id):
+    db = fresh_db
+    workout_id = await _finished_workout(db, user_id)
+    await db.update_workout_note(workout_id, "болело плечо")
+    state = await _make_state(user_id)
+    await state.set_state(WorkoutFlow.editing_finished_note)
+    await state.update_data(note_workout_id=workout_id, note_chat_id=user_id, note_message_id=42)
+
+    message = MagicMock()
+    message.from_user = SimpleNamespace(id=user_id, username="tester")
+    message.text = "-"
+    message.reply = AsyncMock()
+    bot = MagicMock()
+    bot.edit_message_text = AsyncMock()
+    message.bot = bot
+
+    await workout.workout_card_note_entered(message, state)
+
+    saved = await db.get_workout(workout_id)
+    assert saved["note"] is None
 
 
 @pytest.mark.asyncio

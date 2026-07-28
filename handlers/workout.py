@@ -1319,10 +1319,12 @@ async def live_note_prompt(callback: CallbackQuery, state: FSMContext):
         return
     await state.set_state(WorkoutFlow.logging_exercise_note)
     current = f"\n\nСейчас: <i>{escape(ex['notes'])}</i>" if ex["notes"] else ""
+    hint = "\n\nПришли «-», чтобы убрать заметку." if ex["notes"] else ""
     user = await db.get_user(callback.from_user.id)
     await _refresh_live(
         callback.bot, state, user, (await state.get_data())["workout_id"],
-        f"📝 Заметка к «{escape(ex['display_name'])}» — напиши текст (например «побаливает правое плечо»).{current}",
+        f"📝 Заметка к «{escape(ex['display_name'])}» — напиши текст (например «побаливает правое плечо»)."
+        f"{current}{hint}",
         keyboards.cancel_keyboard("live:note_cancel"),
     )
     await callback.answer()
@@ -1340,7 +1342,8 @@ async def live_note_cancel(callback: CallbackQuery, state: FSMContext):
 async def live_note_entered(message: Message, state: FSMContext):
     data = await state.get_data()
     active = data.get("active_exercise_id")
-    await db.set_exercise_notes(active, message.text.strip())
+    text = message.text.strip()
+    await db.set_exercise_notes(active, None if text == "-" else text)
     await _delete_message(message)
     await state.set_state(WorkoutFlow.logging_set)
     user = await db.get_user(message.from_user.id)
@@ -1915,8 +1918,9 @@ async def workout_card_note_prompt(callback: CallbackQuery, state: FSMContext):
     )
     await state.set_state(WorkoutFlow.editing_finished_note)
     current = f"\n\nСейчас: <i>{escape(workout['note'])}</i>" if workout["note"] else ""
+    hint = "\n\nПришли «-», чтобы убрать заметку." if workout["note"] else ""
     await callback.message.answer(
-        f"Заметка к тренировке — напиши текст (сон, самочувствие, что угодно).{current}",
+        f"Заметка к тренировке — напиши текст (сон, самочувствие, что угодно).{current}{hint}",
         reply_markup=keyboards.cancel_keyboard("live:addnote_cancel"),
     )
     await callback.answer()
@@ -1932,7 +1936,8 @@ async def workout_card_note_cancel(callback: CallbackQuery, state: FSMContext):
 async def workout_card_note_entered(message: Message, state: FSMContext):
     data = await state.get_data()
     workout_id = data["note_workout_id"]
-    note = message.text.strip()
+    text = message.text.strip()
+    note = None if text == "-" else text
     await db.update_workout_note(workout_id, note)
     await state.clear()
 

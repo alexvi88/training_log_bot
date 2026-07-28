@@ -128,6 +128,20 @@ async def test_note_entered_saves_to_exercise(fresh_db, user_id):
     assert await state.get_state() == WorkoutFlow.logging_set
 
 
+@pytest.mark.asyncio
+async def test_note_dash_clears_an_existing_note(fresh_db, user_id):
+    db = fresh_db
+    state, ex_id, _ = await _setup_logging(db, user_id)
+    await db.set_exercise_notes(ex_id, "болит плечо")
+    await state.set_state(WorkoutFlow.logging_exercise_note)
+    message = _make_message(user_id, "-")
+
+    await workout.live_note_entered(message, state)
+
+    ex = await db.get_exercise(ex_id)
+    assert ex["notes"] is None
+
+
 async def _finished_baseline(db, user_id, ex_id, weight, reps):
     """A prior finished workout with one set, so later PR detection has history."""
     wid = await db.create_workout(user_id)

@@ -207,6 +207,72 @@ async def test_confirming_template_add_forks_and_shows_full_card(fresh_db, user_
     assert any(cb.startswith("exm:archiveask:") for cb in callback_datas)
 
 
+# ---------- archive / unarchive ----------
+
+
+async def test_archive_list_shows_empty_state_with_nothing_archived(fresh_db, user_id):
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    await db.create_exercise(user_id, "Жим лёжа", group_id)
+
+    state = await _make_state(user_id, exm_group_id=group_id)
+    callback = _make_exercise_callback(user_id, "exm:archivelist")
+
+    await exercises.exm_archive_list(callback, state)
+
+    text = callback.message.answer.await_args.args[0]
+    assert "пусто" in text.lower()
+
+
+async def test_archive_list_offers_archived_exercises(fresh_db, user_id):
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    ex_id = await db.create_exercise(user_id, "Жим лёжа", group_id)
+    await db.archive_exercise(ex_id)
+
+    state = await _make_state(user_id, exm_group_id=group_id)
+    callback = _make_exercise_callback(user_id, "exm:archivelist")
+
+    await exercises.exm_archive_list(callback, state)
+
+    kb = callback.message.answer.await_args.kwargs["reply_markup"]
+    callback_datas = [b.callback_data for row in kb.inline_keyboard for b in row]
+    assert f"exm:unarchive:{ex_id}" in callback_datas
+
+
+async def test_unarchive_restores_exercise_to_normal_list(fresh_db, user_id):
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    ex_id = await db.create_exercise(user_id, "Жим лёжа", group_id)
+    await db.archive_exercise(ex_id)
+
+    state = await _make_state(user_id, exm_group_id=group_id)
+    callback = _make_exercise_callback(user_id, f"exm:unarchive:{ex_id}")
+
+    await exercises.exm_unarchive_exercise(callback, state)
+
+    ex = await db.get_exercise(ex_id)
+    assert ex["is_archived"] == 0
+    assert ex_id in {e["id"] for e in await db.list_user_exercises(user_id)}
+    assert ex_id not in {e["id"] for e in await db.list_archived_exercises(user_id)}
+
+
+async def test_unarchive_rejects_someone_elses_exercise(fresh_db, user_id):
+    db = fresh_db
+    other_group = await db.create_muscle_group(999, "Грудь")
+    other_ex = await db.create_exercise(999, "Жим лёжа", other_group)
+    await db.archive_exercise(other_ex)
+
+    state = await _make_state(user_id)
+    callback = _make_exercise_callback(user_id, f"exm:unarchive:{other_ex}")
+
+    await exercises.exm_unarchive_exercise(callback, state)
+
+    callback.answer.assert_awaited_once_with("Упражнение не найдено", show_alert=True)
+    ex = await db.get_exercise(other_ex)
+    assert ex["is_archived"] == 1
+
+
 # ---------- rename cancel returns to the exercise card ----------
 
 
@@ -346,6 +412,45 @@ async def test_card_offers_edit_description_once_the_user_has_one():
     text, kb = exercises._exercise_detail_view(ex, with_info=False)
     labels = [b.text for row in kb.inline_keyboard for b in row]
     assert "📝 Изменить описание" in labels
+
+
+async def test_card_layout_is_one_button_per_row_except_the_first():
+    """Telegram truncates long Russian labels when two share a row — only the
+    two short buttons (Прогресс/Название) may be paired."""
+    ex = {"id": 1, "name": "pull down", "display_name": "pull down", "description": None, "custom_photo_file_id": None}
+    _text, kb = exercises._exercise_detail_view(ex, with_info=False)
+    rows = kb.inline_keyboard
+    assert len(rows[0]) == 2
+    assert all(len(row) == 1 for row in rows[1:])
+
+
+async def test_card_layout_stays_one_per_row_with_delete_photo_button():
+    ex = {
+        "id": 1, "name": "pull down", "display_name": "pull down",
+        "description": None, "custom_photo_file_id": "FILE_ID",
+    }
+    _text, kb = exercises._exercise_detail_view(ex, with_info=False)
+    rows = kb.inline_keyboard
+    assert len(rows[0]) == 2
+    assert all(len(row) == 1 for row in rows[1:])
+    labels = [b.text for row in rows for b in row]
+    assert "🗑 Удалить фото" in labels
+
+
+async def test_photo_button_label_offers_to_add_when_none_exists():
+    ex = {"id": 1, "name": "pull down", "display_name": "pull down", "description": None, "custom_photo_file_id": None}
+    _text, kb = exercises._exercise_detail_view(ex, with_info=False)
+    labels = [b.text for row in kb.inline_keyboard for b in row]
+    assert "📷 Добавить фото" in labels
+    assert "📷 Заменить фото" not in labels
+
+
+async def test_photo_button_label_offers_to_replace_when_one_exists():
+    ex = {"id": 1, "name": "pull down", "display_name": "pull down", "description": None, "custom_photo_file_id": "FILE_ID"}
+    _text, kb = exercises._exercise_detail_view(ex, with_info=False)
+    labels = [b.text for row in kb.inline_keyboard for b in row]
+    assert "📷 Заменить фото" in labels
+    assert "📷 Добавить фото" not in labels
 
 
 async def test_edit_description_button_prompts_and_sets_state(fresh_db, user_id):

@@ -13,6 +13,26 @@ async def _make_exercises(db, user_id, group_id, n, prefix="Exercise"):
     return ids
 
 
+async def test_archive_then_unarchive_round_trips(fresh_db, user_id):
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    ex_id = await db.create_exercise(user_id, "Жим лёжа", group_id)
+
+    await db.archive_exercise(ex_id)
+    ex = await db.get_exercise(ex_id)
+    assert ex["is_archived"] == 1
+    archived = await db.list_archived_exercises(user_id)
+    assert ex_id in {e["id"] for e in archived}
+    assert ex_id not in {e["id"] for e in await db.list_user_exercises(user_id)}
+
+    await db.unarchive_exercise(ex_id)
+    ex = await db.get_exercise(ex_id)
+    assert ex["is_archived"] == 0
+    archived = await db.list_archived_exercises(user_id)
+    assert ex_id not in {e["id"] for e in archived}
+    assert ex_id in {e["id"] for e in await db.list_user_exercises(user_id)}
+
+
 async def test_list_user_exercises_in_group_paginates(fresh_db, user_id):
     db = fresh_db
     group_id = await db.create_muscle_group(user_id, "Грудь")
