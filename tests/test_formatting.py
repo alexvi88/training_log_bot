@@ -670,11 +670,13 @@ def test_history_list_puts_exercise_names_in_the_body():
         (dt.datetime(2026, 7, 26, 13), ["conventional deadlift", "pull down"], 13),
     ]
     text = formatting.build_history_list(entries)
-    assert "26.07.2026 (вс) · 13 сетов" in text
-    assert "conventional deadlift, pull down" in text
+    assert "26.07.2026 (вс)" in text
+    assert "сет" not in text  # set count no longer shown on the date line
+    assert "• conventional deadlift" in text
+    assert "• pull down" in text
 
 
-def test_history_list_cuts_on_a_name_boundary_not_mid_word():
+def test_history_list_shows_first_three_names_and_folds_the_rest():
     long_names = [
         "bench press - flat - machine",
         "chest press - horizontal machine",
@@ -683,9 +685,11 @@ def test_history_list_cuts_on_a_name_boundary_not_mid_word():
     ]
     entries = [(dt.datetime(2026, 7, 24, 18), long_names, 9)]
     text = formatting.build_history_list(entries)
-    assert "+2" in text  # two names folded away
-    assert "chest press - horizontal machine" in text  # last kept name is whole
-    assert "seated" not in text  # nothing half-rendered
+    assert "• bench press - flat - machine" in text
+    assert "• chest press - horizontal machine" in text
+    assert "• seated row - 1hand - cable" in text
+    assert "+1 другое" in text  # fourth bullet folds the rest
+    assert "overhead press" not in text  # folded name isn't spelled out
 
 
 def test_history_list_keeps_a_full_page_well_inside_the_message_cap():
