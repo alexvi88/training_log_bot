@@ -132,3 +132,17 @@ def test_edit_exercise_keyboard_lists_sets_and_a_way_back():
     assert "editw:addset:1:10" in cbs
     assert "editw:rmexask:1" in cbs  # confirmed removal, not the bare rmex
     assert "editw:top" in cbs
+
+
+def test_bodyweight_periods_match_the_progress_chart_shape():
+    """Both period pickers offer the same 10/20/all shape, and neither defaults
+    to the narrowest window."""
+    assert [value for value, _ in keyboards.BODYWEIGHT_PERIODS] == [10, 20, 0]
+    assert keyboards.DEFAULT_BODYWEIGHT_WEEKS == 20
+
+
+def test_bodyweight_keyboard_marks_the_active_period():
+    kb = keyboards.bodyweight_keyboard(has_logs=True, weeks=20, show_periods=True)
+    texts = _button_texts(kb)
+    assert "• 20 нед •" in texts
+    assert "10 нед" in texts and "Всё" in texts
