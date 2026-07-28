@@ -576,6 +576,8 @@ def settings_keyboard(
     ai_comments_enabled: bool,
     progression_enabled: bool,
     tz_offset: int = 0,
+    stickers_enabled: bool = True,
+    show_stickers_toggle: bool = False,
 ) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(text=f"Единицы: {unit}", callback_data="settings:unit")
@@ -593,6 +595,11 @@ def settings_keyboard(
         else "🤖 Комментарии AI-тренера: выключены"
     )
     b.button(text=ai_label, callback_data="settings:ai_comments")
+    # Hidden entirely when no sticker pack is configured — a toggle for something
+    # the bot physically can't do would just be a dead switch.
+    if show_stickers_toggle:
+        stickers_label = "😎 Стикеры: включены" if stickers_enabled else "😶 Стикеры: выключены"
+        b.button(text=stickers_label, callback_data="settings:stickers")
     b.button(text="📤 Экспорт CSV", callback_data="settings:export")
     b.button(text="📥 Импорт CSV", callback_data="settings:import")
     b.button(text="⬅️ Назад", callback_data="settings:back")

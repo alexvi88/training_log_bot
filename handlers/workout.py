@@ -34,6 +34,7 @@ import exercise_descriptions
 import exercise_media
 import formatting
 import keyboards
+import stickers
 import timeutil
 import ui
 import view_builder
@@ -1990,9 +1991,11 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
         suffix += f"\n\n🏋️ Суммарно за тренировку — {tonnage}. {equivalent}"
     # Backfilled/imported past workouts shouldn't fire the "Nth workout" milestone —
     # they're entered out of order, so the running count isn't meaningful for them.
+    is_milestone = False
     if not is_backfill:
         total_finished = await db.count_workouts(user_id)
-        if analytics.is_workout_milestone(total_finished):
+        is_milestone = analytics.is_workout_milestone(total_finished)
+        if is_milestone:
             suffix += "\n\n" + formatting.format_milestone_line(total_finished)
 
     new_badges = await _evaluate_achievements(user_id, workout_id, started_at, duration_seconds)
@@ -2040,6 +2043,14 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
         )
 
     await _clear_sticky_photo(bot, state)
+
+    # A sticker only for the workouts that actually earned one — a new badge or
+    # a round-number milestone. Sent on every finish it would stop reading as
+    # applause within a week, and it lands *below* the card, so each one costs
+    # the card its place at the bottom of the chat.
+    if not is_backfill and bool(user["stickers_enabled"]) and (new_badges or is_milestone):
+        await stickers.send(bot, data["live_chat_id"], stickers.ACHIEVEMENT)
+
     await state.clear()
     # No auto-sent menu message here on purpose: it used to bury the card (the
     # PR/comparison highlights, the AI comment) the instant it appeared. The
