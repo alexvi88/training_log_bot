@@ -45,13 +45,8 @@ async def _edit_screen_payload(workout_id: int) -> tuple[str, InlineKeyboardMark
 
     exercises: list[tuple[int, int, str]] = []
     for block in await db.list_blocks_for_workout(workout_id):
-        sets = await db.list_sets_for_block(block["id"])
         for be in await db.get_block_exercises(block["id"]):
-            count = sum(1 for s in sets if s["exercise_id"] == be["exercise_id"])
-            word = formatting.plural_ru(count, ("сет", "сета", "сетов"))
-            exercises.append(
-                (block["id"], be["exercise_id"], f"{be['display_name']} · {count} {word}")
-            )
+            exercises.append((block["id"], be["exercise_id"], be["display_name"]))
 
     text = f"✏️ Редактирование · {formatting.format_date_ru(started)}"
     if exercises:
@@ -72,7 +67,7 @@ async def _exercise_screen_payload(
         return None
     sets = [s for s in await db.list_sets_for_block(block_id) if s["exercise_id"] == exercise_id]
     items = [
-        (s["id"], f"{i}) {formatting.format_set(s['weight'], s['reps'], s['rpe'])}")
+        (s["id"], f"{i} - {formatting.format_set(s['weight'], s['reps'], s['rpe'])}")
         for i, s in enumerate(sets, start=1)
     ]
     text = f"✏️ <b>{escape(name)}</b>"

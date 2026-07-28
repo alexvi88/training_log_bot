@@ -202,15 +202,19 @@ async def _sync_sticky_photo(bot, state: FSMContext, ex_id: int | None) -> None:
     await state.update_data(sticky_photo_msg_ids=msg_ids, sticky_photo_ex_id=ex_id)
 
 
-async def _suggested_next_exercise(user_id: int, last_finished_id: int | None):
-    """What the user did right after `last_finished_id` last time, for a one-tap suggestion."""
+async def _suggested_next_exercise(user_id: int, last_finished_id: int | None, done_ids: tuple[int, ...] = ()):
+    """What the user did right after `last_finished_id` last time, for a one-tap suggestion.
+
+    Skips a suggestion the user already logged this workout — recommending it
+    again is just noise once it's already on today's list.
+    """
     if last_finished_id is None:
         return None
     workout_id = await db.find_last_finished_workout_with_exercise(user_id, last_finished_id)
     if workout_id is None:
         return None
     nxt = await db.get_next_exercise_in_workout(workout_id, last_finished_id)
-    if nxt is None or nxt["exercise_id"] == last_finished_id:
+    if nxt is None or nxt["exercise_id"] == last_finished_id or nxt["exercise_id"] in done_ids:
         return None
     ex = await db.get_exercise(nxt["exercise_id"])
     if ex is None or ex["is_archived"]:
@@ -221,14 +225,19 @@ async def _suggested_next_exercise(user_id: int, last_finished_id: int | None):
 _IDLE_RECENT_EXERCISES = 2
 
 
-async def _idle_view(data: dict, user_id: int, is_empty: bool = False) -> tuple[str | None, InlineKeyboardMarkup]:
+async def _idle_view(
+    data: dict, user_id: int, is_empty: bool = False, done_ids: tuple[int, ...] = ()
+) -> tuple[str | None, InlineKeyboardMarkup]:
     has_planned = bool(data.get("planned_blocks"))
-    suggested = None if has_planned else await _suggested_next_exercise(user_id, data.get("last_finished_exercise_id"))
+    suggested = None if has_planned else await _suggested_next_exercise(
+        user_id, data.get("last_finished_exercise_id"), done_ids,
+    )
     hint = f"💡 В прошлый раз дальше было: <b>{escape(suggested[1])}</b>" if suggested else None
     recent: list[tuple[int, str]] = []
     if not has_planned:
-        # Skip the already-offered "suggested" exercise so the two rows never repeat.
-        exclude = (suggested[0],) if suggested else ()
+        # Skip the already-offered "suggested" exercise and anything already
+        # logged this workout so the shortcuts never repeat today's own list.
+        exclude = done_ids + ((suggested[0],) if suggested else ())
         rows = await db.list_recent_exercises(user_id, limit=_IDLE_RECENT_EXERCISES, exclude_ids=exclude)
         recent = [(r["id"], r["display_name"]) for r in rows]
     kb = keyboards.exercise_picker_entry_keyboard(
@@ -240,8 +249,9 @@ async def _idle_view(data: dict, user_id: int, is_empty: bool = False) -> tuple[
 async def _enter_idle_screen(bot, state: FSMContext, user, workout_id: int):
     data = await state.get_data()
     await _clear_sticky_photo(bot, state)  # no active exercise → nothing to illustrate
-    is_empty = not await db.list_exercise_ids_for_workout(workout_id)
-    hint, kb = await _idle_view(data, user["telegram_id"], is_empty=is_empty)
+    done_ids = tuple(await db.list_exercise_ids_for_workout(workout_id))
+    is_empty = not done_ids
+    hint, kb = await _idle_view(data, user["telegram_id"], is_empty=is_empty, done_ids=done_ids)
     await _refresh_live(bot, state, user, workout_id, hint, kb)
 
 
@@ -1383,32 +1393,15 @@ class _UndoResult:
 
 async def _undo_last_set(bot, state: FSMContext, user, data: dict) -> _UndoResult:
     """Core of "delete the active exercise's last set", shared by the ↩️ button
-    and the "-" text command. Always leaves the screen in a consistent state:
-    re-rendered as logging if sets remain (or other exercises are still open),
-    or dropped back to idle if that was the exercise's very last set.
+    and the "-" text command. The exercise stays open even if that was its
+    only logged set — same as a freshly opened exercise with nothing logged
+    yet — so undoing never closes the exercise out from under the user.
     """
     active = data.get("active_exercise_id")
     block_id = (data.get("open_blocks") or {}).get(active)
     row = await db.delete_last_set_in_block(block_id)
     if row is None:
         return _UndoResult(removed=None)
-
-    remaining = await db.list_sets_for_block(block_id)
-    if not remaining:
-        await db.delete_block(block_id)
-        open_exercises = [eid for eid in (data.get("open_exercises") or []) if eid != active]
-        open_blocks = dict(data.get("open_blocks") or {})
-        open_blocks.pop(active, None)
-        if open_exercises:
-            await state.update_data(
-                open_exercises=open_exercises, open_blocks=open_blocks, active_exercise_id=open_exercises[0],
-            )
-            await _render_logging_screen(bot, state, user)
-        else:
-            await state.update_data(open_exercises=[], open_blocks={}, active_exercise_id=None)
-            await state.set_state(WorkoutFlow.idle)
-            await _enter_idle_screen(bot, state, user, data["workout_id"])
-        return _UndoResult(removed=(row["weight"], row["reps"]))
 
     await _render_logging_screen(bot, state, user)
     return _UndoResult(removed=(row["weight"], row["reps"]))

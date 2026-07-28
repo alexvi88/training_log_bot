@@ -29,13 +29,16 @@ def test_exercise_picker_entry_keyboard_offers_menu_exit_when_empty():
     assert "🏁 Завершить тренировку" not in _button_texts(kb)
 
 
-def test_exercise_picker_entry_keyboard_offers_recent_exercises_in_one_row():
+def test_exercise_picker_entry_keyboard_offers_recent_exercises_one_per_row():
     kb = keyboards.exercise_picker_entry_keyboard(recent=[(5, "Pull down"), (6, "Seated row")])
     texts = _button_texts(kb)
     assert "🕘 Pull down" in texts
     assert "🕘 Seated row" in texts
     cbs = _callback_datas(kb)
     assert "live:suggest:5" in cbs and "live:suggest:6" in cbs
+    recent_rows = [row for row in kb.inline_keyboard if any(b.text.startswith("🕘") for b in row)]
+    assert len(recent_rows) == 2
+    assert all(len(row) == 1 for row in recent_rows)
 
 
 def test_exercise_picker_entry_keyboard_no_recent_row_when_none_given():

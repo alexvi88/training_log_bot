@@ -164,7 +164,7 @@ async def test_top_level_lists_exercises_not_every_set(fresh_db, user_id):
     assert len(rows) == 8
     assert all(len(r) == 1 for r in rows)
     labels = [r[0].text for r in rows]
-    assert "Упражнение 0 · 4 сета" in labels
+    assert "Упражнение 0" in labels
 
 
 async def test_exercise_level_lists_its_sets_without_repeating_the_name(fresh_db, user_id):
@@ -178,7 +178,7 @@ async def test_exercise_level_lists_its_sets_without_repeating_the_name(fresh_db
         b for row in kb.inline_keyboard for b in row if b.callback_data.startswith("editw:set:")
     ]
     assert len(set_buttons) == 3
-    assert set_buttons[0].text == "1) 190×5"
+    assert set_buttons[0].text == "1 - 190×5"
     assert "Становая" not in set_buttons[0].text
 
 

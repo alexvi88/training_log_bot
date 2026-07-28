@@ -383,13 +383,15 @@ def _exercise_detail_view(ex, with_info: bool = True):
         # override, so "Добавить" (as if nothing were there) would be misleading.
         description_label = "📝 Своё описание"
     else:
-        description_label = "📝 Добавить описание"
+        description_label = "📝 Описание"
     b = InlineKeyboardBuilder()
     b.button(text="📈 Прогресс", callback_data=f"prog:ex:{ex['id']}:m")
     b.button(text="✏️ Название", callback_data=f"exm:editname:{ex['id']}")
     b.button(text="🗑 Архивировать", callback_data=f"exm:archiveask:{ex['id']}")
     b.button(text="📷 Добавить фото", callback_data=f"exm:addphoto:{ex['id']}")
     b.button(text=description_label, callback_data=f"exm:editdesc:{ex['id']}")
+    if ex["custom_photo_file_id"]:
+        b.button(text="🗑 Удалить фото", callback_data=f"exm:delphotoask:{ex['id']}")
     b.button(text="⬅️ Назад", callback_data="exm:backlist")
     b.adjust(2)
     # Even when the details went out as a photo caption, the button screen keeps
@@ -479,6 +481,38 @@ async def exm_photo_entered(message: Message, state: FSMContext):
     has_images = await _send_exercise_images(message, ex, state)
     text, kb = _exercise_detail_view(ex, with_info=not has_images)
     await message.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
+@router.callback_query(StateFilter(ExerciseManage.picking_exercise), F.data.startswith("exm:delphotoask:"))
+async def exm_delete_photo_confirm(callback: CallbackQuery, state: FSMContext):
+    ex_id = int(callback.data.split(":")[2])
+    ex = await db.get_exercise(ex_id)
+    if ex is None or ex["user_id"] != callback.from_user.id or not ex["custom_photo_file_id"]:
+        await callback.answer("Упражнение не найдено", show_alert=True)
+        return
+    kb = keyboards.yes_no_keyboard(
+        yes_cb=f"exm:delphotoyes:{ex_id}",
+        no_cb=f"exm:ex:{ex_id}",
+        yes_text="🗑 Удалить",
+        no_text="❌ Отмена",
+    )
+    await ui.safe_edit(callback, f"Удалить фото «{escape(ex['name'])}»?", reply_markup=kb)
+    await callback.answer()
+
+
+@router.callback_query(StateFilter(ExerciseManage.picking_exercise), F.data.startswith("exm:delphotoyes:"))
+async def exm_delete_photo(callback: CallbackQuery, state: FSMContext):
+    ex_id = int(callback.data.split(":")[2])
+    ex = await db.get_exercise(ex_id)
+    if ex is None or ex["user_id"] != callback.from_user.id:
+        await callback.answer("Упражнение не найдено", show_alert=True)
+        return
+    await db.delete_exercise_photo(ex_id)
+    await callback.answer("Фото удалено")
+    ex = await db.get_exercise(ex_id)
+    has_images = await _send_exercise_images(callback.message, ex, state)
+    text, kb = _exercise_detail_view(ex, with_info=not has_images)
+    await callback.message.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
 @router.callback_query(F.data.startswith("prog:card:"))

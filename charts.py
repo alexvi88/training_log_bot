@@ -56,6 +56,12 @@ def render_metric_over_sessions(
         ax.set_title(title)
 
     ax.set_ylabel(ylabel)
+    # Ticks only at dates that actually have a point — matplotlib's default date
+    # locator picks evenly-spaced calendar dates, which can land on a day with
+    # no session and misleadingly imply one happened there.
+    max_ticks = 10
+    step = max(1, -(-len(dates) // max_ticks))  # ceil division
+    ax.set_xticks(dates[::step])
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%d.%m"))
     fig.autofmt_xdate()
     ax.grid(True, alpha=0.3)

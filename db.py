@@ -905,6 +905,15 @@ async def set_exercise_photo(exercise_id: int, file_id: str) -> None:
         await conn().commit()
 
 
+async def delete_exercise_photo(exercise_id: int) -> None:
+    """Remove a user-uploaded reference photo, falling back to any bundled demo photos."""
+    async with _write_lock:
+        await conn().execute(
+            "UPDATE exercises SET custom_photo_file_id = NULL WHERE id = ?", (exercise_id,)
+        )
+        await conn().commit()
+
+
 async def set_exercise_notes(exercise_id: int, notes: Optional[str]) -> None:
     """Store a free-text personal note for an exercise (technique cue, injury flag).
     Passing None/empty clears it."""

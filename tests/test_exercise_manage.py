@@ -324,22 +324,25 @@ async def test_custom_photo_overrides_bundled_demo_photos(fresh_db, user_id):
 
 
 async def test_card_offers_add_description_for_a_plain_custom_exercise():
-    ex = {"id": 1, "name": "pull down", "display_name": "pull down", "description": None}
+    ex = {"id": 1, "name": "pull down", "display_name": "pull down", "description": None, "custom_photo_file_id": None}
     text, kb = exercises._exercise_detail_view(ex, with_info=False)
     labels = [b.text for row in kb.inline_keyboard for b in row]
-    assert "📝 Добавить описание" in labels
+    assert "📝 Описание" in labels
 
 
 async def test_card_offers_write_own_when_a_template_default_already_shows():
-    ex = {"id": 1, "name": "Присед со штангой", "display_name": "Присед со штангой", "description": None}
+    ex = {"id": 1, "name": "Присед со штангой", "display_name": "Присед со штангой", "description": None, "custom_photo_file_id": None}
     text, kb = exercises._exercise_detail_view(ex, with_info=False)
     labels = [b.text for row in kb.inline_keyboard for b in row]
     assert "📝 Своё описание" in labels
-    assert "📝 Добавить описание" not in labels
+    assert "📝 Описание" not in labels
 
 
 async def test_card_offers_edit_description_once_the_user_has_one():
-    ex = {"id": 1, "name": "pull down", "display_name": "pull down", "description": "Тяни к низу груди"}
+    ex = {
+        "id": 1, "name": "pull down", "display_name": "pull down",
+        "description": "Тяни к низу груди", "custom_photo_file_id": None,
+    }
     text, kb = exercises._exercise_detail_view(ex, with_info=False)
     labels = [b.text for row in kb.inline_keyboard for b in row]
     assert "📝 Изменить описание" in labels
