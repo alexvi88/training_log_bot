@@ -144,14 +144,35 @@ def yes_no_keyboard(yes_cb: str, no_cb: str, yes_text: str = "Да", no_text: st
     return b.as_markup()
 
 
-_TAB_NAME_MAX = 18
+# A half-width tab fits roughly this many characters before Telegram clips the
+# label itself; a full-width one about twice that.
+_TAB_NAME_MAX = 13
+_TAB_NAME_MAX_WIDE = 28
+
+_QUALIFIER_SEPARATORS = (" - ", " — ", " – ", " (")
 
 
-def _truncate_tab_name(name: str) -> str:
+def _tab_label(name: str, limit: int) -> str:
     """Shortens a superset tab label — the full name is already visible in the
     tracker text above (with ▶ marking the active one), so the tab only needs
-    to be recognizable, not complete."""
-    return name if len(name) <= _TAB_NAME_MAX else name[: _TAB_NAME_MAX - 1].rstrip() + "…"
+    to be recognizable, not complete.
+
+    Names are usually "<base> - <qualifier>" ("triceps block - single arm - cuff"),
+    where the base is what tells the tabs apart; the qualifiers are what made the
+    old head-truncation clip everything into look-alike prefixes. So drop the
+    qualifiers first and only cut into the base if it is still too long.
+    """
+    base = name
+    for sep in _QUALIFIER_SEPARATORS:
+        base = base.split(sep, 1)[0]
+    base = base.strip() or name.strip()
+    if len(base) <= limit:
+        return base
+    cut = base[:limit].rstrip()
+    # Prefer a word boundary over slicing a word in half, when one is close enough.
+    if " " in cut and len(cut.rsplit(" ", 1)[0]) >= limit // 2:
+        cut = cut.rsplit(" ", 1)[0]
+    return cut + "…"
 
 
 def logging_keyboard(
@@ -171,15 +192,26 @@ def logging_keyboard(
     if len(open_items) > 1:
         # Two per row (not one, as with a single open exercise) so 3+ parallel
         # exercises don't push the tracker's own text off the bottom of the screen.
+        # A superset of exactly two, though, gets a row each when the short names
+        # don't fit side by side — one wide tab holds about twice the text.
+        def labels(limit: int) -> list[str]:
+            # The ▶ marker eats width the label would otherwise get.
+            return [
+                ("▶ " + _tab_label(name, limit - 2)) if ex_id == active_id else _tab_label(name, limit)
+                for ex_id, name in open_items
+            ]
+
+        per_row = 2
+        texts = labels(_TAB_NAME_MAX)
+        if len(open_items) == 2 and any(t.endswith("…") for t in texts):
+            per_row = 1
+            texts = labels(_TAB_NAME_MAX_WIDE)
         tabs = [
-            InlineKeyboardButton(
-                text=("▶ " if ex_id == active_id else "") + _truncate_tab_name(name),
-                callback_data=f"live:switch:{ex_id}",
-            )
-            for ex_id, name in open_items
+            InlineKeyboardButton(text=text, callback_data=f"live:switch:{ex_id}")
+            for text, (ex_id, _) in zip(texts, open_items, strict=True)
         ]
-        for i in range(0, len(tabs), 2):
-            b.row(*tabs[i : i + 2])
+        for i in range(0, len(tabs), per_row):
+            b.row(*tabs[i : i + per_row])
     top_row = [InlineKeyboardButton(text="➕ Суперсет", callback_data="live:add_exercise")]
     if active_id is not None:
         top_row.append(InlineKeyboardButton(text="📝 Заметка", callback_data=f"live:note:{active_id}"))
