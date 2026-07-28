@@ -277,6 +277,55 @@ def test_logging_keyboard_packs_superset_tabs_two_per_row():
     assert len(long_tab_text) < len("Overhead press - machine")
 
 
+def _tab_rows(kb):
+    return [
+        row for row in kb.inline_keyboard
+        if any(b.callback_data.startswith("live:switch:") for b in row)
+    ]
+
+
+def test_superset_tabs_drop_qualifiers_instead_of_clipping_the_base_name():
+    # Half-width tabs used to clip "triceps block - single arm - cuff" mid-qualifier
+    # ("triceps block - s…"), which reads as noise. The qualifiers go first.
+    open_items = [
+        (1, "biceps curls - alternating dumbbells"),
+        (2, "triceps block - single arm - cuff"),
+    ]
+    kb = keyboards.logging_keyboard(open_items, active_id=2, has_sets=True)
+    texts = [b.text for row in _tab_rows(kb) for b in row]
+    assert texts == ["biceps curls", "▶ triceps block"]
+
+
+def test_superset_of_two_gets_a_row_each_when_names_do_not_fit_side_by_side():
+    long_pair = [(1, "Подтягивания с весом"), (2, "Тяга")]
+    rows = _tab_rows(keyboards.logging_keyboard(long_pair, active_id=1, has_sets=True))
+    assert [len(r) for r in rows] == [1, 1]
+    assert rows[0][0].text == "▶ Подтягивания с весом"  # full name, no ellipsis
+
+    # Short names still share a row — no need to spend two rows on them.
+    short_pair = [(1, "Bench"), (2, "Row")]
+    assert [len(r) for r in _tab_rows(
+        keyboards.logging_keyboard(short_pair, active_id=1, has_sets=True)
+    )] == [2]
+
+
+def test_three_open_exercises_stay_two_per_row_even_with_long_names():
+    # Full-width tabs for 3+ would push the tracker text off the screen.
+    open_items = [
+        (1, "Приседания со штангой на груди"),
+        (2, "Румынская тяга со штангой"),
+        (3, "Жим ногами в тренажёре"),
+    ]
+    rows = _tab_rows(keyboards.logging_keyboard(open_items, active_id=1, has_sets=True))
+    assert [len(r) for r in rows] == [2, 1]
+
+
+def test_tab_label_cuts_on_a_word_boundary():
+    assert keyboards._tab_label("Жим ногами в тренажёре", 13) == "Жим ногами…"
+    # ...but not when that would leave almost nothing.
+    assert keyboards._tab_label("Гиперэкстензия обратная", 13) == "Гиперэкстензи…"
+
+
 def test_suspicious_weight_warning_flags_likely_typo():
     last_session = [(140.0, 6, None), (130.0, 8, None)]
     warning = workout._suspicious_weight_warning(last_session, today_sets=[(1.0, 1)])
