@@ -600,11 +600,12 @@ def settings_keyboard(
     return b.as_markup()
 
 
-# Chart window options for the weight diary (weeks; 0 = all history).
-BODYWEIGHT_PERIODS = [(8, "8 нед"), (26, "26 нед"), (0, "Всё")]
-# Recent weeks, not all history: the screen lists every entry in the window, and
-# on a daily weigh-in "Всё" grows without bound. "Всё" stays one tap away.
-DEFAULT_BODYWEIGHT_WEEKS = 8
+# Chart window options for the weight diary (weeks; 0 = all history). The 10/20
+# split mirrors the progress chart's periods so both screens offer the same shape.
+BODYWEIGHT_PERIODS = [(10, "10 нед"), (20, "20 нед"), (0, "Всё")]
+# A bounded window, not all history: the screen lists every entry in it, and on a
+# daily weigh-in "Всё" grows without bound. "Всё" stays one tap away.
+DEFAULT_BODYWEIGHT_WEEKS = 20
 
 
 def bodyweight_keyboard(has_logs: bool, weeks: int = 0, show_periods: bool = False) -> InlineKeyboardMarkup:
