@@ -208,7 +208,7 @@ def logging_keyboard(
             texts = labels(_TAB_NAME_MAX_WIDE)
         tabs = [
             InlineKeyboardButton(text=text, callback_data=f"live:switch:{ex_id}")
-            for text, (ex_id, _) in zip(texts, open_items)
+            for text, (ex_id, _) in zip(texts, open_items, strict=True)
         ]
         for i in range(0, len(tabs), per_row):
             b.row(*tabs[i : i + per_row])
