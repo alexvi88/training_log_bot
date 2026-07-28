@@ -176,24 +176,18 @@ def format_date_short(d: dt.datetime) -> str:
     return d.strftime("%d.%m")
 
 
-HISTORY_LINE_MAX = 84
+HISTORY_MAX_NAMES = 3
 
 
-def _history_summary(names: list[str]) -> str:
-    """Exercise names joined to fit one line, cut on a name boundary rather than
-    mid-word — "…, leg p…" reads like a bug, "… +2" reads like a summary."""
-    kept: list[str] = []
-    used = 0
-    for name in names:
-        extra = len(name) + (2 if kept else 0)
-        if kept and used + extra > HISTORY_LINE_MAX:
-            break
-        kept.append(name)
-        used += extra
-    summary = ", ".join(kept)
-    if len(kept) < len(names):
-        summary += f" +{len(names) - len(kept)}"
-    return summary
+def _history_bullets(names: list[str]) -> list[str]:
+    """Up to the first 3 exercise names as bullet lines; any rest are collapsed
+    into a single "+N других" bullet rather than spilling the list further."""
+    kept = names[:HISTORY_MAX_NAMES]
+    lines = [f"• {escape(name)}" for name in kept]
+    rest = len(names) - len(kept)
+    if rest:
+        lines.append(f"• +{rest} {plural_ru(rest, ('другое', 'других', 'других'))}")
+    return lines
 
 
 def build_history_list(
@@ -218,7 +212,10 @@ def build_history_list(
             head += f" · {set_count} {plural_ru(set_count, ('сет', 'сета', 'сетов'))}"
         lines.append("")
         lines.append(f"<b>{head}</b>")
-        lines.append(f"<i>{escape(_history_summary(names))}</i>" if names else "<i>пусто</i>")
+        if names:
+            lines.extend(f"<i>{b}</i>" for b in _history_bullets(names))
+        else:
+            lines.append("<i>пусто</i>")
     if footer:
         lines.append("")
         lines.append(footer)
