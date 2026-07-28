@@ -65,16 +65,45 @@ async def _add_exercise_block(db, user_id: int, workout_id: int, group_id: int, 
     return ex_id, block_id, set_ids
 
 
-async def test_deleting_last_set_drops_the_now_empty_block(fresh_db, user_id):
+async def test_deleting_the_only_set_keeps_the_exercise_open(fresh_db, user_id):
+    """Deleting the last set must not bounce the user back to the exercise
+    list — the block stays (empty) and its "Подходов нет" state is reachable,
+    so the user can immediately type a replacement set."""
     db = fresh_db
     group_id = await db.create_muscle_group(user_id, "Бицепс")
     workout_id = await _make_finished_workout(db, user_id)
-    _, block_id, [set_id] = await _add_exercise_block(
+    ex_id, block_id, [set_id] = await _add_exercise_block(
         db, user_id, workout_id, group_id, "Подъём на бицепс", sets=[(20.0, 10)]
     )
     state = await _make_state(user_id, workout_id)
+    await state.set_state(EditWorkoutFlow.viewing_exercise)
+    await state.update_data(edit_block_id=block_id, edit_exercise_id=ex_id)
 
     await edit_workout.editw_delset(_make_callback(user_id, f"editw:delset:{set_id}"), state)
+
+    assert [b["id"] for b in await db.list_blocks_for_workout(workout_id)] == [block_id]
+    payload = await edit_workout._exercise_screen_payload(workout_id, block_id, ex_id)
+    assert payload is not None
+    text, _kb = payload
+    assert "Подходов нет" in text
+    assert await state.get_state() == EditWorkoutFlow.viewing_exercise
+
+
+async def test_leaving_to_top_level_reaps_the_emptied_block(fresh_db, user_id):
+    """The block left behind by the fix above must not linger forever — once
+    the user walks away to the top-level list, it's finally reaped."""
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Бицепс")
+    workout_id = await _make_finished_workout(db, user_id)
+    ex_id, block_id, [set_id] = await _add_exercise_block(
+        db, user_id, workout_id, group_id, "Подъём на бицепс", sets=[(20.0, 10)]
+    )
+    state = await _make_state(user_id, workout_id)
+    await state.set_state(EditWorkoutFlow.viewing_exercise)
+    await state.update_data(edit_block_id=block_id, edit_exercise_id=ex_id)
+    await edit_workout.editw_delset(_make_callback(user_id, f"editw:delset:{set_id}"), state)
+
+    await edit_workout.editw_to_top(_make_callback(user_id, "editw:top"), state)
 
     assert await db.list_blocks_for_workout(workout_id) == []
 
@@ -164,7 +193,7 @@ async def test_top_level_lists_exercises_not_every_set(fresh_db, user_id):
     assert len(rows) == 8
     assert all(len(r) == 1 for r in rows)
     labels = [r[0].text for r in rows]
-    assert "Упражнение 0 · 4 сета" in labels
+    assert "Упражнение 0" in labels
 
 
 async def test_exercise_level_lists_its_sets_without_repeating_the_name(fresh_db, user_id):
@@ -178,7 +207,7 @@ async def test_exercise_level_lists_its_sets_without_repeating_the_name(fresh_db
         b for row in kb.inline_keyboard for b in row if b.callback_data.startswith("editw:set:")
     ]
     assert len(set_buttons) == 3
-    assert set_buttons[0].text == "1) 190×5"
+    assert set_buttons[0].text == "1 - 190×5"
     assert "Становая" not in set_buttons[0].text
 
 

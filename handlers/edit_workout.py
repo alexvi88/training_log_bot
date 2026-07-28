@@ -27,14 +27,17 @@ async def _delete_message(message: Message):
         await message.delete()
 
 
-async def _on_workout_edited(workout_id: int) -> None:
+async def _on_workout_edited(workout_id: int, keep_block_id: int | None = None) -> None:
     """Common housekeeping after any change to a past workout's sets or date:
     drop blocks a delete_set/rmex left with no sets (they'd otherwise linger
     as a "подходов нет" row forever, since delete_empty_blocks is normally
     only run once, at the moment a workout finishes), and drop the cached
     AI-trainer comment — it describes numbers that just changed underneath it.
+    keep_block_id spares the block the user is currently on, so deleting a
+    last set keeps the exercise screen open (its own empty state handles the
+    display) instead of reaping the block out from under them.
     """
-    await db.delete_empty_blocks(workout_id)
+    await db.delete_empty_blocks(workout_id, keep_block_id=keep_block_id)
     await db.set_workout_ai_comment(workout_id, None)
 
 
@@ -45,13 +48,8 @@ async def _edit_screen_payload(workout_id: int) -> tuple[str, InlineKeyboardMark
 
     exercises: list[tuple[int, int, str]] = []
     for block in await db.list_blocks_for_workout(workout_id):
-        sets = await db.list_sets_for_block(block["id"])
         for be in await db.get_block_exercises(block["id"]):
-            count = sum(1 for s in sets if s["exercise_id"] == be["exercise_id"])
-            word = formatting.plural_ru(count, ("сет", "сета", "сетов"))
-            exercises.append(
-                (block["id"], be["exercise_id"], f"{be['display_name']} · {count} {word}")
-            )
+            exercises.append((block["id"], be["exercise_id"], be["display_name"]))
 
     text = f"✏️ Редактирование · {formatting.format_date_ru(started)}"
     if exercises:
@@ -72,7 +70,7 @@ async def _exercise_screen_payload(
         return None
     sets = [s for s in await db.list_sets_for_block(block_id) if s["exercise_id"] == exercise_id]
     items = [
-        (s["id"], f"{i}) {formatting.format_set(s['weight'], s['reps'], s['rpe'])}")
+        (s["id"], f"{i} - {formatting.format_set(s['weight'], s['reps'], s['rpe'])}")
         for i, s in enumerate(sets, start=1)
     ]
     text = f"✏️ <b>{escape(name)}</b>"
@@ -91,6 +89,10 @@ async def show_edit_screen(event, state: FSMContext, workout_id: int) -> bool:
         else:
             await event.reply("Тренировка не найдена")
         return False
+    # Landing on the top-level list means leaving whichever exercise screen (if
+    # any) was open — reap blocks that were emptied there and abandoned, same
+    # as the original always-reap behaviour, just deferred to this point.
+    await db.delete_empty_blocks(workout_id)
     await state.set_state(EditWorkoutFlow.viewing)
     await state.update_data(edit_workout_id=workout_id, edit_block_id=None, edit_exercise_id=None)
     text, kb = await _edit_screen_payload(workout_id)
@@ -191,8 +193,13 @@ async def editw_delset(callback: CallbackQuery, state: FSMContext):
     workout_id = await _require_edit_workout_id(callback, state)
     if workout_id is None:
         return
+    data = await state.get_data()
     await db.delete_set(set_id)
-    await _on_workout_edited(workout_id)
+    # Keep the block the user is on even if this was its last set — they stay
+    # on the exercise screen and see its "Подходов нет" empty state, rather
+    # than getting bounced up to the list. The block still gets reaped once
+    # they leave (editw_to_top / editw_done), same as before.
+    await _on_workout_edited(workout_id, keep_block_id=data.get("edit_block_id"))
     await callback.answer("Сет удалён")
     await _back_to_current_screen(callback, state, workout_id)
 
@@ -582,6 +589,7 @@ async def editw_done(callback: CallbackQuery, state: FSMContext):
     workout_id = await _require_edit_workout_id(callback, state)
     if workout_id is None:
         return
+    await db.delete_empty_blocks(workout_id)
     await state.set_state(None)
     from handlers.history import show_history_item
     await show_history_item(callback, workout_id)

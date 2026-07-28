@@ -186,7 +186,7 @@ def logging_keyboard(
     navigation/utility actions, not numeric input, to keep it short.
 
     The "➕ Суперсет"/"📝 Заметка" row is always available; once a set is logged,
-    "↩️ Удалить последний" appears above it and "✅ Закончить упражнение" below it.
+    "↩️ Удалить последний" appears directly above "✅ Закончить упражнение".
     """
     b = InlineKeyboardBuilder()
     if len(open_items) > 1:
@@ -216,8 +216,8 @@ def logging_keyboard(
     if active_id is not None:
         top_row.append(InlineKeyboardButton(text="📝 Заметка", callback_data=f"live:note:{active_id}"))
     if has_sets:
-        b.row(InlineKeyboardButton(text="↩️ Удалить последний", callback_data="live:undo"))
         b.row(*top_row)
+        b.row(InlineKeyboardButton(text="↩️ Удалить последний", callback_data="live:undo"))
         b.row(InlineKeyboardButton(text="✅ Закончить упражнение", callback_data="live:finish_exercise"))
     else:
         b.row(*top_row)
@@ -248,13 +248,8 @@ def exercise_picker_entry_keyboard(
         ex_id, _name = suggested
         b.button(text="⏭ Как в прошлый раз", callback_data=f"live:suggest:{ex_id}")
     b.adjust(1)
-    if recent:
-        b.row(
-            *(
-                InlineKeyboardButton(text=f"🕘 {name}", callback_data=f"live:suggest:{ex_id}")
-                for ex_id, name in recent
-            )
-        )
+    for ex_id, name in recent or []:
+        b.row(InlineKeyboardButton(text=f"🕘 {name}", callback_data=f"live:suggest:{ex_id}"))
     if is_empty:
         b.row(InlineKeyboardButton(text="⬅️ В меню", callback_data="live:finish_workout"))
     else:
@@ -385,8 +380,8 @@ def progress_back_keyboard(exercise_id: int = 0, origin: str = "all") -> InlineK
     return b.as_markup()
 
 
-PROGRESS_PERIODS = [(8, "8"), (20, "20"), (9999, "Все")]
-DEFAULT_PROGRESS_LIMIT = PROGRESS_PERIODS[0][0]
+PROGRESS_PERIODS = [(10, "10"), (20, "20"), (9999, "Все")]
+DEFAULT_PROGRESS_LIMIT = 20
 
 
 def progress_chart_keyboard(exercise_id: int, limit: int, origin: str = "all") -> InlineKeyboardMarkup:
@@ -756,10 +751,9 @@ def exercise_resolve_keyboard(
 def edit_workout_keyboard(exercises) -> InlineKeyboardMarkup:
     """Top level of editing a past workout: one button per exercise.
 
-    exercises: ordered (block_id, exercise_id, label) rows, label already
-    pluralised by the caller.
+    exercises: ordered (block_id, exercise_id, label) rows.
     A button per *set* here (with the exercise name repeated in every label, plus
-    a "+ Сет" and a "🗑 Убрать" row each) ran to 30+ single-column rows on an
+    a "➕ Добавить сет" and a "🗑 Убрать" row each) ran to 30+ single-column rows on an
     ordinary 5-exercise session — the sets live one level down instead, where the
     exercise is already named by the screen's own header.
     """
@@ -779,7 +773,7 @@ def edit_exercise_keyboard(block_id: int, exercise_id: int, sets) -> InlineKeybo
     b = InlineKeyboardBuilder()
     for set_id, label in sets:
         b.button(text=label, callback_data=f"editw:set:{set_id}")
-    b.button(text="➕ Сет", callback_data=f"editw:addset:{block_id}:{exercise_id}")
+    b.button(text="➕ Добавить сет", callback_data=f"editw:addset:{block_id}:{exercise_id}")
     b.button(text="🗑 Убрать упражнение целиком", callback_data=f"editw:rmexask:{block_id}")
     b.button(text="⬅️ К упражнениям", callback_data="editw:top")
     b.adjust(1)

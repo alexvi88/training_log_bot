@@ -610,6 +610,12 @@ async def archive_muscle_group(group_id: int) -> None:
         await conn().commit()
 
 
+async def unarchive_muscle_group(group_id: int) -> None:
+    async with _write_lock:
+        await conn().execute("UPDATE muscle_groups SET is_archived = 0 WHERE id = ?", (group_id,))
+        await conn().commit()
+
+
 # ---------- exercises ----------
 
 # An exercise auto-created purely as a side effect of adding a ready-made program
@@ -895,12 +901,36 @@ async def archive_exercise(exercise_id: int) -> None:
         await conn().commit()
 
 
+async def unarchive_exercise(exercise_id: int) -> None:
+    async with _write_lock:
+        await conn().execute("UPDATE exercises SET is_archived = 0 WHERE id = ?", (exercise_id,))
+        await conn().commit()
+
+
+async def list_archived_exercises(user_id: int) -> list[aiosqlite.Row]:
+    cur = await conn().execute(
+        "SELECT * FROM exercises e WHERE e.user_id = ? AND e.is_archived = 1 AND e.is_template = 0 "
+        "ORDER BY e.display_name",
+        (user_id,),
+    )
+    return await cur.fetchall()
+
+
 async def set_exercise_photo(exercise_id: int, file_id: str) -> None:
     """Store a user-uploaded reference photo (Telegram file_id) for an exercise,
     replacing whatever custom photo it had before."""
     async with _write_lock:
         await conn().execute(
             "UPDATE exercises SET custom_photo_file_id = ? WHERE id = ?", (file_id, exercise_id)
+        )
+        await conn().commit()
+
+
+async def delete_exercise_photo(exercise_id: int) -> None:
+    """Remove a user-uploaded reference photo, falling back to any bundled demo photos."""
+    async with _write_lock:
+        await conn().execute(
+            "UPDATE exercises SET custom_photo_file_id = NULL WHERE id = ?", (exercise_id,)
         )
         await conn().commit()
 
@@ -1384,11 +1414,14 @@ async def list_sets_for_block(block_id: int) -> list[aiosqlite.Row]:
     return await cur.fetchall()
 
 
-async def delete_empty_blocks(workout_id: int) -> None:
+async def delete_empty_blocks(workout_id: int, keep_block_id: Optional[int] = None) -> None:
     """Drop blocks that never got a set logged — an exercise added mid-workout
     and then abandoned shouldn't linger as a "подходов нет" placeholder in the
-    finished summary/history."""
+    finished summary/history. keep_block_id skips one block even if it's empty —
+    used while the user is actively looking at it (e.g. just deleted its last set)."""
     for block in await list_blocks_for_workout(workout_id):
+        if block["id"] == keep_block_id:
+            continue
         if not await list_sets_for_block(block["id"]):
             await delete_block(block["id"])
 

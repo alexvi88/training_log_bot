@@ -118,6 +118,7 @@ async def _show_exercise_list(callback: CallbackQuery, state: FSMContext):
     b.row(InlineKeyboardButton(text="➕ Новое упражнение", callback_data="exm:newex"))
     if group is not None and group["user_id"] is not None:
         b.row(InlineKeyboardButton(text="🗑 Архивировать группу", callback_data=f"exm:archivegrpask:{group_id}"))
+    b.row(InlineKeyboardButton(text="🗄 Архив", callback_data="exm:archivelist"))
     b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="exm:backgroups"))
     title = group["name"] if group is not None else "Все упражнения"
     title_html = f"<b>{escape(title.upper())}</b>"
@@ -383,15 +384,23 @@ def _exercise_detail_view(ex, with_info: bool = True):
         # override, so "Добавить" (as if nothing were there) would be misleading.
         description_label = "📝 Своё описание"
     else:
-        description_label = "📝 Добавить описание"
+        description_label = "📝 Описание"
+    photo_label = "📷 Заменить фото" if ex["custom_photo_file_id"] else "📷 Добавить фото"
     b = InlineKeyboardBuilder()
     b.button(text="📈 Прогресс", callback_data=f"prog:ex:{ex['id']}:m")
     b.button(text="✏️ Название", callback_data=f"exm:editname:{ex['id']}")
     b.button(text="🗑 Архивировать", callback_data=f"exm:archiveask:{ex['id']}")
-    b.button(text="📷 Добавить фото", callback_data=f"exm:addphoto:{ex['id']}")
+    b.button(text=photo_label, callback_data=f"exm:addphoto:{ex['id']}")
     b.button(text=description_label, callback_data=f"exm:editdesc:{ex['id']}")
+    if ex["custom_photo_file_id"]:
+        b.button(text="🗑 Удалить фото", callback_data=f"exm:delphotoask:{ex['id']}")
     b.button(text="⬅️ Назад", callback_data="exm:backlist")
-    b.adjust(2)
+    # Only "Прогресс"/"Название" are short enough to share a row without
+    # Telegram truncating the label — everything else gets its own row.
+    if ex["custom_photo_file_id"]:
+        b.adjust(2, 1, 1, 1, 1, 1)
+    else:
+        b.adjust(2, 1, 1, 1, 1)
     # Even when the details went out as a photo caption, the button screen keeps
     # the name: the photo can scroll out of view, and a bare "Управление
     # упражнением:" doesn't say which exercise the buttons act on.
@@ -479,6 +488,38 @@ async def exm_photo_entered(message: Message, state: FSMContext):
     has_images = await _send_exercise_images(message, ex, state)
     text, kb = _exercise_detail_view(ex, with_info=not has_images)
     await message.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
+@router.callback_query(StateFilter(ExerciseManage.picking_exercise), F.data.startswith("exm:delphotoask:"))
+async def exm_delete_photo_confirm(callback: CallbackQuery, state: FSMContext):
+    ex_id = int(callback.data.split(":")[2])
+    ex = await db.get_exercise(ex_id)
+    if ex is None or ex["user_id"] != callback.from_user.id or not ex["custom_photo_file_id"]:
+        await callback.answer("Упражнение не найдено", show_alert=True)
+        return
+    kb = keyboards.yes_no_keyboard(
+        yes_cb=f"exm:delphotoyes:{ex_id}",
+        no_cb=f"exm:ex:{ex_id}",
+        yes_text="🗑 Удалить",
+        no_text="❌ Отмена",
+    )
+    await ui.safe_edit(callback, f"Удалить фото «{escape(ex['name'])}»?", reply_markup=kb)
+    await callback.answer()
+
+
+@router.callback_query(StateFilter(ExerciseManage.picking_exercise), F.data.startswith("exm:delphotoyes:"))
+async def exm_delete_photo(callback: CallbackQuery, state: FSMContext):
+    ex_id = int(callback.data.split(":")[2])
+    ex = await db.get_exercise(ex_id)
+    if ex is None or ex["user_id"] != callback.from_user.id:
+        await callback.answer("Упражнение не найдено", show_alert=True)
+        return
+    await db.delete_exercise_photo(ex_id)
+    await callback.answer("Фото удалено")
+    ex = await db.get_exercise(ex_id)
+    has_images = await _send_exercise_images(callback.message, ex, state)
+    text, kb = _exercise_detail_view(ex, with_info=not has_images)
+    await callback.message.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
 @router.callback_query(F.data.startswith("prog:card:"))
@@ -670,6 +711,36 @@ async def exm_archive_exercise(callback: CallbackQuery, state: FSMContext):
     await db.archive_exercise(ex_id)
     await callback.answer("Упражнение архивировано")
     await _show_exercise_list(callback, state)
+
+
+@router.callback_query(F.data == "exm:archivelist")
+async def exm_archive_list(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(ExerciseManage.picking_exercise)
+    exercises = await db.list_archived_exercises(callback.from_user.id)
+    b = InlineKeyboardBuilder()
+    items = [(f"exm:unarchive:{ex['id']}", ex["display_name"]) for ex in exercises]
+    for row in keyboards.named_buttons(items):
+        b.row(*row)
+    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="exm:backgroups"))
+    text = (
+        "🗄 <b>Архив</b>\n\nНажми на упражнение, чтобы вернуть его в список."
+        if exercises
+        else "🗄 <b>Архив</b>\n\nЗдесь пока пусто — архивированные упражнения появятся тут."
+    )
+    await ui.safe_edit(callback, text, reply_markup=b.as_markup(), parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("exm:unarchive:"))
+async def exm_unarchive_exercise(callback: CallbackQuery, state: FSMContext):
+    ex_id = int(callback.data.split(":")[2])
+    ex = await db.get_exercise(ex_id)
+    if ex is None or ex["user_id"] != callback.from_user.id:
+        await callback.answer("Упражнение не найдено", show_alert=True)
+        return
+    await db.unarchive_exercise(ex_id)
+    await callback.answer("Упражнение возвращено из архива")
+    await exm_archive_list(callback, state)
 
 
 @router.callback_query(F.data == "exm:newgroup")
