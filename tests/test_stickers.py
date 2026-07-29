@@ -202,20 +202,21 @@ async def _finish_a_workout(db, bot, user_id: int, weight: float) -> None:
     await workout._finalize_workout(callback, state, note=None)
 
 
-async def test_finished_workout_gets_a_sticker_only_when_it_earned_a_badge(fresh_db, user_id):
-    bot = _bot(_pack(("cup", "🏆")))
+async def test_every_finished_workout_gets_a_sticker(fresh_db, user_id):
+    """Louder pool for a badge, everyday pool for an ordinary session."""
+    bot = _bot(_pack(("cup", "🏆"), ("flex", "💪")))
     bot.edit_message_text = AsyncMock()
     bot.send_message = AsyncMock()
     bot.delete_message = AsyncMock()
 
-    # First ever workout unlocks 🌱 "Первый шаг".
+    # First ever workout unlocks 🌱 "Первый шаг" — that's the 🏆 pool.
     await _finish_a_workout(fresh_db, bot, user_id, weight=60)
-    bot.send_sticker.assert_awaited_once()
+    assert bot.send_sticker.await_args.kwargs["sticker"] == "cup"
 
-    # The second one is just a workout — no badge, no milestone, no sticker.
-    bot.send_sticker.reset_mock()
+    # The second one earns nothing new, but still gets its applause.
     await _finish_a_workout(fresh_db, bot, user_id, weight=62.5)
-    bot.send_sticker.assert_not_awaited()
+    assert bot.send_sticker.await_count == 2
+    assert bot.send_sticker.await_args.kwargs["sticker"] == "flex"
 
 
 async def test_finished_workout_sticker_respects_the_user_setting(fresh_db, user_id):

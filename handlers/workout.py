@@ -2044,12 +2044,14 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
 
     await _clear_sticky_photo(bot, state)
 
-    # A sticker only for the workouts that actually earned one — a new badge or
-    # a round-number milestone. Sent on every finish it would stop reading as
-    # applause within a week, and it lands *below* the card, so each one costs
-    # the card its place at the bottom of the chat.
-    if not is_backfill and bool(user["stickers_enabled"]) and (new_badges or is_milestone):
-        await stickers.send(bot, data["live_chat_id"], stickers.ACHIEVEMENT)
+    # Every finished workout gets its sticker — the moment the app exists for.
+    # A badge or a round number draws from the louder pool (🏆🥇🎉), an ordinary
+    # session from the everyday one (💪🔥👏), so "just trained" and "just hit
+    # your 50th" don't get the same applause. Backfilled workouts are excluded:
+    # they're bulk data entry, and a stack of them would be a stack of stickers.
+    if not is_backfill and bool(user["stickers_enabled"]):
+        occasion = stickers.ACHIEVEMENT if (new_badges or is_milestone) else stickers.WORKOUT_DONE
+        await stickers.send(bot, data["live_chat_id"], occasion)
 
     await state.clear()
     # No auto-sent menu message here on purpose: it used to bury the card (the
