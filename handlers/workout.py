@@ -233,7 +233,11 @@ async def _idle_view(
     suggested = None if has_planned else await _suggested_next_exercise(
         user_id, data.get("last_finished_exercise_id"), done_ids,
     )
-    hint = f"💡 В прошлый раз дальше было: <b>{escape(suggested[1])}</b>" if suggested else None
+    # The suggestion's own button names the exercise now, so the hint would just
+    # repeat it — keep it only when the button had to shorten the name.
+    hint = None
+    if suggested and keyboards.suggest_button_label(suggested[1]) != suggested[1]:
+        hint = f"💡 В прошлый раз дальше было: <b>{escape(suggested[1])}</b>"
     recent: list[tuple[int, str]] = []
     if not has_planned:
         # Skip the already-offered "suggested" exercise and anything already

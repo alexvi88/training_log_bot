@@ -264,11 +264,13 @@ async def test_finishing_last_exercise_suggests_what_came_next_last_time(fresh_d
 
     await workout.live_finish_exercise(callback, state)
 
-    sent_text = callback.bot.send_message.await_args.kwargs["text"]
-    assert "Triceps pushdown" in sent_text
     kb = callback.bot.send_message.await_args.kwargs["reply_markup"]
     callback_datas = [b.callback_data for row in kb.inline_keyboard for b in row]
     assert f"live:suggest:{triceps}" in callback_datas
+    # The name lives on the button itself, so the text isn't asked to repeat it.
+    texts = [b.text for row in kb.inline_keyboard for b in row]
+    assert "⏭ Как в прошлый раз: Triceps pushdown" in texts
+    assert "Triceps pushdown" not in callback.bot.send_message.await_args.kwargs["text"]
 
 
 async def test_finishing_exercise_with_no_sets_deletes_its_empty_block(fresh_db, user_id):
