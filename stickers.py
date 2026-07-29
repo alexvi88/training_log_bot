@@ -42,6 +42,9 @@ NUDGE = "nudge"
 JAB = "jab"
 WIN_BACK = "win_back"
 PROGRESS = "progress"
+# Deliberately absent from OCCASION_EMOJI below: the weekly sticker-only push
+# is the one moment with nothing to say, so it draws from the whole pack.
+RANDOM = "random"
 
 # Emoji each occasion prefers, best match first. Compared against the emoji the
 # pack's author attached to each sticker, with variation selectors stripped.

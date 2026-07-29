@@ -37,6 +37,11 @@ WEEKLY_DIGEST = "weekly_digest"
 # model; this key only tags the push for dedup/logging).
 AI_WEEKLY = "ai_weekly"
 NEWBIE_NUDGE = "newbie_nudge"
+# A once-a-week push that is only a sticker — no text at all, so it has no pool
+# in TEXTS. It sits last in the priority chain: every category above it has
+# something to actually say, and this one is the "nothing to report, but I'm
+# still here" beat.
+STICKER_ONLY = "sticker_only"
 
 SKIP_MILESTONE_DAYS = (3, 5, 7, 10, 14)
 SKIP_CATEGORY_BY_DAY: dict[int, str] = {
@@ -125,6 +130,7 @@ CATEGORY_LABELS: dict[str, str] = {
     WEEKLY_DIGEST: "Аналитика",
     AI_WEEKLY: "AI-дайджест",
     NEWBIE_NUDGE: "Новичок без тренировок",
+    STICKER_ONLY: "Стикер недели",
 }
 
 

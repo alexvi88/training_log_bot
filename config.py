@@ -71,6 +71,13 @@ STICKER_PACK_NAMES = [
 # STICKERS_ENABLED=false to silence them for everyone without dropping the pack.
 STICKERS_ENABLED = os.getenv("STICKERS_ENABLED", "true").lower() == "true"
 
+# Weekday (0=Mon … 6=Sun) for the wordless sticker-only push — a once-a-week
+# "I'm still here" with nothing to report. Midweek by default: it's the one day
+# no other signal is scheduled for (streaks fire on weekends, the digest and
+# plateau checks on Sundays), so it never displaces a push that has something
+# to say. Set STICKER_PUSH_WEEKDAY=-1 to turn it off.
+STICKER_PUSH_WEEKDAY = int(os.getenv("STICKER_PUSH_WEEKDAY", "2"))
+
 
 # AI trainer (Grok-backed Q&A over the user's own training data). Same xAI
 # key/env names as fun_bot, so one key serves both bots. The menu entry stays

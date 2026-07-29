@@ -176,55 +176,102 @@ async def test_settings_toggle_hidden_until_a_pack_is_configured(monkeypatch, fr
     assert not any("Стикеры" in label for label in labels())
 
 
-async def _finish_a_workout(db, bot, user_id: int, weight: float) -> None:
-    from aiogram.fsm.context import FSMContext
-    from aiogram.fsm.storage.base import StorageKey
-    from aiogram.fsm.storage.memory import MemoryStorage
-    from aiogram.types import CallbackQuery
-
-    from fsm import WorkoutFlow
-    from handlers import workout
-
-    group_id = await db.create_muscle_group(user_id, "Грудь")
-    bench = await db.create_exercise(user_id, f"Bench {weight}", group_id)
-    workout_id = await db.create_workout(user_id)
-    block_id = await db.create_block(workout_id, "single")
-    await db.add_block_exercise(block_id, bench, 0)
-    await db.add_set(block_id, bench, 1, 0, weight, 5)
-
-    state = FSMContext(storage=MemoryStorage(), key=StorageKey(bot_id=1, chat_id=user_id, user_id=user_id))
-    await state.set_state(WorkoutFlow.idle)
-    await state.update_data(live_chat_id=user_id, live_message_id=1, workout_id=workout_id)
-    callback = MagicMock(spec=CallbackQuery)
-    callback.from_user = SimpleNamespace(id=user_id, username="tester")
-    callback.bot = bot
-    callback.answer = AsyncMock()
-    await workout._finalize_workout(callback, state, note=None)
+# ---------- the wordless weekly sticker push ----------
 
 
-async def test_every_finished_workout_gets_a_sticker(fresh_db, user_id):
-    """Louder pool for a badge, everyday pool for an ordinary session."""
-    bot = _bot(_pack(("cup", "🏆"), ("flex", "💪")))
-    bot.edit_message_text = AsyncMock()
+async def test_sticker_only_push_sends_a_sticker_and_no_message(fresh_db, user_id):
+    import engagement
+    import push_texts
+
+    bot = _bot(_pack(("flex", "💪")))
     bot.send_message = AsyncMock()
-    bot.delete_message = AsyncMock()
 
-    # First ever workout unlocks 🌱 "Первый шаг" — that's the 🏆 pool.
-    await _finish_a_workout(fresh_db, bot, user_id, weight=60)
-    assert bot.send_sticker.await_args.kwargs["sticker"] == "cup"
+    await engagement._deliver(bot, user_id, engagement.PushDecision(push_texts.STICKER_ONLY, ""))
 
-    # The second one earns nothing new, but still gets its applause.
-    await _finish_a_workout(fresh_db, bot, user_id, weight=62.5)
-    assert bot.send_sticker.await_count == 2
-    assert bot.send_sticker.await_args.kwargs["sticker"] == "flex"
+    bot.send_sticker.assert_awaited_once()
+    bot.send_message.assert_not_awaited()
+    assert await fresh_db.has_push_today(user_id, _today_iso())
 
 
-async def test_finished_workout_sticker_respects_the_user_setting(fresh_db, user_id):
-    bot = _bot(_pack(("cup", "🏆")))
-    bot.edit_message_text = AsyncMock()
+async def test_sticker_only_push_is_not_recorded_when_the_sticker_fails(fresh_db, user_id):
+    """Nothing reached the user, so the day's push slot must stay unspent."""
+    import engagement
+    import push_texts
+
+    bot = _bot(error=TelegramAPIError(method=MagicMock(), message="STICKERSET_INVALID"))
     bot.send_message = AsyncMock()
-    bot.delete_message = AsyncMock()
+
+    await engagement._deliver(bot, user_id, engagement.PushDecision(push_texts.STICKER_ONLY, ""))
+
+    bot.send_message.assert_not_awaited()
+    assert await fresh_db.has_push_today(user_id, _today_iso()) is False
+
+
+async def test_sticker_only_push_is_skipped_for_users_who_turned_stickers_off(fresh_db, user_id):
+    import engagement
+    import push_texts
+
     await fresh_db.update_user(user_id, stickers_enabled=0)
+    bot = _bot(_pack(("flex", "💪")))
+    bot.send_message = AsyncMock()
 
-    await _finish_a_workout(fresh_db, bot, user_id, weight=60)
+    await engagement._deliver(bot, user_id, engagement.PushDecision(push_texts.STICKER_ONLY, ""))
+
     bot.send_sticker.assert_not_awaited()
+    assert await fresh_db.has_push_today(user_id, _today_iso()) is False
+
+
+async def test_sticker_push_day_follows_the_configured_weekday(monkeypatch):
+    import datetime as dt
+
+    import engagement
+
+    monkeypatch.setattr(config, "STICKER_PUSH_WEEKDAY", 2)
+    assert engagement.is_sticker_push_day(dt.date(2026, 7, 29)) is True  # Wednesday
+    assert engagement.is_sticker_push_day(dt.date(2026, 7, 30)) is False
+
+
+async def test_sticker_push_day_can_be_switched_off(monkeypatch):
+    import datetime as dt
+
+    import engagement
+
+    monkeypatch.setattr(config, "STICKER_PUSH_WEEKDAY", -1)
+    assert not any(
+        engagement.is_sticker_push_day(dt.date(2026, 7, 27) + dt.timedelta(days=d)) for d in range(7)
+    )
+
+
+async def test_no_sticker_push_day_without_a_configured_pack(monkeypatch):
+    import datetime as dt
+
+    import engagement
+
+    monkeypatch.setattr(config, "STICKER_PACK_NAMES", [])
+    monkeypatch.setattr(config, "STICKER_PUSH_WEEKDAY", 2)
+    assert engagement.is_sticker_push_day(dt.date(2026, 7, 29)) is False
+
+
+async def test_sticker_push_never_displaces_a_push_with_something_to_say(fresh_db, user_id, monkeypatch):
+    """It's last in the priority chain: a skip milestone on the sticker day still wins."""
+    import datetime as dt
+
+    import engagement
+    import push_texts
+
+    monkeypatch.setattr(config, "STICKER_PUSH_WEEKDAY", 2)
+    today = dt.date(2026, 7, 29)  # Wednesday
+    workout_id = await fresh_db.create_workout(user_id)
+    await fresh_db.finish_workout(workout_id, None, finished_at=f"{today - dt.timedelta(days=3)}T12:00:00")
+    await fresh_db.update_workout_date(
+        workout_id, f"{today - dt.timedelta(days=3)}T12:00:00", f"{today - dt.timedelta(days=3)}T13:00:00"
+    )
+
+    decision = await engagement.build_daily_push(user_id, today)
+    assert decision is not None and decision.category == push_texts.SKIP_3
+
+
+def _today_iso() -> str:
+    import datetime as dt
+
+    return dt.date.today().isoformat()
