@@ -34,6 +34,7 @@ import exercise_descriptions
 import exercise_media
 import formatting
 import keyboards
+import stickers
 import timeutil
 import ui
 import view_builder
@@ -1990,9 +1991,11 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
         suffix += f"\n\n🏋️ Суммарно за тренировку — {tonnage}. {equivalent}"
     # Backfilled/imported past workouts shouldn't fire the "Nth workout" milestone —
     # they're entered out of order, so the running count isn't meaningful for them.
+    is_milestone = False
     if not is_backfill:
         total_finished = await db.count_workouts(user_id)
-        if analytics.is_workout_milestone(total_finished):
+        is_milestone = analytics.is_workout_milestone(total_finished)
+        if is_milestone:
             suffix += "\n\n" + formatting.format_milestone_line(total_finished)
 
     new_badges = await _evaluate_achievements(user_id, workout_id, started_at, duration_seconds)
@@ -2040,6 +2043,16 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
         )
 
     await _clear_sticky_photo(bot, state)
+
+    # Every finished workout gets its sticker — the moment the app exists for.
+    # A badge or a round number draws from the louder pool (🏆🥇🎉), an ordinary
+    # session from the everyday one (💪🔥👏), so "just trained" and "just hit
+    # your 50th" don't get the same applause. Backfilled workouts are excluded:
+    # they're bulk data entry, and a stack of them would be a stack of stickers.
+    if not is_backfill and bool(user["stickers_enabled"]):
+        occasion = stickers.ACHIEVEMENT if (new_badges or is_milestone) else stickers.WORKOUT_DONE
+        await stickers.send(bot, data["live_chat_id"], occasion)
+
     await state.clear()
     # No auto-sent menu message here on purpose: it used to bury the card (the
     # PR/comparison highlights, the AI comment) the instant it appeared. The

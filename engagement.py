@@ -34,6 +34,7 @@ import db
 import formatting
 import keyboards
 import push_texts
+import stickers
 
 logger = logging.getLogger(__name__)
 
@@ -202,8 +203,29 @@ async def build_newbie_push(telegram_id: int, created_at: str, today: dt.date) -
     return PushDecision(push_texts.NEWBIE_NUDGE, text)
 
 
+STICKER_OCCASION_BY_CATEGORY: dict[str, str] = {
+    push_texts.STREAK_AT_RISK: stickers.NUDGE,
+    push_texts.SKIP_3: stickers.JAB,
+    push_texts.SKIP_5: stickers.JAB,
+    push_texts.SKIP_7: stickers.JAB,
+    push_texts.SKIP_10: stickers.JAB,
+    push_texts.SKIP_14: stickers.JAB,
+    push_texts.WIN_BACK: stickers.WIN_BACK,
+    push_texts.PLATEAU: stickers.NUDGE,
+    push_texts.WEEKLY_DIGEST: stickers.PROGRESS,
+    push_texts.AI_WEEKLY: stickers.PROGRESS,
+    push_texts.NEWBIE_NUDGE: stickers.GREETING,
+}
+
+
 async def _deliver(bot: Bot, telegram_id: int, decision: PushDecision) -> None:
     kb = keyboards.push_cta_keyboard() if decision.with_cta else None
+    # Sticker first, text second: the push's whole job is its CTA button, and a
+    # sticker landing under it would push the button out from under the thumb.
+    # Silent, so one push is still one notification, not two.
+    occasion = STICKER_OCCASION_BY_CATEGORY.get(decision.category)
+    if occasion is not None:
+        await stickers.send_to_user(bot, telegram_id, occasion)
     try:
         await bot.send_message(
             chat_id=telegram_id, text=decision.text, reply_markup=kb, disable_notification=False
