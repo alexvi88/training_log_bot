@@ -144,6 +144,15 @@ def yes_no_keyboard(yes_cb: str, no_cb: str, yes_text: str = "Да", no_text: st
     return b.as_markup()
 
 
+def weight_confirm_keyboard() -> InlineKeyboardMarkup:
+    """"That weight looks like a typo — record it?" before a suspicious set is
+    written (see handlers.workout._weight_confirm_prompt). "Нет" throws the
+    input away so the set can simply be retyped."""
+    return yes_no_keyboard(
+        "live:wconf:yes", "live:wconf:no", yes_text="✅ Да, записать", no_text="✏️ Исправить",
+    )
+
+
 # A half-width tab fits roughly this many characters before Telegram clips the
 # label itself; a full-width one about twice that.
 _TAB_NAME_MAX = 13
@@ -225,6 +234,17 @@ def logging_keyboard(
     return b.as_markup()
 
 
+# Room for the exercise name in "⏭ Как в прошлый раз: <name>" before Telegram
+# clips the label — the prefix already eats about half a button's width.
+_SUGGEST_NAME_MAX = 20
+
+
+def suggest_button_label(name: str) -> str:
+    """The "как в прошлый раз" button's label, and whether it still names the
+    exercise in full — see exercise_picker_entry_keyboard."""
+    return _tab_label(name, _SUGGEST_NAME_MAX)
+
+
 def exercise_picker_entry_keyboard(
     has_planned: bool = False,
     suggested: tuple[int, str] | None = None,
@@ -232,6 +252,11 @@ def exercise_picker_entry_keyboard(
     recent: list[tuple[int, str]] | None = None,
 ) -> InlineKeyboardMarkup:
     """suggested: (exercise_id, display_name) of what usually follows the just-finished exercise.
+
+    Its button names the exercise ("⏭ Как в прошлый раз: leg press") so the
+    choice can be made without reading the hint line above the keyboard; the
+    hint is only kept (see handlers.workout._idle_view) when the name had to be
+    shortened to fit.
 
     recent: up to a couple of (exercise_id, display_name) most-recently-logged
     exercises (never including `suggested`), offered as a one-tap shortcut so
@@ -245,8 +270,12 @@ def exercise_picker_entry_keyboard(
         b.button(text="▶️ Следующее по шаблону", callback_data="live:next_planned")
     b.button(text="➕ Упражнение", callback_data="live:add_exercise")
     if suggested is not None:
-        ex_id, _name = suggested
-        b.button(text="⏭ Как в прошлый раз", callback_data=f"live:suggest:{ex_id}")
+        ex_id, name = suggested
+        # Naming the exercise on the button itself is what makes it a one-tap
+        # decision — "как в прошлый раз" alone forces a look up at the hint line
+        # to find out what would be opened.
+        label = suggest_button_label(name)
+        b.button(text=f"⏭ Как в прошлый раз: {label}", callback_data=f"live:suggest:{ex_id}")
     b.adjust(1)
     for ex_id, name in recent or []:
         b.row(InlineKeyboardButton(text=f"🕘 {name}", callback_data=f"live:suggest:{ex_id}"))
