@@ -103,9 +103,24 @@ class JSONFileStorage(BaseStorage):
 
     def _write_to_disk(self, snapshot: dict[str, dict[str, Any]]) -> None:
         tmp_path = self._path + ".tmp"
-        with open(tmp_path, "w") as f:
-            json.dump(snapshot, f)
-        os.replace(tmp_path, self._path)
+        # The volume backing self._path is a network mount, which occasionally
+        # surfaces a stale file handle (errno 116) on an open()/replace() pair
+        # after the server-side mount is remounted underneath us. The stale
+        # handle is tied to the old lookup, not to the path itself, so a fresh
+        # open() a moment later resolves cleanly — retry a couple of times
+        # before giving up.
+        last_exc: OSError | None = None
+        for attempt in range(3):
+            try:
+                with open(tmp_path, "w") as f:
+                    json.dump(snapshot, f)
+                os.replace(tmp_path, self._path)
+                return
+            except OSError as exc:
+                last_exc = exc
+                if attempt < 2:
+                    time.sleep(0.2 * (attempt + 1))
+        raise last_exc
 
     async def _save(self) -> None:
         # The snapshot is taken outside the lock (mutations to self._data are
@@ -114,7 +129,23 @@ class JSONFileStorage(BaseStorage):
         # matters once the write moved to a worker thread.
         snapshot = {k: dict(v) for k, v in self._data.items()}
         async with self._save_lock:
-            await asyncio.to_thread(self._write_to_disk, snapshot)
+            try:
+                await asyncio.to_thread(self._write_to_disk, snapshot)
+            except OSError:
+                # self._data (the in-memory source of truth) is already up to
+                # date regardless of whether the write succeeded, so a
+                # persistent disk failure here shouldn't take down the handler
+                # that's mid-flow (e.g. state.set_state from a callback) —
+                # that would leave the user's button press unanswered on every
+                # single update until the mount recovers. Losing this one
+                # snapshot just means a restart during the outage would replay
+                # slightly stale state, which is the same trade-off _load
+                # already makes for a corrupt file.
+                logger.exception(
+                    "Failed to persist FSM state to %s; continuing with "
+                    "in-memory state only.",
+                    self._path,
+                )
 
     async def set_state(self, key: StorageKey, state: StateType = None) -> None:
         key_str = _key_to_str(key)
