@@ -330,6 +330,7 @@ def _logging_hint(
     note: str | None = None,
     show_instruction: bool = True,
     inferred_step: float | None = None,
+    confirmed_weight: float | None = None,
 ) -> str:
     base = None
     if show_instruction:
@@ -338,6 +339,11 @@ def _logging_hint(
             base += " (можно только повторы — вес возьмётся с последнего подхода)"
     note_line = f"📝 <i>{escape(note)}</i>\n" if note else ""
     warning = _suspicious_weight_warning(last_session, today_sets, unit)
+    if warning and confirmed_weight is not None and today_sets and today_sets[-1][0] == confirmed_weight:
+        # Already answered "да, записать" for exactly this weight — repeating the
+        # warning under the set would be nagging about a settled question. Sets
+        # that arrive by other routes ("N: 100 8" edits) still get the nudge.
+        warning = None
     warning_line = f"{warning}\n" if warning else ""
     if last_session:
         sets_str = ", ".join(formatting.format_set(w, r, rpe) for w, r, rpe in last_session)
@@ -480,6 +486,7 @@ async def _render_logging_screen(bot, state: FSMContext, user):
         note=active_note,
         show_instruction=show_instruction,
         inferred_step=weight_steps.get(active),
+        confirmed_weight=(data.get("confirmed_weights") or {}).get(active),
     )
     kb = keyboards.logging_keyboard(open_items, active, has_sets)
     await _sync_sticky_photo(bot, state, active)
@@ -1372,6 +1379,135 @@ async def _store_parsed_sets(state: FSMContext, data: dict, active: int, parsed)
     return logged
 
 
+def _resolve_parsed_weights(data: dict, active: int, parsed: list[ParsedSet]) -> list[ParsedSet]:
+    """The sets `_store_parsed_sets` would actually write, with bare-reps input
+    ("8") already filled in from the previous set's weight — so the typo check
+    below sees the same numbers that would land in the DB."""
+    last_by = data.get("last_by_exercise") or {}
+    prev_weight, _ = last_by.get(active) or (0.0, 0)
+    resolved: list[ParsedSet] = []
+    for ps in parsed:
+        weight = prev_weight if (ps.weight_omitted and prev_weight) else ps.weight
+        resolved.append(ParsedSet(weight=weight, reps=ps.reps, rpe=ps.rpe))
+        prev_weight = weight
+    return resolved
+
+
+def _weight_confirm_prompt(
+    data: dict, active: int, resolved: list[ParsedSet], unit: str = "kg"
+) -> str | None:
+    """"555кг? В прошлый раз 66кг" — the question asked *before* a suspicious set
+    is written, or None when nothing looks off.
+
+    Asking up front rather than flagging after the fact is what a typo in the
+    heavy direction needs: once written, an over-large set is the exercise's
+    all-time record, counts toward lifetime tonnage and unlocks weight-club
+    achievements that are never revoked (see parser.MAX_WEIGHT), so a nudge
+    under an already-saved set comes too late to prevent any of it.
+    """
+    last_session = (data.get("last_session_sets") or {}).get(active)
+    for ps in resolved:
+        warning = _suspicious_weight_warning(last_session, [(ps.weight, ps.reps)], unit)
+        if warning:
+            return warning
+    return None
+
+
+async def _finalize_logged_sets(bot, state: FSMContext, user, data: dict, active: int,
+                                logged: list[tuple[float, int]], chat_id: int, message_id: int,
+                                message: Message | None = None) -> None:
+    """Shared tail of logging typed sets: celebrate a record on the message that
+    carried it, otherwise tidy the message away, then redraw the tracker.
+
+    `message` is the input itself when it is still in hand; the confirmation
+    path (`live_weight_confirm`) only has its chat/message ids to work from.
+    """
+    is_record = await _sets_beat_record(active, data["workout_id"], logged, user["e1rm_formula"])
+    if is_record:
+        # A record-setting message keeps its place in the chat with a 🔥 reaction —
+        # instant, wordless celebration — instead of being tidied away like a normal set.
+        with suppress(TelegramBadRequest):
+            await bot.set_message_reaction(
+                chat_id=chat_id, message_id=message_id, reaction=[ReactionTypeEmoji(emoji="🔥")],
+            )
+        asyncio.create_task(
+            _delete_message_later(bot, chat_id, message_id, _RECORD_MESSAGE_LIFETIME_SECONDS)
+        )
+    elif message is not None:
+        await _delete_message(message)
+    else:
+        with suppress(TelegramBadRequest):
+            await bot.delete_message(chat_id=chat_id, message_id=message_id)
+    await _render_logging_screen(bot, state, user)
+
+
+async def _finalize_voice_sets(bot, state: FSMContext, user, data: dict, active: int,
+                               logged: list[tuple[float, int]], chat_id: int, message_id: int,
+                               message: Message | None = None) -> None:
+    """Same tail as `_finalize_logged_sets`, for voice input: the voice message
+    stays in the chat (there is nothing to re-read in it) and gets a spoken-back
+    "записал" so a misheard number is still catchable after the fact."""
+    sets_str = ", ".join(formatting.format_set(w, r) for w, r in logged)
+    text = f"🎙 Записал: {sets_str}"
+    if message is not None:
+        await message.reply(text)
+    else:
+        await bot.send_message(chat_id=chat_id, text=text, reply_to_message_id=message_id)
+    if await _sets_beat_record(active, data["workout_id"], logged, user["e1rm_formula"]):
+        with suppress(TelegramBadRequest):
+            await bot.set_message_reaction(
+                chat_id=chat_id, message_id=message_id, reaction=[ReactionTypeEmoji(emoji="🔥")],
+            )
+    await _render_logging_screen(bot, state, user)
+
+
+async def _ask_weight_confirmation(
+    message: Message, state: FSMContext, active: int, resolved: list[ParsedSet], prompt: str,
+    source: str = "text",
+) -> None:
+    """Park the parsed sets and ask before writing them. Nothing reaches the DB
+    until the answer comes back, and the user's own message is left in place so
+    the numbers they typed are still on screen next to the question."""
+    sent = await message.reply(
+        f"{prompt}\nЗаписываем?", reply_markup=keyboards.weight_confirm_keyboard()
+    )
+    await state.update_data(
+        pending_weight_confirm={
+            "exercise_id": active,
+            "sets": [[ps.weight, ps.reps, ps.rpe] for ps in resolved],
+            "source": source,
+            "chat_id": message.chat.id,
+            "message_id": message.message_id,
+            "prompt_message_id": sent.message_id,
+        }
+    )
+
+
+async def _take_pending_weight_confirmation(bot, state: FSMContext, data: dict) -> dict | None:
+    """Pop the parked confirmation (if any) and take its question off screen."""
+    pending = data.get("pending_weight_confirm")
+    if not pending:
+        return None
+    await state.update_data(pending_weight_confirm=None)
+    with suppress(TelegramBadRequest):
+        await bot.delete_message(
+            chat_id=pending["chat_id"], message_id=pending["prompt_message_id"]
+        )
+    return pending
+
+
+async def _discard_superseded_confirmation(bot, state: FSMContext, data: dict) -> dict:
+    """New input instead of an answer means the parked set is no longer wanted:
+    take the question down along with the message that raised it, and hand back
+    fresh state data. A no-op when nothing is pending."""
+    pending = await _take_pending_weight_confirmation(bot, state, data)
+    if pending is None:
+        return data
+    with suppress(TelegramBadRequest):
+        await bot.delete_message(chat_id=pending["chat_id"], message_id=pending["message_id"])
+    return await state.get_data()
+
+
 async def _apply_set_edit(state: FSMContext, data: dict, active: int, index: int, new_set: ParsedSet) -> None:
     """Overwrite the `index`-th (1-based) already-logged set of the active
     exercise, in the same order the tracker lists them. Raises ParseError if
@@ -1451,6 +1587,7 @@ async def log_set_text(message: Message, state: FSMContext):
     """
     text = message.text.strip()
     data = await state.get_data()
+    data = await _discard_superseded_confirmation(message.bot, state, data)
     active = data.get("active_exercise_id")
 
     if text == "?":
@@ -1508,27 +1645,19 @@ async def log_set_text(message: Message, state: FSMContext):
     except ParseError as e:
         await message.reply(e.message)
         return
-    logged = await _store_parsed_sets(state, data, active, parsed)
 
     user = await db.get_user(message.from_user.id)
-    # A record-setting message keeps its place in the chat with a 🔥 reaction —
-    # instant, wordless celebration — instead of being tidied away like a normal set.
-    is_record = await _sets_beat_record(active, data["workout_id"], logged, user["e1rm_formula"])
-    if is_record:
-        with suppress(TelegramBadRequest):
-            await message.bot.set_message_reaction(
-                chat_id=message.chat.id,
-                message_id=message.message_id,
-                reaction=[ReactionTypeEmoji(emoji="🔥")],
-            )
-        asyncio.create_task(
-            _delete_message_later(
-                message.bot, message.chat.id, message.message_id, _RECORD_MESSAGE_LIFETIME_SECONDS
-            )
-        )
-    else:
-        await _delete_message(message)
-    await _render_logging_screen(message.bot, state, user)
+    resolved = _resolve_parsed_weights(data, active, parsed)
+    prompt = _weight_confirm_prompt(data, active, resolved, user["unit"])
+    if prompt is not None:
+        await _ask_weight_confirmation(message, state, active, resolved, prompt)
+        return
+
+    logged = await _store_parsed_sets(state, data, active, parsed)
+    await _finalize_logged_sets(
+        message.bot, state, user, data, active, logged,
+        message.chat.id, message.message_id, message=message,
+    )
 
 
 @router.message(StateFilter(WorkoutFlow.logging_set), F.voice)
@@ -1558,18 +1687,56 @@ async def log_set_voice(message: Message, state: FSMContext):
         return
 
     data = await state.get_data()
+    data = await _discard_superseded_confirmation(message.bot, state, data)
     active = data.get("active_exercise_id")
-    logged = await _store_parsed_sets(state, data, active, parsed)
     user = await db.get_user(message.from_user.id)
-    sets_str = ", ".join(formatting.format_set(w, r) for w, r in logged)
-    await message.reply(f"🎙 Записал: {sets_str}")
-    if await _sets_beat_record(active, data["workout_id"], logged, user["e1rm_formula"]):
+    resolved = _resolve_parsed_weights(data, active, parsed)
+    # Mishearing a number is at least as likely as mistyping one, so voice gets
+    # the same "точно?" gate as text.
+    prompt = _weight_confirm_prompt(data, active, resolved, user["unit"])
+    if prompt is not None:
+        await _ask_weight_confirmation(message, state, active, resolved, prompt, source="voice")
+        return
+
+    logged = await _store_parsed_sets(state, data, active, parsed)
+    await _finalize_voice_sets(
+        message.bot, state, user, data, active, logged,
+        message.chat.id, message.message_id, message=message,
+    )
+
+
+@router.callback_query(StateFilter(WorkoutFlow.logging_set), F.data.startswith("live:wconf:"))
+async def live_weight_confirm(callback: CallbackQuery, state: FSMContext):
+    """Answer to "555кг? Записываем?" — see `_weight_confirm_prompt`."""
+    data = await state.get_data()
+    pending = await _take_pending_weight_confirmation(callback.bot, state, data)
+    if pending is None:
+        # Stale keyboard (restart, or the input was already superseded).
+        await callback.answer()
+        return
+
+    if callback.data.endswith(":no"):
+        # Drop the input entirely: retyping the set is one message, and leaving
+        # the wrong numbers on screen would only invite tapping "да" later.
         with suppress(TelegramBadRequest):
-            await message.bot.set_message_reaction(
-                chat_id=message.chat.id, message_id=message.message_id,
-                reaction=[ReactionTypeEmoji(emoji="🔥")],
+            await callback.bot.delete_message(
+                chat_id=pending["chat_id"], message_id=pending["message_id"]
             )
-    await _render_logging_screen(message.bot, state, user)
+        await callback.answer("Не записал — набери подход заново")
+        return
+
+    active = pending["exercise_id"]
+    parsed = [ParsedSet(weight=w, reps=r, rpe=rpe) for w, r, rpe in pending["sets"]]
+    logged = await _store_parsed_sets(state, data, active, parsed)
+    confirmed = dict(data.get("confirmed_weights") or {})
+    confirmed[active] = logged[-1][0]
+    await state.update_data(confirmed_weights=confirmed)
+    user = await db.get_user(callback.from_user.id)
+    await callback.answer()
+    finalize = _finalize_voice_sets if pending.get("source") == "voice" else _finalize_logged_sets
+    await finalize(
+        callback.bot, state, user, data, active, logged, pending["chat_id"], pending["message_id"],
+    )
 
 
 @router.callback_query(StateFilter(WorkoutFlow.logging_set), F.data == "live:undo")

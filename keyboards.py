@@ -144,6 +144,15 @@ def yes_no_keyboard(yes_cb: str, no_cb: str, yes_text: str = "Да", no_text: st
     return b.as_markup()
 
 
+def weight_confirm_keyboard() -> InlineKeyboardMarkup:
+    """"That weight looks like a typo — record it?" before a suspicious set is
+    written (see handlers.workout._weight_confirm_prompt). "Нет" throws the
+    input away so the set can simply be retyped."""
+    return yes_no_keyboard(
+        "live:wconf:yes", "live:wconf:no", yes_text="✅ Да, записать", no_text="✏️ Исправить",
+    )
+
+
 # A half-width tab fits roughly this many characters before Telegram clips the
 # label itself; a full-width one about twice that.
 _TAB_NAME_MAX = 13
