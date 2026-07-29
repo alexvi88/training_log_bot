@@ -11,6 +11,7 @@ match wins, at most one push per user per day):
   3. Возвращение     — 21+ days gone, then every 10 days
   4. Плато           — Sundays only, weight stuck despite 12+ reps
   5. Аналитика       — Sundays only, weekly digest
+  6. Стикер недели   — one fixed weekday, a wordless sticker and nothing else
 
 A separate track, `build_newbie_push`, walks a disjoint pool: users who signed
 up but never finished a single workout. Since these users have no last-workout
@@ -54,6 +55,11 @@ class PushDecision:
     text: str
     with_cta: bool = True
 
+    @property
+    def is_sticker_only(self) -> bool:
+        """A push whose whole content is the sticker — no message follows it."""
+        return self.category == push_texts.STICKER_ONLY
+
 
 # ---------- pure signal detectors (no I/O, easy to unit test) ----------
 
@@ -71,6 +77,13 @@ def is_win_back_day(days_since_last: Optional[int]) -> bool:
     if days_since_last is None or days_since_last < WIN_BACK_START_DAY:
         return False
     return (days_since_last - WIN_BACK_START_DAY) % WIN_BACK_REPEAT_DAYS == 0
+
+
+def is_sticker_push_day(today: dt.date) -> bool:
+    """The wordless weekly sticker fires on one fixed weekday, or never if disabled."""
+    if not stickers.is_configured():
+        return False
+    return today.weekday() == config.STICKER_PUSH_WEEKDAY
 
 
 def is_newbie_nudge_day(days_since_signup: int) -> bool:
@@ -178,6 +191,9 @@ async def build_daily_push(telegram_id: int, today: dt.date) -> Optional[PushDec
             )
             return PushDecision(push_texts.WEEKLY_DIGEST, text, with_cta=False)
 
+    if is_sticker_push_day(today):
+        return PushDecision(push_texts.STICKER_ONLY, "", with_cta=False)
+
     return None
 
 
@@ -215,6 +231,7 @@ STICKER_OCCASION_BY_CATEGORY: dict[str, str] = {
     push_texts.WEEKLY_DIGEST: stickers.PROGRESS,
     push_texts.AI_WEEKLY: stickers.PROGRESS,
     push_texts.NEWBIE_NUDGE: stickers.GREETING,
+    push_texts.STICKER_ONLY: stickers.RANDOM,
 }
 
 
@@ -224,8 +241,18 @@ async def _deliver(bot: Bot, telegram_id: int, decision: PushDecision) -> None:
     # sticker landing under it would push the button out from under the thumb.
     # Silent, so one push is still one notification, not two.
     occasion = STICKER_OCCASION_BY_CATEGORY.get(decision.category)
+    sticker_sent = False
     if occasion is not None:
-        await stickers.send_to_user(bot, telegram_id, occasion)
+        sticker_sent = await stickers.send_to_user(
+            bot, telegram_id, occasion, silent=not decision.is_sticker_only
+        )
+    if decision.is_sticker_only:
+        # Nothing follows the sticker, so a sticker that didn't go out means no
+        # push happened at all — recording one would burn this user's daily slot
+        # (and, on the sticker day, their whole week) on silence.
+        if sticker_sent:
+            await db.record_push(telegram_id, decision.category, "")
+        return
     try:
         await bot.send_message(
             chat_id=telegram_id, text=decision.text, reply_markup=kb, disable_notification=False
