@@ -234,7 +234,7 @@ def logging_keyboard(
     return b.as_markup()
 
 
-# Room for the exercise name in "⏭ Как в прошлый раз: <name>" before Telegram
+# Room for the exercise name in "⏭ <name>" before Telegram
 # clips the label — the prefix already eats about half a button's width.
 _SUGGEST_NAME_MAX = 20
 
@@ -273,7 +273,7 @@ def exercise_picker_entry_keyboard(
 ) -> InlineKeyboardMarkup:
     """suggested: (exercise_id, display_name) of what usually follows the just-finished exercise.
 
-    Its button names the exercise ("⏭ Как в прошлый раз: leg press") so the
+    Its button names the exercise ("⏭ leg press") so the
     choice can be made without reading the hint line above the keyboard; the
     hint is only kept (see handlers.workout._idle_view) when the name had to be
     shortened to fit.
@@ -295,7 +295,7 @@ def exercise_picker_entry_keyboard(
         # decision — "как в прошлый раз" alone forces a look up at the hint line
         # to find out what would be opened.
         label = suggest_button_label(name)
-        b.button(text=f"⏭ Как в прошлый раз: {label}", callback_data=f"live:suggest:{ex_id}")
+        b.button(text=f"⏭ {label}", callback_data=f"live:suggest:{ex_id}")
     b.adjust(1)
     for ex_id, name in recent or []:
         b.row(InlineKeyboardButton(text=f"🕘 {name}", callback_data=f"live:suggest:{ex_id}"))
