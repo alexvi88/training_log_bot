@@ -298,16 +298,16 @@ def _tab_rows(kb):
     ]
 
 
-def test_superset_tabs_drop_qualifiers_instead_of_clipping_the_base_name():
-    # Half-width tabs used to clip "triceps block - single arm - cuff" mid-qualifier
-    # ("triceps block - s…"), which reads as noise. The qualifiers go first.
+def test_superset_tabs_show_full_name_falling_back_to_wide_rows():
+    # Tabs show the full exercise name (not just the "base" before a qualifier),
+    # cutting into it only when it doesn't even fit a full-width tab.
     open_items = [
         (1, "biceps curls - alternating dumbbells"),
         (2, "triceps block - single arm - cuff"),
     ]
     kb = keyboards.logging_keyboard(open_items, active_id=2, has_sets=True)
     texts = [b.text for row in _tab_rows(kb) for b in row]
-    assert texts == ["biceps curls", "▶ triceps block"]
+    assert texts == ["biceps curls - alternating…", "▶ triceps block - single…"]
 
 
 def test_superset_of_two_gets_a_row_each_when_names_do_not_fit_side_by_side():

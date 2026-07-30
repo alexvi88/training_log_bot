@@ -85,8 +85,14 @@ def groups_keyboard(
     prefix: str,
     extra_buttons: list[tuple[str, str]] | None = None,
     show_all: bool = False,
+    partner_buttons: list[tuple[int, str]] | None = None,
 ) -> InlineKeyboardMarkup:
+    """partner_buttons: (exercise_id, display_name) pairs most often logged
+    alongside the exercise the "➕ Суперсет" screen was opened from — a
+    one-tap shortcut so a habitual pairing skips the group→list picker."""
     b = InlineKeyboardBuilder()
+    for ex_id, name in partner_buttons or []:
+        b.row(InlineKeyboardButton(text=f"⚡ {name}", callback_data=f"{prefix}:partner:{ex_id}"))
     for g in groups:
         b.button(text=g["name"], callback_data=f"{prefix}:grp:{g['id']}")
     if show_all:
@@ -184,26 +190,13 @@ def weight_confirm_keyboard() -> InlineKeyboardMarkup:
 _TAB_NAME_MAX = 13
 _TAB_NAME_MAX_WIDE = 28
 
-_QUALIFIER_SEPARATORS = (" - ", " — ", " – ", " (")
-
-
 def _tab_label(name: str, limit: int) -> str:
-    """Shortens a superset tab label — the full name is already visible in the
-    tracker text above (with ▶ marking the active one), so the tab only needs
-    to be recognizable, not complete.
-
-    Names are usually "<base> - <qualifier>" ("triceps block - single arm - cuff"),
-    where the base is what tells the tabs apart; the qualifiers are what made the
-    old head-truncation clip everything into look-alike prefixes. So drop the
-    qualifiers first and only cut into the base if it is still too long.
-    """
-    base = name
-    for sep in _QUALIFIER_SEPARATORS:
-        base = base.split(sep, 1)[0]
-    base = base.strip() or name.strip()
-    if len(base) <= limit:
-        return base
-    cut = base[:limit].rstrip()
+    """A superset tab's label — shows the full exercise name, only cutting it
+    down (word-boundary-aware, with an ellipsis) when it doesn't fit the tab."""
+    name = name.strip()
+    if len(name) <= limit:
+        return name
+    cut = name[:limit].rstrip()
     # Prefer a word boundary over slicing a word in half, when one is close enough.
     if " " in cut and len(cut.rsplit(" ", 1)[0]) >= limit // 2:
         cut = cut.rsplit(" ", 1)[0]
@@ -269,26 +262,10 @@ def suggest_button_label(name: str) -> str:
     """The "как в прошлый раз" button's label, and whether it still names the
     exercise in full — see exercise_picker_entry_keyboard.
 
-    Unlike the superset tabs (_tab_label), where the leading part is what tells
-    look-alike names apart, here a leading segment is often just a group/category
-    prefix ("abs - pull down block") — the trailing part is the actual exercise,
-    so that's what gets kept when the full name doesn't fit.
+    Shows the full name, only cutting it down (word-boundary-aware, with an
+    ellipsis) when it doesn't fit the button.
     """
-    if len(name) <= _SUGGEST_NAME_MAX:
-        return name
-    tail = name
-    for sep in _QUALIFIER_SEPARATORS:
-        if sep in tail:
-            tail = tail.rsplit(sep, 1)[-1]
-            if sep == " (":
-                tail = tail.rstrip(")")
-    tail = tail.strip() or name.strip()
-    if len(tail) <= _SUGGEST_NAME_MAX:
-        return tail
-    cut = tail[:_SUGGEST_NAME_MAX].rstrip()
-    if " " in cut and len(cut.rsplit(" ", 1)[0]) >= _SUGGEST_NAME_MAX // 2:
-        cut = cut.rsplit(" ", 1)[0]
-    return cut + "…"
+    return _tab_label(name, _SUGGEST_NAME_MAX)
 
 
 def exercise_picker_entry_keyboard(
@@ -421,6 +398,14 @@ def stale_workout_keyboard(workout_id: int) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(text="✅ Завершить задним числом", callback_data=f"stale:finish:{workout_id}")
     b.button(text="🗑 Удалить", callback_data=f"stale:delete:{workout_id}")
+    b.adjust(1)
+    return b.as_markup()
+
+
+def confirm_finish_workout_keyboard() -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.button(text="✅ Да, завершить", callback_data="live:finish_confirmed")
+    b.button(text="❌ Отмена", callback_data="live:cancel_finish")
     b.adjust(1)
     return b.as_markup()
 

@@ -64,7 +64,7 @@ async def _log_a_set(db, workout_id: int, user_id: int):
     await db.add_set(block_id, bench, 1, 0, 100, 5)
 
 
-async def test_same_day_finish_finalizes_directly(fresh_db, user_id):
+async def test_finish_button_asks_for_confirmation(fresh_db, user_id):
     db = fresh_db
     workout_id = await db.create_workout(user_id)
     await _log_a_set(db, workout_id, user_id)
@@ -74,6 +74,27 @@ async def test_same_day_finish_finalizes_directly(fresh_db, user_id):
     callback = _make_callback(user_id, "live:finish_workout", bot)
 
     await workout.live_finish_workout(callback, state)
+
+    assert await state.get_state() == WorkoutFlow.confirming_finish
+    text = callback.message.answer.await_args.args[0]
+    assert "Завершить тренировку?" in text
+    kb = callback.message.answer.await_args.kwargs["reply_markup"]
+    callback_datas = [b.callback_data for row in kb.inline_keyboard for b in row]
+    assert "live:finish_confirmed" in callback_datas
+    assert "live:cancel_finish" in callback_datas
+
+
+async def test_same_day_finish_finalizes_directly(fresh_db, user_id):
+    db = fresh_db
+    workout_id = await db.create_workout(user_id)
+    await _log_a_set(db, workout_id, user_id)
+
+    state = await _make_state(user_id, workout_id=workout_id)
+    await state.set_state(WorkoutFlow.confirming_finish)
+    bot = _make_bot()
+    callback = _make_callback(user_id, "live:finish_confirmed", bot)
+
+    await workout.live_finish_workout_confirmed(callback, state)
 
     bot.edit_message_text.assert_awaited_once()
     assert await state.get_state() is None
@@ -88,10 +109,11 @@ async def test_cross_day_finish_asks_for_confirmation(fresh_db, user_id):
     await _log_a_set(db, workout_id, user_id)
 
     state = await _make_state(user_id, workout_id=workout_id)
+    await state.set_state(WorkoutFlow.confirming_finish)
     bot = _make_bot()
-    callback = _make_callback(user_id, "live:finish_workout", bot)
+    callback = _make_callback(user_id, "live:finish_confirmed", bot)
 
-    await workout.live_finish_workout(callback, state)
+    await workout.live_finish_workout_confirmed(callback, state)
 
     bot.edit_message_text.assert_not_awaited()
     text = callback.message.answer.await_args.args[0]
@@ -115,10 +137,11 @@ async def test_backfill_workout_skips_confirmation(fresh_db, user_id):
     state = await _make_state(
         user_id, workout_id=workout_id, is_backfill=True, bf_date=started.isoformat()
     )
+    await state.set_state(WorkoutFlow.confirming_finish)
     bot = _make_bot()
-    callback = _make_callback(user_id, "live:finish_workout", bot)
+    callback = _make_callback(user_id, "live:finish_confirmed", bot)
 
-    await workout.live_finish_workout(callback, state)
+    await workout.live_finish_workout_confirmed(callback, state)
 
     bot.edit_message_text.assert_awaited_once()
     assert await state.get_state() is None

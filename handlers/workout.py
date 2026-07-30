@@ -96,7 +96,7 @@ def _move_open_exercises_last(
     return closed + [open_map[eid] for eid in order if eid in open_map]
 
 
-async def _refresh_live(bot, state: FSMContext, user, workout_id: int, hint, keyboard):
+async def _refresh_live(bot, state: FSMContext, user, workout_id: int, hint, keyboard, note: str | None = None):
     """Redraw the live tracker so it always sits at the bottom of the chat.
 
     Telegram doesn't let a bot move an edited message down past newer messages,
@@ -112,7 +112,7 @@ async def _refresh_live(bot, state: FSMContext, user, workout_id: int, hint, key
     blocks = await view_builder.build_block_views(workout_id, user["e1rm_formula"])
     active = data.get("active_exercise_id")
     blocks = _move_open_exercises_last(blocks, data.get("open_exercises") or [], active)
-    text = formatting.build_live_session_text(blocks, hint, active_exercise_id=active)
+    text = formatting.build_live_session_text(blocks, hint, active_exercise_id=active, note=note)
     if data.get("is_backfill") and data.get("bf_date"):
         date = dt.date.fromisoformat(data["bf_date"])
         text = f"📅 {formatting.format_date_ru(date)}\n\n{text}"
@@ -242,7 +242,12 @@ async def _idle_view(
         # Skip the already-offered "suggested" exercise and anything already
         # logged this workout so the shortcuts never repeat today's own list.
         exclude = done_ids + ((suggested[0],) if suggested else ())
-        rows = await db.list_recent_exercises(user_id, limit=_IDLE_RECENT_EXERCISES, exclude_ids=exclude)
+        last_finished = data.get("last_finished_exercise_id")
+        rows = (
+            await db.list_common_followups(user_id, last_finished, limit=_IDLE_RECENT_EXERCISES, exclude_ids=exclude)
+            if last_finished is not None
+            else await db.list_recent_exercises(user_id, limit=_IDLE_RECENT_EXERCISES, exclude_ids=exclude)
+        )
         recent = [(r["id"], r["display_name"]) for r in rows]
     kb = keyboards.exercise_picker_entry_keyboard(
         has_planned=has_planned, suggested=suggested, is_empty=is_empty, recent=recent,
@@ -326,7 +331,6 @@ def _logging_hint(
     unit: str = "kg",
     show_progression: bool = True,
     today_sets: list[tuple[float, int]] | None = None,
-    note: str | None = None,
     show_instruction: bool = True,
     inferred_step: float | None = None,
     confirmed_weight: float | None = None,
@@ -337,7 +341,6 @@ def _logging_hint(
         base = "Вес и повторы через пробел, например «100 8»"
         if has_sets:
             base += " (можно только повторы — вес возьмётся с последнего подхода)"
-    note_line = f"📝 <i>{escape(note)}</i>\n" if note else ""
     warning = _suspicious_weight_warning(last_session, today_sets, unit)
     if warning and confirmed_weight is not None and today_sets and today_sets[-1][0] == confirmed_weight:
         # Already answered "да, записать" for exactly this weight — repeating the
@@ -358,11 +361,10 @@ def _logging_hint(
                     w >= suggestion.target_weight and r >= suggestion.target_reps
                     for w, r in (today_sets or [])
                 )
-                line += f"\n{formatting.format_progression_hint(suggestion, unit, achieved)}"
-        return f"{warning_line}{note_line}<i>{line}</i>\n\n{base}" if base else f"{warning_line}{note_line}<i>{line}</i>"
-    if note_line or warning_line:
-        head = f"{warning_line}{note_line}"
-        return f"{head}\n{base}" if base else head.rstrip("\n")
+                line += f"\n{formatting.format_progression_hint(suggestion, achieved)}"
+        return f"{warning_line}<i>{line}</i>\n\n{base}" if base else f"{warning_line}<i>{line}</i>"
+    if warning_line:
+        return f"{warning_line}\n{base}" if base else warning_line.rstrip("\n")
     return base or ""
 
 
@@ -466,7 +468,6 @@ async def _render_logging_screen(bot, state: FSMContext, user):
         user["unit"],
         bool(user["progression_hint_enabled"]),
         today_sets,
-        note=active_note,
         show_instruction=show_instruction,
         inferred_step=weight_steps.get(active),
         confirmed_weight=(data.get("confirmed_weights") or {}).get(active),
@@ -474,7 +475,7 @@ async def _render_logging_screen(bot, state: FSMContext, user):
     )
     kb = keyboards.logging_keyboard(open_items, active, has_sets)
     await _sync_sticky_photo(bot, state, active)
-    await _refresh_live(bot, state, user, data["workout_id"], hint, kb)
+    await _refresh_live(bot, state, user, data["workout_id"], hint, kb, note=active_note)
 
 
 async def _back_after_cancel(bot, state: FSMContext, user):
@@ -987,9 +988,16 @@ async def _picker_screen_groups(callback: CallbackQuery, state: FSMContext, show
     groups = await db.list_muscle_groups(callback.from_user.id, order_by_usage=True)
     hint = "Выбери группу мышц или найди упражнение по названию:"
     open_ids = data.get("open_exercises") or []
+    partner_buttons: list[tuple[int, str]] = []
     if open_ids:
         names = [escape((await db.get_exercise(eid))["display_name"]) for eid in open_ids]
         hint = "Открыто сейчас: " + ", ".join(names) + "\n" + hint
+        active = data.get("active_exercise_id")
+        if active is not None:
+            partners = await db.list_superset_partners(
+                callback.from_user.id, active, limit=2, exclude_ids=tuple(open_ids)
+            )
+            partner_buttons = [(p["id"], p["display_name"]) for p in partners]
     extra = []
     if show_program_button:
         # Offered only on the very first picker screen of a fresh workout: pick
@@ -1001,7 +1009,9 @@ async def _picker_screen_groups(callback: CallbackQuery, state: FSMContext, show
     # Not a "cancel the workout" — pick:cancel just returns to whatever screen was
     # open before (see _back_after_cancel), so it reads as "⬅️ Назад", not "❌ Отмена".
     extra.append(("⬅️ Назад", "pick:cancel"))
-    kb = keyboards.groups_keyboard(groups, prefix="pick", extra_buttons=extra, show_all=True)
+    kb = keyboards.groups_keyboard(
+        groups, prefix="pick", extra_buttons=extra, show_all=True, partner_buttons=partner_buttons
+    )
     await state.update_data(picker_stage="groups")
     await _refresh_live(callback.bot, state, user, data["workout_id"], hint, kb)
 
@@ -1011,6 +1021,12 @@ async def live_add_exercise(callback: CallbackQuery, state: FSMContext):
     await state.set_state(WorkoutFlow.picking_group)
     await _picker_screen_groups(callback, state)
     await callback.answer()
+
+
+@router.callback_query(StateFilter(WorkoutFlow.picking_group), F.data.startswith("pick:partner:"))
+async def pick_partner(callback: CallbackQuery, state: FSMContext):
+    ex_id = int(callback.data.split(":")[2])
+    await _on_exercise_chosen(callback, state, ex_id)
 
 
 @router.callback_query(
@@ -1847,6 +1863,19 @@ async def live_finish_workout(callback: CallbackQuery, state: FSMContext):
         await _show_main_menu(callback, state)
         await callback.answer("Тренировка была пустая — удалил её.")
         return
+    await state.set_state(WorkoutFlow.confirming_finish)
+    await ui.safe_edit(
+        callback,
+        "🏁 Завершить тренировку?",
+        reply_markup=keyboards.confirm_finish_workout_keyboard(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(StateFilter(WorkoutFlow.confirming_finish), F.data == "live:finish_confirmed")
+async def live_finish_workout_confirmed(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    workout_id = data["workout_id"]
     workout = await db.get_workout(workout_id)
     user = await db.get_user(callback.from_user.id)
     started = dt.datetime.fromisoformat(workout["started_at"])
@@ -1935,7 +1964,10 @@ async def finish_date_cancel(callback: CallbackQuery, state: FSMContext):
     await _finalize_workout(callback, state, note=None)
 
 
-@router.callback_query(StateFilter(WorkoutFlow.confirming_finish_date), F.data == "live:cancel_finish")
+@router.callback_query(
+    StateFilter(WorkoutFlow.confirming_finish, WorkoutFlow.confirming_finish_date),
+    F.data == "live:cancel_finish",
+)
 async def cancel_finish(callback: CallbackQuery, state: FSMContext):
     user = await db.get_user(callback.from_user.id)
     await _back_after_cancel(callback.bot, state, user)

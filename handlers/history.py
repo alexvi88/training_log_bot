@@ -473,7 +473,7 @@ async def _render_progress_view(ex_id: int, user, limit: int, origin: str = "all
             (s.started_at, tuple((r.weight, r.reps, r.rpe) for r in s.sets))
             for s in sessions
         ),
-        user["e1rm_formula"], user["unit"],
+        user["e1rm_formula"], user["unit"], ex["notes"],
     )
     cached_user = _progress_view_cache.get(user["telegram_id"])
     by_limit = (
@@ -495,7 +495,8 @@ async def _render_progress_view(ex_id: int, user, limit: int, origin: str = "all
         records = analytics.compute_personal_records(sessions)
 
         text = formatting.format_progress_screen(
-            ex["display_name"], sessions, comparison, records, limit=limit, unit=user["unit"]
+            ex["display_name"], sessions, comparison, records, limit=limit, unit=user["unit"],
+            note=ex["notes"],
         )
 
         png = None
