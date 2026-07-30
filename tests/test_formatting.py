@@ -650,14 +650,21 @@ def test_logging_hint_instruction_can_be_hidden():
     assert without == ""
 
 
-def test_logging_hint_hides_instruction_but_keeps_last_session_and_note():
+def test_logging_hint_hides_instruction_but_keeps_last_session():
     from handlers.workout import _logging_hint
 
     last = [(100.0, 10, None)]
-    hint = _logging_hint(last, has_sets=True, show_progression=False, note="болит плечо", show_instruction=False)
+    hint = _logging_hint(last, has_sets=True, show_progression=False, show_instruction=False)
     assert "Вес и повторы" not in hint
-    assert "болит плечо" in hint
     assert "В прошлый раз" in hint
+
+
+def test_live_session_text_places_note_under_active_exercise():
+    block = ExerciseBlockView(group_name="Ноги", exercise_name="Присед", sets=[(100.0, 5)], exercise_id=1)
+    text = formatting.build_live_session_text([block], active_exercise_id=1, note="болит плечо")
+    lines = text.splitlines()
+    assert "Присед" in lines[0]
+    assert "болит плечо" in lines[2]
 
 
 # ---------- build_history_list ----------

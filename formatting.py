@@ -522,6 +522,7 @@ def build_live_session_text(
     blocks: list[BlockView],
     hint: str | None = None,
     active_exercise_id: int | None = None,
+    note: str | None = None,
 ) -> str:
     body_lines = []
     for i, block in enumerate(blocks):
@@ -532,6 +533,8 @@ def build_live_session_text(
         body_lines.append(f"{prefix}<b>{escape(block.exercise_name)}</b>")
         if is_active:
             body_lines.extend(f"  • {format_set(w, r, block.rpe_for(i))}" for i, (w, r) in enumerate(block.sets))
+            if note:
+                body_lines.append(f"📝 <i>{escape(note)}</i>")
         elif block.sets:
             body_lines.append(", ".join(format_set(w, r, block.rpe_for(i)) for i, (w, r) in enumerate(block.sets)))
     lines = list(body_lines)

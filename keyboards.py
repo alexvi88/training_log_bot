@@ -399,6 +399,14 @@ def stale_workout_keyboard(workout_id: int) -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
+def confirm_finish_workout_keyboard() -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.button(text="✅ Да, завершить", callback_data="live:finish_confirmed")
+    b.button(text="❌ Отмена", callback_data="live:cancel_finish")
+    b.adjust(1)
+    return b.as_markup()
+
+
 def finish_date_mismatch_keyboard() -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(text="✅ Да, всё верно", callback_data="finconfirm:keep")

@@ -96,7 +96,7 @@ def _move_open_exercises_last(
     return closed + [open_map[eid] for eid in order if eid in open_map]
 
 
-async def _refresh_live(bot, state: FSMContext, user, workout_id: int, hint, keyboard):
+async def _refresh_live(bot, state: FSMContext, user, workout_id: int, hint, keyboard, note: str | None = None):
     """Redraw the live tracker so it always sits at the bottom of the chat.
 
     Telegram doesn't let a bot move an edited message down past newer messages,
@@ -112,7 +112,7 @@ async def _refresh_live(bot, state: FSMContext, user, workout_id: int, hint, key
     blocks = await view_builder.build_block_views(workout_id, user["e1rm_formula"])
     active = data.get("active_exercise_id")
     blocks = _move_open_exercises_last(blocks, data.get("open_exercises") or [], active)
-    text = formatting.build_live_session_text(blocks, hint, active_exercise_id=active)
+    text = formatting.build_live_session_text(blocks, hint, active_exercise_id=active, note=note)
     if data.get("is_backfill") and data.get("bf_date"):
         date = dt.date.fromisoformat(data["bf_date"])
         text = f"📅 {formatting.format_date_ru(date)}\n\n{text}"
@@ -326,7 +326,6 @@ def _logging_hint(
     unit: str = "kg",
     show_progression: bool = True,
     today_sets: list[tuple[float, int]] | None = None,
-    note: str | None = None,
     show_instruction: bool = True,
     inferred_step: float | None = None,
     confirmed_weight: float | None = None,
@@ -336,7 +335,6 @@ def _logging_hint(
         base = "Вес и повторы через пробел, например «100 8»"
         if has_sets:
             base += " (можно только повторы — вес возьмётся с последнего подхода)"
-    note_line = f"📝 <i>{escape(note)}</i>\n" if note else ""
     warning = _suspicious_weight_warning(last_session, today_sets, unit)
     if warning and confirmed_weight is not None and today_sets and today_sets[-1][0] == confirmed_weight:
         # Already answered "да, записать" for exactly this weight — repeating the
@@ -358,10 +356,9 @@ def _logging_hint(
                     for w, r in (today_sets or [])
                 )
                 line += f"\n{formatting.format_progression_hint(suggestion, unit, achieved)}"
-        return f"{warning_line}{note_line}<i>{line}</i>\n\n{base}" if base else f"{warning_line}{note_line}<i>{line}</i>"
-    if note_line or warning_line:
-        head = f"{warning_line}{note_line}"
-        return f"{head}\n{base}" if base else head.rstrip("\n")
+        return f"{warning_line}<i>{line}</i>\n\n{base}" if base else f"{warning_line}<i>{line}</i>"
+    if warning_line:
+        return f"{warning_line}\n{base}" if base else warning_line.rstrip("\n")
     return base or ""
 
 
@@ -482,14 +479,13 @@ async def _render_logging_screen(bot, state: FSMContext, user):
         user["unit"],
         bool(user["progression_hint_enabled"]),
         today_sets,
-        note=active_note,
         show_instruction=show_instruction,
         inferred_step=weight_steps.get(active),
         confirmed_weight=(data.get("confirmed_weights") or {}).get(active),
     )
     kb = keyboards.logging_keyboard(open_items, active, has_sets)
     await _sync_sticky_photo(bot, state, active)
-    await _refresh_live(bot, state, user, data["workout_id"], hint, kb)
+    await _refresh_live(bot, state, user, data["workout_id"], hint, kb, note=active_note)
 
 
 async def _back_after_cancel(bot, state: FSMContext, user):
@@ -1862,6 +1858,19 @@ async def live_finish_workout(callback: CallbackQuery, state: FSMContext):
         await _show_main_menu(callback, state)
         await callback.answer("Тренировка была пустая — удалил её.")
         return
+    await state.set_state(WorkoutFlow.confirming_finish)
+    await ui.safe_edit(
+        callback,
+        "🏁 Завершить тренировку?",
+        reply_markup=keyboards.confirm_finish_workout_keyboard(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(StateFilter(WorkoutFlow.confirming_finish), F.data == "live:finish_confirmed")
+async def live_finish_workout_confirmed(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    workout_id = data["workout_id"]
     workout = await db.get_workout(workout_id)
     user = await db.get_user(callback.from_user.id)
     started = dt.datetime.fromisoformat(workout["started_at"])
@@ -1950,7 +1959,10 @@ async def finish_date_cancel(callback: CallbackQuery, state: FSMContext):
     await _finalize_workout(callback, state, note=None)
 
 
-@router.callback_query(StateFilter(WorkoutFlow.confirming_finish_date), F.data == "live:cancel_finish")
+@router.callback_query(
+    StateFilter(WorkoutFlow.confirming_finish, WorkoutFlow.confirming_finish_date),
+    F.data == "live:cancel_finish",
+)
 async def cancel_finish(callback: CallbackQuery, state: FSMContext):
     user = await db.get_user(callback.from_user.id)
     await _back_after_cancel(callback.bot, state, user)
