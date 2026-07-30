@@ -433,6 +433,24 @@ async def _send_exercise_images(message: Message, ex, state: FSMContext) -> bool
     return True
 
 
+async def send_exercise_card(message: Message, state: FSMContext, user_id: int, ex_id: int) -> bool:
+    """Posts the exercise card as a new message instead of editing one in place.
+
+    Used from screens that must survive the jump — the AI-trainer chat, where
+    editing would swallow the answer the exercise was mentioned in. Returns
+    False if the exercise isn't the user's (or is gone).
+    """
+    ex = await db.get_exercise(ex_id)
+    if ex is None or ex["user_id"] != user_id:
+        return False
+    await state.set_state(ExerciseManage.picking_exercise)
+    await state.update_data(exm_exercise_id=ex_id)
+    has_images = await _send_exercise_images(message, ex, state)
+    text, kb = _exercise_detail_view(ex, with_info=not has_images)
+    await message.answer(text, reply_markup=kb, parse_mode="HTML")
+    return True
+
+
 async def _render_exercise_card(callback: CallbackQuery, state: FSMContext, ex_id: int) -> None:
     ex = await db.get_exercise(ex_id)
     if ex is None or ex["user_id"] != callback.from_user.id:
