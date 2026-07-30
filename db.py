@@ -740,6 +740,34 @@ async def list_superset_partners(
     return await cur.fetchall()
 
 
+async def list_common_followups(
+    user_id: int, exercise_id: int, limit: int, exclude_ids: tuple[int, ...] = ()
+) -> list[aiosqlite.Row]:
+    """Exercises most often logged *after* `exercise_id` within the same past
+    workout (by block order), ranked by how many distinct workouts followed it
+    that way — what the idle "🕘" shortcuts offer once an exercise is finished,
+    instead of just whatever was logged most recently regardless of sequence.
+    """
+    sql = (
+        "SELECT e.*, COUNT(DISTINCT wb2.workout_id) AS followup_count "
+        "FROM workout_blocks wb1 "
+        "JOIN block_exercises be1 ON be1.block_id = wb1.id AND be1.exercise_id = ? "
+        "JOIN workout_blocks wb2 ON wb2.workout_id = wb1.workout_id AND wb2.order_index > wb1.order_index "
+        "JOIN block_exercises be2 ON be2.block_id = wb2.id AND be2.exercise_id != ? "
+        "JOIN exercises e ON e.id = be2.exercise_id "
+        "WHERE e.user_id = ? AND e.is_archived = 0 AND e.is_template = 0 "
+        f"AND {_VISIBLE_EXERCISE_FILTER} "
+    )
+    params: list[Any] = [exercise_id, exercise_id, user_id]
+    if exclude_ids:
+        sql += f"AND e.id NOT IN ({','.join('?' * len(exclude_ids))}) "
+        params.extend(exclude_ids)
+    sql += "GROUP BY e.id ORDER BY followup_count DESC, e.display_name LIMIT ?"
+    params.append(limit)
+    cur = await conn().execute(sql, params)
+    return await cur.fetchall()
+
+
 async def count_user_exercises(user_id: int) -> int:
     cur = await conn().execute(
         "SELECT COUNT(*) FROM exercises e WHERE e.user_id = ? AND e.is_archived = 0 AND e.is_template = 0 "

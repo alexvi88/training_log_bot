@@ -242,7 +242,12 @@ async def _idle_view(
         # Skip the already-offered "suggested" exercise and anything already
         # logged this workout so the shortcuts never repeat today's own list.
         exclude = done_ids + ((suggested[0],) if suggested else ())
-        rows = await db.list_recent_exercises(user_id, limit=_IDLE_RECENT_EXERCISES, exclude_ids=exclude)
+        last_finished = data.get("last_finished_exercise_id")
+        rows = (
+            await db.list_common_followups(user_id, last_finished, limit=_IDLE_RECENT_EXERCISES, exclude_ids=exclude)
+            if last_finished is not None
+            else await db.list_recent_exercises(user_id, limit=_IDLE_RECENT_EXERCISES, exclude_ids=exclude)
+        )
         recent = [(r["id"], r["display_name"]) for r in rows]
     kb = keyboards.exercise_picker_entry_keyboard(
         has_planned=has_planned, suggested=suggested, is_empty=is_empty, recent=recent,

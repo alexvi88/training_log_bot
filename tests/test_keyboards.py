@@ -48,9 +48,11 @@ def test_exercise_picker_entry_keyboard_names_the_suggested_exercise():
 
 
 def test_exercise_picker_entry_keyboard_shortens_a_long_suggested_name():
+    # Full name is kept, cut down word-boundary-aware with an ellipsis only
+    # when it doesn't fit — not shortened to whatever's after a "-" qualifier.
     kb = keyboards.exercise_picker_entry_keyboard(suggested=(7, "chest press - horizontal machine"))
     label = next(t for t in _button_texts(kb) if t.startswith("⏭"))
-    assert label == "⏭ horizontal machine"
+    assert label == "⏭ chest press -…"
 
 
 def test_exercise_picker_entry_keyboard_no_recent_row_when_none_given():
