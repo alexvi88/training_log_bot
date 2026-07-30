@@ -313,18 +313,48 @@ def weight_step_for(
     return base
 
 
+# e1RM is an estimate, not a measurement, and the formulas disagree with each
+# other by more than this. A target within 1% of the last session's estimate is
+# the same effort, so it counts as holding — without the slack, the rep count
+# would flip between 9 and 10 on rounding noise alone.
+E1RM_HOLD_TOLERANCE = 0.99
+
+
+def _reps_holding_e1rm(
+    target_weight: float, last_weight: float, last_reps: int, formula: str
+) -> int:
+    """Fewest reps at target_weight whose e1RM still matches the last top set.
+
+    Restarting at the bottom of the rep range after a weight bump can be a
+    *step down* in strength: 127x10 is an e1RM of ~169, while 129.5x5 is only
+    ~151. Offering that as "the goal" asks the athlete to do visibly less than
+    last time. So the restart point is the lowest rep count in the range that
+    holds the e1RM already reached, clamped to the range: REP_RANGE_MIN when
+    the weight jump alone covers it, REP_RANGE_MAX when even a full range
+    can't (the last session ran well past the range — the weight bump is still
+    the right call, just not a reason to hand back reps).
+    """
+    reference = e1rm(last_weight, last_reps, formula) * E1RM_HOLD_TOLERANCE
+    for reps in range(REP_RANGE_MIN, REP_RANGE_MAX):
+        if e1rm(target_weight, reps, formula) >= reference:
+            return reps
+    return REP_RANGE_MAX
+
+
 def suggest_progression(
     last_sets: list[tuple[float, int]],
     *,
     unit: str = "kg",
     inferred_step: Optional[float] = None,
+    formula: str = "epley",
 ) -> Optional[ProgressionSuggestion]:
     """Next-session target from last session's sets, by double progression.
 
     While the top working set is still inside the rep range, add a rep at the
     same weight; once it crossed the top of the range (>= REP_RANGE_MAX), bump
-    the weight by one step (see weight_step_for) and restart at the bottom of
-    the range. Bodyweight sets (weight 0) simply chase one more rep.
+    the weight by one step (see weight_step_for) and restart at the lowest rep
+    count that doesn't give back the e1RM already earned (_reps_holding_e1rm).
+    Bodyweight sets (weight 0) simply chase one more rep.
     """
     working = [(w, r) for w, r in last_sets if r > 0]
     if not working:
@@ -336,7 +366,12 @@ def suggest_progression(
     reps_at_top = max(r for w, r in working if w == top_weight)
     if reps_at_top >= REP_RANGE_MAX:
         step = weight_step_for(top_weight, unit, inferred_step)
-        return ProgressionSuggestion("add_weight", round(top_weight + step, 2), REP_RANGE_MIN)
+        target_weight = round(top_weight + step, 2)
+        return ProgressionSuggestion(
+            "add_weight",
+            target_weight,
+            _reps_holding_e1rm(target_weight, top_weight, reps_at_top, formula),
+        )
     return ProgressionSuggestion("add_reps", top_weight, reps_at_top + 1)
 
 

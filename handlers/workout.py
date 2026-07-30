@@ -330,6 +330,7 @@ def _logging_hint(
     show_instruction: bool = True,
     inferred_step: float | None = None,
     confirmed_weight: float | None = None,
+    formula: str = config.DEFAULT_E1RM_FORMULA,
 ) -> str:
     base = None
     if show_instruction:
@@ -350,7 +351,7 @@ def _logging_hint(
         if show_progression:
             wr_only = [(w, r) for w, r, _ in last_session]
             suggestion = analytics.suggest_progression(
-                wr_only, unit=unit, inferred_step=inferred_step
+                wr_only, unit=unit, inferred_step=inferred_step, formula=formula
             )
             if suggestion is not None:
                 achieved = any(
@@ -486,6 +487,7 @@ async def _render_logging_screen(bot, state: FSMContext, user):
         show_instruction=show_instruction,
         inferred_step=weight_steps.get(active),
         confirmed_weight=(data.get("confirmed_weights") or {}).get(active),
+        formula=user["e1rm_formula"],
     )
     kb = keyboards.logging_keyboard(open_items, active, has_sets)
     await _sync_sticky_photo(bot, state, active)
