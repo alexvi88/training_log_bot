@@ -43,14 +43,14 @@ def test_exercise_picker_entry_keyboard_offers_recent_exercises_one_per_row():
 
 def test_exercise_picker_entry_keyboard_names_the_suggested_exercise():
     kb = keyboards.exercise_picker_entry_keyboard(suggested=(7, "leg press"))
-    assert "⏭ Как в прошлый раз: leg press" in _button_texts(kb)
+    assert "⏭ leg press" in _button_texts(kb)
     assert "live:suggest:7" in _callback_datas(kb)
 
 
 def test_exercise_picker_entry_keyboard_shortens_a_long_suggested_name():
     kb = keyboards.exercise_picker_entry_keyboard(suggested=(7, "chest press - horizontal machine"))
     label = next(t for t in _button_texts(kb) if t.startswith("⏭"))
-    assert label == "⏭ Как в прошлый раз: chest press"
+    assert label == "⏭ horizontal machine"
 
 
 def test_exercise_picker_entry_keyboard_no_recent_row_when_none_given():
