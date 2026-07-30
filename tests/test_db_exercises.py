@@ -249,6 +249,66 @@ async def test_list_muscle_groups_default_order_unaffected_by_usage(fresh_db, us
     assert names.index("Ноги нестандарт") < names.index("Спина нестандарт")
 
 
+async def test_list_common_followups_ranked_by_shared_workout_count(fresh_db, user_id):
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Спина")
+    pulldown = await db.create_exercise(user_id, "Pull down", group_id)
+    row = await db.create_exercise(user_id, "Seated row", group_id)
+    curl = await db.create_exercise(user_id, "Curl", group_id)
+
+    async def _sequence(*ex_ids):
+        w = await db.create_workout(user_id)
+        for i, ex_id in enumerate(ex_ids):
+            block_id = await db.create_block(w, "single")
+            await db.add_block_exercise(block_id, ex_id, 0)
+
+    for _ in range(3):
+        await _sequence(pulldown, row)
+    await _sequence(pulldown, curl)
+
+    followups = await db.list_common_followups(user_id, pulldown, limit=2)
+    assert [f["id"] for f in followups] == [row, curl]
+
+
+async def test_list_common_followups_ignores_exercises_that_came_before(fresh_db, user_id):
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Спина")
+    pulldown = await db.create_exercise(user_id, "Pull down", group_id)
+    row = await db.create_exercise(user_id, "Seated row", group_id)
+    w = await db.create_workout(user_id)
+    block_a = await db.create_block(w, "single")
+    await db.add_block_exercise(block_a, row, 0)
+    block_b = await db.create_block(w, "single")
+    await db.add_block_exercise(block_b, pulldown, 0)
+
+    followups = await db.list_common_followups(user_id, pulldown, limit=2)
+    assert followups == []
+
+
+async def test_idle_view_offers_common_followups_when_exercise_just_finished(fresh_db, user_id):
+    """Once an exercise is finished, the "🕘" shortcuts should reflect what
+    usually follows *that* exercise, not just whatever was logged most
+    recently anywhere."""
+    from handlers import workout
+
+    group_id = await fresh_db.create_muscle_group(user_id, "Спина")
+    pulldown = await fresh_db.create_exercise(user_id, "Pull down", group_id)
+    row = await fresh_db.create_exercise(user_id, "Seated row", group_id)
+    unrelated = await fresh_db.create_exercise(user_id, "Overhead press", group_id)
+    await fresh_db.touch_exercise_last_used(unrelated)  # most recent overall, but never followed pulldown
+
+    w = await fresh_db.create_workout(user_id)
+    block_a = await fresh_db.create_block(w, "single")
+    await fresh_db.add_block_exercise(block_a, pulldown, 0)
+    block_b = await fresh_db.create_block(w, "single")
+    await fresh_db.add_block_exercise(block_b, row, 0)
+
+    hint, kb = await workout._idle_view({"last_finished_exercise_id": pulldown}, user_id, is_empty=False)
+    texts = [b.text for r in kb.inline_keyboard for b in r]
+    assert "🕘 Seated row" in texts
+    assert "🕘 Overhead press" not in texts
+
+
 async def test_idle_view_offers_recent_exercises_excluding_suggested(fresh_db, user_id):
     """The between-exercises pause screen should surface a couple of recently
     logged exercises as a one-tap shortcut, without repeating whatever is

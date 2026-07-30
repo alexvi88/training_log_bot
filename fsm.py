@@ -8,6 +8,7 @@ class WorkoutFlow(StatesGroup):
     creating_exercise_name = State()
     logging_set = State()
     logging_exercise_note = State()
+    confirming_finish = State()
     confirming_finish_date = State()
     awaiting_finish_date = State()
     editing_finished_note = State()
