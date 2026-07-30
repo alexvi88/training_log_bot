@@ -12,6 +12,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+import achievement_sync
 import ai_trainer
 import analytics
 import charts
@@ -316,6 +317,10 @@ async def hist_delete(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Тренировка не найдена", show_alert=True)
         return
     await db.discard_workout(workout_id)
+    # Deleting the workout has to delete what it earned too: a set typed as 500кг
+    # unlocks the weight clubs, and leaving those badges behind would keep the
+    # mistake visible in the grid forever, with no workout left to fix or remove.
+    await achievement_sync.resync(callback.from_user.id)
     data = await state.get_data()
     await show_history_list(callback, state, data.get("history_page", 0))
     await callback.answer("Тренировка удалена.")
