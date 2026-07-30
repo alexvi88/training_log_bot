@@ -76,7 +76,7 @@ async def build_block_views(
                 set_rpes=entry["rpes"] if any(r is not None for r in entry["rpes"]) else None,
                 prev_set_rpes=prev_set_rpes,
                 prev_started_at=prev_started_at,
-                note=ex["notes"],
+                note=await db.get_workout_exercise_note(workout_id, ex_id),
             )
         )
 

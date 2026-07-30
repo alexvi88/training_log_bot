@@ -102,6 +102,19 @@ CREATE TABLE IF NOT EXISTS block_exercises (
 );
 CREATE INDEX IF NOT EXISTS idx_block_exercises_block ON block_exercises (block_id);
 
+-- A note ("!болит плечо", "new training scheme") is tied to one workout's
+-- attempt at an exercise, not the exercise itself — it shouldn't resurface on
+-- every later session, only on the session it was actually written for.
+CREATE TABLE IF NOT EXISTS exercise_notes (
+    workout_id INTEGER NOT NULL,
+    exercise_id INTEGER NOT NULL,
+    note TEXT NOT NULL,
+    PRIMARY KEY (workout_id, exercise_id),
+    FOREIGN KEY (workout_id) REFERENCES workouts (id),
+    FOREIGN KEY (exercise_id) REFERENCES exercises (id)
+);
+CREATE INDEX IF NOT EXISTS idx_exercise_notes_exercise ON exercise_notes (exercise_id);
+
 CREATE TABLE IF NOT EXISTS sets (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     block_id INTEGER NOT NULL,
@@ -1001,14 +1014,42 @@ async def delete_exercise_photo(exercise_id: int) -> None:
         await conn().commit()
 
 
-async def set_exercise_notes(exercise_id: int, notes: Optional[str]) -> None:
-    """Store a free-text personal note for an exercise (technique cue, injury flag).
-    Passing None/empty clears it."""
+async def set_workout_exercise_note(workout_id: int, exercise_id: int, note: Optional[str]) -> None:
+    """Store a free-text note (technique cue, injury flag) for this exercise in
+    this specific workout — not the exercise in general, so it doesn't
+    resurface on unrelated later sessions. Passing None/empty clears it."""
     async with _write_lock:
-        await conn().execute(
-            "UPDATE exercises SET notes = ? WHERE id = ?", (notes or None, exercise_id)
-        )
+        if note:
+            await conn().execute(
+                "INSERT INTO exercise_notes (workout_id, exercise_id, note) VALUES (?, ?, ?) "
+                "ON CONFLICT (workout_id, exercise_id) DO UPDATE SET note = excluded.note",
+                (workout_id, exercise_id, note),
+            )
+        else:
+            await conn().execute(
+                "DELETE FROM exercise_notes WHERE workout_id = ? AND exercise_id = ?",
+                (workout_id, exercise_id),
+            )
         await conn().commit()
+
+
+async def get_workout_exercise_note(workout_id: int, exercise_id: int) -> Optional[str]:
+    cur = await conn().execute(
+        "SELECT note FROM exercise_notes WHERE workout_id = ? AND exercise_id = ?",
+        (workout_id, exercise_id),
+    )
+    row = await cur.fetchone()
+    return row["note"] if row else None
+
+
+async def list_workout_notes_for_exercise(exercise_id: int) -> dict[int, str]:
+    """Every {workout_id: note} this exercise has, for the progress screen to
+    show each past session's own note next to it."""
+    cur = await conn().execute(
+        "SELECT workout_id, note FROM exercise_notes WHERE exercise_id = ?", (exercise_id,)
+    )
+    rows = await cur.fetchall()
+    return {r["workout_id"]: r["note"] for r in rows}
 
 
 async def set_exercise_description(exercise_id: int, description: Optional[str]) -> None:

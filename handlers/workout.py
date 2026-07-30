@@ -450,8 +450,8 @@ async def _render_logging_screen(bot, state: FSMContext, user):
     for ex_id in open_ids:
         ex = await db.get_exercise(ex_id)
         names[ex_id] = ex["display_name"]
-        if ex_id == active:
-            active_note = ex["notes"]
+    if active is not None:
+        active_note = await db.get_workout_exercise_note(data["workout_id"], active)
 
     open_items = [(ex_id, names[ex_id]) for ex_id in open_ids]
     active_block_id = (data.get("open_blocks") or {}).get(active)
@@ -1322,19 +1322,22 @@ async def live_switch_exercise(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(StateFilter(WorkoutFlow.logging_set), F.data.startswith("live:note:"))
 async def live_note_prompt(callback: CallbackQuery, state: FSMContext):
-    """Ask for a free-text note tied to the active exercise (technique cue, injury flag).
-    It resurfaces above "в прошлый раз" on every later session with this exercise."""
+    """Ask for a free-text note tied to this exercise in this workout (technique
+    cue, injury flag). It resurfaces above "в прошлый раз" for the rest of this
+    session, and stays attached to this session once it's finished."""
     ex_id = int(callback.data.split(":")[2])
     ex = await db.get_exercise(ex_id)
     if ex is None or ex["user_id"] != callback.from_user.id:
         await callback.answer("Упражнение не найдено", show_alert=True)
         return
     await state.set_state(WorkoutFlow.logging_exercise_note)
-    current = f"\n\nСейчас: <i>{escape(ex['notes'])}</i>" if ex["notes"] else ""
-    hint = "\n\nПришли «-», чтобы убрать заметку." if ex["notes"] else ""
+    workout_id = (await state.get_data())["workout_id"]
+    existing = await db.get_workout_exercise_note(workout_id, ex_id)
+    current = f"\n\nСейчас: <i>{escape(existing)}</i>" if existing else ""
+    hint = "\n\nПришли «-», чтобы убрать заметку." if existing else ""
     user = await db.get_user(callback.from_user.id)
     await _refresh_live(
-        callback.bot, state, user, (await state.get_data())["workout_id"],
+        callback.bot, state, user, workout_id,
         f"📝 Заметка к «{escape(ex['display_name'])}» — напиши текст (например «побаливает правое плечо»)."
         f"{current}{hint}",
         keyboards.cancel_keyboard("live:note_cancel"),
@@ -1355,7 +1358,7 @@ async def live_note_entered(message: Message, state: FSMContext):
     data = await state.get_data()
     active = data.get("active_exercise_id")
     text = message.text.strip()
-    await db.set_exercise_notes(active, None if text == "-" else text)
+    await db.set_workout_exercise_note(data["workout_id"], active, None if text == "-" else text)
     await _delete_message(message)
     await state.set_state(WorkoutFlow.logging_set)
     user = await db.get_user(message.from_user.id)
@@ -1617,7 +1620,7 @@ async def log_set_text(message: Message, state: FSMContext):
         if not note:
             await message.reply("Напиши текст после «!», например «!болит плечо — следи за локтями»")
             return
-        await db.set_exercise_notes(active, note)
+        await db.set_workout_exercise_note(data["workout_id"], active, note)
         await _delete_message(message)
         user = await db.get_user(message.from_user.id)
         await _render_logging_screen(message.bot, state, user)
