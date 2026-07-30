@@ -10,6 +10,7 @@ from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 
+import achievement_sync
 import config
 import db
 import formatting
@@ -39,6 +40,12 @@ async def _on_workout_edited(workout_id: int, keep_block_id: int | None = None) 
     """
     await db.delete_empty_blocks(workout_id, keep_block_id=keep_block_id)
     await db.set_workout_ai_comment(workout_id, None)
+    # Badges are derived from the sets: fixing a mistyped 500кг down to 50кг (or
+    # deleting that set) has to take back the weight-club/tonnage badges it
+    # unlocked, and a corrected date can just as well complete a streak.
+    workout = await db.get_workout(workout_id)
+    if workout is not None:
+        await achievement_sync.resync(workout["user_id"])
 
 
 async def _edit_screen_payload(workout_id: int) -> tuple[str, InlineKeyboardMarkup]:
@@ -557,6 +564,9 @@ async def _apply_edit_workout_date(workout_id: int, new_date: dt.date) -> None:
     # exercise in the workout, so a cached AI comment describing the old
     # comparison would go stale.
     await db.set_workout_ai_comment(workout_id, None)
+    # Streaks and the "1 января" badge are read off the calendar day, so moving
+    # a workout can win or lose either one.
+    await achievement_sync.resync(workout["user_id"])
 
 
 @router.callback_query(StateFilter(EditWorkoutFlow.awaiting_date), F.data.startswith("editwd:date:"))

@@ -1191,6 +1191,36 @@ async def award_achievements(user_id: int, codes: set[str]) -> list[str]:
     return new
 
 
+async def revoke_achievements(user_id: int, codes: set[str]) -> list[str]:
+    """Take back badges the user's history no longer supports (a deleted or
+    corrected workout), returning the codes actually removed."""
+    if not codes:
+        return []
+    held = await list_achievement_codes(user_id)
+    gone = sorted(codes & held)
+    if not gone:
+        return []
+    async with _write_lock:
+        await conn().executemany(
+            "DELETE FROM achievements WHERE user_id = ? AND code = ?",
+            [(user_id, code) for code in gone],
+        )
+        await conn().commit()
+    return gone
+
+
+async def list_finished_workouts_meta(user_id: int) -> list[aiosqlite.Row]:
+    """id/started_at/finished_at of every finished workout, oldest first — enough
+    to re-derive the per-workout achievements (early bird, marathon, 1 января)
+    without loading their sets."""
+    cur = await conn().execute(
+        "SELECT id, started_at, finished_at FROM workouts "
+        "WHERE user_id = ? AND status = 'finished' ORDER BY started_at",
+        (user_id,),
+    )
+    return await cur.fetchall()
+
+
 async def hall_of_fame_aggregates(user_id: int) -> dict[str, float]:
     """Lifetime totals for the Hall of Fame: tonnage moved, total working sets,
     and the longest single finished workout (seconds). All over finished workouts."""
