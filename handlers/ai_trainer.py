@@ -17,6 +17,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 import ai_trainer
 import config
 import db
+import exercise_mentions
 import formatting
 import keyboards
 import ui
@@ -167,10 +168,15 @@ class _RunningDisplay:
                 await self._placeholder.edit_text(preview)
 
 
-async def ai_keyboard(user_id: int) -> InlineKeyboardMarkup:
-    """AI-trainer reply keyboard: 'К тренировке' instead of 'Меню' while a workout is active."""
+async def ai_keyboard(user_id: int, answer: Optional[str] = None) -> InlineKeyboardMarkup:
+    """AI-trainer reply keyboard: 'К тренировке' instead of 'Меню' while a workout is active.
+
+    `answer` — текст ответа тренера, если он есть: упомянутые в нём упражнения
+    пользователя становятся кнопками-ссылками на свои карточки.
+    """
     active = await db.get_active_workout(user_id)
-    return keyboards.ai_trainer_keyboard(has_active_workout=bool(active))
+    mentioned = await exercise_mentions.find_in_text(user_id, answer)
+    return keyboards.ai_trainer_keyboard(has_active_workout=bool(active), exercises=mentioned)
 
 
 @router.callback_query(F.data == "menu:ai")
@@ -215,6 +221,22 @@ async def ai_resume_workout(callback: CallbackQuery, state: FSMContext):
         return
     await callback.answer()
     await _enter_live(callback, state, active["id"], delete_message=False)
+
+
+@router.callback_query(F.data.startswith("ai:excard:"))
+async def ai_exercise_card(callback: CallbackQuery, state: FSMContext):
+    """Карточка упражнения, упомянутого в ответе тренера.
+
+    Шлём новым сообщением (а не правим текущее, как prog:card:), чтобы сам
+    ответ с советом остался в чате — на него ещё смотреть, открыв карточку.
+    """
+    from handlers.exercises import send_exercise_card
+
+    ex_id = int(callback.data.split(":")[2])
+    if not await send_exercise_card(callback.message, state, callback.from_user.id, ex_id):
+        await callback.answer("Упражнение не найдено", show_alert=True)
+        return
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("ai:comment:"))
@@ -347,7 +369,7 @@ async def _handle_question(
     await db.add_ai_chat_message(user_id, "user", history_question)
     await db.add_ai_chat_message(user_id, "assistant", answer)
 
-    reply_markup = await ai_keyboard(user_id)
+    reply_markup = await ai_keyboard(user_id, answer=answer)
     chunks = [answer[i : i + TG_CHUNK] for i in range(0, len(answer), TG_CHUNK)]
     for i, chunk in enumerate(chunks):
         is_last = i == len(chunks) - 1

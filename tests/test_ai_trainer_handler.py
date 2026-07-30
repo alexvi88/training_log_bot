@@ -320,3 +320,70 @@ async def test_first_entry_still_shows_the_intro(fresh_db, user_id, monkeypatch)
     text = sent.args[0] if sent.args else sent.kwargs["text"]
     assert "ТРЕНЕР НА СВЯЗИ" in text
     assert "Спрашивай что угодно" in text
+
+
+# ---------- exercise cards for exercises the answer mentions ----------
+
+
+async def test_answer_gets_a_card_button_per_mentioned_exercise(fresh_db, user_id, monkeypatch):
+    bench_id = await fresh_db.create_exercise(user_id, "Жим лёжа", None)
+    row_id = await fresh_db.create_exercise(user_id, "Тяга горизонтального блока", None)
+    await fresh_db.create_exercise(user_id, "Приседания со штангой", None)
+    answer = "Убери жим лёжа на неделю и замени на тягу горизонтального блока."
+    monkeypatch.setattr(ai_trainer.ai_trainer, "ask", AsyncMock(return_value=answer))
+
+    state = await _make_state(user_id)
+    await state.set_state("AITrainerFlow:chatting")
+    message = _make_chat_message(user_id, "болит плечо")
+
+    await ai_trainer.ai_question(message, state)
+
+    placeholder = message.answer.return_value
+    kb = placeholder.edit_text.await_args.kwargs["reply_markup"]
+    assert _callbacks(kb) == [f"ai:excard:{bench_id}", f"ai:excard:{row_id}", "ai:menu"]
+
+
+async def test_answer_without_mentions_keeps_the_plain_keyboard(fresh_db, user_id, monkeypatch):
+    await fresh_db.create_exercise(user_id, "Жим лёжа", None)
+    monkeypatch.setattr(ai_trainer.ai_trainer, "ask", AsyncMock(return_value="Спи восемь часов."))
+
+    state = await _make_state(user_id)
+    await state.set_state("AITrainerFlow:chatting")
+    message = _make_chat_message(user_id, "как восстанавливаться?")
+
+    await ai_trainer.ai_question(message, state)
+
+    kb = message.answer.return_value.edit_text.await_args.kwargs["reply_markup"]
+    assert _callbacks(kb) == ["ai:menu"]
+
+
+async def test_exercise_card_button_keeps_the_answer_in_the_chat(fresh_db, user_id):
+    """Карточка приходит новым сообщением: ответ тренера, из которого в неё
+    перешли, должен остаться на месте."""
+    # Название с демо-фото: карточка шлёт ещё и медиа, это тоже не должно
+    # трогать сообщение с ответом.
+    ex_id = await fresh_db.create_exercise(user_id, "Жим штанги лёжа", None)
+    state = await _make_state(user_id)
+    callback = _make_callback(user_id, f"ai:excard:{ex_id}")
+    callback.message.answer_media_group = AsyncMock(
+        return_value=[SimpleNamespace(message_id=11), SimpleNamespace(message_id=12)]
+    )
+
+    await ai_trainer.ai_exercise_card(callback, state)
+
+    callback.message.answer_media_group.assert_awaited_once()
+    callback.message.edit_text.assert_not_called()
+    callback.message.answer.assert_awaited()
+    callback.answer.assert_awaited()
+    assert await state.get_state() == "ExerciseManage:picking_exercise"
+
+
+async def test_exercise_card_button_rejects_someone_elses_exercise(fresh_db, user_id):
+    other = await fresh_db.get_or_create_user(telegram_id=222, username="other")
+    ex_id = await fresh_db.create_exercise(other["telegram_id"], "Жим лёжа", None)
+    state = await _make_state(user_id)
+    callback = _make_callback(user_id, f"ai:excard:{ex_id}")
+
+    await ai_trainer.ai_exercise_card(callback, state)
+
+    callback.answer.assert_awaited_once_with("Упражнение не найдено", show_alert=True)

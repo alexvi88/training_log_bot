@@ -1,9 +1,18 @@
 """Inline keyboard builders. Callback data uses a short `prefix:arg` scheme."""
 
 import datetime as dt
+from typing import Any, Sequence
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+
+# Сколько символов названия влезает в кнопку под ответом AI-тренера, не
+# растягивая клавиатуру и не обрезаясь самим Telegram.
+AI_MENTION_LABEL_LIMIT = 32
+
+
+def _shorten_label(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 # Persistent reply-keyboard buttons, always visible under the input field.
 BTN_WORKOUT = "Тренировка"
@@ -43,7 +52,12 @@ def main_menu(has_active_workout: bool) -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
-def ai_trainer_keyboard(has_active_workout: bool = False) -> InlineKeyboardMarkup:
+def ai_trainer_keyboard(
+    has_active_workout: bool = False, exercises: Sequence[Any] = ()
+) -> InlineKeyboardMarkup:
+    """`exercises` — упражнения, упомянутые в ответе тренера (см. exercise_mentions):
+    каждое получает свою строку-ссылку на карточку, чтобы «замени на тягу
+    горизонтального блока» не приходилось искать руками через меню."""
     b = InlineKeyboardBuilder()
     b.button(text="⬅️ Меню", callback_data="ai:menu")
     if has_active_workout:
@@ -51,7 +65,19 @@ def ai_trainer_keyboard(has_active_workout: bool = False) -> InlineKeyboardMarku
         b.adjust(2)
     else:
         b.adjust(1)
-    return b.as_markup()
+    nav = b.as_markup().inline_keyboard
+    # Кнопки упражнений — над навигацией и каждая своей строкой: названия
+    # длинные, в паре Telegram их обрежет.
+    mention_rows = [
+        [
+            InlineKeyboardButton(
+                text=f"📋 {_shorten_label(ex['display_name'], AI_MENTION_LABEL_LIMIT)}",
+                callback_data=f"ai:excard:{ex['id']}",
+            )
+        ]
+        for ex in exercises
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=mention_rows + nav)
 
 
 def groups_keyboard(
