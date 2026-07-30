@@ -6,9 +6,11 @@ whatever case the sentence needs ("убери pull down", "замени на т�
 misses all of that, so names are compared word by word on their stems: two
 words match when one is the other with a different Russian ending.
 
-Matches are ranked so a longer, more specific name wins over a shorter one
-contained in it ("Жим лёжа узким хватом" over "Жим лёжа"), and only the first
-few survive — a wall of buttons under an answer is worse than none.
+Overlapping matches are all kept: "жим лёжа узким хватом" in the text matches
+both that exercise and the "Жим лёжа" inside it, and guessing which one the
+trainer meant would silently drop the right card. Both get a button, the more
+specific one first, and the user picks. Only the first few survive — a wall of
+buttons under an answer is worse than none.
 """
 
 import os
@@ -64,8 +66,8 @@ def find_mentions(
     candidates = []
     for ex in exercises:
         # display_name — это name плюс оснастка/хват («Жим лёжа · гантели»):
-        # если тренер назвал упражнение полностью, совпадение длиннее и при
-        # двух похожих упражнениях выигрывает нужное.
+        # если тренер назвал упражнение полностью, совпадение длиннее и кнопка
+        # встанет выше более общего однофамильца.
         for needle in sorted((_tokens(ex["display_name"]), _tokens(ex["name"])), key=len, reverse=True):
             # Название из одних коротких слов («Пресс») дало бы слишком много
             # ложных срабатываний на обычной прозе.
@@ -83,19 +85,13 @@ def find_mentions(
                 candidates.append((match, len(needle), ex))
                 break
 
-    # Сначала самые длинные названия: если в тексте «жим лёжа узким хватом»,
-    # кнопка должна вести на него, а не на «жим лёжа», попавший в ту же фразу.
-    taken: list[range] = []
-    picked: list[tuple[int, Any]] = []
-    for start, length, ex in sorted(candidates, key=lambda c: (-c[1], c[0])):
-        span = range(start, start + length)
-        if any(span.start < t.stop and t.start < span.stop for t in taken):
-            continue
-        taken.append(span)
-        picked.append((start, ex))
-
-    picked.sort(key=lambda p: p[0])
-    return [ex for _, ex in picked[:limit]]
+    # Пересекающиеся совпадения не схлопываем: на «жим лёжа узким хватом»
+    # подходят и он сам, и «Жим лёжа» внутри него — какое из них имел в виду
+    # тренер, по тексту не решить, так что показываем оба и выбирает
+    # пользователь. Порядок — по месту в тексте, при равном начале выше стоит
+    # более конкретное (длинное) название.
+    candidates.sort(key=lambda c: (c[0], -c[1]))
+    return [ex for _, _, ex in candidates[:limit]]
 
 
 async def find_in_text(

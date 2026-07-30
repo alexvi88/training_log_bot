@@ -38,9 +38,11 @@ def test_ignores_unmentioned_exercises():
     assert exercise_mentions.find_mentions("Ешь больше белка и спи 8 часов", [BENCH, SQUAT]) == []
 
 
-def test_longer_name_wins_over_contained_one():
+def test_overlapping_names_both_get_a_button():
+    """«Жим лёжа» внутри «жима лёжа узким хватом» — что имел в виду тренер, по
+    тексту не решить, поэтому показываем оба, конкретное первым."""
     found = exercise_mentions.find_mentions("Попробуй жим лёжа узким хватом", [BENCH, BENCH_CLOSE])
-    assert _names(found) == ["Жим лёжа узким хватом"]
+    assert _names(found) == ["Жим лёжа узким хватом", "Жим лёжа"]
 
 
 def test_keeps_order_of_appearance():
@@ -107,9 +109,10 @@ def test_keyboard_without_mentions_is_unchanged():
     assert [b.callback_data for row in kb.inline_keyboard for b in row] == ["ai:menu"]
 
 
-def test_full_display_name_picks_the_right_variant_of_the_same_exercise():
-    """Два «жима лёжа» с разной оснасткой: выигрывает тот, что назван целиком."""
+def test_fully_named_variant_goes_first_but_the_other_stays():
+    """Два «жима лёжа» с разной оснасткой: названный целиком стоит первым,
+    второй остаётся кнопкой ниже — вдруг тренер имел в виду его."""
     barbell = _ex(10, "Жим лёжа", "Жим лёжа · штанга")
     dumbbells = _ex(11, "Жим лёжа", "Жим лёжа · гантели")
     found = exercise_mentions.find_mentions("Ставь жим лёжа гантели в начало", [barbell, dumbbells])
-    assert [r["id"] for r in found] == [11]
+    assert [r["id"] for r in found] == [11, 10]
