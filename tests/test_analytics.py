@@ -314,7 +314,29 @@ def test_suggest_progression_add_weight_when_top_of_range_reached():
     s = analytics.suggest_progression([(100, 10), (100, 10)])
     assert s.action == "add_weight"
     assert s.target_weight == pytest.approx(102.5)
-    assert s.target_reps == analytics.REP_RANGE_MIN
+    # Not REP_RANGE_MIN: 102.5x5 would be a weaker session than 100x10.
+    assert s.target_reps == 9
+
+
+def test_suggest_progression_weight_bump_never_lowers_the_bar():
+    # The reported bug: 127x10 came back as "129.5 x 5", an e1RM of ~151 against
+    # the ~169 already lifted — a goal that asks for less than last time.
+    s = analytics.suggest_progression([(127.0, 10)])
+    assert s.target_weight == pytest.approx(129.5)
+    assert analytics.e1rm(s.target_weight, s.target_reps) >= analytics.e1rm(127.0, 10) * 0.99
+
+
+def test_suggest_progression_reps_capped_at_top_of_range():
+    # 15 reps is far past the range; a single weight step can't hold that e1RM
+    # inside the range, so the target caps out rather than chasing 14 reps.
+    s = analytics.suggest_progression([(127.0, 15)])
+    assert s.target_reps == analytics.REP_RANGE_MAX
+
+
+def test_suggest_progression_big_jump_can_restart_at_bottom_of_range():
+    # A 20% jump (light dumbbells stepping 10 -> 12) outruns the reps it costs.
+    s = analytics.suggest_progression([(10.0, 10)], inferred_step=2.0)
+    assert (s.target_weight, s.target_reps) == (12.0, analytics.REP_RANGE_MIN)
 
 
 def test_suggest_progression_uses_heaviest_set_reps():
