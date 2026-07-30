@@ -355,7 +355,7 @@ def _logging_hint(
                     w >= suggestion.target_weight and r >= suggestion.target_reps
                     for w, r in (today_sets or [])
                 )
-                line += f"\n{formatting.format_progression_hint(suggestion, unit, achieved)}"
+                line += f"\n{formatting.format_progression_hint(suggestion, achieved)}"
         return f"{warning_line}<i>{line}</i>\n\n{base}" if base else f"{warning_line}<i>{line}</i>"
     if warning_line:
         return f"{warning_line}\n{base}" if base else warning_line.rstrip("\n")
@@ -998,9 +998,16 @@ async def _picker_screen_groups(callback: CallbackQuery, state: FSMContext, show
     groups = await db.list_muscle_groups(callback.from_user.id, order_by_usage=True)
     hint = "Выбери группу мышц или найди упражнение по названию:"
     open_ids = data.get("open_exercises") or []
+    partner_buttons: list[tuple[int, str]] = []
     if open_ids:
         names = [escape((await db.get_exercise(eid))["display_name"]) for eid in open_ids]
         hint = "Открыто сейчас: " + ", ".join(names) + "\n" + hint
+        active = data.get("active_exercise_id")
+        if active is not None:
+            partners = await db.list_superset_partners(
+                callback.from_user.id, active, limit=2, exclude_ids=tuple(open_ids)
+            )
+            partner_buttons = [(p["id"], p["display_name"]) for p in partners]
     extra = []
     if show_program_button:
         # Offered only on the very first picker screen of a fresh workout: pick
@@ -1012,7 +1019,9 @@ async def _picker_screen_groups(callback: CallbackQuery, state: FSMContext, show
     # Not a "cancel the workout" — pick:cancel just returns to whatever screen was
     # open before (see _back_after_cancel), so it reads as "⬅️ Назад", not "❌ Отмена".
     extra.append(("⬅️ Назад", "pick:cancel"))
-    kb = keyboards.groups_keyboard(groups, prefix="pick", extra_buttons=extra, show_all=True)
+    kb = keyboards.groups_keyboard(
+        groups, prefix="pick", extra_buttons=extra, show_all=True, partner_buttons=partner_buttons
+    )
     await state.update_data(picker_stage="groups")
     await _refresh_live(callback.bot, state, user, data["workout_id"], hint, kb)
 
@@ -1022,6 +1031,12 @@ async def live_add_exercise(callback: CallbackQuery, state: FSMContext):
     await state.set_state(WorkoutFlow.picking_group)
     await _picker_screen_groups(callback, state)
     await callback.answer()
+
+
+@router.callback_query(StateFilter(WorkoutFlow.picking_group), F.data.startswith("pick:partner:"))
+async def pick_partner(callback: CallbackQuery, state: FSMContext):
+    ex_id = int(callback.data.split(":")[2])
+    await _on_exercise_chosen(callback, state, ex_id)
 
 
 @router.callback_query(

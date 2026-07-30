@@ -59,8 +59,14 @@ def groups_keyboard(
     prefix: str,
     extra_buttons: list[tuple[str, str]] | None = None,
     show_all: bool = False,
+    partner_buttons: list[tuple[int, str]] | None = None,
 ) -> InlineKeyboardMarkup:
+    """partner_buttons: (exercise_id, display_name) pairs most often logged
+    alongside the exercise the "➕ Суперсет" screen was opened from — a
+    one-tap shortcut so a habitual pairing skips the group→list picker."""
     b = InlineKeyboardBuilder()
+    for ex_id, name in partner_buttons or []:
+        b.row(InlineKeyboardButton(text=f"⚡ {name}", callback_data=f"{prefix}:partner:{ex_id}"))
     for g in groups:
         b.button(text=g["name"], callback_data=f"{prefix}:grp:{g['id']}")
     if show_all:
@@ -162,22 +168,12 @@ _QUALIFIER_SEPARATORS = (" - ", " — ", " – ", " (")
 
 
 def _tab_label(name: str, limit: int) -> str:
-    """Shortens a superset tab label — the full name is already visible in the
-    tracker text above (with ▶ marking the active one), so the tab only needs
-    to be recognizable, not complete.
-
-    Names are usually "<base> - <qualifier>" ("triceps block - single arm - cuff"),
-    where the base is what tells the tabs apart; the qualifiers are what made the
-    old head-truncation clip everything into look-alike prefixes. So drop the
-    qualifiers first and only cut into the base if it is still too long.
-    """
-    base = name
-    for sep in _QUALIFIER_SEPARATORS:
-        base = base.split(sep, 1)[0]
-    base = base.strip() or name.strip()
-    if len(base) <= limit:
-        return base
-    cut = base[:limit].rstrip()
+    """A superset tab's label — shows the full exercise name, only cutting it
+    down (word-boundary-aware, with an ellipsis) when it doesn't fit the tab."""
+    name = name.strip()
+    if len(name) <= limit:
+        return name
+    cut = name[:limit].rstrip()
     # Prefer a word boundary over slicing a word in half, when one is close enough.
     if " " in cut and len(cut.rsplit(" ", 1)[0]) >= limit // 2:
         cut = cut.rsplit(" ", 1)[0]

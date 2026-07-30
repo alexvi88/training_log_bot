@@ -77,6 +77,17 @@ def test_build_workout_summary_includes_note():
     assert "📝 Болело плечо" in text
 
 
+def test_build_workout_summary_includes_exercise_note():
+    started = dt.datetime(2026, 6, 26, 18, 0)
+    blocks = [
+        ExerciseBlockView(
+            group_name="спина", exercise_name="Pull down", sets=[(100.0, 8)], note="new training scheme",
+        )
+    ]
+    text = formatting.build_workout_summary(started, blocks)
+    assert "📝 <i>new training scheme</i>" in text
+
+
 def test_build_workout_summary_shows_duration_when_given():
     started = dt.datetime(2026, 6, 26, 18, 0)
     text = formatting.build_workout_summary(started, [], duration_seconds=75 * 60)
@@ -420,6 +431,13 @@ def test_format_progress_screen_no_sessions():
     assert "Пока нет завершённых тренировок" in text
 
 
+def test_format_progress_screen_includes_exercise_note():
+    text = formatting.format_progress_screen(
+        "Pull down", [], None, analytics.PersonalRecords(), note="new training scheme",
+    )
+    assert "📝 <i>new training scheme</i>" in text
+
+
 def test_format_progress_screen_weighted_shows_total_growth():
     sessions = [
         _weighted_session(1, "2026-06-01T10:00:00", [(100.0, 8)]),
@@ -554,20 +572,20 @@ def test_logging_hint_puts_goal_on_its_own_line():
 
 def test_progression_hint_add_weight_is_plain_goal_without_nudge():
     s = analytics.suggest_progression([(100.0, 10)])
-    assert formatting.format_progression_hint(s) == "🎯 Цель: 102.5кг × 5"
+    assert formatting.format_progression_hint(s) == "🎯 Цель: 102.5×5"
 
 
 def test_logging_hint_uses_the_exercises_own_weight_step():
     from handlers.workout import _logging_hint
     last = [(22.0, 10, None)]  # dumbbells, 2kg apart -> 24, not 24.5
     hint = _logging_hint(last, has_sets=True, unit="kg", show_progression=True, inferred_step=2.0)
-    assert "🎯 Цель: 24кг × 5" in hint
+    assert "🎯 Цель: 24×5" in hint
 
 
 def test_logging_hint_bumps_heavy_lifts_by_five():
     from handlers.workout import _logging_hint
     hint = _logging_hint([(200.0, 10, None)], has_sets=True, unit="kg", show_progression=True)
-    assert "🎯 Цель: 205кг × 5" in hint
+    assert "🎯 Цель: 205×5" in hint
 
 
 def test_logging_hint_shows_achieved_goal_when_today_sets_meet_target():

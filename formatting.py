@@ -127,6 +127,7 @@ class ExerciseBlockView:
     set_rpes: list[float | None] | None = None  # per-set RPE, aligned with `sets`; None = none logged
     prev_set_rpes: list[float | None] | None = None  # per-set RPE for prev_sets
     prev_started_at: dt.datetime | None = None  # date of the previous session, for the delta line
+    note: str | None = None  # exercise's own note (technique cue, injury flag)
 
     def rpe_for(self, index: int) -> float | None:
         if not self.set_rpes or index >= len(self.set_rpes):
@@ -260,6 +261,8 @@ def _render_single_block(block: ExerciseBlockView, show_extra: bool, unit: str =
     u = UNIT_LABELS.get(unit, "кг")
     label = f"{escape(block.exercise_name)} [{block.group_name.upper()}]"
     lines = [f"<b>{label}</b>"]
+    if block.note:
+        lines.append(f"  📝 <i>{escape(block.note)}</i>")
     if block.sets:
         formatted = [format_set(w, r, block.rpe_for(i)) for i, (w, r) in enumerate(block.sets)]
         lines.extend(f"  • {s}" for s in _collapse_formatted_sets(formatted))
@@ -714,9 +717,13 @@ def format_progress_screen(
     records,  # analytics.PersonalRecords
     limit: int = 8,
     unit: str = "kg",
+    note: str | None = None,
 ) -> str:
     u = UNIT_LABELS.get(unit, "кг")
-    lines = [f"📈 <b>{escape(exercise_name)}</b>", ""]
+    lines = [f"📈 <b>{escape(exercise_name)}</b>"]
+    if note:
+        lines.append(f"📝 <i>{escape(note)}</i>")
+    lines.append("")
     if not sessions:
         lines.append("Пока нет завершённых тренировок с этим упражнением.")
         return "\n".join(lines)
@@ -824,15 +831,12 @@ def build_bodyweight_screen(logs: list, unit: str = "kg", period_logs: list | No
     return text
 
 
-def format_progression_hint(suggestion, unit: str = "kg", achieved: bool = False) -> str:
+def format_progression_hint(suggestion, achieved: bool = False) -> str:
     """"Цель: …" nudge from analytics.suggest_progression, on its own line under
     the "В прошлый раз" line (no bold — the surrounding line is already italicized).
     """
-    u = UNIT_LABELS.get(unit, "кг")
     if suggestion.is_bodyweight:
         goal = f"{suggestion.target_reps} повторов"
-    elif suggestion.action == "add_weight":
-        goal = f"{format_weight(suggestion.target_weight)}{u} × {suggestion.target_reps}"
     else:
         goal = format_set(suggestion.target_weight, suggestion.target_reps)
     if achieved:
