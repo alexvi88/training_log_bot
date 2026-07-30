@@ -241,8 +241,28 @@ _SUGGEST_NAME_MAX = 20
 
 def suggest_button_label(name: str) -> str:
     """The "как в прошлый раз" button's label, and whether it still names the
-    exercise in full — see exercise_picker_entry_keyboard."""
-    return _tab_label(name, _SUGGEST_NAME_MAX)
+    exercise in full — see exercise_picker_entry_keyboard.
+
+    Unlike the superset tabs (_tab_label), where the leading part is what tells
+    look-alike names apart, here a leading segment is often just a group/category
+    prefix ("abs - pull down block") — the trailing part is the actual exercise,
+    so that's what gets kept when the full name doesn't fit.
+    """
+    if len(name) <= _SUGGEST_NAME_MAX:
+        return name
+    tail = name
+    for sep in _QUALIFIER_SEPARATORS:
+        if sep in tail:
+            tail = tail.rsplit(sep, 1)[-1]
+            if sep == " (":
+                tail = tail.rstrip(")")
+    tail = tail.strip() or name.strip()
+    if len(tail) <= _SUGGEST_NAME_MAX:
+        return tail
+    cut = tail[:_SUGGEST_NAME_MAX].rstrip()
+    if " " in cut and len(cut.rsplit(" ", 1)[0]) >= _SUGGEST_NAME_MAX // 2:
+        cut = cut.rsplit(" ", 1)[0]
+    return cut + "…"
 
 
 def exercise_picker_entry_keyboard(

@@ -50,7 +50,7 @@ def test_exercise_picker_entry_keyboard_names_the_suggested_exercise():
 def test_exercise_picker_entry_keyboard_shortens_a_long_suggested_name():
     kb = keyboards.exercise_picker_entry_keyboard(suggested=(7, "chest press - horizontal machine"))
     label = next(t for t in _button_texts(kb) if t.startswith("⏭"))
-    assert label == "⏭ Как в прошлый раз: chest press"
+    assert label == "⏭ Как в прошлый раз: horizontal machine"
 
 
 def test_exercise_picker_entry_keyboard_no_recent_row_when_none_given():
