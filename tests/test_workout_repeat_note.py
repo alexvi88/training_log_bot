@@ -73,13 +73,13 @@ async def _setup_logging(db, user_id: int):
         open_exercises=[ex_id], open_blocks={ex_id: block_id}, active_exercise_id=ex_id,
         last_by_exercise={ex_id: (100.0, 8)}, last_session_sets={},
     )
-    return state, ex_id, block_id
+    return state, ex_id, block_id, workout_id
 
 
 @pytest.mark.asyncio
 async def test_repeat_copies_last_set(fresh_db, user_id):
     db = fresh_db
-    state, ex_id, block_id = await _setup_logging(db, user_id)
+    state, ex_id, block_id, _ = await _setup_logging(db, user_id)
     callback = _make_callback(user_id, "live:repeat")
 
     await workout.live_repeat_set(callback, state)
@@ -115,31 +115,31 @@ async def test_repeat_with_no_sets_is_a_noop(fresh_db, user_id):
 
 
 @pytest.mark.asyncio
-async def test_note_entered_saves_to_exercise(fresh_db, user_id):
+async def test_note_entered_saves_to_workout_exercise(fresh_db, user_id):
     db = fresh_db
-    state, ex_id, _ = await _setup_logging(db, user_id)
+    state, ex_id, _, workout_id = await _setup_logging(db, user_id)
     await state.set_state(WorkoutFlow.logging_exercise_note)
     message = _make_message(user_id, "болит плечо — следи за локтями")
 
     await workout.live_note_entered(message, state)
 
-    ex = await db.get_exercise(ex_id)
-    assert ex["notes"] == "болит плечо — следи за локтями"
+    note = await db.get_workout_exercise_note(workout_id, ex_id)
+    assert note == "болит плечо — следи за локтями"
     assert await state.get_state() == WorkoutFlow.logging_set
 
 
 @pytest.mark.asyncio
 async def test_note_dash_clears_an_existing_note(fresh_db, user_id):
     db = fresh_db
-    state, ex_id, _ = await _setup_logging(db, user_id)
-    await db.set_exercise_notes(ex_id, "болит плечо")
+    state, ex_id, _, workout_id = await _setup_logging(db, user_id)
+    await db.set_workout_exercise_note(workout_id, ex_id, "болит плечо")
     await state.set_state(WorkoutFlow.logging_exercise_note)
     message = _make_message(user_id, "-")
 
     await workout.live_note_entered(message, state)
 
-    ex = await db.get_exercise(ex_id)
-    assert ex["notes"] is None
+    note = await db.get_workout_exercise_note(workout_id, ex_id)
+    assert note is None
 
 
 async def _finished_baseline(db, user_id, ex_id, weight, reps):
@@ -156,7 +156,7 @@ async def _finished_baseline(db, user_id, ex_id, weight, reps):
 @pytest.mark.asyncio
 async def test_record_set_reacts_and_keeps_message_briefly(fresh_db, user_id):
     db = fresh_db
-    state, ex_id, block_id = await _setup_logging(db, user_id)
+    state, ex_id, block_id, _ = await _setup_logging(db, user_id)
     await _finished_baseline(db, user_id, ex_id, 100.0, 5)
     message = _make_message(user_id, "150 5")  # clear e1RM record
 
@@ -173,7 +173,7 @@ async def test_record_set_message_is_deleted_after_delay(fresh_db, user_id, monk
     """The 🔥 reaction message isn't left in the chat forever — it's cleaned up
     after a delay like everything else, just not instantly (so it can be noticed)."""
     db = fresh_db
-    state, ex_id, block_id = await _setup_logging(db, user_id)
+    state, ex_id, block_id, _ = await _setup_logging(db, user_id)
     await _finished_baseline(db, user_id, ex_id, 100.0, 5)
     message = _make_message(user_id, "150 5")  # clear e1RM record
 
@@ -200,7 +200,7 @@ async def test_record_set_message_is_deleted_after_delay(fresh_db, user_id, monk
 @pytest.mark.asyncio
 async def test_ordinary_set_is_deleted_without_reaction(fresh_db, user_id):
     db = fresh_db
-    state, ex_id, block_id = await _setup_logging(db, user_id)
+    state, ex_id, block_id, _ = await _setup_logging(db, user_id)
     await _finished_baseline(db, user_id, ex_id, 200.0, 5)  # high baseline
     message = _make_message(user_id, "60 5")  # nowhere near a record
 
@@ -213,7 +213,7 @@ async def test_ordinary_set_is_deleted_without_reaction(fresh_db, user_id):
 @pytest.mark.asyncio
 async def test_voice_logs_a_set(fresh_db, user_id, monkeypatch):
     db = fresh_db
-    state, ex_id, block_id = await _setup_logging(db, user_id)
+    state, ex_id, block_id, _ = await _setup_logging(db, user_id)
 
     monkeypatch.setattr(ai_trainer, "is_voice_configured", lambda: True)
 
@@ -236,7 +236,7 @@ async def test_voice_logs_a_set(fresh_db, user_id, monkeypatch):
 @pytest.mark.asyncio
 async def test_voice_unparseable_asks_to_retry(fresh_db, user_id, monkeypatch):
     db = fresh_db
-    state, ex_id, block_id = await _setup_logging(db, user_id)
+    state, ex_id, block_id, _ = await _setup_logging(db, user_id)
     monkeypatch.setattr(ai_trainer, "is_voice_configured", lambda: True)
 
     async def _fake_transcribe(buf, uid):

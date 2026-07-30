@@ -431,11 +431,23 @@ def test_format_progress_screen_no_sessions():
     assert "Пока нет завершённых тренировок" in text
 
 
-def test_format_progress_screen_includes_exercise_note():
+def test_format_progress_screen_shows_each_sessions_own_note():
+    # A note is tied to the specific workout it was written in — it should
+    # appear next to that session only, not on every session for the exercise.
+    sessions = [
+        _weighted_session(1, "2026-06-01T10:00:00", [(100.0, 8)]),
+        _weighted_session(2, "2026-06-08T10:00:00", [(105.0, 8)]),
+    ]
+    records = analytics.PersonalRecords(best_e1rm_weight=105.0, best_e1rm_reps=8, max_e1rm=140.0)
+
     text = formatting.format_progress_screen(
-        "Pull down", [], None, analytics.PersonalRecords(), note="new training scheme",
+        "Pull down", sessions, None, records, session_notes={2: "new training scheme"},
     )
-    assert "📝 <i>new training scheme</i>" in text
+
+    blocks = text.split("\n\n")
+    newest, oldest = blocks[-2], blocks[-1]  # newest session first
+    assert "📝 <i>new training scheme</i>" in newest
+    assert "📝" not in oldest
 
 
 def test_format_progress_screen_weighted_shows_total_growth():

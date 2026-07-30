@@ -122,8 +122,9 @@ async def test_bang_sets_a_note_on_the_active_exercise(fresh_db, user_id):
 
     await workout.log_set_text(message, state)
 
-    ex = await db.get_exercise(ex_id)
-    assert ex["notes"] == "болит плечо — следи за локтями"
+    workout_id = (await state.get_data())["workout_id"]
+    note = await db.get_workout_exercise_note(workout_id, ex_id)
+    assert note == "болит плечо — следи за локтями"
     message.delete.assert_awaited_once()
     # It doesn't also get parsed as a set.
     assert len(await db.list_sets_for_block(block_id)) == 1

@@ -468,12 +468,13 @@ async def _render_progress_view(ex_id: int, user, limit: int, origin: str = "all
     """
     ex = await db.get_exercise(ex_id)
     sessions = await _load_sessions(ex_id, user["e1rm_formula"])
+    session_notes = await db.list_workout_notes_for_exercise(ex_id)
     fingerprint = (
         tuple(
             (s.started_at, tuple((r.weight, r.reps, r.rpe) for r in s.sets))
             for s in sessions
         ),
-        user["e1rm_formula"], user["unit"], ex["notes"],
+        user["e1rm_formula"], user["unit"], tuple(sorted(session_notes.items())),
     )
     cached_user = _progress_view_cache.get(user["telegram_id"])
     by_limit = (
@@ -496,7 +497,7 @@ async def _render_progress_view(ex_id: int, user, limit: int, origin: str = "all
 
         text = formatting.format_progress_screen(
             ex["display_name"], sessions, comparison, records, limit=limit, unit=user["unit"],
-            note=ex["notes"],
+            session_notes=session_notes,
         )
 
         png = None

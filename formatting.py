@@ -698,8 +698,10 @@ def build_hall_of_fame(
     return text
 
 
-def _progress_session_block(session, is_bodyweight: bool) -> str:
-    """One dated session on the progress screen: date, its sets, and the metric."""
+def _progress_session_block(session, is_bodyweight: bool, note: str | None = None) -> str:
+    """One dated session on the progress screen: date, its sets, the metric,
+    and this session's own note, if it had one — a note only ever applies to
+    the specific workout it was written in, not the exercise in general."""
     d = dt.datetime.fromisoformat(session.started_at)
     sets_str = ", ".join(format_set(st.weight, st.reps, st.rpe) for st in session.sets)
     tail = (
@@ -707,7 +709,8 @@ def _progress_session_block(session, is_bodyweight: bool) -> str:
         if is_bodyweight
         else f"e1RM {session.top_e1rm:.1f}"
     )
-    return f"<b>{format_date_ru(d)}</b>\n{sets_str}\n{tail}"
+    note_line = f"\n📝 <i>{escape(note)}</i>" if note else ""
+    return f"<b>{format_date_ru(d)}</b>\n{sets_str}\n{tail}{note_line}"
 
 
 def format_progress_screen(
@@ -717,13 +720,10 @@ def format_progress_screen(
     records,  # analytics.PersonalRecords
     limit: int = 8,
     unit: str = "kg",
-    note: str | None = None,
+    session_notes: dict[int, str] | None = None,  # {workout_id: note}
 ) -> str:
     u = UNIT_LABELS.get(unit, "кг")
-    lines = [f"📈 <b>{escape(exercise_name)}</b>"]
-    if note:
-        lines.append(f"📝 <i>{escape(note)}</i>")
-    lines.append("")
+    lines = [f"📈 <b>{escape(exercise_name)}</b>", ""]
     if not sessions:
         lines.append("Пока нет завершённых тренировок с этим упражнением.")
         return "\n".join(lines)
@@ -755,7 +755,10 @@ def format_progress_screen(
         lines.append(f"Рекорд: {format_set(records.best_e1rm_weight, records.best_e1rm_reps)} · e1RM {records.max_e1rm:.1f}{u}")
 
     header = "\n".join(lines)
-    blocks = [_progress_session_block(s, is_bw) for s in reversed(candidates)]  # newest first
+    notes = session_notes or {}
+    blocks = [
+        _progress_session_block(s, is_bw, notes.get(s.workout_id)) for s in reversed(candidates)
+    ]  # newest first
 
     def assemble(keep: list[str]) -> str:
         parts = [header, collapsible_if_long("\n\n".join(keep))]

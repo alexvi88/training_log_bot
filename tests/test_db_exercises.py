@@ -258,7 +258,7 @@ async def test_list_common_followups_ranked_by_shared_workout_count(fresh_db, us
 
     async def _sequence(*ex_ids):
         w = await db.create_workout(user_id)
-        for i, ex_id in enumerate(ex_ids):
+        for ex_id in ex_ids:
             block_id = await db.create_block(w, "single")
             await db.add_block_exercise(block_id, ex_id, 0)
 
