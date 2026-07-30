@@ -715,22 +715,29 @@ async def list_recent_exercises(
 async def list_superset_partners(
     user_id: int, exercise_id: int, limit: int, exclude_ids: tuple[int, ...] = ()
 ) -> list[aiosqlite.Row]:
-    """Exercises most often logged in the same workout as `exercise_id` — a
-    proxy for "usually paired in a superset with this", since supersets
-    themselves aren't tracked as a distinct relationship, only co-occurrence
-    within a workout. Ranked by how many distinct workouts they shared.
+    """Exercises whose sets were actually logged in the same time window as
+    `exercise_id`'s, within a shared workout — i.e. genuinely worked as a
+    superset (switching back and forth), not just done somewhere else in the
+    same session. Supersets aren't tracked as their own relationship, so this
+    is inferred from each exercise's earliest/latest set timestamp per
+    workout overlapping. Ranked by how many distinct workouts they overlapped in.
     """
     sql = (
-        "SELECT e.*, COUNT(DISTINCT wb2.workout_id) AS pair_count "
-        "FROM block_exercises be1 "
-        "JOIN workout_blocks wb1 ON wb1.id = be1.block_id AND be1.exercise_id = ? "
-        "JOIN workout_blocks wb2 ON wb2.workout_id = wb1.workout_id "
-        "JOIN block_exercises be2 ON be2.block_id = wb2.id AND be2.exercise_id != ? "
-        "JOIN exercises e ON e.id = be2.exercise_id "
-        "WHERE e.user_id = ? AND e.is_archived = 0 AND e.is_template = 0 "
+        "WITH ranges AS ("
+        "  SELECT wb.workout_id AS workout_id, s.exercise_id AS exercise_id, "
+        "         MIN(s.created_at) AS min_at, MAX(s.created_at) AS max_at "
+        "  FROM sets s JOIN workout_blocks wb ON wb.id = s.block_id "
+        "  GROUP BY wb.workout_id, s.exercise_id"
+        ") "
+        "SELECT e.*, COUNT(DISTINCT r2.workout_id) AS pair_count "
+        "FROM ranges r1 "
+        "JOIN ranges r2 ON r2.workout_id = r1.workout_id AND r2.exercise_id != r1.exercise_id "
+        "  AND r2.min_at <= r1.max_at AND r2.max_at >= r1.min_at "
+        "JOIN exercises e ON e.id = r2.exercise_id "
+        "WHERE r1.exercise_id = ? AND e.user_id = ? AND e.is_archived = 0 AND e.is_template = 0 "
         f"AND {_VISIBLE_EXERCISE_FILTER} "
     )
-    params: list[Any] = [exercise_id, exercise_id, user_id]
+    params: list[Any] = [exercise_id, user_id]
     if exclude_ids:
         sql += f"AND e.id NOT IN ({','.join('?' * len(exclude_ids))}) "
         params.extend(exclude_ids)
