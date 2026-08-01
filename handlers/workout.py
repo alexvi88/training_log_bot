@@ -609,11 +609,10 @@ _HELP_TEXT = (
     "• <code>2: 100 8</code> — исправить 2-й уже залогированный подход\n"
     "• <code>?</code> или /help — эта справка\n\n"
     "🎙 Можно и голосом: запиши войс «сто на восемь».\n\n"
-    "<b>e1RM</b> — расчётный разовый максимум: сколько бы ты поднял на один раз. "
-    "Бот считает его из веса и повторов каждого подхода, поднимать не нужно. "
-    "Он нужен, чтобы сравнивать разные подходы между собой: 100×8 и 110×5 — "
-    "это примерно один и тот же уровень, а по одному весу этого не видно. "
-    "Формула — в ⚙️ Настройках."
+    "<b>e1RM</b> — расчётный разовый максимум: сколько ты смог бы поднять за один раз. "
+    "Бот считает его по весу и повторам каждого подхода, проверять на практике не нужно. "
+    "Нужен он для сравнения: 100×8 и 110×5 — это примерно один уровень, "
+    "а по одному только весу этого не видно. Формула — в ⚙️ Настройках."
 )
 
 
@@ -2061,20 +2060,6 @@ async def _record_highlights_and_summary(
     return summary_fn, highlights, session_tonnage, duration_seconds
 
 
-def _e1rm_hint_suffix(user, card_text: str) -> str:
-    """The e1RM footnote as a trailing card section, or "" when it doesn't apply.
-
-    Keyed off the rendered card rather than the workout's contents: a
-    bodyweight-only session prints reps and never names the metric, and
-    explaining a word the card didn't use would spend one of the few showings
-    the hint gets (config.E1RM_HINT_MAX_SHOWS) on nothing.
-    """
-    hint = formatting.e1rm_hint_line(user["e1rm_hint_seen"])
-    if hint is None or "e1RM" not in card_text:
-        return ""
-    return f"\n\n{hint}"
-
-
 _UNSET = object()
 
 
@@ -2108,9 +2093,6 @@ async def _finished_workout_card_text(workout, user, note: str | None, comment=_
     if highlights:
         header = "🔥 <b>Рекорды и сравнения</b>"
         suffix += f"\n{formatting.DIVIDER}\n{header}\n{formatting.collapsible_if_long(highlights)}"
-    # No counting here: re-rendering an already-finished card (a note attached,
-    # the workout reopened from history) isn't a new encounter with the metric.
-    suffix += _e1rm_hint_suffix(user, summary_fn(None) + suffix)
     effective_comment = workout["ai_comment"] if comment is _UNSET else comment
     if effective_comment:
         suffix += "\n" + formatting.build_ai_comment_block(effective_comment)
@@ -2218,10 +2200,6 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
         suffix += f"\n{formatting.DIVIDER}\n{header}\n{formatting.collapsible_if_long(highlights)}"
 
     prefix = "✅ Сохранено как прошлая тренировка\n\n" if is_backfill else ""
-    hint_suffix = _e1rm_hint_suffix(user, summary_fn(None) + suffix)
-    if hint_suffix:
-        suffix += hint_suffix
-        await db.note_e1rm_hint_shown(user_id)
 
     # Existing comment (already generated, e.g. from a backfilled workout) shows right
     # away; a fresh one is generated in the background so finishing a workout doesn't

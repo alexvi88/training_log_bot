@@ -10,7 +10,6 @@ from dataclasses import dataclass
 from html import escape
 from typing import Literal
 
-import config
 from analytics import e1rm
 
 _WEEKDAYS_RU = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"]
@@ -35,22 +34,17 @@ MESSAGE_LIMIT = 4096
 FOLD_MIN_LINES = 6
 FOLD_MIN_CHARS = 300
 
-# Every card, chart and record in the bot is denominated in e1RM, which is an
-# abbreviation for a concept most people have never met — and the number itself
-# gives no hint that it's a calculation rather than a lift that happened. One
-# italic line under the screens that print it, for a user's first few encounters
-# (config.E1RM_HINT_MAX_SHOWS), then it's gone for good: a footnote you re-read
-# after every workout has stopped being a footnote.
+# e1RM is an abbreviation for a concept most people have never met, and the
+# number itself gives no hint that it's a calculation rather than a lift that
+# happened. The footnote lives on the progress screen and nowhere else: that's
+# the screen you open to interpret the metric, so a permanent line there is
+# reference material — under the workout card, read after every session, the
+# same line would just be something to scroll past.
 E1RM_HINT = (
-    "ℹ️ <i>e1RM — расчётный разовый максимум: сколько бы ты поднял на один раз. "
-    "Бот считает его из веса и повторов, поднимать не нужно — он нужен, чтобы "
-    "сравнивать подходы с разным весом.</i>"
+    "ℹ️ <i>e1RM — расчётный разовый максимум: сколько ты смог бы поднять за один раз. "
+    "Считается по весу и повторам подхода — проверять на практике не нужно. "
+    "Так можно сравнивать подходы с разным весом.</i>"
 )
-
-
-def e1rm_hint_line(seen: int) -> str | None:
-    """The footnote while the user is still new to the metric, else None."""
-    return E1RM_HINT if seen < config.E1RM_HINT_MAX_SHOWS else None
 
 
 def telegram_length(text: str) -> int:
@@ -739,7 +733,6 @@ def format_progress_screen(
     limit: int = 8,
     unit: str = "kg",
     session_notes: dict[int, str] | None = None,  # {workout_id: note}
-    show_e1rm_hint: bool = False,
 ) -> str:
     u = UNIT_LABELS.get(unit, "кг")
     lines = [f"📈 <b>{escape(exercise_name)}</b>", ""]
@@ -780,8 +773,8 @@ def format_progress_screen(
     ]  # newest first
 
     # A bodyweight exercise's screen is measured in reps and never prints an
-    # e1RM, so it must not spend one of the footnote's few showings either.
-    footer = E1RM_HINT if show_e1rm_hint and not is_bw else None
+    # e1RM, so there's nothing for the footnote to explain there.
+    footer = None if is_bw else E1RM_HINT
 
     def assemble(keep: list[str]) -> str:
         parts = [header, collapsible_if_long("\n\n".join(keep))]

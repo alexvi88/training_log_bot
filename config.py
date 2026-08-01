@@ -23,13 +23,6 @@ LB_PER_KG = 2.20462
 # e1RM formula: "epley" or "brzycki"
 DEFAULT_E1RM_FORMULA = os.getenv("E1RM_FORMULA", "epley")
 
-# How many times a user sees the one-line "что такое e1RM" footnote before it
-# stops appearing (see formatting.E1RM_HINT, db.note_e1rm_hint_shown). The
-# metric heads every card and chart in the bot, but the abbreviation means
-# nothing to someone who's never met it — and a permanent footnote under a
-# screen you read after every workout is noise, so it fades instead.
-E1RM_HINT_MAX_SHOWS = 3
-
 # How many sessions to keep visible in the progress screen by default.
 PROGRESS_HISTORY_LIMIT = 8
 
