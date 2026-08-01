@@ -400,9 +400,10 @@ async def _exercise_group_name(ex) -> str | None:
 
 async def _exercise_detail_payload(ex, state: FSMContext, with_info: bool = True):
     """_exercise_detail_view with the exercise's group name looked up for it and
-    "⬅️ Назад" pointed wherever this card was actually reached from."""
+    "⬅️ Назад" pointed wherever this card was actually reached from: closing it
+    to reveal the AI-тренер reply underneath, rather than the exercises list."""
     data = await state.get_data()
-    back_cb = "ai:menu" if data.get("exm_from_ai") else "exm:backlist"
+    back_cb = "ai:closecard" if data.get("exm_from_ai") else "exm:backlist"
     return _exercise_detail_view(
         ex, with_info=with_info, group_name=await _exercise_group_name(ex), back_cb=back_cb
     )

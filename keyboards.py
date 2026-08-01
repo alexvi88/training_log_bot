@@ -60,12 +60,14 @@ AI_MENTION_PAGE_SIZE = 3
 def ai_trainer_keyboard(
     has_active_workout: bool = False, exercises: Sequence[Any] = (), page: int = 0
 ) -> InlineKeyboardMarkup:
-    """`exercises` — упражнения, упомянутые в ответе тренера (см. exercise_mentions),
-    до exercise_mentions.MAX_MENTIONS_TOTAL штук: каждое получает свою строку-ссылку
-    на карточку, чтобы «замени на тягу горизонтального блока» не приходилось искать
-    руками через меню. Показываем по AI_MENTION_PAGE_SIZE штук за раз с постраничным
-    ⬅️/➡️, если упоминаний больше — id всех упоминаний едут прямо в callback_data
-    стрелок (см. handlers/ai_trainer.ai_mentions_page), отдельного состояния не нужно."""
+    """`exercises` — то, что тренер упомянул в ответе (см. exercise_mentions), и
+    свои упражнения, и ещё не добавленные из каталога — до
+    exercise_mentions.MAX_MENTIONS_TOTAL штук. Своё ведёт прямо на карточку, а
+    каталожное сначала добавляет его пользователю и потом открывает ту же
+    карточку — прямая ссылка вела бы в никуда, раз упражнения ещё нет.
+    Показываем по AI_MENTION_PAGE_SIZE штук за раз с постраничным ⬅️/➡️, если
+    упоминаний больше — id всех упоминаний едут прямо в callback_data стрелок
+    (см. handlers/ai_trainer.ai_mentions_page), отдельного состояния не нужно."""
     exercises = list(exercises)
     b = InlineKeyboardBuilder()
     b.button(text="⬅️ Меню", callback_data="ai:menu")
@@ -79,16 +81,22 @@ def ai_trainer_keyboard(
     start = page * AI_MENTION_PAGE_SIZE
     page_exercises = exercises[start : start + AI_MENTION_PAGE_SIZE]
     # Кнопки упражнений — над навигацией и каждая своей строкой: названия
-    # длинные, в паре Telegram их обрежет.
-    mention_rows = [
-        [
-            InlineKeyboardButton(
-                text=f"📋 {_shorten_label(ex['display_name'], AI_MENTION_LABEL_LIMIT)}",
-                callback_data=f"ai:excard:{ex['id']}",
-            )
-        ]
-        for ex in page_exercises
-    ]
+    # длинные, в паре Telegram их обрежет. Разные эмодзи — своё (📌) не спутать
+    # с ещё не добавленным из каталога (📋).
+    mention_rows = []
+    for ex in page_exercises:
+        if ex["is_template"]:
+            emoji, callback_data = "📋", f"ai:tpladd:{ex['id']}"
+        else:
+            emoji, callback_data = "📌", f"ai:excard:{ex['id']}"
+        mention_rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{emoji} {_shorten_label(ex['display_name'], AI_MENTION_LABEL_LIMIT)}",
+                    callback_data=callback_data,
+                )
+            ]
+        )
 
     page_nav = []
     if len(exercises) > AI_MENTION_PAGE_SIZE:

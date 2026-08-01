@@ -6,8 +6,10 @@ import exercise_mentions
 import keyboards
 
 
-def _ex(ex_id: int, name: str, display_name: str | None = None) -> dict:
-    return {"id": ex_id, "name": name, "display_name": display_name or name}
+def _ex(ex_id: int, name: str, display_name: str | None = None, is_template: bool = False) -> dict:
+    return {
+        "id": ex_id, "name": name, "display_name": display_name or name, "is_template": int(is_template),
+    }
 
 
 PULLDOWN = _ex(1, "Тяга верхнего блока", "Тяга верхнего блока · широкий хват")
@@ -104,6 +106,25 @@ async def test_find_in_text_without_answer(fresh_db, user_id):
     assert await exercise_mentions.find_in_text(user_id, None) == []
 
 
+@pytest.mark.asyncio
+async def test_find_in_text_also_matches_a_catalog_template_not_yet_added(fresh_db, user_id):
+    """«Из каталога на плечи бери эти: ... Жим гантелей сидя ...» should still
+    get a button — the user just doesn't own that exercise yet."""
+    found = await exercise_mentions.find_in_text(user_id, "Попробуй жим гантелей сидя")
+    assert _names(found) == ["Жим гантелей сидя"]
+    assert found[0]["is_template"]
+
+
+@pytest.mark.asyncio
+async def test_find_in_text_prefers_the_owned_copy_over_the_catalog_template(fresh_db, user_id):
+    """Once the user has forked "Жим гантелей сидя" into their own exercises,
+    mentioning it again must not also offer the read-only catalog template."""
+    ex_id = await fresh_db.create_exercise(user_id, "Жим гантелей сидя", None)
+    found = await exercise_mentions.find_in_text(user_id, "Попробуй жим гантелей сидя")
+    assert [r["id"] for r in found] == [ex_id]
+    assert not found[0]["is_template"]
+
+
 def test_keyboard_puts_mentions_above_navigation():
     kb = keyboards.ai_trainer_keyboard(has_active_workout=True, exercises=[BENCH, PULLDOWN])
     rows = kb.inline_keyboard
@@ -153,6 +174,22 @@ def test_keyboard_with_few_mentions_has_no_paging_arrows():
     kb = keyboards.ai_trainer_keyboard(exercises=[BENCH, PULLDOWN])
     callback_datas = [b.callback_data for row in kb.inline_keyboard for b in row]
     assert not any(cb.startswith("ai:mpage:") for cb in callback_datas)
+
+
+# ---------- catalog templates the user hasn't added yet also get a button ----------
+
+
+def test_keyboard_links_a_template_mention_to_add_it_instead_of_a_card():
+    template = _ex(30, "Жим гантелей сидя", is_template=True)
+    (button,) = keyboards.ai_trainer_keyboard(exercises=[template]).inline_keyboard[0]
+    assert button.callback_data == "ai:tpladd:30"
+    assert button.text.startswith("📋")
+
+
+def test_keyboard_links_an_owned_mention_straight_to_its_card():
+    (button,) = keyboards.ai_trainer_keyboard(exercises=[BENCH]).inline_keyboard[0]
+    assert button.callback_data == "ai:excard:3"
+    assert button.text.startswith("📌")
 
 
 def test_fully_named_variant_goes_first_but_the_other_stays():

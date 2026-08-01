@@ -802,6 +802,13 @@ async def count_user_exercises(user_id: int) -> int:
     return count
 
 
+async def list_all_exercise_templates() -> list[aiosqlite.Row]:
+    """The whole catalog, unfiltered by group — used to spot catalog exercises
+    the AI trainer names in an answer even if the user hasn't added them yet."""
+    cur = await conn().execute("SELECT * FROM exercises WHERE is_template = 1 ORDER BY display_name")
+    return await cur.fetchall()
+
+
 async def list_templates_in_group(group_id: int) -> list[aiosqlite.Row]:
     cur = await conn().execute(
         "SELECT * FROM exercises WHERE is_template = 1 AND primary_group_id = ? ORDER BY display_name",
