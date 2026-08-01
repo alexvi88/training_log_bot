@@ -207,6 +207,23 @@ async def test_confirming_template_add_forks_and_shows_full_card(fresh_db, user_
     assert any(cb.startswith("exm:archiveask:") for cb in callback_datas)
 
 
+# ---------- groups screen layout ----------
+
+
+async def test_groups_screen_gives_new_group_and_back_their_own_full_row(fresh_db, user_id):
+    """Muscle groups and "📋 Все" pack two per row, but "➕ Новая группа" and
+    "⬅️ Назад" are wide, one-per-row buttons — pairing them up made them look
+    like just another pair of group buttons."""
+    await fresh_db.create_muscle_group(user_id, "Грудь")
+    await fresh_db.create_muscle_group(user_id, "Спина")
+
+    _text, kb = await exercises._groups_payload(user_id)
+    rows = kb.inline_keyboard
+
+    assert len(rows[-2]) == 1 and rows[-2][0].text == "➕ Новая группа"
+    assert len(rows[-1]) == 1 and rows[-1][0].text == "⬅️ Назад"
+
+
 # ---------- archive / unarchive ----------
 
 
@@ -276,7 +293,7 @@ async def test_unarchive_rejects_someone_elses_exercise(fresh_db, user_id):
 # ---------- rename cancel returns to the exercise card ----------
 
 
-async def test_edit_name_cancel_button_points_to_exercise_card(fresh_db, user_id):
+async def test_edit_name_cancel_button_points_to_edit_menu(fresh_db, user_id):
     db = fresh_db
     group_id = await db.create_muscle_group(user_id, "Грудь")
     ex_id = await db.create_exercise(user_id, "Жим лёжа", group_id)
@@ -287,7 +304,7 @@ async def test_edit_name_cancel_button_points_to_exercise_card(fresh_db, user_id
 
     kb = callback.message.answer.await_args.kwargs["reply_markup"]
     callback_datas = [b.callback_data for row in kb.inline_keyboard for b in row]
-    assert callback_datas == [f"exm:ex:{ex_id}"]
+    assert callback_datas == [f"exm:editmenu:{ex_id}"]
 
 
 async def test_cancelling_rename_shows_exercise_card_not_list(fresh_db, user_id):
@@ -313,6 +330,30 @@ async def test_cancelling_rename_shows_exercise_card_not_list(fresh_db, user_id)
     assert await state.get_state() == ExerciseManage.picking_exercise
 
 
+async def test_cancelling_rename_returns_to_the_edit_menu_not_the_card(fresh_db, user_id):
+    """"❌ Отмена" on the rename prompt now points at exm:editmenu:, not the
+    full card — cancelling an edit should drop you back where you picked it
+    from, and reset the FSM state the same way exm:ex: does."""
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    ex_id = await db.create_exercise(user_id, "Жим лёжа", group_id)
+
+    state = await _make_state(user_id, exm_group_id=group_id)
+    edit_callback = _make_exercise_callback(user_id, f"exm:editname:{ex_id}")
+    await exercises.exm_edit_name(edit_callback, state)
+    assert await state.get_state() == ExerciseManage.editing_name
+
+    cancel_callback = _make_exercise_callback(user_id, f"exm:editmenu:{ex_id}")
+    cancel_callback.message.bot = edit_callback.message.bot
+    cancel_callback.bot = edit_callback.bot
+    await exercises.exm_edit_menu(cancel_callback, state)
+
+    assert await state.get_state() == ExerciseManage.picking_exercise
+    kb = cancel_callback.message.answer.await_args.kwargs["reply_markup"]
+    labels = [b.text for row in kb.inline_keyboard for b in row]
+    assert "✏️ Название" in labels
+
+
 # ---------- muscle group edit ----------
 
 
@@ -332,7 +373,7 @@ async def test_edit_group_button_shows_group_picker(fresh_db, user_id):
     kb = callback.message.answer.await_args.kwargs["reply_markup"]
     callback_datas = [b.callback_data for row in kb.inline_keyboard for b in row]
     assert f"exmeditgrp:grp:{other_group_id}" in callback_datas
-    assert f"exm:ex:{ex_id}" in callback_datas
+    assert f"exm:editmenu:{ex_id}" in callback_datas
 
 
 async def test_picking_a_group_moves_the_exercise_and_returns_to_its_card(fresh_db, user_id):
@@ -383,7 +424,7 @@ async def test_add_photo_button_prompts_and_sets_state(fresh_db, user_id):
     assert await state.get_state() == ExerciseManage.awaiting_photo
     kb = callback.message.answer.await_args.kwargs["reply_markup"]
     callback_datas = [b.callback_data for row in kb.inline_keyboard for b in row]
-    assert callback_datas == [f"exm:ex:{ex_id}"]
+    assert callback_datas == [f"exm:editmenu:{ex_id}"]
 
 
 async def test_sending_photo_stores_it_and_returns_to_card(fresh_db, user_id):
@@ -448,15 +489,15 @@ async def test_card_offers_add_description_for_a_plain_custom_exercise():
     ex = {"id": 1, "name": "pull down", "display_name": "pull down", "description": None, "custom_photo_file_id": None}
     kb = exercises._exercise_edit_menu_keyboard(ex)
     labels = [b.text for row in kb.inline_keyboard for b in row]
-    assert "📝 Описание" in labels
+    assert "✏️ Описание" in labels
 
 
 async def test_card_offers_write_own_when_a_template_default_already_shows():
     ex = {"id": 1, "name": "Присед со штангой", "display_name": "Присед со штангой", "description": None, "custom_photo_file_id": None}
     kb = exercises._exercise_edit_menu_keyboard(ex)
     labels = [b.text for row in kb.inline_keyboard for b in row]
-    assert "📝 Своё описание" in labels
-    assert "📝 Описание" not in labels
+    assert "✏️ Своё описание" in labels
+    assert "✏️ Описание" not in labels
 
 
 async def test_card_offers_edit_description_once_the_user_has_one():
@@ -466,7 +507,16 @@ async def test_card_offers_edit_description_once_the_user_has_one():
     }
     kb = exercises._exercise_edit_menu_keyboard(ex)
     labels = [b.text for row in kb.inline_keyboard for b in row]
-    assert "📝 Изменить описание" in labels
+    assert "✏️ Изменить описание" in labels
+
+
+async def test_edit_menu_layout_is_two_buttons_per_row():
+    ex = {"id": 1, "name": "pull down", "display_name": "pull down", "description": None, "custom_photo_file_id": None}
+    kb = exercises._exercise_edit_menu_keyboard(ex)
+    rows = kb.inline_keyboard
+    assert [b.text for b in rows[0]] == ["✏️ Название", "✏️ Группа"]
+    assert [b.text for b in rows[1]] == ["✏️ Описание", "✏️ Фото"]
+    assert [b.text for b in rows[2]] == ["⬅️ Назад"]
 
 
 async def test_card_layout_is_prog_edit_archive_back():
@@ -488,22 +538,20 @@ async def test_edit_menu_offers_delete_photo_button_when_one_exists():
     kb = exercises._exercise_edit_menu_keyboard(ex)
     labels = [b.text for row in kb.inline_keyboard for b in row]
     assert "🗑 Удалить фото" in labels
+    rows = kb.inline_keyboard
+    assert [b.text for b in rows[2]] == ["🗑 Удалить фото"]
+    assert [b.text for b in rows[3]] == ["⬅️ Назад"]
 
 
-async def test_photo_button_label_offers_to_add_when_none_exists():
-    ex = {"id": 1, "name": "pull down", "display_name": "pull down", "description": None, "custom_photo_file_id": None}
-    kb = exercises._exercise_edit_menu_keyboard(ex)
-    labels = [b.text for row in kb.inline_keyboard for b in row]
-    assert "📷 Добавить фото" in labels
-    assert "📷 Заменить фото" not in labels
-
-
-async def test_photo_button_label_offers_to_replace_when_one_exists():
-    ex = {"id": 1, "name": "pull down", "display_name": "pull down", "description": None, "custom_photo_file_id": "FILE_ID"}
-    kb = exercises._exercise_edit_menu_keyboard(ex)
-    labels = [b.text for row in kb.inline_keyboard for b in row]
-    assert "📷 Заменить фото" in labels
-    assert "📷 Добавить фото" not in labels
+async def test_photo_button_label_is_the_same_whether_or_not_one_exists():
+    """No more "Добавить"/"Заменить" split — always just "Фото", same ✏️ as
+    every other edit button."""
+    without_photo = {"id": 1, "name": "pull down", "display_name": "pull down", "description": None, "custom_photo_file_id": None}
+    with_photo = {"id": 1, "name": "pull down", "display_name": "pull down", "description": None, "custom_photo_file_id": "FILE_ID"}
+    for ex in (without_photo, with_photo):
+        kb = exercises._exercise_edit_menu_keyboard(ex)
+        labels = [b.text for row in kb.inline_keyboard for b in row]
+        assert "✏️ Фото" in labels
 
 
 async def test_edit_description_button_prompts_and_sets_state(fresh_db, user_id):
@@ -518,7 +566,7 @@ async def test_edit_description_button_prompts_and_sets_state(fresh_db, user_id)
     assert await state.get_state() == ExerciseManage.editing_description
     kb = callback.message.answer.await_args.kwargs["reply_markup"]
     callback_datas = [b.callback_data for row in kb.inline_keyboard for b in row]
-    assert callback_datas == [f"exm:ex:{ex_id}"]
+    assert callback_datas == [f"exm:editmenu:{ex_id}"]
 
 
 async def test_sending_description_stores_it_and_returns_to_card(fresh_db, user_id):
