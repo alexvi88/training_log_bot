@@ -185,6 +185,17 @@ def weight_confirm_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+def help_keyboard(expanded: bool) -> InlineKeyboardMarkup:
+    """Toggle between the short /help screen and the full input reference
+    (handlers.workout.help_toggle)."""
+    b = InlineKeyboardBuilder()
+    if expanded:
+        b.button(text="⬆️ Свернуть", callback_data="help:less")
+    else:
+        b.button(text="⬇️ Ещё: RPE, заметки, правки", callback_data="help:more")
+    return b.as_markup()
+
+
 # A half-width tab fits roughly this many characters before Telegram clips the
 # label itself; a full-width one about twice that.
 _TAB_NAME_MAX = 13
