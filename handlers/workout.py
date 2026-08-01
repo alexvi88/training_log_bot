@@ -590,31 +590,62 @@ async def cmd_start(message: Message, state: FSMContext):
             await message.answer(warning, reply_markup=keyboards.stale_workout_keyboard(active["id"]))
 
 
-_HELP_TEXT = (
-    "🆘 <b>СПРАВКА ПО ВВОДУ</b>\n\n"
-    "<b>Подход — вес и повторы через пробел или «x»:</b>\n"
-    "• <code>100 8</code> или <code>100x8</code> — 100кг × 8 повторов\n"
-    "• <code>100x8x3</code> или <code>100 8 3</code> — то же самое, но сразу 3 подхода\n"
-    "• <code>8</code> — только повторы, вес возьмётся с последнего подхода "
-    "(для своего веса — подтягивания, отжимания и т.п.)\n"
-    "• <code>+20 8</code> — то же, что <code>20 8</code>; «+» просто для себя, "
-    "если считаешь довеском к своему весу\n"
-    "• <code>100x8@9</code> или <code>100 8 @8.5</code> — с RPE (сложность подхода, 1–10)\n\n"
-    "<b>Несколько подходов одним сообщением</b> — через запятую, точку с запятой "
-    "или с новой строки:\n<code>100 8, 100 7, 95 8</code>\n\n"
-    "<b>Быстрые команды</b> (пока открыто упражнение):\n"
-    "• <code>-</code> — удалить последний подход\n"
-    "• <code>=</code> — повторить последний подход\n"
-    "• <code>!текст</code> — заметка к упражнению, например «!болит плечо»\n"
-    "• <code>2: 100 8</code> — исправить 2-й уже залогированный подход\n"
-    "• <code>?</code> или /help — эта справка\n\n"
-    "🎙 Можно и голосом: запиши войс «сто на восемь»."
+# Справка живёт в двух экранах: первый закрывает то, что нужно 95% времени
+# (записать подход, поправить последний), остальное — RPE, заметки, правки
+# задним числом — прячется за кнопкой. Полотно из полутора десятков строк
+# читать посреди подхода никто не станет, а пять строк — прочитают.
+# Пример слева от тирe — жирным моноширинным: капсом цифры не выделишь, а
+# глазу нужно за что-то зацепиться, чтобы читать справку по левой колонке.
+_HELP_SHORT = (
+    "🆘 <b>КАК ЗАПИСАТЬ ПОДХОД</b>\n\n"
+    "<b><code>100 8</code></b> — 100 кг × 8 повторов\n"
+    "<b><code>100 8 3</code></b> — сразу 3 таких подхода\n"
+    "<b><code>8</code></b> — только повторы, вес — как в прошлом подходе\n"
+    "<b><code>100 8, 100 7, 95 8</code></b> — несколько подходов сразу\n\n"
+    "<b><code>-</code></b> удалить последний · <b><code>=</code></b> повторить последний\n\n"
+    "🎙 Или голосом: «сто на восемь»."
+)
+
+_HELP_FULL = (
+    "🆘 <b>ВСЁ ПРО ВВОД</b>\n\n"
+    "<b>ПОДХОД:</b>\n"
+    "• <b><code>100 8</code></b> = <b><code>100x8</code></b> — 100 кг × 8 повторов\n"
+    "• <b><code>100 8 3</code></b> = <b><code>100x8x3</code></b> — сразу 3 подхода\n"
+    "• <b><code>8</code></b> — только повторы, вес возьмётся с прошлого подхода "
+    "(удобно для своего веса — подтягивания, отжимания)\n"
+    "• <b><code>+20 8</code></b> — то же, что <code>20 8</code>; «+» для себя, "
+    "если считаешь это довеском к своему весу\n"
+    "• <b><code>100x8@9</code></b> — RPE, сложность подхода 1–10\n"
+    "• несколько подходов сразу — через запятую, «;» или с новой строки\n\n"
+    "<b>ПОКА ОТКРЫТО УПРАЖНЕНИЕ:</b>\n"
+    "• <b><code>-</code></b> — удалить последний подход\n"
+    "• <b><code>=</code></b> — повторить последний подход\n"
+    "• <b><code>!болит плечо</code></b> — заметка к упражнению\n"
+    "• <b><code>2: 100 8</code></b> — исправить 2-й залогированный подход\n"
+    "• <b><code>?</code></b> или /help — эта справка\n\n"
+    "🎙 Или голосом: «сто на восемь»."
 )
 
 
 @router.message(Command("help"))
 async def cmd_help(message: Message, state: FSMContext):
-    await message.answer(_HELP_TEXT, parse_mode="HTML")
+    await message.answer(
+        _HELP_SHORT, parse_mode="HTML", reply_markup=keyboards.help_keyboard(expanded=False)
+    )
+
+
+@router.callback_query(F.data.in_({"help:more", "help:less"}))
+async def help_toggle(callback: CallbackQuery, state: FSMContext):
+    """Разворачивает/сворачивает справку прямо в том же сообщении — оно висит
+    ответом на «?» посреди тренировки, так что переезжать вниз чата ему незачем."""
+    expanded = callback.data == "help:more"
+    with suppress(TelegramBadRequest):
+        await callback.message.edit_text(
+            _HELP_FULL if expanded else _HELP_SHORT,
+            parse_mode="HTML",
+            reply_markup=keyboards.help_keyboard(expanded=expanded),
+        )
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("stale:finish:"))
@@ -1594,7 +1625,9 @@ async def log_set_text(message: Message, state: FSMContext):
     active = data.get("active_exercise_id")
 
     if text == "?":
-        await message.reply(_HELP_TEXT, parse_mode="HTML")
+        await message.reply(
+            _HELP_SHORT, parse_mode="HTML", reply_markup=keyboards.help_keyboard(expanded=False)
+        )
         return
 
     if text == "-":

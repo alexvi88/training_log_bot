@@ -33,6 +33,16 @@ def _make_message(user_id: int, text: str, message_id: int = 55):
     return msg
 
 
+def _make_callback(user_id: int, data: str):
+    cb = MagicMock()
+    cb.data = data
+    cb.from_user = SimpleNamespace(id=user_id, username="tester")
+    cb.answer = AsyncMock()
+    cb.message = _make_message(user_id, "")
+    cb.message.edit_text = AsyncMock()
+    return cb
+
+
 async def _setup_logging(db, user_id: int, sets: list[tuple[float, int]] | None = None):
     group_id = await db.create_muscle_group(user_id, "Грудь")
     ex_id = await db.create_exercise(user_id, "Жим лёжа", group_id)
@@ -240,8 +250,33 @@ async def test_help_command_sends_the_reference(fresh_db, user_id):
     message.answer.assert_awaited_once()
     text, kwargs = message.answer.await_args.args[0], message.answer.await_args.kwargs
     assert kwargs.get("parse_mode") == "HTML"
-    for needle in ("100 8", "100x8x3", "@9", "!текст", "2: 100 8", "-", "="):
+    # The first screen stays short — the basics only, the rest is a tap away.
+    for needle in ("100 8", "100 8 3", "-", "="):
         assert needle in text
+    assert "@9" not in text and "2: 100 8" not in text
+    assert kwargs["reply_markup"].inline_keyboard[0][0].callback_data == "help:more"
+
+
+@pytest.mark.asyncio
+async def test_help_expands_to_the_full_reference_and_back(fresh_db, user_id):
+    db = fresh_db
+    state, ex_id, block_id = await _setup_logging(db, user_id, [(100.0, 8)])
+    callback = _make_callback(user_id, "help:more")
+
+    await workout.help_toggle(callback, state)
+
+    text, kwargs = (
+        callback.message.edit_text.await_args.args[0],
+        callback.message.edit_text.await_args.kwargs,
+    )
+    for needle in ("@9", "!болит плечо", "2: 100 8", "+20 8"):
+        assert needle in text
+    assert kwargs["reply_markup"].inline_keyboard[0][0].callback_data == "help:less"
+
+    callback.data = "help:less"
+    await workout.help_toggle(callback, state)
+    collapsed = callback.message.edit_text.await_args.args[0]
+    assert "@9" not in collapsed
 
 
 @pytest.mark.asyncio
@@ -254,7 +289,7 @@ async def test_question_mark_shows_help_without_touching_the_workout(fresh_db, u
 
     message.reply.assert_awaited_once()
     text = message.reply.await_args.args[0]
-    assert "СПРАВКА" in text
+    assert "КАК ЗАПИСАТЬ ПОДХОД" in text
     assert message.reply.await_args.kwargs.get("parse_mode") == "HTML"
     # Nothing about the in-progress exercise changed — it's a pure lookup.
     assert len(await db.list_sets_for_block(block_id)) == 1
