@@ -446,14 +446,14 @@ async def test_custom_photo_overrides_bundled_demo_photos(fresh_db, user_id):
 
 async def test_card_offers_add_description_for_a_plain_custom_exercise():
     ex = {"id": 1, "name": "pull down", "display_name": "pull down", "description": None, "custom_photo_file_id": None}
-    text, kb = exercises._exercise_detail_view(ex, with_info=False)
+    kb = exercises._exercise_edit_menu_keyboard(ex)
     labels = [b.text for row in kb.inline_keyboard for b in row]
     assert "📝 Описание" in labels
 
 
 async def test_card_offers_write_own_when_a_template_default_already_shows():
     ex = {"id": 1, "name": "Присед со штангой", "display_name": "Присед со штангой", "description": None, "custom_photo_file_id": None}
-    text, kb = exercises._exercise_detail_view(ex, with_info=False)
+    kb = exercises._exercise_edit_menu_keyboard(ex)
     labels = [b.text for row in kb.inline_keyboard for b in row]
     assert "📝 Своё описание" in labels
     assert "📝 Описание" not in labels
@@ -464,37 +464,35 @@ async def test_card_offers_edit_description_once_the_user_has_one():
         "id": 1, "name": "pull down", "display_name": "pull down",
         "description": "Тяни к низу груди", "custom_photo_file_id": None,
     }
-    text, kb = exercises._exercise_detail_view(ex, with_info=False)
+    kb = exercises._exercise_edit_menu_keyboard(ex)
     labels = [b.text for row in kb.inline_keyboard for b in row]
     assert "📝 Изменить описание" in labels
 
 
-async def test_card_layout_is_one_button_per_row_except_the_first():
-    """Telegram truncates long Russian labels when two share a row — only the
-    two short buttons (Прогресс/Название) may be paired."""
+async def test_card_layout_is_prog_edit_archive_back():
+    """Верхний уровень карточки — Прогресс/Редактировать одной строкой, затем
+    Архивировать и Назад каждая своей строкой; конкретные правки (название,
+    группа, описание, фото) спрятаны за "Редактировать"."""
     ex = {"id": 1, "name": "pull down", "display_name": "pull down", "description": None, "custom_photo_file_id": None}
     _text, kb = exercises._exercise_detail_view(ex, with_info=False)
     rows = kb.inline_keyboard
-    assert len(rows[0]) == 2
-    assert all(len(row) == 1 for row in rows[1:])
+    assert [b.text for b in rows[0]] == ["📈 Прогресс", "✏️ Редактировать"]
+    assert [b.text for row in rows[1:] for b in row] == ["🗑 Архивировать", "⬅️ Назад"]
 
 
-async def test_card_layout_stays_one_per_row_with_delete_photo_button():
+async def test_edit_menu_offers_delete_photo_button_when_one_exists():
     ex = {
         "id": 1, "name": "pull down", "display_name": "pull down",
         "description": None, "custom_photo_file_id": "FILE_ID",
     }
-    _text, kb = exercises._exercise_detail_view(ex, with_info=False)
-    rows = kb.inline_keyboard
-    assert len(rows[0]) == 2
-    assert all(len(row) == 1 for row in rows[1:])
-    labels = [b.text for row in rows for b in row]
+    kb = exercises._exercise_edit_menu_keyboard(ex)
+    labels = [b.text for row in kb.inline_keyboard for b in row]
     assert "🗑 Удалить фото" in labels
 
 
 async def test_photo_button_label_offers_to_add_when_none_exists():
     ex = {"id": 1, "name": "pull down", "display_name": "pull down", "description": None, "custom_photo_file_id": None}
-    _text, kb = exercises._exercise_detail_view(ex, with_info=False)
+    kb = exercises._exercise_edit_menu_keyboard(ex)
     labels = [b.text for row in kb.inline_keyboard for b in row]
     assert "📷 Добавить фото" in labels
     assert "📷 Заменить фото" not in labels
@@ -502,7 +500,7 @@ async def test_photo_button_label_offers_to_add_when_none_exists():
 
 async def test_photo_button_label_offers_to_replace_when_one_exists():
     ex = {"id": 1, "name": "pull down", "display_name": "pull down", "description": None, "custom_photo_file_id": "FILE_ID"}
-    _text, kb = exercises._exercise_detail_view(ex, with_info=False)
+    kb = exercises._exercise_edit_menu_keyboard(ex)
     labels = [b.text for row in kb.inline_keyboard for b in row]
     assert "📷 Заменить фото" in labels
     assert "📷 Добавить фото" not in labels

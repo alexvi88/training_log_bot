@@ -6,11 +6,15 @@ whatever case the sentence needs ("убери pull down", "замени на т�
 misses all of that, so names are compared word by word on their stems: two
 words match when one is the other with a different Russian ending.
 
-Overlapping matches are all kept: "жим лёжа узким хватом" in the text matches
-both that exercise and the "Жим лёжа" inside it, and guessing which one the
-trainer meant would silently drop the right card. Both get a button, the more
-specific one first, and the user picks. Only the first few survive — a wall of
-buttons under an answer is worse than none.
+Two matches that overlap in the text are kept together only when they're
+truly the same exercise — same `name`, just different equipment/attachment
+("Жим лёжа · штанга" vs "Жим лёжа · гантели"): which variant the trainer
+meant can't be told from the text alone, so both get a button, more specific
+first, and the user picks. Any other overlap is between two unrelated
+exercises whose words just happen to collide ("pull down" sitting inside
+"abs - pull down block"), and only the longer/more specific match survives —
+showing a card for an exercise the trainer never actually meant is worse than
+not showing one at all.
 """
 
 import os
@@ -22,6 +26,11 @@ import db
 # Столько кнопок максимум вешаем под ответ: тренер может упомянуть пять
 # упражнений в одном абзаце, но клавиатура на пять строк перекрывает сам ответ.
 MAX_MENTIONS = 3
+
+# Верхняя граница на то, сколько упоминаний вообще держим ради пролистывания
+# (см. keyboards.ai_trainer_keyboard) — id всех найденных упражнений едут в
+# callback_data кнопок-стрелок, а у Telegram там жёсткий лимит в 64 байта.
+MAX_MENTIONS_TOTAL = 6
 
 _WORD_RE = re.compile(r"[а-яa-z0-9]+")
 
@@ -85,13 +94,54 @@ def find_mentions(
                 candidates.append((match, len(needle), ex))
                 break
 
-    # Пересекающиеся совпадения не схлопываем: на «жим лёжа узким хватом»
-    # подходят и он сам, и «Жим лёжа» внутри него — какое из них имел в виду
-    # тренер, по тексту не решить, так что показываем оба и выбирает
-    # пользователь. Порядок — по месту в тексте, при равном начале выше стоит
-    # более конкретное (длинное) название.
-    candidates.sort(key=lambda c: (c[0], -c[1]))
-    return [ex for _, _, ex in candidates[:limit]]
+    # Совпадения, которые пересекаются в тексте, схлопываем в кластеры — но
+    # оставляем оба (все) совпадения кластера только если это буквально одно
+    # и то же упражнение (одинаковый `name`, отличается только оснастка/хват).
+    # Для любого другого пересечения оставляем один, самый длинный/конкретный
+    # матч — иначе случайное совпадение слов между двумя разными упражнениями
+    # («pull down» внутри «abs - pull down block») давало бы кнопку на
+    # упражнение, которое тренер вообще не упоминал.
+    def _overlaps(a: tuple[int, int, Any], b: tuple[int, int, Any]) -> bool:
+        a_start, a_len, _ = a
+        b_start, b_len, _ = b
+        return a_start < b_start + b_len and b_start < a_start + a_len
+
+    n = len(candidates)
+    parent = list(range(n))
+
+    def _find(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    def _union(i: int, j: int) -> None:
+        ri, rj = _find(i), _find(j)
+        if ri != rj:
+            parent[ri] = rj
+
+    for i in range(n):
+        for j in range(i + 1, n):
+            if _overlaps(candidates[i], candidates[j]):
+                _union(i, j)
+
+    clusters: dict[int, list[int]] = {}
+    for i in range(n):
+        clusters.setdefault(_find(i), []).append(i)
+
+    kept = []
+    for idxs in clusters.values():
+        cluster = [candidates[i] for i in idxs]
+        names = {c[2]["name"] for c in cluster}
+        if len(names) == 1:
+            kept.extend(cluster)
+        else:
+            kept.append(max(cluster, key=lambda c: (c[1], -c[0])))
+
+    # Порядок — по месту в тексте, при равном начале выше стоит более
+    # конкретное (длинное) название.
+    kept.sort(key=lambda c: (c[0], -c[1]))
+    return [ex for _, _, ex in kept[:limit]]
 
 
 async def find_in_text(

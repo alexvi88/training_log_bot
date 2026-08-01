@@ -175,7 +175,9 @@ async def ai_keyboard(user_id: int, answer: Optional[str] = None) -> InlineKeybo
     пользователя становятся кнопками-ссылками на свои карточки.
     """
     active = await db.get_active_workout(user_id)
-    mentioned = await exercise_mentions.find_in_text(user_id, answer)
+    mentioned = await exercise_mentions.find_in_text(
+        user_id, answer, limit=exercise_mentions.MAX_MENTIONS_TOTAL
+    )
     return keyboards.ai_trainer_keyboard(has_active_workout=bool(active), exercises=mentioned)
 
 
@@ -233,9 +235,32 @@ async def ai_exercise_card(callback: CallbackQuery, state: FSMContext):
     from handlers.exercises import send_exercise_card
 
     ex_id = int(callback.data.split(":")[2])
+    # So the card's "⬅️ Назад" returns here instead of the exercises menu list
+    # — see show_exercise_groups, which clears this once the user actually
+    # enters that menu on its own.
+    await state.update_data(exm_from_ai=True)
     if not await send_exercise_card(callback.message, state, callback.from_user.id, ex_id):
         await callback.answer("Упражнение не найдено", show_alert=True)
         return
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("ai:mpage:"))
+async def ai_mentions_page(callback: CallbackQuery, state: FSMContext):
+    """Стрелки листания упоминаний под ответом тренера — id упомянутых
+    упражнений едут прямо в callback_data (см. keyboards.ai_trainer_keyboard),
+    так что тут только перерисовываем клавиатуру, не трогая сам текст ответа."""
+    _, _, page_str, ids_csv = callback.data.split(":", 3)
+    page = int(page_str)
+    exercises = []
+    for raw_id in ids_csv.split(","):
+        ex = await db.get_exercise(int(raw_id))
+        if ex is not None and ex["user_id"] == callback.from_user.id:
+            exercises.append(ex)
+    active = await db.get_active_workout(callback.from_user.id)
+    kb = keyboards.ai_trainer_keyboard(has_active_workout=bool(active), exercises=exercises, page=page)
+    with suppress(TelegramBadRequest):
+        await callback.message.edit_reply_markup(reply_markup=kb)
     await callback.answer()
 
 
