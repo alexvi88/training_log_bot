@@ -11,7 +11,9 @@ match wins, at most one push per user per day):
   3. Возвращение     — 21+ days gone, then every 10 days
   4. Плато           — Sundays only, weight stuck despite 12+ reps
   5. Аналитика       — Sundays only, weekly digest
-  6. Стикер недели   — one fixed weekday, a wordless sticker and nothing else
+
+Every push is delivered as a photo (the same fixed "coach" image) with the
+push text as its caption.
 
 A separate track, `build_newbie_push`, walks a disjoint pool: users who signed
 up but never finished a single workout. Since these users have no last-workout
@@ -22,11 +24,13 @@ history) — they get their own periodic nudge timed off `users.created_at` inst
 import asyncio
 import datetime as dt
 import logging
+import os
 from dataclasses import dataclass
 from typing import Optional
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramForbiddenError
+from aiogram.types import FSInputFile
 
 import ai_trainer
 import analytics
@@ -35,9 +39,13 @@ import db
 import formatting
 import keyboards
 import push_texts
-import stickers
 
 logger = logging.getLogger(__name__)
+
+PUSH_IMAGE_PATH = os.path.join(os.path.dirname(__file__), "media", "push", "coach_incoming_call.jpg")
+# Telegram hands back a file_id on first upload; re-sending that id costs no
+# upload at all, and every push uses the same image.
+_push_image_file_id: str | None = None
 
 WIN_BACK_START_DAY = 21
 WIN_BACK_REPEAT_DAYS = 10
@@ -54,11 +62,6 @@ class PushDecision:
     category: str
     text: str
     with_cta: bool = True
-
-    @property
-    def is_sticker_only(self) -> bool:
-        """A push whose whole content is the sticker — no message follows it."""
-        return self.category == push_texts.STICKER_ONLY
 
 
 # ---------- pure signal detectors (no I/O, easy to unit test) ----------
@@ -77,13 +80,6 @@ def is_win_back_day(days_since_last: Optional[int]) -> bool:
     if days_since_last is None or days_since_last < WIN_BACK_START_DAY:
         return False
     return (days_since_last - WIN_BACK_START_DAY) % WIN_BACK_REPEAT_DAYS == 0
-
-
-def is_sticker_push_day(today: dt.date) -> bool:
-    """The wordless weekly sticker fires on one fixed weekday, or never if disabled."""
-    if not stickers.is_configured():
-        return False
-    return today.weekday() == config.STICKER_PUSH_WEEKDAY
 
 
 def is_newbie_nudge_day(days_since_signup: int) -> bool:
@@ -191,9 +187,6 @@ async def build_daily_push(telegram_id: int, today: dt.date) -> Optional[PushDec
             )
             return PushDecision(push_texts.WEEKLY_DIGEST, text, with_cta=False)
 
-    if is_sticker_push_day(today):
-        return PushDecision(push_texts.STICKER_ONLY, "", with_cta=False)
-
     return None
 
 
@@ -219,47 +212,39 @@ async def build_newbie_push(telegram_id: int, created_at: str, today: dt.date) -
     return PushDecision(push_texts.NEWBIE_NUDGE, text)
 
 
-STICKER_OCCASION_BY_CATEGORY: dict[str, str] = {
-    push_texts.STREAK_AT_RISK: stickers.NUDGE,
-    push_texts.SKIP_3: stickers.JAB,
-    push_texts.SKIP_5: stickers.JAB,
-    push_texts.SKIP_7: stickers.JAB,
-    push_texts.SKIP_10: stickers.JAB,
-    push_texts.SKIP_14: stickers.JAB,
-    push_texts.WIN_BACK: stickers.WIN_BACK,
-    push_texts.PLATEAU: stickers.NUDGE,
-    push_texts.WEEKLY_DIGEST: stickers.PROGRESS,
-    push_texts.AI_WEEKLY: stickers.PROGRESS,
-    push_texts.NEWBIE_NUDGE: stickers.GREETING,
-    push_texts.STICKER_ONLY: stickers.RANDOM,
-}
+def _push_image() -> FSInputFile | str:
+    """Cached file_id after the first send, else the file itself."""
+    return _push_image_file_id or FSInputFile(PUSH_IMAGE_PATH)
+
+
+# Telegram's hard limit on a photo caption. Every rotation-pool push text is
+# well under this, but the AI weekly digest is a free-form model completion
+# and needs the safety net.
+CAPTION_LIMIT = 1024
+
+
+def _as_caption(text: str) -> str:
+    if len(text) <= CAPTION_LIMIT:
+        return text
+    return text[: CAPTION_LIMIT - 1].rstrip() + "…"
 
 
 async def _deliver(bot: Bot, telegram_id: int, decision: PushDecision) -> None:
+    global _push_image_file_id
     kb = keyboards.push_cta_keyboard() if decision.with_cta else None
-    # Sticker first, text second: the push's whole job is its CTA button, and a
-    # sticker landing under it would push the button out from under the thumb.
-    # Silent, so one push is still one notification, not two.
-    occasion = STICKER_OCCASION_BY_CATEGORY.get(decision.category)
-    sticker_sent = False
-    if occasion is not None:
-        sticker_sent = await stickers.send_to_user(
-            bot, telegram_id, occasion, silent=not decision.is_sticker_only
-        )
-    if decision.is_sticker_only:
-        # Nothing follows the sticker, so a sticker that didn't go out means no
-        # push happened at all — recording one would burn this user's daily slot
-        # (and, on the sticker day, their whole week) on silence.
-        if sticker_sent:
-            await db.record_push(telegram_id, decision.category, "")
-        return
     try:
-        await bot.send_message(
-            chat_id=telegram_id, text=decision.text, reply_markup=kb, disable_notification=False
+        message = await bot.send_photo(
+            chat_id=telegram_id,
+            photo=_push_image(),
+            caption=_as_caption(decision.text),
+            reply_markup=kb,
+            disable_notification=False,
         )
     except TelegramForbiddenError:
         logger.info("User %s blocked the bot, skipping push", telegram_id)
         return
+    if _push_image_file_id is None:
+        _push_image_file_id = message.photo[-1].file_id
     await db.record_push(telegram_id, decision.category, decision.text)
 
 
