@@ -313,6 +313,61 @@ async def test_cancelling_rename_shows_exercise_card_not_list(fresh_db, user_id)
     assert await state.get_state() == ExerciseManage.picking_exercise
 
 
+# ---------- muscle group edit ----------
+
+
+async def test_edit_group_button_shows_group_picker(fresh_db, user_id):
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    other_group_id = await db.create_muscle_group(user_id, "Спина")
+    ex_id = await db.create_exercise(user_id, "Жим лёжа", group_id)
+
+    state = await _make_state(user_id, exm_group_id=group_id)
+    callback = _make_exercise_callback(user_id, f"exm:editgroup:{ex_id}")
+    await exercises.exm_edit_group(callback, state)
+
+    assert await state.get_state() == ExerciseManage.editing_group
+    text = callback.message.answer.await_args.args[0]
+    assert "Грудь" in text
+    kb = callback.message.answer.await_args.kwargs["reply_markup"]
+    callback_datas = [b.callback_data for row in kb.inline_keyboard for b in row]
+    assert f"exmeditgrp:grp:{other_group_id}" in callback_datas
+    assert f"exm:ex:{ex_id}" in callback_datas
+
+
+async def test_picking_a_group_moves_the_exercise_and_returns_to_its_card(fresh_db, user_id):
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    other_group_id = await db.create_muscle_group(user_id, "Спина")
+    ex_id = await db.create_exercise(user_id, "Жим лёжа", group_id)
+
+    state = await _make_state(user_id, exm_group_id=group_id, exm_exercise_id=ex_id)
+    await state.set_state(ExerciseManage.editing_group)
+    callback = _make_exercise_callback(user_id, f"exmeditgrp:grp:{other_group_id}")
+
+    await exercises.exm_edit_group_picked(callback, state)
+
+    ex = await db.get_exercise(ex_id)
+    assert ex["primary_group_id"] == other_group_id
+    assert await state.get_state() == ExerciseManage.picking_exercise
+    callback.answer.assert_awaited_once_with("Группа изменена")
+    text = callback.message.answer.await_args.args[0]
+    assert "Спина" in text
+
+
+async def test_edit_group_rejects_someone_elses_exercise(fresh_db, user_id):
+    db = fresh_db
+    other_group = await db.create_muscle_group(999, "Грудь")
+    other_ex = await db.create_exercise(999, "Жим лёжа", other_group)
+
+    state = await _make_state(user_id)
+    callback = _make_exercise_callback(user_id, f"exm:editgroup:{other_ex}")
+
+    await exercises.exm_edit_group(callback, state)
+
+    callback.answer.assert_awaited_once_with("Упражнение не найдено", show_alert=True)
+
+
 # ---------- exercise photo upload ----------
 
 

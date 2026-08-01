@@ -118,8 +118,10 @@ async def _show_exercise_list(callback: CallbackQuery, state: FSMContext):
     b.row(InlineKeyboardButton(text="➕ Новое упражнение", callback_data="exm:newex"))
     if group is not None and group["user_id"] is not None:
         b.row(InlineKeyboardButton(text="🗑 Архивировать группу", callback_data=f"exm:archivegrpask:{group_id}"))
-    b.row(InlineKeyboardButton(text="🗄 Архив", callback_data="exm:archivelist"))
-    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="exm:backgroups"))
+    b.row(
+        InlineKeyboardButton(text="🗄 Архив", callback_data="exm:archivelist"),
+        InlineKeyboardButton(text="⬅️ Назад", callback_data="exm:backgroups"),
+    )
     title = group["name"] if group is not None else "Все упражнения"
     title_html = f"<b>{escape(title.upper())}</b>"
     if exercises:
@@ -218,7 +220,7 @@ async def exm_add_template(callback: CallbackQuery, state: FSMContext):
     with suppress(TelegramBadRequest):
         await callback.message.delete()
     has_images = await _send_exercise_images(callback.message, ex, state)
-    text, kb = _exercise_detail_view(ex, with_info=not has_images)
+    text, kb = await _exercise_detail_payload(ex, with_info=not has_images)
     await callback.message.answer(text, reply_markup=kb, parse_mode="HTML")
     await callback.answer()
 
@@ -243,7 +245,7 @@ async def _exm_finish_new_exercise_name(answerer, state: FSMContext, user_id: in
     await state.update_data(exm_exercise_id=ex_id)
     await state.set_state(ExerciseManage.picking_exercise)
     ex = await db.get_exercise(ex_id)
-    text, kb = _exercise_detail_view(ex)
+    text, kb = await _exercise_detail_payload(ex)
     await answerer.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
@@ -321,7 +323,7 @@ async def exm_new_exercise_group_picked(callback: CallbackQuery, state: FSMConte
     await state.update_data(exm_exercise_id=ex_id, exm_new_name=None)
     await state.set_state(ExerciseManage.picking_exercise)
     ex = await db.get_exercise(ex_id)
-    text, kb = _exercise_detail_view(ex)
+    text, kb = await _exercise_detail_payload(ex)
     await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML")
     await callback.answer()
 
@@ -360,8 +362,10 @@ async def exm_archive_group(callback: CallbackQuery, state: FSMContext):
     await show_exercise_groups(callback, state)
 
 
-def _exercise_info_text(ex, with_created: bool = True) -> str:
+def _exercise_info_text(ex, with_created: bool = True, group_name: str | None = None) -> str:
     info = [f"Название: <b>{escape(ex['name'])}</b>"]
+    if group_name:
+        info.append(f"Группа: {escape(group_name)}")
     if ex["equipment"]:
         info.append(f"Оснастка: {ex['equipment']}")
     if ex["unilateral"]:
@@ -376,7 +380,19 @@ def _exercise_info_text(ex, with_created: bool = True) -> str:
     return "\n".join(info)
 
 
-def _exercise_detail_view(ex, with_info: bool = True):
+async def _exercise_group_name(ex) -> str | None:
+    if not ex["primary_group_id"]:
+        return None
+    group = await db.get_muscle_group(ex["primary_group_id"])
+    return group["name"] if group else None
+
+
+async def _exercise_detail_payload(ex, with_info: bool = True):
+    """_exercise_detail_view with the exercise's group name looked up for it."""
+    return _exercise_detail_view(ex, with_info=with_info, group_name=await _exercise_group_name(ex))
+
+
+def _exercise_detail_view(ex, with_info: bool = True, group_name: str | None = None):
     if ex["description"]:
         description_label = "📝 Изменить описание"
     elif exercise_descriptions.get_description(ex["name"]):
@@ -389,6 +405,7 @@ def _exercise_detail_view(ex, with_info: bool = True):
     b = InlineKeyboardBuilder()
     b.button(text="📈 Прогресс", callback_data=f"prog:ex:{ex['id']}:m")
     b.button(text="✏️ Название", callback_data=f"exm:editname:{ex['id']}")
+    b.button(text="✏️ Группа", callback_data=f"exm:editgroup:{ex['id']}")
     b.button(text="🗑 Архивировать", callback_data=f"exm:archiveask:{ex['id']}")
     b.button(text=photo_label, callback_data=f"exm:addphoto:{ex['id']}")
     b.button(text=description_label, callback_data=f"exm:editdesc:{ex['id']}")
@@ -398,14 +415,14 @@ def _exercise_detail_view(ex, with_info: bool = True):
     # Only "Прогресс"/"Название" are short enough to share a row without
     # Telegram truncating the label — everything else gets its own row.
     if ex["custom_photo_file_id"]:
-        b.adjust(2, 1, 1, 1, 1, 1)
+        b.adjust(2, 1, 1, 1, 1, 1, 1)
     else:
-        b.adjust(2, 1, 1, 1, 1)
+        b.adjust(2, 1, 1, 1, 1, 1)
     # Even when the details went out as a photo caption, the button screen keeps
     # the name: the photo can scroll out of view, and a bare "Управление
     # упражнением:" doesn't say which exercise the buttons act on.
     text = (
-        _exercise_info_text(ex)
+        _exercise_info_text(ex, group_name=group_name)
         if with_info
         else f"<b>{escape(ex['display_name'])}</b>\nУправление упражнением:"
     )
@@ -417,16 +434,23 @@ async def _send_exercise_images(message: Message, ex, state: FSMContext) -> bool
     caption. A user-uploaded custom photo takes priority over the bundled
     demo photos. Returns whether any were sent."""
     await _clear_exercise_media(message.bot, message.chat.id, state)
+    group_name = await _exercise_group_name(ex)
     if ex["custom_photo_file_id"]:
         sent = await message.answer_photo(
-            ex["custom_photo_file_id"], caption=_exercise_info_text(ex), parse_mode="HTML"
+            ex["custom_photo_file_id"], caption=_exercise_info_text(ex, group_name=group_name), parse_mode="HTML"
         )
         await state.update_data(exm_media_msg_ids=[sent.message_id])
         return True
     images = exercise_media.get_images(ex["name"])
     if not images:
         return False
-    media = [InputMediaPhoto(media=FSInputFile(images[0]), caption=_exercise_info_text(ex), parse_mode="HTML")]
+    media = [
+        InputMediaPhoto(
+            media=FSInputFile(images[0]),
+            caption=_exercise_info_text(ex, group_name=group_name),
+            parse_mode="HTML",
+        )
+    ]
     media += [InputMediaPhoto(media=FSInputFile(p)) for p in images[1:]]
     sent = await message.answer_media_group(media)
     await state.update_data(exm_media_msg_ids=[m.message_id for m in sent])
@@ -446,7 +470,7 @@ async def send_exercise_card(message: Message, state: FSMContext, user_id: int, 
     await state.set_state(ExerciseManage.picking_exercise)
     await state.update_data(exm_exercise_id=ex_id)
     has_images = await _send_exercise_images(message, ex, state)
-    text, kb = _exercise_detail_view(ex, with_info=not has_images)
+    text, kb = await _exercise_detail_payload(ex, with_info=not has_images)
     await message.answer(text, reply_markup=kb, parse_mode="HTML")
     return True
 
@@ -458,7 +482,7 @@ async def _render_exercise_card(callback: CallbackQuery, state: FSMContext, ex_i
         return
     await state.update_data(exm_exercise_id=ex_id)
     has_images = await _send_exercise_images(callback.message, ex, state)
-    text, kb = _exercise_detail_view(ex, with_info=not has_images)
+    text, kb = await _exercise_detail_payload(ex, with_info=not has_images)
     await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML")
     await callback.answer()
 
@@ -466,7 +490,8 @@ async def _render_exercise_card(callback: CallbackQuery, state: FSMContext, ex_i
 @router.callback_query(
     StateFilter(
         ExerciseManage.picking_exercise, ExerciseManage.editing_name,
-        ExerciseManage.editing_description, ExerciseManage.awaiting_photo,
+        ExerciseManage.editing_group, ExerciseManage.editing_description,
+        ExerciseManage.awaiting_photo,
     ),
     F.data.startswith("exm:ex:"),
 )
@@ -504,7 +529,7 @@ async def exm_photo_entered(message: Message, state: FSMContext):
     await state.set_state(ExerciseManage.picking_exercise)
     ex = await db.get_exercise(ex_id)
     has_images = await _send_exercise_images(message, ex, state)
-    text, kb = _exercise_detail_view(ex, with_info=not has_images)
+    text, kb = await _exercise_detail_payload(ex, with_info=not has_images)
     await message.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
@@ -536,7 +561,7 @@ async def exm_delete_photo(callback: CallbackQuery, state: FSMContext):
     await callback.answer("Фото удалено")
     ex = await db.get_exercise(ex_id)
     has_images = await _send_exercise_images(callback.message, ex, state)
-    text, kb = _exercise_detail_view(ex, with_info=not has_images)
+    text, kb = await _exercise_detail_payload(ex, with_info=not has_images)
     await callback.message.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
@@ -596,7 +621,7 @@ async def _exm_finish_rename(answerer, state: FSMContext, ex_id: int, name: str)
         return
     await state.set_state(ExerciseManage.picking_exercise)
     ex = await db.get_exercise(ex_id)
-    text, kb = _exercise_detail_view(ex)
+    text, kb = await _exercise_detail_payload(ex)
     await answerer.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
@@ -652,6 +677,53 @@ async def exm_rename_longname_declined(callback: CallbackQuery, state: FSMContex
     await callback.answer()
 
 
+@router.callback_query(F.data.startswith("exm:editgroup:"))
+async def exm_edit_group(callback: CallbackQuery, state: FSMContext):
+    ex_id = int(callback.data.split(":")[2])
+    ex = await db.get_exercise(ex_id)
+    if ex is None or ex["user_id"] != callback.from_user.id:
+        await callback.answer("Упражнение не найдено", show_alert=True)
+        return
+    await state.update_data(exm_exercise_id=ex_id)
+    await state.set_state(ExerciseManage.editing_group)
+    groups = await db.list_muscle_groups(callback.from_user.id)
+    kb = keyboards.groups_keyboard(
+        groups, prefix="exmeditgrp", extra_buttons=[("❌ Отмена", f"exm:ex:{ex_id}")]
+    )
+    current = await _exercise_group_name(ex)
+    current_line = f"Текущая группа: <b>{escape(current)}</b>\n\n" if current else ""
+    await ui.safe_edit(
+        callback,
+        f"{current_line}Выбери новую группу мышц для «{escape(ex['display_name'])}»:",
+        reply_markup=kb,
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.callback_query(
+    StateFilter(ExerciseManage.editing_group), F.data.startswith("exmeditgrp:grp:")
+)
+async def exm_edit_group_picked(callback: CallbackQuery, state: FSMContext):
+    raw = callback.data.split(":")[2]
+    if raw == "all":
+        await callback.answer("Выбери конкретную группу", show_alert=True)
+        return
+    group_id = int(raw)
+    data = await state.get_data()
+    ex_id = data.get("exm_exercise_id")
+    ex = await db.get_exercise(ex_id) if ex_id else None
+    if ex is None or ex["user_id"] != callback.from_user.id:
+        await callback.answer("Упражнение не найдено", show_alert=True)
+        return
+    await db.update_exercise_group(ex_id, group_id)
+    await state.set_state(ExerciseManage.picking_exercise)
+    ex = await db.get_exercise(ex_id)
+    await callback.answer("Группа изменена")
+    text, kb = await _exercise_detail_payload(ex)
+    await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML")
+
+
 @router.callback_query(F.data.startswith("exm:editdesc:"))
 async def exm_edit_description(callback: CallbackQuery, state: FSMContext):
     """Own exercises had nowhere to carry a technique description — only catalog
@@ -683,7 +755,7 @@ async def exm_description_entered(message: Message, state: FSMContext):
     await db.set_exercise_description(ex_id, None if description == "-" else description)
     await state.set_state(ExerciseManage.picking_exercise)
     ex = await db.get_exercise(ex_id)
-    text, kb = _exercise_detail_view(ex)
+    text, kb = await _exercise_detail_payload(ex)
     await message.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
