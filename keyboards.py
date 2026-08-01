@@ -641,7 +641,10 @@ def settings_keyboard(
 ) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(text=f"Единицы: {unit}", callback_data="settings:unit")
-    b.button(text=f"Формула 1ПМ: {formula}", callback_data="settings:formula")
+    # "e1RM", not "1ПМ": every card, chart and record in the bot is labelled
+    # e1RM, and a setting that names the metric differently reads as a setting
+    # for something else entirely.
+    b.button(text=f"Формула e1RM: {formula}", callback_data="settings:formula")
     b.button(text=f"🕒 Часовой пояс: {format_utc_offset(tz_offset)}", callback_data="settings:tz")
     progression_label = (
         "🎯 Подсказки прогрессии: вкл" if progression_enabled else "🎯 Подсказки прогрессии: выкл"

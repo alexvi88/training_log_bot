@@ -35,7 +35,8 @@ CREATE TABLE IF NOT EXISTS users (
     ai_comments_enabled INTEGER NOT NULL DEFAULT 0,
     progression_hint_enabled INTEGER NOT NULL DEFAULT 1,
     tz_offset INTEGER NOT NULL DEFAULT 0,
-    stickers_enabled INTEGER NOT NULL DEFAULT 1
+    stickers_enabled INTEGER NOT NULL DEFAULT 1,
+    e1rm_hint_seen INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS muscle_groups (
@@ -315,6 +316,10 @@ async def _migrate_schema() -> None:
         await _conn.execute("ALTER TABLE users ADD COLUMN tz_offset INTEGER NOT NULL DEFAULT 0")
     if "stickers_enabled" not in user_cols:
         await _conn.execute("ALTER TABLE users ADD COLUMN stickers_enabled INTEGER NOT NULL DEFAULT 1")
+    if "e1rm_hint_seen" not in user_cols:
+        # Existing users start at 0 too: they've seen the metric, but never an
+        # explanation of it, so they get the same few showings as a new one.
+        await _conn.execute("ALTER TABLE users ADD COLUMN e1rm_hint_seen INTEGER NOT NULL DEFAULT 0")
     if "reply_keyboard_version" not in user_cols:
         if "reply_keyboard_shown" in user_cols:
             # Superseded by a version counter so future button-set changes can
@@ -561,6 +566,22 @@ async def update_user(telegram_id: int, **fields: Any) -> None:
         await conn().execute(
             f"UPDATE users SET {cols} WHERE telegram_id = ?",
             (*fields.values(), telegram_id),
+        )
+        await conn().commit()
+
+
+async def note_e1rm_hint_shown(telegram_id: int) -> None:
+    """Count one showing of the e1RM footnote (see formatting.E1RM_HINT).
+
+    Capped in SQL rather than by the caller so concurrent screens can't push the
+    counter past the cap — every screen that shows the line calls this, and the
+    line stops appearing once the cap is reached.
+    """
+    async with _write_lock:
+        await conn().execute(
+            "UPDATE users SET e1rm_hint_seen = e1rm_hint_seen + 1 "
+            "WHERE telegram_id = ? AND e1rm_hint_seen < ?",
+            (telegram_id, config.E1RM_HINT_MAX_SHOWS),
         )
         await conn().commit()
 

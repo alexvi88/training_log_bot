@@ -469,12 +469,16 @@ async def _render_progress_view(ex_id: int, user, limit: int, origin: str = "all
     ex = await db.get_exercise(ex_id)
     sessions = await _load_sessions(ex_id, user["e1rm_formula"])
     session_notes = await db.list_workout_notes_for_exercise(ex_id)
+    # Part of the fingerprint, not applied after the fact: the footnote lives
+    # inside the caption's length budget, and it stops being rendered the moment
+    # the user has seen it enough times.
+    show_hint = formatting.e1rm_hint_line(user["e1rm_hint_seen"]) is not None
     fingerprint = (
         tuple(
             (s.started_at, tuple((r.weight, r.reps, r.rpe) for r in s.sets))
             for s in sessions
         ),
-        user["e1rm_formula"], user["unit"], tuple(sorted(session_notes.items())),
+        user["e1rm_formula"], user["unit"], tuple(sorted(session_notes.items())), show_hint,
     )
     cached_user = _progress_view_cache.get(user["telegram_id"])
     by_limit = (
@@ -497,7 +501,7 @@ async def _render_progress_view(ex_id: int, user, limit: int, origin: str = "all
 
         text = formatting.format_progress_screen(
             ex["display_name"], sessions, comparison, records, limit=limit, unit=user["unit"],
-            session_notes=session_notes,
+            session_notes=session_notes, show_e1rm_hint=show_hint,
         )
 
         png = None
@@ -529,6 +533,10 @@ async def prog_show_exercise(callback: CallbackQuery, state: FSMContext):
     await state.update_data(prog_exercise_id=ex_id, prog_origin=origin)
     user = await db.get_user(callback.from_user.id)
     text, png, kb = await _render_progress_view(ex_id, user, keyboards.DEFAULT_PROGRESS_LIMIT, origin)
+    if formatting.E1RM_HINT in text:
+        # Counted on opening the screen only — flipping the period below
+        # re-renders the same screen and shouldn't burn a showing on it.
+        await db.note_e1rm_hint_shown(callback.from_user.id)
 
     if png:
         await ui.safe_edit_photo(callback, png, "chart.png", text, reply_markup=kb, parse_mode="HTML")
