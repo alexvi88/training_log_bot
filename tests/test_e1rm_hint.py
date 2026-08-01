@@ -136,7 +136,8 @@ async def test_workout_card_stays_free_of_the_explanation(fresh_db, user_id):
     assert ex_id  # seeded exercise is what put the e1RM on the card
 
 
-async def test_help_spells_out_the_term():
-    """The /help reference is where a user goes with the question on purpose."""
-    assert "e1RM" in workout._HELP_TEXT
-    assert "расчётный максимум в упражнении" in workout._HELP_TEXT
+async def test_help_spells_out_the_term_on_the_full_screen():
+    """/help is where a user goes with the question on purpose — but only its
+    expanded half: the short screen answers "как записать подход" and nothing else."""
+    assert "расчётный максимум в упражнении" in workout._HELP_FULL
+    assert "e1RM" not in workout._HELP_SHORT

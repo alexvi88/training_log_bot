@@ -387,3 +387,34 @@ async def test_exercise_card_button_rejects_someone_elses_exercise(fresh_db, use
     await ai_trainer.ai_exercise_card(callback, state)
 
     callback.answer.assert_awaited_once_with("Упражнение не найдено", show_alert=True)
+
+
+# ---------- paging through mentions (ai:mpage:) ----------
+
+
+async def test_mentions_page_rerenders_only_the_keyboard(fresh_db, user_id):
+    ids = [await fresh_db.create_exercise(user_id, f"Упражнение {i}", None) for i in range(5)]
+    state = await _make_state(user_id)
+    callback = _make_callback(user_id, f"ai:mpage:1:{','.join(map(str, ids))}")
+    callback.message.edit_reply_markup = AsyncMock()
+
+    await ai_trainer.ai_mentions_page(callback, state)
+
+    callback.message.edit_reply_markup.assert_awaited_once()
+    kb = callback.message.edit_reply_markup.await_args.kwargs["reply_markup"]
+    assert _callbacks(kb) == [f"ai:excard:{ids[3]}", f"ai:excard:{ids[4]}", f"ai:mpage:0:{','.join(map(str, ids))}", "ai:menu"]
+    callback.answer.assert_awaited_once()
+
+
+async def test_mentions_page_drops_ids_that_are_not_the_users_own(fresh_db, user_id):
+    mine = await fresh_db.create_exercise(user_id, "Жим лёжа", None)
+    other = await fresh_db.get_or_create_user(telegram_id=222, username="other")
+    theirs = await fresh_db.create_exercise(other["telegram_id"], "Присед", None)
+    state = await _make_state(user_id)
+    callback = _make_callback(user_id, f"ai:mpage:0:{mine},{theirs}")
+    callback.message.edit_reply_markup = AsyncMock()
+
+    await ai_trainer.ai_mentions_page(callback, state)
+
+    kb = callback.message.edit_reply_markup.await_args.kwargs["reply_markup"]
+    assert _callbacks(kb) == [f"ai:excard:{mine}", "ai:menu"]

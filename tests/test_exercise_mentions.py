@@ -38,11 +38,26 @@ def test_ignores_unmentioned_exercises():
     assert exercise_mentions.find_mentions("Ешь больше белка и спи 8 часов", [BENCH, SQUAT]) == []
 
 
-def test_overlapping_names_both_get_a_button():
-    """«Жим лёжа» внутри «жима лёжа узким хватом» — что имел в виду тренер, по
-    тексту не решить, поэтому показываем оба, конкретное первым."""
+def test_overlapping_names_of_different_exercises_keep_only_the_longer_match():
+    """«Жим лёжа» и «Жим лёжа узким хватом» — разные упражнения (разный `name`),
+    а не оснастка одного и того же: их пересечение в тексте не схлопываем в две
+    кнопки, оставляем только более конкретное совпадение."""
     found = exercise_mentions.find_mentions("Попробуй жим лёжа узким хватом", [BENCH, BENCH_CLOSE])
-    assert _names(found) == ["Жим лёжа узким хватом", "Жим лёжа"]
+    assert _names(found) == ["Жим лёжа узким хватом"]
+
+
+def test_unrelated_exercise_inside_another_ones_name_is_not_mentioned():
+    """«pull down» лежит внутри «abs - pull down block», но это два разных,
+    несвязанных упражнения — вторая кнопка тут не нужна (регрессия на реальном
+    случае: тренер написал только про abs-упражнение, а кнопка появилась и на
+    посторонний «pull down»)."""
+    abs_pulldown = _ex(20, "abs - pull down block")
+    unrelated_pulldown = _ex(21, "pull down")
+    found = exercise_mentions.find_mentions(
+        "У тебя уже есть abs - pull down block — норм вариант.",
+        [abs_pulldown, unrelated_pulldown],
+    )
+    assert _names(found) == ["abs - pull down block"]
 
 
 def test_keeps_order_of_appearance():
@@ -107,6 +122,37 @@ def test_keyboard_shortens_long_labels():
 def test_keyboard_without_mentions_is_unchanged():
     kb = keyboards.ai_trainer_keyboard()
     assert [b.callback_data for row in kb.inline_keyboard for b in row] == ["ai:menu"]
+
+
+# ---------- paging through more mentions than fit on one screen ----------
+
+
+def test_keyboard_shows_only_a_page_of_mentions_with_a_next_arrow():
+    five = [_ex(i, f"Упражнение {i}") for i in range(1, 6)]
+    kb = keyboards.ai_trainer_keyboard(exercises=five)
+    rows = kb.inline_keyboard
+    assert [b.callback_data for row in rows[:3] for b in row] == [
+        "ai:excard:1", "ai:excard:2", "ai:excard:3",
+    ]
+    nav_row = rows[3]
+    assert [b.text for b in nav_row] == ["➡️"]
+    assert nav_row[0].callback_data == "ai:mpage:1:1,2,3,4,5"
+
+
+def test_keyboard_second_page_shows_remaining_mentions_and_a_prev_arrow():
+    five = [_ex(i, f"Упражнение {i}") for i in range(1, 6)]
+    kb = keyboards.ai_trainer_keyboard(exercises=five, page=1)
+    rows = kb.inline_keyboard
+    assert [b.callback_data for row in rows[:2] for b in row] == ["ai:excard:4", "ai:excard:5"]
+    nav_row = rows[2]
+    assert [b.text for b in nav_row] == ["⬅️"]
+    assert nav_row[0].callback_data == "ai:mpage:0:1,2,3,4,5"
+
+
+def test_keyboard_with_few_mentions_has_no_paging_arrows():
+    kb = keyboards.ai_trainer_keyboard(exercises=[BENCH, PULLDOWN])
+    callback_datas = [b.callback_data for row in kb.inline_keyboard for b in row]
+    assert not any(cb.startswith("ai:mpage:") for cb in callback_datas)
 
 
 def test_fully_named_variant_goes_first_but_the_other_stays():
