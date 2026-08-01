@@ -21,6 +21,7 @@ import config
 import db
 import exercise_descriptions
 import exercise_media
+import formatting
 import keyboards
 import ui
 from fsm import ExerciseManage
@@ -32,7 +33,7 @@ async def _groups_payload(user_id: int):
     groups = await db.list_muscle_groups(user_id)
     b = InlineKeyboardBuilder()
     for g in groups:
-        b.button(text=g["name"], callback_data=f"exm:grp:{g['id']}")
+        b.button(text=formatting.format_group(g["name"]), callback_data=f"exm:grp:{g['id']}")
     b.button(text="📋 Все", callback_data="exm:grp:all")
     b.adjust(2)
     b.row(InlineKeyboardButton(text="➕ Новая группа", callback_data="exm:newgroup"))
@@ -131,8 +132,8 @@ async def _show_exercise_list(callback: CallbackQuery, state: FSMContext):
         InlineKeyboardButton(text="🗄 Архив", callback_data="exm:archivelist"),
         InlineKeyboardButton(text="⬅️ Назад", callback_data="exm:backgroups"),
     )
-    title = group["name"] if group is not None else "Все упражнения"
-    title_html = f"<b>{escape(title.upper())}</b>"
+    title = formatting.format_group(group["name"]) if group is not None else "ВСЕ УПРАЖНЕНИЯ"
+    title_html = f"<b>{escape(title)}</b>"
     if exercises:
         text = f"{title_html}\n\nТвои упражнения:"
     else:
@@ -352,7 +353,7 @@ async def exm_archive_group_confirm(callback: CallbackQuery, state: FSMContext):
     )
     await ui.safe_edit(
         callback,
-        f"Архивировать группу «{escape(group['name'])}»? "
+        f"Архивировать группу «{escape(formatting.format_group(group['name']))}»? "
         "Просто уберём все её упражнения из списка выбора — история тренировок с ними останется.",
         reply_markup=kb,
     )
@@ -372,9 +373,11 @@ async def exm_archive_group(callback: CallbackQuery, state: FSMContext):
 
 
 def _exercise_info_text(ex, with_created: bool = True, group_name: str | None = None) -> str:
-    info = [f"Название: <b>{escape(ex['name'])}</b>"]
+    # The name is the card's heading, not a labelled field — "Название:" in front
+    # of it only says what is already obvious from it being first and bold.
+    info = [f"<b>{escape(ex['name'])}</b>"]
     if group_name:
-        info.append(f"Группа: {escape(group_name)}")
+        info.append(f"Группа: {escape(formatting.format_group(group_name))}")
     if ex["equipment"]:
         info.append(f"Оснастка: {ex['equipment']}")
     if ex["unilateral"]:
@@ -742,7 +745,9 @@ async def exm_edit_group(callback: CallbackQuery, state: FSMContext):
         groups, prefix="exmeditgrp", extra_buttons=[("❌ Отмена", f"exm:editmenu:{ex_id}")]
     )
     current = await _exercise_group_name(ex)
-    current_line = f"Текущая группа: <b>{escape(current)}</b>\n\n" if current else ""
+    current_line = (
+        f"Текущая группа: <b>{escape(formatting.format_group(current))}</b>\n\n" if current else ""
+    )
     await ui.safe_edit(
         callback,
         f"{current_line}Выбери новую группу мышц для «{escape(ex['display_name'])}»:",

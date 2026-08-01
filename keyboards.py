@@ -6,6 +6,8 @@ from typing import Any, Sequence
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+import formatting
+
 # Сколько символов названия влезает в кнопку под ответом AI-тренера, не
 # растягивая клавиатуру и не обрезаясь самим Telegram.
 AI_MENTION_LABEL_LIMIT = 32
@@ -121,16 +123,23 @@ def groups_keyboard(
     alongside the exercise the "➕ Суперсет" screen was opened from — a
     one-tap shortcut so a habitual pairing skips the group→list picker."""
     b = InlineKeyboardBuilder()
-    for ex_id, name in partner_buttons or []:
-        b.row(InlineKeyboardButton(text=f"⚡ {name}", callback_data=f"{prefix}:partner:{ex_id}"))
     for g in groups:
-        b.button(text=g["name"], callback_data=f"{prefix}:grp:{g['id']}")
+        b.button(text=formatting.format_group(g["name"]), callback_data=f"{prefix}:grp:{g['id']}")
     if show_all:
         b.button(text="📋 Все", callback_data=f"{prefix}:grp:all")
     b.adjust(2)
-    for text, cb in extra_buttons or []:
-        b.row(InlineKeyboardButton(text=text, callback_data=cb))
-    return b.as_markup()
+    # The partner shortcuts go on top, one full-width row each — a group name is
+    # one short word and pairs up two to a row, but an exercise name squeezed
+    # into that half-width column comes out as "triceps block - si…". They can't
+    # just be b.row()'d first either: adjust(2) reflows every row already in the
+    # builder, partner rows included, which is exactly how they ended up there.
+    rows = [
+        [InlineKeyboardButton(text=f"⚡ {name}", callback_data=f"{prefix}:partner:{ex_id}")]
+        for ex_id, name in partner_buttons or []
+    ]
+    rows += b.export()
+    rows += [[InlineKeyboardButton(text=text, callback_data=cb)] for text, cb in extra_buttons or []]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def named_buttons(items: list[tuple[str, str]]) -> list[list[InlineKeyboardButton]]:
@@ -226,9 +235,8 @@ def help_keyboard(expanded: bool) -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
-# A half-width tab fits roughly this many characters before Telegram clips the
-# label itself; a full-width one about twice that.
-_TAB_NAME_MAX = 13
+# A full-width tab fits roughly this many characters before Telegram clips the
+# label itself.
 _TAB_NAME_MAX_WIDE = 28
 
 def _tab_label(name: str, limit: int) -> str:
@@ -259,28 +267,18 @@ def logging_keyboard(
     """
     b = InlineKeyboardBuilder()
     if len(open_items) > 1:
-        # Two per row (not one, as with a single open exercise) so 3+ parallel
-        # exercises don't push the tracker's own text off the bottom of the screen.
-        # A superset of exactly two, though, gets a row each when the short names
-        # don't fit side by side — one wide tab holds about twice the text.
-        def labels(limit: int) -> list[str]:
+        # One tab per row, whatever the size of the superset. Two half-width tabs
+        # per row saved a line but cut every real exercise name down to a stub
+        # ("triceps…"), which is the one thing the tab has to say; a full-width
+        # row holds about twice the text and names them properly.
+        for ex_id, name in open_items:
             # The ▶ marker eats width the label would otherwise get.
-            return [
-                ("▶ " + _tab_label(name, limit - 2)) if ex_id == active_id else _tab_label(name, limit)
-                for ex_id, name in open_items
-            ]
-
-        per_row = 2
-        texts = labels(_TAB_NAME_MAX)
-        if len(open_items) == 2 and any(t.endswith("…") for t in texts):
-            per_row = 1
-            texts = labels(_TAB_NAME_MAX_WIDE)
-        tabs = [
-            InlineKeyboardButton(text=text, callback_data=f"live:switch:{ex_id}")
-            for text, (ex_id, _) in zip(texts, open_items, strict=True)
-        ]
-        for i in range(0, len(tabs), per_row):
-            b.row(*tabs[i : i + per_row])
+            text = (
+                "▶ " + _tab_label(name, _TAB_NAME_MAX_WIDE - 2)
+                if ex_id == active_id
+                else _tab_label(name, _TAB_NAME_MAX_WIDE)
+            )
+            b.row(InlineKeyboardButton(text=text, callback_data=f"live:switch:{ex_id}"))
     top_row = [InlineKeyboardButton(text="➕ Суперсет", callback_data="live:add_exercise")]
     if active_id is not None:
         top_row.append(InlineKeyboardButton(text="📝 Заметка", callback_data=f"live:note:{active_id}"))
@@ -294,9 +292,10 @@ def logging_keyboard(
     return b.as_markup()
 
 
-# Room for the exercise name in "⏭ <name>" before Telegram
-# clips the label — the prefix already eats about half a button's width.
-_SUGGEST_NAME_MAX = 20
+# The suggestion button is full-width and carries nothing but the name, so it
+# holds a real exercise name ("bench press - flat - machine") whole — only the
+# genuinely long ones get cut.
+_SUGGEST_NAME_MAX = 32
 
 
 def suggest_button_label(name: str) -> str:
@@ -317,7 +316,7 @@ def exercise_picker_entry_keyboard(
 ) -> InlineKeyboardMarkup:
     """suggested: (exercise_id, display_name) of what usually follows the just-finished exercise.
 
-    Its button names the exercise ("⏭ leg press") so the
+    Its button names the exercise ("leg press") so the
     choice can be made without reading the hint line above the keyboard; the
     hint is only kept (see handlers.workout._idle_view) when the name had to be
     shortened to fit.
@@ -338,11 +337,12 @@ def exercise_picker_entry_keyboard(
         # Naming the exercise on the button itself is what makes it a one-tap
         # decision — "как в прошлый раз" alone forces a look up at the hint line
         # to find out what would be opened.
-        label = suggest_button_label(name)
-        b.button(text=f"⏭ {label}", callback_data=f"live:suggest:{ex_id}")
+        # No emoji prefix: these buttons are a column of exercise names, and the
+        # icons only ate the width the names needed.
+        b.button(text=suggest_button_label(name), callback_data=f"live:suggest:{ex_id}")
     b.adjust(1)
     for ex_id, name in recent or []:
-        b.row(InlineKeyboardButton(text=f"🕘 {name}", callback_data=f"live:suggest:{ex_id}"))
+        b.row(InlineKeyboardButton(text=name, callback_data=f"live:suggest:{ex_id}"))
     if is_empty:
         b.row(InlineKeyboardButton(text="⬅️ В меню", callback_data="live:finish_workout"))
     else:

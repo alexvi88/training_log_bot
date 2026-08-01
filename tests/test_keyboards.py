@@ -32,32 +32,47 @@ def test_exercise_picker_entry_keyboard_offers_menu_exit_when_empty():
 def test_exercise_picker_entry_keyboard_offers_recent_exercises_one_per_row():
     kb = keyboards.exercise_picker_entry_keyboard(recent=[(5, "Pull down"), (6, "Seated row")])
     texts = _button_texts(kb)
-    assert "🕘 Pull down" in texts
-    assert "🕘 Seated row" in texts
+    assert "Pull down" in texts
+    assert "Seated row" in texts
     cbs = _callback_datas(kb)
     assert "live:suggest:5" in cbs and "live:suggest:6" in cbs
-    recent_rows = [row for row in kb.inline_keyboard if any(b.text.startswith("🕘") for b in row)]
+    recent_rows = [
+        row for row in kb.inline_keyboard
+        if any(b.callback_data.startswith("live:suggest:") for b in row)
+    ]
     assert len(recent_rows) == 2
     assert all(len(row) == 1 for row in recent_rows)
 
 
 def test_exercise_picker_entry_keyboard_names_the_suggested_exercise():
     kb = keyboards.exercise_picker_entry_keyboard(suggested=(7, "leg press"))
-    assert "⏭ leg press" in _button_texts(kb)
+    # No emoji prefix — the buttons are a plain column of exercise names.
+    assert "leg press" in _button_texts(kb)
     assert "live:suggest:7" in _callback_datas(kb)
 
 
 def test_exercise_picker_entry_keyboard_shortens_a_long_suggested_name():
     # Full name is kept, cut down word-boundary-aware with an ellipsis only
     # when it doesn't fit — not shortened to whatever's after a "-" qualifier.
-    kb = keyboards.exercise_picker_entry_keyboard(suggested=(7, "chest press - horizontal machine"))
-    label = next(t for t in _button_texts(kb) if t.startswith("⏭"))
-    assert label == "⏭ chest press -…"
+    kb = keyboards.exercise_picker_entry_keyboard(
+        suggested=(7, "biceps curls - alternating dumbbells")
+    )
+    label = next(
+        b.text for row in kb.inline_keyboard for b in row if b.callback_data == "live:suggest:7"
+    )
+    assert label == "biceps curls - alternating…"
+
+
+def test_exercise_picker_entry_keyboard_keeps_a_normal_length_name_whole():
+    # A real exercise name fits a full-width button — it used to lose half of
+    # itself to a 20-char cut made for a label that also carried an emoji.
+    kb = keyboards.exercise_picker_entry_keyboard(suggested=(7, "bench press - flat - machine"))
+    assert "bench press - flat - machine" in _button_texts(kb)
 
 
 def test_exercise_picker_entry_keyboard_no_recent_row_when_none_given():
     kb = keyboards.exercise_picker_entry_keyboard(recent=None)
-    assert not any(t.startswith("🕘") for t in _button_texts(kb))
+    assert not any(cb.startswith("live:suggest:") for cb in _callback_datas(kb))
 
 
 def _callback_datas(kb):

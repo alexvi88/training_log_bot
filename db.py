@@ -764,13 +764,24 @@ async def list_superset_partners(
     return await cur.fetchall()
 
 
+_FOLLOWUP_MIN_WORKOUTS = 2
+
+
 async def list_common_followups(
     user_id: int, exercise_id: int, limit: int, exclude_ids: tuple[int, ...] = ()
 ) -> list[aiosqlite.Row]:
     """Exercises most often logged *after* `exercise_id` within the same past
     workout (by block order), ranked by how many distinct workouts followed it
-    that way — what the idle "🕘" shortcuts offer once an exercise is finished,
+    that way — what the idle shortcuts offer once an exercise is finished,
     instead of just whatever was logged most recently regardless of sequence.
+
+    A single past pairing isn't a habit: one leg day that happened to end with
+    abs was enough to put "abs - pull down block" on an upper-body screen, and
+    the alphabetical tiebreak between all the other one-off pairings put it
+    first. So a followup has to have happened in at least
+    _FOLLOWUP_MIN_WORKOUTS distinct workouts to be offered at all, and equally
+    frequent ones are broken by recency rather than by name. The caller gets an
+    empty list when nothing qualifies (see handlers.workout._idle_view).
     """
     sql = (
         "SELECT e.*, COUNT(DISTINCT wb2.workout_id) AS followup_count "
@@ -786,8 +797,11 @@ async def list_common_followups(
     if exclude_ids:
         sql += f"AND e.id NOT IN ({','.join('?' * len(exclude_ids))}) "
         params.extend(exclude_ids)
-    sql += "GROUP BY e.id ORDER BY followup_count DESC, e.display_name LIMIT ?"
-    params.append(limit)
+    sql += (
+        "GROUP BY e.id HAVING followup_count >= ? "
+        "ORDER BY followup_count DESC, e.last_used_at DESC LIMIT ?"
+    )
+    params.extend([_FOLLOWUP_MIN_WORKOUTS, limit])
     cur = await conn().execute(sql, params)
     return await cur.fetchall()
 

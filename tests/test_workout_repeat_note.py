@@ -274,21 +274,16 @@ def test_logging_keyboard_note_button_is_labelled():
     assert "📝 Заметка" in texts
 
 
-def test_logging_keyboard_packs_superset_tabs_two_per_row():
+def test_logging_keyboard_puts_every_superset_tab_on_its_own_row():
     open_items = [(1, "Bench press"), (2, "Overhead press - machine"), (3, "Row")]
     kb = keyboards.logging_keyboard(open_items, active_id=1, has_sets=True)
     tab_rows = [
         row for row in kb.inline_keyboard
         if any(b.callback_data.startswith("live:switch:") for b in row)
     ]
-    assert len(tab_rows) == 2  # 3 tabs -> two per row, then the odd one alone
-    assert len(tab_rows[0]) == 2
-    assert len(tab_rows[1]) == 1
-    # The long name is shortened — it's already fully visible in the tracker text.
-    long_tab_text = next(
-        b.text for row in tab_rows for b in row if b.callback_data == "live:switch:2"
-    )
-    assert len(long_tab_text) < len("Overhead press - machine")
+    assert [len(r) for r in tab_rows] == [1, 1, 1]
+    # A full-width row fits the whole name instead of cutting it to a stub.
+    assert tab_rows[1][0].text == "Overhead press - machine"
 
 
 def _tab_rows(kb):
@@ -310,28 +305,17 @@ def test_superset_tabs_show_full_name_falling_back_to_wide_rows():
     assert texts == ["biceps curls - alternating…", "▶ triceps block - single…"]
 
 
-def test_superset_of_two_gets_a_row_each_when_names_do_not_fit_side_by_side():
+def test_superset_of_two_gets_a_row_each():
     long_pair = [(1, "Подтягивания с весом"), (2, "Тяга")]
     rows = _tab_rows(keyboards.logging_keyboard(long_pair, active_id=1, has_sets=True))
     assert [len(r) for r in rows] == [1, 1]
     assert rows[0][0].text == "▶ Подтягивания с весом"  # full name, no ellipsis
 
-    # Short names still share a row — no need to spend two rows on them.
+    # Short names get their own row too — a shared row is what used to cut them.
     short_pair = [(1, "Bench"), (2, "Row")]
     assert [len(r) for r in _tab_rows(
         keyboards.logging_keyboard(short_pair, active_id=1, has_sets=True)
-    )] == [2]
-
-
-def test_three_open_exercises_stay_two_per_row_even_with_long_names():
-    # Full-width tabs for 3+ would push the tracker text off the screen.
-    open_items = [
-        (1, "Приседания со штангой на груди"),
-        (2, "Румынская тяга со штангой"),
-        (3, "Жим ногами в тренажёре"),
-    ]
-    rows = _tab_rows(keyboards.logging_keyboard(open_items, active_id=1, has_sets=True))
-    assert [len(r) for r in rows] == [2, 1]
+    )] == [1, 1]
 
 
 def test_tab_label_cuts_on_a_word_boundary():

@@ -369,7 +369,7 @@ async def test_edit_group_button_shows_group_picker(fresh_db, user_id):
 
     assert await state.get_state() == ExerciseManage.editing_group
     text = callback.message.answer.await_args.args[0]
-    assert "Грудь" in text
+    assert "ГРУДЬ" in text  # the group is always shown uppercase
     kb = callback.message.answer.await_args.kwargs["reply_markup"]
     callback_datas = [b.callback_data for row in kb.inline_keyboard for b in row]
     assert f"exmeditgrp:grp:{other_group_id}" in callback_datas
@@ -393,7 +393,7 @@ async def test_picking_a_group_moves_the_exercise_and_returns_to_its_card(fresh_
     assert await state.get_state() == ExerciseManage.picking_exercise
     callback.answer.assert_awaited_once_with("Группа изменена")
     text = callback.message.answer.await_args.args[0]
-    assert "Спина" in text
+    assert "Группа: СПИНА" in text
 
 
 async def test_edit_group_rejects_someone_elses_exercise(fresh_db, user_id):
