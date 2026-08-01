@@ -966,6 +966,16 @@ async def update_exercise_name(exercise_id: int, name: str) -> bool:
         return True
 
 
+async def update_exercise_group(exercise_id: int, group_id: int) -> None:
+    """Move an exercise to another muscle group in place (same row/id) so its
+    sets and history stay attached to it."""
+    async with _write_lock:
+        await conn().execute(
+            "UPDATE exercises SET primary_group_id = ? WHERE id = ?", (group_id, exercise_id)
+        )
+        await conn().commit()
+
+
 async def touch_exercise_last_used(exercise_id: int) -> None:
     async with _write_lock:
         await conn().execute(

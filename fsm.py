@@ -18,6 +18,7 @@ class ExerciseManage(StatesGroup):
     picking_group = State()
     picking_exercise = State()
     editing_name = State()
+    editing_group = State()
     editing_description = State()
     new_group_name = State()
     creating_exercise_name = State()
