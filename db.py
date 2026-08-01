@@ -315,6 +315,10 @@ async def _migrate_schema() -> None:
         await _conn.execute("ALTER TABLE users ADD COLUMN tz_offset INTEGER NOT NULL DEFAULT 0")
     if "stickers_enabled" not in user_cols:
         await _conn.execute("ALTER TABLE users ADD COLUMN stickers_enabled INTEGER NOT NULL DEFAULT 1")
+    if "e1rm_hint_seen" in user_cols:
+        # Counted showings of the e1RM footnote, back when it faded out after a
+        # few — it lives permanently on the progress screen now.
+        await _conn.execute("ALTER TABLE users DROP COLUMN e1rm_hint_seen")
     if "reply_keyboard_version" not in user_cols:
         if "reply_keyboard_shown" in user_cols:
             # Superseded by a version counter so future button-set changes can

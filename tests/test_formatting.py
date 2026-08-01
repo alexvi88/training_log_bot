@@ -444,8 +444,9 @@ def test_format_progress_screen_shows_each_sessions_own_note():
         "Pull down", sessions, None, records, session_notes={2: "new training scheme"},
     )
 
+    # …, session (newest first), session, e1RM footnote
     blocks = text.split("\n\n")
-    newest, oldest = blocks[-2], blocks[-1]  # newest session first
+    newest, oldest = blocks[-3], blocks[-2]
     assert "📝 <i>new training scheme</i>" in newest
     assert "📝" not in oldest
 

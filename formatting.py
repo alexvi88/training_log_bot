@@ -34,6 +34,17 @@ MESSAGE_LIMIT = 4096
 FOLD_MIN_LINES = 6
 FOLD_MIN_CHARS = 300
 
+# e1RM is an abbreviation for a concept most people have never met, and the
+# number itself gives no hint that it's a calculation rather than a lift that
+# happened. The footnote lives on the progress screen and nowhere else: that's
+# the screen you open to interpret the metric, so a permanent line there is
+# reference material — under the workout card, read after every session, the
+# same line would just be something to scroll past.
+E1RM_HINT = (
+    "ℹ️ <i>e1RM — расчётный максимум в упражнении: какой вес ты смог бы поднять "
+    "на один раз. Считается по весу и повторам, проверять на практике не нужно.</i>"
+)
+
 
 def telegram_length(text: str) -> int:
     """Length as Telegram counts it: markup is parsed into entities and doesn't
@@ -760,11 +771,17 @@ def format_progress_screen(
         _progress_session_block(s, is_bw, notes.get(s.workout_id)) for s in reversed(candidates)
     ]  # newest first
 
+    # A bodyweight exercise's screen is measured in reps and never prints an
+    # e1RM, so there's nothing for the footnote to explain there.
+    footer = None if is_bw else E1RM_HINT
+
     def assemble(keep: list[str]) -> str:
         parts = [header, collapsible_if_long("\n\n".join(keep))]
         if len(window) > len(keep):
             n = plural_ru(len(window), ("тренировка", "тренировки", "тренировок"))
             parts.append(f"Показано {len(keep)} из {len(window)} {n}")
+        if footer:
+            parts.append(footer)
         return "\n\n".join(parts).rstrip()
 
     # Drop the oldest sessions until the whole thing fits the caption cap. The

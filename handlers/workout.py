@@ -623,7 +623,14 @@ _HELP_FULL = (
     "• <b><code>!болит плечо</code></b> — заметка к упражнению\n"
     "• <b><code>2: 100 8</code></b> — исправить 2-й залогированный подход\n"
     "• <b><code>?</code></b> или /help — эта справка\n\n"
-    "🎙 Или голосом: «сто на восемь»."
+    "🎙 Или голосом: «сто на восемь».\n\n"
+    # Только на развёрнутом экране: это не про ввод, а про то, что бот потом
+    # показывает — на коротком оно бы стояло между «как записать подход» и
+    # ответом на вопрос, с которым сюда пришли.
+    "<b>e1RM</b> — расчётный максимум в упражнении: какой вес ты смог бы поднять на один раз. "
+    "Бот считает его по весу и повторам каждого подхода, проверять на практике не нужно. "
+    "Нужен он для сравнения: 100×8 и 110×5 — это примерно один уровень, "
+    "а по одному только весу этого не видно. Формула — в ⚙️ Настройках."
 )
 
 
@@ -2228,6 +2235,8 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
         header = "🔥 <b>Рекорды и сравнения</b>"
         suffix += f"\n{formatting.DIVIDER}\n{header}\n{formatting.collapsible_if_long(highlights)}"
 
+    prefix = "✅ Сохранено как прошлая тренировка\n\n" if is_backfill else ""
+
     # Existing comment (already generated, e.g. from a backfilled workout) shows right
     # away; a fresh one is generated in the background so finishing a workout doesn't
     # block on the LLM call — see _attach_ai_comment below.
@@ -2238,7 +2247,6 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
         existing_comment is None and bool(user["ai_comments_enabled"]) and ai_trainer.is_configured()
     )
 
-    prefix = "✅ Сохранено как прошлая тренировка\n\n" if is_backfill else ""
     full_text = formatting.fit_workout_text(lambda mc: prefix + summary_fn(mc), suffix)
     card_kb = keyboards.workout_card_keyboard(
         workout_id,

@@ -117,7 +117,10 @@ async def settings_formula_confirm(callback: CallbackQuery, state: FSMContext):
     )
     await ui.safe_edit(
         callback,
-        f"Переключить формулу 1ПМ на {new_formula}? Все расчётные максимумы, "
+        f"e1RM — расчётный максимум в упражнении: какой вес ты смог бы поднять на один раз. "
+        f"Считается по весу и повторам, а {new_formula} — просто другая формула "
+        f"этого расчёта.\n\n"
+        f"Переключить на {new_formula}? Все расчётные максимумы, "
         "рекорды и графики пересчитаются — сами подходы не изменятся.",
         reply_markup=kb,
     )
@@ -129,7 +132,7 @@ async def settings_formula(callback: CallbackQuery, state: FSMContext):
     user = await db.get_user(callback.from_user.id)
     new_formula = "brzycki" if user["e1rm_formula"] == "epley" else "epley"
     await db.update_user(callback.from_user.id, e1rm_formula=new_formula)
-    await show_settings(callback, state, alert=f"Формула 1ПМ: {new_formula}")
+    await show_settings(callback, state, alert=f"Формула e1RM: {new_formula}")
 
 
 @router.callback_query(F.data == "settings:formulano")

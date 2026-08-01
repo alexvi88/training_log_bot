@@ -529,7 +529,6 @@ async def prog_show_exercise(callback: CallbackQuery, state: FSMContext):
     await state.update_data(prog_exercise_id=ex_id, prog_origin=origin)
     user = await db.get_user(callback.from_user.id)
     text, png, kb = await _render_progress_view(ex_id, user, keyboards.DEFAULT_PROGRESS_LIMIT, origin)
-
     if png:
         await ui.safe_edit_photo(callback, png, "chart.png", text, reply_markup=kb, parse_mode="HTML")
     else:
