@@ -375,6 +375,11 @@ async def test_exercise_card_button_keeps_the_answer_in_the_chat(fresh_db, user_
     callback.message.edit_text.assert_not_called()
     callback.message.answer.assert_awaited()
     callback.answer.assert_awaited()
+    # "⬅️ Назад" must close the card (see ai_close_exercise_card), not drop
+    # into the exercises menu list.
+    kb = callback.message.answer.await_args.kwargs["reply_markup"]
+    callback_datas = [b.callback_data for row in kb.inline_keyboard for b in row]
+    assert "ai:closecard" in callback_datas
     assert await state.get_state() == "ExerciseManage:picking_exercise"
 
 
@@ -418,3 +423,54 @@ async def test_mentions_page_drops_ids_that_are_not_the_users_own(fresh_db, user
 
     kb = callback.message.edit_reply_markup.await_args.kwargs["reply_markup"]
     assert _callbacks(kb) == [f"ai:excard:{mine}", "ai:menu"]
+
+
+async def test_mentions_page_keeps_catalog_templates_across_pages(fresh_db, user_id):
+    """A page can mix the user's own exercises with not-yet-added catalog
+    templates — templates have no user_id of their own and must not be
+    filtered out by the ownership check meant for the user's own rows."""
+    mine = await fresh_db.create_exercise(user_id, "Жим лёжа", None)
+    templates = await fresh_db.list_all_exercise_templates()
+    template = next(t for t in templates if t["name"] == "Жим гантелей сидя")
+    state = await _make_state(user_id)
+    callback = _make_callback(user_id, f"ai:mpage:0:{mine},{template['id']}")
+    callback.message.edit_reply_markup = AsyncMock()
+
+    await ai_trainer.ai_mentions_page(callback, state)
+
+    kb = callback.message.edit_reply_markup.await_args.kwargs["reply_markup"]
+    assert _callbacks(kb) == [f"ai:excard:{mine}", f"ai:tpladd:{template['id']}", "ai:menu"]
+
+
+# ---------- adding a mentioned catalog template the user doesn't have yet ----------
+
+
+async def test_add_template_forks_it_and_opens_its_card(fresh_db, user_id):
+    templates = await fresh_db.list_all_exercise_templates()
+    template = next(t for t in templates if t["name"] == "Жим гантелей сидя")
+    state = await _make_state(user_id)
+    callback = _make_callback(user_id, f"ai:tpladd:{template['id']}")
+    callback.message.answer_media_group = AsyncMock(
+        return_value=[SimpleNamespace(message_id=11), SimpleNamespace(message_id=12)]
+    )
+
+    await ai_trainer.ai_add_template(callback, state)
+
+    ex = await fresh_db.find_exercise_by_display_name(user_id, "Жим гантелей сидя")
+    assert ex is not None
+    callback.message.answer.assert_awaited()
+    callback.answer.assert_awaited()
+    assert (await state.get_data()).get("exm_from_ai") is True
+
+
+# ---------- closing a card opened from the AI-тренер chat ----------
+
+
+async def test_close_card_just_deletes_it(fresh_db, user_id):
+    state = await _make_state(user_id)
+    callback = _make_callback(user_id, "ai:closecard")
+
+    await ai_trainer.ai_close_exercise_card(callback, state)
+
+    callback.message.delete.assert_awaited_once()
+    callback.answer.assert_awaited_once()

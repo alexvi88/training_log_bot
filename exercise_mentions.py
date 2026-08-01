@@ -1,10 +1,16 @@
-"""Finding the user's own exercises inside free-form AI-trainer text.
+"""Finding exercises — the user's own and the catalog's — inside free-form
+AI-trainer text.
 
 The trainer writes prose, so an exercise it names comes out inflected and in
 whatever case the sentence needs ("убери pull down", "замени на тягу
 горизонтального блока"). A plain substring match against `exercises.name`
 misses all of that, so names are compared word by word on their stems: two
 words match when one is the other with a different Russian ending.
+
+Catalog templates the user hasn't added yet are matched too ("Из каталога на
+плечи бери эти: ...") — see find_in_text, which excludes any template the
+user already owns under the same display name so it doesn't duplicate the
+user's own card with a second "add it" button.
 
 Two matches that overlap in the text are kept together only when they're
 truly the same exercise — same `name`, just different equipment/attachment
@@ -149,5 +155,10 @@ async def find_in_text(
 ) -> list[Any]:
     if not text:
         return []
-    exercises = await db.list_user_exercises(user_id)
-    return find_mentions(text, exercises, limit=limit)
+    own = await db.list_user_exercises(user_id)
+    owned_names = {ex["display_name"].strip().lower() for ex in own}
+    templates = [
+        t for t in await db.list_all_exercise_templates()
+        if t["display_name"].strip().lower() not in owned_names
+    ]
+    return find_mentions(text, list(own) + templates, limit=limit)

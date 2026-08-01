@@ -34,9 +34,9 @@ async def _groups_payload(user_id: int):
     for g in groups:
         b.button(text=g["name"], callback_data=f"exm:grp:{g['id']}")
     b.button(text="📋 Все", callback_data="exm:grp:all")
-    b.button(text="➕ Новая группа", callback_data="exm:newgroup")
-    b.button(text="⬅️ Назад", callback_data="exm:back")
     b.adjust(2)
+    b.row(InlineKeyboardButton(text="➕ Новая группа", callback_data="exm:newgroup"))
+    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="exm:back"))
     return "⚙️ Упражнения — выбери группу мышц:", b.as_markup()
 
 
@@ -85,11 +85,9 @@ async def _clear_exercise_media(bot, chat_id: int, state: FSMContext) -> None:
 
 def _exercise_list_label(ex) -> str:
     """Marks each exercise button with what its card actually has to show:
-    📷 for a reference photo (custom or bundled), 📝 for a text description."""
-    has_photo = bool(ex["custom_photo_file_id"] or exercise_media.get_images(ex["name"]))
+    📝 for a text description."""
     has_description = bool(exercise_descriptions.effective_description(ex))
-    marks = ("📷" if has_photo else "") + ("📝" if has_description else "")
-    return f"{marks} {ex['display_name']}" if marks else ex["display_name"]
+    return f"📝 {ex['display_name']}" if has_description else ex["display_name"]
 
 
 async def _show_exercise_list(callback: CallbackQuery, state: FSMContext):
@@ -400,9 +398,10 @@ async def _exercise_group_name(ex) -> str | None:
 
 async def _exercise_detail_payload(ex, state: FSMContext, with_info: bool = True):
     """_exercise_detail_view with the exercise's group name looked up for it and
-    "⬅️ Назад" pointed wherever this card was actually reached from."""
+    "⬅️ Назад" pointed wherever this card was actually reached from: closing it
+    to reveal the AI-тренер reply underneath, rather than the exercises list."""
     data = await state.get_data()
-    back_cb = "ai:menu" if data.get("exm_from_ai") else "exm:backlist"
+    back_cb = "ai:closecard" if data.get("exm_from_ai") else "exm:backlist"
     return _exercise_detail_view(
         ex, with_info=with_info, group_name=await _exercise_group_name(ex), back_cb=back_cb
     )
@@ -431,26 +430,38 @@ def _exercise_detail_view(
 def _exercise_edit_menu_keyboard(ex) -> InlineKeyboardMarkup:
     """The "✏️ Редактировать" drill-down: renaming, changing group, description
     and photo are all edits — grouping them behind one button keeps the card
-    itself down to Прогресс/Редактировать/Архивировать/Назад."""
+    itself down to Прогресс/Редактировать/Архивировать/Назад. Same ✏️ on all
+    four (they're all "edit this field"), two per row; "Удалить фото" keeps
+    its own 🗑, same as elsewhere in the app, since it's a delete, not an edit."""
     if ex["description"]:
-        description_label = "📝 Изменить описание"
+        description_label = "✏️ Изменить описание"
     elif exercise_descriptions.get_description(ex["name"]):
         # A template default is already shown above — this writes a personal
         # override, so "Добавить" (as if nothing were there) would be misleading.
-        description_label = "📝 Своё описание"
+        description_label = "✏️ Своё описание"
     else:
-        description_label = "📝 Описание"
-    photo_label = "📷 Заменить фото" if ex["custom_photo_file_id"] else "📷 Добавить фото"
+        description_label = "✏️ Описание"
     b = InlineKeyboardBuilder()
     b.button(text="✏️ Название", callback_data=f"exm:editname:{ex['id']}")
     b.button(text="✏️ Группа", callback_data=f"exm:editgroup:{ex['id']}")
     b.button(text=description_label, callback_data=f"exm:editdesc:{ex['id']}")
-    b.button(text=photo_label, callback_data=f"exm:addphoto:{ex['id']}")
+    b.button(text="✏️ Фото", callback_data=f"exm:addphoto:{ex['id']}")
     if ex["custom_photo_file_id"]:
         b.button(text="🗑 Удалить фото", callback_data=f"exm:delphotoask:{ex['id']}")
-    b.button(text="⬅️ Назад", callback_data=f"exm:ex:{ex['id']}")
-    b.adjust(1)
+        b.button(text="⬅️ Назад", callback_data=f"exm:ex:{ex['id']}")
+        b.adjust(2, 2, 1, 1)
+    else:
+        b.button(text="⬅️ Назад", callback_data=f"exm:ex:{ex['id']}")
+        b.adjust(2, 2, 1)
     return b.as_markup()
+
+
+async def _exercise_edit_menu_payload(ex):
+    """Same info text as the card, but with the edit-submenu keyboard — what
+    "✏️ Редактировать" swaps to, and where every edit's "❌ Отмена" now returns
+    (see exm:editmenu: callers below) instead of the full card."""
+    group_name = await _exercise_group_name(ex)
+    return _exercise_info_text(ex, group_name=group_name), _exercise_edit_menu_keyboard(ex)
 
 
 @router.callback_query(F.data.startswith("exm:editmenu:"))
@@ -460,8 +471,12 @@ async def exm_edit_menu(callback: CallbackQuery, state: FSMContext):
     if ex is None or ex["user_id"] != callback.from_user.id:
         await callback.answer("Упражнение не найдено", show_alert=True)
         return
-    with suppress(TelegramBadRequest):
-        await callback.message.edit_reply_markup(reply_markup=_exercise_edit_menu_keyboard(ex))
+    # Also reachable as a "❌ Отмена" target from editing_name/editing_group/
+    # editing_description/awaiting_photo — reset out of whichever of those got
+    # us here, or a later typed message would be mistaken for another attempt.
+    await state.set_state(ExerciseManage.picking_exercise)
+    text, kb = await _exercise_edit_menu_payload(ex)
+    await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML")
     await callback.answer()
 
 
@@ -549,7 +564,7 @@ async def exm_add_photo(callback: CallbackQuery, state: FSMContext):
     await ui.safe_edit(
         callback,
         "Пришли фото упражнения:",
-        reply_markup=keyboards.cancel_keyboard(f"exm:ex:{ex_id}"),
+        reply_markup=keyboards.cancel_keyboard(f"exm:editmenu:{ex_id}"),
     )
     await callback.answer()
 
@@ -578,7 +593,7 @@ async def exm_delete_photo_confirm(callback: CallbackQuery, state: FSMContext):
         return
     kb = keyboards.yes_no_keyboard(
         yes_cb=f"exm:delphotoyes:{ex_id}",
-        no_cb=f"exm:ex:{ex_id}",
+        no_cb=f"exm:editmenu:{ex_id}",
         yes_text="🗑 Удалить",
         no_text="❌ Отмена",
     )
@@ -644,7 +659,7 @@ async def exm_edit_name(callback: CallbackQuery, state: FSMContext):
     await ui.safe_edit(
         callback,
         f"Текущее название: <b>{escape(ex['name'])}</b>\n\nНапиши новое название упражнения:",
-        reply_markup=keyboards.cancel_keyboard(f"exm:ex:{ex_id}"),
+        reply_markup=keyboards.cancel_keyboard(f"exm:editmenu:{ex_id}"),
         parse_mode="HTML",
     )
     await callback.answer()
@@ -707,7 +722,7 @@ async def exm_rename_longname_declined(callback: CallbackQuery, state: FSMContex
         await callback.message.delete()
     await callback.message.answer(
         f"Текущее название: <b>{escape(ex['name'])}</b>\n\nНапиши новое название упражнения:",
-        reply_markup=keyboards.cancel_keyboard(f"exm:ex:{ex_id}"),
+        reply_markup=keyboards.cancel_keyboard(f"exm:editmenu:{ex_id}"),
         parse_mode="HTML",
     )
     await callback.answer()
@@ -724,7 +739,7 @@ async def exm_edit_group(callback: CallbackQuery, state: FSMContext):
     await state.set_state(ExerciseManage.editing_group)
     groups = await db.list_muscle_groups(callback.from_user.id)
     kb = keyboards.groups_keyboard(
-        groups, prefix="exmeditgrp", extra_buttons=[("❌ Отмена", f"exm:ex:{ex_id}")]
+        groups, prefix="exmeditgrp", extra_buttons=[("❌ Отмена", f"exm:editmenu:{ex_id}")]
     )
     current = await _exercise_group_name(ex)
     current_line = f"Текущая группа: <b>{escape(current)}</b>\n\n" if current else ""
@@ -777,7 +792,7 @@ async def exm_edit_description(callback: CallbackQuery, state: FSMContext):
         callback,
         f"Напиши описание/технику выполнения для «{escape(ex['display_name'])}».{current}\n\n"
         "Пришли «-», чтобы убрать своё описание.",
-        reply_markup=keyboards.cancel_keyboard(f"exm:ex:{ex_id}"),
+        reply_markup=keyboards.cancel_keyboard(f"exm:editmenu:{ex_id}"),
         parse_mode="HTML",
     )
     await callback.answer()

@@ -235,13 +235,44 @@ async def ai_exercise_card(callback: CallbackQuery, state: FSMContext):
     from handlers.exercises import send_exercise_card
 
     ex_id = int(callback.data.split(":")[2])
-    # So the card's "⬅️ Назад" returns here instead of the exercises menu list
-    # — see show_exercise_groups, which clears this once the user actually
-    # enters that menu on its own.
+    # So the card's "⬅️ Назад" closes it (ai:closecard below) instead of
+    # dropping into the exercises menu list — see show_exercise_groups, which
+    # clears this once the user actually enters that menu on its own.
     await state.update_data(exm_from_ai=True)
     if not await send_exercise_card(callback.message, state, callback.from_user.id, ex_id):
         await callback.answer("Упражнение не найдено", show_alert=True)
         return
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("ai:tpladd:"))
+async def ai_add_template(callback: CallbackQuery, state: FSMContext):
+    """Каталожное упражнение из ответа тренера, которого у пользователя ещё
+    нет ("Из каталога на плечи бери эти: ..."): форкаем шаблон в своё и сразу
+    открываем карточку — прямая ссылка на карточку тут не сработала бы, само
+    упражнение у пользователя до этого тапа просто не существовало."""
+    from handlers.exercises import send_exercise_card
+
+    template_id = int(callback.data.split(":")[2])
+    ex_id = await db.fork_exercise_from_template(callback.from_user.id, template_id)
+    await state.update_data(exm_from_ai=True)
+    if not await send_exercise_card(callback.message, state, callback.from_user.id, ex_id):
+        await callback.answer("Упражнение не найдено", show_alert=True)
+        return
+    await callback.answer()
+
+
+@router.callback_query(F.data == "ai:closecard")
+async def ai_close_exercise_card(callback: CallbackQuery, state: FSMContext):
+    """"⬅️ Назад" on a card opened from the AI-тренер chat: just closes it (and
+    its reference photos, if any) instead of opening any other screen — the
+    trainer's reply is right underneath and becomes the bottom of the chat
+    again, same as before the card was ever opened."""
+    from handlers.exercises import _clear_exercise_media
+
+    await _clear_exercise_media(callback.bot, callback.message.chat.id, state)
+    with suppress(TelegramBadRequest):
+        await callback.message.delete()
     await callback.answer()
 
 
@@ -255,7 +286,10 @@ async def ai_mentions_page(callback: CallbackQuery, state: FSMContext):
     exercises = []
     for raw_id in ids_csv.split(","):
         ex = await db.get_exercise(int(raw_id))
-        if ex is not None and ex["user_id"] == callback.from_user.id:
+        # A page can mix the user's own exercises with not-yet-added catalog
+        # templates (see keyboards.ai_trainer_keyboard) — templates have no
+        # user_id of their own, so only ownership-check the non-template rows.
+        if ex is not None and (ex["is_template"] or ex["user_id"] == callback.from_user.id):
             exercises.append(ex)
     active = await db.get_active_workout(callback.from_user.id)
     kb = keyboards.ai_trainer_keyboard(has_active_workout=bool(active), exercises=exercises, page=page)
