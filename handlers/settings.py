@@ -117,7 +117,7 @@ async def settings_formula_confirm(callback: CallbackQuery, state: FSMContext):
     )
     await ui.safe_edit(
         callback,
-        f"e1RM — расчётный разовый максимум: сколько ты смог бы поднять за один раз. "
+        f"e1RM — расчётный максимум в упражнении: какой вес ты смог бы поднять на один раз. "
         f"Считается по весу и повторам, а {new_formula} — просто другая формула "
         f"этого расчёта.\n\n"
         f"Переключить на {new_formula}? Все расчётные максимумы, "

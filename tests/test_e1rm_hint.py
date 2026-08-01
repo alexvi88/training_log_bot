@@ -139,4 +139,4 @@ async def test_workout_card_stays_free_of_the_explanation(fresh_db, user_id):
 async def test_help_spells_out_the_term():
     """The /help reference is where a user goes with the question on purpose."""
     assert "e1RM" in workout._HELP_TEXT
-    assert "расчётный разовый максимум" in workout._HELP_TEXT
+    assert "расчётный максимум в упражнении" in workout._HELP_TEXT
