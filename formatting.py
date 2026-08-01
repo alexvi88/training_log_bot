@@ -42,8 +42,19 @@ FOLD_MIN_CHARS = 300
 # same line would just be something to scroll past.
 E1RM_HINT = (
     "ℹ️ <i>e1RM — расчётный максимум в упражнении: какой вес ты смог бы поднять "
-    "на один раз. Считается по весу и повторам, проверять на практике не нужно.</i>"
+    "на один раз (посчитано на основе весов и повторов).</i>"
 )
+
+
+def format_group(name: str) -> str:
+    """A muscle group's name as it's shown anywhere in the UI: uppercase.
+
+    The group is context around whatever it labels (an exercise name, a card
+    heading), never the thing itself — caps read as a tag at a glance and stop
+    the group competing with the name next to it. Applied at render time only:
+    the stored name keeps whatever case the user typed.
+    """
+    return name.upper()
 
 
 def telegram_length(text: str) -> int:
@@ -270,7 +281,7 @@ def _collapse_formatted_sets(formatted: list[str]) -> list[str]:
 
 def _render_single_block(block: ExerciseBlockView, show_extra: bool, unit: str = "kg") -> list[str]:
     u = UNIT_LABELS.get(unit, "кг")
-    label = f"{escape(block.exercise_name)} [{block.group_name.upper()}]"
+    label = f"{escape(block.exercise_name)} [{format_group(block.group_name)}]"
     lines = [f"<b>{label}</b>"]
     if block.note:
         lines.append(f"  📝 <i>{escape(block.note)}</i>")
@@ -486,7 +497,7 @@ def build_workout_card(
     tonnage = 0.0
 
     for block in blocks:
-        body.append(f"{block.exercise_name} [{block.group_name.upper()}]")
+        body.append(f"{block.exercise_name} [{format_group(block.group_name)}]")
         if block.sets:
             # Same "190×5 ×3" collapsing the text card uses — a straight run of
             # work sets otherwise spells every one of them out, which on the image

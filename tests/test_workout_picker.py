@@ -269,7 +269,7 @@ async def test_finishing_last_exercise_suggests_what_came_next_last_time(fresh_d
     assert f"live:suggest:{triceps}" in callback_datas
     # The name lives on the button itself, so the text isn't asked to repeat it.
     texts = [b.text for row in kb.inline_keyboard for b in row]
-    assert "⏭ Triceps pushdown" in texts
+    assert "Triceps pushdown" in texts
     assert "Triceps pushdown" not in callback.bot.send_message.await_args.kwargs["text"]
 
 

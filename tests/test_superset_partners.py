@@ -112,3 +112,27 @@ def test_groups_keyboard_shows_partner_shortcuts():
     )
     callback_datas = [b.callback_data for row in kb.inline_keyboard for b in row]
     assert "pick:partner:5" in callback_datas
+
+
+def test_groups_keyboard_gives_each_partner_shortcut_a_full_row():
+    """adjust(2) reflows the whole builder, so partner rows added before it used
+    to end up sharing a half-width column with a group — long enough to clip
+    every real exercise name."""
+    kb = keyboards.groups_keyboard(
+        [{"id": 1, "name": "Спина"}, {"id": 2, "name": "Грудь"}],
+        prefix="pick",
+        show_all=True,
+        partner_buttons=[(5, "triceps block - single arm - cuff"), (6, "Seated row")],
+    )
+    partner_rows = [
+        row for row in kb.inline_keyboard
+        if any(b.callback_data.startswith("pick:partner:") for b in row)
+    ]
+    assert [len(r) for r in partner_rows] == [1, 1]
+    assert partner_rows[0][0].text == "⚡ triceps block - single arm - cuff"
+    # Groups themselves still pair up two to a row, uppercase.
+    group_row = next(
+        row for row in kb.inline_keyboard
+        if any(b.callback_data == "pick:grp:1" for b in row)
+    )
+    assert [b.text for b in group_row] == ["СПИНА", "ГРУДЬ"]

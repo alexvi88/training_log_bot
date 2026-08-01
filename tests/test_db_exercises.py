@@ -264,10 +264,27 @@ async def test_list_common_followups_ranked_by_shared_workout_count(fresh_db, us
 
     for _ in range(3):
         await _sequence(pulldown, row)
-    await _sequence(pulldown, curl)
+    for _ in range(2):
+        await _sequence(pulldown, curl)
 
     followups = await db.list_common_followups(user_id, pulldown, limit=2)
     assert [f["id"] for f in followups] == [row, curl]
+
+
+async def test_list_common_followups_ignores_a_one_off_pairing(fresh_db, user_id):
+    """One leg day that happened to end with abs shouldn't make abs a suggestion
+    on every upper-body day — a followup needs a repeat to count."""
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Спина")
+    pulldown = await db.create_exercise(user_id, "Pull down", group_id)
+    abs_ex = await db.create_exercise(user_id, "Abs", group_id)
+
+    w = await db.create_workout(user_id)
+    for ex_id in (pulldown, abs_ex):
+        block_id = await db.create_block(w, "single")
+        await db.add_block_exercise(block_id, ex_id, 0)
+
+    assert await db.list_common_followups(user_id, pulldown, limit=2) == []
 
 
 async def test_list_common_followups_ignores_exercises_that_came_before(fresh_db, user_id):
@@ -286,7 +303,7 @@ async def test_list_common_followups_ignores_exercises_that_came_before(fresh_db
 
 
 async def test_idle_view_offers_common_followups_when_exercise_just_finished(fresh_db, user_id):
-    """Once an exercise is finished, the "🕘" shortcuts should reflect what
+    """Once an exercise is finished, the shortcuts should reflect what
     usually follows *that* exercise, not just whatever was logged most
     recently anywhere."""
     from handlers import workout
@@ -297,16 +314,34 @@ async def test_idle_view_offers_common_followups_when_exercise_just_finished(fre
     unrelated = await fresh_db.create_exercise(user_id, "Overhead press", group_id)
     await fresh_db.touch_exercise_last_used(unrelated)  # most recent overall, but never followed pulldown
 
-    w = await fresh_db.create_workout(user_id)
-    block_a = await fresh_db.create_block(w, "single")
-    await fresh_db.add_block_exercise(block_a, pulldown, 0)
-    block_b = await fresh_db.create_block(w, "single")
-    await fresh_db.add_block_exercise(block_b, row, 0)
+    for _ in range(2):  # twice — a single pairing doesn't count as a habit
+        w = await fresh_db.create_workout(user_id)
+        block_a = await fresh_db.create_block(w, "single")
+        await fresh_db.add_block_exercise(block_a, pulldown, 0)
+        block_b = await fresh_db.create_block(w, "single")
+        await fresh_db.add_block_exercise(block_b, row, 0)
 
     hint, kb = await workout._idle_view({"last_finished_exercise_id": pulldown}, user_id, is_empty=False)
     texts = [b.text for r in kb.inline_keyboard for b in r]
-    assert "🕘 Seated row" in texts
-    assert "🕘 Overhead press" not in texts
+    assert "Seated row" in texts
+    assert "Overhead press" not in texts
+
+
+async def test_idle_view_falls_back_to_recent_when_no_established_followup(fresh_db, user_id):
+    """Nothing reliably follows this exercise yet — the shortcut row shows the
+    most recent exercises instead of going empty."""
+    from handlers import workout
+
+    group_id = await fresh_db.create_muscle_group(user_id, "Спина")
+    pulldown = await fresh_db.create_exercise(user_id, "Pull down", group_id)
+    row = await fresh_db.create_exercise(user_id, "Seated row", group_id)
+    await fresh_db.touch_exercise_last_used(row)
+
+    hint, kb = await workout._idle_view(
+        {"last_finished_exercise_id": pulldown}, user_id, is_empty=False
+    )
+    texts = [b.text for r in kb.inline_keyboard for b in r]
+    assert "Seated row" in texts
 
 
 async def test_idle_view_offers_recent_exercises_excluding_suggested(fresh_db, user_id):
@@ -328,8 +363,8 @@ async def test_idle_view_offers_recent_exercises_excluding_suggested(fresh_db, u
 
     hint, kb = await workout._idle_view({}, user_id, is_empty=False)
     texts = [b.text for r in kb.inline_keyboard for b in r]
-    assert "🕘 Seated row" in texts
-    assert "🕘 Pull down" in texts
+    assert "Seated row" in texts
+    assert "Pull down" in texts
 
 
 # ---------- concurrent set logging ----------

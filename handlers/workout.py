@@ -243,11 +243,18 @@ async def _idle_view(
         # logged this workout so the shortcuts never repeat today's own list.
         exclude = done_ids + ((suggested[0],) if suggested else ())
         last_finished = data.get("last_finished_exercise_id")
-        rows = (
-            await db.list_common_followups(user_id, last_finished, limit=_IDLE_RECENT_EXERCISES, exclude_ids=exclude)
-            if last_finished is not None
-            else await db.list_recent_exercises(user_id, limit=_IDLE_RECENT_EXERCISES, exclude_ids=exclude)
-        )
+        rows = []
+        if last_finished is not None:
+            rows = await db.list_common_followups(
+                user_id, last_finished, limit=_IDLE_RECENT_EXERCISES, exclude_ids=exclude
+            )
+        # No established pairing after this exercise (list_common_followups now
+        # ignores one-off ones) — fall back to plain recency rather than leaving
+        # the shortcut row empty.
+        if not rows:
+            rows = await db.list_recent_exercises(
+                user_id, limit=_IDLE_RECENT_EXERCISES, exclude_ids=exclude
+            )
         recent = [(r["id"], r["display_name"]) for r in rows]
     kb = keyboards.exercise_picker_entry_keyboard(
         has_planned=has_planned, suggested=suggested, is_empty=is_empty, recent=recent,
@@ -815,7 +822,7 @@ def _repeat_workout_block(i: int, date: str, exercises: list[tuple[str, str]]) -
     if not exercises:
         return f"{header}\nнет упражнений"
     bullets = "\n".join(
-        f"• {escape(name)} [{escape(group.upper())}]" if group else f"• {escape(name)}"
+        f"• {escape(name)} [{escape(formatting.format_group(group))}]" if group else f"• {escape(name)}"
         for name, group in exercises
     )
     return f"{header}\n{bullets}"
