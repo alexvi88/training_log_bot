@@ -39,6 +39,24 @@ async def test_overview_reports_stats_and_exercises(fresh_db, user_id):
     assert "Жим лёжа" in names
 
 
+async def test_overview_includes_each_exercises_muscle_group(fresh_db, user_id):
+    await _seed_bench_history(fresh_db, user_id, 1)
+
+    payload = json.loads(await ai_trainer.execute_tool(user_id, "get_training_overview", {}))
+
+    bench = next(e for e in payload["exercises"] if e["name"] == "Жим лёжа")
+    assert bench["muscle_group"] == "Грудь"
+
+
+async def test_overview_reports_null_group_for_a_groupless_exercise(fresh_db, user_id):
+    await fresh_db.create_exercise(user_id, "Разное упражнение", None)
+
+    payload = json.loads(await ai_trainer.execute_tool(user_id, "get_training_overview", {}))
+
+    ex = next(e for e in payload["exercises"] if e["name"] == "Разное упражнение")
+    assert ex["muscle_group"] is None
+
+
 async def test_recent_workouts_lists_sets(fresh_db, user_id):
     await _seed_bench_history(fresh_db, user_id, 3)
 
@@ -49,7 +67,7 @@ async def test_recent_workouts_lists_sets(fresh_db, user_id):
     assert len(payload["workouts"]) == 2
     latest = payload["workouts"][0]
     assert latest["date"] == "2026-01-03"
-    assert latest["exercises"][0] == {"name": "Жим лёжа", "sets": ["103x8"]}
+    assert latest["exercises"][0] == {"name": "Жим лёжа", "sets": ["103x8"], "note": None}
 
 
 async def test_recent_workouts_includes_rpe_in_set_string(fresh_db, user_id):
@@ -147,6 +165,7 @@ async def test_exercise_progress_returns_sessions_and_records(fresh_db, user_id)
         await ai_trainer.execute_tool(user_id, "get_exercise_progress", {"exercise_name": "Жим лёжа"})
     )
 
+    assert payload["muscle_group"] == "Грудь"
     assert payload["total_sessions"] == 3
     assert payload["sessions"][-1]["sets"] == ["103x8"]
     assert payload["records"]["max_weight"] == 103.0
@@ -162,6 +181,47 @@ async def test_exercise_progress_unknown_name_suggests_candidates(fresh_db, user
 
     assert "error" in payload
     assert "Жим лёжа" in payload["did_you_mean"]
+
+
+# ---------- per-exercise notes (see "📝 Заметка" in the live tracker) ----------
+
+
+async def test_exercise_progress_includes_the_workouts_own_note(fresh_db, user_id):
+    ex_id = await _seed_bench_history(fresh_db, user_id, 2)
+    workouts = await fresh_db.list_workouts(user_id)
+    await fresh_db.set_workout_exercise_note(workouts[0]["id"], ex_id, "болело плечо")
+
+    payload = json.loads(
+        await ai_trainer.execute_tool(user_id, "get_exercise_progress", {"exercise_name": "Жим лёжа"})
+    )
+
+    notes = {s["date"]: s["note"] for s in payload["sessions"]}
+    assert notes[workouts[0]["started_at"][:10]] == "болело плечо"
+    assert notes[workouts[1]["started_at"][:10]] is None
+
+
+async def test_recent_workouts_includes_per_exercise_note(fresh_db, user_id):
+    ex_id = await _seed_bench_history(fresh_db, user_id, 1)
+    workouts = await fresh_db.list_workouts(user_id)
+    await fresh_db.set_workout_exercise_note(workouts[0]["id"], ex_id, "техника хромает")
+
+    payload = json.loads(await ai_trainer.execute_tool(user_id, "list_recent_workouts", {}))
+
+    assert payload["workouts"][0]["exercises"][0]["note"] == "техника хромает"
+
+
+async def test_active_workout_includes_per_exercise_note(fresh_db, user_id):
+    group_id = await fresh_db.create_muscle_group(user_id, "Грудь")
+    ex_id = await fresh_db.create_exercise(user_id, "Жим лёжа", group_id)
+    workout_id = await fresh_db.create_workout(user_id, started_at="2026-04-01T10:00:00")
+    block_id = await fresh_db.create_block(workout_id, "single")
+    await fresh_db.add_block_exercise(block_id, ex_id, 0)
+    await fresh_db.add_set(block_id, ex_id, round_index=1, order_in_round=0, weight=100.0, reps=8)
+    await fresh_db.set_workout_exercise_note(workout_id, ex_id, "не растёт вес")
+
+    payload = json.loads(await ai_trainer.execute_tool(user_id, "get_active_workout", {}))
+
+    assert payload["exercises"][0]["note"] == "не растёт вес"
 
 
 async def test_unknown_tool_returns_error(fresh_db, user_id):

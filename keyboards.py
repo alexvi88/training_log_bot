@@ -52,12 +52,21 @@ def main_menu(has_active_workout: bool) -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
+# Сколько кнопок-упоминаний показываем разом под ответом — дальше листаем
+# стрелками, а не удлиняем клавиатуру (см. ai_trainer_keyboard).
+AI_MENTION_PAGE_SIZE = 3
+
+
 def ai_trainer_keyboard(
-    has_active_workout: bool = False, exercises: Sequence[Any] = ()
+    has_active_workout: bool = False, exercises: Sequence[Any] = (), page: int = 0
 ) -> InlineKeyboardMarkup:
-    """`exercises` — упражнения, упомянутые в ответе тренера (см. exercise_mentions):
-    каждое получает свою строку-ссылку на карточку, чтобы «замени на тягу
-    горизонтального блока» не приходилось искать руками через меню."""
+    """`exercises` — упражнения, упомянутые в ответе тренера (см. exercise_mentions),
+    до exercise_mentions.MAX_MENTIONS_TOTAL штук: каждое получает свою строку-ссылку
+    на карточку, чтобы «замени на тягу горизонтального блока» не приходилось искать
+    руками через меню. Показываем по AI_MENTION_PAGE_SIZE штук за раз с постраничным
+    ⬅️/➡️, если упоминаний больше — id всех упоминаний едут прямо в callback_data
+    стрелок (см. handlers/ai_trainer.ai_mentions_page), отдельного состояния не нужно."""
+    exercises = list(exercises)
     b = InlineKeyboardBuilder()
     b.button(text="⬅️ Меню", callback_data="ai:menu")
     if has_active_workout:
@@ -66,6 +75,9 @@ def ai_trainer_keyboard(
     else:
         b.adjust(1)
     nav = b.as_markup().inline_keyboard
+
+    start = page * AI_MENTION_PAGE_SIZE
+    page_exercises = exercises[start : start + AI_MENTION_PAGE_SIZE]
     # Кнопки упражнений — над навигацией и каждая своей строкой: названия
     # длинные, в паре Telegram их обрежет.
     mention_rows = [
@@ -75,9 +87,19 @@ def ai_trainer_keyboard(
                 callback_data=f"ai:excard:{ex['id']}",
             )
         ]
-        for ex in exercises
+        for ex in page_exercises
     ]
-    return InlineKeyboardMarkup(inline_keyboard=mention_rows + nav)
+
+    page_nav = []
+    if len(exercises) > AI_MENTION_PAGE_SIZE:
+        ids = ",".join(str(ex["id"]) for ex in exercises)
+        if page > 0:
+            page_nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"ai:mpage:{page - 1}:{ids}"))
+        if start + AI_MENTION_PAGE_SIZE < len(exercises):
+            page_nav.append(InlineKeyboardButton(text="➡️", callback_data=f"ai:mpage:{page + 1}:{ids}"))
+    page_nav_rows = [page_nav] if page_nav else []
+
+    return InlineKeyboardMarkup(inline_keyboard=mention_rows + page_nav_rows + nav)
 
 
 def groups_keyboard(
