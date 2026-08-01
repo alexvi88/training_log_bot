@@ -557,6 +557,12 @@ async def count_users() -> int:
     return count
 
 
+async def list_all_telegram_ids() -> list[int]:
+    """Every registered user's id — for admin broadcasts."""
+    cur = await conn().execute("SELECT telegram_id FROM users")
+    return [row["telegram_id"] for row in await cur.fetchall()]
+
+
 async def update_user(telegram_id: int, **fields: Any) -> None:
     if not fields:
         return

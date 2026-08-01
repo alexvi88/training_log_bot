@@ -1,10 +1,11 @@
 """Admin-only: browse other users' workout history (read-only)."""
 
+import asyncio
 import datetime as dt
 
 from aiogram import F, Router
-from aiogram.exceptions import TelegramAPIError
-from aiogram.filters import Command
+from aiogram.exceptions import TelegramAPIError, TelegramForbiddenError
+from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
@@ -270,6 +271,81 @@ async def admin_ai_dialogs_show(callback: CallbackQuery, state: FSMContext):
         markup = keyboards.admin_ai_dialogs_back_keyboard(page) if is_last else None
         await callback.message.answer(chunk, reply_markup=markup)
     await callback.answer()
+
+
+BROADCAST_SEND_DELAY = 0.05  # seconds between sends — stays under Telegram's rate limit
+
+
+@router.message(Command("broadcast"))
+async def cmd_broadcast(message: Message, state: FSMContext):
+    if not _is_admin(message.from_user.id):
+        return
+    await state.clear()
+    await state.set_state(AdminFlow.broadcast_awaiting_message)
+    await message.answer(
+        "📢 Пришли сообщение для рассылки всем пользователям — текст, фото, что угодно, "
+        "уйдёт как есть. Любая другая команда отменит рассылку."
+    )
+
+
+@router.message(StateFilter(AdminFlow.broadcast_awaiting_message))
+async def broadcast_receive(message: Message, state: FSMContext):
+    if not _is_admin(message.from_user.id):
+        return
+    total = await db.count_users()
+    await state.update_data(broadcast_chat_id=message.chat.id, broadcast_message_id=message.message_id)
+    await state.set_state(AdminFlow.broadcast_confirming)
+    await message.reply(
+        f"Отправить это сообщение всем пользователям ({total})?",
+        reply_markup=keyboards.yes_no_keyboard(
+            "admin:bc:yes", "admin:bc:no", yes_text="📢 Отправить", no_text="Отмена",
+        ),
+    )
+
+
+@router.callback_query(StateFilter(AdminFlow.broadcast_confirming), F.data == "admin:bc:no")
+async def broadcast_cancel(callback: CallbackQuery, state: FSMContext):
+    if not _is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    await state.clear()
+    await ui.safe_edit(callback, "Рассылка отменена.")
+    await callback.answer()
+
+
+@router.callback_query(StateFilter(AdminFlow.broadcast_confirming), F.data == "admin:bc:yes")
+async def broadcast_send(callback: CallbackQuery, state: FSMContext):
+    if not _is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    data = await state.get_data()
+    src_chat_id = data.get("broadcast_chat_id")
+    src_message_id = data.get("broadcast_message_id")
+    await state.clear()
+    if src_chat_id is None or src_message_id is None:
+        await callback.answer("Сообщение потерялось, начни заново через /broadcast", show_alert=True)
+        return
+
+    await callback.answer("Рассылка запущена…")
+    await ui.safe_edit(callback, "📢 Рассылка запущена, отчитаюсь по завершении…")
+
+    user_ids = await db.list_all_telegram_ids()
+    sent = blocked = failed = 0
+    for telegram_id in user_ids:
+        try:
+            await callback.bot.copy_message(
+                chat_id=telegram_id, from_chat_id=src_chat_id, message_id=src_message_id,
+            )
+            sent += 1
+        except TelegramForbiddenError:
+            blocked += 1
+        except TelegramAPIError:
+            failed += 1
+        await asyncio.sleep(BROADCAST_SEND_DELAY)
+
+    await callback.message.answer(
+        f"✅ Рассылка завершена: {sent} доставлено, {blocked} заблокировали бота, {failed} ошибок."
+    )
 
 
 # The filter checks the admin id itself rather than the handler body: with
