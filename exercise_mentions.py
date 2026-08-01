@@ -59,7 +59,11 @@ def _same_word(a: str, b: str) -> bool:
     if abs(len(a) - len(b)) > 4:
         return False
     common = len(os.path.commonprefix([a, b]))
-    return common >= shorter - 2
+    # У четырёх-пятибуквенного слова на окончание остаётся одна буква
+    # («тяга»/«тяги»): разреши две — и «плюс» сойдётся с «планкой» на общих
+    # «пл», а «приём» с «приседом» на «при».
+    max_ending = 1 if shorter <= _MIN_STEM_WORD + 1 else 2
+    return common >= shorter - max_ending
 
 
 def _matches_at(haystack: list[str], start: int, needle: list[str]) -> bool:

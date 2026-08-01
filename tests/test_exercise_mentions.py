@@ -85,6 +85,19 @@ def test_short_words_do_not_match_by_stem():
     assert exercise_mentions.find_mentions("Следи за жиром", [_ex(9, "Жим")]) == []
 
 
+def test_common_words_do_not_match_by_two_letter_stem():
+    """У коротких слов на окончание остаётся одна буква: «плюс» — это не
+    «планка», а «приём» — не «присед»."""
+    text = "Плюс сон 8+ часов. При долгом приёме бывает апатия."
+    assert exercise_mentions.find_mentions(text, [_ex(10, "Планка"), SQUAT]) == []
+
+
+def test_inflected_short_name_still_matches():
+    """Ужесточение стеммера не должно ломать обычные падежи: «тягу» — это «тяга»."""
+    found = exercise_mentions.find_mentions("Добавь тягу в конец", [_ex(11, "Тяга")])
+    assert _names(found) == ["Тяга"]
+
+
 def test_case_and_yo_are_ignored():
     found = exercise_mentions.find_mentions("ЖИМ ЛЕЖА — база", [BENCH])
     assert _names(found) == ["Жим лёжа"]
