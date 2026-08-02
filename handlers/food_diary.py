@@ -11,11 +11,10 @@
 («это была груша, и порция 300 г» — правка уходит модели вместе с прошлой
 догадкой, а не начинает разбор с нуля) или отменяет.
 
-Дата спрашивается уже после подтверждения еды, а не до: обычный случай — «съел
-только что», и лишний вопрос в начале мешал бы каждому вводу. На экране выбора
-предложены текущий просматриваемый день и две соседние даты, плюс календарь и
-ручной ввод дд.мм.гггг — так еда за прошлые дни заносится тем же путём, что и за
-сегодня.
+Дата не спрашивается отдельным шагом: запись уходит в тот день, что сейчас
+открыт на экране. Чтобы занести еду за прошлый день, сначала переключаются на
+него стрелками/«История» на самом экране дня, а потом уже пишут/шлют фото —
+один и тот же путь что для сегодня, что для прошлого.
 """
 
 import asyncio
@@ -40,7 +39,6 @@ import keyboards
 import timeutil
 import ui
 from fsm import FoodDiaryFlow
-from parser import ParseError, parse_ru_date
 
 router = Router(name="food_diary")
 
@@ -377,7 +375,7 @@ async def fd_text_entry(message: Message, state: FSMContext):
     if not user["food_macros_enabled"]:
         # «Просто сохраняет твой текст» — без карточки-подтверждения: тут
         # нечего проверять, это уже ровно то, что человек написал.
-        await _ask_for_date(message, state, _plain_text_pending(text))
+        await _save_now(message, state, _plain_text_pending(text))
         return
     await _analyze_and_show(message, state, text=text)
 
@@ -426,8 +424,7 @@ async def fd_correction_photo(message: Message, state: FSMContext):
 
 
 @router.callback_query(
-    StateFilter(FoodDiaryFlow.confirming, FoodDiaryFlow.correcting, FoodDiaryFlow.picking_date),
-    F.data == "fd:cancel",
+    StateFilter(FoodDiaryFlow.confirming, FoodDiaryFlow.correcting), F.data == "fd:cancel"
 )
 async def fd_cancel(callback: CallbackQuery, state: FSMContext):
     date = await _state_date(state, callback.from_user.id)
@@ -436,76 +433,15 @@ async def fd_cancel(callback: CallbackQuery, state: FSMContext):
     await callback.answer("Отменил")
 
 
-async def _ask_for_date(event, state: FSMContext, pending: dict[str, Any]) -> None:
-    """«За какую дату занести?» — shared by the normal confirm path (fd:ok) and
-    the macros-off text path, which skips the confirmation card entirely and
-    lands here straight from typing."""
-    await state.update_data(fd_pending=pending)
-    await state.set_state(FoodDiaryFlow.picking_date)
+async def _save_now(event, state: FSMContext, pending: dict[str, Any]) -> None:
+    """Сохранить запись в день, который сейчас открыт на экране, и сразу
+    показать обновлённый день — без отдельного вопроса «за какую дату».
+    Занести за прошлый день можно, переключившись на него ДО ввода еды —
+    тем же путём, что и просмотр (стрелки, «История»)."""
     user_id = event.from_user.id
-    today = await _today(user_id)
-    viewed = await _state_date(state, user_id)
-    text = "📅 За какую дату занести?"
-    kb = keyboards.food_date_keyboard(_date_options(viewed, today), today)
-    if isinstance(event, CallbackQuery):
-        await ui.safe_edit(event, text, reply_markup=kb)
-    else:
-        await event.answer(text, reply_markup=kb)
-
-
-def _date_options(viewed: dt.date, today: dt.date) -> list[dt.date]:
-    """Предложенная дата и две соседние.
-
-    Смотрим сегодняшний день — предлагаем сегодня, вчера и позавчера (еду
-    заносят задним числом, а не наперёд). Открыт прошлый день — предлагаем его
-    и соседей по обе стороны, не выходя за сегодня.
-    """
-    if viewed >= today:
-        return [today, today - dt.timedelta(days=1), today - dt.timedelta(days=2)]
-    neighbours = [viewed - dt.timedelta(days=1), viewed + dt.timedelta(days=1)]
-    return [viewed] + [d for d in neighbours if d <= today]
-
-
-@router.callback_query(StateFilter(FoodDiaryFlow.confirming), F.data == "fd:ok")
-async def fd_confirm(callback: CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    pending = data.get("fd_pending")
-    if not pending:
-        await callback.answer("Нечего сохранять", show_alert=True)
-        return
-    await _ask_for_date(callback, state, pending)
-    await callback.answer()
-
-
-@router.callback_query(StateFilter(FoodDiaryFlow.picking_date), F.data == "fd:otherdate")
-async def fd_other_date(callback: CallbackQuery, state: FSMContext):
-    today = await _today(callback.from_user.id)
-    await ui.safe_edit(
-        callback,
-        "📅 Выбери дату:",
-        reply_markup=keyboards.calendar_keyboard("fd", today.year, today.month, today=today),
-    )
-    await callback.answer()
-
-
-@router.callback_query(StateFilter(FoodDiaryFlow.picking_date), F.data.startswith("fd:cal:"))
-async def fd_calendar_nav(callback: CallbackQuery, state: FSMContext):
-    year, month = (int(x) for x in callback.data.split(":")[2].split("-"))
-    today = await _today(callback.from_user.id)
-    with suppress(TelegramBadRequest):
-        await callback.message.edit_reply_markup(
-            reply_markup=keyboards.calendar_keyboard("fd", year, month, today=today)
-        )
-    await callback.answer()
-
-
-async def _save_pending(event, state: FSMContext, date: dt.date) -> bool:
-    data = await state.get_data()
-    pending = data.get("fd_pending")
-    if not pending:
-        return False
+    date = await _state_date(state, user_id)
     await db.add_food_entry(
-        event.from_user.id,
+        user_id,
         eaten_on=date.isoformat(),
         description=pending.get("description") or "Приём пищи",
         details=_items_to_json(pending.get("items")),
@@ -516,33 +452,18 @@ async def _save_pending(event, state: FSMContext, date: dt.date) -> bool:
         photo_file_id=pending.get("photo_file_id"),
         source=pending.get("source", "text"),
     )
-    await state.update_data(fd_pending=None)
-    return True
+    await _show_day(event, state, date)
 
 
-@router.callback_query(StateFilter(FoodDiaryFlow.picking_date), F.data.startswith("fd:date:"))
-async def fd_pick_date(callback: CallbackQuery, state: FSMContext):
-    date = dt.date.fromisoformat(callback.data.split(":", 2)[2])
-    if not await _save_pending(callback, state, date):
+@router.callback_query(StateFilter(FoodDiaryFlow.confirming), F.data == "fd:ok")
+async def fd_confirm(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    pending = data.get("fd_pending")
+    if not pending:
         await callback.answer("Нечего сохранять", show_alert=True)
-        await _show_day(callback, state, date)
         return
-    await _show_day(callback, state, date)
-    await callback.answer(f"Записал за {formatting.format_day_month_ru(date)} 👌")
-
-
-@router.message(StateFilter(FoodDiaryFlow.picking_date), F.text, _NOT_A_COMMAND)
-async def fd_date_typed(message: Message, state: FSMContext):
-    try:
-        date = parse_ru_date(
-            message.text, today=timeutil.user_today(await db.get_user(message.from_user.id))
-        )
-    except ParseError as e:
-        await message.reply(e.message)
-        return
-    if not await _save_pending(message, state, date):
-        await message.reply("Нечего сохранять — начни заново.")
-    await _show_day(message, state, date)
+    await _save_now(callback, state, pending)
+    await callback.answer("Записал 👌")
 
 
 # ---------- удаление и история ----------

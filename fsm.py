@@ -97,5 +97,4 @@ class FoodDiaryFlow(StatesGroup):
     viewing = State()          # one day's diary — typing/sending a photo here logs food
     confirming = State()       # model's guess is on screen, awaiting подтверждение/правку
     correcting = State()       # user is typing what the model got wrong
-    picking_date = State()     # "за какую дату занести?" — quick buttons + calendar
     browsing_history = State()

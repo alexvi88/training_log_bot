@@ -304,7 +304,24 @@ def test_day_screen_shows_per_item_macros():
     # у отдельных продуктов — обычным текстом, не перегружаем скобки
     assert "Протеин — 30 г — 120 ккал (Б 24 · Ж 1 · У 3)" in text
     assert "Гранола — 150 г — 630 ккал (Б 15 · Ж 23 · У 98)" in text
-    assert "Б 39 · Ж 24 · У 101" in text  # итог по приёму — отдельной строкой
+    # итог по приёму — ккал и БЖУ одной строкой под раскладкой, жирным
+    assert "<b>750 ккал · Б 39 · Ж 24 · У 101</b>" in text
+    # калорий блюда больше нет при названии наверху
+    assert "Гранола с протеином</b> — 750 ккал" not in text
+
+
+def test_day_screen_entry_totals_omit_missing_half():
+    """Только ккал (без БЖУ) или только БЖУ (без ккал) — итоговая строка не
+    показывает пустое место вместо недостающей половины."""
+    only_kcal = formatting.build_food_day_screen(
+        dt.date(2026, 7, 20), [_view(id=1, description="Чай", calories=40)]
+    )
+    assert "<b>40 ккал</b>" in only_kcal
+
+    only_macros = formatting.build_food_day_screen(
+        dt.date(2026, 7, 20), [_view(id=1, description="Что-то", protein=10, fat=2, carbs=5)]
+    )
+    assert "<b>Б 10 · Ж 2 · У 5</b>" in only_macros
 
 
 def test_estimate_text_lists_items_with_their_own_macros():
@@ -405,38 +422,6 @@ def test_day_keyboard_hides_step_into_the_future():
     assert "fd:day:2026-07-19" in cbs
 
 
-def test_date_keyboard_offers_neighbours_and_calendar():
-    today = dt.date(2026, 7, 20)
-    kb = keyboards.food_date_keyboard(
-        [today, dt.date(2026, 7, 19), dt.date(2026, 7, 18)], today
-    )
-    cbs = _callbacks(kb)
-    assert cbs[0] == "fd:date:2026-07-20"
-    assert "fd:date:2026-07-19" in cbs and "fd:date:2026-07-18" in cbs
-    assert "fd:otherdate" in cbs and "fd:cancel" in cbs
-    assert "Занести за сегодня" in kb.inline_keyboard[0][0].text
-
-
-def test_date_keyboard_names_a_past_day_in_words():
-    kb = keyboards.food_date_keyboard([dt.date(2026, 7, 18)], dt.date(2026, 7, 20))
-    assert kb.inline_keyboard[0][0].text == "✅ Занести за 18 июля"
-
-
-@pytest.mark.parametrize(
-    "viewed,today,expected",
-    [
-        # сегодняшний день — предлагаем сегодня и два прошлых, а не будущие
-        ("2026-07-20", "2026-07-20", ["2026-07-20", "2026-07-19", "2026-07-18"]),
-        # открыт прошлый день — соседи по обе стороны
-        ("2026-07-10", "2026-07-20", ["2026-07-10", "2026-07-09", "2026-07-11"]),
-        # вчера — «завтра» это сегодня, оно ещё допустимо
-        ("2026-07-19", "2026-07-20", ["2026-07-19", "2026-07-18", "2026-07-20"]),
-    ],
-)
-def test_date_options(viewed, today, expected):
-    got = food_diary._date_options(dt.date.fromisoformat(viewed), dt.date.fromisoformat(today))
-    assert [d.isoformat() for d in got] == expected
-
 
 # ---------- флоу ----------
 
@@ -494,6 +479,33 @@ async def test_command_opens_today_and_sets_state(user_id, monkeypatch):
     assert "20.07.2026" in message.answer.call_args.args[0]
 
 
+async def test_text_entry_saves_immediately_when_macros_are_off(user_id, monkeypatch):
+    """С выключенным КБЖУ текстовый ввод не зовёт модель и не показывает
+    карточку — сохраняется как есть, сразу в текущий день."""
+    monkeypatch.setattr(food_diary.timeutil, "user_today", lambda user: dt.date(2026, 7, 20))
+    await dbmod.update_user(user_id, food_macros_enabled=0)
+    called = False
+
+    async def fail_if_called(*args, **kwargs):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(food_diary.ai_trainer, "analyze_food", fail_if_called)
+
+    state = await _make_state(user_id)
+    await state.set_state(FoodDiaryFlow.viewing)
+    await state.update_data(fd_date="2026-07-20")
+    message = _make_message(user_id, text="овсянка с бананом")
+
+    await food_diary.fd_text_entry(message, state)
+
+    assert not called
+    entries = await dbmod.list_food_entries(user_id, "2026-07-20")
+    assert [e["description"] for e in entries] == ["овсянка с бананом"]
+    assert entries[0]["calories"] is None
+    assert await state.get_state() == FoodDiaryFlow.viewing.state
+
+
 async def test_typed_food_goes_to_model_and_shows_confirmation(user_id, monkeypatch):
     monkeypatch.setattr(food_diary.timeutil, "user_today", lambda user: dt.date(2026, 7, 20))
     monkeypatch.setattr(food_diary.ai_trainer, "is_configured", lambda: True)
@@ -549,12 +561,14 @@ async def test_model_failure_keeps_the_diary_usable(user_id, monkeypatch):
     assert (await state.get_data())["fd_screen_id"] == 999
 
 
-async def test_confirm_asks_for_the_date_then_saves(user_id, monkeypatch):
+async def test_confirm_saves_straight_into_the_viewed_day(user_id, monkeypatch):
+    """Нет отдельного шага «за какую дату» — запись уходит в тот день, что
+    открыт на экране, сразу по «✅ Всё верно»."""
     monkeypatch.setattr(food_diary.timeutil, "user_today", lambda user: dt.date(2026, 7, 20))
     state = await _make_state(user_id)
     await state.set_state(FoodDiaryFlow.confirming)
     await state.update_data(
-        fd_date="2026-07-20",
+        fd_date="2026-07-18",  # переключились стрелками на прошлый день до ввода еды
         fd_pending={
             "description": "Овсянка",
             "items": [{"name": "овсянка", "portion": "60 г", "calories": 220,
@@ -565,9 +579,6 @@ async def test_confirm_asks_for_the_date_then_saves(user_id, monkeypatch):
     )
 
     await food_diary.fd_confirm(_make_callback(user_id, "fd:ok"), state)
-    assert await state.get_state() == FoodDiaryFlow.picking_date.state
-
-    await food_diary.fd_pick_date(_make_callback(user_id, "fd:date:2026-07-18"), state)
 
     entries = await dbmod.list_food_entries(user_id, "2026-07-18")
     assert [e["description"] for e in entries] == ["Овсянка"]
@@ -576,35 +587,10 @@ async def test_confirm_asks_for_the_date_then_saves(user_id, monkeypatch):
     assert [i.name for i in stored_items] == ["овсянка"]
     assert stored_items[0].portion == "60 г"
     assert stored_items[0].calories == 220
-    # ничего не подвисло: экран вернулся на выбранный день, черновик очищен
+    # ничего не подвисло: экран того же дня, черновик очищен
     assert await state.get_state() == FoodDiaryFlow.viewing.state
     data = await state.get_data()
     assert data["fd_date"] == "2026-07-18" and data["fd_pending"] is None
-
-
-async def test_typed_date_saves_for_a_past_day(user_id, monkeypatch):
-    monkeypatch.setattr(food_diary.timeutil, "user_today", lambda user: dt.date(2026, 7, 20))
-    state = await _make_state(user_id)
-    await state.set_state(FoodDiaryFlow.picking_date)
-    await state.update_data(fd_date="2026-07-20", fd_pending={"description": "Творог"})
-
-    await food_diary.fd_date_typed(_make_message(user_id, text="15.07.2026"), state)
-
-    assert [e["description"] for e in await dbmod.list_food_entries(user_id, "2026-07-15")] == ["Творог"]
-
-
-async def test_bad_typed_date_does_not_save(user_id, monkeypatch):
-    monkeypatch.setattr(food_diary.timeutil, "user_today", lambda user: dt.date(2026, 7, 20))
-    state = await _make_state(user_id)
-    await state.set_state(FoodDiaryFlow.picking_date)
-    await state.update_data(fd_date="2026-07-20", fd_pending={"description": "Творог"})
-    message = _make_message(user_id, text="когда-то на той неделе")
-
-    await food_diary.fd_date_typed(message, state)
-
-    assert await dbmod.count_food_days(user_id) == 0
-    assert (await state.get_data())["fd_pending"] is not None  # черновик цел, можно повторить
-    message.reply.assert_awaited()
 
 
 async def test_correction_reruns_the_model_with_the_previous_guess(user_id, monkeypatch):
