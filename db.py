@@ -2307,7 +2307,8 @@ async def list_food_days(
     of rows.
     """
     cur = await conn().execute(
-        "SELECT eaten_on, COUNT(*) AS entries, SUM(calories) AS calories "
+        "SELECT eaten_on, COUNT(*) AS entries, SUM(calories) AS calories, "
+        "SUM(protein) AS protein, SUM(fat) AS fat, SUM(carbs) AS carbs "
         "FROM food_entries WHERE telegram_id = ? "
         "GROUP BY eaten_on ORDER BY eaten_on DESC LIMIT ? OFFSET ?",
         (telegram_id, limit, offset),

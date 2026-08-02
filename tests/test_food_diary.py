@@ -39,14 +39,16 @@ async def test_food_entry_roundtrip_and_day_grouping(user_id):
 
 
 async def test_food_days_history_newest_first_with_totals(user_id):
-    await dbmod.add_food_entry(user_id, "2026-07-20", "Овсянка", calories=350)
-    await dbmod.add_food_entry(user_id, "2026-07-20", "Кофе", calories=60)
-    await dbmod.add_food_entry(user_id, "2026-07-21", "Творог", calories=200)
+    await dbmod.add_food_entry(user_id, "2026-07-20", "Овсянка", calories=350, protein=12, fat=8, carbs=55)
+    await dbmod.add_food_entry(user_id, "2026-07-20", "Кофе", calories=60, protein=1)
+    await dbmod.add_food_entry(user_id, "2026-07-21", "Творог", calories=200, protein=20, fat=5, carbs=10)
 
     days = await dbmod.list_food_days(user_id)
     assert [r["eaten_on"] for r in days] == ["2026-07-21", "2026-07-20"]
     assert [r["entries"] for r in days] == [1, 2]
     assert [r["calories"] for r in days] == [200, 410]
+    assert [r["protein"] for r in days] == [20, 13]
+    assert days[1]["fat"] == 8  # у второй записи (Кофе) fat не задан — суммируем только известное
     assert await dbmod.count_food_days(user_id) == 2
 
 
@@ -263,7 +265,16 @@ def test_day_screen_numbers_entries_and_totals():
     assert "📷" in text
     assert "410 ккал" in text
     assert "2 приёма пищи" in text
-    assert "Б <b>12</b> · Ж <b>8</b> · У <b>55</b>" in text  # граммовки жирным
+    assert "Б 12 · Ж 8 · У 55" in text
+
+
+def test_non_empty_day_screen_still_hints_at_adding_more():
+    """Без этой строки экран после первой записи выглядит тупиком — непонятно,
+    что можно просто дописать ещё один приём пищи (см. отчёт пользователя)."""
+    text = formatting.build_food_day_screen(
+        dt.date(2026, 7, 20), [_view(id=1, description="Овсянка", calories=350)]
+    )
+    assert "Напиши текстом или пришли фото" in text
 
 
 def test_day_screen_flags_entries_without_calories():
@@ -293,8 +304,7 @@ def test_day_screen_shows_per_item_macros():
     # у отдельных продуктов — обычным текстом, не перегружаем скобки
     assert "Протеин — 30 г — 120 ккал (Б 24 · Ж 1 · У 3)" in text
     assert "Гранола — 150 г — 630 ккал (Б 15 · Ж 23 · У 98)" in text
-    # итог по приёму — отдельной строкой, граммовки жирным
-    assert "Б <b>39</b> · Ж <b>24</b> · У <b>101</b>" in text
+    assert "Б 39 · Ж 24 · У 101" in text  # итог по приёму — отдельной строкой
 
 
 def test_estimate_text_lists_items_with_their_own_macros():
@@ -311,13 +321,12 @@ def test_estimate_text_lists_items_with_their_own_macros():
     assert "• Банан — 1 шт — 90 ккал" in text  # без макросов — без скобок
     assert "(Б" not in text.split("Банан")[1].split("\n")[0]
     assert "Итого: <b>310 ккал</b>" in text
-    assert "Б <b>9</b> · Ж <b>6</b> · У <b>62</b>" in text
+    assert "Б 9 · Ж 6 · У 62" in text
     assert "порция на глаз" in text
 
 
-def test_macros_line_bolds_only_the_numbers():
+def test_macros_line_has_no_bold_and_no_trailing_unit():
     assert formatting._macros_line(30, 12, 60) == "Б 30 · Ж 12 · У 60"
-    assert formatting._macros_line(30, 12, 60, bold=True) == "Б <b>30</b> · Ж <b>12</b> · У <b>60</b>"
 
 
 def test_estimate_text_without_numbers_shows_dash():
@@ -326,12 +335,33 @@ def test_estimate_text_without_numbers_shows_dash():
     assert "Б " not in text  # строки БЖУ нет вовсе
 
 
+def _day(**kwargs) -> formatting.FoodDayView:
+    base = {"date": dt.date(2026, 7, 20), "entries": 1}
+    base.update(kwargs)
+    return formatting.FoodDayView(**base)
+
+
 def test_history_list_newest_first():
-    days = [(dt.date(2026, 7, 21), 1, 200.0), (dt.date(2026, 7, 20), 2, 410.0)]
+    days = [
+        _day(date=dt.date(2026, 7, 21), entries=1, calories=200.0),
+        _day(date=dt.date(2026, 7, 20), entries=2, calories=410.0),
+    ]
     text = formatting.build_food_history_list(days)
     assert text.index("21.07.2026") < text.index("20.07.2026")
     assert "2 приёма" in text
     assert "410 ккал" in text
+
+
+def test_history_list_shows_per_day_macros():
+    days = [_day(entries=2, calories=410.0, protein=29, fat=15, carbs=40)]
+    text = formatting.build_food_history_list(days)
+    assert "Б 29 · Ж 15 · У 40" in text
+
+
+def test_history_list_skips_macros_line_when_unknown():
+    days = [_day(entries=1, calories=200.0)]
+    text = formatting.build_food_history_list(days)
+    assert "Б " not in text
 
 
 def test_history_list_empty():
@@ -357,6 +387,13 @@ def test_day_keyboard_has_delete_per_entry_and_day_steps():
     assert "fd:day:2026-07-19" in cbs  # шаг назад
     assert "fd:day:2026-07-21" in cbs  # шаг вперёд — день в прошлом
     assert "fd:history:0" in cbs
+
+
+def test_day_keyboard_history_and_menu_share_a_row():
+    kb = keyboards.food_day_keyboard(dt.date(2026, 7, 20), [], today=dt.date(2026, 7, 20))
+    last_row = kb.inline_keyboard[-1]
+    assert [b.callback_data for b in last_row] == ["fd:history:0", "fd:menu"]
+    assert last_row[1].text == "⬅️ Меню"
 
 
 def test_day_keyboard_hides_step_into_the_future():

@@ -515,14 +515,20 @@ async def fd_history(callback: CallbackQuery, state: FSMContext):
     size = keyboards.FOOD_HISTORY_PAGE_SIZE
     total = await db.count_food_days(user_id)
     rows = await db.list_food_days(user_id, limit=size, offset=page * size)
-    days = [(dt.date.fromisoformat(r["eaten_on"]), r["entries"], r["calories"]) for r in rows]
+    days = [
+        formatting.FoodDayView(
+            date=dt.date.fromisoformat(r["eaten_on"]), entries=r["entries"], calories=r["calories"],
+            protein=r["protein"], fat=r["fat"], carbs=r["carbs"],
+        )
+        for r in rows
+    ]
 
     await state.set_state(FoodDiaryFlow.browsing_history)
     sent = await ui.safe_edit(
         callback,
         formatting.build_food_history_list(days),
         reply_markup=keyboards.food_history_keyboard(
-            [d for d, _, _ in days], page, has_next=(page + 1) * size < total
+            [d.date for d in days], page, has_next=(page + 1) * size < total
         ),
         parse_mode="HTML",
     )

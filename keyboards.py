@@ -769,8 +769,10 @@ def food_day_keyboard(date: dt.date, entry_ids: Sequence[int], today: dt.date) -
     b.row(*nav)
     if date != today:
         b.row(InlineKeyboardButton(text="📅 Сегодня", callback_data=f"fd:day:{today.isoformat()}"))
-    b.row(InlineKeyboardButton(text="📚 История", callback_data="fd:history:0"))
-    b.row(InlineKeyboardButton(text="⬅️ Главное меню", callback_data="fd:menu"))
+    b.row(
+        InlineKeyboardButton(text="📚 История", callback_data="fd:history:0"),
+        InlineKeyboardButton(text="⬅️ Меню", callback_data="fd:menu"),
+    )
     return b.as_markup()
 
 
@@ -827,7 +829,7 @@ def food_history_keyboard(days: Sequence[dt.date], page: int, has_next: bool) ->
     if nav:
         b.row(*nav)
     b.row(InlineKeyboardButton(text="⬅️ К сегодняшнему дню", callback_data="fd:day:today"))
-    b.row(InlineKeyboardButton(text="⬅️ Главное меню", callback_data="fd:menu"))
+    b.row(InlineKeyboardButton(text="⬅️ Меню", callback_data="fd:menu"))
     return b.as_markup()
 
 
