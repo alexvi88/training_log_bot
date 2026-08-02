@@ -179,3 +179,37 @@ def test_parse_ru_date_accepts_the_users_today():
     assert parse_ru_date("28.07.2026", today=users_today) == users_today
     with pytest.raises(ParseError):
         parse_ru_date("29.07.2026", today=users_today)
+
+
+async def test_slow_tick_still_pushes_users_resolved_at_its_start(fresh_db, user_id, monkeypatch):
+    """Building a push can be slow — Sunday's digest makes an LLM call per user
+    — so a long tick can outlast the hour it started in. Re-checking the clock
+    per user as the loop crawled dropped everyone near the end of the list, and
+    by the next tick their send hour had passed: the push was lost, not late."""
+    import engagement
+
+    db = fresh_db
+    other = (await db.get_or_create_user(telegram_id=222, username="second"))["telegram_id"]
+    for uid in (user_id, other):
+        await db.create_finished_workout(
+            uid, started_at="2026-07-01T10:00:00", finished_at="2026-07-01T11:00:00"
+        )
+
+    clock = {"hour_has_passed": False}
+
+    def fake_is_send_hour(tz, hour):
+        return not clock["hour_has_passed"]
+
+    built = []
+
+    async def slow_build(telegram_id, today):
+        built.append(telegram_id)
+        clock["hour_has_passed"] = True  # the first user's push took us past the hour
+        return None
+
+    monkeypatch.setattr(engagement, "is_send_hour", fake_is_send_hour)
+    monkeypatch.setattr(engagement, "build_daily_push", slow_build)
+
+    await engagement._send_daily_pushes(MagicMock())
+
+    assert sorted(built) == sorted([user_id, other])

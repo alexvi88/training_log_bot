@@ -277,10 +277,25 @@ async def _send_daily_pushes(bot: Bot) -> None:
     local date also keeps the one-per-day promise per user.
     """
     hour = config.ENGAGEMENT_HOUR
-    for telegram_id, tz_offset in await db.list_engagement_eligible_user_ids():
-        if not is_send_hour(tz_offset, hour):
-            continue
-        local_date = _local_now(tz_offset).date()
+
+    # Decide who is due *before* sending anything. Building a push can be slow —
+    # Sunday's digest makes an LLM call per user — so a big list can take the
+    # tick past the hour it started in. Re-checking the clock per user as the
+    # loop crawled meant everyone near the end fell out of their own send hour
+    # and got skipped; by the next tick their hour had passed, so the push was
+    # lost for the day rather than merely late.
+    due = [
+        (telegram_id, _local_now(tz_offset).date())
+        for telegram_id, tz_offset in await db.list_engagement_eligible_user_ids()
+        if is_send_hour(tz_offset, hour)
+    ]
+    due_newbies = [
+        (telegram_id, created_at, _local_now(tz_offset).date())
+        for telegram_id, created_at, tz_offset in await db.list_newbie_user_ids()
+        if is_send_hour(tz_offset, hour)
+    ]
+
+    for telegram_id, local_date in due:
         try:
             decision = await build_daily_push(telegram_id, local_date)
         except Exception:
@@ -289,10 +304,7 @@ async def _send_daily_pushes(bot: Bot) -> None:
         if decision is not None:
             await _deliver(bot, telegram_id, decision, local_date)
 
-    for telegram_id, created_at, tz_offset in await db.list_newbie_user_ids():
-        if not is_send_hour(tz_offset, hour):
-            continue
-        local_date = _local_now(tz_offset).date()
+    for telegram_id, created_at, local_date in due_newbies:
         try:
             decision = await build_newbie_push(telegram_id, created_at, local_date)
         except Exception:
