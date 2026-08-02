@@ -2211,9 +2211,11 @@ async def _finished_workout_card_text(workout, user, note: str | None, comment=_
         workout, user, note
     )
     suffix = ""
-    equivalent = formatting.format_tonnage_equivalent(session_tonnage, seed=workout["id"])
+    equivalent = formatting.format_tonnage_equivalent(
+        session_tonnage, seed=workout["id"], unit=user["unit"]
+    )
     if equivalent:
-        tonnage = formatting.format_tonnage(session_tonnage)
+        tonnage = formatting.format_tonnage(session_tonnage, user["unit"])
         suffix += f"\n\n🏋️ Суммарно за тренировку — {tonnage}. {equivalent}"
     if highlights:
         header = "🔥 <b>Рекорды и сравнения</b>"
@@ -2328,9 +2330,11 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
         workout, user, note
     )
     suffix = ""
-    equivalent = formatting.format_tonnage_equivalent(session_tonnage, seed=workout_id)
+    equivalent = formatting.format_tonnage_equivalent(
+        session_tonnage, seed=workout_id, unit=user["unit"]
+    )
     if equivalent:
-        tonnage = formatting.format_tonnage(session_tonnage)
+        tonnage = formatting.format_tonnage(session_tonnage, user["unit"])
         suffix += f"\n\n🏋️ Суммарно за тренировку — {tonnage}. {equivalent}"
     # Backfilled/imported past workouts shouldn't fire the "Nth workout" milestone —
     # they're entered out of order, so the running count isn't meaningful for them.

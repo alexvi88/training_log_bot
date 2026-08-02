@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from html import escape
 from typing import Literal
 
+import config
 from analytics import e1rm
 
 _WEEKDAYS_RU = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"]
@@ -276,21 +277,33 @@ def _delta_arrow(delta: float) -> str:
     return "↑" if delta > 0 else ("↓" if delta < 0 else "→")
 
 
-def format_tonnage(total_kg: float, unit: str = "kg") -> str:
+def to_kg(total: float, unit: str = "kg") -> float:
+    """Weights are stored in whatever unit the user picked, so anything compared
+    against a real-world quantity (a ton, an elephant) has to be normalized."""
+    return total / config.LB_PER_KG if unit == "lb" else total
+
+
+def format_tonnage(total: float, unit: str = "kg") -> str:
     """Session/lifetime tonnage as a full word ("тонны"/"тонн"), never abbreviated.
+
+    `total` is in the user's own unit. A ton is a ton, so the threshold and the
+    figure are computed in kilograms — a lb user lifting 20 000 lb has moved
+    9 tons, not 20. Below a ton there's nothing to convert: their own number in
+    their own unit is what they want to see.
 
     Russian grammar: a non-whole amount (e.g. "1.5 тонны") always takes the
     2-4 form regardless of the leading digit, so only a whole number of tons
     goes through the normal plural_ru rules.
     """
     u = UNIT_LABELS.get(unit, "кг")
+    total_kg = to_kg(total, unit)
     if total_kg >= 1000:
         tons = round(total_kg / 1000, 1)
         tons_str = format_weight(tons)
         forms = ("тонна", "тонны", "тонн")
         word = plural_ru(int(tons), forms) if tons == int(tons) else forms[1]
         return f"{tons_str} {word}"
-    return f"{total_kg:.0f}{u}"
+    return f"{total:.0f}{u}"
 
 
 def _collapse_formatted_sets(formatted: list[str]) -> list[str]:
@@ -458,14 +471,19 @@ _TONNAGE_OBJECTS = [
 ]
 
 
-def format_tonnage_equivalent(total_kg: float, seed: int = 0) -> str | None:
+def format_tonnage_equivalent(total: float, seed: int = 0, unit: str = "kg") -> str | None:
     """A playful "это как N слонов 🐘" comparison clause, without restating the tonnage
     itself — callers fold it into whatever sentence already states the total.
 
     Picks whichever object gives a believable count (2..40); `seed` (e.g. the
     workout id) rotates the choice so it isn't always the same object. Returns
     None for a tonnage too small to compare (bodyweight-only or very light days).
+
+    `total` comes in the user's own unit and is converted first: the objects
+    below weigh what they weigh, so counting pounds against them inflated every
+    comparison by 2.2× for lb users.
     """
+    total_kg = to_kg(total, unit)
     if total_kg < 150:
         return None
     candidates = [
@@ -706,8 +724,11 @@ def build_hall_of_fame(
     w = plural_ru(total_workouts, ("тренировка", "тренировки", "тренировок"))
     lines.append(f"🗓 Всего тренировок: <b>{total_workouts}</b> {w}")
 
-    if tonnage_kg >= 1000:
-        tons = round(tonnage_kg / 1000)
+    # `tonnage_kg` arrives in the user's own unit despite the name — a ton is a
+    # ton, so convert before comparing against one (see format_tonnage).
+    lifetime_kg = to_kg(tonnage_kg, unit)
+    if lifetime_kg >= 1000:
+        tons = round(lifetime_kg / 1000)
         tonnage_str = f"{tons} {plural_ru(tons, ('тонна', 'тонны', 'тонн'))}"
     else:
         tonnage_str = f"{tonnage_kg:.0f}{u}"
