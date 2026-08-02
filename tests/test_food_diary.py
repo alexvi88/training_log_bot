@@ -265,7 +265,7 @@ def test_day_screen_numbers_entries_and_totals():
     assert "📷" in text
     assert "410 ккал" in text
     assert "2 приёма пищи" in text
-    assert "Б 12 · Ж 8 · У 55" in text
+    assert "Б12 · Ж8 · У55" in text
 
 
 def test_non_empty_day_screen_still_hints_at_adding_more():
@@ -302,10 +302,10 @@ def test_day_screen_shows_per_item_macros():
     ]
     text = formatting.build_food_day_screen(dt.date(2026, 7, 20), entries)
     # у отдельных продуктов — обычным текстом, не перегружаем скобки
-    assert "Протеин — 30 г — 120 ккал (Б 24 · Ж 1 · У 3)" in text
-    assert "Гранола — 150 г — 630 ккал (Б 15 · Ж 23 · У 98)" in text
+    assert "Протеин — 30 г — 120 ккал (Б24 · Ж1 · У3)" in text
+    assert "Гранола — 150 г — 630 ккал (Б15 · Ж23 · У98)" in text
     # итог по приёму — ккал и БЖУ одной строкой под раскладкой, жирным
-    assert "<b>750 ккал · Б 39 · Ж 24 · У 101</b>" in text
+    assert "<b>750 ккал · Б39 · Ж24 · У101</b>" in text
     # калорий блюда больше нет при названии наверху
     assert "Гранола с протеином</b> — 750 ккал" not in text
 
@@ -321,7 +321,7 @@ def test_day_screen_entry_totals_omit_missing_half():
     only_macros = formatting.build_food_day_screen(
         dt.date(2026, 7, 20), [_view(id=1, description="Что-то", protein=10, fat=2, carbs=5)]
     )
-    assert "<b>Б 10 · Ж 2 · У 5</b>" in only_macros
+    assert "<b>Б10 · Ж2 · У5</b>" in only_macros
 
 
 def test_estimate_text_lists_items_with_their_own_macros():
@@ -334,16 +334,16 @@ def test_estimate_text_lists_items_with_their_own_macros():
         calories=310, protein=9, fat=6, carbs=62, comment="порция на глаз",
     )
     assert "Овсянка с бананом" in text
-    assert "• Овсянка — 60 г — 220 ккал (Б 6 · Ж 4 · У 36)" in text
+    assert "• Овсянка — 60 г — 220 ккал (Б6 · Ж4 · У36)" in text
     assert "• Банан — 1 шт — 90 ккал" in text  # без макросов — без скобок
     assert "(Б" not in text.split("Банан")[1].split("\n")[0]
     assert "Итого: <b>310 ккал</b>" in text
-    assert "Б 9 · Ж 6 · У 62" in text
+    assert "Б9 · Ж6 · У62" in text
     assert "порция на глаз" in text
 
 
 def test_macros_line_has_no_bold_and_no_trailing_unit():
-    assert formatting._macros_line(30, 12, 60) == "Б 30 · Ж 12 · У 60"
+    assert formatting._macros_line(30, 12, 60) == "Б30 · Ж12 · У60"
 
 
 def test_estimate_text_without_numbers_skips_totals_entirely():
@@ -374,7 +374,7 @@ def test_history_list_newest_first():
 def test_history_list_shows_per_day_macros():
     days = [_day(entries=2, calories=410.0, protein=29, fat=15, carbs=40)]
     text = formatting.build_food_history_list(days)
-    assert "Б 29 · Ж 15 · У 40" in text
+    assert "Б29 · Ж15 · У40" in text
 
 
 def test_history_list_skips_macros_line_when_unknown():
