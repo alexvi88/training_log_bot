@@ -259,12 +259,42 @@ def classify_weekly_volume(sets_count: int) -> str:
     return "in_range"
 
 
+# How long a muscle group needs before it's worth loading hard again. Scaled by
+# how much work it got: a 4-set session clears in about two days, a 15-set one
+# takes the better part of three. Deliberately a rule of thumb, not a model —
+# it answers "что сегодня логичнее" and nothing more.
+RECOVERY_HOURS_MIN = 48
+RECOVERY_HOURS_MAX = 72
+RECOVERY_SETS_FOR_MAX = 12
+
+
+def recovery_percent(last_trained: dt.date, sets_done: int, today: dt.date) -> int:
+    """0-100: how recovered a muscle group is, given when it was last trained
+    and how many sets it took.
+
+    Linear from 0% at the end of that session to 100% after the window. Never
+    negative, never above 100 — this is shown as a readiness figure, and a
+    number outside that range would read as a bug rather than as nuance.
+    """
+    days_since = (today - last_trained).days
+    if days_since < 0:
+        return 0
+    load = min(max(sets_done, 0), RECOVERY_SETS_FOR_MAX) / RECOVERY_SETS_FOR_MAX
+    window_hours = RECOVERY_HOURS_MIN + (RECOVERY_HOURS_MAX - RECOVERY_HOURS_MIN) * load
+    return max(0, min(100, round(days_since * 24 / window_hours * 100)))
+
+
 @dataclass
 class ProgressionSuggestion:
     action: str  # "add_weight" | "add_reps"
     target_weight: float
     target_reps: int  # add_reps: reps to beat; add_weight: bottom-of-range reps to restart at
     is_bodyweight: bool = False
+    # The set the target was derived from — the top working set of last session.
+    # Carried so the hint can say *why* this number and not just assert it; the
+    # commonest complaint about Fitbod is exactly that its numbers look random.
+    from_weight: float = 0.0
+    from_reps: int = 0
 
 
 # Fallback increment per unit, used when the exercise's own history says nothing
@@ -361,7 +391,10 @@ def suggest_progression(
         return None
     if all(w == 0 for w, _ in working):
         best_reps = max(r for _, r in working)
-        return ProgressionSuggestion("add_reps", 0.0, best_reps + 1, is_bodyweight=True)
+        return ProgressionSuggestion(
+            "add_reps", 0.0, best_reps + 1, is_bodyweight=True,
+            from_weight=0.0, from_reps=best_reps,
+        )
     top_weight = max(w for w, _ in working)
     reps_at_top = max(r for w, r in working if w == top_weight)
     if reps_at_top >= REP_RANGE_MAX:
@@ -371,8 +404,12 @@ def suggest_progression(
             "add_weight",
             target_weight,
             _reps_holding_e1rm(target_weight, top_weight, reps_at_top, formula),
+            from_weight=top_weight,
+            from_reps=reps_at_top,
         )
-    return ProgressionSuggestion("add_reps", top_weight, reps_at_top + 1)
+    return ProgressionSuggestion(
+        "add_reps", top_weight, reps_at_top + 1, from_weight=top_weight, from_reps=reps_at_top
+    )
 
 
 @dataclass
@@ -386,6 +423,25 @@ class Dashboard:
 
 def _week_monday(d: dt.date) -> dt.date:
     return d - dt.timedelta(days=d.weekday())
+
+
+def most_frequent_weekday(workout_dates: Iterable[dt.date], min_lead: int = 2) -> int | None:
+    """Which weekday (0=Mon) the user trains on most, or None when nothing
+    stands out.
+
+    `min_lead` is how many workouts clear of the runner-up the winner must be:
+    "твой самый продуктивный день" is a claim about a habit, and 5-vs-4 is
+    noise, not a habit.
+    """
+    counts: dict[int, int] = {}
+    for d in workout_dates:
+        counts[d.weekday()] = counts.get(d.weekday(), 0) + 1
+    if not counts:
+        return None
+    ranked = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    if len(ranked) == 1:
+        return ranked[0][0]
+    return ranked[0][0] if ranked[0][1] - ranked[1][1] >= min_lead else None
 
 
 def max_week_streak(workout_dates: Iterable[dt.date]) -> int:

@@ -145,18 +145,15 @@ class RefreshPersistentMenuMiddleware(BaseMiddleware):
 
 
 async def _setup_commands(bot: Bot) -> None:
-    """Whose "/" menu lists what.
-
-    /food_diary works for everyone who types it, but it's listed only in the
-    admin's scope while the section is being run in: the default list is what
-    every user sees as the bot's advertised feature set, and the food diary
-    isn't in the main menu yet either.
-    """
+    """Whose "/" menu lists what — the default list doubles as the bot's
+    advertised feature set, so anything reachable from the main menu belongs
+    in it."""
     await bot.set_my_commands(
         [
             BotCommand(command="start", description="Открыть главное меню"),
             BotCommand(command="help", description="Как вводить подходы"),
             BotCommand(command="ai_trainer", description="AI-тренер"),
+            BotCommand(command="food_diary", description="Дневник еды"),
             BotCommand(command="feedback", description="Отзыв / баг / идея"),
         ],
         scope=BotCommandScopeDefault(),
@@ -167,8 +164,8 @@ async def _setup_commands(bot: Bot) -> None:
                 BotCommand(command="start", description="Открыть главное меню"),
                 BotCommand(command="help", description="Как вводить подходы"),
                 BotCommand(command="ai_trainer", description="AI-тренер"),
-                BotCommand(command="feedback", description="Отзыв / баг / идея"),
                 BotCommand(command="food_diary", description="Дневник еды"),
+                BotCommand(command="feedback", description="Отзыв / баг / идея"),
                 BotCommand(command="check_users", description="Список пользователей (админ)"),
                 BotCommand(command="ai_dialogs", description="Диалоги с AI-тренером (админ)"),
                 BotCommand(command="pushes", description="Лог отправленных пушей (админ)"),

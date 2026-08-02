@@ -241,3 +241,41 @@ async def test_menu_view_heatmap_cached_across_calls(user_id, fresh_db, monkeypa
     assert png3 != png1
 
 
+
+
+async def test_charts_render_correctly_from_concurrent_threads():
+    """Renders run in worker threads (asyncio.to_thread). pyplot keeps one global
+    figure registry per process, so two users opening "Прогресс" at the same
+    moment were racing for it; building figures directly avoids that."""
+    import asyncio
+    import datetime as dt
+
+    import charts
+
+    base = dt.datetime(2026, 5, 4, 12, 0)
+    points = [(base + dt.timedelta(days=i), 100.0 + i) for i in range(12)]
+
+    pngs = await asyncio.gather(*[
+        asyncio.to_thread(
+            charts.render_metric_over_sessions, points, f"График {i}", "кг"
+        )
+        for i in range(8)
+    ])
+
+    assert all(png.startswith(b"\x89PNG") for png in pngs)
+    assert all(len(png) > 1000 for png in pngs)
+
+
+async def test_onboarding_names_the_features_a_new_user_cannot_guess(fresh_db, user_id):
+    """A new user's first screen used to describe only "pick a group, type a
+    set" — the ready-made programs on the very next screen, the voice input and
+    the AI trainer went unmentioned, so they were found by accident or not at
+    all."""
+    from handlers import workout
+
+    text, _png = await workout._menu_view(user_id)
+
+    assert "Готовые программы" in text
+    assert "голосов" in text
+    assert "AI-тренер" in text
+    assert "Дневник питания" in text

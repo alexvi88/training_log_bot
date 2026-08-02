@@ -681,3 +681,75 @@ async def test_transcribe_voice_returns_empty_string_when_blank(monkeypatch):
     text = await ai_trainer.transcribe_voice(SimpleNamespace(name="voice.ogg"))
 
     assert text == ""
+
+
+async def test_model_clients_are_built_with_a_timeout(monkeypatch):
+    """The OpenAI SDK defaults to a 600s timeout, which isn't a timeout so much
+    as an abandonment: a hung request leaves the user watching "🤔 думаю…" for
+    ten minutes while the placeholder animation keeps cycling."""
+    import ai_trainer as module
+
+    captured = {}
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(module, "AsyncOpenAI", FakeClient)
+    monkeypatch.setattr(module, "_client", None)
+
+    module._get_client()
+
+    assert captured["timeout"] == config.AI_REQUEST_TIMEOUT_SECONDS
+    assert captured["timeout"] < 600
+
+
+async def test_food_diary_tool_groups_entries_by_day_with_totals(fresh_db, user_id):
+    """The coach advised on nutrition while blind to the diary in the same
+    database. Totals are summed here rather than left to the model: they're the
+    part that gets reasoned about ("недобираешь белок")."""
+    import datetime as dt
+
+    import ai_trainer as module
+    import db as dbmod
+
+    today = dt.date.today().isoformat()
+    await dbmod.add_food_entry(
+        user_id, eaten_on=today, description="Овсянка", calories=350, protein=12, fat=7, carbs=60
+    )
+    await dbmod.add_food_entry(
+        user_id, eaten_on=today, description="Курица с рисом", calories=650, protein=55, fat=12, carbs=70
+    )
+
+    payload = await module._food_diary(user_id, days=7)
+
+    assert len(payload["days"]) == 1
+    day = payload["days"][0]
+    assert day["date"] == today
+    assert day["calories"] == 1000
+    assert day["protein"] == 67
+    assert [e["description"] for e in day["entries"]] == ["Овсянка", "Курица с рисом"]
+
+
+async def test_food_diary_tool_marks_entries_saved_without_macros(fresh_db, user_id):
+    """Users can turn КБЖУ off — those entries are text-only, not broken."""
+    import datetime as dt
+
+    import ai_trainer as module
+    import db as dbmod
+
+    today = dt.date.today().isoformat()
+    await dbmod.add_food_entry(user_id, eaten_on=today, description="Шаурма у дома")
+
+    payload = await module._food_diary(user_id, days=7)
+
+    day = payload["days"][0]
+    assert day["entries_without_macros"] == 1
+    assert day["entries"][0]["calories"] is None
+
+
+async def test_food_diary_tool_is_offered_to_the_model():
+    import ai_trainer as module
+
+    names = [t["function"]["name"] for t in module.TOOLS]
+    assert "get_food_diary" in names

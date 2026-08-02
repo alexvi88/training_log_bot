@@ -36,22 +36,32 @@ def persistent_menu() -> ReplyKeyboardMarkup:
     )
 
 
-def main_menu(has_active_workout: bool) -> InlineKeyboardMarkup:
+def main_menu(has_active_workout: bool, show_quick_log: bool = False) -> InlineKeyboardMarkup:
+    """show_quick_log: offered while the diary is still empty. A first-time user
+    has nothing to look at and a whole training history behind them — letting
+    them type one line of it beats walking the picker for the first record."""
     b = InlineKeyboardBuilder()
     if has_active_workout:
         b.button(text="▶️ ПРОДОЛЖИТЬ ТРЕНИРОВКУ", callback_data="menu:resume_workout")
     else:
         b.button(text="🏋️ НАЧАТЬ ТРЕНИРОВКУ", callback_data="menu:start_workout")
+    # Also on the persistent keyboard, but the menu is what a new user reads to
+    # find out what the bot does — and "menu:ai" had a handler no keyboard sent.
+    if show_quick_log:
+        b.button(text="✍️ Записать прошлую тренировку", callback_data="menu:quicklog")
+    b.button(text="🤖 AI-тренер", callback_data="menu:ai")
     b.button(text="📈 Прогресс", callback_data="menu:progress")
     b.button(text="📚 История", callback_data="menu:history")
     b.button(text="⚙️ Упражнения", callback_data="menu:exercises")
     b.button(text="🗂 Программы", callback_data="rt:manage")
     b.button(text="⚖️ Дневник веса", callback_data="menu:bodyweight")
-    b.button(text="🍽 Дневник еды", callback_data="menu:food_diary")
+    b.button(text="🍽 Дневник еды", callback_data="menu:food")
+    b.button(text="🏆 Достижения", callback_data="menu:achievements")
     b.button(text="🔧 Настройки", callback_data="menu:settings")
-    # first row: start/resume; then Прогресс·История, Упражнения·Программы,
-    # Дневник веса·Дневник еды, Настройки.
-    b.adjust(1, 2, 2, 2, 1)
+    # start/resume, quick-log (if shown) and AI-тренер full width, then pairs:
+    # Прогресс·История, Упражнения·Программы, Дневник веса·Дневник еды,
+    # Достижения·Настройки.
+    b.adjust(*([1, 1, 1] if show_quick_log else [1, 1]), 2, 2, 2, 2)
     return b.as_markup()
 
 
@@ -61,7 +71,10 @@ AI_MENTION_PAGE_SIZE = 3
 
 
 def ai_trainer_keyboard(
-    has_active_workout: bool = False, exercises: Sequence[Any] = (), page: int = 0
+    has_active_workout: bool = False,
+    exercises: Sequence[Any] = (),
+    page: int = 0,
+    program_name: str | None = None,
 ) -> InlineKeyboardMarkup:
     """`exercises` — то, что тренер упомянул в ответе (см. exercise_mentions), и
     свои упражнения, и ещё не добавленные из каталога — до
@@ -70,7 +83,12 @@ def ai_trainer_keyboard(
     карточку — прямая ссылка вела бы в никуда, раз упражнения ещё нет.
     Показываем по AI_MENTION_PAGE_SIZE штук за раз с постраничным ⬅️/➡️, если
     упоминаний больше — id всех упоминаний едут прямо в callback_data стрелок
-    (см. handlers/ai_trainer.ai_mentions_page), отдельного состояния не нужно."""
+    (см. handlers/ai_trainer.ai_mentions_page), отдельного состояния не нужно.
+
+    `program_name` — название программы, которую тренер собрал в этом ответе
+    (см. ai_trainer.propose_program): даёт самую верхнюю кнопку, ведущую на
+    превью с составом и кнопкой сохранения. Сам черновик в callback_data не
+    влезает и лежит в FSM, поэтому кнопка без параметров."""
     exercises = list(exercises)
     b = InlineKeyboardBuilder()
     b.button(text="🏠 Меню", callback_data="ai:menu")
@@ -110,7 +128,44 @@ def ai_trainer_keyboard(
             page_nav.append(InlineKeyboardButton(text="➡️", callback_data=f"ai:mpage:{page + 1}:{ids}"))
     page_nav_rows = [page_nav] if page_nav else []
 
-    return InlineKeyboardMarkup(inline_keyboard=mention_rows + page_nav_rows + nav)
+    # Программа — над всем остальным: это то, ради чего пользователь и просил
+    # ответ, а упоминания упражнений рядом с ней второстепенны.
+    program_rows = []
+    if program_name:
+        program_rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"📋 {_shorten_label(program_name, AI_MENTION_LABEL_LIMIT)}",
+                    callback_data="ai:prog:view",
+                )
+            ]
+        )
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=program_rows + mention_rows + page_nav_rows + nav
+    )
+
+
+def ai_program_preview_keyboard() -> InlineKeyboardMarkup:
+    """Превью программы, собранной тренером: сохранить или отказаться.
+
+    Сохранение создаёт по программе на каждый её день (см.
+    handlers/ai_trainer.ai_program_save), поэтому подпись говорит «добавить»,
+    а не «сохранить программу» — в списке появится несколько строк.
+    """
+    b = InlineKeyboardBuilder()
+    b.button(text="✅ Добавить себе", callback_data="ai:prog:save")
+    b.button(text="❌ Не надо", callback_data="ai:prog:drop")
+    b.adjust(1)
+    return b.as_markup()
+
+
+def ai_program_saved_keyboard() -> InlineKeyboardMarkup:
+    """После сохранения программы — прямая дорога в её список, без возврата в меню."""
+    b = InlineKeyboardBuilder()
+    b.button(text="🗂 К программам", callback_data="rt:manage")
+    b.adjust(1)
+    return b.as_markup()
 
 
 def groups_keyboard(
@@ -559,10 +614,17 @@ def history_item_keyboard(workout_id: int, show_ai_button: bool = False) -> Inli
     return b.as_markup()
 
 
-def workout_card_keyboard(workout_id: int, show_ai_button: bool = False) -> InlineKeyboardMarkup:
+def workout_card_keyboard(
+    workout_id: int, show_ai_button: bool = False, show_achievements: bool = False
+) -> InlineKeyboardMarkup:
+    """show_achievements: only when this workout actually unlocked a badge. The
+    card announces the new badge in its text, and until now there was nowhere to
+    go and look at it — the grid lives behind Прогресс → выбор группы."""
     b = InlineKeyboardBuilder()
     if show_ai_button:
         b.row(InlineKeyboardButton(text="🤖 Комментарий AI-тренера", callback_data=f"ai:comment:{workout_id}"))
+    if show_achievements:
+        b.row(InlineKeyboardButton(text="🏆 Достижения", callback_data="menu:achievements"))
     b.row(
         InlineKeyboardButton(text="🖼 Картинка", callback_data=f"hist:card:{workout_id}"),
         InlineKeyboardButton(text="📝 Заметка", callback_data=f"live:addnote:{workout_id}"),
@@ -681,6 +743,7 @@ def settings_keyboard(
     stickers_enabled: bool = True,
     show_stickers_toggle: bool = False,
     food_macros_enabled: bool = True,
+    show_extra_stats: bool = True,
 ) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(text=f"Единицы: {unit}", callback_data="settings:unit")
@@ -712,6 +775,14 @@ def settings_keyboard(
         else "📝 КБЖУ в дневнике питания: не считаю"
     )
     b.button(text=macros_label, callback_data="settings:food_macros")
+    # users.show_extra_stats has always gated the e1RM line on the finish card;
+    # it just had no switch, so nobody could ever turn it off.
+    card_label = (
+        "📊 Карточка тренировки: подробно"
+        if show_extra_stats
+        else "📋 Карточка тренировки: компактно"
+    )
+    b.button(text=card_label, callback_data="settings:card_detail")
     b.button(text="📤 Экспорт CSV", callback_data="settings:export")
     b.button(text="📥 Импорт CSV", callback_data="settings:import")
     b.button(text="🏠 Меню", callback_data="settings:back")

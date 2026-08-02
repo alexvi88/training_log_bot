@@ -18,6 +18,7 @@ day-14 line — hence a dedicated category per milestone instead of one big
 """
 
 import random
+import re
 
 import db
 
@@ -100,7 +101,7 @@ TEXTS: dict[str, list[str]] = {
     WEEKLY_DIGEST: [
         "ПРИВЕТ АТЛЕТ, за месяц ты поднял суммарно {tonnage} — это примерно один синий кит. Зайди, покажу разбивку.",
         "ПРИВЕТ АТЛЕТ, на этой неделе — {week_count}. Заходи, гляну, что подросло.",
-        "ПРИВЕТ АТЛЕТ, понедельник — твой самый продуктивный день по истории. Держим планку?",
+        "ПРИВЕТ АТЛЕТ, {best_day} — твой самый продуктивный день по истории. Держим планку?",
         "ПРИВЕТ АТЛЕТ, за 30 дней суммарный тоннаж — {tonnage}. На этой неделе — {week_count}. Разбор — в приложении.",
         "ПРИВЕТ АТЛЕТ, тоннаж за месяц — {tonnage}, а на этой неделе набралось {week_count}. Заходи, посмотри цифры целиком.",
     ],
@@ -133,15 +134,28 @@ async def pick_text(telegram_id: int, category: str, **format_kwargs: object) ->
 
     Draws from a shuffled bag persisted per (telegram_id, category); refills
     and reshuffles once exhausted so every variant is seen before any repeat.
+
+    A placeholder passed as None means "no data for this" — variants using it
+    are dropped from the draw rather than filled with a guess. That's how a
+    claim about the user's own history ("{best_day} — твой самый продуктивный
+    день") stays true: without the data behind it, the line simply isn't sent.
     """
-    pool = TEXTS[category]
+    missing = {k for k, v in format_kwargs.items() if v is None}
+    pool = [t for t in TEXTS[category] if not any("{" + k + "}" in t for k in missing)]
+    if not pool:
+        pool = [t for t in TEXTS[category] if not _placeholders(t)] or TEXTS[category]
     if len(pool) == 1:
         return pool[0].format(**format_kwargs)
 
     bag = await db.get_rotation_bag(telegram_id, category)
+    bag = [i for i in bag if i < len(pool)]
     if not bag:
         bag = list(range(len(pool)))
         random.shuffle(bag)
     index = bag.pop(0)
     await db.save_rotation_bag(telegram_id, category, bag)
     return pool[index].format(**format_kwargs)
+
+
+def _placeholders(template: str) -> set[str]:
+    return set(re.findall(r"{(\w+)}", template))

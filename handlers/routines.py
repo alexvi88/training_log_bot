@@ -305,7 +305,7 @@ async def rt_pickw_use(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(StateFilter(RoutineFlow.naming))
+@router.message(StateFilter(RoutineFlow.naming), F.text)
 async def rt_name_entered(message: Message, state: FSMContext):
     name = message.text.strip()
     if not name:
@@ -331,7 +331,7 @@ async def rt_rename(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(StateFilter(RoutineFlow.renaming))
+@router.message(StateFilter(RoutineFlow.renaming), F.text)
 async def rt_rename_entered(message: Message, state: FSMContext):
     name = message.text.strip()
     if not name:
@@ -406,7 +406,7 @@ async def _begin_routine_workout(callback: CallbackQuery, state: FSMContext, rou
     """Create the workout and load the routine's first block. Assumes any
     previously active workout has already been dealt with."""
     from handlers.workout import _delete_message as wk_delete
-    from handlers.workout import _load_next_planned_block, _picker_screen_groups
+    from handlers.workout import _load_next_planned_block, _picker_screen_groups, _reset_new_workout_scaffold
 
     exercises = await db.list_routine_exercises(routine["id"])
     planned = [
@@ -414,6 +414,7 @@ async def _begin_routine_workout(callback: CallbackQuery, state: FSMContext, rou
         for ex in exercises
     ]
 
+    await _reset_new_workout_scaffold(state)
     workout_id = await db.create_workout(callback.from_user.id)
     await wk_delete(callback.message)
     sent = await callback.message.answer(f"🏋️ Тренировка по программе «{routine['name']}»")
@@ -593,7 +594,7 @@ async def rtadd_pick_template(callback: CallbackQuery, state: FSMContext):
     await _rtadd_finish(callback, state, ex_id)
 
 
-@router.message(StateFilter(RoutineFlow.adding_exercise_group, RoutineFlow.adding_exercise_pick))
+@router.message(StateFilter(RoutineFlow.adding_exercise_group, RoutineFlow.adding_exercise_pick), F.text)
 async def rtadd_search_text(message: Message, state: FSMContext):
     """Typing while picking what to add searches — own exercises plus catalog
     templates (forked on tap), same merge as the live-workout picker."""

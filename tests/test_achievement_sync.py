@@ -16,6 +16,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import CallbackQuery
 
 import achievement_sync
+import config
 from fsm import EditWorkoutFlow, HistoryFlow
 from handlers import edit_workout, history
 
@@ -176,3 +177,46 @@ async def test_moving_a_workout_off_january_first_drops_the_new_year_badge(fresh
     await edit_workout._apply_edit_workout_date(workout_id, dt.date(2026, 1, 3))
 
     assert "new_year" not in await db.list_achievement_codes(user_id)
+
+
+async def test_weight_clubs_use_kilograms_not_the_users_unit(fresh_db, user_id):
+    """Club thresholds are in kg, but weights are stored in whatever unit the
+    user picked — so a lb user cleared "Клуб 100" with a 100 lb (45 kg) lift."""
+    db = fresh_db
+    await db.update_user(user_id, unit="lb")
+    gid = await db.create_muscle_group(user_id, "Грудь")
+    ex_id = await db.create_exercise(user_id, "Жим", gid)
+    workout_id = await db.create_workout(user_id)
+    block_id = await db.create_block(workout_id, "single")
+    await db.add_block_exercise(block_id, ex_id, 0)
+    await db.add_set(block_id, ex_id, 1, 0, 100, 5)  # 100 lb ≈ 45 kg
+    await db.finish_workout(workout_id)
+
+    await achievement_sync.resync(user_id)
+
+    assert "club100" not in await db.list_achievement_codes(user_id)
+
+
+async def test_switching_units_does_not_hand_out_every_weight_club(fresh_db, user_id):
+    """Switching kg → lb multiplies every stored weight by 2.2. Measured against
+    kg thresholds that unlocked all four clubs at once, and the award-only path
+    never takes a badge back."""
+    db = fresh_db
+    gid = await db.create_muscle_group(user_id, "Ноги")
+    ex_id = await db.create_exercise(user_id, "Присед", gid)
+    workout_id = await db.create_workout(user_id)
+    block_id = await db.create_block(workout_id, "single")
+    await db.add_block_exercise(block_id, ex_id, 0)
+    await db.add_set(block_id, ex_id, 1, 0, 100, 5)  # 100 kg
+    await db.finish_workout(workout_id)
+    await achievement_sync.resync(user_id)
+    assert await db.list_achievement_codes(user_id) >= {"club100"}
+
+    # The unit switch as handlers/settings performs it.
+    await db.scale_user_set_weights(user_id, config.LB_PER_KG)
+    await db.update_user(user_id, unit="lb")
+    await achievement_sync.resync(user_id)
+
+    codes = await db.list_achievement_codes(user_id)
+    assert "club100" in codes  # still a real 100kg lift
+    assert {"club140", "club180", "club220"}.isdisjoint(codes)

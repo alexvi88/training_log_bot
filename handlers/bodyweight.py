@@ -160,7 +160,7 @@ async def bw_undo(callback: CallbackQuery, state: FSMContext):
     await _render(callback, state)
 
 
-@router.message(StateFilter(BodyweightFlow.viewing))
+@router.message(StateFilter(BodyweightFlow.viewing), F.text)
 async def bw_weight_entered(message: Message, state: FSMContext):
     try:
         weight = parse_bodyweight(message.text)

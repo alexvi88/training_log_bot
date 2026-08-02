@@ -18,6 +18,7 @@ import logging
 import achievements
 import analytics
 import db
+import formatting
 import view_builder
 
 logger = logging.getLogger(__name__)
@@ -25,14 +26,27 @@ logger = logging.getLogger(__name__)
 
 async def _aggregate_context(user_id: int) -> achievements.AchievementContext:
     """Lifetime totals only — the per-workout fields stay None so a caller can
-    fill them in for whichever workout it is evaluating."""
+    fill them in for whichever workout it is evaluating.
+
+    Weights are normalized to kilograms here. The thresholds behind "🏅 Клуб 220"
+    and the tonnage badges are in kg (as the field names say), but the DB stores
+    whatever unit the user picked — so a lb user was measured against kg
+    thresholds and cleared "Клуб 100" with a 100 lb (45 kg) lift, and switching
+    kg → lb multiplied every stored weight by 2.2 and handed out all four
+    weight clubs at once. Badges are never revoked by the award-only path, so
+    that grade of wrong is permanent.
+    """
+    user = await db.get_user(user_id)
+    unit = user["unit"] if user else "kg"
     return achievements.AchievementContext(
         total_workouts=await db.count_workouts(user_id),
-        lifetime_tonnage_kg=(await db.hall_of_fame_aggregates(user_id))["tonnage"],
+        lifetime_tonnage_kg=formatting.to_kg(
+            (await db.hall_of_fame_aggregates(user_id))["tonnage"], unit
+        ),
         best_week_streak=analytics.max_week_streak(
             [dt.date.fromisoformat(d) for d in await db.list_finished_workout_dates(user_id)]
         ),
-        max_weight_kg=await db.max_weight_ever(user_id),
+        max_weight_kg=formatting.to_kg(await db.max_weight_ever(user_id), unit),
         distinct_exercises=await db.count_distinct_exercises_used(user_id),
     )
 

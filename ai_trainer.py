@@ -60,6 +60,19 @@ PROGRESS_SESSIONS_LIMIT = 10
 # не раздул промпт до неприличия.
 FULL_WORKOUT_HISTORY_LIMIT = 200
 
+# Границы программы, которую собирает тренер (см. propose_program). Всё, что
+# сверх, срезается в _propose_program, а модели про это говорят в ответе
+# инструмента — молча урезанная программа хуже, чем урезанная с объяснением.
+PROGRAM_MAX_DAYS = 6
+PROGRAM_MAX_EXERCISES_PER_DAY = 12
+PROGRAM_NAME_LIMIT = 48
+PROGRAM_MAX_SETS = 10
+PROGRAM_MAX_REPS = 50
+
+# Сколько всего программ разрешаем держать пользователю: список программ —
+# плоский экран без пагинации, и полсотни строк в нём никто не разгребёт.
+MAX_ROUTINES_PER_USER = 30
+
 _client: Optional[AsyncOpenAI] = None
 
 
@@ -85,7 +98,11 @@ def is_configured() -> bool:
 def _get_client() -> AsyncOpenAI:
     global _client
     if _client is None:
-        _client = AsyncOpenAI(api_key=config.XAI_API_KEY, base_url=config.GROK_BASE_URL)
+        _client = AsyncOpenAI(
+            api_key=config.XAI_API_KEY,
+            base_url=config.GROK_BASE_URL,
+            timeout=config.AI_REQUEST_TIMEOUT_SECONDS,
+        )
     return _client
 
 
@@ -99,7 +116,9 @@ def is_voice_configured() -> bool:
 def _get_audio_client() -> AsyncOpenAI:
     global _audio_client
     if _audio_client is None:
-        _audio_client = AsyncOpenAI(api_key=config.OPENAI_API_KEY)
+        _audio_client = AsyncOpenAI(
+            api_key=config.OPENAI_API_KEY, timeout=config.AI_REQUEST_TIMEOUT_SECONDS
+        )
     return _audio_client
 
 
@@ -134,7 +153,9 @@ async def _get_sdk_client() -> AsyncXAIClient:
     if _sdk_client is None:
         async with _sdk_client_lock:
             if _sdk_client is None:
-                _sdk_client = AsyncXAIClient(api_key=config.XAI_API_KEY)
+                _sdk_client = AsyncXAIClient(
+                    api_key=config.XAI_API_KEY, timeout=config.AI_REQUEST_TIMEOUT_SECONDS
+                )
     return _sdk_client
 
 
@@ -213,6 +234,13 @@ list_recent_workouts отдаёт максимум 10 последних тре�
 тела за период, тренд набора/похудения или сравнение с прошлым — вызови
 get_bodyweight_history, она отдаёт всю историю дневника веса, а не только последнюю запись.
 
+В боте есть и дневник питания — get_food_diary отдаёт, что человек ел последние дни,
+с КБЖУ по дням. Если разговор про еду, калории, белок, набор или сушку — сначала
+посмотри дневник, а не спрашивай «что ты ешь»: человек, возможно, уже всё записал.
+Самое ценное — связка с тренировками: если рабочие веса просели на фоне недобора
+калорий или белка, скажи об этом прямо. Дневник может быть и пустым — тогда так и
+скажи, что данных нет, и спроси.
+
 Также есть инструмент list_exercise_catalog — полный каталог упражнений-шаблонов
 бота по группам мышц. Используй его вместе со списком упражнений пользователя
 (из get_training_overview), когда советуешь новое упражнение, разбираешь баланс
@@ -220,6 +248,50 @@ get_bodyweight_history, она отдаёт всю историю дневник
 упражнения из каталога (они уже есть в боте и их можно сразу добавить через
 «⚙️ Упражнения → Новое упражнение → Шаблоны»), но можешь называть и упражнения
 вне каталога, если это уместно.
+
+Ты умеешь собирать пользователю программу тренировок — инструмент propose_program.
+Он НЕ сохраняет её: пользователь увидит превью под твоим ответом и сам решит,
+добавлять её себе или нет.
+
+Прежде чем собирать программу, СНАЧАЛА УТОЧНИ вводные — обычным текстом, без
+вызова инструмента. Тебе нужно знать:
+- сколько дней в неделю он готов тренироваться и сколько времени на тренировку;
+- где тренируется и что там есть из железа (зал / дом, штанга, гантели, блоки,
+  турник);
+- какой опыт (новичок / год-два / давно в теме);
+- цель (масса, сила, похудеть, вернуться после перерыва);
+- травмы, боли и чего делать нельзя.
+
+Спрашивай не всё подряд и не занудным списком: посмотри его данные
+(get_training_overview, list_recent_workouts, get_weekly_volume_by_group) — то,
+что и так видно из истории, не переспрашивай.
+Задай 2-4 коротких вопроса именно про то, чего не знаешь, одной репликой и
+по-тренерски. Если пользователь уже сам всё описал в вопросе или отвечал на это
+раньше в диалоге — не переспрашивай вообще, сразу собирай.
+
+Если пользователь отмахивается («да просто дай что-нибудь», «на своё усмотрение»),
+не выпытывай — собери программу на разумных дефолтах, но прямо скажи, из чего
+исходил (например: три дня в неделю, зал со стандартным железом, средний уровень),
+чтобы он мог поправить.
+
+Собирая программу:
+- Названия упражнений бери ТОЧНО из list_exercise_catalog или из списка упражнений
+  пользователя — что не совпало, в программу не попадёт (инструмент вернёт такие
+  названия в unresolved; если это случилось — замени их на каталожные и вызови
+  инструмент ещё раз, либо честно скажи, что такого упражнения в боте нет).
+- Ставь подходы и повторы по своей методике: рабочий диапазон 5-10 повторений,
+  недельный объём на группу 5-12 подходов — считай объём по всем дням сразу, а не
+  по одному.
+- Учитывай, чем он уже занимается: если у него в истории есть любимые упражнения,
+  которые подходят под задачу, — включай их, а не заменяй всё подряд каталогом.
+- После вызова инструмента опиши программу словами: логику сплита, как прогрессировать,
+  на что смотреть. Не пересказывай построчно весь список — он и так будет в превью.
+- Пока пользователь не нажал кнопку, программа НЕ сохранена. Не пиши «сохранил»,
+  «добавил тебе программу» — скажи, что она ждёт подтверждения под сообщением.
+
+Если пользователь просит поправить только что предложенную программу («убери
+становую», «сделай 4 дня») — просто вызови propose_program заново, целиком с
+учётом правки; предыдущее предложение заменится новым.
 
 Если среди доступных инструментов есть веб-поиск — используй его для вопросов,
 выходящих за рамки личных данных пользователя (актуальные исследования,
@@ -872,6 +944,30 @@ TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "get_food_diary",
+            "description": (
+                "Дневник питания пользователя (🍽 Дневник питания) за последние дни: что ел, "
+                "когда, и КБЖУ каждой записи с итогами по дню. Вызывай, когда речь про еду, "
+                "калории, белок, набор или сушку — не гадай и не спрашивай «что ты ешь», если "
+                "человек ведёт дневник, просто посмотри. Полезно и вместе с тренировками: "
+                "просевшие рабочие веса на фоне недобора калорий или белка — это связь, которую "
+                "стоит назвать. Записи без КБЖУ (пользователь мог отключить подсчёт) приходят "
+                "с calories = null — это не ошибка, просто текстовая заметка о еде."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "days": {
+                        "type": "integer",
+                        "description": "За сколько последних дней смотреть. По умолчанию 14.",
+                    }
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_full_chat_history",
             "description": (
                 "Полная история переписки с этим пользователем в AI-тренере за всё время — "
@@ -884,12 +980,97 @@ TOOLS: list[dict[str, Any]] = [
             "parameters": {"type": "object", "properties": {}},
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "propose_program",
+            "description": (
+                "Предложить пользователю программу тренировок — один или несколько "
+                "тренировочных дней, каждый со своим списком упражнений и схемой "
+                "подходов. НИЧЕГО НЕ СОХРАНЯЕТ: пользователь увидит превью под твоим "
+                "ответом и сам решит, добавлять её себе или нет. Вызывай, когда "
+                "пользователь просит составить программу, сплит или план тренировок — "
+                "но только после того, как уточнил у него ключевые вводные (сколько "
+                "дней в неделю, где и с каким оборудованием тренируется, опыт, цель, "
+                "травмы и ограничения); если чего-то из этого не знаешь — сначала "
+                "задай вопросы обычным текстом, без вызова этого инструмента. "
+                "Названия упражнений бери ТОЧНО из list_exercise_catalog или из "
+                "списка упражнений пользователя (get_training_overview) — всё, что "
+                "не совпало ни с тем, ни с другим, в программу не попадёт, и "
+                "инструмент вернёт такие названия в поле unresolved. После вызова "
+                "обязательно опиши программу словами: логику сплита, прогрессию, "
+                "на что смотреть."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": f"Название программы, до {PROGRAM_NAME_LIMIT} символов",
+                    },
+                    "days": {
+                        "type": "array",
+                        "description": f"Тренировочные дни, 1-{PROGRAM_MAX_DAYS} штук",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": {
+                                    "type": "string",
+                                    "description": (
+                                        "Название дня, до "
+                                        f"{PROGRAM_NAME_LIMIT} символов, например «День 1 — верх»"
+                                    ),
+                                },
+                                "exercises": {
+                                    "type": "array",
+                                    "description": (
+                                        "Упражнения дня по порядку, 1-"
+                                        f"{PROGRAM_MAX_EXERCISES_PER_DAY} штук"
+                                    ),
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "name": {
+                                                "type": "string",
+                                                "description": "Точное название упражнения",
+                                            },
+                                            "sets": {
+                                                "type": "integer",
+                                                "description": "Рабочих подходов, 1-10",
+                                            },
+                                            "reps_min": {
+                                                "type": "integer",
+                                                "description": "Нижняя граница диапазона повторов",
+                                            },
+                                            "reps_max": {
+                                                "type": "integer",
+                                                "description": "Верхняя граница диапазона повторов",
+                                            },
+                                        },
+                                        "required": ["name"],
+                                    },
+                                },
+                            },
+                            "required": ["name", "exercises"],
+                        },
+                    },
+                },
+                "required": ["name", "days"],
+            },
+        },
+    },
 ]
 
 # Опциональный колбэк для показа реального прогресса в running-сообщении (см.
 # handlers/ai_trainer.py): что сейчас происходит — вместо/вперемешку со
 # случайными фразами-заполнителями. Может не приходить (например, в тестах).
 StatusCallback = Optional[Callable[[str], Awaitable[None]]]
+
+# Опциональный колбэк предложенной программы (см. propose_program): получает
+# черновик, который тренер собрал в ответ на просьбу составить программу.
+# Ничего не сохраняет — вызывающая сторона (handlers/ai_trainer.py) кладёт
+# черновик в FSM и вешает под ответ кнопку, а пишет в БД уже тап пользователя.
+ProgramCallback = Optional[Callable[[dict[str, Any]], Awaitable[None]]]
 
 # Человеко-читаемый статус для каждого инструмента — во что реально идёт вызов,
 # а не абстрактное "думаю".
@@ -902,7 +1083,9 @@ TOOL_STATUS_TEXTS: dict[str, str] = {
     "get_exercise_progress": "📈 смотрю прогресс по упражнению...",
     "list_exercise_catalog": "📋 сверяюсь с каталогом упражнений...",
     "get_bodyweight_history": "⚖️ смотрю дневник веса...",
+    "get_food_diary": "🍽 смотрю дневник питания...",
     "get_full_chat_history": "🗂️ поднимаю историю переписки...",
+    "propose_program": "📋 собираю программу...",
 }
 
 _CATALOG_BY_GROUP: dict[str, list[str]] = {}
@@ -1084,6 +1267,40 @@ async def _bodyweight_history(user_id: int) -> dict[str, Any]:
     }
 
 
+async def _food_diary(user_id: int, days: int = 14) -> dict[str, Any]:
+    """Recent food-diary entries grouped by day, with each day's totals.
+
+    Days are grouped here rather than left to the model: the totals are the
+    part that gets reasoned about ("недобираешь белок"), and a model adding up
+    a flat list of entries itself is a needless chance to get them wrong.
+    """
+    days = max(1, min(days, 90))
+    since = (dt.date.today() - dt.timedelta(days=days - 1)).isoformat()
+    rows = await db.list_recent_food_entries(user_id, since)
+
+    by_day: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        day = by_day.setdefault(
+            row["eaten_on"],
+            {"date": row["eaten_on"], "entries": [], "calories": 0.0,
+             "protein": 0.0, "fat": 0.0, "carbs": 0.0, "entries_without_macros": 0},
+        )
+        day["entries"].append({
+            "description": row["description"],
+            "calories": row["calories"],
+            "protein": row["protein"],
+            "fat": row["fat"],
+            "carbs": row["carbs"],
+        })
+        if row["calories"] is None:
+            day["entries_without_macros"] += 1
+        for field in ("calories", "protein", "fat", "carbs"):
+            if row[field] is not None:
+                day[field] += row[field]
+
+    return {"days": list(by_day.values())}
+
+
 async def _full_chat_history(user_id: int) -> dict[str, Any]:
     rows = await db.get_ai_chat_history(user_id)
     return {
@@ -1094,7 +1311,153 @@ async def _full_chat_history(user_id: int) -> dict[str, Any]:
     }
 
 
-async def execute_tool(user_id: int, name: str, tool_input: dict[str, Any]) -> str:
+def _clean_program_name(raw: Any, fallback: str) -> str:
+    name = str(raw or "").strip()
+    return name[:PROGRAM_NAME_LIMIT] if name else fallback
+
+
+def _clean_int(raw: Any, low: int, high: int) -> Optional[int]:
+    """Целое из того, что прислала модель, зажатое в границы; None на мусоре."""
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return max(low, min(value, high))
+
+
+def _clean_program_item(raw: Any) -> Optional[dict[str, Any]]:
+    """Одно упражнение из предложенной программы: имя плюс схема подходов.
+
+    Схема необязательна — тренер может задать только подходы или только
+    повторы. Перевёрнутый диапазон («10-5») разворачиваем, а не отбрасываем:
+    смысл его очевиден, а терять из-за этого упражнение незачем.
+    """
+    if isinstance(raw, str):
+        raw = {"name": raw}
+    if not isinstance(raw, dict):
+        return None
+    name = str(raw.get("name") or "").strip()
+    if not name:
+        return None
+    reps_min = _clean_int(raw.get("reps_min"), 1, PROGRAM_MAX_REPS)
+    reps_max = _clean_int(raw.get("reps_max"), 1, PROGRAM_MAX_REPS)
+    if reps_min and reps_max and reps_min > reps_max:
+        reps_min, reps_max = reps_max, reps_min
+    return {
+        "name": name,
+        "sets": _clean_int(raw.get("sets"), 1, PROGRAM_MAX_SETS),
+        "reps_min": reps_min,
+        "reps_max": reps_max,
+    }
+
+
+async def _propose_program(
+    user_id: int, tool_input: dict[str, Any]
+) -> tuple[dict[str, Any], Optional[dict[str, Any]]]:
+    """Разобрать предложенную моделью программу — и ничего не сохранить.
+
+    Возвращает (payload для модели, черновик для показа пользователю). Черновик
+    None, если сохранять в итоге нечего. Названия упражнений резолвятся
+    read-only (db.resolve_exercise_name): предложение, от которого пользователь
+    откажется, не должно оставить у него в каталоге форкнутых упражнений —
+    форк случится при сохранении, в db.create_routine_from_program.
+    """
+    raw_days = tool_input.get("days")
+    if not isinstance(raw_days, list) or not raw_days:
+        return {"error": "days пустой — программа не показана пользователю"}, None
+
+    program_name = _clean_program_name(tool_input.get("name"), "Программа")
+    truncated_days = len(raw_days) > PROGRAM_MAX_DAYS
+
+    days: list[dict[str, Any]] = []
+    report: list[dict[str, Any]] = []
+    for index, raw_day in enumerate(raw_days[:PROGRAM_MAX_DAYS], start=1):
+        if not isinstance(raw_day, dict):
+            continue
+        raw_exercises = raw_day.get("exercises")
+        if not isinstance(raw_exercises, list):
+            continue
+        day_name = _clean_program_name(raw_day.get("name"), f"День {index}")
+
+        items: list[dict[str, Any]] = []
+        unresolved: list[str] = []
+        seen: set[str] = set()
+        for raw_item in raw_exercises[:PROGRAM_MAX_EXERCISES_PER_DAY]:
+            item = _clean_program_item(raw_item)
+            if item is None:
+                continue
+            source, display_name = await db.resolve_exercise_name(user_id, item["name"])
+            if source is None:
+                unresolved.append(item["name"])
+                continue
+            key = display_name.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            # target — та же строка, что у готовых программ (routine_exercises.target):
+            # схему собираем здесь, чтобы дальше — и в превью, и в тренировке —
+            # программа тренера ничем не отличалась от каталожной.
+            target = formatting.build_routine_target(
+                item["sets"], item["reps_min"], item["reps_max"]
+            )
+            items.append({**item, "name": display_name, "source": source, "target": target})
+
+        if items:
+            days.append({"name": day_name, "items": items})
+        report.append(
+            {
+                "day": day_name,
+                "resolved": [item["name"] for item in items],
+                "unresolved": unresolved,
+                "truncated_exercises": len(raw_exercises) > PROGRAM_MAX_EXERCISES_PER_DAY,
+            }
+        )
+
+    if not days:
+        return (
+            {
+                "saved": False,
+                "shown_to_user": False,
+                "days": report,
+                "error": (
+                    "ни одно упражнение не совпало с каталогом или упражнениями "
+                    "пользователя — программа не показана. Возьми названия точно "
+                    "из list_exercise_catalog и вызови инструмент ещё раз."
+                ),
+            },
+            None,
+        )
+
+    existing = await db.count_routines(user_id)
+    payload: dict[str, Any] = {
+        "saved": False,
+        "shown_to_user": True,
+        "program_name": program_name,
+        "days": report,
+        "note": (
+            "Программа показана пользователю кнопкой под твоим ответом. Он ещё "
+            "НЕ сохранил её — не пиши, что программа уже добавлена, скажи, что "
+            "она ждёт его подтверждения под сообщением."
+        ),
+    }
+    if truncated_days:
+        payload["truncated_days"] = (
+            f"дней было больше {PROGRAM_MAX_DAYS}, лишние отброшены"
+        )
+    if existing + len(days) > MAX_ROUTINES_PER_USER:
+        payload["warning"] = (
+            f"у пользователя уже {existing} программ при лимите {MAX_ROUTINES_PER_USER} — "
+            "при сохранении поместятся не все, предупреди его, что старые стоит удалить"
+        )
+    return payload, {"name": program_name, "days": days}
+
+
+async def execute_tool(
+    user_id: int,
+    name: str,
+    tool_input: dict[str, Any],
+    on_program: ProgramCallback = None,
+) -> str:
     if name == "get_training_overview":
         payload = await _training_overview(user_id)
     elif name == "get_active_workout":
@@ -1113,8 +1476,14 @@ async def execute_tool(user_id: int, name: str, tool_input: dict[str, Any]) -> s
         payload = {"catalog": _CATALOG_BY_GROUP}
     elif name == "get_bodyweight_history":
         payload = await _bodyweight_history(user_id)
+    elif name == "get_food_diary":
+        payload = await _food_diary(user_id, int(tool_input.get("days") or 14))
     elif name == "get_full_chat_history":
         payload = await _full_chat_history(user_id)
+    elif name == "propose_program":
+        payload, draft = await _propose_program(user_id, tool_input)
+        if draft is not None and on_program is not None:
+            await on_program(draft)
     else:
         payload = {"error": f"unknown tool: {name}"}
     return json.dumps(payload, ensure_ascii=False)
@@ -1128,6 +1497,7 @@ async def ask(
     history: list[dict[str, Any]],
     image_data_url: Optional[str] = None,
     on_status: StatusCallback = None,
+    on_program: ProgramCallback = None,
 ) -> str:
     """Один вопрос пользователя → готовый текст ответа.
 
@@ -1142,6 +1512,10 @@ async def ask(
     реально сейчас происходит (веб-поиск, конкретный tool-call), чтобы вызывающая
     сторона могла показать это пользователю вместо голого "думаю" (см.
     handlers/ai_trainer.py).
+
+    on_program — опциональный колбэк с черновиком программы, если тренер за этот
+    ход собрал её (см. propose_program). Текст ответа при этом обычный: черновик
+    едет отдельно, потому что сохранить его должен тап пользователя, а не модель.
 
     Пока не исчерпана дневная квота поисковых ответов (config.AI_SEARCH_DAILY_LIMIT),
     перед основным ответом дешёвый гейт на быстрой модели (см. _search_worth_it)
@@ -1165,7 +1539,9 @@ async def ask(
         "AI trainer question from user %s: %r (web search used: %s)",
         user_id, question, bool(search_context),
     )
-    return await _ask_plain(user_id, question, history, image_data_url, search_context, on_status)
+    return await _ask_plain(
+        user_id, question, history, image_data_url, search_context, on_status, on_program
+    )
 
 
 def _plain_user_content(question: str, image_data_url: Optional[str]) -> Any:
@@ -1199,6 +1575,7 @@ async def _ask_plain(
     image_data_url: Optional[str] = None,
     search_context: Optional[str] = None,
     on_status: StatusCallback = None,
+    on_program: ProgramCallback = None,
 ) -> str:
     client = _get_client()
     messages: list[dict[str, Any]] = [
@@ -1241,7 +1618,9 @@ async def _ask_plain(
         for tc in tool_calls:
             try:
                 args = json.loads(tc.function.arguments or "{}")
-                tool_content = await execute_tool(user_id, tc.function.name, args)
+                tool_content = await execute_tool(
+                    user_id, tc.function.name, args, on_program=on_program
+                )
             except Exception:
                 logger.exception("AI trainer tool %s failed", tc.function.name)
                 tool_content = json.dumps(

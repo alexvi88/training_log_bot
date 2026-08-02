@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 pytestmark = pytest.mark.asyncio
@@ -425,3 +427,57 @@ async def test_append_set_counts_only_its_own_exercise(fresh_db, user_id):
         by_ex.setdefault(s["exercise_id"], []).append(s["round_index"])
     assert by_ex[a] == [1, 2]
     assert by_ex[b] == [1]
+
+
+async def test_same_name_in_different_case_reuses_the_cyrillic_exercise(fresh_db, user_id):
+    """SQLite's LOWER() only folds ASCII, so the unique index behind
+    create_exercise's dedup treats "Жим лёжа" and "жим лёжа" as two names —
+    splitting one exercise into two, each with its own history and records."""
+    db = fresh_db
+    gid = await db.create_muscle_group(user_id, "Грудь")
+
+    first = await db.create_exercise(user_id, "Жим лёжа", gid)
+    second = await db.create_exercise(user_id, "жим лёжа", gid)
+
+    assert second == first
+    assert await db.count_user_exercises(user_id) == 1
+
+
+async def test_case_insensitive_lookup_still_works_for_ascii_names(fresh_db, user_id):
+    db = fresh_db
+    gid = await db.create_muscle_group(user_id, "Грудь")
+    ex_id = await db.create_exercise(user_id, "Bench Press", gid)
+
+    found = await db.find_exercise_by_display_name(user_id, "bench press")
+    assert found is not None and found["id"] == ex_id
+
+
+async def test_concurrent_create_block_gets_distinct_order_indexes(fresh_db, user_id):
+    """aiogram processes updates concurrently, so two blocks can be opened at
+    once (a double-tapped exercise, "➕ Суперсет" racing the picker). Reading
+    MAX(order_index) before the INSERT let both land on the same position,
+    leaving the workout's exercise order arbitrary."""
+    db = fresh_db
+    workout_id = await db.create_workout(user_id)
+
+    blocks = await asyncio.gather(
+        db.create_block(workout_id, "single"),
+        db.create_block(workout_id, "single"),
+        db.create_block(workout_id, "single"),
+    )
+
+    rows = await db.list_blocks_for_workout(workout_id)
+    assert sorted(r["order_index"] for r in rows) == [0, 1, 2]
+    assert len(set(blocks)) == 3
+
+
+async def test_concurrent_append_routine_exercise_gets_distinct_order_indexes(fresh_db, user_id):
+    db = fresh_db
+    gid = await db.create_muscle_group(user_id, "Спина")
+    routine_id = await db.create_routine(user_id, "Тяга")
+    ex_ids = [await db.create_exercise(user_id, f"Упражнение {i}", gid) for i in range(3)]
+
+    await asyncio.gather(*(db.append_routine_exercise(routine_id, ex) for ex in ex_ids))
+
+    rows = await db.list_routine_exercises(routine_id)
+    assert sorted(r["order_index"] for r in rows) == [0, 1, 2]
