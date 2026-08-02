@@ -131,12 +131,17 @@ CREATE TABLE IF NOT EXISTS sets (
 CREATE INDEX IF NOT EXISTS idx_sets_exercise ON sets (exercise_id);
 CREATE INDEX IF NOT EXISTS idx_sets_block ON sets (block_id);
 
+-- sent_on is the recipient's *own* calendar date, which is what the
+-- one-push-per-day rule is about; sent_at stays server time, for the admin log.
+-- They disagree whenever the user's send hour falls on the other side of the
+-- server's midnight — every American zone on a UTC server.
 CREATE TABLE IF NOT EXISTS pushes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     telegram_id INTEGER NOT NULL,
     category TEXT NOT NULL,
     text TEXT NOT NULL,
-    sent_at TEXT NOT NULL
+    sent_at TEXT NOT NULL,
+    sent_on TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_pushes_sent_at ON pushes (sent_at);
 CREATE INDEX IF NOT EXISTS idx_pushes_telegram_id ON pushes (telegram_id, sent_at);
@@ -373,6 +378,13 @@ async def _migrate_schema() -> None:
     routine_ex_cols = await _column_names("routine_exercises")
     if "target" not in routine_ex_cols:
         await _conn.execute("ALTER TABLE routine_exercises ADD COLUMN target TEXT")
+
+    push_cols = await _column_names("pushes")
+    if "sent_on" not in push_cols:
+        await _conn.execute("ALTER TABLE pushes ADD COLUMN sent_on TEXT")
+        # Best available approximation for rows sent before the column existed:
+        # the server date they were written on.
+        await _conn.execute("UPDATE pushes SET sent_on = date(sent_at) WHERE sent_on IS NULL")
 
     await _conn.commit()
 
@@ -2402,19 +2414,29 @@ async def scale_user_set_weights(telegram_id: int, factor: float) -> None:
         await conn().commit()
 
 
-async def record_push(telegram_id: int, category: str, text: str) -> None:
+async def record_push(telegram_id: int, category: str, text: str, sent_on: str) -> None:
+    """Log a delivered push. `sent_on` is the recipient's own calendar date
+    (YYYY-MM-DD) — see has_push_today."""
     async with _write_lock:
         await conn().execute(
-            "INSERT INTO pushes (telegram_id, category, text, sent_at) VALUES (?, ?, ?, ?)",
-            (telegram_id, category, text, now_iso()),
+            "INSERT INTO pushes (telegram_id, category, text, sent_at, sent_on) VALUES (?, ?, ?, ?, ?)",
+            (telegram_id, category, text, now_iso(), sent_on),
         )
         await conn().commit()
 
 
 async def has_push_today(telegram_id: int, today: str) -> bool:
-    """Whether this user already got a daily-rotation push on this calendar date (YYYY-MM-DD)."""
+    """Whether this user already got a daily-rotation push on this calendar date (YYYY-MM-DD).
+
+    Matches on the stored local date, not on `date(sent_at)`: the caller asks
+    in the user's timezone, while sent_at is server time. For a user whose
+    19:00 falls after the server's midnight, the previous day's push carried
+    the *next* server date — so the check said "already pushed today" and
+    silently dropped every other day's push. `COALESCE` covers rows written
+    before the column existed.
+    """
     cur = await conn().execute(
-        "SELECT 1 FROM pushes WHERE telegram_id = ? AND date(sent_at) = ? LIMIT 1",
+        "SELECT 1 FROM pushes WHERE telegram_id = ? AND COALESCE(sent_on, date(sent_at)) = ? LIMIT 1",
         (telegram_id, today),
     )
     return await cur.fetchone() is not None

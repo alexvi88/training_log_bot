@@ -229,7 +229,11 @@ def _as_caption(text: str) -> str:
     return text[: CAPTION_LIMIT - 1].rstrip() + "…"
 
 
-async def _deliver(bot: Bot, telegram_id: int, decision: PushDecision) -> None:
+async def _deliver(
+    bot: Bot, telegram_id: int, decision: PushDecision, local_date: dt.date
+) -> None:
+    """Send the push and log it against the recipient's own date — that date is
+    what `has_push_today` dedupes on."""
     global _push_image_file_id
     kb = keyboards.push_cta_keyboard() if decision.with_cta else None
     try:
@@ -245,7 +249,7 @@ async def _deliver(bot: Bot, telegram_id: int, decision: PushDecision) -> None:
         return
     if _push_image_file_id is None:
         _push_image_file_id = message.photo[-1].file_id
-    await db.record_push(telegram_id, decision.category, decision.text)
+    await db.record_push(telegram_id, decision.category, decision.text, local_date.isoformat())
 
 
 def _utc_now() -> dt.datetime:
@@ -276,24 +280,26 @@ async def _send_daily_pushes(bot: Bot) -> None:
     for telegram_id, tz_offset in await db.list_engagement_eligible_user_ids():
         if not is_send_hour(tz_offset, hour):
             continue
+        local_date = _local_now(tz_offset).date()
         try:
-            decision = await build_daily_push(telegram_id, _local_now(tz_offset).date())
+            decision = await build_daily_push(telegram_id, local_date)
         except Exception:
             logger.exception("Failed to build push for user %s", telegram_id)
             continue
         if decision is not None:
-            await _deliver(bot, telegram_id, decision)
+            await _deliver(bot, telegram_id, decision, local_date)
 
     for telegram_id, created_at, tz_offset in await db.list_newbie_user_ids():
         if not is_send_hour(tz_offset, hour):
             continue
+        local_date = _local_now(tz_offset).date()
         try:
-            decision = await build_newbie_push(telegram_id, created_at, _local_now(tz_offset).date())
+            decision = await build_newbie_push(telegram_id, created_at, local_date)
         except Exception:
             logger.exception("Failed to build newbie push for user %s", telegram_id)
             continue
         if decision is not None:
-            await _deliver(bot, telegram_id, decision)
+            await _deliver(bot, telegram_id, decision, local_date)
 
 
 def _seconds_until_next_hour() -> float:

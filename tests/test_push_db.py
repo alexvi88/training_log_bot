@@ -7,8 +7,8 @@ pytestmark = pytest.mark.asyncio
 
 async def test_record_and_list_recent_pushes_most_recent_first(fresh_db, user_id):
     db = fresh_db
-    await db.record_push(user_id, "skip_3", "первое")
-    await db.record_push(user_id, "win_back", "второе")
+    await db.record_push(user_id, "skip_3", "первое", "2026-05-04")
+    await db.record_push(user_id, "win_back", "второе", "2026-05-04")
 
     assert await db.count_pushes() == 2
     rows = await db.list_recent_pushes(limit=10, offset=0)
@@ -18,10 +18,10 @@ async def test_record_and_list_recent_pushes_most_recent_first(fresh_db, user_id
 
 async def test_has_push_today_true_only_after_a_push_is_recorded(fresh_db, user_id):
     db = fresh_db
-    today = db.now_iso()[:10]
+    today = "2026-05-04"
     assert await db.has_push_today(user_id, today) is False
 
-    await db.record_push(user_id, "skip_3", "третий день")
+    await db.record_push(user_id, "skip_3", "третий день", today)
     assert await db.has_push_today(user_id, today) is True
 
 
@@ -103,3 +103,19 @@ async def test_tonnage_since_sums_weight_times_reps(fresh_db, user_id):
 
     future = "2099-01-01"
     assert await db.tonnage_since(user_id, future) == 0
+
+
+async def test_dedup_uses_the_users_own_date_not_the_servers(fresh_db, user_id, monkeypatch):
+    """A user at UTC-7 gets their 19:00 push at 02:00 the *next* server day, so
+    the row lands with tomorrow's server date. Deduping on date(sent_at) then
+    answered "already pushed" on the user's next local day and silently ate
+    every other day's push."""
+    db = fresh_db
+    local_day = "2026-05-04"
+    # Server clock is already past midnight into the 5th when this goes out.
+    monkeypatch.setattr(db, "now_iso", lambda: "2026-05-05T02:00:00")
+
+    await db.record_push(user_id, "skip_3", "третий день", local_day)
+
+    assert await db.has_push_today(user_id, local_day) is True
+    assert await db.has_push_today(user_id, "2026-05-05") is False
