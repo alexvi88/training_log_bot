@@ -233,6 +233,45 @@ async def test_analyze_food_sends_image_and_correction(monkeypatch, user_id):
     assert "это груша" in content[0]["text"]
 
 
+async def test_describe_only_uses_the_no_macros_prompt(monkeypatch, user_id):
+    """with_macros=False должен переключать промпт и не считать КБЖУ."""
+    captured = {}
+
+    async def fake_create(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(
+                content='{"is_food": true, "description": "Протеин Whey — 30 г", "comment": ""}'
+            ))],
+            usage=None,
+        )
+
+    monkeypatch.setattr(
+        ai_trainer, "_get_client", lambda: SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=fake_create)))
+    )
+
+    result = await ai_trainer.analyze_food(
+        user_id,
+        previous={"description": "Протеин Whey"},
+        correction="30г",
+        with_macros=False,
+    )
+
+    assert captured["messages"][0]["content"] == ai_trainer.FOOD_DESCRIBE_SYSTEM_PROMPT
+    assert result == {
+        "is_food": True, "description": "Протеин Whey — 30 г", "items": [],
+        "calories": None, "protein": None, "fat": None, "carbs": None, "comment": "",
+    }
+
+
+def test_describe_only_prompt_tells_the_model_to_fold_portion_into_description():
+    """Регрессия на баг: без этой инструкции модель кладёт уточнение вроде
+    «30 г» в comment, а comment нигде не сохраняется — правка теряется целиком
+    (см. отчёт пользователя «нигде не сохранилось что 30г»)."""
+    assert "ПРЯМО В description" in ai_trainer.FOOD_DESCRIBE_SYSTEM_PROMPT
+    assert "единственное поле, которое реально сохраняется" in ai_trainer.FOOD_DESCRIBE_SYSTEM_PROMPT
+
+
 # ---------- тексты экранов ----------
 
 
@@ -263,9 +302,10 @@ def test_day_screen_numbers_entries_and_totals():
     assert "1. Овсянка" in text
     assert "2. Кофе" in text
     assert "📷" in text
-    assert "410 ккал" in text
-    assert "2 приёма пищи" in text
-    assert "Б12 · Ж8 · У55" in text
+    # итог дня — ккал и БЖУ жирным одной строкой, число приёмов в скобках рядом
+    assert "Итого за день: <b>410 ккал · Б12 · Ж8 · У55</b> (2 приёма пищи)" in text
+    # подсказка внизу — без точки на конце
+    assert text.rstrip().endswith("добавлю новой записью</i>")
 
 
 def test_day_screen_last_entry_sits_right_above_the_divider():
@@ -368,6 +408,19 @@ def test_estimate_text_lists_items_with_their_own_macros():
     assert "(Б" not in text.split("Банан")[1].split("\n")[0]
     assert "Итого: <b>310 ккал · Б9 · Ж6 · У62</b>" in text
     assert "порция на глаз" in text
+    assert "Всё верно?" not in text  # кнопки под карточкой уже спрашивают это
+
+
+def test_estimate_text_skips_breakdown_for_a_single_item():
+    """Один компонент дублирует название приёма — раскладку не показываем
+    (та же логика, что в build_food_day_screen)."""
+    text = formatting.build_food_estimate_text(
+        "Сникерс",
+        [_item(name="Сникерс", portion="1 батончик 50 г", calories=256, protein=4, fat=12, carbs=33)],
+        calories=256, protein=4, fat=12, carbs=33,
+    )
+    assert "• Сникерс" not in text
+    assert "Итого: <b>256 ккал · Б4 · Ж12 · У33</b>" in text
 
 
 def test_macros_line_has_no_bold_and_no_trailing_unit():
@@ -561,9 +614,12 @@ async def test_typed_food_goes_to_model_and_shows_confirmation(user_id, monkeypa
     assert pending["source"] == "text"
     # карточка ушла правкой заглушки «думаю»
     placeholder = message.answer.return_value
-    assert "Всё верно?" in placeholder.edit_text.call_args.args[0]
+    assert "Овсянка с бананом" in placeholder.edit_text.call_args.args[0]
     # экран дня («напиши, что съел») остался — не удалялся ради заглушки
     message.bot.delete_message.assert_not_called()
+    # вопрос "Всё верно?" отдельной строкой убран — кнопки под карточкой сами
+    # спрашивают то же самое
+    assert "Всё верно?" not in placeholder.edit_text.call_args.args[0]
 
 
 async def test_model_failure_keeps_the_diary_usable(user_id, monkeypatch):
@@ -662,8 +718,12 @@ async def test_fix_button_keeps_the_estimate_visible(user_id, monkeypatch):
         fd_date="2026-07-20",
         fd_pending={
             "description": "Гранола с протеином",
-            "items": [{"name": "Протеин", "portion": "30 г", "calories": 120,
-                       "protein": 24, "fat": 1, "carbs": 3}],
+            "items": [
+                {"name": "Протеин", "portion": "30 г", "calories": 120,
+                 "protein": 24, "fat": 1, "carbs": 3},
+                {"name": "Гранола", "portion": "150 г", "calories": 630,
+                 "protein": 15, "fat": 23, "carbs": 98},
+            ],
             "calories": 750, "protein": 39, "fat": 24, "carbs": 101, "comment": "",
         },
     )

@@ -963,7 +963,9 @@ def build_food_estimate_text(
     """The confirmation card shown after the model reads a meal, and (with a
     different header) the preview of a correction."""
     lines = [header, "", f"<b>{escape(description or 'Приём пищи')}</b>"]
-    if items:
+    # Один компонент ничего не добавляет к названию приёма — не дублируем
+    # (та же логика, что в build_food_day_screen).
+    if items and len(items) > 1:
         lines.extend(f"• {_item_line(i)}" for i in items)
     if calories is not None:
         # Ничего не выдумываем: без числа "Итого" не показываем вовсе (а не
@@ -1013,24 +1015,23 @@ def build_food_day_screen(date: dt.date, entries: list[FoodEntryView]) -> str:
 
     known = [e.calories for e in entries if e.calories is not None]
     n = plural_ru(len(entries), ("приём", "приёма", "приёмов"))
-    if known:
-        total = sum(known)
-        total_line = f"{DIVIDER}\nИтого за день: <b>{format_kcal(total)}</b> · {len(entries)} {n} пищи"
-        if len(known) < len(entries):
-            total_line += f"\n<i>(без калорий: {len(entries) - len(known)})</i>"
-    else:
-        total_line = f"{DIVIDER}\nЗа день: {len(entries)} {n} пищи"
-    lines.append(total_line)
-
     day_macros = _macros_line(
         _sum_or_none(e.protein for e in entries),
         _sum_or_none(e.fat for e in entries),
         _sum_or_none(e.carbs for e in entries),
     )
-    if day_macros:
-        lines.append(day_macros)
+    day_totals = [p for p in (format_kcal(sum(known)) if known else "", day_macros) if p]
+    if day_totals:
+        total_line = (
+            f"{DIVIDER}\nИтого за день: <b>{' · '.join(day_totals)}</b> ({len(entries)} {n} пищи)"
+        )
+    else:
+        total_line = f"{DIVIDER}\nЗа день: {len(entries)} {n} пищи"
+    if known and len(known) < len(entries):
+        total_line += f"\n<i>(без калорий: {len(entries) - len(known)})</i>"
+    lines.append(total_line)
     lines.append("")
-    lines.append("<i>Ещё что-то съел? Напиши текстом или пришли фото — добавлю новой записью.</i>")
+    lines.append("<i>Ещё что-то съел? Напиши текстом или пришли фото — добавлю новой записью</i>")
     return "\n".join(lines)
 
 
@@ -1060,11 +1061,11 @@ def build_food_history_list(days: list[FoodDayView]) -> str:
     lines = ["📚 <b>История питания</b>", ""]
     for d in days:
         n = plural_ru(d.entries, ("приём", "приёма", "приёмов"))
+        macros = _macros_line(d.protein, d.fat, d.carbs)
+        totals = [p for p in (format_kcal(d.calories) if d.calories is not None else "", macros) if p]
+        totals_part = " · ".join(totals) if totals else "—"
         lines.append(
             f"<b>{format_date_ru(dt.datetime.combine(d.date, dt.time()))}</b> — "
-            f"{d.entries} {n} · {format_kcal(d.calories)}"
+            f"{totals_part} [{d.entries} {n}]"
         )
-        macros = _macros_line(d.protein, d.fat, d.carbs)
-        if macros:
-            lines.append(f"<i>{macros}</i>")
     return "\n".join(lines)
