@@ -690,11 +690,20 @@ async def cmd_start(message: Message, state: FSMContext):
     if active:
         started = dt.datetime.fromisoformat(active["started_at"])
         if (dt.datetime.now() - started).total_seconds() > config.STALE_WORKOUT_HOURS * 3600:
-            warning = (
-                f"⚠️ У тебя висит тренировка с {formatting.format_date_ru(started)} — "
-                f"забыл закрыть?"
+            user = await db.get_user(message.from_user.id)
+            local = timeutil.to_user_local(started, user)
+            # Время висящей тренировки — единственное место, где бот называет
+            # конкретный момент, а не дату: пусть клиент покажет его в поясе
+            # смотрящего (пояс в настройках выставляет меньшинство).
+            stamp, entity = formatting.local_time_entity(
+                started, f"{formatting.format_date_ru(local)}, {local:%H:%M}"
             )
-            await message.answer(warning, reply_markup=keyboards.stale_workout_keyboard(active["id"]))
+            warning = f"⚠️ У тебя висит тренировка с {stamp} — забыл закрыть?"
+            await message.answer(
+                warning,
+                entities=formatting.entities_at(warning, stamp, entity),
+                reply_markup=keyboards.stale_workout_keyboard(active["id"]),
+            )
 
 
 # Справка живёт в двух экранах: первый закрывает то, что нужно 95% времени

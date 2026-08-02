@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 from html import escape
 from typing import Literal
 
+from aiogram.types import MessageEntity
+
 import config
 from analytics import e1rm
 
@@ -57,6 +59,39 @@ E1RM_HINT = (
 )
 
 
+def local_time_entity(moment: dt.datetime, fallback: str) -> tuple[str, MessageEntity]:
+    """Момент времени, который клиент покажет в поясе смотрящего (Bot API 9.5).
+
+    Возвращает (текст, entity): текст — обычный фолбэк, который увидят старые
+    клиенты, entity накрывает его целиком и заставляет новые нарисовать то же
+    время по своим часам. Выигрыш не в том, чтобы не считать пояс самим, — а в
+    том, что для большинства он посчитан неверно: пояс в настройках бота никто
+    не выставляет, и вся сдвижка идёт от нуля.
+
+    Хранится по-прежнему серверное время (см. UX_IMPROVEMENTS_PART2.md) —
+    entity лечит отображение, а не корень.
+    """
+    return fallback, MessageEntity(
+        type="date_time",
+        offset=0,
+        length=len(fallback.encode("utf-16-le")) // 2,
+        unix_time=int(moment.replace(tzinfo=dt.timezone.utc).timestamp()),
+    )
+
+
+def entities_at(text: str, marker: str, entity: MessageEntity) -> list[MessageEntity] | None:
+    """Сдвинуть entity на позицию `marker` внутри `text`.
+
+    Смещения Telegram считает в UTF-16, как и telegram_length, — кириллица и
+    эмодзи до маркера иначе сдвинут метку на чужие символы.
+    """
+    index = text.find(marker)
+    if index < 0:
+        return None
+    prefix_len = len(text[:index].encode("utf-16-le")) // 2
+    return [entity.model_copy(update={"offset": prefix_len})]
+
+
 def format_group(name: str) -> str:
     """A muscle group's name as it's shown anywhere in the UI: uppercase.
 
@@ -66,6 +101,12 @@ def format_group(name: str) -> str:
     the stored name keeps whatever case the user typed.
     """
     return name.upper()
+
+
+def strip_tags(text: str) -> str:
+    """Текст без HTML-разметки — для мест, где разметку не разбирают
+    (rich-блоки, лог)."""
+    return _TAG_RE.sub("", text)
 
 
 def telegram_length(text: str) -> int:
@@ -826,6 +867,80 @@ def _hall_of_fame_lift(name: str, weight: float, reps: int, e1rm_value: float, u
         return f"• {escape(name)} — {format_set(weight, reps)} · e1RM {e1rm_value:.0f}{unit_label}"
     word = plural_ru(reps, ("повтор", "повтора", "повторов"))
     return f"• {escape(name)} — {reps} {word}"
+
+
+@dataclass
+class WeeklyRow:
+    """Одна строка недельной сводки — упражнение за неделю."""
+    name: str
+    top_weight: float
+    tonnage: float
+    sets_count: int
+
+
+def build_weekly_summary(
+    rows: list[WeeklyRow],
+    workouts: int,
+    total_tonnage: float,
+    period: str,
+    unit: str = "kg",
+    food_line: str | None = None,
+) -> str:
+    """Недельная сводка обычным текстом — фолбэк для клиентов без rich-таблиц
+    и источник тех же чисел для табличной версии (см. build_weekly_table)."""
+    u = UNIT_LABELS.get(unit, "кг")
+    w = plural_ru(workouts, ("тренировка", "тренировки", "тренировок"))
+    lines = [
+        f"📊 <b>НЕДЕЛЯ {escape(period)}</b>",
+        f"{workouts} {w} · {format_tonnage(total_tonnage, unit)}",
+        "",
+    ]
+    if not rows:
+        lines.append("На этой неделе тренировок не было.")
+        return "\n".join(lines)
+    for row in rows:
+        lines.append(
+            f"<b>{escape(row.name)}</b> — {format_weight(row.top_weight)}{u} · "
+            f"{row.sets_count} подх. · {format_tonnage(row.tonnage, unit)}"
+        )
+    if food_line:
+        lines += ["", food_line]
+    return "\n".join(lines)
+
+
+def build_weekly_table(rows: list[WeeklyRow], unit: str = "kg"):
+    """Те же строки настоящей таблицей (rich messages, Bot API 10.1).
+
+    Возвращает InputRichBlockTable или None, если строк нет. Вызывающая сторона
+    обязана уметь и без него: на сервере/клиенте ниже 10.1 отправка упадёт, и
+    сводка уходит текстом (см. build_weekly_summary).
+    """
+    from aiogram.types import InputRichBlockTable, RichBlockTableCell
+
+    if not rows:
+        return None
+    u = UNIT_LABELS.get(unit, "кг")
+    def cell(text: str, align: str = "left", is_header: bool = False) -> RichBlockTableCell:
+        # align/valign у ячейки обязательны — без них pydantic-модель aiogram
+        # не собирается вовсе.
+        return RichBlockTableCell(text=text, align=align, valign="middle", is_header=is_header)
+
+    header = [
+        cell("Упражнение", is_header=True),
+        cell("Лучший", "right", is_header=True),
+        cell("Подх.", "right", is_header=True),
+        cell("Тоннаж", "right", is_header=True),
+    ]
+    body = [
+        [
+            cell(row.name),
+            cell(f"{format_weight(row.top_weight)}{u}", "right"),
+            cell(str(row.sets_count), "right"),
+            cell(format_tonnage(row.tonnage, unit), "right"),
+        ]
+        for row in rows
+    ]
+    return InputRichBlockTable(cells=[header, *body], is_striped=True, is_bordered=True)
 
 
 def format_rank_line(rank, gap: str | None = None) -> str:

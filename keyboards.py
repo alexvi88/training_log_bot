@@ -894,6 +894,13 @@ def food_history_keyboard(days: Sequence[dt.date], page: int, has_next: bool) ->
     return b.as_markup()
 
 
+def back_keyboard(cb: str) -> InlineKeyboardMarkup:
+    """Одна кнопка «⬅️ Назад» — для экранов, где больше делать нечего."""
+    b = InlineKeyboardBuilder()
+    b.button(text="⬅️ Назад", callback_data=cb)
+    return b.as_markup()
+
+
 def cancel_keyboard(cb: str = "cancel") -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(text="❌ Отмена", callback_data=cb)

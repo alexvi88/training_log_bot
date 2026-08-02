@@ -2309,6 +2309,29 @@ async def backup_to_file(dest_path: str) -> None:
 
 # ---------- push notifications ----------
 
+async def weekly_exercise_rollup(user_id: int, since_date: str) -> list[aiosqlite.Row]:
+    """Per exercise since `since_date`: best set, its reps, total tonnage and
+    set count — one row per exercise, heaviest tonnage first.
+
+    Feeds the weekly summary table (see formatting.build_weekly_summary), so
+    it's one query rather than a walk over every workout of the week.
+    """
+    cur = await conn().execute(
+        "SELECT e.display_name AS name, "
+        "       MAX(s.weight) AS top_weight, "
+        "       SUM(s.weight * s.reps) AS tonnage, "
+        "       COUNT(s.id) AS sets_count "
+        "FROM sets s "
+        "JOIN workout_blocks b ON b.id = s.block_id "
+        "JOIN workouts w ON w.id = b.workout_id "
+        "JOIN exercises e ON e.id = s.exercise_id "
+        "WHERE w.user_id = ? AND w.status = 'finished' AND w.started_at >= ? AND s.reps > 0 "
+        "GROUP BY e.id ORDER BY tonnage DESC",
+        (user_id, since_date),
+    )
+    return await cur.fetchall()
+
+
 async def tonnage_since(user_id: int, since_date: str) -> float:
     """Total weight x reps across all finished-workout sets on/after since_date — for the weekly digest push."""
     cur = await conn().execute(
