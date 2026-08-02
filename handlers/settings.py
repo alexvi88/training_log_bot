@@ -27,6 +27,7 @@ async def show_settings(callback: CallbackQuery, state: FSMContext, alert: str |
         tz_offset=user["tz_offset"],
         stickers_enabled=bool(user["stickers_enabled"]),
         show_stickers_toggle=stickers.is_configured(),
+        food_macros_enabled=bool(user["food_macros_enabled"]),
     )
     await ui.safe_edit(callback, "🔧 Настройки:", reply_markup=kb)
     if alert:
@@ -167,6 +168,15 @@ async def settings_ai_comments(callback: CallbackQuery, state: FSMContext):
 async def settings_stickers(callback: CallbackQuery, state: FSMContext):
     user = await db.get_user(callback.from_user.id)
     await db.update_user(callback.from_user.id, stickers_enabled=0 if user["stickers_enabled"] else 1)
+    await show_settings(callback, state)
+
+
+@router.callback_query(F.data == "settings:food_macros")
+async def settings_food_macros(callback: CallbackQuery, state: FSMContext):
+    user = await db.get_user(callback.from_user.id)
+    await db.update_user(
+        callback.from_user.id, food_macros_enabled=0 if user["food_macros_enabled"] else 1
+    )
     await show_settings(callback, state)
 
 

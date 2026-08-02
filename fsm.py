@@ -91,3 +91,10 @@ class ImportFlow(StatesGroup):
 
 class FeedbackFlow(StatesGroup):
     awaiting_message = State()
+
+
+class FoodDiaryFlow(StatesGroup):
+    viewing = State()          # one day's diary — typing/sending a photo here logs food
+    confirming = State()       # model's guess is on screen, awaiting подтверждение/правку
+    correcting = State()       # user is typing what the model got wrong
+    browsing_history = State()

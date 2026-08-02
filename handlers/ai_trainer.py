@@ -4,7 +4,6 @@ import asyncio
 import base64
 import logging
 import random
-import time
 from contextlib import suppress
 from html import escape
 from typing import Optional
@@ -111,31 +110,22 @@ def _pick_different(replies: list[str], exclude: Optional[str]) -> str:
     return choice
 
 
-# Как часто (сек) правим placeholder во время потоковой генерации ответа —
-# Telegram не любит частых edit_text одного сообщения, поэтому не чаще ~раз в секунду.
-STREAM_EDIT_INTERVAL = 0.9
-
-
 class _RunningDisplay:
     """Крутит placeholder, пока модель думает. Реальные статусы от ai_trainer.ask
     (веб-поиск, конкретный tool-call — см. StatusCallback) идут через set_status и
     показывают, что происходит на самом деле; в паузах между ними (или если модель
     отвечает без единого tool-call) cycle_idle крутит случайные фразы-заполнители,
-    чтобы сообщение не выглядело зависшим.
-
-    Как только пошёл потоковый ответ (stream), заполнители замолкают и мы печатаем
-    сам ответ вживую, подрезая частоту правок под лимиты Telegram."""
+    чтобы сообщение не выглядело зависшим. Сам ответ приходит одним куском в конце
+    (см. _handle_question) — без построчной печати вживую."""
 
     def __init__(self, placeholder: Message, initial_text: str) -> None:
         self._placeholder = placeholder
         self._last_text = initial_text
         self._lock = asyncio.Lock()
-        self._streaming = False
-        self._last_stream_edit = 0.0
 
     async def set_status(self, text: str) -> None:
         async with self._lock:
-            if self._streaming or text == self._last_text:
+            if text == self._last_text:
                 return
             self._last_text = text
             with suppress(TelegramBadRequest):
@@ -145,27 +135,9 @@ class _RunningDisplay:
         while True:
             await asyncio.sleep(RUNNING_INTERVAL)
             async with self._lock:
-                if self._streaming:
-                    continue  # реальный ответ уже печатается — не мешаем заполнителями
                 self._last_text = _pick_different(RUNNING_REPLIES, self._last_text)
                 with suppress(TelegramBadRequest):
                     await self._placeholder.edit_text(self._last_text)
-
-    async def stream(self, accumulated: str) -> None:
-        """Колбэк потоковой генерации: печатает накопленный ответ, но не чаще
-        STREAM_EDIT_INTERVAL и только когда текст реально изменился."""
-        async with self._lock:
-            self._streaming = True
-            preview = accumulated[:TG_CHUNK]
-            now = time.monotonic()
-            if not preview.strip() or preview == self._last_text:
-                return
-            if now - self._last_stream_edit < STREAM_EDIT_INTERVAL:
-                return
-            self._last_stream_edit = now
-            self._last_text = preview
-            with suppress(TelegramBadRequest):
-                await self._placeholder.edit_text(preview)
 
 
 async def ai_keyboard(
@@ -365,7 +337,11 @@ async def ai_program_save(callback: CallbackQuery, state: FSMContext):
         return
 
     for day in days:
-        await db.create_routine_from_plan(user_id, day["name"], day["items"])
+        await db.create_routine_from_program(
+            # .get на target: черновик переживает перезапуск в FSM-сторадже, так
+            # что тут может лежать предложение, собранное ещё прошлой версией.
+            user_id, day["name"], [(item["name"], item.get("target")) for item in day["items"]]
+        )
     await state.update_data(ai_program_draft=None)
 
     word = formatting.plural_ru(len(days), ("программу", "программы", "программ"))
@@ -483,21 +459,10 @@ async def _handle_question(
         program_draft.update(draft)
 
     try:
-        try:
-            answer = await ai_trainer.ask(
-                user_id, question, history, image_data_url=image_data_url,
-                on_status=display.set_status, on_delta=display.stream,
-                on_program=collect_program,
-            )
-        except Exception:
-            # Streaming can fail if the endpoint dislikes it — fall back to a plain,
-            # non-streamed answer once before giving up, so the user still gets a reply.
-            logger.exception("AI trainer streaming failed for user %s, retrying plain", user_id)
-            program_draft.clear()  # предложенное в упавшей попытке к этому ответу не относится
-            answer = await ai_trainer.ask(
-                user_id, question, history, image_data_url=image_data_url,
-                on_status=display.set_status, on_program=collect_program,
-            )
+        answer = await ai_trainer.ask(
+            user_id, question, history, image_data_url=image_data_url,
+            on_status=display.set_status, on_program=collect_program,
+        )
     except Exception:
         logger.exception("AI trainer request failed for user %s", user_id)
         with suppress(TelegramBadRequest):

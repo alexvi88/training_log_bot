@@ -6,7 +6,7 @@ are responsible for turning DB rows into the small view dataclasses below.
 
 import datetime as dt
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from html import escape
 from typing import Literal
 
@@ -123,31 +123,44 @@ def format_set(weight: float, reps: int, rpe: float | None = None) -> str:
     return f"{format_weight(weight)}×{reps}{format_rpe(rpe)}"
 
 
-def format_routine_scheme(
-    target_sets: int | None,
-    target_reps_min: int | None,
-    target_reps_max: int | None,
+def build_routine_target(
+    sets: int | None, reps_min: int | None, reps_max: int | None
 ) -> str:
-    """«3×5-10» — схема упражнения в программе, собранной AI-тренером.
+    """«3×5–8» — routine_exercises.target из подходов и повторов, которые назвал
+    AI-тренер (см. ai_trainer.propose_program).
 
-    Пустая строка, когда схемы нет: программы, сохранённые из тренировки или
-    взятые из каталога готовых, несут только состав (см. db.add_routine_exercise),
-    и подрисовывать им выдуманные подходы нельзя.
+    Та же free-form строка, что у готовых программ в seed_data, и попадает она
+    в то же поле — значит и на карточке программы, и подсказкой «🎯 План» во
+    время тренировки выглядит одинаково, кто бы программу ни собрал.
+
+    Пустая строка, если схемы нет вовсе: тогда у упражнения останется пустой
+    target, как у программы, снятой с тренировки.
     """
     reps = ""
-    if target_reps_min and target_reps_max and target_reps_max != target_reps_min:
-        reps = f"{target_reps_min}-{target_reps_max}"
-    elif target_reps_min or target_reps_max:
-        reps = str(target_reps_min or target_reps_max)
-    if target_sets and reps:
-        return f"{target_sets}×{reps}"
-    if target_sets:
-        return f"{target_sets}×"
+    if reps_min and reps_max and reps_max != reps_min:
+        reps = f"{reps_min}–{reps_max}"
+    elif reps_min or reps_max:
+        reps = str(reps_min or reps_max)
+    if sets and reps:
+        return f"{sets}×{reps}"
+    if sets:
+        return f"{sets} подх."
     return reps
 
 
 def format_date_ru(d: dt.datetime) -> str:
     return f"{d.strftime('%d.%m.%Y')} ({_WEEKDAYS_RU[d.weekday()]})"
+
+
+_MONTHS_RU_GEN = [
+    "января", "февраля", "марта", "апреля", "мая", "июня",
+    "июля", "августа", "сентября", "октября", "ноября", "декабря",
+]
+
+
+def format_day_month_ru(d: dt.date) -> str:
+    """"20 июля" — for prose and button labels, where dd.mm.yyyy reads as a form field."""
+    return f"{d.day} {_MONTHS_RU_GEN[d.month - 1]}"
 
 
 def format_duration(seconds: float) -> str:
@@ -439,9 +452,9 @@ def build_ai_program_preview(name: str, days: list[dict]) -> str:
     """Превью программы, которую собрал AI-тренер, до её сохранения.
 
     `days` — черновик из ai_trainer.propose_program: [{"name", "items": [{"name",
-    "sets", "reps_min", "reps_max", "source"}]}]. Каждый день станет отдельной
-    программой в списке пользователя, поэтому текст проговаривает это прямо —
-    иначе «добавить» выглядит как одна новая строка, а появится несколько.
+    "target", "source"}]}]. Каждый день станет отдельной программой в списке
+    пользователя, поэтому текст проговаривает это прямо — иначе «добавить»
+    выглядит как одна новая строка, а появится несколько.
     """
     total = sum(len(day["items"]) for day in days)
     new_names = sorted(
@@ -459,10 +472,8 @@ def build_ai_program_preview(name: str, days: list[dict]) -> str:
     for day in days:
         lines += ["", f"<b>{escape(day['name'])}</b>"]
         for i, item in enumerate(day["items"], start=1):
-            scheme = format_routine_scheme(
-                item.get("sets"), item.get("reps_min"), item.get("reps_max")
-            )
-            suffix = f" — {scheme}" if scheme else ""
+            target = item.get("target")
+            suffix = f" — {escape(target)}" if target else ""
             lines.append(f"{i}. {escape(item['name'])}{suffix}")
 
     lines += ["", DIVIDER]
@@ -947,3 +958,187 @@ def format_comparison_line(e1rm_delta: float, unit: str = "kg") -> str:
     u = UNIT_LABELS.get(unit, "кг")
     arrow = "↑" if e1rm_delta > 0 else ("↓" if e1rm_delta < 0 else "→")
     return f"{arrow} e1RM {e1rm_delta:+.1f}{u} vs предыдущего рекорда этого упражнения"
+
+
+# ---------- дневник питания ----------
+
+
+@dataclass
+class FoodItemView:
+    """One product within a logged meal, with its own portion and КБЖУ."""
+    name: str
+    portion: str = ""
+    calories: float | None = None
+    protein: float | None = None
+    fat: float | None = None
+    carbs: float | None = None
+
+
+@dataclass
+class FoodEntryView:
+    """One logged meal, as the food-diary screen shows it."""
+    id: int
+    description: str
+    items: list[FoodItemView] | None = None
+    calories: float | None = None
+    protein: float | None = None
+    fat: float | None = None
+    carbs: float | None = None
+    has_photo: bool = False
+
+
+def format_kcal(value: float | None) -> str:
+    return "—" if value is None else f"{round(value):g} ккал"
+
+
+def _macros_line(protein: float | None, fat: float | None, carbs: float | None) -> str:
+    """"Б30 · Ж12 · У60" — skipped entirely when the model gave no macros. No
+    space between the label and the number (same compact style as "80×5" for a
+    set or "@9" for RPE elsewhere), and no trailing "г": the labels (Б/Ж/У)
+    already say these are grams, unlike a bare number that needs a unit.
+    """
+    parts = [
+        (label, v)
+        for label, v in (("Б", protein), ("Ж", fat), ("У", carbs))
+        if v is not None
+    ]
+    if not parts:
+        return ""
+    return " · ".join(f"{label}{round(v):g}" for label, v in parts)
+
+
+def _item_line(item: FoodItemView) -> str:
+    """"Гранола — 150 г — 630 ккал (Б 15 · Ж 20 · У 90 г)" — portion and macros
+    only when the model actually gave them, so a bare guess doesn't show "None"."""
+    head = escape(item.name)
+    if item.portion:
+        head += f" — {escape(item.portion)}"
+    head += f" — {format_kcal(item.calories)}"
+    macros = _macros_line(item.protein, item.fat, item.carbs)
+    return f"{head} ({macros})" if macros else head
+
+
+def build_food_estimate_text(
+    description: str,
+    items: list[FoodItemView] | None = None,
+    calories: float | None = None,
+    protein: float | None = None,
+    fat: float | None = None,
+    carbs: float | None = None,
+    comment: str = "",
+    header: str = "🍽 Вот что я вижу:",
+) -> str:
+    """The confirmation card shown after the model reads a meal, and (with a
+    different header) the preview of a correction."""
+    lines = [header, "", f"<b>{escape(description or 'Приём пищи')}</b>"]
+    # Один компонент ничего не добавляет к названию приёма — не дублируем
+    # (та же логика, что в build_food_day_screen).
+    if items and len(items) > 1:
+        lines.extend(f"• {_item_line(i)}" for i in items)
+    if calories is not None:
+        # Ничего не выдумываем: без числа "Итого" не показываем вовсе (а не
+        # "Итого: —") — так карточка от режима "без КБЖУ" не выглядит
+        # недосчитанной, ей просто нечего тут показывать.
+        macros = _macros_line(protein, fat, carbs)
+        totals = f"{format_kcal(calories)} · {macros}" if macros else format_kcal(calories)
+        lines.append("")
+        lines.append(f"Итого: <b>{totals}</b>")
+    if comment:
+        lines.append("")
+        lines.append(f"<i>{escape(comment)}</i>")
+    return "\n".join(lines)
+
+
+def build_food_day_screen(date: dt.date, entries: list[FoodEntryView]) -> str:
+    """One day of the diary: every meal with its per-item КБЖУ, then the day's total."""
+    head = f"🍽 <b>Дневник питания — {format_date_ru(dt.datetime.combine(date, dt.time()))}</b>"
+    if not entries:
+        return (
+            f"{head}\n\nЗа этот день пока пусто.\n\n"
+            "Напиши, что съел, или пришли фото еды (можно с подписью) — "
+            "я прикину калории и БЖУ, а ты подтвердишь."
+        )
+
+    lines = [head, ""]
+    for i, e in enumerate(entries, start=1):
+        if i > 1:
+            # Пустая строка только МЕЖДУ приёмами — над чертой-разделителем её
+            # быть не должно, последний приём должен идти к ней вплотную.
+            lines.append("")
+        photo = " 📷" if e.has_photo else ""
+        lines.append(f"<b>{i}. {escape(e.description)}</b>{photo}")
+        items = e.items or []
+        # Один компонент ничего не добавляет к названию приёма — не дублируем.
+        # Больше одного — под сворачиваемую цитату, а не разворачиваем на весь
+        # экран: раскладка нужна для точности, а не для чтения на каждый день.
+        if len(items) > 1:
+            breakdown = "\n".join(f"• {_item_line(item)}" for item in items)
+            lines.append(collapsible(f"<i>{breakdown}</i>"))
+        # Калории приёма и его БЖУ — одной итоговой строкой под раскладкой,
+        # а не калории наверху при названии и БЖУ отдельно внизу.
+        totals = [p for p in (format_kcal(e.calories) if e.calories is not None else "",
+                               _macros_line(e.protein, e.fat, e.carbs)) if p]
+        if totals:
+            lines.append(f"<b><i>{' · '.join(totals)}</i></b>")
+
+    known = [e.calories for e in entries if e.calories is not None]
+    n = plural_ru(len(entries), ("приём", "приёма", "приёмов"))
+    day_macros = _macros_line(
+        _sum_or_none(e.protein for e in entries),
+        _sum_or_none(e.fat for e in entries),
+        _sum_or_none(e.carbs for e in entries),
+    )
+    day_totals = [p for p in (format_kcal(sum(known)) if known else "", day_macros) if p]
+    if day_totals:
+        total_line = (
+            f"{DIVIDER}\nИтого за день: <b>{' · '.join(day_totals)}</b> ({len(entries)} {n} пищи)"
+        )
+    else:
+        total_line = f"{DIVIDER}\nЗа день: {len(entries)} {n} пищи"
+    if known and len(known) < len(entries):
+        total_line += f"\n<i>(без калорий: {len(entries) - len(known)})</i>"
+    lines.append(total_line)
+    lines.append("")
+    lines.append("<i>Ещё что-то съел? Напиши текстом или пришли фото — добавлю новой записью</i>")
+    return "\n".join(lines)
+
+
+def _sum_or_none(values) -> float | None:
+    known = [v for v in values if v is not None]
+    return sum(known) if known else None
+
+
+@dataclass
+class FoodDayView:
+    """One day's row in the history list, with its totals and what was eaten."""
+    date: dt.date
+    entries: int
+    calories: float | None = None
+    protein: float | None = None
+    fat: float | None = None
+    carbs: float | None = None
+    descriptions: list[str] = field(default_factory=list)
+
+
+def build_food_history_list(days: list[FoodDayView]) -> str:
+    """The history tab: one block per logged day, newest first — date, totals,
+    entry count, then the food itself folded behind a collapsible quote."""
+    if not days:
+        return (
+            "📚 <b>История питания</b>\n\nПока ничего не записано.\n"
+            "Открой день и напиши, что съел."
+        )
+    day_blocks = []
+    for d in days:
+        n = plural_ru(d.entries, ("приём", "приёма", "приёмов"))
+        macros = _macros_line(d.protein, d.fat, d.carbs)
+        totals = [p for p in (format_kcal(d.calories) if d.calories is not None else "", macros) if p]
+        block = [f"<b>{format_date_ru(dt.datetime.combine(d.date, dt.time()))}</b>"]
+        if totals:
+            block.append(" · ".join(totals))
+        block.append(f"{d.entries} {n} пищи")
+        if d.descriptions:
+            food_list = "\n".join(f"{i}. {escape(name)}" for i, name in enumerate(d.descriptions, start=1))
+            block.append(collapsible(food_list))
+        day_blocks.append("\n".join(block))
+    return "📚 <b>История питания</b>\n\n" + "\n\n".join(day_blocks)

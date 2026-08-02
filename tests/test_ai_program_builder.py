@@ -66,7 +66,7 @@ async def test_draft_carries_scheme_and_resolved_names(fresh_db, user_id):
 
     item = draft["days"][0]["items"][0]
     assert item["name"] == TEMPLATE_A
-    assert (item["sets"], item["reps_min"], item["reps_max"]) == (4, 5, 10)
+    assert item["target"] == "4×5–10"
     assert item["source"] == "template"
 
 
@@ -151,8 +151,7 @@ async def test_reversed_rep_range_is_turned_around(fresh_db, user_id):
         {"name": "П", "days": [_day("День 1", [{"name": TEMPLATE_A, "reps_min": 10, "reps_max": 5}])]},
     )
 
-    item = draft["days"][0]["items"][0]
-    assert (item["reps_min"], item["reps_max"]) == (5, 10)
+    assert draft["days"][0]["items"][0]["target"] == "5–10"
 
 
 async def test_absurd_sets_are_clamped_and_garbage_becomes_none(fresh_db, user_id):
@@ -169,6 +168,7 @@ async def test_absurd_sets_are_clamped_and_garbage_becomes_none(fresh_db, user_i
     item = draft["days"][0]["items"][0]
     assert item["sets"] == ai_trainer.PROGRAM_MAX_SETS
     assert item["reps_min"] is None
+    assert item["target"] == f"{ai_trainer.PROGRAM_MAX_SETS} подх."
 
 
 async def test_long_names_are_trimmed_and_empty_ones_get_a_fallback(fresh_db, user_id):
@@ -213,7 +213,9 @@ async def test_saving_a_draft_creates_one_routine_per_day_with_scheme(fresh_db, 
     )
 
     for day in draft["days"]:
-        await fresh_db.create_routine_from_plan(user_id, day["name"], day["items"])
+        await fresh_db.create_routine_from_program(
+            user_id, day["name"], [(i["name"], i["target"]) for i in day["items"]]
+        )
 
     routines = await fresh_db.list_routines(user_id)
     assert sorted(r["name"] for r in routines) == ["День 1 — верх", "День 2 — низ"]
@@ -221,7 +223,7 @@ async def test_saving_a_draft_creates_one_routine_per_day_with_scheme(fresh_db, 
     upper = next(r for r in routines if r["name"] == "День 1 — верх")
     rows = await fresh_db.list_routine_exercises(upper["id"])
     assert rows[0]["display_name"] == TEMPLATE_A
-    assert (rows[0]["target_sets"], rows[0]["target_reps_min"], rows[0]["target_reps_max"]) == (3, 5, 10)
+    assert rows[0]["target"] == "3×5–10"
 
 
 async def test_saving_forks_catalog_exercises_into_the_users_list(fresh_db, user_id):
@@ -230,22 +232,21 @@ async def test_saving_forks_catalog_exercises_into_the_users_list(fresh_db, user
     )
     assert await fresh_db.count_user_exercises(user_id) == 0
 
-    await fresh_db.create_routine_from_plan(user_id, "День 1", draft["days"][0]["items"])
+    await fresh_db.create_routine_from_program(
+        user_id, "День 1", [(i["name"], i["target"]) for i in draft["days"][0]["items"]]
+    )
 
     assert await fresh_db.find_exercise_by_name(user_id, TEMPLATE_A) is not None
 
 
-async def test_plan_without_a_scheme_leaves_the_targets_empty(fresh_db, user_id):
-    """Программы из каталога готовых и снятые с тренировки схемы не несут."""
-    rid = await fresh_db.create_routine_from_plan(user_id, "День 1", [{"name": TEMPLATE_A}])
+async def test_a_program_without_a_scheme_leaves_the_target_empty(fresh_db, user_id):
+    """Программа, снятая с тренировки, схемы не несёт — и не выдумывает её."""
+    rid = await fresh_db.create_routine_from_program(user_id, "День 1", [TEMPLATE_A])
 
-    row = (await fresh_db.list_routine_exercises(rid))[0]
-    assert row["target_sets"] is None
-    assert row["target_reps_min"] is None
+    assert (await fresh_db.list_routine_exercises(rid))[0]["target"] is None
 
 
 async def test_ready_made_program_still_instantiates(fresh_db, user_id):
-    """create_routine_from_program теперь делегирует в create_routine_from_plan."""
     rid = await fresh_db.create_routine_from_program(
         user_id, "Всё тело", [TEMPLATE_A, TEMPLATE_B, TEMPLATE_A]
     )
@@ -263,18 +264,17 @@ def test_preview_lists_days_scheme_and_new_exercises():
             {
                 "name": "День 1",
                 "items": [
-                    {"name": "Жим лёжа", "sets": 3, "reps_min": 5, "reps_max": 10, "source": "template"},
-                    {"name": "Тяга", "sets": 3, "reps_min": 8, "reps_max": 8, "source": "own"},
+                    {"name": "Жим лёжа", "target": "3×5–10", "source": "template"},
+                    {"name": "Тяга", "target": "3×8", "source": "own"},
                 ],
             },
-            {"name": "День 2", "items": [{"name": "Присед", "sets": 4, "reps_min": 5, "reps_max": 10,
-                                          "source": "own"}]},
+            {"name": "День 2", "items": [{"name": "Присед", "target": "4×5–10", "source": "own"}]},
         ],
     )
 
     assert "Верх/низ" in text
     assert "2 дня · 3 упражнения" in text
-    assert "1. Жим лёжа — 3×5-10" in text
+    assert "1. Жим лёжа — 3×5–10" in text
     assert "2. Тяга — 3×8" in text
     assert "Новых для тебя упражнение: 1" in text
 
@@ -296,12 +296,12 @@ def test_preview_of_a_single_day_does_not_promise_several_programs():
     assert "Добавлю как программу" in text
 
 
-def test_scheme_formats_partial_input():
-    assert formatting.format_routine_scheme(3, 5, 10) == "3×5-10"
-    assert formatting.format_routine_scheme(3, 8, 8) == "3×8"
-    assert formatting.format_routine_scheme(3, None, None) == "3×"
-    assert formatting.format_routine_scheme(None, 5, 10) == "5-10"
-    assert formatting.format_routine_scheme(None, None, None) == ""
+def test_target_formats_partial_input():
+    assert formatting.build_routine_target(3, 5, 10) == "3×5–10"
+    assert formatting.build_routine_target(3, 8, 8) == "3×8"
+    assert formatting.build_routine_target(3, None, None) == "3 подх."
+    assert formatting.build_routine_target(None, 5, 10) == "5–10"
+    assert formatting.build_routine_target(None, None, None) == ""
 
 
 def test_program_button_appears_only_when_a_program_was_proposed():

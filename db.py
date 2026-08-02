@@ -179,6 +179,28 @@ CREATE TABLE IF NOT EXISTS bodyweight_logs (
 );
 CREATE INDEX IF NOT EXISTS idx_bodyweight_user ON bodyweight_logs (telegram_id, logged_at);
 
+-- Дневник питания (см. handlers/food_diary.py). eaten_on — календарная дата
+-- пользователя, к которой относится еда (она же ключ подневной группировки),
+-- а не момент ввода: запись за прошлую дату заносится тем же путём.
+-- Макросы/калории — оценка модели, поэтому все они nullable: запись без цифр
+-- (модель не смогла или пользователь ввёл текстом без деталей) всё равно
+-- имеет смысл как строка «что съел».
+CREATE TABLE IF NOT EXISTS food_entries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    telegram_id INTEGER NOT NULL,
+    eaten_on TEXT NOT NULL,
+    description TEXT NOT NULL,
+    details TEXT,
+    calories REAL,
+    protein REAL,
+    fat REAL,
+    carbs REAL,
+    photo_file_id TEXT,
+    source TEXT NOT NULL DEFAULT 'text',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_food_entries_user_day ON food_entries (telegram_id, eaten_on, id);
+
 CREATE TABLE IF NOT EXISTS routines (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL,
@@ -192,9 +214,7 @@ CREATE TABLE IF NOT EXISTS routine_exercises (
     routine_id INTEGER NOT NULL,
     exercise_id INTEGER NOT NULL,
     order_index INTEGER NOT NULL,
-    target_sets INTEGER,
-    target_reps_min INTEGER,
-    target_reps_max INTEGER,
+    target TEXT,
     FOREIGN KEY (routine_id) REFERENCES routines (id),
     FOREIGN KEY (exercise_id) REFERENCES exercises (id)
 );
@@ -318,6 +338,10 @@ async def _migrate_schema() -> None:
         await _conn.execute("ALTER TABLE users ADD COLUMN tz_offset INTEGER NOT NULL DEFAULT 0")
     if "stickers_enabled" not in user_cols:
         await _conn.execute("ALTER TABLE users ADD COLUMN stickers_enabled INTEGER NOT NULL DEFAULT 1")
+    if "food_macros_enabled" not in user_cols:
+        # 1 = model estimates КБЖУ for food-diary entries (current default);
+        # 0 = it just describes/saves the meal, no numbers — see handlers/food_diary.py.
+        await _conn.execute("ALTER TABLE users ADD COLUMN food_macros_enabled INTEGER NOT NULL DEFAULT 1")
     if "e1rm_hint_seen" in user_cols:
         # Counted showings of the e1RM footnote, back when it faded out after a
         # few — it lives permanently on the progress screen now.
@@ -342,15 +366,9 @@ async def _migrate_schema() -> None:
     if "is_warmup" in set_cols:
         await _conn.execute("ALTER TABLE sets DROP COLUMN is_warmup")
 
-    # Программы, собранные до появления схемы подходов/повторов, остаются
-    # валидными — у них эти колонки просто NULL (см. format_routine_scheme).
-    routine_exercise_cols = await _column_names("routine_exercises")
-    if "target_sets" not in routine_exercise_cols:
-        await _conn.execute("ALTER TABLE routine_exercises ADD COLUMN target_sets INTEGER")
-    if "target_reps_min" not in routine_exercise_cols:
-        await _conn.execute("ALTER TABLE routine_exercises ADD COLUMN target_reps_min INTEGER")
-    if "target_reps_max" not in routine_exercise_cols:
-        await _conn.execute("ALTER TABLE routine_exercises ADD COLUMN target_reps_max INTEGER")
+    routine_ex_cols = await _column_names("routine_exercises")
+    if "target" not in routine_ex_cols:
+        await _conn.execute("ALTER TABLE routine_exercises ADD COLUMN target TEXT")
 
     await _conn.commit()
 
@@ -1773,22 +1791,13 @@ async def create_routine(user_id: int, name: str) -> int:
 
 
 async def add_routine_exercise(
-    routine_id: int,
-    exercise_id: int,
-    order_index: int,
-    target_sets: Optional[int] = None,
-    target_reps_min: Optional[int] = None,
-    target_reps_max: Optional[int] = None,
+    routine_id: int, exercise_id: int, order_index: int, target: Optional[str] = None
 ) -> None:
-    """target_* — схема подхода, которую задал AI-тренер, когда собирал программу
-    (см. create_routine_from_plan). Всё, что создано руками из тренировки или из
-    готовой программы, схемы не несёт и оставляет их NULL."""
     async with _write_lock:
         await conn().execute(
-            "INSERT INTO routine_exercises "
-            "(routine_id, exercise_id, order_index, target_sets, target_reps_min, target_reps_max) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (routine_id, exercise_id, order_index, target_sets, target_reps_min, target_reps_max),
+            "INSERT INTO routine_exercises (routine_id, exercise_id, order_index, target) "
+            "VALUES (?, ?, ?, ?)",
+            (routine_id, exercise_id, order_index, target),
         )
         await conn().commit()
 
@@ -1930,39 +1939,34 @@ async def count_routines(user_id: int) -> int:
     return row[0]
 
 
-async def create_routine_from_plan(user_id: int, name: str, items: list[dict[str, Any]]) -> int:
-    """Instantiate one program day as a routine.
+async def create_routine_from_program(
+    user_id: int, name: str, exercise_names: list[str | tuple[str, Optional[str]]]
+) -> int:
+    """Instantiate one ready-made program day as a routine.
 
-    `items` — [{"name": ..., "sets": ..., "reps_min": ..., "reps_max": ...}], где
-    всё кроме "name" необязательно. Каждое название резолвится в собственное
-    упражнение пользователя (форкая глобальный шаблон, если своего ещё нет);
-    дубли и нерезолвящиеся имена пропускаются, чтобы программа осталась чистой.
+    Each exercise name is resolved to the user's own copy (forking the global
+    template when missing). Duplicate or unresolvable names are skipped so the
+    routine stays clean.
+
+    Each item may be a bare name, or an (name, target) tuple carrying the
+    program's recommended sets×reps for that exercise (e.g. "4×6–8") — stored on
+    the routine_exercises row so it can be shown again both on the routine and
+    while logging a workout started from it. Programs the AI trainer builds land
+    here the same way, carrying the target it picked (ai_trainer.propose_program).
     """
     routine_id = await create_routine(user_id, name)
     seen: set[int] = set()
     order = 0
-    for item in items:
-        ex_id = await get_or_create_user_exercise_by_name(user_id, item.get("name", ""))
+    for item in exercise_names:
+        ex_name, target = item if isinstance(item, tuple) else (item, None)
+        ex_id = await get_or_create_user_exercise_by_name(user_id, ex_name)
         if ex_id is None or ex_id in seen:
             continue
         seen.add(ex_id)
-        await add_routine_exercise(
-            routine_id,
-            ex_id,
-            order,
-            target_sets=item.get("sets"),
-            target_reps_min=item.get("reps_min"),
-            target_reps_max=item.get("reps_max"),
-        )
+        await add_routine_exercise(routine_id, ex_id, order, target)
         order += 1
     return routine_id
 
-
-async def create_routine_from_program(user_id: int, name: str, exercise_names: list[str]) -> int:
-    """Готовая программа из каталога (seed_data.WORKOUT_PROGRAMS) — только состав,
-    без схемы подходов: она у этих программ описана текстом на экране, а не по
-    упражнениям."""
-    return await create_routine_from_plan(user_id, name, [{"name": n} for n in exercise_names])
 
 
 async def create_routine_from_workout(user_id: int, workout_id: int, name: str) -> int:
@@ -2273,6 +2277,87 @@ async def scale_bodyweight_logs(telegram_id: int, factor: float) -> None:
             (factor, telegram_id),
         )
         await conn().commit()
+
+
+# ---------- food diary ----------
+
+
+async def add_food_entry(
+    telegram_id: int,
+    eaten_on: str,
+    description: str,
+    details: Optional[str] = None,
+    calories: Optional[float] = None,
+    protein: Optional[float] = None,
+    fat: Optional[float] = None,
+    carbs: Optional[float] = None,
+    photo_file_id: Optional[str] = None,
+    source: str = "text",
+) -> int:
+    async with _write_lock:
+        cur = await conn().execute(
+            "INSERT INTO food_entries (telegram_id, eaten_on, description, details, calories, "
+            "protein, fat, carbs, photo_file_id, source, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                telegram_id, eaten_on, description, details, calories,
+                protein, fat, carbs, photo_file_id, source, now_iso(),
+            ),
+        )
+        await conn().commit()
+        return cur.lastrowid
+
+
+async def list_food_entries(telegram_id: int, eaten_on: str) -> list[aiosqlite.Row]:
+    """One day's entries, in the order they were added."""
+    cur = await conn().execute(
+        "SELECT * FROM food_entries WHERE telegram_id = ? AND eaten_on = ? ORDER BY id",
+        (telegram_id, eaten_on),
+    )
+    return await cur.fetchall()
+
+
+async def get_food_entry(entry_id: int) -> Optional[aiosqlite.Row]:
+    cur = await conn().execute("SELECT * FROM food_entries WHERE id = ?", (entry_id,))
+    return await cur.fetchone()
+
+
+async def delete_food_entry(entry_id: int) -> None:
+    async with _write_lock:
+        await conn().execute("DELETE FROM food_entries WHERE id = ?", (entry_id,))
+        await conn().commit()
+
+
+async def list_food_days(
+    telegram_id: int, limit: int = 8, offset: int = 0
+) -> list[aiosqlite.Row]:
+    """Days that have entries, newest first, with per-day totals and the list of
+    what was eaten (as newline-joined descriptions) — the history list.
+
+    Aggregated in SQL rather than by loading every entry per day separately —
+    the history screen shows a handful of days at a time, but a year of
+    logging is thousands of rows. The inner subquery orders by id before the
+    GROUP BY so GROUP_CONCAT collects each day's descriptions in the order
+    they were logged, not an arbitrary one.
+    """
+    cur = await conn().execute(
+        "SELECT eaten_on, COUNT(*) AS entries, SUM(calories) AS calories, "
+        "SUM(protein) AS protein, SUM(fat) AS fat, SUM(carbs) AS carbs, "
+        "GROUP_CONCAT(description, char(10)) AS descriptions "
+        "FROM (SELECT * FROM food_entries WHERE telegram_id = ? ORDER BY id) "
+        "GROUP BY eaten_on ORDER BY eaten_on DESC LIMIT ? OFFSET ?",
+        (telegram_id, limit, offset),
+    )
+    return await cur.fetchall()
+
+
+async def count_food_days(telegram_id: int) -> int:
+    cur = await conn().execute(
+        "SELECT COUNT(DISTINCT eaten_on) FROM food_entries WHERE telegram_id = ?",
+        (telegram_id,),
+    )
+    (count,) = await cur.fetchone()
+    return count
 
 
 async def scale_user_set_weights(telegram_id: int, factor: float) -> None:

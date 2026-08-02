@@ -61,6 +61,21 @@ async def test_show_settings_reflects_pushes_state_in_keyboard_labels(fresh_db, 
     assert any("выключены" in label for label in labels_off)
 
 
+async def test_settings_food_macros_toggles_off_then_on(fresh_db, user_id):
+    db = fresh_db
+    state = await _make_state(user_id)
+
+    assert (await db.get_user(user_id))["food_macros_enabled"] == 1  # по умолчанию считаем
+
+    callback = _make_callback(user_id, "settings:food_macros")
+    await settings.settings_food_macros(callback, state)
+    assert (await db.get_user(user_id))["food_macros_enabled"] == 0
+
+    callback = _make_callback(user_id, "settings:food_macros")
+    await settings.settings_food_macros(callback, state)
+    assert (await db.get_user(user_id))["food_macros_enabled"] == 1
+
+
 async def test_settings_progression_toggles_off_then_on(fresh_db, user_id):
     db = fresh_db
     state = await _make_state(user_id)

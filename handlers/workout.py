@@ -342,12 +342,17 @@ def _logging_hint(
     inferred_step: float | None = None,
     confirmed_weight: float | None = None,
     formula: str = config.DEFAULT_E1RM_FORMULA,
+    target: str | None = None,
 ) -> str:
     base = None
     if show_instruction:
         base = "Вес и повторы через пробел, например «100 8»"
         if has_sets:
             base += " (можно только повторы — вес возьмётся с последнего подхода)"
+    # The program's recommended sets×reps, if this exercise was opened from a
+    # routine that carries one — shown above the history/warning lines since
+    # it's the plan for today, not a look back at a previous session.
+    target_line = f"🎯 План: {target}\n" if target else ""
     warning = _suspicious_weight_warning(last_session, today_sets, unit)
     if warning and confirmed_weight is not None and today_sets and today_sets[-1][0] == confirmed_weight:
         # Already answered "да, записать" for exactly this weight — repeating the
@@ -355,6 +360,7 @@ def _logging_hint(
         # that arrive by other routes ("N: 100 8" edits) still get the nudge.
         warning = None
     warning_line = f"{warning}\n" if warning else ""
+    lead = f"{target_line}{warning_line}"
     if last_session:
         sets_str = ", ".join(formatting.format_set(w, r, rpe) for w, r, rpe in last_session)
         line = f"💡 В прошлый раз: {sets_str}"
@@ -369,9 +375,9 @@ def _logging_hint(
                     for w, r in (today_sets or [])
                 )
                 line += f"\n{formatting.format_progression_hint(suggestion, achieved)}"
-        return f"{warning_line}<i>{line}</i>\n\n{base}" if base else f"{warning_line}<i>{line}</i>"
-    if warning_line:
-        return f"{warning_line}\n{base}" if base else warning_line.rstrip("\n")
+        return f"{lead}<i>{line}</i>\n\n{base}" if base else f"{lead}<i>{line}</i>"
+    if lead:
+        return f"{lead}\n{base}" if base else lead.rstrip("\n")
     return base or ""
 
 
@@ -479,20 +485,32 @@ async def _render_logging_screen(bot, state: FSMContext, user):
         inferred_step=weight_steps.get(active),
         confirmed_weight=(data.get("confirmed_weights") or {}).get(active),
         formula=user["e1rm_formula"],
+        target=(data.get("exercise_targets") or {}).get(active),
     )
     kb = keyboards.logging_keyboard(open_items, active, has_sets)
     await _sync_sticky_photo(bot, state, active)
     await _refresh_live(bot, state, user, data["workout_id"], hint, kb, note=active_note)
 
 
-async def _back_after_cancel(bot, state: FSMContext, user):
+async def _back_after_cancel(callback: CallbackQuery, state: FSMContext, user):
     data = await state.get_data()
     if data.get("open_exercises"):
         await state.set_state(WorkoutFlow.logging_set)
-        await _render_logging_screen(bot, state, user)
-    else:
-        await state.set_state(WorkoutFlow.idle)
-        await _enter_idle_screen(bot, state, user, data["workout_id"])
+        await _render_logging_screen(callback.bot, state, user)
+        return
+    workout_id = data["workout_id"]
+    exercise_ids = await db.list_exercise_ids_for_workout(workout_id)
+    if not exercise_ids:
+        # Nothing was ever logged — the workout only exists because "Начать
+        # тренировку" creates it up front, so "Назад" here should undo that,
+        # not drop the user on the same "add exercise to begin" screen.
+        await db.discard_workout(workout_id)
+        await _clear_sticky_photo(callback.bot, state)
+        await state.clear()
+        await _show_main_menu(callback, state)
+        return
+    await state.set_state(WorkoutFlow.idle)
+    await _enter_idle_screen(callback.bot, state, user, workout_id)
 
 
 # ---------- main menu ----------
@@ -716,7 +734,7 @@ async def stale_delete_cancel(callback: CallbackQuery, state: FSMContext):
 
 
 async def _show_main_menu(callback: CallbackQuery, state: FSMContext, delete_current: bool = True):
-    # delete_current=False when reached from the AI-trainer chat's "⬅️ Меню"
+    # delete_current=False when reached from the AI-trainer chat's "🏠 Меню"
     # button — that message is part of the user's conversation with the
     # AI-тренер, not a disposable menu screen, so it should stay in the chat
     # instead of being deleted (same reasoning as _enter_live's delete_message).
@@ -734,7 +752,7 @@ async def _show_main_menu(callback: CallbackQuery, state: FSMContext, delete_cur
 
 @router.callback_query(F.data == "live:back_to_menu")
 async def live_back_to_menu(callback: CallbackQuery, state: FSMContext):
-    """"⬅️ В меню" on the just-finished workout card — see _finalize_workout,
+    """"🏠 Меню" on the just-finished workout card — see _finalize_workout,
     which stopped auto-sending the menu so the card isn't buried under it."""
     await _show_main_menu(callback, state)
     await callback.answer()
@@ -1080,7 +1098,7 @@ async def pick_partner(callback: CallbackQuery, state: FSMContext):
 )
 async def pick_cancel(callback: CallbackQuery, state: FSMContext):
     user = await db.get_user(callback.from_user.id)
-    await _back_after_cancel(callback.bot, state, user)
+    await _back_after_cancel(callback, state, user)
     await callback.answer()
 
 
@@ -1868,6 +1886,10 @@ async def _load_next_planned_block(event, state: FSMContext) -> bool:
     last_by = dict(data.get("last_by_exercise") or {})
     last_session_sets = dict(data.get("last_session_sets") or {})
     weight_steps = dict(data.get("weight_steps") or {})
+    exercise_targets = dict(data.get("exercise_targets") or {})
+    for ex_id, target in (block_plan.get("targets") or {}).items():
+        if target:
+            exercise_targets[ex_id] = target
     for ex_id in block_plan["exercise_ids"]:
         block_id = await db.create_block(workout_id, "single")
         await db.add_block_exercise(block_id, ex_id, 0)
@@ -1882,7 +1904,7 @@ async def _load_next_planned_block(event, state: FSMContext) -> bool:
     await state.update_data(
         open_exercises=open_exercises, open_blocks=open_blocks,
         active_exercise_id=open_exercises[0], last_by_exercise=last_by, last_session_sets=last_session_sets,
-        weight_steps=weight_steps,
+        weight_steps=weight_steps, exercise_targets=exercise_targets,
     )
     await state.set_state(WorkoutFlow.logging_set)
     user = await db.get_user(event.from_user.id)
@@ -2020,7 +2042,7 @@ async def finish_date_cancel(callback: CallbackQuery, state: FSMContext):
 )
 async def cancel_finish(callback: CallbackQuery, state: FSMContext):
     user = await db.get_user(callback.from_user.id)
-    await _back_after_cancel(callback.bot, state, user)
+    await _back_after_cancel(callback, state, user)
     await callback.answer()
 
 
@@ -2282,5 +2304,5 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
     await state.clear()
     # No auto-sent menu message here on purpose: it used to bury the card (the
     # PR/comparison highlights, the AI comment) the instant it appeared. The
-    # card's own "⬅️ В меню" button (live:back_to_menu below) opens the menu
+    # card's own "🏠 Меню" button (live:back_to_menu below) opens the menu
     # in its place instead, so it's a beat the user chooses, not one forced on them.

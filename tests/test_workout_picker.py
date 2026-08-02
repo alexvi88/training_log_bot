@@ -235,6 +235,31 @@ async def test_pick_page_first_page_has_no_back_button(fresh_db, user_id):
     assert "pick:page:1" in callback_datas  # next-page button still present
 
 
+async def test_pick_cancel_on_fresh_empty_workout_discards_it_and_returns_to_menu(fresh_db, user_id):
+    """"Назад" right after "Начать тренировку" — before anything was logged —
+    should undo the workout the tap created, not drop the user on the same
+    "add exercise to begin" screen (see _back_after_cancel)."""
+    db = fresh_db
+    workout_id = await db.create_workout(user_id)
+
+    state = await _make_state(user_id)
+    await state.update_data(workout_id=workout_id)
+    await state.set_state(WorkoutFlow.picking_group)
+    callback = _make_callback(user_id, "pick:cancel")
+    callback.message = MagicMock()
+    callback.message.delete = AsyncMock()
+    callback.message.answer = AsyncMock(return_value=SimpleNamespace(message_id=999))
+    callback.message.text = "some text"
+    callback.message.chat = SimpleNamespace(id=user_id)
+    callback.message.message_id = 1
+
+    await workout.pick_cancel(callback, state)
+
+    assert await db.get_workout(workout_id) is None
+    text = callback.message.answer.await_args.args[0]
+    assert "АТЛЕТ" in text  # main menu greeting/onboarding, not the live tracker
+
+
 async def test_finishing_last_exercise_suggests_what_came_next_last_time(fresh_db, user_id):
     db = fresh_db
     group_id = await db.create_muscle_group(user_id, "Грудь")

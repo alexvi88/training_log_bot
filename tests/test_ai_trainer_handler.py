@@ -487,13 +487,7 @@ def _draft(days: int = 2) -> dict:
             {
                 "name": f"День {i}",
                 "items": [
-                    {
-                        "name": "Жим штанги лёжа",
-                        "sets": 3,
-                        "reps_min": 5,
-                        "reps_max": 10,
-                        "source": "template",
-                    }
+                    {"name": "Жим штанги лёжа", "target": "3×5–10", "source": "template"}
                 ],
             }
             for i in range(1, days + 1)

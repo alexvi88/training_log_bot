@@ -8,15 +8,14 @@ user_id текущего пользователя на уровне executor'а,
 не может прочитать чужие данные.
 
 Пока у пользователя не исчерпана дневная квота (config.AI_SEARCH_DAILY_LIMIT),
-перед основным ответом дешёвый гейт-классификатор на быстрой config.GROK_MODEL
-(см. ask/_search_worth_it) решает, нужен ли вопросу живой поиск; и только если
-нужен — поднимается отдельный шаг через xAI's gRPC "Agent Tools" SDK на дорогой
-search-модели (config.GROK_SEARCH_MODEL, ~10× дороже). Ей доступны только
-server-side web_search/x_search, без наших DB-инструментов. Инструменты
-приходится разводить по разным вызовам:
+перед основным ответом дешёвый гейт-классификатор на config.GROK_MODEL (см.
+ask/_search_worth_it) решает, нужен ли вопросу живой поиск; и только если
+нужен — поднимается отдельный шаг через xAI's gRPC "Agent Tools" SDK на
+multi-agent-модели (config.GROK_SEARCH_MODEL) с web_search/x_search, без наших
+DB-инструментов. Инструменты приходится разводить по разным вызовам:
 смешивание client-side function tools (наши DB-инструменты) с multi-agent
 моделью в одном запросе требует xAI beta access, которого у аккаунта нет —
-а server-side-only поиск под это ограничение не попадает (так же как в
+а чисто server-side-only поиск под это ограничение не попадает (так же как в
 fun_bot, см. его grok.py, где нет своих function tools вовсе). Реальное
 использование поиска считается по citations/server_side_tool_usage в ответе,
 а не по факту, что инструмент был просто предложен; если поиск не нужен или
@@ -29,7 +28,7 @@ import asyncio
 import datetime as dt
 import json
 import logging
-from types import SimpleNamespace
+import re
 from typing import Any, Awaitable, Callable, Optional
 
 from openai import AsyncOpenAI
@@ -435,6 +434,7 @@ async def comment_on_workout(user_id: int, workout_id: int) -> str:
     response = await client.chat.completions.create(
         model=config.GROK_MODEL,
         max_tokens=700,
+        extra_body={"reasoning_effort": config.GROK_QUICK_REASONING_EFFORT},
         messages=[
             {
                 "role": "system",
@@ -524,6 +524,7 @@ async def weekly_digest(user_id: int) -> Optional[str]:
         response = await client.chat.completions.create(
             model=config.GROK_MODEL,
             max_tokens=500,
+            extra_body={"reasoning_effort": config.GROK_QUICK_REASONING_EFFORT},
             messages=[
                 {"role": "system", "content": WEEKLY_DIGEST_SYSTEM_PROMPT},
                 {"role": "user", "content": summary},
@@ -535,6 +536,257 @@ async def weekly_digest(user_id: int) -> Optional[str]:
     await _log_llm_cost(user_id, config.GROK_MODEL, getattr(response, "usage", None))
     text = (response.choices[0].message.content or "").strip()
     return text or None
+
+
+FOOD_ANALYSIS_SYSTEM_PROMPT = """\
+Ты — нутрициолог-помощник в Telegram-боте дневника питания. Тебе присылают, что
+человек съел: текстом, фотографией еды или фото с подписью. Твоя задача — понять,
+что это за приём пищи, и оценить его калорийность и БЖУ.
+
+Отвечай ТОЛЬКО одним JSON-объектом, без markdown-обёртки и любого текста вокруг:
+{
+  "is_food": true или false,
+  "description": "короткое название приёма пищи, 1 строка, по-русски",
+  "items": [
+    {"name": "продукт", "portion": "примерная порция, напр. \"150 г\"",
+     "calories": число или null, "protein": число (граммы) или null,
+     "fat": число (граммы) или null, "carbs": число (граммы) или null},
+    ...
+  ],
+  "calories": число или null,
+  "protein": число (граммы) или null,
+  "fat": число (граммы) или null,
+  "carbs": число (граммы) или null,
+  "comment": "одно короткое уточнение или пустая строка"
+}
+
+Правила:
+- is_food: false — если на фото или в тексте вообще нет еды (человек, пейзаж,
+  случайный предмет, бессмысленное сообщение и т.п.). В этом случае остальные
+  поля можно оставить пустыми/null, а в comment коротко объясни, что не так
+  («на фото человек, еды не видно»). Не пытайся притянуть что-то за уши только
+  чтобы заполнить description.
+- description — то, что человек увидит в дневнике: «Овсянка с бананом», «Куриная
+  грудка с рисом и салатом». Без калорий и граммов внутри — они в отдельных полях.
+- items — раскладка по продуктам, 1-6 пунктов, у КАЖДОГО своя порция и своё
+  КБЖУ. Если из текста порции неизвестны, предполагай обычную бытовую порцию
+  и не спрашивай разрешения.
+- Главное — правдоподобные БЖУ у каждого пункта: калорийность пересчитывается
+  из них по 4/4/9 уже после тебя, поэтому не подгоняй цифры друг под друга и не
+  бойся, что сумма не сойдётся — просто дай честную оценку белков, жиров и
+  углеводов для названной порции.
+- Цифры — оценка, а не точность до грамма: это нормально, оценивай смело. null
+  ставь, только если по фото/тексту вообще нельзя понять, что это за еда.
+- Если человек уже указал вес/калории — используй его цифры, не переоценивай.
+- comment — только если есть что важное сказать (например «порция на глаз, если
+  знаешь вес — поправь»). Иначе пустая строка. Без markdown.
+- Всё по-русски.
+"""
+
+
+# Используется вместо FOOD_ANALYSIS_SYSTEM_PROMPT, когда у пользователя выключен
+# подсчёт КБЖУ (users.food_macros_enabled = 0, см. handlers/food_diary.py) — тогда
+# для текста запись сохраняется вообще без модели, а модель зовётся только на
+# фото, просто чтобы превратить картинку в короткое текстовое описание.
+FOOD_DESCRIBE_SYSTEM_PROMPT = """\
+Ты помогаешь вести дневник питания. Тебе присылают фотографию еды, возможно с
+подписью. Пользователь сам решил не считать калории и БЖУ — не предлагай их и
+не упоминай, просто опиши, что это за приём пищи.
+
+Отвечай ТОЛЬКО одним JSON-объектом, без markdown-обёртки и текста вокруг:
+{
+  "is_food": true или false,
+  "description": "короткое название приёма пищи, 1 строка, по-русски",
+  "comment": "одно короткое уточнение или пустая строка"
+}
+
+Правила:
+- is_food: false — если на фото вообще нет еды (человек, пейзаж, случайный
+  предмет и т.п.). Тогда в comment коротко объясни, что не так, а description
+  оставь пустым.
+- description — одна строка, название и состав: «Чизбургер», «Овсянка с
+  бананом и мёдом». Если продуктов несколько — перечисли через запятую в одной
+  строке.
+- Порцию/вес указывай ПРЯМО В description, если она известна из подписи, текста
+  или правки пользователя — например «Протеин Whey — 30 г», «Куриная грудка —
+  200 г». Не выдумывай порцию, если её не называли и не видно по фото. Это
+  единственное поле, которое реально сохраняется в дневник — то, что не попало
+  в description, для записи как будто не существовало.
+- comment — только для чего-то ещё, что не влезло в description (не для
+  порции/веса — тем место в самом название). Иначе пустая строка.
+- Всё по-русски.
+"""
+
+
+def _extract_json_object(text: str) -> dict[str, Any]:
+    """Парсим JSON из ответа модели, переживая ```json-обёртку и текст вокруг.
+
+    Модель просят вернуть голый объект, но просьба — не гарантия, а падать
+    целым экраном из-за пары лишних символов не стоит.
+    """
+    text = (text or "").strip()
+    if text.startswith("```"):
+        text = text.split("\n", 1)[-1].rsplit("```", 1)[0]
+    start, end = text.find("{"), text.rfind("}")
+    if start == -1 or end <= start:
+        raise ValueError("no JSON object in model response")
+    return json.loads(text[start : end + 1])
+
+
+def _as_number(value: Any) -> Optional[float]:
+    """Число из поля JSON, терпимое к "420 ккал"/"~15 г"/null/мусору."""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    if isinstance(value, str):
+        match = re.search(r"-?\d+(?:[.,]\d+)?", value)
+        if match:
+            return float(match.group().replace(",", "."))
+    return None
+
+
+# Коэффициенты Атуотера — по ним калорийность считают на этикетках: белки и
+# углеводы по 4 ккал/г, жиры 9 ккал/г.
+_KCAL_PER_GRAM = {"protein": 4.0, "fat": 9.0, "carbs": 4.0}
+
+
+def _atwater_kcal(macros: dict[str, Optional[float]]) -> Optional[float]:
+    """Калорийность из БЖУ, или None — если хоть одного макроса не хватает."""
+    if any(macros.get(k) is None for k in _KCAL_PER_GRAM):
+        return None
+    return sum(macros[k] * per_gram for k, per_gram in _KCAL_PER_GRAM.items())
+
+
+def _reconcile_macros(entry: dict[str, Any]) -> None:
+    """Привести КБЖУ одной строки к целым граммам и пересчитать из них ккал.
+
+    Модель выдаёт калорийность и БЖУ как две независимые догадки, поэтому они
+    сходятся лишь примерно (620 ккал против 592 по формуле — обычный разброс).
+    На экране это читается как ошибка: любой, кто перемножит граммы на 4/4/9,
+    увидит, что итог не бьётся. Считаем ккал из БЖУ сами — и именно из тех
+    целых граммов, которые показываем, иначе округление вывода (28.4 → «28»)
+    снова разведёт цифры. Строку без полного набора БЖУ не трогаем: там
+    пересчитывать не из чего, и калорийность модели остаётся как есть.
+    """
+    for key in _KCAL_PER_GRAM:
+        if entry.get(key) is not None:
+            entry[key] = float(round(entry[key]))
+    kcal = _atwater_kcal(entry)
+    if kcal is not None:
+        entry["calories"] = kcal
+
+
+def _sum_field(items: list[dict[str, Any]], field: str) -> Optional[float]:
+    known = [i[field] for i in items if i.get(field) is not None]
+    return sum(known) if known else None
+
+
+async def analyze_food(
+    user_id: int,
+    text: str = "",
+    image_data_url: Optional[str] = None,
+    previous: Optional[dict[str, Any]] = None,
+    correction: str = "",
+    with_macros: bool = True,
+) -> dict[str, Any]:
+    """Что человек съел → структурированная оценка приёма пищи.
+
+    Обычный REST-вызов без инструментов: вопрос замкнут на присланные текст и
+    фото, лезть в тренировочные данные пользователя тут незачем. `previous` +
+    `correction` — второй заход после «✏️ Поправить»: модель получает свою
+    прошлую догадку и правку пользователя, поэтому правка «это не банан, а
+    груша, и порция 300 г» уточняет оценку, а не начинает её с нуля.
+
+    with_macros=False (users.food_macros_enabled выключен) переключает на
+    FOOD_DESCRIBE_SYSTEM_PROMPT — модель только называет, что на фото, без
+    калорий и БЖУ; возвращённый словарь при этом той же формы (calories/
+    protein/fat/carbs = None, items = []), чтобы вызывающему не пришлось
+    разветвляться по режиму.
+
+    Возвращаемый словарь всегда несёт "is_food": False, когда на фото/в тексте
+    вообще нет еды — вызывающий должен не предлагать сохранить такую догадку.
+
+    Кидает исключение при сетевой ошибке или неразборчивом ответе — вызывающий
+    решает, что показать пользователю.
+    """
+    client = _get_client()
+    parts = []
+    if text:
+        parts.append(f"Что съел: {text}")
+    if image_data_url:
+        parts.append("К сообщению приложено фото еды — оцени по нему.")
+    if previous:
+        parts.append(f"Твоя прошлая оценка: {json.dumps(previous, ensure_ascii=False)}")
+    if correction:
+        parts.append(f"Пользователь поправил: {correction}\nУчти правку и верни исправленную оценку.")
+    if not parts:
+        parts.append("Данных нет — верни description с пустой строкой.")
+
+    response = await client.chat.completions.create(
+        model=config.GROK_MODEL,
+        max_tokens=700 if with_macros else 200,
+        extra_body={"reasoning_effort": config.GROK_QUICK_REASONING_EFFORT},
+        messages=[
+            {
+                "role": "system",
+                "content": FOOD_ANALYSIS_SYSTEM_PROMPT if with_macros else FOOD_DESCRIBE_SYSTEM_PROMPT,
+            },
+            {"role": "user", "content": _plain_user_content("\n\n".join(parts), image_data_url)},
+        ],
+    )
+    await _log_llm_cost(user_id, config.GROK_MODEL, getattr(response, "usage", None))
+    data = _extract_json_object(response.choices[0].message.content or "")
+    is_food = bool(data.get("is_food", True))
+
+    if not with_macros:
+        return {
+            "is_food": is_food,
+            "description": str(data.get("description") or "").strip(),
+            "items": [],
+            "calories": None,
+            "protein": None,
+            "fat": None,
+            "carbs": None,
+            "comment": str(data.get("comment") or "").strip(),
+        }
+
+    items = []
+    for raw in (data.get("items") or [])[:6]:
+        if not isinstance(raw, dict):
+            continue
+        name = str(raw.get("name") or "").strip()
+        if not name:
+            continue
+        item = {
+            "name": name,
+            "portion": str(raw.get("portion") or "").strip(),
+            "calories": _as_number(raw.get("calories")),
+            "protein": _as_number(raw.get("protein")),
+            "fat": _as_number(raw.get("fat")),
+            "carbs": _as_number(raw.get("carbs")),
+        }
+        _reconcile_macros(item)
+        items.append(item)
+
+    estimate = {
+        "is_food": is_food,
+        "description": str(data.get("description") or "").strip(),
+        "items": items,
+        "calories": _as_number(data.get("calories")),
+        "protein": _as_number(data.get("protein")),
+        "fat": _as_number(data.get("fat")),
+        "carbs": _as_number(data.get("carbs")),
+        "comment": str(data.get("comment") or "").strip(),
+    }
+    if items:
+        # Итог — сумма раскладки, а не отдельная догадка модели: иначе строки и
+        # «Итого» на карточке живут своей жизнью. Граммы у пунктов уже целые, а
+        # формула линейна, так что сумма ккал по пунктам ровно равна ккал из
+        # суммы БЖУ — карточка сходится и по вертикали, и по формуле.
+        for field in ("calories", "protein", "fat", "carbs"):
+            estimate[field] = _sum_field(items, field)
+    else:
+        _reconcile_macros(estimate)
+    return estimate
 
 
 TOOLS: list[dict[str, Any]] = [
@@ -774,12 +1026,6 @@ TOOLS: list[dict[str, Any]] = [
 # handlers/ai_trainer.py): что сейчас происходит — вместо/вперемешку со
 # случайными фразами-заполнителями. Может не приходить (например, в тестах).
 StatusCallback = Optional[Callable[[str], Awaitable[None]]]
-
-# Опциональный колбэк потоковой генерации: получает накопленный текст ответа по
-# мере поступления токенов, чтобы вызывающая сторона печатала ответ вживую вместо
-# ожидания целиком (см. handlers/ai_trainer.py). Только для финального ответа —
-# в раундах с tool-call'ами не дёргается.
-DeltaCallback = Optional[Callable[[str], Awaitable[None]]]
 
 # Опциональный колбэк предложенной программы (см. propose_program): получает
 # черновик, который тренер собрал в ответ на просьбу составить программу.
@@ -1040,7 +1286,7 @@ async def _propose_program(
     None, если сохранять в итоге нечего. Названия упражнений резолвятся
     read-only (db.resolve_exercise_name): предложение, от которого пользователь
     откажется, не должно оставить у него в каталоге форкнутых упражнений —
-    форк случится при сохранении, в db.create_routine_from_plan.
+    форк случится при сохранении, в db.create_routine_from_program.
     """
     raw_days = tool_input.get("days")
     if not isinstance(raw_days, list) or not raw_days:
@@ -1074,7 +1320,13 @@ async def _propose_program(
             if key in seen:
                 continue
             seen.add(key)
-            items.append({**item, "name": display_name, "source": source})
+            # target — та же строка, что у готовых программ (routine_exercises.target):
+            # схему собираем здесь, чтобы дальше — и в превью, и в тренировке —
+            # программа тренера ничем не отличалась от каталожной.
+            target = formatting.build_routine_target(
+                item["sets"], item["reps_min"], item["reps_max"]
+            )
+            items.append({**item, "name": display_name, "source": source, "target": target})
 
         if items:
             days.append({"name": day_name, "items": items})
@@ -1169,7 +1421,6 @@ async def ask(
     history: list[dict[str, Any]],
     image_data_url: Optional[str] = None,
     on_status: StatusCallback = None,
-    on_delta: DeltaCallback = None,
     on_program: ProgramCallback = None,
 ) -> str:
     """Один вопрос пользователя → готовый текст ответа.
@@ -1213,7 +1464,7 @@ async def ask(
         user_id, question, bool(search_context),
     )
     return await _ask_plain(
-        user_id, question, history, image_data_url, search_context, on_status, on_delta, on_program
+        user_id, question, history, image_data_url, search_context, on_status, on_program
     )
 
 
@@ -1230,55 +1481,15 @@ async def _completion_round(
     client: AsyncOpenAI,
     messages: list[dict[str, Any]],
     user_id: Optional[int],
-    on_delta: DeltaCallback,
 ) -> tuple[str, list[Any]]:
-    """One chat-completion turn. Returns (content, tool_calls).
-
-    When `on_delta` is set, the turn is streamed and content deltas are pushed to
-    it live — but only until a tool call appears in the stream (a tool round has
-    no user-facing answer to type out). Cost is logged either way.
-    """
-    if on_delta is None:
-        response = await client.chat.completions.create(
-            model=config.GROK_MODEL, max_tokens=2048, tools=TOOLS, messages=messages,
-        )
-        await _log_llm_cost(user_id, config.GROK_MODEL, getattr(response, "usage", None))
-        m = response.choices[0].message
-        return (m.content or ""), list(m.tool_calls or [])
-
-    stream = await client.chat.completions.create(
+    """One chat-completion turn. Returns (content, tool_calls)."""
+    response = await client.chat.completions.create(
         model=config.GROK_MODEL, max_tokens=2048, tools=TOOLS, messages=messages,
-        stream=True, stream_options={"include_usage": True},
+        extra_body={"reasoning_effort": config.GROK_REASONING_EFFORT},
     )
-    parts: list[str] = []
-    frags: dict[int, dict[str, str]] = {}
-    saw_tool = False
-    usage = None
-    async for chunk in stream:
-        if getattr(chunk, "usage", None):
-            usage = chunk.usage
-        if not chunk.choices:
-            continue
-        delta = chunk.choices[0].delta
-        for tc in getattr(delta, "tool_calls", None) or []:
-            saw_tool = True
-            f = frags.setdefault(tc.index, {"id": "", "name": "", "args": ""})
-            if tc.id:
-                f["id"] = tc.id
-            if tc.function and tc.function.name:
-                f["name"] += tc.function.name
-            if tc.function and tc.function.arguments:
-                f["args"] += tc.function.arguments
-        if getattr(delta, "content", None):
-            parts.append(delta.content)
-            if not saw_tool:
-                await on_delta("".join(parts))
-    await _log_llm_cost(user_id, config.GROK_MODEL, usage)
-    tool_calls = [
-        SimpleNamespace(id=f["id"], function=SimpleNamespace(name=f["name"], arguments=f["args"]))
-        for _, f in sorted(frags.items())
-    ]
-    return "".join(parts), tool_calls
+    await _log_llm_cost(user_id, config.GROK_MODEL, getattr(response, "usage", None))
+    m = response.choices[0].message
+    return (m.content or ""), list(m.tool_calls or [])
 
 
 async def _ask_plain(
@@ -1288,7 +1499,6 @@ async def _ask_plain(
     image_data_url: Optional[str] = None,
     search_context: Optional[str] = None,
     on_status: StatusCallback = None,
-    on_delta: DeltaCallback = None,
     on_program: ProgramCallback = None,
 ) -> str:
     client = _get_client()
@@ -1307,7 +1517,7 @@ async def _ask_plain(
 
     content = ""
     for _ in range(MAX_TOOL_ROUNDS + 1):
-        content, tool_calls = await _completion_round(client, messages, user_id, on_delta)
+        content, tool_calls = await _completion_round(client, messages, user_id)
         if not tool_calls:
             break
         if on_status:
@@ -1371,16 +1581,16 @@ async def _search_worth_it(
     question: str,
     history: list[dict[str, Any]],
 ) -> bool:
-    """Дешёвый гейт перед дорогим multi-agent поиском: решаем на быстрой модели
-    (config.GROK_MODEL), нужен ли вопросу живой веб/X-поиск вообще.
+    """Дешёвый гейт перед поиском: решаем на config.GROK_MODEL, нужен ли вопросу
+    живой веб/X-поиск вообще.
 
-    Решение «искать или нет» — обычная классификация, ей не нужны ни веб-доступ,
-    ни агентность, поэтому гонять на каждый вопрос дорогую multi-agent модель
-    (config.GROK_SEARCH_MODEL, ~10× дороже) только ради этого решения — пустой
-    слив бюджета: большинство вопросов к боту-дневнику про личные данные
-    пользователя и поиска не требуют. Дорогую модель поднимаем только когда этот
-    гейт сказал «да». Картинку в решение не передаём — тема поиска считывается по
-    тексту, а фото у нас почти всегда личное (форма, еда), поиска не просит.
+    Решение «искать или нет» — обычная классификация, ей не нужен веб-доступ,
+    поэтому гонять на каждый вопрос отдельный шаг с config.GROK_SEARCH_MODEL
+    только ради этого решения — пустой слив бюджета: большинство вопросов к
+    боту-дневнику про личные данные пользователя и поиска не требуют. Шаг с
+    поиском поднимаем только когда этот гейт сказал «да». Картинку в решение
+    не передаём — тема поиска считывается по тексту, а фото у нас почти всегда
+    личное (форма, еда), поиска не просит.
 
     При любой ошибке/неоднозначности возвращаем False: не искать безопаснее и
     дешевле, чем впустую дёргать дорогую модель.
@@ -1390,6 +1600,7 @@ async def _search_worth_it(
         response = await client.chat.completions.create(
             model=config.GROK_MODEL,
             max_tokens=3,
+            extra_body={"reasoning_effort": config.GROK_QUICK_REASONING_EFFORT},
             messages=[
                 {"role": "system", "content": _search_decision_system_prompt()},
                 *history,
@@ -1411,10 +1622,19 @@ async def _web_search_findings(
     on_status: StatusCallback = None,
 ) -> Optional[str]:
     """Отдельный шаг перед основным ответом: чистый server-side веб/X-поиск, без
-    наших DB-инструментов — их смешивание с multi-agent моделью в одном вызове
-    требует xAI beta access, которого у аккаунта нет (см. модуль docstring).
-    Возвращает найденное текстом или None, если поиск не нужен вопросу или сам
-    шаг не удался — в обоих случаях основной ответ просто идёт без него.
+    наших DB-инструментов (см. модуль docstring, почему они разведены по разным
+    вызовам). Возвращает найденное текстом или None, если поиск не нужен вопросу
+    или сам шаг не удался — в обоих случаях основной ответ просто идёт без него.
+
+    Одиночный линейный запрос (обычно 1 обращение в сеть на вопрос), а не
+    параллельный research по многим источникам, поэтому agent_count держим на
+    минимуме (config.GROK_SEARCH_AGENT_COUNT, дефолт 4) — раньше он вообще не
+    передавался явно, а по докам xAI непереданный effort может отображаться в
+    16 агентов, и биллятся токены (включая ризонинг и тул-коллы) всех агентов
+    сразу, не только лидера. Если этот шаг когда-нибудь станет вопросом
+    "прочесать много независимых источников параллельно" — тогда есть смысл
+    поднять agent_count до 16, а не менять модель: grok-4.20-multi-agent
+    дешевле grok-4.5 за токен и не в процессе вывода из эксплуатации.
 
     web_search/x_search — server-side: модель вызывает их и получает результаты
     в рамках одного sample(), без tool_calls, которые нужно было бы исполнять
@@ -1435,6 +1655,7 @@ async def _web_search_findings(
             messages=_to_xai_messages(history, question, system_prompt=_search_system_prompt()),
             tools=[xai_web_search(), xai_x_search()],
             max_tokens=1024,
+            agent_count=config.GROK_SEARCH_AGENT_COUNT,
         )
         response = await chat_session.sample()
     except Exception:

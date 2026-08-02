@@ -76,14 +76,44 @@ STICKERS_ENABLED = os.getenv("STICKERS_ENABLED", "true").lower() == "true"
 # key/env names as fun_bot, so one key serves both bots. The menu entry stays
 # visible but answers with a hint until the key is set.
 XAI_API_KEY = os.getenv("XAI_API_KEY", "")
-GROK_MODEL = os.getenv("GROK_MODEL", "grok-4-1-fast")
+GROK_MODEL = os.getenv("GROK_MODEL", "grok-4.5-latest")
 GROK_BASE_URL = os.getenv("GROK_BASE_URL", "https://api.x.ai/v1")
 
-# Search-capable model used (via xAI's gRPC "Agent Tools" SDK, not the REST
-# endpoint) when a question is allowed web/X search access — same model name
-# as fun_bot's GROK_SEARCH_MODEL. Needs an agentic/multi-agent-capable model,
-# not the plain chat one.
+# Reasoning depth for GROK_MODEL calls (low/medium/high — xAI defaults to
+# "high" when unset, which reasoning models can't turn off). Split in two
+# rather than one flat value for every call:
+#
+# GROK_REASONING_EFFORT — the main agentic Q&A loop (_completion_round, see
+# ask/_ask_plain), where the model reads tool results and gives actual
+# coaching advice. This is the one place extra thinking plausibly pays off,
+# so it stays at medium.
+#
+# GROK_QUICK_REASONING_EFFORT — everything else on GROK_MODEL: the workout
+# comment, the weekly digest, food-photo analysis, and the search-worth-it
+# gate (a 3-token yes/no classification). None of these need open-ended
+# reasoning, and since streaming was removed the user stares at "думаю..."
+# for the model's full thinking time with nothing live to show for it — low
+# keeps that wait (and the cost) down where it doesn't buy anything.
+GROK_REASONING_EFFORT = os.getenv("GROK_REASONING_EFFORT", "medium")
+GROK_QUICK_REASONING_EFFORT = os.getenv("GROK_QUICK_REASONING_EFFORT", "low")
+
+# Search-capable model used (via xAI's gRPC SDK, not the REST endpoint) when a
+# question is allowed web/X search access — same model name as fun_bot's
+# GROK_SEARCH_MODEL. Kept on grok-4.20-multi-agent rather than grok-4.5: per
+# xAI's pricing page, multi-agent is cheaper per token than grok-4.5 ($2.50 vs
+# $6.00/1M output), has a 1M context window vs 500k, and a 20% batch discount
+# grok-4.5 lacks. It's still current (not on xAI's May-2026 retirement list) —
+# don't "optimize" this to grok-4.5 on model-recency instinct alone.
 GROK_SEARCH_MODEL = os.getenv("GROK_SEARCH_MODEL", "grok-4.20-multi-agent")
+
+# Parallel sub-agent count for the search step (xAI SDK's native agent_count
+# param — 4 or 16). Explicit and low: this step is one linear web/X lookup per
+# question (see _web_search_findings docstring), not multi-source research, so
+# it doesn't need 16 agents — and leaving this unset risks defaulting to the
+# most expensive tier (xAI's docs map an unset/high reasoning effort to 16
+# agents; all agents' tokens, including their own reasoning and tool calls,
+# get billed).
+GROK_SEARCH_AGENT_COUNT = int(os.getenv("GROK_SEARCH_AGENT_COUNT", "4"))
 
 # Per-user daily cap on AI-trainer questions answered with web/X search access.
 # Guards against runaway search cost; once hit, the AI trainer still answers
@@ -111,9 +141,17 @@ OPENAI_TRANSCRIBE_MODEL = os.getenv("OPENAI_TRANSCRIBE_MODEL", "gpt-4o-mini-tran
 # tokens as (input, output), keyed by the exact model name sent to the API.
 # Override without a code change via LLM_PRICES_USD_PER_1K_JSON, e.g.
 # '{"grok-4-1-fast": [0.0002, 0.0005]}'.
+#
+# grok-4.20-multi-agent's rate here is xAI's short-context per-token price;
+# per xAI's docs all sub-agents' tokens (reasoning + tool calls included) are
+# billed, not just the leader's — if the usage object we log doesn't already
+# sum across agents, this underestimates actual spend on that model. Not
+# verified either way; xAI's own `cost_in_usd_ticks` on the response would be
+# the authoritative number if this ever needs auditing.
 LLM_PRICES_USD_PER_1K: dict[str, tuple[float, float]] = {
     "grok-4-1-fast": (0.0002, 0.0005),
-    "grok-4.20-multi-agent": (0.002, 0.006),
+    "grok-4.20-multi-agent": (0.00125, 0.0025),
+    "grok-4.5-latest": (0.002, 0.006),
 }
 try:
     for _model, _price in json.loads(os.getenv("LLM_PRICES_USD_PER_1K_JSON", "{}")).items():

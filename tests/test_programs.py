@@ -29,7 +29,7 @@ def test_every_program_exercise_exists_in_catalog():
     """Every referenced exercise must be a known global template so it resolves."""
     for p in WORKOUT_PROGRAMS:
         for _day_name, exercises in p["days"]:
-            for ex in exercises:
+            for ex, _target in exercises:
                 assert ex.strip().lower() in _TEMPLATE_NAMES, (
                     f"{ex!r} in program {p['key']} is not in EXERCISE_TEMPLATES"
                 )
@@ -136,4 +136,5 @@ async def test_instantiating_a_full_program_creates_all_days(user_id):
     for day_name, exercises in program["days"]:
         assert by_name[day_name]["exercise_count"] == len(exercises)
         rexs = await dbmod.list_routine_exercises(by_name[day_name]["id"])
-        assert [r["display_name"] for r in rexs] == exercises
+        assert [r["display_name"] for r in rexs] == [ex for ex, _target in exercises]
+        assert [r["target"] for r in rexs] == [target for _ex, target in exercises]
