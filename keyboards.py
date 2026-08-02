@@ -803,34 +803,6 @@ def food_confirm_keyboard() -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
-def food_date_keyboard(dates: Sequence[dt.date], today: dt.date) -> InlineKeyboardMarkup:
-    """«За какую дату занести?»: предложенная дата первой строкой, две соседние
-    рядом, плюс календарь для всего остального.
-
-    `dates` приходит уже посчитанным (первая — предложенная по умолчанию), чтобы
-    клавиатура не знала про правила выбора соседей."""
-    b = InlineKeyboardBuilder()
-    if dates:
-        primary = dates[0]
-        label = "сегодня" if primary == today else formatting.format_day_month_ru(primary)
-        b.row(
-            InlineKeyboardButton(
-                text=f"✅ Занести за {label}", callback_data=f"fd:date:{primary.isoformat()}"
-            )
-        )
-    others = [
-        InlineKeyboardButton(
-            text=formatting.format_day_month_ru(d), callback_data=f"fd:date:{d.isoformat()}"
-        )
-        for d in dates[1:]
-    ]
-    if others:
-        b.row(*others)
-    b.row(InlineKeyboardButton(text="📅 Другая дата", callback_data="fd:otherdate"))
-    b.row(InlineKeyboardButton(text="❌ Отменить", callback_data="fd:cancel"))
-    return b.as_markup()
-
-
 def food_history_keyboard(days: Sequence[dt.date], page: int, has_next: bool) -> InlineKeyboardMarkup:
     """Дни с записями, по два в ряд — что в них было, расписано в тексте экрана."""
     b = InlineKeyboardBuilder()

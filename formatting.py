@@ -992,13 +992,15 @@ def build_food_day_screen(date: dt.date, entries: list[FoodEntryView]) -> str:
     lines = [head, ""]
     for i, e in enumerate(entries, start=1):
         photo = " 📷" if e.has_photo else ""
-        kcal_part = f" — {format_kcal(e.calories)}" if e.calories is not None else ""
-        lines.append(f"<b>{i}. {escape(e.description)}</b>{photo}{kcal_part}")
+        lines.append(f"<b>{i}. {escape(e.description)}</b>{photo}")
         for item in e.items or []:
             lines.append(f"<i>• {_item_line(item)}</i>")
-        macros = _macros_line(e.protein, e.fat, e.carbs)
-        if macros:
-            lines.append(f"<i>{macros}</i>")
+        # Калории приёма и его БЖУ — одной итоговой строкой под раскладкой,
+        # а не калории наверху при названии и БЖУ отдельно внизу.
+        totals = [p for p in (format_kcal(e.calories) if e.calories is not None else "",
+                               _macros_line(e.protein, e.fat, e.carbs)) if p]
+        if totals:
+            lines.append(f"<b>{' · '.join(totals)}</b>")
         lines.append("")
 
     known = [e.calories for e in entries if e.calories is not None]
