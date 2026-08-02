@@ -1521,16 +1521,22 @@ async def weekly_volume_by_group(
 # ---------- blocks / block exercises ----------
 
 async def create_block(workout_id: int, block_type: str) -> int:
-    db = conn()
-    cur = await db.execute(
-        "SELECT COALESCE(MAX(order_index), -1) + 1 FROM workout_blocks WHERE workout_id = ?",
-        (workout_id,),
-    )
-    (order_index,) = await cur.fetchone()
+    """Append a block, choosing its order_index inside the INSERT.
+
+    Reading MAX(order_index) first left a window: aiogram handles updates
+    concurrently, so two blocks opened in quick succession (tapping an
+    exercise twice, or "➕ Суперсет" racing the picker) both read the same
+    value and inserted with it. Two blocks then shared an order_index and the
+    workout's exercise order became arbitrary — in the card, in the history and
+    in "next exercise" lookups. Same fix as append_set.
+    """
     async with _write_lock:
+        db = conn()
         cur = await db.execute(
-            "INSERT INTO workout_blocks (workout_id, order_index, type) VALUES (?, ?, ?)",
-            (workout_id, order_index, block_type),
+            "INSERT INTO workout_blocks (workout_id, order_index, type) "
+            "SELECT ?, COALESCE(MAX(order_index), -1) + 1, ? "
+            "FROM workout_blocks WHERE workout_id = ?",
+            (workout_id, block_type, workout_id),
         )
         await db.commit()
         return cur.lastrowid
@@ -1891,13 +1897,19 @@ async def append_routine_exercise(routine_id: int, exercise_id: int) -> None:
     """Add an exercise to the end of a routine that already exists — the "✏️ edit
     an already-saved program" path, as opposed to add_routine_exercise's use
     building a fresh routine where the caller tracks order_index itself.
+
+    The order_index is chosen inside the INSERT so two exercises added in quick
+    succession can't both read the same MAX and land on the same position —
+    see create_block.
     """
-    cur = await conn().execute(
-        "SELECT COALESCE(MAX(order_index), -1) + 1 FROM routine_exercises WHERE routine_id = ?",
-        (routine_id,),
-    )
-    row = await cur.fetchone()
-    await add_routine_exercise(routine_id, exercise_id, row[0])
+    async with _write_lock:
+        await conn().execute(
+            "INSERT INTO routine_exercises (routine_id, exercise_id, order_index, target) "
+            "SELECT ?, ?, COALESCE(MAX(order_index), -1) + 1, NULL "
+            "FROM routine_exercises WHERE routine_id = ?",
+            (routine_id, exercise_id, routine_id),
+        )
+        await conn().commit()
 
 
 async def remove_routine_exercise(routine_exercise_id: int) -> None:
