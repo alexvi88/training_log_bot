@@ -969,11 +969,10 @@ def build_food_estimate_text(
         # Ничего не выдумываем: без числа "Итого" не показываем вовсе (а не
         # "Итого: —") — так карточка от режима "без КБЖУ" не выглядит
         # недосчитанной, ей просто нечего тут показывать.
-        lines.append("")
-        lines.append(f"Итого: <b>{format_kcal(calories)}</b>")
         macros = _macros_line(protein, fat, carbs)
-        if macros:
-            lines.append(macros)
+        totals = f"{format_kcal(calories)} · {macros}" if macros else format_kcal(calories)
+        lines.append("")
+        lines.append(f"Итого: <b>{totals}</b>")
     if comment:
         lines.append("")
         lines.append(f"<i>{escape(comment)}</i>")
@@ -992,6 +991,10 @@ def build_food_day_screen(date: dt.date, entries: list[FoodEntryView]) -> str:
 
     lines = [head, ""]
     for i, e in enumerate(entries, start=1):
+        if i > 1:
+            # Пустая строка только МЕЖДУ приёмами — над чертой-разделителем её
+            # быть не должно, последний приём должен идти к ней вплотную.
+            lines.append("")
         photo = " 📷" if e.has_photo else ""
         lines.append(f"<b>{i}. {escape(e.description)}</b>{photo}")
         for item in e.items or []:
@@ -1002,7 +1005,6 @@ def build_food_day_screen(date: dt.date, entries: list[FoodEntryView]) -> str:
                                _macros_line(e.protein, e.fat, e.carbs)) if p]
         if totals:
             lines.append(f"<b>{' · '.join(totals)}</b>")
-        lines.append("")
 
     known = [e.calories for e in entries if e.calories is not None]
     n = plural_ru(len(entries), ("приём", "приёма", "приёмов"))

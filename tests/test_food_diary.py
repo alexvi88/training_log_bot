@@ -268,6 +268,18 @@ def test_day_screen_numbers_entries_and_totals():
     assert "Б12 · Ж8 · У55" in text
 
 
+def test_day_screen_last_entry_sits_right_above_the_divider():
+    """Пустая строка разделяет приёмы между собой, но перед чертой-разделителем
+    её быть не должно — последний приём идёт к ней вплотную."""
+    entries = [
+        _view(id=1, description="Овсянка", calories=350),
+        _view(id=2, description="Кофе", calories=60),
+    ]
+    text = formatting.build_food_day_screen(dt.date(2026, 7, 20), entries)
+    assert "350 ккал</b>\n\n<b>2. Кофе" in text  # между приёмами — пустая строка
+    assert f"60 ккал</b>\n{formatting.DIVIDER}" in text  # а перед чертой — нет
+
+
 def test_non_empty_day_screen_still_hints_at_adding_more():
     """Без этой строки экран после первой записи выглядит тупиком — непонятно,
     что можно просто дописать ещё один приём пищи (см. отчёт пользователя)."""
@@ -337,8 +349,7 @@ def test_estimate_text_lists_items_with_their_own_macros():
     assert "• Овсянка — 60 г — 220 ккал (Б6 · Ж4 · У36)" in text
     assert "• Банан — 1 шт — 90 ккал" in text  # без макросов — без скобок
     assert "(Б" not in text.split("Банан")[1].split("\n")[0]
-    assert "Итого: <b>310 ккал</b>" in text
-    assert "Б9 · Ж6 · У62" in text
+    assert "Итого: <b>310 ккал · Б9 · Ж6 · У62</b>" in text
     assert "порция на глаз" in text
 
 
