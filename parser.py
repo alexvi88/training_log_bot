@@ -63,6 +63,15 @@ MAX_SETS_PER_LINE = 40
 # are *not* here on purpose — "100 8" is one set (weight + reps), not two.
 _LINE_SPLIT_RE = re.compile(r"[,;\n]+")
 
+# A decimal weight typed with a comma ("102,5 8", normal for a RU keyboard) looks
+# exactly like this line's own set separator once split, and the split runs
+# first — "102,5 8" silently became two bogus sets (0×102 with carry-forward,
+# then 5×8) instead of one 102.5kg set. Protect it: a comma between digits that
+# reads like a decimal fraction (1-2 digits, then a non-digit or end) is turned
+# into a dot before splitting. A comma actually separating two sets is either
+# followed by a space ("100 8, 100 7") or by 3+ digits — both survive untouched.
+_DECIMAL_COMMA_RE = re.compile(r"(?<=\d),(?=\d{1,2}(?:\D|$))")
+
 
 def _parse_rpe(raw: str | None) -> float | None:
     if not raw:
@@ -149,6 +158,7 @@ def parse_sets_line(text: str) -> list[ParsedSet]:
     bare reps, @RPE, +weight) still works inside a chunk. A single bad chunk
     fails the whole line — partial logging would be more confusing than a reparse.
     """
+    text = _DECIMAL_COMMA_RE.sub(".", text)
     chunks = [c.strip() for c in _LINE_SPLIT_RE.split(text) if c.strip()]
     if not chunks:
         raise ParseError(EXAMPLES_HINT)

@@ -440,10 +440,16 @@ async def _save_now(event, state: FSMContext, pending: dict[str, Any]) -> None:
     тем же путём, что и просмотр (стрелки, «История»)."""
     user_id = event.from_user.id
     date = await _state_date(state, user_id)
+    # Название режем на входе, а не только при отрисовке: при выключенном КБЖУ
+    # сюда попадает текст пользователя целиком (до 4096 символов), и он потом
+    # ходит и в экран дня, и в промпт модели.
+    description = formatting.shorten(
+        pending.get("description") or "Приём пищи", formatting.FOOD_DESC_LIMIT
+    )
     await db.add_food_entry(
         user_id,
         eaten_on=date.isoformat(),
-        description=pending.get("description") or "Приём пищи",
+        description=description,
         details=_items_to_json(pending.get("items")),
         calories=pending.get("calories"),
         protein=pending.get("protein"),

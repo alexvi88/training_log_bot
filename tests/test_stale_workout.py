@@ -129,6 +129,46 @@ async def test_start_workout_creates_and_enters_picker_immediately(fresh_db, use
     assert "pick:cancel" in callback_datas
 
 
+async def test_start_workout_resets_stale_fsm_scaffold(fresh_db, user_id):
+    """Regression for a bug where finishing a stale workout retroactively and
+    then starting a new one left the previous workout's open-exercise
+    scaffolding (`open_exercises`/`open_blocks`) in the FSM. A set logged into
+    that phantom "open" tab in the new workout was silently written into the
+    old (already finished) workout's block instead."""
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    bench = await db.create_exercise(user_id, "Bench press", group_id)
+    old_workout_id = await db.create_workout(user_id)
+    old_block_id = await db.create_block(old_workout_id, "single")
+    await db.add_block_exercise(old_block_id, bench, 0)
+    await db.add_set(old_block_id, bench, 1, 0, 100, 8)
+
+    state = await _make_state(user_id)
+    # Simulates the leftover scaffolding _clear_state_keep_workout preserves
+    # across a trip to the menu, pointing at the now-finished workout's block.
+    await state.update_data(
+        workout_id=old_workout_id, open_exercises=[bench], active_exercise_id=bench,
+        open_blocks={bench: old_block_id}, last_by_exercise={bench: (100, 8, None)},
+        last_session_sets={bench: [(100, 8, None)]}, weight_steps={bench: 2.5},
+        confirmed_weights={bench: 100}, exercise_targets={bench: "3x8"},
+    )
+    await db.finish_workout(old_workout_id)
+
+    callback = _make_callback(user_id, "menu:start_workout")
+    await workout.start_workout(callback, state)
+
+    data = await state.get_data()
+    new_workout_id = data["workout_id"]
+    assert new_workout_id != old_workout_id
+    assert not data.get("open_exercises")
+    assert not data.get("open_blocks")
+    assert data.get("active_exercise_id") is None
+    assert not data.get("last_session_sets")
+    assert not data.get("weight_steps")
+    assert not data.get("confirmed_weights")
+    assert not data.get("exercise_targets")
+
+
 async def test_stale_delete_requires_confirmation_then_deletes(fresh_db, user_id):
     db = fresh_db
     started = dt.datetime.now() - dt.timedelta(hours=config.STALE_WORKOUT_HOURS + 1)

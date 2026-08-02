@@ -583,6 +583,23 @@ _WORKOUT_SCAFFOLD_KEYS = (
 )
 
 
+async def _reset_new_workout_scaffold(state: FSMContext) -> None:
+    """Wipe every per-workout FSM key before starting a brand-new workout.
+
+    `_clear_state_keep_workout` deliberately keeps this scaffolding around when
+    the user steps out to the menu — but the flip side is that starting a
+    fresh workout (a normal "start" tap, or finishing/discarding a stale one
+    and starting another) must explicitly clear it. Without this, a stale
+    workout's `open_exercises`/`open_blocks` map ("exercise → block_id of the
+    *previous* workout") survives into the new one: the picker shows a phantom
+    "Открыто сейчас: …", and logging into that tab writes the new set's block
+    into yesterday's already-finished workout instead of today's.
+    """
+    keys = {*_WORKOUT_SCAFFOLD_KEYS, "confirmed_weights", "exercise_targets", "planned_blocks"}
+    keys.discard("ai_history")  # not workout scaffolding — the AI chat survives across workouts on purpose
+    await state.update_data(**{key: None for key in keys})
+
+
 async def _clear_state_keep_workout(state: FSMContext) -> None:
     """Reset the FSM flow, but keep the in-progress workout's open-exercise
     scaffolding intact. Leaving to the menu (or elsewhere) doesn't lose any
@@ -796,6 +813,7 @@ async def start_workout(callback: CallbackQuery, state: FSMContext):
     if active:
         await _enter_live(callback, state, active["id"])
         return
+    await _reset_new_workout_scaffold(state)
     workout_id = await db.create_workout(callback.from_user.id)
     await _delete_message(callback.message)
     sent = await callback.message.answer("🏋️ Тренировка начата")

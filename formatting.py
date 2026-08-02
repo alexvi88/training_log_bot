@@ -28,6 +28,12 @@ _TAG_RE = re.compile(r"<[^>]+>")
 CAPTION_LIMIT = 1024
 MESSAGE_LIMIT = 4096
 
+# Название приёма пищи в дневнике: при выключенном КБЖУ туда попадает текст
+# пользователя как есть, а он ограничен только лимитом сообщения Telegram —
+# одна такая запись способна распереть экран дня за 4096 и сделать день
+# неоткрываемым (кнопки удаления живут на этом же экране).
+FOOD_DESC_LIMIT = 200
+
 # Worth folding only above this much content — see collapsible_if_long. Six lines
 # is twice what the collapsed box occupies; the character threshold catches prose,
 # which wraps into many screen lines without containing a single newline.
@@ -62,6 +68,18 @@ def telegram_length(text: str) -> int:
     count toward the limit, and characters are measured in UTF-16 code units —
     so an emoji costs two, not one."""
     return len(_TAG_RE.sub("", text).encode("utf-16-le")) // 2
+
+
+def shorten(text: str, limit: int) -> str:
+    """Обрезать по границе слова с многоточием, если длиннее лимита."""
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    cut = text[:limit].rstrip()
+    space = cut.rfind(" ")
+    if space > limit // 2:
+        cut = cut[:space]
+    return cut.rstrip(" ,.;:—-") + "…"
 
 
 def collapsible_if_long(text: str) -> str:
@@ -340,7 +358,7 @@ def build_workout_summary(
         header += f" · {format_duration(duration_seconds)}"
     head_lines = [header]
     if note:
-        head_lines.append(f"📝 {note}")
+        head_lines.append(f"📝 {escape(note)}")
     head_lines.append("")
 
     def assemble(keep: list[BlockView]) -> str:
@@ -543,7 +561,7 @@ def build_workout_preview(
         header += f" · {format_duration(duration_seconds)}"
     lines = [header]
     if note:
-        lines.append(f"📝 {note}")
+        lines.append(f"📝 {escape(note)}")
     lines.append("")
     for block in blocks:
         lines.append(f"<b>{escape(block.exercise_name)}</b>")
@@ -991,28 +1009,58 @@ def build_food_day_screen(date: dt.date, entries: list[FoodEntryView]) -> str:
             "я прикину калории и БЖУ, а ты подтвердишь."
         )
 
-    lines = [head, ""]
-    for i, e in enumerate(entries, start=1):
-        if i > 1:
-            # Пустая строка только МЕЖДУ приёмами — над чертой-разделителем её
-            # быть не должно, последний приём должен идти к ней вплотную.
-            lines.append("")
+    def render_entry(i: int, e: FoodEntryView) -> list[str]:
+        out = []
         photo = " 📷" if e.has_photo else ""
-        lines.append(f"<b>{i}. {escape(e.description)}</b>{photo}")
+        out.append(f"<b>{i}. {escape(shorten(e.description, FOOD_DESC_LIMIT))}</b>{photo}")
         items = e.items or []
         # Один компонент ничего не добавляет к названию приёма — не дублируем.
         # Больше одного — под сворачиваемую цитату, а не разворачиваем на весь
         # экран: раскладка нужна для точности, а не для чтения на каждый день.
         if len(items) > 1:
             breakdown = "\n".join(f"• {_item_line(item)}" for item in items)
-            lines.append(collapsible(f"<i>{breakdown}</i>"))
+            out.append(collapsible(f"<i>{breakdown}</i>"))
         # Калории приёма и его БЖУ — одной итоговой строкой под раскладкой,
         # а не калории наверху при названии и БЖУ отдельно внизу.
         totals = [p for p in (format_kcal(e.calories) if e.calories is not None else "",
                                _macros_line(e.protein, e.fat, e.carbs)) if p]
         if totals:
-            lines.append(f"<b><i>{' · '.join(totals)}</i></b>")
+            out.append(f"<b><i>{' · '.join(totals)}</i></b>")
+        return out
 
+    # Номер приёма — тот же, что на кнопке «🗑 N», поэтому нумерация считается
+    # по всему дню, а не по показанному: при обрезке уезжает начало списка, а
+    # номера оставшихся не должны съезжать относительно клавиатуры.
+    rendered = [render_entry(i, e) for i, e in enumerate(entries, start=1)]
+
+    def assemble(keep: list[list[str]]) -> str:
+        lines = [head, ""]
+        if len(keep) < len(rendered):
+            lines.append(f"<i>Показаны последние {len(keep)} из {len(rendered)} записей дня</i>")
+            lines.append("")
+        for j, block in enumerate(keep):
+            if j > 0:
+                # Пустая строка только МЕЖДУ приёмами — над чертой-разделителем её
+                # быть не должно, последний приём должен идти к ней вплотную.
+                lines.append("")
+            lines.extend(block)
+        lines.append(_food_day_footer(entries))
+        return "\n".join(lines)
+
+    # Итоги дня считаются по всем записям, даже если часть не поместилась на
+    # экран: «Итого за день» обязано быть честным, иначе обрезка тихо занижает
+    # съеденное. Обрезается только список — с головы, самое старое.
+    kept = rendered
+    text = assemble(kept)
+    while len(kept) > 1 and telegram_length(text) > MESSAGE_LIMIT:
+        kept = kept[1:]
+        text = assemble(kept)
+    return text
+
+
+def _food_day_footer(entries: list[FoodEntryView]) -> str:
+    """Итоговая строка дня плюс подсказка — то, что идёт под списком приёмов."""
+    lines: list[str] = []
     known = [e.calories for e in entries if e.calories is not None]
     n = plural_ru(len(entries), ("приём", "приёма", "приёмов"))
     day_macros = _macros_line(
