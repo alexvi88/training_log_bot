@@ -896,11 +896,22 @@ def format_comparison_line(e1rm_delta: float, unit: str = "kg") -> str:
 
 
 @dataclass
+class FoodItemView:
+    """One product within a logged meal, with its own portion and КБЖУ."""
+    name: str
+    portion: str = ""
+    calories: float | None = None
+    protein: float | None = None
+    fat: float | None = None
+    carbs: float | None = None
+
+
+@dataclass
 class FoodEntryView:
     """One logged meal, as the food-diary screen shows it."""
     id: int
     description: str
-    details: str | None = None
+    items: list[FoodItemView] | None = None
     calories: float | None = None
     protein: float | None = None
     fat: float | None = None
@@ -924,9 +935,20 @@ def _macros_line(protein: float | None, fat: float | None, carbs: float | None) 
     return " · ".join(f"{label} {round(v):g}" for label, v in parts) + " г"
 
 
+def _item_line(item: FoodItemView) -> str:
+    """"Гранола — 150 г — 630 ккал (Б 15 · Ж 20 · У 90 г)" — portion and macros
+    only when the model actually gave them, so a bare guess doesn't show "None"."""
+    head = escape(item.name)
+    if item.portion:
+        head += f" — {escape(item.portion)}"
+    head += f" — {format_kcal(item.calories)}"
+    macros = _macros_line(item.protein, item.fat, item.carbs)
+    return f"{head} ({macros})" if macros else head
+
+
 def build_food_estimate_text(
     description: str,
-    items: list[str],
+    items: list[FoodItemView] | None = None,
     calories: float | None = None,
     protein: float | None = None,
     fat: float | None = None,
@@ -939,7 +961,7 @@ def build_food_estimate_text(
     lines = [header, "", f"<b>{escape(description or 'Приём пищи')}</b>"]
     if items:
         lines.append("")
-        lines.extend(f"• {escape(i)}" for i in items)
+        lines.extend(f"• {_item_line(i)}" for i in items)
     lines.append("")
     lines.append(f"Итого: <b>{format_kcal(calories)}</b>")
     macros = _macros_line(protein, fat, carbs)
@@ -952,7 +974,7 @@ def build_food_estimate_text(
 
 
 def build_food_day_screen(date: dt.date, entries: list[FoodEntryView]) -> str:
-    """One day of the diary: every meal with its calories, then the day's total."""
+    """One day of the diary: every meal with its per-item КБЖУ, then the day's total."""
     head = f"🍽 <b>Дневник питания — {format_date_ru(dt.datetime.combine(date, dt.time()))}</b>"
     if not entries:
         return (
@@ -965,8 +987,8 @@ def build_food_day_screen(date: dt.date, entries: list[FoodEntryView]) -> str:
     for i, e in enumerate(entries, start=1):
         photo = " 📷" if e.has_photo else ""
         lines.append(f"<b>{i}. {escape(e.description)}</b>{photo} — {format_kcal(e.calories)}")
-        if e.details:
-            lines.extend(f"<i>{escape(d)}</i>" for d in e.details.split("\n") if d.strip())
+        for item in e.items or []:
+            lines.append(f"<i>• {_item_line(item)}</i>")
         macros = _macros_line(e.protein, e.fat, e.carbs)
         if macros:
             lines.append(f"<i>{macros}</i>")

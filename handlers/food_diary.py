@@ -21,6 +21,7 @@
 import asyncio
 import base64
 import datetime as dt
+import json
 import logging
 from contextlib import suppress
 from typing import Any, Optional
@@ -79,12 +80,35 @@ async def _state_date(state: FSMContext, user_id: int) -> dt.date:
     return await _today(user_id)
 
 
+def _parse_items(raw: Optional[str]) -> list[formatting.FoodItemView]:
+    """`food_entries.details` holds the per-product breakdown as JSON — see
+    `_items_to_json`. Empty/broken JSON just means no breakdown to show."""
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+    except (TypeError, ValueError):
+        return []
+    return [
+        formatting.FoodItemView(
+            name=i.get("name", ""), portion=i.get("portion", ""),
+            calories=i.get("calories"), protein=i.get("protein"),
+            fat=i.get("fat"), carbs=i.get("carbs"),
+        )
+        for i in data if isinstance(i, dict) and i.get("name")
+    ]
+
+
+def _items_to_json(items: Optional[list[dict[str, Any]]]) -> Optional[str]:
+    return json.dumps(items, ensure_ascii=False) if items else None
+
+
 def _entry_views(rows) -> list[formatting.FoodEntryView]:
     return [
         formatting.FoodEntryView(
             id=r["id"],
             description=r["description"],
-            details=r["details"],
+            items=_parse_items(r["details"]),
             calories=r["calories"],
             protein=r["protein"],
             fat=r["fat"],
@@ -172,6 +196,26 @@ async def _download_photo_as_data_url(message: Message) -> Optional[str]:
     return "data:image/jpeg;base64," + base64.b64encode(buf.read()).decode()
 
 
+def _estimate_text(estimate: dict[str, Any]) -> str:
+    items = [
+        formatting.FoodItemView(
+            name=i.get("name", ""), portion=i.get("portion", ""),
+            calories=i.get("calories"), protein=i.get("protein"),
+            fat=i.get("fat"), carbs=i.get("carbs"),
+        )
+        for i in estimate.get("items") or []
+    ]
+    return formatting.build_food_estimate_text(
+        estimate.get("description", ""),
+        items,
+        calories=estimate.get("calories"),
+        protein=estimate.get("protein"),
+        fat=estimate.get("fat"),
+        carbs=estimate.get("carbs"),
+        comment=estimate.get("comment", ""),
+    )
+
+
 async def _show_estimate(
     message: Message,
     state: FSMContext,
@@ -186,16 +230,7 @@ async def _show_estimate(
     """
     await state.update_data(fd_pending=estimate)
     await state.set_state(FoodDiaryFlow.confirming)
-    text = formatting.build_food_estimate_text(
-        estimate.get("description", ""),
-        estimate.get("items") or [],
-        calories=estimate.get("calories"),
-        protein=estimate.get("protein"),
-        fat=estimate.get("fat"),
-        carbs=estimate.get("carbs"),
-        comment=estimate.get("comment", ""),
-    )
-    text += "\n\nВсё верно?"
+    text = _estimate_text(estimate) + "\n\nВсё верно?"
     kb = keyboards.food_confirm_keyboard()
     if placeholder is not None:
         try:
@@ -307,10 +342,13 @@ async def fd_text_entry(message: Message, state: FSMContext):
 
 @router.callback_query(StateFilter(FoodDiaryFlow.confirming), F.data == "fd:fix")
 async def fd_fix(callback: CallbackQuery, state: FSMContext):
+    """Догадка модели остаётся на экране — правку проще написать, глядя на то,
+    что именно нужно поправить, а не вслепую по памяти."""
     await state.set_state(FoodDiaryFlow.correcting)
-    await ui.safe_edit(
-        callback, _CORRECT_HINT, reply_markup=keyboards.cancel_keyboard("fd:cancel")
-    )
+    data = await state.get_data()
+    pending = data.get("fd_pending") or {}
+    text = _estimate_text(pending) + "\n\n" + _CORRECT_HINT
+    await ui.safe_edit(callback, text, reply_markup=keyboards.cancel_keyboard("fd:cancel"))
     await callback.answer()
 
 
@@ -412,7 +450,7 @@ async def _save_pending(event, state: FSMContext, date: dt.date) -> bool:
         event.from_user.id,
         eaten_on=date.isoformat(),
         description=pending.get("description") or "Приём пищи",
-        details="\n".join(pending.get("items") or []) or None,
+        details=_items_to_json(pending.get("items")),
         calories=pending.get("calories"),
         protein=pending.get("protein"),
         fat=pending.get("fat"),
