@@ -42,6 +42,9 @@ def main_menu(has_active_workout: bool) -> InlineKeyboardMarkup:
         b.button(text="▶️ ПРОДОЛЖИТЬ ТРЕНИРОВКУ", callback_data="menu:resume_workout")
     else:
         b.button(text="🏋️ НАЧАТЬ ТРЕНИРОВКУ", callback_data="menu:start_workout")
+    # Also on the persistent keyboard, but the menu is what a new user reads to
+    # find out what the bot does — and "menu:ai" had a handler no keyboard sent.
+    b.button(text="🤖 AI-тренер", callback_data="menu:ai")
     b.button(text="📈 Прогресс", callback_data="menu:progress")
     b.button(text="📚 История", callback_data="menu:history")
     b.button(text="⚙️ Упражнения", callback_data="menu:exercises")
@@ -50,9 +53,9 @@ def main_menu(has_active_workout: bool) -> InlineKeyboardMarkup:
     b.button(text="🍽 Дневник питания", callback_data="menu:food")
     b.button(text="🏆 Достижения", callback_data="menu:achievements")
     b.button(text="🔧 Настройки", callback_data="menu:settings")
-    # first row: start/resume; then Прогресс·История, Упражнения·Программы,
-    # Дневник веса·Дневник питания, Достижения·Настройки.
-    b.adjust(1, 2, 2, 2, 2)
+    # start/resume, then AI-тренер, then pairs: Прогресс·История,
+    # Упражнения·Программы, Дневник веса·Дневник питания, Достижения·Настройки.
+    b.adjust(1, 1, 2, 2, 2, 2)
     return b.as_markup()
 
 
@@ -560,10 +563,17 @@ def history_item_keyboard(workout_id: int, show_ai_button: bool = False) -> Inli
     return b.as_markup()
 
 
-def workout_card_keyboard(workout_id: int, show_ai_button: bool = False) -> InlineKeyboardMarkup:
+def workout_card_keyboard(
+    workout_id: int, show_ai_button: bool = False, show_achievements: bool = False
+) -> InlineKeyboardMarkup:
+    """show_achievements: only when this workout actually unlocked a badge. The
+    card announces the new badge in its text, and until now there was nowhere to
+    go and look at it — the grid lives behind Прогресс → выбор группы."""
     b = InlineKeyboardBuilder()
     if show_ai_button:
         b.row(InlineKeyboardButton(text="🤖 Комментарий AI-тренера", callback_data=f"ai:comment:{workout_id}"))
+    if show_achievements:
+        b.row(InlineKeyboardButton(text="🏆 Достижения", callback_data="menu:achievements"))
     b.row(
         InlineKeyboardButton(text="🖼 Картинка", callback_data=f"hist:card:{workout_id}"),
         InlineKeyboardButton(text="📝 Заметка", callback_data=f"live:addnote:{workout_id}"),
@@ -682,6 +692,7 @@ def settings_keyboard(
     stickers_enabled: bool = True,
     show_stickers_toggle: bool = False,
     food_macros_enabled: bool = True,
+    show_extra_stats: bool = True,
 ) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(text=f"Единицы: {unit}", callback_data="settings:unit")
@@ -713,6 +724,14 @@ def settings_keyboard(
         else "📝 КБЖУ в дневнике питания: не считаю"
     )
     b.button(text=macros_label, callback_data="settings:food_macros")
+    # users.show_extra_stats has always gated the e1RM line on the finish card;
+    # it just had no switch, so nobody could ever turn it off.
+    card_label = (
+        "📊 Карточка тренировки: подробно"
+        if show_extra_stats
+        else "📋 Карточка тренировки: компактно"
+    )
+    b.button(text=card_label, callback_data="settings:card_detail")
     b.button(text="📤 Экспорт CSV", callback_data="settings:export")
     b.button(text="📥 Импорт CSV", callback_data="settings:import")
     b.button(text="🏠 Меню", callback_data="settings:back")

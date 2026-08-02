@@ -2408,6 +2408,7 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
     card_kb = keyboards.workout_card_keyboard(
         workout_id,
         show_ai_button=existing_comment is None and not needs_ai_comment and ai_trainer.is_configured(),
+        show_achievements=bool(new_badges),
     )
     message_id = data["live_message_id"]
     try:

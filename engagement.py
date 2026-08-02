@@ -181,9 +181,16 @@ async def build_daily_push(telegram_id: int, today: dt.date) -> Optional[PushDec
             if ai_text:
                 return PushDecision(push_texts.AI_WEEKLY, ai_text)
             week_word = formatting.plural_ru(dashboard.this_week, ("тренировка", "тренировки", "тренировок"))
+            # None when no weekday clearly stands out — pick_text then drops the
+            # variant that would have claimed one, instead of asserting a habit
+            # the history doesn't show.
+            best_weekday = analytics.most_frequent_weekday(dates)
             text = await push_texts.pick_text(
                 telegram_id, push_texts.WEEKLY_DIGEST,
                 tonnage=format_tonnage(tonnage), week_count=f"{dashboard.this_week} {week_word}",
+                best_day=(
+                    formatting.WEEKDAY_NAMES_RU[best_weekday] if best_weekday is not None else None
+                ),
             )
             return PushDecision(push_texts.WEEKLY_DIGEST, text, with_cta=False)
 

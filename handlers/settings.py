@@ -7,6 +7,7 @@ from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import BufferedInputFile, CallbackQuery
 
+import achievement_sync
 import config
 import db
 import formatting
@@ -28,6 +29,7 @@ async def show_settings(callback: CallbackQuery, state: FSMContext, alert: str |
         stickers_enabled=bool(user["stickers_enabled"]),
         show_stickers_toggle=stickers.is_configured(),
         food_macros_enabled=bool(user["food_macros_enabled"]),
+        show_extra_stats=bool(user["show_extra_stats"]),
     )
     await ui.safe_edit(callback, "🔧 Настройки:", reply_markup=kb)
     if alert:
@@ -109,6 +111,10 @@ async def settings_unit(callback: CallbackQuery, state: FSMContext):
     await db.scale_bodyweight_logs(user_id, factor)
     await db.update_user(user_id, unit=new_unit)
     await _rescale_active_workout_weight_cache(state, factor)
+    # Badge thresholds are in kilograms and the stored weights just changed unit,
+    # so what the user qualifies for has to be recomputed both ways — resync
+    # revokes as well as awards, unlike the award-only path used at finish time.
+    await achievement_sync.resync(user_id)
     await show_settings(
         callback, state,
         alert=f"Единицы переключены на {new_unit}. Все веса в истории пересчитаны автоматически.",
@@ -185,6 +191,17 @@ async def settings_progression(callback: CallbackQuery, state: FSMContext):
     user = await db.get_user(callback.from_user.id)
     await db.update_user(
         callback.from_user.id, progression_hint_enabled=0 if user["progression_hint_enabled"] else 1
+    )
+    await show_settings(callback, state)
+
+
+@router.callback_query(F.data == "settings:card_detail")
+async def settings_card_detail(callback: CallbackQuery, state: FSMContext):
+    """Detailed cards carry the e1RM line under each exercise; compact ones drop
+    it. The column existed from the start but had no switch."""
+    user = await db.get_user(callback.from_user.id)
+    await db.update_user(
+        callback.from_user.id, show_extra_stats=0 if user["show_extra_stats"] else 1
     )
     await show_settings(callback, state)
 

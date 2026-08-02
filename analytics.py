@@ -388,6 +388,25 @@ def _week_monday(d: dt.date) -> dt.date:
     return d - dt.timedelta(days=d.weekday())
 
 
+def most_frequent_weekday(workout_dates: Iterable[dt.date], min_lead: int = 2) -> int | None:
+    """Which weekday (0=Mon) the user trains on most, or None when nothing
+    stands out.
+
+    `min_lead` is how many workouts clear of the runner-up the winner must be:
+    "твой самый продуктивный день" is a claim about a habit, and 5-vs-4 is
+    noise, not a habit.
+    """
+    counts: dict[int, int] = {}
+    for d in workout_dates:
+        counts[d.weekday()] = counts.get(d.weekday(), 0) + 1
+    if not counts:
+        return None
+    ranked = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    if len(ranked) == 1:
+        return ranked[0][0]
+    return ranked[0][0] if ranked[0][1] - ranked[1][1] >= min_lead else None
+
+
 def max_week_streak(workout_dates: Iterable[dt.date]) -> int:
     """Longest run of consecutive Mon–Sun weeks that each had at least one workout,
     anywhere in history (for the Hall of Fame — unlike Dashboard.week_streak, which

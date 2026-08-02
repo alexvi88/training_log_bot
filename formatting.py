@@ -14,6 +14,10 @@ import config
 from analytics import e1rm
 
 _WEEKDAYS_RU = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"]
+# Full names for prose ("понедельник — твой самый продуктивный день").
+WEEKDAY_NAMES_RU = [
+    "понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье",
+]
 
 UNIT_LABELS = {"kg": "кг", "lb": "lb"}
 
