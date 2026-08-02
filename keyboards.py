@@ -81,14 +81,19 @@ def ai_trainer_keyboard(
     exercise_mentions.MAX_MENTIONS_TOTAL штук. Своё ведёт прямо на карточку, а
     каталожное сначала добавляет его пользователю и потом открывает ту же
     карточку — прямая ссылка вела бы в никуда, раз упражнения ещё нет.
-    Показываем по AI_MENTION_PAGE_SIZE штук за раз с постраничным ⬅️/➡️, если
-    упоминаний больше — id всех упоминаний едут прямо в callback_data стрелок
-    (см. handlers/ai_trainer.ai_mentions_page), отдельного состояния не нужно.
 
     `program_name` — название программы, которую тренер собрал в этом ответе
-    (см. ai_trainer.propose_program): даёт самую верхнюю кнопку, ведущую на
-    превью с составом и кнопкой сохранения. Сам черновик в callback_data не
-    влезает и лежит в FSM, поэтому кнопка без параметров."""
+    (см. ai_trainer.propose_program): даёт кнопку, ведущую на превью с составом
+    и кнопкой сохранения. Сам черновик в callback_data не влезает и лежит в
+    FSM, поэтому кнопка без параметров.
+
+    Программа, если есть, идёт первым пунктом общего списка и делит с
+    упоминаниями упражнений один и тот же лимит и постраничную навигацию
+    (AI_MENTION_PAGE_SIZE штук за раз, ⬅️/➡️ если пунктов больше) — иначе она
+    съедала бы место сверх лимита. id упомянутых упражнений едут прямо в
+    callback_data стрелок (см. handlers/ai_trainer.ai_mentions_page), отдельного
+    состояния для них не нужно.
+    """
     exercises = list(exercises)
     b = InlineKeyboardBuilder()
     b.button(text="🏠 Меню", callback_data="ai:menu")
@@ -99,51 +104,43 @@ def ai_trainer_keyboard(
         b.adjust(1)
     nav = b.as_markup().inline_keyboard
 
+    # A sentinel up front so the program shares pagination with the mentions
+    # instead of always occupying an extra row above the limit.
+    _PROGRAM = object()
+    items = ([_PROGRAM] if program_name else []) + exercises
+
     start = page * AI_MENTION_PAGE_SIZE
-    page_exercises = exercises[start : start + AI_MENTION_PAGE_SIZE]
-    # Кнопки упражнений — над навигацией и каждая своей строкой: названия
-    # длинные, в паре Telegram их обрежет. Разные эмодзи — своё (📌) не спутать
-    # с ещё не добавленным из каталога (📋).
-    mention_rows = []
-    for ex in page_exercises:
-        if ex["is_template"]:
-            emoji, callback_data = "📋", f"ai:tpladd:{ex['id']}"
+    page_items = items[start : start + AI_MENTION_PAGE_SIZE]
+    # Каждая кнопка своей строкой: названия длинные, в паре Telegram их обрежет.
+    # Разные эмодзи — программа (🗂, как в главном меню), своё упражнение (📌),
+    # ещё не добавленное из каталога (📋) — не путаются друг с другом.
+    item_rows = []
+    for item in page_items:
+        if item is _PROGRAM:
+            emoji, callback_data, label = "🗂", "ai:prog:view", program_name
+        elif item["is_template"]:
+            emoji, callback_data, label = "📋", f"ai:tpladd:{item['id']}", item["display_name"]
         else:
-            emoji, callback_data = "📌", f"ai:excard:{ex['id']}"
-        mention_rows.append(
+            emoji, callback_data, label = "📌", f"ai:excard:{item['id']}", item["display_name"]
+        item_rows.append(
             [
                 InlineKeyboardButton(
-                    text=f"{emoji} {_shorten_label(ex['display_name'], AI_MENTION_LABEL_LIMIT)}",
+                    text=f"{emoji} {_shorten_label(label, AI_MENTION_LABEL_LIMIT)}",
                     callback_data=callback_data,
                 )
             ]
         )
 
     page_nav = []
-    if len(exercises) > AI_MENTION_PAGE_SIZE:
+    if len(items) > AI_MENTION_PAGE_SIZE:
         ids = ",".join(str(ex["id"]) for ex in exercises)
         if page > 0:
             page_nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"ai:mpage:{page - 1}:{ids}"))
-        if start + AI_MENTION_PAGE_SIZE < len(exercises):
+        if start + AI_MENTION_PAGE_SIZE < len(items):
             page_nav.append(InlineKeyboardButton(text="➡️", callback_data=f"ai:mpage:{page + 1}:{ids}"))
     page_nav_rows = [page_nav] if page_nav else []
 
-    # Программа — над всем остальным: это то, ради чего пользователь и просил
-    # ответ, а упоминания упражнений рядом с ней второстепенны.
-    program_rows = []
-    if program_name:
-        program_rows.append(
-            [
-                InlineKeyboardButton(
-                    text=f"📋 {_shorten_label(program_name, AI_MENTION_LABEL_LIMIT)}",
-                    callback_data="ai:prog:view",
-                )
-            ]
-        )
-
-    return InlineKeyboardMarkup(
-        inline_keyboard=program_rows + mention_rows + page_nav_rows + nav
-    )
+    return InlineKeyboardMarkup(inline_keyboard=item_rows + page_nav_rows + nav)
 
 
 def ai_program_preview_keyboard() -> InlineKeyboardMarkup:
