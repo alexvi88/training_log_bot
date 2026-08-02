@@ -1261,8 +1261,8 @@ async def _recovery_line(user_id: int, groups) -> str:
         return ""
     spent.sort()
     shown = spent[:_RECOVERY_MAX_MENTIONS]
-    parts = " · ".join(f"{escape(name.lower())} {percent}%" for percent, name in shown)
-    return f"💤 Ещё не отдохнули: {parts}"
+    parts = " · ".join(f"{escape(name.lower())} <i>{percent}%</i>" for percent, name in shown)
+    return f"💤 <b>Ещё не отдохнули:</b> {parts}"
 
 
 async def _picker_screen_groups(callback: CallbackQuery, state: FSMContext, show_program_button: bool = False):
@@ -1271,7 +1271,7 @@ async def _picker_screen_groups(callback: CallbackQuery, state: FSMContext, show
     # Mid-workout, adding an exercise is time pressure — the groups the user
     # actually trains most should be first, not alphabetical/catalog order.
     groups = await db.list_muscle_groups(callback.from_user.id, order_by_usage=True)
-    hint = "Выбери группу мышц или найди упражнение по названию:"
+    hint = "<i>Выбери группу мышц или найди упражнение по названию:</i>"
     recovery = await _recovery_line(callback.from_user.id, groups)
     if recovery:
         hint = recovery + "\n" + hint

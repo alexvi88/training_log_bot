@@ -1627,7 +1627,10 @@ async def _completion_round(
     parts: list[str] = []
     tool_calls: dict[int, dict[str, Any]] = {}
     usage = None
-    last_flush = 0.0
+    # Started at "now", not 0: otherwise the first content token always clears
+    # the "now - last_flush >= STREAM_FLUSH_SECONDS" check instantly, flashing a
+    # single character on screen that then sits unchanged for a full interval.
+    last_flush = asyncio.get_running_loop().time()
     async for event in stream:
         usage = getattr(event, "usage", None) or usage
         if not event.choices:
