@@ -314,3 +314,21 @@ def test_program_button_appears_only_when_a_program_was_proposed():
     top = with_program.inline_keyboard[0][0]
     assert top.callback_data == "ai:prog:view"
     assert "Верх/низ" in top.text
+    assert "🗂" in top.text
+
+
+def test_program_button_shares_the_mention_page_limit():
+    """The program shares AI_MENTION_PAGE_SIZE with mentioned exercises rather
+    than always occupying an extra row above the limit."""
+    exercises = [
+        {"id": i, "is_template": False, "display_name": f"Упражнение {i}"} for i in range(1, 5)
+    ]
+    kb = keyboards.ai_trainer_keyboard(exercises=exercises, program_name="Верх/низ")
+    item_rows = kb.inline_keyboard[: keyboards.AI_MENTION_PAGE_SIZE]
+    assert len(item_rows) == keyboards.AI_MENTION_PAGE_SIZE
+    assert item_rows[0][0].callback_data == "ai:prog:view"
+    assert item_rows[1][0].callback_data == "ai:excard:1"
+    assert item_rows[2][0].callback_data == "ai:excard:2"
+    # Одно упражнение не влезло на первую страницу из-за программы — есть стрелка дальше.
+    nav_row = kb.inline_keyboard[keyboards.AI_MENTION_PAGE_SIZE]
+    assert any(b.callback_data.startswith("ai:mpage:1:") for b in nav_row)

@@ -240,10 +240,6 @@ class ExerciseBlockView:
             return 0.0
         return max(e1rm(w, r, self.formula) for w, r in self.prev_sets)
 
-    @property
-    def prev_total_reps(self) -> int:
-        return sum(r for _, r in self.prev_sets) if self.prev_sets else 0
-
 
 # A workout is rendered as a flat list of exercise blocks. (Exercises logged in
 # parallel — the "superset" entry mechanic — are stored as independent blocks and
@@ -361,20 +357,13 @@ def _render_single_block(block: ExerciseBlockView, show_extra: bool, unit: str =
         lines.extend(f"  • {s}" for s in _collapse_formatted_sets(formatted))
     else:
         lines.append("  <i>подходов нет</i>")
-    if show_extra and block.sets:
+    if show_extra and block.sets and not block.is_bodyweight:
         vs_prev = ""
         if block.prev_sets and block.prev_started_at is not None:
             when = format_date_short(block.prev_started_at)
-            if block.is_bodyweight:
-                delta = sum(r for _, r in block.sets) - block.prev_total_reps
-                vs_prev = f" ({_delta_arrow(delta)}{delta:+d} vs {when})"
-            else:
-                delta = block.top_e1rm - block.prev_top_e1rm
-                vs_prev = f" ({_delta_arrow(delta)}{delta:+.1f}{u} vs {when})"
-        if block.is_bodyweight:
-            lines.append(f"  ↳ повторов всего {sum(r for _, r in block.sets)}{vs_prev}")
-        else:
-            lines.append(f"  ↳ e1RM {block.top_e1rm:.1f}{u}{vs_prev}")
+            delta = block.top_e1rm - block.prev_top_e1rm
+            vs_prev = f" ({_delta_arrow(delta)}{delta:+.1f}{u} vs {when})"
+        lines.append(f"  ↳ e1RM {block.top_e1rm:.1f}{u}{vs_prev}")
     if block.prev_sets:
         formatted_prev = [format_set(w, r, block.prev_rpe_for(i)) for i, (w, r) in enumerate(block.prev_sets)]
         prev_str = ", ".join(_collapse_formatted_sets(formatted_prev))
@@ -740,7 +729,7 @@ def build_achievements_screen(earned: set[str]) -> str:
 
     got = [a for a in achievements.CATALOG if a.code in earned]
     locked = [a for a in achievements.CATALOG if a.code not in earned]
-    lines = [f"🏅 <b>ДОСТИЖЕНИЯ</b> — {len(got)}/{len(achievements.CATALOG)}", ""]
+    lines = [f"🏅 <b>ДОСТИЖЕНИЯ</b> — {len(got)}/{len(achievements.CATALOG)}"]
     if got:
         lines.append(
             collapsible(
@@ -908,8 +897,10 @@ def format_progress_screen(
     # e1RM, so there's nothing for the footnote to explain there.
     footer = None if is_bw else E1RM_HINT
 
+    sep = "\n\n"
+
     def assemble(keep: list[str]) -> str:
-        parts = [header, collapsible_if_long("\n\n".join(keep))]
+        parts = [f"{header}\n{collapsible_if_long(sep.join(keep))}"]
         if len(window) > len(keep):
             n = plural_ru(len(window), ("тренировка", "тренировки", "тренировок"))
             parts.append(f"Показано {len(keep)} из {len(window)} {n}")

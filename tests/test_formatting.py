@@ -57,11 +57,12 @@ def test_build_workout_summary_weighted_exercise_shows_e1rm():
     assert "e1RM" in text
 
 
-def test_build_workout_summary_bodyweight_exercise_shows_total_reps():
+def test_build_workout_summary_bodyweight_exercise_hides_total_reps():
     started = dt.datetime(2026, 6, 26, 18, 0)
     blocks = [ExerciseBlockView(group_name="пресс", exercise_name="Пресс", sets=[(0.0, 20), (0.0, 15)])]
     text = formatting.build_workout_summary(started, blocks)
-    assert "повторов всего 35" in text
+    assert "повторов всего" not in text
+    assert "e1RM" not in text
 
 
 def test_build_workout_summary_hides_extra_stats_when_disabled():
@@ -152,7 +153,7 @@ def test_build_workout_summary_e1rm_line_uses_unit():
     assert "lb" in text
 
 
-def test_build_workout_summary_bodyweight_delta_shows_reps_diff():
+def test_build_workout_summary_bodyweight_exercise_shows_no_delta_line():
     started = dt.datetime(2026, 6, 26, 18, 0)
     blocks = [
         ExerciseBlockView(
@@ -161,7 +162,8 @@ def test_build_workout_summary_bodyweight_delta_shows_reps_diff():
         )
     ]
     text = formatting.build_workout_summary(started, blocks)
-    assert "↑+5 vs 19.06" in text
+    assert "vs 19.06" not in text
+    assert "[прошлая: 0×15]" in text
 
 
 def test_build_workout_summary_collapses_identical_consecutive_sets():

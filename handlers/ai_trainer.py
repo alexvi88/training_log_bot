@@ -264,6 +264,8 @@ async def ai_mentions_page(callback: CallbackQuery, state: FSMContext):
     page = int(page_str)
     exercises = []
     for raw_id in ids_csv.split(","):
+        if not raw_id:
+            continue
         ex = await db.get_exercise(int(raw_id))
         # A page can mix the user's own exercises with not-yet-added catalog
         # templates (see keyboards.ai_trainer_keyboard) — templates have no
@@ -271,7 +273,11 @@ async def ai_mentions_page(callback: CallbackQuery, state: FSMContext):
         if ex is not None and (ex["is_template"] or ex["user_id"] == callback.from_user.id):
             exercises.append(ex)
     active = await db.get_active_workout(callback.from_user.id)
-    kb = keyboards.ai_trainer_keyboard(has_active_workout=bool(active), exercises=exercises, page=page)
+    draft = (await state.get_data()).get("ai_program_draft")
+    program_name = draft.get("name") if draft else None
+    kb = keyboards.ai_trainer_keyboard(
+        has_active_workout=bool(active), exercises=exercises, page=page, program_name=program_name
+    )
     with suppress(TelegramBadRequest):
         await callback.message.edit_reply_markup(reply_markup=kb)
     await callback.answer()

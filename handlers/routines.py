@@ -97,8 +97,8 @@ async def rt_program_detail(callback: CallbackQuery, state: FSMContext):
     text = "\n\n".join([
         f"✨ <b>{escape(program['name'])}</b>\n<i>{escape(program['meta'])}</i>",
         escape(program["description"]),
-        f"<b>{len(days)} {_days_word(len(days))}:</b>",
-        formatting.collapsible_if_long("\n\n".join(day_blocks)),
+        f"<b>{len(days)} {_days_word(len(days))}:</b>\n"
+        + formatting.collapsible_if_long("\n\n".join(day_blocks)),
     ])
     kb = keyboards.program_detail_keyboard(key)
     await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML")
