@@ -17,7 +17,7 @@ async def test_ladder_is_linear_and_starts_at_the_bottom():
     levels = [r.level for r in analytics.RANKS]
     assert levels == sorted(levels) == list(range(len(analytics.RANKS)))
     # Каждая ступень строго требовательнее предыдущей по всем трём осям.
-    for lower, higher in zip(analytics.RANKS, analytics.RANKS[1:]):
+    for lower, higher in zip(analytics.RANKS, analytics.RANKS[1:], strict=False):
         assert higher.min_workouts > lower.min_workouts
         assert higher.min_tonnage_kg > lower.min_tonnage_kg
         assert higher.min_per_week >= lower.min_per_week
