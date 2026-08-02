@@ -2224,6 +2224,29 @@ async def _finished_workout_card_text(workout, user, note: str | None, comment=_
     return formatting.fit_workout_text(summary_fn, suffix)
 
 
+_NOTE_FLOW_KEYS = ("note_workout_id", "note_chat_id", "note_message_id", "note_return_state")
+
+
+async def _leave_note_flow(state: FSMContext) -> None:
+    """Put the FSM back wherever the note prompt found it.
+
+    Finished-workout cards keep their 📝 button forever, so this flow can be
+    entered in the middle of a live session — the card for last Tuesday is
+    still sitting in the chat. Clearing the state outright then wiped the
+    active workout's scaffolding (open tabs, carried weights) along with it:
+    the tracker went dead, typed sets fell through to "Не понял 🤔", and
+    /start → "Продолжить" could only ever rebuild the single most recent
+    block. Returning to the previous state costs one stored string.
+    """
+    data = await state.get_data()
+    return_state = data.get("note_return_state")
+    await state.update_data(**{key: None for key in _NOTE_FLOW_KEYS})
+    if return_state:
+        await state.set_state(return_state)
+    else:
+        await state.clear()
+
+
 @router.callback_query(F.data.startswith("live:addnote:"))
 async def workout_card_note_prompt(callback: CallbackQuery, state: FSMContext):
     workout_id = int(callback.data.split(":")[2])
@@ -2235,6 +2258,7 @@ async def workout_card_note_prompt(callback: CallbackQuery, state: FSMContext):
         note_workout_id=workout_id,
         note_chat_id=callback.message.chat.id,
         note_message_id=callback.message.message_id,
+        note_return_state=await state.get_state(),
     )
     await state.set_state(WorkoutFlow.editing_finished_note)
     current = f"\n\nСейчас: <i>{escape(workout['note'])}</i>" if workout["note"] else ""
@@ -2248,18 +2272,18 @@ async def workout_card_note_prompt(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(StateFilter(WorkoutFlow.editing_finished_note), F.data == "live:addnote_cancel")
 async def workout_card_note_cancel(callback: CallbackQuery, state: FSMContext):
-    await state.clear()
+    await _leave_note_flow(state)
     await callback.answer()
 
 
-@router.message(StateFilter(WorkoutFlow.editing_finished_note))
+@router.message(StateFilter(WorkoutFlow.editing_finished_note), F.text)
 async def workout_card_note_entered(message: Message, state: FSMContext):
     data = await state.get_data()
     workout_id = data["note_workout_id"]
     text = message.text.strip()
     note = None if text == "-" else text
     await db.update_workout_note(workout_id, note)
-    await state.clear()
+    await _leave_note_flow(state)
 
     workout = await db.get_workout(workout_id)
     user = await db.get_user(message.from_user.id)

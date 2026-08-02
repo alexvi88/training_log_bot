@@ -168,3 +168,67 @@ async def test_addnote_rejects_other_users_workout(fresh_db, user_id):
 
     callback.answer.assert_awaited_once_with("Тренировка не найдена", show_alert=True)
     assert await state.get_state() is None
+
+
+@pytest.mark.asyncio
+async def test_note_on_an_old_card_returns_to_the_live_session(fresh_db, user_id):
+    """Finished cards keep their 📝 button forever, so this flow can start in
+    the middle of a live session. Clearing the state afterwards took the active
+    workout's open tabs and carried weights with it: the tracker went dead and
+    typed sets fell through to the "Не понял 🤔" fallback."""
+    db = fresh_db
+    old_workout = await _finished_workout(db, user_id)
+
+    live_workout = await db.create_workout(user_id)
+    group_id = await db.create_muscle_group(user_id, "Спина")
+    row_ex = await db.create_exercise(user_id, "Тяга", group_id)
+    live_block = await db.create_block(live_workout, "single")
+    await db.add_block_exercise(live_block, row_ex, 0)
+
+    state = await _make_state(user_id)
+    await state.set_state(WorkoutFlow.logging_set)
+    await state.update_data(
+        workout_id=live_workout, live_chat_id=user_id, live_message_id=7,
+        open_exercises=[row_ex], open_blocks={row_ex: live_block},
+        active_exercise_id=row_ex, last_by_exercise={row_ex: (80.0, 8)},
+    )
+
+    await workout.workout_card_note_prompt(
+        _make_callback(user_id, f"live:addnote:{old_workout}"), state
+    )
+    assert await state.get_state() == WorkoutFlow.editing_finished_note
+
+    message = MagicMock()
+    message.from_user = SimpleNamespace(id=user_id, username="tester")
+    message.text = "спина была уставшая"
+    message.reply = AsyncMock()
+    message.bot = MagicMock()
+    message.bot.edit_message_text = AsyncMock()
+
+    await workout.workout_card_note_entered(message, state)
+
+    assert (await db.get_workout(old_workout))["note"] == "спина была уставшая"
+    assert await state.get_state() == WorkoutFlow.logging_set
+    data = await state.get_data()
+    assert data["workout_id"] == live_workout
+    assert data["open_blocks"] == {row_ex: live_block}
+    assert data["active_exercise_id"] == row_ex
+
+
+@pytest.mark.asyncio
+async def test_note_cancel_on_an_old_card_returns_to_the_live_session(fresh_db, user_id):
+    db = fresh_db
+    old_workout = await _finished_workout(db, user_id)
+    live_workout = await db.create_workout(user_id)
+
+    state = await _make_state(user_id)
+    await state.set_state(WorkoutFlow.logging_set)
+    await state.update_data(workout_id=live_workout, open_exercises=[], open_blocks={})
+
+    await workout.workout_card_note_prompt(
+        _make_callback(user_id, f"live:addnote:{old_workout}"), state
+    )
+    await workout.workout_card_note_cancel(_make_callback(user_id, "live:addnote_cancel"), state)
+
+    assert await state.get_state() == WorkoutFlow.logging_set
+    assert (await state.get_data())["workout_id"] == live_workout
