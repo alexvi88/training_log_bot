@@ -319,8 +319,8 @@ def test_day_screen_last_entry_sits_right_above_the_divider():
         _view(id=2, description="Кофе", calories=60),
     ]
     text = formatting.build_food_day_screen(dt.date(2026, 7, 20), entries)
-    assert "350 ккал</i></b>\n\n<b>2. Кофе" in text  # между приёмами — пустая строка
-    assert f"60 ккал</i></b>\n{formatting.DIVIDER}" in text  # а перед чертой — нет
+    assert "350 ккал</b>\n\n<b>2. Кофе" in text  # между приёмами — пустая строка
+    assert f"60 ккал</b>\n{formatting.DIVIDER}" in text  # а перед чертой — нет
 
 
 def test_non_empty_day_screen_still_hints_at_adding_more():
@@ -360,7 +360,7 @@ def test_day_screen_shows_per_item_macros():
     assert "Протеин — 30 г — 120 ккал (Б24 · Ж1 · У3)" in text
     assert "Гранола — 150 г — 630 ккал (Б15 · Ж23 · У98)" in text
     # итог по приёму — ккал и БЖУ одной строкой под раскладкой, жирным
-    assert "<b><i>750 ккал · Б39 · Ж24 · У101</i></b>" in text
+    assert "<b>750 ккал · Б39 · Ж24 · У101</b>" in text
     # калорий блюда больше нет при названии наверху
     assert "Гранола с протеином</b> — 750 ккал" not in text
     # больше одного компонента — раскладка под сворачиваемой цитатой
@@ -379,7 +379,7 @@ def test_day_screen_skips_breakdown_for_a_single_item():
     text = formatting.build_food_day_screen(dt.date(2026, 7, 20), entries)
     assert "Кофе — 200 мл" not in text
     assert "<blockquote" not in text
-    assert "<b><i>60 ккал · Б1 · Ж1 · У8</i></b>" in text
+    assert "<b>60 ккал · Б1 · Ж1 · У8</b>" in text
 
 
 def test_day_screen_entry_totals_omit_missing_half():
@@ -388,12 +388,12 @@ def test_day_screen_entry_totals_omit_missing_half():
     only_kcal = formatting.build_food_day_screen(
         dt.date(2026, 7, 20), [_view(id=1, description="Чай", calories=40)]
     )
-    assert "<b><i>40 ккал</i></b>" in only_kcal
+    assert "<b>40 ккал</b>" in only_kcal
 
     only_macros = formatting.build_food_day_screen(
         dt.date(2026, 7, 20), [_view(id=1, description="Что-то", protein=10, fat=2, carbs=5)]
     )
-    assert "<b><i>Б10 · Ж2 · У5</i></b>" in only_macros
+    assert "<b>Б10 · Ж2 · У5</b>" in only_macros
 
 
 def test_estimate_text_lists_items_with_their_own_macros():

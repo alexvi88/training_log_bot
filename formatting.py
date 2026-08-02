@@ -1124,7 +1124,7 @@ def build_food_day_screen(date: dt.date, entries: list[FoodEntryView]) -> str:
         totals = [p for p in (format_kcal(e.calories) if e.calories is not None else "",
                                _macros_line(e.protein, e.fat, e.carbs)) if p]
         if totals:
-            out.append(f"<b><i>{' · '.join(totals)}</i></b>")
+            out.append(f"<b>{' · '.join(totals)}</b>")
         return out
 
     # Номер приёма — тот же, что на кнопке «🗑 N», поэтому нумерация считается
