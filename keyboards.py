@@ -72,7 +72,7 @@ def ai_trainer_keyboard(
     (см. handlers/ai_trainer.ai_mentions_page), отдельного состояния не нужно."""
     exercises = list(exercises)
     b = InlineKeyboardBuilder()
-    b.button(text="⬅️ Меню", callback_data="ai:menu")
+    b.button(text="🏠 Меню", callback_data="ai:menu")
     if has_active_workout:
         b.button(text="🏋️ К тренировке", callback_data="ai:resume_workout")
         b.adjust(2)
@@ -344,7 +344,7 @@ def exercise_picker_entry_keyboard(
     for ex_id, name in recent or []:
         b.row(InlineKeyboardButton(text=name, callback_data=f"live:suggest:{ex_id}"))
     if is_empty:
-        b.row(InlineKeyboardButton(text="⬅️ В меню", callback_data="live:finish_workout"))
+        b.row(InlineKeyboardButton(text="🏠 Меню", callback_data="live:finish_workout"))
     else:
         b.row(InlineKeyboardButton(text="🏁 Завершить тренировку", callback_data="live:finish_workout"))
     return b.as_markup()
@@ -357,7 +357,7 @@ def routines_manage_keyboard(routines, has_workouts: bool) -> InlineKeyboardMark
     if has_workouts:
         b.button(text="➕ Из тренировки", callback_data="rt:pickw:page:0")
     b.button(text="✨ Готовые программы", callback_data="rt:programs")
-    b.button(text="⬅️ Главное меню", callback_data="rt:menu")
+    b.button(text="🏠 Меню", callback_data="rt:menu")
     b.adjust(1)
     return b.as_markup()
 
@@ -512,7 +512,7 @@ def history_list_keyboard(workouts, page: int, has_next: bool) -> InlineKeyboard
     if nav:
         b.row(*nav)
     b.row(InlineKeyboardButton(text="🗓 Добавить прошлые тренировки", callback_data="menu:backfill_workout"))
-    b.row(InlineKeyboardButton(text="⬅️ Главное меню", callback_data="hist:menu"))
+    b.row(InlineKeyboardButton(text="🏠 Меню", callback_data="hist:menu"))
     return b.as_markup()
 
 
@@ -571,7 +571,7 @@ def workout_card_keyboard(workout_id: int, show_ai_button: bool = False) -> Inli
     # callback the history screen's card already uses.
     b.row(
         InlineKeyboardButton(text="✏️ Редактировать", callback_data=f"hist:edit:{workout_id}"),
-        InlineKeyboardButton(text="⬅️ В меню", callback_data="live:back_to_menu"),
+        InlineKeyboardButton(text="🏠 Меню", callback_data="live:back_to_menu"),
     )
     return b.as_markup()
 
@@ -589,7 +589,7 @@ def admin_users_keyboard(users, page: int, has_next: bool) -> InlineKeyboardMark
     b.adjust(1)
     if nav:
         b.row(*nav)
-    b.row(InlineKeyboardButton(text="⬅️ Главное меню", callback_data="admin:menu"))
+    b.row(InlineKeyboardButton(text="🏠 Меню", callback_data="admin:menu"))
     return b.as_markup()
 
 
@@ -631,7 +631,7 @@ def admin_ai_users_keyboard(users, page: int, has_next: bool) -> InlineKeyboardM
     b.adjust(1)
     if nav:
         b.row(*nav)
-    b.row(InlineKeyboardButton(text="⬅️ Главное меню", callback_data="admin:menu"))
+    b.row(InlineKeyboardButton(text="🏠 Меню", callback_data="admin:menu"))
     return b.as_markup()
 
 
@@ -651,7 +651,7 @@ def admin_pushes_keyboard(page: int, has_next: bool) -> InlineKeyboardMarkup:
         nav.append(InlineKeyboardButton(text="➡️", callback_data=f"admin:pp:{page + 1}"))
     if nav:
         b.row(*nav)
-    b.row(InlineKeyboardButton(text="⬅️ Главное меню", callback_data="admin:menu"))
+    b.row(InlineKeyboardButton(text="🏠 Меню", callback_data="admin:menu"))
     return b.as_markup()
 
 
@@ -713,7 +713,7 @@ def settings_keyboard(
     b.button(text=macros_label, callback_data="settings:food_macros")
     b.button(text="📤 Экспорт CSV", callback_data="settings:export")
     b.button(text="📥 Импорт CSV", callback_data="settings:import")
-    b.button(text="⬅️ Назад", callback_data="settings:back")
+    b.button(text="🏠 Меню", callback_data="settings:back")
     b.adjust(1)
     return b.as_markup()
 
@@ -738,7 +738,7 @@ def bodyweight_keyboard(has_logs: bool, weeks: int = 0, show_periods: bool = Fal
             for value, label in BODYWEIGHT_PERIODS
         ]
         b.row(*period_buttons)
-    b.row(InlineKeyboardButton(text="⬅️ Главное меню", callback_data="bw:menu"))
+    b.row(InlineKeyboardButton(text="🏠 Меню", callback_data="bw:menu"))
     return b.as_markup()
 
 
@@ -778,7 +778,7 @@ def food_day_keyboard(date: dt.date, entry_ids: Sequence[int], today: dt.date) -
         b.row(InlineKeyboardButton(text="📅 Сегодня", callback_data=f"fd:day:{today.isoformat()}"))
     b.row(
         InlineKeyboardButton(text="📚 История", callback_data="fd:history:0"),
-        InlineKeyboardButton(text="⬅️ Меню", callback_data="fd:menu"),
+        InlineKeyboardButton(text="🏠 Меню", callback_data="fd:menu"),
     )
     return b.as_markup()
 
@@ -845,7 +845,7 @@ def food_history_keyboard(days: Sequence[dt.date], page: int, has_next: bool) ->
     if nav:
         b.row(*nav)
     b.row(InlineKeyboardButton(text="⬅️ К сегодняшнему дню", callback_data="fd:day:today"))
-    b.row(InlineKeyboardButton(text="⬅️ Меню", callback_data="fd:menu"))
+    b.row(InlineKeyboardButton(text="🏠 Меню", callback_data="fd:menu"))
     return b.as_markup()
 
 

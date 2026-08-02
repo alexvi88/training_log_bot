@@ -395,7 +395,7 @@ def test_day_keyboard_history_and_menu_share_a_row():
     kb = keyboards.food_day_keyboard(dt.date(2026, 7, 20), [], today=dt.date(2026, 7, 20))
     last_row = kb.inline_keyboard[-1]
     assert [b.callback_data for b in last_row] == ["fd:history:0", "fd:menu"]
-    assert last_row[1].text == "⬅️ Меню"
+    assert last_row[1].text == "🏠 Меню"
 
 
 def test_day_keyboard_hides_step_into_the_future():

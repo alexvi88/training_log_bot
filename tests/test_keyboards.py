@@ -20,12 +20,12 @@ def _button_texts(kb):
 def test_exercise_picker_entry_keyboard_offers_finish_when_not_empty():
     kb = keyboards.exercise_picker_entry_keyboard(is_empty=False)
     assert "🏁 Завершить тренировку" in _button_texts(kb)
-    assert "⬅️ В меню" not in _button_texts(kb)
+    assert "🏠 Меню" not in _button_texts(kb)
 
 
 def test_exercise_picker_entry_keyboard_offers_menu_exit_when_empty():
     kb = keyboards.exercise_picker_entry_keyboard(is_empty=True)
-    assert "⬅️ В меню" in _button_texts(kb)
+    assert "🏠 Меню" in _button_texts(kb)
     assert "🏁 Завершить тренировку" not in _button_texts(kb)
 
 
@@ -123,7 +123,7 @@ def test_workout_card_keyboard_packs_actions_into_one_row():
     assert len(rows[1]) == 2
     assert "🖼 Картинка" in _button_texts(kb)
     assert "✏️ Редактировать" in _button_texts(kb)
-    assert "⬅️ В меню" in _button_texts(kb)
+    assert "🏠 Меню" in _button_texts(kb)
 
 
 def test_routine_detail_keyboard_has_no_per_exercise_delete_rows():
