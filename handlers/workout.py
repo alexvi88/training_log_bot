@@ -492,14 +492,25 @@ async def _render_logging_screen(bot, state: FSMContext, user):
     await _refresh_live(bot, state, user, data["workout_id"], hint, kb, note=active_note)
 
 
-async def _back_after_cancel(bot, state: FSMContext, user):
+async def _back_after_cancel(callback: CallbackQuery, state: FSMContext, user):
     data = await state.get_data()
     if data.get("open_exercises"):
         await state.set_state(WorkoutFlow.logging_set)
-        await _render_logging_screen(bot, state, user)
-    else:
-        await state.set_state(WorkoutFlow.idle)
-        await _enter_idle_screen(bot, state, user, data["workout_id"])
+        await _render_logging_screen(callback.bot, state, user)
+        return
+    workout_id = data["workout_id"]
+    exercise_ids = await db.list_exercise_ids_for_workout(workout_id)
+    if not exercise_ids:
+        # Nothing was ever logged — the workout only exists because "Начать
+        # тренировку" creates it up front, so "Назад" here should undo that,
+        # not drop the user on the same "add exercise to begin" screen.
+        await db.discard_workout(workout_id)
+        await _clear_sticky_photo(callback.bot, state)
+        await state.clear()
+        await _show_main_menu(callback, state)
+        return
+    await state.set_state(WorkoutFlow.idle)
+    await _enter_idle_screen(callback.bot, state, user, workout_id)
 
 
 # ---------- main menu ----------
@@ -1087,7 +1098,7 @@ async def pick_partner(callback: CallbackQuery, state: FSMContext):
 )
 async def pick_cancel(callback: CallbackQuery, state: FSMContext):
     user = await db.get_user(callback.from_user.id)
-    await _back_after_cancel(callback.bot, state, user)
+    await _back_after_cancel(callback, state, user)
     await callback.answer()
 
 
@@ -2031,7 +2042,7 @@ async def finish_date_cancel(callback: CallbackQuery, state: FSMContext):
 )
 async def cancel_finish(callback: CallbackQuery, state: FSMContext):
     user = await db.get_user(callback.from_user.id)
-    await _back_after_cancel(callback.bot, state, user)
+    await _back_after_cancel(callback, state, user)
     await callback.answer()
 
 
