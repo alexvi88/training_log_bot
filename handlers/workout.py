@@ -1120,6 +1120,42 @@ async def _enter_live(
 
 # ---------- picker: add an exercise (either to start, or alongside what's already open) ----------
 
+# Only groups this far from recovered are worth naming: the point of the line is
+# "не грузи это сегодня", and a list including everything at 100% is just noise.
+_RECOVERY_MENTION_BELOW = 85
+_RECOVERY_MAX_MENTIONS = 3
+
+
+async def _recovery_line(user_id: int, groups) -> str:
+    """"💤 Ещё не отдохнули: ноги 40% · спина 70%" — or "" when everything is
+    fresh, which is the common case and needs no line at all.
+
+    Reuses what's already logged rather than asking the user anything: a group
+    is "spent" in proportion to how many sets it took and how long ago (see
+    analytics.recovery_percent). It's a nudge on the screen where the choice is
+    made, not a verdict — nothing is blocked or hidden.
+    """
+    last = await db.last_session_by_group(user_id)
+    if not last:
+        return ""
+    today = timeutil.user_today(await db.get_user(user_id))
+    spent = []
+    for group in groups:
+        entry = last.get(group["id"])
+        if entry is None:
+            continue
+        day, sets_done = entry
+        percent = analytics.recovery_percent(dt.date.fromisoformat(day), sets_done, today)
+        if percent < _RECOVERY_MENTION_BELOW:
+            spent.append((percent, group["name"]))
+    if not spent:
+        return ""
+    spent.sort()
+    shown = spent[:_RECOVERY_MAX_MENTIONS]
+    parts = " · ".join(f"{escape(name.lower())} {percent}%" for percent, name in shown)
+    return f"💤 Ещё не отдохнули: {parts}"
+
+
 async def _picker_screen_groups(callback: CallbackQuery, state: FSMContext, show_program_button: bool = False):
     data = await state.get_data()
     user = await db.get_user(callback.from_user.id)
@@ -1127,6 +1163,9 @@ async def _picker_screen_groups(callback: CallbackQuery, state: FSMContext, show
     # actually trains most should be first, not alphabetical/catalog order.
     groups = await db.list_muscle_groups(callback.from_user.id, order_by_usage=True)
     hint = "Выбери группу мышц или найди упражнение по названию:"
+    recovery = await _recovery_line(callback.from_user.id, groups)
+    if recovery:
+        hint = recovery + "\n" + hint
     open_ids = data.get("open_exercises") or []
     partner_buttons: list[tuple[int, str]] = []
     if open_ids:

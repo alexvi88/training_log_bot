@@ -1538,6 +1538,31 @@ async def hall_of_fame_aggregates(user_id: int) -> dict[str, float]:
     }
 
 
+async def last_session_by_group(user_id: int) -> dict[Optional[int], tuple[str, int]]:
+    """Per muscle group: the date it was last trained and how many sets that
+    session had — the two inputs a recovery estimate needs.
+
+    One query rather than one per group: this feeds a screen the user opens
+    several times per workout.
+    """
+    cur = await conn().execute(
+        "SELECT gid, day, cnt FROM ("
+        "  SELECT e.primary_group_id AS gid, date(w.started_at) AS day, COUNT(s.id) AS cnt,"
+        "         ROW_NUMBER() OVER ("
+        "             PARTITION BY e.primary_group_id ORDER BY date(w.started_at) DESC"
+        "         ) AS rn"
+        "  FROM sets s"
+        "  JOIN workout_blocks b ON b.id = s.block_id"
+        "  JOIN workouts w ON w.id = b.workout_id"
+        "  JOIN exercises e ON e.id = s.exercise_id"
+        "  WHERE w.user_id = ? AND w.status = 'finished'"
+        "  GROUP BY e.primary_group_id, date(w.started_at)"
+        ") WHERE rn = 1",
+        (user_id,),
+    )
+    return {row["gid"]: (row["day"], row["cnt"]) for row in await cur.fetchall()}
+
+
 async def weekly_volume_by_group(
     user_id: int, start_date: str, end_date: str
 ) -> dict[Optional[int], int]:

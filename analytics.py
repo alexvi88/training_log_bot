@@ -259,6 +259,31 @@ def classify_weekly_volume(sets_count: int) -> str:
     return "in_range"
 
 
+# How long a muscle group needs before it's worth loading hard again. Scaled by
+# how much work it got: a 4-set session clears in about two days, a 15-set one
+# takes the better part of three. Deliberately a rule of thumb, not a model —
+# it answers "что сегодня логичнее" and nothing more.
+RECOVERY_HOURS_MIN = 48
+RECOVERY_HOURS_MAX = 72
+RECOVERY_SETS_FOR_MAX = 12
+
+
+def recovery_percent(last_trained: dt.date, sets_done: int, today: dt.date) -> int:
+    """0-100: how recovered a muscle group is, given when it was last trained
+    and how many sets it took.
+
+    Linear from 0% at the end of that session to 100% after the window. Never
+    negative, never above 100 — this is shown as a readiness figure, and a
+    number outside that range would read as a bug rather than as nuance.
+    """
+    days_since = (today - last_trained).days
+    if days_since < 0:
+        return 0
+    load = min(max(sets_done, 0), RECOVERY_SETS_FOR_MAX) / RECOVERY_SETS_FOR_MAX
+    window_hours = RECOVERY_HOURS_MIN + (RECOVERY_HOURS_MAX - RECOVERY_HOURS_MIN) * load
+    return max(0, min(100, round(days_since * 24 / window_hours * 100)))
+
+
 @dataclass
 class ProgressionSuggestion:
     action: str  # "add_weight" | "add_reps"
