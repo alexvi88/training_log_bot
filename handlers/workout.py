@@ -1197,7 +1197,7 @@ async def pick_existing_exercise(callback: CallbackQuery, state: FSMContext):
     await _on_exercise_chosen(callback, state, ex_id)
 
 
-@router.message(StateFilter(WorkoutFlow.picking_group, WorkoutFlow.picking_exercise))
+@router.message(StateFilter(WorkoutFlow.picking_group, WorkoutFlow.picking_exercise), F.text)
 async def pick_exercise_search(message: Message, state: FSMContext):
     """Typing while picking a group or an exercise searches instead of being silently
     dropped — so the user can jump straight to an exercise by name without first
@@ -1317,7 +1317,7 @@ def _suspicious_exercise_name_reason(name: str) -> str | None:
     return None
 
 
-@router.message(StateFilter(WorkoutFlow.creating_exercise_name))
+@router.message(StateFilter(WorkoutFlow.creating_exercise_name), F.text)
 async def new_exercise_name_entered(message: Message, state: FSMContext):
     name = message.text.strip()
     if not name:
@@ -2079,7 +2079,7 @@ async def finish_date_quick(callback: CallbackQuery, state: FSMContext):
     await _finalize_workout(callback, state, note=None)
 
 
-@router.message(StateFilter(WorkoutFlow.awaiting_finish_date))
+@router.message(StateFilter(WorkoutFlow.awaiting_finish_date), F.text)
 async def finish_date_text(message: Message, state: FSMContext):
     try:
         date = parse_ru_date(message.text, today=timeutil.user_today(await db.get_user(message.from_user.id)))

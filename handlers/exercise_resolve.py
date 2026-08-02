@@ -143,7 +143,7 @@ async def resolve_cancel_all(callback: CallbackQuery, state: FSMContext):
     await callback.answer("Отменено")
 
 
-@router.message(StateFilter(ResolveFlow.picking))
+@router.message(StateFilter(ResolveFlow.picking), F.text)
 async def resolve_search_text(message: Message, state: FSMContext):
     query = message.text.strip()
     if not query:

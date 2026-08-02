@@ -53,7 +53,7 @@ async def show_history_list(callback: CallbackQuery, state: FSMContext, page: in
     await callback.answer()
 
 
-@router.message(StateFilter(HistoryFlow.browsing))
+@router.message(StateFilter(HistoryFlow.browsing), F.text)
 async def hist_search(message: Message, state: FSMContext):
     """Typing while browsing history filters it by exercise name.
 
@@ -414,7 +414,7 @@ async def prog_group_page(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(StateFilter(ProgressFlow.picking_group, ProgressFlow.picking_exercise))
+@router.message(StateFilter(ProgressFlow.picking_group, ProgressFlow.picking_exercise), F.text)
 async def prog_search_text(message: Message, state: FSMContext):
     """Typing while browsing Progress searches the user's own exercises instead
     of falling through to the fallback router's "Не понял" — same pattern as

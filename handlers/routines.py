@@ -305,7 +305,7 @@ async def rt_pickw_use(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(StateFilter(RoutineFlow.naming))
+@router.message(StateFilter(RoutineFlow.naming), F.text)
 async def rt_name_entered(message: Message, state: FSMContext):
     name = message.text.strip()
     if not name:
@@ -331,7 +331,7 @@ async def rt_rename(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(StateFilter(RoutineFlow.renaming))
+@router.message(StateFilter(RoutineFlow.renaming), F.text)
 async def rt_rename_entered(message: Message, state: FSMContext):
     name = message.text.strip()
     if not name:
@@ -594,7 +594,7 @@ async def rtadd_pick_template(callback: CallbackQuery, state: FSMContext):
     await _rtadd_finish(callback, state, ex_id)
 
 
-@router.message(StateFilter(RoutineFlow.adding_exercise_group, RoutineFlow.adding_exercise_pick))
+@router.message(StateFilter(RoutineFlow.adding_exercise_group, RoutineFlow.adding_exercise_pick), F.text)
 async def rtadd_search_text(message: Message, state: FSMContext):
     """Typing while picking what to add searches — own exercises plus catalog
     templates (forked on tap), same merge as the live-workout picker."""

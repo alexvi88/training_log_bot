@@ -229,7 +229,7 @@ async def editw_editset_prompt(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(StateFilter(EditWorkoutFlow.editing_set))
+@router.message(StateFilter(EditWorkoutFlow.editing_set), F.text)
 async def editw_editset_entered(message: Message, state: FSMContext):
     try:
         parsed = parse_single_token(message.text)
@@ -264,7 +264,7 @@ async def editw_addset_prompt(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(StateFilter(EditWorkoutFlow.adding_set))
+@router.message(StateFilter(EditWorkoutFlow.adding_set), F.text)
 async def editw_addset_entered(message: Message, state: FSMContext):
     try:
         parsed = parse_sets_line(message.text)
@@ -295,7 +295,7 @@ async def editw_addset_entered(message: Message, state: FSMContext):
     await _back_to_current_screen(message, state, data["edit_workout_id"])
 
 
-@router.message(StateFilter(EditWorkoutFlow.viewing_exercise))
+@router.message(StateFilter(EditWorkoutFlow.viewing_exercise), F.text)
 async def editw_typed_set(message: Message, state: FSMContext):
     """"100 8" typed on an exercise's screen adds that set, same as in the live
     tracker — the parser and the "➕ Сет" prompt already accept exactly this, so
@@ -497,7 +497,7 @@ async def editwex_pick_template(callback: CallbackQuery, state: FSMContext):
     await _editwex_finish(callback, state, ex_id)
 
 
-@router.message(StateFilter(EditWorkoutFlow.adding_exercise_group, EditWorkoutFlow.adding_exercise_pick))
+@router.message(StateFilter(EditWorkoutFlow.adding_exercise_group, EditWorkoutFlow.adding_exercise_pick), F.text)
 async def editwex_search_text(message: Message, state: FSMContext):
     query = message.text.strip()
     if not query:
@@ -578,7 +578,7 @@ async def editw_date_calendar_pick(callback: CallbackQuery, state: FSMContext):
     await callback.answer("Дата обновлена")
 
 
-@router.message(StateFilter(EditWorkoutFlow.awaiting_date))
+@router.message(StateFilter(EditWorkoutFlow.awaiting_date), F.text)
 async def editw_date_entered(message: Message, state: FSMContext):
     try:
         new_date = parse_ru_date(
