@@ -20,6 +20,7 @@ import config
 import db
 import formatting
 import keyboards
+import timeutil
 import ui
 import view_builder
 from fsm import HistoryFlow, ProgressFlow
@@ -150,6 +151,9 @@ async def build_hall_of_fame_text(user_id: int, max_chars: int | None = None) ->
     best_streak = analytics.max_week_streak(dates)
     top = await _top_lifts(user_id, formula)
     equivalent = formatting.format_tonnage_equivalent(agg["tonnage"], seed=user_id, unit=unit)
+    tonnage_kg = formatting.to_kg(agg["tonnage"], unit)
+    per_week = analytics.workouts_per_week(dates, timeutil.user_today(user))
+    rank = analytics.rank_for(total_workouts, tonnage_kg, per_week)
     return formatting.build_hall_of_fame(
         total_workouts=total_workouts,
         tonnage_kg=agg["tonnage"],
@@ -158,6 +162,8 @@ async def build_hall_of_fame_text(user_id: int, max_chars: int | None = None) ->
         longest_workout_seconds=agg["longest_workout_seconds"],
         top_lifts=top,
         unit=unit,
+        rank=rank,
+        rank_gap=analytics.rank_gap(rank, total_workouts, tonnage_kg, per_week),
         max_chars=max_chars,
     )
 

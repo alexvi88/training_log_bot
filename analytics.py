@@ -133,6 +133,100 @@ def linear_trend(points: list[tuple[dt.datetime, float]]) -> Optional[Trend]:
     return Trend(slope_per_week=slope, direction=direction, intercept=intercept)
 
 
+@dataclass(frozen=True)
+class Rank:
+    """One rung of the rank ladder."""
+    level: int
+    emoji: str
+    name: str
+    min_workouts: int
+    min_tonnage_kg: float
+    min_per_week: float
+
+
+# Линейная лестница: звание растёт и от накопленного (тренировки, тоннаж), и от
+# того, ходишь ли ты сейчас. Обе оси обязательны — тоннаж без регулярности это
+# прошлые заслуги, а регулярность без объёма это разминка.
+RANKS: list[Rank] = [
+    Rank(0, "🚪", "Новичок", 0, 0, 0.0),
+    Rank(1, "🧱", "Салага", 5, 5_000, 0.5),
+    Rank(2, "🔩", "Работяга", 20, 25_000, 1.0),
+    Rank(3, "⚙️", "Станок", 50, 75_000, 1.5),
+    Rank(4, "🪨", "Тяжеловес", 100, 200_000, 2.0),
+    Rank(5, "🦾", "Ветеран подвала", 200, 500_000, 2.5),
+    Rank(6, "👑", "Дед зала", 400, 1_000_000, 3.0),
+]
+
+# Окно, по которому считается «ходишь ли сейчас». Восемь недель — достаточно,
+# чтобы отпуск не ронял звание, и мало, чтобы прошлогодняя форма не считалась
+# текущей.
+RANK_FREQUENCY_WEEKS = 8
+
+
+def workouts_per_week(workout_dates: Iterable[dt.date], today: dt.date, weeks: int = RANK_FREQUENCY_WEEKS) -> float:
+    """Средняя частота тренировок за последние `weeks` недель."""
+    since = today - dt.timedelta(weeks=weeks)
+    recent = sum(1 for d in workout_dates if since < d <= today)
+    return recent / weeks
+
+
+def _level_by(predicate) -> int:
+    level = 0
+    for rank in RANKS[1:]:
+        if predicate(rank):
+            level = rank.level
+        else:
+            break
+    return level
+
+
+def rank_for(total_workouts: int, tonnage_kg: float, per_week: float) -> Rank:
+    """Текущее звание — по слабейшей из осей, но перерыв стоит одну ступень.
+
+    Минимум из осей нужен, чтобы тоннаж, набранный когда-то, не держал звание
+    человеку, который полгода не заходит, а частые пустые заходы не давали
+    «Деда зала» за месяц. Но без нижней границы ветеран с пятью сотнями
+    тренировок за месяц простоя падал бы в «Новички» — это читается как
+    сломанный счётчик, а не как честная оценка. Поэтому пол: на одну ступень
+    ниже заработанного результатами, и не глубже.
+    """
+    by_results = _level_by(
+        lambda r: total_workouts >= r.min_workouts and tonnage_kg >= r.min_tonnage_kg
+    )
+    by_frequency = _level_by(lambda r: per_week >= r.min_per_week)
+    return RANKS[max(min(by_results, by_frequency), by_results - 1, 0)]
+
+
+def next_rank(current: Rank) -> Optional[Rank]:
+    return RANKS[current.level + 1] if current.level + 1 < len(RANKS) else None
+
+
+def rank_gap(current: Rank, total_workouts: int, tonnage_kg: float, per_week: float) -> Optional[str]:
+    """Чего конкретно не хватает до следующего звания — самая отстающая ось.
+
+    Одна причина, а не список: «не хватает 12 тренировок» — это цель, а три
+    строки с недостачами по всем осям читаются как отказ.
+    """
+    nxt = next_rank(current)
+    if nxt is None:
+        return None
+    gaps: list[tuple[float, str]] = []
+    if total_workouts < nxt.min_workouts:
+        missing = nxt.min_workouts - total_workouts
+        gaps.append((missing / max(nxt.min_workouts, 1), f"ещё {missing} трен."))
+    if tonnage_kg < nxt.min_tonnage_kg:
+        missing_t = (nxt.min_tonnage_kg - tonnage_kg) / 1000
+        gaps.append((missing_t * 1000 / max(nxt.min_tonnage_kg, 1), f"ещё {missing_t:.1f} т"))
+    if per_week < nxt.min_per_week:
+        gaps.append((
+            (nxt.min_per_week - per_week) / max(nxt.min_per_week, 0.1),
+            f"держать {nxt.min_per_week:g} трен./нед",
+        ))
+    if not gaps:
+        return None
+    return max(gaps)[1]
+
+
 @dataclass
 class GoldBook:
     """The three all-time-best sets of one exercise, each with its date.

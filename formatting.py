@@ -828,6 +828,17 @@ def _hall_of_fame_lift(name: str, weight: float, reps: int, e1rm_value: float, u
     return f"• {escape(name)} — {reps} {word}"
 
 
+def format_rank_line(rank, gap: str | None = None) -> str:
+    """«⚙️ Станок» плюс, если есть куда расти, чего не хватает до следующего."""
+    line = f"{rank.emoji} Звание: <b>{escape(rank.name)}</b>"
+    return f"{line}  (до следующего: {gap})" if gap else line
+
+
+def format_rank_promotion(rank) -> str:
+    """Строка повышения на карточке завершения — объявляется один раз."""
+    return f"🎖 <b>Новое звание: {rank.emoji} {escape(rank.name)}</b>"
+
+
 def build_hall_of_fame(
     total_workouts: int,
     tonnage_kg: float,
@@ -837,6 +848,8 @@ def build_hall_of_fame(
     top_lifts: list[tuple[str, float, int, float]],  # (name, weight, reps, e1rm); weight 0 = bodyweight
     unit: str = "kg",
     max_chars: int | None = None,
+    rank=None,  # analytics.Rank | None
+    rank_gap: str | None = None,
 ) -> str:
     """Lifetime totals plus the user's best lifts, shown above the badge grid
     on the '🏅 Достижения' screen — no heading of its own."""
@@ -845,6 +858,8 @@ def build_hall_of_fame(
         return "Пока пусто — заверши первую тренировку, и здесь появятся твои рекорды."
 
     lines = []
+    if rank is not None:
+        lines.append(format_rank_line(rank, rank_gap))
     w = plural_ru(total_workouts, ("тренировка", "тренировки", "тренировок"))
     lines.append(f"🗓 Всего тренировок: <b>{total_workouts}</b> {w}")
 

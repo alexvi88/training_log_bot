@@ -359,6 +359,11 @@ async def _migrate_schema() -> None:
         await _conn.execute("ALTER TABLE users ADD COLUMN tz_offset INTEGER NOT NULL DEFAULT 0")
     if "stickers_enabled" not in user_cols:
         await _conn.execute("ALTER TABLE users ADD COLUMN stickers_enabled INTEGER NOT NULL DEFAULT 1")
+    if "rank_level_seen" not in user_cols:
+        # Последнее объявленное звание. Нужно, чтобы «🎖 Новое звание» показывалось
+        # ровно один раз: само звание считается на лету из тренировок и тоннажа,
+        # так что без этой отметки карточка объявляла бы его каждый раз.
+        await _conn.execute("ALTER TABLE users ADD COLUMN rank_level_seen INTEGER NOT NULL DEFAULT -1")
     if "food_macros_enabled" not in user_cols:
         # 1 = model estimates КБЖУ for food-diary entries (current default);
         # 0 = it just describes/saves the meal, no numbers — see handlers/food_diary.py.

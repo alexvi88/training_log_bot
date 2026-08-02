@@ -2373,6 +2373,28 @@ def _finished_workout_ai_button_visible(workout, user) -> bool:
     return existing_comment is None and not needs_ai_comment and ai_trainer.is_configured()
 
 
+async def _rank_promotion(user_id: int, user) -> "analytics.Rank | None":
+    """Звание, если оно только что выросло, иначе None.
+
+    Само звание считается на лету (analytics.rank_for), поэтому «объявлено ли
+    оно уже» приходится помнить отдельно — users.rank_level_seen. Понижение
+    (перерыв стоит одной ступени) молча опускает и отметку: вернувшись к темпу,
+    человек получит объявление снова — это возвращение, и оно того стоит.
+    """
+    dates = [dt.date.fromisoformat(d) for d in await db.list_finished_workout_dates(user_id)]
+    agg = await db.hall_of_fame_aggregates(user_id)
+    rank = analytics.rank_for(
+        len(dates),
+        formatting.to_kg(agg["tonnage"], user["unit"]),
+        analytics.workouts_per_week(dates, timeutil.user_today(user)),
+    )
+    seen = user["rank_level_seen"]
+    if rank.level == seen:
+        return None
+    await db.update_user(user_id, rank_level_seen=rank.level)
+    return rank if rank.level > seen else None
+
+
 async def _finished_workout_card_text(workout, user, note: str | None, comment=_UNSET) -> str:
     """The completion card's body for an already-finished workout: sets, PR
     highlights, tonnage-equivalent and any AI-trainer comment — everything
@@ -2528,6 +2550,10 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
         total_finished = await db.count_workouts(user_id)
         if analytics.is_workout_milestone(total_finished):
             suffix += "\n\n" + formatting.format_milestone_line(total_finished)
+
+    promotion = await _rank_promotion(user_id, user)
+    if promotion is not None:
+        suffix += "\n\n" + formatting.format_rank_promotion(promotion)
 
     new_badges = await _evaluate_achievements(user_id, workout_id, started_at, duration_seconds)
     achievement_line = formatting.format_new_achievements(new_badges)
