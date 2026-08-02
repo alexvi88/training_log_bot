@@ -997,14 +997,19 @@ def build_food_day_screen(date: dt.date, entries: list[FoodEntryView]) -> str:
             lines.append("")
         photo = " 📷" if e.has_photo else ""
         lines.append(f"<b>{i}. {escape(e.description)}</b>{photo}")
-        for item in e.items or []:
-            lines.append(f"<i>• {_item_line(item)}</i>")
+        items = e.items or []
+        # Один компонент ничего не добавляет к названию приёма — не дублируем.
+        # Больше одного — под сворачиваемую цитату, а не разворачиваем на весь
+        # экран: раскладка нужна для точности, а не для чтения на каждый день.
+        if len(items) > 1:
+            breakdown = "\n".join(f"• {_item_line(item)}" for item in items)
+            lines.append(collapsible(f"<i>{breakdown}</i>"))
         # Калории приёма и его БЖУ — одной итоговой строкой под раскладкой,
         # а не калории наверху при названии и БЖУ отдельно внизу.
         totals = [p for p in (format_kcal(e.calories) if e.calories is not None else "",
                                _macros_line(e.protein, e.fat, e.carbs)) if p]
         if totals:
-            lines.append(f"<b>{' · '.join(totals)}</b>")
+            lines.append(f"<b><i>{' · '.join(totals)}</i></b>")
 
     known = [e.calories for e in entries if e.calories is not None]
     n = plural_ru(len(entries), ("приём", "приёма", "приёмов"))
