@@ -569,7 +569,10 @@ async def test_saving_a_program_creates_one_routine_per_day(fresh_db, user_id):
     await ai_trainer.ai_program_save(callback, state)
 
     routines = await fresh_db.list_routines(user_id)
-    assert sorted(r["name"] for r in routines) == ["Верх/низ — День 1", "Верх/низ — День 2"]
+    assert sorted(r["name"] for r in routines) == ["День 1", "День 2"]
+    # Дни сгруппированы под именем программы — в списке она одна строка, а не две.
+    programs = await fresh_db.list_programs(user_id)
+    assert [(p["program_name"], p["day_count"]) for p in programs] == [("Верх/низ", 2)]
     # Черновик израсходован — второй тап по той же кнопке ничего не задублирует.
     assert (await state.get_data()).get("ai_program_draft") is None
 

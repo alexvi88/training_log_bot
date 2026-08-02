@@ -403,14 +403,34 @@ def exercise_picker_entry_keyboard(
     return b.as_markup()
 
 
-def routines_manage_keyboard(routines, has_workouts: bool) -> InlineKeyboardMarkup:
+def routines_manage_keyboard(programs, routines, has_workouts: bool) -> InlineKeyboardMarkup:
+    """`programs` — многодневки одной строкой каждая (см. db.list_programs): их
+    дни лежат за вторым экраном, иначе трёхдневный сплит занимает три кнопки и
+    список перестаёт читаться. `routines` — одиночные программы, у них второго
+    уровня нет и они ведут сразу в карточку."""
     b = InlineKeyboardBuilder()
+    for p in programs:
+        word = formatting.plural_ru(p["day_count"], ("день", "дня", "дней"))
+        b.button(
+            text=f"🗂 {p['program_name']} · {p['day_count']} {word}",
+            callback_data=f"rt:pgm:{p['anchor_id']}",
+        )
     for r in routines:
         b.button(text=r["name"], callback_data=f"rt:view:{r['id']}")
     if has_workouts:
         b.button(text="➕ Из тренировки", callback_data="rt:pickw:page:0")
     b.button(text="✨ Готовые программы", callback_data="rt:programs")
     b.button(text="🏠 Меню", callback_data="rt:menu")
+    b.adjust(1)
+    return b.as_markup()
+
+
+def program_days_keyboard(days) -> InlineKeyboardMarkup:
+    """Day selector for one saved multi-day program."""
+    b = InlineKeyboardBuilder()
+    for d in days:
+        b.button(text=d["name"], callback_data=f"rt:view:{d['id']}")
+    b.button(text="⬅️ Назад", callback_data="rt:manage")
     b.adjust(1)
     return b.as_markup()
 
@@ -459,13 +479,17 @@ def program_detail_keyboard(program_key: str) -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
-def routine_detail_keyboard(routine_id: int) -> InlineKeyboardMarkup:
+def routine_detail_keyboard(routine_id: int, program_anchor_id: int | None = None) -> InlineKeyboardMarkup:
     """The program's own screen — start it, or go edit it.
 
     The per-exercise "🗑 {name}" rows used to sit directly under "▶️ Начать
     тренировку": one row's mistap on the way to starting a session silently
     dropped an exercise, and putting it back appends it to the end, losing the
     program's order. They live behind "✏️ Изменить состав" now.
+
+    `program_anchor_id` — день многодневки возвращает назад к её списку дней, а
+    не к самому верху: иначе «назад» перепрыгивает через экран, с которого сюда
+    и пришли.
     """
     b = InlineKeyboardBuilder()
     b.row(InlineKeyboardButton(text="▶️ Начать тренировку", callback_data=f"rt:start:{routine_id}"))
@@ -473,7 +497,8 @@ def routine_detail_keyboard(routine_id: int) -> InlineKeyboardMarkup:
     b.row(InlineKeyboardButton(text="✏️ Переименовать", callback_data=f"rt:rename:{routine_id}"))
     b.row(InlineKeyboardButton(text="📤 Поделиться", callback_data=f"share:rt:{routine_id}"))
     b.row(InlineKeyboardButton(text="🗑 Удалить программу", callback_data=f"rt:delask:{routine_id}"))
-    b.row(InlineKeyboardButton(text="⬅️ К списку", callback_data="rt:manage"))
+    back = "rt:manage" if program_anchor_id is None else f"rt:pgm:{program_anchor_id}"
+    b.row(InlineKeyboardButton(text="⬅️ К списку", callback_data=back))
     return b.as_markup()
 
 

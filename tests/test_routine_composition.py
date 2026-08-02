@@ -12,6 +12,7 @@ from aiogram.types import CallbackQuery
 
 from fsm import RoutineFlow
 from handlers import routines
+from seed_data import PROGRAM_BY_KEY
 
 pytestmark = pytest.mark.asyncio
 
@@ -244,3 +245,80 @@ async def test_back_from_preview_returns_to_the_stored_list_page(fresh_db, user_
     kb = callback.message.answer.await_args.kwargs["reply_markup"]
     cbs = [b.callback_data for row in kb.inline_keyboard for b in row]
     assert f"rt:pickw:item:{oldest_wid}" in cbs
+
+
+# ---------- programs list is two-stage: program → its days ----------
+
+
+async def _manage_buttons(fresh_db, user_id: int) -> list[tuple[str, str]]:
+    callback = _make_callback(user_id, "rt:manage")
+    await routines.rt_manage(callback, await _make_state(user_id))
+    kb = callback.message.answer.await_args.kwargs["reply_markup"]
+    return [(b.text, b.callback_data) for row in kb.inline_keyboard for b in row]
+
+
+async def test_adding_a_catalog_program_shows_one_row_not_one_per_day(fresh_db, user_id):
+    """Раньше трёхдневный сплит занимал три строки списка и день было не
+    соотнести с программой; теперь это одна кнопка со вторым экраном."""
+    callback = _make_callback(user_id, "rt:progadd:ppl")
+    await routines.rt_program_add(callback, await _make_state(user_id))
+
+    program = PROGRAM_BY_KEY["ppl"]
+    buttons = await _manage_buttons(fresh_db, user_id)
+    program_rows = [b for b in buttons if b[1].startswith("rt:pgm:")]
+
+    assert len(program_rows) == 1
+    assert program["name"] in program_rows[0][0]
+    # Ни один день не просочился в верхний уровень списка.
+    assert not [b for b in buttons if b[1].startswith("rt:view:")]
+
+
+async def test_opening_a_program_lists_its_days(fresh_db, user_id):
+    await routines.rt_program_add(
+        _make_callback(user_id, "rt:progadd:ppl"), await _make_state(user_id)
+    )
+    buttons = await _manage_buttons(fresh_db, user_id)
+    anchor_cb = next(b[1] for b in buttons if b[1].startswith("rt:pgm:"))
+
+    callback = _make_callback(user_id, anchor_cb)
+    await routines.rt_program_days(callback, await _make_state(user_id))
+
+    kb = callback.message.answer.await_args.kwargs["reply_markup"]
+    labels = [b.text for row in kb.inline_keyboard for b in row]
+    day_names = [day_name for day_name, _ex in PROGRAM_BY_KEY["ppl"]["days"]]
+    assert labels[: len(day_names)] == day_names
+    assert labels[-1] == "⬅️ Назад"
+
+
+async def test_a_standalone_routine_still_opens_straight_into_its_card(fresh_db, user_id):
+    await fresh_db.create_routine(user_id, "Своя тренировка")
+
+    buttons = await _manage_buttons(fresh_db, user_id)
+
+    assert [b for b in buttons if b[1].startswith("rt:view:")]
+    assert not [b for b in buttons if b[1].startswith("rt:pgm:")]
+
+
+async def test_a_program_day_goes_back_to_its_day_list_not_the_top(fresh_db, user_id):
+    await routines.rt_program_add(
+        _make_callback(user_id, "rt:progadd:ppl"), await _make_state(user_id)
+    )
+    day = (await fresh_db.list_program_days(user_id, PROGRAM_BY_KEY["ppl"]["name"]))[0]
+
+    callback = _make_callback(user_id, f"rt:view:{day['id']}")
+    await routines.rt_view(callback, await _make_state(user_id))
+
+    kb = callback.message.answer.await_args.kwargs["reply_markup"]
+    back = [b.callback_data for row in kb.inline_keyboard for b in row][-1]
+    assert back.startswith("rt:pgm:")
+
+
+async def test_a_standalone_routine_goes_back_to_the_top_list(fresh_db, user_id):
+    rid = await fresh_db.create_routine(user_id, "Своя тренировка")
+
+    callback = _make_callback(user_id, f"rt:view:{rid}")
+    await routines.rt_view(callback, await _make_state(user_id))
+
+    kb = callback.message.answer.await_args.kwargs["reply_markup"]
+    back = [b.callback_data for row in kb.inline_keyboard for b in row][-1]
+    assert back == "rt:manage"

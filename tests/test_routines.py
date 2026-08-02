@@ -84,3 +84,42 @@ async def test_rename_and_delete_routine(user_id):
     await dbmod.delete_routine(rid)
     assert await dbmod.get_routine(rid) is None
     assert await dbmod.list_routines(user_id) == []
+
+
+# ---------- multi-day programs are one row in the list, days behind it ----------
+
+
+@pytest.mark.asyncio
+async def test_program_days_group_under_one_row_and_standalone_routines_stay_separate(user_id):
+    for day in ("День 1 — Жим", "День 2 — Тяга", "День 3 — Ноги"):
+        await dbmod.create_routine(user_id, day, program_name="PPL гипертрофия")
+    await dbmod.create_routine(user_id, "Своя тренировка")
+
+    programs = await dbmod.list_programs(user_id)
+    standalone = await dbmod.list_standalone_routines(user_id)
+
+    assert [(p["program_name"], p["day_count"]) for p in programs] == [("PPL гипертрофия", 3)]
+    assert [r["name"] for r in standalone] == ["Своя тренировка"]
+
+
+@pytest.mark.asyncio
+async def test_program_days_are_listed_in_day_order(user_id):
+    for day in ("День 1", "День 2", "День 3"):
+        await dbmod.create_routine(user_id, day, program_name="Сплит")
+
+    days = await dbmod.list_program_days(user_id, "Сплит")
+
+    assert [d["name"] for d in days] == ["День 1", "День 2", "День 3"]
+
+
+@pytest.mark.asyncio
+async def test_the_anchor_of_a_program_belongs_to_it(user_id):
+    """Программа адресуется id одного из своих дней — по нему хендлер и находит
+    остальные, так что якорь обязан быть её же днём."""
+    for day in ("День 1", "День 2"):
+        await dbmod.create_routine(user_id, day, program_name="Верх/низ")
+
+    program = (await dbmod.list_programs(user_id))[0]
+    anchor = await dbmod.get_routine(program["anchor_id"])
+
+    assert anchor["program_name"] == "Верх/низ"
