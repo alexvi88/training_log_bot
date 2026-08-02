@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from aiogram.exceptions import TelegramBadRequest
 
 import engagement
 import push_texts
@@ -77,3 +78,41 @@ async def test_a_caption_over_telegrams_limit_is_truncated(fresh_db, user_id):
     caption = bot.send_photo.await_args.kwargs["caption"]
     assert len(caption) == engagement.CAPTION_LIMIT
     assert caption.endswith("…")
+
+
+async def test_one_failed_delivery_does_not_stop_the_rest_of_the_tick(fresh_db, user_id, monkeypatch):
+    """_deliver runs inside a loop over every due user. An exception escaping it
+    aborted the whole tick, so everyone after the failing recipient got nothing
+    — and by the next tick their send hour had passed, losing the push for the
+    day rather than merely delaying it."""
+    import db as dbmod
+    import engagement as eng
+
+    other = (await dbmod.get_or_create_user(telegram_id=333, username="third"))["telegram_id"]
+    for uid in (user_id, other):
+        await dbmod.create_finished_workout(
+            uid, started_at="2026-07-01T10:00:00", finished_at="2026-07-01T11:00:00"
+        )
+
+    delivered = []
+
+    async def send_photo(*, chat_id, **kwargs):
+        if not delivered:
+            delivered.append(chat_id)
+            raise TelegramBadRequest(method=MagicMock(), message="chat not found")
+        delivered.append(chat_id)
+        return SimpleNamespace(photo=[SimpleNamespace(file_id="fid")])
+
+    bot = MagicMock()
+    bot.send_photo = AsyncMock(side_effect=send_photo)
+
+    async def build(telegram_id, today):
+        return engagement.PushDecision(push_texts.SKIP_3, "текст")
+
+    monkeypatch.setattr(eng, "build_daily_push", build)
+    monkeypatch.setattr(eng, "is_send_hour", lambda tz, hour: True)
+    monkeypatch.setattr(eng, "SEND_DELAY", 0)
+
+    await eng._send_daily_pushes(bot)
+
+    assert sorted(delivered) == sorted([user_id, other])

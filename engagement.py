@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from aiogram import Bot
-from aiogram.exceptions import TelegramForbiddenError
+from aiogram.exceptions import TelegramAPIError, TelegramForbiddenError, TelegramRetryAfter
 from aiogram.types import FSInputFile
 
 import ai_trainer
@@ -233,23 +233,53 @@ async def _deliver(
     bot: Bot, telegram_id: int, decision: PushDecision, local_date: dt.date
 ) -> None:
     """Send the push and log it against the recipient's own date — that date is
-    what `has_push_today` dedupes on."""
+    what `has_push_today` dedupes on.
+
+    Every Telegram failure stays contained here. This runs inside a loop over
+    every due user, so an exception escaping it (a deleted chat, a network
+    blip, a 429 from sending without pause) aborted the whole tick: everyone
+    after the failing recipient got nothing, and by the next tick their send
+    hour had passed. /broadcast learned this already — same treatment here.
+    """
     global _push_image_file_id
     kb = keyboards.push_cta_keyboard() if decision.with_cta else None
     try:
-        message = await bot.send_photo(
+        message = await _send_push_photo(bot, telegram_id, decision, kb)
+    except TelegramForbiddenError:
+        logger.info("User %s blocked the bot, skipping push", telegram_id)
+        return
+    except TelegramAPIError:
+        logger.exception("Failed to deliver push to user %s", telegram_id)
+        return
+    if _push_image_file_id is None:
+        _push_image_file_id = message.photo[-1].file_id
+    await db.record_push(telegram_id, decision.category, decision.text, local_date.isoformat())
+
+
+async def _send_push_photo(bot: Bot, telegram_id: int, decision: PushDecision, kb):
+    """One send, retried once if Telegram asks us to wait."""
+    try:
+        return await bot.send_photo(
             chat_id=telegram_id,
             photo=_push_image(),
             caption=_as_caption(decision.text),
             reply_markup=kb,
             disable_notification=False,
         )
-    except TelegramForbiddenError:
-        logger.info("User %s blocked the bot, skipping push", telegram_id)
-        return
-    if _push_image_file_id is None:
-        _push_image_file_id = message.photo[-1].file_id
-    await db.record_push(telegram_id, decision.category, decision.text, local_date.isoformat())
+    except TelegramRetryAfter as e:
+        await asyncio.sleep(e.retry_after)
+        return await bot.send_photo(
+            chat_id=telegram_id,
+            photo=_push_image(),
+            caption=_as_caption(decision.text),
+            reply_markup=kb,
+            disable_notification=False,
+        )
+
+
+# Pause between sends, so a tick with many due users stays under Telegram's
+# ~30 messages/second cap. Same value /broadcast uses.
+SEND_DELAY = 0.05
 
 
 def _utc_now() -> dt.datetime:
@@ -303,6 +333,7 @@ async def _send_daily_pushes(bot: Bot) -> None:
             continue
         if decision is not None:
             await _deliver(bot, telegram_id, decision, local_date)
+            await asyncio.sleep(SEND_DELAY)
 
     for telegram_id, created_at, local_date in due_newbies:
         try:
@@ -312,6 +343,7 @@ async def _send_daily_pushes(bot: Bot) -> None:
             continue
         if decision is not None:
             await _deliver(bot, telegram_id, decision, local_date)
+            await asyncio.sleep(SEND_DELAY)
 
 
 def _seconds_until_next_hour() -> float:
