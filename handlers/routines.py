@@ -406,8 +406,7 @@ async def _begin_routine_workout(callback: CallbackQuery, state: FSMContext, rou
     """Create the workout and load the routine's first block. Assumes any
     previously active workout has already been dealt with."""
     from handlers.workout import _delete_message as wk_delete
-    from handlers.workout import _load_next_planned_block, _picker_screen_groups
-    from handlers.workout import _reset_new_workout_scaffold
+    from handlers.workout import _load_next_planned_block, _picker_screen_groups, _reset_new_workout_scaffold
 
     exercises = await db.list_routine_exercises(routine["id"])
     planned = [
