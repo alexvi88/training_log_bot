@@ -1595,6 +1595,13 @@ def _plain_user_content(question: str, image_data_url: Optional[str]) -> Any:
 # токен: получатель шлёт его в Telegram, а там свои лимиты на частоту запросов.
 STREAM_FLUSH_SECONDS = 1.2
 
+# Первый флаш ждёт не только тайминга, но и объёма: время до первого токена
+# модели (thinking, network) само по себе часто больше STREAM_FLUSH_SECONDS,
+# так что "прошло достаточно времени" на первой дельте почти всегда истинно —
+# и наружу уходит одно слово или буква, которая потом висит без изменений ещё
+# целый интервал. Порог по символам держит первый показ черновика содержательным.
+MIN_FIRST_FLUSH_CHARS = 40
+
 
 async def _completion_round(
     client: AsyncOpenAI,
@@ -1627,10 +1634,7 @@ async def _completion_round(
     parts: list[str] = []
     tool_calls: dict[int, dict[str, Any]] = {}
     usage = None
-    # Started at "now", not 0: otherwise the first content token always clears
-    # the "now - last_flush >= STREAM_FLUSH_SECONDS" check instantly, flashing a
-    # single character on screen that then sits unchanged for a full interval.
-    last_flush = asyncio.get_running_loop().time()
+    last_flush: Optional[float] = None
     async for event in stream:
         usage = getattr(event, "usage", None) or usage
         if not event.choices:
@@ -1646,10 +1650,18 @@ async def _completion_round(
                 slot["arguments"] += tc.function.arguments or ""
         if delta.content:
             parts.append(delta.content)
+            text = "".join(parts)
             now = asyncio.get_running_loop().time()
-            if now - last_flush >= STREAM_FLUSH_SECONDS:
+            # Before the first flush, time elapsed alone isn't a good signal —
+            # the wait for the model's first token already eats into it — so
+            # the first flush also needs enough text to be worth showing.
+            ready = (
+                (last_flush is None and len(text) >= MIN_FIRST_FLUSH_CHARS)
+                or (last_flush is not None and now - last_flush >= STREAM_FLUSH_SECONDS)
+            )
+            if ready:
                 last_flush = now
-                await on_chunk("".join(parts))
+                await on_chunk(text)
     await _log_llm_cost(user_id, config.GROK_MODEL, usage)
     return "".join(parts), [_StreamedToolCall(slot) for slot in tool_calls.values()]
 
