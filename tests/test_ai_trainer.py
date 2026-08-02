@@ -681,3 +681,24 @@ async def test_transcribe_voice_returns_empty_string_when_blank(monkeypatch):
     text = await ai_trainer.transcribe_voice(SimpleNamespace(name="voice.ogg"))
 
     assert text == ""
+
+
+async def test_model_clients_are_built_with_a_timeout(monkeypatch):
+    """The OpenAI SDK defaults to a 600s timeout, which isn't a timeout so much
+    as an abandonment: a hung request leaves the user watching "🤔 думаю…" for
+    ten minutes while the placeholder animation keeps cycling."""
+    import ai_trainer as module
+
+    captured = {}
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(module, "AsyncOpenAI", FakeClient)
+    monkeypatch.setattr(module, "_client", None)
+
+    module._get_client()
+
+    assert captured["timeout"] == config.AI_REQUEST_TIMEOUT_SECONDS
+    assert captured["timeout"] < 600

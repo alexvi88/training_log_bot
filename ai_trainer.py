@@ -85,7 +85,11 @@ def is_configured() -> bool:
 def _get_client() -> AsyncOpenAI:
     global _client
     if _client is None:
-        _client = AsyncOpenAI(api_key=config.XAI_API_KEY, base_url=config.GROK_BASE_URL)
+        _client = AsyncOpenAI(
+            api_key=config.XAI_API_KEY,
+            base_url=config.GROK_BASE_URL,
+            timeout=config.AI_REQUEST_TIMEOUT_SECONDS,
+        )
     return _client
 
 
@@ -99,7 +103,9 @@ def is_voice_configured() -> bool:
 def _get_audio_client() -> AsyncOpenAI:
     global _audio_client
     if _audio_client is None:
-        _audio_client = AsyncOpenAI(api_key=config.OPENAI_API_KEY)
+        _audio_client = AsyncOpenAI(
+            api_key=config.OPENAI_API_KEY, timeout=config.AI_REQUEST_TIMEOUT_SECONDS
+        )
     return _audio_client
 
 
@@ -134,7 +140,9 @@ async def _get_sdk_client() -> AsyncXAIClient:
     if _sdk_client is None:
         async with _sdk_client_lock:
             if _sdk_client is None:
-                _sdk_client = AsyncXAIClient(api_key=config.XAI_API_KEY)
+                _sdk_client = AsyncXAIClient(
+                    api_key=config.XAI_API_KEY, timeout=config.AI_REQUEST_TIMEOUT_SECONDS
+                )
     return _sdk_client
 
 
