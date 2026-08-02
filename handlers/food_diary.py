@@ -1,7 +1,6 @@
 """🍽 Дневник питания — что съел, по дням, с распознаванием еды моделью.
 
-Открывается только командой /food_diary: кнопки в главном меню пока нет, раздел
-обкатывается отдельно от основного сценария бота.
+Открывается кнопкой «🍽 Дневник еды» в главном меню или командой /food_diary.
 
 Как устроен ввод. Пользователь на экране дня просто пишет текстом или шлёт фото
 (можно фото с подписью) — отдельной кнопки «добавить» не нужно, как и на экране
@@ -154,11 +153,21 @@ async def _show_day(event, state: FSMContext, date: dt.date) -> None:
 # ---------- вход в раздел ----------
 
 
+async def show_food_diary(event, state: FSMContext) -> None:
+    await db.get_or_create_user(event.from_user.id, event.from_user.username)
+    await state.clear()
+    await _show_day(event, state, await _today(event.from_user.id))
+
+
 @router.message(Command("food_diary"))
 async def cmd_food_diary(message: Message, state: FSMContext):
-    await db.get_or_create_user(message.from_user.id, message.from_user.username)
-    await state.clear()
-    await _show_day(message, state, await _today(message.from_user.id))
+    await show_food_diary(message, state)
+
+
+@router.callback_query(F.data == "menu:food_diary")
+async def menu_food_diary(callback: CallbackQuery, state: FSMContext):
+    await show_food_diary(callback, state)
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("fd:day:"))

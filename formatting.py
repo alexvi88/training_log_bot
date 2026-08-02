@@ -786,8 +786,10 @@ def format_progress_screen(
     # e1RM, so there's nothing for the footnote to explain there.
     footer = None if is_bw else E1RM_HINT
 
+    sep = "\n\n"
+
     def assemble(keep: list[str]) -> str:
-        parts = [header, collapsible_if_long("\n\n".join(keep))]
+        parts = [f"{header}\n{collapsible_if_long(sep.join(keep))}"]
         if len(window) > len(keep):
             n = plural_ru(len(window), ("тренировка", "тренировки", "тренировок"))
             parts.append(f"Показано {len(keep)} из {len(window)} {n}")

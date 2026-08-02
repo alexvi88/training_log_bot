@@ -168,7 +168,7 @@ async def _setup_commands(bot: Bot) -> None:
                 BotCommand(command="help", description="Как вводить подходы"),
                 BotCommand(command="ai_trainer", description="AI-тренер"),
                 BotCommand(command="feedback", description="Отзыв / баг / идея"),
-                BotCommand(command="food_diary", description="Дневник еды (бета)"),
+                BotCommand(command="food_diary", description="Дневник еды"),
                 BotCommand(command="check_users", description="Список пользователей (админ)"),
                 BotCommand(command="ai_dialogs", description="Диалоги с AI-тренером (админ)"),
                 BotCommand(command="pushes", description="Лог отправленных пушей (админ)"),

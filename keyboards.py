@@ -47,10 +47,11 @@ def main_menu(has_active_workout: bool) -> InlineKeyboardMarkup:
     b.button(text="⚙️ Упражнения", callback_data="menu:exercises")
     b.button(text="🗂 Программы", callback_data="rt:manage")
     b.button(text="⚖️ Дневник веса", callback_data="menu:bodyweight")
+    b.button(text="🍽 Дневник еды", callback_data="menu:food_diary")
     b.button(text="🔧 Настройки", callback_data="menu:settings")
     # first row: start/resume; then Прогресс·История, Упражнения·Программы,
-    # Дневник·Настройки.
-    b.adjust(1, 2, 2, 2)
+    # Дневник веса·Дневник еды, Настройки.
+    b.adjust(1, 2, 2, 2, 1)
     return b.as_markup()
 
 
