@@ -425,3 +425,26 @@ async def test_append_set_counts_only_its_own_exercise(fresh_db, user_id):
         by_ex.setdefault(s["exercise_id"], []).append(s["round_index"])
     assert by_ex[a] == [1, 2]
     assert by_ex[b] == [1]
+
+
+async def test_same_name_in_different_case_reuses_the_cyrillic_exercise(fresh_db, user_id):
+    """SQLite's LOWER() only folds ASCII, so the unique index behind
+    create_exercise's dedup treats "Жим лёжа" and "жим лёжа" as two names —
+    splitting one exercise into two, each with its own history and records."""
+    db = fresh_db
+    gid = await db.create_muscle_group(user_id, "Грудь")
+
+    first = await db.create_exercise(user_id, "Жим лёжа", gid)
+    second = await db.create_exercise(user_id, "жим лёжа", gid)
+
+    assert second == first
+    assert await db.count_user_exercises(user_id) == 1
+
+
+async def test_case_insensitive_lookup_still_works_for_ascii_names(fresh_db, user_id):
+    db = fresh_db
+    gid = await db.create_muscle_group(user_id, "Грудь")
+    ex_id = await db.create_exercise(user_id, "Bench Press", gid)
+
+    found = await db.find_exercise_by_display_name(user_id, "bench press")
+    assert found is not None and found["id"] == ex_id

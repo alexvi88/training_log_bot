@@ -972,9 +972,22 @@ async def find_exercise_by_name(user_id: int, name: str) -> Optional[aiosqlite.R
 
 
 async def find_exercise_by_display_name(user_id: int, display_name: str) -> Optional[aiosqlite.Row]:
-    """Match the unique index (user_id, LOWER(display_name)) exactly, archived or not."""
+    """Find a user's exercise by name, case-insensitively, archived or not.
+
+    Uses `py_lower`, not SQL `LOWER()`: the built-in only case-folds ASCII, so
+    "Жим лёжа" and "жим лёжа" compare as different names — and since
+    `create_exercise` relies on this lookup to reuse an existing row, that
+    split one exercise into two, each with its own history, records and e1RM.
+    (The unique index behind it has the same ASCII-only limitation and can't be
+    fixed the same way: an index can only use deterministic built-ins. This
+    check runs first, so the index never sees the collision.)
+
+    Oldest first, so an account that already accumulated such a pair keeps
+    resolving to the same one of them.
+    """
     cur = await conn().execute(
-        "SELECT * FROM exercises WHERE user_id = ? AND is_template = 0 AND LOWER(display_name) = LOWER(?)",
+        "SELECT * FROM exercises WHERE user_id = ? AND is_template = 0 "
+        "AND py_lower(display_name) = py_lower(?) ORDER BY id LIMIT 1",
         (user_id, display_name),
     )
     return await cur.fetchone()
