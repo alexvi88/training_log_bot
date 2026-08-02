@@ -29,6 +29,7 @@ import asyncio
 import datetime as dt
 import json
 import logging
+import re
 from types import SimpleNamespace
 from typing import Any, Awaitable, Callable, Optional
 
@@ -478,6 +479,116 @@ async def weekly_digest(user_id: int) -> Optional[str]:
     await _log_llm_cost(user_id, config.GROK_MODEL, getattr(response, "usage", None))
     text = (response.choices[0].message.content or "").strip()
     return text or None
+
+
+FOOD_ANALYSIS_SYSTEM_PROMPT = """\
+Ты — нутрициолог-помощник в Telegram-боте дневника питания. Тебе присылают, что
+человек съел: текстом, фотографией еды или фото с подписью. Твоя задача — понять,
+что это за приём пищи, и оценить его калорийность и БЖУ.
+
+Отвечай ТОЛЬКО одним JSON-объектом, без markdown-обёртки и любого текста вокруг:
+{
+  "description": "короткое название приёма пищи, 1 строка, по-русски",
+  "items": ["продукт — примерная порция — ккал", ...],
+  "calories": число или null,
+  "protein": число (граммы) или null,
+  "fat": число (граммы) или null,
+  "carbs": число (граммы) или null,
+  "comment": "одно короткое уточнение или пустая строка"
+}
+
+Правила:
+- description — то, что человек увидит в дневнике: «Овсянка с бананом», «Куриная
+  грудка с рисом и салатом». Без калорий и граммов внутри — они в отдельных полях.
+- items — построчная раскладка, 1-6 пунктов. Если из текста порции неизвестны,
+  предполагай обычную бытовую порцию и не спрашивай разрешения.
+- Цифры — оценка, а не точность до грамма: это нормально, оценивай смело. null
+  ставь, только если по фото/тексту вообще нельзя понять, что это за еда.
+- Если человек уже указал вес/калории — используй его цифры, не переоценивай.
+- comment — только если есть что важное сказать (например «порция на глаз, если
+  знаешь вес — поправь»). Иначе пустая строка. Без markdown.
+- Всё по-русски.
+"""
+
+
+def _extract_json_object(text: str) -> dict[str, Any]:
+    """Парсим JSON из ответа модели, переживая ```json-обёртку и текст вокруг.
+
+    Модель просят вернуть голый объект, но просьба — не гарантия, а падать
+    целым экраном из-за пары лишних символов не стоит.
+    """
+    text = (text or "").strip()
+    if text.startswith("```"):
+        text = text.split("\n", 1)[-1].rsplit("```", 1)[0]
+    start, end = text.find("{"), text.rfind("}")
+    if start == -1 or end <= start:
+        raise ValueError("no JSON object in model response")
+    return json.loads(text[start : end + 1])
+
+
+def _as_number(value: Any) -> Optional[float]:
+    """Число из поля JSON, терпимое к "420 ккал"/"~15 г"/null/мусору."""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    if isinstance(value, str):
+        match = re.search(r"-?\d+(?:[.,]\d+)?", value)
+        if match:
+            return float(match.group().replace(",", "."))
+    return None
+
+
+async def analyze_food(
+    user_id: int,
+    text: str = "",
+    image_data_url: Optional[str] = None,
+    previous: Optional[dict[str, Any]] = None,
+    correction: str = "",
+) -> dict[str, Any]:
+    """Что человек съел → структурированная оценка приёма пищи.
+
+    Обычный REST-вызов без инструментов: вопрос замкнут на присланные текст и
+    фото, лезть в тренировочные данные пользователя тут незачем. `previous` +
+    `correction` — второй заход после «✏️ Поправить»: модель получает свою
+    прошлую догадку и правку пользователя, поэтому правка «это не банан, а
+    груша, и порция 300 г» уточняет оценку, а не начинает её с нуля.
+
+    Кидает исключение при сетевой ошибке или неразборчивом ответе — вызывающий
+    решает, что показать пользователю.
+    """
+    client = _get_client()
+    parts = []
+    if text:
+        parts.append(f"Что съел: {text}")
+    if image_data_url:
+        parts.append("К сообщению приложено фото еды — оцени по нему.")
+    if previous:
+        parts.append(f"Твоя прошлая оценка: {json.dumps(previous, ensure_ascii=False)}")
+    if correction:
+        parts.append(f"Пользователь поправил: {correction}\nУчти правку и верни исправленную оценку.")
+    if not parts:
+        parts.append("Данных нет — верни description с пустой строкой.")
+
+    response = await client.chat.completions.create(
+        model=config.GROK_MODEL,
+        max_tokens=700,
+        messages=[
+            {"role": "system", "content": FOOD_ANALYSIS_SYSTEM_PROMPT},
+            {"role": "user", "content": _plain_user_content("\n\n".join(parts), image_data_url)},
+        ],
+    )
+    await _log_llm_cost(user_id, config.GROK_MODEL, getattr(response, "usage", None))
+    data = _extract_json_object(response.choices[0].message.content or "")
+
+    items = [str(i).strip() for i in data.get("items") or [] if str(i).strip()]
+    return {
+        "description": str(data.get("description") or "").strip(),
+        "items": items[:6],
+        "calories": _as_number(data.get("calories")),
+        "protein": _as_number(data.get("protein")),
+        "fat": _as_number(data.get("fat")),
+        "carbs": _as_number(data.get("carbs")),
+        "comment": str(data.get("comment") or "").strip(),
+    }
 
 
 TOOLS: list[dict[str, Any]] = [

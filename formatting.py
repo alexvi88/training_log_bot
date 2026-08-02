@@ -127,6 +127,17 @@ def format_date_ru(d: dt.datetime) -> str:
     return f"{d.strftime('%d.%m.%Y')} ({_WEEKDAYS_RU[d.weekday()]})"
 
 
+_MONTHS_RU_GEN = [
+    "января", "февраля", "марта", "апреля", "мая", "июня",
+    "июля", "августа", "сентября", "октября", "ноября", "декабря",
+]
+
+
+def format_day_month_ru(d: dt.date) -> str:
+    """"20 июля" — for prose and button labels, where dd.mm.yyyy reads as a form field."""
+    return f"{d.day} {_MONTHS_RU_GEN[d.month - 1]}"
+
+
 def format_duration(seconds: float) -> str:
     total_minutes = round(seconds / 60)
     hours, minutes = divmod(total_minutes, 60)
@@ -879,3 +890,123 @@ def format_comparison_line(e1rm_delta: float, unit: str = "kg") -> str:
     u = UNIT_LABELS.get(unit, "кг")
     arrow = "↑" if e1rm_delta > 0 else ("↓" if e1rm_delta < 0 else "→")
     return f"{arrow} e1RM {e1rm_delta:+.1f}{u} vs предыдущего рекорда этого упражнения"
+
+
+# ---------- дневник питания ----------
+
+
+@dataclass
+class FoodEntryView:
+    """One logged meal, as the food-diary screen shows it."""
+    id: int
+    description: str
+    details: str | None = None
+    calories: float | None = None
+    protein: float | None = None
+    fat: float | None = None
+    carbs: float | None = None
+    has_photo: bool = False
+
+
+def format_kcal(value: float | None) -> str:
+    return "—" if value is None else f"{round(value):g} ккал"
+
+
+def _macros_line(protein: float | None, fat: float | None, carbs: float | None) -> str:
+    """"Б 30 · Ж 12 · У 60 г" — skipped entirely when the model gave no macros."""
+    parts = [
+        (label, v)
+        for label, v in (("Б", protein), ("Ж", fat), ("У", carbs))
+        if v is not None
+    ]
+    if not parts:
+        return ""
+    return " · ".join(f"{label} {round(v):g}" for label, v in parts) + " г"
+
+
+def build_food_estimate_text(
+    description: str,
+    items: list[str],
+    calories: float | None = None,
+    protein: float | None = None,
+    fat: float | None = None,
+    carbs: float | None = None,
+    comment: str = "",
+    header: str = "🍽 <b>Вот что я вижу:</b>",
+) -> str:
+    """The confirmation card shown after the model reads a meal, and (with a
+    different header) the preview of a correction."""
+    lines = [header, "", f"<b>{escape(description or 'Приём пищи')}</b>"]
+    if items:
+        lines.append("")
+        lines.extend(f"• {escape(i)}" for i in items)
+    lines.append("")
+    lines.append(f"Итого: <b>{format_kcal(calories)}</b>")
+    macros = _macros_line(protein, fat, carbs)
+    if macros:
+        lines.append(macros)
+    if comment:
+        lines.append("")
+        lines.append(f"<i>{escape(comment)}</i>")
+    return "\n".join(lines)
+
+
+def build_food_day_screen(date: dt.date, entries: list[FoodEntryView]) -> str:
+    """One day of the diary: every meal with its calories, then the day's total."""
+    head = f"🍽 <b>Дневник питания — {format_date_ru(dt.datetime.combine(date, dt.time()))}</b>"
+    if not entries:
+        return (
+            f"{head}\n\nЗа этот день пока пусто.\n\n"
+            "Напиши, что съел, или пришли фото еды (можно с подписью) — "
+            "я прикину калории и БЖУ, а ты подтвердишь."
+        )
+
+    lines = [head, ""]
+    for i, e in enumerate(entries, start=1):
+        photo = " 📷" if e.has_photo else ""
+        lines.append(f"<b>{i}. {escape(e.description)}</b>{photo} — {format_kcal(e.calories)}")
+        if e.details:
+            lines.extend(f"<i>{escape(d)}</i>" for d in e.details.split("\n") if d.strip())
+        macros = _macros_line(e.protein, e.fat, e.carbs)
+        if macros:
+            lines.append(f"<i>{macros}</i>")
+        lines.append("")
+
+    known = [e.calories for e in entries if e.calories is not None]
+    total = sum(known) if known else None
+    n = plural_ru(len(entries), ("приём", "приёма", "приёмов"))
+    total_line = f"{DIVIDER}\nИтого за день: <b>{format_kcal(total)}</b> · {len(entries)} {n} пищи"
+    if known and len(known) < len(entries):
+        total_line += f"\n<i>(без калорий: {len(entries) - len(known)})</i>"
+    lines.append(total_line)
+
+    day_macros = _macros_line(
+        _sum_or_none(e.protein for e in entries),
+        _sum_or_none(e.fat for e in entries),
+        _sum_or_none(e.carbs for e in entries),
+    )
+    if day_macros:
+        lines.append(day_macros)
+    return "\n".join(lines)
+
+
+def _sum_or_none(values) -> float | None:
+    known = [v for v in values if v is not None]
+    return sum(known) if known else None
+
+
+def build_food_history_list(days: list[tuple[dt.date, int, float | None]]) -> str:
+    """The history tab: one line per logged day, newest first."""
+    if not days:
+        return (
+            "📚 <b>История питания</b>\n\nПока ничего не записано.\n"
+            "Открой день и напиши, что съел."
+        )
+    lines = ["📚 <b>История питания</b>", ""]
+    for date, entries, calories in days:
+        n = plural_ru(entries, ("приём", "приёма", "приёмов"))
+        lines.append(
+            f"<b>{format_date_ru(dt.datetime.combine(date, dt.time()))}</b> — "
+            f"{entries} {n} · {format_kcal(calories)}"
+        )
+    return "\n".join(lines)

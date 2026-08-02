@@ -32,6 +32,7 @@ from handlers import (
     exercises,
     fallback,
     feedback,
+    food_diary,
     history,
     persistent_menu,
     routines,
@@ -144,6 +145,13 @@ class RefreshPersistentMenuMiddleware(BaseMiddleware):
 
 
 async def _setup_commands(bot: Bot) -> None:
+    """Whose "/" menu lists what.
+
+    /food_diary works for everyone who types it, but it's listed only in the
+    admin's scope while the section is being run in: the default list is what
+    every user sees as the bot's advertised feature set, and the food diary
+    isn't in the main menu yet either.
+    """
     await bot.set_my_commands(
         [
             BotCommand(command="start", description="Открыть главное меню"),
@@ -160,6 +168,7 @@ async def _setup_commands(bot: Bot) -> None:
                 BotCommand(command="help", description="Как вводить подходы"),
                 BotCommand(command="ai_trainer", description="AI-тренер"),
                 BotCommand(command="feedback", description="Отзыв / баг / идея"),
+                BotCommand(command="food_diary", description="Дневник питания (бета)"),
                 BotCommand(command="check_users", description="Список пользователей (админ)"),
                 BotCommand(command="ai_dialogs", description="Диалоги с AI-тренером (админ)"),
                 BotCommand(command="pushes", description="Лог отправленных пушей (админ)"),
@@ -197,6 +206,9 @@ async def main() -> None:
     # swallows these commands as plain text whenever the user is mid-flow.
     dp.include_router(admin.router)
     dp.include_router(feedback.router)
+    # Same reason as admin/feedback above: /food_diary and the fd:* callbacks
+    # must reach their router even when the user is mid-workout.
+    dp.include_router(food_diary.router)
     dp.include_router(workout.router)
     dp.include_router(routines.router)
     dp.include_router(backfill.router)
