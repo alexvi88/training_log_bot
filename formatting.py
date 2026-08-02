@@ -123,6 +123,29 @@ def format_set(weight: float, reps: int, rpe: float | None = None) -> str:
     return f"{format_weight(weight)}×{reps}{format_rpe(rpe)}"
 
 
+def format_routine_scheme(
+    target_sets: int | None,
+    target_reps_min: int | None,
+    target_reps_max: int | None,
+) -> str:
+    """«3×5-10» — схема упражнения в программе, собранной AI-тренером.
+
+    Пустая строка, когда схемы нет: программы, сохранённые из тренировки или
+    взятые из каталога готовых, несут только состав (см. db.add_routine_exercise),
+    и подрисовывать им выдуманные подходы нельзя.
+    """
+    reps = ""
+    if target_reps_min and target_reps_max and target_reps_max != target_reps_min:
+        reps = f"{target_reps_min}-{target_reps_max}"
+    elif target_reps_min or target_reps_max:
+        reps = str(target_reps_min or target_reps_max)
+    if target_sets and reps:
+        return f"{target_sets}×{reps}"
+    if target_sets:
+        return f"{target_sets}×"
+    return reps
+
+
 def format_date_ru(d: dt.datetime) -> str:
     return f"{d.strftime('%d.%m.%Y')} ({_WEEKDAYS_RU[d.weekday()]})"
 
@@ -410,6 +433,51 @@ def build_ai_comment_block(comment: str) -> str:
     a tap on the client (see collapsible).
     """
     return f"{DIVIDER}\n🤖 <b>Комментарий AI-тренера</b>\n{collapsible_if_long(markdown_bold_to_html(comment))}"
+
+
+def build_ai_program_preview(name: str, days: list[dict]) -> str:
+    """Превью программы, которую собрал AI-тренер, до её сохранения.
+
+    `days` — черновик из ai_trainer.propose_program: [{"name", "items": [{"name",
+    "sets", "reps_min", "reps_max", "source"}]}]. Каждый день станет отдельной
+    программой в списке пользователя, поэтому текст проговаривает это прямо —
+    иначе «добавить» выглядит как одна новая строка, а появится несколько.
+    """
+    total = sum(len(day["items"]) for day in days)
+    new_names = sorted(
+        {item["name"] for day in days for item in day["items"] if item.get("source") == "template"}
+    )
+    day_word = plural_ru(len(days), ("день", "дня", "дней"))
+    ex_word = plural_ru(total, ("упражнение", "упражнения", "упражнений"))
+
+    lines = [
+        "📋 <b>ПРОГРАММА ОТ ТРЕНЕРА</b>",
+        "",
+        f"<b>{escape(name)}</b>",
+        f"{len(days)} {day_word} · {total} {ex_word}",
+    ]
+    for day in days:
+        lines += ["", f"<b>{escape(day['name'])}</b>"]
+        for i, item in enumerate(day["items"], start=1):
+            scheme = format_routine_scheme(
+                item.get("sets"), item.get("reps_min"), item.get("reps_max")
+            )
+            suffix = f" — {scheme}" if scheme else ""
+            lines.append(f"{i}. {escape(item['name'])}{suffix}")
+
+    lines += ["", DIVIDER]
+    if len(days) == 1:
+        lines.append("Добавлю как программу — начать по ней тренировку можно в один тап.")
+    else:
+        lines.append(
+            f"Добавлю как {len(days)} отдельные программы — по каждой начинаешь тренировку в один тап."
+        )
+    if new_names:
+        word = plural_ru(len(new_names), ("упражнение", "упражнения", "упражнений"))
+        lines.append(
+            f"Новых для тебя {word}: {len(new_names)} — добавлю их в твой список автоматически."
+        )
+    return "\n".join(lines)
 
 
 # Fun, shareable size comparisons for a tonnage total — (emoji, kg each, declensions),

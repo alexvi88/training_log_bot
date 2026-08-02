@@ -143,7 +143,14 @@ async def _show_routine_detail(event, state: FSMContext, routine_id: int) -> Non
     exercises = await db.list_routine_exercises(routine_id)
     lines = [f"🗂 <b>{escape(routine['name'])}</b>", ""]
     if exercises:
-        lines.extend(f"{i}. {escape(ex['display_name'])}" for i, ex in enumerate(exercises, start=1))
+        for i, ex in enumerate(exercises, start=1):
+            # Схема есть только у программ, собранных AI-тренером — остальные
+            # показывают просто состав (см. formatting.format_routine_scheme).
+            scheme = formatting.format_routine_scheme(
+                ex["target_sets"], ex["target_reps_min"], ex["target_reps_max"]
+            )
+            suffix = f" — {scheme}" if scheme else ""
+            lines.append(f"{i}. {escape(ex['display_name'])}{suffix}")
     else:
         lines.append("В программе нет упражнений (возможно, они были архивированы).")
     kb = keyboards.routine_detail_keyboard(routine_id)

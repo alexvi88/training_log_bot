@@ -192,6 +192,9 @@ CREATE TABLE IF NOT EXISTS routine_exercises (
     routine_id INTEGER NOT NULL,
     exercise_id INTEGER NOT NULL,
     order_index INTEGER NOT NULL,
+    target_sets INTEGER,
+    target_reps_min INTEGER,
+    target_reps_max INTEGER,
     FOREIGN KEY (routine_id) REFERENCES routines (id),
     FOREIGN KEY (exercise_id) REFERENCES exercises (id)
 );
@@ -338,6 +341,16 @@ async def _migrate_schema() -> None:
     set_cols = await _column_names("sets")
     if "is_warmup" in set_cols:
         await _conn.execute("ALTER TABLE sets DROP COLUMN is_warmup")
+
+    # Программы, собранные до появления схемы подходов/повторов, остаются
+    # валидными — у них эти колонки просто NULL (см. format_routine_scheme).
+    routine_exercise_cols = await _column_names("routine_exercises")
+    if "target_sets" not in routine_exercise_cols:
+        await _conn.execute("ALTER TABLE routine_exercises ADD COLUMN target_sets INTEGER")
+    if "target_reps_min" not in routine_exercise_cols:
+        await _conn.execute("ALTER TABLE routine_exercises ADD COLUMN target_reps_min INTEGER")
+    if "target_reps_max" not in routine_exercise_cols:
+        await _conn.execute("ALTER TABLE routine_exercises ADD COLUMN target_reps_max INTEGER")
 
     await _conn.commit()
 
@@ -1759,11 +1772,23 @@ async def create_routine(user_id: int, name: str) -> int:
         return cur.lastrowid
 
 
-async def add_routine_exercise(routine_id: int, exercise_id: int, order_index: int) -> None:
+async def add_routine_exercise(
+    routine_id: int,
+    exercise_id: int,
+    order_index: int,
+    target_sets: Optional[int] = None,
+    target_reps_min: Optional[int] = None,
+    target_reps_max: Optional[int] = None,
+) -> None:
+    """target_* — схема подхода, которую задал AI-тренер, когда собирал программу
+    (см. create_routine_from_plan). Всё, что создано руками из тренировки или из
+    готовой программы, схемы не несёт и оставляет их NULL."""
     async with _write_lock:
         await conn().execute(
-            "INSERT INTO routine_exercises (routine_id, exercise_id, order_index) VALUES (?, ?, ?)",
-            (routine_id, exercise_id, order_index),
+            "INSERT INTO routine_exercises "
+            "(routine_id, exercise_id, order_index, target_sets, target_reps_min, target_reps_max) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (routine_id, exercise_id, order_index, target_sets, target_reps_min, target_reps_max),
         )
         await conn().commit()
 
@@ -1880,24 +1905,64 @@ async def get_or_create_user_exercise_by_name(user_id: int, name: str) -> Option
     return None
 
 
-async def create_routine_from_program(user_id: int, name: str, exercise_names: list[str]) -> int:
-    """Instantiate one ready-made program day as a routine.
+async def resolve_exercise_name(user_id: int, name: str) -> tuple[Optional[str], Optional[str]]:
+    """Куда ляжет название упражнения, ничего при этом не создавая.
 
-    Each exercise name is resolved to the user's own copy (forking the global
-    template when missing). Duplicate or unresolvable names are skipped so the
-    routine stays clean.
+    Read-only двойник get_or_create_user_exercise_by_name: тем же порядком
+    (сначала своё, потом глобальный шаблон) проверяет, резолвится ли имя
+    вообще, и возвращает ("own"|"template", каноничное display_name) либо
+    (None, None). Нужен AI-тренеру, чтобы показать состав предлагаемой
+    программы до того, как пользователь согласился её сохранить, — предложение
+    не должно форкать пользователю упражнения (см. ai_trainer.propose_program).
+    """
+    existing = await find_exercise_by_name(user_id, name)
+    if existing is not None:
+        return "own", existing["display_name"]
+    template = await _find_global_template_by_name(name)
+    if template is not None:
+        return "template", template["display_name"]
+    return None, None
+
+
+async def count_routines(user_id: int) -> int:
+    cur = await conn().execute("SELECT COUNT(*) FROM routines WHERE user_id = ?", (user_id,))
+    row = await cur.fetchone()
+    return row[0]
+
+
+async def create_routine_from_plan(user_id: int, name: str, items: list[dict[str, Any]]) -> int:
+    """Instantiate one program day as a routine.
+
+    `items` — [{"name": ..., "sets": ..., "reps_min": ..., "reps_max": ...}], где
+    всё кроме "name" необязательно. Каждое название резолвится в собственное
+    упражнение пользователя (форкая глобальный шаблон, если своего ещё нет);
+    дубли и нерезолвящиеся имена пропускаются, чтобы программа осталась чистой.
     """
     routine_id = await create_routine(user_id, name)
     seen: set[int] = set()
     order = 0
-    for ex_name in exercise_names:
-        ex_id = await get_or_create_user_exercise_by_name(user_id, ex_name)
+    for item in items:
+        ex_id = await get_or_create_user_exercise_by_name(user_id, item.get("name", ""))
         if ex_id is None or ex_id in seen:
             continue
         seen.add(ex_id)
-        await add_routine_exercise(routine_id, ex_id, order)
+        await add_routine_exercise(
+            routine_id,
+            ex_id,
+            order,
+            target_sets=item.get("sets"),
+            target_reps_min=item.get("reps_min"),
+            target_reps_max=item.get("reps_max"),
+        )
         order += 1
     return routine_id
+
+
+async def create_routine_from_program(user_id: int, name: str, exercise_names: list[str]) -> int:
+    """Готовая программа из каталога (seed_data.WORKOUT_PROGRAMS) — только состав,
+    без схемы подходов: она у этих программ описана текстом на экране, а не по
+    упражнениям."""
+    return await create_routine_from_plan(user_id, name, [{"name": n} for n in exercise_names])
 
 
 async def create_routine_from_workout(user_id: int, workout_id: int, name: str) -> int:

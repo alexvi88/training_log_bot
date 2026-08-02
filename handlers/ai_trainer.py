@@ -168,17 +168,24 @@ class _RunningDisplay:
                 await self._placeholder.edit_text(preview)
 
 
-async def ai_keyboard(user_id: int, answer: Optional[str] = None) -> InlineKeyboardMarkup:
+async def ai_keyboard(
+    user_id: int, answer: Optional[str] = None, program_name: Optional[str] = None
+) -> InlineKeyboardMarkup:
     """AI-trainer reply keyboard: 'К тренировке' instead of 'Меню' while a workout is active.
 
     `answer` — текст ответа тренера, если он есть: упомянутые в нём упражнения
     пользователя становятся кнопками-ссылками на свои карточки.
+
+    `program_name` — название программы, которую тренер собрал этим ответом
+    (см. ai_trainer.propose_program): добавляет кнопку с превью и сохранением.
     """
     active = await db.get_active_workout(user_id)
     mentioned = await exercise_mentions.find_in_text(
         user_id, answer, limit=exercise_mentions.MAX_MENTIONS_TOTAL
     )
-    return keyboards.ai_trainer_keyboard(has_active_workout=bool(active), exercises=mentioned)
+    return keyboards.ai_trainer_keyboard(
+        has_active_workout=bool(active), exercises=mentioned, program_name=program_name
+    )
 
 
 @router.callback_query(F.data == "menu:ai")
@@ -298,6 +305,91 @@ async def ai_mentions_page(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+_PROGRAM_GONE = (
+    "Это предложение уже неактуально — попроси тренера собрать программу заново."
+)
+
+
+async def _program_draft(callback: CallbackQuery, state: FSMContext) -> Optional[dict]:
+    """Черновик программы из FSM или None с алертом, если его уже нет.
+
+    Живёт ровно один черновик на пользователя (см. _handle_question), так что
+    кнопка под старым ответом вполне может указывать в пустоту — молча сохранять
+    в этом случае нечего, а сохранять «что-то другое» было бы хуже всего.
+    """
+    data = await state.get_data()
+    draft = data.get("ai_program_draft")
+    if not draft or not draft.get("days"):
+        await callback.answer(_PROGRAM_GONE, show_alert=True)
+        return None
+    return draft
+
+
+@router.callback_query(F.data == "ai:prog:view")
+async def ai_program_view(callback: CallbackQuery, state: FSMContext):
+    """Превью программы, собранной тренером.
+
+    Отдельным сообщением, а не правкой ответа: сам разбор с логикой сплита
+    нужен рядом, пока пользователь решает, брать программу или нет.
+    """
+    draft = await _program_draft(callback, state)
+    if draft is None:
+        return
+    text = formatting.build_ai_program_preview(draft["name"], draft["days"])
+    await callback.message.answer(
+        text, parse_mode="HTML", reply_markup=keyboards.ai_program_preview_keyboard()
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "ai:prog:save")
+async def ai_program_save(callback: CallbackQuery, state: FSMContext):
+    """Сохранение программы: каждый её день — отдельная программа в списке.
+
+    Здесь же и происходит единственная запись за всю фичу: до этого тапа
+    предложение нигде не материализовалось, в том числе не форкало пользователю
+    упражнения из каталога (см. ai_trainer._propose_program)."""
+    draft = await _program_draft(callback, state)
+    if draft is None:
+        return
+
+    user_id = callback.from_user.id
+    days = draft["days"]
+    existing = await db.count_routines(user_id)
+    if existing + len(days) > ai_trainer.MAX_ROUTINES_PER_USER:
+        await callback.answer(
+            f"У тебя уже {existing} программ — больше {ai_trainer.MAX_ROUTINES_PER_USER} "
+            "не влезет. Удали лишние в «🗂 Программы» и попробуй ещё раз.",
+            show_alert=True,
+        )
+        return
+
+    for day in days:
+        await db.create_routine_from_plan(user_id, day["name"], day["items"])
+    await state.update_data(ai_program_draft=None)
+
+    word = formatting.plural_ru(len(days), ("программу", "программы", "программ"))
+    text = (
+        f"✅ <b>Добавил {len(days)} {word}.</b>\n\n"
+        "Ищи их в «🗂 Программы» — оттуда начинается тренировка по любой из них."
+    )
+    with suppress(TelegramBadRequest):
+        await callback.message.edit_text(
+            text, parse_mode="HTML", reply_markup=keyboards.ai_program_saved_keyboard()
+        )
+    await callback.answer("Готово 💪")
+
+
+@router.callback_query(F.data == "ai:prog:drop")
+async def ai_program_drop(callback: CallbackQuery, state: FSMContext):
+    """«Не надо»: убираем превью и черновик. Ответ тренера с разбором остаётся —
+    попросить переделать программу можно прямо следующей репликой."""
+    await state.update_data(ai_program_draft=None)
+    with suppress(TelegramBadRequest):
+        await callback.message.delete()
+    await callback.answer("Убрал")
+
+
 @router.callback_query(F.data.startswith("ai:comment:"))
 async def ai_comment_workout(callback: CallbackQuery, state: FSMContext):
     """Ручной запрос комментария к тренировке — кнопка на карточке завершённой тренировки.
@@ -380,18 +472,31 @@ async def _handle_question(
     placeholder = await message.answer(running_text)
     display = _RunningDisplay(placeholder, running_text)
     running_task = asyncio.create_task(display.cycle_idle())
+
+    # Программа, если тренер собрал её этим ответом (см. propose_program). Держим
+    # в ячейке, а не в возврате ask(): текст ответа и черновик — разные вещи, и
+    # черновик может прийти в любом раунде tool-calls, в том числе не последнем.
+    program_draft: dict = {}
+
+    async def collect_program(draft: dict) -> None:
+        program_draft.clear()
+        program_draft.update(draft)
+
     try:
         try:
             answer = await ai_trainer.ask(
                 user_id, question, history, image_data_url=image_data_url,
                 on_status=display.set_status, on_delta=display.stream,
+                on_program=collect_program,
             )
         except Exception:
             # Streaming can fail if the endpoint dislikes it — fall back to a plain,
             # non-streamed answer once before giving up, so the user still gets a reply.
             logger.exception("AI trainer streaming failed for user %s, retrying plain", user_id)
+            program_draft.clear()  # предложенное в упавшей попытке к этому ответу не относится
             answer = await ai_trainer.ask(
-                user_id, question, history, image_data_url=image_data_url, on_status=display.set_status
+                user_id, question, history, image_data_url=image_data_url,
+                on_status=display.set_status, on_program=collect_program,
             )
     except Exception:
         logger.exception("AI trainer request failed for user %s", user_id)
@@ -420,7 +525,10 @@ async def _handle_question(
             {"role": "assistant", "content": answer},
         ]
     )[-HISTORY_LIMIT:]
-    await state.update_data(ai_history=history)
+    # Черновик один на пользователя: новое предложение затирает старое, а ответ
+    # без программы — стирает его вовсе, чтобы кнопка под прошлым ответом не
+    # сохранила программу из позапрошлого разговора (см. ai_program_view).
+    await state.update_data(ai_history=history, ai_program_draft=program_draft or None)
 
     # Full, permanent log — separate from the live window above, which is capped
     # (and lost on a restart, unlike this). Lets the model pull it back via the
@@ -428,7 +536,9 @@ async def _handle_question(
     await db.add_ai_chat_message(user_id, "user", history_question)
     await db.add_ai_chat_message(user_id, "assistant", answer)
 
-    reply_markup = await ai_keyboard(user_id, answer=answer)
+    reply_markup = await ai_keyboard(
+        user_id, answer=answer, program_name=program_draft.get("name") if program_draft else None
+    )
     chunks = [answer[i : i + TG_CHUNK] for i in range(0, len(answer), TG_CHUNK)]
     for i, chunk in enumerate(chunks):
         is_last = i == len(chunks) - 1
