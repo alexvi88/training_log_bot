@@ -342,12 +342,17 @@ def _logging_hint(
     inferred_step: float | None = None,
     confirmed_weight: float | None = None,
     formula: str = config.DEFAULT_E1RM_FORMULA,
+    target: str | None = None,
 ) -> str:
     base = None
     if show_instruction:
         base = "Вес и повторы через пробел, например «100 8»"
         if has_sets:
             base += " (можно только повторы — вес возьмётся с последнего подхода)"
+    # The program's recommended sets×reps, if this exercise was opened from a
+    # routine that carries one — shown above the history/warning lines since
+    # it's the plan for today, not a look back at a previous session.
+    target_line = f"🎯 План: {target}\n" if target else ""
     warning = _suspicious_weight_warning(last_session, today_sets, unit)
     if warning and confirmed_weight is not None and today_sets and today_sets[-1][0] == confirmed_weight:
         # Already answered "да, записать" for exactly this weight — repeating the
@@ -355,6 +360,7 @@ def _logging_hint(
         # that arrive by other routes ("N: 100 8" edits) still get the nudge.
         warning = None
     warning_line = f"{warning}\n" if warning else ""
+    lead = f"{target_line}{warning_line}"
     if last_session:
         sets_str = ", ".join(formatting.format_set(w, r, rpe) for w, r, rpe in last_session)
         line = f"💡 В прошлый раз: {sets_str}"
@@ -369,9 +375,9 @@ def _logging_hint(
                     for w, r in (today_sets or [])
                 )
                 line += f"\n{formatting.format_progression_hint(suggestion, achieved)}"
-        return f"{warning_line}<i>{line}</i>\n\n{base}" if base else f"{warning_line}<i>{line}</i>"
-    if warning_line:
-        return f"{warning_line}\n{base}" if base else warning_line.rstrip("\n")
+        return f"{lead}<i>{line}</i>\n\n{base}" if base else f"{lead}<i>{line}</i>"
+    if lead:
+        return f"{lead}\n{base}" if base else lead.rstrip("\n")
     return base or ""
 
 
@@ -479,6 +485,7 @@ async def _render_logging_screen(bot, state: FSMContext, user):
         inferred_step=weight_steps.get(active),
         confirmed_weight=(data.get("confirmed_weights") or {}).get(active),
         formula=user["e1rm_formula"],
+        target=(data.get("exercise_targets") or {}).get(active),
     )
     kb = keyboards.logging_keyboard(open_items, active, has_sets)
     await _sync_sticky_photo(bot, state, active)
@@ -1868,6 +1875,10 @@ async def _load_next_planned_block(event, state: FSMContext) -> bool:
     last_by = dict(data.get("last_by_exercise") or {})
     last_session_sets = dict(data.get("last_session_sets") or {})
     weight_steps = dict(data.get("weight_steps") or {})
+    exercise_targets = dict(data.get("exercise_targets") or {})
+    for ex_id, target in (block_plan.get("targets") or {}).items():
+        if target:
+            exercise_targets[ex_id] = target
     for ex_id in block_plan["exercise_ids"]:
         block_id = await db.create_block(workout_id, "single")
         await db.add_block_exercise(block_id, ex_id, 0)
@@ -1882,7 +1893,7 @@ async def _load_next_planned_block(event, state: FSMContext) -> bool:
     await state.update_data(
         open_exercises=open_exercises, open_blocks=open_blocks,
         active_exercise_id=open_exercises[0], last_by_exercise=last_by, last_session_sets=last_session_sets,
-        weight_steps=weight_steps,
+        weight_steps=weight_steps, exercise_targets=exercise_targets,
     )
     await state.set_state(WorkoutFlow.logging_set)
     user = await db.get_user(event.from_user.id)

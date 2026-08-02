@@ -20,6 +20,7 @@ import db
 import formatting
 import keyboards
 import ui
+import view_builder
 from fsm import RoutineFlow, WorkoutFlow
 from seed_data import PROGRAM_BY_KEY, WORKOUT_PROGRAMS
 
@@ -37,7 +38,8 @@ async def show_manage(event, state: FSMContext) -> None:
     else:
         text = (
             "🗂 <b>ПРОГРАММЫ</b>\n\nУ тебя пока нет сохранённых программ.\n"
-            "Проведи тренировку и сохрани её как программу — потом начнёшь такую же в один тап."
+            "Выбери готовую программу ниже или проведи тренировку и сохрани её как "
+            "программу — потом начнёшь такую же в один тап."
         )
     kb = keyboards.routines_manage_keyboard(routines, has_workouts=has_workouts)
     if isinstance(event, CallbackQuery):
@@ -86,7 +88,10 @@ async def rt_program_detail(callback: CallbackQuery, state: FSMContext):
     # exercise-by-exercise breakdown is 20+ lines of detail, so it folds away
     # and the catalog stays scannable.
     day_blocks = [
-        "\n".join([f"<b>{escape(day_name)}</b>", *(f"• {escape(ex)}" for ex in exercises)])
+        "\n".join([
+            f"<b>{escape(day_name)}</b>",
+            *(f"• {escape(ex)} — {escape(target)}" for ex, target in exercises),
+        ])
         for day_name, exercises in days
     ]
     text = "\n\n".join([
@@ -143,7 +148,9 @@ async def _show_routine_detail(event, state: FSMContext, routine_id: int) -> Non
     exercises = await db.list_routine_exercises(routine_id)
     lines = [f"🗂 <b>{escape(routine['name'])}</b>", ""]
     if exercises:
-        lines.extend(f"{i}. {escape(ex['display_name'])}" for i, ex in enumerate(exercises, start=1))
+        for i, ex in enumerate(exercises, start=1):
+            suffix = f" — {escape(ex['target'])}" if ex["target"] else ""
+            lines.append(f"{i}. {escape(ex['display_name'])}{suffix}")
     else:
         lines.append("В программе нет упражнений (возможно, они были архивированы).")
     kb = keyboards.routine_detail_keyboard(routine_id)
@@ -248,10 +255,17 @@ async def _show_routine_source_preview(callback: CallbackQuery, workout_id: int)
         await callback.answer("Тренировка не найдена", show_alert=True)
         return
     date_label = formatting.format_date_ru(dt.datetime.fromisoformat(workout["started_at"]))
-    names = await _workout_exercise_names(workout_id)
+    blocks = await view_builder.build_block_views(workout_id)
     lines = [f"📋 <b>{escape(date_label)}</b>", ""]
-    if names:
-        lines.extend(f"{i}. {escape(n)}" for i, n in enumerate(names, start=1))
+    if blocks:
+        for i, b in enumerate(blocks, start=1):
+            sets_str = ", ".join(
+                formatting.format_set(w, r, rpe)
+                for (w, r), rpe in zip(b.sets, b.set_rpes or [None] * len(b.sets), strict=True)
+            )
+            lines.append(f"{i}. <b>{escape(b.exercise_name)}</b>")
+            if sets_str:
+                lines.append(f"   {sets_str}")
     else:
         lines.append("В тренировке нет упражнений.")
     lines.append("")
@@ -395,7 +409,10 @@ async def _begin_routine_workout(callback: CallbackQuery, state: FSMContext, rou
     from handlers.workout import _load_next_planned_block, _picker_screen_groups
 
     exercises = await db.list_routine_exercises(routine["id"])
-    planned = [{"exercise_ids": [ex["exercise_id"]]} for ex in exercises]
+    planned = [
+        {"exercise_ids": [ex["exercise_id"]], "targets": {ex["exercise_id"]: ex["target"]}}
+        for ex in exercises
+    ]
 
     workout_id = await db.create_workout(callback.from_user.id)
     await wk_delete(callback.message)
