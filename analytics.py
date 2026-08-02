@@ -265,6 +265,11 @@ class ProgressionSuggestion:
     target_weight: float
     target_reps: int  # add_reps: reps to beat; add_weight: bottom-of-range reps to restart at
     is_bodyweight: bool = False
+    # The set the target was derived from — the top working set of last session.
+    # Carried so the hint can say *why* this number and not just assert it; the
+    # commonest complaint about Fitbod is exactly that its numbers look random.
+    from_weight: float = 0.0
+    from_reps: int = 0
 
 
 # Fallback increment per unit, used when the exercise's own history says nothing
@@ -361,7 +366,10 @@ def suggest_progression(
         return None
     if all(w == 0 for w, _ in working):
         best_reps = max(r for _, r in working)
-        return ProgressionSuggestion("add_reps", 0.0, best_reps + 1, is_bodyweight=True)
+        return ProgressionSuggestion(
+            "add_reps", 0.0, best_reps + 1, is_bodyweight=True,
+            from_weight=0.0, from_reps=best_reps,
+        )
     top_weight = max(w for w, _ in working)
     reps_at_top = max(r for w, r in working if w == top_weight)
     if reps_at_top >= REP_RANGE_MAX:
@@ -371,8 +379,12 @@ def suggest_progression(
             "add_weight",
             target_weight,
             _reps_holding_e1rm(target_weight, top_weight, reps_at_top, formula),
+            from_weight=top_weight,
+            from_reps=reps_at_top,
         )
-    return ProgressionSuggestion("add_reps", top_weight, reps_at_top + 1)
+    return ProgressionSuggestion(
+        "add_reps", top_weight, reps_at_top + 1, from_weight=top_weight, from_reps=reps_at_top
+    )
 
 
 @dataclass

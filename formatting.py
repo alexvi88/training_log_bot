@@ -926,7 +926,22 @@ def format_progression_hint(suggestion, achieved: bool = False) -> str:
         goal = format_set(suggestion.target_weight, suggestion.target_reps)
     if achieved:
         return f"✅ Цель выполнена: {goal}"
-    return f"🎯 Цель: {goal}"
+    return f"🎯 Цель: {goal}{_progression_reason(suggestion)}"
+
+
+def _progression_reason(suggestion) -> str:
+    """Short "почему именно столько" clause, only where the number surprises.
+
+    An unexplained prescribed weight reads as arbitrary — the commonest
+    complaint about apps that hand out numbers. But this line is redrawn on
+    every logged set, so it earns its width only when the target jumps: the
+    weight went up because the rep range topped out. The "+1 повтор at the same
+    weight" case explains itself against the "В прошлый раз" line right above,
+    and a clause there would be noise on every single render.
+    """
+    if suggestion.action != "add_weight" or not suggestion.from_reps:
+        return ""
+    return f" — взял {suggestion.from_reps} повторов, добавляем вес"
 
 
 def format_comparison_line(e1rm_delta: float, unit: str = "kg") -> str:
