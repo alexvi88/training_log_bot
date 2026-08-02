@@ -15,6 +15,7 @@ import asyncio
 import datetime as dt
 import json
 import os
+import secrets
 from typing import Any, Optional
 
 import aiosqlite
@@ -206,6 +207,17 @@ CREATE TABLE IF NOT EXISTS food_entries (
 );
 CREATE INDEX IF NOT EXISTS idx_food_entries_user_day ON food_entries (telegram_id, eaten_on, id);
 
+-- A share is a snapshot, not a live reference: the link keeps working if the
+-- owner later edits or deletes the original, and the recipient never gets read
+-- access to someone else's live rows. Payload is JSON (see handlers/sharing.py).
+CREATE TABLE IF NOT EXISTS shared_items (
+    token TEXT PRIMARY KEY,
+    owner_id INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS routines (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL,
@@ -347,6 +359,11 @@ async def _migrate_schema() -> None:
         await _conn.execute("ALTER TABLE users ADD COLUMN tz_offset INTEGER NOT NULL DEFAULT 0")
     if "stickers_enabled" not in user_cols:
         await _conn.execute("ALTER TABLE users ADD COLUMN stickers_enabled INTEGER NOT NULL DEFAULT 1")
+    if "rank_level_seen" not in user_cols:
+        # Последнее объявленное звание. Нужно, чтобы «🎖 Новое звание» показывалось
+        # ровно один раз: само звание считается на лету из тренировок и тоннажа,
+        # так что без этой отметки карточка объявляла бы его каждый раз.
+        await _conn.execute("ALTER TABLE users ADD COLUMN rank_level_seen INTEGER NOT NULL DEFAULT -1")
     if "food_macros_enabled" not in user_cols:
         # 1 = model estimates КБЖУ for food-diary entries (current default);
         # 0 = it just describes/saves the meal, no numbers — see handlers/food_diary.py.
@@ -1436,6 +1453,35 @@ async def list_finished_workout_dates(user_id: int) -> list[str]:
     return [r["d"] for r in await cur.fetchall()]
 
 
+def _e1rm_sql(formula: str) -> str:
+    """SQL mirror of analytics.e1rm — reps<=1 is the weight itself; brzycki
+    falls back to epley above BRZYCKI_MAX_REPS (10), exactly like the Python."""
+    epley = "s.weight * (1 + s.reps / 30.0)"
+    if formula == "brzycki":
+        return (
+            "CASE WHEN s.reps <= 1 THEN s.weight "
+            f"WHEN s.reps > 10 THEN {epley} "
+            "ELSE s.weight * 36.0 / (37 - s.reps) END"
+        )
+    return f"CASE WHEN s.reps <= 1 THEN s.weight ELSE {epley} END"
+
+
+async def max_e1rm_before_workout(
+    user_id: int, exercise_id: int, workout_id: int, formula: str = "epley"
+) -> float:
+    """All-time best e1RM of the exercise across finished workouts, excluding
+    `workout_id` — the bar a set must clear to earn the live 🥇 mark."""
+    cur = await conn().execute(
+        f"SELECT COALESCE(MAX({_e1rm_sql(formula)}), 0) AS mx FROM sets s "
+        "JOIN workout_blocks b ON b.id = s.block_id "
+        "JOIN workouts w ON w.id = b.workout_id "
+        "WHERE w.user_id = ? AND w.status = 'finished' AND w.id != ? "
+        "AND s.exercise_id = ? AND s.reps > 0",
+        (user_id, workout_id, exercise_id),
+    )
+    return (await cur.fetchone())["mx"]
+
+
 async def max_weight_ever(user_id: int) -> float:
     """Heaviest single set (any exercise) across finished workouts — for weight-club
     achievements."""
@@ -1938,6 +1984,24 @@ async def get_next_exercise_in_workout(workout_id: int, exercise_id: int) -> Opt
 
 # ---------- routines (saved workout templates / splits) ----------
 
+async def create_shared_item(owner_id: int, kind: str, payload: str) -> str:
+    """Store a share snapshot and return its unguessable token."""
+    token = secrets.token_urlsafe(8)
+    async with _write_lock:
+        await conn().execute(
+            "INSERT INTO shared_items (token, owner_id, kind, payload, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (token, owner_id, kind, payload, now_iso()),
+        )
+        await conn().commit()
+    return token
+
+
+async def get_shared_item(token: str) -> Optional[aiosqlite.Row]:
+    cur = await conn().execute("SELECT * FROM shared_items WHERE token = ?", (token,))
+    return await cur.fetchone()
+
+
 async def create_routine(user_id: int, name: str) -> int:
     async with _write_lock:
         cur = await conn().execute(
@@ -2244,6 +2308,29 @@ async def backup_to_file(dest_path: str) -> None:
 
 
 # ---------- push notifications ----------
+
+async def weekly_exercise_rollup(user_id: int, since_date: str) -> list[aiosqlite.Row]:
+    """Per exercise since `since_date`: best set, its reps, total tonnage and
+    set count — one row per exercise, heaviest tonnage first.
+
+    Feeds the weekly summary table (see formatting.build_weekly_summary), so
+    it's one query rather than a walk over every workout of the week.
+    """
+    cur = await conn().execute(
+        "SELECT e.display_name AS name, "
+        "       MAX(s.weight) AS top_weight, "
+        "       SUM(s.weight * s.reps) AS tonnage, "
+        "       COUNT(s.id) AS sets_count "
+        "FROM sets s "
+        "JOIN workout_blocks b ON b.id = s.block_id "
+        "JOIN workouts w ON w.id = b.workout_id "
+        "JOIN exercises e ON e.id = s.exercise_id "
+        "WHERE w.user_id = ? AND w.status = 'finished' AND w.started_at >= ? AND s.reps > 0 "
+        "GROUP BY e.id ORDER BY tonnage DESC",
+        (user_id, since_date),
+    )
+    return await cur.fetchall()
+
 
 async def tonnage_since(user_id: int, since_date: str) -> float:
     """Total weight x reps across all finished-workout sets on/after since_date — for the weekly digest push."""

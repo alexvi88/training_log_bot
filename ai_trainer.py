@@ -29,6 +29,7 @@ import datetime as dt
 import json
 import logging
 import re
+from types import SimpleNamespace
 from typing import Any, Awaitable, Callable, Optional
 
 from openai import AsyncOpenAI
@@ -491,6 +492,13 @@ WEEKLY_DIGEST_SYSTEM_PROMPT = """\
 тоннаж и объём (рабочих подходов) по каждой группе мышц со статусом относительно
 целевого диапазона (low = мало, in_range = норм, high = многовато).
 
+Если человек вёл дневник питания, в сводке будет и еда: за сколько дней есть
+записи и средние калории с белком в день. Это то, чего не умеет ни одно
+приложение-трекер: свяжи еду с железом там, где связь реально видна (мало белка
+на фоне объёмной недели, недобор калорий при просевшем тоннаже). Строки про еду
+в сводке нет — значит, дневник пустой, и про питание тогда молчи, не выдумывай
+и не выпрашивай.
+
 Напиши короткий еженедельный дайджест-подведение итогов недели. Правила:
 - Начни ровно с «ПРИВЕТ АТЛЕТ, ».
 - По-русски, на «ты», тепло и с юмором, свой в доску — без токсичности и шейминга.
@@ -533,6 +541,9 @@ async def weekly_digest(user_id: int) -> Optional[str]:
         f"Целевой объём на группу: {vol['target_sets_per_group']} подходов/нед.\n"
         f"Объём по группам: {groups_line}."
     )
+    food_line = await _weekly_food_summary(user_id)
+    if food_line:
+        summary += "\n" + food_line
 
     client = _get_client()
     try:
@@ -551,6 +562,28 @@ async def weekly_digest(user_id: int) -> Optional[str]:
     await _log_llm_cost(user_id, config.GROK_MODEL, getattr(response, "usage", None))
     text = (response.choices[0].message.content or "").strip()
     return text or None
+
+
+async def _weekly_food_summary(user_id: int) -> str:
+    """"Питание: записи за 5 дн. из 7, в среднем 2150 ккал и 118 г белка в день."
+    Empty string when the diary has nothing this week.
+
+    Averaged over the days actually logged, not over seven: a diary kept on five
+    days out of seven describes those five, and dividing by seven would invent a
+    deficit that isn't there. Days logged is reported alongside so the coach can
+    see how much the average is worth.
+    """
+    days = (await _food_diary(user_id, days=7))["days"]
+    with_calories = [d for d in days if d["calories"]]
+    if not with_calories:
+        return ""
+    avg_kcal = sum(d["calories"] for d in with_calories) / len(with_calories)
+    protein_days = [d for d in with_calories if d["protein"]]
+    parts = [f"записи за {len(with_calories)} дн. из 7", f"в среднем {avg_kcal:.0f} ккал"]
+    if protein_days:
+        avg_protein = sum(d["protein"] for d in protein_days) / len(protein_days)
+        parts.append(f"{avg_protein:.0f} г белка в день")
+    return "Питание: " + ", ".join(parts) + "."
 
 
 FOOD_ANALYSIS_SYSTEM_PROMPT = """\
@@ -1072,6 +1105,9 @@ StatusCallback = Optional[Callable[[str], Awaitable[None]]]
 # черновик в FSM и вешает под ответ кнопку, а пишет в БД уже тап пользователя.
 ProgramCallback = Optional[Callable[[dict[str, Any]], Awaitable[None]]]
 
+# Накопленный текст ответа по мере генерации — см. _completion_round.
+ChunkCallback = Optional[Callable[[str], Awaitable[None]]]
+
 # Человеко-читаемый статус для каждого инструмента — во что реально идёт вызов,
 # а не абстрактное "думаю".
 TOOL_STATUS_TEXTS: dict[str, str] = {
@@ -1498,6 +1534,7 @@ async def ask(
     image_data_url: Optional[str] = None,
     on_status: StatusCallback = None,
     on_program: ProgramCallback = None,
+    on_chunk: ChunkCallback = None,
 ) -> str:
     """Один вопрос пользователя → готовый текст ответа.
 
@@ -1540,7 +1577,8 @@ async def ask(
         user_id, question, bool(search_context),
     )
     return await _ask_plain(
-        user_id, question, history, image_data_url, search_context, on_status, on_program
+        user_id, question, history, image_data_url, search_context, on_status, on_program,
+        on_chunk,
     )
 
 
@@ -1553,19 +1591,73 @@ def _plain_user_content(question: str, image_data_url: Optional[str]) -> Any:
     ]
 
 
+# Как часто отдаём накопленный текст наружу во время стрима. Не на каждый
+# токен: получатель шлёт его в Telegram, а там свои лимиты на частоту запросов.
+STREAM_FLUSH_SECONDS = 1.2
+
+
 async def _completion_round(
     client: AsyncOpenAI,
     messages: list[dict[str, Any]],
     user_id: Optional[int],
+    on_chunk: ChunkCallback = None,
 ) -> tuple[str, list[Any]]:
-    """One chat-completion turn. Returns (content, tool_calls)."""
-    response = await client.chat.completions.create(
+    """One chat-completion turn. Returns (content, tool_calls).
+
+    `on_chunk` включает стриминг: текст отдаётся наружу по мере генерации, не
+    чаще чем раз в STREAM_FLUSH_SECONDS. Стримить имеет смысл только тот раунд,
+    который окажется финальным, — но какой из них финальный, заранее неизвестно,
+    поэтому раунд с tool_calls просто ничего не отдаёт (там текста и нет, а
+    происходящее показывают статусы).
+    """
+    if on_chunk is None:
+        response = await client.chat.completions.create(
+            model=config.GROK_MODEL, max_tokens=2048, tools=TOOLS, messages=messages,
+            extra_body={"reasoning_effort": config.GROK_REASONING_EFFORT},
+        )
+        await _log_llm_cost(user_id, config.GROK_MODEL, getattr(response, "usage", None))
+        m = response.choices[0].message
+        return (m.content or ""), list(m.tool_calls or [])
+
+    stream = await client.chat.completions.create(
         model=config.GROK_MODEL, max_tokens=2048, tools=TOOLS, messages=messages,
         extra_body={"reasoning_effort": config.GROK_REASONING_EFFORT},
+        stream=True, stream_options={"include_usage": True},
     )
-    await _log_llm_cost(user_id, config.GROK_MODEL, getattr(response, "usage", None))
-    m = response.choices[0].message
-    return (m.content or ""), list(m.tool_calls or [])
+    parts: list[str] = []
+    tool_calls: dict[int, dict[str, Any]] = {}
+    usage = None
+    last_flush = 0.0
+    async for event in stream:
+        usage = getattr(event, "usage", None) or usage
+        if not event.choices:
+            continue
+        delta = event.choices[0].delta
+        for tc in getattr(delta, "tool_calls", None) or []:
+            slot = tool_calls.setdefault(
+                tc.index, {"id": "", "name": "", "arguments": ""}
+            )
+            slot["id"] += tc.id or ""
+            if tc.function:
+                slot["name"] += tc.function.name or ""
+                slot["arguments"] += tc.function.arguments or ""
+        if delta.content:
+            parts.append(delta.content)
+            now = asyncio.get_running_loop().time()
+            if now - last_flush >= STREAM_FLUSH_SECONDS:
+                last_flush = now
+                await on_chunk("".join(parts))
+    await _log_llm_cost(user_id, config.GROK_MODEL, usage)
+    return "".join(parts), [_StreamedToolCall(slot) for slot in tool_calls.values()]
+
+
+class _StreamedToolCall:
+    """Собранный из дельт tool-call в форме, которую ждёт остальной код
+    (tc.id / tc.function.name / tc.function.arguments)."""
+
+    def __init__(self, slot: dict[str, Any]) -> None:
+        self.id = slot["id"]
+        self.function = SimpleNamespace(name=slot["name"], arguments=slot["arguments"])
 
 
 async def _ask_plain(
@@ -1576,6 +1668,7 @@ async def _ask_plain(
     search_context: Optional[str] = None,
     on_status: StatusCallback = None,
     on_program: ProgramCallback = None,
+    on_chunk: ChunkCallback = None,
 ) -> str:
     client = _get_client()
     messages: list[dict[str, Any]] = [
@@ -1593,7 +1686,7 @@ async def _ask_plain(
 
     content = ""
     for _ in range(MAX_TOOL_ROUNDS + 1):
-        content, tool_calls = await _completion_round(client, messages, user_id)
+        content, tool_calls = await _completion_round(client, messages, user_id, on_chunk)
         if not tool_calls:
             break
         if on_status:

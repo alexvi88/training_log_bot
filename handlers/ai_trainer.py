@@ -9,7 +9,7 @@ from html import escape
 from typing import Optional
 
 from aiogram import F, Router
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 
@@ -41,6 +41,10 @@ MAX_IMAGE_BYTES = 10 * 1024 * 1024
 
 # Вопрос по умолчанию, если пользователь прислал фото без подписи.
 DEFAULT_PHOTO_QUESTION = "Посмотри на фото и прокомментируй."
+
+# Черновик — превью, а не сообщение: показываем хвост генерации, чтобы длинный
+# ответ не упирался в лимиты, а живая «печать» была видна.
+MAX_DRAFT_CHARS = 1000
 
 # Лимит на размер голосового (Telegram сам не режет сильнее, но перестрахуемся).
 MAX_VOICE_BYTES = 20 * 1024 * 1024
@@ -138,6 +142,54 @@ class _RunningDisplay:
                 self._last_text = _pick_different(RUNNING_REPLIES, self._last_text)
                 with suppress(TelegramBadRequest):
                     await self._placeholder.edit_text(self._last_text)
+
+
+class _DraftStreamer:
+    """Печатает ответ тренера в пузыре-черновике, пока модель его генерирует.
+
+    Стриминг у бота уже был и был выпилен: он строился на редактировании
+    сообщения, а это лимиты на частоту правок и мигающий сырой markdown, из
+    которого текст «пересобирался» на глазах. sendMessageDraft — нативный
+    механизм ровно под это: черновик живёт вне ленты сообщений, анимируется
+    клиентом и не оставляет следа, а готовый ответ приходит одним обычным
+    сообщением, как и раньше.
+
+    Метод появился в Bot API 9.3, поэтому любая ошибка отправки просто
+    выключает стриминг до конца ответа — на старых клиентах и серверах всё
+    работает как прежде, только без анимации.
+    """
+
+    def __init__(self, message: Message) -> None:
+        self._message = message
+        # Идентификатор черновика произвольный, но постоянный в пределах ответа:
+        # им же черновик потом гасится пустым текстом.
+        self._draft_id = message.message_id
+        self._enabled = True
+        self._started = False
+
+    async def push(self, text: str) -> None:
+        if not self._enabled or not text:
+            return
+        try:
+            await self._message.bot.send_message_draft(
+                chat_id=self._message.chat.id,
+                draft_id=self._draft_id,
+                text=text[-MAX_DRAFT_CHARS:],
+            )
+            self._started = True
+        except (TelegramBadRequest, TelegramAPIError):
+            # Не тот сервер/клиент, слишком часто, что угодно — молча живём
+            # дальше без черновика: ответ всё равно придёт целиком.
+            self._enabled = False
+
+    async def close(self) -> None:
+        """Погасить черновик, чтобы он не остался висеть рядом с ответом."""
+        if not self._started:
+            return
+        with suppress(TelegramBadRequest, TelegramAPIError):
+            await self._message.bot.send_message_draft(
+                chat_id=self._message.chat.id, draft_id=self._draft_id, text=""
+            )
 
 
 async def ai_keyboard(
@@ -483,6 +535,7 @@ async def _handle_question(
     placeholder = await message.answer(running_text)
     display = _RunningDisplay(placeholder, running_text)
     running_task = asyncio.create_task(display.cycle_idle())
+    streamer = _DraftStreamer(message)
 
     # Программа, если тренер собрал её этим ответом (см. propose_program). Держим
     # в ячейке, а не в возврате ask(): текст ответа и черновик — разные вещи, и
@@ -497,6 +550,7 @@ async def _handle_question(
         answer = await ai_trainer.ask(
             user_id, question, history, image_data_url=image_data_url,
             on_status=display.set_status, on_program=collect_program,
+            on_chunk=streamer.push,
         )
     except Exception:
         logger.exception("AI trainer request failed for user %s", user_id)
@@ -510,6 +564,7 @@ async def _handle_question(
         running_task.cancel()
         with suppress(asyncio.CancelledError):
             await running_task
+        await streamer.close()
 
     await db.increment_ai_question_count(user_id)
     # Warn before the wall, not at it — the old behaviour only ever mentioned the

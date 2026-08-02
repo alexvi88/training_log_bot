@@ -471,6 +471,7 @@ def routine_detail_keyboard(routine_id: int) -> InlineKeyboardMarkup:
     b.row(InlineKeyboardButton(text="▶️ Начать тренировку", callback_data=f"rt:start:{routine_id}"))
     b.row(InlineKeyboardButton(text="✏️ Изменить состав", callback_data=f"rt:edit:{routine_id}"))
     b.row(InlineKeyboardButton(text="✏️ Переименовать", callback_data=f"rt:rename:{routine_id}"))
+    b.row(InlineKeyboardButton(text="📤 Поделиться", callback_data=f"share:rt:{routine_id}"))
     b.row(InlineKeyboardButton(text="🗑 Удалить программу", callback_data=f"rt:delask:{routine_id}"))
     b.row(InlineKeyboardButton(text="⬅️ К списку", callback_data="rt:manage"))
     return b.as_markup()
@@ -887,6 +888,13 @@ def food_history_keyboard(days: Sequence[dt.date], page: int, has_next: bool) ->
         b.row(*nav)
     b.row(InlineKeyboardButton(text="⬅️ К сегодняшнему дню", callback_data="fd:day:today"))
     b.row(InlineKeyboardButton(text="🏠 Меню", callback_data="fd:menu"))
+    return b.as_markup()
+
+
+def back_keyboard(cb: str) -> InlineKeyboardMarkup:
+    """Одна кнопка «⬅️ Назад» — для экранов, где больше делать нечего."""
+    b = InlineKeyboardBuilder()
+    b.button(text="⬅️ Назад", callback_data=cb)
     return b.as_markup()
 
 

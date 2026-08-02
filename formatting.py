@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 from html import escape
 from typing import Literal
 
+from aiogram.types import MessageEntity
+
 import config
 from analytics import e1rm
 
@@ -57,6 +59,39 @@ E1RM_HINT = (
 )
 
 
+def local_time_entity(moment: dt.datetime, fallback: str) -> tuple[str, MessageEntity]:
+    """Момент времени, который клиент покажет в поясе смотрящего (Bot API 9.5).
+
+    Возвращает (текст, entity): текст — обычный фолбэк, который увидят старые
+    клиенты, entity накрывает его целиком и заставляет новые нарисовать то же
+    время по своим часам. Выигрыш не в том, чтобы не считать пояс самим, — а в
+    том, что для большинства он посчитан неверно: пояс в настройках бота никто
+    не выставляет, и вся сдвижка идёт от нуля.
+
+    Хранится по-прежнему серверное время (см. UX_IMPROVEMENTS_PART2.md) —
+    entity лечит отображение, а не корень.
+    """
+    return fallback, MessageEntity(
+        type="date_time",
+        offset=0,
+        length=len(fallback.encode("utf-16-le")) // 2,
+        unix_time=int(moment.replace(tzinfo=dt.timezone.utc).timestamp()),
+    )
+
+
+def entities_at(text: str, marker: str, entity: MessageEntity) -> list[MessageEntity] | None:
+    """Сдвинуть entity на позицию `marker` внутри `text`.
+
+    Смещения Telegram считает в UTF-16, как и telegram_length, — кириллица и
+    эмодзи до маркера иначе сдвинут метку на чужие символы.
+    """
+    index = text.find(marker)
+    if index < 0:
+        return None
+    prefix_len = len(text[:index].encode("utf-16-le")) // 2
+    return [entity.model_copy(update={"offset": prefix_len})]
+
+
 def format_group(name: str) -> str:
     """A muscle group's name as it's shown anywhere in the UI: uppercase.
 
@@ -66,6 +101,12 @@ def format_group(name: str) -> str:
     the stored name keeps whatever case the user typed.
     """
     return name.upper()
+
+
+def strip_tags(text: str) -> str:
+    """Текст без HTML-разметки — для мест, где разметку не разбирают
+    (rich-блоки, лог)."""
+    return _TAG_RE.sub("", text)
 
 
 def telegram_length(text: str) -> int:
@@ -209,6 +250,9 @@ class ExerciseBlockView:
     prev_set_rpes: list[float | None] | None = None  # per-set RPE for prev_sets
     prev_started_at: dt.datetime | None = None  # date of the previous session, for the delta line
     note: str | None = None  # exercise's own note (technique cue, injury flag)
+    # Index into `sets` of the set that is the exercise's new all-time-best
+    # e1RM — the live 🥇 mark. None when nothing in this session beats history.
+    gold_index: int | None = None
 
     def rpe_for(self, index: int) -> float | None:
         if not self.set_rpes or index >= len(self.set_rpes):
@@ -664,12 +708,20 @@ def build_live_session_text(
         is_active = active_exercise_id is not None and block.exercise_id == active_exercise_id
         prefix = "▶ " if is_active else ""
         body_lines.append(f"{prefix}<b>{escape(block.exercise_name)}</b>")
+        # 🥇 — новый лучший сет за всю историю упражнения. Ставится сразу, даже
+        # если тренировка в целом слабая: ран провален — голд твой.
+        gold = getattr(block, "gold_index", None)
+
+        def set_str(i: int, w: float, r: int, *, blk=block, gold=gold) -> str:
+            marked = format_set(w, r, blk.rpe_for(i))
+            return f"{marked} 🥇" if i == gold else marked
+
         if is_active:
-            body_lines.extend(f"  • {format_set(w, r, block.rpe_for(i))}" for i, (w, r) in enumerate(block.sets))
+            body_lines.extend(f"  • {set_str(i, w, r)}" for i, (w, r) in enumerate(block.sets))
             if note:
                 body_lines.append(f"📝 <i>{escape(note)}</i>")
         elif block.sets:
-            body_lines.append(", ".join(format_set(w, r, block.rpe_for(i)) for i, (w, r) in enumerate(block.sets)))
+            body_lines.append(", ".join(set_str(i, w, r) for i, (w, r) in enumerate(block.sets)))
     lines = list(body_lines)
     if not lines and not hint:
         lines = ["Добавь упражнение, чтобы начать."]
@@ -678,6 +730,47 @@ def build_live_session_text(
             lines.append(DIVIDER if body_lines else "")
         lines.append(hint)
     return "\n".join(lines)
+
+
+def build_gold_book_lines(golds, unit: str = "kg", is_bodyweight: bool = False) -> list[str]:
+    """"🥇 Золотая книга" — лучшие сеты упражнения за всё время, каждый с датой.
+
+    Три категории, потому что пики у них разные: самый тяжёлый сет, сет с
+    лучшим e1RM и самый долгий сет — обычно три разных дня. Дубли схлопываются:
+    если тяжёлый сет он же и лучший по e1RM, строка одна.
+    """
+    # Пустая книга — по числу повторов, а не по e1RM: у упражнений своим весом
+    # e1RM тождественно нулю, и проверка по нему прятала книгу целиком.
+    if golds is None or golds.max_reps <= 0:
+        return []
+    u = UNIT_LABELS.get(unit, "кг")
+
+    def dated(label: str, value: str, day: str) -> str:
+        when = f" · {_iso_to_ru(day)}" if day else ""
+        return f"   {label} {value}{when}"
+
+    if is_bodyweight:
+        # Вес всегда 0 — «самый тяжёлый» и e1RM смысла не имеют, остаются повторы.
+        return ["🥇 <b>Золотая книга</b>",
+                dated("Повторы", str(golds.max_reps), golds.max_reps_date)]
+
+    rows = [("e1RM", f"{golds.best_e1rm:.1f}{u} ({format_set(golds.best_e1rm_weight, golds.best_e1rm_reps)})",
+             golds.best_e1rm_date)]
+    weight_set = (golds.max_weight, golds.max_weight_reps)
+    if weight_set != (golds.best_e1rm_weight, golds.best_e1rm_reps):
+        rows.append(("Вес", format_set(*weight_set), golds.max_weight_date))
+    reps_set = (golds.max_reps_weight, golds.max_reps)
+    if reps_set not in (weight_set, (golds.best_e1rm_weight, golds.best_e1rm_reps)):
+        rows.append(("Повторы", format_set(*reps_set), golds.max_reps_date))
+    return ["🥇 <b>Золотая книга</b>"] + [dated(label, value, day) for label, value, day in rows]
+
+
+def _iso_to_ru(day: str) -> str:
+    """'2026-08-02' → '2 августа'; пустая строка, если дата не разбирается."""
+    try:
+        return format_day_month_ru(dt.date.fromisoformat(day))
+    except ValueError:
+        return ""
 
 
 def format_pr_detail(kind: str, value: float, extra: float | None = None, unit: str = "kg") -> str:
@@ -765,6 +858,91 @@ def _hall_of_fame_lift(name: str, weight: float, reps: int, e1rm_value: float, u
     return f"• {escape(name)} — {reps} {word}"
 
 
+@dataclass
+class WeeklyRow:
+    """Одна строка недельной сводки — упражнение за неделю."""
+    name: str
+    top_weight: float
+    tonnage: float
+    sets_count: int
+
+
+def build_weekly_summary(
+    rows: list[WeeklyRow],
+    workouts: int,
+    total_tonnage: float,
+    period: str,
+    unit: str = "kg",
+    food_line: str | None = None,
+) -> str:
+    """Недельная сводка обычным текстом — фолбэк для клиентов без rich-таблиц
+    и источник тех же чисел для табличной версии (см. build_weekly_table)."""
+    u = UNIT_LABELS.get(unit, "кг")
+    w = plural_ru(workouts, ("тренировка", "тренировки", "тренировок"))
+    lines = [
+        f"📊 <b>НЕДЕЛЯ {escape(period)}</b>",
+        f"{workouts} {w} · {format_tonnage(total_tonnage, unit)}",
+        "",
+    ]
+    if not rows:
+        lines.append("На этой неделе тренировок не было.")
+        return "\n".join(lines)
+    for row in rows:
+        lines.append(
+            f"<b>{escape(row.name)}</b> — {format_weight(row.top_weight)}{u} · "
+            f"{row.sets_count} подх. · {format_tonnage(row.tonnage, unit)}"
+        )
+    if food_line:
+        lines += ["", food_line]
+    return "\n".join(lines)
+
+
+def build_weekly_table(rows: list[WeeklyRow], unit: str = "kg"):
+    """Те же строки настоящей таблицей (rich messages, Bot API 10.1).
+
+    Возвращает InputRichBlockTable или None, если строк нет. Вызывающая сторона
+    обязана уметь и без него: на сервере/клиенте ниже 10.1 отправка упадёт, и
+    сводка уходит текстом (см. build_weekly_summary).
+    """
+    from aiogram.types import InputRichBlockTable, RichBlockTableCell
+
+    if not rows:
+        return None
+    u = UNIT_LABELS.get(unit, "кг")
+    def cell(text: str, align: str = "left", is_header: bool = False) -> RichBlockTableCell:
+        # align/valign у ячейки обязательны — без них pydantic-модель aiogram
+        # не собирается вовсе.
+        return RichBlockTableCell(text=text, align=align, valign="middle", is_header=is_header)
+
+    header = [
+        cell("Упражнение", is_header=True),
+        cell("Лучший", "right", is_header=True),
+        cell("Подх.", "right", is_header=True),
+        cell("Тоннаж", "right", is_header=True),
+    ]
+    body = [
+        [
+            cell(row.name),
+            cell(f"{format_weight(row.top_weight)}{u}", "right"),
+            cell(str(row.sets_count), "right"),
+            cell(format_tonnage(row.tonnage, unit), "right"),
+        ]
+        for row in rows
+    ]
+    return InputRichBlockTable(cells=[header, *body], is_striped=True, is_bordered=True)
+
+
+def format_rank_line(rank, gap: str | None = None) -> str:
+    """«⚙️ Станок» плюс, если есть куда расти, чего не хватает до следующего."""
+    line = f"{rank.emoji} Звание: <b>{escape(rank.name)}</b>"
+    return f"{line}  (до следующего: {gap})" if gap else line
+
+
+def format_rank_promotion(rank) -> str:
+    """Строка повышения на карточке завершения — объявляется один раз."""
+    return f"🎖 <b>Новое звание: {rank.emoji} {escape(rank.name)}</b>"
+
+
 def build_hall_of_fame(
     total_workouts: int,
     tonnage_kg: float,
@@ -774,6 +952,8 @@ def build_hall_of_fame(
     top_lifts: list[tuple[str, float, int, float]],  # (name, weight, reps, e1rm); weight 0 = bodyweight
     unit: str = "kg",
     max_chars: int | None = None,
+    rank=None,  # analytics.Rank | None
+    rank_gap: str | None = None,
 ) -> str:
     """Lifetime totals plus the user's best lifts, shown above the badge grid
     on the '🏅 Достижения' screen — no heading of its own."""
@@ -782,6 +962,8 @@ def build_hall_of_fame(
         return "Пока пусто — заверши первую тренировку, и здесь появятся твои рекорды."
 
     lines = []
+    if rank is not None:
+        lines.append(format_rank_line(rank, rank_gap))
     w = plural_ru(total_workouts, ("тренировка", "тренировки", "тренировок"))
     lines.append(f"🗓 Всего тренировок: <b>{total_workouts}</b> {w}")
 
@@ -854,6 +1036,7 @@ def format_progress_screen(
     limit: int = 8,
     unit: str = "kg",
     session_notes: dict[int, str] | None = None,  # {workout_id: note}
+    golds=None,  # analytics.GoldBook | None
 ) -> str:
     u = UNIT_LABELS.get(unit, "кг")
     lines = [f"📈 <b>{escape(exercise_name)}</b>", ""]
@@ -886,6 +1069,11 @@ def format_progress_screen(
         lines.append(f"Рекорд повторов в сете: {best_reps}")
     else:
         lines.append(f"Рекорд: {format_set(records.best_e1rm_weight, records.best_e1rm_reps)} · e1RM {records.max_e1rm:.1f}{u}")
+
+    gold_lines = build_gold_book_lines(golds, unit=unit, is_bodyweight=is_bw)
+    if gold_lines:
+        lines.append("")
+        lines.extend(gold_lines)
 
     header = "\n".join(lines)
     notes = session_notes or {}
