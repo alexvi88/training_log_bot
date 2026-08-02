@@ -222,7 +222,8 @@ CREATE TABLE IF NOT EXISTS routines (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL,
     name TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    program_name TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_routines_user ON routines (user_id);
 
@@ -395,6 +396,10 @@ async def _migrate_schema() -> None:
     routine_ex_cols = await _column_names("routine_exercises")
     if "target" not in routine_ex_cols:
         await _conn.execute("ALTER TABLE routine_exercises ADD COLUMN target TEXT")
+
+    routine_cols = await _column_names("routines")
+    if "program_name" not in routine_cols:
+        await _conn.execute("ALTER TABLE routines ADD COLUMN program_name TEXT")
 
     push_cols = await _column_names("pushes")
     if "sent_on" not in push_cols:
@@ -2067,11 +2072,14 @@ async def get_shared_item(token: str) -> Optional[aiosqlite.Row]:
     return await cur.fetchone()
 
 
-async def create_routine(user_id: int, name: str) -> int:
+async def create_routine(user_id: int, name: str, program_name: Optional[str] = None) -> int:
+    """`program_name` groups several routines as days of one multi-day program
+    (see list_programs); NULL means a standalone routine, e.g. one saved from a
+    past workout."""
     async with _write_lock:
         cur = await conn().execute(
-            "INSERT INTO routines (user_id, name, created_at) VALUES (?, ?, ?)",
-            (user_id, name, now_iso()),
+            "INSERT INTO routines (user_id, name, created_at, program_name) VALUES (?, ?, ?, ?)",
+            (user_id, name, now_iso(), program_name),
         )
         await conn().commit()
         return cur.lastrowid
@@ -2126,6 +2134,48 @@ async def list_routines(user_id: int) -> list[aiosqlite.Row]:
         "SELECT r.*, "
         "(SELECT COUNT(*) FROM routine_exercises re WHERE re.routine_id = r.id) AS exercise_count "
         "FROM routines r WHERE r.user_id = ? ORDER BY r.created_at DESC, r.id DESC",
+        (user_id,),
+    )
+    return await cur.fetchall()
+
+
+async def list_programs(user_id: int) -> list[aiosqlite.Row]:
+    """Multi-day programs the user has saved, one row per program.
+
+    `anchor_id` is the newest routine in the group — the handle the program's
+    day list is opened by, since a program has no id of its own and its name
+    doesn't fit in callback data.
+    """
+    cur = await conn().execute(
+        "SELECT program_name, COUNT(*) AS day_count, MAX(id) AS anchor_id, "
+        "MAX(created_at) AS created_at "
+        "FROM routines WHERE user_id = ? AND program_name IS NOT NULL "
+        "GROUP BY program_name ORDER BY MAX(created_at) DESC, MAX(id) DESC",
+        (user_id,),
+    )
+    return await cur.fetchall()
+
+
+async def list_program_days(user_id: int, program_name: str) -> list[aiosqlite.Row]:
+    """The routines making up one program, oldest first — day 1 is created first
+    (or, for the catalog flow, last-reversed) so ascending id is day order."""
+    cur = await conn().execute(
+        "SELECT r.*, "
+        "(SELECT COUNT(*) FROM routine_exercises re WHERE re.routine_id = r.id) AS exercise_count "
+        "FROM routines r WHERE r.user_id = ? AND r.program_name = ? "
+        "ORDER BY r.id ASC",
+        (user_id, program_name),
+    )
+    return await cur.fetchall()
+
+
+async def list_standalone_routines(user_id: int) -> list[aiosqlite.Row]:
+    """Routines that aren't part of a program — shown directly in the list."""
+    cur = await conn().execute(
+        "SELECT r.*, "
+        "(SELECT COUNT(*) FROM routine_exercises re WHERE re.routine_id = r.id) AS exercise_count "
+        "FROM routines r WHERE r.user_id = ? AND r.program_name IS NULL "
+        "ORDER BY r.created_at DESC, r.id DESC",
         (user_id,),
     )
     return await cur.fetchall()
@@ -2233,7 +2283,10 @@ async def count_routines(user_id: int) -> int:
 
 
 async def create_routine_from_program(
-    user_id: int, name: str, exercise_names: list[str | tuple[str, Optional[str]]]
+    user_id: int,
+    name: str,
+    exercise_names: list[str | tuple[str, Optional[str]]],
+    program_name: Optional[str] = None,
 ) -> int:
     """Instantiate one ready-made program day as a routine.
 
@@ -2246,8 +2299,11 @@ async def create_routine_from_program(
     the routine_exercises row so it can be shown again both on the routine and
     while logging a workout started from it. Programs the AI trainer builds land
     here the same way, carrying the target it picked (ai_trainer.propose_program).
+
+    `program_name` groups the created day with the program's other days (see
+    create_routine).
     """
-    routine_id = await create_routine(user_id, name)
+    routine_id = await create_routine(user_id, name, program_name)
     seen: set[int] = set()
     order = 0
     for item in exercise_names:

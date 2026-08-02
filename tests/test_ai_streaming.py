@@ -117,8 +117,9 @@ async def test_streamed_round_returns_the_whole_text(monkeypatch):
         return_value=_FakeStream([_delta_event("Жим "), _delta_event("встал.")])
     )
     monkeypatch.setattr(ai_trainer, "_log_llm_cost", AsyncMock())
-    # Планка частоты не должна мешать тесту: отдаём каждый кусок.
+    # Планки частоты и минимальной длины не должны мешать тесту: отдаём каждый кусок.
     monkeypatch.setattr(ai_trainer, "STREAM_FLUSH_SECONDS", 0)
+    monkeypatch.setattr(ai_trainer, "MIN_FIRST_FLUSH_CHARS", 0)
     seen: list[str] = []
 
     content, tool_calls = await ai_trainer._completion_round(
@@ -128,6 +129,31 @@ async def test_streamed_round_returns_the_whole_text(monkeypatch):
     assert content == "Жим встал."
     assert tool_calls == []
     assert seen[-1] == "Жим встал."
+
+
+async def test_first_flush_waits_for_enough_text_even_if_flush_interval_has_passed(monkeypatch):
+    """A slow-arriving first token can already be older than STREAM_FLUSH_SECONDS
+    by the time it lands — time alone would flush it instantly, flashing a
+    near-empty draft that then sits still for a full interval. The first flush
+    also needs enough accumulated text."""
+    import ai_trainer
+
+    client = MagicMock()
+    client.chat.completions.create = AsyncMock(
+        return_value=_FakeStream([_delta_event("Ж"), _delta_event("им встал." * 10)])
+    )
+    monkeypatch.setattr(ai_trainer, "_log_llm_cost", AsyncMock())
+    # Планка частоты нулевая (флаш готов сразу по времени) — тест бьёт именно по
+    # длине текста, не по интервалу.
+    monkeypatch.setattr(ai_trainer, "STREAM_FLUSH_SECONDS", 0)
+    seen: list[str] = []
+
+    await ai_trainer._completion_round(
+        client, [{"role": "user", "content": "?"}], user_id=1, on_chunk=_collector(seen),
+    )
+
+    # Один символ никогда не должен был уйти наружу отдельным флашем.
+    assert "Ж" not in seen
 
 
 def _collector(sink: list[str]):

@@ -31,9 +31,12 @@ ROUTINE_SOURCE_PAGE_SIZE = 8
 
 async def show_manage(event, state: FSMContext) -> None:
     user_id = event.from_user.id
-    routines = await db.list_routines(user_id)
+    # Многодневки свёрнуты в одну строку каждая, дни — за вторым экраном
+    # (rt_program_days): иначе один добавленный сплит занимает три-четыре кнопки.
+    programs = await db.list_programs(user_id)
+    routines = await db.list_standalone_routines(user_id)
     has_workouts = await db.count_workouts(user_id) > 0
-    if routines:
+    if programs or routines:
         text = "🗂 <b>ПРОГРАММЫ</b>\n\nВыбери программу или создай новую из тренировки."
     else:
         text = (
@@ -41,7 +44,7 @@ async def show_manage(event, state: FSMContext) -> None:
             "Выбери готовую программу ниже или проведи тренировку и сохрани её как "
             "программу — потом начнёшь такую же в один тап."
         )
-    kb = keyboards.routines_manage_keyboard(routines, has_workouts=has_workouts)
+    kb = keyboards.routines_manage_keyboard(programs, routines, has_workouts=has_workouts)
     if isinstance(event, CallbackQuery):
         await ui.safe_edit(event, text, reply_markup=kb, parse_mode="HTML")
     else:
@@ -52,6 +55,35 @@ async def show_manage(event, state: FSMContext) -> None:
 async def rt_manage(callback: CallbackQuery, state: FSMContext):
     await state.set_state(None)
     await show_manage(callback, state)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("rt:pgm:"))
+async def rt_program_days(callback: CallbackQuery, state: FSMContext):
+    """Second level of the programs list: one saved multi-day program — what it
+    is, and which day to open. Addressed by any one routine in the group (see
+    db.list_programs), since a program has no id of its own."""
+    anchor_id = int(callback.data.split(":")[2])
+    anchor = await _owned_routine(callback, anchor_id)
+    if anchor is None:
+        return
+    program_name = anchor["program_name"]
+    if not program_name:
+        await _show_routine_detail(callback, state, anchor_id)
+        await callback.answer()
+        return
+    days = await db.list_program_days(callback.from_user.id, program_name)
+    lines = [f"🗂 <b>{escape(program_name)}</b>", ""]
+    for day in days:
+        word = formatting.plural_ru(
+            day["exercise_count"], ("упражнение", "упражнения", "упражнений")
+        )
+        lines.append(f"• <b>{escape(day['name'])}</b> — {day['exercise_count']} {word}")
+    lines += ["", "Выбери день — посмотреть состав или начать тренировку."]
+    await ui.safe_edit(
+        callback, "\n".join(lines),
+        reply_markup=keyboards.program_days_keyboard(days), parse_mode="HTML",
+    )
     await callback.answer()
 
 
@@ -112,11 +144,9 @@ async def rt_program_add(callback: CallbackQuery, state: FSMContext):
     if program is None:
         await callback.answer("Программа не найдена", show_alert=True)
         return
-    # Create days in reverse so day 1 ends up newest and thus tops the routines
-    # list (list_routines orders by created_at/id DESC).
-    for day_name, exercises in reversed(program["days"]):
+    for day_name, exercises in program["days"]:
         await db.create_routine_from_program(
-            callback.from_user.id, f"{program['name']} — {day_name}", exercises
+            callback.from_user.id, day_name, exercises, program_name=program["name"]
         )
     await callback.answer(f"Программа добавлена: {len(program['days'])} дн.")
     await show_manage(callback, state)
@@ -148,14 +178,26 @@ async def _show_routine_detail(event, state: FSMContext, routine_id: int) -> Non
     if routine is None:
         return
     exercises = await db.list_routine_exercises(routine_id)
-    lines = [f"🗂 <b>{escape(routine['name'])}</b>", ""]
+    program_name = routine["program_name"]
+    if program_name:
+        lines = [
+            f"🗂 <b>{escape(program_name)}</b>",
+            f"<b>{escape(routine['name'])}</b>",
+            "",
+        ]
+    else:
+        lines = [f"🗂 <b>{escape(routine['name'])}</b>", ""]
     if exercises:
         for i, ex in enumerate(exercises, start=1):
             suffix = f" — {escape(ex['target'])}" if ex["target"] else ""
             lines.append(f"{i}. {escape(ex['display_name'])}{suffix}")
     else:
         lines.append("В программе нет упражнений (возможно, они были архивированы).")
-    kb = keyboards.routine_detail_keyboard(routine_id)
+    anchor_id = None
+    if program_name:
+        siblings = await db.list_program_days(routine["user_id"], program_name)
+        anchor_id = max(d["id"] for d in siblings)
+    kb = keyboards.routine_detail_keyboard(routine_id, program_anchor_id=anchor_id)
     text = "\n".join(lines)
     if isinstance(event, CallbackQuery):
         await ui.safe_edit(event, text, reply_markup=kb, parse_mode="HTML")
