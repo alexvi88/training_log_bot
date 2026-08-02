@@ -2429,6 +2429,21 @@ async def list_food_entries(telegram_id: int, eaten_on: str) -> list[aiosqlite.R
     return await cur.fetchall()
 
 
+async def list_recent_food_entries(telegram_id: int, since: str, limit: int = 200) -> list[aiosqlite.Row]:
+    """Food entries from `since` (YYYY-MM-DD) onward, oldest first.
+
+    For the AI trainer, which reasons over a stretch of days rather than one
+    screen's worth: without it the coach advises on nutrition while blind to
+    the diary sitting in the same database.
+    """
+    cur = await conn().execute(
+        "SELECT * FROM food_entries WHERE telegram_id = ? AND eaten_on >= ? "
+        "ORDER BY eaten_on, id LIMIT ?",
+        (telegram_id, since, limit),
+    )
+    return await cur.fetchall()
+
+
 async def get_food_entry(entry_id: int) -> Optional[aiosqlite.Row]:
     cur = await conn().execute("SELECT * FROM food_entries WHERE id = ?", (entry_id,))
     return await cur.fetchone()

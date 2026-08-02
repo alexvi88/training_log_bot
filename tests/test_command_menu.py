@@ -55,7 +55,7 @@ def test_feedback_router_registered_before_fsm_flow_routers():
 
 
 @pytest.mark.asyncio
-async def test_default_scope_only_has_start(monkeypatch):
+async def test_default_scope_advertises_the_user_facing_sections(monkeypatch):
     monkeypatch.setattr(config, "ADMIN_ID", 12345)
     bot = AsyncMock()
 
@@ -65,7 +65,9 @@ async def test_default_scope_only_has_start(monkeypatch):
         c for c in bot.set_my_commands.call_args_list if isinstance(c.kwargs["scope"], BotCommandScopeDefault)
     )
     commands = default_call.args[0]
-    assert [c.command for c in commands] == ["start", "help", "ai_trainer", "feedback"]
+    assert [c.command for c in commands] == [
+        "start", "help", "ai_trainer", "food_diary", "feedback",
+    ]
 
 
 @pytest.mark.asyncio

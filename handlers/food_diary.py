@@ -161,6 +161,13 @@ async def cmd_food_diary(message: Message, state: FSMContext):
     await _show_day(message, state, await _today(message.from_user.id))
 
 
+@router.callback_query(F.data == "menu:food")
+async def menu_food_diary(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await _show_day(callback, state, await _today(callback.from_user.id))
+    await callback.answer()
+
+
 @router.callback_query(F.data.startswith("fd:day:"))
 async def fd_open_day(callback: CallbackQuery, state: FSMContext):
     raw = callback.data.split(":", 2)[2]
