@@ -545,6 +545,22 @@ _heatmap_cache: dict[int, tuple[tuple, bytes]] = {}
 _confirming: set[int] = set()
 
 
+# The event loop only keeps weak references to running tasks, so a fire-and-forget
+# create_task() whose only reference is the loop's own can be garbage-collected
+# mid-flight: the record message would never be tidied away, or the AI comment
+# would silently never arrive. Holding a strong reference until the task is done
+# is the documented fix.
+_background_tasks: set[asyncio.Task] = set()
+
+
+def _spawn(coro) -> asyncio.Task:
+    """Run `coro` in the background, keeping it referenced until it finishes."""
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return task
+
+
 def _try_claim_weight_confirm(user_id: int) -> bool:
     """Atomically check-and-reserve `_confirming` for this user — no `await`
     between the membership check and the `.add()`, same reasoning as
@@ -1538,9 +1554,7 @@ async def _finalize_logged_sets(bot, state: FSMContext, user, data: dict, active
             await bot.set_message_reaction(
                 chat_id=chat_id, message_id=message_id, reaction=[ReactionTypeEmoji(emoji="🔥")],
             )
-        asyncio.create_task(
-            _delete_message_later(bot, chat_id, message_id, _RECORD_MESSAGE_LIFETIME_SECONDS)
-        )
+        _spawn(_delete_message_later(bot, chat_id, message_id, _RECORD_MESSAGE_LIFETIME_SECONDS))
     elif message is not None:
         await _delete_message(message)
     else:
@@ -2398,7 +2412,7 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
         message_id = sent.message_id
 
     if needs_ai_comment:
-        asyncio.create_task(
+        _spawn(
             _attach_ai_comment(bot, data["live_chat_id"], message_id, user_id, workout_id, full_text)
         )
 
