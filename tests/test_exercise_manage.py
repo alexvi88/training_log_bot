@@ -519,15 +519,16 @@ async def test_edit_menu_layout_is_two_buttons_per_row():
     assert [b.text for b in rows[2]] == ["⬅️ Назад"]
 
 
-async def test_card_layout_is_prog_edit_archive_back():
-    """Верхний уровень карточки — Прогресс/Редактировать одной строкой, затем
-    Архивировать и Назад каждая своей строкой; конкретные правки (название,
-    группа, описание, фото) спрятаны за "Редактировать"."""
+async def test_card_layout_is_prog_edit_share_archive_back():
+    """Верхний уровень карточки — две пары (Прогресс/Редактировать,
+    Поделиться/Архивировать) и Назад своей строкой; конкретные правки
+    (название, группа, описание, фото) спрятаны за "Редактировать"."""
     ex = {"id": 1, "name": "pull down", "display_name": "pull down", "description": None, "custom_photo_file_id": None}
     _text, kb = exercises._exercise_detail_view(ex, with_info=False)
     rows = kb.inline_keyboard
     assert [b.text for b in rows[0]] == ["📈 Прогресс", "✏️ Редактировать"]
-    assert [b.text for row in rows[1:] for b in row] == ["🗑 Архивировать", "⬅️ Назад"]
+    assert [b.text for b in rows[1]] == ["📤 Поделиться", "🗑 Архивировать"]
+    assert [b.text for row in rows[2:] for b in row] == ["⬅️ Назад"]
 
 
 async def test_edit_menu_offers_delete_photo_button_when_one_exists():
