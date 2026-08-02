@@ -268,6 +268,18 @@ def test_day_screen_numbers_entries_and_totals():
     assert "Б12 · Ж8 · У55" in text
 
 
+def test_day_screen_last_entry_sits_right_above_the_divider():
+    """Пустая строка разделяет приёмы между собой, но перед чертой-разделителем
+    её быть не должно — последний приём идёт к ней вплотную."""
+    entries = [
+        _view(id=1, description="Овсянка", calories=350),
+        _view(id=2, description="Кофе", calories=60),
+    ]
+    text = formatting.build_food_day_screen(dt.date(2026, 7, 20), entries)
+    assert "350 ккал</b>\n\n<b>2. Кофе" in text  # между приёмами — пустая строка
+    assert f"60 ккал</b>\n{formatting.DIVIDER}" in text  # а перед чертой — нет
+
+
 def test_non_empty_day_screen_still_hints_at_adding_more():
     """Без этой строки экран после первой записи выглядит тупиком — непонятно,
     что можно просто дописать ещё один приём пищи (см. отчёт пользователя)."""
