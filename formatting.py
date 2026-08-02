@@ -924,9 +924,10 @@ def format_kcal(value: float | None) -> str:
 
 
 def _macros_line(protein: float | None, fat: float | None, carbs: float | None) -> str:
-    """"Б 30 · Ж 12 · У 60" — skipped entirely when the model gave no macros.
-    No trailing "г": the labels (Б/Ж/У) already say these are grams, unlike a
-    bare number that needs a unit.
+    """"Б30 · Ж12 · У60" — skipped entirely when the model gave no macros. No
+    space between the label and the number (same compact style as "80×5" for a
+    set or "@9" for RPE elsewhere), and no trailing "г": the labels (Б/Ж/У)
+    already say these are grams, unlike a bare number that needs a unit.
     """
     parts = [
         (label, v)
@@ -935,7 +936,7 @@ def _macros_line(protein: float | None, fat: float | None, carbs: float | None) 
     ]
     if not parts:
         return ""
-    return " · ".join(f"{label} {round(v):g}" for label, v in parts)
+    return " · ".join(f"{label}{round(v):g}" for label, v in parts)
 
 
 def _item_line(item: FoodItemView) -> str:
