@@ -179,6 +179,28 @@ CREATE TABLE IF NOT EXISTS bodyweight_logs (
 );
 CREATE INDEX IF NOT EXISTS idx_bodyweight_user ON bodyweight_logs (telegram_id, logged_at);
 
+-- Дневник питания (см. handlers/food_diary.py). eaten_on — календарная дата
+-- пользователя, к которой относится еда (она же ключ подневной группировки),
+-- а не момент ввода: запись за прошлую дату заносится тем же путём.
+-- Макросы/калории — оценка модели, поэтому все они nullable: запись без цифр
+-- (модель не смогла или пользователь ввёл текстом без деталей) всё равно
+-- имеет смысл как строка «что съел».
+CREATE TABLE IF NOT EXISTS food_entries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    telegram_id INTEGER NOT NULL,
+    eaten_on TEXT NOT NULL,
+    description TEXT NOT NULL,
+    details TEXT,
+    calories REAL,
+    protein REAL,
+    fat REAL,
+    carbs REAL,
+    photo_file_id TEXT,
+    source TEXT NOT NULL DEFAULT 'text',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_food_entries_user_day ON food_entries (telegram_id, eaten_on, id);
+
 CREATE TABLE IF NOT EXISTS routines (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL,
@@ -2208,6 +2230,82 @@ async def scale_bodyweight_logs(telegram_id: int, factor: float) -> None:
             (factor, telegram_id),
         )
         await conn().commit()
+
+
+# ---------- food diary ----------
+
+
+async def add_food_entry(
+    telegram_id: int,
+    eaten_on: str,
+    description: str,
+    details: Optional[str] = None,
+    calories: Optional[float] = None,
+    protein: Optional[float] = None,
+    fat: Optional[float] = None,
+    carbs: Optional[float] = None,
+    photo_file_id: Optional[str] = None,
+    source: str = "text",
+) -> int:
+    async with _write_lock:
+        cur = await conn().execute(
+            "INSERT INTO food_entries (telegram_id, eaten_on, description, details, calories, "
+            "protein, fat, carbs, photo_file_id, source, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                telegram_id, eaten_on, description, details, calories,
+                protein, fat, carbs, photo_file_id, source, now_iso(),
+            ),
+        )
+        await conn().commit()
+        return cur.lastrowid
+
+
+async def list_food_entries(telegram_id: int, eaten_on: str) -> list[aiosqlite.Row]:
+    """One day's entries, in the order they were added."""
+    cur = await conn().execute(
+        "SELECT * FROM food_entries WHERE telegram_id = ? AND eaten_on = ? ORDER BY id",
+        (telegram_id, eaten_on),
+    )
+    return await cur.fetchall()
+
+
+async def get_food_entry(entry_id: int) -> Optional[aiosqlite.Row]:
+    cur = await conn().execute("SELECT * FROM food_entries WHERE id = ?", (entry_id,))
+    return await cur.fetchone()
+
+
+async def delete_food_entry(entry_id: int) -> None:
+    async with _write_lock:
+        await conn().execute("DELETE FROM food_entries WHERE id = ?", (entry_id,))
+        await conn().commit()
+
+
+async def list_food_days(
+    telegram_id: int, limit: int = 8, offset: int = 0
+) -> list[aiosqlite.Row]:
+    """Days that have entries, newest first, with per-day totals — the history list.
+
+    Aggregated in SQL rather than by loading every entry: the history screen only
+    ever shows a count and the day's calories, and a year of logging is thousands
+    of rows.
+    """
+    cur = await conn().execute(
+        "SELECT eaten_on, COUNT(*) AS entries, SUM(calories) AS calories "
+        "FROM food_entries WHERE telegram_id = ? "
+        "GROUP BY eaten_on ORDER BY eaten_on DESC LIMIT ? OFFSET ?",
+        (telegram_id, limit, offset),
+    )
+    return await cur.fetchall()
+
+
+async def count_food_days(telegram_id: int) -> int:
+    cur = await conn().execute(
+        "SELECT COUNT(DISTINCT eaten_on) FROM food_entries WHERE telegram_id = ?",
+        (telegram_id,),
+    )
+    (count,) = await cur.fetchone()
+    return count
 
 
 async def scale_user_set_weights(telegram_id: int, factor: float) -> None:

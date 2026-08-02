@@ -735,6 +735,102 @@ def bodyweight_keyboard(has_logs: bool, weeks: int = 0, show_periods: bool = Fal
     return b.as_markup()
 
 
+# Сколько дней истории питания на страницу — как в истории тренировок.
+FOOD_HISTORY_PAGE_SIZE = 8
+
+
+def food_day_keyboard(date: dt.date, entry_ids: Sequence[int], today: dt.date) -> InlineKeyboardMarkup:
+    """Экран одного дня дневника питания: удаление записей, шаг по дням, история.
+
+    Кнопка удаления на запись — по номеру («🗑 2»), потому что сами названия
+    («Куриная грудка с рисом и салатом») в лейбл не влезают, а нумерация уже
+    есть в тексте экрана.
+    """
+    b = InlineKeyboardBuilder()
+    if entry_ids:
+        b.row(
+            *[
+                InlineKeyboardButton(text=f"🗑 {i}", callback_data=f"fd:del:{entry_id}")
+                for i, entry_id in enumerate(entry_ids, start=1)
+            ],
+            width=4,
+        )
+    prev_day = date - dt.timedelta(days=1)
+    nav = [InlineKeyboardButton(text=f"⬅️ {formatting.format_day_month_ru(prev_day)}",
+                                callback_data=f"fd:day:{prev_day.isoformat()}")]
+    if date < today:
+        next_day = date + dt.timedelta(days=1)
+        nav.append(
+            InlineKeyboardButton(
+                text=f"{formatting.format_day_month_ru(next_day)} ➡️",
+                callback_data=f"fd:day:{next_day.isoformat()}",
+            )
+        )
+    b.row(*nav)
+    if date != today:
+        b.row(InlineKeyboardButton(text="📅 Сегодня", callback_data=f"fd:day:{today.isoformat()}"))
+    b.row(InlineKeyboardButton(text="📚 История", callback_data="fd:history:0"))
+    b.row(InlineKeyboardButton(text="⬅️ Главное меню", callback_data="fd:menu"))
+    return b.as_markup()
+
+
+def food_confirm_keyboard() -> InlineKeyboardMarkup:
+    """Под догадкой модели: подтвердить, поправить словами или выкинуть."""
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="✅ Всё верно", callback_data="fd:ok"))
+    b.row(
+        InlineKeyboardButton(text="✏️ Поправить", callback_data="fd:fix"),
+        InlineKeyboardButton(text="❌ Отменить", callback_data="fd:cancel"),
+    )
+    return b.as_markup()
+
+
+def food_date_keyboard(dates: Sequence[dt.date], today: dt.date) -> InlineKeyboardMarkup:
+    """«За какую дату занести?»: предложенная дата первой строкой, две соседние
+    рядом, плюс календарь для всего остального.
+
+    `dates` приходит уже посчитанным (первая — предложенная по умолчанию), чтобы
+    клавиатура не знала про правила выбора соседей."""
+    b = InlineKeyboardBuilder()
+    if dates:
+        primary = dates[0]
+        label = "сегодня" if primary == today else formatting.format_day_month_ru(primary)
+        b.row(
+            InlineKeyboardButton(
+                text=f"✅ Занести за {label}", callback_data=f"fd:date:{primary.isoformat()}"
+            )
+        )
+    others = [
+        InlineKeyboardButton(
+            text=formatting.format_day_month_ru(d), callback_data=f"fd:date:{d.isoformat()}"
+        )
+        for d in dates[1:]
+    ]
+    if others:
+        b.row(*others)
+    b.row(InlineKeyboardButton(text="📅 Другая дата", callback_data="fd:otherdate"))
+    b.row(InlineKeyboardButton(text="❌ Отменить", callback_data="fd:cancel"))
+    return b.as_markup()
+
+
+def food_history_keyboard(days: Sequence[dt.date], page: int, has_next: bool) -> InlineKeyboardMarkup:
+    """Дни с записями, по два в ряд — что в них было, расписано в тексте экрана."""
+    b = InlineKeyboardBuilder()
+    for d in days:
+        b.button(text=d.strftime("%d.%m.%Y"), callback_data=f"fd:day:{d.isoformat()}")
+    b.adjust(2)
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"fd:history:{page - 1}"))
+    if has_next:
+        nav.append(InlineKeyboardButton(text="➡️", callback_data=f"fd:history:{page + 1}"))
+    if nav:
+        b.row(*nav)
+    b.row(InlineKeyboardButton(text="⬅️ К сегодняшнему дню", callback_data="fd:day:today"))
+    b.row(InlineKeyboardButton(text="⬅️ Главное меню", callback_data="fd:menu"))
+    return b.as_markup()
+
+
 def cancel_keyboard(cb: str = "cancel") -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(text="❌ Отмена", callback_data=cb)

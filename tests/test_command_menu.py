@@ -86,6 +86,7 @@ async def test_admin_scope_targets_only_admin_chat_and_includes_admin_command(mo
         "help",
         "ai_trainer",
         "feedback",
+        "food_diary",
         "check_users",
         "ai_dialogs",
         "pushes",
