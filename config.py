@@ -79,6 +79,12 @@ XAI_API_KEY = os.getenv("XAI_API_KEY", "")
 GROK_MODEL = os.getenv("GROK_MODEL", "grok-4.5-latest")
 GROK_BASE_URL = os.getenv("GROK_BASE_URL", "https://api.x.ai/v1")
 
+# Reasoning depth for GROK_MODEL calls (low/medium/high — xAI defaults to
+# "high" when unset, which reasoning models can't turn off). Medium is the
+# documented middle ground for latency-tolerant but not fully open-ended
+# tasks, which fits the AI trainer's chat/classification calls.
+GROK_REASONING_EFFORT = os.getenv("GROK_REASONING_EFFORT", "medium")
+
 # Search-capable model used (via xAI's gRPC "Agent Tools" SDK, not the REST
 # endpoint) when a question is allowed web/X search access — same model name
 # as fun_bot's GROK_SEARCH_MODEL. Needs an agentic/multi-agent-capable model,
