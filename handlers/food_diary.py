@@ -509,6 +509,7 @@ async def fd_history(callback: CallbackQuery, state: FSMContext):
         formatting.FoodDayView(
             date=dt.date.fromisoformat(r["eaten_on"]), entries=r["entries"], calories=r["calories"],
             protein=r["protein"], fat=r["fat"], carbs=r["carbs"],
+            descriptions=(r["descriptions"] or "").split("\n"),
         )
         for r in rows
     ]

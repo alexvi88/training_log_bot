@@ -2304,16 +2304,20 @@ async def delete_food_entry(entry_id: int) -> None:
 async def list_food_days(
     telegram_id: int, limit: int = 8, offset: int = 0
 ) -> list[aiosqlite.Row]:
-    """Days that have entries, newest first, with per-day totals — the history list.
+    """Days that have entries, newest first, with per-day totals and the list of
+    what was eaten (as newline-joined descriptions) — the history list.
 
-    Aggregated in SQL rather than by loading every entry: the history screen only
-    ever shows a count and the day's calories, and a year of logging is thousands
-    of rows.
+    Aggregated in SQL rather than by loading every entry per day separately —
+    the history screen shows a handful of days at a time, but a year of
+    logging is thousands of rows. The inner subquery orders by id before the
+    GROUP BY so GROUP_CONCAT collects each day's descriptions in the order
+    they were logged, not an arbitrary one.
     """
     cur = await conn().execute(
         "SELECT eaten_on, COUNT(*) AS entries, SUM(calories) AS calories, "
-        "SUM(protein) AS protein, SUM(fat) AS fat, SUM(carbs) AS carbs "
-        "FROM food_entries WHERE telegram_id = ? "
+        "SUM(protein) AS protein, SUM(fat) AS fat, SUM(carbs) AS carbs, "
+        "GROUP_CONCAT(description, char(10)) AS descriptions "
+        "FROM (SELECT * FROM food_entries WHERE telegram_id = ? ORDER BY id) "
         "GROUP BY eaten_on ORDER BY eaten_on DESC LIMIT ? OFFSET ?",
         (telegram_id, limit, offset),
     )
