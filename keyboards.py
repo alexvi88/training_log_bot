@@ -60,7 +60,10 @@ AI_MENTION_PAGE_SIZE = 3
 
 
 def ai_trainer_keyboard(
-    has_active_workout: bool = False, exercises: Sequence[Any] = (), page: int = 0
+    has_active_workout: bool = False,
+    exercises: Sequence[Any] = (),
+    page: int = 0,
+    program_name: str | None = None,
 ) -> InlineKeyboardMarkup:
     """`exercises` — то, что тренер упомянул в ответе (см. exercise_mentions), и
     свои упражнения, и ещё не добавленные из каталога — до
@@ -69,7 +72,12 @@ def ai_trainer_keyboard(
     карточку — прямая ссылка вела бы в никуда, раз упражнения ещё нет.
     Показываем по AI_MENTION_PAGE_SIZE штук за раз с постраничным ⬅️/➡️, если
     упоминаний больше — id всех упоминаний едут прямо в callback_data стрелок
-    (см. handlers/ai_trainer.ai_mentions_page), отдельного состояния не нужно."""
+    (см. handlers/ai_trainer.ai_mentions_page), отдельного состояния не нужно.
+
+    `program_name` — название программы, которую тренер собрал в этом ответе
+    (см. ai_trainer.propose_program): даёт самую верхнюю кнопку, ведущую на
+    превью с составом и кнопкой сохранения. Сам черновик в callback_data не
+    влезает и лежит в FSM, поэтому кнопка без параметров."""
     exercises = list(exercises)
     b = InlineKeyboardBuilder()
     b.button(text="🏠 Меню", callback_data="ai:menu")
@@ -109,7 +117,44 @@ def ai_trainer_keyboard(
             page_nav.append(InlineKeyboardButton(text="➡️", callback_data=f"ai:mpage:{page + 1}:{ids}"))
     page_nav_rows = [page_nav] if page_nav else []
 
-    return InlineKeyboardMarkup(inline_keyboard=mention_rows + page_nav_rows + nav)
+    # Программа — над всем остальным: это то, ради чего пользователь и просил
+    # ответ, а упоминания упражнений рядом с ней второстепенны.
+    program_rows = []
+    if program_name:
+        program_rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"📋 {_shorten_label(program_name, AI_MENTION_LABEL_LIMIT)}",
+                    callback_data="ai:prog:view",
+                )
+            ]
+        )
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=program_rows + mention_rows + page_nav_rows + nav
+    )
+
+
+def ai_program_preview_keyboard() -> InlineKeyboardMarkup:
+    """Превью программы, собранной тренером: сохранить или отказаться.
+
+    Сохранение создаёт по программе на каждый её день (см.
+    handlers/ai_trainer.ai_program_save), поэтому подпись говорит «добавить»,
+    а не «сохранить программу» — в списке появится несколько строк.
+    """
+    b = InlineKeyboardBuilder()
+    b.button(text="✅ Добавить себе", callback_data="ai:prog:save")
+    b.button(text="❌ Не надо", callback_data="ai:prog:drop")
+    b.adjust(1)
+    return b.as_markup()
+
+
+def ai_program_saved_keyboard() -> InlineKeyboardMarkup:
+    """После сохранения программы — прямая дорога в её список, без возврата в меню."""
+    b = InlineKeyboardBuilder()
+    b.button(text="🗂 К программам", callback_data="rt:manage")
+    b.adjust(1)
+    return b.as_markup()
 
 
 def groups_keyboard(
