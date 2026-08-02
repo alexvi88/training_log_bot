@@ -260,7 +260,8 @@ async def _show_routine_source_preview(callback: CallbackQuery, workout_id: int)
     if blocks:
         for i, b in enumerate(blocks, start=1):
             sets_str = ", ".join(
-                formatting.format_set(w, r, rpe) for (w, r), rpe in zip(b.sets, b.set_rpes or [None] * len(b.sets))
+                formatting.format_set(w, r, rpe)
+                for (w, r), rpe in zip(b.sets, b.set_rpes or [None] * len(b.sets), strict=True)
             )
             lines.append(f"{i}. <b>{escape(b.exercise_name)}</b>")
             if sets_str:
