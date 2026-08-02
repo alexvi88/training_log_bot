@@ -329,10 +329,12 @@ def test_macros_line_has_no_bold_and_no_trailing_unit():
     assert formatting._macros_line(30, 12, 60) == "Б 30 · Ж 12 · У 60"
 
 
-def test_estimate_text_without_numbers_shows_dash():
+def test_estimate_text_without_numbers_skips_totals_entirely():
+    """Без оценки (режим "без КБЖУ", или модель ничего не разобрала) карточка
+    не выдумывает плейсхолдер вида "Итого: —" — просто ничего не показывает."""
     text = formatting.build_food_estimate_text("Что-то съел", [])
-    assert "— ккал" in text or "—" in text
-    assert "Б " not in text  # строки БЖУ нет вовсе
+    assert "Итого" not in text
+    assert "Б " not in text
 
 
 def _day(**kwargs) -> formatting.FoodDayView:
@@ -383,7 +385,7 @@ def test_day_keyboard_has_delete_per_entry_and_day_steps():
     today = dt.date(2026, 7, 21)
     kb = keyboards.food_day_keyboard(dt.date(2026, 7, 20), [7, 8], today=today)
     cbs = _callbacks(kb)
-    assert "fd:del:7" in cbs and "fd:del:8" in cbs
+    assert "fd:delask:7" in cbs and "fd:delask:8" in cbs  # спрашивает подтверждение, не удаляет сразу
     assert "fd:day:2026-07-19" in cbs  # шаг назад
     assert "fd:day:2026-07-21" in cbs  # шаг вперёд — день в прошлом
     assert "fd:history:0" in cbs
@@ -496,7 +498,7 @@ async def test_typed_food_goes_to_model_and_shows_confirmation(user_id, monkeypa
     monkeypatch.setattr(food_diary.timeutil, "user_today", lambda user: dt.date(2026, 7, 20))
     monkeypatch.setattr(food_diary.ai_trainer, "is_configured", lambda: True)
 
-    async def fake_analyze(uid, text="", image_data_url=None, previous=None, correction=""):
+    async def fake_analyze(uid, text="", image_data_url=None, previous=None, correction="", with_macros=True):
         return {
             "description": "Овсянка с бананом",
             "items": [{"name": "овсянка", "portion": "60 г", "calories": 220,
@@ -610,7 +612,7 @@ async def test_correction_reruns_the_model_with_the_previous_guess(user_id, monk
     monkeypatch.setattr(food_diary.ai_trainer, "is_configured", lambda: True)
     seen = {}
 
-    async def fake_analyze(uid, text="", image_data_url=None, previous=None, correction=""):
+    async def fake_analyze(uid, text="", image_data_url=None, previous=None, correction="", with_macros=True):
         seen["previous"] = previous
         seen["correction"] = correction
         return {"description": "Груша", "items": [], "calories": 80, "comment": ""}
@@ -671,7 +673,7 @@ async def test_typed_correction_without_pressing_the_button(user_id, monkeypatch
     monkeypatch.setattr(food_diary.ai_trainer, "is_configured", lambda: True)
     seen = {}
 
-    async def fake_analyze(uid, text="", image_data_url=None, previous=None, correction=""):
+    async def fake_analyze(uid, text="", image_data_url=None, previous=None, correction="", with_macros=True):
         seen["correction"] = correction
         return {"description": "Груша", "items": [], "calories": 80, "comment": ""}
 
@@ -708,6 +710,36 @@ async def test_cancel_drops_the_draft(user_id, monkeypatch):
     assert (await state.get_data())["fd_pending"] is None
     assert await dbmod.count_food_days(user_id) == 0
     assert await state.get_state() == FoodDiaryFlow.viewing.state
+
+
+async def test_delete_asks_for_confirmation_before_removing(user_id, monkeypatch):
+    monkeypatch.setattr(food_diary.timeutil, "user_today", lambda user: dt.date(2026, 7, 20))
+    entry_id = await dbmod.add_food_entry(user_id, "2026-07-20", "Овсянка", calories=350)
+
+    state = await _make_state(user_id)
+    await state.set_state(FoodDiaryFlow.viewing)
+    callback = _make_callback(user_id, f"fd:delask:{entry_id}")
+
+    await food_diary.fd_delete_ask(callback, state)
+
+    # ничего не удалено — только показан вопрос с кнопками подтверждения
+    assert await dbmod.get_food_entry(entry_id) is not None
+    shown_text = callback.message.answer.call_args.args[0]
+    assert "Овсянка" in shown_text
+    kb = callback.message.answer.call_args.kwargs["reply_markup"]
+    cbs = [b.callback_data for row in kb.inline_keyboard for b in row]
+    assert f"fd:del:{entry_id}" in cbs
+    assert "fd:day:2026-07-20" in cbs  # «Отмена» ведёт назад на день записи
+
+
+async def test_delete_asks_reports_missing_entry(user_id, monkeypatch):
+    state = await _make_state(user_id)
+    await state.set_state(FoodDiaryFlow.viewing)
+    callback = _make_callback(user_id, "fd:delask:999999")
+
+    await food_diary.fd_delete_ask(callback, state)
+
+    assert callback.answer.call_args.args[0] == "Запись не найдена"
 
 
 async def test_delete_removes_only_the_owner_entry(user_id, monkeypatch):

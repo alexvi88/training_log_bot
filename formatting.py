@@ -964,11 +964,15 @@ def build_food_estimate_text(
     lines = [header, "", f"<b>{escape(description or 'Приём пищи')}</b>"]
     if items:
         lines.extend(f"• {_item_line(i)}" for i in items)
-    lines.append("")
-    lines.append(f"Итого: <b>{format_kcal(calories)}</b>")
-    macros = _macros_line(protein, fat, carbs)
-    if macros:
-        lines.append(macros)
+    if calories is not None:
+        # Ничего не выдумываем: без числа "Итого" не показываем вовсе (а не
+        # "Итого: —") — так карточка от режима "без КБЖУ" не выглядит
+        # недосчитанной, ей просто нечего тут показывать.
+        lines.append("")
+        lines.append(f"Итого: <b>{format_kcal(calories)}</b>")
+        macros = _macros_line(protein, fat, carbs)
+        if macros:
+            lines.append(macros)
     if comment:
         lines.append("")
         lines.append(f"<i>{escape(comment)}</i>")
@@ -988,7 +992,8 @@ def build_food_day_screen(date: dt.date, entries: list[FoodEntryView]) -> str:
     lines = [head, ""]
     for i, e in enumerate(entries, start=1):
         photo = " 📷" if e.has_photo else ""
-        lines.append(f"<b>{i}. {escape(e.description)}</b>{photo} — {format_kcal(e.calories)}")
+        kcal_part = f" — {format_kcal(e.calories)}" if e.calories is not None else ""
+        lines.append(f"<b>{i}. {escape(e.description)}</b>{photo}{kcal_part}")
         for item in e.items or []:
             lines.append(f"<i>• {_item_line(item)}</i>")
         macros = _macros_line(e.protein, e.fat, e.carbs)
@@ -997,11 +1002,14 @@ def build_food_day_screen(date: dt.date, entries: list[FoodEntryView]) -> str:
         lines.append("")
 
     known = [e.calories for e in entries if e.calories is not None]
-    total = sum(known) if known else None
     n = plural_ru(len(entries), ("приём", "приёма", "приёмов"))
-    total_line = f"{DIVIDER}\nИтого за день: <b>{format_kcal(total)}</b> · {len(entries)} {n} пищи"
-    if known and len(known) < len(entries):
-        total_line += f"\n<i>(без калорий: {len(entries) - len(known)})</i>"
+    if known:
+        total = sum(known)
+        total_line = f"{DIVIDER}\nИтого за день: <b>{format_kcal(total)}</b> · {len(entries)} {n} пищи"
+        if len(known) < len(entries):
+            total_line += f"\n<i>(без калорий: {len(entries) - len(known)})</i>"
+    else:
+        total_line = f"{DIVIDER}\nЗа день: {len(entries)} {n} пищи"
     lines.append(total_line)
 
     day_macros = _macros_line(
