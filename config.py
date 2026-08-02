@@ -79,6 +79,12 @@ XAI_API_KEY = os.getenv("XAI_API_KEY", "")
 GROK_MODEL = os.getenv("GROK_MODEL", "grok-4.5-latest")
 GROK_BASE_URL = os.getenv("GROK_BASE_URL", "https://api.x.ai/v1")
 
+# Hard ceiling on a single model call. The OpenAI SDK defaults to 600s, which
+# is not a timeout so much as an abandonment: a hung request leaves the user
+# watching "🤔 думаю…" for ten minutes, and the placeholder animation keeps
+# cycling the whole time, so it doesn't even look broken.
+AI_REQUEST_TIMEOUT_SECONDS = float(os.getenv("AI_REQUEST_TIMEOUT_SECONDS", "90"))
+
 # Reasoning depth for GROK_MODEL calls (low/medium/high — xAI defaults to
 # "high" when unset, which reasoning models can't turn off). Split in two
 # rather than one flat value for every call:

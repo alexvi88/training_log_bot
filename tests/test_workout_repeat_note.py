@@ -179,7 +179,9 @@ async def test_record_set_message_is_deleted_after_delay(fresh_db, user_id, monk
 
     monkeypatch.setattr(workout, "_RECORD_MESSAGE_LIFETIME_SECONDS", 0)
     scheduled = []
-    monkeypatch.setattr(workout.asyncio, "create_task", lambda coro: scheduled.append(coro))
+    # _spawn is the seam for background work now (it keeps a strong reference
+    # so the task cannot be collected mid-flight); capture instead of running.
+    monkeypatch.setattr(workout, "_spawn", lambda coro: scheduled.append(coro))
 
     await workout.log_set_text(message, state)
 

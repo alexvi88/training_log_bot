@@ -324,6 +324,56 @@ async def test_finishing_exercise_with_no_sets_deletes_its_empty_block(fresh_db,
     assert blocks == []
 
 
+async def test_finishing_exercise_with_pending_confirm_does_not_write_to_wrong_block(
+    fresh_db, user_id
+):
+    """A "555кг? Записываем?" prompt for exercise A is still unanswered when the
+    user taps "закончить упражнение" on A (B stays open, superset case). A's
+    block_id is dropped from open_blocks by finishing it; if the pending
+    confirmation weren't discarded too, answering "Да" afterwards would look up
+    a block_id that no longer exists and crash (or, worse, silently resolve to
+    whatever block ends up at that key)."""
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    bench = await db.create_exercise(user_id, "Bench press", group_id)
+    row = await db.create_exercise(user_id, "Row", group_id)
+
+    workout_id = await db.create_workout(user_id)
+    bench_block = await db.create_block(workout_id, "single")
+    await db.add_block_exercise(bench_block, bench, 0)
+    row_block = await db.create_block(workout_id, "single")
+    await db.add_block_exercise(row_block, row, 0)
+
+    state = await _make_state(
+        user_id,
+        open_exercises=[bench, row],
+        open_blocks={bench: bench_block, row: row_block},
+        active_exercise_id=bench,
+        pending_weight_confirm={
+            "exercise_id": bench, "sets": [[555.0, 5, None]], "source": "text",
+            "chat_id": user_id, "message_id": 42, "prompt_message_id": 43,
+        },
+    )
+    await state.update_data(workout_id=workout_id)
+    await state.set_state(WorkoutFlow.logging_set)
+    finish_callback = _make_callback(user_id, "live:finish_exercise")
+
+    await workout.live_finish_exercise(finish_callback, state)
+
+    data = await state.get_data()
+    assert data.get("pending_weight_confirm") is None
+    assert bench not in (data.get("open_blocks") or {})
+
+    # Tapping the now-stale "Да, записать" button must not crash and must not
+    # write anything — the prompt it answers no longer applies to anything.
+    confirm_callback = _make_callback(user_id, "live:wconf:yes")
+    await workout.live_weight_confirm(confirm_callback, state)
+
+    assert await db.list_sets_for_block(bench_block) == []
+    assert await db.list_sets_for_block(row_block) == []
+    confirm_callback.answer.assert_awaited()
+
+
 async def test_tapping_suggestion_jumps_straight_into_logging_it(fresh_db, user_id):
     db = fresh_db
     group_id = await db.create_muscle_group(user_id, "Грудь")

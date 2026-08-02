@@ -79,7 +79,7 @@ async def bf_date_quick(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(StateFilter(BackfillFlow.awaiting_date))
+@router.message(StateFilter(BackfillFlow.awaiting_date), F.text)
 async def bf_date_text(message: Message, state: FSMContext):
     try:
         date = parse_ru_date(

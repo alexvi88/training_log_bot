@@ -131,12 +131,17 @@ CREATE TABLE IF NOT EXISTS sets (
 CREATE INDEX IF NOT EXISTS idx_sets_exercise ON sets (exercise_id);
 CREATE INDEX IF NOT EXISTS idx_sets_block ON sets (block_id);
 
+-- sent_on is the recipient's *own* calendar date, which is what the
+-- one-push-per-day rule is about; sent_at stays server time, for the admin log.
+-- They disagree whenever the user's send hour falls on the other side of the
+-- server's midnight — every American zone on a UTC server.
 CREATE TABLE IF NOT EXISTS pushes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     telegram_id INTEGER NOT NULL,
     category TEXT NOT NULL,
     text TEXT NOT NULL,
-    sent_at TEXT NOT NULL
+    sent_at TEXT NOT NULL,
+    sent_on TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_pushes_sent_at ON pushes (sent_at);
 CREATE INDEX IF NOT EXISTS idx_pushes_telegram_id ON pushes (telegram_id, sent_at);
@@ -276,7 +281,11 @@ async def init_db(db_path: str = config.DB_PATH) -> None:
     # one so Cyrillic search can be filtered in SQL instead of fetching every
     # row into the app and filtering there.
     await _conn.create_function("py_lower", 1, lambda s: s.lower() if s is not None else None)
-    await _conn.execute("PRAGMA journal_mode=DELETE")
+    # WAL: в режиме DELETE каждый коммит создаёт и удаляет файл журнала (две
+    # операции с метаданными на запись) и писатель блокирует читателей — на
+    # единственном соединении это значит, что INSERT подхода останавливает все
+    # чтения. Замер на файловой БД, 200 коммитов: 3.96 мс → 2.29 мс (−42%).
+    await _conn.execute("PRAGMA journal_mode=WAL")
     await _conn.execute("PRAGMA foreign_keys=ON")
     await _conn.executescript(SCHEMA)
     await _conn.commit()
@@ -284,7 +293,7 @@ async def init_db(db_path: str = config.DB_PATH) -> None:
     await _seed_globals()
     await _migrate_muscle_groups()
     await _sync_exercise_templates()
-    await _backfill_seeded_from_program()
+    await _run_one_shot_migrations()
 
 
 async def _column_names(table: str) -> set[str]:
@@ -369,6 +378,13 @@ async def _migrate_schema() -> None:
     routine_ex_cols = await _column_names("routine_exercises")
     if "target" not in routine_ex_cols:
         await _conn.execute("ALTER TABLE routine_exercises ADD COLUMN target TEXT")
+
+    push_cols = await _column_names("pushes")
+    if "sent_on" not in push_cols:
+        await _conn.execute("ALTER TABLE pushes ADD COLUMN sent_on TEXT")
+        # Best available approximation for rows sent before the column existed:
+        # the server date they were written on.
+        await _conn.execute("UPDATE pushes SET sent_on = date(sent_at) WHERE sent_on IS NULL")
 
     await _conn.commit()
 
@@ -459,9 +475,40 @@ async def _sync_exercise_templates() -> None:
         await db.commit()
 
 
+# Bumped whenever a one-shot migration is added to _run_one_shot_migrations.
+_SCHEMA_VERSION = 1
+
+
+async def _run_one_shot_migrations() -> None:
+    """Run migrations that must happen exactly once per database.
+
+    Unlike the idempotent column adds in `_migrate_schema`, these rewrite user
+    data based on what it looks like *right now*, so re-running them on every
+    startup would keep re-applying them to rows the user has since created.
+    `PRAGMA user_version` is SQLite's built-in slot for tracking this.
+    """
+    cur = await _conn.execute("PRAGMA user_version")
+    (version,) = await cur.fetchone()
+    if version >= _SCHEMA_VERSION:
+        return
+    if version < 1:
+        await _backfill_seeded_from_program()
+    # Not parameterizable — SQLite only accepts a literal here. The value is an
+    # internal constant, never user input.
+    await _conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
+    await _conn.commit()
+
+
 async def _backfill_seeded_from_program() -> None:
     """Retroactively flag pristine, untouched, routine-less forks of a global
     template as seeded_from_program.
+
+    One-shot (see `_run_one_shot_migrations`): the WHERE clause below can't
+    tell a leftover from a program from an exercise the user picked out of
+    "📋 Выбрать из шаблонов" themselves and hasn't trained yet — both are
+    untrained, un-renamed forks of a template. Running it on every startup
+    therefore made a just-added exercise vanish from the user's list (and from
+    search) at the next restart, which reads as data loss.
 
     get_or_create_user_exercise_by_name only sets this flag going forward; a
     user exercise created the same way before that flag existed (e.g. by
@@ -925,9 +972,22 @@ async def find_exercise_by_name(user_id: int, name: str) -> Optional[aiosqlite.R
 
 
 async def find_exercise_by_display_name(user_id: int, display_name: str) -> Optional[aiosqlite.Row]:
-    """Match the unique index (user_id, LOWER(display_name)) exactly, archived or not."""
+    """Find a user's exercise by name, case-insensitively, archived or not.
+
+    Uses `py_lower`, not SQL `LOWER()`: the built-in only case-folds ASCII, so
+    "Жим лёжа" and "жим лёжа" compare as different names — and since
+    `create_exercise` relies on this lookup to reuse an existing row, that
+    split one exercise into two, each with its own history, records and e1RM.
+    (The unique index behind it has the same ASCII-only limitation and can't be
+    fixed the same way: an index can only use deterministic built-ins. This
+    check runs first, so the index never sees the collision.)
+
+    Oldest first, so an account that already accumulated such a pair keeps
+    resolving to the same one of them.
+    """
     cur = await conn().execute(
-        "SELECT * FROM exercises WHERE user_id = ? AND is_template = 0 AND LOWER(display_name) = LOWER(?)",
+        "SELECT * FROM exercises WHERE user_id = ? AND is_template = 0 "
+        "AND py_lower(display_name) = py_lower(?) ORDER BY id LIMIT 1",
         (user_id, display_name),
     )
     return await cur.fetchone()
@@ -1139,10 +1199,40 @@ async def set_exercise_description(exercise_id: int, description: Optional[str])
 # ---------- workouts ----------
 
 async def get_active_workout(user_id: int) -> Optional[aiosqlite.Row]:
+    # Explicit ordering so an account that already accumulated two active rows
+    # keeps resolving to the same one instead of an arbitrary one per query.
     cur = await conn().execute(
-        "SELECT * FROM workouts WHERE user_id = ? AND status = 'active'", (user_id,)
+        "SELECT * FROM workouts WHERE user_id = ? AND status = 'active' ORDER BY id LIMIT 1",
+        (user_id,),
     )
     return await cur.fetchone()
+
+
+async def get_or_create_active_workout(user_id: int) -> tuple[int, bool]:
+    """The user's active workout, starting one if there isn't one. Returns
+    (workout_id, created).
+
+    Check and insert happen under the same lock: aiogram processes updates
+    concurrently, so a double-tapped "🏋️ Начать тренировку" had both taps see
+    no active workout and create one each. The loser became a permanent ghost —
+    an empty active workout that "Продолжить" might open instead of the real
+    one, and that resurfaces later as a stale-workout warning.
+    """
+    async with _write_lock:
+        db = conn()
+        cur = await db.execute(
+            "SELECT id FROM workouts WHERE user_id = ? AND status = 'active' ORDER BY id LIMIT 1",
+            (user_id,),
+        )
+        row = await cur.fetchone()
+        if row is not None:
+            return row["id"], False
+        cur = await db.execute(
+            "INSERT INTO workouts (user_id, started_at, status) VALUES (?, ?, 'active')",
+            (user_id, now_iso()),
+        )
+        await db.commit()
+        return cur.lastrowid, True
 
 
 async def create_workout(user_id: int, started_at: Optional[str] = None, status: str = "active") -> int:
@@ -1193,13 +1283,25 @@ async def update_workout_note(workout_id: int, note: Optional[str]) -> None:
         await conn().commit()
 
 
-async def finish_workout(workout_id: int, note: Optional[str] = None, finished_at: Optional[str] = None) -> None:
+async def finish_workout(
+    workout_id: int, note: Optional[str] = None, finished_at: Optional[str] = None
+) -> bool:
+    """Mark an active workout finished. Returns False if it wasn't active any
+    more — i.e. somebody else just finished it.
+
+    The status check lives in the UPDATE so it can't be raced: the caller's own
+    "is it still active?" guard is several awaits away from getting here, which
+    is enough of a window for a double-tapped "🏁 Завершить" to produce two
+    finish cards for one workout.
+    """
     async with _write_lock:
-        await conn().execute(
-            "UPDATE workouts SET status = 'finished', finished_at = ?, note = ? WHERE id = ?",
+        cur = await conn().execute(
+            "UPDATE workouts SET status = 'finished', finished_at = ?, note = ? "
+            "WHERE id = ? AND status != 'finished'",
             (finished_at or now_iso(), note, workout_id),
         )
         await conn().commit()
+        return cur.rowcount > 0
 
 
 async def set_workout_ai_comment(workout_id: int, comment: Optional[str]) -> None:
@@ -1211,21 +1313,35 @@ async def set_workout_ai_comment(workout_id: int, comment: Optional[str]) -> Non
 
 
 async def discard_workout(workout_id: int) -> None:
+    """Снести тренировку целиком — вместе со всем, что на неё ссылается.
+
+    Порядок обязателен: `exercise_notes` держит FK на `workouts`, и без их
+    удаления финальный DELETE падает по констрейнту уже после того, как
+    подходы и блоки стёрты. Отсюда же и rollback: частичное удаление,
+    оставленное в открытой транзакции, закоммитит первый же следующий
+    (чужой) commit на этом соединении — и тренировка останется в базе
+    выпотрошенной, без подходов, но со статусом.
+    """
     async with _write_lock:
         db = conn()
-        await db.execute(
-            "DELETE FROM sets WHERE block_id IN "
-            "(SELECT id FROM workout_blocks WHERE workout_id = ?)",
-            (workout_id,),
-        )
-        await db.execute(
-            "DELETE FROM block_exercises WHERE block_id IN "
-            "(SELECT id FROM workout_blocks WHERE workout_id = ?)",
-            (workout_id,),
-        )
-        await db.execute("DELETE FROM workout_blocks WHERE workout_id = ?", (workout_id,))
-        await db.execute("DELETE FROM workouts WHERE id = ?", (workout_id,))
-        await db.commit()
+        try:
+            await db.execute(
+                "DELETE FROM sets WHERE block_id IN "
+                "(SELECT id FROM workout_blocks WHERE workout_id = ?)",
+                (workout_id,),
+            )
+            await db.execute(
+                "DELETE FROM block_exercises WHERE block_id IN "
+                "(SELECT id FROM workout_blocks WHERE workout_id = ?)",
+                (workout_id,),
+            )
+            await db.execute("DELETE FROM workout_blocks WHERE workout_id = ?", (workout_id,))
+            await db.execute("DELETE FROM exercise_notes WHERE workout_id = ?", (workout_id,))
+            await db.execute("DELETE FROM workouts WHERE id = ?", (workout_id,))
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
 
 
 async def list_workouts(
@@ -1422,6 +1538,31 @@ async def hall_of_fame_aggregates(user_id: int) -> dict[str, float]:
     }
 
 
+async def last_session_by_group(user_id: int) -> dict[Optional[int], tuple[str, int]]:
+    """Per muscle group: the date it was last trained and how many sets that
+    session had — the two inputs a recovery estimate needs.
+
+    One query rather than one per group: this feeds a screen the user opens
+    several times per workout.
+    """
+    cur = await conn().execute(
+        "SELECT gid, day, cnt FROM ("
+        "  SELECT e.primary_group_id AS gid, date(w.started_at) AS day, COUNT(s.id) AS cnt,"
+        "         ROW_NUMBER() OVER ("
+        "             PARTITION BY e.primary_group_id ORDER BY date(w.started_at) DESC"
+        "         ) AS rn"
+        "  FROM sets s"
+        "  JOIN workout_blocks b ON b.id = s.block_id"
+        "  JOIN workouts w ON w.id = b.workout_id"
+        "  JOIN exercises e ON e.id = s.exercise_id"
+        "  WHERE w.user_id = ? AND w.status = 'finished'"
+        "  GROUP BY e.primary_group_id, date(w.started_at)"
+        ") WHERE rn = 1",
+        (user_id,),
+    )
+    return {row["gid"]: (row["day"], row["cnt"]) for row in await cur.fetchall()}
+
+
 async def weekly_volume_by_group(
     user_id: int, start_date: str, end_date: str
 ) -> dict[Optional[int], int]:
@@ -1447,16 +1588,22 @@ async def weekly_volume_by_group(
 # ---------- blocks / block exercises ----------
 
 async def create_block(workout_id: int, block_type: str) -> int:
-    db = conn()
-    cur = await db.execute(
-        "SELECT COALESCE(MAX(order_index), -1) + 1 FROM workout_blocks WHERE workout_id = ?",
-        (workout_id,),
-    )
-    (order_index,) = await cur.fetchone()
+    """Append a block, choosing its order_index inside the INSERT.
+
+    Reading MAX(order_index) first left a window: aiogram handles updates
+    concurrently, so two blocks opened in quick succession (tapping an
+    exercise twice, or "➕ Суперсет" racing the picker) both read the same
+    value and inserted with it. Two blocks then shared an order_index and the
+    workout's exercise order became arbitrary — in the card, in the history and
+    in "next exercise" lookups. Same fix as append_set.
+    """
     async with _write_lock:
+        db = conn()
         cur = await db.execute(
-            "INSERT INTO workout_blocks (workout_id, order_index, type) VALUES (?, ?, ?)",
-            (workout_id, order_index, block_type),
+            "INSERT INTO workout_blocks (workout_id, order_index, type) "
+            "SELECT ?, COALESCE(MAX(order_index), -1) + 1, ? "
+            "FROM workout_blocks WHERE workout_id = ?",
+            (workout_id, block_type, workout_id),
         )
         await db.commit()
         return cur.lastrowid
@@ -1707,11 +1854,22 @@ async def list_all_sets_by_exercise(user_id: int) -> list[aiosqlite.Row]:
 
 
 async def list_sets_for_workout_exercise(workout_id: int, exercise_id: int) -> list[aiosqlite.Row]:
+    """Every set of one exercise in one workout, in the order the tracker shows
+    them.
+
+    Block order comes first because `round_index` restarts per block (see
+    `append_set`): an exercise logged, closed and reopened has two blocks whose
+    rounds both count from 1, so ordering by round alone would interleave them
+    — 1st set of block 2 between the 1st and 2nd of block 1. view_builder
+    merges blocks in `order_index` order, and anything indexing into this list
+    by what the user sees (editing "2: 100 8", carry-forward's "last set")
+    has to agree with it.
+    """
     cur = await conn().execute(
         "SELECT s.* FROM sets s "
         "JOIN workout_blocks b ON b.id = s.block_id "
         "WHERE b.workout_id = ? AND s.exercise_id = ? "
-        "ORDER BY s.round_index, s.order_in_round, s.id",
+        "ORDER BY b.order_index, s.round_index, s.order_in_round, s.id",
         (workout_id, exercise_id),
     )
     return await cur.fetchall()
@@ -1806,13 +1964,19 @@ async def append_routine_exercise(routine_id: int, exercise_id: int) -> None:
     """Add an exercise to the end of a routine that already exists — the "✏️ edit
     an already-saved program" path, as opposed to add_routine_exercise's use
     building a fresh routine where the caller tracks order_index itself.
+
+    The order_index is chosen inside the INSERT so two exercises added in quick
+    succession can't both read the same MAX and land on the same position —
+    see create_block.
     """
-    cur = await conn().execute(
-        "SELECT COALESCE(MAX(order_index), -1) + 1 FROM routine_exercises WHERE routine_id = ?",
-        (routine_id,),
-    )
-    row = await cur.fetchone()
-    await add_routine_exercise(routine_id, exercise_id, row[0])
+    async with _write_lock:
+        await conn().execute(
+            "INSERT INTO routine_exercises (routine_id, exercise_id, order_index, target) "
+            "SELECT ?, ?, COALESCE(MAX(order_index), -1) + 1, NULL "
+            "FROM routine_exercises WHERE routine_id = ?",
+            (routine_id, exercise_id, routine_id),
+        )
+        await conn().commit()
 
 
 async def remove_routine_exercise(routine_exercise_id: int) -> None:
@@ -2317,6 +2481,21 @@ async def list_food_entries(telegram_id: int, eaten_on: str) -> list[aiosqlite.R
     return await cur.fetchall()
 
 
+async def list_recent_food_entries(telegram_id: int, since: str, limit: int = 200) -> list[aiosqlite.Row]:
+    """Food entries from `since` (YYYY-MM-DD) onward, oldest first.
+
+    For the AI trainer, which reasons over a stretch of days rather than one
+    screen's worth: without it the coach advises on nutrition while blind to
+    the diary sitting in the same database.
+    """
+    cur = await conn().execute(
+        "SELECT * FROM food_entries WHERE telegram_id = ? AND eaten_on >= ? "
+        "ORDER BY eaten_on, id LIMIT ?",
+        (telegram_id, since, limit),
+    )
+    return await cur.fetchall()
+
+
 async def get_food_entry(entry_id: int) -> Optional[aiosqlite.Row]:
     cur = await conn().execute("SELECT * FROM food_entries WHERE id = ?", (entry_id,))
     return await cur.fetchone()
@@ -2373,19 +2552,29 @@ async def scale_user_set_weights(telegram_id: int, factor: float) -> None:
         await conn().commit()
 
 
-async def record_push(telegram_id: int, category: str, text: str) -> None:
+async def record_push(telegram_id: int, category: str, text: str, sent_on: str) -> None:
+    """Log a delivered push. `sent_on` is the recipient's own calendar date
+    (YYYY-MM-DD) — see has_push_today."""
     async with _write_lock:
         await conn().execute(
-            "INSERT INTO pushes (telegram_id, category, text, sent_at) VALUES (?, ?, ?, ?)",
-            (telegram_id, category, text, now_iso()),
+            "INSERT INTO pushes (telegram_id, category, text, sent_at, sent_on) VALUES (?, ?, ?, ?, ?)",
+            (telegram_id, category, text, now_iso(), sent_on),
         )
         await conn().commit()
 
 
 async def has_push_today(telegram_id: int, today: str) -> bool:
-    """Whether this user already got a daily-rotation push on this calendar date (YYYY-MM-DD)."""
+    """Whether this user already got a daily-rotation push on this calendar date (YYYY-MM-DD).
+
+    Matches on the stored local date, not on `date(sent_at)`: the caller asks
+    in the user's timezone, while sent_at is server time. For a user whose
+    19:00 falls after the server's midnight, the previous day's push carried
+    the *next* server date — so the check said "already pushed today" and
+    silently dropped every other day's push. `COALESCE` covers rows written
+    before the column existed.
+    """
     cur = await conn().execute(
-        "SELECT 1 FROM pushes WHERE telegram_id = ? AND date(sent_at) = ? LIMIT 1",
+        "SELECT 1 FROM pushes WHERE telegram_id = ? AND COALESCE(sent_on, date(sent_at)) = ? LIMIT 1",
         (telegram_id, today),
     )
     return await cur.fetchone() is not None

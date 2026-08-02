@@ -10,9 +10,14 @@ from dataclasses import dataclass, field
 from html import escape
 from typing import Literal
 
+import config
 from analytics import e1rm
 
 _WEEKDAYS_RU = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"]
+# Full names for prose ("понедельник — твой самый продуктивный день").
+WEEKDAY_NAMES_RU = [
+    "понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье",
+]
 
 UNIT_LABELS = {"kg": "кг", "lb": "lb"}
 
@@ -27,6 +32,12 @@ _TAG_RE = re.compile(r"<[^>]+>")
 # no screen at all.
 CAPTION_LIMIT = 1024
 MESSAGE_LIMIT = 4096
+
+# Название приёма пищи в дневнике: при выключенном КБЖУ туда попадает текст
+# пользователя как есть, а он ограничен только лимитом сообщения Telegram —
+# одна такая запись способна распереть экран дня за 4096 и сделать день
+# неоткрываемым (кнопки удаления живут на этом же экране).
+FOOD_DESC_LIMIT = 200
 
 # Worth folding only above this much content — see collapsible_if_long. Six lines
 # is twice what the collapsed box occupies; the character threshold catches prose,
@@ -62,6 +73,18 @@ def telegram_length(text: str) -> int:
     count toward the limit, and characters are measured in UTF-16 code units —
     so an emoji costs two, not one."""
     return len(_TAG_RE.sub("", text).encode("utf-16-le")) // 2
+
+
+def shorten(text: str, limit: int) -> str:
+    """Обрезать по границе слова с многоточием, если длиннее лимита."""
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    cut = text[:limit].rstrip()
+    space = cut.rfind(" ")
+    if space > limit // 2:
+        cut = cut[:space]
+    return cut.rstrip(" ,.;:—-") + "…"
 
 
 def collapsible_if_long(text: str) -> str:
@@ -283,21 +306,33 @@ def _delta_arrow(delta: float) -> str:
     return "↑" if delta > 0 else ("↓" if delta < 0 else "→")
 
 
-def format_tonnage(total_kg: float, unit: str = "kg") -> str:
+def to_kg(total: float, unit: str = "kg") -> float:
+    """Weights are stored in whatever unit the user picked, so anything compared
+    against a real-world quantity (a ton, an elephant) has to be normalized."""
+    return total / config.LB_PER_KG if unit == "lb" else total
+
+
+def format_tonnage(total: float, unit: str = "kg") -> str:
     """Session/lifetime tonnage as a full word ("тонны"/"тонн"), never abbreviated.
+
+    `total` is in the user's own unit. A ton is a ton, so the threshold and the
+    figure are computed in kilograms — a lb user lifting 20 000 lb has moved
+    9 tons, not 20. Below a ton there's nothing to convert: their own number in
+    their own unit is what they want to see.
 
     Russian grammar: a non-whole amount (e.g. "1.5 тонны") always takes the
     2-4 form regardless of the leading digit, so only a whole number of tons
     goes through the normal plural_ru rules.
     """
     u = UNIT_LABELS.get(unit, "кг")
+    total_kg = to_kg(total, unit)
     if total_kg >= 1000:
         tons = round(total_kg / 1000, 1)
         tons_str = format_weight(tons)
         forms = ("тонна", "тонны", "тонн")
         word = plural_ru(int(tons), forms) if tons == int(tons) else forms[1]
         return f"{tons_str} {word}"
-    return f"{total_kg:.0f}{u}"
+    return f"{total:.0f}{u}"
 
 
 def _collapse_formatted_sets(formatted: list[str]) -> list[str]:
@@ -365,7 +400,7 @@ def build_workout_summary(
         header += f" · {format_duration(duration_seconds)}"
     head_lines = [header]
     if note:
-        head_lines.append(f"📝 {note}")
+        head_lines.append(f"📝 {escape(note)}")
     head_lines.append("")
 
     def assemble(keep: list[BlockView]) -> str:
@@ -508,14 +543,19 @@ _TONNAGE_OBJECTS = [
 ]
 
 
-def format_tonnage_equivalent(total_kg: float, seed: int = 0) -> str | None:
+def format_tonnage_equivalent(total: float, seed: int = 0, unit: str = "kg") -> str | None:
     """A playful "это как N слонов 🐘" comparison clause, without restating the tonnage
     itself — callers fold it into whatever sentence already states the total.
 
     Picks whichever object gives a believable count (2..40); `seed` (e.g. the
     workout id) rotates the choice so it isn't always the same object. Returns
     None for a tonnage too small to compare (bodyweight-only or very light days).
+
+    `total` comes in the user's own unit and is converted first: the objects
+    below weigh what they weigh, so counting pounds against them inflated every
+    comparison by 2.2× for lb users.
     """
+    total_kg = to_kg(total, unit)
     if total_kg < 150:
         return None
     candidates = [
@@ -611,7 +651,7 @@ def build_workout_preview(
         header += f" · {format_duration(duration_seconds)}"
     lines = [header]
     if note:
-        lines.append(f"📝 {note}")
+        lines.append(f"📝 {escape(note)}")
     lines.append("")
     for block in blocks:
         lines.append(f"<b>{escape(block.exercise_name)}</b>")
@@ -756,8 +796,11 @@ def build_hall_of_fame(
     w = plural_ru(total_workouts, ("тренировка", "тренировки", "тренировок"))
     lines.append(f"🗓 Всего тренировок: <b>{total_workouts}</b> {w}")
 
-    if tonnage_kg >= 1000:
-        tons = round(tonnage_kg / 1000)
+    # `tonnage_kg` arrives in the user's own unit despite the name — a ton is a
+    # ton, so convert before comparing against one (see format_tonnage).
+    lifetime_kg = to_kg(tonnage_kg, unit)
+    if lifetime_kg >= 1000:
+        tons = round(lifetime_kg / 1000)
         tonnage_str = f"{tons} {plural_ru(tons, ('тонна', 'тонны', 'тонн'))}"
     else:
         tonnage_str = f"{tonnage_kg:.0f}{u}"
@@ -951,7 +994,22 @@ def format_progression_hint(suggestion, achieved: bool = False) -> str:
         goal = format_set(suggestion.target_weight, suggestion.target_reps)
     if achieved:
         return f"✅ Цель выполнена: {goal}"
-    return f"🎯 Цель: {goal}"
+    return f"🎯 Цель: {goal}{_progression_reason(suggestion)}"
+
+
+def _progression_reason(suggestion) -> str:
+    """Short "почему именно столько" clause, only where the number surprises.
+
+    An unexplained prescribed weight reads as arbitrary — the commonest
+    complaint about apps that hand out numbers. But this line is redrawn on
+    every logged set, so it earns its width only when the target jumps: the
+    weight went up because the rep range topped out. The "+1 повтор at the same
+    weight" case explains itself against the "В прошлый раз" line right above,
+    and a clause there would be noise on every single render.
+    """
+    if suggestion.action != "add_weight" or not suggestion.from_reps:
+        return ""
+    return f" — взял {suggestion.from_reps} повторов, добавляем вес"
 
 
 def format_comparison_line(e1rm_delta: float, unit: str = "kg") -> str:
@@ -1059,28 +1117,58 @@ def build_food_day_screen(date: dt.date, entries: list[FoodEntryView]) -> str:
             "я прикину калории и БЖУ, а ты подтвердишь."
         )
 
-    lines = [head, ""]
-    for i, e in enumerate(entries, start=1):
-        if i > 1:
-            # Пустая строка только МЕЖДУ приёмами — над чертой-разделителем её
-            # быть не должно, последний приём должен идти к ней вплотную.
-            lines.append("")
+    def render_entry(i: int, e: FoodEntryView) -> list[str]:
+        out = []
         photo = " 📷" if e.has_photo else ""
-        lines.append(f"<b>{i}. {escape(e.description)}</b>{photo}")
+        out.append(f"<b>{i}. {escape(shorten(e.description, FOOD_DESC_LIMIT))}</b>{photo}")
         items = e.items or []
         # Один компонент ничего не добавляет к названию приёма — не дублируем.
         # Больше одного — под сворачиваемую цитату, а не разворачиваем на весь
         # экран: раскладка нужна для точности, а не для чтения на каждый день.
         if len(items) > 1:
             breakdown = "\n".join(f"• {_item_line(item)}" for item in items)
-            lines.append(collapsible(f"<i>{breakdown}</i>"))
+            out.append(collapsible(f"<i>{breakdown}</i>"))
         # Калории приёма и его БЖУ — одной итоговой строкой под раскладкой,
         # а не калории наверху при названии и БЖУ отдельно внизу.
         totals = [p for p in (format_kcal(e.calories) if e.calories is not None else "",
                                _macros_line(e.protein, e.fat, e.carbs)) if p]
         if totals:
-            lines.append(f"<b><i>{' · '.join(totals)}</i></b>")
+            out.append(f"<b><i>{' · '.join(totals)}</i></b>")
+        return out
 
+    # Номер приёма — тот же, что на кнопке «🗑 N», поэтому нумерация считается
+    # по всему дню, а не по показанному: при обрезке уезжает начало списка, а
+    # номера оставшихся не должны съезжать относительно клавиатуры.
+    rendered = [render_entry(i, e) for i, e in enumerate(entries, start=1)]
+
+    def assemble(keep: list[list[str]]) -> str:
+        lines = [head, ""]
+        if len(keep) < len(rendered):
+            lines.append(f"<i>Показаны последние {len(keep)} из {len(rendered)} записей дня</i>")
+            lines.append("")
+        for j, block in enumerate(keep):
+            if j > 0:
+                # Пустая строка только МЕЖДУ приёмами — над чертой-разделителем её
+                # быть не должно, последний приём должен идти к ней вплотную.
+                lines.append("")
+            lines.extend(block)
+        lines.append(_food_day_footer(entries))
+        return "\n".join(lines)
+
+    # Итоги дня считаются по всем записям, даже если часть не поместилась на
+    # экран: «Итого за день» обязано быть честным, иначе обрезка тихо занижает
+    # съеденное. Обрезается только список — с головы, самое старое.
+    kept = rendered
+    text = assemble(kept)
+    while len(kept) > 1 and telegram_length(text) > MESSAGE_LIMIT:
+        kept = kept[1:]
+        text = assemble(kept)
+    return text
+
+
+def _food_day_footer(entries: list[FoodEntryView]) -> str:
+    """Итоговая строка дня плюс подсказка — то, что идёт под списком приёмов."""
+    lines: list[str] = []
     known = [e.calories for e in entries if e.calories is not None]
     n = plural_ru(len(entries), ("приём", "приёма", "приёмов"))
     day_macros = _macros_line(

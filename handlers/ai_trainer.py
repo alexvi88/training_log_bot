@@ -393,7 +393,8 @@ async def ai_comment_workout(callback: CallbackQuery, state: FSMContext):
             return
         await db.set_workout_ai_comment(workout_id, comment)
 
-    new_text = (callback.message.html_text or "") + "\n" + formatting.build_ai_comment_block(comment)
+    comment_block = formatting.build_ai_comment_block(comment)
+    new_text = (callback.message.html_text or "") + "\n" + comment_block
     existing_kb = callback.message.reply_markup
     rows = existing_kb.inline_keyboard if existing_kb else []
     new_rows = [
@@ -401,6 +402,15 @@ async def ai_comment_workout(callback: CallbackQuery, state: FSMContext):
     ]
     new_rows = [r for r in new_rows if r]
     new_markup = InlineKeyboardMarkup(inline_keyboard=new_rows) if new_rows else None
+
+    if formatting.telegram_length(new_text) > formatting.MESSAGE_LIMIT:
+        # A long card plus a comment can pass Telegram's cap, and the edit was
+        # wrapped in suppress() — so the user was told the comment was coming
+        # and then nothing changed. Deliver it as its own message instead.
+        with suppress(TelegramBadRequest):
+            await callback.message.edit_reply_markup(reply_markup=new_markup)
+        await callback.message.answer(comment_block, parse_mode="HTML")
+        return
     with suppress(TelegramBadRequest):
         await callback.message.edit_text(new_text, parse_mode="HTML", reply_markup=new_markup)
 
@@ -411,6 +421,26 @@ async def _download_photo_as_data_url(message: Message) -> Optional[str]:
         return None
     buf = await message.bot.download(photo)
     return "data:image/jpeg;base64," + base64.b64encode(buf.read()).decode()
+
+
+def _try_claim_busy(user_id: int) -> bool:
+    """Atomically check-and-reserve `_busy` for this user.
+
+    Must be called with no `await` between the membership check and the
+    `.add()` — asyncio's cooperative scheduling guarantees two back-to-back
+    synchronous statements can't be interleaved by another task, which two
+    separately-awaited steps can. The previous shape (check here, `.add()`
+    several awaits later inside `_handle_question`, after reading the daily
+    count and FSM state) left exactly that gap: two fast messages from the
+    same user both passed the check before either reservation landed, so both
+    reached the model — double the Grok cost, and the daily-question limit
+    (charged only after a successful answer) could be exceeded by however many
+    requests raced through the gap.
+    """
+    if user_id in _busy:
+        return False
+    _busy.add(user_id)
+    return True
 
 
 async def _handle_question(
@@ -425,12 +455,12 @@ async def _handle_question(
     question — то, что реально уходит модели на этот ход (текст +, если есть, фото).
     history_question — облегчённая версия для ai_history/БД: фото туда не попадают
     (не пересылать же их каждый следующий ход), только текст/подпись или заглушка.
+
+    Caller owns the `_busy` reservation end-to-end (claimed atomically before
+    any await, released in the caller's `finally`) — this function assumes the
+    reservation is already held and never touches `_busy` itself.
     """
     user_id = message.from_user.id
-    if user_id in _busy:
-        await message.reply("Секунду, ещё думаю над прошлым вопросом 😅")
-        return
-
     asked_today = await db.get_ai_question_count_today(user_id)
     if asked_today >= config.AI_QUESTION_DAILY_LIMIT:
         await message.reply(
@@ -443,7 +473,6 @@ async def _handle_question(
 
     # The daily counter is charged only once there's an answer to show for it —
     # a provider outage shouldn't cost the user one of their questions.
-    _busy.add(user_id)
     running_text = _pick(RUNNING_REPLIES)
     placeholder = await message.answer(running_text)
     display = _RunningDisplay(placeholder, running_text)
@@ -475,7 +504,6 @@ async def _handle_question(
         running_task.cancel()
         with suppress(asyncio.CancelledError):
             await running_task
-        _busy.discard(user_id)
 
     await db.increment_ai_question_count(user_id)
     # Warn before the wall, not at it — the old behaviour only ever mentioned the
@@ -525,27 +553,40 @@ async def ai_question(message: Message, state: FSMContext):
     question = (message.text or "").strip()
     if not question:
         return
-    await _handle_question(message, state, question, history_question=question)
+    user_id = message.from_user.id
+    if not _try_claim_busy(user_id):
+        await message.reply("Секунду, ещё думаю над прошлым вопросом 😅")
+        return
+    try:
+        await _handle_question(message, state, question, history_question=question)
+    finally:
+        _busy.discard(user_id)
 
 
 @router.message(AITrainerFlow.chatting, F.photo)
 async def ai_photo_question(message: Message, state: FSMContext):
-    if message.from_user.id in _busy:
+    user_id = message.from_user.id
+    # Claimed before the first await (the photo download below) — the previous
+    # shape checked `_busy` here but only reserved it deep inside
+    # _handle_question, leaving the whole download+dispatch window unguarded.
+    if not _try_claim_busy(user_id):
         await message.reply("Секунду, ещё думаю над прошлым вопросом 😅")
         return
+    try:
+        caption = (message.caption or "").strip()
+        question = caption or DEFAULT_PHOTO_QUESTION
 
-    caption = (message.caption or "").strip()
-    question = caption or DEFAULT_PHOTO_QUESTION
+        image_data_url = await _download_photo_as_data_url(message)
+        if image_data_url is None:
+            await message.reply("Фото слишком большое, пришли поменьше.")
+            return
 
-    image_data_url = await _download_photo_as_data_url(message)
-    if image_data_url is None:
-        await message.reply("Фото слишком большое, пришли поменьше.")
-        return
-
-    history_question = f"[фото] {caption}" if caption else "[прислал фото]"
-    await _handle_question(
-        message, state, question, history_question=history_question, image_data_url=image_data_url
-    )
+        history_question = f"[фото] {caption}" if caption else "[прислал фото]"
+        await _handle_question(
+            message, state, question, history_question=history_question, image_data_url=image_data_url
+        )
+    finally:
+        _busy.discard(user_id)
 
 
 async def _download_voice_as_file(message: Message):
@@ -559,34 +600,38 @@ async def _download_voice_as_file(message: Message):
 
 @router.message(AITrainerFlow.chatting, F.voice)
 async def ai_voice_question(message: Message, state: FSMContext):
-    if message.from_user.id in _busy:
+    user_id = message.from_user.id
+    if not _try_claim_busy(user_id):
         await message.reply("Секунду, ещё думаю над прошлым вопросом 😅")
         return
-    if not ai_trainer.is_voice_configured():
-        await message.reply("Голосовой ввод пока не настроен, напиши вопрос текстом.")
-        return
-    if message.voice.duration and message.voice.duration > MAX_VOICE_SECONDS:
-        await message.reply("Голосовое слишком длинное, запиши покороче.")
-        return
-
-    voice_file = await _download_voice_as_file(message)
-    if voice_file is None:
-        await message.reply("Голосовое слишком большое, запиши покороче.")
-        return
-
     try:
-        question = await ai_trainer.transcribe_voice(voice_file, message.from_user.id)
-    except Exception:
-        logger.exception("AI trainer voice transcription failed for user %s", message.from_user.id)
-        await message.reply("⚠️ Не получилось распознать голосовое, попробуй ещё раз или напиши текстом.")
-        return
+        if not ai_trainer.is_voice_configured():
+            await message.reply("Голосовой ввод пока не настроен, напиши вопрос текстом.")
+            return
+        if message.voice.duration and message.voice.duration > MAX_VOICE_SECONDS:
+            await message.reply("Голосовое слишком длинное, запиши покороче.")
+            return
 
-    if not question:
-        await message.reply("🤐 Не удалось разобрать речь, попробуй ещё раз.")
-        return
+        voice_file = await _download_voice_as_file(message)
+        if voice_file is None:
+            await message.reply("Голосовое слишком большое, запиши покороче.")
+            return
 
-    # Echo what was heard: on a misheard question the answer otherwise looks like
-    # the trainer hallucinating, with nothing pointing at the transcription. Set
-    # logging already does this ("🎙 Записал: …").
-    await message.reply(f"🎙 <i>{escape(question)}</i>", parse_mode="HTML")
-    await _handle_question(message, state, question, history_question=question)
+        try:
+            question = await ai_trainer.transcribe_voice(voice_file, user_id)
+        except Exception:
+            logger.exception("AI trainer voice transcription failed for user %s", user_id)
+            await message.reply("⚠️ Не получилось распознать голосовое, попробуй ещё раз или напиши текстом.")
+            return
+
+        if not question:
+            await message.reply("🤐 Не удалось разобрать речь, попробуй ещё раз.")
+            return
+
+        # Echo what was heard: on a misheard question the answer otherwise looks
+        # like the trainer hallucinating, with nothing pointing at the
+        # transcription. Set logging already does this ("🎙 Записал: …").
+        await message.reply(f"🎙 <i>{escape(question)}</i>", parse_mode="HTML")
+        await _handle_question(message, state, question, history_question=question)
+    finally:
+        _busy.discard(user_id)

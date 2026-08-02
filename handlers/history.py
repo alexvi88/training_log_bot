@@ -53,7 +53,7 @@ async def show_history_list(callback: CallbackQuery, state: FSMContext, page: in
     await callback.answer()
 
 
-@router.message(StateFilter(HistoryFlow.browsing))
+@router.message(StateFilter(HistoryFlow.browsing), F.text)
 async def hist_search(message: Message, state: FSMContext):
     """Typing while browsing history filters it by exercise name.
 
@@ -149,7 +149,7 @@ async def build_hall_of_fame_text(user_id: int, max_chars: int | None = None) ->
     dates = [dt.date.fromisoformat(d) for d in await db.list_finished_workout_dates(user_id)]
     best_streak = analytics.max_week_streak(dates)
     top = await _top_lifts(user_id, formula)
-    equivalent = formatting.format_tonnage_equivalent(agg["tonnage"], seed=user_id)
+    equivalent = formatting.format_tonnage_equivalent(agg["tonnage"], seed=user_id, unit=unit)
     return formatting.build_hall_of_fame(
         total_workouts=total_workouts,
         tonnage_kg=agg["tonnage"],
@@ -414,7 +414,7 @@ async def prog_group_page(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(StateFilter(ProgressFlow.picking_group, ProgressFlow.picking_exercise))
+@router.message(StateFilter(ProgressFlow.picking_group, ProgressFlow.picking_exercise), F.text)
 async def prog_search_text(message: Message, state: FSMContext):
     """Typing while browsing Progress searches the user's own exercises instead
     of falling through to the fallback router's "Не понял" — same pattern as

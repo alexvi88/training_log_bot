@@ -1,5 +1,6 @@
 """The "555кг? Записываем?" gate in front of a set whose weight looks like a
 typo — nothing reaches the DB until the question is answered."""
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -72,6 +73,40 @@ async def test_yes_writes_the_set(fresh_db, user_id):
     assert data["pending_weight_confirm"] is None
     # ...and the tracker stops repeating the warning for a weight already confirmed.
     assert data["confirmed_weights"][ex_id] == 555.0
+
+
+@pytest.mark.asyncio
+async def test_double_tap_on_yes_does_not_duplicate_the_set(fresh_db, user_id):
+    """Two fast taps on "✅ Да, записать" both read `data` before either
+    finishes popping pending_weight_confirm — each then works from its own
+    snapshot, so popping alone doesn't stop the second one from writing the
+    same sets again.
+
+    The window is opened explicitly here: MemoryStorage never suspends, so the
+    first call would otherwise run to completion before the second starts. In
+    production the real storage and the Telegram call inside the pop both
+    suspend right there, which is exactly what the sleep(0) stands in for.
+    """
+    db = fresh_db
+    state, _ex_id, block_id = await _setup(db, user_id)
+    await workout.log_set_text(_make_message(user_id, "555 5"), state)
+
+    original_get_data = state.get_data
+
+    async def yielding_get_data():
+        data = await original_get_data()
+        await asyncio.sleep(0)
+        return data
+
+    state.get_data = yielding_get_data
+    workout._confirming.discard(user_id)  # isolate from other tests' leftovers
+    await asyncio.gather(
+        workout.live_weight_confirm(_make_callback(user_id, "live:wconf:yes"), state),
+        workout.live_weight_confirm(_make_callback(user_id, "live:wconf:yes"), state),
+    )
+
+    sets = await db.list_sets_for_block(block_id)
+    assert [(s["weight"], s["reps"]) for s in sets] == [(555.0, 5)]
 
 
 @pytest.mark.asyncio

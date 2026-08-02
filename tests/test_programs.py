@@ -138,3 +138,19 @@ async def test_instantiating_a_full_program_creates_all_days(user_id):
         rexs = await dbmod.list_routine_exercises(by_name[day_name]["id"])
         assert [r["display_name"] for r in rexs] == [ex for ex, _target in exercises]
         assert [r["target"] for r in rexs] == [target for _ex, target in exercises]
+
+
+async def test_backfill_does_not_hide_exercises_added_after_it_ran(user_id):
+    """The backfill can't distinguish a leftover from a ready-made program from
+    an exercise the user just picked out of "📋 Выбрать из шаблонов" and hasn't
+    trained yet. Running it on every startup made such an exercise disappear at
+    the next restart, so it runs once per DB and never revisits later rows."""
+    gid = await _group_id("Грудь")
+    await dbmod._run_one_shot_migrations()  # the once-per-DB pass
+
+    await dbmod.create_exercise(user_id, "Присед со штангой", gid)
+    assert await dbmod.count_user_exercises(user_id) == 1
+
+    await dbmod._run_one_shot_migrations()  # every later startup
+
+    assert await dbmod.count_user_exercises(user_id) == 1

@@ -583,9 +583,18 @@ def test_logging_hint_puts_goal_on_its_own_line():
     assert "Цель" in lines[1]
 
 
-def test_progression_hint_add_weight_is_plain_goal_without_nudge():
+def test_progression_hint_says_why_the_weight_went_up():
+    """A jumped target looks arbitrary without the reason behind it — the
+    commonest complaint about apps that prescribe weights."""
     s = analytics.suggest_progression([(100.0, 10)])
-    assert formatting.format_progression_hint(s) == "🎯 Цель: 102.5×9"
+    assert formatting.format_progression_hint(s) == "🎯 Цель: 102.5×9 — взял 10 повторов, добавляем вес"
+
+
+def test_progression_hint_stays_terse_when_only_a_rep_is_added():
+    """This line is redrawn on every logged set, so it earns extra width only
+    when the number jumps; "+1 повтор" reads off the "В прошлый раз" line above."""
+    s = analytics.suggest_progression([(100.0, 7)])
+    assert formatting.format_progression_hint(s) == "🎯 Цель: 100×8"
 
 
 def test_logging_hint_uses_the_exercises_own_weight_step():

@@ -1,14 +1,18 @@
 """Push delivery: every push goes out as the coach photo with the text as its caption."""
 
+import datetime as dt
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from aiogram.exceptions import TelegramBadRequest
 
 import engagement
 import push_texts
 
 pytestmark = pytest.mark.asyncio
+
+_TODAY = dt.date(2026, 5, 4)
 
 
 def _bot(file_id: str = "AgAD_new_upload"):
@@ -30,24 +34,24 @@ async def test_push_is_sent_as_a_photo_with_the_text_as_caption(fresh_db, user_i
     bot = _bot()
     decision = engagement.PushDecision(push_texts.SKIP_3, "ПРИВЕТ АТЛЕТ, третий день без зала.")
 
-    await engagement._deliver(bot, user_id, decision)
+    await engagement._deliver(bot, user_id, decision, _TODAY)
 
     bot.send_photo.assert_awaited_once()
     kwargs = bot.send_photo.await_args.kwargs
     assert kwargs["chat_id"] == user_id
     assert kwargs["caption"] == decision.text
     assert kwargs["reply_markup"] is not None
-    assert await fresh_db.has_push_today(user_id, __import__("datetime").date.today().isoformat())
+    assert await fresh_db.has_push_today(user_id, _TODAY.isoformat())
 
 
 async def test_push_upload_is_cached_and_reused_by_file_id(fresh_db, user_id):
     bot = _bot(file_id="AgAD_cached")
     decision = engagement.PushDecision(push_texts.SKIP_3, "ПРИВЕТ АТЛЕТ, третий день без зала.")
 
-    await engagement._deliver(bot, user_id, decision)
+    await engagement._deliver(bot, user_id, decision, _TODAY)
     first_photo = bot.send_photo.await_args.kwargs["photo"]
 
-    await engagement._deliver(bot, user_id, decision)
+    await engagement._deliver(bot, user_id, decision, _TODAY)
     second_photo = bot.send_photo.await_args.kwargs["photo"]
 
     assert second_photo == "AgAD_cached"
@@ -58,7 +62,7 @@ async def test_push_without_cta_omits_the_keyboard(fresh_db, user_id):
     bot = _bot()
     decision = engagement.PushDecision(push_texts.WEEKLY_DIGEST, "текст", with_cta=False)
 
-    await engagement._deliver(bot, user_id, decision)
+    await engagement._deliver(bot, user_id, decision, _TODAY)
 
     assert bot.send_photo.await_args.kwargs["reply_markup"] is None
 
@@ -69,8 +73,46 @@ async def test_a_caption_over_telegrams_limit_is_truncated(fresh_db, user_id):
     long_text = "ПРИВЕТ АТЛЕТ, " + "а" * 2000
     decision = engagement.PushDecision(push_texts.AI_WEEKLY, long_text)
 
-    await engagement._deliver(bot, user_id, decision)
+    await engagement._deliver(bot, user_id, decision, _TODAY)
 
     caption = bot.send_photo.await_args.kwargs["caption"]
     assert len(caption) == engagement.CAPTION_LIMIT
     assert caption.endswith("…")
+
+
+async def test_one_failed_delivery_does_not_stop_the_rest_of_the_tick(fresh_db, user_id, monkeypatch):
+    """_deliver runs inside a loop over every due user. An exception escaping it
+    aborted the whole tick, so everyone after the failing recipient got nothing
+    — and by the next tick their send hour had passed, losing the push for the
+    day rather than merely delaying it."""
+    import db as dbmod
+    import engagement as eng
+
+    other = (await dbmod.get_or_create_user(telegram_id=333, username="third"))["telegram_id"]
+    for uid in (user_id, other):
+        await dbmod.create_finished_workout(
+            uid, started_at="2026-07-01T10:00:00", finished_at="2026-07-01T11:00:00"
+        )
+
+    delivered = []
+
+    async def send_photo(*, chat_id, **kwargs):
+        if not delivered:
+            delivered.append(chat_id)
+            raise TelegramBadRequest(method=MagicMock(), message="chat not found")
+        delivered.append(chat_id)
+        return SimpleNamespace(photo=[SimpleNamespace(file_id="fid")])
+
+    bot = MagicMock()
+    bot.send_photo = AsyncMock(side_effect=send_photo)
+
+    async def build(telegram_id, today):
+        return engagement.PushDecision(push_texts.SKIP_3, "текст")
+
+    monkeypatch.setattr(eng, "build_daily_push", build)
+    monkeypatch.setattr(eng, "is_send_hour", lambda tz, hour: True)
+    monkeypatch.setattr(eng, "SEND_DELAY", 0)
+
+    await eng._send_daily_pushes(bot)
+
+    assert sorted(delivered) == sorted([user_id, other])

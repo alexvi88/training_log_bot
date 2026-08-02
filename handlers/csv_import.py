@@ -9,12 +9,13 @@ from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
+import achievement_sync
 import db
 import formatting
 import keyboards
 import ui
 from fsm import ImportFlow
-from parser import ParseError, parse_ru_date
+from parser import MAX_REPS, MAX_WEIGHT, ParseError, parse_ru_date
 
 router = Router(name="csv_import")
 
@@ -199,6 +200,17 @@ def _build_workout_groups(rows: list[list[str]], mapping: dict[str, int]) -> lis
             raise ParseError(f"Строка {line_no}: пустое название упражнения")
         if reps <= 0:
             raise ParseError(f"Строка {line_no}: повторы должны быть больше 0")
+        # Same ceilings the typed-set parser enforces, and for the same reason:
+        # an impossible set imported here is silently permanent — it becomes the
+        # exercise's all-time record, joins lifetime tonnage, and unlocks weight
+        # clubs that are never revoked. A stray column or a units mix-up in
+        # someone else's export is exactly how that gets in.
+        if reps > MAX_REPS:
+            raise ParseError(f"Строка {line_no}: слишком много повторов ({reps})")
+        if weight < 0:
+            raise ParseError(f"Строка {line_no}: отрицательный вес ({weight_text})")
+        if weight > MAX_WEIGHT:
+            raise ParseError(f"Строка {line_no}: слишком большой вес ({weight_text})")
 
         date_iso = date_val.isoformat()
         if date_iso not in groups:
@@ -302,6 +314,12 @@ async def import_save(callback: CallbackQuery, state: FSMContext):
             await db.touch_exercise_last_used(ex_id)
             for idx, (weight, reps, rpe) in enumerate(entry["sets"], start=1):
                 await db.add_set(block_id, ex_id, idx, 0, weight, reps, rpe)
+
+    # A year of imported history can complete streaks, weight clubs and tonnage
+    # badges all at once. Without this the grid stays empty until the next live
+    # workout happens to trigger an evaluation — the same resync the history and
+    # edit screens already run after changing the past.
+    await achievement_sync.resync(user_id)
 
     await state.clear()
     # show_settings redraws this very message, so a "✅ Импортировано N" written

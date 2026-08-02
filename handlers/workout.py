@@ -39,7 +39,14 @@ import ui
 import view_builder
 import voice_parse
 from fsm import WorkoutFlow
-from parser import ParsedSet, ParseError, parse_ru_date, parse_set_edit, parse_sets_line
+from parser import (
+    ParsedSet,
+    ParseError,
+    parse_quick_workout,
+    parse_ru_date,
+    parse_set_edit,
+    parse_sets_line,
+)
 
 router = Router(name="workout")
 
@@ -65,11 +72,23 @@ async def _attach_ai_comment(
             )
         return
     await db.set_workout_ai_comment(workout_id, comment)
-    new_text = base_text + "\n" + formatting.build_ai_comment_block(comment)
+    comment_block = formatting.build_ai_comment_block(comment)
+    new_text = base_text + "\n" + comment_block
+    card_kb = keyboards.workout_card_keyboard(workout_id, show_ai_button=False)
+    if formatting.telegram_length(new_text) > formatting.MESSAGE_LIMIT:
+        # A long card plus a comment can pass Telegram's cap; the edit is
+        # suppressed on failure, so the comment would just never appear.
+        with suppress(TelegramBadRequest):
+            await bot.edit_message_reply_markup(
+                chat_id=chat_id, message_id=message_id, reply_markup=card_kb
+            )
+        with suppress(TelegramBadRequest):
+            await bot.send_message(chat_id=chat_id, text=comment_block, parse_mode="HTML")
+        return
     with suppress(TelegramBadRequest):
         await bot.edit_message_text(
             chat_id=chat_id, message_id=message_id, text=new_text, parse_mode="HTML",
-            reply_markup=keyboards.workout_card_keyboard(workout_id, show_ai_button=False),
+            reply_markup=card_kb,
         )
 
 
@@ -525,6 +544,13 @@ _ONBOARDING = (
     "1️⃣ Жми «🏋️ НАЧАТЬ ТРЕНИРОВКУ»\n"
     "2️⃣ Выбирай группу мышц и упражнение\n"
     "3️⃣ Пиши вес и повторы, например «100 8» (или «8» для своего веса)\n\n"
+    "Не хочешь собирать тренировку сам — на первом же экране есть "
+    "«✨ Готовые программы»: выбрал сплит, и упражнения на каждый день уже "
+    "расставлены.\n\n"
+    "Что ещё умею:\n"
+    "🎙 подход можно наговорить голосовым — «сто на восемь»\n"
+    "🤖 «AI-тренер» видит твою историю и отвечает на вопросы по ней\n"
+    "🍽 «Дневник питания» считает КБЖУ по фото или описанию\n\n"
     "Дальше я сам посчитаю рекорды и прогресс. Погнали? 👇"
 )
 
@@ -536,6 +562,39 @@ _ONBOARDING = (
 # menu view except the first one after something actually changed — matplotlib
 # is the expensive part of _menu_view, not the DB lookups above it.
 _heatmap_cache: dict[int, tuple[tuple, bytes]] = {}
+
+
+# Guards "live:wconf:*" against a double tap: aiogram can process two callbacks
+# from the same user concurrently, and each one reads its own snapshot of the
+# FSM data — so one task clearing pending_weight_confirm doesn't stop the other
+# task's already-read copy from still holding it. See _try_claim_weight_confirm.
+_confirming: set[int] = set()
+
+
+# The event loop only keeps weak references to running tasks, so a fire-and-forget
+# create_task() whose only reference is the loop's own can be garbage-collected
+# mid-flight: the record message would never be tidied away, or the AI comment
+# would silently never arrive. Holding a strong reference until the task is done
+# is the documented fix.
+_background_tasks: set[asyncio.Task] = set()
+
+
+def _spawn(coro) -> asyncio.Task:
+    """Run `coro` in the background, keeping it referenced until it finishes."""
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return task
+
+
+def _try_claim_weight_confirm(user_id: int) -> bool:
+    """Atomically check-and-reserve `_confirming` for this user — no `await`
+    between the membership check and the `.add()`, same reasoning as
+    ai_trainer._try_claim_busy."""
+    if user_id in _confirming:
+        return False
+    _confirming.add(user_id)
+    return True
 
 
 async def _menu_view(user_id: int) -> tuple[str, bytes | None]:
@@ -571,7 +630,11 @@ async def _send_menu(message: Message, text: str, png: bytes | None, keyboard) -
 
 
 async def _main_menu_kb(user_id: int, active) -> InlineKeyboardMarkup:
-    return keyboards.main_menu(bool(active))
+    # The quick-log entry is offered only while the diary is empty: it exists to
+    # get a first record in, and once there is history the normal flows are
+    # better (they know the exercises, the targets and the progression).
+    has_history = await db.count_workouts(user_id) > 0
+    return keyboards.main_menu(bool(active), show_quick_log=not has_history)
 
 
 _WORKOUT_SCAFFOLD_KEYS = (
@@ -581,6 +644,23 @@ _WORKOUT_SCAFFOLD_KEYS = (
     # and back shouldn't make the AI-тренер forget the conversation in progress.
     "ai_history",
 )
+
+
+async def _reset_new_workout_scaffold(state: FSMContext) -> None:
+    """Wipe every per-workout FSM key before starting a brand-new workout.
+
+    `_clear_state_keep_workout` deliberately keeps this scaffolding around when
+    the user steps out to the menu — but the flip side is that starting a
+    fresh workout (a normal "start" tap, or finishing/discarding a stale one
+    and starting another) must explicitly clear it. Without this, a stale
+    workout's `open_exercises`/`open_blocks` map ("exercise → block_id of the
+    *previous* workout") survives into the new one: the picker shows a phantom
+    "Открыто сейчас: …", and logging into that tab writes the new set's block
+    into yesterday's already-finished workout instead of today's.
+    """
+    keys = {*_WORKOUT_SCAFFOLD_KEYS, "confirmed_weights", "exercise_targets", "planned_blocks"}
+    keys.discard("ai_history")  # not workout scaffolding — the AI chat survives across workouts on purpose
+    await state.update_data(**{key: None for key in keys})
 
 
 async def _clear_state_keep_workout(state: FSMContext) -> None:
@@ -694,6 +774,12 @@ async def stale_finish_workout(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
         return
     await db.finish_workout(workout_id, finished_at=workout["started_at"])
+    # This path bypasses _finalize_workout, so nothing else would evaluate
+    # badges for it: the workout counts toward streaks, tonnage and weight clubs
+    # the moment it's finished, but the grid wouldn't catch up until some later
+    # workout happened to trigger an evaluation.
+    started_at = dt.datetime.fromisoformat(workout["started_at"])
+    await _evaluate_achievements(callback.from_user.id, workout_id, started_at, None)
     await ui.safe_edit(callback, "✅ Тренировка завершена задним числом.")
     await callback.answer()
 
@@ -792,11 +878,13 @@ async def start_workout(callback: CallbackQuery, state: FSMContext):
     # gave up on its own, ~10s later.
     await callback.answer()
     await _ensure_user(callback.from_user.id, callback.from_user.username)
-    active = await db.get_active_workout(callback.from_user.id)
-    if active:
-        await _enter_live(callback, state, active["id"])
+    # Claiming the workout in one atomic step, rather than checking and then
+    # creating, is what stops a double tap from opening two of them.
+    workout_id, created = await db.get_or_create_active_workout(callback.from_user.id)
+    if not created:
+        await _enter_live(callback, state, workout_id)
         return
-    workout_id = await db.create_workout(callback.from_user.id)
+    await _reset_new_workout_scaffold(state)
     await _delete_message(callback.message)
     sent = await callback.message.answer("🏋️ Тренировка начата")
     await state.update_data(
@@ -805,6 +893,93 @@ async def start_workout(callback: CallbackQuery, state: FSMContext):
     )
     await state.set_state(WorkoutFlow.picking_group)
     await _picker_screen_groups(callback, state, show_program_button=True)
+
+
+QUICK_LOG_PROMPT = (
+    "✍️ <b>Запиши тренировку одной строкой</b>\n\n"
+    "Упражнение, вес и повторы — через запятую:\n"
+    "<code>жим 80x8x3, присед 100x5, подтягивания 12</code>\n\n"
+    "Сохраню как сегодняшнюю тренировку. Упражнений, которых у тебя ещё нет, "
+    "заведу сам."
+)
+
+# Unknown names go here rather than stopping to ask for a muscle group each —
+# the same trade-off the CSV import's "создать все" makes, and the group is
+# editable later in ⚙️ Упражнения.
+_QUICK_LOG_GROUP = "Другое"
+
+
+@router.callback_query(F.data == "menu:quicklog")
+async def menu_quick_log(callback: CallbackQuery, state: FSMContext):
+    await _clear_state_keep_workout(state)
+    await state.set_state(WorkoutFlow.quick_log)
+    await ui.safe_edit(
+        callback, QUICK_LOG_PROMPT,
+        reply_markup=keyboards.cancel_keyboard("quick:cancel"), parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.callback_query(StateFilter(WorkoutFlow.quick_log), F.data == "quick:cancel")
+async def quick_log_cancel(callback: CallbackQuery, state: FSMContext):
+    await _show_main_menu(callback, state)
+    await callback.answer()
+
+
+async def _resolve_quick_exercise(user_id: int, name: str) -> int:
+    """The user's exercise of that name, forking a catalog template or creating
+    one if there isn't one yet."""
+    existing = await db.find_exercise_by_name(user_id, name)
+    if existing:
+        return existing["id"]
+    from_template = await db.get_or_create_user_exercise_by_name(user_id, name)
+    if from_template is not None:
+        return from_template
+    groups = await db.list_muscle_groups(user_id)
+    group_id = next(
+        (g["id"] for g in groups if g["name"] == _QUICK_LOG_GROUP),
+        groups[0]["id"] if groups else None,
+    )
+    return await db.create_exercise(user_id, name, group_id)
+
+
+@router.message(StateFilter(WorkoutFlow.quick_log), F.text)
+async def quick_log_entered(message: Message, state: FSMContext):
+    """Save a whole past session typed as one line, as a finished workout today.
+
+    Nothing about it is live: there is no tracker, no picker and no finish step,
+    because the session already happened — the user is transcribing, not
+    training. That's the point of the flow (see keyboards.main_menu's
+    show_quick_log).
+    """
+    user_id = message.from_user.id
+    try:
+        entries = parse_quick_workout(message.text)
+    except ParseError as e:
+        await message.reply(e.message)
+        return
+
+    user = await db.get_user(user_id)
+    today = timeutil.user_today(user)
+    started_at = f"{today.isoformat()}T12:00:00"
+    workout_id = await db.create_finished_workout(user_id, started_at, started_at)
+    for entry in entries:
+        ex_id = await _resolve_quick_exercise(user_id, entry.name)
+        block_id = await db.create_block(workout_id, "single")
+        await db.add_block_exercise(block_id, ex_id, 0)
+        await db.touch_exercise_last_used(ex_id)
+        for parsed in entry.sets:
+            await db.append_set(block_id, ex_id, 0, parsed.weight, parsed.reps, parsed.rpe)
+
+    await achievement_sync.resync(user_id)
+    await state.clear()
+
+    workout = await db.get_workout(workout_id)
+    card = await _finished_workout_card_text(workout, await db.get_user(user_id), None)
+    await message.answer(
+        card, parse_mode="HTML",
+        reply_markup=keyboards.workout_card_keyboard(workout_id),
+    )
 
 
 REPEAT_PAGE_SIZE = 6
@@ -1043,6 +1218,42 @@ async def _enter_live(
 
 # ---------- picker: add an exercise (either to start, or alongside what's already open) ----------
 
+# Only groups this far from recovered are worth naming: the point of the line is
+# "не грузи это сегодня", and a list including everything at 100% is just noise.
+_RECOVERY_MENTION_BELOW = 85
+_RECOVERY_MAX_MENTIONS = 3
+
+
+async def _recovery_line(user_id: int, groups) -> str:
+    """"💤 Ещё не отдохнули: ноги 40% · спина 70%" — or "" when everything is
+    fresh, which is the common case and needs no line at all.
+
+    Reuses what's already logged rather than asking the user anything: a group
+    is "spent" in proportion to how many sets it took and how long ago (see
+    analytics.recovery_percent). It's a nudge on the screen where the choice is
+    made, not a verdict — nothing is blocked or hidden.
+    """
+    last = await db.last_session_by_group(user_id)
+    if not last:
+        return ""
+    today = timeutil.user_today(await db.get_user(user_id))
+    spent = []
+    for group in groups:
+        entry = last.get(group["id"])
+        if entry is None:
+            continue
+        day, sets_done = entry
+        percent = analytics.recovery_percent(dt.date.fromisoformat(day), sets_done, today)
+        if percent < _RECOVERY_MENTION_BELOW:
+            spent.append((percent, group["name"]))
+    if not spent:
+        return ""
+    spent.sort()
+    shown = spent[:_RECOVERY_MAX_MENTIONS]
+    parts = " · ".join(f"{escape(name.lower())} {percent}%" for percent, name in shown)
+    return f"💤 Ещё не отдохнули: {parts}"
+
+
 async def _picker_screen_groups(callback: CallbackQuery, state: FSMContext, show_program_button: bool = False):
     data = await state.get_data()
     user = await db.get_user(callback.from_user.id)
@@ -1050,6 +1261,9 @@ async def _picker_screen_groups(callback: CallbackQuery, state: FSMContext, show
     # actually trains most should be first, not alphabetical/catalog order.
     groups = await db.list_muscle_groups(callback.from_user.id, order_by_usage=True)
     hint = "Выбери группу мышц или найди упражнение по названию:"
+    recovery = await _recovery_line(callback.from_user.id, groups)
+    if recovery:
+        hint = recovery + "\n" + hint
     open_ids = data.get("open_exercises") or []
     partner_buttons: list[tuple[int, str]] = []
     if open_ids:
@@ -1162,7 +1376,7 @@ async def pick_existing_exercise(callback: CallbackQuery, state: FSMContext):
     await _on_exercise_chosen(callback, state, ex_id)
 
 
-@router.message(StateFilter(WorkoutFlow.picking_group, WorkoutFlow.picking_exercise))
+@router.message(StateFilter(WorkoutFlow.picking_group, WorkoutFlow.picking_exercise), F.text)
 async def pick_exercise_search(message: Message, state: FSMContext):
     """Typing while picking a group or an exercise searches instead of being silently
     dropped — so the user can jump straight to an exercise by name without first
@@ -1282,7 +1496,7 @@ def _suspicious_exercise_name_reason(name: str) -> str | None:
     return None
 
 
-@router.message(StateFilter(WorkoutFlow.creating_exercise_name))
+@router.message(StateFilter(WorkoutFlow.creating_exercise_name), F.text)
 async def new_exercise_name_entered(message: Message, state: FSMContext):
     name = message.text.strip()
     if not name:
@@ -1496,9 +1710,7 @@ async def _finalize_logged_sets(bot, state: FSMContext, user, data: dict, active
             await bot.set_message_reaction(
                 chat_id=chat_id, message_id=message_id, reaction=[ReactionTypeEmoji(emoji="🔥")],
             )
-        asyncio.create_task(
-            _delete_message_later(bot, chat_id, message_id, _RECORD_MESSAGE_LIFETIME_SECONDS)
-        )
+        _spawn(_delete_message_later(bot, chat_id, message_id, _RECORD_MESSAGE_LIFETIME_SECONDS))
     elif message is not None:
         await _delete_message(message)
     else:
@@ -1578,9 +1790,15 @@ async def _apply_set_edit(state: FSMContext, data: dict, active: int, index: int
     """Overwrite the `index`-th (1-based) already-logged set of the active
     exercise, in the same order the tracker lists them. Raises ParseError if
     that index doesn't exist — caller replies it back to the user same as any
-    other bad input, rather than silently doing nothing."""
-    block_id = (data.get("open_blocks") or {}).get(active)
-    sets = await db.list_sets_for_block(block_id) if block_id else []
+    other bad input, rather than silently doing nothing.
+
+    Indexes across the whole workout's sets for this exercise, not just the
+    currently open block: an exercise closed and reopened has more than one
+    block, and the tracker numbers their sets as one merged list (see
+    view_builder.build_block_views). Counting within one block would silently
+    edit the wrong set and reject indexes the user can plainly see on screen.
+    """
+    sets = await db.list_sets_for_workout_exercise(data["workout_id"], active)
     if not (1 <= index <= len(sets)):
         if not sets:
             raise ParseError("Пока нет ни одного подхода — нечего править.")
@@ -1775,36 +1993,51 @@ async def log_set_voice(message: Message, state: FSMContext):
 
 @router.callback_query(StateFilter(WorkoutFlow.logging_set), F.data.startswith("live:wconf:"))
 async def live_weight_confirm(callback: CallbackQuery, state: FSMContext):
-    """Answer to "555кг? Записываем?" — see `_weight_confirm_prompt`."""
-    data = await state.get_data()
-    pending = await _take_pending_weight_confirmation(callback.bot, state, data)
-    if pending is None:
-        # Stale keyboard (restart, or the input was already superseded).
+    """Answer to "555кг? Записываем?" — see `_weight_confirm_prompt`.
+
+    Claims `_confirming` before the first `await`: two fast taps on the same
+    button both read `data` while pending_weight_confirm is still set (each
+    holds its own snapshot), so without this guard both would write the same
+    sets — clearing it only stops a *later* tap, not a second one racing the
+    first.
+    """
+    user_id = callback.from_user.id
+    if not _try_claim_weight_confirm(user_id):
         await callback.answer()
         return
+    try:
+        data = await state.get_data()
+        pending = await _take_pending_weight_confirmation(callback.bot, state, data)
+        if pending is None:
+            # Stale keyboard (restart, or the input was already superseded).
+            await callback.answer()
+            return
 
-    if callback.data.endswith(":no"):
-        # Drop the input entirely: retyping the set is one message, and leaving
-        # the wrong numbers on screen would only invite tapping "да" later.
-        with suppress(TelegramBadRequest):
-            await callback.bot.delete_message(
-                chat_id=pending["chat_id"], message_id=pending["message_id"]
-            )
-        await callback.answer("Не записал — набери подход заново")
-        return
+        if callback.data.endswith(":no"):
+            # Drop the input entirely: retyping the set is one message, and leaving
+            # the wrong numbers on screen would only invite tapping "да" later.
+            with suppress(TelegramBadRequest):
+                await callback.bot.delete_message(
+                    chat_id=pending["chat_id"], message_id=pending["message_id"]
+                )
+            await callback.answer("Не записал — набери подход заново")
+            return
 
-    active = pending["exercise_id"]
-    parsed = [ParsedSet(weight=w, reps=r, rpe=rpe) for w, r, rpe in pending["sets"]]
-    logged = await _store_parsed_sets(state, data, active, parsed)
-    confirmed = dict(data.get("confirmed_weights") or {})
-    confirmed[active] = logged[-1][0]
-    await state.update_data(confirmed_weights=confirmed)
-    user = await db.get_user(callback.from_user.id)
-    await callback.answer()
-    finalize = _finalize_voice_sets if pending.get("source") == "voice" else _finalize_logged_sets
-    await finalize(
-        callback.bot, state, user, data, active, logged, pending["chat_id"], pending["message_id"],
-    )
+        active = pending["exercise_id"]
+        parsed = [ParsedSet(weight=w, reps=r, rpe=rpe) for w, r, rpe in pending["sets"]]
+        logged = await _store_parsed_sets(state, data, active, parsed)
+        confirmed = dict(data.get("confirmed_weights") or {})
+        confirmed[active] = logged[-1][0]
+        await state.update_data(confirmed_weights=confirmed)
+        user = await db.get_user(user_id)
+        await callback.answer()
+        finalize = _finalize_voice_sets if pending.get("source") == "voice" else _finalize_logged_sets
+        await finalize(
+            callback.bot, state, user, data, active, logged,
+            pending["chat_id"], pending["message_id"],
+        )
+    finally:
+        _confirming.discard(user_id)
 
 
 @router.callback_query(StateFilter(WorkoutFlow.logging_set), F.data == "live:undo")
@@ -1838,6 +2071,10 @@ async def live_repeat_set(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(StateFilter(WorkoutFlow.logging_set), F.data == "live:finish_exercise")
 async def live_finish_exercise(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
+    # A "555кг? Записываем?" prompt for this exercise may still be waiting on an
+    # answer — closing the exercise is about to drop it from open_blocks, so a
+    # later "Да" would look up a block_id that is no longer there.
+    data = await _discard_superseded_confirmation(callback.bot, state, data)
     active = data.get("active_exercise_id")
     active_block_id = (data.get("open_blocks") or {}).get(active)
     if active_block_id is not None and not await db.list_sets_for_block(active_block_id):
@@ -2019,7 +2256,7 @@ async def finish_date_quick(callback: CallbackQuery, state: FSMContext):
     await _finalize_workout(callback, state, note=None)
 
 
-@router.message(StateFilter(WorkoutFlow.awaiting_finish_date))
+@router.message(StateFilter(WorkoutFlow.awaiting_finish_date), F.text)
 async def finish_date_text(message: Message, state: FSMContext):
     try:
         date = parse_ru_date(message.text, today=timeutil.user_today(await db.get_user(message.from_user.id)))
@@ -2151,9 +2388,11 @@ async def _finished_workout_card_text(workout, user, note: str | None, comment=_
         workout, user, note
     )
     suffix = ""
-    equivalent = formatting.format_tonnage_equivalent(session_tonnage, seed=workout["id"])
+    equivalent = formatting.format_tonnage_equivalent(
+        session_tonnage, seed=workout["id"], unit=user["unit"]
+    )
     if equivalent:
-        tonnage = formatting.format_tonnage(session_tonnage)
+        tonnage = formatting.format_tonnage(session_tonnage, user["unit"])
         suffix += f"\n\n🏋️ Суммарно за тренировку — {tonnage}. {equivalent}"
     if highlights:
         header = "🔥 <b>Рекорды и сравнения</b>"
@@ -2162,6 +2401,29 @@ async def _finished_workout_card_text(workout, user, note: str | None, comment=_
     if effective_comment:
         suffix += "\n" + formatting.build_ai_comment_block(effective_comment)
     return formatting.fit_workout_text(summary_fn, suffix)
+
+
+_NOTE_FLOW_KEYS = ("note_workout_id", "note_chat_id", "note_message_id", "note_return_state")
+
+
+async def _leave_note_flow(state: FSMContext) -> None:
+    """Put the FSM back wherever the note prompt found it.
+
+    Finished-workout cards keep their 📝 button forever, so this flow can be
+    entered in the middle of a live session — the card for last Tuesday is
+    still sitting in the chat. Clearing the state outright then wiped the
+    active workout's scaffolding (open tabs, carried weights) along with it:
+    the tracker went dead, typed sets fell through to "Не понял 🤔", and
+    /start → "Продолжить" could only ever rebuild the single most recent
+    block. Returning to the previous state costs one stored string.
+    """
+    data = await state.get_data()
+    return_state = data.get("note_return_state")
+    await state.update_data(**{key: None for key in _NOTE_FLOW_KEYS})
+    if return_state:
+        await state.set_state(return_state)
+    else:
+        await state.clear()
 
 
 @router.callback_query(F.data.startswith("live:addnote:"))
@@ -2175,6 +2437,7 @@ async def workout_card_note_prompt(callback: CallbackQuery, state: FSMContext):
         note_workout_id=workout_id,
         note_chat_id=callback.message.chat.id,
         note_message_id=callback.message.message_id,
+        note_return_state=await state.get_state(),
     )
     await state.set_state(WorkoutFlow.editing_finished_note)
     current = f"\n\nСейчас: <i>{escape(workout['note'])}</i>" if workout["note"] else ""
@@ -2188,18 +2451,18 @@ async def workout_card_note_prompt(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(StateFilter(WorkoutFlow.editing_finished_note), F.data == "live:addnote_cancel")
 async def workout_card_note_cancel(callback: CallbackQuery, state: FSMContext):
-    await state.clear()
+    await _leave_note_flow(state)
     await callback.answer()
 
 
-@router.message(StateFilter(WorkoutFlow.editing_finished_note))
+@router.message(StateFilter(WorkoutFlow.editing_finished_note), F.text)
 async def workout_card_note_entered(message: Message, state: FSMContext):
     data = await state.get_data()
     workout_id = data["note_workout_id"]
     text = message.text.strip()
     note = None if text == "-" else text
     await db.update_workout_note(workout_id, note)
-    await state.clear()
+    await _leave_note_flow(state)
 
     workout = await db.get_workout(workout_id)
     user = await db.get_user(message.from_user.id)
@@ -2237,16 +2500,25 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
     is_backfill = bool(data.get("is_backfill"))
     finished_at = f"{data['bf_date']}T12:00:00" if is_backfill else None
     await db.delete_empty_blocks(workout_id)
-    await db.finish_workout(workout_id, note, finished_at=finished_at)
+    # The status guard above is several awaits back by now — wide enough for a
+    # second tap to have slipped past it. finish_workout only marks a workout
+    # that is still unfinished, so whichever call loses that race stops here
+    # rather than building a second card for the same workout.
+    if not await db.finish_workout(workout_id, note, finished_at=finished_at):
+        if isinstance(event, CallbackQuery):
+            await event.answer()
+        return
     workout = await db.get_workout(workout_id)
 
     summary_fn, highlights, session_tonnage, duration_seconds = await _record_highlights_and_summary(
         workout, user, note
     )
     suffix = ""
-    equivalent = formatting.format_tonnage_equivalent(session_tonnage, seed=workout_id)
+    equivalent = formatting.format_tonnage_equivalent(
+        session_tonnage, seed=workout_id, unit=user["unit"]
+    )
     if equivalent:
-        tonnage = formatting.format_tonnage(session_tonnage)
+        tonnage = formatting.format_tonnage(session_tonnage, user["unit"])
         suffix += f"\n\n🏋️ Суммарно за тренировку — {tonnage}. {equivalent}"
     # Backfilled/imported past workouts shouldn't fire the "Nth workout" milestone —
     # they're entered out of order, so the running count isn't meaningful for them.
@@ -2280,6 +2552,7 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
     card_kb = keyboards.workout_card_keyboard(
         workout_id,
         show_ai_button=existing_comment is None and not needs_ai_comment and ai_trainer.is_configured(),
+        show_achievements=bool(new_badges),
     )
     message_id = data["live_message_id"]
     try:
@@ -2296,7 +2569,7 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
         message_id = sent.message_id
 
     if needs_ai_comment:
-        asyncio.create_task(
+        _spawn(
             _attach_ai_comment(bot, data["live_chat_id"], message_id, user_id, workout_id, full_text)
         )
 

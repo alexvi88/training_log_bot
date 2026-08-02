@@ -271,7 +271,7 @@ def _suspicious_name_reason(name: str) -> str | None:
     return None
 
 
-@router.message(StateFilter(ExerciseManage.creating_exercise_name))
+@router.message(StateFilter(ExerciseManage.creating_exercise_name), F.text)
 async def exm_new_exercise_name_entered(message: Message, state: FSMContext):
     name = message.text.strip()
     if not name:
@@ -628,7 +628,7 @@ async def prog_show_exercise_card(callback: CallbackQuery, state: FSMContext):
     await _render_exercise_card(callback, state, ex_id)
 
 
-@router.message(StateFilter(ExerciseManage.picking_exercise))
+@router.message(StateFilter(ExerciseManage.picking_exercise), F.text)
 async def exm_search_text(message: Message, state: FSMContext):
     """Typing while browsing the exercise list searches instead of being silently dropped."""
     query = message.text.strip()
@@ -679,7 +679,7 @@ async def _exm_finish_rename(answerer, state: FSMContext, ex_id: int, name: str)
     await answerer.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
-@router.message(StateFilter(ExerciseManage.editing_name))
+@router.message(StateFilter(ExerciseManage.editing_name), F.text)
 async def exm_name_entered(message: Message, state: FSMContext):
     name = message.text.strip()
     if not name:
@@ -803,7 +803,7 @@ async def exm_edit_description(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(StateFilter(ExerciseManage.editing_description))
+@router.message(StateFilter(ExerciseManage.editing_description), F.text)
 async def exm_description_entered(message: Message, state: FSMContext):
     description = message.text.strip()
     data = await state.get_data()
@@ -900,7 +900,7 @@ async def exm_new_group(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(StateFilter(ExerciseManage.new_group_name))
+@router.message(StateFilter(ExerciseManage.new_group_name), F.text)
 async def exm_new_group_entered(message: Message, state: FSMContext):
     name = message.text.strip()
     if not name:

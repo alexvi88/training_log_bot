@@ -252,6 +252,20 @@ def test_line_trailing_separators_ignored():
     assert parse_sets_line("100 8, ,") == [ParsedSet(weight=100.0, reps=8)]
 
 
+def test_line_decimal_comma_weight_not_split_as_separator():
+    # "102,5 8" is one 102.5kg set typed with a RU decimal comma — it must not
+    # be sliced by the line's own comma-separated-sets logic into "102" (bare
+    # reps, weight carried from the previous set) and "5 8".
+    assert parse_sets_line("102,5 8") == [ParsedSet(weight=102.5, reps=8)]
+
+
+def test_line_decimal_comma_weight_mixed_with_real_separators():
+    assert parse_sets_line("102,5 8, 100,25 7") == [
+        ParsedSet(weight=102.5, reps=8),
+        ParsedSet(weight=100.25, reps=7),
+    ]
+
+
 def test_line_empty_raises():
     with pytest.raises(ParseError):
         parse_sets_line("  ,  ")

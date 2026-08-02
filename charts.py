@@ -9,16 +9,30 @@ import matplotlib
 matplotlib.use("Agg")
 
 import matplotlib.dates as mdates  # noqa: E402
-import matplotlib.pyplot as plt  # noqa: E402
+from matplotlib.backends.backend_agg import FigureCanvasAgg  # noqa: E402
+from matplotlib.figure import Figure  # noqa: E402
 from matplotlib.patches import FancyBboxPatch  # noqa: E402
 
 from analytics import linear_trend  # noqa: E402
 
 
+# Figures are built directly rather than through pyplot: pyplot keeps a single
+# global registry of figures per process, and these renders run in worker threads
+# (asyncio.to_thread) — two users opening "Прогресс" at the same moment would be
+# racing each other for that registry. Going through Figure() also removes the
+# need to remember plt.close(), so a forgotten one can't leak.
+def _new_figure(**kwargs) -> Figure:
+    """A figure with an Agg canvas attached — pyplot normally does this, and
+    without it anything that measures text (get_renderer) has no renderer to
+    ask."""
+    fig = Figure(**kwargs)
+    FigureCanvasAgg(fig)
+    return fig
+
+
 def _fig_to_png(fig, dpi: int = 150) -> bytes:
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=dpi, bbox_inches="tight", facecolor=fig.get_facecolor())
-    plt.close(fig)
     buf.seek(0)
     return buf.read()
 
@@ -33,7 +47,8 @@ def render_metric_over_sessions(
     (used by the bodyweight diary) or the plain total change across the
     plotted points (used by the exercise progress chart, where a rate reads
     as noise next to "how much did it actually grow")."""
-    fig, ax = plt.subplots(figsize=(6, 3.5))
+    fig = _new_figure(figsize=(6, 3.5))
+    ax = fig.subplots()
     dates = [p[0] for p in points]
     values = [p[1] for p in points]
     ax.plot(dates, values, marker="o", color="#3366cc")
@@ -119,7 +134,7 @@ def render_year_heatmap(
     grid_h = 2.4
     fig_w, fig_h = grid_w, stats_h + grid_h
 
-    fig = plt.figure(figsize=(fig_w, fig_h), dpi=150)
+    fig = _new_figure(figsize=(fig_w, fig_h), dpi=150)
     fig.patch.set_facecolor(BG)
 
     text_ax = fig.add_axes([0, 1 - stats_h / fig_h, 1, stats_h / fig_h])
@@ -224,7 +239,7 @@ def render_workout_card(
     fig_w = 6.6
     fig_h = top_pad + bottom_pad + len(rows) * line_h
 
-    fig = plt.figure(figsize=(fig_w, fig_h), dpi=150)
+    fig = _new_figure(figsize=(fig_w, fig_h), dpi=150)
     fig.patch.set_facecolor(BG)
     ax = fig.add_axes([0, 0, 1, 1])
     ax.set_facecolor(BG)

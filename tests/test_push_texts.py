@@ -64,3 +64,48 @@ async def test_rotation_is_isolated_per_user(fresh_db, user_id):
 async def test_pick_text_formats_placeholders():
     text = push_texts.TEXTS[push_texts.PLATEAU][0].format(exercise="Жим лёжа")
     assert "Жим лёжа" in text
+
+
+async def test_variant_needing_missing_data_is_not_drawn(fresh_db, user_id):
+    """A push has to be true. The digest claimed "понедельник — твой самый
+    продуктивный день" as fixed copy, sent to anyone regardless of their
+    history; now the day is computed, and when nothing stands out the variant
+    that would assert one is dropped from the draw."""
+    seen = set()
+    for _ in range(len(push_texts.TEXTS[push_texts.WEEKLY_DIGEST]) * 3):
+        seen.add(
+            await push_texts.pick_text(
+                user_id, push_texts.WEEKLY_DIGEST,
+                tonnage="4.2 т", week_count="2 тренировки", best_day=None,
+            )
+        )
+
+    assert seen  # something is still sent
+    assert not any("самый продуктивный день" in text for text in seen)
+
+
+async def test_variant_is_available_once_the_data_exists(fresh_db, user_id):
+    seen = set()
+    for _ in range(len(push_texts.TEXTS[push_texts.WEEKLY_DIGEST]) * 3):
+        seen.add(
+            await push_texts.pick_text(
+                user_id, push_texts.WEEKLY_DIGEST,
+                tonnage="4.2 т", week_count="2 тренировки", best_day="среда",
+            )
+        )
+
+    assert any("среда — твой самый продуктивный день" in text for text in seen)
+
+
+async def test_most_frequent_weekday_needs_a_clear_winner():
+    import datetime as dt
+
+    import analytics
+
+    mondays = [dt.date(2026, 5, 4) + dt.timedelta(weeks=i) for i in range(4)]
+    fridays = [dt.date(2026, 5, 8) + dt.timedelta(weeks=i) for i in range(2)]
+    assert analytics.most_frequent_weekday(mondays + fridays) == 0
+
+    # 3 vs 2 is noise, not a habit.
+    assert analytics.most_frequent_weekday(mondays[:3] + fridays) is None
+    assert analytics.most_frequent_weekday([]) is None

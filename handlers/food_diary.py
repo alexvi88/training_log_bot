@@ -1,7 +1,6 @@
 """🍽 Дневник питания — что съел, по дням, с распознаванием еды моделью.
 
-Открывается только командой /food_diary: кнопки в главном меню пока нет, раздел
-обкатывается отдельно от основного сценария бота.
+Открывается кнопкой «🍽 Дневник питания» в главном меню или командой /food_diary.
 
 Как устроен ввод. Пользователь на экране дня просто пишет текстом или шлёт фото
 (можно фото с подписью) — отдельной кнопки «добавить» не нужно, как и на экране
@@ -159,6 +158,13 @@ async def cmd_food_diary(message: Message, state: FSMContext):
     await db.get_or_create_user(message.from_user.id, message.from_user.username)
     await state.clear()
     await _show_day(message, state, await _today(message.from_user.id))
+
+
+@router.callback_query(F.data == "menu:food")
+async def menu_food_diary(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await _show_day(callback, state, await _today(callback.from_user.id))
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("fd:day:"))
@@ -440,10 +446,16 @@ async def _save_now(event, state: FSMContext, pending: dict[str, Any]) -> None:
     тем же путём, что и просмотр (стрелки, «История»)."""
     user_id = event.from_user.id
     date = await _state_date(state, user_id)
+    # Название режем на входе, а не только при отрисовке: при выключенном КБЖУ
+    # сюда попадает текст пользователя целиком (до 4096 символов), и он потом
+    # ходит и в экран дня, и в промпт модели.
+    description = formatting.shorten(
+        pending.get("description") or "Приём пищи", formatting.FOOD_DESC_LIMIT
+    )
     await db.add_food_entry(
         user_id,
         eaten_on=date.isoformat(),
-        description=pending.get("description") or "Приём пищи",
+        description=description,
         details=_items_to_json(pending.get("items")),
         calories=pending.get("calories"),
         protein=pending.get("protein"),

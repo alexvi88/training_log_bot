@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from aiogram import Bot
-from aiogram.exceptions import TelegramForbiddenError
+from aiogram.exceptions import TelegramAPIError, TelegramForbiddenError, TelegramRetryAfter
 from aiogram.types import FSInputFile
 
 import ai_trainer
@@ -181,9 +181,16 @@ async def build_daily_push(telegram_id: int, today: dt.date) -> Optional[PushDec
             if ai_text:
                 return PushDecision(push_texts.AI_WEEKLY, ai_text)
             week_word = formatting.plural_ru(dashboard.this_week, ("тренировка", "тренировки", "тренировок"))
+            # None when no weekday clearly stands out — pick_text then drops the
+            # variant that would have claimed one, instead of asserting a habit
+            # the history doesn't show.
+            best_weekday = analytics.most_frequent_weekday(dates)
             text = await push_texts.pick_text(
                 telegram_id, push_texts.WEEKLY_DIGEST,
                 tonnage=format_tonnage(tonnage), week_count=f"{dashboard.this_week} {week_word}",
+                best_day=(
+                    formatting.WEEKDAY_NAMES_RU[best_weekday] if best_weekday is not None else None
+                ),
             )
             return PushDecision(push_texts.WEEKLY_DIGEST, text, with_cta=False)
 
@@ -229,23 +236,57 @@ def _as_caption(text: str) -> str:
     return text[: CAPTION_LIMIT - 1].rstrip() + "…"
 
 
-async def _deliver(bot: Bot, telegram_id: int, decision: PushDecision) -> None:
+async def _deliver(
+    bot: Bot, telegram_id: int, decision: PushDecision, local_date: dt.date
+) -> None:
+    """Send the push and log it against the recipient's own date — that date is
+    what `has_push_today` dedupes on.
+
+    Every Telegram failure stays contained here. This runs inside a loop over
+    every due user, so an exception escaping it (a deleted chat, a network
+    blip, a 429 from sending without pause) aborted the whole tick: everyone
+    after the failing recipient got nothing, and by the next tick their send
+    hour had passed. /broadcast learned this already — same treatment here.
+    """
     global _push_image_file_id
     kb = keyboards.push_cta_keyboard() if decision.with_cta else None
     try:
-        message = await bot.send_photo(
+        message = await _send_push_photo(bot, telegram_id, decision, kb)
+    except TelegramForbiddenError:
+        logger.info("User %s blocked the bot, skipping push", telegram_id)
+        return
+    except TelegramAPIError:
+        logger.exception("Failed to deliver push to user %s", telegram_id)
+        return
+    if _push_image_file_id is None:
+        _push_image_file_id = message.photo[-1].file_id
+    await db.record_push(telegram_id, decision.category, decision.text, local_date.isoformat())
+
+
+async def _send_push_photo(bot: Bot, telegram_id: int, decision: PushDecision, kb):
+    """One send, retried once if Telegram asks us to wait."""
+    try:
+        return await bot.send_photo(
             chat_id=telegram_id,
             photo=_push_image(),
             caption=_as_caption(decision.text),
             reply_markup=kb,
             disable_notification=False,
         )
-    except TelegramForbiddenError:
-        logger.info("User %s blocked the bot, skipping push", telegram_id)
-        return
-    if _push_image_file_id is None:
-        _push_image_file_id = message.photo[-1].file_id
-    await db.record_push(telegram_id, decision.category, decision.text)
+    except TelegramRetryAfter as e:
+        await asyncio.sleep(e.retry_after)
+        return await bot.send_photo(
+            chat_id=telegram_id,
+            photo=_push_image(),
+            caption=_as_caption(decision.text),
+            reply_markup=kb,
+            disable_notification=False,
+        )
+
+
+# Pause between sends, so a tick with many due users stays under Telegram's
+# ~30 messages/second cap. Same value /broadcast uses.
+SEND_DELAY = 0.05
 
 
 def _utc_now() -> dt.datetime:
@@ -273,27 +314,43 @@ async def _send_daily_pushes(bot: Bot) -> None:
     local date also keeps the one-per-day promise per user.
     """
     hour = config.ENGAGEMENT_HOUR
-    for telegram_id, tz_offset in await db.list_engagement_eligible_user_ids():
-        if not is_send_hour(tz_offset, hour):
-            continue
+
+    # Decide who is due *before* sending anything. Building a push can be slow —
+    # Sunday's digest makes an LLM call per user — so a big list can take the
+    # tick past the hour it started in. Re-checking the clock per user as the
+    # loop crawled meant everyone near the end fell out of their own send hour
+    # and got skipped; by the next tick their hour had passed, so the push was
+    # lost for the day rather than merely late.
+    due = [
+        (telegram_id, _local_now(tz_offset).date())
+        for telegram_id, tz_offset in await db.list_engagement_eligible_user_ids()
+        if is_send_hour(tz_offset, hour)
+    ]
+    due_newbies = [
+        (telegram_id, created_at, _local_now(tz_offset).date())
+        for telegram_id, created_at, tz_offset in await db.list_newbie_user_ids()
+        if is_send_hour(tz_offset, hour)
+    ]
+
+    for telegram_id, local_date in due:
         try:
-            decision = await build_daily_push(telegram_id, _local_now(tz_offset).date())
+            decision = await build_daily_push(telegram_id, local_date)
         except Exception:
             logger.exception("Failed to build push for user %s", telegram_id)
             continue
         if decision is not None:
-            await _deliver(bot, telegram_id, decision)
+            await _deliver(bot, telegram_id, decision, local_date)
+            await asyncio.sleep(SEND_DELAY)
 
-    for telegram_id, created_at, tz_offset in await db.list_newbie_user_ids():
-        if not is_send_hour(tz_offset, hour):
-            continue
+    for telegram_id, created_at, local_date in due_newbies:
         try:
-            decision = await build_newbie_push(telegram_id, created_at, _local_now(tz_offset).date())
+            decision = await build_newbie_push(telegram_id, created_at, local_date)
         except Exception:
             logger.exception("Failed to build newbie push for user %s", telegram_id)
             continue
         if decision is not None:
-            await _deliver(bot, telegram_id, decision)
+            await _deliver(bot, telegram_id, decision, local_date)
+            await asyncio.sleep(SEND_DELAY)
 
 
 def _seconds_until_next_hour() -> float:

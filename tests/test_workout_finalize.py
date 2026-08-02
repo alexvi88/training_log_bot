@@ -201,3 +201,25 @@ async def test_ai_comment_generated_in_background_after_finalize(fresh_db, user_
     assert "Отличная работа!" in last_text
     saved = await db.get_workout(workout_id)
     assert saved["ai_comment"] == "Отличная работа!"
+
+
+async def test_background_tasks_are_kept_referenced_until_they_finish(fresh_db, user_id):
+    """The event loop holds only weak references to running tasks, so a
+    fire-and-forget create_task() can be collected mid-flight — the record
+    message would never be tidied away and the AI comment would silently never
+    arrive."""
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow():
+        started.set()
+        await release.wait()
+
+    task = workout._spawn(slow())
+    await started.wait()
+
+    assert task in workout._background_tasks
+
+    release.set()
+    await task
+    assert task not in workout._background_tasks

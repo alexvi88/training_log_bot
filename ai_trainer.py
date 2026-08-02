@@ -98,7 +98,11 @@ def is_configured() -> bool:
 def _get_client() -> AsyncOpenAI:
     global _client
     if _client is None:
-        _client = AsyncOpenAI(api_key=config.XAI_API_KEY, base_url=config.GROK_BASE_URL)
+        _client = AsyncOpenAI(
+            api_key=config.XAI_API_KEY,
+            base_url=config.GROK_BASE_URL,
+            timeout=config.AI_REQUEST_TIMEOUT_SECONDS,
+        )
     return _client
 
 
@@ -112,7 +116,9 @@ def is_voice_configured() -> bool:
 def _get_audio_client() -> AsyncOpenAI:
     global _audio_client
     if _audio_client is None:
-        _audio_client = AsyncOpenAI(api_key=config.OPENAI_API_KEY)
+        _audio_client = AsyncOpenAI(
+            api_key=config.OPENAI_API_KEY, timeout=config.AI_REQUEST_TIMEOUT_SECONDS
+        )
     return _audio_client
 
 
@@ -147,7 +153,9 @@ async def _get_sdk_client() -> AsyncXAIClient:
     if _sdk_client is None:
         async with _sdk_client_lock:
             if _sdk_client is None:
-                _sdk_client = AsyncXAIClient(api_key=config.XAI_API_KEY)
+                _sdk_client = AsyncXAIClient(
+                    api_key=config.XAI_API_KEY, timeout=config.AI_REQUEST_TIMEOUT_SECONDS
+                )
     return _sdk_client
 
 
@@ -225,6 +233,13 @@ list_recent_workouts отдаёт максимум 10 последних тре�
 (latest_bodyweight) — используй его для быстрой справки. Если вопрос про динамику веса
 тела за период, тренд набора/похудения или сравнение с прошлым — вызови
 get_bodyweight_history, она отдаёт всю историю дневника веса, а не только последнюю запись.
+
+В боте есть и дневник питания — get_food_diary отдаёт, что человек ел последние дни,
+с КБЖУ по дням. Если разговор про еду, калории, белок, набор или сушку — сначала
+посмотри дневник, а не спрашивай «что ты ешь»: человек, возможно, уже всё записал.
+Самое ценное — связка с тренировками: если рабочие веса просели на фоне недобора
+калорий или белка, скажи об этом прямо. Дневник может быть и пустым — тогда так и
+скажи, что данных нет, и спроси.
 
 Также есть инструмент list_exercise_catalog — полный каталог упражнений-шаблонов
 бота по группам мышц. Используй его вместе со списком упражнений пользователя
@@ -929,6 +944,30 @@ TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "get_food_diary",
+            "description": (
+                "Дневник питания пользователя (🍽 Дневник питания) за последние дни: что ел, "
+                "когда, и КБЖУ каждой записи с итогами по дню. Вызывай, когда речь про еду, "
+                "калории, белок, набор или сушку — не гадай и не спрашивай «что ты ешь», если "
+                "человек ведёт дневник, просто посмотри. Полезно и вместе с тренировками: "
+                "просевшие рабочие веса на фоне недобора калорий или белка — это связь, которую "
+                "стоит назвать. Записи без КБЖУ (пользователь мог отключить подсчёт) приходят "
+                "с calories = null — это не ошибка, просто текстовая заметка о еде."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "days": {
+                        "type": "integer",
+                        "description": "За сколько последних дней смотреть. По умолчанию 14.",
+                    }
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_full_chat_history",
             "description": (
                 "Полная история переписки с этим пользователем в AI-тренере за всё время — "
@@ -1044,6 +1083,7 @@ TOOL_STATUS_TEXTS: dict[str, str] = {
     "get_exercise_progress": "📈 смотрю прогресс по упражнению...",
     "list_exercise_catalog": "📋 сверяюсь с каталогом упражнений...",
     "get_bodyweight_history": "⚖️ смотрю дневник веса...",
+    "get_food_diary": "🍽 смотрю дневник питания...",
     "get_full_chat_history": "🗂️ поднимаю историю переписки...",
     "propose_program": "📋 собираю программу...",
 }
@@ -1227,6 +1267,40 @@ async def _bodyweight_history(user_id: int) -> dict[str, Any]:
     }
 
 
+async def _food_diary(user_id: int, days: int = 14) -> dict[str, Any]:
+    """Recent food-diary entries grouped by day, with each day's totals.
+
+    Days are grouped here rather than left to the model: the totals are the
+    part that gets reasoned about ("недобираешь белок"), and a model adding up
+    a flat list of entries itself is a needless chance to get them wrong.
+    """
+    days = max(1, min(days, 90))
+    since = (dt.date.today() - dt.timedelta(days=days - 1)).isoformat()
+    rows = await db.list_recent_food_entries(user_id, since)
+
+    by_day: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        day = by_day.setdefault(
+            row["eaten_on"],
+            {"date": row["eaten_on"], "entries": [], "calories": 0.0,
+             "protein": 0.0, "fat": 0.0, "carbs": 0.0, "entries_without_macros": 0},
+        )
+        day["entries"].append({
+            "description": row["description"],
+            "calories": row["calories"],
+            "protein": row["protein"],
+            "fat": row["fat"],
+            "carbs": row["carbs"],
+        })
+        if row["calories"] is None:
+            day["entries_without_macros"] += 1
+        for field in ("calories", "protein", "fat", "carbs"):
+            if row[field] is not None:
+                day[field] += row[field]
+
+    return {"days": list(by_day.values())}
+
+
 async def _full_chat_history(user_id: int) -> dict[str, Any]:
     rows = await db.get_ai_chat_history(user_id)
     return {
@@ -1402,6 +1476,8 @@ async def execute_tool(
         payload = {"catalog": _CATALOG_BY_GROUP}
     elif name == "get_bodyweight_history":
         payload = await _bodyweight_history(user_id)
+    elif name == "get_food_diary":
+        payload = await _food_diary(user_id, int(tool_input.get("days") or 14))
     elif name == "get_full_chat_history":
         payload = await _full_chat_history(user_id)
     elif name == "propose_program":
