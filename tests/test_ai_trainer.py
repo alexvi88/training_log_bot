@@ -753,3 +753,57 @@ async def test_food_diary_tool_is_offered_to_the_model():
 
     names = [t["function"]["name"] for t in module.TOOLS]
     assert "get_food_diary" in names
+
+
+async def test_weekly_digest_summary_includes_food_when_the_diary_has_any(fresh_db, user_id):
+    """The connection between the plate and the barbell is the one thing no
+    tracker on the market does — it only works if the Sunday digest can see
+    both. The chat tool wasn't enough: the digest is a plain completion with no
+    tools, so the food has to be in the summary it's given."""
+    import datetime as dt
+
+    import ai_trainer as module
+    import db as dbmod
+
+    today = dt.date.today()
+    for offset, kcal, protein in ((0, 2000, 120), (1, 2300, 116)):
+        await dbmod.add_food_entry(
+            user_id,
+            eaten_on=(today - dt.timedelta(days=offset)).isoformat(),
+            description="День",
+            calories=kcal,
+            protein=protein,
+        )
+
+    line = await module._weekly_food_summary(user_id)
+
+    assert "2 дн. из 7" in line
+    assert "2150 ккал" in line
+    assert "118 г белка" in line
+
+
+async def test_weekly_digest_says_nothing_about_food_on_an_empty_diary(fresh_db, user_id):
+    """No line at all rather than a zero: the prompt tells the coach that a
+    missing line means "не выдумывай", and a "0 ккал" would read as starvation."""
+    import ai_trainer as module
+
+    assert await module._weekly_food_summary(user_id) == ""
+
+
+async def test_weekly_food_average_is_over_days_logged_not_over_seven(fresh_db, user_id):
+    """A diary kept on one day describes that day; dividing by seven would
+    invent a deficit that isn't there."""
+    import datetime as dt
+
+    import ai_trainer as module
+    import db as dbmod
+
+    await dbmod.add_food_entry(
+        user_id, eaten_on=dt.date.today().isoformat(), description="День",
+        calories=2100, protein=100,
+    )
+
+    line = await module._weekly_food_summary(user_id)
+
+    assert "2100 ккал" in line
+    assert "1 дн. из 7" in line

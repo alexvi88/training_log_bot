@@ -491,6 +491,13 @@ WEEKLY_DIGEST_SYSTEM_PROMPT = """\
 тоннаж и объём (рабочих подходов) по каждой группе мышц со статусом относительно
 целевого диапазона (low = мало, in_range = норм, high = многовато).
 
+Если человек вёл дневник питания, в сводке будет и еда: за сколько дней есть
+записи и средние калории с белком в день. Это то, чего не умеет ни одно
+приложение-трекер: свяжи еду с железом там, где связь реально видна (мало белка
+на фоне объёмной недели, недобор калорий при просевшем тоннаже). Строки про еду
+в сводке нет — значит, дневник пустой, и про питание тогда молчи, не выдумывай
+и не выпрашивай.
+
 Напиши короткий еженедельный дайджест-подведение итогов недели. Правила:
 - Начни ровно с «ПРИВЕТ АТЛЕТ, ».
 - По-русски, на «ты», тепло и с юмором, свой в доску — без токсичности и шейминга.
@@ -533,6 +540,9 @@ async def weekly_digest(user_id: int) -> Optional[str]:
         f"Целевой объём на группу: {vol['target_sets_per_group']} подходов/нед.\n"
         f"Объём по группам: {groups_line}."
     )
+    food_line = await _weekly_food_summary(user_id)
+    if food_line:
+        summary += "\n" + food_line
 
     client = _get_client()
     try:
@@ -551,6 +561,28 @@ async def weekly_digest(user_id: int) -> Optional[str]:
     await _log_llm_cost(user_id, config.GROK_MODEL, getattr(response, "usage", None))
     text = (response.choices[0].message.content or "").strip()
     return text or None
+
+
+async def _weekly_food_summary(user_id: int) -> str:
+    """"Питание: записи за 5 дн. из 7, в среднем 2150 ккал и 118 г белка в день."
+    Empty string when the diary has nothing this week.
+
+    Averaged over the days actually logged, not over seven: a diary kept on five
+    days out of seven describes those five, and dividing by seven would invent a
+    deficit that isn't there. Days logged is reported alongside so the coach can
+    see how much the average is worth.
+    """
+    days = (await _food_diary(user_id, days=7))["days"]
+    with_calories = [d for d in days if d["calories"]]
+    if not with_calories:
+        return ""
+    avg_kcal = sum(d["calories"] for d in with_calories) / len(with_calories)
+    protein_days = [d for d in with_calories if d["protein"]]
+    parts = [f"записи за {len(with_calories)} дн. из 7", f"в среднем {avg_kcal:.0f} ккал"]
+    if protein_days:
+        avg_protein = sum(d["protein"] for d in protein_days) / len(protein_days)
+        parts.append(f"{avg_protein:.0f} г белка в день")
+    return "Питание: " + ", ".join(parts) + "."
 
 
 FOOD_ANALYSIS_SYSTEM_PROMPT = """\
