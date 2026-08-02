@@ -6,7 +6,7 @@ are responsible for turning DB rows into the small view dataclasses below.
 
 import datetime as dt
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from html import escape
 from typing import Literal
 
@@ -1042,30 +1042,35 @@ def _sum_or_none(values) -> float | None:
 
 @dataclass
 class FoodDayView:
-    """One day's row in the history list, with its totals."""
+    """One day's row in the history list, with its totals and what was eaten."""
     date: dt.date
     entries: int
     calories: float | None = None
     protein: float | None = None
     fat: float | None = None
     carbs: float | None = None
+    descriptions: list[str] = field(default_factory=list)
 
 
 def build_food_history_list(days: list[FoodDayView]) -> str:
-    """The history tab: one line per logged day, newest first."""
+    """The history tab: one block per logged day, newest first — date, totals,
+    entry count, then the food itself folded behind a collapsible quote."""
     if not days:
         return (
             "📚 <b>История питания</b>\n\nПока ничего не записано.\n"
             "Открой день и напиши, что съел."
         )
-    lines = ["📚 <b>История питания</b>", ""]
+    day_blocks = []
     for d in days:
         n = plural_ru(d.entries, ("приём", "приёма", "приёмов"))
         macros = _macros_line(d.protein, d.fat, d.carbs)
         totals = [p for p in (format_kcal(d.calories) if d.calories is not None else "", macros) if p]
-        date_part = f"<b>{format_date_ru(dt.datetime.combine(d.date, dt.time()))}</b>"
-        # Ни одной цифры за день — не выдумываем "—", просто ничего не пишем
-        # между датой и числом приёмов.
-        totals_part = f" — {' · '.join(totals)}" if totals else ""
-        lines.append(f"{date_part}{totals_part} [{d.entries} {n}]")
-    return "\n".join(lines)
+        block = [f"<b>{format_date_ru(dt.datetime.combine(d.date, dt.time()))}</b>"]
+        if totals:
+            block.append(" · ".join(totals))
+        block.append(f"{d.entries} {n} пищи")
+        if d.descriptions:
+            food_list = "\n".join(f"{i}. {escape(name)}" for i, name in enumerate(d.descriptions, start=1))
+            block.append(collapsible(food_list))
+        day_blocks.append("\n".join(block))
+    return "📚 <b>История питания</b>\n\n" + "\n\n".join(day_blocks)

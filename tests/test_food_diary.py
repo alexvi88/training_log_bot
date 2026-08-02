@@ -49,6 +49,9 @@ async def test_food_days_history_newest_first_with_totals(user_id):
     assert [r["calories"] for r in days] == [200, 410]
     assert [r["protein"] for r in days] == [20, 13]
     assert days[1]["fat"] == 8  # у второй записи (Кофе) fat не задан — суммируем только известное
+    # список названий за день — в порядке ввода, не алфавитном/произвольном
+    assert days[1]["descriptions"] == "Овсянка\nКофе"
+    assert days[0]["descriptions"] == "Творог"
     assert await dbmod.count_food_days(user_id) == 2
 
 
@@ -448,14 +451,14 @@ def test_history_list_newest_first():
     ]
     text = formatting.build_food_history_list(days)
     assert text.index("21.07.2026") < text.index("20.07.2026")
-    assert "2 приёма" in text
+    assert "2 приёма пищи" in text
     assert "410 ккал" in text
 
 
 def test_history_list_shows_per_day_macros():
     days = [_day(entries=2, calories=410.0, protein=29, fat=15, carbs=40)]
     text = formatting.build_food_history_list(days)
-    assert "Б29 · Ж15 · У40" in text
+    assert "410 ккал · Б29 · Ж15 · У40" in text
 
 
 def test_history_list_skips_macros_line_when_unknown():
@@ -464,12 +467,24 @@ def test_history_list_skips_macros_line_when_unknown():
     assert "Б " not in text
 
 
-def test_history_list_omits_dash_for_a_day_with_no_numbers():
+def test_history_list_omits_totals_line_for_a_day_with_no_numbers():
     """Ни одной цифры за день — не пишем "—", просто дата и число приёмов."""
     days = [_day(date=dt.date(2026, 7, 20), entries=2)]
     text = formatting.build_food_history_list(days)
-    assert "20.07.2026 (пн)</b> [2 приёма]" in text
+    assert "20.07.2026 (пн)</b>\n2 приёма пищи" in text
     assert "—" not in text
+
+
+def test_history_list_folds_the_food_behind_a_collapsible_quote():
+    days = [_day(entries=2, calories=410.0, descriptions=["Овсянка", "Кофе"])]
+    text = formatting.build_food_history_list(days)
+    assert "<blockquote expandable>1. Овсянка\n2. Кофе</blockquote>" in text
+
+
+def test_history_list_skips_the_quote_without_descriptions():
+    days = [_day(entries=1, calories=200.0)]
+    text = formatting.build_food_history_list(days)
+    assert "<blockquote" not in text
 
 
 def test_history_list_empty():
