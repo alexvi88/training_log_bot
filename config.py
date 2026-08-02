@@ -76,8 +76,14 @@ STICKERS_ENABLED = os.getenv("STICKERS_ENABLED", "true").lower() == "true"
 # key/env names as fun_bot, so one key serves both bots. The menu entry stays
 # visible but answers with a hint until the key is set.
 XAI_API_KEY = os.getenv("XAI_API_KEY", "")
-GROK_MODEL = os.getenv("GROK_MODEL", "grok-4-1-fast")
+GROK_MODEL = os.getenv("GROK_MODEL", "grok-4.5-latest")
 GROK_BASE_URL = os.getenv("GROK_BASE_URL", "https://api.x.ai/v1")
+
+# Reasoning depth for GROK_MODEL calls (low/medium/high — xAI defaults to
+# "high" when unset, which reasoning models can't turn off). Medium is the
+# documented middle ground for latency-tolerant but not fully open-ended
+# tasks, which fits the AI trainer's chat/classification calls.
+GROK_REASONING_EFFORT = os.getenv("GROK_REASONING_EFFORT", "medium")
 
 # Search-capable model used (via xAI's gRPC "Agent Tools" SDK, not the REST
 # endpoint) when a question is allowed web/X search access — same model name
@@ -114,6 +120,7 @@ OPENAI_TRANSCRIBE_MODEL = os.getenv("OPENAI_TRANSCRIBE_MODEL", "gpt-4o-mini-tran
 LLM_PRICES_USD_PER_1K: dict[str, tuple[float, float]] = {
     "grok-4-1-fast": (0.0002, 0.0005),
     "grok-4.20-multi-agent": (0.002, 0.006),
+    "grok-4.5-latest": (0.002, 0.006),
 }
 try:
     for _model, _price in json.loads(os.getenv("LLM_PRICES_USD_PER_1K_JSON", "{}")).items():
