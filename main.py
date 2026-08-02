@@ -37,6 +37,7 @@ from handlers import (
     persistent_menu,
     routines,
     settings,
+    sharing,
     workout,
 )
 
@@ -210,6 +211,7 @@ async def main() -> None:
     dp.include_router(workout.router)
     dp.include_router(routines.router)
     dp.include_router(backfill.router)
+    dp.include_router(sharing.router)
     dp.include_router(exercise_resolve.router)
     dp.include_router(csv_import.router)
     dp.include_router(exercises.router)

@@ -15,6 +15,7 @@ import asyncio
 import datetime as dt
 import json
 import os
+import secrets
 from typing import Any, Optional
 
 import aiosqlite
@@ -205,6 +206,17 @@ CREATE TABLE IF NOT EXISTS food_entries (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_food_entries_user_day ON food_entries (telegram_id, eaten_on, id);
+
+-- A share is a snapshot, not a live reference: the link keeps working if the
+-- owner later edits or deletes the original, and the recipient never gets read
+-- access to someone else's live rows. Payload is JSON (see handlers/sharing.py).
+CREATE TABLE IF NOT EXISTS shared_items (
+    token TEXT PRIMARY KEY,
+    owner_id INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS routines (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1937,6 +1949,24 @@ async def get_next_exercise_in_workout(workout_id: int, exercise_id: int) -> Opt
 
 
 # ---------- routines (saved workout templates / splits) ----------
+
+async def create_shared_item(owner_id: int, kind: str, payload: str) -> str:
+    """Store a share snapshot and return its unguessable token."""
+    token = secrets.token_urlsafe(8)
+    async with _write_lock:
+        await conn().execute(
+            "INSERT INTO shared_items (token, owner_id, kind, payload, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (token, owner_id, kind, payload, now_iso()),
+        )
+        await conn().commit()
+    return token
+
+
+async def get_shared_item(token: str) -> Optional[aiosqlite.Row]:
+    cur = await conn().execute("SELECT * FROM shared_items WHERE token = ?", (token,))
+    return await cur.fetchone()
+
 
 async def create_routine(user_id: int, name: str) -> int:
     async with _write_lock:

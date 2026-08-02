@@ -416,9 +416,10 @@ def _exercise_detail_view(
     b = InlineKeyboardBuilder()
     b.button(text="📈 Прогресс", callback_data=f"prog:ex:{ex['id']}:m")
     b.button(text="✏️ Редактировать", callback_data=f"exm:editmenu:{ex['id']}")
+    b.button(text="📤 Поделиться", callback_data=f"share:ex:{ex['id']}")
     b.button(text="🗑 Архивировать", callback_data=f"exm:archiveask:{ex['id']}")
     b.button(text="⬅️ Назад", callback_data=back_cb)
-    b.adjust(2, 1, 1)
+    b.adjust(2, 2, 1)
     # Even when the details went out as a photo caption, the button screen keeps
     # the name: the photo can scroll out of view, and a bare "Управление
     # упражнением:" doesn't say which exercise the buttons act on.
