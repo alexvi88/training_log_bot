@@ -405,7 +405,11 @@ async def ai_program_save(callback: CallbackQuery, state: FSMContext):
         await db.create_routine_from_program(
             # .get на target: черновик переживает перезапуск в FSM-сторадже, так
             # что тут может лежать предложение, собранное ещё прошлой версией.
-            user_id, day["name"], [(item["name"], item.get("target")) for item in day["items"]]
+            # Имя программы — в префиксе: без него «Программы» превращаются в
+            # безымянные «День 1 — Жим», и через пару сохранённых программ не
+            # разобрать, откуда какой день.
+            user_id, f"{draft['name']} — {day['name']}",
+            [(item["name"], item.get("target")) for item in day["items"]]
         )
     await state.update_data(ai_program_draft=None)
 
