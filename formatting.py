@@ -924,7 +924,9 @@ def format_kcal(value: float | None) -> str:
 
 
 def _macros_line(protein: float | None, fat: float | None, carbs: float | None, bold: bool = False) -> str:
-    """"Б 30 · Ж 12 · У 60 г" — skipped entirely when the model gave no macros.
+    """"Б 30 · Ж 12 · У 60" — skipped entirely when the model gave no macros.
+    No trailing "г": the labels (Б/Ж/У) already say these are grams, unlike a
+    bare number that needs a unit.
 
     bold=True (totals — a meal's or a day's) wraps just the numbers in <b>, so
     they read at a glance without the Б/Ж/У labels competing for weight; the
@@ -938,7 +940,7 @@ def _macros_line(protein: float | None, fat: float | None, carbs: float | None, 
     if not parts:
         return ""
     num = (lambda v: f"<b>{round(v):g}</b>") if bold else (lambda v: f"{round(v):g}")
-    return " · ".join(f"{label} {num(v)}" for label, v in parts) + " г"
+    return " · ".join(f"{label} {num(v)}" for label, v in parts)
 
 
 def _item_line(item: FoodItemView) -> str:

@@ -263,7 +263,7 @@ def test_day_screen_numbers_entries_and_totals():
     assert "📷" in text
     assert "410 ккал" in text
     assert "2 приёма пищи" in text
-    assert "Б <b>12</b> · Ж <b>8</b> · У <b>55</b> г" in text  # граммовки жирным
+    assert "Б <b>12</b> · Ж <b>8</b> · У <b>55</b>" in text  # граммовки жирным
 
 
 def test_day_screen_flags_entries_without_calories():
@@ -291,10 +291,10 @@ def test_day_screen_shows_per_item_macros():
     ]
     text = formatting.build_food_day_screen(dt.date(2026, 7, 20), entries)
     # у отдельных продуктов — обычным текстом, не перегружаем скобки
-    assert "Протеин — 30 г — 120 ккал (Б 24 · Ж 1 · У 3 г)" in text
-    assert "Гранола — 150 г — 630 ккал (Б 15 · Ж 23 · У 98 г)" in text
+    assert "Протеин — 30 г — 120 ккал (Б 24 · Ж 1 · У 3)" in text
+    assert "Гранола — 150 г — 630 ккал (Б 15 · Ж 23 · У 98)" in text
     # итог по приёму — отдельной строкой, граммовки жирным
-    assert "Б <b>39</b> · Ж <b>24</b> · У <b>101</b> г" in text
+    assert "Б <b>39</b> · Ж <b>24</b> · У <b>101</b>" in text
 
 
 def test_estimate_text_lists_items_with_their_own_macros():
@@ -307,17 +307,17 @@ def test_estimate_text_lists_items_with_their_own_macros():
         calories=310, protein=9, fat=6, carbs=62, comment="порция на глаз",
     )
     assert "Овсянка с бананом" in text
-    assert "• Овсянка — 60 г — 220 ккал (Б 6 · Ж 4 · У 36 г)" in text
+    assert "• Овсянка — 60 г — 220 ккал (Б 6 · Ж 4 · У 36)" in text
     assert "• Банан — 1 шт — 90 ккал" in text  # без макросов — без скобок
     assert "(Б" not in text.split("Банан")[1].split("\n")[0]
     assert "Итого: <b>310 ккал</b>" in text
-    assert "Б <b>9</b> · Ж <b>6</b> · У <b>62</b> г" in text
+    assert "Б <b>9</b> · Ж <b>6</b> · У <b>62</b>" in text
     assert "порция на глаз" in text
 
 
 def test_macros_line_bolds_only_the_numbers():
-    assert formatting._macros_line(30, 12, 60) == "Б 30 · Ж 12 · У 60 г"
-    assert formatting._macros_line(30, 12, 60, bold=True) == "Б <b>30</b> · Ж <b>12</b> · У <b>60</b> г"
+    assert formatting._macros_line(30, 12, 60) == "Б 30 · Ж 12 · У 60"
+    assert formatting._macros_line(30, 12, 60, bold=True) == "Б <b>30</b> · Ж <b>12</b> · У <b>60</b>"
 
 
 def test_estimate_text_without_numbers_shows_dash():
