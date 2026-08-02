@@ -923,8 +923,13 @@ def format_kcal(value: float | None) -> str:
     return "—" if value is None else f"{round(value):g} ккал"
 
 
-def _macros_line(protein: float | None, fat: float | None, carbs: float | None) -> str:
-    """"Б 30 · Ж 12 · У 60 г" — skipped entirely when the model gave no macros."""
+def _macros_line(protein: float | None, fat: float | None, carbs: float | None, bold: bool = False) -> str:
+    """"Б 30 · Ж 12 · У 60 г" — skipped entirely when the model gave no macros.
+
+    bold=True (totals — a meal's or a day's) wraps just the numbers in <b>, so
+    they read at a glance without the Б/Ж/У labels competing for weight; the
+    per-item breakdown in parentheses stays plain, it's already secondary text.
+    """
     parts = [
         (label, v)
         for label, v in (("Б", protein), ("Ж", fat), ("У", carbs))
@@ -932,7 +937,8 @@ def _macros_line(protein: float | None, fat: float | None, carbs: float | None) 
     ]
     if not parts:
         return ""
-    return " · ".join(f"{label} {round(v):g}" for label, v in parts) + " г"
+    num = (lambda v: f"<b>{round(v):g}</b>") if bold else (lambda v: f"{round(v):g}")
+    return " · ".join(f"{label} {num(v)}" for label, v in parts) + " г"
 
 
 def _item_line(item: FoodItemView) -> str:
@@ -954,17 +960,16 @@ def build_food_estimate_text(
     fat: float | None = None,
     carbs: float | None = None,
     comment: str = "",
-    header: str = "🍽 <b>Вот что я вижу:</b>",
+    header: str = "🍽 Вот что я вижу:",
 ) -> str:
     """The confirmation card shown after the model reads a meal, and (with a
     different header) the preview of a correction."""
     lines = [header, "", f"<b>{escape(description or 'Приём пищи')}</b>"]
     if items:
-        lines.append("")
         lines.extend(f"• {_item_line(i)}" for i in items)
     lines.append("")
     lines.append(f"Итого: <b>{format_kcal(calories)}</b>")
-    macros = _macros_line(protein, fat, carbs)
+    macros = _macros_line(protein, fat, carbs, bold=True)
     if macros:
         lines.append(macros)
     if comment:
@@ -989,7 +994,7 @@ def build_food_day_screen(date: dt.date, entries: list[FoodEntryView]) -> str:
         lines.append(f"<b>{i}. {escape(e.description)}</b>{photo} — {format_kcal(e.calories)}")
         for item in e.items or []:
             lines.append(f"<i>• {_item_line(item)}</i>")
-        macros = _macros_line(e.protein, e.fat, e.carbs)
+        macros = _macros_line(e.protein, e.fat, e.carbs, bold=True)
         if macros:
             lines.append(f"<i>{macros}</i>")
         lines.append("")
@@ -1006,6 +1011,7 @@ def build_food_day_screen(date: dt.date, entries: list[FoodEntryView]) -> str:
         _sum_or_none(e.protein for e in entries),
         _sum_or_none(e.fat for e in entries),
         _sum_or_none(e.carbs for e in entries),
+        bold=True,
     )
     if day_macros:
         lines.append(day_macros)

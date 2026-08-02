@@ -263,7 +263,7 @@ def test_day_screen_numbers_entries_and_totals():
     assert "📷" in text
     assert "410 ккал" in text
     assert "2 приёма пищи" in text
-    assert "Б 12 · Ж 8 · У 55 г" in text
+    assert "Б <b>12</b> · Ж <b>8</b> · У <b>55</b> г" in text  # граммовки жирным
 
 
 def test_day_screen_flags_entries_without_calories():
@@ -290,9 +290,11 @@ def test_day_screen_shows_per_item_macros():
         )
     ]
     text = formatting.build_food_day_screen(dt.date(2026, 7, 20), entries)
+    # у отдельных продуктов — обычным текстом, не перегружаем скобки
     assert "Протеин — 30 г — 120 ккал (Б 24 · Ж 1 · У 3 г)" in text
     assert "Гранола — 150 г — 630 ккал (Б 15 · Ж 23 · У 98 г)" in text
-    assert "Б 39 · Ж 24 · У 101 г" in text  # итог по приёму — отдельной строкой
+    # итог по приёму — отдельной строкой, граммовки жирным
+    assert "Б <b>39</b> · Ж <b>24</b> · У <b>101</b> г" in text
 
 
 def test_estimate_text_lists_items_with_their_own_macros():
@@ -309,8 +311,13 @@ def test_estimate_text_lists_items_with_their_own_macros():
     assert "• Банан — 1 шт — 90 ккал" in text  # без макросов — без скобок
     assert "(Б" not in text.split("Банан")[1].split("\n")[0]
     assert "Итого: <b>310 ккал</b>" in text
-    assert "Б 9 · Ж 6 · У 62 г" in text
+    assert "Б <b>9</b> · Ж <b>6</b> · У <b>62</b> г" in text
     assert "порция на глаз" in text
+
+
+def test_macros_line_bolds_only_the_numbers():
+    assert formatting._macros_line(30, 12, 60) == "Б 30 · Ж 12 · У 60 г"
+    assert formatting._macros_line(30, 12, 60, bold=True) == "Б <b>30</b> · Ж <b>12</b> · У <b>60</b> г"
 
 
 def test_estimate_text_without_numbers_shows_dash():
@@ -464,7 +471,7 @@ async def test_typed_food_goes_to_model_and_shows_confirmation(user_id, monkeypa
 
     state = await _make_state(user_id)
     await state.set_state(FoodDiaryFlow.viewing)
-    await state.update_data(fd_date="2026-07-20")
+    await state.update_data(fd_date="2026-07-20", fd_screen_id=999)
     message = _make_message(user_id, text="овсянка с бананом")
 
     await food_diary.fd_text_entry(message, state)
@@ -476,6 +483,8 @@ async def test_typed_food_goes_to_model_and_shows_confirmation(user_id, monkeypa
     # карточка ушла правкой заглушки «думаю»
     placeholder = message.answer.return_value
     assert "Всё верно?" in placeholder.edit_text.call_args.args[0]
+    # экран дня («напиши, что съел») остался — не удалялся ради заглушки
+    message.bot.delete_message.assert_not_called()
 
 
 async def test_model_failure_keeps_the_diary_usable(user_id, monkeypatch):
@@ -489,13 +498,16 @@ async def test_model_failure_keeps_the_diary_usable(user_id, monkeypatch):
 
     state = await _make_state(user_id)
     await state.set_state(FoodDiaryFlow.viewing)
-    await state.update_data(fd_date="2026-07-20")
+    await state.update_data(fd_date="2026-07-20", fd_screen_id=999)
     message = _make_message(user_id, text="овсянка")
 
     await food_diary.fd_text_entry(message, state)
 
-    assert await state.get_state() == FoodDiaryFlow.viewing.state  # экран дня вернулся
+    assert await state.get_state() == FoodDiaryFlow.viewing.state
     assert "Не получилось разобрать" in message.answer.return_value.edit_text.call_args.args[0]
+    # экран дня цел — ни разу не удалялся и не перерисовывался
+    message.bot.delete_message.assert_not_called()
+    assert (await state.get_data())["fd_screen_id"] == 999
 
 
 async def test_confirm_asks_for_the_date_then_saves(user_id, monkeypatch):
@@ -612,6 +624,8 @@ async def test_fix_button_keeps_the_estimate_visible(user_id, monkeypatch):
     assert "Протеин — 30 г — 120 ккал" in shown_text
     assert "750 ккал" in shown_text
     assert food_diary._CORRECT_HINT in shown_text
+    # HTML-разметку карточки обязаны отрисовать, а не показать тегами как есть
+    assert callback.message.answer.call_args.kwargs["parse_mode"] == "HTML"
 
 
 async def test_typed_correction_without_pressing_the_button(user_id, monkeypatch):
