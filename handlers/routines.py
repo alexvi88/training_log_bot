@@ -115,7 +115,9 @@ async def rt_program_add(callback: CallbackQuery, state: FSMContext):
     # Create days in reverse so day 1 ends up newest and thus tops the routines
     # list (list_routines orders by created_at/id DESC).
     for day_name, exercises in reversed(program["days"]):
-        await db.create_routine_from_program(callback.from_user.id, day_name, exercises)
+        await db.create_routine_from_program(
+            callback.from_user.id, f"{program['name']} — {day_name}", exercises
+        )
     await callback.answer(f"Программа добавлена: {len(program['days'])} дн.")
     await show_manage(callback, state)
 

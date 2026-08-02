@@ -6,7 +6,7 @@ import logging
 import random
 from contextlib import suppress
 from html import escape
-from typing import Optional
+from typing import Callable, Optional
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
@@ -159,13 +159,18 @@ class _DraftStreamer:
     работает как прежде, только без анимации.
     """
 
-    def __init__(self, message: Message) -> None:
+    def __init__(self, message: Message, on_start: Optional[Callable] = None) -> None:
         self._message = message
         # Идентификатор черновика произвольный, но постоянный в пределах ответа:
         # им же черновик потом гасится пустым текстом.
         self._draft_id = message.message_id
         self._enabled = True
         self._started = False
+        # Вызывается ровно один раз, когда черновик реально появился на экране —
+        # чтобы вызывающая сторона убрала "думаю..." placeholder: два индикатора
+        # ожидания разом (статичный текст сообщением выше и печатающийся черновик
+        # снизу) читаются как баг, а не как прогресс.
+        self._on_start = on_start
 
     async def push(self, text: str) -> None:
         if not self._enabled or not text:
@@ -176,6 +181,8 @@ class _DraftStreamer:
                 draft_id=self._draft_id,
                 text=text[-MAX_DRAFT_CHARS:],
             )
+            if not self._started and self._on_start:
+                await self._on_start()
             self._started = True
         except (TelegramBadRequest, TelegramAPIError):
             # Не тот сервер/клиент, слишком часто, что угодно — молча живём
@@ -398,7 +405,11 @@ async def ai_program_save(callback: CallbackQuery, state: FSMContext):
         await db.create_routine_from_program(
             # .get на target: черновик переживает перезапуск в FSM-сторадже, так
             # что тут может лежать предложение, собранное ещё прошлой версией.
-            user_id, day["name"], [(item["name"], item.get("target")) for item in day["items"]]
+            # Имя программы — в префиксе: без него «Программы» превращаются в
+            # безымянные «День 1 — Жим», и через пару сохранённых программ не
+            # разобрать, откуда какой день.
+            user_id, f"{draft['name']} — {day['name']}",
+            [(item["name"], item.get("target")) for item in day["items"]]
         )
     await state.update_data(ai_program_draft=None)
 
@@ -535,7 +546,20 @@ async def _handle_question(
     placeholder = await message.answer(running_text)
     display = _RunningDisplay(placeholder, running_text)
     running_task = asyncio.create_task(display.cycle_idle())
-    streamer = _DraftStreamer(message)
+
+    async def on_draft_start() -> None:
+        # The native draft is now live and telling the same story ("тренер
+        # печатает..."), so the static "думаю..." bubble above it is a second,
+        # stale copy of the same signal — drop it rather than leave both on
+        # screen. edit_text on a deleted message just falls back to a fresh
+        # send later (see the final-answer loop below), so this is safe.
+        running_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await running_task
+        with suppress(TelegramBadRequest):
+            await placeholder.delete()
+
+    streamer = _DraftStreamer(message, on_start=on_draft_start)
 
     # Программа, если тренер собрал её этим ответом (см. propose_program). Держим
     # в ячейке, а не в возврате ask(): текст ответа и черновик — разные вещи, и
