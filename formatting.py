@@ -969,11 +969,10 @@ def build_food_estimate_text(
         # Ничего не выдумываем: без числа "Итого" не показываем вовсе (а не
         # "Итого: —") — так карточка от режима "без КБЖУ" не выглядит
         # недосчитанной, ей просто нечего тут показывать.
-        lines.append("")
-        lines.append(f"Итого: <b>{format_kcal(calories)}</b>")
         macros = _macros_line(protein, fat, carbs)
-        if macros:
-            lines.append(macros)
+        totals = f"{format_kcal(calories)} · {macros}" if macros else format_kcal(calories)
+        lines.append("")
+        lines.append(f"Итого: <b>{totals}</b>")
     if comment:
         lines.append("")
         lines.append(f"<i>{escape(comment)}</i>")

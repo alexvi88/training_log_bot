@@ -337,8 +337,7 @@ def test_estimate_text_lists_items_with_their_own_macros():
     assert "• Овсянка — 60 г — 220 ккал (Б6 · Ж4 · У36)" in text
     assert "• Банан — 1 шт — 90 ккал" in text  # без макросов — без скобок
     assert "(Б" not in text.split("Банан")[1].split("\n")[0]
-    assert "Итого: <b>310 ккал</b>" in text
-    assert "Б9 · Ж6 · У62" in text
+    assert "Итого: <b>310 ккал · Б9 · Ж6 · У62</b>" in text
     assert "порция на глаз" in text
 
 
