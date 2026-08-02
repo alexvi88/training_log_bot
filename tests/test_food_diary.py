@@ -233,6 +233,45 @@ async def test_analyze_food_sends_image_and_correction(monkeypatch, user_id):
     assert "это груша" in content[0]["text"]
 
 
+async def test_describe_only_uses_the_no_macros_prompt(monkeypatch, user_id):
+    """with_macros=False должен переключать промпт и не считать КБЖУ."""
+    captured = {}
+
+    async def fake_create(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(
+                content='{"is_food": true, "description": "Протеин Whey — 30 г", "comment": ""}'
+            ))],
+            usage=None,
+        )
+
+    monkeypatch.setattr(
+        ai_trainer, "_get_client", lambda: SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=fake_create)))
+    )
+
+    result = await ai_trainer.analyze_food(
+        user_id,
+        previous={"description": "Протеин Whey"},
+        correction="30г",
+        with_macros=False,
+    )
+
+    assert captured["messages"][0]["content"] == ai_trainer.FOOD_DESCRIBE_SYSTEM_PROMPT
+    assert result == {
+        "is_food": True, "description": "Протеин Whey — 30 г", "items": [],
+        "calories": None, "protein": None, "fat": None, "carbs": None, "comment": "",
+    }
+
+
+def test_describe_only_prompt_tells_the_model_to_fold_portion_into_description():
+    """Регрессия на баг: без этой инструкции модель кладёт уточнение вроде
+    «30 г» в comment, а comment нигде не сохраняется — правка теряется целиком
+    (см. отчёт пользователя «нигде не сохранилось что 30г»)."""
+    assert "ПРЯМО В description" in ai_trainer.FOOD_DESCRIBE_SYSTEM_PROMPT
+    assert "единственное поле, которое реально сохраняется" in ai_trainer.FOOD_DESCRIBE_SYSTEM_PROMPT
+
+
 # ---------- тексты экранов ----------
 
 
