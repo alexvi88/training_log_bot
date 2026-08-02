@@ -29,7 +29,6 @@ import datetime as dt
 import json
 import logging
 import re
-from types import SimpleNamespace
 from typing import Any, Awaitable, Callable, Optional
 
 from openai import AsyncOpenAI
