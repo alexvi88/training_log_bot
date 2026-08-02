@@ -109,7 +109,11 @@ async def test_analyze_food_normalizes_model_response(monkeypatch, user_id):
                     message=SimpleNamespace(
                         content=(
                             '{"description": "Овсянка с бананом", '
-                            '"items": ["овсянка 60 г — 220 ккал", "банан — 90 ккал", "  "], '
+                            '"items": ['
+                            '{"name": "овсянка", "portion": "60 г", "calories": "220 ккал", '
+                            '"protein": 6, "fat": 4, "carbs": 36}, '
+                            '{"name": "банан", "portion": "1 шт", "calories": 90}, '
+                            '{"name": "  "}], '
                             '"calories": "310 ккал", "protein": 9, "fat": null, "carbs": 62, '
                             '"comment": "порция на глаз"}'
                         )
@@ -126,12 +130,77 @@ async def test_analyze_food_normalizes_model_response(monkeypatch, user_id):
     result = await ai_trainer.analyze_food(user_id, text="овсянка с бананом")
 
     assert result["description"] == "Овсянка с бананом"
-    assert result["items"] == ["овсянка 60 г — 220 ккал", "банан — 90 ккал"]  # пустые выброшены
-    assert result["calories"] == 310.0
-    assert result["protein"] == 9.0
-    assert result["fat"] is None
+    assert [i["name"] for i in result["items"]] == ["овсянка", "банан"]  # безымянный выброшен
+    assert result["items"][0]["portion"] == "60 г"
+    assert result["items"][0]["protein"] == 6.0
+    # ккал пункта пересчитаны из его же БЖУ (6·4 + 4·9 + 36·4), а не взяты из ответа
+    assert result["items"][0]["calories"] == 204.0
+    assert result["items"][1]["fat"] is None  # чего не было в ответе — то None
+    assert result["items"][1]["calories"] == 90.0  # без полного БЖУ ккал модели не трогаем
+    # итог — сумма раскладки, а не отдельная догадка модели (в ответе было 310)
+    assert result["calories"] == 294.0
+    assert result["protein"] == 6.0
     assert result["comment"] == "порция на глаз"
     assert "овсянка с бананом" in captured["messages"][1]["content"]
+
+
+def test_atwater_kcal_needs_the_full_set():
+    assert ai_trainer._atwater_kcal({"protein": 28, "fat": 32, "carbs": 48}) == 592.0
+    assert ai_trainer._atwater_kcal({"protein": 28, "fat": None, "carbs": 48}) is None
+
+
+def test_reconcile_rounds_grams_then_derives_kcal():
+    """Округление до целых граммов идёт ДО пересчёта, иначе показанные «28 г»
+    и показанные ккал снова разойдутся."""
+    entry = {"calories": 620.0, "protein": 28.4, "fat": 31.6, "carbs": 47.7}
+    ai_trainer._reconcile_macros(entry)
+    assert (entry["protein"], entry["fat"], entry["carbs"]) == (28.0, 32.0, 48.0)
+    assert entry["calories"] == 28 * 4 + 32 * 9 + 48 * 4
+
+
+def test_reconcile_leaves_incomplete_macros_alone():
+    entry = {"calories": 250.0, "protein": 20.0, "fat": None, "carbs": 10.0}
+    ai_trainer._reconcile_macros(entry)
+    assert entry["calories"] == 250.0  # пересчитывать не из чего
+
+
+async def test_totals_reconcile_with_the_breakdown(monkeypatch, user_id):
+    """Главная проверка: показанные БЖУ, умноженные на 4/9/4, дают показанный
+    итог, и он же равен сумме калорий по строкам."""
+
+    async def fake_create(**kwargs):
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(
+                        content=(
+                            '{"description": "Чизбургер", "items": ['
+                            '{"name": "Булочка", "portion": "80 г", "calories": 220,'
+                            ' "protein": 7.4, "fat": 4.2, "carbs": 38.6},'
+                            '{"name": "Котлета", "portion": "100 г", "calories": 250,'
+                            ' "protein": 17.7, "fat": 19.4, "carbs": 0.3},'
+                            '{"name": "Сыр", "portion": "25 г", "calories": 100,'
+                            ' "protein": 6.1, "fat": 8.3, "carbs": 0.6}],'
+                            '"calories": 620, "protein": 28, "fat": 32, "carbs": 48}'
+                        )
+                    )
+                )
+            ],
+            usage=None,
+        )
+
+    monkeypatch.setattr(
+        ai_trainer, "_get_client", lambda: SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=fake_create)))
+    )
+
+    result = await ai_trainer.analyze_food(user_id, text="чизбургер")
+
+    by_formula = result["protein"] * 4 + result["fat"] * 9 + result["carbs"] * 4
+    assert result["calories"] == by_formula
+    assert result["calories"] == sum(i["calories"] for i in result["items"])
+    # и каждая строка сходится сама с собой
+    for item in result["items"]:
+        assert item["calories"] == item["protein"] * 4 + item["fat"] * 9 + item["carbs"] * 4
 
 
 async def test_analyze_food_sends_image_and_correction(monkeypatch, user_id):
@@ -171,6 +240,12 @@ def _view(**kwargs) -> formatting.FoodEntryView:
     return formatting.FoodEntryView(**base)
 
 
+def _item(**kwargs) -> formatting.FoodItemView:
+    base = {"name": "Овсянка"}
+    base.update(kwargs)
+    return formatting.FoodItemView(**base)
+
+
 def test_day_screen_empty_explains_how_to_add():
     text = formatting.build_food_day_screen(dt.date(2026, 7, 20), [])
     assert "20.07.2026" in text
@@ -204,15 +279,36 @@ def test_day_screen_escapes_html_in_description():
     assert "&lt;b&gt;" in text
 
 
-def test_estimate_text_lists_items_and_macros():
+def test_day_screen_shows_per_item_macros():
+    entries = [
+        _view(
+            id=1, description="Гранола с протеином", calories=750, protein=39, fat=24, carbs=101,
+            items=[
+                _item(name="Протеин", portion="30 г", calories=120, protein=24, fat=1, carbs=3),
+                _item(name="Гранола", portion="150 г", calories=630, protein=15, fat=23, carbs=98),
+            ],
+        )
+    ]
+    text = formatting.build_food_day_screen(dt.date(2026, 7, 20), entries)
+    assert "Протеин — 30 г — 120 ккал (Б 24 · Ж 1 · У 3 г)" in text
+    assert "Гранола — 150 г — 630 ккал (Б 15 · Ж 23 · У 98 г)" in text
+    assert "Б 39 · Ж 24 · У 101 г" in text  # итог по приёму — отдельной строкой
+
+
+def test_estimate_text_lists_items_with_their_own_macros():
     text = formatting.build_food_estimate_text(
         "Овсянка с бананом",
-        ["овсянка 60 г — 220 ккал", "банан — 90 ккал"],
+        [
+            _item(name="Овсянка", portion="60 г", calories=220, protein=6, fat=4, carbs=36),
+            _item(name="Банан", portion="1 шт", calories=90),
+        ],
         calories=310, protein=9, fat=6, carbs=62, comment="порция на глаз",
     )
     assert "Овсянка с бананом" in text
-    assert "• банан — 90 ккал" in text
-    assert "310 ккал" in text
+    assert "• Овсянка — 60 г — 220 ккал (Б 6 · Ж 4 · У 36 г)" in text
+    assert "• Банан — 1 шт — 90 ккал" in text  # без макросов — без скобок
+    assert "(Б" not in text.split("Банан")[1].split("\n")[0]
+    assert "Итого: <b>310 ккал</b>" in text
     assert "Б 9 · Ж 6 · У 62 г" in text
     assert "порция на глаз" in text
 
@@ -358,7 +454,9 @@ async def test_typed_food_goes_to_model_and_shows_confirmation(user_id, monkeypa
 
     async def fake_analyze(uid, text="", image_data_url=None, previous=None, correction=""):
         return {
-            "description": "Овсянка с бананом", "items": ["овсянка 60 г"],
+            "description": "Овсянка с бананом",
+            "items": [{"name": "овсянка", "portion": "60 г", "calories": 220,
+                       "protein": 6, "fat": 4, "carbs": 36}],
             "calories": 310, "protein": 9, "fat": 6, "carbs": 62, "comment": "",
         }
 
@@ -407,7 +505,10 @@ async def test_confirm_asks_for_the_date_then_saves(user_id, monkeypatch):
     await state.update_data(
         fd_date="2026-07-20",
         fd_pending={
-            "description": "Овсянка", "items": ["овсянка 60 г"], "calories": 310,
+            "description": "Овсянка",
+            "items": [{"name": "овсянка", "portion": "60 г", "calories": 220,
+                       "protein": None, "fat": None, "carbs": None}],
+            "calories": 310,
             "protein": 9, "fat": 6, "carbs": 62, "source": "text", "photo_file_id": None,
         },
     )
@@ -419,8 +520,11 @@ async def test_confirm_asks_for_the_date_then_saves(user_id, monkeypatch):
 
     entries = await dbmod.list_food_entries(user_id, "2026-07-18")
     assert [e["description"] for e in entries] == ["Овсянка"]
-    assert entries[0]["details"] == "овсянка 60 г"
     assert entries[0]["calories"] == 310
+    stored_items = food_diary._parse_items(entries[0]["details"])
+    assert [i.name for i in stored_items] == ["овсянка"]
+    assert stored_items[0].portion == "60 г"
+    assert stored_items[0].calories == 220
     # ничего не подвисло: экран вернулся на выбранный день, черновик очищен
     assert await state.get_state() == FoodDiaryFlow.viewing.state
     data = await state.get_data()
@@ -481,6 +585,33 @@ async def test_correction_reruns_the_model_with_the_previous_guess(user_id, monk
     assert pending["description"] == "Груша"
     assert pending["photo_file_id"] == "AgAC"  # фото от исходного сообщения не потерялось
     assert await state.get_state() == FoodDiaryFlow.confirming.state
+
+
+async def test_fix_button_keeps_the_estimate_visible(user_id, monkeypatch):
+    """Нажатие «✏️ Поправить» не должно стирать карточку с догадкой модели —
+    иначе непонятно, что именно поправлять."""
+    monkeypatch.setattr(food_diary.timeutil, "user_today", lambda user: dt.date(2026, 7, 20))
+    state = await _make_state(user_id)
+    await state.set_state(FoodDiaryFlow.confirming)
+    await state.update_data(
+        fd_date="2026-07-20",
+        fd_pending={
+            "description": "Гранола с протеином",
+            "items": [{"name": "Протеин", "portion": "30 г", "calories": 120,
+                       "protein": 24, "fat": 1, "carbs": 3}],
+            "calories": 750, "protein": 39, "fat": 24, "carbs": 101, "comment": "",
+        },
+    )
+
+    callback = _make_callback(user_id, "fd:fix")
+    await food_diary.fd_fix(callback, state)
+
+    assert await state.get_state() == FoodDiaryFlow.correcting.state
+    shown_text = callback.message.answer.call_args.args[0]
+    assert "Гранола с протеином" in shown_text
+    assert "Протеин — 30 г — 120 ккал" in shown_text
+    assert "750 ккал" in shown_text
+    assert food_diary._CORRECT_HINT in shown_text
 
 
 async def test_typed_correction_without_pressing_the_button(user_id, monkeypatch):

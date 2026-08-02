@@ -489,7 +489,12 @@ FOOD_ANALYSIS_SYSTEM_PROMPT = """\
 Отвечай ТОЛЬКО одним JSON-объектом, без markdown-обёртки и любого текста вокруг:
 {
   "description": "короткое название приёма пищи, 1 строка, по-русски",
-  "items": ["продукт — примерная порция — ккал", ...],
+  "items": [
+    {"name": "продукт", "portion": "примерная порция, напр. \"150 г\"",
+     "calories": число или null, "protein": число (граммы) или null,
+     "fat": число (граммы) или null, "carbs": число (граммы) или null},
+    ...
+  ],
   "calories": число или null,
   "protein": число (граммы) или null,
   "fat": число (граммы) или null,
@@ -500,8 +505,13 @@ FOOD_ANALYSIS_SYSTEM_PROMPT = """\
 Правила:
 - description — то, что человек увидит в дневнике: «Овсянка с бананом», «Куриная
   грудка с рисом и салатом». Без калорий и граммов внутри — они в отдельных полях.
-- items — построчная раскладка, 1-6 пунктов. Если из текста порции неизвестны,
-  предполагай обычную бытовую порцию и не спрашивай разрешения.
+- items — раскладка по продуктам, 1-6 пунктов, у КАЖДОГО своя порция и своё
+  КБЖУ. Если из текста порции неизвестны, предполагай обычную бытовую порцию
+  и не спрашивай разрешения.
+- Главное — правдоподобные БЖУ у каждого пункта: калорийность пересчитывается
+  из них по 4/4/9 уже после тебя, поэтому не подгоняй цифры друг под друга и не
+  бойся, что сумма не сойдётся — просто дай честную оценку белков, жиров и
+  углеводов для названной порции.
 - Цифры — оценка, а не точность до грамма: это нормально, оценивай смело. null
   ставь, только если по фото/тексту вообще нельзя понять, что это за еда.
 - Если человек уже указал вес/калории — используй его цифры, не переоценивай.
@@ -535,6 +545,42 @@ def _as_number(value: Any) -> Optional[float]:
         if match:
             return float(match.group().replace(",", "."))
     return None
+
+
+# Коэффициенты Атуотера — по ним калорийность считают на этикетках: белки и
+# углеводы по 4 ккал/г, жиры 9 ккал/г.
+_KCAL_PER_GRAM = {"protein": 4.0, "fat": 9.0, "carbs": 4.0}
+
+
+def _atwater_kcal(macros: dict[str, Optional[float]]) -> Optional[float]:
+    """Калорийность из БЖУ, или None — если хоть одного макроса не хватает."""
+    if any(macros.get(k) is None for k in _KCAL_PER_GRAM):
+        return None
+    return sum(macros[k] * per_gram for k, per_gram in _KCAL_PER_GRAM.items())
+
+
+def _reconcile_macros(entry: dict[str, Any]) -> None:
+    """Привести КБЖУ одной строки к целым граммам и пересчитать из них ккал.
+
+    Модель выдаёт калорийность и БЖУ как две независимые догадки, поэтому они
+    сходятся лишь примерно (620 ккал против 592 по формуле — обычный разброс).
+    На экране это читается как ошибка: любой, кто перемножит граммы на 4/4/9,
+    увидит, что итог не бьётся. Считаем ккал из БЖУ сами — и именно из тех
+    целых граммов, которые показываем, иначе округление вывода (28.4 → «28»)
+    снова разведёт цифры. Строку без полного набора БЖУ не трогаем: там
+    пересчитывать не из чего, и калорийность модели остаётся как есть.
+    """
+    for key in _KCAL_PER_GRAM:
+        if entry.get(key) is not None:
+            entry[key] = float(round(entry[key]))
+    kcal = _atwater_kcal(entry)
+    if kcal is not None:
+        entry["calories"] = kcal
+
+
+def _sum_field(items: list[dict[str, Any]], field: str) -> Optional[float]:
+    known = [i[field] for i in items if i.get(field) is not None]
+    return sum(known) if known else None
 
 
 async def analyze_food(
@@ -579,16 +625,43 @@ async def analyze_food(
     await _log_llm_cost(user_id, config.GROK_MODEL, getattr(response, "usage", None))
     data = _extract_json_object(response.choices[0].message.content or "")
 
-    items = [str(i).strip() for i in data.get("items") or [] if str(i).strip()]
-    return {
+    items = []
+    for raw in (data.get("items") or [])[:6]:
+        if not isinstance(raw, dict):
+            continue
+        name = str(raw.get("name") or "").strip()
+        if not name:
+            continue
+        item = {
+            "name": name,
+            "portion": str(raw.get("portion") or "").strip(),
+            "calories": _as_number(raw.get("calories")),
+            "protein": _as_number(raw.get("protein")),
+            "fat": _as_number(raw.get("fat")),
+            "carbs": _as_number(raw.get("carbs")),
+        }
+        _reconcile_macros(item)
+        items.append(item)
+
+    estimate = {
         "description": str(data.get("description") or "").strip(),
-        "items": items[:6],
+        "items": items,
         "calories": _as_number(data.get("calories")),
         "protein": _as_number(data.get("protein")),
         "fat": _as_number(data.get("fat")),
         "carbs": _as_number(data.get("carbs")),
         "comment": str(data.get("comment") or "").strip(),
     }
+    if items:
+        # Итог — сумма раскладки, а не отдельная догадка модели: иначе строки и
+        # «Итого» на карточке живут своей жизнью. Граммы у пунктов уже целые, а
+        # формула линейна, так что сумма ккал по пунктам ровно равна ккал из
+        # суммы БЖУ — карточка сходится и по вертикали, и по формуле.
+        for field in ("calories", "protein", "fat", "carbs"):
+            estimate[field] = _sum_field(items, field)
+    else:
+        _reconcile_macros(estimate)
+    return estimate
 
 
 TOOLS: list[dict[str, Any]] = [
