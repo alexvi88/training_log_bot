@@ -960,13 +960,12 @@ def build_food_estimate_text(
     fat: float | None = None,
     carbs: float | None = None,
     comment: str = "",
-    header: str = "🍽 <b>Вот что я вижу:</b>",
+    header: str = "🍽 Вот что я вижу:",
 ) -> str:
     """The confirmation card shown after the model reads a meal, and (with a
     different header) the preview of a correction."""
     lines = [header, "", f"<b>{escape(description or 'Приём пищи')}</b>"]
     if items:
-        lines.append("")
         lines.extend(f"• {_item_line(i)}" for i in items)
     lines.append("")
     lines.append(f"Итого: <b>{format_kcal(calories)}</b>")

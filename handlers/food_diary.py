@@ -352,7 +352,9 @@ async def fd_fix(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     pending = data.get("fd_pending") or {}
     text = _estimate_text(pending) + "\n\n" + _CORRECT_HINT
-    await ui.safe_edit(callback, text, reply_markup=keyboards.cancel_keyboard("fd:cancel"))
+    await ui.safe_edit(
+        callback, text, reply_markup=keyboards.cancel_keyboard("fd:cancel"), parse_mode="HTML"
+    )
     await callback.answer()
 
 

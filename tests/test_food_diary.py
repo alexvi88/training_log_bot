@@ -624,6 +624,8 @@ async def test_fix_button_keeps_the_estimate_visible(user_id, monkeypatch):
     assert "Протеин — 30 г — 120 ккал" in shown_text
     assert "750 ккал" in shown_text
     assert food_diary._CORRECT_HINT in shown_text
+    # HTML-разметку карточки обязаны отрисовать, а не показать тегами как есть
+    assert callback.message.answer.call_args.kwargs["parse_mode"] == "HTML"
 
 
 async def test_typed_correction_without_pressing_the_button(user_id, monkeypatch):
