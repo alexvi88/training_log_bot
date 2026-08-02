@@ -474,3 +474,57 @@ async def test_close_card_just_deletes_it(fresh_db, user_id):
 
     callback.message.delete.assert_awaited_once()
     callback.answer.assert_awaited_once()
+
+
+async def test_long_card_gets_the_comment_as_its_own_message(fresh_db, user_id, monkeypatch):
+    """A long finish card plus a comment can pass Telegram's 4096 cap. The edit
+    is wrapped in suppress(), so the user was told the comment was coming and
+    then nothing changed — deliver it separately instead of losing it."""
+    import ai_trainer as ai_trainer_module
+    import db as dbmod
+
+    workout_id = await dbmod.create_workout(user_id)
+    await dbmod.finish_workout(workout_id)
+
+    async def fake_comment(uid, wid):
+        return "Хорошая работа, держи темп."
+
+    monkeypatch.setattr(ai_trainer_module, "is_configured", lambda: True)
+    monkeypatch.setattr(ai_trainer_module, "comment_on_workout", fake_comment)
+
+    callback = _make_callback(user_id, f"ai:comment:{workout_id}")
+    callback.message.html_text = "к" * 4090
+    callback.message.reply_markup = None
+    callback.message.edit_text = AsyncMock()
+    callback.message.edit_reply_markup = AsyncMock()
+
+    await ai_trainer.ai_comment_workout(callback, await _make_state(user_id))
+
+    callback.message.edit_text.assert_not_awaited()
+    callback.message.answer.assert_awaited_once()
+    assert "Хорошая работа" in callback.message.answer.await_args.args[0]
+
+
+async def test_short_card_still_gets_the_comment_appended_in_place(fresh_db, user_id, monkeypatch):
+    import ai_trainer as ai_trainer_module
+    import db as dbmod
+
+    workout_id = await dbmod.create_workout(user_id)
+    await dbmod.finish_workout(workout_id)
+
+    async def fake_comment(uid, wid):
+        return "Коротко и по делу."
+
+    monkeypatch.setattr(ai_trainer_module, "is_configured", lambda: True)
+    monkeypatch.setattr(ai_trainer_module, "comment_on_workout", fake_comment)
+
+    callback = _make_callback(user_id, f"ai:comment:{workout_id}")
+    callback.message.html_text = "Карточка тренировки"
+    callback.message.reply_markup = None
+    callback.message.edit_text = AsyncMock()
+    callback.message.edit_reply_markup = AsyncMock()
+
+    await ai_trainer.ai_comment_workout(callback, await _make_state(user_id))
+
+    callback.message.edit_text.assert_awaited_once()
+    assert "Коротко и по делу" in callback.message.edit_text.await_args.args[0]

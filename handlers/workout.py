@@ -65,11 +65,23 @@ async def _attach_ai_comment(
             )
         return
     await db.set_workout_ai_comment(workout_id, comment)
-    new_text = base_text + "\n" + formatting.build_ai_comment_block(comment)
+    comment_block = formatting.build_ai_comment_block(comment)
+    new_text = base_text + "\n" + comment_block
+    card_kb = keyboards.workout_card_keyboard(workout_id, show_ai_button=False)
+    if formatting.telegram_length(new_text) > formatting.MESSAGE_LIMIT:
+        # A long card plus a comment can pass Telegram's cap; the edit is
+        # suppressed on failure, so the comment would just never appear.
+        with suppress(TelegramBadRequest):
+            await bot.edit_message_reply_markup(
+                chat_id=chat_id, message_id=message_id, reply_markup=card_kb
+            )
+        with suppress(TelegramBadRequest):
+            await bot.send_message(chat_id=chat_id, text=comment_block, parse_mode="HTML")
+        return
     with suppress(TelegramBadRequest):
         await bot.edit_message_text(
             chat_id=chat_id, message_id=message_id, text=new_text, parse_mode="HTML",
-            reply_markup=keyboards.workout_card_keyboard(workout_id, show_ai_button=False),
+            reply_markup=card_kb,
         )
 
 

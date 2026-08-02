@@ -297,7 +297,8 @@ async def ai_comment_workout(callback: CallbackQuery, state: FSMContext):
             return
         await db.set_workout_ai_comment(workout_id, comment)
 
-    new_text = (callback.message.html_text or "") + "\n" + formatting.build_ai_comment_block(comment)
+    comment_block = formatting.build_ai_comment_block(comment)
+    new_text = (callback.message.html_text or "") + "\n" + comment_block
     existing_kb = callback.message.reply_markup
     rows = existing_kb.inline_keyboard if existing_kb else []
     new_rows = [
@@ -305,6 +306,15 @@ async def ai_comment_workout(callback: CallbackQuery, state: FSMContext):
     ]
     new_rows = [r for r in new_rows if r]
     new_markup = InlineKeyboardMarkup(inline_keyboard=new_rows) if new_rows else None
+
+    if formatting.telegram_length(new_text) > formatting.MESSAGE_LIMIT:
+        # A long card plus a comment can pass Telegram's cap, and the edit was
+        # wrapped in suppress() — so the user was told the comment was coming
+        # and then nothing changed. Deliver it as its own message instead.
+        with suppress(TelegramBadRequest):
+            await callback.message.edit_reply_markup(reply_markup=new_markup)
+        await callback.message.answer(comment_block, parse_mode="HTML")
+        return
     with suppress(TelegramBadRequest):
         await callback.message.edit_text(new_text, parse_mode="HTML", reply_markup=new_markup)
 
