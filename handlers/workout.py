@@ -723,7 +723,7 @@ async def stale_delete_cancel(callback: CallbackQuery, state: FSMContext):
 
 
 async def _show_main_menu(callback: CallbackQuery, state: FSMContext, delete_current: bool = True):
-    # delete_current=False when reached from the AI-trainer chat's "⬅️ Меню"
+    # delete_current=False when reached from the AI-trainer chat's "🏠 Меню"
     # button — that message is part of the user's conversation with the
     # AI-тренер, not a disposable menu screen, so it should stay in the chat
     # instead of being deleted (same reasoning as _enter_live's delete_message).
@@ -741,7 +741,7 @@ async def _show_main_menu(callback: CallbackQuery, state: FSMContext, delete_cur
 
 @router.callback_query(F.data == "live:back_to_menu")
 async def live_back_to_menu(callback: CallbackQuery, state: FSMContext):
-    """"⬅️ В меню" on the just-finished workout card — see _finalize_workout,
+    """"🏠 Меню" on the just-finished workout card — see _finalize_workout,
     which stopped auto-sending the menu so the card isn't buried under it."""
     await _show_main_menu(callback, state)
     await callback.answer()
@@ -2293,5 +2293,5 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
     await state.clear()
     # No auto-sent menu message here on purpose: it used to bury the card (the
     # PR/comparison highlights, the AI comment) the instant it appeared. The
-    # card's own "⬅️ В меню" button (live:back_to_menu below) opens the menu
+    # card's own "🏠 Меню" button (live:back_to_menu below) opens the menu
     # in its place instead, so it's a beat the user chooses, not one forced on them.

@@ -101,7 +101,7 @@ async def test_menu_then_resume_keeps_full_superset_open(fresh_db, user_id):
 
 
 async def test_show_main_menu_then_resume_keeps_full_superset_open(fresh_db, user_id):
-    """Same scenario via the inline '⬅️ Меню' button (_show_main_menu) instead of
+    """Same scenario via the inline '🏠 Меню' button (_show_main_menu) instead of
     the persistent keyboard button, e.g. reached from the history screen."""
     db = fresh_db
     group_id = await db.create_muscle_group(user_id, "Руки")
