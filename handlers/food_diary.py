@@ -231,7 +231,7 @@ async def _show_estimate(
     """
     await state.update_data(fd_pending=estimate)
     await state.set_state(FoodDiaryFlow.confirming)
-    text = _estimate_text(estimate) + "\n\nВсё верно?"
+    text = _estimate_text(estimate)
     kb = keyboards.food_confirm_keyboard()
     if placeholder is not None:
         try:
