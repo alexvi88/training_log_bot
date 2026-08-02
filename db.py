@@ -192,6 +192,7 @@ CREATE TABLE IF NOT EXISTS routine_exercises (
     routine_id INTEGER NOT NULL,
     exercise_id INTEGER NOT NULL,
     order_index INTEGER NOT NULL,
+    target TEXT,
     FOREIGN KEY (routine_id) REFERENCES routines (id),
     FOREIGN KEY (exercise_id) REFERENCES exercises (id)
 );
@@ -338,6 +339,10 @@ async def _migrate_schema() -> None:
     set_cols = await _column_names("sets")
     if "is_warmup" in set_cols:
         await _conn.execute("ALTER TABLE sets DROP COLUMN is_warmup")
+
+    routine_ex_cols = await _column_names("routine_exercises")
+    if "target" not in routine_ex_cols:
+        await _conn.execute("ALTER TABLE routine_exercises ADD COLUMN target TEXT")
 
     await _conn.commit()
 
@@ -1759,11 +1764,14 @@ async def create_routine(user_id: int, name: str) -> int:
         return cur.lastrowid
 
 
-async def add_routine_exercise(routine_id: int, exercise_id: int, order_index: int) -> None:
+async def add_routine_exercise(
+    routine_id: int, exercise_id: int, order_index: int, target: Optional[str] = None
+) -> None:
     async with _write_lock:
         await conn().execute(
-            "INSERT INTO routine_exercises (routine_id, exercise_id, order_index) VALUES (?, ?, ?)",
-            (routine_id, exercise_id, order_index),
+            "INSERT INTO routine_exercises (routine_id, exercise_id, order_index, target) "
+            "VALUES (?, ?, ?, ?)",
+            (routine_id, exercise_id, order_index, target),
         )
         await conn().commit()
 
@@ -1880,22 +1888,30 @@ async def get_or_create_user_exercise_by_name(user_id: int, name: str) -> Option
     return None
 
 
-async def create_routine_from_program(user_id: int, name: str, exercise_names: list[str]) -> int:
+async def create_routine_from_program(
+    user_id: int, name: str, exercise_names: list[str | tuple[str, Optional[str]]]
+) -> int:
     """Instantiate one ready-made program day as a routine.
 
     Each exercise name is resolved to the user's own copy (forking the global
     template when missing). Duplicate or unresolvable names are skipped so the
     routine stays clean.
+
+    Each item may be a bare name, or an (name, target) tuple carrying the
+    program's recommended sets×reps for that exercise (e.g. "4×6–8") — stored on
+    the routine_exercises row so it can be shown again both on the routine and
+    while logging a workout started from it.
     """
     routine_id = await create_routine(user_id, name)
     seen: set[int] = set()
     order = 0
-    for ex_name in exercise_names:
+    for item in exercise_names:
+        ex_name, target = item if isinstance(item, tuple) else (item, None)
         ex_id = await get_or_create_user_exercise_by_name(user_id, ex_name)
         if ex_id is None or ex_id in seen:
             continue
         seen.add(ex_id)
-        await add_routine_exercise(routine_id, ex_id, order)
+        await add_routine_exercise(routine_id, ex_id, order, target)
         order += 1
     return routine_id
 
