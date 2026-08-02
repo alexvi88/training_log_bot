@@ -39,14 +39,16 @@ async def test_food_entry_roundtrip_and_day_grouping(user_id):
 
 
 async def test_food_days_history_newest_first_with_totals(user_id):
-    await dbmod.add_food_entry(user_id, "2026-07-20", "Овсянка", calories=350)
-    await dbmod.add_food_entry(user_id, "2026-07-20", "Кофе", calories=60)
-    await dbmod.add_food_entry(user_id, "2026-07-21", "Творог", calories=200)
+    await dbmod.add_food_entry(user_id, "2026-07-20", "Овсянка", calories=350, protein=12, fat=8, carbs=55)
+    await dbmod.add_food_entry(user_id, "2026-07-20", "Кофе", calories=60, protein=1)
+    await dbmod.add_food_entry(user_id, "2026-07-21", "Творог", calories=200, protein=20, fat=5, carbs=10)
 
     days = await dbmod.list_food_days(user_id)
     assert [r["eaten_on"] for r in days] == ["2026-07-21", "2026-07-20"]
     assert [r["entries"] for r in days] == [1, 2]
     assert [r["calories"] for r in days] == [200, 410]
+    assert [r["protein"] for r in days] == [20, 13]
+    assert days[1]["fat"] == 8  # у второй записи (Кофе) fat не задан — суммируем только известное
     assert await dbmod.count_food_days(user_id) == 2
 
 
@@ -263,7 +265,16 @@ def test_day_screen_numbers_entries_and_totals():
     assert "📷" in text
     assert "410 ккал" in text
     assert "2 приёма пищи" in text
-    assert "Б <b>12</b> · Ж <b>8</b> · У <b>55</b> г" in text  # граммовки жирным
+    assert "Б 12 · Ж 8 · У 55" in text
+
+
+def test_non_empty_day_screen_still_hints_at_adding_more():
+    """Без этой строки экран после первой записи выглядит тупиком — непонятно,
+    что можно просто дописать ещё один приём пищи (см. отчёт пользователя)."""
+    text = formatting.build_food_day_screen(
+        dt.date(2026, 7, 20), [_view(id=1, description="Овсянка", calories=350)]
+    )
+    assert "Напиши текстом или пришли фото" in text
 
 
 def test_day_screen_flags_entries_without_calories():
@@ -291,10 +302,9 @@ def test_day_screen_shows_per_item_macros():
     ]
     text = formatting.build_food_day_screen(dt.date(2026, 7, 20), entries)
     # у отдельных продуктов — обычным текстом, не перегружаем скобки
-    assert "Протеин — 30 г — 120 ккал (Б 24 · Ж 1 · У 3 г)" in text
-    assert "Гранола — 150 г — 630 ккал (Б 15 · Ж 23 · У 98 г)" in text
-    # итог по приёму — отдельной строкой, граммовки жирным
-    assert "Б <b>39</b> · Ж <b>24</b> · У <b>101</b> г" in text
+    assert "Протеин — 30 г — 120 ккал (Б 24 · Ж 1 · У 3)" in text
+    assert "Гранола — 150 г — 630 ккал (Б 15 · Ж 23 · У 98)" in text
+    assert "Б 39 · Ж 24 · У 101" in text  # итог по приёму — отдельной строкой
 
 
 def test_estimate_text_lists_items_with_their_own_macros():
@@ -307,31 +317,53 @@ def test_estimate_text_lists_items_with_their_own_macros():
         calories=310, protein=9, fat=6, carbs=62, comment="порция на глаз",
     )
     assert "Овсянка с бананом" in text
-    assert "• Овсянка — 60 г — 220 ккал (Б 6 · Ж 4 · У 36 г)" in text
+    assert "• Овсянка — 60 г — 220 ккал (Б 6 · Ж 4 · У 36)" in text
     assert "• Банан — 1 шт — 90 ккал" in text  # без макросов — без скобок
     assert "(Б" not in text.split("Банан")[1].split("\n")[0]
     assert "Итого: <b>310 ккал</b>" in text
-    assert "Б <b>9</b> · Ж <b>6</b> · У <b>62</b> г" in text
+    assert "Б 9 · Ж 6 · У 62" in text
     assert "порция на глаз" in text
 
 
-def test_macros_line_bolds_only_the_numbers():
-    assert formatting._macros_line(30, 12, 60) == "Б 30 · Ж 12 · У 60 г"
-    assert formatting._macros_line(30, 12, 60, bold=True) == "Б <b>30</b> · Ж <b>12</b> · У <b>60</b> г"
+def test_macros_line_has_no_bold_and_no_trailing_unit():
+    assert formatting._macros_line(30, 12, 60) == "Б 30 · Ж 12 · У 60"
 
 
-def test_estimate_text_without_numbers_shows_dash():
+def test_estimate_text_without_numbers_skips_totals_entirely():
+    """Без оценки (режим "без КБЖУ", или модель ничего не разобрала) карточка
+    не выдумывает плейсхолдер вида "Итого: —" — просто ничего не показывает."""
     text = formatting.build_food_estimate_text("Что-то съел", [])
-    assert "— ккал" in text or "—" in text
-    assert "Б " not in text  # строки БЖУ нет вовсе
+    assert "Итого" not in text
+    assert "Б " not in text
+
+
+def _day(**kwargs) -> formatting.FoodDayView:
+    base = {"date": dt.date(2026, 7, 20), "entries": 1}
+    base.update(kwargs)
+    return formatting.FoodDayView(**base)
 
 
 def test_history_list_newest_first():
-    days = [(dt.date(2026, 7, 21), 1, 200.0), (dt.date(2026, 7, 20), 2, 410.0)]
+    days = [
+        _day(date=dt.date(2026, 7, 21), entries=1, calories=200.0),
+        _day(date=dt.date(2026, 7, 20), entries=2, calories=410.0),
+    ]
     text = formatting.build_food_history_list(days)
     assert text.index("21.07.2026") < text.index("20.07.2026")
     assert "2 приёма" in text
     assert "410 ккал" in text
+
+
+def test_history_list_shows_per_day_macros():
+    days = [_day(entries=2, calories=410.0, protein=29, fat=15, carbs=40)]
+    text = formatting.build_food_history_list(days)
+    assert "Б 29 · Ж 15 · У 40" in text
+
+
+def test_history_list_skips_macros_line_when_unknown():
+    days = [_day(entries=1, calories=200.0)]
+    text = formatting.build_food_history_list(days)
+    assert "Б " not in text
 
 
 def test_history_list_empty():
@@ -353,10 +385,17 @@ def test_day_keyboard_has_delete_per_entry_and_day_steps():
     today = dt.date(2026, 7, 21)
     kb = keyboards.food_day_keyboard(dt.date(2026, 7, 20), [7, 8], today=today)
     cbs = _callbacks(kb)
-    assert "fd:del:7" in cbs and "fd:del:8" in cbs
+    assert "fd:delask:7" in cbs and "fd:delask:8" in cbs  # спрашивает подтверждение, не удаляет сразу
     assert "fd:day:2026-07-19" in cbs  # шаг назад
     assert "fd:day:2026-07-21" in cbs  # шаг вперёд — день в прошлом
     assert "fd:history:0" in cbs
+
+
+def test_day_keyboard_history_and_menu_share_a_row():
+    kb = keyboards.food_day_keyboard(dt.date(2026, 7, 20), [], today=dt.date(2026, 7, 20))
+    last_row = kb.inline_keyboard[-1]
+    assert [b.callback_data for b in last_row] == ["fd:history:0", "fd:menu"]
+    assert last_row[1].text == "🏠 Меню"
 
 
 def test_day_keyboard_hides_step_into_the_future():
@@ -459,7 +498,7 @@ async def test_typed_food_goes_to_model_and_shows_confirmation(user_id, monkeypa
     monkeypatch.setattr(food_diary.timeutil, "user_today", lambda user: dt.date(2026, 7, 20))
     monkeypatch.setattr(food_diary.ai_trainer, "is_configured", lambda: True)
 
-    async def fake_analyze(uid, text="", image_data_url=None, previous=None, correction=""):
+    async def fake_analyze(uid, text="", image_data_url=None, previous=None, correction="", with_macros=True):
         return {
             "description": "Овсянка с бананом",
             "items": [{"name": "овсянка", "portion": "60 г", "calories": 220,
@@ -573,7 +612,7 @@ async def test_correction_reruns_the_model_with_the_previous_guess(user_id, monk
     monkeypatch.setattr(food_diary.ai_trainer, "is_configured", lambda: True)
     seen = {}
 
-    async def fake_analyze(uid, text="", image_data_url=None, previous=None, correction=""):
+    async def fake_analyze(uid, text="", image_data_url=None, previous=None, correction="", with_macros=True):
         seen["previous"] = previous
         seen["correction"] = correction
         return {"description": "Груша", "items": [], "calories": 80, "comment": ""}
@@ -634,7 +673,7 @@ async def test_typed_correction_without_pressing_the_button(user_id, monkeypatch
     monkeypatch.setattr(food_diary.ai_trainer, "is_configured", lambda: True)
     seen = {}
 
-    async def fake_analyze(uid, text="", image_data_url=None, previous=None, correction=""):
+    async def fake_analyze(uid, text="", image_data_url=None, previous=None, correction="", with_macros=True):
         seen["correction"] = correction
         return {"description": "Груша", "items": [], "calories": 80, "comment": ""}
 
@@ -671,6 +710,36 @@ async def test_cancel_drops_the_draft(user_id, monkeypatch):
     assert (await state.get_data())["fd_pending"] is None
     assert await dbmod.count_food_days(user_id) == 0
     assert await state.get_state() == FoodDiaryFlow.viewing.state
+
+
+async def test_delete_asks_for_confirmation_before_removing(user_id, monkeypatch):
+    monkeypatch.setattr(food_diary.timeutil, "user_today", lambda user: dt.date(2026, 7, 20))
+    entry_id = await dbmod.add_food_entry(user_id, "2026-07-20", "Овсянка", calories=350)
+
+    state = await _make_state(user_id)
+    await state.set_state(FoodDiaryFlow.viewing)
+    callback = _make_callback(user_id, f"fd:delask:{entry_id}")
+
+    await food_diary.fd_delete_ask(callback, state)
+
+    # ничего не удалено — только показан вопрос с кнопками подтверждения
+    assert await dbmod.get_food_entry(entry_id) is not None
+    shown_text = callback.message.answer.call_args.args[0]
+    assert "Овсянка" in shown_text
+    kb = callback.message.answer.call_args.kwargs["reply_markup"]
+    cbs = [b.callback_data for row in kb.inline_keyboard for b in row]
+    assert f"fd:del:{entry_id}" in cbs
+    assert "fd:day:2026-07-20" in cbs  # «Отмена» ведёт назад на день записи
+
+
+async def test_delete_asks_reports_missing_entry(user_id, monkeypatch):
+    state = await _make_state(user_id)
+    await state.set_state(FoodDiaryFlow.viewing)
+    callback = _make_callback(user_id, "fd:delask:999999")
+
+    await food_diary.fd_delete_ask(callback, state)
+
+    assert callback.answer.call_args.args[0] == "Запись не найдена"
 
 
 async def test_delete_removes_only_the_owner_entry(user_id, monkeypatch):

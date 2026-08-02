@@ -923,12 +923,10 @@ def format_kcal(value: float | None) -> str:
     return "—" if value is None else f"{round(value):g} ккал"
 
 
-def _macros_line(protein: float | None, fat: float | None, carbs: float | None, bold: bool = False) -> str:
-    """"Б 30 · Ж 12 · У 60 г" — skipped entirely when the model gave no macros.
-
-    bold=True (totals — a meal's or a day's) wraps just the numbers in <b>, so
-    they read at a glance without the Б/Ж/У labels competing for weight; the
-    per-item breakdown in parentheses stays plain, it's already secondary text.
+def _macros_line(protein: float | None, fat: float | None, carbs: float | None) -> str:
+    """"Б 30 · Ж 12 · У 60" — skipped entirely when the model gave no macros.
+    No trailing "г": the labels (Б/Ж/У) already say these are grams, unlike a
+    bare number that needs a unit.
     """
     parts = [
         (label, v)
@@ -937,8 +935,7 @@ def _macros_line(protein: float | None, fat: float | None, carbs: float | None, 
     ]
     if not parts:
         return ""
-    num = (lambda v: f"<b>{round(v):g}</b>") if bold else (lambda v: f"{round(v):g}")
-    return " · ".join(f"{label} {num(v)}" for label, v in parts) + " г"
+    return " · ".join(f"{label} {round(v):g}" for label, v in parts)
 
 
 def _item_line(item: FoodItemView) -> str:
@@ -967,11 +964,15 @@ def build_food_estimate_text(
     lines = [header, "", f"<b>{escape(description or 'Приём пищи')}</b>"]
     if items:
         lines.extend(f"• {_item_line(i)}" for i in items)
-    lines.append("")
-    lines.append(f"Итого: <b>{format_kcal(calories)}</b>")
-    macros = _macros_line(protein, fat, carbs, bold=True)
-    if macros:
-        lines.append(macros)
+    if calories is not None:
+        # Ничего не выдумываем: без числа "Итого" не показываем вовсе (а не
+        # "Итого: —") — так карточка от режима "без КБЖУ" не выглядит
+        # недосчитанной, ей просто нечего тут показывать.
+        lines.append("")
+        lines.append(f"Итого: <b>{format_kcal(calories)}</b>")
+        macros = _macros_line(protein, fat, carbs)
+        if macros:
+            lines.append(macros)
     if comment:
         lines.append("")
         lines.append(f"<i>{escape(comment)}</i>")
@@ -991,30 +992,35 @@ def build_food_day_screen(date: dt.date, entries: list[FoodEntryView]) -> str:
     lines = [head, ""]
     for i, e in enumerate(entries, start=1):
         photo = " 📷" if e.has_photo else ""
-        lines.append(f"<b>{i}. {escape(e.description)}</b>{photo} — {format_kcal(e.calories)}")
+        kcal_part = f" — {format_kcal(e.calories)}" if e.calories is not None else ""
+        lines.append(f"<b>{i}. {escape(e.description)}</b>{photo}{kcal_part}")
         for item in e.items or []:
             lines.append(f"<i>• {_item_line(item)}</i>")
-        macros = _macros_line(e.protein, e.fat, e.carbs, bold=True)
+        macros = _macros_line(e.protein, e.fat, e.carbs)
         if macros:
             lines.append(f"<i>{macros}</i>")
         lines.append("")
 
     known = [e.calories for e in entries if e.calories is not None]
-    total = sum(known) if known else None
     n = plural_ru(len(entries), ("приём", "приёма", "приёмов"))
-    total_line = f"{DIVIDER}\nИтого за день: <b>{format_kcal(total)}</b> · {len(entries)} {n} пищи"
-    if known and len(known) < len(entries):
-        total_line += f"\n<i>(без калорий: {len(entries) - len(known)})</i>"
+    if known:
+        total = sum(known)
+        total_line = f"{DIVIDER}\nИтого за день: <b>{format_kcal(total)}</b> · {len(entries)} {n} пищи"
+        if len(known) < len(entries):
+            total_line += f"\n<i>(без калорий: {len(entries) - len(known)})</i>"
+    else:
+        total_line = f"{DIVIDER}\nЗа день: {len(entries)} {n} пищи"
     lines.append(total_line)
 
     day_macros = _macros_line(
         _sum_or_none(e.protein for e in entries),
         _sum_or_none(e.fat for e in entries),
         _sum_or_none(e.carbs for e in entries),
-        bold=True,
     )
     if day_macros:
         lines.append(day_macros)
+    lines.append("")
+    lines.append("<i>Ещё что-то съел? Напиши текстом или пришли фото — добавлю новой записью.</i>")
     return "\n".join(lines)
 
 
@@ -1023,7 +1029,18 @@ def _sum_or_none(values) -> float | None:
     return sum(known) if known else None
 
 
-def build_food_history_list(days: list[tuple[dt.date, int, float | None]]) -> str:
+@dataclass
+class FoodDayView:
+    """One day's row in the history list, with its totals."""
+    date: dt.date
+    entries: int
+    calories: float | None = None
+    protein: float | None = None
+    fat: float | None = None
+    carbs: float | None = None
+
+
+def build_food_history_list(days: list[FoodDayView]) -> str:
     """The history tab: one line per logged day, newest first."""
     if not days:
         return (
@@ -1031,10 +1048,13 @@ def build_food_history_list(days: list[tuple[dt.date, int, float | None]]) -> st
             "Открой день и напиши, что съел."
         )
     lines = ["📚 <b>История питания</b>", ""]
-    for date, entries, calories in days:
-        n = plural_ru(entries, ("приём", "приёма", "приёмов"))
+    for d in days:
+        n = plural_ru(d.entries, ("приём", "приёма", "приёмов"))
         lines.append(
-            f"<b>{format_date_ru(dt.datetime.combine(date, dt.time()))}</b> — "
-            f"{entries} {n} · {format_kcal(calories)}"
+            f"<b>{format_date_ru(dt.datetime.combine(d.date, dt.time()))}</b> — "
+            f"{d.entries} {n} · {format_kcal(d.calories)}"
         )
+        macros = _macros_line(d.protein, d.fat, d.carbs)
+        if macros:
+            lines.append(f"<i>{macros}</i>")
     return "\n".join(lines)

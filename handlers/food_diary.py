@@ -24,6 +24,7 @@ import datetime as dt
 import json
 import logging
 from contextlib import suppress
+from html import escape
 from typing import Any, Optional
 
 from aiogram import F, Router
@@ -58,6 +59,8 @@ _CORRECT_HINT = (
     "✏️ Напиши, что не так — например «это была груша, и порция граммов 300» "
     "или «добавь ещё кофе с молоком»."
 )
+
+_NOT_FOOD_HINT = "Пришли фото самой еды или напиши текстом, что съел."
 
 # Пока модель считает — чтобы экран не выглядел зависшим.
 _THINKING_TEXT = "🤔 Разбираю, что тут..."
@@ -256,16 +259,19 @@ async def _analyze_and_show(
         )
         return
 
-    # Модели отдаём только пищевую часть прошлой догадки: file_id фотографии и
-    # признак источника ей ни о чём не говорят, а место в промпте занимают.
-    # Само фото при правке заново не пересылается — держать base64 картинки в
-    # FSM (а он пишется на диск) дороже, чем пересчитать оценку по прошлой
-    # раскладке плюс правке пользователя.
+    # Модели отдаём только пищевую часть прошлой догадки: file_id фотографии,
+    # признак источника и вердикт is_food ей ни о чём не говорят, а место в
+    # промпте занимают. Само фото при правке заново не пересылается — держать
+    # base64 картинки в FSM (а он пишется на диск) дороже, чем пересчитать
+    # оценку по прошлой раскладке плюс правке пользователя.
     model_previous = (
-        {k: v for k, v in previous.items() if k not in ("photo_file_id", "source")}
+        {k: v for k, v in previous.items() if k not in ("photo_file_id", "source", "is_food")}
         if previous
         else None
     )
+
+    user = await db.get_user(message.from_user.id)
+    with_macros = bool(user["food_macros_enabled"])
 
     # Экран дня (с подсказкой «напиши, что съел») намеренно не удаляется —
     # разбор идёт отдельным сообщением ниже, а не заменяет собой то, на что
@@ -279,6 +285,7 @@ async def _analyze_and_show(
                 image_data_url=image_data_url,
                 previous=model_previous,
                 correction=correction,
+                with_macros=with_macros,
             ),
             timeout=90,
         )
@@ -291,6 +298,20 @@ async def _analyze_and_show(
             )
         # Возвращаемся в режим просмотра дня, не трогая сам экран дня — он не
         # удалялся и не менялся, перерисовывать (и тем более удалять) нечего.
+        await state.set_state(FoodDiaryFlow.viewing)
+        await state.update_data(fd_pending=None)
+        return
+
+    if not estimate.get("is_food", True):
+        # Модель уверенно говорит, что это не еда — не подсовываем «Всё верно?»
+        # с нечем подтверждать: карточка на пустом месте только злит (см. отчёт
+        # пользователя про «нахуя мне заносить»). Просто объясняем и возвращаем
+        # экран дня, ничего не сохраняя.
+        comment = estimate.get("comment", "").strip()
+        not_food_text = "🤔 Не нашёл тут еды" + (f": {escape(comment)}" if comment else ".")
+        not_food_text += f"\n{_NOT_FOOD_HINT}"
+        with suppress(TelegramBadRequest):
+            await placeholder.edit_text(not_food_text)
         await state.set_state(FoodDiaryFlow.viewing)
         await state.update_data(fd_pending=None)
         return
@@ -333,10 +354,30 @@ async def fd_photo_entry(message: Message, state: FSMContext):
 _NOT_A_COMMAND = ~F.text.startswith("/")
 
 
+def _plain_text_pending(text: str) -> dict[str, Any]:
+    """Пищевая запись без модели — то, что человек написал, как есть.
+
+    Используется, когда КБЖУ выключен в настройках: для текста это вообще не
+    требует запроса к модели — сохранять нечего проверять, кроме собственных
+    слов пользователя.
+    """
+    return {
+        "is_food": True, "description": text, "items": [], "calories": None,
+        "protein": None, "fat": None, "carbs": None, "comment": "",
+        "photo_file_id": None, "source": "text",
+    }
+
+
 @router.message(StateFilter(FoodDiaryFlow.viewing), F.text, _NOT_A_COMMAND)
 async def fd_text_entry(message: Message, state: FSMContext):
     text = (message.text or "").strip()
     if not text:
+        return
+    user = await db.get_user(message.from_user.id)
+    if not user["food_macros_enabled"]:
+        # «Просто сохраняет твой текст» — без карточки-подтверждения: тут
+        # нечего проверять, это уже ровно то, что человек написал.
+        await _ask_for_date(message, state, _plain_text_pending(text))
         return
     await _analyze_and_show(message, state, text=text)
 
@@ -395,6 +436,23 @@ async def fd_cancel(callback: CallbackQuery, state: FSMContext):
     await callback.answer("Отменил")
 
 
+async def _ask_for_date(event, state: FSMContext, pending: dict[str, Any]) -> None:
+    """«За какую дату занести?» — shared by the normal confirm path (fd:ok) and
+    the macros-off text path, which skips the confirmation card entirely and
+    lands here straight from typing."""
+    await state.update_data(fd_pending=pending)
+    await state.set_state(FoodDiaryFlow.picking_date)
+    user_id = event.from_user.id
+    today = await _today(user_id)
+    viewed = await _state_date(state, user_id)
+    text = "📅 За какую дату занести?"
+    kb = keyboards.food_date_keyboard(_date_options(viewed, today), today)
+    if isinstance(event, CallbackQuery):
+        await ui.safe_edit(event, text, reply_markup=kb)
+    else:
+        await event.answer(text, reply_markup=kb)
+
+
 def _date_options(viewed: dt.date, today: dt.date) -> list[dt.date]:
     """Предложенная дата и две соседние.
 
@@ -411,17 +469,11 @@ def _date_options(viewed: dt.date, today: dt.date) -> list[dt.date]:
 @router.callback_query(StateFilter(FoodDiaryFlow.confirming), F.data == "fd:ok")
 async def fd_confirm(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
-    if not data.get("fd_pending"):
+    pending = data.get("fd_pending")
+    if not pending:
         await callback.answer("Нечего сохранять", show_alert=True)
         return
-    today = await _today(callback.from_user.id)
-    viewed = await _state_date(state, callback.from_user.id)
-    await state.set_state(FoodDiaryFlow.picking_date)
-    await ui.safe_edit(
-        callback,
-        "📅 За какую дату занести?",
-        reply_markup=keyboards.food_date_keyboard(_date_options(viewed, today), today),
-    )
+    await _ask_for_date(callback, state, pending)
     await callback.answer()
 
 
@@ -496,6 +548,23 @@ async def fd_date_typed(message: Message, state: FSMContext):
 # ---------- удаление и история ----------
 
 
+@router.callback_query(StateFilter(FoodDiaryFlow.viewing), F.data.startswith("fd:delask:"))
+async def fd_delete_ask(callback: CallbackQuery, state: FSMContext):
+    entry_id = int(callback.data.split(":")[2])
+    entry = await db.get_food_entry(entry_id)
+    if entry is None or entry["telegram_id"] != callback.from_user.id:
+        await callback.answer("Запись не найдена", show_alert=True)
+        return
+    date = dt.date.fromisoformat(entry["eaten_on"])
+    await ui.safe_edit(
+        callback,
+        f"Удалить «{escape(entry['description'])}»?",
+        reply_markup=keyboards.food_delete_confirm_keyboard(entry_id, date),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
 @router.callback_query(StateFilter(FoodDiaryFlow.viewing), F.data.startswith("fd:del:"))
 async def fd_delete(callback: CallbackQuery, state: FSMContext):
     entry_id = int(callback.data.split(":")[2])
@@ -515,14 +584,20 @@ async def fd_history(callback: CallbackQuery, state: FSMContext):
     size = keyboards.FOOD_HISTORY_PAGE_SIZE
     total = await db.count_food_days(user_id)
     rows = await db.list_food_days(user_id, limit=size, offset=page * size)
-    days = [(dt.date.fromisoformat(r["eaten_on"]), r["entries"], r["calories"]) for r in rows]
+    days = [
+        formatting.FoodDayView(
+            date=dt.date.fromisoformat(r["eaten_on"]), entries=r["entries"], calories=r["calories"],
+            protein=r["protein"], fat=r["fat"], carbs=r["carbs"],
+        )
+        for r in rows
+    ]
 
     await state.set_state(FoodDiaryFlow.browsing_history)
     sent = await ui.safe_edit(
         callback,
         formatting.build_food_history_list(days),
         reply_markup=keyboards.food_history_keyboard(
-            [d for d, _, _ in days], page, has_next=(page + 1) * size < total
+            [d.date for d in days], page, has_next=(page + 1) * size < total
         ),
         parse_mode="HTML",
     )

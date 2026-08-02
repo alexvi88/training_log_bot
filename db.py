@@ -338,6 +338,10 @@ async def _migrate_schema() -> None:
         await _conn.execute("ALTER TABLE users ADD COLUMN tz_offset INTEGER NOT NULL DEFAULT 0")
     if "stickers_enabled" not in user_cols:
         await _conn.execute("ALTER TABLE users ADD COLUMN stickers_enabled INTEGER NOT NULL DEFAULT 1")
+    if "food_macros_enabled" not in user_cols:
+        # 1 = model estimates КБЖУ for food-diary entries (current default);
+        # 0 = it just describes/saves the meal, no numbers — see handlers/food_diary.py.
+        await _conn.execute("ALTER TABLE users ADD COLUMN food_macros_enabled INTEGER NOT NULL DEFAULT 1")
     if "e1rm_hint_seen" in user_cols:
         # Counted showings of the e1RM footnote, back when it faded out after a
         # few — it lives permanently on the progress screen now.
@@ -2307,7 +2311,8 @@ async def list_food_days(
     of rows.
     """
     cur = await conn().execute(
-        "SELECT eaten_on, COUNT(*) AS entries, SUM(calories) AS calories "
+        "SELECT eaten_on, COUNT(*) AS entries, SUM(calories) AS calories, "
+        "SUM(protein) AS protein, SUM(fat) AS fat, SUM(carbs) AS carbs "
         "FROM food_entries WHERE telegram_id = ? "
         "GROUP BY eaten_on ORDER BY eaten_on DESC LIMIT ? OFFSET ?",
         (telegram_id, limit, offset),

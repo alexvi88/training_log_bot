@@ -488,6 +488,7 @@ FOOD_ANALYSIS_SYSTEM_PROMPT = """\
 
 Отвечай ТОЛЬКО одним JSON-объектом, без markdown-обёртки и любого текста вокруг:
 {
+  "is_food": true или false,
   "description": "короткое название приёма пищи, 1 строка, по-русски",
   "items": [
     {"name": "продукт", "portion": "примерная порция, напр. \"150 г\"",
@@ -503,6 +504,11 @@ FOOD_ANALYSIS_SYSTEM_PROMPT = """\
 }
 
 Правила:
+- is_food: false — если на фото или в тексте вообще нет еды (человек, пейзаж,
+  случайный предмет, бессмысленное сообщение и т.п.). В этом случае остальные
+  поля можно оставить пустыми/null, а в comment коротко объясни, что не так
+  («на фото человек, еды не видно»). Не пытайся притянуть что-то за уши только
+  чтобы заполнить description.
 - description — то, что человек увидит в дневнике: «Овсянка с бананом», «Куриная
   грудка с рисом и салатом». Без калорий и граммов внутри — они в отдельных полях.
 - items — раскладка по продуктам, 1-6 пунктов, у КАЖДОГО своя порция и своё
@@ -517,6 +523,34 @@ FOOD_ANALYSIS_SYSTEM_PROMPT = """\
 - Если человек уже указал вес/калории — используй его цифры, не переоценивай.
 - comment — только если есть что важное сказать (например «порция на глаз, если
   знаешь вес — поправь»). Иначе пустая строка. Без markdown.
+- Всё по-русски.
+"""
+
+
+# Используется вместо FOOD_ANALYSIS_SYSTEM_PROMPT, когда у пользователя выключен
+# подсчёт КБЖУ (users.food_macros_enabled = 0, см. handlers/food_diary.py) — тогда
+# для текста запись сохраняется вообще без модели, а модель зовётся только на
+# фото, просто чтобы превратить картинку в короткое текстовое описание.
+FOOD_DESCRIBE_SYSTEM_PROMPT = """\
+Ты помогаешь вести дневник питания. Тебе присылают фотографию еды, возможно с
+подписью. Пользователь сам решил не считать калории и БЖУ — не предлагай их и
+не упоминай, просто опиши, что это за приём пищи.
+
+Отвечай ТОЛЬКО одним JSON-объектом, без markdown-обёртки и текста вокруг:
+{
+  "is_food": true или false,
+  "description": "короткое название приёма пищи, 1 строка, по-русски",
+  "comment": "одно короткое уточнение или пустая строка"
+}
+
+Правила:
+- is_food: false — если на фото вообще нет еды (человек, пейзаж, случайный
+  предмет и т.п.). Тогда в comment коротко объясни, что не так, а description
+  оставь пустым.
+- description — одна строка, без калорий, БЖУ и граммов порций, только
+  название и состав: «Чизбургер», «Овсянка с бананом и мёдом». Если продуктов
+  несколько — перечисли через запятую в одной строке.
+- comment — только если есть что важное сказать. Иначе пустая строка.
 - Всё по-русски.
 """
 
@@ -589,6 +623,7 @@ async def analyze_food(
     image_data_url: Optional[str] = None,
     previous: Optional[dict[str, Any]] = None,
     correction: str = "",
+    with_macros: bool = True,
 ) -> dict[str, Any]:
     """Что человек съел → структурированная оценка приёма пищи.
 
@@ -597,6 +632,15 @@ async def analyze_food(
     `correction` — второй заход после «✏️ Поправить»: модель получает свою
     прошлую догадку и правку пользователя, поэтому правка «это не банан, а
     груша, и порция 300 г» уточняет оценку, а не начинает её с нуля.
+
+    with_macros=False (users.food_macros_enabled выключен) переключает на
+    FOOD_DESCRIBE_SYSTEM_PROMPT — модель только называет, что на фото, без
+    калорий и БЖУ; возвращённый словарь при этом той же формы (calories/
+    protein/fat/carbs = None, items = []), чтобы вызывающему не пришлось
+    разветвляться по режиму.
+
+    Возвращаемый словарь всегда несёт "is_food": False, когда на фото/в тексте
+    вообще нет еды — вызывающий должен не предлагать сохранить такую догадку.
 
     Кидает исключение при сетевой ошибке или неразборчивом ответе — вызывающий
     решает, что показать пользователю.
@@ -616,14 +660,30 @@ async def analyze_food(
 
     response = await client.chat.completions.create(
         model=config.GROK_MODEL,
-        max_tokens=700,
+        max_tokens=700 if with_macros else 200,
         messages=[
-            {"role": "system", "content": FOOD_ANALYSIS_SYSTEM_PROMPT},
+            {
+                "role": "system",
+                "content": FOOD_ANALYSIS_SYSTEM_PROMPT if with_macros else FOOD_DESCRIBE_SYSTEM_PROMPT,
+            },
             {"role": "user", "content": _plain_user_content("\n\n".join(parts), image_data_url)},
         ],
     )
     await _log_llm_cost(user_id, config.GROK_MODEL, getattr(response, "usage", None))
     data = _extract_json_object(response.choices[0].message.content or "")
+    is_food = bool(data.get("is_food", True))
+
+    if not with_macros:
+        return {
+            "is_food": is_food,
+            "description": str(data.get("description") or "").strip(),
+            "items": [],
+            "calories": None,
+            "protein": None,
+            "fat": None,
+            "carbs": None,
+            "comment": str(data.get("comment") or "").strip(),
+        }
 
     items = []
     for raw in (data.get("items") or [])[:6]:
@@ -644,6 +704,7 @@ async def analyze_food(
         items.append(item)
 
     estimate = {
+        "is_food": is_food,
         "description": str(data.get("description") or "").strip(),
         "items": items,
         "calories": _as_number(data.get("calories")),

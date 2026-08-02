@@ -679,6 +679,7 @@ def settings_keyboard(
     tz_offset: int = 0,
     stickers_enabled: bool = True,
     show_stickers_toggle: bool = False,
+    food_macros_enabled: bool = True,
 ) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(text=f"Единицы: {unit}", callback_data="settings:unit")
@@ -704,6 +705,12 @@ def settings_keyboard(
     if show_stickers_toggle:
         stickers_label = "😎 Стикеры: включены" if stickers_enabled else "😶 Стикеры: выключены"
         b.button(text=stickers_label, callback_data="settings:stickers")
+    macros_label = (
+        "🔢 КБЖУ в дневнике питания: считаю"
+        if food_macros_enabled
+        else "📝 КБЖУ в дневнике питания: не считаю"
+    )
+    b.button(text=macros_label, callback_data="settings:food_macros")
     b.button(text="📤 Экспорт CSV", callback_data="settings:export")
     b.button(text="📥 Импорт CSV", callback_data="settings:import")
     b.button(text="🏠 Меню", callback_data="settings:back")
@@ -750,7 +757,7 @@ def food_day_keyboard(date: dt.date, entry_ids: Sequence[int], today: dt.date) -
     if entry_ids:
         b.row(
             *[
-                InlineKeyboardButton(text=f"🗑 {i}", callback_data=f"fd:del:{entry_id}")
+                InlineKeyboardButton(text=f"🗑 {i}", callback_data=f"fd:delask:{entry_id}")
                 for i, entry_id in enumerate(entry_ids, start=1)
             ],
             width=4,
@@ -769,9 +776,20 @@ def food_day_keyboard(date: dt.date, entry_ids: Sequence[int], today: dt.date) -
     b.row(*nav)
     if date != today:
         b.row(InlineKeyboardButton(text="📅 Сегодня", callback_data=f"fd:day:{today.isoformat()}"))
-    b.row(InlineKeyboardButton(text="📚 История", callback_data="fd:history:0"))
-    b.row(InlineKeyboardButton(text="🏠 Меню", callback_data="fd:menu"))
+    b.row(
+        InlineKeyboardButton(text="📚 История", callback_data="fd:history:0"),
+        InlineKeyboardButton(text="🏠 Меню", callback_data="fd:menu"),
+    )
     return b.as_markup()
+
+
+def food_delete_confirm_keyboard(entry_id: int, back_date: dt.date) -> InlineKeyboardMarkup:
+    """"Удалить запись?" — back_date routes "Нет" back to that day's screen
+    (reuses fd:day:, the same callback the day-nav buttons already use)."""
+    return yes_no_keyboard(
+        yes_cb=f"fd:del:{entry_id}", no_cb=f"fd:day:{back_date.isoformat()}",
+        yes_text="🗑 Удалить", no_text="❌ Отмена",
+    )
 
 
 def food_confirm_keyboard() -> InlineKeyboardMarkup:
