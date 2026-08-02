@@ -1482,6 +1482,71 @@ async def max_e1rm_before_workout(
     return (await cur.fetchone())["mx"]
 
 
+async def achievement_extremes(user_id: int) -> dict[str, Any]:
+    """Пер-сессионные экстремумы и счётчики для новых семей ачивок — одним
+    проходом по finished-тренировкам, чтобы resync не ходил по ним по одной.
+
+    Тоннаж и повторы — сырые, в единицах пользователя: нормализация в кг
+    остаётся на achievement_sync, как и у остальных полей контекста.
+    """
+    cur = await conn().execute(
+        "SELECT COALESCE(MAX(sets_count), 0) AS max_sets, "
+        "       COALESCE(MAX(tonnage), 0) AS max_tonnage, "
+        "       COALESCE(MAX(exercises_count), 0) AS max_exercises "
+        "FROM ("
+        "  SELECT w.id, COUNT(s.id) AS sets_count, SUM(s.weight * s.reps) AS tonnage, "
+        "         COUNT(DISTINCT s.exercise_id) AS exercises_count "
+        "  FROM sets s "
+        "  JOIN workout_blocks b ON b.id = s.block_id "
+        "  JOIN workouts w ON w.id = b.workout_id "
+        "  WHERE w.user_id = ? AND w.status = 'finished' "
+        "  GROUP BY w.id"
+        ")",
+        (user_id,),
+    )
+    per_session = dict(await cur.fetchone())
+    cur = await conn().execute(
+        "SELECT COALESCE(MAX(CASE WHEN s.weight = 0 THEN s.reps END), 0) AS max_bw_reps, "
+        "       MAX(s.rpe) AS max_rpe, "
+        "       COUNT(s.rpe) AS rpe_sets, "
+        "       COUNT(DISTINCT e.primary_group_id) AS distinct_groups "
+        "FROM sets s "
+        "JOIN workout_blocks b ON b.id = s.block_id "
+        "JOIN workouts w ON w.id = b.workout_id "
+        "JOIN exercises e ON e.id = s.exercise_id "
+        "WHERE w.user_id = ? AND w.status = 'finished'",
+        (user_id,),
+    )
+    per_set = dict(await cur.fetchone())
+    cur = await conn().execute(
+        "SELECT EXISTS("
+        "  SELECT 1 FROM workout_blocks b JOIN workouts w ON w.id = b.workout_id "
+        "  WHERE w.user_id = ? AND w.status = 'finished' AND b.type != 'single'"
+        ") AS has_superset, "
+        "(SELECT COUNT(*) FROM workouts w2 WHERE w2.user_id = ? AND w2.status = 'finished' "
+        " AND CAST(strftime('%H', w2.started_at) AS INTEGER) < 7) AS early_workouts",
+        (user_id, user_id),
+    )
+    extra = dict(await cur.fetchone())
+    return {**per_session, **per_set, **extra}
+
+
+async def count_bodyweight_logs(user_id: int) -> int:
+    cur = await conn().execute(
+        "SELECT COUNT(*) AS c FROM bodyweight_logs WHERE telegram_id = ?", (user_id,)
+    )
+    return (await cur.fetchone())["c"]
+
+
+async def list_food_entry_dates(telegram_id: int) -> list[str]:
+    """Все дни, в которые есть хоть одна запись еды, — для «Недели учёта»."""
+    cur = await conn().execute(
+        "SELECT DISTINCT eaten_on FROM food_entries WHERE telegram_id = ? ORDER BY eaten_on",
+        (telegram_id,),
+    )
+    return [r["eaten_on"] for r in await cur.fetchall()]
+
+
 async def max_weight_ever(user_id: int) -> float:
     """Heaviest single set (any exercise) across finished workouts — for weight-club
     achievements."""

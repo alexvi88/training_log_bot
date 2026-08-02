@@ -38,16 +38,33 @@ async def _aggregate_context(user_id: int) -> achievements.AchievementContext:
     """
     user = await db.get_user(user_id)
     unit = user["unit"] if user else "kg"
+    dates = [dt.date.fromisoformat(d) for d in await db.list_finished_workout_dates(user_id)]
+    extremes = await db.achievement_extremes(user_id)
+    food_days = [dt.date.fromisoformat(d) for d in await db.list_food_entry_dates(user_id)]
     return achievements.AchievementContext(
         total_workouts=await db.count_workouts(user_id),
         lifetime_tonnage_kg=formatting.to_kg(
             (await db.hall_of_fame_aggregates(user_id))["tonnage"], unit
         ),
-        best_week_streak=analytics.max_week_streak(
-            [dt.date.fromisoformat(d) for d in await db.list_finished_workout_dates(user_id)]
-        ),
+        best_week_streak=analytics.max_week_streak(dates),
         max_weight_kg=formatting.to_kg(await db.max_weight_ever(user_id), unit),
         distinct_exercises=await db.count_distinct_exercises_used(user_id),
+        distinct_groups=extremes["distinct_groups"],
+        max_session_sets=extremes["max_sets"],
+        max_session_tonnage_kg=formatting.to_kg(extremes["max_tonnage"], unit),
+        max_session_exercises=extremes["max_exercises"],
+        has_superset=bool(extremes["has_superset"]),
+        max_bodyweight_reps=extremes["max_bw_reps"],
+        # Час, как и у «Ранней пташки», пока серверный — единый корень B3
+        # (хранение в UTC) чинится миграцией, и обе ачивки поедут вместе с ней.
+        early_workouts=extremes["early_workouts"],
+        has_weekend_pair=achievements.weekend_pair_exists(dates),
+        all_weekdays_covered=len({d.weekday() for d in dates}) == 7,
+        has_dec31=any((d.month, d.day) == (12, 31) for d in dates),
+        max_rpe=extremes["max_rpe"],
+        rpe_sets=extremes["rpe_sets"],
+        bodyweight_logs=await db.count_bodyweight_logs(user_id),
+        food_diary_best_run=achievements.longest_daily_run(food_days),
     )
 
 

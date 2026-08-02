@@ -39,17 +39,38 @@ CATALOG: list[Achievement] = [
     Achievement("ton100", "🐘", "100 тонн", "100т суммарно за всё время"),
     Achievement("ton500", "🚂", "Товарный состав", "500 т суммарно за всё время"),
     Achievement("ton1000", "🐋", "Кашалот", "1000 т суммарно за всё время"),
+    Achievement("w200", "🗿", "Двести", "200 тренировок"),
+    Achievement("w500", "🏛", "Пятьсот", "500 тренировок — это уже биография"),
     Achievement("variety20", "🎨", "Коллекционер", "20 разных упражнений"),
+    Achievement("variety50", "🧰", "Мастер на все руки", "50 разных упражнений"),
+    Achievement("groups6", "🕸", "Без слабых мест", "Тренировал 6 разных групп мышц"),
+    Achievement("vol25", "🧨", "Объёмный день", "25+ подходов за одну тренировку"),
+    Achievement("session5t", "🏗", "Пятитонник", "5 тонн за одну тренировку"),
+    Achievement("combine8", "🚜", "Комбайн", "8+ упражнений за одну тренировку"),
+    Achievement("superset1", "🔀", "Двустаночник", "Первый суперсет"),
+    Achievement("bw25", "🤸", "Многоповторщик", "25+ повторов своим весом в одном подходе"),
+    Achievement("weekend_double", "⚔️", "Выходной воин", "Тренировки в субботу и воскресенье одной недели"),
+    Achievement("all_weekdays", "🗓", "Все семь", "Тренировался в каждый день недели (за всё время)"),
     Achievement("early_bird", "🌅", "Ранняя пташка", "Тренировка до 7 утра"),
+    Achievement("early10", "🌄", "Клуб пяти утра", "10 тренировок до 7 утра"),
     Achievement("night_owl", "🦉", "Ночная смена", "Тренировка после 22:00"),
     Achievement("marathon", "⏳", "Марафонец", "Тренировка длиннее 2 часов"),
+    Achievement("rpe10", "💥", "До отказа", "Подход с RPE 10"),
+    Achievement("rpe100", "📓", "Честный дневник", "100 подходов с проставленным RPE"),
+    Achievement("bwlog30", "📏", "Под контролем", "30 записей в дневнике веса"),
+    Achievement("food7", "🍱", "Неделя учёта", "7 дней подряд с записями в дневнике еды"),
     Achievement("new_year", "🎄", "С Новым годом!", "Тренировка 1 января"),
+    Achievement("dec31", "🎇", "Закрыл год", "Тренировка 31 декабря"),
 ]
 
 BY_CODE: dict[str, Achievement] = {a.code: a for a in CATALOG}
 
 # Thresholds (kg for weight, kg for tonnage, weeks, count).
-_WORKOUT_TIERS = [(1, "first"), (10, "w10"), (25, "w25"), (50, "w50"), (100, "w100")]
+_WORKOUT_TIERS = [
+    (1, "first"), (10, "w10"), (25, "w25"), (50, "w50"), (100, "w100"),
+    (200, "w200"), (500, "w500"),
+]
+_VARIETY_TIERS = [(20, "variety20"), (50, "variety50")]
 _STREAK_TIERS = [(4, "streak4"), (12, "streak12"), (26, "streak26"), (52, "streak52")]
 _WEIGHT_TIERS = [(100, "club100"), (140, "club140"), (180, "club180"), (220, "club220")]
 _TONNAGE_TIERS = [
@@ -65,10 +86,47 @@ class AchievementContext:
     best_week_streak: int
     max_weight_kg: float
     distinct_exercises: int
+    # --- lifetime aggregates for the newer badge families. All of these are
+    # "best/count ever" numbers on purpose: an aggregate survives resync (the
+    # full recomputation after an edit/delete) without walking workouts one by
+    # one, and a per-session record like "25 подходов за тренировку" IS a
+    # lifetime max — of a per-session number.
+    distinct_groups: int = 0
+    max_session_sets: int = 0
+    max_session_tonnage_kg: float = 0.0
+    max_session_exercises: int = 0
+    has_superset: bool = False
+    max_bodyweight_reps: int = 0
+    early_workouts: int = 0
+    has_weekend_pair: bool = False
+    all_weekdays_covered: bool = False
+    has_dec31: bool = False
+    max_rpe: Optional[float] = None
+    rpe_sets: int = 0
+    bodyweight_logs: int = 0
+    food_diary_best_run: int = 0
     # Attributes of the workout that just finished (None when evaluating aggregates only).
     workout_start_hour: Optional[int] = None
     workout_date: Optional[dt.date] = None
     workout_duration_seconds: Optional[float] = None
+
+
+def weekend_pair_exists(dates: list[dt.date]) -> bool:
+    """Суббота и воскресенье одной и той же недели — обе с тренировкой."""
+    days = set(dates)
+    return any(d.weekday() == 5 and d + dt.timedelta(days=1) in days for d in days)
+
+
+def longest_daily_run(dates: list[dt.date]) -> int:
+    """Длина самой длинной цепочки дней подряд (для «Недели учёта»)."""
+    days = sorted(set(dates))
+    best = run = 0
+    prev: Optional[dt.date] = None
+    for d in days:
+        run = run + 1 if prev is not None and (d - prev).days == 1 else 1
+        best = max(best, run)
+        prev = d
+    return best
 
 
 def earned_codes(ctx: AchievementContext) -> set[str]:
@@ -86,8 +144,37 @@ def earned_codes(ctx: AchievementContext) -> set[str]:
     for kg, code in _TONNAGE_TIERS:
         if ctx.lifetime_tonnage_kg >= kg:
             codes.add(code)
-    if ctx.distinct_exercises >= 20:
-        codes.add("variety20")
+    for n, code in _VARIETY_TIERS:
+        if ctx.distinct_exercises >= n:
+            codes.add(code)
+    if ctx.distinct_groups >= 6:
+        codes.add("groups6")
+    if ctx.max_session_sets >= 25:
+        codes.add("vol25")
+    if ctx.max_session_tonnage_kg >= 5_000:
+        codes.add("session5t")
+    if ctx.max_session_exercises >= 8:
+        codes.add("combine8")
+    if ctx.has_superset:
+        codes.add("superset1")
+    if ctx.max_bodyweight_reps >= 25:
+        codes.add("bw25")
+    if ctx.early_workouts >= 10:
+        codes.add("early10")
+    if ctx.has_weekend_pair:
+        codes.add("weekend_double")
+    if ctx.all_weekdays_covered:
+        codes.add("all_weekdays")
+    if ctx.has_dec31:
+        codes.add("dec31")
+    if ctx.max_rpe is not None and ctx.max_rpe >= 10:
+        codes.add("rpe10")
+    if ctx.rpe_sets >= 100:
+        codes.add("rpe100")
+    if ctx.bodyweight_logs >= 30:
+        codes.add("bwlog30")
+    if ctx.food_diary_best_run >= 7:
+        codes.add("food7")
     if ctx.workout_start_hour is not None:
         if ctx.workout_start_hour < 7:
             codes.add("early_bird")
