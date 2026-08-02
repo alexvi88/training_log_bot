@@ -464,6 +464,14 @@ def test_history_list_skips_macros_line_when_unknown():
     assert "Б " not in text
 
 
+def test_history_list_omits_dash_for_a_day_with_no_numbers():
+    """Ни одной цифры за день — не пишем "—", просто дата и число приёмов."""
+    days = [_day(date=dt.date(2026, 7, 20), entries=2)]
+    text = formatting.build_food_history_list(days)
+    assert "20.07.2026 (пн)</b> [2 приёма]" in text
+    assert "—" not in text
+
+
 def test_history_list_empty():
     assert "Пока ничего не записано" in formatting.build_food_history_list([])
 

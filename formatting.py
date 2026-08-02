@@ -1063,9 +1063,9 @@ def build_food_history_list(days: list[FoodDayView]) -> str:
         n = plural_ru(d.entries, ("приём", "приёма", "приёмов"))
         macros = _macros_line(d.protein, d.fat, d.carbs)
         totals = [p for p in (format_kcal(d.calories) if d.calories is not None else "", macros) if p]
-        totals_part = " · ".join(totals) if totals else "—"
-        lines.append(
-            f"<b>{format_date_ru(dt.datetime.combine(d.date, dt.time()))}</b> — "
-            f"{totals_part} [{d.entries} {n}]"
-        )
+        date_part = f"<b>{format_date_ru(dt.datetime.combine(d.date, dt.time()))}</b>"
+        # Ни одной цифры за день — не выдумываем "—", просто ничего не пишем
+        # между датой и числом приёмов.
+        totals_part = f" — {' · '.join(totals)}" if totals else ""
+        lines.append(f"{date_part}{totals_part} [{d.entries} {n}]")
     return "\n".join(lines)
