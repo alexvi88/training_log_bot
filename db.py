@@ -1199,10 +1199,40 @@ async def set_exercise_description(exercise_id: int, description: Optional[str])
 # ---------- workouts ----------
 
 async def get_active_workout(user_id: int) -> Optional[aiosqlite.Row]:
+    # Explicit ordering so an account that already accumulated two active rows
+    # keeps resolving to the same one instead of an arbitrary one per query.
     cur = await conn().execute(
-        "SELECT * FROM workouts WHERE user_id = ? AND status = 'active'", (user_id,)
+        "SELECT * FROM workouts WHERE user_id = ? AND status = 'active' ORDER BY id LIMIT 1",
+        (user_id,),
     )
     return await cur.fetchone()
+
+
+async def get_or_create_active_workout(user_id: int) -> tuple[int, bool]:
+    """The user's active workout, starting one if there isn't one. Returns
+    (workout_id, created).
+
+    Check and insert happen under the same lock: aiogram processes updates
+    concurrently, so a double-tapped "🏋️ Начать тренировку" had both taps see
+    no active workout and create one each. The loser became a permanent ghost —
+    an empty active workout that "Продолжить" might open instead of the real
+    one, and that resurfaces later as a stale-workout warning.
+    """
+    async with _write_lock:
+        db = conn()
+        cur = await db.execute(
+            "SELECT id FROM workouts WHERE user_id = ? AND status = 'active' ORDER BY id LIMIT 1",
+            (user_id,),
+        )
+        row = await cur.fetchone()
+        if row is not None:
+            return row["id"], False
+        cur = await db.execute(
+            "INSERT INTO workouts (user_id, started_at, status) VALUES (?, ?, 'active')",
+            (user_id, now_iso()),
+        )
+        await db.commit()
+        return cur.lastrowid, True
 
 
 async def create_workout(user_id: int, started_at: Optional[str] = None, status: str = "active") -> int:
@@ -1253,13 +1283,25 @@ async def update_workout_note(workout_id: int, note: Optional[str]) -> None:
         await conn().commit()
 
 
-async def finish_workout(workout_id: int, note: Optional[str] = None, finished_at: Optional[str] = None) -> None:
+async def finish_workout(
+    workout_id: int, note: Optional[str] = None, finished_at: Optional[str] = None
+) -> bool:
+    """Mark an active workout finished. Returns False if it wasn't active any
+    more — i.e. somebody else just finished it.
+
+    The status check lives in the UPDATE so it can't be raced: the caller's own
+    "is it still active?" guard is several awaits away from getting here, which
+    is enough of a window for a double-tapped "🏁 Завершить" to produce two
+    finish cards for one workout.
+    """
     async with _write_lock:
-        await conn().execute(
-            "UPDATE workouts SET status = 'finished', finished_at = ?, note = ? WHERE id = ?",
+        cur = await conn().execute(
+            "UPDATE workouts SET status = 'finished', finished_at = ?, note = ? "
+            "WHERE id = ? AND status != 'finished'",
             (finished_at or now_iso(), note, workout_id),
         )
         await conn().commit()
+        return cur.rowcount > 0
 
 
 async def set_workout_ai_comment(workout_id: int, comment: Optional[str]) -> None:

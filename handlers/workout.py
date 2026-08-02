@@ -728,6 +728,12 @@ async def stale_finish_workout(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
         return
     await db.finish_workout(workout_id, finished_at=workout["started_at"])
+    # This path bypasses _finalize_workout, so nothing else would evaluate
+    # badges for it: the workout counts toward streaks, tonnage and weight clubs
+    # the moment it's finished, but the grid wouldn't catch up until some later
+    # workout happened to trigger an evaluation.
+    started_at = dt.datetime.fromisoformat(workout["started_at"])
+    await _evaluate_achievements(callback.from_user.id, workout_id, started_at, None)
     await ui.safe_edit(callback, "✅ Тренировка завершена задним числом.")
     await callback.answer()
 
@@ -826,12 +832,13 @@ async def start_workout(callback: CallbackQuery, state: FSMContext):
     # gave up on its own, ~10s later.
     await callback.answer()
     await _ensure_user(callback.from_user.id, callback.from_user.username)
-    active = await db.get_active_workout(callback.from_user.id)
-    if active:
-        await _enter_live(callback, state, active["id"])
+    # Claiming the workout in one atomic step, rather than checking and then
+    # creating, is what stops a double tap from opening two of them.
+    workout_id, created = await db.get_or_create_active_workout(callback.from_user.id)
+    if not created:
+        await _enter_live(callback, state, workout_id)
         return
     await _reset_new_workout_scaffold(state)
-    workout_id = await db.create_workout(callback.from_user.id)
     await _delete_message(callback.message)
     sent = await callback.message.answer("🏋️ Тренировка начата")
     await state.update_data(
@@ -2323,7 +2330,14 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
     is_backfill = bool(data.get("is_backfill"))
     finished_at = f"{data['bf_date']}T12:00:00" if is_backfill else None
     await db.delete_empty_blocks(workout_id)
-    await db.finish_workout(workout_id, note, finished_at=finished_at)
+    # The status guard above is several awaits back by now — wide enough for a
+    # second tap to have slipped past it. finish_workout only marks a workout
+    # that is still unfinished, so whichever call loses that race stops here
+    # rather than building a second card for the same workout.
+    if not await db.finish_workout(workout_id, note, finished_at=finished_at):
+        if isinstance(event, CallbackQuery):
+            await event.answer()
+        return
     workout = await db.get_workout(workout_id)
 
     summary_fn, highlights, session_tonnage, duration_seconds = await _record_highlights_and_summary(

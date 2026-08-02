@@ -2,6 +2,7 @@
 resolve it (finish retroactively, or delete) instead of leaving the user to
 figure out how to close it themselves.
 """
+import asyncio
 import datetime as dt
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -98,6 +99,30 @@ async def test_stale_finish_marks_workout_finished_with_original_date(fresh_db, 
     assert "завершена" in callback.message.answer.await_args.args[0]
 
 
+async def test_stale_finish_awards_achievements_for_the_workout(fresh_db, user_id):
+    """Finishing retroactively bypasses _finalize_workout, so nothing else would
+    evaluate badges: the workout counts toward streaks, tonnage and weight clubs
+    the moment it is finished, but the grid stayed empty until some later
+    workout happened to trigger an evaluation."""
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Ноги")
+    squat = await db.create_exercise(user_id, "Присед", group_id)
+    started = dt.datetime.now() - dt.timedelta(hours=config.STALE_WORKOUT_HOURS + 1)
+    workout_id = await db.create_workout(user_id, started_at=started.isoformat())
+    block_id = await db.create_block(workout_id, "single")
+    await db.add_block_exercise(block_id, squat, 0)
+    await db.add_set(block_id, squat, 1, 0, 150, 5)
+
+    state = await _make_state(user_id)
+    callback = _make_callback(user_id, f"stale:finish:{workout_id}")
+
+    await workout.stale_finish_workout(callback, state)
+
+    codes = await db.list_achievement_codes(user_id)
+    assert "first" in codes
+    assert "club100" in codes
+
+
 async def test_stale_finish_discards_empty_workout(fresh_db, user_id):
     db = fresh_db
     started = dt.datetime.now() - dt.timedelta(hours=config.STALE_WORKOUT_HOURS + 1)
@@ -189,3 +214,34 @@ async def test_stale_delete_requires_confirmation_then_deletes(fresh_db, user_id
     await workout.stale_delete(delete_callback, state)
 
     assert await db.get_workout(workout_id) is None
+
+
+async def test_double_tap_on_start_opens_one_workout_not_two(fresh_db, user_id):
+    """aiogram handles updates concurrently, so two taps both used to see "no
+    active workout" and create one each. The loser became a permanent ghost:
+    an empty active workout that "Продолжить" might open instead of the real
+    one, and that resurfaces later as a stale-workout warning."""
+    db = fresh_db
+
+    first, second = await asyncio.gather(
+        db.get_or_create_active_workout(user_id),
+        db.get_or_create_active_workout(user_id),
+    )
+
+    assert first[0] == second[0]
+    assert [first[1], second[1]].count(True) == 1  # exactly one of them created it
+    cur = await db.conn().execute(
+        "SELECT COUNT(*) FROM workouts WHERE user_id = ? AND status = 'active'", (user_id,)
+    )
+    assert (await cur.fetchone())[0] == 1
+
+
+async def test_finish_workout_only_succeeds_once(fresh_db, user_id):
+    """The status guard in _finalize_workout is several awaits away from the
+    UPDATE, which is enough of a window for a second tap to slip past it and
+    build a duplicate finish card."""
+    db = fresh_db
+    workout_id = await db.create_workout(user_id)
+
+    assert await db.finish_workout(workout_id) is True
+    assert await db.finish_workout(workout_id) is False
