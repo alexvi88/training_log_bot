@@ -209,6 +209,9 @@ class ExerciseBlockView:
     prev_set_rpes: list[float | None] | None = None  # per-set RPE for prev_sets
     prev_started_at: dt.datetime | None = None  # date of the previous session, for the delta line
     note: str | None = None  # exercise's own note (technique cue, injury flag)
+    # Index into `sets` of the set that is the exercise's new all-time-best
+    # e1RM — the live 🥇 mark. None when nothing in this session beats history.
+    gold_index: int | None = None
 
     def rpe_for(self, index: int) -> float | None:
         if not self.set_rpes or index >= len(self.set_rpes):
@@ -675,12 +678,20 @@ def build_live_session_text(
         is_active = active_exercise_id is not None and block.exercise_id == active_exercise_id
         prefix = "▶ " if is_active else ""
         body_lines.append(f"{prefix}<b>{escape(block.exercise_name)}</b>")
+        # 🥇 — новый лучший сет за всю историю упражнения. Ставится сразу, даже
+        # если тренировка в целом слабая: ран провален — голд твой.
+        gold = getattr(block, "gold_index", None)
+
+        def set_str(i: int, w: float, r: int, *, blk=block, gold=gold) -> str:
+            marked = format_set(w, r, blk.rpe_for(i))
+            return f"{marked} 🥇" if i == gold else marked
+
         if is_active:
-            body_lines.extend(f"  • {format_set(w, r, block.rpe_for(i))}" for i, (w, r) in enumerate(block.sets))
+            body_lines.extend(f"  • {set_str(i, w, r)}" for i, (w, r) in enumerate(block.sets))
             if note:
                 body_lines.append(f"📝 <i>{escape(note)}</i>")
         elif block.sets:
-            body_lines.append(", ".join(format_set(w, r, block.rpe_for(i)) for i, (w, r) in enumerate(block.sets)))
+            body_lines.append(", ".join(set_str(i, w, r) for i, (w, r) in enumerate(block.sets)))
     lines = list(body_lines)
     if not lines and not hint:
         lines = ["Добавь упражнение, чтобы начать."]
@@ -689,6 +700,47 @@ def build_live_session_text(
             lines.append(DIVIDER if body_lines else "")
         lines.append(hint)
     return "\n".join(lines)
+
+
+def build_gold_book_lines(golds, unit: str = "kg", is_bodyweight: bool = False) -> list[str]:
+    """"🥇 Золотая книга" — лучшие сеты упражнения за всё время, каждый с датой.
+
+    Три категории, потому что пики у них разные: самый тяжёлый сет, сет с
+    лучшим e1RM и самый долгий сет — обычно три разных дня. Дубли схлопываются:
+    если тяжёлый сет он же и лучший по e1RM, строка одна.
+    """
+    # Пустая книга — по числу повторов, а не по e1RM: у упражнений своим весом
+    # e1RM тождественно нулю, и проверка по нему прятала книгу целиком.
+    if golds is None or golds.max_reps <= 0:
+        return []
+    u = UNIT_LABELS.get(unit, "кг")
+
+    def dated(label: str, value: str, day: str) -> str:
+        when = f" · {_iso_to_ru(day)}" if day else ""
+        return f"   {label} {value}{when}"
+
+    if is_bodyweight:
+        # Вес всегда 0 — «самый тяжёлый» и e1RM смысла не имеют, остаются повторы.
+        return ["🥇 <b>Золотая книга</b>",
+                dated("Повторы", str(golds.max_reps), golds.max_reps_date)]
+
+    rows = [("e1RM", f"{golds.best_e1rm:.1f}{u} ({format_set(golds.best_e1rm_weight, golds.best_e1rm_reps)})",
+             golds.best_e1rm_date)]
+    weight_set = (golds.max_weight, golds.max_weight_reps)
+    if weight_set != (golds.best_e1rm_weight, golds.best_e1rm_reps):
+        rows.append(("Вес", format_set(*weight_set), golds.max_weight_date))
+    reps_set = (golds.max_reps_weight, golds.max_reps)
+    if reps_set not in (weight_set, (golds.best_e1rm_weight, golds.best_e1rm_reps)):
+        rows.append(("Повторы", format_set(*reps_set), golds.max_reps_date))
+    return ["🥇 <b>Золотая книга</b>"] + [dated(label, value, day) for label, value, day in rows]
+
+
+def _iso_to_ru(day: str) -> str:
+    """'2026-08-02' → '2 августа'; пустая строка, если дата не разбирается."""
+    try:
+        return format_day_month_ru(dt.date.fromisoformat(day))
+    except ValueError:
+        return ""
 
 
 def format_pr_detail(kind: str, value: float, extra: float | None = None, unit: str = "kg") -> str:
@@ -865,6 +917,7 @@ def format_progress_screen(
     limit: int = 8,
     unit: str = "kg",
     session_notes: dict[int, str] | None = None,  # {workout_id: note}
+    golds=None,  # analytics.GoldBook | None
 ) -> str:
     u = UNIT_LABELS.get(unit, "кг")
     lines = [f"📈 <b>{escape(exercise_name)}</b>", ""]
@@ -897,6 +950,11 @@ def format_progress_screen(
         lines.append(f"Рекорд повторов в сете: {best_reps}")
     else:
         lines.append(f"Рекорд: {format_set(records.best_e1rm_weight, records.best_e1rm_reps)} · e1RM {records.max_e1rm:.1f}{u}")
+
+    gold_lines = build_gold_book_lines(golds, unit=unit, is_bodyweight=is_bw)
+    if gold_lines:
+        lines.append("")
+        lines.extend(gold_lines)
 
     header = "\n".join(lines)
     notes = session_notes or {}

@@ -1448,6 +1448,35 @@ async def list_finished_workout_dates(user_id: int) -> list[str]:
     return [r["d"] for r in await cur.fetchall()]
 
 
+def _e1rm_sql(formula: str) -> str:
+    """SQL mirror of analytics.e1rm — reps<=1 is the weight itself; brzycki
+    falls back to epley above BRZYCKI_MAX_REPS (10), exactly like the Python."""
+    epley = "s.weight * (1 + s.reps / 30.0)"
+    if formula == "brzycki":
+        return (
+            "CASE WHEN s.reps <= 1 THEN s.weight "
+            f"WHEN s.reps > 10 THEN {epley} "
+            "ELSE s.weight * 36.0 / (37 - s.reps) END"
+        )
+    return f"CASE WHEN s.reps <= 1 THEN s.weight ELSE {epley} END"
+
+
+async def max_e1rm_before_workout(
+    user_id: int, exercise_id: int, workout_id: int, formula: str = "epley"
+) -> float:
+    """All-time best e1RM of the exercise across finished workouts, excluding
+    `workout_id` — the bar a set must clear to earn the live 🥇 mark."""
+    cur = await conn().execute(
+        f"SELECT COALESCE(MAX({_e1rm_sql(formula)}), 0) AS mx FROM sets s "
+        "JOIN workout_blocks b ON b.id = s.block_id "
+        "JOIN workouts w ON w.id = b.workout_id "
+        "WHERE w.user_id = ? AND w.status = 'finished' AND w.id != ? "
+        "AND s.exercise_id = ? AND s.reps > 0",
+        (user_id, workout_id, exercise_id),
+    )
+    return (await cur.fetchone())["mx"]
+
+
 async def max_weight_ever(user_id: int) -> float:
     """Heaviest single set (any exercise) across finished workouts — for weight-club
     achievements."""

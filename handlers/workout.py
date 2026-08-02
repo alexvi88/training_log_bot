@@ -128,7 +128,9 @@ async def _refresh_live(bot, state: FSMContext, user, workout_id: int, hint, key
     data = await state.get_data()
     chat_id = data["live_chat_id"]
     message_id = data["live_message_id"]
-    blocks = await view_builder.build_block_views(workout_id, user["e1rm_formula"])
+    blocks = await view_builder.build_block_views(
+        workout_id, user["e1rm_formula"], mark_golds=True
+    )
     active = data.get("active_exercise_id")
     blocks = _move_open_exercises_last(blocks, data.get("open_exercises") or [], active)
     text = formatting.build_live_session_text(blocks, hint, active_exercise_id=active, note=note)

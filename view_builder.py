@@ -11,9 +11,14 @@ async def build_block_views(
     workout_id: int,
     formula: str = "epley",
     previous_before: str | None = None,
+    mark_golds: bool = False,
 ) -> list[BlockView]:
     """previous_before: if set (a workout's started_at), each block also gets the
     set breakdown from that exercise's last session strictly before that date.
+
+    mark_golds: flag the set that beats the exercise's all-time best e1RM (the
+    live 🥇). Costs one aggregate query per exercise, so it is opt-in — the
+    live tracker and the finish card want it, history and admin views don't.
 
     An exercise logged as more than one block in the same workout (e.g. 2 sets
     up front and 2 more at the end) is deliberately allowed at entry time — but
@@ -53,11 +58,22 @@ async def build_block_views(
         entry["sets"].extend((s["weight"], s["reps"]) for s in sets)
         entry["rpes"].extend(s["rpe"] for s in sets)
 
+    workout = await db.get_workout(workout_id) if mark_golds else None
+
     views: list[BlockView] = []
     for ex_id in order:
         entry = merged[ex_id]
         ex = entry["exercise"]
         gname = await group_info(ex["primary_group_id"])
+        gold_index = None
+        if workout is not None:
+            gold_index = _best_gold_index(
+                entry["sets"],
+                await db.max_e1rm_before_workout(
+                    workout["user_id"], ex_id, workout_id, formula
+                ),
+                formula,
+            )
         prev_sets = None
         prev_set_rpes = None
         prev_started_at = None
@@ -77,10 +93,26 @@ async def build_block_views(
                 prev_set_rpes=prev_set_rpes,
                 prev_started_at=prev_started_at,
                 note=await db.get_workout_exercise_note(workout_id, ex_id),
+                gold_index=gold_index,
             )
         )
 
     return views
+
+
+def _best_gold_index(sets: list[tuple[float, int]], previous_best: float, formula: str) -> int | None:
+    """Index of the session's best set, if it clears the exercise's all-time
+    best e1RM. Only the best one is marked: two 🥇 in one exercise would read
+    as a bug, and the later set is the one that stands as the record anyway."""
+    best_index = None
+    best_score = previous_best
+    for i, (weight, reps) in enumerate(sets):
+        if reps <= 0:
+            continue
+        score = analytics.e1rm(weight, reps, formula)
+        if score > best_score:
+            best_score, best_index = score, i
+    return best_index
 
 
 MAX_PLAUSIBLE_DURATION_SECONDS = 6 * 3600

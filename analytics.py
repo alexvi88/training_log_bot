@@ -134,6 +134,54 @@ def linear_trend(points: list[tuple[dt.datetime, float]]) -> Optional[Trend]:
 
 
 @dataclass
+class GoldBook:
+    """The three all-time-best sets of one exercise, each with its date.
+
+    A speedrunner's "gold split": the best segment ever, independent of how
+    good the run around it was. Three categories because they peak on
+    different days — the heaviest single, the best-e1RM set and the longest
+    set are usually three different memories.
+    """
+    best_e1rm: float = 0.0
+    best_e1rm_weight: float = 0.0
+    best_e1rm_reps: int = 0
+    best_e1rm_date: str = ""
+    max_weight: float = 0.0
+    max_weight_reps: int = 0
+    max_weight_date: str = ""
+    max_reps: int = 0
+    max_reps_weight: float = 0.0
+    max_reps_date: str = ""
+
+
+def gold_book(sessions: list[SessionStats], formula: str = "epley") -> Optional[GoldBook]:
+    """All-time golds from the exercise's full session history, or None when
+    there is nothing logged yet."""
+    book = GoldBook()
+    found = False
+    for session in sessions:
+        day = session.started_at[:10]
+        for row in session.sets:
+            if row.reps <= 0:
+                continue
+            found = True
+            score = e1rm(row.weight, row.reps, formula)
+            if score > book.best_e1rm:
+                book.best_e1rm = score
+                book.best_e1rm_weight, book.best_e1rm_reps = row.weight, row.reps
+                book.best_e1rm_date = day
+            if row.weight > book.max_weight or (
+                row.weight == book.max_weight and row.reps > book.max_weight_reps
+            ):
+                book.max_weight, book.max_weight_reps = row.weight, row.reps
+                book.max_weight_date = day
+            if row.reps > book.max_reps:
+                book.max_reps, book.max_reps_weight = row.reps, row.weight
+                book.max_reps_date = day
+    return book if found else None
+
+
+@dataclass
 class PersonalRecords:
     max_weight: float = 0.0
     max_e1rm: float = 0.0

@@ -498,6 +498,7 @@ async def _render_progress_view(ex_id: int, user, limit: int, origin: str = "all
         text = formatting.format_progress_screen(
             ex["display_name"], sessions, comparison, records, limit=limit, unit=user["unit"],
             session_notes=session_notes,
+            golds=analytics.gold_book(sessions, user["e1rm_formula"]),
         )
 
         png = None
