@@ -538,6 +538,23 @@ _ONBOARDING = (
 _heatmap_cache: dict[int, tuple[tuple, bytes]] = {}
 
 
+# Guards "live:wconf:*" against a double tap: aiogram can process two callbacks
+# from the same user concurrently, and each one reads its own snapshot of the
+# FSM data — so one task clearing pending_weight_confirm doesn't stop the other
+# task's already-read copy from still holding it. See _try_claim_weight_confirm.
+_confirming: set[int] = set()
+
+
+def _try_claim_weight_confirm(user_id: int) -> bool:
+    """Atomically check-and-reserve `_confirming` for this user — no `await`
+    between the membership check and the `.add()`, same reasoning as
+    ai_trainer._try_claim_busy."""
+    if user_id in _confirming:
+        return False
+    _confirming.add(user_id)
+    return True
+
+
 async def _menu_view(user_id: int) -> tuple[str, bytes | None]:
     """Greeting, plus a year heatmap image (with the streak/this-week/30-day
     dashboard stats drawn into it) once the user has any finished workouts.
@@ -1793,36 +1810,51 @@ async def log_set_voice(message: Message, state: FSMContext):
 
 @router.callback_query(StateFilter(WorkoutFlow.logging_set), F.data.startswith("live:wconf:"))
 async def live_weight_confirm(callback: CallbackQuery, state: FSMContext):
-    """Answer to "555кг? Записываем?" — see `_weight_confirm_prompt`."""
-    data = await state.get_data()
-    pending = await _take_pending_weight_confirmation(callback.bot, state, data)
-    if pending is None:
-        # Stale keyboard (restart, or the input was already superseded).
+    """Answer to "555кг? Записываем?" — see `_weight_confirm_prompt`.
+
+    Claims `_confirming` before the first `await`: two fast taps on the same
+    button both read `data` while pending_weight_confirm is still set (each
+    holds its own snapshot), so without this guard both would write the same
+    sets — clearing it only stops a *later* tap, not a second one racing the
+    first.
+    """
+    user_id = callback.from_user.id
+    if not _try_claim_weight_confirm(user_id):
         await callback.answer()
         return
+    try:
+        data = await state.get_data()
+        pending = await _take_pending_weight_confirmation(callback.bot, state, data)
+        if pending is None:
+            # Stale keyboard (restart, or the input was already superseded).
+            await callback.answer()
+            return
 
-    if callback.data.endswith(":no"):
-        # Drop the input entirely: retyping the set is one message, and leaving
-        # the wrong numbers on screen would only invite tapping "да" later.
-        with suppress(TelegramBadRequest):
-            await callback.bot.delete_message(
-                chat_id=pending["chat_id"], message_id=pending["message_id"]
-            )
-        await callback.answer("Не записал — набери подход заново")
-        return
+        if callback.data.endswith(":no"):
+            # Drop the input entirely: retyping the set is one message, and leaving
+            # the wrong numbers on screen would only invite tapping "да" later.
+            with suppress(TelegramBadRequest):
+                await callback.bot.delete_message(
+                    chat_id=pending["chat_id"], message_id=pending["message_id"]
+                )
+            await callback.answer("Не записал — набери подход заново")
+            return
 
-    active = pending["exercise_id"]
-    parsed = [ParsedSet(weight=w, reps=r, rpe=rpe) for w, r, rpe in pending["sets"]]
-    logged = await _store_parsed_sets(state, data, active, parsed)
-    confirmed = dict(data.get("confirmed_weights") or {})
-    confirmed[active] = logged[-1][0]
-    await state.update_data(confirmed_weights=confirmed)
-    user = await db.get_user(callback.from_user.id)
-    await callback.answer()
-    finalize = _finalize_voice_sets if pending.get("source") == "voice" else _finalize_logged_sets
-    await finalize(
-        callback.bot, state, user, data, active, logged, pending["chat_id"], pending["message_id"],
-    )
+        active = pending["exercise_id"]
+        parsed = [ParsedSet(weight=w, reps=r, rpe=rpe) for w, r, rpe in pending["sets"]]
+        logged = await _store_parsed_sets(state, data, active, parsed)
+        confirmed = dict(data.get("confirmed_weights") or {})
+        confirmed[active] = logged[-1][0]
+        await state.update_data(confirmed_weights=confirmed)
+        user = await db.get_user(user_id)
+        await callback.answer()
+        finalize = _finalize_voice_sets if pending.get("source") == "voice" else _finalize_logged_sets
+        await finalize(
+            callback.bot, state, user, data, active, logged,
+            pending["chat_id"], pending["message_id"],
+        )
+    finally:
+        _confirming.discard(user_id)
 
 
 @router.callback_query(StateFilter(WorkoutFlow.logging_set), F.data == "live:undo")
@@ -1856,6 +1888,10 @@ async def live_repeat_set(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(StateFilter(WorkoutFlow.logging_set), F.data == "live:finish_exercise")
 async def live_finish_exercise(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
+    # A "555кг? Записываем?" prompt for this exercise may still be waiting on an
+    # answer — closing the exercise is about to drop it from open_blocks, so a
+    # later "Да" would look up a block_id that is no longer there.
+    data = await _discard_superseded_confirmation(callback.bot, state, data)
     active = data.get("active_exercise_id")
     active_block_id = (data.get("open_blocks") or {}).get(active)
     if active_block_id is not None and not await db.list_sets_for_block(active_block_id):
