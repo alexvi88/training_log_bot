@@ -267,7 +267,9 @@ async def _analyze_and_show(
         else None
     )
 
-    await _clear_previous_screen(message, state)
+    # Экран дня (с подсказкой «напиши, что съел») намеренно не удаляется —
+    # разбор идёт отдельным сообщением ниже, а не заменяет собой то, на что
+    # человек только что ответил.
     placeholder = await message.answer(_THINKING_TEXT)
     try:
         estimate = await asyncio.wait_for(
@@ -287,8 +289,10 @@ async def _analyze_and_show(
                 "⚠️ Не получилось разобрать, что это за еда. Попробуй ещё раз "
                 "или напиши текстом, что съел."
             )
-        # Экран дня уже убран — вернём его, иначе разделу некуда возвращаться.
-        await _show_day(message, state, await _state_date(state, message.from_user.id))
+        # Возвращаемся в режим просмотра дня, не трогая сам экран дня — он не
+        # удалялся и не менялся, перерисовывать (и тем более удалять) нечего.
+        await state.set_state(FoodDiaryFlow.viewing)
+        await state.update_data(fd_pending=None)
         return
 
     if not estimate.get("description"):
