@@ -377,7 +377,7 @@ async def comment_on_workout(user_id: int, workout_id: int) -> str:
     response = await client.chat.completions.create(
         model=config.GROK_MODEL,
         max_tokens=700,
-        extra_body={"reasoning_effort": config.GROK_REASONING_EFFORT},
+        extra_body={"reasoning_effort": config.GROK_QUICK_REASONING_EFFORT},
         messages=[
             {
                 "role": "system",
@@ -467,7 +467,7 @@ async def weekly_digest(user_id: int) -> Optional[str]:
         response = await client.chat.completions.create(
             model=config.GROK_MODEL,
             max_tokens=500,
-            extra_body={"reasoning_effort": config.GROK_REASONING_EFFORT},
+            extra_body={"reasoning_effort": config.GROK_QUICK_REASONING_EFFORT},
             messages=[
                 {"role": "system", "content": WEEKLY_DIGEST_SYSTEM_PROMPT},
                 {"role": "user", "content": summary},
@@ -661,7 +661,7 @@ async def analyze_food(
     response = await client.chat.completions.create(
         model=config.GROK_MODEL,
         max_tokens=700 if with_macros else 200,
-        extra_body={"reasoning_effort": config.GROK_REASONING_EFFORT},
+        extra_body={"reasoning_effort": config.GROK_QUICK_REASONING_EFFORT},
         messages=[
             {
                 "role": "system",
@@ -1291,7 +1291,7 @@ async def _search_worth_it(
         response = await client.chat.completions.create(
             model=config.GROK_MODEL,
             max_tokens=3,
-            extra_body={"reasoning_effort": config.GROK_REASONING_EFFORT},
+            extra_body={"reasoning_effort": config.GROK_QUICK_REASONING_EFFORT},
             messages=[
                 {"role": "system", "content": _search_decision_system_prompt()},
                 *history,

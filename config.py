@@ -80,10 +80,22 @@ GROK_MODEL = os.getenv("GROK_MODEL", "grok-4.5-latest")
 GROK_BASE_URL = os.getenv("GROK_BASE_URL", "https://api.x.ai/v1")
 
 # Reasoning depth for GROK_MODEL calls (low/medium/high — xAI defaults to
-# "high" when unset, which reasoning models can't turn off). Medium is the
-# documented middle ground for latency-tolerant but not fully open-ended
-# tasks, which fits the AI trainer's chat/classification calls.
+# "high" when unset, which reasoning models can't turn off). Split in two
+# rather than one flat value for every call:
+#
+# GROK_REASONING_EFFORT — the main agentic Q&A loop (_completion_round, see
+# ask/_ask_plain), where the model reads tool results and gives actual
+# coaching advice. This is the one place extra thinking plausibly pays off,
+# so it stays at medium.
+#
+# GROK_QUICK_REASONING_EFFORT — everything else on GROK_MODEL: the workout
+# comment, the weekly digest, food-photo analysis, and the search-worth-it
+# gate (a 3-token yes/no classification). None of these need open-ended
+# reasoning, and since streaming was removed the user stares at "думаю..."
+# for the model's full thinking time with nothing live to show for it — low
+# keeps that wait (and the cost) down where it doesn't buy anything.
 GROK_REASONING_EFFORT = os.getenv("GROK_REASONING_EFFORT", "medium")
+GROK_QUICK_REASONING_EFFORT = os.getenv("GROK_QUICK_REASONING_EFFORT", "low")
 
 # Search-capable model used (via xAI's gRPC SDK, not the REST endpoint) when a
 # question is allowed web/X search access — same model name as fun_bot's
