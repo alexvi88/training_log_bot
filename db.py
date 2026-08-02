@@ -288,7 +288,7 @@ async def init_db(db_path: str = config.DB_PATH) -> None:
     await _seed_globals()
     await _migrate_muscle_groups()
     await _sync_exercise_templates()
-    await _backfill_seeded_from_program()
+    await _run_one_shot_migrations()
 
 
 async def _column_names(table: str) -> set[str]:
@@ -463,9 +463,40 @@ async def _sync_exercise_templates() -> None:
         await db.commit()
 
 
+# Bumped whenever a one-shot migration is added to _run_one_shot_migrations.
+_SCHEMA_VERSION = 1
+
+
+async def _run_one_shot_migrations() -> None:
+    """Run migrations that must happen exactly once per database.
+
+    Unlike the idempotent column adds in `_migrate_schema`, these rewrite user
+    data based on what it looks like *right now*, so re-running them on every
+    startup would keep re-applying them to rows the user has since created.
+    `PRAGMA user_version` is SQLite's built-in slot for tracking this.
+    """
+    cur = await _conn.execute("PRAGMA user_version")
+    (version,) = await cur.fetchone()
+    if version >= _SCHEMA_VERSION:
+        return
+    if version < 1:
+        await _backfill_seeded_from_program()
+    # Not parameterizable — SQLite only accepts a literal here. The value is an
+    # internal constant, never user input.
+    await _conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
+    await _conn.commit()
+
+
 async def _backfill_seeded_from_program() -> None:
     """Retroactively flag pristine, untouched, routine-less forks of a global
     template as seeded_from_program.
+
+    One-shot (see `_run_one_shot_migrations`): the WHERE clause below can't
+    tell a leftover from a program from an exercise the user picked out of
+    "📋 Выбрать из шаблонов" themselves and hasn't trained yet — both are
+    untrained, un-renamed forks of a template. Running it on every startup
+    therefore made a just-added exercise vanish from the user's list (and from
+    search) at the next restart, which reads as data loss.
 
     get_or_create_user_exercise_by_name only sets this flag going forward; a
     user exercise created the same way before that flag existed (e.g. by
