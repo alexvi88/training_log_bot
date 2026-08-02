@@ -264,3 +264,18 @@ async def test_charts_render_correctly_from_concurrent_threads():
 
     assert all(png.startswith(b"\x89PNG") for png in pngs)
     assert all(len(png) > 1000 for png in pngs)
+
+
+async def test_onboarding_names_the_features_a_new_user_cannot_guess(fresh_db, user_id):
+    """A new user's first screen used to describe only "pick a group, type a
+    set" — the ready-made programs on the very next screen, the voice input and
+    the AI trainer went unmentioned, so they were found by accident or not at
+    all."""
+    from handlers import workout
+
+    text, _png = await workout._menu_view(user_id)
+
+    assert "Готовые программы" in text
+    assert "голосов" in text
+    assert "AI-тренер" in text
+    assert "Дневник питания" in text
