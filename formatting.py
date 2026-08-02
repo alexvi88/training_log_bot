@@ -6,7 +6,7 @@ are responsible for turning DB rows into the small view dataclasses below.
 
 import datetime as dt
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from html import escape
 from typing import Literal
 
@@ -144,6 +144,31 @@ def format_rpe(rpe: float | None) -> str:
 
 def format_set(weight: float, reps: int, rpe: float | None = None) -> str:
     return f"{format_weight(weight)}×{reps}{format_rpe(rpe)}"
+
+
+def build_routine_target(
+    sets: int | None, reps_min: int | None, reps_max: int | None
+) -> str:
+    """«3×5–8» — routine_exercises.target из подходов и повторов, которые назвал
+    AI-тренер (см. ai_trainer.propose_program).
+
+    Та же free-form строка, что у готовых программ в seed_data, и попадает она
+    в то же поле — значит и на карточке программы, и подсказкой «🎯 План» во
+    время тренировки выглядит одинаково, кто бы программу ни собрал.
+
+    Пустая строка, если схемы нет вовсе: тогда у упражнения останется пустой
+    target, как у программы, снятой с тренировки.
+    """
+    reps = ""
+    if reps_min and reps_max and reps_max != reps_min:
+        reps = f"{reps_min}–{reps_max}"
+    elif reps_min or reps_max:
+        reps = str(reps_min or reps_max)
+    if sets and reps:
+        return f"{sets}×{reps}"
+    if sets:
+        return f"{sets} подх."
+    return reps
 
 
 def format_date_ru(d: dt.datetime) -> str:
@@ -456,6 +481,49 @@ def build_ai_comment_block(comment: str) -> str:
     a tap on the client (see collapsible).
     """
     return f"{DIVIDER}\n🤖 <b>Комментарий AI-тренера</b>\n{collapsible_if_long(markdown_bold_to_html(comment))}"
+
+
+def build_ai_program_preview(name: str, days: list[dict]) -> str:
+    """Превью программы, которую собрал AI-тренер, до её сохранения.
+
+    `days` — черновик из ai_trainer.propose_program: [{"name", "items": [{"name",
+    "target", "source"}]}]. Каждый день станет отдельной программой в списке
+    пользователя, поэтому текст проговаривает это прямо — иначе «добавить»
+    выглядит как одна новая строка, а появится несколько.
+    """
+    total = sum(len(day["items"]) for day in days)
+    new_names = sorted(
+        {item["name"] for day in days for item in day["items"] if item.get("source") == "template"}
+    )
+    day_word = plural_ru(len(days), ("день", "дня", "дней"))
+    ex_word = plural_ru(total, ("упражнение", "упражнения", "упражнений"))
+
+    lines = [
+        "📋 <b>ПРОГРАММА ОТ ТРЕНЕРА</b>",
+        "",
+        f"<b>{escape(name)}</b>",
+        f"{len(days)} {day_word} · {total} {ex_word}",
+    ]
+    for day in days:
+        lines += ["", f"<b>{escape(day['name'])}</b>"]
+        for i, item in enumerate(day["items"], start=1):
+            target = item.get("target")
+            suffix = f" — {escape(target)}" if target else ""
+            lines.append(f"{i}. {escape(item['name'])}{suffix}")
+
+    lines += ["", DIVIDER]
+    if len(days) == 1:
+        lines.append("Добавлю как программу — начать по ней тренировку можно в один тап.")
+    else:
+        lines.append(
+            f"Добавлю как {len(days)} отдельные программы — по каждой начинаешь тренировку в один тап."
+        )
+    if new_names:
+        word = plural_ru(len(new_names), ("упражнение", "упражнения", "упражнений"))
+        lines.append(
+            f"Новых для тебя {word}: {len(new_names)} — добавлю их в твой список автоматически."
+        )
+    return "\n".join(lines)
 
 
 # Fun, shareable size comparisons for a tonnage total — (emoji, kg each, declensions),
@@ -1130,30 +1198,35 @@ def _sum_or_none(values) -> float | None:
 
 @dataclass
 class FoodDayView:
-    """One day's row in the history list, with its totals."""
+    """One day's row in the history list, with its totals and what was eaten."""
     date: dt.date
     entries: int
     calories: float | None = None
     protein: float | None = None
     fat: float | None = None
     carbs: float | None = None
+    descriptions: list[str] = field(default_factory=list)
 
 
 def build_food_history_list(days: list[FoodDayView]) -> str:
-    """The history tab: one line per logged day, newest first."""
+    """The history tab: one block per logged day, newest first — date, totals,
+    entry count, then the food itself folded behind a collapsible quote."""
     if not days:
         return (
             "📚 <b>История питания</b>\n\nПока ничего не записано.\n"
             "Открой день и напиши, что съел."
         )
-    lines = ["📚 <b>История питания</b>", ""]
+    day_blocks = []
     for d in days:
         n = plural_ru(d.entries, ("приём", "приёма", "приёмов"))
         macros = _macros_line(d.protein, d.fat, d.carbs)
         totals = [p for p in (format_kcal(d.calories) if d.calories is not None else "", macros) if p]
-        totals_part = " · ".join(totals) if totals else "—"
-        lines.append(
-            f"<b>{format_date_ru(dt.datetime.combine(d.date, dt.time()))}</b> — "
-            f"{totals_part} [{d.entries} {n}]"
-        )
-    return "\n".join(lines)
+        block = [f"<b>{format_date_ru(dt.datetime.combine(d.date, dt.time()))}</b>"]
+        if totals:
+            block.append(" · ".join(totals))
+        block.append(f"{d.entries} {n} пищи")
+        if d.descriptions:
+            food_list = "\n".join(f"{i}. {escape(name)}" for i, name in enumerate(d.descriptions, start=1))
+            block.append(collapsible(food_list))
+        day_blocks.append("\n".join(block))
+    return "📚 <b>История питания</b>\n\n" + "\n\n".join(day_blocks)

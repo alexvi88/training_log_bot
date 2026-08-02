@@ -2078,6 +2078,31 @@ async def get_or_create_user_exercise_by_name(user_id: int, name: str) -> Option
     return None
 
 
+async def resolve_exercise_name(user_id: int, name: str) -> tuple[Optional[str], Optional[str]]:
+    """Куда ляжет название упражнения, ничего при этом не создавая.
+
+    Read-only двойник get_or_create_user_exercise_by_name: тем же порядком
+    (сначала своё, потом глобальный шаблон) проверяет, резолвится ли имя
+    вообще, и возвращает ("own"|"template", каноничное display_name) либо
+    (None, None). Нужен AI-тренеру, чтобы показать состав предлагаемой
+    программы до того, как пользователь согласился её сохранить, — предложение
+    не должно форкать пользователю упражнения (см. ai_trainer.propose_program).
+    """
+    existing = await find_exercise_by_name(user_id, name)
+    if existing is not None:
+        return "own", existing["display_name"]
+    template = await _find_global_template_by_name(name)
+    if template is not None:
+        return "template", template["display_name"]
+    return None, None
+
+
+async def count_routines(user_id: int) -> int:
+    cur = await conn().execute("SELECT COUNT(*) FROM routines WHERE user_id = ?", (user_id,))
+    row = await cur.fetchone()
+    return row[0]
+
+
 async def create_routine_from_program(
     user_id: int, name: str, exercise_names: list[str | tuple[str, Optional[str]]]
 ) -> int:
@@ -2090,7 +2115,8 @@ async def create_routine_from_program(
     Each item may be a bare name, or an (name, target) tuple carrying the
     program's recommended sets×reps for that exercise (e.g. "4×6–8") — stored on
     the routine_exercises row so it can be shown again both on the routine and
-    while logging a workout started from it.
+    while logging a workout started from it. Programs the AI trainer builds land
+    here the same way, carrying the target it picked (ai_trainer.propose_program).
     """
     routine_id = await create_routine(user_id, name)
     seen: set[int] = set()
@@ -2104,6 +2130,7 @@ async def create_routine_from_program(
         await add_routine_exercise(routine_id, ex_id, order, target)
         order += 1
     return routine_id
+
 
 
 async def create_routine_from_workout(user_id: int, workout_id: int, name: str) -> int:
@@ -2483,16 +2510,20 @@ async def delete_food_entry(entry_id: int) -> None:
 async def list_food_days(
     telegram_id: int, limit: int = 8, offset: int = 0
 ) -> list[aiosqlite.Row]:
-    """Days that have entries, newest first, with per-day totals — the history list.
+    """Days that have entries, newest first, with per-day totals and the list of
+    what was eaten (as newline-joined descriptions) — the history list.
 
-    Aggregated in SQL rather than by loading every entry: the history screen only
-    ever shows a count and the day's calories, and a year of logging is thousands
-    of rows.
+    Aggregated in SQL rather than by loading every entry per day separately —
+    the history screen shows a handful of days at a time, but a year of
+    logging is thousands of rows. The inner subquery orders by id before the
+    GROUP BY so GROUP_CONCAT collects each day's descriptions in the order
+    they were logged, not an arbitrary one.
     """
     cur = await conn().execute(
         "SELECT eaten_on, COUNT(*) AS entries, SUM(calories) AS calories, "
-        "SUM(protein) AS protein, SUM(fat) AS fat, SUM(carbs) AS carbs "
-        "FROM food_entries WHERE telegram_id = ? "
+        "SUM(protein) AS protein, SUM(fat) AS fat, SUM(carbs) AS carbs, "
+        "GROUP_CONCAT(description, char(10)) AS descriptions "
+        "FROM (SELECT * FROM food_entries WHERE telegram_id = ? ORDER BY id) "
         "GROUP BY eaten_on ORDER BY eaten_on DESC LIMIT ? OFFSET ?",
         (telegram_id, limit, offset),
     )

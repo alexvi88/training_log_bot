@@ -1,7 +1,6 @@
 """🍽 Дневник питания — что съел, по дням, с распознаванием еды моделью.
 
-Открывается только командой /food_diary: кнопки в главном меню пока нет, раздел
-обкатывается отдельно от основного сценария бота.
+Открывается кнопкой «🍽 Дневник питания» в главном меню или командой /food_diary.
 
 Как устроен ввод. Пользователь на экране дня просто пишет текстом или шлёт фото
 (можно фото с подписью) — отдельной кнопки «добавить» не нужно, как и на экране
@@ -522,6 +521,7 @@ async def fd_history(callback: CallbackQuery, state: FSMContext):
         formatting.FoodDayView(
             date=dt.date.fromisoformat(r["eaten_on"]), entries=r["entries"], calories=r["calories"],
             protein=r["protein"], fat=r["fat"], carbs=r["carbs"],
+            descriptions=(r["descriptions"] or "").split("\n"),
         )
         for r in rows
     ]

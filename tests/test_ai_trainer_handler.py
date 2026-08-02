@@ -22,6 +22,7 @@ def _callbacks(kb) -> list[str]:
 def _make_callback(user_id: int, data: str):
     message = MagicMock()
     message.delete = AsyncMock()
+    message.edit_text = AsyncMock()
     message.answer = AsyncMock(return_value=SimpleNamespace(chat=SimpleNamespace(id=user_id), message_id=1))
     bot = MagicMock()
     bot.delete_message = AsyncMock()
@@ -528,3 +529,94 @@ async def test_short_card_still_gets_the_comment_appended_in_place(fresh_db, use
 
     callback.message.edit_text.assert_awaited_once()
     assert "Коротко и по делу" in callback.message.edit_text.await_args.args[0]
+
+# ---------- program the trainer proposed (ai:prog:*) ----------
+
+
+def _draft(days: int = 2) -> dict:
+    return {
+        "name": "Верх/низ",
+        "days": [
+            {
+                "name": f"День {i}",
+                "items": [
+                    {"name": "Жим штанги лёжа", "target": "3×5–10", "source": "template"}
+                ],
+            }
+            for i in range(1, days + 1)
+        ],
+    }
+
+
+async def test_program_preview_keeps_the_answer_and_offers_saving(fresh_db, user_id):
+    state = await _make_state(user_id)
+    await state.update_data(ai_program_draft=_draft())
+    callback = _make_callback(user_id, "ai:prog:view")
+
+    await ai_trainer.ai_program_view(callback, state)
+
+    callback.message.answer.assert_awaited_once()
+    kb = callback.message.answer.await_args.kwargs["reply_markup"]
+    assert _callbacks(kb) == ["ai:prog:save", "ai:prog:drop"]
+    callback.message.delete.assert_not_awaited()
+
+
+async def test_saving_a_program_creates_one_routine_per_day(fresh_db, user_id):
+    state = await _make_state(user_id)
+    await state.update_data(ai_program_draft=_draft(days=2))
+    callback = _make_callback(user_id, "ai:prog:save")
+
+    await ai_trainer.ai_program_save(callback, state)
+
+    routines = await fresh_db.list_routines(user_id)
+    assert sorted(r["name"] for r in routines) == ["День 1", "День 2"]
+    # Черновик израсходован — второй тап по той же кнопке ничего не задублирует.
+    assert (await state.get_data()).get("ai_program_draft") is None
+
+
+async def test_saving_twice_does_not_duplicate_the_program(fresh_db, user_id):
+    state = await _make_state(user_id)
+    await state.update_data(ai_program_draft=_draft(days=1))
+    callback = _make_callback(user_id, "ai:prog:save")
+
+    await ai_trainer.ai_program_save(callback, state)
+    await ai_trainer.ai_program_save(callback, state)
+
+    assert len(await fresh_db.list_routines(user_id)) == 1
+
+
+async def test_saving_a_stale_draft_alerts_and_writes_nothing(fresh_db, user_id):
+    state = await _make_state(user_id)
+    callback = _make_callback(user_id, "ai:prog:save")
+
+    await ai_trainer.ai_program_save(callback, state)
+
+    assert await fresh_db.list_routines(user_id) == []
+    assert callback.answer.await_args.kwargs.get("show_alert") is True
+
+
+async def test_saving_over_the_routine_cap_is_refused(fresh_db, user_id):
+    import ai_trainer as ai_trainer_module
+
+    for i in range(ai_trainer_module.MAX_ROUTINES_PER_USER):
+        await fresh_db.create_routine(user_id, f"Программа {i}")
+    state = await _make_state(user_id)
+    await state.update_data(ai_program_draft=_draft(days=1))
+    callback = _make_callback(user_id, "ai:prog:save")
+
+    await ai_trainer.ai_program_save(callback, state)
+
+    assert len(await fresh_db.list_routines(user_id)) == ai_trainer_module.MAX_ROUTINES_PER_USER
+    assert callback.answer.await_args.kwargs.get("show_alert") is True
+
+
+async def test_dropping_a_program_removes_the_preview_and_the_draft(fresh_db, user_id):
+    state = await _make_state(user_id)
+    await state.update_data(ai_program_draft=_draft())
+    callback = _make_callback(user_id, "ai:prog:drop")
+
+    await ai_trainer.ai_program_drop(callback, state)
+
+    callback.message.delete.assert_awaited_once()
+    assert (await state.get_data()).get("ai_program_draft") is None
+    assert await fresh_db.list_routines(user_id) == []
