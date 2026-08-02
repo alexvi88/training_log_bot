@@ -1725,11 +1725,22 @@ async def list_all_sets_by_exercise(user_id: int) -> list[aiosqlite.Row]:
 
 
 async def list_sets_for_workout_exercise(workout_id: int, exercise_id: int) -> list[aiosqlite.Row]:
+    """Every set of one exercise in one workout, in the order the tracker shows
+    them.
+
+    Block order comes first because `round_index` restarts per block (see
+    `append_set`): an exercise logged, closed and reopened has two blocks whose
+    rounds both count from 1, so ordering by round alone would interleave them
+    — 1st set of block 2 between the 1st and 2nd of block 1. view_builder
+    merges blocks in `order_index` order, and anything indexing into this list
+    by what the user sees (editing "2: 100 8", carry-forward's "last set")
+    has to agree with it.
+    """
     cur = await conn().execute(
         "SELECT s.* FROM sets s "
         "JOIN workout_blocks b ON b.id = s.block_id "
         "WHERE b.workout_id = ? AND s.exercise_id = ? "
-        "ORDER BY s.round_index, s.order_in_round, s.id",
+        "ORDER BY b.order_index, s.round_index, s.order_in_round, s.id",
         (workout_id, exercise_id),
     )
     return await cur.fetchall()

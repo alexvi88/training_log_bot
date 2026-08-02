@@ -1613,9 +1613,15 @@ async def _apply_set_edit(state: FSMContext, data: dict, active: int, index: int
     """Overwrite the `index`-th (1-based) already-logged set of the active
     exercise, in the same order the tracker lists them. Raises ParseError if
     that index doesn't exist — caller replies it back to the user same as any
-    other bad input, rather than silently doing nothing."""
-    block_id = (data.get("open_blocks") or {}).get(active)
-    sets = await db.list_sets_for_block(block_id) if block_id else []
+    other bad input, rather than silently doing nothing.
+
+    Indexes across the whole workout's sets for this exercise, not just the
+    currently open block: an exercise closed and reopened has more than one
+    block, and the tracker numbers their sets as one merged list (see
+    view_builder.build_block_views). Counting within one block would silently
+    edit the wrong set and reject indexes the user can plainly see on screen.
+    """
+    sets = await db.list_sets_for_workout_exercise(data["workout_id"], active)
     if not (1 <= index <= len(sets)):
         if not sets:
             raise ParseError("Пока нет ни одного подхода — нечего править.")

@@ -196,6 +196,40 @@ async def test_indexed_edit_out_of_range_replies_with_how_many_exist(fresh_db, u
 
 
 @pytest.mark.asyncio
+async def test_indexed_edit_counts_sets_across_a_reopened_exercise(fresh_db, user_id):
+    """Closing an exercise and adding it again later makes a second block for
+    it, but the tracker still numbers all its sets as one list. The edit has to
+    use that same numbering: counting inside the open block only would edit the
+    wrong set and reject numbers the user can see on screen."""
+    db = fresh_db
+    state, ex_id, first_block = await _setup_logging(db, user_id, [(100.0, 8), (100.0, 8)])
+    data = await state.get_data()
+
+    # Reopened later in the same workout: a fresh block, one set in it.
+    second_block = await db.create_block(data["workout_id"], "single")
+    await db.add_block_exercise(second_block, ex_id, 0)
+    await db.append_set(second_block, ex_id, 0, 60.0, 10)
+    await state.update_data(open_blocks={ex_id: second_block})
+
+    # On screen this is set 3 of 3 — it lives in the second block.
+    await workout.log_set_text(_make_message(user_id, "3: 65 10"), state)
+
+    assert [(s["weight"], s["reps"]) for s in await db.list_sets_for_block(first_block)] == [
+        (100.0, 8), (100.0, 8),
+    ]
+    assert [(s["weight"], s["reps"]) for s in await db.list_sets_for_block(second_block)] == [
+        (65.0, 10),
+    ]
+
+    # ...and set 1 is the first block's, not the open block's only set.
+    await workout.log_set_text(_make_message(user_id, "1: 110 5"), state)
+
+    assert [(s["weight"], s["reps"]) for s in await db.list_sets_for_block(first_block)] == [
+        (110.0, 5), (100.0, 8),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_indexed_edit_rejects_a_count_suffix(fresh_db, user_id):
     db = fresh_db
     state, ex_id, block_id = await _setup_logging(db, user_id, [(100.0, 8)])
