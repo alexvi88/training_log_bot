@@ -36,7 +36,10 @@ def persistent_menu() -> ReplyKeyboardMarkup:
     )
 
 
-def main_menu(has_active_workout: bool) -> InlineKeyboardMarkup:
+def main_menu(has_active_workout: bool, show_quick_log: bool = False) -> InlineKeyboardMarkup:
+    """show_quick_log: offered while the diary is still empty. A first-time user
+    has nothing to look at and a whole training history behind them — letting
+    them type one line of it beats walking the picker for the first record."""
     b = InlineKeyboardBuilder()
     if has_active_workout:
         b.button(text="▶️ ПРОДОЛЖИТЬ ТРЕНИРОВКУ", callback_data="menu:resume_workout")
@@ -44,6 +47,8 @@ def main_menu(has_active_workout: bool) -> InlineKeyboardMarkup:
         b.button(text="🏋️ НАЧАТЬ ТРЕНИРОВКУ", callback_data="menu:start_workout")
     # Also on the persistent keyboard, but the menu is what a new user reads to
     # find out what the bot does — and "menu:ai" had a handler no keyboard sent.
+    if show_quick_log:
+        b.button(text="✍️ Записать прошлую тренировку", callback_data="menu:quicklog")
     b.button(text="🤖 AI-тренер", callback_data="menu:ai")
     b.button(text="📈 Прогресс", callback_data="menu:progress")
     b.button(text="📚 История", callback_data="menu:history")
@@ -53,9 +58,10 @@ def main_menu(has_active_workout: bool) -> InlineKeyboardMarkup:
     b.button(text="🍽 Дневник питания", callback_data="menu:food")
     b.button(text="🏆 Достижения", callback_data="menu:achievements")
     b.button(text="🔧 Настройки", callback_data="menu:settings")
-    # start/resume, then AI-тренер, then pairs: Прогресс·История,
-    # Упражнения·Программы, Дневник веса·Дневник питания, Достижения·Настройки.
-    b.adjust(1, 1, 2, 2, 2, 2)
+    # start/resume, quick-log (if shown) and AI-тренер full width, then pairs:
+    # Прогресс·История, Упражнения·Программы, Дневник веса·Дневник питания,
+    # Достижения·Настройки.
+    b.adjust(*([1, 1, 1] if show_quick_log else [1, 1]), 2, 2, 2, 2)
     return b.as_markup()
 
 

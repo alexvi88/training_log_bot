@@ -39,7 +39,14 @@ import ui
 import view_builder
 import voice_parse
 from fsm import WorkoutFlow
-from parser import ParsedSet, ParseError, parse_ru_date, parse_set_edit, parse_sets_line
+from parser import (
+    ParsedSet,
+    ParseError,
+    parse_quick_workout,
+    parse_ru_date,
+    parse_set_edit,
+    parse_sets_line,
+)
 
 router = Router(name="workout")
 
@@ -623,7 +630,11 @@ async def _send_menu(message: Message, text: str, png: bytes | None, keyboard) -
 
 
 async def _main_menu_kb(user_id: int, active) -> InlineKeyboardMarkup:
-    return keyboards.main_menu(bool(active))
+    # The quick-log entry is offered only while the diary is empty: it exists to
+    # get a first record in, and once there is history the normal flows are
+    # better (they know the exercises, the targets and the progression).
+    has_history = await db.count_workouts(user_id) > 0
+    return keyboards.main_menu(bool(active), show_quick_log=not has_history)
 
 
 _WORKOUT_SCAFFOLD_KEYS = (
@@ -882,6 +893,93 @@ async def start_workout(callback: CallbackQuery, state: FSMContext):
     )
     await state.set_state(WorkoutFlow.picking_group)
     await _picker_screen_groups(callback, state, show_program_button=True)
+
+
+QUICK_LOG_PROMPT = (
+    "✍️ <b>Запиши тренировку одной строкой</b>\n\n"
+    "Упражнение, вес и повторы — через запятую:\n"
+    "<code>жим 80x8x3, присед 100x5, подтягивания 12</code>\n\n"
+    "Сохраню как сегодняшнюю тренировку. Упражнений, которых у тебя ещё нет, "
+    "заведу сам."
+)
+
+# Unknown names go here rather than stopping to ask for a muscle group each —
+# the same trade-off the CSV import's "создать все" makes, and the group is
+# editable later in ⚙️ Упражнения.
+_QUICK_LOG_GROUP = "Другое"
+
+
+@router.callback_query(F.data == "menu:quicklog")
+async def menu_quick_log(callback: CallbackQuery, state: FSMContext):
+    await _clear_state_keep_workout(state)
+    await state.set_state(WorkoutFlow.quick_log)
+    await ui.safe_edit(
+        callback, QUICK_LOG_PROMPT,
+        reply_markup=keyboards.cancel_keyboard("quick:cancel"), parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.callback_query(StateFilter(WorkoutFlow.quick_log), F.data == "quick:cancel")
+async def quick_log_cancel(callback: CallbackQuery, state: FSMContext):
+    await _show_main_menu(callback, state)
+    await callback.answer()
+
+
+async def _resolve_quick_exercise(user_id: int, name: str) -> int:
+    """The user's exercise of that name, forking a catalog template or creating
+    one if there isn't one yet."""
+    existing = await db.find_exercise_by_name(user_id, name)
+    if existing:
+        return existing["id"]
+    from_template = await db.get_or_create_user_exercise_by_name(user_id, name)
+    if from_template is not None:
+        return from_template
+    groups = await db.list_muscle_groups(user_id)
+    group_id = next(
+        (g["id"] for g in groups if g["name"] == _QUICK_LOG_GROUP),
+        groups[0]["id"] if groups else None,
+    )
+    return await db.create_exercise(user_id, name, group_id)
+
+
+@router.message(StateFilter(WorkoutFlow.quick_log), F.text)
+async def quick_log_entered(message: Message, state: FSMContext):
+    """Save a whole past session typed as one line, as a finished workout today.
+
+    Nothing about it is live: there is no tracker, no picker and no finish step,
+    because the session already happened — the user is transcribing, not
+    training. That's the point of the flow (see keyboards.main_menu's
+    show_quick_log).
+    """
+    user_id = message.from_user.id
+    try:
+        entries = parse_quick_workout(message.text)
+    except ParseError as e:
+        await message.reply(e.message)
+        return
+
+    user = await db.get_user(user_id)
+    today = timeutil.user_today(user)
+    started_at = f"{today.isoformat()}T12:00:00"
+    workout_id = await db.create_finished_workout(user_id, started_at, started_at)
+    for entry in entries:
+        ex_id = await _resolve_quick_exercise(user_id, entry.name)
+        block_id = await db.create_block(workout_id, "single")
+        await db.add_block_exercise(block_id, ex_id, 0)
+        await db.touch_exercise_last_used(ex_id)
+        for parsed in entry.sets:
+            await db.append_set(block_id, ex_id, 0, parsed.weight, parsed.reps, parsed.rpe)
+
+    await achievement_sync.resync(user_id)
+    await state.clear()
+
+    workout = await db.get_workout(workout_id)
+    card = await _finished_workout_card_text(workout, await db.get_user(user_id), None)
+    await message.answer(
+        card, parse_mode="HTML",
+        reply_markup=keyboards.workout_card_keyboard(workout_id),
+    )
 
 
 REPEAT_PAGE_SIZE = 6
