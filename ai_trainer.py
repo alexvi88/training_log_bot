@@ -29,6 +29,7 @@ import datetime as dt
 import json
 import logging
 import re
+from types import SimpleNamespace
 from typing import Any, Awaitable, Callable, Optional
 
 from openai import AsyncOpenAI
@@ -1104,6 +1105,9 @@ StatusCallback = Optional[Callable[[str], Awaitable[None]]]
 # черновик в FSM и вешает под ответ кнопку, а пишет в БД уже тап пользователя.
 ProgramCallback = Optional[Callable[[dict[str, Any]], Awaitable[None]]]
 
+# Накопленный текст ответа по мере генерации — см. _completion_round.
+ChunkCallback = Optional[Callable[[str], Awaitable[None]]]
+
 # Человеко-читаемый статус для каждого инструмента — во что реально идёт вызов,
 # а не абстрактное "думаю".
 TOOL_STATUS_TEXTS: dict[str, str] = {
@@ -1530,6 +1534,7 @@ async def ask(
     image_data_url: Optional[str] = None,
     on_status: StatusCallback = None,
     on_program: ProgramCallback = None,
+    on_chunk: ChunkCallback = None,
 ) -> str:
     """Один вопрос пользователя → готовый текст ответа.
 
@@ -1572,7 +1577,8 @@ async def ask(
         user_id, question, bool(search_context),
     )
     return await _ask_plain(
-        user_id, question, history, image_data_url, search_context, on_status, on_program
+        user_id, question, history, image_data_url, search_context, on_status, on_program,
+        on_chunk,
     )
 
 
@@ -1585,19 +1591,73 @@ def _plain_user_content(question: str, image_data_url: Optional[str]) -> Any:
     ]
 
 
+# Как часто отдаём накопленный текст наружу во время стрима. Не на каждый
+# токен: получатель шлёт его в Telegram, а там свои лимиты на частоту запросов.
+STREAM_FLUSH_SECONDS = 1.2
+
+
 async def _completion_round(
     client: AsyncOpenAI,
     messages: list[dict[str, Any]],
     user_id: Optional[int],
+    on_chunk: ChunkCallback = None,
 ) -> tuple[str, list[Any]]:
-    """One chat-completion turn. Returns (content, tool_calls)."""
-    response = await client.chat.completions.create(
+    """One chat-completion turn. Returns (content, tool_calls).
+
+    `on_chunk` включает стриминг: текст отдаётся наружу по мере генерации, не
+    чаще чем раз в STREAM_FLUSH_SECONDS. Стримить имеет смысл только тот раунд,
+    который окажется финальным, — но какой из них финальный, заранее неизвестно,
+    поэтому раунд с tool_calls просто ничего не отдаёт (там текста и нет, а
+    происходящее показывают статусы).
+    """
+    if on_chunk is None:
+        response = await client.chat.completions.create(
+            model=config.GROK_MODEL, max_tokens=2048, tools=TOOLS, messages=messages,
+            extra_body={"reasoning_effort": config.GROK_REASONING_EFFORT},
+        )
+        await _log_llm_cost(user_id, config.GROK_MODEL, getattr(response, "usage", None))
+        m = response.choices[0].message
+        return (m.content or ""), list(m.tool_calls or [])
+
+    stream = await client.chat.completions.create(
         model=config.GROK_MODEL, max_tokens=2048, tools=TOOLS, messages=messages,
         extra_body={"reasoning_effort": config.GROK_REASONING_EFFORT},
+        stream=True, stream_options={"include_usage": True},
     )
-    await _log_llm_cost(user_id, config.GROK_MODEL, getattr(response, "usage", None))
-    m = response.choices[0].message
-    return (m.content or ""), list(m.tool_calls or [])
+    parts: list[str] = []
+    tool_calls: dict[int, dict[str, Any]] = {}
+    usage = None
+    last_flush = 0.0
+    async for event in stream:
+        usage = getattr(event, "usage", None) or usage
+        if not event.choices:
+            continue
+        delta = event.choices[0].delta
+        for tc in getattr(delta, "tool_calls", None) or []:
+            slot = tool_calls.setdefault(
+                tc.index, {"id": "", "name": "", "arguments": ""}
+            )
+            slot["id"] += tc.id or ""
+            if tc.function:
+                slot["name"] += tc.function.name or ""
+                slot["arguments"] += tc.function.arguments or ""
+        if delta.content:
+            parts.append(delta.content)
+            now = asyncio.get_running_loop().time()
+            if now - last_flush >= STREAM_FLUSH_SECONDS:
+                last_flush = now
+                await on_chunk("".join(parts))
+    await _log_llm_cost(user_id, config.GROK_MODEL, usage)
+    return "".join(parts), [_StreamedToolCall(slot) for slot in tool_calls.values()]
+
+
+class _StreamedToolCall:
+    """Собранный из дельт tool-call в форме, которую ждёт остальной код
+    (tc.id / tc.function.name / tc.function.arguments)."""
+
+    def __init__(self, slot: dict[str, Any]) -> None:
+        self.id = slot["id"]
+        self.function = SimpleNamespace(name=slot["name"], arguments=slot["arguments"])
 
 
 async def _ask_plain(
@@ -1608,6 +1668,7 @@ async def _ask_plain(
     search_context: Optional[str] = None,
     on_status: StatusCallback = None,
     on_program: ProgramCallback = None,
+    on_chunk: ChunkCallback = None,
 ) -> str:
     client = _get_client()
     messages: list[dict[str, Any]] = [
@@ -1625,7 +1686,7 @@ async def _ask_plain(
 
     content = ""
     for _ in range(MAX_TOOL_ROUNDS + 1):
-        content, tool_calls = await _completion_round(client, messages, user_id)
+        content, tool_calls = await _completion_round(client, messages, user_id, on_chunk)
         if not tool_calls:
             break
         if on_status:
