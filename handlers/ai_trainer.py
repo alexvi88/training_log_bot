@@ -9,7 +9,7 @@ from html import escape
 from typing import Callable, Optional
 
 from aiogram import F, Router
-from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramRetryAfter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 
@@ -45,6 +45,13 @@ DEFAULT_PHOTO_QUESTION = "Посмотри на фото и прокоммент
 # Черновик — превью, а не сообщение: показываем хвост генерации, чтобы длинный
 # ответ не упирался в лимиты, а живая «печать» была видна.
 MAX_DRAFT_CHARS = 1000
+
+# Минимальная пауза между двумя отправками черновика: Telegram ограничивает
+# частоту, а глазу чаще и не надо.
+DRAFT_MIN_INTERVAL = config.AI_STREAM_FLUSH_SECONDS
+
+# Дольше этого ждать флудвейт бессмысленно — ответ придёт раньше черновика.
+MAX_DRAFT_RETRY_WAIT = 5.0
 
 # Лимит на размер голосового (Telegram сам не режет сильнее, но перестрахуемся).
 MAX_VOICE_BYTES = 20 * 1024 * 1024
@@ -154,9 +161,17 @@ class _DraftStreamer:
     клиентом и не оставляет следа, а готовый ответ приходит одним обычным
     сообщением, как и раньше.
 
-    Метод появился в Bot API 9.3, поэтому любая ошибка отправки просто
+    Метод появился в Bot API 9.3, поэтому отсутствие метода на сервере просто
     выключает стриминг до конца ответа — на старых клиентах и серверах всё
     работает как прежде, только без анимации.
+
+    Отправка живёт в отдельной задаче, а `push` только запоминает последний
+    текст и мгновенно возвращает управление. Раньше `push` слал черновик прямо
+    из цикла чтения стрима модели: один медленный (или флудвейтнутый) запрос в
+    Telegram останавливал вычитывание дельт, они копились в сокете — черновик
+    замирал на полуслове, а потом весь ответ «пробегал» разом. Теперь сеть
+    Telegram и чтение стрима не ждут друг друга: подтормаживает отправка —
+    просто пропускаем промежуточные состояния и показываем самое свежее.
     """
 
     def __init__(self, message: Message, on_start: Optional[Callable] = None) -> None:
@@ -171,26 +186,67 @@ class _DraftStreamer:
         # ожидания разом (статичный текст сообщением выше и печатающийся черновик
         # снизу) читаются как баг, а не как прогресс.
         self._on_start = on_start
+        # Последний непоказанный текст: писатель всегда берёт свежайший, а не
+        # очередь — промежуточные состояния черновика никому не нужны.
+        self._pending: Optional[str] = None
+        self._wake = asyncio.Event()
+        self._writer: Optional[asyncio.Task] = None
 
     async def push(self, text: str) -> None:
+        """Отдать черновику новый текст. Не ждёт сети — только будит писателя."""
         if not self._enabled or not text:
             return
+        self._pending = text[-MAX_DRAFT_CHARS:]
+        if self._writer is None:
+            self._writer = asyncio.create_task(self._run())
+        self._wake.set()
+
+    async def _run(self) -> None:
+        while True:
+            await self._wake.wait()
+            self._wake.clear()
+            text, self._pending = self._pending, None
+            if text is None:
+                continue
+            if not await self._send(text):
+                self._enabled = False
+                self._pending = None
+                return
+            if not self._started:
+                self._started = True
+                if self._on_start:
+                    await self._on_start()
+            # Пауза между черновиками: Telegram не любит частых правок, а
+            # человек всё равно не читает быстрее.
+            await asyncio.sleep(DRAFT_MIN_INTERVAL)
+
+    async def _send(self, text: str) -> bool:
+        """True — черновик ушёл (или стоит попробовать ещё раз), False — сдаёмся."""
         try:
             await self._message.bot.send_message_draft(
-                chat_id=self._message.chat.id,
-                draft_id=self._draft_id,
-                text=text[-MAX_DRAFT_CHARS:],
+                chat_id=self._message.chat.id, draft_id=self._draft_id, text=text
             )
-            if not self._started and self._on_start:
-                await self._on_start()
-            self._started = True
+            return True
+        except TelegramRetryAfter as e:
+            # Слишком часто — это не «сервер не умеет», а «подожди»: раньше
+            # флудвейт насовсем гасил черновик, и он замирал до самого ответа.
+            await asyncio.sleep(min(e.retry_after, MAX_DRAFT_RETRY_WAIT))
+            self._pending = text
+            self._wake.set()
+            return True
         except (TelegramBadRequest, TelegramAPIError):
-            # Не тот сервер/клиент, слишком часто, что угодно — молча живём
-            # дальше без черновика: ответ всё равно придёт целиком.
-            self._enabled = False
+            # Не тот сервер/клиент, что угодно — молча живём дальше без
+            # черновика: ответ всё равно придёт целиком.
+            return False
 
     async def close(self) -> None:
         """Погасить черновик, чтобы он не остался висеть рядом с ответом."""
+        if self._writer is not None:
+            self._writer.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._writer
+            self._writer = None
+        self._enabled = False
         if not self._started:
             return
         with suppress(TelegramBadRequest, TelegramAPIError):

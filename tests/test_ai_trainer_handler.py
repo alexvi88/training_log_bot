@@ -598,6 +598,25 @@ async def test_saving_a_stale_draft_alerts_and_writes_nothing(fresh_db, user_id)
     assert callback.answer.await_args.kwargs.get("show_alert") is True
 
 
+async def test_program_draft_survives_a_trip_to_the_menu(fresh_db, user_id):
+    """Кнопка программы висит под ответом тренера и остаётся нажимаемой, так что
+    черновик обязан пережить выход в меню: раньше поход в меню (в том числе
+    после просмотра превью) чистил FSM целиком, и кнопка отвечала алертом
+    «предложение уже неактуально»."""
+    from handlers.workout import _clear_state_keep_workout
+
+    state = await _make_state(user_id)
+    await state.update_data(ai_program_draft=_draft())
+
+    await _clear_state_keep_workout(state)
+
+    callback = _make_callback(user_id, "ai:prog:view")
+    await ai_trainer.ai_program_view(callback, state)
+
+    callback.message.answer.assert_awaited_once()
+    assert callback.answer.await_args.kwargs.get("show_alert") is not True
+
+
 async def test_saving_over_the_routine_cap_is_refused(fresh_db, user_id):
     import ai_trainer as ai_trainer_module
 

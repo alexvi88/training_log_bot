@@ -80,7 +80,8 @@ CREATE TABLE IF NOT EXISTS workouts (
     status TEXT NOT NULL DEFAULT 'active',
     note TEXT,
     source TEXT NOT NULL DEFAULT 'manual',
-    ai_comment TEXT
+    ai_comment TEXT,
+    routine_id INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_workouts_user_status ON workouts (user_id, status);
 
@@ -324,6 +325,12 @@ async def _migrate_schema() -> None:
         await _conn.execute("ALTER TABLE workouts ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'")
     if "ai_comment" not in workout_cols:
         await _conn.execute("ALTER TABLE workouts ADD COLUMN ai_comment TEXT")
+    if "routine_id" not in workout_cols:
+        # Which saved routine the session was started from, when it was — the
+        # only record of it (the plan itself lives in the FSM and is gone by the
+        # next screen). Feeds the "programs you've actually been training by"
+        # shortcuts on the picker; older rows just stay NULL.
+        await _conn.execute("ALTER TABLE workouts ADD COLUMN routine_id INTEGER")
     if "followup_due_at" in workout_cols:
         # Post-workout followup push was removed — drop the columns a DB that
         # already ran the earlier migration would have.
@@ -1365,11 +1372,18 @@ async def get_or_create_active_workout(user_id: int) -> tuple[int, bool]:
         return cur.lastrowid, True
 
 
-async def create_workout(user_id: int, started_at: Optional[str] = None, status: str = "active") -> int:
+async def create_workout(
+    user_id: int,
+    started_at: Optional[str] = None,
+    status: str = "active",
+    routine_id: Optional[int] = None,
+) -> int:
+    """`routine_id` — программа, с которой стартовали (см. list_recent_programs);
+    у обычной тренировки «с нуля» его нет."""
     async with _write_lock:
         cur = await conn().execute(
-            "INSERT INTO workouts (user_id, started_at, status) VALUES (?, ?, ?)",
-            (user_id, started_at or now_iso(), status),
+            "INSERT INTO workouts (user_id, started_at, status, routine_id) VALUES (?, ?, ?, ?)",
+            (user_id, started_at or now_iso(), status, routine_id),
         )
         await conn().commit()
         return cur.lastrowid
@@ -2262,6 +2276,47 @@ async def list_programs(user_id: int) -> list[aiosqlite.Row]:
         (user_id,),
     )
     return await cur.fetchall()
+
+
+async def list_recent_programs(
+    user_id: int, since: str, limit: int = 3
+) -> list[dict[str, Any]]:
+    """Программы, по которым человек реально тренировался начиная с `since`.
+
+    Считаем по `workouts.routine_id` — по факту проведённых тренировок, а не по
+    тому, что лежит в списке программ: на экране «начать тренировку» нужны те
+    два-три сплита, между которыми человек ходит сейчас.
+
+    Дни одной программы схлопываются в одну строку (тренировался по «ноги» и по
+    «верх» — это одна программа), одиночные шаблоны без program_name идут сами
+    по себе. `anchor_id` — routine, которым открывается экран (см.
+    handlers.routines.rt_program_days): для программы это любой её день.
+    """
+    cur = await conn().execute(
+        "SELECT r.id AS routine_id, r.name AS routine_name, r.program_name, "
+        "MAX(w.started_at) AS last_started "
+        "FROM workouts w JOIN routines r ON r.id = w.routine_id "
+        "WHERE w.user_id = ? AND r.user_id = ? AND w.started_at >= ? "
+        "GROUP BY r.id ORDER BY MAX(w.started_at) DESC",
+        (user_id, user_id, since),
+    )
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in await cur.fetchall():
+        key = row["program_name"] or f"routine:{row['routine_id']}"
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(
+            {
+                "name": row["program_name"] or row["routine_name"],
+                "anchor_id": row["routine_id"],
+                "last_started": row["last_started"],
+            }
+        )
+        if len(out) >= limit:
+            break
+    return out
 
 
 async def list_program_days(user_id: int, program_name: str) -> list[aiosqlite.Row]:
