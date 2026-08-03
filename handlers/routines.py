@@ -238,6 +238,19 @@ async def rt_view(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+@router.callback_query(F.data.startswith("rt:editmenu:"))
+async def rt_edit_menu(callback: CallbackQuery, state: FSMContext):
+    routine_id = int(callback.data.split(":")[2])
+    routine = await _owned_routine(callback, routine_id)
+    if routine is None:
+        return
+    await ui.safe_edit(
+        callback, f"✏️ <b>{escape(routine['name'])}</b>",
+        reply_markup=keyboards.routine_edit_menu_keyboard(routine_id), parse_mode="HTML",
+    )
+    await callback.answer()
+
+
 @router.callback_query(F.data.startswith("rt:edit:"))
 async def rt_edit(callback: CallbackQuery, state: FSMContext):
     routine_id = int(callback.data.split(":")[2])

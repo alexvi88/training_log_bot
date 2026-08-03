@@ -494,14 +494,27 @@ def routine_detail_keyboard(routine_id: int, program_anchor_id: int | None = Non
     не к самому верху: иначе «назад» перепрыгивает через экран, с которого сюда
     и пришли.
     """
+    back = "rt:manage" if program_anchor_id is None else f"rt:pgm:{program_anchor_id}"
     b = InlineKeyboardBuilder()
     b.row(InlineKeyboardButton(text="▶️ Начать тренировку", callback_data=f"rt:start:{routine_id}"))
+    b.row(
+        InlineKeyboardButton(text="✏️ Редактировать", callback_data=f"rt:editmenu:{routine_id}"),
+        InlineKeyboardButton(text="🗑 Удалить программу", callback_data=f"rt:delask:{routine_id}"),
+    )
+    b.row(
+        InlineKeyboardButton(text="📤 Поделиться", callback_data=f"share:rt:{routine_id}"),
+        InlineKeyboardButton(text="⬅️ К списку", callback_data=back),
+    )
+    return b.as_markup()
+
+
+def routine_edit_menu_keyboard(routine_id: int) -> InlineKeyboardMarkup:
+    """Sub-menu behind "✏️ Редактировать": состав и название редко трогают
+    вместе, но обе — правки, а не отдельные действия верхнего уровня."""
+    b = InlineKeyboardBuilder()
     b.row(InlineKeyboardButton(text="✏️ Изменить состав", callback_data=f"rt:edit:{routine_id}"))
     b.row(InlineKeyboardButton(text="✏️ Переименовать", callback_data=f"rt:rename:{routine_id}"))
-    b.row(InlineKeyboardButton(text="📤 Поделиться", callback_data=f"share:rt:{routine_id}"))
-    b.row(InlineKeyboardButton(text="🗑 Удалить программу", callback_data=f"rt:delask:{routine_id}"))
-    back = "rt:manage" if program_anchor_id is None else f"rt:pgm:{program_anchor_id}"
-    b.row(InlineKeyboardButton(text="⬅️ К списку", callback_data=back))
+    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"rt:view:{routine_id}"))
     return b.as_markup()
 
 
