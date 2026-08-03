@@ -1236,8 +1236,9 @@ _RECOVERY_MAX_MENTIONS = 3
 
 
 async def _recovery_line(user_id: int, groups) -> str:
-    """"💤 Ещё не отдохнули: ноги 40% · спина 70%" — or "" when everything is
-    fresh, which is the common case and needs no line at all.
+    """"💤 ЕЩЁ НЕ ОТДОХНУЛИ:\nноги — 40% восстановления\nспина — 70% восстановления"
+    — or "" when everything is fresh, which is the common case and needs no
+    line at all.
 
     Reuses what's already logged rather than asking the user anything: a group
     is "spent" in proportion to how many sets it took and how long ago (see
@@ -1261,8 +1262,8 @@ async def _recovery_line(user_id: int, groups) -> str:
         return ""
     spent.sort()
     shown = spent[:_RECOVERY_MAX_MENTIONS]
-    parts = " · ".join(f"{escape(name.lower())} <i>{percent}%</i>" for percent, name in shown)
-    return f"💤 <b>Ещё не отдохнули:</b> {parts}"
+    lines = "\n".join(f"{escape(name.lower())} — <i>{percent}% восстановления</i>" for percent, name in shown)
+    return f"💤 <b>ЕЩЁ НЕ ОТДОХНУЛИ:</b>\n{lines}"
 
 
 async def _picker_screen_groups(callback: CallbackQuery, state: FSMContext, show_program_button: bool = False):
