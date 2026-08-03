@@ -425,7 +425,7 @@ async def _sets_beat_record(
     started = workout["started_at"]
     history_rows = await db.list_sets_for_exercise(ex_id, exclude_workout_id=workout_id)
     history_set_rows = [
-        analytics.SetRow(r["weight"], r["reps"], r["workout_id"], r["started_at"])
+        analytics.SetRow(db.load_of(r), r["reps"], r["workout_id"], r["started_at"])
         for r in history_rows
         if r["started_at"] < started
     ]
@@ -2609,7 +2609,7 @@ async def _record_highlights_and_summary(
         ex = await db.get_exercise(ex_id)
         history_rows = await db.list_sets_for_exercise(ex_id, exclude_workout_id=workout_id)
         history_set_rows = [
-            analytics.SetRow(r["weight"], r["reps"], r["workout_id"], r["started_at"])
+            analytics.SetRow(db.load_of(r), r["reps"], r["workout_id"], r["started_at"])
             for r in history_rows
             if r["started_at"] < workout["started_at"]
         ]
@@ -2619,7 +2619,7 @@ async def _record_highlights_and_summary(
 
         this_rows = await db.list_sets_for_workout_exercise(workout_id, ex_id)
         this_set_rows = [
-            analytics.SetRow(r["weight"], r["reps"], workout_id, workout["started_at"])
+            analytics.SetRow(db.load_of(r), r["reps"], workout_id, workout["started_at"])
             for r in this_rows
         ]
         new_session = analytics.SessionStats(

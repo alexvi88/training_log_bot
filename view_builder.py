@@ -146,7 +146,7 @@ async def _previous_session_sets(
     date — or None if there's no prior session."""
     rows = await db.list_sets_for_exercise(exercise_id, exclude_workout_id=workout_id)
     set_rows = [
-        analytics.SetRow(r["weight"], r["reps"], r["workout_id"], r["started_at"], r["rpe"])
+        analytics.SetRow(db.load_of(r), r["reps"], r["workout_id"], r["started_at"], r["rpe"])
         for r in rows
         if r["started_at"] < before
     ]

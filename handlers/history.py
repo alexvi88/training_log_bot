@@ -124,7 +124,7 @@ async def _top_lifts(user_id: int, formula: str) -> list[tuple[str, float, int, 
         entry = by_exercise.get(r["exercise_id"])
         if entry is None:
             entry = by_exercise[r["exercise_id"]] = (r["display_name"], [])
-        entry[1].append(analytics.SetRow(r["weight"], r["reps"], r["workout_id"], r["started_at"]))
+        entry[1].append(analytics.SetRow(db.load_of(r), r["reps"], r["workout_id"], r["started_at"]))
 
     for display_name, set_rows in by_exercise.values():
         sessions = analytics.group_sets_by_session(set_rows)
@@ -514,7 +514,7 @@ async def prog_search_text(message: Message, state: FSMContext):
 async def _load_sessions(exercise_id: int, formula: str) -> list[analytics.SessionStats]:
     rows = await db.list_sets_for_exercise(exercise_id)
     set_rows = [
-        analytics.SetRow(r["weight"], r["reps"], r["workout_id"], r["started_at"], r["rpe"])
+        analytics.SetRow(db.load_of(r), r["reps"], r["workout_id"], r["started_at"], r["rpe"])
         for r in rows
     ]
     sessions = analytics.group_sets_by_session(set_rows)
