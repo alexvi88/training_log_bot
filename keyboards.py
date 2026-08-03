@@ -387,6 +387,8 @@ def exercise_picker_entry_keyboard(
     suggested: tuple[int, str] | None = None,
     is_empty: bool = False,
     recent: list[tuple[int, str]] | None = None,
+    planned_next_name: str | None = None,
+    planned_left: int = 0,
 ) -> InlineKeyboardMarkup:
     """suggested: (exercise_id, display_name) of what usually follows the just-finished exercise.
 
@@ -401,10 +403,23 @@ def exercise_picker_entry_keyboard(
 
     is_empty: nothing logged in this workout yet — "finish" would just discard it
     (see live_finish_workout), so the button reads as an exit rather than a finish.
+
+    planned_next_name / planned_left: what the program has queued up. The first
+    button names the exercise that's next in the program's order, and — while
+    more than one is left — "📋 Программа" opens the rest (see
+    planned_plan_keyboard), because the next one in line is regularly the one
+    whose machine is taken.
     """
     b = InlineKeyboardBuilder()
     if has_planned:
-        b.button(text="▶️ Следующее по программе", callback_data="live:next_planned")
+        label = (
+            f"▶️ {suggest_button_label(planned_next_name)}"
+            if planned_next_name
+            else "▶️ Следующее по программе"
+        )
+        b.button(text=label, callback_data="live:next_planned")
+        if planned_left > 1:
+            b.button(text=f"📋 Программа · осталось {planned_left}", callback_data="live:plan")
     b.button(text="➕ Упражнение", callback_data="live:add_exercise")
     if suggested is not None:
         ex_id, name = suggested
@@ -421,6 +436,28 @@ def exercise_picker_entry_keyboard(
         b.row(InlineKeyboardButton(text="🏠 Меню", callback_data="live:finish_workout"))
     else:
         b.row(InlineKeyboardButton(text="🏁 Завершить тренировку", callback_data="live:finish_workout"))
+    return b.as_markup()
+
+
+# Full-width buttons carrying "название — 3x8-12"; Telegram's own limit is 64,
+# but names past this start wrapping to a second line on a phone.
+_PLAN_LABEL_MAX = 44
+
+
+def planned_plan_keyboard(items: list[tuple[int, str]]) -> InlineKeyboardMarkup:
+    """What's left of the program, any of it startable right now.
+
+    `items` — (position in planned_blocks, label) in program order. The program's
+    order is a suggestion, not a queue: a taken machine shouldn't force the whole
+    session to wait, so every remaining exercise is one tap away and the rest keep
+    their order after it.
+    """
+    b = InlineKeyboardBuilder()
+    for index, label in items:
+        b.row(InlineKeyboardButton(
+            text=_tab_label(label, _PLAN_LABEL_MAX), callback_data=f"live:plan:pick:{index}",
+        ))
+    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="live:plan:back"))
     return b.as_markup()
 
 

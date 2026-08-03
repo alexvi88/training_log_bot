@@ -249,7 +249,8 @@ _IDLE_RECENT_EXERCISES = 2
 async def _idle_view(
     data: dict, user_id: int, is_empty: bool = False, done_ids: tuple[int, ...] = ()
 ) -> tuple[str | None, InlineKeyboardMarkup]:
-    has_planned = bool(data.get("planned_blocks"))
+    planned = list(data.get("planned_blocks") or [])
+    has_planned = bool(planned)
     suggested = None if has_planned else await _suggested_next_exercise(
         user_id, data.get("last_finished_exercise_id"), done_ids,
     )
@@ -279,6 +280,8 @@ async def _idle_view(
         recent = [(r["id"], r["display_name"]) for r in rows]
     kb = keyboards.exercise_picker_entry_keyboard(
         has_planned=has_planned, suggested=suggested, is_empty=is_empty, recent=recent,
+        planned_next_name=(await _planned_block_label(planned[0], with_target=False)) if planned else None,
+        planned_left=len(planned),
     )
     return hint, kb
 
@@ -1616,10 +1619,22 @@ async def _on_exercise_chosen(event, state: FSMContext, ex_id: int):
     if step is not None:
         weight_steps[ex_id] = step
 
+    # Picked something the program still had queued up (e.g. found it free while
+    # waiting for the machine before it) — count it as that step of the program,
+    # target and all, instead of offering it again later.
+    planned = list(data.get("planned_blocks") or [])
+    exercise_targets = dict(data.get("exercise_targets") or {})
+    for block in planned:
+        if ex_id in (block.get("exercise_ids") or []):
+            target = (block.get("targets") or {}).get(ex_id)
+            if target:
+                exercise_targets[ex_id] = target
+    remaining = _drop_planned_exercise(planned, ex_id)
+
     await state.update_data(
         open_exercises=open_exercises, open_blocks=open_blocks,
         active_exercise_id=ex_id, last_by_exercise=last_by, last_session_sets=last_session_sets,
-        weight_steps=weight_steps,
+        weight_steps=weight_steps, planned_blocks=remaining, exercise_targets=exercise_targets,
     )
     await state.set_state(WorkoutFlow.logging_set)
     user = await db.get_user(event.from_user.id)
@@ -2150,17 +2165,58 @@ async def live_pick_suggested(callback: CallbackQuery, state: FSMContext):
     await _on_exercise_chosen(callback, state, ex_id)
 
 
-async def _load_next_planned_block(event, state: FSMContext) -> bool:
-    """Open the next block from a routine's planned_blocks. Returns False if none left.
+async def _planned_block_label(block_plan: dict, with_target: bool = True) -> str:
+    """How a queued block reads on a button — exercise name (supersets joined
+    with "+"), plus the program's sets/reps scheme when there is one."""
+    ex_ids = list(block_plan.get("exercise_ids") or [])
+    names = []
+    for ex_id in ex_ids:
+        ex = await db.get_exercise(ex_id)
+        names.append(ex["display_name"] if ex else "упражнение")
+    label = " + ".join(names) or "упражнение"
+    if with_target:
+        targets = block_plan.get("targets") or {}
+        target = next((targets[i] for i in ex_ids if targets.get(i)), None)
+        if target:
+            return f"{label} — {target}"
+    return label
 
-    Shared by the "▶️ Следующее по программе" button and by starting a workout from
-    a routine (handlers/routines.py), so both paths open blocks identically.
+
+def _drop_planned_exercise(planned: list[dict], ex_id: int) -> list[dict]:
+    """Remove ex_id's block from the queue once it's been opened by hand.
+
+    Without this, picking a program exercise through "➕ Упражнение" (the only
+    way to reach one out of order before the 📋 screen existed) left it in the
+    plan, so the program went on offering an exercise already done today.
+
+    A superset block keeps its other half: opening one exercise of a pair by hand
+    says nothing about the partner, which is still owed.
+    """
+    out = []
+    for block in planned:
+        ex_ids = [i for i in (block.get("exercise_ids") or []) if i != ex_id]
+        if not ex_ids:
+            continue
+        if len(ex_ids) == len(block.get("exercise_ids") or []):
+            out.append(block)
+            continue
+        targets = {i: t for i, t in (block.get("targets") or {}).items() if i in ex_ids}
+        out.append({**block, "exercise_ids": ex_ids, "targets": targets})
+    return out
+
+
+async def _load_next_planned_block(event, state: FSMContext, index: int = 0) -> bool:
+    """Open a block from a routine's planned_blocks. Returns False if none left.
+
+    Shared by the "▶️" button, the 📋 program screen (which passes an `index` to
+    take something out of order) and by starting a workout from a routine
+    (handlers/routines.py), so every path opens blocks identically.
     """
     data = await state.get_data()
     planned = list(data.get("planned_blocks") or [])
-    if not planned:
+    if not planned or not 0 <= index < len(planned):
         return False
-    block_plan = planned.pop(0)
+    block_plan = planned.pop(index)
     await state.update_data(planned_blocks=planned)
     workout_id = data["workout_id"]
 
@@ -2200,6 +2256,44 @@ async def live_next_planned(callback: CallbackQuery, state: FSMContext):
     if not await _load_next_planned_block(callback, state):
         await callback.answer("Шаблон закончился")
         return
+    await callback.answer()
+
+
+@router.callback_query(StateFilter(WorkoutFlow.idle), F.data == "live:plan")
+async def live_plan(callback: CallbackQuery, state: FSMContext):
+    """Всё, что осталось в программе, — списком, любое можно начать сейчас.
+
+    Порядок в программе остаётся порядком по умолчанию (кнопка «▶️» сверху), а
+    этот экран — ответ на «тренажёр занят»: берёшь следующее по факту, остальное
+    никуда не девается и ждёт своей очереди."""
+    data = await state.get_data()
+    planned = list(data.get("planned_blocks") or [])
+    if not planned:
+        await callback.answer("Программа пройдена")
+        return
+    items = [(i, await _planned_block_label(b)) for i, b in enumerate(planned)]
+    hint = "📋 <b>Осталось по программе</b>\nВыбери, что делать сейчас — порядок не обязателен."
+    user = await db.get_user(callback.from_user.id)
+    await _refresh_live(
+        callback.bot, state, user, data["workout_id"], hint, keyboards.planned_plan_keyboard(items),
+    )
+    await callback.answer()
+
+
+@router.callback_query(StateFilter(WorkoutFlow.idle), F.data.startswith("live:plan:pick:"))
+async def live_plan_pick(callback: CallbackQuery, state: FSMContext):
+    index = int(callback.data.split(":")[3])
+    if not await _load_next_planned_block(callback, state, index=index):
+        await callback.answer("Это упражнение уже не в плане")
+        return
+    await callback.answer()
+
+
+@router.callback_query(StateFilter(WorkoutFlow.idle), F.data == "live:plan:back")
+async def live_plan_back(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    user = await db.get_user(callback.from_user.id)
+    await _enter_idle_screen(callback.bot, state, user, data["workout_id"])
     await callback.answer()
 
 
