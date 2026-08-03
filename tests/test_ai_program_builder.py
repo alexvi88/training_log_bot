@@ -383,13 +383,16 @@ def test_target_formats_partial_input():
 def test_program_button_appears_only_when_a_program_was_proposed():
     without = keyboards.ai_trainer_keyboard(program_name=None)
     assert not any(
-        b.callback_data == "ai:prog:view" for row in without.inline_keyboard for b in row
+        b.callback_data.startswith("ai:prog:view") for row in without.inline_keyboard for b in row
     )
 
-    with_program = keyboards.ai_trainer_keyboard(program_name="Верх/низ")
+    with_program = keyboards.ai_trainer_keyboard(program_name="Верх/низ", draft_id=7)
     top = with_program.inline_keyboard[0][0]
-    assert top.callback_data == "ai:prog:view"
+    assert top.callback_data == "ai:prog:view:7"
+    # 5.1: подпись — предложение забрать программу, а не голое название (иначе
+    # неотличимо от кнопки навигации «открыть программу»).
     assert "Верх/низ" in top.text
+    assert "Забрать" in top.text
     assert "🗂" in top.text
 
 
@@ -399,10 +402,10 @@ def test_program_button_shares_the_mention_page_limit():
     exercises = [
         {"id": i, "is_template": False, "display_name": f"Упражнение {i}"} for i in range(1, 5)
     ]
-    kb = keyboards.ai_trainer_keyboard(exercises=exercises, program_name="Верх/низ")
+    kb = keyboards.ai_trainer_keyboard(exercises=exercises, program_name="Верх/низ", draft_id=3)
     item_rows = kb.inline_keyboard[: keyboards.AI_MENTION_PAGE_SIZE]
     assert len(item_rows) == keyboards.AI_MENTION_PAGE_SIZE
-    assert item_rows[0][0].callback_data == "ai:prog:view"
+    assert item_rows[0][0].callback_data == "ai:prog:view:3"
     assert item_rows[1][0].callback_data == "ai:excard:1"
     assert item_rows[2][0].callback_data == "ai:excard:2"
     # Одно упражнение не влезло на первую страницу из-за программы — есть стрелка дальше.
@@ -563,5 +566,32 @@ def test_preview_of_a_huge_edit_still_fits_into_one_telegram_message():
     assert formatting.telegram_length(text) <= formatting.MESSAGE_LIMIT
     assert "…и ещё" in text
     # Резать можно только состав: и разница, и предупреждение о замене на месте.
+    assert "Что меняется" in text
+    assert "Заменю" in text
+
+
+def test_preview_of_an_edit_that_keeps_day_names_still_fits_into_one_message():
+    """A1: the previous huge-edit test renamed every day, which collapses the
+    whole diff to a handful of "new day"/"removed day" lines and hides the
+    real bug — when day names are KEPT and every exercise inside changes, each
+    day contributes its own full add/remove block (~2 lines per exercise), and
+    with real catalog-length names that block alone measured ~5300 chars for a
+    6-day×12-exercise replacement — build_ai_program_preview only ever
+    budgeted for trimming `composition`, never for the changes block sitting
+    right next to it, so the budget went negative and nothing was sent at all.
+    """
+    long_name = "Разгибание ног в тренажёре сидя широким хватом"
+    old = [
+        _old_day(f"День {d}", [(f"{long_name} {i}", "3×8–12") for i in range(12)])
+        for d in range(1, 7)
+    ]
+    new = [
+        _new_day(f"День {d}", [(f"{long_name} нов {i}", "4×6–8") for i in range(12)])
+        for d in range(1, 7)
+    ]
+
+    text = formatting.build_ai_program_preview("Программа", new, replaces={"name": "Программа", "days": old})
+
+    assert formatting.telegram_length(text) <= formatting.MESSAGE_LIMIT
     assert "Что меняется" in text
     assert "Заменю" in text

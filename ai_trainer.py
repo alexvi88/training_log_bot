@@ -70,9 +70,20 @@ PROGRAM_NAME_LIMIT = 48
 PROGRAM_MAX_SETS = 10
 PROGRAM_MAX_REPS = 50
 
+# Правило прогрессии на одно упражнение (см. propose_program.days[].exercises[].
+# progression и PROGRAMS_DEEP_DIVE §3.2/5.6): закрытый список, а не свободная
+# строка — иначе хранили бы то, что не умеем интерпретировать. step — на сколько
+# прибавлять вес (в единицах пользователя), зажат тем же приёмом, что sets/reps
+# в _clean_program_item.
+PROGRESSION_RULES = ("double_progression", "linear_load")
+PROGRESSION_MIN_STEP = 0.25
+PROGRESSION_MAX_STEP = 25.0
+
 # Сколько всего программ разрешаем держать пользователю: список программ —
 # плоский экран без пагинации, и полсотни строк в нём никто не разгребёт.
-MAX_ROUTINES_PER_USER = 30
+# Живёт в config теперь (см. db.routine_budget) — алиас оставлен, потому что
+# тесты и часть кода всё ещё читают его отсюда как ai_trainer.MAX_ROUTINES_PER_USER.
+MAX_ROUTINES_PER_USER = config.MAX_ROUTINES_PER_USER
 
 _client: Optional[AsyncOpenAI] = None
 
@@ -265,10 +276,19 @@ get_bodyweight_history, она отдаёт всю историю дневник
 
 Спрашивай не всё подряд и не занудным списком: посмотри его данные
 (get_training_overview, list_recent_workouts, get_weekly_volume_by_group) — то,
-что и так видно из истории, не переспрашивай.
+что и так видно из истории, не переспрашивай. get_training_overview несёт и
+поле profile (дни в неделю, оборудование, опыт, цель, ограничения) — то, что
+он уже рассказывал раньше и ты сохранил через save_athlete_profile: спрашивай
+только то, чего там нет (null), а не весь список заново.
 Задай 2-4 коротких вопроса именно про то, чего не знаешь, одной репликой и
 по-тренерски. Если пользователь уже сам всё описал в вопросе или отвечал на это
 раньше в диалоге — не переспрашивай вообще, сразу собирай.
+
+Как только узнал что-то из вводных (в этом ответе или любом другом, не только
+при сборке программы) — сохрани это через save_athlete_profile: присылай
+только то, что реально узнал сейчас, остальное трогать не нужно. Подтверди
+коротко, что запомнил («ок, зафиксировал — три раза в неделю, дома с
+гантелями»), без канцелярита про «сохранение в базу данных».
 
 Если пользователь отмахивается («да просто дай что-нибудь», «на своё усмотрение»),
 не выпытывай — собери программу на разумных дефолтах, но прямо скажи, из чего
@@ -305,6 +325,13 @@ get_bodyweight_history, она отдаёт всю историю дневник
 меняется, так что не пиши «поправил» — пиши, что правка ждёт подтверждения.
 Если человек просит не поправить, а собрать ещё одну программу вдобавок —
 replaces_program не передавай, иначе затрёшь старую.
+
+Прежде чем судить о сохранённой программе («она у меня рабочая?», «может,
+поменять программу?», предлагать замену) — посмотри get_program_adherence, а
+не только состав из get_saved_programs. Состав может быть отличным, а человек
+по нему не тренируется или методично сливает один день: «программа хорошая, но
+ты по ней не ходишь» — честный и полезный ответ, если данные это показывают, а
+не повод придумывать, что не так с самой программой.
 
 Если среди доступных инструментов есть веб-поиск — используй его для вопросов,
 выходящих за рамки личных данных пользователя (актуальные исследования,
@@ -1132,6 +1159,45 @@ TOOLS: list[dict[str, Any]] = [
                                                 "maximum": PROGRAM_MAX_REPS,
                                                 "description": "Верхняя граница диапазона повторов",
                                             },
+                                            "progression": {
+                                                "type": "object",
+                                                "description": (
+                                                    "Необязательное правило прогрессии для ЭТОГО "
+                                                    "упражнения — так оно сохранится вместе с "
+                                                    "программой и переживёт чат (иначе прогрессия "
+                                                    "живёт только в твоих словах и теряется). Ставь, "
+                                                    "только если реально предлагаешь прогрессию, а "
+                                                    "не просто упомянул её в тексте."
+                                                ),
+                                                "properties": {
+                                                    "rule": {
+                                                        "type": "string",
+                                                        "enum": list(PROGRESSION_RULES),
+                                                        "description": (
+                                                            "double_progression — сначала повторы в "
+                                                            "диапазоне, потом вес, когда дошёл до "
+                                                            "верхней границы (reps_top); linear_load — "
+                                                            "вес растёт на step каждую тренировку"
+                                                        ),
+                                                    },
+                                                    "reps_top": {
+                                                        "type": "integer",
+                                                        "minimum": 1,
+                                                        "maximum": PROGRAM_MAX_REPS,
+                                                        "description": (
+                                                            "Для double_progression — повторы, при "
+                                                            "которых пора добавлять вес"
+                                                        ),
+                                                    },
+                                                    "step": {
+                                                        "type": "number",
+                                                        "minimum": PROGRESSION_MIN_STEP,
+                                                        "maximum": PROGRESSION_MAX_STEP,
+                                                        "description": "На сколько прибавлять вес",
+                                                    },
+                                                },
+                                                "required": ["rule"],
+                                            },
                                         },
                                         "required": ["name"],
                                     },
@@ -1142,6 +1208,70 @@ TOOLS: list[dict[str, Any]] = [
                     },
                 },
                 "required": ["name", "days"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_program_adherence",
+            "description": (
+                "Насколько реально ходят по каждой сохранённой многодневной программе — "
+                "то, чего get_saved_programs не знает вообще, потому что показывает только "
+                "состав. Для каждой программы: сколько всего тренировок по ней проведено, "
+                "по каждому дню — сколько раз и сколько дней с последнего раза (null — ни "
+                "разу). Вызывай перед тем, как судить о программе («хорошая ли», «стоит ли "
+                "поменять») — состав может быть идеальным, а человек по ней просто не ходит "
+                "(или ходит через день на один и тот же день). «Программа хорошая, но ты по "
+                "ней не ходишь» — нормальный, честный ответ, если данные это показывают."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "save_athlete_profile",
+            "description": (
+                "Сохранить то, что пользователь рассказал о себе для подбора программы: "
+                "сколько дней в неделю готов тренироваться, где и с каким оборудованием, "
+                "опыт, цель, травмы/ограничения. Раньше эти ответы оседали только в переписке "
+                "и терялись — вызывай его сразу, как только человек сказал что-то из этого "
+                "(необязательно всё разом — присылай только то, что реально узнал в этом "
+                "ходе, старые поля так и останутся сохранёнными). После вызова коротко "
+                "подтверди, что записал — не спрашивай то же самое снова в будущих разговорах, "
+                "сначала посмотри профиль в get_training_overview."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "days_per_week": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 7,
+                        "description": "Сколько дней в неделю готов тренироваться",
+                    },
+                    "equipment": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Что есть из железа/места, например [\"штанга\", \"гантели\", \"турник\"]",
+                    },
+                    "experience": {
+                        "type": "string",
+                        "maxLength": 200,
+                        "description": "Опыт тренировок, свободной фразой (например «новичок», «тренируется 3 года»)",
+                    },
+                    "goal": {
+                        "type": "string",
+                        "maxLength": 200,
+                        "description": "Цель: масса, сила, похудение, возврат после перерыва и т.п.",
+                    },
+                    "limitations": {
+                        "type": "string",
+                        "maxLength": 500,
+                        "description": "Травмы, боли, ограничения по упражнениям",
+                    },
+                },
             },
         },
     },
@@ -1176,6 +1306,8 @@ TOOL_STATUS_TEXTS: dict[str, str] = {
     "get_full_chat_history": "🗂️ поднимаю историю переписки...",
     "get_saved_programs": "🗂 смотрю твои программы...",
     "propose_program": "📋 собираю программу...",
+    "get_program_adherence": "📊 смотрю, как ты реально ходишь по программе...",
+    "save_athlete_profile": "📝 записываю вводные...",
 }
 
 _CATALOG_BY_GROUP: dict[str, list[str]] = {}
@@ -1202,12 +1334,30 @@ async def _training_overview(user_id: int) -> dict[str, Any]:
     groups = await db.list_muscle_groups(user_id)
     group_name_by_id = {g["id"]: g["name"] for g in groups}
     bodyweight = await db.get_latest_bodyweight(user_id)
+    equipment = None
+    if user["equipment"]:
+        try:
+            equipment = json.loads(user["equipment"])
+        except (TypeError, ValueError):
+            equipment = None
     return {
         "unit": user["unit"],
         "e1rm_formula": user["e1rm_formula"],
         "latest_bodyweight": (
             {"weight": bodyweight["weight"], "date": bodyweight["logged_at"][:10]} if bodyweight else None
         ),
+        # 3.3: то, что тренер и так каждый раз выпытывает (дни в неделю,
+        # железо, опыт, цель, травмы) — раньше оседало только в
+        # ai_chat_messages, откуда его надо было доставать отдельным
+        # инструментом. null в поле значит «не знаем, спроси» — это НЕ то же
+        # самое, что отсутствие поля вообще, поэтому отдаём все пять всегда.
+        "profile": {
+            "experience": user["experience"],
+            "goal": user["goal"],
+            "days_per_week": user["days_per_week"],
+            "equipment": equipment,
+            "limitations": user["limitations"],
+        },
         "stats": {
             "total_workouts": dash.total_workouts,
             "this_week": dash.this_week,
@@ -1234,11 +1384,17 @@ async def _saved_programs(user_id: int) -> dict[str, Any]:
     предлагать новое: без этого «убери сведения из дня ног» ему просто не по
     чему выполнить. `id` дней здесь не отдаём — правка идёт по имени программы
     (см. propose_program.replaces_program), а имена пользователю и видны.
+
+    `kind` — "program" (многодневка) или "routine" (одиночная программа из
+    одного дня): без этой пометки список был плоским, а _resolve_replaced_program
+    сначала проверял многодневки, потом одиночные — при совпадении имён между
+    ними правилась не та программа, на которую рассчитывал пользователь, и по
+    превью это было не понять (см. PROGRAMS_DEEP_DIVE §5.4).
     """
     programs: list[dict[str, Any]] = []
     for row in await db.list_programs(user_id):
         days = []
-        for day in await db.list_program_days(user_id, row["program_name"]):
+        for day in await db.list_program_days_by_id(row["id"]):
             days.append(
                 {
                     "name": day["name"],
@@ -1248,11 +1404,12 @@ async def _saved_programs(user_id: int) -> dict[str, Any]:
                     ],
                 }
             )
-        programs.append({"name": row["program_name"], "days": days})
+        programs.append({"name": row["program_name"], "kind": "program", "days": days})
     for routine in await db.list_standalone_routines(user_id):
         programs.append(
             {
                 "name": routine["name"],
+                "kind": "routine",
                 "days": [
                     {
                         "name": routine["name"],
@@ -1473,6 +1630,34 @@ def _clean_int(raw: Any, low: int, high: int) -> Optional[int]:
     return max(low, min(value, high))
 
 
+def _clean_progression(raw: Any) -> Optional[dict[str, Any]]:
+    """Правило прогрессии одного упражнения — {"rule", "reps_top"?, "step"?}.
+
+    5.6/3.2: раньше прогрессия существовала только прозой в ответе тренера и
+    терялась вместе с чатом (см. PROGRAMS_DEEP_DIVE §3.2) — теперь она едет
+    вместе с самим предложением и сохраняется на routine_exercises.progression
+    (db.set_routine_exercise_progression). `rule` — закрытый список
+    (PROGRESSION_RULES): свободную строку от модели хранить некому
+    интерпретировать. Мусор (неизвестное правило, не-объект) — не поле в
+    отличие от sets/reps: тут нечего клампить в разумный дефолт, поэтому просто
+    отбрасываем прогрессию целиком, а не всё упражнение.
+    """
+    if not isinstance(raw, dict):
+        return None
+    rule = str(raw.get("rule") or "").strip()
+    if rule not in PROGRESSION_RULES:
+        return None
+    out: dict[str, Any] = {"rule": rule}
+    step = _as_number(raw.get("step"))
+    if step is not None:
+        out["step"] = max(PROGRESSION_MIN_STEP, min(step, PROGRESSION_MAX_STEP))
+    if raw.get("reps_top") is not None:
+        reps_top = _clean_int(raw.get("reps_top"), 1, PROGRAM_MAX_REPS)
+        if reps_top is not None:
+            out["reps_top"] = reps_top
+    return out
+
+
 def _clean_program_item(raw: Any) -> Optional[dict[str, Any]]:
     """Одно упражнение из предложенной программы: имя плюс схема подходов.
 
@@ -1526,6 +1711,7 @@ def _clean_program_item(raw: Any) -> Optional[dict[str, Any]]:
         "reps_min": reps_min,
         "reps_max": reps_max,
         "clamped": clamped,
+        "progression": _clean_progression(raw.get("progression")),
     }
 
 
@@ -1534,11 +1720,28 @@ async def _resolve_replaced_program(
 ) -> tuple[Optional[dict[str, Any]], Optional[str]]:
     """Какую сохранённую программу заменяет предложение. Возвращает (цель, ошибка).
 
+    A4: раньше совпадение искалось вручную по `row["program_name"].lower()` над
+    `db.list_programs`, а таблица `programs` дедуплицирует имена по Python-
+    свёрнутому `name_key` (см. db._program_key) — «Сплит» и «сплит» были для
+    резолвера одной программой, а для SQLite-сравнения в другом месте — разными,
+    и промах удалял программу, которую пользователь не упоминал. Теперь ровно
+    та же свёртка, что и в уникальном индексе: db.find_program_by_name.
+
     Совпадение только точное (с точностью до регистра и пробелов): промах здесь
     стоит пользователю удалённой программы, так что «похожее» имя лучше вернуть
-    модели ошибкой, чем угадывать. Сам список id мы фиксируем сейчас, а удаляем
-    только по тапу пользователя (см. handlers.ai_trainer.ai_program_save) —
-    инструмент по-прежнему ничего не пишет.
+    модели ошибкой, чем угадывать. `id` программы (или одиночной routine)
+    сохраняется в результате и переживает до сохранения — по нему, а не по
+    имени, происходит правка в момент тапа (см. handlers.ai_trainer, A7):
+    имя к тому моменту могло смениться руками, программу могли переименовать
+    или удалить, а id остаётся однозначной ссылкой. `routine_ids`, снятые здесь,
+    — то же самое, зафиксированное на момент предложения, для обратной
+    совместимости со старым форматом диффа; актуальный список на момент
+    сохранения перечитывается по id заново.
+
+    `kind` различает многодневку и одиночную программу (см. _saved_programs) —
+    раньше резолвер сначала проверял многодневки, потом одиночные, и при
+    совпадении имён между ними правилась не та программа, на которую
+    рассчитывал пользователь.
 
     Вместе с id забираем и текущий состав: превью показывает не только итог, но
     и что именно меняется (formatting.build_ai_program_preview), а после
@@ -1560,22 +1763,30 @@ async def _resolve_replaced_program(
             for routine in routines
         ]
 
-    key = name.lower()
-    for row in await db.list_programs(user_id):
-        if row["program_name"].strip().lower() == key:
-            days = await db.list_program_days(user_id, row["program_name"])
-            return (
-                {
-                    "name": row["program_name"],
-                    "routine_ids": [d["id"] for d in days],
-                    "days": await _snapshot(days),
-                },
-                None,
-            )
+    program = await db.find_program_by_name(user_id, name)
+    if program is not None:
+        days = await db.list_program_days_by_id(program["id"])
+        return (
+            {
+                "kind": "program",
+                "id": program["id"],
+                "name": program["name"],
+                "routine_ids": [d["id"] for d in days],
+                "days": await _snapshot(days),
+            },
+            None,
+        )
+    # Многодневки с таким именем нет — может, это одиночная программа (день без
+    # program_id). Имена одиночных routines живут в другом пространстве
+    # (routines.name, не programs.name), собственного «свёрнутого» индекса у
+    # них нет, поэтому сверяем как раньше — Python str.lower() уже свёртывает
+    # юникод корректно (в отличие от SQL LOWER(), см. db._program_key).
     for routine in await db.list_standalone_routines(user_id):
-        if routine["name"].strip().lower() == key:
+        if routine["name"].strip().lower() == name.lower():
             return (
                 {
+                    "kind": "routine",
+                    "id": routine["id"],
                     "name": routine["name"],
                     "routine_ids": [routine["id"]],
                     "days": await _snapshot([routine]),
@@ -1735,7 +1946,109 @@ async def _propose_program(
             f"у пользователя уже {existing} программ при лимите {MAX_ROUTINES_PER_USER} — "
             "при сохранении поместятся не все, предупреди его, что старые стоит удалить"
         )
-    return payload, {"name": program_name, "days": days, "replaces": replaces}
+
+    # 5.3: те же клампы и потери, что уже уходят модели построчно выше
+    # (truncated_days/truncated_exercises/unresolved/name_truncated), собраны
+    # тут же человеческими фразами для самого превью — раньше это было видно
+    # только модели, и молчаливо урезанная программа («попросил 7 дней, получил
+    # 6») зависела от того, упомянет ли модель это в ответе. См.
+    # formatting.build_ai_program_preview(notes=...).
+    notes: list[str] = []
+    if truncated_days:
+        notes.append(f"Дней получилось больше {PROGRAM_MAX_DAYS} — показал только первые {PROGRAM_MAX_DAYS}.")
+    if program_name_truncated:
+        notes.append(f"Имя программы длиннее {PROGRAM_NAME_LIMIT} символов — обрезал.")
+    for entry in report:
+        if entry.get("name_truncated"):
+            notes.append(f"Название дня «{entry['day']}» длиннее {PROGRAM_NAME_LIMIT} символов — обрезал.")
+        if entry.get("truncated_exercises"):
+            notes.append(
+                f"«{entry['day']}»: упражнений было больше {PROGRAM_MAX_EXERCISES_PER_DAY} — лишние не вошли."
+            )
+        if entry.get("unresolved"):
+            notes.append(f"«{entry['day']}»: не нашёл в боте — {', '.join(entry['unresolved'])}.")
+    for dd in dropped_days:
+        notes.append(f"День «{dd['day']}» целиком пропал — ни одно упражнение из него не нашлось.")
+
+    return payload, {"name": program_name, "days": days, "replaces": replaces, "notes": notes}
+
+
+async def _program_adherence(user_id: int) -> dict[str, Any]:
+    """5.5: сколько раз реально тренировались по каждой сохранённой программе.
+
+    get_saved_programs отдаёт только состав; workouts.routine_id записывается с
+    самого начала, но до сих пор читался ровно в одном месте бота (экран
+    «начать тренировку» → недавние программы). Здесь — по каждой многодневке:
+    сколько всего тренировок и по каждому дню — сколько раз и сколько дней с
+    последнего (null — ни разу). Одиночные (однодневные) программы сюда
+    сознательно не попадают: адхеренс интересен там, где есть выбор между
+    днями («ноги забросил, а грудь качаешь через день») — у одного дня выбора
+    нет, а его собственная свежесть и так видна в get_saved_programs/истории.
+    """
+    programs = await db.list_programs(user_id)
+    if not programs:
+        return {
+            "programs": [],
+            "note": "У пользователя пока нет ни одной сохранённой многодневной программы.",
+        }
+    today = dt.date.today()
+    out = []
+    for p in programs:
+        days = await db.list_program_days_by_id(p["id"])
+        history = await db.program_day_history(p["id"])
+        total_sessions = sum(times for _, times in history.values())
+        day_rows = []
+        for d in days:
+            last_started, times = history.get(d["id"], (None, 0))
+            days_since_last = None
+            if last_started:
+                days_since_last = (today - dt.date.fromisoformat(last_started[:10])).days
+            day_rows.append({"day": d["name"], "sessions": times, "days_since_last": days_since_last})
+        out.append(
+            {
+                "program": p["program_name"],
+                "created_at": p["created_at"][:10],
+                "total_sessions": total_sessions,
+                "days": day_rows,
+            }
+        )
+    return {
+        "programs": out,
+        "note": (
+            "sessions — сколько раз реально начинали тренировку по этому дню; "
+            "days_since_last — сколько дней прошло с последнего раза, null значит "
+            "ни разу не тренировался по этому дню. Хороший состав программы и "
+            "реальное следование ей — разные вещи, суди по обоим."
+        ),
+    }
+
+
+async def _save_athlete_profile(user_id: int, tool_input: dict[str, Any]) -> dict[str, Any]:
+    """3.3: частичная запись профиля тренирующегося в users.* — только те поля,
+    что реально прислали этим вызовом (см. db.update_user).
+
+    Раньше дни в неделю/оборудование/опыт/цель/травмы оседали только в
+    ai_chat_messages, откуда их надо было доставать get_full_chat_history —
+    поэтому тренер переспрашивал одно и то же в каждом новом разговоре.
+    """
+    fields: dict[str, Any] = {}
+    if tool_input.get("days_per_week") is not None:
+        days = _clean_int(tool_input.get("days_per_week"), 1, 7)
+        if days is not None:
+            fields["days_per_week"] = days
+    for key, limit in (("experience", 200), ("goal", 200), ("limitations", 500)):
+        value = str(tool_input.get(key) or "").strip()
+        if value:
+            fields[key] = value[:limit]
+    raw_equipment = tool_input.get("equipment")
+    if isinstance(raw_equipment, list):
+        items = [str(x).strip() for x in raw_equipment if str(x).strip()][:20]
+        if items:
+            fields["equipment"] = json.dumps(items, ensure_ascii=False)
+    if not fields:
+        return {"saved": False, "error": "ничего не прислано — профиль не изменился"}
+    await db.update_user(user_id, **fields)
+    return {"saved": True, "fields": fields}
 
 
 async def execute_tool(
@@ -1768,6 +2081,10 @@ async def execute_tool(
         payload = await _full_chat_history(user_id)
     elif name == "get_saved_programs":
         payload = await _saved_programs(user_id)
+    elif name == "get_program_adherence":
+        payload = await _program_adherence(user_id)
+    elif name == "save_athlete_profile":
+        payload = await _save_athlete_profile(user_id, tool_input)
     elif name == "propose_program":
         payload, draft = await _propose_program(user_id, tool_input)
         if draft is not None and on_program is not None:

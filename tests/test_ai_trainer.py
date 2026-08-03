@@ -89,6 +89,41 @@ async def test_overview_includes_latest_bodyweight(fresh_db, user_id):
     assert payload["latest_bodyweight"] == {"weight": 81.5, "date": "2026-03-01"}
 
 
+async def test_overview_reports_null_profile_fields_when_unknown(fresh_db, user_id):
+    """3.3: get_training_overview всегда несёт profile, даже пустой — null,
+    а не отсутствие поля, чтобы тренер понимал, что именно ещё не знает."""
+    payload = json.loads(await ai_trainer.execute_tool(user_id, "get_training_overview", {}))
+
+    assert payload["profile"] == {
+        "experience": None,
+        "goal": None,
+        "days_per_week": None,
+        "equipment": None,
+        "limitations": None,
+    }
+
+
+async def test_overview_surfaces_a_saved_profile(fresh_db, user_id):
+    """3.3: то, что save_athlete_profile записал, должно быть видно тренеру в
+    следующем разговоре без отдельного вызова get_full_chat_history —
+    иначе он продолжит переспрашивать одно и то же."""
+    await fresh_db.update_user(
+        user_id, experience="год-два", goal="масса", days_per_week=4,
+        equipment=json.dumps(["штанга", "гантели"], ensure_ascii=False),
+        limitations="болит плечо",
+    )
+
+    payload = json.loads(await ai_trainer.execute_tool(user_id, "get_training_overview", {}))
+
+    assert payload["profile"] == {
+        "experience": "год-два",
+        "goal": "масса",
+        "days_per_week": 4,
+        "equipment": ["штанга", "гантели"],
+        "limitations": "болит плечо",
+    }
+
+
 async def test_bodyweight_history_returns_full_log(fresh_db, user_id):
     await fresh_db.add_bodyweight_log(user_id, 82.0, logged_at="2026-01-01T08:00:00")
     await fresh_db.add_bodyweight_log(user_id, 81.5, logged_at="2026-02-01T08:00:00")
@@ -780,6 +815,110 @@ async def test_food_diary_tool_is_offered_to_the_model():
 
     names = [t["function"]["name"] for t in module.TOOLS]
     assert "get_food_diary" in names
+
+
+# ---------- 5.5: get_program_adherence ----------
+
+
+async def test_program_adherence_tool_is_offered_to_the_model():
+    names = [t["function"]["name"] for t in ai_trainer.TOOLS]
+    assert "get_program_adherence" in names
+
+
+async def test_program_adherence_reports_empty_when_no_multi_day_program(fresh_db, user_id):
+    payload = json.loads(await ai_trainer.execute_tool(user_id, "get_program_adherence", {}))
+    assert payload["programs"] == []
+
+
+async def test_program_adherence_counts_sessions_and_days_since_last(fresh_db, user_id, monkeypatch):
+    """5.5: get_saved_programs видит только состав программы — adherence должен
+    сказать, реально ли по ней ходят и какие дни забрасывают."""
+    import datetime as dt
+
+    class _FixedDate(dt.date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 3, 20)
+
+    monkeypatch.setattr(ai_trainer.dt, "date", _FixedDate)
+
+    program_id = await fresh_db.create_program(user_id, "PPL")
+    push = await fresh_db.create_routine(user_id, "Толкай", program_id=program_id)
+    pull = await fresh_db.create_routine(user_id, "Тяни", program_id=program_id)
+    legs = await fresh_db.create_routine(user_id, "Ноги", program_id=program_id)
+
+    async def _log(routine_id, started_at):
+        wid = await fresh_db.create_finished_workout(user_id, started_at=started_at, finished_at=started_at)
+        await fresh_db.set_workout_routine(wid, routine_id)
+
+    await _log(push, "2026-03-01T10:00:00")
+    await _log(push, "2026-03-08T10:00:00")
+    await _log(pull, "2026-03-02T10:00:00")
+    await _log(legs, "2026-01-01T10:00:00")  # давно и всего один раз
+
+    payload = json.loads(await ai_trainer.execute_tool(user_id, "get_program_adherence", {}))
+
+    (program,) = payload["programs"]
+    assert program["program"] == "PPL"
+    assert program["total_sessions"] == 4
+    by_day = {d["day"]: d for d in program["days"]}
+    assert by_day["Толкай"]["sessions"] == 2
+    assert by_day["Толкай"]["days_since_last"] == 12
+    assert by_day["Тяни"]["sessions"] == 1
+    assert by_day["Ноги"]["sessions"] == 1
+    assert by_day["Ноги"]["days_since_last"] == (dt.date(2026, 3, 20) - dt.date(2026, 1, 1)).days
+
+
+async def test_program_adherence_never_trained_day_has_null_days_since_last(fresh_db, user_id):
+    program_id = await fresh_db.create_program(user_id, "PPL")
+    await fresh_db.create_routine(user_id, "Толкай", program_id=program_id)
+
+    payload = json.loads(await ai_trainer.execute_tool(user_id, "get_program_adherence", {}))
+
+    (program,) = payload["programs"]
+    (day,) = program["days"]
+    assert day == {"day": "Толкай", "sessions": 0, "days_since_last": None}
+
+
+# ---------- 3.3: save_athlete_profile ----------
+
+
+async def test_save_athlete_profile_tool_is_offered_to_the_model():
+    names = [t["function"]["name"] for t in ai_trainer.TOOLS]
+    assert "save_athlete_profile" in names
+
+
+async def test_save_athlete_profile_writes_only_the_provided_fields(fresh_db, user_id):
+    payload = json.loads(
+        await ai_trainer.execute_tool(
+            user_id, "save_athlete_profile",
+            {"days_per_week": 4, "goal": "масса", "equipment": ["штанга", "гантели"]},
+        )
+    )
+    assert payload["saved"] is True
+
+    user = await fresh_db.get_user(user_id)
+    assert user["days_per_week"] == 4
+    assert user["goal"] == "масса"
+    assert json.loads(user["equipment"]) == ["штанга", "гантели"]
+    # Не присланное этим вызовом — не тронуто (осталось null).
+    assert user["experience"] is None
+
+
+async def test_save_athlete_profile_partial_update_does_not_erase_earlier_fields(fresh_db, user_id):
+    """Раньше эти ответы оседали только в переписке — здесь важно, что второй
+    частичный вызов не стирает то, что записал первый."""
+    await ai_trainer.execute_tool(user_id, "save_athlete_profile", {"goal": "масса"})
+    await ai_trainer.execute_tool(user_id, "save_athlete_profile", {"days_per_week": 3})
+
+    user = await fresh_db.get_user(user_id)
+    assert user["goal"] == "масса"
+    assert user["days_per_week"] == 3
+
+
+async def test_save_athlete_profile_with_nothing_useful_reports_not_saved(fresh_db, user_id):
+    payload = json.loads(await ai_trainer.execute_tool(user_id, "save_athlete_profile", {}))
+    assert payload["saved"] is False
 
 
 async def test_weekly_digest_summary_includes_food_when_the_diary_has_any(fresh_db, user_id):

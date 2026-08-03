@@ -1362,15 +1362,27 @@ async def _picker_screen_groups(callback: CallbackQuery, state: FSMContext, show
         # Программы, по которым человек ходит сейчас, — выше групп мышц: у того,
         # кто тренируется по сплиту, выбор дня программы и есть начало
         # тренировки, а группы мышц ниже остаются для «сегодня по-своему».
-        # Кнопка ведёт в список дней программы (rt:pgm), а не стартует день
-        # сразу: какой сегодня день — решает человек.
+        #
+        # Кнопка называет день, до которого дошла очередь, и ведёт прямо на его
+        # карточку. Раньше она вела в список дней — то есть между «хочу
+        # тренироваться» и «тренируюсь» стоял экран из одинаковых кнопок, по
+        # которым надо было самому вспомнить, что вчера был «Толкай». Очередь
+        # считается из истории (db.next_program_day), так что это подсказка, а
+        # не рельсы: остальные дни по-прежнему в одном тапе за «⬅️ К списку».
         since = (
             timeutil.user_today(user) - dt.timedelta(days=RECENT_PROGRAM_DAYS)
         ).isoformat()
         recent = await db.list_recent_programs(
             callback.from_user.id, since, limit=MAX_RECENT_PROGRAM_BUTTONS
         )
-        top_buttons = [(f"🗂 {p['name']}", f"rt:pgm:{p['anchor_id']}") for p in recent]
+        for p in recent:
+            next_day = (
+                await db.next_program_day(p["program_id"]) if p["program_id"] else None
+            )
+            if next_day is not None:
+                top_buttons.append((f"🗂 {p['name']} · {next_day['name']}", f"rt:view:{next_day['id']}"))
+            else:
+                top_buttons.append((f"🗂 {p['name']}", f"rt:view:{p['routine_id']}"))
         # Offered only on the very first picker screen of a fresh workout: pick
         # any past session to re-run for people who train A/B without a saved
         # program, plus the shortcut into saved programs.

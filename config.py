@@ -195,3 +195,9 @@ TRANSCRIPTION_PRICE_USD_PER_CALL = float(os.getenv("TRANSCRIPTION_PRICE_USD_PER_
 # How long db.cost_events rows are kept — only the daily admin report reads
 # this table, and only ever one day back.
 COST_EVENTS_RETENTION_DAYS = int(os.getenv("COST_EVENTS_RETENTION_DAYS", "90"))
+
+# Сколько живёт визитка-снапшот (db.shared_items) с момента создания. Таблица
+# только росла и ничем не чистилась: каждое «📤 Поделиться» — строка навсегда.
+# Полгода — с запасом на «переслал в чат, забрали через месяц»; отозвать ссылку
+# раньше можно руками (handlers/sharing.share_revoke).
+SHARED_ITEMS_RETENTION_DAYS = int(os.getenv("SHARED_ITEMS_RETENTION_DAYS", "180"))

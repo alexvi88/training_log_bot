@@ -516,10 +516,6 @@ def build_ai_comment_block(comment: str) -> str:
     return f"{DIVIDER}\n🤖 <b>Комментарий AI-тренера</b>\n{collapsible_if_long(markdown_bold_to_html(comment))}"
 
 
-# Запас под строку «…и ещё N упражнений»/«…и ещё N изменений», которой может
-# заканчиваться обрезанный блок «что меняется» и/или состав программы (см.
-# build_ai_program_preview, _truncate_block).
-_TRUNCATION_RESERVE = 120
 
 
 def _day_key(name: str) -> str:
@@ -576,53 +572,96 @@ def build_program_changes(old_days: list[dict], new_days: list[dict]) -> list[st
     return lines
 
 
+# Запас, который блок «что меняется» обязан оставить после себя для состава
+# ниже (см. build_ai_program_preview, _truncate_block): состав обрезается уже
+# ПОСЛЕ изменений и делит с ними один и тот же общий лимит Telegram — если бы
+# изменения расходовали его весь без остатка, составу не хватило бы места даже
+# на собственную строку «…и ещё N упражнений», и итог всё равно перевалил бы
+# за лимит. С запасом в разы больше самой длинной такой строки — с учётом
+# 3-значных чисел и русской словоформы — этого не случится.
+_COMPOSITION_NOTE_RESERVE = 140
+
+
 def _truncate_block(
     candidate_lines: list[str],
     already: list[str],
     tail: list[str],
     is_item: Callable[[str], bool],
     note: Callable[[int], str],
+    reserve: int = 0,
 ) -> list[str]:
     """Добавить candidate_lines к already построчно, пока итог (already + kept
-    + tail) укладывается в лимит Telegram; остаток сворачивается в одну строку
-    от note().
+    + tail) укладывается в MESSAGE_LIMIT - reserve; остаток сворачивается в
+    одну строку от note().
 
     Общий механизм для обоих переменных по размеру блоков превью программы
     (см. build_ai_program_preview) — блока «что меняется» и состава: раньше
     обрезался только состав, а блок изменений на большой правке (много дней,
     имена не менялись — см. build_program_changes) сам по себе перевешивал
-    лимит, и тогда не отправлялось вообще ничего. Проверка идёт по полной
-    длине сообщения на каждом шаге, а не по абстрактному «бюджету в символах»,
-    поэтому учитывает всё, что уже добавлено раньше (включая другой такой же
-    обрезанный блок).
+    лимит, и тогда не отправлялось вообще ничего.
+
+    `reserve` — сколько символов заведомо оставить свободными после этого
+    блока для того, что будет обрезано следующим (см.
+    _COMPOSITION_NOTE_RESERVE): без этого первый же обрезанный блок мог занять
+    буквально весь лимит под свою note(), не оставив второму места даже на
+    собственную «…и ещё N» — раньше оба блока резервировали один и тот же
+    _TRUNCATION_RESERVE независимо друг от друга, и на двух одновременно
+    обрезанных блоках итог всё равно перевешивал MESSAGE_LIMIT.
+
+    Проверка на каждом шаге — это полная длина сообщения, а не абстрактный
+    «бюджет в символах»: после того, как основной цикл остановился, note ещё
+    раз проверяется на месте и, если впритык не влезла, забирает место у уже
+    добавленных строк, а не сообщения целиком.
     """
+    budget = MESSAGE_LIMIT - reserve
+
+    def fits(extra: list[str]) -> bool:
+        return telegram_length("\n".join(already + extra + tail)) <= budget
+
     kept: list[str] = []
+    cut_at = len(candidate_lines)
     for index, line in enumerate(candidate_lines):
-        candidate = already + kept + [line] + tail
-        if telegram_length("\n".join(candidate)) > MESSAGE_LIMIT - _TRUNCATION_RESERVE:
-            hidden = sum(1 for rest in candidate_lines[index:] if is_item(rest))
-            if hidden:
-                kept += ["", note(hidden)]
+        if not fits(kept + [line]):
+            cut_at = index
             break
         kept.append(line)
-    return kept
+    else:
+        return kept  # все строки уместились — резать было нечего
+
+    hidden = sum(1 for rest in candidate_lines[cut_at:] if is_item(rest))
+    if not hidden:
+        return kept
+
+    note_lines = ["", note(hidden)]
+    while kept and not fits(kept + note_lines):
+        kept.pop()
+        hidden = sum(1 for rest in candidate_lines[len(kept):] if is_item(rest))
+        note_lines = ["", note(hidden)]
+    return kept + note_lines
 
 
 def build_ai_program_preview(
-    name: str, days: list[dict], replaces: Optional[dict] = None
+    name: str, days: list[dict], replaces: Optional[dict] = None, notes: Optional[list[str]] = None,
 ) -> str:
     """Превью программы, которую собрал AI-тренер, до её сохранения.
 
     `days` — черновик из ai_trainer.propose_program: [{"name", "items": [{"name",
-    "target", "source"}]}]. Дни складываются в одну программу с общим именем
-    (routine_exercises.program_name — см. db.create_routine_from_program), в
-    списке пользователя это одна строка с числом дней, а не несколько.
+    "target", "source", "progression"?}]}]. Дни складываются в одну программу с
+    общим именем (routine_exercises.program_name — см.
+    db.create_routine_from_program), в списке пользователя это одна строка с
+    числом дней, а не несколько.
 
     `replaces` — сохранённая программа, которую эта правка заменит: {"name",
     "days"} со старым составом. Замена стирает старые дни, поэтому превью и
     называется правкой, и показывает разницу со старой версией: без этого
     человеку пришлось бы сличать два списка по десятку упражнений глазами,
     чтобы понять, что тренер вообще поменял.
+
+    `notes` — 5.3: человеческие фразы о том, что молча срезалось или не
+    нашлось (дней/упражнений было больше лимита, имя обрезано, упражнение не
+    из каталога) — раньше это уходило только модели полем в JSON, и если она
+    забывала упомянуть об этом в ответе, пользователь просто не узнавал, что
+    попросил семь дней, а получил шесть.
     """
     total = sum(len(day["items"]) for day in days)
     new_names = sorted(
@@ -631,12 +670,38 @@ def build_ai_program_preview(
     day_word = plural_ru(len(days), ("день", "дня", "дней"))
     ex_word = plural_ru(total, ("упражнение", "упражнения", "упражнений"))
 
+    def _progression_note(progression: Optional[dict]) -> str:
+        """Короткая человекочитаемая строка правила прогрессии (5.6/3.2 —
+        ai_trainer._clean_progression, db.set_routine_exercise_progression):
+        без неё превью показывало бы схему подходов, но не то, как её менять
+        дальше, а это ровно то, что раньше терялось вместе с чатом."""
+        if not progression:
+            return ""
+        rule = progression.get("rule")
+        step = progression.get("step")
+        if rule == "double_progression":
+            top = progression.get("reps_top")
+            if top and step:
+                return f"дошёл до {top} повторов — прибавь {step:g}"
+            return "двойная прогрессия"
+        if rule == "linear_load":
+            return f"+{step:g} каждую тренировку" if step else "линейная прогрессия"
+        return ""
+
     lines = [
         "📋 <b>ПРАВКА ПРОГРАММЫ</b>" if replaces else "📋 <b>ПРОГРАММА ОТ ТРЕНЕРА</b>",
         "",
         f"<b>{escape(name)}</b>",
         f"{len(days)} {day_word} · {total} {ex_word}",
     ]
+
+    # 5.3: клампы и потери, которые раньше уходили только модели JSON-полями
+    # (truncated_days/truncated_exercises/unresolved/name_truncated в
+    # ai_trainer._propose_program) — здесь тем же текстом, что видит модель, но
+    # адресовано пользователю напрямую: он не должен зависеть от того, упомянет
+    # ли модель в ответе, что просил семь дней, а получил шесть.
+    if notes:
+        lines += ["", "⚠️ <b>На заметку:</b>"] + [f"• {escape(n)}" for n in notes]
 
     composition: list[str] = []
     for day in days:
@@ -645,6 +710,9 @@ def build_ai_program_preview(
             target = item.get("target")
             suffix = f" — {escape(target)}" if target else ""
             composition.append(f"{i}. {escape(item['name'])}{suffix}")
+            prog_note = _progression_note(item.get("progression"))
+            if prog_note:
+                composition.append(f"   ⤴️ {escape(prog_note)}")
 
     tail = ["", DIVIDER]
     if replaces:
@@ -689,6 +757,11 @@ def build_ai_program_preview(
                 f"<i>…и ещё {n} {plural_ru(n, ('изменение', 'изменения', 'изменений'))} — "
                 "не поместились, полный состав смотри ниже и в «🗂 Программы» после сохранения.</i>"
             ),
+            # Оставляем составу ниже гарантированное место хотя бы на
+            # собственную «…и ещё N упражнений» (см. _COMPOSITION_NOTE_RESERVE) —
+            # иначе на программе, где обрезаны оба блока разом, их note()
+            # конкурировали бы за один и тот же хвост лимита.
+            reserve=_COMPOSITION_NOTE_RESERVE,
         )
         changes_block = changes_header + kept_changes
     lines += changes_block

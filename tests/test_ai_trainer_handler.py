@@ -556,8 +556,9 @@ async def test_short_card_still_gets_the_comment_appended_in_place(fresh_db, use
 # ---------- program the trainer proposed (ai:prog:*) ----------
 
 
-def _draft(days: int = 2) -> dict:
+def _draft(days: int = 2, draft_id: int = 1) -> dict:
     return {
+        "id": draft_id,
         "name": "Верх/низ",
         "days": [
             {
@@ -574,20 +575,35 @@ def _draft(days: int = 2) -> dict:
 async def test_program_preview_keeps_the_answer_and_offers_saving(fresh_db, user_id):
     state = await _make_state(user_id)
     await state.update_data(ai_program_draft=_draft())
-    callback = _make_callback(user_id, "ai:prog:view")
+    callback = _make_callback(user_id, "ai:prog:view:1")
 
     await ai_trainer.ai_program_view(callback, state)
 
     callback.message.answer.assert_awaited_once()
     kb = callback.message.answer.await_args.kwargs["reply_markup"]
-    assert _callbacks(kb) == ["ai:prog:save", "ai:prog:drop"]
+    assert _callbacks(kb) == ["ai:prog:save:1", "ai:prog:drop:1"]
     callback.message.delete.assert_not_awaited()
+
+
+async def test_stale_draft_button_is_refused_by_id(fresh_db, user_id):
+    """5.2: a button под старым ответом хранит id того черновика, который был
+    актуален в момент показа. Более новое propose_program заменяет слот другим
+    id — тап по старой кнопке не должен молча сохранить/показать эту новую,
+    более позднюю программу."""
+    state = await _make_state(user_id)
+    await state.update_data(ai_program_draft=_draft(draft_id=2))
+    callback = _make_callback(user_id, "ai:prog:view:1")
+
+    await ai_trainer.ai_program_view(callback, state)
+
+    callback.message.answer.assert_not_awaited()
+    assert callback.answer.await_args.kwargs.get("show_alert") is True
 
 
 async def test_saving_a_program_creates_one_routine_per_day(fresh_db, user_id):
     state = await _make_state(user_id)
     await state.update_data(ai_program_draft=_draft(days=2))
-    callback = _make_callback(user_id, "ai:prog:save")
+    callback = _make_callback(user_id, "ai:prog:save:1")
 
     await ai_trainer.ai_program_save(callback, state)
 
@@ -603,7 +619,7 @@ async def test_saving_a_program_creates_one_routine_per_day(fresh_db, user_id):
 async def test_saving_twice_does_not_duplicate_the_program(fresh_db, user_id):
     state = await _make_state(user_id)
     await state.update_data(ai_program_draft=_draft(days=1))
-    callback = _make_callback(user_id, "ai:prog:save")
+    callback = _make_callback(user_id, "ai:prog:save:1")
 
     await ai_trainer.ai_program_save(callback, state)
     await ai_trainer.ai_program_save(callback, state)
@@ -621,8 +637,8 @@ async def test_concurrent_saves_do_not_duplicate_the_program(fresh_db, user_id):
     await state.update_data(ai_program_draft=_draft(days=2))
 
     await asyncio.gather(
-        ai_trainer.ai_program_save(_make_callback(user_id, "ai:prog:save"), state),
-        ai_trainer.ai_program_save(_make_callback(user_id, "ai:prog:save"), state),
+        ai_trainer.ai_program_save(_make_callback(user_id, "ai:prog:save:1"), state),
+        ai_trainer.ai_program_save(_make_callback(user_id, "ai:prog:save:1"), state),
     )
 
     assert len(await fresh_db.list_routines(user_id)) == 2
@@ -641,8 +657,8 @@ async def test_concurrent_saves_do_not_bypass_the_routine_cap(fresh_db, user_id)
     await state.update_data(ai_program_draft=_draft(days=2))
 
     await asyncio.gather(
-        ai_trainer.ai_program_save(_make_callback(user_id, "ai:prog:save"), state),
-        ai_trainer.ai_program_save(_make_callback(user_id, "ai:prog:save"), state),
+        ai_trainer.ai_program_save(_make_callback(user_id, "ai:prog:save:1"), state),
+        ai_trainer.ai_program_save(_make_callback(user_id, "ai:prog:save:1"), state),
     )
 
     assert len(await fresh_db.list_routines(user_id)) == ai_trainer_module.MAX_ROUTINES_PER_USER
@@ -658,12 +674,13 @@ async def test_partial_save_failure_keeps_the_old_program_intact(fresh_db, user_
 
     gid = await fresh_db.create_muscle_group(user_id, "Ноги")
     squat = await fresh_db.create_exercise(user_id, "Присед", gid)
-    old_day = await fresh_db.create_routine(user_id, "Старый день", program_name="Верх/низ")
+    program_id = await fresh_db.create_program(user_id, "Верх/низ")
+    old_day = await fresh_db.create_routine(user_id, "Старый день", program_id=program_id)
     await fresh_db.add_routine_exercise(old_day, squat, 0, "3×5")
 
     state = await _make_state(user_id)
     draft = _draft(days=2)
-    draft["replaces"] = {"name": "Верх/низ", "routine_ids": [old_day]}
+    draft["replaces"] = {"kind": "program", "id": program_id, "name": "Верх/низ", "routine_ids": [old_day]}
     await state.update_data(ai_program_draft=draft)
 
     real_create = db_module.create_routine_from_program
@@ -678,7 +695,7 @@ async def test_partial_save_failure_keeps_the_old_program_intact(fresh_db, user_
     monkeypatch.setattr(db_module, "create_routine_from_program", flaky_create)
 
     with pytest.raises(RuntimeError):
-        await ai_trainer.ai_program_save(_make_callback(user_id, "ai:prog:save"), state)
+        await ai_trainer.ai_program_save(_make_callback(user_id, "ai:prog:save:1"), state)
 
     names = [r["name"] for r in await fresh_db.list_routines(user_id)]
     assert "Старый день" in names
@@ -686,7 +703,7 @@ async def test_partial_save_failure_keeps_the_old_program_intact(fresh_db, user_
 
 async def test_saving_a_stale_draft_alerts_and_writes_nothing(fresh_db, user_id):
     state = await _make_state(user_id)
-    callback = _make_callback(user_id, "ai:prog:save")
+    callback = _make_callback(user_id, "ai:prog:save:1")
 
     await ai_trainer.ai_program_save(callback, state)
 
@@ -700,15 +717,16 @@ async def test_editing_a_program_replaces_its_days_instead_of_duplicating(fresh_
     db_ = fresh_db
     gid = await db_.create_muscle_group(user_id, "Ноги")
     squat = await db_.create_exercise(user_id, "Присед", gid)
-    old_day = await db_.create_routine(user_id, "Старый день", program_name="Верх/низ")
+    program_id = await db_.create_program(user_id, "Верх/низ")
+    old_day = await db_.create_routine(user_id, "Старый день", program_id=program_id)
     await db_.add_routine_exercise(old_day, squat, 0, "3×5")
 
     state = await _make_state(user_id)
     draft = _draft(days=2)
-    draft["replaces"] = {"name": "Верх/низ", "routine_ids": [old_day]}
+    draft["replaces"] = {"kind": "program", "id": program_id, "name": "Верх/низ", "routine_ids": [old_day]}
     await state.update_data(ai_program_draft=draft)
 
-    await ai_trainer.ai_program_save(_make_callback(user_id, "ai:prog:save"), state)
+    await ai_trainer.ai_program_save(_make_callback(user_id, "ai:prog:save:1"), state)
 
     programs = await db_.list_programs(user_id)
     assert [(p["program_name"], p["day_count"]) for p in programs] == [("Верх/низ", 2)]
@@ -716,12 +734,62 @@ async def test_editing_a_program_replaces_its_days_instead_of_duplicating(fresh_
     assert "Старый день" not in names
 
 
+async def test_editing_replaces_all_current_days_even_ones_added_since_the_proposal(fresh_db, user_id):
+    """A7: правка резолвится заново по id в момент тапа, а не по снимку
+    routine_ids, сделанному при предложении — день, добавленный руками между
+    предложением и тапом, тоже должен уйти вместе со старой версией, а не
+    пережить замену и не всплыть первым в списке."""
+    db_ = fresh_db
+    gid = await db_.create_muscle_group(user_id, "Ноги")
+    squat = await db_.create_exercise(user_id, "Присед", gid)
+    program_id = await db_.create_program(user_id, "Верх/низ")
+    old_day = await db_.create_routine(user_id, "Старый день", program_id=program_id)
+    await db_.add_routine_exercise(old_day, squat, 0, "3×5")
+
+    state = await _make_state(user_id)
+    draft = _draft(days=1)
+    # routine_ids в черновике — снимок на момент предложения, ДО того как
+    # пользователь дописал ещё один день руками.
+    draft["replaces"] = {"kind": "program", "id": program_id, "name": "Верх/низ", "routine_ids": [old_day]}
+    await state.update_data(ai_program_draft=draft)
+
+    added_later = await db_.create_routine(user_id, "Добавил руками", program_id=program_id)
+
+    await ai_trainer.ai_program_save(_make_callback(user_id, "ai:prog:save:1"), state)
+
+    names = [r["name"] for r in await db_.list_program_days_by_id(program_id)]
+    assert names == ["День 1"]
+    assert "Добавил руками" not in names
+    assert "Старый день" not in names
+
+
+async def test_editing_keeps_the_program_name_unless_the_trainer_renamed_it(fresh_db, user_id):
+    """A7: имя программы не должно молча откатываться, если пользователь
+    переименовал её между предложением и тапом руками — но если тренер сам
+    прислал другое имя в propose_program, это переименование должно примениться."""
+    db_ = fresh_db
+    program_id = await db_.create_program(user_id, "Верх/низ")
+    old_day = await db_.create_routine(user_id, "Старый день", program_id=program_id)
+
+    state = await _make_state(user_id)
+    draft = _draft(days=1)
+    draft["name"] = "Верх/низ"  # то же имя, что и у replaces — рассматривается как правка состава
+    draft["replaces"] = {"kind": "program", "id": program_id, "name": "Верх/низ", "routine_ids": [old_day]}
+    await state.update_data(ai_program_draft=draft)
+    await db_.rename_program_by_id(program_id, "Переименовал руками")
+
+    await ai_trainer.ai_program_save(_make_callback(user_id, "ai:prog:save:1"), state)
+
+    programs = await db_.list_programs(user_id)
+    assert [p["program_name"] for p in programs] == ["Переименовал руками"]
+
+
 async def test_editing_preview_says_it_will_replace_and_labels_the_button(fresh_db, user_id):
     state = await _make_state(user_id)
     draft = _draft(days=1)
-    draft["replaces"] = {"name": "Верх/низ", "routine_ids": [123]}
+    draft["replaces"] = {"kind": "program", "id": 999, "name": "Верх/низ", "routine_ids": [123]}
     await state.update_data(ai_program_draft=draft)
-    callback = _make_callback(user_id, "ai:prog:view")
+    callback = _make_callback(user_id, "ai:prog:view:1")
 
     await ai_trainer.ai_program_view(callback, state)
 
@@ -736,10 +804,10 @@ async def test_a_program_deleted_before_the_tap_is_just_added(fresh_db, user_id)
     значит просто добавляем, а не падаем."""
     state = await _make_state(user_id)
     draft = _draft(days=1)
-    draft["replaces"] = {"name": "Верх/низ", "routine_ids": [999_999]}
+    draft["replaces"] = {"kind": "program", "id": 999_999, "name": "Верх/низ", "routine_ids": [999_999]}
     await state.update_data(ai_program_draft=draft)
 
-    await ai_trainer.ai_program_save(_make_callback(user_id, "ai:prog:save"), state)
+    await ai_trainer.ai_program_save(_make_callback(user_id, "ai:prog:save:1"), state)
 
     assert len(await fresh_db.list_routines(user_id)) == 1
 
@@ -756,7 +824,7 @@ async def test_program_draft_survives_a_trip_to_the_menu(fresh_db, user_id):
 
     await _clear_state_keep_workout(state)
 
-    callback = _make_callback(user_id, "ai:prog:view")
+    callback = _make_callback(user_id, "ai:prog:view:1")
     await ai_trainer.ai_program_view(callback, state)
 
     callback.message.answer.assert_awaited_once()
@@ -770,7 +838,7 @@ async def test_saving_over_the_routine_cap_is_refused(fresh_db, user_id):
         await fresh_db.create_routine(user_id, f"Программа {i}")
     state = await _make_state(user_id)
     await state.update_data(ai_program_draft=_draft(days=1))
-    callback = _make_callback(user_id, "ai:prog:save")
+    callback = _make_callback(user_id, "ai:prog:save:1")
 
     await ai_trainer.ai_program_save(callback, state)
 
@@ -778,10 +846,60 @@ async def test_saving_over_the_routine_cap_is_refused(fresh_db, user_id):
     assert callback.answer.await_args.kwargs.get("show_alert") is True
 
 
+async def test_saving_a_program_with_a_taken_name_offers_a_choice(fresh_db, user_id):
+    """A2: раньше дни молча дописывались в существующую программу с тем же
+    именем — три сохранения подряд давали 18 дней в одной программе. Теперь
+    сохранение (без replaces) на занятое имя не пишет ничего, а предлагает
+    пользователю решить."""
+    await fresh_db.create_program(user_id, "Верх/низ")
+    state = await _make_state(user_id)
+    await state.update_data(ai_program_draft=_draft(days=2))
+    callback = _make_callback(user_id, "ai:prog:save:1")
+
+    await ai_trainer.ai_program_save(callback, state)
+
+    # Ничего не сохранено, пока пользователь не выбрал.
+    assert await fresh_db.list_routines(user_id) == []
+    kb = callback.message.edit_text.await_args.kwargs["reply_markup"]
+    callbacks = _callbacks(kb)
+    assert "ai:prog:replace:1" in callbacks
+    assert "ai:prog:copy:1" in callbacks
+    # Черновик жив — решение ещё предстоит принять.
+    assert (await state.get_data())["ai_program_draft"]["id"] == 1
+
+
+async def test_conflict_replace_choice_replaces_the_existing_program(fresh_db, user_id):
+    existing_id = await fresh_db.create_program(user_id, "Верх/низ")
+    await fresh_db.create_routine(user_id, "Старый день", program_id=existing_id)
+    state = await _make_state(user_id)
+    await state.update_data(ai_program_draft=_draft(days=2))
+
+    await ai_trainer.ai_program_save(_make_callback(user_id, "ai:prog:save:1"), state)
+    await ai_trainer.ai_program_replace_conflict(_make_callback(user_id, "ai:prog:replace:1"), state)
+
+    programs = await fresh_db.list_programs(user_id)
+    assert [(p["program_name"], p["day_count"]) for p in programs] == [("Верх/низ", 2)]
+    names = [r["name"] for r in await fresh_db.list_routines(user_id)]
+    assert "Старый день" not in names
+
+
+async def test_conflict_copy_choice_saves_under_a_free_name(fresh_db, user_id):
+    await fresh_db.create_program(user_id, "Верх/низ")
+    state = await _make_state(user_id)
+    await state.update_data(ai_program_draft=_draft(days=2))
+
+    await ai_trainer.ai_program_save(_make_callback(user_id, "ai:prog:save:1"), state)
+    await ai_trainer.ai_program_copy_conflict(_make_callback(user_id, "ai:prog:copy:1"), state)
+
+    programs = await fresh_db.list_programs(user_id)
+    names = sorted(p["program_name"] for p in programs)
+    assert names == ["Верх/низ", "Верх/низ (2)"]
+
+
 async def test_dropping_a_program_removes_the_preview_and_the_draft(fresh_db, user_id):
     state = await _make_state(user_id)
     await state.update_data(ai_program_draft=_draft())
-    callback = _make_callback(user_id, "ai:prog:drop")
+    callback = _make_callback(user_id, "ai:prog:drop:1")
 
     await ai_trainer.ai_program_drop(callback, state)
 

@@ -75,6 +75,7 @@ def ai_trainer_keyboard(
     exercises: Sequence[Any] = (),
     page: int = 0,
     program_name: str | None = None,
+    draft_id: int | None = None,
 ) -> InlineKeyboardMarkup:
     """`exercises` — то, что тренер упомянул в ответе (см. exercise_mentions), и
     свои упражнения, и ещё не добавленные из каталога — до
@@ -84,8 +85,17 @@ def ai_trainer_keyboard(
 
     `program_name` — название программы, которую тренер собрал в этом ответе
     (см. ai_trainer.propose_program): даёт кнопку, ведущую на превью с составом
-    и кнопкой сохранения. Сам черновик в callback_data не влезает и лежит в
-    FSM, поэтому кнопка без параметров.
+    и кнопкой сохранения. `draft_id` — короткий id этого черновика (см. 5.2 /
+    handlers/ai_trainer._handle_question): едет в callback_data кнопки, а сам
+    черновик по-прежнему лежит в FSM (не влезает в callback_data целиком).
+    Раньше кнопка была без параметров и ссылалась просто на «черновик,
+    который сейчас лежит в FSM» — под старым ответом она молча сохраняла
+    более позднюю программу, если пользователь успел попросить тренера
+    собрать другую, и это никак не проверялось при тапе.
+
+    Подпись — «Забрать: <имя>», а не голое название: неотличимое от навигации
+    название программы читалось как «открыть программу», а не как предложение,
+    которое ждёт подтверждения (см. 5.1).
 
     Программа, если есть, идёт первым пунктом общего списка и делит с
     упоминаниями упражнений один и тот же лимит и постраничную навигацию
@@ -117,7 +127,9 @@ def ai_trainer_keyboard(
     item_rows = []
     for item in page_items:
         if item is _PROGRAM:
-            emoji, callback_data, label = "🗂", "ai:prog:view", program_name
+            emoji = "🗂"
+            callback_data = f"ai:prog:view:{draft_id}"
+            label = f"Забрать: {program_name}"
         elif item["is_template"]:
             emoji, callback_data, label = "📋", f"ai:tpladd:{item['id']}", item["display_name"]
         else:
@@ -143,7 +155,7 @@ def ai_trainer_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=item_rows + page_nav_rows + nav)
 
 
-def ai_program_preview_keyboard(replacing: bool = False) -> InlineKeyboardMarkup:
+def ai_program_preview_keyboard(replacing: bool = False, draft_id: int = 0) -> InlineKeyboardMarkup:
     """Превью программы, собранной тренером: сохранить или отказаться.
 
     Сохранение создаёт по одной программе (routines.program_name общий на все
@@ -153,13 +165,17 @@ def ai_program_preview_keyboard(replacing: bool = False) -> InlineKeyboardMarkup
 
     `replacing` — это правка уже сохранённой программы, а не новая: тап удалит
     её старые дни, и кнопка обязана говорить «обновить», а не «добавить».
+
+    `draft_id` (5.2) едет в callback_data обеих кнопок: обработчик сверяет его
+    с id черновика, лежащего в FSM, и отказывается сохранять/удалять чужой,
+    более новый черновик, если это превью открыто под устаревшим ответом.
     """
     b = InlineKeyboardBuilder()
     b.button(
         text="✅ Обновить программу" if replacing else "✅ Добавить себе",
-        callback_data="ai:prog:save",
+        callback_data=f"ai:prog:save:{draft_id}",
     )
-    b.button(text="❌ Не надо", callback_data="ai:prog:drop")
+    b.button(text="❌ Не надо", callback_data=f"ai:prog:drop:{draft_id}")
     b.adjust(1)
     return b.as_markup()
 
@@ -480,32 +496,82 @@ def routines_manage_keyboard(programs, routines, has_workouts: bool) -> InlineKe
     for p in programs:
         word = formatting.plural_ru(p["day_count"], ("день", "дня", "дней"))
         b.button(
-            text=f"🗂 {p['program_name']} · {p['day_count']} {word}",
-            callback_data=f"rt:pgm:{p['anchor_id']}",
+            text=f"🗂 {p['name']} · {p['day_count']} {word}",
+            callback_data=f"rt:prg:{p['id']}",
         )
     for r in routines:
         b.button(text=r["name"], callback_data=f"rt:view:{r['id']}")
+    # Каталог первым и с эмодзи-акцентом: у человека без единой тренировки
+    # верный ответ почти всегда «возьми готовую» — это мгновенно и бесплатно,
+    # тогда как AI-путь требует переписки. Три равнозначные кнопки заставляли
+    # выбирать способ раньше, чем он понял, что вообще выбирает.
     b.button(text="✨ Готовые программы", callback_data="rt:programs")
+    b.button(text="🤖 Составить с AI-тренером", callback_data="ai:buildprog")
     if has_workouts:
         b.button(text="➕ Из тренировки", callback_data="rt:pickw:page:0")
-    b.button(text="🤖 Составить с AI-тренером", callback_data="ai:buildprog")
     b.button(text="🏠 Меню", callback_data="rt:menu")
     b.adjust(1)
     return b.as_markup()
 
 
-def program_days_keyboard(days, anchor_id: int) -> InlineKeyboardMarkup:
-    """Day selector for one saved multi-day program."""
+def program_days_keyboard(days, program_id: int, next_day_id: int | None = None) -> InlineKeyboardMarkup:
+    """Экран программы: какой день сегодня, остальные ниже, и что можно с ней сделать.
+
+    `next_day_id` — день, до которого дошла очередь (db.next_program_day). Он
+    поднят наверх отдельной кнопкой «▶️ Сегодня: …», потому что раньше три дня
+    сплита выглядели тремя одинаковыми кнопками и вспоминать, что вчера был
+    «Толкай», приходилось самому — при том, что бот это знал (workouts.routine_id).
+    """
     b = InlineKeyboardBuilder()
+    if next_day_id is not None:
+        today = next((d for d in days if d["id"] == next_day_id), None)
+        if today is not None:
+            b.button(text=f"▶️ Сегодня: {today['name']}", callback_data=f"rt:view:{today['id']}")
     for d in days:
+        if d["id"] == next_day_id:
+            continue
         b.button(text=d["name"], callback_data=f"rt:view:{d['id']}")
-    b.button(text="✏️ Переименовать программу", callback_data=f"rt:pgmrename:{anchor_id}")
+    b.button(text="➕ Добавить день", callback_data=f"rt:dayadd:{program_id}")
+    if len(days) > 1:
+        b.button(text="🔀 Порядок дней", callback_data=f"rt:dayorder:{program_id}")
+    b.button(text="✏️ Переименовать программу", callback_data=f"rt:pgmrename:{program_id}")
     # Программа целиком, а не день — тот же токен-визитка, но со всеми днями
     # разом: делиться по одному дню значило собирать программу получателю
     # вручную из нескольких пересланных сообщений.
-    b.button(text="📤 Поделиться программой", callback_data=f"share:pgm:{anchor_id}")
-    b.button(text="🗑 Удалить программу", callback_data=f"rt:pgmdelask:{anchor_id}")
+    b.button(text="📤 Поделиться программой", callback_data=f"share:pgm:{program_id}")
+    b.button(text="🗑 Удалить программу", callback_data=f"rt:pgmdelask:{program_id}")
     b.button(text="⬅️ Назад", callback_data="rt:manage")
+    b.adjust(1)
+    return b.as_markup()
+
+
+def program_day_order_keyboard(days, program_id: int) -> InlineKeyboardMarkup:
+    """Стрелки для перестановки дней — та же механика, что у упражнений внутри
+    дня (routine_edit_keyboard), этажом выше."""
+    b = InlineKeyboardBuilder()
+    last = len(days) - 1
+    for i, d in enumerate(days):
+        row = []
+        if i > 0:
+            row.append(InlineKeyboardButton(text="⬆️", callback_data=f"rt:daymv:{d['id']}:up"))
+        if i < last:
+            row.append(InlineKeyboardButton(text="⬇️", callback_data=f"rt:daymv:{d['id']}:down"))
+        row.append(InlineKeyboardButton(text=d["name"], callback_data=f"rt:view:{d['id']}"))
+        b.row(*row)
+    b.row(InlineKeyboardButton(text="⬅️ Готово", callback_data=f"rt:prg:{program_id}"))
+    return b.as_markup()
+
+
+def program_day_source_keyboard(program_id: int, days) -> InlineKeyboardMarkup:
+    """«➕ Добавить день»: пустой день, копия существующего или снимок прошлой
+    тренировки. Программа была неизменяемого размера навсегда — взял из каталога
+    трёхдневку, захотел четвёртый день на руки, и пересобирать надо было всё."""
+    b = InlineKeyboardBuilder()
+    b.button(text="📄 Пустой день", callback_data=f"rt:dayblank:{program_id}")
+    b.button(text="🏋️ Из прошлой тренировки", callback_data=f"rt:daypickw:{program_id}:0")
+    for d in days:
+        b.button(text=f"⧉ Копия «{d['name']}»", callback_data=f"rt:daycopy:{d['id']}")
+    b.button(text="⬅️ Назад", callback_data=f"rt:prg:{program_id}")
     b.adjust(1)
     return b.as_markup()
 
@@ -554,7 +620,7 @@ def program_detail_keyboard(program_key: str) -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
-def routine_detail_keyboard(routine_id: int, program_anchor_id: int | None = None) -> InlineKeyboardMarkup:
+def routine_detail_keyboard(routine_id: int, program_id: int | None = None) -> InlineKeyboardMarkup:
     """The program's own screen — start it, or go edit it.
 
     The per-exercise "🗑 {name}" rows used to sit directly under "▶️ Начать
@@ -562,16 +628,22 @@ def routine_detail_keyboard(routine_id: int, program_anchor_id: int | None = Non
     dropped an exercise, and putting it back appends it to the end, losing the
     program's order. They live behind "✏️ Изменить состав" now.
 
-    `program_anchor_id` — день многодневки возвращает назад к её списку дней, а
-    не к самому верху: иначе «назад» перепрыгивает через экран, с которого сюда
-    и пришли.
+    `program_id` — этот экран обслуживает и одиночную программу, и день
+    многодневки, и раньше подписи этого не различали: на дне «🗑 Удалить
+    программу» удаляла один день, а точно такая же кнопка этажом выше — всю
+    программу, и по тексту подтверждения различить их было нельзя. Плюс «назад»
+    у дня ведёт к списку дней, а не на самый верх.
     """
-    back = "rt:manage" if program_anchor_id is None else f"rt:pgm:{program_anchor_id}"
+    is_day = program_id is not None
+    back = f"rt:prg:{program_id}" if is_day else "rt:manage"
     b = InlineKeyboardBuilder()
     b.row(InlineKeyboardButton(text="▶️ Начать тренировку", callback_data=f"rt:start:{routine_id}"))
     b.row(
         InlineKeyboardButton(text="✏️ Редактировать", callback_data=f"rt:editmenu:{routine_id}"),
-        InlineKeyboardButton(text="🗑 Удалить программу", callback_data=f"rt:delask:{routine_id}"),
+        InlineKeyboardButton(
+            text="🗑 Удалить день" if is_day else "🗑 Удалить программу",
+            callback_data=f"rt:delask:{routine_id}",
+        ),
     )
     b.row(
         InlineKeyboardButton(text="📤 Поделиться", callback_data=f"share:rt:{routine_id}"),
@@ -580,33 +652,63 @@ def routine_detail_keyboard(routine_id: int, program_anchor_id: int | None = Non
     return b.as_markup()
 
 
-def routine_edit_menu_keyboard(routine_id: int) -> InlineKeyboardMarkup:
+def routine_edit_menu_keyboard(routine_id: int, is_day: bool = False) -> InlineKeyboardMarkup:
     """Sub-menu behind "✏️ Редактировать": состав и название редко трогают
     вместе, но обе — правки, а не отдельные действия верхнего уровня."""
     b = InlineKeyboardBuilder()
     b.row(InlineKeyboardButton(text="✏️ Изменить состав", callback_data=f"rt:edit:{routine_id}"))
-    b.row(InlineKeyboardButton(text="✏️ Переименовать", callback_data=f"rt:rename:{routine_id}"))
+    b.row(
+        InlineKeyboardButton(
+            text="✏️ Переименовать день" if is_day else "✏️ Переименовать",
+            callback_data=f"rt:rename:{routine_id}",
+        )
+    )
+    if is_day:
+        # Вынести день наружу отдельной программой — обратная операция к
+        # «➕ Добавить день»; без неё день, попавший в программу, оставался в
+        # ней навсегда.
+        b.row(
+            InlineKeyboardButton(text="📤 Вынести из программы", callback_data=f"rt:dayout:{routine_id}")
+        )
     b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"rt:view:{routine_id}"))
     return b.as_markup()
 
 
 def routine_edit_keyboard(routine_id: int, exercises=()) -> InlineKeyboardMarkup:
-    """The program's composition editor: exercises: (routine_exercise_id,
-    display_name) rows in program order, each with move-up/move-down and a
-    remove button. Reached deliberately, so removal stays one tap here
-    without a confirmation."""
+    """The program's composition editor: `exercises` is (routine_exercise_id,
+    label, target) in program order, each row with move-up/move-down, an
+    edit-the-scheme button and a remove button. Reached deliberately, so
+    removal stays one tap here without a confirmation.
+
+    The ✏️ button exists because changing «3×10» to «4×8» used to mean removing
+    the exercise (behind a confirmation), adding it back — where it lands at the
+    end — and walking it up with the arrows: up to nine taps for one number.
+    """
     b = InlineKeyboardBuilder()
     last = len(exercises) - 1
-    for i, (re_id, name) in enumerate(exercises):
+    for i, entry in enumerate(exercises):
+        re_id, name = entry[0], entry[1]
         row = []
         if i > 0:
             row.append(InlineKeyboardButton(text="⬆️", callback_data=f"rt:mvex:{routine_id}:{re_id}:up"))
         if i < last:
             row.append(InlineKeyboardButton(text="⬇️", callback_data=f"rt:mvex:{routine_id}:{re_id}:down"))
+        row.append(InlineKeyboardButton(text="✏️", callback_data=f"rt:extarget:{routine_id}:{re_id}"))
         row.append(InlineKeyboardButton(text=f"🗑 {name}", callback_data=f"rt:rmex:{routine_id}:{re_id}"))
         b.row(*row)
     b.row(InlineKeyboardButton(text="➕ Добавить упражнение", callback_data=f"rt:addex:{routine_id}"))
     b.row(InlineKeyboardButton(text="⬅️ Готово", callback_data=f"rt:view:{routine_id}"))
+    return b.as_markup()
+
+
+def program_name_taken_keyboard(existing_id: int, back_cb: str, add_cb: str) -> InlineKeyboardMarkup:
+    """Имя занято — три честных выхода вместо молчаливого слияния, которое
+    происходило раньше."""
+    b = InlineKeyboardBuilder()
+    b.button(text="🗂 Открыть существующую", callback_data=f"rt:prg:{existing_id}")
+    b.button(text="➕ Добавить второй копией", callback_data=add_cb)
+    b.button(text="❌ Отмена", callback_data=back_cb)
+    b.adjust(1)
     return b.as_markup()
 
 

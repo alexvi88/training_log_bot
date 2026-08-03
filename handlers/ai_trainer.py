@@ -2,16 +2,18 @@
 
 import asyncio
 import base64
+import json
 import logging
 import random
 from contextlib import suppress
 from html import escape
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramRetryAfter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import ai_trainer
 import config
@@ -256,22 +258,31 @@ class _DraftStreamer:
 
 
 async def ai_keyboard(
-    user_id: int, answer: Optional[str] = None, program_name: Optional[str] = None
+    user_id: int,
+    answer: Optional[str] = None,
+    program_name: Optional[str] = None,
+    draft_id: Optional[int] = None,
 ) -> InlineKeyboardMarkup:
     """AI-trainer reply keyboard: 'К тренировке' instead of 'Меню' while a workout is active.
 
     `answer` — текст ответа тренера, если он есть: упомянутые в нём упражнения
     пользователя становятся кнопками-ссылками на свои карточки.
 
-    `program_name` — название программы, которую тренер собрал этим ответом
-    (см. ai_trainer.propose_program): добавляет кнопку с превью и сохранением.
+    `program_name` / `draft_id` — название и id черновика программы, которую
+    тренер собрал этим ответом (см. ai_trainer.propose_program и 5.2): вместе
+    дают кнопку с превью, а id в её callback_data — то, чем ai_program_view
+    отличает актуальный черновик от более старого, показанного под прошлым
+    ответом (см. _program_draft).
     """
     active = await db.get_active_workout(user_id)
     mentioned = await exercise_mentions.find_in_text(
         user_id, answer, limit=exercise_mentions.MAX_MENTIONS_TOTAL
     )
     return keyboards.ai_trainer_keyboard(
-        has_active_workout=bool(active), exercises=mentioned, program_name=program_name
+        has_active_workout=bool(active),
+        exercises=mentioned,
+        program_name=program_name,
+        draft_id=draft_id,
     )
 
 
@@ -448,8 +459,13 @@ async def ai_mentions_page(callback: CallbackQuery, state: FSMContext):
     active = await db.get_active_workout(callback.from_user.id)
     draft = (await state.get_data()).get("ai_program_draft")
     program_name = draft.get("name") if draft else None
+    draft_id = draft.get("id") if draft else None
     kb = keyboards.ai_trainer_keyboard(
-        has_active_workout=bool(active), exercises=exercises, page=page, program_name=program_name
+        has_active_workout=bool(active),
+        exercises=exercises,
+        page=page,
+        program_name=program_name,
+        draft_id=draft_id,
     )
     with suppress(TelegramBadRequest):
         await callback.message.edit_reply_markup(reply_markup=kb)
@@ -461,118 +477,124 @@ _PROGRAM_GONE = (
 )
 
 
-async def _program_draft(callback: CallbackQuery, state: FSMContext) -> Optional[dict]:
-    """Черновик программы из FSM или None с алертом, если его уже нет.
+def _draft_id_from(callback_data: str) -> int:
+    """Последний сегмент callback_data ("ai:prog:save:12" → 12).
 
-    Живёт ровно один черновик на пользователя (см. _handle_question), так что
-    кнопка под старым ответом вполне может указывать в пустоту — молча сохранять
-    в этом случае нечего, а сохранять «что-то другое» было бы хуже всего.
+    Отсутствие/нечисло (например "ai:prog:view:None" на черновике без id — не
+    должно случаться, но лучше явный неудачный матч, чем ValueError наружу)
+    трактуется как заведомо несуществующий id.
+    """
+    try:
+        return int(callback_data.rsplit(":", 1)[1])
+    except (ValueError, IndexError):
+        return -1
+
+
+async def _program_draft(
+    callback: CallbackQuery, state: FSMContext, draft_id: int
+) -> Optional[dict]:
+    """Черновик программы из FSM, только если его id совпал с тем, что в
+    callback_data — иначе алерт и None.
+
+    Живёт ровно один черновик на пользователя (см. _handle_question), а кнопки
+    под старыми ответами остаются тапабельными (5.2): без сверки по id тап под
+    устаревшим ответом тренера мог сохранить/удалить более позднюю программу,
+    которую пользователь даже не видел, и ничем не был бы отличим от тапа под
+    актуальным ответом.
     """
     data = await state.get_data()
     draft = data.get("ai_program_draft")
-    if not draft or not draft.get("days"):
+    if not draft or not draft.get("days") or draft.get("id") != draft_id:
         await callback.answer(_PROGRAM_GONE, show_alert=True)
         return None
     return draft
 
 
-@router.callback_query(F.data == "ai:prog:view")
+@router.callback_query(F.data.startswith("ai:prog:view:"))
 async def ai_program_view(callback: CallbackQuery, state: FSMContext):
     """Превью программы, собранной тренером.
 
     Отдельным сообщением, а не правкой ответа: сам разбор с логикой сплита
     нужен рядом, пока пользователь решает, брать программу или нет.
     """
-    draft = await _program_draft(callback, state)
+    draft_id = _draft_id_from(callback.data)
+    draft = await _program_draft(callback, state, draft_id)
     if draft is None:
         return
     replaces = draft.get("replaces")
-    text = formatting.build_ai_program_preview(draft["name"], draft["days"], replaces=replaces)
+    text = formatting.build_ai_program_preview(
+        draft["name"], draft["days"], replaces=replaces, notes=draft.get("notes")
+    )
     await callback.message.answer(
         text,
         parse_mode="HTML",
-        reply_markup=keyboards.ai_program_preview_keyboard(replacing=bool(replaces)),
+        reply_markup=keyboards.ai_program_preview_keyboard(replacing=bool(replaces), draft_id=draft_id),
     )
     await callback.answer()
 
 
-@router.callback_query(F.data == "ai:prog:save")
-async def ai_program_save(callback: CallbackQuery, state: FSMContext):
-    """Сохранение программы: все её дни ложатся под одним program_name.
+def _name_conflict_keyboard(draft_id: int, program_name: str) -> InlineKeyboardMarkup:
+    """A2: у пользователя уже есть программа с этим именем, а предложение —
+    НЕ её правка (иначе ai_trainer.propose_program.replaces_program было бы
+    заполнено). Раньше в этом случае дни молча дописывались в существующую
+    программу под тем же именем — три таких сохранения подряд давали 18 дней
+    в одной программе. Теперь решает пользователь: заменить или завести
+    отдельную копию под свободным именем (db.unique_program_name).
 
-    Здесь же и происходит единственная запись за всю фичу: до этого тапа
-    предложение нигде не материализовалось, в том числе не форкало пользователю
-    упражнения из каталога (см. ai_trainer._propose_program)."""
-    draft = await _program_draft(callback, state)
-    if draft is None:
-        return
+    Не через keyboards.py — та функция зарезервирована под ровно другой экран
+    (`ai_program_preview_keyboard`), а этот собирается только здесь, в момент
+    обнаруженного конфликта.
+    """
+    b = InlineKeyboardBuilder()
+    b.button(text="🔄 Заменить существующую", callback_data=f"ai:prog:replace:{draft_id}")
+    b.button(text="➕ Добавить второй копией", callback_data=f"ai:prog:copy:{draft_id}")
+    b.button(text="❌ Не надо", callback_data=f"ai:prog:drop:{draft_id}")
+    b.adjust(1)
+    return b.as_markup()
 
-    # Забираем черновик атомарно: между этой строкой и .get_data() выше нет ни
-    # одного await, который реально отдаёт управление циклу событий (FSMContext
-    # поверх MemoryStorage ничего не ждёт по-настоящему) — значит второй
-    # параллельный тап уже не увидит этот черновик и получит _PROGRAM_GONE
-    # вместо повторного сохранения. Раньше это же state.update_data(None) стояло
-    # в конце функции, через ~5 await на реальную БД — окно между чтением и
-    # очисткой давало двум быстрым тапам прочитать один и тот же черновик и
-    # задублировать дни, попутно обходя MAX_ROUTINES_PER_USER (см. A3).
-    await state.update_data(ai_program_draft=None)
 
-    user_id = callback.from_user.id
-    days = draft["days"]
-    # Правка существующей программы: её дни уходят, новые встают на их место
-    # (см. ai_trainer._resolve_replaced_program). Считаем лимит с учётом
-    # освобождающихся мест — иначе правка программы того же размера упиралась бы
-    # в потолок только потому, что старая версия ещё цела.
-    replaced_ids = []
-    for rid in (draft.get("replaces") or {}).get("routine_ids", []):
-        # Программу могли удалить (или переделать) руками между предложением и
-        # тапом — тогда заменять уже нечего, и это просто добавление.
-        routine = await db.get_routine(rid)
-        if routine is not None and routine["user_id"] == user_id:
-            replaced_ids.append(rid)
-    existing = await db.count_routines(user_id)
-    if existing - len(replaced_ids) + len(days) > ai_trainer.MAX_ROUTINES_PER_USER:
-        # Возвращаем черновик обратно — отказ сохранить не должен стоить
-        # пользователю самого предложения: удалит лишнее в «🗂 Программы» и
-        # нажмёт кнопку ещё раз (см. A3).
-        await state.update_data(ai_program_draft=draft)
-        await callback.answer(
-            f"У тебя уже {existing} программ — больше {ai_trainer.MAX_ROUTINES_PER_USER} "
-            "не влезет. Удали лишние в «🗂 Программы» и попробуй ещё раз.",
-            show_alert=True,
-        )
-        return
+async def _create_program_day(user_id: int, day: dict, program_id: int) -> int:
+    """Создать один день программы и, если тренер задал прогрессию хоть на одно
+    упражнение, записать её (5.6/3.2 — db.set_routine_exercise_progression).
 
-    # Сначала создаём новые дни и только потом удаляем старые (см. A6): раньше
-    # было наоборот, и упавший на середине create (например, гонка по
-    # уникальному имени упражнения) оставлял пользователя без старой программы
-    # и без новой — а черновик к этому моменту уже пуст, попробовать заново
-    # нечем. В этом порядке падение оставляет лишние новые дни рядом со старой
-    # программой — хуже, но старая версия цела и ничего не потеряно.
-    for day in days:
-        await db.create_routine_from_program(
-            # .get на target: черновик переживает перезапуск в FSM-сторадже, так
-            # что тут может лежать предложение, собранное ещё прошлой версией.
-            user_id, day["name"],
-            [(item["name"], item.get("target")) for item in day["items"]],
-            program_name=draft["name"],
-        )
-    for routine_id in replaced_ids:
-        await db.delete_routine(routine_id)
+    Порядок routine_exercises после create_routine_from_program совпадает с
+    порядком day["items"] (тот же список, без пропусков — дубли и нерезолвнутые
+    имена уже отфильтрованы в ai_trainer._propose_program), поэтому сверяем по
+    display_name, а не по позиции — устойчивее, если это когда-нибудь перестанет
+    быть так.
+    """
+    routine_id = await db.create_routine_from_program(
+        user_id, day["name"],
+        [(item["name"], item.get("target")) for item in day["items"]],
+        program_id=program_id,
+    )
+    progressions = {
+        item["name"]: item["progression"] for item in day["items"] if item.get("progression")
+    }
+    if progressions:
+        for re_row in await db.list_routine_exercises(routine_id):
+            progression = progressions.get(re_row["display_name"])
+            if progression:
+                await db.set_routine_exercise_progression(
+                    re_row["id"], json.dumps(progression, ensure_ascii=False)
+                )
+    return routine_id
 
-    day_word = formatting.plural_ru(len(days), ("день", "дня", "дней"))
-    if replaced_ids:
+
+async def _announce_saved(callback: CallbackQuery, name: str, day_count: int, replacing: bool) -> None:
+    day_word = formatting.plural_ru(day_count, ("день", "дня", "дней"))
+    if replacing:
         text = (
-            f"✅ <b>Обновил программу «{escape(draft['name'])}».</b>\n\n"
-            f"Теперь в ней {len(days)} {day_word} — ищи в «🗂 Программы»."
+            f"✅ <b>Обновил программу «{escape(name)}».</b>\n\n"
+            f"Теперь в ней {day_count} {day_word} — ищи в «🗂 Программы»."
         )
     else:
-        # Одна программа с общим именем на все дни (routines.program_name), а
-        # не «N программ» — «🗂 Программы» покажет её одной строкой с числом
-        # дней внутри, а не N отдельных (см. A8: старый текст обещал поведение,
-        # которого никогда не было).
+        # Одна программа с общим именем на все дни, а не «N программ» — «🗂
+        # Программы» покажет её одной строкой с числом дней внутри, а не N
+        # отдельных (см. A8: старый текст обещал поведение, которого никогда
+        # не было).
         text = (
-            f"✅ <b>Добавил программу «{escape(draft['name'])}» — {len(days)} {day_word}.</b>\n\n"
+            f"✅ <b>Добавил программу «{escape(name)}» — {day_count} {day_word}.</b>\n\n"
             "Ищи её в «🗂 Программы» — оттуда начинается тренировка по любому из дней."
         )
     with suppress(TelegramBadRequest):
@@ -582,11 +604,197 @@ async def ai_program_save(callback: CallbackQuery, state: FSMContext):
     await callback.answer("Готово 💪")
 
 
-@router.callback_query(F.data == "ai:prog:drop")
+async def _save_into_existing_program(
+    callback: CallbackQuery, state: FSMContext, user_id: int, draft: dict, program: Any
+) -> None:
+    """A7: правка уже сохранённой программы, резолвится по id заново прямо
+    здесь — в момент тапа, а не по снимку, сделанному при предложении.
+
+    Дни программы перечитываются из БД сейчас (а не берутся из
+    replaces["routine_ids"], зафиксированных на момент propose_program) — день,
+    который пользователь успел добавить руками между предложением и тапом,
+    раньше переживал замену и вылезал в списке первым; теперь заменяется весь
+    текущий набор дней программы, как и обещает промпт тренера ("что не
+    прислал — то из программы пропадёт"). Имя программы меняется, только если
+    тренер прислал другое: старое поведение (запись новых дней под draft["name"]
+    отдельной строкой) молча откатывало переименование, сделанное пользователем
+    между предложением и тапом.
+    """
+    days = draft["days"]
+    old_days = await db.list_program_days_by_id(program["id"])
+    budget_msg = await db.routine_budget(user_id, adding=len(days), freeing=len(old_days))
+    if budget_msg:
+        await state.update_data(ai_program_draft=draft)
+        await callback.answer(budget_msg, show_alert=True)
+        return
+
+    # Переименование — если draft["name"] отличается от имени, которое тренер
+    # РЕЗОЛВИЛ при предложении (replaces["name"] — то, что видела модель,
+    # снятое в момент propose_program), а не от текущего живого имени
+    # программы: сравнение с live-именем спутало бы «модель хочет
+    # переименовать» с «пользователь успел переименовать руками между
+    # предложением и тапом» — второе не должно откатываться так, как раньше
+    # (новые дни писались под draft["name"] отдельной строкой, стирая ручное
+    # переименование молча).
+    resolved_name = (draft.get("replaces") or {}).get("name") or program["name"]
+    target_name = program["name"]
+    if draft["name"].strip().lower() != resolved_name.strip().lower():
+        if await db.rename_program_by_id(program["id"], draft["name"]):
+            target_name = draft["name"]
+        # Если имя занято другой программой — просто оставляем текущее имя:
+        # это правка состава, а не переименования, отказывать из-за него незачем.
+
+    # Сначала новые дни, потом удаление старых (A6): падение посередине
+    # оставляет пользователя с лишними новыми днями рядом со старой
+    # программой — хуже, чем идеально, но старая версия цела и есть с чем
+    # попробовать снова, а не пусто с обеих сторон.
+    for day in days:
+        await _create_program_day(user_id, day, program_id=program["id"])
+    for old in old_days:
+        await db.delete_routine(old["id"])
+
+    final_days = await db.list_program_days_by_id(program["id"])
+    await _announce_saved(callback, target_name, len(final_days), replacing=True)
+
+
+async def _save_as_new_program(
+    callback: CallbackQuery,
+    state: FSMContext,
+    user_id: int,
+    draft: dict,
+    freeing_routine_id: Optional[int] = None,
+) -> None:
+    """Новая программа — включая случай, когда предложение заменяло одиночную
+    (однодневную) программу: у неё нет program_id, поэтому под неё заводится
+    новая программа, а старый день удаляется отдельно (`freeing_routine_id`).
+
+    A2: если имя уже занято другой сохранённой программой пользователя, это
+    больше не решается угадыванием (см. db.create_program — коллизия теперь
+    None, а не молчаливый merge внутри существующей программы) — пользователь
+    выбирает сам через _name_conflict_keyboard.
+    """
+    days = draft["days"]
+    freed = 1 if freeing_routine_id else 0
+    budget_msg = await db.routine_budget(user_id, adding=len(days), freeing=freed)
+    if budget_msg:
+        await state.update_data(ai_program_draft=draft)
+        await callback.answer(budget_msg, show_alert=True)
+        return
+
+    program_id = await db.create_program(user_id, draft["name"], source="ai")
+    if program_id is None:
+        await state.update_data(ai_program_draft=draft)
+        with suppress(TelegramBadRequest):
+            await callback.message.edit_text(
+                f"У тебя уже есть программа «{escape(draft['name'])}». Заменить её этой "
+                "или добавить как отдельную?",
+                parse_mode="HTML",
+                reply_markup=_name_conflict_keyboard(draft["id"], draft["name"]),
+            )
+        await callback.answer()
+        return
+
+    for day in days:
+        await _create_program_day(user_id, day, program_id=program_id)
+    if freeing_routine_id is not None:
+        await db.delete_routine(freeing_routine_id)
+    await _announce_saved(callback, draft["name"], len(days), replacing=False)
+
+
+async def _finalize_program_save(callback: CallbackQuery, state: FSMContext, user_id: int, draft: dict) -> None:
+    """Все пути сохранения черновика после того, как он атомарно забран из FSM.
+
+    Правка сохранённой многодневки идёт в _save_into_existing_program; всё
+    остальное (новая программа, замена одиночной программы, конфликт имени
+    из ai:prog:replace/copy) — в _save_as_new_program.
+    """
+    replaces = draft.get("replaces")
+    if replaces and replaces.get("kind") == "program":
+        program = await db.get_program(replaces["id"])
+        if program is not None and program["user_id"] == user_id:
+            await _save_into_existing_program(callback, state, user_id, draft, program)
+            return
+        # Программу удалили (или это был чужой id) между предложением и тапом —
+        # заменять нечего, значит просто добавляем (см. тест A6/A7 fallback).
+        replaces = None
+
+    freeing_routine_id = None
+    if replaces and replaces.get("kind") == "routine":
+        routine = await db.get_routine(replaces["id"])
+        if routine is not None and routine["user_id"] == user_id:
+            freeing_routine_id = routine["id"]
+
+    await _save_as_new_program(callback, state, user_id, draft, freeing_routine_id=freeing_routine_id)
+
+
+@router.callback_query(F.data.startswith("ai:prog:save:"))
+async def ai_program_save(callback: CallbackQuery, state: FSMContext):
+    """Сохранение программы.
+
+    Здесь же и происходит единственная запись за всю фичу: до этого тапа
+    предложение нигде не материализовалось, в том числе не форкало пользователю
+    упражнения из каталога (см. ai_trainer._propose_program)."""
+    draft_id = _draft_id_from(callback.data)
+    draft = await _program_draft(callback, state, draft_id)
+    if draft is None:
+        return
+
+    # Забираем черновик атомарно: между этой строкой и .get_data() выше нет ни
+    # одного await, который реально отдаёт управление циклу событий (FSMContext
+    # поверх MemoryStorage ничего не ждёт по-настоящему) — значит второй
+    # параллельный тап уже не увидит этот черновик и получит _PROGRAM_GONE
+    # вместо повторного сохранения (см. A3).
+    await state.update_data(ai_program_draft=None)
+    await _finalize_program_save(callback, state, callback.from_user.id, draft)
+
+
+@router.callback_query(F.data.startswith("ai:prog:replace:"))
+async def ai_program_replace_conflict(callback: CallbackQuery, state: FSMContext):
+    """A2: пользователь выбрал «заменить» на экране конфликта имён."""
+    draft_id = _draft_id_from(callback.data)
+    draft = await _program_draft(callback, state, draft_id)
+    if draft is None:
+        return
+    await state.update_data(ai_program_draft=None)
+    user_id = callback.from_user.id
+    existing = await db.find_program_by_name(user_id, draft["name"])
+    if existing is None:
+        # Программу с этим именем успели удалить между вопросом и тапом —
+        # заменять уже нечего, просто добавляем как новую.
+        await _save_as_new_program(callback, state, user_id, draft)
+        return
+    await _save_into_existing_program(callback, state, user_id, draft, existing)
+
+
+@router.callback_query(F.data.startswith("ai:prog:copy:"))
+async def ai_program_copy_conflict(callback: CallbackQuery, state: FSMContext):
+    """A2: пользователь выбрал «добавить второй копией» на экране конфликта имён —
+    сохраняем под ближайшим свободным именем (db.unique_program_name), а не под
+    занятым."""
+    draft_id = _draft_id_from(callback.data)
+    draft = await _program_draft(callback, state, draft_id)
+    if draft is None:
+        return
+    await state.update_data(ai_program_draft=None)
+    user_id = callback.from_user.id
+    alt_name = await db.unique_program_name(user_id, draft["name"], suffix="2")
+    draft = dict(draft)
+    draft["name"] = alt_name
+    await _save_as_new_program(callback, state, user_id, draft)
+
+
+@router.callback_query(F.data.startswith("ai:prog:drop:"))
 async def ai_program_drop(callback: CallbackQuery, state: FSMContext):
     """«Не надо»: убираем превью и черновик. Ответ тренера с разбором остаётся —
-    попросить переделать программу можно прямо следующей репликой."""
-    await state.update_data(ai_program_draft=None)
+    попросить переделать программу можно прямо следующей репликой.
+
+    Черновик очищается, только если его id совпал с тем, что в кнопке (5.2) —
+    иначе это тап по устаревшей кнопке, и он не должен стирать более новый,
+    ещё не показанный черновик."""
+    draft_id = _draft_id_from(callback.data)
+    data = await state.get_data()
+    if (data.get("ai_program_draft") or {}).get("id") == draft_id:
+        await state.update_data(ai_program_draft=None)
     with suppress(TelegramBadRequest):
         await callback.message.delete()
     await callback.answer("Убрал")
@@ -772,7 +980,16 @@ async def _handle_question(
     # Черновик по-прежнему пропадает — но только явно: по ai:prog:save или
     # ai:prog:drop, либо будучи заменённым новым предложением здесь же.
     if program_draft:
-        await state.update_data(ai_history=history, ai_program_draft=program_draft)
+        # 5.2: короткий возрастающий id — то, чем кнопка под ЭТИМ ответом
+        # отличается от кнопки под более старым. Раньше кнопка ссылалась просто
+        # на «черновик, который сейчас лежит в FSM» без параметров: следующее
+        # propose_program перетирало слот, и тап по старой кнопке молча сохранял
+        # более позднюю программу, которую пользователь мог даже не видеть.
+        draft_seq = int((data.get("ai_draft_seq") or 0)) + 1
+        program_draft["id"] = draft_seq
+        await state.update_data(
+            ai_history=history, ai_program_draft=program_draft, ai_draft_seq=draft_seq
+        )
     else:
         await state.update_data(ai_history=history)
 
@@ -783,7 +1000,10 @@ async def _handle_question(
     await db.add_ai_chat_message(user_id, "assistant", answer)
 
     reply_markup = await ai_keyboard(
-        user_id, answer=answer, program_name=program_draft.get("name") if program_draft else None
+        user_id,
+        answer=answer,
+        program_name=program_draft.get("name") if program_draft else None,
+        draft_id=program_draft.get("id") if program_draft else None,
     )
     chunks = [answer[i : i + TG_CHUNK] for i in range(0, len(answer), TG_CHUNK)]
     for i, chunk in enumerate(chunks):
