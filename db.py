@@ -498,7 +498,7 @@ async def _sync_exercise_templates() -> None:
 
 
 # Bumped whenever a one-shot migration is added to _run_one_shot_migrations.
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 3
 
 
 async def _run_one_shot_migrations() -> None:
@@ -517,6 +517,8 @@ async def _run_one_shot_migrations() -> None:
         await _backfill_seeded_from_program()
     if version < 2:
         await _group_prefixed_program_days()
+    if version < 3:
+        await _group_program_days_saved_together()
     # Not parameterizable — SQLite only accepts a literal here. The value is an
     # internal constant, never user input.
     await _conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
@@ -563,6 +565,68 @@ async def _group_prefixed_program_days() -> None:
                 (program, day, routine_id),
             )
     await _conn.commit()
+
+
+# A program's days are written back-to-back by one loop, so consecutive days
+# land within a second or two of each other even with exercise forking in
+# between. Saving a routine by hand can't be that fast — it needs a workout
+# picked and a name typed — so a gap this small means "same batch".
+_PROGRAM_BATCH_SECONDS = 10
+
+
+async def _group_program_days_saved_together() -> None:
+    """Group days of programs saved before anything recorded which program they
+    belonged to — neither a program_name column nor the name prefix that
+    briefly stood in for it (see _group_prefixed_program_days).
+
+    Nothing in such a row names its program, but the rows still remember being
+    written *together*: create_routine_from_program is called in a loop, so a
+    program's days are consecutive in id and seconds apart, while a routine
+    saved from a workout arrives alone after the user picks a session and types
+    a name. That burst is the grouping; only the program's name is genuinely
+    unrecoverable, so it gets a dated placeholder the user can rename rather
+    than an invented title claiming to be the original.
+
+    One-shot (see `_run_one_shot_migrations`): once programs record their own
+    name, a burst of new routines is never again evidence of anything.
+    """
+    cur = await _conn.execute(
+        "SELECT id, user_id, created_at FROM routines WHERE program_name IS NULL "
+        "ORDER BY user_id, created_at, id"
+    )
+    batches: list[list[aiosqlite.Row]] = []
+    for row in await cur.fetchall():
+        current = batches[-1] if batches else None
+        if current and current[-1]["user_id"] == row["user_id"] and _within_batch(current[-1], row):
+            current.append(row)
+        else:
+            batches.append([row])
+    for batch in batches:
+        if len(batch) < 2:
+            continue
+        name = _batch_program_name(batch[0]["created_at"])
+        for row in batch:
+            await _conn.execute(
+                "UPDATE routines SET program_name = ? WHERE id = ?", (name, row["id"])
+            )
+    await _conn.commit()
+
+
+def _within_batch(previous, row) -> bool:
+    try:
+        gap = dt.datetime.fromisoformat(row["created_at"]) - dt.datetime.fromisoformat(
+            previous["created_at"]
+        )
+    except ValueError:  # a hand-edited or pre-ISO timestamp — don't guess
+        return False
+    return 0 <= gap.total_seconds() <= _PROGRAM_BATCH_SECONDS
+
+
+def _batch_program_name(created_at: str) -> str:
+    try:
+        return f"Программа от {dt.datetime.fromisoformat(created_at):%d.%m}"
+    except ValueError:
+        return "Программа"
 
 
 async def _backfill_seeded_from_program() -> None:
@@ -2244,6 +2308,17 @@ async def list_routine_exercises(routine_id: int) -> list[aiosqlite.Row]:
         (routine_id,),
     )
     return await cur.fetchall()
+
+
+async def rename_program(user_id: int, program_name: str, new_name: str) -> None:
+    """Rename a program — i.e. re-label every day that belongs to it, since the
+    program itself is only the name its days share."""
+    async with _write_lock:
+        await conn().execute(
+            "UPDATE routines SET program_name = ? WHERE user_id = ? AND program_name = ?",
+            (new_name, user_id, program_name),
+        )
+        await conn().commit()
 
 
 async def rename_routine(routine_id: int, name: str) -> None:

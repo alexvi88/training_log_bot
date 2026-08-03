@@ -82,7 +82,7 @@ async def rt_program_days(callback: CallbackQuery, state: FSMContext):
     lines += ["", "Выбери день — посмотреть состав или начать тренировку."]
     await ui.safe_edit(
         callback, "\n".join(lines),
-        reply_markup=keyboards.program_days_keyboard(days), parse_mode="HTML",
+        reply_markup=keyboards.program_days_keyboard(days, anchor_id), parse_mode="HTML",
     )
     await callback.answer()
 
@@ -386,6 +386,45 @@ async def rt_rename_entered(message: Message, state: FSMContext):
     await db.rename_routine(routine_id, name)
     await state.set_state(None)
     await _show_routine_detail(message, state, routine_id)
+
+
+@router.callback_query(F.data.startswith("rt:pgmrename:"))
+async def rt_program_rename(callback: CallbackQuery, state: FSMContext):
+    """Programs recovered from old data carry a dated placeholder name (see
+    db._group_program_days_saved_together) — this is how it stops being one."""
+    anchor_id = int(callback.data.split(":")[2])
+    anchor = await _owned_routine(callback, anchor_id)
+    if anchor is None:
+        return
+    if not anchor["program_name"]:
+        await callback.answer("Это не программа из нескольких дней", show_alert=True)
+        return
+    await state.set_state(RoutineFlow.renaming_program)
+    await state.update_data(program_rename_anchor_id=anchor_id)
+    await ui.safe_edit(
+        callback,
+        f"Как назвать программу «{escape(anchor['program_name'])}»?",
+        reply_markup=keyboards.cancel_keyboard(f"rt:pgm:{anchor_id}"),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.message(StateFilter(RoutineFlow.renaming_program), F.text)
+async def rt_program_rename_entered(message: Message, state: FSMContext):
+    name = message.text.strip()
+    if not name:
+        await message.reply("Название не может быть пустым")
+        return
+    data = await state.get_data()
+    anchor = await _owned_routine(message, data["program_rename_anchor_id"])
+    if anchor is None or not anchor["program_name"]:
+        await state.set_state(None)
+        await show_manage(message, state)
+        return
+    await db.rename_program(message.from_user.id, anchor["program_name"], name)
+    await state.set_state(None)
+    await show_manage(message, state)
 
 
 @router.callback_query(F.data.startswith("rt:delask:"))

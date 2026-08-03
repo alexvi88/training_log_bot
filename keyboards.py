@@ -425,11 +425,12 @@ def routines_manage_keyboard(programs, routines, has_workouts: bool) -> InlineKe
     return b.as_markup()
 
 
-def program_days_keyboard(days) -> InlineKeyboardMarkup:
+def program_days_keyboard(days, anchor_id: int) -> InlineKeyboardMarkup:
     """Day selector for one saved multi-day program."""
     b = InlineKeyboardBuilder()
     for d in days:
         b.button(text=d["name"], callback_data=f"rt:view:{d['id']}")
+    b.button(text="✏️ Переименовать программу", callback_data=f"rt:pgmrename:{anchor_id}")
     b.button(text="⬅️ Назад", callback_data="rt:manage")
     b.adjust(1)
     return b.as_markup()
