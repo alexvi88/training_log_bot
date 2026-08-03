@@ -145,6 +145,43 @@ class RefreshPersistentMenuMiddleware(BaseMiddleware):
         return result
 
 
+def setup_routers(dp: Dispatcher) -> None:
+    """Register every handler router. Order matters — see the comments below.
+
+    Split out of main() so the routing itself can be tested without starting
+    polling: "which router wins this update" is real behaviour, and the share
+    deep link has already been broken by it once.
+    """
+    dp.include_router(persistent_menu.router)
+    # admin.router and feedback.router only match their own Command(...) /
+    # "admin:"/"feedback:"-prefixed callback data, so it's safe (and necessary)
+    # to register them ahead of the FSM flow routers below — otherwise a
+    # state's catch-all message handler (e.g. workout.py's logging_set handler)
+    # swallows these commands as plain text whenever the user is mid-flow.
+    dp.include_router(admin.router)
+    dp.include_router(feedback.router)
+    # Same reason as admin/feedback above: /food_diary and the fd:* callbacks
+    # must reach their router even when the user is mid-workout.
+    dp.include_router(food_diary.router)
+    # Ahead of workout.router on purpose: the share deep link arrives as
+    # "/start sh_<token>", and workout's bare Command("start") matches that too
+    # — registered after it, the deep link never reaches sharing and the
+    # recipient just lands in the main menu with nothing imported.
+    dp.include_router(sharing.router)
+    dp.include_router(workout.router)
+    dp.include_router(routines.router)
+    dp.include_router(backfill.router)
+    dp.include_router(exercise_resolve.router)
+    dp.include_router(csv_import.router)
+    dp.include_router(exercises.router)
+    dp.include_router(history.router)
+    dp.include_router(edit_workout.router)
+    dp.include_router(ai_trainer.router)
+    dp.include_router(bodyweight.router)
+    dp.include_router(settings.router)
+    dp.include_router(fallback.router)
+
+
 async def _setup_commands(bot: Bot) -> None:
     """Whose "/" menu lists what — the default list doubles as the bot's
     advertised feature set, so anything reachable from the main menu belongs
@@ -197,30 +234,7 @@ async def main() -> None:
     refresh_menu_middleware = RefreshPersistentMenuMiddleware()
     dp.message.outer_middleware(refresh_menu_middleware)
     dp.callback_query.outer_middleware(refresh_menu_middleware)
-    dp.include_router(persistent_menu.router)
-    # admin.router and feedback.router only match their own Command(...) /
-    # "admin:"/"feedback:"-prefixed callback data, so it's safe (and necessary)
-    # to register them ahead of the FSM flow routers below — otherwise a
-    # state's catch-all message handler (e.g. workout.py's logging_set handler)
-    # swallows these commands as plain text whenever the user is mid-flow.
-    dp.include_router(admin.router)
-    dp.include_router(feedback.router)
-    # Same reason as admin/feedback above: /food_diary and the fd:* callbacks
-    # must reach their router even when the user is mid-workout.
-    dp.include_router(food_diary.router)
-    dp.include_router(workout.router)
-    dp.include_router(routines.router)
-    dp.include_router(backfill.router)
-    dp.include_router(sharing.router)
-    dp.include_router(exercise_resolve.router)
-    dp.include_router(csv_import.router)
-    dp.include_router(exercises.router)
-    dp.include_router(history.router)
-    dp.include_router(edit_workout.router)
-    dp.include_router(ai_trainer.router)
-    dp.include_router(bodyweight.router)
-    dp.include_router(settings.router)
-    dp.include_router(fallback.router)
+    setup_routers(dp)
 
     admin_job = asyncio.create_task(admin_tasks.run_daily_admin_jobs(bot))
     engagement_job = asyncio.create_task(engagement.run_daily_engagement_job(bot))
