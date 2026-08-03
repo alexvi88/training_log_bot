@@ -322,3 +322,31 @@ async def test_a_standalone_routine_goes_back_to_the_top_list(fresh_db, user_id)
     kb = callback.message.answer.await_args.kwargs["reply_markup"]
     back = [b.callback_data for row in kb.inline_keyboard for b in row][-1]
     assert back == "rt:manage"
+
+
+async def test_renaming_a_program_from_its_day_screen(fresh_db, user_id):
+    """Программы, восстановленные из старых данных, получают датированную
+    заглушку вместо имени — переименование и есть то, чем она перестаёт ей быть."""
+    for day in ("День 1", "День 2"):
+        await fresh_db.create_routine(user_id, day, program_name="Программа от 28.07")
+    anchor = (await fresh_db.list_programs(user_id))[0]["anchor_id"]
+    state = await _make_state(user_id)
+
+    await routines.rt_program_rename(_make_callback(user_id, f"rt:pgmrename:{anchor}"), state)
+    assert await state.get_state() == RoutineFlow.renaming_program
+
+    await routines.rt_program_rename_entered(_make_message(user_id, "Верх/низ"), state)
+
+    assert [p["program_name"] for p in await fresh_db.list_programs(user_id)] == ["Верх/низ"]
+    assert await state.get_state() is None
+
+
+async def test_renaming_rejects_a_standalone_routine(fresh_db, user_id):
+    rid = await fresh_db.create_routine(user_id, "Своя тренировка")
+    callback = _make_callback(user_id, f"rt:pgmrename:{rid}")
+
+    await routines.rt_program_rename(callback, await _make_state(user_id))
+
+    callback.answer.assert_awaited_once_with(
+        "Это не программа из нескольких дней", show_alert=True
+    )

@@ -81,6 +81,7 @@ class BodyweightFlow(StatesGroup):
 class RoutineFlow(StatesGroup):
     naming = State()
     renaming = State()
+    renaming_program = State()
     adding_exercise_group = State()
     adding_exercise_pick = State()
 

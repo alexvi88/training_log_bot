@@ -123,3 +123,189 @@ async def test_the_anchor_of_a_program_belongs_to_it(user_id):
     anchor = await dbmod.get_routine(program["anchor_id"])
 
     assert anchor["program_name"] == "Верх/низ"
+
+
+# ---------- recovering the grouping of days named before program_name existed ----------
+
+
+async def _force_legacy_shape(user_id: int, names: list[str]) -> None:
+    """Routines as they looked before `program_name`: the program, if any, lived
+    in the name itself.
+
+    Minutes apart on purpose — that isolates the prefix migration from the
+    save-batch one, which groups anything written seconds apart (see
+    _group_program_days_saved_together and its own tests).
+    """
+    for i, name in enumerate(names):
+        rid = await dbmod.create_routine(user_id, name)
+        await dbmod._conn.execute(
+            "UPDATE routines SET program_name = NULL, created_at = ? WHERE id = ?",
+            (f"2026-07-28T10:{i:02d}:00", rid),
+        )
+    await dbmod._conn.execute("PRAGMA user_version = 1")
+    await dbmod._conn.commit()
+
+
+@pytest.mark.asyncio
+async def test_migration_splits_a_shared_prefix_back_into_program_and_day(user_id):
+    await _force_legacy_shape(user_id, [
+        "PPL гипертрофия 3 дня — День 1 — Жим",
+        "PPL гипертрофия 3 дня — День 2 — Тяга",
+        "PPL гипертрофия 3 дня — День 3 — Ноги",
+    ])
+
+    await dbmod._run_one_shot_migrations()
+
+    programs = await dbmod.list_programs(user_id)
+    assert [(p["program_name"], p["day_count"]) for p in programs] == [("PPL гипертрофия 3 дня", 3)]
+    days = await dbmod.list_program_days(user_id, "PPL гипертрофия 3 дня")
+    assert [d["name"] for d in days] == ["День 1 — Жим", "День 2 — Тяга", "День 3 — Ноги"]
+    assert await dbmod.list_standalone_routines(user_id) == []
+
+
+@pytest.mark.asyncio
+async def test_migration_leaves_a_lone_routine_with_a_dash_alone(user_id):
+    """Один роутин с тире в названии — не программа, и переименовывать его
+    («Грудь — тяжёлая» → «тяжёлая» под программой «Грудь») было бы порчей данных."""
+    await _force_legacy_shape(user_id, ["Грудь — тяжёлая", "Спина"])
+
+    await dbmod._run_one_shot_migrations()
+
+    assert await dbmod.list_programs(user_id) == []
+    assert sorted(r["name"] for r in await dbmod.list_standalone_routines(user_id)) == [
+        "Грудь — тяжёлая", "Спина",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_migration_leaves_day_shaped_names_saved_far_apart_alone(user_id):
+    """Названия вида «День N — X» сами по себе ничего не говорят о программе: без
+    общего префикса и без общей записи одним заходом склеивать их нечем."""
+    await _force_legacy_shape(user_id, ["День 1 — Жим", "День 2 — Тяга", "День 3 — Ноги"])
+
+    await dbmod._run_one_shot_migrations()
+
+    assert await dbmod.list_programs(user_id) == []
+    assert len(await dbmod.list_standalone_routines(user_id)) == 3
+
+
+@pytest.mark.asyncio
+async def test_migration_does_not_regroup_routines_named_after_it_ran(user_id):
+    await dbmod._run_one_shot_migrations()  # once-per-DB pass, nothing to do yet
+
+    await dbmod.create_routine(user_id, "Тяга — с пола")
+    await dbmod.create_routine(user_id, "Тяга — с плинтов")
+    await dbmod._run_one_shot_migrations()  # every later startup
+
+    assert await dbmod.list_programs(user_id) == []
+    assert len(await dbmod.list_standalone_routines(user_id)) == 2
+
+
+async def _legacy_routines_at(user_id: int, entries: list[tuple[str, str]]) -> None:
+    """Routines as they looked before program_name, with explicit created_at —
+    `entries` is [(name, created_at)]."""
+    for name, created_at in entries:
+        rid = await dbmod.create_routine(user_id, name)
+        await dbmod._conn.execute(
+            "UPDATE routines SET program_name = NULL, created_at = ? WHERE id = ?",
+            (created_at, rid),
+        )
+    await dbmod._conn.execute("PRAGMA user_version = 2")
+    await dbmod._conn.commit()
+
+
+@pytest.mark.asyncio
+async def test_migration_groups_days_that_were_saved_in_one_burst(user_id):
+    """Дни программы пишутся одним циклом — секунды друг от друга; вручную
+    сохранённый роутин так быстро не появляется."""
+    await _legacy_routines_at(user_id, [
+        ("День 1 — Жим", "2026-07-28T10:00:00"),
+        ("День 2 — Тяга", "2026-07-28T10:00:01"),
+        ("День 3 — Ноги", "2026-07-28T10:00:03"),
+    ])
+
+    await dbmod._run_one_shot_migrations()
+
+    programs = await dbmod.list_programs(user_id)
+    assert [(p["program_name"], p["day_count"]) for p in programs] == [("Программа от 28.07", 3)]
+    days = await dbmod.list_program_days(user_id, "Программа от 28.07")
+    assert [d["name"] for d in days] == ["День 1 — Жим", "День 2 — Тяга", "День 3 — Ноги"]
+    assert await dbmod.list_standalone_routines(user_id) == []
+
+
+@pytest.mark.asyncio
+async def test_migration_keeps_separately_saved_routines_apart(user_id):
+    """Между сохранениями руками — выбор тренировки и ввод названия, это далеко
+    не секунды. Склеивать такие в одну программу было бы враньём."""
+    await _legacy_routines_at(user_id, [
+        ("Грудь", "2026-07-28T10:00:00"),
+        ("Спина", "2026-07-28T10:04:00"),
+    ])
+
+    await dbmod._run_one_shot_migrations()
+
+    assert await dbmod.list_programs(user_id) == []
+    assert len(await dbmod.list_standalone_routines(user_id)) == 2
+
+
+@pytest.mark.asyncio
+async def test_migration_does_not_merge_bursts_of_different_users(user_id):
+    await _legacy_routines_at(user_id, [
+        ("День 1", "2026-07-28T10:00:00"),
+        ("День 2", "2026-07-28T10:00:01"),
+    ])
+    await _legacy_routines_at(999, [
+        ("День 1", "2026-07-28T10:00:02"),
+        ("День 2", "2026-07-28T10:00:03"),
+    ])
+
+    await dbmod._run_one_shot_migrations()
+
+    assert len(await dbmod.list_programs(user_id)) == 1
+    assert len(await dbmod.list_programs(999)) == 1
+
+
+@pytest.mark.asyncio
+async def test_migration_leaves_a_single_legacy_routine_standalone(user_id):
+    await _legacy_routines_at(user_id, [("Своя тренировка", "2026-07-28T10:00:00")])
+
+    await dbmod._run_one_shot_migrations()
+
+    assert await dbmod.list_programs(user_id) == []
+    assert len(await dbmod.list_standalone_routines(user_id)) == 1
+
+
+@pytest.mark.asyncio
+async def test_migration_does_not_group_routines_created_after_it_ran(user_id):
+    await dbmod._run_one_shot_migrations()  # once-per-DB pass
+
+    await dbmod.create_routine(user_id, "Грудь")
+    await dbmod.create_routine(user_id, "Спина")
+    await dbmod._run_one_shot_migrations()  # every later startup
+
+    assert await dbmod.list_programs(user_id) == []
+    assert len(await dbmod.list_standalone_routines(user_id)) == 2
+
+
+@pytest.mark.asyncio
+async def test_renaming_a_program_relabels_all_of_its_days(user_id):
+    for day in ("День 1", "День 2"):
+        await dbmod.create_routine(user_id, day, program_name="Программа от 28.07")
+
+    await dbmod.rename_program(user_id, "Программа от 28.07", "Верх/низ")
+
+    programs = await dbmod.list_programs(user_id)
+    assert [(p["program_name"], p["day_count"]) for p in programs] == [("Верх/низ", 2)]
+    assert [d["name"] for d in await dbmod.list_program_days(user_id, "Верх/низ")] == [
+        "День 1", "День 2",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_renaming_a_program_leaves_another_users_program_alone(user_id):
+    await dbmod.create_routine(user_id, "День 1", program_name="Сплит")
+    await dbmod.create_routine(999, "День 1", program_name="Сплит")
+
+    await dbmod.rename_program(user_id, "Сплит", "Мой сплит")
+
+    assert [p["program_name"] for p in await dbmod.list_programs(999)] == ["Сплит"]
