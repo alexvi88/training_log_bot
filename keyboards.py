@@ -143,15 +143,21 @@ def ai_trainer_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=item_rows + page_nav_rows + nav)
 
 
-def ai_program_preview_keyboard() -> InlineKeyboardMarkup:
+def ai_program_preview_keyboard(replacing: bool = False) -> InlineKeyboardMarkup:
     """Превью программы, собранной тренером: сохранить или отказаться.
 
     Сохранение создаёт по программе на каждый её день (см.
     handlers/ai_trainer.ai_program_save), поэтому подпись говорит «добавить»,
     а не «сохранить программу» — в списке появится несколько строк.
+
+    `replacing` — это правка уже сохранённой программы, а не новая: тап удалит
+    её старые дни, и кнопка обязана говорить «обновить», а не «добавить».
     """
     b = InlineKeyboardBuilder()
-    b.button(text="✅ Добавить себе", callback_data="ai:prog:save")
+    b.button(
+        text="✅ Обновить программу" if replacing else "✅ Добавить себе",
+        callback_data="ai:prog:save",
+    )
     b.button(text="❌ Не надо", callback_data="ai:prog:drop")
     b.adjust(1)
     return b.as_markup()

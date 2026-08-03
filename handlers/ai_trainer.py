@@ -481,9 +481,12 @@ async def ai_program_view(callback: CallbackQuery, state: FSMContext):
     draft = await _program_draft(callback, state)
     if draft is None:
         return
-    text = formatting.build_ai_program_preview(draft["name"], draft["days"])
+    replaces = draft.get("replaces")
+    text = formatting.build_ai_program_preview(draft["name"], draft["days"], replaces=replaces)
     await callback.message.answer(
-        text, parse_mode="HTML", reply_markup=keyboards.ai_program_preview_keyboard()
+        text,
+        parse_mode="HTML",
+        reply_markup=keyboards.ai_program_preview_keyboard(replacing=bool(replaces)),
     )
     await callback.answer()
 
@@ -501,8 +504,19 @@ async def ai_program_save(callback: CallbackQuery, state: FSMContext):
 
     user_id = callback.from_user.id
     days = draft["days"]
+    # Правка существующей программы: её дни уходят, новые встают на их место
+    # (см. ai_trainer._resolve_replaced_program). Считаем лимит с учётом
+    # освобождающихся мест — иначе правка программы того же размера упиралась бы
+    # в потолок только потому, что старая версия ещё цела.
+    replaced_ids = []
+    for rid in (draft.get("replaces") or {}).get("routine_ids", []):
+        # Программу могли удалить (или переделать) руками между предложением и
+        # тапом — тогда заменять уже нечего, и это просто добавление.
+        routine = await db.get_routine(rid)
+        if routine is not None and routine["user_id"] == user_id:
+            replaced_ids.append(rid)
     existing = await db.count_routines(user_id)
-    if existing + len(days) > ai_trainer.MAX_ROUTINES_PER_USER:
+    if existing - len(replaced_ids) + len(days) > ai_trainer.MAX_ROUTINES_PER_USER:
         await callback.answer(
             f"У тебя уже {existing} программ — больше {ai_trainer.MAX_ROUTINES_PER_USER} "
             "не влезет. Удали лишние в «🗂 Программы» и попробуй ещё раз.",
@@ -510,6 +524,8 @@ async def ai_program_save(callback: CallbackQuery, state: FSMContext):
         )
         return
 
+    for routine_id in replaced_ids:
+        await db.delete_routine(routine_id)
     for day in days:
         await db.create_routine_from_program(
             # .get на target: черновик переживает перезапуск в FSM-сторадже, так
@@ -520,11 +536,18 @@ async def ai_program_save(callback: CallbackQuery, state: FSMContext):
         )
     await state.update_data(ai_program_draft=None)
 
-    word = formatting.plural_ru(len(days), ("программу", "программы", "программ"))
-    text = (
-        f"✅ <b>Добавил {len(days)} {word}.</b>\n\n"
-        "Ищи их в «🗂 Программы» — оттуда начинается тренировка по любой из них."
-    )
+    if replaced_ids:
+        day_word = formatting.plural_ru(len(days), ("день", "дня", "дней"))
+        text = (
+            f"✅ <b>Обновил программу «{escape(draft['name'])}».</b>\n\n"
+            f"Теперь в ней {len(days)} {day_word} — ищи в «🗂 Программы»."
+        )
+    else:
+        word = formatting.plural_ru(len(days), ("программу", "программы", "программ"))
+        text = (
+            f"✅ <b>Добавил {len(days)} {word}.</b>\n\n"
+            "Ищи их в «🗂 Программы» — оттуда начинается тренировка по любой из них."
+        )
     with suppress(TelegramBadRequest):
         await callback.message.edit_text(
             text, parse_mode="HTML", reply_markup=keyboards.ai_program_saved_keyboard()
