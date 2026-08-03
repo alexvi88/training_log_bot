@@ -2219,7 +2219,9 @@ async def add_routine_exercise(
         await conn().commit()
 
 
-async def append_routine_exercise(routine_id: int, exercise_id: int) -> None:
+async def append_routine_exercise(
+    routine_id: int, exercise_id: int, target: Optional[str] = None
+) -> None:
     """Add an exercise to the end of a routine that already exists — the "✏️ edit
     an already-saved program" path, as opposed to add_routine_exercise's use
     building a fresh routine where the caller tracks order_index itself.
@@ -2231,9 +2233,9 @@ async def append_routine_exercise(routine_id: int, exercise_id: int) -> None:
     async with _write_lock:
         await conn().execute(
             "INSERT INTO routine_exercises (routine_id, exercise_id, order_index, target) "
-            "SELECT ?, ?, COALESCE(MAX(order_index), -1) + 1, NULL "
+            "SELECT ?, ?, COALESCE(MAX(order_index), -1) + 1, ? "
             "FROM routine_exercises WHERE routine_id = ?",
-            (routine_id, exercise_id, routine_id),
+            (routine_id, exercise_id, target, routine_id),
         )
         await conn().commit()
 
@@ -2241,6 +2243,31 @@ async def append_routine_exercise(routine_id: int, exercise_id: int) -> None:
 async def remove_routine_exercise(routine_exercise_id: int) -> None:
     async with _write_lock:
         await conn().execute("DELETE FROM routine_exercises WHERE id = ?", (routine_exercise_id,))
+        await conn().commit()
+
+
+async def reorder_routine_exercise(routine_exercise_id: int, direction: str) -> None:
+    """Swap a routine exercise with its neighbor above ("up") or below ("down")
+    among the routine's visible (non-archived) exercises. No-op at either end."""
+    entry = await get_routine_exercise(routine_exercise_id)
+    if entry is None:
+        return
+    exercises = await list_routine_exercises(entry["routine_id"])
+    ids = [ex["id"] for ex in exercises]
+    if routine_exercise_id not in ids:
+        return
+    idx = ids.index(routine_exercise_id)
+    neighbor_idx = idx - 1 if direction == "up" else idx + 1
+    if neighbor_idx < 0 or neighbor_idx >= len(ids):
+        return
+    a, b = exercises[idx], exercises[neighbor_idx]
+    async with _write_lock:
+        await conn().execute(
+            "UPDATE routine_exercises SET order_index = ? WHERE id = ?", (b["order_index"], a["id"])
+        )
+        await conn().execute(
+            "UPDATE routine_exercises SET order_index = ? WHERE id = ?", (a["order_index"], b["id"])
+        )
         await conn().commit()
 
 

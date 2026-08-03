@@ -84,6 +84,7 @@ class RoutineFlow(StatesGroup):
     renaming_program = State()
     adding_exercise_group = State()
     adding_exercise_pick = State()
+    adding_exercise_target = State()
 
 
 class ImportFlow(StatesGroup):
