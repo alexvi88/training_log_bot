@@ -85,6 +85,14 @@ GROK_BASE_URL = os.getenv("GROK_BASE_URL", "https://api.x.ai/v1")
 # cycling the whole time, so it doesn't even look broken.
 AI_REQUEST_TIMEOUT_SECONDS = float(os.getenv("AI_REQUEST_TIMEOUT_SECONDS", "90"))
 
+# Как часто накопленный текст ответа уходит в черновик во время стриминга
+# (см. ai_trainer._completion_round). Не на каждый токен: каждый флаш — это
+# запрос sendMessageDraft, а у Telegram свои лимиты на частоту. Мельче шаг —
+# живее «печать», но больше запросов; упрёмся в лимит — стриминг молча
+# выключится до конца ответа, и текст приедет одним куском.
+# В env, чтобы подбирать на живых ответах без релиза.
+AI_STREAM_FLUSH_SECONDS = float(os.getenv("AI_STREAM_FLUSH_SECONDS", "0.6"))
+
 # Reasoning depth for GROK_MODEL calls (low/medium/high — xAI defaults to
 # "high" when unset, which reasoning models can't turn off). Split in two
 # rather than one flat value for every call:
@@ -97,9 +105,9 @@ AI_REQUEST_TIMEOUT_SECONDS = float(os.getenv("AI_REQUEST_TIMEOUT_SECONDS", "90")
 # GROK_QUICK_REASONING_EFFORT — everything else on GROK_MODEL: the workout
 # comment, the weekly digest, food-photo analysis, and the search-worth-it
 # gate (a 3-token yes/no classification). None of these need open-ended
-# reasoning, and since streaming was removed the user stares at "думаю..."
-# for the model's full thinking time with nothing live to show for it — low
-# keeps that wait (and the cost) down where it doesn't buy anything.
+# reasoning, and none of them stream — unlike the chat loop, the user has
+# nothing live to watch while the model thinks, so low keeps that wait (and
+# the cost) down where it doesn't buy anything.
 GROK_REASONING_EFFORT = os.getenv("GROK_REASONING_EFFORT", "medium")
 GROK_QUICK_REASONING_EFFORT = os.getenv("GROK_QUICK_REASONING_EFFORT", "low")
 

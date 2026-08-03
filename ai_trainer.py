@@ -1591,9 +1591,10 @@ def _plain_user_content(question: str, image_data_url: Optional[str]) -> Any:
     ]
 
 
-# Как часто отдаём накопленный текст наружу во время стрима. Не на каждый
-# токен: получатель шлёт его в Telegram, а там свои лимиты на частоту запросов.
-STREAM_FLUSH_SECONDS = 1.2
+# Как часто отдаём накопленный текст наружу во время стрима — см.
+# config.AI_STREAM_FLUSH_SECONDS (не на каждый токен: получатель шлёт его в
+# Telegram, а там лимиты на частоту запросов).
+STREAM_FLUSH_SECONDS = config.AI_STREAM_FLUSH_SECONDS
 
 # Первый флаш ждёт не только тайминга, но и объёма: время до первого токена
 # модели (thinking, network) само по себе часто больше STREAM_FLUSH_SECONDS,

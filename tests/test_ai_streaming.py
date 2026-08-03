@@ -202,3 +202,14 @@ async def test_without_a_chunk_callback_the_call_is_not_streamed(monkeypatch):
 
     assert content == "ответ"
     assert "stream" not in client.chat.completions.create.await_args.kwargs
+
+
+async def test_flush_cadence_is_configurable():
+    """Шаг стриминга подбирается на живых ответах, поэтому живёт в env, а не в
+    коде: мельче — «печать» живее, но каждый флаш это запрос sendMessageDraft,
+    и упёршись в лимиты Telegram стример молча выключится до конца ответа."""
+    import ai_trainer
+    import config
+
+    assert ai_trainer.STREAM_FLUSH_SECONDS == config.AI_STREAM_FLUSH_SECONDS
+    assert 0 < config.AI_STREAM_FLUSH_SECONDS <= 2
