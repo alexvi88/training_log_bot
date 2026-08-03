@@ -2335,6 +2335,26 @@ async def delete_routine(routine_id: int) -> None:
         await db.commit()
 
 
+async def delete_program(user_id: int, program_name: str) -> None:
+    """Delete every day belonging to a multi-day program."""
+    async with _write_lock:
+        db = conn()
+        day_ids = [
+            r["id"] for r in await (
+                await db.execute(
+                    "SELECT id FROM routines WHERE user_id = ? AND program_name = ?",
+                    (user_id, program_name),
+                )
+            ).fetchall()
+        ]
+        for day_id in day_ids:
+            await db.execute("DELETE FROM routine_exercises WHERE routine_id = ?", (day_id,))
+        await db.execute(
+            "DELETE FROM routines WHERE user_id = ? AND program_name = ?", (user_id, program_name)
+        )
+        await db.commit()
+
+
 async def _find_global_template_by_name(name: str) -> Optional[aiosqlite.Row]:
     """Case-insensitive (Cyrillic-safe) match of a global template by its bare name."""
     cur = await conn().execute(

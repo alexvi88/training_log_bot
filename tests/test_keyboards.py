@@ -133,9 +133,17 @@ def test_routine_detail_keyboard_has_no_per_exercise_delete_rows():
     cbs = _callback_datas(kb)
     assert not any(cb.startswith("rt:rmex:") for cb in cbs)
     assert "rt:start:7" in cbs
-    assert "rt:edit:7" in cbs
+    assert "rt:editmenu:7" in cbs
     # The one destructive action left on this screen asks for confirmation.
     assert "rt:delask:7" in cbs
+
+
+def test_routine_edit_menu_keyboard_offers_composition_and_rename():
+    kb = keyboards.routine_edit_menu_keyboard(7)
+    cbs = _callback_datas(kb)
+    assert "rt:edit:7" in cbs
+    assert "rt:rename:7" in cbs
+    assert "rt:view:7" in cbs
 
 
 def test_routine_edit_keyboard_carries_the_removals():

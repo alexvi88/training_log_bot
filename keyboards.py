@@ -49,7 +49,6 @@ def main_menu(has_active_workout: bool, show_quick_log: bool = False) -> InlineK
     # find out what the bot does — and "menu:ai" had a handler no keyboard sent.
     if show_quick_log:
         b.button(text="✍️ Записать прошлую тренировку", callback_data="menu:quicklog")
-    b.button(text="🤖 AI-тренер", callback_data="menu:ai")
     b.button(text="📈 Прогресс", callback_data="menu:progress")
     b.button(text="📚 История", callback_data="menu:history")
     b.button(text="⚙️ Упражнения", callback_data="menu:exercises")
@@ -58,10 +57,11 @@ def main_menu(has_active_workout: bool, show_quick_log: bool = False) -> InlineK
     b.button(text="🍽 Дневник еды", callback_data="menu:food")
     b.button(text="🏆 Достижения", callback_data="menu:achievements")
     b.button(text="🔧 Настройки", callback_data="menu:settings")
-    # start/resume, quick-log (if shown) and AI-тренер full width, then pairs:
+    b.button(text="🤖 AI-тренер", callback_data="menu:ai")
+    # start/resume and quick-log (if shown) full width, then pairs:
     # Прогресс·История, Упражнения·Программы, Дневник веса·Дневник еды,
-    # Достижения·Настройки.
-    b.adjust(*([1, 1, 1] if show_quick_log else [1, 1]), 2, 2, 2, 2)
+    # Достижения·Настройки, then AI-тренер full width at the very bottom.
+    b.adjust(*([1, 1] if show_quick_log else [1]), 2, 2, 2, 2, 1)
     return b.as_markup()
 
 
@@ -417,10 +417,10 @@ def routines_manage_keyboard(programs, routines, has_workouts: bool) -> InlineKe
         )
     for r in routines:
         b.button(text=r["name"], callback_data=f"rt:view:{r['id']}")
+    b.button(text="✨ Готовые программы", callback_data="rt:programs")
     if has_workouts:
         b.button(text="➕ Из тренировки", callback_data="rt:pickw:page:0")
     b.button(text="🤖 Составить с AI-тренером", callback_data="ai:buildprog")
-    b.button(text="✨ Готовые программы", callback_data="rt:programs")
     b.button(text="🏠 Меню", callback_data="rt:menu")
     b.adjust(1)
     return b.as_markup()
@@ -432,6 +432,7 @@ def program_days_keyboard(days, anchor_id: int) -> InlineKeyboardMarkup:
     for d in days:
         b.button(text=d["name"], callback_data=f"rt:view:{d['id']}")
     b.button(text="✏️ Переименовать программу", callback_data=f"rt:pgmrename:{anchor_id}")
+    b.button(text="🗑 Удалить программу", callback_data=f"rt:pgmdelask:{anchor_id}")
     b.button(text="⬅️ Назад", callback_data="rt:manage")
     b.adjust(1)
     return b.as_markup()
@@ -493,14 +494,27 @@ def routine_detail_keyboard(routine_id: int, program_anchor_id: int | None = Non
     не к самому верху: иначе «назад» перепрыгивает через экран, с которого сюда
     и пришли.
     """
+    back = "rt:manage" if program_anchor_id is None else f"rt:pgm:{program_anchor_id}"
     b = InlineKeyboardBuilder()
     b.row(InlineKeyboardButton(text="▶️ Начать тренировку", callback_data=f"rt:start:{routine_id}"))
+    b.row(
+        InlineKeyboardButton(text="✏️ Редактировать", callback_data=f"rt:editmenu:{routine_id}"),
+        InlineKeyboardButton(text="🗑 Удалить программу", callback_data=f"rt:delask:{routine_id}"),
+    )
+    b.row(
+        InlineKeyboardButton(text="📤 Поделиться", callback_data=f"share:rt:{routine_id}"),
+        InlineKeyboardButton(text="⬅️ К списку", callback_data=back),
+    )
+    return b.as_markup()
+
+
+def routine_edit_menu_keyboard(routine_id: int) -> InlineKeyboardMarkup:
+    """Sub-menu behind "✏️ Редактировать": состав и название редко трогают
+    вместе, но обе — правки, а не отдельные действия верхнего уровня."""
+    b = InlineKeyboardBuilder()
     b.row(InlineKeyboardButton(text="✏️ Изменить состав", callback_data=f"rt:edit:{routine_id}"))
     b.row(InlineKeyboardButton(text="✏️ Переименовать", callback_data=f"rt:rename:{routine_id}"))
-    b.row(InlineKeyboardButton(text="📤 Поделиться", callback_data=f"share:rt:{routine_id}"))
-    b.row(InlineKeyboardButton(text="🗑 Удалить программу", callback_data=f"rt:delask:{routine_id}"))
-    back = "rt:manage" if program_anchor_id is None else f"rt:pgm:{program_anchor_id}"
-    b.row(InlineKeyboardButton(text="⬅️ К списку", callback_data=back))
+    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"rt:view:{routine_id}"))
     return b.as_markup()
 
 

@@ -83,7 +83,7 @@ async def rt_program_days(callback: CallbackQuery, state: FSMContext):
         day_blocks.append("\n".join([f"<b>{escape(day['name'])}</b>", *ex_lines]))
     text = "\n\n".join([
         f"🗂 <b>{escape(program_name)}</b>",
-        formatting.collapsible_if_long("\n\n".join(day_blocks)),
+        "\n\n".join(day_blocks),
         "Выбери день — посмотреть состав или начать тренировку.",
     ])
     await ui.safe_edit(
@@ -235,6 +235,19 @@ async def _show_routine_editor(event, state: FSMContext, routine_id: int) -> Non
 async def rt_view(callback: CallbackQuery, state: FSMContext):
     routine_id = int(callback.data.split(":")[2])
     await _show_routine_detail(callback, state, routine_id)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("rt:editmenu:"))
+async def rt_edit_menu(callback: CallbackQuery, state: FSMContext):
+    routine_id = int(callback.data.split(":")[2])
+    routine = await _owned_routine(callback, routine_id)
+    if routine is None:
+        return
+    await ui.safe_edit(
+        callback, f"✏️ <b>{escape(routine['name'])}</b>",
+        reply_markup=keyboards.routine_edit_menu_keyboard(routine_id), parse_mode="HTML",
+    )
     await callback.answer()
 
 
@@ -431,6 +444,36 @@ async def rt_program_rename_entered(message: Message, state: FSMContext):
     await db.rename_program(message.from_user.id, anchor["program_name"], name)
     await state.set_state(None)
     await show_manage(message, state)
+
+
+@router.callback_query(F.data.startswith("rt:pgmdelask:"))
+async def rt_program_delete_confirm(callback: CallbackQuery, state: FSMContext):
+    anchor_id = int(callback.data.split(":")[2])
+    anchor = await _owned_routine(callback, anchor_id)
+    if anchor is None or not anchor["program_name"]:
+        return
+    kb = keyboards.yes_no_keyboard(
+        yes_cb=f"rt:pgmdelyes:{anchor_id}", no_cb=f"rt:pgm:{anchor_id}",
+        yes_text="🗑 Удалить", no_text="❌ Отмена",
+    )
+    await ui.safe_edit(
+        callback,
+        f"Удалить программу «{escape(anchor['program_name'])}» целиком, все дни? "
+        "История тренировок не пострадает.",
+        reply_markup=kb, parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("rt:pgmdelyes:"))
+async def rt_program_delete(callback: CallbackQuery, state: FSMContext):
+    anchor_id = int(callback.data.split(":")[2])
+    anchor = await _owned_routine(callback, anchor_id)
+    if anchor is None or not anchor["program_name"]:
+        return
+    await db.delete_program(callback.from_user.id, anchor["program_name"])
+    await callback.answer("Программа удалена")
+    await show_manage(callback, state)
 
 
 @router.callback_query(F.data.startswith("rt:delask:"))
