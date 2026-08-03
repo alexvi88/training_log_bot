@@ -463,7 +463,7 @@ async def test_adding_a_catalog_program_shows_one_row_not_one_per_day(fresh_db, 
 
     program = PROGRAM_BY_KEY["ppl"]
     buttons = await _manage_buttons(fresh_db, user_id)
-    program_rows = [b for b in buttons if b[1].startswith("rt:pgm:")]
+    program_rows = [b for b in buttons if b[1].startswith("rt:prg:")]
 
     assert len(program_rows) == 1
     assert program["name"] in program_rows[0][0]
@@ -476,15 +476,18 @@ async def test_opening_a_program_lists_its_days(fresh_db, user_id):
         _make_callback(user_id, "rt:progadd:ppl"), await _make_state(user_id)
     )
     buttons = await _manage_buttons(fresh_db, user_id)
-    anchor_cb = next(b[1] for b in buttons if b[1].startswith("rt:pgm:"))
+    program_cb = next(b[1] for b in buttons if b[1].startswith("rt:prg:"))
 
-    callback = _make_callback(user_id, anchor_cb)
-    await routines.rt_program_days(callback, await _make_state(user_id))
+    callback = _make_callback(user_id, program_cb)
+    await routines.rt_program(callback, await _make_state(user_id))
 
     kb = callback.message.answer.await_args.kwargs["reply_markup"]
     labels = [b.text for row in kb.inline_keyboard for b in row]
     day_names = [day_name for day_name, _ex in PROGRAM_BY_KEY["ppl"]["days"]]
-    assert labels[: len(day_names)] == day_names
+    # Первый день поднят наверх как «сегодня» — по нему программа и начинается,
+    # пока она ни разу не пройдена (см. db.next_program_day).
+    assert labels[0] == f"▶️ Сегодня: {day_names[0]}"
+    assert labels[1 : len(day_names)] == day_names[1:]
     assert labels[-1] == "⬅️ Назад"
 
 
@@ -494,7 +497,7 @@ async def test_a_standalone_routine_still_opens_straight_into_its_card(fresh_db,
     buttons = await _manage_buttons(fresh_db, user_id)
 
     assert [b for b in buttons if b[1].startswith("rt:view:")]
-    assert not [b for b in buttons if b[1].startswith("rt:pgm:")]
+    assert not [b for b in buttons if b[1].startswith("rt:prg:")]
 
 
 async def test_a_program_day_goes_back_to_its_day_list_not_the_top(fresh_db, user_id):
@@ -508,7 +511,7 @@ async def test_a_program_day_goes_back_to_its_day_list_not_the_top(fresh_db, use
 
     kb = callback.message.answer.await_args.kwargs["reply_markup"]
     back = [b.callback_data for row in kb.inline_keyboard for b in row][-1]
-    assert back.startswith("rt:pgm:")
+    assert back.startswith("rt:prg:")
 
 
 async def test_a_standalone_routine_goes_back_to_the_top_list(fresh_db, user_id):
@@ -527,10 +530,10 @@ async def test_renaming_a_program_from_its_day_screen(fresh_db, user_id):
     заглушку вместо имени — переименование и есть то, чем она перестаёт ей быть."""
     for day in ("День 1", "День 2"):
         await fresh_db.create_routine(user_id, day, program_name="Программа от 28.07")
-    anchor = (await fresh_db.list_programs(user_id))[0]["anchor_id"]
+    program_id = (await fresh_db.list_programs(user_id))[0]["id"]
     state = await _make_state(user_id)
 
-    await routines.rt_program_rename(_make_callback(user_id, f"rt:pgmrename:{anchor}"), state)
+    await routines.rt_program_rename(_make_callback(user_id, f"rt:pgmrename:{program_id}"), state)
     assert await state.get_state() == RoutineFlow.renaming_program
 
     await routines.rt_program_rename_entered(_make_message(user_id, "Верх/низ"), state)
@@ -539,12 +542,12 @@ async def test_renaming_a_program_from_its_day_screen(fresh_db, user_id):
     assert await state.get_state() is None
 
 
-async def test_renaming_rejects_a_standalone_routine(fresh_db, user_id):
+async def test_renaming_rejects_something_that_is_not_a_program(fresh_db, user_id):
+    """rt:pgmrename адресуется программе, а не её «якорному» дню, так что id
+    одиночной программы (это routine, не program) сюда просто не подходит."""
     rid = await fresh_db.create_routine(user_id, "Своя тренировка")
     callback = _make_callback(user_id, f"rt:pgmrename:{rid}")
 
     await routines.rt_program_rename(callback, await _make_state(user_id))
 
-    callback.answer.assert_awaited_once_with(
-        "Это не программа из нескольких дней", show_alert=True
-    )
+    callback.answer.assert_awaited_once_with("Программа не найдена", show_alert=True)

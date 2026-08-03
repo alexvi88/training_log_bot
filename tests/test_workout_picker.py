@@ -466,10 +466,10 @@ async def test_pick_template_add_forks_and_enters_logging(fresh_db, user_id):
 # ---------- "Составить программу с AI" on the fresh-workout picker ----------
 
 
-async def _picker_extra_callbacks(db, user_id, monkeypatch) -> list[str]:
-    """Render the first picker screen of a fresh workout and return the callback
-    data of its buttons. _refresh_live is stubbed — the keyboard is the subject
-    here, not the live tracker it gets rendered into."""
+async def _picker_keyboard(db, user_id, monkeypatch):
+    """Render the first picker screen of a fresh workout and return its keyboard.
+    _refresh_live is stubbed — the keyboard is the subject here, not the live
+    tracker it gets rendered into."""
     captured = {}
 
     async def fake_refresh_live(bot, state, user, workout_id, hint, kb):
@@ -484,7 +484,17 @@ async def _picker_extra_callbacks(db, user_id, monkeypatch) -> list[str]:
 
     await workout._picker_screen_groups(callback, state, show_program_button=True)
 
-    return [b.callback_data for row in captured["kb"].inline_keyboard for b in row]
+    return captured["kb"]
+
+
+async def _picker_extra_callbacks(db, user_id, monkeypatch) -> list[str]:
+    kb = await _picker_keyboard(db, user_id, monkeypatch)
+    return [b.callback_data for row in kb.inline_keyboard for b in row]
+
+
+async def _picker_extra_buttons(db, user_id, monkeypatch) -> list[tuple[str, str]]:
+    kb = await _picker_keyboard(db, user_id, monkeypatch)
+    return [(b.text, b.callback_data) for row in kb.inline_keyboard for b in row]
 
 
 async def test_picker_offers_building_a_program_when_the_user_has_none(
@@ -527,13 +537,17 @@ async def test_picker_hides_the_ai_program_button_when_the_trainer_is_off(
 async def test_picker_shows_a_button_for_a_recently_trained_program(fresh_db, user_id, monkeypatch):
     """Someone running a split shouldn't have to detour through 🗂 Программы to
     find today's day — the program they've actually trained by this month is
-    right there above the muscle groups."""
-    routine_id = await fresh_db.create_routine(user_id, "Ноги", program_name="Верх/низ")
-    await fresh_db.create_workout(user_id, routine_id=routine_id)
+    right there above the muscle groups, naming the day whose turn it is."""
+    program_id = await fresh_db.create_program(user_id, "Верх/низ")
+    legs = await fresh_db.create_routine(user_id, "Ноги", program_id=program_id)
+    upper = await fresh_db.create_routine(user_id, "Верх", program_id=program_id)
+    await fresh_db.create_workout(user_id, routine_id=legs)
 
-    callbacks = await _picker_extra_callbacks(fresh_db, user_id, monkeypatch)
+    buttons = await _picker_extra_buttons(fresh_db, user_id, monkeypatch)
 
-    assert f"rt:pgm:{routine_id}" in callbacks
+    # Не список дней, а сразу карточка следующего по очереди — «Ноги» уже
+    # сделаны, значит на очереди «Верх» (см. db.next_program_day).
+    assert ("🗂 Верх/низ · Верх", f"rt:view:{upper}") in buttons
 
 
 async def test_picker_ignores_programs_not_trained_recently(fresh_db, user_id, monkeypatch):
@@ -545,7 +559,7 @@ async def test_picker_ignores_programs_not_trained_recently(fresh_db, user_id, m
 
     callbacks = await _picker_extra_callbacks(fresh_db, user_id, monkeypatch)
 
-    assert f"rt:pgm:{routine_id}" not in callbacks
+    assert f"rt:view:{routine_id}" not in callbacks
 
 
 async def test_picker_offers_no_more_than_the_recent_program_cap(fresh_db, user_id, monkeypatch):
@@ -553,9 +567,11 @@ async def test_picker_offers_no_more_than_the_recent_program_cap(fresh_db, user_
         routine_id = await fresh_db.create_routine(user_id, f"День {i}", program_name=f"Программа {i}")
         await fresh_db.create_workout(user_id, routine_id=routine_id)
 
-    callbacks = await _picker_extra_callbacks(fresh_db, user_id, monkeypatch)
+    labels = [b[0] for b in await _picker_extra_buttons(fresh_db, user_id, monkeypatch)]
 
-    assert len([c for c in callbacks if c.startswith("rt:pgm:")]) == workout.MAX_RECENT_PROGRAM_BUTTONS
+    # «🗂 Выбрать программу» — постоянный пункт, а не одна из недавних.
+    recent = [t for t in labels if t.startswith("🗂 ") and t != "🗂 Выбрать программу"]
+    assert len(recent) == workout.MAX_RECENT_PROGRAM_BUTTONS
 
 
 async def test_picker_shows_no_recent_programs_without_any_routine_backed_workouts(

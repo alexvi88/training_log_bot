@@ -1,6 +1,7 @@
 """AI-trainer cost logging (db.cost_events) and the admin daily cost report."""
 
 import datetime as dt
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -108,3 +109,27 @@ async def test_build_cost_report_omits_transcription_line_when_none(fresh_db, us
     report = await admin_tasks._build_cost_report(today)
 
     assert "Голосовых" not in report
+
+
+@pytest.mark.asyncio
+async def test_daily_report_prunes_expired_share_cards(fresh_db, monkeypatch):
+    """`shared_items` рос монотонно: каждое «📤 Поделиться» — строка навсегда,
+    и ничто её не убирало."""
+    old = (dt.datetime.now() - dt.timedelta(days=config.SHARED_ITEMS_RETENTION_DAYS + 1))
+    fresh = await fresh_db.create_shared_item(1, "routine", "{}")
+    stale = await fresh_db.create_shared_item(1, "routine", "{}")
+    await fresh_db.conn().execute(
+        "UPDATE shared_items SET created_at = ? WHERE token = ?",
+        (old.isoformat(timespec="seconds"), stale),
+    )
+    await fresh_db.conn().commit()
+
+    bot = MagicMock()
+    bot.send_message = AsyncMock()
+    bot.send_document = AsyncMock()
+    monkeypatch.setattr(config, "ADMIN_ID", 1)
+
+    await admin_tasks._send_daily_report(bot)
+
+    assert await fresh_db.get_shared_item(fresh) is not None
+    assert await fresh_db.get_shared_item(stale) is None

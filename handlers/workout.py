@@ -645,6 +645,12 @@ async def _main_menu_kb(user_id: int, active) -> InlineKeyboardMarkup:
 _WORKOUT_SCAFFOLD_KEYS = (
     "workout_id", "open_exercises", "open_blocks", "active_exercise_id",
     "last_by_exercise", "last_session_sets", "weight_steps",
+    # The remaining program plan for this workout: which exercises are still
+    # queued, their targets and any weights the user already confirmed for
+    # them. Same reasoning as the rest of this tuple — stepping out to the
+    # menu mid-workout must not throw away the plan the user is partway
+    # through (see _clear_state_keep_workout below).
+    "planned_blocks", "exercise_targets", "confirmed_weights",
     # Not workout scaffolding, but the same reasoning: stepping out to the menu
     # and back shouldn't make the AI-тренер forget the conversation in progress.
     "ai_history",
@@ -666,9 +672,12 @@ async def _reset_new_workout_scaffold(state: FSMContext) -> None:
     workout's `open_exercises`/`open_blocks` map ("exercise → block_id of the
     *previous* workout") survives into the new one: the picker shows a phantom
     "Открыто сейчас: …", and logging into that tab writes the new set's block
-    into yesterday's already-finished workout instead of today's.
+    into yesterday's already-finished workout instead of today's. Same story
+    for a leftover `planned_blocks`/`exercise_targets`/`confirmed_weights` —
+    those now live in `_WORKOUT_SCAFFOLD_KEYS` too, so they'd otherwise survive
+    into the new workout as someone else's plan.
     """
-    keys = {*_WORKOUT_SCAFFOLD_KEYS, "confirmed_weights", "exercise_targets", "planned_blocks"}
+    keys = set(_WORKOUT_SCAFFOLD_KEYS)
     # Not workout scaffolding — the AI chat and its pending program proposal
     # survive across workouts on purpose.
     keys.discard("ai_history")
@@ -1196,6 +1205,31 @@ async def _reopen_exercises(
     return open_exercises, open_blocks, last_session_sets, last_by_exercise, weight_steps
 
 
+async def _rebuild_planned_blocks_from_routine(workout_id: int, routine_id: int) -> list[dict]:
+    """Rederive a workout's remaining program plan when `planned_blocks` didn't
+    survive in the FSM — e.g. handlers/sharing.py's bare `state.clear()` when
+    opening a shared link mid-workout, or any other future full clear.
+
+    `routine_id` on the workout row is the only trace left once the FSM's plan
+    is gone, but it's enough: the routine's exercises minus whatever this
+    workout has already opened (db.list_exercise_ids_for_workout), in routine
+    order, give back the same `[{"exercise_ids": [id], "targets": {id: target}}]`
+    shape `_begin_routine_workout` (handlers/routines.py) builds when the
+    workout is first started from a routine.
+
+    This can only ever reconstruct the plan a routine implies, not one the
+    user has been trimming by hand (see live_plan_skip) — callers must not use
+    it when a plan, even an empty one, is already sitting in the FSM.
+    """
+    exercises = await db.list_routine_exercises(routine_id)
+    done_ids = set(await db.list_exercise_ids_for_workout(workout_id))
+    return [
+        {"exercise_ids": [ex["exercise_id"]], "targets": {ex["exercise_id"]: ex["target"]}}
+        for ex in exercises
+        if ex["exercise_id"] not in done_ids
+    ]
+
+
 async def _enter_live(
     callback: CallbackQuery, state: FSMContext, workout_id: int, delete_message: bool = True
 ):
@@ -1222,6 +1256,24 @@ async def _enter_live(
             open_exercises, open_blocks, last_session_sets, last_by_exercise, weight_steps,
         ) = await _reopen_exercises(workout_id)
         active_exercise_id = open_exercises[-1] if open_exercises else None
+    extra: dict = {}
+    same_workout = data.get("workout_id") == workout_id
+    current_planned = data.get("planned_blocks") if same_workout else None
+    if current_planned is None:
+        # Missing (as opposed to `[]`, which means the plan was deliberately
+        # emptied — see live_plan_skip/_load_next_planned_block), or left over
+        # from a different workout entirely — the FSM lost it (or never had it
+        # for this workout), so try to get it back from the routine the
+        # workout started from.
+        workout = await db.get_workout(workout_id)
+        if workout is not None and workout["routine_id"] is not None:
+            extra["planned_blocks"] = await _rebuild_planned_blocks_from_routine(
+                workout_id, workout["routine_id"]
+            )
+        elif not same_workout:
+            # No routine to rebuild from, but the leftover value (if any) was
+            # some other workout's plan — don't let it leak into this one.
+            extra["planned_blocks"] = None
     if delete_message:
         await _delete_message(callback.message)
     sent = await callback.message.answer("🏋️ Тренировка")
@@ -1230,7 +1282,7 @@ async def _enter_live(
         workout_id=workout_id, live_chat_id=sent.chat.id, live_message_id=sent.message_id,
         last_by_exercise=last_by_exercise, open_exercises=open_exercises, open_blocks=open_blocks,
         active_exercise_id=active_exercise_id, last_session_sets=last_session_sets,
-        weight_steps=weight_steps,
+        weight_steps=weight_steps, **extra,
     )
     if open_exercises:
         await _render_logging_screen(callback.bot, state, user)
@@ -1310,15 +1362,27 @@ async def _picker_screen_groups(callback: CallbackQuery, state: FSMContext, show
         # Программы, по которым человек ходит сейчас, — выше групп мышц: у того,
         # кто тренируется по сплиту, выбор дня программы и есть начало
         # тренировки, а группы мышц ниже остаются для «сегодня по-своему».
-        # Кнопка ведёт в список дней программы (rt:pgm), а не стартует день
-        # сразу: какой сегодня день — решает человек.
+        #
+        # Кнопка называет день, до которого дошла очередь, и ведёт прямо на его
+        # карточку. Раньше она вела в список дней — то есть между «хочу
+        # тренироваться» и «тренируюсь» стоял экран из одинаковых кнопок, по
+        # которым надо было самому вспомнить, что вчера был «Толкай». Очередь
+        # считается из истории (db.next_program_day), так что это подсказка, а
+        # не рельсы: остальные дни по-прежнему в одном тапе за «⬅️ К списку».
         since = (
             timeutil.user_today(user) - dt.timedelta(days=RECENT_PROGRAM_DAYS)
         ).isoformat()
         recent = await db.list_recent_programs(
             callback.from_user.id, since, limit=MAX_RECENT_PROGRAM_BUTTONS
         )
-        top_buttons = [(f"🗂 {p['name']}", f"rt:pgm:{p['anchor_id']}") for p in recent]
+        for p in recent:
+            next_day = (
+                await db.next_program_day(p["program_id"]) if p["program_id"] else None
+            )
+            if next_day is not None:
+                top_buttons.append((f"🗂 {p['name']} · {next_day['name']}", f"rt:view:{next_day['id']}"))
+            else:
+                top_buttons.append((f"🗂 {p['name']}", f"rt:view:{p['routine_id']}"))
         # Offered only on the very first picker screen of a fresh workout: pick
         # any past session to re-run for people who train A/B without a saved
         # program, plus the shortcut into saved programs.
@@ -2251,10 +2315,63 @@ async def _load_next_planned_block(event, state: FSMContext, index: int = 0) -> 
     return True
 
 
+async def _program_complete_stats(workout_id: int) -> tuple[int, int, float]:
+    """Cheap (exercise count, set count, tonnage-in-user-unit) for the "🎉
+    Программа пройдена" screen.
+
+    Deliberately *not* `_record_highlights_and_summary` — that also walks every
+    exercise's whole history to compute PRs/comparisons, which is the right
+    cost for the one finish card at the end of the workout but wasted work for
+    an in-session moment that fires every time the plan empties out (including
+    mid-workout, well before the user has decided to finish). Tonnage here is
+    the same sum-of-weight×reps `analytics.SessionStats.tonnage` uses, just
+    without building the dataclasses for numbers nothing else needs.
+    """
+    exercise_ids = await db.list_exercise_ids_for_workout(workout_id)
+    set_count = 0
+    tonnage = 0.0
+    for ex_id in exercise_ids:
+        rows = await db.list_sets_for_workout_exercise(workout_id, ex_id)
+        set_count += len(rows)
+        tonnage += sum(r["weight"] * r["reps"] for r in rows)
+    return len(exercise_ids), set_count, tonnage
+
+
+async def _enter_program_complete_screen(bot, state: FSMContext, user, workout_id: int) -> None:
+    """The moment the program's queue runs dry — the one unambiguously good
+    beat in a session, so it earns a real screen instead of a grey
+    `callback.answer("Шаблон закончился")` alert (and, wherever the alert used
+    to say "шаблон", the rest of this subsystem always says "программа").
+
+    Nothing about the workout itself changes here — the plan is just empty —
+    so the keyboard underneath is the same idle one `_enter_idle_screen` would
+    draw (➕ Упражнение / 🏁 Завершить тренировку and friends); only the banner
+    above it is different.
+    """
+    await _clear_sticky_photo(bot, state)
+    data = await state.get_data()
+    done_ids = tuple(await db.list_exercise_ids_for_workout(workout_id))
+    ex_count, set_count, tonnage = await _program_complete_stats(workout_id)
+    lines = ["🎉 <b>Программа пройдена</b>"]
+    if ex_count:
+        ex_word = formatting.plural_ru(ex_count, ("упражнение", "упражнения", "упражнений"))
+        set_word = formatting.plural_ru(set_count, ("подход", "подхода", "подходов"))
+        stats = f"{ex_count} {ex_word}, {set_count} {set_word}"
+        if tonnage:
+            stats += f", {formatting.format_tonnage(tonnage, user['unit'])}"
+        lines.append(stats)
+    hint = "\n".join(lines)
+    _, kb = await _idle_view(data, user["telegram_id"], is_empty=not done_ids, done_ids=done_ids)
+    await _refresh_live(bot, state, user, workout_id, hint, kb)
+
+
 @router.callback_query(StateFilter(WorkoutFlow.idle), F.data == "live:next_planned")
 async def live_next_planned(callback: CallbackQuery, state: FSMContext):
     if not await _load_next_planned_block(callback, state):
-        await callback.answer("Шаблон закончился")
+        data = await state.get_data()
+        user = await db.get_user(callback.from_user.id)
+        await _enter_program_complete_screen(callback.bot, state, user, data["workout_id"])
+        await callback.answer()
         return
     await callback.answer()
 
@@ -2269,7 +2386,9 @@ async def live_plan(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     planned = list(data.get("planned_blocks") or [])
     if not planned:
-        await callback.answer("Программа пройдена")
+        user = await db.get_user(callback.from_user.id)
+        await _enter_program_complete_screen(callback.bot, state, user, data["workout_id"])
+        await callback.answer()
         return
     items = [(i, await _planned_block_label(b)) for i, b in enumerate(planned)]
     hint = "📋 <b>Осталось по программе</b>\nВыбери, что делать сейчас — порядок не обязателен."
@@ -2287,6 +2406,37 @@ async def live_plan_pick(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Это упражнение уже не в плане")
         return
     await callback.answer()
+
+
+@router.callback_query(StateFilter(WorkoutFlow.idle), F.data.startswith("live:plan:skip:"))
+async def live_plan_skip(callback: CallbackQuery, state: FSMContext):
+    """Drop a queued block from the plan outright — for a machine that's
+    actually broken (not just busy), "тренажёр занят" (live_plan_pick, the
+    primary action on each row) doesn't help: the exercise would just sit
+    queued for the rest of the session. This never opens anything, so unlike
+    live_plan_pick it re-renders the same 📋 screen (minus the dropped row)
+    rather than falling through to the logging screen — except when that was
+    the last thing left, which is the same "program done" moment picking the
+    last exercise would have reached.
+    """
+    index = int(callback.data.split(":")[3])
+    data = await state.get_data()
+    planned = list(data.get("planned_blocks") or [])
+    if not 0 <= index < len(planned):
+        await callback.answer("Это упражнение уже не в плане")
+        return
+    planned.pop(index)
+    await state.update_data(planned_blocks=planned)
+    user = await db.get_user(callback.from_user.id)
+    if planned:
+        items = [(i, await _planned_block_label(b)) for i, b in enumerate(planned)]
+        hint = "📋 <b>Осталось по программе</b>\nВыбери, что делать сейчас — порядок не обязателен."
+        await _refresh_live(
+            callback.bot, state, user, data["workout_id"], hint, keyboards.planned_plan_keyboard(items),
+        )
+    else:
+        await _enter_program_complete_screen(callback.bot, state, user, data["workout_id"])
+    await callback.answer("Пропустил")
 
 
 @router.callback_query(StateFilter(WorkoutFlow.idle), F.data == "live:plan:back")

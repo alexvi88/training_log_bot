@@ -81,11 +81,14 @@ class BodyweightFlow(StatesGroup):
 
 class RoutineFlow(StatesGroup):
     naming = State()
+    naming_program = State()   # многодневка из нескольких прошлых тренировок
+    naming_day = State()       # новый день внутри уже существующей программы
     renaming = State()
     renaming_program = State()
     adding_exercise_group = State()
     adding_exercise_pick = State()
     adding_exercise_target = State()
+    editing_exercise_target = State()  # схема подходов у уже добавленного упражнения
 
 
 class ImportFlow(StatesGroup):

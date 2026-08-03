@@ -8,7 +8,7 @@ import datetime as dt
 import re
 from dataclasses import dataclass, field
 from html import escape
-from typing import Literal, Optional
+from typing import Callable, Literal, Optional
 
 from aiogram.types import MessageEntity
 
@@ -516,13 +516,34 @@ def build_ai_comment_block(comment: str) -> str:
     return f"{DIVIDER}\n🤖 <b>Комментарий AI-тренера</b>\n{collapsible_if_long(markdown_bold_to_html(comment))}"
 
 
-# Запас под строку «…и ещё N упражнений», которой заканчивается обрезанный
-# состав программы (см. build_ai_program_preview).
-_TRUNCATION_RESERVE = 120
 
 
 def _day_key(name: str) -> str:
     return name.strip().lower()
+
+
+def format_progression_rule(progression: Optional[dict]) -> str:
+    """Короткая человекочитаемая строка правила прогрессии (5.6/3.2 —
+    ai_trainer._clean_progression, db.set_routine_exercise_progression): без неё
+    превью показывало бы схему подходов, но не то, как её менять дальше, а это
+    ровно то, что раньше терялось вместе с чатом.
+
+    Модульного уровня, потому что нужна в двух местах: и в составе программы, и
+    в блоке «что меняется» — правило, которое правка молча переписала, ничем не
+    хуже изменившейся схемы и должно читаться так же.
+    """
+    if not progression:
+        return ""
+    rule = progression.get("rule")
+    step = progression.get("step")
+    if rule == "double_progression":
+        top = progression.get("reps_top")
+        if top and step:
+            return f"дошёл до {top} повторов — прибавь {step:g}"
+        return "двойная прогрессия"
+    if rule == "linear_load":
+        return f"+{step:g} каждую тренировку" if step else "линейная прогрессия"
+    return ""
 
 
 def build_program_changes(old_days: list[dict], new_days: list[dict]) -> list[str]:
@@ -561,10 +582,21 @@ def build_program_changes(old_days: list[dict], new_days: list[dict]) -> list[st
             if was is None:
                 suffix = f" — {escape(target)}" if target else ""
                 changes.append(f"  ➕ {escape(item['name'])}{suffix}")
-            elif (was.get("target") or "") != (target or ""):
+                continue
+            if (was.get("target") or "") != (target or ""):
                 changes.append(
                     f"  ✏️ {escape(item['name'])}: "
                     f"{escape(was.get('target') or 'без схемы')} → {escape(target or 'без схемы')}"
+                )
+            # Правило прогрессии — такая же часть упражнения, как схема, и
+            # переписанное молча оно тем неприятнее, что именно по нему потом
+            # считается подсказка веса.
+            was_rule = format_progression_rule(was.get("progression"))
+            now_rule = format_progression_rule(item.get("progression"))
+            if was_rule != now_rule:
+                changes.append(
+                    f"  ⤴️ {escape(item['name'])}: "
+                    f"{escape(was_rule or 'без прогрессии')} → {escape(now_rule or 'без прогрессии')}"
                 )
         for item in old_day["items"]:
             if item["name"].strip().lower() not in new_items:
@@ -575,21 +607,96 @@ def build_program_changes(old_days: list[dict], new_days: list[dict]) -> list[st
     return lines
 
 
+# Запас, который блок «что меняется» обязан оставить после себя для состава
+# ниже (см. build_ai_program_preview, _truncate_block): состав обрезается уже
+# ПОСЛЕ изменений и делит с ними один и тот же общий лимит Telegram — если бы
+# изменения расходовали его весь без остатка, составу не хватило бы места даже
+# на собственную строку «…и ещё N упражнений», и итог всё равно перевалил бы
+# за лимит. С запасом в разы больше самой длинной такой строки — с учётом
+# 3-значных чисел и русской словоформы — этого не случится.
+_COMPOSITION_NOTE_RESERVE = 140
+
+
+def _truncate_block(
+    candidate_lines: list[str],
+    already: list[str],
+    tail: list[str],
+    is_item: Callable[[str], bool],
+    note: Callable[[int], str],
+    reserve: int = 0,
+) -> list[str]:
+    """Добавить candidate_lines к already построчно, пока итог (already + kept
+    + tail) укладывается в MESSAGE_LIMIT - reserve; остаток сворачивается в
+    одну строку от note().
+
+    Общий механизм для обоих переменных по размеру блоков превью программы
+    (см. build_ai_program_preview) — блока «что меняется» и состава: раньше
+    обрезался только состав, а блок изменений на большой правке (много дней,
+    имена не менялись — см. build_program_changes) сам по себе перевешивал
+    лимит, и тогда не отправлялось вообще ничего.
+
+    `reserve` — сколько символов заведомо оставить свободными после этого
+    блока для того, что будет обрезано следующим (см.
+    _COMPOSITION_NOTE_RESERVE): без этого первый же обрезанный блок мог занять
+    буквально весь лимит под свою note(), не оставив второму места даже на
+    собственную «…и ещё N» — раньше оба блока резервировали один и тот же
+    _TRUNCATION_RESERVE независимо друг от друга, и на двух одновременно
+    обрезанных блоках итог всё равно перевешивал MESSAGE_LIMIT.
+
+    Проверка на каждом шаге — это полная длина сообщения, а не абстрактный
+    «бюджет в символах»: после того, как основной цикл остановился, note ещё
+    раз проверяется на месте и, если впритык не влезла, забирает место у уже
+    добавленных строк, а не сообщения целиком.
+    """
+    budget = MESSAGE_LIMIT - reserve
+
+    def fits(extra: list[str]) -> bool:
+        return telegram_length("\n".join(already + extra + tail)) <= budget
+
+    kept: list[str] = []
+    cut_at = len(candidate_lines)
+    for index, line in enumerate(candidate_lines):
+        if not fits(kept + [line]):
+            cut_at = index
+            break
+        kept.append(line)
+    else:
+        return kept  # все строки уместились — резать было нечего
+
+    hidden = sum(1 for rest in candidate_lines[cut_at:] if is_item(rest))
+    if not hidden:
+        return kept
+
+    note_lines = ["", note(hidden)]
+    while kept and not fits(kept + note_lines):
+        kept.pop()
+        hidden = sum(1 for rest in candidate_lines[len(kept):] if is_item(rest))
+        note_lines = ["", note(hidden)]
+    return kept + note_lines
+
+
 def build_ai_program_preview(
-    name: str, days: list[dict], replaces: Optional[dict] = None
+    name: str, days: list[dict], replaces: Optional[dict] = None, notes: Optional[list[str]] = None,
 ) -> str:
     """Превью программы, которую собрал AI-тренер, до её сохранения.
 
     `days` — черновик из ai_trainer.propose_program: [{"name", "items": [{"name",
-    "target", "source"}]}]. Каждый день станет отдельной программой в списке
-    пользователя, поэтому текст проговаривает это прямо — иначе «добавить»
-    выглядит как одна новая строка, а появится несколько.
+    "target", "source", "progression"?}]}]. Дни складываются в одну программу с
+    общим именем (routine_exercises.program_name — см.
+    db.create_routine_from_program), в списке пользователя это одна строка с
+    числом дней, а не несколько.
 
     `replaces` — сохранённая программа, которую эта правка заменит: {"name",
     "days"} со старым составом. Замена стирает старые дни, поэтому превью и
     называется правкой, и показывает разницу со старой версией: без этого
     человеку пришлось бы сличать два списка по десятку упражнений глазами,
     чтобы понять, что тренер вообще поменял.
+
+    `notes` — 5.3: человеческие фразы о том, что молча срезалось или не
+    нашлось (дней/упражнений было больше лимита, имя обрезано, упражнение не
+    из каталога) — раньше это уходило только модели полем в JSON, и если она
+    забывала упомянуть об этом в ответе, пользователь просто не узнавал, что
+    попросил семь дней, а получил шесть.
     """
     total = sum(len(day["items"]) for day in days)
     new_names = sorted(
@@ -604,12 +711,14 @@ def build_ai_program_preview(
         f"<b>{escape(name)}</b>",
         f"{len(days)} {day_word} · {total} {ex_word}",
     ]
-    if replaces:
-        # Что меняется — выше состава: решение принимают по разнице, а полный
-        # список ниже нужен уже для «ок, и как это теперь выглядит целиком».
-        changes = build_program_changes(replaces.get("days") or [], days)
-        lines += ["", "🔄 <b>Что меняется:</b>"]
-        lines += changes or ["Состав тот же — меняется только порядок или название."]
+
+    # 5.3: клампы и потери, которые раньше уходили только модели JSON-полями
+    # (truncated_days/truncated_exercises/unresolved/name_truncated в
+    # ai_trainer._propose_program) — здесь тем же текстом, что видит модель, но
+    # адресовано пользователю напрямую: он не должен зависеть от того, упомянет
+    # ли модель в ответе, что просил семь дней, а получил шесть.
+    if notes:
+        lines += ["", "⚠️ <b>На заметку:</b>"] + [f"• {escape(n)}" for n in notes]
 
     composition: list[str] = []
     for day in days:
@@ -618,6 +727,9 @@ def build_ai_program_preview(
             target = item.get("target")
             suffix = f" — {escape(target)}" if target else ""
             composition.append(f"{i}. {escape(item['name'])}{suffix}")
+            prog_note = format_progression_rule(item.get("progression"))
+            if prog_note:
+                composition.append(f"   ⤴️ {escape(prog_note)}")
 
     tail = ["", DIVIDER]
     if replaces:
@@ -629,30 +741,64 @@ def build_ai_program_preview(
         tail.append("Добавлю как программу — начать по ней тренировку можно в один тап.")
     else:
         tail.append(
-            f"Добавлю как {len(days)} отдельные программы — по каждой начинаешь тренировку в один тап."
+            f"Добавлю программу «{escape(name)}» из {len(days)} {day_word} — "
+            "начать тренировку по любому можно в один тап."
         )
     if new_names:
-        word = plural_ru(len(new_names), ("упражнение", "упражнения", "упражнений"))
+        # Родительный падеж множественного числа тут фиксированный, а не по
+        # plural_ru(len(new_names), ...): «Новых для тебя» требует именно его
+        # при любом количестве («упражнение: 1» читалось бы как согласование с
+        # числом, а не с «для тебя», см. A13) — ср. «Новых упражнений: 1/2/5».
         tail.append(
-            f"Новых для тебя {word}: {len(new_names)} — добавлю их в твой список автоматически."
+            f"Новых для тебя упражнений: {len(new_names)} — добавлю их в твой список автоматически."
         )
 
-    # Шесть дней по двенадцать упражнений (потолки propose_program) плюс блок
-    # изменений переваливают за лимит Telegram — и тогда не отправится вообще
-    # ничего. Режем именно полный состав: он ниже всего по важности (итог всё
-    # равно окажется в «🗂 Программы»), а шапка, разница и предупреждение о
-    # замене должны дойти целиком.
-    budget = MESSAGE_LIMIT - telegram_length("\n".join(lines + tail)) - _TRUNCATION_RESERVE
-    kept: list[str] = []
-    for index, line in enumerate(composition):
-        if telegram_length("\n".join(kept + [line])) > budget:
-            hidden = sum(1 for rest in composition[index:] if rest.startswith(tuple("0123456789")))
-            if hidden:
-                word = plural_ru(hidden, ("упражнение", "упражнения", "упражнений"))
-                kept += ["", f"<i>…и ещё {hidden} {word} — покажу целиком в «🗂 Программы».</i>"]
-            break
-        kept.append(line)
-    return "\n".join(lines + kept + tail)
+    # Что меняется — выше состава: решение принимают по разнице, а полный
+    # список ниже нужен уже для «ок, и как это теперь выглядит целиком».
+    # Блок сам по себе переменного размера (шесть дней с сохранёнными именами
+    # и полностью новым составом дают под четверть сотни строк на день — см.
+    # test_preview_of_an_edit_that_keeps_day_names_still_fits) и режется по
+    # тому же принципу, что и состав ниже.
+    changes_block: list[str] = []
+    if replaces:
+        changes_header = ["", "🔄 <b>Что меняется:</b>"]
+        changes_body = build_program_changes(replaces.get("days") or [], days) or [
+            "Состав тот же — меняется только порядок или название."
+        ]
+        kept_changes = _truncate_block(
+            changes_body,
+            already=lines + changes_header,
+            tail=tail,
+            is_item=lambda line: any(sym in line for sym in ("➕", "➖", "✏️")),
+            note=lambda n: (
+                f"<i>…и ещё {n} {plural_ru(n, ('изменение', 'изменения', 'изменений'))} — "
+                "не поместились, полный состав смотри ниже и в «🗂 Программы» после сохранения.</i>"
+            ),
+            # Оставляем составу ниже гарантированное место хотя бы на
+            # собственную «…и ещё N упражнений» (см. _COMPOSITION_NOTE_RESERVE) —
+            # иначе на программе, где обрезаны оба блока разом, их note()
+            # конкурировали бы за один и тот же хвост лимита.
+            reserve=_COMPOSITION_NOTE_RESERVE,
+        )
+        changes_block = changes_header + kept_changes
+    lines += changes_block
+
+    # Шесть дней по двенадцать упражнений (потолки propose_program) сами по
+    # себе переваливают за лимит Telegram — и тогда не отправится вообще
+    # ничего. Состав ниже всего по важности (итог всё равно окажется в «🗂
+    # Программы»), поэтому от него отрезается то, что не влезло уже после
+    # шапки, блока изменений (если он был) и хвоста.
+    kept_composition = _truncate_block(
+        composition,
+        already=lines,
+        tail=tail,
+        is_item=lambda line: bool(line) and line[0].isdigit(),
+        note=lambda n: (
+            f"<i>…и ещё {n} {plural_ru(n, ('упражнение', 'упражнения', 'упражнений'))} — "
+            "покажу целиком в «🗂 Программы».</i>"
+        ),
+    )
+    return "\n".join(lines + kept_composition + tail)
 
 
 # Fun, shareable size comparisons for a tonnage total — (emoji, kg each, declensions),

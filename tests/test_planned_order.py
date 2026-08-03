@@ -69,6 +69,15 @@ def _last_keyboard(callback):
     return None
 
 
+def _last_text(callback):
+    """The text of whatever the live tracker was last drawn/edited with (the
+    tracker itself, not the disposable "🏋️ Тренировка" placeholder message)."""
+    for mock in (callback.bot.edit_message_text, callback.bot.send_message):
+        if mock.await_args is not None:
+            return mock.await_args.kwargs.get("text")
+    return None
+
+
 def _callback_datas(kb):
     return [b.callback_data for row in kb.inline_keyboard for b in row]
 
@@ -108,8 +117,12 @@ async def test_plan_screen_lists_everything_left_with_targets(fresh_db, user_id)
     cb = _make_callback(user_id, "live:plan")
     await workout.live_plan(cb, state)
     kb = _last_keyboard(cb)
-    assert _button_texts(kb) == ["Разводка — 3x12", "Брусья", "⬅️ Назад"]
-    assert _callback_datas(kb) == ["live:plan:pick:0", "live:plan:pick:1", "live:plan:back"]
+    assert _button_texts(kb) == ["Разводка — 3x12", "✕", "Брусья", "✕", "⬅️ Назад"]
+    assert _callback_datas(kb) == [
+        "live:plan:pick:0", "live:plan:skip:0",
+        "live:plan:pick:1", "live:plan:skip:1",
+        "live:plan:back",
+    ]
 
 
 async def test_picking_out_of_order_opens_it_and_keeps_the_rest_queued(fresh_db, user_id):
@@ -177,3 +190,102 @@ async def test_plan_button_hidden_when_only_one_exercise_is_left(fresh_db, user_
     )
     assert "live:plan" not in _callback_datas(kb)
     assert "▶️ Жим лёжа" in _button_texts(kb)
+
+
+# ---------- skipping a queued exercise (4.5): the machine is broken, not just busy ----------
+
+
+async def test_skip_drops_the_block_and_redraws_the_plan_screen(fresh_db, user_id):
+    db = fresh_db
+    await _start_program(db, user_id, state := await _state(user_id), [
+        ("Жим лёжа", "4x8"), ("Разводка", "3x12"), ("Брусья", None),
+    ])
+    await _go_idle(user_id, state)
+
+    cb = _make_callback(user_id, "live:plan:skip:0")
+    await workout.live_plan_skip(cb, state)
+
+    data = await state.get_data()
+    # Only the skipped block (Разводка, index 0 of what's left) is gone — the
+    # workout itself is untouched, and we're still on the 📋 screen, not bumped
+    # into logging_set.
+    assert len(data["planned_blocks"]) == 1
+    assert await state.get_state() == WorkoutFlow.idle
+    cb.answer.assert_awaited_once_with("Пропустил")
+    kb = _last_keyboard(cb)
+    assert "Разводка" not in _button_texts(kb)
+    assert "Брусья" in _button_texts(kb)
+
+
+async def test_skip_out_of_range_answers_stale_instead_of_crashing(fresh_db, user_id):
+    db = fresh_db
+    await _start_program(db, user_id, state := await _state(user_id), [("Жим лёжа", None), ("Разводка", None)])
+    await _go_idle(user_id, state)
+
+    cb = _make_callback(user_id, "live:plan:skip:5")
+    await workout.live_plan_skip(cb, state)
+    assert cb.answer.await_args.args == ("Это упражнение уже не в плане",)
+
+
+async def test_skipping_the_last_planned_exercise_reaches_the_program_complete_screen(fresh_db, user_id):
+    db = fresh_db
+    ex_ids = await _start_program(db, user_id, state := await _state(user_id), [("Жим лёжа", None), ("Разводка", None)])
+    data = await state.get_data()
+    await db.append_set(data["open_blocks"][ex_ids[0]], ex_ids[0], 0, 100, 8)
+    await _go_idle(user_id, state)
+
+    cb = _make_callback(user_id, "live:plan:skip:0")
+    await workout.live_plan_skip(cb, state)
+
+    assert (await state.get_data())["planned_blocks"] == []
+    text = _last_text(cb)
+    assert "Программа пройдена" in text
+    assert "🏁 Завершить тренировку" in _button_texts(_last_keyboard(cb))
+
+
+# ---------- program-complete moment (4.6 / B9): a real screen, not a grey alert ----------
+
+
+async def test_next_planned_on_an_empty_plan_shows_the_program_complete_screen(fresh_db, user_id):
+    db = fresh_db
+    await _start_program(db, user_id, state := await _state(user_id), [("Жим лёжа", "4x8")])
+    await _go_idle(user_id, state)  # opens the only planned exercise, plan now empty
+
+    cb = _make_callback(user_id, "live:next_planned")
+    await workout.live_next_planned(cb, state)
+
+    assert "Шаблон" not in (_last_text(cb) or "")
+    assert "🎉" in _last_text(cb) and "Программа пройдена" in _last_text(cb)
+    # No more grey alert text either — the button silently lands on the new screen.
+    cb.answer.assert_awaited_once_with()
+
+
+async def test_plan_screen_on_an_empty_plan_shows_the_program_complete_screen(fresh_db, user_id):
+    db = fresh_db
+    await _start_program(db, user_id, state := await _state(user_id), [("Жим лёжа", "4x8")])
+    await _go_idle(user_id, state)
+    await state.update_data(planned_blocks=[])  # already emptied out
+
+    cb = _make_callback(user_id, "live:plan")
+    await workout.live_plan(cb, state)
+
+    text = _last_text(cb)
+    assert "Программа пройдена" in text
+    cb.answer.assert_awaited_once_with()
+
+
+async def test_program_complete_screen_reports_this_session_numbers(fresh_db, user_id):
+    db = fresh_db
+    ex_ids = await _start_program(db, user_id, state := await _state(user_id), [("Жим лёжа", "4x8")])
+    data = await state.get_data()
+    block_id = data["open_blocks"][ex_ids[0]]
+    await db.append_set(block_id, ex_ids[0], 0, 100, 8)
+    await db.append_set(block_id, ex_ids[0], 0, 100, 8)
+    await _go_idle(user_id, state)
+
+    cb = _make_callback(user_id, "live:next_planned")
+    await workout.live_next_planned(cb, state)
+
+    text = _last_text(cb)
+    assert "1 упражнение" in text
+    assert "2 подхода" in text

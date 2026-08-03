@@ -76,6 +76,10 @@ async def _send_daily_report(bot: Bot) -> None:
         ),
     )
     await db.prune_old_cost_events(config.COST_EVENTS_RETENTION_DAYS)
+    cutoff = (
+        dt.datetime.now() - dt.timedelta(days=config.SHARED_ITEMS_RETENTION_DAYS)
+    ).isoformat(timespec="seconds")
+    await db.delete_shared_items_older_than(cutoff)
 
     backup_name = f"training_log_backup_{dt.date.today().isoformat()}.db"
     backup_path = os.path.join(tempfile.gettempdir(), backup_name)

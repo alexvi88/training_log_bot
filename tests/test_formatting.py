@@ -791,3 +791,57 @@ def test_workout_card_footer_counts_every_set_not_the_collapsed_ones():
         dt.datetime(2026, 7, 26, 13), blocks
     )
     assert "5 сетов" in footer
+
+
+def test_program_changes_report_a_rewritten_progression_rule():
+    """Правило прогрессии — такая же часть упражнения, как схема подходов, и
+    молча переписанное оно тем неприятнее, что по нему считается подсказка веса."""
+    old_days = [{
+        "name": "Толкай",
+        "items": [{
+            "name": "Жим лёжа", "target": "4×8",
+            "progression": {"rule": "linear_load", "step": 2.5},
+        }],
+    }]
+    new_days = [{
+        "name": "Толкай",
+        "items": [{
+            "name": "Жим лёжа", "target": "4×8",
+            "progression": {"rule": "double_progression", "reps_top": 8, "step": 2.5},
+        }],
+    }]
+
+    changes = formatting.build_program_changes(old_days, new_days)
+
+    assert changes == [
+        "<b>Толкай</b>",
+        "  ⤴️ Жим лёжа: +2.5 каждую тренировку → дошёл до 8 повторов — прибавь 2.5",
+    ]
+
+
+def test_program_changes_stay_quiet_when_the_rule_is_unchanged():
+    day = {
+        "name": "Толкай",
+        "items": [{
+            "name": "Жим лёжа", "target": "4×8",
+            "progression": {"rule": "linear_load", "step": 2.5},
+        }],
+    }
+    assert formatting.build_program_changes([day], [day]) == []
+
+
+def test_program_changes_name_a_rule_that_appears_or_disappears():
+    plain = {"name": "Толкай", "items": [{"name": "Жим лёжа", "target": "4×8"}]}
+    with_rule = {
+        "name": "Толкай",
+        "items": [{
+            "name": "Жим лёжа", "target": "4×8",
+            "progression": {"rule": "linear_load", "step": 2.5},
+        }],
+    }
+
+    added = formatting.build_program_changes([plain], [with_rule])
+    removed = formatting.build_program_changes([with_rule], [plain])
+
+    assert added[1] == "  ⤴️ Жим лёжа: без прогрессии → +2.5 каждую тренировку"
+    assert removed[1] == "  ⤴️ Жим лёжа: +2.5 каждую тренировку → без прогрессии"
