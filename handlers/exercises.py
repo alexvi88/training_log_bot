@@ -450,13 +450,14 @@ def _exercise_edit_menu_keyboard(ex) -> InlineKeyboardMarkup:
     b.button(text="✏️ Группа", callback_data=f"exm:editgroup:{ex['id']}")
     b.button(text=description_label, callback_data=f"exm:editdesc:{ex['id']}")
     b.button(text="✏️ Фото", callback_data=f"exm:addphoto:{ex['id']}")
+    b.button(text="🔀 Объединить с другим", callback_data=f"exm:mergestart:{ex['id']}")
     if ex["custom_photo_file_id"]:
         b.button(text="🗑 Удалить фото", callback_data=f"exm:delphotoask:{ex['id']}")
         b.button(text="⬅️ Назад", callback_data=f"exm:ex:{ex['id']}")
-        b.adjust(2, 2, 1, 1)
+        b.adjust(2, 2, 1, 1, 1)
     else:
         b.button(text="⬅️ Назад", callback_data=f"exm:ex:{ex['id']}")
-        b.adjust(2, 2, 1)
+        b.adjust(2, 2, 1, 1)
     return b.as_markup()
 
 
@@ -618,6 +619,94 @@ async def exm_delete_photo(callback: CallbackQuery, state: FSMContext):
     has_images = await _send_exercise_images(callback.message, ex, state)
     text, kb = await _exercise_detail_payload(ex, state, with_info=not has_images)
     await callback.message.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
+def _merge_target_keyboard(source_id: int, candidates) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    items = [(f"exm:mergepick:{ex['id']}", ex["display_name"]) for ex in candidates if ex["id"] != source_id]
+    for row in keyboards.named_buttons(items):
+        b.row(*row)
+    b.row(InlineKeyboardButton(text="❌ Отмена", callback_data=f"exm:editmenu:{source_id}"))
+    return b.as_markup()
+
+
+@router.callback_query(F.data.startswith("exm:mergestart:"))
+async def exm_merge_start(callback: CallbackQuery, state: FSMContext):
+    ex_id = int(callback.data.split(":")[2])
+    ex = await db.get_exercise(ex_id)
+    if ex is None or ex["user_id"] != callback.from_user.id:
+        await callback.answer("Упражнение не найдено", show_alert=True)
+        return
+    await state.update_data(exm_merge_source_id=ex_id)
+    await state.set_state(ExerciseManage.picking_merge_target)
+    candidates = await db.search_exercises(callback.from_user.id, "")
+    text = (
+        f"С каким упражнением объединить «{escape(ex['display_name'])}»?\n"
+        "Вся история (подходы, тренировки, программы) перейдёт в выбранное, "
+        f"а «{escape(ex['display_name'])}» удалится. Выбери из списка или напиши название для поиска:"
+    )
+    await ui.safe_edit(callback, text, reply_markup=_merge_target_keyboard(ex_id, candidates), parse_mode="HTML")
+    await callback.answer()
+
+
+@router.message(StateFilter(ExerciseManage.picking_merge_target), F.text)
+async def exm_merge_search_text(message: Message, state: FSMContext):
+    query = message.text.strip()
+    if not query:
+        return
+    data = await state.get_data()
+    source_id = data["exm_merge_source_id"]
+    candidates = await db.search_exercises(message.from_user.id, query)
+    candidates = [ex for ex in candidates if ex["id"] != source_id]
+    text = (
+        f"Результаты поиска «{escape(query)}»:" if candidates
+        else f"Ничего не нашлось по «{escape(query)}»."
+    )
+    await message.answer(text, reply_markup=_merge_target_keyboard(source_id, candidates))
+
+
+@router.callback_query(StateFilter(ExerciseManage.picking_merge_target), F.data.startswith("exm:mergepick:"))
+async def exm_merge_pick(callback: CallbackQuery, state: FSMContext):
+    target_id = int(callback.data.split(":")[2])
+    data = await state.get_data()
+    source_id = data.get("exm_merge_source_id")
+    source = await db.get_exercise(source_id) if source_id else None
+    target = await db.get_exercise(target_id)
+    if source is None or target is None or target["user_id"] != callback.from_user.id:
+        await callback.answer("Упражнение не найдено", show_alert=True)
+        return
+    kb = keyboards.yes_no_keyboard(
+        yes_cb=f"exm:mergeyes:{target_id}",
+        no_cb=f"exm:mergestart:{source_id}",
+        yes_text="🔀 Объединить",
+        no_text="❌ Отмена",
+    )
+    await ui.safe_edit(
+        callback,
+        f"Объединить «{escape(source['display_name'])}» с «{escape(target['display_name'])}»?\n"
+        f"Вся история «{escape(source['display_name'])}» перейдёт в «{escape(target['display_name'])}», "
+        f"а «{escape(source['display_name'])}» будет удалено. Отменить это действие нельзя.",
+        reply_markup=kb,
+    )
+    await callback.answer()
+
+
+@router.callback_query(StateFilter(ExerciseManage.picking_merge_target), F.data.startswith("exm:mergeyes:"))
+async def exm_merge_confirm(callback: CallbackQuery, state: FSMContext):
+    target_id = int(callback.data.split(":")[2])
+    data = await state.get_data()
+    source_id = data.get("exm_merge_source_id")
+    if source_id is None:
+        await callback.answer("Упражнение не найдено", show_alert=True)
+        return
+    ok = await db.merge_exercises(callback.from_user.id, keep_id=target_id, drop_id=source_id)
+    if not ok:
+        await callback.answer("Не получилось объединить", show_alert=True)
+        return
+    await state.update_data(exm_merge_source_id=None)
+    await state.set_state(ExerciseManage.picking_exercise)
+    await callback.answer("Упражнения объединены")
+    await _render_exercise_card(callback, state, target_id)
 
 
 @router.callback_query(F.data.startswith("prog:card:"))
