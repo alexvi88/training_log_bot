@@ -645,6 +645,11 @@ _WORKOUT_SCAFFOLD_KEYS = (
     # Not workout scaffolding, but the same reasoning: stepping out to the menu
     # and back shouldn't make the AI-тренер forget the conversation in progress.
     "ai_history",
+    # Same again for the program the trainer just proposed: its button lives in
+    # the answer's keyboard and stays tappable, so wiping the draft on a menu
+    # tap (or on opening the preview and stepping out of it) turned that button
+    # into a dead "предложение уже неактуально" alert.
+    "ai_program_draft",
 )
 
 
@@ -661,7 +666,10 @@ async def _reset_new_workout_scaffold(state: FSMContext) -> None:
     into yesterday's already-finished workout instead of today's.
     """
     keys = {*_WORKOUT_SCAFFOLD_KEYS, "confirmed_weights", "exercise_targets", "planned_blocks"}
-    keys.discard("ai_history")  # not workout scaffolding — the AI chat survives across workouts on purpose
+    # Not workout scaffolding — the AI chat and its pending program proposal
+    # survive across workouts on purpose.
+    keys.discard("ai_history")
+    keys.discard("ai_program_draft")
     await state.update_data(**{key: None for key in keys})
 
 

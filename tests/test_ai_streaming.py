@@ -5,11 +5,12 @@
 механизм под это, и его отсутствие на старом сервере/клиенте не должно ничего
 ломать: ответ всё равно приходит целиком одним сообщением.
 """
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 
 from handlers import ai_trainer as handler
 
@@ -26,12 +27,26 @@ def _message(user_id: int = 111):
     return msg
 
 
+@pytest.fixture(autouse=True)
+def _no_draft_pause(monkeypatch):
+    """Пауза между черновиками не должна растягивать тесты."""
+    monkeypatch.setattr(handler, "DRAFT_MIN_INTERVAL", 0)
+
+
+async def _settle():
+    """Дать фоновому писателю черновиков доработать до конца очереди."""
+    for _ in range(20):
+        await asyncio.sleep(0)
+
+
 async def test_pushes_accumulated_text_into_a_draft():
     msg = _message()
     streamer = handler._DraftStreamer(msg)
 
     await streamer.push("Смотрю твой жим")
+    await _settle()
     await streamer.push("Смотрю твой жим за месяц: три недели один вес")
+    await _settle()
 
     calls = msg.bot.send_message_draft.await_args_list
     assert [c.kwargs["text"] for c in calls] == [
@@ -39,12 +54,63 @@ async def test_pushes_accumulated_text_into_a_draft():
         "Смотрю твой жим за месяц: три недели один вес",
     ]
     assert {c.kwargs["draft_id"] for c in calls} == {42}  # один черновик на ответ
+    await streamer.close()
+
+
+async def test_push_does_not_wait_for_telegram():
+    """Главное свойство: чтение стрима модели не тормозит об отправку черновика.
+
+    Пока Telegram отвечает (или флудвейтит), `push` обязан возвращать управление
+    сразу — иначе дельты копятся в сокете, черновик замирает на полуслове, а
+    потом ответ «пробегает» целиком разом."""
+    msg = _message()
+    release = asyncio.Event()
+
+    async def _slow_draft(**kwargs):
+        await release.wait()
+
+    msg.bot.send_message_draft = AsyncMock(side_effect=_slow_draft)
+    streamer = handler._DraftStreamer(msg)
+
+    await asyncio.wait_for(streamer.push("первый"), timeout=1)
+    await asyncio.wait_for(streamer.push("первый второй"), timeout=1)
+
+    release.set()
+    await _settle()
+    # Пока отправка висела, промежуточные состояния просто схлопнулись в
+    # последнее: показывать устаревший черновик смысла нет.
+    assert msg.bot.send_message_draft.await_args.kwargs["text"] == "первый второй"
+    await streamer.close()
+
+
+async def test_flood_wait_only_pauses_the_draft(monkeypatch):
+    """429 — это «подожди», а не «сервер не умеет»: раньше флудвейт насовсем
+    гасил стриминг, и черновик замирал до самого ответа."""
+    msg = _message()
+    calls: list[str] = []
+
+    async def _draft(**kwargs):
+        calls.append(kwargs["text"])
+        if len(calls) == 1:
+            raise TelegramRetryAfter(method=MagicMock(), message="flood", retry_after=0)
+
+    msg.bot.send_message_draft = AsyncMock(side_effect=_draft)
+    streamer = handler._DraftStreamer(msg)
+
+    await streamer.push("первый кусок")
+    await _settle()
+    await streamer.push("первый кусок и второй")
+    await _settle()
+
+    assert calls[-1] == "первый кусок и второй"
+    await streamer.close()
 
 
 async def test_draft_is_cleared_so_it_does_not_hang_next_to_the_answer():
     msg = _message()
     streamer = handler._DraftStreamer(msg)
     await streamer.push("текст")
+    await _settle()
 
     await streamer.close()
 
@@ -67,7 +133,9 @@ async def test_an_unsupported_server_silently_disables_streaming():
     streamer = handler._DraftStreamer(msg)
 
     await streamer.push("первый кусок")
+    await _settle()
     await streamer.push("второй кусок")
+    await _settle()
 
     # Одна неудачная попытка, дальше даже не пробуем.
     assert msg.bot.send_message_draft.await_count == 1
@@ -79,14 +147,17 @@ async def test_only_the_tail_is_streamed_for_long_answers():
     streamer = handler._DraftStreamer(msg)
 
     await streamer.push("х" * (handler.MAX_DRAFT_CHARS + 500))
+    await _settle()
 
     sent = msg.bot.send_message_draft.await_args.kwargs["text"]
     assert len(sent) == handler.MAX_DRAFT_CHARS
+    await streamer.close()
 
 
 async def test_empty_chunks_are_not_sent():
     msg = _message()
     await handler._DraftStreamer(msg).push("")
+    await _settle()
     msg.bot.send_message_draft.assert_not_awaited()
 
 
