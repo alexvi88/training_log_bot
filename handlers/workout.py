@@ -373,7 +373,7 @@ def _logging_hint(
     # The program's recommended sets×reps, if this exercise was opened from a
     # routine that carries one — shown above the history/warning lines since
     # it's the plan for today, not a look back at a previous session.
-    target_line = f"🎯 План: {target}\n" if target else ""
+    target_line = f"📋 План: {target}\n" if target else ""
     warning = _suspicious_weight_warning(last_session, today_sets, unit)
     if warning and confirmed_weight is not None and today_sets and today_sets[-1][0] == confirmed_weight:
         # Already answered "да, записать" for exactly this weight — repeating the
@@ -1242,6 +1242,12 @@ async def _enter_live(
 _RECOVERY_MENTION_BELOW = 85
 _RECOVERY_MAX_MENTIONS = 3
 
+# Окно и лимит для «программ, по которым тренируешься сейчас» на первом экране
+# выбора (см. db.list_recent_programs) — не весь список сохранённых программ,
+# а те несколько, что реально были в ходу за последний месяц.
+RECENT_PROGRAM_DAYS = 30
+MAX_RECENT_PROGRAM_BUTTONS = 3
+
 
 async def _recovery_line(user_id: int, groups) -> str:
     """"💤 ЕЩЁ НЕ ОТДОХНУЛИ:\nноги — 40% восстановления\nспина — 70% восстановления"
@@ -1296,7 +1302,20 @@ async def _picker_screen_groups(callback: CallbackQuery, state: FSMContext, show
             )
             partner_buttons = [(p["id"], p["display_name"]) for p in partners]
     extra = []
+    top_buttons: list[tuple[str, str]] = []
     if show_program_button:
+        # Программы, по которым человек ходит сейчас, — выше групп мышц: у того,
+        # кто тренируется по сплиту, выбор дня программы и есть начало
+        # тренировки, а группы мышц ниже остаются для «сегодня по-своему».
+        # Кнопка ведёт в список дней программы (rt:pgm), а не стартует день
+        # сразу: какой сегодня день — решает человек.
+        since = (
+            timeutil.user_today(user) - dt.timedelta(days=RECENT_PROGRAM_DAYS)
+        ).isoformat()
+        recent = await db.list_recent_programs(
+            callback.from_user.id, since, limit=MAX_RECENT_PROGRAM_BUTTONS
+        )
+        top_buttons = [(f"🗂 {p['name']}", f"rt:pgm:{p['anchor_id']}") for p in recent]
         # Offered only on the very first picker screen of a fresh workout: pick
         # any past session to re-run for people who train A/B without a saved
         # program, plus the shortcut into saved programs.
@@ -1313,7 +1332,8 @@ async def _picker_screen_groups(callback: CallbackQuery, state: FSMContext, show
     # open before (see _back_after_cancel), so it reads as "⬅️ Назад", not "❌ Отмена".
     extra.append(("⬅️ Назад", "pick:cancel"))
     kb = keyboards.groups_keyboard(
-        groups, prefix="pick", extra_buttons=extra, show_all=True, partner_buttons=partner_buttons
+        groups, prefix="pick", extra_buttons=extra, show_all=True,
+        partner_buttons=partner_buttons, top_buttons=top_buttons,
     )
     await state.update_data(picker_stage="groups")
     await _refresh_live(callback.bot, state, user, data["workout_id"], hint, kb)
@@ -2133,7 +2153,7 @@ async def live_pick_suggested(callback: CallbackQuery, state: FSMContext):
 async def _load_next_planned_block(event, state: FSMContext) -> bool:
     """Open the next block from a routine's planned_blocks. Returns False if none left.
 
-    Shared by the "▶️ Следующее по шаблону" button and by starting a workout from
+    Shared by the "▶️ Следующее по программе" button and by starting a workout from
     a routine (handlers/routines.py), so both paths open blocks identically.
     """
     data = await state.get_data()
