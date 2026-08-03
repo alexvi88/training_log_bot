@@ -59,11 +59,33 @@ def _deep_link(username: str, token: str) -> str:
 # ---------- создание визитки ----------
 
 
+def _days_word(n: int) -> str:
+    """Russian plural for «день» (1 день, 2 дня, 5 дней)."""
+    if 11 <= n % 100 <= 14:
+        return "дней"
+    last = n % 10
+    if last == 1:
+        return "день"
+    if 2 <= last <= 4:
+        return "дня"
+    return "дней"
+
+
 def _routine_preview_lines(payload: dict[str, Any]) -> list[str]:
     lines = [f"🗂 <b>{escape(payload['name'])}</b>"]
     for i, ex in enumerate(payload["exercises"], start=1):
         suffix = f" — {escape(ex['target'])}" if ex.get("target") else ""
         lines.append(f"{i}. {escape(ex['name'])}{suffix}")
+    return lines
+
+
+def _program_preview_lines(payload: dict[str, Any]) -> list[str]:
+    lines = [f"🗂 <b>{escape(payload['name'])}</b>"]
+    for day in payload["days"]:
+        lines.append(f"\n<b>{escape(day['name'])}</b>")
+        for ex in day["exercises"]:
+            suffix = f" — {escape(ex['target'])}" if ex.get("target") else ""
+            lines.append(f"• {escape(ex['name'])}{suffix}")
     return lines
 
 
@@ -97,6 +119,48 @@ async def share_routine(callback: CallbackQuery, state: FSMContext):
 
     text = "\n".join(
         _routine_preview_lines(payload)
+        + ["", "<i>Перешли это сообщение — по кнопке программу можно забрать себе.</i>"]
+    )
+    await callback.message.answer(
+        text, parse_mode="HTML", reply_markup=_share_card_keyboard(url, "➕ Забрать программу себе")
+    )
+    await callback.answer("Визитка готова — пересылай 📤")
+
+
+@router.callback_query(F.data.startswith("share:pgm:"))
+async def share_program(callback: CallbackQuery, state: FSMContext):
+    """«📤 Поделиться программой» на экране списка дней: одна визитка на всю
+    многодневку, а не по дню за раз (см. share_routine)."""
+    anchor_id = int(callback.data.split(":")[2])
+    anchor = await db.get_routine(anchor_id)
+    if anchor is None or anchor["user_id"] != callback.from_user.id or not anchor["program_name"]:
+        await callback.answer("Программа не найдена", show_alert=True)
+        return
+    days = await db.list_program_days(callback.from_user.id, anchor["program_name"])
+    day_payloads = []
+    for day in days:
+        exercises = await db.list_routine_exercises(day["id"])
+        if not exercises:
+            continue
+        day_payloads.append(
+            {
+                "name": day["name"][:MAX_NAME_LEN],
+                "exercises": [
+                    {"name": ex["display_name"][:MAX_NAME_LEN], "target": ex["target"]}
+                    for ex in exercises[:MAX_SHARED_EXERCISES]
+                ],
+            }
+        )
+    if not day_payloads:
+        await callback.answer("В программе нет упражнений — нечем делиться", show_alert=True)
+        return
+
+    payload = {"name": anchor["program_name"][:MAX_NAME_LEN], "days": day_payloads}
+    token = await db.create_shared_item(callback.from_user.id, "program", json.dumps(payload, ensure_ascii=False))
+    url = _deep_link(await _get_bot_username(callback.bot), token)
+
+    text = "\n".join(
+        _program_preview_lines(payload)
         + ["", "<i>Перешли это сообщение — по кнопке программу можно забрать себе.</i>"]
     )
     await callback.message.answer(
@@ -143,7 +207,7 @@ async def share_exercise(callback: CallbackQuery, state: FSMContext):
 
 
 def _accept_keyboard(token: str, kind: str) -> InlineKeyboardMarkup:
-    label = "➕ Добавить программу себе" if kind == "routine" else "➕ Добавить упражнение себе"
+    label = "➕ Добавить упражнение себе" if kind == "exercise" else "➕ Добавить программу себе"
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=label, callback_data=f"share:add:{token}")],
         [InlineKeyboardButton(text="🏠 В меню", callback_data="share:skip")],
@@ -167,7 +231,11 @@ async def open_shared(message: Message, command: CommandObject, state: FSMContex
         return
     payload = json.loads(row["payload"])
 
-    if row["kind"] == "routine":
+    if row["kind"] == "program":
+        n = len(payload["days"])
+        head = f"Тебе прислали программу — {n} {_days_word(n)}.\n\n"
+        text = head + "\n".join(_program_preview_lines(payload))
+    elif row["kind"] == "routine":
         n = len(payload["exercises"])
         head = f"Тебе прислали программу — {n} упр.\n\n"
         text = head + "\n".join(_routine_preview_lines(payload))
@@ -235,6 +303,29 @@ async def share_add(callback: CallbackQuery, state: FSMContext):
         return
     user_id = callback.from_user.id
     payload = json.loads(row["payload"])
+
+    if row["kind"] == "program":
+        for day in payload["days"]:
+            routine_id = await db.create_routine(user_id, day["name"], program_name=payload["name"])
+            order = 0
+            seen: set[int] = set()
+            for ex in day["exercises"]:
+                ex_id = await _resolve_exercise(user_id, ex["name"])
+                if ex_id in seen:
+                    continue
+                seen.add(ex_id)
+                await db.add_routine_exercise(routine_id, ex_id, order, ex.get("target"))
+                order += 1
+        # Кнопку убираем: второй тап по «Добавить» иначе плодит дубликаты.
+        await callback.message.edit_reply_markup(reply_markup=None)
+        await callback.message.answer(
+            f"✅ Программа «{escape(payload['name'])}» у тебя — {len(payload['days'])} "
+            f"{_days_word(len(payload['days']))} в 🗂 Программы.\n"
+            "Новые упражнения легли в «Другое», группу можно поменять в ⚙️ Упражнения.",
+            parse_mode="HTML",
+        )
+        await callback.answer("Добавил 👌")
+        return
 
     if row["kind"] == "routine":
         routine_id = await db.create_routine(user_id, payload["name"])
