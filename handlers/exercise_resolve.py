@@ -49,6 +49,10 @@ async def _next(event, state: FSMContext) -> None:
     await state.update_data(resolve_current_name=name)
     await state.set_state(ResolveFlow.picking)
     candidates = await db.search_exercises(event.from_user.id, name)
+    # Каталог спрашиваем наравне со своими: ручное добавление и поиск в живой
+    # тренировке это уже делают, а импорт — нет, хотя именно он заводит
+    # упражнения десятками, и совпавшее с каталогом имя приезжало голым.
+    templates = await db.search_exercise_templates(event.from_user.id, name)
     total = data.get("resolve_total") or len(pending)
     position = total - len(pending) + 1
     text = (
@@ -56,7 +60,9 @@ async def _next(event, state: FSMContext) -> None:
         f"Не нашёл «{name}» в твоём списке.\n"
         "Выбери похожее, создай новое, или напиши другое название для поиска:"
     )
-    kb = keyboards.exercise_resolve_keyboard(candidates, name, "resolve", remaining=len(pending) - 1)
+    kb = keyboards.exercise_resolve_keyboard(
+        candidates, name, "resolve", remaining=len(pending) - 1, templates=templates
+    )
     await _render(event, text, kb)
 
 
@@ -75,6 +81,17 @@ async def _resolve_current(event, state: FSMContext, exercise_id: int) -> None:
 @router.callback_query(StateFilter(ResolveFlow.picking), F.data.startswith("resolve:pick:"))
 async def resolve_pick(callback: CallbackQuery, state: FSMContext):
     ex_id = int(callback.data.split(":")[2])
+    await db.touch_exercise_last_used(ex_id)
+    await _resolve_current(callback, state, ex_id)
+    await callback.answer()
+
+
+@router.callback_query(StateFilter(ResolveFlow.picking), F.data.startswith("resolve:tpl:"))
+async def resolve_pick_template(callback: CallbackQuery, state: FSMContext):
+    """Каталожный шаблон: форкаем его пользователю — вместе с группой, техникой
+    и демо-фото — и засчитываем как разрешённое имя."""
+    template_id = int(callback.data.split(":")[2])
+    ex_id = await db.fork_exercise_from_template(callback.from_user.id, template_id)
     await db.touch_exercise_last_used(ex_id)
     await _resolve_current(callback, state, ex_id)
     await callback.answer()

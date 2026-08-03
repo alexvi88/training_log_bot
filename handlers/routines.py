@@ -702,6 +702,40 @@ async def rt_program_merge(callback: CallbackQuery, state: FSMContext):
     await _show_program(callback, state, target_id)
 
 
+@router.callback_query(F.data.startswith("rt:pgmcopy:"))
+async def rt_program_copy(callback: CallbackQuery, state: FSMContext):
+    """«📄 Дублировать программу» — копия со всеми днями, составом и схемами.
+
+    Имя берём свободное («PPL (2)»), а не спрашиваем: копию делают, чтобы
+    что-то в ней поменять, и лишний экран с вводом имени стоит между решением
+    и результатом. Переименовать её — соседняя кнопка.
+    """
+    program_id = int(callback.data.split(":")[2])
+    program = await _owned_program(callback, program_id)
+    if program is None:
+        return
+    days = await db.list_program_days_by_id(program_id)
+    over_budget = await db.routine_budget(callback.from_user.id, len(days))
+    if over_budget:
+        await callback.answer(over_budget, show_alert=True)
+        return
+
+    user_id = callback.from_user.id
+    name = await db.unique_program_name(user_id, program["name"])
+    copy_id = await db.create_program(
+        user_id, name, source=program["source"], source_ref=program["source_ref"]
+    )
+    for day in days:
+        day_id = await db.create_routine(user_id, day["name"], program_id=copy_id)
+        for ex in await db.list_routine_exercises(day["id"]):
+            await db.append_routine_exercise(day_id, ex["exercise_id"], ex["target"])
+            if ex["progression"]:
+                entry = (await db.list_routine_exercises(day_id))[-1]
+                await db.set_routine_exercise_progression(entry["id"], ex["progression"])
+    await callback.answer(f"Скопировал как «{name}»")
+    await _show_program(callback, state, copy_id)
+
+
 @router.callback_query(F.data.startswith("rt:pgmdelask:"))
 async def rt_program_delete_confirm(callback: CallbackQuery, state: FSMContext):
     program_id = int(callback.data.split(":")[2])

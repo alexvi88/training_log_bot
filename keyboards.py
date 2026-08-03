@@ -534,6 +534,9 @@ def program_days_keyboard(days, program_id: int, next_day_id: int | None = None)
     b.button(text="➕ Добавить день", callback_data=f"rt:dayadd:{program_id}")
     if len(days) > 1:
         b.button(text="🔀 Порядок дней", callback_data=f"rt:dayorder:{program_id}")
+    # Копия целиком — база для «хочу вторую версию с правками»: без неё
+    # единственный способ получить вариант программы был собрать её заново.
+    b.button(text="📄 Дублировать программу", callback_data=f"rt:pgmcopy:{program_id}")
     b.button(text="✏️ Переименовать программу", callback_data=f"rt:pgmrename:{program_id}")
     # Программа целиком, а не день — тот же токен-визитка, но со всеми днями
     # разом: делиться по одному дню значило собирать программу получателю
@@ -1233,16 +1236,26 @@ def confirm_cancel_keyboard(
 
 
 def exercise_resolve_keyboard(
-    candidates, name: str, prefix: str, remaining: int = 0
+    candidates, name: str, prefix: str, remaining: int = 0, templates=()
 ) -> InlineKeyboardMarkup:
     """remaining: how many unmatched names are still queued after this one. With
     a foreign CSV that's dozens of names, each needing a pick plus a muscle-group
     choice — "создать все остальные" is the escape hatch that isn't throwing the
-    whole import away."""
+    whole import away.
+
+    templates: каталожные шаблоны, подошедшие по имени. Импорт — самый массовый
+    вход новых упражнений, и без этого ряда имя, буквально совпадающее с
+    каталогом, заводилось голым: без техники, без фото и без группы."""
     b = InlineKeyboardBuilder()
     items = [(f"{prefix}:pick:{ex['id']}", ex["display_name"]) for ex in candidates[:6]]
     for row in named_buttons(items):
         b.row(*row)
+    for tpl in list(templates)[:4]:
+        b.row(
+            InlineKeyboardButton(
+                text=f"📋 {tpl['display_name']}", callback_data=f"{prefix}:tpl:{tpl['id']}"
+            )
+        )
     b.row(InlineKeyboardButton(text=f"➕ Создать «{name}»", callback_data=f"{prefix}:create"))
     if remaining > 0:
         b.row(

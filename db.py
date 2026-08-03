@@ -21,7 +21,7 @@ from typing import Any, Optional
 import aiosqlite
 
 import config
-from seed_data import EXERCISE_TEMPLATES, MUSCLE_GROUP_PRESETS
+from seed_data import BODYWEIGHT_TEMPLATES, EXERCISE_TEMPLATES, MUSCLE_GROUP_PRESETS
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -74,6 +74,13 @@ CREATE TABLE IF NOT EXISTS exercises (
     created_at TEXT NOT NULL,
     last_used_at TEXT,
     seeded_from_program INTEGER NOT NULL DEFAULT 0,
+    -- Как в этом движении участвует собственный вес: 'none' (штанга, тренажёр),
+    -- 'full' (подтягивания, брусья — вес тела и есть нагрузка, внешний
+    -- добавляется) или 'assisted' (гравитрон, резина — внешний вычитается).
+    -- `bodyweight_factor` — какая доля веса тела реально поднимается: у
+    -- отжиманий от пола это около двух третей, у подтягиваний — всё.
+    bodyweight_load TEXT NOT NULL DEFAULT 'none',
+    bodyweight_factor REAL NOT NULL DEFAULT 1.0,
     custom_photo_file_id TEXT,
     description TEXT,
     FOREIGN KEY (primary_group_id) REFERENCES muscle_groups (id)
@@ -113,6 +120,12 @@ CREATE TABLE IF NOT EXISTS block_exercises (
     FOREIGN KEY (exercise_id) REFERENCES exercises (id)
 );
 CREATE INDEX IF NOT EXISTS idx_block_exercises_block ON block_exercises (block_id);
+-- Одно упражнение не может стоять в блоке дважды. Без этого объединение дублей
+-- вставляло вторую строку молча (db.merge_exercises), а суперсет с одним и тем
+-- же движением в обеих половинах ломает и живой экран, и правку прошлой
+-- тренировки. Второй рубеж — сама merge_exercises чистит коллизию до переноса.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_block_exercises_unique
+    ON block_exercises (block_id, exercise_id);
 
 -- A note ("!болит плечо", "new training scheme") is tied to one workout's
 -- attempt at an exercise, not the exercise itself — it shouldn't resurface on
@@ -136,6 +149,12 @@ CREATE TABLE IF NOT EXISTS sets (
     weight REAL NOT NULL,
     reps INTEGER NOT NULL,
     rpe REAL,
+    -- Сколько на самом деле поднято: внешний вес плюс доля собственного (см.
+    -- exercises.bodyweight_load). Снимается в момент записи, потому что вес
+    -- тела меняется, а подход — уже нет. NULL у строк, записанных до появления
+    -- колонки: читатели берут COALESCE(load_weight, weight), поэтому старые
+    -- данные считаются ровно как раньше.
+    load_weight REAL,
     created_at TEXT NOT NULL,
     FOREIGN KEY (block_id) REFERENCES workout_blocks (id),
     FOREIGN KEY (exercise_id) REFERENCES exercises (id)
@@ -291,6 +310,9 @@ CREATE TABLE IF NOT EXISTS routine_exercises (
     FOREIGN KEY (exercise_id) REFERENCES exercises (id)
 );
 CREATE INDEX IF NOT EXISTS idx_routine_exercises_routine ON routine_exercises (routine_id);
+-- То же этажом выше: день программы не должен содержать одно упражнение дважды.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_routine_exercises_unique
+    ON routine_exercises (routine_id, exercise_id);
 
 CREATE TABLE IF NOT EXISTS cost_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -369,6 +391,22 @@ async def _column_names(table: str) -> set[str]:
     return {r["name"] for r in rows}
 
 
+async def _dedupe_exercise_links() -> None:
+    """Свернуть дубли «одно упражнение дважды в одном блоке/дне» перед тем, как
+    ставить на них UNIQUE.
+
+    Их источник — db.merge_exercises, которая переносила ссылки без проверки
+    коллизии; на живых базах такие строки уже могли накопиться, и
+    CREATE UNIQUE INDEX на них просто не встал бы. Оставляем самую раннюю
+    строку (у неё меньший order — то есть позиция, которую человек и видел).
+    """
+    for table, scope in (("block_exercises", "block_id"), ("routine_exercises", "routine_id")):
+        await _conn.execute(
+            f"DELETE FROM {table} WHERE id NOT IN "
+            f"(SELECT MIN(id) FROM {table} GROUP BY {scope}, exercise_id)"
+        )
+
+
 async def _migrate_schema() -> None:
     """Upgrade older on-disk databases to the current column set in-place."""
     await _conn.execute("DROP INDEX IF EXISTS idx_exercises_user_name")
@@ -402,6 +440,18 @@ async def _migrate_schema() -> None:
         await _conn.execute("ALTER TABLE exercises ADD COLUMN custom_photo_file_id TEXT")
     if "description" not in exercise_cols:
         await _conn.execute("ALTER TABLE exercises ADD COLUMN description TEXT")
+
+    if "bodyweight_load" not in exercise_cols:
+        await _conn.execute(
+            "ALTER TABLE exercises ADD COLUMN bodyweight_load TEXT NOT NULL DEFAULT 'none'"
+        )
+        await _conn.execute(
+            "ALTER TABLE exercises ADD COLUMN bodyweight_factor REAL NOT NULL DEFAULT 1.0"
+        )
+
+    set_cols = await _column_names("sets")
+    if "load_weight" not in set_cols:
+        await _conn.execute("ALTER TABLE sets ADD COLUMN load_weight REAL")
 
     shared_cols = await _column_names("shared_items")
     if "taken_count" not in shared_cols:
@@ -474,6 +524,8 @@ async def _migrate_schema() -> None:
         # добавь 2.5кг» существовало только прозой в ответе AI-тренера и
         # умирало вместе с чатом.
         await _conn.execute("ALTER TABLE routine_exercises ADD COLUMN progression TEXT")
+
+    await _dedupe_exercise_links()
 
     routine_cols = await _column_names("routines")
     if "program_name" not in routine_cols:
@@ -577,6 +629,15 @@ async def _sync_exercise_templates() -> None:
     to_insert = [(gid, name) for (gid, _lname), name in desired.items() if (gid, _lname) not in kept]
 
     if not to_delete and not to_insert:
+        async with _write_lock:
+            for ex_name, (load, factor) in BODYWEIGHT_TEMPLATES.items():
+                await db.execute(
+                    "UPDATE exercises SET bodyweight_load = ?, bodyweight_factor = ? "
+                    "WHERE is_template = 1 AND user_id IS NULL AND name = ? "
+                    "AND (bodyweight_load != ? OR bodyweight_factor != ?)",
+                    (load, factor, ex_name, load, factor),
+                )
+            await db.commit()
         return
 
     async with _write_lock:
@@ -584,17 +645,28 @@ async def _sync_exercise_templates() -> None:
             await db.execute("DELETE FROM exercises WHERE id = ?", (ex_id,))
         for group_id, ex_name in to_insert:
             display_name = build_display_name(ex_name)
+            load, factor = BODYWEIGHT_TEMPLATES.get(ex_name, ("none", 1.0))
             await db.execute(
                 "INSERT INTO exercises "
-                "(user_id, name, primary_group_id, display_name, original_name, is_template, created_at) "
-                "VALUES (NULL, ?, ?, ?, ?, 1, ?)",
-                (ex_name, group_id, display_name, ex_name, now_iso()),
+                "(user_id, name, primary_group_id, display_name, original_name, is_template, "
+                " bodyweight_load, bodyweight_factor, created_at) "
+                "VALUES (NULL, ?, ?, ?, ?, 1, ?, ?, ?)",
+                (ex_name, group_id, display_name, ex_name, load, factor, now_iso()),
+            )
+        # Режим нагрузки правится и у шаблонов, которые уже лежат в базе: список
+        # BODYWEIGHT_TEMPLATES может пополниться, а шаблоны пересоздаются только
+        # когда меняется их имя или группа.
+        for ex_name, (load, factor) in BODYWEIGHT_TEMPLATES.items():
+            await db.execute(
+                "UPDATE exercises SET bodyweight_load = ?, bodyweight_factor = ? "
+                "WHERE is_template = 1 AND user_id IS NULL AND name = ?",
+                (load, factor, ex_name),
             )
         await db.commit()
 
 
 # Bumped whenever a one-shot migration is added to _run_one_shot_migrations.
-_SCHEMA_VERSION = 4
+_SCHEMA_VERSION = 5
 
 
 async def _run_one_shot_migrations() -> None:
@@ -619,9 +691,65 @@ async def _run_one_shot_migrations() -> None:
         # Must run last of the four: the three above are what put `program_name`
         # on the rows this one reads.
         await _migrate_programs_from_names()
+    if version < 5:
+        await _backfill_bodyweight_load()
     # Not parameterizable — SQLite only accepts a literal here. The value is an
     # internal constant, never user input.
     await _conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
+    await _conn.commit()
+
+
+async def _backfill_bodyweight_load() -> None:
+    """Проставить снимок нагрузки историческим подходам с собственным весом.
+
+    До этой миграции подтягивания лежали как «0×12»: нулевой тоннаж, нулевой
+    e1RM, плоский график у человека, который за полгода дошёл с пяти повторов до
+    двенадцати. Вес тела бот всё это время знал — `bodyweight_logs`, — просто
+    ни во что его не включал.
+
+    Берём взвешивание, ближайшее к дате подхода и не позже неё (bodyweight_at):
+    подход из марта не должен пересчитываться от июньского веса. У кого
+    взвешиваний нет вовсе, строки остаются с NULL и считаются как раньше —
+    выдумывать массу человека мы не будем.
+
+    One-shot: дальше снимок ставится при записи подхода (_load_weight_for).
+    """
+    cur = await _conn.execute(
+        "SELECT s.id, s.weight, s.created_at, e.user_id, "
+        "       e.bodyweight_load, e.bodyweight_factor "
+        "FROM sets s JOIN exercises e ON e.id = s.exercise_id "
+        "WHERE s.load_weight IS NULL AND e.bodyweight_load != 'none' AND e.user_id IS NOT NULL"
+    )
+    rows = await cur.fetchall()
+    if not rows:
+        return
+    # Взвешивания читаются пачкой на пользователя: у активного аккаунта таких
+    # подходов тысячи, и запрос на каждый — это минуты на старте бота.
+    logs: dict[int, list[tuple[str, float]]] = {}
+    for row in rows:
+        if row["user_id"] not in logs:
+            log_cur = await _conn.execute(
+                "SELECT logged_at, weight FROM bodyweight_logs WHERE telegram_id = ? "
+                "ORDER BY logged_at, id",
+                (row["user_id"],),
+            )
+            logs[row["user_id"]] = [(r["logged_at"], r["weight"]) for r in await log_cur.fetchall()]
+
+    for row in rows:
+        entries = logs.get(row["user_id"]) or []
+        if not entries:
+            continue
+        earlier = [w for at, w in entries if at <= (row["created_at"] or "")]
+        bodyweight = earlier[-1] if earlier else entries[0][1]
+        await _conn.execute(
+            "UPDATE sets SET load_weight = ? WHERE id = ?",
+            (
+                effective_load(
+                    row["weight"], bodyweight, row["bodyweight_load"], row["bodyweight_factor"]
+                ),
+                row["id"],
+            ),
+        )
     await _conn.commit()
 
 
@@ -1342,7 +1470,7 @@ async def fork_exercise_from_template(
     final_equipment = equipment if equipment is not None else template["equipment"]
     final_unilateral = unilateral if unilateral is not None else bool(template["unilateral"])
     final_attachment = attachment if attachment is not None else template["attachment"]
-    return await create_exercise(
+    ex_id = await create_exercise(
         user_id,
         template["name"],
         template["primary_group_id"],
@@ -1350,12 +1478,36 @@ async def fork_exercise_from_template(
         final_unilateral,
         final_attachment,
     )
+    # Режим нагрузки — свойство движения, а не каталога: без переноса форк
+    # подтягиваний считался бы с нулевым весом, как и до всего этого.
+    async with _write_lock:
+        await conn().execute(
+            "UPDATE exercises SET bodyweight_load = ?, bodyweight_factor = ? WHERE id = ?",
+            (template["bodyweight_load"], template["bodyweight_factor"], ex_id),
+        )
+        await conn().commit()
+    return ex_id
 
 
 async def update_exercise_name(exercise_id: int, name: str) -> bool:
-    """Rename in place (same row/id) so existing sets keep their stats. Returns False on name clash."""
+    """Rename in place (same row/id) so existing sets keep their stats. Returns False on name clash.
+
+    The clash check is the same `py_lower` lookup `create_exercise` does, and
+    for the same reason: the unique index behind it folds case with SQL
+    `LOWER()`, which is ASCII-only, so on a Cyrillic name it never fires. Left
+    to the index alone, renaming «Разводка» to «ЖИМ ЛЁЖА» happily sat down next
+    to an existing «Жим лёжа» — two rows for one lift, each accumulating its own
+    history, while every name-based resolver (programs, share import, CSV, the
+    AI trainer) silently picked whichever was older.
+    """
     ex = await get_exercise(exercise_id)
+    if ex is None:
+        return False
     display_name = build_display_name(name, ex["equipment"], bool(ex["unilateral"]), ex["attachment"])
+    clash = await find_exercise_by_display_name(ex["user_id"], display_name)
+    # Renaming to its own name (or just changing its case) is not a clash.
+    if clash is not None and clash["id"] != exercise_id:
+        return False
     async with _write_lock:
         try:
             await conn().execute(
@@ -1476,7 +1628,34 @@ async def set_exercise_description(exercise_id: int, description: Optional[str])
         await conn().commit()
 
 
-async def merge_exercises(user_id: int, keep_id: int, drop_id: int) -> bool:
+# Почему объединение возвращает не bool, а причину: у отказа их несколько, и
+# «не получилось» вместо «это упражнение сейчас в открытой тренировке» —
+# ровно тот ответ, после которого человек жмёт кнопку ещё раз.
+MERGE_OK = "ok"
+MERGE_INVALID = "invalid"            # не своё, шаблон, одна и та же строка
+MERGE_TARGET_ARCHIVED = "archived"   # цель в архиве — история уехала бы туда же
+MERGE_IN_ACTIVE_WORKOUT = "active"   # одна из сторон открыта в текущей тренировке
+
+
+async def _exercise_in_active_workout(user_id: int, exercise_id: int) -> bool:
+    """Открыто ли упражнение в текущей тренировке.
+
+    Смотрим на `block_exercises`, а не на записанные подходы: таб можно открыть
+    и ещё ничего в него не записать, и именно такой — пустой, но открытый —
+    самый опасный, FSM уже держит его id.
+    """
+    active = await get_active_workout(user_id)
+    if active is None:
+        return False
+    cur = await conn().execute(
+        "SELECT 1 FROM block_exercises be JOIN workout_blocks b ON b.id = be.block_id "
+        "WHERE b.workout_id = ? AND be.exercise_id = ? LIMIT 1",
+        (active["id"], exercise_id),
+    )
+    return await cur.fetchone() is not None
+
+
+async def merge_exercises(user_id: int, keep_id: int, drop_id: int) -> str:
     """Merges drop_id into keep_id — for when the same movement got logged
     under two different names/entries (e.g. typed once as "ягодичный мостик",
     later as "glute bridge") and the user wants one combined history instead
@@ -1484,26 +1663,72 @@ async def merge_exercises(user_id: int, keep_id: int, drop_id: int) -> bool:
 
     Repoints every set, workout block and routine slot from drop_id to
     keep_id, carries over drop's description/photo/notes if keep has none of
-    its own, and then removes drop_id entirely. Returns False if either
-    exercise isn't the user's own, is a catalog template, or they're the same
-    row.
+    its own, and then removes drop_id entirely. Returns one of the MERGE_*
+    constants.
+
+    Every table that references `exercise_id` gets an explicit answer to "what
+    if both rows are already here", because only one of them (exercise_notes,
+    with its composite primary key) would have complained on its own — and the
+    silent ones left the survivor listed twice in a routine day and inside a
+    superset block.
     """
     if keep_id == drop_id:
-        return False
+        return MERGE_INVALID
     keep = await get_exercise(keep_id)
     drop = await get_exercise(drop_id)
     if keep is None or drop is None:
-        return False
+        return MERGE_INVALID
     if keep["user_id"] != user_id or drop["user_id"] != user_id:
-        return False
+        return MERGE_INVALID
     if keep["is_template"] or drop["is_template"]:
-        return False
+        return MERGE_INVALID
+    # Цель в архиве: перенести туда всю историю значит убрать её из каждого
+    # списка сразу, а искать в «🗄 Архив» человек не пойдёт — он не знает, что
+    # её туда унесло. Цель могла быть заархивирована уже после того, как
+    # клавиатура с кнопкой отрисовалась.
+    if keep["is_archived"]:
+        return MERGE_TARGET_ARCHIVED
+    # Открытая тренировка держит id упражнения в FSM (open_exercises/open_blocks);
+    # удалить строку из-под неё значит оставить экран записи подхода указывающим
+    # в никуда.
+    if await _exercise_in_active_workout(user_id, keep_id) or await _exercise_in_active_workout(
+        user_id, drop_id
+    ):
+        return MERGE_IN_ACTIVE_WORKOUT
+
     async with _write_lock:
         await conn().execute(
             "UPDATE sets SET exercise_id = ? WHERE exercise_id = ?", (keep_id, drop_id)
         )
+        # block_exercises: у одного блока (суперсета) могли быть оба упражнения.
+        # UNIQUE на (block_id, exercise_id) нет, так что БД пропустила бы дубль
+        # молча — блок с одной и той же строкой дважды ломает и экран живой
+        # сессии, и редактирование прошлой тренировки.
+        await conn().execute(
+            "DELETE FROM block_exercises WHERE exercise_id = ? AND block_id IN "
+            "(SELECT block_id FROM block_exercises WHERE exercise_id = ?)",
+            (drop_id, keep_id),
+        )
         await conn().execute(
             "UPDATE block_exercises SET exercise_id = ? WHERE exercise_id = ?", (keep_id, drop_id)
+        )
+        # routine_exercises: то же самое днём программы. Схему и правило
+        # прогрессии подбираем со стороны, которую убираем, если у оставшейся
+        # их нет, — иначе объединение молча обнуляло бы «4×8».
+        await conn().execute(
+            "UPDATE routine_exercises SET "
+            "  target = COALESCE(target, (SELECT d.target FROM routine_exercises d "
+            "    WHERE d.exercise_id = ? AND d.routine_id = routine_exercises.routine_id)), "
+            "  progression = COALESCE(progression, (SELECT d.progression FROM routine_exercises d "
+            "    WHERE d.exercise_id = ? AND d.routine_id = routine_exercises.routine_id)) "
+            "WHERE exercise_id = ? AND routine_id IN "
+            "  (SELECT routine_id FROM routine_exercises WHERE exercise_id = ?)",
+            (drop_id, drop_id, keep_id, drop_id),
+        )
+        await conn().execute(
+            "DELETE FROM routine_exercises WHERE exercise_id = ? AND routine_id IN "
+            "(SELECT routine_id FROM routine_exercises WHERE exercise_id = ?)",
+            (drop_id, keep_id),
         )
         await conn().execute(
             "UPDATE routine_exercises SET exercise_id = ? WHERE exercise_id = ?", (keep_id, drop_id)
@@ -1539,7 +1764,7 @@ async def merge_exercises(user_id: int, keep_id: int, drop_id: int) -> bool:
             )
         await conn().execute("DELETE FROM exercises WHERE id = ?", (drop_id,))
         await conn().commit()
-    return True
+    return MERGE_OK
 
 
 # ---------- workouts ----------
@@ -1792,14 +2017,15 @@ async def list_finished_workout_dates(user_id: int) -> list[str]:
 def _e1rm_sql(formula: str) -> str:
     """SQL mirror of analytics.e1rm — reps<=1 is the weight itself; brzycki
     falls back to epley above BRZYCKI_MAX_REPS (10), exactly like the Python."""
-    epley = "s.weight * (1 + s.reps / 30.0)"
+    w = LOAD_WEIGHT_SQL
+    epley = f"{w} * (1 + s.reps / 30.0)"
     if formula == "brzycki":
         return (
-            "CASE WHEN s.reps <= 1 THEN s.weight "
+            f"CASE WHEN s.reps <= 1 THEN {w} "
             f"WHEN s.reps > 10 THEN {epley} "
-            "ELSE s.weight * 36.0 / (37 - s.reps) END"
+            f"ELSE {w} * 36.0 / (37 - s.reps) END"
         )
-    return f"CASE WHEN s.reps <= 1 THEN s.weight ELSE {epley} END"
+    return f"CASE WHEN s.reps <= 1 THEN {w} ELSE {epley} END"
 
 
 async def max_e1rm_before_workout(
@@ -1830,7 +2056,7 @@ async def achievement_extremes(user_id: int) -> dict[str, Any]:
         "       COALESCE(MAX(tonnage), 0) AS max_tonnage, "
         "       COALESCE(MAX(exercises_count), 0) AS max_exercises "
         "FROM ("
-        "  SELECT w.id, COUNT(s.id) AS sets_count, SUM(s.weight * s.reps) AS tonnage, "
+        "  SELECT w.id, COUNT(s.id) AS sets_count, SUM(COALESCE(s.load_weight, s.weight) * s.reps) AS tonnage, "
         "         COUNT(DISTINCT s.exercise_id) AS exercises_count "
         "  FROM sets s "
         "  JOIN workout_blocks b ON b.id = s.block_id "
@@ -1964,7 +2190,7 @@ async def hall_of_fame_aggregates(user_id: int) -> dict[str, float]:
     """Lifetime totals for the Hall of Fame: tonnage moved, total working sets,
     and the longest single finished workout (seconds). All over finished workouts."""
     cur = await conn().execute(
-        "SELECT COALESCE(SUM(s.weight * s.reps), 0) AS tonnage, COUNT(s.id) AS sets_count "
+        "SELECT COALESCE(SUM(COALESCE(s.load_weight, s.weight) * s.reps), 0) AS tonnage, COUNT(s.id) AS sets_count "
         "FROM sets s "
         "JOIN workout_blocks b ON b.id = s.block_id "
         "JOIN workouts w ON w.id = b.workout_id "
@@ -2115,6 +2341,84 @@ async def get_block_owner(block_id: int) -> Optional[int]:
 
 # ---------- sets ----------
 
+# Вес подхода, каким его считает вся арифметика: снимок load_weight, если он
+# есть, иначе то, что записал пользователь. COALESCE, а не миграция всех строк:
+# у подходов, записанных до появления колонки, собственный вес взять неоткуда —
+# вес тела на ту дату мог быть не записан вовсе, — и правильный ответ для них
+# «как раньше», а не «как будто мы знали».
+LOAD_WEIGHT_SQL = "COALESCE(s.load_weight, s.weight)"
+
+
+def load_of(row) -> float:
+    """Питоновский двойник LOAD_WEIGHT_SQL — для строк, выбранных как `s.*`.
+
+    Вся арифметика (тоннаж, e1RM, рекорды, тренд, прогрессия) считает по нему,
+    а `row["weight"]` остаётся тем, что человек записал, и показывается как есть.
+    """
+    try:
+        load = row["load_weight"]
+    except (IndexError, KeyError):
+        load = None
+    return row["weight"] if load is None else load
+
+
+def effective_load(
+    weight: float, bodyweight: Optional[float], load: str, factor: float = 1.0
+) -> float:
+    """Сколько реально поднято в подходе.
+
+    `full` — вес тела и есть нагрузка, внешний добавляется (подтягивания с
+    поясом); `assisted` — внешний вычитается (гравитрон, резина), но не ниже
+    нуля; `none` — обычное железо, вес тела ни при чём. Без записанного веса
+    тела возвращаем внешний: догадываться о массе человека неоткуда, а нулевой
+    тоннаж честнее выдуманного.
+    """
+    if load == "none" or not bodyweight:
+        return weight
+    own = bodyweight * (factor if factor and factor > 0 else 1.0)
+    if load == "assisted":
+        return max(own - weight, 0.0)
+    return own + weight
+
+
+async def bodyweight_at(telegram_id: int, when_iso: Optional[str] = None) -> Optional[float]:
+    """Ближайшее взвешивание не позже `when_iso` (по умолчанию — последнее).
+
+    Не позже, а не «ближайшее в обе стороны»: подход, записанный в марте, не
+    должен пересчитываться, когда человек взвесится в июне. Если до этой даты
+    взвешиваний не было — берём самое раннее из имеющихся, иначе вся история до
+    первого взвешивания осталась бы с нулевой нагрузкой.
+    """
+    if when_iso:
+        cur = await conn().execute(
+            "SELECT weight FROM bodyweight_logs WHERE telegram_id = ? AND logged_at <= ? "
+            "ORDER BY logged_at DESC, id DESC LIMIT 1",
+            (telegram_id, when_iso),
+        )
+        row = await cur.fetchone()
+        if row is not None:
+            return row["weight"]
+    cur = await conn().execute(
+        "SELECT weight FROM bodyweight_logs WHERE telegram_id = ? ORDER BY logged_at, id LIMIT 1",
+        (telegram_id,),
+    )
+    row = await cur.fetchone()
+    return row["weight"] if row else None
+
+
+async def _load_weight_for(exercise_id: int, weight: float) -> Optional[float]:
+    """load_weight для нового подхода, или None для обычного железа."""
+    ex = await get_exercise(exercise_id)
+    if ex is None or ex["bodyweight_load"] == "none":
+        return None
+    owner = ex["user_id"]
+    if owner is None:
+        return None
+    return effective_load(
+        weight, await bodyweight_at(owner), ex["bodyweight_load"], ex["bodyweight_factor"]
+    )
+
+
 async def add_set(
     block_id: int,
     exercise_id: int,
@@ -2124,12 +2428,15 @@ async def add_set(
     reps: int,
     rpe: Optional[float] = None,
 ) -> int:
+    load_weight = await _load_weight_for(exercise_id, weight)
     async with _write_lock:
         cur = await conn().execute(
             "INSERT INTO sets "
-            "(block_id, exercise_id, round_index, order_in_round, weight, reps, rpe, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (block_id, exercise_id, round_index, order_in_round, weight, reps, rpe, now_iso()),
+            "(block_id, exercise_id, round_index, order_in_round, weight, reps, rpe, "
+            " load_weight, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (block_id, exercise_id, round_index, order_in_round, weight, reps, rpe,
+             load_weight, now_iso()),
         )
         await conn().commit()
         return cur.lastrowid
@@ -2162,14 +2469,16 @@ async def append_set(
     next_round_index and insert with it. The INSERT itself does the SELECT, so
     there's no window between them.
     """
+    load_weight = await _load_weight_for(exercise_id, weight)
     async with _write_lock:
         cur = await conn().execute(
             "INSERT INTO sets "
-            "(block_id, exercise_id, round_index, order_in_round, weight, reps, rpe, created_at) "
-            "SELECT ?, ?, COALESCE(MAX(round_index), 0) + 1, ?, ?, ?, ?, ? "
+            "(block_id, exercise_id, round_index, order_in_round, weight, reps, rpe, "
+            " load_weight, created_at) "
+            "SELECT ?, ?, COALESCE(MAX(round_index), 0) + 1, ?, ?, ?, ?, ?, ? "
             "FROM sets WHERE block_id = ? AND exercise_id = ?",
             (
-                block_id, exercise_id, order_in_round, weight, reps, rpe, now_iso(),
+                block_id, exercise_id, order_in_round, weight, reps, rpe, load_weight, now_iso(),
                 block_id, exercise_id,
             ),
         )
@@ -2247,9 +2556,15 @@ async def get_set_owner(set_id: int) -> Optional[int]:
 
 
 async def update_set(set_id: int, weight: float, reps: int, rpe: Optional[float] = None) -> None:
+    cur = await conn().execute("SELECT exercise_id FROM sets WHERE id = ?", (set_id,))
+    row = await cur.fetchone()
+    # Снимок нагрузки пересчитываем вместе с весом: иначе правка «80 → 85» у
+    # подтягиваний с поясом оставила бы старую сумму.
+    load_weight = await _load_weight_for(row["exercise_id"], weight) if row else None
     async with _write_lock:
         await conn().execute(
-            "UPDATE sets SET weight = ?, reps = ?, rpe = ? WHERE id = ?", (weight, reps, rpe, set_id)
+            "UPDATE sets SET weight = ?, reps = ?, rpe = ?, load_weight = ? WHERE id = ?",
+            (weight, reps, rpe, load_weight, set_id),
         )
         await conn().commit()
 
@@ -2286,7 +2601,7 @@ async def list_all_sets_by_exercise(user_id: int) -> list[aiosqlite.Row]:
     account is slow enough for the tapped button's callback to time out.
     """
     cur = await conn().execute(
-        "SELECT s.weight, s.reps, e.id AS exercise_id, e.display_name, "
+        f"SELECT {LOAD_WEIGHT_SQL} AS weight, s.reps, e.id AS exercise_id, e.display_name, "
         "       w.id AS workout_id, w.started_at "
         "FROM sets s "
         "JOIN workout_blocks b ON b.id = s.block_id "
@@ -3043,6 +3358,31 @@ async def set_routine_exercise_progression(
         await conn().commit()
 
 
+async def progression_rule_for_workout(workout_id: int, exercise_id: int) -> Optional[dict]:
+    """Правило прогрессии, которое прописала программа этой тренировки.
+
+    None, если тренировка не по программе, упражнения в её дне нет или правило
+    не записано, — тогда подсказка веса считает по умолчанию, как и раньше
+    (analytics.suggest_progression). Без этой выборки правило оставалось
+    записанным и показанным в превью, но на экране записи подхода не
+    участвовало ни в чём.
+    """
+    cur = await conn().execute(
+        "SELECT re.progression FROM workouts w "
+        "JOIN routine_exercises re ON re.routine_id = w.routine_id "
+        "WHERE w.id = ? AND re.exercise_id = ? AND re.progression IS NOT NULL",
+        (workout_id, exercise_id),
+    )
+    row = await cur.fetchone()
+    if row is None:
+        return None
+    try:
+        rule = json.loads(row["progression"])
+    except (TypeError, ValueError):
+        return None
+    return rule if isinstance(rule, dict) else None
+
+
 async def program_day_history(program_id: int) -> dict[int, tuple[str, int]]:
     """For each day of the program: (last time it was trained, how many times).
 
@@ -3273,8 +3613,8 @@ async def weekly_exercise_rollup(user_id: int, since_date: str) -> list[aiosqlit
     """
     cur = await conn().execute(
         "SELECT e.display_name AS name, "
-        "       MAX(s.weight) AS top_weight, "
-        "       SUM(s.weight * s.reps) AS tonnage, "
+        f"       MAX({LOAD_WEIGHT_SQL}) AS top_weight, "
+        "       SUM(COALESCE(s.load_weight, s.weight) * s.reps) AS tonnage, "
         "       COUNT(s.id) AS sets_count "
         "FROM sets s "
         "JOIN workout_blocks b ON b.id = s.block_id "
@@ -3290,7 +3630,7 @@ async def weekly_exercise_rollup(user_id: int, since_date: str) -> list[aiosqlit
 async def tonnage_since(user_id: int, since_date: str) -> float:
     """Total weight x reps across all finished-workout sets on/after since_date — for the weekly digest push."""
     cur = await conn().execute(
-        "SELECT COALESCE(SUM(s.weight * s.reps), 0) FROM sets s "
+        "SELECT COALESCE(SUM(COALESCE(s.load_weight, s.weight) * s.reps), 0) FROM sets s "
         "JOIN workout_blocks b ON b.id = s.block_id "
         "JOIN workouts w ON w.id = b.workout_id "
         "WHERE w.user_id = ? AND w.status = 'finished' AND w.started_at >= ?",
@@ -3587,6 +3927,16 @@ async def scale_user_set_weights(telegram_id: int, factor: float) -> None:
         await conn().execute(
             "UPDATE sets SET weight = ROUND(weight * ?, 1) "
             "WHERE weight != 0 AND block_id IN ("
+            "  SELECT b.id FROM workout_blocks b JOIN workouts w ON w.id = b.workout_id "
+            "  WHERE w.user_id = ?)",
+            (factor, telegram_id),
+        )
+        # Снимок собственного веса живёт в тех же единицах, что и вес подхода,
+        # поэтому конвертируется вместе с ним — иначе после смены кг↔lb
+        # подтягивания разом «потяжелели» бы вдвое.
+        await conn().execute(
+            "UPDATE sets SET load_weight = ROUND(load_weight * ?, 1) "
+            "WHERE load_weight IS NOT NULL AND block_id IN ("
             "  SELECT b.id FROM workout_blocks b JOIN workouts w ON w.id = b.workout_id "
             "  WHERE w.user_id = ?)",
             (factor, telegram_id),
