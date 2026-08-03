@@ -123,3 +123,71 @@ async def test_the_anchor_of_a_program_belongs_to_it(user_id):
     anchor = await dbmod.get_routine(program["anchor_id"])
 
     assert anchor["program_name"] == "Верх/низ"
+
+
+# ---------- recovering the grouping of days named before program_name existed ----------
+
+
+async def _force_legacy_shape(user_id: int, names: list[str]) -> None:
+    """Routines as they looked before `program_name`: the program, if any, lived
+    in the name itself."""
+    for name in names:
+        rid = await dbmod.create_routine(user_id, name)
+        await dbmod._conn.execute("UPDATE routines SET program_name = NULL WHERE id = ?", (rid,))
+    await dbmod._conn.execute("PRAGMA user_version = 1")
+    await dbmod._conn.commit()
+
+
+@pytest.mark.asyncio
+async def test_migration_splits_a_shared_prefix_back_into_program_and_day(user_id):
+    await _force_legacy_shape(user_id, [
+        "PPL гипертрофия 3 дня — День 1 — Жим",
+        "PPL гипертрофия 3 дня — День 2 — Тяга",
+        "PPL гипертрофия 3 дня — День 3 — Ноги",
+    ])
+
+    await dbmod._run_one_shot_migrations()
+
+    programs = await dbmod.list_programs(user_id)
+    assert [(p["program_name"], p["day_count"]) for p in programs] == [("PPL гипертрофия 3 дня", 3)]
+    days = await dbmod.list_program_days(user_id, "PPL гипертрофия 3 дня")
+    assert [d["name"] for d in days] == ["День 1 — Жим", "День 2 — Тяга", "День 3 — Ноги"]
+    assert await dbmod.list_standalone_routines(user_id) == []
+
+
+@pytest.mark.asyncio
+async def test_migration_leaves_a_lone_routine_with_a_dash_alone(user_id):
+    """Один роутин с тире в названии — не программа, и переименовывать его
+    («Грудь — тяжёлая» → «тяжёлая» под программой «Грудь») было бы порчей данных."""
+    await _force_legacy_shape(user_id, ["Грудь — тяжёлая", "Спина"])
+
+    await dbmod._run_one_shot_migrations()
+
+    assert await dbmod.list_programs(user_id) == []
+    assert sorted(r["name"] for r in await dbmod.list_standalone_routines(user_id)) == [
+        "Грудь — тяжёлая", "Спина",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_migration_leaves_days_that_never_carried_a_program_name(user_id):
+    """Дни, сохранённые ещё до префикса, не несут в себе никакой информации о
+    программе — придумывать ей имя хуже, чем оставить их одиночными."""
+    await _force_legacy_shape(user_id, ["День 1 — Жим", "День 2 — Тяга", "День 3 — Ноги"])
+
+    await dbmod._run_one_shot_migrations()
+
+    assert await dbmod.list_programs(user_id) == []
+    assert len(await dbmod.list_standalone_routines(user_id)) == 3
+
+
+@pytest.mark.asyncio
+async def test_migration_does_not_regroup_routines_named_after_it_ran(user_id):
+    await dbmod._run_one_shot_migrations()  # once-per-DB pass, nothing to do yet
+
+    await dbmod.create_routine(user_id, "Тяга — с пола")
+    await dbmod.create_routine(user_id, "Тяга — с плинтов")
+    await dbmod._run_one_shot_migrations()  # every later startup
+
+    assert await dbmod.list_programs(user_id) == []
+    assert len(await dbmod.list_standalone_routines(user_id)) == 2

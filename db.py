@@ -498,7 +498,7 @@ async def _sync_exercise_templates() -> None:
 
 
 # Bumped whenever a one-shot migration is added to _run_one_shot_migrations.
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 
 
 async def _run_one_shot_migrations() -> None:
@@ -515,9 +515,53 @@ async def _run_one_shot_migrations() -> None:
         return
     if version < 1:
         await _backfill_seeded_from_program()
+    if version < 2:
+        await _group_prefixed_program_days()
     # Not parameterizable — SQLite only accepts a literal here. The value is an
     # internal constant, never user input.
     await _conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
+    await _conn.commit()
+
+
+async def _group_prefixed_program_days() -> None:
+    """Recover the program grouping for days saved before `program_name` existed.
+
+    For a short while a saved program's days carried their program in the name
+    itself — "PPL гипертрофия 3 дня — День 1 — Жим" — because there was nowhere
+    else to put it. Those rows still exist, and without this they'd sit in the
+    list as long, standalone, visibly-related-but-ungrouped entries forever.
+    The prefix is real data, so split it back out: everything before the first
+    " — " becomes program_name, the rest stays the day's name.
+
+    Only prefixes shared by two or more of the user's routines are grouped —
+    one routine that merely happens to contain " — " (e.g. "Грудь — тяжёлая")
+    is not a program, and renaming it would be pure damage. Days from before
+    the prefix existed carry no program information at all and are left alone;
+    nothing in the row says which program they came from, and inventing a name
+    would be worse than leaving them standalone.
+
+    One-shot (see `_run_one_shot_migrations`): after this runs, a user is free
+    to name two routines with a shared "X — " prefix on purpose, and re-running
+    would silently regroup and rename them.
+    """
+    cur = await _conn.execute(
+        "SELECT id, user_id, name FROM routines WHERE program_name IS NULL AND name LIKE '% — %'"
+    )
+    groups: dict[tuple[int, str], list[tuple[int, str]]] = {}
+    for row in await cur.fetchall():
+        program, _, day = row["name"].partition(" — ")
+        program, day = program.strip(), day.strip()
+        if not program or not day:
+            continue
+        groups.setdefault((row["user_id"], program), []).append((row["id"], day))
+    for (_user_id, program), days in groups.items():
+        if len(days) < 2:
+            continue
+        for routine_id, day in days:
+            await _conn.execute(
+                "UPDATE routines SET program_name = ?, name = ? WHERE id = ?",
+                (program, day, routine_id),
+            )
     await _conn.commit()
 
 
