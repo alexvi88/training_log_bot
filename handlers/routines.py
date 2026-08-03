@@ -433,6 +433,36 @@ async def rt_program_rename_entered(message: Message, state: FSMContext):
     await show_manage(message, state)
 
 
+@router.callback_query(F.data.startswith("rt:pgmdelask:"))
+async def rt_program_delete_confirm(callback: CallbackQuery, state: FSMContext):
+    anchor_id = int(callback.data.split(":")[2])
+    anchor = await _owned_routine(callback, anchor_id)
+    if anchor is None or not anchor["program_name"]:
+        return
+    kb = keyboards.yes_no_keyboard(
+        yes_cb=f"rt:pgmdelyes:{anchor_id}", no_cb=f"rt:pgm:{anchor_id}",
+        yes_text="🗑 Удалить", no_text="❌ Отмена",
+    )
+    await ui.safe_edit(
+        callback,
+        f"Удалить программу «{escape(anchor['program_name'])}» целиком, все дни? "
+        "История тренировок не пострадает.",
+        reply_markup=kb, parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("rt:pgmdelyes:"))
+async def rt_program_delete(callback: CallbackQuery, state: FSMContext):
+    anchor_id = int(callback.data.split(":")[2])
+    anchor = await _owned_routine(callback, anchor_id)
+    if anchor is None or not anchor["program_name"]:
+        return
+    await db.delete_program(callback.from_user.id, anchor["program_name"])
+    await callback.answer("Программа удалена")
+    await show_manage(callback, state)
+
+
 @router.callback_query(F.data.startswith("rt:delask:"))
 async def rt_delete_confirm(callback: CallbackQuery, state: FSMContext):
     routine_id = int(callback.data.split(":")[2])

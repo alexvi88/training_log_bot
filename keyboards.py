@@ -432,6 +432,7 @@ def program_days_keyboard(days, anchor_id: int) -> InlineKeyboardMarkup:
     for d in days:
         b.button(text=d["name"], callback_data=f"rt:view:{d['id']}")
     b.button(text="✏️ Переименовать программу", callback_data=f"rt:pgmrename:{anchor_id}")
+    b.button(text="🗑 Удалить программу", callback_data=f"rt:pgmdelask:{anchor_id}")
     b.button(text="⬅️ Назад", callback_data="rt:manage")
     b.adjust(1)
     return b.as_markup()
