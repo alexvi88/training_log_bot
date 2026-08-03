@@ -41,8 +41,8 @@ async def show_manage(event, state: FSMContext) -> None:
     else:
         text = (
             "🗂 <b>ПРОГРАММЫ</b>\n\nУ тебя пока нет сохранённых программ.\n"
-            "Выбери готовую программу ниже или проведи тренировку и сохрани её как "
-            "программу — потом начнёшь такую же в один тап."
+            "Собери свою с AI-тренером, возьми готовую или проведи тренировку и "
+            "сохрани её как программу — потом начнёшь такую же в один тап."
         )
     kb = keyboards.routines_manage_keyboard(programs, routines, has_workouts=has_workouts)
     if isinstance(event, CallbackQuery):

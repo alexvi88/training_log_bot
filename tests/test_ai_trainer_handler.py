@@ -700,3 +700,15 @@ async def test_ai_build_program_seeds_the_conversation_and_enters_chatting(
     assert await state.get_state() == "AITrainerFlow:chatting"
     assert user_id not in ai_trainer._busy
     assert await fresh_db.get_ai_question_count_today(user_id) == 1
+
+    # The intro screen replaces the 🗂 Программы menu, so it needs its own way
+    # out — an answer may never arrive (daily limit reached, provider down).
+    assert callback.message.answer.await_args.kwargs["reply_markup"] is not None
+
+
+async def test_ai_build_program_asks_the_trainer_to_lead_with_questions(fresh_db, user_id):
+    """The button promises "сейчас задам пару вопросов", and the system prompt
+    lets the trainer skip straight to a draft on sensible defaults — so the
+    seed has to ask for the questions explicitly, or the intro would lie."""
+    assert "вопрос" in ai_trainer.BUILD_PROGRAM_SEED.lower()
+    assert "вопрос" in ai_trainer.BUILD_PROGRAM_INTRO.lower()

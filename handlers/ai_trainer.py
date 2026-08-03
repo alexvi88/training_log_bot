@@ -250,23 +250,27 @@ async def ai_to_menu(callback: CallbackQuery, state: FSMContext):
 
 BUILD_PROGRAM_INTRO = (
     "🤖 <b>ОКЕЙ, СОБИРАЕМ ПРОГРАММУ.</b>\n\n"
-    "Отвечай на вопросы — и через пару реплик заберёшь готовый план."
+    "Сейчас задам пару вопросов — отвечай, и заберёшь готовый план."
 )
 
-# Отправляется тренеру от лица пользователя вместо того, чтобы заставлять его
-# печатать этот же запрос вручную (см. ai_build_program) — дальше в дело
-# вступает обычный сценарий из системного промпта: уточняющие вопросы,
-# затем propose_program.
-BUILD_PROGRAM_SEED = "Составь мне программу тренировок с нуля."
+# Уходит тренеру от лица пользователя, чтобы не заставлять его печатать этот же
+# запрос вручную (см. ai_build_program). Про вопросы сказано явно: системный
+# промпт разрешает тренеру собрать программу сразу на дефолтах, если человек
+# отмахивается, а вся суть этой кнопки — наоборот, провести через уточнения.
+BUILD_PROGRAM_SEED = (
+    "Хочу собрать программу тренировок. Сначала задай мне уточняющие вопросы "
+    "по вводным, которых не видно из моей истории, и только после моих ответов "
+    "собирай программу."
+)
 
 
 @router.callback_query(F.data == "ai:buildprog")
 async def ai_build_program(callback: CallbackQuery, state: FSMContext):
-    """Отдельная кнопка "Составить с AI-тренером" в 🗂 Программы: не просто
+    """Кнопка «Составить с AI-тренером» в 🗂 Программы.
 
-    открывает чат тренера, а сразу запускает сценарий сбора программы —
-    чтобы получить план не пришлось самому придумывать, с чего начать
-    разговор.
+    Не просто открывает чат тренера, а сразу запускает сценарий сбора программы
+    (уточняющие вопросы → propose_program → превью с сохранением): иначе, чтобы
+    получить план, надо было самому догадаться попросить об этом словами.
     """
     if not ai_trainer.is_configured():
         await callback.answer(
@@ -281,9 +285,16 @@ async def ai_build_program(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     try:
         await state.set_state(AITrainerFlow.chatting)
-        placeholder_screen = await ui.safe_edit(callback, BUILD_PROGRAM_INTRO, parse_mode="HTML")
+        # С клавиатурой, а не голым текстом: пока тренер думает, это единственный
+        # экран на месте меню — а ответа может и не быть вовсе (исчерпан дневной
+        # лимит вопросов, сбой провайдера), и без кнопок выход остался бы только
+        # через нижнее меню.
+        screen = await ui.safe_edit(
+            callback, BUILD_PROGRAM_INTRO,
+            reply_markup=await ai_keyboard(user_id), parse_mode="HTML",
+        )
         await _handle_question(
-            placeholder_screen, state, BUILD_PROGRAM_SEED,
+            screen, state, BUILD_PROGRAM_SEED,
             history_question=BUILD_PROGRAM_SEED, user_id=user_id,
         )
     finally:
