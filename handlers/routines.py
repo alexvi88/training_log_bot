@@ -83,7 +83,7 @@ async def rt_program_days(callback: CallbackQuery, state: FSMContext):
         day_blocks.append("\n".join([f"<b>{escape(day['name'])}</b>", *ex_lines]))
     text = "\n\n".join([
         f"🗂 <b>{escape(program_name)}</b>",
-        formatting.collapsible_if_long("\n\n".join(day_blocks)),
+        "\n\n".join(day_blocks),
         "Выбери день — посмотреть состав или начать тренировку.",
     ])
     await ui.safe_edit(

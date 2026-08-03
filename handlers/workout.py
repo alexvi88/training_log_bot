@@ -1262,8 +1262,8 @@ async def _recovery_line(user_id: int, groups) -> str:
         return ""
     spent.sort()
     shown = spent[:_RECOVERY_MAX_MENTIONS]
-    lines = "\n".join(f"{escape(name.lower())} — <i>{percent}% восстановления</i>" for percent, name in shown)
-    return f"💤 <b>ЕЩЁ НЕ ОТДОХНУЛИ:</b>\n{lines}"
+    lines = "\n".join(f"• {escape(name.lower())} — {percent}% восстановления" for percent, name in shown)
+    return f"💤 <b>Ещё не отдохнули:</b>\n{lines}"
 
 
 async def _picker_screen_groups(callback: CallbackQuery, state: FSMContext, show_program_button: bool = False):
@@ -1275,7 +1275,7 @@ async def _picker_screen_groups(callback: CallbackQuery, state: FSMContext, show
     hint = "<i>Выбери группу мышц или найди упражнение по названию:</i>"
     recovery = await _recovery_line(callback.from_user.id, groups)
     if recovery:
-        hint = recovery + "\n" + hint
+        hint = recovery + "\n\n" + hint
     open_ids = data.get("open_exercises") or []
     partner_buttons: list[tuple[int, str]] = []
     if open_ids:
