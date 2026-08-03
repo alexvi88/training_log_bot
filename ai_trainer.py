@@ -1751,12 +1751,29 @@ async def _resolve_replaced_program(
     if not name:
         return None, None
 
+    def _stored_progression(raw: Any) -> Optional[dict[str, Any]]:
+        """routine_exercises.progression — JSON-текст; на битой строке молчим и
+        считаем, что правила не было: превью сравнивает старое с новым, и
+        уронить его из-за неразобранной строки было бы хуже, чем показать
+        «без прогрессии»."""
+        if not raw:
+            return None
+        try:
+            value = json.loads(raw)
+        except (TypeError, ValueError):
+            return None
+        return value if isinstance(value, dict) else None
+
     async def _snapshot(routines: list[Any]) -> list[dict[str, Any]]:
         return [
             {
                 "name": routine["name"],
                 "items": [
-                    {"name": ex["display_name"], "target": ex["target"]}
+                    {
+                        "name": ex["display_name"],
+                        "target": ex["target"],
+                        "progression": _stored_progression(ex["progression"]),
+                    }
                     for ex in await db.list_routine_exercises(routine["id"])
                 ],
             }

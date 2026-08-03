@@ -522,6 +522,30 @@ def _day_key(name: str) -> str:
     return name.strip().lower()
 
 
+def format_progression_rule(progression: Optional[dict]) -> str:
+    """Короткая человекочитаемая строка правила прогрессии (5.6/3.2 —
+    ai_trainer._clean_progression, db.set_routine_exercise_progression): без неё
+    превью показывало бы схему подходов, но не то, как её менять дальше, а это
+    ровно то, что раньше терялось вместе с чатом.
+
+    Модульного уровня, потому что нужна в двух местах: и в составе программы, и
+    в блоке «что меняется» — правило, которое правка молча переписала, ничем не
+    хуже изменившейся схемы и должно читаться так же.
+    """
+    if not progression:
+        return ""
+    rule = progression.get("rule")
+    step = progression.get("step")
+    if rule == "double_progression":
+        top = progression.get("reps_top")
+        if top and step:
+            return f"дошёл до {top} повторов — прибавь {step:g}"
+        return "двойная прогрессия"
+    if rule == "linear_load":
+        return f"+{step:g} каждую тренировку" if step else "линейная прогрессия"
+    return ""
+
+
 def build_program_changes(old_days: list[dict], new_days: list[dict]) -> list[str]:
     """Построчно: что правка делает со старой программой.
 
@@ -558,10 +582,21 @@ def build_program_changes(old_days: list[dict], new_days: list[dict]) -> list[st
             if was is None:
                 suffix = f" — {escape(target)}" if target else ""
                 changes.append(f"  ➕ {escape(item['name'])}{suffix}")
-            elif (was.get("target") or "") != (target or ""):
+                continue
+            if (was.get("target") or "") != (target or ""):
                 changes.append(
                     f"  ✏️ {escape(item['name'])}: "
                     f"{escape(was.get('target') or 'без схемы')} → {escape(target or 'без схемы')}"
+                )
+            # Правило прогрессии — такая же часть упражнения, как схема, и
+            # переписанное молча оно тем неприятнее, что именно по нему потом
+            # считается подсказка веса.
+            was_rule = format_progression_rule(was.get("progression"))
+            now_rule = format_progression_rule(item.get("progression"))
+            if was_rule != now_rule:
+                changes.append(
+                    f"  ⤴️ {escape(item['name'])}: "
+                    f"{escape(was_rule or 'без прогрессии')} → {escape(now_rule or 'без прогрессии')}"
                 )
         for item in old_day["items"]:
             if item["name"].strip().lower() not in new_items:
@@ -670,24 +705,6 @@ def build_ai_program_preview(
     day_word = plural_ru(len(days), ("день", "дня", "дней"))
     ex_word = plural_ru(total, ("упражнение", "упражнения", "упражнений"))
 
-    def _progression_note(progression: Optional[dict]) -> str:
-        """Короткая человекочитаемая строка правила прогрессии (5.6/3.2 —
-        ai_trainer._clean_progression, db.set_routine_exercise_progression):
-        без неё превью показывало бы схему подходов, но не то, как её менять
-        дальше, а это ровно то, что раньше терялось вместе с чатом."""
-        if not progression:
-            return ""
-        rule = progression.get("rule")
-        step = progression.get("step")
-        if rule == "double_progression":
-            top = progression.get("reps_top")
-            if top and step:
-                return f"дошёл до {top} повторов — прибавь {step:g}"
-            return "двойная прогрессия"
-        if rule == "linear_load":
-            return f"+{step:g} каждую тренировку" if step else "линейная прогрессия"
-        return ""
-
     lines = [
         "📋 <b>ПРАВКА ПРОГРАММЫ</b>" if replaces else "📋 <b>ПРОГРАММА ОТ ТРЕНЕРА</b>",
         "",
@@ -710,7 +727,7 @@ def build_ai_program_preview(
             target = item.get("target")
             suffix = f" — {escape(target)}" if target else ""
             composition.append(f"{i}. {escape(item['name'])}{suffix}")
-            prog_note = _progression_note(item.get("progression"))
+            prog_note = format_progression_rule(item.get("progression"))
             if prog_note:
                 composition.append(f"   ⤴️ {escape(prog_note)}")
 

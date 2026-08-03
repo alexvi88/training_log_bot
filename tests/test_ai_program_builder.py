@@ -787,3 +787,38 @@ def test_preview_of_an_edit_that_keeps_day_names_still_fits_into_one_message():
     assert formatting.telegram_length(text) <= formatting.MESSAGE_LIMIT
     assert "Что меняется" in text
     assert "Заменю" in text
+
+
+async def test_the_edit_preview_compares_the_stored_progression_rule(fresh_db, user_id):
+    """Старое правило берётся из routine_exercises.progression — без него дифф
+    сравнивал бы новое правило с пустотой и всегда объявлял его изменившимся."""
+    db_ = fresh_db
+    group_id = await db_.create_muscle_group(user_id, "Грудь")
+    ex_id = await db_.create_exercise(user_id, "Жим лёжа", group_id)
+    program_id = await db_.create_program(user_id, "Верх/низ")
+    day = await db_.create_routine(user_id, "Верх", program_id=program_id)
+    await db_.add_routine_exercise(day, ex_id, 0, "4×8")
+    entry = (await db_.list_routine_exercises(day))[0]
+    await db_.set_routine_exercise_progression(
+        entry["id"], json.dumps({"rule": "linear_load", "step": 2.5})
+    )
+
+    replaces, error = await ai_trainer._resolve_replaced_program(user_id, "Верх/низ")
+
+    assert error is None
+    assert replaces["days"][0]["items"][0]["progression"] == {"rule": "linear_load", "step": 2.5}
+
+
+async def test_a_corrupt_stored_progression_reads_as_no_rule(fresh_db, user_id):
+    db_ = fresh_db
+    group_id = await db_.create_muscle_group(user_id, "Грудь")
+    ex_id = await db_.create_exercise(user_id, "Жим лёжа", group_id)
+    program_id = await db_.create_program(user_id, "Верх/низ")
+    day = await db_.create_routine(user_id, "Верх", program_id=program_id)
+    await db_.add_routine_exercise(day, ex_id, 0, "4×8")
+    entry = (await db_.list_routine_exercises(day))[0]
+    await db_.set_routine_exercise_progression(entry["id"], "{не json")
+
+    replaces, _error = await ai_trainer._resolve_replaced_program(user_id, "Верх/низ")
+
+    assert replaces["days"][0]["items"][0]["progression"] is None
