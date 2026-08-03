@@ -1430,6 +1430,10 @@ def _progression_reason(suggestion) -> str:
     """
     if suggestion.action != "add_weight" or not suggestion.from_reps:
         return ""
+    # Цель из правила программы объясняется правилом, а не общим наблюдением:
+    # человек это правило видел в превью и должен узнать его здесь.
+    if getattr(suggestion, "from_rule", False):
+        return f" — по программе: взял {suggestion.from_reps} повторов, прибавляем"
     return f" — взял {suggestion.from_reps} повторов, добавляем вес"
 
 

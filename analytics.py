@@ -6,7 +6,7 @@ DB layer and is trivially testable.
 
 import datetime as dt
 from dataclasses import dataclass, field
-from typing import Iterable, Optional
+from typing import Any, Iterable, Optional
 
 
 def epley_e1rm(weight: float, reps: int) -> float:
@@ -437,6 +437,10 @@ class ProgressionSuggestion:
     # commonest complaint about Fitbod is exactly that its numbers look random.
     from_weight: float = 0.0
     from_reps: int = 0
+    # Цель пришла из правила, которое прописано в программе, а не выведена из
+    # истории — подсказка это проговаривает, чтобы число не выглядело взятым
+    # с потолка (см. formatting.format_progression_hint).
+    from_rule: bool = False
 
 
 # Fallback increment per unit, used when the exercise's own history says nothing
@@ -519,6 +523,7 @@ def suggest_progression(
     unit: str = "kg",
     inferred_step: Optional[float] = None,
     formula: str = "epley",
+    rule: Optional[dict] = None,
 ) -> Optional[ProgressionSuggestion]:
     """Next-session target from last session's sets, by double progression.
 
@@ -527,6 +532,15 @@ def suggest_progression(
     the weight by one step (see weight_step_for) and restart at the lowest rep
     count that doesn't give back the e1RM already earned (_reps_holding_e1rm).
     Bodyweight sets (weight 0) simply chase one more rep.
+
+    `rule` — the progression the program itself prescribes for this exercise
+    (routine_exercises.progression, written by the AI trainer — see
+    db.set_routine_exercise_progression). Without it this function guesses the
+    rep range from a global default and the step from history, which is the
+    right behaviour for a lift the user just does; but when the program says
+    «доходишь до 8 повторов — прибавляй 2.5», the hint has no business
+    proposing anything else. Unknown or malformed rules fall through to the
+    default, so a rule the model invented can never break the hint.
     """
     working = [(w, r) for w, r in last_sets if r > 0]
     if not working:
@@ -539,8 +553,26 @@ def suggest_progression(
         )
     top_weight = max(w for w, _ in working)
     reps_at_top = max(r for w, r in working if w == top_weight)
-    if reps_at_top >= REP_RANGE_MAX:
-        step = weight_step_for(top_weight, unit, inferred_step)
+
+    rule_name = (rule or {}).get("rule")
+    rule_step = _positive_number((rule or {}).get("step"))
+    reps_top = _positive_int((rule or {}).get("reps_top"))
+
+    # linear_load: вес растёт каждую тренировку, повторы не при чём.
+    if rule_name == "linear_load" and rule_step:
+        target_weight = round(top_weight + rule_step, 2)
+        return ProgressionSuggestion(
+            "add_weight", target_weight, reps_at_top,
+            from_weight=top_weight, from_reps=reps_at_top, from_rule=True,
+        )
+
+    # double_progression: тот же алгоритм, что и по умолчанию, но верх
+    # диапазона и шаг берём из программы, а не угадываем.
+    top_of_range = reps_top if (rule_name == "double_progression" and reps_top) else REP_RANGE_MAX
+    from_rule = rule_name == "double_progression" and bool(reps_top or rule_step)
+
+    if reps_at_top >= top_of_range:
+        step = rule_step or weight_step_for(top_weight, unit, inferred_step)
         target_weight = round(top_weight + step, 2)
         return ProgressionSuggestion(
             "add_weight",
@@ -548,10 +580,28 @@ def suggest_progression(
             _reps_holding_e1rm(target_weight, top_weight, reps_at_top, formula),
             from_weight=top_weight,
             from_reps=reps_at_top,
+            from_rule=from_rule,
         )
     return ProgressionSuggestion(
-        "add_reps", top_weight, reps_at_top + 1, from_weight=top_weight, from_reps=reps_at_top
+        "add_reps", top_weight, reps_at_top + 1,
+        from_weight=top_weight, from_reps=reps_at_top, from_rule=from_rule,
     )
+
+
+def _positive_number(raw: Any) -> Optional[float]:
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
+def _positive_int(raw: Any) -> Optional[int]:
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
 
 
 @dataclass

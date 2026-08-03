@@ -3043,6 +3043,31 @@ async def set_routine_exercise_progression(
         await conn().commit()
 
 
+async def progression_rule_for_workout(workout_id: int, exercise_id: int) -> Optional[dict]:
+    """Правило прогрессии, которое прописала программа этой тренировки.
+
+    None, если тренировка не по программе, упражнения в её дне нет или правило
+    не записано, — тогда подсказка веса считает по умолчанию, как и раньше
+    (analytics.suggest_progression). Без этой выборки правило оставалось
+    записанным и показанным в превью, но на экране записи подхода не
+    участвовало ни в чём.
+    """
+    cur = await conn().execute(
+        "SELECT re.progression FROM workouts w "
+        "JOIN routine_exercises re ON re.routine_id = w.routine_id "
+        "WHERE w.id = ? AND re.exercise_id = ? AND re.progression IS NOT NULL",
+        (workout_id, exercise_id),
+    )
+    row = await cur.fetchone()
+    if row is None:
+        return None
+    try:
+        rule = json.loads(row["progression"])
+    except (TypeError, ValueError):
+        return None
+    return rule if isinstance(rule, dict) else None
+
+
 async def program_day_history(program_id: int) -> dict[int, tuple[str, int]]:
     """For each day of the program: (last time it was trained, how many times).
 

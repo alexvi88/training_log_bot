@@ -464,3 +464,43 @@ async def test_a_further_day_can_come_from_another_workout(fresh_db, user_id):
     await routines.rt_name_entered(_make_message(user_id, "День B"), state)
 
     assert [d["name"] for d in await db.list_program_days_by_id(program_id)] == ["День A", "День B"]
+
+
+async def test_a_program_can_be_duplicated_whole(fresh_db, user_id):
+    """Копия целиком — раньше вариант программы можно было получить только
+    собрав её заново."""
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    ex_id = await db.create_exercise(user_id, "Жим лёжа", group_id)
+    program_id = await _program(db, user_id, days=("Толкай", "Тяни"))
+    day = (await db.list_program_days_by_id(program_id))[0]
+    await db.add_routine_exercise(day["id"], ex_id, 0, "4×8")
+    entry = (await db.list_routine_exercises(day["id"]))[0]
+    await db.set_routine_exercise_progression(entry["id"], '{"rule": "linear_load", "step": 2.5}')
+
+    await routines.rt_program_copy(
+        _make_callback(user_id, f"rt:pgmcopy:{program_id}"), await _state(user_id)
+    )
+
+    programs = {p["name"]: p["day_count"] for p in await db.list_programs(user_id)}
+    assert programs == {"PPL": 2, "PPL (2)": 2}
+    copy_id = (await db.find_program_by_name(user_id, "PPL (2)"))["id"]
+    copied_day = (await db.list_program_days_by_id(copy_id))[0]
+    copied = await db.list_routine_exercises(copied_day["id"])
+    assert [(e["display_name"], e["target"]) for e in copied] == [("Жим лёжа", "4×8")]
+    assert copied[0]["progression"] == '{"rule": "linear_load", "step": 2.5}'
+    # Оригинал не тронут.
+    assert len(await db.list_routine_exercises(day["id"])) == 1
+
+
+async def test_duplicating_respects_the_day_budget(fresh_db, user_id):
+    db = fresh_db
+    program_id = await _program(db, user_id, days=("Толкай", "Тяни"))
+    for i in range(config.MAX_ROUTINES_PER_USER - 2):
+        await db.create_routine(user_id, f"Лишний {i}")
+
+    callback = _make_callback(user_id, f"rt:pgmcopy:{program_id}")
+    await routines.rt_program_copy(callback, await _state(user_id))
+
+    assert "не влезет" in callback.answer.await_args.args[0]
+    assert len(await db.list_programs(user_id)) == 1

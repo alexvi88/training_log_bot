@@ -534,6 +534,9 @@ def program_days_keyboard(days, program_id: int, next_day_id: int | None = None)
     b.button(text="➕ Добавить день", callback_data=f"rt:dayadd:{program_id}")
     if len(days) > 1:
         b.button(text="🔀 Порядок дней", callback_data=f"rt:dayorder:{program_id}")
+    # Копия целиком — база для «хочу вторую версию с правками»: без неё
+    # единственный способ получить вариант программы был собрать её заново.
+    b.button(text="📄 Дублировать программу", callback_data=f"rt:pgmcopy:{program_id}")
     b.button(text="✏️ Переименовать программу", callback_data=f"rt:pgmrename:{program_id}")
     # Программа целиком, а не день — тот же токен-визитка, но со всеми днями
     # разом: делиться по одному дню значило собирать программу получателю

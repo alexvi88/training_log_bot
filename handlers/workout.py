@@ -367,6 +367,7 @@ def _logging_hint(
     confirmed_weight: float | None = None,
     formula: str = config.DEFAULT_E1RM_FORMULA,
     target: str | None = None,
+    progression_rule: dict | None = None,
 ) -> str:
     base = None
     if show_instruction:
@@ -391,7 +392,8 @@ def _logging_hint(
         if show_progression:
             wr_only = [(w, r) for w, r, _ in last_session]
             suggestion = analytics.suggest_progression(
-                wr_only, unit=unit, inferred_step=inferred_step, formula=formula
+                wr_only, unit=unit, inferred_step=inferred_step, formula=formula,
+                rule=progression_rule,
             )
             if suggestion is not None:
                 achieved = any(
@@ -510,6 +512,13 @@ async def _render_logging_screen(bot, state: FSMContext, user):
         confirmed_weight=(data.get("confirmed_weights") or {}).get(active),
         formula=user["e1rm_formula"],
         target=(data.get("exercise_targets") or {}).get(active),
+        # Правило прогрессии из программы, по которой идёт тренировка: пока его
+        # никто отсюда не читал, «доходишь до 8 — прибавляй 2.5» оставалось
+        # текстом в превью и на цель не влияло.
+        progression_rule=(
+            await db.progression_rule_for_workout(data["workout_id"], active)
+            if active is not None else None
+        ),
     )
     kb = keyboards.logging_keyboard(open_items, active, has_sets)
     await _sync_sticky_photo(bot, state, active)
