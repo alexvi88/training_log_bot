@@ -49,7 +49,6 @@ def main_menu(has_active_workout: bool, show_quick_log: bool = False) -> InlineK
     # find out what the bot does — and "menu:ai" had a handler no keyboard sent.
     if show_quick_log:
         b.button(text="✍️ Записать прошлую тренировку", callback_data="menu:quicklog")
-    b.button(text="🤖 AI-тренер", callback_data="menu:ai")
     b.button(text="📈 Прогресс", callback_data="menu:progress")
     b.button(text="📚 История", callback_data="menu:history")
     b.button(text="⚙️ Упражнения", callback_data="menu:exercises")
@@ -58,10 +57,11 @@ def main_menu(has_active_workout: bool, show_quick_log: bool = False) -> InlineK
     b.button(text="🍽 Дневник еды", callback_data="menu:food")
     b.button(text="🏆 Достижения", callback_data="menu:achievements")
     b.button(text="🔧 Настройки", callback_data="menu:settings")
-    # start/resume, quick-log (if shown) and AI-тренер full width, then pairs:
+    b.button(text="🤖 AI-тренер", callback_data="menu:ai")
+    # start/resume and quick-log (if shown) full width, then pairs:
     # Прогресс·История, Упражнения·Программы, Дневник веса·Дневник еды,
-    # Достижения·Настройки.
-    b.adjust(*([1, 1, 1] if show_quick_log else [1, 1]), 2, 2, 2, 2)
+    # Достижения·Настройки, then AI-тренер full width at the very bottom.
+    b.adjust(*([1, 1] if show_quick_log else [1]), 2, 2, 2, 2, 1)
     return b.as_markup()
 
 
