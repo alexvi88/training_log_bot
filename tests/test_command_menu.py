@@ -13,11 +13,18 @@ from main import _setup_commands
 
 
 def _router_registration_order() -> list[str]:
-    """Router names in the order main() feeds them to dp.include_router(...)."""
+    """Router names in the order setup_routers() feeds them to dp.include_router(...).
+
+    Read from the source rather than from a live Dispatcher on purpose: the
+    routers are module-level singletons that can only be attached once per
+    process, and tests/test_routing.py already builds the real dispatcher.
+    """
     tree = ast.parse(Path("main.py").read_text())
-    (main_fn,) = [n for n in ast.walk(tree) if isinstance(n, ast.AsyncFunctionDef) and n.name == "main"]
+    (setup_fn,) = [
+        n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "setup_routers"
+    ]
     order = []
-    for node in ast.walk(main_fn):
+    for node in ast.walk(setup_fn):
         if (
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Attribute)
