@@ -752,7 +752,7 @@ def build_ai_program_preview(
             changes_body,
             already=lines + changes_header,
             tail=tail,
-            is_item=lambda l: any(sym in l for sym in ("➕", "➖", "✏️")),
+            is_item=lambda line: any(sym in line for sym in ("➕", "➖", "✏️")),
             note=lambda n: (
                 f"<i>…и ещё {n} {plural_ru(n, ('изменение', 'изменения', 'изменений'))} — "
                 "не поместились, полный состав смотри ниже и в «🗂 Программы» после сохранения.</i>"
@@ -775,7 +775,7 @@ def build_ai_program_preview(
         composition,
         already=lines,
         tail=tail,
-        is_item=lambda l: bool(l) and l[0].isdigit(),
+        is_item=lambda line: bool(line) and line[0].isdigit(),
         note=lambda n: (
             f"<i>…и ещё {n} {plural_ru(n, ('упражнение', 'упражнения', 'упражнений'))} — "
             "покажу целиком в «🗂 Программы».</i>"

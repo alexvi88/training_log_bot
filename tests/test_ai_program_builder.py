@@ -260,6 +260,124 @@ async def test_exercise_given_as_a_bare_string_still_resolves(fresh_db, user_id)
     assert [i["name"] for i in draft["days"][0]["items"]] == [TEMPLATE_A]
 
 
+# ---------- прогрессия (5.6/3.2) ----------
+
+
+async def test_progression_schema_declares_the_closed_rule_set():
+    (tool,) = [t for t in ai_trainer.TOOLS if t["function"]["name"] == "propose_program"]
+    ex_props = tool["function"]["parameters"]["properties"]["days"]["items"]["properties"][
+        "exercises"
+    ]["items"]["properties"]
+    prog_props = ex_props["progression"]["properties"]
+    assert set(prog_props["rule"]["enum"]) == set(ai_trainer.PROGRESSION_RULES)
+    assert prog_props["step"]["maximum"] == ai_trainer.PROGRESSION_MAX_STEP
+
+
+async def test_progression_is_carried_through_to_the_draft(fresh_db, user_id):
+    _, draft = await _propose(
+        user_id,
+        {
+            "name": "П",
+            "days": [
+                _day(
+                    "День 1",
+                    [
+                        {
+                            "name": TEMPLATE_A, "sets": 3, "reps_min": 5, "reps_max": 8,
+                            "progression": {"rule": "double_progression", "reps_top": 8, "step": 2.5},
+                        }
+                    ],
+                )
+            ],
+        },
+    )
+
+    item = draft["days"][0]["items"][0]
+    assert item["progression"] == {"rule": "double_progression", "reps_top": 8, "step": 2.5}
+
+
+async def test_progression_with_an_unknown_rule_is_dropped_not_the_exercise(fresh_db, user_id):
+    """Мусорное правило не должно стоить упражнения целиком — прогрессия не то
+    же самое, что sets/reps, клампить её в разумный дефолт нечем."""
+    _, draft = await _propose(
+        user_id,
+        {
+            "name": "П",
+            "days": [_day("День 1", [{"name": TEMPLATE_A, "progression": {"rule": "выдумка"}}])],
+        },
+    )
+
+    item = draft["days"][0]["items"][0]
+    assert item["name"] == TEMPLATE_A
+    assert item["progression"] is None
+
+
+async def test_progression_step_is_clamped_to_a_sane_range(fresh_db, user_id):
+    _, draft = await _propose(
+        user_id,
+        {
+            "name": "П",
+            "days": [
+                _day(
+                    "День 1",
+                    [{"name": TEMPLATE_A, "progression": {"rule": "linear_load", "step": 999}}],
+                )
+            ],
+        },
+    )
+
+    assert draft["days"][0]["items"][0]["progression"]["step"] == ai_trainer.PROGRESSION_MAX_STEP
+
+
+async def test_saving_a_draft_persists_the_progression_rule(fresh_db, user_id, monkeypatch):
+    """5.6: правило должно пережить сохранение — иначе оно, как и раньше,
+    существует только в прозе ответа и теряется вместе с чатом."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock
+
+    from aiogram.fsm.context import FSMContext
+    from aiogram.fsm.storage.base import StorageKey
+    from aiogram.fsm.storage.memory import MemoryStorage
+
+    from handlers import ai_trainer as handler
+
+    _, draft = await _propose(
+        user_id,
+        {
+            "name": "П",
+            "days": [
+                _day(
+                    "День 1",
+                    [
+                        {
+                            "name": TEMPLATE_A,
+                            "progression": {"rule": "double_progression", "reps_top": 8, "step": 2.5},
+                        }
+                    ],
+                )
+            ],
+        },
+    )
+    draft["id"] = 1
+    key = StorageKey(bot_id=1, chat_id=user_id, user_id=user_id)
+    state = FSMContext(storage=MemoryStorage(), key=key)
+    await state.update_data(ai_program_draft=draft)
+
+    message = MagicMock()
+    message.edit_text = AsyncMock()
+    callback = MagicMock()
+    callback.from_user = SimpleNamespace(id=user_id, username="tester")
+    callback.message = message
+    callback.data = "ai:prog:save:1"
+    callback.answer = AsyncMock()
+
+    await handler.ai_program_save(callback, state)
+
+    (routine,) = await fresh_db.list_routines(user_id)
+    (row,) = await fresh_db.list_routine_exercises(routine["id"])
+    assert json.loads(row["progression"]) == {"rule": "double_progression", "reps_top": 8, "step": 2.5}
+
+
 async def test_warns_the_model_when_the_routine_cap_would_overflow(fresh_db, user_id):
     for i in range(ai_trainer.MAX_ROUTINES_PER_USER):
         await fresh_db.create_routine(user_id, f"Программа {i}")
@@ -362,6 +480,40 @@ def test_preview_escapes_html_in_names():
 
     assert "&lt;b&gt;злое&lt;/b&gt;" in text
     assert "Жим &amp; тяга" in text
+
+
+def test_preview_surfaces_notes_the_model_would_otherwise_keep_to_itself():
+    """5.3: обрезки/потери раньше уходили только модели JSON-полем — если она
+    забывала упомянуть их в ответе, пользователь не узнавал, что попросил семь
+    дней, а получил шесть."""
+    text = formatting.build_ai_program_preview(
+        "П",
+        [{"name": "День 1", "items": [{"name": "Жим", "source": "own"}]}],
+        notes=["Дней получилось больше 6 — показал только первые 6.", "Не нашёл в боте: гакк-приседания."],
+    )
+
+    assert "На заметку" in text
+    assert "Дней получилось больше 6" in text
+    assert "гакк-приседания" in text
+
+
+def test_preview_shows_the_progression_rule_next_to_the_exercise():
+    text = formatting.build_ai_program_preview(
+        "П",
+        [
+            {
+                "name": "День 1",
+                "items": [
+                    {
+                        "name": "Жим лёжа", "target": "3×5–8", "source": "own",
+                        "progression": {"rule": "double_progression", "reps_top": 8, "step": 2.5},
+                    }
+                ],
+            }
+        ],
+    )
+
+    assert "дошёл до 8 повторов — прибавь 2.5" in text
 
 
 def test_preview_of_a_single_day_does_not_promise_several_programs():
@@ -486,6 +638,46 @@ async def test_program_name_matches_case_insensitively(fresh_db, user_id):
     )
 
     assert draft["replaces"]["name"] == "Верх/низ"
+
+
+async def test_saved_programs_tool_marks_multi_day_and_standalone_kind(fresh_db, user_id):
+    """5.4: без пометки kind список программ и одиночных routines был плоским —
+    при совпадении имён между ними резолвер мог поправить не ту, на которую
+    рассчитывал пользователь."""
+    await _saved_two_day_program(fresh_db, user_id)
+    await fresh_db.create_routine(user_id, "Одиночная")
+
+    payload = json.loads(await ai_trainer.execute_tool(user_id, "get_saved_programs", {}))
+
+    kinds = {p["name"]: p["kind"] for p in payload["programs"]}
+    assert kinds["Верх/низ"] == "program"
+    assert kinds["Одиночная"] == "routine"
+
+
+async def test_replaces_program_resolves_case_folded_cyrillic_names_correctly(fresh_db, user_id):
+    """A4: две программы, различающиеся только регистром («Сплит»/«сплит»), —
+    раньше резолвер лоуеркейсил имена вручную поверх db.list_programs (обычной
+    группировки по строке), а Python str.lower() и старое SQL-сравнение
+    расходились ровно на не-ASCII буквах — «Сплит» и «сплит» были одной
+    программой для резолвера и разными для БД, и промах удалял не ту, о которой
+    просил пользователь. db.find_program_by_name использует ту же Unicode-
+    свёртку (name_key), что и уникальный индекс программ, так что резолвится
+    именно та программа, что и должна."""
+    upper_id = await fresh_db.create_program(user_id, "Сплит")
+    await fresh_db.create_routine(user_id, "Старый день", program_id=upper_id)
+
+    payload, draft = await _propose(
+        user_id,
+        {
+            "name": "Сплит",
+            "replaces_program": "Сплит",
+            "days": [_day("Новый день", [{"name": TEMPLATE_A}])],
+        },
+    )
+
+    assert payload["replaces_program"] == "Сплит"
+    assert draft["replaces"]["kind"] == "program"
+    assert draft["replaces"]["id"] == upper_id
 
 
 def test_preview_spells_out_that_the_edit_replaces_the_old_version():

@@ -18,7 +18,6 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
 
-from fsm import WorkoutFlow
 from handlers import routines, workout
 
 pytestmark = pytest.mark.asyncio

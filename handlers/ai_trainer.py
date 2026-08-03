@@ -638,11 +638,11 @@ async def _save_into_existing_program(
     # переименование молча).
     resolved_name = (draft.get("replaces") or {}).get("name") or program["name"]
     target_name = program["name"]
-    if draft["name"].strip().lower() != resolved_name.strip().lower():
-        if await db.rename_program_by_id(program["id"], draft["name"]):
-            target_name = draft["name"]
-        # Если имя занято другой программой — просто оставляем текущее имя:
-        # это правка состава, а не переименования, отказывать из-за него незачем.
+    renamed_by_trainer = draft["name"].strip().lower() != resolved_name.strip().lower()
+    # Если имя занято другой программой, rename вернёт False — просто оставляем
+    # текущее: это правка состава, а не переименования, отказывать из-за него незачем.
+    if renamed_by_trainer and await db.rename_program_by_id(program["id"], draft["name"]):
+        target_name = draft["name"]
 
     # Сначала новые дни, потом удаление старых (A6): падение посередине
     # оставляет пользователя с лишними новыми днями рядом со старой

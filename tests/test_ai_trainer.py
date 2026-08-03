@@ -848,8 +848,7 @@ async def test_program_adherence_counts_sessions_and_days_since_last(fresh_db, u
     legs = await fresh_db.create_routine(user_id, "Ноги", program_id=program_id)
 
     async def _log(routine_id, started_at):
-        wid = await fresh_db.create_finished_workout(user_id, started_at=started_at, finished_at=started_at)
-        await fresh_db.set_workout_routine(wid, routine_id)
+        await fresh_db.create_workout(user_id, started_at=started_at, status="finished", routine_id=routine_id)
 
     await _log(push, "2026-03-01T10:00:00")
     await _log(push, "2026-03-08T10:00:00")

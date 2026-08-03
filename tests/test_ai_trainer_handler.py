@@ -753,7 +753,7 @@ async def test_editing_replaces_all_current_days_even_ones_added_since_the_propo
     draft["replaces"] = {"kind": "program", "id": program_id, "name": "Верх/низ", "routine_ids": [old_day]}
     await state.update_data(ai_program_draft=draft)
 
-    added_later = await db_.create_routine(user_id, "Добавил руками", program_id=program_id)
+    await db_.create_routine(user_id, "Добавил руками", program_id=program_id)
 
     await ai_trainer.ai_program_save(_make_callback(user_id, "ai:prog:save:1"), state)
 
