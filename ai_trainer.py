@@ -294,6 +294,18 @@ get_bodyweight_history, она отдаёт всю историю дневник
 становую», «сделай 4 дня») — просто вызови propose_program заново, целиком с
 учётом правки; предыдущее предложение заменится новым.
 
+Ты умеешь править и те программы, которые у пользователя УЖЕ сохранены, — не
+только что-то предлагать заново. Порядок такой:
+- сначала get_saved_programs — посмотреть, что у него есть, с точным именем
+  программы и составом каждого дня (выдумывать состав по памяти нельзя);
+- потом propose_program, где в replaces_program стоит точное имя той программы,
+  а сама программа прислана ЦЕЛИКОМ: все дни и все упражнения, включая
+  нетронутые. Чего не прислал — того в программе не останется.
+Пользователь увидит превью правки и подтвердит её кнопкой; до тапа ничего не
+меняется, так что не пиши «поправил» — пиши, что правка ждёт подтверждения.
+Если человек просит не поправить, а собрать ещё одну программу вдобавок —
+replaces_program не передавай, иначе затрёшь старую.
+
 Если среди доступных инструментов есть веб-поиск — используй его для вопросов,
 выходящих за рамки личных данных пользователя (актуальные исследования,
 рекомендации по питанию/технике, новости фитнес-индустрии и т.п.), а не
@@ -1016,6 +1028,22 @@ TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "get_saved_programs",
+            "description": (
+                "Программы, которые у пользователя уже сохранены, с составом каждого "
+                "дня (упражнения и схема подходов). Вызывай, когда речь о том, что у "
+                "него есть: «что у меня за программа», «добавь жим в день ног», "
+                "«убери сведения», «поменяй программу» — и вообще перед любой правкой "
+                "существующей программы, чтобы знать её точное имя и текущий состав. "
+                "Если человек просит поправить программу, а ты не смотрел этот "
+                "инструмент — сначала посмотри, а не выдумывай состав."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "propose_program",
             "description": (
                 "Предложить пользователю программу тренировок — один или несколько "
@@ -1032,7 +1060,11 @@ TOOLS: list[dict[str, Any]] = [
                 "не совпало ни с тем, ни с другим, в программу не попадёт, и "
                 "инструмент вернёт такие названия в поле unresolved. После вызова "
                 "обязательно опиши программу словами: логику сплита, прогрессию, "
-                "на что смотреть."
+                "на что смотреть.\n"
+                "Этим же инструментом правят уже сохранённую программу: передай её "
+                "точное имя в replaces_program и пришли программу ЦЕЛИКОМ — со всеми "
+                "днями и упражнениями, включая те, что не менялись. Частичную правку "
+                "инструмент не понимает: что не прислал, то из программы пропадёт."
             ),
             "parameters": {
                 "type": "object",
@@ -1040,6 +1072,15 @@ TOOLS: list[dict[str, Any]] = [
                     "name": {
                         "type": "string",
                         "description": f"Название программы, до {PROGRAM_NAME_LIMIT} символов",
+                    },
+                    "replaces_program": {
+                        "type": "string",
+                        "description": (
+                            "Точное имя уже сохранённой программы (из get_saved_programs), "
+                            "которую это предложение заменяет — для правок существующей "
+                            "программы. Старые дни при подтверждении удалятся, новые "
+                            "встанут на их место. Для новой программы не передавай."
+                        ),
                     },
                     "days": {
                         "type": "array",
@@ -1121,6 +1162,7 @@ TOOL_STATUS_TEXTS: dict[str, str] = {
     "get_bodyweight_history": "⚖️ смотрю дневник веса...",
     "get_food_diary": "🍽 смотрю дневник питания...",
     "get_full_chat_history": "🗂️ поднимаю историю переписки...",
+    "get_saved_programs": "🗂 смотрю твои программы...",
     "propose_program": "📋 собираю программу...",
 }
 
@@ -1170,6 +1212,55 @@ async def _training_overview(user_id: int) -> dict[str, Any]:
             }
             for ex in exercises
         ],
+    }
+
+
+async def _saved_programs(user_id: int) -> dict[str, Any]:
+    """Сохранённые программы пользователя с составом каждого дня.
+
+    Нужны, чтобы тренер мог править то, что у человека уже есть, а не только
+    предлагать новое: без этого «убери сведения из дня ног» ему просто не по
+    чему выполнить. `id` дней здесь не отдаём — правка идёт по имени программы
+    (см. propose_program.replaces_program), а имена пользователю и видны.
+    """
+    programs: list[dict[str, Any]] = []
+    for row in await db.list_programs(user_id):
+        days = []
+        for day in await db.list_program_days(user_id, row["program_name"]):
+            days.append(
+                {
+                    "name": day["name"],
+                    "exercises": [
+                        {"name": ex["display_name"], "target": ex["target"]}
+                        for ex in await db.list_routine_exercises(day["id"])
+                    ],
+                }
+            )
+        programs.append({"name": row["program_name"], "days": days})
+    for routine in await db.list_standalone_routines(user_id):
+        programs.append(
+            {
+                "name": routine["name"],
+                "days": [
+                    {
+                        "name": routine["name"],
+                        "exercises": [
+                            {"name": ex["display_name"], "target": ex["target"]}
+                            for ex in await db.list_routine_exercises(routine["id"])
+                        ],
+                    }
+                ],
+            }
+        )
+    return {
+        "programs": programs,
+        "note": (
+            "Это то, что у пользователя уже сохранено. Чтобы поправить одну из "
+            "этих программ, вызови propose_program целиком (со всеми днями, "
+            "включая нетронутые) и передай её точное имя в replaces_program."
+        )
+        if programs
+        else "У пользователя пока нет сохранённых программ.",
     }
 
 
@@ -1387,6 +1478,66 @@ def _clean_program_item(raw: Any) -> Optional[dict[str, Any]]:
     }
 
 
+async def _resolve_replaced_program(
+    user_id: int, raw_name: Any
+) -> tuple[Optional[dict[str, Any]], Optional[str]]:
+    """Какую сохранённую программу заменяет предложение. Возвращает (цель, ошибка).
+
+    Совпадение только точное (с точностью до регистра и пробелов): промах здесь
+    стоит пользователю удалённой программы, так что «похожее» имя лучше вернуть
+    модели ошибкой, чем угадывать. Сам список id мы фиксируем сейчас, а удаляем
+    только по тапу пользователя (см. handlers.ai_trainer.ai_program_save) —
+    инструмент по-прежнему ничего не пишет.
+
+    Вместе с id забираем и текущий состав: превью показывает не только итог, но
+    и что именно меняется (formatting.build_ai_program_preview), а после
+    удаления старых дней сравнивать было бы уже не с чем.
+    """
+    name = str(raw_name or "").strip()
+    if not name:
+        return None, None
+
+    async def _snapshot(routines: list[Any]) -> list[dict[str, Any]]:
+        return [
+            {
+                "name": routine["name"],
+                "items": [
+                    {"name": ex["display_name"], "target": ex["target"]}
+                    for ex in await db.list_routine_exercises(routine["id"])
+                ],
+            }
+            for routine in routines
+        ]
+
+    key = name.lower()
+    for row in await db.list_programs(user_id):
+        if row["program_name"].strip().lower() == key:
+            days = await db.list_program_days(user_id, row["program_name"])
+            return (
+                {
+                    "name": row["program_name"],
+                    "routine_ids": [d["id"] for d in days],
+                    "days": await _snapshot(days),
+                },
+                None,
+            )
+    for routine in await db.list_standalone_routines(user_id):
+        if routine["name"].strip().lower() == key:
+            return (
+                {
+                    "name": routine["name"],
+                    "routine_ids": [routine["id"]],
+                    "days": await _snapshot([routine]),
+                },
+                None,
+            )
+    return None, (
+        f"программы «{name}» у пользователя нет — replaces_program проигнорирован, "
+        "предложение показано как НОВАЯ программа. Возьми точное имя из "
+        "get_saved_programs и вызови инструмент ещё раз, если хотел править существующую."
+    )
+
+
 async def _propose_program(
     user_id: int, tool_input: dict[str, Any]
 ) -> tuple[dict[str, Any], Optional[dict[str, Any]]]:
@@ -1403,6 +1554,9 @@ async def _propose_program(
         return {"error": "days пустой — программа не показана пользователю"}, None
 
     program_name = _clean_program_name(tool_input.get("name"), "Программа")
+    replaces, replaces_error = await _resolve_replaced_program(
+        user_id, tool_input.get("replaces_program")
+    )
     truncated_days = len(raw_days) > PROGRAM_MAX_DAYS
 
     days: list[dict[str, Any]] = []
@@ -1476,16 +1630,29 @@ async def _propose_program(
             "она ждёт его подтверждения под сообщением."
         ),
     }
+    if replaces is not None:
+        payload["replaces_program"] = replaces["name"]
+        payload["note"] = (
+            f"Правка программы «{replaces['name']}» показана пользователю кнопкой под "
+            "твоим ответом. Она ещё НЕ применена — не пиши, что уже поправил, скажи, "
+            "что правка ждёт подтверждения под сообщением. По тапу старые дни этой "
+            "программы заменятся новыми."
+        )
+    if replaces_error:
+        payload["replaces_program_error"] = replaces_error
     if truncated_days:
         payload["truncated_days"] = (
             f"дней было больше {PROGRAM_MAX_DAYS}, лишние отброшены"
         )
-    if existing + len(days) > MAX_ROUTINES_PER_USER:
+    # Заменяемые дни освобождают свои места — правка программы того же размера
+    # не должна упираться в лимит только потому, что старая версия ещё цела.
+    freed = len(replaces["routine_ids"]) if replaces else 0
+    if existing - freed + len(days) > MAX_ROUTINES_PER_USER:
         payload["warning"] = (
             f"у пользователя уже {existing} программ при лимите {MAX_ROUTINES_PER_USER} — "
             "при сохранении поместятся не все, предупреди его, что старые стоит удалить"
         )
-    return payload, {"name": program_name, "days": days}
+    return payload, {"name": program_name, "days": days, "replaces": replaces}
 
 
 async def execute_tool(
@@ -1516,6 +1683,8 @@ async def execute_tool(
         payload = await _food_diary(user_id, int(tool_input.get("days") or 14))
     elif name == "get_full_chat_history":
         payload = await _full_chat_history(user_id)
+    elif name == "get_saved_programs":
+        payload = await _saved_programs(user_id)
     elif name == "propose_program":
         payload, draft = await _propose_program(user_id, tool_input)
         if draft is not None and on_program is not None:

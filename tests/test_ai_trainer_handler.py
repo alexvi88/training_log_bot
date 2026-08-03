@@ -598,6 +598,56 @@ async def test_saving_a_stale_draft_alerts_and_writes_nothing(fresh_db, user_id)
     assert callback.answer.await_args.kwargs.get("show_alert") is True
 
 
+async def test_editing_a_program_replaces_its_days_instead_of_duplicating(fresh_db, user_id):
+    """Правка сохранённой программы (propose_program.replaces_program) по тапу
+    заменяет её дни, а не кладёт рядом вторую копию с тем же именем."""
+    db_ = fresh_db
+    gid = await db_.create_muscle_group(user_id, "Ноги")
+    squat = await db_.create_exercise(user_id, "Присед", gid)
+    old_day = await db_.create_routine(user_id, "Старый день", program_name="Верх/низ")
+    await db_.add_routine_exercise(old_day, squat, 0, "3×5")
+
+    state = await _make_state(user_id)
+    draft = _draft(days=2)
+    draft["replaces"] = {"name": "Верх/низ", "routine_ids": [old_day]}
+    await state.update_data(ai_program_draft=draft)
+
+    await ai_trainer.ai_program_save(_make_callback(user_id, "ai:prog:save"), state)
+
+    programs = await db_.list_programs(user_id)
+    assert [(p["program_name"], p["day_count"]) for p in programs] == [("Верх/низ", 2)]
+    names = [r["name"] for r in await db_.list_routines(user_id)]
+    assert "Старый день" not in names
+
+
+async def test_editing_preview_says_it_will_replace_and_labels_the_button(fresh_db, user_id):
+    state = await _make_state(user_id)
+    draft = _draft(days=1)
+    draft["replaces"] = {"name": "Верх/низ", "routine_ids": [123]}
+    await state.update_data(ai_program_draft=draft)
+    callback = _make_callback(user_id, "ai:prog:view")
+
+    await ai_trainer.ai_program_view(callback, state)
+
+    text = callback.message.answer.await_args.args[0]
+    assert "Верх/низ" in text and "замен" in text.lower()
+    kb = callback.message.answer.await_args.kwargs["reply_markup"]
+    assert kb.inline_keyboard[0][0].text == "✅ Обновить программу"
+
+
+async def test_a_program_deleted_before_the_tap_is_just_added(fresh_db, user_id):
+    """Черновик переживает и удаление оригинала руками: заменять нечего —
+    значит просто добавляем, а не падаем."""
+    state = await _make_state(user_id)
+    draft = _draft(days=1)
+    draft["replaces"] = {"name": "Верх/низ", "routine_ids": [999_999]}
+    await state.update_data(ai_program_draft=draft)
+
+    await ai_trainer.ai_program_save(_make_callback(user_id, "ai:prog:save"), state)
+
+    assert len(await fresh_db.list_routines(user_id)) == 1
+
+
 async def test_program_draft_survives_a_trip_to_the_menu(fresh_db, user_id):
     """Кнопка программы висит под ответом тренера и остаётся нажимаемой, так что
     черновик обязан пережить выход в меню: раньше поход в меню (в том числе

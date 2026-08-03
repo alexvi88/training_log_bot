@@ -8,7 +8,7 @@ import datetime as dt
 import re
 from dataclasses import dataclass, field
 from html import escape
-from typing import Literal
+from typing import Literal, Optional
 
 from aiogram.types import MessageEntity
 
@@ -516,13 +516,80 @@ def build_ai_comment_block(comment: str) -> str:
     return f"{DIVIDER}\n🤖 <b>Комментарий AI-тренера</b>\n{collapsible_if_long(markdown_bold_to_html(comment))}"
 
 
-def build_ai_program_preview(name: str, days: list[dict]) -> str:
+# Запас под строку «…и ещё N упражнений», которой заканчивается обрезанный
+# состав программы (см. build_ai_program_preview).
+_TRUNCATION_RESERVE = 120
+
+
+def _day_key(name: str) -> str:
+    return name.strip().lower()
+
+
+def build_program_changes(old_days: list[dict], new_days: list[dict]) -> list[str]:
+    """Построчно: что правка делает со старой программой.
+
+    Дни и упражнения сопоставляются по имени (регистр и пробелы не в счёт) —
+    id у предложения нет, да и человек узнаёт свой день именно по названию.
+    Переименованный день читается как «убрал один, добавил другой»: угадывать,
+    что «Ноги» стали «Низом», а не заменили их, неоткуда.
+
+    Перестановки внутри дня намеренно игнорируются: порядок упражнений правка
+    меняет постоянно, и строчка про это утопила бы то, ради чего блок и нужен —
+    что реально пришло, ушло и с какой схемой.
+    """
+    old_by = {_day_key(d["name"]): d for d in old_days}
+    new_by = {_day_key(d["name"]): d for d in new_days}
+
+    lines: list[str] = []
+    for day in new_days:
+        if _day_key(day["name"]) not in old_by:
+            lines.append(f"➕ новый день <b>{escape(day['name'])}</b>")
+    for day in old_days:
+        if _day_key(day["name"]) not in new_by:
+            lines.append(f"➖ убираю день <b>{escape(day['name'])}</b>")
+
+    for day in new_days:
+        old_day = old_by.get(_day_key(day["name"]))
+        if old_day is None:
+            continue
+        old_items = {item["name"].strip().lower(): item for item in old_day["items"]}
+        new_items = {item["name"].strip().lower(): item for item in day["items"]}
+        changes: list[str] = []
+        for item in day["items"]:
+            was = old_items.get(item["name"].strip().lower())
+            target = item.get("target")
+            if was is None:
+                suffix = f" — {escape(target)}" if target else ""
+                changes.append(f"  ➕ {escape(item['name'])}{suffix}")
+            elif (was.get("target") or "") != (target or ""):
+                changes.append(
+                    f"  ✏️ {escape(item['name'])}: "
+                    f"{escape(was.get('target') or 'без схемы')} → {escape(target or 'без схемы')}"
+                )
+        for item in old_day["items"]:
+            if item["name"].strip().lower() not in new_items:
+                changes.append(f"  ➖ {escape(item['name'])}")
+        if changes:
+            lines.append(f"<b>{escape(day['name'])}</b>")
+            lines += changes
+    return lines
+
+
+def build_ai_program_preview(
+    name: str, days: list[dict], replaces: Optional[dict] = None
+) -> str:
     """Превью программы, которую собрал AI-тренер, до её сохранения.
 
     `days` — черновик из ai_trainer.propose_program: [{"name", "items": [{"name",
     "target", "source"}]}]. Каждый день станет отдельной программой в списке
     пользователя, поэтому текст проговаривает это прямо — иначе «добавить»
     выглядит как одна новая строка, а появится несколько.
+
+    `replaces` — сохранённая программа, которую эта правка заменит: {"name",
+    "days"} со старым составом. Замена стирает старые дни, поэтому превью и
+    называется правкой, и показывает разницу со старой версией: без этого
+    человеку пришлось бы сличать два списка по десятку упражнений глазами,
+    чтобы понять, что тренер вообще поменял.
     """
     total = sum(len(day["items"]) for day in days)
     new_names = sorted(
@@ -532,31 +599,60 @@ def build_ai_program_preview(name: str, days: list[dict]) -> str:
     ex_word = plural_ru(total, ("упражнение", "упражнения", "упражнений"))
 
     lines = [
-        "📋 <b>ПРОГРАММА ОТ ТРЕНЕРА</b>",
+        "📋 <b>ПРАВКА ПРОГРАММЫ</b>" if replaces else "📋 <b>ПРОГРАММА ОТ ТРЕНЕРА</b>",
         "",
         f"<b>{escape(name)}</b>",
         f"{len(days)} {day_word} · {total} {ex_word}",
     ]
+    if replaces:
+        # Что меняется — выше состава: решение принимают по разнице, а полный
+        # список ниже нужен уже для «ок, и как это теперь выглядит целиком».
+        changes = build_program_changes(replaces.get("days") or [], days)
+        lines += ["", "🔄 <b>Что меняется:</b>"]
+        lines += changes or ["Состав тот же — меняется только порядок или название."]
+
+    composition: list[str] = []
     for day in days:
-        lines += ["", f"<b>{escape(day['name'])}</b>"]
+        composition += ["", f"<b>{escape(day['name'])}</b>"]
         for i, item in enumerate(day["items"], start=1):
             target = item.get("target")
             suffix = f" — {escape(target)}" if target else ""
-            lines.append(f"{i}. {escape(item['name'])}{suffix}")
+            composition.append(f"{i}. {escape(item['name'])}{suffix}")
 
-    lines += ["", DIVIDER]
-    if len(days) == 1:
-        lines.append("Добавлю как программу — начать по ней тренировку можно в один тап.")
+    tail = ["", DIVIDER]
+    if replaces:
+        tail.append(
+            f"Заменю этим твою программу «{escape(replaces['name'])}» — "
+            "старая версия её дней удалится."
+        )
+    elif len(days) == 1:
+        tail.append("Добавлю как программу — начать по ней тренировку можно в один тап.")
     else:
-        lines.append(
+        tail.append(
             f"Добавлю как {len(days)} отдельные программы — по каждой начинаешь тренировку в один тап."
         )
     if new_names:
         word = plural_ru(len(new_names), ("упражнение", "упражнения", "упражнений"))
-        lines.append(
+        tail.append(
             f"Новых для тебя {word}: {len(new_names)} — добавлю их в твой список автоматически."
         )
-    return "\n".join(lines)
+
+    # Шесть дней по двенадцать упражнений (потолки propose_program) плюс блок
+    # изменений переваливают за лимит Telegram — и тогда не отправится вообще
+    # ничего. Режем именно полный состав: он ниже всего по важности (итог всё
+    # равно окажется в «🗂 Программы»), а шапка, разница и предупреждение о
+    # замене должны дойти целиком.
+    budget = MESSAGE_LIMIT - telegram_length("\n".join(lines + tail)) - _TRUNCATION_RESERVE
+    kept: list[str] = []
+    for index, line in enumerate(composition):
+        if telegram_length("\n".join(kept + [line])) > budget:
+            hidden = sum(1 for rest in composition[index:] if rest.startswith(tuple("0123456789")))
+            if hidden:
+                word = plural_ru(hidden, ("упражнение", "упражнения", "упражнений"))
+                kept += ["", f"<i>…и ещё {hidden} {word} — покажу целиком в «🗂 Программы».</i>"]
+            break
+        kept.append(line)
+    return "\n".join(lines + kept + tail)
 
 
 # Fun, shareable size comparisons for a tonnage total — (emoji, kg each, declensions),
