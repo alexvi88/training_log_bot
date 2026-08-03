@@ -1295,6 +1295,12 @@ async def _picker_screen_groups(callback: CallbackQuery, state: FSMContext, show
         if await db.count_workouts(callback.from_user.id) > 0:
             extra.append(("🔁 Повторить тренировку", "pick:repeat"))
         extra.append(("🗂 Выбрать программу", "rt:manage"))
+        # Только тем, у кого программ ещё нет: для них кнопка выше ведёт на
+        # пустой экран, а собрать программу — как раз то, чего им не хватает.
+        # У кого программы есть, это был бы третий пункт про программы подряд
+        # на экране, куда пришли тренироваться, а не планировать.
+        if not await db.count_routines(callback.from_user.id) and ai_trainer.is_configured():
+            extra.append(("🤖 Составить программу с AI", "ai:buildprog"))
     # Not a "cancel the workout" — pick:cancel just returns to whatever screen was
     # open before (see _back_after_cancel), so it reads as "⬅️ Назад", not "❌ Отмена".
     extra.append(("⬅️ Назад", "pick:cancel"))

@@ -461,3 +461,61 @@ async def test_pick_template_add_forks_and_enters_logging(fresh_db, user_id):
     # one-off album that would double up with it.
     callback.message.answer_media_group.assert_not_awaited()
     callback.bot.send_media_group.assert_awaited_once()
+
+
+# ---------- "Составить программу с AI" on the fresh-workout picker ----------
+
+
+async def _picker_extra_callbacks(db, user_id, monkeypatch) -> list[str]:
+    """Render the first picker screen of a fresh workout and return the callback
+    data of its buttons. _refresh_live is stubbed — the keyboard is the subject
+    here, not the live tracker it gets rendered into."""
+    captured = {}
+
+    async def fake_refresh_live(bot, state, user, workout_id, hint, kb):
+        captured["kb"] = kb
+
+    monkeypatch.setattr(workout, "_refresh_live", fake_refresh_live)
+
+    workout_id = await db.create_workout(user_id)
+    state = await _make_state(user_id, open_exercises=[], active_exercise_id=None)
+    await state.update_data(workout_id=workout_id)
+    callback = _make_callback(user_id, "menu:start_workout")
+
+    await workout._picker_screen_groups(callback, state, show_program_button=True)
+
+    return [b.callback_data for row in captured["kb"].inline_keyboard for b in row]
+
+
+async def test_picker_offers_building_a_program_when_the_user_has_none(
+    fresh_db, user_id, monkeypatch
+):
+    monkeypatch.setattr(workout.ai_trainer, "is_configured", lambda: True)
+
+    callbacks = await _picker_extra_callbacks(fresh_db, user_id, monkeypatch)
+
+    assert "ai:buildprog" in callbacks
+
+
+async def test_picker_hides_the_ai_program_button_once_a_program_exists(
+    fresh_db, user_id, monkeypatch
+):
+    """With programs saved, "🗂 Выбрать программу" already leads somewhere useful
+    — a second program button would just crowd a screen meant for training."""
+    monkeypatch.setattr(workout.ai_trainer, "is_configured", lambda: True)
+    await fresh_db.create_routine(user_id, "Верх/низ")
+
+    callbacks = await _picker_extra_callbacks(fresh_db, user_id, monkeypatch)
+
+    assert "ai:buildprog" not in callbacks
+    assert "rt:manage" in callbacks
+
+
+async def test_picker_hides_the_ai_program_button_when_the_trainer_is_off(
+    fresh_db, user_id, monkeypatch
+):
+    monkeypatch.setattr(workout.ai_trainer, "is_configured", lambda: False)
+
+    callbacks = await _picker_extra_callbacks(fresh_db, user_id, monkeypatch)
+
+    assert "ai:buildprog" not in callbacks

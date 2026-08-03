@@ -419,6 +419,7 @@ def routines_manage_keyboard(programs, routines, has_workouts: bool) -> InlineKe
         b.button(text=r["name"], callback_data=f"rt:view:{r['id']}")
     if has_workouts:
         b.button(text="➕ Из тренировки", callback_data="rt:pickw:page:0")
+    b.button(text="🤖 Составить с AI-тренером", callback_data="ai:buildprog")
     b.button(text="✨ Готовые программы", callback_data="rt:programs")
     b.button(text="🏠 Меню", callback_data="rt:menu")
     b.adjust(1)

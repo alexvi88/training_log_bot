@@ -248,6 +248,59 @@ async def ai_to_menu(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+BUILD_PROGRAM_INTRO = (
+    "🤖 <b>ОКЕЙ, СОБИРАЕМ ПРОГРАММУ.</b>\n\n"
+    "Сейчас задам пару вопросов — отвечай, и заберёшь готовый план."
+)
+
+# Уходит тренеру от лица пользователя, чтобы не заставлять его печатать этот же
+# запрос вручную (см. ai_build_program). Про вопросы сказано явно: системный
+# промпт разрешает тренеру собрать программу сразу на дефолтах, если человек
+# отмахивается, а вся суть этой кнопки — наоборот, провести через уточнения.
+BUILD_PROGRAM_SEED = (
+    "Хочу собрать программу тренировок. Сначала задай мне уточняющие вопросы "
+    "по вводным, которых не видно из моей истории, и только после моих ответов "
+    "собирай программу."
+)
+
+
+@router.callback_query(F.data == "ai:buildprog")
+async def ai_build_program(callback: CallbackQuery, state: FSMContext):
+    """Кнопка «Составить с AI-тренером» в 🗂 Программы.
+
+    Не просто открывает чат тренера, а сразу запускает сценарий сбора программы
+    (уточняющие вопросы → propose_program → превью с сохранением): иначе, чтобы
+    получить план, надо было самому догадаться попросить об этом словами.
+    """
+    if not ai_trainer.is_configured():
+        await callback.answer(
+            "AI-тренер не настроен: администратору нужно задать XAI_API_KEY.",
+            show_alert=True,
+        )
+        return
+    user_id = callback.from_user.id
+    if not _try_claim_busy(user_id):
+        await callback.answer("Секунду, ещё думаю над прошлым вопросом 😅", show_alert=True)
+        return
+    await callback.answer()
+    try:
+        await state.set_state(AITrainerFlow.chatting)
+        # С клавиатурой, а не голым текстом: пока тренер думает, это единственный
+        # экран на месте меню — а ответа может и не быть вовсе (исчерпан дневной
+        # лимит вопросов, сбой провайдера), и без кнопок выход остался бы только
+        # через нижнее меню.
+        screen = await ui.safe_edit(
+            callback, BUILD_PROGRAM_INTRO,
+            reply_markup=await ai_keyboard(user_id), parse_mode="HTML",
+        )
+        await _handle_question(
+            screen, state, BUILD_PROGRAM_SEED,
+            history_question=BUILD_PROGRAM_SEED, user_id=user_id,
+        )
+    finally:
+        _busy.discard(user_id)
+
+
 @router.callback_query(F.data == "ai:resume_workout")
 async def ai_resume_workout(callback: CallbackQuery, state: FSMContext):
     """'К тренировке' from the AI-trainer chat — unlike menu:resume_workout, keeps the
@@ -516,6 +569,7 @@ async def _handle_question(
     question: str,
     history_question: str,
     image_data_url: Optional[str] = None,
+    user_id: Optional[int] = None,
 ) -> None:
     """Общая логика для текстовых и фото-вопросов: запрос к модели, история, отправка ответа.
 
@@ -523,11 +577,15 @@ async def _handle_question(
     history_question — облегчённая версия для ai_history/БД: фото туда не попадают
     (не пересылать же их каждый следующий ход), только текст/подпись или заглушка.
 
+    user_id — по умолчанию берётся из message.from_user.id (обычное сообщение
+    от пользователя); передаётся явно там, где message — это экран бота, а не
+    реплика пользователя (см. ai_build_program: message.from_user там был бы ботом).
+
     Caller owns the `_busy` reservation end-to-end (claimed atomically before
     any await, released in the caller's `finally`) — this function assumes the
     reservation is already held and never touches `_busy` itself.
     """
-    user_id = message.from_user.id
+    user_id = user_id if user_id is not None else message.from_user.id
     asked_today = await db.get_ai_question_count_today(user_id)
     if asked_today >= config.AI_QUESTION_DAILY_LIMIT:
         await message.reply(

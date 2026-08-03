@@ -623,3 +623,92 @@ async def test_dropping_a_program_removes_the_preview_and_the_draft(fresh_db, us
     callback.message.delete.assert_awaited_once()
     assert (await state.get_data()).get("ai_program_draft") is None
     assert await fresh_db.list_routines(user_id) == []
+
+
+# ---------- "Составить с AI-тренером" entry point (ai:buildprog) ----------
+
+
+def _make_buildprog_callback(user_id: int):
+    """screen — the '🗂 Программы' message the button lives on; its .answer()
+    yields the intro screen (safe_edit's fallback path, forced by pinning
+    chat_bottom below), whose own .answer() yields the "думаю…" placeholder
+    that _handle_question edits with the final answer.
+    """
+    from aiogram.types import CallbackQuery
+
+    thinking_placeholder = MagicMock()
+    thinking_placeholder.edit_text = AsyncMock()
+
+    intro_screen = MagicMock()
+    intro_screen.chat = SimpleNamespace(id=user_id)
+    intro_screen.message_id = 9
+    intro_screen.answer = AsyncMock(return_value=thinking_placeholder)
+
+    screen = MagicMock()
+    screen.chat = SimpleNamespace(id=user_id)
+    screen.message_id = 3
+    screen.text = "🗂 Программы"
+    screen.delete = AsyncMock()
+    screen.answer = AsyncMock(return_value=intro_screen)
+
+    callback = MagicMock(spec=CallbackQuery)
+    callback.from_user = SimpleNamespace(id=user_id, username="tester")
+    callback.message = screen
+    callback.data = "ai:buildprog"
+    callback.answer = AsyncMock()
+    return callback
+
+
+async def test_ai_build_program_hints_when_not_configured(fresh_db, user_id, monkeypatch):
+    monkeypatch.setattr(ai_trainer.ai_trainer, "is_configured", lambda: False)
+    state = await _make_state(user_id)
+    callback = _make_buildprog_callback(user_id)
+
+    await ai_trainer.ai_build_program(callback, state)
+
+    assert callback.answer.await_args.kwargs.get("show_alert") is True
+    assert await state.get_state() is None
+
+
+async def test_ai_build_program_seeds_the_conversation_and_enters_chatting(
+    fresh_db, user_id, monkeypatch
+):
+    """The button skips typing anything: it drops straight into the trainer's
+    existing propose_program flow with a canned "build me a program" question,
+    which is what actually drives the guiding questions and the eventual draft."""
+    import ui
+
+    monkeypatch.setattr(ai_trainer.ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(ui.chat_bottom, "is_at_bottom", lambda *a, **k: False)
+
+    captured = {}
+
+    async def fake_ask(uid, question, history, **kwargs):
+        captured["user_id"] = uid
+        captured["question"] = question
+        return "Для программы расскажи: сколько дней в неделю?"
+
+    monkeypatch.setattr(ai_trainer.ai_trainer, "ask", fake_ask)
+
+    state = await _make_state(user_id)
+    callback = _make_buildprog_callback(user_id)
+
+    await ai_trainer.ai_build_program(callback, state)
+
+    assert captured["user_id"] == user_id
+    assert captured["question"] == ai_trainer.BUILD_PROGRAM_SEED
+    assert await state.get_state() == "AITrainerFlow:chatting"
+    assert user_id not in ai_trainer._busy
+    assert await fresh_db.get_ai_question_count_today(user_id) == 1
+
+    # The intro screen replaces the 🗂 Программы menu, so it needs its own way
+    # out — an answer may never arrive (daily limit reached, provider down).
+    assert callback.message.answer.await_args.kwargs["reply_markup"] is not None
+
+
+async def test_ai_build_program_asks_the_trainer_to_lead_with_questions(fresh_db, user_id):
+    """The button promises "сейчас задам пару вопросов", and the system prompt
+    lets the trainer skip straight to a draft on sensible defaults — so the
+    seed has to ask for the questions explicitly, or the intro would lie."""
+    assert "вопрос" in ai_trainer.BUILD_PROGRAM_SEED.lower()
+    assert "вопрос" in ai_trainer.BUILD_PROGRAM_INTRO.lower()
