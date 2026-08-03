@@ -1,7 +1,7 @@
 """🗂 Программы — saved workout templates (splits).
 
 A routine is an ordered list of exercises. Starting a workout from a routine
-fills the FSM's `planned_blocks` so the existing "▶️ Следующее по шаблону"
+fills the FSM's `planned_blocks` so the existing "▶️ Следующее по программе"
 flow (handlers/workout.py) walks the user through it one exercise at a time.
 Routines can be created from any past finished workout — do the session
 once, then save it as your split.
@@ -13,7 +13,8 @@ from html import escape
 from aiogram import F, Router
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, Message
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import config
 import db
@@ -122,9 +123,9 @@ async def rt_program_detail(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Программа не найдена", show_alert=True)
         return
     days = program["days"]
-    # Name, pitch and day count decide whether the program is for you; the
-    # exercise-by-exercise breakdown is 20+ lines of detail, so it folds away
-    # and the catalog stays scannable.
+    # Разбор по дням — плоским текстом, без сворачивающегося блока: состав как
+    # раз то, по чему решают, брать программу или нет, а тоггл прячет его за
+    # лишним тапом (то же самое сделано на экране дней своей программы).
     day_blocks = [
         "\n".join([
             f"<b>{escape(day_name)}</b>",
@@ -135,8 +136,7 @@ async def rt_program_detail(callback: CallbackQuery, state: FSMContext):
     text = "\n\n".join([
         f"✨ <b>{escape(program['name'])}</b>\n<i>{escape(program['meta'])}</i>",
         escape(program["description"]),
-        f"<b>{len(days)} {_days_word(len(days))}:</b>\n"
-        + formatting.collapsible_if_long("\n\n".join(day_blocks)),
+        f"<b>{len(days)} {_days_word(len(days))}:</b>\n" + "\n\n".join(day_blocks),
     ])
     kb = keyboards.program_detail_keyboard(key)
     await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML")
@@ -551,7 +551,10 @@ async def _begin_routine_workout(callback: CallbackQuery, state: FSMContext, rou
     ]
 
     await _reset_new_workout_scaffold(state)
-    workout_id = await db.create_workout(callback.from_user.id)
+    # routine_id: единственный след того, что тренировка шла по программе — сам
+    # план живёт в FSM и исчезает вместе с ней. По нему экран старта показывает
+    # программы, по которым человек ходит в последнее время.
+    workout_id = await db.create_workout(callback.from_user.id, routine_id=routine["id"])
     await wk_delete(callback.message)
     sent = await callback.message.answer(f"🏋️ Тренировка по программе «{routine['name']}»")
     await state.update_data(
@@ -604,6 +607,33 @@ async def rt_resume_previous(callback: CallbackQuery, state: FSMContext):
 # one exercise is trivially undone with "➕ Добавить упражнение".
 
 @router.callback_query(F.data.startswith("rt:rmex:"))
+async def rt_remove_exercise_confirm(callback: CallbackQuery, state: FSMContext):
+    """Одна лишняя опечатка-тап в списке — и упражнение вон из программы
+    навсегда (в отличие от подхода в тренировке, тут нет "отменить"), так что
+    сначала спрашиваем, а сам снос делает rt_remove_exercise ниже."""
+    _, _, routine_id_s, re_id_s = callback.data.split(":")
+    routine_id, re_id = int(routine_id_s), int(re_id_s)
+    routine = await _owned_routine(callback, routine_id)
+    if routine is None:
+        return
+    entry = await db.get_routine_exercise(re_id)
+    if entry is None or entry["routine_id"] != routine_id:
+        await callback.answer("Упражнение уже убрано", show_alert=True)
+        await _show_routine_editor(callback, state, routine_id)
+        return
+    exercise = await db.get_exercise(entry["exercise_id"])
+    name = exercise["display_name"] if exercise else "упражнение"
+    kb = keyboards.yes_no_keyboard(
+        yes_cb=f"rt:rmexyes:{routine_id}:{re_id}", no_cb=f"rt:edit:{routine_id}",
+        yes_text="🗑 Убрать", no_text="❌ Отмена",
+    )
+    await ui.safe_edit(
+        callback, f"Убрать «{escape(name)}» из программы?", reply_markup=kb, parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("rt:rmexyes:"))
 async def rt_remove_exercise(callback: CallbackQuery, state: FSMContext):
     _, _, routine_id_s, re_id_s = callback.data.split(":")
     routine_id, re_id = int(routine_id_s), int(re_id_s)
@@ -689,6 +719,7 @@ async def _rtadd_exercise_list_screen(callback: CallbackQuery, state: FSMContext
     has_next = offset + len(exercises) < total
     kb = keyboards.exercises_keyboard(
         exercises, prefix="rtadd", show_new_button=False, back_cb="back", page=page, has_next=has_next,
+        show_catalog_button=group_id is not None,
     )
     text = "Выбери упражнение или напиши название для поиска:" if exercises else "Пусто здесь — напиши название для поиска."
     await ui.safe_edit(callback, text, reply_markup=kb)
@@ -714,6 +745,32 @@ async def rtadd_page(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(StateFilter(RoutineFlow.adding_exercise_pick), F.data == "rtadd:back")
 async def rtadd_back_to_groups(callback: CallbackQuery, state: FSMContext):
     await _rtadd_groups_screen(callback, state)
+    await callback.answer()
+
+
+async def _rtadd_catalog_screen(callback: CallbackQuery, state: FSMContext) -> None:
+    """Каталог упражнений — шаблоны выбранной группы, а не только свои: до
+    этого экрана шаблон можно было добавить лишь угадав его название в поиске."""
+    data = await state.get_data()
+    group_id = data.get("rtadd_group_id")
+    templates = await db.list_templates_in_group(group_id) if group_id is not None else []
+    b = InlineKeyboardBuilder()
+    for t in templates:
+        b.row(InlineKeyboardButton(text=t["display_name"], callback_data=f"rtadd:tpladd:{t['id']}"))
+    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="rtadd:catalogback"))
+    text = "📋 Шаблоны — выбери подходящий:" if templates else "В этой группе шаблонов нет."
+    await ui.safe_edit(callback, text, reply_markup=b.as_markup())
+
+
+@router.callback_query(StateFilter(RoutineFlow.adding_exercise_pick), F.data == "rtadd:catalog")
+async def rtadd_catalog(callback: CallbackQuery, state: FSMContext):
+    await _rtadd_catalog_screen(callback, state)
+    await callback.answer()
+
+
+@router.callback_query(StateFilter(RoutineFlow.adding_exercise_pick), F.data == "rtadd:catalogback")
+async def rtadd_catalog_back(callback: CallbackQuery, state: FSMContext):
+    await _rtadd_exercise_list_screen(callback, state)
     await callback.answer()
 
 

@@ -519,3 +519,52 @@ async def test_picker_hides_the_ai_program_button_when_the_trainer_is_off(
     callbacks = await _picker_extra_callbacks(fresh_db, user_id, monkeypatch)
 
     assert "ai:buildprog" not in callbacks
+
+
+# ---------- recently-trained programs shown above the muscle groups ----------
+
+
+async def test_picker_shows_a_button_for_a_recently_trained_program(fresh_db, user_id, monkeypatch):
+    """Someone running a split shouldn't have to detour through 🗂 Программы to
+    find today's day — the program they've actually trained by this month is
+    right there above the muscle groups."""
+    routine_id = await fresh_db.create_routine(user_id, "Ноги", program_name="Верх/низ")
+    await fresh_db.create_workout(user_id, routine_id=routine_id)
+
+    callbacks = await _picker_extra_callbacks(fresh_db, user_id, monkeypatch)
+
+    assert f"rt:pgm:{routine_id}" in callbacks
+
+
+async def test_picker_ignores_programs_not_trained_recently(fresh_db, user_id, monkeypatch):
+    import datetime as dt
+
+    routine_id = await fresh_db.create_routine(user_id, "Ноги", program_name="Старое")
+    stale = (dt.datetime.now() - dt.timedelta(days=workout.RECENT_PROGRAM_DAYS + 5)).isoformat()
+    await fresh_db.create_workout(user_id, started_at=stale, routine_id=routine_id)
+
+    callbacks = await _picker_extra_callbacks(fresh_db, user_id, monkeypatch)
+
+    assert f"rt:pgm:{routine_id}" not in callbacks
+
+
+async def test_picker_offers_no_more_than_the_recent_program_cap(fresh_db, user_id, monkeypatch):
+    for i in range(workout.MAX_RECENT_PROGRAM_BUTTONS + 2):
+        routine_id = await fresh_db.create_routine(user_id, f"День {i}", program_name=f"Программа {i}")
+        await fresh_db.create_workout(user_id, routine_id=routine_id)
+
+    callbacks = await _picker_extra_callbacks(fresh_db, user_id, monkeypatch)
+
+    assert len([c for c in callbacks if c.startswith("rt:pgm:")]) == workout.MAX_RECENT_PROGRAM_BUTTONS
+
+
+async def test_picker_shows_no_recent_programs_without_any_routine_backed_workouts(
+    fresh_db, user_id, monkeypatch
+):
+    """A from-scratch workout (no routine_id) shouldn't manufacture a program button."""
+    await fresh_db.create_routine(user_id, "Ноги", program_name="Верх/низ")
+    await fresh_db.create_workout(user_id)  # started fresh, not from that routine
+
+    callbacks = await _picker_extra_callbacks(fresh_db, user_id, monkeypatch)
+
+    assert not [c for c in callbacks if c.startswith("rt:pgm:")]

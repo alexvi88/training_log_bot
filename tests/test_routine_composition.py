@@ -1,6 +1,7 @@
-"""Editing a saved routine's exercise list: remove a single exercise (no
-confirmation — trivially undone) and add one via the groups→exercises picker,
-including a catalog template forked on the fly."""
+"""Editing a saved routine's exercise list: remove a single exercise (asks for
+confirmation first — the DB write happens only on the "yes" tap) and add one
+via the groups→exercises picker, including a catalog template forked on the
+fly or browsed from the group's whole template list."""
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -55,35 +56,44 @@ async def _make_routine(db, user_id: int, exercise_names: list[str]) -> tuple[in
 # ---------- remove ----------
 
 
-async def test_remove_drops_only_that_exercise(fresh_db, user_id):
+async def test_remove_confirm_prompts_and_writes_nothing_yet(fresh_db, user_id):
+    """Tapping the exercise only asks — the DB write waits for rt:rmexyes."""
+    db = fresh_db
+    routine_id, _ = await _make_routine(db, user_id, ["Жим лёжа", "Разведения"])
+    entries = await db.list_routine_exercises(routine_id)
+    target = next(e for e in entries if e["display_name"] == "Жим лёжа")
+    state = await _make_state(user_id)
+    callback = _make_callback(user_id, f"rt:rmex:{routine_id}:{target['id']}")
+
+    await routines.rt_remove_exercise_confirm(callback, state)
+
+    assert [r["display_name"] for r in await db.list_routine_exercises(routine_id)] == [
+        "Жим лёжа", "Разведения",
+    ]
+    text = callback.message.answer.await_args.args[0]
+    assert "Жим лёжа" in text
+    kb = callback.message.answer.await_args.kwargs["reply_markup"]
+    cbs = [b.callback_data for row in kb.inline_keyboard for b in row]
+    assert f"rt:rmexyes:{routine_id}:{target['id']}" in cbs
+    assert f"rt:edit:{routine_id}" in cbs  # "нет" goes back to the same editor
+
+
+async def test_confirming_removal_drops_only_that_exercise(fresh_db, user_id):
     db = fresh_db
     routine_id, _ = await _make_routine(db, user_id, ["Жим лёжа", "Разведения"])
     entries = await db.list_routine_exercises(routine_id)
     target = next(e for e in entries if e["display_name"] == "Жим лёжа")
     state = await _make_state(user_id)
 
-    await routines.rt_remove_exercise(_make_callback(user_id, f"rt:rmex:{routine_id}:{target['id']}"), state)
+    await routines.rt_remove_exercise(
+        _make_callback(user_id, f"rt:rmexyes:{routine_id}:{target['id']}"), state
+    )
 
     remaining = await db.list_routine_exercises(routine_id)
     assert [r["display_name"] for r in remaining] == ["Разведения"]
 
 
-async def test_remove_is_immediate_no_confirmation_step(fresh_db, user_id):
-    """One tap, one DB write — unlike deleting the whole routine, which asks first."""
-    db = fresh_db
-    routine_id, _ = await _make_routine(db, user_id, ["Жим лёжа"])
-    entries = await db.list_routine_exercises(routine_id)
-    re_id = entries[0]["id"]
-    state = await _make_state(user_id)
-    callback = _make_callback(user_id, f"rt:rmex:{routine_id}:{re_id}")
-
-    await routines.rt_remove_exercise(callback, state)
-
-    callback.answer.assert_awaited_once()
-    assert await db.list_routine_exercises(routine_id) == []
-
-
-async def test_remove_rejects_someone_elses_routine(fresh_db, user_id):
+async def test_remove_confirm_rejects_someone_elses_routine(fresh_db, user_id):
     db = fresh_db
     other_group = await db.create_muscle_group(999, "Грудь")
     other_ex = await db.create_exercise(999, "Жим", other_group)
@@ -93,6 +103,22 @@ async def test_remove_rejects_someone_elses_routine(fresh_db, user_id):
     state = await _make_state(user_id)
 
     callback = _make_callback(user_id, f"rt:rmex:{other_routine}:{entries[0]['id']}")
+    await routines.rt_remove_exercise_confirm(callback, state)
+
+    callback.answer.assert_awaited_once_with("Программа не найдена", show_alert=True)
+    assert await db.list_routine_exercises(other_routine) == entries  # untouched
+
+
+async def test_confirming_removal_rejects_someone_elses_routine(fresh_db, user_id):
+    db = fresh_db
+    other_group = await db.create_muscle_group(999, "Грудь")
+    other_ex = await db.create_exercise(999, "Жим", other_group)
+    other_routine = await db.create_routine(999, "Not yours")
+    await db.add_routine_exercise(other_routine, other_ex, 0)
+    entries = await db.list_routine_exercises(other_routine)
+    state = await _make_state(user_id)
+
+    callback = _make_callback(user_id, f"rt:rmexyes:{other_routine}:{entries[0]['id']}")
     await routines.rt_remove_exercise(callback, state)
 
     callback.answer.assert_awaited_once_with("Программа не найдена", show_alert=True)
@@ -246,6 +272,76 @@ async def test_move_rejects_someone_elses_routine(fresh_db, user_id):
     await routines.rt_move_exercise(callback, state)
 
     callback.answer.assert_awaited_once_with("Программа не найдена", show_alert=True)
+
+
+async def test_group_screen_offers_a_catalog_button(fresh_db, user_id):
+    """Раньше в списке группы были только свои упражнения — шаблон можно было
+    добавить лишь угадав его название в поиске. Теперь есть прямой путь."""
+    db = fresh_db
+    template = await db._find_global_template_by_name("Жим штанги лёжа")
+    group_id = template["primary_group_id"]
+    routine_id, _ = await _make_routine(db, user_id, [])
+    state = await _make_state(user_id)
+    await state.update_data(rtadd_routine_id=routine_id)
+
+    callback = _make_callback(user_id, f"rtadd:grp:{group_id}")
+    await routines.rtadd_pick_group(callback, state)
+
+    kb = callback.message.answer.await_args.kwargs["reply_markup"]
+    cbs = {b.callback_data for row in kb.inline_keyboard for b in row}
+    assert "rtadd:catalog" in cbs
+
+
+async def test_catalog_button_browses_the_groups_templates(fresh_db, user_id):
+    db = fresh_db
+    template = await db._find_global_template_by_name("Жим штанги лёжа")
+    group_id = template["primary_group_id"]
+    routine_id, _ = await _make_routine(db, user_id, [])
+    state = await _make_state(user_id)
+    await state.update_data(rtadd_routine_id=routine_id, rtadd_group_id=group_id)
+    await state.set_state(RoutineFlow.adding_exercise_pick)
+
+    callback = _make_callback(user_id, "rtadd:catalog")
+    await routines.rtadd_catalog(callback, state)
+
+    kb = callback.message.answer.await_args.kwargs["reply_markup"]
+    cbs = {b.callback_data for row in kb.inline_keyboard for b in row}
+    assert f"rtadd:tpladd:{template['id']}" in cbs
+    assert "rtadd:catalogback" in cbs
+
+
+async def test_picking_from_the_catalog_forks_and_appends_it(fresh_db, user_id):
+    db = fresh_db
+    template = await db._find_global_template_by_name("Жим штанги лёжа")
+    routine_id, _ = await _make_routine(db, user_id, [])
+    state = await _make_state(user_id)
+    await state.update_data(rtadd_routine_id=routine_id)
+
+    await routines.rtadd_pick_template(
+        _make_callback(user_id, f"rtadd:tpladd:{template['id']}"), state
+    )
+    await routines.rtadd_skip_target(_make_callback(user_id, "rtadd:notarget"), state)
+
+    names = [r["display_name"] for r in await db.list_routine_exercises(routine_id)]
+    assert names == [template["display_name"]]
+
+
+async def test_catalogback_returns_to_the_exercise_list(fresh_db, user_id):
+    db = fresh_db
+    template = await db._find_global_template_by_name("Жим штанги лёжа")
+    group_id = template["primary_group_id"]
+    routine_id, _ = await _make_routine(db, user_id, [])
+    await db.create_exercise(user_id, "Отжимания", group_id)
+    state = await _make_state(user_id)
+    await state.update_data(rtadd_routine_id=routine_id, rtadd_group_id=group_id)
+    await state.set_state(RoutineFlow.adding_exercise_pick)
+
+    callback = _make_callback(user_id, "rtadd:catalogback")
+    await routines.rtadd_catalog_back(callback, state)
+
+    kb = callback.message.answer.await_args.kwargs["reply_markup"]
+    texts = [b.text for row in kb.inline_keyboard for b in row]
+    assert any("Отжимания" in t for t in texts)
 
 
 async def test_search_text_offers_both_own_matches_and_templates(fresh_db, user_id):

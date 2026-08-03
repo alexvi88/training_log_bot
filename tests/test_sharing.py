@@ -87,6 +87,49 @@ async def test_share_routine_snapshots_names_and_targets(fresh_db, user_id):
     assert url.startswith("https://t.me/TrainLogBot?start=sh_")
 
 
+async def _program_with_two_days(db, user_id: int) -> int:
+    gid = await db.create_muscle_group(user_id, "Ноги")
+    squat = await db.create_exercise(user_id, "Присед", gid)
+    bench = await db.create_exercise(user_id, "Жим лёжа", gid)
+    day1 = await db.create_routine(user_id, "Ноги", program_name="Сплит")
+    await db.add_routine_exercise(day1, squat, 0, "3×5")
+    day2 = await db.create_routine(user_id, "Верх", program_name="Сплит")
+    await db.add_routine_exercise(day2, bench, 0, "4×6–8")
+    return day1  # anchor — любой день программы
+
+
+async def test_share_program_snapshots_every_day(fresh_db, user_id):
+    """«Поделиться программой» — вся многодневка одной визиткой, не день за раз."""
+    db = fresh_db
+    anchor_id = await _program_with_two_days(db, user_id)
+
+    await sharing.share_program(_make_callback(user_id, f"share:pgm:{anchor_id}"), await _state(user_id))
+
+    row = await db.get_shared_item(await _last_share_token(db))
+    assert row["kind"] == "program"
+    payload = json.loads(row["payload"])
+    assert payload["name"] == "Сплит"
+    assert [d["name"] for d in payload["days"]] == ["Ноги", "Верх"]
+    assert payload["days"][0]["exercises"] == [{"name": "Присед", "target": "3×5"}]
+
+
+async def test_accepting_a_shared_program_creates_one_routine_per_day(fresh_db, user_id):
+    db = fresh_db
+    anchor_id = await _program_with_two_days(db, user_id)
+    await sharing.share_program(_make_callback(user_id, f"share:pgm:{anchor_id}"), await _state(user_id))
+    token = await _last_share_token(db)
+
+    recipient = (await db.get_or_create_user(telegram_id=555, username="r3"))["telegram_id"]
+    await db.create_muscle_group(recipient, "Другое")
+    callback = _make_callback(recipient, f"share:add:{token}")
+
+    await sharing.share_add(callback, await _state(recipient))
+
+    programs = await db.list_programs(recipient)
+    assert [(p["program_name"], p["day_count"]) for p in programs] == [("Сплит", 2)]
+    callback.message.edit_reply_markup.assert_awaited()
+
+
 async def test_share_survives_deleting_the_original(fresh_db, user_id):
     """Шарится снапшот: удаление рутины после создания визитки не ломает ссылку."""
     db = fresh_db

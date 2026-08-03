@@ -171,10 +171,16 @@ def groups_keyboard(
     extra_buttons: list[tuple[str, str]] | None = None,
     show_all: bool = False,
     partner_buttons: list[tuple[int, str]] | None = None,
+    top_buttons: list[tuple[str, str]] | None = None,
 ) -> InlineKeyboardMarkup:
     """partner_buttons: (exercise_id, display_name) pairs most often logged
     alongside the exercise the "➕ Суперсет" screen was opened from — a
-    one-tap shortcut so a habitual pairing skips the group→list picker."""
+    one-tap shortcut so a habitual pairing skips the group→list picker.
+
+    top_buttons: (text, callback_data) rows placed above everything else — the
+    programs the user is actually training by right now (see
+    handlers.workout._picker_screen_groups). They go first because picking the
+    day of a running split is the likelier intent than picking a muscle group."""
     b = InlineKeyboardBuilder()
     for g in groups:
         b.button(text=formatting.format_group(g["name"]), callback_data=f"{prefix}:grp:{g['id']}")
@@ -186,7 +192,8 @@ def groups_keyboard(
     # into that half-width column comes out as "triceps block - si…". They can't
     # just be b.row()'d first either: adjust(2) reflows every row already in the
     # builder, partner rows included, which is exactly how they ended up there.
-    rows = [
+    rows = [[InlineKeyboardButton(text=text, callback_data=cb)] for text, cb in top_buttons or []]
+    rows += [
         [InlineKeyboardButton(text=f"⚡ {name}", callback_data=f"{prefix}:partner:{ex_id}")]
         for ex_id, name in partner_buttons or []
     ]
@@ -208,12 +215,18 @@ def exercises_keyboard(
     page: int = 0,
     has_next: bool = False,
     templates=None,
+    show_catalog_button: bool = False,
 ) -> InlineKeyboardMarkup:
     """templates: catalog exercises (db.search_exercise_templates) to offer
     alongside the user's own matches, marked "📋" and routed through
     `{prefix}:tpladd:{id}` — the same fork-then-open callback the "📋 Выбрать
     из шаблонов" entry already uses, so tapping one behaves identically to
     picking it from the template browser instead of from search.
+
+    show_catalog_button: a standing "📋 Каталог упражнений" row into
+    `{prefix}:catalog` — for screens (see handlers/routines.py's rtadd flow)
+    that browse a group's own exercises but have no "➕ Новое упражнение" entry
+    point of their own to reach the template browser through.
     """
     b = InlineKeyboardBuilder()
     items = [(f"{prefix}:ex:{ex['id']}", ex["display_name"]) for ex in exercises]
@@ -229,6 +242,8 @@ def exercises_keyboard(
         b.row(*nav)
     if show_new_button:
         b.row(InlineKeyboardButton(text="➕ Новое упражнение", callback_data=f"{prefix}:new"))
+    if show_catalog_button:
+        b.row(InlineKeyboardButton(text="📋 Каталог упражнений", callback_data=f"{prefix}:catalog"))
     b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"{prefix}:{back_cb}"))
     return b.as_markup()
 
@@ -383,7 +398,7 @@ def exercise_picker_entry_keyboard(
     """
     b = InlineKeyboardBuilder()
     if has_planned:
-        b.button(text="▶️ Следующее по шаблону", callback_data="live:next_planned")
+        b.button(text="▶️ Следующее по программе", callback_data="live:next_planned")
     b.button(text="➕ Упражнение", callback_data="live:add_exercise")
     if suggested is not None:
         ex_id, name = suggested
@@ -432,6 +447,10 @@ def program_days_keyboard(days, anchor_id: int) -> InlineKeyboardMarkup:
     for d in days:
         b.button(text=d["name"], callback_data=f"rt:view:{d['id']}")
     b.button(text="✏️ Переименовать программу", callback_data=f"rt:pgmrename:{anchor_id}")
+    # Программа целиком, а не день — тот же токен-визитка, но со всеми днями
+    # разом: делиться по одному дню значило собирать программу получателю
+    # вручную из нескольких пересланных сообщений.
+    b.button(text="📤 Поделиться программой", callback_data=f"share:pgm:{anchor_id}")
     b.button(text="🗑 Удалить программу", callback_data=f"rt:pgmdelask:{anchor_id}")
     b.button(text="⬅️ Назад", callback_data="rt:manage")
     b.adjust(1)
