@@ -520,11 +520,19 @@ def routine_edit_menu_keyboard(routine_id: int) -> InlineKeyboardMarkup:
 
 def routine_edit_keyboard(routine_id: int, exercises=()) -> InlineKeyboardMarkup:
     """The program's composition editor: exercises: (routine_exercise_id,
-    display_name) rows in program order, each with a remove button. Reached
-    deliberately, so removal stays one tap here without a confirmation."""
+    display_name) rows in program order, each with move-up/move-down and a
+    remove button. Reached deliberately, so removal stays one tap here
+    without a confirmation."""
     b = InlineKeyboardBuilder()
-    for re_id, name in exercises:
-        b.row(InlineKeyboardButton(text=f"🗑 {name}", callback_data=f"rt:rmex:{routine_id}:{re_id}"))
+    last = len(exercises) - 1
+    for i, (re_id, name) in enumerate(exercises):
+        row = []
+        if i > 0:
+            row.append(InlineKeyboardButton(text="⬆️", callback_data=f"rt:mvex:{routine_id}:{re_id}:up"))
+        if i < last:
+            row.append(InlineKeyboardButton(text="⬇️", callback_data=f"rt:mvex:{routine_id}:{re_id}:down"))
+        row.append(InlineKeyboardButton(text=f"🗑 {name}", callback_data=f"rt:rmex:{routine_id}:{re_id}"))
+        b.row(*row)
     b.row(InlineKeyboardButton(text="➕ Добавить упражнение", callback_data=f"rt:addex:{routine_id}"))
     b.row(InlineKeyboardButton(text="⬅️ Готово", callback_data=f"rt:view:{routine_id}"))
     return b.as_markup()
@@ -942,6 +950,15 @@ def back_keyboard(cb: str) -> InlineKeyboardMarkup:
 def cancel_keyboard(cb: str = "cancel") -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(text="❌ Отмена", callback_data=cb)
+    return b.as_markup()
+
+
+def routine_exercise_target_keyboard(cb: str) -> InlineKeyboardMarkup:
+    """Prompt after picking an exercise to add to a routine: type a target
+    ("3x8-12") or skip and leave it blank."""
+    b = InlineKeyboardBuilder()
+    b.button(text="➡️ Пропустить", callback_data=cb)
+    b.adjust(1)
     return b.as_markup()
 
 

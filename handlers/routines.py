@@ -222,7 +222,11 @@ async def _show_routine_editor(event, state: FSMContext, routine_id: int) -> Non
     else:
         lines.append("В программе нет упражнений.")
     kb = keyboards.routine_edit_keyboard(
-        routine_id, [(ex["id"], ex["display_name"]) for ex in exercises]
+        routine_id,
+        [
+            (ex["id"], f"{ex['display_name']} — {ex['target']}" if ex["target"] else ex["display_name"])
+            for ex in exercises
+        ],
     )
     text = "\n".join(lines)
     if isinstance(event, CallbackQuery):
@@ -616,6 +620,18 @@ async def rt_remove_exercise(callback: CallbackQuery, state: FSMContext):
     await _show_routine_editor(callback, state, routine_id)
 
 
+@router.callback_query(F.data.startswith("rt:mvex:"))
+async def rt_move_exercise(callback: CallbackQuery, state: FSMContext):
+    _, _, routine_id_s, re_id_s, direction = callback.data.split(":")
+    routine_id, re_id = int(routine_id_s), int(re_id_s)
+    routine = await _owned_routine(callback, routine_id)
+    if routine is None:
+        return
+    await db.reorder_routine_exercise(re_id, direction)
+    await _show_routine_editor(callback, state, routine_id)
+    await callback.answer()
+
+
 async def _rtadd_groups_screen(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(RoutineFlow.adding_exercise_group)
     groups = await db.list_muscle_groups(callback.from_user.id)
@@ -638,7 +654,11 @@ async def rt_add_exercise_start(callback: CallbackQuery, state: FSMContext):
 
 
 @router.callback_query(
-    StateFilter(RoutineFlow.adding_exercise_group, RoutineFlow.adding_exercise_pick),
+    StateFilter(
+        RoutineFlow.adding_exercise_group,
+        RoutineFlow.adding_exercise_pick,
+        RoutineFlow.adding_exercise_target,
+    ),
     F.data == "rtadd:cancel",
 )
 async def rtadd_cancel(callback: CallbackQuery, state: FSMContext):
@@ -697,10 +717,10 @@ async def rtadd_back_to_groups(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-async def _rtadd_finish(event, state: FSMContext, exercise_id: int) -> None:
+async def _rtadd_finish(event, state: FSMContext, exercise_id: int, target: str | None = None) -> None:
     data = await state.get_data()
     routine_id = data["rtadd_routine_id"]
-    await db.append_routine_exercise(routine_id, exercise_id)
+    await db.append_routine_exercise(routine_id, exercise_id, target)
     await db.touch_exercise_last_used(exercise_id)
     await state.set_state(None)
     # Back to the composition editor the "➕" was tapped from, so several
@@ -710,10 +730,24 @@ async def _rtadd_finish(event, state: FSMContext, exercise_id: int) -> None:
         await event.answer("Добавил в программу")
 
 
+async def _rtadd_ask_target(callback: CallbackQuery, state: FSMContext, exercise_id: int) -> None:
+    """After picking what to add, ask for a sets/reps scheme ("3x8-12") before
+    it lands in the program — skippable, since not everyone tracks one."""
+    await state.update_data(rtadd_exercise_id=exercise_id)
+    await state.set_state(RoutineFlow.adding_exercise_target)
+    await ui.safe_edit(
+        callback,
+        "Схема сетов/повторов для этого упражнения? Например «3x8-12». "
+        "Или нажми «Пропустить».",
+        reply_markup=keyboards.routine_exercise_target_keyboard("rtadd:notarget"),
+    )
+    await callback.answer()
+
+
 @router.callback_query(StateFilter(RoutineFlow.adding_exercise_pick), F.data.startswith("rtadd:ex:"))
 async def rtadd_pick_exercise(callback: CallbackQuery, state: FSMContext):
     ex_id = int(callback.data.split(":")[2])
-    await _rtadd_finish(callback, state, ex_id)
+    await _rtadd_ask_target(callback, state, ex_id)
 
 
 @router.callback_query(
@@ -723,7 +757,22 @@ async def rtadd_pick_exercise(callback: CallbackQuery, state: FSMContext):
 async def rtadd_pick_template(callback: CallbackQuery, state: FSMContext):
     template_id = int(callback.data.split(":")[2])
     ex_id = await db.fork_exercise_from_template(callback.from_user.id, template_id)
-    await _rtadd_finish(callback, state, ex_id)
+    await _rtadd_ask_target(callback, state, ex_id)
+
+
+@router.callback_query(StateFilter(RoutineFlow.adding_exercise_target), F.data == "rtadd:notarget")
+async def rtadd_skip_target(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    await _rtadd_finish(callback, state, data["rtadd_exercise_id"])
+
+
+@router.message(StateFilter(RoutineFlow.adding_exercise_target), F.text)
+async def rtadd_target_entered(message: Message, state: FSMContext):
+    target = message.text.strip()
+    if not target:
+        return
+    data = await state.get_data()
+    await _rtadd_finish(message, state, data["rtadd_exercise_id"], target)
 
 
 @router.message(StateFilter(RoutineFlow.adding_exercise_group, RoutineFlow.adding_exercise_pick), F.text)

@@ -125,6 +125,13 @@ async def test_picking_group_then_exercise_appends_it(fresh_db, user_id):
 
     await routines.rtadd_pick_exercise(_make_callback(user_id, f"rtadd:ex:{ex_id}"), state)
 
+    # Not appended yet — picking an exercise now asks for a sets/reps target first.
+    assert await state.get_state() == RoutineFlow.adding_exercise_target
+    names = [r["display_name"] for r in await db.list_routine_exercises(routine_id)]
+    assert names == ["Жим лёжа"]
+
+    await routines.rtadd_skip_target(_make_callback(user_id, "rtadd:notarget"), state)
+
     names = [r["display_name"] for r in await db.list_routine_exercises(routine_id)]
     assert names == ["Жим лёжа", "Отжимания"]  # appended after the existing one
 
@@ -138,12 +145,107 @@ async def test_adding_a_template_forks_it_first(fresh_db, user_id):
     await state.update_data(rtadd_routine_id=routine_id)
 
     await routines.rtadd_pick_template(_make_callback(user_id, f"rtadd:tpladd:{template['id']}"), state)
+    assert await state.get_state() == RoutineFlow.adding_exercise_target
+
+    await routines.rtadd_skip_target(_make_callback(user_id, "rtadd:notarget"), state)
 
     names = [r["display_name"] for r in await db.list_routine_exercises(routine_id)]
     assert names == ["Жим штанги лёжа"]
     # It's a real owned exercise now, not the template row itself.
     owned = await db.find_exercise_by_name(user_id, "Жим штанги лёжа")
     assert owned is not None and owned["user_id"] == user_id
+
+
+async def test_entering_a_target_saves_it_on_the_routine_exercise(fresh_db, user_id):
+    db = fresh_db
+    routine_id, group_id = await _make_routine(db, user_id, [])
+    ex_id = await db.create_exercise(user_id, "Отжимания", group_id)
+    state = await _make_state(user_id)
+    await state.update_data(rtadd_routine_id=routine_id)
+
+    await routines.rtadd_pick_exercise(_make_callback(user_id, f"rtadd:ex:{ex_id}"), state)
+    await routines.rtadd_target_entered(_make_message(user_id, "3x8-12"), state)
+
+    entries = await db.list_routine_exercises(routine_id)
+    assert entries[0]["target"] == "3x8-12"
+    assert await state.get_state() is None
+
+
+async def test_skipping_the_target_leaves_it_blank(fresh_db, user_id):
+    db = fresh_db
+    routine_id, group_id = await _make_routine(db, user_id, [])
+    ex_id = await db.create_exercise(user_id, "Отжимания", group_id)
+    state = await _make_state(user_id)
+    await state.update_data(rtadd_routine_id=routine_id)
+
+    await routines.rtadd_pick_exercise(_make_callback(user_id, f"rtadd:ex:{ex_id}"), state)
+    await routines.rtadd_skip_target(_make_callback(user_id, "rtadd:notarget"), state)
+
+    entries = await db.list_routine_exercises(routine_id)
+    assert entries[0]["target"] is None
+
+
+# ---------- reordering ----------
+
+
+async def test_move_up_swaps_with_previous_exercise(fresh_db, user_id):
+    db = fresh_db
+    routine_id, _ = await _make_routine(db, user_id, ["Жим лёжа", "Разведения", "Отжимания"])
+    entries = await db.list_routine_exercises(routine_id)
+    middle = entries[1]
+    state = await _make_state(user_id)
+
+    await routines.rt_move_exercise(
+        _make_callback(user_id, f"rt:mvex:{routine_id}:{middle['id']}:up"), state
+    )
+
+    names = [r["display_name"] for r in await db.list_routine_exercises(routine_id)]
+    assert names == ["Разведения", "Жим лёжа", "Отжимания"]
+
+
+async def test_move_down_swaps_with_next_exercise(fresh_db, user_id):
+    db = fresh_db
+    routine_id, _ = await _make_routine(db, user_id, ["Жим лёжа", "Разведения", "Отжимания"])
+    entries = await db.list_routine_exercises(routine_id)
+    first = entries[0]
+    state = await _make_state(user_id)
+
+    await routines.rt_move_exercise(
+        _make_callback(user_id, f"rt:mvex:{routine_id}:{first['id']}:down"), state
+    )
+
+    names = [r["display_name"] for r in await db.list_routine_exercises(routine_id)]
+    assert names == ["Разведения", "Жим лёжа", "Отжимания"]
+
+
+async def test_move_up_at_top_is_a_no_op(fresh_db, user_id):
+    db = fresh_db
+    routine_id, _ = await _make_routine(db, user_id, ["Жим лёжа", "Разведения"])
+    entries = await db.list_routine_exercises(routine_id)
+    first = entries[0]
+    state = await _make_state(user_id)
+
+    await routines.rt_move_exercise(
+        _make_callback(user_id, f"rt:mvex:{routine_id}:{first['id']}:up"), state
+    )
+
+    names = [r["display_name"] for r in await db.list_routine_exercises(routine_id)]
+    assert names == ["Жим лёжа", "Разведения"]
+
+
+async def test_move_rejects_someone_elses_routine(fresh_db, user_id):
+    db = fresh_db
+    other_group = await db.create_muscle_group(999, "Грудь")
+    other_ex = await db.create_exercise(999, "Жим", other_group)
+    other_routine = await db.create_routine(999, "Not yours")
+    await db.add_routine_exercise(other_routine, other_ex, 0)
+    entries = await db.list_routine_exercises(other_routine)
+    state = await _make_state(user_id)
+
+    callback = _make_callback(user_id, f"rt:mvex:{other_routine}:{entries[0]['id']}:up")
+    await routines.rt_move_exercise(callback, state)
+
+    callback.answer.assert_awaited_once_with("Программа не найдена", show_alert=True)
 
 
 async def test_search_text_offers_both_own_matches_and_templates(fresh_db, user_id):

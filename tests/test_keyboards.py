@@ -155,6 +155,18 @@ def test_routine_edit_keyboard_carries_the_removals():
     assert "rt:view:7" in cbs  # "готово" back to the program screen
 
 
+def test_routine_edit_keyboard_move_buttons_skip_the_ends():
+    kb = keyboards.routine_edit_keyboard(7, [(11, "Жим"), (12, "Тяга"), (13, "Присед")])
+    cbs = _callback_datas(kb)
+    # First row can only move down, last row can only move up.
+    assert "rt:mvex:7:11:up" not in cbs
+    assert "rt:mvex:7:11:down" in cbs
+    assert "rt:mvex:7:12:up" in cbs
+    assert "rt:mvex:7:12:down" in cbs
+    assert "rt:mvex:7:13:up" in cbs
+    assert "rt:mvex:7:13:down" not in cbs
+
+
 def test_edit_workout_keyboard_is_one_row_per_exercise():
     kb = keyboards.edit_workout_keyboard([(1, 10, "Становая · 3 сета"), (2, 11, "Тяга · 2 сета")])
     rows = kb.inline_keyboard
