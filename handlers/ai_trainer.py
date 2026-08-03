@@ -338,8 +338,13 @@ async def ai_build_program(callback: CallbackQuery, state: FSMContext):
     if not _try_claim_busy(user_id):
         await callback.answer("Секунду, ещё думаю над прошлым вопросом 😅", show_alert=True)
         return
-    await callback.answer()
     try:
+        # Was outside this try: a stale-button tap makes Telegram reject this
+        # answer with "query is too old", and the finally below never runs —
+        # the reservation leaks forever, and every future message/photo/voice
+        # from this user reports "busy" for the life of the process (A5).
+        with suppress(TelegramBadRequest):
+            await callback.answer()
         await state.set_state(AITrainerFlow.chatting)
         # С клавиатурой, а не голым текстом: пока тренер думает, это единственный
         # экран на месте меню — а ответа может и не быть вовсе (исчерпан дневной
@@ -493,7 +498,7 @@ async def ai_program_view(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "ai:prog:save")
 async def ai_program_save(callback: CallbackQuery, state: FSMContext):
-    """Сохранение программы: каждый её день — отдельная программа в списке.
+    """Сохранение программы: все её дни ложатся под одним program_name.
 
     Здесь же и происходит единственная запись за всю фичу: до этого тапа
     предложение нигде не материализовалось, в том числе не форкало пользователю
@@ -501,6 +506,16 @@ async def ai_program_save(callback: CallbackQuery, state: FSMContext):
     draft = await _program_draft(callback, state)
     if draft is None:
         return
+
+    # Забираем черновик атомарно: между этой строкой и .get_data() выше нет ни
+    # одного await, который реально отдаёт управление циклу событий (FSMContext
+    # поверх MemoryStorage ничего не ждёт по-настоящему) — значит второй
+    # параллельный тап уже не увидит этот черновик и получит _PROGRAM_GONE
+    # вместо повторного сохранения. Раньше это же state.update_data(None) стояло
+    # в конце функции, через ~5 await на реальную БД — окно между чтением и
+    # очисткой давало двум быстрым тапам прочитать один и тот же черновик и
+    # задублировать дни, попутно обходя MAX_ROUTINES_PER_USER (см. A3).
+    await state.update_data(ai_program_draft=None)
 
     user_id = callback.from_user.id
     days = draft["days"]
@@ -517,6 +532,10 @@ async def ai_program_save(callback: CallbackQuery, state: FSMContext):
             replaced_ids.append(rid)
     existing = await db.count_routines(user_id)
     if existing - len(replaced_ids) + len(days) > ai_trainer.MAX_ROUTINES_PER_USER:
+        # Возвращаем черновик обратно — отказ сохранить не должен стоить
+        # пользователю самого предложения: удалит лишнее в «🗂 Программы» и
+        # нажмёт кнопку ещё раз (см. A3).
+        await state.update_data(ai_program_draft=draft)
         await callback.answer(
             f"У тебя уже {existing} программ — больше {ai_trainer.MAX_ROUTINES_PER_USER} "
             "не влезет. Удали лишние в «🗂 Программы» и попробуй ещё раз.",
@@ -524,8 +543,12 @@ async def ai_program_save(callback: CallbackQuery, state: FSMContext):
         )
         return
 
-    for routine_id in replaced_ids:
-        await db.delete_routine(routine_id)
+    # Сначала создаём новые дни и только потом удаляем старые (см. A6): раньше
+    # было наоборот, и упавший на середине create (например, гонка по
+    # уникальному имени упражнения) оставлял пользователя без старой программы
+    # и без новой — а черновик к этому моменту уже пуст, попробовать заново
+    # нечем. В этом порядке падение оставляет лишние новые дни рядом со старой
+    # программой — хуже, но старая версия цела и ничего не потеряно.
     for day in days:
         await db.create_routine_from_program(
             # .get на target: черновик переживает перезапуск в FSM-сторадже, так
@@ -534,19 +557,23 @@ async def ai_program_save(callback: CallbackQuery, state: FSMContext):
             [(item["name"], item.get("target")) for item in day["items"]],
             program_name=draft["name"],
         )
-    await state.update_data(ai_program_draft=None)
+    for routine_id in replaced_ids:
+        await db.delete_routine(routine_id)
 
+    day_word = formatting.plural_ru(len(days), ("день", "дня", "дней"))
     if replaced_ids:
-        day_word = formatting.plural_ru(len(days), ("день", "дня", "дней"))
         text = (
             f"✅ <b>Обновил программу «{escape(draft['name'])}».</b>\n\n"
             f"Теперь в ней {len(days)} {day_word} — ищи в «🗂 Программы»."
         )
     else:
-        word = formatting.plural_ru(len(days), ("программу", "программы", "программ"))
+        # Одна программа с общим именем на все дни (routines.program_name), а
+        # не «N программ» — «🗂 Программы» покажет её одной строкой с числом
+        # дней внутри, а не N отдельных (см. A8: старый текст обещал поведение,
+        # которого никогда не было).
         text = (
-            f"✅ <b>Добавил {len(days)} {word}.</b>\n\n"
-            "Ищи их в «🗂 Программы» — оттуда начинается тренировка по любой из них."
+            f"✅ <b>Добавил программу «{escape(draft['name'])}» — {len(days)} {day_word}.</b>\n\n"
+            "Ищи её в «🗂 Программы» — оттуда начинается тренировка по любому из дней."
         )
     with suppress(TelegramBadRequest):
         await callback.message.edit_text(
@@ -738,10 +765,16 @@ async def _handle_question(
             {"role": "assistant", "content": answer},
         ]
     )[-HISTORY_LIMIT:]
-    # Черновик один на пользователя: новое предложение затирает старое, а ответ
-    # без программы — стирает его вовсе, чтобы кнопка под прошлым ответом не
-    # сохранила программу из позапрошлого разговора (см. ai_program_view).
-    await state.update_data(ai_history=history, ai_program_draft=program_draft or None)
+    # Черновик один на пользователя: новое предложение затирает старое. Но
+    # обычный ход без предложения не должен его стирать (A9) — иначе вопрос
+    # вдогонку («сколько отдыхать между подходами?») тушит ещё живую кнопку
+    # «✅ Добавить себе» под прошлым ответом, и она отвечает «уже неактуально».
+    # Черновик по-прежнему пропадает — но только явно: по ai:prog:save или
+    # ai:prog:drop, либо будучи заменённым новым предложением здесь же.
+    if program_draft:
+        await state.update_data(ai_history=history, ai_program_draft=program_draft)
+    else:
+        await state.update_data(ai_history=history)
 
     # Full, permanent log — separate from the live window above, which is capped
     # (and lost on a restart, unlike this). Lets the model pull it back via the

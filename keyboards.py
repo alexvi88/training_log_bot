@@ -146,9 +146,10 @@ def ai_trainer_keyboard(
 def ai_program_preview_keyboard(replacing: bool = False) -> InlineKeyboardMarkup:
     """Превью программы, собранной тренером: сохранить или отказаться.
 
-    Сохранение создаёт по программе на каждый её день (см.
-    handlers/ai_trainer.ai_program_save), поэтому подпись говорит «добавить»,
-    а не «сохранить программу» — в списке появится несколько строк.
+    Сохранение создаёт по одной программе (routines.program_name общий на все
+    дни — см. handlers/ai_trainer.ai_program_save), просто из нескольких дней,
+    так что «🗂 Программы» покажет одну строку с числом дней, а не несколько —
+    отсюда подпись «добавить», а не «сохранить программу».
 
     `replacing` — это правка уже сохранённой программы, а не новая: тап удалит
     её старые дни, и кнопка обязана говорить «обновить», а не «добавить».
@@ -451,12 +452,21 @@ def planned_plan_keyboard(items: list[tuple[int, str]]) -> InlineKeyboardMarkup:
     order is a suggestion, not a queue: a taken machine shouldn't force the whole
     session to wait, so every remaining exercise is one tap away and the rest keep
     their order after it.
+
+    Each row also carries a small "✕" — for a machine that's actually broken
+    (not just busy today), rather than one that stays queued for the rest of
+    the session with no way off. It's a separate, narrower button rather than
+    a second tap-state on the row's main button so it can't be hit by accident:
+    the wide pick button stays the primary action.
     """
     b = InlineKeyboardBuilder()
     for index, label in items:
-        b.row(InlineKeyboardButton(
-            text=_tab_label(label, _PLAN_LABEL_MAX), callback_data=f"live:plan:pick:{index}",
-        ))
+        b.row(
+            InlineKeyboardButton(
+                text=_tab_label(label, _PLAN_LABEL_MAX), callback_data=f"live:plan:pick:{index}",
+            ),
+            InlineKeyboardButton(text="✕", callback_data=f"live:plan:skip:{index}"),
+        )
     b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="live:plan:back"))
     return b.as_markup()
 

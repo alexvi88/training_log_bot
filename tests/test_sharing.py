@@ -294,3 +294,272 @@ async def test_accepting_an_exercise_you_already_have_does_not_duplicate(fresh_d
 
     assert await db.count_user_exercises(recipient) == before
     assert "уже есть" in callback.answer.await_args.args[0]
+
+
+# ---------- B5: большая программа не должна ломать отправку ----------
+
+
+async def _big_program(db, user_id: int, days: int = 6, exercises_per_day: int = 30) -> int:
+    """6×30 упражнений — измеренные 8023 символа против лимита Telegram в 4096."""
+    gid = await db.create_muscle_group(user_id, "Ноги")
+    exercise_ids = [
+        await db.create_exercise(user_id, f"Упражнение с длинным названием номер {i}", gid)
+        for i in range(exercises_per_day)
+    ]
+    anchor_id = None
+    for d in range(days):
+        routine_id = await db.create_routine(user_id, f"День {d + 1}", program_name="Большая сборная")
+        if anchor_id is None:
+            anchor_id = routine_id
+        for order, ex_id in enumerate(exercise_ids):
+            await db.add_routine_exercise(routine_id, ex_id, order, "4×8-12 с очень длинным пояснением")
+    return anchor_id
+
+
+async def test_share_program_fits_telegram_limit_for_6x30(fresh_db, user_id):
+    from formatting import MESSAGE_LIMIT, telegram_length
+
+    db = fresh_db
+    anchor_id = await _big_program(db, user_id, days=6, exercises_per_day=30)
+    callback = _make_callback(user_id, f"share:pgm:{anchor_id}")
+
+    await sharing.share_program(callback, await _state(user_id))
+
+    # Не должно падать (TelegramBadRequest в проде) — сообщение реально отправлено.
+    callback.message.answer.assert_awaited()
+    text = callback.message.answer.await_args.args[0]
+    assert telegram_length(text) <= MESSAGE_LIMIT
+
+
+async def test_snapshot_itself_is_capped_at_max_shared_days(fresh_db, user_id):
+    db = fresh_db
+    anchor_id = await _big_program(db, user_id, days=6, exercises_per_day=30)
+    await sharing.share_program(_make_callback(user_id, f"share:pgm:{anchor_id}"), await _state(user_id))
+
+    row = await db.get_shared_item(await _last_share_token(db))
+    payload = json.loads(row["payload"])
+    assert len(payload["days"]) <= sharing.MAX_SHARED_DAYS
+
+
+async def test_recipient_preview_of_big_program_also_fits(fresh_db, user_id):
+    """Тот же снапшот у получателя (open_shared) — тоже должен влезать."""
+    from formatting import MESSAGE_LIMIT, telegram_length
+
+    db = fresh_db
+    anchor_id = await _big_program(db, user_id, days=6, exercises_per_day=30)
+    await sharing.share_program(_make_callback(user_id, f"share:pgm:{anchor_id}"), await _state(user_id))
+    token = await _last_share_token(db)
+
+    recipient = (await db.get_or_create_user(telegram_id=888, username="r6"))["telegram_id"]
+    msg = _make_message(recipient)
+    await sharing.open_shared(
+        msg, CommandObject(command="start", args=f"sh_{token}"), await _state(recipient)
+    )
+
+    msg.answer.assert_awaited()
+    text = msg.answer.await_args.args[0]
+    assert telegram_length(text) <= MESSAGE_LIMIT
+
+
+# ---------- B8: нельзя импортировать собственную визитку ----------
+
+
+async def test_cannot_import_own_shared_program_via_share_add(fresh_db, user_id):
+    db = fresh_db
+    anchor_id = await _program_with_two_days(db, user_id)
+    await sharing.share_program(_make_callback(user_id, f"share:pgm:{anchor_id}"), await _state(user_id))
+    token = await _last_share_token(db)
+
+    before = await db.list_programs(user_id)
+    callback = _make_callback(user_id, f"share:add:{token}")
+    await sharing.share_add(callback, await _state(user_id))
+
+    after = await db.list_programs(user_id)
+    assert after == before  # ничего не создалось повторно
+    assert "твоя собственная" in callback.answer.await_args.args[0]
+
+
+async def test_cannot_import_own_shared_routine_via_share_add(fresh_db, user_id):
+    db = fresh_db
+    routine_id = await _routine_with_exercises(db, user_id)
+    await sharing.share_routine(_make_callback(user_id, f"share:rt:{routine_id}"), await _state(user_id))
+    token = await _last_share_token(db)
+
+    before = await db.list_routines(user_id)
+    callback = _make_callback(user_id, f"share:add:{token}")
+    await sharing.share_add(callback, await _state(user_id))
+
+    assert await db.list_routines(user_id) == before
+    assert "твоя собственная" in callback.answer.await_args.args[0]
+
+
+# ---------- B4: повторный импорт не должен сливать программы ----------
+
+
+async def test_importing_the_same_program_twice_does_not_merge(fresh_db, user_id):
+    db = fresh_db
+    anchor_id = await _program_with_two_days(db, user_id)
+    await sharing.share_program(_make_callback(user_id, f"share:pgm:{anchor_id}"), await _state(user_id))
+    token = await _last_share_token(db)
+
+    recipient = (await db.get_or_create_user(telegram_id=999, username="r7"))["telegram_id"]
+    await db.create_muscle_group(recipient, "Другое")
+
+    await sharing.share_add(_make_callback(recipient, f"share:add:{token}"), await _state(recipient))
+    await sharing.share_add(_make_callback(recipient, f"share:add:{token}"), await _state(recipient))
+
+    programs = await db.list_programs(recipient)
+    names = sorted(p["program_name"] for p in programs)
+    assert len(names) == 2
+    assert len(set(names)) == 2  # разные имена — не слиплись в одну программу из 4 дней
+    for p in programs:
+        assert p["day_count"] == 2  # ни у одной из двух нет по 4 дня
+
+
+async def test_importing_into_existing_same_name_program_disambiguates(fresh_db, user_id):
+    """Если у получателя уже есть своя программа с таким именем — импорт не
+    должен подмешать чужие дни в неё."""
+    db = fresh_db
+    anchor_id = await _program_with_two_days(db, user_id)
+    await sharing.share_program(_make_callback(user_id, f"share:pgm:{anchor_id}"), await _state(user_id))
+    token = await _last_share_token(db)
+
+    recipient = (await db.get_or_create_user(telegram_id=1000, username="r8"))["telegram_id"]
+    rgid = await db.create_muscle_group(recipient, "Другое")
+    own_ex = await db.create_exercise(recipient, "Своё упражнение", rgid)
+    own_day = await db.create_routine(recipient, "Свой день", program_name="Сплит")
+    await db.add_routine_exercise(own_day, own_ex, 0, None)
+
+    await sharing.share_add(_make_callback(recipient, f"share:add:{token}"), await _state(recipient))
+
+    programs = await db.list_programs(recipient)
+    assert len(programs) == 2
+    own = next(p for p in programs if p["program_name"] == "Сплит")
+    assert own["day_count"] == 1  # чужие дни не подмешались в существующую программу
+    imported = next(p for p in programs if p["program_name"] != "Сплит")
+    assert imported["day_count"] == 2
+    assert "Сплит" in imported["program_name"]  # видно, что это тот же исходный сплит
+
+
+# ---------- 4.7: атрибуция, версия payload, отзыв ----------
+
+
+async def test_recipient_preview_shows_sender_username(fresh_db, user_id):
+    db = fresh_db
+    routine_id = await _routine_with_exercises(db, user_id)
+    await sharing.share_routine(_make_callback(user_id, f"share:rt:{routine_id}"), await _state(user_id))
+    token = await _last_share_token(db)
+
+    recipient = (await db.get_or_create_user(telegram_id=1100, username="r9"))["telegram_id"]
+    msg = _make_message(recipient)
+    await sharing.open_shared(
+        msg, CommandObject(command="start", args=f"sh_{token}"), await _state(recipient)
+    )
+
+    text = msg.answer.await_args.args[0]
+    assert "@tester" in text  # user_id-фикстура создаёт владельца с username="tester"
+
+
+async def test_recipient_preview_handles_owner_without_username(fresh_db):
+    db = fresh_db
+    owner = (await db.get_or_create_user(telegram_id=2000, username=None))["telegram_id"]
+    routine_id = await _routine_with_exercises(db, owner)
+    await sharing.share_routine(_make_callback(owner, f"share:rt:{routine_id}"), await _state(owner))
+    token = await _last_share_token(db)
+
+    recipient = (await db.get_or_create_user(telegram_id=2001, username="r10"))["telegram_id"]
+    msg = _make_message(recipient)
+    await sharing.open_shared(
+        msg, CommandObject(command="start", args=f"sh_{token}"), await _state(recipient)
+    )
+
+    text = msg.answer.await_args.args[0]
+    assert "Тебе прислали" in text
+    assert "@None" not in text
+
+
+async def test_shared_payload_carries_version_field(fresh_db, user_id):
+    db = fresh_db
+    routine_id = await _routine_with_exercises(db, user_id)
+    await sharing.share_routine(_make_callback(user_id, f"share:rt:{routine_id}"), await _state(user_id))
+    token = await _last_share_token(db)
+
+    row = await db.get_shared_item(token)
+    payload = json.loads(row["payload"])
+    assert payload["v"] == sharing.PAYLOAD_VERSION
+
+
+async def test_missing_version_field_is_tolerated_by_readers(fresh_db, user_id):
+    """Старые визитки без поля "v" не должны ронять ни превью, ни импорт."""
+    db = fresh_db
+    routine_id = await _routine_with_exercises(db, user_id)
+    await sharing.share_routine(_make_callback(user_id, f"share:rt:{routine_id}"), await _state(user_id))
+    token = await _last_share_token(db)
+
+    row = await db.get_shared_item(token)
+    payload = json.loads(row["payload"])
+    del payload["v"]
+    await db.conn().execute(
+        "UPDATE shared_items SET payload = ? WHERE token = ?",
+        (json.dumps(payload, ensure_ascii=False), token),
+    )
+    await db.conn().commit()
+
+    recipient = (await db.get_or_create_user(telegram_id=1200, username="r11"))["telegram_id"]
+    msg = _make_message(recipient)
+    await sharing.open_shared(
+        msg, CommandObject(command="start", args=f"sh_{token}"), await _state(recipient)
+    )
+    msg.answer.assert_awaited()
+
+    await db.create_muscle_group(recipient, "Другое")
+    callback = _make_callback(recipient, f"share:add:{token}")
+    await sharing.share_add(callback, await _state(recipient))
+    assert await db.list_routines(recipient) != []
+
+
+async def test_owner_can_revoke_share_link(fresh_db, user_id):
+    db = fresh_db
+    routine_id = await _routine_with_exercises(db, user_id)
+    await sharing.share_routine(_make_callback(user_id, f"share:rt:{routine_id}"), await _state(user_id))
+    token = await _last_share_token(db)
+
+    callback = _make_callback(user_id, f"share:revoke:{token}")
+    await sharing.share_revoke(callback, await _state(user_id))
+
+    assert await db.get_shared_item(token) is None
+    callback.message.edit_reply_markup.assert_awaited()
+
+    # Ссылка отозвана — получателю она уже не открывается.
+    recipient = (await db.get_or_create_user(telegram_id=1300, username="r12"))["telegram_id"]
+    msg = _make_message(recipient)
+    await sharing.open_shared(
+        msg, CommandObject(command="start", args=f"sh_{token}"), await _state(recipient)
+    )
+    assert "устарела" in msg.answer.await_args.args[0]
+
+
+async def test_stranger_cannot_revoke_someone_elses_share_link(fresh_db, user_id):
+    db = fresh_db
+    routine_id = await _routine_with_exercises(db, user_id)
+    await sharing.share_routine(_make_callback(user_id, f"share:rt:{routine_id}"), await _state(user_id))
+    token = await _last_share_token(db)
+
+    stranger = (await db.get_or_create_user(telegram_id=1400, username="s1"))["telegram_id"]
+    callback = _make_callback(stranger, f"share:revoke:{token}")
+    await sharing.share_revoke(callback, await _state(user_id))
+
+    assert await db.get_shared_item(token) is not None
+    assert "не твоя" in callback.answer.await_args.args[0]
+
+
+async def test_share_card_keyboard_includes_revoke_button(fresh_db, user_id):
+    db = fresh_db
+    routine_id = await _routine_with_exercises(db, user_id)
+    callback = _make_callback(user_id, f"share:rt:{routine_id}")
+
+    await sharing.share_routine(callback, await _state(user_id))
+
+    kb = callback.message.answer.await_args.kwargs["reply_markup"]
+    callbacks = [b.callback_data for row in kb.inline_keyboard for b in row]
+    assert any(cb and cb.startswith("share:revoke:") for cb in callbacks)

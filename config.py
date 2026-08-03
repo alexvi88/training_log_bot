@@ -41,6 +41,19 @@ RECENT_EXERCISES_LIMIT = 8
 # No real exercise name comes close to this, but it might genuinely be intended.
 MAX_EXERCISE_NAME_LENGTH = 60
 
+# How many training days one user may keep across all their programs. Lives here
+# rather than in ai_trainer.py, where it used to: the cap has nothing to do with
+# the AI, and while it sat there only the AI-trainer path enforced it — the
+# catalog, the importer and "save from a workout" walked straight past, and then
+# the AI path started refusing on a total it hadn't created. See db.routine_budget.
+MAX_ROUTINES_PER_USER = 30
+
+# Названия программ и дней, которые вводит пользователь. Тот же потолок, по
+# которому AI-тренер режет предложенные им имена: длинное имя едет в подпись
+# кнопки списка программ и разносит вёрстку экрана, с которого его только и
+# можно переименовать обратно.
+MAX_PROGRAM_NAME_LENGTH = 48
+
 # Engagement pushes (streaks, skip reminders, plateau nudges, weekly digest — see
 # PUSH_IDEAS.md). On by default; set ENGAGEMENT_ENABLED=false in the environment
 # to silence the daily job entirely without touching per-user opt-outs.

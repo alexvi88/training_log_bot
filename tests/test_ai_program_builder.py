@@ -117,6 +117,31 @@ async def test_empty_days_is_an_error(fresh_db, user_id):
     assert "error" in payload
 
 
+async def test_a_day_with_nothing_resolved_is_reported_as_dropped(fresh_db, user_id):
+    """A10: a day whose exercises all fail to resolve used to just vanish from
+    `days` while `report` still listed it with resolved: [] and the payload
+    kept claiming shown_to_user=True with the generic note — the model then
+    described (say) a 3-day split while the preview showed only 2. Now the
+    model is told explicitly which day was dropped and why."""
+    payload, draft = await _propose(
+        user_id,
+        {
+            "name": "Сплит",
+            "days": [
+                _day("День 1", [{"name": TEMPLATE_A}]),
+                _day("День 2 — руки", [{"name": "Полная выдумка про бицепс"}]),
+            ],
+        },
+    )
+
+    assert len(draft["days"]) == 1  # день 2 не попал в показанное превью
+    assert "dropped_days" in payload
+    assert payload["dropped_days"] == [
+        {"day": "День 2 — руки", "unresolved": ["Полная выдумка про бицепс"]}
+    ]
+    assert "dropped_days_note" in payload
+
+
 # ---------- валидация и лимиты ----------
 
 async def test_days_over_the_limit_are_cut_and_the_model_is_told(fresh_db, user_id):
@@ -172,12 +197,60 @@ async def test_absurd_sets_are_clamped_and_garbage_becomes_none(fresh_db, user_i
 
 
 async def test_long_names_are_trimmed_and_empty_ones_get_a_fallback(fresh_db, user_id):
-    _, draft = await _propose(
+    payload, draft = await _propose(
         user_id, {"name": "Я" * 200, "days": [_day("", [{"name": TEMPLATE_A}])]}
     )
 
     assert len(draft["name"]) == ai_trainer.PROGRAM_NAME_LIMIT
     assert draft["days"][0]["name"] == "День 1"
+    # A11: truncation used to be completely silent — only truncated_days /
+    # truncated_exercises (which are about something else entirely) existed.
+    assert "program_name_truncated" in payload
+
+
+async def test_clamped_sets_and_reps_are_reported_to_the_model(fresh_db, user_id):
+    """A11: sets/reps used to be clamped (25→10, 100-200→50-50) with no trace
+    beyond the resulting target string ("10×50") looking like an honest
+    proposal — the model had no way to notice and mention it."""
+    payload, _ = await _propose(
+        user_id,
+        {
+            "name": "П",
+            "days": [
+                _day(
+                    "День 1",
+                    [{"name": TEMPLATE_A, "sets": 25, "reps_min": 100, "reps_max": 200}],
+                )
+            ],
+        },
+    )
+
+    assert "clamped" in payload["days"][0]
+    (note,) = payload["days"][0]["clamped"]
+    assert TEMPLATE_A in note and "25" in note and "10" in note and "100" in note and "50" in note
+
+
+def test_propose_program_schema_declares_real_limits():
+    """A11: the limits used to live only in prose descriptions ("Рабочих
+    подходов, 1-10"), which a model can and does ignore — they now also exist
+    as real JSON-schema constraints the API itself can enforce."""
+    (tool,) = [t for t in ai_trainer.TOOLS if t["function"]["name"] == "propose_program"]
+    props = tool["function"]["parameters"]["properties"]
+
+    assert props["name"]["maxLength"] == ai_trainer.PROGRAM_NAME_LIMIT
+    days_schema = props["days"]
+    assert days_schema["minItems"] == 1
+    assert days_schema["maxItems"] == ai_trainer.PROGRAM_MAX_DAYS
+    day_props = days_schema["items"]["properties"]
+    assert day_props["name"]["maxLength"] == ai_trainer.PROGRAM_NAME_LIMIT
+    ex_schema = day_props["exercises"]
+    assert ex_schema["minItems"] == 1
+    assert ex_schema["maxItems"] == ai_trainer.PROGRAM_MAX_EXERCISES_PER_DAY
+    ex_props = ex_schema["items"]["properties"]
+    assert ex_props["sets"]["minimum"] == 1
+    assert ex_props["sets"]["maximum"] == ai_trainer.PROGRAM_MAX_SETS
+    assert ex_props["reps_min"]["maximum"] == ai_trainer.PROGRAM_MAX_REPS
+    assert ex_props["reps_max"]["maximum"] == ai_trainer.PROGRAM_MAX_REPS
 
 
 async def test_exercise_given_as_a_bare_string_still_resolves(fresh_db, user_id):
@@ -276,7 +349,10 @@ def test_preview_lists_days_scheme_and_new_exercises():
     assert "2 дня · 3 упражнения" in text
     assert "1. Жим лёжа — 3×5–10" in text
     assert "2. Тяга — 3×8" in text
-    assert "Новых для тебя упражнение: 1" in text
+    # A13: родительный падеж множественного числа фиксирован («Новых для тебя
+    # упражнений»), а не согласуется с числом через plural_ru — «упражнение: 1»
+    # читалось бы как согласование с количеством, а не с «для тебя».
+    assert "Новых для тебя упражнений: 1" in text
 
 
 def test_preview_escapes_html_in_names():

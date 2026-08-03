@@ -390,8 +390,35 @@ async def test_ask_stops_after_max_tool_rounds(fresh_db, user_id, monkeypatch):
 
     answer = await ai_trainer._ask_plain(user_id, "Как дела?", history=[])
 
-    assert client.chat.completions.create.await_count == ai_trainer.MAX_TOOL_ROUNDS + 1
+    # MAX_TOOL_ROUNDS+1 обычных раундов плюс один принудительный без tools —
+    # см. A12: раньше цикл заканчивался ровно на них, и последний раунд с
+    # tool_calls так и не получал текстового ответа (see
+    # test_ask_forces_a_text_only_round_when_tool_rounds_are_exhausted below).
+    assert client.chat.completions.create.await_count == ai_trainer.MAX_TOOL_ROUNDS + 2
     assert answer  # даём осмысленный fallback, а не пустую строку
+    # Последний, принудительный раунд не даёт модели вызвать инструмент ещё раз.
+    assert "tools" not in client.chat.completions.create.await_args.kwargs
+
+
+async def test_ask_forces_a_text_only_round_when_tool_rounds_are_exhausted(fresh_db, user_id, monkeypatch):
+    """A12: раньше здесь возвращалась заглушка "не получилось сформулировать
+    ответ", хотя propose_program мог сработать этим же ходом — под ней висела
+    бы живая кнопка сохранения программы рядом с текстом о провале."""
+    calls = {"n": 0}
+
+    async def create(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] <= ai_trainer.MAX_TOOL_ROUNDS + 1:
+            return _response(tool_calls=[_tool_call("get_training_overview", {})])
+        assert "tools" not in kwargs  # финальный раунд — без инструментов
+        return _response(content="Вот и программа, гляди на кнопку ниже.")
+
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+
+    answer = await ai_trainer._ask_plain(user_id, "Составь программу", history=[])
+
+    assert answer == "Вот и программа, гляди на кнопку ниже."
 
 
 async def test_ask_passes_user_question_and_history(fresh_db, user_id, monkeypatch):

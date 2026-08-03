@@ -36,7 +36,17 @@ CREATE TABLE IF NOT EXISTS users (
     ai_comments_enabled INTEGER NOT NULL DEFAULT 0,
     progression_hint_enabled INTEGER NOT NULL DEFAULT 1,
     tz_offset INTEGER NOT NULL DEFAULT 0,
-    stickers_enabled INTEGER NOT NULL DEFAULT 1
+    stickers_enabled INTEGER NOT NULL DEFAULT 1,
+    -- Тренировочный профиль. Ровно те пять вводных, которые AI-тренер и так
+    -- спрашивает перед сборкой программы (см. ai_trainer._system_prompt) — но
+    -- раньше они жили только в переписке, и на следующий раз он спрашивал их
+    -- заново. Всё nullable: профиль заполняется по кусочкам, из разговора или
+    -- из настроек, и «не знаю» — нормальный ответ. `equipment` — JSON-список.
+    experience TEXT,
+    goal TEXT,
+    days_per_week INTEGER,
+    equipment TEXT,
+    limitations TEXT
 );
 
 CREATE TABLE IF NOT EXISTS muscle_groups (
@@ -216,17 +226,59 @@ CREATE TABLE IF NOT EXISTS shared_items (
     owner_id INTEGER NOT NULL,
     kind TEXT NOT NULL,
     payload TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    -- Сколько раз визитку забрали. Единственная обратная связь автору: отдал
+    -- программу — и до сих пор не знал, взял её кто-нибудь или нет.
+    taken_count INTEGER NOT NULL DEFAULT 0
 );
 
+-- A program is a named, ordered set of training days. It used to be nothing but
+-- the string its days happened to share (routines.program_name), which meant
+-- two programs with the same name *were* one program: renaming one onto another
+-- merged them, adding the same catalog program twice piled duplicate days into
+-- it, and the "handle" a screen was opened by had to be faked as MAX(routine.id).
+-- Giving it a row of its own is what makes those states impossible rather than
+-- merely unlikely — see _migrate_programs_from_names for the one-shot move.
+--
+-- `source` is where the program came from (manual|workout|catalog|ai|import) and
+-- `source_ref` the detail worth keeping: the catalog key, or the @username who
+-- shared it. Used for attribution on the program card, never for behaviour.
+CREATE TABLE IF NOT EXISTS programs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    name_key TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'manual',
+    source_ref TEXT
+);
+-- The index is the point of the table: a name collision is now an error the
+-- caller has to handle, not a silent merge.
+--
+-- It keys on `name_key` rather than LOWER(name) because SQLite's built-in
+-- LOWER() only folds ASCII — «СПЛИТ» and «сплит» would sail straight past it,
+-- and this bot's programs are named in Russian. `name_key` is the same string
+-- run through Python's Unicode-aware str.lower() (see _program_key), so the
+-- fold the index enforces is the fold find_program_by_name performs.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_programs_user_name
+    ON programs (user_id, name_key);
+
+-- program_name is dead weight kept for one release so a rollback still reads:
+-- the live answer to "which program is this day in" is the programs join (see
+-- _ROUTINE_SELECT). day_order is the day's position — it used to be implied by
+-- ascending id, which is why days could never be reordered.
 CREATE TABLE IF NOT EXISTS routines (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL,
     name TEXT NOT NULL,
     created_at TEXT NOT NULL,
-    program_name TEXT
+    program_name TEXT,
+    program_id INTEGER,
+    day_order INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY (program_id) REFERENCES programs (id)
 );
 CREATE INDEX IF NOT EXISTS idx_routines_user ON routines (user_id);
+CREATE INDEX IF NOT EXISTS idx_routines_program ON routines (program_id, day_order);
 
 CREATE TABLE IF NOT EXISTS routine_exercises (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -234,6 +286,7 @@ CREATE TABLE IF NOT EXISTS routine_exercises (
     exercise_id INTEGER NOT NULL,
     order_index INTEGER NOT NULL,
     target TEXT,
+    progression TEXT,
     FOREIGN KEY (routine_id) REFERENCES routines (id),
     FOREIGN KEY (exercise_id) REFERENCES exercises (id)
 );
@@ -350,7 +403,19 @@ async def _migrate_schema() -> None:
     if "description" not in exercise_cols:
         await _conn.execute("ALTER TABLE exercises ADD COLUMN description TEXT")
 
+    shared_cols = await _column_names("shared_items")
+    if "taken_count" not in shared_cols:
+        await _conn.execute(
+            "ALTER TABLE shared_items ADD COLUMN taken_count INTEGER NOT NULL DEFAULT 0"
+        )
+
     user_cols = await _column_names("users")
+    for profile_col, col_type in (
+        ("experience", "TEXT"), ("goal", "TEXT"), ("days_per_week", "INTEGER"),
+        ("equipment", "TEXT"), ("limitations", "TEXT"),
+    ):
+        if profile_col not in user_cols:
+            await _conn.execute(f"ALTER TABLE users ADD COLUMN {profile_col} {col_type}")
     if "hide_warmups" in user_cols:
         await _conn.execute("ALTER TABLE users DROP COLUMN hide_warmups")
     if "bodyweight" in user_cols:
@@ -403,10 +468,34 @@ async def _migrate_schema() -> None:
     routine_ex_cols = await _column_names("routine_exercises")
     if "target" not in routine_ex_cols:
         await _conn.execute("ALTER TABLE routine_exercises ADD COLUMN target TEXT")
+    if "progression" not in routine_ex_cols:
+        # Правило прогрессии для этого упражнения в этой программе, JSON — см.
+        # set_routine_exercise_progression. До этого «сделал верх диапазона —
+        # добавь 2.5кг» существовало только прозой в ответе AI-тренера и
+        # умирало вместе с чатом.
+        await _conn.execute("ALTER TABLE routine_exercises ADD COLUMN progression TEXT")
 
     routine_cols = await _column_names("routines")
     if "program_name" not in routine_cols:
         await _conn.execute("ALTER TABLE routines ADD COLUMN program_name TEXT")
+    if "program_id" not in routine_cols:
+        await _conn.execute("ALTER TABLE routines ADD COLUMN program_id INTEGER")
+    if "day_order" not in routine_cols:
+        await _conn.execute(
+            "ALTER TABLE routines ADD COLUMN day_order INTEGER NOT NULL DEFAULT 0"
+        )
+    # The table may predate the index (and, on a fresh DB, executescript already
+    # made it) — either way it has to exist before the one-shot migration starts
+    # inserting programs, or the collision it is there to prevent slips through.
+    program_cols = await _column_names("programs")
+    if "name_key" not in program_cols:
+        await _conn.execute("ALTER TABLE programs ADD COLUMN name_key TEXT NOT NULL DEFAULT ''")
+    await _conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_programs_user_name ON programs (user_id, name_key)"
+    )
+    await _conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_routines_program ON routines (program_id, day_order)"
+    )
 
     push_cols = await _column_names("pushes")
     if "sent_on" not in push_cols:
@@ -505,7 +594,7 @@ async def _sync_exercise_templates() -> None:
 
 
 # Bumped whenever a one-shot migration is added to _run_one_shot_migrations.
-_SCHEMA_VERSION = 3
+_SCHEMA_VERSION = 4
 
 
 async def _run_one_shot_migrations() -> None:
@@ -526,9 +615,63 @@ async def _run_one_shot_migrations() -> None:
         await _group_prefixed_program_days()
     if version < 3:
         await _group_program_days_saved_together()
+    if version < 4:
+        # Must run last of the four: the three above are what put `program_name`
+        # on the rows this one reads.
+        await _migrate_programs_from_names()
     # Not parameterizable — SQLite only accepts a literal here. The value is an
     # internal constant, never user input.
     await _conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
+    await _conn.commit()
+
+
+async def _migrate_programs_from_names() -> None:
+    """Give every existing program a row of its own (see the `programs` table).
+
+    Until now a program was the string its days shared, so this reads the
+    distinct (user_id, program_name) pairs and mints one `programs` row per
+    pair, then points the days at it. `day_order` becomes the position in
+    ascending id — which is exactly what the old `list_program_days` already
+    treated as day order, so nobody's days get shuffled by the move.
+
+    Case matters here in a way it didn't before: the new unique index folds
+    case, but the old grouping didn't, so a user with both «Сплит» and «сплит»
+    had two programs and can only be given one. They are merged rather than
+    dropped — the alternative is inventing a name for the loser — and the days
+    of both keep their own names, so nothing becomes unreachable. This is also
+    the state that made the old resolver delete the wrong program, so merging
+    is the outcome the user was already living with, minus the data loss.
+
+    One-shot (see `_run_one_shot_migrations`): afterwards programs are created
+    by get_or_create_program and `program_name` stops being written at all.
+    """
+    cur = await _conn.execute(
+        "SELECT id, user_id, program_name, created_at FROM routines "
+        "WHERE program_name IS NOT NULL AND program_name != '' AND program_id IS NULL "
+        "ORDER BY id"
+    )
+    rows = await cur.fetchall()
+    if not rows:
+        return
+    program_ids: dict[tuple[int, str], int] = {}
+    day_counts: dict[int, int] = {}
+    for row in rows:
+        key = (row["user_id"], _program_key(row["program_name"]))
+        program_id = program_ids.get(key)
+        if program_id is None:
+            inserted = await _conn.execute(
+                "INSERT INTO programs (user_id, name, name_key, created_at, source) "
+                "VALUES (?, ?, ?, ?, 'manual')",
+                (row["user_id"], row["program_name"].strip(), key[1], row["created_at"]),
+            )
+            program_id = inserted.lastrowid
+            program_ids[key] = program_id
+        order = day_counts.get(program_id, 0)
+        day_counts[program_id] = order + 1
+        await _conn.execute(
+            "UPDATE routines SET program_id = ?, day_order = ? WHERE id = ?",
+            (program_id, order, row["id"]),
+        )
     await _conn.commit()
 
 
@@ -2260,14 +2403,214 @@ async def get_shared_item(token: str) -> Optional[aiosqlite.Row]:
     return await cur.fetchone()
 
 
-async def create_routine(user_id: int, name: str, program_name: Optional[str] = None) -> int:
-    """`program_name` groups several routines as days of one multi-day program
-    (see list_programs); NULL means a standalone routine, e.g. one saved from a
-    past workout."""
+async def mark_shared_item_taken(token: str) -> None:
+    async with _write_lock:
+        await conn().execute(
+            "UPDATE shared_items SET taken_count = taken_count + 1 WHERE token = ?", (token,)
+        )
+        await conn().commit()
+
+
+async def delete_shared_item(token: str, owner_id: int) -> bool:
+    """Отозвать визитку. Ссылка была вечной и неотзываемой: отдал программу —
+    и обратно уже никак. True, если удалили (и это была визитка владельца)."""
     async with _write_lock:
         cur = await conn().execute(
-            "INSERT INTO routines (user_id, name, created_at, program_name) VALUES (?, ?, ?, ?)",
-            (user_id, name, now_iso(), program_name),
+            "DELETE FROM shared_items WHERE token = ? AND owner_id = ?", (token, owner_id)
+        )
+        await conn().commit()
+        return cur.rowcount > 0
+
+
+async def delete_shared_items_older_than(cutoff_iso: str) -> int:
+    """Прополка `shared_items`: таблица только росла, ничто её не чистило."""
+    async with _write_lock:
+        cur = await conn().execute(
+            "DELETE FROM shared_items WHERE created_at < ?", (cutoff_iso,)
+        )
+        await conn().commit()
+        return cur.rowcount
+
+
+# ---------- programs (a named, ordered set of training days) ----------
+#
+# Every routine query goes through this SELECT rather than `SELECT *`: the
+# program's name lives on `programs` now, and joining it in under the old
+# `program_name` alias is what lets the handlers keep reading
+# `routine["program_name"]` unchanged. The legacy `routines.program_name`
+# column is deliberately *not* selected — one name, one place.
+
+_ROUTINE_COLUMNS = (
+    "r.id, r.user_id, r.name, r.created_at, r.program_id, r.day_order, "
+    "p.name AS program_name, p.source AS program_source, p.source_ref AS program_source_ref"
+)
+_ROUTINE_FROM = " FROM routines r LEFT JOIN programs p ON p.id = r.program_id "
+_EXERCISE_COUNT = (
+    ", (SELECT COUNT(*) FROM routine_exercises re WHERE re.routine_id = r.id) AS exercise_count"
+)
+
+_ROUTINE_SELECT = "SELECT " + _ROUTINE_COLUMNS + _ROUTINE_FROM
+# Same rows plus how many exercises each day has — the list screens show it.
+_ROUTINE_SELECT_COUNTED = "SELECT " + _ROUTINE_COLUMNS + _EXERCISE_COUNT + _ROUTINE_FROM
+
+
+def _program_key(name: str) -> str:
+    """The folded form a program name is deduplicated by.
+
+    Python's str.lower() rather than SQL's: SQLite's LOWER() is ASCII-only, so
+    doing this in the query would let «Сплит» and «сплит» coexist — which is the
+    exact pair that used to make the AI trainer delete the wrong program.
+    """
+    return name.strip().lower()
+
+
+async def create_program(
+    user_id: int, name: str, source: str = "manual", source_ref: Optional[str] = None
+) -> Optional[int]:
+    """A new program, or None if the user already has one by that name.
+
+    None rather than an exception because every caller has something better to
+    do with a collision than crash: the catalog offers to open the existing one,
+    the importer renames the incoming copy, the AI trainer asks. Before the
+    `programs` table there was no collision to report — the days just merged
+    into whatever program already had the name.
+    """
+    async with _write_lock:
+        try:
+            cur = await conn().execute(
+                "INSERT INTO programs (user_id, name, name_key, created_at, source, source_ref) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (user_id, name.strip(), _program_key(name), now_iso(), source, source_ref),
+            )
+        except aiosqlite.IntegrityError:
+            return None
+        await conn().commit()
+        return cur.lastrowid
+
+
+async def find_program_by_name(user_id: int, name: str) -> Optional[aiosqlite.Row]:
+    """Case- and whitespace-insensitive lookup — the same folding the unique
+    index uses, so "found nothing" here means create_program will succeed."""
+    cur = await conn().execute(
+        "SELECT * FROM programs WHERE user_id = ? AND name_key = ?",
+        (user_id, _program_key(name)),
+    )
+    return await cur.fetchone()
+
+
+async def get_or_create_program(
+    user_id: int, name: str, source: str = "manual", source_ref: Optional[str] = None
+) -> int:
+    """For callers that genuinely want "the program with this name, whichever it
+    is" — chiefly the legacy `create_routine(program_name=...)` shim. Anything
+    the user can trigger twice should use create_program and handle the None."""
+    existing = await find_program_by_name(user_id, name)
+    if existing is not None:
+        return existing["id"]
+    program_id = await create_program(user_id, name, source, source_ref)
+    if program_id is None:  # lost a race with a concurrent insert
+        existing = await find_program_by_name(user_id, name)
+        return existing["id"]
+    return program_id
+
+
+async def get_program(program_id: int) -> Optional[aiosqlite.Row]:
+    cur = await conn().execute("SELECT * FROM programs WHERE id = ?", (program_id,))
+    return await cur.fetchone()
+
+
+async def unique_program_name(user_id: int, name: str, suffix: Optional[str] = None) -> str:
+    """A free name near `name` — «PPL (от @vasya)», then «PPL (2)», «PPL (3)»…
+
+    For the paths where a collision shouldn't stop the user: importing a shared
+    program, or taking the same catalog program a second time on purpose.
+    """
+    name = name.strip()
+    if await find_program_by_name(user_id, name) is None:
+        return name
+    if suffix:
+        candidate = f"{name} ({suffix})"
+        if await find_program_by_name(user_id, candidate) is None:
+            return candidate
+    for n in range(2, 100):
+        candidate = f"{name} ({n})"
+        if await find_program_by_name(user_id, candidate) is None:
+            return candidate
+    return f"{name} ({secrets.token_hex(2)})"
+
+
+async def next_day_order(program_id: int) -> int:
+    cur = await conn().execute(
+        "SELECT COALESCE(MAX(day_order), -1) + 1 FROM routines WHERE program_id = ?",
+        (program_id,),
+    )
+    (order,) = await cur.fetchone()
+    return order
+
+
+async def move_routine_to_program(routine_id: int, program_id: Optional[int]) -> None:
+    """Put a day into a program (appended last), or take it out of one.
+
+    `program_id=None` makes it a standalone routine again — the "вынести день из
+    программы" direction, which was impossible while a program was just a shared
+    string.
+    """
+    order = await next_day_order(program_id) if program_id is not None else 0
+    async with _write_lock:
+        await conn().execute(
+            "UPDATE routines SET program_id = ?, day_order = ? WHERE id = ?",
+            (program_id, order, routine_id),
+        )
+        await conn().commit()
+
+
+async def reorder_program_day(routine_id: int, direction: str) -> None:
+    """Swap a day with its neighbour above ("up") or below ("down"). No-op at
+    either end — same shape as reorder_routine_exercise one level down."""
+    routine = await get_routine(routine_id)
+    if routine is None or routine["program_id"] is None:
+        return
+    days = await list_program_days_by_id(routine["program_id"])
+    ids = [d["id"] for d in days]
+    if routine_id not in ids:
+        return
+    idx = ids.index(routine_id)
+    neighbour = idx - 1 if direction == "up" else idx + 1
+    if not 0 <= neighbour < len(ids):
+        return
+    a, b = days[idx], days[neighbour]
+    async with _write_lock:
+        await conn().execute(
+            "UPDATE routines SET day_order = ? WHERE id = ?", (b["day_order"], a["id"])
+        )
+        await conn().execute(
+            "UPDATE routines SET day_order = ? WHERE id = ?", (a["day_order"], b["id"])
+        )
+        await conn().commit()
+
+
+async def create_routine(
+    user_id: int,
+    name: str,
+    program_name: Optional[str] = None,
+    program_id: Optional[int] = None,
+    day_order: Optional[int] = None,
+) -> int:
+    """One training day. Standalone unless it's given a program.
+
+    `program_id` is the real handle; `program_name` is the older shim, kept
+    because several callers still speak in names — it resolves to a program,
+    creating one if the user has none by that name. Pass one or the other.
+    """
+    if program_id is None and program_name:
+        program_id = await get_or_create_program(user_id, program_name)
+    if program_id is not None and day_order is None:
+        day_order = await next_day_order(program_id)
+    async with _write_lock:
+        cur = await conn().execute(
+            "INSERT INTO routines (user_id, name, created_at, program_id, day_order) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (user_id, name, now_iso(), program_id, day_order or 0),
         )
         await conn().commit()
         return cur.lastrowid
@@ -2346,9 +2689,8 @@ async def get_routine_exercise(routine_exercise_id: int) -> Optional[aiosqlite.R
 
 async def list_routines(user_id: int) -> list[aiosqlite.Row]:
     cur = await conn().execute(
-        "SELECT r.*, "
-        "(SELECT COUNT(*) FROM routine_exercises re WHERE re.routine_id = r.id) AS exercise_count "
-        "FROM routines r WHERE r.user_id = ? ORDER BY r.created_at DESC, r.id DESC",
+        _ROUTINE_SELECT_COUNTED
+        + "WHERE r.user_id = ? ORDER BY r.created_at DESC, r.id DESC",
         (user_id,),
     )
     return await cur.fetchall()
@@ -2357,15 +2699,23 @@ async def list_routines(user_id: int) -> list[aiosqlite.Row]:
 async def list_programs(user_id: int) -> list[aiosqlite.Row]:
     """Multi-day programs the user has saved, one row per program.
 
-    `anchor_id` is the newest routine in the group — the handle the program's
-    day list is opened by, since a program has no id of its own and its name
-    doesn't fit in callback data.
+    `program_name` is aliased alongside `name` so the callers written against
+    the old name-grouped query keep reading; `anchor_id` likewise still points
+    at a day, for keyboards that haven't moved to `id` yet.
+
+    Sorted by "when I last actually trained by it", falling back to creation
+    time for a program never used: the list is a working set, and a split from
+    last spring shouldn't sit above the one you're mid-way through.
     """
     cur = await conn().execute(
-        "SELECT program_name, COUNT(*) AS day_count, MAX(id) AS anchor_id, "
-        "MAX(created_at) AS created_at "
-        "FROM routines WHERE user_id = ? AND program_name IS NOT NULL "
-        "GROUP BY program_name ORDER BY MAX(created_at) DESC, MAX(id) DESC",
+        "SELECT p.id, p.id AS program_id, p.name, p.name AS program_name, "
+        "p.created_at, p.source, p.source_ref, "
+        "COUNT(r.id) AS day_count, MAX(r.id) AS anchor_id, "
+        "(SELECT MAX(w.started_at) FROM workouts w JOIN routines rr ON rr.id = w.routine_id "
+        "  WHERE rr.program_id = p.id) AS last_trained_at "
+        "FROM programs p LEFT JOIN routines r ON r.program_id = p.id "
+        "WHERE p.user_id = ? GROUP BY p.id "
+        "ORDER BY COALESCE(last_trained_at, p.created_at) DESC, p.id DESC",
         (user_id,),
     )
     return await cur.fetchall()
@@ -2381,14 +2731,15 @@ async def list_recent_programs(
     два-три сплита, между которыми человек ходит сейчас.
 
     Дни одной программы схлопываются в одну строку (тренировался по «ноги» и по
-    «верх» — это одна программа), одиночные шаблоны без program_name идут сами
-    по себе. `anchor_id` — routine, которым открывается экран (см.
-    handlers.routines.rt_program_days): для программы это любой её день.
+    «верх» — это одна программа), одиночные шаблоны без программы идут сами по
+    себе. `program_id` — чем открывается экран программы; `anchor_id` оставлен
+    для старых клавиатур, он же routine последнего пройденного дня.
     """
     cur = await conn().execute(
-        "SELECT r.id AS routine_id, r.name AS routine_name, r.program_name, "
-        "MAX(w.started_at) AS last_started "
+        "SELECT r.id AS routine_id, r.name AS routine_name, r.program_id, "
+        "p.name AS program_name, MAX(w.started_at) AS last_started "
         "FROM workouts w JOIN routines r ON r.id = w.routine_id "
+        "LEFT JOIN programs p ON p.id = r.program_id "
         "WHERE w.user_id = ? AND r.user_id = ? AND w.started_at >= ? "
         "GROUP BY r.id ORDER BY MAX(w.started_at) DESC",
         (user_id, user_id, since),
@@ -2396,13 +2747,15 @@ async def list_recent_programs(
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
     for row in await cur.fetchall():
-        key = row["program_name"] or f"routine:{row['routine_id']}"
+        key = f"program:{row['program_id']}" if row["program_id"] else f"routine:{row['routine_id']}"
         if key in seen:
             continue
         seen.add(key)
         out.append(
             {
                 "name": row["program_name"] or row["routine_name"],
+                "program_id": row["program_id"],
+                "routine_id": row["routine_id"],
                 "anchor_id": row["routine_id"],
                 "last_started": row["last_started"],
             }
@@ -2412,25 +2765,35 @@ async def list_recent_programs(
     return out
 
 
-async def list_program_days(user_id: int, program_name: str) -> list[aiosqlite.Row]:
-    """The routines making up one program, oldest first — day 1 is created first
-    (or, for the catalog flow, last-reversed) so ascending id is day order."""
+async def list_program_days_by_id(program_id: int) -> list[aiosqlite.Row]:
+    """The program's days in the order the user put them in.
+
+    Ordered by `day_order` (id only as a tiebreaker for rows written before the
+    column existed) — day order used to be "ascending id", which is why days
+    could be added but never moved.
+    """
     cur = await conn().execute(
-        "SELECT r.*, "
-        "(SELECT COUNT(*) FROM routine_exercises re WHERE re.routine_id = r.id) AS exercise_count "
-        "FROM routines r WHERE r.user_id = ? AND r.program_name = ? "
-        "ORDER BY r.id ASC",
-        (user_id, program_name),
+        _ROUTINE_SELECT_COUNTED
+        + "WHERE r.program_id = ? ORDER BY r.day_order ASC, r.id ASC",
+        (program_id,),
     )
     return await cur.fetchall()
+
+
+async def list_program_days(user_id: int, program_name: str) -> list[aiosqlite.Row]:
+    """By-name shim over list_program_days_by_id, for callers that still hold a
+    name rather than an id. Unknown name → no days, never someone else's."""
+    program = await find_program_by_name(user_id, program_name)
+    if program is None or program["user_id"] != user_id:
+        return []
+    return await list_program_days_by_id(program["id"])
 
 
 async def list_standalone_routines(user_id: int) -> list[aiosqlite.Row]:
     """Routines that aren't part of a program — shown directly in the list."""
     cur = await conn().execute(
-        "SELECT r.*, "
-        "(SELECT COUNT(*) FROM routine_exercises re WHERE re.routine_id = r.id) AS exercise_count "
-        "FROM routines r WHERE r.user_id = ? AND r.program_name IS NULL "
+        _ROUTINE_SELECT_COUNTED
+        + "WHERE r.user_id = ? AND r.program_id IS NULL "
         "ORDER BY r.created_at DESC, r.id DESC",
         (user_id,),
     )
@@ -2438,7 +2801,7 @@ async def list_standalone_routines(user_id: int) -> list[aiosqlite.Row]:
 
 
 async def get_routine(routine_id: int) -> Optional[aiosqlite.Row]:
-    cur = await conn().execute("SELECT * FROM routines WHERE id = ?", (routine_id,))
+    cur = await conn().execute(_ROUTINE_SELECT + "WHERE r.id = ?", (routine_id,))
     return await cur.fetchone()
 
 
@@ -2458,14 +2821,59 @@ async def list_routine_exercises(routine_id: int) -> list[aiosqlite.Row]:
     return await cur.fetchall()
 
 
-async def rename_program(user_id: int, program_name: str, new_name: str) -> None:
-    """Rename a program — i.e. re-label every day that belongs to it, since the
-    program itself is only the name its days share."""
+async def rename_program_by_id(program_id: int, new_name: str) -> bool:
+    """True if renamed, False if the user already has a program by that name.
+
+    The False case used to be a silent merge: `UPDATE routines SET program_name`
+    over every day meant renaming «Бета» to «Альфа» quietly folded both into one
+    program, with no way back — the UI can't take a day out of a program. Now
+    the unique index refuses and the caller gets to ask.
+    """
+    new_name = new_name.strip()
     async with _write_lock:
-        await conn().execute(
-            "UPDATE routines SET program_name = ? WHERE user_id = ? AND program_name = ?",
-            (new_name, user_id, program_name),
-        )
+        try:
+            await conn().execute(
+                "UPDATE programs SET name = ?, name_key = ? WHERE id = ?",
+                (new_name, _program_key(new_name), program_id),
+            )
+        except aiosqlite.IntegrityError:
+            return False
+        await conn().commit()
+        return True
+
+
+async def rename_program(user_id: int, program_name: str, new_name: str) -> bool:
+    """By-name shim over rename_program_by_id."""
+    program = await find_program_by_name(user_id, program_name)
+    if program is None:
+        return False
+    return await rename_program_by_id(program["id"], new_name)
+
+
+async def merge_programs(user_id: int, source_id: int, target_id: int) -> None:
+    """Fold every day of `source_id` into `target_id` and drop the empty shell.
+
+    The explicit version of what renaming one program onto another used to do by
+    accident — offered as a choice when rename_program_by_id reports a
+    collision, so "actually yes, join them" stays possible.
+    """
+    source = await get_program(source_id)
+    target = await get_program(target_id)
+    if source is None or target is None:
+        return
+    if source["user_id"] != user_id or target["user_id"] != user_id:
+        return
+    order = await next_day_order(target_id)
+    for day in await list_program_days_by_id(source_id):
+        async with _write_lock:
+            await conn().execute(
+                "UPDATE routines SET program_id = ?, day_order = ? WHERE id = ?",
+                (target_id, order, day["id"]),
+            )
+            await conn().commit()
+        order += 1
+    async with _write_lock:
+        await conn().execute("DELETE FROM programs WHERE id = ?", (source_id,))
         await conn().commit()
 
 
@@ -2476,31 +2884,43 @@ async def rename_routine(routine_id: int, name: str) -> None:
 
 
 async def delete_routine(routine_id: int) -> None:
+    """Delete one day. If it was the last day of its program, the program goes
+    too — an empty program is a row nothing can be done with, and it would sit
+    in the list reading «· 0 дней»."""
+    routine = await get_routine(routine_id)
+    program_id = routine["program_id"] if routine else None
     async with _write_lock:
         db = conn()
         await db.execute("DELETE FROM routine_exercises WHERE routine_id = ?", (routine_id,))
         await db.execute("DELETE FROM routines WHERE id = ?", (routine_id,))
         await db.commit()
+    if program_id is not None and not await list_program_days_by_id(program_id):
+        async with _write_lock:
+            await conn().execute("DELETE FROM programs WHERE id = ?", (program_id,))
+            await conn().commit()
 
 
-async def delete_program(user_id: int, program_name: str) -> None:
-    """Delete every day belonging to a multi-day program."""
+async def delete_program_by_id(program_id: int) -> None:
+    """Delete a program and every day belonging to it."""
     async with _write_lock:
         db = conn()
         day_ids = [
             r["id"] for r in await (
-                await db.execute(
-                    "SELECT id FROM routines WHERE user_id = ? AND program_name = ?",
-                    (user_id, program_name),
-                )
+                await db.execute("SELECT id FROM routines WHERE program_id = ?", (program_id,))
             ).fetchall()
         ]
         for day_id in day_ids:
             await db.execute("DELETE FROM routine_exercises WHERE routine_id = ?", (day_id,))
-        await db.execute(
-            "DELETE FROM routines WHERE user_id = ? AND program_name = ?", (user_id, program_name)
-        )
+        await db.execute("DELETE FROM routines WHERE program_id = ?", (program_id,))
+        await db.execute("DELETE FROM programs WHERE id = ?", (program_id,))
         await db.commit()
+
+
+async def delete_program(user_id: int, program_name: str) -> None:
+    """By-name shim over delete_program_by_id."""
+    program = await find_program_by_name(user_id, program_name)
+    if program is not None:
+        await delete_program_by_id(program["id"])
 
 
 async def _find_global_template_by_name(name: str) -> Optional[aiosqlite.Row]:
@@ -2569,11 +2989,101 @@ async def count_routines(user_id: int) -> int:
     return row[0]
 
 
+async def routine_budget(user_id: int, adding: int, freeing: int = 0) -> Optional[str]:
+    """None if `adding` more days fit, else the message to show the user.
+
+    The cap existed but only the AI-trainer path checked it, so the catalog,
+    the importer and "save from a workout" each walked straight past it — and
+    then the AI path started refusing on a total it hadn't created. One helper,
+    called from all four doors.
+
+    `freeing` is how many of the user's current days this operation replaces
+    (an AI edit swapping a program's days for new ones): without it, editing a
+    program to the same size hits the ceiling just because the old version is
+    still there.
+    """
+    existing = await count_routines(user_id)
+    if existing - freeing + adding <= config.MAX_ROUTINES_PER_USER:
+        return None
+    return (
+        f"У тебя уже {existing} дней в программах — больше "
+        f"{config.MAX_ROUTINES_PER_USER} не влезет. Удали лишние в «🗂 Программы» "
+        "и попробуй ещё раз."
+    )
+
+
+async def set_routine_exercise_target(routine_exercise_id: int, target: Optional[str]) -> None:
+    """Change the sets×reps scheme in place.
+
+    Without this, changing «3×10» to «4×8» meant removing the exercise (behind a
+    confirmation), adding it again — where it lands at the end — and walking it
+    back up with the arrows.
+    """
+    async with _write_lock:
+        await conn().execute(
+            "UPDATE routine_exercises SET target = ? WHERE id = ?", (target, routine_exercise_id)
+        )
+        await conn().commit()
+
+
+async def set_routine_exercise_progression(
+    routine_exercise_id: int, progression: Optional[str]
+) -> None:
+    """Store the progression rule as JSON (see the `progression` column).
+
+    «Закрыл верх диапазона — добавь 2.5кг» used to live only in the trainer's
+    prose and died with the chat; here it survives to the session where it
+    actually matters.
+    """
+    async with _write_lock:
+        await conn().execute(
+            "UPDATE routine_exercises SET progression = ? WHERE id = ?",
+            (progression, routine_exercise_id),
+        )
+        await conn().commit()
+
+
+async def program_day_history(program_id: int) -> dict[int, tuple[str, int]]:
+    """For each day of the program: (last time it was trained, how many times).
+
+    Read off `workouts.routine_id`, which has been recorded since the column
+    existed and until now fed exactly one screen. It's what «какой сегодня день»
+    and «ноги ты делал дважды за полтора месяца» are both built from.
+    """
+    cur = await conn().execute(
+        "SELECT r.id AS routine_id, MAX(w.started_at) AS last_started, COUNT(*) AS times "
+        "FROM routines r JOIN workouts w ON w.routine_id = r.id "
+        "WHERE r.program_id = ? GROUP BY r.id",
+        (program_id,),
+    )
+    return {row["routine_id"]: (row["last_started"], row["times"]) for row in await cur.fetchall()}
+
+
+async def next_program_day(program_id: int) -> Optional[aiosqlite.Row]:
+    """Which day is due next — the thing the user otherwise has to remember.
+
+    The day after the most recently trained one, wrapping round; the first day
+    if the program has never been used. Deliberately a suggestion computed from
+    history rather than a stored cursor: nothing to get stuck, and a session
+    logged out of order fixes itself next time.
+    """
+    days = await list_program_days_by_id(program_id)
+    if not days:
+        return None
+    history = await program_day_history(program_id)
+    trained = [(history[d["id"]][0], i) for i, d in enumerate(days) if d["id"] in history]
+    if not trained:
+        return days[0]
+    _, last_index = max(trained)
+    return days[(last_index + 1) % len(days)]
+
+
 async def create_routine_from_program(
     user_id: int,
     name: str,
     exercise_names: list[str | tuple[str, Optional[str]]],
     program_name: Optional[str] = None,
+    program_id: Optional[int] = None,
 ) -> int:
     """Instantiate one ready-made program day as a routine.
 
@@ -2587,10 +3097,10 @@ async def create_routine_from_program(
     while logging a workout started from it. Programs the AI trainer builds land
     here the same way, carrying the target it picked (ai_trainer.propose_program).
 
-    `program_name` groups the created day with the program's other days (see
-    create_routine).
+    `program_id` (or the older `program_name`) groups the created day with the
+    program's other days — see create_routine.
     """
-    routine_id = await create_routine(user_id, name, program_name)
+    routine_id = await create_routine(user_id, name, program_name, program_id=program_id)
     seen: set[int] = set()
     order = 0
     for item in exercise_names:
@@ -2605,9 +3115,46 @@ async def create_routine_from_program(
 
 
 
-async def create_routine_from_workout(user_id: int, workout_id: int, name: str) -> int:
-    """Snapshot a finished workout's exercises (in block order, de-duplicated) as a routine."""
-    routine_id = await create_routine(user_id, name)
+async def workout_exercise_targets(workout_id: int) -> dict[int, str]:
+    """«4×8» per exercise, read off what was actually logged in that session.
+
+    A program snapshotted from a workout used to arrive with no scheme at all —
+    the one creation path out of four that didn't set `target` — even though the
+    sets were sitting right there. Reps that varied across the sets become a
+    range («4×6–8»); a single set is «1×8».
+    """
+    cur = await conn().execute(
+        "SELECT s.exercise_id, s.reps FROM sets s "
+        "JOIN workout_blocks wb ON wb.id = s.block_id "
+        "WHERE wb.workout_id = ? ORDER BY s.id",
+        (workout_id,),
+    )
+    reps_by_exercise: dict[int, list[int]] = {}
+    for row in await cur.fetchall():
+        reps_by_exercise.setdefault(row["exercise_id"], []).append(row["reps"])
+    targets: dict[int, str] = {}
+    for ex_id, reps in reps_by_exercise.items():
+        low, high = min(reps), max(reps)
+        targets[ex_id] = f"{len(reps)}×{low}" if low == high else f"{len(reps)}×{low}–{high}"
+    return targets
+
+
+async def create_routine_from_workout(
+    user_id: int,
+    workout_id: int,
+    name: str,
+    program_id: Optional[int] = None,
+    with_targets: bool = True,
+) -> int:
+    """Snapshot a finished workout's exercises (in block order, de-duplicated) as a routine.
+
+    `with_targets` fills each exercise's scheme from the sets that were actually
+    done (see workout_exercise_targets); `program_id` makes the snapshot a day
+    of an existing program instead of a standalone routine, which is how an A/B
+    split that was only ever trained, never saved, becomes one program.
+    """
+    routine_id = await create_routine(user_id, name, program_id=program_id)
+    targets = await workout_exercise_targets(workout_id) if with_targets else {}
     seen: set[int] = set()
     order = 0
     for block in await list_blocks_for_workout(workout_id):
@@ -2616,7 +3163,7 @@ async def create_routine_from_workout(user_id: int, workout_id: int, name: str) 
             if ex_id in seen:
                 continue
             seen.add(ex_id)
-            await add_routine_exercise(routine_id, ex_id, order)
+            await add_routine_exercise(routine_id, ex_id, order, targets.get(ex_id))
             order += 1
     return routine_id
 

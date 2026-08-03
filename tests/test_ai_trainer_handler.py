@@ -2,6 +2,7 @@
 'К тренировке' button that resumes it without wiping the AI chat history.
 """
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -258,6 +259,28 @@ async def test_successful_question_spends_exactly_one(fresh_db, user_id, monkeyp
     await ai_trainer.ai_question(message, state)
 
     assert await fresh_db.get_ai_question_count_today(user_id) == 1
+
+
+async def test_followup_question_does_not_clear_the_pending_program_draft(fresh_db, user_id, monkeypatch):
+    """A9: a plain follow-up ("сколько отдыхать между подходами?") right after
+    a program proposal used to null ai_program_draft on every turn, even one
+    that produced no new draft of its own — killing the still-visible
+    "✅ Добавить себе" button under the previous answer (it would then answer
+    "предложение уже неактуально")."""
+    monkeypatch.setattr(ai_trainer.ai_trainer, "ask", AsyncMock(return_value="Отдыхай 2-3 минуты."))
+
+    state = await _make_state(user_id)
+    await state.set_state("AITrainerFlow:chatting")
+    draft = {
+        "name": "Верх/низ",
+        "days": [{"name": "День 1", "items": [{"name": "Жим", "target": "3×8", "source": "own"}]}],
+    }
+    await state.update_data(ai_program_draft=draft)
+    message = _make_chat_message(user_id, "сколько отдыхать между подходами?")
+
+    await ai_trainer.ai_question(message, state)
+
+    assert (await state.get_data())["ai_program_draft"] == draft
 
 
 async def test_reentering_the_trainer_keeps_the_conversation(fresh_db, user_id, monkeypatch):
@@ -588,6 +611,79 @@ async def test_saving_twice_does_not_duplicate_the_program(fresh_db, user_id):
     assert len(await fresh_db.list_routines(user_id)) == 1
 
 
+async def test_concurrent_saves_do_not_duplicate_the_program(fresh_db, user_id):
+    """A3: the draft used to be read at the top and only cleared ~5 awaits
+    later, after real DB work — two taps racing through that window both saw
+    the same live draft and both saved. The claim now happens with no
+    yielding await in between (see ai_program_save), so the second tap's read
+    finds the draft already gone."""
+    state = await _make_state(user_id)
+    await state.update_data(ai_program_draft=_draft(days=2))
+
+    await asyncio.gather(
+        ai_trainer.ai_program_save(_make_callback(user_id, "ai:prog:save"), state),
+        ai_trainer.ai_program_save(_make_callback(user_id, "ai:prog:save"), state),
+    )
+
+    assert len(await fresh_db.list_routines(user_id)) == 2
+
+
+async def test_concurrent_saves_do_not_bypass_the_routine_cap(fresh_db, user_id):
+    """Repro from the bug report: 28 existing routines + a 2-day draft, two
+    concurrent taps used to produce 32 routines, blowing past
+    MAX_ROUTINES_PER_USER (30). With the draft claimed atomically, only one of
+    the two taps gets to save."""
+    import ai_trainer as ai_trainer_module
+
+    for i in range(ai_trainer_module.MAX_ROUTINES_PER_USER - 2):
+        await fresh_db.create_routine(user_id, f"Программа {i}")
+    state = await _make_state(user_id)
+    await state.update_data(ai_program_draft=_draft(days=2))
+
+    await asyncio.gather(
+        ai_trainer.ai_program_save(_make_callback(user_id, "ai:prog:save"), state),
+        ai_trainer.ai_program_save(_make_callback(user_id, "ai:prog:save"), state),
+    )
+
+    assert len(await fresh_db.list_routines(user_id)) == ai_trainer_module.MAX_ROUTINES_PER_USER
+
+
+async def test_partial_save_failure_keeps_the_old_program_intact(fresh_db, user_id, monkeypatch):
+    """A6: new days used to be created only after the replaced program's old
+    days were already deleted. If a create raised partway through, the user
+    was left with a half-built new program and no old one to fall back to.
+    New days now go in first — a failure here should still find the old
+    program's day untouched."""
+    import db as db_module
+
+    gid = await fresh_db.create_muscle_group(user_id, "Ноги")
+    squat = await fresh_db.create_exercise(user_id, "Присед", gid)
+    old_day = await fresh_db.create_routine(user_id, "Старый день", program_name="Верх/низ")
+    await fresh_db.add_routine_exercise(old_day, squat, 0, "3×5")
+
+    state = await _make_state(user_id)
+    draft = _draft(days=2)
+    draft["replaces"] = {"name": "Верх/низ", "routine_ids": [old_day]}
+    await state.update_data(ai_program_draft=draft)
+
+    real_create = db_module.create_routine_from_program
+    calls = {"n": 0}
+
+    async def flaky_create(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("boom")
+        return await real_create(*args, **kwargs)
+
+    monkeypatch.setattr(db_module, "create_routine_from_program", flaky_create)
+
+    with pytest.raises(RuntimeError):
+        await ai_trainer.ai_program_save(_make_callback(user_id, "ai:prog:save"), state)
+
+    names = [r["name"] for r in await fresh_db.list_routines(user_id)]
+    assert "Старый день" in names
+
+
 async def test_saving_a_stale_draft_alerts_and_writes_nothing(fresh_db, user_id):
     state = await _make_state(user_id)
     callback = _make_callback(user_id, "ai:prog:save")
@@ -773,6 +869,28 @@ async def test_ai_build_program_seeds_the_conversation_and_enters_chatting(
     # The intro screen replaces the 🗂 Программы menu, so it needs its own way
     # out — an answer may never arrive (daily limit reached, provider down).
     assert callback.message.answer.await_args.kwargs["reply_markup"] is not None
+
+
+async def test_ai_build_program_releases_busy_on_a_stale_callback(fresh_db, user_id, monkeypatch):
+    """A5: callback.answer() used to sit outside the try/finally that releases
+    `_busy` — a stale-button tap ("query is too old", a real TelegramBadRequest)
+    made that answer raise, and the finally releasing `_busy` never ran. That
+    locked the user out of the AI trainer (every message/photo/voice answered
+    "ещё думаю над прошлым вопросом") for the rest of the process's life."""
+    from aiogram.exceptions import TelegramBadRequest
+
+    monkeypatch.setattr(ai_trainer.ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(ai_trainer.ai_trainer, "ask", AsyncMock(return_value="ок"))
+
+    state = await _make_state(user_id)
+    callback = _make_buildprog_callback(user_id)
+    callback.answer = AsyncMock(
+        side_effect=TelegramBadRequest(method=MagicMock(), message="query is too old")
+    )
+
+    await ai_trainer.ai_build_program(callback, state)
+
+    assert user_id not in ai_trainer._busy
 
 
 async def test_ai_build_program_asks_the_trainer_to_lead_with_questions(fresh_db, user_id):

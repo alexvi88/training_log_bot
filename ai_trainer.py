@@ -1071,6 +1071,7 @@ TOOLS: list[dict[str, Any]] = [
                 "properties": {
                     "name": {
                         "type": "string",
+                        "maxLength": PROGRAM_NAME_LIMIT,
                         "description": f"Название программы, до {PROGRAM_NAME_LIMIT} символов",
                     },
                     "replaces_program": {
@@ -1084,12 +1085,15 @@ TOOLS: list[dict[str, Any]] = [
                     },
                     "days": {
                         "type": "array",
+                        "minItems": 1,
+                        "maxItems": PROGRAM_MAX_DAYS,
                         "description": f"Тренировочные дни, 1-{PROGRAM_MAX_DAYS} штук",
                         "items": {
                             "type": "object",
                             "properties": {
                                 "name": {
                                     "type": "string",
+                                    "maxLength": PROGRAM_NAME_LIMIT,
                                     "description": (
                                         "Название дня, до "
                                         f"{PROGRAM_NAME_LIMIT} символов, например «День 1 — верх»"
@@ -1097,6 +1101,8 @@ TOOLS: list[dict[str, Any]] = [
                                 },
                                 "exercises": {
                                     "type": "array",
+                                    "minItems": 1,
+                                    "maxItems": PROGRAM_MAX_EXERCISES_PER_DAY,
                                     "description": (
                                         "Упражнения дня по порядку, 1-"
                                         f"{PROGRAM_MAX_EXERCISES_PER_DAY} штук"
@@ -1110,14 +1116,20 @@ TOOLS: list[dict[str, Any]] = [
                                             },
                                             "sets": {
                                                 "type": "integer",
-                                                "description": "Рабочих подходов, 1-10",
+                                                "minimum": 1,
+                                                "maximum": PROGRAM_MAX_SETS,
+                                                "description": f"Рабочих подходов, 1-{PROGRAM_MAX_SETS}",
                                             },
                                             "reps_min": {
                                                 "type": "integer",
+                                                "minimum": 1,
+                                                "maximum": PROGRAM_MAX_REPS,
                                                 "description": "Нижняя граница диапазона повторов",
                                             },
                                             "reps_max": {
                                                 "type": "integer",
+                                                "minimum": 1,
+                                                "maximum": PROGRAM_MAX_REPS,
                                                 "description": "Верхняя граница диапазона повторов",
                                             },
                                         },
@@ -1438,9 +1450,18 @@ async def _full_chat_history(user_id: int) -> dict[str, Any]:
     }
 
 
-def _clean_program_name(raw: Any, fallback: str) -> str:
+def _clean_program_name(raw: Any, fallback: str) -> tuple[str, bool]:
+    """Название (программы или дня), обрезанное до PROGRAM_NAME_LIMIT.
+
+    Возвращает (имя, было ли обрезано) — раньше обрезка была совсем немой
+    (см. A11): 48 символов на живом названии почти всегда режут его посреди
+    слова, и об этом стоит явно сказать модели, а не только приплюсовывать к
+    общему truncated_days/truncated_exercises, которые вообще про другое.
+    """
     name = str(raw or "").strip()
-    return name[:PROGRAM_NAME_LIMIT] if name else fallback
+    if not name:
+        return fallback, False
+    return name[:PROGRAM_NAME_LIMIT], len(name) > PROGRAM_NAME_LIMIT
 
 
 def _clean_int(raw: Any, low: int, high: int) -> Optional[int]:
@@ -1458,6 +1479,11 @@ def _clean_program_item(raw: Any) -> Optional[dict[str, Any]]:
     Схема необязательна — тренер может задать только подходы или только
     повторы. Перевёрнутый диапазон («10-5») разворачиваем, а не отбрасываем:
     смысл его очевиден, а терять из-за этого упражнение незачем.
+
+    `clamped` в результате — человекочитаемые пометки о том, что подходы или
+    повторы вышли за границы схемы и были зажаты (например «sets 25→10» или
+    «reps 100–200→50–50», см. A11) — раньше это происходило молча, и итоговая
+    цель «10×50» ничем не отличалась от честно предложенных тренером 10×50.
     """
     if isinstance(raw, str):
         raw = {"name": raw}
@@ -1466,15 +1492,40 @@ def _clean_program_item(raw: Any) -> Optional[dict[str, Any]]:
     name = str(raw.get("name") or "").strip()
     if not name:
         return None
+
+    def _raw_int(value: Any) -> Optional[int]:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    raw_sets, raw_reps_min, raw_reps_max = (
+        _raw_int(raw.get("sets")), _raw_int(raw.get("reps_min")), _raw_int(raw.get("reps_max"))
+    )
+    sets = _clean_int(raw.get("sets"), 1, PROGRAM_MAX_SETS)
     reps_min = _clean_int(raw.get("reps_min"), 1, PROGRAM_MAX_REPS)
     reps_max = _clean_int(raw.get("reps_max"), 1, PROGRAM_MAX_REPS)
     if reps_min and reps_max and reps_min > reps_max:
         reps_min, reps_max = reps_max, reps_min
+
+    clamped: list[str] = []
+    if raw_sets is not None and sets != raw_sets:
+        clamped.append(f"sets {raw_sets}→{sets}")
+    if raw_reps_min is not None and raw_reps_max is not None and (
+        reps_min != raw_reps_min or reps_max != raw_reps_max
+    ):
+        clamped.append(f"reps {raw_reps_min}–{raw_reps_max}→{reps_min}–{reps_max}")
+    elif raw_reps_min is not None and reps_min != raw_reps_min:
+        clamped.append(f"reps_min {raw_reps_min}→{reps_min}")
+    elif raw_reps_max is not None and reps_max != raw_reps_max:
+        clamped.append(f"reps_max {raw_reps_max}→{reps_max}")
+
     return {
         "name": name,
-        "sets": _clean_int(raw.get("sets"), 1, PROGRAM_MAX_SETS),
+        "sets": sets,
         "reps_min": reps_min,
         "reps_max": reps_max,
+        "clamped": clamped,
     }
 
 
@@ -1553,7 +1604,7 @@ async def _propose_program(
     if not isinstance(raw_days, list) or not raw_days:
         return {"error": "days пустой — программа не показана пользователю"}, None
 
-    program_name = _clean_program_name(tool_input.get("name"), "Программа")
+    program_name, program_name_truncated = _clean_program_name(tool_input.get("name"), "Программа")
     replaces, replaces_error = await _resolve_replaced_program(
         user_id, tool_input.get("replaces_program")
     )
@@ -1561,17 +1612,26 @@ async def _propose_program(
 
     days: list[dict[str, Any]] = []
     report: list[dict[str, Any]] = []
+    # Дни, у которых ни одно упражнение не срезолвилось — они не попадают в
+    # `days` (в превью пустой день незачем показывать), но раньше пропадали и
+    # из ответа модели молча: report держал их с resolved: [], а payload всё
+    # равно говорил shown_to_user=True с общей формулировкой, так что модель
+    # рассказывала пользователю, например, про 3 дня, когда превью показывало
+    # только 2 (см. A10). Собираем их отдельно, чтобы явно сказать модели, что
+    # именно пропало и почему.
+    dropped_days: list[dict[str, Any]] = []
     for index, raw_day in enumerate(raw_days[:PROGRAM_MAX_DAYS], start=1):
         if not isinstance(raw_day, dict):
             continue
         raw_exercises = raw_day.get("exercises")
         if not isinstance(raw_exercises, list):
             continue
-        day_name = _clean_program_name(raw_day.get("name"), f"День {index}")
+        day_name, day_name_truncated = _clean_program_name(raw_day.get("name"), f"День {index}")
 
         items: list[dict[str, Any]] = []
         unresolved: list[str] = []
         seen: set[str] = set()
+        clamped: list[str] = []
         for raw_item in raw_exercises[:PROGRAM_MAX_EXERCISES_PER_DAY]:
             item = _clean_program_item(raw_item)
             if item is None:
@@ -1590,16 +1650,28 @@ async def _propose_program(
             target = formatting.build_routine_target(
                 item["sets"], item["reps_min"], item["reps_max"]
             )
+            if item["clamped"]:
+                clamped.append(f"{display_name}: {', '.join(item['clamped'])}")
             items.append({**item, "name": display_name, "source": source, "target": target})
 
         if items:
             days.append({"name": day_name, "items": items})
+        elif raw_exercises:
+            # raw_exercises непустой, но ничего из него не срезолвилось (или
+            # всё оказалось мусором в _clean_program_item) — весь день исчезнет
+            # из превью, и это надо явно назвать, а не молча потерять.
+            dropped_days.append({"day": day_name, "unresolved": unresolved})
         report.append(
             {
                 "day": day_name,
                 "resolved": [item["name"] for item in items],
                 "unresolved": unresolved,
                 "truncated_exercises": len(raw_exercises) > PROGRAM_MAX_EXERCISES_PER_DAY,
+                # A11: раньше зажатые sets/reps и обрезанное имя дня были видны
+                # только в самих числах (10×50 вместо честных 25×100-200) — тут
+                # они называются прямо, чтобы модель могла поправиться сама.
+                **({"clamped": clamped} if clamped else {}),
+                **({"name_truncated": True} if day_name_truncated else {}),
             }
         )
 
@@ -1643,6 +1715,17 @@ async def _propose_program(
     if truncated_days:
         payload["truncated_days"] = (
             f"дней было больше {PROGRAM_MAX_DAYS}, лишние отброшены"
+        )
+    if program_name_truncated:
+        payload["program_name_truncated"] = f"имя программы обрезано до {PROGRAM_NAME_LIMIT} символов"
+    if dropped_days:
+        payload["dropped_days"] = dropped_days
+        payload["dropped_days_note"] = (
+            "Эти дни целиком пропали из превью — ни одно упражнение внутри них "
+            "не совпало с каталогом или списком пользователя (см. unresolved у "
+            "каждого). Либо вызови propose_program заново, взяв названия точно "
+            "из list_exercise_catalog для этих дней, либо явно скажи "
+            "пользователю, что эти дни не вошли в предложение и почему."
         )
     # Заменяемые дни освобождают свои места — правка программы того же размера
     # не должна упираться в лимит только потому, что старая версия ещё цела.
@@ -1778,6 +1861,7 @@ async def _completion_round(
     messages: list[dict[str, Any]],
     user_id: Optional[int],
     on_chunk: ChunkCallback = None,
+    include_tools: bool = True,
 ) -> tuple[str, list[Any]]:
     """One chat-completion turn. Returns (content, tool_calls).
 
@@ -1786,20 +1870,28 @@ async def _completion_round(
     который окажется финальным, — но какой из них финальный, заранее неизвестно,
     поэтому раунд с tool_calls просто ничего не отдаёт (там текста и нет, а
     происходящее показывают статусы).
+
+    `include_tools=False` — принудительный текстовый раунд без единого tool:
+    используется только на последней попытке _ask_plain, когда раунды с
+    инструментами исчерпаны (см. MAX_TOOL_ROUNDS и A12) — без tools в самом
+    запросе модели физически нечего вызвать, и она обязана ответить текстом.
     """
+    tools_kwarg = {"tools": TOOLS} if include_tools else {}
     if on_chunk is None:
         response = await client.chat.completions.create(
-            model=config.GROK_MODEL, max_tokens=2048, tools=TOOLS, messages=messages,
+            model=config.GROK_MODEL, max_tokens=2048, messages=messages,
             extra_body={"reasoning_effort": config.GROK_REASONING_EFFORT},
+            **tools_kwarg,
         )
         await _log_llm_cost(user_id, config.GROK_MODEL, getattr(response, "usage", None))
         m = response.choices[0].message
         return (m.content or ""), list(m.tool_calls or [])
 
     stream = await client.chat.completions.create(
-        model=config.GROK_MODEL, max_tokens=2048, tools=TOOLS, messages=messages,
+        model=config.GROK_MODEL, max_tokens=2048, messages=messages,
         extra_body={"reasoning_effort": config.GROK_REASONING_EFFORT},
         stream=True, stream_options={"include_usage": True},
+        **tools_kwarg,
     )
     parts: list[str] = []
     tool_calls: dict[int, dict[str, Any]] = {}
@@ -1905,6 +1997,18 @@ async def _ask_plain(
                     {"error": "tool failed, answer from what you already have"}
                 )
             messages.append({"role": "tool", "tool_call_id": tc.id, "content": tool_content})
+    else:
+        # Раунды с инструментами исчерпаны (см. MAX_TOOL_ROUNDS), а модель на
+        # последней итерации всё ещё звала tools — их результаты уже дописаны
+        # в messages выше, но текстового ответа на них никто не спросил. Без
+        # этого ask() возвращал заглушку "не получилось сформулировать ответ"
+        # притом что on_program мог уже сработать этим же ходом — пользователь
+        # видел провал и живую кнопку программы под ним разом (см. A12).
+        # tools здесь физически не передаются: без них отвечать нечем, кроме
+        # текста.
+        content, _ = await _completion_round(
+            client, messages, user_id, on_chunk, include_tools=False
+        )
 
     text = (content or "").strip()
     return text or "Не получилось сформулировать ответ, попробуй переспросить."

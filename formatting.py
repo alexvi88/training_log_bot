@@ -8,7 +8,7 @@ import datetime as dt
 import re
 from dataclasses import dataclass, field
 from html import escape
-from typing import Literal, Optional
+from typing import Callable, Literal, Optional
 
 from aiogram.types import MessageEntity
 
@@ -516,8 +516,9 @@ def build_ai_comment_block(comment: str) -> str:
     return f"{DIVIDER}\n🤖 <b>Комментарий AI-тренера</b>\n{collapsible_if_long(markdown_bold_to_html(comment))}"
 
 
-# Запас под строку «…и ещё N упражнений», которой заканчивается обрезанный
-# состав программы (см. build_ai_program_preview).
+# Запас под строку «…и ещё N упражнений»/«…и ещё N изменений», которой может
+# заканчиваться обрезанный блок «что меняется» и/или состав программы (см.
+# build_ai_program_preview, _truncate_block).
 _TRUNCATION_RESERVE = 120
 
 
@@ -575,15 +576,47 @@ def build_program_changes(old_days: list[dict], new_days: list[dict]) -> list[st
     return lines
 
 
+def _truncate_block(
+    candidate_lines: list[str],
+    already: list[str],
+    tail: list[str],
+    is_item: Callable[[str], bool],
+    note: Callable[[int], str],
+) -> list[str]:
+    """Добавить candidate_lines к already построчно, пока итог (already + kept
+    + tail) укладывается в лимит Telegram; остаток сворачивается в одну строку
+    от note().
+
+    Общий механизм для обоих переменных по размеру блоков превью программы
+    (см. build_ai_program_preview) — блока «что меняется» и состава: раньше
+    обрезался только состав, а блок изменений на большой правке (много дней,
+    имена не менялись — см. build_program_changes) сам по себе перевешивал
+    лимит, и тогда не отправлялось вообще ничего. Проверка идёт по полной
+    длине сообщения на каждом шаге, а не по абстрактному «бюджету в символах»,
+    поэтому учитывает всё, что уже добавлено раньше (включая другой такой же
+    обрезанный блок).
+    """
+    kept: list[str] = []
+    for index, line in enumerate(candidate_lines):
+        candidate = already + kept + [line] + tail
+        if telegram_length("\n".join(candidate)) > MESSAGE_LIMIT - _TRUNCATION_RESERVE:
+            hidden = sum(1 for rest in candidate_lines[index:] if is_item(rest))
+            if hidden:
+                kept += ["", note(hidden)]
+            break
+        kept.append(line)
+    return kept
+
+
 def build_ai_program_preview(
     name: str, days: list[dict], replaces: Optional[dict] = None
 ) -> str:
     """Превью программы, которую собрал AI-тренер, до её сохранения.
 
     `days` — черновик из ai_trainer.propose_program: [{"name", "items": [{"name",
-    "target", "source"}]}]. Каждый день станет отдельной программой в списке
-    пользователя, поэтому текст проговаривает это прямо — иначе «добавить»
-    выглядит как одна новая строка, а появится несколько.
+    "target", "source"}]}]. Дни складываются в одну программу с общим именем
+    (routine_exercises.program_name — см. db.create_routine_from_program), в
+    списке пользователя это одна строка с числом дней, а не несколько.
 
     `replaces` — сохранённая программа, которую эта правка заменит: {"name",
     "days"} со старым составом. Замена стирает старые дни, поэтому превью и
@@ -604,12 +637,6 @@ def build_ai_program_preview(
         f"<b>{escape(name)}</b>",
         f"{len(days)} {day_word} · {total} {ex_word}",
     ]
-    if replaces:
-        # Что меняется — выше состава: решение принимают по разнице, а полный
-        # список ниже нужен уже для «ок, и как это теперь выглядит целиком».
-        changes = build_program_changes(replaces.get("days") or [], days)
-        lines += ["", "🔄 <b>Что меняется:</b>"]
-        lines += changes or ["Состав тот же — меняется только порядок или название."]
 
     composition: list[str] = []
     for day in days:
@@ -629,30 +656,59 @@ def build_ai_program_preview(
         tail.append("Добавлю как программу — начать по ней тренировку можно в один тап.")
     else:
         tail.append(
-            f"Добавлю как {len(days)} отдельные программы — по каждой начинаешь тренировку в один тап."
+            f"Добавлю программу «{escape(name)}» из {len(days)} {day_word} — "
+            "начать тренировку по любому можно в один тап."
         )
     if new_names:
-        word = plural_ru(len(new_names), ("упражнение", "упражнения", "упражнений"))
+        # Родительный падеж множественного числа тут фиксированный, а не по
+        # plural_ru(len(new_names), ...): «Новых для тебя» требует именно его
+        # при любом количестве («упражнение: 1» читалось бы как согласование с
+        # числом, а не с «для тебя», см. A13) — ср. «Новых упражнений: 1/2/5».
         tail.append(
-            f"Новых для тебя {word}: {len(new_names)} — добавлю их в твой список автоматически."
+            f"Новых для тебя упражнений: {len(new_names)} — добавлю их в твой список автоматически."
         )
 
-    # Шесть дней по двенадцать упражнений (потолки propose_program) плюс блок
-    # изменений переваливают за лимит Telegram — и тогда не отправится вообще
-    # ничего. Режем именно полный состав: он ниже всего по важности (итог всё
-    # равно окажется в «🗂 Программы»), а шапка, разница и предупреждение о
-    # замене должны дойти целиком.
-    budget = MESSAGE_LIMIT - telegram_length("\n".join(lines + tail)) - _TRUNCATION_RESERVE
-    kept: list[str] = []
-    for index, line in enumerate(composition):
-        if telegram_length("\n".join(kept + [line])) > budget:
-            hidden = sum(1 for rest in composition[index:] if rest.startswith(tuple("0123456789")))
-            if hidden:
-                word = plural_ru(hidden, ("упражнение", "упражнения", "упражнений"))
-                kept += ["", f"<i>…и ещё {hidden} {word} — покажу целиком в «🗂 Программы».</i>"]
-            break
-        kept.append(line)
-    return "\n".join(lines + kept + tail)
+    # Что меняется — выше состава: решение принимают по разнице, а полный
+    # список ниже нужен уже для «ок, и как это теперь выглядит целиком».
+    # Блок сам по себе переменного размера (шесть дней с сохранёнными именами
+    # и полностью новым составом дают под четверть сотни строк на день — см.
+    # test_preview_of_an_edit_that_keeps_day_names_still_fits) и режется по
+    # тому же принципу, что и состав ниже.
+    changes_block: list[str] = []
+    if replaces:
+        changes_header = ["", "🔄 <b>Что меняется:</b>"]
+        changes_body = build_program_changes(replaces.get("days") or [], days) or [
+            "Состав тот же — меняется только порядок или название."
+        ]
+        kept_changes = _truncate_block(
+            changes_body,
+            already=lines + changes_header,
+            tail=tail,
+            is_item=lambda l: any(sym in l for sym in ("➕", "➖", "✏️")),
+            note=lambda n: (
+                f"<i>…и ещё {n} {plural_ru(n, ('изменение', 'изменения', 'изменений'))} — "
+                "не поместились, полный состав смотри ниже и в «🗂 Программы» после сохранения.</i>"
+            ),
+        )
+        changes_block = changes_header + kept_changes
+    lines += changes_block
+
+    # Шесть дней по двенадцать упражнений (потолки propose_program) сами по
+    # себе переваливают за лимит Telegram — и тогда не отправится вообще
+    # ничего. Состав ниже всего по важности (итог всё равно окажется в «🗂
+    # Программы»), поэтому от него отрезается то, что не влезло уже после
+    # шапки, блока изменений (если он был) и хвоста.
+    kept_composition = _truncate_block(
+        composition,
+        already=lines,
+        tail=tail,
+        is_item=lambda l: bool(l) and l[0].isdigit(),
+        note=lambda n: (
+            f"<i>…и ещё {n} {plural_ru(n, ('упражнение', 'упражнения', 'упражнений'))} — "
+            "покажу целиком в «🗂 Программы».</i>"
+        ),
+    )
+    return "\n".join(lines + kept_composition + tail)
 
 
 # Fun, shareable size comparisons for a tonnage total — (emoji, kg each, declensions),
