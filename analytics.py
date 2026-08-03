@@ -402,11 +402,11 @@ def classify_weekly_volume(sets_count: int) -> str:
 
 
 # How long a muscle group needs before it's worth loading hard again. Scaled by
-# how much work it got: a 4-set session clears in about two days, a 15-set one
-# takes the better part of three. Deliberately a rule of thumb, not a model —
-# it answers "что сегодня логичнее" and nothing more.
-RECOVERY_HOURS_MIN = 48
-RECOVERY_HOURS_MAX = 72
+# how much work it got: a light session clears in about three days, a 12+ set
+# one takes four. Deliberately a rule of thumb, not a model — it answers "что
+# сегодня логичнее" and nothing more.
+RECOVERY_HOURS_MIN = 72
+RECOVERY_HOURS_MAX = 96
 RECOVERY_SETS_FOR_MAX = 12
 
 
