@@ -73,15 +73,21 @@ async def rt_program_days(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
         return
     days = await db.list_program_days(callback.from_user.id, program_name)
-    lines = [f"🗂 <b>{escape(program_name)}</b>", ""]
+    day_blocks = []
     for day in days:
-        word = formatting.plural_ru(
-            day["exercise_count"], ("упражнение", "упражнения", "упражнений")
-        )
-        lines.append(f"• <b>{escape(day['name'])}</b> — {day['exercise_count']} {word}")
-    lines += ["", "Выбери день — посмотреть состав или начать тренировку."]
+        exercises = await db.list_routine_exercises(day["id"])
+        ex_lines = [
+            f"• {escape(ex['display_name'])}" + (f" — {escape(ex['target'])}" if ex["target"] else "")
+            for ex in exercises
+        ] or ["В программе нет упражнений (возможно, они были архивированы)."]
+        day_blocks.append("\n".join([f"<b>{escape(day['name'])}</b>", *ex_lines]))
+    text = "\n\n".join([
+        f"🗂 <b>{escape(program_name)}</b>",
+        formatting.collapsible_if_long("\n\n".join(day_blocks)),
+        "Выбери день — посмотреть состав или начать тренировку.",
+    ])
     await ui.safe_edit(
-        callback, "\n".join(lines),
+        callback, text,
         reply_markup=keyboards.program_days_keyboard(days, anchor_id), parse_mode="HTML",
     )
     await callback.answer()
