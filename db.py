@@ -113,6 +113,12 @@ CREATE TABLE IF NOT EXISTS block_exercises (
     FOREIGN KEY (exercise_id) REFERENCES exercises (id)
 );
 CREATE INDEX IF NOT EXISTS idx_block_exercises_block ON block_exercises (block_id);
+-- Одно упражнение не может стоять в блоке дважды. Без этого объединение дублей
+-- вставляло вторую строку молча (db.merge_exercises), а суперсет с одним и тем
+-- же движением в обеих половинах ломает и живой экран, и правку прошлой
+-- тренировки. Второй рубеж — сама merge_exercises чистит коллизию до переноса.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_block_exercises_unique
+    ON block_exercises (block_id, exercise_id);
 
 -- A note ("!болит плечо", "new training scheme") is tied to one workout's
 -- attempt at an exercise, not the exercise itself — it shouldn't resurface on
@@ -291,6 +297,9 @@ CREATE TABLE IF NOT EXISTS routine_exercises (
     FOREIGN KEY (exercise_id) REFERENCES exercises (id)
 );
 CREATE INDEX IF NOT EXISTS idx_routine_exercises_routine ON routine_exercises (routine_id);
+-- То же этажом выше: день программы не должен содержать одно упражнение дважды.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_routine_exercises_unique
+    ON routine_exercises (routine_id, exercise_id);
 
 CREATE TABLE IF NOT EXISTS cost_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -367,6 +376,22 @@ async def _column_names(table: str) -> set[str]:
     cur = await _conn.execute(f"PRAGMA table_info({table})")
     rows = await cur.fetchall()
     return {r["name"] for r in rows}
+
+
+async def _dedupe_exercise_links() -> None:
+    """Свернуть дубли «одно упражнение дважды в одном блоке/дне» перед тем, как
+    ставить на них UNIQUE.
+
+    Их источник — db.merge_exercises, которая переносила ссылки без проверки
+    коллизии; на живых базах такие строки уже могли накопиться, и
+    CREATE UNIQUE INDEX на них просто не встал бы. Оставляем самую раннюю
+    строку (у неё меньший order — то есть позиция, которую человек и видел).
+    """
+    for table, scope in (("block_exercises", "block_id"), ("routine_exercises", "routine_id")):
+        await _conn.execute(
+            f"DELETE FROM {table} WHERE id NOT IN "
+            f"(SELECT MIN(id) FROM {table} GROUP BY {scope}, exercise_id)"
+        )
 
 
 async def _migrate_schema() -> None:
@@ -474,6 +499,8 @@ async def _migrate_schema() -> None:
         # добавь 2.5кг» существовало только прозой в ответе AI-тренера и
         # умирало вместе с чатом.
         await _conn.execute("ALTER TABLE routine_exercises ADD COLUMN progression TEXT")
+
+    await _dedupe_exercise_links()
 
     routine_cols = await _column_names("routines")
     if "program_name" not in routine_cols:
@@ -1353,9 +1380,24 @@ async def fork_exercise_from_template(
 
 
 async def update_exercise_name(exercise_id: int, name: str) -> bool:
-    """Rename in place (same row/id) so existing sets keep their stats. Returns False on name clash."""
+    """Rename in place (same row/id) so existing sets keep their stats. Returns False on name clash.
+
+    The clash check is the same `py_lower` lookup `create_exercise` does, and
+    for the same reason: the unique index behind it folds case with SQL
+    `LOWER()`, which is ASCII-only, so on a Cyrillic name it never fires. Left
+    to the index alone, renaming «Разводка» to «ЖИМ ЛЁЖА» happily sat down next
+    to an existing «Жим лёжа» — two rows for one lift, each accumulating its own
+    history, while every name-based resolver (programs, share import, CSV, the
+    AI trainer) silently picked whichever was older.
+    """
     ex = await get_exercise(exercise_id)
+    if ex is None:
+        return False
     display_name = build_display_name(name, ex["equipment"], bool(ex["unilateral"]), ex["attachment"])
+    clash = await find_exercise_by_display_name(ex["user_id"], display_name)
+    # Renaming to its own name (or just changing its case) is not a clash.
+    if clash is not None and clash["id"] != exercise_id:
+        return False
     async with _write_lock:
         try:
             await conn().execute(
@@ -1476,7 +1518,34 @@ async def set_exercise_description(exercise_id: int, description: Optional[str])
         await conn().commit()
 
 
-async def merge_exercises(user_id: int, keep_id: int, drop_id: int) -> bool:
+# Почему объединение возвращает не bool, а причину: у отказа их несколько, и
+# «не получилось» вместо «это упражнение сейчас в открытой тренировке» —
+# ровно тот ответ, после которого человек жмёт кнопку ещё раз.
+MERGE_OK = "ok"
+MERGE_INVALID = "invalid"            # не своё, шаблон, одна и та же строка
+MERGE_TARGET_ARCHIVED = "archived"   # цель в архиве — история уехала бы туда же
+MERGE_IN_ACTIVE_WORKOUT = "active"   # одна из сторон открыта в текущей тренировке
+
+
+async def _exercise_in_active_workout(user_id: int, exercise_id: int) -> bool:
+    """Открыто ли упражнение в текущей тренировке.
+
+    Смотрим на `block_exercises`, а не на записанные подходы: таб можно открыть
+    и ещё ничего в него не записать, и именно такой — пустой, но открытый —
+    самый опасный, FSM уже держит его id.
+    """
+    active = await get_active_workout(user_id)
+    if active is None:
+        return False
+    cur = await conn().execute(
+        "SELECT 1 FROM block_exercises be JOIN workout_blocks b ON b.id = be.block_id "
+        "WHERE b.workout_id = ? AND be.exercise_id = ? LIMIT 1",
+        (active["id"], exercise_id),
+    )
+    return await cur.fetchone() is not None
+
+
+async def merge_exercises(user_id: int, keep_id: int, drop_id: int) -> str:
     """Merges drop_id into keep_id — for when the same movement got logged
     under two different names/entries (e.g. typed once as "ягодичный мостик",
     later as "glute bridge") and the user wants one combined history instead
@@ -1484,26 +1553,72 @@ async def merge_exercises(user_id: int, keep_id: int, drop_id: int) -> bool:
 
     Repoints every set, workout block and routine slot from drop_id to
     keep_id, carries over drop's description/photo/notes if keep has none of
-    its own, and then removes drop_id entirely. Returns False if either
-    exercise isn't the user's own, is a catalog template, or they're the same
-    row.
+    its own, and then removes drop_id entirely. Returns one of the MERGE_*
+    constants.
+
+    Every table that references `exercise_id` gets an explicit answer to "what
+    if both rows are already here", because only one of them (exercise_notes,
+    with its composite primary key) would have complained on its own — and the
+    silent ones left the survivor listed twice in a routine day and inside a
+    superset block.
     """
     if keep_id == drop_id:
-        return False
+        return MERGE_INVALID
     keep = await get_exercise(keep_id)
     drop = await get_exercise(drop_id)
     if keep is None or drop is None:
-        return False
+        return MERGE_INVALID
     if keep["user_id"] != user_id or drop["user_id"] != user_id:
-        return False
+        return MERGE_INVALID
     if keep["is_template"] or drop["is_template"]:
-        return False
+        return MERGE_INVALID
+    # Цель в архиве: перенести туда всю историю значит убрать её из каждого
+    # списка сразу, а искать в «🗄 Архив» человек не пойдёт — он не знает, что
+    # её туда унесло. Цель могла быть заархивирована уже после того, как
+    # клавиатура с кнопкой отрисовалась.
+    if keep["is_archived"]:
+        return MERGE_TARGET_ARCHIVED
+    # Открытая тренировка держит id упражнения в FSM (open_exercises/open_blocks);
+    # удалить строку из-под неё значит оставить экран записи подхода указывающим
+    # в никуда.
+    if await _exercise_in_active_workout(user_id, keep_id) or await _exercise_in_active_workout(
+        user_id, drop_id
+    ):
+        return MERGE_IN_ACTIVE_WORKOUT
+
     async with _write_lock:
         await conn().execute(
             "UPDATE sets SET exercise_id = ? WHERE exercise_id = ?", (keep_id, drop_id)
         )
+        # block_exercises: у одного блока (суперсета) могли быть оба упражнения.
+        # UNIQUE на (block_id, exercise_id) нет, так что БД пропустила бы дубль
+        # молча — блок с одной и той же строкой дважды ломает и экран живой
+        # сессии, и редактирование прошлой тренировки.
+        await conn().execute(
+            "DELETE FROM block_exercises WHERE exercise_id = ? AND block_id IN "
+            "(SELECT block_id FROM block_exercises WHERE exercise_id = ?)",
+            (drop_id, keep_id),
+        )
         await conn().execute(
             "UPDATE block_exercises SET exercise_id = ? WHERE exercise_id = ?", (keep_id, drop_id)
+        )
+        # routine_exercises: то же самое днём программы. Схему и правило
+        # прогрессии подбираем со стороны, которую убираем, если у оставшейся
+        # их нет, — иначе объединение молча обнуляло бы «4×8».
+        await conn().execute(
+            "UPDATE routine_exercises SET "
+            "  target = COALESCE(target, (SELECT d.target FROM routine_exercises d "
+            "    WHERE d.exercise_id = ? AND d.routine_id = routine_exercises.routine_id)), "
+            "  progression = COALESCE(progression, (SELECT d.progression FROM routine_exercises d "
+            "    WHERE d.exercise_id = ? AND d.routine_id = routine_exercises.routine_id)) "
+            "WHERE exercise_id = ? AND routine_id IN "
+            "  (SELECT routine_id FROM routine_exercises WHERE exercise_id = ?)",
+            (drop_id, drop_id, keep_id, drop_id),
+        )
+        await conn().execute(
+            "DELETE FROM routine_exercises WHERE exercise_id = ? AND routine_id IN "
+            "(SELECT routine_id FROM routine_exercises WHERE exercise_id = ?)",
+            (drop_id, keep_id),
         )
         await conn().execute(
             "UPDATE routine_exercises SET exercise_id = ? WHERE exercise_id = ?", (keep_id, drop_id)
@@ -1539,7 +1654,7 @@ async def merge_exercises(user_id: int, keep_id: int, drop_id: int) -> bool:
             )
         await conn().execute("DELETE FROM exercises WHERE id = ?", (drop_id,))
         await conn().commit()
-    return True
+    return MERGE_OK
 
 
 # ---------- workouts ----------

@@ -173,7 +173,7 @@ async def _send_sticky_photo(bot, chat_id: int, ex) -> list[int]:
             chat_id=chat_id, photo=ex["custom_photo_file_id"], caption=caption, parse_mode="HTML"
         )
         return [sent.message_id]
-    images = exercise_media.get_images(ex["name"])
+    images = exercise_media.get_images_for(ex)
     if not images:
         return []
     media = [

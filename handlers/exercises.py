@@ -251,11 +251,22 @@ async def _exm_finish_new_exercise_name(answerer, state: FSMContext, user_id: in
             f"«{escape(name)}» — выбери группу мышц:", reply_markup=kb, parse_mode="HTML"
         )
         return
+    # create_exercise переиспользует строку с таким же именем, в том числе
+    # архивную, и возвращает её из архива — это правильно (иначе история
+    # разошлась бы на два упражнения), но молча выглядит так, будто «новое»
+    # упражнение почему-то приехало с чужим прошлым.
+    revived = await db.find_exercise_by_display_name(user_id, db.build_display_name(name))
+    was_archived = bool(revived and revived["is_archived"])
     ex_id = await db.create_exercise(user_id, name, group_id)
     await state.update_data(exm_exercise_id=ex_id)
     await state.set_state(ExerciseManage.picking_exercise)
     ex = await db.get_exercise(ex_id)
     text, kb = await _exercise_detail_payload(ex, state)
+    if was_archived:
+        text = (
+            "🗄 Такое упражнение у тебя уже было — вернул из архива вместе с "
+            "историей и рекордами.\n\n" + text
+        )
     await answerer.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
@@ -439,7 +450,7 @@ def _exercise_edit_menu_keyboard(ex) -> InlineKeyboardMarkup:
     its own 🗑, same as elsewhere in the app, since it's a delete, not an edit."""
     if ex["description"]:
         description_label = "✏️ Изменить описание"
-    elif exercise_descriptions.get_description(ex["name"]):
+    elif exercise_descriptions.catalog_description(ex):
         # A template default is already shown above — this writes a personal
         # override, so "Добавить" (as if nothing were there) would be misleading.
         description_label = "✏️ Своё описание"
@@ -497,7 +508,7 @@ async def _send_exercise_images(message: Message, ex, state: FSMContext) -> bool
         )
         await state.update_data(exm_media_msg_ids=[sent.message_id])
         return True
-    images = exercise_media.get_images(ex["name"])
+    images = exercise_media.get_images_for(ex)
     if not images:
         return False
     media = [
@@ -699,9 +710,23 @@ async def exm_merge_confirm(callback: CallbackQuery, state: FSMContext):
     if source_id is None:
         await callback.answer("Упражнение не найдено", show_alert=True)
         return
-    ok = await db.merge_exercises(callback.from_user.id, keep_id=target_id, drop_id=source_id)
-    if not ok:
-        await callback.answer("Не получилось объединить", show_alert=True)
+    outcome = await db.merge_exercises(callback.from_user.id, keep_id=target_id, drop_id=source_id)
+    if outcome != db.MERGE_OK:
+        # Причину называем: «не получилось» — ровно тот ответ, после которого
+        # человек жмёт ту же кнопку ещё раз.
+        await callback.answer(
+            {
+                db.MERGE_TARGET_ARCHIVED: (
+                    "Это упражнение в архиве — вся история уехала бы туда же. "
+                    "Верни его из «🗄 Архив» и попробуй снова."
+                ),
+                db.MERGE_IN_ACTIVE_WORKOUT: (
+                    "Одно из этих упражнений сейчас в открытой тренировке. "
+                    "Заверши её и объединяй."
+                ),
+            }.get(outcome, "Не получилось объединить"),
+            show_alert=True,
+        )
         return
     await state.update_data(exm_merge_source_id=None)
     await state.set_state(ExerciseManage.picking_exercise)
@@ -712,8 +737,16 @@ async def exm_merge_confirm(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith("prog:card:"))
 async def prog_show_exercise_card(callback: CallbackQuery, state: FSMContext):
     """Jump straight to the exercise's management card from its progress screen,
-    whatever state/flow got the user to that progress screen in the first place."""
+    whatever state/flow got the user to that progress screen in the first place.
+
+    `exm_from_ai` снимается здесь по той же причине, что и в
+    show_exercise_groups: флаг означает «карточку открыли из чата тренера, и
+    „Назад" должно просто закрыть её, обнажив ответ». После захода в прогресс
+    ответа тренера рядом уже нет, а флаг оставался — и «Назад» удаляло
+    сообщение, не открывая взамен ничего.
+    """
     ex_id = int(callback.data.split(":")[2])
+    await state.update_data(exm_from_ai=False)
     await state.set_state(ExerciseManage.picking_exercise)
     await _render_exercise_card(callback, state, ex_id)
 

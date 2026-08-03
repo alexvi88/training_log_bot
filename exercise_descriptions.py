@@ -8,10 +8,13 @@ joint-angle descriptions) is trimmed down to the 2-4 steps a lifter actually
 needs: starting position, the movement, and a breathing/tempo cue where useful.
 
 Keyed by the exact template name from seed_data.EXERCISE_TEMPLATES, since a
-forked exercise keeps that name verbatim (db.fork_exercise_from_template) —
-same convention as exercise_media.py's EXERCISE_IMAGE_SLUGS. Templates with no
+forked exercise records that name in `original_name` — same convention as
+exercise_media.py's EXERCISE_IMAGE_SLUGS, and see exercise_media.catalog_key
+for why the lookup must not use the live, renameable `name`. Templates with no
 entry here simply show no description text.
 """
+
+import exercise_media
 
 EXERCISE_DESCRIPTIONS: dict[str, str] = {
     # ---------- Грудь ----------
@@ -739,9 +742,18 @@ def get_description(exercise_name: str) -> str | None:
     return EXERCISE_DESCRIPTIONS.get(exercise_name)
 
 
+def catalog_description(ex) -> str | None:
+    """The built-in description for this exercise, ignoring any personal one.
+
+    Keyed by exercise_media.catalog_key (i.e. `original_name`) rather than the
+    live name — see that docstring: renaming a fork used to take the catalog
+    text and the demo photos with it.
+    """
+    return get_description(exercise_media.catalog_key(ex))
+
+
 def effective_description(ex) -> str | None:
     """The description to actually show for an exercise row: the user's own
-    text if they wrote one, else the built-in template description for an
-    exact name match (a forked exercise keeps the template's name verbatim,
-    same convention exercise_media.py's EXERCISE_IMAGE_SLUGS relies on)."""
-    return ex["description"] or get_description(ex["name"])
+    text if they wrote one, else the built-in one for the template it came
+    from."""
+    return ex["description"] or catalog_description(ex)

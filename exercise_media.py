@@ -114,6 +114,26 @@ EXERCISE_IMAGE_SLUGS = {
 }
 
 
+def catalog_key(ex) -> str:
+    """The name this exercise's catalog assets are filed under.
+
+    `original_name`, not `name`: a fork keeps the template's name at creation,
+    but the user is invited to rename it ("✏️ Название", right next to the
+    description and photo buttons) — and keying on the mutable field meant the
+    rename silently stripped both. `original_name` is written once at creation
+    and never touched again, which is exactly what a lookup key needs.
+
+    Falls back to `name` for a row that predates the column or was fetched by
+    a query that didn't select it; those are the rows for which the two are
+    equal anyway.
+    """
+    try:
+        original = ex["original_name"]
+    except (IndexError, KeyError):
+        original = None
+    return original or ex["name"]
+
+
 def get_images(exercise_name: str) -> list[str]:
     """Absolute paths to the [start, end] position photos, or [] if none exist."""
     slug = EXERCISE_IMAGE_SLUGS.get(exercise_name)
@@ -121,6 +141,11 @@ def get_images(exercise_name: str) -> list[str]:
         return []
     paths = [os.path.join(MEDIA_DIR, f"{slug}_1.jpg"), os.path.join(MEDIA_DIR, f"{slug}_2.jpg")]
     return paths if all(os.path.exists(p) for p in paths) else []
+
+
+def get_images_for(ex) -> list[str]:
+    """get_images for an exercise row, keyed the rename-proof way."""
+    return get_images(catalog_key(ex))
 
 
 # Telegram hands back a file_id for every uploaded photo, and re-sending that id
