@@ -1333,6 +1333,72 @@ async def set_exercise_description(exercise_id: int, description: Optional[str])
         await conn().commit()
 
 
+async def merge_exercises(user_id: int, keep_id: int, drop_id: int) -> bool:
+    """Merges drop_id into keep_id — for when the same movement got logged
+    under two different names/entries (e.g. typed once as "ягодичный мостик",
+    later as "glute bridge") and the user wants one combined history instead
+    of two split ones.
+
+    Repoints every set, workout block and routine slot from drop_id to
+    keep_id, carries over drop's description/photo/notes if keep has none of
+    its own, and then removes drop_id entirely. Returns False if either
+    exercise isn't the user's own, is a catalog template, or they're the same
+    row.
+    """
+    if keep_id == drop_id:
+        return False
+    keep = await get_exercise(keep_id)
+    drop = await get_exercise(drop_id)
+    if keep is None or drop is None:
+        return False
+    if keep["user_id"] != user_id or drop["user_id"] != user_id:
+        return False
+    if keep["is_template"] or drop["is_template"]:
+        return False
+    async with _write_lock:
+        await conn().execute(
+            "UPDATE sets SET exercise_id = ? WHERE exercise_id = ?", (keep_id, drop_id)
+        )
+        await conn().execute(
+            "UPDATE block_exercises SET exercise_id = ? WHERE exercise_id = ?", (keep_id, drop_id)
+        )
+        await conn().execute(
+            "UPDATE routine_exercises SET exercise_id = ? WHERE exercise_id = ?", (keep_id, drop_id)
+        )
+        # exercise_notes is keyed on (workout_id, exercise_id) — if a workout
+        # already has a note under keep_id, drop_id's note for that same
+        # workout would collide with the row it's about to become, so it's
+        # dropped in favor of keep's.
+        await conn().execute(
+            "DELETE FROM exercise_notes WHERE exercise_id = ? AND workout_id IN "
+            "(SELECT workout_id FROM exercise_notes WHERE exercise_id = ?)",
+            (drop_id, keep_id),
+        )
+        await conn().execute(
+            "UPDATE exercise_notes SET exercise_id = ? WHERE exercise_id = ?", (keep_id, drop_id)
+        )
+        if drop["last_used_at"] and (not keep["last_used_at"] or drop["last_used_at"] > keep["last_used_at"]):
+            await conn().execute(
+                "UPDATE exercises SET last_used_at = ? WHERE id = ?", (drop["last_used_at"], keep_id)
+            )
+        if not keep["description"] and drop["description"]:
+            await conn().execute(
+                "UPDATE exercises SET description = ? WHERE id = ?", (drop["description"], keep_id)
+            )
+        if not keep["custom_photo_file_id"] and drop["custom_photo_file_id"]:
+            await conn().execute(
+                "UPDATE exercises SET custom_photo_file_id = ? WHERE id = ?",
+                (drop["custom_photo_file_id"], keep_id),
+            )
+        if not keep["notes"] and drop["notes"]:
+            await conn().execute(
+                "UPDATE exercises SET notes = ? WHERE id = ?", (drop["notes"], keep_id)
+            )
+        await conn().execute("DELETE FROM exercises WHERE id = ?", (drop_id,))
+        await conn().commit()
+    return True
+
+
 # ---------- workouts ----------
 
 async def get_active_workout(user_id: int) -> Optional[aiosqlite.Row]:
