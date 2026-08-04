@@ -21,6 +21,9 @@ router = Router(name="csv_import")
 
 REQUIRED_FIELDS = ["date", "exercise", "weight", "reps"]
 FIELD_LABELS = {"date": "дата", "exercise": "упражнение", "weight": "вес", "reps": "повторы", "round": "номер подхода"}
+# Кандидаты в разделители: свой экспорт пишет запятую, но «Сохранить как CSV»
+# в русском Excel даёт «;» (и запятую внутри дробей), а Google Sheets — табы.
+DELIMITERS = ",;\t|"
 SYNONYMS = {
     "date": {"дата", "date", "started_at"},
     "exercise": {"упражнение", "exercise"},
@@ -54,6 +57,61 @@ def _auto_detect(headers: list[str]) -> dict[str, int]:
     return mapping
 
 
+def _sniff_delimiter(text: str) -> str:
+    """Чем в этом файле разделены колонки.
+
+    Раньше разделитель был жёстко зашит в запятую, и файл из русского Excel
+    («02.01.2025;Жим лёжа;100,5;8») выглядел как одна колонка: человек проходил
+    четыре шага маппинга и получал «не понял дату» — про «;» ни слова.
+    """
+    lines = [ln for ln in text.splitlines() if ln.strip()][:20]
+    sample = "\n".join(lines)
+    try:
+        return csv.Sniffer().sniff(sample, delimiters=DELIMITERS).delimiter
+    except csv.Error:
+        pass
+    # Sniffer сдаётся на коротких файлах (одна строка данных — обычное дело при
+    # «проверю на маленьком примере»), поэтому берём самый частый в первой строке.
+    first = lines[0] if lines else ""
+    counts = {d: first.count(d) for d in DELIMITERS}
+    best = max(counts, key=lambda d: counts[d])
+    return best if counts[best] else ","
+
+
+def _looks_like_data(row: list[str]) -> bool:
+    """Похожа ли строка на данные, а не на заголовки.
+
+    Признак — читаемая дата в любой из ячеек: названия колонок датами не бывают.
+    Без этой проверки первая строка файла без заголовков уходила в headers и
+    первая тренировка исчезала молча (два подхода в файле → импортирован один).
+    """
+    for cell in row:
+        try:
+            _parse_row_date(cell)
+        except ParseError:
+            continue
+        return True
+    return False
+
+
+def _read_table(text: str) -> tuple[list[str], list[list[str]], bool]:
+    """(заголовки, строки данных, была ли в файле строка заголовков).
+
+    У файла без заголовков колонки безымянные, поэтому подписываем их номерами —
+    спросить «какая колонка это вес» всё равно нужно, а терять первую строку нет.
+    """
+    reader = csv.reader(io.StringIO(text), delimiter=_sniff_delimiter(text))
+    rows = [r for r in reader if r and any(c.strip() for c in r)]
+    if not rows:
+        return [], [], False
+    # Дата решает: в строке заголовков её не бывает, а в строке данных она есть
+    # всегда — иначе импортировать всё равно нечего.
+    if not _looks_like_data(rows[0]):
+        return rows[0], rows[1:], True
+    width = max(len(r) for r in rows)
+    return [f"Колонка {i + 1}" for i in range(width)], rows, False
+
+
 async def _ask_next_mapping(event, state: FSMContext) -> bool:
     """Returns True if a mapping question was asked, False if mapping is complete."""
     data = await state.get_data()
@@ -72,6 +130,15 @@ async def _ask_next_mapping(event, state: FSMContext) -> bool:
         f"Шаг {step} из {total}. Какая колонка соответствует полю «{FIELD_LABELS[field]}»?\n"
         f"Колонки файла: {', '.join(headers)}"
     )
+    # Без строки заголовков «Колонка 2» ни о чём не говорит — показываем первую
+    # строку данных, по ней видно, где что.
+    if not data.get("imp_has_header", True):
+        sample = data.get("imp_sample_row") or []
+        text = (
+            "В файле нет строки заголовков — спрошу про колонки по номерам.\n\n"
+            + text
+            + (f"\nПервая строка: {' | '.join(sample)}" if sample else "")
+        )
     if isinstance(event, CallbackQuery):
         await ui.safe_edit(event, text, reply_markup=kb)
     else:
@@ -92,14 +159,21 @@ async def import_file_received(message: Message, state: FSMContext):
     except UnicodeDecodeError:
         text = raw.decode("cp1251", errors="replace")
 
-    reader = csv.reader(io.StringIO(text))
-    rows = list(reader)
-    if not rows:
+    headers, data_rows, has_header = _read_table(text)
+    if not headers:
         await message.reply("Файл пустой.")
         return
-    headers, data_rows = rows[0], rows[1:]
     if not data_rows:
         await message.reply("В файле нет строк с данными.")
+        return
+    if len(headers) < len(REQUIRED_FIELDS):
+        # Обычно это не «файл из одной колонки», а неугаданный разделитель —
+        # лучше сказать это сразу, чем после четырёх шагов маппинга.
+        await message.reply(
+            f"Нашёл всего {len(headers)} {formatting.plural_ru(len(headers), ('колонку', 'колонки', 'колонок'))}, "
+            "а нужны хотя бы дата, упражнение, вес и повторы.\n"
+            "Проверь разделитель: запятая, «;» или табуляция."
+        )
         return
 
     mapping = _auto_detect(headers)
@@ -107,6 +181,7 @@ async def import_file_received(message: Message, state: FSMContext):
     await state.update_data(
         imp_headers=headers, imp_rows=data_rows, imp_mapping=mapping, imp_pending_fields=pending,
         imp_mapping_total=len(pending), imp_answered_fields=[],
+        imp_has_header=has_header, imp_sample_row=data_rows[0],
     )
     if not await _ask_next_mapping(message, state):
         await _finish_mapping(message, state)
@@ -166,34 +241,69 @@ def _parse_row_date(text: str) -> dt.date:
         raise ParseError(f"не понял дату «{text}»") from None
 
 
-def _build_workout_groups(rows: list[list[str]], mapping: dict[str, int]) -> list[dict]:
+def _parse_number(text: str) -> float:
+    """Дробное из ячейки: «100.5», «100,5» и «1 000» — одно и то же число.
+
+    Запятая как десятичный разделитель — норма для русской локали Excel, а
+    пробел там же приезжает разрядным разделителем.
+    """
+    return float(text.replace(",", ".").replace(" ", "").replace("\xa0", ""))
+
+
+def _parse_count(text: str, label: str) -> int:
+    """Целое из ячейки, терпимое к «8.0».
+
+    Таблицы хранят числа float'ами и охотно пишут «8.0» в повторах — на этом
+    раньше падал весь импорт целиком («не разобрал вес/повторы»), хотя восемь
+    повторов тут читаются однозначно. А вот «8.5» — уже настоящая ошибка.
+    """
+    try:
+        value = _parse_number(text)
+    except ValueError:
+        raise ParseError(f"не понял {label} «{text}»") from None
+    if value != int(value):
+        raise ParseError(f"{label}: «{text}» — не целое число")
+    return int(value)
+
+
+def _build_workout_groups(rows: list[list[str]], mapping: dict[str, int], first_line: int = 2) -> list[dict]:
     groups: dict[str, dict[str, list[tuple]]] = {}
     name_order: dict[str, list[str]] = {}
     date_order: list[str] = []
 
-    for line_no, row in enumerate(rows, start=2):
+    for line_no, row in enumerate(rows, start=first_line):
         if not row or all(not c.strip() for c in row):
             continue
         try:
             date_val = _parse_row_date(row[mapping["date"]])
             name = row[mapping["exercise"]].strip()
             weight_text = row[mapping["weight"]].strip()
-            weight = float(weight_text.replace(",", ".")) if weight_text else 0.0
-            reps = int(row[mapping["reps"]].strip())
+            try:
+                weight = _parse_number(weight_text) if weight_text else 0.0
+            except ValueError:
+                raise ParseError(f"не понял вес «{weight_text}»") from None
+            reps = _parse_count(row[mapping["reps"]].strip(), "повторы")
             round_val = None
             if "round" in mapping:
                 round_text = row[mapping["round"]].strip()
-                round_val = int(round_text) if round_text else None
+                round_val = _parse_count(round_text, "номер подхода") if round_text else None
             rpe_val = None
             if "rpe" in mapping and mapping["rpe"] < len(row):
                 rpe_text = row[mapping["rpe"]].strip()
                 if rpe_text:
-                    rpe_val = float(rpe_text.replace(",", "."))
+                    try:
+                        rpe_val = _parse_number(rpe_text)
+                    except ValueError:
+                        raise ParseError(f"не понял RPE «{rpe_text}»") from None
                     if not (0 < rpe_val <= 10):
                         raise ParseError(f"RPE вне диапазона 1-10: «{rpe_text}»")
         except ParseError as e:
             raise ParseError(f"Строка {line_no}: {e.message}") from None
-        except (ValueError, IndexError):
+        except IndexError:
+            # Обрезанная строка: раньше это тоже было «не разобрал вес/повторы»,
+            # хотя искать нужно не число, а недостающую колонку.
+            raise ParseError(f"Строка {line_no}: колонок меньше, чем нужно (в строке {len(row)})") from None
+        except ValueError:
             raise ParseError(f"Строка {line_no}: не разобрал вес/повторы") from None
 
         if not name:
@@ -236,16 +346,26 @@ def _build_workout_groups(rows: list[list[str]], mapping: dict[str, int]) -> lis
 
 async def _finish_mapping(event, state: FSMContext) -> None:
     data = await state.get_data()
-    try:
-        workouts = _build_workout_groups(data["imp_rows"], data["imp_mapping"])
-    except ParseError as e:
-        text = f"Ошибка в файле: {e.message}\nИсправь файл и пришли заново."
+
+    async def _back_to_file(text: str) -> None:
         await state.set_state(ImportFlow.awaiting_file)
         kb = keyboards.cancel_keyboard("imp:cancel")
         if isinstance(event, CallbackQuery):
             await ui.safe_edit(event, text, reply_markup=kb)
         else:
             await event.answer(text, reply_markup=kb)
+
+    try:
+        workouts = _build_workout_groups(
+            data["imp_rows"], data["imp_mapping"], first_line=2 if data.get("imp_has_header", True) else 1
+        )
+    except ParseError as e:
+        await _back_to_file(f"Ошибка в файле: {e.message}\nИсправь файл и пришли заново.")
+        return
+    if not workouts:
+        # Раньше пустой результат доезжал до подтверждения «0 тренировки» с
+        # кнопкой «✅ Загрузить», которая рапортовала «Импортировано 0 тренировок».
+        await _back_to_file("Не нашёл ни одной строки с подходами.\nПроверь файл и пришли заново.")
         return
 
     await state.update_data(imp_workouts=workouts, imp_resolved={})
@@ -276,35 +396,87 @@ async def on_exercises_resolved(event, state: FSMContext) -> None:
     await show_confirmation(event, state)
 
 
+def _format_dates(date_isos: list[str], limit: int = 10) -> str:
+    shown = ", ".join(formatting.format_date_ru(dt.date.fromisoformat(d)) for d in date_isos[:limit])
+    if len(date_isos) > limit:
+        shown += f" и ещё {len(date_isos) - limit}"
+    return shown
+
+
+async def _duplicate_dates(user_id: int, workouts: list[dict]) -> set[str]:
+    """Даты из файла, на которые у человека уже есть завершённая тренировка.
+
+    Главная защита от повторной загрузки того же файла: раньше её не было
+    вообще, и второй присланный файл молча удваивал историю (20 тренировок и
+    400 подходов превращались в 40 и 800), а пересчёт ачивок закреплял это по
+    удвоенному тоннажу. Разгребать приходилось руками, по одной тренировке.
+    """
+    have = set(await db.list_finished_workout_dates(user_id))
+    return {w["date"] for w in workouts if w["date"] in have}
+
+
 async def show_confirmation(event, state: FSMContext) -> None:
     data = await state.get_data()
     workouts = data["imp_workouts"]
     total_sets = sum(len(entry["sets"]) for w in workouts for entry in w["entries"])
     total_exercises = sum(len(w["entries"]) for w in workouts)
-    dates = ", ".join(formatting.format_date_ru(dt.date.fromisoformat(w["date"])) for w in workouts[:10])
-    if len(workouts) > 10:
-        dates += f" и ещё {len(workouts) - 10}"
+    dup = await _duplicate_dates(event.from_user.id, workouts)
+    fresh = [w for w in workouts if w["date"] not in dup]
 
-    text = (
-        f"📋 Готово к импорту: {len(workouts)} тренировки ({dates}), "
-        f"{total_exercises} упражнения, {total_sets} сетов.\nЗагрузить?"
-    )
+    w_word = formatting.plural_ru(len(workouts), ("тренировка", "тренировки", "тренировок"))
+    e_word = formatting.plural_ru(total_exercises, ("упражнение", "упражнения", "упражнений"))
+    s_word = formatting.plural_ru(total_sets, ("подход", "подхода", "подходов"))
+    lines = [
+        f"📋 В файле: {len(workouts)} {w_word} ({_format_dates([w['date'] for w in workouts])}), "
+        f"{total_exercises} {e_word}, {total_sets} {s_word}."
+    ]
+    # Дубли не пропускаются молча: молчаливый пропуск так же непонятен, как
+    # молчаливое удвоение — человек должен видеть, что именно загрузится.
+    if dup and not fresh:
+        lines.append("\n⚠️ Все эти даты уже есть в твоей истории — похоже, файл уже загружен.")
+    elif dup:
+        d_word = formatting.plural_ru(len(dup), ("дата", "даты", "дат"))
+        lines.append(
+            f"\n⚠️ {len(dup)} {d_word} уже есть в истории "
+            f"({_format_dates(sorted(dup), limit=5)}) — пропущу, чтобы не задваивать.\n"
+            f"Загружу {len(fresh)} {formatting.plural_ru(len(fresh), ('тренировку', 'тренировки', 'тренировок'))}."
+        )
+    else:
+        lines.append("Загрузить?")
+
     await state.set_state(ImportFlow.confirming)
-    kb = keyboards.confirm_cancel_keyboard("imp:save", "imp:cancel", confirm_text="✅ Загрузить")
+    kb = keyboards.csv_import_confirm_keyboard(len(fresh), len(dup))
+    text = "\n".join(lines)
     if isinstance(event, CallbackQuery):
         await ui.safe_edit(event, text, reply_markup=kb)
     else:
         await event.answer(text, reply_markup=kb)
 
 
-@router.callback_query(StateFilter(ImportFlow.confirming), F.data == "imp:save")
+@router.callback_query(StateFilter(ImportFlow.confirming), F.data.in_({"imp:save", "imp:saveall"}))
 async def import_save(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     workouts = data["imp_workouts"]
     resolved = data["imp_resolved"]
     user_id = callback.from_user.id
+    # imp:saveall — человек посмотрел на список дублей и всё равно хочет их
+    # (бывает: две тренировки в один день). imp:save грузит только новые даты.
+    force = callback.data == "imp:saveall"
 
-    for w in workouts:
+    # Считаем дубли здесь, а не только на экране подтверждения: между показом и
+    # нажатием могла появиться тренировка, да и «Загрузить» легко нажать дважды.
+    skip = set() if force else await _duplicate_dates(user_id, workouts)
+    to_import = [w for w in workouts if w["date"] not in skip]
+
+    if not to_import:
+        await state.clear()
+        from handlers.settings import show_settings
+        await show_settings(
+            callback, state, alert="Эти тренировки уже есть в истории — ничего не добавил"
+        )
+        return
+
+    for w in to_import:
         started_at = f"{w['date']}T12:00:00"
         workout_id = await db.create_finished_workout(user_id, started_at, started_at, source="import")
         for entry in w["entries"]:
@@ -324,10 +496,15 @@ async def import_save(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     # show_settings redraws this very message, so a "✅ Импортировано N" written
     # here would live for milliseconds — it goes in the alert instead.
-    n = len(workouts)
+    n = len(to_import)
     word = formatting.plural_ru(n, ("тренировка", "тренировки", "тренировок"))
+    alert = f"✅ Импортировано {n} {word}"
+    if skip:
+        # Пропуск озвучиваем в том же алерте: иначе «импортировано 5» вместо
+        # ожидаемых 25 выглядит как потеря данных.
+        alert += f", пропущено {len(skip)} (уже были в истории)"
     from handlers.settings import show_settings
-    await show_settings(callback, state, alert=f"✅ Импортировано {n} {word}")
+    await show_settings(callback, state, alert=alert)
 
 
 @router.callback_query(F.data == "imp:cancel")
