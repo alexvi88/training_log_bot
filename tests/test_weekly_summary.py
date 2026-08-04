@@ -54,6 +54,27 @@ async def test_table_has_a_header_row_and_one_row_per_exercise():
     assert table.cells[1][2].text == "12"
 
 
+async def test_long_week_is_cut_only_in_the_display():
+    """Строк показываем ограниченное число — а тоннаж недели остаётся полным.
+
+    Список резался до вызова сводки, и итог считался по остатку: у человека с 20
+    упражнениями недельный тоннаж выходил заниженным и не сходился с плиткой
+    «ТОННАЖ ЗА 7 ДНЕЙ», которая считает по всем подходам.
+    """
+    rows = [
+        formatting.WeeklyRow(name=f"упражнение {i}", top_weight=100.0, tonnage=1000.0, sets_count=3)
+        for i in range(20)
+    ]
+    total = sum(r.tonnage for r in rows)
+
+    text = formatting.build_weekly_summary(rows, 4, total, "28.07–03.08")
+    table = formatting.build_weekly_table(rows)
+
+    assert text.count("упражнение ") == formatting.WEEKLY_ROWS_LIMIT
+    assert len(table.cells) == formatting.WEEKLY_ROWS_LIMIT + 1  # шапка + строки
+    assert formatting.format_tonnage(total) in text  # 20 тонн, а не 12
+
+
 async def test_numeric_columns_are_right_aligned():
     """Числа в колонках сравнивают глазами — вразнобой они не сравниваются."""
     table = formatting.build_weekly_table(_rows())
@@ -118,6 +139,42 @@ async def test_successful_rich_send_replaces_the_old_screen(fresh_db, user_id, m
     table = rich.blocks[-1]
     assert table.cells[1][0].text == "Жим лёжа"
     callback.message.delete.assert_awaited_once()
+
+
+# ---------- итог недели ----------
+
+
+async def test_week_total_counts_exercises_the_table_does_not_show(fresh_db, user_id, monkeypatch):
+    """Тот же итог на живых данных: 13 упражнений за неделю, показано 12,
+    в заголовке — тоннаж всех тринадцати."""
+    db = fresh_db
+    gid = await db.create_muscle_group(user_id, "Грудь")
+    today = dt.date.today()
+    monday = today - dt.timedelta(days=today.weekday())
+    workout_id = await db.create_workout(user_id, started_at=f"{monday.isoformat()}T10:00:00")
+    for i in range(formatting.WEEKLY_ROWS_LIMIT + 1):
+        ex_id = await db.create_exercise(user_id, f"Упражнение {i}", gid)
+        block_id = await db.create_block(workout_id, "single")
+        await db.add_block_exercise(block_id, ex_id, 0)
+        await db.append_set(block_id, ex_id, 0, 100.0, 10)
+    await db.finish_workout(workout_id, finished_at=f"{monday.isoformat()}T11:00:00")
+
+    callback = _callback(user_id)
+    callback.message.answer_rich = AsyncMock(
+        side_effect=TelegramBadRequest(method=MagicMock(), message="method not found")
+    )
+    sent = {}
+
+    async def fake_safe_edit(cb, text, **kwargs):
+        sent["text"] = text
+
+    monkeypatch.setattr(history.ui, "safe_edit", fake_safe_edit)
+
+    await history.prog_week(callback, MagicMock())
+
+    # 13 упражнений × 1000 кг — столько же, сколько насчитает плитка тоннажа.
+    expected = formatting.format_tonnage(1000.0 * (formatting.WEEKLY_ROWS_LIMIT + 1))
+    assert expected in sent["text"]
 
 
 # ---------- локальное время ----------

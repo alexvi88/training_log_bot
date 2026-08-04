@@ -1569,6 +1569,21 @@ class WeeklyRow:
     sets_count: int
 
 
+# Сколько упражнений показываем в недельной сводке — дальше таблица перестаёт
+# читаться с телефона, а хвост из одного подхода ничего не добавляет.
+#
+# Обрезается ровно вывод и ничего кроме: раньше список резался до вызова
+# сводки, и итог недели считался по остатку — у человека с 20 упражнениями
+# недельный тоннаж выходил заниженным и не сходился с плиткой на дашборде,
+# которая считает по всем подходам. Итог приходит отдельным числом (см.
+# total_tonnage), строки — все, что были за неделю.
+WEEKLY_ROWS_LIMIT = 12
+
+
+def _weekly_shown(rows: list[WeeklyRow]) -> list[WeeklyRow]:
+    return rows[:WEEKLY_ROWS_LIMIT]
+
+
 def build_weekly_summary(
     rows: list[WeeklyRow],
     workouts: int,
@@ -1578,7 +1593,11 @@ def build_weekly_summary(
     food_line: str | None = None,
 ) -> str:
     """Недельная сводка обычным текстом — фолбэк для клиентов без rich-таблиц
-    и источник тех же чисел для табличной версии (см. build_weekly_table)."""
+    и источник тех же чисел для табличной версии (см. build_weekly_table).
+
+    `rows` — все упражнения недели; до читаемого числа строк список режется
+    здесь, а `total_tonnage` считается вызывающей стороной по всем подходам.
+    """
     u = UNIT_LABELS.get(unit, "кг")
     w = plural_ru(workouts, ("тренировка", "тренировки", "тренировок"))
     lines = [
@@ -1589,7 +1608,7 @@ def build_weekly_summary(
     if not rows:
         lines.append("На этой неделе тренировок не было.")
         return "\n".join(lines)
-    for row in rows:
+    for row in _weekly_shown(rows):
         lines.append(
             f"<b>{escape(row.name)}</b> — {format_weight(row.top_weight)}{u} · "
             f"{row.sets_count} подх. · {format_tonnage(row.tonnage, unit)}"
@@ -1629,7 +1648,7 @@ def build_weekly_table(rows: list[WeeklyRow], unit: str = "kg"):
             cell(str(row.sets_count), "right"),
             cell(format_tonnage(row.tonnage, unit), "right"),
         ]
-        for row in rows
+        for row in _weekly_shown(rows)
     ]
     return InputRichBlockTable(cells=[header, *body], is_striped=True, is_bordered=True)
 
