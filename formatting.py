@@ -599,6 +599,18 @@ def markdown_tables_to_lines(text: str) -> str:
     return "\n".join(out)
 
 
+def markdown_headings_to_bold(text: str) -> str:
+    """«## Заголовок» → «**Заголовок**», всё остальное не трогая.
+
+    Нужно перед отправкой rich-сообщением: настоящий заголовок Telegram рисует
+    по-статейному — крупным кеглем и с широкими полями сверху и снизу, — и
+    строка «Твои цифры» посреди ответа в чате выглядит и читается как разрыв, а
+    не как подзаголовок. Жирная строка говорит ровно то же самое и занимает
+    одну строку. Rich-сообщение мы шлём ради таблиц, а не ради вёрстки статьи.
+    """
+    return _MD_HEADING_RE.sub(lambda m: f"**{m.group(1)}**", text)
+
+
 def ai_markdown_to_html(text: str) -> str:
     """Ответ модели (markdown) → HTML для обычного сообщения Telegram.
 
@@ -624,7 +636,7 @@ def ai_markdown_to_html(text: str) -> str:
     """
     text = markdown_tables_to_lines(text)
     text = _MD_DIVIDER_RE.sub(DIVIDER, text)
-    text = _MD_HEADING_RE.sub(lambda m: f"**{m.group(1)}**", text)
+    text = markdown_headings_to_bold(text)
     parts = []
     pos = 0
     for m in _MD_MARKUP_RE.finditer(text):

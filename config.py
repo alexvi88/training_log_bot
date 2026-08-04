@@ -151,6 +151,15 @@ GROK_SEARCH_MODEL = os.getenv("GROK_SEARCH_MODEL", "grok-4.20-multi-agent")
 # get billed).
 GROK_SEARCH_AGENT_COUNT = int(os.getenv("GROK_SEARCH_AGENT_COUNT", "4"))
 
+# Отдельный потолок для шага живого поиска — он один ходит по SDK и один живёт
+# по другим часам, чем обычный запрос к модели: multi-agent действительно
+# лазает по сети, и полутора минут ему регулярно не хватало (DEADLINE_EXCEEDED
+# на 90с общего AI_REQUEST_TIMEOUT_SECONDS). Обрыв тут — худший из исходов:
+# ждали всё это время И остались без находок, а следом ещё ждём основной ответ.
+# Раз уж решили искать — доводим до конца; сэкономить время можно только не
+# начиная (за это отвечает гейт _search_worth_it).
+AI_SEARCH_TIMEOUT_SECONDS = float(os.getenv("AI_SEARCH_TIMEOUT_SECONDS", "180"))
+
 # Per-user daily cap on AI-trainer questions answered with web/X search access.
 # Guards against runaway search cost; once hit, the AI trainer still answers
 # normally (own tools only, no live search) until the next day.

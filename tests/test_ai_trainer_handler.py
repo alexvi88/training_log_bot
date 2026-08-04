@@ -318,6 +318,30 @@ async def test_answer_goes_out_as_a_rich_message_when_the_server_supports_it(
     placeholder.edit_text.assert_not_awaited()
 
 
+async def test_headings_are_flattened_to_bold_before_going_out_as_rich(
+    fresh_db, user_id, monkeypatch
+):
+    """A real heading is laid out like an article — big type, wide margins above
+    and below — which is what blows the answer apart with whitespace. The rich
+    message is sent for its tables, not for that."""
+    answer = f"## Твои цифры\n\n{_TABLE_ANSWER}"
+    monkeypatch.setattr(ai_trainer.ai_trainer, "ask", AsyncMock(return_value=answer))
+
+    state = await _make_state(user_id)
+    await state.set_state("AITrainerFlow:chatting")
+    message = _make_chat_message(user_id, "разбери мои цифры")
+    placeholder = message.answer.return_value
+    placeholder.bot.edit_message_text = AsyncMock()
+
+    await ai_trainer.ai_question(message, state)
+
+    sent = placeholder.bot.edit_message_text.await_args.kwargs["rich_message"].markdown
+    assert "## Твои цифры" not in sent
+    assert "**Твои цифры**" in sent
+    # The table itself is untouched — that's the whole reason for going rich.
+    assert "| **squat** | 140×6 |" in sent
+
+
 async def test_answer_falls_back_to_plain_html_without_rich_support(fresh_db, user_id, monkeypatch):
     """Servers and clients below 10.1 must still get the whole answer — with the
     table flattened into readable lines rather than raw pipes."""
