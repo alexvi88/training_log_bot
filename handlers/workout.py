@@ -1375,6 +1375,13 @@ async def _enter_live(
 _RECOVERY_MENTION_BELOW = 85
 _RECOVERY_MAX_MENTIONS = 3
 
+# «Другое» — мешок для пресса, предплечий, трапеций и всего, что не легло в шесть
+# основных групп. «Другое — 31% восстановления» не подсказывает ничего: это не
+# мышца, которую можно поберечь сегодня, и утомление в нём складывается из
+# упражнений на разные части тела. Из подсказки о восстановлении его убираем —
+# в самом списке групп он остаётся.
+_RECOVERY_SKIP_GROUPS = {"другое"}
+
 # Окно и лимит для «программ, по которым тренируешься сейчас» на первом экране
 # выбора (см. db.list_recent_programs) — не весь список сохранённых программ,
 # а те несколько, что реально были в ходу за последний месяц.
@@ -1398,6 +1405,8 @@ async def _recovery_line(user_id: int, groups) -> str:
     today = timeutil.user_today(await db.get_user(user_id))
     spent = []
     for group in groups:
+        if group["name"].strip().lower() in _RECOVERY_SKIP_GROUPS:
+            continue
         entry = last.get(group["id"])
         if entry is None:
             continue

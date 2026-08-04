@@ -62,6 +62,27 @@ async def test_line_names_only_the_groups_still_short_of_recovered(fresh_db, use
     assert "спина" not in line  # fully recovered — naming it would be noise
 
 
+async def test_other_is_never_named_even_when_it_looks_spent(fresh_db, user_id):
+    """«Другое» — мешок (пресс, предплечья, трапеции), а не мышца, которую можно
+    поберечь сегодня: его процент в подсказке ничего не значит."""
+    from handlers import workout
+
+    db = fresh_db
+    other = await db.create_muscle_group(user_id, "Другое")
+    crunch = await db.create_exercise(user_id, "Скручивания", other)
+
+    today = dt.date.today()
+    workout_id = await db.create_workout(user_id, started_at=f"{today.isoformat()}T10:00:00")
+    block_id = await db.create_block(workout_id, "single")
+    await db.add_block_exercise(block_id, crunch, 0)
+    for _ in range(12):
+        await db.append_set(block_id, crunch, 0, 0.0, 20)
+    await db.finish_workout(workout_id, finished_at=f"{today.isoformat()}T11:00:00")
+
+    groups = await db.list_muscle_groups(user_id)
+    assert await workout._recovery_line(user_id, groups) == ""
+
+
 async def test_no_line_at_all_when_everything_is_fresh(fresh_db, user_id):
     from handlers import workout
 
