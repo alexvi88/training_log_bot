@@ -1147,6 +1147,82 @@ def weekly_volume_panel(
     return f"ОБЪЁМ ЗА {VOLUME_WINDOW_DAYS} ДНЕЙ · {total} {word}", rows
 
 
+# Сколько символов имени движения влезает в карточку сводки. Ширина карточки —
+# треть картинки, шрифт 7pt: дальше имя лезет на соседнюю карточку.
+_LIFT_NAME_LIMIT = 22
+
+
+def menu_headline(dashboard) -> str:
+    """Одна крупная строка вверху сводки.
+
+    Серия — если она есть: это единственное число, которое человек хочет не
+    потерять, и потому лучше всех работает заголовком. Без серии заголовок
+    говорит про месяц, а не показывает «0 недель подряд» — считать нулевую серию
+    достижением незачем.
+    """
+    if dashboard.week_streak >= 2:
+        weeks = plural_ru(dashboard.week_streak, ("неделя", "недели", "недель"))
+        return f"{dashboard.week_streak} {weeks} подряд"
+    word = plural_ru(dashboard.last_30_days, ("тренировка", "тренировки", "тренировок"))
+    return f"{dashboard.last_30_days} {word} за 30 дней"
+
+
+def menu_tiles(dashboard, tonnage: float, records: int, unit: str = "kg") -> list[tuple[str, str]]:
+    """Три плитки под заголовком: месяц, работа за неделю и рекорды.
+
+    Рекордов может не быть, и тогда плитка отдаёт место текущей неделе: «★
+    РЕКОРДОВ 0» — это не факт, а укор, причём за неделю, в которую человек мог
+    просто работать в подходах.
+    """
+    u = UNIT_LABELS.get(unit, "кг")
+    # Тонны — когда их есть чем мерить: «0,4 т» читается хуже, чем «400 кг».
+    tonnes = f"{tonnage / 1000:.1f}".replace(".", ",")
+    weight = f"{tonnes} т" if tonnage >= 1000 else f"{tonnage:.0f} {u}"
+    tiles = [
+        ("ЗА 30 ДНЕЙ", str(dashboard.last_30_days)),
+        (f"ТОННАЖ {VOLUME_WINDOW_DAYS} Д", weight),
+    ]
+    if records > 0:
+        tiles.append(("★ РЕКОРДОВ", str(records)))
+    else:
+        word = plural_ru(dashboard.this_week, ("тренировка", "тренировки", "тренировок"))
+        tiles.append(("ЭТА НЕДЕЛЯ", f"{dashboard.this_week} {word}"))
+    return tiles
+
+
+def menu_lift_cards(
+    lifts: list[tuple[str, list[float]]], unit: str = "kg"
+) -> list[tuple[str, list[float], str, str]]:
+    """(имя, серия, текущий e1RM, изменение) для карточек движений.
+
+    `lifts` — то, что вернули db.top_exercises_by_frequency и
+    db.exercise_e1rm_series: самые частые упражнения человека, а не «базовые».
+    Понятия базового движения в базе нет (тип движения нигде не заполняется), так
+    что выбирать «жим/присед/тяга» пришлось бы по именам из каталога — и у
+    человека со своими названиями там оказалось бы пусто.
+
+    Изменение — между первой и последней точкой серии, а не между двумя
+    последними: на одной тренировке e1RM гуляет от самочувствия, и такой «минус»
+    сообщал бы про сон, а не про прогресс.
+    """
+    u = UNIT_LABELS.get(unit, "кг")
+    cards: list[tuple[str, list[float], str, str]] = []
+    for name, series in lifts:
+        if not series:
+            continue
+        label = name.upper()
+        if len(label) > _LIFT_NAME_LIMIT:
+            label = label[: _LIFT_NAME_LIMIT - 1].rstrip() + "…"
+        current = f"{series[-1]:.0f} {u}"
+        delta = ""
+        if len(series) >= 2:
+            diff = round(series[-1] - series[0])
+            if diff:
+                delta = f"{diff:+.0f}"
+        cards.append((label, series, current, delta))
+    return cards
+
+
 def build_workout_card(
     started_at: dt.datetime,
     blocks: list[BlockView],

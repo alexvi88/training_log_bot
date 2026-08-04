@@ -2263,6 +2263,114 @@ async def weekly_volume_by_group(
     return {row["gid"]: row["cnt"] for row in await cur.fetchall()}
 
 
+# ---------- сводка на главном экране ----------
+
+# Ниже — агрегаты, которых до сводки не было: тоннаж по неделям, серия e1RM по
+# упражнению и счётчик рекордов. Всё поверх finished-тренировок и через
+# LOAD_WEIGHT_SQL, то есть собственный вес в подтягиваниях считается так же, как
+# везде (см. effective_load).
+
+
+async def top_exercises_by_frequency(
+    user_id: int, start_date: str, end_date: str, limit: int = 3, min_sessions: int = 2
+) -> list[aiosqlite.Row]:
+    """Упражнения, которые человек делает чаще всего, — по числу тренировок, а не
+    подходов.
+
+    Частота считается сессиями осознанно: двадцать подходов за один заход это
+    не «часто», а один тяжёлый день, и по такому упражнению линия прогресса
+    состоит из одной точки. `min_sessions` по той же причине: рисовать тренд по
+    единственной тренировке нечестно, лучше показать то, где точек хватает.
+
+    Ничьи разводятся числом подходов, потом именем — иначе сводка
+    перетасовывалась бы между открытиями меню на одних и тех же данных, а
+    порядок входит в ключ кэша картинки.
+    """
+    cur = await conn().execute(
+        "SELECT e.id, e.display_name, COUNT(DISTINCT w.id) AS sessions, "
+        "       COUNT(s.id) AS sets_count "
+        "FROM sets s "
+        "JOIN workout_blocks b ON b.id = s.block_id "
+        "JOIN workouts w ON w.id = b.workout_id "
+        "JOIN exercises e ON e.id = s.exercise_id "
+        "WHERE w.user_id = ? AND w.status = 'finished' "
+        "AND date(w.started_at) BETWEEN ? AND ? AND s.reps > 0 "
+        "GROUP BY e.id "
+        "HAVING sessions >= ? "
+        "ORDER BY sessions DESC, sets_count DESC, e.display_name "
+        "LIMIT ?",
+        (user_id, start_date, end_date, min_sessions, limit),
+    )
+    return await cur.fetchall()
+
+
+async def exercise_e1rm_series(
+    user_id: int, exercise_id: int, sessions: int = 8, formula: str = "epley"
+) -> list[float]:
+    """Лучший e1RM упражнения в каждой из последних `sessions` тренировок, по
+    возрастанию даты — точки для спарклайна.
+
+    Одна точка на тренировку, а не на подход: внутри дня e1RM гуляет от
+    разминочных и откатных подходов, и линия из подходов показывала бы пилу
+    вместо тренда.
+    """
+    cur = await conn().execute(
+        f"SELECT MAX({_e1rm_sql(formula)}) AS e1rm FROM sets s "
+        "JOIN workout_blocks b ON b.id = s.block_id "
+        "JOIN workouts w ON w.id = b.workout_id "
+        "WHERE w.user_id = ? AND w.status = 'finished' "
+        "AND s.exercise_id = ? AND s.reps > 0 "
+        "GROUP BY w.id ORDER BY w.started_at DESC, w.id DESC LIMIT ?",
+        (user_id, exercise_id, sessions),
+    )
+    return [row["e1rm"] for row in reversed(await cur.fetchall())]
+
+
+async def daily_tonnage(user_id: int, start_date: str, end_date: str) -> dict[str, float]:
+    """Тоннаж по календарным дням в окне. По неделям сворачивает вызывающая
+    сторона: у SQLite %W начинает неделю с воскресенья и ломается на границе
+    года, а тут неделя должна совпадать с той, от которой считается всё
+    остальное на экране.
+    """
+    cur = await conn().execute(
+        f"SELECT date(w.started_at) AS d, SUM({LOAD_WEIGHT_SQL} * s.reps) AS t "
+        "FROM sets s "
+        "JOIN workout_blocks b ON b.id = s.block_id "
+        "JOIN workouts w ON w.id = b.workout_id "
+        "WHERE w.user_id = ? AND w.status = 'finished' "
+        "AND date(w.started_at) BETWEEN ? AND ? "
+        "GROUP BY date(w.started_at)",
+        (user_id, start_date, end_date),
+    )
+    return {row["d"]: row["t"] or 0.0 for row in await cur.fetchall()}
+
+
+async def e1rm_record_count(
+    user_id: int, since_date: str, formula: str = "epley"
+) -> int:
+    """Сколько упражнений с `since_date` перебили свой прежний лучший e1RM.
+
+    Упражнения, у которых прежнего лучшего нет вовсе, не считаются: первая в
+    жизни тренировка движения формально бьёт рекорд в каждом подходе, и называть
+    это рекордом значило бы поздравлять человека с тем, что он что-то попробовал.
+    """
+    e1rm = _e1rm_sql(formula)
+    cur = await conn().execute(
+        "SELECT COUNT(*) AS n FROM ("
+        f"  SELECT s.exercise_id,"
+        f"         MAX(CASE WHEN date(w.started_at) >= ? THEN {e1rm} END) AS inside,"
+        f"         MAX(CASE WHEN date(w.started_at) <  ? THEN {e1rm} END) AS earlier"
+        "   FROM sets s"
+        "   JOIN workout_blocks b ON b.id = s.block_id"
+        "   JOIN workouts w ON w.id = b.workout_id"
+        "   WHERE w.user_id = ? AND w.status = 'finished' AND s.reps > 0"
+        "   GROUP BY s.exercise_id"
+        ") WHERE earlier IS NOT NULL AND inside IS NOT NULL AND inside > earlier",
+        (since_date, since_date, user_id),
+    )
+    return (await cur.fetchone())["n"]
+
+
 # ---------- blocks / block exercises ----------
 
 async def create_block(workout_id: int, block_type: str) -> int:
