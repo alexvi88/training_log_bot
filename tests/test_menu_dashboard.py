@@ -239,16 +239,16 @@ def test_without_a_streak_the_headline_talks_about_the_month():
 
 def test_tonnage_switches_to_kilograms_when_there_are_no_tonnes():
     """«0,4 т» читается хуже, чем «400 кг»."""
-    assert formatting.menu_tiles(_dashboard(), 24_500, 3)[1] == ("ТОННАЖ 7 Д", "24,5 т")
-    assert formatting.menu_tiles(_dashboard(), 400, 3)[1] == ("ТОННАЖ 7 Д", "400 кг")
+    assert formatting.menu_tiles(_dashboard(), 24_500, 3)[1] == ("ТОННАЖ ЗА 7 ДНЕЙ", "24.5 т")
+    assert formatting.menu_tiles(_dashboard(), 400, 3)[1] == ("ТОННАЖ ЗА 7 ДНЕЙ", "400 кг")
 
 
 def test_the_records_tile_gives_its_place_away_when_there_are_none():
     with_records = formatting.menu_tiles(_dashboard(this_week=2), 5000, 2)
     without = formatting.menu_tiles(_dashboard(this_week=2), 5000, 0)
 
-    assert with_records[2] == ("★ РЕКОРДОВ", "2")
-    assert without[2] == ("ЭТА НЕДЕЛЯ", "2 тренировки")
+    assert with_records[2] == ("РЕКОРДОВ ЗА 7 ДНЕЙ", "2")
+    assert without[2] == ("ТРЕНИРОВОК ЗА НЕДЕЛЮ", "2")
     assert len(with_records) == len(without) == 3
 
 
@@ -294,7 +294,7 @@ def _render(**kwargs):
     base = dict(
         day_counts={today: 1}, today=today, start=today - dt.timedelta(weeks=30),
         headline="9 недель подряд", badge="ТЯЖЕЛОВЕС",
-        tiles=[("ЗА 30 ДНЕЙ", "12"), ("ТОННАЖ 7 Д", "24,5 т"), ("★ РЕКОРДОВ", "3")],
+        tiles=[("ТРЕНИРОВОК ЗА 30 ДНЕЙ", "12"), ("ТОННАЖ ЗА 7 ДНЕЙ", "24.5 т"), ("РЕКОРДОВ 7 Д", "3")],
         volume_rows=[("СПИНА", 14, "high"), ("ГРУДЬ", 9, "in_range"), ("НОГИ", 0, "none")],
         volume_title="ОБЪЁМ ЗА 7 ДНЕЙ · 23 ПОДХОДА",
         lifts=[("ЖИМ ЛЁЖА", [100.0, 112.0], "112 кг", "+12")],

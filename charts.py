@@ -304,11 +304,15 @@ DASH_RULE = "#2b3543"
 
 # Высоты виджетов в дюймах. Строка коридора и карточка движения заданы шагом,
 # чтобы блок рос от числа строк, а не растягивал их.
-_DASH_HEAD_H = 0.78
+_DASH_HEAD_H = 0.58
 _DASH_TILES_H = 0.86
 _DASH_VOL_STEP = 0.30
-_DASH_CAL_H = 0.86
-_DASH_LIFTS_H = 1.26
+_DASH_LIFTS_H = 2.10
+# Куда линия движения падает и на сколько поднимается, в единицах оси блока.
+# Раньше на неё приходилось 0.36 из 2.75 — на экране это десяток пикселей, в
+# которых роста не разглядеть.
+_LIFT_LINE_BOTTOM = 1.50
+_LIFT_LINE_HEIGHT = 0.78
 
 
 def _dash_card(ax, x, y, w, h, colour=DASH_CARD) -> None:
@@ -329,21 +333,54 @@ def _dash_section(ax, title: str, note: str = "", note_colour: str = HEATMAP_FIL
                 ha="right", va="center")
 
 
-def _dash_flat_calendar(ax, day_counts, today: dt.date, start: dt.date) -> None:
-    """Тот же гитхабовский календарь, но сплющенный: клетка примерно 15x10 вместо
-    18x18.
+# Календарь сводки — тот же гитхабовский, что и раньше: квадратная клетка.
+# Сплющивать его было ошибкой. Клетка держится ровно 0.119 дюйма, а высота блока
+# из неё выводится, поэтому масштаб не зависит от длины истории: у человека с
+# девятью неделями клетки такие же, просто занимают левую часть полосы, — как в
+# гитхабе у молодого аккаунта. Растягивание девяти колонок на всю ширину давало
+# полосы 8:1, на календарь уже не похожие.
+_DASH_CELL_IN = 6.67 / 56          # 52 недели + 3.4 юнита слева под Пн/Ср/Пт
+_DASH_CAL_LEFT_UNITS = 3.4
+_DASH_CAL_TOP_UNITS = -4.0         # место над сеткой под месяцы и заголовок
+_DASH_CAL_BOTTOM_UNITS = 7.6
 
-    Сплющивание ничего не стоит — аспект оси просто не выставлен в equal, и
-    колонки растягиваются по ширине, пока семь строк остаются низкими. За те же
-    деньги показывается целый год вместо полугода, и это дешевле, чем резать
-    историю. Подписи дней недели убраны: в сплющенном годе строка почти ничего не
-    сообщает, зато мешала сетке встать от того же края, что остальные виджеты.
+
+def _dash_calendar_height() -> float:
+    """Высота блока календаря в дюймах — производная от размера клетки.
+
+    Считается, а не задаётся: у оси включён equal-аспект, и если высоту полосы
+    назначить independently, matplotlib впишет данные внутрь, оставив поля сверху
+    и снизу, и сетка перестанет попадать в свою же подпись.
+    """
+    return _DASH_CELL_IN * (_DASH_CAL_BOTTOM_UNITS - _DASH_CAL_TOP_UNITS)
+
+
+def _dash_year_calendar(
+    ax, day_counts, today: dt.date, start: dt.date, title: str = "", note: str = ""
+) -> None:
+    """Календарь года клетками, как в render_year_heatmap.
+
+    Заголовок рисуется в смешанной системе координат (x — доля ширины оси, y — в
+    данных): по x он обязан встать на тот же DASH_LEFT, что подписи остальных
+    виджетов, а сама ось размечена неделями, и «неделя −3.4» уехала бы к самому
+    краю картинки. Именно так он и стоял в первой версии — на 0.004 ширины вместо
+    0.04, из-за чего заголовки блоков не сходились по левому краю.
     """
     start = start - dt.timedelta(days=start.weekday())
     columns = max((today - start).days // 7 + 1, 1)
-    ax.set_ylim(7.4, -2.6)
-    pad = DASH_LEFT / (DASH_RIGHT - DASH_LEFT) * columns
-    ax.set_xlim(-pad, columns + pad)
+    x_units = DASH_WIDTH_IN / _DASH_CELL_IN
+    ax.set_aspect("equal")
+    ax.set_xlim(-_DASH_CAL_LEFT_UNITS, x_units - _DASH_CAL_LEFT_UNITS)
+    ax.set_ylim(_DASH_CAL_BOTTOM_UNITS, _DASH_CAL_TOP_UNITS)
+
+    blended = ax.get_yaxis_transform()
+    if title:
+        ax.text(DASH_LEFT, -3.3, title, color="#9aa4b2", fontsize=8.5,
+                fontweight="bold", va="center", transform=blended)
+    if note:
+        ax.text(DASH_RIGHT, -3.3, note, color=HEATMAP_FILLED, fontsize=7.5,
+                ha="right", va="center", transform=blended)
+
     for col in range(columns):
         monday = start + dt.timedelta(weeks=col)
         for row in range(7):
@@ -351,24 +388,26 @@ def _dash_flat_calendar(ax, day_counts, today: dt.date, start: dt.date) -> None:
             if day > today:
                 continue
             colour = HEATMAP_FILLED if day_counts.get(day, 0) > 0 else HEATMAP_EMPTY
-            ax.add_patch(
-                FancyBboxPatch((col + 0.08, row + 0.1), 0.84, 0.8,
-                               boxstyle="round,pad=0,rounding_size=0.1",
-                               linewidth=0, facecolor=colour)
-            )
+            _rounded_cell(ax, col, row, 1, colour)
         if col > 0 and monday.month != (monday - dt.timedelta(weeks=1)).month:
-            ax.text(col, -1.3, _MONTHS_RU[monday.month - 1], color="#6b7684",
+            ax.text(col, -1.1, _MONTHS_RU[monday.month - 1], color="#6b7684",
                     fontsize=6.5, va="center")
 
+    for row, label in ((0, "Пн"), (2, "Ср"), (4, "Пт")):
+        ax.text(-0.6, row + 0.55, label, color="#6b7684", fontsize=6,
+                ha="right", va="center")
 
-def _dash_lifts(ax, lifts, fg: str, dim: str, ok: str) -> None:
+
+def _dash_lifts(ax, lifts, fg: str, dim: str, ok: str, title: str = "", note: str = "") -> None:
     """Карточки движений: имя, текущий e1RM, изменение и спарклайн.
 
     Спарклайн нормируется на свой собственный размах, а не на общий: у жима и
     тяги разные веса, и общая шкала расплющила бы жим в прямую. Сравнивать эти
     три линии между собой не нужно — каждая отвечает на «я тут расту?».
     """
-    ax.set_ylim(1.25, -1.5)
+    ax.set_ylim(1.80, -1.5)
+    if title:
+        _dash_section(ax, title, note)
     box = (DASH_RIGHT - DASH_LEFT - 0.02 * (len(lifts) - 1)) / len(lifts)
     for i, (name, series, value, delta) in enumerate(lifts):
         x0 = DASH_LEFT + i * (box + 0.02)
@@ -382,12 +421,15 @@ def _dash_lifts(ax, lifts, fg: str, dim: str, ok: str) -> None:
         if len(series) < 2:
             continue
         low, high = min(series), max(series)
-        span = high - low
+        # Диапазон линии снизу ограничен: без этого +1 кг шума на 220-килограммовой
+        # тяге рисовался бы во всю высоту блока и читался как рывок. Порог в 4% от
+        # рабочего веса оставляет настоящий рост во всю высоту, а дрожание — почти
+        # плоским, каким оно и является.
+        span = max(high - low, (low + high) / 2 * 0.04)
         xs = [x0 + k * box / (len(series) - 1) for k in range(len(series))]
-        # Плоская серия (все веса равны) рисуется по середине, а не делением на ноль.
-        ys = [1.04 - (0.5 if span == 0 else (v - low) / span) * 0.36 for v in series]
-        ax.plot(xs, ys, color=HEATMAP_FILLED, linewidth=1.8, solid_capstyle="round")
-        ax.plot([xs[-1]], [ys[-1]], marker="o", markersize=3.4, color=fg)
+        ys = [_LIFT_LINE_BOTTOM - (v - low) / span * _LIFT_LINE_HEIGHT for v in series]
+        ax.plot(xs, ys, color=HEATMAP_FILLED, linewidth=2.0, solid_capstyle="round")
+        ax.plot([xs[-1]], [ys[-1]], marker="o", markersize=3.8, color=fg)
 
 
 def render_menu_dashboard(
@@ -400,6 +442,10 @@ def render_menu_dashboard(
     volume_rows: list[tuple[str, int, str]] | None = None,
     volume_title: str = "",
     lifts: list[tuple[str, list[float], str, str]] | None = None,
+    calendar_title: str = "",
+    calendar_note: str = "",
+    lifts_title: str = "",
+    lifts_note: str = "",
 ) -> bytes:
     """Сводка для сообщения меню: крупное число, плитки, коридор по группам,
     сплющенный календарь за год и движения с трендом e1RM.
@@ -425,10 +471,10 @@ def render_menu_dashboard(
     # разделять нечем: это одна группа, крупное число и его расшифровка.
     layout: list[tuple[str, float]] = [("head", _DASH_HEAD_H)]
     if tiles:
-        layout += [("pad:tiles", 0.20), ("tiles", _DASH_TILES_H)]
+        layout += [("pad:tiles", 0.10), ("tiles", _DASH_TILES_H)]
     if rows:
         layout += [("gap:vol", DASH_GAP), ("vol", 0.34 + _DASH_VOL_STEP * len(rows))]
-    layout += [("gap:cal", DASH_GAP), ("cal", _DASH_CAL_H)]
+    layout += [("gap:cal", DASH_GAP), ("cal", _dash_calendar_height())]
     if lifts:
         layout += [("gap:lifts", DASH_GAP), ("lifts", _DASH_LIFTS_H)]
 
@@ -476,10 +522,10 @@ def render_menu_dashboard(
         ax = band("vol")
         _draw_volume_panel(ax, rows, volume_title, BG, FG, MUTED)
 
-    _dash_flat_calendar(band("cal"), day_counts, today, start)
+    _dash_year_calendar(band("cal"), day_counts, today, start, calendar_title, calendar_note)
 
     if lifts:
-        _dash_lifts(band("lifts"), lifts, FG, DIM, OK)
+        _dash_lifts(band("lifts"), lifts, FG, DIM, OK, lifts_title, lifts_note)
 
     for key in bands:
         if not key.startswith("gap:"):
