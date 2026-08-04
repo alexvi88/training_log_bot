@@ -261,6 +261,90 @@ async def test_successful_question_spends_exactly_one(fresh_db, user_id, monkeyp
     assert await fresh_db.get_ai_question_count_today(user_id) == 1
 
 
+# ---------- rich answers (Bot API 10.1) ----------
+
+
+_TABLE_ANSWER = (
+    "Смотри цифры:\n\n"
+    "| Движение | Факт |\n"
+    "|---|---|\n"
+    "| **squat** | 140×6 |\n\n"
+    "Присед не раскрыт."
+)
+
+
+async def test_answer_goes_out_as_a_rich_message_when_the_server_supports_it(
+    fresh_db, user_id, monkeypatch
+):
+    """The model's markdown is handed to Telegram as-is so it parses the table
+    itself — a plain message has no table markup at all, and the pipes used to
+    reach the user verbatim."""
+    monkeypatch.setattr(ai_trainer.ai_trainer, "ask", AsyncMock(return_value=_TABLE_ANSWER))
+
+    state = await _make_state(user_id)
+    await state.set_state("AITrainerFlow:chatting")
+    message = _make_chat_message(user_id, "разбери мои цифры")
+    placeholder = message.answer.return_value
+    placeholder.bot.edit_message_text = AsyncMock()
+
+    await ai_trainer.ai_question(message, state)
+
+    rich = placeholder.bot.edit_message_text.await_args.kwargs["rich_message"]
+    assert rich.markdown == _TABLE_ANSWER
+    # The "думаю…" bubble is rewritten in place, not left behind next to the answer.
+    placeholder.edit_text.assert_not_awaited()
+
+
+async def test_answer_falls_back_to_plain_html_without_rich_support(fresh_db, user_id, monkeypatch):
+    """Servers and clients below 10.1 must still get the whole answer — with the
+    table flattened into readable lines rather than raw pipes."""
+    from aiogram.exceptions import TelegramBadRequest
+
+    monkeypatch.setattr(ai_trainer.ai_trainer, "ask", AsyncMock(return_value=_TABLE_ANSWER))
+
+    state = await _make_state(user_id)
+    await state.set_state("AITrainerFlow:chatting")
+    message = _make_chat_message(user_id, "разбери мои цифры")
+    placeholder = message.answer.return_value
+    placeholder.bot.edit_message_text = AsyncMock(
+        side_effect=TelegramBadRequest(method=MagicMock(), message="unknown field rich_message")
+    )
+    message.answer_rich = AsyncMock(
+        side_effect=TelegramBadRequest(method=MagicMock(), message="unknown method")
+    )
+
+    await ai_trainer.ai_question(message, state)
+
+    sent = placeholder.edit_text.await_args.args[0]
+    assert "|" not in sent
+    assert "<b>squat</b>" in sent
+    assert "Присед не раскрыт." in sent
+
+
+async def test_a_deleted_placeholder_still_gets_a_rich_answer(fresh_db, user_id, monkeypatch):
+    """The draft streamer deletes the placeholder when it starts typing, so
+    editing it fails — that's not the server refusing rich, and the answer
+    should still go out as one."""
+    from aiogram.exceptions import TelegramBadRequest
+
+    monkeypatch.setattr(ai_trainer.ai_trainer, "ask", AsyncMock(return_value=_TABLE_ANSWER))
+
+    state = await _make_state(user_id)
+    await state.set_state("AITrainerFlow:chatting")
+    message = _make_chat_message(user_id, "разбери мои цифры")
+    placeholder = message.answer.return_value
+    placeholder.bot.edit_message_text = AsyncMock(
+        side_effect=TelegramBadRequest(method=MagicMock(), message="message to edit not found")
+    )
+    message.answer_rich = AsyncMock()
+
+    await ai_trainer.ai_question(message, state)
+
+    rich = message.answer_rich.await_args.kwargs["rich_message"]
+    assert rich.markdown == _TABLE_ANSWER
+    placeholder.edit_text.assert_not_awaited()
+
+
 async def test_followup_question_does_not_clear_the_pending_program_draft(fresh_db, user_id, monkeypatch):
     """A9: a plain follow-up ("сколько отдыхать между подходами?") right after
     a program proposal used to null ai_program_draft on every turn, even one

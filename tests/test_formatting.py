@@ -231,29 +231,102 @@ def test_fit_workout_text_shrinks_summary_to_leave_room_for_suffix():
     assert text.endswith(suffix)
 
 
-# ---------- markdown_bold_to_html ----------
+# ---------- ai_markdown_to_html ----------
 
 
-def test_markdown_bold_to_html_converts_pairs():
-    assert formatting.markdown_bold_to_html("**pull down**") == "<b>pull down</b>"
+def test_ai_markdown_to_html_converts_pairs():
+    assert formatting.ai_markdown_to_html("**pull down**") == "<b>pull down</b>"
 
 
-def test_markdown_bold_to_html_leaves_unmatched_star_pair_as_literal():
+def test_ai_markdown_to_html_leaves_unmatched_star_pair_as_literal():
     # Simulates a ** pair split across two Telegram chunks: neither half should
     # produce an unclosed <b> tag.
-    assert formatting.markdown_bold_to_html("**pull down") == "**pull down"
+    assert formatting.ai_markdown_to_html("**pull down") == "**pull down"
 
 
-def test_markdown_bold_to_html_converts_headings_to_bold():
-    # Telegram has no heading markup; the model occasionally emits "#" headings
-    # despite being told not to, and they should not show up as literal hashes.
-    assert formatting.markdown_bold_to_html("### Итог") == "<b>Итог</b>"
+def test_ai_markdown_to_html_converts_headings_to_bold():
+    # A plain message has no heading markup, so "#" would reach the user as
+    # literal hashes.
+    assert formatting.ai_markdown_to_html("### Итог") == "<b>Итог</b>"
 
 
-def test_markdown_bold_to_html_strips_hashes_mid_text():
-    text = formatting.markdown_bold_to_html("Привет\n## Заголовок\nдальше текст")
+def test_ai_markdown_to_html_strips_hashes_mid_text():
+    text = formatting.ai_markdown_to_html("Привет\n## Заголовок\nдальше текст")
     assert "##" not in text
     assert "<b>Заголовок</b>" in text
+
+
+# ---------- markdown tables in the plain-message fallback ----------
+
+
+TABLE = (
+    "| Движение | Факт | e1RM |\n"
+    "|---|---|---|\n"
+    "| **conventional deadlift** | 210×3 | ~231 |\n"
+    "| **squat** | 140×6 | ~168 |"
+)
+
+
+def test_markdown_table_becomes_lines_with_header_names_inlined():
+    lines = formatting.markdown_tables_to_lines(TABLE).split("\n")
+    assert lines == [
+        "**conventional deadlift** — Факт: 210×3 · e1RM: ~231",
+        "**squat** — Факт: 140×6 · e1RM: ~168",
+    ]
+
+
+def test_ai_markdown_to_html_leaves_no_pipes_from_a_table():
+    html = formatting.ai_markdown_to_html(TABLE)
+    assert "|" not in html
+    assert "---" not in html
+    assert "<b>conventional deadlift</b>" in html
+
+
+def test_table_conversion_keeps_surrounding_text():
+    text = f"Смотри цифры:\n\n{TABLE}\n\nТяга — уже серьёзная."
+    out = formatting.markdown_tables_to_lines(text)
+    assert out.startswith("Смотри цифры:\n\n")
+    assert out.endswith("\n\nТяга — уже серьёзная.")
+
+
+def test_a_lone_pipe_in_prose_is_not_treated_as_a_table():
+    # No delimiter row underneath, so this is just a sentence that has a pipe in it.
+    text = "Жим | присед — выбирай сам."
+    assert formatting.markdown_tables_to_lines(text) == text
+
+
+def test_table_row_without_trailing_columns_still_renders():
+    text = "| Движение |\n|---|\n| **squat** |"
+    assert formatting.markdown_tables_to_lines(text) == "**squat**"
+
+
+# ---------- split_for_telegram ----------
+
+
+def test_split_for_telegram_keeps_short_text_in_one_chunk():
+    assert formatting.split_for_telegram("одна строка", 100) == ["одна строка"]
+
+
+def test_split_for_telegram_breaks_on_line_boundaries():
+    text = "\n".join(["строка один", "строка два", "строка три"])
+    chunks = formatting.split_for_telegram(text, 25)
+    assert all(len(c) <= 25 for c in chunks)
+    # Nothing is lost and no line is cut in half.
+    assert "\n".join(chunks).split("\n") == text.split("\n")
+
+
+def test_split_for_telegram_never_cuts_a_table_row_in_half():
+    text = "вступление\n" + TABLE
+    chunks = formatting.split_for_telegram(text, 60)
+    assert len(chunks) > 1
+    for chunk in chunks:
+        for line in chunk.split("\n"):
+            assert line in text.split("\n")
+
+
+def test_split_for_telegram_hard_cuts_a_line_longer_than_the_limit():
+    chunks = formatting.split_for_telegram("x" * 250, 100)
+    assert [len(c) for c in chunks] == [100, 100, 50]
 
 
 # ---------- build_ai_comment_block ----------

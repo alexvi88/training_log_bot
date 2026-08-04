@@ -877,6 +877,109 @@ def _try_claim_busy(user_id: int) -> bool:
     return True
 
 
+def _rich(markdown: str):
+    """Ответ тренера как rich-сообщение: markdown разбирает сам Telegram."""
+    from aiogram.types import InputRichMessage
+
+    return InputRichMessage(markdown=markdown)
+
+
+# Rich-сообщений может не быть по трём независимым причинам — сервер Bot API
+# ниже 10.1 (ошибка метода), aiogram без InputRichMessage (ImportError внутри
+# _rich) и не тот тип аргумента у старого метода. Разбирать их по отдельности
+# незачем: любая означает ровно одно — этому пользователю ответ уходит обычным
+# сообщением, как и до 10.1.
+_NO_RICH = (TelegramAPIError, AttributeError, TypeError, ImportError)
+
+
+async def _edit_rich(placeholder: Message, markdown: str, markup) -> bool:
+    """Переписать «думаю...» готовым ответом прямо на месте (rich_message у
+    editMessageText, Bot API 10.1) — placeholder уже висит на экране, и лишнее
+    сообщение вместо него читалось бы как ответ дважды."""
+    try:
+        await placeholder.bot.edit_message_text(
+            chat_id=placeholder.chat.id,
+            message_id=placeholder.message_id,
+            rich_message=_rich(markdown),
+            reply_markup=markup,
+        )
+        return True
+    except _NO_RICH:
+        return False
+
+
+async def _answer_rich(message: Message, markdown: str, markup) -> bool:
+    try:
+        await message.answer_rich(rich_message=_rich(markdown), reply_markup=markup)
+        return True
+    except _NO_RICH:
+        return False
+
+
+async def _send_rich_answer(
+    message: Message,
+    placeholder: Message,
+    chunks: list[str],
+    quota_md: str,
+    quota_html: str,
+    markup,
+) -> bool:
+    """Ответ тренера настоящим rich-сообщением (Bot API 10.1).
+
+    Модель отвечает markdown'ом, а обычное сообщение Telegram из всего markdown
+    понимает только жирный и курсив: заголовки приезжали решётками, таблицы —
+    палками и дефисами (см. ai_markdown_to_html, который это разгребает). В
+    rich-сообщении markdown разбирает сам Telegram — и таблица остаётся
+    таблицей, а заголовок заголовком.
+
+    False — rich не поддержан и НИЧЕГО не отправлено: вызывающая сторона шлёт
+    тот же ответ обычным HTML. Признаком служит первый же кусок: поддержка
+    рича — свойство сервера и клиента, а не конкретного сообщения, так что
+    отказ на первом означает отказ на всех. Сбой на любом следующем куске —
+    это уже частная неудача (ответ наполовину на экране), и хвост дошлём
+    обычным сообщением, чтобы он не потерялся вовсе.
+    """
+    for i, chunk in enumerate(chunks):
+        is_last = i == len(chunks) - 1
+        chunk_markup = markup if is_last else None
+        text = chunk + (quota_md if is_last else "")
+        if i == 0:
+            # placeholder мог быть уже удалён (черновик его гасит, см.
+            # on_draft_start) — тогда правка не пройдёт, и это не повод считать,
+            # что rich не поддержан: пробуем тем же ричем отдельным сообщением.
+            if not await _edit_rich(placeholder, text, chunk_markup) and not await _answer_rich(
+                message, text, chunk_markup
+            ):
+                return False
+            continue
+        if not await _answer_rich(message, text, chunk_markup):
+            await message.answer(
+                formatting.ai_markdown_to_html(chunk) + (quota_html if is_last else ""),
+                parse_mode="HTML",
+                reply_markup=chunk_markup,
+            )
+    return True
+
+
+async def _send_html_answer(
+    message: Message, placeholder: Message, chunks: list[str], quota_note: str, markup
+) -> None:
+    """Тот же ответ обычными сообщениями — путь для всех, у кого нет rich."""
+    for i, chunk in enumerate(chunks):
+        is_last = i == len(chunks) - 1
+        chunk_markup = markup if is_last else None
+        html_chunk = formatting.ai_markdown_to_html(chunk)
+        if is_last:
+            html_chunk += quota_note
+        if i == 0:
+            try:
+                await placeholder.edit_text(html_chunk, parse_mode="HTML", reply_markup=chunk_markup)
+                continue
+            except TelegramBadRequest:
+                pass  # разошлось с ротацией (например текст не изменился) — просто шлём отдельным сообщением
+        await message.answer(html_chunk, parse_mode="HTML", reply_markup=chunk_markup)
+
+
 async def _handle_question(
     message: Message,
     state: FSMContext,
@@ -964,7 +1067,9 @@ async def _handle_question(
     # Warn before the wall, not at it — the old behaviour only ever mentioned the
     # limit by refusing.
     left = config.AI_QUESTION_DAILY_LIMIT - (asked_today + 1)
-    quota_note = f"\n\n<i>Осталось вопросов сегодня: {left}</i>" if 0 < left <= _QUOTA_WARN_AT else ""
+    show_quota = 0 < left <= _QUOTA_WARN_AT
+    quota_html = f"\n\n<i>Осталось вопросов сегодня: {left}</i>" if show_quota else ""
+    quota_md = f"\n\n_Осталось вопросов сегодня: {left}_" if show_quota else ""
 
     history = (
         history
@@ -1005,20 +1110,11 @@ async def _handle_question(
         program_name=program_draft.get("name") if program_draft else None,
         draft_id=program_draft.get("id") if program_draft else None,
     )
-    chunks = [answer[i : i + TG_CHUNK] for i in range(0, len(answer), TG_CHUNK)]
-    for i, chunk in enumerate(chunks):
-        is_last = i == len(chunks) - 1
-        markup = reply_markup if is_last else None
-        html_chunk = formatting.markdown_bold_to_html(chunk)
-        if is_last:
-            html_chunk += quota_note
-        if i == 0:
-            try:
-                await placeholder.edit_text(html_chunk, parse_mode="HTML", reply_markup=markup)
-                continue
-            except TelegramBadRequest:
-                pass  # разошлось с ротацией (например текст не изменился) — просто шлём отдельным сообщением
-        await message.answer(html_chunk, parse_mode="HTML", reply_markup=markup)
+    chunks = formatting.split_for_telegram(answer, TG_CHUNK)
+    if not await _send_rich_answer(
+        message, placeholder, chunks, quota_md, quota_html, reply_markup
+    ):
+        await _send_html_answer(message, placeholder, chunks, quota_html, reply_markup)
 
 
 @router.message(AITrainerFlow.chatting, F.text)

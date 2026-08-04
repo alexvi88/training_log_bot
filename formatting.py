@@ -477,23 +477,95 @@ def fit_workout_text(build_summary, suffix: str, limit: int = MESSAGE_LIMIT) -> 
 
 _MD_BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
 _MD_HEADING_RE = re.compile(r"^#{1,6}[ \t]+(.*)$", re.MULTILINE)
+# Ячейку от ячейки отделяет неэкранированная палка: «\|» внутри текста ячейки
+# сама по себе разделителем не является.
+_MD_CELL_SPLIT_RE = re.compile(r"(?<!\\)\|")
 
 
-def markdown_bold_to_html(text: str) -> str:
-    """Converts **bold** markers from AI output into Telegram <b> tags.
+def _is_table_delimiter(line: str) -> bool:
+    """Строка-разделитель шапки markdown-таблицы («|---|---|», «|:--|--:|»).
 
-    The model is asked to wrap exercise names in ** using their exact display
-    names; everything else is escaped as plain text, so stray * or HTML-special
-    characters elsewhere in the text can't break the message. A ** pair split
-    across two chunks (e.g. by Telegram's message-length limit) just falls back
-    to literal escaped asterisks in both chunks rather than an unclosed tag.
-
-    The system prompt tells the model to never use "#" headings, but it slips
-    up occasionally — Telegram has no heading markup at all, so an unhandled
-    "### Foo" would otherwise render as literal hashes. Stripped here and bolded
-    instead, since that's the closest Telegram equivalent to what a heading
-    is for.
+    Именно она отличает таблицу от обычного текста, в котором просто попалась
+    палка, — поэтому таблицей считается только пара «строка + разделитель под
+    ней», а не всё подряд с «|».
     """
+    stripped = line.strip()
+    return "|" in stripped and "-" in stripped and not stripped.strip("|:- \t")
+
+
+def _split_cells(row: str) -> list[str]:
+    stripped = row.strip().strip("|")
+    return [cell.strip().replace("\\|", "|") for cell in _MD_CELL_SPLIT_RE.split(stripped)]
+
+
+def _table_as_lines(header: list[str], rows: list[list[str]]) -> list[str]:
+    """Таблица построчно: «первая ячейка — Шапка2: ячейка2 · Шапка3: ячейка3».
+
+    Разворот в строки, а не выравнивание пробелами: на телефоне таблица шире
+    двух колонок всё равно не помещается по ширине, а моноширинный блок с
+    выравниванием на узком экране рвётся переносами ещё некрасивее, чем
+    исходные палки. Имя из шапки уезжает к каждому значению — иначе, потеряв
+    выравнивание, значения теряют и смысл.
+    """
+    lines: list[str] = []
+    for row in rows:
+        label = row[0] if row else ""
+        rest = [
+            f"{header[i]}: {cell}" if i < len(header) and header[i] else cell
+            for i, cell in enumerate(row[1:], start=1)
+            if cell
+        ]
+        if label and rest:
+            lines.append(f"{label} — {' · '.join(rest)}")
+        elif label or rest:
+            lines.append(label or " · ".join(rest))
+    return lines
+
+
+def markdown_tables_to_lines(text: str) -> str:
+    """Разворачивает markdown-таблицы в обычные строки, остальной текст не трогает.
+
+    Нужно там, где ответ модели уходит обычным сообщением, а не rich-сообщением
+    (см. handlers.ai_trainer): в обычном сообщении разметки таблиц нет вовсе, и
+    «| Движение | Факт |» доезжает до пользователя ровно палками и дефисами.
+    """
+    lines = text.split("\n")
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        if "|" in lines[i] and i + 1 < len(lines) and _is_table_delimiter(lines[i + 1]):
+            header = _split_cells(lines[i])
+            i += 2
+            body: list[list[str]] = []
+            while i < len(lines) and "|" in lines[i]:
+                body.append(_split_cells(lines[i]))
+                i += 1
+            out.extend(_table_as_lines(header, body))
+            continue
+        out.append(lines[i])
+        i += 1
+    return "\n".join(out)
+
+
+def ai_markdown_to_html(text: str) -> str:
+    """Ответ модели (markdown) → HTML для обычного сообщения Telegram.
+
+    Фолбэк-путь: там, где сервер и клиент умеют rich-сообщения, тот же ответ
+    уходит markdown'ом целиком и разбирается самим Telegram (см.
+    handlers.ai_trainer._send_rich_answer) — тогда и таблицы, и заголовки
+    остаются настоящими. Здесь же вся разметка сводится к тому немногому, что
+    понимает обычное сообщение:
+
+    - **жирный** → <b>. Модель обязана оборачивать в ** названия упражнений;
+      всё остальное экранируется как обычный текст, поэтому шальная звёздочка
+      или «<» в ответе не сломают сообщение. Пара **, разорванная на границе
+      кусков (см. split_for_telegram), в обоих кусках останется буквальными
+      звёздочками, а не открытым тегом.
+    - «### Заголовок» → жирная строка: заголовков у обычного сообщения нет,
+      и решётки доехали бы до пользователя как есть.
+    - таблицы → строки (см. markdown_tables_to_lines).
+    """
+    text = markdown_tables_to_lines(text)
     text = _MD_HEADING_RE.sub(lambda m: f"**{m.group(1)}**", text)
     parts = []
     pos = 0
@@ -503,6 +575,36 @@ def markdown_bold_to_html(text: str) -> str:
         pos = m.end()
     parts.append(escape(text[pos:]))
     return "".join(parts)
+
+
+def split_for_telegram(text: str, limit: int) -> list[str]:
+    """Режет длинный ответ на сообщения по границам строк.
+
+    Резать вслепую по счётчику символов нельзя: разрыв посреди строки таблицы
+    оставляет в одном сообщении шапку, а в другом — хвост строки без единой
+    палки, и ни один из кусков уже не разберётся ни как таблица, ни как текст.
+    По строкам же куски остаются самостоятельными — и в rich-разметке, и в
+    HTML-фолбэке. Строку длиннее лимита целиком сохранить всё равно нельзя,
+    её режем как есть.
+    """
+    chunks: list[str] = []
+    current = ""
+    for line in text.split("\n"):
+        while len(line) > limit:
+            if current:
+                chunks.append(current)
+                current = ""
+            chunks.append(line[:limit])
+            line = line[limit:]
+        candidate = f"{current}\n{line}" if current else line
+        if len(candidate) > limit:
+            chunks.append(current)
+            current = line
+        else:
+            current = candidate
+    if current:
+        chunks.append(current)
+    return chunks or [text]
 
 
 def format_milestone_line(total_finished: int) -> str:
@@ -521,7 +623,7 @@ def build_ai_comment_block(comment: str) -> str:
     costs three lines and still reads as an opening sentence, and unfolding is
     a tap on the client (see collapsible).
     """
-    return f"{DIVIDER}\n🤖 <b>Комментарий AI-тренера</b>\n{collapsible_if_long(markdown_bold_to_html(comment))}"
+    return f"{DIVIDER}\n🤖 <b>Комментарий AI-тренера</b>\n{collapsible_if_long(ai_markdown_to_html(comment))}"
 
 
 
