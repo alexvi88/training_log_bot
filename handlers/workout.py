@@ -1876,6 +1876,31 @@ def _resolve_parsed_weights(data: dict, active: int, parsed: list[ParsedSet]) ->
     return resolved
 
 
+# Выше этого числа повторов под весом бот переспрашивает. Тридцать — это уже
+# сильно за пределами силовой работы, а вот типовые промахи ввода попадают сюда
+# все: «сто пятьдесят» без повторов (голос слышит одно число и берёт вес с
+# прошлого подхода — 100×150), «три подхода по сто на восемь» (3×100), «восемь по
+# сто» (8×100). Своим весом не ограничиваем: 50 отжиманий — обычное дело, а веса
+# там нет.
+_REPS_CONFIRM_ABOVE = 30
+
+
+def _suspicious_reps_warning(weight: float, reps: int) -> str | None:
+    """«100 кг × 150 повторов? Похоже на промах» — или None, если всё в порядке.
+
+    Вес до этого проверялся, повторы — нет вовсе (`parser.MAX_REPS` = 500, то
+    есть практически ничего). А цена промаха такая же: e1RM от 100×150 — это
+    600 кг, и оно становится вечным рекордом упражнения, попадает в тоннаж и в
+    Зал славы, откуда его уже не убрать.
+    """
+    if weight <= 0 or reps <= _REPS_CONFIRM_ABOVE:
+        return None
+    return (
+        f"⚠️ {formatting.format_set(weight, reps)}? Столько повторов под весом "
+        "похоже на промах — проверь, не перепутаны ли вес и повторы."
+    )
+
+
 def _weight_confirm_prompt(
     data: dict, active: int, resolved: list[ParsedSet], unit: str = "kg"
 ) -> str | None:
@@ -1887,10 +1912,17 @@ def _weight_confirm_prompt(
     all-time record, counts toward lifetime tonnage and unlocks weight-club
     achievements that are never revoked (see parser.MAX_WEIGHT), so a nudge
     under an already-saved set comes too late to prevent any of it.
+
+    Повторы проверяются здесь же и без истории: подозрительный вес виден только
+    на фоне прошлого раза, а полторы сотни повторов подозрительны сами по себе —
+    в том числе на первом подходе нового упражнения, где сравнивать не с чем.
     """
     last_session = (data.get("last_session_sets") or {}).get(active)
     for ps in resolved:
         warning = _suspicious_weight_warning(last_session, [(ps.weight, ps.reps)], unit)
+        if warning:
+            return warning
+        warning = _suspicious_reps_warning(ps.weight, ps.reps)
         if warning:
             return warning
     return None
