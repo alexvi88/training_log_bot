@@ -678,9 +678,14 @@ async def _menu_view(user_id: int) -> tuple[str, bytes | None]:
         return _GREETING, cached[1]
 
     this_monday = today - dt.timedelta(days=today.weekday())
-    year_ago = this_monday - dt.timedelta(weeks=52)
-    first_monday = min(dates) - dt.timedelta(days=min(dates).weekday())
-    heatmap_start = max(first_monday, year_ago)
+    # Год целиком, а не от первой тренировки. Обрезка по началу истории имела
+    # смысл в render_year_heatmap, где ширина картинки росла вместе с числом
+    # недель, — там она экономила место. В сводке ширина фиксирована, поэтому та
+    # же обрезка пустоту не экономит, а создаёт: у человека с девятью неделями
+    # сетка превращалась в островок посреди пустой полосы. Пустые недели до старта
+    # рисуются серым, как в гитхабе, и заодно честно показывают, что человек тут
+    # недавно.
+    heatmap_start = this_monday - dt.timedelta(weeks=52)
     # Счётчик под календарём считает только нарисованные клетки: подписать
     # «312 тренировок» под сеткой, которая показывает год из трёх, значило бы
     # объяснять картинку числом, которого в ней нет.

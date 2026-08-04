@@ -158,7 +158,8 @@ def _draw_volume_panel(
     ax.set_xlim(0, 1)
     ax.set_ylim(len(rows) - 0.35, -1.4)  # inverted: самая нагруженная группа сверху
 
-    ax.text(0.04, -0.95, title, color=muted, fontsize=8.5, fontweight="bold", va="center")
+    ax.text(DASH_LEFT, -0.95, title, color=muted, fontsize=DASH_FS_LABEL,
+            fontweight="bold", va="center")
 
     # Целевой коридор — одной подложкой на все строки, а не отдельной пометкой у
     # каждой полосы: норма одна и та же, и рисовать её семь раз значило бы семь
@@ -181,11 +182,12 @@ def _draw_volume_panel(
     ax.text(
         (lo + hi) / 2, -0.95,
         f"НОРМА {WEEKLY_VOLUME_MIN}–{WEEKLY_VOLUME_MAX}",
-        color=HEATMAP_FILLED, fontsize=7, ha="center", va="center",
+        color=HEATMAP_FILLED, fontsize=DASH_FS_CAPTION, ha="center", va="center",
     )
 
     for row, (label, sets, status) in enumerate(rows):
-        ax.text(_VOL_LABEL_RIGHT, row, label, color=muted, fontsize=8, ha="right", va="center")
+        ax.text(_VOL_LABEL_RIGHT, row, label, color=muted, fontsize=DASH_FS_CAPTION,
+                ha="right", va="center")
         ax.plot(
             [_VOL_TRACK_LEFT, _VOL_TRACK_RIGHT], [row, row],
             color=HEATMAP_EMPTY, linewidth=_VOL_BAR_WIDTH,
@@ -201,7 +203,7 @@ def _draw_volume_panel(
             )
         ax.text(
             _VOL_NUMBER_RIGHT, row, str(sets),
-            color=fg if sets else muted, fontsize=8.5,
+            color=fg if sets else muted, fontsize=DASH_FS_NUMBER,
             fontweight="bold" if sets else "normal", ha="right", va="center",
         )
 
@@ -298,9 +300,22 @@ def render_year_heatmap(
 # исходник держим узким. Одна колонка, а не две.
 DASH_WIDTH_IN = 6.67          # 1000 px при 150 dpi
 DASH_LEFT, DASH_RIGHT = 0.04, 0.96
-DASH_GAP = 0.34               # распорка между виджетами, дюймы
+DASH_GAP = 0.34               # распорка между виджетами, с линейкой
+DASH_PAD = 0.14               # распорка внутри группы, без линейки
 DASH_CARD = "#171d26"
 DASH_RULE = "#2b3543"
+
+# Типографика сводки: шесть роле́й вместо одиннадцати случайных размеров. До этого
+# в одной картинке жили 6, 6.5, 7, 7.5, 8, 8.5, 9, 10, 13.5, 15 и 23 pt, причём
+# подписи одного смысла — имя группы мышц и имя движения — отличались на полпункта.
+# Полпункта не видно как решение, зато видно как неряшливость. Роль выбирается по
+# тому, чем элемент является, а не по тому, сколько места осталось.
+DASH_FS_DISPLAY = 23    # крупное число шапки, одно на всю картинку
+DASH_FS_VALUE = 15      # число карточки: плитка, движение
+DASH_FS_NUMBER = 10     # число в строке: подходы, изменение e1RM
+DASH_FS_LABEL = 8.5     # подпись блока, плашка звания
+DASH_FS_CAPTION = 7.5   # имя элемента, примечание блока
+DASH_FS_MICRO = 6.5     # месяцы и дни недели календаря
 
 # Высоты виджетов в дюймах. Строка коридора и карточка движения заданы шагом,
 # чтобы блок рос от числа строк, а не растягивал их.
@@ -326,10 +341,10 @@ def _dash_section(ax, title: str, note: str = "", note_colour: str = HEATMAP_FIL
     """Подпись виджета. Всегда на DASH_LEFT, примечание — на DASH_RIGHT: три
     разных левых края в одной картинке читаются как небрежность, и именно так
     выглядела первая версия."""
-    ax.text(DASH_LEFT, -0.98, title, color="#9aa4b2", fontsize=8.5,
+    ax.text(DASH_LEFT, -0.98, title, color="#9aa4b2", fontsize=DASH_FS_LABEL,
             fontweight="bold", va="center")
     if note:
-        ax.text(DASH_RIGHT, -0.98, note, color=note_colour, fontsize=7.5,
+        ax.text(DASH_RIGHT, -0.98, note, color=note_colour, fontsize=DASH_FS_CAPTION,
                 ha="right", va="center")
 
 
@@ -369,16 +384,25 @@ def _dash_year_calendar(
     start = start - dt.timedelta(days=start.weekday())
     columns = max((today - start).days // 7 + 1, 1)
     x_units = DASH_WIDTH_IN / _DASH_CELL_IN
+    # Короткая история год не заполняет, и прижатая влево сетка читается островком
+    # в углу с пустотой до правого края. Центрируем её: тогда пустота
+    # симметрична и выглядит выбором, а не обрезком. Клетка при этом остаётся того
+    # же размера — растянуть девять недель на всю ширину значило бы вернуть полосы
+    # 8:1, из-за которых сплющивание и выбросили.
+    content_units = (DASH_RIGHT - DASH_LEFT) * x_units
+    left_units = _DASH_CAL_LEFT_UNITS
+    if columns < content_units:
+        left_units = max(left_units, (x_units - columns) / 2)
     ax.set_aspect("equal")
-    ax.set_xlim(-_DASH_CAL_LEFT_UNITS, x_units - _DASH_CAL_LEFT_UNITS)
+    ax.set_xlim(-left_units, x_units - left_units)
     ax.set_ylim(_DASH_CAL_BOTTOM_UNITS, _DASH_CAL_TOP_UNITS)
 
     blended = ax.get_yaxis_transform()
     if title:
-        ax.text(DASH_LEFT, -3.3, title, color="#9aa4b2", fontsize=8.5,
+        ax.text(DASH_LEFT, -3.3, title, color="#9aa4b2", fontsize=DASH_FS_LABEL,
                 fontweight="bold", va="center", transform=blended)
     if note:
-        ax.text(DASH_RIGHT, -3.3, note, color=HEATMAP_FILLED, fontsize=7.5,
+        ax.text(DASH_RIGHT, -3.3, note, color=HEATMAP_FILLED, fontsize=DASH_FS_CAPTION,
                 ha="right", va="center", transform=blended)
 
     for col in range(columns):
@@ -389,12 +413,15 @@ def _dash_year_calendar(
                 continue
             colour = HEATMAP_FILLED if day_counts.get(day, 0) > 0 else HEATMAP_EMPTY
             _rounded_cell(ax, col, row, 1, colour)
-        if col > 0 and monday.month != (monday - dt.timedelta(weeks=1)).month:
+        # Последние колонки подписи не получают: название месяца шире клетки, и у
+        # правого края оно выезжает за кадр обрезанным до одной буквы.
+        new_month = col > 0 and monday.month != (monday - dt.timedelta(weeks=1)).month
+        if new_month and col <= columns - 3:
             ax.text(col, -1.1, _MONTHS_RU[monday.month - 1], color="#6b7684",
-                    fontsize=6.5, va="center")
+                    fontsize=DASH_FS_MICRO, va="center")
 
     for row, label in ((0, "Пн"), (2, "Ср"), (4, "Пт")):
-        ax.text(-0.6, row + 0.55, label, color="#6b7684", fontsize=6,
+        ax.text(-0.6, row + 0.55, label, color="#6b7684", fontsize=DASH_FS_MICRO,
                 ha="right", va="center")
 
 
@@ -411,13 +438,14 @@ def _dash_lifts(ax, lifts, fg: str, dim: str, ok: str, title: str = "", note: st
     box = (DASH_RIGHT - DASH_LEFT - 0.02 * (len(lifts) - 1)) / len(lifts)
     for i, (name, series, value, delta) in enumerate(lifts):
         x0 = DASH_LEFT + i * (box + 0.02)
-        ax.text(x0, 0.02, name, color=dim, fontsize=7, va="center")
-        ax.text(x0, 0.34, value, color=fg, fontsize=13.5, fontweight="bold", va="center")
+        ax.text(x0, 0.02, name, color=dim, fontsize=DASH_FS_CAPTION, va="center")
+        ax.text(x0, 0.34, value, color=fg, fontsize=DASH_FS_VALUE,
+                fontweight="bold", va="center")
         if delta:
             # Минус не красится в зелёное: цвет здесь — единственное, что отличает
             # «вырос» от «просел», и покрасить откат как рост значило бы врать.
             ax.text(x0 + box, 0.34, delta, color=ok if delta.startswith("+") else dim,
-                    fontsize=9, fontweight="bold", ha="right", va="center")
+                    fontsize=DASH_FS_NUMBER, fontweight="bold", ha="right", va="center")
         if len(series) < 2:
             continue
         low, high = min(series), max(series)
@@ -471,7 +499,7 @@ def render_menu_dashboard(
     # разделять нечем: это одна группа, крупное число и его расшифровка.
     layout: list[tuple[str, float]] = [("head", _DASH_HEAD_H)]
     if tiles:
-        layout += [("pad:tiles", 0.10), ("tiles", _DASH_TILES_H)]
+        layout += [("pad:tiles", DASH_PAD), ("tiles", _DASH_TILES_H)]
     if rows:
         layout += [("gap:vol", DASH_GAP), ("vol", 0.34 + _DASH_VOL_STEP * len(rows))]
     layout += [("gap:cal", DASH_GAP), ("cal", _dash_calendar_height())]
@@ -498,14 +526,15 @@ def render_menu_dashboard(
 
     ax = band("head")
     ax.set_ylim(1, 0)
-    ax.text(DASH_LEFT, 0.50, headline, color=FG, fontsize=23, fontweight="bold", va="center")
+    ax.text(DASH_LEFT, 0.50, headline, color=FG, fontsize=DASH_FS_DISPLAY,
+            fontweight="bold", va="center")
     if badge:
         # Шире, чем кажется нужным: в лестнице званий есть «Ветеран подвала», и
         # плашка по короткому «Атлет» его бы обрезала. Эмодзи звания сюда не
         # едет — matplotlib рисует 🪨 и 👑 квадратиком, шрифта с эмодзи в
         # контейнере нет.
         _dash_card(ax, 0.70, 0.28, DASH_RIGHT - 0.70, 0.44, HEATMAP_EMPTY)
-        ax.text((0.70 + DASH_RIGHT) / 2, 0.50, badge, color=HEATMAP_FILLED, fontsize=10,
+        ax.text((0.70 + DASH_RIGHT) / 2, 0.50, badge, color=HEATMAP_FILLED, fontsize=DASH_FS_LABEL,
                 fontweight="bold", ha="center", va="center")
 
     if tiles:
@@ -515,8 +544,9 @@ def render_menu_dashboard(
         for i, (label, value) in enumerate(tiles):
             x = DASH_LEFT + i * (tile_w + 0.02)
             _dash_card(ax, x, 0.10, tile_w, 0.80)
-            ax.text(x + 0.022, 0.34, label, color=DIM, fontsize=7, va="center")
-            ax.text(x + 0.022, 0.66, value, color=FG, fontsize=15, fontweight="bold", va="center")
+            ax.text(x + 0.022, 0.34, label, color=DIM, fontsize=DASH_FS_CAPTION, va="center")
+            ax.text(x + 0.022, 0.66, value, color=FG, fontsize=DASH_FS_VALUE,
+                    fontweight="bold", va="center")
 
     if rows:
         ax = band("vol")
