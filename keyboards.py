@@ -1035,16 +1035,39 @@ def settings_keyboard(
     return b.as_markup()
 
 
+# Кнопки инструкций на экране /mcp. Порядок — от самых частых клиентов к
+# «всё остальное»; ключи совпадают с handlers.mcp_access.GUIDES.
+MCP_CLIENTS = [
+    ("claude_code", "🖥 Claude Code"),
+    ("claude_desktop", "💬 Claude Desktop"),
+    ("cursor", "🖱 Cursor"),
+    ("vscode", "🧩 VS Code"),
+    ("other", "⚙️ Другой клиент"),
+]
+
+
 def mcp_keyboard(has_token: bool) -> InlineKeyboardMarkup:
-    """Экран /mcp. Пока токена нет — одна осмысленная кнопка; когда есть —
-    перевыпуск и отзыв рядом, потому что нужны они всегда срочно."""
+    """Экран /mcp. Пока токена нет — одна осмысленная кнопка: инструкции без
+    токена показывать нечего. Когда есть — сначала «куда вставить» (это то, зачем
+    сюда пришли), а перевыпуск и отзыв внизу, но на том же экране: нужны они
+    всегда срочно."""
     b = InlineKeyboardBuilder()
     if has_token:
+        for kind, label in MCP_CLIENTS:
+            b.button(text=label, callback_data=f"mcp:how:{kind}")
         b.button(text="♻️ Перевыпустить токен", callback_data="mcp:issue")
         b.button(text="🗑 Отозвать токен", callback_data="mcp:revoke")
     else:
         b.button(text="🔑 Выдать токен", callback_data="mcp:issue")
     b.button(text="🔧 Настройки", callback_data="menu:settings")
+    b.adjust(1)
+    return b.as_markup()
+
+
+def mcp_guide_keyboard() -> InlineKeyboardMarkup:
+    """Экран инструкции: назад к токену и списку клиентов."""
+    b = InlineKeyboardBuilder()
+    b.button(text="⬅️ К подключению", callback_data="mcp:open")
     b.adjust(1)
     return b.as_markup()
 

@@ -147,10 +147,66 @@ def test_settings_shows_the_entry_only_when_deployed():
     assert "settings:mcp" not in buttons(False)
 
 
-def test_mcp_keyboard_offers_revoke_only_with_a_token():
-    def buttons(has_token: bool) -> list[str]:
-        kb = keyboards.mcp_keyboard(has_token)
-        return [b.callback_data for row in kb.inline_keyboard for b in row]
+def _buttons(kb) -> list[str]:
+    return [b.callback_data for row in kb.inline_keyboard for b in row]
 
-    assert buttons(False) == ["mcp:issue", "menu:settings"]
-    assert buttons(True) == ["mcp:issue", "mcp:revoke", "menu:settings"]
+
+def test_mcp_keyboard_offers_guides_and_revoke_only_with_a_token():
+    """Без токена инструкции показывать нечего — в них нечего вставлять."""
+    assert _buttons(keyboards.mcp_keyboard(False)) == ["mcp:issue", "menu:settings"]
+    assert _buttons(keyboards.mcp_keyboard(True)) == [
+        "mcp:how:claude_code",
+        "mcp:how:claude_desktop",
+        "mcp:how:cursor",
+        "mcp:how:vscode",
+        "mcp:how:other",
+        "mcp:issue",
+        "mcp:revoke",
+        "menu:settings",
+    ]
+
+
+def test_every_button_has_a_guide_behind_it():
+    """Кнопка без инструкции — это тап в никуда, и заметен он только руками."""
+    assert {kind for kind, _ in keyboards.MCP_CLIENTS} == set(mcp_access.GUIDES)
+
+
+@pytest.mark.parametrize("kind", list(mcp_access.GUIDES))
+async def test_guide_screen_carries_token_and_address(fresh_db, user_id, kind):
+    token = await fresh_db.issue_mcp_token(user_id)
+    callback = _callback(user_id, f"mcp:how:{kind}")
+    await mcp_access.mcp_guide(callback, await _state(user_id))
+
+    text = _sent_text(callback)
+    assert token in text
+    assert "https://training-log.example.com/mcp" in text
+    # Инструкция без пути назад — тупик: экран с токеном уже уехал вверх.
+    assert _buttons(callback.message.answer.call_args.kwargs["reply_markup"]) == ["mcp:open"]
+
+
+@pytest.mark.parametrize("kind", list(mcp_access.GUIDES))
+async def test_guide_fits_into_one_telegram_message(fresh_db, user_id, kind):
+    """4096 символов — жёсткий лимит Telegram: инструкция длиннее не отправится
+    вовсе, и вместо неё пользователь увидит ошибку."""
+    token = await fresh_db.issue_mcp_token(user_id)
+    assert len(mcp_access.GUIDES[kind][1](token)) < 4096
+
+
+async def test_guide_falls_back_to_the_main_screen_without_a_token(fresh_db, user_id):
+    """Токен могли отозвать с другого устройства, пока экран висел открытым."""
+    callback = _callback(user_id, "mcp:how:cursor")
+    await mcp_access.mcp_guide(callback, await _state(user_id))
+
+    text = _sent_text(callback)
+    assert "Выдать токен" in text
+    assert _buttons(callback.message.answer.call_args.kwargs["reply_markup"]) == [
+        "mcp:issue",
+        "menu:settings",
+    ]
+
+
+async def test_unknown_guide_does_not_crash(fresh_db, user_id):
+    await fresh_db.issue_mcp_token(user_id)
+    callback = _callback(user_id, "mcp:how:нет-такого")
+    await mcp_access.mcp_guide(callback, await _state(user_id))
+    assert _sent_text(callback)
