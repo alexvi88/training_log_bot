@@ -124,8 +124,17 @@ def client_display_name(metadata: Optional[str], client_id: str) -> str:
     return f"приложение {client_id[:8]}"
 
 
-async def issue_link_code(user_id: int) -> str:
-    """Код связывания для экрана /mcp."""
+async def link_code(user_id: int, force_new: bool = False) -> str:
+    """Код связывания для экрана /mcp.
+
+    По умолчанию отдаётся действующий, если он есть: человек мог уже скопировать
+    его и вернуться в бота перечитать шаг — выдать в этот момент новый значит
+    убить тот, что у него в браузере. Новый выдаётся только по явной кнопке.
+    """
+    if not force_new:
+        live = await db.get_live_oauth_link_code(user_id)
+        if live is not None:
+            return live
     return await db.issue_oauth_link_code(user_id, LINK_CODE_TTL)
 
 
@@ -251,10 +260,19 @@ class TrainingLogOAuthProvider:
             user_id=row["user_id"],
             scopes=scopes or json.loads(row["scopes"]),
             resource=row["resource"],
+            # Дата подключения переезжает в новую пару: человек подтвердил доступ
+            # один раз, а обновление токена — служебная механика, и показывать её
+            # как «подключено только что» неправда.
+            connected_at=row["connected_at"] or row["created_at"],
         )
 
     async def _issue_pair(
-        self, client_id: str, user_id: int, scopes: list[str], resource: Optional[str]
+        self,
+        client_id: str,
+        user_id: int,
+        scopes: list[str],
+        resource: Optional[str],
+        connected_at: Optional[str] = None,
     ) -> OAuthToken:
         access_token = secrets.token_urlsafe(32)
         refresh_token = secrets.token_urlsafe(32)
@@ -268,6 +286,7 @@ class TrainingLogOAuthProvider:
             resource=resource,
             expires_at=now + ACCESS_TOKEN_TTL,
             refresh_expires_at=now + REFRESH_TOKEN_TTL,
+            connected_at=connected_at,
         )
         logger.info("MCP OAuth: tokens issued for user %s, client %s", user_id, client_id)
         return OAuthToken(
@@ -411,7 +430,12 @@ def _consent_page(request_id: str, app_name: str, error: str = "") -> HTMLRespon
         '<div class="row">'
         '<button class="deny" type="submit" name="action" value="deny">Отмена</button>'
         '<button class="allow" type="submit" name="action" value="allow">Разрешить</button>'
-        "</div></form>",
+        "</div></form>"
+        # Для того, кто начал с приложения, а бота ещё не открывал: сказать, где
+        # код берётся, надо — но мелким шрифтом и после поля, чтобы не посылать
+        # туда того, у кого код уже есть.
+        '<p class="muted">Кода нет под рукой? В боте: <b>/mcp</b> → выбери своё '
+        "приложение, код будет в том же сообщении.</p>",
         status_code=200 if not error else 400,
     )
 

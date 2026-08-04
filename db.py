@@ -407,6 +407,9 @@ CREATE INDEX IF NOT EXISTS idx_oauth_auth_codes_expires ON oauth_auth_codes (exp
 -- парный, а держать их порознь — это способ про это забыть. Два срока на строку,
 -- потому что живут они по-разному: access — час, refresh — недели, и строка
 -- нужна, пока жив хотя бы refresh.
+-- connected_at — когда человек подтвердил доступ, а не когда выдана эта пара:
+-- обновление токена каждый час переписывало бы created_at, и экран «Подключённые
+-- приложения» показывал бы «подключено сегодня» тому, кто подключился месяц назад.
 CREATE TABLE IF NOT EXISTS oauth_tokens (
     access_token TEXT PRIMARY KEY,
     refresh_token TEXT UNIQUE,
@@ -417,6 +420,7 @@ CREATE TABLE IF NOT EXISTS oauth_tokens (
     expires_at REAL NOT NULL,
     refresh_expires_at REAL,
     created_at TEXT NOT NULL,
+    connected_at TEXT,
     last_used_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_oauth_tokens_user ON oauth_tokens (user_id);
@@ -548,6 +552,17 @@ async def _migrate_schema() -> None:
     set_cols = await _column_names("sets")
     if "load_weight" not in set_cols:
         await _conn.execute("ALTER TABLE sets ADD COLUMN load_weight REAL")
+
+    # Таблица завелась вместе с OAuth и уже могла уехать на прод без этой колонки:
+    # первая версия писала только created_at, который обновление токена переписывало.
+    oauth_token_cols = await _column_names("oauth_tokens")
+    if "connected_at" not in oauth_token_cols:
+        await _conn.execute("ALTER TABLE oauth_tokens ADD COLUMN connected_at TEXT")
+        # У уже выданных пар дата подключения неизвестна: created_at — лучшее, что
+        # есть, и для строк, которые ещё не обновлялись, он и есть верный ответ.
+        await _conn.execute(
+            "UPDATE oauth_tokens SET connected_at = created_at WHERE connected_at IS NULL"
+        )
 
     shared_cols = await _column_names("shared_items")
     if "taken_count" not in shared_cols:
@@ -3116,6 +3131,21 @@ async def issue_oauth_link_code(user_id: int, ttl_seconds: int, digits: int = 6)
     return code
 
 
+async def get_live_oauth_link_code(user_id: int) -> Optional[str]:
+    """Действующий код пользователя, если он ещё жив.
+
+    Нужен, чтобы повторное открытие инструкции не гасило код, который человек
+    уже скопировал: он вернулся перечитать шаг, а код в браузере от этого мёртвым
+    становиться не должен.
+    """
+    cur = await conn().execute(
+        "SELECT code FROM oauth_link_codes WHERE user_id = ? AND expires_at > ?",
+        (user_id, time.time()),
+    )
+    row = await cur.fetchone()
+    return row["code"] if row else None
+
+
 async def verify_oauth_link_code(
     request_id: str, code: str, max_attempts: int
 ) -> tuple[str, Optional[int]]:
@@ -3220,12 +3250,16 @@ async def create_oauth_token(
     resource: Optional[str],
     expires_at: float,
     refresh_expires_at: Optional[float],
+    connected_at: Optional[str] = None,
 ) -> None:
+    """`connected_at` передаётся при обновлении токена — это дата, когда человек
+    подтвердил доступ. Без него пара считается новым подключением."""
+    now = now_iso()
     async with _write_lock:
         await conn().execute(
             "INSERT INTO oauth_tokens (access_token, refresh_token, client_id, user_id, scopes, "
-            "resource, expires_at, refresh_expires_at, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "resource, expires_at, refresh_expires_at, created_at, connected_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 access_token,
                 refresh_token,
@@ -3235,7 +3269,8 @@ async def create_oauth_token(
                 resource,
                 expires_at,
                 refresh_expires_at,
-                now_iso(),
+                now,
+                connected_at or now,
             ),
         )
         await conn().commit()
@@ -3313,7 +3348,10 @@ async def list_oauth_connections(user_id: int) -> list[aiosqlite.Row]:
     now = time.time()
     cur = await conn().execute(
         "SELECT t.client_id AS client_id, c.metadata AS metadata, COUNT(*) AS tokens, "
-        "MIN(t.created_at) AS connected_at, MAX(t.last_used_at) AS last_used_at "
+        # Именно connected_at: created_at переписывается на каждом обновлении
+        # токена, то есть раз в час, и «подключено» уезжало бы вслед за ним.
+        "MIN(COALESCE(t.connected_at, t.created_at)) AS connected_at, "
+        "MAX(t.last_used_at) AS last_used_at "
         "FROM oauth_tokens t LEFT JOIN oauth_clients c ON c.client_id = t.client_id "
         "WHERE t.user_id = ? AND COALESCE(t.refresh_expires_at, t.expires_at) > ? "
         # client_id вторым ключом — чтобы список не перетасовывался между
@@ -3358,6 +3396,17 @@ async def purge_expired_oauth(now: Optional[float] = None) -> int:
         ):
             cur = await conn().execute(statement, (moment,))
             deleted += cur.rowcount
+        # Клиенты — последними, когда мёртвых токенов уже нет. Каждое «добавить
+        # коннектор» регистрирует нового: приложение, которое человек отключил или
+        # не довёл до конца, иначе остаётся в таблице навсегда. Ссылок на такую
+        # строку нет ни у токена, ни у заявки — она никому не нужна.
+        cur = await conn().execute(
+            "DELETE FROM oauth_clients WHERE client_id NOT IN "
+            "(SELECT client_id FROM oauth_tokens UNION "
+            " SELECT client_id FROM oauth_consent_requests UNION "
+            " SELECT client_id FROM oauth_auth_codes)"
+        )
+        deleted += cur.rowcount
         await conn().commit()
     return deleted
 

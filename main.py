@@ -197,7 +197,7 @@ def _public_commands() -> list[BotCommand]:
     # Только когда MCP реально куда-то ведёт: команда в «/»-меню обещает
     # работающую функцию, а без публичного адреса обещать нечего.
     if config.mcp_available():
-        commands.append(BotCommand(command="mcp", description="Подключить данные к Claude (MCP)"))
+        commands.append(BotCommand(command="mcp", description="Подключить данные к Claude и ChatGPT"))
     return commands
 
 

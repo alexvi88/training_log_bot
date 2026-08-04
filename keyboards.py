@@ -1029,7 +1029,7 @@ def settings_keyboard(
     # Скрыт, когда бот развёрнут без публичного адреса для MCP: подключать
     # тогда физически не к чему (см. config.mcp_available).
     if show_mcp:
-        b.button(text="🔌 Подключить к Claude (MCP)", callback_data="settings:mcp")
+        b.button(text="🔌 Подключить к Claude и ChatGPT", callback_data="settings:mcp")
     b.button(text="🏠 Меню", callback_data="settings:back")
     b.adjust(1)
     return b.as_markup()
@@ -1098,7 +1098,9 @@ def mcp_guide_keyboard(code_kind: str | None = None) -> InlineKeyboardMarkup:
     """
     b = InlineKeyboardBuilder()
     if code_kind:
-        b.button(text="🔄 Новый код", callback_data=f"mcp:how:{code_kind}")
+        # Суффикс :new — чтобы просто вернуться на этот экран можно было, не
+        # трогая код: человек мог его уже скопировать и зайти перечитать шаг.
+        b.button(text="🔄 Новый код", callback_data=f"mcp:how:{code_kind}:new")
     b.button(text="⬅️ К подключению", callback_data="mcp:open")
     b.adjust(1)
     return b.as_markup()
