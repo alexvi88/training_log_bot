@@ -558,6 +558,22 @@ def _table_as_lines(header: list[str], rows: list[list[str]]) -> list[str]:
     return lines
 
 
+def has_markdown_table(text: str) -> bool:
+    """Есть ли в тексте хоть одна markdown-таблица.
+
+    Это единственное, чего обычное сообщение не умеет вовсе (см.
+    markdown_tables_to_lines — там таблица разбирается на строки, потому что
+    другого выхода нет). Всё прочее — заголовки, списки, жирный — обычным
+    сообщением передаётся не хуже, поэтому по этому признаку и решается, стоит
+    ли ответ отправлять rich-сообщением: см. handlers.ai_trainer._handle_question.
+    """
+    lines = text.split("\n")
+    return any(
+        "|" in line and _is_table_delimiter(lines[i + 1])
+        for i, line in enumerate(lines[:-1])
+    )
+
+
 def markdown_tables_to_lines(text: str) -> str:
     """Разворачивает markdown-таблицы в обычные строки, остальной текст не трогает.
 

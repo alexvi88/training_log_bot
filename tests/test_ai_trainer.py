@@ -586,7 +586,7 @@ async def test_ask_logs_question_and_search_usage(fresh_db, user_id, monkeypatch
     [record] = [r for r in caplog.records if "AI trainer question" in r.message]
     message = record.getMessage()
     assert "Что нового в исследованиях?" in message
-    assert "web search used: True" in message
+    assert "web search: used" in message
 
 
 async def test_ask_logs_question_without_search_usage(fresh_db, user_id, monkeypatch, caplog):
@@ -601,7 +601,9 @@ async def test_ask_logs_question_without_search_usage(fresh_db, user_id, monkeyp
     [record] = [r for r in caplog.records if "AI trainer question" in r.message]
     message = record.getMessage()
     assert "Как мои дела?" in message
-    assert "web search used: False" in message
+    # The gate said yes, the search step just came back empty — the log now
+    # names that outcome instead of flattening every no-search case to "False".
+    assert "web search: ran but found nothing" in message
 
 
 async def test_web_search_findings_passes_only_server_side_tools(fresh_db, user_id, monkeypatch):
@@ -658,6 +660,41 @@ async def test_search_worth_it_returns_false_on_no_and_on_error(fresh_db, user_i
     monkeypatch.setattr(ai_trainer, "_get_client", lambda: err_client)
     # Ошибка гейта не должна валить ответ — просто не ищем.
     assert await ai_trainer._search_worth_it(user_id, "Вопрос", history=[]) is False
+
+
+async def test_search_gate_leaves_room_for_reasoning_tokens(fresh_db, user_id, monkeypatch):
+    """The gate answers in one word, but a reasoning model spends the same
+    budget thinking first. The old 3-token ceiling was consumed inside the
+    reasoning, the content came back empty, and an empty verdict reads as "not
+    YES" — so live search never ran, whatever the question."""
+    client = _fake_client([_response(content="YES")])
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+
+    await ai_trainer._search_worth_it(user_id, "Что нового?", history=[])
+
+    assert client.chat.completions.create.await_args.kwargs["max_tokens"] >= 128
+
+
+async def test_search_gate_treats_an_empty_verdict_as_no_and_says_so(
+    fresh_db, user_id, monkeypatch, caplog
+):
+    """Truncated or refused — either way there's no verdict. Not searching is
+    still the right call, but it must be visible in the log rather than silent."""
+    client = _fake_client([_response(content="")])
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+
+    with caplog.at_level(logging.WARNING, logger="ai_trainer"):
+        assert await ai_trainer._search_worth_it(user_id, "Что нового?", history=[]) is False
+
+    assert any("empty verdict" in r.getMessage() for r in caplog.records)
+
+
+async def test_search_gate_survives_a_verdict_wrapped_in_markdown(fresh_db, user_id, monkeypatch):
+    """Losing live search over a pair of asterisks would be a silly way to fail."""
+    client = _fake_client([_response(content="**YES**")])
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+
+    assert await ai_trainer._search_worth_it(user_id, "Что нового?", history=[]) is True
 
 
 # ---------- image input (text+img and img-only questions) ----------

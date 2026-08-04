@@ -2155,15 +2155,21 @@ async def ask(
     # дорогая модель не дёргается на каждый вопрос (большинство — про личные данные,
     # поиска не требуют). Порядок в and важен: короткое замыкание не даёт вызвать
     # гейт при исчерпанной квоте.
+    # Исход пишем словами, а не bool: «False» одинаково значил и «квота
+    # кончилась», и «гейт сказал нет», и «поиск отработал, но ничего не
+    # принёс». Сломанный гейт (см. _SEARCH_GATE_MAX_TOKENS) в этом логе был
+    # неотличим от честного отказа — и потому прожил незамеченным.
     search_context = None
-    if (
-        await db.get_ai_search_count_today(user_id) < config.AI_SEARCH_DAILY_LIMIT
-        and await _search_worth_it(user_id, question, history)
-    ):
+    if await db.get_ai_search_count_today(user_id) >= config.AI_SEARCH_DAILY_LIMIT:
+        search_outcome = "skipped: daily limit reached"
+    elif not await _search_worth_it(user_id, question, history):
+        search_outcome = "skipped: gate says not needed"
+    else:
         search_context = await _web_search_findings(user_id, question, history, on_status)
+        search_outcome = "used" if search_context else "ran but found nothing"
     logger.info(
-        "AI trainer question from user %s: %r (web search used: %s)",
-        user_id, question, bool(search_context),
+        "AI trainer question from user %s: %r (web search: %s)",
+        user_id, question, search_outcome,
     )
     return await _ask_plain(
         user_id, question, history, image_data_url, search_context, on_status, on_program,
@@ -2371,6 +2377,16 @@ def _to_xai_messages(
     return out
 
 
+# Гейт отвечает одним словом — но отвечает им ризонинговая модель, а
+# reasoning-токены списываются из того же бюджета, что и ответ. На прежних
+# max_tokens=3 бюджет заканчивался внутри размышления, наружу приходил ПУСТОЙ
+# content, а пустой вердикт — это «не YES»: живой поиск не поднимался никогда,
+# как бы вопрос его ни просил («что там по свежим исследованиям, со ссылками»
+# — тоже нет). Потолок щедрый намеренно: платим за реально сгенерированное, а
+# односложный ответ столько не сгенерирует ни при каком раскладе.
+_SEARCH_GATE_MAX_TOKENS = 512
+
+
 async def _search_worth_it(
     user_id: int,
     question: str,
@@ -2394,7 +2410,7 @@ async def _search_worth_it(
         client = _get_client()
         response = await client.chat.completions.create(
             model=config.GROK_MODEL,
-            max_tokens=3,
+            max_tokens=_SEARCH_GATE_MAX_TOKENS,
             extra_body={"reasoning_effort": config.GROK_QUICK_REASONING_EFFORT},
             messages=[
                 {"role": "system", "content": _search_decision_system_prompt()},
@@ -2407,7 +2423,15 @@ async def _search_worth_it(
         return False
     await _log_llm_cost(user_id, config.GROK_MODEL, getattr(response, "usage", None))
     verdict = (response.choices[0].message.content or "").strip().upper()
-    return verdict.startswith("YES")
+    if not verdict:
+        # Пустой content — почти всегда обрезанный бюджет (см.
+        # _SEARCH_GATE_MAX_TOKENS). Раньше это молча означало «не искать», и
+        # отличить сломанный гейт от честного NO было нельзя ничем.
+        logger.warning("AI trainer search gate returned an empty verdict, skipping live search")
+        return False
+    # Модель просят ответить голым словом, но она нет-нет да обернёт его в
+    # markdown или кавычки — из-за «**YES**» терять живой поиск глупо.
+    return verdict.lstrip("*_`'\"«# ").startswith("YES")
 
 
 async def _web_search_findings(
