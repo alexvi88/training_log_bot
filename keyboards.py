@@ -76,6 +76,8 @@ def ai_trainer_keyboard(
     page: int = 0,
     program_name: str | None = None,
     draft_id: int | None = None,
+    programs: Sequence[Any] = (),
+    delete_target: Any = None,
 ) -> InlineKeyboardMarkup:
     """`exercises` — то, что тренер упомянул в ответе (см. exercise_mentions), и
     свои упражнения, и ещё не добавленные из каталога — до
@@ -97,14 +99,26 @@ def ai_trainer_keyboard(
     название программы читалось как «открыть программу», а не как предложение,
     которое ждёт подтверждения (см. 5.1).
 
+    `programs` — сохранённые программы, которые тренер назвал в ответе (см.
+    program_mentions): ответ вроде «две «Вики» — дубликаты друг друга» знает,
+    о чём говорит, и кнопка под ним должна открывать ровно это, а не
+    отправлять человека искать программу руками в ⚙️ Программы.
+
+    `delete_target` — программа, удаление которой тренер предложил в этом ходе
+    (см. ai_trainer.delete_program). Сам он ничего не удаляет: кнопка ведёт на
+    тот же экран подтверждения, что и удаление руками, — там и проверка
+    владельца, и «точно?». Стоит отдельной строкой над списком и не листается:
+    это ответ на прямую просьбу, а не подсказка по тексту.
+
     Программа, если есть, идёт первым пунктом общего списка и делит с
     упоминаниями упражнений один и тот же лимит и постраничную навигацию
     (AI_MENTION_PAGE_SIZE штук за раз, ⬅️/➡️ если пунктов больше) — иначе она
-    съедала бы место сверх лимита. id упомянутых упражнений едут прямо в
+    съедала бы место сверх лимита. Ссылки на упомянутое едут прямо в
     callback_data стрелок (см. handlers/ai_trainer.ai_mentions_page), отдельного
     состояния для них не нужно.
     """
     exercises = list(exercises)
+    programs = list(programs)
     b = InlineKeyboardBuilder()
     b.button(text="🏠 Меню", callback_data="ai:menu")
     if has_active_workout:
@@ -116,8 +130,8 @@ def ai_trainer_keyboard(
 
     # A sentinel up front so the program shares pagination with the mentions
     # instead of always occupying an extra row above the limit.
-    _PROGRAM = object()
-    items = ([_PROGRAM] if program_name else []) + exercises
+    _DRAFT = object()
+    items = ([_DRAFT] if program_name else []) + [("saved", p) for p in programs] + exercises
 
     start = page * AI_MENTION_PAGE_SIZE
     page_items = items[start : start + AI_MENTION_PAGE_SIZE]
@@ -126,10 +140,12 @@ def ai_trainer_keyboard(
     # ещё не добавленное из каталога (📋) — не путаются друг с другом.
     item_rows = []
     for item in page_items:
-        if item is _PROGRAM:
+        if item is _DRAFT:
             emoji = "🗂"
             callback_data = f"ai:prog:view:{draft_id}"
             label = f"Забрать: {program_name}"
+        elif isinstance(item, tuple):
+            emoji, callback_data, label = "🗂", ai_program_open_cb(item[1]), item[1]["name"]
         elif item["is_template"]:
             emoji, callback_data, label = "📋", f"ai:tpladd:{item['id']}", item["display_name"]
         else:
@@ -145,14 +161,52 @@ def ai_trainer_keyboard(
 
     page_nav = []
     if len(items) > AI_MENTION_PAGE_SIZE:
-        ids = ",".join(str(ex["id"]) for ex in exercises)
+        # Программы едут теми же стрелками, что и упражнения, — с префиксом
+        # p/r, чтобы обработчик знал, многодневка это или одиночный день, и не
+        # ходил за этим в базу лишний раз.
+        refs = [ai_mention_ref(p) for p in programs] + [str(ex["id"]) for ex in exercises]
+        joined = ",".join(refs)
         if page > 0:
-            page_nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"ai:mpage:{page - 1}:{ids}"))
+            page_nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"ai:mpage:{page - 1}:{joined}"))
         if start + AI_MENTION_PAGE_SIZE < len(items):
-            page_nav.append(InlineKeyboardButton(text="➡️", callback_data=f"ai:mpage:{page + 1}:{ids}"))
+            page_nav.append(InlineKeyboardButton(text="➡️", callback_data=f"ai:mpage:{page + 1}:{joined}"))
     page_nav_rows = [page_nav] if page_nav else []
 
-    return InlineKeyboardMarkup(inline_keyboard=item_rows + page_nav_rows + nav)
+    delete_rows = []
+    if delete_target:
+        delete_rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"🗑 {_shorten_label('Удалить: ' + delete_target['name'], AI_MENTION_LABEL_LIMIT)}",
+                    callback_data=ai_program_delete_cb(delete_target),
+                )
+            ]
+        )
+
+    return InlineKeyboardMarkup(inline_keyboard=delete_rows + item_rows + page_nav_rows + nav)
+
+
+def ai_mention_ref(target: Any) -> str:
+    """Программа в callback_data стрелок листания: «p12» — многодневка, «r7» —
+    одиночная (у них разные экраны и разные таблицы, id между собой не
+    пересекаются только внутри своей)."""
+    return ("p" if target["kind"] == "program" else "r") + str(target["id"])
+
+
+def ai_program_open_cb(target: Any) -> str:
+    """Чем открывается сохранённая программа: многодневка — своим экраном,
+    одиночная — карточкой единственного дня."""
+    if target["kind"] == "program":
+        return f"rt:prg:{target['id']}"
+    return f"rt:view:{target['id']}"
+
+
+def ai_program_delete_cb(target: Any) -> str:
+    """Экран подтверждения удаления — тот же, что и при удалении руками: там
+    и проверка владельца, и «точно?». Тренер сам ничего не сносит."""
+    if target["kind"] == "program":
+        return f"rt:pgmdelask:{target['id']}"
+    return f"rt:delask:{target['id']}"
 
 
 def ai_program_preview_keyboard(replacing: bool = False, draft_id: int = 0) -> InlineKeyboardMarkup:
@@ -461,7 +515,7 @@ def exercise_picker_entry_keyboard(
 _PLAN_LABEL_MAX = 44
 
 
-def planned_plan_keyboard(items: list[tuple[int, str]]) -> InlineKeyboardMarkup:
+def planned_plan_keyboard(items: list[tuple[int, str]], *, removing: bool = False) -> InlineKeyboardMarkup:
     """What's left of the program, any of it startable right now.
 
     `items` — (position in planned_blocks, label) in program order. The program's
@@ -469,21 +523,27 @@ def planned_plan_keyboard(items: list[tuple[int, str]]) -> InlineKeyboardMarkup:
     session to wait, so every remaining exercise is one tap away and the rest keep
     their order after it.
 
-    Each row also carries a small "✕" — for a machine that's actually broken
-    (not just busy today), rather than one that stays queued for the rest of
-    the session with no way off. It's a separate, narrower button rather than
-    a second tap-state on the row's main button so it can't be hit by accident:
-    the wide pick button stays the primary action.
+    Каждая строка — на всю ширину. «Убрать из плана» (для тренажёра, который
+    реально сломан, а не просто занят) раньше висело крестиком в той же строке,
+    но Telegram делит строку из двух кнопок пополам: половину экрана занимали
+    ✕, а названия упражнений обрезались до «Сгибание но…ре». Посреди
+    тренировки нужен список того, что делать, — убирание из плана ушло под
+    отдельную кнопку внизу (`removing=True` перерисовывает тот же список, где
+    тап убирает строку).
     """
     b = InlineKeyboardBuilder()
+    action = "skip" if removing else "pick"
     for index, label in items:
         b.row(
             InlineKeyboardButton(
-                text=_tab_label(label, _PLAN_LABEL_MAX), callback_data=f"live:plan:pick:{index}",
+                text=_tab_label(label, _PLAN_LABEL_MAX), callback_data=f"live:plan:{action}:{index}",
             ),
-            InlineKeyboardButton(text="✕", callback_data=f"live:plan:skip:{index}"),
         )
-    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="live:plan:back"))
+    if removing:
+        b.row(InlineKeyboardButton(text="✅ Готово", callback_data="live:plan"))
+    else:
+        b.row(InlineKeyboardButton(text="✕ Убрать из плана", callback_data="live:plan:rm"))
+        b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="live:plan:back"))
     return b.as_markup()
 
 

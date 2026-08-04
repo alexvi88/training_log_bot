@@ -280,7 +280,7 @@ async def _idle_view(
         recent = [(r["id"], r["display_name"]) for r in rows]
     kb = keyboards.exercise_picker_entry_keyboard(
         has_planned=has_planned, suggested=suggested, is_empty=is_empty, recent=recent,
-        planned_next_name=(await _planned_block_label(planned[0], with_target=False)) if planned else None,
+        planned_next_name=(await _planned_block_label(planned[0])) if planned else None,
         planned_left=len(planned),
     )
     return hint, kb
@@ -1124,7 +1124,7 @@ def _repeat_workout_block(i: int, date: str, exercises: list[tuple[str, str]]) -
     if not exercises:
         return f"{header}\nнет упражнений"
     bullets = "\n".join(
-        f"• {escape(name)} [{escape(formatting.format_group(group))}]" if group else f"• {escape(name)}"
+        f"• {escape(name)} [{escape(formatting.format_group_tag(group))}]" if group else f"• {escape(name)}"
         for name, group in exercises
     )
     return f"{header}\n{bullets}"
@@ -1375,6 +1375,13 @@ async def _enter_live(
 _RECOVERY_MENTION_BELOW = 85
 _RECOVERY_MAX_MENTIONS = 3
 
+# «Другое» — мешок для пресса, предплечий, трапеций и всего, что не легло в шесть
+# основных групп. «Другое — 31% восстановления» не подсказывает ничего: это не
+# мышца, которую можно поберечь сегодня, и утомление в нём складывается из
+# упражнений на разные части тела. Из подсказки о восстановлении его убираем —
+# в самом списке групп он остаётся.
+_RECOVERY_SKIP_GROUPS = {"другое"}
+
 # Окно и лимит для «программ, по которым тренируешься сейчас» на первом экране
 # выбора (см. db.list_recent_programs) — не весь список сохранённых программ,
 # а те несколько, что реально были в ходу за последний месяц.
@@ -1398,6 +1405,8 @@ async def _recovery_line(user_id: int, groups) -> str:
     today = timeutil.user_today(await db.get_user(user_id))
     spent = []
     for group in groups:
+        if group["name"].strip().lower() in _RECOVERY_SKIP_GROUPS:
+            continue
         entry = last.get(group["id"])
         if entry is None:
             continue
@@ -2339,21 +2348,19 @@ async def live_pick_suggested(callback: CallbackQuery, state: FSMContext):
     await _on_exercise_chosen(callback, state, ex_id)
 
 
-async def _planned_block_label(block_plan: dict, with_target: bool = True) -> str:
-    """How a queued block reads on a button — exercise name (supersets joined
-    with "+"), plus the program's sets/reps scheme when there is one."""
-    ex_ids = list(block_plan.get("exercise_ids") or [])
+async def _planned_block_label(block_plan: dict) -> str:
+    """How a queued block reads on a button — только название упражнения
+    (суперсет — через «+»).
+
+    Схему подходов («— 3×8–12») кнопка раньше дописывала, и на неё уходила
+    половина строки: на экране выбора решают, что делать, а не сколько, а сама
+    схема всё равно стоит в карточке упражнения, как только его открыл.
+    """
     names = []
-    for ex_id in ex_ids:
+    for ex_id in list(block_plan.get("exercise_ids") or []):
         ex = await db.get_exercise(ex_id)
         names.append(ex["display_name"] if ex else "упражнение")
-    label = " + ".join(names) or "упражнение"
-    if with_target:
-        targets = block_plan.get("targets") or {}
-        target = next((targets[i] for i in ex_ids if targets.get(i)), None)
-        if target:
-            return f"{label} — {target}"
-    return label
+    return " + ".join(names) or "упражнение"
 
 
 def _drop_planned_exercise(planned: list[dict], ex_id: int) -> list[dict]:
@@ -2486,6 +2493,26 @@ async def live_next_planned(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+_PLAN_HINT = "📋 <b>Осталось по программе</b>\nВыбери, что делать сейчас — порядок не обязателен."
+_PLAN_REMOVE_HINT = "📋 <b>Убрать из плана</b>\nТапни то, чего сегодня не будет."
+
+
+async def _plan_screen(callback: CallbackQuery, state: FSMContext, *, removing: bool = False):
+    """Список оставшегося по программе — или он же в режиме «убрать»."""
+    data = await state.get_data()
+    planned = list(data.get("planned_blocks") or [])
+    user = await db.get_user(callback.from_user.id)
+    if not planned:
+        await _enter_program_complete_screen(callback.bot, state, user, data["workout_id"])
+        return
+    items = [(i, await _planned_block_label(b)) for i, b in enumerate(planned)]
+    await _refresh_live(
+        callback.bot, state, user, data["workout_id"],
+        _PLAN_REMOVE_HINT if removing else _PLAN_HINT,
+        keyboards.planned_plan_keyboard(items, removing=removing),
+    )
+
+
 @router.callback_query(StateFilter(WorkoutFlow.idle), F.data == "live:plan")
 async def live_plan(callback: CallbackQuery, state: FSMContext):
     """Всё, что осталось в программе, — списком, любое можно начать сейчас.
@@ -2493,19 +2520,14 @@ async def live_plan(callback: CallbackQuery, state: FSMContext):
     Порядок в программе остаётся порядком по умолчанию (кнопка «▶️» сверху), а
     этот экран — ответ на «тренажёр занят»: берёшь следующее по факту, остальное
     никуда не девается и ждёт своей очереди."""
-    data = await state.get_data()
-    planned = list(data.get("planned_blocks") or [])
-    if not planned:
-        user = await db.get_user(callback.from_user.id)
-        await _enter_program_complete_screen(callback.bot, state, user, data["workout_id"])
-        await callback.answer()
-        return
-    items = [(i, await _planned_block_label(b)) for i, b in enumerate(planned)]
-    hint = "📋 <b>Осталось по программе</b>\nВыбери, что делать сейчас — порядок не обязателен."
-    user = await db.get_user(callback.from_user.id)
-    await _refresh_live(
-        callback.bot, state, user, data["workout_id"], hint, keyboards.planned_plan_keyboard(items),
-    )
+    await _plan_screen(callback, state)
+    await callback.answer()
+
+
+@router.callback_query(StateFilter(WorkoutFlow.idle), F.data == "live:plan:rm")
+async def live_plan_remove_mode(callback: CallbackQuery, state: FSMContext):
+    """Тот же список, но тап убирает упражнение из плана, а не начинает его."""
+    await _plan_screen(callback, state, removing=True)
     await callback.answer()
 
 
@@ -2524,10 +2546,10 @@ async def live_plan_skip(callback: CallbackQuery, state: FSMContext):
     actually broken (not just busy), "тренажёр занят" (live_plan_pick, the
     primary action on each row) doesn't help: the exercise would just sit
     queued for the rest of the session. This never opens anything, so unlike
-    live_plan_pick it re-renders the same 📋 screen (minus the dropped row)
-    rather than falling through to the logging screen — except when that was
-    the last thing left, which is the same "program done" moment picking the
-    last exercise would have reached.
+    live_plan_pick it stays on the 📋 screen — in the same «убрать» mode, so
+    two broken machines are two taps, not two trips through the menu — minus
+    the dropped row. Except when that was the last thing left, which is the
+    same "program done" moment picking the last exercise would have reached.
     """
     index = int(callback.data.split(":")[3])
     data = await state.get_data()
@@ -2537,16 +2559,8 @@ async def live_plan_skip(callback: CallbackQuery, state: FSMContext):
         return
     planned.pop(index)
     await state.update_data(planned_blocks=planned)
-    user = await db.get_user(callback.from_user.id)
-    if planned:
-        items = [(i, await _planned_block_label(b)) for i, b in enumerate(planned)]
-        hint = "📋 <b>Осталось по программе</b>\nВыбери, что делать сейчас — порядок не обязателен."
-        await _refresh_live(
-            callback.bot, state, user, data["workout_id"], hint, keyboards.planned_plan_keyboard(items),
-        )
-    else:
-        await _enter_program_complete_screen(callback.bot, state, user, data["workout_id"])
-    await callback.answer("Пропустил")
+    await _plan_screen(callback, state, removing=True)
+    await callback.answer("Убрал")
 
 
 @router.callback_query(StateFilter(WorkoutFlow.idle), F.data == "live:plan:back")

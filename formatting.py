@@ -108,6 +108,20 @@ def format_group(name: str) -> str:
     return name.upper()
 
 
+def format_group_tag(name: str) -> str:
+    """Группа в квадратных скобках рядом с названием упражнения — как есть.
+
+    Капс (см. format_group) работает там, где группа стоит сама по себе:
+    кнопка, заголовок экрана. В строке «Румынская тяга [НОГИ]» скобок уже
+    хватает, чтобы отделить тег от названия, а капс поверх них просто кричит
+    из середины сводки.
+
+    Экранирование остаётся на вызывающем: этим же тегом подписаны и картинки,
+    где HTML не при чём.
+    """
+    return name.strip()
+
+
 def clamp_caption(text: str, limit: int = CAPTION_LIMIT) -> str:
     """Подпись к фото, гарантированно влезающая в лимит Telegram.
 
@@ -442,7 +456,7 @@ def _collapse_formatted_sets(formatted: list[str]) -> list[str]:
 
 def _render_single_block(block: ExerciseBlockView, show_extra: bool, unit: str = "kg") -> list[str]:
     u = UNIT_LABELS.get(unit, "кг")
-    label = f"{escape(block.exercise_name)} [{format_group(block.group_name)}]"
+    label = f"{escape(block.exercise_name)} [{escape(format_group_tag(block.group_name))}]"
     lines = [f"<b>{label}</b>"]
     if block.note:
         lines.append(f"  📝 <i>{escape(block.note)}</i>")
@@ -1351,7 +1365,7 @@ def build_workout_card(
     tonnage = 0.0
 
     for block in blocks:
-        body.append(f"{block.exercise_name} [{format_group(block.group_name)}]")
+        body.append(f"{block.exercise_name} [{format_group_tag(block.group_name)}]")
         if block.sets:
             # Same "190×5 ×3" collapsing the text card uses — a straight run of
             # work sets otherwise spells every one of them out, which on the image
@@ -1476,13 +1490,19 @@ def _iso_to_ru(day: str) -> str:
 
 
 def format_pr_detail(kind: str, value: float, extra: float | None = None, unit: str = "kg") -> str:
-    """A single PR line, scoped to an exercise that's already named by its surrounding header."""
+    """A single PR line, scoped to an exercise that's already named by its surrounding header.
+
+    Без 🔥 в начале: блок целиком уже подписан «🔥 Рекорды и сравнения», и на
+    тренировке, где рекордов несколько, тот же огонёк повторялся в каждой
+    строке — сигнал перестаёт работать ровно тогда, когда его больше всего.
+    Строки идут маркером, как соседняя строка сравнения с её «↑».
+    """
     u = UNIT_LABELS.get(unit, "кг")
     if kind == "e1rm":
-        return f"🔥 Новый рекорд e1RM: {value:.1f}{u}"
+        return f"• Новый рекорд e1RM: {value:.1f}{u}"
     if kind == "reps_at_weight":
-        return f"🔥 Новый рекорд повторов: {format_weight(extra or 0)}{u} × {int(value)}"
-    return "🔥 Новый рекорд"
+        return f"• Новый рекорд повторов: {format_weight(extra or 0)}{u} × {int(value)}"
+    return "• Новый рекорд"
 
 
 def build_exercise_highlights(groups: list[tuple[str, list[str], str | None]]) -> str:
