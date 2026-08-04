@@ -1046,11 +1046,12 @@ MCP_OAUTH_CLIENTS = [
 
 # Клиенты, которым нужен статический токен в заголовке. Их инструкции без токена
 # бессмысленны — в них нечего вставлять, поэтому и кнопки появляются вместе с ним.
+#
+# Список нарочно короткий: экран нужен, чтобы человек подключился, а не чтобы
+# перечислить всё, что умеет MCP. Cursor, VS Code и «любой другой клиент»
+# настраиваются тем же токеном по тому же адресу — и то, и другое на экране есть.
 MCP_TOKEN_CLIENTS = [
     ("claude_code", "🖥 Claude Code"),
-    ("cursor", "🖱 Cursor"),
-    ("vscode", "🧩 VS Code"),
-    ("other", "⚙️ Другой клиент"),
 ]
 
 # Все клиенты сразу: ключи совпадают с handlers.mcp_access.GUIDES.
@@ -1067,9 +1068,13 @@ def mcp_keyboard(has_token: bool, has_connections: bool = False) -> InlineKeyboa
     отключать, — иначе это тап в пустой список.
     """
     b = InlineKeyboardBuilder()
-    b.button(text="🔗 Код для подключения", callback_data="mcp:code")
     for kind, label in MCP_OAUTH_CLIENTS:
         b.button(text=label, callback_data=f"mcp:how:{kind}")
+    # Код — после инструкций, а не первым: он живёт минуты и нужен на середине
+    # пути, когда приложение уже открыло страницу подтверждения. Взятый заранее
+    # успевает истечь, пока человек ищет в приложении раздел коннекторов, — та же
+    # кнопка есть на каждом экране инструкции, где она и к месту.
+    b.button(text="🔗 Код для подключения", callback_data="mcp:code")
     if has_connections:
         b.button(text="🔌 Подключённые приложения", callback_data="mcp:apps")
     if has_token:
@@ -1084,17 +1089,24 @@ def mcp_keyboard(has_token: bool, has_connections: bool = False) -> InlineKeyboa
     return b.as_markup()
 
 
-def mcp_guide_keyboard() -> InlineKeyboardMarkup:
-    """Экран инструкции: назад к токену и списку клиентов."""
+def mcp_guide_keyboard(code_kind: str | None = None) -> InlineKeyboardMarkup:
+    """Экран инструкции: назад к списку клиентов.
+
+    `code_kind` — вид инструкции, на которой показан код связывания. Тогда сверху
+    появляется «🔄 Новый код», и он перерисовывает эту же инструкцию: истёкший код
+    — обычный исход, и лечиться он должен на месте, а не походом на другой экран.
+    """
     b = InlineKeyboardBuilder()
+    if code_kind:
+        b.button(text="🔄 Новый код", callback_data=f"mcp:how:{code_kind}")
     b.button(text="⬅️ К подключению", callback_data="mcp:open")
     b.adjust(1)
     return b.as_markup()
 
 
 def mcp_code_keyboard() -> InlineKeyboardMarkup:
-    """Экран кода связывания. «Новый код» на том же экране: код одноразовый и
-    живёт минуты, так что «не успел» — это нормальный исход, а не ошибка."""
+    """Экран кода без инструкции — для тех, у кого страница подтверждения уже
+    открыта. «Новый код» тут же: код живёт минуты."""
     b = InlineKeyboardBuilder()
     b.button(text="🔄 Новый код", callback_data="mcp:code")
     b.button(text="⬅️ К подключению", callback_data="mcp:open")

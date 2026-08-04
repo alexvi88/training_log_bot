@@ -70,15 +70,16 @@ def _sent_text(mock_target) -> str:
     raise AssertionError("экран не показан")
 
 
-async def test_command_shows_intro_without_issuing_a_token(fresh_db, user_id):
-    """Токен не выдаётся самим фактом захода на экран: пока человек не нажал
-    кнопку, наружу открывать нечего."""
+async def test_command_shows_intro_without_issuing_anything(fresh_db, user_id):
+    """Ни токен, ни код не выдаются самим фактом захода на экран: пока человек не
+    выбрал приложение, наружу открывать нечего."""
     msg = _message(user_id)
     await mcp_access.cmd_mcp(msg, await _state(user_id))
 
-    text = msg.answer.call_args.args[0]
-    assert "MCP" in text
+    assert "https://training-log.example.com/mcp" in msg.answer.call_args.args[0]
     assert await fresh_db.get_mcp_token(user_id) is None
+    cur = await fresh_db.conn().execute("SELECT COUNT(*) AS n FROM oauth_link_codes")
+    assert (await cur.fetchone())["n"] == 0
 
 
 async def test_issue_shows_the_whole_token_and_the_address(fresh_db, user_id):
@@ -158,10 +159,12 @@ def test_connector_path_is_offered_without_any_token():
     ChatGPT токена не требуют, и прятать их за «сначала выдай токен» значило бы
     закрыть единственный путь, где человек ничего не настраивает."""
     assert _buttons(keyboards.mcp_keyboard(False)) == [
-        "mcp:code",
         "mcp:how:claude_web",
         "mcp:how:chatgpt",
         "mcp:how:claude_desktop",
+        # Код — после инструкций: он живёт минуты и нужен по ходу подключения,
+        # а взятый до него успевает истечь.
+        "mcp:code",
         "mcp:issue",
         "menu:settings",
     ]
@@ -171,14 +174,11 @@ def test_token_guides_and_revoke_appear_only_with_a_token():
     """А вот инструкции для терминала без токена показывать нечего — в них
     нечего вставлять."""
     assert _buttons(keyboards.mcp_keyboard(True)) == [
-        "mcp:code",
         "mcp:how:claude_web",
         "mcp:how:chatgpt",
         "mcp:how:claude_desktop",
+        "mcp:code",
         "mcp:how:claude_code",
-        "mcp:how:cursor",
-        "mcp:how:vscode",
-        "mcp:how:other",
         "mcp:issue",
         "mcp:revoke",
         "menu:settings",
@@ -212,16 +212,45 @@ async def test_guide_screen_carries_token_and_address(fresh_db, user_id, kind):
 
 
 @pytest.mark.parametrize("kind", sorted(mcp_access.OAUTH_GUIDES))
-async def test_connector_guide_needs_no_token_at_all(fresh_db, user_id, kind):
-    """Инструкции под коннектор открываются с нуля: человек, у которого токена
-    нет и не будет, — это и есть их читатель."""
+async def test_connector_guide_carries_the_code_on_the_same_screen(fresh_db, user_id, kind):
+    """Главное про эти экраны: инструкция самодостаточна. Адрес и код лежат в том
+    же сообщении, где шаги, — уходить за ними на другой экран и возвращаться
+    значит терять код, который живёт минуты, ровно в середине подключения.
+
+    Токена при этом не требуется: человек, у которого его нет и не будет, — это и
+    есть читатель этих инструкций.
+    """
     callback = _callback(user_id, f"mcp:how:{kind}")
     await mcp_access.mcp_guide(callback, await _state(user_id))
 
     text = _sent_text(callback)
+    cur = await fresh_db.conn().execute(
+        "SELECT code FROM oauth_link_codes WHERE user_id = ?", (user_id,)
+    )
+    code = (await cur.fetchone())["code"]
+    assert code in text
     assert "https://training-log.example.com/mcp" in text
-    assert "Код для подключения" in text
-    assert _buttons(callback.message.answer.call_args.kwargs["reply_markup"]) == ["mcp:open"]
+    # «Новый код» перерисовывает эту же инструкцию, а не уводит на третий экран.
+    assert _buttons(callback.message.answer.call_args.kwargs["reply_markup"]) == [
+        f"mcp:how:{kind}",
+        "mcp:open",
+    ]
+
+
+@pytest.mark.parametrize("kind", sorted(mcp_access.OAUTH_GUIDES))
+async def test_reopening_a_guide_gives_a_fresh_code(fresh_db, user_id, kind):
+    """«Не успел» — обычный исход, и лечится он на месте: повторное открытие
+    инструкции выдаёт новый код, а прежний перестаёт существовать."""
+    first = _callback(user_id, f"mcp:how:{kind}")
+    await mcp_access.mcp_guide(first, await _state(user_id))
+    second = _callback(user_id, f"mcp:how:{kind}")
+    await mcp_access.mcp_guide(second, await _state(user_id))
+
+    cur = await fresh_db.conn().execute("SELECT code FROM oauth_link_codes")
+    codes = [row["code"] for row in await cur.fetchall()]
+    assert len(codes) == 1
+    assert codes[0] in _sent_text(second)
+    assert codes[0] not in _sent_text(first)
 
 
 @pytest.mark.parametrize("kind", list(mcp_access.GUIDES))
@@ -229,7 +258,7 @@ async def test_guide_fits_into_one_telegram_message(fresh_db, user_id, kind):
     """4096 символов — жёсткий лимит Telegram: инструкция длиннее не отправится
     вовсе, и вместо неё пользователь увидит ошибку."""
     token = await fresh_db.issue_mcp_token(user_id)
-    assert len(mcp_access.GUIDES[kind][1](token)) < 4096
+    assert len(mcp_access.GUIDES[kind][1](token, "123456")) < 4096
 
 
 async def test_the_main_screen_fits_into_one_telegram_message(fresh_db, user_id):
@@ -246,7 +275,7 @@ async def test_the_main_screen_fits_into_one_telegram_message(fresh_db, user_id)
 
 async def test_token_guide_falls_back_to_the_main_screen_without_a_token(fresh_db, user_id):
     """Токен могли отозвать с другого устройства, пока экран висел открытым."""
-    callback = _callback(user_id, "mcp:how:cursor")
+    callback = _callback(user_id, "mcp:how:claude_code")
     await mcp_access.mcp_guide(callback, await _state(user_id))
 
     assert "нужен токен" in _sent_text(callback)
@@ -277,7 +306,9 @@ async def test_the_link_code_screen_shows_six_digits_and_the_address(fresh_db, u
     assert len(code) == 6
     assert code in text
     assert "https://training-log.example.com/mcp" in text
-    assert "5 минут" in text
+    # Срок берётся из константы, а не вписан числом: разъехавшийся с кодом текст
+    # обманывает человека ровно в тот момент, когда он ждёт «ещё успею».
+    assert mcp_access._code_ttl() in text
 
 
 async def test_a_new_code_button_replaces_the_previous_code(fresh_db, user_id):
