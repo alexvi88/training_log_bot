@@ -165,8 +165,11 @@ async def _get_sdk_client() -> AsyncXAIClient:
     if _sdk_client is None:
         async with _sdk_client_lock:
             if _sdk_client is None:
+                # Клиент SDK ходит ровно в один шаг — живой поиск (см.
+                # _web_search_findings), — поэтому и часы у него свои: см.
+                # config.AI_SEARCH_TIMEOUT_SECONDS.
                 _sdk_client = AsyncXAIClient(
-                    api_key=config.XAI_API_KEY, timeout=config.AI_REQUEST_TIMEOUT_SECONDS
+                    api_key=config.XAI_API_KEY, timeout=config.AI_SEARCH_TIMEOUT_SECONDS
                 )
     return _sdk_client
 
@@ -2467,6 +2470,7 @@ async def _web_search_findings(
     """
     if on_status:
         await on_status("🔎 ищу свежую информацию в сети...")
+    started = asyncio.get_running_loop().time()
     try:
         sdk_client = await _get_sdk_client()
         chat_session = sdk_client.chat.create(
@@ -2478,8 +2482,21 @@ async def _web_search_findings(
         )
         response = await chat_session.sample()
     except Exception:
-        logger.exception("AI trainer web search step failed, answering without live search")
+        # Сколько именно ждали до обрыва — то, по чему потом и подбирается
+        # бюджет: без этой цифры «поиск отвалился» не отличить от «поиск
+        # отвалился, не дотянув пары секунд».
+        logger.exception(
+            "AI trainer web search step failed after %.1fs (budget %.0fs), "
+            "answering without live search",
+            asyncio.get_running_loop().time() - started,
+            config.AI_SEARCH_TIMEOUT_SECONDS,
+        )
         return None
+    logger.info(
+        "AI trainer web search step took %.1fs (budget %.0fs)",
+        asyncio.get_running_loop().time() - started,
+        config.AI_SEARCH_TIMEOUT_SECONDS,
+    )
 
     await _log_llm_cost(user_id, config.GROK_SEARCH_MODEL, getattr(response, "usage", None))
     if not (response.citations or response.server_side_tool_usage):
