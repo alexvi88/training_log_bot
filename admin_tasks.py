@@ -80,11 +80,6 @@ async def _send_daily_report(bot: Bot) -> None:
         dt.datetime.now() - dt.timedelta(days=config.SHARED_ITEMS_RETENTION_DAYS)
     ).isoformat(timespec="seconds")
     await db.delete_shared_items_older_than(cutoff)
-    # Брошенное на полпути подключение по OAuth не гасит за собой ничего: код,
-    # заявка и просроченная пара токенов остаются лежать. Прополка — здесь,
-    # рядом с остальной, а не в самом флоу: чистить в горячем пути значит
-    # платить за это на каждом запросе.
-    await db.purge_expired_oauth()
 
     backup_name = f"training_log_backup_{dt.date.today().isoformat()}.db"
     backup_path = os.path.join(tempfile.gettempdir(), backup_name)
@@ -96,6 +91,25 @@ async def _send_daily_report(bot: Bot) -> None:
     finally:
         if os.path.exists(backup_path):
             os.remove(backup_path)
+
+
+async def run_oauth_purge_job() -> None:
+    """Прополка просрочки OAuth — отдельной задачей, раз в час.
+
+    Отдельной, потому что раньше она стояла внутри суточного отчёта админу, за
+    `bot.send_message`: админ заблокировал бота — исключение, и прополки в этот
+    день нет вовсе. А без `ADMIN_ID` отчёт не запускается никогда, то есть
+    таблицы не чистились бы совсем.
+
+    Раз в час, а не в сутки: коды и заявки живут минуты, и держать их до ночи
+    незачем — а именно они копятся от каждой брошенной попытки подключения.
+    """
+    while True:
+        try:
+            await db.purge_expired_oauth()
+        except Exception:
+            logger.exception("OAuth purge failed")
+        await asyncio.sleep(3600)
 
 
 async def run_daily_admin_jobs(bot: Bot) -> None:

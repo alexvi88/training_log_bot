@@ -1,5 +1,6 @@
 """AI-trainer cost logging (db.cost_events) and the admin daily cost report."""
 
+import asyncio
 import datetime as dt
 from unittest.mock import AsyncMock, MagicMock
 
@@ -136,10 +137,15 @@ async def test_daily_report_prunes_expired_share_cards(fresh_db, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_daily_report_prunes_abandoned_oauth_rows(fresh_db, user_id, monkeypatch):
+async def test_the_oauth_purge_runs_on_its_own(fresh_db, user_id, monkeypatch):
     """Подключение коннектора, брошенное на полпути, не гасит за собой ничего:
-    заявка на согласие и код связывания остаются лежать. Убирать их некому,
-    кроме ночной прополки."""
+    заявка на согласие и код связывания остаются лежать.
+
+    Прополка живёт отдельной задачей, а не внутри отчёта админу: там она стояла
+    за `bot.send_message`, то есть пропадала в тот день, когда админ заблокировал
+    бота, — и не запускалась вовсе, если ADMIN_ID не задан.
+    """
+    monkeypatch.setattr(config, "ADMIN_ID", None)
     await fresh_db.create_oauth_consent_request(
         request_id="stale",
         client_id="client",
@@ -153,12 +159,13 @@ async def test_daily_report_prunes_abandoned_oauth_rows(fresh_db, user_id, monke
     )
     live = await fresh_db.issue_oauth_link_code(user_id, 300)
 
-    bot = MagicMock()
-    bot.send_message = AsyncMock()
-    bot.send_document = AsyncMock()
-    monkeypatch.setattr(config, "ADMIN_ID", 1)
+    # Один проход и выход: задача бесконечная, а проверяем мы её первый круг.
+    async def _stop(_seconds):
+        raise asyncio.CancelledError
 
-    await admin_tasks._send_daily_report(bot)
+    monkeypatch.setattr(admin_tasks.asyncio, "sleep", _stop)
+    with pytest.raises(asyncio.CancelledError):
+        await admin_tasks.run_oauth_purge_job()
 
     assert await fresh_db.get_oauth_consent_request("stale") is None
     # Живой код при этом на месте: прополка не должна ронять подключение,

@@ -433,6 +433,22 @@ CREATE TABLE IF NOT EXISTS oauth_link_codes (
     user_id INTEGER NOT NULL,
     expires_at REAL NOT NULL
 );
+
+-- Неудачные попытки ввода кода связывания — по одной строке на попытку.
+--
+-- Это единственное, что ограничивает перебор. Счётчик на заявке (attempts выше)
+-- не ограничивает ничего: заявка создаётся бесплатным GET /authorize, и пять
+-- попыток — цена одной заявки, а не механизма. Шесть цифр — двадцать бит, и без
+-- этой таблицы их перебирают за время жизни кода.
+--
+-- Скользящее окно, а не вечный счётчик: человек, который трижды ошибся,
+-- не должен остаться запертым навсегда.
+CREATE TABLE IF NOT EXISTS oauth_consent_failures (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    at REAL NOT NULL,
+    client_ip TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_oauth_failures_at ON oauth_consent_failures (at);
 """
 
 _conn: Optional[aiosqlite.Connection] = None
@@ -3037,9 +3053,26 @@ async def resolve_mcp_token(token: str) -> Optional[int]:
 # Значения токенов и кодов сюда приходят и здесь остаются: ни одна из функций
 # ниже их не логирует.
 
+# Сколько регистрация клиента живёт после того, как на неё не осталось ссылок.
+# Клиент помнит свой client_id и приходит с ним же после отключения — снесённая
+# регистрация означает «Client ID not found» вместо переподключения.
+OAUTH_CLIENT_GRACE_SECONDS = 24 * 3600
+
+# Предел на размер метаданных регистрации. Их пишет кто угодно без всякой
+# авторизации (RFC 7591 это и есть), а «кто угодно» присылает и 200 000 символов
+# в client_name — база у бота и у MCP одна, и заполненный диск роняет дневник.
+OAUTH_CLIENT_METADATA_LIMIT = 4000
+
 
 async def save_oauth_client(client_id: str, client_secret: Optional[str], metadata: str) -> None:
-    """Зарегистрировать клиента (или перезаписать регистрацию под тем же id)."""
+    """Зарегистрировать клиента (или перезаписать регистрацию под тем же id).
+
+    Метаданные обрезаются по длине: их присылает кто угодно без авторизации, и
+    складывать в базу присланные мегабайты незачем — всё, что нам из них нужно,
+    это `client_name` и `redirect_uris`.
+    """
+    if len(metadata) > OAUTH_CLIENT_METADATA_LIMIT:
+        raise ValueError("client metadata too large")
     async with _write_lock:
         await conn().execute(
             "INSERT OR REPLACE INTO oauth_clients (client_id, client_secret, metadata, created_at) "
@@ -3102,33 +3135,54 @@ async def delete_oauth_consent_request(request_id: str) -> None:
         await conn().commit()
 
 
-async def issue_oauth_link_code(user_id: int, ttl_seconds: int, digits: int = 6) -> str:
+async def issue_oauth_link_code(
+    user_id: int, ttl_seconds: int, digits: int = 6, *, reuse_live: bool = False
+) -> str:
     """Код связывания: человек называет его на странице согласия, и только так
     страница узнаёт, кто перед ней.
 
     Живёт один на пользователя — выдать новый значит погасить прежний, поэтому
     «нажал кнопку дважды» не оставляет позади себя действующий код.
+
+    `reuse_live=True` отдаёт действующий код, если он есть, — и проверка «есть
+    ли» делается здесь, под тем же локом, что и вставка: снаружи между чтением и
+    записью успевает пройти второй запрос, и два одновременных открытия экрана
+    выдают два кода, из которых живёт только последний.
     """
     now = time.time()
     ceiling = 10**digits
     async with _write_lock:
-        await conn().execute("DELETE FROM oauth_link_codes WHERE user_id = ?", (user_id,))
-        # Заодно чистим просрочку: иначе мёртвый код продолжает занимать шесть
-        # цифр из миллиона до ближайшей ночной прополки.
-        await conn().execute("DELETE FROM oauth_link_codes WHERE expires_at < ?", (now,))
-        for _ in range(20):
-            code = f"{secrets.randbelow(ceiling):0{digits}d}"
-            cur = await conn().execute("SELECT 1 FROM oauth_link_codes WHERE code = ?", (code,))
-            if await cur.fetchone() is None:
-                break
-        else:  # pragma: no cover — миллион живых кодов у личного бота недостижим
-            raise RuntimeError("не удалось подобрать свободный код связывания")
-        await conn().execute(
-            "INSERT INTO oauth_link_codes (code, user_id, expires_at) VALUES (?, ?, ?)",
-            (code, user_id, now + ttl_seconds),
-        )
-        await conn().commit()
-    return code
+        try:
+            if reuse_live:
+                cur = await conn().execute(
+                    "SELECT code FROM oauth_link_codes WHERE user_id = ? AND expires_at > ?",
+                    (user_id, now),
+                )
+                live = await cur.fetchone()
+                if live is not None:
+                    return live["code"]
+            await conn().execute("DELETE FROM oauth_link_codes WHERE user_id = ?", (user_id,))
+            # Заодно чистим просрочку: иначе мёртвый код продолжает занимать шесть
+            # цифр из миллиона до ближайшей ночной прополки.
+            await conn().execute("DELETE FROM oauth_link_codes WHERE expires_at < ?", (now,))
+            for _ in range(20):
+                code = f"{secrets.randbelow(ceiling):0{digits}d}"
+                cur = await conn().execute(
+                    "SELECT 1 FROM oauth_link_codes WHERE code = ?", (code,)
+                )
+                if await cur.fetchone() is None:
+                    break
+            else:  # pragma: no cover — миллион живых кодов у личного бота недостижим
+                raise RuntimeError("не удалось подобрать свободный код связывания")
+            await conn().execute(
+                "INSERT INTO oauth_link_codes (code, user_id, expires_at) VALUES (?, ?, ?)",
+                (code, user_id, now + ttl_seconds),
+            )
+            await conn().commit()
+            return code
+        except Exception:
+            await conn().rollback()
+            raise
 
 
 async def get_live_oauth_link_code(user_id: int) -> Optional[str]:
@@ -3147,45 +3201,96 @@ async def get_live_oauth_link_code(user_id: int) -> Optional[str]:
 
 
 async def verify_oauth_link_code(
-    request_id: str, code: str, max_attempts: int
+    request_id: str,
+    code: str,
+    max_attempts: int,
+    *,
+    client_ip: Optional[str] = None,
+    window_seconds: float = 0.0,
+    window_limit_per_ip: int = 0,
+    window_limit_total: int = 0,
 ) -> tuple[str, Optional[int]]:
     """Сверить код связывания с заявкой на согласие, одной транзакцией.
 
     Возвращает («ok», user_id) либо причину отказа: `unknown_request`,
-    `expired_request`, `too_many_attempts`, `bad_code`. Причина нужна странице
-    согласия: «код не тот» и «заявка устарела» лечатся по-разному.
+    `expired_request`, `too_many_attempts` (заперта заявка), `rate_limited`
+    (исчерпано окно неудач), `bad_code`. Причина нужна странице согласия: «код не
+    тот», «заявка устарела» и «слишком часто» лечатся по-разному.
 
-    Верный код гасится здесь же, неверный увеличивает счётчик попыток заявки:
-    без лимита шесть цифр перебираются за минуты.
+    Три предела, и только последние два действительно ограничивают перебор:
+
+    * `max_attempts` — на заявку. Он про опечатки человека, а не про защиту:
+      заявку создаёт бесплатный GET /authorize, так что перебирающий просто
+      берёт новую.
+    * `window_limit_per_ip` — неудачи с одного адреса за окно. Это и есть замок:
+      двадцать бит кода переберут, только если дать пробовать без счёта.
+    * `window_limit_total` — предохранитель на случай перебора с многих адресов.
+      Ставится заведомо выше того, что способен набрать живой человек.
+
+    Верный код гасится здесь же. Неудача пишется в `oauth_consent_failures` — и
+    предел проверяется ДО сверки, иначе счёт попыток не ограничен вовсе.
     """
     now = time.time()
     async with _write_lock:
-        cur = await conn().execute(
-            "SELECT attempts, expires_at FROM oauth_consent_requests WHERE request_id = ?",
-            (request_id,),
-        )
-        request = await cur.fetchone()
-        if request is None:
-            return "unknown_request", None
-        if request["expires_at"] < now:
-            return "expired_request", None
-        if request["attempts"] >= max_attempts:
-            return "too_many_attempts", None
-        cur = await conn().execute(
-            "SELECT user_id FROM oauth_link_codes WHERE code = ? AND expires_at > ?",
-            (code, now),
-        )
-        row = await cur.fetchone()
-        if row is None:
-            await conn().execute(
-                "UPDATE oauth_consent_requests SET attempts = attempts + 1 WHERE request_id = ?",
+        try:
+            cur = await conn().execute(
+                "SELECT attempts, expires_at FROM oauth_consent_requests WHERE request_id = ?",
                 (request_id,),
             )
+            request = await cur.fetchone()
+            if request is None:
+                return "unknown_request", None
+            if request["expires_at"] < now:
+                return "expired_request", None
+            if request["attempts"] >= max_attempts:
+                return "too_many_attempts", None
+            if window_seconds > 0:
+                # Просрочку убираем здесь же: окно скользящее, и старые строки в
+                # нём не участвуют — держать их незачем.
+                await conn().execute(
+                    "DELETE FROM oauth_consent_failures WHERE at < ?", (now - window_seconds,)
+                )
+                cur = await conn().execute(
+                    "SELECT COUNT(*) AS total, "
+                    "SUM(CASE WHEN client_ip IS ? THEN 1 ELSE 0 END) AS same_ip "
+                    "FROM oauth_consent_failures WHERE at >= ?",
+                    (client_ip, now - window_seconds),
+                )
+                seen = await cur.fetchone()
+                too_many_here = (
+                    window_limit_per_ip > 0 and (seen["same_ip"] or 0) >= window_limit_per_ip
+                )
+                too_many_anywhere = (
+                    window_limit_total > 0 and seen["total"] >= window_limit_total
+                )
+                if too_many_here or too_many_anywhere:
+                    await conn().commit()
+                    return "rate_limited", None
+            cur = await conn().execute(
+                "SELECT user_id FROM oauth_link_codes WHERE code = ? AND expires_at > ?",
+                (code, now),
+            )
+            row = await cur.fetchone()
+            if row is None:
+                await conn().execute(
+                    "UPDATE oauth_consent_requests SET attempts = attempts + 1 "
+                    "WHERE request_id = ?",
+                    (request_id,),
+                )
+                await conn().execute(
+                    "INSERT INTO oauth_consent_failures (at, client_ip) VALUES (?, ?)",
+                    (now, client_ip),
+                )
+                await conn().commit()
+                return "bad_code", None
+            await conn().execute("DELETE FROM oauth_link_codes WHERE code = ?", (code,))
             await conn().commit()
-            return "bad_code", None
-        await conn().execute("DELETE FROM oauth_link_codes WHERE code = ?", (code,))
-        await conn().commit()
-        return "ok", row["user_id"]
+            return "ok", row["user_id"]
+        except Exception:
+            # Иначе недоделанная транзакция достаётся следующему писателю, и он
+            # коммитит её вместе со своей (тот же довод, что в discard_workout).
+            await conn().rollback()
+            raise
 
 
 async def create_oauth_auth_code(
@@ -3364,18 +3469,35 @@ async def list_oauth_connections(user_id: int) -> list[aiosqlite.Row]:
 
 
 async def revoke_oauth_client_tokens(user_id: int, client_id: str) -> int:
-    """«Отключить приложение»: все пары этого клиента у этого пользователя.
+    """«Отключить приложение»: всё, чем этот клиент может вернуться.
 
-    Именно все: клиент мог обменять refresh и завести вторую пару, а человек
-    нажал одну кнопку и вправе считать, что доступ закрыт целиком.
+    Пар может быть несколько — клиент обменял refresh и завёл вторую, — и это
+    только половина. Вторая половина: уже выданный код авторизации и открытая
+    заявка на согласие. Их не гасить значит оставить приложению путь обратно
+    через минуты после того, как человеку сказали «доступ закрыт».
     """
     async with _write_lock:
-        cur = await conn().execute(
-            "DELETE FROM oauth_tokens WHERE user_id = ? AND client_id = ?",
-            (user_id, client_id),
-        )
-        await conn().commit()
-        return cur.rowcount
+        try:
+            cur = await conn().execute(
+                "DELETE FROM oauth_tokens WHERE user_id = ? AND client_id = ?",
+                (user_id, client_id),
+            )
+            revoked = cur.rowcount
+            await conn().execute(
+                "DELETE FROM oauth_auth_codes WHERE user_id = ? AND client_id = ?",
+                (user_id, client_id),
+            )
+            # Заявка ещё не знает пользователя — она создаётся до подтверждения,
+            # поэтому гасим все заявки этого клиента. Чужую этим не сломать:
+            # заявка живёт минуты и принадлежит тому же приложению.
+            await conn().execute(
+                "DELETE FROM oauth_consent_requests WHERE client_id = ?", (client_id,)
+            )
+            await conn().commit()
+            return revoked
+        except Exception:
+            await conn().rollback()
+            raise
 
 
 async def purge_expired_oauth(now: Optional[float] = None) -> int:
@@ -3388,27 +3510,42 @@ async def purge_expired_oauth(now: Optional[float] = None) -> int:
     moment = time.time() if now is None else now
     deleted = 0
     async with _write_lock:
-        for statement in (
-            "DELETE FROM oauth_auth_codes WHERE expires_at < ?",
-            "DELETE FROM oauth_consent_requests WHERE expires_at < ?",
-            "DELETE FROM oauth_link_codes WHERE expires_at < ?",
-            "DELETE FROM oauth_tokens WHERE COALESCE(refresh_expires_at, expires_at) < ?",
-        ):
-            cur = await conn().execute(statement, (moment,))
+        try:
+            for statement in (
+                "DELETE FROM oauth_auth_codes WHERE expires_at < ?",
+                "DELETE FROM oauth_consent_requests WHERE expires_at < ?",
+                "DELETE FROM oauth_link_codes WHERE expires_at < ?",
+                "DELETE FROM oauth_tokens WHERE COALESCE(refresh_expires_at, expires_at) < ?",
+                # Неудачные попытки нужны только внутри своего окна; окно — минуты.
+                "DELETE FROM oauth_consent_failures WHERE at < ?",
+            ):
+                cur = await conn().execute(statement, (moment,))
+                deleted += cur.rowcount
+            # Клиенты — последними, когда мёртвых токенов уже нет. Каждое «добавить
+            # коннектор» регистрирует нового: приложение, которое человек отключил или
+            # не довёл до конца, иначе остаётся в таблице навсегда.
+            #
+            # Но не сразу: клиент помнит свой client_id и после отключения приходит
+            # с ним же. Снесённая регистрация превращает «подключить заново» в
+            # «Client ID not found», а обещание на экране — в ложь. Отсюда отсрочка:
+            # ссылок нет и регистрация старше суток.
+            cur = await conn().execute(
+                "DELETE FROM oauth_clients WHERE created_at < ? AND client_id NOT IN "
+                "(SELECT client_id FROM oauth_tokens UNION "
+                " SELECT client_id FROM oauth_consent_requests UNION "
+                " SELECT client_id FROM oauth_auth_codes)",
+                (
+                    dt.datetime.fromtimestamp(moment - OAUTH_CLIENT_GRACE_SECONDS).isoformat(
+                        timespec="seconds"
+                    ),
+                ),
+            )
             deleted += cur.rowcount
-        # Клиенты — последними, когда мёртвых токенов уже нет. Каждое «добавить
-        # коннектор» регистрирует нового: приложение, которое человек отключил или
-        # не довёл до конца, иначе остаётся в таблице навсегда. Ссылок на такую
-        # строку нет ни у токена, ни у заявки — она никому не нужна.
-        cur = await conn().execute(
-            "DELETE FROM oauth_clients WHERE client_id NOT IN "
-            "(SELECT client_id FROM oauth_tokens UNION "
-            " SELECT client_id FROM oauth_consent_requests UNION "
-            " SELECT client_id FROM oauth_auth_codes)"
-        )
-        deleted += cur.rowcount
-        await conn().commit()
-    return deleted
+            await conn().commit()
+            return deleted
+        except Exception:
+            await conn().rollback()
+            raise
 
 
 # ---------- programs (a named, ordered set of training days) ----------

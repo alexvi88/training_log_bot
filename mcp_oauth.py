@@ -31,12 +31,14 @@ import secrets
 import time
 from html import escape
 from typing import Any, Optional
+from urllib.parse import urlparse
 
 from mcp.server.auth.provider import (
     AccessToken,
     AuthorizationCode,
     AuthorizationParams,
     RefreshToken,
+    RegistrationError,
     TokenError,
     construct_redirect_uri,
 )
@@ -73,8 +75,18 @@ CONSENT_REQUEST_TTL = 900
 # лишних пяти минут жизни куда ниже, чем «код истёк, начинай сначала».
 LINK_CODE_TTL = 600
 LINK_CODE_TTL_MINUTES = LINK_CODE_TTL // 60
-# Шесть цифр перебираются за минуты, если пробовать их можно бесконечно.
+
+# Три предела на ввод кода, и только два последних что-то ограничивают.
+#
+# Пять попыток на заявку — про опечатки: заявку создаёт бесплатный GET /authorize,
+# так что перебирающий берёт новую и счёт начинается заново (так и было устроено,
+# и это ничего не защищало). Настоящий замок — скользящее окно неудач: с одного
+# адреса десять за десять минут, суммарно шестьдесят. Двадцать бит кода при таком
+# счёте не перебрать, а живой человек столько не ошибается — он ошибается два раза.
 LINK_CODE_MAX_ATTEMPTS = 5
+CONSENT_FAILURE_WINDOW = 600
+CONSENT_FAILURE_LIMIT_PER_IP = 10
+CONSENT_FAILURE_LIMIT_TOTAL = 60
 
 # `client_id` статического токена. Токен выпускает бот, а не приложение, так что
 # клиента у него нет — но `AccessToken.client_id` обязателен, и осмысленное
@@ -111,17 +123,49 @@ def auth_settings(resource_path: str) -> AuthSettings:
     )
 
 
+# Имя приложения приходит из регистрации, то есть его пишет тот, кто
+# регистрируется, — кто угодно. Обрезаем: без предела 300 символов лезут в подпись
+# кнопки Telegram и в вёрстку страницы согласия.
+CLIENT_NAME_LIMIT = 40
+
+
 def client_display_name(metadata: Optional[str], client_id: str) -> str:
-    """Имя приложения для человека: из метаданных регистрации, а если их нет —
-    хотя бы начало client_id, чтобы две строки в списке различались."""
+    """Имя приложения для человека.
+
+    Из метаданных регистрации, если там есть непустое имя; иначе — хост, куда
+    клиент просит вернуть код (он говорит человеку больше, чем что-либо ещё);
+    в последнюю очередь — начало client_id, чтобы две строки в списке различались.
+    """
+    parsed: dict = {}
     if metadata:
         try:
-            name = json.loads(metadata).get("client_name")
-        except (ValueError, AttributeError):
-            name = None
-        if name:
-            return str(name)
+            loaded = json.loads(metadata)
+            parsed = loaded if isinstance(loaded, dict) else {}
+        except ValueError:
+            parsed = {}
+    name = str(parsed.get("client_name") or "").strip()
+    if name:
+        return name[:CLIENT_NAME_LIMIT]
+    host = redirect_host(parsed.get("redirect_uris") or [])
+    if host:
+        return host
     return f"приложение {client_id[:8]}"
+
+
+def redirect_host(redirect_uris: Any) -> str:
+    """Хост, куда уедет код авторизации.
+
+    Единственное на странице согласия, что нельзя подделать вместе с именем: имя
+    приложения атакующий пишет какое хочет, а адрес возврата — тот, куда данные
+    реально уйдут.
+    """
+    if isinstance(redirect_uris, str):
+        redirect_uris = [redirect_uris]
+    for uri in redirect_uris or []:
+        host = urlparse(str(uri)).hostname
+        if host:
+            return host
+    return ""
 
 
 async def link_code(user_id: int, force_new: bool = False) -> str:
@@ -131,11 +175,9 @@ async def link_code(user_id: int, force_new: bool = False) -> str:
     его и вернуться в бота перечитать шаг — выдать в этот момент новый значит
     убить тот, что у него в браузере. Новый выдаётся только по явной кнопке.
     """
-    if not force_new:
-        live = await db.get_live_oauth_link_code(user_id)
-        if live is not None:
-            return live
-    return await db.issue_oauth_link_code(user_id, LINK_CODE_TTL)
+    return await db.issue_oauth_link_code(
+        user_id, LINK_CODE_TTL, reuse_live=not force_new
+    )
 
 
 class TrainingLogOAuthProvider:
@@ -155,11 +197,30 @@ class TrainingLogOAuthProvider:
         return OAuthClientInformationFull.model_validate_json(row["metadata"])
 
     async def register_client(self, client_info: OAuthClientInformationFull) -> None:
-        await db.save_oauth_client(
-            client_info.client_id,
-            client_info.client_secret,
-            client_info.model_dump_json(),
-        )
+        """Записать регистрацию, отвергнув то, чем пользоваться нельзя.
+
+        Схему адреса возврата проверяем сами: SDK принимает любой URI, а `http:`
+        означает код авторизации открытым текстом по сети (OAuth 2.1 это прямо
+        запрещает), `javascript:` и `data:` — попытку получить исполнение на
+        нашем домене. Loopback оставляем: на нём живут локальные клиенты.
+        """
+        for uri in client_info.redirect_uris or []:
+            parsed = urlparse(str(uri))
+            loopback = parsed.hostname in ("localhost", "127.0.0.1", "::1", "[::1]")
+            if parsed.scheme == "https" or (parsed.scheme == "http" and loopback):
+                continue
+            raise RegistrationError(
+                "invalid_redirect_uri",
+                f"redirect_uri must use https (got {parsed.scheme or 'no'} scheme)",
+            )
+        try:
+            await db.save_oauth_client(
+                client_info.client_id,
+                client_info.client_secret,
+                client_info.model_dump_json(),
+            )
+        except ValueError as e:
+            raise RegistrationError("invalid_client_metadata", str(e)) from e
         logger.info("MCP OAuth: client registered (%s)", client_info.client_id)
 
     # ---------- согласие ----------
@@ -369,19 +430,24 @@ input[name="code"] {
   padding: 12px; border: 1px solid #d2d2d7; border-radius: 12px;
   background: #fff; color: inherit;
 }
-.row { display: flex; gap: 12px; margin-top: 18px; }
+/* row-reverse: «Разрешить» стоит в разметке ПЕРВОЙ, чтобы Enter в поле кода
+   отправлял согласие, а не отказ (первая submit-кнопка формы — кнопка по
+   умолчанию), но человек видит её справа, как принято. */
+.row { display: flex; flex-direction: row-reverse; gap: 12px; margin-top: 18px; }
 button {
   flex: 1; padding: 13px; font-size: 16px; font-weight: 600;
   border-radius: 12px; border: 1px solid transparent; cursor: pointer;
 }
 .allow { background: #0071e3; color: #fff; }
-.deny { background: transparent; color: #6e6e73; border-color: #d2d2d7; }
+.deny { background: transparent; color: #515156; border-color: #86868b; }
+.dest { font-weight: 600; word-break: break-all; }
+.app { word-break: break-word; }
 @media (prefers-color-scheme: dark) {
   body { background: #16161a; color: #f5f5f7; }
   .card { background: #1f1f24; box-shadow: none; }
-  .muted, .deny { color: #a1a1a6; }
+  .muted { color: #a1a1a6; }
+  .deny { color: #c7c7cc; border-color: #6a6a70; }
   input[name="code"] { background: #2a2a30; border-color: #3a3a41; }
-  .deny { border-color: #3a3a41; }
   .error { background: #3a1d1a; color: #ff9f95; }
 }
 """
@@ -402,34 +468,66 @@ def _page(title: str, body: str, status_code: int = 200) -> HTMLResponse:
         f"<title>{escape(title)}</title><style>{_STYLE}</style></head>"
         f"<body><div class=card>{body}</div></body></html>"
     )
-    # no-store: на странице лежит код связывания, и возвращаться на неё кнопкой
-    # «назад» из кэша браузера ей незачем.
-    return HTMLResponse(html, status_code=status_code, headers={"Cache-Control": "no-store"})
+    return HTMLResponse(
+        html,
+        status_code=status_code,
+        headers={
+            # no-store: на странице лежит код связывания, и возвращаться на неё
+            # кнопкой «назад» из кэша браузера ей незачем.
+            "Cache-Control": "no-store",
+            # Страницу, на которой человек отдаёт доступ, нельзя вкладывать в
+            # чужой интерфейс: в iframe она выглядит частью сайта атакующего.
+            "X-Frame-Options": "DENY",
+            "Content-Security-Policy": "frame-ancestors 'none'",
+        },
+    )
 
 
-def _consent_page(request_id: str, app_name: str, error: str = "") -> HTMLResponse:
-    error_block = f'<div class="error">{escape(error)}</div>' if error else ""
+def _consent_page(
+    request_id: str, app_name: str, destination: str = "", error: str = ""
+) -> HTMLResponse:
+    error_block = (
+        f'<div class="error" role="alert" id="err">{escape(error)}</div>' if error else ""
+    )
+    # Хост назначения — единственное на странице, что нельзя подделать заодно с
+    # именем: назваться «Claude» может кто угодно, а код уедет туда, куда просил
+    # клиент при регистрации. Человеку это и надо сверить.
+    destination_block = (
+        f'<p>Код и доступ уйдут на <span class="dest">{escape(destination)}</span>. '
+        "Если это не то приложение, которое ты подключаешь, — нажми «Отмена».</p>"
+        if destination
+        else ""
+    )
     return _page(
         "Дневник тренировок — подтверждение",
         "<h1>Дневник тренировок</h1>"
         f'<p><span class="app">{escape(app_name)}</span> просит доступ к твоим данным '
         "<b>только на чтение</b>:</p>"
         f"<ul>{_SHARED_DATA}</ul>"
+        f"{destination_block}"
         '<p class="muted">Записать что-либо в дневник приложение не сможет. '
         "Переписка с AI-тренером наружу не уходит.</p>"
         f"{error_block}"
-        f'<form method="post" action="{CONSENT_PATH}">'
+        # action="" — на текущий адрес: так форма не ломается, если бот когда-нибудь
+        # окажется за префиксом пути.
+        '<form method="post" action="">'
         f'<input type="hidden" name="request" value="{escape(request_id)}">'
         # Никуда не посылаем: код уже лежит в том же сообщении бота, из которого
         # человек сюда пришёл, — инструкция самодостаточна (см. handlers/mcp_access).
         # Отправлять его «открыть бота и нажать кнопку» значит противоречить экрану,
         # который у него открыт на соседнем устройстве.
-        "<p>Введи код из бота — он в том же сообщении, где инструкция:</p>"
-        '<input name="code" inputmode="numeric" autocomplete="off" maxlength="6" '
-        'pattern="[0-9]*" placeholder="000000" autofocus>'
+        '<p><label for="code">Введи код из бота — он в том же сообщении, '
+        "где инструкция:</label></p>"
+        # maxlength с запасом и без pattern: сервер сам выбрасывает из кода всё,
+        # кроме цифр, а браузер, обрезающий вставленное «123 456» до шести
+        # символов, ломает ровно то, что сервер терпит.
+        '<input id="code" name="code" inputmode="numeric" autocomplete="off" '
+        'maxlength="16" placeholder="000000" required autofocus'
+        f'{" aria-describedby=err" if error else ""}>'
         '<div class="row">'
-        '<button class="deny" type="submit" name="action" value="deny">Отмена</button>'
         '<button class="allow" type="submit" name="action" value="allow">Разрешить</button>'
+        '<button class="deny" type="submit" name="action" value="deny" '
+        'formnovalidate>Отмена</button>'
         "</div></form>"
         # Для того, кто начал с приложения, а бота ещё не открывал: сказать, где
         # код берётся, надо — но мелким шрифтом и после поля, чтобы не посылать
@@ -456,10 +554,47 @@ _ERRORS = {
         "Код не подошёл — скорее всего устарел. В боте нажми «🔄 Новый код» "
         "на том же экране и введи ещё раз."
     ),
-    "too_many_attempts": (
-        "Слишком много попыток. Начни подключение заново из приложения."
+    "empty_code": "Введи шесть цифр из бота.",
+}
+
+# Тупики: заявку уже не оживить, и форма на ней только водит по кругу.
+_DEAD_ENDS = {
+    "unknown_request": "Запрос на подключение устарел или не найден.",
+    "expired_request": "Запрос на подключение устарел или не найден.",
+    "too_many_attempts": "Слишком много неверных попыток по этому запросу.",
+    "rate_limited": (
+        "Слишком много попыток ввода за последние минуты. Подожди немного и "
+        "начни подключение заново из приложения."
     ),
 }
+
+
+def _client_ip(request: Request) -> Optional[str]:
+    """Адрес, по которому считаются неудачные попытки.
+
+    За прокси хостинга `request.client` — это сам прокси, поэтому берём последний
+    элемент X-Forwarded-For: его дописывает прокси, и подделать его клиент не
+    может (всё, что он пришлёт сам, окажется левее). Без прокси остаётся адрес
+    соединения.
+    """
+    forwarded = request.headers.get("x-forwarded-for", "")
+    if forwarded:
+        return forwarded.split(",")[-1].strip() or None
+    return request.client.host if request.client else None
+
+
+async def _named_client(consent) -> tuple[str, str]:
+    """(имя приложения, хост назначения) для страницы согласия."""
+    client = await db.get_oauth_client(consent["client_id"])
+    metadata = client["metadata"] if client else None
+    name = client_display_name(metadata, consent["client_id"])
+    host = ""
+    if metadata:
+        try:
+            host = redirect_host(json.loads(metadata).get("redirect_uris"))
+        except ValueError:  # pragma: no cover — метаданные пишет pydantic
+            host = ""
+    return name, host or redirect_host([consent["redirect_uri"]])
 
 
 async def consent_route(request: Request) -> Response:
@@ -472,20 +607,24 @@ async def consent_route(request: Request) -> Response:
         request_id = request.query_params.get("request", "")
         consent = await db.get_oauth_consent_request(request_id)
         if consent is None or consent["expires_at"] < time.time():
-            return _dead_end_page("Запрос на подключение устарел или не найден.")
-        client = await db.get_oauth_client(consent["client_id"])
-        name = client_display_name(
-            client["metadata"] if client else None, consent["client_id"]
-        )
-        return _consent_page(request_id, name)
+            return _dead_end_page(_DEAD_ENDS["unknown_request"])
+        name, destination = await _named_client(consent)
+        return _consent_page(request_id, name, destination)
 
     form = await request.form()
     request_id = str(form.get("request", ""))
     consent = await db.get_oauth_consent_request(request_id)
     if consent is None or consent["expires_at"] < time.time():
-        return _dead_end_page("Запрос на подключение устарел или не найден.")
+        # Сюда же приходит второй клик по «Разрешить»: заявка уже погашена первым.
+        return _dead_end_page(
+            "Запрос на подключение устарел, не найден — или доступ уже выдан. "
+            "Проверь приложение: возможно, всё уже подключено."
+        )
 
-    if form.get("action") == "deny":
+    # Согласие — только по явной кнопке. Любая другая отправка (потерялось
+    # значение кнопки, самодельный запрос) — отказ: fail-closed на том шаге, где
+    # человек отдаёт доступ ко всей своей истории.
+    if form.get("action") != "allow":
         await db.delete_oauth_consent_request(request_id)
         return RedirectResponse(
             construct_redirect_uri(
@@ -500,20 +639,28 @@ async def consent_route(request: Request) -> Response:
 
     # Пробелы и дефисы человек вставляет сам, копируя код из чата.
     entered = "".join(ch for ch in str(form.get("code", "")) if ch.isdigit())
+    if not entered:
+        # Пустая отправка — промах пальцем, а не попытка угадать: считать её
+        # попыткой значит запирать заявку тому, кто ещё ничего не вводил.
+        name, destination = await _named_client(consent)
+        return _consent_page(request_id, name, destination, error=_ERRORS["empty_code"])
     verdict, user_id = await db.verify_oauth_link_code(
-        request_id, entered, LINK_CODE_MAX_ATTEMPTS
+        request_id,
+        entered,
+        LINK_CODE_MAX_ATTEMPTS,
+        client_ip=_client_ip(request),
+        window_seconds=CONSENT_FAILURE_WINDOW,
+        window_limit_per_ip=CONSENT_FAILURE_LIMIT_PER_IP,
+        window_limit_total=CONSENT_FAILURE_LIMIT_TOTAL,
     )
     if verdict != "ok":
-        if verdict in ("unknown_request", "expired_request"):  # pragma: no cover
-            return _dead_end_page("Запрос на подключение устарел или не найден.")
-        client = await db.get_oauth_client(consent["client_id"])
-        name = client_display_name(
-            client["metadata"] if client else None, consent["client_id"]
-        )
         logger.info(
             "MCP OAuth: consent rejected (%s) for client %s", verdict, consent["client_id"]
         )
-        return _consent_page(request_id, name, error=_ERRORS[verdict])
+        if verdict in _DEAD_ENDS:
+            return _dead_end_page(_DEAD_ENDS[verdict])
+        name, destination = await _named_client(consent)
+        return _consent_page(request_id, name, destination, error=_ERRORS[verdict])
 
     code = secrets.token_urlsafe(32)
     await db.create_oauth_auth_code(

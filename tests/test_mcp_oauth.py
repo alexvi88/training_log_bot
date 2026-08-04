@@ -27,6 +27,7 @@ import pytest
 from test_mcp_server import _asgi_post, _headers, _rpc, _running
 
 import config
+import db
 import mcp_oauth
 import mcp_server
 
@@ -479,9 +480,10 @@ async def test_a_link_code_works_exactly_once(fresh_db, user_id):
 
 
 async def test_five_wrong_attempts_lock_the_request_even_for_the_right_code(fresh_db, user_id):
-    """Шесть цифр перебираются за минуты, если пробовать можно бесконечно.
-    Заперта именно заявка: правильный код после лимита тоже не проходит, и
-    подключение приходится начинать заново."""
+    """Пять попыток на заявку — это про опечатки человека, а не про защиту от
+    перебора (её держит окно неудач, см. соседний тест). Заперта именно заявка:
+    правильный код после лимита тоже не проходит, и подключение приходится
+    начинать заново — форма на такой заявке больше не показывается."""
     app = mcp_server.build_app()
     async with _running(app):
         client_id = await _register(app)
@@ -498,7 +500,10 @@ async def test_five_wrong_attempts_lock_the_request_even_for_the_right_code(fres
 
     assert status == 400
     assert "location" not in headers
-    assert "Слишком много попыток" in body.decode()
+    page = body.decode()
+    assert "Слишком много неверных попыток" in page
+    # Формы на запертой заявке нет: она бы только водила по кругу.
+    assert "<form" not in page
 
 
 async def test_a_new_code_replaces_the_previous_one(fresh_db, user_id):
@@ -822,17 +827,277 @@ async def test_the_purge_collects_clients_nobody_references(fresh_db, user_id):
     приложения его не удаляет: строка остаётся, а ссылок на неё нет ни у токена,
     ни у заявки. Без прополки oauth_clients растёт от каждой попытки подключиться
     — в том числе брошенной на середине.
+
+    Но не в тот же час: клиент помнит свой client_id и приходит с ним же, когда
+    человек решит подключиться заново. Снесённая регистрация означает для него
+    «Client ID not found», поэтому у неё есть сутки отсрочки.
     """
     app = mcp_server.build_app()
     async with _running(app):
         alive = await _connect(app, user_id, name="Claude")
         abandoned = await _register(app, name="ChatGPT")  # человек не дошёл до согласия
 
-        first_purge = await fresh_db.purge_expired_oauth()
+        right_away = await fresh_db.purge_expired_oauth()
         await fresh_db.revoke_oauth_client_tokens(user_id, alive["client_id"])
-        await fresh_db.purge_expired_oauth()
+        later = time.time() + db.OAUTH_CLIENT_GRACE_SECONDS + 1
+        await fresh_db.purge_expired_oauth(now=later)
 
-    # Брошенная регистрация ушла сразу, а живая — только вместе с отключением.
-    assert first_purge == 1
+    # Сразу после отключения регистрации на месте — переподключиться можно.
+    assert right_away == 0
+    # А через сутки обе уходят: ссылок на них нет.
     assert await fresh_db.get_oauth_client(abandoned) is None
     assert await fresh_db.get_oauth_client(alive["client_id"]) is None
+
+
+# ---------- перебор кода ----------
+
+
+async def test_fresh_requests_do_not_hand_out_fresh_attempts(fresh_db, user_id):
+    """Главная дыра, которую закрывает окно неудач.
+
+    Пять попыток на заявку не ограничивают ничего: заявку создаёт бесплатный
+    GET /authorize, и перебирающий просто берёт новую. Шесть цифр — двадцать
+    бит; через настоящее приложение это сотни попыток в секунду, то есть
+    заметная доля миллиона за те минуты, что живёт код жертвы.
+
+    Считать надо неудачи, а не заявки: после предела ввод отвергается, даже
+    если заявка только что создана.
+    """
+    app = mcp_server.build_app()
+    await mcp_oauth.link_code(user_id)  # у жертвы открыт экран инструкции
+    accepted = 0
+    async with _running(app):
+        client_id = await _register(app)
+        for _ in range(mcp_oauth.CONSENT_FAILURE_LIMIT_PER_IP + 5):
+            _, headers, _ = await _authorize(app, client_id, _pkce()[1])
+            status, _, body = await _consent(app, _request_id(headers["location"]), "000000")
+            assert status == 400
+            if "Код не подошёл" in body.decode():
+                accepted += 1
+
+    assert accepted == mcp_oauth.CONSENT_FAILURE_LIMIT_PER_IP
+
+
+async def test_the_window_slides_so_a_mistyping_human_is_not_locked_out(fresh_db, user_id):
+    """Окно скользящее: человек, ошибшийся вчера, сегодня подключается. Иначе
+    защита от перебора превращается в вечный замок на пустом месте."""
+    app = mcp_server.build_app()
+    async with _running(app):
+        client_id = await _register(app)
+        for _ in range(mcp_oauth.CONSENT_FAILURE_LIMIT_PER_IP):
+            _, headers, _ = await _authorize(app, client_id, _pkce()[1])
+            await _consent(app, _request_id(headers["location"]), "000000")
+        # Неудачи состарились ровно на длину окна.
+        await fresh_db.conn().execute(
+            "UPDATE oauth_consent_failures SET at = at - ?",
+            (mcp_oauth.CONSENT_FAILURE_WINDOW + 1,),
+        )
+        await fresh_db.conn().commit()
+
+        code = await mcp_oauth.link_code(user_id)
+        _, headers, _ = await _authorize(app, client_id, _pkce()[1])
+        status, headers, _ = await _consent(app, _request_id(headers["location"]), code)
+
+    assert status == 302
+    assert "code=" in headers["location"]
+
+
+async def test_an_empty_field_is_not_an_attempt(fresh_db, user_id):
+    """Промах пальцем по «Разрешить» с пустым полем — не попытка угадать. Считать
+    её попыткой значит запирать заявку тому, кто ещё ничего не вводил."""
+    app = mcp_server.build_app()
+    async with _running(app):
+        client_id = await _register(app)
+        _, headers, _ = await _authorize(app, client_id, _pkce()[1])
+        request_id = _request_id(headers["location"])
+
+        for _ in range(mcp_oauth.LINK_CODE_MAX_ATTEMPTS + 3):
+            status, _, body = await _consent(app, request_id, "")
+        assert status == 400
+        assert "Введи шесть цифр" in body.decode()
+
+        code = await mcp_oauth.link_code(user_id)
+        status, headers, _ = await _consent(app, request_id, code)
+
+    assert status == 302
+    cur = await fresh_db.conn().execute("SELECT COUNT(*) AS n FROM oauth_consent_failures")
+    assert (await cur.fetchone())["n"] == 0
+
+
+async def test_a_code_pasted_with_spaces_still_works(fresh_db, user_id):
+    """«123 456» — это то, что получается при копировании из чата. Сервер это
+    терпит, и поле ввода не должно обрезать вставленное раньше него."""
+    app = mcp_server.build_app()
+    async with _running(app):
+        client_id = await _register(app)
+        _, headers, _ = await _authorize(app, client_id, _pkce()[1])
+        code = await mcp_oauth.link_code(user_id)
+        status, headers, _ = await _consent(
+            app, _request_id(headers["location"]), f"{code[:3]} {code[3:]}"
+        )
+
+    assert status == 302
+    page = mcp_oauth._consent_page("r", "Claude").body.decode()
+    assert 'maxlength="16"' in page
+
+
+# ---------- чужое приложение ----------
+
+
+async def test_the_page_names_where_the_data_will_go(fresh_db, user_id):
+    """Именем приложения атакующий распоряжается сам: зарегистрироваться как
+    «Claude» может кто угодно, а ссылку на страницу согласия — прислать жертве.
+    Единственное, что он подделать не может, — хост, куда уйдёт код."""
+    app = mcp_server.build_app()
+    async with _running(app):
+        client_id = await _register(
+            app, name="Claude", redirect_uri="https://evil.example.com/catch"
+        )
+        _, headers, _ = await _authorize(
+            app, client_id, _pkce()[1], redirect_uri="https://evil.example.com/catch"
+        )
+        status, page_headers, body = await _asgi(
+            app,
+            "GET",
+            mcp_oauth.CONSENT_PATH,
+            query=f"request={_request_id(headers['location'])}",
+        )
+
+    page = body.decode()
+    assert status == 200
+    assert "evil.example.com" in page
+    # И страницу нельзя подложить в чужой интерфейс через iframe.
+    assert page_headers["x-frame-options"] == "DENY"
+    assert "frame-ancestors 'none'" in page_headers["content-security-policy"]
+
+
+async def test_registration_refuses_addresses_that_leak_the_code(fresh_db, user_id):
+    """`http:` — код авторизации открытым текстом по сети (OAuth 2.1 запрещает),
+    `javascript:`/`data:` — попытка получить исполнение на нашем домене."""
+    app = mcp_server.build_app()
+    async with _running(app):
+        for uri in (
+            "http://evil.example.com/catch",
+            "javascript:alert(document.domain)//",
+            "data:text/html,<script>alert(1)</script>",
+        ):
+            status, _, _ = await _asgi(
+                app,
+                "POST",
+                "/register",
+                json_body={
+                    "client_name": "Claude",
+                    "redirect_uris": [uri],
+                    "grant_types": ["authorization_code"],
+                    "response_types": ["code"],
+                    "token_endpoint_auth_method": "none",
+                },
+            )
+            assert status == 400, uri
+        # Локальный клиент по loopback — законный случай, его не трогаем.
+        assert await _register(app, redirect_uri="http://127.0.0.1:33418/callback")
+
+
+async def test_registration_refuses_a_giant_body(fresh_db, user_id):
+    """`/register` — запись в базу без всякой авторизации. База у бота и у MCP
+    одна, и заполненный диск роняет дневник, а не коннектор."""
+    app = mcp_server.build_app()
+    async with _running(app):
+        status, _, _ = await _asgi(
+            app,
+            "POST",
+            "/register",
+            json_body={
+                "client_name": "Я" * 200_000,
+                "redirect_uris": [REDIRECT_URI],
+                "grant_types": ["authorization_code"],
+                "response_types": ["code"],
+                "token_endpoint_auth_method": "none",
+            },
+        )
+
+    assert status == 400
+    cur = await fresh_db.conn().execute("SELECT COUNT(*) AS n FROM oauth_clients")
+    assert (await cur.fetchone())["n"] == 0
+
+
+def test_a_hostile_name_stays_text_and_stays_short():
+    """Имя приложения приходит от того, кто регистрируется. В HTML оно должно
+    остаться текстом, а по длине — влезать в вёрстку и в подпись кнопки."""
+    page = mcp_oauth._consent_page("r", "<img src=x onerror=alert(1)>").body.decode()
+    assert "<img src=x" not in page
+    assert "&lt;img src=x" in page
+
+    long_name = json.dumps({"client_name": "Ы" * 300})
+    assert len(mcp_oauth.client_display_name(long_name, "cid")) <= mcp_oauth.CLIENT_NAME_LIMIT
+
+
+def test_a_blank_name_falls_back_to_something_a_human_can_judge():
+    """Имя из пробелов проходит регистрацию, и на экране оставалось «• » с
+    датами под пустотой. Хост назначения человеку хотя бы о чём-то говорит."""
+    metadata = json.dumps({"client_name": "   ", "redirect_uris": ["https://claude.ai/cb"]})
+    assert mcp_oauth.client_display_name(metadata, "cid12345678") == "claude.ai"
+    assert mcp_oauth.client_display_name(json.dumps({}), "cid12345678") == "приложение cid12345"
+    # Битые метаданные не должны ронять ни страницу, ни экран бота.
+    assert mcp_oauth.client_display_name("не json", "cid12345678") == "приложение cid12345"
+
+
+# ---------- отзыв и согласие ----------
+
+
+async def test_consent_grants_only_on_the_explicit_button(fresh_db, user_id):
+    """Отправка без значения кнопки — не согласие. На шаге, где человек отдаёт
+    всю историю тренировок, «не отказ» не должно означать «разрешил»."""
+    app = mcp_server.build_app()
+    async with _running(app):
+        client_id = await _register(app)
+        _, headers, _ = await _authorize(app, client_id, _pkce()[1])
+        request_id = _request_id(headers["location"])
+        code = await mcp_oauth.link_code(user_id)
+        status, headers, _ = await _asgi(
+            app,
+            "POST",
+            mcp_oauth.CONSENT_PATH,
+            form={"request": request_id, "code": code},
+        )
+
+    assert status == 302
+    assert "error=access_denied" in headers["location"]
+
+
+async def test_disconnect_also_kills_the_code_already_on_its_way(fresh_db, user_id):
+    """«Отключить» гасило только пары токенов. Уже выданный код авторизации жил
+    дальше и возвращал доступ через минуту после того, как человеку сказали
+    «доступ закрыт целиком»."""
+    app = mcp_server.build_app()
+    async with _running(app):
+        tokens = await _connect(app, user_id)
+        # Приложение начало второе подключение и держит свежий код.
+        verifier, challenge = _pkce()
+        _, headers, _ = await _authorize(app, tokens["client_id"], challenge)
+        link = await mcp_oauth.link_code(user_id, force_new=True)
+        _, headers, _ = await _consent(app, _request_id(headers["location"]), link)
+        pending = parse_qs(urlparse(headers["location"]).query)["code"][0]
+
+        await fresh_db.revoke_oauth_client_tokens(user_id, tokens["client_id"])
+        status, _, _ = await _exchange_code(app, tokens["client_id"], pending, verifier)
+
+    assert status == 400
+    assert await fresh_db.list_oauth_connections(user_id) == []
+
+
+async def test_disconnect_closes_an_open_consent_request_too(fresh_db, user_id):
+    """Та же дыра с другого конца: незакрытая заявка этого приложения после
+    отключения не должна доводиться до кода."""
+    app = mcp_server.build_app()
+    async with _running(app):
+        tokens = await _connect(app, user_id)
+        _, headers, _ = await _authorize(app, tokens["client_id"], _pkce()[1])
+        request_id = _request_id(headers["location"])
+
+        await fresh_db.revoke_oauth_client_tokens(user_id, tokens["client_id"])
+        code = await mcp_oauth.link_code(user_id, force_new=True)
+        status, headers, _ = await _consent(app, request_id, code)
+
+    assert status == 400
+    assert "location" not in headers
