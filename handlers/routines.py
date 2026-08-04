@@ -10,7 +10,7 @@ once, then save it as your split.
 import datetime as dt
 from html import escape
 
-from aiogram import F, Router
+from aiogram import BaseMiddleware, F, Router
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, Message
@@ -30,9 +30,74 @@ router = Router(name="routines")
 
 ROUTINE_SOURCE_PAGE_SIZE = 8
 
+# Состояния этого роутера — все до единого «бот ждёт текста»: название, новое
+# название, схема подходов, поиск упражнения.
+_INPUT_STATES = frozenset(RoutineFlow.__all_states_names__)
+
+
+def _handles_state(handler) -> bool:
+    """Объявляет ли обработчик, в каких состояниях он работает (StateFilter).
+
+    Это и есть признак «кнопка изнутри потока»: только такой обработчик что-то
+    знает про текущее состояние (продолжает поток или сам его снимает). Кнопка
+    без StateFilter — это экран, на который можно прийти откуда угодно, то есть
+    для потока ввода это выход.
+    """
+    return any(
+        isinstance(getattr(f.callback, "__self__", f.callback), StateFilter)
+        for f in handler.filters or []
+    )
+
+
+class DropInputStateOnExit(BaseMiddleware):
+    """Ушёл с экрана ввода — состояние ввода снимается. Одно место на все выходы.
+
+    Экранов ввода тут пять («как назвать программу», «как назвать день», «новое
+    название», «схема подходов», поиск упражнения), а выходов с них — по одному
+    на экран: «❌ Отмена» ведёт то на rt:view, то на rt:prg, то на rt:manage, и
+    каждый из этих обработчиков должен был помнить про set_state(None). Кто-то
+    не помнил: после «❌ Отмена» на переименовании состояние оставалось, и
+    следующая реплика человека («а сколько мне есть белка?») молча становилась
+    названием дня. Хранилище файловое (fsm_storage.py), так что это переживало и
+    перезапуск, и сутки.
+
+    Поэтому снимаем состояние здесь — через этот middleware проходит каждая
+    кнопка роутера, включая те выходы, которых ещё нет. Обработчики внутри
+    потока (со StateFilter) не трогаем: см. _handles_state.
+
+    Снимается только состояние и только своё, RoutineFlow: тапнуть кнопку
+    программы можно и посреди незакрытой тренировки, а `state.clear()` снёс бы
+    каркас открытых упражнений — «Продолжить» после этого восстанавливает лишь
+    последнее (см. handlers.workout._clear_state_keep_workout). По той же
+    причине не чистим data: между экранами выбора тренировки-источника там
+    лежит страница списка, и она нужна живой.
+    """
+
+    async def __call__(self, handler, event, data):
+        state: FSMContext | None = data.get("state")
+        if (
+            state is not None
+            and not _handles_state(data["handler"])
+            # Порядок важен: сначала дешёвая проверка фильтров, и только на своём
+            # состоянии — запись в хранилище (оно файловое).
+            and await state.get_state() in _INPUT_STATES
+        ):
+            await state.set_state(None)
+        return await handler(event, data)
+
+
+router.callback_query.middleware(DropInputStateOnExit())
+
 
 async def show_manage(event, state: FSMContext) -> None:
     user_id = event.from_user.id
+    # Черновик «➕ Добавить день» живёт в data, а не в состоянии, поэтому
+    # middleware выше его не снимает — а уйти из него можно ровно сюда, в список
+    # программ («⬅️ Назад» из выбора тренировки-источника). Пометка, оставшаяся
+    # от брошенной попытки, потом молча уводила новую программу днём в ту самую
+    # программу: «➕ Из тренировки» стоит на этом же экране, и rt_pickw_use
+    # смотрит в data. На списке программ никакого «дня» быть не может по смыслу.
+    await state.update_data(day_program_id=None, day_from_workout=None, day_copy_from=None)
     # Многодневки свёрнуты в одну строку каждая, дни — за вторым экраном
     # (rt_program_days): иначе один добавленный сплит занимает три-четыре кнопки.
     programs = await db.list_programs(user_id)
