@@ -107,6 +107,14 @@ AI_REQUEST_TIMEOUT_SECONDS = float(os.getenv("AI_REQUEST_TIMEOUT_SECONDS", "90")
 # В env, чтобы подбирать на живых ответах без релиза.
 AI_STREAM_FLUSH_SECONDS = float(os.getenv("AI_STREAM_FLUSH_SECONDS", "0.6"))
 
+# Как часто черновик реально ПЕРЕРИСОВЫВАЕТСЯ на экране. Отдельно от
+# AI_STREAM_FLUSH_SECONDS, хотя раньше это было одно значение: копить текст
+# почаще дёшево и полезно, а вот перерисовывать пузырь почаще — то, от чего
+# рябит в глазах. За 0.6с быстрая модель успевает выдать несколько строк, и
+# каждая перерисовка меняла пол-пузыря — на глаз это не «печать», а мигание.
+# Отдаём глазу время дочитать до того, как текст поедет дальше.
+AI_DRAFT_INTERVAL_SECONDS = float(os.getenv("AI_DRAFT_INTERVAL_SECONDS", "1.5"))
+
 # Reasoning depth for GROK_MODEL calls (low/medium/high — xAI defaults to
 # "high" when unset, which reasoning models can't turn off). Split in two
 # rather than one flat value for every call:
