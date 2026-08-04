@@ -4659,19 +4659,31 @@ async def save_rotation_bag(telegram_id: int, category: str, bag: list[int]) -> 
 
 
 # ---------- AI trainer: daily web-search quota ----------
+#
+# «Сегодня» здесь — сутки пользователя, а не сервера: дневная квота, которая
+# обнуляется в 03:00 по местному времени, выглядит произвольной, а у кого-то
+# сбрасывалась ровно посреди вечерней тренировки. Чтение и запись берут день
+# одинаково, поэтому счётчик всегда попадает в ту же строку.
+
+
+async def _quota_day(telegram_id: int) -> str:
+    """Календарный день пользователя (YYYY-MM-DD) для дневных квот."""
+    offset = await user_tz_offset(telegram_id)
+    local_now = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None) + dt.timedelta(hours=offset)
+    return local_now.date().isoformat()
+
 
 async def get_ai_search_count_today(telegram_id: int) -> int:
-    today = dt.date.today().isoformat()
     cur = await conn().execute(
         "SELECT count FROM ai_search_usage WHERE telegram_id = ? AND date = ?",
-        (telegram_id, today),
+        (telegram_id, await _quota_day(telegram_id)),
     )
     row = await cur.fetchone()
     return row["count"] if row else 0
 
 
 async def increment_ai_search_count(telegram_id: int) -> None:
-    today = dt.date.today().isoformat()
+    today = await _quota_day(telegram_id)
     async with _write_lock:
         await conn().execute(
             "INSERT INTO ai_search_usage (telegram_id, date, count) VALUES (?, ?, 1) "
@@ -4682,17 +4694,16 @@ async def increment_ai_search_count(telegram_id: int) -> None:
 
 
 async def get_ai_question_count_today(telegram_id: int) -> int:
-    today = dt.date.today().isoformat()
     cur = await conn().execute(
         "SELECT count FROM ai_question_usage WHERE telegram_id = ? AND date = ?",
-        (telegram_id, today),
+        (telegram_id, await _quota_day(telegram_id)),
     )
     row = await cur.fetchone()
     return row["count"] if row else 0
 
 
 async def increment_ai_question_count(telegram_id: int) -> None:
-    today = dt.date.today().isoformat()
+    today = await _quota_day(telegram_id)
     async with _write_lock:
         await conn().execute(
             "INSERT INTO ai_question_usage (telegram_id, date, count) VALUES (?, ?, 1) "

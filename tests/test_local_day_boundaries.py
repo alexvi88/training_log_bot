@@ -202,3 +202,25 @@ async def test_recent_programs_window_starts_at_a_local_day(fresh_db, user_id):
     recent = await db.list_recent_programs(user_id, "2026-06-24")
 
     assert [p["name"] for p in recent] == ["Сплит"]
+
+
+async def test_ai_quota_day_follows_the_user_timezone(fresh_db, user_id):
+    """Дневная квота на вопросы — это «сегодня» пользователя, а не сутки сервера:
+    иначе счётчик обнулялся посреди его дня."""
+    db = fresh_db
+    utc_now = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
+    # Смещение, при котором местная дата гарантированно не равна UTC-дате.
+    offset = 12 if utc_now.hour >= 12 else -12
+    await db.update_user(user_id, tz_offset=offset)
+    local_day = (utc_now + dt.timedelta(hours=offset)).date().isoformat()
+    assert local_day != utc_now.date().isoformat()
+
+    await db.increment_ai_question_count(user_id)
+    await db.increment_ai_search_count(user_id)
+
+    cur = await db.conn().execute(
+        "SELECT date FROM ai_question_usage WHERE telegram_id = ?", (user_id,)
+    )
+    assert [r["date"] for r in await cur.fetchall()] == [local_day]
+    assert await db.get_ai_question_count_today(user_id) == 1
+    assert await db.get_ai_search_count_today(user_id) == 1
