@@ -1035,30 +1035,50 @@ def settings_keyboard(
     return b.as_markup()
 
 
-# Кнопки инструкций на экране /mcp. Порядок — от самых частых клиентов к
-# «всё остальное»; ключи совпадают с handlers.mcp_access.GUIDES.
-MCP_CLIENTS = [
-    ("claude_code", "🖥 Claude Code"),
+# Клиенты, которые подключаются коннектором по OAuth: адрес и код из бота, ни
+# одного файла конфигурации. Их инструкции показываются всегда — токена они не
+# требуют вовсе.
+MCP_OAUTH_CLIENTS = [
+    ("claude_web", "☁️ Claude в браузере"),
+    ("chatgpt", "🤖 ChatGPT"),
     ("claude_desktop", "💬 Claude Desktop"),
+]
+
+# Клиенты, которым нужен статический токен в заголовке. Их инструкции без токена
+# бессмысленны — в них нечего вставлять, поэтому и кнопки появляются вместе с ним.
+MCP_TOKEN_CLIENTS = [
+    ("claude_code", "🖥 Claude Code"),
     ("cursor", "🖱 Cursor"),
     ("vscode", "🧩 VS Code"),
     ("other", "⚙️ Другой клиент"),
 ]
 
+# Все клиенты сразу: ключи совпадают с handlers.mcp_access.GUIDES.
+MCP_CLIENTS = MCP_OAUTH_CLIENTS + MCP_TOKEN_CLIENTS
 
-def mcp_keyboard(has_token: bool) -> InlineKeyboardMarkup:
-    """Экран /mcp. Пока токена нет — одна осмысленная кнопка: инструкции без
-    токена показывать нечего. Когда есть — сначала «куда вставить» (это то, зачем
-    сюда пришли), а перевыпуск и отзыв внизу, но на том же экране: нужны они
-    всегда срочно."""
+
+def mcp_keyboard(has_token: bool, has_connections: bool = False) -> InlineKeyboardMarkup:
+    """Экран /mcp: сверху простой путь, ниже — токен для терминала.
+
+    Порядок ровно такой, потому что подключение коннектором доступно всем и
+    сразу, а токен нужен меньшинству: ставить его первым значит отправлять
+    человека копировать секрет в конфиг там, где хватило бы шести цифр.
+    Кнопка «Подключённые приложения» появляется, только когда есть что
+    отключать, — иначе это тап в пустой список.
+    """
     b = InlineKeyboardBuilder()
+    b.button(text="🔗 Код для подключения", callback_data="mcp:code")
+    for kind, label in MCP_OAUTH_CLIENTS:
+        b.button(text=label, callback_data=f"mcp:how:{kind}")
+    if has_connections:
+        b.button(text="🔌 Подключённые приложения", callback_data="mcp:apps")
     if has_token:
-        for kind, label in MCP_CLIENTS:
+        for kind, label in MCP_TOKEN_CLIENTS:
             b.button(text=label, callback_data=f"mcp:how:{kind}")
         b.button(text="♻️ Перевыпустить токен", callback_data="mcp:issue")
         b.button(text="🗑 Отозвать токен", callback_data="mcp:revoke")
     else:
-        b.button(text="🔑 Выдать токен", callback_data="mcp:issue")
+        b.button(text="🔑 Выдать токен для терминала", callback_data="mcp:issue")
     b.button(text="🔧 Настройки", callback_data="menu:settings")
     b.adjust(1)
     return b.as_markup()
@@ -1067,6 +1087,31 @@ def mcp_keyboard(has_token: bool) -> InlineKeyboardMarkup:
 def mcp_guide_keyboard() -> InlineKeyboardMarkup:
     """Экран инструкции: назад к токену и списку клиентов."""
     b = InlineKeyboardBuilder()
+    b.button(text="⬅️ К подключению", callback_data="mcp:open")
+    b.adjust(1)
+    return b.as_markup()
+
+
+def mcp_code_keyboard() -> InlineKeyboardMarkup:
+    """Экран кода связывания. «Новый код» на том же экране: код одноразовый и
+    живёт минуты, так что «не успел» — это нормальный исход, а не ошибка."""
+    b = InlineKeyboardBuilder()
+    b.button(text="🔄 Новый код", callback_data="mcp:code")
+    b.button(text="⬅️ К подключению", callback_data="mcp:open")
+    b.adjust(1)
+    return b.as_markup()
+
+
+def mcp_apps_keyboard(connections: list[tuple[str, str]]) -> InlineKeyboardMarkup:
+    """Подключённые приложения: на каждое — своя кнопка «Отключить».
+
+    Отзыв именно по приложению, а не «всё сразу»: у человека может быть
+    подключён и браузерный Claude, и ChatGPT, и убить оба, чтобы закрыть один,
+    — это не отзыв доступа, а поломка настроенного.
+    """
+    b = InlineKeyboardBuilder()
+    for client_id, name in connections:
+        b.button(text=f"🚫 Отключить {name}", callback_data=f"mcp:off:{client_id}")
     b.button(text="⬅️ К подключению", callback_data="mcp:open")
     b.adjust(1)
     return b.as_markup()

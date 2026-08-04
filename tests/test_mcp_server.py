@@ -131,29 +131,6 @@ async def test_server_exposes_exactly_the_whitelist():
     assert all((t.description or "").strip() for t in tools)
 
 
-# ---------- разбор заголовка ----------
-
-@pytest.mark.parametrize(
-    "header,expected",
-    [
-        ("Bearer abc123", "abc123"),
-        ("bearer abc123", "abc123"),  # RFC 7235: схема регистронезависима
-        ("BEARER  abc123 ", "abc123"),
-        ("Basic abc123", ""),
-        ("abc123", ""),
-        ("Bearer", ""),
-        ("", ""),
-    ],
-)
-def test_bearer_token_parsing(header, expected):
-    assert mcp_server.bearer_token({"authorization": header}) == expected
-
-
-def test_bearer_token_without_headers():
-    assert mcp_server.bearer_token(None) == ""
-    assert mcp_server.bearer_token({}) == ""
-
-
 # ---------- по проводу ----------
 
 async def test_tool_call_returns_the_owners_data(fresh_db, user_id):
@@ -231,19 +208,16 @@ async def test_public_host_is_not_rejected(fresh_db, user_id):
 
 
 async def test_call_refuses_tools_outside_the_whitelist(fresh_db, user_id):
-    """Страховка на случай, если инструмент добавят мимо белого списка."""
-    token = await fresh_db.issue_mcp_token(user_id)
+    """Страховка на случай, если инструмент добавят мимо белого списка.
 
-    class _Ctx:
-        headers = {"authorization": f"Bearer {token}"}
-
+    Белый список проверяется до личности — потому эта страховка и работает даже
+    там, где авторизацию смонтировали неправильно."""
     with pytest.raises(ValueError, match="not exposed"):
-        await mcp_server._call(_Ctx(), "propose_program")
+        await mcp_server._call("propose_program")
 
 
-async def test_call_without_token_raises_unauthorized(fresh_db, user_id):
-    class _Ctx:
-        headers = {"authorization": "Bearer nope"}
-
+async def test_call_without_an_authenticated_user_raises_unauthorized(fresh_db, user_id):
+    """Личность приходит из контекста, который выставляет middleware SDK. Вне
+    запроса её нет — и инструмент обязан отказать, а не отдать чьи-то данные."""
     with pytest.raises(mcp_server.Unauthorized):
-        await mcp_server._call(_Ctx(), "get_training_overview")
+        await mcp_server._call("get_training_overview")

@@ -133,3 +133,35 @@ async def test_daily_report_prunes_expired_share_cards(fresh_db, monkeypatch):
 
     assert await fresh_db.get_shared_item(fresh) is not None
     assert await fresh_db.get_shared_item(stale) is None
+
+
+@pytest.mark.asyncio
+async def test_daily_report_prunes_abandoned_oauth_rows(fresh_db, user_id, monkeypatch):
+    """Подключение коннектора, брошенное на полпути, не гасит за собой ничего:
+    заявка на согласие и код связывания остаются лежать. Убирать их некому,
+    кроме ночной прополки."""
+    await fresh_db.create_oauth_consent_request(
+        request_id="stale",
+        client_id="client",
+        redirect_uri="https://claude.ai/callback",
+        redirect_uri_provided_explicitly=True,
+        code_challenge="x",
+        scopes="[]",
+        resource=None,
+        state=None,
+        expires_at=0.0,
+    )
+    live = await fresh_db.issue_oauth_link_code(user_id, 300)
+
+    bot = MagicMock()
+    bot.send_message = AsyncMock()
+    bot.send_document = AsyncMock()
+    monkeypatch.setattr(config, "ADMIN_ID", 1)
+
+    await admin_tasks._send_daily_report(bot)
+
+    assert await fresh_db.get_oauth_consent_request("stale") is None
+    # Живой код при этом на месте: прополка не должна ронять подключение,
+    # начатое минуту назад.
+    cur = await fresh_db.conn().execute("SELECT code FROM oauth_link_codes")
+    assert [row["code"] for row in await cur.fetchall()] == [live]
