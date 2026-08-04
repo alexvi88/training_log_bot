@@ -46,6 +46,7 @@ import analytics
 import config
 import db
 import formatting
+import timeutil
 import view_builder
 from seed_data import EXERCISE_TEMPLATES
 
@@ -411,8 +412,20 @@ replaces_program не передавай, иначе затрёшь старую
 """
 
 
-def _system_prompt() -> str:
-    return SYSTEM_PROMPT + f"\nСегодня {dt.date.today().isoformat()}."
+async def _user_today(user_id: int) -> dt.date:
+    """Сегодня по часовому поясу пользователя, а не по времени сервера.
+
+    Сервер живёт в UTC (см. timeutil), а у человека в UTC+10 сутки начинаются на
+    десять часов раньше: тренировка в 00:30 по местному лежит в базе как вчерашняя
+    UTC-дата. Из-за этого тренер на «сколько я сегодня сделал» отвечал про чужой
+    день, а в промпт себе вписывал чужое число. Все остальные экраны бота берут
+    день через timeutil.user_today — тренер был единственным, кто этого не делал.
+    """
+    return timeutil.user_today(await db.get_user(user_id))
+
+
+def _system_prompt(today: dt.date) -> str:
+    return SYSTEM_PROMPT + f"\nСегодня {today.isoformat()}."
 
 
 SEARCH_SYSTEM_PROMPT = """\
@@ -432,8 +445,8 @@ NO_SEARCH_NEEDED
 """
 
 
-def _search_system_prompt() -> str:
-    return SEARCH_SYSTEM_PROMPT + f"\nСегодня {dt.date.today().isoformat()}."
+def _search_system_prompt(today: dt.date) -> str:
+    return SEARCH_SYSTEM_PROMPT + f"\nСегодня {today.isoformat()}."
 
 
 SEARCH_DECISION_SYSTEM_PROMPT = """\
@@ -452,8 +465,8 @@ NO — если не нужен (вопрос про тренировки, пр�
 """
 
 
-def _search_decision_system_prompt() -> str:
-    return SEARCH_DECISION_SYSTEM_PROMPT + f"\nСегодня {dt.date.today().isoformat()}."
+def _search_decision_system_prompt(today: dt.date) -> str:
+    return SEARCH_DECISION_SYSTEM_PROMPT + f"\nСегодня {today.isoformat()}."
 
 
 WORKOUT_COMMENT_SYSTEM_PROMPT = """\
@@ -521,7 +534,8 @@ async def comment_on_workout(user_id: int, workout_id: int) -> str:
         messages=[
             {
                 "role": "system",
-                "content": WORKOUT_COMMENT_SYSTEM_PROMPT + f"\nСегодня {dt.date.today().isoformat()}.",
+                "content": WORKOUT_COMMENT_SYSTEM_PROMPT
+                + f"\nСегодня {timeutil.user_today(user).isoformat()}.",
             },
             {"role": "user", "content": card_text},
         ],
@@ -592,7 +606,7 @@ async def weekly_digest(user_id: int) -> Optional[str]:
     if user is None:
         return None
 
-    today = dt.date.today()
+    today = timeutil.user_today(user)
     dates = [dt.date.fromisoformat(d) for d in await db.list_finished_workout_dates(user_id)]
     dash = analytics.compute_dashboard(dates, today)
     vol = await _weekly_volume(user_id)
@@ -1426,7 +1440,7 @@ async def _training_overview(user_id: int) -> dict[str, Any]:
     if user is None:
         return {"error": "user not found"}
     dates = [dt.date.fromisoformat(d) for d in await db.list_finished_workout_dates(user_id)]
-    dash = analytics.compute_dashboard(dates, dt.date.today())
+    dash = analytics.compute_dashboard(dates, timeutil.user_today(user))
     exercises = await db.list_user_exercises(user_id)
     groups = await db.list_muscle_groups(user_id)
     group_name_by_id = {g["id"]: g["name"] for g in groups}
@@ -1531,7 +1545,7 @@ async def _saved_programs(user_id: int) -> dict[str, Any]:
 
 
 async def _weekly_volume(user_id: int) -> dict[str, Any]:
-    today = dt.date.today()
+    today = await _user_today(user_id)
     monday = today - dt.timedelta(days=today.weekday())
     sunday = monday + dt.timedelta(days=6)
     counts = await db.weekly_volume_by_group(user_id, monday.isoformat(), sunday.isoformat())
@@ -1668,7 +1682,7 @@ async def _food_diary(user_id: int, days: int = 14) -> dict[str, Any]:
     a flat list of entries itself is a needless chance to get them wrong.
     """
     days = max(1, min(days, 90))
-    since = (dt.date.today() - dt.timedelta(days=days - 1)).isoformat()
+    since = (await _user_today(user_id) - dt.timedelta(days=days - 1)).isoformat()
     rows = await db.list_recent_food_entries(user_id, since)
 
     by_day: dict[str, dict[str, Any]] = {}
@@ -2105,7 +2119,7 @@ async def _program_adherence(user_id: int) -> dict[str, Any]:
             "programs": [],
             "note": "У пользователя пока нет ни одной сохранённой многодневной программы.",
         }
-    today = dt.date.today()
+    today = await _user_today(user_id)
     out = []
     for p in programs:
         days = await db.list_program_days_by_id(p["id"])
@@ -2388,7 +2402,7 @@ async def _ask_plain(
 ) -> str:
     client = _get_client()
     messages: list[dict[str, Any]] = [
-        {"role": "system", "content": _system_prompt()},
+        {"role": "system", "content": _system_prompt(await _user_today(user_id))},
         *history,
     ]
     if search_context:
@@ -2457,7 +2471,9 @@ def _to_xai_messages(
     image_data_url: Optional[str] = None,
     system_prompt: Optional[str] = None,
 ) -> list:
-    out = [xai_system(system_prompt if system_prompt is not None else _system_prompt())]
+    if system_prompt is None:
+        raise ValueError("system_prompt обязателен: он содержит дату пользователя")
+    out = [xai_system(system_prompt)]
     for msg in history:
         content = msg.get("content", "")
         if msg.get("role") == "assistant":
@@ -2508,7 +2524,10 @@ async def _search_worth_it(
             extra_body={"reasoning_effort": config.GROK_QUICK_REASONING_EFFORT},
             extra_headers=_cache_headers(user_id),
             messages=[
-                {"role": "system", "content": _search_decision_system_prompt()},
+                {
+                    "role": "system",
+                    "content": _search_decision_system_prompt(await _user_today(user_id)),
+                },
                 *history,
                 {"role": "user", "content": question},
             ],
@@ -2567,7 +2586,10 @@ async def _web_search_findings(
         sdk_client = await _get_sdk_client()
         chat_session = sdk_client.chat.create(
             model=config.GROK_SEARCH_MODEL,
-            messages=_to_xai_messages(history, question, system_prompt=_search_system_prompt()),
+            messages=_to_xai_messages(
+                history, question,
+                system_prompt=_search_system_prompt(await _user_today(user_id)),
+            ),
             tools=[xai_web_search(), xai_x_search()],
             max_tokens=1024,
             agent_count=config.GROK_SEARCH_AGENT_COUNT,

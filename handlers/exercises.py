@@ -504,7 +504,9 @@ async def _send_exercise_images(message: Message, ex, state: FSMContext) -> bool
     group_name = await _exercise_group_name(ex)
     if ex["custom_photo_file_id"]:
         sent = await message.answer_photo(
-            ex["custom_photo_file_id"], caption=_exercise_info_text(ex, group_name=group_name), parse_mode="HTML"
+            ex["custom_photo_file_id"],
+            caption=formatting.clamp_caption(_exercise_info_text(ex, group_name=group_name)),
+            parse_mode="HTML",
         )
         await state.update_data(exm_media_msg_ids=[sent.message_id])
         return True
@@ -514,7 +516,7 @@ async def _send_exercise_images(message: Message, ex, state: FSMContext) -> bool
     media = [
         InputMediaPhoto(
             media=FSInputFile(images[0]),
-            caption=_exercise_info_text(ex, group_name=group_name),
+            caption=formatting.clamp_caption(_exercise_info_text(ex, group_name=group_name)),
             parse_mode="HTML",
         )
     ]
@@ -929,6 +931,16 @@ async def exm_edit_description(callback: CallbackQuery, state: FSMContext):
 @router.message(StateFilter(ExerciseManage.editing_description), F.text)
 async def exm_description_entered(message: Message, state: FSMContext):
     description = message.text.strip()
+    if len(description) > config.MAX_EXERCISE_DESCRIPTION_LENGTH:
+        # Не обрезаем молча: человек написал это осознанно, и вернуть ему обрубок
+        # хуже, чем сказать, сколько лишнего. Состояние остаётся — можно
+        # переписать, не открывая карточку заново.
+        await message.answer(
+            f"Описание длиннее {config.MAX_EXERCISE_DESCRIPTION_LENGTH} символов "
+            f"({len(description)}) — столько не влезает в подпись к фото. "
+            "Сократи и пришли снова."
+        )
+        return
     data = await state.get_data()
     ex_id = data["exm_exercise_id"]
     await db.set_exercise_description(ex_id, None if description == "-" else description)

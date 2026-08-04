@@ -42,6 +42,13 @@ RECENT_EXERCISES_LIMIT = 8
 # No real exercise name comes close to this, but it might genuinely be intended.
 MAX_EXERCISE_NAME_LENGTH = 60
 
+# Описание упражнения уезжает в подпись к фото, а у подписи лимит Telegram — 1024
+# символа, а не 4096, как у сообщения. Остаток от 1024 забирают имя, группа,
+# оснастка, дата и HTML-разметка, поэтому у самого описания бюджет меньше.
+# Проверять его надо на вводе: раньше не проверяли нигде, и карточка упражнения с
+# фото после длинного описания падала при каждом открытии.
+MAX_EXERCISE_DESCRIPTION_LENGTH = 700
+
 # How many training days one user may keep across all their programs. Lives here
 # rather than in ai_trainer.py, where it used to: the cap has nothing to do with
 # the AI, and while it sat there only the AI-trainer path enforced it — the

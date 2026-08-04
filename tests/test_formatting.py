@@ -1109,3 +1109,42 @@ def test_the_first_rank_needs_nothing():
 
     assert "с самого начала" in text
     assert "0 трен. · 0 т" not in text
+
+
+# ---------- подпись к фото ----------
+
+
+def test_a_short_caption_is_left_alone():
+    assert formatting.clamp_caption("<b>Жим лёжа</b>\nГруппа: ГРУДЬ") == \
+        "<b>Жим лёжа</b>\nГруппа: ГРУДЬ"
+
+
+def test_a_long_caption_is_cut_to_the_telegram_limit():
+    """У подписи к фото лимит 1024, а не 4096, как у сообщения. Превышение
+    отклоняет сообщение целиком, то есть карточка упражнения не показывается
+    вовсе — обрезанная подпись честнее исключения."""
+    text = "<b>Жим</b>\n" + "\n".join(["строка описания" * 5] * 40)
+
+    clamped = formatting.clamp_caption(text)
+
+    assert len(clamped) <= formatting.CAPTION_LIMIT
+    assert clamped.endswith("…")
+    assert clamped.startswith("<b>Жим</b>")
+
+
+def test_the_cut_lands_on_a_line_break():
+    """Обрыв посреди слова читается как сбой, а оборванный HTML-тег вообще не даёт
+    Telegram разобрать разметку."""
+    text = "\n".join([f"<b>строка {i}</b>" for i in range(200)])
+
+    clamped = formatting.clamp_caption(text)
+
+    assert clamped.count("<b>") == clamped.count("</b>")
+
+
+def test_a_single_unbreakable_line_is_still_cut():
+    """Границы строк может не быть вовсе — тогда лимит важнее аккуратности."""
+    clamped = formatting.clamp_caption("я" * 3000)
+
+    assert len(clamped) <= formatting.CAPTION_LIMIT
+    assert clamped.endswith("…")

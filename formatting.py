@@ -108,6 +108,31 @@ def format_group(name: str) -> str:
     return name.upper()
 
 
+def clamp_caption(text: str, limit: int = CAPTION_LIMIT) -> str:
+    """Подпись к фото, гарантированно влезающая в лимит Telegram.
+
+    Страховка, а не основная проверка: длину описания ограничивает ввод (см.
+    config.MAX_EXERCISE_DESCRIPTION_LENGTH). Но в подпись едет не только оно, а
+    ещё имя, группа, оснастка и дата, и описание может приехать не из ввода —
+    из каталога или импорта. Превышение лимита Telegram отклоняет всё сообщение
+    целиком, то есть карточка не показывается вовсе, поэтому обрезанная подпись
+    здесь честнее исключения.
+
+    Резать по границе строки: обрыв посреди слова читается как сбой, а
+    оборванный HTML-тег вообще не даёт Telegram разобрать разметку.
+    """
+    if len(text) <= limit:
+        return text
+    kept: list[str] = []
+    used = 0
+    for line in text.split("\n"):
+        if used + len(line) + 1 > limit - 1:
+            break
+        kept.append(line)
+        used += len(line) + 1
+    return ("\n".join(kept) + "…") if kept else text[: limit - 1] + "…"
+
+
 def strip_tags(text: str) -> str:
     """Текст без HTML-разметки — для мест, где разметку не разбирают
     (rich-блоки, лог)."""
