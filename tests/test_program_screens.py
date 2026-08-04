@@ -522,7 +522,7 @@ async def test_the_program_screen_is_about_training_not_editing(fresh_db, user_i
 
     callbacks = [cb for _text, cb in _buttons(callback)]
     assert f"rt:pgmedit:{program_id}" in callbacks
-    for gone in ("rt:dayadd:", "rt:dayorder:", "rt:pgmcopy:", "rt:pgmrename:", "share:pgm:", "rt:pgmdelask:"):
+    for gone in ("rt:dayadd:", "rt:dayorder:", "rt:pgmcopy:", "rt:pgmrename:", "share:prg:", "rt:pgmdelask:"):
         assert not any(cb.startswith(gone) for cb in callbacks), gone
     # Осталось: три дня, «Изменить программу», «Назад».
     assert len(callbacks) == 5
@@ -543,7 +543,7 @@ async def test_every_edit_action_survived_the_move(fresh_db, user_id):
         f"rt:dayorder:{program_id}",
         f"rt:pgmcopy:{program_id}",
         f"rt:pgmrename:{program_id}",
-        f"share:pgm:{program_id}",
+        f"share:prg:{program_id}",
         f"rt:pgmdelask:{program_id}",
         f"rt:prg:{program_id}",
     ]
