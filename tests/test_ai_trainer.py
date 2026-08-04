@@ -637,6 +637,25 @@ async def test_web_search_step_never_forwards_user_photo(fresh_db, user_id, monk
     assert _FAKE_IMAGE_DATA_URL not in repr(search_messages)
 
 
+async def test_calls_carry_the_cache_routing_header(fresh_db, user_id, monkeypatch):
+    """xAI caches the repeated prefix by itself, but only if the request lands
+    on the server that holds it — which is what x-grok-conv-id decides. Without
+    it, half the prompt tokens miss the cache and bill at full rate. Keyed per
+    user: the shared system prompt and tool schemas settle on that user's
+    server, and their own history grows on top of it."""
+    client = _fake_client([_response(tool_calls=[]), _response(content="ответ")])
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+
+    await ai_trainer.ask(user_id, "как жим?", history=[])
+
+    headers = client.chat.completions.create.await_args.kwargs["extra_headers"]
+    assert headers["x-grok-conv-id"] == f"trainer-{user_id}"
+
+
+async def test_the_cache_header_is_omitted_when_there_is_no_user():
+    assert ai_trainer._cache_headers(None) == {}
+
+
 async def test_search_worth_it_uses_fast_model_and_parses_verdict(fresh_db, user_id, monkeypatch):
     client = _fake_client([_response(content="YES")])
     monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)

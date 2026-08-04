@@ -121,8 +121,12 @@ AI_DRAFT_INTERVAL_SECONDS = float(os.getenv("AI_DRAFT_INTERVAL_SECONDS", "1.5"))
 #
 # GROK_REASONING_EFFORT — the main agentic Q&A loop (_completion_round, see
 # ask/_ask_plain), where the model reads tool results and gives actual
-# coaching advice. This is the one place extra thinking plausibly pays off,
-# so it stays at medium.
+# coaching advice. Held at medium for a while on the theory that extra
+# thinking pays off here; the console says that theory costs real money —
+# reasoning tokens bill at the output rate, the priciest kind, and came to
+# $0.46 of a $3.01 week. Dropped to low: the tools already hand the model the
+# numbers it reasons about, so the thinking it was buying was mostly
+# re-deriving what it had been given. Raise it back if answers get shallower.
 #
 # GROK_QUICK_REASONING_EFFORT — everything else on GROK_MODEL: the workout
 # comment, the weekly digest, food-photo analysis, and the search-worth-it
@@ -130,7 +134,7 @@ AI_DRAFT_INTERVAL_SECONDS = float(os.getenv("AI_DRAFT_INTERVAL_SECONDS", "1.5"))
 # reasoning, and none of them stream — unlike the chat loop, the user has
 # nothing live to watch while the model thinks, so low keeps that wait (and
 # the cost) down where it doesn't buy anything.
-GROK_REASONING_EFFORT = os.getenv("GROK_REASONING_EFFORT", "medium")
+GROK_REASONING_EFFORT = os.getenv("GROK_REASONING_EFFORT", "low")
 GROK_QUICK_REASONING_EFFORT = os.getenv("GROK_QUICK_REASONING_EFFORT", "low")
 
 # Search-capable model used (via xAI's gRPC SDK, not the REST endpoint) when a
@@ -149,7 +153,12 @@ GROK_SEARCH_MODEL = os.getenv("GROK_SEARCH_MODEL", "grok-4.20-multi-agent")
 # most expensive tier (xAI's docs map an unset/high reasoning effort to 16
 # agents; all agents' tokens, including their own reasoning and tool calls,
 # get billed).
-GROK_SEARCH_AGENT_COUNT = int(os.getenv("GROK_SEARCH_AGENT_COUNT", "4"))
+# Два, а не четыре: по консоли xAI multi-agent — самая дорогая модель у бота
+# ($1.40 из $3.07 за неделю), и биллятся токены всех агентов сразу. Наш запрос
+# — «сходи в сеть и перескажи», а не «прочеши десяток источников параллельно»,
+# так что за четвёртым агентом стоит цена, а не находки. Поднять обратно
+# осмысленно ровно тогда, когда шаг станет настоящим research'ем.
+GROK_SEARCH_AGENT_COUNT = int(os.getenv("GROK_SEARCH_AGENT_COUNT", "2"))
 
 # Отдельный потолок для шага живого поиска — он один ходит по SDK и один живёт
 # по другим часам, чем обычный запрос к модели: multi-agent действительно
