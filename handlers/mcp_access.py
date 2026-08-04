@@ -73,12 +73,17 @@ def _address() -> str:
     return f"🌐 <b>Адрес для коннектора:</b>\n{_copyable(_server_url())}"
 
 
-def _credentials(token: str) -> str:
-    """Токен и адрес — то, что нужно подставить в клиент с заголовком."""
-    return (
-        f"🔑 <b>Токен:</b>\n{_copyable(token)}\n"
-        f"🌐 <b>Адрес сервера:</b>\n{_copyable(_server_url())}"
-    )
+def _credentials(token: str, with_address: bool = True) -> str:
+    """Токен и адрес — то, что нужно подставить в клиент с заголовком.
+
+    `with_address=False` — когда адрес на этом экране уже показан выше: два
+    одинаковых значения под разными подписями («для коннектора» и «сервера»)
+    читаются как два разных адреса, которые нельзя перепутать.
+    """
+    token_block = f"🔑 <b>Токен:</b>\n{_copyable(token)}"
+    if not with_address:
+        return token_block
+    return token_block + f"\n🌐 <b>Адрес сервера:</b>\n{_copyable(_server_url())}"
 
 
 def _code_ttl() -> str:
@@ -116,9 +121,17 @@ def _when(value: str | None, user=None) -> str:
 # значит выкинуть ровно те детали, из-за которых подключение и не получается.
 
 
-def _claude_web_guide(token: str | None, code: str | None) -> str:
+def _claude_guide(token: str | None, code: str | None) -> str:
+    """Браузер и приложение — одна инструкция, потому что путь и правда один.
+
+    Разводить их по экранам было ошибкой: разделы называются одинаково, шаги
+    совпадают до последнего, различается только где искать настройки. Два экрана
+    с одинаковым текстом человек читает как «я, наверное, открыл не тот».
+    """
     return (
-        "☁️ <b>Claude в браузере</b> (claude.ai)\n\n"
+        "☁️ <b>Claude</b> — браузер и приложение\n\n"
+        "Шаги одни и те же: раздел коннекторов есть и на claude.ai, и в Claude "
+        "Desktop, и называется одинаково.\n\n"
         "1. <b>Settings → Connectors</b> (Настройки → Коннекторы)\n"
         "2. <b>Add custom connector</b> (Добавить свой коннектор)\n"
         "3. Вставь адрес:\n"
@@ -128,7 +141,10 @@ def _claude_web_guide(token: str | None, code: str | None) -> str:
         "5. Нажми <b>«Разрешить»</b> — готово\n\n"
         "Проверка: в новом чате спроси «покажи мои последние тренировки» — Claude "
         "попросит разрешение на вызов инструмента и вернёт данные.\n\n"
-        f"Код одноразовый и живёт {_code_ttl()}. Истёк — «🔄 Новый код» ниже."
+        f"Код одноразовый и живёт {_code_ttl()}. Истёк — «🔄 Новый код» ниже.\n\n"
+        "Ни Node.js, ни <code>mcp-remote</code> не нужны: приложение подключает "
+        "коннекторы само. Мостик остался только для сборок без раздела "
+        "коннекторов — если это твой случай, скажи, дам команду."
     )
 
 
@@ -148,24 +164,6 @@ def _chatgpt_guide(token: str | None, code: str | None) -> str:
         "тренировки».\n\n"
         "Названия пунктов OpenAI периодически меняет — ищи по словам "
         "<i>Connectors</i> и <i>Developer mode</i>.\n\n"
-        f"Код одноразовый и живёт {_code_ttl()}. Истёк — «🔄 Новый код» ниже."
-    )
-
-
-def _claude_desktop_guide(token: str | None, code: str | None) -> str:
-    return (
-        "💬 <b>Claude Desktop</b>\n\n"
-        "Ни Node.js, ни <code>mcp-remote</code> не нужны — приложение подключает "
-        "коннекторы само.\n\n"
-        "1. <b>Настройки → Коннекторы</b> (Settings → Connectors)\n"
-        "2. <b>Добавить свой коннектор</b> (Add custom connector)\n"
-        "3. Вставь адрес:\n"
-        f"{_copyable(_server_url())}"
-        "4. На открывшейся странице введи код:\n"
-        f"{_copyable(code or '')}"
-        "5. Нажми <b>«Разрешить»</b> — готово\n\n"
-        "Проверка: в чате появится значок инструментов — спроси «покажи мои "
-        "последние тренировки».\n\n"
         f"Код одноразовый и живёт {_code_ttl()}. Истёк — «🔄 Новый код» ниже."
     )
 
@@ -190,9 +188,8 @@ def _claude_code_guide(token: str | None, code: str | None) -> str:
 
 
 GUIDES = {
-    "claude_web": ("Claude в браузере", _claude_web_guide),
+    "claude": ("Claude", _claude_guide),
     "chatgpt": ("ChatGPT", _chatgpt_guide),
-    "claude_desktop": ("Claude Desktop", _claude_desktop_guide),
     "claude_code": ("Claude Code", _claude_code_guide),
 }
 
@@ -207,7 +204,12 @@ def _connections_block(connections: list, user) -> str:
     lines = ["🔌 <b>Подключено:</b>"]
     for row in connections:
         name = mcp_oauth.client_display_name(row["metadata"], row["client_id"])
-        lines.append(f"• {escape(name)} — {_when(row['last_used_at'], user)}")
+        # Подпись обязательна: без неё дата читается как «когда подключено», и
+        # человек, зашедший проверить, ходил ли кто-то за данными, делает
+        # противоположный вывод.
+        lines.append(
+            f"• {escape(name)} — последний запрос: {_when(row['last_used_at'], user)}"
+        )
     return "\n".join(lines)
 
 
@@ -226,8 +228,8 @@ def _screen_text(token_row, connections: list, user=None) -> str:
         # «Ещё ни разу» — это не мелочь: сразу после настройки клиента по этой
         # строке видно, дошёл запрос или нет, и не надо гадать, где ошибка.
         blocks.append(
-            _credentials(token_row["token"])
-            + f"\n\n🕒 Последнее обращение по токену: {_when(used, user)}"
+            _credentials(token_row["token"], with_address=False)
+            + f"\n🕒 Последний запрос по токену: {_when(used, user)}"
         )
     # Последняя строка перед кнопками — про то, что кнопка ведёт не в очередной
     # список, а сразу ко всему нужному: человек, которого один раз погоняли между

@@ -20,8 +20,6 @@ import config
 import keyboards
 from handlers import mcp_access
 
-pytestmark = pytest.mark.asyncio
-
 
 @pytest.fixture(autouse=True)
 def public_url(monkeypatch):
@@ -154,14 +152,17 @@ def _buttons(kb) -> list[str]:
     return [b.callback_data for row in kb.inline_keyboard for b in row]
 
 
+def _rows(kb) -> list[list[str]]:
+    return [[b.callback_data for b in row] for row in kb.inline_keyboard]
+
+
 def test_connector_path_is_offered_without_any_token():
     """Коннектор доступен сразу и всем: код связывания и инструкции под Claude с
     ChatGPT токена не требуют, и прятать их за «сначала выдай токен» значило бы
     закрыть единственный путь, где человек ничего не настраивает."""
     assert _buttons(keyboards.mcp_keyboard(False)) == [
-        "mcp:how:claude_web",
+        "mcp:how:claude",
         "mcp:how:chatgpt",
-        "mcp:how:claude_desktop",
         # Код — после инструкций: он живёт минуты и нужен по ходу подключения,
         # а взятый до него успевает истечь.
         "mcp:code",
@@ -173,16 +174,27 @@ def test_connector_path_is_offered_without_any_token():
 def test_token_guides_and_revoke_appear_only_with_a_token():
     """А вот инструкции для терминала без токена показывать нечего — в них
     нечего вставлять."""
-    assert _buttons(keyboards.mcp_keyboard(True)) == [
-        "mcp:how:claude_web",
-        "mcp:how:chatgpt",
-        "mcp:how:claude_desktop",
-        "mcp:code",
-        "mcp:how:claude_code",
-        "mcp:issue",
-        "mcp:revoke",
-        "menu:settings",
-    ]
+    with_token = _buttons(keyboards.mcp_keyboard(True))
+    assert "mcp:how:claude_code" in with_token
+    assert "mcp:revoke" in with_token
+    assert "mcp:how:claude_code" not in _buttons(keyboards.mcp_keyboard(False))
+    assert "mcp:revoke" not in _buttons(keyboards.mcp_keyboard(False))
+
+
+def test_the_screen_is_grouped_into_rows_not_one_long_column():
+    """Девять кнопок в одну колонку — простыня, в которой глазу не за что
+    зацепиться. Группы очевидны: клиенты, код с приложениями, токен."""
+    rows = _rows(keyboards.mcp_keyboard(True, True))
+
+    assert rows[0] == ["mcp:how:claude", "mcp:how:chatgpt"]
+    assert rows[1] == ["mcp:how:claude_code"]
+    assert rows[2] == ["mcp:code"]
+    assert rows[3] == ["mcp:apps"]
+    assert rows[4] == ["mcp:issue", "mcp:revoke"]
+    assert rows[-1] == ["menu:settings"]
+    # Ни один ряд не длиннее двух: три кнопки в ряд Telegram сжимает до
+    # нечитаемых обрубков подписей.
+    assert max(len(row) for row in rows) == 2
 
 
 def test_connected_apps_appear_only_when_there_is_something_to_disconnect():

@@ -14,8 +14,6 @@ import pytest
 import ai_trainer
 import mcp_server
 
-pytestmark = pytest.mark.asyncio
-
 
 @asynccontextmanager
 async def _running(app):

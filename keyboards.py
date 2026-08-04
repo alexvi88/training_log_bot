@@ -1039,9 +1039,8 @@ def settings_keyboard(
 # одного файла конфигурации. Их инструкции показываются всегда — токена они не
 # требуют вовсе.
 MCP_OAUTH_CLIENTS = [
-    ("claude_web", "☁️ Claude в браузере"),
+    ("claude", "☁️ Claude"),
     ("chatgpt", "🤖 ChatGPT"),
-    ("claude_desktop", "💬 Claude Desktop"),
 ]
 
 # Клиенты, которым нужен статический токен в заголовке. Их инструкции без токена
@@ -1066,26 +1065,51 @@ def mcp_keyboard(has_token: bool, has_connections: bool = False) -> InlineKeyboa
     человека копировать секрет в конфиг там, где хватило бы шести цифр.
     Кнопка «Подключённые приложения» появляется, только когда есть что
     отключать, — иначе это тап в пустой список.
+
+    Кнопки разложены по рядам, а не столбиком: девять штук в одну колонку — это
+    простыня, в которой глазу не за что зацепиться, хотя группы очевидны
+    (клиенты / код и приложения / токен). Парами они читаются как три раздела.
     """
     b = InlineKeyboardBuilder()
-    for kind, label in MCP_OAUTH_CLIENTS:
-        b.button(text=label, callback_data=f"mcp:how:{kind}")
+    # Claude и ChatGPT в один ряд: это те два, с которых подключается тот, кто не
+    # открывает терминал вообще. Claude один на браузер и приложение — путь там
+    # ровно один и тот же, и второй экран с тем же текстом только сбивает.
+    b.row(
+        *(
+            InlineKeyboardButton(text=label, callback_data=f"mcp:how:{kind}")
+            for kind, label in MCP_OAUTH_CLIENTS
+        )
+    )
+    if has_token:
+        b.row(
+            *(
+                InlineKeyboardButton(text=label, callback_data=f"mcp:how:{kind}")
+                for kind, label in MCP_TOKEN_CLIENTS
+            )
+        )
     # Код — после инструкций, а не первым: он живёт минуты и нужен на середине
     # пути, когда приложение уже открыло страницу подтверждения. Взятый заранее
     # успевает истечь, пока человек ищет в приложении раздел коннекторов, — та же
     # кнопка есть на каждом экране инструкции, где она и к месту.
-    b.button(text="🔗 Код для подключения", callback_data="mcp:code")
+    b.row(InlineKeyboardButton(text="🔗 Код для подключения", callback_data="mcp:code"))
     if has_connections:
-        b.button(text="🔌 Подключённые приложения", callback_data="mcp:apps")
+        b.row(
+            InlineKeyboardButton(
+                text="🔌 Подключённые приложения", callback_data="mcp:apps"
+            )
+        )
     if has_token:
-        for kind, label in MCP_TOKEN_CLIENTS:
-            b.button(text=label, callback_data=f"mcp:how:{kind}")
-        b.button(text="♻️ Перевыпустить токен", callback_data="mcp:issue")
-        b.button(text="🗑 Отозвать токен", callback_data="mcp:revoke")
+        b.row(
+            InlineKeyboardButton(text="♻️ Перевыпустить", callback_data="mcp:issue"),
+            InlineKeyboardButton(text="🗑 Отозвать", callback_data="mcp:revoke"),
+        )
     else:
-        b.button(text="🔑 Выдать токен для терминала", callback_data="mcp:issue")
-    b.button(text="🔧 Настройки", callback_data="menu:settings")
-    b.adjust(1)
+        b.row(
+            InlineKeyboardButton(
+                text="🔑 Выдать токен для терминала", callback_data="mcp:issue"
+            )
+        )
+    b.row(InlineKeyboardButton(text="🔧 Настройки", callback_data="menu:settings"))
     return b.as_markup()
 
 
