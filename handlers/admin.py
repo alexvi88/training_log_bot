@@ -348,33 +348,3 @@ async def broadcast_send(callback: CallbackQuery, state: FSMContext):
     )
 
 
-# The filter checks the admin id itself rather than the handler body: with
-# ADMIN_ID unset (or anyone else sending a sticker) the handler never matches,
-# so the sticker falls through to the normal fallback reply instead of being
-# silently swallowed by a handler that returns early.
-@router.message(F.sticker, F.from_user.id == config.ADMIN_ID)
-async def sticker_probe(message: Message):
-    """Identify a sticker's pack, so STICKER_PACKS can be filled in.
-
-    A pack's short name isn't visible anywhere in the Telegram UI, but it's
-    exactly what stickers.py needs. Forwarding one sticker here answers with it,
-    plus the emoji the author tagged it with — which is what decides when the
-    bot picks it (see stickers.OCCASION_EMOJI).
-    """
-    sticker = message.sticker
-    pack = sticker.set_name or "— (стикер вне набора)"
-    lines = [
-        "🧩 <b>Стикер</b>",
-        f"Набор: <code>{pack}</code>",
-        f"Эмодзи: {sticker.emoji or '—'}",
-    ]
-    if sticker.set_name:
-        try:
-            full = await message.bot.get_sticker_set(sticker.set_name)
-            emojis = sorted({s.emoji for s in full.stickers if s.emoji})
-            lines.append(f"Стикеров в наборе: {len(full.stickers)}")
-            lines.append("Эмодзи набора: " + " ".join(emojis))
-        except TelegramAPIError as e:
-            lines.append(f"Не удалось прочитать набор: {e}")
-        lines.append(f"\nЧтобы включить: <code>STICKER_PACKS={sticker.set_name}</code>")
-    await message.reply("\n".join(lines), parse_mode="HTML")
