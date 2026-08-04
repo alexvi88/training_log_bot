@@ -373,9 +373,18 @@ def compare_to_previous_session(sessions: list[SessionStats]) -> Optional[Compar
 REP_RANGE_MIN = 5
 REP_RANGE_MAX = 10
 
-# Weekly working-set landmarks per muscle group (5-12 sets/week).
-WEEKLY_VOLUME_MIN = 5
+# Целевой недельный объём на группу мышц, в рабочих подходах. Round numbers
+# rather than a citation: the dose-response literature usually quotes ~10
+# sets/week as the point where a group is trained *enough*, with more still
+# paying off for trained lifters — so treat 6 as "меньше этого мало похоже на
+# тренировку группы", not as a scientific floor.
+WEEKLY_VOLUME_MIN = 6
 WEEKLY_VOLUME_MAX = 12
+
+# Окно, за которое считается объём на главном экране. Скользящие 7 дней, а не
+# календарная неделя: с понедельника счётчик показывал бы нули ровно в тот день,
+# когда человек открывает бота планировать неделю.
+VOLUME_WINDOW_DAYS = 7
 
 
 # Finished-workout counts worth celebrating right on the completion card

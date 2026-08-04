@@ -613,13 +613,24 @@ def _try_claim_weight_confirm(user_id: int) -> bool:
 
 async def _menu_view(user_id: int) -> tuple[str, bytes | None]:
     """Greeting, plus a year heatmap image (with the streak/this-week/30-day
-    dashboard stats drawn into it) once the user has any finished workouts.
+    dashboard stats and the per-muscle-group volume panel drawn into it) once the
+    user has any finished workouts.
     """
     today = timeutil.user_today(await db.get_user(user_id))
     dates = [dt.date.fromisoformat(d) for d in await db.list_finished_workout_dates(user_id)]
     if not dates:
         return _ONBOARDING, None
-    cache_key = (today, len(dates), max(dates))
+    window_start = today - dt.timedelta(days=analytics.VOLUME_WINDOW_DAYS - 1)
+    volume_title, volume_rows = formatting.weekly_volume_panel(
+        await db.weekly_volume_by_group(user_id, window_start.isoformat(), today.isoformat()),
+        await db.list_muscle_groups(user_id),
+    )
+    # Объём входит в ключ кэша: он меняется от подходов, а не от тренировок, так
+    # что по (дата, число тренировок) картинка застыла бы до следующей открытой
+    # тренировки — дописал четыре подхода в уже закрытую, а полосы прежние.
+    # Ещё он меняется сам по себе от того, что день прошёл и подход выпал из окна
+    # семи дней, — это ловит today в ключе.
+    cache_key = (today, len(dates), max(dates), tuple(volume_rows))
     cached = _heatmap_cache.get(user_id)
     if cached is not None and cached[0] == cache_key:
         return _GREETING, cached[1]
@@ -629,7 +640,10 @@ async def _menu_view(user_id: int) -> tuple[str, bytes | None]:
     first_monday = min(dates) - dt.timedelta(days=min(dates).weekday())
     heatmap_start = max(first_monday, year_ago)
     stat_lines = formatting.dashboard_stat_lines(dashboard)
-    png = await asyncio.to_thread(charts.render_year_heatmap, Counter(dates), today, heatmap_start, stat_lines)
+    png = await asyncio.to_thread(
+        charts.render_year_heatmap,
+        Counter(dates), today, heatmap_start, stat_lines, volume_rows, volume_title,
+    )
     _heatmap_cache[user_id] = (cache_key, png)
     return _GREETING, png
 

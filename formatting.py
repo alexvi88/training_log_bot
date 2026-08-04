@@ -13,7 +13,7 @@ from typing import Callable, Literal, Optional
 from aiogram.types import MessageEntity
 
 import config
-from analytics import e1rm
+from analytics import VOLUME_WINDOW_DAYS, classify_weekly_volume, e1rm
 
 _WEEKDAYS_RU = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"]
 # Full names for prose ("понедельник — твой самый продуктивный день").
@@ -1101,6 +1101,50 @@ def dashboard_stat_lines(dashboard) -> list[tuple[str, str]]:
     month_word = plural_ru(dashboard.last_30_days, ("тренировка", "тренировки", "тренировок"))
     lines.append(("Последние 30 дней: ", f"{dashboard.last_30_days} {month_word}"))
     return lines
+
+
+# Подпись группы, под которую бот не смог определить мышцу. Своя строка, а не
+# пропуск: подходы сделаны, и прятать их из суммы значило бы показывать неверный
+# итог.
+UNGROUPED_LABEL = "БЕЗ ГРУППЫ"
+
+
+def weekly_volume_panel(
+    counts: dict[Optional[int], int], groups: list
+) -> tuple[str, list[tuple[str, int, str]]]:
+    """(заголовок, строки) для панели недельного объёма на главном экране.
+
+    `counts` — что вернул db.weekly_volume_by_group (ключ — id группы мышц, None
+    для упражнений без группы), `groups` — список групп пользователя. Строка:
+    (название капсом, подходов, статус из classify_weekly_volume) — то, что
+    charts._draw_volume_panel рисует напрямую.
+
+    Группы с нулём остаются в списке: «спину я на этой неделе не трогал» — это
+    главное, что панель вообще способна сообщить, и выкинуть такую строку значит
+    выкинуть ответ. А вот когда ноль везде, панели нет совсем — вызывающая
+    сторона видит пустой список строк.
+
+    Порядок — по убыванию подходов: перебор собирается сверху, провалы внизу, и
+    длина полос идёт монотонно, так что дыру видно по силуэту списка, а не
+    вычитанием чисел. Ничьи разводятся по названию, иначе картинка бы
+    перетасовывалась между открытиями меню на одних и тех же данных.
+    """
+    rows: list[tuple[str, int, str]] = []
+    for group in groups:
+        sets = counts.get(group["id"], 0)
+        rows.append((format_group(group["name"]), sets, classify_weekly_volume(sets)))
+
+    ungrouped = counts.get(None, 0)
+    if ungrouped:
+        rows.append((UNGROUPED_LABEL, ungrouped, classify_weekly_volume(ungrouped)))
+
+    total = sum(sets for _, sets, _ in rows)
+    if total == 0:
+        return "", []
+
+    rows.sort(key=lambda row: (-row[1], row[0]))
+    word = plural_ru(total, ("ПОДХОД", "ПОДХОДА", "ПОДХОДОВ"))
+    return f"ОБЪЁМ ЗА {VOLUME_WINDOW_DAYS} ДНЕЙ · {total} {word}", rows
 
 
 def build_workout_card(
