@@ -381,6 +381,29 @@ def test_a_single_point_series_renders_without_a_line():
     assert _render(lifts=[("ЖИМ", [100.0], "100 кг", "")])[:8] == b"\x89PNG\r\n\x1a\n"
 
 
+def test_the_lift_card_is_spaced_like_the_volume_row():
+    """Блок движений размечен тем же шагом, что и коридор объёма.
+
+    Он задавался наоборот — блоку назначалась высота в дюймах, а разметка жила в
+    единицах оси, — и единица выходила вдвое крупнее соседней панели. Отступ «в
+    одну единицу» между подписью блока и именем движения из-за этого занимал
+    сотню пикселей пустоты. Сравниваем шаг, а не пиксели: пиксели поедут от
+    любой правки шрифта, а «два блока разъехались по плотности» — не поедет.
+    """
+    assert charts._LIFT_UNIT_IN == charts._DASH_VOL_STEP
+    lift_units = charts._LIFT_BOTTOM - charts._LIFT_TOP
+    assert abs(charts._LIFT_UNIT_IN * lift_units - charts._DASH_LIFTS_H) < 1e-9
+
+
+def test_the_sparkline_gets_most_of_its_card():
+    """Спарклайн — единственное, зачем этот блок нужен: остальное в нём и так есть
+    текстом. Раньше на линию приходилось меньше трети высоты блока, остальное
+    съедали отступы, и рост в ней было не разглядеть."""
+    line_share = charts._LIFT_LINE_HEIGHT / (charts._LIFT_BOTTOM - charts._LIFT_TOP)
+
+    assert line_share > 0.5
+
+
 # ---------- экран меню ----------
 
 

@@ -322,12 +322,24 @@ DASH_FS_MICRO = 6.5     # месяцы и дни недели календаря
 _DASH_HEAD_H = 0.58
 _DASH_TILES_H = 0.86
 _DASH_VOL_STEP = 0.30
-_DASH_LIFTS_H = 2.45
-# Куда линия движения падает и на сколько поднимается, в единицах оси блока.
-# Раньше на неё приходилось 0.36 из 2.75 — на экране это десяток пикселей, в
-# которых роста не разглядеть.
-_LIFT_LINE_BOTTOM = 1.80
-_LIFT_LINE_HEIGHT = 1.05
+
+# Карточка движения размечена тем же шагом, что и строка коридора объёма, и
+# высота блока выводится из разметки, а не наоборот. Раньше было наоборот: блоку
+# назначались 2.45 дюйма на 3.6 единицы оси, единица выходила 0.68 дюйма — вдвое
+# крупнее соседней панели. Отступ «в одну единицу» между подписью блока и именем
+# движения из-за этого занимал сотню пикселей пустоты, а на сам график
+# оставалось меньше её. Теперь единица одна на оба блока, воздух между строками
+# такой же плотный, как в коридоре, а всё сэкономленное ушло в высоту линии.
+_LIFT_UNIT_IN = _DASH_VOL_STEP
+_LIFT_TOP = -1.4          # верх полосы — как у панели объёма
+_LIFT_NAME_Y = 0.0        # имя движения: первая строка блока
+_LIFT_VALUE_Y = 0.85      # под ним крупное число и изменение
+# Куда линия движения падает и откуда поднимается, в тех же единицах.
+_LIFT_LINE_TOP = 1.45
+_LIFT_LINE_BOTTOM = 5.65
+_LIFT_BOTTOM = 6.2
+_LIFT_LINE_HEIGHT = _LIFT_LINE_BOTTOM - _LIFT_LINE_TOP
+_DASH_LIFTS_H = _LIFT_UNIT_IN * (_LIFT_BOTTOM - _LIFT_TOP)
 
 
 def _dash_card(ax, x, y, w, h, colour=DASH_CARD) -> None:
@@ -432,19 +444,19 @@ def _dash_lifts(ax, lifts, fg: str, dim: str, ok: str, title: str = "", note: st
     тяги разные веса, и общая шкала расплющила бы жим в прямую. Сравнивать эти
     три линии между собой не нужно — каждая отвечает на «я тут расту?».
     """
-    ax.set_ylim(2.10, -1.5)
+    ax.set_ylim(_LIFT_BOTTOM, _LIFT_TOP)
     if title:
         _dash_section(ax, title, note)
     box = (DASH_RIGHT - DASH_LEFT - 0.02 * (len(lifts) - 1)) / len(lifts)
     for i, (name, series, value, delta) in enumerate(lifts):
         x0 = DASH_LEFT + i * (box + 0.02)
-        ax.text(x0, 0.02, name, color=dim, fontsize=DASH_FS_CAPTION, va="center")
-        ax.text(x0, 0.34, value, color=fg, fontsize=DASH_FS_VALUE,
+        ax.text(x0, _LIFT_NAME_Y, name, color=dim, fontsize=DASH_FS_CAPTION, va="center")
+        ax.text(x0, _LIFT_VALUE_Y, value, color=fg, fontsize=DASH_FS_VALUE,
                 fontweight="bold", va="center")
         if delta:
             # Минус не красится в зелёное: цвет здесь — единственное, что отличает
             # «вырос» от «просел», и покрасить откат как рост значило бы врать.
-            ax.text(x0 + box, 0.34, delta, color=ok if delta.startswith("+") else dim,
+            ax.text(x0 + box, _LIFT_VALUE_Y, delta, color=ok if delta.startswith("+") else dim,
                     fontsize=DASH_FS_NUMBER, fontweight="bold", ha="right", va="center")
         if len(series) < 2:
             continue
