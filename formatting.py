@@ -1121,6 +1121,13 @@ def dashboard_stat_lines(dashboard) -> list[tuple[str, str]]:
 # итог.
 UNGROUPED_LABEL = "БЕЗ ГРУППЫ"
 
+# «Другое» — сборная группа каталога, куда попадает всё, что не легло в шесть
+# основных. На сводке она не нужна: у коридора 6–12 нет смысла для мешка, в
+# котором может лежать и пресс, и кардио, и одна разминка, а строку и место она
+# занимает наравне с грудью. В сумму заголовка тоже не идёт — иначе число не
+# сходилось бы с видимыми полосами.
+VOLUME_HIDDEN_GROUPS = frozenset({"другое"})
+
 
 def weekly_volume_panel(
     counts: dict[Optional[int], int], groups: list
@@ -1144,6 +1151,8 @@ def weekly_volume_panel(
     """
     rows: list[tuple[str, int, str]] = []
     for group in groups:
+        if group["name"].strip().lower() in VOLUME_HIDDEN_GROUPS:
+            continue
         sets = counts.get(group["id"], 0)
         rows.append((format_group(group["name"]), sets, classify_weekly_volume(sets)))
 
@@ -1157,12 +1166,36 @@ def weekly_volume_panel(
 
     rows.sort(key=lambda row: (-row[1], row[0]))
     word = plural_ru(total, ("ПОДХОД", "ПОДХОДА", "ПОДХОДОВ"))
-    return f"ОБЪЁМ ЗА {VOLUME_WINDOW_DAYS} ДНЕЙ · {total} {word}", rows
+    return f"ОБЪЁМ {days_window_label(VOLUME_WINDOW_DAYS)} · {total} {word}", rows
 
 
 # Сколько символов имени движения влезает в карточку сводки. Ширина карточки —
 # треть картинки, шрифт 7pt: дальше имя лезет на соседнюю карточку.
 _LIFT_NAME_LIMIT = 22
+
+# Подписи блоков сводки, у которых нет своего числа в заголовке. Без них блок —
+# это просто клетки или просто цифры: календарь без подписи не отличить от
+# декорации, а «101 кг» под именем упражнения читается как поднятый вес, хотя это
+# расчётный максимум.
+MENU_CALENDAR_TITLE = "ПОСЕЩЕНИЯ · ГОД"
+MENU_LIFTS_TITLE = "ЧТО ДЕЛАЕШЬ ЧАЩЕ ВСЕГО"
+MENU_LIFTS_NOTE = "РАСЧЁТНЫЙ МАКСИМУМ"
+
+
+def days_window_label(days: int) -> str:
+    """«ЗА 7 ДНЕЙ» — единственная форма записи окна в сводке.
+
+    До этого в одной картинке жили три: «ЗА 30 ДНЕЙ», «ТОННАЖ 7 Д» и «ОБЪЁМ ЗА 7
+    ДНЕЙ». Одна и та же мысль, записанная тремя способами, заставляет читателя
+    каждый раз заново решать, что перед ним, — а решать тут нечего.
+    """
+    return f"ЗА {days} {plural_ru(days, ('ДЕНЬ', 'ДНЯ', 'ДНЕЙ'))}"
+
+
+def menu_calendar_caption(workouts: int) -> tuple[str, str]:
+    """(заголовок, примечание) для календаря: что это за клетки и сколько их."""
+    word = plural_ru(workouts, ("тренировка", "тренировки", "тренировок"))
+    return MENU_CALENDAR_TITLE, f"{workouts} {word}"
 
 
 def menu_headline(dashboard) -> str:
@@ -1183,23 +1216,25 @@ def menu_headline(dashboard) -> str:
 def menu_tiles(dashboard, tonnage: float, records: int, unit: str = "kg") -> list[tuple[str, str]]:
     """Три плитки под заголовком: месяц, работа за неделю и рекорды.
 
-    Рекордов может не быть, и тогда плитка отдаёт место текущей неделе: «★
-    РЕКОРДОВ 0» — это не факт, а укор, причём за неделю, в которую человек мог
+    Рекордов может не быть, и тогда плитка отдаёт место текущей неделе:
+    «РЕКОРДОВ 0» — это не факт, а укор, причём за неделю, в которую человек мог
     просто работать в подходах.
+
+    У тоннажа и рекордов окно названо в подписи. Без него «11» рядом с «35.1 т»
+    выглядит как счётчик за всё время, и цифра врёт в разы.
     """
     u = UNIT_LABELS.get(unit, "кг")
-    # Тонны — когда их есть чем мерить: «0,4 т» читается хуже, чем «400 кг».
-    tonnes = f"{tonnage / 1000:.1f}".replace(".", ",")
+    # Тонны — когда их есть чем мерить: «0.4 т» читается хуже, чем «400 кг».
+    tonnes = f"{tonnage / 1000:.1f}"
     weight = f"{tonnes} т" if tonnage >= 1000 else f"{tonnage:.0f} {u}"
     tiles = [
-        ("ЗА 30 ДНЕЙ", str(dashboard.last_30_days)),
-        (f"ТОННАЖ {VOLUME_WINDOW_DAYS} Д", weight),
+        (f"ТРЕНИРОВОК {days_window_label(30)}", str(dashboard.last_30_days)),
+        (f"ТОННАЖ {days_window_label(VOLUME_WINDOW_DAYS)}", weight),
     ]
     if records > 0:
-        tiles.append(("★ РЕКОРДОВ", str(records)))
+        tiles.append((f"РЕКОРДОВ {days_window_label(VOLUME_WINDOW_DAYS)}", str(records)))
     else:
-        word = plural_ru(dashboard.this_week, ("тренировка", "тренировки", "тренировок"))
-        tiles.append(("ЭТА НЕДЕЛЯ", f"{dashboard.this_week} {word}"))
+        tiles.append(("ТРЕНИРОВОК ЗА НЕДЕЛЮ", str(dashboard.this_week)))
     return tiles
 
 

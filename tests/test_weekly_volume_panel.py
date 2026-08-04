@@ -239,9 +239,9 @@ async def test_a_user_without_workouts_gets_no_panel_and_no_image(fresh_db, user
     assert text == workout_handlers._ONBOARDING
 
 
-async def test_the_real_groups_all_reach_the_panel(fresh_db, user_id):
-    """Семь глобальных групп плюс, при необходимости, свои: панель строится по
-    списку групп пользователя, а не по тем, в которых он что-то делал."""
+async def test_the_real_groups_reach_the_panel(fresh_db, user_id):
+    """Панель строится по списку групп пользователя, а не по тем, в которых он
+    что-то делал — иначе она перестала бы отвечать на «чего я не тренировал»."""
     db = fresh_db
     groups = await db.list_muscle_groups(user_id)
     group_id = groups[0]["id"]
@@ -253,6 +253,25 @@ async def test_the_real_groups_all_reach_the_panel(fresh_db, user_id):
     counts = await db.weekly_volume_by_group(user_id, window_start.isoformat(), today.isoformat())
     _, rows = formatting.weekly_volume_panel(counts, groups)
 
-    assert len(rows) == len(groups)
+    expected = [
+        g for g in groups if g["name"].strip().lower() not in formatting.VOLUME_HIDDEN_GROUPS
+    ]
+    assert len(rows) == len(expected)
     assert rows[0][1] == 7  # тренированная группа — сверху
     assert all(row[2] == "none" for row in rows[1:])
+
+
+async def test_the_catch_all_group_is_left_out(fresh_db, user_id):
+    """«Другое» — мешок, куда падает всё, что не легло в шесть основных: у
+    коридора 6–12 для него нет смысла, а строку и место он занимает наравне с
+    грудью. Из суммы в заголовке тоже исключён, иначе число не сошлось бы с
+    видимыми полосами."""
+    db = fresh_db
+    groups = await db.list_muscle_groups(user_id)
+    other = next(g for g in groups if g["name"].strip().lower() == "другое")
+    chest = next(g for g in groups if g["name"] == "Грудь")
+
+    title, rows = formatting.weekly_volume_panel({other["id"]: 9, chest["id"]: 6}, groups)
+
+    assert "ДРУГОЕ" not in [row[0] for row in rows]
+    assert title.endswith("6 ПОДХОДОВ")

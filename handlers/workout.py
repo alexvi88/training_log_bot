@@ -548,12 +548,12 @@ async def _back_after_cancel(callback: CallbackQuery, state: FSMContext, user):
 
 # ---------- main menu ----------
 
-_GREETING = "<b>ПРИВЕТ, АТЛЕТ. НАЧНЁМ ТРЕНИРОВКУ?</b>"
+_GREETING = "<b>ПРИВЕТ АТЛЕТ. НАЧНЁМ ТРЕНИРОВКУ?</b>"
 
 # Shown on the main menu until the first workout is logged — a quick "here's how
 # it works" so a brand-new user isn't dropped onto the same screen as a veteran.
 _ONBOARDING = (
-    "<b>ПРИВЕТ, АТЛЕТ! 💪</b>\n\n"
+    "<b>ПРИВЕТ АТЛЕТ! 💪</b>\n\n"
     "Я — твой дневник силовых тренировок. Работает просто:\n"
     "1️⃣ Жми «🏋️ НАЧАТЬ ТРЕНИРОВКУ»\n"
     "2️⃣ Выбирай группу мышц и упражнение\n"
@@ -681,10 +681,18 @@ async def _menu_view(user_id: int) -> tuple[str, bytes | None]:
     year_ago = this_monday - dt.timedelta(weeks=52)
     first_monday = min(dates) - dt.timedelta(days=min(dates).weekday())
     heatmap_start = max(first_monday, year_ago)
+    # Счётчик под календарём считает только нарисованные клетки: подписать
+    # «312 тренировок» под сеткой, которая показывает год из трёх, значило бы
+    # объяснять картинку числом, которого в ней нет.
+    calendar_title, calendar_note = formatting.menu_calendar_caption(
+        sum(1 for day in dates if day >= heatmap_start)
+    )
     png = await asyncio.to_thread(
         charts.render_menu_dashboard,
         Counter(dates), today, heatmap_start, headline, rank.name.upper(),
         tiles, volume_rows, volume_title, lift_cards,
+        calendar_title, calendar_note,
+        formatting.MENU_LIFTS_TITLE if lift_cards else "", formatting.MENU_LIFTS_NOTE,
     )
     _heatmap_cache[user_id] = (cache_key, png)
     return _GREETING, png
