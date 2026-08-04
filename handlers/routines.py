@@ -138,6 +138,33 @@ async def rt_program(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+@router.callback_query(F.data.startswith("rt:pgmedit:"))
+async def rt_program_edit(callback: CallbackQuery, state: FSMContext):
+    """«⚙️ Изменить программу» — отдельный экран под все правки.
+
+    Состав дней тут не повторяется: его человек только что видел на экране
+    программы, а здесь он выбирает действие, а не читает программу. Число дней
+    оставлено — от него зависит, что вообще осмысленно нажимать («Порядок дней»
+    на одном дне не показывается).
+    """
+    program_id = int(callback.data.split(":")[2])
+    program = await _owned_program(callback, program_id)
+    if program is None:
+        return
+    days = await db.list_program_days_by_id(program_id)
+    word = formatting.plural_ru(len(days), ("день", "дня", "дней"))
+    text = (
+        f"⚙️ <b>{escape(program['name'])}</b>\n"
+        f"<i>{len(days)} {word}</i>\n\n"
+        "Что меняем?"
+    )
+    await ui.safe_edit(
+        callback, text, reply_markup=keyboards.program_edit_keyboard(days, program_id),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
 @router.callback_query(F.data.startswith("rt:pgm:"))
 async def rt_program_days_legacy(callback: CallbackQuery, state: FSMContext):
     """Старая ручка экрана программы — id одного из её дней.

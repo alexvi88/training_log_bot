@@ -11,9 +11,9 @@ matplotlib.use("Agg")
 import matplotlib.dates as mdates  # noqa: E402
 from matplotlib.backends.backend_agg import FigureCanvasAgg  # noqa: E402
 from matplotlib.figure import Figure  # noqa: E402
-from matplotlib.patches import FancyBboxPatch  # noqa: E402
+from matplotlib.patches import FancyBboxPatch, Rectangle  # noqa: E402
 
-from analytics import linear_trend  # noqa: E402
+from analytics import WEEKLY_VOLUME_MAX, WEEKLY_VOLUME_MIN, linear_trend  # noqa: E402
 
 
 # Figures are built directly rather than through pyplot: pyplot keeps a single
@@ -106,11 +106,106 @@ def _rounded_cell(ax, x: float, y: float, size: float, colour: str) -> None:
     )
 
 
+# Цвета статусов недельного объёма (см. analytics.classify_weekly_volume). Цвет
+# здесь — единственный носитель «мало / норма / перебор»: у груди, бицепса и
+# трицепса в базе один и тот же эмодзи 💪, так что значком группы их не
+# различить, а подпись занята названием.
+VOLUME_COLOURS = {
+    "low": "#e0a845",
+    "in_range": "#45b97c",
+    "high": "#e2685a",
+}
+
+# Геометрия строки объёма в долях ширины картинки: название группы прижато
+# вправо к _VOL_LABEL_RIGHT, дорожка занимает середину, число — у правого края.
+_VOL_LABEL_RIGHT = 0.25
+_VOL_TRACK_LEFT = 0.275
+_VOL_TRACK_RIGHT = 0.945
+_VOL_NUMBER_RIGHT = 0.99
+
+# Толщина полосы в точках. Скруглённые концы даёт кап линии, а не
+# FancyBboxPatch, как в клетках календаря: у панели объёма оси не
+# равномасштабны, и скругление, заданное в данных, растянулось бы в овал.
+_VOL_BAR_WIDTH = 7.5
+
+
+def _volume_scale_max(rows: list[tuple[str, int, str]]) -> int:
+    """Правый край шкалы. Коридор всегда виден целиком с запасом, но одна
+    ударная неделя (30 подходов на спину) не должна сплющить остальные полосы
+    в ничто."""
+    busiest = max((sets for _, sets, _ in rows), default=0)
+    return max(WEEKLY_VOLUME_MAX + 4, busiest)
+
+
+def _draw_volume_panel(
+    ax, rows: list[tuple[str, int, str]], title: str, bg: str, fg: str, muted: str
+) -> None:
+    scale = _volume_scale_max(rows)
+    span = _VOL_TRACK_RIGHT - _VOL_TRACK_LEFT
+
+    def x_of(sets: int) -> float:
+        return _VOL_TRACK_LEFT + span * min(sets, scale) / scale
+
+    ax.set_facecolor(bg)
+    ax.axis("off")
+    ax.set_xlim(0, 1)
+    ax.set_ylim(len(rows) - 0.35, -1.4)  # inverted: самая нагруженная группа сверху
+
+    ax.text(0.04, -0.95, title, color=muted, fontsize=8.5, fontweight="bold", va="center")
+
+    # Целевой коридор — одной подложкой на все строки, а не отдельной пометкой у
+    # каждой полосы: норма одна и та же, и рисовать её семь раз значило бы семь
+    # раз просить глаз её перечитать.
+    lo, hi = x_of(WEEKLY_VOLUME_MIN), x_of(WEEKLY_VOLUME_MAX)
+    ax.add_patch(
+        Rectangle(
+            (lo, -0.5), hi - lo, len(rows),
+            linewidth=0, facecolor=HEATMAP_FILLED, alpha=0.17, zorder=0,
+        )
+    )
+    for edge in (lo, hi):
+        ax.plot(
+            [edge, edge], [-0.5, len(rows) - 0.5],
+            color=HEATMAP_FILLED, alpha=0.5, linewidth=0.9,
+            linestyle=(0, (1.5, 2)), zorder=1,
+        )
+    # Подпись коридора — в строке заголовка, а не под последней полосой: снизу она
+    # висела в пустоте между панелью и календарём и читалась как подпись к нему.
+    ax.text(
+        (lo + hi) / 2, -0.95,
+        f"НОРМА {WEEKLY_VOLUME_MIN}–{WEEKLY_VOLUME_MAX}",
+        color=HEATMAP_FILLED, fontsize=7, ha="center", va="center",
+    )
+
+    for row, (label, sets, status) in enumerate(rows):
+        ax.text(_VOL_LABEL_RIGHT, row, label, color=muted, fontsize=8, ha="right", va="center")
+        ax.plot(
+            [_VOL_TRACK_LEFT, _VOL_TRACK_RIGHT], [row, row],
+            color=HEATMAP_EMPTY, linewidth=_VOL_BAR_WIDTH,
+            solid_capstyle="round", zorder=2,
+        )
+        # Ноль полосой не рисуется вовсе: полоска нулевой длины со скруглённым
+        # капом всё равно выглядит как «немного есть», а здесь ровно наоборот.
+        if sets > 0:
+            ax.plot(
+                [_VOL_TRACK_LEFT, x_of(sets)], [row, row],
+                color=VOLUME_COLOURS[status], linewidth=_VOL_BAR_WIDTH,
+                solid_capstyle="round", zorder=3,
+            )
+        ax.text(
+            _VOL_NUMBER_RIGHT, row, str(sets),
+            color=fg if sets else muted, fontsize=8.5,
+            fontweight="bold" if sets else "normal", ha="right", va="center",
+        )
+
+
 def render_year_heatmap(
     day_counts: dict[dt.date, int],
     today: dt.date,
     start: dt.date,
     stat_lines: list[tuple[str, str]],
+    volume_rows: list[tuple[str, int, str]] | None = None,
+    volume_title: str = "",
 ) -> bytes:
     """GitHub-style contribution calendar: week columns x 7 day rows, Monday on top.
 
@@ -121,6 +216,11 @@ def render_year_heatmap(
     `start` (typically the Monday of the user's first workout, capped at a
     year back) through `today`, so it doesn't waste columns on weeks before
     the user began.
+
+    `volume_rows` — (название группы, подходов, статус) для панели недельного
+    объёма, которая рисуется между статистикой и календарём; порядок строк
+    задаёт вызывающая сторона (см. formatting.weekly_volume_panel). Пустой
+    список — панели нет совсем: семь нулей ничего не сообщают, а место занимают.
     """
     BG = "#12161d"
     FG = "#e6e6e6"
@@ -129,10 +229,12 @@ def render_year_heatmap(
     start = start - dt.timedelta(days=start.weekday())  # snap to Monday
     columns = (today - start).days // 7 + 1
 
+    rows = list(volume_rows or ())
     stats_h = 0.36 + 0.24 * max(len(stat_lines), 1)
+    vol_h = 0.0 if not rows else 0.30 + 0.26 * len(rows)
     grid_w = max(6.6, 2.4 + columns * 0.19)
     grid_h = 2.4
-    fig_w, fig_h = grid_w, stats_h + grid_h
+    fig_w, fig_h = grid_w, stats_h + vol_h + grid_h
 
     fig = _new_figure(figsize=(fig_w, fig_h), dpi=150)
     fig.patch.set_facecolor(BG)
@@ -151,6 +253,10 @@ def render_year_heatmap(
         bbox = label_text.get_window_extent(renderer=fig.canvas.get_renderer())
         bbox_axes = bbox.transformed(text_ax.transAxes.inverted())
         text_ax.text(bbox_axes.x1, y, value, color=FG, fontsize=10.5, fontweight="bold", va="center")
+
+    if rows:
+        vol_ax = fig.add_axes([0, grid_h / fig_h, 1, vol_h / fig_h])
+        _draw_volume_panel(vol_ax, rows, volume_title, BG, FG, MUTED)
 
     grid_ax = fig.add_axes([0, 0, 1, grid_h / fig_h])
     grid_ax.set_facecolor(BG)
