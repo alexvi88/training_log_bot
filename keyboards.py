@@ -69,6 +69,11 @@ def main_menu(has_active_workout: bool, show_quick_log: bool = False) -> InlineK
 # стрелками, а не удлиняем клавиатуру (см. ai_trainer_keyboard).
 AI_MENTION_PAGE_SIZE = 3
 
+# Предложенных действий за один ход бывает несколько («почисти лишние
+# программы» — это два удаления), но клавиатура на семь строк перекрывает сам
+# ответ, ради которого её и показали.
+MAX_AI_ACTIONS = 3
+
 
 def ai_trainer_keyboard(
     has_active_workout: bool = False,
@@ -77,7 +82,7 @@ def ai_trainer_keyboard(
     program_name: str | None = None,
     draft_id: int | None = None,
     programs: Sequence[Any] = (),
-    delete_target: Any = None,
+    actions: Sequence[Any] = (),
 ) -> InlineKeyboardMarkup:
     """`exercises` — то, что тренер упомянул в ответе (см. exercise_mentions), и
     свои упражнения, и ещё не добавленные из каталога — до
@@ -104,11 +109,11 @@ def ai_trainer_keyboard(
     о чём говорит, и кнопка под ним должна открывать ровно это, а не
     отправлять человека искать программу руками в ⚙️ Программы.
 
-    `delete_target` — программа, удаление которой тренер предложил в этом ходе
-    (см. ai_trainer.delete_program). Сам он ничего не удаляет: кнопка ведёт на
-    тот же экран подтверждения, что и удаление руками, — там и проверка
-    владельца, и «точно?». Стоит отдельной строкой над списком и не листается:
-    это ответ на прямую просьбу, а не подсказка по тексту.
+    `actions` — то, что тренер предложил сделать в этом ходе, но не сделал:
+    удалить программу, объединить две, поделиться (см. ai_trainer.ActionCallback).
+    Каждое — {"label", "callback"}; кнопки стоят отдельными строками над
+    списком и не листаются: это ответ на прямую просьбу, а не подсказка по
+    тексту, и прятать её на второй странице нельзя.
 
     Программа, если есть, идёт первым пунктом общего списка и делит с
     упоминаниями упражнений один и тот же лимит и постраничную навигацию
@@ -172,18 +177,17 @@ def ai_trainer_keyboard(
             page_nav.append(InlineKeyboardButton(text="➡️", callback_data=f"ai:mpage:{page + 1}:{joined}"))
     page_nav_rows = [page_nav] if page_nav else []
 
-    delete_rows = []
-    if delete_target:
-        delete_rows.append(
-            [
-                InlineKeyboardButton(
-                    text=f"🗑 {_shorten_label('Удалить: ' + delete_target['name'], AI_MENTION_LABEL_LIMIT)}",
-                    callback_data=ai_program_delete_cb(delete_target),
-                )
-            ]
-        )
+    action_rows = [
+        [
+            InlineKeyboardButton(
+                text=_shorten_label(action["label"], AI_MENTION_LABEL_LIMIT),
+                callback_data=action["callback"],
+            )
+        ]
+        for action in list(actions)[:MAX_AI_ACTIONS]
+    ]
 
-    return InlineKeyboardMarkup(inline_keyboard=delete_rows + item_rows + page_nav_rows + nav)
+    return InlineKeyboardMarkup(inline_keyboard=action_rows + item_rows + page_nav_rows + nav)
 
 
 def ai_mention_ref(target: Any) -> str:
@@ -200,13 +204,6 @@ def ai_program_open_cb(target: Any) -> str:
         return f"rt:prg:{target['id']}"
     return f"rt:view:{target['id']}"
 
-
-def ai_program_delete_cb(target: Any) -> str:
-    """Экран подтверждения удаления — тот же, что и при удалении руками: там
-    и проверка владельца, и «точно?». Тренер сам ничего не сносит."""
-    if target["kind"] == "program":
-        return f"rt:pgmdelask:{target['id']}"
-    return f"rt:delask:{target['id']}"
 
 
 def ai_program_preview_keyboard(replacing: bool = False, draft_id: int = 0) -> InlineKeyboardMarkup:
