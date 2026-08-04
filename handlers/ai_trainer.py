@@ -46,11 +46,22 @@ DEFAULT_PHOTO_QUESTION = "Посмотри на фото и прокоммент
 
 # Черновик — превью, а не сообщение: показываем хвост генерации, чтобы длинный
 # ответ не упирался в лимиты, а живая «печать» была видна.
-MAX_DRAFT_CHARS = 1000
+#
+# Окно намеренно большое: почти любой ответ тренера (3–10 коротких абзацев) целиком
+# помещается в него и не едет вовсе — текст просто дописывается снизу. С
+# прежней тысячей символов окно начинало ползти уже на середине среднего
+# ответа, и дальше весь пузырь ехал вверх до самого конца генерации. Ползёт
+# теперь только по-настоящему длинный разбор, и то в самом конце.
+MAX_DRAFT_CHARS = 2400
 
-# Минимальная пауза между двумя отправками черновика: Telegram ограничивает
-# частоту, а глазу чаще и не надо.
-DRAFT_MIN_INTERVAL = config.AI_STREAM_FLUSH_SECONDS
+# Потолок Telegram на текст черновика — «после разбора entities», то есть
+# считается видимый текст, а не наша HTML-разметка (см. _draft_html: таблица,
+# разложенная в строки, видимый текст удлиняет, и упереться в лимит реально).
+DRAFT_TEXT_LIMIT = 4096
+
+# Минимальная пауза между двумя перерисовками черновика — см.
+# config.AI_DRAFT_INTERVAL_SECONDS: это про глаза, а не про лимиты Telegram.
+DRAFT_MIN_INTERVAL = config.AI_DRAFT_INTERVAL_SECONDS
 
 # Дольше этого ждать флудвейт бессмысленно — ответ придёт раньше черновика.
 MAX_DRAFT_RETRY_WAIT = 5.0
@@ -153,7 +164,7 @@ class _RunningDisplay:
                     await self._placeholder.edit_text(self._last_text)
 
 
-def _draft_tail(text: str) -> str:
+def _draft_tail(text: str, limit: int = MAX_DRAFT_CHARS) -> str:
     """Хвост ответа для черновика, прижатый к началу строки.
 
     Резать хвост ровно по счётчику символов (`text[-1000:]`) — и есть та самая
@@ -168,14 +179,34 @@ def _draft_tail(text: str) -> str:
     пачку букв. Если строк в окне нет вовсе (сплошной абзац), отступаем к
     границе слова: это хотя бы не полслова.
     """
-    if len(text) <= MAX_DRAFT_CHARS:
+    if len(text) <= limit:
         return text
-    window = text[-MAX_DRAFT_CHARS:]
+    window = text[-limit:]
     newline = window.find("\n")
     if newline != -1:
         return window[newline + 1 :]
     space = window.find(" ")
     return window[space + 1 :] if space != -1 else window
+
+
+def _draft_html(text: str) -> str:
+    """Готовый текст черновика: хвост, разобранная разметка, длина в пределах
+    лимита Telegram.
+
+    Резать приходится ДО разбора разметки (иначе в куске окажется незакрытый
+    тег), а лимит считается ПОСЛЕ — и одно в другое не переводится: таблица,
+    разложенная в строки, видимый текст заметно удлиняет. Поэтому не считаем, а
+    проверяем и ужимаем окно, пока не влезет. Обычно цикл не проходит и одной
+    итерации; упереться в пол он может только на чём-то совсем неожиданном, но
+    и тогда лучше короткий черновик, чем ошибка, которая выключит стриминг до
+    конца ответа.
+    """
+    limit = MAX_DRAFT_CHARS
+    while True:
+        html = formatting.ai_markdown_to_html(_draft_tail(text, limit))
+        if formatting.telegram_length(html) <= DRAFT_TEXT_LIMIT or limit <= 400:
+            return html
+        limit //= 2
 
 
 class _DraftStreamer:
@@ -223,7 +254,10 @@ class _DraftStreamer:
         """Отдать черновику новый текст. Не ждёт сети — только будит писателя."""
         if not self._enabled or not text:
             return
-        self._pending = _draft_tail(text)
+        # Копим сырой текст целиком: во что именно он превратится на экране,
+        # решает _draft_html уже в момент отправки — промежуточные состояния
+        # всё равно выбрасываются, и обрезать их незачем.
+        self._pending = text
         if self._writer is None:
             self._writer = asyncio.create_task(self._run())
         self._wake.set()
@@ -256,8 +290,8 @@ class _DraftStreamer:
                 # Модель печатает markdown, а черновик — обычное сообщение:
                 # без разбора разметки в пузыре мигали сырые «**» ровно там,
                 # где тренер называет упражнение, то есть в каждой второй
-                # строке. Режем ДО разбора, поэтому теги в куске всегда парные.
-                text=formatting.ai_markdown_to_html(text),
+                # строке.
+                text=_draft_html(text) if text else text,
                 parse_mode="HTML",
             )
             return True

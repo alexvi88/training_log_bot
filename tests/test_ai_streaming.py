@@ -185,6 +185,29 @@ async def test_a_single_unbroken_paragraph_falls_back_to_a_word_boundary():
     assert not handler._draft_tail(text).startswith("во ")
 
 
+async def test_a_typical_answer_fits_the_window_without_ever_scrolling():
+    """Most of the trainer's answers are a few short paragraphs. If the window
+    is smaller than that, the bubble scrolls for the whole second half of the
+    generation — which is the part that made it flicker."""
+    typical = "\n\n".join(["Строка про жим и присед, вполне обычной длины."] * 20)
+    assert len(typical) < handler.MAX_DRAFT_CHARS
+    assert handler._draft_tail(typical) == typical
+
+
+async def test_the_draft_stays_within_telegram_limit_even_when_a_table_expands():
+    """The cut happens on markdown, the limit applies to the visible text, and
+    a table flattened into lines is much longer than its source. Overflowing
+    would fail the send and kill streaming for the rest of the answer."""
+    row = "| очень длинное название упражнения | 3×5–10 | комментарий про технику |\n"
+    text = "| Упражнение | Подходы | Заметка |\n|---|---|---|\n" + row * 200
+
+    html = handler._draft_html(text)
+
+    from formatting import telegram_length
+
+    assert telegram_length(html) <= handler.DRAFT_TEXT_LIMIT
+
+
 async def test_the_draft_shows_formatted_text_not_raw_markdown():
     """The bubble is a plain message, so ** used to blink through it verbatim —
     on every second line, since that is how exercise names are marked."""
