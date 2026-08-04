@@ -283,6 +283,19 @@ class ExerciseBlockView:
     # Index into `sets` of the set that is the exercise's new all-time-best
     # e1RM — the live 🥇 mark. None when nothing in this session beats history.
     gold_index: int | None = None
+    # Фактическая нагрузка каждого подхода (db.load_of), выровнена с `sets`.
+    # Отдельным полем, потому что в `sets` лежит то, что записал человек
+    # («0×12» подтягиваний), а вся арифметика — e1RM, рекорды, графики — считает
+    # по нагрузке: вес тела плюс добавка. Пока карточка считала e1RM по сырому
+    # весу, один и тот же подход показывал 11.7 кг на экране тренировки и 105 кг
+    # рекордом в зале славы. None — обычное железо: нагрузка равна записанному.
+    set_loads: list[float] | None = None
+
+    def load_for(self, index: int) -> float:
+        """Нагрузка подхода — то, по чему считается e1RM (не то, что показано)."""
+        if self.set_loads and index < len(self.set_loads):
+            return self.set_loads[index]
+        return self.sets[index][0]
 
     def rpe_for(self, index: int) -> float | None:
         if not self.set_rpes or index >= len(self.set_rpes):
@@ -304,12 +317,19 @@ class ExerciseBlockView:
 
     @property
     def top_e1rm(self) -> float:
+        # По нагрузке, а не по записанному весу: рекорды, графики и «прошлая»
+        # считаются так же (db.LOAD_WEIGHT_SQL / db.load_of), и расходиться с
+        # ними на том же самом подходе карточка не имеет права.
         if not self.sets:
             return 0.0
-        return max(e1rm(w, r, self.formula) for w, r in self.sets)
+        return max(
+            e1rm(self.load_for(i), r, self.formula) for i, (_w, r) in enumerate(self.sets)
+        )
 
     @property
     def prev_top_e1rm(self) -> float:
+        # prev_sets приходят из view_builder уже нагрузкой (db.load_of), так что
+        # дельта «vs прошлая» сравнима с top_e1rm выше.
         if not self.prev_sets:
             return 0.0
         return max(e1rm(w, r, self.formula) for w, r in self.prev_sets)
