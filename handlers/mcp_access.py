@@ -169,21 +169,42 @@ def _chatgpt_guide(token: str | None, code: str | None) -> str:
 
 
 def _claude_code_guide(token: str | None, code: str | None) -> str:
-    """Единственная инструкция на токене: в терминале он короче любого OAuth."""
+    """И в терминале токен не обязателен: Claude Code умеет OAuth сам.
+
+    Раньше здесь была команда с заголовком, будто иначе нельзя. Можно: `claude
+    mcp add` без заголовка, дальше `/mcp` → Authenticate, браузер, наша страница
+    согласия — и Claude Code сам хранит выданные токены и обновляет их по
+    refresh. Токен остаётся ровно для того, где браузера рядом нет: облачные
+    сессии, скрипты, curl.
+    """
+    tail = (
+        "Токеном в заголовке — для скриптов и облачных сессий, где браузер "
+        "открыть некому:\n"
+        + _copyable(
+            f'claude mcp add --transport http -s user training-log {_server_url()} '
+            f'--header "Authorization: Bearer {token}"'
+        )
+        if token
+        else "Если браузера нет вовсе (скрипты, облачные сессии) — понадобится "
+        "токен: выдай его кнопкой «Выдать токен для терминала» на экране "
+        "подключения."
+    )
     return (
         "🖥 <b>Claude Code</b> (терминал)\n\n"
-        "Одна команда — скопируй и вставь целиком:\n"
-        + _copyable(
-            "claude mcp add --transport http -s user training-log \\\n"
-            f"  {_server_url()} \\\n"
-            f'  --header "Authorization: Bearer {token or ""}"'
-        )
-        + "<code>-s user</code> — чтобы сервер был доступен во всех проектах, а не "
-        "только в текущей папке.\n\n"
-        "Проверка: запусти <code>claude</code>, набери <code>/mcp</code> — "
-        "training-log должен быть <b>connected</b>.\n\n"
-        "Токен и адрес по отдельности, если нужны в другой клиент:\n"
-        f"{_credentials(token or '')}"
+        "1. Добавь сервер — без токена:\n"
+        + _copyable(f"claude mcp add --transport http -s user training-log {_server_url()}")
+        + "2. Запусти <code>claude</code>, набери <code>/mcp</code> → "
+        "<b>training-log</b> → <b>Authenticate</b>\n"
+        "3. Откроется браузер со страницей подтверждения. Введи код:\n"
+        f"{_copyable(code or '')}"
+        "4. Нажми <b>«Разрешить»</b> — в <code>/mcp</code> станет "
+        "<b>connected</b>\n\n"
+        "<code>-s user</code> — чтобы сервер был во всех проектах, а не только в "
+        "текущей папке. Выданные токены Claude Code хранит сам и обновляет без "
+        "тебя.\n\n"
+        "Без браузера под рукой: <code>claude mcp login training-log "
+        "--no-browser</code> напечатает ссылку — открой её на своей машине.\n\n"
+        f"{tail}"
     )
 
 
@@ -193,9 +214,9 @@ GUIDES = {
     "claude_code": ("Claude Code", _claude_code_guide),
 }
 
-# Инструкции, которым токен не нужен: они целиком про коннектор. Показывать их
-# можно всегда — в отличие от остальных, где без токена нечего вставлять.
-OAUTH_GUIDES = frozenset({kind for kind, _ in keyboards.MCP_OAUTH_CLIENTS})
+# Токен не требуется ни одной инструкции: коннектор по OAuth умеют все три
+# клиента, включая терминальный. Поэтому и код связывания показывается на каждой.
+OAUTH_GUIDES = frozenset(GUIDES)
 
 
 def _connections_block(connections: list, user) -> str:
@@ -296,18 +317,16 @@ async def mcp_guide(callback: CallbackQuery, state: FSMContext):
     if guide is None or not config.mcp_available():
         await _show(callback, state)
         return
-    token, code = None, None
+    code = None
     if kind in OAUTH_GUIDES:
         code = await mcp_oauth.link_code(callback.from_user.id, force_new=force_new)
-        logger.info("MCP OAuth: link code shown to user %s (new=%s)", callback.from_user.id, force_new)
-    else:
-        row = await db.get_mcp_token(callback.from_user.id)
-        # Токен могли отозвать с другого устройства, пока этот экран висел
-        # открытым: инструкция с мёртвым токеном — гарантированный «не работает».
-        if row is None:
-            await _show(callback, state)
-            return
-        token = row["token"]
+        logger.info(
+            "MCP OAuth: link code shown to user %s (new=%s)", callback.from_user.id, force_new
+        )
+    # Токен — по наличию, а не по требованию: ни одна инструкция без него уже не
+    # ломается, он нужен только в хвосте про скрипты и облачные сессии.
+    row = await db.get_mcp_token(callback.from_user.id)
+    token = row["token"] if row else None
     await ui.safe_edit(
         callback,
         guide[1](token, code),

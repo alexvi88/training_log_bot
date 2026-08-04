@@ -1043,18 +1043,19 @@ MCP_OAUTH_CLIENTS = [
     ("chatgpt", "🤖 ChatGPT"),
 ]
 
-# Клиенты, которым нужен статический токен в заголовке. Их инструкции без токена
-# бессмысленны — в них нечего вставлять, поэтому и кнопки появляются вместе с ним.
+# Терминальный клиент стоит отдельной строкой, потому что путь у него другой:
+# команда в консоли вместо раздела настроек. Токена он, как и остальные, не
+# требует — Claude Code умеет OAuth сам (`/mcp` → Authenticate).
 #
 # Список нарочно короткий: экран нужен, чтобы человек подключился, а не чтобы
-# перечислить всё, что умеет MCP. Cursor, VS Code и «любой другой клиент»
-# настраиваются тем же токеном по тому же адресу — и то, и другое на экране есть.
-MCP_TOKEN_CLIENTS = [
+# перечислить всё, что умеет MCP. Cursor и VS Code подключаются тем же
+# коннектором по тому же адресу.
+MCP_TERMINAL_CLIENTS = [
     ("claude_code", "🖥 Claude Code"),
 ]
 
 # Все клиенты сразу: ключи совпадают с handlers.mcp_access.GUIDES.
-MCP_CLIENTS = MCP_OAUTH_CLIENTS + MCP_TOKEN_CLIENTS
+MCP_CLIENTS = MCP_OAUTH_CLIENTS + MCP_TERMINAL_CLIENTS
 
 
 def mcp_keyboard(has_token: bool, has_connections: bool = False) -> InlineKeyboardMarkup:
@@ -1080,13 +1081,12 @@ def mcp_keyboard(has_token: bool, has_connections: bool = False) -> InlineKeyboa
             for kind, label in MCP_OAUTH_CLIENTS
         )
     )
-    if has_token:
-        b.row(
-            *(
-                InlineKeyboardButton(text=label, callback_data=f"mcp:how:{kind}")
-                for kind, label in MCP_TOKEN_CLIENTS
-            )
+    b.row(
+        *(
+            InlineKeyboardButton(text=label, callback_data=f"mcp:how:{kind}")
+            for kind, label in MCP_TERMINAL_CLIENTS
         )
+    )
     # Код — после инструкций, а не первым: он живёт минуты и нужен на середине
     # пути, когда приложение уже открыло страницу подтверждения. Взятый заранее
     # успевает истечь, пока человек ищет в приложении раздел коннекторов, — та же
