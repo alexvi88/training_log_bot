@@ -45,15 +45,11 @@ _DISABLED_TEXT = (
 
 _INTRO = (
     "🔌 <b>Свои данные в Claude и ChatGPT</b>\n\n"
-    "Бот умеет отдавать твою историю тренировок по протоколу MCP: подключаешь его "
-    "один раз и дальше спрашиваешь про тренировки прямо там — «что у меня с жимом "
-    "за полгода», «собери сплит с учётом моей истории».\n\n"
-    "<b>Как подключить:</b> в приложении добавь коннектор по адресу ниже, "
-    "оно откроет страницу подтверждения — введи там код из бота, и всё.\n\n"
+    "Подключаешь один раз — и спрашиваешь про свои тренировки прямо там: «что у "
+    "меня с жимом за полгода», «собери сплит с учётом моей истории».\n\n"
     "Отдаём <b>только на чтение</b>: тренировки и подходы, прогресс по упражнениям, "
-    "недельный объём по группам мышц, вес тела, дневник питания, программы. "
-    "Переписка с AI-тренером наружу не уходит, и записать что-либо в дневник "
-    "снаружи нельзя."
+    "объём по группам мышц, вес тела, питание, программы. Переписка с AI-тренером "
+    "наружу не уходит, записать что-либо в дневник снаружи нельзя."
 )
 
 
@@ -61,17 +57,25 @@ def _server_url() -> str:
     return f"{config.MCP_PUBLIC_URL}{mcp_server.MCP_PATH}"
 
 
+def _copyable(value: str) -> str:
+    """То, что нужно перенести в другое приложение, — блоком <pre>.
+
+    Именно <pre>, а не инлайновый <code>: у блока кода в Telegram есть кнопка
+    копирования, а инлайновый копируется тапом только на телефоне — на десктопе
+    его приходится выделять мышью, и адрес с токеном там ловят по буквам.
+    """
+    return f"<pre>{escape(value)}</pre>"
+
+
 def _address() -> str:
-    """Адрес сервера отдельным <code>: по такому блоку в Telegram копирование
-    идёт одним тапом, а адрес руками не перенабрать."""
-    return f"🌐 <b>Адрес для коннектора:</b>\n<code>{escape(_server_url())}</code>"
+    return f"🌐 <b>Адрес для коннектора:</b>\n{_copyable(_server_url())}"
 
 
 def _credentials(token: str) -> str:
     """Токен и адрес — то, что нужно подставить в клиент с заголовком."""
     return (
-        f"🔑 <b>Токен:</b>\n<code>{escape(token)}</code>\n\n"
-        f"🌐 <b>Адрес сервера:</b>\n<code>{escape(_server_url())}</code>"
+        f"🔑 <b>Токен:</b>\n{_copyable(token)}\n"
+        f"🌐 <b>Адрес сервера:</b>\n{_copyable(_server_url())}"
     )
 
 
@@ -94,161 +98,86 @@ def _when(value: str | None) -> str:
     return f"{parts[2]}.{parts[1]}.{parts[0]} {clock[:5]}".strip()
 
 
-# Инструкции разведены по отдельным экранам не для красоты: вместе они не влезают
-# в одно сообщение Telegram (лимит 4096 символов), а резать текст ради влезания
-# значит выкинуть ровно те детали, из-за которых подключение и не получается —
-# где лежит нужная настройка, что перезапустить, куда смотреть при проверке.
+# Каждая инструкция — самодостаточный экран: шаги, адрес и код лежат в одном
+# сообщении, ровно там, где по ним идёт человек. Ходить за копированием на другой
+# экран и возвращаться — самый быстрый способ упустить код: он живёт минуты, а
+# уходит время на поиск нужного раздела в приложении.
+#
+# Инструкции при этом разведены по клиентам, потому что вместе они не влезают в
+# одно сообщение (лимит Telegram — 4096 символов), а резать текст ради влезания
+# значит выкинуть ровно те детали, из-за которых подключение и не получается.
 
 
-def _claude_web_guide(token: str | None) -> str:
+def _claude_web_guide(token: str | None, code: str | None) -> str:
     return (
-        "<b>Claude в браузере</b> (claude.ai)\n\n"
-        "Ни файлов, ни терминала — коннектор добавляется в настройках.\n\n"
-        "1. claude.ai → <b>Settings → Connectors</b> (Настройки → Коннекторы)\n"
+        "☁️ <b>Claude в браузере</b> (claude.ai)\n\n"
+        "1. <b>Settings → Connectors</b> (Настройки → Коннекторы)\n"
         "2. <b>Add custom connector</b> (Добавить свой коннектор)\n"
-        "3. Вставь адрес и нажми «Добавить»\n"
-        "4. Claude откроет страницу подтверждения\n"
-        "5. Вернись в бота, нажми <b>«🔗 Код для подключения»</b>, введи шесть цифр "
-        "на странице и нажми «Разрешить»\n\n"
+        "3. Вставь адрес:\n"
+        f"{_copyable(_server_url())}"
+        "4. Claude откроет страницу подтверждения. Введи там код:\n"
+        f"{_copyable(code or '')}"
+        "5. Нажми <b>«Разрешить»</b> — готово\n\n"
         "Проверка: в новом чате спроси «покажи мои последние тренировки» — Claude "
-        "спросит разрешение на вызов инструмента и вернёт данные.\n\n"
-        f"Код одноразовый и живёт {_code_ttl()}: не успел — жми кнопку в боте "
-        "ещё раз.\n\n"
-        f"{_address()}"
+        "попросит разрешение на вызов инструмента и вернёт данные.\n\n"
+        f"Код одноразовый и живёт {_code_ttl()}. Истёк — «🔄 Новый код» ниже."
     )
 
 
-def _chatgpt_guide(token: str | None) -> str:
+def _chatgpt_guide(token: str | None, code: str | None) -> str:
     return (
-        "<b>ChatGPT</b>\n\n"
-        "MCP-серверы ChatGPT подключает как коннекторы; раздел спрятан за режимом "
-        "разработчика.\n\n"
+        "🤖 <b>ChatGPT</b>\n\n"
+        "Коннекторы у ChatGPT спрятаны за режимом разработчика.\n\n"
         "1. <b>Settings → Connectors → Advanced</b> → включи <b>Developer mode</b>\n"
-        "2. Вернись в <b>Connectors</b> → <b>Create</b> (Создать)\n"
-        "3. <b>MCP Server URL</b> — адрес ниже\n"
-        "4. <b>Authentication</b> — <b>OAuth</b>\n"
-        "5. Откроется страница подтверждения: введи код из бота "
-        "(кнопка «🔗 Код для подключения») и нажми «Разрешить»\n\n"
+        "2. Вернись в <b>Connectors</b> → <b>Create</b>\n"
+        "3. <b>MCP Server URL</b>:\n"
+        f"{_copyable(_server_url())}"
+        "4. <b>Authentication</b> — <b>OAuth</b>, дальше <b>Create</b>\n"
+        "5. На странице подтверждения введи код:\n"
+        f"{_copyable(code or '')}"
+        "6. Нажми <b>«Разрешить»</b> — готово\n\n"
         "Проверка: в чате включи коннектор через «+» и спроси «покажи мои последние "
         "тренировки».\n\n"
         "Названия пунктов OpenAI периодически меняет — ищи по словам "
         "<i>Connectors</i> и <i>Developer mode</i>.\n\n"
-        f"{_address()}"
+        f"Код одноразовый и живёт {_code_ttl()}. Истёк — «🔄 Новый код» ниже."
     )
 
 
-def _claude_desktop_guide(token: str | None) -> str:
-    tail = (
-        "Старым версиям без раздела коннекторов остаётся мостик "
-        "<code>mcp-remote</code> (нужен Node.js): в "
-        "<code>claude_desktop_config.json</code> прописать "
-        f'<code>npx -y mcp-remote {escape(_server_url())} --header '
-        f'"Authorization: Bearer {escape(token)}"</code>.'
-        if token
-        else "Старым версиям без раздела коннекторов остаётся мостик "
-        "<code>mcp-remote</code> (нужен Node.js и токен — выдай его на этом же "
-        "экране кнопкой «Выдать токен для терминала»)."
-    )
+def _claude_desktop_guide(token: str | None, code: str | None) -> str:
     return (
-        "<b>Claude Desktop</b>\n\n"
-        "Приложение подключает коннекторы нативно — ни Node.js, ни "
-        "<code>mcp-remote</code> больше не нужны.\n\n"
+        "💬 <b>Claude Desktop</b>\n\n"
+        "Ни Node.js, ни <code>mcp-remote</code> не нужны — приложение подключает "
+        "коннекторы само.\n\n"
         "1. <b>Настройки → Коннекторы</b> (Settings → Connectors)\n"
         "2. <b>Добавить свой коннектор</b> (Add custom connector)\n"
-        "3. Вставь адрес ниже\n"
-        "4. На открывшейся странице введи код из бота "
-        "(кнопка «🔗 Код для подключения») и нажми «Разрешить»\n\n"
+        "3. Вставь адрес:\n"
+        f"{_copyable(_server_url())}"
+        "4. На открывшейся странице введи код:\n"
+        f"{_copyable(code or '')}"
+        "5. Нажми <b>«Разрешить»</b> — готово\n\n"
         "Проверка: в чате появится значок инструментов — спроси «покажи мои "
         "последние тренировки».\n\n"
-        f"{_address()}\n\n"
-        f"{tail}"
+        f"Код одноразовый и живёт {_code_ttl()}. Истёк — «🔄 Новый код» ниже."
     )
 
 
-def _claude_code_guide(token: str | None) -> str:
-    url, tok = escape(_server_url()), escape(token or "")
+def _claude_code_guide(token: str | None, code: str | None) -> str:
+    """Единственная инструкция на токене: в терминале он короче любого OAuth."""
     return (
-        "<b>Claude Code</b> (терминал)\n\n"
-        "Одна команда:\n"
-        f"<pre>claude mcp add --transport http -s user training-log \\\n"
-        f"  {url} \\\n"
-        f'  --header "Authorization: Bearer {tok}"</pre>\n'
-        "<code>-s user</code> — чтобы сервер был доступен во всех проектах, "
-        "а не только в текущей папке.\n\n"
+        "🖥 <b>Claude Code</b> (терминал)\n\n"
+        "Одна команда — скопируй и вставь целиком:\n"
+        + _copyable(
+            "claude mcp add --transport http -s user training-log \\\n"
+            f"  {_server_url()} \\\n"
+            f'  --header "Authorization: Bearer {token or ""}"'
+        )
+        + "<code>-s user</code> — чтобы сервер был доступен во всех проектах, а не "
+        "только в текущей папке.\n\n"
         "Проверка: запусти <code>claude</code>, набери <code>/mcp</code> — "
         "training-log должен быть <b>connected</b>.\n\n"
+        "Токен и адрес по отдельности, если нужны в другой клиент:\n"
         f"{_credentials(token or '')}"
-    )
-
-
-def _cursor_guide(token: str | None) -> str:
-    url, tok = escape(_server_url()), escape(token or "")
-    return (
-        "<b>Cursor</b>\n\n"
-        "Файл <code>~/.cursor/mcp.json</code> (для всех проектов) или "
-        "<code>.cursor/mcp.json</code> внутри проекта:\n"
-        f"<pre>{{\n"
-        f'  "mcpServers": {{\n'
-        f'    "training-log": {{\n'
-        f'      "url": "{url}",\n'
-        f'      "headers": {{\n'
-        f'        "Authorization": "Bearer {tok}"\n'
-        f"      }}\n"
-        f"    }}\n"
-        f"  }}\n"
-        f"}}</pre>\n"
-        "Проверка: <b>Settings → MCP</b>, сервер должен гореть зелёным.\n\n"
-        f"{_credentials(token or '')}"
-    )
-
-
-def _vscode_guide(token: str | None) -> str:
-    url, tok = escape(_server_url()), escape(token or "")
-    return (
-        "<b>VS Code</b> (Copilot, режим агента)\n\n"
-        "Без открытого проекта: палитра команд (<code>Ctrl/Cmd+Shift+P</code>) → "
-        "<b>MCP: Add Server</b> → <b>HTTP</b> → адрес ниже → <b>User settings</b> — "
-        "сервер будет доступен во всех папках.\n\n"
-        "Внутри проекта — файл <code>.vscode/mcp.json</code>. Ключ верхнего "
-        "уровня — <code>servers</code>, не <code>mcpServers</code>:\n"
-        f"<pre>{{\n"
-        f'  "servers": {{\n'
-        f'    "training-log": {{\n'
-        f'      "type": "http",\n'
-        f'      "url": "{url}",\n'
-        f'      "headers": {{\n'
-        f'        "Authorization": "Bearer {tok}"\n'
-        f"      }}\n"
-        f"    }}\n"
-        f"  }}\n"
-        f"}}</pre>\n"
-        "Именно <code>.vscode/mcp.json</code>: в корневом <code>.mcp.json</code> "
-        "VS Code молча выбрасывает заголовки, и сервер отвечает 401 без объяснений.\n\n"
-        f"{_credentials(token or '')}"
-    )
-
-
-def _generic_guide(token: str | None) -> str:
-    url, tok = escape(_server_url()), escape(token or "")
-    return (
-        "<b>Любой другой MCP-клиент</b>\n\n"
-        "Всё, что ему нужно знать:\n\n"
-        f"• Транспорт: <b>streamable HTTP</b> (не stdio и не SSE)\n"
-        f"• URL: <code>{url}</code>\n"
-        "• Аутентификация — на выбор: <b>OAuth</b> (динамическая регистрация, "
-        "PKCE, подтверждение кодом из бота) или статический токен в заголовке\n"
-        f"• Заголовок для второго случая: <code>Authorization: Bearer {tok}</code>\n"
-        # Считаем по факту, а не пишем числом: инструмент добавят, а цифру в
-        # тексте поправить забудут.
-        f"• {len(mcp_server.READ_ONLY_TOOLS)} инструментов, все только на чтение\n\n"
-        "Метаданные OAuth клиент найдёт сам:\n"
-        f"<pre>{escape(config.MCP_PUBLIC_URL)}/.well-known/oauth-authorization-server</pre>\n"
-        "Проверить, что сервер жив, можно откуда угодно:\n"
-        f"<pre>curl -si -X POST {url} \\\n"
-        f'  -H "Content-Type: application/json" \\\n'
-        f"  -d '{{}}' | head -1</pre>\n"
-        "Без токена ответит <code>401</code> — значит сервер на месте и ждёт "
-        "авторизацию."
     )
 
 
@@ -257,9 +186,6 @@ GUIDES = {
     "chatgpt": ("ChatGPT", _chatgpt_guide),
     "claude_desktop": ("Claude Desktop", _claude_desktop_guide),
     "claude_code": ("Claude Code", _claude_code_guide),
-    "cursor": ("Cursor", _cursor_guide),
-    "vscode": ("VS Code", _vscode_guide),
-    "other": ("Другой клиент", _generic_guide),
 }
 
 # Инструкции, которым токен не нужен: они целиком про коннектор. Показывать их
@@ -284,8 +210,8 @@ def _screen_text(token_row, connections: list) -> str:
         blocks.append(connected)
     if token_row is None:
         blocks.append(
-            "Для Claude Code, Cursor и VS Code вместо кода нужен токен — "
-            "выдать его можно тут же, кнопкой ниже."
+            "Клиентам из терминала — Claude Code и любому другому, куда заголовок "
+            "вписывают руками, — вместо кода нужен токен. Выдать его можно тут же."
         )
     else:
         used = token_row["last_used_at"]
@@ -295,7 +221,10 @@ def _screen_text(token_row, connections: list) -> str:
             _credentials(token_row["token"])
             + f"\n\n🕒 Последнее обращение по токену: {_when(used)}"
         )
-    blocks.append("👇 Выбери свой клиент — покажу, что где нажать.")
+    # Последняя строка перед кнопками — про то, что кнопка ведёт не в очередной
+    # список, а сразу ко всему нужному: человек, которого один раз погоняли между
+    # экранами, второй раз кнопку не нажмёт.
+    blocks.append("👇 Выбери приложение — там пошагово, вместе с адресом и кодом.")
     return "\n\n".join(blocks)
 
 
@@ -335,14 +264,23 @@ async def mcp_open(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("mcp:how:"))
 async def mcp_guide(callback: CallbackQuery, state: FSMContext):
-    """Инструкция под конкретный клиент."""
+    """Инструкция под конкретный клиент — со всем, что нужно скопировать.
+
+    Код связывания выдаётся здесь же, на открытии экрана: он нужен на четвёртом
+    шаге этой самой инструкции, и посылать за ним на другой экран значит гонять
+    человека туда-обратно ровно в тот момент, когда у него на втором мониторе
+    открыта страница подтверждения. «🔄 Новый код» перерисовывает этот же экран.
+    """
     kind = callback.data.split(":", 2)[2]
     guide = GUIDES.get(kind)
     if guide is None or not config.mcp_available():
         await _show(callback, state)
         return
-    token = None
-    if kind not in OAUTH_GUIDES:
+    token, code = None, None
+    if kind in OAUTH_GUIDES:
+        code = await mcp_oauth.issue_link_code(callback.from_user.id)
+        logger.info("MCP OAuth: link code issued for user %s", callback.from_user.id)
+    else:
         row = await db.get_mcp_token(callback.from_user.id)
         # Токен могли отозвать с другого устройства, пока этот экран висел
         # открытым: инструкция с мёртвым токеном — гарантированный «не работает».
@@ -352,8 +290,8 @@ async def mcp_guide(callback: CallbackQuery, state: FSMContext):
         token = row["token"]
     await ui.safe_edit(
         callback,
-        guide[1](token),
-        reply_markup=keyboards.mcp_guide_keyboard(),
+        guide[1](token, code),
+        reply_markup=keyboards.mcp_guide_keyboard(kind if code else None),
         parse_mode="HTML",
     )
     await callback.answer()
@@ -371,12 +309,13 @@ async def mcp_code(callback: CallbackQuery, state: FSMContext):
     await ui.safe_edit(
         callback,
         "🔗 <b>Код для подключения</b>\n\n"
-        f"<code>{code}</code>\n\n"
+        f"{_copyable(code)}\n"
         "Введи его на странице подтверждения, которую откроет приложение. "
         f"Код одноразовый и действует {_code_ttl()} — не успел, жми «Новый код».\n\n"
         "Если страница ещё не открыта: добавь в приложении коннектор по адресу\n"
-        f"<code>{escape(_server_url())}</code>\n"
-        "— оно само предложит подтвердить доступ.",
+        f"{_copyable(_server_url())}"
+        "— оно само предложит подтвердить доступ. Пошагово — на экранах "
+        "«Claude в браузере», «ChatGPT» и «Claude Desktop».",
         reply_markup=keyboards.mcp_code_keyboard(),
         parse_mode="HTML",
     )

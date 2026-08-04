@@ -511,17 +511,20 @@ async def test_a_new_code_replaces_the_previous_one(fresh_db, user_id):
     assert [row["code"] for row in await cur.fetchall()] == [second]
 
 
-def test_the_link_code_is_six_digits():
-    """Шесть цифр — это то, что человек перенабирает с экрана телефона на
-    ноутбук без ошибок. Буквы и длина сверх этого ломают ровно этот путь."""
-    assert mcp_oauth.LINK_CODE_TTL == 300
-    assert mcp_oauth.LINK_CODE_MAX_ATTEMPTS == 5
-
-
-async def test_the_code_is_six_digits_in_fact(fresh_db, user_id):
+async def test_the_code_is_six_digits_and_lives_as_long_as_promised(fresh_db, user_id):
+    """Шесть цифр — это то, что человек перенабирает с экрана телефона в браузер
+    без ошибок. И столько минут, сколько ему обещал текст в боте: срок в базе и
+    срок в тексте берутся из одной константы, иначе «код истёк» приходит раньше,
+    чем человек этого ждёт."""
+    before = time.time()
     code = await mcp_oauth.issue_link_code(user_id)
+
     assert len(code) == 6
     assert code.isdigit()
+    cur = await fresh_db.conn().execute(
+        "SELECT expires_at FROM oauth_link_codes WHERE code = ?", (code,)
+    )
+    assert (await cur.fetchone())["expires_at"] >= before + mcp_oauth.LINK_CODE_TTL
 
 
 # ---------- отзыв ----------
