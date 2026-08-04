@@ -20,6 +20,7 @@ import db
 import exercise_mentions
 import formatting
 import keyboards
+import program_mentions
 import running_texts
 import ui
 from fsm import AITrainerFlow
@@ -295,6 +296,7 @@ async def ai_keyboard(
     answer: Optional[str] = None,
     program_name: Optional[str] = None,
     draft_id: Optional[int] = None,
+    delete_target: Optional[dict] = None,
 ) -> InlineKeyboardMarkup:
     """AI-trainer reply keyboard: 'К тренировке' instead of 'Меню' while a workout is active.
 
@@ -306,16 +308,25 @@ async def ai_keyboard(
     дают кнопку с превью, а id в её callback_data — то, чем ai_program_view
     отличает актуальный черновик от более старого, показанного под прошлым
     ответом (см. _program_draft).
+
+    `delete_target` — программа, которую тренер этим ходом предложил удалить
+    (см. ai_trainer.delete_program): даёт кнопку на обычный экран
+    подтверждения, сам тренер ничего не сносит.
     """
     active = await db.get_active_workout(user_id)
     mentioned = await exercise_mentions.find_in_text(
         user_id, answer, limit=exercise_mentions.MAX_MENTIONS_TOTAL
     )
+    # Программы, названные в ответе, — ссылками на них же. Лимит общий с
+    # упражнениями: под ответом место одно и то же.
+    programs = await program_mentions.find_in_text(user_id, answer)
     return keyboards.ai_trainer_keyboard(
         has_active_workout=bool(active),
         exercises=mentioned,
+        programs=programs,
         program_name=program_name,
         draft_id=draft_id,
+        delete_target=delete_target,
     )
 
 
@@ -472,33 +483,60 @@ async def ai_close_exercise_card(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+async def _owned_program_target(user_id: int, prefix: str, item_id: int) -> Optional[dict]:
+    """Ссылка на программу из callback_data — обратно в цель для клавиатуры,
+    с проверкой владельца: id в callback_data приходит от клиента."""
+    if prefix == "p":
+        program = await db.get_program(item_id)
+        if program is None or program["user_id"] != user_id:
+            return None
+        return {"kind": "program", "id": program["id"], "name": program["name"]}
+    routine = await db.get_routine(item_id)
+    if routine is None or routine["user_id"] != user_id:
+        return None
+    return {"kind": "routine", "id": routine["id"], "name": routine["name"]}
+
+
 @router.callback_query(F.data.startswith("ai:mpage:"))
 async def ai_mentions_page(callback: CallbackQuery, state: FSMContext):
-    """Стрелки листания упоминаний под ответом тренера — id упомянутых
-    упражнений едут прямо в callback_data (см. keyboards.ai_trainer_keyboard),
-    так что тут только перерисовываем клавиатуру, не трогая сам текст ответа."""
-    _, _, page_str, ids_csv = callback.data.split(":", 3)
+    """Стрелки листания упоминаний под ответом тренера — ссылки на упомянутое
+    едут прямо в callback_data (см. keyboards.ai_trainer_keyboard), так что тут
+    только перерисовываем клавиатуру, не трогая сам текст ответа.
+
+    Программы отличаются от упражнений префиксом p/r (многодневка / одиночный
+    день) — см. keyboards.ai_mention_ref."""
+    _, _, page_str, refs_csv = callback.data.split(":", 3)
     page = int(page_str)
+    user_id = callback.from_user.id
     exercises = []
-    for raw_id in ids_csv.split(","):
-        if not raw_id:
+    programs = []
+    for ref in refs_csv.split(","):
+        if not ref:
             continue
-        ex = await db.get_exercise(int(raw_id))
+        if ref[0] in "pr":
+            target = await _owned_program_target(user_id, ref[0], int(ref[1:]))
+            if target is not None:
+                programs.append(target)
+            continue
+        ex = await db.get_exercise(int(ref))
         # A page can mix the user's own exercises with not-yet-added catalog
         # templates (see keyboards.ai_trainer_keyboard) — templates have no
         # user_id of their own, so only ownership-check the non-template rows.
-        if ex is not None and (ex["is_template"] or ex["user_id"] == callback.from_user.id):
+        if ex is not None and (ex["is_template"] or ex["user_id"] == user_id):
             exercises.append(ex)
-    active = await db.get_active_workout(callback.from_user.id)
-    draft = (await state.get_data()).get("ai_program_draft")
+    active = await db.get_active_workout(user_id)
+    data = await state.get_data()
+    draft = data.get("ai_program_draft")
     program_name = draft.get("name") if draft else None
     draft_id = draft.get("id") if draft else None
     kb = keyboards.ai_trainer_keyboard(
         has_active_workout=bool(active),
         exercises=exercises,
+        programs=programs,
         page=page,
         program_name=program_name,
         draft_id=draft_id,
+        delete_target=data.get("ai_delete_target"),
     )
     with suppress(TelegramBadRequest):
         await callback.message.edit_reply_markup(reply_markup=kb)
@@ -1083,11 +1121,18 @@ async def _handle_question(
         program_draft.clear()
         program_draft.update(draft)
 
+    # То же для просьбы удалить программу (см. ai_trainer.delete_program).
+    delete_target: dict = {}
+
+    async def collect_delete(target: dict) -> None:
+        delete_target.clear()
+        delete_target.update(target)
+
     try:
         answer = await ai_trainer.ask(
             user_id, question, history, image_data_url=image_data_url,
             on_status=display.set_status, on_program=collect_program,
-            on_chunk=streamer.push,
+            on_delete=collect_delete, on_chunk=streamer.push,
         )
     except Exception:
         logger.exception("AI trainer request failed for user %s", user_id)
@@ -1138,6 +1183,14 @@ async def _handle_question(
     else:
         await state.update_data(ai_history=history)
 
+    # Цель удаления живёт до следующей просьбы удалить: в отличие от черновика,
+    # тут нечего «сохранить не то» — id программы стоит прямо в callback_data
+    # кнопки, а сносит её всё равно экран подтверждения. Стирать её на каждом
+    # ходе без delete_program нельзя по той же причине, что и черновик: вопрос
+    # вдогонку тушил бы ещё живую кнопку под прошлым ответом.
+    if delete_target:
+        await state.update_data(ai_delete_target=delete_target)
+
     # Full, permanent log — separate from the live window above, which is capped
     # (and lost on a restart, unlike this). Lets the model pull it back via the
     # get_full_chat_history tool if a later question references it.
@@ -1149,6 +1202,7 @@ async def _handle_question(
         answer=answer,
         program_name=program_draft.get("name") if program_draft else None,
         draft_id=program_draft.get("id") if program_draft else None,
+        delete_target=delete_target or None,
     )
     chunks = formatting.split_for_telegram(answer, TG_CHUNK)
     # Rich — только ради таблицы, и только когда таблица в ответе есть.

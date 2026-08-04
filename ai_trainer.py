@@ -348,6 +348,17 @@ get_bodyweight_history, она отдаёт всю историю дневник
 Если человек просит не поправить, а собрать ещё одну программу вдобавок —
 replaces_program не передавай, иначе затрёшь старую.
 
+Удалить сохранённую программу ты тоже умеешь — через delete_program, по
+точному имени из get_saved_programs. Не отправляй человека делать это руками
+через меню и не говори, что не умеешь. Сносит программу тап пользователя по
+кнопке под твоим ответом, так что не пиши «удалил» — пиши, что кнопка ниже.
+Удаляешь несколько — вызови инструмент по разу на каждую.
+
+Ссылку на программу или упражнение отдельно давать не нужно и нечем: всё, что
+ты назвал в ответе, само превращается в кнопки под сообщением. Так что просто
+называй программы их точными именами — на них и будет кнопка; писать «зайди в
+⚙️ Программы и выбери» не надо.
+
 Прежде чем судить о сохранённой программе («она у меня рабочая?», «может,
 поменять программу?», предлагать замену) — посмотри get_program_adherence, а
 не только состав из get_saved_programs. Состав может быть отличным, а человек
@@ -1258,6 +1269,34 @@ TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "delete_program",
+            "description": (
+                "Пользователь просит удалить/снести одну из своих сохранённых программ "
+                "(«удали вторую Вику», «убери дубликат», «почисти лишние программы»). "
+                "САМ НИЧЕГО НЕ УДАЛЯЕТ: под твоим ответом появится кнопка «🗑 Удалить: "
+                "<имя>», которая ведёт на обычный экран подтверждения — сносит только "
+                "тап пользователя. Имя бери ТОЧНО из get_saved_programs (сначала вызови "
+                "его, если не смотрел): совпадение ищется точное, по «примерно такому» "
+                "имени инструмент вернёт ошибку. Удалять несколько — вызови по разу на "
+                "каждую. В ответе коротко скажи, что кнопка ниже, и не обещай, что уже "
+                "удалил. История тренировок при удалении не страдает — это можно сказать, "
+                "если человек переживает."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Точное имя программы из get_saved_programs",
+                    },
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_program_adherence",
             "description": (
                 "Насколько реально ходят по каждой сохранённой многодневной программе — "
@@ -1332,6 +1371,12 @@ StatusCallback = Optional[Callable[[str], Awaitable[None]]]
 # черновик в FSM и вешает под ответ кнопку, а пишет в БД уже тап пользователя.
 ProgramCallback = Optional[Callable[[dict[str, Any]], Awaitable[None]]]
 
+# Опциональный колбэк предложенного удаления (см. delete_program): получает
+# ссылку на сохранённую программу, которую пользователь попросил снести.
+# Как и с черновиком, тренер сам ничего не удаляет — вызывающая сторона вешает
+# под ответ кнопку, ведущую на обычный экран подтверждения.
+DeleteCallback = Optional[Callable[[dict[str, Any]], Awaitable[None]]]
+
 # Накопленный текст ответа по мере генерации — см. _completion_round.
 ChunkCallback = Optional[Callable[[str], Awaitable[None]]]
 
@@ -1400,6 +1445,10 @@ TOOL_STATUS_TEXTS: dict[str, list[str]] = {
         "📋 собираю программу...",
         "🏗️ строю программу под твои вводные...",
         "🧩 складываю программу по кусочкам...",
+    ],
+    "delete_program": [
+        "🗑 нахожу программу, которую сносим...",
+        "🗂 сверяю, какую именно программу удалить...",
     ],
     "get_program_adherence": [
         "📊 смотрю, как ты реально ходишь по программе...",
@@ -1928,6 +1977,52 @@ async def _resolve_replaced_program(
     )
 
 
+async def _delete_program(
+    user_id: int, tool_input: dict[str, Any]
+) -> tuple[dict[str, Any], Optional[dict[str, Any]]]:
+    """Разобрать просьбу удалить программу — и ничего не удалить.
+
+    Возвращает (payload для модели, цель для кнопки). Резолвится тем же
+    _resolve_replaced_program, что и правка: та же точная сверка имени (промах
+    здесь стоил бы пользователю чужой программы), то же различение многодневки
+    и одиночного дня.
+
+    Удаление — единственное необратимое, о чём тренера можно попросить, поэтому
+    оно устроено как propose_program, а не как save_athlete_profile: инструмент
+    только называет цель, сносит её тап пользователя на обычном экране
+    подтверждения (см. keyboards.ai_program_delete_cb). Модель, которая
+    неправильно поняла «убери сведения из дня ног» и потянулась удалять
+    программу целиком, стоит человеку одного «❌ Отмена», а не программы.
+    """
+    name = str(tool_input.get("name") or "").strip()
+    if not name:
+        return {"error": "нужно имя программы — возьми точное из get_saved_programs"}, None
+    target, error = await _resolve_replaced_program(user_id, name)
+    if target is None:
+        saved = [p["name"] for p in (await _saved_programs(user_id))["programs"]]
+        return (
+            {
+                "error": f"программы «{name}» у пользователя нет, ничего не предложено",
+                "saved_programs": saved,
+                "note": "Возьми точное имя из этого списка и вызови ещё раз." if saved
+                        else "Сохранённых программ нет вообще — удалять нечего.",
+            },
+            None,
+        )
+    return (
+        {
+            "ok": True,
+            "proposed": {"name": target["name"], "kind": target["kind"], "days": len(target["days"])},
+            "note": (
+                "НЕ УДАЛЕНО. Под твоим ответом появилась кнопка «🗑 Удалить: "
+                f"{target['name']}» — программа исчезнет, только когда пользователь "
+                "нажмёт её и подтвердит. Так и скажи: удалить готов, кнопка ниже."
+            ),
+        },
+        {"kind": target["kind"], "id": target["id"], "name": target["name"]},
+    )
+
+
 async def _propose_program(
     user_id: int, tool_input: dict[str, Any]
 ) -> tuple[dict[str, Any], Optional[dict[str, Any]]]:
@@ -2184,6 +2279,7 @@ async def execute_tool(
     name: str,
     tool_input: dict[str, Any],
     on_program: ProgramCallback = None,
+    on_delete: DeleteCallback = None,
 ) -> str:
     if name == "get_training_overview":
         payload = await _training_overview(user_id)
@@ -2217,6 +2313,10 @@ async def execute_tool(
         payload, draft = await _propose_program(user_id, tool_input)
         if draft is not None and on_program is not None:
             await on_program(draft)
+    elif name == "delete_program":
+        payload, target = await _delete_program(user_id, tool_input)
+        if target is not None and on_delete is not None:
+            await on_delete(target)
     else:
         payload = {"error": f"unknown tool: {name}"}
     return json.dumps(payload, ensure_ascii=False)
@@ -2231,6 +2331,7 @@ async def ask(
     image_data_url: Optional[str] = None,
     on_status: StatusCallback = None,
     on_program: ProgramCallback = None,
+    on_delete: DeleteCallback = None,
     on_chunk: ChunkCallback = None,
 ) -> str:
     """Один вопрос пользователя → готовый текст ответа.
@@ -2250,6 +2351,9 @@ async def ask(
     on_program — опциональный колбэк с черновиком программы, если тренер за этот
     ход собрал её (см. propose_program). Текст ответа при этом обычный: черновик
     едет отдельно, потому что сохранить его должен тап пользователя, а не модель.
+
+    on_delete — то же самое для просьбы удалить программу (см. delete_program):
+    колбэк получает ссылку на неё, а сносит её тап по кнопке под ответом.
 
     Пока не исчерпана дневная квота поисковых ответов (config.AI_SEARCH_DAILY_LIMIT),
     перед основным ответом дешёвый гейт на быстрой модели (см. _search_worth_it)
@@ -2281,7 +2385,7 @@ async def ask(
     )
     return await _ask_plain(
         user_id, question, history, image_data_url, search_context, on_status, on_program,
-        on_chunk,
+        on_delete, on_chunk,
     )
 
 
@@ -2398,6 +2502,7 @@ async def _ask_plain(
     search_context: Optional[str] = None,
     on_status: StatusCallback = None,
     on_program: ProgramCallback = None,
+    on_delete: DeleteCallback = None,
     on_chunk: ChunkCallback = None,
 ) -> str:
     client = _get_client()
@@ -2440,7 +2545,8 @@ async def _ask_plain(
             try:
                 args = json.loads(tc.function.arguments or "{}")
                 tool_content = await execute_tool(
-                    user_id, tc.function.name, args, on_program=on_program
+                    user_id, tc.function.name, args,
+                    on_program=on_program, on_delete=on_delete,
                 )
             except Exception:
                 logger.exception("AI trainer tool %s failed", tc.function.name)
