@@ -84,7 +84,23 @@ class IgnoreStaleCallbackMiddleware(BaseMiddleware):
 _GENERIC_ERROR_TEXT = "⚠️ Что-то пошло не так. Нажми /start, чтобы вернуться в меню."
 
 
-async def on_unhandled_error(event: ErrorEvent) -> bool:
+def _error_chat_id(update) -> int | None:
+    """Чат, в который писать про ошибку.
+
+    Именно chat.id, а не reply на исходное сообщение: ui.safe_edit удаляет старый
+    экран прямо перед отправкой нового, так что «сообщение уже удалено, а потом
+    случилась ошибка» — самый частый расклад, а не редкий край, и reply в нём
+    падает сам. Плюс у InaccessibleMessage никакого reply нет вовсе, а chat есть.
+    """
+    message = None
+    if update.callback_query is not None:
+        message = update.callback_query.message
+    elif update.message is not None:
+        message = update.message
+    return getattr(getattr(message, "chat", None), "id", None)
+
+
+async def on_unhandled_error(event: ErrorEvent, bot: Bot | None = None) -> bool:
     """Last-resort net for anything a handler didn't catch — a DB error, a bad
     assumption about FSM data, matplotlib choking on a chart, etc.
 
@@ -98,11 +114,21 @@ async def on_unhandled_error(event: ErrorEvent) -> bool:
         "Unhandled error processing update %s", event.update.update_id, exc_info=event.exception
     )
     update = event.update
-    with suppress(Exception):
-        if update.callback_query is not None:
+    # Каждый шаг — в своём try: спиннер на кнопке и сообщение в чат нужны
+    # независимо друг от друга (алерт мог устареть, сообщение — исчезнуть), а
+    # обработчик ошибок, который сам бросил исключение, не показывает человеку
+    # ничего — ни экрана, ни подсказки.
+    if update.callback_query is not None:
+        with suppress(Exception):
             await update.callback_query.answer(_GENERIC_ERROR_TEXT, show_alert=True)
-        elif update.message is not None:
-            await update.message.reply(_GENERIC_ERROR_TEXT)
+    # Алерт — всплывашка, она гаснет; сообщение в чате остаётся, и если экран уже
+    # удалён, это единственное, от чего человек может оттолкнуться.
+    chat_id = _error_chat_id(update)
+    if bot is None:
+        bot = getattr(update, "bot", None)
+    if chat_id is not None and bot is not None:
+        with suppress(Exception):
+            await bot.send_message(chat_id, _GENERIC_ERROR_TEXT)
     return True
 
 
