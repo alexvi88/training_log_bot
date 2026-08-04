@@ -13,6 +13,7 @@
 """
 import datetime as dt
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import charts
 import formatting
@@ -243,6 +244,22 @@ def test_tonnage_switches_to_kilograms_when_there_are_no_tonnes():
     assert formatting.menu_tiles(_dashboard(), 400, 3)[1] == ("ТОННАЖ ЗА 7 ДНЕЙ", "400 кг")
 
 
+def test_the_tonnage_tile_counts_tonnes_in_kilograms():
+    """Тонна — тонна: у человека в фунтах плитка обязана показывать то же число,
+    что зал славы и недельная сводка.
+
+    Тоннаж лежит в единицах пользователя, а плитка делила его на 1000 как есть —
+    24 500 фунтов превращались в «24.5 т» вместо 11.1 тонны, и плитка врала
+    больше чем вдвое относительно остальных экранов.
+    """
+    tile = formatting.menu_tiles(_dashboard(), 24_500, 3, "lb")[1]
+
+    assert tile == ("ТОННАЖ ЗА 7 ДНЕЙ", "11.1 т")
+    assert formatting.format_tonnage(24_500, "lb").startswith("11.1")
+    # Ниже тонны конвертировать нечего — это его число в его единицах.
+    assert formatting.menu_tiles(_dashboard(), 900, 3, "lb")[1] == ("ТОННАЖ ЗА 7 ДНЕЙ", "900 lb")
+
+
 def test_the_records_tile_gives_its_place_away_when_there_are_none():
     with_records = formatting.menu_tiles(_dashboard(this_week=2), 5000, 2)
     without = formatting.menu_tiles(_dashboard(this_week=2), 5000, 0)
@@ -379,6 +396,57 @@ def test_an_all_zero_series_does_not_take_the_whole_menu_down():
 
 def test_a_single_point_series_renders_without_a_line():
     assert _render(lifts=[("ЖИМ", [100.0], "100 кг", "")])[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_the_year_grid_fits_with_room_for_the_last_month():
+    """Клетка выводится из ширины, поэтому запас справа обязан быть в формуле.
+
+    Его там не было: 53 колонки полного года плюс 3.4 юнита под Пн/Ср/Пт не
+    влезали в 56, и последняя неделя — та, в которой человек тренируется прямо
+    сейчас, — уезжала за край обрезанной.
+    """
+    x_units = charts.DASH_WIDTH_IN / charts._DASH_CELL_IN
+
+    assert x_units >= charts._DASH_CAL_LEFT_UNITS + charts._DASH_CAL_COLUMNS
+    last_col = charts._DASH_CAL_COLUMNS - 1
+    assert x_units >= (
+        charts._DASH_CAL_LEFT_UNITS + last_col + charts._DASH_CAL_MONTH_UNITS
+    )
+
+
+def test_the_current_month_is_labelled():
+    """Подпись рисовалась «кроме двух последних колонок» — то есть текущий месяц
+    не подписывался никогда, хотя он единственный, который человеку и интересен."""
+    ax = MagicMock()
+    today = dt.date(2026, 8, 4)
+
+    charts._dash_year_calendar(ax, {}, today, today - dt.timedelta(weeks=52))
+
+    labels = [call.args[2] for call in ax.text.call_args_list if len(call.args) > 2]
+    assert "Авг" in labels
+
+
+def test_the_lift_card_is_spaced_like_the_volume_row():
+    """Блок движений размечен тем же шагом, что и коридор объёма.
+
+    Он задавался наоборот — блоку назначалась высота в дюймах, а разметка жила в
+    единицах оси, — и единица выходила вдвое крупнее соседней панели. Отступ «в
+    одну единицу» между подписью блока и именем движения из-за этого занимал
+    сотню пикселей пустоты. Сравниваем шаг, а не пиксели: пиксели поедут от
+    любой правки шрифта, а «два блока разъехались по плотности» — не поедет.
+    """
+    assert charts._LIFT_UNIT_IN == charts._DASH_VOL_STEP
+    lift_units = charts._LIFT_BOTTOM - charts._LIFT_TOP
+    assert abs(charts._LIFT_UNIT_IN * lift_units - charts._DASH_LIFTS_H) < 1e-9
+
+
+def test_the_sparkline_gets_most_of_its_card():
+    """Спарклайн — единственное, зачем этот блок нужен: остальное в нём и так есть
+    текстом. Раньше на линию приходилось меньше трети высоты блока, остальное
+    съедали отступы, и рост в ней было не разглядеть."""
+    line_share = charts._LIFT_LINE_HEIGHT / (charts._LIFT_BOTTOM - charts._LIFT_TOP)
+
+    assert line_share > 0.5
 
 
 # ---------- экран меню ----------

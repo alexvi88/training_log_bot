@@ -20,6 +20,7 @@ import config
 import db
 import formatting
 import keyboards
+import state_scaffold
 import timeutil
 import ui
 import view_builder
@@ -168,11 +169,6 @@ async def build_hall_of_fame_text(user_id: int, max_chars: int | None = None) ->
     )
 
 
-# Сколько упражнений показываем в недельной сводке — дальше таблица перестаёт
-# читаться с телефона, а хвост из одного подхода ничего не добавляет.
-WEEKLY_TABLE_LIMIT = 12
-
-
 @router.callback_query(F.data == "prog:week")
 async def prog_week(callback: CallbackQuery, state: FSMContext):
     """Недельная сводка: настоящей таблицей там, где Telegram её умеет.
@@ -194,9 +190,12 @@ async def prog_week(callback: CallbackQuery, state: FSMContext):
             tonnage=r["tonnage"], sets_count=r["sets_count"],
         )
         for r in await db.weekly_exercise_rollup(user_id, since)
-    ][:WEEKLY_TABLE_LIMIT]
+    ]
     dates = [dt.date.fromisoformat(d) for d in await db.list_finished_workout_dates(user_id)]
     workouts = sum(1 for d in dates if d >= monday)
+    # По всем упражнениям недели, а не по показанным: сводка сама режет список
+    # до formatting.WEEKLY_ROWS_LIMIT строк, и итог, посчитанный по обрезку, был
+    # меньше правды и расходился с плиткой тоннажа на дашборде.
     total = sum(r.tonnage for r in rows)
     period = f"{monday.strftime('%d.%m')}–{(monday + dt.timedelta(days=6)).strftime('%d.%m')}"
     text = formatting.build_weekly_summary(
@@ -240,7 +239,9 @@ async def menu_achievements(callback: CallbackQuery, state: FSMContext):
     """'🏆 Достижения' — reached from the Progress entry screen. Combines the
     old standalone Hall of Fame screen (lifetime totals, personal records)
     with the badge grid into one screen."""
-    await state.clear()
+    # Экран смотрят и посреди тренировки («сколько мне до значка»), поэтому
+    # снимается только поток: каркас открытых упражнений должен уцелеть.
+    await state_scaffold.clear_state_keep_workout(state)
     # Acknowledged up front: assembling this screen reads the user's whole set
     # history, and Telegram spins the tapped button until the callback is answered
     # (and gives up entirely after ~10s).

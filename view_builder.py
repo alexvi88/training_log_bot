@@ -52,10 +52,17 @@ async def build_block_views(
             merged[ex_id] = {
                 "exercise": ex,
                 "sets": [],
+                "loads": [],
                 "rpes": [],
             }
         entry = merged[ex_id]
+        # Два разных числа на подход, и оба нужны: `sets` — то, что записал
+        # человек, и то, что показывается ("0×12" подтягиваний), а `loads` —
+        # фактическая нагрузка (db.load_of), по которой считают e1RM рекорды и
+        # графики. Показывать нагрузку вместо записанного веса нельзя, считать
+        # по записанному весу — тоже: карточка расходилась с залом славы.
         entry["sets"].extend((s["weight"], s["reps"]) for s in sets)
+        entry["loads"].extend(db.load_of(s) for s in sets)
         entry["rpes"].extend(s["rpe"] for s in sets)
 
     workout = await db.get_workout(workout_id) if mark_golds else None
@@ -68,7 +75,10 @@ async def build_block_views(
         gold_index = None
         if workout is not None:
             gold_index = _best_gold_index(
-                entry["sets"],
+                [
+                    (load, reps)
+                    for load, (_w, reps) in zip(entry["loads"], entry["sets"], strict=True)
+                ],
                 await db.max_e1rm_before_workout(
                     workout["user_id"], ex_id, workout_id, formula
                 ),
@@ -94,22 +104,31 @@ async def build_block_views(
                 prev_started_at=prev_started_at,
                 note=await db.get_workout_exercise_note(workout_id, ex_id),
                 gold_index=gold_index,
+                set_loads=entry["loads"],
             )
         )
 
     return views
 
 
-def _best_gold_index(sets: list[tuple[float, int]], previous_best: float, formula: str) -> int | None:
+def _best_gold_index(
+    loaded_sets: list[tuple[float, int]], previous_best: float, formula: str
+) -> int | None:
     """Index of the session's best set, if it clears the exercise's all-time
     best e1RM. Only the best one is marked: two 🥇 in one exercise would read
-    as a bug, and the later set is the one that stands as the record anyway."""
+    as a bug, and the later set is the one that stands as the record anyway.
+
+    Пары (нагрузка, повторы), а не (записанный вес, повторы): планка приходит из
+    db.max_e1rm_before_workout, а та считает по load_weight. По сырому весу
+    подтягивания с поясом не брали 🥇 никогда — их «10 кг» не могли перебить
+    рекорд в 105 кг, который сами же и поставили.
+    """
     best_index = None
     best_score = previous_best
-    for i, (weight, reps) in enumerate(sets):
+    for i, (load, reps) in enumerate(loaded_sets):
         if reps <= 0:
             continue
-        score = analytics.e1rm(weight, reps, formula)
+        score = analytics.e1rm(load, reps, formula)
         if score > best_score:
             best_score, best_index = score, i
     return best_index

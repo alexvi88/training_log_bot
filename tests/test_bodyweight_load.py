@@ -8,8 +8,12 @@
 Считается не на лету, а снимком на подходе (`sets.load_weight`): вес тела
 меняется, а уже сделанный подход — нет.
 """
+import datetime as dt
+
 import analytics
 import db as db_module
+import formatting
+import view_builder
 
 # asyncio_mode=auto (pytest.ini); часть проверок ниже чисто арифметические.
 
@@ -168,6 +172,75 @@ async def test_the_sql_tonnage_path_counts_bodyweight_too(fresh_db, user_id):
     await _log(db, user_id, ex_id, 0, 10)
 
     assert (await db.hall_of_fame_aggregates(user_id))["tonnage"] == 800.0
+
+
+# ---------- экран тренировки считает по той же нагрузке, что и рекорды ----------
+
+
+async def _finished_with(db, user_id, ex_id, sets, started_at=None):
+    kwargs = {"started_at": started_at} if started_at else {}
+    workout_id = await db.create_workout(user_id, **kwargs)
+    block_id = await db.create_block(workout_id, "single")
+    await db.add_block_exercise(block_id, ex_id, 0)
+    for weight, reps in sets:
+        await db.append_set(block_id, ex_id, 0, weight, reps)
+    await db.finish_workout(workout_id, **({"finished_at": started_at} if started_at else {}))
+    return workout_id
+
+
+async def test_card_e1rm_is_the_same_number_as_the_record(fresh_db, user_id):
+    """Один подход — одно число на всех экранах.
+
+    Карточка считала e1RM по записанному весу (подтягивания «10 кг» → 11.7),
+    а зал славы и графики — по нагрузке (80 + 10 → 105). Человек видел два
+    разных «расчётных максимума» для одного и того же подхода.
+    """
+    db = fresh_db
+    await db.add_bodyweight_log(user_id, 80.0)
+    ex_id = await _own(db, user_id, PULLUPS)
+    workout_id = await _finished_with(db, user_id, ex_id, [(10.0, 5)])
+
+    blocks = await view_builder.build_block_views(workout_id)
+    record = await db.max_e1rm_before_workout(user_id, ex_id, workout_id + 1)
+
+    assert record > 100  # 90 кг на 5 повторов
+    assert blocks[0].top_e1rm == record
+    # И на самой карточке видно то же число, а не сырые 11.7.
+    assert f"e1RM {record:.1f}" in formatting.build_workout_summary(
+        dt.datetime.now(), blocks
+    )
+
+
+async def test_bodyweight_set_can_take_the_gold_mark(fresh_db, user_id):
+    """🥇 сравнивается с планкой из db.max_e1rm_before_workout, а та по нагрузке:
+    по сырому весу подтягивания с поясом не могли перебить собственный же
+    рекорд никогда."""
+    db = fresh_db
+    await db.add_bodyweight_log(user_id, 80.0)
+    ex_id = await _own(db, user_id, PULLUPS)
+    await _finished_with(db, user_id, ex_id, [(10.0, 5)], "2026-05-01T10:00:00")
+
+    workout_id = await db.create_workout(user_id)
+    block_id = await db.create_block(workout_id, "single")
+    await db.add_block_exercise(block_id, ex_id, 0)
+    await db.append_set(block_id, ex_id, 0, 20.0, 5)
+
+    blocks = await view_builder.build_block_views(workout_id, mark_golds=True)
+
+    assert blocks[0].gold_index == 0
+    assert "🥇" in formatting.build_live_session_text(blocks, active_exercise_id=ex_id)
+
+
+async def test_a_barbell_card_still_shows_the_weight_that_was_lifted(fresh_db, user_id):
+    """Обычное железо считается ровно как раньше — load_weight у него нет."""
+    db = fresh_db
+    await db.add_bodyweight_log(user_id, 80.0)
+    ex_id = await _own(db, user_id, BENCH)
+    workout_id = await _finished_with(db, user_id, ex_id, [(100.0, 5)])
+
+    blocks = await view_builder.build_block_views(workout_id)
+
+    assert blocks[0].top_e1rm == analytics.e1rm(100.0, 5)
 
 
 # ---------- миграция ----------

@@ -35,6 +35,7 @@ import ai_trainer
 import db
 import formatting
 import keyboards
+import state_scaffold
 import timeutil
 import ui
 from fsm import FoodDiaryFlow
@@ -156,13 +157,16 @@ async def _show_day(event, state: FSMContext, date: dt.date) -> None:
 @router.message(Command("food_diary"))
 async def cmd_food_diary(message: Message, state: FSMContext):
     await db.get_or_create_user(message.from_user.id, message.from_user.username)
-    await state.clear()
+    # Записать еду можно и в перерыве между подходами: сбрасываем поток, но не
+    # каркас незакрытой тренировки — иначе возврат в трекер покажет пустой экран.
+    await state_scaffold.clear_state_keep_workout(state)
     await _show_day(message, state, await _today(message.from_user.id))
 
 
 @router.callback_query(F.data == "menu:food")
 async def menu_food_diary(callback: CallbackQuery, state: FSMContext):
-    await state.clear()
+    # То же, что и в /food_diary: кнопка меню — это не конец тренировки.
+    await state_scaffold.clear_state_keep_workout(state)
     await _show_day(callback, state, await _today(callback.from_user.id))
     await callback.answer()
 
@@ -182,7 +186,9 @@ async def fd_open_day(callback: CallbackQuery, state: FSMContext):
 async def fd_menu(callback: CallbackQuery, state: FSMContext):
     from handlers.workout import _show_main_menu
 
-    await state.clear()
+    # Состояние снимает сам _show_main_menu, и снимает бережно (каркас открытой
+    # тренировки остаётся). Стоявший здесь state.clear() успевал снести каркас до
+    # него — и «Продолжить» в меню открывало тренировку без упражнений.
     await _show_main_menu(callback, state)
     await callback.answer()
 

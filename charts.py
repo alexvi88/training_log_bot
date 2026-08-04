@@ -322,12 +322,24 @@ DASH_FS_MICRO = 6.5     # месяцы и дни недели календаря
 _DASH_HEAD_H = 0.58
 _DASH_TILES_H = 0.86
 _DASH_VOL_STEP = 0.30
-_DASH_LIFTS_H = 2.45
-# Куда линия движения падает и на сколько поднимается, в единицах оси блока.
-# Раньше на неё приходилось 0.36 из 2.75 — на экране это десяток пикселей, в
-# которых роста не разглядеть.
-_LIFT_LINE_BOTTOM = 1.80
-_LIFT_LINE_HEIGHT = 1.05
+
+# Карточка движения размечена тем же шагом, что и строка коридора объёма, и
+# высота блока выводится из разметки, а не наоборот. Раньше было наоборот: блоку
+# назначались 2.45 дюйма на 3.6 единицы оси, единица выходила 0.68 дюйма — вдвое
+# крупнее соседней панели. Отступ «в одну единицу» между подписью блока и именем
+# движения из-за этого занимал сотню пикселей пустоты, а на сам график
+# оставалось меньше её. Теперь единица одна на оба блока, воздух между строками
+# такой же плотный, как в коридоре, а всё сэкономленное ушло в высоту линии.
+_LIFT_UNIT_IN = _DASH_VOL_STEP
+_LIFT_TOP = -1.4          # верх полосы — как у панели объёма
+_LIFT_NAME_Y = 0.0        # имя движения: первая строка блока
+_LIFT_VALUE_Y = 0.85      # под ним крупное число и изменение
+# Куда линия движения падает и откуда поднимается, в тех же единицах.
+_LIFT_LINE_TOP = 1.45
+_LIFT_LINE_BOTTOM = 5.65
+_LIFT_BOTTOM = 6.2
+_LIFT_LINE_HEIGHT = _LIFT_LINE_BOTTOM - _LIFT_LINE_TOP
+_DASH_LIFTS_H = _LIFT_UNIT_IN * (_LIFT_BOTTOM - _LIFT_TOP)
 
 
 def _dash_card(ax, x, y, w, h, colour=DASH_CARD) -> None:
@@ -354,10 +366,22 @@ def _dash_section(ax, title: str, note: str = "", note_colour: str = HEATMAP_FIL
 # девятью неделями клетки такие же, просто занимают левую часть полосы, — как в
 # гитхабе у молодого аккаунта. Растягивание девяти колонок на всю ширину давало
 # полосы 8:1, на календарь уже не похожие.
-_DASH_CELL_IN = 6.67 / 56          # 52 недели + 3.4 юнита слева под Пн/Ср/Пт
-_DASH_CAL_LEFT_UNITS = 3.4
+_DASH_CAL_LEFT_UNITS = 3.4         # слева от сетки — подписи Пн/Ср/Пт
+# Справа тоже нужен запас, и раньше его не было: клетка выводилась из ширины на 56
+# юнитов, а колонок в полном годе 53 плюс 3.4 слева — последняя неделя (та самая,
+# в которой человек тренируется прямо сейчас) уезжала за край обрезанной, а
+# подпись текущего месяца не рисовалась вовсе, потому что не влезала. Запас
+# рассчитан на трёхбуквенное «Авг» у самой правой колонки.
+_DASH_CAL_RIGHT_UNITS = 2.4
+_DASH_CAL_COLUMNS = 53             # 52 недели назад плюс текущая
+_DASH_CELL_IN = DASH_WIDTH_IN / (
+    _DASH_CAL_LEFT_UNITS + _DASH_CAL_COLUMNS + _DASH_CAL_RIGHT_UNITS
+)
 _DASH_CAL_TOP_UNITS = -4.0         # место над сеткой под месяцы и заголовок
 _DASH_CAL_BOTTOM_UNITS = 7.6
+# Ширина подписи месяца в юнитах: три буквы шрифтом DASH_FS_MICRO. Нужна, чтобы
+# решать, влезает ли подпись, а не гадать по номеру колонки.
+_DASH_CAL_MONTH_UNITS = 1.6
 
 
 def _dash_calendar_height() -> float:
@@ -413,10 +437,13 @@ def _dash_year_calendar(
                 continue
             colour = HEATMAP_FILLED if day_counts.get(day, 0) > 0 else HEATMAP_EMPTY
             _rounded_cell(ax, col, row, 1, colour)
-        # Последние колонки подписи не получают: название месяца шире клетки, и у
-        # правого края оно выезжает за кадр обрезанным до одной буквы.
+        # Подпись рисуется, если она целиком влезает до правого края полосы, а не
+        # «кроме двух последних колонок», как раньше. Правило по номеру колонки
+        # выбрасывало подпись текущего месяца всегда — а это единственный месяц,
+        # который человеку и интересен: на скриншоте августа не было вовсе.
         new_month = col > 0 and monday.month != (monday - dt.timedelta(weeks=1)).month
-        if new_month and col <= columns - 3:
+        room_right = (x_units - left_units) - col
+        if new_month and room_right >= _DASH_CAL_MONTH_UNITS:
             ax.text(col, -1.1, _MONTHS_RU[monday.month - 1], color="#6b7684",
                     fontsize=DASH_FS_MICRO, va="center")
 
@@ -432,19 +459,19 @@ def _dash_lifts(ax, lifts, fg: str, dim: str, ok: str, title: str = "", note: st
     тяги разные веса, и общая шкала расплющила бы жим в прямую. Сравнивать эти
     три линии между собой не нужно — каждая отвечает на «я тут расту?».
     """
-    ax.set_ylim(2.10, -1.5)
+    ax.set_ylim(_LIFT_BOTTOM, _LIFT_TOP)
     if title:
         _dash_section(ax, title, note)
     box = (DASH_RIGHT - DASH_LEFT - 0.02 * (len(lifts) - 1)) / len(lifts)
     for i, (name, series, value, delta) in enumerate(lifts):
         x0 = DASH_LEFT + i * (box + 0.02)
-        ax.text(x0, 0.02, name, color=dim, fontsize=DASH_FS_CAPTION, va="center")
-        ax.text(x0, 0.34, value, color=fg, fontsize=DASH_FS_VALUE,
+        ax.text(x0, _LIFT_NAME_Y, name, color=dim, fontsize=DASH_FS_CAPTION, va="center")
+        ax.text(x0, _LIFT_VALUE_Y, value, color=fg, fontsize=DASH_FS_VALUE,
                 fontweight="bold", va="center")
         if delta:
             # Минус не красится в зелёное: цвет здесь — единственное, что отличает
             # «вырос» от «просел», и покрасить откат как рост значило бы врать.
-            ax.text(x0 + box, 0.34, delta, color=ok if delta.startswith("+") else dim,
+            ax.text(x0 + box, _LIFT_VALUE_Y, delta, color=ok if delta.startswith("+") else dim,
                     fontsize=DASH_FS_NUMBER, fontweight="bold", ha="right", va="center")
         if len(series) < 2:
             continue

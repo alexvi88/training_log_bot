@@ -1,5 +1,7 @@
 """Shared helper for keeping bot screens at the bottom of the chat."""
 
+import logging
+import re
 from contextlib import suppress
 
 from aiogram.exceptions import TelegramBadRequest
@@ -12,8 +14,136 @@ from aiogram.types import (
 )
 
 import chat_bottom
+import formatting
+
+logger = logging.getLogger(__name__)
 
 _NOT_MODIFIED = "message is not modified"
+
+# Потолки Telegram: 4096 на текст сообщения и всего 1024 на подпись к фото. Берём
+# те же константы, по которым сборщики экранов подгоняют содержимое
+# (formatting.MESSAGE_LIMIT/CAPTION_LIMIT) — второй набор чисел про то же самое
+# рано или поздно разъедется с первым.
+TEXT_LIMIT = formatting.MESSAGE_LIMIT
+CAPTION_LIMIT = formatting.CAPTION_LIMIT
+
+# Пометка вместо молчаливой обрезки: экран, у которого просто нет конца, читается
+# как потерянные данные, а не как «не поместилось».
+_TRUNCATED_NOTE = "\n…сообщение обрезано"
+
+# Последний рубеж, когда экран не удалось отправить ни в каком виде: сообщение
+# уже удалено, поэтому без этого человек остаётся с пустым чатом без кнопок.
+_RESCUE_TEXT = "⚠️ Не получилось показать экран. Нажми /start, чтобы вернуться в меню."
+
+_TAG_RE = re.compile(r"<\s*(/?)\s*([a-zA-Z][\w-]*)[^>]*>")
+_ENTITY_RE = re.compile(r"&(?:[a-zA-Z]+|#\d+|#[xX][0-9a-fA-F]+);")
+
+
+def _length(text: str, is_html: bool) -> int:
+    """Длина в понимании Telegram, а не в символах Python.
+
+    Считать по len() нельзя в обе стороны: лимит измеряется в кодовых единицах
+    UTF-16 (эмодзи стоит две, и экран из эмодзи упирается в потолок вдвое
+    раньше), а при parse_mode=HTML теги в лимит не входят вовсе — они уезжают в
+    entities, и по len() мы бы резали экран, который ещё спокойно влезает.
+    """
+    if is_html:
+        return formatting.telegram_length(text)
+    return len(text.encode("utf-16-le")) // 2
+
+
+def _unclosed_tags(html: str) -> list[str]:
+    """Открытые и не закрытые в `html` теги — снизу вверх по вложенности.
+
+    В HTML-разметке Telegram одиночных тегов нет вовсе (<br> и подобные не
+    поддерживаются), так что любой открытый тег обязан быть закрыт — иначе
+    Telegram отвечает «can't parse entities» и сообщение не уходит совсем.
+    """
+    stack: list[str] = []
+    for match in _TAG_RE.finditer(html):
+        name = match.group(2).lower()
+        if match.group(1):
+            # Закрывающий тег: снимаем ближайший одноимённый открытый. Мусорный
+            # </b> без пары просто игнорируем — не наше дело чинить разметку,
+            # наше дело не сделать её хуже обрезкой.
+            if name in stack:
+                while stack.pop() != name:
+                    pass
+        else:
+            stack.append(name)
+    return stack
+
+
+def _drop_dangling(head: str) -> str:
+    """Убрать обрубок тега или HTML-сущности на конце — их Telegram не разберёт."""
+    start = head.rfind("<")
+    if start != -1 and ">" not in head[start:]:
+        head = head[:start]
+    start = head.rfind("&")
+    if start != -1 and ";" not in head[start:]:
+        head = head[:start]
+    return head
+
+
+def _hard_cut(text: str, budget: int, is_html: bool) -> str:
+    """Обрезка внутри строки — на случай, когда одна строка сама длиннее лимита.
+
+    Единственное место, где мы рвём строку посередине (простыня описания, ответ
+    AI-тренера — там переводов строк может не быть вовсе). Идём по тексту
+    кусками, а не по символам, чтобы точка обрыва никогда не попала внутрь тега
+    или &-сущности: такой обрубок Telegram не разберёт и отвергнет сообщение
+    целиком — то есть ровно то, от чего мы тут защищаемся.
+    """
+    used = 0
+    index = 0
+    while index < len(text):
+        tag = _TAG_RE.match(text, index) if is_html else None
+        if tag:
+            index = tag.end()  # разметка в лимит не входит — берём тег целиком
+            continue
+        entity = _ENTITY_RE.match(text, index) if is_html else None
+        chunk = entity.group(0) if entity else text[index]
+        cost = 1 if entity else len(chunk.encode("utf-16-le")) // 2
+        if used + cost > budget:
+            break
+        used += cost
+        index += len(chunk)
+    return text[:index]
+
+
+def fit_to_limit(text: str, limit: int, parse_mode=None) -> str:
+    """Текст, гарантированно влезающий в `limit`, с честной пометкой об обрезке.
+
+    Почему это важно: превышение лимита — это TelegramBadRequest на отправке, а
+    отправляем мы уже после удаления старого экрана, так что человек остаётся не
+    с длинным экраном, а вообще без экрана. Для живого трекера тренировки это
+    значит остаться без трекера до её конца. Обрезанный экран лучше пропавшего.
+
+    Режем по границе строк: у нас все экраны построчные (таблицы подходов, списки
+    упражнений), и строка, оборванная на середине, читается как баг. Незакрытые
+    теги в остатке дописываем, а не дорезаем до них: <b>, открытый в первой
+    строке, увёл бы обрезку в пустой текст. Закрывающие теги при этом бесплатны —
+    разметка в лимит не считается.
+    """
+    is_html = isinstance(parse_mode, str) and parse_mode.lower() == "html"
+    if text is None or _length(text, is_html) <= limit:
+        return text
+    budget = limit - _length(_TRUNCATED_NOTE, is_html)
+    kept: list[str] = []
+    used = 0
+    for line in text.split("\n"):
+        cost = _length(line, is_html) + (1 if kept else 0)  # +1 — сам перевод строки
+        if used + cost > budget:
+            break
+        kept.append(line)
+        used += cost
+    head = "\n".join(kept) if kept else _hard_cut(text, budget, is_html)
+    head = head.rstrip()
+    if is_html:
+        # Строку с "\n" внутри тега мы бы порвали по этому "\n" — подстраховка.
+        head = _drop_dangling(head)
+        head += "".join(f"</{tag}>" for tag in reversed(_unclosed_tags(head)))
+    return head + _TRUNCATED_NOTE
 
 
 async def _edit_text(message: Message, text: str, reply_markup, parse_mode) -> Message | None:
@@ -43,6 +173,27 @@ async def _edit_photo(
     return edited if isinstance(edited, Message) else message
 
 
+async def _send_screen(callback: CallbackQuery, message: Message, text: str, reply_markup, parse_mode) -> Message:
+    """Отправить новый экран так, чтобы чат не остался пустым.
+
+    К этому моменту старое сообщение обычно уже удалено, поэтому любая ошибка
+    здесь — это человек без экрана. Длину мы уже подрезали, но отказать Telegram
+    может и по разметке, и по клавиатуре, так что откатываемся по шагам: тот же
+    текст без parse_mode (сырые теги некрасивы, но экран на месте), а в самом
+    конце — короткое сообщение с выходом в меню. Отправляем через bot по chat_id:
+    у message.answer тот же адресат, но незачем зависеть от объекта сообщения,
+    которого в чате уже нет.
+    """
+    try:
+        return await message.answer(text, reply_markup=reply_markup, parse_mode=parse_mode)
+    except TelegramBadRequest as e:
+        logger.warning("Экран не отправился (%s) — спасаем чат", e.message)
+    chat_id = message.chat.id
+    with suppress(TelegramBadRequest):
+        return await callback.bot.send_message(chat_id, text, reply_markup=reply_markup)
+    return await callback.bot.send_message(chat_id, _RESCUE_TEXT)
+
+
 async def safe_edit(
     callback: CallbackQuery, text: str, reply_markup=None, parse_mode=None, delete: bool = True
 ) -> Message:
@@ -61,6 +212,10 @@ async def safe_edit(
     history, not a disposable menu screen.
     """
     message = callback.message
+    # Подрезаем ДО того, как что-то удалим: раньше слишком длинный текст падал уже
+    # на отправке нового экрана, то есть после delete() старого — и человек
+    # оставался вообще без экрана (посреди тренировки — без трекера).
+    text = fit_to_limit(text, TEXT_LIMIT, parse_mode)
     # InaccessibleMessage: так Telegram отдаёт сообщение, которое слишком старое
     # или удалено — а кнопки живут в истории чата вечно, так что это обычный
     # случай, а не край. Это не Message: у него нет ни `text`, ни `answer`, ни
@@ -78,7 +233,7 @@ async def safe_edit(
                 return edited
         with suppress(TelegramBadRequest):
             await message.delete()
-    return await message.answer(text, reply_markup=reply_markup, parse_mode=parse_mode)
+    return await _send_screen(callback, message, text, reply_markup, parse_mode)
 
 
 async def safe_edit_photo(
@@ -100,6 +255,9 @@ async def safe_edit_photo(
     safe_edit.
     """
     message = callback.message
+    # У подписи лимит вчетверо меньше, чем у текста, так что упереться в него
+    # проще; всё остальное — как в safe_edit: режем до любых удалений.
+    caption = fit_to_limit(caption, CAPTION_LIMIT, parse_mode)
     # То же, что в safe_edit: у InaccessibleMessage нет ни `photo`, ни методов.
     if isinstance(message, InaccessibleMessage):
         return await callback.bot.send_photo(
@@ -116,9 +274,23 @@ async def safe_edit_photo(
                 return edited
         with suppress(TelegramBadRequest):
             await message.delete()
-    return await message.answer_photo(
-        BufferedInputFile(photo, filename=filename),
-        caption=caption,
-        reply_markup=reply_markup,
-        parse_mode=parse_mode,
-    )
+    # Та же лестница откатов, что в _send_screen: подпись без разметки, а если и
+    # фото не уходит — хотя бы текстовый экран с выходом в меню.
+    try:
+        return await message.answer_photo(
+            BufferedInputFile(photo, filename=filename),
+            caption=caption,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode,
+        )
+    except TelegramBadRequest as e:
+        logger.warning("Фото-экран не отправился (%s) — спасаем чат", e.message)
+    chat_id = message.chat.id
+    with suppress(TelegramBadRequest):
+        return await callback.bot.send_photo(
+            chat_id,
+            BufferedInputFile(photo, filename=filename),
+            caption=caption,
+            reply_markup=reply_markup,
+        )
+    return await callback.bot.send_message(chat_id, _RESCUE_TEXT)
