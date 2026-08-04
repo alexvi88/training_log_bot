@@ -16,28 +16,30 @@
   `propose_program`), поэтому имена инструментов здесь перечислены поимённо в
   явном белом списке — новый пишущий инструмент у тренера не должен утечь
   наружу самим фактом своего появления.
-* Аутентификация — bearer-токен из `db.mcp_tokens`, выпускаемый в боте
-  (handlers/mcp_access.py). Токен и есть личность: он же отвечает на вопрос,
-  чьи данные отдавать. Проверяется дважды — ASGI-обёрткой (чтобы клиент без
-  токена получил честный 401 на транспорте, а не ошибку внутри вызова) и
-  каждым инструментом (обёртку можно смонтировать неправильно, инструмент —
-  нет).
+* Аутентификация — два пути к одной личности (см. mcp_oauth.py): OAuth для
+  клиентов, которые подключаются коннектором (claude.ai, Claude Desktop,
+  ChatGPT), и статический bearer-токен из `db.mcp_tokens` для тех, где заголовок
+  вписывают руками (Claude Code, Cursor, VS Code). Оба приходят в инструмент
+  одинаково — `AccessToken.subject` с telegram_id владельца. Проверяет токен
+  middleware SDK на транспорте (клиент без токена получает честный 401, а не
+  ошибку внутри вызова), а каждый инструмент проверяет ещё раз, что личность
+  вообще есть: middleware можно смонтировать неправильно, инструмент — нет.
 * Транспорт — streamable HTTP в stateless-режиме: сессию между запросами
   держать негде (Amvera перезапускает контейнер когда угодно), а без неё
   каждый POST самодостаточен.
 """
 
-import json
 import logging
-from typing import Any, Optional
+from typing import Any
 
 import uvicorn
-from mcp.server.mcpserver import Context, MCPServer
+from mcp.server.auth.middleware.auth_context import get_access_token
+from mcp.server.mcpserver import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 
 import ai_trainer
 import config
-import db
+import mcp_oauth
 
 logger = logging.getLogger(__name__)
 
@@ -68,36 +70,25 @@ class Unauthorized(Exception):
     """Запрос без валидного токена. Наружу уходит как ошибка вызова."""
 
 
-def bearer_token(headers: Optional[Any]) -> str:
-    """Достать токен из заголовка Authorization.
+def _user_id() -> int:
+    """Чьи данные отдавать — из личности, которую установил middleware SDK.
 
-    Регистр схемы не фиксирован (RFC 7235: `Bearer` — case-insensitive), а
-    клиенты пишут её по-разному, поэтому сравниваем в нижнем регистре. Сам
-    токен — как есть.
+    `subject` кладут туда оба пути авторизации (см. mcp_oauth), поэтому здесь
+    нет ни разбора заголовка, ни знания о том, каким из них пришёл клиент.
     """
-    if not headers:
-        return ""
-    raw = headers.get("authorization") or headers.get("Authorization") or ""
-    parts = raw.split(None, 1)
-    if len(parts) != 2 or parts[0].lower() != "bearer":
-        return ""
-    return parts[1].strip()
-
-
-async def _user_id(ctx: Context) -> int:
-    user_id = await db.resolve_mcp_token(bearer_token(ctx.headers))
-    if user_id is None:
+    token = get_access_token()
+    if token is None or not token.subject:
         # Текст уходит в клиент как есть: это единственная подсказка, которую
-        # увидит человек, вставивший старый или обрезанный токен.
+        # увидит человек, подключившийся не тем токеном.
         raise Unauthorized(
-            "Нужен действующий токен. Открой бота, набери /mcp и вставь выданный "
-            "токен в заголовок Authorization: Bearer <токен>."
+            "Нужен действующий доступ. Открой бота, набери /mcp и подключи его "
+            "заново — коннектором или токеном."
         )
-    return user_id
+    return int(token.subject)
 
 
-async def _call(ctx: Context, name: str, **arguments: Any) -> str:
-    """Общий путь всех инструментов: токен → user_id → ридер AI-тренера.
+async def _call(name: str, **arguments: Any) -> str:
+    """Общий путь всех инструментов: личность → ридер AI-тренера.
 
     Возвращает JSON-строку — ровно то же, что видит модель внутри бота.
     """
@@ -105,14 +96,20 @@ async def _call(ctx: Context, name: str, **arguments: Any) -> str:
         # Недостижимо через объявленные ниже инструменты; страховка от того,
         # что кто-то добавит вызов мимо белого списка.
         raise ValueError(f"tool {name} is not exposed over MCP")
-    user_id = await _user_id(ctx)
+    user_id = _user_id()
     logger.info("MCP tool %s for user %s", name, user_id)
     return await ai_trainer.execute_tool(user_id, name, arguments)
 
 
 def build_server() -> MCPServer:
     """Собрать MCP-сервер. Отдельной функцией, чтобы тесты поднимали свой
-    экземпляр, а не тянули глобальный."""
+    экземпляр, а не тянули глобальный.
+
+    `auth_server_provider` без отдельного `token_verifier` — не упущение:
+    MCPServer запрещает передавать оба, а из провайдера он сам делает
+    верификатор поверх `load_access_token`. Нам это и нужно, потому что там же
+    принимается статический токен — один путь проверки на оба вида.
+    """
     mcp = MCPServer(
         name="training-log",
         title="Дневник тренировок",
@@ -124,133 +121,90 @@ def build_server() -> MCPServer:
             "нужны остальным инструментам."
         ),
         version="1.0.0",
+        auth_server_provider=mcp_oauth.TrainingLogOAuthProvider(),
+        auth=mcp_oauth.auth_settings(MCP_PATH),
     )
+    mcp_oauth.register_routes(mcp)
 
     @mcp.tool()
-    async def get_training_overview(ctx: Context) -> str:
+    async def get_training_overview() -> str:
         """Сводка по пользователю: единицы измерения, формула e1RM, статистика (всего
         тренировок, за неделю, за 30 дней, дней с последней, стрик) и список его
         упражнений с группой мышц и числом использований. Вызывай первым."""
-        return await _call(ctx, "get_training_overview")
+        return await _call("get_training_overview")
 
     @mcp.tool()
-    async def get_active_workout(ctx: Context) -> str:
+    async def get_active_workout() -> str:
         """Текущая незавершённая тренировка: когда начата, что уже залогировано,
         заметки к упражнениям. Пустой результат — сейчас пользователь не тренируется."""
-        return await _call(ctx, "get_active_workout")
+        return await _call("get_active_workout")
 
     @mcp.tool()
-    async def list_recent_workouts(ctx: Context, limit: int = 5) -> str:
+    async def list_recent_workouts(limit: int = 5) -> str:
         """Последние завершённые тренировки (1-10, по умолчанию 5): дата, заметки и
         все подходы (вес x повторы) по каждому упражнению. Для вопросов про долгий
         период бери get_full_workout_history."""
-        return await _call(ctx, "list_recent_workouts", limit=max(1, min(int(limit), 10)))
+        return await _call("list_recent_workouts", limit=max(1, min(int(limit), 10)))
 
     @mcp.tool()
-    async def get_full_workout_history(ctx: Context) -> str:
+    async def get_full_workout_history() -> str:
         """Вся история тренировок (до 200 последних) — для вопросов про длинный
         период: динамика за полгода, объём по месяцам, поиск давних тренировок."""
-        return await _call(ctx, "get_full_workout_history")
+        return await _call("get_full_workout_history")
 
     @mcp.tool()
-    async def get_weekly_volume_by_group(ctx: Context) -> str:
+    async def get_weekly_volume_by_group() -> str:
         """Объём (рабочие подходы) по группам мышц за текущую и прошлую неделю —
         чем нагрузка перекошена и что недобирает."""
-        return await _call(ctx, "get_weekly_volume_by_group")
+        return await _call("get_weekly_volume_by_group")
 
     @mcp.tool()
-    async def get_exercise_progress(ctx: Context, exercise_name: str) -> str:
+    async def get_exercise_progress(exercise_name: str) -> str:
         """Динамика по одному упражнению: подходы по датам, рабочие веса, e1RM,
         рекорды. exercise_name — точное название из get_training_overview."""
-        return await _call(ctx, "get_exercise_progress", exercise_name=exercise_name)
+        return await _call("get_exercise_progress", exercise_name=exercise_name)
 
     @mcp.tool()
-    async def list_exercise_catalog(ctx: Context) -> str:
+    async def list_exercise_catalog() -> str:
         """Каталог упражнений бота по группам мышц — что можно предложить сверх того,
         что пользователь уже делает."""
-        return await _call(ctx, "list_exercise_catalog")
+        return await _call("list_exercise_catalog")
 
     @mcp.tool()
-    async def get_bodyweight_history(ctx: Context) -> str:
+    async def get_bodyweight_history() -> str:
         """История взвешиваний: дата и вес тела."""
-        return await _call(ctx, "get_bodyweight_history")
+        return await _call("get_bodyweight_history")
 
     @mcp.tool()
-    async def get_food_diary(ctx: Context, days: int = 14) -> str:
+    async def get_food_diary(days: int = 14) -> str:
         """Дневник питания за последние N дней (по умолчанию 14): записи о еде с КБЖУ
         и суточными итогами."""
-        return await _call(ctx, "get_food_diary", days=max(1, min(int(days), 90)))
+        return await _call("get_food_diary", days=max(1, min(int(days), 90)))
 
     @mcp.tool()
-    async def get_saved_programs(ctx: Context) -> str:
+    async def get_saved_programs() -> str:
         """Сохранённые программы пользователя: дни, упражнения и схемы подходов."""
-        return await _call(ctx, "get_saved_programs")
+        return await _call("get_saved_programs")
 
     @mcp.tool()
-    async def get_program_adherence(ctx: Context) -> str:
+    async def get_program_adherence() -> str:
         """Насколько реальные тренировки совпадают с сохранённой программой: что
         делается по плану, что пропускается, что добавлено сверху."""
-        return await _call(ctx, "get_program_adherence")
+        return await _call("get_program_adherence")
 
     return mcp
 
 
-def _unauthorized_response() -> tuple[int, dict[str, str], bytes]:
-    body = json.dumps(
-        {
-            "error": "unauthorized",
-            "error_description": (
-                "Открой Telegram-бота, набери /mcp и передавай выданный токен "
-                "в заголовке Authorization: Bearer <токен>."
-            ),
-        }
-    ).encode()
-    headers = {
-        "content-type": "application/json",
-        # RFC 6750: без этого заголовка клиент не знает, что именно от него
-        # хотят, и показывает голый 401.
-        "www-authenticate": 'Bearer realm="training-log"',
-        "content-length": str(len(body)),
-    }
-    return 401, headers, body
-
-
-def require_token(app):
-    """ASGI-обёртка: без валидного токена дальше запрос не идёт.
-
-    Инструменты и сами проверяют токен, но до вызова инструмента ещё нужно
-    пройти `initialize` — а клиент, который успешно инициализировался и только
-    потом получил отказ на каждом вызове, выглядит как «сервер сломан», а не
-    как «токен не тот». 401 на транспорте — это то, что клиенты умеют
-    показывать человеку.
-    """
-
-    async def wrapped(scope, receive, send):
-        if scope["type"] != "http":
-            await app(scope, receive, send)
-            return
-        headers = {k.decode("latin-1").lower(): v.decode("latin-1") for k, v in scope["headers"]}
-        if await db.resolve_mcp_token(bearer_token(headers)) is None:
-            status, response_headers, body = _unauthorized_response()
-            await send(
-                {
-                    "type": "http.response.start",
-                    "status": status,
-                    "headers": [
-                        (k.encode("latin-1"), v.encode("latin-1"))
-                        for k, v in response_headers.items()
-                    ],
-                }
-            )
-            await send({"type": "http.response.body", "body": body})
-            return
-        await app(scope, receive, send)
-
-    return wrapped
-
-
 def build_app():
-    """ASGI-приложение целиком: MCP на MCP_PATH за проверкой токена.
+    """ASGI-приложение целиком: MCP на MCP_PATH, рядом — роуты OAuth.
+
+    Своей обёртки с проверкой токена здесь больше нет, и это не упрощение:
+    обёртка требовала токен на *любом* запросе, а теперь на том же порту живут
+    `/authorize`, `/token`, `/register`, `.well-known` и страница согласия — то
+    есть ровно те адреса, куда клиент приходит ещё без токена. Требование токена
+    висит на одном `MCP_PATH` (`RequireAuthMiddleware` от SDK), и 401 там такой
+    же честный: с `WWW-Authenticate`, по которому клиент находит, где
+    авторизоваться.
 
     stateless_http/json_response: сессию между запросами держать негде — процесс
     один, но перезапускается по воле хостинга, — а SSE-стрим здесь не нужен,
@@ -264,12 +218,12 @@ def build_app():
     запросом всё равно должен лежать секрет, которого у чужой страницы нет.
     """
     mcp = build_server()
-    return require_token(mcp.streamable_http_app(
+    return mcp.streamable_http_app(
         streamable_http_path=MCP_PATH,
         stateless_http=True,
         json_response=True,
         transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
-    ))
+    )
 
 
 async def serve() -> None:

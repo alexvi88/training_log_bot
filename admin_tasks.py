@@ -80,6 +80,11 @@ async def _send_daily_report(bot: Bot) -> None:
         dt.datetime.now() - dt.timedelta(days=config.SHARED_ITEMS_RETENTION_DAYS)
     ).isoformat(timespec="seconds")
     await db.delete_shared_items_older_than(cutoff)
+    # Брошенное на полпути подключение по OAuth не гасит за собой ничего: код,
+    # заявка и просроченная пара токенов остаются лежать. Прополка — здесь,
+    # рядом с остальной, а не в самом флоу: чистить в горячем пути значит
+    # платить за это на каждом запросе.
+    await db.purge_expired_oauth()
 
     backup_name = f"training_log_backup_{dt.date.today().isoformat()}.db"
     backup_path = os.path.join(tempfile.gettempdir(), backup_name)

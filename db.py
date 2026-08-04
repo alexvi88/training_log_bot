@@ -16,6 +16,7 @@ import datetime as dt
 import json
 import os
 import secrets
+import time
 from typing import Any, Optional
 
 import aiosqlite
@@ -351,6 +352,82 @@ CREATE TABLE IF NOT EXISTS mcp_tokens (
     user_id INTEGER NOT NULL UNIQUE,
     created_at TEXT NOT NULL,
     last_used_at TEXT
+);
+
+-- OAuth к тому же доступу (см. mcp_oauth.py). Статический токен выше умеют
+-- слать только клиенты, где заголовок можно вписать руками; браузерный
+-- claude.ai, нативные коннекторы Claude Desktop и ChatGPT принимают
+-- исключительно OAuth — а это ровно те клиенты, где человек не настраивает
+-- ничего. Механизмы независимы: отзыв одного не трогает другой.
+
+-- Клиенты динамической регистрации (RFC 7591). Регистрируется приложение
+-- (Claude, ChatGPT), а не человек, поэтому user_id тут нет.
+CREATE TABLE IF NOT EXISTS oauth_clients (
+    client_id TEXT PRIMARY KEY,
+    client_secret TEXT,
+    metadata TEXT NOT NULL,      -- OAuthClientInformationFull в JSON
+    created_at TEXT NOT NULL
+);
+
+-- Заявка на согласие: /authorize пришёл, человек ещё не подтвердил, что это он.
+-- Лежит в базе, а не в памяти процесса: контейнер перезапускается когда угодно,
+-- и перезапуск посреди подключения не должен выглядеть как «ничего не работает».
+--
+-- attempts здесь, а не на коде связывания: у неверного кода строки в базе нет,
+-- запирать по нему нечего — перебирают шесть цифр в рамках одной заявки, её и
+-- запираем.
+CREATE TABLE IF NOT EXISTS oauth_consent_requests (
+    request_id TEXT PRIMARY KEY,
+    client_id TEXT NOT NULL,
+    redirect_uri TEXT NOT NULL,
+    redirect_uri_provided_explicitly INTEGER NOT NULL,
+    code_challenge TEXT NOT NULL,
+    scopes TEXT NOT NULL,
+    resource TEXT,
+    state TEXT,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    expires_at REAL NOT NULL
+);
+
+-- Код авторизации: живёт минуты, гасится при обмене.
+CREATE TABLE IF NOT EXISTS oauth_auth_codes (
+    code TEXT PRIMARY KEY,
+    client_id TEXT NOT NULL,
+    user_id INTEGER NOT NULL,
+    redirect_uri TEXT NOT NULL,
+    redirect_uri_provided_explicitly INTEGER NOT NULL,
+    code_challenge TEXT NOT NULL,
+    scopes TEXT NOT NULL,
+    resource TEXT,
+    expires_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_oauth_auth_codes_expires ON oauth_auth_codes (expires_at);
+
+-- Выданные токены. refresh_token в той же строке: отзыв одного обязан гасить
+-- парный, а держать их порознь — это способ про это забыть. Два срока на строку,
+-- потому что живут они по-разному: access — час, refresh — недели, и строка
+-- нужна, пока жив хотя бы refresh.
+CREATE TABLE IF NOT EXISTS oauth_tokens (
+    access_token TEXT PRIMARY KEY,
+    refresh_token TEXT UNIQUE,
+    client_id TEXT NOT NULL,
+    user_id INTEGER NOT NULL,
+    scopes TEXT NOT NULL,
+    resource TEXT,
+    expires_at REAL NOT NULL,
+    refresh_expires_at REAL,
+    created_at TEXT NOT NULL,
+    last_used_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_oauth_tokens_user ON oauth_tokens (user_id);
+
+-- Одноразовый код из бота, которым человек доказывает на странице согласия, что
+-- это он. Единственный аккаунт у пользователя — телеграмный, и подтвердить
+-- владение им можно только через сам бот.
+CREATE TABLE IF NOT EXISTS oauth_link_codes (
+    code TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    expires_at REAL NOT NULL
 );
 """
 
@@ -2931,6 +3008,358 @@ async def resolve_mcp_token(token: str) -> Optional[int]:
         )
         await conn().commit()
     return row["user_id"]
+
+
+# ---------- MCP OAuth (см. mcp_oauth.py) ----------
+#
+# Хранилище OAuth-провайдера. Функции нарочно тонкие: политика — сроки жизни,
+# длина кода, лимит попыток — живёт в mcp_oauth.py, здесь только запись и
+# чтение. Исключений два, и оба про одноразовость: `consume_*` и
+# `verify_oauth_link_code` обязаны проверять и гасить одной транзакцией, иначе
+# между «код верный» и «код удалён» проходит второй запрос и одноразовый код
+# перестаёт быть одноразовым.
+#
+# Значения токенов и кодов сюда приходят и здесь остаются: ни одна из функций
+# ниже их не логирует.
+
+
+async def save_oauth_client(client_id: str, client_secret: Optional[str], metadata: str) -> None:
+    """Зарегистрировать клиента (или перезаписать регистрацию под тем же id)."""
+    async with _write_lock:
+        await conn().execute(
+            "INSERT OR REPLACE INTO oauth_clients (client_id, client_secret, metadata, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (client_id, client_secret, metadata, now_iso()),
+        )
+        await conn().commit()
+
+
+async def get_oauth_client(client_id: str) -> Optional[aiosqlite.Row]:
+    cur = await conn().execute("SELECT * FROM oauth_clients WHERE client_id = ?", (client_id,))
+    return await cur.fetchone()
+
+
+async def create_oauth_consent_request(
+    request_id: str,
+    client_id: str,
+    redirect_uri: str,
+    redirect_uri_provided_explicitly: bool,
+    code_challenge: str,
+    scopes: str,
+    resource: Optional[str],
+    state: Optional[str],
+    expires_at: float,
+) -> None:
+    async with _write_lock:
+        await conn().execute(
+            "INSERT INTO oauth_consent_requests (request_id, client_id, redirect_uri, "
+            "redirect_uri_provided_explicitly, code_challenge, scopes, resource, state, expires_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                request_id,
+                client_id,
+                redirect_uri,
+                int(redirect_uri_provided_explicitly),
+                code_challenge,
+                scopes,
+                resource,
+                state,
+                expires_at,
+            ),
+        )
+        await conn().commit()
+
+
+async def get_oauth_consent_request(request_id: str) -> Optional[aiosqlite.Row]:
+    if not request_id:
+        return None
+    cur = await conn().execute(
+        "SELECT * FROM oauth_consent_requests WHERE request_id = ?", (request_id,)
+    )
+    return await cur.fetchone()
+
+
+async def delete_oauth_consent_request(request_id: str) -> None:
+    async with _write_lock:
+        await conn().execute(
+            "DELETE FROM oauth_consent_requests WHERE request_id = ?", (request_id,)
+        )
+        await conn().commit()
+
+
+async def issue_oauth_link_code(user_id: int, ttl_seconds: int, digits: int = 6) -> str:
+    """Код связывания: человек называет его на странице согласия, и только так
+    страница узнаёт, кто перед ней.
+
+    Живёт один на пользователя — выдать новый значит погасить прежний, поэтому
+    «нажал кнопку дважды» не оставляет позади себя действующий код.
+    """
+    now = time.time()
+    ceiling = 10**digits
+    async with _write_lock:
+        await conn().execute("DELETE FROM oauth_link_codes WHERE user_id = ?", (user_id,))
+        # Заодно чистим просрочку: иначе мёртвый код продолжает занимать шесть
+        # цифр из миллиона до ближайшей ночной прополки.
+        await conn().execute("DELETE FROM oauth_link_codes WHERE expires_at < ?", (now,))
+        for _ in range(20):
+            code = f"{secrets.randbelow(ceiling):0{digits}d}"
+            cur = await conn().execute("SELECT 1 FROM oauth_link_codes WHERE code = ?", (code,))
+            if await cur.fetchone() is None:
+                break
+        else:  # pragma: no cover — миллион живых кодов у личного бота недостижим
+            raise RuntimeError("не удалось подобрать свободный код связывания")
+        await conn().execute(
+            "INSERT INTO oauth_link_codes (code, user_id, expires_at) VALUES (?, ?, ?)",
+            (code, user_id, now + ttl_seconds),
+        )
+        await conn().commit()
+    return code
+
+
+async def verify_oauth_link_code(
+    request_id: str, code: str, max_attempts: int
+) -> tuple[str, Optional[int]]:
+    """Сверить код связывания с заявкой на согласие, одной транзакцией.
+
+    Возвращает («ok», user_id) либо причину отказа: `unknown_request`,
+    `expired_request`, `too_many_attempts`, `bad_code`. Причина нужна странице
+    согласия: «код не тот» и «заявка устарела» лечатся по-разному.
+
+    Верный код гасится здесь же, неверный увеличивает счётчик попыток заявки:
+    без лимита шесть цифр перебираются за минуты.
+    """
+    now = time.time()
+    async with _write_lock:
+        cur = await conn().execute(
+            "SELECT attempts, expires_at FROM oauth_consent_requests WHERE request_id = ?",
+            (request_id,),
+        )
+        request = await cur.fetchone()
+        if request is None:
+            return "unknown_request", None
+        if request["expires_at"] < now:
+            return "expired_request", None
+        if request["attempts"] >= max_attempts:
+            return "too_many_attempts", None
+        cur = await conn().execute(
+            "SELECT user_id FROM oauth_link_codes WHERE code = ? AND expires_at > ?",
+            (code, now),
+        )
+        row = await cur.fetchone()
+        if row is None:
+            await conn().execute(
+                "UPDATE oauth_consent_requests SET attempts = attempts + 1 WHERE request_id = ?",
+                (request_id,),
+            )
+            await conn().commit()
+            return "bad_code", None
+        await conn().execute("DELETE FROM oauth_link_codes WHERE code = ?", (code,))
+        await conn().commit()
+        return "ok", row["user_id"]
+
+
+async def create_oauth_auth_code(
+    code: str,
+    client_id: str,
+    user_id: int,
+    redirect_uri: str,
+    redirect_uri_provided_explicitly: bool,
+    code_challenge: str,
+    scopes: str,
+    resource: Optional[str],
+    expires_at: float,
+) -> None:
+    async with _write_lock:
+        await conn().execute(
+            "INSERT INTO oauth_auth_codes (code, client_id, user_id, redirect_uri, "
+            "redirect_uri_provided_explicitly, code_challenge, scopes, resource, expires_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                code,
+                client_id,
+                user_id,
+                redirect_uri,
+                int(redirect_uri_provided_explicitly),
+                code_challenge,
+                scopes,
+                resource,
+                expires_at,
+            ),
+        )
+        await conn().commit()
+
+
+async def get_oauth_auth_code(code: str) -> Optional[aiosqlite.Row]:
+    if not code:
+        return None
+    cur = await conn().execute("SELECT * FROM oauth_auth_codes WHERE code = ?", (code,))
+    return await cur.fetchone()
+
+
+async def consume_oauth_auth_code(code: str) -> Optional[aiosqlite.Row]:
+    """Забрать код авторизации и погасить его. None — кода нет, значит его уже
+    обменяли (или он и не существовал), и второй обмен обязан провалиться."""
+    if not code:
+        return None
+    async with _write_lock:
+        cur = await conn().execute("SELECT * FROM oauth_auth_codes WHERE code = ?", (code,))
+        row = await cur.fetchone()
+        if row is None:
+            return None
+        await conn().execute("DELETE FROM oauth_auth_codes WHERE code = ?", (code,))
+        await conn().commit()
+        return row
+
+
+async def create_oauth_token(
+    access_token: str,
+    refresh_token: Optional[str],
+    client_id: str,
+    user_id: int,
+    scopes: str,
+    resource: Optional[str],
+    expires_at: float,
+    refresh_expires_at: Optional[float],
+) -> None:
+    async with _write_lock:
+        await conn().execute(
+            "INSERT INTO oauth_tokens (access_token, refresh_token, client_id, user_id, scopes, "
+            "resource, expires_at, refresh_expires_at, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                access_token,
+                refresh_token,
+                client_id,
+                user_id,
+                scopes,
+                resource,
+                expires_at,
+                refresh_expires_at,
+                now_iso(),
+            ),
+        )
+        await conn().commit()
+
+
+async def get_oauth_access_token(access_token: str) -> Optional[aiosqlite.Row]:
+    if not access_token:
+        return None
+    cur = await conn().execute(
+        "SELECT * FROM oauth_tokens WHERE access_token = ?", (access_token,)
+    )
+    return await cur.fetchone()
+
+
+async def get_oauth_refresh_token(refresh_token: str) -> Optional[aiosqlite.Row]:
+    if not refresh_token:
+        return None
+    cur = await conn().execute(
+        "SELECT * FROM oauth_tokens WHERE refresh_token = ?", (refresh_token,)
+    )
+    return await cur.fetchone()
+
+
+async def consume_oauth_refresh_token(refresh_token: str) -> Optional[aiosqlite.Row]:
+    """Забрать пару по refresh-токену и удалить её целиком: обмен обязан
+    ротировать оба токена, а старая пара после обмена не должна открывать
+    ничего (RFC 6749 §10.4 — украденный refresh иначе живёт вечно)."""
+    if not refresh_token:
+        return None
+    async with _write_lock:
+        cur = await conn().execute(
+            "SELECT * FROM oauth_tokens WHERE refresh_token = ?", (refresh_token,)
+        )
+        row = await cur.fetchone()
+        if row is None:
+            return None
+        await conn().execute(
+            "DELETE FROM oauth_tokens WHERE refresh_token = ?", (refresh_token,)
+        )
+        await conn().commit()
+        return row
+
+
+async def touch_oauth_token(access_token: str) -> None:
+    """Отметка последнего обращения — её показывает раздел «Подключённые
+    приложения»: только по ней и видно, ходит ли приложение за данными."""
+    async with _write_lock:
+        await conn().execute(
+            "UPDATE oauth_tokens SET last_used_at = ? WHERE access_token = ?",
+            (now_iso(), access_token),
+        )
+        await conn().commit()
+
+
+async def revoke_oauth_token(token: str) -> bool:
+    """Погасить пару по любому из её токенов: строка одна, поэтому отзыв access
+    убивает и парный refresh, и наоборот."""
+    if not token:
+        return False
+    async with _write_lock:
+        cur = await conn().execute(
+            "DELETE FROM oauth_tokens WHERE access_token = ? OR refresh_token = ?",
+            (token, token),
+        )
+        await conn().commit()
+        return cur.rowcount > 0
+
+
+async def list_oauth_connections(user_id: int) -> list[aiosqlite.Row]:
+    """Подключённые приложения пользователя — по одной строке на клиента.
+
+    Живым считается подключение, у которого не истёк refresh: access живёт час,
+    и по нему половина списка исчезала бы у человека на глазах.
+    """
+    now = time.time()
+    cur = await conn().execute(
+        "SELECT t.client_id AS client_id, c.metadata AS metadata, COUNT(*) AS tokens, "
+        "MIN(t.created_at) AS connected_at, MAX(t.last_used_at) AS last_used_at "
+        "FROM oauth_tokens t LEFT JOIN oauth_clients c ON c.client_id = t.client_id "
+        "WHERE t.user_id = ? AND COALESCE(t.refresh_expires_at, t.expires_at) > ? "
+        # client_id вторым ключом — чтобы список не перетасовывался между
+        # открытиями экрана: подключить два приложения в одну секунду вполне
+        # реально, а кнопка «Отключить» стоит напротив имени.
+        "GROUP BY t.client_id ORDER BY connected_at DESC, client_id",
+        (user_id, now),
+    )
+    return list(await cur.fetchall())
+
+
+async def revoke_oauth_client_tokens(user_id: int, client_id: str) -> int:
+    """«Отключить приложение»: все пары этого клиента у этого пользователя.
+
+    Именно все: клиент мог обменять refresh и завести вторую пару, а человек
+    нажал одну кнопку и вправе считать, что доступ закрыт целиком.
+    """
+    async with _write_lock:
+        cur = await conn().execute(
+            "DELETE FROM oauth_tokens WHERE user_id = ? AND client_id = ?",
+            (user_id, client_id),
+        )
+        await conn().commit()
+        return cur.rowcount
+
+
+async def purge_expired_oauth(now: Optional[float] = None) -> int:
+    """Прополка просрочки: коды, заявки и мёртвые пары токенов.
+
+    Без неё таблицы только растут — каждая попытка подключения оставляет по
+    строке в трёх из них, и удалять их некому: успешный флоу гасит свои, а
+    брошенный на полпути не гасит ничего.
+    """
+    moment = time.time() if now is None else now
+    deleted = 0
+    async with _write_lock:
+        for statement in (
+            "DELETE FROM oauth_auth_codes WHERE expires_at < ?",
+            "DELETE FROM oauth_consent_requests WHERE expires_at < ?",
+            "DELETE FROM oauth_link_codes WHERE expires_at < ?",
+            "DELETE FROM oauth_tokens WHERE COALESCE(refresh_expires_at, expires_at) < ?",
+        ):
+            cur = await conn().execute(statement, (moment,))
+            deleted += cur.rowcount
+        await conn().commit()
+    return deleted
 
 
 # ---------- programs (a named, ordered set of training days) ----------
