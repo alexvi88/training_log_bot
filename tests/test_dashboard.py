@@ -120,8 +120,8 @@ def test_build_workout_card_text():
         started, blocks, note="Спал хорошо", unit="kg"
     )
     assert title.startswith("26.06.2026")
-    assert any("Жим лёжа [ГРУДЬ]" in line for line in body)
-    assert any("Тяга [СПИНА]" in line for line in body)
+    assert any("Жим лёжа [грудь]" in line for line in body)
+    assert any("Тяга [спина]" in line for line in body)
     assert note == "Спал хорошо"
     assert footer.startswith("2 упражнения")
     assert "5 сетов" in footer

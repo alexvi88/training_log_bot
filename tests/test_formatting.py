@@ -52,7 +52,7 @@ def test_build_workout_summary_weighted_exercise_shows_e1rm():
         ExerciseBlockView(group_name="грудь", exercise_name="Жим лёжа", sets=[(100.0, 8), (100.0, 6)])
     ]
     text = formatting.build_workout_summary(started, blocks)
-    assert "Жим лёжа [ГРУДЬ]" in text
+    assert "Жим лёжа [грудь]" in text
     assert "100×8" in text and "100×6" in text
     assert "e1RM" in text
 
@@ -538,7 +538,7 @@ def test_build_workout_preview_is_compact_no_1rm():
 
     assert "<b>Жим лёжа</b>" in lines
     assert "100×8, 100×7" in lines
-    assert "[ГРУДЬ]" not in text
+    assert "[грудь]" not in text
     assert "e1RM" not in text
     assert "  •" not in text
     assert "<i>подходов нет</i>" in lines  # exercise with no sets logged
@@ -549,16 +549,16 @@ def test_build_workout_preview_is_compact_no_1rm():
 
 def test_format_pr_detail_e1rm():
     text = formatting.format_pr_detail("e1rm", 133.3)
-    assert text == "🔥 Новый рекорд e1RM: 133.3кг"
+    assert text == "• Новый рекорд e1RM: 133.3кг"
 
 
 def test_format_pr_detail_reps_at_weight():
     text = formatting.format_pr_detail("reps_at_weight", 8, extra=100.0)
-    assert text == "🔥 Новый рекорд повторов: 100кг × 8"
+    assert text == "• Новый рекорд повторов: 100кг × 8"
 
 
 def test_format_pr_detail_unknown_kind_falls_back():
-    assert formatting.format_pr_detail("tonnage", 1000) == "🔥 Новый рекорд"
+    assert formatting.format_pr_detail("tonnage", 1000) == "• Новый рекорд"
 
 
 def test_format_pr_detail_respects_unit():

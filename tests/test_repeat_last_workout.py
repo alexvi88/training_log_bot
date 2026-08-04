@@ -118,10 +118,10 @@ async def test_repeat_list_keeps_button_labels_short_with_dash_separator(fresh_d
 
     text = list_cb.bot.send_message.await_args.kwargs["text"]
     assert f"<b>1 · {expected_date}</b>" in text
-    assert "• Приседания со штангой на плечах [ГРУДЬ]" in text
-    assert "• Жим штанги лёжа широким хватом [ГРУДЬ]" in text
+    assert "• Приседания со штангой на плечах [Грудь]" in text
+    assert "• Жим штанги лёжа широким хватом [Грудь]" in text
     # Nothing gets folded behind a "+N" anymore — every exercise gets its own line.
-    assert "• Тяга штанги в наклоне [ГРУДЬ]" in text
+    assert "• Тяга штанги в наклоне [Грудь]" in text
     assert text.startswith("🔁 Выбери тренировку, чтобы повторить её план:")
 
 

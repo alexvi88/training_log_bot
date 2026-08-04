@@ -107,7 +107,9 @@ async def test_idle_screen_names_the_next_program_exercise_and_offers_the_rest(f
     assert "live:plan" in _callback_datas(kb)
 
 
-async def test_plan_screen_lists_everything_left_with_targets(fresh_db, user_id):
+async def test_plan_screen_lists_everything_left_by_name_only(fresh_db, user_id):
+    """Строки — на всю ширину и без схемы подходов: посреди тренировки на этом
+    экране решают, что делать, а «3x12» рядом с названием только его обрезало."""
     db = fresh_db
     await _start_program(db, user_id, state := await _state(user_id), [
         ("Жим лёжа", "4x8"), ("Разводка", "3x12"), ("Брусья", None),
@@ -117,12 +119,27 @@ async def test_plan_screen_lists_everything_left_with_targets(fresh_db, user_id)
     cb = _make_callback(user_id, "live:plan")
     await workout.live_plan(cb, state)
     kb = _last_keyboard(cb)
-    assert _button_texts(kb) == ["Разводка — 3x12", "✕", "Брусья", "✕", "⬅️ Назад"]
+    assert _button_texts(kb) == ["Разводка", "Брусья", "✕ Убрать из плана", "⬅️ Назад"]
     assert _callback_datas(kb) == [
-        "live:plan:pick:0", "live:plan:skip:0",
-        "live:plan:pick:1", "live:plan:skip:1",
-        "live:plan:back",
+        "live:plan:pick:0", "live:plan:pick:1", "live:plan:rm", "live:plan:back",
     ]
+
+
+async def test_removing_is_a_mode_behind_its_own_button(fresh_db, user_id):
+    """Крестика в каждой строке больше нет — «убрать» это тот же список за
+    отдельной кнопкой, где тап убирает вместо того, чтобы начинать."""
+    db = fresh_db
+    await _start_program(db, user_id, state := await _state(user_id), [
+        ("Жим лёжа", "4x8"), ("Разводка", "3x12"), ("Брусья", None),
+    ])
+    await _go_idle(user_id, state)
+
+    cb = _make_callback(user_id, "live:plan:rm")
+    await workout.live_plan_remove_mode(cb, state)
+    kb = _last_keyboard(cb)
+    assert "Убрать из плана" in _last_text(cb)
+    assert _button_texts(kb) == ["Разводка", "Брусья", "✅ Готово"]
+    assert _callback_datas(kb) == ["live:plan:skip:0", "live:plan:skip:1", "live:plan"]
 
 
 async def test_picking_out_of_order_opens_it_and_keeps_the_rest_queued(fresh_db, user_id):
@@ -211,10 +228,12 @@ async def test_skip_drops_the_block_and_redraws_the_plan_screen(fresh_db, user_i
     # into logging_set.
     assert len(data["planned_blocks"]) == 1
     assert await state.get_state() == WorkoutFlow.idle
-    cb.answer.assert_awaited_once_with("Пропустил")
+    cb.answer.assert_awaited_once_with("Убрал")
     kb = _last_keyboard(cb)
+    # Остались в режиме «убрать»: два сломанных тренажёра — два тапа подряд.
     assert "Разводка" not in _button_texts(kb)
     assert "Брусья" in _button_texts(kb)
+    assert _callback_datas(kb) == ["live:plan:skip:0", "live:plan"]
 
 
 async def test_skip_out_of_range_answers_stale_instead_of_crashing(fresh_db, user_id):

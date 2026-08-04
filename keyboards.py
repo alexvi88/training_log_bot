@@ -461,7 +461,7 @@ def exercise_picker_entry_keyboard(
 _PLAN_LABEL_MAX = 44
 
 
-def planned_plan_keyboard(items: list[tuple[int, str]]) -> InlineKeyboardMarkup:
+def planned_plan_keyboard(items: list[tuple[int, str]], *, removing: bool = False) -> InlineKeyboardMarkup:
     """What's left of the program, any of it startable right now.
 
     `items` — (position in planned_blocks, label) in program order. The program's
@@ -469,21 +469,27 @@ def planned_plan_keyboard(items: list[tuple[int, str]]) -> InlineKeyboardMarkup:
     session to wait, so every remaining exercise is one tap away and the rest keep
     their order after it.
 
-    Each row also carries a small "✕" — for a machine that's actually broken
-    (not just busy today), rather than one that stays queued for the rest of
-    the session with no way off. It's a separate, narrower button rather than
-    a second tap-state on the row's main button so it can't be hit by accident:
-    the wide pick button stays the primary action.
+    Каждая строка — на всю ширину. «Убрать из плана» (для тренажёра, который
+    реально сломан, а не просто занят) раньше висело крестиком в той же строке,
+    но Telegram делит строку из двух кнопок пополам: половину экрана занимали
+    ✕, а названия упражнений обрезались до «Сгибание но…ре». Посреди
+    тренировки нужен список того, что делать, — убирание из плана ушло под
+    отдельную кнопку внизу (`removing=True` перерисовывает тот же список, где
+    тап убирает строку).
     """
     b = InlineKeyboardBuilder()
+    action = "skip" if removing else "pick"
     for index, label in items:
         b.row(
             InlineKeyboardButton(
-                text=_tab_label(label, _PLAN_LABEL_MAX), callback_data=f"live:plan:pick:{index}",
+                text=_tab_label(label, _PLAN_LABEL_MAX), callback_data=f"live:plan:{action}:{index}",
             ),
-            InlineKeyboardButton(text="✕", callback_data=f"live:plan:skip:{index}"),
         )
-    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="live:plan:back"))
+    if removing:
+        b.row(InlineKeyboardButton(text="✅ Готово", callback_data="live:plan"))
+    else:
+        b.row(InlineKeyboardButton(text="✕ Убрать из плана", callback_data="live:plan:rm"))
+        b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="live:plan:back"))
     return b.as_markup()
 
 
