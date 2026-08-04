@@ -34,6 +34,7 @@ from handlers import (
     feedback,
     food_diary,
     history,
+    mcp_access,
     persistent_menu,
     routines,
     settings,
@@ -160,6 +161,9 @@ def setup_routers(dp: Dispatcher) -> None:
     # swallows these commands as plain text whenever the user is mid-flow.
     dp.include_router(admin.router)
     dp.include_router(feedback.router)
+    # Same reason: /mcp and its own callbacks must reach this router even when
+    # the user is parked in some flow's catch-all message handler.
+    dp.include_router(mcp_access.router)
     # Same reason as admin/feedback above: /food_diary and the fd:* callbacks
     # must reach their router even when the user is mid-workout.
     dp.include_router(food_diary.router)
@@ -182,28 +186,30 @@ def setup_routers(dp: Dispatcher) -> None:
     dp.include_router(fallback.router)
 
 
+def _public_commands() -> list[BotCommand]:
+    commands = [
+        BotCommand(command="start", description="Открыть главное меню"),
+        BotCommand(command="help", description="Как вводить подходы"),
+        BotCommand(command="ai_trainer", description="AI-тренер"),
+        BotCommand(command="food_diary", description="Дневник еды"),
+        BotCommand(command="feedback", description="Отзыв / баг / идея"),
+    ]
+    # Только когда MCP реально куда-то ведёт: команда в «/»-меню обещает
+    # работающую функцию, а без публичного адреса обещать нечего.
+    if config.mcp_available():
+        commands.append(BotCommand(command="mcp", description="Подключить данные к Claude (MCP)"))
+    return commands
+
+
 async def _setup_commands(bot: Bot) -> None:
     """Whose "/" menu lists what — the default list doubles as the bot's
     advertised feature set, so anything reachable from the main menu belongs
     in it."""
-    await bot.set_my_commands(
-        [
-            BotCommand(command="start", description="Открыть главное меню"),
-            BotCommand(command="help", description="Как вводить подходы"),
-            BotCommand(command="ai_trainer", description="AI-тренер"),
-            BotCommand(command="food_diary", description="Дневник еды"),
-            BotCommand(command="feedback", description="Отзыв / баг / идея"),
-        ],
-        scope=BotCommandScopeDefault(),
-    )
+    await bot.set_my_commands(_public_commands(), scope=BotCommandScopeDefault())
     if config.ADMIN_ID is not None:
         await bot.set_my_commands(
             [
-                BotCommand(command="start", description="Открыть главное меню"),
-                BotCommand(command="help", description="Как вводить подходы"),
-                BotCommand(command="ai_trainer", description="AI-тренер"),
-                BotCommand(command="food_diary", description="Дневник еды"),
-                BotCommand(command="feedback", description="Отзыв / баг / идея"),
+                *_public_commands(),
                 BotCommand(command="check_users", description="Список пользователей (админ)"),
                 BotCommand(command="ai_dialogs", description="Диалоги с AI-тренером (админ)"),
                 BotCommand(command="pushes", description="Лог отправленных пушей (админ)"),
@@ -238,11 +244,20 @@ async def main() -> None:
 
     admin_job = asyncio.create_task(admin_tasks.run_daily_admin_jobs(bot))
     engagement_job = asyncio.create_task(engagement.run_daily_engagement_job(bot))
+    background = [admin_job, engagement_job]
+    # MCP живёт в том же процессе и на том же event loop, что и поллинг: это
+    # один контейнер с одной SQLite-базой на единственном соединении (см. db.py),
+    # и второй процесс к ней просто не подключить. Импорт локальный — mcp тянет
+    # за собой starlette/uvicorn, и разворот без MCP не должен на них падать.
+    if config.mcp_available():
+        import mcp_server
+
+        background.append(asyncio.create_task(mcp_server.serve()))
     try:
         await dp.start_polling(bot)
     finally:
-        admin_job.cancel()
-        engagement_job.cancel()
+        for task in background:
+            task.cancel()
         await db.close_db()
 
 

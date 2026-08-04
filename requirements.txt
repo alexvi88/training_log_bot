@@ -3,4 +3,5 @@ aiosqlite==0.22.1
 openai==1.57.0
 xai-sdk==1.11.0
 matplotlib==3.11.0
+mcp==2.0.0
 python-dotenv==1.2.2

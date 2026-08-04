@@ -989,6 +989,7 @@ def settings_keyboard(
     tz_offset: int = 0,
     food_macros_enabled: bool = True,
     show_extra_stats: bool = True,
+    show_mcp: bool = False,
 ) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(text=f"Единицы: {unit}", callback_data="settings:unit")
@@ -1025,7 +1026,25 @@ def settings_keyboard(
     b.button(text=card_label, callback_data="settings:card_detail")
     b.button(text="📤 Экспорт CSV", callback_data="settings:export")
     b.button(text="📥 Импорт CSV", callback_data="settings:import")
+    # Скрыт, когда бот развёрнут без публичного адреса для MCP: подключать
+    # тогда физически не к чему (см. config.mcp_available).
+    if show_mcp:
+        b.button(text="🔌 Подключить к Claude (MCP)", callback_data="settings:mcp")
     b.button(text="🏠 Меню", callback_data="settings:back")
+    b.adjust(1)
+    return b.as_markup()
+
+
+def mcp_keyboard(has_token: bool) -> InlineKeyboardMarkup:
+    """Экран /mcp. Пока токена нет — одна осмысленная кнопка; когда есть —
+    перевыпуск и отзыв рядом, потому что нужны они всегда срочно."""
+    b = InlineKeyboardBuilder()
+    if has_token:
+        b.button(text="♻️ Перевыпустить токен", callback_data="mcp:issue")
+        b.button(text="🗑 Отозвать токен", callback_data="mcp:revoke")
+    else:
+        b.button(text="🔑 Выдать токен", callback_data="mcp:issue")
+    b.button(text="🔧 Настройки", callback_data="menu:settings")
     b.adjust(1)
     return b.as_markup()
 

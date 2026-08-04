@@ -27,6 +27,7 @@ async def show_settings(callback: CallbackQuery, state: FSMContext, alert: str |
         tz_offset=user["tz_offset"],
         food_macros_enabled=bool(user["food_macros_enabled"]),
         show_extra_stats=bool(user["show_extra_stats"]),
+        show_mcp=config.mcp_available(),
     )
     await ui.safe_edit(callback, "🔧 Настройки:", reply_markup=kb)
     if alert:

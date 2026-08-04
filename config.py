@@ -213,3 +213,30 @@ COST_EVENTS_RETENTION_DAYS = int(os.getenv("COST_EVENTS_RETENTION_DAYS", "90"))
 # Полгода — с запасом на «переслал в чат, забрали через месяц»; отозвать ссылку
 # раньше можно руками (handlers/sharing.share_revoke).
 SHARED_ITEMS_RETENTION_DAYS = int(os.getenv("SHARED_ITEMS_RETENTION_DAYS", "180"))
+
+
+# --- MCP: доступ к своим данным из внешних AI-клиентов (Claude и т.п.) ------
+#
+# Бот поднимает MCP-сервер (streamable HTTP, см. mcp_server.py) рядом с
+# поллингом, в том же процессе и на порту контейнера — read-only обёртка над
+# теми же ридерами, которыми пользуется AI-тренер. Пользователь выпускает себе
+# токен в боте (/mcp) и вставляет его в конфиг своего клиента.
+#
+# Публичный адрес — единственный обязательный параметр: без него некуда
+# посылать пользователя, поэтому и весь раздел в боте не показывается.
+# Например: https://training-log.example.com (без /mcp на конце — путь
+# дописывается сам).
+MCP_PUBLIC_URL = os.getenv("MCP_PUBLIC_URL", "").rstrip("/")
+
+# Порт, на котором слушает MCP-сервер. Совпадает с containerPort в amvera.yaml:
+# наружу контейнер отдаёт ровно один порт, а поллингу он не нужен вовсе.
+MCP_PORT = int(os.getenv("MCP_PORT", "80"))
+
+# Аварийный выключатель: MCP_ENABLED=false гасит и сервер, и экран в боте,
+# не трогая уже выпущенные токены (они просто перестают куда-либо вести).
+MCP_ENABLED = os.getenv("MCP_ENABLED", "true").lower() not in ("false", "0", "no")
+
+
+def mcp_available() -> bool:
+    """Показывать ли раздел MCP и поднимать ли сервер."""
+    return MCP_ENABLED and bool(MCP_PUBLIC_URL)

@@ -337,6 +337,21 @@ CREATE TABLE IF NOT EXISTS achievements (
     UNIQUE (user_id, code)
 );
 CREATE INDEX IF NOT EXISTS idx_achievements_user ON achievements (user_id);
+
+-- Токен доступа к своим данным по MCP (см. mcp_server.py): пользователь
+-- вставляет его в конфиг внешнего AI-клиента, и тот читает историю тренировок
+-- напрямую. Ровно один живой токен на человека — «перевыпустить» удаляет
+-- старый, так что отозвать доступ у клиента, который больше не нужен, можно
+-- всегда и одним действием.
+--
+-- last_used_at существует только ради экрана в боте: «последний раз читали
+-- тогда-то» — единственный способ заметить, что токеном пользуется кто-то ещё.
+CREATE TABLE IF NOT EXISTS mcp_tokens (
+    token TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL UNIQUE,
+    created_at TEXT NOT NULL,
+    last_used_at TEXT
+);
 """
 
 _conn: Optional[aiosqlite.Connection] = None
@@ -2860,6 +2875,62 @@ async def delete_shared_items_older_than(cutoff_iso: str) -> int:
         )
         await conn().commit()
         return cur.rowcount
+
+
+# ---------- MCP access tokens (см. mcp_server.py) ----------
+
+async def issue_mcp_token(user_id: int) -> str:
+    """Выдать пользователю новый токен доступа по MCP, погасив прежний.
+
+    Перевыпуск и есть отзыв: старый токен удаляется той же транзакцией, поэтому
+    «я вставил его не туда» лечится одной кнопкой, а не походом в базу. 32 байта
+    энтропии (против 8 у визитки-снапшота): визитка отдаёт один снимок, который
+    владелец и так собирался показать, а этот токен открывает всю историю
+    тренировок целиком и живёт, пока его не отозвали.
+    """
+    token = secrets.token_urlsafe(32)
+    async with _write_lock:
+        await conn().execute("DELETE FROM mcp_tokens WHERE user_id = ?", (user_id,))
+        await conn().execute(
+            "INSERT INTO mcp_tokens (token, user_id, created_at) VALUES (?, ?, ?)",
+            (token, user_id, now_iso()),
+        )
+        await conn().commit()
+    return token
+
+
+async def get_mcp_token(user_id: int) -> Optional[aiosqlite.Row]:
+    cur = await conn().execute("SELECT * FROM mcp_tokens WHERE user_id = ?", (user_id,))
+    return await cur.fetchone()
+
+
+async def revoke_mcp_token(user_id: int) -> bool:
+    """True, если токен был и его удалили."""
+    async with _write_lock:
+        cur = await conn().execute("DELETE FROM mcp_tokens WHERE user_id = ?", (user_id,))
+        await conn().commit()
+        return cur.rowcount > 0
+
+
+async def resolve_mcp_token(token: str) -> Optional[int]:
+    """Токен → telegram_id владельца, или None. Обновляет отметку последнего
+    использования (её показывает экран /mcp — по ней и видно чужие обращения).
+
+    Пустой токен отсекается до запроса: `WHERE token = ''` ничего не найдёт и
+    сейчас, но полагаться на это в проверке доступа не стоит.
+    """
+    if not token:
+        return None
+    cur = await conn().execute("SELECT user_id FROM mcp_tokens WHERE token = ?", (token,))
+    row = await cur.fetchone()
+    if row is None:
+        return None
+    async with _write_lock:
+        await conn().execute(
+            "UPDATE mcp_tokens SET last_used_at = ? WHERE token = ?", (now_iso(), token)
+        )
+        await conn().commit()
+    return row["user_id"]
 
 
 # ---------- programs (a named, ordered set of training days) ----------
