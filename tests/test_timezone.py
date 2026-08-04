@@ -84,15 +84,14 @@ def test_local_now_shifts_by_the_user_offset(monkeypatch):
     assert engagement._local_now(-3).hour == 12
 
 
-def test_is_send_hour_uses_the_user_offset(monkeypatch):
+def test_should_send_now_uses_the_user_offset(monkeypatch):
     import engagement
 
     monkeypatch.setattr(engagement, "_utc_now", lambda: dt.datetime(2026, 7, 27, 15, 0))
 
-    assert engagement.is_send_hour(0, 15) is True     # UTC user: it's 15:00
-    assert engagement.is_send_hour(5, 15) is False    # UTC+5: it's 20:00 for them
-    assert engagement.is_send_hour(5, 20) is True
-    assert engagement.is_send_hour(-3, 12) is True    # UTC-3: it's 12:00
+    assert engagement.should_send_now(5, 15) is False    # UTC+5: it's 20:00 for them
+    assert engagement.should_send_now(5, 20) is True
+    assert engagement.should_send_now(-3, 12) is True    # UTC-3: it's 12:00
 
 
 async def test_push_job_skips_users_whose_local_hour_has_not_come(fresh_db, user_id, monkeypatch):
@@ -114,7 +113,7 @@ async def test_push_job_skips_users_whose_local_hour_has_not_come(fresh_db, user
         return None
 
     monkeypatch.setattr(engagement, "build_daily_push", fake_build)
-    monkeypatch.setattr(engagement, "is_send_hour", lambda tz, hour: tz == 5 and hour == config.ENGAGEMENT_HOUR)
+    monkeypatch.setattr(engagement, "should_send_now", lambda tz, hour: tz == 5 and hour == config.ENGAGEMENT_HOUR)
 
     bot = MagicMock()
     await engagement._send_daily_pushes(bot)
@@ -140,12 +139,46 @@ async def test_push_job_passes_the_users_local_date(fresh_db, user_id, monkeypat
         return None
 
     monkeypatch.setattr(engagement, "build_daily_push", fake_build)
-    monkeypatch.setattr(engagement, "is_send_hour", lambda tz, hour: True)
+    monkeypatch.setattr(engagement, "should_send_now", lambda tz, hour: True)
     monkeypatch.setattr(engagement, "_local_now", lambda tz: dt.datetime(2026, 7, 28, 1, 0))
 
     await engagement._send_daily_pushes(MagicMock())
 
     assert seen == [dt.date(2026, 7, 28)]
+
+
+async def test_push_job_leaves_users_without_a_timezone_alone_at_night(fresh_db, user_id, monkeypatch):
+    """Пояс нигде не спрашивается, поэтому tz_offset = 0 — это «не знаем», а не
+    «UTC». На сервере 19:00 → у такого пользователя может быть и два ночи, так
+    что тик его не трогает: ни отправки, ни даже сборки пуша (а по воскресеньям
+    сборка — это ещё и вызов модели)."""
+    import engagement
+
+    db = fresh_db
+    await db.create_finished_workout(
+        user_id, started_at="2026-07-01T10:00:00", finished_at="2026-07-01T11:00:00"
+    )
+    assert (await db.get_user(user_id))["tz_offset"] == 0  # никто пояс не выставлял
+
+    built = []
+
+    async def fake_build(telegram_id, today):
+        built.append(telegram_id)
+        return None
+
+    monkeypatch.setattr(engagement, "build_daily_push", fake_build)
+    monkeypatch.setattr(engagement, "_utc_now", lambda: dt.datetime(2026, 7, 27, 19, 0))
+
+    await engagement._send_daily_pushes(MagicMock())
+    assert built == []
+
+    # ...а в безопасный для всех поясов час — трогает.
+    monkeypatch.setattr(
+        engagement, "_utc_now",
+        lambda: dt.datetime(2026, 7, 27, engagement.UNKNOWN_TZ_SEND_HOUR_UTC, 0),
+    )
+    await engagement._send_daily_pushes(MagicMock())
+    assert built == [user_id]
 
 
 # ---------- date pickers show the user's today ----------
@@ -197,7 +230,7 @@ async def test_slow_tick_still_pushes_users_resolved_at_its_start(fresh_db, user
 
     clock = {"hour_has_passed": False}
 
-    def fake_is_send_hour(tz, hour):
+    def fake_should_send_now(tz, hour):
         return not clock["hour_has_passed"]
 
     built = []
@@ -207,7 +240,7 @@ async def test_slow_tick_still_pushes_users_resolved_at_its_start(fresh_db, user
         clock["hour_has_passed"] = True  # the first user's push took us past the hour
         return None
 
-    monkeypatch.setattr(engagement, "is_send_hour", fake_is_send_hour)
+    monkeypatch.setattr(engagement, "should_send_now", fake_should_send_now)
     monkeypatch.setattr(engagement, "build_daily_push", slow_build)
 
     await engagement._send_daily_pushes(MagicMock())
