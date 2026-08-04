@@ -1051,3 +1051,61 @@ def test_the_column_count_check_does_not_reject_normal_tables():
     assert formatting.has_markdown_table("| Движение | Вес |\n|---|---|\n| Жим лёжа | 100 |")
     # Маркеры выравнивания — часть разделителя, а не лишняя колонка.
     assert formatting.has_markdown_table("| Движение | Вес |\n|:--|--:|\n| Жим лёжа | 100 |")
+
+
+# ---------- лестница званий ----------
+
+
+def test_the_ladder_marks_where_you_are_and_what_is_next():
+    """Звание показывалось в трёх местах и нигде не объяснялось: плашка на сводке,
+    строка в зале славы и разовое объявление на карточке. Из этого видно, что
+    система есть, и не видно, какая она, — а непонятная система мотивирует хуже
+    отсутствующей."""
+    current = analytics.RANKS[2]
+
+    text = formatting.build_rank_ladder(analytics.RANKS, current, "ещё 12 трен.")
+
+    assert "ты здесь" in text
+    # Отметка стоит у текущего звания, а подсказка — у следующего, и ровно по одной.
+    marked = [line for line in text.split("\n") if "ты здесь" in line]
+    assert len(marked) == 1 and current.name in marked[0]
+    hinted = [line for line in text.split("\n") if "ещё 12 трен." in line]
+    assert len(hinted) == 1 and analytics.RANKS[3].name in hinted[0]
+
+
+def test_every_rank_is_listed_with_its_thresholds():
+    """Лестница целиком, а не «текущее и следующее»: человек должен видеть, куда
+    она вообще идёт, иначе непонятно, к чему прикладывать усилие."""
+    text = formatting.build_rank_ladder(analytics.RANKS, analytics.RANKS[0])
+
+    for rank in analytics.RANKS:
+        assert rank.name in text
+    assert "400 трен." in text          # порог верхней ступени
+    assert "1000 т" in text
+
+
+def test_the_weakest_axis_rule_is_spelled_out():
+    """Без этого правила лестница читается как «набери любое из трёх», и человек с
+    большим тоннажем после месяца простоя считает, что бот сломался."""
+    text = formatting.build_rank_ladder(analytics.RANKS, analytics.RANKS[1])
+
+    assert "самая слабая" in text
+    assert "Перерыв стоит одной ступени" in text
+
+
+def test_the_top_rank_has_nothing_next():
+    top = analytics.RANKS[-1]
+
+    text = formatting.build_rank_ladder(analytics.RANKS, top, None)
+
+    assert "ты здесь" in text
+    assert text.count("←") == 1
+
+
+def test_the_first_rank_needs_nothing():
+    """«Новичок» с порогами 0/0/0 выглядел бы как «0 трен. · 0 т · 0 трен./нед» —
+    строка, которая ничего не сообщает."""
+    text = formatting.build_rank_ladder(analytics.RANKS, analytics.RANKS[0])
+
+    assert "с самого начала" in text
+    assert "0 трен. · 0 т" not in text

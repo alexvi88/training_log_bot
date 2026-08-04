@@ -13,7 +13,12 @@ from typing import Callable, Literal, Optional
 from aiogram.types import MessageEntity
 
 import config
-from analytics import VOLUME_WINDOW_DAYS, classify_weekly_volume, e1rm
+from analytics import (
+    RANK_FREQUENCY_WEEKS,
+    VOLUME_WINDOW_DAYS,
+    classify_weekly_volume,
+    e1rm,
+)
 
 _WEEKDAYS_RU = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"]
 # Full names for prose ("понедельник — твой самый продуктивный день").
@@ -1586,6 +1591,45 @@ def format_rank_line(rank, gap: str | None = None) -> str:
 def format_rank_promotion(rank) -> str:
     """Строка повышения на карточке завершения — объявляется один раз."""
     return f"🎖 <b>Новое звание: {rank.emoji} {escape(rank.name)}</b>"
+
+
+def build_rank_ladder(ranks: list, current, gap: str | None = None) -> str:
+    """Вся лестница званий с порогами и отметкой, где человек сейчас.
+
+    До этого звание нигде не объяснялось: на сводке висела плашка «РАБОТЯГА» без
+    контекста, а в зале славы — строка «до следующего: ещё 12 трен.». Из этого
+    видно, что есть какая-то система, и не видно ни какая, ни докуда она идёт.
+    Непонятная система мотивирует хуже отсутствующей: человек не знает, к чему
+    приложить усилие, и перестаёт считать её своей.
+
+    Правило про слабейшую ось названо прямо. Без него лестница читается как
+    «набери любое из трёх», и человек с большим тоннажем и месяцем простоя
+    считает, что бот ошибся, — хотя это ровно то поведение, которое задумано.
+    """
+    lines = [
+        "🎖 <b>ЗВАНИЯ</b>",
+        "",
+        "Звание считается по трём осям: сколько тренировок за всё время, сколько "
+        "поднято суммарно и как часто ходишь <i>сейчас</i> — за последние "
+        f"{RANK_FREQUENCY_WEEKS} недель. Берётся самая слабая, так что одна ось "
+        "не вытянет остальные.",
+        "",
+        "Перерыв стоит одной ступени, не больше: вернёшься к темпу — вернётся и звание.",
+        "",
+    ]
+    for rank in ranks:
+        thresholds = "с самого начала" if rank.level == 0 else " · ".join((
+            f"{rank.min_workouts} трен.",
+            f"{rank.min_tonnage_kg / 1000:g} т",
+            f"{rank.min_per_week:g} трен./нед",
+        ))
+        row = f"{rank.emoji} <b>{escape(rank.name)}</b> — {thresholds}"
+        if rank.level == current.level:
+            row += "  ← <b>ты здесь</b>"
+        elif rank.level == current.level + 1 and gap:
+            row += f"  ← {gap}"
+        lines.append(row)
+    return "\n".join(lines)
 
 
 def build_hall_of_fame(

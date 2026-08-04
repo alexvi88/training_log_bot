@@ -255,7 +255,34 @@ async def menu_achievements(callback: CallbackQuery, state: FSMContext):
     hof_text = await build_hall_of_fame_text(callback.from_user.id, max_chars=budget)
     text = hof_text + "\n\n" + ach_text
     kb = InlineKeyboardBuilder()
+    kb.button(text="🎖 Звания", callback_data="rank:ladder")
     kb.button(text="⬅️ Назад", callback_data="prog:groups")
+    kb.adjust(1)
+    await ui.safe_edit(callback, text, reply_markup=kb.as_markup(), parse_mode="HTML")
+
+
+@router.callback_query(F.data == "rank:ladder")
+async def rank_ladder(callback: CallbackQuery, state: FSMContext):
+    """«🎖 Звания» — вся лестница с порогами и правилом, по которому она считается.
+
+    Звание до этого показывалось в трёх местах и нигде не объяснялось: плашка на
+    сводке, строка в зале славы и разовое объявление на карточке. Из этого видно,
+    что система есть, и не видно, какая она и докуда идёт, — а непонятная система
+    мотивирует хуже отсутствующей.
+    """
+    await callback.answer()
+    user = await db.get_user(callback.from_user.id)
+    dates = [dt.date.fromisoformat(d) for d in await db.list_finished_workout_dates(callback.from_user.id)]
+    agg = await db.hall_of_fame_aggregates(callback.from_user.id)
+    tonnage_kg = formatting.to_kg(agg["tonnage"], user["unit"])
+    per_week = analytics.workouts_per_week(dates, timeutil.user_today(user))
+    rank = analytics.rank_for(len(dates), tonnage_kg, per_week)
+    text = formatting.build_rank_ladder(
+        analytics.RANKS, rank,
+        analytics.rank_gap(rank, len(dates), tonnage_kg, per_week),
+    )
+    kb = InlineKeyboardBuilder()
+    kb.button(text="⬅️ Назад", callback_data="menu:achievements")
     kb.adjust(1)
     await ui.safe_edit(callback, text, reply_markup=kb.as_markup(), parse_mode="HTML")
 
