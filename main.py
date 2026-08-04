@@ -245,6 +245,11 @@ async def main() -> None:
     admin_job = asyncio.create_task(admin_tasks.run_daily_admin_jobs(bot))
     engagement_job = asyncio.create_task(engagement.run_daily_engagement_job(bot))
     background = [admin_job, engagement_job]
+    # Прополка OAuth не зависит ни от ADMIN_ID, ни от того, дошёл ли отчёт: она
+    # чистит коды и заявки, которые копятся от каждой брошенной попытки
+    # подключения (см. admin_tasks.run_oauth_purge_job).
+    if config.mcp_available():
+        background.append(asyncio.create_task(admin_tasks.run_oauth_purge_job()))
     # MCP живёт в том же процессе и на том же event loop, что и поллинг: это
     # один контейнер с одной SQLite-базой на единственном соединении (см. db.py),
     # и второй процесс к ней просто не подключить. Импорт локальный — mcp тянет
