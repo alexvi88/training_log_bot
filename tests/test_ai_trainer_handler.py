@@ -273,6 +273,29 @@ _TABLE_ANSWER = (
 )
 
 
+async def test_a_plain_prose_answer_stays_an_ordinary_message(fresh_db, user_id, monkeypatch):
+    """Rich messages are laid out like an article — big headings, wide spacing —
+    so an answer with nothing but prose in it must not go that way: there's
+    nothing a plain message can't carry, and the article look just inflates it."""
+    monkeypatch.setattr(
+        ai_trainer.ai_trainer, "ask", AsyncMock(return_value="## Итог\n\nТяга растёт, жми дальше.")
+    )
+
+    state = await _make_state(user_id)
+    await state.set_state("AITrainerFlow:chatting")
+    message = _make_chat_message(user_id, "как дела с тягой?")
+    placeholder = message.answer.return_value
+    placeholder.bot.edit_message_text = AsyncMock()
+    message.answer_rich = AsyncMock()
+
+    await ai_trainer.ai_question(message, state)
+
+    placeholder.bot.edit_message_text.assert_not_awaited()
+    message.answer_rich.assert_not_awaited()
+    # The heading still arrives as a bold line rather than raw hashes.
+    assert "<b>Итог</b>" in placeholder.edit_text.await_args.args[0]
+
+
 async def test_answer_goes_out_as_a_rich_message_when_the_server_supports_it(
     fresh_db, user_id, monkeypatch
 ):

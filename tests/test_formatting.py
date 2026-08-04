@@ -324,6 +324,16 @@ def test_markdown_table_becomes_lines_with_header_names_inlined():
     ]
 
 
+def test_has_markdown_table_only_fires_on_a_real_table():
+    assert formatting.has_markdown_table(TABLE)
+    assert formatting.has_markdown_table(f"вступление\n\n{TABLE}\n\nвывод")
+    # A pipe in prose, a heading and a list are all things a plain message
+    # carries fine — none of them is a reason to switch to a rich message.
+    assert not formatting.has_markdown_table("Жим | присед — выбирай сам.")
+    assert not formatting.has_markdown_table("## Итог\n\n- тяга 260\n- присед 200")
+    assert not formatting.has_markdown_table("")
+
+
 def test_ai_markdown_to_html_leaves_no_pipes_from_a_table():
     html = formatting.ai_markdown_to_html(TABLE)
     assert "|" not in html

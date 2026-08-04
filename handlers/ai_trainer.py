@@ -1111,9 +1111,17 @@ async def _handle_question(
         draft_id=program_draft.get("id") if program_draft else None,
     )
     chunks = formatting.split_for_telegram(answer, TG_CHUNK)
-    if not await _send_rich_answer(
+    # Rich — только ради таблицы, и только когда таблица в ответе есть.
+    # Rich-сообщение Telegram рисует статьёй: крупные заголовки, широкие
+    # отступы, воздух между абзацами. Для разбора с таблицей это уместно, а
+    # обычный ответ тренера на три абзаца в такой вёрстке просто раздувается на
+    # пол-экрана — при том что ничего, кроме таблицы, обычное сообщение
+    # передать и не мешает (заголовок станет жирной строкой, список останется
+    # списком).
+    sent_rich = formatting.has_markdown_table(answer) and await _send_rich_answer(
         message, placeholder, chunks, quota_md, quota_html, reply_markup
-    ):
+    )
+    if not sent_rich:
         await _send_html_answer(message, placeholder, chunks, quota_html, reply_markup)
 
 
