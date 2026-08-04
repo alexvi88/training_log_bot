@@ -1280,8 +1280,15 @@ def menu_tiles(dashboard, tonnage: float, records: int, unit: str = "kg") -> lis
     """
     u = UNIT_LABELS.get(unit, "кг")
     # Тонны — когда их есть чем мерить: «0.4 т» читается хуже, чем «400 кг».
-    tonnes = f"{tonnage / 1000:.1f}"
-    weight = f"{tonnes} т" if tonnage >= 1000 else f"{tonnage:.0f} {u}"
+    #
+    # Тонна — тонна, поэтому и порог, и сама цифра считаются в килограммах, ровно
+    # как в format_tonnage: тоннаж лежит в единицах пользователя, и делить на
+    # 1000 фунты значило показать «24.5 т» там, где на всех остальных экранах
+    # (зал славы, недельная сводка) у того же человека 11.1 тонны. Ниже тонны
+    # конвертировать нечего — там его собственное число в его же единицах.
+    total_kg = to_kg(tonnage, unit)
+    tonnes = f"{total_kg / 1000:.1f}"
+    weight = f"{tonnes} т" if total_kg >= 1000 else f"{tonnage:.0f} {u}"
     tiles = [
         (f"ТРЕНИРОВОК {days_window_label(30)}", str(dashboard.last_30_days)),
         (f"ТОННАЖ {days_window_label(VOLUME_WINDOW_DAYS)}", weight),
