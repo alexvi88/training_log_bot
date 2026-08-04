@@ -10,11 +10,18 @@ from unittest.mock import AsyncMock
 
 import pytest
 from aiogram import Bot, Dispatcher
+from aiogram.fsm.context import FSMContext
 from aiogram.types import Chat, Message, Update, User
 
 import main
+from fsm import FeedbackFlow
 
 pytestmark = pytest.mark.asyncio
+
+# Тот, от чьего имени приходят сообщения в _feed, — вынесено, чтобы по этому же
+# ключу доставать его состояние из хранилища диспетчера.
+_CHAT_ID = 555
+_BOT_TOKEN = "42:TEST"
 
 
 @pytest.fixture(scope="module")
@@ -48,13 +55,13 @@ async def _feed(dp: Dispatcher, text: str) -> list[str]:
 
             handler.callback = make()
 
-    bot = Bot(token="42:TEST")
+    bot = Bot(token=_BOT_TOKEN)
     bot.session = AsyncMock()
     message = Message(
         message_id=1,
         date=dt.datetime.now(),
-        chat=Chat(id=555, type="private"),
-        from_user=User(id=555, is_bot=False, first_name="Recipient"),
+        chat=Chat(id=_CHAT_ID, type="private"),
+        from_user=User(id=_CHAT_ID, is_bot=False, first_name="Recipient"),
         text=text,
     ).as_(bot)
     try:
@@ -63,6 +70,56 @@ async def _feed(dp: Dispatcher, text: str) -> list[str]:
         for handler, callback in originals:
             handler.callback = callback
     return winners
+
+
+def _fsm(dispatcher: Dispatcher) -> FSMContext:
+    """Состояние того же собеседника, чьи сообщения шлёт _feed: ключ хранилища
+    диспетчер собирает из id бота и чата, а они у нас всегда одни и те же."""
+    return dispatcher.fsm.resolve_context(
+        bot=Bot(token=_BOT_TOKEN), chat_id=_CHAT_ID, user_id=_CHAT_ID
+    )
+
+
+async def test_start_typed_while_writing_feedback_opens_the_menu(dispatcher):
+    """Регрессия: /start передумавшего уходил админу как текст отзыва.
+
+    Роутер фидбека подключён вторым, поэтому его «ловлю всё» состояние стояло
+    впереди команд остальных роутеров — и выхода из отзыва не было вовсе.
+    """
+    fsm = _fsm(dispatcher)
+    await fsm.set_state(FeedbackFlow.awaiting_message)
+    try:
+        assert await _feed(dispatcher, "/start") == ["handlers.workout.cmd_start"]
+        # И заодно человек больше не в отзыве: следующая его реплика — не отзыв.
+        assert await fsm.get_state() is None
+    finally:
+        await fsm.clear()
+
+
+async def test_unknown_command_also_ends_the_feedback_flow(dispatcher):
+    """«/cancel», «/menu» — команды, которых у бота нет: их забирает fallback, и
+    сам он состояний не снимает. Снять его всё равно надо, иначе следующая
+    реплика («а сколько мне есть белка?») опять уедет админу."""
+    fsm = _fsm(dispatcher)
+    await fsm.set_state(FeedbackFlow.awaiting_message)
+    try:
+        assert await _feed(dispatcher, "/cancel") == ["handlers.fallback.unhandled_text"]
+        assert await fsm.get_state() is None
+    finally:
+        await fsm.clear()
+
+
+async def test_plain_text_in_the_feedback_flow_still_reaches_the_admin(dispatcher):
+    """Обратная сторона: лечение не должно перестать принимать сами отзывы."""
+    fsm = _fsm(dispatcher)
+    await fsm.set_state(FeedbackFlow.awaiting_message)
+    try:
+        assert await _feed(dispatcher, "кнопка веса не нажимается") == [
+            "handlers.feedback.feedback_message"
+        ]
+        assert await fsm.get_state() == FeedbackFlow.awaiting_message.state
+    finally:
+        await fsm.clear()
 
 
 async def test_share_deep_link_reaches_sharing_not_the_main_menu(dispatcher):

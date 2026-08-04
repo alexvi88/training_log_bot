@@ -19,8 +19,8 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import CallbackQuery, Message
 
 import config
-from fsm import FoodDiaryFlow, WorkoutFlow
-from handlers import food_diary, history, mcp_access, workout
+from fsm import FeedbackFlow, FoodDiaryFlow, WorkoutFlow
+from handlers import feedback, food_diary, history, mcp_access, workout
 
 # Каркас ровно того вида, что живёт в FSM посреди суперсета по программе: два
 # открытых упражнения, активное из них, остаток плана и начатая переписка с
@@ -154,6 +154,43 @@ async def test_mcp_link_code_screen_keeps_open_workout(fresh_db, user_id, mcp_en
     await mcp_access.mcp_code(_callback(user_id, "mcp:code"), state)
 
     await _assert_scaffold_survived(state)
+
+
+# ---------- отзыв ----------
+
+
+async def test_feedback_command_keeps_open_workout(fresh_db, user_id):
+    state = await _state_mid_workout(user_id)
+
+    await feedback.cmd_feedback(_message(user_id), state)
+
+    assert await state.get_state() == FeedbackFlow.awaiting_message.state
+    await _assert_scaffold_survived(state)
+
+
+async def test_leaving_feedback_keeps_open_workout(fresh_db, user_id):
+    workout_id = await fresh_db.create_workout(user_id)
+    state = await _state_mid_workout(user_id, workout_id)
+    await state.set_state(FeedbackFlow.awaiting_message)
+
+    await feedback.feedback_done(_callback(user_id, "feedback:done"), state)
+
+    await _assert_scaffold_survived(state, workout_id)
+
+
+async def test_command_out_of_feedback_keeps_open_workout(fresh_db, user_id):
+    """Выход из отзыва по команде снимает состояние — но не каркас тренировки."""
+    state = await _state_mid_workout(user_id)
+    await state.set_state(FeedbackFlow.awaiting_message)
+    message = _message(user_id)
+    message.text = "/start"
+    handler = AsyncMock()
+
+    await feedback.DropFeedbackStateOnCommand()(handler, message, {"state": state})
+
+    assert await state.get_state() is None
+    await _assert_scaffold_survived(state)
+    handler.assert_awaited_once()  # апдейт идёт дальше, к настоящему хендлеру команды
 
 
 # ---------- и, собственно, возврат к подходам ----------
