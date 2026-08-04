@@ -11,8 +11,9 @@ FSM_STORAGE_PATH = os.getenv("FSM_STORAGE_PATH", "/data/fsm_storage.json")
 # Telegram user id that receives the daily stats report + DB backup. Unset disables the job.
 ADMIN_ID = int(os.getenv("ADMIN_ID")) if os.getenv("ADMIN_ID") else None
 
-# Local hour (0-23) at which the daily admin report/backup job runs.
-ADMIN_REPORT_HOUR = int(os.getenv("ADMIN_REPORT_HOUR", "9"))
+# UTC hour (0-23) at which the daily admin report/backup job runs.
+# Deployment clock is UTC (see timeutil.py); 7 UTC == 10:00 MSK (UTC+3).
+ADMIN_REPORT_HOUR = int(os.getenv("ADMIN_REPORT_HOUR", "7"))
 
 DEFAULT_UNIT = "kg"
 
