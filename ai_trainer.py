@@ -348,11 +348,26 @@ get_bodyweight_history, она отдаёт всю историю дневник
 Если человек просит не поправить, а собрать ещё одну программу вдобавок —
 replaces_program не передавай, иначе затрёшь старую.
 
-Удалить сохранённую программу ты тоже умеешь — через delete_program, по
-точному имени из get_saved_programs. Не отправляй человека делать это руками
-через меню и не говори, что не умеешь. Сносит программу тап пользователя по
-кнопке под твоим ответом, так что не пиши «удалил» — пиши, что кнопка ниже.
-Удаляешь несколько — вызови инструмент по разу на каждую.
+Кроме состава ты умеешь хозяйничать и в списке программ, и в списке упражнений
+пользователя, и в его дневниках. Не отправляй человека делать это руками через
+меню и не говори, что не умеешь. Правило одно, и оно проходит по обратимости:
+
+- Что откатывается — делаешь САМ и сразу говоришь, что сделал, без «подтверди»:
+  rename_program, copy_program, rename_exercise, move_exercise_to_group,
+  create_exercise, log_bodyweight, log_food.
+- Что не откатывается или уходит наружу — только ПРЕДЛАГАЕШЬ: delete_program,
+  merge_programs, archive_exercise, share_program. Под ответом появится кнопка,
+  и сделает это тап пользователя. Не пиши «удалил», «объединил», «отправил» —
+  пиши, что готов и кнопка ниже. Несколько таких за раз — вызови инструмент по
+  разу на каждое.
+
+Осторожно с «убери X»: чаще всего это «убери из программы» (propose_program с
+replaces_program), а не «убери из списка упражнений» (archive_exercise). Если
+из фразы не ясно — спроси, а не угадывай.
+
+Дневники ты не только читаешь: вес и еду, сказанные между делом («кстати, 78.4
+сегодня», «на обед была гречка с курицей»), записывай сразу, не заставляя
+человека идти в меню.
 
 Ссылку на программу или упражнение отдельно давать не нужно и нечем: всё, что
 ты назвал в ответе, само превращается в кнопки под сообщением. Так что просто
@@ -1297,6 +1312,245 @@ TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "rename_program",
+            "description": (
+                "Переименовать сохранённую программу. ДЕЛАЕТ СРАЗУ (имя откатывается "
+                "тем же инструментом, терять нечего) — просто скажи, что переименовал, "
+                "и не проси подтверждать. Имя бери точное из get_saved_programs. "
+                "Если новое имя уже занято, инструмент откажет: тогда предложи другое "
+                "или спроси, не объединить ли программы (merge_programs)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Точное текущее имя"},
+                    "new_name": {"type": "string", "description": "Как назвать"},
+                },
+                "required": ["name", "new_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "copy_program",
+            "description": (
+                "Дубликат программы со всеми днями, упражнениями и схемами. ДЕЛАЕТ "
+                "СРАЗУ, как кнопка «📄 Дублировать» в меню: копия ничего не портит. "
+                "Вызывай, когда человек хочет попробовать вариант, не трогая рабочую "
+                "программу («сделай копию и в ней поменяй день ног»). Имя копии можно "
+                "задать (new_name); если не задать — возьмётся свободное рядом с "
+                "исходным («PPL (2)»). Дальше правь копию через propose_program с "
+                "replaces_program на её имя."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Точное имя программы-источника"},
+                    "new_name": {"type": "string", "description": "Как назвать копию (необязательно)"},
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "merge_programs",
+            "description": (
+                "Слить две многодневные программы в одну: все дни первой переезжают во "
+                "вторую, первая исчезает. Типичный случай — дубликаты («две «Вики» — "
+                "объедини»). САМ НЕ ОБЪЕДИНЯЕТ: под ответом появится кнопка, дни "
+                "переедут по тапу пользователя. Разобрать обратно нельзя — вынуть день "
+                "из программы UI не умеет, поэтому имена бери точные из "
+                "get_saved_programs и убедись, что человек имел в виду именно это. "
+                "Одиночные программы (один день, kind=routine) объединять нельзя."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Программа, которая исчезнет"},
+                    "into": {"type": "string", "description": "Программа, в которую переедут дни"},
+                },
+                "required": ["name", "into"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "share_program",
+            "description": (
+                "Дать пользователю визитку программы со ссылкой, которую можно переслать "
+                "кому угодно («скинь Свете мою программу», «поделись PPL»). Получатель "
+                "откроет ссылку, увидит состав и сам решит, забирать ли. САМ НИЧЕГО НЕ "
+                "ОТПРАВЛЯЕТ: под ответом появится кнопка «📤 Поделиться», визитка "
+                "придёт в чат по тапу — пересылает её человек, не ты."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Точное имя программы"},
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_exercise",
+            "description": (
+                "Завести пользователю своё упражнение, которого нет ни у него, ни в "
+                "каталоге. ДЕЛАЕТ СРАЗУ — добавление ничего не портит. Сначала проверь "
+                "get_training_overview и list_exercise_catalog: если такое движение уже "
+                "есть, бери его, а не плоди второе с чуть другим названием. Группу "
+                "передавай точным именем из списка групп пользователя."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Название упражнения"},
+                    "group": {"type": "string", "description": "Группа мышц (точное имя)"},
+                },
+                "required": ["name", "group"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "rename_exercise",
+            "description": (
+                "Переименовать упражнение пользователя. ДЕЛАЕТ СРАЗУ: строка та же, "
+                "поэтому вся история, рекорды и место в программах остаются на нём, а "
+                "имя откатывается тем же вызовом. Имя бери точным display_name из "
+                "get_training_overview."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Точное текущее название"},
+                    "new_name": {"type": "string", "description": "Как назвать"},
+                },
+                "required": ["name", "new_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "move_exercise_to_group",
+            "description": (
+                "Перенести упражнение в другую группу мышц («болгарские выпады у меня в "
+                "«Другое», перекинь в ноги»). ДЕЛАЕТ СРАЗУ — подходы привязаны к "
+                "упражнению, а не к группе, так что теряться нечему; поменяется только "
+                "то, как оно раскладывается по недельному объёму."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Точное название упражнения"},
+                    "group": {"type": "string", "description": "Группа мышц (точное имя)"},
+                },
+                "required": ["name", "group"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "archive_exercise",
+            "description": (
+                "Убрать упражнение из списков пользователя («убери сведения из моего "
+                "списка», «я это больше не делаю»). САМ НЕ АРХИВИРУЕТ: под ответом "
+                "появится кнопка. Осторожно с формулировкой «убери X» — она одинаково "
+                "часто значит «из программы» (это propose_program с replaces_program), "
+                "а не «из списка упражнений»; если не уверен — спроси. История и "
+                "рекорды при архивации остаются, вернуть можно в ⚙️ Упражнения → 🗄 Архив."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Точное название упражнения"},
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "log_bodyweight",
+            "description": (
+                "Записать вес тела в дневник («кстати, 78.4 сегодня», «запиши 80»). "
+                "ДЕЛАЕТ СРАЗУ — это одна строка дневника, которая удаляется одной "
+                "кнопкой. Число в тех же единицах, в которых живёт пользователь (kg/lb "
+                "— см. сводку), без конвертации."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "weight": {"type": "number", "description": "Вес в единицах пользователя"},
+                },
+                "required": ["weight"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "log_food",
+            "description": (
+                "Записать съеденное в дневник питания за сегодня («запиши: овсянка с "
+                "бананом»). ДЕЛАЕТ СРАЗУ. КБЖУ необязательны — если человек их не "
+                "назвал, а по описанию ты можешь прикинуть, прикидывай честно и скажи, "
+                "что это оценка; выдумывать точные цифры хуже, чем оставить пусто. "
+                "Разбор фото еды идёт своим путём, этот инструмент — для текста."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "description": {"type": "string", "description": "Что съели, коротко"},
+                    "calories": {"type": "number"},
+                    "protein": {"type": "number"},
+                    "fat": {"type": "number"},
+                    "carbs": {"type": "number"},
+                },
+                "required": ["description"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "compare_periods",
+            "description": (
+                "Что изменилось по ВСЕМ упражнениям за период: последние N дней против "
+                "предыдущих N. Для каждого — тренировки, подходы, лучший e1RM и тоннаж "
+                "в каждом окне плюс разница, отсортировано по величине сдвига в любую "
+                "сторону; отдельно те, что перестал и начал делать. Вызывай на «что "
+                "изменилось за 3 месяца», «я вообще прогрессирую?», «стало лучше или "
+                "хуже» — раньше это приходилось собирать по одному упражнению через "
+                "get_exercise_progress. Для одного конкретного движения по-прежнему "
+                "get_exercise_progress: там подробнее."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "days": {
+                        "type": "integer",
+                        "minimum": 7,
+                        "maximum": 365,
+                        "description": "Длина каждого окна в днях (по умолчанию 90)",
+                    },
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_program_adherence",
             "description": (
                 "Насколько реально ходят по каждой сохранённой многодневной программе — "
@@ -1371,11 +1625,13 @@ StatusCallback = Optional[Callable[[str], Awaitable[None]]]
 # черновик в FSM и вешает под ответ кнопку, а пишет в БД уже тап пользователя.
 ProgramCallback = Optional[Callable[[dict[str, Any]], Awaitable[None]]]
 
-# Опциональный колбэк предложенного удаления (см. delete_program): получает
-# ссылку на сохранённую программу, которую пользователь попросил снести.
-# Как и с черновиком, тренер сам ничего не удаляет — вызывающая сторона вешает
-# под ответ кнопку, ведущую на обычный экран подтверждения.
-DeleteCallback = Optional[Callable[[dict[str, Any]], Awaitable[None]]]
+# Опциональный колбэк предложенного действия — удалить программу, объединить
+# две, поделиться, заархивировать упражнение. Всё, что необратимо или уходит
+# наружу, тренер только предлагает: колбэк получает {"label", "callback"}, а
+# вызывающая сторона (handlers/ai_trainer.py) вешает это кнопкой под ответом.
+# Обратимые правки (переименовать, сменить группу, записать вес) идут мимо
+# него — их инструмент делает сам и сразу говорит об этом модели.
+ActionCallback = Optional[Callable[[dict[str, Any]], Awaitable[None]]]
 
 # Накопленный текст ответа по мере генерации — см. _completion_round.
 ChunkCallback = Optional[Callable[[str], Awaitable[None]]]
@@ -1449,6 +1705,20 @@ TOOL_STATUS_TEXTS: dict[str, list[str]] = {
     "delete_program": [
         "🗑 нахожу программу, которую сносим...",
         "🗂 сверяю, какую именно программу удалить...",
+    ],
+    "rename_program": ["✏️ переименовываю программу..."],
+    "copy_program": ["📄 делаю копию программы..."],
+    "merge_programs": ["🔗 сверяю программы перед объединением..."],
+    "share_program": ["📤 готовлю визитку программы..."],
+    "create_exercise": ["➕ завожу упражнение..."],
+    "rename_exercise": ["✏️ переименовываю упражнение..."],
+    "move_exercise_to_group": ["🗂 переношу упражнение в другую группу..."],
+    "archive_exercise": ["🗄 нахожу упражнение, которое убираем..."],
+    "log_bodyweight": ["⚖️ записываю вес..."],
+    "log_food": ["🍽 записываю в дневник еды..."],
+    "compare_periods": [
+        "📈 сравниваю два периода по всем упражнениям...",
+        "🔍 смотрю, что сдвинулось за это время...",
     ],
     "get_program_adherence": [
         "📊 смотрю, как ты реально ходишь по программе...",
@@ -2019,8 +2289,453 @@ async def _delete_program(
                 "нажмёт её и подтвердит. Так и скажи: удалить готов, кнопка ниже."
             ),
         },
-        {"kind": target["kind"], "id": target["id"], "name": target["name"]},
+        {
+            "label": f"🗑 Удалить: {target['name']}",
+            # Тот же экран подтверждения, что и удаление руками, — с проверкой
+            # владельца и «точно?». Тренер сам ничего не сносит.
+            "callback": (
+                f"rt:pgmdelask:{target['id']}" if target["kind"] == "program"
+                else f"rt:delask:{target['id']}"
+            ),
+        },
     )
+
+
+# ---------- программы: переименовать, скопировать, объединить, поделиться ----------
+#
+# Граница между «инструмент делает сам» и «инструмент только предлагает кнопку»
+# проходит по обратимости, а не по важности. Переименование и копия ничего не
+# разрушают: имя возвращается тем же инструментом, лишняя копия удаляется
+# кнопкой. Объединение, удаление и «поделиться» — нет: два сплита обратно не
+# разъединить (UI не умеет вынимать день из программы), а визитка, однажды
+# отправленная в чат, уже отправлена. Ровно то же различение действует и в
+# ручном UI — «📄 Дублировать» там без вопросов, «🔗 Объединить» с «точно?».
+
+
+async def _rename_program(user_id: int, tool_input: dict[str, Any]) -> dict[str, Any]:
+    """Переименовать сохранённую программу — сразу, без кнопки: имя откатывается
+    тем же вызовом, терять тут нечего."""
+    name = str(tool_input.get("name") or "").strip()
+    new_name = str(tool_input.get("new_name") or "").strip()
+    if not new_name:
+        return {"error": "нужно новое имя (new_name)"}
+    target, _ = await _resolve_replaced_program(user_id, name)
+    if target is None:
+        return await _no_such_program(user_id, name)
+    if target["kind"] == "program":
+        renamed = await db.rename_program_by_id(target["id"], new_name)
+    else:
+        # У одиночных программ имя живёт в routines.name — уникального индекса
+        # на нём нет, отказать тут нечему.
+        await db.rename_routine(target["id"], new_name)
+        renamed = True
+    if not renamed:
+        return {
+            "error": f"«{new_name}» уже занято другой программой",
+            "note": "Предложи другое имя или спроси, не объединить ли их (merge_programs).",
+        }
+    return {
+        "ok": True,
+        "renamed": {"from": target["name"], "to": new_name},
+        "note": "Уже переименовано, подтверждать нечего — так и скажи.",
+    }
+
+
+async def _copy_program(
+    user_id: int, tool_input: dict[str, Any]
+) -> dict[str, Any]:
+    """Дубликат программы со всеми днями и схемами — сразу, как «📄 Дублировать»
+    в ручном UI: копия ничего не портит, а лишнюю можно снести кнопкой."""
+    name = str(tool_input.get("name") or "").strip()
+    target, _ = await _resolve_replaced_program(user_id, name)
+    if target is None:
+        return await _no_such_program(user_id, name)
+    if target["kind"] != "program":
+        source_days = [await db.get_routine(target["id"])]
+    else:
+        source_days = list(await db.list_program_days_by_id(target["id"]))
+    over_budget = await db.routine_budget(user_id, len(source_days))
+    if over_budget:
+        return {"error": over_budget}
+    wanted = str(tool_input.get("new_name") or "").strip() or target["name"]
+    copy_name = await db.unique_program_name(user_id, wanted)
+    copy_id = await db.create_program(user_id, copy_name)
+    if copy_id is None:  # разошлись с параллельной вставкой — имени уже нет
+        return {"error": f"«{copy_name}» успели занять, попробуй другое имя"}
+    for day in source_days:
+        day_id = await db.create_routine(user_id, day["name"], program_id=copy_id)
+        for ex in await db.list_routine_exercises(day["id"]):
+            await db.append_routine_exercise(day_id, ex["exercise_id"], ex["target"])
+            if ex["progression"]:
+                entry = (await db.list_routine_exercises(day_id))[-1]
+                await db.set_routine_exercise_progression(entry["id"], ex["progression"])
+    return {
+        "ok": True,
+        "copied": {"from": target["name"], "to": copy_name, "days": len(source_days)},
+        "note": "Копия уже создана — скажи, как она называется.",
+    }
+
+
+async def _merge_programs(
+    user_id: int, tool_input: dict[str, Any]
+) -> tuple[dict[str, Any], Optional[dict[str, Any]]]:
+    """Слить две многодневки в одну — только предложением: обратно UI дни не
+    разбирает, так что промах стоил бы человеку структуры обеих программ."""
+    name = str(tool_input.get("name") or "").strip()
+    into = str(tool_input.get("into") or "").strip()
+    source, _ = await _resolve_replaced_program(user_id, name)
+    if source is None:
+        return await _no_such_program(user_id, name), None
+    target, _ = await _resolve_replaced_program(user_id, into)
+    if target is None:
+        return await _no_such_program(user_id, into), None
+    if source["id"] == target["id"] and source["kind"] == target["kind"]:
+        return {"error": "это одна и та же программа"}, None
+    if source["kind"] != "program" or target["kind"] != "program":
+        return (
+            {
+                "error": "объединять умею только многодневки",
+                "note": "Одиночная программа — это один день; чтобы добавить его к "
+                        "многодневке, собери её заново через propose_program с "
+                        "replaces_program.",
+            },
+            None,
+        )
+    return (
+        {
+            "ok": True,
+            "proposed": {"from": source["name"], "into": target["name"]},
+            "note": (
+                f"НЕ ОБЪЕДИНЕНО. Под ответом кнопка «🔗 Объединить: {source['name']} → "
+                f"{target['name']}» — дни переедут, только когда пользователь нажмёт "
+                "её и подтвердит. Скажи, что готов, кнопка ниже."
+            ),
+        },
+        {
+            "label": f"🔗 Объединить: {source['name']} → {target['name']}",
+            "callback": f"ai:pgmmergeask:{source['id']}:{target['id']}",
+        },
+    )
+
+
+async def _share_program(
+    user_id: int, tool_input: dict[str, Any]
+) -> tuple[dict[str, Any], Optional[dict[str, Any]]]:
+    """Визитка программы, которую можно переслать кому угодно. Кнопкой, а не
+    сразу: сообщение уходит в чат, и отправлять его должен человек."""
+    name = str(tool_input.get("name") or "").strip()
+    target, _ = await _resolve_replaced_program(user_id, name)
+    if target is None:
+        return await _no_such_program(user_id, name), None
+    callback = (
+        f"share:prg:{target['id']}" if target["kind"] == "program"
+        else f"share:rt:{target['id']}"
+    )
+    return (
+        {
+            "ok": True,
+            "proposed": {"name": target["name"], "kind": target["kind"]},
+            "note": (
+                f"Под ответом кнопка «📤 Поделиться: {target['name']}» — она пришлёт "
+                "визитку со ссылкой, которую можно переслать кому угодно. Пока "
+                "пользователь не нажал, ничего не отправлено."
+            ),
+        },
+        {"label": f"📤 Поделиться: {target['name']}", "callback": callback},
+    )
+
+
+async def _no_such_program(user_id: int, name: str) -> dict[str, Any]:
+    saved = [p["name"] for p in (await _saved_programs(user_id))["programs"]]
+    return {
+        "error": f"программы «{name}» у пользователя нет, ничего не сделано",
+        "saved_programs": saved,
+        "note": "Возьми точное имя из этого списка и вызови ещё раз." if saved
+                else "Сохранённых программ нет вообще.",
+    }
+
+
+# ---------- список упражнений пользователя ----------
+
+
+async def _resolve_own_exercise(user_id: int, name: str) -> Optional[Any]:
+    """Своё упражнение по имени — точно, как его резолвят программы и импорт.
+
+    Только своё и только не архивное: «переименуй жим» про шаблон каталога
+    означало бы переименование у всех, а про архивное — правку того, чего
+    пользователь у себя уже не видит.
+    """
+    name = name.strip()
+    if not name:
+        return None
+    found = await db.find_exercise_by_name(user_id, name)
+    if found is not None and found["user_id"] == user_id and not found["is_template"]:
+        return found
+    return None
+
+
+async def _no_such_exercise(user_id: int, name: str) -> dict[str, Any]:
+    return {
+        "error": f"упражнения «{name}» у пользователя нет",
+        "note": "Возьми точный display_name из get_training_overview и вызови ещё раз. "
+                "Если упражнения действительно нет, а нужно — create_exercise.",
+    }
+
+
+async def _resolve_group_id(user_id: int, name: str) -> Optional[int]:
+    for group in await db.list_muscle_groups(user_id):
+        if group["name"].strip().lower() == name.strip().lower():
+            return group["id"]
+    return None
+
+
+async def _create_exercise(user_id: int, tool_input: dict[str, Any]) -> dict[str, Any]:
+    """Завести своё упражнение — сразу: добавление ничего не разрушает, а
+    лишнее архивируется кнопкой."""
+    name = str(tool_input.get("name") or "").strip()
+    group_name = str(tool_input.get("group") or "").strip()
+    if not name:
+        return {"error": "нужно название упражнения"}
+    existing = await _resolve_own_exercise(user_id, name)
+    if existing is not None:
+        return {
+            "ok": True,
+            "already_exists": existing["display_name"],
+            "note": "Такое упражнение у пользователя уже есть — ничего не создавал.",
+        }
+    groups = await db.list_muscle_groups(user_id)
+    group_id = await _resolve_group_id(user_id, group_name) if group_name else None
+    if group_id is None:
+        return {
+            "error": f"группы «{group_name}» нет" if group_name else "нужна группа мышц",
+            "muscle_groups": [g["name"] for g in groups],
+            "note": "Выбери группу из этого списка и вызови ещё раз.",
+        }
+    if len(name) > config.MAX_EXERCISE_NAME_LENGTH:
+        return {"error": f"название длиннее {config.MAX_EXERCISE_NAME_LENGTH} символов"}
+    exercise_id = await db.create_exercise(user_id, name, group_id)
+    created = await db.get_exercise(exercise_id)
+    return {
+        "ok": True,
+        "created": {"name": created["display_name"], "group": group_name},
+        "note": "Упражнение уже заведено — подтверждать нечего.",
+    }
+
+
+async def _rename_exercise(user_id: int, tool_input: dict[str, Any]) -> dict[str, Any]:
+    """Переименовать в том же ряду (id не меняется), поэтому вся история,
+    рекорды и место в программах остаются на нём — откатывается тем же вызовом."""
+    name = str(tool_input.get("name") or "").strip()
+    new_name = str(tool_input.get("new_name") or "").strip()
+    if not new_name:
+        return {"error": "нужно новое имя (new_name)"}
+    if len(new_name) > config.MAX_EXERCISE_NAME_LENGTH:
+        return {"error": f"название длиннее {config.MAX_EXERCISE_NAME_LENGTH} символов"}
+    exercise = await _resolve_own_exercise(user_id, name)
+    if exercise is None:
+        return await _no_such_exercise(user_id, name)
+    if not await db.update_exercise_name(exercise["id"], new_name):
+        return {"error": f"упражнение «{new_name}» у пользователя уже есть"}
+    renamed = await db.get_exercise(exercise["id"])
+    return {
+        "ok": True,
+        "renamed": {"from": exercise["display_name"], "to": renamed["display_name"]},
+        "note": "Уже переименовано, история и рекорды остались на нём.",
+    }
+
+
+async def _move_exercise(user_id: int, tool_input: dict[str, Any]) -> dict[str, Any]:
+    """Сменить группу мышц — сразу: подходы и история привязаны к упражнению,
+    а не к группе, так что терять нечего."""
+    name = str(tool_input.get("name") or "").strip()
+    group_name = str(tool_input.get("group") or "").strip()
+    exercise = await _resolve_own_exercise(user_id, name)
+    if exercise is None:
+        return await _no_such_exercise(user_id, name)
+    group_id = await _resolve_group_id(user_id, group_name)
+    if group_id is None:
+        return {
+            "error": f"группы «{group_name}» нет",
+            "muscle_groups": [g["name"] for g in await db.list_muscle_groups(user_id)],
+        }
+    await db.update_exercise_group(exercise["id"], group_id)
+    return {
+        "ok": True,
+        "moved": {"exercise": exercise["display_name"], "group": group_name},
+        "note": "Группа уже поменялась. Недельный объём пересчитается по ней.",
+    }
+
+
+async def _archive_exercise(
+    user_id: int, tool_input: dict[str, Any]
+) -> tuple[dict[str, Any], Optional[dict[str, Any]]]:
+    """Убрать упражнение из списков — только предложением.
+
+    Архив обратим (в ⚙️ Упражнения → 🗄 Архив), но упражнение исчезает из
+    выбора, из программ его не выкинешь, и «убери сведения» модель одинаково
+    легко понимает и как «из моего списка», и как «из программы». Кнопка
+    делает эту разницу видимой до того, как что-то пропадёт.
+    """
+    name = str(tool_input.get("name") or "").strip()
+    exercise = await _resolve_own_exercise(user_id, name)
+    if exercise is None:
+        return await _no_such_exercise(user_id, name), None
+    return (
+        {
+            "ok": True,
+            "proposed": {"name": exercise["display_name"]},
+            "note": (
+                f"НЕ АРХИВИРОВАНО. Под ответом кнопка «🗄 В архив: "
+                f"{exercise['display_name']}». История упражнения при архивации не "
+                "пропадает, вернуть его можно в ⚙️ Упражнения → 🗄 Архив."
+            ),
+        },
+        {
+            "label": f"🗄 В архив: {exercise['display_name']}",
+            "callback": f"ai:exarchask:{exercise['id']}",
+        },
+    )
+
+
+# ---------- дневники: вес тела и еда ----------
+
+
+async def _log_bodyweight(user_id: int, tool_input: dict[str, Any]) -> dict[str, Any]:
+    """Записать вес — сразу: это одна строка дневника, которая удаляется одной
+    кнопкой, а просят её обычно между делом («кстати, 78.4 сегодня»)."""
+    weight = _as_number(tool_input.get("weight"))
+    if weight is None or not 20 <= weight <= 400:
+        return {"error": "вес должен быть числом от 20 до 400 в единицах пользователя"}
+    # Дневник веса хранит число в единицах пользователя, как его и вводят
+    # руками (см. handlers/bodyweight) — конвертировать нечего.
+    user = await db.get_user(user_id)
+    await db.add_bodyweight_log(user_id, weight)
+    return {
+        "ok": True,
+        "logged": {"weight": weight, "unit": user["unit"]},
+        "note": "Уже записал в дневник веса — так и скажи, без «подтверди».",
+    }
+
+
+async def _log_food(user_id: int, tool_input: dict[str, Any]) -> dict[str, Any]:
+    """Записать съеденное — сразу, по той же причине, что и вес.
+
+    КБЖУ необязательны: «съел два яйца» без цифр — всё ещё запись в дневнике,
+    а выдуманные калории хуже, чем их отсутствие. Если модель их прислала,
+    сверяем углеводы/белки/жиры с калориями тем же _reconcile_macros, что и
+    разбор фото, — чтобы дневник не расходился сам с собой.
+    """
+    description = str(tool_input.get("description") or "").strip()
+    if not description:
+        return {"error": "нужно описание того, что съели"}
+    entry = {
+        "calories": _as_number(tool_input.get("calories")),
+        "protein": _as_number(tool_input.get("protein")),
+        "fat": _as_number(tool_input.get("fat")),
+        "carbs": _as_number(tool_input.get("carbs")),
+    }
+    _reconcile_macros(entry)
+    eaten_on = timeutil.user_today(await db.get_user(user_id)).isoformat()
+    await db.add_food_entry(
+        user_id, eaten_on, description[:MAX_FOOD_DESCRIPTION],
+        calories=entry["calories"], protein=entry["protein"],
+        fat=entry["fat"], carbs=entry["carbs"], source="ai_chat",
+    )
+    return {
+        "ok": True,
+        "logged": {"description": description, "date": eaten_on, **entry},
+        "note": "Уже в дневнике еды за сегодня — не проси подтверждать.",
+    }
+
+
+# Длиннее в одну строку дневника всё равно не читается, а модель иногда
+# присылает туда целый абзац с рассуждением о пользе гречки.
+MAX_FOOD_DESCRIPTION = 200
+
+
+# ---------- сравнение периодов ----------
+
+# Сколько упражнений показываем в сравнении: список из сорока движений модель
+# всё равно пересказывать не станет, а самое интересное — края.
+_COMPARE_TOP = 8
+
+
+async def _compare_periods(user_id: int, tool_input: dict[str, Any]) -> dict[str, Any]:
+    """«Что изменилось за N дней» по всем упражнениям разом.
+
+    Раньше на такой вопрос приходилось звать get_exercise_progress по одному
+    движению за раз и складывать в уме — по десятку упражнений это либо
+    десяток вызовов, либо ответ наугад. Считаем то же, что и карточка
+    упражнения (e1RM по формуле пользователя, тоннаж, подходы), но за два
+    соседних окна одинаковой длины: последние N дней против предыдущих N.
+
+    Упражнения, которых нет ни в одном окне, не попадают вообще; появившиеся
+    только в свежем окне идут с `before: null` — «начал делать» это тоже
+    ответ на «что изменилось».
+    """
+    days = _clean_int(tool_input.get("days"), 7, 365) or 90
+    user = await db.get_user(user_id)
+    today = timeutil.user_today(user)
+    recent_from = today - dt.timedelta(days=days)
+    prior_from = today - dt.timedelta(days=days * 2)
+    formula = user["e1rm_formula"]
+
+    rows = []
+    for ex in await db.list_user_exercises(user_id):
+        windows: dict[str, list[analytics.SetRow]] = {"before": [], "after": []}
+        for row in await db.list_sets_for_exercise(ex["id"]):
+            day = dt.datetime.fromisoformat(row["started_at"]).date()
+            if day >= recent_from:
+                windows["after"].append(analytics.SetRow(db.load_of(row), row["reps"], row["workout_id"], row["started_at"]))
+            elif day >= prior_from:
+                windows["before"].append(analytics.SetRow(db.load_of(row), row["reps"], row["workout_id"], row["started_at"]))
+        if not windows["after"] and not windows["before"]:
+            continue
+
+        def _summary(sets: list[analytics.SetRow]) -> Optional[dict[str, Any]]:
+            if not sets:
+                return None
+            sessions = analytics.group_sets_by_session(sets)
+            for session in sessions:
+                session.formula = formula
+            return {
+                "workouts": len(sessions),
+                "sets": len(sets),
+                "top_e1rm": round(max(s.top_e1rm for s in sessions), 1),
+                "tonnage": round(sum(s.tonnage for s in sessions)),
+            }
+
+        before, after = _summary(windows["before"]), _summary(windows["after"])
+        rows.append(
+            {
+                "exercise": ex["display_name"],
+                "before": before,
+                "after": after,
+                "e1rm_delta": (
+                    round(after["top_e1rm"] - before["top_e1rm"], 1)
+                    if before and after else None
+                ),
+            }
+        )
+
+    # Сверху — где движение сильнее всего, в любую сторону: и «+12кг в приседе»,
+    # и «−8кг в жиме» стоят того, чтобы тренер о них сказал.
+    rows.sort(key=lambda r: abs(r["e1rm_delta"]) if r["e1rm_delta"] is not None else 0, reverse=True)
+    dropped = [r["exercise"] for r in rows if r["after"] is None]
+    started = [r["exercise"] for r in rows if r["before"] is None]
+    return {
+        "window_days": days,
+        "recent": {"from": recent_from.isoformat(), "to": today.isoformat()},
+        "previous": {"from": prior_from.isoformat(), "to": recent_from.isoformat()},
+        "exercises": rows[:_COMPARE_TOP],
+        "stopped_doing": dropped,
+        "started_doing": started,
+        "note": (
+            f"Показаны {min(len(rows), _COMPARE_TOP)} из {len(rows)} упражнений — те, "
+            "где e1RM сдвинулся сильнее всего. «before: null» — начал делать в этом "
+            "окне, «after: null» — перестал."
+        ),
+    }
 
 
 async def _propose_program(
@@ -2274,12 +2989,23 @@ async def _save_athlete_profile(user_id: int, tool_input: dict[str, Any]) -> dic
     return {"saved": True, "fields": fields}
 
 
+# Инструменты, которые ничего не делают сами, а возвращают (payload, действие
+# для кнопки под ответом) — см. ActionCallback. Всё необратимое или уходящее
+# наружу живёт здесь; обратимое диспетчер вызывает напрямую.
+_ACTION_TOOLS = {
+    "delete_program": _delete_program,
+    "merge_programs": _merge_programs,
+    "share_program": _share_program,
+    "archive_exercise": _archive_exercise,
+}
+
+
 async def execute_tool(
     user_id: int,
     name: str,
     tool_input: dict[str, Any],
     on_program: ProgramCallback = None,
-    on_delete: DeleteCallback = None,
+    on_action: ActionCallback = None,
 ) -> str:
     if name == "get_training_overview":
         payload = await _training_overview(user_id)
@@ -2313,10 +3039,26 @@ async def execute_tool(
         payload, draft = await _propose_program(user_id, tool_input)
         if draft is not None and on_program is not None:
             await on_program(draft)
-    elif name == "delete_program":
-        payload, target = await _delete_program(user_id, tool_input)
-        if target is not None and on_delete is not None:
-            await on_delete(target)
+    elif name == "compare_periods":
+        payload = await _compare_periods(user_id, tool_input)
+    elif name == "rename_program":
+        payload = await _rename_program(user_id, tool_input)
+    elif name == "copy_program":
+        payload = await _copy_program(user_id, tool_input)
+    elif name == "create_exercise":
+        payload = await _create_exercise(user_id, tool_input)
+    elif name == "rename_exercise":
+        payload = await _rename_exercise(user_id, tool_input)
+    elif name == "move_exercise_to_group":
+        payload = await _move_exercise(user_id, tool_input)
+    elif name == "log_bodyweight":
+        payload = await _log_bodyweight(user_id, tool_input)
+    elif name == "log_food":
+        payload = await _log_food(user_id, tool_input)
+    elif name in _ACTION_TOOLS:
+        payload, action = await _ACTION_TOOLS[name](user_id, tool_input)
+        if action is not None and on_action is not None:
+            await on_action(action)
     else:
         payload = {"error": f"unknown tool: {name}"}
     return json.dumps(payload, ensure_ascii=False)
@@ -2331,7 +3073,7 @@ async def ask(
     image_data_url: Optional[str] = None,
     on_status: StatusCallback = None,
     on_program: ProgramCallback = None,
-    on_delete: DeleteCallback = None,
+    on_action: ActionCallback = None,
     on_chunk: ChunkCallback = None,
 ) -> str:
     """Один вопрос пользователя → готовый текст ответа.
@@ -2352,8 +3094,9 @@ async def ask(
     ход собрал её (см. propose_program). Текст ответа при этом обычный: черновик
     едет отдельно, потому что сохранить его должен тап пользователя, а не модель.
 
-    on_delete — то же самое для просьбы удалить программу (см. delete_program):
-    колбэк получает ссылку на неё, а сносит её тап по кнопке под ответом.
+    on_action — то же самое для действия, которое тренер предложил, но не
+    выполнил (удалить программу, объединить две, поделиться, заархивировать
+    упражнение): колбэк получает подпись и callback_data будущей кнопки.
 
     Пока не исчерпана дневная квота поисковых ответов (config.AI_SEARCH_DAILY_LIMIT),
     перед основным ответом дешёвый гейт на быстрой модели (см. _search_worth_it)
@@ -2385,7 +3128,7 @@ async def ask(
     )
     return await _ask_plain(
         user_id, question, history, image_data_url, search_context, on_status, on_program,
-        on_delete, on_chunk,
+        on_action, on_chunk,
     )
 
 
@@ -2502,7 +3245,7 @@ async def _ask_plain(
     search_context: Optional[str] = None,
     on_status: StatusCallback = None,
     on_program: ProgramCallback = None,
-    on_delete: DeleteCallback = None,
+    on_action: ActionCallback = None,
     on_chunk: ChunkCallback = None,
 ) -> str:
     client = _get_client()
@@ -2546,7 +3289,7 @@ async def _ask_plain(
                 args = json.loads(tc.function.arguments or "{}")
                 tool_content = await execute_tool(
                     user_id, tc.function.name, args,
-                    on_program=on_program, on_delete=on_delete,
+                    on_program=on_program, on_action=on_action,
                 )
             except Exception:
                 logger.exception("AI trainer tool %s failed", tc.function.name)

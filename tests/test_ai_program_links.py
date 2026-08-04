@@ -93,9 +93,12 @@ async def test_delete_program_only_proposes(fresh_db, user_id):
     db = fresh_db
     program_id, _ = await _saved(db, user_id)
 
-    payload, target = await ai_trainer._delete_program(user_id, {"name": "Вика: ноги/верх"})
+    payload, action = await ai_trainer._delete_program(user_id, {"name": "Вика: ноги/верх"})
 
-    assert target == {"kind": "program", "id": program_id, "name": "Вика: ноги/верх"}
+    assert action == {
+        "label": "🗑 Удалить: Вика: ноги/верх",
+        "callback": f"rt:pgmdelask:{program_id}",
+    }
     assert payload["ok"] is True
     assert "НЕ УДАЛЕНО" in payload["note"]
     # Ничего не снесено: сносит тап пользователя на экране подтверждения.
@@ -106,33 +109,121 @@ async def test_delete_program_on_a_wrong_name_lists_the_real_ones(fresh_db, user
     db = fresh_db
     await _saved(db, user_id)
 
-    payload, target = await ai_trainer._delete_program(user_id, {"name": "Вика 2"})
+    payload, action = await ai_trainer._delete_program(user_id, {"name": "Вика 2"})
 
-    assert target is None
+    assert action is None
     assert "нет" in payload["error"]
     assert set(payload["saved_programs"]) == {"Вика: ноги/верх", "Домашка на турнике"}
 
 
-async def test_delete_button_leads_to_the_usual_confirmation():
-    program = keyboards.ai_trainer_keyboard(delete_target={"kind": "program", "id": 7, "name": "Вика"})
-    solo = keyboards.ai_trainer_keyboard(delete_target={"kind": "routine", "id": 3, "name": "Домашка"})
+async def test_a_solo_program_is_deleted_through_its_own_screen(fresh_db, user_id):
+    db = fresh_db
+    _, solo_id = await _saved(db, user_id)
 
-    assert _callbacks(program)[0] == "rt:pgmdelask:7"
-    assert _labels(program)[0] == "🗑 Удалить: Вика"
-    assert _callbacks(solo)[0] == "rt:delask:3"
+    _, action = await ai_trainer._delete_program(user_id, {"name": "Домашка на турнике"})
+
+    assert action["callback"] == f"rt:delask:{solo_id}"
 
 
-async def test_delete_target_is_reachable_through_the_tool_dispatcher(fresh_db, user_id):
-    """execute_tool отдаёт цель наружу колбэком — иначе кнопку не на что вешать."""
+async def test_proposed_actions_become_buttons_above_the_mentions():
+    kb = keyboards.ai_trainer_keyboard(
+        actions=[{"label": "🗑 Удалить: Вика", "callback": "rt:pgmdelask:7"}],
+        programs=[{"kind": "program", "id": 9, "name": "PPL"}],
+    )
+    assert _callbacks(kb)[:2] == ["rt:pgmdelask:7", "rt:prg:9"]
+    assert _labels(kb)[0] == "🗑 Удалить: Вика"
+
+
+async def test_action_is_reachable_through_the_tool_dispatcher(fresh_db, user_id):
+    """execute_tool отдаёт действие наружу колбэком — иначе кнопку не на что вешать."""
     db = fresh_db
     program_id, _ = await _saved(db, user_id)
     seen: list[dict] = []
 
-    async def collect(target):
-        seen.append(target)
+    async def collect(action):
+        seen.append(action)
 
     await ai_trainer.execute_tool(
-        user_id, "delete_program", {"name": "Вика: ноги/верх"}, on_delete=collect
+        user_id, "delete_program", {"name": "Вика: ноги/верх"}, on_action=collect
     )
 
-    assert seen == [{"kind": "program", "id": program_id, "name": "Вика: ноги/верх"}]
+    assert seen == [
+        {"label": "🗑 Удалить: Вика: ноги/верх", "callback": f"rt:pgmdelask:{program_id}"}
+    ]
+
+
+# ---------- экраны подтверждения для необратимого ----------
+
+
+def _make_callback(user_id: int, data: str):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock
+
+    message = MagicMock()
+    message.answer = AsyncMock()
+    message.edit_text = AsyncMock()
+    callback = MagicMock()
+    callback.from_user = SimpleNamespace(id=user_id, username="tester")
+    callback.message = message
+    callback.data = data
+    callback.answer = AsyncMock()
+    return callback
+
+
+async def _state(user_id: int):
+    from aiogram.fsm.context import FSMContext
+    from aiogram.fsm.storage.base import StorageKey
+    from aiogram.fsm.storage.memory import MemoryStorage
+
+    return FSMContext(storage=MemoryStorage(), key=StorageKey(bot_id=1, chat_id=user_id, user_id=user_id))
+
+
+async def test_merge_button_asks_before_merging(fresh_db, user_id):
+    """Разобрать слитые программы обратно UI не умеет — вопрос обязателен."""
+    from handlers import ai_trainer as handler
+
+    db = fresh_db
+    source = await db.create_program(user_id, "Вика")
+    await db.create_routine(user_id, "Ноги", program_id=source)
+    target = await db.create_program(user_id, "Вика (2)")
+    await db.create_routine(user_id, "Верх", program_id=target)
+
+    cb = _make_callback(user_id, f"ai:pgmmergeask:{source}:{target}")
+    await handler.ai_program_merge_confirm(cb, await _state(user_id))
+
+    kwargs = cb.message.answer.await_args.kwargs
+    assert [b.callback_data for row in kwargs["reply_markup"].inline_keyboard for b in row] == [
+        f"rt:pgmmerge:{source}:{target}", "ai:menu",
+    ]
+    # Пока не подтвердили — обе программы на месте.
+    assert await dbmod.get_program(source) is not None
+
+
+async def test_archive_button_asks_and_then_archives(fresh_db, user_id):
+    from handlers import ai_trainer as handler
+
+    db = fresh_db
+    group = await db.create_muscle_group(user_id, "Другое")
+    fly = await db.create_exercise(user_id, "Сведения", group)
+    state = await _state(user_id)
+
+    await handler.ai_exercise_archive_confirm(_make_callback(user_id, f"ai:exarchask:{fly}"), state)
+    assert (await dbmod.get_exercise(fly))["is_archived"] == 0
+
+    await handler.ai_exercise_archive(_make_callback(user_id, f"ai:exarchyes:{fly}"), state)
+    assert (await dbmod.get_exercise(fly))["is_archived"] == 1
+
+
+async def test_archive_refuses_someone_elses_exercise(fresh_db, user_id):
+    from handlers import ai_trainer as handler
+
+    db = fresh_db
+    other = await db.get_or_create_user(telegram_id=222, username="other")
+    group = await db.create_muscle_group(other["telegram_id"], "Другое")
+    theirs = await db.create_exercise(other["telegram_id"], "Сведения", group)
+
+    cb = _make_callback(user_id, f"ai:exarchyes:{theirs}")
+    await handler.ai_exercise_archive(cb, await _state(user_id))
+
+    cb.answer.assert_awaited_once_with("Упражнение не найдено", show_alert=True)
+    assert (await dbmod.get_exercise(theirs))["is_archived"] == 0

@@ -6,7 +6,7 @@ import json
 import logging
 from contextlib import suppress
 from html import escape
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Sequence
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramRetryAfter
@@ -296,7 +296,7 @@ async def ai_keyboard(
     answer: Optional[str] = None,
     program_name: Optional[str] = None,
     draft_id: Optional[int] = None,
-    delete_target: Optional[dict] = None,
+    actions: Sequence[dict] = (),
 ) -> InlineKeyboardMarkup:
     """AI-trainer reply keyboard: 'К тренировке' instead of 'Меню' while a workout is active.
 
@@ -309,9 +309,9 @@ async def ai_keyboard(
     отличает актуальный черновик от более старого, показанного под прошлым
     ответом (см. _program_draft).
 
-    `delete_target` — программа, которую тренер этим ходом предложил удалить
-    (см. ai_trainer.delete_program): даёт кнопку на обычный экран
-    подтверждения, сам тренер ничего не сносит.
+    `actions` — то, что тренер предложил сделать, но не сделал (удалить
+    программу, объединить две, поделиться, заархивировать упражнение — см.
+    ai_trainer.ActionCallback): каждое становится кнопкой над списком.
     """
     active = await db.get_active_workout(user_id)
     mentioned = await exercise_mentions.find_in_text(
@@ -326,7 +326,7 @@ async def ai_keyboard(
         programs=programs,
         program_name=program_name,
         draft_id=draft_id,
-        delete_target=delete_target,
+        actions=actions,
     )
 
 
@@ -452,6 +452,81 @@ async def ai_exercise_card(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+@router.callback_query(F.data.startswith("ai:pgmmergeask:"))
+async def ai_program_merge_confirm(callback: CallbackQuery, state: FSMContext):
+    """«Точно объединить?» перед rt:pgmmerge.
+
+    Ручной путь к объединению спрашивает это же (см. handlers/routines,
+    rt_program_rename_entered), и пропускать вопрос только потому, что о слиянии
+    попросили словами, нельзя: разобрать программы обратно UI не умеет.
+    """
+    _, _, source_s, target_s = callback.data.split(":")
+    source = await db.get_program(int(source_s))
+    target = await db.get_program(int(target_s))
+    user_id = callback.from_user.id
+    if (
+        source is None or target is None
+        or source["user_id"] != user_id or target["user_id"] != user_id
+    ):
+        await callback.answer("Программа не найдена", show_alert=True)
+        return
+    days = await db.list_program_days_by_id(source["id"])
+    word = formatting.plural_ru(len(days), ("день", "дня", "дней"))
+    await callback.message.answer(
+        f"Перенести все {len(days)} {word} из «{escape(source['name'])}» в "
+        f"«{escape(target['name'])}»? «{escape(source['name'])}» после этого исчезнет, "
+        "а разобрать их обратно уже не получится. История тренировок не пострадает.",
+        reply_markup=keyboards.yes_no_keyboard(
+            yes_cb=f"rt:pgmmerge:{source['id']}:{target['id']}",
+            no_cb="ai:menu",
+            yes_text="🔗 Объединить", no_text="❌ Отмена",
+        ),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("ai:exarchask:"))
+async def ai_exercise_archive_confirm(callback: CallbackQuery, state: FSMContext):
+    """«Точно в архив?» — тот же вопрос, что и в ⚙️ Упражнения.
+
+    Своя копия, а не exm:archiveask: тот живёт под StateFilter экрана
+    упражнений, и из чата с тренером просто не сработал бы.
+    """
+    ex_id = int(callback.data.split(":")[2])
+    ex = await db.get_exercise(ex_id)
+    if ex is None or ex["user_id"] != callback.from_user.id or ex["is_template"]:
+        await callback.answer("Упражнение не найдено", show_alert=True)
+        return
+    await callback.message.answer(
+        f"Убрать «{escape(ex['display_name'])}» из списка упражнений? История и "
+        "рекорды останутся, вернуть можно в ⚙️ Упражнения → 🗄 Архив.",
+        reply_markup=keyboards.yes_no_keyboard(
+            yes_cb=f"ai:exarchyes:{ex_id}", no_cb="ai:menu",
+            yes_text="🗄 В архив", no_text="❌ Отмена",
+        ),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("ai:exarchyes:"))
+async def ai_exercise_archive(callback: CallbackQuery, state: FSMContext):
+    ex_id = int(callback.data.split(":")[2])
+    ex = await db.get_exercise(ex_id)
+    if ex is None or ex["user_id"] != callback.from_user.id or ex["is_template"]:
+        await callback.answer("Упражнение не найдено", show_alert=True)
+        return
+    await db.archive_exercise(ex_id)
+    await callback.answer("В архиве")
+    with suppress(TelegramBadRequest):
+        await callback.message.edit_text(
+            f"🗄 «{escape(ex['display_name'])}» в архиве.",
+            reply_markup=await ai_keyboard(callback.from_user.id),
+            parse_mode="HTML",
+        )
+
+
 @router.callback_query(F.data.startswith("ai:tpladd:"))
 async def ai_add_template(callback: CallbackQuery, state: FSMContext):
     """Каталожное упражнение из ответа тренера, которого у пользователя ещё
@@ -536,7 +611,7 @@ async def ai_mentions_page(callback: CallbackQuery, state: FSMContext):
         page=page,
         program_name=program_name,
         draft_id=draft_id,
-        delete_target=data.get("ai_delete_target"),
+        actions=data.get("ai_actions") or (),
     )
     with suppress(TelegramBadRequest):
         await callback.message.edit_reply_markup(reply_markup=kb)
@@ -1121,18 +1196,21 @@ async def _handle_question(
         program_draft.clear()
         program_draft.update(draft)
 
-    # То же для просьбы удалить программу (см. ai_trainer.delete_program).
-    delete_target: dict = {}
+    # То же для действий, которые тренер предложил, но не выполнил (удалить
+    # программу, объединить две, поделиться, заархивировать упражнение). Их за
+    # ход бывает несколько — «почисти дубликаты» это два удаления, — поэтому
+    # список, а не ячейка; сколько из них влезет кнопками, решает клавиатура.
+    actions: list[dict] = []
 
-    async def collect_delete(target: dict) -> None:
-        delete_target.clear()
-        delete_target.update(target)
+    async def collect_action(action: dict) -> None:
+        if action not in actions:
+            actions.append(action)
 
     try:
         answer = await ai_trainer.ask(
             user_id, question, history, image_data_url=image_data_url,
             on_status=display.set_status, on_program=collect_program,
-            on_delete=collect_delete, on_chunk=streamer.push,
+            on_action=collect_action, on_chunk=streamer.push,
         )
     except Exception:
         logger.exception("AI trainer request failed for user %s", user_id)
@@ -1183,13 +1261,14 @@ async def _handle_question(
     else:
         await state.update_data(ai_history=history)
 
-    # Цель удаления живёт до следующей просьбы удалить: в отличие от черновика,
-    # тут нечего «сохранить не то» — id программы стоит прямо в callback_data
-    # кнопки, а сносит её всё равно экран подтверждения. Стирать её на каждом
-    # ходе без delete_program нельзя по той же причине, что и черновик: вопрос
-    # вдогонку тушил бы ещё живую кнопку под прошлым ответом.
-    if delete_target:
-        await state.update_data(ai_delete_target=delete_target)
+    # Предложенные действия живут до следующего предложения: в отличие от
+    # черновика программы, «сделать не то» тут нечего — id стоит прямо в
+    # callback_data кнопки, а необратимое всё равно проходит через экран
+    # подтверждения. Стирать их на каждом ходе без действий нельзя по той же
+    # причине, что и черновик: вопрос вдогонку тушил бы ещё живую кнопку под
+    # прошлым ответом.
+    if actions:
+        await state.update_data(ai_actions=actions)
 
     # Full, permanent log — separate from the live window above, which is capped
     # (and lost on a restart, unlike this). Lets the model pull it back via the
@@ -1202,7 +1281,7 @@ async def _handle_question(
         answer=answer,
         program_name=program_draft.get("name") if program_draft else None,
         draft_id=program_draft.get("id") if program_draft else None,
-        delete_target=delete_target or None,
+        actions=actions,
     )
     chunks = formatting.split_for_telegram(answer, TG_CHUNK)
     # Rich — только ради таблицы, и только когда таблица в ответе есть.
