@@ -20,6 +20,7 @@ import config
 import db
 import formatting
 import keyboards
+import state_scaffold
 import timeutil
 import ui
 import view_builder
@@ -238,7 +239,9 @@ async def menu_achievements(callback: CallbackQuery, state: FSMContext):
     """'🏆 Достижения' — reached from the Progress entry screen. Combines the
     old standalone Hall of Fame screen (lifetime totals, personal records)
     with the badge grid into one screen."""
-    await state.clear()
+    # Экран смотрят и посреди тренировки («сколько мне до значка»), поэтому
+    # снимается только поток: каркас открытых упражнений должен уцелеть.
+    await state_scaffold.clear_state_keep_workout(state)
     # Acknowledged up front: assembling this screen reads the user's whole set
     # history, and Telegram spins the tapped button until the callback is answered
     # (and gives up entirely after ~10s).

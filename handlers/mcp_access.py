@@ -33,6 +33,7 @@ import formatting
 import keyboards
 import mcp_oauth
 import mcp_server
+import state_scaffold
 import timeutil
 import ui
 
@@ -273,7 +274,9 @@ async def _show(target, state: FSMContext, alert: str | None = None) -> None:
         else:
             await target.answer(_DISABLED_TEXT, reply_markup=keyboards.mcp_keyboard(False))
         return
-    await state.clear()
+    # /mcp долетает из любого состояния (роутер подключён раньше workout.router),
+    # в том числе из середины тренировки: снимаем поток, но не её каркас.
+    await state_scaffold.clear_state_keep_workout(state)
     row = await db.get_mcp_token(user.id)
     connections = await db.list_oauth_connections(user.id)
     # Профиль нужен ровно за таймзоной: даты в базе серверные, а сверяет их
@@ -345,7 +348,8 @@ async def mcp_code(callback: CallbackQuery, state: FSMContext):
     if not config.mcp_available():
         await callback.answer("Подключение по MCP выключено.", show_alert=True)
         return
-    await state.clear()
+    # Тот же расчёт, что в _show: экран кода — не повод забыть открытую тренировку.
+    await state_scaffold.clear_state_keep_workout(state)
     code = await mcp_oauth.link_code(callback.from_user.id, force_new=True)
     logger.info("MCP OAuth: link code issued for user %s", callback.from_user.id)
     await ui.safe_edit(
@@ -374,7 +378,8 @@ async def mcp_apps(callback: CallbackQuery, state: FSMContext):
     if not config.mcp_available():
         await callback.answer("Подключение по MCP выключено.", show_alert=True)
         return
-    await state.clear()
+    # Тот же расчёт, что в _show.
+    await state_scaffold.clear_state_keep_workout(state)
     connections = await db.list_oauth_connections(callback.from_user.id)
     if not connections:
         await _show(callback, state, alert="Подключённых приложений нет.")
