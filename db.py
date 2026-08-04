@@ -36,7 +36,6 @@ CREATE TABLE IF NOT EXISTS users (
     ai_comments_enabled INTEGER NOT NULL DEFAULT 0,
     progression_hint_enabled INTEGER NOT NULL DEFAULT 1,
     tz_offset INTEGER NOT NULL DEFAULT 0,
-    stickers_enabled INTEGER NOT NULL DEFAULT 1,
     -- Тренировочный профиль. Ровно те пять вводных, которые AI-тренер и так
     -- спрашивает перед сборкой программы (см. ai_trainer._system_prompt) — но
     -- раньше они жили только в переписке, и на следующий раз он спрашивал их
@@ -485,8 +484,11 @@ async def _migrate_schema() -> None:
         )
     if "tz_offset" not in user_cols:
         await _conn.execute("ALTER TABLE users ADD COLUMN tz_offset INTEGER NOT NULL DEFAULT 0")
-    if "stickers_enabled" not in user_cols:
-        await _conn.execute("ALTER TABLE users ADD COLUMN stickers_enabled INTEGER NOT NULL DEFAULT 1")
+    if "stickers_enabled" in user_cols:
+        # Стикеры-реакции выпилены: их никто не отправлял, а тумблер в настройках
+        # обещал их пользователю (см. коммит). Колонку убираем тем же способом,
+        # что hide_warmups выше.
+        await _conn.execute("ALTER TABLE users DROP COLUMN stickers_enabled")
     if "rank_level_seen" not in user_cols:
         # Последнее объявленное звание. Нужно, чтобы «🎖 Новое звание» показывалось
         # ровно один раз: само звание считается на лету из тренировок и тоннажа,

@@ -987,8 +987,6 @@ def settings_keyboard(
     ai_comments_enabled: bool,
     progression_enabled: bool,
     tz_offset: int = 0,
-    stickers_enabled: bool = True,
-    show_stickers_toggle: bool = False,
     food_macros_enabled: bool = True,
     show_extra_stats: bool = True,
 ) -> InlineKeyboardMarkup:
@@ -1011,11 +1009,6 @@ def settings_keyboard(
         else "🤖 Комментарии AI-тренера: выключены"
     )
     b.button(text=ai_label, callback_data="settings:ai_comments")
-    # Hidden entirely when no sticker pack is configured — a toggle for something
-    # the bot physically can't do would just be a dead switch.
-    if show_stickers_toggle:
-        stickers_label = "😎 Стикеры: включены" if stickers_enabled else "😶 Стикеры: выключены"
-        b.button(text=stickers_label, callback_data="settings:stickers")
     macros_label = (
         "🔢 КБЖУ в дневнике питания: считаю"
         if food_macros_enabled

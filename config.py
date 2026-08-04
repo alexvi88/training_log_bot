@@ -69,21 +69,6 @@ ENGAGEMENT_HOUR = int(os.getenv("ENGAGEMENT_HOUR", "19"))
 AI_WEEKLY_DIGEST_ENABLED = os.getenv("AI_WEEKLY_DIGEST_ENABLED", "true").lower() == "true"
 
 
-# Sticker reactions (see stickers.py). STICKER_PACKS is a comma-separated list
-# of *short names* — the part after t.me/addstickers/ — of packs the bot re-sends
-# from. Nothing is bundled: the stickers are fetched from Telegram at runtime, so
-# any public pack works and swapping one is an env change. Unset = no stickers
-# anywhere, whatever STICKERS_ENABLED says.
-#
-# To find a pack's short name, send any sticker from it to this bot as the admin
-# (ADMIN_ID) — it replies with the name (see handlers/admin.py).
-STICKER_PACK_NAMES = [
-    name.strip() for name in os.getenv("STICKER_PACKS", "").split(",") if name.strip()
-]
-
-# Master switch for sticker reactions, on top of the per-user setting. Set
-# STICKERS_ENABLED=false to silence them for everyone without dropping the pack.
-STICKERS_ENABLED = os.getenv("STICKERS_ENABLED", "true").lower() == "true"
 
 
 # AI trainer (Grok-backed Q&A over the user's own training data). Same xAI
