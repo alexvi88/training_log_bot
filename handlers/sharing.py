@@ -51,11 +51,16 @@ MAX_DESCRIPTION_LEN = 1500
 # созданы без поля "v" (читатели ниже трактуют его отсутствие как v=0), но с
 # этого момента пишем версию всегда: ретрофитить её в старые визитки было бы
 # нельзя, а стоит это сейчас — ничего.
-PAYLOAD_VERSION = 1
+#
+# v2 добавил "total_days": сколько дней было в программе до обрезки. У визиток
+# v0/v1 этого числа нет и восстановить его нечем (снапшот уже обрезан), поэтому
+# по ним считаем, что уехало всё — см. _program_days_totals.
+PAYLOAD_VERSION = 2
 
 # Превью должно гарантированно влезать в лимит Telegram при ЛЮБОМ снапшоте —
 # в том числе созданном до появления MAX_SHARED_DAYS. Резервируем место под
-# шапку получателя («Тебе прислали программу — N дней.») и футер-подсказку,
+# шапку получателя («Тебе прислали программу — N дней.») и футер-подсказку
+# (вместе с предупреждением про недоехавшие дни, см. _omitted_days_note),
 # которые дописываются поверх результата _program_preview_lines /
 # _routine_preview_lines и на превью-бюджет не претендуют.
 _PREVIEW_HEAD_RESERVE = 200
@@ -92,6 +97,39 @@ def _days_word(n: int) -> str:
     if 2 <= last <= 4:
         return "дня"
     return "дней"
+
+
+def _program_days_totals(payload: dict[str, Any]) -> tuple[int, int]:
+    """(сколько дней реально в визитке, сколько было в программе).
+
+    Второе число — из "total_days" (payload v2+). У визиток постарше поля нет, и
+    честного ответа по ним уже не получить, поэтому считаем, что уехало всё:
+    придумывать потерю хуже, чем промолчать о ней.
+    """
+    in_card = len(payload["days"])
+    return in_card, max(int(payload.get("total_days", in_card)), in_card)
+
+
+def _omitted_days_note(payload: dict[str, Any]) -> Optional[str]:
+    """Предупреждение про дни, которых в визитке нет вовсе — или None.
+
+    Это не то же, что «…и ещё K дней» в превью: там дни в визитке есть, просто
+    не поместились в текст сообщения, а здесь получатель их не получит совсем.
+    Раньше про такую потерю не узнавал никто: восьмидневная программа уезжала
+    пятью днями, отправителю бот говорил «Визитка готова», получателю — «5
+    дней», и обе стороны считали, что передали программу целиком.
+    """
+    in_card, total = _program_days_totals(payload)
+    if in_card >= total:
+        return None
+    # Причина различима по числу: до лимита снапшот добирает только непустые
+    # дни, значит ровно MAX_SHARED_DAYS в визитке — это упёрлись в лимит.
+    reason = (
+        "больше в одну визитку не влезает"
+        if in_card >= MAX_SHARED_DAYS
+        else "пустые дни не передаются"
+    )
+    return f"⚠️ Уехало {in_card} {_days_word(in_card)} из {total} — {reason}."
 
 
 def _routine_preview_lines(payload: dict[str, Any], budget: int = PREVIEW_BUDGET) -> list[str]:
@@ -201,18 +239,19 @@ async def share_routine(callback: CallbackQuery, state: FSMContext):
     await callback.answer("Визитка готова — пересылай 📤")
 
 
-@router.callback_query(F.data.startswith("share:pgm:"))
-async def share_program(callback: CallbackQuery, state: FSMContext):
-    """«📤 Поделиться программой» на экране списка дней: одна визитка на всю
-    многодневку, а не по дню за раз (см. share_routine)."""
-    anchor_id = int(callback.data.split(":")[2])
-    anchor = await db.get_routine(anchor_id)
-    if anchor is None or anchor["user_id"] != callback.from_user.id or not anchor["program_name"]:
-        await callback.answer("Программа не найдена", show_alert=True)
-        return
-    days = await db.list_program_days(callback.from_user.id, anchor["program_name"])
+async def _send_program_card(callback: CallbackQuery, program_id: int, program_name: str) -> None:
+    """Собрать снапшот программы и отдать владельцу визитку — общее тело обеих
+    ручек ниже (адресованной id программы и старой, адресованной днём).
+
+    Дни добираются до MAX_SHARED_DAYS *непустых*: пустой день получателю ничего
+    не сообщает, но и место в лимите занимать не должен — иначе восьмидневная
+    программа с одним пустым днём уезжала пятью днями вместо шести.
+    """
+    days = await db.list_program_days_by_id(program_id)
     day_payloads = []
-    for day in days[:MAX_SHARED_DAYS]:
+    for day in days:
+        if len(day_payloads) >= MAX_SHARED_DAYS:
+            break
         exercises = await db.list_routine_exercises(day["id"])
         if not exercises:
             continue
@@ -229,18 +268,70 @@ async def share_program(callback: CallbackQuery, state: FSMContext):
         await callback.answer("В программе нет упражнений — нечем делиться", show_alert=True)
         return
 
-    payload = {"v": PAYLOAD_VERSION, "name": anchor["program_name"][:MAX_NAME_LEN], "days": day_payloads}
+    payload = {
+        "v": PAYLOAD_VERSION,
+        "name": program_name[:MAX_NAME_LEN],
+        "days": day_payloads,
+        # Сколько дней было в программе — единственное, из чего обе стороны
+        # потом узнают, что уехало не всё (см. _omitted_days_note).
+        "total_days": len(days),
+    }
     token = await db.create_shared_item(callback.from_user.id, "program", json.dumps(payload, ensure_ascii=False))
     url = _deep_link(await _get_bot_username(callback.bot), token)
 
+    note = _omitted_days_note(payload)
     text = "\n".join(
         _program_preview_lines(payload)
+        + ([f"\n{note}"] if note else [])
         + ["", "<i>Перешли это сообщение — по кнопке программу можно забрать себе.</i>"]
     )
     await callback.message.answer(
         text, parse_mode="HTML", reply_markup=_share_card_keyboard(url, "➕ Забрать программу себе", token)
     )
-    await callback.answer("Визитка готова — пересылай 📤")
+    if note is None:
+        await callback.answer("Визитка готова — пересылай 📤")
+        return
+    # Тост — чтобы человек заметил потерю сразу, а не отправив визитку другу;
+    # то же самое написано в самой визитке, тост её только не даёт проскочить.
+    in_card, total = _program_days_totals(payload)
+    await callback.answer(
+        f"Визитка готова, но уехало {in_card} {_days_word(in_card)} из {total}", show_alert=True
+    )
+
+
+@router.callback_query(F.data.startswith("share:prg:"))
+async def share_program(callback: CallbackQuery, state: FSMContext):
+    """«📤 Поделиться» на экране «⚙️ Изменить программу»: одна визитка на всю
+    многодневку, а не по дню за раз (см. share_routine).
+
+    В callback'е — id программы (`programs.id`). Ручка раньше читала это число
+    как id дня-якоря, хотя кнопка отдаёт id программы с тех пор, как у программы
+    появился свой id: у человека с двумя программами «Программа Б» уезжала
+    визиткой «Программы А», потому что день с таким id принадлежал ей. У кого
+    программа одна, id совпадали случайно — поэтому баг и не замечали.
+    """
+    program = await db.get_program(int(callback.data.split(":")[2]))
+    if program is None or program["user_id"] != callback.from_user.id:
+        await callback.answer("Программа не найдена", show_alert=True)
+        return
+    await _send_program_card(callback, program["id"], program["name"])
+
+
+@router.callback_query(F.data.startswith("share:pgm:"))
+async def share_program_legacy(callback: CallbackQuery, state: FSMContext):
+    """Старая кнопка «Поделиться программой» — в ней id дня-якоря.
+
+    Программа не имела собственного id, и кнопки адресовались одним из её дней;
+    такие сообщения остались в чатах. Резолвим якорь в его программу, а не
+    роняем — ровно как rt:pgm: в handlers.routines. Переиспользовать этот же
+    префикс под id программы нельзя: старая кнопка тогда поделилась бы чужой
+    программой, то есть тем же багом, только наоборот.
+    """
+    anchor = await db.get_routine(int(callback.data.split(":")[2]))
+    if anchor is None or anchor["user_id"] != callback.from_user.id or anchor["program_id"] is None:
+        await callback.answer("Программа не найдена", show_alert=True)
+        return
+    await _send_program_card(callback, anchor["program_id"], anchor["program_name"])
 
 
 @router.callback_query(F.data.startswith("share:ex:"))
@@ -337,9 +428,14 @@ async def open_shared(message: Message, command: CommandObject, state: FSMContex
     from_whom = f"от @{owner['username']}" if owner and owner["username"] else "от кого-то"
 
     if row["kind"] == "program":
-        n = len(payload["days"])
-        head = f"Тебе прислали программу {from_whom} — {n} {_days_word(n)}.\n\n"
-        text = head + "\n".join(_program_preview_lines(payload))
+        # «N дней» — про то, что реально лежит в визитке, и «из M», если у
+        # отправителя было больше: получатель должен видеть, что забирает часть,
+        # до того как решит забрать (раньше про урезку не говорили вообще).
+        n, total = _program_days_totals(payload)
+        out_of = "" if n >= total else f" из {total}"
+        head = f"Тебе прислали программу {from_whom} — {n} {_days_word(n)}{out_of}.\n\n"
+        note = _omitted_days_note(payload)
+        text = head + "\n".join(_program_preview_lines(payload) + ([f"\n{note}"] if note else []))
     elif row["kind"] == "routine":
         n = len(payload["exercises"])
         head = f"Тебе прислали программу {from_whom} — {n} упр.\n\n"

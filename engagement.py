@@ -253,7 +253,13 @@ async def _deliver(
     try:
         message = await _send_push_photo(bot, telegram_id, decision, kb)
     except TelegramForbiddenError:
-        logger.info("User %s blocked the bot, skipping push", telegram_id)
+        # Заблокировавший бота остаётся в пуле навсегда: попытка отправки каждый
+        # день, а по воскресеньям ещё и дайджест, который перед отправкой пишет
+        # модель — то есть за текст для несуществующего получателя мы платим.
+        # Гасим тумблер: оба пула фильтруют по pushes_enabled, а если человек
+        # вернётся — включить пуши обратно можно в настройках.
+        logger.info("User %s blocked the bot, disabling pushes", telegram_id)
+        await db.update_user(telegram_id, pushes_enabled=0)
         return
     except TelegramAPIError:
         logger.exception("Failed to deliver push to user %s", telegram_id)
@@ -264,24 +270,30 @@ async def _deliver(
 
 
 async def _send_push_photo(bot: Bot, telegram_id: int, decision: PushDecision, kb):
-    """One send, retried once if Telegram asks us to wait."""
+    """One send, retried once if Telegram asks us to wait.
+
+    Оба вызова собираются из одного словаря аргументов не ради краткости:
+    именно на расхождении этих двух копий и жил звук — `disable_notification`
+    приходилось помнить дважды.
+    """
+    kwargs = dict(
+        chat_id=telegram_id,
+        photo=_push_image(),
+        caption=_as_caption(decision.text),
+        reply_markup=kb,
+        # Молча. Весь бот уже поставлен на DefaultBotProperties(disable_notification=True),
+        # а здесь стояло False — то есть пуш был единственным местом, которое
+        # осознанно перебивало общий режим и звенело. Напоминание «третий день
+        # без зала» не стоит звука ни в 19:00, ни тем более если время всё-таки
+        # съехало: беззвучное уведомление никого не разбудит. Пишем True явно —
+        # чтобы у следующего читателя не было соблазна повторить историю.
+        disable_notification=True,
+    )
     try:
-        return await bot.send_photo(
-            chat_id=telegram_id,
-            photo=_push_image(),
-            caption=_as_caption(decision.text),
-            reply_markup=kb,
-            disable_notification=False,
-        )
+        return await bot.send_photo(**kwargs)
     except TelegramRetryAfter as e:
         await asyncio.sleep(e.retry_after)
-        return await bot.send_photo(
-            chat_id=telegram_id,
-            photo=_push_image(),
-            caption=_as_caption(decision.text),
-            reply_markup=kb,
-            disable_notification=False,
-        )
+        return await bot.send_photo(**kwargs)
 
 
 # Pause between sends, so a tick with many due users stays under Telegram's
@@ -299,8 +311,77 @@ def _local_now(tz_offset: int) -> dt.datetime:
     return _utc_now() + dt.timedelta(hours=tz_offset or 0)
 
 
-def is_send_hour(tz_offset: int, hour: int) -> bool:
-    return _local_now(tz_offset).hour == hour
+# ---------- когда писать можно, а когда человек спит ----------
+#
+# Пуш будил людей, и по двум независимым причинам.
+#
+# Первая — звук: отправка перебивала общий беззвучный режим бота (см.
+# _send_push_photo, там же почему).
+#
+# Вторая — час. `users.tz_offset` по умолчанию 0, и пояс нигде не спрашивается:
+# его выставляет только тот, кто сам залез в настройки. То есть для почти всех
+# «локальные ENGAGEMENT_HOUR = 19:00» — это 19:00 UTC, а это 22:00 в Москве,
+# 00:00 в Екатеринбурге, 02:00 в Новосибирске и 05:00 во Владивостоке.
+#
+# Что выбрано и почему:
+#
+# * Не спрашиваем пояс в онбординге. Лишний экран между «поставил бота» и
+#   «записал первый подход» — это отвал на самом дорогом шаге, а платить им за
+#   то, чтобы вечерний пуш пришёл ровно в 19:00, а не в обед, дорого.
+# * Не угадываем пояс по активности. Угадывать нечем ровно там, где больнее
+#   всего: новичок получает первый пуш на второй день после регистрации, а
+#   тренировок, по времени которых можно было бы что-то вывести, у него ноль.
+#   Одна отметка created_at — это не пояс, а «когда человек нажал /start».
+# * Ночной пуш не сдвигаем на утро, а не отправляем вовсе. Сдвинутый пуш —
+#   это «третий день без зала» в девять утра про вчерашний день, плюс риск двух
+#   пушей за сутки (has_push_today дедуплицирует по факту отправки, а не по
+#   попытке). Сигналы повторяемы сами по себе: скипы считаются по дням,
+#   дайджест приходит по воскресеньям — пропущенный вечер вернётся.
+
+# tz_offset == 0 читаем как «пояс неизвестен», а не как «человек живёт по UTC»:
+# дефолт схемы и «настройку не трогали» — одно и то же значение, так что ноль
+# не несёт информации. Цена ошибки несимметрична: принять реального UTC+0 за
+# неизвестного — это пуш в обед вместо вечера, принять неизвестного за UTC+0 —
+# это пуш в два ночи. Округляем в безопасную сторону. Проигрывает от этого
+# только тот, кто осознанно выбрал в настройках именно UTC+0; отличать его
+# пришлось бы отдельным полем в схеме, и одного обеденного пуша это не стоит.
+def tz_is_known(tz_offset: int) -> bool:
+    return bool(tz_offset)
+
+
+# Тихие часы: с 22:00 до 09:00 по местному пуш не уходит. Держим их константами,
+# а не переменными окружения, — это нижняя граница «не будить», и она не должна
+# отключаться конфигом.
+QUIET_HOURS_START = 22
+QUIET_HOURS_END = 9
+
+# Пояса русскоязычной аудитории: от Калининграда (UTC+2) до Камчатки (UTC+12).
+UNKNOWN_TZ_BAND = range(2, 13)
+
+# Для неизвестного пояса единственный честный час — тот, который бодрый во всём
+# диапазоне сразу: 09:00 UTC — это 11:00 в Калининграде, 12:00 в Москве, 16:00 в
+# Новосибирске, 21:00 на Камчатке. Да, это обед, а не вечер: осознанная плата за
+# незнание пояса, и вечерний слот остаётся тому, кто пояс в настройках указал.
+# Инвариант «этот час бодрый на всём диапазоне» закреплён тестом, чтобы правка
+# тихих часов или диапазона не вернула ночные пуши тихой сменой константы.
+UNKNOWN_TZ_SEND_HOUR_UTC = 9
+
+
+def is_quiet_hour(local_hour: int) -> bool:
+    return local_hour >= QUIET_HOURS_START or local_hour < QUIET_HOURS_END
+
+
+def should_send_now(tz_offset: int, hour: int) -> bool:
+    """Пора ли писать этому пользователю прямо сейчас."""
+    if not tz_is_known(tz_offset):
+        return _utc_now().hour == UNKNOWN_TZ_SEND_HOUR_UTC
+    local_hour = _local_now(tz_offset).hour
+    # ENGAGEMENT_HOUR задаётся окружением, так что «час отправки» и «человек
+    # спит» — независимые условия: ENGAGEMENT_HOUR=2 не должен означать «будить
+    # всех в два». Тихие часы поверх всего остального.
+    if is_quiet_hour(local_hour):
+        return False
+    return local_hour == hour
 
 
 async def _send_daily_pushes(bot: Bot) -> None:
@@ -312,6 +393,12 @@ async def _send_daily_pushes(bot: Bot) -> None:
     everything else in the bot already respected it. build_daily_push's own
     has_push_today guard is keyed on the date it's given, so passing each user's
     local date also keeps the one-per-day promise per user.
+
+    Для пользователя с неизвестным поясом (tz_offset == 0, см. tz_is_known)
+    локальная дата считается по UTC — и это не приблизительность: отправка ему
+    идёт в 09:00 UTC, а в этот момент календарная дата одна и та же на всём
+    диапазоне поясов аудитории (09:00 + 12 < 24). Так что «один пуш в день»
+    остаётся честным и для него.
     """
     hour = config.ENGAGEMENT_HOUR
 
@@ -324,12 +411,12 @@ async def _send_daily_pushes(bot: Bot) -> None:
     due = [
         (telegram_id, _local_now(tz_offset).date())
         for telegram_id, tz_offset in await db.list_engagement_eligible_user_ids()
-        if is_send_hour(tz_offset, hour)
+        if should_send_now(tz_offset, hour)
     ]
     due_newbies = [
         (telegram_id, created_at, _local_now(tz_offset).date())
         for telegram_id, created_at, tz_offset in await db.list_newbie_user_ids()
-        if is_send_hour(tz_offset, hour)
+        if should_send_now(tz_offset, hour)
     ]
 
     for telegram_id, local_date in due:

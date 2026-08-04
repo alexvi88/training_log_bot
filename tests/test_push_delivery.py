@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
 
 import engagement
 import push_texts
@@ -80,6 +80,56 @@ async def test_a_caption_over_telegrams_limit_is_truncated(fresh_db, user_id):
     assert caption.endswith("…")
 
 
+async def test_push_goes_out_without_sound(fresh_db, user_id):
+    """Весь бот отправляет молча (DefaultBotProperties), и пуш был единственным
+    местом, которое это перебивало и звенело — в том числе ночью."""
+    bot = _bot()
+    decision = engagement.PushDecision(push_texts.SKIP_3, "текст")
+
+    await engagement._deliver(bot, user_id, decision, _TODAY)
+
+    assert bot.send_photo.await_args.kwargs["disable_notification"] is True
+
+
+async def test_retry_after_resend_is_also_silent(fresh_db, user_id):
+    """Повтор после 429 — вторая копия того же вызова, и звук возвращался бы
+    именно через неё."""
+    bot = MagicMock()
+    bot.send_photo = AsyncMock(
+        side_effect=[
+            TelegramRetryAfter(method=MagicMock(), message="flood", retry_after=0),
+            SimpleNamespace(photo=[SimpleNamespace(file_id="fid")]),
+        ]
+    )
+
+    await engagement._deliver(bot, user_id, engagement.PushDecision(push_texts.SKIP_3, "текст"), _TODAY)
+
+    assert bot.send_photo.await_count == 2
+    for call in bot.send_photo.await_args_list:
+        assert call.kwargs["disable_notification"] is True
+
+
+async def test_blocked_user_drops_out_of_the_push_pool(fresh_db, user_id):
+    """Раньше блокировка только логировалась: человек оставался в пуле навсегда,
+    и по воскресеньям модель писала дайджест для того, кто его не получит."""
+    await fresh_db.create_finished_workout(
+        user_id, started_at="2026-07-01T10:00:00", finished_at="2026-07-01T11:00:00"
+    )
+    assert [uid for uid, _ in await fresh_db.list_engagement_eligible_user_ids()] == [user_id]
+
+    bot = MagicMock()
+    bot.send_photo = AsyncMock(
+        side_effect=TelegramForbiddenError(method=MagicMock(), message="bot was blocked by the user")
+    )
+
+    await engagement._deliver(bot, user_id, engagement.PushDecision(push_texts.SKIP_3, "текст"), _TODAY)
+
+    assert (await fresh_db.get_user(user_id))["pushes_enabled"] == 0
+    assert await fresh_db.list_engagement_eligible_user_ids() == []
+    # запись о пуше не делается: он не дошёл
+    assert not await fresh_db.has_push_today(user_id, _TODAY.isoformat())
+
+
 async def test_one_failed_delivery_does_not_stop_the_rest_of_the_tick(fresh_db, user_id, monkeypatch):
     """_deliver runs inside a loop over every due user. An exception escaping it
     aborted the whole tick, so everyone after the failing recipient got nothing
@@ -110,7 +160,7 @@ async def test_one_failed_delivery_does_not_stop_the_rest_of_the_tick(fresh_db, 
         return engagement.PushDecision(push_texts.SKIP_3, "текст")
 
     monkeypatch.setattr(eng, "build_daily_push", build)
-    monkeypatch.setattr(eng, "is_send_hour", lambda tz, hour: True)
+    monkeypatch.setattr(eng, "should_send_now", lambda tz, hour: True)
     monkeypatch.setattr(eng, "SEND_DELAY", 0)
 
     await eng._send_daily_pushes(bot)

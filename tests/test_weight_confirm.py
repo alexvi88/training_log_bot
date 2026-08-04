@@ -235,3 +235,47 @@ async def test_voice_asks_before_logging(fresh_db, user_id, monkeypatch):
     pending = (await state.get_data())["pending_weight_confirm"]
     assert pending["source"] == "voice"
     assert pending["sets"] == [[555.0, 5, None]]
+
+
+# ---------- повторы ----------
+
+
+@pytest.mark.asyncio
+async def test_a_hundred_and_fifty_reps_under_load_is_questioned(fresh_db, user_id):
+    """Повторы не проверялись вовсе: `parser.MAX_REPS` — 500, то есть почти
+    ничего. А промахнуться легко именно голосом: «сто пятьдесят» без повторов
+    слышится как одно число, вес берётся с прошлого подхода — и в базу уходит
+    100×150. e1RM оттуда — 600 кг, вечный рекорд упражнения, тоннаж и Зал славы.
+    """
+    db = fresh_db
+    state, ex_id, block_id = await _setup(db, user_id, last_session=((100.0, 8, None),))
+
+    await workout.log_set_text(_make_message(user_id, "100 150"), state)
+
+    assert await db.list_sets_for_block(block_id) == []
+    assert (await state.get_data()).get("pending_weight_confirm") is not None
+    assert "повторов" in workout._suspicious_reps_warning(100.0, 150)
+
+
+@pytest.mark.asyncio
+async def test_many_reps_at_bodyweight_pass_without_a_question(fresh_db, user_id):
+    """50 отжиманий — обычный подход, а не промах: веса там нет, и придираться
+    к числу повторов не к чему."""
+    db = fresh_db
+    state, ex_id, block_id = await _setup(db, user_id, last_session=((0.0, 30, None),))
+
+    await workout.log_set_text(_make_message(user_id, "0 50"), state)
+
+    assert len(await db.list_sets_for_block(block_id)) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_normal_high_rep_set_is_not_questioned(fresh_db, user_id):
+    """Двадцать повторов с весом — это работа на выносливость, а не опечатка.
+    Порог стоит там, где силовой работы уже не бывает."""
+    db = fresh_db
+    state, ex_id, block_id = await _setup(db, user_id, last_session=((40.0, 20, None),))
+
+    await workout.log_set_text(_make_message(user_id, "40 20"), state)
+
+    assert len(await db.list_sets_for_block(block_id)) == 1

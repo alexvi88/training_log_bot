@@ -561,7 +561,11 @@ def program_edit_keyboard(days, program_id: int) -> InlineKeyboardMarkup:
     # Программа целиком, а не день — тот же токен-визитка, но со всеми днями
     # разом: делиться по одному дню значило собирать программу получателю
     # вручную из нескольких пересланных сообщений.
-    b.button(text="📤 Поделиться", callback_data=f"share:pgm:{program_id}")
+    #
+    # Префикс share:prg: (а не share:pgm:) — id здесь программы, а старый
+    # префикс остался за кнопками, которые адресовались днём-якорем; см.
+    # handlers.sharing.share_program_legacy и ту же пару rt:prg:/rt:pgm:.
+    b.button(text="📤 Поделиться", callback_data=f"share:prg:{program_id}")
     b.button(text="🗑 Удалить", callback_data=f"rt:pgmdelask:{program_id}")
     b.button(text="⬅️ Назад", callback_data=f"rt:prg:{program_id}")
     # Работа с днями — полной шириной: она про состав программы, а не про
@@ -1446,6 +1450,26 @@ def set_actions_keyboard(set_id: int) -> InlineKeyboardMarkup:
     b.button(text="✏️ Изменить вес/повторы", callback_data=f"editw:editset:{set_id}")
     b.button(text="🗑 Удалить сет", callback_data=f"editw:delset:{set_id}")
     b.button(text="⬅️ Назад", callback_data="editw:back")
+    b.adjust(1)
+    return b.as_markup()
+
+
+def csv_import_confirm_keyboard(new_count: int, dup_count: int) -> InlineKeyboardMarkup:
+    """Кнопки подтверждения импорта CSV.
+
+    Дубли по датам ни пропускаются молча, ни грузятся молча: обычная кнопка
+    берёт только новые даты (и говорит, сколько их), а вторая появляется лишь
+    при дублях — для тех, кто действительно тренировался в тот день дважды.
+    Если новых дат нет, кнопки «загрузить N» нет вообще: одна и та же история
+    дважды — это тот самый баг, из-за которого её потом удаляли по одной.
+    """
+    b = InlineKeyboardBuilder()
+    if new_count:
+        b.button(text=f"✅ Загрузить {new_count}", callback_data="imp:save")
+    if dup_count:
+        total = new_count + dup_count
+        b.button(text=f"⚠️ Загрузить всё ({total}), включая дубли", callback_data="imp:saveall")
+    b.button(text="❌ Отмена", callback_data="imp:cancel")
     b.adjust(1)
     return b.as_markup()
 
