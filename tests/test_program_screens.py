@@ -504,3 +504,95 @@ async def test_duplicating_respects_the_day_budget(fresh_db, user_id):
 
     assert "не влезет" in callback.answer.await_args.args[0]
     assert len(await db.list_programs(user_id)) == 1
+
+
+# ---------- правки за одной кнопкой ----------
+
+
+async def test_the_program_screen_is_about_training_not_editing(fresh_db, user_id):
+    """Шесть кнопок редактирования стояли ровно на пути «пойти потренироваться»:
+    экран трёхдневного сплита был из десяти кнопок, из которых по делу — три дня.
+    Правки между тренировками не нужны примерно никогда, а экран открывают каждый
+    раз."""
+    db = fresh_db
+    program_id = await _program(db, user_id)
+
+    callback = _make_callback(user_id, f"rt:prg:{program_id}")
+    await routines.rt_program(callback, await _state(user_id))
+
+    callbacks = [cb for _text, cb in _buttons(callback)]
+    assert f"rt:pgmedit:{program_id}" in callbacks
+    for gone in ("rt:dayadd:", "rt:dayorder:", "rt:pgmcopy:", "rt:pgmrename:", "share:pgm:", "rt:pgmdelask:"):
+        assert not any(cb.startswith(gone) for cb in callbacks), gone
+    # Осталось: три дня, «Изменить программу», «Назад».
+    assert len(callbacks) == 5
+
+
+async def test_every_edit_action_survived_the_move(fresh_db, user_id):
+    """Кнопки не удалены, а переехали — если какая-то потерялась, действие
+    становится недостижимым, потому что других входов у него нет."""
+    db = fresh_db
+    program_id = await _program(db, user_id)
+
+    callback = _make_callback(user_id, f"rt:pgmedit:{program_id}")
+    await routines.rt_program_edit(callback, await _state(user_id))
+
+    callbacks = [cb for _text, cb in _buttons(callback)]
+    assert callbacks == [
+        f"rt:dayadd:{program_id}",
+        f"rt:dayorder:{program_id}",
+        f"rt:pgmcopy:{program_id}",
+        f"rt:pgmrename:{program_id}",
+        f"share:pgm:{program_id}",
+        f"rt:pgmdelask:{program_id}",
+        f"rt:prg:{program_id}",
+    ]
+
+
+async def test_back_from_the_edit_screen_returns_to_the_program(fresh_db, user_id):
+    """А не к списку программ: человек пришёл сюда с экрана программы и туда же
+    ждёт вернуться."""
+    db = fresh_db
+    program_id = await _program(db, user_id)
+
+    callback = _make_callback(user_id, f"rt:pgmedit:{program_id}")
+    await routines.rt_program_edit(callback, await _state(user_id))
+
+    back = [cb for text, cb in _buttons(callback) if text.startswith("⬅️")]
+    assert back == [f"rt:prg:{program_id}"]
+
+
+async def test_reordering_is_hidden_on_a_single_day_program(fresh_db, user_id):
+    db = fresh_db
+    program_id = await _program(db, user_id, days=("Всё тело",))
+
+    callback = _make_callback(user_id, f"rt:pgmedit:{program_id}")
+    await routines.rt_program_edit(callback, await _state(user_id))
+
+    assert f"rt:dayorder:{program_id}" not in [cb for _text, cb in _buttons(callback)]
+
+
+async def test_the_edit_screen_names_the_program_and_counts_its_days(fresh_db, user_id):
+    """Состав дней тут не повторяется — его только что показали этажом выше, — но
+    без названия экран правок безымянный, а «Удалить» на безымянном экране
+    страшно нажимать."""
+    db = fresh_db
+    program_id = await _program(db, user_id, days=("Толкай", "Тяни"))
+
+    callback = _make_callback(user_id, f"rt:pgmedit:{program_id}")
+    await routines.rt_program_edit(callback, await _state(user_id))
+
+    text = _last_text(callback)
+    assert "PPL" in text
+    assert "2 дня" in text
+    assert "Толкай" not in text
+
+
+async def test_the_edit_screen_belongs_to_its_owner(fresh_db, user_id):
+    db = fresh_db
+    program_id = await _program(db, user_id)
+
+    callback = _make_callback(user_id + 1, f"rt:pgmedit:{program_id}")
+    await routines.rt_program_edit(callback, await _state(user_id + 1))
+
+    assert _buttons(callback) == []

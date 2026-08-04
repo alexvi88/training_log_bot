@@ -515,12 +515,18 @@ def routines_manage_keyboard(programs, routines, has_workouts: bool) -> InlineKe
 
 
 def program_days_keyboard(days, program_id: int, next_day_id: int | None = None) -> InlineKeyboardMarkup:
-    """Экран программы: какой день сегодня, остальные ниже, и что можно с ней сделать.
+    """Экран программы: какой день сегодня, остальные ниже, и одна кнопка правок.
 
     `next_day_id` — день, до которого дошла очередь (db.next_program_day). Он
     поднят наверх отдельной кнопкой «▶️ Сегодня: …», потому что раньше три дня
     сплита выглядели тремя одинаковыми кнопками и вспоминать, что вчера был
     «Толкай», приходилось самому — при том, что бот это знал (workouts.routine_id).
+
+    Всё, что меняет программу, уехало за «⚙️ Изменить программу» (см.
+    program_edit_keyboard). Шесть кнопок редактирования стояли ровно на пути
+    «пойти потренироваться» — а между тренировками программу правят примерно
+    никогда, зато открывают её каждый раз. На двухдневной программе экран был из
+    девяти кнопок, стал из четырёх.
     """
     b = InlineKeyboardBuilder()
     if next_day_id is not None:
@@ -531,20 +537,37 @@ def program_days_keyboard(days, program_id: int, next_day_id: int | None = None)
         if d["id"] == next_day_id:
             continue
         b.button(text=d["name"], callback_data=f"rt:view:{d['id']}")
+    b.button(text="⚙️ Изменить программу", callback_data=f"rt:pgmedit:{program_id}")
+    b.button(text="⬅️ Назад", callback_data="rt:manage")
+    b.adjust(1)
+    return b.as_markup()
+
+
+def program_edit_keyboard(days, program_id: int) -> InlineKeyboardMarkup:
+    """«⚙️ Изменить программу»: всё, что меняет саму программу, одним экраном.
+
+    Подписи без слова «программу» — заголовок экрана её и так называет, а
+    короткие подписи встают по две в ряд, так что четыре действия занимают две
+    строки вместо четырёх.
+    """
+    b = InlineKeyboardBuilder()
     b.button(text="➕ Добавить день", callback_data=f"rt:dayadd:{program_id}")
     if len(days) > 1:
         b.button(text="🔀 Порядок дней", callback_data=f"rt:dayorder:{program_id}")
     # Копия целиком — база для «хочу вторую версию с правками»: без неё
     # единственный способ получить вариант программы был собрать её заново.
-    b.button(text="📄 Дублировать программу", callback_data=f"rt:pgmcopy:{program_id}")
-    b.button(text="✏️ Переименовать программу", callback_data=f"rt:pgmrename:{program_id}")
+    b.button(text="📄 Дублировать", callback_data=f"rt:pgmcopy:{program_id}")
+    b.button(text="✏️ Переименовать", callback_data=f"rt:pgmrename:{program_id}")
     # Программа целиком, а не день — тот же токен-визитка, но со всеми днями
     # разом: делиться по одному дню значило собирать программу получателю
     # вручную из нескольких пересланных сообщений.
-    b.button(text="📤 Поделиться программой", callback_data=f"share:pgm:{program_id}")
-    b.button(text="🗑 Удалить программу", callback_data=f"rt:pgmdelask:{program_id}")
-    b.button(text="⬅️ Назад", callback_data="rt:manage")
-    b.adjust(1)
+    b.button(text="📤 Поделиться", callback_data=f"share:pgm:{program_id}")
+    b.button(text="🗑 Удалить", callback_data=f"rt:pgmdelask:{program_id}")
+    b.button(text="⬅️ Назад", callback_data=f"rt:prg:{program_id}")
+    # Работа с днями — полной шириной: она про состав программы, а не про
+    # программу целиком, и ставить её в пару с «Удалить» значило бы посадить
+    # рядом безобидное и необратимое.
+    b.adjust(*((1, 1) if len(days) > 1 else (1,)), 2, 2, 1)
     return b.as_markup()
 
 
