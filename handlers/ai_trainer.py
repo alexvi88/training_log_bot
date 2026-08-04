@@ -4,7 +4,6 @@ import asyncio
 import base64
 import json
 import logging
-import random
 from contextlib import suppress
 from html import escape
 from typing import Any, Callable, Optional
@@ -21,6 +20,7 @@ import db
 import exercise_mentions
 import formatting
 import keyboards
+import running_texts
 import ui
 from fsm import AITrainerFlow
 
@@ -92,59 +92,26 @@ _busy: set[int] = set()
 
 # Крутятся в placeholder-сообщении, пока модель думает — вместо голого "печатает..."
 # на несколько секунд/десятков секунд (особенно с tool-calls и веб-поиском под капотом).
-RUNNING_REPLIES = [
-    "💪 держи паузу, сейчас будет по делу...",
-    "🧠 включаю тренерский мозг, момент...",
-    "🔥 разминаюсь перед ответом...",
-    "🎯 целюсь в точный совет, не спугни...",
-    "🧘 собираю мысли, не гони...",
-    "🏋️ гружу знания, как штангу — по чуть-чуть...",
-    "📖 сверяюсь с методикой, секунду...",
-    "⏱️ отдыхаю между подходами мысли, погоди...",
-    "🥩 перевариваю вопрос, дай времени...",
-    "🧊 остываю от подхода, сейчас отвечу...",
-    "🩹 разбираю по косточкам, момент...",
-    "🚿 после подхода думается чётче, секунду...",
-    "🧢 не гони, тренер думает медленно, но метко...",
-    "🥊 бью по вопросу точно, момент...",
-    "🍗 заряжаюсь белком мысли, момент...",
-    "🧱 закладываю фундамент ответа...",
-    "⚡ собираю энергию для ответа...",
-    "🗿 стою как штанга — думаю тяжело, но верно...",
-    "🧭 нахожу верное направление, секунду...",
-    "🛠️ докручиваю ответ, почти готово...",
-]
+# Сами пулы фраз и подбор темы по вопросу — в running_texts.py: там же объяснено,
+# почему это важно (первая фраза видна ещё до единого tool-call).
 
 # Интервал ротации placeholder-текста, секунды.
 RUNNING_INTERVAL = 2.8
-
-
-def _pick(replies: list[str]) -> str:
-    return random.choice(replies)
-
-
-def _pick_different(replies: list[str], exclude: Optional[str]) -> str:
-    """Случайная реплика, отличная от предыдущей — иначе editText упадёт с
-    "message is not modified", да и ротация без этого выглядит нечестно."""
-    if len(replies) <= 1:
-        return _pick(replies)
-    choice = exclude
-    while choice == exclude:
-        choice = _pick(replies)
-    return choice
 
 
 class _RunningDisplay:
     """Крутит placeholder, пока модель думает. Реальные статусы от ai_trainer.ask
     (веб-поиск, конкретный tool-call — см. StatusCallback) идут через set_status и
     показывают, что происходит на самом деле; в паузах между ними (или если модель
-    отвечает без единого tool-call) cycle_idle крутит случайные фразы-заполнители,
-    чтобы сообщение не выглядело зависшим. Сам ответ приходит одним куском в конце
-    (см. _handle_question) — без построчной печати вживую."""
+    отвечает без единого tool-call) cycle_idle крутит случайные фразы-заполнители из
+    пула, выбранного под тему вопроса (см. running_texts.pool_for), чтобы сообщение
+    не выглядело зависшим и не съезжало с темы. Сам ответ приходит одним куском в
+    конце (см. _handle_question) — без построчной печати вживую."""
 
-    def __init__(self, placeholder: Message, initial_text: str) -> None:
+    def __init__(self, placeholder: Message, initial_text: str, pool: list[str]) -> None:
         self._placeholder = placeholder
         self._last_text = initial_text
+        self._pool = pool
         self._lock = asyncio.Lock()
 
     async def set_status(self, text: str) -> None:
@@ -159,7 +126,7 @@ class _RunningDisplay:
         while True:
             await asyncio.sleep(RUNNING_INTERVAL)
             async with self._lock:
-                self._last_text = _pick_different(RUNNING_REPLIES, self._last_text)
+                self._last_text = running_texts.pick_different(self._pool, self._last_text)
                 with suppress(TelegramBadRequest):
                     await self._placeholder.edit_text(self._last_text)
 
@@ -1084,9 +1051,13 @@ async def _handle_question(
 
     # The daily counter is charged only once there's an answer to show for it —
     # a provider outage shouldn't cost the user one of their questions.
-    running_text = _pick(RUNNING_REPLIES)
+    # Пул фраз подбирается по теме вопроса (питание, программа, конкретное
+    # упражнение и т.д. — см. running_texts.py), чтобы даже самый первый
+    # placeholder до единого tool-call звучал в тему, а не наугад.
+    running_pool = running_texts.pool_for(question)
+    running_text = running_texts.pick(running_pool)
     placeholder = await message.answer(running_text)
-    display = _RunningDisplay(placeholder, running_text)
+    display = _RunningDisplay(placeholder, running_text, running_pool)
     running_task = asyncio.create_task(display.cycle_idle())
 
     async def on_draft_start() -> None:
