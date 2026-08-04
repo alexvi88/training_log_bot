@@ -678,7 +678,12 @@ def compute_dashboard(workout_dates: Iterable[dt.date], today: dt.date) -> Dashb
     this_monday = _week_monday(today)
     this_week = sum(1 for d in dates if _week_monday(d) == this_monday)
     last_30_days = sum(1 for d in dates if 0 <= (today - d).days < 30)
-    days_since_last = (today - max(dates)).days
+    # max(0, ...) — «дней с последней тренировки» не бывает отрицательным.
+    # Дата тренировки может оказаться позже «сегодня» (импорт из CSV, правка даты
+    # вручную, а до перевода агрегатов на местные сутки — ещё и тренировка,
+    # закрытая около полуночи), и тогда счётчик показывал «-1 день», что читается
+    # как сломанный экран. Ноль — это «сегодня», ближайшее правдивое значение.
+    days_since_last = max(0, (today - max(dates)).days)
 
     weeks = {_week_monday(d) for d in dates}
     cursor = this_monday
