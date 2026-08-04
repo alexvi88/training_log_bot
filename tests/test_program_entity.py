@@ -7,6 +7,8 @@
 дней, а «ручкой» экрана служил MAX(routine.id). Тесты ниже — про то, что
 каждое из этих состояний теперь недостижимо.
 """
+import asyncio
+
 import pytest
 
 import config
@@ -395,3 +397,56 @@ async def test_only_the_owner_can_revoke_a_share(fresh_db, user_id):
     assert await db.get_shared_item(token) is not None
     assert await db.delete_shared_item(token, owner_id=user_id) is True
     assert await db.get_shared_item(token) is None
+
+
+async def test_two_days_added_at_once_get_different_positions(fresh_db, user_id):
+    """Два быстрых тапа «➕ Добавить день» — и оба дня получали day_order = 0.
+
+    Порядок читался отдельным SELECT до вставки, а aiogram обрабатывает апдейты
+    конкурентно: второй хендлер успевал прочитать тот же MAX, пока первый ещё не
+    вставил строку. Уникального индекса на (program_id, day_order) нет, так что
+    коллизия проходила молча, а «поднять день» после неё переставлял не тот день —
+    сортировка становилась неоднозначной.
+    """
+    db = fresh_db
+    program_id = await db.create_program(user_id, "PPL")
+
+    await asyncio.gather(
+        db.create_routine(user_id, "Толкай", program_id=program_id),
+        db.create_routine(user_id, "Тяни", program_id=program_id),
+        db.create_routine(user_id, "Ноги", program_id=program_id),
+    )
+
+    days = await db.list_program_days_by_id(program_id)
+    orders = sorted(day["day_order"] for day in days)
+    assert orders == [0, 1, 2]
+
+
+async def test_moving_days_in_concurrently_does_not_collide(fresh_db, user_id):
+    """Тот же race на «вынести день в программу» — там порядок тоже читался до
+    записи."""
+    db = fresh_db
+    program_id = await db.create_program(user_id, "PPL")
+    await db.create_routine(user_id, "Толкай", program_id=program_id)
+    loose = [await db.create_routine(user_id, name) for name in ("Тяни", "Ноги")]
+
+    await asyncio.gather(*(db.move_routine_to_program(rid, program_id) for rid in loose))
+
+    days = await db.list_program_days_by_id(program_id)
+    assert sorted(day["day_order"] for day in days) == [0, 1, 2]
+
+
+async def test_merging_appends_days_without_reusing_positions(fresh_db, user_id):
+    db = fresh_db
+    keep = await db.create_program(user_id, "Основная")
+    drop = await db.create_program(user_id, "Вторая")
+    for name in ("Толкай", "Тяни"):
+        await db.create_routine(user_id, name, program_id=keep)
+    for name in ("Верх", "Низ"):
+        await db.create_routine(user_id, name, program_id=drop)
+
+    await db.merge_programs(user_id, drop, keep)
+
+    days = await db.list_program_days_by_id(keep)
+    assert [day["name"] for day in days] == ["Толкай", "Тяни", "Верх", "Низ"]
+    assert [day["day_order"] for day in days] == [0, 1, 2, 3]

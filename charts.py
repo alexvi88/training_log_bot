@@ -322,12 +322,12 @@ DASH_FS_MICRO = 6.5     # месяцы и дни недели календаря
 _DASH_HEAD_H = 0.58
 _DASH_TILES_H = 0.86
 _DASH_VOL_STEP = 0.30
-_DASH_LIFTS_H = 2.10
+_DASH_LIFTS_H = 2.45
 # Куда линия движения падает и на сколько поднимается, в единицах оси блока.
 # Раньше на неё приходилось 0.36 из 2.75 — на экране это десяток пикселей, в
 # которых роста не разглядеть.
-_LIFT_LINE_BOTTOM = 1.50
-_LIFT_LINE_HEIGHT = 0.78
+_LIFT_LINE_BOTTOM = 1.80
+_LIFT_LINE_HEIGHT = 1.05
 
 
 def _dash_card(ax, x, y, w, h, colour=DASH_CARD) -> None:
@@ -432,7 +432,7 @@ def _dash_lifts(ax, lifts, fg: str, dim: str, ok: str, title: str = "", note: st
     тяги разные веса, и общая шкала расплющила бы жим в прямую. Сравнивать эти
     три линии между собой не нужно — каждая отвечает на «я тут расту?».
     """
-    ax.set_ylim(1.80, -1.5)
+    ax.set_ylim(2.10, -1.5)
     if title:
         _dash_section(ax, title, note)
     box = (DASH_RIGHT - DASH_LEFT - 0.02 * (len(lifts) - 1)) / len(lifts)
@@ -453,9 +453,14 @@ def _dash_lifts(ax, lifts, fg: str, dim: str, ok: str, title: str = "", note: st
         # тяге рисовался бы во всю высоту блока и читался как рывок. Порог в 4% от
         # рабочего веса оставляет настоящий рост во всю высоту, а дрожание — почти
         # плоским, каким оно и является.
-        span = max(high - low, (low + high) / 2 * 0.04)
+        span = max(high - low, (low + high) / 2 * 0.02)
         xs = [x0 + k * box / (len(series) - 1) for k in range(len(series))]
         ys = [_LIFT_LINE_BOTTOM - (v - low) / span * _LIFT_LINE_HEIGHT for v in series]
+        # Заливка под линией: на графике высотой в сантиметр форма от неё
+        # читается заметно лучше, чем от одной линии, — глаз ловит площадь
+        # раньше, чем наклон.
+        ax.fill_between(xs, ys, _LIFT_LINE_BOTTOM, color=HEATMAP_FILLED,
+                        alpha=0.16, linewidth=0)
         ax.plot(xs, ys, color=HEATMAP_FILLED, linewidth=2.0, solid_capstyle="round")
         ax.plot([xs[-1]], [ys[-1]], marker="o", markersize=3.8, color=fg)
 

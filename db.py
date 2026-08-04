@@ -2969,15 +2969,6 @@ async def unique_program_name(user_id: int, name: str, suffix: Optional[str] = N
     return f"{name} ({secrets.token_hex(2)})"
 
 
-async def next_day_order(program_id: int) -> int:
-    cur = await conn().execute(
-        "SELECT COALESCE(MAX(day_order), -1) + 1 FROM routines WHERE program_id = ?",
-        (program_id,),
-    )
-    (order,) = await cur.fetchone()
-    return order
-
-
 async def move_routine_to_program(routine_id: int, program_id: Optional[int]) -> None:
     """Put a day into a program (appended last), or take it out of one.
 
@@ -2985,13 +2976,24 @@ async def move_routine_to_program(routine_id: int, program_id: Optional[int]) ->
     программы" direction, which was impossible while a program was just a shared
     string.
     """
-    order = await next_day_order(program_id) if program_id is not None else 0
     async with _write_lock:
-        await conn().execute(
-            "UPDATE routines SET program_id = ?, day_order = ? WHERE id = ?",
-            (program_id, order, routine_id),
-        )
-        await conn().commit()
+        db = conn()
+        if program_id is None:
+            await db.execute(
+                "UPDATE routines SET program_id = NULL, day_order = 0 WHERE id = ?",
+                (routine_id,),
+            )
+        else:
+            # Порядок — подзапросом внутри UPDATE, по той же причине, что в
+            # create_routine: между чтением MAX и записью успевает вклиниться
+            # второй апдейт.
+            await db.execute(
+                "UPDATE routines SET program_id = ?, day_order = "
+                "(SELECT COALESCE(MAX(day_order), -1) + 1 FROM routines WHERE program_id = ?) "
+                "WHERE id = ?",
+                (program_id, program_id, routine_id),
+            )
+        await db.commit()
 
 
 async def reorder_program_day(routine_id: int, direction: str) -> None:
@@ -3034,15 +3036,29 @@ async def create_routine(
     """
     if program_id is None and program_name:
         program_id = await get_or_create_program(user_id, program_name)
-    if program_id is not None and day_order is None:
-        day_order = await next_day_order(program_id)
     async with _write_lock:
-        cur = await conn().execute(
-            "INSERT INTO routines (user_id, name, created_at, program_id, day_order) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (user_id, name, now_iso(), program_id, day_order or 0),
-        )
-        await conn().commit()
+        db = conn()
+        if program_id is not None and day_order is None:
+            # Порядок дня считается внутри INSERT, а не отдельным SELECT до него.
+            # aiogram обрабатывает апдейты конкурентно, и два быстрых тапа
+            # «➕ Добавить день» успевали прочитать один и тот же MAX(day_order)
+            # раньше, чем первый вставил строку: оба дня получали один порядок, а
+            # «поднять день» после этого переставлял не тот, потому что сортировка
+            # становилась неоднозначной. Тот же приём, что в append_set и
+            # create_block — там этот же race уже был найден и закрыт.
+            cur = await db.execute(
+                "INSERT INTO routines (user_id, name, created_at, program_id, day_order) "
+                "SELECT ?, ?, ?, ?, COALESCE(MAX(day_order), -1) + 1 "
+                "FROM routines WHERE program_id = ?",
+                (user_id, name, now_iso(), program_id, program_id),
+            )
+        else:
+            cur = await db.execute(
+                "INSERT INTO routines (user_id, name, created_at, program_id, day_order) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (user_id, name, now_iso(), program_id, day_order or 0),
+            )
+        await db.commit()
         return cur.lastrowid
 
 
@@ -3293,15 +3309,15 @@ async def merge_programs(user_id: int, source_id: int, target_id: int) -> None:
         return
     if source["user_id"] != user_id or target["user_id"] != user_id:
         return
-    order = await next_day_order(target_id)
     for day in await list_program_days_by_id(source_id):
         async with _write_lock:
             await conn().execute(
-                "UPDATE routines SET program_id = ?, day_order = ? WHERE id = ?",
-                (target_id, order, day["id"]),
+                "UPDATE routines SET program_id = ?, day_order = "
+                "(SELECT COALESCE(MAX(day_order), -1) + 1 FROM routines WHERE program_id = ?) "
+                "WHERE id = ?",
+                (target_id, target_id, day["id"]),
             )
             await conn().commit()
-        order += 1
     async with _write_lock:
         await conn().execute("DELETE FROM programs WHERE id = ?", (source_id,))
         await conn().commit()

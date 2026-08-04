@@ -6,6 +6,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
 
+import config
 from fsm import ExerciseManage
 from handlers import exercises
 
@@ -806,3 +807,43 @@ async def test_group_creation_leaves_a_single_screen(fresh_db, user_id):
     assert "выбери группу мышц" in text
     groups = {g["name"] for g in await fresh_db.list_muscle_groups(user_id)}
     assert "Предплечья" in groups
+
+
+async def test_an_overlong_description_is_refused_not_stored(fresh_db, user_id):
+    """Описание уезжает в подпись к фото, а у подписи лимит 1024, не 4096.
+    Проверки не было нигде, и карточка упражнения с фото после длинного описания
+    падала при каждом открытии — пока человек не догадается сократить текст,
+    которого он больше не видит.
+
+    Отказ, а не молчаливая обрезка: человек написал это осознанно, и вернуть ему
+    обрубок хуже, чем сказать, сколько лишнего.
+    """
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    ex_id = await db.create_exercise(user_id, "pull down", group_id)
+
+    state = await _make_state(user_id, exm_group_id=group_id, exm_exercise_id=ex_id)
+    await state.set_state(ExerciseManage.editing_description)
+    message = _make_message(user_id, "я" * (config.MAX_EXERCISE_DESCRIPTION_LENGTH + 1))
+
+    await exercises.exm_description_entered(message, state)
+
+    assert (await db.get_exercise(ex_id))["description"] is None
+    # Состояние остаётся: можно переписать, не открывая карточку заново.
+    assert await state.get_state() == ExerciseManage.editing_description
+    reply = message.answer.await_args.args[0]
+    assert str(config.MAX_EXERCISE_DESCRIPTION_LENGTH) in reply
+    assert str(config.MAX_EXERCISE_DESCRIPTION_LENGTH + 1) in reply
+
+
+async def test_a_description_at_the_limit_still_goes_through(fresh_db, user_id):
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    ex_id = await db.create_exercise(user_id, "pull down", group_id)
+
+    state = await _make_state(user_id, exm_group_id=group_id, exm_exercise_id=ex_id)
+    await state.set_state(ExerciseManage.editing_description)
+    text = "я" * config.MAX_EXERCISE_DESCRIPTION_LENGTH
+    await exercises.exm_description_entered(_make_message(user_id, text), state)
+
+    assert (await db.get_exercise(ex_id))["description"] == text

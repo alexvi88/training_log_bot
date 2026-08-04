@@ -9,6 +9,7 @@ import pytest
 
 import ai_trainer
 import config
+import timeutil
 
 pytestmark = pytest.mark.asyncio
 
@@ -148,13 +149,11 @@ async def test_bodyweight_history_does_not_leak_other_users_data(fresh_db, user_
 async def test_weekly_volume_tool_counts_and_classifies(fresh_db, user_id, monkeypatch):
     import datetime as dt
 
-    # Freeze "today" so the seeded workout lands in the current week.
-    class _FixedDate(dt.date):
-        @classmethod
-        def today(cls):
-            return cls(2026, 7, 15)  # Wednesday
-
-    monkeypatch.setattr(ai_trainer.dt, "date", _FixedDate)
+    # Фиксируем «сегодня» там, откуда тренер его теперь берёт — из часового пояса
+    # пользователя, а не из даты сервера.
+    monkeypatch.setattr(
+        ai_trainer.timeutil, "user_today", lambda user: dt.date(2026, 7, 15)  # среда
+    )
 
     group_id = (await fresh_db.list_muscle_groups(None, global_only=True))[0]["id"]
     ex_id = await fresh_db.create_exercise(user_id, "Жим", group_id)
@@ -749,7 +748,9 @@ async def test_ask_plain_sends_plain_text_content_without_image(fresh_db, user_i
 
 
 async def test_to_xai_messages_includes_image_content():
-    messages = ai_trainer._to_xai_messages([], "что на фото?", _FAKE_IMAGE_DATA_URL)
+    messages = ai_trainer._to_xai_messages(
+        [], "что на фото?", _FAKE_IMAGE_DATA_URL, system_prompt="системный промпт"
+    )
 
     last = messages[-1]
     assert [c.WhichOneof("content") for c in last.content] == ["text", "image_url"]
@@ -758,7 +759,7 @@ async def test_to_xai_messages_includes_image_content():
 
 
 async def test_to_xai_messages_text_only_without_image():
-    messages = ai_trainer._to_xai_messages([], "просто текст")
+    messages = ai_trainer._to_xai_messages([], "просто текст", system_prompt="системный промпт")
 
     last = messages[-1]
     assert [c.WhichOneof("content") for c in last.content] == ["text"]
@@ -891,12 +892,9 @@ async def test_program_adherence_counts_sessions_and_days_since_last(fresh_db, u
     сказать, реально ли по ней ходят и какие дни забрасывают."""
     import datetime as dt
 
-    class _FixedDate(dt.date):
-        @classmethod
-        def today(cls):
-            return cls(2026, 3, 20)
-
-    monkeypatch.setattr(ai_trainer.dt, "date", _FixedDate)
+    monkeypatch.setattr(
+        ai_trainer.timeutil, "user_today", lambda user: dt.date(2026, 3, 20)
+    )
 
     program_id = await fresh_db.create_program(user_id, "PPL")
     push = await fresh_db.create_routine(user_id, "Толкай", program_id=program_id)
@@ -1028,3 +1026,52 @@ async def test_weekly_food_average_is_over_days_logged_not_over_seven(fresh_db, 
 
     assert "2100 ккал" in line
     assert "1 дн. из 7" in line
+
+
+async def test_the_trainer_uses_the_athletes_day_not_the_servers(fresh_db, user_id):
+    """Сервер живёт в UTC, а у человека в UTC+10 сутки начинаются на десять часов
+    раньше: тренировка в 00:30 по местному лежит в базе как вчерашняя UTC-дата.
+
+    `timeutil` в ai_trainer не импортировался вовсе, а `dt.date.today()`
+    встречался девять раз — включая строку «Сегодня …», которую тренер вписывает
+    себе в промпт. На вопрос «сколько я сегодня сделал» он отвечал про чужой день.
+    """
+    import datetime as dt
+
+    await fresh_db.update_user(user_id, tz_offset=10)
+    server_today = dt.datetime.now().date()
+
+    trainer_today = await ai_trainer._user_today(user_id)
+
+    # У пояса +10 «сегодня» либо совпадает с серверным, либо уже следующее — но
+    # никогда не берётся из UTC вслепую.
+    assert trainer_today in (server_today, server_today + dt.timedelta(days=1))
+    assert trainer_today == timeutil.user_today(await fresh_db.get_user(user_id))
+
+
+async def test_the_date_in_the_prompt_is_the_athletes_date():
+    import datetime as dt
+
+    prompt = ai_trainer._system_prompt(dt.date(2026, 8, 4))
+
+    assert "Сегодня 2026-08-04." in prompt
+
+
+async def test_the_search_prompts_carry_a_date_too():
+    """Их три, и раньше каждый брал дату сервера самостоятельно. Дата теперь
+    обязательный аргумент, чтобы забыть её было нельзя."""
+    import datetime as dt
+
+    day = dt.date(2026, 8, 4)
+
+    assert "2026-08-04" in ai_trainer._search_system_prompt(day)
+    assert "2026-08-04" in ai_trainer._search_decision_system_prompt(day)
+
+
+async def test_building_xai_messages_without_a_prompt_is_refused():
+    """Дефолт «собери системный промпт сам» означал бы промпт без даты
+    пользователя — то есть тихое возвращение той же ошибки."""
+    import pytest as _pytest
+
+    with _pytest.raises(ValueError):
+        ai_trainer._to_xai_messages([], "вопрос")
