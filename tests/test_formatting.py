@@ -256,6 +256,21 @@ def test_ai_markdown_to_html_strips_hashes_mid_text():
     assert "<b>Заголовок</b>" in text
 
 
+def test_a_heading_is_given_its_own_paragraph():
+    """"## X" is a block and spaces itself out; "**X**" without a blank line
+    around it is just a bold run inside the neighbouring paragraph, and the
+    heading ends up welded to the text."""
+    out = formatting.markdown_headings_to_bold("текст.\n## Что дальше\nпродолжение")
+    assert out == "текст.\n\n**Что дальше**\n\nпродолжение"
+
+
+def test_a_heading_the_model_already_spaced_does_not_get_a_second_blank_line():
+    spaced = "текст.\n\n## Что дальше\n\nпродолжение"
+    assert formatting.markdown_headings_to_bold(spaced) == (
+        "текст.\n\n**Что дальше**\n\nпродолжение"
+    )
+
+
 def test_ai_markdown_to_html_covers_the_rest_of_the_inline_markup():
     """Everything the rich path renders natively has to survive the plain-message
     path too — otherwise old clients get raw markdown instead of the answer."""
@@ -332,6 +347,25 @@ def test_has_markdown_table_only_fires_on_a_real_table():
     assert not formatting.has_markdown_table("Жим | присед — выбирай сам.")
     assert not formatting.has_markdown_table("## Итог\n\n- тяга 260\n- присед 200")
     assert not formatting.has_markdown_table("")
+
+
+def test_a_table_whose_cells_are_sentences_is_not_worth_drawing_as_one():
+    """Cells wrap to four lines on a phone, every row grows to match its tallest
+    cell, and the table becomes a grid of whitespace. The same pairs read better
+    as lines, so this one goes out as an ordinary message."""
+    prose = (
+        "| Нюанс | Смысл |\n|---|---|\n"
+        "| Поясница | Тяжёлый присед плюс тяжёлая тяга в одной неделе — надо "
+        "разводить их по разным дням и не геройствовать |"
+    )
+    assert not formatting.has_markdown_table(prose)
+    # ...and it still renders as readable lines rather than pipes.
+    assert "|" not in formatting.ai_markdown_to_html(prose)
+
+
+def test_a_table_of_short_cells_is_still_worth_drawing():
+    numbers = "| Движение | Подходы |\n|---|---|\n| squat | 3×5–10 |\n| pull down | 2×5–10 |"
+    assert formatting.has_markdown_table(numbers)
 
 
 def test_ai_markdown_to_html_leaves_no_pipes_from_a_table():
