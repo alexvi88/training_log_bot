@@ -9,11 +9,13 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from aiogram.dispatcher.event.bases import UNHANDLED
 from aiogram.filters import CommandObject
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
 
+import keyboards
 from handlers import sharing
 
 pytestmark = pytest.mark.asyncio
@@ -60,8 +62,57 @@ async def _routine_with_exercises(db, user_id: int):
 
 
 async def _last_share_token(db) -> str:
-    cur = await db.conn().execute("SELECT token FROM shared_items ORDER BY created_at DESC LIMIT 1")
+    # rowid, а не created_at: две визитки в одном тесте создаются в пределах
+    # одной секунды, и по времени «последняя» была бы какой попало.
+    cur = await db.conn().execute("SELECT token FROM shared_items ORDER BY rowid DESC LIMIT 1")
     return (await cur.fetchone())["token"]
+
+
+async def _last_payload(db) -> dict:
+    row = await db.get_shared_item(await _last_share_token(db))
+    return json.loads(row["payload"])
+
+
+async def _tap(user_id: int, data: str):
+    """Нажать кнопку через настоящий роутер, а не выбранной руками ручкой.
+
+    Тесты, которые звали sharing.share_program напрямую и подставляли id сами,
+    как раз и не поймали расхождение: кнопка отдавала id программы, а
+    обработчик читал его как id дня.
+    """
+    callback = _make_callback(user_id, data)
+    result = await sharing.router.callback_query.trigger(callback, state=await _state(user_id))
+    assert result is not UNHANDLED, f"кнопку {data} не забрал никто"
+    return callback
+
+
+async def _program(db, user_id: int, name: str, days=("Ноги", "Верх"), empty=()) -> int:
+    """Программа с днями — возвращает id ПРОГРАММЫ, не дня-якоря.
+
+    `empty` — имена дней, которые остаются без упражнений: такой день в визитку
+    не попадает, и это одна из двух причин, по которым программа уезжает не
+    целиком.
+    """
+    gid = await db.create_muscle_group(user_id, f"Мышцы {name}")
+    program_id = await db.create_program(user_id, name)
+    for i, day_name in enumerate(days):
+        routine_id = await db.create_routine(user_id, day_name, program_id=program_id)
+        if day_name in empty:
+            continue
+        ex_id = await db.create_exercise(user_id, f"{name} — упражнение {i}", gid)
+        await db.add_routine_exercise(routine_id, ex_id, 0, "3×10")
+    return program_id
+
+
+def _share_button(kb) -> str:
+    """callback_data кнопки «Поделиться» — из самой клавиатуры, а не собранная
+    в тесте по образцу обработчика."""
+    return next(
+        b.callback_data
+        for row in kb.inline_keyboard
+        for b in row
+        if b.text.startswith("📤")
+    )
 
 
 # ---------- визитка ----------
@@ -95,15 +146,15 @@ async def _program_with_two_days(db, user_id: int) -> int:
     await db.add_routine_exercise(day1, squat, 0, "3×5")
     day2 = await db.create_routine(user_id, "Верх", program_name="Сплит")
     await db.add_routine_exercise(day2, bench, 0, "4×6–8")
-    return day1  # anchor — любой день программы
+    return (await db.find_program_by_name(user_id, "Сплит"))["id"]
 
 
 async def test_share_program_snapshots_every_day(fresh_db, user_id):
     """«Поделиться программой» — вся многодневка одной визиткой, не день за раз."""
     db = fresh_db
-    anchor_id = await _program_with_two_days(db, user_id)
+    program_id = await _program_with_two_days(db, user_id)
 
-    await sharing.share_program(_make_callback(user_id, f"share:pgm:{anchor_id}"), await _state(user_id))
+    await _tap(user_id, f"share:prg:{program_id}")
 
     row = await db.get_shared_item(await _last_share_token(db))
     assert row["kind"] == "program"
@@ -115,8 +166,8 @@ async def test_share_program_snapshots_every_day(fresh_db, user_id):
 
 async def test_accepting_a_shared_program_creates_one_routine_per_day(fresh_db, user_id):
     db = fresh_db
-    anchor_id = await _program_with_two_days(db, user_id)
-    await sharing.share_program(_make_callback(user_id, f"share:pgm:{anchor_id}"), await _state(user_id))
+    program_id = await _program_with_two_days(db, user_id)
+    await _tap(user_id, f"share:prg:{program_id}")
     token = await _last_share_token(db)
 
     recipient = (await db.get_or_create_user(telegram_id=555, username="r3"))["telegram_id"]
@@ -306,24 +357,20 @@ async def _big_program(db, user_id: int, days: int = 6, exercises_per_day: int =
         await db.create_exercise(user_id, f"Упражнение с длинным названием номер {i}", gid)
         for i in range(exercises_per_day)
     ]
-    anchor_id = None
     for d in range(days):
         routine_id = await db.create_routine(user_id, f"День {d + 1}", program_name="Большая сборная")
-        if anchor_id is None:
-            anchor_id = routine_id
         for order, ex_id in enumerate(exercise_ids):
             await db.add_routine_exercise(routine_id, ex_id, order, "4×8-12 с очень длинным пояснением")
-    return anchor_id
+    return (await db.find_program_by_name(user_id, "Большая сборная"))["id"]
 
 
 async def test_share_program_fits_telegram_limit_for_6x30(fresh_db, user_id):
     from formatting import MESSAGE_LIMIT, telegram_length
 
     db = fresh_db
-    anchor_id = await _big_program(db, user_id, days=6, exercises_per_day=30)
-    callback = _make_callback(user_id, f"share:pgm:{anchor_id}")
+    program_id = await _big_program(db, user_id, days=6, exercises_per_day=30)
 
-    await sharing.share_program(callback, await _state(user_id))
+    callback = await _tap(user_id, f"share:prg:{program_id}")
 
     # Не должно падать (TelegramBadRequest в проде) — сообщение реально отправлено.
     callback.message.answer.assert_awaited()
@@ -333,8 +380,8 @@ async def test_share_program_fits_telegram_limit_for_6x30(fresh_db, user_id):
 
 async def test_snapshot_itself_is_capped_at_max_shared_days(fresh_db, user_id):
     db = fresh_db
-    anchor_id = await _big_program(db, user_id, days=6, exercises_per_day=30)
-    await sharing.share_program(_make_callback(user_id, f"share:pgm:{anchor_id}"), await _state(user_id))
+    program_id = await _big_program(db, user_id, days=6, exercises_per_day=30)
+    await _tap(user_id, f"share:prg:{program_id}")
 
     row = await db.get_shared_item(await _last_share_token(db))
     payload = json.loads(row["payload"])
@@ -346,8 +393,8 @@ async def test_recipient_preview_of_big_program_also_fits(fresh_db, user_id):
     from formatting import MESSAGE_LIMIT, telegram_length
 
     db = fresh_db
-    anchor_id = await _big_program(db, user_id, days=6, exercises_per_day=30)
-    await sharing.share_program(_make_callback(user_id, f"share:pgm:{anchor_id}"), await _state(user_id))
+    program_id = await _big_program(db, user_id, days=6, exercises_per_day=30)
+    await _tap(user_id, f"share:prg:{program_id}")
     token = await _last_share_token(db)
 
     recipient = (await db.get_or_create_user(telegram_id=888, username="r6"))["telegram_id"]
@@ -366,8 +413,8 @@ async def test_recipient_preview_of_big_program_also_fits(fresh_db, user_id):
 
 async def test_cannot_import_own_shared_program_via_share_add(fresh_db, user_id):
     db = fresh_db
-    anchor_id = await _program_with_two_days(db, user_id)
-    await sharing.share_program(_make_callback(user_id, f"share:pgm:{anchor_id}"), await _state(user_id))
+    program_id = await _program_with_two_days(db, user_id)
+    await _tap(user_id, f"share:prg:{program_id}")
     token = await _last_share_token(db)
 
     before = await db.list_programs(user_id)
@@ -398,8 +445,8 @@ async def test_cannot_import_own_shared_routine_via_share_add(fresh_db, user_id)
 
 async def test_importing_the_same_program_twice_does_not_merge(fresh_db, user_id):
     db = fresh_db
-    anchor_id = await _program_with_two_days(db, user_id)
-    await sharing.share_program(_make_callback(user_id, f"share:pgm:{anchor_id}"), await _state(user_id))
+    program_id = await _program_with_two_days(db, user_id)
+    await _tap(user_id, f"share:prg:{program_id}")
     token = await _last_share_token(db)
 
     recipient = (await db.get_or_create_user(telegram_id=999, username="r7"))["telegram_id"]
@@ -420,8 +467,8 @@ async def test_importing_into_existing_same_name_program_disambiguates(fresh_db,
     """Если у получателя уже есть своя программа с таким именем — импорт не
     должен подмешать чужие дни в неё."""
     db = fresh_db
-    anchor_id = await _program_with_two_days(db, user_id)
-    await sharing.share_program(_make_callback(user_id, f"share:pgm:{anchor_id}"), await _state(user_id))
+    program_id = await _program_with_two_days(db, user_id)
+    await _tap(user_id, f"share:prg:{program_id}")
     token = await _last_share_token(db)
 
     recipient = (await db.get_or_create_user(telegram_id=1000, username="r8"))["telegram_id"]
@@ -563,3 +610,133 @@ async def test_share_card_keyboard_includes_revoke_button(fresh_db, user_id):
     kb = callback.message.answer.await_args.kwargs["reply_markup"]
     callbacks = [b.callback_data for row in kb.inline_keyboard for b in row]
     assert any(cb and cb.startswith("share:revoke:") for cb in callbacks)
+
+
+# ---------- кнопка «Поделиться» и обработчик должны говорить об одной программе ----------
+
+
+async def test_share_button_shares_the_program_it_was_built_for(fresh_db, user_id):
+    """У кого две программы, тот делился не той: кнопка отдаёт id программы, а
+    обработчик читал его как id дня — и день с таким id принадлежал соседней
+    программе. callback_data здесь берётся из самой клавиатуры, поэтому
+    разойтись им больше нельзя."""
+    db = fresh_db
+    await _program(db, user_id, "Программа А")
+    program_b = await _program(db, user_id, "Программа Б", days=("Толкай", "Тяни"))
+    days_b = await db.list_program_days_by_id(program_b)
+
+    callback = await _tap(user_id, _share_button(keyboards.program_edit_keyboard(days_b, program_b)))
+
+    payload = await _last_payload(db)
+    assert payload["name"] == "Программа Б"
+    assert [d["name"] for d in payload["days"]] == ["Толкай", "Тяни"]
+    # Программа уехала целиком — пугать потерей нечем.
+    assert "⚠️" not in callback.message.answer.await_args.args[0]
+
+
+async def test_old_share_buttons_addressed_by_day_reach_the_same_program(fresh_db, user_id):
+    """Кнопки в чатах адресовались днём-якорем (у программы не было своего id).
+    Такое сообщение должно вести в ту же программу, что и нынешняя кнопка, а не
+    переставать работать."""
+    db = fresh_db
+    await _program(db, user_id, "Программа А")
+    program_b = await _program(db, user_id, "Программа Б", days=("Толкай", "Тяни"))
+    day = (await db.list_program_days_by_id(program_b))[1]
+
+    await _tap(user_id, f"share:prg:{program_b}")
+    by_program = await _last_payload(db)
+    await _tap(user_id, f"share:pgm:{day['id']}")
+    by_day = await _last_payload(db)
+
+    assert by_program["name"] == "Программа Б"
+    assert by_day == by_program
+
+
+async def test_a_standalone_routine_id_never_turns_into_someone_elses_program(fresh_db, user_id):
+    """Ни один из двух входов не должен превратить id одиночной программы в чужую
+    многодневку: у одиночки программы нет, делятся ей через share:rt:."""
+    db = fresh_db
+    await _program(db, user_id, "Программа А")
+    routine_id = await _routine_with_exercises(db, user_id)
+
+    for data in (f"share:prg:{routine_id}", f"share:pgm:{routine_id}"):
+        callback = await _tap(user_id, data)
+        callback.message.answer.assert_not_awaited()
+        assert "не найдена" in callback.answer.await_args.args[0], data
+
+
+# ---------- программа, которая не уехала целиком ----------
+
+
+async def test_days_over_the_card_limit_are_reported_to_both_sides(fresh_db, user_id):
+    """Восьмидневка уезжала шестью днями молча: отправителю бот говорил «Визитка
+    готова», получателю — «6 дней», и оба считали, что передали программу
+    целиком."""
+    db = fresh_db
+    program_id = await _program(
+        db, user_id, "Восьмидневка", days=tuple(f"День {i}" for i in range(1, 9))
+    )
+
+    callback = await _tap(user_id, f"share:prg:{program_id}")
+
+    payload = await _last_payload(db)
+    assert len(payload["days"]) == sharing.MAX_SHARED_DAYS
+    assert payload["total_days"] == 8
+
+    # Отправитель: и в самой визитке, и в ответе на нажатие.
+    text = callback.message.answer.await_args.args[0]
+    assert "6 дней из 8" in text
+    assert "6 дней из 8" in callback.answer.await_args.args[0]
+    # Число в тексте — про то, что реально в визитке.
+    assert [d["name"] for d in payload["days"] if d["name"] in text] == [
+        d["name"] for d in payload["days"]
+    ]
+
+    # Получатель — до того, как решит забирать.
+    recipient = (await db.get_or_create_user(telegram_id=1500, username="r13"))["telegram_id"]
+    msg = _make_message(recipient)
+    await sharing.open_shared(
+        msg,
+        CommandObject(command="start", args=f"sh_{await _last_share_token(db)}"),
+        await _state(recipient),
+    )
+    assert "6 дней из 8" in msg.answer.await_args.args[0]
+
+
+async def test_empty_days_do_not_eat_the_limit_but_are_counted_as_missing(fresh_db, user_id):
+    """Пустой день не передаётся (получателю он ничего не говорит), но и место в
+    лимите занимать не должен — иначе семидневка с одним пустым днём уезжала
+    пятью днями вместо шести, и опять молча."""
+    db = fresh_db
+    program_id = await _program(
+        db,
+        user_id,
+        "Семидневка",
+        days=tuple(f"День {i}" for i in range(1, 8)),
+        empty=("День 1",),
+    )
+
+    callback = await _tap(user_id, f"share:prg:{program_id}")
+
+    payload = await _last_payload(db)
+    assert [d["name"] for d in payload["days"]] == [f"День {i}" for i in range(2, 8)]
+    assert payload["total_days"] == 7
+    assert "6 дней из 7" in callback.message.answer.await_args.args[0]
+
+
+async def test_a_program_with_one_empty_day_says_which_rule_dropped_it(fresh_db, user_id):
+    """Причина потери — не лимит визитки, а пустой день: человеку нужно знать,
+    что чинить (положить в день упражнения), а не что уперся в предел."""
+    db = fresh_db
+    program_id = await _program(
+        db, user_id, "Трёхдневка", days=("Толкай", "Тяни", "Ноги"), empty=("Тяни",)
+    )
+
+    callback = await _tap(user_id, f"share:prg:{program_id}")
+
+    payload = await _last_payload(db)
+    assert [d["name"] for d in payload["days"]] == ["Толкай", "Ноги"]
+    text = callback.message.answer.await_args.args[0]
+    assert "2 дня из 3" in text
+    assert "пустые дни не передаются" in text
+    assert "2 дня из 3" in callback.answer.await_args.args[0]

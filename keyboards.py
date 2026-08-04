@@ -561,7 +561,11 @@ def program_edit_keyboard(days, program_id: int) -> InlineKeyboardMarkup:
     # Программа целиком, а не день — тот же токен-визитка, но со всеми днями
     # разом: делиться по одному дню значило собирать программу получателю
     # вручную из нескольких пересланных сообщений.
-    b.button(text="📤 Поделиться", callback_data=f"share:pgm:{program_id}")
+    #
+    # Префикс share:prg: (а не share:pgm:) — id здесь программы, а старый
+    # префикс остался за кнопками, которые адресовались днём-якорем; см.
+    # handlers.sharing.share_program_legacy и ту же пару rt:prg:/rt:pgm:.
+    b.button(text="📤 Поделиться", callback_data=f"share:prg:{program_id}")
     b.button(text="🗑 Удалить", callback_data=f"rt:pgmdelask:{program_id}")
     b.button(text="⬅️ Назад", callback_data=f"rt:prg:{program_id}")
     # Работа с днями — полной шириной: она про состав программы, а не про
