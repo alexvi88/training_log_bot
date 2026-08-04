@@ -256,6 +256,55 @@ def test_ai_markdown_to_html_strips_hashes_mid_text():
     assert "<b>Заголовок</b>" in text
 
 
+def test_ai_markdown_to_html_covers_the_rest_of_the_inline_markup():
+    """Everything the rich path renders natively has to survive the plain-message
+    path too — otherwise old clients get raw markdown instead of the answer."""
+    assert formatting.ai_markdown_to_html("_курсив_") == "<i>курсив</i>"
+    assert formatting.ai_markdown_to_html("*курсив*") == "<i>курсив</i>"
+    assert formatting.ai_markdown_to_html("~~было~~") == "<s>было</s>"
+    assert formatting.ai_markdown_to_html("жми `progress`") == "жми <code>progress</code>"
+    assert (
+        formatting.ai_markdown_to_html("[пруф](https://ex.com)")
+        == '<a href="https://ex.com">пруф</a>'
+    )
+
+
+def test_ai_markdown_to_html_renders_a_fenced_code_block():
+    assert "<pre>3x5\n</pre>" in formatting.ai_markdown_to_html("```\n3x5\n```")
+
+
+def test_ai_markdown_to_html_turns_a_rule_into_a_divider_line():
+    assert formatting.DIVIDER in formatting.ai_markdown_to_html("верх\n\n---\n\nниз")
+
+
+def test_ai_markdown_to_html_leaves_underscores_inside_words_alone():
+    # snake_case identifiers and grouped numbers are not italics.
+    text = "поле get_training_overview и 100_000 кг"
+    assert formatting.ai_markdown_to_html(text) == text
+
+
+def test_ai_markdown_to_html_does_not_italicise_list_bullets():
+    text = "* тяга 260\n* присед 200"
+    assert formatting.ai_markdown_to_html(text) == text
+
+
+def test_ai_markdown_to_html_leaves_arithmetic_stars_alone():
+    text = "5 * 3 = 15 и 2 * 2"
+    assert formatting.ai_markdown_to_html(text) == text
+
+
+def test_ai_markdown_to_html_still_escapes_html_inside_markup():
+    out = formatting.ai_markdown_to_html("**<script>**")
+    assert out == "<b>&lt;script&gt;</b>"
+
+
+def test_ai_markdown_to_html_does_not_let_markup_span_paragraphs():
+    # A single stray ** used to be harmless; it must not swallow everything up
+    # to the next one several paragraphs away.
+    text = "**жирный\n\nобычный абзац\n\nещё **хвост"
+    assert "<b>" not in formatting.ai_markdown_to_html(text)
+
+
 # ---------- markdown tables in the plain-message fallback ----------
 
 

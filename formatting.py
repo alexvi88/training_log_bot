@@ -475,11 +475,47 @@ def fit_workout_text(build_summary, suffix: str, limit: int = MESSAGE_LIMIT) -> 
     return build_summary(budget) + suffix
 
 
-_MD_BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
 _MD_HEADING_RE = re.compile(r"^#{1,6}[ \t]+(.*)$", re.MULTILINE)
+_MD_DIVIDER_RE = re.compile(r"^[ \t]*-{3,}[ \t]*$", re.MULTILINE)
 # Ячейку от ячейки отделяет неэкранированная палка: «\|» внутри текста ячейки
 # сама по себе разделителем не является.
 _MD_CELL_SPLIT_RE = re.compile(r"(?<!\\)\|")
+
+# Вся строчная разметка одним проходом. Порядок веток значим: «**» проверяется
+# раньше «*», иначе жирный разобрался бы как курсив вокруг пустоты.
+#
+# Ни одна ветка, кроме блока кода, не переходит на другую строку (`[^\n]`,
+# точка без DOTALL): непарная звёздочка в одном абзаце иначе съела бы полтекста
+# до следующей такой же. Курсиву дополнительно запрещено начинаться с пробела —
+# так пункт списка «* тяга 260» не превращается в курсив до следующей звёздочки,
+# — и стоять вплотную к букве или цифре, чтобы snake_case и «100_000» остались
+# собой.
+_MD_MARKUP_RE = re.compile(
+    r"(?s:```[^\n]*\n(?P<pre>.*?)```)"
+    r"|`(?P<code>[^`\n]+)`"
+    r"|\*\*(?P<bold>[^\n]+?)\*\*"
+    r"|__(?P<bold_alt>[^\n]+?)__"
+    r"|~~(?P<strike>[^\n]+?)~~"
+    r"|\[(?P<link>[^\]\n]+)\]\((?P<href>[^)\s]+)\)"
+    r"|(?<![\w*])\*(?P<italic>[^*\s][^*\n]*)\*(?![\w*])"
+    r"|(?<![\w_])_(?P<italic_alt>[^_\s][^_\n]*)_(?![\w_])"
+)
+
+
+def _render_markup(m: re.Match) -> str:
+    """Одно совпадение _MD_MARKUP_RE → тег Telegram. Содержимое экранируется
+    здесь же: наружу из этой функции неэкранированный текст не выходит."""
+    if m.group("pre") is not None:
+        return f"<pre>{escape(m.group('pre'))}</pre>"
+    if m.group("code") is not None:
+        return f"<code>{escape(m.group('code'))}</code>"
+    if m.group("link") is not None:
+        return f'<a href="{escape(m.group("href"), quote=True)}">{escape(m.group("link"))}</a>'
+    for group, tag in (("bold", "b"), ("bold_alt", "b"), ("strike", "s"),
+                       ("italic", "i"), ("italic_alt", "i")):
+        if m.group(group) is not None:
+            return f"<{tag}>{escape(m.group(group))}</{tag}>"
+    return escape(m.group(0))
 
 
 def _is_table_delimiter(line: str) -> bool:
@@ -556,22 +592,28 @@ def ai_markdown_to_html(text: str) -> str:
     остаются настоящими. Здесь же вся разметка сводится к тому немногому, что
     понимает обычное сообщение:
 
-    - **жирный** → <b>. Модель обязана оборачивать в ** названия упражнений;
-      всё остальное экранируется как обычный текст, поэтому шальная звёздочка
-      или «<» в ответе не сломают сообщение. Пара **, разорванная на границе
-      кусков (см. split_for_telegram), в обоих кусках останется буквальными
+    - **жирный** → <b>, *курсив* → <i>, ~~зачёркнутый~~ → <s>, `код` и блоки
+      кода → <code>/<pre>, [текст](ссылка) → <a>. Всё, что разметкой не
+      является, экранируется как обычный текст, поэтому шальная звёздочка или
+      «<» в ответе не сломают сообщение. Пара **, разорванная на границе кусков
+      (см. split_for_telegram), в обоих кусках останется буквальными
       звёздочками, а не открытым тегом.
-    - «### Заголовок» → жирная строка: заголовков у обычного сообщения нет,
-      и решётки доехали бы до пользователя как есть.
+    - «### Заголовок» → жирная строка, «---» → линия: ни заголовков, ни
+      разделителей у обычного сообщения нет, и то и другое доехало бы до
+      пользователя решётками и дефисами.
     - таблицы → строки (см. markdown_tables_to_lines).
+
+    Списки не трогаем: «- тяга 260» и «1. присед» читаются как список и без
+    всякой разметки — а вот всё остальное выше без разбора доезжало бы сырым.
     """
     text = markdown_tables_to_lines(text)
+    text = _MD_DIVIDER_RE.sub(DIVIDER, text)
     text = _MD_HEADING_RE.sub(lambda m: f"**{m.group(1)}**", text)
     parts = []
     pos = 0
-    for m in _MD_BOLD_RE.finditer(text):
+    for m in _MD_MARKUP_RE.finditer(text):
         parts.append(escape(text[pos : m.start()]))
-        parts.append(f"<b>{escape(m.group(1))}</b>")
+        parts.append(_render_markup(m))
         pos = m.end()
     parts.append(escape(text[pos:]))
     return "".join(parts)
