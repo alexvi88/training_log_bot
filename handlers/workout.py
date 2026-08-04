@@ -611,38 +611,80 @@ def _try_claim_weight_confirm(user_id: int) -> bool:
     return True
 
 
+# Окно, за которое ищутся самые частые движения, и сколько тренировок берётся в
+# спарклайн. Восемь недель — то же окно, по которому считается звание
+# (analytics.RANK_FREQUENCY_WEEKS): «что я сейчас делаю», а не «что делал когда-то».
+_LIFT_WINDOW_WEEKS = 8
+_LIFT_SESSIONS = 8
+_LIFT_COUNT = 3
+
+
 async def _menu_view(user_id: int) -> tuple[str, bytes | None]:
-    """Greeting, plus a year heatmap image (with the streak/this-week/30-day
-    dashboard stats and the per-muscle-group volume panel drawn into it) once the
-    user has any finished workouts.
+    """Greeting, plus the summary image — headline, tiles, weekly volume per
+    muscle group, the flattened year calendar and the athlete's most-frequent
+    movements with their e1RM trend — once they have any finished workouts.
     """
-    today = timeutil.user_today(await db.get_user(user_id))
+    user = await db.get_user(user_id)
+    today = timeutil.user_today(user)
     dates = [dt.date.fromisoformat(d) for d in await db.list_finished_workout_dates(user_id)]
     if not dates:
         return _ONBOARDING, None
+
     window_start = today - dt.timedelta(days=analytics.VOLUME_WINDOW_DAYS - 1)
     volume_title, volume_rows = formatting.weekly_volume_panel(
         await db.weekly_volume_by_group(user_id, window_start.isoformat(), today.isoformat()),
         await db.list_muscle_groups(user_id),
     )
-    # Объём входит в ключ кэша: он меняется от подходов, а не от тренировок, так
-    # что по (дата, число тренировок) картинка застыла бы до следующей открытой
-    # тренировки — дописал четыре подхода в уже закрытую, а полосы прежние.
-    # Ещё он меняется сам по себе от того, что день прошёл и подход выпал из окна
-    # семи дней, — это ловит today в ключе.
-    cache_key = (today, len(dates), max(dates), tuple(volume_rows))
+    formula = user["e1rm_formula"]
+    tonnage = sum(
+        (await db.daily_tonnage(user_id, window_start.isoformat(), today.isoformat())).values()
+    )
+    records = await db.e1rm_record_count(user_id, window_start.isoformat(), formula)
+    dashboard = analytics.compute_dashboard(dates, today)
+
+    # Движения — самые частые за окно, по числу тренировок. Не «базовые»: типа
+    # движения в базе нет, и выбирать жим/присед/тягу пришлось бы по каталожным
+    # именам, а у человека со своими названиями список оказался бы пустым.
+    lift_start = today - dt.timedelta(weeks=_LIFT_WINDOW_WEEKS)
+    lifts: list[tuple[str, list[float]]] = []
+    for row in await db.top_exercises_by_frequency(
+        user_id, lift_start.isoformat(), today.isoformat(), limit=_LIFT_COUNT
+    ):
+        series = await db.exercise_e1rm_series(user_id, row["id"], _LIFT_SESSIONS, formula)
+        lifts.append((row["display_name"], series))
+
+    agg = await db.hall_of_fame_aggregates(user_id)
+    rank = analytics.rank_for(
+        len(dates),
+        formatting.to_kg(agg["tonnage"], user["unit"]),
+        analytics.workouts_per_week(dates, today),
+    )
+    headline = formatting.menu_headline(dashboard)
+    tiles = formatting.menu_tiles(dashboard, tonnage, records, user["unit"])
+    lift_cards = formatting.menu_lift_cards(lifts, user["unit"])
+
+    # Ключ кэша собран из того, что реально нарисуется, а не из «даты и числа
+    # тренировок»: объём, тоннаж и e1RM меняются от подходов, поэтому по прежнему
+    # ключу картинка застывала — дописал четыре подхода в уже закрытую
+    # тренировку, а на экране всё прежнее. Серии округляются, чтобы дрожание
+    # десятых долей не считалось изменением и не гоняло отрисовку зря.
+    cache_key = (
+        today, len(dates), max(dates), headline, rank.level, tuple(tiles),
+        tuple(volume_rows), volume_title,
+        tuple((name, tuple(round(v, 1) for v in series)) for name, series, _, _ in lift_cards),
+    )
     cached = _heatmap_cache.get(user_id)
     if cached is not None and cached[0] == cache_key:
         return _GREETING, cached[1]
-    dashboard = analytics.compute_dashboard(dates, today)
+
     this_monday = today - dt.timedelta(days=today.weekday())
     year_ago = this_monday - dt.timedelta(weeks=52)
     first_monday = min(dates) - dt.timedelta(days=min(dates).weekday())
     heatmap_start = max(first_monday, year_ago)
-    stat_lines = formatting.dashboard_stat_lines(dashboard)
     png = await asyncio.to_thread(
-        charts.render_year_heatmap,
-        Counter(dates), today, heatmap_start, stat_lines, volume_rows, volume_title,
+        charts.render_menu_dashboard,
+        Counter(dates), today, heatmap_start, headline, rank.name.upper(),
+        tiles, volume_rows, volume_title, lift_cards,
     )
     _heatmap_cache[user_id] = (cache_key, png)
     return _GREETING, png

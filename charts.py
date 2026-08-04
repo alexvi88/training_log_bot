@@ -30,9 +30,16 @@ def _new_figure(**kwargs) -> Figure:
     return fig
 
 
-def _fig_to_png(fig, dpi: int = 150) -> bytes:
+def _fig_to_png(fig, dpi: int = 150, tight: bool = True) -> bytes:
+    """tight=False — для фигур, у которых вся раскладка посчитана в дюймах и
+    рассчитывает на точный размер кадра: bbox_inches="tight" обрезает по
+    содержимому и сдвигает всё, что позиционировалось от краёв (разделительные
+    линейки сводки уезжали за границу кадра именно так)."""
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=dpi, bbox_inches="tight", facecolor=fig.get_facecolor())
+    fig.savefig(
+        buf, format="png", dpi=dpi,
+        bbox_inches="tight" if tight else None, facecolor=fig.get_facecolor(),
+    )
     buf.seek(0)
     return buf.read()
 
@@ -280,6 +287,213 @@ def render_year_heatmap(
         grid_ax.text(-0.5, row + 0.55, label, color=MUTED, fontsize=7, ha="right", va="center")
 
     return _fig_to_png(fig)
+
+
+# ---------- сводка на главном экране ----------
+
+# Сводка живёт в том же сообщении меню, что и раньше жила одна тепловая карта.
+# Всё позиционирование — в дюймах: Telegram масштабирует фото под ширину пузыря,
+# поэтому размер элемента на экране равен его размеру в исходнике, умноженному на
+# (ширина пузыря / ширина исходника). Отсюда единственное правило раскладки:
+# исходник держим узким. Одна колонка, а не две.
+DASH_WIDTH_IN = 6.67          # 1000 px при 150 dpi
+DASH_LEFT, DASH_RIGHT = 0.04, 0.96
+DASH_GAP = 0.34               # распорка между виджетами, дюймы
+DASH_CARD = "#171d26"
+DASH_RULE = "#2b3543"
+
+# Высоты виджетов в дюймах. Строка коридора и карточка движения заданы шагом,
+# чтобы блок рос от числа строк, а не растягивал их.
+_DASH_HEAD_H = 0.78
+_DASH_TILES_H = 0.86
+_DASH_VOL_STEP = 0.30
+_DASH_CAL_H = 0.86
+_DASH_LIFTS_H = 1.26
+
+
+def _dash_card(ax, x, y, w, h, colour=DASH_CARD) -> None:
+    ax.add_patch(
+        FancyBboxPatch((x, y), w, h, boxstyle="round,pad=0,rounding_size=0.02",
+                       linewidth=0, facecolor=colour, zorder=0)
+    )
+
+
+def _dash_section(ax, title: str, note: str = "", note_colour: str = HEATMAP_FILLED) -> None:
+    """Подпись виджета. Всегда на DASH_LEFT, примечание — на DASH_RIGHT: три
+    разных левых края в одной картинке читаются как небрежность, и именно так
+    выглядела первая версия."""
+    ax.text(DASH_LEFT, -0.98, title, color="#9aa4b2", fontsize=8.5,
+            fontweight="bold", va="center")
+    if note:
+        ax.text(DASH_RIGHT, -0.98, note, color=note_colour, fontsize=7.5,
+                ha="right", va="center")
+
+
+def _dash_flat_calendar(ax, day_counts, today: dt.date, start: dt.date) -> None:
+    """Тот же гитхабовский календарь, но сплющенный: клетка примерно 15x10 вместо
+    18x18.
+
+    Сплющивание ничего не стоит — аспект оси просто не выставлен в equal, и
+    колонки растягиваются по ширине, пока семь строк остаются низкими. За те же
+    деньги показывается целый год вместо полугода, и это дешевле, чем резать
+    историю. Подписи дней недели убраны: в сплющенном годе строка почти ничего не
+    сообщает, зато мешала сетке встать от того же края, что остальные виджеты.
+    """
+    start = start - dt.timedelta(days=start.weekday())
+    columns = max((today - start).days // 7 + 1, 1)
+    ax.set_ylim(7.4, -2.6)
+    pad = DASH_LEFT / (DASH_RIGHT - DASH_LEFT) * columns
+    ax.set_xlim(-pad, columns + pad)
+    for col in range(columns):
+        monday = start + dt.timedelta(weeks=col)
+        for row in range(7):
+            day = monday + dt.timedelta(days=row)
+            if day > today:
+                continue
+            colour = HEATMAP_FILLED if day_counts.get(day, 0) > 0 else HEATMAP_EMPTY
+            ax.add_patch(
+                FancyBboxPatch((col + 0.08, row + 0.1), 0.84, 0.8,
+                               boxstyle="round,pad=0,rounding_size=0.1",
+                               linewidth=0, facecolor=colour)
+            )
+        if col > 0 and monday.month != (monday - dt.timedelta(weeks=1)).month:
+            ax.text(col, -1.3, _MONTHS_RU[monday.month - 1], color="#6b7684",
+                    fontsize=6.5, va="center")
+
+
+def _dash_lifts(ax, lifts, fg: str, dim: str, ok: str) -> None:
+    """Карточки движений: имя, текущий e1RM, изменение и спарклайн.
+
+    Спарклайн нормируется на свой собственный размах, а не на общий: у жима и
+    тяги разные веса, и общая шкала расплющила бы жим в прямую. Сравнивать эти
+    три линии между собой не нужно — каждая отвечает на «я тут расту?».
+    """
+    ax.set_ylim(1.25, -1.5)
+    box = (DASH_RIGHT - DASH_LEFT - 0.02 * (len(lifts) - 1)) / len(lifts)
+    for i, (name, series, value, delta) in enumerate(lifts):
+        x0 = DASH_LEFT + i * (box + 0.02)
+        ax.text(x0, 0.02, name, color=dim, fontsize=7, va="center")
+        ax.text(x0, 0.34, value, color=fg, fontsize=13.5, fontweight="bold", va="center")
+        if delta:
+            # Минус не красится в зелёное: цвет здесь — единственное, что отличает
+            # «вырос» от «просел», и покрасить откат как рост значило бы врать.
+            ax.text(x0 + box, 0.34, delta, color=ok if delta.startswith("+") else dim,
+                    fontsize=9, fontweight="bold", ha="right", va="center")
+        if len(series) < 2:
+            continue
+        low, high = min(series), max(series)
+        span = high - low
+        xs = [x0 + k * box / (len(series) - 1) for k in range(len(series))]
+        # Плоская серия (все веса равны) рисуется по середине, а не делением на ноль.
+        ys = [1.04 - (0.5 if span == 0 else (v - low) / span) * 0.36 for v in series]
+        ax.plot(xs, ys, color=HEATMAP_FILLED, linewidth=1.8, solid_capstyle="round")
+        ax.plot([xs[-1]], [ys[-1]], marker="o", markersize=3.4, color=fg)
+
+
+def render_menu_dashboard(
+    day_counts: dict[dt.date, int],
+    today: dt.date,
+    start: dt.date,
+    headline: str,
+    badge: str = "",
+    tiles: list[tuple[str, str]] | None = None,
+    volume_rows: list[tuple[str, int, str]] | None = None,
+    volume_title: str = "",
+    lifts: list[tuple[str, list[float], str, str]] | None = None,
+) -> bytes:
+    """Сводка для сообщения меню: крупное число, плитки, коридор по группам,
+    сплющенный календарь за год и движения с трендом e1RM.
+
+    Каждый виджет — своя ось со своей системой координат, между ними полосы-
+    распорки. Воздух добавляется распоркой, а не растягиванием виджета: внутри
+    виджета шаг строк и отступ — одна и та же величина, и растянув его, получаешь
+    разъехавшиеся строки вместо отступа. Разделительные линейки рисуются детьми
+    этих же распорок — артист уровня фигуры до пикселей не доходил, а
+    непрозрачный фон соседней оси его закрывал.
+
+    Любой из виджетов можно не передавать: у нового пользователя нет ни объёма,
+    ни движений, и пустой блок сообщал бы только то, что он пуст.
+    """
+    BG, FG, MUTED, DIM = "#12161d", "#e6e6e6", "#9aa4b2", "#6b7684"
+    OK = "#45b97c"
+
+    tiles = list(tiles or ())
+    rows = list(volume_rows or ())
+    lifts = list(lifts or ())
+
+    # «pad:» — распорка без линейки, «gap:» — с линейкой. Заголовок и плитки
+    # разделять нечем: это одна группа, крупное число и его расшифровка.
+    layout: list[tuple[str, float]] = [("head", _DASH_HEAD_H)]
+    if tiles:
+        layout += [("pad:tiles", 0.20), ("tiles", _DASH_TILES_H)]
+    if rows:
+        layout += [("gap:vol", DASH_GAP), ("vol", 0.34 + _DASH_VOL_STEP * len(rows))]
+    layout += [("gap:cal", DASH_GAP), ("cal", _DASH_CAL_H)]
+    if lifts:
+        layout += [("gap:lifts", DASH_GAP), ("lifts", _DASH_LIFTS_H)]
+
+    fig_h = sum(h for _, h in layout)
+    fig = _new_figure(figsize=(DASH_WIDTH_IN, fig_h), dpi=150)
+    fig.patch.set_facecolor(BG)
+
+    bands: dict[str, tuple[float, float]] = {}
+    cursor = fig_h
+    for key, height in layout:
+        cursor -= height
+        bands[key] = (cursor, height)
+
+    def band(key: str):
+        bottom, height = bands[key]
+        ax = fig.add_axes([0, bottom / fig_h, 1, height / fig_h])
+        ax.set_facecolor("none")   # фон уже у фигуры; свой закрывал бы линейки
+        ax.axis("off")
+        ax.set_xlim(0, 1)
+        return ax
+
+    ax = band("head")
+    ax.set_ylim(1, 0)
+    ax.text(DASH_LEFT, 0.50, headline, color=FG, fontsize=23, fontweight="bold", va="center")
+    if badge:
+        # Шире, чем кажется нужным: в лестнице званий есть «Ветеран подвала», и
+        # плашка по короткому «Атлет» его бы обрезала. Эмодзи звания сюда не
+        # едет — matplotlib рисует 🪨 и 👑 квадратиком, шрифта с эмодзи в
+        # контейнере нет.
+        _dash_card(ax, 0.70, 0.28, DASH_RIGHT - 0.70, 0.44, HEATMAP_EMPTY)
+        ax.text((0.70 + DASH_RIGHT) / 2, 0.50, badge, color=HEATMAP_FILLED, fontsize=10,
+                fontweight="bold", ha="center", va="center")
+
+    if tiles:
+        ax = band("tiles")
+        ax.set_ylim(1, 0)
+        tile_w = (DASH_RIGHT - DASH_LEFT - 0.02 * (len(tiles) - 1)) / len(tiles)
+        for i, (label, value) in enumerate(tiles):
+            x = DASH_LEFT + i * (tile_w + 0.02)
+            _dash_card(ax, x, 0.10, tile_w, 0.80)
+            ax.text(x + 0.022, 0.34, label, color=DIM, fontsize=7, va="center")
+            ax.text(x + 0.022, 0.66, value, color=FG, fontsize=15, fontweight="bold", va="center")
+
+    if rows:
+        ax = band("vol")
+        _draw_volume_panel(ax, rows, volume_title, BG, FG, MUTED)
+
+    _dash_flat_calendar(band("cal"), day_counts, today, start)
+
+    if lifts:
+        _dash_lifts(band("lifts"), lifts, FG, DIM, OK)
+
+    for key in bands:
+        if not key.startswith("gap:"):
+            continue
+        bottom, height = bands[key]
+        gap_ax = fig.add_axes([0, bottom / fig_h, 1, height / fig_h])
+        gap_ax.set_facecolor("none")
+        gap_ax.axis("off")
+        gap_ax.set_xlim(0, 1)
+        gap_ax.set_ylim(0, 1)
+        gap_ax.plot([DASH_LEFT, DASH_RIGHT], [0.5, 0.5], color=DASH_RULE,
+                    linewidth=1.0, solid_capstyle="butt")
+
+    return _fig_to_png(fig, tight=False)
 
 
 # At the card's fixed 6.6in width, monospace 12pt fits ~59 characters between the

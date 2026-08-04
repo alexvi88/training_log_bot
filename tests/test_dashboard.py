@@ -217,14 +217,16 @@ async def test_menu_view_heatmap_cached_across_calls(user_id, fresh_db, monkeypa
     from handlers.workout import _menu_view
 
     calls = 0
-    real_render = charts.render_year_heatmap
+    # Меню рисует сводку целиком (render_menu_dashboard), а не одну тепловую
+    # карту: сама карта осталась отдельной функцией и своими тестами ниже.
+    real_render = charts.render_menu_dashboard
 
     def _counting_render(*args, **kwargs):
         nonlocal calls
         calls += 1
         return real_render(*args, **kwargs)
 
-    monkeypatch.setattr(charts, "render_year_heatmap", _counting_render)
+    monkeypatch.setattr(charts, "render_menu_dashboard", _counting_render)
 
     _, png1 = await _menu_view(user_id)
     _, png2 = await _menu_view(user_id)

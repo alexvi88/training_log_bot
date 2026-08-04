@@ -1023,3 +1023,31 @@ def test_program_changes_name_a_rule_that_appears_or_disappears():
 
     assert added[1] == "  ⤴️ Жим лёжа: без прогрессии → +2.5 каждую тренировку"
     assert removed[1] == "  ⤴️ Жим лёжа: +2.5 каждую тренировку → без прогрессии"
+
+
+def test_a_delimiter_with_the_wrong_column_count_is_not_a_table():
+    """Тот самый ответ про кофеин: шапка из двух колонок, разделитель из трёх.
+
+    По правилам GFM таблицы тут нет вовсе, так что Telegram показал весь блок
+    одним абзацем — палками, дефисами и без переводов строк, потому что
+    одиночные переводы внутри абзаца markdown съедает. Признавать таблицей то,
+    чего не признаёт Telegram, значит гарантированно показать человеку разметку.
+    """
+    broken = (
+        "| Напиток | Обычно кофеина |\n"
+        "|---|---|---|\n"
+        "| Эспрессо 1 шот | ~60–80 мг |\n"
+        "| Растворимый | ~50–90 мг |"
+    )
+    assert not formatting.has_markdown_table(broken)
+    # Свой разворот в строки к числу колонок терпим — поэтому кривую таблицу и
+    # выгоднее увести на обычный путь, а не отдать Telegram.
+    assert "|" not in formatting.ai_markdown_to_html(broken)
+    assert "Эспрессо 1 шот" in formatting.markdown_tables_to_lines(broken)
+
+
+def test_the_column_count_check_does_not_reject_normal_tables():
+    """Ради нормальных таблиц рич и существует — проверка не должна их зарубить."""
+    assert formatting.has_markdown_table("| Движение | Вес |\n|---|---|\n| Жим лёжа | 100 |")
+    # Маркеры выравнивания — часть разделителя, а не лишняя колонка.
+    assert formatting.has_markdown_table("| Движение | Вес |\n|:--|--:|\n| Жим лёжа | 100 |")
