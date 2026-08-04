@@ -279,8 +279,11 @@ CREATE TABLE IF NOT EXISTS programs (
 -- and this bot's programs are named in Russian. `name_key` is the same string
 -- run through Python's Unicode-aware str.lower() (see _program_key), so the
 -- fold the index enforces is the fold find_program_by_name performs.
-CREATE UNIQUE INDEX IF NOT EXISTS idx_programs_user_name
-    ON programs (user_id, name_key);
+--
+-- Not created here: on an upgrade from an old on-disk DB, this executescript
+-- runs before _migrate_schema has a chance to ALTER TABLE ADD COLUMN name_key,
+-- so an index referencing it here would fail with "no such column" on a table
+-- that already exists without it. _migrate_schema creates it after the ALTER.
 
 -- program_name is dead weight kept for one release so a rollback still reads:
 -- the live answer to "which program is this day in" is the programs join (see
@@ -297,7 +300,9 @@ CREATE TABLE IF NOT EXISTS routines (
     FOREIGN KEY (program_id) REFERENCES programs (id)
 );
 CREATE INDEX IF NOT EXISTS idx_routines_user ON routines (user_id);
-CREATE INDEX IF NOT EXISTS idx_routines_program ON routines (program_id, day_order);
+-- Not created here for the same reason idx_programs_user_name isn't (see
+-- above): program_id may not exist yet on an old on-disk DB at executescript
+-- time. _migrate_schema creates it after ALTER TABLE ADD COLUMN program_id.
 
 CREATE TABLE IF NOT EXISTS routine_exercises (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
