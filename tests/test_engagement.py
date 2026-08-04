@@ -114,6 +114,59 @@ def test_newbie_nudge_stops_after_30_days():
     assert engagement.is_newbie_nudge_day(36) is False
 
 
+# ---------- тихие часы и неизвестный пояс ----------
+
+
+def test_quiet_hours_cover_the_night():
+    assert engagement.is_quiet_hour(22) is True
+    assert engagement.is_quiet_hour(2) is True   # ровно та жалоба: «разбудили в два ночи»
+    assert engagement.is_quiet_hour(8) is True
+    assert engagement.is_quiet_hour(9) is False
+    assert engagement.is_quiet_hour(19) is False
+    assert engagement.is_quiet_hour(21) is False
+
+
+def test_unknown_tz_send_hour_is_awake_across_the_whole_audience_band():
+    """Час для неизвестного пояса обязан быть бодрым во всём диапазоне аудитории.
+
+    Это инвариант, а не проверка константы: правка тихих часов или диапазона
+    поясов не должна тихо вернуть ночные пуши тем, кто пояс не указывал.
+    """
+    for offset in engagement.UNKNOWN_TZ_BAND:
+        local_hour = (engagement.UNKNOWN_TZ_SEND_HOUR_UTC + offset) % 24
+        assert not engagement.is_quiet_hour(local_hour), f"UTC+{offset} получил бы пуш в {local_hour}:00"
+
+
+def test_zero_offset_means_unknown_not_utc():
+    """Дефолт схемы и «настройку не трогали» — одно значение, значит ноль не
+    сообщает, что человек живёт по UTC."""
+    assert engagement.tz_is_known(0) is False
+    assert engagement.tz_is_known(3) is True
+    assert engagement.tz_is_known(-3) is True
+
+
+def test_unknown_tz_user_is_not_pushed_at_the_server_evening(monkeypatch):
+    """19:00 UTC — это 02:00 в Новосибирске. Пуш уходит в час, безопасный для всех."""
+    monkeypatch.setattr(engagement, "_utc_now", lambda: dt.datetime(2026, 7, 27, 19, 0))
+    assert engagement.should_send_now(0, 19) is False
+
+    monkeypatch.setattr(
+        engagement, "_utc_now",
+        lambda: dt.datetime(2026, 7, 27, engagement.UNKNOWN_TZ_SEND_HOUR_UTC, 0),
+    )
+    assert engagement.should_send_now(0, 19) is True
+
+
+def test_night_push_is_dropped_not_shifted(monkeypatch):
+    """ENGAGEMENT_HOUR берётся из окружения, так что «час отправки» сам может
+    оказаться ночным — тихие часы поверх него, и пуш не уходит вовсе."""
+    monkeypatch.setattr(engagement, "_utc_now", lambda: dt.datetime(2026, 7, 27, 23, 0))
+    assert engagement.should_send_now(3, 2) is False    # у пользователя 02:00
+    # ...а утром того же дня, когда сигнал ещё актуален, ничего не «догоняет»:
+    monkeypatch.setattr(engagement, "_utc_now", lambda: dt.datetime(2026, 7, 28, 6, 0))
+    assert engagement.should_send_now(3, 2) is False    # 09:00 по местному, но час отправки не тот
+
+
 # ---------- tonnage formatting ----------
 
 

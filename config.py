@@ -68,6 +68,10 @@ MAX_PROGRAM_NAME_LENGTH = 48
 ENGAGEMENT_ENABLED = os.getenv("ENGAGEMENT_ENABLED", "true").lower() == "true"
 
 # Local hour (0-23) at which the daily engagement job evaluates and sends pushes.
+# Час местный, и он применяется только к тем, у кого часовой пояс известен: кто
+# пояс не выставлял, получает пуш в час, безопасный для всех поясов аудитории
+# (см. engagement.should_send_now — там же почему). Ночное значение здесь ничего
+# не разбудит: тихие часы в engagement стоят поверх этой настройки.
 ENGAGEMENT_HOUR = int(os.getenv("ENGAGEMENT_HOUR", "19"))
 
 # Use an AI-generated personalized weekly digest (Sundays) in place of the static
