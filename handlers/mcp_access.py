@@ -235,7 +235,10 @@ def _connections_block(connections: list, user) -> str:
 
 
 def _screen_text(token_row, connections: list, user=None) -> str:
-    blocks = [_INTRO, _address()]
+    # Адреса здесь нет нарочно: он есть в каждой инструкции, внутри того шага,
+    # где его вставляют. На этом экране с ним делать нечего, а места он занимает
+    # больше всех — и вместе с токеном превращал экран в свалку значений.
+    blocks = [_INTRO]
     connected = _connections_block(connections, user)
     if connected:
         blocks.append(connected)

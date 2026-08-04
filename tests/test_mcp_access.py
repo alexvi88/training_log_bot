@@ -74,20 +74,20 @@ async def test_command_shows_intro_without_issuing_anything(fresh_db, user_id):
     msg = _message(user_id)
     await mcp_access.cmd_mcp(msg, await _state(user_id))
 
-    assert "https://training-log.example.com/mcp" in msg.answer.call_args.args[0]
+    assert "Свои данные в Claude и ChatGPT" in msg.answer.call_args.args[0]
     assert await fresh_db.get_mcp_token(user_id) is None
     cur = await fresh_db.conn().execute("SELECT COUNT(*) AS n FROM oauth_link_codes")
     assert (await cur.fetchone())["n"] == 0
 
 
-async def test_issue_shows_the_whole_token_and_the_address(fresh_db, user_id):
+async def test_issue_shows_the_whole_token(fresh_db, user_id):
+    """Токен виден целиком: обрезанный — это молча не работающее подключение.
+    Адрес рядом не нужен, он есть в инструкции того клиента, куда токен и едет."""
     callback = _callback(user_id, "mcp:issue")
     await mcp_access.mcp_issue(callback, await _state(user_id))
 
     token = (await fresh_db.get_mcp_token(user_id))["token"]
-    text = _sent_text(callback)
-    assert token in text
-    assert "https://training-log.example.com/mcp" in text
+    assert token in _sent_text(callback)
 
 
 async def test_reissue_replaces_the_old_token_on_screen(fresh_db, user_id):
@@ -162,10 +162,10 @@ def test_connector_path_is_offered_without_any_token():
     закрыть единственный путь, где человек ничего не настраивает."""
     assert _buttons(keyboards.mcp_keyboard(False)) == [
         "mcp:how:claude",
-        "mcp:how:chatgpt",
         # Claude Code — тоже коннектором: он умеет OAuth сам, токен ему нужен
         # только там, где браузер открыть некому.
         "mcp:how:claude_code",
+        "mcp:how:chatgpt",
         # Код — после инструкций: он живёт минуты и нужен по ходу подключения,
         # а взятый до него успевает истечь.
         "mcp:code",
@@ -187,8 +187,9 @@ def test_the_screen_is_grouped_into_rows_not_one_long_column():
     зацепиться. Группы очевидны: клиенты, код с приложениями, токен."""
     rows = _rows(keyboards.mcp_keyboard(True, True))
 
-    assert rows[0] == ["mcp:how:claude", "mcp:how:chatgpt"]
-    assert rows[1] == ["mcp:how:claude_code"]
+    # Два Claude рядом: называются похоже, ищутся вместе.
+    assert rows[0] == ["mcp:how:claude", "mcp:how:claude_code"]
+    assert rows[1] == ["mcp:how:chatgpt"]
     assert rows[2] == ["mcp:code"]
     assert rows[3] == ["mcp:apps"]
     assert rows[4] == ["mcp:issue", "mcp:revoke"]
