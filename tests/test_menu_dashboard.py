@@ -244,6 +244,22 @@ def test_tonnage_switches_to_kilograms_when_there_are_no_tonnes():
     assert formatting.menu_tiles(_dashboard(), 400, 3)[1] == ("ТОННАЖ ЗА 7 ДНЕЙ", "400 кг")
 
 
+def test_the_tonnage_tile_counts_tonnes_in_kilograms():
+    """Тонна — тонна: у человека в фунтах плитка обязана показывать то же число,
+    что зал славы и недельная сводка.
+
+    Тоннаж лежит в единицах пользователя, а плитка делила его на 1000 как есть —
+    24 500 фунтов превращались в «24.5 т» вместо 11.1 тонны, и плитка врала
+    больше чем вдвое относительно остальных экранов.
+    """
+    tile = formatting.menu_tiles(_dashboard(), 24_500, 3, "lb")[1]
+
+    assert tile == ("ТОННАЖ ЗА 7 ДНЕЙ", "11.1 т")
+    assert formatting.format_tonnage(24_500, "lb").startswith("11.1")
+    # Ниже тонны конвертировать нечего — это его число в его единицах.
+    assert formatting.menu_tiles(_dashboard(), 900, 3, "lb")[1] == ("ТОННАЖ ЗА 7 ДНЕЙ", "900 lb")
+
+
 def test_the_records_tile_gives_its_place_away_when_there_are_none():
     with_records = formatting.menu_tiles(_dashboard(this_week=2), 5000, 2)
     without = formatting.menu_tiles(_dashboard(this_week=2), 5000, 0)

@@ -283,6 +283,19 @@ class ExerciseBlockView:
     # Index into `sets` of the set that is the exercise's new all-time-best
     # e1RM — the live 🥇 mark. None when nothing in this session beats history.
     gold_index: int | None = None
+    # Фактическая нагрузка каждого подхода (db.load_of), выровнена с `sets`.
+    # Отдельным полем, потому что в `sets` лежит то, что записал человек
+    # («0×12» подтягиваний), а вся арифметика — e1RM, рекорды, графики — считает
+    # по нагрузке: вес тела плюс добавка. Пока карточка считала e1RM по сырому
+    # весу, один и тот же подход показывал 11.7 кг на экране тренировки и 105 кг
+    # рекордом в зале славы. None — обычное железо: нагрузка равна записанному.
+    set_loads: list[float] | None = None
+
+    def load_for(self, index: int) -> float:
+        """Нагрузка подхода — то, по чему считается e1RM (не то, что показано)."""
+        if self.set_loads and index < len(self.set_loads):
+            return self.set_loads[index]
+        return self.sets[index][0]
 
     def rpe_for(self, index: int) -> float | None:
         if not self.set_rpes or index >= len(self.set_rpes):
@@ -304,12 +317,19 @@ class ExerciseBlockView:
 
     @property
     def top_e1rm(self) -> float:
+        # По нагрузке, а не по записанному весу: рекорды, графики и «прошлая»
+        # считаются так же (db.LOAD_WEIGHT_SQL / db.load_of), и расходиться с
+        # ними на том же самом подходе карточка не имеет права.
         if not self.sets:
             return 0.0
-        return max(e1rm(w, r, self.formula) for w, r in self.sets)
+        return max(
+            e1rm(self.load_for(i), r, self.formula) for i, (_w, r) in enumerate(self.sets)
+        )
 
     @property
     def prev_top_e1rm(self) -> float:
+        # prev_sets приходят из view_builder уже нагрузкой (db.load_of), так что
+        # дельта «vs прошлая» сравнима с top_e1rm выше.
         if not self.prev_sets:
             return 0.0
         return max(e1rm(w, r, self.formula) for w, r in self.prev_sets)
@@ -1260,8 +1280,15 @@ def menu_tiles(dashboard, tonnage: float, records: int, unit: str = "kg") -> lis
     """
     u = UNIT_LABELS.get(unit, "кг")
     # Тонны — когда их есть чем мерить: «0.4 т» читается хуже, чем «400 кг».
-    tonnes = f"{tonnage / 1000:.1f}"
-    weight = f"{tonnes} т" if tonnage >= 1000 else f"{tonnage:.0f} {u}"
+    #
+    # Тонна — тонна, поэтому и порог, и сама цифра считаются в килограммах, ровно
+    # как в format_tonnage: тоннаж лежит в единицах пользователя, и делить на
+    # 1000 фунты значило показать «24.5 т» там, где на всех остальных экранах
+    # (зал славы, недельная сводка) у того же человека 11.1 тонны. Ниже тонны
+    # конвертировать нечего — там его собственное число в его же единицах.
+    total_kg = to_kg(tonnage, unit)
+    tonnes = f"{total_kg / 1000:.1f}"
+    weight = f"{tonnes} т" if total_kg >= 1000 else f"{tonnage:.0f} {u}"
     tiles = [
         (f"ТРЕНИРОВОК {days_window_label(30)}", str(dashboard.last_30_days)),
         (f"ТОННАЖ {days_window_label(VOLUME_WINDOW_DAYS)}", weight),
@@ -1542,6 +1569,21 @@ class WeeklyRow:
     sets_count: int
 
 
+# Сколько упражнений показываем в недельной сводке — дальше таблица перестаёт
+# читаться с телефона, а хвост из одного подхода ничего не добавляет.
+#
+# Обрезается ровно вывод и ничего кроме: раньше список резался до вызова
+# сводки, и итог недели считался по остатку — у человека с 20 упражнениями
+# недельный тоннаж выходил заниженным и не сходился с плиткой на дашборде,
+# которая считает по всем подходам. Итог приходит отдельным числом (см.
+# total_tonnage), строки — все, что были за неделю.
+WEEKLY_ROWS_LIMIT = 12
+
+
+def _weekly_shown(rows: list[WeeklyRow]) -> list[WeeklyRow]:
+    return rows[:WEEKLY_ROWS_LIMIT]
+
+
 def build_weekly_summary(
     rows: list[WeeklyRow],
     workouts: int,
@@ -1551,7 +1593,11 @@ def build_weekly_summary(
     food_line: str | None = None,
 ) -> str:
     """Недельная сводка обычным текстом — фолбэк для клиентов без rich-таблиц
-    и источник тех же чисел для табличной версии (см. build_weekly_table)."""
+    и источник тех же чисел для табличной версии (см. build_weekly_table).
+
+    `rows` — все упражнения недели; до читаемого числа строк список режется
+    здесь, а `total_tonnage` считается вызывающей стороной по всем подходам.
+    """
     u = UNIT_LABELS.get(unit, "кг")
     w = plural_ru(workouts, ("тренировка", "тренировки", "тренировок"))
     lines = [
@@ -1562,7 +1608,7 @@ def build_weekly_summary(
     if not rows:
         lines.append("На этой неделе тренировок не было.")
         return "\n".join(lines)
-    for row in rows:
+    for row in _weekly_shown(rows):
         lines.append(
             f"<b>{escape(row.name)}</b> — {format_weight(row.top_weight)}{u} · "
             f"{row.sets_count} подх. · {format_tonnage(row.tonnage, unit)}"
@@ -1602,7 +1648,7 @@ def build_weekly_table(rows: list[WeeklyRow], unit: str = "kg"):
             cell(str(row.sets_count), "right"),
             cell(format_tonnage(row.tonnage, unit), "right"),
         ]
-        for row in rows
+        for row in _weekly_shown(rows)
     ]
     return InputRichBlockTable(cells=[header, *body], is_striped=True, is_bordered=True)
 
