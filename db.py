@@ -2626,16 +2626,28 @@ async def bodyweight_at(telegram_id: int, when_iso: Optional[str] = None) -> Opt
     должен пересчитываться, когда человек взвесится в июне. Если до этой даты
     взвешиваний не было — берём самое раннее из имеющихся, иначе вся история до
     первого взвешивания осталась бы с нулевой нагрузкой.
+
+    Без даты — последнее взвешивание, а не первое. Это не мелочь: сюда приходит
+    каждый новый подход упражнения на своём весе (`_load_weight_for`), и «первое»
+    означало, что человек, похудевший с 95 до 78, продолжал получать подтягивания
+    с плюс-95 — e1RM завышен на четверть, тоннаж на 170 кг за подход.
     """
-    if when_iso:
+    if when_iso is None:
         cur = await conn().execute(
-            "SELECT weight FROM bodyweight_logs WHERE telegram_id = ? AND logged_at <= ? "
+            "SELECT weight FROM bodyweight_logs WHERE telegram_id = ? "
             "ORDER BY logged_at DESC, id DESC LIMIT 1",
-            (telegram_id, when_iso),
+            (telegram_id,),
         )
         row = await cur.fetchone()
-        if row is not None:
-            return row["weight"]
+        return row["weight"] if row else None
+    cur = await conn().execute(
+        "SELECT weight FROM bodyweight_logs WHERE telegram_id = ? AND logged_at <= ? "
+        "ORDER BY logged_at DESC, id DESC LIMIT 1",
+        (telegram_id, when_iso),
+    )
+    row = await cur.fetchone()
+    if row is not None:
+        return row["weight"]
     cur = await conn().execute(
         "SELECT weight FROM bodyweight_logs WHERE telegram_id = ? ORDER BY logged_at, id LIMIT 1",
         (telegram_id,),
@@ -2644,8 +2656,25 @@ async def bodyweight_at(telegram_id: int, when_iso: Optional[str] = None) -> Opt
     return row["weight"] if row else None
 
 
-async def _load_weight_for(exercise_id: int, weight: float) -> Optional[float]:
-    """load_weight для нового подхода, или None для обычного железа."""
+async def _workout_date_of_block(block_id: int) -> Optional[str]:
+    cur = await conn().execute(
+        "SELECT w.started_at FROM workout_blocks b JOIN workouts w ON w.id = b.workout_id "
+        "WHERE b.id = ?",
+        (block_id,),
+    )
+    row = await cur.fetchone()
+    return row["started_at"] if row else None
+
+
+async def _load_weight_for(
+    exercise_id: int, weight: float, when_iso: Optional[str] = None
+) -> Optional[float]:
+    """load_weight для подхода, или None для обычного железа.
+
+    `when_iso` — дата тренировки, к которой подход относится, а не «сейчас»:
+    занесённая задним числом тренировка и правка старого подхода должны брать
+    вес тела того дня. Без даты берётся последнее взвешивание.
+    """
     ex = await get_exercise(exercise_id)
     if ex is None or ex["bodyweight_load"] == "none":
         return None
@@ -2653,7 +2682,10 @@ async def _load_weight_for(exercise_id: int, weight: float) -> Optional[float]:
     if owner is None:
         return None
     return effective_load(
-        weight, await bodyweight_at(owner), ex["bodyweight_load"], ex["bodyweight_factor"]
+        weight,
+        await bodyweight_at(owner, when_iso),
+        ex["bodyweight_load"],
+        ex["bodyweight_factor"],
     )
 
 
@@ -2666,7 +2698,9 @@ async def add_set(
     reps: int,
     rpe: Optional[float] = None,
 ) -> int:
-    load_weight = await _load_weight_for(exercise_id, weight)
+    load_weight = await _load_weight_for(
+        exercise_id, weight, await _workout_date_of_block(block_id)
+    )
     async with _write_lock:
         cur = await conn().execute(
             "INSERT INTO sets "
@@ -2707,7 +2741,9 @@ async def append_set(
     next_round_index and insert with it. The INSERT itself does the SELECT, so
     there's no window between them.
     """
-    load_weight = await _load_weight_for(exercise_id, weight)
+    load_weight = await _load_weight_for(
+        exercise_id, weight, await _workout_date_of_block(block_id)
+    )
     async with _write_lock:
         cur = await conn().execute(
             "INSERT INTO sets "
@@ -2794,11 +2830,20 @@ async def get_set_owner(set_id: int) -> Optional[int]:
 
 
 async def update_set(set_id: int, weight: float, reps: int, rpe: Optional[float] = None) -> None:
-    cur = await conn().execute("SELECT exercise_id FROM sets WHERE id = ?", (set_id,))
+    cur = await conn().execute(
+        "SELECT s.exercise_id, w.started_at FROM sets s "
+        "JOIN workout_blocks b ON b.id = s.block_id "
+        "JOIN workouts w ON w.id = b.workout_id WHERE s.id = ?",
+        (set_id,),
+    )
     row = await cur.fetchone()
     # Снимок нагрузки пересчитываем вместе с весом: иначе правка «80 → 85» у
-    # подтягиваний с поясом оставила бы старую сумму.
-    load_weight = await _load_weight_for(row["exercise_id"], weight) if row else None
+    # подтягиваний с поясом оставила бы старую сумму. Вес тела при этом берётся
+    # на дату той тренировки, а не сегодняшний: правка подхода из марта не должна
+    # приезжать с июньским весом.
+    load_weight = (
+        await _load_weight_for(row["exercise_id"], weight, row["started_at"]) if row else None
+    )
     async with _write_lock:
         await conn().execute(
             "UPDATE sets SET weight = ?, reps = ?, rpe = ?, load_weight = ? WHERE id = ?",

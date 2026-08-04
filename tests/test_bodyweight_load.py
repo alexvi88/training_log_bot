@@ -216,3 +216,44 @@ async def test_the_backfill_leaves_barbell_sets_alone(fresh_db, user_id):
     await db._backfill_bodyweight_load()
 
     assert (await db.list_sets_for_exercise(ex_id))[0]["load_weight"] is None
+
+
+# ---------- какое взвешивание берётся ----------
+
+
+async def test_a_new_set_uses_the_latest_weigh_in_not_the_first(fresh_db, user_id):
+    """Похудел с 95 до 78 — подтягивания сегодня идут с 78, а не с 95.
+
+    `bodyweight_at` без даты уходила в фолбэк «самое раннее из имеющихся», хотя
+    докстринг обещал «последнее». Через него проходит каждый новый подход
+    упражнения на своём весе, так что e1RM был завышен на четверть, а тоннаж —
+    на разницу веса за каждый подход.
+    """
+    db = fresh_db
+    await db.add_bodyweight_log(user_id, 95.0, logged_at="2026-01-10")
+    await db.add_bodyweight_log(user_id, 86.0, logged_at="2026-04-10")
+    await db.add_bodyweight_log(user_id, 78.0, logged_at="2026-07-10")
+    ex_id = await _own(db, user_id, PULLUPS)
+
+    await _log(db, user_id, ex_id, 0, 10)
+
+    assert db_module.load_of((await db.list_sets_for_exercise(ex_id))[0]) == 78.0
+    assert await db.bodyweight_at(user_id) == 78.0
+
+
+async def test_a_set_backdated_into_an_old_workout_uses_that_days_weight(fresh_db, user_id):
+    """Тренировка, занесённая задним числом, берёт вес тела того дня: снимок
+    привязан к тренировке, а не к моменту, когда его посчитали."""
+    db = fresh_db
+    await db.add_bodyweight_log(user_id, 95.0, logged_at="2026-01-10")
+    await db.add_bodyweight_log(user_id, 78.0, logged_at="2026-07-10")
+    ex_id = await _own(db, user_id, PULLUPS)
+
+    workout_id = await db.create_finished_workout(
+        user_id, "2026-02-01T10:00:00", "2026-02-01T11:00:00"
+    )
+    block_id = await db.create_block(workout_id, "single")
+    await db.add_block_exercise(block_id, ex_id, 0)
+    await db.add_set(block_id, ex_id, 0, 0, 0.0, 10)
+
+    assert db_module.load_of((await db.list_sets_for_exercise(ex_id))[0]) == 95.0

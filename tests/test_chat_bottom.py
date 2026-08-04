@@ -1,12 +1,14 @@
 """The bottom-of-chat tracker that decides whether a screen can be edited in
 place or has to be deleted and resent, plus the two middlewares that feed it."""
 import datetime as dt
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from aiogram.methods import DeleteMessage, DeleteMessages, SendMessage
-from aiogram.types import Chat, Message
+from aiogram.types import CallbackQuery, Chat, InaccessibleMessage, Message
 
 import chat_bottom
+import ui
 
 
 @pytest.fixture(autouse=True)
@@ -136,3 +138,40 @@ async def test_failed_send_leaves_the_tracker_alone():
     with pytest.raises(RuntimeError):
         await chat_bottom.TrackOutgoingMessages()(make_request, None, SendMessage(chat_id=1, text="x"))
     assert chat_bottom.is_at_bottom(1, 10)
+
+
+# ---------- сообщения, которых уже нет ----------
+
+
+async def test_safe_edit_survives_an_inaccessible_message():
+    """Кнопки живут в истории чата вечно, и для сообщения старше суток (или
+    удалённого) Telegram присылает `InaccessibleMessage` — это не `Message`: ни
+    `text`, ни `answer`, ни `delete` у него нет.
+
+    Читать их — `AttributeError` вместо экрана, то есть «⚠️ Что-то пошло не так»
+    ровно в том случае, когда кнопку и нажимают. Править там нечего, поэтому
+    экран уходит новым сообщением в тот же чат.
+    """
+    inaccessible = InaccessibleMessage(chat=Chat(id=77, type="private"), message_id=5)
+    callback = MagicMock(spec=CallbackQuery)
+    callback.message = inaccessible
+    callback.bot = MagicMock()
+    callback.bot.send_message = AsyncMock(return_value="sent")
+
+    result = await ui.safe_edit(callback, "экран")
+
+    assert result == "sent"
+    assert callback.bot.send_message.await_args.args[0] == 77
+
+
+async def test_safe_edit_photo_survives_an_inaccessible_message():
+    inaccessible = InaccessibleMessage(chat=Chat(id=77, type="private"), message_id=5)
+    callback = MagicMock(spec=CallbackQuery)
+    callback.message = inaccessible
+    callback.bot = MagicMock()
+    callback.bot.send_photo = AsyncMock(return_value="sent")
+
+    result = await ui.safe_edit_photo(callback, b"\x89PNG", "chart.png", "подпись")
+
+    assert result == "sent"
+    assert callback.bot.send_photo.await_args.args[0] == 77

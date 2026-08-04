@@ -367,6 +367,16 @@ def test_a_flat_series_does_not_divide_by_zero():
     assert _render(lifts=[("ЖИМ", [100.0, 100.0, 100.0], "100 кг", "")])[:8] == b"\x89PNG\r\n\x1a\n"
 
 
+def test_an_all_zero_series_does_not_take_the_whole_menu_down():
+    """Ноль во всей серии — не выдумка: e1RM упражнения на своём весе равен нулю,
+    пока человек ни разу не взвесился, а подтягивания легко попадают в топ-3
+    частых. Порог шума считался от среднего, то есть тоже нулём, — и главный
+    экран падал целиком, вместе с /start, потому что сводка рисуется на обоих."""
+    assert _render(lifts=[("ПОДТЯГИВАНИЯ", [0.0, 0.0, 0.0, 0.0], "0 кг", "")])[:8] == (
+        b"\x89PNG\r\n\x1a\n"
+    )
+
+
 def test_a_single_point_series_renders_without_a_line():
     assert _render(lifts=[("ЖИМ", [100.0], "100 кг", "")])[:8] == b"\x89PNG\r\n\x1a\n"
 

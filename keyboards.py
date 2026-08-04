@@ -1040,22 +1040,22 @@ def settings_keyboard(
 # требуют вовсе.
 MCP_OAUTH_CLIENTS = [
     ("claude", "☁️ Claude"),
-    ("chatgpt", "🤖 ChatGPT"),
+    ("claude_code", "🖥 Claude Code"),
 ]
 
-# Терминальный клиент стоит отдельной строкой, потому что путь у него другой:
-# команда в консоли вместо раздела настроек. Токена он, как и остальные, не
-# требует — Claude Code умеет OAuth сам (`/mcp` → Authenticate).
+# Второй ряд. Два Claude стоят рядом в первом — они и называются похоже, и
+# ищутся вместе; ChatGPT уезжает ниже, чтобы ряды не читались как «Claude против
+# всех остальных».
 #
 # Список нарочно короткий: экран нужен, чтобы человек подключился, а не чтобы
 # перечислить всё, что умеет MCP. Cursor и VS Code подключаются тем же
 # коннектором по тому же адресу.
-MCP_TERMINAL_CLIENTS = [
-    ("claude_code", "🖥 Claude Code"),
+MCP_SECOND_ROW_CLIENTS = [
+    ("chatgpt", "🤖 ChatGPT"),
 ]
 
 # Все клиенты сразу: ключи совпадают с handlers.mcp_access.GUIDES.
-MCP_CLIENTS = MCP_OAUTH_CLIENTS + MCP_TERMINAL_CLIENTS
+MCP_CLIENTS = MCP_OAUTH_CLIENTS + MCP_SECOND_ROW_CLIENTS
 
 
 def mcp_keyboard(has_token: bool, has_connections: bool = False) -> InlineKeyboardMarkup:
@@ -1072,9 +1072,9 @@ def mcp_keyboard(has_token: bool, has_connections: bool = False) -> InlineKeyboa
     (клиенты / код и приложения / токен). Парами они читаются как три раздела.
     """
     b = InlineKeyboardBuilder()
-    # Claude и ChatGPT в один ряд: это те два, с которых подключается тот, кто не
-    # открывает терминал вообще. Claude один на браузер и приложение — путь там
-    # ровно один и тот же, и второй экран с тем же текстом только сбивает.
+    # Claude один на браузер и приложение — путь там ровно один и тот же, и второй
+    # экран с тем же текстом только сбивает. Claude Code рядом с ним: тоже Claude,
+    # тоже коннектором, отличается только тем, что живёт в терминале.
     b.row(
         *(
             InlineKeyboardButton(text=label, callback_data=f"mcp:how:{kind}")
@@ -1084,7 +1084,7 @@ def mcp_keyboard(has_token: bool, has_connections: bool = False) -> InlineKeyboa
     b.row(
         *(
             InlineKeyboardButton(text=label, callback_data=f"mcp:how:{kind}")
-            for kind, label in MCP_TERMINAL_CLIENTS
+            for kind, label in MCP_SECOND_ROW_CLIENTS
         )
     )
     # Код — после инструкций, а не первым: он живёт минуты и нужен на середине
