@@ -3,7 +3,13 @@
 from contextlib import suppress
 
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.types import BufferedInputFile, CallbackQuery, InputMediaPhoto, Message
+from aiogram.types import (
+    BufferedInputFile,
+    CallbackQuery,
+    InaccessibleMessage,
+    InputMediaPhoto,
+    Message,
+)
 
 import chat_bottom
 
@@ -55,6 +61,15 @@ async def safe_edit(
     history, not a disposable menu screen.
     """
     message = callback.message
+    # InaccessibleMessage: так Telegram отдаёт сообщение, которое слишком старое
+    # или удалено — а кнопки живут в истории чата вечно, так что это обычный
+    # случай, а не край. Это не Message: у него нет ни `text`, ни `answer`, ни
+    # `delete`, и обращение к ним даёт AttributeError вместо экрана. Править
+    # нечего, поэтому просто отправляем новый экран в тот же чат.
+    if isinstance(message, InaccessibleMessage):
+        return await callback.bot.send_message(
+            message.chat.id, text, reply_markup=reply_markup, parse_mode=parse_mode
+        )
     if delete:
         # A photo message can't be edited into a text one, only replaced.
         if message.text is not None and chat_bottom.is_at_bottom(message.chat.id, message.message_id):
@@ -85,6 +100,15 @@ async def safe_edit_photo(
     safe_edit.
     """
     message = callback.message
+    # То же, что в safe_edit: у InaccessibleMessage нет ни `photo`, ни методов.
+    if isinstance(message, InaccessibleMessage):
+        return await callback.bot.send_photo(
+            message.chat.id,
+            BufferedInputFile(photo, filename=filename),
+            caption=caption,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode,
+        )
     if delete:
         if message.photo and chat_bottom.is_at_bottom(message.chat.id, message.message_id):
             edited = await _edit_photo(message, photo, filename, caption, reply_markup, parse_mode)
