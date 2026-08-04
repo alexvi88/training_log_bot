@@ -20,8 +20,6 @@ import config
 import keyboards
 from handlers import mcp_access
 
-pytestmark = pytest.mark.asyncio
-
 
 @pytest.fixture(autouse=True)
 def public_url(monkeypatch):
@@ -154,14 +152,20 @@ def _buttons(kb) -> list[str]:
     return [b.callback_data for row in kb.inline_keyboard for b in row]
 
 
+def _rows(kb) -> list[list[str]]:
+    return [[b.callback_data for b in row] for row in kb.inline_keyboard]
+
+
 def test_connector_path_is_offered_without_any_token():
     """Коннектор доступен сразу и всем: код связывания и инструкции под Claude с
     ChatGPT токена не требуют, и прятать их за «сначала выдай токен» значило бы
     закрыть единственный путь, где человек ничего не настраивает."""
     assert _buttons(keyboards.mcp_keyboard(False)) == [
-        "mcp:how:claude_web",
+        "mcp:how:claude",
         "mcp:how:chatgpt",
-        "mcp:how:claude_desktop",
+        # Claude Code — тоже коннектором: он умеет OAuth сам, токен ему нужен
+        # только там, где браузер открыть некому.
+        "mcp:how:claude_code",
         # Код — после инструкций: он живёт минуты и нужен по ходу подключения,
         # а взятый до него успевает истечь.
         "mcp:code",
@@ -170,19 +174,28 @@ def test_connector_path_is_offered_without_any_token():
     ]
 
 
-def test_token_guides_and_revoke_appear_only_with_a_token():
-    """А вот инструкции для терминала без токена показывать нечего — в них
-    нечего вставлять."""
-    assert _buttons(keyboards.mcp_keyboard(True)) == [
-        "mcp:how:claude_web",
-        "mcp:how:chatgpt",
-        "mcp:how:claude_desktop",
-        "mcp:code",
-        "mcp:how:claude_code",
-        "mcp:issue",
-        "mcp:revoke",
-        "menu:settings",
-    ]
+def test_only_revoking_needs_a_token():
+    """Инструкции доступны все и всегда: токена не требует ни одна, включая
+    терминальную. От токена зависит только то, что с ним можно сделать."""
+    assert "mcp:revoke" in _buttons(keyboards.mcp_keyboard(True))
+    assert "mcp:revoke" not in _buttons(keyboards.mcp_keyboard(False))
+    assert "mcp:how:claude_code" in _buttons(keyboards.mcp_keyboard(False))
+
+
+def test_the_screen_is_grouped_into_rows_not_one_long_column():
+    """Девять кнопок в одну колонку — простыня, в которой глазу не за что
+    зацепиться. Группы очевидны: клиенты, код с приложениями, токен."""
+    rows = _rows(keyboards.mcp_keyboard(True, True))
+
+    assert rows[0] == ["mcp:how:claude", "mcp:how:chatgpt"]
+    assert rows[1] == ["mcp:how:claude_code"]
+    assert rows[2] == ["mcp:code"]
+    assert rows[3] == ["mcp:apps"]
+    assert rows[4] == ["mcp:issue", "mcp:revoke"]
+    assert rows[-1] == ["menu:settings"]
+    # Ни один ряд не длиннее двух: три кнопки в ряд Telegram сжимает до
+    # нечитаемых обрубков подписей.
+    assert max(len(row) for row in rows) == 2
 
 
 def test_connected_apps_appear_only_when_there_is_something_to_disconnect():
@@ -195,20 +208,21 @@ def test_every_button_has_a_guide_behind_it():
     assert {kind for kind, _ in keyboards.MCP_CLIENTS} == set(mcp_access.GUIDES)
 
 
-TOKEN_GUIDES = [kind for kind in mcp_access.GUIDES if kind not in mcp_access.OAUTH_GUIDES]
-
-
-@pytest.mark.parametrize("kind", TOKEN_GUIDES)
-async def test_guide_screen_carries_token_and_address(fresh_db, user_id, kind):
+async def test_the_terminal_guide_still_offers_the_token_when_there_is_one(fresh_db, user_id):
+    """Токен в хвосте инструкции — для скриптов и облачных сессий, где браузер
+    открыть некому. Есть токен — показываем команду целиком, нет — говорим, где
+    его взять, и на сам коннектор это не влияет."""
     token = await fresh_db.issue_mcp_token(user_id)
-    callback = _callback(user_id, f"mcp:how:{kind}")
+    callback = _callback(user_id, "mcp:how:claude_code")
     await mcp_access.mcp_guide(callback, await _state(user_id))
 
     text = _sent_text(callback)
     assert token in text
     assert "https://training-log.example.com/mcp" in text
-    # Инструкция без пути назад — тупик: экран с токеном уже уехал вверх.
-    assert _buttons(callback.message.answer.call_args.kwargs["reply_markup"]) == ["mcp:open"]
+    assert _buttons(callback.message.answer.call_args.kwargs["reply_markup"]) == [
+        "mcp:how:claude_code:new",
+        "mcp:open",
+    ]
 
 
 @pytest.mark.parametrize("kind", sorted(mcp_access.OAUTH_GUIDES))
@@ -297,15 +311,20 @@ async def test_the_main_screen_fits_into_one_telegram_message(fresh_db, user_id)
     assert len(msg.answer.call_args.args[0]) < 4096
 
 
-async def test_token_guide_falls_back_to_the_main_screen_without_a_token(fresh_db, user_id):
-    """Токен могли отозвать с другого устройства, пока экран висел открытым."""
+async def test_the_terminal_guide_works_without_a_token_too(fresh_db, user_id):
+    """Claude Code подключается коннектором: `claude mcp add` без заголовка,
+    дальше `/mcp` → Authenticate и та же страница согласия. Токен упоминается
+    только там, где браузер открыть некому — в скриптах и облачных сессиях."""
     callback = _callback(user_id, "mcp:how:claude_code")
     await mcp_access.mcp_guide(callback, await _state(user_id))
 
-    assert "нужен токен" in _sent_text(callback)
-    assert _buttons(callback.message.answer.call_args.kwargs["reply_markup"]) == _buttons(
-        keyboards.mcp_keyboard(False)
+    text = _sent_text(callback)
+    assert "Authenticate" in text
+    assert "--header" not in text
+    cur = await fresh_db.conn().execute(
+        "SELECT code FROM oauth_link_codes WHERE user_id = ?", (user_id,)
     )
+    assert (await cur.fetchone())["code"] in text
 
 
 async def test_unknown_guide_does_not_crash(fresh_db, user_id):

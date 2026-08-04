@@ -74,3 +74,23 @@ async def test_plain_start_still_opens_the_main_menu(dispatcher):
     """При этом обычный /start обязан остаться за workout.cmd_start —
     лечение не должно увести к шарингу всех подряд."""
     assert await _feed(dispatcher, "/start") == ["handlers.workout.cmd_start"]
+
+
+@pytest.mark.filterwarnings("ignore::pytest.PytestWarning")
+def test_no_callback_can_fall_through_the_routers(dispatcher):
+    """Регрессия на «бот залип»: перехватчик кнопок обязан существовать и обязан
+    стоять последним.
+
+    Существовать — потому что больше сотни обработчиков стоят под `StateFilter`,
+    и после `state.clear()` их callback не брал никто: Telegram крутил спиннер и
+    гасил его молча, без ответа, без ошибки и без строчки в логах. Последним —
+    потому что без фильтров он съел бы и те кнопки, у которых обработчик есть.
+    """
+    assert [r.name for r in dispatcher.sub_routers][-1] == "fallback"
+    catch_all = [
+        h
+        for router in dispatcher.sub_routers
+        for h in router.callback_query.handlers
+        if not h.filters
+    ]
+    assert catch_all, "нет перехватчика callback_query — кнопки уйдут в тишину"

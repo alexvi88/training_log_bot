@@ -73,12 +73,17 @@ def _address() -> str:
     return f"🌐 <b>Адрес для коннектора:</b>\n{_copyable(_server_url())}"
 
 
-def _credentials(token: str) -> str:
-    """Токен и адрес — то, что нужно подставить в клиент с заголовком."""
-    return (
-        f"🔑 <b>Токен:</b>\n{_copyable(token)}\n"
-        f"🌐 <b>Адрес сервера:</b>\n{_copyable(_server_url())}"
-    )
+def _credentials(token: str, with_address: bool = True) -> str:
+    """Токен и адрес — то, что нужно подставить в клиент с заголовком.
+
+    `with_address=False` — когда адрес на этом экране уже показан выше: два
+    одинаковых значения под разными подписями («для коннектора» и «сервера»)
+    читаются как два разных адреса, которые нельзя перепутать.
+    """
+    token_block = f"🔑 <b>Токен:</b>\n{_copyable(token)}"
+    if not with_address:
+        return token_block
+    return token_block + f"\n🌐 <b>Адрес сервера:</b>\n{_copyable(_server_url())}"
 
 
 def _code_ttl() -> str:
@@ -116,9 +121,17 @@ def _when(value: str | None, user=None) -> str:
 # значит выкинуть ровно те детали, из-за которых подключение и не получается.
 
 
-def _claude_web_guide(token: str | None, code: str | None) -> str:
+def _claude_guide(token: str | None, code: str | None) -> str:
+    """Браузер и приложение — одна инструкция, потому что путь и правда один.
+
+    Разводить их по экранам было ошибкой: разделы называются одинаково, шаги
+    совпадают до последнего, различается только где искать настройки. Два экрана
+    с одинаковым текстом человек читает как «я, наверное, открыл не тот».
+    """
     return (
-        "☁️ <b>Claude в браузере</b> (claude.ai)\n\n"
+        "☁️ <b>Claude</b> — браузер и приложение\n\n"
+        "Шаги одни и те же: раздел коннекторов есть и на claude.ai, и в Claude "
+        "Desktop, и называется одинаково.\n\n"
         "1. <b>Settings → Connectors</b> (Настройки → Коннекторы)\n"
         "2. <b>Add custom connector</b> (Добавить свой коннектор)\n"
         "3. Вставь адрес:\n"
@@ -128,7 +141,10 @@ def _claude_web_guide(token: str | None, code: str | None) -> str:
         "5. Нажми <b>«Разрешить»</b> — готово\n\n"
         "Проверка: в новом чате спроси «покажи мои последние тренировки» — Claude "
         "попросит разрешение на вызов инструмента и вернёт данные.\n\n"
-        f"Код одноразовый и живёт {_code_ttl()}. Истёк — «🔄 Новый код» ниже."
+        f"Код одноразовый и живёт {_code_ttl()}. Истёк — «🔄 Новый код» ниже.\n\n"
+        "Ни Node.js, ни <code>mcp-remote</code> не нужны: приложение подключает "
+        "коннекторы само. Мостик остался только для сборок без раздела "
+        "коннекторов — если это твой случай, скажи, дам команду."
     )
 
 
@@ -152,53 +168,55 @@ def _chatgpt_guide(token: str | None, code: str | None) -> str:
     )
 
 
-def _claude_desktop_guide(token: str | None, code: str | None) -> str:
-    return (
-        "💬 <b>Claude Desktop</b>\n\n"
-        "Ни Node.js, ни <code>mcp-remote</code> не нужны — приложение подключает "
-        "коннекторы само.\n\n"
-        "1. <b>Настройки → Коннекторы</b> (Settings → Connectors)\n"
-        "2. <b>Добавить свой коннектор</b> (Add custom connector)\n"
-        "3. Вставь адрес:\n"
-        f"{_copyable(_server_url())}"
-        "4. На открывшейся странице введи код:\n"
-        f"{_copyable(code or '')}"
-        "5. Нажми <b>«Разрешить»</b> — готово\n\n"
-        "Проверка: в чате появится значок инструментов — спроси «покажи мои "
-        "последние тренировки».\n\n"
-        f"Код одноразовый и живёт {_code_ttl()}. Истёк — «🔄 Новый код» ниже."
-    )
-
-
 def _claude_code_guide(token: str | None, code: str | None) -> str:
-    """Единственная инструкция на токене: в терминале он короче любого OAuth."""
+    """И в терминале токен не обязателен: Claude Code умеет OAuth сам.
+
+    Раньше здесь была команда с заголовком, будто иначе нельзя. Можно: `claude
+    mcp add` без заголовка, дальше `/mcp` → Authenticate, браузер, наша страница
+    согласия — и Claude Code сам хранит выданные токены и обновляет их по
+    refresh. Токен остаётся ровно для того, где браузера рядом нет: облачные
+    сессии, скрипты, curl.
+    """
+    tail = (
+        "Токеном в заголовке — для скриптов и облачных сессий, где браузер "
+        "открыть некому:\n"
+        + _copyable(
+            f'claude mcp add --transport http -s user training-log {_server_url()} '
+            f'--header "Authorization: Bearer {token}"'
+        )
+        if token
+        else "Если браузера нет вовсе (скрипты, облачные сессии) — понадобится "
+        "токен: выдай его кнопкой «Выдать токен для терминала» на экране "
+        "подключения."
+    )
     return (
         "🖥 <b>Claude Code</b> (терминал)\n\n"
-        "Одна команда — скопируй и вставь целиком:\n"
-        + _copyable(
-            "claude mcp add --transport http -s user training-log \\\n"
-            f"  {_server_url()} \\\n"
-            f'  --header "Authorization: Bearer {token or ""}"'
-        )
-        + "<code>-s user</code> — чтобы сервер был доступен во всех проектах, а не "
-        "только в текущей папке.\n\n"
-        "Проверка: запусти <code>claude</code>, набери <code>/mcp</code> — "
-        "training-log должен быть <b>connected</b>.\n\n"
-        "Токен и адрес по отдельности, если нужны в другой клиент:\n"
-        f"{_credentials(token or '')}"
+        "1. Добавь сервер — без токена:\n"
+        + _copyable(f"claude mcp add --transport http -s user training-log {_server_url()}")
+        + "2. Запусти <code>claude</code>, набери <code>/mcp</code> → "
+        "<b>training-log</b> → <b>Authenticate</b>\n"
+        "3. Откроется браузер со страницей подтверждения. Введи код:\n"
+        f"{_copyable(code or '')}"
+        "4. Нажми <b>«Разрешить»</b> — в <code>/mcp</code> станет "
+        "<b>connected</b>\n\n"
+        "<code>-s user</code> — чтобы сервер был во всех проектах, а не только в "
+        "текущей папке. Выданные токены Claude Code хранит сам и обновляет без "
+        "тебя.\n\n"
+        "Без браузера под рукой: <code>claude mcp login training-log "
+        "--no-browser</code> напечатает ссылку — открой её на своей машине.\n\n"
+        f"{tail}"
     )
 
 
 GUIDES = {
-    "claude_web": ("Claude в браузере", _claude_web_guide),
+    "claude": ("Claude", _claude_guide),
     "chatgpt": ("ChatGPT", _chatgpt_guide),
-    "claude_desktop": ("Claude Desktop", _claude_desktop_guide),
     "claude_code": ("Claude Code", _claude_code_guide),
 }
 
-# Инструкции, которым токен не нужен: они целиком про коннектор. Показывать их
-# можно всегда — в отличие от остальных, где без токена нечего вставлять.
-OAUTH_GUIDES = frozenset({kind for kind, _ in keyboards.MCP_OAUTH_CLIENTS})
+# Токен не требуется ни одной инструкции: коннектор по OAuth умеют все три
+# клиента, включая терминальный. Поэтому и код связывания показывается на каждой.
+OAUTH_GUIDES = frozenset(GUIDES)
 
 
 def _connections_block(connections: list, user) -> str:
@@ -207,7 +225,12 @@ def _connections_block(connections: list, user) -> str:
     lines = ["🔌 <b>Подключено:</b>"]
     for row in connections:
         name = mcp_oauth.client_display_name(row["metadata"], row["client_id"])
-        lines.append(f"• {escape(name)} — {_when(row['last_used_at'], user)}")
+        # Подпись обязательна: без неё дата читается как «когда подключено», и
+        # человек, зашедший проверить, ходил ли кто-то за данными, делает
+        # противоположный вывод.
+        lines.append(
+            f"• {escape(name)} — последний запрос: {_when(row['last_used_at'], user)}"
+        )
     return "\n".join(lines)
 
 
@@ -226,8 +249,8 @@ def _screen_text(token_row, connections: list, user=None) -> str:
         # «Ещё ни разу» — это не мелочь: сразу после настройки клиента по этой
         # строке видно, дошёл запрос или нет, и не надо гадать, где ошибка.
         blocks.append(
-            _credentials(token_row["token"])
-            + f"\n\n🕒 Последнее обращение по токену: {_when(used, user)}"
+            _credentials(token_row["token"], with_address=False)
+            + f"\n🕒 Последний запрос по токену: {_when(used, user)}"
         )
     # Последняя строка перед кнопками — про то, что кнопка ведёт не в очередной
     # список, а сразу ко всему нужному: человек, которого один раз погоняли между
@@ -294,18 +317,16 @@ async def mcp_guide(callback: CallbackQuery, state: FSMContext):
     if guide is None or not config.mcp_available():
         await _show(callback, state)
         return
-    token, code = None, None
+    code = None
     if kind in OAUTH_GUIDES:
         code = await mcp_oauth.link_code(callback.from_user.id, force_new=force_new)
-        logger.info("MCP OAuth: link code shown to user %s (new=%s)", callback.from_user.id, force_new)
-    else:
-        row = await db.get_mcp_token(callback.from_user.id)
-        # Токен могли отозвать с другого устройства, пока этот экран висел
-        # открытым: инструкция с мёртвым токеном — гарантированный «не работает».
-        if row is None:
-            await _show(callback, state)
-            return
-        token = row["token"]
+        logger.info(
+            "MCP OAuth: link code shown to user %s (new=%s)", callback.from_user.id, force_new
+        )
+    # Токен — по наличию, а не по требованию: ни одна инструкция без него уже не
+    # ломается, он нужен только в хвосте про скрипты и облачные сессии.
+    row = await db.get_mcp_token(callback.from_user.id)
+    token = row["token"] if row else None
     await ui.safe_edit(
         callback,
         guide[1](token, code),

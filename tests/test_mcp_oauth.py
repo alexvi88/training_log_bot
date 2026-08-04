@@ -31,8 +31,6 @@ import db
 import mcp_oauth
 import mcp_server
 
-pytestmark = pytest.mark.asyncio
-
 REDIRECT_URI = "https://claude.ai/api/mcp/auth_callback"
 PUBLIC_URL = "https://training-log.example.com"
 RESOURCE = f"{PUBLIC_URL}/mcp"
