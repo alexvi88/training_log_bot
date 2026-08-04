@@ -18,6 +18,7 @@
 использовании, поэтому его цена в чате куда ниже.
 """
 
+import datetime as dt
 import logging
 from html import escape
 
@@ -32,6 +33,7 @@ import formatting
 import keyboards
 import mcp_oauth
 import mcp_server
+import timeutil
 import ui
 
 router = Router(name="mcp_access")
@@ -86,16 +88,22 @@ def _code_ttl() -> str:
     return f"{minutes} {formatting.plural_ru(minutes, ('минуту', 'минуты', 'минут'))}"
 
 
-def _when(value: str | None) -> str:
-    """ISO-время из базы в человеческий вид. Секунды не нужны: это строка «когда
-    последний раз ходили за данными», а не отладочный лог."""
+def _when(value: str | None, user=None) -> str:
+    """ISO-время из базы в человеческий вид, в часах пользователя.
+
+    Сдвиг обязателен: в базе лежит серверное (UTC) время, а человек сверяет
+    «последнее обращение» со своими часами — без сдвига оно на несколько часов в
+    прошлом, и выглядит это как «приложение не ходило за данными».
+
+    Секунды не показываем: это строка «когда последний раз читали», а не лог.
+    """
     if not value:
         return "ещё ни разу"
-    date, _, clock = value.partition("T")
-    parts = date.split("-")
-    if len(parts) != 3:  # pragma: no cover — формат пишет db.now_iso
+    try:
+        moment = timeutil.to_user_local(dt.datetime.fromisoformat(value), user)
+    except ValueError:  # pragma: no cover — формат пишет db.now_iso
         return value
-    return f"{parts[2]}.{parts[1]}.{parts[0]} {clock[:5]}".strip()
+    return moment.strftime("%d.%m.%Y %H:%M")
 
 
 # Каждая инструкция — самодостаточный экран: шаги, адрес и код лежат в одном
@@ -193,19 +201,19 @@ GUIDES = {
 OAUTH_GUIDES = frozenset({kind for kind, _ in keyboards.MCP_OAUTH_CLIENTS})
 
 
-def _connections_block(connections: list) -> str:
+def _connections_block(connections: list, user) -> str:
     if not connections:
         return ""
     lines = ["🔌 <b>Подключено:</b>"]
     for row in connections:
         name = mcp_oauth.client_display_name(row["metadata"], row["client_id"])
-        lines.append(f"• {escape(name)} — {_when(row['last_used_at'])}")
+        lines.append(f"• {escape(name)} — {_when(row['last_used_at'], user)}")
     return "\n".join(lines)
 
 
-def _screen_text(token_row, connections: list) -> str:
+def _screen_text(token_row, connections: list, user=None) -> str:
     blocks = [_INTRO, _address()]
-    connected = _connections_block(connections)
+    connected = _connections_block(connections, user)
     if connected:
         blocks.append(connected)
     if token_row is None:
@@ -219,7 +227,7 @@ def _screen_text(token_row, connections: list) -> str:
         # строке видно, дошёл запрос или нет, и не надо гадать, где ошибка.
         blocks.append(
             _credentials(token_row["token"])
-            + f"\n\n🕒 Последнее обращение по токену: {_when(used)}"
+            + f"\n\n🕒 Последнее обращение по токену: {_when(used, user)}"
         )
     # Последняя строка перед кнопками — про то, что кнопка ведёт не в очередной
     # список, а сразу ко всему нужному: человек, которого один раз погоняли между
@@ -242,7 +250,9 @@ async def _show(target, state: FSMContext, alert: str | None = None) -> None:
     await state.clear()
     row = await db.get_mcp_token(user.id)
     connections = await db.list_oauth_connections(user.id)
-    text = _screen_text(row, connections)
+    # Профиль нужен ровно за таймзоной: даты в базе серверные, а сверяет их
+    # человек со своими часами.
+    text = _screen_text(row, connections, await db.get_user(user.id))
     kb = keyboards.mcp_keyboard(row is not None, bool(connections))
     if is_callback:
         await ui.safe_edit(target, text, reply_markup=kb, parse_mode="HTML")
@@ -266,20 +276,28 @@ async def mcp_open(callback: CallbackQuery, state: FSMContext):
 async def mcp_guide(callback: CallbackQuery, state: FSMContext):
     """Инструкция под конкретный клиент — со всем, что нужно скопировать.
 
-    Код связывания выдаётся здесь же, на открытии экрана: он нужен на четвёртом
-    шаге этой самой инструкции, и посылать за ним на другой экран значит гонять
-    человека туда-обратно ровно в тот момент, когда у него на втором мониторе
-    открыта страница подтверждения. «🔄 Новый код» перерисовывает этот же экран.
+    Код связывания показывается здесь же, на открытии экрана: он нужен на
+    четвёртом шаге этой самой инструкции, и посылать за ним на другой экран значит
+    гонять человека туда-обратно ровно в тот момент, когда у него на втором
+    мониторе открыта страница подтверждения.
+
+    Действующий код при этом переиспользуется, а не выдаётся заново: человек мог
+    его уже скопировать и вернуться перечитать шаг — новый код в этот момент убил
+    бы тот, что у него в браузере. Сменить код можно кнопкой «🔄 Новый код», и
+    только ей.
     """
-    kind = callback.data.split(":", 2)[2]
+    parts = callback.data.split(":")
+    kind = parts[2]
+    # «🔄 Новый код» — тот же экран, но с явным требованием сменить код.
+    force_new = len(parts) > 3 and parts[3] == "new"
     guide = GUIDES.get(kind)
     if guide is None or not config.mcp_available():
         await _show(callback, state)
         return
     token, code = None, None
     if kind in OAUTH_GUIDES:
-        code = await mcp_oauth.issue_link_code(callback.from_user.id)
-        logger.info("MCP OAuth: link code issued for user %s", callback.from_user.id)
+        code = await mcp_oauth.link_code(callback.from_user.id, force_new=force_new)
+        logger.info("MCP OAuth: link code shown to user %s (new=%s)", callback.from_user.id, force_new)
     else:
         row = await db.get_mcp_token(callback.from_user.id)
         # Токен могли отозвать с другого устройства, пока этот экран висел
@@ -304,7 +322,7 @@ async def mcp_code(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Подключение по MCP выключено.", show_alert=True)
         return
     await state.clear()
-    code = await mcp_oauth.issue_link_code(callback.from_user.id)
+    code = await mcp_oauth.link_code(callback.from_user.id, force_new=True)
     logger.info("MCP OAuth: link code issued for user %s", callback.from_user.id)
     await ui.safe_edit(
         callback,
@@ -338,13 +356,14 @@ async def mcp_apps(callback: CallbackQuery, state: FSMContext):
         await _show(callback, state, alert="Подключённых приложений нет.")
         return
     lines = ["🔌 <b>Подключённые приложения</b>\n"]
+    user = await db.get_user(callback.from_user.id)
     buttons = []
     for row in connections:
         name = mcp_oauth.client_display_name(row["metadata"], row["client_id"])
         lines.append(
             f"• <b>{escape(name)}</b>\n"
-            f"   подключено: {_when(row['connected_at'])}\n"
-            f"   последнее обращение: {_when(row['last_used_at'])}"
+            f"   подключено: {_when(row['connected_at'], user)}\n"
+            f"   последнее обращение: {_when(row['last_used_at'], user)}"
         )
         buttons.append((row["client_id"][:48], name))
     lines.append(

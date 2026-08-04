@@ -232,9 +232,22 @@ async def serve() -> None:
     Падение сервера не должно ронять бота: Telegram-часть — основная, а MCP
     отвалившийся с ошибкой порта заметят лишь те, кто им пользуется.
     """
+    try:
+        # Сборка приложения — тоже под перехватом, и это не перестраховка: OAuth
+        # требует HTTPS-адреса (RFC 8414), и на MCP_PUBLIC_URL с http сборка
+        # падает здесь. Снаружи try это уронило бы задачу с голым трейсбеком, а
+        # причина в нём не видна — а бот при этом продолжал бы работать, так что
+        # заметить нечем.
+        app = build_app()
+    except Exception:
+        logger.exception(
+            "MCP server not started: не удалось собрать приложение. "
+            "Проверь MCP_PUBLIC_URL — для OAuth он обязан быть https://"
+        )
+        return
     server = uvicorn.Server(
         uvicorn.Config(
-            build_app(),
+            app,
             host="0.0.0.0",  # noqa: S104 — контейнер, наружу торчит один порт
             port=config.MCP_PORT,
             log_level="info",

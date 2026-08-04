@@ -173,7 +173,7 @@ async def _connect(app, user_id: int, name: str = "Claude") -> dict:
     status, headers, _ = await _authorize(app, client_id, challenge)
     assert status == 302
     request_id = _request_id(headers["location"])
-    link_code = await mcp_oauth.issue_link_code(user_id)
+    link_code = await mcp_oauth.link_code(user_id)
     status, headers, _ = await _consent(app, request_id, link_code)
     assert status == 302, headers
     code = parse_qs(urlparse(headers["location"]).query)["code"][0]
@@ -329,7 +329,7 @@ async def test_an_authorization_code_cannot_be_exchanged_twice(fresh_db, user_id
         client_id = await _register(app)
         verifier, challenge = _pkce()
         _, headers, _ = await _authorize(app, client_id, challenge)
-        link_code = await mcp_oauth.issue_link_code(user_id)
+        link_code = await mcp_oauth.link_code(user_id)
         _, headers, _ = await _consent(app, _request_id(headers["location"]), link_code)
         code = parse_qs(urlparse(headers["location"]).query)["code"][0]
 
@@ -349,7 +349,7 @@ async def test_a_wrong_pkce_verifier_is_rejected(fresh_db, user_id):
         client_id = await _register(app)
         _, challenge = _pkce()
         _, headers, _ = await _authorize(app, client_id, challenge)
-        link_code = await mcp_oauth.issue_link_code(user_id)
+        link_code = await mcp_oauth.link_code(user_id)
         _, headers, _ = await _consent(app, _request_id(headers["location"]), link_code)
         code = parse_qs(urlparse(headers["location"]).query)["code"][0]
 
@@ -381,7 +381,7 @@ async def test_the_redirect_uri_must_match_at_the_token_step_too(fresh_db, user_
         client_id = await _register(app)
         verifier, challenge = _pkce()
         _, headers, _ = await _authorize(app, client_id, challenge)
-        link_code = await mcp_oauth.issue_link_code(user_id)
+        link_code = await mcp_oauth.link_code(user_id)
         _, headers, _ = await _consent(app, _request_id(headers["location"]), link_code)
         code = parse_qs(urlparse(headers["location"]).query)["code"][0]
 
@@ -446,7 +446,7 @@ async def test_an_expired_link_code_opens_nothing(fresh_db, user_id):
         client_id = await _register(app)
         _, headers, _ = await _authorize(app, client_id, _pkce()[1])
         request_id = _request_id(headers["location"])
-        link_code = await mcp_oauth.issue_link_code(user_id)
+        link_code = await mcp_oauth.link_code(user_id)
         await fresh_db.conn().execute(
             "UPDATE oauth_link_codes SET expires_at = ? WHERE code = ?",
             (time.time() - 1, link_code),
@@ -465,7 +465,7 @@ async def test_a_link_code_works_exactly_once(fresh_db, user_id):
     чужих, если человек его переслал вместе со скриншотом."""
     app = mcp_server.build_app()
     async with _running(app):
-        link_code = await mcp_oauth.issue_link_code(user_id)
+        link_code = await mcp_oauth.link_code(user_id)
         first_client = await _register(app, name="Claude")
         _, headers, _ = await _authorize(app, first_client, _pkce()[1])
         first_status, _, _ = await _consent(app, _request_id(headers["location"]), link_code)
@@ -487,7 +487,7 @@ async def test_five_wrong_attempts_lock_the_request_even_for_the_right_code(fres
         client_id = await _register(app)
         _, headers, _ = await _authorize(app, client_id, _pkce()[1])
         request_id = _request_id(headers["location"])
-        link_code = await mcp_oauth.issue_link_code(user_id)
+        link_code = await mcp_oauth.link_code(user_id)
 
         for _ in range(mcp_oauth.LINK_CODE_MAX_ATTEMPTS):
             status, _, body = await _consent(app, request_id, "000000")
@@ -502,9 +502,9 @@ async def test_five_wrong_attempts_lock_the_request_even_for_the_right_code(fres
 
 
 async def test_a_new_code_replaces_the_previous_one(fresh_db, user_id):
-    """«Нажал кнопку дважды» не должно оставлять позади действующий код."""
-    first = await mcp_oauth.issue_link_code(user_id)
-    second = await mcp_oauth.issue_link_code(user_id)
+    """«🔄 Новый код» не должен оставлять позади действующий прежний."""
+    first = await mcp_oauth.link_code(user_id)
+    second = await mcp_oauth.link_code(user_id, force_new=True)
 
     assert first != second
     assert await fresh_db.verify_oauth_link_code("нет-заявки", first, 5) == (
@@ -521,7 +521,7 @@ async def test_the_code_is_six_digits_and_lives_as_long_as_promised(fresh_db, us
     срок в тексте берутся из одной константы, иначе «код истёк» приходит раньше,
     чем человек этого ждёт."""
     before = time.time()
-    code = await mcp_oauth.issue_link_code(user_id)
+    code = await mcp_oauth.link_code(user_id)
 
     assert len(code) == 6
     assert code.isdigit()
@@ -578,6 +578,41 @@ async def test_disconnecting_one_app_leaves_the_other_connected(fresh_db, user_i
 
     assert claude_status == 401
     assert chatgpt_status == 200
+
+
+async def test_refresh_does_not_reset_the_connection_date(fresh_db, user_id):
+    """«Подключено» — это когда человек подтвердил доступ, а не когда клиент
+    последний раз обновил токен.
+
+    Так и было сломано: created_at новой пары становился датой подключения, и у
+    того, кто подключился месяц назад, экран показывал «подключено сегодня» —
+    потому что обновление приходит раз в час.
+    """
+    app = mcp_server.build_app()
+    async with _running(app):
+        tokens = await _connect(app, user_id)
+        connected_at = (await fresh_db.list_oauth_connections(user_id))[0]["connected_at"]
+        # Сдвигаем дату подключения в прошлое: подключились не сейчас, а раньше.
+        await fresh_db.conn().execute(
+            "UPDATE oauth_tokens SET connected_at = ? WHERE access_token = ?",
+            ("2026-07-01T10:00:00", tokens["access_token"]),
+        )
+        await fresh_db.conn().commit()
+
+        await _asgi(
+            app,
+            "POST",
+            "/token",
+            form={
+                "grant_type": "refresh_token",
+                "refresh_token": tokens["refresh_token"],
+                "client_id": tokens["client_id"],
+            },
+        )
+        after = (await fresh_db.list_oauth_connections(user_id))[0]["connected_at"]
+
+    assert connected_at is not None
+    assert after == "2026-07-01T10:00:00"
 
 
 async def test_the_connections_list_shows_one_row_per_app(fresh_db, user_id):
@@ -698,7 +733,7 @@ async def test_secrets_do_not_reach_the_logs(fresh_db, user_id, caplog):
     app = mcp_server.build_app()
     with caplog.at_level(logging.INFO):
         async with _running(app):
-            link_code = await mcp_oauth.issue_link_code(user_id)
+            link_code = await mcp_oauth.link_code(user_id)
             client_id = await _register(app)
             verifier, challenge = _pkce()
             _, headers, _ = await _authorize(app, client_id, challenge)
@@ -765,7 +800,7 @@ async def test_the_purge_removes_only_the_dead(fresh_db, user_id):
             expires_at=stale,
             refresh_expires_at=stale,
         )
-        code = await mcp_oauth.issue_link_code(user_id)
+        code = await mcp_oauth.link_code(user_id)
         await fresh_db.conn().execute(
             "UPDATE oauth_link_codes SET expires_at = ? WHERE code = ?", (stale, code)
         )
@@ -780,3 +815,24 @@ async def test_the_purge_removes_only_the_dead(fresh_db, user_id):
     assert await fresh_db.get_oauth_consent_request("stale") is None
     assert await fresh_db.get_oauth_access_token("stale-access") is None
     assert len(await fresh_db.list_oauth_connections(user_id)) == 1
+
+
+async def test_the_purge_collects_clients_nobody_references(fresh_db, user_id):
+    """Каждое «добавить коннектор» регистрирует нового клиента, и отключение
+    приложения его не удаляет: строка остаётся, а ссылок на неё нет ни у токена,
+    ни у заявки. Без прополки oauth_clients растёт от каждой попытки подключиться
+    — в том числе брошенной на середине.
+    """
+    app = mcp_server.build_app()
+    async with _running(app):
+        alive = await _connect(app, user_id, name="Claude")
+        abandoned = await _register(app, name="ChatGPT")  # человек не дошёл до согласия
+
+        first_purge = await fresh_db.purge_expired_oauth()
+        await fresh_db.revoke_oauth_client_tokens(user_id, alive["client_id"])
+        await fresh_db.purge_expired_oauth()
+
+    # Брошенная регистрация ушла сразу, а живая — только вместе с отключением.
+    assert first_purge == 1
+    assert await fresh_db.get_oauth_client(abandoned) is None
+    assert await fresh_db.get_oauth_client(alive["client_id"]) is None

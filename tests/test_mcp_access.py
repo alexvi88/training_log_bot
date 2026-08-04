@@ -232,25 +232,49 @@ async def test_connector_guide_carries_the_code_on_the_same_screen(fresh_db, use
     assert "https://training-log.example.com/mcp" in text
     # «Новый код» перерисовывает эту же инструкцию, а не уводит на третий экран.
     assert _buttons(callback.message.answer.call_args.kwargs["reply_markup"]) == [
-        f"mcp:how:{kind}",
+        f"mcp:how:{kind}:new",
         "mcp:open",
     ]
 
 
 @pytest.mark.parametrize("kind", sorted(mcp_access.OAUTH_GUIDES))
-async def test_reopening_a_guide_gives_a_fresh_code(fresh_db, user_id, kind):
-    """«Не успел» — обычный исход, и лечится он на месте: повторное открытие
-    инструкции выдаёт новый код, а прежний перестаёт существовать."""
+async def test_reopening_a_guide_keeps_the_code_already_copied(fresh_db, user_id, kind):
+    """Человек скопировал код, вставил его в браузере и вернулся в бота
+    перечитать шаг — и код от этого умирать не должен.
+
+    Именно так и ломалось: каждое открытие инструкции выдавало новый, а тот, что
+    уже лежал в поле на странице подтверждения, становился мёртвым.
+    """
     first = _callback(user_id, f"mcp:how:{kind}")
     await mcp_access.mcp_guide(first, await _state(user_id))
+    cur = await fresh_db.conn().execute("SELECT code FROM oauth_link_codes")
+    code = (await cur.fetchone())["code"]
+
     second = _callback(user_id, f"mcp:how:{kind}")
     await mcp_access.mcp_guide(second, await _state(user_id))
 
+    assert code in _sent_text(second)
+    cur = await fresh_db.conn().execute("SELECT code FROM oauth_link_codes")
+    assert [row["code"] for row in await cur.fetchall()] == [code]
+
+
+@pytest.mark.parametrize("kind", sorted(mcp_access.OAUTH_GUIDES))
+async def test_the_new_code_button_does_rotate_it(fresh_db, user_id, kind):
+    """А явная кнопка — меняет: «код истёк» лечится на том же экране."""
+    first = _callback(user_id, f"mcp:how:{kind}")
+    await mcp_access.mcp_guide(first, await _state(user_id))
+    cur = await fresh_db.conn().execute("SELECT code FROM oauth_link_codes")
+    old = (await cur.fetchone())["code"]
+
+    rotated = _callback(user_id, f"mcp:how:{kind}:new")
+    await mcp_access.mcp_guide(rotated, await _state(user_id))
+
+    text = _sent_text(rotated)
     cur = await fresh_db.conn().execute("SELECT code FROM oauth_link_codes")
     codes = [row["code"] for row in await cur.fetchall()]
+    assert codes != [old]
     assert len(codes) == 1
-    assert codes[0] in _sent_text(second)
-    assert codes[0] not in _sent_text(first)
+    assert codes[0] in text
 
 
 @pytest.mark.parametrize("kind", list(mcp_access.GUIDES))
@@ -398,6 +422,26 @@ async def test_disconnecting_the_last_app_returns_to_the_main_screen(fresh_db, u
     assert await fresh_db.list_oauth_connections(user_id) == []
     assert "mcp:apps" not in _buttons(callback.message.answer.call_args.kwargs["reply_markup"])
     assert callback.answer.call_args.kwargs.get("show_alert") is True
+
+
+async def test_dates_are_shown_in_the_users_own_hours(fresh_db, user_id):
+    """В базе время серверное (UTC), а сверяет его человек со своими часами: без
+    сдвига «последнее обращение» показывалось бы на несколько часов в прошлом, и
+    выглядело бы это как «приложение не ходило за данными»."""
+    await fresh_db.update_user(user_id, tz_offset=3)
+    await _connect_app(fresh_db, user_id, "client-1", "Claude")
+    await fresh_db.conn().execute(
+        "UPDATE oauth_tokens SET connected_at = ?, last_used_at = ? WHERE client_id = ?",
+        ("2026-08-04T10:00:00", "2026-08-04T12:30:00", "client-1"),
+    )
+    await fresh_db.conn().commit()
+
+    callback = _callback(user_id, "mcp:apps")
+    await mcp_access.mcp_apps(callback, await _state(user_id))
+
+    text = _sent_text(callback)
+    assert "04.08.2026 13:00" in text  # 10:00 UTC + 3
+    assert "04.08.2026 15:30" in text
 
 
 async def test_disconnecting_someone_elses_app_does_nothing(fresh_db, user_id):
