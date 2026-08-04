@@ -1450,6 +1450,26 @@ def set_actions_keyboard(set_id: int) -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
+def csv_import_confirm_keyboard(new_count: int, dup_count: int) -> InlineKeyboardMarkup:
+    """Кнопки подтверждения импорта CSV.
+
+    Дубли по датам ни пропускаются молча, ни грузятся молча: обычная кнопка
+    берёт только новые даты (и говорит, сколько их), а вторая появляется лишь
+    при дублях — для тех, кто действительно тренировался в тот день дважды.
+    Если новых дат нет, кнопки «загрузить N» нет вообще: одна и та же история
+    дважды — это тот самый баг, из-за которого её потом удаляли по одной.
+    """
+    b = InlineKeyboardBuilder()
+    if new_count:
+        b.button(text=f"✅ Загрузить {new_count}", callback_data="imp:save")
+    if dup_count:
+        total = new_count + dup_count
+        b.button(text=f"⚠️ Загрузить всё ({total}), включая дубли", callback_data="imp:saveall")
+    b.button(text="❌ Отмена", callback_data="imp:cancel")
+    b.adjust(1)
+    return b.as_markup()
+
+
 def csv_column_options_keyboard(headers: list[str], prefix: str, allow_skip: bool = False) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     for idx, header in enumerate(headers):
