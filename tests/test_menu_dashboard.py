@@ -13,6 +13,7 @@
 """
 import datetime as dt
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import charts
 import formatting
@@ -379,6 +380,34 @@ def test_an_all_zero_series_does_not_take_the_whole_menu_down():
 
 def test_a_single_point_series_renders_without_a_line():
     assert _render(lifts=[("ЖИМ", [100.0], "100 кг", "")])[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_the_year_grid_fits_with_room_for_the_last_month():
+    """Клетка выводится из ширины, поэтому запас справа обязан быть в формуле.
+
+    Его там не было: 53 колонки полного года плюс 3.4 юнита под Пн/Ср/Пт не
+    влезали в 56, и последняя неделя — та, в которой человек тренируется прямо
+    сейчас, — уезжала за край обрезанной.
+    """
+    x_units = charts.DASH_WIDTH_IN / charts._DASH_CELL_IN
+
+    assert x_units >= charts._DASH_CAL_LEFT_UNITS + charts._DASH_CAL_COLUMNS
+    last_col = charts._DASH_CAL_COLUMNS - 1
+    assert x_units >= (
+        charts._DASH_CAL_LEFT_UNITS + last_col + charts._DASH_CAL_MONTH_UNITS
+    )
+
+
+def test_the_current_month_is_labelled():
+    """Подпись рисовалась «кроме двух последних колонок» — то есть текущий месяц
+    не подписывался никогда, хотя он единственный, который человеку и интересен."""
+    ax = MagicMock()
+    today = dt.date(2026, 8, 4)
+
+    charts._dash_year_calendar(ax, {}, today, today - dt.timedelta(weeks=52))
+
+    labels = [call.args[2] for call in ax.text.call_args_list if len(call.args) > 2]
+    assert "Авг" in labels
 
 
 def test_the_lift_card_is_spaced_like_the_volume_row():

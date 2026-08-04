@@ -366,10 +366,22 @@ def _dash_section(ax, title: str, note: str = "", note_colour: str = HEATMAP_FIL
 # девятью неделями клетки такие же, просто занимают левую часть полосы, — как в
 # гитхабе у молодого аккаунта. Растягивание девяти колонок на всю ширину давало
 # полосы 8:1, на календарь уже не похожие.
-_DASH_CELL_IN = 6.67 / 56          # 52 недели + 3.4 юнита слева под Пн/Ср/Пт
-_DASH_CAL_LEFT_UNITS = 3.4
+_DASH_CAL_LEFT_UNITS = 3.4         # слева от сетки — подписи Пн/Ср/Пт
+# Справа тоже нужен запас, и раньше его не было: клетка выводилась из ширины на 56
+# юнитов, а колонок в полном годе 53 плюс 3.4 слева — последняя неделя (та самая,
+# в которой человек тренируется прямо сейчас) уезжала за край обрезанной, а
+# подпись текущего месяца не рисовалась вовсе, потому что не влезала. Запас
+# рассчитан на трёхбуквенное «Авг» у самой правой колонки.
+_DASH_CAL_RIGHT_UNITS = 2.4
+_DASH_CAL_COLUMNS = 53             # 52 недели назад плюс текущая
+_DASH_CELL_IN = DASH_WIDTH_IN / (
+    _DASH_CAL_LEFT_UNITS + _DASH_CAL_COLUMNS + _DASH_CAL_RIGHT_UNITS
+)
 _DASH_CAL_TOP_UNITS = -4.0         # место над сеткой под месяцы и заголовок
 _DASH_CAL_BOTTOM_UNITS = 7.6
+# Ширина подписи месяца в юнитах: три буквы шрифтом DASH_FS_MICRO. Нужна, чтобы
+# решать, влезает ли подпись, а не гадать по номеру колонки.
+_DASH_CAL_MONTH_UNITS = 1.6
 
 
 def _dash_calendar_height() -> float:
@@ -425,10 +437,13 @@ def _dash_year_calendar(
                 continue
             colour = HEATMAP_FILLED if day_counts.get(day, 0) > 0 else HEATMAP_EMPTY
             _rounded_cell(ax, col, row, 1, colour)
-        # Последние колонки подписи не получают: название месяца шире клетки, и у
-        # правого края оно выезжает за кадр обрезанным до одной буквы.
+        # Подпись рисуется, если она целиком влезает до правого края полосы, а не
+        # «кроме двух последних колонок», как раньше. Правило по номеру колонки
+        # выбрасывало подпись текущего месяца всегда — а это единственный месяц,
+        # который человеку и интересен: на скриншоте августа не было вовсе.
         new_month = col > 0 and monday.month != (monday - dt.timedelta(weeks=1)).month
-        if new_month and col <= columns - 3:
+        room_right = (x_units - left_units) - col
+        if new_month and room_right >= _DASH_CAL_MONTH_UNITS:
             ax.text(col, -1.1, _MONTHS_RU[monday.month - 1], color="#6b7684",
                     fontsize=DASH_FS_MICRO, va="center")
 
