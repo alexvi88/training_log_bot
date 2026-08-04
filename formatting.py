@@ -476,6 +476,7 @@ def fit_workout_text(build_summary, suffix: str, limit: int = MESSAGE_LIMIT) -> 
 
 
 _MD_BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
+_MD_HEADING_RE = re.compile(r"^#{1,6}[ \t]+(.*)$", re.MULTILINE)
 
 
 def markdown_bold_to_html(text: str) -> str:
@@ -486,7 +487,14 @@ def markdown_bold_to_html(text: str) -> str:
     characters elsewhere in the text can't break the message. A ** pair split
     across two chunks (e.g. by Telegram's message-length limit) just falls back
     to literal escaped asterisks in both chunks rather than an unclosed tag.
+
+    The system prompt tells the model to never use "#" headings, but it slips
+    up occasionally — Telegram has no heading markup at all, so an unhandled
+    "### Foo" would otherwise render as literal hashes. Stripped here and bolded
+    instead, since that's the closest Telegram equivalent to what a heading
+    is for.
     """
+    text = _MD_HEADING_RE.sub(lambda m: f"**{m.group(1)}**", text)
     parts = []
     pos = 0
     for m in _MD_BOLD_RE.finditer(text):

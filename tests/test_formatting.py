@@ -244,6 +244,18 @@ def test_markdown_bold_to_html_leaves_unmatched_star_pair_as_literal():
     assert formatting.markdown_bold_to_html("**pull down") == "**pull down"
 
 
+def test_markdown_bold_to_html_converts_headings_to_bold():
+    # Telegram has no heading markup; the model occasionally emits "#" headings
+    # despite being told not to, and they should not show up as literal hashes.
+    assert formatting.markdown_bold_to_html("### Итог") == "<b>Итог</b>"
+
+
+def test_markdown_bold_to_html_strips_hashes_mid_text():
+    text = formatting.markdown_bold_to_html("Привет\n## Заголовок\nдальше текст")
+    assert "##" not in text
+    assert "<b>Заголовок</b>" in text
+
+
 # ---------- build_ai_comment_block ----------
 
 
