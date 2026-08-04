@@ -153,6 +153,31 @@ class _RunningDisplay:
                     await self._placeholder.edit_text(self._last_text)
 
 
+def _draft_tail(text: str) -> str:
+    """Хвост ответа для черновика, прижатый к началу строки.
+
+    Резать хвост ровно по счётчику символов (`text[-1000:]`) — и есть та самая
+    дёрганость: каждая новая пачка букв сдвигает окно на столько же слева, весь
+    видимый текст уезжает влево на каждом обновлении, и клиенту нечего
+    анимировать — он перерисовывает пузырь целиком. Да ещё и начинается всё с
+    середины слова.
+
+    С привязкой к строке начало окна стоит на месте, пока эта строка из него не
+    выпадет: между сдвигами текст только дописывается снизу — ровно то, что
+    клиент умеет анимировать плавно, — а дёргается раз в строку, а не раз в
+    пачку букв. Если строк в окне нет вовсе (сплошной абзац), отступаем к
+    границе слова: это хотя бы не полслова.
+    """
+    if len(text) <= MAX_DRAFT_CHARS:
+        return text
+    window = text[-MAX_DRAFT_CHARS:]
+    newline = window.find("\n")
+    if newline != -1:
+        return window[newline + 1 :]
+    space = window.find(" ")
+    return window[space + 1 :] if space != -1 else window
+
+
 class _DraftStreamer:
     """Печатает ответ тренера в пузыре-черновике, пока модель его генерирует.
 
@@ -198,7 +223,7 @@ class _DraftStreamer:
         """Отдать черновику новый текст. Не ждёт сети — только будит писателя."""
         if not self._enabled or not text:
             return
-        self._pending = text[-MAX_DRAFT_CHARS:]
+        self._pending = _draft_tail(text)
         if self._writer is None:
             self._writer = asyncio.create_task(self._run())
         self._wake.set()
@@ -226,7 +251,14 @@ class _DraftStreamer:
         """True — черновик ушёл (или стоит попробовать ещё раз), False — сдаёмся."""
         try:
             await self._message.bot.send_message_draft(
-                chat_id=self._message.chat.id, draft_id=self._draft_id, text=text
+                chat_id=self._message.chat.id,
+                draft_id=self._draft_id,
+                # Модель печатает markdown, а черновик — обычное сообщение:
+                # без разбора разметки в пузыре мигали сырые «**» ровно там,
+                # где тренер называет упражнение, то есть в каждой второй
+                # строке. Режем ДО разбора, поэтому теги в куске всегда парные.
+                text=formatting.ai_markdown_to_html(text),
+                parse_mode="HTML",
             )
             return True
         except TelegramRetryAfter as e:

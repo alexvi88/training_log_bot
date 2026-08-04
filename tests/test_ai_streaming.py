@@ -154,6 +154,52 @@ async def test_only_the_tail_is_streamed_for_long_answers():
     await streamer.close()
 
 
+# ---------- the draft window ----------
+
+
+async def test_short_text_is_streamed_whole():
+    assert handler._draft_tail("Смотрю твой жим") == "Смотрю твой жим"
+
+
+async def test_the_tail_starts_at_a_line_break_not_mid_word():
+    long_line = "х" * handler.MAX_DRAFT_CHARS
+    assert handler._draft_tail(f"первая строка\n{long_line}\nхвост") == "хвост"
+
+
+async def test_the_window_holds_still_while_the_text_grows_under_it():
+    """The jitter came from slicing by character count: every new delta shoved
+    the window left by the same amount, so the whole bubble shifted on each
+    update and the client had nothing to animate but a full redraw. Anchored to
+    a line, the visible text only ever gains at the bottom until a whole line
+    scrolls out."""
+    head = "строка одна\nстрока два\n" + "х" * handler.MAX_DRAFT_CHARS + "\n"
+    first = handler._draft_tail(head + "растущий")
+    second = handler._draft_tail(head + "растущий хвост")
+
+    assert first == "растущий"
+    assert second.startswith(first)
+
+
+async def test_a_single_unbroken_paragraph_falls_back_to_a_word_boundary():
+    text = "слово " * (handler.MAX_DRAFT_CHARS // 3)
+    assert not handler._draft_tail(text).startswith("во ")
+
+
+async def test_the_draft_shows_formatted_text_not_raw_markdown():
+    """The bubble is a plain message, so ** used to blink through it verbatim —
+    on every second line, since that is how exercise names are marked."""
+    msg = _message()
+    streamer = handler._DraftStreamer(msg)
+
+    await streamer.push("Смотрю твой **pull down**")
+    await _settle()
+
+    sent = msg.bot.send_message_draft.await_args.kwargs
+    assert sent["text"] == "Смотрю твой <b>pull down</b>"
+    assert sent["parse_mode"] == "HTML"
+    await streamer.close()
+
+
 async def test_empty_chunks_are_not_sent():
     msg = _message()
     await handler._DraftStreamer(msg).push("")
