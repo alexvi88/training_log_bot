@@ -459,6 +459,50 @@ def now_iso() -> str:
     return dt.datetime.now().isoformat(timespec="seconds")
 
 
+# ---------- сутки по часам пользователя ----------
+#
+# started_at/created_at пишутся по часам сервера, а сервер живёт по UTC. Экраны
+# же считают «сегодня» местным временем пользователя (users.tz_offset, см.
+# timeutil.user_today). Пока агрегаты резали день через date(started_at), эти две
+# системы расходились на тренировках около полуночи, и расхождение было видно
+# пользователю: тренировка, закрытая в 23:40 западнее UTC, попадала в UTC-«завтра»
+# — окно «за 30 дней», посчитанное от местного «сегодня», её не ловило («0
+# тренировок за 30 дней» сразу после тренировки), а «дней с последней» уходило в
+# минус. Поэтому день режется сдвинутой меткой: date(started_at, '-3 hours').
+#
+# Смещение подставляется в SQL текстом, а не параметром: тот же кусок выражения
+# идёт в SELECT, GROUP BY и оконную функцию, и три одинаковых плейсхолдера в
+# нужном порядке — источник ошибок. int() гарантирует, что в SQL уходит число.
+
+
+def _local_day(column: str, tz_offset: int) -> str:
+    """SQL-выражение «календарный день по часам пользователя» для UTC-столбца."""
+    return f"date({column}, '{int(tz_offset):+d} hours')"
+
+
+async def user_tz_offset(user_id: int) -> int:
+    """Смещение пользователя в целых часах; 0, если пользователя или значения нет."""
+    cur = await conn().execute(
+        "SELECT tz_offset FROM users WHERE telegram_id = ?", (user_id,)
+    )
+    row = await cur.fetchone()
+    try:
+        return int(row["tz_offset"])
+    except (TypeError, KeyError, IndexError, ValueError):
+        return 0
+
+
+async def _tz_offset_of(user_id: int, tz_offset: Optional[int]) -> int:
+    """Смещение для запроса: переданное вызывающей стороной или прочитанное из БД.
+
+    Агрегаты ниже принимают tz_offset необязательным параметром, и None значит
+    «возьми из users». Так вызовы, у которых строки пользователя под рукой нет
+    (их большинство), остаются корректными без изменений, а тот, кто уже держит
+    строку, может передать смещение и сэкономить запрос.
+    """
+    return await user_tz_offset(user_id) if tz_offset is None else int(tz_offset)
+
+
 def build_display_name(
     name: str,
     equipment: Optional[str] = None,
@@ -2130,14 +2174,21 @@ async def count_workouts(user_id: int, status: str = "finished") -> int:
     return count
 
 
-async def list_finished_workout_dates(user_id: int) -> list[str]:
+async def list_finished_workout_dates(
+    user_id: int, *, tz_offset: Optional[int] = None
+) -> list[str]:
     """Calendar date (YYYY-MM-DD) of each finished workout, ascending — for the dashboard.
 
     One row per workout (same-day workouts appear twice), so counts reflect
     workout volume rather than distinct active days.
+
+    День — местный для пользователя (см. «сутки по часам пользователя» выше):
+    эти даты сравниваются с timeutil.user_today, и UTC-день ломал ровно те
+    экраны, ради которых функция и существует — сводку, звание, стрик.
     """
+    day = _local_day("started_at", await _tz_offset_of(user_id, tz_offset))
     cur = await conn().execute(
-        "SELECT date(started_at) AS d FROM workouts "
+        f"SELECT {day} AS d FROM workouts "
         "WHERE user_id = ? AND status = 'finished' ORDER BY d",
         (user_id,),
     )
@@ -2341,25 +2392,33 @@ async def hall_of_fame_aggregates(user_id: int) -> dict[str, float]:
     }
 
 
-async def last_session_by_group(user_id: int) -> dict[Optional[int], tuple[str, int]]:
+async def last_session_by_group(
+    user_id: int, *, tz_offset: Optional[int] = None
+) -> dict[Optional[int], tuple[str, int]]:
     """Per muscle group: the date it was last trained and how many sets that
     session had — the two inputs a recovery estimate needs.
 
     One query rather than one per group: this feeds a screen the user opens
     several times per workout.
+
+    Дата — местная: восстановление считается как разница с timeutil.user_today
+    (analytics.recovery_percent), и UTC-день у вечерней тренировки давал
+    отрицательную разницу — группа выглядела «0% восстановления» там, где надо
+    было показать прогресс, и наоборот.
     """
+    day = _local_day("w.started_at", await _tz_offset_of(user_id, tz_offset))
     cur = await conn().execute(
         "SELECT gid, day, cnt FROM ("
-        "  SELECT e.primary_group_id AS gid, date(w.started_at) AS day, COUNT(s.id) AS cnt,"
+        f"  SELECT e.primary_group_id AS gid, {day} AS day, COUNT(s.id) AS cnt,"
         "         ROW_NUMBER() OVER ("
-        "             PARTITION BY e.primary_group_id ORDER BY date(w.started_at) DESC"
+        f"             PARTITION BY e.primary_group_id ORDER BY {day} DESC"
         "         ) AS rn"
         "  FROM sets s"
         "  JOIN workout_blocks b ON b.id = s.block_id"
         "  JOIN workouts w ON w.id = b.workout_id"
         "  JOIN exercises e ON e.id = s.exercise_id"
         "  WHERE w.user_id = ? AND w.status = 'finished'"
-        "  GROUP BY e.primary_group_id, date(w.started_at)"
+        f"  GROUP BY e.primary_group_id, {day}"
         ") WHERE rn = 1",
         (user_id,),
     )
@@ -2367,13 +2426,17 @@ async def last_session_by_group(user_id: int) -> dict[Optional[int], tuple[str, 
 
 
 async def weekly_volume_by_group(
-    user_id: int, start_date: str, end_date: str
+    user_id: int, start_date: str, end_date: str, *, tz_offset: Optional[int] = None
 ) -> dict[Optional[int], int]:
     """Count of working sets per muscle group across finished workouts in [start_date, end_date].
 
     Keyed by exercises.primary_group_id (None bucketed under the NULL key). Dates
-    are calendar days (YYYY-MM-DD) compared against date(workouts.started_at).
+    are calendar days (YYYY-MM-DD) compared against the *local* day of
+    workouts.started_at: границы окна вызывающая сторона считает от
+    timeutil.user_today, поэтому и день тренировки должен быть местным — иначе
+    вечерняя тренировка выпадала из окна, которое заканчивается «сегодня».
     """
+    day = _local_day("w.started_at", await _tz_offset_of(user_id, tz_offset))
     cur = await conn().execute(
         "SELECT e.primary_group_id AS gid, COUNT(s.id) AS cnt "
         "FROM sets s "
@@ -2381,7 +2444,7 @@ async def weekly_volume_by_group(
         "JOIN workouts w ON w.id = b.workout_id "
         "JOIN exercises e ON e.id = s.exercise_id "
         "WHERE w.user_id = ? AND w.status = 'finished' "
-        "AND date(w.started_at) BETWEEN ? AND ? "
+        f"AND {day} BETWEEN ? AND ? "
         "GROUP BY e.primary_group_id",
         (user_id, start_date, end_date),
     )
@@ -2397,7 +2460,13 @@ async def weekly_volume_by_group(
 
 
 async def top_exercises_by_frequency(
-    user_id: int, start_date: str, end_date: str, limit: int = 3, min_sessions: int = 2
+    user_id: int,
+    start_date: str,
+    end_date: str,
+    limit: int = 3,
+    min_sessions: int = 2,
+    *,
+    tz_offset: Optional[int] = None,
 ) -> list[aiosqlite.Row]:
     """Упражнения, которые человек делает чаще всего, — по числу тренировок, а не
     подходов.
@@ -2410,7 +2479,10 @@ async def top_exercises_by_frequency(
     Ничьи разводятся числом подходов, потом именем — иначе сводка
     перетасовывалась бы между открытиями меню на одних и тех же данных, а
     порядок входит в ключ кэша картинки.
+
+    Границы окна — местные календарные дни (как их и считает вызывающая сторона).
     """
+    day = _local_day("w.started_at", await _tz_offset_of(user_id, tz_offset))
     cur = await conn().execute(
         "SELECT e.id, e.display_name, COUNT(DISTINCT w.id) AS sessions, "
         "       COUNT(s.id) AS sets_count "
@@ -2419,7 +2491,7 @@ async def top_exercises_by_frequency(
         "JOIN workouts w ON w.id = b.workout_id "
         "JOIN exercises e ON e.id = s.exercise_id "
         "WHERE w.user_id = ? AND w.status = 'finished' "
-        "AND date(w.started_at) BETWEEN ? AND ? AND s.reps > 0 "
+        f"AND {day} BETWEEN ? AND ? AND s.reps > 0 "
         "GROUP BY e.id "
         "HAVING sessions >= ? "
         "ORDER BY sessions DESC, sets_count DESC, e.display_name "
@@ -2451,40 +2523,50 @@ async def exercise_e1rm_series(
     return [row["e1rm"] for row in reversed(await cur.fetchall())]
 
 
-async def daily_tonnage(user_id: int, start_date: str, end_date: str) -> dict[str, float]:
+async def daily_tonnage(
+    user_id: int, start_date: str, end_date: str, *, tz_offset: Optional[int] = None
+) -> dict[str, float]:
     """Тоннаж по календарным дням в окне. По неделям сворачивает вызывающая
     сторона: у SQLite %W начинает неделю с воскресенья и ломается на границе
     года, а тут неделя должна совпадать с той, от которой считается всё
     остальное на экране.
+
+    Дни — местные для пользователя, и ключами возвращаются тоже они: экран
+    раскладывает тоннаж по своим датам, посчитанным от timeutil.user_today.
     """
+    day = _local_day("w.started_at", await _tz_offset_of(user_id, tz_offset))
     cur = await conn().execute(
-        f"SELECT date(w.started_at) AS d, SUM({LOAD_WEIGHT_SQL} * s.reps) AS t "
+        f"SELECT {day} AS d, SUM({LOAD_WEIGHT_SQL} * s.reps) AS t "
         "FROM sets s "
         "JOIN workout_blocks b ON b.id = s.block_id "
         "JOIN workouts w ON w.id = b.workout_id "
         "WHERE w.user_id = ? AND w.status = 'finished' "
-        "AND date(w.started_at) BETWEEN ? AND ? "
-        "GROUP BY date(w.started_at)",
+        f"AND {day} BETWEEN ? AND ? "
+        f"GROUP BY {day}",
         (user_id, start_date, end_date),
     )
     return {row["d"]: row["t"] or 0.0 for row in await cur.fetchall()}
 
 
 async def e1rm_record_count(
-    user_id: int, since_date: str, formula: str = "epley"
+    user_id: int, since_date: str, formula: str = "epley", *, tz_offset: Optional[int] = None
 ) -> int:
     """Сколько упражнений с `since_date` перебили свой прежний лучший e1RM.
 
     Упражнения, у которых прежнего лучшего нет вовсе, не считаются: первая в
     жизни тренировка движения формально бьёт рекорд в каждом подходе, и называть
     это рекордом значило бы поздравлять человека с тем, что он что-то попробовал.
+
+    `since_date` — местный календарный день, поэтому и день тренировки местный:
+    по UTC ночной рекорд первого дня окна попадал «до окна» и не считался.
     """
     e1rm = _e1rm_sql(formula)
+    day = _local_day("w.started_at", await _tz_offset_of(user_id, tz_offset))
     cur = await conn().execute(
         "SELECT COUNT(*) AS n FROM ("
         f"  SELECT s.exercise_id,"
-        f"         MAX(CASE WHEN date(w.started_at) >= ? THEN {e1rm} END) AS inside,"
-        f"         MAX(CASE WHEN date(w.started_at) <  ? THEN {e1rm} END) AS earlier"
+        f"         MAX(CASE WHEN {day} >= ? THEN {e1rm} END) AS inside,"
+        f"         MAX(CASE WHEN {day} <  ? THEN {e1rm} END) AS earlier"
         "   FROM sets s"
         "   JOIN workout_blocks b ON b.id = s.block_id"
         "   JOIN workouts w ON w.id = b.workout_id"
@@ -3899,7 +3981,7 @@ async def list_programs(user_id: int) -> list[aiosqlite.Row]:
 
 
 async def list_recent_programs(
-    user_id: int, since: str, limit: int = 3
+    user_id: int, since: str, limit: int = 3, *, tz_offset: Optional[int] = None
 ) -> list[dict[str, Any]]:
     """Программы, по которым человек реально тренировался начиная с `since`.
 
@@ -3911,13 +3993,18 @@ async def list_recent_programs(
     «верх» — это одна программа), одиночные шаблоны без программы идут сами по
     себе. `program_id` — чем открывается экран программы; `anchor_id` оставлен
     для старых клавиатур, он же routine последнего пройденного дня.
+
+    `since` — местная дата (окно считается от «сегодня» пользователя), поэтому и
+    день тренировки местный: программа, по которой человек тренировался вчера
+    вечером, не должна выпадать из «последних» из-за UTC-границы суток.
     """
+    day = _local_day("w.started_at", await _tz_offset_of(user_id, tz_offset))
     cur = await conn().execute(
         "SELECT r.id AS routine_id, r.name AS routine_name, r.program_id, "
         "p.name AS program_name, MAX(w.started_at) AS last_started "
         "FROM workouts w JOIN routines r ON r.id = w.routine_id "
         "LEFT JOIN programs p ON p.id = r.program_id "
-        "WHERE w.user_id = ? AND r.user_id = ? AND w.started_at >= ? "
+        f"WHERE w.user_id = ? AND r.user_id = ? AND {day} >= date(?) "
         "GROUP BY r.id ORDER BY MAX(w.started_at) DESC",
         (user_id, user_id, since),
     )
@@ -4466,13 +4553,21 @@ async def backup_to_file(dest_path: str) -> None:
 
 # ---------- push notifications ----------
 
-async def weekly_exercise_rollup(user_id: int, since_date: str) -> list[aiosqlite.Row]:
+async def weekly_exercise_rollup(
+    user_id: int, since_date: str, *, tz_offset: Optional[int] = None
+) -> list[aiosqlite.Row]:
     """Per exercise since `since_date`: best set, its reps, total tonnage and
     set count — one row per exercise, heaviest tonnage first.
 
     Feeds the weekly summary table (see formatting.build_weekly_summary), so
     it's one query rather than a walk over every workout of the week.
+
+    `since_date` — граница суток по местному времени (дата или дата с T00:00:00),
+    поэтому сравнение идёт по местному дню тренировки: иначе тренировка вечера
+    понедельника не попадала в таблицу той недели, которую сама же и открывала,
+    хотя в счётчике тренировок рядом уже была.
     """
+    day = _local_day("w.started_at", await _tz_offset_of(user_id, tz_offset))
     cur = await conn().execute(
         "SELECT e.display_name AS name, "
         f"       MAX({LOAD_WEIGHT_SQL}) AS top_weight, "
@@ -4482,20 +4577,27 @@ async def weekly_exercise_rollup(user_id: int, since_date: str) -> list[aiosqlit
         "JOIN workout_blocks b ON b.id = s.block_id "
         "JOIN workouts w ON w.id = b.workout_id "
         "JOIN exercises e ON e.id = s.exercise_id "
-        "WHERE w.user_id = ? AND w.status = 'finished' AND w.started_at >= ? AND s.reps > 0 "
+        f"WHERE w.user_id = ? AND w.status = 'finished' AND {day} >= date(?) AND s.reps > 0 "
         "GROUP BY e.id ORDER BY tonnage DESC",
         (user_id, since_date),
     )
     return await cur.fetchall()
 
 
-async def tonnage_since(user_id: int, since_date: str) -> float:
-    """Total weight x reps across all finished-workout sets on/after since_date — for the weekly digest push."""
+async def tonnage_since(
+    user_id: int, since_date: str, *, tz_offset: Optional[int] = None
+) -> float:
+    """Total weight x reps across all finished-workout sets on/after since_date — for the weekly digest push.
+
+    `since_date` приходит местной датой (дайджест считает окно от «сегодня»
+    пользователя), поэтому и отсечка — по местному дню тренировки.
+    """
+    day = _local_day("w.started_at", await _tz_offset_of(user_id, tz_offset))
     cur = await conn().execute(
         "SELECT COALESCE(SUM(COALESCE(s.load_weight, s.weight) * s.reps), 0) FROM sets s "
         "JOIN workout_blocks b ON b.id = s.block_id "
         "JOIN workouts w ON w.id = b.workout_id "
-        "WHERE w.user_id = ? AND w.status = 'finished' AND w.started_at >= ?",
+        f"WHERE w.user_id = ? AND w.status = 'finished' AND {day} >= date(?)",
         (user_id, since_date),
     )
     (total,) = await cur.fetchone()
