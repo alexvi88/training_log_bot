@@ -904,7 +904,7 @@ async def stale_finish_workout(callback: CallbackQuery, state: FSMContext):
     # workout happened to trigger an evaluation.
     started_at = dt.datetime.fromisoformat(workout["started_at"])
     await _evaluate_achievements(callback.from_user.id, workout_id, started_at, None)
-    await ui.safe_edit(callback, "✅ Тренировка завершена задним числом.")
+    await ui.safe_edit(callback, "✅ Закрыл тренировку задним числом — всё посчитал.")
     await callback.answer()
 
 
@@ -933,7 +933,7 @@ async def stale_delete(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Тренировка не найдена", show_alert=True)
         return
     await db.discard_workout(workout_id)
-    await ui.safe_edit(callback, "Тренировка удалена.")
+    await ui.safe_edit(callback, "Удалил тренировку.")
     await callback.answer()
 
 
@@ -1010,7 +1010,7 @@ async def start_workout(callback: CallbackQuery, state: FSMContext):
         return
     await _reset_new_workout_scaffold(state)
     await _delete_message(callback.message)
-    sent = await callback.message.answer("🏋️ Тренировка начата")
+    sent = await callback.message.answer("🏋️ Тренировка начата — погнали")
     await state.update_data(
         workout_id=workout_id, live_chat_id=sent.chat.id, live_message_id=sent.message_id,
         last_by_exercise={},
@@ -2067,7 +2067,7 @@ async def _apply_set_edit(state: FSMContext, data: dict, active: int, index: int
     if not (1 <= index <= len(sets)):
         if not sets:
             raise ParseError("Пока нет ни одного подхода — нечего править.")
-        raise ParseError(f"Нет подхода №{index} — сейчас залогировано {len(sets)}.")
+        raise ParseError(f"Нет подхода №{index} — в дневнике их пока {len(sets)}.")
     row = sets[index - 1]
     weight = row["weight"] if new_set.weight_omitted else new_set.weight
     await db.update_set(row["id"], weight, new_set.reps, new_set.rpe)
@@ -2936,7 +2936,7 @@ async def workout_card_note_entered(message: Message, state: FSMContext):
             chat_id=data["note_chat_id"], message_id=data["note_message_id"], text=full_text,
             parse_mode="HTML", reply_markup=card_kb,
         )
-    await message.reply("📝 Заметка сохранена.")
+    await message.reply("📝 Записал заметку.")
 
 
 async def _finalize_workout(event, state: FSMContext, note: str | None):
@@ -3001,7 +3001,7 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
         header = "🔥 <b>Рекорды и сравнения</b>"
         suffix += f"\n{formatting.DIVIDER}\n{header}\n{formatting.collapsible_if_long(highlights)}"
 
-    prefix = "✅ Сохранено как прошлая тренировка\n\n" if is_backfill else ""
+    prefix = "✅ Записал как прошлую тренировку\n\n" if is_backfill else ""
 
     # Existing comment (already generated, e.g. from a backfilled workout) shows right
     # away; a fresh one is generated in the background so finishing a workout doesn't

@@ -78,7 +78,7 @@ def _parse_rpe(raw: str | None) -> float | None:
         return None
     rpe = float(raw.replace(",", "."))
     if not (0 < rpe <= 10):
-        raise ParseError("RPE должен быть от 1 до 10")
+        raise ParseError("RPE — от 1 до 10, например «100x8@9»")
     return rpe
 
 
@@ -92,7 +92,7 @@ def parse_single_token(token: str) -> list[ParsedSet]:
     if bw_match:
         reps = int(bw_match.group("reps"))
         if reps <= 0:
-            raise ParseError("Повторы должны быть больше 0")
+            raise ParseError("Повторы — от 1, ноль в дневник не идёт")
         if reps > MAX_REPS:
             raise ParseError(f"Подозрительно много повторов (максимум {MAX_REPS}) — опечатка?")
         rpe = _parse_rpe(bw_match.group("rpe"))
@@ -108,13 +108,15 @@ def parse_single_token(token: str) -> list[ParsedSet]:
     rpe = _parse_rpe(match.group("rpe"))
 
     if reps <= 0:
-        raise ParseError("Повторы должны быть больше 0")
+        raise ParseError("Повторы — от 1, ноль в дневник не идёт")
     if reps > MAX_REPS:
         raise ParseError(f"Подозрительно много повторов (максимум {MAX_REPS}) — опечатка?")
     if weight > MAX_WEIGHT:
         raise ParseError(f"Подозрительно большой вес (максимум {MAX_WEIGHT:.0f}) — лишний ноль?")
     if not (0 < count <= MAX_SETS_PER_TOKEN):
-        raise ParseError("Странное количество подходов")
+        raise ParseError(
+            f"Странное количество подходов — за одну строку принимаю от 1 до {MAX_SETS_PER_TOKEN}, например «100x8x3»"
+        )
 
     return [ParsedSet(weight=weight, reps=reps, rpe=rpe) for _ in range(count)]
 
@@ -193,19 +195,19 @@ def parse_ru_date(text: str, today: dt.date | None = None) -> dt.date:
     raw = text.strip()
     match = _DATE_RE.match(raw)
     if not match:
-        raise ParseError("Не понял дату. Формат: дд.мм.гггг, например 14.03.2025")
+        raise ParseError("Не понял дату. Напиши как дд.мм.гггг, например 14.03.2025")
     day, month, year = int(match["d"]), int(match["m"]), int(match["y"])
     if year < 100:
         year += 2000
     try:
         date = dt.date(year, month, day)
     except ValueError:
-        raise ParseError("Такой даты не существует") from None
+        raise ParseError("Такой даты в календаре нет — проверь день и месяц") from None
     # today is passed in by callers that know the user's timezone — at the far
     # ends of the world the server's date is a day off, and typing your own
     # today's date shouldn't be rejected as "в будущем".
     if date > (today or dt.date.today()):
-        raise ParseError("Дата в будущем — для прошлой тренировки нужна дата не позже сегодня")
+        raise ParseError("Эта дата ещё в будущем — прошлая тренировка живёт не позже сегодняшнего дня")
     return date
 
 
@@ -274,7 +276,9 @@ def parse_quick_workout(text: str) -> list[QuickEntry]:
             entries[-1].sets.extend(sets)
             continue
         if len(name) > _QUICK_NAME_MAX:
-            raise ParseError(f"Слишком длинное название: «{name[:30]}…»")
+            raise ParseError(
+                f"Слишком длинное название: «{name[:30]}…» — уложись в {_QUICK_NAME_MAX} символов"
+            )
         entries.append(QuickEntry(name=name, sets=sets))
 
     if len(entries) > MAX_QUICK_ENTRIES:

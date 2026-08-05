@@ -6,6 +6,7 @@
     python3 scripts/gen_push_table.py
 
 Логика триггеров живёт в `engagement.py`, тексты — в `push_texts.py`.
+Общие правила голоса для всего бота (не только пушей) — `TONE_OF_VOICE.md`.
 
 ## Голос: «Привет Атлет»
 

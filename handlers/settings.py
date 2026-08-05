@@ -118,7 +118,7 @@ async def settings_unit(callback: CallbackQuery, state: FSMContext):
     await achievement_sync.resync(user_id)
     await show_settings(
         callback, state,
-        alert=f"Единицы переключены на {new_unit}. Все веса в истории пересчитаны автоматически.",
+        alert=f"Перевёл всё на {new_unit} — историю и рекорды пересчитал сам.",
     )
 
 

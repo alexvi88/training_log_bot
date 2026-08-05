@@ -81,7 +81,7 @@ class IgnoreStaleCallbackMiddleware(BaseMiddleware):
             raise
 
 
-_GENERIC_ERROR_TEXT = "⚠️ Что-то пошло не так. Нажми /start, чтобы вернуться в меню."
+_GENERIC_ERROR_TEXT = "⚠️ Что-то пошло не так — бывает даже у чемпионов. Жми /start, вернёмся в меню."
 
 
 def _error_chat_id(update) -> int | None:

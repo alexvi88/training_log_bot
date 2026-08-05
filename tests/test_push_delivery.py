@@ -58,6 +58,24 @@ async def test_push_upload_is_cached_and_reused_by_file_id(fresh_db, user_id):
     assert first_photo != second_photo
 
 
+async def test_push_cta_continues_the_coach_line_per_category(fresh_db, user_id):
+    """Кнопка — последняя строка пуша: под «серия на кону» она говорит «Спасти
+    серию», а категории без своей строки получают нейтральный дефолт."""
+    bot = _bot()
+
+    await engagement._deliver(
+        bot, user_id, engagement.PushDecision(push_texts.STREAK_AT_RISK, "текст"), _TODAY
+    )
+    kb = bot.send_photo.await_args.kwargs["reply_markup"]
+    assert kb.inline_keyboard[0][0].text == "▶ Спасти серию"
+
+    await engagement._deliver(
+        bot, user_id, engagement.PushDecision(push_texts.SKIP_3, "текст"), _TODAY
+    )
+    kb = bot.send_photo.await_args.kwargs["reply_markup"]
+    assert kb.inline_keyboard[0][0].text == engagement.DEFAULT_PUSH_CTA
+
+
 async def test_push_without_cta_omits_the_keyboard(fresh_db, user_id):
     bot = _bot()
     decision = engagement.PushDecision(push_texts.WEEKLY_DIGEST, "текст", with_cta=False)
