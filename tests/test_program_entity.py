@@ -99,6 +99,29 @@ async def test_unique_program_name_prefers_the_suffix_then_counts(fresh_db, user
     assert await db.unique_program_name(user_id, "PPL") == "PPL (3)"
 
 
+async def test_unique_program_name_never_exceeds_the_rename_limit(fresh_db, user_id):
+    """Имя ровно в лимит получало « (2)» сверху — 52 символа, которые ручное
+    переименование уже не принимает: копию нельзя было даже переназвать."""
+    db = fresh_db
+    base = "П" * config.MAX_PROGRAM_NAME_LENGTH
+    await db.create_program(user_id, base)
+
+    copy_name = await db.unique_program_name(user_id, base)
+    assert len(copy_name) <= config.MAX_PROGRAM_NAME_LENGTH
+    assert copy_name.endswith("(2)")
+
+    # Суффиксный вариант («от @vasya») обязан влезать так же.
+    suffixed = await db.unique_program_name(user_id, base, suffix="от @vasya")
+    assert len(suffixed) <= config.MAX_PROGRAM_NAME_LENGTH
+    assert suffixed.endswith("(от @vasya)")
+
+    # И следующая копия не совпадает с уже занятой усечённой.
+    await db.create_program(user_id, copy_name)
+    third = await db.unique_program_name(user_id, base)
+    assert len(third) <= config.MAX_PROGRAM_NAME_LENGTH
+    assert third != copy_name
+
+
 # ---------- порядок дней ----------
 
 
@@ -185,6 +208,14 @@ async def test_deleting_a_program_takes_its_days_and_their_exercises(fresh_db, u
 # ---------- «какой сегодня день» ----------
 
 
+async def _train_day(db, user_id, routine_id, started_at):
+    """Полноценная сессия дня: начата и завершена — именно завершение делает
+    тап «▶️» тренировкой в истории программы."""
+    workout_id = await db.create_workout(user_id, started_at=started_at, routine_id=routine_id)
+    await db.finish_workout(workout_id, finished_at=started_at)
+    return workout_id
+
+
 async def test_next_day_is_the_first_one_for_a_program_never_trained(fresh_db, user_id):
     program_id = await _program_with_days(fresh_db, user_id, "PPL", ["Толкай", "Тяни", "Ноги"])
     nxt = await fresh_db.next_program_day(program_id)
@@ -196,10 +227,10 @@ async def test_next_day_follows_the_last_one_actually_trained(fresh_db, user_id)
     program_id = await _program_with_days(fresh_db, user_id, "PPL", ["Толкай", "Тяни", "Ноги"])
     days = await db.list_program_days_by_id(program_id)
 
-    await db.create_workout(user_id, started_at="2026-08-01T10:00:00", routine_id=days[0]["id"])
+    await _train_day(db, user_id, days[0]["id"], "2026-08-01T10:00:00")
     assert (await db.next_program_day(program_id))["name"] == "Тяни"
 
-    await db.create_workout(user_id, started_at="2026-08-03T10:00:00", routine_id=days[1]["id"])
+    await _train_day(db, user_id, days[1]["id"], "2026-08-03T10:00:00")
     assert (await db.next_program_day(program_id))["name"] == "Ноги"
 
 
@@ -207,7 +238,7 @@ async def test_next_day_wraps_round_at_the_end_of_the_program(fresh_db, user_id)
     db = fresh_db
     program_id = await _program_with_days(fresh_db, user_id, "PPL", ["Толкай", "Тяни"])
     days = await db.list_program_days_by_id(program_id)
-    await db.create_workout(user_id, started_at="2026-08-03T10:00:00", routine_id=days[1]["id"])
+    await _train_day(db, user_id, days[1]["id"], "2026-08-03T10:00:00")
     assert (await db.next_program_day(program_id))["name"] == "Толкай"
 
 
@@ -217,8 +248,8 @@ async def test_a_session_logged_out_of_order_just_moves_the_suggestion(fresh_db,
     db = fresh_db
     program_id = await _program_with_days(fresh_db, user_id, "PPL", ["Толкай", "Тяни", "Ноги"])
     days = await db.list_program_days_by_id(program_id)
-    await db.create_workout(user_id, started_at="2026-08-01T10:00:00", routine_id=days[0]["id"])
-    await db.create_workout(user_id, started_at="2026-08-02T10:00:00", routine_id=days[2]["id"])
+    await _train_day(db, user_id, days[0]["id"], "2026-08-01T10:00:00")
+    await _train_day(db, user_id, days[2]["id"], "2026-08-02T10:00:00")
     assert (await db.next_program_day(program_id))["name"] == "Толкай"
 
 
@@ -226,14 +257,38 @@ async def test_day_history_counts_every_session_per_day(fresh_db, user_id):
     db = fresh_db
     program_id = await _program_with_days(fresh_db, user_id, "PPL", ["Толкай", "Ноги"])
     days = await db.list_program_days_by_id(program_id)
-    await db.create_workout(user_id, started_at="2026-07-01T10:00:00", routine_id=days[0]["id"])
-    await db.create_workout(user_id, started_at="2026-07-08T10:00:00", routine_id=days[0]["id"])
-    await db.create_workout(user_id, started_at="2026-06-20T10:00:00", routine_id=days[1]["id"])
+    await _train_day(db, user_id, days[0]["id"], "2026-07-01T10:00:00")
+    await _train_day(db, user_id, days[0]["id"], "2026-07-08T10:00:00")
+    await _train_day(db, user_id, days[1]["id"], "2026-06-20T10:00:00")
 
     history = await db.program_day_history(program_id)
 
     assert history[days[0]["id"]] == ("2026-07-08T10:00:00", 2)
     assert history[days[1]["id"]] == ("2026-06-20T10:00:00", 1)
+
+
+async def test_a_started_but_unfinished_workout_is_not_a_session_of_the_day(fresh_db, user_id):
+    """Тап «▶️ День 1», брошенный в раздевалке, — не тренировка: он не должен
+    ни попадать в историю дня, ни сдвигать «дальше по кругу» на День 2 —
+    иначе несделанный день пропускается насовсем."""
+    db = fresh_db
+    program_id = await _program_with_days(fresh_db, user_id, "PPL", ["Толкай", "Тяни"])
+    days = await db.list_program_days_by_id(program_id)
+
+    # Активная (начатая и не завершённая) тренировка по Дню 1.
+    await db.create_workout(user_id, started_at="2026-08-01T10:00:00", routine_id=days[0]["id"])
+
+    assert await db.program_day_history(program_id) == {}
+    assert (await db.next_program_day(program_id))["name"] == "Толкай"
+
+    # Завершённая сессия Дня 1 против недоделанного захода на День 2 позже:
+    # указатель слушает только завершённые.
+    await _train_day(db, user_id, days[0]["id"], "2026-08-02T10:00:00")
+    await db.create_workout(user_id, started_at="2026-08-03T10:00:00", routine_id=days[1]["id"])
+
+    history = await db.program_day_history(program_id)
+    assert set(history) == {days[0]["id"]}
+    assert (await db.next_program_day(program_id))["name"] == "Тяни"
 
 
 async def test_programs_are_listed_by_when_they_were_last_trained(fresh_db, user_id):
