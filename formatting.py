@@ -829,7 +829,7 @@ def _day_key(name: str) -> str:
     return name.strip().lower()
 
 
-def format_progression_rule(progression: Optional[dict]) -> str:
+def format_progression_rule(progression: Optional[dict], unit: Optional[str] = None) -> str:
     """Короткая человекочитаемая строка правила прогрессии (5.6/3.2 —
     ai_trainer._clean_progression, db.set_routine_exercise_progression): без неё
     превью показывало бы схему подходов, но не то, как её менять дальше, а это
@@ -838,22 +838,33 @@ def format_progression_rule(progression: Optional[dict]) -> str:
     Модульного уровня, потому что нужна в двух местах: и в составе программы, и
     в блоке «что меняется» — правило, которое правка молча переписала, ничем не
     хуже изменившейся схемы и должно читаться так же.
+
+    `unit` — "kg"/"lb" пользователя: «прибавь 2.5» без единицы читалось как
+    «прибавь чего?». Параметр необязательный: не у всех вызовов единица под
+    рукой, и тогда пишем нейтральное «к весу», а не выдуманные килограммы —
+    у lb-пользователя они были бы враньём в 2.2 раза.
     """
     if not progression:
         return ""
     rule = progression.get("rule")
     step = progression.get("step")
+    step_text = None
+    if step:
+        # Вплотную к числу, как везде в проекте («20кг», не «20 кг»).
+        step_text = f"{step:g}{UNIT_LABELS.get(unit, 'кг')}" if unit else f"{step:g} к весу"
     if rule == "double_progression":
         top = progression.get("reps_top")
-        if top and step:
-            return f"дошёл до {top} повторов — прибавь {step:g}"
+        if top and step_text:
+            return f"дошёл до {top} повторов — прибавь {step_text}"
         return "двойная прогрессия"
     if rule == "linear_load":
-        return f"+{step:g} каждую тренировку" if step else "линейная прогрессия"
+        return f"+{step_text} каждую тренировку" if step_text else "линейная прогрессия"
     return ""
 
 
-def build_program_changes(old_days: list[dict], new_days: list[dict]) -> list[str]:
+def build_program_changes(
+    old_days: list[dict], new_days: list[dict], unit: Optional[str] = None
+) -> list[str]:
     """Построчно: что правка делает со старой программой.
 
     Дни и упражнения сопоставляются по имени (регистр и пробелы не в счёт) —
@@ -898,8 +909,8 @@ def build_program_changes(old_days: list[dict], new_days: list[dict]) -> list[st
             # Правило прогрессии — такая же часть упражнения, как схема, и
             # переписанное молча оно тем неприятнее, что именно по нему потом
             # считается подсказка веса.
-            was_rule = format_progression_rule(was.get("progression"))
-            now_rule = format_progression_rule(item.get("progression"))
+            was_rule = format_progression_rule(was.get("progression"), unit)
+            now_rule = format_progression_rule(item.get("progression"), unit)
             if was_rule != now_rule:
                 changes.append(
                     f"  ⤴️ {escape(item['name'])}: "
@@ -984,6 +995,7 @@ def _truncate_block(
 
 def build_ai_program_preview(
     name: str, days: list[dict], replaces: Optional[dict] = None, notes: Optional[list[str]] = None,
+    unit: Optional[str] = None,
 ) -> str:
     """Превью программы, которую собрал AI-тренер, до её сохранения.
 
@@ -1004,6 +1016,9 @@ def build_ai_program_preview(
     из каталога) — раньше это уходило только модели полем в JSON, и если она
     забывала упомянуть об этом в ответе, пользователь просто не узнавал, что
     попросил семь дней, а получил шесть.
+
+    `unit` — "kg"/"lb" пользователя для строк прогрессии («прибавь 2.5кг»,
+    см. format_progression_rule); без него — нейтральное «к весу».
     """
     total = sum(len(day["items"]) for day in days)
     new_names = sorted(
@@ -1034,7 +1049,7 @@ def build_ai_program_preview(
             target = item.get("target")
             suffix = f" — {escape(target)}" if target else ""
             composition.append(f"{i}. {escape(item['name'])}{suffix}")
-            prog_note = format_progression_rule(item.get("progression"))
+            prog_note = format_progression_rule(item.get("progression"), unit)
             if prog_note:
                 composition.append(f"   ⤴️ {escape(prog_note)}")
 
@@ -1069,7 +1084,7 @@ def build_ai_program_preview(
     changes_block: list[str] = []
     if replaces:
         changes_header = ["", "🔄 <b>Что меняется:</b>"]
-        changes_body = build_program_changes(replaces.get("days") or [], days) or [
+        changes_body = build_program_changes(replaces.get("days") or [], days, unit) or [
             "Состав тот же — меняется только порядок или название."
         ]
         kept_changes = _truncate_block(
