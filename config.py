@@ -225,6 +225,11 @@ COST_EVENTS_RETENTION_DAYS = int(os.getenv("COST_EVENTS_RETENTION_DAYS", "90"))
 # раньше можно руками (handlers/sharing.share_revoke).
 SHARED_ITEMS_RETENTION_DAYS = int(os.getenv("SHARED_ITEMS_RETENTION_DAYS", "180"))
 
+# Сколько живёт лог действий (db.user_events, пишется из activity_log.py). Строка
+# на каждое нажатие — самая быстрорастущая таблица в базе, а смотрят в неё всегда
+# про недавнее: «что человек делал на этой неделе». Месяца на это хватает.
+ACTIVITY_RETENTION_DAYS = int(os.getenv("ACTIVITY_RETENTION_DAYS", "30"))
+
 
 # --- MCP: доступ к своим данным из внешних AI-клиентов (Claude и т.п.) ------
 #

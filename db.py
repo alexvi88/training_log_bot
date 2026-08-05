@@ -330,6 +330,30 @@ CREATE TABLE IF NOT EXISTS cost_events (
 );
 CREATE INDEX IF NOT EXISTS idx_cost_events_created ON cost_events (created_at);
 
+-- Сырой лог того, что человек делает в боте: каждое входящее сообщение и каждое
+-- нажатие кнопки, одной строкой (см. activity_log.py). Всё остальное, что видит
+-- админ — история, пуши, диалоги с AI — это результат: что записалось, что
+-- отправилось. По результату не видно ни того, как человек к нему шёл, ни того,
+-- что он написал впустую и бот не понял. Отсюда и таблица: она про путь, а не
+-- про итог.
+--
+-- content — то, что реально введено: текст сообщения, подпись к фото или
+-- человекочитаемая надпись нажатой кнопки; подрезается на входе
+-- (activity_log.MAX_CONTENT_LEN), чтобы простыня из буфера обмена не раздувала
+-- базу. payload у кнопок — её callback_data, то есть чем нажатие было для бота.
+-- Живёт не вечно: prune_old_user_events чистит по ACTIVITY_RETENTION_DAYS в том
+-- же суточном джобе, что и cost_events.
+CREATE TABLE IF NOT EXISTS user_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    telegram_id INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    content TEXT NOT NULL,
+    payload TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_user_events_user ON user_events (telegram_id, id);
+CREATE INDEX IF NOT EXISTS idx_user_events_created ON user_events (created_at);
+
 CREATE TABLE IF NOT EXISTS achievements (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL,
@@ -4574,6 +4598,73 @@ async def prune_old_cost_events(retention_days: int) -> int:
     cutoff = (dt.date.today() - dt.timedelta(days=retention_days)).isoformat()
     async with _write_lock:
         cur = await conn().execute("DELETE FROM cost_events WHERE date(created_at) < ?", (cutoff,))
+        await conn().commit()
+        return cur.rowcount
+
+
+# ---------- лог действий пользователей ----------
+#
+# Пишется из activity_log.py на каждое входящее сообщение и нажатие, читается
+# только админской панелью (/activity). Отсюда и форма запросов: всё «за
+# пользователя», от свежего к старому.
+
+
+async def log_user_event(
+    telegram_id: int, kind: str, content: str, payload: Optional[str] = None
+) -> None:
+    async with _write_lock:
+        await conn().execute(
+            "INSERT INTO user_events (telegram_id, kind, content, payload, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (telegram_id, kind, content, payload, now_iso()),
+        )
+        await conn().commit()
+
+
+async def list_users_with_event_counts(limit: int = 10, offset: int = 0) -> list[aiosqlite.Row]:
+    """Пользователи со счётчиком действий и временем последнего — самые активные сверху.
+
+    LEFT JOIN, а не JOIN: тот, кто зашёл и не сделал ничего, — сам по себе
+    ответ на вопрос «как пользуются», и пропадать из списка он не должен.
+    """
+    cur = await conn().execute(
+        "SELECT u.telegram_id, u.username, COUNT(e.id) AS event_count, MAX(e.created_at) AS last_event_at "
+        "FROM users u LEFT JOIN user_events e ON e.telegram_id = u.telegram_id "
+        "GROUP BY u.telegram_id "
+        "ORDER BY event_count DESC, u.telegram_id "
+        "LIMIT ? OFFSET ?",
+        (limit, offset),
+    )
+    return await cur.fetchall()
+
+
+async def count_user_events(telegram_id: int) -> int:
+    cur = await conn().execute(
+        "SELECT COUNT(*) FROM user_events WHERE telegram_id = ?", (telegram_id,)
+    )
+    (count,) = await cur.fetchone()
+    return count
+
+
+async def list_user_events(telegram_id: int, limit: int = 30, offset: int = 0) -> list[aiosqlite.Row]:
+    """Действия одного пользователя, свежие сверху."""
+    cur = await conn().execute(
+        "SELECT id, kind, content, payload, created_at FROM user_events "
+        "WHERE telegram_id = ? ORDER BY id DESC LIMIT ? OFFSET ?",
+        (telegram_id, limit, offset),
+    )
+    return await cur.fetchall()
+
+
+async def prune_old_user_events(retention_days: int) -> int:
+    """Выкинуть действия старше retention_days.
+
+    Лог растёт быстрее всех остальных таблиц — по строке на каждое нажатие, — а
+    смотрят в него всегда про недавнее: «что человек делал на этой неделе».
+    """
+    cutoff = (dt.date.today() - dt.timedelta(days=retention_days)).isoformat()
+    async with _write_lock:
+        cur = await conn().execute("DELETE FROM user_events WHERE date(created_at) < ?", (cutoff,))
         await conn().commit()
         return cur.rowcount
 
