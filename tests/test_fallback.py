@@ -37,16 +37,20 @@ def _callback(user_id: int = 1, data: str = "pick:grp:7", *, inaccessible: bool 
     return callback
 
 
-async def test_unhandled_text_gets_a_pointer_back_to_start():
+async def test_unhandled_text_points_to_ai_trainer_and_start():
+    """Самый частый непонятый текст — вопрос тренеру, напечатанный из главного
+    меню («составь мне программу»): ответ обязан вести и к AI-тренеру, и в меню."""
     message = MagicMock()
     message.from_user = SimpleNamespace(id=1)
-    message.text = "какая-то ерунда"
+    message.text = "составь мне программу"
     message.reply = AsyncMock()
 
     await fallback.unhandled_text(message)
 
     message.reply.assert_awaited_once()
-    assert "/start" in message.reply.await_args.args[0]
+    reply = message.reply.await_args.args[0]
+    assert "AI-тренер" in reply
+    assert "/start" in reply
 
 
 async def test_an_unhandled_button_answers_and_opens_the_menu(fresh_db, user_id):

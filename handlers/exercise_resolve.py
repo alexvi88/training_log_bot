@@ -15,6 +15,7 @@ import db
 import keyboards
 import ui
 from fsm import ResolveFlow
+from state_scaffold import clear_state_keep_ai
 
 router = Router(name="exercise_resolve")
 
@@ -154,7 +155,9 @@ async def resolve_create_all(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(StateFilter(ResolveFlow.picking, ResolveFlow.picking_new_group), F.data == "resolve:cancelall")
 async def resolve_cancel_all(callback: CallbackQuery, state: FSMContext):
-    await state.clear()
+    # Отмена резолва имён не отменяет переписку с AI-тренером и черновик его
+    # программы — сохраняем их.
+    await clear_state_keep_ai(state)
     from handlers.settings import show_settings
     await show_settings(callback, state)
     await callback.answer("Отменено")
