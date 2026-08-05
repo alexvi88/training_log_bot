@@ -329,6 +329,97 @@ async def test_progression_step_is_clamped_to_a_sane_range(fresh_db, user_id):
     assert draft["days"][0]["items"][0]["progression"]["step"] == ai_trainer.PROGRESSION_MAX_STEP
 
 
+async def test_reps_top_out_of_sync_with_the_range_is_snapped_to_reps_max(fresh_db, user_id):
+    """reps_top живёт отдельным полем от схемы, и модель их рассинхронизирует:
+    target 5-10 при reps_top=8 значит, что вес добавится раньше, чем человек
+    дошёл до верха своего диапазона. Верх диапазона — единственное осмысленное
+    значение, и подмена о себе сообщает через clamped."""
+    payload, draft = await _propose(
+        user_id,
+        {
+            "name": "П",
+            "days": [
+                _day(
+                    "День 1",
+                    [
+                        {
+                            "name": TEMPLATE_A, "sets": 3, "reps_min": 5, "reps_max": 10,
+                            "progression": {"rule": "double_progression", "reps_top": 8, "step": 2.5},
+                        }
+                    ],
+                )
+            ],
+        },
+    )
+
+    assert draft["days"][0]["items"][0]["progression"]["reps_top"] == 10
+    (note,) = payload["days"][0]["clamped"]
+    assert "reps_top" in note and "8" in note and "10" in note
+
+
+async def test_double_progression_without_reps_top_gets_the_exercises_reps_max(fresh_db, user_id):
+    """Без reps_top правило валидно, но подсказка веса падала на глобальный
+    REP_RANGE_MAX (10) — на упражнении с диапазоном до 8 она молчала бы вечно."""
+    payload, draft = await _propose(
+        user_id,
+        {
+            "name": "П",
+            "days": [
+                _day(
+                    "День 1",
+                    [
+                        {
+                            "name": TEMPLATE_A, "sets": 3, "reps_min": 5, "reps_max": 8,
+                            "progression": {"rule": "double_progression", "step": 2.5},
+                        }
+                    ],
+                )
+            ],
+        },
+    )
+
+    assert draft["days"][0]["items"][0]["progression"]["reps_top"] == 8
+    (note,) = payload["days"][0]["clamped"]
+    assert "reps_top" in note
+
+
+async def test_double_progression_without_a_range_is_left_untouched(fresh_db, user_id):
+    """Схемы нет — подставлять нечего: правило остаётся как прислано и живёт на
+    глобальном дефолте, это честнее, чем выдумывать диапазон."""
+    _, draft = await _propose(
+        user_id,
+        {
+            "name": "П",
+            "days": [
+                _day(
+                    "День 1",
+                    [{"name": TEMPLATE_A, "progression": {"rule": "double_progression"}}],
+                )
+            ],
+        },
+    )
+
+    assert draft["days"][0]["items"][0]["progression"] == {"rule": "double_progression"}
+
+
+async def test_linear_load_without_a_step_is_dropped_and_reported(fresh_db, user_id):
+    """linear_load без step проходил валидацию и молча деградировал в дефолт —
+    неработающее правило хуже честного «без прогрессии» с пометкой модели."""
+    payload, draft = await _propose(
+        user_id,
+        {
+            "name": "П",
+            "days": [
+                _day("День 1", [{"name": TEMPLATE_A, "progression": {"rule": "linear_load"}}])
+            ],
+        },
+    )
+
+    assert draft["days"][0]["items"][0]["progression"] is None
+    (note,) = payload["days"][0]["clamped"]
+    assert "linear_load" in note and "step" in note
+
+
 async def test_saving_a_draft_persists_the_progression_rule(fresh_db, user_id, monkeypatch):
     """5.6: правило должно пережить сохранение — иначе оно, как и раньше,
     существует только в прозе ответа и теряется вместе с чатом."""
@@ -584,7 +675,33 @@ async def test_saved_programs_tool_shows_days_and_composition(fresh_db, user_id)
     (program,) = payload["programs"]
     assert program["name"] == "Верх/низ"
     assert [d["name"] for d in program["days"]] == ["Низ", "Верх"]
-    assert program["days"][0]["exercises"] == [{"name": TEMPLATE_B, "target": "3×5"}]
+    assert program["days"][0]["exercises"] == [
+        {"name": TEMPLATE_B, "target": "3×5", "progression": None}
+    ]
+
+
+async def test_saved_programs_tool_shows_the_stored_progression_rule(fresh_db, user_id):
+    """Правка идёт через propose_program «программа ЦЕЛИКОМ» — пока модель не
+    видела сохранённые правила прогрессии, ей нечем было их перенести, и правка
+    одного упражнения молча стирала прогрессию всех остальных."""
+    db_ = fresh_db
+    group_id = await db_.create_muscle_group(user_id, "Грудь")
+    ex_id = await db_.create_exercise(user_id, "Жим лёжа", group_id)
+    program_id = await db_.create_program(user_id, "Верх/низ")
+    day = await db_.create_routine(user_id, "Верх", program_id=program_id)
+    await db_.add_routine_exercise(day, ex_id, 0, "3×5–10")
+    entry = (await db_.list_routine_exercises(day))[0]
+    await db_.set_routine_exercise_progression(
+        entry["id"], json.dumps({"rule": "double_progression", "reps_top": 10, "step": 2.5})
+    )
+
+    payload = json.loads(await ai_trainer.execute_tool(user_id, "get_saved_programs", {}))
+
+    (program,) = payload["programs"]
+    (exercise,) = program["days"][0]["exercises"]
+    assert exercise["progression"] == {
+        "rule": "double_progression", "reps_top": 10, "step": 2.5,
+    }
 
 
 async def test_editing_marks_the_draft_as_replacing_the_saved_program(fresh_db, user_id):

@@ -16,6 +16,7 @@ import timeutil
 import ui
 from fsm import BackfillFlow, WorkoutFlow
 from parser import ParseError, parse_ru_date
+from state_scaffold import clear_state_keep_ai
 
 router = Router(name="backfill")
 
@@ -25,7 +26,9 @@ _BACKFILL_PROMPT = "📅 На какую дату занести трениро�
 
 @router.callback_query(F.data == "menu:backfill_workout")
 async def backfill_start(callback: CallbackQuery, state: FSMContext):
-    await state.clear()
+    # Сброс перед новым потоком, но переписка с AI-тренером и черновик его
+    # программы переживают тренировки — их не трогаем.
+    await clear_state_keep_ai(state)
     await state.set_state(BackfillFlow.awaiting_date)
     today = timeutil.user_today(await db.get_user(callback.from_user.id))
     await ui.safe_edit(
@@ -93,7 +96,9 @@ async def bf_date_text(message: Message, state: FSMContext):
 
 @router.callback_query(StateFilter(BackfillFlow.awaiting_date), F.data == "bf:cancel")
 async def bf_cancel(callback: CallbackQuery, state: FSMContext):
-    await state.clear()
+    # Отмена задним числом не отменяет переписку с AI-тренером и черновик его
+    # программы — сохраняем их.
+    await clear_state_keep_ai(state)
     from handlers.workout import _show_main_menu
     await _show_main_menu(callback, state)
     await callback.answer("Отменено")

@@ -541,7 +541,9 @@ async def test_picker_shows_a_button_for_a_recently_trained_program(fresh_db, us
     program_id = await fresh_db.create_program(user_id, "Верх/низ")
     legs = await fresh_db.create_routine(user_id, "Ноги", program_id=program_id)
     upper = await fresh_db.create_routine(user_id, "Верх", program_id=program_id)
-    await fresh_db.create_workout(user_id, routine_id=legs)
+    # Завершённая сессия: «дальше по кругу» слушает только сделанные дни.
+    wid = await fresh_db.create_workout(user_id, routine_id=legs)
+    await fresh_db.finish_workout(wid)
 
     buttons = await _picker_extra_buttons(fresh_db, user_id, monkeypatch)
 

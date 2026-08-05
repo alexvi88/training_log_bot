@@ -215,7 +215,8 @@ async def test_the_program_screen_leads_with_the_day_whose_turn_it_is(fresh_db, 
     db = fresh_db
     program_id = await _program(db, user_id)
     days = await db.list_program_days_by_id(program_id)
-    await db.create_workout(user_id, started_at="2026-08-01T10:00:00", routine_id=days[0]["id"])
+    wid = await db.create_workout(user_id, started_at="2026-08-01T10:00:00", routine_id=days[0]["id"])
+    await db.finish_workout(wid, finished_at="2026-08-01T11:00:00")
 
     callback = _make_callback(user_id, f"rt:prg:{program_id}")
     await routines.rt_program(callback, await _state(user_id))
@@ -230,7 +231,8 @@ async def test_the_program_screen_says_how_long_ago_each_day_was(fresh_db, user_
     db = fresh_db
     program_id = await _program(db, user_id, days=("Толкай", "Ноги"))
     days = await db.list_program_days_by_id(program_id)
-    await db.create_workout(user_id, started_at="2026-08-01T10:00:00", routine_id=days[0]["id"])
+    wid = await db.create_workout(user_id, started_at="2026-08-01T10:00:00", routine_id=days[0]["id"])
+    await db.finish_workout(wid, finished_at="2026-08-01T11:00:00")
 
     callback = _make_callback(user_id, f"rt:prg:{program_id}")
     await routines.rt_program(callback, await _state(user_id))

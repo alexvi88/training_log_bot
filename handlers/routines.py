@@ -1074,6 +1074,12 @@ async def rt_day_named(message: Message, state: FSMContext):
     if source_id is not None:
         for ex in await db.list_routine_exercises(source_id):
             await db.append_routine_exercise(routine_id, ex["exercise_id"], ex["target"])
+            # Правило прогрессии — такая же часть дня, как схема подходов:
+            # ручная копия без него молча теряла бы «+2.5 при закрытом
+            # диапазоне», в отличие от «Дублировать программу» и AI-копии.
+            if ex["progression"]:
+                entry = (await db.list_routine_exercises(routine_id))[-1]
+                await db.set_routine_exercise_progression(entry["id"], ex["progression"])
     await state.set_state(None)
     await _show_routine_detail(message, state, routine_id)
 
@@ -1205,10 +1211,16 @@ async def rt_edit_exercise_target(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(StateFilter(RoutineFlow.editing_exercise_target), F.data == "rt:extclear")
 async def rt_clear_exercise_target(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
+    # Смотрим на правило до записи: set_routine_exercise_target его сбросит,
+    # а пометку в ответе заслуживает только правило, которое реально было.
+    entry = await db.get_routine_exercise(data["rtedit_re_id"])
+    had_rule = entry is not None and entry["progression"]
     await db.set_routine_exercise_target(data["rtedit_re_id"], None)
     await state.set_state(None)
     await _show_routine_editor(callback, state, data["rtedit_routine_id"])
-    await callback.answer("Убрал схему")
+    await callback.answer(
+        "Убрал схему. Правило прогрессии из программы тоже сброшено" if had_rule else "Убрал схему"
+    )
 
 
 @router.message(StateFilter(RoutineFlow.editing_exercise_target), F.text)
@@ -1217,7 +1229,14 @@ async def rt_exercise_target_entered(message: Message, state: FSMContext):
     if not target:
         return
     data = await state.get_data()
+    # Правило читаем до записи — set_routine_exercise_target сбрасывает его
+    # вместе со старой схемой, а предупредить стоит только если оно было.
+    entry = await db.get_routine_exercise(data["rtedit_re_id"])
     await db.set_routine_exercise_target(data["rtedit_re_id"], target)
+    if entry is not None and entry["progression"]:
+        await message.reply(
+            "Схема теперь ручная — правило прогрессии из программы сброшено."
+        )
     await state.set_state(None)
     await _show_routine_editor(message, state, data["rtedit_routine_id"])
 

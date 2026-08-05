@@ -74,13 +74,18 @@ AI_MENTION_PAGE_SIZE = 3
 # ответ, ради которого её и показали.
 MAX_AI_ACTIONS = 3
 
+# Потолок Telegram на callback_data одной кнопки, в байтах. Превышение — это
+# не обрезанная кнопка, а отказ на ВСЁ сообщение: ответ тренера, уже
+# оплаченный квотой, просто не доходит.
+_CALLBACK_DATA_LIMIT = 64
+
 
 def ai_trainer_keyboard(
     has_active_workout: bool = False,
     exercises: Sequence[Any] = (),
     page: int = 0,
     program_name: str | None = None,
-    draft_id: int | None = None,
+    draft_id: int | str | None = None,
     programs: Sequence[Any] = (),
     actions: Sequence[Any] = (),
 ) -> InlineKeyboardMarkup:
@@ -170,6 +175,15 @@ def ai_trainer_keyboard(
         # p/r, чтобы обработчик знал, многодневка это или одиночный день, и не
         # ходил за этим в базу лишний раз.
         refs = [ai_mention_ref(p) for p in programs] + [str(ex["id"]) for ex in exercises]
+        # Ссылки едут прямо в callback_data стрелок, а Telegram ограничивает её
+        # 64 байтами: с длинными (8-значными) id упражнений полный список туда
+        # не влезает, и Telegram отверг бы всё сообщение с ответом целиком.
+        # Хвостовые ссылки честнее потерять — это дальние страницы листания,
+        # а не сам ответ. Бюджет считаем по префиксу «вперёд»: у page+1 цифр
+        # не меньше, чем у page-1.
+        budget = _CALLBACK_DATA_LIMIT - len(f"ai:mpage:{page + 1}:".encode())
+        while refs and len(",".join(refs).encode()) > budget:
+            refs.pop()
         joined = ",".join(refs)
         if page > 0:
             page_nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"ai:mpage:{page - 1}:{joined}"))
@@ -206,7 +220,7 @@ def ai_program_open_cb(target: Any) -> str:
 
 
 
-def ai_program_preview_keyboard(replacing: bool = False, draft_id: int = 0) -> InlineKeyboardMarkup:
+def ai_program_preview_keyboard(replacing: bool = False, draft_id: int | str = 0) -> InlineKeyboardMarkup:
     """Превью программы, собранной тренером: сохранить или отказаться.
 
     Сохранение создаёт по одной программе (routines.program_name общий на все
@@ -231,9 +245,16 @@ def ai_program_preview_keyboard(replacing: bool = False, draft_id: int = 0) -> I
     return b.as_markup()
 
 
-def ai_program_saved_keyboard() -> InlineKeyboardMarkup:
-    """После сохранения программы — прямая дорога в её список, без возврата в меню."""
+def ai_program_saved_keyboard(program_id: int) -> InlineKeyboardMarkup:
+    """После сохранения программы — прямая дорога в неё саму и в общий список.
+
+    «Открыть программу» первой: текст над клавиатурой говорит «ищи в
+    «🗂 Программы»», но искать там нечего — бот и так знает, что только что
+    сохранил. rt:prg: живёт без StateFilter, так что срабатывает и из
+    состояния чата с тренером.
+    """
     b = InlineKeyboardBuilder()
+    b.button(text="🗂 Открыть программу", callback_data=f"rt:prg:{program_id}")
     b.button(text="🗂 К программам", callback_data="rt:manage")
     b.adjust(1)
     return b.as_markup()

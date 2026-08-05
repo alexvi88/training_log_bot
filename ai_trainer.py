@@ -208,11 +208,18 @@ SYSTEM_PROMPT = """\
 конкретной группы мышц просто потому что для неё «так принято» — 5-10 действует
 универсально, если пользователь явно не попросил другую схему.
 - Рабочий диапазон — 5-10 повторений в подходе.
-- Тренировки тяжёлые: RPE 8-9-10 (близко к отказу или до отказа).
+- Тренировки тяжёлые: RPE 8-9-10 (близко к отказу или до отказа). Исключение —
+  новичок: первые недели назначай RPE 6-7 с упором на технику, к отказу подводи
+  постепенно.
 - Недельный объём на одну мышечную группу — обычно 6-12 рабочих подходов, не больше.
+  Для ног планка мягче: там несколько крупных мышц и обычно больше упражнений, так
+  что объём выше диапазона 6-12 — норма, а не перебор.
 - Прогрессия двойная: пока вес держится в диапазоне 5-10 повторений — сначала
   добавляешь повторы на том же весе; как только вышел за верхнюю границу диапазона
   (сделал 10+ повторов) — повышаешь вес и снова начинаешь с нижней границы диапазона.
+- Если оборудование не позволяет добавлять вес мелким шагом (одна неразборная
+  гантель, только свой вес) — не настаивай на 5-10 повторениях: назначай
+  прогрессию повторами в широком диапазоне (до 15-30) и объясни пользователю почему.
 
 Важно: 5-10 — это твоя рекомендация по умолчанию для удобной двойной прогрессии,
 а не научная граница гипертрофии — гипертрофия работает в широком диапазоне
@@ -327,6 +334,9 @@ get_bodyweight_history, она отдаёт всю историю дневник
   по одному.
 - Учитывай, чем он уже занимается: если у него в истории есть любимые упражнения,
   которые подходят под задачу, — включай их, а не заменяй всё подряд каталогом.
+- Стартовые веса в программу не записываются — их бот посчитает из истории. Назови
+  ориентиры в тексте ответа: опытному — из get_exercise_progress, новичку объясни,
+  как подобрать за 1-2 тренировки. Не обещай, что проставил веса в программе.
 - После вызова инструмента опиши программу словами: логику сплита, как прогрессировать,
   на что смотреть. Не пересказывай построчно весь список — он и так будет в превью.
 - Пока пользователь не нажал кнопку, программа НЕ сохранена. Не пиши «сохранил»,
@@ -342,7 +352,10 @@ get_bodyweight_history, она отдаёт всю историю дневник
   программы и составом каждого дня (выдумывать состав по памяти нельзя);
 - потом propose_program, где в replaces_program стоит точное имя той программы,
   а сама программа прислана ЦЕЛИКОМ: все дни и все упражнения, включая
-  нетронутые. Чего не прислал — того в программе не останется.
+  нетронутые. Чего не прислал — того в программе не останется. При правке
+  переноси в propose_program и progression каждого нетронутого упражнения (как
+  оно лежит в get_saved_programs) — что не пришлёшь, у него сотрётся, включая
+  правило прогрессии.
 Пользователь увидит превью правки и подтвердит её кнопкой; до тапа ничего не
 меняется, так что не пиши «поправил» — пиши, что правка ждёт подтверждения.
 Если человек просит не поправить, а собрать ещё одну программу вдобавок —
@@ -1263,7 +1276,12 @@ TOOLS: list[dict[str, Any]] = [
                                                         "type": "number",
                                                         "minimum": PROGRESSION_MIN_STEP,
                                                         "maximum": PROGRESSION_MAX_STEP,
-                                                        "description": "На сколько прибавлять вес",
+                                                        "description": (
+                                                            "На сколько прибавлять вес — в единицах "
+                                                            "пользователя (kg/lb — смотри unit в "
+                                                            "get_training_overview): типично 2.5 для "
+                                                            "килограммовой штанги, 5 для фунтовой"
+                                                        ),
                                                     },
                                                 },
                                                 "required": ["rule"],
@@ -1596,7 +1614,11 @@ TOOLS: list[dict[str, Any]] = [
                     "experience": {
                         "type": "string",
                         "maxLength": 200,
-                        "description": "Опыт тренировок, свободной фразой (например «новичок», «тренируется 3 года»)",
+                        "description": (
+                            "Опыт тренировок, свободной фразой (например «новичок», "
+                            "«тренируется 3 года»); сюда же возраст и пол, если "
+                            "пользователь их назвал"
+                        ),
                     },
                     "goal": {
                         "type": "string",
@@ -1606,7 +1628,10 @@ TOOLS: list[dict[str, Any]] = [
                     "limitations": {
                         "type": "string",
                         "maxLength": 500,
-                        "description": "Травмы, боли, ограничения по упражнениям",
+                        "description": (
+                            "Травмы, боли, ограничения по упражнениям; сюда же "
+                            "возраст и пол, если пользователь их назвал"
+                        ),
                     },
                 },
             },
@@ -1807,6 +1832,20 @@ async def _training_overview(user_id: int) -> dict[str, Any]:
     }
 
 
+def _stored_progression(raw: Any) -> Optional[dict[str, Any]]:
+    """routine_exercises.progression — JSON-текст; на битой строке молчим и
+    считаем, что правила не было: и превью, и выдача get_saved_programs
+    сравнивают/показывают состав, и уронить их из-за неразобранной строки
+    было бы хуже, чем показать «без прогрессии»."""
+    if not raw:
+        return None
+    try:
+        value = json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
 async def _saved_programs(user_id: int) -> dict[str, Any]:
     """Сохранённые программы пользователя с составом каждого дня.
 
@@ -1820,20 +1859,29 @@ async def _saved_programs(user_id: int) -> dict[str, Any]:
     сначала проверял многодневки, потом одиночные — при совпадении имён между
     ними правилась не та программа, на которую рассчитывал пользователь, и по
     превью это было не понять (см. PROGRAMS_DEEP_DIVE §5.4).
+
+    `progression` у каждого упражнения обязательна в выдаче: правка идёт через
+    propose_program «программа ЦЕЛИКОМ», и всё, чего модель не пришлёт,
+    стирается — пока она не видела сохранённые правила прогрессии, ей нечем
+    было их перенести, и «замени приседания на жим ногами» молча сносил
+    double_progression на нетронутом жиме лёжа.
     """
+
+    async def _exercises(routine_id: int) -> list[dict[str, Any]]:
+        return [
+            {
+                "name": ex["display_name"],
+                "target": ex["target"],
+                "progression": _stored_progression(ex["progression"]),
+            }
+            for ex in await db.list_routine_exercises(routine_id)
+        ]
+
     programs: list[dict[str, Any]] = []
     for row in await db.list_programs(user_id):
         days = []
         for day in await db.list_program_days_by_id(row["id"]):
-            days.append(
-                {
-                    "name": day["name"],
-                    "exercises": [
-                        {"name": ex["display_name"], "target": ex["target"]}
-                        for ex in await db.list_routine_exercises(day["id"])
-                    ],
-                }
-            )
+            days.append({"name": day["name"], "exercises": await _exercises(day["id"])})
         programs.append({"name": row["program_name"], "kind": "program", "days": days})
     for routine in await db.list_standalone_routines(user_id):
         programs.append(
@@ -1841,13 +1889,7 @@ async def _saved_programs(user_id: int) -> dict[str, Any]:
                 "name": routine["name"],
                 "kind": "routine",
                 "days": [
-                    {
-                        "name": routine["name"],
-                        "exercises": [
-                            {"name": ex["display_name"], "target": ex["target"]}
-                            for ex in await db.list_routine_exercises(routine["id"])
-                        ],
-                    }
+                    {"name": routine["name"], "exercises": await _exercises(routine["id"])}
                 ],
             }
         )
@@ -1856,7 +1898,9 @@ async def _saved_programs(user_id: int) -> dict[str, Any]:
         "note": (
             "Это то, что у пользователя уже сохранено. Чтобы поправить одну из "
             "этих программ, вызови propose_program целиком (со всеми днями, "
-            "включая нетронутые) и передай её точное имя в replaces_program."
+            "включая нетронутые) и передай её точное имя в replaces_program. "
+            "Правила progression нетронутых упражнений тоже переноси как есть — "
+            "чего не пришлёшь, у того сотрётся."
         )
         if programs
         else "У пользователя пока нет сохранённых программ.",
@@ -2163,13 +2207,37 @@ def _clean_program_item(raw: Any) -> Optional[dict[str, Any]]:
     elif raw_reps_max is not None and reps_max != raw_reps_max:
         clamped.append(f"reps_max {raw_reps_max}→{reps_max}")
 
+    progression = _clean_progression(raw.get("progression"))
+    if progression is not None:
+        rule = progression["rule"]
+        if rule == "double_progression" and reps_max is not None:
+            # reps_top живёт отдельным полем от схемы, и модель их регулярно
+            # рассинхронизирует (target 5-10, reps_top=8), а без reps_top
+            # подсказка веса падала на глобальный REP_RANGE_MAX вместо
+            # диапазона этого упражнения. Верх диапазона — единственное
+            # осмысленное значение, поэтому подставляем его, а не отбрасываем
+            # правило; пометка в clamped — чтобы модель узнала о подмене.
+            reps_top = progression.get("reps_top")
+            if reps_top != reps_max:
+                progression["reps_top"] = reps_max
+                clamped.append(
+                    f"reps_top {reps_top if reps_top is not None else '(не задан)'}→{reps_max}"
+                )
+        if rule == "linear_load" and "step" not in progression:
+            # linear_load без step — правило-пустышка: валидацию оно проходило,
+            # а подсказка веса молча деградировала в дефолт. Клампить нечем
+            # (осмысленный шаг зависит от железа), так что честнее отбросить
+            # и сказать об этом модели, чем хранить неработающее правило.
+            progression = None
+            clamped.append("progression linear_load без step — отброшена")
+
     return {
         "name": name,
         "sets": sets,
         "reps_min": reps_min,
         "reps_max": reps_max,
         "clamped": clamped,
-        "progression": _clean_progression(raw.get("progression")),
+        "progression": progression,
     }
 
 
@@ -2208,19 +2276,6 @@ async def _resolve_replaced_program(
     name = str(raw_name or "").strip()
     if not name:
         return None, None
-
-    def _stored_progression(raw: Any) -> Optional[dict[str, Any]]:
-        """routine_exercises.progression — JSON-текст; на битой строке молчим и
-        считаем, что правила не было: превью сравнивает старое с новым, и
-        уронить его из-за неразобранной строки было бы хуже, чем показать
-        «без прогрессии»."""
-        if not raw:
-            return None
-        try:
-            value = json.loads(raw)
-        except (TypeError, ValueError):
-            return None
-        return value if isinstance(value, dict) else None
 
     async def _snapshot(routines: list[Any]) -> list[dict[str, Any]]:
         return [

@@ -4,6 +4,7 @@ import asyncio
 import base64
 import json
 import logging
+import secrets
 from contextlib import suppress
 from html import escape
 from typing import Any, Callable, Optional, Sequence
@@ -78,7 +79,7 @@ INTRO_TEXT = (
     "У меня есть доступ к истории твоих тренировок и многолетний тренерский опыт. "
     "Спрашивай что угодно:\n"
     "• «Как прогресс в жиме лёжа? Почему не растёт присед?»\n"
-    "• «Дай совет по программе тренировок»\n"
+    "• «Составь мне программу на массу 3 раза в неделю»\n"
     "• «Сколько белка есть, чтобы расти?»\n\n"
     "Пиши вопрос 👇 (можно голосом — жми на 🎤)"
 )
@@ -87,6 +88,12 @@ INTRO_TEXT = (
 # going — repeating the whole "привет, вот что я умею" would read as if the
 # trainer had forgotten the last few messages.
 RESUME_TEXT = "🤖 <b>ТРЕНЕР НА СВЯЗИ.</b> Продолжаем — пиши вопрос 👇"
+
+# Общий текст дневного лимита: показывается и на вопрос в чате, и на кнопку
+# «Составить с AI-тренером» — расходовать они пытаются один и тот же счётчик.
+DAILY_LIMIT_TEXT = (
+    "На сегодня лимит вопросов исчерпан 😮‍💨 Дай тренеру передохнуть — возвращайся завтра."
+)
 
 # Пользователи, чей вопрос сейчас обрабатывается — защита от параллельных запросов.
 _busy: set[int] = set()
@@ -295,7 +302,7 @@ async def ai_keyboard(
     user_id: int,
     answer: Optional[str] = None,
     program_name: Optional[str] = None,
-    draft_id: Optional[int] = None,
+    draft_id: Optional[str] = None,
     actions: Sequence[dict] = (),
 ) -> InlineKeyboardMarkup:
     """AI-trainer reply keyboard: 'К тренировке' instead of 'Меню' while a workout is active.
@@ -412,6 +419,15 @@ async def ai_build_program(callback: CallbackQuery, state: FSMContext):
         # from this user reports "busy" for the life of the process (A5).
         with suppress(TelegramBadRequest):
             await callback.answer()
+        # Лимит — до интро, а не после: бодрое «ОКЕЙ, СОБИРАЕМ ПРОГРАММУ» с
+        # мгновенным «лимит исчерпан» следом читалось как обещание, которое
+        # бот сам тут же забирает назад.
+        if await db.get_ai_question_count_today(user_id) >= config.AI_QUESTION_DAILY_LIMIT:
+            await ui.safe_edit(
+                callback, DAILY_LIMIT_TEXT,
+                reply_markup=await ai_keyboard(user_id), parse_mode="HTML",
+            )
+            return
         await state.set_state(AITrainerFlow.chatting)
         # С клавиатурой, а не голым текстом: пока тренер думает, это единственный
         # экран на месте меню — а ответа может и не быть вовсе (исчерпан дневной
@@ -630,26 +646,26 @@ async def ai_mentions_page(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+# Совет «собрать заново» здесь раньше приводил к дубликатам: алерт показывается
+# и после УСПЕШНОГО сохранения (черновик израсходован — кнопка под старым
+# превью и должна отвечать так), и человек, следуя совету, просил вторую копию.
 _PROGRAM_GONE = (
-    "Это предложение уже неактуально — попроси тренера собрать программу заново."
+    "Это предложение уже неактуально. Если ты его сохранял — программа уже в "
+    "«🗂 Программы»; если нет — попроси тренера собрать заново."
 )
 
 
-def _draft_id_from(callback_data: str) -> int:
-    """Последний сегмент callback_data ("ai:prog:save:12" → 12).
+def _draft_id_from(callback_data: str) -> str:
+    """Последний сегмент callback_data ("ai:prog:save:1a2b3c4d" → "1a2b3c4d").
 
-    Отсутствие/нечисло (например "ai:prog:view:None" на черновике без id — не
-    должно случаться, но лучше явный неудачный матч, чем ValueError наружу)
-    трактуется как заведомо несуществующий id.
+    Id черновика — непрозрачный токен (см. _handle_question), поэтому сегмент
+    не парсится в число, а сравнивается с id из FSM как строка.
     """
-    try:
-        return int(callback_data.rsplit(":", 1)[1])
-    except (ValueError, IndexError):
-        return -1
+    return callback_data.rsplit(":", 1)[-1]
 
 
 async def _program_draft(
-    callback: CallbackQuery, state: FSMContext, draft_id: int
+    callback: CallbackQuery, state: FSMContext, draft_id: str
 ) -> Optional[dict]:
     """Черновик программы из FSM, только если его id совпал с тем, что в
     callback_data — иначе алерт и None.
@@ -662,7 +678,15 @@ async def _program_draft(
     """
     data = await state.get_data()
     draft = data.get("ai_program_draft")
-    if not draft or not draft.get("days") or draft.get("id") != draft_id:
+    # Сравнение строковое: в callback_data id всегда приезжает текстом, а в FSM
+    # он мог быть записан и числом (кнопки со старыми счётчиками живут в чате
+    # вечно) — сравнение int с str молча отвергало бы легитимный тап.
+    if (
+        not draft
+        or not draft.get("days")
+        or draft.get("id") is None
+        or str(draft.get("id")) != draft_id
+    ):
         await callback.answer(_PROGRAM_GONE, show_alert=True)
         return None
     return draft
@@ -691,7 +715,7 @@ async def ai_program_view(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-def _name_conflict_keyboard(draft_id: int, program_name: str) -> InlineKeyboardMarkup:
+def _name_conflict_keyboard(draft_id: str, program_name: str) -> InlineKeyboardMarkup:
     """A2: у пользователя уже есть программа с этим именем, а предложение —
     НЕ её правка (иначе ai_trainer.propose_program.replaces_program было бы
     заполнено). Раньше в этом случае дни молча дописывались в существующую
@@ -739,12 +763,24 @@ async def _create_program_day(user_id: int, day: dict, program_id: int) -> int:
     return routine_id
 
 
-async def _announce_saved(callback: CallbackQuery, name: str, day_count: int, replacing: bool) -> None:
+async def _announce_saved(
+    callback: CallbackQuery, name: str, day_count: int, replacing: bool, program_id: int
+) -> None:
+    """`program_id` — только что сохранённая программа: кнопка «Открыть
+    программу» ведёт прямо в неё (rt:prg: без StateFilter, так что работает и
+    из состояния чата с тренером)."""
     day_word = formatting.plural_ru(day_count, ("день", "дня", "дней"))
     if replacing:
         text = (
             f"✅ <b>Обновил программу «{escape(name)}».</b>\n\n"
             f"Теперь в ней {day_count} {day_word} — ищи в «🗂 Программы»."
+        )
+    elif day_count == 1:
+        # «Тренировка по любому из дней» на программе из одного дня читалась
+        # как нелепость — дня-то одного и хватает.
+        text = (
+            f"✅ <b>Добавил программу «{escape(name)}».</b>\n\n"
+            "Ищи её в «🗂 Программы» — оттуда и начинается тренировка."
         )
     else:
         # Одна программа с общим именем на все дни, а не «N программ» — «🗂
@@ -757,13 +793,18 @@ async def _announce_saved(callback: CallbackQuery, name: str, day_count: int, re
         )
     with suppress(TelegramBadRequest):
         await callback.message.edit_text(
-            text, parse_mode="HTML", reply_markup=keyboards.ai_program_saved_keyboard()
+            text, parse_mode="HTML", reply_markup=keyboards.ai_program_saved_keyboard(program_id)
         )
     await callback.answer("Готово 💪")
 
 
 async def _save_into_existing_program(
-    callback: CallbackQuery, state: FSMContext, user_id: int, draft: dict, program: Any
+    callback: CallbackQuery,
+    state: FSMContext,
+    user_id: int,
+    draft: dict,
+    program: Any,
+    outcome: Optional[dict] = None,
 ) -> None:
     """A7: правка уже сохранённой программы, резолвится по id заново прямо
     здесь — в момент тапа, а не по снимку, сделанному при предложении.
@@ -802,6 +843,11 @@ async def _save_into_existing_program(
     if renamed_by_trainer and await db.rename_program_by_id(program["id"], draft["name"]):
         target_name = draft["name"]
 
+    # Дальше начинается запись в ЧУЖУЮ для черновика программу — при падении
+    # её нельзя удалять как обрубок (см. _run_program_save), там старые дни
+    # пользователя.
+    if outcome is not None:
+        outcome["into_existing"] = True
     # Сначала новые дни, потом удаление старых (A6): падение посередине
     # оставляет пользователя с лишними новыми днями рядом со старой
     # программой — хуже, чем идеально, но старая версия цела и есть с чем
@@ -812,7 +858,7 @@ async def _save_into_existing_program(
         await db.delete_routine(old["id"])
 
     final_days = await db.list_program_days_by_id(program["id"])
-    await _announce_saved(callback, target_name, len(final_days), replacing=True)
+    await _announce_saved(callback, target_name, len(final_days), replacing=True, program_id=program["id"])
 
 
 async def _save_as_new_program(
@@ -821,6 +867,7 @@ async def _save_as_new_program(
     user_id: int,
     draft: dict,
     freeing_routine_id: Optional[int] = None,
+    outcome: Optional[dict] = None,
 ) -> None:
     """Новая программа — включая случай, когда предложение заменяло одиночную
     (однодневную) программу: у неё нет program_id, поэтому под неё заводится
@@ -852,14 +899,22 @@ async def _save_as_new_program(
         await callback.answer()
         return
 
+    # Свежесозданная программа: если запись дней ниже упадёт, её нужно убрать
+    # целиком (см. _run_program_save) — иначе в «🗂 Программы» остаётся
+    # обрубок с частью дней, а create_program+дни не транзакция.
+    if outcome is not None:
+        outcome["created_program_id"] = program_id
+
     for day in days:
         await _create_program_day(user_id, day, program_id=program_id)
     if freeing_routine_id is not None:
         await db.delete_routine(freeing_routine_id)
-    await _announce_saved(callback, draft["name"], len(days), replacing=False)
+    await _announce_saved(callback, draft["name"], len(days), replacing=False, program_id=program_id)
 
 
-async def _finalize_program_save(callback: CallbackQuery, state: FSMContext, user_id: int, draft: dict) -> None:
+async def _finalize_program_save(
+    callback: CallbackQuery, state: FSMContext, user_id: int, draft: dict, outcome: Optional[dict] = None
+) -> None:
     """Все пути сохранения черновика после того, как он атомарно забран из FSM.
 
     Правка сохранённой многодневки идёт в _save_into_existing_program; всё
@@ -870,7 +925,7 @@ async def _finalize_program_save(callback: CallbackQuery, state: FSMContext, use
     if replaces and replaces.get("kind") == "program":
         program = await db.get_program(replaces["id"])
         if program is not None and program["user_id"] == user_id:
-            await _save_into_existing_program(callback, state, user_id, draft, program)
+            await _save_into_existing_program(callback, state, user_id, draft, program, outcome=outcome)
             return
         # Программу удалили (или это был чужой id) между предложением и тапом —
         # заменять нечего, значит просто добавляем (см. тест A6/A7 fallback).
@@ -882,7 +937,64 @@ async def _finalize_program_save(callback: CallbackQuery, state: FSMContext, use
         if routine is not None and routine["user_id"] == user_id:
             freeing_routine_id = routine["id"]
 
-    await _save_as_new_program(callback, state, user_id, draft, freeing_routine_id=freeing_routine_id)
+    await _save_as_new_program(
+        callback, state, user_id, draft, freeing_routine_id=freeing_routine_id, outcome=outcome
+    )
+
+
+# Тексты честного отказа при упавшем сохранении: кнопка «ещё раз» рядом, потому
+# что черновик к этому моменту уже возвращён в FSM и она снова живая.
+_SAVE_FAILED_NEW = (
+    "⚠️ Не получилось сохранить программу — ничего не записал.\n"
+    "Предложение тренера живо: нажми кнопку ещё раз."
+)
+_SAVE_FAILED_REPLACE = (
+    "⚠️ Не получилось обновить программу: часть новых дней могла успеть добавиться "
+    "рядом со старыми — загляни в «🗂 Программы» и проверь.\n"
+    "Предложение тренера живо: нажми кнопку ещё раз."
+)
+
+
+async def _run_program_save(
+    callback: CallbackQuery, state: FSMContext, user_id: int, draft: dict, action: Callable
+) -> None:
+    """Предохранитель всех путей сохранения черновика.
+
+    Черновик забирается из FSM ДО записи (атомарность против двойного тапа,
+    см. ai_program_save), поэтому необработанное исключение раньше означало
+    сразу две потери: кнопка «Добавить себе» навсегда отвечала «уже
+    неактуально», а в «🗂 Программы» мог остаться обрубок — программа без части
+    дней (create_program и дни пишутся отдельными запросами, не транзакцией).
+
+    Здесь при любом падении: черновик возвращается в FSM (кнопка снова живая),
+    свежесозданный обрубок удаляется, человеку — честное сообщение вместо
+    тишины. Для replace-пути обрубок не удаляется — там живёт старая программа
+    пользователя, и лишние новые дни рядом с ней лучше пустоты; поэтому текст
+    у него свой. Re-raise не нужен: наружу падение не скажет ничего, чего не
+    скажет лог, а сообщение пользователю уже отправлено.
+    """
+    outcome = {"created_program_id": None, "into_existing": False}
+    try:
+        await action(outcome)
+    except Exception:
+        logger.exception("AI program save failed for user %s", user_id)
+        await state.update_data(ai_program_draft=draft)
+        if outcome["created_program_id"] is not None:
+            # Удаление лучших усилий: если и оно упало (например, лежит БД),
+            # обрубок переживёт до ручной чистки — но сообщение ниже всё равно
+            # должно дойти.
+            with suppress(Exception):
+                await db.delete_program_by_id(outcome["created_program_id"])
+        text = _SAVE_FAILED_REPLACE if outcome["into_existing"] else _SAVE_FAILED_NEW
+        with suppress(TelegramBadRequest, TelegramAPIError):
+            await callback.message.answer(
+                text,
+                reply_markup=keyboards.ai_program_preview_keyboard(
+                    replacing=outcome["into_existing"], draft_id=str(draft["id"])
+                ),
+            )
+        with suppress(TelegramBadRequest):
+            await callback.answer()
 
 
 @router.callback_query(F.data.startswith("ai:prog:save:"))
@@ -903,7 +1015,12 @@ async def ai_program_save(callback: CallbackQuery, state: FSMContext):
     # параллельный тап уже не увидит этот черновик и получит _PROGRAM_GONE
     # вместо повторного сохранения (см. A3).
     await state.update_data(ai_program_draft=None)
-    await _finalize_program_save(callback, state, callback.from_user.id, draft)
+    user_id = callback.from_user.id
+
+    async def action(outcome: dict) -> None:
+        await _finalize_program_save(callback, state, user_id, draft, outcome=outcome)
+
+    await _run_program_save(callback, state, user_id, draft, action)
 
 
 @router.callback_query(F.data.startswith("ai:prog:replace:"))
@@ -915,13 +1032,17 @@ async def ai_program_replace_conflict(callback: CallbackQuery, state: FSMContext
         return
     await state.update_data(ai_program_draft=None)
     user_id = callback.from_user.id
-    existing = await db.find_program_by_name(user_id, draft["name"])
-    if existing is None:
-        # Программу с этим именем успели удалить между вопросом и тапом —
-        # заменять уже нечего, просто добавляем как новую.
-        await _save_as_new_program(callback, state, user_id, draft)
-        return
-    await _save_into_existing_program(callback, state, user_id, draft, existing)
+
+    async def action(outcome: dict) -> None:
+        existing = await db.find_program_by_name(user_id, draft["name"])
+        if existing is None:
+            # Программу с этим именем успели удалить между вопросом и тапом —
+            # заменять уже нечего, просто добавляем как новую.
+            await _save_as_new_program(callback, state, user_id, draft, outcome=outcome)
+            return
+        await _save_into_existing_program(callback, state, user_id, draft, existing, outcome=outcome)
+
+    await _run_program_save(callback, state, user_id, draft, action)
 
 
 @router.callback_query(F.data.startswith("ai:prog:copy:"))
@@ -935,10 +1056,16 @@ async def ai_program_copy_conflict(callback: CallbackQuery, state: FSMContext):
         return
     await state.update_data(ai_program_draft=None)
     user_id = callback.from_user.id
-    alt_name = await db.unique_program_name(user_id, draft["name"], suffix="2")
-    draft = dict(draft)
-    draft["name"] = alt_name
-    await _save_as_new_program(callback, state, user_id, draft)
+
+    async def action(outcome: dict) -> None:
+        alt_name = await db.unique_program_name(user_id, draft["name"], suffix="2")
+        renamed = dict(draft)
+        renamed["name"] = alt_name
+        await _save_as_new_program(callback, state, user_id, renamed, outcome=outcome)
+
+    # При падении в FSM возвращается исходный черновик (с исходным именем):
+    # свободное имя всё равно пересчитывается заново на каждом тапе.
+    await _run_program_save(callback, state, user_id, draft, action)
 
 
 @router.callback_query(F.data.startswith("ai:prog:drop:"))
@@ -951,7 +1078,9 @@ async def ai_program_drop(callback: CallbackQuery, state: FSMContext):
     ещё не показанный черновик."""
     draft_id = _draft_id_from(callback.data)
     data = await state.get_data()
-    if (data.get("ai_program_draft") or {}).get("id") == draft_id:
+    current_id = (data.get("ai_program_draft") or {}).get("id")
+    # Строковое сравнение — по той же причине, что в _program_draft.
+    if current_id is not None and str(current_id) == draft_id:
         await state.update_data(ai_program_draft=None)
     with suppress(TelegramBadRequest):
         await callback.message.delete()
@@ -1132,13 +1261,24 @@ async def _send_html_answer(
         html_chunk = formatting.ai_markdown_to_html(chunk)
         if is_last:
             html_chunk += quota_note
+        # Чанки нарезаны по сырому markdown (~TG_CHUNK), а конверсия в HTML
+        # текст удлиняет — таблица, разложенная в строки, разрастается в
+        # полтора-два раза, и «влезавший» чанк превышал 4096: Telegram отвергал
+        # сообщение целиком, и кусок ответа пропадал уже после списания квоты.
+        # Меряем так, как меряет Telegram, и ужимаем с честной пометкой.
+        html_chunk = ui.fit_to_limit(html_chunk, ui.TEXT_LIMIT, "HTML")
         if i == 0:
             try:
                 await placeholder.edit_text(html_chunk, parse_mode="HTML", reply_markup=chunk_markup)
                 continue
             except TelegramBadRequest:
                 pass  # разошлось с ротацией (например текст не изменился) — просто шлём отдельным сообщением
-        await message.answer(html_chunk, parse_mode="HTML", reply_markup=chunk_markup)
+        try:
+            await message.answer(html_chunk, parse_mode="HTML", reply_markup=chunk_markup)
+        except (TelegramBadRequest, TelegramAPIError):
+            # Падение одного чанка не должно съедать остальные: ответ уже
+            # оплачен квотой, и дыра в середине лучше оборванного хвоста.
+            logger.exception("AI answer chunk %s failed to send for user chat %s", i, message.chat.id)
 
 
 async def _handle_question(
@@ -1166,9 +1306,10 @@ async def _handle_question(
     user_id = user_id if user_id is not None else message.from_user.id
     asked_today = await db.get_ai_question_count_today(user_id)
     if asked_today >= config.AI_QUESTION_DAILY_LIMIT:
-        await message.reply(
-            "На сегодня лимит вопросов исчерпан 😮‍💨 Дай тренеру передохнуть — возвращайся завтра."
-        )
+        # С той же клавиатурой, что у обычных ответов чата: сообщение о лимите
+        # становится нижним экраном переписки, и без кнопок из него оставался
+        # только выход через нижнее меню.
+        await message.reply(DAILY_LIMIT_TEXT, reply_markup=await ai_keyboard(user_id))
         return
 
     data = await state.get_data()
@@ -1226,11 +1367,16 @@ async def _handle_question(
         )
     except Exception:
         logger.exception("AI trainer request failed for user %s", user_id)
-        with suppress(TelegramBadRequest):
-            await placeholder.edit_text(
-                "⚠️ Не получилось получить ответ, попробуй ещё раз чуть позже.",
-                reply_markup=await ai_keyboard(user_id),
-            )
+        error_text = "⚠️ Не получилось получить ответ, попробуй ещё раз чуть позже."
+        error_kb = await ai_keyboard(user_id)
+        try:
+            await placeholder.edit_text(error_text, reply_markup=error_kb)
+        except TelegramBadRequest:
+            # Placeholder уже удалён (черновик его гасит, см. on_draft_start) —
+            # значит, обрыв стрима случился ПОСЛЕ начала «печати», и правка
+            # молча проваливалась: человек оставался в полной тишине без
+            # единого сообщения. Шлём ошибку новым сообщением.
+            await message.answer(error_text, reply_markup=error_kb)
         return
     finally:
         running_task.cancel()
@@ -1260,16 +1406,16 @@ async def _handle_question(
     # Черновик по-прежнему пропадает — но только явно: по ai:prog:save или
     # ai:prog:drop, либо будучи заменённым новым предложением здесь же.
     if program_draft:
-        # 5.2: короткий возрастающий id — то, чем кнопка под ЭТИМ ответом
-        # отличается от кнопки под более старым. Раньше кнопка ссылалась просто
-        # на «черновик, который сейчас лежит в FSM» без параметров: следующее
-        # propose_program перетирало слот, и тап по старой кнопке молча сохранял
-        # более позднюю программу, которую пользователь мог даже не видеть.
-        draft_seq = int((data.get("ai_draft_seq") or 0)) + 1
-        program_draft["id"] = draft_seq
-        await state.update_data(
-            ai_history=history, ai_program_draft=program_draft, ai_draft_seq=draft_seq
-        )
+        # 5.2: id в callback_data — то, чем кнопка под ЭТИМ ответом отличается
+        # от кнопки под более старым. Случайный токен, а не счётчик в FSM:
+        # счётчик не входил в _WORKOUT_SCAFFOLD_KEYS и гиб при каждом походе в
+        # меню и при state.clear() после тренировки — обнулившись, он выдавал
+        # новой программе id уже существующей кнопки, и та молча сохраняла не
+        # ту программу, что показывала. Кнопки живут в чате вечно, поэтому id
+        # обязан не повторяться никогда; 8 hex-символов спокойно влезают в
+        # 64 байта callback_data.
+        program_draft["id"] = secrets.token_hex(4)
+        await state.update_data(ai_history=history, ai_program_draft=program_draft)
     else:
         await state.update_data(ai_history=history)
 

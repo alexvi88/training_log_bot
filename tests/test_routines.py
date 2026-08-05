@@ -309,3 +309,126 @@ async def test_renaming_a_program_leaves_another_users_program_alone(user_id):
     await dbmod.rename_program(user_id, "Сплит", "Мой сплит")
 
     assert [p["program_name"] for p in await dbmod.list_programs(999)] == ["Сплит"]
+
+
+# ---------- правило прогрессии: копия дня и ручная правка схемы ----------
+
+
+def _make_message(user_id: int, text: str):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock
+
+    message = MagicMock()
+    message.chat = SimpleNamespace(id=user_id)
+    message.from_user = SimpleNamespace(id=user_id, username="tester")
+    message.text = text
+    message.answer = AsyncMock(
+        return_value=SimpleNamespace(message_id=1, chat=SimpleNamespace(id=user_id))
+    )
+    message.reply = AsyncMock()
+    return message
+
+
+async def _state(user_id: int):
+    from aiogram.fsm.context import FSMContext
+    from aiogram.fsm.storage.base import StorageKey
+    from aiogram.fsm.storage.memory import MemoryStorage
+
+    return FSMContext(
+        storage=MemoryStorage(), key=StorageKey(bot_id=1, chat_id=user_id, user_id=user_id)
+    )
+
+
+_RULE = '{"rule": "double_progression", "reps_top": 10, "step": 2.5}'
+
+
+async def _program_day_with_rule(user_id: int) -> tuple[int, int, int]:
+    """Программа с одним днём, в дне — упражнение со схемой и правилом."""
+    gid = await _group_id("Грудь")
+    ex_id = await dbmod.create_exercise(user_id, "Жим", gid)
+    program_id = await dbmod.create_program(user_id, "Моя")
+    rid = await dbmod.create_routine(user_id, "День 1", program_id=program_id)
+    await dbmod.add_routine_exercise(rid, ex_id, 0, "3×8-10")
+    entry = (await dbmod.list_routine_exercises(rid))[0]
+    await dbmod.set_routine_exercise_progression(entry["id"], _RULE)
+    return program_id, rid, entry["id"]
+
+
+@pytest.mark.asyncio
+async def test_a_manual_day_copy_keeps_the_progression_rule(user_id):
+    """«Копия дня» руками теряла правило, хотя «Дублировать программу» и
+    AI-копия его переносят — копию делают, чтобы чуть поменять, а не чтобы
+    молча остаться без прогрессии."""
+    from handlers import routines
+
+    program_id, rid, _re_id = await _program_day_with_rule(user_id)
+    state = await _state(user_id)
+    await state.update_data(day_program_id=program_id, day_copy_from=rid)
+
+    await routines.rt_day_named(_make_message(user_id, "День 1 (копия)"), state)
+
+    copy = next(
+        d for d in await dbmod.list_program_days_by_id(program_id) if d["name"] == "День 1 (копия)"
+    )
+    copied = (await dbmod.list_routine_exercises(copy["id"]))[0]
+    assert copied["target"] == "3×8-10"
+    assert copied["progression"] == _RULE
+
+
+@pytest.mark.asyncio
+async def test_manually_editing_the_target_drops_the_programs_rule(user_id):
+    """Человек сменил «3×8-10» на «5×5» — правило с reps_top=10 не должно
+    дальше управлять подсказкой «🎯 Цель — по программе», которую он думает,
+    что стёр. И об этом ему говорится явно."""
+    from handlers import routines
+
+    _pid, rid, re_id = await _program_day_with_rule(user_id)
+    state = await _state(user_id)
+    await state.update_data(rtedit_routine_id=rid, rtedit_re_id=re_id)
+    message = _make_message(user_id, "5×5")
+
+    await routines.rt_exercise_target_entered(message, state)
+
+    entry = await dbmod.get_routine_exercise(re_id)
+    assert entry["target"] == "5×5"
+    assert entry["progression"] is None
+    assert any(
+        "прогрессии" in call.args[0] for call in message.reply.await_args_list
+    )
+
+
+@pytest.mark.asyncio
+async def test_editing_a_target_without_a_rule_says_nothing_about_rules(user_id):
+    from handlers import routines
+
+    _pid, rid, re_id = await _program_day_with_rule(user_id)
+    await dbmod.set_routine_exercise_progression(re_id, None)
+    state = await _state(user_id)
+    await state.update_data(rtedit_routine_id=rid, rtedit_re_id=re_id)
+    message = _make_message(user_id, "5×5")
+
+    await routines.rt_exercise_target_entered(message, state)
+
+    assert (await dbmod.get_routine_exercise(re_id))["target"] == "5×5"
+    assert not any(
+        "прогрессии" in call.args[0] for call in message.reply.await_args_list
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_ai_write_path_does_not_touch_the_rule(user_id):
+    """AI-путь пишет target при вставке строки и правит правило отдельным
+    вызовом — ни то, ни другое не должно сбрасывать прогрессию, сброс только
+    за ручным редактором (set_routine_exercise_target)."""
+    _pid, rid, re_id = await _program_day_with_rule(user_id)
+
+    # Обновление самого правила (так делает AI-редактирование) — правило живо.
+    new_rule = '{"rule": "linear_load", "step": 5}'
+    await dbmod.set_routine_exercise_progression(re_id, new_rule)
+    assert (await dbmod.get_routine_exercise(re_id))["progression"] == new_rule
+
+    # Вставка новой строки с target (AI-копия/пересборка дня) правило соседа не трогает.
+    gid = await _group_id("Грудь")
+    other = await dbmod.create_exercise(user_id, "Разведение", gid)
+    await dbmod.append_routine_exercise(rid, other, "3×12")
+    assert (await dbmod.get_routine_exercise(re_id))["progression"] == new_rule
