@@ -381,14 +381,39 @@ BUILD_PROGRAM_SEED = (
     "собирай программу."
 )
 
+BUILD_WORKOUT_INTRO = (
+    "🤖 <b>СОБИРАЕМ ТРЕНИРОВКУ НА СЕГОДНЯ.</b>\n\n"
+    "Гляну, что у тебя отдохнуло, и спрошу пару вещей — а дальше по ней и пойдём."
+)
 
-@router.callback_query(F.data == "ai:buildprog")
-async def ai_build_program(callback: CallbackQuery, state: FSMContext):
-    """Кнопка «Составить с AI-тренером» в 🗂 Программы.
+# Отдельный сценарий, а не «программа из одного дня»: человек стоит в зале и
+# хочет знать, что делать сегодня, а не заводить себе ещё одну программу
+# навсегда. Отсюда три отличия от BUILD_PROGRAM_SEED — прямое указание сходить
+# за восстановлением (тренер про него не знал вовсе, пока не появился
+# get_muscle_recovery), просьба ограничиться одним днём и явное «коротко»:
+# уточнять инвентарь и цели на полразговора, когда человек уже разминается,
+# — худшее, что тут можно сделать.
+BUILD_WORKOUT_SEED = (
+    "Собери мне тренировку на сегодня — одну, прямо сейчас пойду по ней "
+    "заниматься. Сначала посмотри get_muscle_recovery и реши, что сегодня "
+    "логичнее грузить, а что ещё не отдохнуло. Потом задай мне не больше двух "
+    "коротких вопросов (сколько есть времени и как самочувствие) и только "
+    "после ответов вызывай propose_program ровно с одним днём."
+)
 
-    Не просто открывает чат тренера, а сразу запускает сценарий сбора программы
-    (уточняющие вопросы → propose_program → превью с сохранением): иначе, чтобы
+
+async def _start_ai_scenario(
+    callback: CallbackQuery, state: FSMContext, intro: str, seed: str
+) -> None:
+    """Кнопка, которая сама начинает разговор с тренером за пользователя.
+
+    Общая половина «Составить программу» и «Тренировка на сегодня»: обе не
+    просто открывают чат, а сразу задают тренеру нужный вопрос — иначе, чтобы
     получить план, надо было самому догадаться попросить об этом словами.
+
+    Дневной лимит проверяется ДО подмены экрана: раньше бодрое «ОКЕЙ, СОБИРАЕМ»
+    успевало встать на место меню, и уже под ним приезжал отказ — человек терял
+    экран, с которого пришёл, ради обещания, которое бот тут же забирал назад.
     """
     if not ai_trainer.is_configured():
         await callback.answer(
@@ -397,15 +422,10 @@ async def ai_build_program(callback: CallbackQuery, state: FSMContext):
         )
         return
     user_id = callback.from_user.id
-    # Лимит проверяем ДО того, как экран «🗂 Программы» сменится на интро.
-    # _handle_question проверит его и сам, но там отказ приходит уже под
-    # обещанием «сейчас задам пару вопросов» — то есть человек теряет экран, с
-    # которого пришёл, и получает на его месте несбывшееся обещание. Алертом
-    # он остаётся там же, где стоял.
     if await db.get_ai_question_count_today(user_id) >= config.AI_QUESTION_DAILY_LIMIT:
         await callback.answer(
-            "На сегодня лимит вопросов к тренеру исчерпан 😮‍💨 Возвращайся завтра — "
-            "а пока программу можно взять готовую в «✨ Готовые программы».",
+            "На сегодня лимит вопросов исчерпан 😮\u200d💨 Дай мне передохнуть, "
+            "возвращайся завтра — а пока забери готовую в «✨ Готовые программы».",
             show_alert=True,
         )
         return
@@ -413,36 +433,44 @@ async def ai_build_program(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Секунду, ещё думаю над прошлым вопросом 😅", show_alert=True)
         return
     try:
-        # Was outside this try: a stale-button tap makes Telegram reject this
-        # answer with "query is too old", and the finally below never runs —
-        # the reservation leaks forever, and every future message/photo/voice
-        # from this user reports "busy" for the life of the process (A5).
+        # Внутри try: тап по устаревшей кнопке Telegram отвергает с «query is
+        # too old», и без этого finally не отработал бы — бронь протекла бы
+        # навсегда, а каждое следующее сообщение пользователя отвечало бы
+        # «ещё думаю» до конца жизни процесса (A5).
         with suppress(TelegramBadRequest):
             await callback.answer()
-        # Лимит — до интро, а не после: бодрое «ОКЕЙ, СОБИРАЕМ ПРОГРАММУ» с
-        # мгновенным «лимит исчерпан» следом читалось как обещание, которое
-        # бот сам тут же забирает назад.
-        if await db.get_ai_question_count_today(user_id) >= config.AI_QUESTION_DAILY_LIMIT:
-            await ui.safe_edit(
-                callback, DAILY_LIMIT_TEXT,
-                reply_markup=await ai_keyboard(user_id), parse_mode="HTML",
-            )
-            return
         await state.set_state(AITrainerFlow.chatting)
         # С клавиатурой, а не голым текстом: пока тренер думает, это единственный
-        # экран на месте меню — а ответа может и не быть вовсе (исчерпан дневной
-        # лимит вопросов, сбой провайдера), и без кнопок выход остался бы только
-        # через нижнее меню.
+        # экран на месте меню — а ответа может и не быть вовсе (сбой провайдера),
+        # и без кнопок выход остался бы только через нижнее меню.
         screen = await ui.safe_edit(
-            callback, BUILD_PROGRAM_INTRO,
-            reply_markup=await ai_keyboard(user_id), parse_mode="HTML",
+            callback, intro, reply_markup=await ai_keyboard(user_id), parse_mode="HTML",
         )
         await _handle_question(
-            screen, state, BUILD_PROGRAM_SEED,
-            history_question=BUILD_PROGRAM_SEED, user_id=user_id,
+            screen, state, seed, history_question=seed, user_id=user_id,
         )
     finally:
         _busy.discard(user_id)
+
+
+@router.callback_query(F.data == "ai:buildprog")
+async def ai_build_program(callback: CallbackQuery, state: FSMContext):
+    """«Составить с AI-тренером» в 🗂 Программы — многодневка на будущее."""
+    await _start_ai_scenario(callback, state, BUILD_PROGRAM_INTRO, BUILD_PROGRAM_SEED)
+
+
+@router.callback_query(F.data == "ai:buildworkout")
+async def ai_build_workout(callback: CallbackQuery, state: FSMContext):
+    """«🤖 Собрать тренировку на сегодня» на экране начала тренировки.
+
+    Не то же самое, что собрать программу: программа — это план на недели
+    вперёд, который ещё надо сохранить, а тут человек уже в зале и ему нужно
+    знать, что делать в ближайший час. Поэтому и сценарий другой (одна тренировка,
+    с оглядкой на восстановление, минимум вопросов), и из превью такого
+    однодневного черновика можно уйти сразу в тренировку, не сохраняя его
+    себе программой — см. keyboards.ai_program_preview_keyboard.
+    """
+    await _start_ai_scenario(callback, state, BUILD_WORKOUT_INTRO, BUILD_WORKOUT_SEED)
 
 
 @router.callback_query(F.data == "ai:resume_workout")
@@ -876,9 +904,90 @@ async def ai_program_view(callback: CallbackQuery, state: FSMContext):
     await callback.message.answer(
         text,
         parse_mode="HTML",
-        reply_markup=keyboards.ai_program_preview_keyboard(replacing=bool(replaces), draft_id=draft_id),
+        reply_markup=keyboards.ai_program_preview_keyboard(
+            replacing=bool(replaces),
+            draft_id=draft_id,
+            # Один день — это тренировка, а не программа: по ней логично пойти
+            # прямо сейчас, ничего себе не заводя (см. ai_program_train).
+            can_train_now=len(draft["days"]) == 1,
+        ),
     )
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("ai:prog:train:"))
+async def ai_program_train(callback: CallbackQuery, state: FSMContext):
+    """«▶️ Начать по ней» — тренировка по собранному плану, без сохранения.
+
+    Единственной дорогой от плана к штанге было «Добавить себе»: чтобы пойти по
+    сгенерённому, приходилось сначала завести себе программу навсегда, и разовая
+    «тренька на сегодня» оседала в 🗂 Программы рядом с настоящими. Сохранять её
+    и не нужно: сессия попадёт в историю, а «🔁 Повторить тренировку» на экране
+    старта умеет перезапустить любую прошлую.
+
+    Активную тренировку не трогаем, а до-планируем: на этот экран приходят с
+    экрана выбора, который активную тренировку уже создал (menu:start_workout),
+    так что она тут почти всегда есть и почти всегда пустая. Уже отработанные
+    в ней упражнения из плана вычитаются — тем же приёмом, что и в
+    workout._rebuild_planned_blocks_from_routine.
+
+    Упражнения тут форкаются из каталога — в отличие от самого предложения,
+    которое не пишет ничего (ai_trainer._propose_program). Это осознанно: пойти
+    заниматься по плану и есть согласие им пользоваться.
+
+    У такой тренировки нет routine_id, и это её единственный минус: если
+    состояние FSM потеряется на середине, восстановить план будет неоткуда —
+    workout._rebuild_planned_blocks_from_routine опирается как раз на него.
+    Заводить ради страховки скрытую программу значило бы вернуть ровно тот
+    мусор в списке, из-за которого всё и затевалось.
+    """
+    from handlers.workout import (
+        _delete_message,
+        _load_next_planned_block,
+        _reset_new_workout_scaffold,
+    )
+
+    draft_id = _draft_id_from(callback.data)
+    draft = await _program_draft(callback, state, draft_id)
+    if draft is None:
+        return
+    day = draft["days"][0]
+
+    user_id = callback.from_user.id
+    workout_id, created = await db.get_or_create_active_workout(user_id)
+    done_ids = set() if created else set(await db.list_exercise_ids_for_workout(workout_id))
+
+    planned = []
+    for item in day["items"]:
+        ex_id = await db.get_or_create_user_exercise_by_name(user_id, item["name"])
+        if ex_id is None or ex_id in done_ids:
+            continue
+        done_ids.add(ex_id)
+        planned.append({"exercise_ids": [ex_id], "targets": {ex_id: item.get("target")}})
+
+    if not planned:
+        await callback.answer(
+            "Всё из этого плана ты уже сделал 💪 Добери что-нибудь сам или "
+            "попроси меня собрать ещё.",
+            show_alert=True,
+        )
+        return
+
+    # Черновик израсходован: он больше не «предложение, которое ждёт решения».
+    # Кнопка «Добавить себе» под этим же превью после старта ответит, что
+    # предложение неактуально, — и это правда, по нему уже занимаются.
+    await state.update_data(ai_program_draft=None)
+
+    if created:
+        await _reset_new_workout_scaffold(state)
+    await _delete_message(callback.message)
+    sent = await callback.message.answer(f"🏋️ Тренировка: {escape(day['name'])}")
+    await state.update_data(
+        workout_id=workout_id, live_chat_id=sent.chat.id, live_message_id=sent.message_id,
+        last_by_exercise={}, planned_blocks=planned,
+    )
+    await _load_next_planned_block(callback, state)
+    await callback.answer("Погнали 💪")
 
 
 def _name_conflict_keyboard(draft_id: str, program_name: str) -> InlineKeyboardMarkup:

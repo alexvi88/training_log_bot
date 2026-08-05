@@ -182,6 +182,8 @@ async def test_profile_screen_marks_what_is_still_unknown(fresh_db, user_id):
     empty = [line for line in seen["text"].split("\n") if line.endswith("</b> —")]
     assert len(empty) == 5
     assert "Ограничения" in seen["text"]
+    # Пустое состояние зовёт, а не констатирует (см. TONE_OF_VOICE.md).
+    assert "AI-тренер" in seen["text"]
 
 
 async def test_profile_can_be_cleared(fresh_db, user_id):
@@ -211,3 +213,29 @@ async def test_profile_button_is_on_the_settings_screen():
     callbacks = [b.callback_data for row in kb.inline_keyboard for b in row]
 
     assert "settings:profile" in callbacks
+
+
+async def test_profile_screen_speaks_in_the_first_person(fresh_db, user_id):
+    """Один персонаж на весь продукт (TONE_OF_VOICE.md): бот говорит «записал»,
+    а не «тренер записал» — про самого себя в третьем лице он не говорит."""
+    import ai_trainer
+    import ui
+
+    await ai_trainer.execute_tool(user_id, "save_athlete_profile", {"goal": "масса"})
+
+    seen = {}
+
+    async def fake_edit(callback, text, **kwargs):
+        seen["text"] = text
+        return MagicMock()
+
+    original, ui.safe_edit = ui.safe_edit, fake_edit
+    try:
+        await settings.settings_profile(
+            _make_callback(user_id, "settings:profile"), await _make_state(user_id)
+        )
+    finally:
+        ui.safe_edit = original
+
+    assert "Записал с твоих слов" in seen["text"]
+    assert "скажи мне" in seen["text"]

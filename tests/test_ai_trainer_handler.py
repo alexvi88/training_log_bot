@@ -1490,3 +1490,129 @@ async def test_undo_of_someone_elses_row_is_refused(fresh_db, user_id):
 
     assert callback.answer.await_args.kwargs.get("show_alert") is True
     assert len(await fresh_db.list_bodyweight_logs(other_id)) == 1
+
+
+# ---------- «▶️ Начать по ней»: план в работу, программа не заводится ----------
+
+
+def _make_train_callback(user_id: int, draft_id: str):
+    from aiogram.types import CallbackQuery
+
+    live = MagicMock()
+    live.chat = SimpleNamespace(id=user_id)
+    live.message_id = 77
+
+    preview = MagicMock()
+    preview.chat = SimpleNamespace(id=user_id)
+    preview.message_id = 42
+    preview.delete = AsyncMock()
+    preview.answer = AsyncMock(return_value=live)
+
+    callback = MagicMock(spec=CallbackQuery)
+    callback.from_user = SimpleNamespace(id=user_id, username="tester")
+    callback.message = preview
+    callback.data = f"ai:prog:train:{draft_id}"
+    callback.answer = AsyncMock()
+    return callback
+
+
+async def _draft_in_state(fresh_db, user_id, state, items):
+    group_id = await fresh_db.create_muscle_group(user_id, "Ноги")
+    ids = [await fresh_db.create_exercise(user_id, name, group_id) for name, _ in items]
+    draft = {
+        "id": "d1", "name": "Сегодня", "replaces": None, "notes": [],
+        "days": [{"name": "Ноги", "items": [
+            {"name": name, "target": target, "source": "own"} for name, target in items
+        ]}],
+    }
+    await state.update_data(ai_program_draft=draft)
+    return ids
+
+
+async def test_training_by_a_draft_creates_no_program(fresh_db, user_id, monkeypatch):
+    """Ради этого всё и делалось: разовая тренировка не должна оседать в
+    «🗂 Программы» рядом с настоящими программами."""
+    loaded = {}
+
+    async def fake_load(callback, state, index=0):
+        loaded["called"] = True
+        return True
+
+    monkeypatch.setattr("handlers.workout._load_next_planned_block", fake_load)
+
+    state = await _make_state(user_id)
+    ex_ids = await _draft_in_state(fresh_db, user_id, state, [("Присед", "4×8"), ("Выпады", "3×12")])
+
+    await ai_trainer.ai_program_train(_make_train_callback(user_id, "d1"), state)
+
+    assert await fresh_db.list_programs(user_id) == []
+    assert await fresh_db.list_routines(user_id) == []
+    # А тренировка — есть, и план в ней.
+    assert await fresh_db.get_active_workout(user_id) is not None
+    planned = (await state.get_data())["planned_blocks"]
+    assert [b["exercise_ids"][0] for b in planned] == ex_ids
+    assert planned[0]["targets"][ex_ids[0]] == "4×8"
+    assert loaded["called"]
+
+
+async def test_training_by_a_draft_uses_the_workout_already_open(fresh_db, user_id, monkeypatch):
+    """На превью приходят с экрана выбора, который активную тренировку уже
+    создал — заводить вторую значило бы бросить первую."""
+    monkeypatch.setattr("handlers.workout._load_next_planned_block", AsyncMock(return_value=True))
+
+    workout_id, _ = await fresh_db.get_or_create_active_workout(user_id)
+    state = await _make_state(user_id)
+    await _draft_in_state(fresh_db, user_id, state, [("Присед", "4×8")])
+
+    await ai_trainer.ai_program_train(_make_train_callback(user_id, "d1"), state)
+
+    assert (await state.get_data())["workout_id"] == workout_id
+
+
+async def test_the_draft_is_spent_once_you_train_by_it(fresh_db, user_id, monkeypatch):
+    """Кнопка «Добавить себе» под тем же превью после старта должна отвечать,
+    что предложение неактуально: по нему уже занимаются."""
+    monkeypatch.setattr("handlers.workout._load_next_planned_block", AsyncMock(return_value=True))
+
+    state = await _make_state(user_id)
+    await _draft_in_state(fresh_db, user_id, state, [("Присед", "4×8")])
+
+    await ai_trainer.ai_program_train(_make_train_callback(user_id, "d1"), state)
+
+    assert (await state.get_data())["ai_program_draft"] is None
+
+
+async def test_a_draft_already_done_this_session_says_so(fresh_db, user_id, monkeypatch):
+    """Упражнения, уже отработанные в этой тренировке, из плана вычитаются —
+    а если не осталось ничего, надо сказать, а не открыть пустой план."""
+    monkeypatch.setattr("handlers.workout._load_next_planned_block", AsyncMock(return_value=True))
+
+    state = await _make_state(user_id)
+    ex_ids = await _draft_in_state(fresh_db, user_id, state, [("Присед", "4×8")])
+    workout_id, _ = await fresh_db.get_or_create_active_workout(user_id)
+    block_id = await fresh_db.create_block(workout_id, "single")
+    await fresh_db.add_block_exercise(block_id, ex_ids[0], 0)
+    await fresh_db.append_set(block_id, ex_ids[0], 0, 100, 5)
+
+    callback = _make_train_callback(user_id, "d1")
+    await ai_trainer.ai_program_train(callback, state)
+
+    assert callback.answer.await_args.kwargs.get("show_alert") is True
+    # Черновик при этом цел: по нему ещё можно пойти в следующий раз.
+    assert (await state.get_data())["ai_program_draft"] is not None
+
+
+async def test_the_workout_picker_offers_todays_workout_to_everyone(fresh_db, user_id, monkeypatch):
+    """Кнопка сбора ПРОГРАММЫ показывается только тем, у кого программ нет, —
+    а «что сегодня качать» одинаково нужно и тем, и другим."""
+    from handlers import workout as workout_handlers
+
+    monkeypatch.setattr(workout_handlers.ai_trainer, "is_configured", lambda: True)
+    await fresh_db.create_routine(user_id, "Верх/низ")
+
+    from tests.test_workout_picker import _picker_extra_callbacks
+
+    callbacks = await _picker_extra_callbacks(fresh_db, user_id, monkeypatch)
+
+    assert "ai:buildworkout" in callbacks
+    assert "ai:buildprog" not in callbacks

@@ -1493,16 +1493,24 @@ async def _picker_screen_groups(callback: CallbackQuery, state: FSMContext, show
         if await db.count_workouts(callback.from_user.id) > 0:
             extra.append(("🔁 Повторить тренировку", "pick:repeat"))
         extra.append(("🗂 Выбрать программу", "rt:manage"))
-        # Только тем, у кого программ ещё нет: для них кнопка выше ведёт на
-        # пустой экран, а собрать программу — как раз то, чего им не хватает.
-        # У кого программы есть, это был бы третий пункт про программы подряд
-        # на экране, куда пришли тренироваться, а не планировать.
-        if not await db.count_routines(callback.from_user.id) and ai_trainer.is_configured():
-            # Та же подпись, что и на экране «🗂 Программы» (см.
-            # keyboards.routines_manage_keyboard): это одна и та же кнопка,
-            # ведущая в один и тот же сценарий, и разные названия у неё читались
-            # как две разные возможности.
-            extra.append(("🤖 Составить с AI-тренером", "ai:buildprog"))
+        if ai_trainer.is_configured():
+            # Тренировка на сегодня, а не программа: сюда приходят тренироваться,
+            # и полезен тот вопрос, который человек себе прямо сейчас и задаёт —
+            # «что качать». Тренер отвечает на него, глядя на восстановление
+            # (get_muscle_recovery), а по собранному можно пойти сразу, не
+            # заводя себе программу навсегда.
+            #
+            # Показывается всем, в отличие от кнопки сбора программы ниже: она
+            # про план на недели вперёд, и человеку с программами это был бы
+            # третий пункт про программы подряд на экране, куда пришли
+            # заниматься. А «что сегодня» одинаково нужно и тем, и другим.
+            extra.append(("🤖 Собрать тренировку на сегодня", "ai:buildworkout"))
+            if not await db.count_routines(callback.from_user.id):
+                # Та же подпись, что и на экране «🗂 Программы» (см.
+                # keyboards.routines_manage_keyboard): это одна и та же кнопка,
+                # ведущая в один и тот же сценарий, и разные названия у неё
+                # читались как две разные возможности.
+                extra.append(("🤖 Составить с AI-тренером", "ai:buildprog"))
     # Not a "cancel the workout" — pick:cancel just returns to whatever screen was
     # open before (see _back_after_cancel), so it reads as "⬅️ Назад", not "❌ Отмена".
     extra.append(("⬅️ Назад", "pick:cancel"))
