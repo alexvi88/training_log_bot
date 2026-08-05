@@ -131,7 +131,7 @@ async def test_brzycki_threshold_matches_the_python_formula(fresh_db, user_id):
 # ---------- золотая книга ----------
 
 
-async def test_gold_book_collects_three_categories_with_dates(fresh_db, user_id):
+async def test_gold_book_shows_e1rm_and_weight_but_not_reps(fresh_db, user_id):
     db = fresh_db
     ex_id = await _exercise(db, user_id)
     await _finished(db, user_id, ex_id, [(120.0, 1)], "2026-05-14T10:00:00")  # самый тяжёлый
@@ -144,12 +144,15 @@ async def test_gold_book_collects_three_categories_with_dates(fresh_db, user_id)
     assert (book.best_e1rm_weight, book.best_e1rm_reps) == (105.0, 6)
     assert book.best_e1rm_date == "2026-08-02"
     assert (book.max_weight, book.max_weight_reps) == (120.0, 1)
-    assert book.max_reps == 20
 
     lines = formatting.build_gold_book_lines(book)
     assert "🥇 <b>Золотая книга</b>" in lines[0]
     assert any("2 августа" in ln for ln in lines)
     assert any("120×1" in ln for ln in lines)
+    # Рекорд повторов у упражнений с весом больше не упоминается нигде,
+    # включая золотую книгу.
+    assert not any("60×20" in ln for ln in lines)
+    assert not any("Повторы" in ln for ln in lines)
 
 
 async def test_gold_book_collapses_a_set_that_wins_two_categories(fresh_db, user_id):

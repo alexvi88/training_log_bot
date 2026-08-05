@@ -552,9 +552,9 @@ def test_format_pr_detail_e1rm():
     assert text == "• Новый рекорд e1RM: 133.3кг"
 
 
-def test_format_pr_detail_reps_at_weight():
-    text = formatting.format_pr_detail("reps_at_weight", 8, extra=100.0)
-    assert text == "• Новый рекорд повторов: 100кг × 8"
+def test_format_pr_detail_bodyweight_reps():
+    text = formatting.format_pr_detail("reps", 12)
+    assert text == "• Новый рекорд повторов: 12"
 
 
 def test_format_pr_detail_unknown_kind_falls_back():
@@ -572,7 +572,7 @@ def test_format_pr_detail_respects_unit():
 def test_build_exercise_highlights_groups_and_joins():
     groups = [
         ("Жим лёжа", ["🔥 Новый рекорд e1RM: 133.3 кг"], "↑ e1RM +5.0 кг vs прошлой тренировки этого упражнения"),
-        ("Присед", ["🔥 Новый рекорд повторов: 10 на 100 кг"], None),
+        ("Подтягивания", ["🔥 Новый рекорд повторов: 15"], None),
     ]
     text = formatting.build_exercise_highlights(groups)
     blocks = text.split("\n\n")
@@ -580,7 +580,7 @@ def test_build_exercise_highlights_groups_and_joins():
     assert "<b>Жим лёжа</b>" in blocks[0]
     assert "Новый рекорд e1RM" in blocks[0]
     assert "vs прошлой тренировки" in blocks[0]
-    assert "<b>Присед</b>" in blocks[1]
+    assert "<b>Подтягивания</b>" in blocks[1]
     assert "vs прошлой" not in blocks[1]
 
 

@@ -413,12 +413,8 @@ async def _sets_beat_record(
 ) -> bool:
     """True if any of the sets just logged is a genuine all-time record for this
     exercise — a new best e1RM or a new heaviest weight (or, for bodyweight moves,
-    the most reps in a set).
-
-    Deliberately stricter than the completion-card highlights: reps at a
-    never-before-used weight are *not* treated as a record here, or almost every
-    set at a fresh weight would trigger the 🔥. Compared against every prior
-    finished session, so the current workout's own earlier sets are excluded.
+    the most reps in a set). Compared against every prior finished session, so
+    the current workout's own earlier sets are excluded.
     """
     workout = await db.get_workout(workout_id)
     if workout is None:
@@ -2748,6 +2744,8 @@ async def _record_highlights_and_summary(
         session_tonnage += new_session.tonnage
 
         records = analytics.detect_new_records(prior_sessions, new_session)
+        # e1RM-рекорды в отдельные строки не идут — их покрывает строка
+        # сравнения ниже; остаются рекорды повторов упражнений своим весом.
         pr_details = [
             formatting.format_pr_detail(r.kind, r.value, r.extra, unit=user["unit"])
             for r in records
