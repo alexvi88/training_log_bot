@@ -4791,6 +4791,50 @@ async def delete_last_bodyweight(telegram_id: int) -> Optional[aiosqlite.Row]:
     return row
 
 
+async def delete_bodyweight_log(log_id: int, telegram_id: int) -> bool:
+    """Убрать одну конкретную запись веса — ту, а не последнюю.
+
+    delete_last_bodyweight хватает экрану 🏋️ Вес, где отменяют только что
+    набранное. Откату записи, сделанной AI-тренером, — нет: между записью и
+    тапом по «↩️ Отменить» человек мог взвеситься ещё раз руками, и снос
+    последней утащил бы не то. Отсюда id — и проверка владельца при нём: id
+    приезжает из callback_data, то есть от клиента.
+    """
+    async with _write_lock:
+        cur = await conn().execute(
+            "DELETE FROM bodyweight_logs WHERE id = ? AND telegram_id = ?",
+            (log_id, telegram_id),
+        )
+        await conn().commit()
+        return cur.rowcount > 0
+
+
+async def delete_exercise_if_unused(exercise_id: int, user_id: int) -> bool:
+    """Снести упражнение целиком — только если по нему ещё ничего не записано.
+
+    Откат «создай упражнение»: раз его завели секунду назад, сносим по-честному,
+    а не архивируем — архив копил бы мусор, которого пользователь не заводил.
+    Но если между созданием и откатом по нему уже успели сделать подход или
+    поставить его в программу, удаление утащило бы за собой чужие данные:
+    тогда отказываемся, и вызывающая сторона говорит об этом вслух.
+    """
+    exercise = await get_exercise(exercise_id)
+    if exercise is None or exercise["user_id"] != user_id or exercise["is_template"]:
+        return False
+    if await list_sets_for_exercise(exercise_id):
+        return False
+    cur = await conn().execute(
+        "SELECT 1 FROM routine_exercises WHERE exercise_id = ? LIMIT 1", (exercise_id,)
+    )
+    if await cur.fetchone():
+        return False
+    async with _write_lock:
+        db = conn()
+        await db.execute("DELETE FROM exercises WHERE id = ?", (exercise_id,))
+        await db.commit()
+    return True
+
+
 async def scale_bodyweight_logs(telegram_id: int, factor: float) -> None:
     """Multiply every stored bodyweight by `factor` — used when a user switches units."""
     async with _write_lock:

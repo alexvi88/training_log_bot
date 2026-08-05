@@ -352,9 +352,12 @@ replaces_program не передавай, иначе затрёшь старую
 пользователя, и в его дневниках. Не отправляй человека делать это руками через
 меню и не говори, что не умеешь. Правило одно, и оно проходит по обратимости:
 
-- Что откатывается — делаешь САМ и сразу говоришь, что сделал, без «подтверди»:
+- Что откатывается — делаешь САМ и сразу говоришь, что сделал:
   rename_program, copy_program, rename_exercise, move_exercise_to_group,
-  create_exercise, log_bodyweight, log_food.
+  create_exercise, log_bodyweight, log_food, save_athlete_profile. Разрешения
+  не спрашивай — но и молча не оставляй: под ответом появится кнопка отката,
+  и о ней надо сказать одной короткой фразой («если что — отменишь кнопкой
+  ниже»). Человек должен узнать о записи от тебя, а не наткнуться на неё потом.
 - Что не откатывается или уходит наружу — только ПРЕДЛАГАЕШЬ: delete_program,
   merge_programs, archive_exercise, share_program. Под ответом появится кнопка,
   и сделает это тап пользователя. Не пиши «удалил», «объединил», «отправил» —
@@ -1314,9 +1317,9 @@ TOOLS: list[dict[str, Any]] = [
         "function": {
             "name": "rename_program",
             "description": (
-                "Переименовать сохранённую программу. ДЕЛАЕТ СРАЗУ (имя откатывается "
-                "тем же инструментом, терять нечего) — просто скажи, что переименовал, "
-                "и не проси подтверждать. Имя бери точное из get_saved_programs. "
+                "Переименовать сохранённую программу. ДЕЛАЕТ СРАЗУ — скажи, что "
+                "переименовал, и упомяни кнопку отката под ответом. Имя бери точное "
+                "из get_saved_programs. "
                 "Если новое имя уже занято, инструмент откажет: тогда предложи другое "
                 "или спроси, не объединить ли программы (merge_programs)."
             ),
@@ -1484,9 +1487,9 @@ TOOLS: list[dict[str, Any]] = [
             "name": "log_bodyweight",
             "description": (
                 "Записать вес тела в дневник («кстати, 78.4 сегодня», «запиши 80»). "
-                "ДЕЛАЕТ СРАЗУ — это одна строка дневника, которая удаляется одной "
-                "кнопкой. Число в тех же единицах, в которых живёт пользователь (kg/lb "
-                "— см. сводку), без конвертации."
+                "ДЕЛАЕТ СРАЗУ, под ответом появится кнопка отката — скажи, что записал, "
+                "и упомяни её. Число в тех же единицах, в которых живёт пользователь "
+                "(kg/lb — см. сводку), без конвертации."
             ),
             "parameters": {
                 "type": "object",
@@ -1503,7 +1506,8 @@ TOOLS: list[dict[str, Any]] = [
             "name": "log_food",
             "description": (
                 "Записать съеденное в дневник питания за сегодня («запиши: овсянка с "
-                "бананом»). ДЕЛАЕТ СРАЗУ. КБЖУ необязательны — если человек их не "
+                "бананом»). ДЕЛАЕТ СРАЗУ, под ответом появится кнопка отката — скажи, "
+                "что записал, и упомяни её. КБЖУ необязательны — если человек их не "
                 "назвал, а по описанию ты можешь прикинуть, прикидывай честно и скажи, "
                 "что это оценка; выдумывать точные цифры хуже, чем оставить пусто. "
                 "Разбор фото еды идёт своим путём, этот инструмент — для текста."
@@ -1576,8 +1580,10 @@ TOOLS: list[dict[str, Any]] = [
                 "и терялись — вызывай его сразу, как только человек сказал что-то из этого "
                 "(необязательно всё разом — присылай только то, что реально узнал в этом "
                 "ходе, старые поля так и останутся сохранёнными). После вызова коротко "
-                "подтверди, что записал — не спрашивай то же самое снова в будущих разговорах, "
-                "сначала посмотри профиль в get_training_overview."
+                "скажи, что записал, и что это отменяется кнопкой под ответом — человек "
+                "должен знать, что ты о нём запомнил. Не спрашивай то же самое снова в "
+                "будущих разговорах, сначала посмотри профиль в get_training_overview. "
+                "Посмотреть и стереть его человек может сам в ⚙️ Настройки → 🧬 Обо мне."
             ),
             "parameters": {
                 "type": "object",
@@ -2340,16 +2346,34 @@ async def _delete_program(
 # ручном UI — «📄 Дублировать» там без вопросов, «🔗 Объединить» с «точно?».
 
 
-async def _rename_program(user_id: int, tool_input: dict[str, Any]) -> dict[str, Any]:
-    """Переименовать сохранённую программу — сразу, без кнопки: имя откатывается
-    тем же вызовом, терять тут нечего."""
+# Что тренер говорит пользователю про сделанную запись. Раньше почти во всех
+# этих инструментах стояло «уже сделано, подтверждать нечего» — из-за чего
+# модель бодро сообщала о записи и на этом успокаивалась. Теперь под ответом
+# висит кнопка отката, и о ней надо сказать: молчаливая правка, о которой
+# человек узнаёт постфактум, — ровно то, чего он и боится.
+_UNDO_NOTE = (
+    "Уже сделано. Под твоим ответом стоит кнопка отката — скажи об этом одной "
+    "короткой фразой, чтобы человек знал, что это отменяется одним тапом."
+)
+
+
+async def _rename_program(
+    user_id: int, tool_input: dict[str, Any]
+) -> tuple[dict[str, Any], Optional[dict[str, Any]]]:
+    """Переименовать сохранённую программу — сразу, с кнопкой отката.
+
+    «Откатывается тем же вызовом» — так это было устроено раньше, и это
+    неправда с точки зрения человека: чтобы попросить вернуть старое имя, его
+    надо помнить, а в ответе тренера оно могло и не прозвучать. Старое имя
+    знает вот этот код — он его и кладёт в кнопку.
+    """
     name = str(tool_input.get("name") or "").strip()
     new_name = str(tool_input.get("new_name") or "").strip()
     if not new_name:
-        return {"error": "нужно новое имя (new_name)"}
+        return {"error": "нужно новое имя (new_name)"}, None
     target, _ = await _resolve_replaced_program(user_id, name)
     if target is None:
-        return await _no_such_program(user_id, name)
+        return await _no_such_program(user_id, name), None
     if target["kind"] == "program":
         renamed = await db.rename_program_by_id(target["id"], new_name)
     else:
@@ -2361,35 +2385,46 @@ async def _rename_program(user_id: int, tool_input: dict[str, Any]) -> dict[str,
         return {
             "error": f"«{new_name}» уже занято другой программой",
             "note": "Предложи другое имя или спроси, не объединить ли их (merge_programs).",
-        }
-    return {
-        "ok": True,
-        "renamed": {"from": target["name"], "to": new_name},
-        "note": "Уже переименовано, подтверждать нечего — так и скажи.",
-    }
+        }, None
+    return (
+        {
+            "ok": True,
+            "renamed": {"from": target["name"], "to": new_name},
+            "note": _UNDO_NOTE,
+        },
+        {
+            "label": f"↩️ Вернуть имя «{target['name']}»",
+            "undo": {
+                "kind": "program_name" if target["kind"] == "program" else "routine_name",
+                "id": target["id"],
+                "name": target["name"],
+            },
+        },
+    )
 
 
 async def _copy_program(
     user_id: int, tool_input: dict[str, Any]
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], Optional[dict[str, Any]]]:
     """Дубликат программы со всеми днями и схемами — сразу, как «📄 Дублировать»
-    в ручном UI: копия ничего не портит, а лишнюю можно снести кнопкой."""
+    в ручном UI: копия ничего не портит. Но и убирать её вручную незачем —
+    кнопка отката сносит ровно ту копию, которую только что создали."""
     name = str(tool_input.get("name") or "").strip()
     target, _ = await _resolve_replaced_program(user_id, name)
     if target is None:
-        return await _no_such_program(user_id, name)
+        return await _no_such_program(user_id, name), None
     if target["kind"] != "program":
         source_days = [await db.get_routine(target["id"])]
     else:
         source_days = list(await db.list_program_days_by_id(target["id"]))
     over_budget = await db.routine_budget(user_id, len(source_days))
     if over_budget:
-        return {"error": over_budget}
+        return {"error": over_budget}, None
     wanted = str(tool_input.get("new_name") or "").strip() or target["name"]
     copy_name = await db.unique_program_name(user_id, wanted)
     copy_id = await db.create_program(user_id, copy_name)
     if copy_id is None:  # разошлись с параллельной вставкой — имени уже нет
-        return {"error": f"«{copy_name}» успели занять, попробуй другое имя"}
+        return {"error": f"«{copy_name}» успели занять, попробуй другое имя"}, None
     for day in source_days:
         day_id = await db.create_routine(user_id, day["name"], program_id=copy_id)
         for ex in await db.list_routine_exercises(day["id"]):
@@ -2397,11 +2432,17 @@ async def _copy_program(
             if ex["progression"]:
                 entry = (await db.list_routine_exercises(day_id))[-1]
                 await db.set_routine_exercise_progression(entry["id"], ex["progression"])
-    return {
-        "ok": True,
-        "copied": {"from": target["name"], "to": copy_name, "days": len(source_days)},
-        "note": "Копия уже создана — скажи, как она называется.",
-    }
+    return (
+        {
+            "ok": True,
+            "copied": {"from": target["name"], "to": copy_name, "days": len(source_days)},
+            "note": f"Копия «{copy_name}» создана. {_UNDO_NOTE}",
+        },
+        {
+            "label": f"↩️ Убрать копию «{copy_name}»",
+            "undo": {"kind": "program_new", "id": copy_id, "name": copy_name},
+        },
+    )
 
 
 async def _merge_programs(
@@ -2517,20 +2558,25 @@ async def _resolve_group_id(user_id: int, name: str) -> Optional[int]:
     return None
 
 
-async def _create_exercise(user_id: int, tool_input: dict[str, Any]) -> dict[str, Any]:
-    """Завести своё упражнение — сразу: добавление ничего не разрушает, а
-    лишнее архивируется кнопкой."""
+async def _create_exercise(
+    user_id: int, tool_input: dict[str, Any]
+) -> tuple[dict[str, Any], Optional[dict[str, Any]]]:
+    """Завести своё упражнение — сразу: добавление ничего не разрушает.
+
+    Откат сносит его целиком (db.delete_exercise_if_unused), а не архивирует:
+    в архиве копился бы мусор, которого пользователь не заводил.
+    """
     name = str(tool_input.get("name") or "").strip()
     group_name = str(tool_input.get("group") or "").strip()
     if not name:
-        return {"error": "нужно название упражнения"}
+        return {"error": "нужно название упражнения"}, None
     existing = await _resolve_own_exercise(user_id, name)
     if existing is not None:
         return {
             "ok": True,
             "already_exists": existing["display_name"],
             "note": "Такое упражнение у пользователя уже есть — ничего не создавал.",
-        }
+        }, None
     groups = await db.list_muscle_groups(user_id)
     group_id = await _resolve_group_id(user_id, group_name) if group_name else None
     if group_id is None:
@@ -2538,60 +2584,111 @@ async def _create_exercise(user_id: int, tool_input: dict[str, Any]) -> dict[str
             "error": f"группы «{group_name}» нет" if group_name else "нужна группа мышц",
             "muscle_groups": [g["name"] for g in groups],
             "note": "Выбери группу из этого списка и вызови ещё раз.",
-        }
+        }, None
     if len(name) > config.MAX_EXERCISE_NAME_LENGTH:
-        return {"error": f"название длиннее {config.MAX_EXERCISE_NAME_LENGTH} символов"}
+        return {"error": f"название длиннее {config.MAX_EXERCISE_NAME_LENGTH} символов"}, None
     exercise_id = await db.create_exercise(user_id, name, group_id)
     created = await db.get_exercise(exercise_id)
-    return {
-        "ok": True,
-        "created": {"name": created["display_name"], "group": group_name},
-        "note": "Упражнение уже заведено — подтверждать нечего.",
-    }
+    return (
+        {
+            "ok": True,
+            "created": {"name": created["display_name"], "group": group_name},
+            "note": _UNDO_NOTE,
+        },
+        {
+            "label": f"↩️ Убрать «{created['display_name']}»",
+            "undo": {
+                "kind": "exercise_new",
+                "id": exercise_id,
+                "name": created["display_name"],
+            },
+        },
+    )
 
 
-async def _rename_exercise(user_id: int, tool_input: dict[str, Any]) -> dict[str, Any]:
+async def _rename_exercise(
+    user_id: int, tool_input: dict[str, Any]
+) -> tuple[dict[str, Any], Optional[dict[str, Any]]]:
     """Переименовать в том же ряду (id не меняется), поэтому вся история,
-    рекорды и место в программах остаются на нём — откатывается тем же вызовом."""
+    рекорды и место в программах остаются на нём.
+
+    Старое имя уезжает в кнопку отката: «откатывается тем же вызовом» верно
+    только для того, кто это имя ещё помнит.
+    """
     name = str(tool_input.get("name") or "").strip()
     new_name = str(tool_input.get("new_name") or "").strip()
     if not new_name:
-        return {"error": "нужно новое имя (new_name)"}
+        return {"error": "нужно новое имя (new_name)"}, None
     if len(new_name) > config.MAX_EXERCISE_NAME_LENGTH:
-        return {"error": f"название длиннее {config.MAX_EXERCISE_NAME_LENGTH} символов"}
+        return {"error": f"название длиннее {config.MAX_EXERCISE_NAME_LENGTH} символов"}, None
     exercise = await _resolve_own_exercise(user_id, name)
     if exercise is None:
-        return await _no_such_exercise(user_id, name)
+        return await _no_such_exercise(user_id, name), None
     if not await db.update_exercise_name(exercise["id"], new_name):
-        return {"error": f"упражнение «{new_name}» у пользователя уже есть"}
+        return {"error": f"упражнение «{new_name}» у пользователя уже есть"}, None
     renamed = await db.get_exercise(exercise["id"])
-    return {
-        "ok": True,
-        "renamed": {"from": exercise["display_name"], "to": renamed["display_name"]},
-        "note": "Уже переименовано, история и рекорды остались на нём.",
-    }
+    return (
+        {
+            "ok": True,
+            "renamed": {"from": exercise["display_name"], "to": renamed["display_name"]},
+            "note": f"История и рекорды остались на нём. {_UNDO_NOTE}",
+        },
+        {
+            "label": f"↩️ Вернуть имя «{exercise['display_name']}»",
+            "undo": {
+                "kind": "exercise_name",
+                "id": exercise["id"],
+                "name": exercise["display_name"],
+            },
+        },
+    )
 
 
-async def _move_exercise(user_id: int, tool_input: dict[str, Any]) -> dict[str, Any]:
+async def _move_exercise(
+    user_id: int, tool_input: dict[str, Any]
+) -> tuple[dict[str, Any], Optional[dict[str, Any]]]:
     """Сменить группу мышц — сразу: подходы и история привязаны к упражнению,
-    а не к группе, так что терять нечего."""
+    а не к группе, так что терять нечего. Но недельный объём по группам после
+    этого считается иначе, поэтому прежняя группа уезжает в кнопку отката."""
     name = str(tool_input.get("name") or "").strip()
     group_name = str(tool_input.get("group") or "").strip()
     exercise = await _resolve_own_exercise(user_id, name)
     if exercise is None:
-        return await _no_such_exercise(user_id, name)
+        return await _no_such_exercise(user_id, name), None
     group_id = await _resolve_group_id(user_id, group_name)
     if group_id is None:
         return {
             "error": f"группы «{group_name}» нет",
             "muscle_groups": [g["name"] for g in await db.list_muscle_groups(user_id)],
-        }
+        }, None
+    was_group_id = exercise["primary_group_id"]
+    was_group = next(
+        (g["name"] for g in await db.list_muscle_groups(user_id) if g["id"] == was_group_id),
+        None,
+    )
     await db.update_exercise_group(exercise["id"], group_id)
-    return {
-        "ok": True,
-        "moved": {"exercise": exercise["display_name"], "group": group_name},
-        "note": "Группа уже поменялась. Недельный объём пересчитается по ней.",
-    }
+    # Группы у упражнения могло не быть вовсе — возвращать тогда не к чему,
+    # и кнопки не будет.
+    undo = None
+    if was_group_id is not None:
+        undo = {
+            "label": f"↩️ Вернуть в «{was_group}»" if was_group else "↩️ Вернуть группу",
+            "undo": {
+                "kind": "exercise_group",
+                "id": exercise["id"],
+                "group_id": was_group_id,
+                "name": was_group or "",
+            },
+        }
+    return (
+        {
+            "ok": True,
+            "moved": {"exercise": exercise["display_name"], "group": group_name},
+            "note": f"Недельный объём пересчитается по ней. {_UNDO_NOTE}" if undo
+                    else "Группа уже поменялась. Недельный объём пересчитается по ней.",
+        },
+        undo,
+    )
 
 
 async def _archive_exercise(
@@ -2628,24 +2725,41 @@ async def _archive_exercise(
 # ---------- дневники: вес тела и еда ----------
 
 
-async def _log_bodyweight(user_id: int, tool_input: dict[str, Any]) -> dict[str, Any]:
-    """Записать вес — сразу: это одна строка дневника, которая удаляется одной
-    кнопкой, а просят её обычно между делом («кстати, 78.4 сегодня»)."""
+async def _log_bodyweight(
+    user_id: int, tool_input: dict[str, Any]
+) -> tuple[dict[str, Any], Optional[dict[str, Any]]]:
+    """Записать вес — сразу: просят его обычно между делом («кстати, 78.4
+    сегодня»), и лишний экран подтверждения на такой реплике только мешает.
+
+    Но «удаляется одной кнопкой» до сих пор означало кнопку на ДРУГОМ экране
+    (🏋️ Вес → «отменить последнюю»): из чата, где запись и произошла, отката
+    не было вовсе, а узнать о записи можно было только из текста ответа.
+    Теперь откат стоит прямо под ответом и сносит именно эту строку — не
+    последнюю, потому что между записью и тапом человек мог взвеситься ещё раз.
+    """
     weight = _as_number(tool_input.get("weight"))
     if weight is None or not 20 <= weight <= 400:
-        return {"error": "вес должен быть числом от 20 до 400 в единицах пользователя"}
+        return {"error": "вес должен быть числом от 20 до 400 в единицах пользователя"}, None
     # Дневник веса хранит число в единицах пользователя, как его и вводят
     # руками (см. handlers/bodyweight) — конвертировать нечего.
     user = await db.get_user(user_id)
-    await db.add_bodyweight_log(user_id, weight)
-    return {
-        "ok": True,
-        "logged": {"weight": weight, "unit": user["unit"]},
-        "note": "Уже записал в дневник веса — так и скажи, без «подтверди».",
-    }
+    log_id = await db.add_bodyweight_log(user_id, weight)
+    return (
+        {
+            "ok": True,
+            "logged": {"weight": weight, "unit": user["unit"]},
+            "note": _UNDO_NOTE,
+        },
+        {
+            "label": f"↩️ Отменить: {formatting.format_weight(weight)} {user['unit']}",
+            "undo": {"kind": "bodyweight", "id": log_id},
+        },
+    )
 
 
-async def _log_food(user_id: int, tool_input: dict[str, Any]) -> dict[str, Any]:
+async def _log_food(
+    user_id: int, tool_input: dict[str, Any]
+) -> tuple[dict[str, Any], Optional[dict[str, Any]]]:
     """Записать съеденное — сразу, по той же причине, что и вес.
 
     КБЖУ необязательны: «съел два яйца» без цифр — всё ещё запись в дневнике,
@@ -2655,7 +2769,7 @@ async def _log_food(user_id: int, tool_input: dict[str, Any]) -> dict[str, Any]:
     """
     description = str(tool_input.get("description") or "").strip()
     if not description:
-        return {"error": "нужно описание того, что съели"}
+        return {"error": "нужно описание того, что съели"}, None
     entry = {
         "calories": _as_number(tool_input.get("calories")),
         "protein": _as_number(tool_input.get("protein")),
@@ -2664,16 +2778,22 @@ async def _log_food(user_id: int, tool_input: dict[str, Any]) -> dict[str, Any]:
     }
     _reconcile_macros(entry)
     eaten_on = timeutil.user_today(await db.get_user(user_id)).isoformat()
-    await db.add_food_entry(
+    entry_id = await db.add_food_entry(
         user_id, eaten_on, description[:MAX_FOOD_DESCRIPTION],
         calories=entry["calories"], protein=entry["protein"],
         fat=entry["fat"], carbs=entry["carbs"], source="ai_chat",
     )
-    return {
-        "ok": True,
-        "logged": {"description": description, "date": eaten_on, **entry},
-        "note": "Уже в дневнике еды за сегодня — не проси подтверждать.",
-    }
+    return (
+        {
+            "ok": True,
+            "logged": {"description": description, "date": eaten_on, **entry},
+            "note": _UNDO_NOTE,
+        },
+        {
+            "label": f"↩️ Убрать из дневника: {formatting.shorten(description, 24)}",
+            "undo": {"kind": "food", "id": entry_id},
+        },
+    )
 
 
 # Длиннее в одну строку дневника всё равно не читается, а модель иногда
@@ -3001,13 +3121,39 @@ async def _program_adherence(user_id: int) -> dict[str, Any]:
     }
 
 
-async def _save_athlete_profile(user_id: int, tool_input: dict[str, Any]) -> dict[str, Any]:
+PROFILE_FIELDS = ("days_per_week", "equipment", "experience", "goal", "limitations")
+
+# Человеческие имена полей профиля — и для кнопки отката, и для экрана
+# «🧬 Обо мне» (см. handlers/settings): без них откат читался бы как
+# «↩️ Вернуть limitations».
+PROFILE_LABELS = {
+    "days_per_week": "дни в неделю",
+    "equipment": "оборудование",
+    "experience": "опыт",
+    "goal": "цель",
+    "limitations": "ограничения",
+}
+
+
+async def _save_athlete_profile(
+    user_id: int, tool_input: dict[str, Any]
+) -> tuple[dict[str, Any], Optional[dict[str, Any]]]:
     """3.3: частичная запись профиля тренирующегося в users.* — только те поля,
     что реально прислали этим вызовом (см. db.update_user).
 
     Раньше дни в неделю/оборудование/опыт/цель/травмы оседали только в
     ai_chat_messages, откуда их надо было доставать get_full_chat_history —
     поэтому тренер переспрашивал одно и то же в каждом новом разговоре.
+
+    Единственная запись тренера, которую пользователь не мог ни увидеть, ни
+    откатить: экрана у этих полей не было вообще, а промпт велит вызывать
+    инструмент не дожидаясь просьбы («вызывай сразу, как только человек сказал
+    что-то из этого»). То есть реплика «плечо после вчерашнего ноет» молча
+    перезаписывала `limitations` пересказом модели поверх прежнего значения.
+    Спрашивать до записи здесь нельзя — сбор программы зовёт этот инструмент
+    несколько раз подряд, и диалог превратился бы в череду подтверждений;
+    поэтому прежние значения снимаются ДО записи и уезжают в кнопку отката,
+    а увидеть и поправить профиль теперь можно в ⚙️ Настройки → 🧬 Обо мне.
     """
     fields: dict[str, Any] = {}
     if tool_input.get("days_per_week") is not None:
@@ -3024,9 +3170,24 @@ async def _save_athlete_profile(user_id: int, tool_input: dict[str, Any]) -> dic
         if items:
             fields["equipment"] = json.dumps(items, ensure_ascii=False)
     if not fields:
-        return {"saved": False, "error": "ничего не прислано — профиль не изменился"}
+        return {"saved": False, "error": "ничего не прислано — профиль не изменился"}, None
+
+    # Снимаем прежние значения до записи — после неё их уже не восстановить
+    # ниоткуда. Пишем в откат ровно те поля, которые сейчас меняем: восстановить
+    # весь профиль целиком значило бы затереть заодно и то, что человек успел
+    # поправить руками между записью и тапом.
+    user = await db.get_user(user_id)
+    before = {key: (user[key] if user is not None else None) for key in fields}
     await db.update_user(user_id, **fields)
-    return {"saved": True, "fields": fields}
+
+    changed = ", ".join(PROFILE_LABELS.get(key, key) for key in fields)
+    return (
+        {"saved": True, "fields": fields, "note": _UNDO_NOTE},
+        {
+            "label": f"↩️ Не записывать: {formatting.shorten(changed, 28)}",
+            "undo": {"kind": "profile", "before": before},
+        },
+    )
 
 
 # Инструменты, которые ничего не делают сами, а возвращают (payload, действие
@@ -3037,6 +3198,29 @@ _ACTION_TOOLS = {
     "merge_programs": _merge_programs,
     "share_program": _share_program,
     "archive_exercise": _archive_exercise,
+}
+
+# Инструменты, которые дело делают сразу, но кладут под ответ кнопку отката.
+#
+# Прежняя граница шла ровно по обратимости: необратимое — через кнопку,
+# обратимое — молча. Правило верное, но неполное: обратимость и возможность
+# откатить — разные вещи. Отменить записанный вес можно было только уйдя в
+# 🏋️ Вес и нажав там «отменить последнюю», еду — найдя строку в дневнике
+# питания, а старое имя после переименования надо было ещё и помнить. То есть
+# откат существовал везде, кроме того места, где человек узнавал о записи.
+#
+# Подтверждать всё подряд взамен нельзя: половину этих инструментов зовут по
+# явной просьбе («запиши 84»), и лишний тап на ней — чистая помеха. Поэтому
+# запись остаётся мгновенной, а отменяется одним тапом там же, где произошла.
+_UNDOABLE_TOOLS = {
+    "log_bodyweight": _log_bodyweight,
+    "log_food": _log_food,
+    "create_exercise": _create_exercise,
+    "rename_exercise": _rename_exercise,
+    "move_exercise_to_group": _move_exercise,
+    "rename_program": _rename_program,
+    "copy_program": _copy_program,
+    "save_athlete_profile": _save_athlete_profile,
 }
 
 
@@ -3073,30 +3257,18 @@ async def execute_tool(
         payload = await _saved_programs(user_id)
     elif name == "get_program_adherence":
         payload = await _program_adherence(user_id)
-    elif name == "save_athlete_profile":
-        payload = await _save_athlete_profile(user_id, tool_input)
     elif name == "propose_program":
         payload, draft = await _propose_program(user_id, tool_input)
         if draft is not None and on_program is not None:
             await on_program(draft)
     elif name == "compare_periods":
         payload = await _compare_periods(user_id, tool_input)
-    elif name == "rename_program":
-        payload = await _rename_program(user_id, tool_input)
-    elif name == "copy_program":
-        payload = await _copy_program(user_id, tool_input)
-    elif name == "create_exercise":
-        payload = await _create_exercise(user_id, tool_input)
-    elif name == "rename_exercise":
-        payload = await _rename_exercise(user_id, tool_input)
-    elif name == "move_exercise_to_group":
-        payload = await _move_exercise(user_id, tool_input)
-    elif name == "log_bodyweight":
-        payload = await _log_bodyweight(user_id, tool_input)
-    elif name == "log_food":
-        payload = await _log_food(user_id, tool_input)
-    elif name in _ACTION_TOOLS:
-        payload, action = await _ACTION_TOOLS[name](user_id, tool_input)
+    elif name in _ACTION_TOOLS or name in _UNDOABLE_TOOLS:
+        # Обе категории отдают (payload, действие для кнопки) и обрабатываются
+        # одинаково — различаются они только тем, что кнопка означает: у
+        # _ACTION_TOOLS она делает дело, у _UNDOABLE_TOOLS отменяет уже сделанное.
+        tool = _ACTION_TOOLS.get(name) or _UNDOABLE_TOOLS[name]
+        payload, action = await tool(user_id, tool_input)
         if action is not None and on_action is not None:
             await on_action(action)
     else:

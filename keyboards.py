@@ -1085,6 +1085,11 @@ def settings_keyboard(
         else "📋 Карточка тренировки: компактно"
     )
     b.button(text=card_label, callback_data="settings:card_detail")
+    # Профиль тренирующегося пишет AI-тренер (ai_trainer.save_athlete_profile),
+    # и до появления этого экрана посмотреть, что он там про тебя записал, было
+    # нельзя нигде — при том что от этих полей зависит, какую программу он
+    # соберёт.
+    b.button(text="🧬 Обо мне", callback_data="settings:profile")
     b.button(text="📤 Экспорт CSV", callback_data="settings:export")
     b.button(text="📥 Импорт CSV", callback_data="settings:import")
     # Скрыт, когда бот развёрнут без публичного адреса для MCP: подключать
@@ -1092,6 +1097,21 @@ def settings_keyboard(
     if show_mcp:
         b.button(text="🔌 Подключить к Claude и ChatGPT", callback_data="settings:mcp")
     b.button(text="🏠 Меню", callback_data="settings:back")
+    b.adjust(1)
+    return b.as_markup()
+
+
+def profile_keyboard() -> InlineKeyboardMarkup:
+    """Экран «🧬 Обо мне»: посмотреть и, если надо, стереть.
+
+    Правится профиль репликой тренеру, а не отсюда: поля свободнотекстовые, и
+    городить под каждое свой ввод значило бы дублировать разговор, который для
+    этого и существует. А вот стереть всё разом словами не попросишь — модель
+    save_athlete_profile пустые поля игнорирует, — поэтому кнопка одна.
+    """
+    b = InlineKeyboardBuilder()
+    b.button(text="🗑 Очистить", callback_data="settings:profileclear")
+    b.button(text="⬅️ Назад", callback_data="settings:menu")
     b.adjust(1)
     return b.as_markup()
 

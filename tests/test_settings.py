@@ -124,3 +124,90 @@ async def test_cancelling_the_formula_switch_changes_nothing(fresh_db, user_id):
 
     user = await fresh_db.get_user(user_id)
     assert user["e1rm_formula"] == "epley"
+
+
+# ---------- «🧬 Обо мне»: что AI-тренер записал с твоих слов ----------
+
+
+async def test_profile_screen_shows_what_the_trainer_wrote(fresh_db, user_id):
+    """Поля профиля пишет тренер, не дожидаясь просьбы (см.
+    ai_trainer.save_athlete_profile) — до этого экрана их нельзя было ни
+    увидеть, ни поправить, при том что от них зависит подбор программ."""
+    import ai_trainer
+    import ui
+
+    await ai_trainer.execute_tool(
+        user_id, "save_athlete_profile",
+        {"goal": "масса", "days_per_week": 4, "equipment": ["штанга", "гантели"]},
+    )
+
+    seen = {}
+
+    async def fake_edit(callback, text, **kwargs):
+        seen["text"] = text
+        return MagicMock()
+
+    original, ui.safe_edit = ui.safe_edit, fake_edit
+    try:
+        await settings.settings_profile(_make_callback(user_id, "settings:profile"), await _make_state(user_id))
+    finally:
+        ui.safe_edit = original
+
+    assert "масса" in seen["text"]
+    assert "4" in seen["text"]
+    # Оборудование лежит JSON-строкой, а показываться должно по-человечески.
+    assert "штанга, гантели" in seen["text"]
+    assert '["' not in seen["text"]
+
+
+async def test_profile_screen_marks_what_is_still_unknown(fresh_db, user_id):
+    """Прочерк, а не пропущенная строка: половина ценности экрана в том, чтобы
+    видеть, чего тренер про тебя ещё не знает."""
+    import ui
+
+    seen = {}
+
+    async def fake_edit(callback, text, **kwargs):
+        seen["text"] = text
+        return MagicMock()
+
+    original, ui.safe_edit = ui.safe_edit, fake_edit
+    try:
+        await settings.settings_profile(_make_callback(user_id, "settings:profile"), await _make_state(user_id))
+    finally:
+        ui.safe_edit = original
+
+    # Считаем прочерки-значения, а не все тире в тексте — во вводной фразе
+    # экрана своё.
+    empty = [line for line in seen["text"].split("\n") if line.endswith("</b> —")]
+    assert len(empty) == 5
+    assert "Ограничения" in seen["text"]
+
+
+async def test_profile_can_be_cleared(fresh_db, user_id):
+    import ai_trainer
+    import ui
+
+    await ai_trainer.execute_tool(user_id, "save_athlete_profile", {"limitations": "болит плечо"})
+
+    async def fake_edit(callback, text, **kwargs):
+        return MagicMock()
+
+    original, ui.safe_edit = ui.safe_edit, fake_edit
+    try:
+        await settings.settings_profile_clear(
+            _make_callback(user_id, "settings:profileclear"), await _make_state(user_id)
+        )
+    finally:
+        ui.safe_edit = original
+
+    assert (await fresh_db.get_user(user_id))["limitations"] is None
+
+
+async def test_profile_button_is_on_the_settings_screen():
+    import keyboards
+
+    kb = keyboards.settings_keyboard("kg", "epley", True, True, True)
+    callbacks = [b.callback_data for row in kb.inline_keyboard for b in row]
+
+    assert "settings:profile" in callbacks
