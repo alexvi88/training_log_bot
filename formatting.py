@@ -1525,9 +1525,11 @@ def build_live_session_text(
 def build_gold_book_lines(golds, unit: str = "kg", is_bodyweight: bool = False) -> list[str]:
     """"🥇 Золотая книга" — лучшие сеты упражнения за всё время, каждый с датой.
 
-    Три категории, потому что пики у них разные: самый тяжёлый сет, сет с
-    лучшим e1RM и самый долгий сет — обычно три разных дня. Дубли схлопываются:
-    если тяжёлый сет он же и лучший по e1RM, строка одна.
+    Две категории — самый тяжёлый сет и сет с лучшим e1RM: пики у них разные
+    дни. Рекорд повторов из книги убран вместе с остальными упоминаниями
+    рекордов по повторам — остался он только у упражнений своим весом, где
+    e1RM тождественно нулю и мерить больше нечем. Дубли схлопываются: если
+    тяжёлый сет он же и лучший по e1RM, строка одна.
     """
     # Пустая книга — по числу повторов, а не по e1RM: у упражнений своим весом
     # e1RM тождественно нулю, и проверка по нему прятала книгу целиком.
@@ -1549,9 +1551,6 @@ def build_gold_book_lines(golds, unit: str = "kg", is_bodyweight: bool = False) 
     weight_set = (golds.max_weight, golds.max_weight_reps)
     if weight_set != (golds.best_e1rm_weight, golds.best_e1rm_reps):
         rows.append(("Вес", format_set(*weight_set), golds.max_weight_date))
-    reps_set = (golds.max_reps_weight, golds.max_reps)
-    if reps_set not in (weight_set, (golds.best_e1rm_weight, golds.best_e1rm_reps)):
-        rows.append(("Повторы", format_set(*reps_set), golds.max_reps_date))
     return ["🥇 <b>Золотая книга</b>"] + [dated(label, value, day) for label, value, day in rows]
 
 
@@ -1574,8 +1573,9 @@ def format_pr_detail(kind: str, value: float, extra: float | None = None, unit: 
     u = UNIT_LABELS.get(unit, "кг")
     if kind == "e1rm":
         return f"• Новый рекорд e1RM: {value:.1f}{u}"
-    if kind == "reps_at_weight":
-        return f"• Новый рекорд повторов: {format_weight(extra or 0)}{u} × {int(value)}"
+    if kind == "reps":
+        # Только упражнения своим весом: вес там всегда 0, печатать нечего.
+        return f"• Новый рекорд повторов: {int(value)}"
     return "• Новый рекорд"
 
 
@@ -1985,7 +1985,9 @@ def format_progress_screen(
     sep = "\n\n"
 
     def assemble(keep: list[str]) -> str:
-        parts = [f"{header}\n{collapsible_if_long(sep.join(keep))}"]
+        # Пустая строка перед тогглом: шапка с золотой книгой и свёрнутый
+        # список тренировок — разные блоки, слипшиеся они читались как один.
+        parts = [f"{header}\n\n{collapsible_if_long(sep.join(keep))}"]
         if len(window) > len(keep):
             n = plural_ru(len(window), ("тренировка", "тренировки", "тренировок"))
             parts.append(f"Показано {len(keep)} из {len(window)} {n}")

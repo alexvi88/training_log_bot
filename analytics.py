@@ -340,47 +340,36 @@ def compute_personal_records(sessions: list[SessionStats]) -> PersonalRecords:
 
 @dataclass
 class NewRecord:
-    kind: str  # "weight" | "e1rm" | "tonnage" | "reps_at_weight"
+    kind: str  # "e1rm" | "reps" (reps — только для упражнений своим весом)
     value: float
-    extra: Optional[float] = None  # weight, for reps_at_weight
+    extra: Optional[float] = None
 
 
 def detect_new_records(
     history_sessions: list[SessionStats], new_session: SessionStats
 ) -> list[NewRecord]:
-    """Compare a freshly finished session against all prior sessions for the same exercise."""
+    """Compare a freshly finished session against all prior sessions for the same exercise.
+
+    Рекорды считаются только по e1RM: «повторы на весе» давали отметку чуть ли
+    не на каждый сет с новым весом, и слово «рекорд» переставало что-то значить.
+    Исключение — упражнения своим весом: e1RM там тождественно нулю, и повторы
+    в сете остаются единственным осмысленным рекордом.
+    """
     prior_pr = compute_personal_records(history_sessions)
     records: list[NewRecord] = []
+
+    if new_session.is_bodyweight_mode:
+        prev_best = max(prior_pr.max_reps_at_weight.values(), default=0)
+        best = new_session.max_reps_in_set
+        if best > prev_best:
+            records.append(NewRecord(kind="reps", value=best))
+        return records
 
     for s in new_session.sets:
         val = e1rm(s.weight, s.reps, new_session.formula)
         if val > prior_pr.max_e1rm:
             records.append(NewRecord(kind="e1rm", value=val))
             prior_pr.max_e1rm = val
-
-    reps_records: list[NewRecord] = []
-    for s in new_session.sets:
-        prev_best = prior_pr.max_reps_at_weight.get(s.weight, 0)
-        if s.reps > prev_best:
-            reps_records.append(NewRecord(kind="reps_at_weight", value=s.reps, extra=s.weight))
-            prior_pr.max_reps_at_weight[s.weight] = s.reps
-
-    # Drop records dominated by any set actually performed in this session (same
-    # reps at a lower weight, or same weight at fewer reps) — only the best one is
-    # worth a notification. This must check against all sets, not just the ones
-    # that individually beat history: a weight already matched historically (so
-    # not itself "new") can still dominate a lighter new-weight-bucket record set
-    # in the same session.
-    for r in reps_records:
-        dominated = any(
-            other.weight >= r.extra
-            and other.reps >= r.value
-            and (other.weight, other.reps) != (r.extra, r.value)
-            for other in new_session.sets
-        )
-        if not dominated:
-            records.append(r)
-
     return records
 
 

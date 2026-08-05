@@ -205,7 +205,7 @@ def test_detect_new_records_first_ever_session_is_a_record():
     new_session = SessionStats(1, "2026-06-01T10:00:00", [SetRow(100, 8)])
     records = analytics.detect_new_records([], new_session)
     kinds = {r.kind for r in records}
-    assert kinds == {"e1rm", "reps_at_weight"}
+    assert kinds == {"e1rm"}
 
 
 def test_detect_new_records_no_pr_when_below_history():
@@ -215,14 +215,13 @@ def test_detect_new_records_no_pr_when_below_history():
     assert records == []
 
 
-def test_detect_new_records_new_weight_bucket_is_a_reps_pr_even_if_lighter():
-    # max_reps_at_weight is tracked per distinct weight, so a lighter weight
-    # never seen before still counts as a fresh reps record at that weight —
-    # it just won't beat the heavier e1rm PR.
+def test_detect_new_records_weighted_exercise_never_gets_a_reps_record():
+    # Раньше «повторы на весе» считались рекордом на каждый новый вес — теперь
+    # для упражнений с весом единственный вид рекорда — e1RM. Более лёгкий сет
+    # ниже исторического e1RM рекордом не считается вовсе.
     history = [SessionStats(1, "2026-06-01T10:00:00", [SetRow(120, 8)])]
     new_session = SessionStats(2, "2026-06-08T10:00:00", [SetRow(100, 8)])
-    records = analytics.detect_new_records(history, new_session)
-    assert records == [NewRecord(kind="reps_at_weight", value=8, extra=100)]
+    assert analytics.detect_new_records(history, new_session) == []
 
 
 def test_detect_new_records_e1rm_pr_detected():
@@ -234,53 +233,28 @@ def test_detect_new_records_e1rm_pr_detected():
     assert e1rm_records[0].value == pytest.approx(analytics.epley_e1rm(110, 8))
 
 
-def test_detect_new_records_reps_at_weight_pr_detected():
+def test_detect_new_records_more_reps_at_the_same_weight_is_an_e1rm_record():
+    # 100×8 против 100×5 в истории — рекорд есть, но он e1RM, без отдельной
+    # записи «рекорд повторов».
     history = [SessionStats(1, "2026-06-01T10:00:00", [SetRow(100, 5)])]
     new_session = SessionStats(2, "2026-06-08T10:00:00", [SetRow(100, 8)])
     records = analytics.detect_new_records(history, new_session)
-    reps_records = [r for r in records if r.kind == "reps_at_weight"]
-    assert reps_records == [NewRecord(kind="reps_at_weight", value=8, extra=100)]
+    assert {r.kind for r in records} == {"e1rm"}
 
 
-def test_detect_new_records_drops_dominated_reps_record_by_weight():
-    # 100x8 dominates 80x8 (same reps, heavier weight) within the same session.
-    new_session = SessionStats(1, "2026-06-01T10:00:00", [SetRow(100, 8), SetRow(80, 8)])
-    records = analytics.detect_new_records([], new_session)
-    reps_records = [r for r in records if r.kind == "reps_at_weight"]
-    assert reps_records == [NewRecord(kind="reps_at_weight", value=8, extra=100)]
-
-
-def test_detect_new_records_drops_dominated_reps_record_by_reps():
-    # 100x8 dominates 100x6 (same weight, more reps) within the same session.
-    new_session = SessionStats(1, "2026-06-01T10:00:00", [SetRow(100, 6), SetRow(100, 8)])
-    records = analytics.detect_new_records([], new_session)
-    reps_records = [r for r in records if r.kind == "reps_at_weight"]
-    assert reps_records == [NewRecord(kind="reps_at_weight", value=8, extra=100)]
-
-
-def test_detect_new_records_dominated_by_a_weight_already_matched_in_history():
-    # 210x3 was already a PR from a past session, so it isn't itself "new" today,
-    # but it's still a set performed in this session and should suppress the
-    # lighter 205x3 (new weight bucket, but strictly worse than 210x3 done today).
-    history = [SessionStats(1, "2026-06-01T10:00:00", [SetRow(210, 3)])]
-    new_session = SessionStats(
-        2, "2026-06-08T10:00:00", [SetRow(190, 3), SetRow(205, 3), SetRow(210, 3)]
-    )
+def test_detect_new_records_bodyweight_reps_pr():
+    # У упражнений своим весом e1RM тождественно нулю — рекорд там один:
+    # повторы в сете, и он по-прежнему детектируется.
+    history = [SessionStats(1, "2026-06-01T10:00:00", [SetRow(0, 10)])]
+    new_session = SessionStats(2, "2026-06-08T10:00:00", [SetRow(0, 8), SetRow(0, 12)])
     records = analytics.detect_new_records(history, new_session)
-    reps_records = [r for r in records if r.kind == "reps_at_weight"]
-    assert reps_records == []
+    assert records == [NewRecord(kind="reps", value=12)]
 
 
-def test_detect_new_records_dominated_even_with_fewer_reps_at_the_lighter_weight():
-    # Same as above, but the lighter set also has fewer reps (205x2 vs 210x3) —
-    # still not a record, since 210x3 done in the same session beats it outright.
-    history = [SessionStats(1, "2026-06-01T10:00:00", [SetRow(210, 3)])]
-    new_session = SessionStats(
-        2, "2026-06-08T10:00:00", [SetRow(190, 3), SetRow(205, 2), SetRow(210, 3)]
-    )
-    records = analytics.detect_new_records(history, new_session)
-    reps_records = [r for r in records if r.kind == "reps_at_weight"]
-    assert reps_records == []
+def test_detect_new_records_bodyweight_no_pr_when_below_history():
+    history = [SessionStats(1, "2026-06-01T10:00:00", [SetRow(0, 15)])]
+    new_session = SessionStats(2, "2026-06-08T10:00:00", [SetRow(0, 12)])
+    assert analytics.detect_new_records(history, new_session) == []
 
 
 # ---------- compare_to_previous_session ----------
