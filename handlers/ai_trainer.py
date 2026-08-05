@@ -424,8 +424,8 @@ async def _start_ai_scenario(
     user_id = callback.from_user.id
     if await db.get_ai_question_count_today(user_id) >= config.AI_QUESTION_DAILY_LIMIT:
         await callback.answer(
-            "На сегодня лимит вопросов к тренеру исчерпан 😮\u200d💨 Возвращайся завтра — "
-            "а пока программу можно взять готовую в «✨ Готовые программы».",
+            "На сегодня лимит вопросов исчерпан 😮\u200d💨 Дай мне передохнуть, "
+            "возвращайся завтра — а пока забери готовую в «✨ Готовые программы».",
             show_alert=True,
         )
         return
@@ -967,7 +967,9 @@ async def ai_program_train(callback: CallbackQuery, state: FSMContext):
 
     if not planned:
         await callback.answer(
-            "Всё из этого плана ты в этой тренировке уже сделал 💪", show_alert=True
+            "Всё из этого плана ты уже сделал 💪 Добери что-нибудь сам или "
+            "попроси меня собрать ещё.",
+            show_alert=True,
         )
         return
 

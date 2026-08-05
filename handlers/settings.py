@@ -90,11 +90,19 @@ async def settings_profile(callback: CallbackQuery, state: FSMContext):
     именно от них зависит, какую программу он соберёт.
     """
     user = await db.get_user(callback.from_user.id)
+    lines = _profile_lines(user)
+    known = any(not line.endswith("</b> —") for line in lines)
+    tail = (
+        "Что-то не так — просто скажи мне, как правильно."
+        if known
+        else "Пока я про тебя ничего не знаю. Загляни в 🤖 AI-тренер и расскажи, "
+             "чего хочешь от зала, — запомню и буду собирать программы под это."
+    )
     text = (
-        "🧬 <b>ОБО МНЕ</b>\n\n"
-        "Это тренер записал с твоих слов — по нему он и подбирает программы.\n\n"
-        + "\n".join(_profile_lines(user))
-        + "\n\nЧтобы поправить, просто скажи тренеру, как правильно."
+        "🤖 <b>ЧТО Я ПРО ТЕБЯ ЗНАЮ</b>\n\n"
+        "Записал с твоих слов — по этому и подбираю программы.\n\n"
+        + "\n".join(lines)
+        + f"\n\n{tail}"
     )
     await ui.safe_edit(
         callback, text, reply_markup=keyboards.profile_keyboard(), parse_mode="HTML"

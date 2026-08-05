@@ -1158,7 +1158,7 @@ def settings_keyboard(
     # и до появления этого экрана посмотреть, что он там про тебя записал, было
     # нельзя нигде — при том что от этих полей зависит, какую программу он
     # соберёт.
-    b.button(text="🧬 Обо мне", callback_data="settings:profile")
+    b.button(text="🤖 Что тренер про тебя знает", callback_data="settings:profile")
     b.button(text="📤 Экспорт CSV", callback_data="settings:export")
     b.button(text="📥 Импорт CSV", callback_data="settings:import")
     # Скрыт, когда бот развёрнут без публичного адреса для MCP: подключать
