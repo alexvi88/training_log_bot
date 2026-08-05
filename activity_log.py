@@ -1,0 +1,131 @@
+"""Пишет в базу всё, что человек делает в боте: сообщения и нажатия кнопок.
+
+Зачем это отдельно от всего остального. Админ и раньше видел историю тренировок,
+пуши и диалоги с AI-тренером — но всё это результаты: что записалось, что
+отправилось. По ним не видно ни пути к результату, ни того, что до результата не
+дошло: набранный и не понятый парсером подход, брошенный на полпути мастер,
+десять тапов по одной кнопке подряд. А вопрос «как пользуются» — ровно про это.
+
+Как это устроено. Два outer-middleware (регистрируются в main()): outer —
+потому что писать надо и то, чего не поймал ни один хендлер (стикер в ответ на
+экран логирования, текст в состоянии, где его никто не ждёт). Событие
+записывается до вызова хендлера: упавший хендлер — это как раз то, что хочется
+увидеть в логе, а не то, что должно из него исчезнуть. Ошибка самой записи
+глотается — лог действий не тот повод, чтобы ронять человеку тренировку.
+
+Что именно пишется: текст сообщения (или подпись к фото), для нетекстовых —
+пометка типа («🎤 голосовое»), для нажатия — надпись на кнопке, которую человек
+видел, и её callback_data. Файлы и фото сами по себе не сохраняются — только то,
+что человек ввёл, и след того, куда он нажал.
+"""
+
+from __future__ import annotations
+
+import logging
+
+from aiogram import BaseMiddleware
+from aiogram.types import CallbackQuery, Message
+
+import db
+
+logger = logging.getLogger(__name__)
+
+# Простыня из буфера обмена (импорт CSV, длинная простыня для AI-тренера) не
+# должна раздувать базу — для «что человек ввёл» начала хватает с запасом.
+MAX_CONTENT_LEN = 1000
+
+KIND_MESSAGE = "message"
+KIND_CALLBACK = "callback"
+
+# Нетекстовые сообщения: сам файл не хранится, но факт «прислал голосовое» —
+# ровно та часть картины, которой иначе не видно.
+_MEDIA_MARKS = (
+    ("voice", "🎤 голосовое"),
+    ("video_note", "🎥 кружок"),
+    ("photo", "🖼 фото"),
+    ("document", "📎 файл"),
+    ("sticker", "🌀 стикер"),
+    ("audio", "🎵 аудио"),
+    ("video", "📹 видео"),
+    ("animation", "🎞 гифка"),
+    ("location", "📍 геопозиция"),
+    ("contact", "👤 контакт"),
+)
+
+
+def _truncate(text: str) -> str:
+    text = text.strip()
+    if len(text) <= MAX_CONTENT_LEN:
+        return text
+    return text[: MAX_CONTENT_LEN - 1] + "…"
+
+
+def describe_message(message: Message) -> str:
+    """Одна строка про входящее сообщение — текст, подпись или пометка типа."""
+    text = message.text or message.caption
+    parts = []
+    for attr, mark in _MEDIA_MARKS:
+        if getattr(message, attr, None):
+            parts.append(mark)
+            break
+    if text:
+        parts.append(_truncate(text))
+    return " ".join(parts) if parts else "(сообщение без текста)"
+
+
+def button_label(callback: CallbackQuery) -> str | None:
+    """Надпись нажатой кнопки — по callback_data ищем её в клавиатуре экрана.
+
+    Именно надпись отвечает на вопрос «что человек нажал»: callback_data вроде
+    `wo:set:12:3` говорит это только тому, кто помнит схему колбэков, а
+    клавиатура у сообщения — прямо здесь, и брать её ниоткуда не надо.
+    """
+    markup = getattr(getattr(callback, "message", None), "reply_markup", None)
+    rows = getattr(markup, "inline_keyboard", None)
+    if not rows:
+        return None
+    for row in rows:
+        for button in row:
+            if getattr(button, "callback_data", None) == callback.data:
+                return button.text
+    return None
+
+
+async def record_message(message: Message) -> None:
+    if message.from_user is None:
+        return
+    await db.log_user_event(message.from_user.id, KIND_MESSAGE, describe_message(message))
+
+
+async def record_callback(callback: CallbackQuery) -> None:
+    if callback.from_user is None:
+        return
+    data = callback.data or ""
+    label = button_label(callback)
+    await db.log_user_event(
+        callback.from_user.id, KIND_CALLBACK, _truncate(label or data or "(кнопка)"), data or None
+    )
+
+
+class LogIncomingMessages(BaseMiddleware):
+    """Каждое входящее сообщение — в user_events, ещё до фильтров и хендлеров."""
+
+    async def __call__(self, handler, event, data):
+        if isinstance(event, Message):
+            try:
+                await record_message(event)
+            except Exception:
+                logger.exception("Failed to log user message")
+        return await handler(event, data)
+
+
+class LogCallbackQueries(BaseMiddleware):
+    """То же для нажатий: что нажали и чем это нажатие было для бота."""
+
+    async def __call__(self, handler, event, data):
+        if isinstance(event, CallbackQuery):
+            try:
+                await record_callback(event)
+            except Exception:
+                logger.exception("Failed to log user callback")
+        return await handler(event, data)

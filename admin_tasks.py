@@ -76,6 +76,7 @@ async def _send_daily_report(bot: Bot) -> None:
         ),
     )
     await db.prune_old_cost_events(config.COST_EVENTS_RETENTION_DAYS)
+    await db.prune_old_user_events(config.ACTIVITY_RETENTION_DAYS)
     cutoff = (
         dt.datetime.now() - dt.timedelta(days=config.SHARED_ITEMS_RETENTION_DAYS)
     ).isoformat(timespec="seconds")
