@@ -220,7 +220,9 @@ def ai_program_open_cb(target: Any) -> str:
 
 
 
-def ai_program_preview_keyboard(replacing: bool = False, draft_id: int | str = 0) -> InlineKeyboardMarkup:
+def ai_program_preview_keyboard(
+    replacing: bool = False, draft_id: int | str = 0, can_train_now: bool = False,
+) -> InlineKeyboardMarkup:
     """Превью программы, собранной тренером: сохранить или отказаться.
 
     Сохранение создаёт по одной программе (routines.program_name общий на все
@@ -234,8 +236,19 @@ def ai_program_preview_keyboard(replacing: bool = False, draft_id: int | str = 0
     `draft_id` (5.2) едет в callback_data обеих кнопок: обработчик сверяет его
     с id черновика, лежащего в FSM, и отказывается сохранять/удалять чужой,
     более новый черновик, если это превью открыто под устаревшим ответом.
+
+    `can_train_now` — черновик из одного дня, по которому можно пойти прямо
+    сейчас. Раньше единственной дорогой от собранного плана к штанге было
+    «Добавить себе»: чтобы потренироваться по сгенерённому, приходилось сначала
+    сохранить его навсегда — и разовая «тренька на сегодня» оседала в 🗂
+    Программы рядом с настоящими программами. Сохранять её незачем и потом:
+    проведённая сессия попадает в историю, а «🔁 Повторить тренировку» умеет
+    перезапустить любую прошлую. На правке (`replacing`) кнопки нет: там смысл
+    тапа — обновить сохранённое, а не сходить разок.
     """
     b = InlineKeyboardBuilder()
+    if can_train_now and not replacing:
+        b.button(text="▶️ Начать по ней", callback_data=f"ai:prog:train:{draft_id}")
     b.button(
         text="✅ Обновить программу" if replacing else "✅ Добавить себе",
         callback_data=f"ai:prog:save:{draft_id}",

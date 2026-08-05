@@ -1053,3 +1053,74 @@ def test_notes_that_do_not_fit_are_counted_not_dropped_silently():
     assert formatting.telegram_length(text) <= formatting.MESSAGE_LIMIT
     assert "замечани" in text and "…и ещё" in text
     assert "Жим лёжа" in text
+
+
+# ---------- «▶️ Начать по ней»: тренировка без сохранения ----------
+
+async def test_recovery_tool_gives_the_trainer_what_the_screen_shows(fresh_db, user_id):
+    """Тренер про восстановление не знал вообще — при том что «что сегодня
+    качать» это первый вопрос, с которым к нему приходят, а число уже считалось
+    для экрана выбора. Считаться оно должно одно и то же."""
+    import datetime as dt
+
+    import analytics
+
+    group_id = await fresh_db.create_muscle_group(user_id, "Ноги")
+    ex_id = await fresh_db.create_exercise(user_id, "Присед", group_id)
+    day = dt.date.today() - dt.timedelta(days=1)
+    workout_id = await fresh_db.create_workout(user_id, started_at=f"{day.isoformat()}T10:00:00")
+    block_id = await fresh_db.create_block(workout_id, "single")
+    await fresh_db.add_block_exercise(block_id, ex_id, 0)
+    for _ in range(6):
+        await fresh_db.append_set(block_id, ex_id, 0, 100, 5)
+    await fresh_db.finish_workout(workout_id, finished_at=f"{day.isoformat()}T11:00:00")
+
+    payload = json.loads(await ai_trainer.execute_tool(user_id, "get_muscle_recovery", {}))
+
+    legs = next(row for row in payload["groups"] if row["group"] == "Ноги")
+    assert legs["days_ago"] == 1
+    assert legs["sets_that_session"] == 6
+    assert legs["recovery_percent"] == analytics.recovery_percent(day, 6, dt.date.today())
+
+
+async def test_never_trained_groups_are_not_passed_off_as_fully_rested(fresh_db, user_id):
+    """«Свежая» и «ни разу не тронутая» — разные вещи, и вторая обычно
+    интереснее: она означает пробел, а не готовность."""
+    await fresh_db.create_muscle_group(user_id, "Спина")
+
+    payload = json.loads(await ai_trainer.execute_tool(user_id, "get_muscle_recovery", {}))
+
+    assert "Спина" in payload["never_trained"]
+    assert all(row["group"] != "Спина" for row in payload["groups"])
+
+
+def test_single_day_draft_can_be_trained_without_saving():
+    """Разовую тренировку не надо заводить программой: сессия попадёт в
+    историю, а «🔁 Повторить тренировку» перезапустит любую прошлую."""
+    one_day = keyboards.ai_program_preview_keyboard(draft_id="abc", can_train_now=True)
+    callbacks = [b.callback_data for row in one_day.inline_keyboard for b in row]
+
+    assert callbacks[0] == "ai:prog:train:abc"
+    assert "ai:prog:save:abc" in callbacks
+
+
+def test_a_multi_day_draft_has_no_train_now_button():
+    """Программу из нескольких дней «начать» нельзя — непонятно, каким днём."""
+    many = keyboards.ai_program_preview_keyboard(draft_id="abc", can_train_now=False)
+
+    assert not any(
+        (b.callback_data or "").startswith("ai:prog:train:")
+        for row in many.inline_keyboard for b in row
+    )
+
+
+def test_an_edit_of_a_saved_program_is_not_offered_as_a_workout():
+    """У правки смысл тапа — обновить сохранённое, а не сходить разок."""
+    edit = keyboards.ai_program_preview_keyboard(
+        replacing=True, draft_id="abc", can_train_now=True
+    )
+
+    assert not any(
+        (b.callback_data or "").startswith("ai:prog:train:")
+        for row in edit.inline_keyboard for b in row
+    )
