@@ -100,15 +100,16 @@ async def _seed_heavy_workout(db, ex_id, user_id, day: str):
     await db.add_block_exercise(block, ex_id, 0)
     await db.add_set(block, ex_id, 1, 0, 100.0, 8)
     await db.add_set(block, ex_id, 2, 0, 100.0, 8)
+    await db.add_set(block, ex_id, 3, 0, 100.0, 8)
 
 
 async def test_friday_rank_near_push_names_the_rank_and_the_gap(fresh_db, user_id):
-    """18 workouts, ~29 т, 2+ раза в неделю: до «Работяги» (20 тренировок)
+    """13 workouts, ~31 т, 2+ раза в неделю: до «Работяги» (15 тренировок)
     ровно две — в пятницу приходит пуш с целью."""
     db = fresh_db
     gid = (await db.list_muscle_groups(None, global_only=True))[0]["id"]
     ex_id = await db.create_exercise(user_id, "Жим", gid)
-    for k in range(18):
+    for k in range(13):
         day = (dt.date(2026, 7, 16) - dt.timedelta(days=2 * k)).isoformat()
         await _seed_heavy_workout(db, ex_id, user_id, day)
 

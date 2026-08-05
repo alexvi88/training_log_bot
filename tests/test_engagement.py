@@ -53,7 +53,7 @@ def test_streak_milestone_exact_marks_only():
 
 
 def test_rank_near_fires_within_three_workouts():
-    near = engagement.rank_near_missing(18, 30_000, 1.2)
+    near = engagement.rank_near_missing(13, 30_000, 1.2)
     assert near is not None
     missing, nxt = near
     assert missing == 2
@@ -63,12 +63,12 @@ def test_rank_near_fires_within_three_workouts():
 def test_rank_near_silent_when_another_axis_lags():
     # "ещё 2 тренировки — и звание твоё" must be true: with tonnage or
     # frequency also short, the workouts alone wouldn't deliver the rank
-    assert engagement.rank_near_missing(18, 20_000, 1.2) is None
-    assert engagement.rank_near_missing(18, 30_000, 0.8) is None
+    assert engagement.rank_near_missing(13, 20_000, 1.2) is None
+    assert engagement.rank_near_missing(13, 30_000, 0.8) is None
 
 
 def test_rank_near_silent_when_far_or_already_met():
-    assert engagement.rank_near_missing(10, 30_000, 1.2) is None  # 10 workouts away
+    assert engagement.rank_near_missing(5, 30_000, 1.2) is None  # 10 workouts away
     assert engagement.rank_near_missing(25, 20_000, 1.2) is None  # workouts axis already done
 
 
