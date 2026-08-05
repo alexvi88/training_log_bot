@@ -281,6 +281,9 @@ async def rank_ladder(callback: CallbackQuery, state: FSMContext):
     text = formatting.build_rank_ladder(
         analytics.RANKS, rank,
         analytics.rank_gap(rank, len(dates), tonnage_kg, per_week),
+        total_workouts=len(dates),
+        tonnage_kg=tonnage_kg,
+        per_week=per_week,
     )
     kb = InlineKeyboardBuilder()
     kb.button(text="⬅️ Назад", callback_data="menu:achievements")
