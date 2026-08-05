@@ -780,8 +780,18 @@ async def _clear_state_keep_workout(state: FSMContext) -> None:
 
 @router.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext):
+    from handlers.persistent_menu import attach_silently
+
     await _clear_state_keep_workout(state)
+    # Спрашиваем до _ensure_user: «первый ли это /start» видно только по тому,
+    # была ли запись до него.
+    is_new = await db.get_user(message.from_user.id) is None
     await _ensure_user(message.from_user.id, message.from_user.username)
+    if is_new:
+        # Молча, до приветствия: клавиатура нужна сразу, но новичку нечего
+        # рассказывать про «обновил меню» (см. attach_silently), а приветствие
+        # должно остаться последним сообщением на экране.
+        await attach_silently(message, message.from_user.id)
     active = await db.get_active_workout(message.from_user.id)
     text, png = await _menu_view(message.from_user.id)
     await _send_menu(message, text, png, await _main_menu_kb(message.from_user.id, active))
