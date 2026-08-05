@@ -185,12 +185,11 @@ async def test_menu_view_plain_text_for_new_user(user_id, fresh_db):
 
 
 @pytest.mark.asyncio
-async def test_menu_view_shows_onboarding_steps_for_new_user(user_id, fresh_db):
+async def test_menu_view_shows_onboarding_for_new_user(user_id, fresh_db):
     from handlers.workout import _ONBOARDING, _menu_view
 
     text, _ = await _menu_view(user_id)
     assert text == _ONBOARDING
-    assert "Выбирай группу мышц" in text
 
 
 @pytest.mark.asyncio
@@ -268,16 +267,26 @@ async def test_charts_render_correctly_from_concurrent_threads():
     assert all(len(png) > 1000 for png in pngs)
 
 
-async def test_onboarding_names_the_features_a_new_user_cannot_guess(fresh_db, user_id):
-    """A new user's first screen used to describe only "pick a group, type a
-    set" — the ready-made programs on the very next screen, the voice input and
-    the AI trainer went unmentioned, so they were found by accident or not at
-    all."""
+async def test_onboarding_teaches_the_set_format_and_the_ai_trainer(fresh_db, user_id):
+    """Первый экран учит ровно одному, чего человек не угадает сам, — формату
+    строки подхода, — и называет AI-тренера: программу под себя и разбор своей
+    истории иначе находят случайно или никогда."""
     from handlers import workout
 
     text, _png = await workout._menu_view(user_id)
 
-    assert "Готовые программы" in text
-    assert "голосов" in text
+    assert "100 8" in text
     assert "AI-тренер" in text
-    assert "Дневник питания" in text
+    assert "программу" in text
+
+
+async def test_onboarding_fits_on_one_screen(fresh_db, user_id):
+    """Кнопки под текстом — то, ради чего экран существует; из-за полотна в
+    четырнадцать строк «НАЧАТЬ ТРЕНИРОВКУ» уезжала под сгиб. Ограничение
+    грубое, но оно ловит ровно тот регресс, который уже случался: онбординг
+    снова начал расти списком фич."""
+    from handlers import workout
+
+    text, _png = await workout._menu_view(user_id)
+
+    assert len(text.splitlines()) <= 8

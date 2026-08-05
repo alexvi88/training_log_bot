@@ -411,7 +411,14 @@ async def open_shared(message: Message, command: CommandObject, state: FSMContex
     решаешь». Битый/устаревший токен не роняет /start: юзер получает внятный
     ответ и остаётся в боте.
     """
+    from handlers.persistent_menu import attach_silently
+
+    # Визитка — второй вход для новичка: сюда попадают по ссылке, не нажав
+    # «Start». Клавиатура нужна так же, а «обновил меню» — так же не нужно.
+    is_new = await db.get_user(message.from_user.id) is None
     await db.get_or_create_user(message.from_user.id, message.from_user.username)
+    if is_new:
+        await attach_silently(message, message.from_user.id)
     await state.clear()
     token = (command.args or "")[len(START_PREFIX):]
     row = await db.get_shared_item(token)
