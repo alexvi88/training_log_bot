@@ -134,6 +134,34 @@ def _best_gold_index(
     return best_index
 
 
+async def workout_pick_exercises(workout_id: int) -> list[tuple[str, str]]:
+    """(имя, группа мышц) для каждого упражнения тренировки, в порядке блоков и
+    без повторов — из чего собираются списки выбора тренировки (повторить план,
+    создать программу).
+
+    Суперсеты разворачиваются целиком: в план уезжают оба упражнения блока, и
+    показывать только первое значило бы обещать не то, что человек получит.
+    Группа — пустая строка, если у упражнения её нет: подписывать «[БЕЗ ГРУППЫ]»
+    в списке из восьми строк дороже, чем промолчать.
+    """
+    seen: set[int] = set()
+    rows: list[tuple[str, str]] = []
+    for block in await db.list_blocks_for_workout(workout_id):
+        for be in await db.get_block_exercises(block["id"]):
+            if be["exercise_id"] in seen:
+                continue
+            seen.add(be["exercise_id"])
+            ex = await db.get_exercise(be["exercise_id"])
+            if ex is None:
+                continue
+            group = (
+                await db.get_muscle_group(ex["primary_group_id"])
+                if ex["primary_group_id"] else None
+            )
+            rows.append((ex["display_name"], group["name"] if group else ""))
+    return rows
+
+
 MAX_PLAUSIBLE_DURATION_SECONDS = 6 * 3600
 
 

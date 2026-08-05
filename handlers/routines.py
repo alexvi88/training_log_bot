@@ -28,7 +28,10 @@ from seed_data import PROGRAM_BY_KEY, WORKOUT_PROGRAMS
 
 router = Router(name="routines")
 
-ROUTINE_SOURCE_PAGE_SIZE = 8
+# Столько же, сколько в списке «повторить тренировку»: теперь каждая тренировка
+# расписана упражнениями, и восемь таких блоков — это экран, который приходится
+# листать до кнопок.
+ROUTINE_SOURCE_PAGE_SIZE = 6
 
 # Состояния этого роутера — все до единого «бот ждёт текста»: название, новое
 # название, схема подходов, поиск упражнения.
@@ -475,48 +478,35 @@ async def rt_edit(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-# Button text has a hard Telegram limit (64 chars) and gets cramped well before
-# that, so the exercise summary is cut short rather than listing everything.
-_SOURCE_PICKER_SUMMARY_MAX = 30
-
-
-async def _workout_exercise_names(workout_id: int) -> list[str]:
-    """Exercise names for a workout, in block order and de-duplicated — same
-    source list create_routine_from_workout snapshots into the routine."""
-    seen: set[int] = set()
-    names: list[str] = []
-    for block in await db.list_blocks_for_workout(workout_id):
-        for be in await db.get_block_exercises(block["id"]):
-            if be["exercise_id"] in seen:
-                continue
-            seen.add(be["exercise_id"])
-            names.append(be["display_name"])
-    return names
-
-
-async def _workout_exercise_summary(workout_id: int) -> str:
-    """Comma-joined, truncated version of _workout_exercise_names for a button label."""
-    summary = ", ".join(await _workout_exercise_names(workout_id))
-    if len(summary) > _SOURCE_PICKER_SUMMARY_MAX:
-        summary = summary[:_SOURCE_PICKER_SUMMARY_MAX].rstrip() + "…"
-    return summary
-
-
 async def _show_routine_source_picker(callback: CallbackQuery, state: FSMContext, page: int) -> None:
+    """Список прошлых тренировок, из которых можно собрать программу.
+
+    Каждая тренировка расписана в тексте — дата и все её упражнения с группами,
+    — а кнопка несёт только номер и дату, как на экране «повторить тренировку»
+    (workout._repeat_list_screen). До этого имена упражнений жили в подписи
+    кнопки и обрезались на тридцатом знаке: у человека, который ходит по одному
+    сплиту, все кнопки читались одинаково («03.08 — conventional deadlift,
+    seated…»), и выбирать приходилось наугад.
+    """
     user_id = callback.from_user.id
     total = await db.count_workouts(user_id)
     workouts = await db.list_workouts(user_id, limit=ROUTINE_SOURCE_PAGE_SIZE, offset=page * ROUTINE_SOURCE_PAGE_SIZE)
     items = []
-    for w in workouts:
+    blocks = []
+    for i, w in enumerate(workouts, start=1 + page * ROUTINE_SOURCE_PAGE_SIZE):
         date_label = formatting.format_date_ru(dt.datetime.fromisoformat(w["started_at"]))
-        summary = await _workout_exercise_summary(w["id"])
-        label = f"{date_label} — {summary}" if summary else date_label
-        items.append({"id": w["id"], "label": label})
+        items.append({"id": w["id"], "label": f"{i} - {date_label}"})
+        blocks.append(formatting.workout_pick_block(
+            i, date_label, await view_builder.workout_pick_exercises(w["id"])
+        ))
     has_next = (page + 1) * ROUTINE_SOURCE_PAGE_SIZE < total
     kb = keyboards.routine_source_picker_keyboard(items, page, has_next)
-    text = "Из какой тренировки создать программу?" if items else "Нет завершённых тренировок."
+    text = (
+        "🗂 Из какой тренировки создать программу?\n\n" + "\n\n".join(blocks)
+        if items else "Нет завершённых тренировок."
+    )
     await state.update_data(routine_source_page=page)
-    await ui.safe_edit(callback, text, reply_markup=kb)
+    await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML")
 
 
 @router.callback_query(F.data.startswith("rt:pickw:page:"))
