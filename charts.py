@@ -323,6 +323,25 @@ _DASH_HEAD_H = 0.58
 _DASH_TILES_H = 0.86
 _DASH_VOL_STEP = 0.30
 
+# Левый край плашки звания в шапке.
+_DASH_BADGE_X = 0.70
+
+
+def _shrink_to_fit(fig, txt, max_width: float, min_size: float = 13.0) -> None:
+    """Уменьшает кегль надписи, пока она не влезет в `max_width` (доля ширины
+    картинки). Ниже `min_size` не опускается: строка, набранная вдвое мельче
+    заявленной роли, всё равно сломает шапку — пусть лучше подойдёт к плашке
+    вплотную, чем превратится в подпись.
+
+    Мерить приходится через рендерер: ширина строки известна только шрифту, а
+    заранее считать её по числу знаков — это гадание, из-за которого шапка и
+    налезала на плашку.
+    """
+    limit = max_width * fig.get_figwidth() * fig.dpi
+    renderer = fig.canvas.get_renderer()
+    while txt.get_fontsize() > min_size and txt.get_window_extent(renderer).width > limit:
+        txt.set_fontsize(txt.get_fontsize() - 0.5)
+
 # Карточка движения размечена тем же шагом, что и строка коридора объёма, и
 # высота блока выводится из разметки, а не наоборот. Раньше было наоборот: блоку
 # назначались 2.45 дюйма на 3.6 единицы оси, единица выходила 0.68 дюйма — вдвое
@@ -340,6 +359,17 @@ _LIFT_LINE_BOTTOM = 5.65
 _LIFT_BOTTOM = 6.2
 _LIFT_LINE_HEIGHT = _LIFT_LINE_BOTTOM - _LIFT_LINE_TOP
 _DASH_LIFTS_H = _LIFT_UNIT_IN * (_LIFT_BOTTOM - _LIFT_TOP)
+# Низ блока, когда ни у одного движения нет линии: место под график не
+# отводится. Иначе у человека, у которого каждое движение сделано один раз,
+# внизу сводки висела пустая полоса в три сантиметра — и читалась как «график
+# не нарисовался», хотя рисовать было нечего.
+_LIFT_BOTTOM_BARE = _LIFT_VALUE_Y + 0.7
+
+# Сколько карточек движений размечается по ширине независимо от того, сколько
+# их пришло. Одна карточка на всю ширину — это спарклайн длиной в картинку, и
+# +5 кг на нём выглядят как рывок через полстраницы: наклон линии читается на
+# глаз, а её длина — нет. Пустое место справа честнее.
+_LIFT_SLOTS = 3
 
 
 def _dash_card(ax, x, y, w, h, colour=DASH_CARD) -> None:
@@ -452,17 +482,24 @@ def _dash_year_calendar(
                 ha="right", va="center")
 
 
-def _dash_lifts(ax, lifts, fg: str, dim: str, ok: str, title: str = "", note: str = "") -> None:
+def _dash_lifts(
+    ax, lifts, fg: str, dim: str, ok: str, title: str = "", note: str = "",
+    bottom: float = _LIFT_BOTTOM,
+) -> None:
     """Карточки движений: имя, текущий e1RM, изменение и спарклайн.
 
     Спарклайн нормируется на свой собственный размах, а не на общий: у жима и
     тяги разные веса, и общая шкала расплющила бы жим в прямую. Сравнивать эти
     три линии между собой не нужно — каждая отвечает на «я тут расту?».
+
+    Ширина карточки — всегда треть полосы, даже когда движений одно или два:
+    см. _LIFT_SLOTS.
     """
-    ax.set_ylim(_LIFT_BOTTOM, _LIFT_TOP)
+    ax.set_ylim(bottom, _LIFT_TOP)
     if title:
         _dash_section(ax, title, note)
-    box = (DASH_RIGHT - DASH_LEFT - 0.02 * (len(lifts) - 1)) / len(lifts)
+    slots = max(len(lifts), _LIFT_SLOTS)
+    box = (DASH_RIGHT - DASH_LEFT - 0.02 * (slots - 1)) / slots
     for i, (name, series, value, delta) in enumerate(lifts):
         x0 = DASH_LEFT + i * (box + 0.02)
         ax.text(x0, _LIFT_NAME_Y, name, color=dim, fontsize=DASH_FS_CAPTION, va="center")
@@ -538,8 +575,11 @@ def render_menu_dashboard(
     if rows:
         layout += [("gap:vol", DASH_GAP), ("vol", 0.34 + _DASH_VOL_STEP * len(rows))]
     layout += [("gap:cal", DASH_GAP), ("cal", _dash_calendar_height())]
+    # Блок движений без единой линии — это только имена и числа, и высоту он
+    # занимает по ним, а не по графику, которого нет.
+    lifts_bottom = _LIFT_BOTTOM if any(len(s) >= 2 for _, s, _, _ in lifts) else _LIFT_BOTTOM_BARE
     if lifts:
-        layout += [("gap:lifts", DASH_GAP), ("lifts", _DASH_LIFTS_H)]
+        layout += [("gap:lifts", DASH_GAP), ("lifts", _LIFT_UNIT_IN * (lifts_bottom - _LIFT_TOP))]
 
     fig_h = sum(h for _, h in layout)
     fig = _new_figure(figsize=(DASH_WIDTH_IN, fig_h), dpi=150)
@@ -561,15 +601,21 @@ def render_menu_dashboard(
 
     ax = band("head")
     ax.set_ylim(1, 0)
-    ax.text(DASH_LEFT, 0.50, headline, color=FG, fontsize=DASH_FS_DISPLAY,
-            fontweight="bold", va="center")
+    head = ax.text(DASH_LEFT, 0.50, headline, color=FG, fontsize=DASH_FS_DISPLAY,
+                   fontweight="bold", va="center")
+    # Заголовок без серии длиннее заголовка с серией: «3 тренировки за 30 дней»
+    # против «9 недель подряд». Двадцать три пункта такую строку заводят прямо
+    # под плашку звания, и у нового пользователя — то есть у единственного, кто
+    # эту формулировку видит, — шапка выходила слипшейся. Кегль уменьшается
+    # ровно настолько, чтобы строка кончилась до плашки.
+    _shrink_to_fit(fig, head, (_DASH_BADGE_X - 0.02 if badge else DASH_RIGHT) - DASH_LEFT)
     if badge:
         # Шире, чем кажется нужным: в лестнице званий есть «Ветеран подвала», и
         # плашка по короткому «Атлет» его бы обрезала. Эмодзи звания сюда не
         # едет — matplotlib рисует 🪨 и 👑 квадратиком, шрифта с эмодзи в
         # контейнере нет.
-        _dash_card(ax, 0.70, 0.28, DASH_RIGHT - 0.70, 0.44, HEATMAP_EMPTY)
-        ax.text((0.70 + DASH_RIGHT) / 2, 0.50, badge, color=HEATMAP_FILLED, fontsize=DASH_FS_LABEL,
+        _dash_card(ax, _DASH_BADGE_X, 0.28, DASH_RIGHT - _DASH_BADGE_X, 0.44, HEATMAP_EMPTY)
+        ax.text((_DASH_BADGE_X + DASH_RIGHT) / 2, 0.50, badge, color=HEATMAP_FILLED, fontsize=DASH_FS_LABEL,
                 fontweight="bold", ha="center", va="center")
 
     if tiles:
@@ -590,7 +636,7 @@ def render_menu_dashboard(
     _dash_year_calendar(band("cal"), day_counts, today, start, calendar_title, calendar_note)
 
     if lifts:
-        _dash_lifts(band("lifts"), lifts, FG, DIM, OK, lifts_title, lifts_note)
+        _dash_lifts(band("lifts"), lifts, FG, DIM, OK, lifts_title, lifts_note, lifts_bottom)
 
     for key in bands:
         if not key.startswith("gap:"):

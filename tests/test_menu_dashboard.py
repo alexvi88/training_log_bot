@@ -269,6 +269,14 @@ def test_the_records_tile_gives_its_place_away_when_there_are_none():
     assert len(with_records) == len(without) == 3
 
 
+def test_the_week_tile_is_skipped_when_it_would_repeat_the_month():
+    """Первая неделя в дневнике: вся история — эта неделя, и «ЗА НЕДЕЛЮ 1» рядом
+    с «ЗА 30 ДНЕЙ 1» это одно число, поставленное дважды."""
+    tiles = formatting.menu_tiles(_dashboard(this_week=1, last_30_days=1), 300, 0)
+
+    assert [label for label, _ in tiles] == ["ТРЕНИРОВОК ЗА 30 ДНЕЙ", "ТОННАЖ ЗА 7 ДНЕЙ"]
+
+
 def test_lift_cards_carry_the_current_value_and_the_change():
     cards = formatting.menu_lift_cards([("Жим штанги лёжа", [100.0, 108.0, 112.0])])
 
@@ -396,6 +404,58 @@ def test_an_all_zero_series_does_not_take_the_whole_menu_down():
 
 def test_a_single_point_series_renders_without_a_line():
     assert _render(lifts=[("ЖИМ", [100.0], "100 кг", "")])[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_a_block_without_a_single_line_does_not_reserve_room_for_graphs():
+    """Если ни у одного движения нет второй точки, рисовать нечего — и высоту
+    под график блок не занимает. Иначе внизу сводки висела пустая полоса в три
+    сантиметра, и читалась она как «график не нарисовался»."""
+    trend = _png_size(_render(lifts=[("ЖИМ", [100.0, 112.0], "112 кг", "+12")]))[1]
+    bare = _png_size(_render(lifts=[("ЖИМ", [100.0], "100 кг", "")]))[1]
+
+    assert bare < trend
+
+
+def test_one_movement_gets_a_third_of_the_width_not_all_of_it():
+    """Спарклайн на всю ширину картинки превращает +5 кг в рывок через
+    полстраницы: наклон линии глаз читает, а её длину — нет. У человека с одним
+    частым движением карточка та же, что была бы в тройке, а справа пусто."""
+    import io
+
+    from PIL import Image
+
+    img = Image.open(io.BytesIO(_render(lifts=[("ЖИМ", [100.0, 112.0], "112 кг", "+12")]))).convert("RGB")
+    width, height = img.size
+    line = tuple(int(charts.HEATMAP_FILLED[i:i + 2], 16) for i in (1, 3, 5))
+    # Нижняя пятая часть картинки — уже только поле спарклайна: ни клеток
+    # календаря, ни примечания блока, покрашенных тем же акцентом, там нет.
+    rightmost = max(
+        (x for y in range(int(height * 0.8), height) for x in range(width)
+         if img.getpixel((x, y)) == line),
+        default=0,
+    )
+
+    assert rightmost < width * 0.45
+
+
+def test_a_long_headline_stops_before_the_rank_badge():
+    """Заголовок без серии длиннее заголовка с ней («3 тренировки за 30 дней»
+    против «9 недель подряд»), и на 23 пунктах он заезжал под плашку звания —
+    ровно у новичка, единственного, кто эту формулировку видит."""
+    import io
+
+    from PIL import Image
+
+    img = Image.open(io.BytesIO(_render(headline="3 тренировки за 30 дней"))).convert("RGB")
+    width, _ = img.size
+    badge_left = round(charts._DASH_BADGE_X * width)
+    fg = (0xE6, 0xE6, 0xE6)
+    head_rows = range(round(0.28 * charts._DASH_HEAD_H * 150), round(0.72 * charts._DASH_HEAD_H * 150))
+
+    assert not any(
+        img.getpixel((x, y)) == fg
+        for y in head_rows for x in range(badge_left, width)
+    )
 
 
 def test_the_year_grid_fits_with_room_for_the_last_month():

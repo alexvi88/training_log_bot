@@ -1354,8 +1354,12 @@ def menu_tiles(dashboard, tonnage: float, records: int, unit: str = "kg") -> lis
     ]
     if records > 0:
         tiles.append((f"РЕКОРДОВ {days_window_label(VOLUME_WINDOW_DAYS)}", str(records)))
-    else:
+    elif dashboard.this_week != dashboard.last_30_days:
         tiles.append(("ТРЕНИРОВОК ЗА НЕДЕЛЮ", str(dashboard.this_week)))
+    # Иначе плитки нет вовсе: у человека, который только начал, вся история
+    # лежит внутри этой недели, и «ЗА НЕДЕЛЮ 1» рядом с «ЗА 30 ДНЕЙ 1» — это
+    # одно и то же число, поставленное дважды. Две плитки на полосе честнее трёх,
+    # из которых одна дублирует соседнюю.
     return tiles
 
 
@@ -1430,6 +1434,31 @@ def build_workout_card(
         f"{format_weight(tonnage)}{u}"
     )
     return title, body, footer, note
+
+
+def workout_pick_block(index: int, date: str, exercises: list[tuple[str, str]]) -> str:
+    """Одна тренировка в списке выбора: жирный «номер · дата», под ним все
+    упражнения по строке на каждое, группа мышц в скобках — та же запись
+    «Название [ГРУППА]», что в живом трекере (см. _render_single_block).
+
+    Номер — потому что в подпись кнопки имена упражнений не влезают: на кнопке
+    остаётся «1 - 3 августа», а что это за тренировка, человек читает в тексте
+    над кнопками. Через запятую тот же список читался стеной даже усечённым, а
+    по строке на упражнение он длиннее, зато сканируется — и ничего не
+    приходится обрезать.
+
+    Одна и та же разметка на двух экранах выбора — «повторить тренировку» и
+    «создать программу из тренировки»: выбор там один и тот же, и выглядеть он
+    должен одинаково.
+    """
+    header = f"<b>{index} · {date}</b>"
+    if not exercises:
+        return f"{header}\nнет упражнений"
+    bullets = "\n".join(
+        f"• {escape(name)} [{escape(format_group_tag(group))}]" if group else f"• {escape(name)}"
+        for name, group in exercises
+    )
+    return f"{header}\n{bullets}"
 
 
 def build_workout_preview(

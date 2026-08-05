@@ -47,23 +47,27 @@ async def test_create_routine_from_workout_dedups_and_orders(user_id):
 
 
 @pytest.mark.asyncio
-async def test_workout_exercise_summary_lists_names_in_order(user_id):
-    from handlers.routines import _workout_exercise_summary
+async def test_workout_pick_exercises_lists_names_with_groups_in_order(user_id):
+    import view_builder
 
     wid, _ex_ids = await _finished_workout_with(user_id, ["Жим", "Разведение", "Жим"])
-    assert await _workout_exercise_summary(wid) == "Жим, Разведение"
+    assert await view_builder.workout_pick_exercises(wid) == [("Жим", "Грудь"), ("Разведение", "Грудь")]
 
 
 @pytest.mark.asyncio
-async def test_workout_exercise_summary_truncates_long_lists(user_id):
-    from handlers.routines import _SOURCE_PICKER_SUMMARY_MAX, _workout_exercise_summary
+async def test_long_exercise_names_are_not_truncated_anywhere(user_id):
+    """Имена живут в тексте экрана, а не в подписи кнопки, поэтому обрезать их
+    больше нечем — раньше список кнопок обрывался на тридцатом знаке, и у
+    человека с одним сплитом все кнопки выглядели одинаково."""
+    import formatting
+    import view_builder
 
-    wid, _ex_ids = await _finished_workout_with(
-        user_id, ["Приседания со штангой на плечах", "Жим штанги лёжа широким хватом"]
-    )
-    summary = await _workout_exercise_summary(wid)
-    assert summary.endswith("…")
-    assert len(summary) <= _SOURCE_PICKER_SUMMARY_MAX + 1
+    names = ["Приседания со штангой на плечах", "Жим штанги лёжа широким хватом"]
+    wid, _ex_ids = await _finished_workout_with(user_id, names)
+    block = formatting.workout_pick_block(1, "15 июля", await view_builder.workout_pick_exercises(wid))
+    assert "…" not in block
+    for name in names:
+        assert f"• {name} [Грудь]" in block
 
 
 @pytest.mark.asyncio

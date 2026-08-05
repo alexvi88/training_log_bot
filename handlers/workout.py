@@ -1116,35 +1116,7 @@ async def _repeat_summary(workout) -> tuple[str, list[tuple[str, str]]]:
     (name, muscle group) pairs, in block order, for one past workout in the
     repeat list."""
     started = dt.datetime.fromisoformat(workout["started_at"])
-    date = formatting.format_date_ru(started)
-    plan = await db.workout_plan(workout["id"])
-    exercises: list[tuple[str, str]] = []
-    for block in plan:
-        ex = await db.get_exercise(block["exercise_ids"][0])
-        if ex is None:
-            continue
-        group = await db.get_muscle_group(ex["primary_group_id"]) if ex["primary_group_id"] else None
-        exercises.append((ex["display_name"], group["name"] if group else ""))
-    return date, exercises
-
-
-def _repeat_workout_block(i: int, date: str, exercises: list[tuple[str, str]]) -> str:
-    """Bold number+date title, then every exercise as its own bulleted line,
-    muscle group in brackets — same "Name [GROUP]" convention the live tracker
-    uses (see formatting._render_single_block).
-
-    A comma-joined summary still read as a wall of text even truncated — one
-    bullet per exercise is longer overall but each line is short and the eye
-    can actually scan it, so nothing gets cut this time.
-    """
-    header = f"<b>{i} · {date}</b>"
-    if not exercises:
-        return f"{header}\nнет упражнений"
-    bullets = "\n".join(
-        f"• {escape(name)} [{escape(formatting.format_group_tag(group))}]" if group else f"• {escape(name)}"
-        for name, group in exercises
-    )
-    return f"{header}\n{bullets}"
+    return formatting.format_date_ru(started), await view_builder.workout_pick_exercises(workout["id"])
 
 
 async def _repeat_list_screen(callback: CallbackQuery, state: FSMContext, page: int):
@@ -1166,7 +1138,7 @@ async def _repeat_list_screen(callback: CallbackQuery, state: FSMContext, page: 
     for i, w in enumerate(workouts, start=1 + page * REPEAT_PAGE_SIZE):
         date, exercises = await _repeat_summary(w)
         items.append({"id": w["id"], "label": f"{i} - {date}"})
-        blocks.append(_repeat_workout_block(i, date, exercises))
+        blocks.append(formatting.workout_pick_block(i, date, exercises))
     has_next = (page + 1) * REPEAT_PAGE_SIZE < total
     kb = keyboards.repeat_list_keyboard(items, page, has_next)
     hint = "🔁 Выбери тренировку, чтобы повторить её план:\n\n" + "\n\n".join(blocks)

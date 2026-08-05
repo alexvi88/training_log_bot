@@ -423,10 +423,32 @@ async def test_confirming_the_preview_moves_to_naming(fresh_db, user_id):
     assert (await state.get_data())["routine_source_workout_id"] == wid
 
 
+async def test_the_source_list_spells_out_every_workout_above_numbered_buttons(fresh_db, user_id):
+    """Кнопка несёт номер и дату, а что за тренировка — расписано в тексте, как
+    на экране «повторить тренировку». Раньше упражнения жили в подписи кнопки и
+    обрезались, из-за чего однотипные тренировки выглядели одинаково."""
+    db = fresh_db
+    wid = await _finished_workout_with(
+        db, user_id, ["Приседания со штангой на плечах", "Жим штанги лёжа широким хватом"]
+    )
+    callback = _make_callback(user_id, "rt:pickw")
+    await routines._show_routine_source_picker(callback, await _make_state(user_id), page=0)
+
+    text = callback.message.answer.await_args.args[0]
+    assert text.startswith("🗂 Из какой тренировки создать программу?")
+    assert "<b>1 · 15.07.2026 (ср)</b>" in text
+    assert "• Приседания со штангой на плечах [Грудь]" in text
+    assert "• Жим штанги лёжа широким хватом [Грудь]" in text
+
+    kb = callback.message.answer.await_args.kwargs["reply_markup"]
+    button = next(b for row in kb.inline_keyboard for b in row if b.callback_data == f"rt:pickw:item:{wid}")
+    assert button.text == "1 - 15.07.2026 (ср)"
+
+
 async def test_back_from_preview_returns_to_the_stored_list_page(fresh_db, user_id):
     db = fresh_db
-    # 9 workouts so page 1 (ROUTINE_SOURCE_PAGE_SIZE=8) actually holds one — the
-    # 9th and oldest, since list_workouts orders newest-first. Distinct dates
+    # 9 workouts so page 1 (ROUTINE_SOURCE_PAGE_SIZE=6) actually holds some — the
+    # oldest among them, since list_workouts orders newest-first. Distinct dates
     # (rather than 9 identical ones) so that ordering doesn't depend on however
     # SQLite happens to break ties.
     for day in range(8, 0, -1):
