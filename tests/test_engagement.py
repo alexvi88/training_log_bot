@@ -30,6 +30,52 @@ def test_streak_at_risk_requires_streak_and_empty_week():
     assert engagement.is_streak_at_risk(already_trained, saturday) is False
 
 
+# ---------- streak milestone (celebration) ----------
+
+
+def test_streak_milestone_only_on_monday():
+    dashboard = analytics.Dashboard(20, 0, 8, 2, week_streak=4)
+    assert engagement.streak_milestone(dashboard, d("2026-07-13")) == 4  # Monday
+    assert engagement.streak_milestone(dashboard, d("2026-07-14")) is None
+    assert engagement.streak_milestone(dashboard, d("2026-07-19")) is None
+
+
+def test_streak_milestone_exact_marks_only():
+    # exact match is what makes the push one-shot: by the next Monday the
+    # streak is either past the mark or reset to zero
+    monday = d("2026-07-13")
+    for weeks, expected in [(3, None), (4, 4), (5, None), (8, 8), (26, 26), (52, 52)]:
+        dashboard = analytics.Dashboard(20, 0, 8, 2, week_streak=weeks)
+        assert engagement.streak_milestone(dashboard, monday) == expected
+
+
+# ---------- rank near ----------
+
+
+def test_rank_near_fires_within_three_workouts():
+    near = engagement.rank_near_missing(18, 30_000, 1.2)
+    assert near is not None
+    missing, nxt = near
+    assert missing == 2
+    assert nxt.name == "Работяга"
+
+
+def test_rank_near_silent_when_another_axis_lags():
+    # "ещё 2 тренировки — и звание твоё" must be true: with tonnage or
+    # frequency also short, the workouts alone wouldn't deliver the rank
+    assert engagement.rank_near_missing(18, 20_000, 1.2) is None
+    assert engagement.rank_near_missing(18, 30_000, 0.8) is None
+
+
+def test_rank_near_silent_when_far_or_already_met():
+    assert engagement.rank_near_missing(10, 30_000, 1.2) is None  # 10 workouts away
+    assert engagement.rank_near_missing(25, 20_000, 1.2) is None  # workouts axis already done
+
+
+def test_rank_near_silent_at_the_top_rank():
+    assert engagement.rank_near_missing(10_000, 10_000_000, 10.0) is None
+
+
 # ---------- skip milestones ----------
 
 
