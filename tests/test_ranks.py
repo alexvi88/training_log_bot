@@ -31,7 +31,7 @@ async def test_rank_is_capped_by_the_weaker_axis():
     frequent_but_light = analytics.rank_for(8, 6_000, 3.0)
 
     assert heavy_but_rare.name == "Станок"
-    assert frequent_but_light.name == "Каменщик"  # частота высокая, но объёма нет
+    assert frequent_but_light.name == "Новобранец"  # частота высокая, но объёма нет
 
 
 async def test_a_break_costs_one_rung_not_the_whole_ladder():
