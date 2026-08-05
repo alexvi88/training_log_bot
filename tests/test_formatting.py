@@ -993,7 +993,7 @@ def test_program_changes_report_a_rewritten_progression_rule():
 
     assert changes == [
         "<b>Толкай</b>",
-        "  ⤴️ Жим лёжа: +2.5 каждую тренировку → дошёл до 8 повторов — прибавь 2.5",
+        "  ⤴️ Жим лёжа: +2.5 к весу каждую тренировку → дошёл до 8 повторов — прибавь 2.5 к весу",
     ]
 
 
@@ -1021,8 +1021,38 @@ def test_program_changes_name_a_rule_that_appears_or_disappears():
     added = formatting.build_program_changes([plain], [with_rule])
     removed = formatting.build_program_changes([with_rule], [plain])
 
-    assert added[1] == "  ⤴️ Жим лёжа: без прогрессии → +2.5 каждую тренировку"
-    assert removed[1] == "  ⤴️ Жим лёжа: +2.5 каждую тренировку → без прогрессии"
+    assert added[1] == "  ⤴️ Жим лёжа: без прогрессии → +2.5 к весу каждую тренировку"
+    assert removed[1] == "  ⤴️ Жим лёжа: +2.5 к весу каждую тренировку → без прогрессии"
+
+
+def test_progression_rule_names_the_users_unit_when_it_is_known():
+    """«прибавь 2.5» — прибавь чего? С единицей пользователя строка перестаёт
+    быть загадкой, а без неё честно говорит «к весу», не выдумывая килограммы
+    lb-пользователю."""
+    double = {"rule": "double_progression", "reps_top": 10, "step": 2.5}
+    linear = {"rule": "linear_load", "step": 5}
+
+    assert formatting.format_progression_rule(double, "kg") == (
+        "дошёл до 10 повторов — прибавь 2.5кг"
+    )
+    assert formatting.format_progression_rule(linear, "lb") == "+5lb каждую тренировку"
+    # Без единицы — нейтральный дефолт, старые вызовы не ломаются.
+    assert formatting.format_progression_rule(double) == (
+        "дошёл до 10 повторов — прибавь 2.5 к весу"
+    )
+
+
+def test_program_preview_passes_the_unit_down_to_progression_lines():
+    days = [{
+        "name": "День 1",
+        "items": [{
+            "name": "Жим лёжа", "target": "3×5–10", "source": "own",
+            "progression": {"rule": "double_progression", "reps_top": 10, "step": 2.5},
+        }],
+    }]
+
+    assert "прибавь 2.5кг" in formatting.build_ai_program_preview("П", days, unit="kg")
+    assert "прибавь 2.5 к весу" in formatting.build_ai_program_preview("П", days)
 
 
 def test_a_delimiter_with_the_wrong_column_count_is_not_a_table():
