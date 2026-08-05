@@ -85,6 +85,18 @@ class PushDecision:
     with_cta: bool = True
 
 
+# Кнопка — последняя строка пуша, и она должна договаривать реплику тренера,
+# а не переключаться на голос интерфейса. Категории без своей строки получают
+# нейтральный DEFAULT_PUSH_CTA.
+DEFAULT_PUSH_CTA = "▶ Начать тренировку"
+PUSH_CTA_BY_CATEGORY: dict[str, str] = {
+    push_texts.STREAK_MILESTONE: "▶ Продолжаем серию",
+    push_texts.STREAK_AT_RISK: "▶ Спасти серию",
+    push_texts.RANK_NEAR: "▶ Добить до звания",
+    push_texts.NEWBIE_NUDGE: "▶ Первая тренировка",
+}
+
+
 # ---------- pure signal detectors (no I/O, easy to unit test) ----------
 
 def is_streak_at_risk(dashboard: analytics.Dashboard, today: dt.date) -> bool:
@@ -277,7 +289,11 @@ async def build_daily_push(telegram_id: int, today: dt.date) -> Optional[PushDec
         if tonnage > 0:
             ai_text = await _ai_weekly_digest_text(telegram_id)
             if ai_text:
-                return PushDecision(push_texts.AI_WEEKLY, ai_text)
+                # with_cta=False — как у статического дайджеста ниже: это один и
+                # тот же воскресный слот, и кнопка «начать тренировку» под
+                # аналитикой то появлялась, то нет — в зависимости от того,
+                # ответила ли модель.
+                return PushDecision(push_texts.AI_WEEKLY, ai_text, with_cta=False)
             week_word = formatting.plural_ru(dashboard.this_week, ("тренировка", "тренировки", "тренировок"))
             # None when no weekday clearly stands out — pick_text then drops the
             # variant that would have claimed one, instead of asserting a habit
@@ -347,7 +363,11 @@ async def _deliver(
     hour had passed. /broadcast learned this already — same treatment here.
     """
     global _push_image_file_id
-    kb = keyboards.push_cta_keyboard() if decision.with_cta else None
+    kb = (
+        keyboards.push_cta_keyboard(PUSH_CTA_BY_CATEGORY.get(decision.category, DEFAULT_PUSH_CTA))
+        if decision.with_cta
+        else None
+    )
     try:
         message = await _send_push_photo(bot, telegram_id, decision, kb)
     except TelegramForbiddenError:

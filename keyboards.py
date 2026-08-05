@@ -1388,10 +1388,15 @@ def feedback_keyboard() -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
-def push_cta_keyboard() -> InlineKeyboardMarkup:
-    """Attached to daily-rotation push notifications: routes straight into starting a workout."""
+def push_cta_keyboard(text: str = "▶ Начать тренировку") -> InlineKeyboardMarkup:
+    """Attached to daily-rotation push notifications: routes straight into starting a workout.
+
+    `text` меняется по категории пуша (см. engagement.PUSH_CTA_BY_CATEGORY):
+    кнопка — последняя строка пуша, и «▶ Начать тренировку» под «серия на кону»
+    звучит как реклама, а «▶ Спасти серию» — как продолжение реплики тренера.
+    """
     b = InlineKeyboardBuilder()
-    b.button(text="▶ Начать тренировку", callback_data="menu:start_workout")
+    b.button(text=text, callback_data="menu:start_workout")
     return b.as_markup()
 
 

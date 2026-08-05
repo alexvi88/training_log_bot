@@ -186,7 +186,7 @@ async def test_ai_button_warns_when_not_configured(fresh_db, user_id):
         await persistent_menu.persistent_ai_button(message, state)
 
     assert await state.get_state() is None
-    assert "не настроен" in message.answer.await_args.args[0]
+    assert "не подключён" in message.answer.await_args.args[0]
 
 
 async def test_ai_trainer_command_reuses_same_flow(fresh_db, user_id):

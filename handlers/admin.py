@@ -206,7 +206,7 @@ async def _show_ai_users_list(target: Message | CallbackQuery, state: FSMContext
     users = await db.list_users_with_ai_message_counts(limit=USERS_PAGE_SIZE, offset=page * USERS_PAGE_SIZE)
     has_next = (page + 1) * USERS_PAGE_SIZE < total
     kb = keyboards.admin_ai_users_keyboard(users, page, has_next)
-    text = "🤖 Диалоги с AI-тренером — выберите пользователя:" if users else "Пользователей пока нет."
+    text = "🤖 Диалоги с AI-тренером — выбери пользователя:" if users else "Пользователей пока нет."
     if isinstance(target, CallbackQuery):
         await ui.safe_edit(target, text, reply_markup=kb)
     else:

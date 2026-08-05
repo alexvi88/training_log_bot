@@ -96,7 +96,7 @@ async def test_stale_finish_marks_workout_finished_with_original_date(fresh_db, 
     saved = await db.get_workout(workout_id)
     assert saved["status"] == "finished"
     assert saved["finished_at"] == started.isoformat()
-    assert "завершена" in callback.message.answer.await_args.args[0]
+    assert "Закрыл тренировку задним числом" in callback.message.answer.await_args.args[0]
 
 
 async def test_stale_finish_awards_achievements_for_the_workout(fresh_db, user_id):

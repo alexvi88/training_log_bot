@@ -30,7 +30,7 @@ def test_bodyweight_bare_reps():
 
 
 def test_bodyweight_zero_reps_rejected():
-    with pytest.raises(ParseError, match="больше 0"):
+    with pytest.raises(ParseError, match="от 1"):
         parse_single_token("0")
 
 
@@ -166,7 +166,7 @@ def test_negative_numbers_are_unparseable():
 
 
 def test_zero_reps_rejected_in_weight_form():
-    with pytest.raises(ParseError, match="больше 0"):
+    with pytest.raises(ParseError, match="от 1"):
         parse_single_token("100x0")
 
 
@@ -304,7 +304,7 @@ def test_date_strips_whitespace():
 
 
 def test_date_invalid_calendar_date_raises():
-    with pytest.raises(ParseError, match="не существует"):
+    with pytest.raises(ParseError, match="в календаре нет"):
         parse_ru_date("31.02.2025")
 
 
