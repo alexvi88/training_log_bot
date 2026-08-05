@@ -21,9 +21,32 @@ handlers.exercises и handlers.settings из тел функций ровно п
 
 from aiogram.fsm.context import FSMContext
 
+# Ключи AI-тренера, живущие дольше любой отдельной тренировки: переписка и
+# черновик предложенной программы. Кнопка «Забрать программу» остаётся в чате
+# навсегда, так что стирать черновик вместе с каркасом законченной тренировки —
+# значит превращать её в мёртвое «предложение уже неактуально». Кортеж лежит
+# здесь (а не в handlers/workout.py), чтобы и `_WORKOUT_SCAFFOLD_KEYS`, и
+# `clear_state_keep_ai` читали один и тот же список: новый AI-ключ добавляется
+# ровно в одном месте.
+AI_STATE_KEYS = ("ai_history", "ai_program_draft")
+
 
 async def clear_state_keep_workout(state: FSMContext) -> None:
     """То же, что `state.clear()`, но каркас незакрытой тренировки уцелеет."""
     from handlers.workout import _clear_state_keep_workout
 
     await _clear_state_keep_workout(state)
+
+
+async def clear_state_keep_ai(state: FSMContext) -> None:
+    """Полный сброс FSM, но переписка с AI-тренером и черновик программы уцелеют.
+
+    Для мест, где тренировка закончена или отменена: её каркас чистить правильно,
+    а вот AI-ключи по замыслу переживают тренировки (см. комментарий у
+    `handlers.workout._reset_new_workout_scaffold`).
+    """
+    data = await state.get_data()
+    preserved = {k: data[k] for k in AI_STATE_KEYS if k in data}
+    await state.clear()
+    if preserved:
+        await state.update_data(**preserved)

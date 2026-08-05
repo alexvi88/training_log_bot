@@ -47,6 +47,7 @@ from parser import (
     parse_set_edit,
     parse_sets_line,
 )
+from state_scaffold import AI_STATE_KEYS, clear_state_keep_ai
 
 router = Router(name="workout")
 
@@ -539,7 +540,9 @@ async def _back_after_cancel(callback: CallbackQuery, state: FSMContext, user):
         # not drop the user on the same "add exercise to begin" screen.
         await db.discard_workout(workout_id)
         await _clear_sticky_photo(callback.bot, state)
-        await state.clear()
+        # Тренировка отменена — каркас чистим, но переписку с AI-тренером и
+        # черновик его программы сохраняем: они переживают тренировки.
+        await clear_state_keep_ai(state)
         await _show_main_menu(callback, state)
         return
     await state.set_state(WorkoutFlow.idle)
@@ -730,14 +733,14 @@ _WORKOUT_SCAFFOLD_KEYS = (
     # through (see _clear_state_keep_workout below).
     "planned_blocks", "exercise_targets", "confirmed_weights",
     # Not workout scaffolding, but the same reasoning: stepping out to the menu
-    # and back shouldn't make the AI-тренер forget the conversation in progress.
-    "ai_history",
-    # Same again for the program the trainer just proposed: its button lives in
-    # the answer's keyboard and stays tappable, so wiping the draft on a menu
-    # tap (or on opening the preview and stepping out of it) turned that button
-    # into a dead "предложение уже неактуально" alert.
-    "ai_program_draft",
-)
+    # and back shouldn't make the AI-тренер forget the conversation in progress
+    # (`ai_history`), and the program the trainer just proposed
+    # (`ai_program_draft`) has a button that lives in the answer's keyboard and
+    # stays tappable — wiping the draft turned that button into a dead
+    # "предложение уже неактуально" alert. The keys themselves live in
+    # state_scaffold.AI_STATE_KEYS so that `clear_state_keep_ai` (used on every
+    # "workout is over" path) preserves exactly the same set.
+) + AI_STATE_KEYS
 
 
 async def _reset_new_workout_scaffold(state: FSMContext) -> None:
@@ -758,8 +761,7 @@ async def _reset_new_workout_scaffold(state: FSMContext) -> None:
     keys = set(_WORKOUT_SCAFFOLD_KEYS)
     # Not workout scaffolding — the AI chat and its pending program proposal
     # survive across workouts on purpose.
-    keys.discard("ai_history")
-    keys.discard("ai_program_draft")
+    keys.difference_update(AI_STATE_KEYS)
     await state.update_data(**{key: None for key in keys})
 
 
@@ -1081,7 +1083,9 @@ async def quick_log_entered(message: Message, state: FSMContext):
             await db.append_set(block_id, ex_id, 0, parsed.weight, parsed.reps, parsed.rpe)
 
     await achievement_sync.resync(user_id)
-    await state.clear()
+    # Быстрая запись закончена — но переписка с AI-тренером и черновик его
+    # программы не про неё: они переживают тренировки, сохраняем.
+    await clear_state_keep_ai(state)
 
     workout = await db.get_workout(workout_id)
     card = await _finished_workout_card_text(workout, await db.get_user(user_id), None)
@@ -2582,7 +2586,9 @@ async def live_finish_workout(callback: CallbackQuery, state: FSMContext):
     if not exercise_ids:
         await db.discard_workout(workout_id)
         await _clear_sticky_photo(callback.bot, state)
-        await state.clear()
+        # Пустую тренировку удалили — а переписка с AI-тренером и черновик его
+        # программы переживают тренировки, их не трогаем.
+        await clear_state_keep_ai(state)
         await _show_main_menu(callback, state)
         await callback.answer("Тренировка была пустая — удалил её.")
         return
@@ -2859,7 +2865,9 @@ async def _leave_note_flow(state: FSMContext) -> None:
     if return_state:
         await state.set_state(return_state)
     else:
-        await state.clear()
+        # Заметку писали без активного потока — но переписка с AI-тренером и
+        # черновик его программы могли лежать в данных, они переживают заметку.
+        await clear_state_keep_ai(state)
 
 
 @router.callback_query(F.data.startswith("live:addnote:"))
@@ -3014,7 +3022,9 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
         )
 
     await _clear_sticky_photo(bot, state)
-    await state.clear()
+    # Тренировка закрыта — каркас больше не нужен, но переписка с AI-тренером и
+    # черновик его программы переживают тренировки, сохраняем их.
+    await clear_state_keep_ai(state)
     # No auto-sent menu message here on purpose: it used to bury the card (the
     # PR/comparison highlights, the AI comment) the instant it appeared. The
     # card's own "🏠 Меню" button (live:back_to_menu below) opens the menu
