@@ -76,6 +76,50 @@ async def test_build_newbie_push_respects_one_per_day_dedup(fresh_db, user_id):
     assert decision is None
 
 
+async def test_monday_streak_milestone_beats_the_skip_jab(fresh_db, user_id):
+    """Four consecutive training weeks, checked on the following Monday: the
+    celebration must win over the skip-5 jab that fires the same day."""
+    db = fresh_db
+    for day in ("2026-06-17", "2026-06-24", "2026-07-01", "2026-07-08"):  # 4 weeks in a row
+        await db.create_finished_workout(
+            user_id, started_at=f"{day}T10:00:00", finished_at=f"{day}T11:00:00"
+        )
+
+    decision = await engagement.build_daily_push(user_id, dt.date(2026, 7, 13))  # Monday, 5 days out
+
+    assert decision is not None
+    assert decision.category == push_texts.STREAK_MILESTONE
+    assert "4 недели" in decision.text
+
+
+async def _seed_heavy_workout(db, ex_id, user_id, day: str):
+    workout_id = await db.create_finished_workout(
+        user_id, started_at=f"{day}T10:00:00", finished_at=f"{day}T11:00:00"
+    )
+    block = await db.create_block(workout_id, "single")
+    await db.add_block_exercise(block, ex_id, 0)
+    await db.add_set(block, ex_id, 1, 0, 100.0, 8)
+    await db.add_set(block, ex_id, 2, 0, 100.0, 8)
+
+
+async def test_friday_rank_near_push_names_the_rank_and_the_gap(fresh_db, user_id):
+    """18 workouts, ~29 т, 2+ раза в неделю: до «Работяги» (20 тренировок)
+    ровно две — в пятницу приходит пуш с целью."""
+    db = fresh_db
+    gid = (await db.list_muscle_groups(None, global_only=True))[0]["id"]
+    ex_id = await db.create_exercise(user_id, "Жим", gid)
+    for k in range(18):
+        day = (dt.date(2026, 7, 16) - dt.timedelta(days=2 * k)).isoformat()
+        await _seed_heavy_workout(db, ex_id, user_id, day)
+
+    decision = await engagement.build_daily_push(user_id, dt.date(2026, 7, 17))  # Friday, 1 day out
+
+    assert decision is not None
+    assert decision.category == push_texts.RANK_NEAR
+    assert "Работяга" in decision.text
+    assert "2 тренировки" in decision.text
+
+
 async def _seed_recent_workout(db, user_id):
     # Sunday 2026-07-19; a workout the day before → tonnage>0, day-since-last not a milestone.
     await db.create_finished_workout(

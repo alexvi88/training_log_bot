@@ -6,11 +6,18 @@ never touches anything that's already visible in a just-finished workout
 screen (that's `handlers/workout.py`'s job). Priority order below (first
 match wins, at most one push per user per day):
 
-  1. Серия на кону   — weekend only, a running week-streak about to break
-  2. Пропуск         — exact day-since-last-workout milestones (jabs live here)
-  3. Возвращение     — 21+ days gone, then every 10 days
-  4. Плато           — Sundays only, weight stuck despite 12+ reps
-  5. Аналитика       — Sundays only, weekly digest
+  1. Серия: рубеж    — Mondays only, week-streak hit a milestone (celebration)
+  2. Серия на кону   — weekend only, a running week-streak about to break
+  3. Пропуск         — exact day-since-last-workout milestones (jabs live here)
+  4. Возвращение     — 21+ days gone, then every 10 days
+  5. Близко к званию — Fridays only, <=3 workouts short of the next rank
+  6. Плато           — Sundays only, weight stuck despite 12+ reps
+  7. Аналитика       — Sundays only, weekly digest
+
+The two positive signals (1 and 5) are deliberate: with only absence-driven
+pushes, a regular who never skips days never hears from the coach at all —
+except to be scolded. Each is pinned to its own weekday, so it fires at most
+once a week and never competes with the Sunday analytics slot.
 
 Every push is delivered as a photo (the same fixed "coach" image) with the
 push text as its caption.
@@ -49,6 +56,20 @@ _push_image_file_id: str | None = None
 
 WIN_BACK_START_DAY = 21
 WIN_BACK_REPEAT_DAYS = 10
+# Week-streak marks worth a celebration push. Fired on Mondays only and only on
+# an exact match, so each milestone congratulates once: by the next Monday the
+# streak has either grown past the mark or (grace week spent) reset to zero.
+STREAK_MILESTONE_WEEKS = (4, 8, 12, 26, 52)
+# "Close to the next rank": this many workouts short at most, with the other
+# two rank axes (tonnage, frequency) already met — so the push can honestly
+# promise "N тренировок — и звание твоё". Friday-only: a concrete, near goal
+# right before the weekend, and the weekly cadence bounds repetition for
+# someone who stays close without training.
+RANK_NEAR_MAX_MISSING = 3
+RANK_NEAR_WEEKDAY = 4  # Friday
+# tonnage_since() wants a lower bound; ranks are all-time, so give it one that
+# predates any real data.
+RANK_TONNAGE_EPOCH = "2000-01-01"
 PLATEAU_MIN_REPS = 12
 PLATEAU_SESSIONS = 3
 DIGEST_LOOKBACK_DAYS = 30
@@ -68,6 +89,42 @@ class PushDecision:
 
 def is_streak_at_risk(dashboard: analytics.Dashboard, today: dt.date) -> bool:
     return today.weekday() >= 5 and dashboard.week_streak >= 2 and dashboard.this_week == 0
+
+
+def streak_milestone(dashboard: analytics.Dashboard, today: dt.date) -> Optional[int]:
+    """Milestone streak length to celebrate today, or None.
+
+    Monday + exact match keeps it one-shot per milestone: compute_dashboard's
+    one-week grace means Monday's streak still counts the run just completed,
+    and by the following Monday the streak is either milestone+1 (kept going)
+    or 0 (grace week also empty) — never the same milestone twice.
+    """
+    if today.weekday() != 0:
+        return None
+    if dashboard.week_streak in STREAK_MILESTONE_WEEKS:
+        return dashboard.week_streak
+    return None
+
+
+def rank_near_missing(
+    total_workouts: int, tonnage_kg: float, per_week: float
+) -> Optional[tuple[int, analytics.Rank]]:
+    """(workouts missing, next rank) when the next rank is 1-3 workouts away.
+
+    Only the workout axis may be short: with tonnage or frequency also lagging,
+    "ещё 2 тренировки — и звание твоё" would be a lie, so the detector stays
+    silent rather than hedge.
+    """
+    current = analytics.rank_for(total_workouts, tonnage_kg, per_week)
+    nxt = analytics.next_rank(current)
+    if nxt is None:
+        return None
+    missing = nxt.min_workouts - total_workouts
+    if not 1 <= missing <= RANK_NEAR_MAX_MISSING:
+        return None
+    if tonnage_kg < nxt.min_tonnage_kg or per_week < nxt.min_per_week:
+        return None
+    return missing, nxt
 
 
 def skip_milestone(days_since_last: Optional[int]) -> Optional[int]:
@@ -117,6 +174,16 @@ def is_plateau(sessions: list[analytics.SessionStats]) -> bool:
     return all(reps >= PLATEAU_MIN_REPS for _, reps in stats)
 
 
+def _weeks_phrase(weeks: int) -> str:
+    """"6 недель"/"4 недели" — templates take the phrase whole so the copy never
+    glues a bare number to a hardcoded (and for 2-4 wrong) "недель"."""
+    return f"{weeks} {formatting.plural_ru(weeks, ('неделя', 'недели', 'недель'))}"
+
+
+def _workouts_phrase(count: int) -> str:
+    return f"{count} {formatting.plural_ru(count, ('тренировка', 'тренировки', 'тренировок'))}"
+
+
 def format_tonnage(kg: float) -> str:
     if kg >= 1000:
         return f"{kg / 1000:.1f}т"
@@ -124,6 +191,18 @@ def format_tonnage(kg: float) -> str:
 
 
 # ---------- orchestration (I/O) ----------
+
+async def _find_rank_near(
+    telegram_id: int, total_workouts: int, dates: list[dt.date], today: dt.date
+) -> Optional[tuple[int, analytics.Rank]]:
+    """rank_near_missing() fed with this user's all-time tonnage (normalized to
+    kg — ranks are defined in kg, weights are stored in the user's unit)."""
+    user = await db.get_user(telegram_id)
+    raw = await db.tonnage_since(telegram_id, RANK_TONNAGE_EPOCH)
+    tonnage_kg = formatting.to_kg(raw, user["unit"] if user else "kg")
+    per_week = analytics.workouts_per_week(dates, today)
+    return rank_near_missing(total_workouts, tonnage_kg, per_week)
+
 
 async def _find_plateau_exercise(telegram_id: int) -> Optional[str]:
     for ex in await db.list_user_exercises(telegram_id):
@@ -149,11 +228,18 @@ async def build_daily_push(telegram_id: int, today: dt.date) -> Optional[PushDec
     dates = [dt.date.fromisoformat(s) for s in date_strings]
     dashboard = analytics.compute_dashboard(dates, today)
 
+    milestone_weeks = streak_milestone(dashboard, today)
+    if milestone_weeks is not None:
+        text = await push_texts.pick_text(
+            telegram_id, push_texts.STREAK_MILESTONE, weeks=_weeks_phrase(milestone_weeks)
+        )
+        return PushDecision(push_texts.STREAK_MILESTONE, text)
+
     if is_streak_at_risk(dashboard, today):
         text = await push_texts.pick_text(
             telegram_id,
             push_texts.STREAK_AT_RISK,
-            weeks=dashboard.week_streak,
+            weeks=_weeks_phrase(dashboard.week_streak),
             days_left="сегодня и завтра" if today.weekday() == 5 else "последний день",
         )
         return PushDecision(push_texts.STREAK_AT_RISK, text)
@@ -167,6 +253,18 @@ async def build_daily_push(telegram_id: int, today: dt.date) -> Optional[PushDec
     if is_win_back_day(dashboard.days_since_last):
         text = await push_texts.pick_text(telegram_id, push_texts.WIN_BACK)
         return PushDecision(push_texts.WIN_BACK, text)
+
+    if today.weekday() == RANK_NEAR_WEEKDAY:
+        near = await _find_rank_near(telegram_id, dashboard.total_workouts, dates, today)
+        if near is not None:
+            missing, nxt = near
+            text = await push_texts.pick_text(
+                telegram_id,
+                push_texts.RANK_NEAR,
+                rank=f"{nxt.emoji} {nxt.name}",
+                missing=_workouts_phrase(missing),
+            )
+            return PushDecision(push_texts.RANK_NEAR, text)
 
     if today.weekday() == 6:  # Sunday
         exercise_name = await _find_plateau_exercise(telegram_id)
