@@ -5,7 +5,10 @@ buttons always short-circuits whatever FSM state the user is currently in —
 same hard reset semantics as /start.
 """
 
+from contextlib import suppress
+
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
@@ -17,6 +20,29 @@ from fsm import AITrainerFlow
 from handlers.ai_trainer import INTRO_TEXT, RESUME_TEXT, ai_keyboard
 
 router = Router(name="persistent_menu")
+
+
+async def attach_silently(message: Message, user_id: int) -> None:
+    """Give a brand-new user the keyboard under the input field without the
+    "⌨️ Обновил меню" notice RefreshPersistentMenuMiddleware sends.
+
+    That notice makes sense for an existing user whose button row just changed;
+    on a first /start it's a second message about an update that never
+    happened — noise on the one screen that has to sell the bot.
+
+    A reply keyboard can only arrive attached to a message, and every screen
+    here already carries an inline keyboard instead, so there's nothing to ride
+    along with: the carrier is sent and deleted straight away. Telegram keeps
+    the keyboard once it's set — deleting the message that set it doesn't take
+    it back down.
+
+    Bumps reply_keyboard_version so the middleware, which runs after the
+    handler and re-reads the row, sees an up-to-date user and stays quiet.
+    """
+    with suppress(TelegramBadRequest):
+        carrier = await message.answer("⌨️", reply_markup=keyboards.persistent_menu())
+        await carrier.delete()
+    await db.update_user(user_id, reply_keyboard_version=keyboards.PERSISTENT_MENU_VERSION)
 
 
 class _MessageAsCallback:

@@ -586,3 +586,25 @@ async def test_picker_shows_no_recent_programs_without_any_routine_backed_workou
     callbacks = await _picker_extra_callbacks(fresh_db, user_id, monkeypatch)
 
     assert not [c for c in callbacks if c.startswith("rt:pgm:")]
+
+
+async def test_both_doors_into_the_ai_program_builder_are_labelled_the_same(
+    fresh_db, user_id, monkeypatch
+):
+    """Кнопка одна и та же (ai:buildprog) и ведёт в один и тот же сценарий —
+    на экране тренировки она называлась «Составить программу с AI», а в «🗂
+    Программы» «Составить с AI-тренером», и это читалось как две разные
+    возможности."""
+    import keyboards
+
+    monkeypatch.setattr(workout.ai_trainer, "is_configured", lambda: True)
+
+    picker = await _picker_extra_buttons(fresh_db, user_id, monkeypatch)
+    from_picker = next(text for text, cb in picker if cb == "ai:buildprog")
+
+    manage = keyboards.routines_manage_keyboard([], [], has_workouts=False)
+    from_manage = next(
+        b.text for row in manage.inline_keyboard for b in row if b.callback_data == "ai:buildprog"
+    )
+
+    assert from_picker == from_manage

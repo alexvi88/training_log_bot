@@ -939,3 +939,117 @@ async def test_a_corrupt_stored_progression_reads_as_no_rule(fresh_db, user_id):
     replaces, _error = await ai_trainer._resolve_replaced_program(user_id, "Верх/низ")
 
     assert replaces["days"][0]["items"][0]["progression"] is None
+
+
+# ---------- блок «На заметку» ----------
+
+async def test_preview_with_a_huge_notes_block_still_fits_into_one_message(fresh_db, user_id):
+    """Заметки растут от того, что нафантазировала модель, и раньше в обрезке
+    не участвовали вовсе — приклеивались к шапке целиком.
+
+    Шесть дней по дюжине ненайденных упражнений с длинными выдуманными
+    названиями давали под шесть тысяч символов одними заметками. Превью
+    переваливало за лимит Telegram, а ai_program_view отправку не страхует —
+    так что тап по кнопке «📋 Программа» не показывал ровно ничего.
+    """
+    junk = [
+        {"name": "Тяга гантели в наклоне с супинацией под углом " + str(i) * 20}
+        for i in range(ai_trainer.PROGRAM_MAX_EXERCISES_PER_DAY - 1)
+    ]
+    days = [_day("День 1", [{"name": TEMPLATE_A}] + junk)]
+    for d in range(2, 7):
+        days.append(
+            _day(f"День {d}", [
+                {"name": f"Выпад болгарский в Смите вариант {d}-{i} " + "х" * 30}
+                for i in range(ai_trainer.PROGRAM_MAX_EXERCISES_PER_DAY - 1)
+            ])
+        )
+
+    _payload, draft = await _propose(user_id, {"name": "Фуллбоди", "days": days})
+
+    text = formatting.build_ai_program_preview(
+        draft["name"], draft["days"], notes=draft["notes"]
+    )
+    assert formatting.telegram_length(text) <= formatting.MESSAGE_LIMIT
+    # Резать заметки можно, а молчать о том, что они были, — нет.
+    assert "На заметку" in text
+    # Состав того единственного дня, который всё-таки собрался, не должен
+    # оказаться съеден заметками целиком.
+    assert TEMPLATE_A in text
+
+
+async def test_a_day_that_dropped_entirely_gets_one_note_not_two(fresh_db, user_id):
+    """Раньше про такой день было две заметки подряд — «не нашёл в боте — …» и
+    «целиком пропал» — и блок читался как повтор."""
+    _payload, draft = await _propose(
+        user_id,
+        {
+            "name": "Сплит",
+            "days": [
+                _day("Грудь", [{"name": TEMPLATE_A}]),
+                _day("Спина", [{"name": "Тяга Кузнецова"}, {"name": "Жим Петрова"}]),
+            ],
+        },
+    )
+
+    about_back = [n for n in draft["notes"] if "Спина" in n]
+    assert len(about_back) == 1, about_back
+    # Одна строка, но обе вещи в ней: и что день не вошёл, и что именно не нашлось.
+    assert "не вошёл" in about_back[0]
+    assert "Тяга Кузнецова" in about_back[0]
+    assert "Жим Петрова" in about_back[0]
+
+
+# ---------- имена дней ----------
+
+async def test_days_with_the_same_name_are_told_apart(fresh_db, user_id):
+    """Модель нет-нет да пришлёт два «Дня 1», забыв переименовать шаблонные дни.
+
+    Дни программы — кнопки на одном экране (keyboards.program_days_keyboard):
+    два одинаковых там неразличимы, какой из них какой видно только открыв оба.
+    """
+    _payload, draft = await _propose(
+        user_id,
+        {
+            "name": "Сплит",
+            "days": [
+                _day("День 1", [{"name": TEMPLATE_A}]),
+                _day("День 1", [{"name": TEMPLATE_B}]),
+                _day("день 1", [{"name": TEMPLATE_A}]),
+            ],
+        },
+    )
+
+    names = [d["name"] for d in draft["days"]]
+    assert len(names) == 3
+    assert len({n.lower() for n in names}) == 3, names
+    # Разводим суффиксом, а не отбрасыванием дня: состав у них разный.
+    assert names[0] == "День 1"
+    assert TEMPLATE_B in [item["name"] for item in draft["days"][1]["items"]]
+
+
+def test_a_disambiguated_day_name_still_respects_the_length_cap():
+    taken: set[str] = set()
+    long_name = "Д" * ai_trainer.PROGRAM_NAME_LIMIT
+    first = ai_trainer._unique_day_name(long_name, taken)
+    second = ai_trainer._unique_day_name(long_name, taken)
+
+    assert first != second
+    assert len(second) <= ai_trainer.PROGRAM_NAME_LIMIT
+
+
+def test_notes_that_do_not_fit_are_counted_not_dropped_silently():
+    """Обрезанный блок обязан сказать, сколько заметок не влезло, и оставить
+    место составу ниже — иначе «на заметку» съедало бы весь экран."""
+    notes = [
+        f"«День {i}»: не нашёл в боте — "
+        + ", ".join(f"Упражнение выдуманное номер {i}-{j}" for j in range(12))
+        for i in range(1, 40)
+    ]
+    days = [_new_day("День 1", [("Жим лёжа", "4×8")])]
+
+    text = formatting.build_ai_program_preview("Программа", days, notes=notes)
+
+    assert formatting.telegram_length(text) <= formatting.MESSAGE_LIMIT
+    assert "замечани" in text and "…и ещё" in text
+    assert "Жим лёжа" in text

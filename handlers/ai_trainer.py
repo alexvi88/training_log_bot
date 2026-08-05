@@ -397,6 +397,18 @@ async def ai_build_program(callback: CallbackQuery, state: FSMContext):
         )
         return
     user_id = callback.from_user.id
+    # Лимит проверяем ДО того, как экран «🗂 Программы» сменится на интро.
+    # _handle_question проверит его и сам, но там отказ приходит уже под
+    # обещанием «сейчас задам пару вопросов» — то есть человек теряет экран, с
+    # которого пришёл, и получает на его месте несбывшееся обещание. Алертом
+    # он остаётся там же, где стоял.
+    if await db.get_ai_question_count_today(user_id) >= config.AI_QUESTION_DAILY_LIMIT:
+        await callback.answer(
+            "На сегодня лимит вопросов к тренеру исчерпан 😮‍💨 Возвращайся завтра — "
+            "а пока программу можно взять готовую в «✨ Готовые программы».",
+            show_alert=True,
+        )
+        return
     if not _try_claim_busy(user_id):
         await callback.answer("Секунду, ещё думаю над прошлым вопросом 😅", show_alert=True)
         return

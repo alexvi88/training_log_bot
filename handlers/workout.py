@@ -555,20 +555,23 @@ _GREETING = "<b>ПРИВЕТ АТЛЕТ. НАЧНЁМ ТРЕНИРОВКУ?</b>"
 
 # Shown on the main menu until the first workout is logged — a quick "here's how
 # it works" so a brand-new user isn't dropped onto the same screen as a veteran.
+#
+# Держится в пределах экрана: раньше это было четырнадцать строк, и кнопка
+# «НАЧАТЬ ТРЕНИРОВКУ» — то, ради чего человек сюда пришёл, — уезжала под сгиб,
+# за перечень фич. Шаги «выбери группу → выбери упражнение» ушли по той же
+# причине: это навигация, которую он увидит, нажав кнопку. Учить надо одному —
+# формату строки. Голосовой ввод не упомянут намеренно: подсказка про него
+# живёт в _HELP_SHORT, на экране записи подхода, где он и применим.
 _ONBOARDING = (
     "<b>ПРИВЕТ АТЛЕТ! 💪</b>\n\n"
-    "Я — твой дневник силовых тренировок. Работает просто:\n"
-    "1️⃣ Жми «🏋️ НАЧАТЬ ТРЕНИРОВКУ»\n"
-    "2️⃣ Выбирай группу мышц и упражнение\n"
-    "3️⃣ Пиши вес и повторы, например «100 8» (или «8» для своего веса)\n\n"
-    "Не хочешь собирать тренировку сам — на первом же экране есть "
-    "«✨ Готовые программы»: выбрал сплит, и упражнения на каждый день уже "
-    "расставлены.\n\n"
-    "Что ещё умею:\n"
-    "🎙 подход можно наговорить голосовым — «сто на восемь»\n"
-    "🤖 «AI-тренер» видит твою историю и отвечает на вопросы по ней\n"
-    "🍽 «Дневник питания» считает КБЖУ по фото или описанию\n\n"
-    "Дальше я сам посчитаю рекорды и прогресс. Погнали? 👇"
+    "Правило тут одно: подход пишешь строкой — <b><code>100 8</code></b>. "
+    "Вес и повторы. Записал.\n"
+    "Рекорды, объём и прогресс — за мной. Железо — за тобой.\n\n"
+    "Не знаешь, что делать сегодня? Скажи 🤖 <b>AI-тренеру</b>, чего хочешь — "
+    "соберёт программу и разложит по дням. Он же видит всю твою историю: "
+    "спроси «я стал сильнее за три месяца?» — ответит по цифрам, а не по "
+    "ощущениям.\n\n"
+    "Жми 🏋️ и погнали 👇"
 )
 
 
@@ -782,8 +785,18 @@ async def _clear_state_keep_workout(state: FSMContext) -> None:
 
 @router.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext):
+    from handlers.persistent_menu import attach_silently
+
     await _clear_state_keep_workout(state)
+    # Спрашиваем до _ensure_user: «первый ли это /start» видно только по тому,
+    # была ли запись до него.
+    is_new = await db.get_user(message.from_user.id) is None
     await _ensure_user(message.from_user.id, message.from_user.username)
+    if is_new:
+        # Молча, до приветствия: клавиатура нужна сразу, но новичку нечего
+        # рассказывать про «обновил меню» (см. attach_silently), а приветствие
+        # должно остаться последним сообщением на экране.
+        await attach_silently(message, message.from_user.id)
     active = await db.get_active_workout(message.from_user.id)
     text, png = await _menu_view(message.from_user.id)
     await _send_menu(message, text, png, await _main_menu_kb(message.from_user.id, active))
@@ -1485,7 +1498,11 @@ async def _picker_screen_groups(callback: CallbackQuery, state: FSMContext, show
         # У кого программы есть, это был бы третий пункт про программы подряд
         # на экране, куда пришли тренироваться, а не планировать.
         if not await db.count_routines(callback.from_user.id) and ai_trainer.is_configured():
-            extra.append(("🤖 Составить программу с AI", "ai:buildprog"))
+            # Та же подпись, что и на экране «🗂 Программы» (см.
+            # keyboards.routines_manage_keyboard): это одна и та же кнопка,
+            # ведущая в один и тот же сценарий, и разные названия у неё читались
+            # как две разные возможности.
+            extra.append(("🤖 Составить с AI-тренером", "ai:buildprog"))
     # Not a "cancel the workout" — pick:cancel just returns to whatever screen was
     # open before (see _back_after_cancel), so it reads as "⬅️ Назад", not "❌ Отмена".
     extra.append(("⬅️ Назад", "pick:cancel"))

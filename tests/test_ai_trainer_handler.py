@@ -1356,31 +1356,6 @@ async def test_program_gone_alert_does_not_ask_to_rebuild_a_saved_program():
     assert "🗂 Программы" in ai_trainer._PROGRAM_GONE
 
 
-async def test_build_program_checks_the_quota_before_the_cheerful_intro(fresh_db, user_id, monkeypatch):
-    """«ОКЕЙ, СОБИРАЕМ ПРОГРАММУ» с мгновенным «лимит исчерпан» следом — обещание,
-    которое бот сам тут же забирает назад: лимит проверяется до интро."""
-    import config
-    import ui
-
-    monkeypatch.setattr(ai_trainer.ai_trainer, "is_configured", lambda: True)
-    monkeypatch.setattr(ui.chat_bottom, "is_at_bottom", lambda *a, **k: False)
-    ask = AsyncMock()
-    monkeypatch.setattr(ai_trainer.ai_trainer, "ask", ask)
-    for _ in range(config.AI_QUESTION_DAILY_LIMIT):
-        await fresh_db.increment_ai_question_count(user_id)
-
-    callback = _make_buildprog_callback(user_id)
-    await ai_trainer.ai_build_program(callback, await _make_state(user_id))
-
-    ask.assert_not_awaited()
-    sent = callback.message.answer.await_args
-    text = sent.args[0] if sent.args else sent.kwargs["text"]
-    assert "СОБИРАЕМ ПРОГРАММУ" not in text
-    assert "лимит" in text.lower()
-    assert "ai:menu" in _callbacks(sent.kwargs["reply_markup"])
-    assert user_id not in ai_trainer._busy
-
-
 async def test_saved_announcement_offers_opening_the_program(fresh_db, user_id):
     """Текст говорил «ищи в «🗂 Программы»», хотя бот и так знает, что только
     что сохранил — первая кнопка открывает программу напрямую."""
@@ -1407,3 +1382,33 @@ async def test_saving_a_single_day_does_not_promise_any_of_the_days(fresh_db, us
 
     text = callback.message.edit_text.await_args.args[0]
     assert "любому из дней" not in text
+
+
+async def test_ai_build_program_refuses_before_burning_the_screen(fresh_db, user_id, monkeypatch):
+    """Лимит вопросов кончился — кнопка не должна менять экран «🗂 Программы»
+    на интро «сейчас задам пару вопросов», под которым тут же приедет отказ.
+
+    _handle_question проверяет лимит и сам, но к тому моменту человек уже
+    потерял экран, с которого пришёл, и получил на его месте обещание, которое
+    сразу же не сбылось.
+    """
+    import config
+
+    monkeypatch.setattr(ai_trainer.ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(
+        ai_trainer.ai_trainer, "ask", AsyncMock(side_effect=AssertionError("модель не должна дёргаться"))
+    )
+    for _ in range(config.AI_QUESTION_DAILY_LIMIT):
+        await fresh_db.increment_ai_question_count(user_id)
+
+    state = await _make_state(user_id)
+    callback = _make_buildprog_callback(user_id)
+
+    await ai_trainer.ai_build_program(callback, state)
+
+    callback.message.answer.assert_not_awaited()
+    assert callback.answer.await_args.kwargs.get("show_alert") is True
+    assert "лимит" in callback.answer.await_args.args[0].lower()
+    # И экран не должен утащить человека в чат с тренером, куда он не попал.
+    assert await state.get_state() is None
+    assert user_id not in ai_trainer._busy
