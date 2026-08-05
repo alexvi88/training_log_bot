@@ -1112,7 +1112,7 @@ def test_every_rank_is_listed_with_its_thresholds():
 
     for rank in analytics.RANKS:
         assert rank.name in text
-    assert "400 трен." in text          # порог верхней ступени
+    assert "300 трен." in text          # порог верхней ступени
     assert "1000 т" in text
 
 
