@@ -28,6 +28,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 import db
 from formatting import MESSAGE_LIMIT, telegram_length
+from state_scaffold import clear_state_keep_ai
 
 logger = logging.getLogger(__name__)
 
@@ -411,8 +412,17 @@ async def open_shared(message: Message, command: CommandObject, state: FSMContex
     решаешь». Битый/устаревший токен не роняет /start: юзер получает внятный
     ответ и остаётся в боте.
     """
+    from handlers.persistent_menu import attach_silently
+
+    # Визитка — второй вход для новичка: сюда попадают по ссылке, не нажав
+    # «Start». Клавиатура нужна так же, а «обновил меню» — так же не нужно.
+    is_new = await db.get_user(message.from_user.id) is None
     await db.get_or_create_user(message.from_user.id, message.from_user.username)
-    await state.clear()
+    if is_new:
+        await attach_silently(message, message.from_user.id)
+    # /start по чужой ссылке сбрасывает поток, но переписка с AI-тренером и
+    # черновик его программы переживают такие переходы — сохраняем их.
+    await clear_state_keep_ai(state)
     token = (command.args or "")[len(START_PREFIX):]
     row = await db.get_shared_item(token)
     if row is None:

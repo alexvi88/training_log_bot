@@ -1541,15 +1541,25 @@ async def get_exercise(exercise_id: int) -> Optional[aiosqlite.Row]:
     return await cur.fetchone()
 
 
+def _fold_exercise_name(value: str) -> str:
+    """Нормализация имени для сравнения: регистр и ё→е.
+
+    .lower() букву «ё» не сворачивает, а люди (и модель) пишут «Жим лёжа» и
+    «Жим лежа» вперемешку — без этой замены совпадающее по сути имя уходило в
+    unresolved и стоило AI-тренеру лишнего раунда уточнений.
+    """
+    return value.strip().lower().replace("ё", "е")
+
+
 async def find_exercise_by_name(user_id: int, name: str) -> Optional[aiosqlite.Row]:
-    """Exact case-insensitive match on the bare name or full display name (Cyrillic-safe)."""
+    """Exact case-insensitive match on the bare name or full display name (Cyrillic-safe, ё=е)."""
     cur = await conn().execute(
         "SELECT * FROM exercises WHERE user_id = ? AND is_archived = 0 AND is_template = 0", (user_id,)
     )
     rows = await cur.fetchall()
-    needle = name.strip().lower()
+    needle = _fold_exercise_name(name)
     for r in rows:
-        if r["name"].strip().lower() == needle or r["display_name"].strip().lower() == needle:
+        if _fold_exercise_name(r["name"]) == needle or _fold_exercise_name(r["display_name"]) == needle:
             return r
     return None
 
@@ -3768,19 +3778,29 @@ async def unique_program_name(user_id: int, name: str, suffix: Optional[str] = N
 
     For the paths where a collision shouldn't stop the user: importing a shared
     program, or taking the same catalog program a second time on purpose.
+
+    Кандидаты с суффиксом ужимаются под MAX_PROGRAM_NAME_LENGTH: имя ровно в
+    лимит получало « (2)» сверху, и такую программу потом нельзя было даже
+    переименовать — ручной ввод длиннее лимита не принимается.
     """
+
+    def with_suffix(tail: str) -> str:
+        # Урезаем базу, а не хвост: хвост и есть то, что различает копии.
+        room = config.MAX_PROGRAM_NAME_LENGTH - len(tail)
+        return f"{name[:room].rstrip()}{tail}"
+
     name = name.strip()
     if await find_program_by_name(user_id, name) is None:
         return name
     if suffix:
-        candidate = f"{name} ({suffix})"
+        candidate = with_suffix(f" ({suffix})")
         if await find_program_by_name(user_id, candidate) is None:
             return candidate
     for n in range(2, 100):
-        candidate = f"{name} ({n})"
+        candidate = with_suffix(f" ({n})")
         if await find_program_by_name(user_id, candidate) is None:
             return candidate
-    return f"{name} ({secrets.token_hex(2)})"
+    return with_suffix(f" ({secrets.token_hex(2)})")
 
 
 async def move_routine_to_program(routine_id: int, program_id: Optional[int]) -> None:
@@ -4189,14 +4209,14 @@ async def delete_program(user_id: int, program_name: str) -> None:
 
 
 async def _find_global_template_by_name(name: str) -> Optional[aiosqlite.Row]:
-    """Case-insensitive (Cyrillic-safe) match of a global template by its bare name."""
+    """Case-insensitive (Cyrillic-safe, ё=е) match of a global template by its bare name."""
     cur = await conn().execute(
         "SELECT * FROM exercises WHERE is_template = 1 AND user_id IS NULL"
     )
     rows = await cur.fetchall()
-    needle = name.strip().lower()
+    needle = _fold_exercise_name(name)
     for r in rows:
-        if (r["name"] or "").strip().lower() == needle:
+        if _fold_exercise_name(r["name"] or "") == needle:
             return r
     return None
 
@@ -4283,10 +4303,17 @@ async def set_routine_exercise_target(routine_exercise_id: int, target: Optional
     Without this, changing «3×10» to «4×8» meant removing the exercise (behind a
     confirmation), adding it again — where it lands at the end — and walking it
     back up with the arrows.
+
+    Сюда приходит только ручной редактор (AI-путь пишет target при вставке
+    строки), и ручная правка схемы означает «теперь по-моему»: правило
+    прогрессии из программы сбрасывается вместе со старой схемой — иначе
+    человек, сменивший «3×8-10» на «5×5», продолжал бы получать подсказку
+    «🎯 Цель — по программе» из правила, которое, по его мнению, стёр.
     """
     async with _write_lock:
         await conn().execute(
-            "UPDATE routine_exercises SET target = ? WHERE id = ?", (target, routine_exercise_id)
+            "UPDATE routine_exercises SET target = ?, progression = NULL WHERE id = ?",
+            (target, routine_exercise_id),
         )
         await conn().commit()
 
@@ -4339,11 +4366,16 @@ async def program_day_history(program_id: int) -> dict[int, tuple[str, int]]:
     Read off `workouts.routine_id`, which has been recorded since the column
     existed and until now fed exactly one screen. It's what «какой сегодня день»
     and «ноги ты делал дважды за полтора месяца» are both built from.
+
+    Только завершённые тренировки: голый тап «▶️ День 1», брошенный в
+    раздевалке, — не сессия. Без фильтра экран программы писал «сегодня»
+    про день, который не сделан, и навсегда перепрыгивал его в «дальше по
+    кругу», а инструмент adherence AI-тренера считал такие тапы посещениями.
     """
     cur = await conn().execute(
         "SELECT r.id AS routine_id, MAX(w.started_at) AS last_started, COUNT(*) AS times "
         "FROM routines r JOIN workouts w ON w.routine_id = r.id "
-        "WHERE r.program_id = ? GROUP BY r.id",
+        "WHERE r.program_id = ? AND w.status = 'finished' GROUP BY r.id",
         (program_id,),
     )
     return {row["routine_id"]: (row["last_started"], row["times"]) for row in await cur.fetchall()}
@@ -4960,6 +4992,43 @@ async def scale_user_set_weights(telegram_id: int, factor: float) -> None:
             "  SELECT b.id FROM workout_blocks b JOIN workouts w ON w.id = b.workout_id "
             "  WHERE w.user_id = ?)",
             (factor, telegram_id),
+        )
+        await conn().commit()
+
+
+async def scale_progression_steps(user_id: int, factor: float) -> None:
+    """Пересчитать `step` в правилах прогрессии программ при смене кг↔lb.
+
+    step хранится внутри JSON `routine_exercises.progression` в единицах
+    пользователя. scale_user_set_weights конвертирует историю подходов, а без
+    этого прохода сохранённое «+2.5 кг» после перехода на фунты молча
+    превращалось бы в «+2.5 lb» — на порядок меньший шаг.
+    """
+    cur = await conn().execute(
+        "SELECT re.id, re.progression FROM routine_exercises re "
+        "JOIN routines r ON r.id = re.routine_id "
+        "WHERE r.user_id = ? AND re.progression IS NOT NULL",
+        (user_id,),
+    )
+    rows = await cur.fetchall()
+    updates: list[tuple[str, int]] = []
+    for row in rows:
+        try:
+            rule = json.loads(row["progression"])
+        except (TypeError, ValueError):
+            # Правило пишет модель — мусор в нём не должен ронять смену единиц;
+            # подсказка веса такой JSON и так игнорирует (progression_rule_for_workout).
+            continue
+        step = rule.get("step") if isinstance(rule, dict) else None
+        if not isinstance(step, (int, float)) or isinstance(step, bool):
+            continue
+        rule["step"] = round(step * factor, 2)
+        updates.append((json.dumps(rule, ensure_ascii=False), row["id"]))
+    if not updates:
+        return
+    async with _write_lock:
+        await conn().executemany(
+            "UPDATE routine_exercises SET progression = ? WHERE id = ?", updates
         )
         await conn().commit()
 

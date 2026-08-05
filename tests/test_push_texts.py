@@ -14,6 +14,11 @@ async def test_every_variant_opens_with_privet_atlet():
             assert "боец" not in text.lower()
 
 
+async def test_every_category_has_a_label():
+    for category in push_texts.TEXTS:
+        assert category in push_texts.CATEGORY_LABELS, category
+
+
 async def test_pick_text_cycles_through_pool_without_repeats(fresh_db, user_id):
     pool = push_texts.TEXTS[push_texts.WIN_BACK]
     seen = [await push_texts.pick_text(user_id, push_texts.WIN_BACK) for _ in range(len(pool))]

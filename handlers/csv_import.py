@@ -16,6 +16,7 @@ import keyboards
 import ui
 from fsm import ImportFlow
 from parser import MAX_REPS, MAX_WEIGHT, ParseError, parse_ru_date
+from state_scaffold import clear_state_keep_ai
 
 router = Router(name="csv_import")
 
@@ -469,7 +470,9 @@ async def import_save(callback: CallbackQuery, state: FSMContext):
     to_import = [w for w in workouts if w["date"] not in skip]
 
     if not to_import:
-        await state.clear()
+        # Импорт закончился ничем — но переписка с AI-тренером и черновик его
+        # программы к нему отношения не имеют, сохраняем их.
+        await clear_state_keep_ai(state)
         from handlers.settings import show_settings
         await show_settings(
             callback, state, alert="Эти тренировки уже есть в истории — ничего не добавил"
@@ -493,7 +496,9 @@ async def import_save(callback: CallbackQuery, state: FSMContext):
     # edit screens already run after changing the past.
     await achievement_sync.resync(user_id)
 
-    await state.clear()
+    # Импорт завершён — а переписка с AI-тренером и черновик его программы
+    # переживают такие потоки, их не трогаем.
+    await clear_state_keep_ai(state)
     # show_settings redraws this very message, so a "✅ Импортировано N" written
     # here would live for milliseconds — it goes in the alert instead.
     n = len(to_import)
@@ -509,7 +514,9 @@ async def import_save(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "imp:cancel")
 async def import_cancel(callback: CallbackQuery, state: FSMContext):
-    await state.clear()
+    # Отмена импорта не отменяет переписку с AI-тренером и черновик его
+    # программы — сохраняем их.
+    await clear_state_keep_ai(state)
     from handlers.settings import show_settings
     await show_settings(callback, state)
     await callback.answer("Отменено")

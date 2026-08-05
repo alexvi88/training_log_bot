@@ -176,6 +176,9 @@ async def settings_unit(callback: CallbackQuery, state: FSMContext):
     factor = config.LB_PER_KG if new_unit == "lb" else 1 / config.LB_PER_KG
     await db.scale_user_set_weights(user_id, factor)
     await db.scale_bodyweight_logs(user_id, factor)
+    # Шаг прогрессии в программах хранится в единицах пользователя, как и веса
+    # подходов, — без пересчёта «+2.5 кг» после переключения читалось бы как «+2.5 lb».
+    await db.scale_progression_steps(user_id, factor)
     await db.update_user(user_id, unit=new_unit)
     await _rescale_active_workout_weight_cache(state, factor)
     # Badge thresholds are in kilograms and the stored weights just changed unit,

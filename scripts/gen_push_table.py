@@ -24,6 +24,7 @@ END_MARKER = "<!-- PUSH_TABLE_END -->"
 # Trigger descriptions per category — kept here (not in push_texts.py) since
 # they describe engagement.py's orchestration logic, not the copy itself.
 TRIGGERS = {
+    push_texts.STREAK_MILESTONE: "Пн, `week_streak` ∈ {4, 8, 12, 26, 52} — ровно на рубеже",
     push_texts.STREAK_AT_RISK: "Сб/вс, `week_streak >= 2`, тренировок на этой неделе — 0",
     push_texts.SKIP_3: "Ровно 3 дня с последней тренировки",
     push_texts.SKIP_5: "Ровно 5 дней с последней тренировки",
@@ -31,6 +32,7 @@ TRIGGERS = {
     push_texts.SKIP_10: "Ровно 10 дней с последней тренировки",
     push_texts.SKIP_14: "Ровно 14 дней с последней тренировки",
     push_texts.WIN_BACK: "`days_since_last >= 21`, затем каждые 10 дней (21, 31, 41…)",
+    push_texts.RANK_NEAR: "Пт: до следующего звания ≤ 3 тренировок, тоннаж и частота уже закрыты",
     push_texts.PLATEAU: "Вс: тот же рабочий вес 3 тренировки подряд, каждый раз 12+ повторов",
     push_texts.WEEKLY_DIGEST: "Вс, нет активного плато, суммарный тоннаж за 30 дней > 0",
     push_texts.NEWBIE_NUDGE: (
@@ -42,6 +44,7 @@ TRIGGERS = {
 # categories share one priority tier — engagement.py resolves them via a
 # single "which exact day is it" check, not five separate competing checks.
 ORDER = [
+    push_texts.STREAK_MILESTONE,
     push_texts.STREAK_AT_RISK,
     push_texts.SKIP_3,
     push_texts.SKIP_5,
@@ -49,33 +52,38 @@ ORDER = [
     push_texts.SKIP_10,
     push_texts.SKIP_14,
     push_texts.WIN_BACK,
+    push_texts.RANK_NEAR,
     push_texts.PLATEAU,
     push_texts.WEEKLY_DIGEST,
     push_texts.NEWBIE_NUDGE,
 ]
 
 RANK_BY_CATEGORY = {
-    push_texts.STREAK_AT_RISK: "1",
-    push_texts.SKIP_3: "2",
-    push_texts.SKIP_5: "2",
-    push_texts.SKIP_7: "2",
-    push_texts.SKIP_10: "2",
-    push_texts.SKIP_14: "2",
-    push_texts.WIN_BACK: "3",
-    push_texts.PLATEAU: "4",
-    push_texts.WEEKLY_DIGEST: "5",
+    push_texts.STREAK_MILESTONE: "1",
+    push_texts.STREAK_AT_RISK: "2",
+    push_texts.SKIP_3: "3",
+    push_texts.SKIP_5: "3",
+    push_texts.SKIP_7: "3",
+    push_texts.SKIP_10: "3",
+    push_texts.SKIP_14: "3",
+    push_texts.WIN_BACK: "4",
+    push_texts.RANK_NEAR: "5",
+    push_texts.PLATEAU: "6",
+    push_texts.WEEKLY_DIGEST: "7",
     # Not part of the priority chain above — a separate walk pool over users
-    # with zero finished workouts, so it never competes with ranks 1-6.
+    # with zero finished workouts, so it never competes with ranks 1-7.
     push_texts.NEWBIE_NUDGE: "—",
 }
 
 # Stand-ins for {placeholder} templates so the table shows readable examples.
 PLACEHOLDER_EXAMPLES = {
-    "{weeks}": "6",
+    "{weeks}": "6 недель",
     "{days_left}": "последний день",
     "{exercise}": "Жим лёжа",
     "{tonnage}": "4.2 т",
     "{week_count}": "2 тренировки",
+    "{rank}": "🔩 Работяга",
+    "{missing}": "2 тренировки",
 }
 
 

@@ -49,7 +49,12 @@ class _CallbackAsMessage:
 
 @router.message()
 async def unhandled_text(message: Message) -> None:
-    await message.reply("Не понял 🤔 Нажми /start, чтобы вернуться в меню.")
+    # Сюда чаще всего прилетает вопрос тренеру, напечатанный из главного меню
+    # («составь мне программу»), — подсказываем дорогу к AI-тренеру, а не только
+    # /start. Без детекции по словам: любой непонятый текст получает один ответ.
+    await message.reply(
+        "Не понял 🤔 Вопрос тренеру — жми «AI-тренер» на клавиатуре снизу. Меню — /start"
+    )
 
 
 @router.callback_query()
