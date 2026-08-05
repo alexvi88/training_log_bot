@@ -1,4 +1,6 @@
-"""Admin-only: browse other users' workout history (read-only)."""
+"""Admin-only, read-only: чужая история тренировок, пуши, диалоги с AI-тренером
+и сырая лента действий (/activity — что человек вводил и куда нажимал, см.
+activity_log.py)."""
 
 import asyncio
 import datetime as dt
@@ -9,6 +11,7 @@ from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
+import activity_log
 import config
 import db
 import formatting
@@ -206,7 +209,7 @@ async def _show_ai_users_list(target: Message | CallbackQuery, state: FSMContext
     users = await db.list_users_with_ai_message_counts(limit=USERS_PAGE_SIZE, offset=page * USERS_PAGE_SIZE)
     has_next = (page + 1) * USERS_PAGE_SIZE < total
     kb = keyboards.admin_ai_users_keyboard(users, page, has_next)
-    text = "🤖 Диалоги с AI-тренером — выберите пользователя:" if users else "Пользователей пока нет."
+    text = "🤖 Диалоги с AI-тренером — выбери пользователя:" if users else "Пользователей пока нет."
     if isinstance(target, CallbackQuery):
         await ui.safe_edit(target, text, reply_markup=kb)
     else:
@@ -270,6 +273,107 @@ async def admin_ai_dialogs_show(callback: CallbackQuery, state: FSMContext):
         is_last = i == len(chunks) - 1
         markup = keyboards.admin_ai_dialogs_back_keyboard(page) if is_last else None
         await callback.message.answer(chunk, reply_markup=markup)
+    await callback.answer()
+
+
+ACTIVITY_PAGE_SIZE = 25
+# Экран — одно сообщение (4096 символов у Telegram), а в базе строка может быть
+# длиной до activity_log.MAX_CONTENT_LEN. Показываем начало: для «что человек
+# ввёл» его хватает, а целиком длинная простыня всё равно вытеснила бы с экрана
+# соседние события — то есть контекст, ради которого лента и открыта.
+ACTIVITY_LINE_LIMIT = 120
+
+
+def _activity_line(row) -> str:
+    at = dt.datetime.fromisoformat(row["created_at"])
+    content = row["content"]
+    if len(content) > ACTIVITY_LINE_LIMIT:
+        content = content[: ACTIVITY_LINE_LIMIT - 1] + "…"
+    content = content.replace("\n", " ⏎ ")
+    marker = "👉" if row["kind"] == activity_log.KIND_CALLBACK else "💬"
+    return f"{at.strftime('%d.%m %H:%M')} {marker} {content}"
+
+
+async def _show_activity_users(target: Message | CallbackQuery, state: FSMContext, page: int):
+    await state.set_state(AdminFlow.browsing_activity_users)
+    await state.update_data(admin_activity_users_page=page)
+    total = await db.count_users()
+    users = await db.list_users_with_event_counts(limit=USERS_PAGE_SIZE, offset=page * USERS_PAGE_SIZE)
+    has_next = (page + 1) * USERS_PAGE_SIZE < total
+    kb = keyboards.admin_activity_users_keyboard(users, page, has_next)
+    text = "👀 Что делают пользователи — выбери, чью ленту открыть:" if users else "Пользователей пока нет."
+    if isinstance(target, CallbackQuery):
+        await ui.safe_edit(target, text, reply_markup=kb)
+    else:
+        await target.answer(text, reply_markup=kb)
+
+
+async def _show_activity_feed(callback: CallbackQuery, state: FSMContext, target_user_id: int, page: int):
+    await state.set_state(AdminFlow.browsing_activity)
+    await state.update_data(admin_activity_user=target_user_id, admin_activity_page=page)
+    user = await db.get_user(target_user_id)
+    total = await db.count_user_events(target_user_id)
+    rows = await db.list_user_events(
+        target_user_id, limit=ACTIVITY_PAGE_SIZE, offset=page * ACTIVITY_PAGE_SIZE
+    )
+    has_next = (page + 1) * ACTIVITY_PAGE_SIZE < total
+
+    who = f"@{user['username']}" if user and user["username"] else str(target_user_id)
+    if rows:
+        header = f"👀 {who} — {total} действий, свежие сверху:"
+        text = header + "\n\n" + "\n".join(_activity_line(row) for row in rows)
+    else:
+        text = f"👀 {who} — действий пока нет (лог хранится {config.ACTIVITY_RETENTION_DAYS} дн.)."
+
+    kb = keyboards.admin_activity_feed_keyboard(target_user_id, page, has_next)
+    await ui.safe_edit(callback, text, reply_markup=kb)
+
+
+@router.message(Command("activity"))
+async def cmd_activity(message: Message, state: FSMContext):
+    if not _is_admin(message.from_user.id):
+        return
+    await state.clear()
+    await _show_activity_users(message, state, page=0)
+
+
+@router.callback_query(F.data.startswith("admin:acp:"))
+async def admin_activity_users_page(callback: CallbackQuery, state: FSMContext):
+    if not _is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    page = int(callback.data.split(":")[2])
+    await _show_activity_users(callback, state, page)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin:acb")
+async def admin_activity_back(callback: CallbackQuery, state: FSMContext):
+    if not _is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    data = await state.get_data()
+    await _show_activity_users(callback, state, data.get("admin_activity_users_page", 0))
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin:acu:"))
+async def admin_activity_pick_user(callback: CallbackQuery, state: FSMContext):
+    if not _is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    target_user_id = int(callback.data.split(":")[2])
+    await _show_activity_feed(callback, state, target_user_id, page=0)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin:acf:"))
+async def admin_activity_feed_page(callback: CallbackQuery, state: FSMContext):
+    if not _is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    _, _, target_raw, page_raw = callback.data.split(":")
+    await _show_activity_feed(callback, state, int(target_raw), int(page_raw))
     await callback.answer()
 
 

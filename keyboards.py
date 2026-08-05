@@ -1047,6 +1047,41 @@ def admin_ai_dialogs_back_keyboard(page: int) -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
+def admin_activity_users_keyboard(users, page: int, has_next: bool) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    for u in users:
+        name = f"@{u['username']}" if u["username"] else str(u["telegram_id"])
+        b.button(text=f"{name} ({u['event_count']})", callback_data=f"admin:acu:{u['telegram_id']}")
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"admin:acp:{page - 1}"))
+    if has_next:
+        nav.append(InlineKeyboardButton(text="➡️", callback_data=f"admin:acp:{page + 1}"))
+    b.adjust(1)
+    if nav:
+        b.row(*nav)
+    b.row(InlineKeyboardButton(text="🏠 Меню", callback_data="admin:menu"))
+    return b.as_markup()
+
+
+def admin_activity_feed_keyboard(target_user_id: int, page: int, has_next: bool) -> InlineKeyboardMarkup:
+    """Лента одного пользователя: страницы — вглубь истории, «⬅️» — назад к списку.
+
+    Стрелки читаются как время, а не как номер страницы: следующая страница —
+    это события постарше, поэтому «⬅️ раньше» слева, «позже ➡️» справа.
+    """
+    b = InlineKeyboardBuilder()
+    nav = []
+    if has_next:
+        nav.append(InlineKeyboardButton(text="⬅️ раньше", callback_data=f"admin:acf:{target_user_id}:{page + 1}"))
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="позже ➡️", callback_data=f"admin:acf:{target_user_id}:{page - 1}"))
+    if nav:
+        b.row(*nav)
+    b.row(InlineKeyboardButton(text="⬅️ К пользователям", callback_data="admin:acb"))
+    return b.as_markup()
+
+
 def admin_pushes_keyboard(page: int, has_next: bool) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     nav = []
@@ -1401,10 +1436,15 @@ def feedback_keyboard() -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
-def push_cta_keyboard() -> InlineKeyboardMarkup:
-    """Attached to daily-rotation push notifications: routes straight into starting a workout."""
+def push_cta_keyboard(text: str = "▶ Начать тренировку") -> InlineKeyboardMarkup:
+    """Attached to daily-rotation push notifications: routes straight into starting a workout.
+
+    `text` меняется по категории пуша (см. engagement.PUSH_CTA_BY_CATEGORY):
+    кнопка — последняя строка пуша, и «▶ Начать тренировку» под «серия на кону»
+    звучит как реклама, а «▶ Спасти серию» — как продолжение реплики тренера.
+    """
     b = InlineKeyboardBuilder()
-    b.button(text="▶ Начать тренировку", callback_data="menu:start_workout")
+    b.button(text=text, callback_data="menu:start_workout")
     return b.as_markup()
 
 

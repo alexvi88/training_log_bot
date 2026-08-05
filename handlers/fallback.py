@@ -71,7 +71,7 @@ async def unhandled_callback(callback: CallbackQuery, state: FSMContext) -> None
     # Данные кнопки в лог: это единственный след, по которому потом видно, какой
     # экран остался без обработчика (сам callback в dp.errors не попадает).
     logger.info("Unhandled callback %s from user %s", callback.data, callback.from_user.id)
-    await callback.answer("Этот экран уже неактуален — открыл меню.")
+    await callback.answer("Эта кнопка уже отработала своё — открыл меню.")
     if callback.message is None:  # pragma: no cover — Telegram всегда даёт message
         return
     await cmd_start(_CallbackAsMessage(callback), state)

@@ -75,7 +75,7 @@ MAX_VOICE_BYTES = 20 * 1024 * 1024
 MAX_VOICE_SECONDS = 300
 
 INTRO_TEXT = (
-    "🤖 <b>ПРИВЕТ, АТЛЕТ. ТРЕНЕР НА СВЯЗИ.</b>\n\n"
+    "🤖 <b>ПРИВЕТ АТЛЕТ, ТРЕНЕР НА СВЯЗИ.</b>\n\n"
     "У меня есть доступ к истории твоих тренировок и многолетний тренерский опыт. "
     "Спрашивай что угодно:\n"
     "• «Как прогресс в жиме лёжа? Почему не растёт присед?»\n"
@@ -341,7 +341,7 @@ async def ai_keyboard(
 async def menu_ai(callback: CallbackQuery, state: FSMContext):
     if not ai_trainer.is_configured():
         await callback.answer(
-            "AI-тренер не настроен: администратору нужно задать XAI_API_KEY.",
+            "AI-тренер пока не подключён — это к админу бота.",
             show_alert=True,
         )
         return
@@ -417,7 +417,7 @@ async def _start_ai_scenario(
     """
     if not ai_trainer.is_configured():
         await callback.answer(
-            "AI-тренер не настроен: администратору нужно задать XAI_API_KEY.",
+            "AI-тренер пока не подключён — это к админу бота.",
             show_alert=True,
         )
         return

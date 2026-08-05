@@ -14,6 +14,7 @@ from aiogram.types import (
     Message,
 )
 
+import activity_log
 import admin_tasks
 import chat_bottom
 import config
@@ -81,7 +82,7 @@ class IgnoreStaleCallbackMiddleware(BaseMiddleware):
             raise
 
 
-_GENERIC_ERROR_TEXT = "⚠️ Что-то пошло не так. Нажми /start, чтобы вернуться в меню."
+_GENERIC_ERROR_TEXT = "⚠️ Что-то пошло не так — бывает даже у чемпионов. Жми /start, вернёмся в меню."
 
 
 def _error_chat_id(update) -> int | None:
@@ -239,6 +240,7 @@ async def _setup_commands(bot: Bot) -> None:
                 BotCommand(command="check_users", description="Список пользователей (админ)"),
                 BotCommand(command="ai_dialogs", description="Диалоги с AI-тренером (админ)"),
                 BotCommand(command="pushes", description="Лог отправленных пушей (админ)"),
+                BotCommand(command="activity", description="Что делают пользователи (админ)"),
                 BotCommand(command="broadcast", description="Рассылка всем пользователям (админ)"),
             ],
             scope=BotCommandScopeChat(chat_id=config.ADMIN_ID),
@@ -263,6 +265,10 @@ async def main() -> None:
     dp.errors.register(on_unhandled_error)
     dp.message.outer_middleware(chat_bottom.TrackIncomingMessages())
     dp.callback_query.outer_middleware(IgnoreStaleCallbackMiddleware())
+    # Лог действий — тоже outer: в него должно попадать и то, чего не поймал ни
+    # один хендлер (см. activity_log).
+    dp.message.outer_middleware(activity_log.LogIncomingMessages())
+    dp.callback_query.outer_middleware(activity_log.LogCallbackQueries())
     refresh_menu_middleware = RefreshPersistentMenuMiddleware()
     dp.message.outer_middleware(refresh_menu_middleware)
     dp.callback_query.outer_middleware(refresh_menu_middleware)
