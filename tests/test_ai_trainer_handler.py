@@ -1148,3 +1148,33 @@ async def test_ai_build_program_asks_the_trainer_to_lead_with_questions(fresh_db
     seed has to ask for the questions explicitly, or the intro would lie."""
     assert "вопрос" in ai_trainer.BUILD_PROGRAM_SEED.lower()
     assert "вопрос" in ai_trainer.BUILD_PROGRAM_INTRO.lower()
+
+
+async def test_ai_build_program_refuses_before_burning_the_screen(fresh_db, user_id, monkeypatch):
+    """Лимит вопросов кончился — кнопка не должна менять экран «🗂 Программы»
+    на интро «сейчас задам пару вопросов», под которым тут же приедет отказ.
+
+    _handle_question проверяет лимит и сам, но к тому моменту человек уже
+    потерял экран, с которого пришёл, и получил на его месте обещание, которое
+    сразу же не сбылось.
+    """
+    import config
+
+    monkeypatch.setattr(ai_trainer.ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(
+        ai_trainer.ai_trainer, "ask", AsyncMock(side_effect=AssertionError("модель не должна дёргаться"))
+    )
+    for _ in range(config.AI_QUESTION_DAILY_LIMIT):
+        await fresh_db.increment_ai_question_count(user_id)
+
+    state = await _make_state(user_id)
+    callback = _make_buildprog_callback(user_id)
+
+    await ai_trainer.ai_build_program(callback, state)
+
+    callback.message.answer.assert_not_awaited()
+    assert callback.answer.await_args.kwargs.get("show_alert") is True
+    assert "лимит" in callback.answer.await_args.args[0].lower()
+    # И экран не должен утащить человека в чат с тренером, куда он не попал.
+    assert await state.get_state() is None
+    assert user_id not in ai_trainer._busy

@@ -2051,6 +2051,34 @@ def _clean_program_name(raw: Any, fallback: str) -> tuple[str, bool]:
     return name[:PROGRAM_NAME_LIMIT], len(name) > PROGRAM_NAME_LIMIT
 
 
+def _unique_day_name(name: str, taken: set[str]) -> str:
+    """Имя дня, не повторяющее уже занятые в этом же предложении.
+
+    Дни программы — это кнопки на одном экране (keyboards.program_days_keyboard),
+    и два «Дня 1» подряд там неразличимы: какой из них какой, видно только
+    открыв оба. Модель их иногда и присылает — забыв переименовать
+    сгенерированные по шаблону дни. Разводим суффиксом, а не отбрасыванием:
+    состав у них разный, и терять день из-за имени было бы куда хуже.
+
+    Занятое имя пополняется тем, что реально ушло в программу, поэтому «День 1,
+    День 1, День 1 (2)» не схлопнется в два одинаковых «День 1 (2)».
+    """
+    key = name.strip().lower()
+    if key not in taken:
+        taken.add(key)
+        return name
+    for suffix in range(2, PROGRAM_MAX_DAYS + 2):
+        # Суффикс не должен вытолкнуть имя за общий потолок длины: place под
+        # него отрезаем от самого имени, как и _clean_program_name.
+        marker = f" ({suffix})"
+        candidate = name[: PROGRAM_NAME_LIMIT - len(marker)].rstrip() + marker
+        if candidate.strip().lower() not in taken:
+            taken.add(candidate.strip().lower())
+            return candidate
+    taken.add(key)
+    return name
+
+
 def _clean_int(raw: Any, low: int, high: int) -> Optional[int]:
     """Целое из того, что прислала модель, зажатое в границы; None на мусоре."""
     try:
@@ -2769,6 +2797,7 @@ async def _propose_program(
     # только 2 (см. A10). Собираем их отдельно, чтобы явно сказать модели, что
     # именно пропало и почему.
     dropped_days: list[dict[str, Any]] = []
+    seen_day_names: set[str] = set()
     for index, raw_day in enumerate(raw_days[:PROGRAM_MAX_DAYS], start=1):
         if not isinstance(raw_day, dict):
             continue
@@ -2776,6 +2805,7 @@ async def _propose_program(
         if not isinstance(raw_exercises, list):
             continue
         day_name, day_name_truncated = _clean_program_name(raw_day.get("name"), f"День {index}")
+        day_name = _unique_day_name(day_name, seen_day_names)
 
         items: list[dict[str, Any]] = []
         unresolved: list[str] = []
@@ -2803,6 +2833,7 @@ async def _propose_program(
                 clamped.append(f"{display_name}: {', '.join(item['clamped'])}")
             items.append({**item, "name": display_name, "source": source, "target": target})
 
+        dropped = False
         if items:
             days.append({"name": day_name, "items": items})
         elif raw_exercises:
@@ -2810,6 +2841,7 @@ async def _propose_program(
             # всё оказалось мусором в _clean_program_item) — весь день исчезнет
             # из превью, и это надо явно назвать, а не молча потерять.
             dropped_days.append({"day": day_name, "unresolved": unresolved})
+            dropped = True
         report.append(
             {
                 "day": day_name,
@@ -2821,6 +2853,7 @@ async def _propose_program(
                 # они называются прямо, чтобы модель могла поправиться сама.
                 **({"clamped": clamped} if clamped else {}),
                 **({"name_truncated": True} if day_name_truncated else {}),
+                **({"dropped": True} if dropped else {}),
             }
         )
 
@@ -2903,10 +2936,17 @@ async def _propose_program(
             notes.append(
                 f"«{entry['day']}»: упражнений было больше {PROGRAM_MAX_EXERCISES_PER_DAY} — лишние не вошли."
             )
-        if entry.get("unresolved"):
+        # День, пропавший целиком, назван одной строкой ниже — вместе с тем, что
+        # в нём не нашлось. Раньше о таком дне было две заметки подряд («не
+        # нашёл в боте — …» и «целиком пропал»), и блок читался как повтор.
+        if entry.get("unresolved") and not entry.get("dropped"):
             notes.append(f"«{entry['day']}»: не нашёл в боте — {', '.join(entry['unresolved'])}.")
     for dd in dropped_days:
-        notes.append(f"День «{dd['day']}» целиком пропал — ни одно упражнение из него не нашлось.")
+        lost = ", ".join(dd["unresolved"])
+        notes.append(
+            f"День «{dd['day']}» не вошёл — не нашёл в боте: {lost}." if lost
+            else f"День «{dd['day']}» не вошёл — ни одно упражнение из него не нашлось."
+        )
 
     return payload, {"name": program_name, "days": days, "replaces": replaces, "notes": notes}
 
