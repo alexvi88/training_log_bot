@@ -31,7 +31,7 @@ async def test_rank_is_capped_by_the_weaker_axis():
     frequent_but_light = analytics.rank_for(8, 6_000, 3.0)
 
     assert heavy_but_rare.name == "Станок"
-    assert frequent_but_light.name == "Салага"  # частота высокая, но объёма нет
+    assert frequent_but_light.name == "Новобранец"  # частота высокая, но объёма нет
 
 
 async def test_a_break_costs_one_rung_not_the_whole_ladder():
@@ -70,7 +70,38 @@ async def test_gap_names_the_single_worst_axis():
     gap = analytics.rank_gap(rank, 60, 80_000, 2.0)
 
     assert gap is not None
-    assert gap.count("ещё") + gap.count("держать") == 1
+    assert gap.axis in {"workouts", "tonnage", "frequency"}
+    phrase = formatting.format_rank_gap(gap)
+    assert phrase.count("ещё") + phrase.count("держать") == 1
+
+
+async def test_gap_picks_the_axis_that_lags_most_in_share_not_in_units():
+    """40 тренировок из 100 — половина пути; 5 тонн из 200 — почти ничего.
+    Отстающей считается доля от порога, иначе большие числа всегда выигрывают."""
+    rank = analytics.rank_for(60, 80_000, 2.0)  # Станок, дальше 100 трен. · 200 т
+    gap = analytics.rank_gap(rank, 60, 5_000, 2.0)
+
+    assert gap is not None and gap.axis == "tonnage"
+
+
+async def test_gap_speaks_full_words_not_system_abbreviations():
+    """Пуш говорит «ещё 2 тренировки» — экран не должен говорить «2 трен.»."""
+    assert formatting.format_rank_gap(analytics.RankGap("workouts", 2)) == "ещё 2 тренировки"
+    assert formatting.format_rank_gap(analytics.RankGap("workouts", 12)) == "ещё 12 тренировок"
+    assert formatting.format_rank_gap(analytics.RankGap("workouts", 1)) == "ещё 1 тренировка"
+    assert formatting.format_rank_gap(analytics.RankGap("tonnage", 12_000)) == "ещё 12 т"
+    assert formatting.format_rank_gap(analytics.RankGap("tonnage", 12_500)) == "ещё 12.5 т"
+    # Остаток меньше центнера не округляем до «0.0 т» — это читалось бы как «всё».
+    assert formatting.format_rank_gap(analytics.RankGap("tonnage", 40)) == "ещё 40 кг"
+    assert "в неделю" in formatting.format_rank_gap(analytics.RankGap("frequency", 1.5))
+
+
+async def test_ranks_do_not_mock_the_lower_rungs():
+    """Звание висит на сводке каждый день — насмешка в нём работала бы постоянно.
+    Джебы разрешены только за пропуски (TONE_OF_VOICE)."""
+    banned = {"салага", "слабак", "лох", "дно", "нытик", "тряпка", "чайник", "задрот"}
+    for rank in analytics.RANKS:
+        assert rank.name.lower() not in banned
 
 
 async def test_top_rank_has_no_gap():
@@ -81,10 +112,26 @@ async def test_top_rank_has_no_gap():
 
 async def test_rank_lines_render():
     rank = analytics.rank_for(60, 80_000, 2.0)
-    line = formatting.format_rank_line(rank, "ещё 120.0 т")
-    assert "Станок" in line and "до следующего" in line
+    line = formatting.format_rank_line(rank, analytics.RankGap("tonnage", 120_000))
+    assert "Станок" in line and "до следующего" in line and "ещё 120 т" in line
     assert "до следующего" not in formatting.format_rank_line(rank)
     assert "Новое звание" in formatting.format_rank_promotion(rank)
+
+
+async def test_ladder_shows_where_you_stand_next_to_the_thresholds():
+    """Пороги без своих чисел показывают, куда идти, и не показывают, откуда."""
+    rank = analytics.rank_for(60, 80_000, 2.0)
+    text = formatting.build_rank_ladder(
+        analytics.RANKS, rank,
+        analytics.rank_gap(rank, 60, 80_000, 2.0),
+        total_workouts=60, tonnage_kg=80_000, per_week=2.0,
+    )
+
+    assert "Сейчас у тебя" in text
+    assert "60 трен." in text and "80.0 т" in text and "2.0 трен./нед" in text
+    assert "ты здесь" in text
+    # Без своих чисел строка просто не появляется — экран остаётся валидным.
+    assert "Сейчас у тебя" not in formatting.build_rank_ladder(analytics.RANKS, rank)
 
 
 # ---------- объявление на карточке ----------

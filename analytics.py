@@ -147,9 +147,14 @@ class Rank:
 # Линейная лестница: звание растёт и от накопленного (тренировки, тоннаж), и от
 # того, ходишь ли ты сейчас. Обе оси обязательны — тоннаж без регулярности это
 # прошлые заслуги, а регулярность без объёма это разминка.
+#
+# Названия описывают этап, а не место в иерархии: «Новобранец» — тот, кто только
+# начал, «Работяга» и «Станок» — про труд. Ни одно не подкалывает того, кто стоит
+# ниже: тренер из подвала подкалывает только за пропуски (TONE_OF_VOICE), а
+# звание видно на сводке каждый день — насмешка в нём работала бы постоянно.
 RANKS: list[Rank] = [
     Rank(0, "🚪", "Новичок", 0, 0, 0.0),
-    Rank(1, "🧱", "Салага", 5, 5_000, 0.5),
+    Rank(1, "🧱", "Новобранец", 5, 5_000, 0.5),
     Rank(2, "🔩", "Работяга", 20, 25_000, 1.0),
     Rank(3, "⚙️", "Станок", 50, 75_000, 1.5),
     Rank(4, "🪨", "Тяжеловес", 100, 200_000, 2.0),
@@ -201,30 +206,51 @@ def next_rank(current: Rank) -> Optional[Rank]:
     return RANKS[current.level + 1] if current.level + 1 < len(RANKS) else None
 
 
-def rank_gap(current: Rank, total_workouts: int, tonnage_kg: float, per_week: float) -> Optional[str]:
-    """Чего конкретно не хватает до следующего звания — самая отстающая ось.
+@dataclass(frozen=True)
+class RankGap:
+    """Чего не хватает до следующего звания: ось и её недостача.
+
+    Числа, а не готовая строка: фразу собирает formatting — «ещё 12 тренировок»
+    требует русского согласования (plural_ru), которое живёт там же, где весь
+    остальной текст.
+
+    `axis` — "workouts" (не хватает тренировок, штук), "tonnage" (не хватает
+    килограммов) или "frequency" (нужный темп, трен./нед — не недостача, а
+    планка: её держат, а не добирают).
+    """
+    axis: str
+    value: float
+
+
+def rank_gap(
+    current: Rank, total_workouts: int, tonnage_kg: float, per_week: float
+) -> Optional[RankGap]:
+    """Самая отстающая ось до следующего звания.
 
     Одна причина, а не список: «не хватает 12 тренировок» — это цель, а три
-    строки с недостачами по всем осям читаются как отказ.
+    строки с недостачами по всем осям читаются как отказ. «Самая отстающая» —
+    по доле от порога, чтобы 40 тренировок из 50 не выигрывали у 5 тонн из 75.
     """
     nxt = next_rank(current)
     if nxt is None:
         return None
-    gaps: list[tuple[float, str]] = []
+    gaps: list[tuple[float, RankGap]] = []
     if total_workouts < nxt.min_workouts:
         missing = nxt.min_workouts - total_workouts
-        gaps.append((missing / max(nxt.min_workouts, 1), f"ещё {missing} трен."))
+        gaps.append((missing / max(nxt.min_workouts, 1), RankGap("workouts", missing)))
     if tonnage_kg < nxt.min_tonnage_kg:
-        missing_t = (nxt.min_tonnage_kg - tonnage_kg) / 1000
-        gaps.append((missing_t * 1000 / max(nxt.min_tonnage_kg, 1), f"ещё {missing_t:.1f} т"))
+        missing_kg = nxt.min_tonnage_kg - tonnage_kg
+        gaps.append((missing_kg / max(nxt.min_tonnage_kg, 1), RankGap("tonnage", missing_kg)))
     if per_week < nxt.min_per_week:
         gaps.append((
             (nxt.min_per_week - per_week) / max(nxt.min_per_week, 0.1),
-            f"держать {nxt.min_per_week:g} трен./нед",
+            RankGap("frequency", nxt.min_per_week),
         ))
     if not gaps:
         return None
-    return max(gaps)[1]
+    # По ключу, а не по кортежу целиком: при равных долях сравнение уезжало на
+    # второй элемент, и ось выбиралась по алфавиту.
+    return max(gaps, key=lambda g: g[0])[1]
 
 
 @dataclass

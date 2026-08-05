@@ -1718,10 +1718,30 @@ def build_weekly_table(rows: list[WeeklyRow], unit: str = "kg"):
     return InputRichBlockTable(cells=[header, *body], is_striped=True, is_bordered=True)
 
 
-def format_rank_line(rank, gap: str | None = None) -> str:
+def format_rank_gap(gap) -> str:  # analytics.RankGap
+    """Недостача до следующего звания словами тренера, а не сокращениями системы.
+
+    «ещё 12 тренировок», а не «ещё 12 трен.»: то же самое расстояние пуш уже
+    называет полным словом (engagement._workouts_phrase), и разнобой между
+    экраном и пушем читается как два разных голоса.
+    """
+    if gap.axis == "workouts":
+        n = int(gap.value)
+        return f"ещё {n} {plural_ru(n, ('тренировка', 'тренировки', 'тренировок'))}"
+    if gap.axis == "tonnage":
+        tons = gap.value / 1000
+        # Меньше сотни килограммов — «0.0 т» выглядело бы как «уже всё»,
+        # поэтому остаток ниже центнера договариваем килограммами.
+        # Округление как у порогов рядом («200 т», не «200.0 т»): лишний ноль в
+        # строке-подсказке выглядит другой единицей измерения, а не той же осью.
+        return f"ещё {round(tons, 1):g} т" if gap.value >= 100 else f"ещё {gap.value:.0f} кг"
+    return f"держать {gap.value:g} трен. в неделю"
+
+
+def format_rank_line(rank, gap=None) -> str:  # gap: analytics.RankGap | None
     """«⚙️ Станок» плюс, если есть куда расти, чего не хватает до следующего."""
     line = f"{rank.emoji} Звание: <b>{escape(rank.name)}</b>"
-    return f"{line}  (до следующего: {gap})" if gap else line
+    return f"{line}  (до следующего: {format_rank_gap(gap)})" if gap else line
 
 
 def format_rank_promotion(rank) -> str:
@@ -1729,7 +1749,14 @@ def format_rank_promotion(rank) -> str:
     return f"🎖 <b>Новое звание: {rank.emoji} {escape(rank.name)}</b>"
 
 
-def build_rank_ladder(ranks: list, current, gap: str | None = None) -> str:
+def build_rank_ladder(
+    ranks: list,
+    current,
+    gap=None,  # analytics.RankGap | None
+    total_workouts: int | None = None,
+    tonnage_kg: float | None = None,
+    per_week: float | None = None,
+) -> str:
     """Вся лестница званий с порогами и отметкой, где человек сейчас.
 
     До этого звание нигде не объяснялось: на сводке висела плашка «РАБОТЯГА» без
@@ -1741,6 +1768,11 @@ def build_rank_ladder(ranks: list, current, gap: str | None = None) -> str:
     Правило про слабейшую ось названо прямо. Без него лестница читается как
     «набери любое из трёх», и человек с большим тоннажем и месяцем простоя
     считает, что бот ошибся, — хотя это ровно то поведение, которое задумано.
+
+    Свои три числа (`total_workouts`, `tonnage_kg`, `per_week`) — рядом с
+    порогами: без них видно, куда идти, и не видно, откуда. «Ещё 12 тренировок»
+    у следующей ступени отвечает только за одну ось, а человек в этот момент
+    хочет знать, какая из трёх его держит.
     """
     lines = [
         "🎖 <b>ЗВАНИЯ</b>",
@@ -1753,6 +1785,17 @@ def build_rank_ladder(ranks: list, current, gap: str | None = None) -> str:
         "Перерыв стоит одной ступени, не больше: вернёшься к темпу — вернётся и звание.",
         "",
     ]
+    if None not in (total_workouts, tonnage_kg, per_week):
+        lines.append(
+            "📊 Сейчас у тебя: <b>"
+            + " · ".join((
+                f"{total_workouts} трен.",
+                f"{tonnage_kg / 1000:.1f} т",
+                f"{per_week:.1f} трен./нед",
+            ))
+            + "</b>"
+        )
+        lines.append("")
     for rank in ranks:
         thresholds = "с самого начала" if rank.level == 0 else " · ".join((
             f"{rank.min_workouts} трен.",
@@ -1763,7 +1806,7 @@ def build_rank_ladder(ranks: list, current, gap: str | None = None) -> str:
         if rank.level == current.level:
             row += "  ← <b>ты здесь</b>"
         elif rank.level == current.level + 1 and gap:
-            row += f"  ← {gap}"
+            row += f"  ← {format_rank_gap(gap)}"
         lines.append(row)
     return "\n".join(lines)
 
@@ -1778,7 +1821,7 @@ def build_hall_of_fame(
     unit: str = "kg",
     max_chars: int | None = None,
     rank=None,  # analytics.Rank | None
-    rank_gap: str | None = None,
+    rank_gap=None,  # analytics.RankGap | None
 ) -> str:
     """Lifetime totals plus the user's best lifts, shown above the badge grid
     on the '🏅 Достижения' screen — no heading of its own."""

@@ -1093,13 +1093,15 @@ def test_the_ladder_marks_where_you_are_and_what_is_next():
     отсутствующей."""
     current = analytics.RANKS[2]
 
-    text = formatting.build_rank_ladder(analytics.RANKS, current, "ещё 12 трен.")
+    text = formatting.build_rank_ladder(
+        analytics.RANKS, current, analytics.RankGap("workouts", 12)
+    )
 
     assert "ты здесь" in text
     # Отметка стоит у текущего звания, а подсказка — у следующего, и ровно по одной.
     marked = [line for line in text.split("\n") if "ты здесь" in line]
     assert len(marked) == 1 and current.name in marked[0]
-    hinted = [line for line in text.split("\n") if "ещё 12 трен." in line]
+    hinted = [line for line in text.split("\n") if "ещё 12 тренировок" in line]
     assert len(hinted) == 1 and analytics.RANKS[3].name in hinted[0]
 
 
