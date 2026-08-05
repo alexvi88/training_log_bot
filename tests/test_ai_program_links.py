@@ -152,6 +152,22 @@ async def test_action_is_reachable_through_the_tool_dispatcher(fresh_db, user_id
     ]
 
 
+async def test_logging_bodyweight_offers_a_shortcut_to_its_diary(fresh_db, user_id):
+    """Запись веса не спрашивает подтверждения (она уже сделана) — но так же,
+    как удаление/слияние/архивация, отдаётся наружу колбэком, а не молча
+    возвращается только в payload: иначе кнопке под ответом не на чем висеть."""
+    seen: list[dict] = []
+
+    async def collect(action):
+        seen.append(action)
+
+    await ai_trainer.execute_tool(
+        user_id, "log_bodyweight", {"weight": 84.4}, on_action=collect
+    )
+
+    assert seen == [{"label": "⚖️ Дневник веса", "callback": "menu:bodyweight"}]
+
+
 # ---------- экраны подтверждения для необратимого ----------
 
 

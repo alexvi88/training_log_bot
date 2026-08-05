@@ -185,15 +185,19 @@ async def test_exercise_tools_do_not_touch_catalog_templates(fresh_db, user_id):
 
 
 async def test_log_bodyweight_writes_it_straight_away(fresh_db, user_id):
-    payload = await ai_trainer._log_bodyweight(user_id, {"weight": 78.4})
+    payload, action = await ai_trainer._log_bodyweight(user_id, {"weight": 78.4})
 
     assert payload["ok"] is True
     assert (await dbmod.get_latest_bodyweight(user_id))["weight"] == 78.4
+    # Запись уже сделана — кнопка ведёт прямо в дневник веса, не спрашивая
+    # подтверждения (в отличие от действий вроде удаления программы).
+    assert action == {"label": "⚖️ Дневник веса", "callback": "menu:bodyweight"}
 
 
 async def test_log_bodyweight_rejects_nonsense(fresh_db, user_id):
-    payload = await ai_trainer._log_bodyweight(user_id, {"weight": 4})
+    payload, action = await ai_trainer._log_bodyweight(user_id, {"weight": 4})
     assert "error" in payload
+    assert action is None
     assert await dbmod.get_latest_bodyweight(user_id) is None
 
 

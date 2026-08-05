@@ -1650,12 +1650,17 @@ StatusCallback = Optional[Callable[[str], Awaitable[None]]]
 # черновик в FSM и вешает под ответ кнопку, а пишет в БД уже тап пользователя.
 ProgramCallback = Optional[Callable[[dict[str, Any]], Awaitable[None]]]
 
-# Опциональный колбэк предложенного действия — удалить программу, объединить
-# две, поделиться, заархивировать упражнение. Всё, что необратимо или уходит
-# наружу, тренер только предлагает: колбэк получает {"label", "callback"}, а
-# вызывающая сторона (handlers/ai_trainer.py) вешает это кнопкой под ответом.
-# Обратимые правки (переименовать, сменить группу, записать вес) идут мимо
-# него — их инструмент делает сам и сразу говорит об этом модели.
+# Опциональный колбэк кнопки под ответом — {"label", "callback"}, которую
+# вызывающая сторона (handlers/ai_trainer.py) вешает под ответом. Два разных
+# повода:
+#   - предложенное, но не сделанное действие — удалить программу, объединить
+#     две, поделиться, заархивировать упражнение. Всё, что необратимо или
+#     уходит наружу, тренер только предлагает, а тап пользователя доводит до
+#     экрана подтверждения.
+#   - уже сделанное обратимое действие — переименовать, сменить группу,
+#     записать вес — инструмент делает сам и сразу говорит об этом модели;
+#     кнопка тут не спрашивает подтверждения, а просто ведёт туда, где это
+#     видно и откатывается (запись веса → её же дневник).
 ActionCallback = Optional[Callable[[dict[str, Any]], Awaitable[None]]]
 
 # Накопленный текст ответа по мере генерации — см. _completion_round.
@@ -2683,21 +2688,32 @@ async def _archive_exercise(
 # ---------- дневники: вес тела и еда ----------
 
 
-async def _log_bodyweight(user_id: int, tool_input: dict[str, Any]) -> dict[str, Any]:
+async def _log_bodyweight(
+    user_id: int, tool_input: dict[str, Any]
+) -> tuple[dict[str, Any], Optional[dict[str, Any]]]:
     """Записать вес — сразу: это одна строка дневника, которая удаляется одной
-    кнопкой, а просят её обычно между делом («кстати, 78.4 сегодня»)."""
+    кнопкой, а просят её обычно между делом («кстати, 78.4 сегодня»).
+
+    Возвращает (payload, действие-ссылка) — второе не про подтверждение (запись
+    уже сделана), а про то, что после «записал 84.4кг» человеку деться из чата с
+    тренером в свой дневник веса можно было только руками через ⚙️ Меню; кнопка
+    ведёт прямо на экран, где эту запись видно и можно откатить.
+    """
     weight = _as_number(tool_input.get("weight"))
     if weight is None or not 20 <= weight <= 400:
-        return {"error": "вес должен быть числом от 20 до 400 в единицах пользователя"}
+        return {"error": "вес должен быть числом от 20 до 400 в единицах пользователя"}, None
     # Дневник веса хранит число в единицах пользователя, как его и вводят
     # руками (см. handlers/bodyweight) — конвертировать нечего.
     user = await db.get_user(user_id)
     await db.add_bodyweight_log(user_id, weight)
-    return {
-        "ok": True,
-        "logged": {"weight": weight, "unit": user["unit"]},
-        "note": "Уже записал в дневник веса — так и скажи, без «подтверди».",
-    }
+    return (
+        {
+            "ok": True,
+            "logged": {"weight": weight, "unit": user["unit"]},
+            "note": "Уже записал в дневник веса — так и скажи, без «подтверди».",
+        },
+        {"label": "⚖️ Дневник веса", "callback": "menu:bodyweight"},
+    )
 
 
 async def _log_food(user_id: int, tool_input: dict[str, Any]) -> dict[str, Any]:
@@ -3147,7 +3163,9 @@ async def execute_tool(
     elif name == "move_exercise_to_group":
         payload = await _move_exercise(user_id, tool_input)
     elif name == "log_bodyweight":
-        payload = await _log_bodyweight(user_id, tool_input)
+        payload, action = await _log_bodyweight(user_id, tool_input)
+        if action is not None and on_action is not None:
+            await on_action(action)
     elif name == "log_food":
         payload = await _log_food(user_id, tool_input)
     elif name in _ACTION_TOOLS:
