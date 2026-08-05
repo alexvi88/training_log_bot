@@ -655,6 +655,172 @@ _PROGRAM_GONE = (
 )
 
 
+# ---------- откат того, что тренер сделал сам ----------
+
+# Сколько откатов держим живыми одновременно. Кнопки под старыми ответами
+# остаются тапабельными сколько угодно долго, но хранить их описания вечно
+# незачем: FSM едет на диск целиком при каждой записи. Восемь — это заметно
+# больше, чем успевает накопиться за один разговор, и достаточно мало, чтобы
+# не раздувать файл состояния.
+_UNDO_SLOTS = 8
+
+
+async def _register_undos(state: FSMContext, actions: list[dict]) -> list[dict]:
+    """Описания откатов — в FSM, а в кнопку — короткий ключ на них.
+
+    В callback_data 64 байта, а откату нужно то, что туда не влезает: старое
+    имя программы (до 48 символов, а в UTF-8 это под сотню байт) или целый
+    прежний срез профиля. Поэтому в кнопке едет только ключ.
+
+    Ключ намеренно не числовой («u7», не «7»): состояние FSM лежит в JSON, а
+    тот стрингифицирует ключи словарей — fsm_storage._restore_int_keys при
+    загрузке честно превращает «7» обратно в int 7, и после перезапуска бота
+    поиск по строковому ключу из callback_data не нашёл бы ничего.
+
+    Действия, у которых отката нет (они, наоборот, ждут подтверждения — см.
+    ai_trainer._ACTION_TOOLS), проходят насквозь нетронутыми.
+    """
+    data = await state.get_data()
+    store = dict(data.get("ai_undo") or {})
+    seq = int(data.get("ai_undo_seq") or 0)
+
+    out: list[dict] = []
+    for action in actions:
+        undo = action.get("undo")
+        if undo is None:
+            out.append(action)
+            continue
+        seq += 1
+        key = f"u{seq}"
+        store[key] = undo
+        out.append({"label": action["label"], "callback": f"ai:undo:{key}"})
+
+    for stale in sorted(store, key=lambda k: int(k[1:]))[:-_UNDO_SLOTS]:
+        del store[stale]
+    await state.update_data(ai_undo=store, ai_undo_seq=seq)
+    return out
+
+
+async def _apply_undo(user_id: int, undo: dict) -> Optional[str]:
+    """Вернуть как было. Возвращает текст для пользователя либо None, если не вышло.
+
+    Владельца проверяем на каждом шаге заново: между записью и тапом по кнопке
+    проходит сколько угодно времени, а id приезжает из FSM, куда его положил
+    прошлый ход — но сама строка в базе к этому моменту могла и смениться.
+    """
+    kind = undo.get("kind")
+
+    if kind == "bodyweight":
+        if await db.delete_bodyweight_log(int(undo["id"]), user_id):
+            return "Убрал запись веса"
+        return None
+
+    if kind == "food":
+        entry = await db.get_food_entry(int(undo["id"]))
+        if entry is None or entry["telegram_id"] != user_id:
+            return None
+        await db.delete_food_entry(entry["id"])
+        return "Убрал из дневника еды"
+
+    if kind == "exercise_new":
+        if await db.delete_exercise_if_unused(int(undo["id"]), user_id):
+            return f"Убрал «{undo.get('name', '')}»".replace("«»", "упражнение")
+        # По нему уже успели что-то записать — сносить нельзя, чужие данные
+        # уедут вместе с ним. Честнее сказать, чем сделать вид, что откатили.
+        return None
+
+    if kind == "exercise_name":
+        exercise = await db.get_exercise(int(undo["id"]))
+        if exercise is None or exercise["user_id"] != user_id:
+            return None
+        if not await db.update_exercise_name(exercise["id"], undo["name"]):
+            return None
+        return f"Вернул имя «{undo['name']}»"
+
+    if kind == "exercise_group":
+        exercise = await db.get_exercise(int(undo["id"]))
+        if exercise is None or exercise["user_id"] != user_id:
+            return None
+        await db.update_exercise_group(exercise["id"], int(undo["group_id"]))
+        return f"Вернул в «{undo['name']}»" if undo.get("name") else "Вернул группу"
+
+    if kind == "program_name":
+        program = await db.get_program(int(undo["id"]))
+        if program is None or program["user_id"] != user_id:
+            return None
+        if not await db.rename_program_by_id(program["id"], undo["name"]):
+            return None
+        return f"Вернул имя «{undo['name']}»"
+
+    if kind == "routine_name":
+        routine = await db.get_routine(int(undo["id"]))
+        if routine is None or routine["user_id"] != user_id:
+            return None
+        await db.rename_routine(routine["id"], undo["name"])
+        return f"Вернул имя «{undo['name']}»"
+
+    if kind == "program_new":
+        program = await db.get_program(int(undo["id"]))
+        if program is None or program["user_id"] != user_id:
+            return None
+        await db.delete_program_by_id(program["id"])
+        return f"Убрал копию «{undo.get('name') or program['name']}»"
+
+    if kind == "profile":
+        before = undo.get("before") or {}
+        fields = {k: v for k, v in before.items() if k in ai_trainer.PROFILE_FIELDS}
+        if not fields:
+            return None
+        await db.update_user(user_id, **fields)
+        names = ", ".join(ai_trainer.PROFILE_LABELS.get(k, k) for k in fields)
+        return f"Вернул как было: {names}"
+
+    return None
+
+
+@router.callback_query(F.data.startswith("ai:undo:"))
+async def ai_undo(callback: CallbackQuery, state: FSMContext):
+    """«↩️ Отменить» под ответом тренера.
+
+    Ключ забираем из хранилища ДО самого отката и сразу пишем состояние: между
+    чтением и записью нет ни одного await, реально отдающего управление циклу,
+    так что второй тап по той же кнопке не найдёт ключа и не снесёт заодно
+    запись, которую человек успел сделать после.
+    """
+    key = callback.data.split(":", 2)[2]
+    data = await state.get_data()
+    store = dict(data.get("ai_undo") or {})
+    undo = store.pop(key, None)
+    if undo is None:
+        await callback.answer(
+            "Это уже отменено — или кнопка от слишком старого ответа.", show_alert=True
+        )
+        return
+    await state.update_data(ai_undo=store)
+
+    done = await _apply_undo(callback.from_user.id, undo)
+    if done is None:
+        await callback.answer(
+            "Откатить не вышло: с тех пор это успели поменять или удалить вручную.",
+            show_alert=True,
+        )
+        return
+    await callback.answer(done)
+
+    # Кнопка отработала — убираем её, чтобы она не выглядела всё ещё живой.
+    # Остальные кнопки под этим ответом (ссылки на упражнения, другие откаты)
+    # остаются: ответ тренера никуда не делся, по нему ещё ходят.
+    actions = [a for a in (data.get("ai_actions") or []) if a.get("callback") != callback.data]
+    await state.update_data(ai_actions=actions)
+    rows = (callback.message.reply_markup.inline_keyboard if callback.message.reply_markup else [])
+    kept = [[b for b in row if b.callback_data != callback.data] for row in rows]
+    kept = [row for row in kept if row]
+    with suppress(TelegramBadRequest):
+        await callback.message.edit_reply_markup(
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=kept) if kept else None
+        )
+
+
 def _draft_id_from(callback_data: str) -> str:
     """Последний сегмент callback_data ("ai:prog:save:1a2b3c4d" → "1a2b3c4d").
 
@@ -1426,6 +1592,7 @@ async def _handle_question(
     # причине, что и черновик: вопрос вдогонку тушил бы ещё живую кнопку под
     # прошлым ответом.
     if actions:
+        actions = await _register_undos(state, actions)
         await state.update_data(ai_actions=actions)
 
     # Full, permanent log — separate from the live window above, which is capped

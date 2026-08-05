@@ -1412,3 +1412,81 @@ async def test_ai_build_program_refuses_before_burning_the_screen(fresh_db, user
     # И экран не должен утащить человека в чат с тренером, куда он не попал.
     assert await state.get_state() is None
     assert user_id not in ai_trainer._busy
+
+
+# ---------- кнопка отката под ответом тренера ----------
+
+
+def _make_undo_callback(user_id: int, data: str, buttons: list[str]):
+    from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
+
+    message = MagicMock()
+    message.reply_markup = InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text=cb, callback_data=cb)] for cb in buttons]
+    )
+    message.edit_reply_markup = AsyncMock()
+    callback = MagicMock(spec=CallbackQuery)
+    callback.from_user = SimpleNamespace(id=user_id, username="tester")
+    callback.message = message
+    callback.data = data
+    callback.answer = AsyncMock()
+    return callback
+
+
+async def test_undo_button_reverts_and_disappears(fresh_db, user_id):
+    log_id = await fresh_db.add_bodyweight_log(user_id, 78.4)
+    state = await _make_state(user_id)
+    buttons = await ai_trainer._register_undos(
+        state, [{"label": "↩️ Отменить: 78.4 kg", "undo": {"kind": "bodyweight", "id": log_id}}]
+    )
+    data = buttons[0]["callback"]
+    await state.update_data(ai_actions=buttons)
+
+    callback = _make_undo_callback(user_id, data, [data, "ai:menu"])
+    await ai_trainer.ai_undo(callback, state)
+
+    assert await fresh_db.list_bodyweight_logs(user_id) == []
+    # Отработавшая кнопка убирается, соседние остаются — по ответу ещё ходят.
+    kept = callback.message.edit_reply_markup.await_args.kwargs["reply_markup"]
+    left = [b.callback_data for row in kept.inline_keyboard for b in row]
+    assert left == ["ai:menu"]
+    assert (await state.get_data())["ai_actions"] == []
+
+
+async def test_a_second_tap_on_the_same_undo_does_nothing(fresh_db, user_id):
+    """Ключ забирается из хранилища до самого отката: иначе второй тап снёс бы
+    запись, которую человек успел сделать после первого."""
+    log_id = await fresh_db.add_bodyweight_log(user_id, 78.4)
+    state = await _make_state(user_id)
+    buttons = await ai_trainer._register_undos(
+        state, [{"label": "↩️", "undo": {"kind": "bodyweight", "id": log_id}}]
+    )
+    data = buttons[0]["callback"]
+
+    await ai_trainer.ai_undo(_make_undo_callback(user_id, data, [data]), state)
+    await fresh_db.add_bodyweight_log(user_id, 81.0)
+
+    second = _make_undo_callback(user_id, data, [data])
+    await ai_trainer.ai_undo(second, state)
+
+    assert second.answer.await_args.kwargs.get("show_alert") is True
+    assert [r["weight"] for r in await fresh_db.list_bodyweight_logs(user_id)] == [81.0]
+
+
+async def test_undo_of_someone_elses_row_is_refused(fresh_db, user_id):
+    """id приезжает из FSM, но строка в базе к моменту тапа могла смениться —
+    владельца проверяем заново на каждом шаге."""
+    other_id = user_id + 1
+    await fresh_db.get_or_create_user(other_id, "чужой")
+    foreign_log = await fresh_db.add_bodyweight_log(other_id, 90.0)
+
+    state = await _make_state(user_id)
+    buttons = await ai_trainer._register_undos(
+        state, [{"label": "↩️", "undo": {"kind": "bodyweight", "id": foreign_log}}]
+    )
+    callback = _make_undo_callback(user_id, buttons[0]["callback"], [buttons[0]["callback"]])
+
+    await ai_trainer.ai_undo(callback, state)
+
+    assert callback.answer.await_args.kwargs.get("show_alert") is True
+    assert len(await fresh_db.list_bodyweight_logs(other_id)) == 1

@@ -2,6 +2,8 @@
 
 import csv
 import io
+import json
+from html import escape
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
@@ -41,6 +43,73 @@ async def settings_back(callback: CallbackQuery, state: FSMContext):
     from handlers.workout import _show_main_menu
     await _show_main_menu(callback, state)
     await callback.answer()
+
+
+@router.callback_query(F.data == "settings:menu")
+async def settings_menu(callback: CallbackQuery, state: FSMContext):
+    """Возврат на сам экран настроек — в отличие от settings:back, который
+    уводит в главное меню."""
+    await show_settings(callback, state)
+
+
+def _profile_lines(user) -> list[str]:
+    """Профиль тренирующегося человеческим текстом, пустые поля — прочерком.
+
+    Прочерк, а не пропуск строки: половина ценности экрана в том, чтобы видеть,
+    чего тренер про тебя ещё НЕ знает — отсутствующая строка читалась бы как
+    «такого поля нет», а не «пусто».
+    """
+    equipment = user["equipment"]
+    if equipment:
+        try:
+            items = json.loads(equipment)
+            equipment = ", ".join(str(x) for x in items) if isinstance(items, list) else str(equipment)
+        except (TypeError, ValueError):
+            # Поле пишет модель через json.dumps, но строка могла приехать и из
+            # старой записи — показать как есть лучше, чем уронить экран.
+            pass
+    days = user["days_per_week"]
+    rows = [
+        ("Дней в неделю", str(days) if days else None),
+        ("Опыт", user["experience"]),
+        ("Цель", user["goal"]),
+        ("Оборудование", equipment),
+        ("Ограничения", user["limitations"]),
+    ]
+    return [
+        f"<b>{label}:</b> {escape(str(value)) if value else '—'}" for label, value in rows
+    ]
+
+
+@router.callback_query(F.data == "settings:profile")
+async def settings_profile(callback: CallbackQuery, state: FSMContext):
+    """«🧬 Обо мне» — что AI-тренер про тебя записал.
+
+    Эти поля он пишет сам, не дожидаясь просьбы (см. save_athlete_profile), и
+    до этого экрана их нельзя было ни увидеть, ни поправить — при том что
+    именно от них зависит, какую программу он соберёт.
+    """
+    user = await db.get_user(callback.from_user.id)
+    text = (
+        "🧬 <b>ОБО МНЕ</b>\n\n"
+        "Это тренер записал с твоих слов — по нему он и подбирает программы.\n\n"
+        + "\n".join(_profile_lines(user))
+        + "\n\nЧтобы поправить, просто скажи тренеру, как правильно."
+    )
+    await ui.safe_edit(
+        callback, text, reply_markup=keyboards.profile_keyboard(), parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "settings:profileclear")
+async def settings_profile_clear(callback: CallbackQuery, state: FSMContext):
+    await db.update_user(
+        callback.from_user.id,
+        days_per_week=None, experience=None, goal=None, equipment=None, limitations=None,
+    )
+    await callback.answer("Очистил")
+    await settings_profile(callback, state)
 
 
 @router.callback_query(F.data == "settings:unit")
