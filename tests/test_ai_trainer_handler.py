@@ -218,6 +218,11 @@ async def test_ai_question_daily_limit_blocks_before_calling_model(fresh_db, use
     assert called is False
     message.reply.assert_awaited_once()
     assert "лимит" in message.reply.await_args.args[0].lower()
+    # Сообщение о лимите — нижний экран переписки, и без клавиатуры из него
+    # оставался только выход через нижнее меню.
+    kb = message.reply.await_args.kwargs.get("reply_markup")
+    assert kb is not None
+    assert "ai:menu" in _callbacks(kb)
 
 
 def _make_chat_message(user_id: int, text: str):
@@ -825,11 +830,17 @@ async def test_partial_save_failure_keeps_the_old_program_intact(fresh_db, user_
 
     monkeypatch.setattr(db_module, "create_routine_from_program", flaky_create)
 
-    with pytest.raises(RuntimeError):
-        await ai_trainer.ai_program_save(_make_callback(user_id, "ai:prog:save:1"), state)
+    callback = _make_callback(user_id, "ai:prog:save:1")
+    await ai_trainer.ai_program_save(callback, state)
 
     names = [r["name"] for r in await fresh_db.list_routines(user_id)]
     assert "Старый день" in names
+    # Replace-путь: удалять «обрубок» нельзя — программа существовала до
+    # предложения. Черновик возвращён, человеку сказано честно, а не молча.
+    assert (await state.get_data())["ai_program_draft"] == draft
+    assert len(await fresh_db.list_programs(user_id)) == 1
+    text = callback.message.answer.await_args.args[0]
+    assert "Не получилось" in text and "ещё раз" in text
 
 
 async def test_saving_a_stale_draft_alerts_and_writes_nothing(fresh_db, user_id):
@@ -1148,3 +1159,251 @@ async def test_ai_build_program_asks_the_trainer_to_lead_with_questions(fresh_db
     seed has to ask for the questions explicitly, or the intro would lie."""
     assert "вопрос" in ai_trainer.BUILD_PROGRAM_SEED.lower()
     assert "вопрос" in ai_trainer.BUILD_PROGRAM_INTRO.lower()
+
+
+# ---------- неповторяющийся id черновика ----------
+
+
+def _fake_ask_with_program():
+    """ai_trainer.ask, который на каждый вопрос отдаёт свежий черновик программы."""
+
+    async def fake_ask(uid, question, history, **kwargs):
+        await kwargs["on_program"](
+            {
+                "name": "Верх/низ",
+                "days": [
+                    {"name": "День 1", "items": [{"name": "Жим", "target": "3×8", "source": "own"}]}
+                ],
+            }
+        )
+        return "Собрал программу."
+
+    return fake_ask
+
+
+async def test_draft_ids_survive_a_full_state_clear_without_colliding(fresh_db, user_id, monkeypatch):
+    """Счётчик ai_draft_seq жил в FSM и гиб при state.clear() (конец тренировки)
+    и походах в меню: следующая программа снова получала id=1, и вечная кнопка
+    «ai:prog:save:1» под превью программы А молча сохраняла программу Б."""
+    monkeypatch.setattr(ai_trainer.ai_trainer, "ask", _fake_ask_with_program())
+
+    state = await _make_state(user_id)
+    await state.set_state("AITrainerFlow:chatting")
+    await ai_trainer.ai_question(_make_chat_message(user_id, "собери программу"), state)
+    first_id = (await state.get_data())["ai_program_draft"]["id"]
+
+    await state.clear()  # полный сброс — как после завершения тренировки
+    await state.set_state("AITrainerFlow:chatting")
+    await ai_trainer.ai_question(_make_chat_message(user_id, "собери другую"), state)
+    second_id = (await state.get_data())["ai_program_draft"]["id"]
+
+    assert first_id != second_id
+
+
+async def test_a_hex_draft_id_button_saves_its_draft(fresh_db, user_id):
+    """Id черновика — непрозрачный токен: парсинг сегмента callback_data в int
+    превращал бы любой нечисловой id в «несуществующий» и убивал кнопку."""
+    state = await _make_state(user_id)
+    await state.update_data(ai_program_draft=_draft(days=1, draft_id="a1b2c3d4"))
+
+    await ai_trainer.ai_program_save(_make_callback(user_id, "ai:prog:save:a1b2c3d4"), state)
+
+    assert len(await fresh_db.list_routines(user_id)) == 1
+
+
+# ---------- упавшее сохранение не теряет ни черновик, ни список программ ----------
+
+
+async def test_failed_save_restores_the_draft_and_removes_the_stub_program(fresh_db, user_id, monkeypatch):
+    """Сохранение стирает черновик из FSM до записи (защита от двойного тапа) —
+    необработанное исключение раньше уносило черновик насовсем, а в списке
+    программ оставался обрубок: create_program и дни пишутся не транзакцией."""
+    import db as db_module
+
+    real_create = db_module.create_routine_from_program
+
+    async def broken_create(*args, **kwargs):
+        raise RuntimeError("db went away")
+
+    monkeypatch.setattr(db_module, "create_routine_from_program", broken_create)
+    state = await _make_state(user_id)
+    draft = _draft(days=2)
+    await state.update_data(ai_program_draft=draft)
+    callback = _make_callback(user_id, "ai:prog:save:1")
+
+    await ai_trainer.ai_program_save(callback, state)
+
+    # Обрубок (create_program успел пройти) удалён — «🗂 Программы» пуст.
+    assert await fresh_db.list_programs(user_id) == []
+    # Черновик вернулся в FSM, человеку сказано честно и предложено повторить.
+    assert (await state.get_data())["ai_program_draft"] == draft
+    text = callback.message.answer.await_args.args[0]
+    assert "Не получилось" in text and "ещё раз" in text
+
+    # Кнопка действительно живая: повторный тап после починки сохраняет всё —
+    # без удаления обрубка он упёрся бы в конфликт имён вместо сохранения.
+    monkeypatch.setattr(db_module, "create_routine_from_program", real_create)
+    await ai_trainer.ai_program_save(_make_callback(user_id, "ai:prog:save:1"), state)
+    programs = await fresh_db.list_programs(user_id)
+    assert [(p["program_name"], p["day_count"]) for p in programs] == [("Верх/низ", 2)]
+
+
+# ---------- обрыв стрима не остаётся тишиной ----------
+
+
+async def test_stream_break_after_placeholder_deletion_is_reported_in_a_new_message(
+    fresh_db, user_id, monkeypatch
+):
+    """Черновик-стример удаляет placeholder, когда начинает «печатать»
+    (on_draft_start); если после этого стрим обрывается, правка placeholder
+    падала под suppress — и человек оставался в полной тишине."""
+    from aiogram.exceptions import TelegramBadRequest
+
+    monkeypatch.setattr(
+        ai_trainer.ai_trainer, "ask", AsyncMock(side_effect=RuntimeError("stream died"))
+    )
+
+    state = await _make_state(user_id)
+    await state.set_state("AITrainerFlow:chatting")
+    message = _make_chat_message(user_id, "как жим?")
+    placeholder = message.answer.return_value
+    placeholder.edit_text = AsyncMock(
+        side_effect=TelegramBadRequest(method=MagicMock(), message="message to edit not found")
+    )
+
+    await ai_trainer.ai_question(message, state)
+
+    # Первый message.answer — placeholder «думаю…», второй — сама ошибка.
+    assert message.answer.await_count == 2
+    err = message.answer.await_args
+    assert "Не получилось" in err.args[0]
+    assert err.kwargs.get("reply_markup") is not None
+
+
+# ---------- ответ не теряется после списания квоты ----------
+
+
+async def test_html_chunk_grown_past_the_limit_by_conversion_is_cut(monkeypatch):
+    """Чанки режутся по сырому markdown, а HTML-конверсия удлиняет текст
+    (развёрнутая таблица — в полтора-два раза): чанк, «влезавший» до конверсии,
+    превышал 4096, и Telegram отвергал сообщение целиком."""
+    import formatting
+    import ui
+
+    monkeypatch.setattr(ai_trainer.formatting, "ai_markdown_to_html", lambda s: s * 2)
+    placeholder = MagicMock()
+    placeholder.edit_text = AsyncMock()
+    message = MagicMock()
+    message.chat = SimpleNamespace(id=1)
+    message.answer = AsyncMock()
+
+    await ai_trainer._send_html_answer(message, placeholder, ["к" * 4000], "", None)
+
+    sent = placeholder.edit_text.await_args.args[0]
+    assert formatting.telegram_length(sent) <= ui.TEXT_LIMIT
+
+
+async def test_one_failed_chunk_does_not_eat_the_rest(monkeypatch):
+    """Второй и дальние чанки уходили без перехвата: падение одного обрывало
+    отправку всех последующих — вместе с клавиатурой на последнем."""
+    from aiogram.exceptions import TelegramBadRequest
+
+    placeholder = MagicMock()
+    placeholder.edit_text = AsyncMock()
+    message = MagicMock()
+    message.chat = SimpleNamespace(id=1)
+    message.answer = AsyncMock(
+        side_effect=[TelegramBadRequest(method=MagicMock(), message="too long"), None]
+    )
+
+    await ai_trainer._send_html_answer(message, placeholder, ["один", "два", "три"], "", None)
+
+    # Чанк «три» отправлен, несмотря на упавший «два».
+    assert message.answer.await_count == 2
+
+
+async def test_mention_paging_arrows_fit_telegrams_callback_data_limit():
+    """Ссылки на упомянутое едут прямо в callback_data стрелок, а Telegram
+    ограничивает её 64 байтами: с 8-значными id упражнений полный список не
+    влезал, и Telegram отвергал всё сообщение с ответом."""
+    import keyboards
+
+    exercises = [
+        {"id": 10_000_000 + i, "is_template": False, "display_name": f"Упражнение {i}"}
+        for i in range(8)
+    ]
+    kb = keyboards.ai_trainer_keyboard(exercises=exercises)
+
+    arrows = [
+        b for row in kb.inline_keyboard for b in row if b.callback_data.startswith("ai:mpage:")
+    ]
+    assert arrows  # листание не пропало совсем — потерян только хвост ссылок
+    for b in arrows:
+        assert len(b.callback_data.encode()) <= 64
+
+
+# ---------- UX-мелочи релиза ----------
+
+
+async def test_intro_advertises_the_program_builder():
+    """Интро должно рекламировать фичу релиза, а не только советы по программе."""
+    assert "Составь мне программу" in ai_trainer.INTRO_TEXT
+
+
+async def test_program_gone_alert_does_not_ask_to_rebuild_a_saved_program():
+    """Алерт показывается и после УСПЕШНОГО сохранения (черновик израсходован) —
+    совет «собрать заново» вёл к дубликатам."""
+    assert "🗂 Программы" in ai_trainer._PROGRAM_GONE
+
+
+async def test_build_program_checks_the_quota_before_the_cheerful_intro(fresh_db, user_id, monkeypatch):
+    """«ОКЕЙ, СОБИРАЕМ ПРОГРАММУ» с мгновенным «лимит исчерпан» следом — обещание,
+    которое бот сам тут же забирает назад: лимит проверяется до интро."""
+    import config
+    import ui
+
+    monkeypatch.setattr(ai_trainer.ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(ui.chat_bottom, "is_at_bottom", lambda *a, **k: False)
+    ask = AsyncMock()
+    monkeypatch.setattr(ai_trainer.ai_trainer, "ask", ask)
+    for _ in range(config.AI_QUESTION_DAILY_LIMIT):
+        await fresh_db.increment_ai_question_count(user_id)
+
+    callback = _make_buildprog_callback(user_id)
+    await ai_trainer.ai_build_program(callback, await _make_state(user_id))
+
+    ask.assert_not_awaited()
+    sent = callback.message.answer.await_args
+    text = sent.args[0] if sent.args else sent.kwargs["text"]
+    assert "СОБИРАЕМ ПРОГРАММУ" not in text
+    assert "лимит" in text.lower()
+    assert "ai:menu" in _callbacks(sent.kwargs["reply_markup"])
+    assert user_id not in ai_trainer._busy
+
+
+async def test_saved_announcement_offers_opening_the_program(fresh_db, user_id):
+    """Текст говорил «ищи в «🗂 Программы»», хотя бот и так знает, что только
+    что сохранил — первая кнопка открывает программу напрямую."""
+    state = await _make_state(user_id)
+    await state.update_data(ai_program_draft=_draft(days=2))
+    callback = _make_callback(user_id, "ai:prog:save:1")
+
+    await ai_trainer.ai_program_save(callback, state)
+
+    (program,) = await fresh_db.list_programs(user_id)
+    kb = callback.message.edit_text.await_args.kwargs["reply_markup"]
+    callbacks = _callbacks(kb)
+    assert callbacks[0] == f"rt:prg:{program['id']}"
+    assert "rt:manage" in callbacks
+
+
+async def test_saving_a_single_day_does_not_promise_any_of_the_days(fresh_db, user_id):
+    """Для программы из одного дня «тренировка по любому из дней» — нелепость."""
+    state = await _make_state(user_id)
+    await state.update_data(ai_program_draft=_draft(days=1))
+    callback = _make_callback(user_id, "ai:prog:save:1")
+
+    await ai_trainer.ai_program_save(callback, state)
+
+    text = callback.message.edit_text.await_args.args[0]
+    assert "любому из дней" not in text
