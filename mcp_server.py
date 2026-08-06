@@ -39,6 +39,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 
 import ai_trainer
 import config
+import game_server
 import mcp_oauth
 
 logger = logging.getLogger(__name__)
@@ -125,6 +126,9 @@ def build_server() -> MCPServer:
         auth=mcp_oauth.auth_settings(MCP_PATH),
     )
     mcp_oauth.register_routes(mcp)
+    # Мини-игра живёт на том же сервере: свои роуты без MCP-токена, подлинность
+    # пользователя доказывает initData Telegram WebApp (см. game_server).
+    game_server.register_routes(mcp)
 
     @mcp.tool()
     async def get_training_overview() -> str:

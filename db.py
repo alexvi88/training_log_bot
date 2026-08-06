@@ -319,6 +319,18 @@ CREATE INDEX IF NOT EXISTS idx_routine_exercises_routine ON routine_exercises (r
 CREATE UNIQUE INDEX IF NOT EXISTS idx_routine_exercises_unique
     ON routine_exercises (routine_id, exercise_id);
 
+-- Результаты забегов мини-игры «Кач-Раннер» (см. game_server.py): каждая
+-- завершённая попытка одной строкой, рекорд — MAX(distance) по пользователю.
+CREATE TABLE IF NOT EXISTS game_results (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    telegram_id INTEGER NOT NULL,
+    distance INTEGER NOT NULL,
+    score INTEGER NOT NULL,
+    fighter TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_game_results_user ON game_results (telegram_id, distance);
+
 CREATE TABLE IF NOT EXISTS cost_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER,
@@ -5184,3 +5196,24 @@ async def list_recent_pushes(limit: int = 20, offset: int = 0) -> list[aiosqlite
         (limit, offset),
     )
     return await cur.fetchall()
+
+
+# ---------- мини-игра «Кач-Раннер» ----------
+
+
+async def save_game_result(telegram_id: int, distance: int, score: int, fighter: str) -> None:
+    async with _write_lock:
+        await conn().execute(
+            "INSERT INTO game_results (telegram_id, distance, score, fighter, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (telegram_id, distance, score, fighter, now_iso()),
+        )
+        await conn().commit()
+
+
+async def get_game_best_distance(telegram_id: int) -> int:
+    cur = await conn().execute(
+        "SELECT MAX(distance) FROM game_results WHERE telegram_id = ?", (telegram_id,)
+    )
+    (best,) = await cur.fetchone()
+    return best or 0
