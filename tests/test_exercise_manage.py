@@ -1,3 +1,4 @@
+import re
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -621,6 +622,19 @@ async def test_own_description_overrides_template_default_in_the_card_text(fresh
 
     assert "Моя версия — колени наружу" in overridden_text
     assert "1." not in overridden_text  # the numbered template steps are gone, not appended
+
+
+async def test_created_date_is_shown_russian_style_not_iso(fresh_db, user_id):
+    """Regression: the card used to print the raw ISO prefix ("Создано:
+    2026-08-06") while every other date in the bot reads "06.08.2026 (чт)"."""
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    ex_id = await db.create_exercise(user_id, "Жим штанги лёжа", group_id)
+
+    text = exercises._exercise_info_text(await db.get_exercise(ex_id))
+
+    assert "Создано: 2026-" not in text
+    assert re.search(r"Создано: \d{2}\.\d{2}\.\d{4} \(\w+\)", text)
 
 
 # ---------- creating an exercise from "📋 Все" (no group selected) ----------

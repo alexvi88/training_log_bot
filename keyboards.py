@@ -412,6 +412,15 @@ def weight_confirm_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+def bodyweight_confirm_keyboard() -> InlineKeyboardMarkup:
+    """Same "looks like a typo — record it?" nudge as weight_confirm_keyboard,
+    for a bodyweight entry outside the plausible range (see
+    parser.bodyweight_warning, handlers.bodyweight.bw_weight_entered)."""
+    return yes_no_keyboard(
+        "bw:wconf:yes", "bw:wconf:no", yes_text="✅ Да, записать", no_text="✏️ Исправить",
+    )
+
+
 def help_keyboard(expanded: bool) -> InlineKeyboardMarkup:
     """Toggle between the short /help screen and the full input reference
     (handlers.workout.help_toggle)."""

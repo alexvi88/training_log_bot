@@ -10,7 +10,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 
 import db as dbmod
 import formatting
-from parser import ParseError, parse_bodyweight
+from parser import ParseError, bodyweight_warning, parse_bodyweight
 
 # ---------- parser ----------
 
@@ -20,10 +20,41 @@ def test_parse_bodyweight_ok(text, expected):
     assert parse_bodyweight(text) == expected
 
 
-@pytest.mark.parametrize("bad", ["", "abc", "0", "-5", "1200", "80 kg"])
+@pytest.mark.parametrize("bad", ["", "abc", "0", "-5", "80 kg"])
 def test_parse_bodyweight_rejects(bad):
     with pytest.raises(ParseError):
         parse_bodyweight(bad)
+
+
+def test_parse_bodyweight_no_longer_rejects_a_plausible_typo_outright():
+    """Regression for находка 16: 300 used to slip through the old 0-1000
+    bound silently, and the fix is a soft warning (see below), not a hard
+    reject — parse_bodyweight itself now only rejects the truly impossible."""
+    assert parse_bodyweight("300") == 300.0
+
+
+def test_parse_bodyweight_hard_ceiling():
+    """Well past anything human, in kg or lb — still a hard reject."""
+    with pytest.raises(ParseError):
+        parse_bodyweight("9999")
+
+
+# ---------- soft "does this look like a typo?" warning ----------
+
+
+def test_bodyweight_warning_flags_a_suspicious_kg_value():
+    """300 кг — точно тот случай из находки 16: "Сейчас: 300кг" молча ломало
+    тренд. Теперь это не жёсткий отказ, а мягкая метка "подозрительно"."""
+    assert bodyweight_warning(300.0, "kg") is not None
+    assert bodyweight_warning(80.0, "kg") is None
+
+
+def test_bodyweight_warning_accounts_for_pounds():
+    """A perfectly normal pound entry shouldn't get flagged by the kg range —
+    660lb is roughly 300kg, the same plausible ceiling, just in the other unit."""
+    assert bodyweight_warning(180.0, "lb") is None  # ~82kg, ordinary
+    assert bodyweight_warning(300.0, "lb") is None  # ~136kg, still plausible in lb
+    assert bodyweight_warning(700.0, "lb") is not None
 
 
 # ---------- db ----------
@@ -230,6 +261,73 @@ async def test_typing_invalid_text_while_viewing_replies_with_error(fresh_db, us
 
     assert await dbmod.list_bodyweight_logs(user_id) == []
     message.reply.assert_awaited_once()
+
+
+def _make_bw_confirm_callback(user_id: int, data: str):
+    callback = MagicMock()
+    callback.from_user = SimpleNamespace(id=user_id, username="tester")
+    callback.data = data
+    callback.answer = AsyncMock()
+    callback.message = MagicMock()
+    callback.message.delete = AsyncMock()
+    callback.message.chat = SimpleNamespace(id=user_id)
+    callback.message.bot = MagicMock()
+    callback.message.bot.delete_message = AsyncMock()
+    callback.message.answer = AsyncMock(return_value=SimpleNamespace(message_id=44))
+    callback.message.answer_photo = AsyncMock(return_value=SimpleNamespace(message_id=44))
+    return callback
+
+
+@pytest.mark.asyncio
+async def test_a_suspicious_bodyweight_asks_before_logging(fresh_db, user_id):
+    """Regression for находка 16: 300 used to be written straight to the log
+    with no signal at all ("Сейчас: 300кг"). Now it's held back for a
+    confirm, same as a suspicious set weight."""
+    import handlers.bodyweight as bw
+    from fsm import BodyweightFlow
+
+    state = await _make_state(user_id)
+    await state.set_state(BodyweightFlow.viewing)
+
+    message = _make_message(user_id, "300")
+    await bw.bw_weight_entered(message, state)
+
+    assert await dbmod.list_bodyweight_logs(user_id) == []  # not written yet
+    message.reply.assert_awaited_once()
+    kwargs = message.reply.await_args.kwargs
+    assert "Подозрительно" in message.reply.await_args.args[0]
+    assert kwargs["reply_markup"] is not None
+
+
+@pytest.mark.asyncio
+async def test_confirming_a_suspicious_bodyweight_logs_it(fresh_db, user_id):
+    import handlers.bodyweight as bw
+    from fsm import BodyweightFlow
+
+    state = await _make_state(user_id)
+    await state.set_state(BodyweightFlow.viewing)
+    await state.update_data(bw_pending_weight=300.0)
+
+    callback = _make_bw_confirm_callback(user_id, "bw:wconf:yes")
+    await bw.bw_weight_confirm_yes(callback, state)
+
+    logs = await dbmod.list_bodyweight_logs(user_id)
+    assert [r["weight"] for r in logs] == [300.0]
+
+
+@pytest.mark.asyncio
+async def test_declining_a_suspicious_bodyweight_leaves_the_log_empty(fresh_db, user_id):
+    import handlers.bodyweight as bw
+    from fsm import BodyweightFlow
+
+    state = await _make_state(user_id)
+    await state.set_state(BodyweightFlow.viewing)
+    await state.update_data(bw_pending_weight=300.0)
+
+    callback = _make_bw_confirm_callback(user_id, "bw:wconf:no")
+    await bw.bw_weight_confirm_no(callback, state)
+
+    assert await dbmod.list_bodyweight_logs(user_id) == []
 
 
 def test_bodyweight_screen_fits_the_caption_cap_on_a_long_history():

@@ -174,6 +174,16 @@ def parse_sets_line(text: str) -> list[ParsedSet]:
 
 _BODYWEIGHT_VALUE_RE = re.compile(r"^\d+(?:[.,]\d+)?$")
 
+# Past this, in either unit, it just isn't a human body weight — the heaviest
+# person on record is nowhere near it. Kept generous on purpose: this is the
+# only hard reject left (see bodyweight_warning for the softer nudge that
+# replaced the old 0-1000 cutoff, which let a stray "300" through unremarked).
+_BODYWEIGHT_HARD_MAX = 2000.0
+
+# Plausible adult range per unit, used only for the soft warning below — not a
+# reject. Wide enough that no real entry should ever trip it.
+_BODYWEIGHT_PLAUSIBLE = {"kg": (25.0, 300.0), "lb": (55.0, 660.0)}
+
 
 def parse_bodyweight(text: str) -> float:
     """A single positive body weight, e.g. '80', '80.5', '80,5'."""
@@ -181,9 +191,22 @@ def parse_bodyweight(text: str) -> float:
     if not _BODYWEIGHT_VALUE_RE.match(raw):
         raise ParseError("Не понял вес. Напиши число, например 80 или 80.5")
     weight = float(raw.replace(",", "."))
-    if not (0 < weight < 1000):
+    if not (0 < weight < _BODYWEIGHT_HARD_MAX):
         raise ParseError("Странный вес — напиши реальное число в кг/lb")
     return weight
+
+
+def bodyweight_warning(weight: float, unit: str = "kg") -> str | None:
+    """A soft nudge — never blocks logging, unlike parse_bodyweight's hard
+    ceiling — when a bodyweight entry falls outside a plausible human range for
+    the user's unit. Same spirit as handlers.workout._suspicious_weight_warning:
+    an extra/missing zero is the commonest typo, and body weight has no history
+    check to catch it the way a set does against last session's numbers."""
+    lo, hi = _BODYWEIGHT_PLAUSIBLE.get(unit, _BODYWEIGHT_PLAUSIBLE["kg"])
+    if lo < weight < hi:
+        return None
+    kind = "большой" if weight > hi else "маленький"
+    return f"Подозрительно {kind} вес — лишний ноль?"
 
 
 # ---------- date input: дд.мм.гггг ----------
