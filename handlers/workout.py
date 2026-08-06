@@ -1533,7 +1533,7 @@ async def pick_cancel(callback: CallbackQuery, state: FSMContext):
 async def pick_group(callback: CallbackQuery, state: FSMContext):
     raw = callback.data.split(":")[2]
     group_id = None if raw == "all" else int(raw)
-    await state.update_data(pending_group_id=group_id, pick_page=0)
+    await state.update_data(pending_group_id=group_id, pick_page=0, pick_query=None)
     await state.set_state(WorkoutFlow.picking_exercise)
     await _picker_screen_exercises(callback, state)
     await callback.answer()
@@ -1547,9 +1547,55 @@ async def pick_page(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+# Поиск листается целиком, а не срезается: раньше выдача обрывалась на восьми
+# шаблонах по алфавиту, и «жим» не доставал до «Жима штанги лёжа» вообще. Тянем
+# с запасом и режем на страницы уже здесь — совпадений на один запрос заведомо
+# меньше сотни, отдельный COUNT ради этого не нужен.
+_SEARCH_FETCH_LIMIT = 200
+
+
+async def _search_matches(user_id: int, query: str) -> tuple[list, list]:
+    return (
+        await db.search_exercises(user_id, query, limit=_SEARCH_FETCH_LIMIT),
+        await db.search_exercise_templates(user_id, query, limit=_SEARCH_FETCH_LIMIT),
+    )
+
+
+async def _picker_screen_search(callback_or_message, state: FSMContext, user):
+    """Страница результатов поиска. Своё идёт раньше каталога: то, чем человек
+    уже пользуется, почти всегда и есть искомое."""
+    data = await state.get_data()
+    query = data["pick_query"]
+    page = data.get("pick_page", 0)
+    size = config.RECENT_EXERCISES_LIMIT
+    own, templates = await _search_matches(callback_or_message.from_user.id, query)
+    combined = [("ex", row) for row in own] + [("tpl", row) for row in templates]
+    chunk = combined[page * size : (page + 1) * size]
+    kb = keyboards.exercises_keyboard(
+        [row for kind, row in chunk if kind == "ex"],
+        prefix="pick", back_cb="back",
+        show_new_button=data.get("pending_group_id") is not None,
+        page=page, has_next=(page + 1) * size < len(combined),
+        templates=[row for kind, row in chunk if kind == "tpl"],
+    )
+    if combined:
+        total = len(combined)
+        word = formatting.plural_ru(total, ("совпадение", "совпадения", "совпадений"))
+        hint = f"Результаты поиска «{escape(query)}» — {total} {word}:"
+    else:
+        hint = f"Ничего не нашлось по «{escape(query)}»."
+        if data.get("pending_group_id") is not None:
+            hint += " Можно создать новое:"
+    await state.update_data(picker_stage="exercises")
+    await _refresh_live(callback_or_message.bot, state, user, data["workout_id"], hint, kb)
+
+
 async def _picker_screen_exercises(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     user = await db.get_user(callback.from_user.id)
+    if data.get("pick_query"):
+        await _picker_screen_search(callback, state, user)
+        return
     group_id = data["pending_group_id"]
     page = data.get("pick_page", 0)
     offset = page * config.RECENT_EXERCISES_LIMIT
@@ -1579,6 +1625,9 @@ async def _picker_screen_exercises(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(StateFilter(WorkoutFlow.picking_exercise), F.data == "pick:back")
 async def pick_back_to_groups(callback: CallbackQuery, state: FSMContext):
     await state.set_state(WorkoutFlow.picking_group)
+    # Из поиска «назад» ведёт к группам, а не к прошлой выдаче — иначе следующий
+    # выбор группы показал бы результаты старого запроса.
+    await state.update_data(pick_query=None, pick_page=0)
     await _picker_screen_groups(callback, state)
     await callback.answer()
 
@@ -1603,25 +1652,14 @@ async def pick_exercise_search(message: Message, state: FSMContext):
     await _delete_message(message)
     if not query:
         return
-    data = await state.get_data()
     user = await db.get_user(message.from_user.id)
-    group_id = data.get("pending_group_id")
     # Searching from the group screen jumps into exercise-picking so a tap on a
     # result (pick:ex:*) and the "back" button both resolve correctly.
     await state.set_state(WorkoutFlow.picking_exercise)
-    results = await db.search_exercises(message.from_user.id, query)
-    templates = await db.search_exercise_templates(message.from_user.id, query)
-    kb = keyboards.exercises_keyboard(
-        results, prefix="pick", back_cb="back", show_new_button=group_id is not None, templates=templates,
-    )
-    if results or templates:
-        hint = f"Результаты поиска «{escape(query)}»:"
-    else:
-        hint = f"Ничего не нашлось по «{escape(query)}»."
-        if group_id is not None:
-            hint += " Можно создать новое:"
-    await state.update_data(picker_stage="exercises")
-    await _refresh_live(message.bot, state, user, data["workout_id"], hint, kb)
+    # Запрос живёт в state, пока человек не ушёл из поиска: по нему же листаются
+    # страницы (pick:page:*), иначе вторая страница показала бы список группы.
+    await state.update_data(pick_query=query, pick_page=0)
+    await _picker_screen_search(message, state, user)
 
 
 async def _new_exercise_entry_screen(callback: CallbackQuery, state: FSMContext):

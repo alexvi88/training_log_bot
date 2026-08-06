@@ -1616,15 +1616,26 @@ async def list_templates_in_group(group_id: int) -> list[aiosqlite.Row]:
     return await cur.fetchall()
 
 
+# Точное совпадение → начинается с запроса → содержит его где-то внутри. Без
+# этого «жим» отдавал алфавит («Жим Арнольда», «Жим в тренажёре»…), и то, что
+# человек искал на самом деле, оказывалось в хвосте — а хвост срезался лимитом.
+_RELEVANCE_RANK = (
+    "CASE WHEN py_lower({col}) = py_lower(?) THEN 0 "
+    "     WHEN py_lower({col}) LIKE py_lower(?) || '%' ESCAPE '\\' THEN 1 "
+    "     ELSE 2 END"
+)
+
+
 async def search_exercises(user_id: int, query: str, limit: int = 20) -> list[aiosqlite.Row]:
     escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    rank = _RELEVANCE_RANK.format(col="e.display_name")
     cur = await conn().execute(
         "SELECT * FROM exercises e WHERE e.user_id = ? AND e.is_archived = 0 AND e.is_template = 0 "
         "AND py_lower(e.display_name) LIKE '%' || py_lower(?) || '%' ESCAPE '\\' "
         f"AND {_VISIBLE_EXERCISE_FILTER} "
-        "ORDER BY e.last_used_at IS NULL, e.last_used_at DESC, e.display_name "
+        f"ORDER BY {rank}, e.last_used_at IS NULL, e.last_used_at DESC, py_lower(e.display_name) "
         "LIMIT ?",
-        (user_id, escaped, limit),
+        (user_id, escaped, escaped, escaped, limit),
     )
     return await cur.fetchall()
 
@@ -1640,6 +1651,7 @@ async def search_exercise_templates(user_id: int, query: str, limit: int = 8) ->
     `templates` param) instead of leaving them to build one from scratch.
     """
     escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    rank = _RELEVANCE_RANK.format(col="t.display_name")
     cur = await conn().execute(
         "SELECT * FROM exercises t WHERE t.is_template = 1 "
         "AND py_lower(t.display_name) LIKE '%' || py_lower(?) || '%' ESCAPE '\\' "
@@ -1647,9 +1659,11 @@ async def search_exercise_templates(user_id: int, query: str, limit: int = 8) ->
         "   SELECT 1 FROM exercises o WHERE o.user_id = ? AND o.is_template = 0 "
         "   AND o.is_archived = 0 AND py_lower(o.display_name) = py_lower(t.display_name)"
         ") "
-        "ORDER BY t.display_name "
+        # py_lower и здесь: бинарная коллация ставила «Жим в тренажёре Хаммер»
+        # раньше «Жим в тренажёре на плечи» — заглавная Х меньше строчной н.
+        f"ORDER BY {rank}, py_lower(t.display_name) "
         "LIMIT ?",
-        (escaped, user_id, limit),
+        (escaped, user_id, escaped, escaped, limit),
     )
     return await cur.fetchall()
 

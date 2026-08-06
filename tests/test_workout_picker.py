@@ -156,6 +156,53 @@ async def test_typing_in_exercise_picker_searches_instead_of_being_ignored(fresh
     assert not any("Triceps" in t for t in button_texts)
 
 
+async def test_search_results_are_paginated_instead_of_being_cut_off(fresh_db, user_id):
+    """Регрессия: выдача обрывалась на восьми совпадениях, и «жим» не доставал
+    до «Жима штанги лёжа» вообще — он оказывался за срезом алфавита."""
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    for i in range(12):
+        await db.create_exercise(user_id, f"Жим вариант {i:02d}", group_id)
+    await db.create_exercise(user_id, "Жим штанги лёжа", group_id)
+
+    state = await _make_state(user_id)
+    message = _make_message(user_id, "жим")
+
+    await workout.pick_exercise_search(message, state)
+
+    kb = message.bot.send_message.await_args.kwargs["reply_markup"]
+    texts = [b.text for row in kb.inline_keyboard for b in row]
+    assert "➡️" in texts, "нет кнопки следующей страницы"
+    # Тринадцать совпадений при странице в восемь — вторая страница обязана быть,
+    # и «Жим штанги лёжа» должен быть достижим, а не срезан.
+    assert sum(1 for t in texts if t.startswith("Жим")) <= 8
+
+
+async def test_search_puts_the_exact_match_first(fresh_db, user_id):
+    """«Жим» должен вести к «Жим», а не к алфавитно первому «Жим Арнольда»."""
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    await db.create_exercise(user_id, "Жим Арнольда", group_id)
+    await db.create_exercise(user_id, "Жим", group_id)
+
+    rows = await db.search_exercises(user_id, "жим")
+
+    assert rows[0]["display_name"] == "Жим"
+
+
+async def test_search_ordering_folds_case_like_the_filter_does(fresh_db, user_id):
+    """Бинарная коллация ставила «Хаммер» перед «на плечи»: заглавная Х меньше
+    строчной н. Сортировка должна folds так же, как и поиск."""
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    await db.create_exercise(user_id, "Тяга в тренажёре Хаммер", group_id)
+    await db.create_exercise(user_id, "Тяга в тренажёре на плечи", group_id)
+
+    names = [r["display_name"] for r in await db.search_exercises(user_id, "тяга в тренажёре")]
+
+    assert names == ["Тяга в тренажёре на плечи", "Тяга в тренажёре Хаммер"]
+
+
 async def test_typing_on_group_screen_searches_and_enters_exercise_picking(fresh_db, user_id):
     db = fresh_db
     group_id = await db.create_muscle_group(user_id, "Грудь")
