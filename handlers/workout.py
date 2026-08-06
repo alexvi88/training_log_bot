@@ -1470,6 +1470,21 @@ async def _picker_screen_groups(callback: CallbackQuery, state: FSMContext, show
         recent = await db.list_recent_programs(
             callback.from_user.id, since, limit=MAX_RECENT_PROGRAM_BUTTONS
         )
+        if len(recent) < MAX_RECENT_PROGRAM_BUTTONS:
+            # находка 1: list_recent_programs считает по фактически проведённым
+            # тренировкам, так что программа, только что добавленная из
+            # готовых/AI, в него не попадает — досыпаем по created_at, пока не
+            # наберём лимит, не повторяя то, что уже есть по истории.
+            seen_programs = {p["program_id"] for p in recent if p["program_id"]}
+            seen_routines = {p["routine_id"] for p in recent if not p["program_id"]}
+            for p in await db.list_programs_without_workout_history(
+                callback.from_user.id, MAX_RECENT_PROGRAM_BUTTONS
+            ):
+                if p["program_id"] in seen_programs or (not p["program_id"] and p["routine_id"] in seen_routines):
+                    continue
+                recent.append(p)
+                if len(recent) >= MAX_RECENT_PROGRAM_BUTTONS:
+                    break
         for p in recent:
             next_day = (
                 await db.next_program_day(p["program_id"]) if p["program_id"] else None

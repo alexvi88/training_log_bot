@@ -659,6 +659,53 @@ async def test_picker_shows_no_recent_programs_without_any_routine_backed_workou
     assert not [c for c in callbacks if c.startswith("rt:pgm:")]
 
 
+# ---------- находка 1: свежедобавленная программа без истории ----------
+
+
+async def test_picker_tops_up_with_a_freshly_added_program_that_has_no_history(
+    fresh_db, user_id, monkeypatch
+):
+    """Добавил «Толкай / Тяни / Ноги» и сразу жмёшь «Начать тренировку» —
+    list_recent_programs пуст (по ней ещё не тренировались), но программа
+    должна появиться сверху по created_at, а не потребовать похода в
+    «Выбрать программу»."""
+    program_id = await fresh_db.create_program(user_id, "Толкай/Тяни/Ноги")
+    push = await fresh_db.create_routine(user_id, "Толкай", program_id=program_id)
+    await fresh_db.create_routine(user_id, "Тяни", program_id=program_id)
+
+    buttons = await _picker_extra_buttons(fresh_db, user_id, monkeypatch)
+
+    # Первый день по порядку — next_program_day без истории отдаёт days[0].
+    assert ("🗂 Толкай/Тяни/Ноги · Толкай", f"rt:view:{push}") in buttons
+
+
+async def test_picker_tops_up_a_fresh_standalone_day_without_history(fresh_db, user_id, monkeypatch):
+    """Тот же случай для одиночного дня (не многодневная программа)."""
+    routine_id = await fresh_db.create_routine(user_id, "Грудь+трицепс")
+
+    buttons = await _picker_extra_buttons(fresh_db, user_id, monkeypatch)
+
+    assert ("🗂 Грудь+трицепс", f"rt:view:{routine_id}") in buttons
+
+
+async def test_picker_prefers_actually_trained_programs_over_fresh_ones_when_capped(
+    fresh_db, user_id, monkeypatch
+):
+    """The top-up only fills remaining slots — a program the user is actively
+    training by isn't bumped by one just sitting there unused."""
+    trained_id = await fresh_db.create_routine(user_id, "Верх", program_name="Активная")
+    wid = await fresh_db.create_workout(user_id, routine_id=trained_id)
+    await fresh_db.finish_workout(wid)
+    for i in range(workout.MAX_RECENT_PROGRAM_BUTTONS):
+        await fresh_db.create_routine(user_id, f"Свежая {i}")
+
+    labels = [b[0] for b in await _picker_extra_buttons(fresh_db, user_id, monkeypatch)]
+    recent = [t for t in labels if t.startswith("🗂 ") and t != "🗂 Выбрать программу"]
+
+    assert len(recent) == workout.MAX_RECENT_PROGRAM_BUTTONS
+    assert "🗂 Активная · Верх" in recent
+
+
 async def test_both_doors_into_the_ai_program_builder_are_labelled_the_same(
     fresh_db, user_id, monkeypatch
 ):

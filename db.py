@@ -4233,6 +4233,62 @@ async def list_recent_programs(
     return out
 
 
+async def list_programs_without_workout_history(user_id: int, limit: int) -> list[dict[str, Any]]:
+    """Programs/standalone days добавлены, но по ним ещё ни разу не тренировались —
+    list_recent_programs их не видит (считает по workouts.routine_id), а именно
+    в момент "только что добавил" человек и хочет по ней пойти (находка 1).
+
+    Sorted by created_at DESC — свежедобавленное выше. Shaped like
+    list_recent_programs's rows (last_started always None here) so callers can
+    concatenate the two lists without special-casing.
+    """
+    out: list[dict[str, Any]] = []
+    cur = await conn().execute(
+        "SELECT p.id AS program_id, p.name, p.created_at, "
+        "(SELECT r.id FROM routines r WHERE r.program_id = p.id "
+        " ORDER BY r.day_order ASC, r.id ASC LIMIT 1) AS anchor_id "
+        "FROM programs p WHERE p.user_id = ? AND NOT EXISTS ("
+        "  SELECT 1 FROM workouts w JOIN routines r ON r.id = w.routine_id WHERE r.program_id = p.id"
+        ") ORDER BY p.created_at DESC",
+        (user_id,),
+    )
+    for row in await cur.fetchall():
+        if row["anchor_id"] is None:  # program with no days at all — nothing to open
+            continue
+        out.append(
+            {
+                "name": row["name"],
+                "program_id": row["program_id"],
+                "routine_id": row["anchor_id"],
+                "anchor_id": row["anchor_id"],
+                "last_started": None,
+                "created_at": row["created_at"],
+            }
+        )
+
+    cur = await conn().execute(
+        "SELECT r.id AS routine_id, r.name, r.created_at FROM routines r "
+        "WHERE r.user_id = ? AND r.program_id IS NULL AND NOT EXISTS ("
+        "  SELECT 1 FROM workouts w WHERE w.routine_id = r.id"
+        ") ORDER BY r.created_at DESC",
+        (user_id,),
+    )
+    for row in await cur.fetchall():
+        out.append(
+            {
+                "name": row["name"],
+                "program_id": None,
+                "routine_id": row["routine_id"],
+                "anchor_id": row["routine_id"],
+                "last_started": None,
+                "created_at": row["created_at"],
+            }
+        )
+
+    out.sort(key=lambda p: p["created_at"], reverse=True)
+    return out[:limit]
+
+
 async def list_program_days_by_id(program_id: int) -> list[aiosqlite.Row]:
     """The program's days in the order the user put them in.
 
