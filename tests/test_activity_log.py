@@ -260,3 +260,58 @@ async def test_newlines_do_not_break_the_one_event_per_line_feed(fresh_db, user_
 
     text = _screen_text(callback)
     assert "жим 100х5 ⏎ тяга 120х5" in text
+
+
+# ---------- общая лента по всем пользователям ----------
+
+
+async def test_the_users_list_offers_a_button_for_the_shared_feed(fresh_db, user_id, monkeypatch):
+    monkeypatch.setattr(config, "ADMIN_ID", ADMIN_ID)
+    message = _message(ADMIN_ID)
+    state = await _state(ADMIN_ID)
+
+    await admin.cmd_activity(message, state)
+
+    kb = message.answer.await_args.kwargs["reply_markup"]
+    buttons = {b.callback_data: b.text for row in kb.inline_keyboard for b in row}
+    assert buttons.get("admin:aca:0") == "🌐 Все пользователи"
+
+
+async def test_the_shared_feed_mixes_events_from_every_user_newest_first(fresh_db, user_id, monkeypatch):
+    monkeypatch.setattr(config, "ADMIN_ID", ADMIN_ID)
+    await db.get_or_create_user(telegram_id=222, username="other")
+    await db.log_user_event(user_id, activity_log.KIND_MESSAGE, "жим 100х5")
+    await db.log_user_event(222, activity_log.KIND_MESSAGE, "присед 80х5")
+
+    callback = _callback(ADMIN_ID, data="admin:aca:0")
+    state = await _state(ADMIN_ID)
+    await admin.admin_activity_all(callback, state)
+
+    assert await state.get_state() == AdminFlow.browsing_activity_all.state
+    text = _screen_text(callback)
+    assert "@other" in text and "@tester" in text
+    assert text.index("присед 80х5") < text.index("жим 100х5")
+
+
+async def test_the_shared_feed_pages_back_into_older_events(fresh_db, user_id, monkeypatch):
+    monkeypatch.setattr(config, "ADMIN_ID", ADMIN_ID)
+    for i in range(admin.ACTIVITY_PAGE_SIZE + 1):
+        await db.log_user_event(user_id, activity_log.KIND_MESSAGE, f"событие {i}")
+
+    callback = _callback(ADMIN_ID, data="admin:aca:1")
+    await admin.admin_activity_all(callback, await _state(ADMIN_ID))
+
+    text = _screen_text(callback)
+    assert "событие 0" in text
+    assert "событие 25" not in text
+
+
+async def test_a_non_admin_cannot_open_the_shared_feed(fresh_db, user_id, monkeypatch):
+    monkeypatch.setattr(config, "ADMIN_ID", ADMIN_ID)
+    await db.log_user_event(user_id, activity_log.KIND_MESSAGE, "секрет")
+    callback = _callback(222, data="admin:aca:0")
+
+    await admin.admin_activity_all(callback, await _state(222))
+
+    callback.message.edit_text.assert_not_awaited()
+    callback.message.answer.assert_not_awaited()

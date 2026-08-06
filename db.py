@@ -4656,6 +4656,23 @@ async def list_user_events(telegram_id: int, limit: int = 30, offset: int = 0) -
     return await cur.fetchall()
 
 
+async def count_all_events() -> int:
+    cur = await conn().execute("SELECT COUNT(*) FROM user_events")
+    (count,) = await cur.fetchone()
+    return count
+
+
+async def list_all_events(limit: int = 30, offset: int = 0) -> list[aiosqlite.Row]:
+    """Действия всех пользователей вперемешку, свежие сверху."""
+    cur = await conn().execute(
+        "SELECT e.id, e.telegram_id, u.username, e.kind, e.content, e.payload, e.created_at "
+        "FROM user_events e LEFT JOIN users u ON u.telegram_id = e.telegram_id "
+        "ORDER BY e.id DESC LIMIT ? OFFSET ?",
+        (limit, offset),
+    )
+    return await cur.fetchall()
+
+
 async def prune_old_user_events(retention_days: int) -> int:
     """Выкинуть действия старше retention_days.
 
