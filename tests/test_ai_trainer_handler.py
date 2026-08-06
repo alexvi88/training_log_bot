@@ -1190,7 +1190,7 @@ async def test_fresh_intro_offers_preset_question_buttons(fresh_db, user_id, mon
         assert f"ai:preset:{key}" in callbacks
     assert "ai:buildprog" in callbacks
     # Пресеты стоят выше навигации: на интро они — основной призыв к действию.
-    assert callbacks.index(f"ai:preset:progress") < callbacks.index("ai:menu")
+    assert callbacks.index("ai:preset:progress") < callbacks.index("ai:menu")
 
 
 async def test_resumed_conversation_has_no_preset_buttons(fresh_db, user_id, monkeypatch):
