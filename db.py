@@ -2818,7 +2818,13 @@ async def workout_plan(workout_id: int) -> list[dict[str, list[int]]]:
     ``[{"exercise_ids": [...]}, ...]`` — the same shape planned_blocks uses, so it
     can drive the "repeat workout" flow through _load_next_planned_block.
 
-    Supersets (a block with several exercises) are preserved as multi-id blocks.
+    Would preserve supersets (a block with several exercises) as multi-id
+    blocks — but nothing in the live "➕ Суперсет" flow actually creates one
+    (every db.create_block call there passes "single"; what the UI calls a
+    superset is two independent blocks whose sets happen to interleave in
+    time, see db.list_superset_partners). So in practice every block here
+    has exactly one exercise_id, and "Повторить тренировку" offers a
+    superset pair as two separate plan entries, not one (находка 21).
     Empty list if the workout has no exercises.
     """
     blocks = await list_blocks_for_workout(workout_id)
