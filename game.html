@@ -72,6 +72,11 @@
     letter-spacing: 3px; color: #ff4444; text-shadow: 0 0 20px #ff4444;
   }
   .result-score { font-size: 20px; color: #ffd700; }
+  #result-art {
+    width: 104px; height: 104px; object-fit: cover; border-radius: 12px;
+    border: 2px solid rgba(255,215,0,0.4); display: none; margin: 0 auto;
+  }
+  .result-stats { font-size: 12px; color: #aaa; }
   .result-quip { font-size: 13px; color: #ccc; line-height: 1.6; max-width: 340px; }
   .result-best { font-size: 12px; color: #888; }
   .result-btn {
@@ -112,7 +117,9 @@
 <div id="screen-result" class="screen">
   <div class="screen-inner">
     <div class="result-title">Отказ</div>
+    <img id="result-art" src="" alt="">
     <div class="result-score" id="result-score">0 м · 🥤 0</div>
+    <div class="result-stats" id="result-stats"></div>
     <div class="result-quip" id="result-quip"></div>
     <div class="result-best" id="result-best"></div>
     <button class="result-btn retry" onclick="restartGame()">🔄 Ещё подход</button>
@@ -189,6 +196,12 @@ const GROUND = () => H * 0.80;
 let running = false;
 let t = 0, dist = 0, speed = 0, score = 0, best = Math.max(serverBest, +(localStorage.getItem('gymrun_best') || 0));
 let shakeT = 0, lastResult = null;
+// Комбо: серия подборов без столкновений растит множитель очков (×1…×5).
+// Скорость: старт 330, +4.5/с, потолок 760 — на капе от края экрана до игрока
+// остаётся ~0.5 с реакции; выше (как было: 920) честно успевает только бот.
+const SPEED_START = 330, SPEED_RAMP = 4.5, SPEED_CAP = 760;
+let combo = 0, maxCombo = 0, pickups = 0, lastMile = 0;
+const mult = () => 1 + Math.min(4, Math.floor(combo / 8));
 const rnd = (a, b) => a + Math.random() * (b - a);
 const pick = a => a[Math.floor(Math.random() * a.length)];
 
@@ -198,7 +211,8 @@ const P = {
   shield: false, rageT: 0, magnetT: 0, runPhase: 0,
 };
 function resetGame() {
-  t = 0; dist = 0; speed = 340; score = 0; shakeT = 0;
+  t = 0; dist = 0; speed = SPEED_START; score = 0; shakeT = 0;
+  combo = 0; maxCombo = 0; pickups = 0; lastMile = 0;
   P.x = W * 0.22; P.y = GROUND(); P.vy = 0; P.onGround = true; P.jumps = 0; P.slideT = 0;
   P.shield = false; P.rageT = 0; P.magnetT = 0; P.runPhase = 0;
   obstacles.length = 0; items.length = 0; parts.length = 0; toasts.length = 0;
@@ -319,8 +333,26 @@ function spawnObstacle() {
   if (kind === 'rack') { o.w = 26; o.h = 0; o.gap = 64; }
   if (kind === 'plate') { o.w = 44; o.h = 44; o.vx = 120 + speed * 0.12; o.rot = 0; }
   obstacles.push(o);
+  // Награда, ведущая через препятствие: дуга — по траектории прыжка, дорожка
+  // на полу — сквозь стойку на высоте подката. Собирание учит уклоняться.
+  if (Math.random() < 0.45) spawnGuideItems(o);
   const gapPx = rnd(0.85, 1.5) * (speed * 0.72) + 180;
   nextObsAt = dist + (gapPx / 7);
+}
+
+function spawnGuideItems(o) {
+  if (o.kind === 'plate') return; // блин едет навстречу — «след» из наград разъедется с ним
+  if (o.kind === 'rack') {
+    for (let i = 0; i < 4; i++) items.push(mkItem('shaker', o.x - 40 + i * 46, GROUND() - 26));
+    return;
+  }
+  const cx = o.x + o.w / 2, n = 5;
+  const barAt = Math.random() < 0.35 ? Math.floor(n / 2) : -1;
+  for (let i = 0; i < n; i++) {
+    const p = i / (n - 1);
+    const y = GROUND() - 60 - Math.sin(p * Math.PI) * 95;
+    items.push(mkItem(i === barAt ? 'bar' : 'shaker', cx - 110 + p * 220, y));
+  }
 }
 function drawObstacle(o) {
   const gy = GROUND();
@@ -376,15 +408,22 @@ const ITEM_TYPES = {
 const items = [];
 let nextItemAt = 140;
 function spawnItems() {
+  // Свободные награды не пересекаются с препятствиями: если у правого края
+  // уже спавнится преграда, дорожка вела бы прямо в неё — переносим попытку.
+  if (obstacles.some(o => o.x > W - 180)) { nextItemAt = dist + 12; return; }
   const r = Math.random();
   if (r < 0.14) items.push(mkItem('creatine', W + 60, GROUND() - 120));
   else if (r < 0.25) items.push(mkItem('preworkout', W + 60, GROUND() - 150));
   else if (r < 0.34) items.push(mkItem('gainer', W + 60, GROUND() - 100));
-  else {
+  else if (r < 0.48) {
+    // Верхний ярус: достаётся только двойным прыжком, поэтому и награда
+    // жирнее — батончики вместо шейкеров.
+    for (let i = 0; i < 3; i++) items.push(mkItem('bar', W + 60 + i * 58, GROUND() - 240));
+  } else {
     const n = 4 + Math.floor(rnd(0, 3)), arc = Math.random() < 0.5;
     const barMix = Math.random() < 0.3;
     for (let i = 0; i < n; i++) {
-      const y = arc ? GROUND() - 90 - Math.sin(i / (n - 1) * Math.PI) * 110 : GROUND() - 64;
+      const y = arc ? GROUND() - 80 - Math.sin(i / (n - 1) * Math.PI) * 80 : GROUND() - 64;
       const type = (barMix && i === Math.floor(n / 2)) ? 'bar' : 'shaker';
       items.push(mkItem(type, W + 60 + i * 54, y));
     }
@@ -396,6 +435,9 @@ function drawItem(it) {
   const d = ITEM_TYPES[it.type];
   const bob = Math.sin(it.t * 4) * 4;
   ctx.save(); ctx.translate(it.x, it.y + bob);
+  // Мягкий ореол: в тёмных локациях (неон, улица) предметы сливались с фоном.
+  ctx.fillStyle = 'rgba(255,255,255,0.09)';
+  ctx.beginPath(); ctx.arc(0, 0, 21, 0, 7); ctx.fill();
   if (it.type === 'shaker') {
     ctx.fillStyle = d.color; ctx.fillRect(-9, -12, 18, 26);
     ctx.fillStyle = '#b93b4e'; ctx.fillRect(-9, -2, 18, 4);
@@ -427,7 +469,9 @@ function burst(x, y, color, n = 10, sp = 180) {
   }
 }
 const toasts = [];
-function toast(text, color) { toasts.push({ text, color, t: 0, x: P.x, y: P.y - P.h - 30 }); }
+function toast(text, color, x, y) {
+  toasts.push({ text, color, t: 0, x: x ?? P.x, y: y ?? P.y - P.h - 30 });
+}
 
 // ── ИГРОК ────────────────────────────────────────────────────────────────────
 function playerBox() {
@@ -641,7 +685,10 @@ function jump() {
 }
 function slide() {
   if (!running) return;
-  if (P.onGround) P.slideT = 0.62;
+  // Длительность от скорости, а не константа: подкат должен покрывать длину
+  // стойки (~290 px) на любой скорости. С фиксированными 0.62 с на стартовой
+  // скорости игрок вставал ровно под перекладиной — гарантированная смерть.
+  if (P.onGround) P.slideT = Math.min(1.05, Math.max(0.5, 330 / Math.max(120, speed)));
   else { P.vy = Math.max(P.vy, 900); P.slideT = 0.5; }
 }
 let touchY = null, touchT = 0;
@@ -712,9 +759,17 @@ function die() {
   if (d > best) { best = d; localStorage.setItem('gymrun_best', best); }
   lastResult = {
     distance: d, score, fighter: selectedFighter,
-    best, gameTimestamp: Date.now(),
+    best, maxCombo, pickups, gameTimestamp: Date.now(),
   };
+  // Арт выбранного атлета, если он есть (см. assets/game) — иначе без картинки.
+  const art = document.getElementById('result-art');
+  art.style.display = 'none';
+  art.onload = () => { art.style.display = 'block'; };
+  art.onerror = () => { art.style.display = 'none'; };
+  art.src = 'assets/game/' + selectedFighter + '.jpg';
   document.getElementById('result-score').textContent = d + ' м · 🥤 ' + score;
+  document.getElementById('result-stats').textContent =
+    'лучшая серия: ' + maxCombo + ' · пауэрапов: ' + pickups;
   // «ПРИВЕТ АТЛЕТ, » — брендовая формула, имя не подставляем (см. TONE_OF_VOICE.md)
   document.getElementById('result-quip').textContent = 'ПРИВЕТ АТЛЕТ, ' + d + pick(QUIPS);
   document.getElementById('result-best').textContent = 'рекорд: ' + best + ' м';
@@ -774,7 +829,12 @@ function update(dt) {
   const rage = P.rageT > 0;
   const spd = speed * (rage ? 1.55 : 1);
   dist += spd * dt / 7;
-  speed = Math.min(920, speed + 7.5 * dt);
+  speed = Math.min(SPEED_CAP, speed + SPEED_RAMP * dt);
+  // Милстоны: каждые 500 м — отметка, чтобы у бесконечного забега были этапы.
+  if (Math.floor(dist / 500) > lastMile) {
+    lastMile = Math.floor(dist / 500);
+    toast(lastMile * 500 + ' м!', C_GOLD, W / 2, H * 0.3);
+  }
   if (P.rageT > 0) P.rageT -= dt;
   if (P.magnetT > 0) P.magnetT -= dt;
   if (P.slideT > 0) P.slideT -= dt;
@@ -796,8 +856,20 @@ function update(dt) {
     if (o.x < -160) { obstacles.splice(i, 1); continue; }
     const b = obstacleBox(o);
     if (pb.x < b.x + b.w && pb.x + pb.w > b.x && pb.y < b.y + b.h && pb.y + pb.h > b.y) {
-      if (rage) { burst(o.x + (o.w || 30) / 2, GROUND() - 24, '#9aa0ab', 14, 300); obstacles.splice(i, 1); toast('РАЗНЁС!', C_RAGE); continue; }
-      if (P.shield) { P.shield = false; obstacles.splice(i, 1); burst(P.x, P.y - 30, '#7ea8ff', 16, 260); toast('КРЕАТИН СПАС', '#7ea8ff'); shakeT = 0.25; continue; }
+      if (rage) {
+        // Ярость награждает за агрессию: снос — это очки, а не только спецэффект.
+        const bonus = 25 * mult();
+        score += bonus;
+        burst(o.x + (o.w || 30) / 2, GROUND() - 24, '#9aa0ab', 14, 300);
+        obstacles.splice(i, 1);
+        toast('+' + bonus, C_RAGE, o.x, GROUND() - 80);
+        continue;
+      }
+      if (P.shield) {
+        P.shield = false; combo = 0;
+        obstacles.splice(i, 1); burst(P.x, P.y - 30, '#7ea8ff', 16, 260);
+        toast('КРЕАТИН СПАС', '#7ea8ff'); shakeT = 0.25; continue;
+      }
       die(); return;
     }
   }
@@ -815,10 +887,13 @@ function update(dt) {
       const d = ITEM_TYPES[it.type];
       items.splice(i, 1);
       burst(it.x, it.y, d.color, 8, 160);
-      if (d.power === 'shield') { P.shield = true; toast('ЩИТ: КРЕАТИН', '#7ea8ff'); sPower(); }
-      else if (d.power === 'rage') { P.rageT = 4.2; toast('ПРЕДТРЕНИК: ЯРОСТЬ!', C_RAGE); sPower(); shakeT = 0.3; }
-      else if (d.power === 'magnet') { P.magnetT = 6; toast('ГЕЙНЕР-МАГНИТ', '#67c26a'); sPower(); }
-      else { score += d.pts; sPick(); }
+      const before = mult();
+      combo += 1; maxCombo = Math.max(maxCombo, combo);
+      if (d.power === 'shield') { P.shield = true; pickups += 1; toast('ЩИТ: КРЕАТИН', '#7ea8ff'); sPower(); }
+      else if (d.power === 'rage') { P.rageT = 4.2; pickups += 1; toast('ПРЕДТРЕНИК: ЯРОСТЬ!', C_RAGE); sPower(); shakeT = 0.3; }
+      else if (d.power === 'magnet') { P.magnetT = 6; pickups += 1; toast('ГЕЙНЕР-МАГНИТ', '#67c26a'); sPower(); }
+      else { score += d.pts * mult(); sPick(); }
+      if (mult() > before) toast('СЕРИЯ ×' + mult(), C_GOLD);
     }
   }
 
@@ -876,7 +951,8 @@ function render() {
   ctx.font = "700 14px 'Courier New', monospace"; ctx.fillStyle = 'rgba(242,237,227,0.6)';
   ctx.fillText('рекорд ' + Math.max(best, Math.floor(dist)) + ' м', 20, 62);
   ctx.textAlign = 'right'; ctx.fillStyle = '#e94f64'; ctx.font = "900 22px 'Courier New', monospace";
-  ctx.fillText('🥤 ' + score, W - 20, 40);
+  const multNow = mult();
+  ctx.fillText('🥤 ' + score + (multNow > 1 ? '  ×' + multNow : ''), W - 20, 40);
   let ix = W - 20;
   const pw = (label, color, frac) => {
     ctx.textAlign = 'right'; ctx.font = "800 12px 'Courier New', monospace"; ctx.fillStyle = color;

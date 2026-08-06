@@ -90,6 +90,86 @@ async def test_best_distance_is_max_of_all_runs(fresh_db, user_id):
     assert await fresh_db.get_game_best_distance(user_id) == 512
 
 
+# ---------- реакция тренера на забег ----------
+
+
+async def test_first_run_gets_a_trainer_message(fresh_db, user_id, monkeypatch):
+    sent = []
+    monkeypatch.setattr(game_server, "_send_trainer_message",
+                        AsyncMock(side_effect=lambda uid, text: sent.append((uid, text))))
+
+    ok = await game_server.process_game_result(
+        user_id, {"distance": 150, "score": 40, "fighter": "power", "gameTimestamp": 1}
+    )
+
+    assert ok
+    ((uid, text),) = sent
+    assert uid == user_id
+    assert text.startswith("ПРИВЕТ АТЛЕТ, ")
+    assert "150" in text
+
+
+async def test_ordinary_run_stays_silent(fresh_db, user_id, monkeypatch):
+    """Не рекорд и не первый забег — тренер молчит, иначе каждый заход = спам."""
+    sent = AsyncMock()
+    monkeypatch.setattr(game_server, "_send_trainer_message", sent)
+    await fresh_db.save_game_result(user_id, 500, 10, "power")
+
+    await game_server.process_game_result(
+        user_id, {"distance": 400, "score": 5, "fighter": "power", "gameTimestamp": 2}
+    )
+
+    sent.assert_not_awaited()
+
+
+async def test_small_record_gains_stay_silent_but_big_ones_notify(fresh_db, user_id, monkeypatch):
+    """Ранние забеги бьют рекорд каждый раз — сообщение только за заметный прирост."""
+    sent = []
+    monkeypatch.setattr(game_server, "_send_trainer_message",
+                        AsyncMock(side_effect=lambda uid, text: sent.append(text)))
+    await fresh_db.save_game_result(user_id, 500, 10, "power")
+
+    # +10% — рекорд, но тихий
+    await game_server.process_game_result(
+        user_id, {"distance": 550, "score": 5, "fighter": "power", "gameTimestamp": 3}
+    )
+    assert sent == []
+
+    # +30% — уже событие
+    await game_server.process_game_result(
+        user_id, {"distance": 715, "score": 5, "fighter": "power", "gameTimestamp": 4}
+    )
+    (text,) = sent
+    assert "рекорд" in text and "715" in text and "550" in text
+
+
+async def test_notify_failure_does_not_break_result_saving(fresh_db, user_id, monkeypatch):
+    monkeypatch.setattr(
+        game_server, "_send_trainer_message", AsyncMock(side_effect=RuntimeError("tg down"))
+    )
+
+    ok = await game_server.process_game_result(
+        user_id, {"distance": 200, "score": 1, "fighter": "cross", "gameTimestamp": 5}
+    )
+
+    assert ok
+    assert await fresh_db.get_game_best_distance(user_id) == 200
+
+
+async def test_duplicate_submission_is_saved_once(fresh_db, user_id, monkeypatch):
+    monkeypatch.setattr(game_server, "_send_trainer_message", AsyncMock())
+    raw = {"distance": 300, "score": 10, "fighter": "power", "gameTimestamp": 777}
+
+    assert await game_server.process_game_result(user_id, raw)
+    assert await game_server.process_game_result(user_id, raw)
+
+    cur = await fresh_db.conn().execute(
+        "SELECT COUNT(*) FROM game_results WHERE telegram_id = ?", (user_id,)
+    )
+    (count,) = await cur.fetchone()
+    assert count == 1
+
+
 # ---------- команда /game ----------
 
 
