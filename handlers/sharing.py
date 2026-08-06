@@ -26,6 +26,7 @@ from aiogram.filters import CommandObject, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
+import acquisition
 import db
 from formatting import MESSAGE_LIMIT, telegram_length
 from state_scaffold import clear_state_keep_ai
@@ -74,7 +75,7 @@ FALLBACK_GROUP_NAME = "Другое"
 _bot_username: Optional[str] = None
 
 
-async def _get_bot_username(bot) -> str:
+async def get_bot_username(bot) -> str:
     global _bot_username
     if _bot_username is None:
         _bot_username = (await bot.get_me()).username
@@ -228,7 +229,7 @@ async def share_routine(callback: CallbackQuery, state: FSMContext):
         ],
     }
     token = await db.create_shared_item(callback.from_user.id, "routine", json.dumps(payload, ensure_ascii=False))
-    url = _deep_link(await _get_bot_username(callback.bot), token)
+    url = _deep_link(await get_bot_username(callback.bot), token)
 
     text = "\n".join(
         _routine_preview_lines(payload)
@@ -278,7 +279,7 @@ async def _send_program_card(callback: CallbackQuery, program_id: int, program_n
         "total_days": len(days),
     }
     token = await db.create_shared_item(callback.from_user.id, "program", json.dumps(payload, ensure_ascii=False))
-    url = _deep_link(await _get_bot_username(callback.bot), token)
+    url = _deep_link(await get_bot_username(callback.bot), token)
 
     note = _omitted_days_note(payload)
     text = "\n".join(
@@ -354,7 +355,7 @@ async def share_exercise(callback: CallbackQuery, state: FSMContext):
         "photo_file_id": ex["custom_photo_file_id"],
     }
     token = await db.create_shared_item(callback.from_user.id, "exercise", json.dumps(payload, ensure_ascii=False))
-    url = _deep_link(await _get_bot_username(callback.bot), token)
+    url = _deep_link(await get_bot_username(callback.bot), token)
 
     lines = [f"🏋️ <b>{escape(payload['name'])}</b>"]
     if payload["group"]:
@@ -425,6 +426,15 @@ async def open_shared(message: Message, command: CommandObject, state: FSMContex
     await clear_state_keep_ai(state)
     token = (command.args or "")[len(START_PREFIX):]
     row = await db.get_shared_item(token)
+    if is_new:
+        # Визитка приводит людей не хуже рекламы, и в воронке (см. acquisition.py)
+        # стоит своей строкой — с автором, если ссылка ещё живая. По битой
+        # ссылке человек тоже пришёл, и терять его из отчёта незачем.
+        await db.set_user_source(
+            message.from_user.id,
+            acquisition.SOURCE_SHARED_CARD,
+            row["owner_id"] if row is not None else None,
+        )
     if row is None:
         await message.answer("🤷 Эта ссылка устарела или битая. Открой меню: /start")
         return

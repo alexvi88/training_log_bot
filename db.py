@@ -698,6 +698,20 @@ async def _migrate_schema() -> None:
         # ровно один раз: само звание считается на лету из тренировок и тоннажа,
         # так что без этой отметки карточка объявляла бы его каждый раз.
         await _conn.execute("ALTER TABLE users ADD COLUMN rank_level_seen INTEGER NOT NULL DEFAULT -1")
+    if "source" not in user_cols:
+        # Откуда человек пришёл в бота: метка из deep link'а на первом /start
+        # (см. acquisition.py). NULL значит «ещё не размечен» — на этом держится
+        # правило первого касания в set_user_source.
+        await _conn.execute("ALTER TABLE users ADD COLUMN source TEXT")
+        await _conn.execute("ALTER TABLE users ADD COLUMN referrer_id INTEGER")
+        # Все, кто зарегистрировался до этой миграции, пришли неизвестно откуда,
+        # и узнать это уже нечем. Метим их отдельным источником, а не оставляем
+        # NULL: иначе первый же их /start после деплоя записал бы им сегодняшнюю
+        # метку, и месячная воронка показала бы толпу «новых» из канала, который
+        # их не приводил. Из отчётов эта метка исключена целиком.
+        await _conn.execute(
+            "UPDATE users SET source = 'legacy' WHERE source IS NULL"
+        )
     if "food_macros_enabled" not in user_cols:
         # 1 = model estimates КБЖУ for food-diary entries (current default);
         # 0 = it just describes/saves the meal, no numbers — see handlers/food_diary.py.
@@ -1220,6 +1234,73 @@ async def get_or_create_user(telegram_id: int, username: Optional[str]) -> aiosq
 async def get_user(telegram_id: int) -> Optional[aiosqlite.Row]:
     cur = await conn().execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,))
     return await cur.fetchone()
+
+
+async def set_user_source(
+    telegram_id: int, source: str, referrer_id: Optional[int] = None
+) -> bool:
+    """Записать, откуда человек пришёл — но только если он ещё не размечен.
+
+    Первое касание побеждает: `WHERE source IS NULL` в самом UPDATE, а не
+    проверка в вызывающем коде, потому что два /start подряд (человек нажал
+    Start дважды, пока бот думал) — обычное дело, и второй не должен переписать
+    источник первого. Возвращает True, если метка легла.
+    """
+    async with _write_lock:
+        cur = await conn().execute(
+            "UPDATE users SET source = ?, referrer_id = ? "
+            "WHERE telegram_id = ? AND source IS NULL",
+            (source, referrer_id, telegram_id),
+        )
+        await conn().commit()
+    return cur.rowcount > 0
+
+
+# Подзапрос «сколько тренировок человек закрыл и когда последнюю» — общий для
+# воронки и топа пригласивших.
+_FINISHED_BY_USER = (
+    "SELECT user_id, COUNT(*) AS finished, MAX(started_at) AS last_finished_at "
+    "FROM workouts WHERE status = 'finished' GROUP BY user_id"
+)
+
+
+async def acquisition_funnel(days: int = 30, alive_days: int = 7) -> list[aiosqlite.Row]:
+    """По источникам: сколько пришло, сколько записало первую тренировку, сколько живо.
+
+    Окно считается по дате регистрации, а не по дате тренировок: канал отвечает
+    за тех, кого привёл, даже если тренируются они месяцем позже. `legacy`
+    (пришедшие до появления атрибуции) в отчёт не попадает — см. _migrate_schema.
+    """
+    since = (dt.datetime.now() - dt.timedelta(days=days)).isoformat(timespec="seconds")
+    alive_since = (dt.datetime.now() - dt.timedelta(days=alive_days)).isoformat(timespec="seconds")
+    cur = await conn().execute(
+        "SELECT COALESCE(u.source, 'unknown') AS source, "
+        "COUNT(*) AS users, "
+        "COUNT(*) FILTER (WHERE f.finished >= 1) AS activated, "
+        "COUNT(*) FILTER (WHERE f.finished >= 3) AS engaged, "
+        "COUNT(*) FILTER (WHERE f.last_finished_at >= ?) AS alive "
+        f"FROM users u LEFT JOIN ({_FINISHED_BY_USER}) f ON f.user_id = u.telegram_id "
+        "WHERE u.created_at >= ? AND COALESCE(u.source, 'unknown') <> 'legacy' "
+        "GROUP BY source ORDER BY users DESC, source",
+        (alive_since, since),
+    )
+    return await cur.fetchall()
+
+
+async def top_referrers(limit: int = 10) -> list[aiosqlite.Row]:
+    """Кто привёл больше всех — и сколько из приведённых дошли до первой тренировки."""
+    cur = await conn().execute(
+        "SELECT u.referrer_id AS referrer_id, r.username AS username, "
+        "COUNT(*) AS invited, "
+        "COUNT(*) FILTER (WHERE f.finished >= 1) AS activated "
+        "FROM users u "
+        "LEFT JOIN users r ON r.telegram_id = u.referrer_id "
+        f"LEFT JOIN ({_FINISHED_BY_USER}) f ON f.user_id = u.telegram_id "
+        "WHERE u.referrer_id IS NOT NULL "
+        "GROUP BY u.referrer_id ORDER BY invited DESC, activated DESC LIMIT ?",
+        (limit,),
+    )
+    return await cur.fetchall()
 
 
 async def list_users_with_workout_counts(limit: int = 10, offset: int = 0) -> list[aiosqlite.Row]:

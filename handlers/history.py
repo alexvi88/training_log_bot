@@ -13,6 +13,7 @@ from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import achievement_sync
+import acquisition
 import ai_trainer
 import analytics
 import charts
@@ -25,6 +26,7 @@ import timeutil
 import ui
 import view_builder
 from fsm import HistoryFlow, ProgressFlow
+from handlers import sharing
 
 router = Router(name="history")
 
@@ -339,6 +341,16 @@ async def hist_card(callback: CallbackQuery, state: FSMContext):
     )
     png = await asyncio.to_thread(charts.render_workout_card, title, body, footer, note)
     kb = InlineKeyboardBuilder()
+    # URL-кнопка стоит первой и переживает пересылку — в отличие от callback'ов
+    # (тот же приём, что у визиток, см. handlers/sharing.py). Картинку уносят в
+    # чат с друзьями, и там она перестаёт быть просто картинкой: по ссылке в ней
+    # видно, кто привёл человека (acquisition.SOURCE_REFERRAL).
+    kb.button(
+        text="🏋️ Тоже вести дневник",
+        url=acquisition.referral_link(
+            await sharing.get_bot_username(callback.bot), callback.from_user.id
+        ),
+    )
     kb.button(text="⬅️ Назад к тренировке", callback_data=f"hist:item:{workout_id}")
     kb.adjust(1)
     await callback.message.answer_photo(
