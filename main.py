@@ -226,9 +226,12 @@ def _public_commands() -> list[BotCommand]:
         BotCommand(command="feedback", description="Отзыв / баг / идея"),
     ]
     # Только когда MCP реально куда-то ведёт: команда в «/»-меню обещает
-    # работающую функцию, а без публичного адреса обещать нечего.
+    # работающую функцию, а без публичного адреса обещать нечего. /game
+    # раздаёт страница того же сервера (см. handlers/game.game_url), так что
+    # условие общее.
     if config.mcp_available():
         commands.append(BotCommand(command="mcp", description="Подключить данные к Claude и ChatGPT"))
+        commands.append(BotCommand(command="game", description="Мини-игра «Кач-Раннер»"))
     return commands
 
 
