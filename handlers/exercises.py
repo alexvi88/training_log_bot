@@ -276,7 +276,9 @@ def _suspicious_name_reason(name: str) -> str | None:
     either a stray message (too long) or something with no letters at all
     ("50 12", a logged set typed while the bot was waiting for a name instead)."""
     if len(name) > config.MAX_EXERCISE_NAME_LENGTH:
-        return f"длинновато для упражнения ({len(name)} символов)"
+        n = len(name)
+        word = formatting.plural_ru(n, ("символ", "символа", "символов"))
+        return f"длинновато для упражнения ({n} {word})"
     if not any(ch.isalpha() for ch in name):
         return "в названии нет ни одной буквы — не похоже на упражнение"
     return None
