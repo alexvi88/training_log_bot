@@ -2890,7 +2890,7 @@ async def _log_bodyweight(
             "note": _UNDO_NOTE,
         },
         {
-            "label": f"↩️ Отменить: {formatting.format_weight(weight)} {user['unit']}",
+            "label": "↩️ Отменить",
             "undo": {"kind": "bodyweight", "id": log_id},
         },
     )
@@ -3412,6 +3412,12 @@ async def execute_tool(
         payload, action = await tool(user_id, tool_input)
         if action is not None and on_action is not None:
             await on_action(action)
+            # Запись веса — единственное действие тут, у которого есть свой
+            # постоянный экран (⚖️ Дневник веса): даём прямую ссылку на него,
+            # а не только откат — человек мог захотеть глянуть график, а не
+            # передумать про саму запись.
+            if name == "log_bodyweight":
+                await on_action({"label": "⚖️ Дневник веса", "callback": "menu:bodyweight"})
     else:
         payload = {"error": f"unknown tool: {name}"}
     return json.dumps(payload, ensure_ascii=False)
