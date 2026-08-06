@@ -294,6 +294,11 @@ def _activity_line(row) -> str:
     return f"{at.strftime('%d.%m %H:%M')} {marker} {content}"
 
 
+def _activity_line_all(row) -> str:
+    who = f"@{row['username']}" if row["username"] else str(row["telegram_id"])
+    return f"{_activity_line(row)} — {who}"
+
+
 async def _show_activity_users(target: Message | CallbackQuery, state: FSMContext, page: int):
     await state.set_state(AdminFlow.browsing_activity_users)
     await state.update_data(admin_activity_users_page=page)
@@ -326,6 +331,23 @@ async def _show_activity_feed(callback: CallbackQuery, state: FSMContext, target
         text = f"👀 {who} — действий пока нет (лог хранится {config.ACTIVITY_RETENTION_DAYS} дн.)."
 
     kb = keyboards.admin_activity_feed_keyboard(target_user_id, page, has_next)
+    await ui.safe_edit(callback, text, reply_markup=kb)
+
+
+async def _show_activity_feed_all(callback: CallbackQuery, state: FSMContext, page: int):
+    await state.set_state(AdminFlow.browsing_activity_all)
+    await state.update_data(admin_activity_all_page=page)
+    total = await db.count_all_events()
+    rows = await db.list_all_events(limit=ACTIVITY_PAGE_SIZE, offset=page * ACTIVITY_PAGE_SIZE)
+    has_next = (page + 1) * ACTIVITY_PAGE_SIZE < total
+
+    if rows:
+        header = f"👀 Все пользователи — {total} действий, свежие сверху:"
+        text = header + "\n\n" + "\n".join(_activity_line_all(row) for row in rows)
+    else:
+        text = f"👀 Действий пока нет (лог хранится {config.ACTIVITY_RETENTION_DAYS} дн.)."
+
+    kb = keyboards.admin_activity_all_keyboard(page, has_next)
     await ui.safe_edit(callback, text, reply_markup=kb)
 
 
@@ -374,6 +396,16 @@ async def admin_activity_feed_page(callback: CallbackQuery, state: FSMContext):
         return
     _, _, target_raw, page_raw = callback.data.split(":")
     await _show_activity_feed(callback, state, int(target_raw), int(page_raw))
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin:aca:"))
+async def admin_activity_all(callback: CallbackQuery, state: FSMContext):
+    if not _is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    page = int(callback.data.split(":")[2])
+    await _show_activity_feed_all(callback, state, page)
     await callback.answer()
 
 

@@ -1072,7 +1072,22 @@ def admin_activity_users_keyboard(users, page: int, has_next: bool) -> InlineKey
     b.adjust(1)
     if nav:
         b.row(*nav)
+    b.row(InlineKeyboardButton(text="🌐 Все пользователи", callback_data="admin:aca:0"))
     b.row(InlineKeyboardButton(text="🏠 Меню", callback_data="admin:menu"))
+    return b.as_markup()
+
+
+def admin_activity_all_keyboard(page: int, has_next: bool) -> InlineKeyboardMarkup:
+    """Общая лента всех пользователей: та же логика «⬅️ раньше / позже ➡️», что и в ленте одного юзера."""
+    b = InlineKeyboardBuilder()
+    nav = []
+    if has_next:
+        nav.append(InlineKeyboardButton(text="⬅️ раньше", callback_data=f"admin:aca:{page + 1}"))
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="позже ➡️", callback_data=f"admin:aca:{page - 1}"))
+    if nav:
+        b.row(*nav)
+    b.row(InlineKeyboardButton(text="⬅️ К пользователям", callback_data="admin:acb"))
     return b.as_markup()
 
 
