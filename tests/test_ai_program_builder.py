@@ -1139,3 +1139,39 @@ def test_an_edit_of_a_saved_program_is_not_offered_as_a_workout():
         (b.callback_data or "").startswith("ai:prog:train:")
         for row in edit.inline_keyboard for b in row
     )
+
+
+async def test_weekly_volume_is_counted_by_code_not_by_the_model(fresh_db, user_id):
+    """Регрессия: модель называла объём по своему же черновику и ошибалась —
+    обещала «~12 подходов на грудь» в программе, где их 19. Теперь инструмент
+    возвращает посчитанное, а промпт велит брать числа только оттуда."""
+    payload, _draft = await _propose(
+        user_id,
+        {
+            "name": "Жим 3× в неделю",
+            "days": [
+                _day("A", [{"name": TEMPLATE_A, "sets": 5, "reps_min": 5, "reps_max": 8}]),
+                _day("B", [{"name": TEMPLATE_B, "sets": 4, "reps_min": 5, "reps_max": 10}]),
+                _day("C", [{"name": TEMPLATE_A, "sets": 4, "reps_min": 6, "reps_max": 10}]),
+            ],
+        },
+    )
+
+    # Жим штанги лёжа стоит в двух днях: 5 + 4 подхода на грудь за неделю.
+    assert payload["weekly_sets_by_group"]["Грудь"] == 9
+    assert payload["weekly_sets_by_group"]["Ноги"] == 4
+
+
+async def test_weekly_volume_skips_exercises_without_a_set_count(fresh_db, user_id):
+    """Схема необязательна: упражнение без числа подходов не должно ни падать,
+    ни завышать объём."""
+    payload, _draft = await _propose(
+        user_id,
+        {
+            "name": "Без схем",
+            "days": [_day("A", [{"name": TEMPLATE_A}, {"name": TEMPLATE_B, "sets": 3}])],
+        },
+    )
+
+    assert "Грудь" not in payload["weekly_sets_by_group"]
+    assert payload["weekly_sets_by_group"]["Ноги"] == 3
