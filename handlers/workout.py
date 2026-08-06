@@ -731,7 +731,7 @@ _WORKOUT_SCAFFOLD_KEYS = (
     # them. Same reasoning as the rest of this tuple — stepping out to the
     # menu mid-workout must not throw away the plan the user is partway
     # through (see _clear_state_keep_workout below).
-    "planned_blocks", "exercise_targets", "confirmed_weights",
+    "planned_blocks", "exercise_targets", "confirmed_weights", "plan_completes_on_close",
     # Not workout scaffolding, but the same reasoning: stepping out to the menu
     # and back shouldn't make the AI-тренер forget the conversation in progress
     # (`ai_history`), and the program the trainer just proposed
@@ -2428,11 +2428,22 @@ async def live_finish_exercise(callback: CallbackQuery, state: FSMContext):
         )
         await _render_logging_screen(callback.bot, state, user)
     else:
+        # находка 20: this block was the plan's last one (flagged when it was
+        # opened, see _load_next_planned_block) and it's closing right now —
+        # the linear "делаю по порядку, закрываю, беру следующее" path used to
+        # never hit "🎉 Программа пройдена" at all, because has_planned (and
+        # with it the "▶️" button that used to surface the empty queue) had
+        # already gone false the moment this exercise was opened.
+        plan_completes = bool(data.get("plan_completes_on_close"))
         await state.update_data(
             open_exercises=[], open_blocks={}, active_exercise_id=None, last_finished_exercise_id=active,
+            plan_completes_on_close=False,
         )
         await state.set_state(WorkoutFlow.idle)
-        await _enter_idle_screen(callback.bot, state, user, data["workout_id"])
+        if plan_completes:
+            await _enter_program_complete_screen(callback.bot, state, user, data["workout_id"])
+        else:
+            await _enter_idle_screen(callback.bot, state, user, data["workout_id"])
     await callback.answer()
 
 
@@ -2492,7 +2503,14 @@ async def _load_next_planned_block(event, state: FSMContext, index: int = 0) -> 
     if not planned or not 0 <= index < len(planned):
         return False
     block_plan = planned.pop(index)
-    await state.update_data(planned_blocks=planned)
+    # находка 20: the queue empties HERE, at open time, not when the block is
+    # closed — by the time the last planned exercise is finished, has_planned
+    # is already false and the "▶️" that used to surface an empty queue no
+    # longer renders at all. Remember that this block is the plan's last one
+    # so live_finish_exercise can show "🎉 Программа пройдена" the moment it's
+    # actually closed, instead of the screen being reachable only through
+    # 📋 "Убрать из плана".
+    await state.update_data(planned_blocks=planned, plan_completes_on_close=not planned)
     workout_id = data["workout_id"]
 
     open_exercises: list[int] = []
