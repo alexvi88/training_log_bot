@@ -1589,7 +1589,12 @@ async def pick_existing_exercise(callback: CallbackQuery, state: FSMContext):
     await _on_exercise_chosen(callback, state, ex_id)
 
 
-@router.message(StateFilter(WorkoutFlow.picking_group, WorkoutFlow.picking_exercise), F.text)
+_NOT_A_COMMAND = ~F.text.startswith("/")
+
+
+@router.message(
+    StateFilter(WorkoutFlow.picking_group, WorkoutFlow.picking_exercise), F.text, _NOT_A_COMMAND
+)
 async def pick_exercise_search(message: Message, state: FSMContext):
     """Typing while picking a group or an exercise searches instead of being silently
     dropped — so the user can jump straight to an exercise by name without first
@@ -1703,7 +1708,9 @@ def _suspicious_exercise_name_reason(name: str) -> str | None:
     either a stray message (too long) or something with no letters at all
     ("50 12", a logged set typed while the bot was waiting for a name instead)."""
     if len(name) > config.MAX_EXERCISE_NAME_LENGTH:
-        return f"длинновато для упражнения ({len(name)} символов)"
+        n = len(name)
+        word = formatting.plural_ru(n, ("символ", "символа", "символов"))
+        return f"длинновато для упражнения ({n} {word})"
     if not any(ch.isalpha() for ch in name):
         return "в названии нет ни одной буквы — не похоже на упражнение"
     return None

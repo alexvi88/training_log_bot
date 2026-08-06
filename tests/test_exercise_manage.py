@@ -847,3 +847,14 @@ async def test_a_description_at_the_limit_still_goes_through(fresh_db, user_id):
     await exercises.exm_description_entered(_make_message(user_id, text), state)
 
     assert (await db.get_exercise(ex_id))["description"] == text
+
+
+async def test_long_name_warning_declines_symbol_count_correctly():
+    """Раньше было жёсткое «81 символов» через f-строку — теперь
+    plural_ru согласует число со словом («81 символ», «82 символа»)."""
+    reason_81 = exercises._suspicious_name_reason("я" * 81)
+    assert reason_81 == "длинновато для упражнения (81 символ)"
+    reason_82 = exercises._suspicious_name_reason("я" * 82)
+    assert reason_82 == "длинновато для упражнения (82 символа)"
+    reason_85 = exercises._suspicious_name_reason("я" * 85)
+    assert reason_85 == "длинновато для упражнения (85 символов)"

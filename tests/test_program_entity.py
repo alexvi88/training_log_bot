@@ -314,6 +314,21 @@ async def test_routine_budget_is_one_rule_for_every_creation_path(fresh_db, user
     assert await db.routine_budget(user_id, 1) is not None
 
 
+async def test_routine_budget_message_declines_day_count(fresh_db, user_id, monkeypatch):
+    """Число дней подставлялось в фиксированное «дней» независимо от того,
+    сколько их — «1 дней», «2 дней». plural_ru согласует форму со значением."""
+    db = fresh_db
+    monkeypatch.setattr(config, "MAX_ROUTINES_PER_USER", 1)
+    await db.create_routine(user_id, "День 1")
+    message = await db.routine_budget(user_id, adding=1)
+    assert "1 день в программах" in message
+
+    monkeypatch.setattr(config, "MAX_ROUTINES_PER_USER", 2)
+    await db.create_routine(user_id, "День 2")
+    message = await db.routine_budget(user_id, adding=1)
+    assert "2 дня в программах" in message
+
+
 async def test_replacing_days_does_not_count_them_twice(fresh_db, user_id):
     """Правка программы того же размера упиралась бы в потолок только потому,
     что старая версия ещё цела."""

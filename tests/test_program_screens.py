@@ -598,3 +598,50 @@ async def test_the_edit_screen_belongs_to_its_owner(fresh_db, user_id):
     await routines.rt_program_edit(callback, await _state(user_id + 1))
 
     assert _buttons(callback) == []
+
+
+# ---------- «незакрытая тренировка» перед стартом дня ----------
+
+
+async def test_unfinished_workout_prompt_names_the_program_not_the_day(fresh_db, user_id):
+    """routine['name'] — имя дня («Тяни»), а не программы («PPL»). Раньше
+    фраза «начать по программе «Тяни»?» называла программой день — здесь
+    должно быть имя программы, день — уточнением в скобках."""
+    db = fresh_db
+    program_id = await _program(db, user_id, days=("Толкай", "Тяни"))
+    days = await db.list_program_days_by_id(program_id)
+    tyani = next(d for d in days if d["name"] == "Тяни")
+    # Незакрытая тренировка с хотя бы одним подходом — иначе бот тихо
+    # выбрасывает старую и стартует новую без вопросов.
+    group_id = await db.create_muscle_group(user_id, "Ноги")
+    ex_id = await db.create_exercise(user_id, "Присед", group_id)
+    active_id = await db.create_workout(user_id, started_at="2026-08-01T10:00:00")
+    block_id = await db.create_block(active_id, "single")
+    await db.add_block_exercise(block_id, ex_id, 0)
+    await db.add_set(block_id, ex_id, 0, 0, 100.0, 5)
+
+    callback = _make_callback(user_id, f"rt:start:{tyani['id']}")
+    await routines.rt_start(callback, await _state(user_id))
+
+    text = _last_text(callback)
+    assert "программе «PPL»" in text
+    assert "день «Тяни»" in text
+
+
+async def test_unfinished_workout_prompt_has_no_program_name_for_standalone_day(fresh_db, user_id):
+    """Тренировка без программы (routine['program_name'] is None) не должна
+    получить пустое «программе « »» — используем имя самой тренировки."""
+    db = fresh_db
+    routine_id = await db.create_routine(user_id, "Фулбади")
+    group_id = await db.create_muscle_group(user_id, "Ноги")
+    ex_id = await db.create_exercise(user_id, "Присед", group_id)
+    active_id = await db.create_workout(user_id, started_at="2026-08-01T10:00:00")
+    block_id = await db.create_block(active_id, "single")
+    await db.add_block_exercise(block_id, ex_id, 0)
+    await db.add_set(block_id, ex_id, 0, 0, 100.0, 5)
+
+    callback = _make_callback(user_id, f"rt:start:{routine_id}")
+    await routines.rt_start(callback, await _state(user_id))
+
+    text = _last_text(callback)
+    assert "программе «Фулбади»" in text

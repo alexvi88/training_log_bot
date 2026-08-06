@@ -1032,6 +1032,7 @@ def build_ai_program_preview(
         {item["name"] for day in days for item in day["items"] if item.get("source") == "template"}
     )
     day_word = plural_ru(len(days), ("день", "дня", "дней"))
+    day_word_gen = plural_ru(len(days), ("дня", "дней", "дней"))
     ex_word = plural_ru(total, ("упражнение", "упражнения", "упражнений"))
 
     lines = [
@@ -1062,7 +1063,7 @@ def build_ai_program_preview(
         tail.append("Добавлю как программу — начать по ней тренировку можно в один тап.")
     else:
         tail.append(
-            f"Добавлю программу «{escape(name)}» из {len(days)} {day_word} — "
+            f"Добавлю программу «{escape(name)}» из {len(days)} {day_word_gen} — "
             "начать тренировку по любому можно в один тап."
         )
     if new_names:
