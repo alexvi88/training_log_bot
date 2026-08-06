@@ -415,11 +415,14 @@ async def test_each_app_gets_its_own_disconnect_button(fresh_db, user_id):
 
     text = _sent_text(callback)
     assert "Claude" in text and "ChatGPT" in text
-    assert _buttons(callback.message.answer.call_args.kwargs["reply_markup"]) == [
-        "mcp:off:client-1",
-        "mcp:off:client-2",
-        "mcp:open",
-    ]
+    buttons = _buttons(callback.message.answer.call_args.kwargs["reply_markup"])
+    # Порядок между приложениями тут не проверяем: список отсортирован по времени
+    # подключения (новое первым, см. db.list_connected_mcp_apps), а два подключения
+    # подряд попадают то в одну секунду, то в разные — на CI это давало то
+    # client-1 первым, то client-2. Проверяем то, ради чего тест и написан: у
+    # каждого приложения своя кнопка отключения, и общая кнопка идёт последней.
+    assert sorted(buttons[:-1]) == ["mcp:off:client-1", "mcp:off:client-2"]
+    assert buttons[-1] == "mcp:open"
 
 
 async def test_disconnect_kills_only_that_app(fresh_db, user_id):
