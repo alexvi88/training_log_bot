@@ -289,13 +289,15 @@ async def test_the_shared_feed_mixes_events_from_every_user_newest_first(fresh_d
 
     assert await state.get_state() == AdminFlow.browsing_activity_all.state
     text = _screen_text(callback)
-    assert "@other" in text and "@tester" in text
+    assert "<b>@other</b>" in text and "<b>@tester</b>" in text
     assert text.index("присед 80х5") < text.index("жим 100х5")
+    used_mock = callback.message.edit_text if callback.message.edit_text.await_args else callback.message.answer
+    assert used_mock.await_args.kwargs["parse_mode"] == "HTML"
 
 
 async def test_the_shared_feed_pages_back_into_older_events(fresh_db, user_id, monkeypatch):
     monkeypatch.setattr(config, "ADMIN_ID", ADMIN_ID)
-    for i in range(admin.ACTIVITY_PAGE_SIZE + 1):
+    for i in range(admin.ACTIVITY_ALL_PAGE_SIZE + 1):
         await db.log_user_event(user_id, activity_log.KIND_MESSAGE, f"событие {i}")
 
     callback = _callback(ADMIN_ID, data="admin:aca:1")
@@ -303,7 +305,7 @@ async def test_the_shared_feed_pages_back_into_older_events(fresh_db, user_id, m
 
     text = _screen_text(callback)
     assert "событие 0" in text
-    assert "событие 25" not in text
+    assert f"событие {admin.ACTIVITY_ALL_PAGE_SIZE}" not in text
 
 
 async def test_a_non_admin_cannot_open_the_shared_feed(fresh_db, user_id, monkeypatch):
