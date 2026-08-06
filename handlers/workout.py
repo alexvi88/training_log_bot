@@ -1573,7 +1573,12 @@ async def pick_existing_exercise(callback: CallbackQuery, state: FSMContext):
     await _on_exercise_chosen(callback, state, ex_id)
 
 
-@router.message(StateFilter(WorkoutFlow.picking_group, WorkoutFlow.picking_exercise), F.text)
+_NOT_A_COMMAND = ~F.text.startswith("/")
+
+
+@router.message(
+    StateFilter(WorkoutFlow.picking_group, WorkoutFlow.picking_exercise), F.text, _NOT_A_COMMAND
+)
 async def pick_exercise_search(message: Message, state: FSMContext):
     """Typing while picking a group or an exercise searches instead of being silently
     dropped — so the user can jump straight to an exercise by name without first
