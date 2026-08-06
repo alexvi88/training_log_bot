@@ -4,6 +4,7 @@ activity_log.py)."""
 
 import asyncio
 import datetime as dt
+from html import escape
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramAPIError, TelegramForbiddenError
@@ -277,6 +278,10 @@ async def admin_ai_dialogs_show(callback: CallbackQuery, state: FSMContext):
 
 
 ACTIVITY_PAGE_SIZE = 25
+# Общая лента смешивает события всех юзеров, поэтому на одно и то же число
+# событий приходится куда больше времени наблюдения — короткая страница
+# заставляла бы листать через каждые несколько минут. Держим её длиннее.
+ACTIVITY_ALL_PAGE_SIZE = 80
 # Экран — одно сообщение (4096 символов у Telegram), а в базе строка может быть
 # длиной до activity_log.MAX_CONTENT_LEN. Показываем начало: для «что человек
 # ввёл» его хватает, а целиком длинная простыня всё равно вытеснила бы с экрана
@@ -295,8 +300,16 @@ def _activity_line(row) -> str:
 
 
 def _activity_line_all(row) -> str:
+    """Та же строка, что и в ленте одного пользователя, но с автором — общая
+    лента иначе нечитаема — и в HTML, чтобы автора можно было выделить жирным."""
+    at = dt.datetime.fromisoformat(row["created_at"])
+    content = row["content"]
+    if len(content) > ACTIVITY_LINE_LIMIT:
+        content = content[: ACTIVITY_LINE_LIMIT - 1] + "…"
+    content = content.replace("\n", " ⏎ ")
+    marker = "👉" if row["kind"] == activity_log.KIND_CALLBACK else "💬"
     who = f"@{row['username']}" if row["username"] else str(row["telegram_id"])
-    return f"{_activity_line(row)} — {who}"
+    return f"{at.strftime('%d.%m %H:%M')} {marker} {escape(content)} — <b>{escape(who)}</b>"
 
 
 async def _show_activity_users(target: Message | CallbackQuery, state: FSMContext, page: int):
@@ -338,8 +351,8 @@ async def _show_activity_feed_all(callback: CallbackQuery, state: FSMContext, pa
     await state.set_state(AdminFlow.browsing_activity_all)
     await state.update_data(admin_activity_all_page=page)
     total = await db.count_all_events()
-    rows = await db.list_all_events(limit=ACTIVITY_PAGE_SIZE, offset=page * ACTIVITY_PAGE_SIZE)
-    has_next = (page + 1) * ACTIVITY_PAGE_SIZE < total
+    rows = await db.list_all_events(limit=ACTIVITY_ALL_PAGE_SIZE, offset=page * ACTIVITY_ALL_PAGE_SIZE)
+    has_next = (page + 1) * ACTIVITY_ALL_PAGE_SIZE < total
 
     if rows:
         header = f"👀 Все пользователи — {total} действий, свежие сверху:"
@@ -348,7 +361,7 @@ async def _show_activity_feed_all(callback: CallbackQuery, state: FSMContext, pa
         text = f"👀 Действий пока нет (лог хранится {config.ACTIVITY_RETENTION_DAYS} дн.)."
 
     kb = keyboards.admin_activity_all_keyboard(page, has_next)
-    await ui.safe_edit(callback, text, reply_markup=kb)
+    await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML")
 
 
 @router.message(Command("activity"))
