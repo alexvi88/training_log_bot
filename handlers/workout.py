@@ -11,7 +11,7 @@ from typing import Callable
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.filters import Command, StateFilter
+from aiogram.filters import Command, CommandObject, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import (
     BufferedInputFile,
@@ -24,6 +24,7 @@ from aiogram.types import (
 )
 
 import achievement_sync
+import acquisition
 import ai_trainer
 import analytics
 import charts
@@ -780,7 +781,13 @@ async def _clear_state_keep_workout(state: FSMContext) -> None:
 
 
 @router.message(Command("start"))
-async def cmd_start(message: Message, state: FSMContext):
+async def cmd_start(message: Message, state: FSMContext, command: CommandObject | None = None):
+    """Главное меню — и единственное место, где считается источник новичка.
+
+    `command` приезжает от фильтра Command и несёт метку из deep link'а
+    (`?start=src_kachalka`). Он опциональный, потому что этот же хендлер служит
+    кнопке «🏠 Меню» (см. persistent_menu), где никакой команды нет.
+    """
     from handlers.persistent_menu import attach_silently
 
     await _clear_state_keep_workout(state)
@@ -789,6 +796,15 @@ async def cmd_start(message: Message, state: FSMContext):
     is_new = await db.get_user(message.from_user.id) is None
     await _ensure_user(message.from_user.id, message.from_user.username)
     if is_new:
+        # Только новичку: у старожила переход по чужой ссылке — не привлечение,
+        # и записывать ему источник значило бы приписать каналу человека,
+        # который был в боте задолго до него.
+        attribution = acquisition.attribution_for(
+            command.args if command else None, message.from_user.id
+        )
+        await db.set_user_source(
+            message.from_user.id, attribution.source, attribution.referrer_id
+        )
         # Молча, до приветствия: клавиатура нужна сразу, но новичку нечего
         # рассказывать про «обновил меню» (см. attach_silently), а приветствие
         # должно остаться последним сообщением на экране.

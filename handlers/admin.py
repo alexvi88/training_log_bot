@@ -12,6 +12,7 @@ from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
+import acquisition
 import activity_log
 import config
 import db
@@ -21,6 +22,7 @@ import push_texts
 import ui
 import view_builder
 from fsm import AdminFlow
+from handlers import sharing
 
 router = Router(name="admin")
 
@@ -362,6 +364,35 @@ async def _show_activity_feed_all(callback: CallbackQuery, state: FSMContext, pa
 
     kb = keyboards.admin_activity_all_keyboard(page, has_next)
     await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML")
+
+
+GROWTH_WINDOW_DAYS = 30
+GROWTH_REFERRERS = 10
+
+
+@router.message(Command("growth"))
+async def cmd_growth(message: Message, state: FSMContext):
+    """Воронка по источникам: за что заплатили и что с этого пришло.
+
+    Без аргументов — окно GROWTH_WINDOW_DAYS дней; `/growth 7` сужает его, чтобы
+    смотреть свежий закуп, не утопая в накопленной истории.
+    """
+    if not _is_admin(message.from_user.id):
+        return
+    days = GROWTH_WINDOW_DAYS
+    parts = (message.text or "").split()
+    if len(parts) > 1 and parts[1].isdigit() and int(parts[1]) > 0:
+        days = int(parts[1])
+    funnel = await db.acquisition_funnel(days, alive_days=acquisition.ALIVE_WINDOW_DAYS)
+    referrers = await db.top_referrers(GROWTH_REFERRERS)
+    bot_username = await sharing.get_bot_username(message.bot)
+    text = (
+        f"{acquisition.format_funnel(funnel, days)}\n\n"
+        f"{acquisition.format_referrers(referrers)}\n\n"
+        f"Ссылка под новый канал: <code>{acquisition.channel_link(bot_username, 'имя')}</code> — "
+        f"вместо «имя» латиница, цифры и «_»."
+    )
+    await message.answer(text, parse_mode="HTML", disable_web_page_preview=True)
 
 
 @router.message(Command("activity"))
