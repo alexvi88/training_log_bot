@@ -11,18 +11,33 @@
 
 ## Промпты для генерации
 
-Общий стиль (добавлять к каждому): *stylized semi-realistic character portrait,
-3/4 view, dark basement gym background with warm dim lighting, moody and gritty
-but not grim, muted colors with one accent, square format, no text, no logos*.
+Стиль — мультяшный, подчёркнуто нереалистичный: генераторы «semi-realistic»
+уводят в гиперреализм с венами, а масса в мультстиле делается преувеличением
+пропорций. Общий стилевой хвост, добавлять к каждому промпту:
 
-- **power.jpg**: massive powerlifter in a dark red tank top and gold lifting
-  belt, bandana on head, chalk on hands, standing by a loaded barbell
-- **cross.jpg**: lean athletic crossfitter in a teal sleeveless shirt and white
-  headband, jump rope over shoulders
-- **wrestle.jpg**: stocky wrestler in a burgundy singlet, cauliflower ears,
-  short buzz cut, wrestling shoes
-- **build.jpg**: tanned bodybuilder, shirtless with defined abs and chest, dark
-  posing trunks, short dark hair, relaxed front pose
+> Flat 2D cartoon character art, cel-shaded with thick clean outlines,
+> exaggerated stylized proportions, simple flat colors, like a character from a
+> fun mobile arcade game, NOT photorealistic, no fine skin detail, no realistic
+> anatomy, cheerful confident face, waist-up portrait, simple dark gym
+> background with warm glowing bulbs drawn as simple shapes, one accent color
+> per character, square format, no text, no watermark
 
-Одинаковый фон и свет во всех четырёх — карточки стоят рядом и должны выглядеть
-одной серией.
+- **power.jpg**: A colossal cartoon powerlifter, super heavyweight class, thick
+  barrel torso, shoulders twice as wide as his head, grey bandana on head, dark
+  red tank top, shiny gold lifting belt, chalk clouds around his hands, arms
+  crossed, smug grin. *(акцент — красный)*
+- **cross.jpg**: A lean bouncy cartoon crossfitter, springy athletic build,
+  white headband, teal sleeveless shirt, jump rope over his shoulders, taped
+  wrists, easy open grin. *(акцент — бирюзовый)*
+- **wrestle.jpg**: A stocky cartoon wrestler, low and wide like a fridge,
+  burgundy singlet, comically big cauliflower ears, short buzz cut, tiny calm
+  smile, ready stance. *(акцент — бордовый)*
+- **build.jpg**: An enormous cartoon bodybuilder with absurd heroic
+  proportions, arms bigger than his head, huge round pecs, wide flaring lats,
+  tiny waist, deep orange tan, dark posing trunks, short dark hair, proud
+  chin-up pose. *(акцент — золотой)*
+
+Практика: генерить все четыре подряд в одном чате генератора («same style,
+now …») — карточки стоят рядом и должны выглядеть одной серией. Портрет по
+пояс, персонаж по центру: карточка квадратная и кропает центр (object-fit:
+cover), ноги в неё не влезают в любом случае.
