@@ -77,12 +77,39 @@ MAX_VOICE_SECONDS = 300
 INTRO_TEXT = (
     "🤖 <b>ПРИВЕТ АТЛЕТ, ТРЕНЕР НА СВЯЗИ.</b>\n\n"
     "У меня есть доступ к истории твоих тренировок и многолетний тренерский опыт. "
-    "Спрашивай что угодно:\n"
-    "• «Как прогресс в жиме лёжа? Почему не растёт присед?»\n"
-    "• «Составь мне программу на массу 3 раза в неделю»\n"
-    "• «Сколько белка есть, чтобы расти?»\n\n"
+    "Спрашивай что угодно — или начни с готового вопроса на кнопках ниже.\n\n"
     "Пиши вопрос 👇 (можно голосом — жми на 🎤)"
 )
+
+# Готовые вопросы на стартовом экране: раньше интро перечисляло примеры текстом,
+# и их приходилось перепечатывать руками — тап по кнопке задаёт вопрос сразу.
+# Ключ едет в callback_data (ai:preset:<key>), поэтому короткий и стабильный:
+# кнопка из старого интро, повисшего в чате, должна находить вопрос и после
+# рестарта/релиза. Показываются только на свежем интро (см. menu_ai): в идущем
+# разговоре стартовые вопросы читались бы как потеря контекста.
+PRESET_QUESTIONS: dict[str, tuple[str, str]] = {
+    "progress": (
+        "📈 Как мой прогресс?",
+        "Как мой прогресс за последнее время? Что растёт, а что застряло — и почему?",
+    ),
+    "weak": (
+        "🔍 Найди мои слабые места",
+        "Посмотри мою историю тренировок: что я недорабатываю и что стоит добавить?",
+    ),
+    "protein": (
+        "🍗 Сколько мне есть белка?",
+        "Сколько белка мне есть в день, чтобы расти?",
+    ),
+}
+
+
+def _intro_presets() -> list[tuple[str, str]]:
+    """Кнопки готовых вопросов для интро + «Составь мне программу» — она не
+    вопрос, а готовый сценарий с уточнениями (ai:buildprog), поэтому живёт не в
+    PRESET_QUESTIONS, а переиспользует существующий обработчик."""
+    rows = [(label, f"ai:preset:{key}") for key, (label, _) in PRESET_QUESTIONS.items()]
+    rows.append(("🗂 Составь мне программу", "ai:buildprog"))
+    return rows
 
 # Shown instead of the full intro when returning to a conversation that's already
 # going — repeating the whole "привет, вот что я умею" would read as if the
@@ -304,6 +331,7 @@ async def ai_keyboard(
     program_name: Optional[str] = None,
     draft_id: Optional[str] = None,
     actions: Sequence[dict] = (),
+    presets: Sequence[tuple[str, str]] = (),
 ) -> InlineKeyboardMarkup:
     """AI-trainer reply keyboard: 'К тренировке' instead of 'Меню' while a workout is active.
 
@@ -334,6 +362,7 @@ async def ai_keyboard(
         program_name=program_name,
         draft_id=draft_id,
         actions=actions,
+        presets=presets,
     )
 
 
@@ -350,10 +379,14 @@ async def menu_ai(callback: CallbackQuery, state: FSMContext):
     # a workout and coming back used to reset the trainer to its intro with no
     # memory of what was just discussed.
     data = await state.get_data()
-    text = INTRO_TEXT if not data.get("ai_history") else RESUME_TEXT
-    await ui.safe_edit(
-        callback, text, reply_markup=await ai_keyboard(callback.from_user.id), parse_mode="HTML"
+    fresh = not data.get("ai_history")
+    text = INTRO_TEXT if fresh else RESUME_TEXT
+    # Готовые вопросы — только на свежем интро: посреди разговора они бы
+    # читались как «тренер забыл, о чём речь».
+    keyboard = await ai_keyboard(
+        callback.from_user.id, presets=_intro_presets() if fresh else ()
     )
+    await ui.safe_edit(callback, text, reply_markup=keyboard, parse_mode="HTML")
     await callback.answer()
 
 
@@ -471,6 +504,24 @@ async def ai_build_workout(callback: CallbackQuery, state: FSMContext):
     себе программой — см. keyboards.ai_program_preview_keyboard.
     """
     await _start_ai_scenario(callback, state, BUILD_WORKOUT_INTRO, BUILD_WORKOUT_SEED)
+
+
+@router.callback_query(F.data.startswith("ai:preset:"))
+async def ai_preset_question(callback: CallbackQuery, state: FSMContext):
+    """Готовый вопрос со стартового экрана AI-тренера (см. PRESET_QUESTIONS).
+
+    Тот же путь, что у «Составить программу»: интро цитирует вопрос, чтобы в
+    чате осталось, о чём вообще спрашивали, — сам вопрос от лица пользователя
+    в чат не попадает, и без цитаты ответ висел бы без контекста.
+    """
+    preset = PRESET_QUESTIONS.get(callback.data.split(":", 2)[2])
+    if preset is None:
+        # Кнопка из интро прошлой версии, где этот вопрос ещё существовал.
+        await callback.answer("Такого вопроса больше нет — напиши его словами 👇", show_alert=True)
+        return
+    _, question = preset
+    intro = f"🤖 <b>ПРИНЯЛ ВОПРОС.</b>\n\n«{question}»"
+    await _start_ai_scenario(callback, state, intro, question)
 
 
 @router.callback_query(F.data == "ai:resume_workout")

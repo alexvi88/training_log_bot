@@ -1153,6 +1153,108 @@ async def test_ai_build_program_releases_busy_on_a_stale_callback(fresh_db, user
     assert user_id not in ai_trainer._busy
 
 
+# ---------- готовые вопросы на стартовом экране (ai:preset:*) ----------
+
+
+def _make_menu_ai_callback(user_id: int):
+    from aiogram.types import CallbackQuery
+
+    message = MagicMock()
+    message.chat = SimpleNamespace(id=user_id)
+    message.message_id = 3
+    message.text = "меню"
+    message.photo = None
+    message.delete = AsyncMock()
+    message.edit_text = AsyncMock(return_value=True)
+    message.answer = AsyncMock(return_value=SimpleNamespace(message_id=4))
+    callback = MagicMock(spec=CallbackQuery)
+    callback.from_user = SimpleNamespace(id=user_id, username="tester")
+    callback.message = message
+    callback.data = "menu:ai"
+    callback.answer = AsyncMock()
+    return callback
+
+
+async def test_fresh_intro_offers_preset_question_buttons(fresh_db, user_id, monkeypatch):
+    """Примеры вопросов из интро стали кнопками: тап задаёт вопрос сразу,
+    вместо перепечатывания примера руками."""
+    monkeypatch.setattr(ai_trainer.ai_trainer, "is_configured", lambda: True)
+    state = await _make_state(user_id)
+    callback = _make_menu_ai_callback(user_id)
+
+    await ai_trainer.menu_ai(callback, state)
+
+    kb = callback.message.answer.await_args.kwargs["reply_markup"]
+    callbacks = _callbacks(kb)
+    for key in ai_trainer.PRESET_QUESTIONS:
+        assert f"ai:preset:{key}" in callbacks
+    assert "ai:buildprog" in callbacks
+    # Пресеты стоят выше навигации: на интро они — основной призыв к действию.
+    assert callbacks.index(f"ai:preset:progress") < callbacks.index("ai:menu")
+
+
+async def test_resumed_conversation_has_no_preset_buttons(fresh_db, user_id, monkeypatch):
+    """Посреди разговора стартовые вопросы читались бы как потеря контекста."""
+    monkeypatch.setattr(ai_trainer.ai_trainer, "is_configured", lambda: True)
+    state = await _make_state(user_id)
+    await state.update_data(ai_history=[{"role": "user", "content": "как жим?"}])
+    callback = _make_menu_ai_callback(user_id)
+
+    await ai_trainer.menu_ai(callback, state)
+
+    kb = callback.message.answer.await_args.kwargs["reply_markup"]
+    assert not any(cb.startswith("ai:preset:") for cb in _callbacks(kb))
+
+
+async def test_preset_tap_seeds_the_conversation_with_the_full_question(
+    fresh_db, user_id, monkeypatch
+):
+    """Кнопка отправляет тренеру полный текст вопроса и проводит его через тот же
+    путь, что и напечатанный руками (лимит, история, чат-состояние)."""
+    import ui
+
+    monkeypatch.setattr(ai_trainer.ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(ui.chat_bottom, "is_at_bottom", lambda *a, **k: False)
+
+    captured = {}
+
+    async def fake_ask(uid, question, history, **kwargs):
+        captured["question"] = question
+        return "Жим растёт, присед стоит."
+
+    monkeypatch.setattr(ai_trainer.ai_trainer, "ask", fake_ask)
+
+    state = await _make_state(user_id)
+    callback = _make_buildprog_callback(user_id)
+    callback.data = "ai:preset:progress"
+
+    await ai_trainer.ai_preset_question(callback, state)
+
+    _, expected_question = ai_trainer.PRESET_QUESTIONS["progress"]
+    assert captured["question"] == expected_question
+    assert await state.get_state() == "AITrainerFlow:chatting"
+    assert user_id not in ai_trainer._busy
+    assert await fresh_db.get_ai_question_count_today(user_id) == 1
+    # Экран-интро цитирует вопрос: сам вопрос в чат от лица пользователя не
+    # попадает, и без цитаты ответ висел бы без контекста.
+    sent = callback.message.answer.await_args
+    intro_text = sent.args[0] if sent.args else sent.kwargs["text"]
+    assert expected_question in intro_text
+
+
+async def test_stale_preset_button_alerts_instead_of_crashing(fresh_db, user_id, monkeypatch):
+    """Кнопка из интро прошлой версии, где такой вопрос ещё существовал."""
+    monkeypatch.setattr(ai_trainer.ai_trainer, "is_configured", lambda: True)
+    state = await _make_state(user_id)
+    callback = _make_buildprog_callback(user_id)
+    callback.data = "ai:preset:gone"
+
+    await ai_trainer.ai_preset_question(callback, state)
+
+    assert callback.answer.await_args.kwargs.get("show_alert") is True
+    assert await state.get_state() is None
+
+
 async def test_ai_build_program_asks_the_trainer_to_lead_with_questions(fresh_db, user_id):
     """The button promises "сейчас задам пару вопросов", and the system prompt
     lets the trainer skip straight to a draft on sensible defaults — so the
@@ -1346,8 +1448,10 @@ async def test_mention_paging_arrows_fit_telegrams_callback_data_limit():
 
 
 async def test_intro_advertises_the_program_builder():
-    """Интро должно рекламировать фичу релиза, а не только советы по программе."""
-    assert "Составь мне программу" in ai_trainer.INTRO_TEXT
+    """Сборка программы должна рекламироваться прямо на старте диалога — раньше
+    примером в тексте интро, теперь кнопкой готового вопроса под ним."""
+    labels = [label for label, _cb in ai_trainer._intro_presets()]
+    assert any("Составь мне программу" in label for label in labels)
 
 
 async def test_program_gone_alert_does_not_ask_to_rebuild_a_saved_program():
