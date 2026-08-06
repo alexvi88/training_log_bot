@@ -574,10 +574,11 @@ async def test_reordering_is_hidden_on_a_single_day_program(fresh_db, user_id):
     assert f"rt:dayorder:{program_id}" not in [cb for _text, cb in _buttons(callback)]
 
 
-async def test_the_edit_screen_names_the_program_and_counts_its_days(fresh_db, user_id):
-    """Состав дней тут не повторяется — его только что показали этажом выше, — но
-    без названия экран правок безымянный, а «Удалить» на безымянном экране
-    страшно нажимать."""
+async def test_the_edit_screen_shows_what_is_being_edited(fresh_db, user_id):
+    """Раньше экран правок сводился к имени и числу дней, и человек выбирал,
+    какой день переименовать или куда добавить упражнение, не видя ни одного из
+    них. Имя тоже обязано остаться: «Удалить» на безымянном экране страшно
+    нажимать."""
     db = fresh_db
     program_id = await _program(db, user_id, days=("Толкай", "Тяни"))
 
@@ -587,7 +588,9 @@ async def test_the_edit_screen_names_the_program_and_counts_its_days(fresh_db, u
     text = _last_text(callback)
     assert "PPL" in text
     assert "2 дня" in text
-    assert "Толкай" not in text
+    assert "Толкай" in text and "Тяни" in text
+    # Давность — про то, куда идти тренироваться, а не про то, что менять.
+    assert "ещё не делал" not in text
 
 
 async def test_the_edit_screen_belongs_to_its_owner(fresh_db, user_id):
