@@ -1,5 +1,6 @@
 """CRUD/browsing for muscle groups and exercises (the "⚙️ Упражнения" menu)."""
 
+import datetime as dt
 from contextlib import suppress
 from html import escape
 
@@ -398,7 +399,9 @@ def _exercise_info_text(ex, with_created: bool = True, group_name: str | None = 
     if ex["attachment"]:
         info.append(f"Хват/насадка: {ex['attachment']}")
     if with_created:
-        info.append(f"Создано: {ex['created_at'][:10]}")
+        # Везде в боте дата по-русски («06.08.2026 (чт)»), а не ISO-обрубок.
+        created = dt.datetime.fromisoformat(ex["created_at"])
+        info.append(f"Создано: {formatting.format_date_ru(created)}")
     description = exercise_descriptions.effective_description(ex)
     if description:
         info.append(f"\n{escape(description)}")

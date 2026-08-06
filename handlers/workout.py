@@ -731,7 +731,7 @@ _WORKOUT_SCAFFOLD_KEYS = (
     # them. Same reasoning as the rest of this tuple — stepping out to the
     # menu mid-workout must not throw away the plan the user is partway
     # through (see _clear_state_keep_workout below).
-    "planned_blocks", "exercise_targets", "confirmed_weights",
+    "planned_blocks", "exercise_targets", "confirmed_weights", "plan_completes_on_close",
     # Not workout scaffolding, but the same reasoning: stepping out to the menu
     # and back shouldn't make the AI-тренер forget the conversation in progress
     # (`ai_history`), and the program the trainer just proposed
@@ -1390,7 +1390,7 @@ RECENT_PROGRAM_DAYS = 30
 MAX_RECENT_PROGRAM_BUTTONS = 3
 
 
-async def _recovery_line(user_id: int, groups) -> str:
+async def _recovery_line(user_id: int, groups, as_of: dt.date | None = None) -> str:
     """"💤 ЕЩЁ НЕ ОТДОХНУЛИ:\nноги — 40% восстановления\nспина — 70% восстановления"
     — or "" when everything is fresh, which is the common case and needs no
     line at all.
@@ -1399,11 +1399,17 @@ async def _recovery_line(user_id: int, groups) -> str:
     is "spent" in proportion to how many sets it took and how long ago (see
     analytics.recovery_percent). It's a nudge on the screen where the choice is
     made, not a verdict — nothing is blocked or hidden.
+
+    `as_of` — the date recovery is measured against; defaults to today. Backfill
+    (находка 8) passes bf_date instead: writing a set on 03.08 while the last
+    real session was 06.08 must not read as "grew from a session three days in
+    the future" — last_session_by_group(before=...) also restricts the lookup
+    to sessions that actually happened before that date.
     """
-    last = await db.last_session_by_group(user_id)
+    today = as_of or timeutil.user_today(await db.get_user(user_id))
+    last = await db.last_session_by_group(user_id, before=today.isoformat() if as_of else None)
     if not last:
         return ""
-    today = timeutil.user_today(await db.get_user(user_id))
     spent = []
     for group in groups:
         if group["name"].strip().lower() in _RECOVERY_SKIP_GROUPS:
@@ -1430,7 +1436,8 @@ async def _picker_screen_groups(callback: CallbackQuery, state: FSMContext, show
     # actually trains most should be first, not alphabetical/catalog order.
     groups = await db.list_muscle_groups(callback.from_user.id, order_by_usage=True)
     hint = "<i>Выбери группу мышц или найди упражнение по названию:</i>"
-    recovery = await _recovery_line(callback.from_user.id, groups)
+    bf_date = dt.date.fromisoformat(data["bf_date"]) if data.get("is_backfill") and data.get("bf_date") else None
+    recovery = await _recovery_line(callback.from_user.id, groups, as_of=bf_date)
     if recovery:
         hint = recovery + "\n\n" + hint
     open_ids = data.get("open_exercises") or []
@@ -1463,6 +1470,21 @@ async def _picker_screen_groups(callback: CallbackQuery, state: FSMContext, show
         recent = await db.list_recent_programs(
             callback.from_user.id, since, limit=MAX_RECENT_PROGRAM_BUTTONS
         )
+        if len(recent) < MAX_RECENT_PROGRAM_BUTTONS:
+            # находка 1: list_recent_programs считает по фактически проведённым
+            # тренировкам, так что программа, только что добавленная из
+            # готовых/AI, в него не попадает — досыпаем по created_at, пока не
+            # наберём лимит, не повторяя то, что уже есть по истории.
+            seen_programs = {p["program_id"] for p in recent if p["program_id"]}
+            seen_routines = {p["routine_id"] for p in recent if not p["program_id"]}
+            for p in await db.list_programs_without_workout_history(
+                callback.from_user.id, MAX_RECENT_PROGRAM_BUTTONS
+            ):
+                if p["program_id"] in seen_programs or (not p["program_id"] and p["routine_id"] in seen_routines):
+                    continue
+                recent.append(p)
+                if len(recent) >= MAX_RECENT_PROGRAM_BUTTONS:
+                    break
         for p in recent:
             next_day = (
                 await db.next_program_day(p["program_id"]) if p["program_id"] else None
@@ -1533,7 +1555,7 @@ async def pick_cancel(callback: CallbackQuery, state: FSMContext):
 async def pick_group(callback: CallbackQuery, state: FSMContext):
     raw = callback.data.split(":")[2]
     group_id = None if raw == "all" else int(raw)
-    await state.update_data(pending_group_id=group_id, pick_page=0)
+    await state.update_data(pending_group_id=group_id, pick_page=0, pick_query=None)
     await state.set_state(WorkoutFlow.picking_exercise)
     await _picker_screen_exercises(callback, state)
     await callback.answer()
@@ -1547,9 +1569,55 @@ async def pick_page(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+# Поиск листается целиком, а не срезается: раньше выдача обрывалась на восьми
+# шаблонах по алфавиту, и «жим» не доставал до «Жима штанги лёжа» вообще. Тянем
+# с запасом и режем на страницы уже здесь — совпадений на один запрос заведомо
+# меньше сотни, отдельный COUNT ради этого не нужен.
+_SEARCH_FETCH_LIMIT = 200
+
+
+async def _search_matches(user_id: int, query: str) -> tuple[list, list]:
+    return (
+        await db.search_exercises(user_id, query, limit=_SEARCH_FETCH_LIMIT),
+        await db.search_exercise_templates(user_id, query, limit=_SEARCH_FETCH_LIMIT),
+    )
+
+
+async def _picker_screen_search(callback_or_message, state: FSMContext, user):
+    """Страница результатов поиска. Своё идёт раньше каталога: то, чем человек
+    уже пользуется, почти всегда и есть искомое."""
+    data = await state.get_data()
+    query = data["pick_query"]
+    page = data.get("pick_page", 0)
+    size = config.RECENT_EXERCISES_LIMIT
+    own, templates = await _search_matches(callback_or_message.from_user.id, query)
+    combined = [("ex", row) for row in own] + [("tpl", row) for row in templates]
+    chunk = combined[page * size : (page + 1) * size]
+    kb = keyboards.exercises_keyboard(
+        [row for kind, row in chunk if kind == "ex"],
+        prefix="pick", back_cb="back",
+        show_new_button=data.get("pending_group_id") is not None,
+        page=page, has_next=(page + 1) * size < len(combined),
+        templates=[row for kind, row in chunk if kind == "tpl"],
+    )
+    if combined:
+        total = len(combined)
+        word = formatting.plural_ru(total, ("совпадение", "совпадения", "совпадений"))
+        hint = f"Результаты поиска «{escape(query)}» — {total} {word}:"
+    else:
+        hint = f"Ничего не нашлось по «{escape(query)}»."
+        if data.get("pending_group_id") is not None:
+            hint += " Можно создать новое:"
+    await state.update_data(picker_stage="exercises")
+    await _refresh_live(callback_or_message.bot, state, user, data["workout_id"], hint, kb)
+
+
 async def _picker_screen_exercises(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     user = await db.get_user(callback.from_user.id)
+    if data.get("pick_query"):
+        await _picker_screen_search(callback, state, user)
+        return
     group_id = data["pending_group_id"]
     page = data.get("pick_page", 0)
     offset = page * config.RECENT_EXERCISES_LIMIT
@@ -1564,12 +1632,26 @@ async def _picker_screen_exercises(callback: CallbackQuery, state: FSMContext):
         )
         total = await db.count_user_exercises_in_group(callback.from_user.id, group_id)
     has_next = offset + len(exercises) < total
+    # Своих упражнений в группе может не быть вовсе — у новичка их нет нигде, — и
+    # раньше он упирался в «здесь пусто» при полном каталоге шаблонов этой самой
+    # группы. Шаблоны показываем на последней странице, под своими: они дополняют
+    # список, а не подменяют его.
+    templates = []
+    room = config.RECENT_EXERCISES_LIMIT - len(exercises)
+    if group_id is not None and not has_next and room > 0:
+        own_names = {ex["display_name"].lower() for ex in exercises}
+        templates = [
+            t for t in await db.list_templates_in_group(group_id)
+            if t["display_name"].lower() not in own_names
+        ][:room]
     kb = keyboards.exercises_keyboard(
         exercises, prefix="pick", back_cb="back", show_new_button=group_id is not None,
-        page=page, has_next=has_next,
+        page=page, has_next=has_next, templates=templates,
     )
     if exercises:
         hint = "Выбери упражнение или напиши название для поиска:"
+    elif templates:
+        hint = "Выбери из каталога или напиши название для поиска:"
     else:
         hint = "У тебя пока нет своих упражнений здесь — добавь новое или напиши название для поиска:"
     await state.update_data(picker_stage="exercises")
@@ -1579,6 +1661,9 @@ async def _picker_screen_exercises(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(StateFilter(WorkoutFlow.picking_exercise), F.data == "pick:back")
 async def pick_back_to_groups(callback: CallbackQuery, state: FSMContext):
     await state.set_state(WorkoutFlow.picking_group)
+    # Из поиска «назад» ведёт к группам, а не к прошлой выдаче — иначе следующий
+    # выбор группы показал бы результаты старого запроса.
+    await state.update_data(pick_query=None, pick_page=0)
     await _picker_screen_groups(callback, state)
     await callback.answer()
 
@@ -1603,25 +1688,14 @@ async def pick_exercise_search(message: Message, state: FSMContext):
     await _delete_message(message)
     if not query:
         return
-    data = await state.get_data()
     user = await db.get_user(message.from_user.id)
-    group_id = data.get("pending_group_id")
     # Searching from the group screen jumps into exercise-picking so a tap on a
     # result (pick:ex:*) and the "back" button both resolve correctly.
     await state.set_state(WorkoutFlow.picking_exercise)
-    results = await db.search_exercises(message.from_user.id, query)
-    templates = await db.search_exercise_templates(message.from_user.id, query)
-    kb = keyboards.exercises_keyboard(
-        results, prefix="pick", back_cb="back", show_new_button=group_id is not None, templates=templates,
-    )
-    if results or templates:
-        hint = f"Результаты поиска «{escape(query)}»:"
-    else:
-        hint = f"Ничего не нашлось по «{escape(query)}»."
-        if group_id is not None:
-            hint += " Можно создать новое:"
-    await state.update_data(picker_stage="exercises")
-    await _refresh_live(message.bot, state, user, data["workout_id"], hint, kb)
+    # Запрос живёт в state, пока человек не ушёл из поиска: по нему же листаются
+    # страницы (pick:page:*), иначе вторая страница показала бы список группы.
+    await state.update_data(pick_query=query, pick_page=0)
+    await _picker_screen_search(message, state, user)
 
 
 async def _new_exercise_entry_screen(callback: CallbackQuery, state: FSMContext):
@@ -2354,11 +2428,22 @@ async def live_finish_exercise(callback: CallbackQuery, state: FSMContext):
         )
         await _render_logging_screen(callback.bot, state, user)
     else:
+        # находка 20: this block was the plan's last one (flagged when it was
+        # opened, see _load_next_planned_block) and it's closing right now —
+        # the linear "делаю по порядку, закрываю, беру следующее" path used to
+        # never hit "🎉 Программа пройдена" at all, because has_planned (and
+        # with it the "▶️" button that used to surface the empty queue) had
+        # already gone false the moment this exercise was opened.
+        plan_completes = bool(data.get("plan_completes_on_close"))
         await state.update_data(
             open_exercises=[], open_blocks={}, active_exercise_id=None, last_finished_exercise_id=active,
+            plan_completes_on_close=False,
         )
         await state.set_state(WorkoutFlow.idle)
-        await _enter_idle_screen(callback.bot, state, user, data["workout_id"])
+        if plan_completes:
+            await _enter_program_complete_screen(callback.bot, state, user, data["workout_id"])
+        else:
+            await _enter_idle_screen(callback.bot, state, user, data["workout_id"])
     await callback.answer()
 
 
@@ -2418,7 +2503,14 @@ async def _load_next_planned_block(event, state: FSMContext, index: int = 0) -> 
     if not planned or not 0 <= index < len(planned):
         return False
     block_plan = planned.pop(index)
-    await state.update_data(planned_blocks=planned)
+    # находка 20: the queue empties HERE, at open time, not when the block is
+    # closed — by the time the last planned exercise is finished, has_planned
+    # is already false and the "▶️" that used to surface an empty queue no
+    # longer renders at all. Remember that this block is the plan's last one
+    # so live_finish_exercise can show "🎉 Программа пройдена" the moment it's
+    # actually closed, instead of the screen being reachable only through
+    # 📋 "Убрать из плана".
+    await state.update_data(planned_blocks=planned, plan_completes_on_close=not planned)
     workout_id = data["workout_id"]
 
     open_exercises: list[int] = []

@@ -262,6 +262,55 @@ async def test_skipping_the_last_planned_exercise_reaches_the_program_complete_s
     assert "🏁 Завершить тренировку" in _button_texts(_last_keyboard(cb))
 
 
+# ---------- находка 20: обычное линейное прохождение тоже должно доходить ----------
+
+
+async def test_closing_the_last_planned_exercise_in_order_reaches_the_program_complete_screen(
+    fresh_db, user_id
+):
+    """Ровно сценарий из находки 20: делаем по одному упражнению по порядку,
+    закрываем каждое обычной кнопкой «Закончить упражнение» (не через
+    📋 «Убрать из плана» и без ручного вызова live_next_planned) — после
+    последнего должна показаться «🎉 Программа пройдена», а не обычный
+    between-exercise экран."""
+    db = fresh_db
+    bench, fly = await _start_program(
+        db, user_id, state := await _state(user_id), [("Жим лёжа", None), ("Разводка", None)],
+    )
+
+    # First exercise: log a set, finish it — plan still has one left, so this
+    # must land on the ordinary between-exercise screen, not the congrats one.
+    data = await state.get_data()
+    await db.append_set(data["open_blocks"][bench], bench, 0, 100, 8)
+    cb1 = await _go_idle(user_id, state)
+    assert "Программа пройдена" not in (_last_text(cb1) or "")
+    assert "📋 Программа" not in (_last_text(cb1) or "")  # not the plan list either
+
+    # Second exercise is offered next ("▶️ Разводка") — open and finish it too.
+    cb2 = _make_callback(user_id, "live:next_planned")
+    await workout.live_next_planned(cb2, state)
+    data = await state.get_data()
+    await db.append_set(data["open_blocks"][fly], fly, 0, 40, 12)
+    cb3 = await _go_idle(user_id, state)
+
+    assert (await state.get_data())["planned_blocks"] == []
+    text = _last_text(cb3)
+    assert "🎉" in text and "Программа пройдена" in text
+    assert "2 упражнения" in text and "2 подхода" in text
+
+
+async def test_closing_a_non_final_planned_exercise_does_not_show_the_complete_screen(
+    fresh_db, user_id
+):
+    db = fresh_db
+    await _start_program(db, user_id, state := await _state(user_id), [
+        ("Жим лёжа", None), ("Разводка", None), ("Брусья", None),
+    ])
+    cb = await _go_idle(user_id, state)
+    assert "Программа пройдена" not in (_last_text(cb) or "")
+    assert (await state.get_data())["planned_blocks"] != []
+
+
 # ---------- program-complete moment (4.6 / B9): a real screen, not a grey alert ----------
 
 

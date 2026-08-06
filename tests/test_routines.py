@@ -436,3 +436,70 @@ async def test_the_ai_write_path_does_not_touch_the_rule(user_id):
     other = await dbmod.create_exercise(user_id, "Разведение", gid)
     await dbmod.append_routine_exercise(rid, other, "3×12")
     assert (await dbmod.get_routine_exercise(re_id))["progression"] == new_rule
+
+
+# ---------- находка 22: удаление дня не должно ронять счётчик программы ----------
+
+
+async def test_deleting_a_day_keeps_the_programs_total_workout_count(user_id):
+    """Подтверждение при удалении дня обещает «история тренировок не
+    пострадает» — счётчик «N тренировок по ней» под именем программы должен
+    держать это слово, а не проседать на тренировки удалённого дня."""
+    program_id = await dbmod.create_program(user_id, "Жим 3х в неделю")
+    day_a = await dbmod.create_routine(user_id, "День A", program_id=program_id)
+    day_d = await dbmod.create_routine(user_id, "День D — пустой", program_id=program_id)
+
+    wid1 = await dbmod.create_workout(user_id, started_at="2026-08-01T10:00:00", routine_id=day_d)
+    await dbmod.finish_workout(wid1, finished_at="2026-08-01T10:30:00")
+    wid2 = await dbmod.create_workout(user_id, started_at="2026-08-02T10:00:00", routine_id=day_d)
+    await dbmod.finish_workout(wid2, finished_at="2026-08-02T10:30:00")
+    wid3 = await dbmod.create_workout(user_id, started_at="2026-08-03T10:00:00", routine_id=day_a)
+    await dbmod.finish_workout(wid3, finished_at="2026-08-03T10:30:00")
+
+    assert await dbmod.program_total_workouts(program_id) == 3
+
+    await dbmod.delete_routine(day_d)
+
+    # The two workouts by "День D" stay in history (routine_id now dangling,
+    # but nothing about the workout rows themselves was touched)...
+    for wid in (wid1, wid2):
+        w = await dbmod.get_workout(wid)
+        assert w is not None
+    # ...and the program's own total still counts them, unlike the old
+    # program_day_history-based sum which required the routines row to exist.
+    assert await dbmod.program_total_workouts(program_id) == 3
+
+
+async def test_create_workout_denormalizes_program_id_from_the_routine(user_id):
+    program_id = await dbmod.create_program(user_id, "Сплит")
+    day = await dbmod.create_routine(user_id, "День 1", program_id=program_id)
+    wid = await dbmod.create_workout(user_id, routine_id=day)
+    workout = await dbmod.get_workout(wid)
+    assert workout["program_id"] == program_id
+
+
+async def test_program_screen_header_survives_a_deleted_day(user_id):
+    """Same scenario as above, through the actual screen text — «3 тренировки
+    по ней» must not become «1 тренировка по ней» just because День D is gone."""
+    from handlers import routines
+
+    program_id = await dbmod.create_program(user_id, "Жим 3х в неделю")
+    day_d = await dbmod.create_routine(user_id, "День D — пустой", program_id=program_id)
+    # Another day, so deleting День D below doesn't also empty (and delete)
+    # the whole program — delete_routine drops a program once its last day goes.
+    await dbmod.create_routine(user_id, "День A", program_id=program_id)
+    for started, finished in [
+        ("2026-08-01T10:00:00", "2026-08-01T10:30:00"),
+        ("2026-08-02T10:00:00", "2026-08-02T10:30:00"),
+    ]:
+        wid = await dbmod.create_workout(user_id, started_at=started, routine_id=day_d)
+        await dbmod.finish_workout(wid, finished_at=finished)
+
+    await dbmod.delete_routine(day_d)
+
+    state = await _state(user_id)
+    message = _make_message(user_id, "")
+    await routines._show_program(message, state, program_id)
+
+    text = message.answer.await_args.args[0]
+    assert "2 тренировки по ней" in text

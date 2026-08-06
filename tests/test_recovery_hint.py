@@ -89,3 +89,68 @@ async def test_no_line_at_all_when_everything_is_fresh(fresh_db, user_id):
     db = fresh_db
     groups = await db.list_muscle_groups(user_id)
     assert await workout._recovery_line(user_id, groups) == ""
+
+
+# ---------- находка 8: запись задним числом считает отдых от даты записи ----------
+
+
+async def test_recovery_as_of_backfill_date_ignores_a_later_real_session(fresh_db, user_id):
+    """Заносим тренировку на 03.08, а грудь реально тренировалась 06.08 — на
+    три дня позже даты записи. «Ещё не отдохнули» не должно об этом знать: с
+    точки зрения 03.08 сессии 06.08 ещё не было."""
+    from handlers import workout
+
+    db = fresh_db
+    chest = await db.create_muscle_group(user_id, "Грудь")
+    bench = await db.create_exercise(user_id, "Жим", chest)
+
+    later = dt.date(2026, 8, 6)
+    workout_id = await db.create_workout(user_id, started_at=f"{later.isoformat()}T10:00:00")
+    block_id = await db.create_block(workout_id, "single")
+    await db.add_block_exercise(block_id, bench, 0)
+    for _ in range(12):
+        await db.append_set(block_id, bench, 0, 100.0, 5)
+    await db.finish_workout(workout_id, finished_at=f"{later.isoformat()}T11:00:00")
+
+    groups = await db.list_muscle_groups(user_id)
+    bf_date = dt.date(2026, 8, 3)
+    assert await workout._recovery_line(user_id, groups, as_of=bf_date) == ""
+    # Sanity: from a day after the real session, the same group is flagged.
+    assert "грудь" in await workout._recovery_line(user_id, groups, as_of=later + dt.timedelta(days=1))
+
+
+async def test_recovery_as_of_backfill_date_still_uses_an_earlier_real_session(fresh_db, user_id):
+    """A session that genuinely happened before the backfilled date must still
+    count — as_of narrows the lookup, it doesn't just turn it off."""
+    from handlers import workout
+
+    db = fresh_db
+    legs = await db.create_muscle_group(user_id, "Ноги")
+    squat = await db.create_exercise(user_id, "Присед", legs)
+
+    earlier = dt.date(2026, 8, 1)
+    workout_id = await db.create_workout(user_id, started_at=f"{earlier.isoformat()}T10:00:00")
+    block_id = await db.create_block(workout_id, "single")
+    await db.add_block_exercise(block_id, squat, 0)
+    for _ in range(12):
+        await db.append_set(block_id, squat, 0, 100.0, 5)
+    await db.finish_workout(workout_id, finished_at=f"{earlier.isoformat()}T11:00:00")
+
+    groups = await db.list_muscle_groups(user_id)
+    bf_date = dt.date(2026, 8, 3)
+    assert "ноги" in await workout._recovery_line(user_id, groups, as_of=bf_date)
+
+
+async def test_last_session_by_group_before_excludes_later_sessions(fresh_db, user_id):
+    db = fresh_db
+    legs = await db.create_muscle_group(user_id, "Ноги")
+    squat = await db.create_exercise(user_id, "Присед", legs)
+    workout_id = await db.create_workout(user_id, started_at="2026-08-06T10:00:00")
+    block_id = await db.create_block(workout_id, "single")
+    await db.add_block_exercise(block_id, squat, 0)
+    await db.append_set(block_id, squat, 0, 100.0, 5)
+    await db.finish_workout(workout_id, finished_at="2026-08-06T11:00:00")
+
+    assert await db.last_session_by_group(user_id, before="2026-08-03") == {}
+    result = await db.last_session_by_group(user_id, before="2026-08-07")
+    assert result[legs][0] == "2026-08-06"

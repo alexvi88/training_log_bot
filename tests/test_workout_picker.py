@@ -156,6 +156,77 @@ async def test_typing_in_exercise_picker_searches_instead_of_being_ignored(fresh
     assert not any("Triceps" in t for t in button_texts)
 
 
+async def test_empty_group_offers_the_catalog_instead_of_a_dead_end(fresh_db, user_id):
+    """Регрессия: новичок жал ГРУДЬ и видел «у тебя пока нет своих упражнений
+    здесь» при полном каталоге грудных шаблонов — и не знал, что делать дальше."""
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    await db.conn().execute(
+        "INSERT INTO exercises "
+        "(user_id, name, primary_group_id, display_name, original_name, is_template, created_at) "
+        "VALUES (NULL, ?, ?, ?, ?, 1, ?)",
+        ("Жим штанги лёжа", group_id, "Жим штанги лёжа", "Жим штанги лёжа", db.now_iso()),
+    )
+    await db.conn().commit()
+
+    state = await _make_state(user_id)
+    await state.update_data(pending_group_id=group_id, pick_page=0)
+    callback = _make_callback(user_id, f"pick:grp:{group_id}")
+
+    await workout._picker_screen_exercises(callback, state)
+
+    kb = callback.bot.send_message.await_args.kwargs["reply_markup"]
+    texts = [b.text for row in kb.inline_keyboard for b in row]
+    assert any("Жим штанги лёжа" in t for t in texts), texts
+
+
+async def test_search_results_are_paginated_instead_of_being_cut_off(fresh_db, user_id):
+    """Регрессия: выдача обрывалась на восьми совпадениях, и «жим» не доставал
+    до «Жима штанги лёжа» вообще — он оказывался за срезом алфавита."""
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    for i in range(12):
+        await db.create_exercise(user_id, f"Жим вариант {i:02d}", group_id)
+    await db.create_exercise(user_id, "Жим штанги лёжа", group_id)
+
+    state = await _make_state(user_id)
+    message = _make_message(user_id, "жим")
+
+    await workout.pick_exercise_search(message, state)
+
+    kb = message.bot.send_message.await_args.kwargs["reply_markup"]
+    texts = [b.text for row in kb.inline_keyboard for b in row]
+    assert "➡️" in texts, "нет кнопки следующей страницы"
+    # Тринадцать совпадений при странице в восемь — вторая страница обязана быть,
+    # и «Жим штанги лёжа» должен быть достижим, а не срезан.
+    assert sum(1 for t in texts if t.startswith("Жим")) <= 8
+
+
+async def test_search_puts_the_exact_match_first(fresh_db, user_id):
+    """«Жим» должен вести к «Жим», а не к алфавитно первому «Жим Арнольда»."""
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    await db.create_exercise(user_id, "Жим Арнольда", group_id)
+    await db.create_exercise(user_id, "Жим", group_id)
+
+    rows = await db.search_exercises(user_id, "жим")
+
+    assert rows[0]["display_name"] == "Жим"
+
+
+async def test_search_ordering_folds_case_like_the_filter_does(fresh_db, user_id):
+    """Бинарная коллация ставила «Хаммер» перед «на плечи»: заглавная Х меньше
+    строчной н. Сортировка должна folds так же, как и поиск."""
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    await db.create_exercise(user_id, "Тяга в тренажёре Хаммер", group_id)
+    await db.create_exercise(user_id, "Тяга в тренажёре на плечи", group_id)
+
+    names = [r["display_name"] for r in await db.search_exercises(user_id, "тяга в тренажёре")]
+
+    assert names == ["Тяга в тренажёре на плечи", "Тяга в тренажёре Хаммер"]
+
+
 async def test_typing_on_group_screen_searches_and_enters_exercise_picking(fresh_db, user_id):
     db = fresh_db
     group_id = await db.create_muscle_group(user_id, "Грудь")
@@ -586,6 +657,53 @@ async def test_picker_shows_no_recent_programs_without_any_routine_backed_workou
     callbacks = await _picker_extra_callbacks(fresh_db, user_id, monkeypatch)
 
     assert not [c for c in callbacks if c.startswith("rt:pgm:")]
+
+
+# ---------- находка 1: свежедобавленная программа без истории ----------
+
+
+async def test_picker_tops_up_with_a_freshly_added_program_that_has_no_history(
+    fresh_db, user_id, monkeypatch
+):
+    """Добавил «Толкай / Тяни / Ноги» и сразу жмёшь «Начать тренировку» —
+    list_recent_programs пуст (по ней ещё не тренировались), но программа
+    должна появиться сверху по created_at, а не потребовать похода в
+    «Выбрать программу»."""
+    program_id = await fresh_db.create_program(user_id, "Толкай/Тяни/Ноги")
+    push = await fresh_db.create_routine(user_id, "Толкай", program_id=program_id)
+    await fresh_db.create_routine(user_id, "Тяни", program_id=program_id)
+
+    buttons = await _picker_extra_buttons(fresh_db, user_id, monkeypatch)
+
+    # Первый день по порядку — next_program_day без истории отдаёт days[0].
+    assert ("🗂 Толкай/Тяни/Ноги · Толкай", f"rt:view:{push}") in buttons
+
+
+async def test_picker_tops_up_a_fresh_standalone_day_without_history(fresh_db, user_id, monkeypatch):
+    """Тот же случай для одиночного дня (не многодневная программа)."""
+    routine_id = await fresh_db.create_routine(user_id, "Грудь+трицепс")
+
+    buttons = await _picker_extra_buttons(fresh_db, user_id, monkeypatch)
+
+    assert ("🗂 Грудь+трицепс", f"rt:view:{routine_id}") in buttons
+
+
+async def test_picker_prefers_actually_trained_programs_over_fresh_ones_when_capped(
+    fresh_db, user_id, monkeypatch
+):
+    """The top-up only fills remaining slots — a program the user is actively
+    training by isn't bumped by one just sitting there unused."""
+    trained_id = await fresh_db.create_routine(user_id, "Верх", program_name="Активная")
+    wid = await fresh_db.create_workout(user_id, routine_id=trained_id)
+    await fresh_db.finish_workout(wid)
+    for i in range(workout.MAX_RECENT_PROGRAM_BUTTONS):
+        await fresh_db.create_routine(user_id, f"Свежая {i}")
+
+    labels = [b[0] for b in await _picker_extra_buttons(fresh_db, user_id, monkeypatch)]
+    recent = [t for t in labels if t.startswith("🗂 ") and t != "🗂 Выбрать программу"]
+
+    assert len(recent) == workout.MAX_RECENT_PROGRAM_BUTTONS
+    assert "🗂 Активная · Верх" in recent
 
 
 async def test_both_doors_into_the_ai_program_builder_are_labelled_the_same(

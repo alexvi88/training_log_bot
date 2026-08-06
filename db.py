@@ -99,7 +99,8 @@ CREATE TABLE IF NOT EXISTS workouts (
     note TEXT,
     source TEXT NOT NULL DEFAULT 'manual',
     ai_comment TEXT,
-    routine_id INTEGER
+    routine_id INTEGER,
+    program_id INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_workouts_user_status ON workouts (user_id, status);
 
@@ -620,6 +621,20 @@ async def _migrate_schema() -> None:
         # next screen). Feeds the "programs you've actually been training by"
         # shortcuts on the picker; older rows just stay NULL.
         await _conn.execute("ALTER TABLE workouts ADD COLUMN routine_id INTEGER")
+    if "program_id" not in workout_cols:
+        # находка 22: routine_id alone loses the program once its day is
+        # deleted (delete_routine drops the routines row, not the workouts
+        # that pointed at it) — the "N тренировок по ней" total under a
+        # program's name would silently shrink even though the workouts
+        # themselves stay in history exactly as the delete confirmation
+        # promises. A denormalized program_id survives that: it's set at
+        # workout creation, from the routine picked, and outlives the day.
+        await _conn.execute("ALTER TABLE workouts ADD COLUMN program_id INTEGER")
+        await _conn.execute(
+            "UPDATE workouts SET program_id = "
+            "(SELECT program_id FROM routines WHERE routines.id = workouts.routine_id) "
+            "WHERE routine_id IS NOT NULL"
+        )
     if "followup_due_at" in workout_cols:
         # Post-workout followup push was removed — drop the columns a DB that
         # already ran the earlier migration would have.
@@ -1616,15 +1631,26 @@ async def list_templates_in_group(group_id: int) -> list[aiosqlite.Row]:
     return await cur.fetchall()
 
 
+# Точное совпадение → начинается с запроса → содержит его где-то внутри. Без
+# этого «жим» отдавал алфавит («Жим Арнольда», «Жим в тренажёре»…), и то, что
+# человек искал на самом деле, оказывалось в хвосте — а хвост срезался лимитом.
+_RELEVANCE_RANK = (
+    "CASE WHEN py_lower({col}) = py_lower(?) THEN 0 "
+    "     WHEN py_lower({col}) LIKE py_lower(?) || '%' ESCAPE '\\' THEN 1 "
+    "     ELSE 2 END"
+)
+
+
 async def search_exercises(user_id: int, query: str, limit: int = 20) -> list[aiosqlite.Row]:
     escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    rank = _RELEVANCE_RANK.format(col="e.display_name")
     cur = await conn().execute(
         "SELECT * FROM exercises e WHERE e.user_id = ? AND e.is_archived = 0 AND e.is_template = 0 "
         "AND py_lower(e.display_name) LIKE '%' || py_lower(?) || '%' ESCAPE '\\' "
         f"AND {_VISIBLE_EXERCISE_FILTER} "
-        "ORDER BY e.last_used_at IS NULL, e.last_used_at DESC, e.display_name "
+        f"ORDER BY {rank}, e.last_used_at IS NULL, e.last_used_at DESC, py_lower(e.display_name) "
         "LIMIT ?",
-        (user_id, escaped, limit),
+        (user_id, escaped, escaped, escaped, limit),
     )
     return await cur.fetchall()
 
@@ -1640,6 +1666,7 @@ async def search_exercise_templates(user_id: int, query: str, limit: int = 8) ->
     `templates` param) instead of leaving them to build one from scratch.
     """
     escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    rank = _RELEVANCE_RANK.format(col="t.display_name")
     cur = await conn().execute(
         "SELECT * FROM exercises t WHERE t.is_template = 1 "
         "AND py_lower(t.display_name) LIKE '%' || py_lower(?) || '%' ESCAPE '\\' "
@@ -1647,9 +1674,11 @@ async def search_exercise_templates(user_id: int, query: str, limit: int = 8) ->
         "   SELECT 1 FROM exercises o WHERE o.user_id = ? AND o.is_template = 0 "
         "   AND o.is_archived = 0 AND py_lower(o.display_name) = py_lower(t.display_name)"
         ") "
-        "ORDER BY t.display_name "
+        # py_lower и здесь: бинарная коллация ставила «Жим в тренажёре Хаммер»
+        # раньше «Жим в тренажёре на плечи» — заглавная Х меньше строчной н.
+        f"ORDER BY {rank}, py_lower(t.display_name) "
         "LIMIT ?",
-        (escaped, user_id, limit),
+        (escaped, user_id, escaped, escaped, limit),
     )
     return await cur.fetchall()
 
@@ -2116,11 +2145,22 @@ async def create_workout(
     routine_id: Optional[int] = None,
 ) -> int:
     """`routine_id` — программа, с которой стартовали (см. list_recent_programs);
-    у обычной тренировки «с нуля» его нет."""
+    у обычной тренировки «с нуля» его нет.
+
+    `program_id` дублируется с routine_id.program_id на момент старта — не
+    просто денормализация: если день потом удалят (delete_routine сносит саму
+    строку routines), routine_id повиснет без пары, а program_id останется и
+    даст программе честно посчитать «N тренировок по ней» даже по дням,
+    которых больше нет (находка 22)."""
+    program_id = None
+    if routine_id is not None:
+        routine = await get_routine(routine_id)
+        program_id = routine["program_id"] if routine else None
     async with _write_lock:
         cur = await conn().execute(
-            "INSERT INTO workouts (user_id, started_at, status, routine_id) VALUES (?, ?, ?, ?)",
-            (user_id, started_at or now_iso(), status, routine_id),
+            "INSERT INTO workouts (user_id, started_at, status, routine_id, program_id) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (user_id, started_at or now_iso(), status, routine_id, program_id),
         )
         await conn().commit()
         return cur.lastrowid
@@ -2522,7 +2562,7 @@ async def hall_of_fame_aggregates(user_id: int) -> dict[str, float]:
 
 
 async def last_session_by_group(
-    user_id: int, *, tz_offset: Optional[int] = None
+    user_id: int, *, tz_offset: Optional[int] = None, before: Optional[str] = None
 ) -> dict[Optional[int], tuple[str, int]]:
     """Per muscle group: the date it was last trained and how many sets that
     session had — the two inputs a recovery estimate needs.
@@ -2534,8 +2574,19 @@ async def last_session_by_group(
     (analytics.recovery_percent), и UTC-день у вечерней тренировки давал
     отрицательную разницу — группа выглядела «0% восстановления» там, где надо
     было показать прогресс, и наоборот.
+
+    `before` (YYYY-MM-DD) restricts to sessions strictly earlier than that local
+    day — задним числом (находка 8) «отдых» должен считаться от даты записи,
+    а не от «сегодня», и только по тому, что реально было раньше неё: без
+    этого фильтра запись на 03.08 при последней сессии 06.08 читала бы её как
+    прошлую, хотя та случилась на три дня позже даты, куда идёт запись.
     """
     day = _local_day("w.started_at", await _tz_offset_of(user_id, tz_offset))
+    params: list = [user_id]
+    where = "WHERE w.user_id = ? AND w.status = 'finished'"
+    if before is not None:
+        where += f" AND {day} < ?"
+        params.append(before)
     cur = await conn().execute(
         "SELECT gid, day, cnt FROM ("
         f"  SELECT e.primary_group_id AS gid, {day} AS day, COUNT(s.id) AS cnt,"
@@ -2546,10 +2597,10 @@ async def last_session_by_group(
         "  JOIN workout_blocks b ON b.id = s.block_id"
         "  JOIN workouts w ON w.id = b.workout_id"
         "  JOIN exercises e ON e.id = s.exercise_id"
-        "  WHERE w.user_id = ? AND w.status = 'finished'"
+        f"  {where}"
         f"  GROUP BY e.primary_group_id, {day}"
         ") WHERE rn = 1",
-        (user_id,),
+        tuple(params),
     )
     return {row["gid"]: (row["day"], row["cnt"]) for row in await cur.fetchall()}
 
@@ -3141,13 +3192,27 @@ async def list_exercise_ids_for_workout(workout_id: int) -> list[int]:
     return [r["exercise_id"] for r in rows]
 
 
-async def get_workout_set_span(workout_id: int) -> Optional[tuple[str, str]]:
-    """(first_set_created_at, last_set_created_at) for a workout, or None if it has no sets."""
-    cur = await conn().execute(
-        "SELECT MIN(s.created_at) AS first_at, MAX(s.created_at) AS last_at FROM sets s "
-        "JOIN workout_blocks b ON b.id = s.block_id WHERE b.workout_id = ?",
-        (workout_id,),
-    )
+async def get_workout_set_span(
+    workout_id: int, before: Optional[str] = None
+) -> Optional[tuple[str, str]]:
+    """(first_set_created_at, last_set_created_at) for a workout, or None if it has no sets.
+
+    `before` excludes sets created at or after that moment — used to keep a set
+    added through the post-finish editor (see view_builder.workout_duration_seconds)
+    from stretching the span past the workout's own finished_at.
+    """
+    if before is None:
+        cur = await conn().execute(
+            "SELECT MIN(s.created_at) AS first_at, MAX(s.created_at) AS last_at FROM sets s "
+            "JOIN workout_blocks b ON b.id = s.block_id WHERE b.workout_id = ?",
+            (workout_id,),
+        )
+    else:
+        cur = await conn().execute(
+            "SELECT MIN(s.created_at) AS first_at, MAX(s.created_at) AS last_at FROM sets s "
+            "JOIN workout_blocks b ON b.id = s.block_id WHERE b.workout_id = ? AND s.created_at <= ?",
+            (workout_id, before),
+        )
     row = await cur.fetchone()
     if row is None or row["first_at"] is None:
         return None
@@ -4168,6 +4233,62 @@ async def list_recent_programs(
     return out
 
 
+async def list_programs_without_workout_history(user_id: int, limit: int) -> list[dict[str, Any]]:
+    """Programs/standalone days добавлены, но по ним ещё ни разу не тренировались —
+    list_recent_programs их не видит (считает по workouts.routine_id), а именно
+    в момент "только что добавил" человек и хочет по ней пойти (находка 1).
+
+    Sorted by created_at DESC — свежедобавленное выше. Shaped like
+    list_recent_programs's rows (last_started always None here) so callers can
+    concatenate the two lists without special-casing.
+    """
+    out: list[dict[str, Any]] = []
+    cur = await conn().execute(
+        "SELECT p.id AS program_id, p.name, p.created_at, "
+        "(SELECT r.id FROM routines r WHERE r.program_id = p.id "
+        " ORDER BY r.day_order ASC, r.id ASC LIMIT 1) AS anchor_id "
+        "FROM programs p WHERE p.user_id = ? AND NOT EXISTS ("
+        "  SELECT 1 FROM workouts w JOIN routines r ON r.id = w.routine_id WHERE r.program_id = p.id"
+        ") ORDER BY p.created_at DESC",
+        (user_id,),
+    )
+    for row in await cur.fetchall():
+        if row["anchor_id"] is None:  # program with no days at all — nothing to open
+            continue
+        out.append(
+            {
+                "name": row["name"],
+                "program_id": row["program_id"],
+                "routine_id": row["anchor_id"],
+                "anchor_id": row["anchor_id"],
+                "last_started": None,
+                "created_at": row["created_at"],
+            }
+        )
+
+    cur = await conn().execute(
+        "SELECT r.id AS routine_id, r.name, r.created_at FROM routines r "
+        "WHERE r.user_id = ? AND r.program_id IS NULL AND NOT EXISTS ("
+        "  SELECT 1 FROM workouts w WHERE w.routine_id = r.id"
+        ") ORDER BY r.created_at DESC",
+        (user_id,),
+    )
+    for row in await cur.fetchall():
+        out.append(
+            {
+                "name": row["name"],
+                "program_id": None,
+                "routine_id": row["routine_id"],
+                "anchor_id": row["routine_id"],
+                "last_started": None,
+                "created_at": row["created_at"],
+            }
+        )
+
+    out.sort(key=lambda p: p["created_at"], reverse=True)
+    return out[:limit]
+
+
 async def list_program_days_by_id(program_id: int) -> list[aiosqlite.Row]:
     """The program's days in the order the user put them in.
 
@@ -4498,6 +4619,19 @@ async def program_day_history(program_id: int) -> dict[int, tuple[str, int]]:
         (program_id,),
     )
     return {row["routine_id"]: (row["last_started"], row["times"]) for row in await cur.fetchall()}
+
+
+async def program_total_workouts(program_id: int) -> int:
+    """How many finished workouts were ever done by this program — across every
+    day, including days since deleted (see workouts.program_id, находка 22).
+    Unlike program_day_history, this doesn't need the routines row to still
+    exist, so deleting a day never quietly shrinks it."""
+    cur = await conn().execute(
+        "SELECT COUNT(*) AS n FROM workouts WHERE program_id = ? AND status = 'finished'",
+        (program_id,),
+    )
+    row = await cur.fetchone()
+    return row["n"] if row else 0
 
 
 async def next_program_day(program_id: int) -> Optional[aiosqlite.Row]:
