@@ -18,6 +18,7 @@ from analytics import (
     VOLUME_WINDOW_DAYS,
     classify_weekly_volume,
     e1rm,
+    e1rm_noise_floor,
 )
 
 _WEEKDAYS_RU = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"]
@@ -1282,6 +1283,34 @@ def weekly_volume_panel(
 # треть картинки, шрифт 7pt: дальше имя лезет на соседнюю карточку.
 _LIFT_NAME_LIMIT = 22
 
+# Насколько коротким разрешено стать имени, обрезанному по границе слова. Ниже
+# этой доли лимита обрезка по слову выбрасывает больше, чем экономит: у
+# «CONVENTIONAL DEADLIFT» первая же граница отрезала бы всё, кроме одного слова.
+_LIFT_NAME_MIN_WORD_CUT = 0.6
+
+# Разделители, по которым имя движения можно резать: пробел и оба дефиса,
+# которыми в каталоге разделены части составного названия.
+_LIFT_NAME_SEPARATORS = " -–"
+
+
+def _trim_lift_name(label: str) -> str:
+    """Обрезает имя движения до _LIFT_NAME_LIMIT, по возможности по границе слова.
+
+    Резать посередине слова — это выбрасывать самую содержательную часть имени:
+    «TRIC BLOCK - 1ARM - CABLE PUSHDOWN» превращалось в «TRIC BLOCK - 1ARM - C…»,
+    где последний знак не сообщает ничего, а место занимает. По границе выходит
+    «TRIC BLOCK - 1ARM…» — на два слова меньше, зато оба целые.
+    """
+    if len(label) <= _LIFT_NAME_LIMIT:
+        return label
+    head = label[: _LIFT_NAME_LIMIT - 1]
+    cut = max((head.rfind(sep) for sep in _LIFT_NAME_SEPARATORS), default=-1)
+    if cut >= _LIFT_NAME_LIMIT * _LIFT_NAME_MIN_WORD_CUT:
+        head = head[:cut]
+    # Висящий разделитель на конце («1ARM -…») читается как оборванная вёрстка,
+    # а не как сокращение.
+    return head.rstrip(_LIFT_NAME_SEPARATORS) + "…"
+
 # Подписи блоков сводки, у которых нет своего числа в заголовке. Без них блок —
 # это просто клетки или просто цифры: календарь без подписи не отличить от
 # декорации, а «101 кг» под именем упражнения читается как поднятый вес, хотя это
@@ -1289,6 +1318,27 @@ _LIFT_NAME_LIMIT = 22
 MENU_CALENDAR_TITLE = "ПОСЕЩЕНИЯ · ГОД"
 MENU_LIFTS_TITLE = "ЧТО ДЕЛАЕШЬ ЧАЩЕ ВСЕГО"
 MENU_LIFTS_NOTE = "РАСЧЁТНЫЙ МАКСИМУМ"
+
+
+def menu_lifts_note(cards: list[tuple]) -> str:
+    """Примечание блока движений: что за число и за какой отрезок нарисована линия.
+
+    Без отрезка «РАСЧЁТНЫЙ МАКСИМУМ» объясняет только число, а линию — нет: пик
+    на спарклайне может быть и прошлой неделей, и прошлой осенью, и по картинке
+    это не различить. Точки — тренировки, а не дни, поэтому и подписаны они
+    тренировками.
+
+    «ЗА N» — когда у всех линий точек поровну, иначе «ДО N»: у одного движения
+    может быть восемь тренировок, у другого три, и «ЗА 8» тогда обещало бы
+    короткой линии историю, которой у неё нет.
+    """
+    lengths = {len(series) for _, series, *_ in cards if len(series) >= 2}
+    if not lengths:
+        return MENU_LIFTS_NOTE
+    longest = max(lengths)
+    word = plural_ru(longest, ("ТРЕНИРОВКУ", "ТРЕНИРОВКИ", "ТРЕНИРОВОК"))
+    prefix = "ЗА" if len(lengths) == 1 else "ДО"
+    return f"{MENU_LIFTS_NOTE} {prefix} {longest} {word}"
 
 
 def days_window_label(days: int) -> str:
@@ -1365,8 +1415,8 @@ def menu_tiles(dashboard, tonnage: float, records: int, unit: str = "kg") -> lis
 
 def menu_lift_cards(
     lifts: list[tuple[str, list[float]]], unit: str = "kg"
-) -> list[tuple[str, list[float], str, str]]:
-    """(имя, серия, текущий e1RM, изменение) для карточек движений.
+) -> list[tuple[str, list[float], str, str, str]]:
+    """(имя, серия, текущий e1RM, изменение, тренд) для карточек движений.
 
     `lifts` — то, что вернули db.top_exercises_by_frequency и
     db.exercise_e1rm_series: самые частые упражнения человека, а не «базовые».
@@ -1377,22 +1427,32 @@ def menu_lift_cards(
     Изменение — между первой и последней точкой серии, а не между двумя
     последними: на одной тренировке e1RM гуляет от самочувствия, и такой «минус»
     сообщал бы про сон, а не про прогресс.
+
+    Тренд («up» / «down» / «flat») отделён от самого числа, потому что цвет на
+    карточке отвечает не на «какой знак у разности», а на «это рост?». Разница
+    между этими вопросами и была видна на экране: у тяги, откатившейся с пика на
+    двадцать килограммов, разность от начала серии выходила +1 кг — и рисовалась
+    зелёным, тем же цветом, что честные +13 у жима. Килограмм на двухстах
+    двадцати — это округление, и красить его ростом значит обещать прогресс,
+    которого в данных нет. Всё, что не выходит за порог шума, считается ровным.
     """
     u = UNIT_LABELS.get(unit, "кг")
-    cards: list[tuple[str, list[float], str, str]] = []
+    cards: list[tuple[str, list[float], str, str, str]] = []
     for name, series in lifts:
         if not series:
             continue
-        label = name.upper()
-        if len(label) > _LIFT_NAME_LIMIT:
-            label = label[: _LIFT_NAME_LIMIT - 1].rstrip() + "…"
+        label = _trim_lift_name(name.upper())
         current = f"{series[-1]:.0f} {u}"
-        delta = ""
+        delta, trend = "", "flat"
         if len(series) >= 2:
-            diff = round(series[-1] - series[0])
+            change = series[-1] - series[0]
+            noise = e1rm_noise_floor(series)
+            if abs(change) > noise:
+                trend = "up" if change > 0 else "down"
+            diff = round(change)
             if diff:
                 delta = f"{diff:+.0f}"
-        cards.append((label, series, current, delta))
+        cards.append((label, series, current, delta, trend))
     return cards
 
 

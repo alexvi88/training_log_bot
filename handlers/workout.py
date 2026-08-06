@@ -673,7 +673,10 @@ async def _menu_view(user_id: int) -> tuple[str, bytes | None]:
     cache_key = (
         today, len(dates), max(dates), headline, rank.level, tuple(tiles),
         tuple(volume_rows), volume_title,
-        tuple((name, tuple(round(v, 1) for v in series)) for name, series, _, _ in lift_cards),
+        tuple(
+            (name, tuple(round(v, 1) for v in series))
+            for name, series, *_ in lift_cards
+        ),
     )
     cached = _heatmap_cache.get(user_id)
     if cached is not None and cached[0] == cache_key:
@@ -699,7 +702,8 @@ async def _menu_view(user_id: int) -> tuple[str, bytes | None]:
         Counter(dates), today, heatmap_start, headline, rank.name.upper(),
         tiles, volume_rows, volume_title, lift_cards,
         calendar_title, calendar_note,
-        formatting.MENU_LIFTS_TITLE if lift_cards else "", formatting.MENU_LIFTS_NOTE,
+        formatting.MENU_LIFTS_TITLE if lift_cards else "",
+        formatting.menu_lifts_note(lift_cards),
     )
     _heatmap_cache[user_id] = (cache_key, png)
     return _GREETING, png

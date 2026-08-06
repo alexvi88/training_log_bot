@@ -280,11 +280,30 @@ def test_the_week_tile_is_skipped_when_it_would_repeat_the_month():
 def test_lift_cards_carry_the_current_value_and_the_change():
     cards = formatting.menu_lift_cards([("Жим штанги лёжа", [100.0, 108.0, 112.0])])
 
-    assert cards == [("ЖИМ ШТАНГИ ЛЁЖА", [100.0, 108.0, 112.0], "112 кг", "+12")]
+    assert cards == [("ЖИМ ШТАНГИ ЛЁЖА", [100.0, 108.0, 112.0], "112 кг", "+12", "up")]
 
 
 def test_a_drop_is_not_dressed_up_as_growth():
-    assert formatting.menu_lift_cards([("Присед", [120.0, 110.0])])[0][3] == "-10"
+    card = formatting.menu_lift_cards([("Присед", [120.0, 110.0])])[0]
+
+    assert (card[3], card[4]) == ("-10", "down")
+
+
+def test_rounding_on_a_heavy_lift_is_not_counted_as_growth():
+    """Тяга, откатившаяся с пика: разность от начала серии выходит +1 кг на двухстах
+    двадцати. Это округление, а не прогресс, и красить его тем же зелёным, что и
+    честные +13 у жима, значит обещать рост, которого в данных нет."""
+    card = formatting.menu_lift_cards([("Становая", [220.0, 241.0, 205.0, 221.0])])[0]
+
+    assert card[3] == "+1"
+    assert card[4] == "flat"
+
+
+def test_the_same_change_on_a_light_lift_is_growth():
+    """Порог считается от рабочего веса, а не абсолютный: +1 кг на разгибании
+    рукой — это уже шаг, и приглушать его нечестно ровно так же, как красить
+    зелёным дрожание на тяге."""
+    assert formatting.menu_lift_cards([("Разгибание", [20.0, 24.0])])[0][4] == "up"
 
 
 def test_the_change_is_measured_across_the_whole_series():
@@ -307,8 +326,46 @@ def test_a_long_movement_name_is_truncated_not_wrapped():
     assert len(label) <= 22
 
 
+def test_a_truncated_name_keeps_whole_words():
+    """«TRIC BLOCK - 1ARM - C…» — обрезка посреди слова выбрасывает самую
+    содержательную часть имени, а последний уцелевший знак не сообщает ничего."""
+    label = formatting.menu_lift_cards([("Tric block - 1arm - cable pushdown", [65.0])])[0][0]
+
+    assert label == "TRIC BLOCK - 1ARM…"
+
+
+def test_a_single_long_word_is_still_cut_mid_word():
+    """Резать по слову там, где слово одно, значило бы не показать имя вовсе."""
+    label = formatting.menu_lift_cards([("Гиперэкстензиясотягощением", [40.0])])[0][0]
+
+    assert label == "ГИПЕРЭКСТЕНЗИЯСОТЯГОЩ…"
+
+
 def test_a_movement_without_a_series_is_dropped():
     assert formatting.menu_lift_cards([("Жим", [])]) == []
+
+
+def test_the_lifts_note_says_how_long_the_line_is():
+    """«РАСЧЁТНЫЙ МАКСИМУМ» объясняет число, но не линию: по картинке не понять,
+    пик на ней — это прошлая неделя или прошлая осень."""
+    cards = formatting.menu_lift_cards([("Жим", [100.0] * 8), ("Присед", [120.0] * 8)])
+
+    assert formatting.menu_lifts_note(cards) == "РАСЧЁТНЫЙ МАКСИМУМ ЗА 8 ТРЕНИРОВОК"
+
+
+def test_uneven_series_are_described_as_an_upper_bound():
+    """У одного движения восемь тренировок, у другого три: «ЗА 8» обещало бы
+    короткой линии историю, которой у неё нет."""
+    cards = formatting.menu_lift_cards([("Жим", [100.0] * 8), ("Присед", [120.0] * 3)])
+
+    assert formatting.menu_lifts_note(cards) == "РАСЧЁТНЫЙ МАКСИМУМ ДО 8 ТРЕНИРОВОК"
+
+
+def test_the_note_stays_bare_when_there_is_no_line_to_describe():
+    """Одна точка — это не линия, и приписывать ей отрезок нечего."""
+    cards = formatting.menu_lift_cards([("Жим", [100.0])])
+
+    assert formatting.menu_lifts_note(cards) == "РАСЧЁТНЫЙ МАКСИМУМ"
 
 
 # ---------- отрисовка ----------
@@ -322,7 +379,7 @@ def _render(**kwargs):
         tiles=[("ТРЕНИРОВОК ЗА 30 ДНЕЙ", "12"), ("ТОННАЖ ЗА 7 ДНЕЙ", "24.5 т"), ("РЕКОРДОВ 7 Д", "3")],
         volume_rows=[("СПИНА", 14, "high"), ("ГРУДЬ", 9, "in_range"), ("НОГИ", 0, "none")],
         volume_title="ОБЪЁМ ЗА 7 ДНЕЙ · 23 ПОДХОДА",
-        lifts=[("ЖИМ ЛЁЖА", [100.0, 112.0], "112 кг", "+12")],
+        lifts=[("ЖИМ ЛЁЖА", [100.0, 112.0], "112 кг", "+12", "up")],
     )
     base.update(kwargs)
     return charts.render_menu_dashboard(**base)
@@ -355,9 +412,9 @@ def test_a_full_summary_is_a_portrait():
             ("ДРУГОЕ", 0, "none"),
         ],
         lifts=[
-            ("ЖИМ ЛЁЖА", [100.0, 112.0], "112 кг", "+12"),
-            ("ПРИСЕД", [140.0, 158.0], "158 кг", "+18"),
-            ("ТЯГА", [180.0, 192.0], "192 кг", "+12"),
+            ("ЖИМ ЛЁЖА", [100.0, 112.0], "112 кг", "+12", "up"),
+            ("ПРИСЕД", [140.0, 158.0], "158 кг", "+18", "up"),
+            ("ТЯГА", [180.0, 192.0], "192 кг", "+12", "up"),
         ],
     ))
 
@@ -389,7 +446,7 @@ def test_the_dividers_are_actually_drawn():
 
 
 def test_a_flat_series_does_not_divide_by_zero():
-    assert _render(lifts=[("ЖИМ", [100.0, 100.0, 100.0], "100 кг", "")])[:8] == b"\x89PNG\r\n\x1a\n"
+    assert _render(lifts=[("ЖИМ", [100.0, 100.0, 100.0], "100 кг", "", "flat")])[:8] == b"\x89PNG\r\n\x1a\n"
 
 
 def test_an_all_zero_series_does_not_take_the_whole_menu_down():
@@ -397,23 +454,65 @@ def test_an_all_zero_series_does_not_take_the_whole_menu_down():
     пока человек ни разу не взвесился, а подтягивания легко попадают в топ-3
     частых. Порог шума считался от среднего, то есть тоже нулём, — и главный
     экран падал целиком, вместе с /start, потому что сводка рисуется на обоих."""
-    assert _render(lifts=[("ПОДТЯГИВАНИЯ", [0.0, 0.0, 0.0, 0.0], "0 кг", "")])[:8] == (
+    assert _render(lifts=[("ПОДТЯГИВАНИЯ", [0.0, 0.0, 0.0, 0.0], "0 кг", "", "flat")])[:8] == (
         b"\x89PNG\r\n\x1a\n"
     )
 
 
 def test_a_single_point_series_renders_without_a_line():
-    assert _render(lifts=[("ЖИМ", [100.0], "100 кг", "")])[:8] == b"\x89PNG\r\n\x1a\n"
+    assert _render(lifts=[("ЖИМ", [100.0], "100 кг", "", "flat")])[:8] == b"\x89PNG\r\n\x1a\n"
 
 
 def test_a_block_without_a_single_line_does_not_reserve_room_for_graphs():
     """Если ни у одного движения нет второй точки, рисовать нечего — и высоту
     под график блок не занимает. Иначе внизу сводки висела пустая полоса в три
     сантиметра, и читалась она как «график не нарисовался»."""
-    trend = _png_size(_render(lifts=[("ЖИМ", [100.0, 112.0], "112 кг", "+12")]))[1]
-    bare = _png_size(_render(lifts=[("ЖИМ", [100.0], "100 кг", "")]))[1]
+    trend = _png_size(_render(lifts=[("ЖИМ", [100.0, 112.0], "112 кг", "+12", "up")]))[1]
+    bare = _png_size(_render(lifts=[("ЖИМ", [100.0], "100 кг", "", "flat")]))[1]
 
     assert bare < trend
+
+
+def _dim_ink(png: bytes) -> int:
+    """Сколько в картинке приглушённо-серых пикселей — то есть краски маркера пика.
+
+    С допуском, а не по точному коду цвета: полая точка обведена линией в
+    полтора пикселя, и почти вся её краска — это сглаживание, у которого точного
+    цвета не бывает. Синий спарклайн и белая точка текущего значения в допуск не
+    попадают: до них по каналам далеко.
+    """
+    import io
+
+    from PIL import Image
+
+    img = Image.open(io.BytesIO(png)).convert("RGB")
+    dim = tuple(int(charts.DASH_DIM[i:i + 2], 16) for i in (1, 3, 5))
+    width, height = img.size
+    return sum(
+        1
+        for y in range(height) for x in range(width)
+        if sum((a - b) ** 2 for a, b in zip(img.getpixel((x, y)), dim, strict=True)) < 40 ** 2
+    )
+
+
+def test_a_lift_that_fell_off_its_peak_gets_the_peak_marked():
+    """Серая дельта у откатившегося движения сама по себе выглядит как сбой
+    раскраски. Полая точка на пике объясняет её: «здесь ты был выше».
+
+    Остальная приглушённая краска — имя движения, дни недели, месяцы — у обеих
+    картинок одна и та же, поэтому разницу даёт только маркер."""
+    fell = _render(lifts=[("ТЯГА", [220.0, 241.0, 205.0, 221.0], "221 кг", "+1", "flat")])
+    grew = _render(lifts=[("ТЯГА", [205.0, 213.0, 221.0], "221 кг", "+16", "up")])
+
+    assert _dim_ink(fell) > _dim_ink(grew)
+
+
+def test_a_lift_still_at_its_peak_gets_no_second_marker():
+    """Маркер пика под маркером текущей точки — это не подсказка, а клякса."""
+    at_peak = _render(lifts=[("ТЯГА", [205.0, 213.0, 221.0], "221 кг", "+16", "up")])
+    flat = _render(lifts=[("ТЯГА", [221.0, 221.0, 221.0], "221 кг", "", "flat")])
+
+    assert _dim_ink(at_peak) == _dim_ink(flat)
 
 
 def test_one_movement_gets_a_third_of_the_width_not_all_of_it():
@@ -424,7 +523,7 @@ def test_one_movement_gets_a_third_of_the_width_not_all_of_it():
 
     from PIL import Image
 
-    img = Image.open(io.BytesIO(_render(lifts=[("ЖИМ", [100.0, 112.0], "112 кг", "+12")]))).convert("RGB")
+    img = Image.open(io.BytesIO(_render(lifts=[("ЖИМ", [100.0, 112.0], "112 кг", "+12", "up")]))).convert("RGB")
     width, height = img.size
     line = tuple(int(charts.HEATMAP_FILLED[i:i + 2], 16) for i in (1, 3, 5))
     # Нижняя пятая часть картинки — уже только поле спарклайна: ни клеток

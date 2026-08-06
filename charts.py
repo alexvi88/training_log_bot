@@ -13,7 +13,12 @@ from matplotlib.backends.backend_agg import FigureCanvasAgg  # noqa: E402
 from matplotlib.figure import Figure  # noqa: E402
 from matplotlib.patches import FancyBboxPatch, Rectangle  # noqa: E402
 
-from analytics import WEEKLY_VOLUME_MAX, WEEKLY_VOLUME_MIN, linear_trend  # noqa: E402
+from analytics import (  # noqa: E402
+    WEEKLY_VOLUME_MAX,
+    WEEKLY_VOLUME_MIN,
+    e1rm_noise_floor,
+    linear_trend,
+)
 
 
 # Figures are built directly rather than through pyplot: pyplot keeps a single
@@ -304,6 +309,10 @@ DASH_GAP = 0.34               # распорка между виджетами, 
 DASH_PAD = 0.14               # распорка внутри группы, без линейки
 DASH_CARD = "#171d26"
 DASH_RULE = "#2b3543"
+# Приглушённая краска сводки: имена элементов, дни недели, месяцы и маркер пика
+# на спарклайне. Вынесена из render_menu_dashboard, потому что о ней теперь
+# нужно знать снаружи — по ней проверяется, нарисован ли маркер.
+DASH_DIM = "#6b7684"
 
 # Типографика сводки: шесть роле́й вместо одиннадцати случайных размеров. До этого
 # в одной картинке жили 6, 6.5, 7, 7.5, 8, 8.5, 9, 10, 13.5, 15 и 23 pt, причём
@@ -474,11 +483,11 @@ def _dash_year_calendar(
         new_month = col > 0 and monday.month != (monday - dt.timedelta(weeks=1)).month
         room_right = (x_units - left_units) - col
         if new_month and room_right >= _DASH_CAL_MONTH_UNITS:
-            ax.text(col, -1.1, _MONTHS_RU[monday.month - 1], color="#6b7684",
+            ax.text(col, -1.1, _MONTHS_RU[monday.month - 1], color=DASH_DIM,
                     fontsize=DASH_FS_MICRO, va="center")
 
     for row, label in ((0, "Пн"), (2, "Ср"), (4, "Пт")):
-        ax.text(-0.6, row + 0.55, label, color="#6b7684", fontsize=DASH_FS_MICRO,
+        ax.text(-0.6, row + 0.55, label, color=DASH_DIM, fontsize=DASH_FS_MICRO,
                 ha="right", va="center")
 
 
@@ -500,15 +509,17 @@ def _dash_lifts(
         _dash_section(ax, title, note)
     slots = max(len(lifts), _LIFT_SLOTS)
     box = (DASH_RIGHT - DASH_LEFT - 0.02 * (slots - 1)) / slots
-    for i, (name, series, value, delta) in enumerate(lifts):
+    for i, (name, series, value, delta, trend) in enumerate(lifts):
         x0 = DASH_LEFT + i * (box + 0.02)
         ax.text(x0, _LIFT_NAME_Y, name, color=dim, fontsize=DASH_FS_CAPTION, va="center")
         ax.text(x0, _LIFT_VALUE_Y, value, color=fg, fontsize=DASH_FS_VALUE,
                 fontweight="bold", va="center")
         if delta:
-            # Минус не красится в зелёное: цвет здесь — единственное, что отличает
-            # «вырос» от «просел», и покрасить откат как рост значило бы врать.
-            ax.text(x0 + box, _LIFT_VALUE_Y, delta, color=ok if delta.startswith("+") else dim,
+            # Зелёным красится рост, а не знак «плюс». Цвет здесь — единственное,
+            # что отличает «вырос» от «просел» и от «стоит на месте», и покрасить
+            # откат или округление как рост значило бы врать; какое изменение
+            # считается ровным, решает formatting.menu_lift_cards.
+            ax.text(x0 + box, _LIFT_VALUE_Y, delta, color=ok if trend == "up" else dim,
                     fontsize=DASH_FS_NUMBER, fontweight="bold", ha="right", va="center")
         if len(series) < 2:
             continue
@@ -529,6 +540,14 @@ def _dash_lifts(
         ax.fill_between(xs, ys, _LIFT_LINE_BOTTOM, color=HEATMAP_FILLED,
                         alpha=0.16, linewidth=0)
         ax.plot(xs, ys, color=HEATMAP_FILLED, linewidth=2.0, solid_capstyle="round")
+        # Пик отмечается, только когда человек с него ушёл: иначе маркер лёг бы
+        # ровно под маркером текущей точки и превратил бы её в кляксу. Полая
+        # точка приглушённым цветом — это «здесь ты был выше», и она объясняет
+        # серую дельту, которая иначе выглядит как сбой раскраски.
+        peak = max(range(len(series)), key=lambda k: series[k])
+        if high - series[-1] > e1rm_noise_floor(series) and peak != len(series) - 1:
+            ax.plot([xs[peak]], [ys[peak]], marker="o", markersize=3.4,
+                    markerfacecolor="none", markeredgecolor=dim, markeredgewidth=1.1)
         ax.plot([xs[-1]], [ys[-1]], marker="o", markersize=3.8, color=fg)
 
 
@@ -560,7 +579,7 @@ def render_menu_dashboard(
     Любой из виджетов можно не передавать: у нового пользователя нет ни объёма,
     ни движений, и пустой блок сообщал бы только то, что он пуст.
     """
-    BG, FG, MUTED, DIM = "#12161d", "#e6e6e6", "#9aa4b2", "#6b7684"
+    BG, FG, MUTED, DIM = "#12161d", "#e6e6e6", "#9aa4b2", DASH_DIM
     OK = "#45b97c"
 
     tiles = list(tiles or ())
@@ -577,7 +596,7 @@ def render_menu_dashboard(
     layout += [("gap:cal", DASH_GAP), ("cal", _dash_calendar_height())]
     # Блок движений без единой линии — это только имена и числа, и высоту он
     # занимает по ним, а не по графику, которого нет.
-    lifts_bottom = _LIFT_BOTTOM if any(len(s) >= 2 for _, s, _, _ in lifts) else _LIFT_BOTTOM_BARE
+    lifts_bottom = _LIFT_BOTTOM if any(len(s) >= 2 for _, s, *_ in lifts) else _LIFT_BOTTOM_BARE
     if lifts:
         layout += [("gap:lifts", DASH_GAP), ("lifts", _LIFT_UNIT_IN * (lifts_bottom - _LIFT_TOP))]
 
