@@ -293,14 +293,18 @@ def _state(user_id: int) -> FSMContext:
 
 
 async def _call(user_id: int, tool: str, payload: dict) -> dict | None:
-    """Вызвать инструмент через execute_tool и забрать описание отката."""
+    """Вызвать инструмент через execute_tool и забрать описание отката.
+
+    log_bodyweight отдаёт две кнопки (откат и ссылку на дневник веса — см.
+    ai_trainer.execute_tool) — тут нужна именно кнопка отката."""
     captured: list[dict] = []
 
     async def on_action(action: dict) -> None:
         captured.append(action)
 
     await ai_trainer.execute_tool(user_id, tool, payload, on_action=on_action)
-    return captured[-1] if captured else None
+    undoable = [a for a in captured if "undo" in a]
+    return undoable[-1] if undoable else (captured[-1] if captured else None)
 
 
 async def test_every_self_acting_tool_offers_an_undo(fresh_db, user_id):
@@ -323,6 +327,22 @@ async def test_logged_bodyweight_can_be_taken_back(fresh_db, user_id):
 
     assert await ai_handler._apply_undo(user_id, action["undo"]) is not None
     assert await fresh_db.list_bodyweight_logs(user_id) == []
+
+
+async def test_logged_bodyweight_also_offers_a_diary_link(fresh_db, user_id):
+    """Вес виден прямо в тексте ответа — на кнопке отката его дублировать не
+    нужно, а вот ссылка на 🏋️ Дневник веса (график, история) — да."""
+    captured: list[dict] = []
+
+    async def on_action(action: dict) -> None:
+        captured.append(action)
+
+    await ai_trainer.execute_tool(
+        user_id, "log_bodyweight", {"weight": 78.4}, on_action=on_action
+    )
+
+    assert [a["label"] for a in captured] == ["↩️ Отменить", "⚖️ Дневник веса"]
+    assert captured[1]["callback"] == "menu:bodyweight"
 
 
 async def test_undo_removes_that_entry_not_the_latest(fresh_db, user_id):
