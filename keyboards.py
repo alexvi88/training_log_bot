@@ -88,6 +88,7 @@ def ai_trainer_keyboard(
     draft_id: int | str | None = None,
     programs: Sequence[Any] = (),
     actions: Sequence[Any] = (),
+    presets: Sequence[tuple[str, str]] = (),
 ) -> InlineKeyboardMarkup:
     """`exercises` — то, что тренер упомянул в ответе (см. exercise_mentions), и
     свои упражнения, и ещё не добавленные из каталога — до
@@ -119,6 +120,11 @@ def ai_trainer_keyboard(
     Каждое — {"label", "callback"}; кнопки стоят отдельными строками над
     списком и не листаются: это ответ на прямую просьбу, а не подсказка по
     тексту, и прятать её на второй странице нельзя.
+
+    `presets` — готовые вопросы стартового экрана (label, callback_data):
+    стоят первыми строками, выше всего остального — на интро это единственный
+    контент, и тап по ним должен быть первым движением, а не поиском под
+    навигацией.
 
     Программа, если есть, идёт первым пунктом общего списка и делит с
     упоминаниями упражнений один и тот же лимит и постраничную навигацию
@@ -201,7 +207,13 @@ def ai_trainer_keyboard(
         for action in list(actions)[:MAX_AI_ACTIONS]
     ]
 
-    return InlineKeyboardMarkup(inline_keyboard=action_rows + item_rows + page_nav_rows + nav)
+    preset_rows = [
+        [InlineKeyboardButton(text=label, callback_data=cb)] for label, cb in presets
+    ]
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=preset_rows + action_rows + item_rows + page_nav_rows + nav
+    )
 
 
 def ai_mention_ref(target: Any) -> str:
