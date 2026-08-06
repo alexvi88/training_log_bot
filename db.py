@@ -22,6 +22,7 @@ from typing import Any, Optional
 import aiosqlite
 
 import config
+import formatting
 from seed_data import BODYWEIGHT_TEMPLATES, EXERCISE_TEMPLATES, MUSCLE_GROUP_PRESETS
 
 SCHEMA = """
@@ -4314,8 +4315,9 @@ async def routine_budget(user_id: int, adding: int, freeing: int = 0) -> Optiona
     existing = await count_routines(user_id)
     if existing - freeing + adding <= config.MAX_ROUTINES_PER_USER:
         return None
+    day_word = formatting.plural_ru(existing, ("день", "дня", "дней"))
     return (
-        f"У тебя уже {existing} дней в программах — больше "
+        f"У тебя уже {existing} {day_word} в программах — больше "
         f"{config.MAX_ROUTINES_PER_USER} не влезет. Удали лишние в «🗂 Программы» "
         "и попробуй ещё раз."
     )

@@ -608,3 +608,17 @@ async def test_both_doors_into_the_ai_program_builder_are_labelled_the_same(
     )
 
     assert from_picker == from_manage
+
+
+async def test_long_name_warning_declines_symbol_count_correctly():
+    """Тот же класс ошибки, что и в exercises.py: раньше «81 символов» через
+    f-строку без plural_ru, независимо от числа."""
+    assert workout._suspicious_exercise_name_reason("я" * 81) == (
+        "длинновато для упражнения (81 символ)"
+    )
+    assert workout._suspicious_exercise_name_reason("я" * 82) == (
+        "длинновато для упражнения (82 символа)"
+    )
+    assert workout._suspicious_exercise_name_reason("я" * 85) == (
+        "длинновато для упражнения (85 символов)"
+    )

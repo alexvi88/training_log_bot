@@ -615,6 +615,21 @@ def test_preview_of_a_single_day_does_not_promise_several_programs():
     assert "Добавлю как программу" in text
 
 
+def test_preview_uses_genitive_case_after_the_preposition():
+    """Шапка «3 дня · N упражнений» верна в именительном, но та же переменная
+    day_word раньше переиспользовалась после предлога «из», где нужен
+    родительный: «из 3 дня» вместо «из 3 дней». Ломалось на 2–4 днях — самом
+    частом сплите."""
+    days = [
+        {"name": f"День {i}", "items": [{"name": "Жим", "source": "own"}]} for i in range(1, 4)
+    ]
+    text = formatting.build_ai_program_preview("Сплит", days)
+
+    assert "3 дня · 3 упражнения" in text
+    assert "из 3 дней —" in text
+    assert "из 3 дня —" not in text
+
+
 def test_target_formats_partial_input():
     assert formatting.build_routine_target(3, 5, 10) == "3×5–10"
     assert formatting.build_routine_target(3, 8, 8) == "3×8"

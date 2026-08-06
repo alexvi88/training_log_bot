@@ -915,10 +915,16 @@ async def rt_start(callback: CallbackQuery, state: FSMContext):
                 yes_text="🏁 Завершить и начать",
                 no_text="↩️ Вернуться к ней",
             )
+            if routine["program_name"]:
+                program_phrase = (
+                    f"«{escape(routine['program_name'])}» (день «{escape(routine['name'])}»)"
+                )
+            else:
+                program_phrase = f"«{escape(routine['name'])}»"
             await ui.safe_edit(
                 callback,
                 f"У тебя не закрыта тренировка от <b>{formatting.format_date_ru(started)}</b>.\n"
-                f"Завершить её и начать по программе «{escape(routine['name'])}»?",
+                f"Завершить её и начать по программе {program_phrase}?",
                 reply_markup=kb,
                 parse_mode="HTML",
             )
