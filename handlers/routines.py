@@ -152,6 +152,28 @@ def _days_ago_label(iso: str, today: dt.date) -> str:
     return f"{days} {formatting.plural_ru(days, ('день', 'дня', 'дней'))} назад"
 
 
+async def _day_composition_blocks(days, *, history=None, today=None) -> list[str]:
+    """Дни программы с их составом — по блоку на день.
+
+    `history`/`today` дописывают к имени дня «· вчера» / «· ещё не делал»: это
+    нужно экрану программы, где выбирают, куда идти сегодня, и лишнее на экране
+    правок, где выбирают, что менять.
+    """
+    blocks = []
+    for day in days:
+        exercises = await db.list_routine_exercises(day["id"])
+        ex_lines = [
+            f"• {escape(ex['display_name'])}" + (f" — {escape(ex['target'])}" if ex["target"] else "")
+            for ex in exercises
+        ] or ["В дне нет упражнений (возможно, они были архивированы)."]
+        when = ""
+        if history is not None:
+            entry = history.get(day["id"])
+            when = f" <i>· {_days_ago_label(entry[0], today)}</i>" if entry else " <i>· ещё не делал</i>"
+        blocks.append("\n".join([f"<b>{escape(day['name'])}</b>{when}", *ex_lines]))
+    return blocks
+
+
 async def _show_program(event, state: FSMContext, program_id: int) -> None:
     """Экран одной программы: что в ней, какой день сегодня и когда что делалось.
 
@@ -169,16 +191,7 @@ async def _show_program(event, state: FSMContext, program_id: int) -> None:
     today = timeutil.user_today(await db.get_user(event.from_user.id))
     next_day = await db.next_program_day(program_id)
 
-    day_blocks = []
-    for day in days:
-        exercises = await db.list_routine_exercises(day["id"])
-        ex_lines = [
-            f"• {escape(ex['display_name'])}" + (f" — {escape(ex['target'])}" if ex["target"] else "")
-            for ex in exercises
-        ] or ["В дне нет упражнений (возможно, они были архивированы)."]
-        entry = history.get(day["id"])
-        when = f" <i>· {_days_ago_label(entry[0], today)}</i>" if entry else " <i>· ещё не делал</i>"
-        day_blocks.append("\n".join([f"<b>{escape(day['name'])}</b>{when}", *ex_lines]))
+    day_blocks = await _day_composition_blocks(days, history=history, today=today)
 
     header = [f"🗂 <b>{escape(program['name'])}</b>"]
     # По workouts.program_id, а не sum() по дням из program_day_history — дни
@@ -213,10 +226,11 @@ async def rt_program(callback: CallbackQuery, state: FSMContext):
 async def rt_program_edit(callback: CallbackQuery, state: FSMContext):
     """«⚙️ Изменить программу» — отдельный экран под все правки.
 
-    Состав дней тут не повторяется: его человек только что видел на экране
-    программы, а здесь он выбирает действие, а не читает программу. Число дней
-    оставлено — от него зависит, что вообще осмысленно нажимать («Порядок дней»
-    на одном дне не показывается).
+    Состав дней показывается и здесь: раньше экран сводился к имени и числу
+    дней, и человек выбирал, какой день переименовать или куда добавить
+    упражнение, не видя ни одного из них — приходилось возвращаться назад и
+    держать состав в голове. Давность («· вчера») при этом не нужна: она про
+    то, куда идти тренироваться, а не про то, что менять.
     """
     program_id = int(callback.data.split(":")[2])
     program = await _owned_program(callback, program_id)
@@ -224,10 +238,13 @@ async def rt_program_edit(callback: CallbackQuery, state: FSMContext):
         return
     days = await db.list_program_days_by_id(program_id)
     word = formatting.plural_ru(len(days), ("день", "дня", "дней"))
-    text = (
-        f"⚙️ <b>{escape(program['name'])}</b>\n"
-        f"<i>{len(days)} {word}</i>\n\n"
-        "Что меняем?"
+    blocks = await _day_composition_blocks(days)
+    text = "\n\n".join(
+        [
+            f"⚙️ <b>{escape(program['name'])}</b>\n<i>{len(days)} {word}</i>",
+            *blocks,
+            "Что меняем?",
+        ]
     )
     await ui.safe_edit(
         callback, text, reply_markup=keyboards.program_edit_keyboard(days, program_id),

@@ -4494,6 +4494,23 @@ async def get_or_create_user_exercise_by_name(user_id: int, name: str) -> Option
     return None
 
 
+async def exercise_group_name(user_id: int, name: str) -> Optional[str]:
+    """Группа мышц упражнения по имени — тем же порядком, что resolve_exercise_name.
+
+    Нужна, чтобы посчитать недельный объём предложенной программы кодом: раньше
+    это число называла сама модель по своему же черновику и ошибалась (обещала
+    ~12 подходов на грудь в программе, где их 19).
+    """
+    row = await find_exercise_by_name(user_id, name) or await _find_global_template_by_name(name)
+    if row is None or row["primary_group_id"] is None:
+        return None
+    cur = await conn().execute(
+        "SELECT name FROM muscle_groups WHERE id = ?", (row["primary_group_id"],)
+    )
+    group = await cur.fetchone()
+    return group["name"] if group else None
+
+
 async def resolve_exercise_name(user_id: int, name: str) -> tuple[Optional[str], Optional[str]]:
     """Куда ляжет название упражнения, ничего при этом не создавая.
 
