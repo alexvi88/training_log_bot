@@ -171,12 +171,17 @@ async def workout_duration_seconds(workout) -> float | None:
     Backfilled/imported workouts have started_at == finished_at (no live FSM ran),
     so the set timestamps only reflect data-entry time, not the actual session —
     duration is skipped for those. Editing a finished workout can also add a set
-    with a fresh timestamp long after the session; an implausibly long span is
-    treated the same way rather than shown as-is.
+    with a fresh timestamp long after the session — that moment is identifiable
+    (it can only be later than finished_at, since a live set is always logged
+    before the workout is closed), so those sets are excluded from the span
+    instead of just capping the total: находка 25 — a couple hours' delay
+    between finishing and editing read as a real 2h+ session and neither the
+    old 6h cap nor "как есть" caught it, and the number fed straight into
+    "Самая длинная тренировка" and the «Марафонец» achievement.
     """
     if workout["started_at"] == workout["finished_at"]:
         return None
-    span = await db.get_workout_set_span(workout["id"])
+    span = await db.get_workout_set_span(workout["id"], before=workout["finished_at"])
     if span is None:
         return None
     first_at, last_at = span

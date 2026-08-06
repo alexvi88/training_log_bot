@@ -3155,13 +3155,27 @@ async def list_exercise_ids_for_workout(workout_id: int) -> list[int]:
     return [r["exercise_id"] for r in rows]
 
 
-async def get_workout_set_span(workout_id: int) -> Optional[tuple[str, str]]:
-    """(first_set_created_at, last_set_created_at) for a workout, or None if it has no sets."""
-    cur = await conn().execute(
-        "SELECT MIN(s.created_at) AS first_at, MAX(s.created_at) AS last_at FROM sets s "
-        "JOIN workout_blocks b ON b.id = s.block_id WHERE b.workout_id = ?",
-        (workout_id,),
-    )
+async def get_workout_set_span(
+    workout_id: int, before: Optional[str] = None
+) -> Optional[tuple[str, str]]:
+    """(first_set_created_at, last_set_created_at) for a workout, or None if it has no sets.
+
+    `before` excludes sets created at or after that moment — used to keep a set
+    added through the post-finish editor (see view_builder.workout_duration_seconds)
+    from stretching the span past the workout's own finished_at.
+    """
+    if before is None:
+        cur = await conn().execute(
+            "SELECT MIN(s.created_at) AS first_at, MAX(s.created_at) AS last_at FROM sets s "
+            "JOIN workout_blocks b ON b.id = s.block_id WHERE b.workout_id = ?",
+            (workout_id,),
+        )
+    else:
+        cur = await conn().execute(
+            "SELECT MIN(s.created_at) AS first_at, MAX(s.created_at) AS last_at FROM sets s "
+            "JOIN workout_blocks b ON b.id = s.block_id WHERE b.workout_id = ? AND s.created_at <= ?",
+            (workout_id, before),
+        )
     row = await cur.fetchone()
     if row is None or row["first_at"] is None:
         return None
