@@ -78,6 +78,27 @@ async def test_default_scope_advertises_the_user_facing_sections(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_mcp_available_adds_mcp_and_game_to_default_scope(monkeypatch):
+    """/game раздаёт страница того же HTTP-сервера, что и MCP (см.
+    handlers/game.game_url), так что обе команды в «/»-меню зависят от одного
+    и того же условия."""
+    monkeypatch.setattr(config, "ADMIN_ID", None)
+    monkeypatch.setattr(config, "MCP_ENABLED", True)
+    monkeypatch.setattr(config, "MCP_PUBLIC_URL", "https://example.com")
+    bot = AsyncMock()
+
+    await _setup_commands(bot)
+
+    default_call = next(
+        c for c in bot.set_my_commands.call_args_list if isinstance(c.kwargs["scope"], BotCommandScopeDefault)
+    )
+    commands = default_call.args[0]
+    assert [c.command for c in commands] == [
+        "start", "help", "ai_trainer", "food_diary", "feedback", "mcp", "game",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_admin_scope_targets_only_admin_chat_and_includes_admin_command(monkeypatch):
     monkeypatch.setattr(config, "ADMIN_ID", 12345)
     bot = AsyncMock()
