@@ -181,7 +181,10 @@ async def _show_program(event, state: FSMContext, program_id: int) -> None:
         day_blocks.append("\n".join([f"<b>{escape(day['name'])}</b>{when}", *ex_lines]))
 
     header = [f"🗂 <b>{escape(program['name'])}</b>"]
-    total = sum(entry[1] for entry in history.values())
+    # По workouts.program_id, а не sum() по дням из program_day_history — дни
+    # можно удалить, а тренировки по ним честно остаются в истории, и счётчик
+    # не должен проседать следом (находка 22).
+    total = await db.program_total_workouts(program_id)
     if total:
         word = formatting.plural_ru(total, ("тренировка", "тренировки", "тренировок"))
         header.append(f"<i>{total} {word} по ней</i>")

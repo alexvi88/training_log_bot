@@ -99,7 +99,8 @@ CREATE TABLE IF NOT EXISTS workouts (
     note TEXT,
     source TEXT NOT NULL DEFAULT 'manual',
     ai_comment TEXT,
-    routine_id INTEGER
+    routine_id INTEGER,
+    program_id INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_workouts_user_status ON workouts (user_id, status);
 
@@ -620,6 +621,20 @@ async def _migrate_schema() -> None:
         # next screen). Feeds the "programs you've actually been training by"
         # shortcuts on the picker; older rows just stay NULL.
         await _conn.execute("ALTER TABLE workouts ADD COLUMN routine_id INTEGER")
+    if "program_id" not in workout_cols:
+        # находка 22: routine_id alone loses the program once its day is
+        # deleted (delete_routine drops the routines row, not the workouts
+        # that pointed at it) — the "N тренировок по ней" total under a
+        # program's name would silently shrink even though the workouts
+        # themselves stay in history exactly as the delete confirmation
+        # promises. A denormalized program_id survives that: it's set at
+        # workout creation, from the routine picked, and outlives the day.
+        await _conn.execute("ALTER TABLE workouts ADD COLUMN program_id INTEGER")
+        await _conn.execute(
+            "UPDATE workouts SET program_id = "
+            "(SELECT program_id FROM routines WHERE routines.id = workouts.routine_id) "
+            "WHERE routine_id IS NOT NULL"
+        )
     if "followup_due_at" in workout_cols:
         # Post-workout followup push was removed — drop the columns a DB that
         # already ran the earlier migration would have.
@@ -2130,11 +2145,22 @@ async def create_workout(
     routine_id: Optional[int] = None,
 ) -> int:
     """`routine_id` — программа, с которой стартовали (см. list_recent_programs);
-    у обычной тренировки «с нуля» его нет."""
+    у обычной тренировки «с нуля» его нет.
+
+    `program_id` дублируется с routine_id.program_id на момент старта — не
+    просто денормализация: если день потом удалят (delete_routine сносит саму
+    строку routines), routine_id повиснет без пары, а program_id останется и
+    даст программе честно посчитать «N тренировок по ней» даже по дням,
+    которых больше нет (находка 22)."""
+    program_id = None
+    if routine_id is not None:
+        routine = await get_routine(routine_id)
+        program_id = routine["program_id"] if routine else None
     async with _write_lock:
         cur = await conn().execute(
-            "INSERT INTO workouts (user_id, started_at, status, routine_id) VALUES (?, ?, ?, ?)",
-            (user_id, started_at or now_iso(), status, routine_id),
+            "INSERT INTO workouts (user_id, started_at, status, routine_id, program_id) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (user_id, started_at or now_iso(), status, routine_id, program_id),
         )
         await conn().commit()
         return cur.lastrowid
@@ -4526,6 +4552,19 @@ async def program_day_history(program_id: int) -> dict[int, tuple[str, int]]:
         (program_id,),
     )
     return {row["routine_id"]: (row["last_started"], row["times"]) for row in await cur.fetchall()}
+
+
+async def program_total_workouts(program_id: int) -> int:
+    """How many finished workouts were ever done by this program — across every
+    day, including days since deleted (see workouts.program_id, находка 22).
+    Unlike program_day_history, this doesn't need the routines row to still
+    exist, so deleting a day never quietly shrinks it."""
+    cur = await conn().execute(
+        "SELECT COUNT(*) AS n FROM workouts WHERE program_id = ? AND status = 'finished'",
+        (program_id,),
+    )
+    row = await cur.fetchone()
+    return row["n"] if row else 0
 
 
 async def next_program_day(program_id: int) -> Optional[aiosqlite.Row]:
