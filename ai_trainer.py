@@ -1557,9 +1557,11 @@ TOOLS: list[dict[str, Any]] = [
             "description": (
                 "Записать съеденное в дневник питания за сегодня («запиши: овсянка с "
                 "бананом»). ДЕЛАЕТ СРАЗУ, под ответом появится кнопка отката — скажи, "
-                "что записал, и упомяни её. КБЖУ необязательны — если человек их не "
-                "назвал, а по описанию ты можешь прикинуть, прикидывай честно и скажи, "
-                "что это оценка; выдумывать точные цифры хуже, чем оставить пусто. "
+                "что записал, и упомяни её. КБЖУ передавай только те, что человек "
+                "назвал сам: если их нет, оценку посчитает тот же разборщик, что и на "
+                "экране дневника, — не подставляй свои цифры вместо него. Когда в "
+                "ответе придёт macros_estimated, скажи человеку, что КБЖУ прикидочные "
+                "и их можно уточнить, назвав вес или тип блюда. "
                 "Разбор фото еды идёт своим путём, этот инструмент — для текста."
             ),
             "parameters": {
@@ -2896,15 +2898,48 @@ async def _log_bodyweight(
     )
 
 
+# Дневник ждёт разбор до 90 секунд, но там человек смотрит на «разбираю...» и
+# больше ничего не делает. Здесь это один шаг внутри цикла инструментов, за
+# которым ждут ответа тренера, — поэтому лимит короче, а провал не фатален:
+# запись всё равно ляжет, просто без цифр, как было раньше.
+_FOOD_ESTIMATE_TIMEOUT = 30
+
+
+async def _estimate_missing_macros(user_id: int, description: str, entry: dict[str, Any]) -> bool:
+    """Досчитать КБЖУ по описанию тем же оценщиком, что и экран дневника.
+
+    True — цифры проставлены. False — оценщик не увидел еды, не уложился в
+    таймаут или упал; запись тогда идёт без КБЖУ, как и до этого.
+    """
+    if not is_configured():
+        return False
+    try:
+        estimate = await asyncio.wait_for(
+            analyze_food(user_id, text=description), timeout=_FOOD_ESTIMATE_TIMEOUT
+        )
+    except Exception:
+        logger.exception("food estimate failed for user %s", user_id)
+        return False
+    if not estimate.get("is_food"):
+        return False
+    for key in ("calories", "protein", "fat", "carbs"):
+        entry[key] = _as_number(estimate.get(key))
+    _reconcile_macros(entry)
+    return entry["calories"] is not None
+
+
 async def _log_food(
     user_id: int, tool_input: dict[str, Any]
 ) -> tuple[dict[str, Any], Optional[dict[str, Any]]]:
     """Записать съеденное — сразу, по той же причине, что и вес.
 
-    КБЖУ необязательны: «съел два яйца» без цифр — всё ещё запись в дневнике,
-    а выдуманные калории хуже, чем их отсутствие. Если модель их прислала,
-    сверяем углеводы/белки/жиры с калориями тем же _reconcile_macros, что и
-    разбор фото, — чтобы дневник не расходился сам с собой.
+    Если модель прислала КБЖУ, сверяем углеводы/белки/жиры с калориями тем же
+    _reconcile_macros, что и разбор фото, — чтобы дневник не расходился сам с
+    собой. Если не прислала — досчитываем тем же analyze_food, которым считает
+    экран дневника: раньше запись просто ложилась без цифр, и одно и то же
+    «хачапури» давало 865 ккал из дневника и пустоту из чата с тренером, молча
+    занижая итог дня. Оценщик там же и отказывается («поел», «асдфг»), так что
+    выдуманных калорий это не добавляет.
     """
     description = str(tool_input.get("description") or "").strip()
     if not description:
@@ -2916,7 +2951,11 @@ async def _log_food(
         "carbs": _as_number(tool_input.get("carbs")),
     }
     _reconcile_macros(entry)
-    eaten_on = timeutil.user_today(await db.get_user(user_id)).isoformat()
+    user = await db.get_user(user_id)
+    estimated = False
+    if entry["calories"] is None and user["food_macros_enabled"]:
+        estimated = await _estimate_missing_macros(user_id, description, entry)
+    eaten_on = timeutil.user_today(user).isoformat()
     entry_id = await db.add_food_entry(
         user_id, eaten_on, description[:MAX_FOOD_DESCRIPTION],
         calories=entry["calories"], protein=entry["protein"],
@@ -2926,6 +2965,9 @@ async def _log_food(
         {
             "ok": True,
             "logged": {"description": description, "date": eaten_on, **entry},
+            # Пусть модель скажет человеку, что цифры прикидочные: сам он их не
+            # называл, а в дневнике они выглядят как факт.
+            "macros_estimated": estimated,
             "note": _UNDO_NOTE,
         },
         {

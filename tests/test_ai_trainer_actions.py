@@ -212,10 +212,64 @@ async def test_log_food_lands_in_todays_diary(fresh_db, user_id):
 
 
 async def test_log_food_without_numbers_is_still_an_entry(fresh_db, user_id):
-    """Выдуманные калории хуже, чем их отсутствие."""
+    """Без оценщика (ключа нет) запись всё равно ложится — просто без цифр."""
     payload, _undo = await ai_trainer._log_food(user_id, {"description": "Два яйца"})
     entries = await dbmod.list_food_entries(user_id, payload["logged"]["date"])
     assert entries[0]["calories"] is None
+    assert payload["macros_estimated"] is False
+
+
+async def test_log_food_without_numbers_asks_the_same_estimator_as_the_diary(
+    fresh_db, user_id, monkeypatch
+):
+    """Регрессия: одно и то же «хачапури» давало 865 ккал с экрана дневника и
+    пустую запись из чата с тренером, молча занижая итог дня."""
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+
+    async def fake_analyze(uid, text="", **kwargs):
+        assert text == "Хачапури"
+        return {"is_food": True, "calories": 865, "protein": 35, "fat": 45, "carbs": 80}
+
+    monkeypatch.setattr(ai_trainer, "analyze_food", fake_analyze)
+
+    payload, _undo = await ai_trainer._log_food(user_id, {"description": "Хачапури"})
+
+    entries = await dbmod.list_food_entries(user_id, payload["logged"]["date"])
+    assert entries[0]["calories"] == 865
+    # Человек этих цифр не называл — тренер обязан сказать, что они прикидочные.
+    assert payload["macros_estimated"] is True
+
+
+async def test_log_food_keeps_numbers_the_person_named(fresh_db, user_id, monkeypatch):
+    """Названные вслух цифры важнее оценки: оценщик к ним не зовётся вовсе."""
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+
+    async def fail(*a, **kw):
+        raise AssertionError("оценщик не должен вызываться, цифры уже есть")
+
+    monkeypatch.setattr(ai_trainer, "analyze_food", fail)
+
+    payload, _undo = await ai_trainer._log_food(
+        user_id, {"description": "Овсянка", "calories": 300}
+    )
+    assert payload["logged"]["calories"] == 300
+    assert payload["macros_estimated"] is False
+
+
+async def test_log_food_does_not_invent_numbers_for_a_non_meal(fresh_db, user_id, monkeypatch):
+    """«Поел» — не еда: оценщик отказывается, и запись остаётся без цифр."""
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+
+    async def not_food(uid, text="", **kwargs):
+        return {"is_food": False, "calories": None}
+
+    monkeypatch.setattr(ai_trainer, "analyze_food", not_food)
+
+    payload, _undo = await ai_trainer._log_food(user_id, {"description": "Поел"})
+
+    entries = await dbmod.list_food_entries(user_id, payload["logged"]["date"])
+    assert entries[0]["calories"] is None
+    assert payload["macros_estimated"] is False
 
 
 # ---------- сравнение периодов ----------
