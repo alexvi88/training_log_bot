@@ -1610,12 +1610,26 @@ async def _picker_screen_exercises(callback: CallbackQuery, state: FSMContext):
         )
         total = await db.count_user_exercises_in_group(callback.from_user.id, group_id)
     has_next = offset + len(exercises) < total
+    # Своих упражнений в группе может не быть вовсе — у новичка их нет нигде, — и
+    # раньше он упирался в «здесь пусто» при полном каталоге шаблонов этой самой
+    # группы. Шаблоны показываем на последней странице, под своими: они дополняют
+    # список, а не подменяют его.
+    templates = []
+    room = config.RECENT_EXERCISES_LIMIT - len(exercises)
+    if group_id is not None and not has_next and room > 0:
+        own_names = {ex["display_name"].lower() for ex in exercises}
+        templates = [
+            t for t in await db.list_templates_in_group(group_id)
+            if t["display_name"].lower() not in own_names
+        ][:room]
     kb = keyboards.exercises_keyboard(
         exercises, prefix="pick", back_cb="back", show_new_button=group_id is not None,
-        page=page, has_next=has_next,
+        page=page, has_next=has_next, templates=templates,
     )
     if exercises:
         hint = "Выбери упражнение или напиши название для поиска:"
+    elif templates:
+        hint = "Выбери из каталога или напиши название для поиска:"
     else:
         hint = "У тебя пока нет своих упражнений здесь — добавь новое или напиши название для поиска:"
     await state.update_data(picker_stage="exercises")

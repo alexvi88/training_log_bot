@@ -156,6 +156,30 @@ async def test_typing_in_exercise_picker_searches_instead_of_being_ignored(fresh
     assert not any("Triceps" in t for t in button_texts)
 
 
+async def test_empty_group_offers_the_catalog_instead_of_a_dead_end(fresh_db, user_id):
+    """Регрессия: новичок жал ГРУДЬ и видел «у тебя пока нет своих упражнений
+    здесь» при полном каталоге грудных шаблонов — и не знал, что делать дальше."""
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    await db.conn().execute(
+        "INSERT INTO exercises "
+        "(user_id, name, primary_group_id, display_name, original_name, is_template, created_at) "
+        "VALUES (NULL, ?, ?, ?, ?, 1, ?)",
+        ("Жим штанги лёжа", group_id, "Жим штанги лёжа", "Жим штанги лёжа", db.now_iso()),
+    )
+    await db.conn().commit()
+
+    state = await _make_state(user_id)
+    await state.update_data(pending_group_id=group_id, pick_page=0)
+    callback = _make_callback(user_id, f"pick:grp:{group_id}")
+
+    await workout._picker_screen_exercises(callback, state)
+
+    kb = callback.bot.send_message.await_args.kwargs["reply_markup"]
+    texts = [b.text for row in kb.inline_keyboard for b in row]
+    assert any("Жим штанги лёжа" in t for t in texts), texts
+
+
 async def test_search_results_are_paginated_instead_of_being_cut_off(fresh_db, user_id):
     """Регрессия: выдача обрывалась на восьми совпадениях, и «жим» не доставал
     до «Жима штанги лёжа» вообще — он оказывался за срезом алфавита."""
