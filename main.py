@@ -34,6 +34,7 @@ from handlers import (
     fallback,
     feedback,
     food_diary,
+    game,
     history,
     mcp_access,
     persistent_menu,
@@ -191,6 +192,9 @@ def setup_routers(dp: Dispatcher) -> None:
     # Same reason: /mcp and its own callbacks must reach this router even when
     # the user is parked in some flow's catch-all message handler.
     dp.include_router(mcp_access.router)
+    # Same reason: /game — одна команда без состояний, и она должна долетать
+    # из любого сценария.
+    dp.include_router(game.router)
     # Same reason as admin/feedback above: /food_diary and the fd:* callbacks
     # must reach their router even when the user is mid-workout.
     dp.include_router(food_diary.router)
