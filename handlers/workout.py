@@ -1390,7 +1390,7 @@ RECENT_PROGRAM_DAYS = 30
 MAX_RECENT_PROGRAM_BUTTONS = 3
 
 
-async def _recovery_line(user_id: int, groups) -> str:
+async def _recovery_line(user_id: int, groups, as_of: dt.date | None = None) -> str:
     """"💤 ЕЩЁ НЕ ОТДОХНУЛИ:\nноги — 40% восстановления\nспина — 70% восстановления"
     — or "" when everything is fresh, which is the common case and needs no
     line at all.
@@ -1399,11 +1399,17 @@ async def _recovery_line(user_id: int, groups) -> str:
     is "spent" in proportion to how many sets it took and how long ago (see
     analytics.recovery_percent). It's a nudge on the screen where the choice is
     made, not a verdict — nothing is blocked or hidden.
+
+    `as_of` — the date recovery is measured against; defaults to today. Backfill
+    (находка 8) passes bf_date instead: writing a set on 03.08 while the last
+    real session was 06.08 must not read as "grew from a session three days in
+    the future" — last_session_by_group(before=...) also restricts the lookup
+    to sessions that actually happened before that date.
     """
-    last = await db.last_session_by_group(user_id)
+    today = as_of or timeutil.user_today(await db.get_user(user_id))
+    last = await db.last_session_by_group(user_id, before=today.isoformat() if as_of else None)
     if not last:
         return ""
-    today = timeutil.user_today(await db.get_user(user_id))
     spent = []
     for group in groups:
         if group["name"].strip().lower() in _RECOVERY_SKIP_GROUPS:
@@ -1430,7 +1436,8 @@ async def _picker_screen_groups(callback: CallbackQuery, state: FSMContext, show
     # actually trains most should be first, not alphabetical/catalog order.
     groups = await db.list_muscle_groups(callback.from_user.id, order_by_usage=True)
     hint = "<i>Выбери группу мышц или найди упражнение по названию:</i>"
-    recovery = await _recovery_line(callback.from_user.id, groups)
+    bf_date = dt.date.fromisoformat(data["bf_date"]) if data.get("is_backfill") and data.get("bf_date") else None
+    recovery = await _recovery_line(callback.from_user.id, groups, as_of=bf_date)
     if recovery:
         hint = recovery + "\n\n" + hint
     open_ids = data.get("open_exercises") or []

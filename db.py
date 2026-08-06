@@ -2562,7 +2562,7 @@ async def hall_of_fame_aggregates(user_id: int) -> dict[str, float]:
 
 
 async def last_session_by_group(
-    user_id: int, *, tz_offset: Optional[int] = None
+    user_id: int, *, tz_offset: Optional[int] = None, before: Optional[str] = None
 ) -> dict[Optional[int], tuple[str, int]]:
     """Per muscle group: the date it was last trained and how many sets that
     session had — the two inputs a recovery estimate needs.
@@ -2574,8 +2574,19 @@ async def last_session_by_group(
     (analytics.recovery_percent), и UTC-день у вечерней тренировки давал
     отрицательную разницу — группа выглядела «0% восстановления» там, где надо
     было показать прогресс, и наоборот.
+
+    `before` (YYYY-MM-DD) restricts to sessions strictly earlier than that local
+    day — задним числом (находка 8) «отдых» должен считаться от даты записи,
+    а не от «сегодня», и только по тому, что реально было раньше неё: без
+    этого фильтра запись на 03.08 при последней сессии 06.08 читала бы её как
+    прошлую, хотя та случилась на три дня позже даты, куда идёт запись.
     """
     day = _local_day("w.started_at", await _tz_offset_of(user_id, tz_offset))
+    params: list = [user_id]
+    where = "WHERE w.user_id = ? AND w.status = 'finished'"
+    if before is not None:
+        where += f" AND {day} < ?"
+        params.append(before)
     cur = await conn().execute(
         "SELECT gid, day, cnt FROM ("
         f"  SELECT e.primary_group_id AS gid, {day} AS day, COUNT(s.id) AS cnt,"
@@ -2586,10 +2597,10 @@ async def last_session_by_group(
         "  JOIN workout_blocks b ON b.id = s.block_id"
         "  JOIN workouts w ON w.id = b.workout_id"
         "  JOIN exercises e ON e.id = s.exercise_id"
-        "  WHERE w.user_id = ? AND w.status = 'finished'"
+        f"  {where}"
         f"  GROUP BY e.primary_group_id, {day}"
         ") WHERE rn = 1",
-        (user_id,),
+        tuple(params),
     )
     return {row["gid"]: (row["day"], row["cnt"]) for row in await cur.fetchall()}
 
