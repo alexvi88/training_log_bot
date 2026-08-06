@@ -129,6 +129,72 @@ async def game_asset(request: Request):
     return FileResponse(path)
 
 
+# Реакция тренера в чате. Не на каждый забег (это спам), а на события:
+# первый забег вообще и новый рекорд — заметный (от 300 м и +20% к прошлому),
+# иначе ранние забеги, каждый из которых чуть лучше, зафлудили бы чат.
+RECORD_MIN_DISTANCE = 300
+RECORD_MIN_GAIN = 1.2
+
+FIRST_RUN_TEXT = (
+    "ПРИВЕТ АТЛЕТ, видел твой первый забег — {distance} м. Записал. "
+    "Дыхалка — тоже мышца, забегай ещё: /game"
+)
+RECORD_TEXT = (
+    "ПРИВЕТ АТЛЕТ, {distance} м — новый рекорд забега, прошлый был {best}. "
+    "Так и записал."
+)
+
+
+def _trainer_reaction(distance: int, best_before: int) -> Optional[str]:
+    """Текст тренера про забег или None, когда событие не заслуживает сообщения."""
+    if best_before == 0:
+        return FIRST_RUN_TEXT.format(distance=distance)
+    if distance >= RECORD_MIN_DISTANCE and distance >= best_before * RECORD_MIN_GAIN:
+        return RECORD_TEXT.format(distance=distance, best=best_before)
+    return None
+
+
+async def _send_trainer_message(user_id: int, text: str) -> None:
+    """Отправить сообщение от бота вне обработчика апдейта.
+
+    Свой короткоживущий Bot: у game_server нет доступа к инстансу из main
+    (роуты регистрируются при сборке MCP-приложения, бота там ещё нет), а
+    событие редкое — первый забег да рекорды, сессию не жалко.
+    """
+    from aiogram import Bot
+
+    bot = Bot(token=config.BOT_TOKEN)
+    try:
+        await bot.send_message(user_id, text)
+    finally:
+        await bot.session.close()
+
+
+async def process_game_result(user_id: int, raw: Any) -> bool:
+    """Сохранить результат забега и, если событие того стоит, ответить тренером.
+
+    False — результат не прошёл проверку границ; дубликат считается успехом
+    (клиент ретраит сеть, второй раз записывать нечего).
+    """
+    result = parse_result(raw)
+    if result is None:
+        return False
+    if _is_duplicate(user_id, raw):
+        return True
+    best_before = await db.get_game_best_distance(user_id)
+    await db.save_game_result(user_id, result["distance"], result["score"], result["fighter"])
+    logger.info("game result: user=%s distance=%s score=%s", user_id, result["distance"], result["score"])
+    text = _trainer_reaction(result["distance"], best_before)
+    if text:
+        try:
+            await _send_trainer_message(user_id, text)
+        except Exception as e:
+            # Сообщение — приятный бонус, а не часть контракта: результат уже
+            # записан, и клиенту незачем получать 500 из-за упавшей отправки.
+            logger.warning("game result notify failed: user=%s: %s", user_id, e)
+    return True
+
+
 async def game_result(request: Request):
     try:
         body = await request.json()
@@ -137,13 +203,8 @@ async def game_result(request: Request):
     user_id = validate_init_data(str(body.get("initData", "")))
     if not user_id:
         return PlainTextResponse("unauthorized", status_code=403)
-    result = parse_result(body.get("result"))
-    if result is None:
+    if not await process_game_result(user_id, body.get("result")):
         return PlainTextResponse("invalid result", status_code=400)
-    if _is_duplicate(user_id, body.get("result")):
-        return PlainTextResponse("ok")
-    await db.save_game_result(user_id, result["distance"], result["score"], result["fighter"])
-    logger.info("game result: user=%s distance=%s score=%s", user_id, result["distance"], result["score"])
     return PlainTextResponse("ok")
 
 
