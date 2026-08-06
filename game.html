@@ -861,7 +861,11 @@ function render() {
   toasts.forEach(ts => {
     ctx.globalAlpha = Math.max(0, 1 - ts.t / 1.2);
     ctx.font = "900 16px 'Courier New', monospace"; ctx.textAlign = 'center';
-    ctx.fillStyle = ts.color; ctx.fillText(ts.text, ts.x, ts.y);
+    // Игрок стоит у левого края — тост, отцентрованный на нём, обрезался бы
+    // экраном; прижимаем к видимой области.
+    const half = ctx.measureText(ts.text).width / 2;
+    const tx = Math.max(half + 8, Math.min(W - half - 8, ts.x));
+    ctx.fillStyle = ts.color; ctx.fillText(ts.text, tx, ts.y);
   });
   ctx.globalAlpha = 1;
 
