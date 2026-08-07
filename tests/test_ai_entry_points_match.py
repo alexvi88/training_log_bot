@@ -51,7 +51,7 @@ async def test_bottom_button_shows_the_same_presets_as_inline(fresh_db, user_id)
     await persistent_menu._open_ai_trainer(message, _state(user_id))
 
     shown = _labels(message.answer.await_args.kwargs["reply_markup"])
-    for label, _cb in ai_handler.intro_presets():
+    for label, _cb in await ai_handler.intro_presets(user_id):
         assert label in shown, f"нижняя кнопка не показала готовый вопрос: {label}"
 
 
@@ -76,5 +76,5 @@ async def test_resumed_conversation_has_no_presets(fresh_db, user_id):
     await persistent_menu._open_ai_trainer(message, state)
 
     shown = _labels(message.answer.await_args.kwargs["reply_markup"])
-    for label, _cb in ai_handler.intro_presets():
+    for label, _cb in await ai_handler.intro_presets(user_id):
         assert label not in shown

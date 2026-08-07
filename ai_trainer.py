@@ -100,11 +100,11 @@ async def _log_llm_cost(user_id: Optional[int], model: str, usage: Any) -> None:
     """
     prompt_tokens = usage.prompt_tokens if usage else 0
     completion_tokens = usage.completion_tokens if usage else 0
-    logger.info(
-        "LLM call %s for user %s: %s+%s tokens, ~$%.4f",
-        model, user_id, prompt_tokens, completion_tokens,
-        config.call_price_usd(model, prompt_tokens, completion_tokens),
-    )
+    # Сколько входа приехало из кэша, если провайдер это сообщает: у xAI совпавший
+    # префикс (system + схемы инструментов, около десяти тысяч токенов — см.
+    # _cache_headers) стоит сильно дешевле полной ставки. Строку с ценой печатает
+    # db.log_cost_event — там сходятся все платные вызовы.
+    details = getattr(usage, "prompt_tokens_details", None)
     try:
         await db.log_cost_event(
             user_id,
@@ -112,6 +112,7 @@ async def _log_llm_cost(user_id: Optional[int], model: str, usage: Any) -> None:
             model=model,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
+            cached_tokens=getattr(details, "cached_tokens", 0) or 0,
         )
     except Exception:
         logger.exception("failed to log llm cost event")
@@ -159,12 +160,8 @@ async def transcribe_voice(file_obj: Any, user_id: Optional[int] = None) -> str:
         model=config.OPENAI_TRANSCRIBE_MODEL,
         file=file_obj,
     )
-    # У аудио API не возвращает токенов, поэтому и в отчёте, и здесь цена берётся
-    # плоской ставкой за вызов (config.TRANSCRIPTION_PRICE_USD_PER_CALL).
-    logger.info(
-        "transcription %s for user %s: ~$%.4f",
-        config.OPENAI_TRANSCRIBE_MODEL, user_id, config.TRANSCRIPTION_PRICE_USD_PER_CALL,
-    )
+    # У аудио API не возвращает токенов, поэтому цена берётся плоской ставкой за
+    # вызов (config.TRANSCRIPTION_PRICE_USD_PER_CALL) — и в отчёте, и в логе.
     try:
         await db.log_cost_event(user_id, "transcription", model=config.OPENAI_TRANSCRIBE_MODEL)
     except Exception:
