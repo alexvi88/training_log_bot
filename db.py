@@ -3256,6 +3256,24 @@ async def list_sets_for_workout_exercise(workout_id: int, exercise_id: int) -> l
     return await cur.fetchall()
 
 
+async def list_opened_exercise_ids_for_workout(workout_id: int) -> list[int]:
+    """Упражнения, которые в этой тренировке уже открывали, — включая те, где
+    ещё нет ни одного подхода.
+
+    Отличается от `list_exercise_ids_for_workout` ровно этим: та считает по
+    подходам, и упражнение, открытое минуту назад и ещё не записанное, для неё
+    не существует. Там, где вопрос звучит «что ещё осталось из плана», это
+    ошибка — открытое упражнение возвращалось в очередь как несделанное.
+    """
+    cur = await conn().execute(
+        "SELECT DISTINCT be.exercise_id FROM block_exercises be "
+        "JOIN workout_blocks b ON b.id = be.block_id WHERE b.workout_id = ?",
+        (workout_id,),
+    )
+    rows = await cur.fetchall()
+    return [r["exercise_id"] for r in rows]
+
+
 async def list_exercise_ids_for_workout(workout_id: int) -> list[int]:
     cur = await conn().execute(
         "SELECT DISTINCT s.exercise_id FROM sets s "

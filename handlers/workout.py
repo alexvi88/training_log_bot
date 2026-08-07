@@ -1337,7 +1337,9 @@ async def _rebuild_planned_blocks_from_routine(workout_id: int, routine_id: int)
 
     `routine_id` on the workout row is the only trace left once the FSM's plan
     is gone, but it's enough: the routine's exercises minus whatever this
-    workout has already opened (db.list_exercise_ids_for_workout), in routine
+    workout has already opened (db.list_opened_exercise_ids_for_workout — по
+    открытым, а не по записанным: упражнение, начатое и ещё не записанное,
+    несделанным считать нельзя), in routine
     order, give back the same `[{"exercise_ids": [id], "targets": {id: target}}]`
     shape `_begin_routine_workout` (handlers/routines.py) builds when the
     workout is first started from a routine.
@@ -1347,12 +1349,23 @@ async def _rebuild_planned_blocks_from_routine(workout_id: int, routine_id: int)
     it when a plan, even an empty one, is already sitting in the FSM.
     """
     exercises = await db.list_routine_exercises(routine_id)
-    done_ids = set(await db.list_exercise_ids_for_workout(workout_id))
+    done_ids = set(await db.list_opened_exercise_ids_for_workout(workout_id))
     return [
         {"exercise_ids": [ex["exercise_id"]], "targets": {ex["exercise_id"]: ex["target"]}}
         for ex in exercises
         if ex["exercise_id"] not in done_ids
     ]
+
+
+def _plan_targets(blocks: list[dict]) -> dict[str, str]:
+    """Схемы подходов плана как {id упражнения: схема} со строковыми ключами —
+    в таком виде их можно сравнивать до и после хранения в FSM."""
+    return {
+        str(ex_id): target
+        for block in blocks
+        for ex_id, target in (block.get("targets") or {}).items()
+        if target
+    }
 
 
 async def resync_plan_with_routine(state: FSMContext, routine_id: int) -> str | None:
@@ -1379,7 +1392,10 @@ async def resync_plan_with_routine(state: FSMContext, routine_id: int) -> str | 
 
     entries = await db.list_routine_exercises(routine_id)
     in_routine = {ex["exercise_id"]: ex["target"] for ex in entries}
-    done = set(await db.list_exercise_ids_for_workout(workout_id))
+    # Открытые, а не записанные: упражнение, которое человек делает прямо
+    # сейчас и ещё не успел записать, — не «несделанное из плана», и
+    # возвращать его в очередь нельзя.
+    done = set(await db.list_opened_exercise_ids_for_workout(workout_id))
     skipped = set(data.get("plan_skipped_ids") or [])
 
     kept, removed_ids = [], []
@@ -1401,7 +1417,10 @@ async def resync_plan_with_routine(state: FSMContext, routine_id: int) -> str | 
         {"exercise_ids": [ex_id], "targets": {ex_id: in_routine[ex_id]} if in_routine[ex_id] else {}}
         for ex_id in added_ids
     ]
-    if not added_ids and not removed_ids and kept == planned:
+    # Сравниваем состав и схемы, а не блоки целиком: ключи словаря targets
+    # переживают хранение в FSM как строки, и сравнение блоков объявляло бы
+    # изменением каждое открытие редактора.
+    if not added_ids and not removed_ids and _plan_targets(kept) == _plan_targets(planned):
         return None
     await state.update_data(planned_blocks=kept)
 

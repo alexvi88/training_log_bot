@@ -260,3 +260,23 @@ async def test_editing_someone_elses_program_leaves_the_running_plan_alone(fresh
 
     assert await workout.resync_plan_with_routine(state, other_routine) is None
     assert (await state.get_data())["planned_blocks"] == before
+
+
+async def test_the_exercise_being_done_right_now_is_not_pushed_back_into_the_plan(fresh_db, user_id):
+    """Найдено живым прогоном: первое упражнение программы открыто, но ещё ни
+    одного подхода в нём нет. Пересборка считала «сделанным» только записанное
+    и возвращала открытое упражнение в очередь — плюс писала «добавил Жим
+    штанги лёжа» на ровном месте, стоило открыть редактор программы."""
+    db = fresh_db
+    (bench, fly, dips), routine_id = await _start_program(
+        db, user_id, state := await _state(user_id),
+        [("Жим лёжа", "4x8"), ("Разводка", "3x12"), ("Брусья", None)],
+    )
+    # _begin_routine_workout уже открыл первое упражнение — блок есть, подходов нет.
+    assert await db.list_exercise_ids_for_workout((await state.get_data())["workout_id"]) == []
+
+    note = await workout.resync_plan_with_routine(state, routine_id)
+
+    planned = (await state.get_data())["planned_blocks"]
+    assert bench not in [i for b in planned for i in b["exercise_ids"]]
+    assert note is None  # ничего не менялось — и сказать нечего

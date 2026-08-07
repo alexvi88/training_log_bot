@@ -1201,13 +1201,20 @@ def format_utc_offset(tz_offset: int) -> str:
 
 
 def timezone_picker_keyboard(current: int) -> InlineKeyboardMarkup:
-    """Grid of whole-hour UTC offsets covering the RU/CIS + Europe range."""
+    """Сетка целочасовых смещений от UTC — весь обитаемый диапазон.
+
+    Раньше сетка шла от UTC−1: продукт русскоязычный, и охват «СНГ и Европа»
+    выглядел достаточным. Но русскоязычные живут и в Америке, а без своего
+    пояса у них уезжает «сегодня» — а с ним границы суток, стрики и
+    напоминания — на три-восемь часов, и поправить это было нечем.
+    """
     b = InlineKeyboardBuilder()
-    for off in range(-1, 13):  # UTC-1 … UTC+12
+    for off in range(-11, 15):  # UTC-11 … UTC+14
         label = format_utc_offset(off)
         b.button(text=f"• {label} •" if off == current else label, callback_data=f"settings:tzset:{off}")
     b.button(text="⬅️ Назад", callback_data="settings:tzback")
-    b.adjust(4, 4, 4, 2, 1)
+    # 26 смещений по четыре в ряд, остаток и «назад» — своими рядами.
+    b.adjust(4, 4, 4, 4, 4, 4, 2, 1)
     return b.as_markup()
 
 
