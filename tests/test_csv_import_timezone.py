@@ -66,12 +66,12 @@ async def squat(fresh_db, user_id):
     return await fresh_db.create_exercise(user_id, "Присед", gid)
 
 
-@pytest.mark.parametrize("tz_offset", [-1, 0, 5, 12])
+@pytest.mark.parametrize("tz_offset", [-11, -5, -1, 0, 5, 12, 14])
 async def test_imported_date_survives_every_tz_offset_in_the_picker_range(
     fresh_db, user_id, squat, alerts, tz_offset
 ):
     """Импортированная дата должна остаться той же датой у любого офсета из
-    диапазона пикера (-1…+12), а не только у большинства из них."""
+    диапазона пикера (−11…+14), а не только у большинства из них."""
     await fresh_db.update_user(user_id, tz_offset=tz_offset)
 
     await csv_import.import_save(_callback(user_id), await _state(user_id, ONE_DAY, squat))

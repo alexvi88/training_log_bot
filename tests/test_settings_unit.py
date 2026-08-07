@@ -83,3 +83,39 @@ async def test_unit_no_cancels_without_converting(fresh_db, user_id):
 
     user = await db.get_user(user_id)
     assert user["unit"] == "kg"
+
+
+# ---------- находка 34: часовой пояс двигает календарные дни ----------
+
+
+async def test_changing_the_timezone_takes_back_a_badge_the_new_days_do_not_earn(fresh_db, user_id):
+    """Тренировка 31 декабря в 23:00 при сдвиге пояса уезжает на 1 января, но
+    значок «31 декабря» оставался в профиле навсегда: путь выдачи при
+    завершении тренировки умеет награждать, но не отбирать."""
+    import achievement_sync
+
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    ex_id = await db.create_exercise(user_id, "Жим", group_id)
+    workout_id = await db.create_finished_workout(
+        user_id, "2025-12-31T23:00:00", "2025-12-31T23:40:00"
+    )
+    block_id = await db.create_block(workout_id, "single")
+    await db.add_block_exercise(block_id, ex_id, 0)
+    await db.add_set(block_id, ex_id, round_index=1, order_in_round=0, weight=100.0, reps=5)
+    await achievement_sync.resync(user_id)
+    assert "dec31" in set(await db.list_achievement_codes(user_id))
+
+    await settings.settings_timezone_set(_make_callback(user_id, "settings:tzset:2"), await _make_state(user_id))
+
+    assert await db.list_finished_workout_dates(user_id) == ["2026-01-01"]
+    assert "dec31" not in set(await db.list_achievement_codes(user_id))
+
+
+async def test_picking_the_same_timezone_again_is_a_no_op(fresh_db, user_id):
+    db = fresh_db
+    state = await _make_state(user_id)
+
+    await settings.settings_timezone_set(_make_callback(user_id, "settings:tzset:0"), state)
+
+    assert (await db.get_user(user_id))["tz_offset"] == 0

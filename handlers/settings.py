@@ -219,7 +219,17 @@ async def settings_timezone(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith("settings:tzset:"))
 async def settings_timezone_set(callback: CallbackQuery, state: FSMContext):
     offset = int(callback.data.split(":")[2])
+    user = await db.get_user(callback.from_user.id)
+    changed = user is not None and user["tz_offset"] != offset
     await db.update_user(callback.from_user.id, tz_offset=offset)
+    if changed:
+        # Часть значков считается по календарным дням, а дни — местные
+        # (db.list_finished_workout_dates): стрик по неделям, пара выходных,
+        # все дни недели, 31 декабря. Сдвинул пояс — тренировка в 23:00 уехала
+        # на соседние сутки, и набор значков стал другим. Без пересчёта здесь
+        # он оставался прежним навсегда: путь при завершении тренировки умеет
+        # только выдавать, но не отбирать.
+        await achievement_sync.resync(callback.from_user.id)
     await show_settings(callback, state, alert=f"Часовой пояс: {keyboards.format_utc_offset(offset)}")
 
 
