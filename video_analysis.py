@@ -198,13 +198,22 @@ def _sanitize(data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-async def analyze(video_bytes: bytes, user_id: Optional[int]) -> Optional[dict[str, Any]]:
+async def analyze(
+    video_bytes: bytes,
+    user_id: Optional[int],
+    mime_type: str = "video/mp4",
+) -> Optional[dict[str, Any]]:
     """Видео → структура наблюдений, или None если разобрать не удалось.
 
     None означает ровно «наблюдений нет»: тренер в этом случае отвечает без
     видео, а не извиняется за чужую поломку.
+
+    mime_type берётся из самого апдейта, а не подставляется наугад: ролик без
+    аудиодорожки Telegram отдаёт как animation, и там встречается и video/mp4, и
+    image/gif. Соврать про тип в data: URL — значит отправить модели файл под
+    чужой вывеской.
     """
-    data_url = "data:video/mp4;base64," + base64.b64encode(video_bytes).decode()
+    data_url = f"data:{mime_type};base64," + base64.b64encode(video_bytes).decode()
     try:
         response = await _get_client().chat.completions.create(
             model=config.NOVITA_VIDEO_MODEL,

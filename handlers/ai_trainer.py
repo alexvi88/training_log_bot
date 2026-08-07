@@ -104,7 +104,7 @@ PRESET_QUESTIONS: dict[str, tuple[str, str]] = {
 }
 
 
-def _intro_presets() -> list[tuple[str, str]]:
+def intro_presets() -> list[tuple[str, str]]:
     """Кнопки готовых вопросов для интро + «Составь мне программу» — она не
     вопрос, а готовый сценарий с уточнениями (ai:buildprog), поэтому живёт не в
     PRESET_QUESTIONS, а переиспользует существующий обработчик."""
@@ -385,7 +385,7 @@ async def menu_ai(callback: CallbackQuery, state: FSMContext):
     # Готовые вопросы — только на свежем интро: посреди разговора они бы
     # читались как «тренер забыл, о чём речь».
     keyboard = await ai_keyboard(
-        callback.from_user.id, presets=_intro_presets() if fresh else ()
+        callback.from_user.id, presets=intro_presets() if fresh else ()
     )
     await ui.safe_edit(callback, text, reply_markup=keyboard, parse_mode="HTML")
     await callback.answer()
@@ -1832,13 +1832,19 @@ DEFAULT_VIDEO_QUESTION = (
 )
 
 
-@router.message(AITrainerFlow.chatting, F.video | F.video_note)
+@router.message(AITrainerFlow.chatting, F.video | F.video_note | F.animation)
 async def ai_video_question(message: Message, state: FSMContext):
     """Ролик подхода → наблюдения от Qwen3-VL → ответ голосом тренера.
 
     Порядок проверок — от самой дешёвой к самой дорогой: сначала настройка, потом
     длина (её Telegram сообщает в апдейте, качать не нужно), потом дневная квота,
     и только под конец скачивание с разбором. Иначе за отказ платили бы трафиком.
+
+    animation в фильтре обязателен: ролик БЕЗ АУДИОДОРОЖКИ Telegram отдаёт не как
+    video, а как animation (в клиенте он подписан «GIF»), и снятое в зале видео
+    сплошь такое — телефон часто пишет молча, да и пересланное без звука
+    конвертируется. Без этой ветки такой ролик проваливался в общий fallback
+    «Не понял», то есть фича молча не работала на самом частом входе.
     """
     user_id = message.from_user.id
     # Как и в фото-хендлере: занимаем до первого await, иначе два быстрых ролика
@@ -1851,7 +1857,7 @@ async def ai_video_question(message: Message, state: FSMContext):
             await message.reply("Разбор видео пока не подключил. Напиши вопрос текстом.")
             return
 
-        video = message.video or message.video_note
+        video = message.video or message.video_note or message.animation
         if video.duration and video.duration > config.MAX_VIDEO_SECONDS:
             await message.reply(
                 f"Ролик длинный. Пришли до {config.MAX_VIDEO_SECONDS} секунд — "
@@ -1875,7 +1881,10 @@ async def ai_video_question(message: Message, state: FSMContext):
         status = await message.answer("🎥 Смотрю видео...")
         try:
             buf = await message.bot.download(video)
-            analysis = await video_analysis.analyze(buf.read(), user_id)
+            # video_note своего mime_type не несёт — там всегда mp4.
+            analysis = await video_analysis.analyze(
+                buf.read(), user_id, mime_type=getattr(video, "mime_type", None) or "video/mp4"
+            )
         except Exception:
             logger.exception("video download/analysis failed for user %s", user_id)
             analysis = None
