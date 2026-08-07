@@ -219,6 +219,7 @@ async def analyze(video_bytes: bytes, user_id: Optional[int]) -> Optional[dict[s
                 },
             ],
             max_tokens=config.VIDEO_ANALYSIS_MAX_TOKENS,
+            temperature=config.VIDEO_ANALYSIS_TEMPERATURE,
             response_format={"type": "json_object"},
         )
     except Exception:
@@ -230,13 +231,22 @@ async def analyze(video_bytes: bytes, user_id: Optional[int]) -> Optional[dict[s
     # Своей оценке модели тут веры нет: на вопрос «сколько токенов ушло» она
     # выдумывает число, у неё нет доступа к счётчику.
     usage = getattr(response, "usage", None)
+    prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
+    completion_tokens = getattr(usage, "completion_tokens", 0) or 0
+    # Цена в логе на каждый разбор — чтобы смотреть расход сразу после ролика, а
+    # не ждать ночного отчёта.
+    logger.info(
+        "video analysis for user %s: %s+%s tokens, ~$%.4f",
+        user_id, prompt_tokens, completion_tokens,
+        config.call_price_usd(config.NOVITA_VIDEO_MODEL, prompt_tokens, completion_tokens),
+    )
     try:
         await db.log_cost_event(
             user_id,
             "llm_call",
             model=config.NOVITA_VIDEO_MODEL,
-            prompt_tokens=getattr(usage, "prompt_tokens", 0) or 0,
-            completion_tokens=getattr(usage, "completion_tokens", 0) or 0,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
         )
     except Exception:
         logger.exception("failed to log video analysis cost event")

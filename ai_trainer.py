@@ -92,14 +92,26 @@ _client: Optional[AsyncOpenAI] = None
 
 async def _log_llm_cost(user_id: Optional[int], model: str, usage: Any) -> None:
     """Fire-and-forget cost_events row for a chat-completion call (see
-    db.get_llm_cost_breakdown / admin_tasks.py's daily report)."""
+    db.get_llm_cost_breakdown / admin_tasks.py's daily report).
+
+    Цена того же вызова уходит и в лог: ночной отчёт показывает сумму за сутки, а
+    в логе видно каждый запрос отдельно — можно смотреть расход сразу, пока
+    помнишь, что именно спрашивали.
+    """
+    prompt_tokens = usage.prompt_tokens if usage else 0
+    completion_tokens = usage.completion_tokens if usage else 0
+    logger.info(
+        "LLM call %s for user %s: %s+%s tokens, ~$%.4f",
+        model, user_id, prompt_tokens, completion_tokens,
+        config.call_price_usd(model, prompt_tokens, completion_tokens),
+    )
     try:
         await db.log_cost_event(
             user_id,
             "llm_call",
             model=model,
-            prompt_tokens=usage.prompt_tokens if usage else 0,
-            completion_tokens=usage.completion_tokens if usage else 0,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
         )
     except Exception:
         logger.exception("failed to log llm cost event")
@@ -146,6 +158,12 @@ async def transcribe_voice(file_obj: Any, user_id: Optional[int] = None) -> str:
     response = await client.audio.transcriptions.create(
         model=config.OPENAI_TRANSCRIBE_MODEL,
         file=file_obj,
+    )
+    # У аудио API не возвращает токенов, поэтому и в отчёте, и здесь цена берётся
+    # плоской ставкой за вызов (config.TRANSCRIPTION_PRICE_USD_PER_CALL).
+    logger.info(
+        "transcription %s for user %s: ~$%.4f",
+        config.OPENAI_TRANSCRIBE_MODEL, user_id, config.TRANSCRIPTION_PRICE_USD_PER_CALL,
     )
     try:
         await db.log_cost_event(user_id, "transcription", model=config.OPENAI_TRANSCRIBE_MODEL)

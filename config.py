@@ -196,8 +196,16 @@ OPENAI_TRANSCRIBE_MODEL = os.getenv("OPENAI_TRANSCRIBE_MODEL", "gpt-4o-mini-tran
 # openai, только другой base_url. Ключ отдельный от XAI_API_KEY и OPENAI_API_KEY.
 # Без ключа раздел просто не показывается, как и голосовой ввод без OPENAI_API_KEY.
 NOVITA_API_KEY = os.getenv("NOVITA_API_KEY", "")
-NOVITA_BASE_URL = os.getenv("NOVITA_BASE_URL", "https://api.novita.ai/openai")
+# С /v1 на конце — именно этот путь в curl-примере Novita
+# (api.novita.ai/openai/v1/chat/completions), а SDK дописывает к base_url только
+# /chat/completions. Без /v1 запрос ушёл бы мимо эндпоинта.
+NOVITA_BASE_URL = os.getenv("NOVITA_BASE_URL", "https://api.novita.ai/openai/v1")
 NOVITA_VIDEO_MODEL = os.getenv("NOVITA_VIDEO_MODEL", "qwen/qwen3-vl-235b-a22b-instruct")
+
+# У Novita в примерах стоит temperature=1 — для «опиши, что видно» это слишком
+# свободно: работа тут репортёрская, а не сочинительская, и лишняя свобода идёт
+# ровно в выдуманные наблюдения (см. фильтры в video_analysis._sanitize).
+VIDEO_ANALYSIS_TEMPERATURE = float(os.getenv("VIDEO_ANALYSIS_TEMPERATURE", "0.2"))
 
 # Сколько разборов видео в день на человека. Дороже обычного вопроса не сильно,
 # но заливать ролики можно быстрее, чем печатать вопросы, — и каждый ролик ещё и
@@ -258,6 +266,21 @@ try:
 except (TypeError, ValueError, IndexError, json.JSONDecodeError):
     pass
 DEFAULT_LLM_PRICE_USD_PER_1K: tuple[float, float] = (0.0002, 0.0005)
+
+
+def call_price_usd(model: str, prompt_tokens: int, completion_tokens: int) -> float:
+    """Цена одного вызова в долларах по таблице выше.
+
+    Одна формула на два потребителя: дневной отчёт (admin_tasks._llm_cost) и
+    строка в логе на каждый вызов (ai_trainer._log_llm_cost). Держать её в двух
+    местах — верный способ получить два разных ответа на один вопрос.
+
+    Лог с ценой нужен, чтобы смотреть расход сразу после запроса, а не ждать
+    ночного отчёта: цена одного разбора видео или тяжёлого вопроса видна в
+    момент, когда её ещё можно связать с тем, что происходило.
+    """
+    inp, out = LLM_PRICES_USD_PER_1K.get(model, DEFAULT_LLM_PRICE_USD_PER_1K)
+    return prompt_tokens / 1000 * inp + completion_tokens / 1000 * out
 
 # Flat per-call estimate for voice transcription (OPENAI_TRANSCRIBE_MODEL) — the
 # API doesn't return token counts for audio, so this stands in for a real
