@@ -13,6 +13,11 @@ import timeutil
 
 pytestmark = pytest.mark.asyncio
 
+# Вердикт гейта — две строки (см. ai_trainer.GateVerdict). DATA=YES почти везде,
+# потому что тестам нужен обычный путь с инструментами.
+_GATE_SEARCH = "SEARCH=YES\nDATA=YES"
+_GATE_NO_SEARCH = "SEARCH=NO\nDATA=YES"
+
 
 async def _seed_bench_history(db, user_id: int, n_sessions: int = 3, exercise: str = "Жим лёжа") -> int:
     group_id = await db.create_muscle_group(user_id, "Грудь")
@@ -503,7 +508,7 @@ async def test_ask_uses_search_context_and_counts_quota_when_search_used(fresh_d
         _xai_response(content="нашёл свежее исследование по протеину", citations=["http://example.com"])
     )
     monkeypatch.setattr(ai_trainer, "_get_sdk_client", AsyncMock(return_value=sdk_client))
-    client = _fake_client([_response(content="YES"), _response(content="финальный ответ")])
+    client = _fake_client([_response(content=_GATE_SEARCH), _response(content="финальный ответ")])
     monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
 
     answer = await ai_trainer.ask(user_id, "Что нового в исследованиях по протеину?", history=[])
@@ -517,7 +522,7 @@ async def test_ask_uses_search_context_and_counts_quota_when_search_used(fresh_d
 async def test_ask_skips_search_context_when_search_unused(fresh_db, user_id, monkeypatch):
     sdk_client = _fake_sdk_client(_xai_response(content="NO_SEARCH_NEEDED"))
     monkeypatch.setattr(ai_trainer, "_get_sdk_client", AsyncMock(return_value=sdk_client))
-    client = _fake_client([_response(content="YES"), _response(content="обычный ответ")])
+    client = _fake_client([_response(content=_GATE_SEARCH), _response(content="обычный ответ")])
     monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
 
     answer = await ai_trainer.ask(user_id, "Как мои дела?", history=[])
@@ -532,7 +537,7 @@ async def test_ask_skips_expensive_search_when_gate_says_no(fresh_db, user_id, m
     # Дешёвый гейт сказал NO → дорогая multi-agent модель не поднимается вовсе.
     sdk_getter = AsyncMock()
     monkeypatch.setattr(ai_trainer, "_get_sdk_client", sdk_getter)
-    client = _fake_client([_response(content="NO"), _response(content="обычный ответ")])
+    client = _fake_client([_response(content=_GATE_NO_SEARCH), _response(content="обычный ответ")])
     monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
 
     answer = await ai_trainer.ask(user_id, "Как мои дела?", history=[])
@@ -546,7 +551,10 @@ async def test_ask_skips_search_step_once_quota_exhausted(fresh_db, user_id, mon
     for _ in range(config.AI_SEARCH_DAILY_LIMIT):
         await fresh_db.increment_ai_search_count(user_id)
 
-    client = _fake_client([_response(content="обычный ответ")])
+    # Гейт вызывается и при исчерпанной квоте: вердикт про доступ к данным нужен
+    # независимо от поиска (см. GateVerdict) — экономить на нём нечего, лишние
+    # 6900 токенов схем в каждом раунде дороже самого вердикта.
+    client = _fake_client([_response(content=_GATE_SEARCH), _response(content="обычный ответ")])
     monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
     sdk_getter = AsyncMock()
     monkeypatch.setattr(ai_trainer, "_get_sdk_client", sdk_getter)
@@ -554,6 +562,7 @@ async def test_ask_skips_search_step_once_quota_exhausted(fresh_db, user_id, mon
     answer = await ai_trainer.ask(user_id, "Вопрос", history=[])
 
     assert answer == "обычный ответ"
+    # Дорогой шаг поиска всё равно не поднимается — квота исчерпана.
     sdk_getter.assert_not_awaited()
 
 
@@ -564,7 +573,7 @@ async def test_ask_answers_normally_when_search_step_raises(fresh_db, user_id, m
     session = SimpleNamespace(sample=boom)
     sdk_client = SimpleNamespace(chat=SimpleNamespace(create=lambda **kwargs: session))
     monkeypatch.setattr(ai_trainer, "_get_sdk_client", AsyncMock(return_value=sdk_client))
-    client = _fake_client([_response(content="YES"), _response(content="обычный ответ")])
+    client = _fake_client([_response(content=_GATE_SEARCH), _response(content="обычный ответ")])
     monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
 
     answer = await ai_trainer.ask(user_id, "Вопрос", history=[])
@@ -576,7 +585,7 @@ async def test_ask_answers_normally_when_search_step_raises(fresh_db, user_id, m
 async def test_ask_logs_question_and_search_usage(fresh_db, user_id, monkeypatch, caplog):
     sdk_client = _fake_sdk_client(_xai_response(content="находки", citations=["http://example.com"]))
     monkeypatch.setattr(ai_trainer, "_get_sdk_client", AsyncMock(return_value=sdk_client))
-    client = _fake_client([_response(content="YES"), _response(content="ответ")])
+    client = _fake_client([_response(content=_GATE_SEARCH), _response(content="ответ")])
     monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
 
     with caplog.at_level(logging.INFO, logger="ai_trainer"):
@@ -591,7 +600,7 @@ async def test_ask_logs_question_and_search_usage(fresh_db, user_id, monkeypatch
 async def test_ask_logs_question_without_search_usage(fresh_db, user_id, monkeypatch, caplog):
     sdk_client = _fake_sdk_client(_xai_response(content="NO_SEARCH_NEEDED"))
     monkeypatch.setattr(ai_trainer, "_get_sdk_client", AsyncMock(return_value=sdk_client))
-    client = _fake_client([_response(content="YES"), _response(content="ответ")])
+    client = _fake_client([_response(content=_GATE_SEARCH), _response(content="ответ")])
     monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
 
     with caplog.at_level(logging.INFO, logger="ai_trainer"):
@@ -625,7 +634,7 @@ async def test_web_search_step_never_forwards_user_photo(fresh_db, user_id, monk
     # сессии картинка не попала.
     sdk_client = _fake_sdk_client(_xai_response(content="находки", citations=["http://example.com"]))
     monkeypatch.setattr(ai_trainer, "_get_sdk_client", AsyncMock(return_value=sdk_client))
-    client = _fake_client([_response(content="YES"), _response(content="ответ")])
+    client = _fake_client([_response(content=_GATE_SEARCH), _response(content="ответ")])
     monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
 
     await ai_trainer.ask(
@@ -655,20 +664,49 @@ async def test_the_cache_header_is_omitted_when_there_is_no_user():
     assert ai_trainer._cache_headers(None) == {}
 
 
-async def test_search_worth_it_uses_fast_model_and_parses_verdict(fresh_db, user_id, monkeypatch):
-    client = _fake_client([_response(content="YES")])
+async def test_gate_parses_both_verdicts(fresh_db, user_id, monkeypatch):
+    client = _fake_client([_response(content="SEARCH=YES\nDATA=NO")])
     monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
 
-    assert await ai_trainer._search_worth_it(user_id, "Что нового?", history=[]) is True
+    verdict = await ai_trainer._gate_verdict(user_id, "Что нового по креатину?", history=[])
+
+    assert verdict.search is True
+    assert verdict.data is False
     # Гейт должен идти на дешёвую модель, а не на дорогую multi-agent.
     assert client.chat.completions.create.await_args.kwargs["model"] == config.GROK_MODEL
 
 
-async def test_search_worth_it_returns_false_on_no_and_on_error(fresh_db, user_id, monkeypatch):
-    no_client = _fake_client([_response(content="NO")])
-    monkeypatch.setattr(ai_trainer, "_get_client", lambda: no_client)
-    assert await ai_trainer._search_worth_it(user_id, "Как мои дела?", history=[]) is False
+async def test_gate_uses_its_own_cache_slot(fresh_db, user_id, monkeypatch):
+    """У гейта свой системный промпт, и под общим conv-id он вытеснял из кэша
+    префикс основного вызова — в проде это стоило вчетверо дороже."""
+    client = _fake_client([_response(content="SEARCH=NO\nDATA=YES")])
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
 
+    await ai_trainer._gate_verdict(user_id, "Вопрос", history=[])
+
+    headers = client.chat.completions.create.await_args.kwargs["extra_headers"]
+    assert headers["x-grok-conv-id"] == f"gate-{user_id}"
+
+
+async def test_gate_survives_markdown_around_the_verdict(fresh_db, user_id, monkeypatch):
+    client = _fake_client([_response(content="**SEARCH=YES**\n**DATA=YES**")])
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+
+    verdict = await ai_trainer._gate_verdict(user_id, "Вопрос", history=[])
+    assert verdict.search is True and verdict.data is True
+
+
+async def test_gate_defaults_keep_data_access_on_bad_output(fresh_db, user_id, monkeypatch):
+    """Асимметрия намеренная: не искать безопасно, а вот отобрать у тренера
+    данные — значит заставить его отвечать общими словами про личный вопрос."""
+    for content in ("", "чепуха без ключей", "SEARCH=YES"):
+        client = _fake_client([_response(content=content)])
+        monkeypatch.setattr(ai_trainer, "_get_client", lambda c=client: c)
+        verdict = await ai_trainer._gate_verdict(user_id, "Как мой прогресс?", history=[])
+        assert verdict.data is True, f"на {content!r} тренер остался без данных"
+
+
+async def test_gate_failure_falls_back_to_defaults(fresh_db, user_id, monkeypatch):
     def boom():
         raise RuntimeError("api down")
 
@@ -676,24 +714,27 @@ async def test_search_worth_it_returns_false_on_no_and_on_error(fresh_db, user_i
         chat=SimpleNamespace(completions=SimpleNamespace(create=AsyncMock(side_effect=boom)))
     )
     monkeypatch.setattr(ai_trainer, "_get_client", lambda: err_client)
-    # Ошибка гейта не должна валить ответ — просто не ищем.
-    assert await ai_trainer._search_worth_it(user_id, "Вопрос", history=[]) is False
+
+    verdict = await ai_trainer._gate_verdict(user_id, "Вопрос", history=[])
+    # Ошибка гейта не должна ни валить ответ, ни отбирать данные.
+    assert verdict.search is False
+    assert verdict.data is True
 
 
-async def test_search_gate_leaves_room_for_reasoning_tokens(fresh_db, user_id, monkeypatch):
+async def test_gate_leaves_room_for_reasoning_tokens(fresh_db, user_id, monkeypatch):
     """The gate answers in one word, but a reasoning model spends the same
     budget thinking first. The old 3-token ceiling was consumed inside the
     reasoning, the content came back empty, and an empty verdict reads as "not
     YES" — so live search never ran, whatever the question."""
-    client = _fake_client([_response(content="YES")])
+    client = _fake_client([_response(content=_GATE_SEARCH)])
     monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
 
-    await ai_trainer._search_worth_it(user_id, "Что нового?", history=[])
+    await ai_trainer._gate_verdict(user_id, "Что нового?", history=[])
 
     assert client.chat.completions.create.await_args.kwargs["max_tokens"] >= 128
 
 
-async def test_search_gate_treats_an_empty_verdict_as_no_and_says_so(
+async def test_gate_treats_an_empty_verdict_as_no_search_and_says_so(
     fresh_db, user_id, monkeypatch, caplog
 ):
     """Truncated or refused — either way there's no verdict. Not searching is
@@ -702,17 +743,9 @@ async def test_search_gate_treats_an_empty_verdict_as_no_and_says_so(
     monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
 
     with caplog.at_level(logging.WARNING, logger="ai_trainer"):
-        assert await ai_trainer._search_worth_it(user_id, "Что нового?", history=[]) is False
+        assert (await ai_trainer._gate_verdict(user_id, "Что нового?", history=[])).search is False
 
     assert any("empty verdict" in r.getMessage() for r in caplog.records)
-
-
-async def test_search_gate_survives_a_verdict_wrapped_in_markdown(fresh_db, user_id, monkeypatch):
-    """Losing live search over a pair of asterisks would be a silly way to fail."""
-    client = _fake_client([_response(content="**YES**")])
-    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
-
-    assert await ai_trainer._search_worth_it(user_id, "Что нового?", history=[]) is True
 
 
 # ---------- image input (text+img and img-only questions) ----------
@@ -1075,3 +1108,50 @@ async def test_building_xai_messages_without_a_prompt_is_refused():
 
     with _pytest.raises(ValueError):
         ai_trainer._to_xai_messages([], "вопрос")
+
+
+# ---------- гейт данных: схемы инструментов не уезжают, когда не нужны ----------
+
+
+async def test_tools_are_not_sent_when_gate_says_no_data(fresh_db, user_id, monkeypatch):
+    """Схемы 27 инструментов — около 6900 токенов В КАЖДОМ раунде. На вопросе про
+    общее знание («креатин работает?») ни один не нужен, и отправлять их незачем."""
+    client = _fake_client([
+        _response(content="SEARCH=NO\nDATA=NO"),
+        _response(content="креатин работает, бери 5 г в день"),
+    ])
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+
+    answer = await ai_trainer.ask(user_id, "креатин работает?", history=[])
+
+    assert answer == "креатин работает, бери 5 г в день"
+    main_call = client.chat.completions.create.await_args_list[-1].kwargs
+    assert "tools" not in main_call, "схемы уехали, хотя гейт сказал, что данные не нужны"
+
+
+async def test_tools_are_sent_when_gate_says_data_needed(fresh_db, user_id, monkeypatch):
+    client = _fake_client([
+        _response(content="SEARCH=NO\nDATA=YES"),
+        _response(content="по твоей истории всё растёт"),
+    ])
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+
+    await ai_trainer.ask(user_id, "как мой прогресс?", history=[])
+
+    main_call = client.chat.completions.create.await_args_list[-1].kwargs
+    assert main_call.get("tools"), "тренер остался без доступа к данным на личном вопросе"
+
+
+async def test_tools_are_sent_when_the_gate_breaks(fresh_db, user_id, monkeypatch):
+    """Сломанный гейт не должен тихо отбирать у тренера базу — он тогда отвечает
+    общими словами там, где от него ждут конкретику по человеку."""
+    client = _fake_client([
+        _response(content=""),
+        _response(content="ответ"),
+    ])
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+
+    await ai_trainer.ask(user_id, "сколько я жал в прошлый раз?", history=[])
+
+    main_call = client.chat.completions.create.await_args_list[-1].kwargs
+    assert main_call.get("tools")

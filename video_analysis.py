@@ -171,16 +171,37 @@ def _sanitize(data: dict[str, Any]) -> dict[str, Any]:
 
     # Наблюдение без доказательства — то самое «дописал, а не увидел», ради
     # чего поле evidence и заведено. Нет его — нет наблюдения.
+    raw_observations = data.get("observations") or []
     observations = [
-        obs for obs in (data.get("observations") or [])
+        obs for obs in raw_observations
         if isinstance(obs, dict) and (obs.get("evidence") or "").strip()
     ]
+    # Логируем, что модель нашла и что из этого выжило. Без этой строки нельзя
+    # отличить «Qwen не увидел ошибок» от «Qwen увидел, а фильтр выбросил», а
+    # разница принципиальная: первое — честный разбор, второе — наш баг, из-за
+    # которого тренер молчит о реальных косяках.
+    dropped = [
+        (obs.get("what") if isinstance(obs, dict) else repr(obs)[:60])
+        for obs in raw_observations
+        if not (isinstance(obs, dict) and (obs.get("evidence") or "").strip())
+    ]
+    logger.info(
+        "video sanitize: наблюдений от модели %s, осталось %s%s",
+        len(raw_observations), len(observations),
+        f", выброшено без evidence: {dropped}" if dropped else "",
+    )
     observations.sort(key=lambda o: _SEVERITY_ORDER.get(o.get("severity"), 3))
 
+    raw_not_visible = data.get("not_visible") or []
     not_visible = [
-        item for item in (data.get("not_visible") or [])
+        item for item in raw_not_visible
         if isinstance(item, dict) and not _is_unobservable(str(item.get("what", "")))
     ]
+    if len(not_visible) != len(raw_not_visible):
+        logger.info(
+            "video sanitize: «не видно» %s → %s (убрано ненаблюдаемое в принципе)",
+            len(raw_not_visible), len(not_visible),
+        )
     # Непротиворечивость, которую промпт просит, а модель соблюдает не всегда:
     # «ракурс хороший, помех нет» и длинный список «судить нельзя» вместе не
     # живут. Верим первому — оно проверяемо, а список был отпиской.
@@ -282,10 +303,12 @@ def to_context_block(analysis: dict[str, Any]) -> str:
     view = analysis.get("view") or {}
     lines = [
         "Разбор присланного видео. Смотрела отдельная модель по кадрам — она не "
-        "знает ни истории атлета, ни его весов, и может ошибаться. Это "
-        "показания, а не приговор: наблюдение с низкой уверенностью подавай как "
-        "предположение («похоже, что...»), а не как факт. Своих наблюдений не "
-        "добавляй — чего нет в списке, того на видео не видели.",
+        "знает ни истории атлета, ни его весов, и может ошибаться. Своих "
+        "наблюдений не добавляй: чего нет в списке, того на видео не видели.\n"
+        "Про уверенность: наблюдение с ВЫСОКОЙ уверенностью говори прямо, как "
+        "факт, без «похоже», «возможно» и «мне кажется» — оно видно в кадре, и "
+        "мяться тут значит не помочь. Смягчай только НИЗКУЮ уверенность — вот её "
+        "подавай предположением.",
         f"Упражнение на видео: {analysis.get('exercise')}.",
     ]
     if analysis.get("reps_seen"):
