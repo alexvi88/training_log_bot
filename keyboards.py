@@ -355,8 +355,10 @@ def groups_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-# Голая «➡️» в ряду с названиями упражнений читалась как оборванная кнопка, а не
-# как «дальше»: непонятно, листает она список или уводит с экрана. Подписываем.
+# Голая «➡️» в ряду с названиями читалась как оборванная кнопка, а не как
+# «дальше»: непонятно, листает она список или уводит с экрана. Подписываем — и
+# одинаково везде, где есть страницы: пикер, упоминания тренера, история,
+# дневник еды, выбор тренировки для программы, повтор, админские списки.
 PAGE_PREV_TEXT = "⬅️ Предыдущие"
 PAGE_NEXT_TEXT = "Ещё ➡️"
 
@@ -791,9 +793,9 @@ def routine_source_picker_keyboard(workouts, page: int, has_next: bool) -> Inlin
         b.button(text=w["label"], callback_data=f"rt:pickw:item:{w['id']}")
     nav = []
     if page > 0:
-        nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"rt:pickw:page:{page - 1}"))
+        nav.append(InlineKeyboardButton(text=PAGE_PREV_TEXT, callback_data=f"rt:pickw:page:{page - 1}"))
     if has_next:
-        nav.append(InlineKeyboardButton(text="➡️", callback_data=f"rt:pickw:page:{page + 1}"))
+        nav.append(InlineKeyboardButton(text=PAGE_NEXT_TEXT, callback_data=f"rt:pickw:page:{page + 1}"))
     b.adjust(1)
     if nav:
         b.row(*nav)
@@ -989,9 +991,9 @@ def history_list_keyboard(workouts, page: int, has_next: bool) -> InlineKeyboard
         b.button(text=w["label"], callback_data=f"hist:item:{w['id']}")
     nav = []
     if page > 0:
-        nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"hist:page:{page - 1}"))
+        nav.append(InlineKeyboardButton(text=PAGE_PREV_TEXT, callback_data=f"hist:page:{page - 1}"))
     if has_next:
-        nav.append(InlineKeyboardButton(text="➡️", callback_data=f"hist:page:{page + 1}"))
+        nav.append(InlineKeyboardButton(text=PAGE_NEXT_TEXT, callback_data=f"hist:page:{page + 1}"))
     b.adjust(2)
     if nav:
         b.row(*nav)
@@ -1009,9 +1011,9 @@ def repeat_list_keyboard(workouts, page: int, has_next: bool) -> InlineKeyboardM
     b.adjust(1)
     nav = []
     if page > 0:
-        nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"pick:rep:page:{page - 1}"))
+        nav.append(InlineKeyboardButton(text=PAGE_PREV_TEXT, callback_data=f"pick:rep:page:{page - 1}"))
     if has_next:
-        nav.append(InlineKeyboardButton(text="➡️", callback_data=f"pick:rep:page:{page + 1}"))
+        nav.append(InlineKeyboardButton(text=PAGE_NEXT_TEXT, callback_data=f"pick:rep:page:{page + 1}"))
     if nav:
         b.row(*nav)
     b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="pick:rep:cancel"))
@@ -1074,9 +1076,9 @@ def admin_users_keyboard(users, page: int, has_next: bool) -> InlineKeyboardMark
         b.button(text=f"{name} ({u['workout_count']})", callback_data=f"admin:u:{u['telegram_id']}")
     nav = []
     if page > 0:
-        nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"admin:up:{page - 1}"))
+        nav.append(InlineKeyboardButton(text=PAGE_PREV_TEXT, callback_data=f"admin:up:{page - 1}"))
     if has_next:
-        nav.append(InlineKeyboardButton(text="➡️", callback_data=f"admin:up:{page + 1}"))
+        nav.append(InlineKeyboardButton(text=PAGE_NEXT_TEXT, callback_data=f"admin:up:{page + 1}"))
     b.adjust(1)
     if nav:
         b.row(*nav)
@@ -1092,9 +1094,9 @@ def admin_history_list_keyboard(
         b.button(text=w["label"], callback_data=f"admin:hi:{target_user_id}:{w['id']}")
     nav = []
     if page > 0:
-        nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"admin:hp:{target_user_id}:{page - 1}"))
+        nav.append(InlineKeyboardButton(text=PAGE_PREV_TEXT, callback_data=f"admin:hp:{target_user_id}:{page - 1}"))
     if has_next:
-        nav.append(InlineKeyboardButton(text="➡️", callback_data=f"admin:hp:{target_user_id}:{page + 1}"))
+        nav.append(InlineKeyboardButton(text=PAGE_NEXT_TEXT, callback_data=f"admin:hp:{target_user_id}:{page + 1}"))
     b.adjust(1)
     if nav:
         b.row(*nav)
@@ -1116,9 +1118,9 @@ def admin_ai_users_keyboard(users, page: int, has_next: bool) -> InlineKeyboardM
         b.button(text=f"{name} ({u['ai_message_count']})", callback_data=f"admin:aiu:{u['telegram_id']}")
     nav = []
     if page > 0:
-        nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"admin:aip:{page - 1}"))
+        nav.append(InlineKeyboardButton(text=PAGE_PREV_TEXT, callback_data=f"admin:aip:{page - 1}"))
     if has_next:
-        nav.append(InlineKeyboardButton(text="➡️", callback_data=f"admin:aip:{page + 1}"))
+        nav.append(InlineKeyboardButton(text=PAGE_NEXT_TEXT, callback_data=f"admin:aip:{page + 1}"))
     b.adjust(1)
     if nav:
         b.row(*nav)
@@ -1140,9 +1142,9 @@ def admin_activity_users_keyboard(users, page: int, has_next: bool) -> InlineKey
         b.button(text=f"{name} ({u['event_count']})", callback_data=f"admin:acu:{u['telegram_id']}")
     nav = []
     if page > 0:
-        nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"admin:acp:{page - 1}"))
+        nav.append(InlineKeyboardButton(text=PAGE_PREV_TEXT, callback_data=f"admin:acp:{page - 1}"))
     if has_next:
-        nav.append(InlineKeyboardButton(text="➡️", callback_data=f"admin:acp:{page + 1}"))
+        nav.append(InlineKeyboardButton(text=PAGE_NEXT_TEXT, callback_data=f"admin:acp:{page + 1}"))
     b.adjust(1)
     if nav:
         b.row(*nav)
@@ -1187,9 +1189,9 @@ def admin_pushes_keyboard(page: int, has_next: bool) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     nav = []
     if page > 0:
-        nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"admin:pp:{page - 1}"))
+        nav.append(InlineKeyboardButton(text=PAGE_PREV_TEXT, callback_data=f"admin:pp:{page - 1}"))
     if has_next:
-        nav.append(InlineKeyboardButton(text="➡️", callback_data=f"admin:pp:{page + 1}"))
+        nav.append(InlineKeyboardButton(text=PAGE_NEXT_TEXT, callback_data=f"admin:pp:{page + 1}"))
     if nav:
         b.row(*nav)
     b.row(InlineKeyboardButton(text="🏠 Меню", callback_data="admin:menu"))
@@ -1506,9 +1508,9 @@ def food_history_keyboard(days: Sequence[dt.date], page: int, has_next: bool) ->
     b.adjust(2)
     nav = []
     if page > 0:
-        nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"fd:history:{page - 1}"))
+        nav.append(InlineKeyboardButton(text=PAGE_PREV_TEXT, callback_data=f"fd:history:{page - 1}"))
     if has_next:
-        nav.append(InlineKeyboardButton(text="➡️", callback_data=f"fd:history:{page + 1}"))
+        nav.append(InlineKeyboardButton(text=PAGE_NEXT_TEXT, callback_data=f"fd:history:{page + 1}"))
     if nav:
         b.row(*nav)
     b.row(InlineKeyboardButton(text="⬅️ К сегодняшнему дню", callback_data="fd:day:today"))

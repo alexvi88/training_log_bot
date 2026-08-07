@@ -1398,10 +1398,17 @@ async def resync_plan_with_routine(state: FSMContext, routine_id: int) -> str | 
     done = set(await db.list_opened_exercise_ids_for_workout(workout_id))
     skipped = set(data.get("plan_skipped_ids") or [])
 
-    kept, removed_ids = [], []
+    kept, removed_ids, stale_ids = [], [], []
     for block in planned:
-        ex_ids = [i for i in (block.get("exercise_ids") or []) if i in in_routine]
-        removed_ids += [i for i in (block.get("exercise_ids") or []) if i not in in_routine]
+        source_ids = block.get("exercise_ids") or []
+        removed_ids += [i for i in source_ids if i not in in_routine]
+        # Уже открытое в этой тренировке из очереди тоже вычищаем: очередь про
+        # то, что осталось, и сделанному в ней не место. В обычном ходе вещей
+        # оно туда и не попадает (открытие снимает блок с очереди), но состояние
+        # живёт в FSM неделями, и одна кривая запись иначе оставалась бы там
+        # навсегда. Тихо, без упоминания в сводке: программу никто не менял.
+        stale_ids += [i for i in source_ids if i in in_routine and i in done]
+        ex_ids = [i for i in source_ids if i in in_routine and i not in done]
         if not ex_ids:
             continue
         # Схемы подходов тоже свежие: правка «3×10» → «4×8» должна доехать.
@@ -1420,7 +1427,8 @@ async def resync_plan_with_routine(state: FSMContext, routine_id: int) -> str | 
     # Сравниваем состав и схемы, а не блоки целиком: ключи словаря targets
     # переживают хранение в FSM как строки, и сравнение блоков объявляло бы
     # изменением каждое открытие редактора.
-    if not added_ids and not removed_ids and _plan_targets(kept) == _plan_targets(planned):
+    if (not added_ids and not removed_ids and not stale_ids
+            and _plan_targets(kept) == _plan_targets(planned)):
         return None
     await state.update_data(planned_blocks=kept)
 
@@ -1434,7 +1442,10 @@ async def resync_plan_with_routine(state: FSMContext, routine_id: int) -> str | 
     if removed_ids:
         parts.append(f"убрал {await names(removed_ids)}")
     if not parts:
-        return "План текущей тренировки обновил."
+        # Состав программы не менялся — правили схему подходов или чистили
+        # сделанное. Молчим: сообщение без причины читается как «что-то
+        # произошло», и человек идёт искать что.
+        return None
     return "План текущей тренировки обновил: " + " и ".join(parts) + "."
 
 
