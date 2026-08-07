@@ -280,3 +280,26 @@ async def test_the_exercise_being_done_right_now_is_not_pushed_back_into_the_pla
     planned = (await state.get_data())["planned_blocks"]
     assert bench not in [i for b in planned for i in b["exercise_ids"]]
     assert note is None  # ничего не менялось — и сказать нечего
+
+
+async def test_an_already_done_exercise_is_swept_out_of_the_plan(fresh_db, user_id):
+    """Самолечение: в очереди не место тому, что в этой тренировке уже открывали.
+    В обычном ходе вещей оно туда и не попадает, но состояние живёт в FSM
+    неделями, и одна кривая запись иначе осталась бы там навсегда."""
+    db = fresh_db
+    (bench, fly, dips), routine_id = await _start_program(
+        db, user_id, state := await _state(user_id),
+        [("Жим лёжа", "4x8"), ("Разводка", "3x12"), ("Брусья", None)],
+    )
+    planned = (await state.get_data())["planned_blocks"]
+    # Открытое первым упражнение каким-то образом снова оказалось в очереди.
+    await state.update_data(
+        planned_blocks=[{"exercise_ids": [bench], "targets": {bench: "4x8"}}] + planned
+    )
+
+    note = await workout.resync_plan_with_routine(state, routine_id)
+
+    planned = (await state.get_data())["planned_blocks"]
+    assert bench not in [i for b in planned for i in b["exercise_ids"]]
+    assert [fly, dips] == [i for b in planned for i in b["exercise_ids"]]
+    assert note is None  # программу не меняли — и говорить не о чем
