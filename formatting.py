@@ -231,6 +231,45 @@ def format_set(weight: float, reps: int, rpe: float | None = None) -> str:
     return f"{format_weight(weight)}×{reps}{format_rpe(rpe)}"
 
 
+# «5x3-5», «5 х 3 - 5», «4X8» — как схему пишет человек. Разделитель подходов:
+# латинская x, русская х, знак умножения. Диапазон повторов: дефис, тире, длинное
+# тире. Всё это должно приезжать к одному виду, а не соседствовать в одном списке.
+_TARGET_RE = re.compile(
+    r"^\s*(?P<sets>\d{1,2})\s*[xX×хХ]\s*(?P<lo>\d{1,3})\s*(?:[-–—]\s*(?P<hi>\d{1,3}))?\s*$"
+)
+
+
+def parse_routine_target(text: str) -> tuple[int, int, int | None] | None:
+    """«4x6-10» → (4, 6, 10). None, если это не схема «подходы × повторы».
+
+    None — обычный ответ, а не ошибка: в каталоге есть «3×30–60 сек», и строго
+    отбивать неразобранное значило бы запретить формат, который бот использует
+    сам. Разбираем то, что разбирается, остальное оставляем как есть.
+    """
+    match = _TARGET_RE.match(text or "")
+    if match is None:
+        return None
+    sets = int(match.group("sets"))
+    lo = int(match.group("lo"))
+    hi = int(match.group("hi")) if match.group("hi") else None
+    if not sets or not lo or (hi is not None and hi < lo):
+        return None
+    return sets, lo, hi
+
+
+def normalize_routine_target(text: str) -> str:
+    """Привести схему к тому же виду, в котором её пишем мы сами.
+
+    Без этого рядом в одном дне живут «4×6–10» от генератора и «5x3-5» от
+    человека — одна и та же вещь двумя разными наборами символов.
+    """
+    parsed = parse_routine_target(text)
+    if parsed is None:
+        return (text or "").strip()
+    sets, lo, hi = parsed
+    return build_routine_target(sets, lo, hi)
+
+
 def build_routine_target(
     sets: int | None, reps_min: int | None, reps_max: int | None
 ) -> str:

@@ -61,11 +61,14 @@ class _Chat:
     def user_message(self, text: str):
         return self._blank(text)
 
-    def callback(self, data: str):
+    def callback(self, data: str, msg_id: int = 777):
+        """msg_id по умолчанию — тот же, что кладёт _state_with_setup: в жизни тап
+        прилетает от того самого сообщения с вопросом, и обработчик это сверяет."""
         cb = MagicMock()
         cb.data = data
         cb.from_user = SimpleNamespace(id=self.user_id, username="tester")
         cb.message = self._blank()
+        cb.message.message_id = msg_id
         cb.bot = self.bot
         cb.answer = AsyncMock()
         return cb
@@ -422,3 +425,25 @@ def test_finishing_frames_demand_the_tool_call_not_just_a_retelling():
     отвечал на четыре вопроса и не получал ни состава, ни кнопки сохранения."""
     for frame in (ai_trainer.SETUP_ANSWERS_FRAME, ai_trainer.SETUP_ENOUGH_FRAME):
         assert "propose_program" in frame
+
+
+async def test_button_from_an_abandoned_questionnaire_does_not_answer_the_live_one(
+    fresh_db, user_id, monkeypatch
+):
+    """Регрессия: индекса мало. Брошенный опросник оставляет свой вопрос с живыми
+    кнопками, и если он встал на том же шаге, что текущий, тап по нему уезжал
+    ответом в новый опросник — молча и не тем вариантом, что был под пальцем.
+    Воспроизведено вживую: старый «ВОПРОС 3» ответил за текущий."""
+    monkeypatch.setattr(ai_trainer.ai_trainer, "ask", _ask_recording([]))
+    state = await _state_with_setup(user_id)
+    chat = _Chat(user_id)
+
+    # Тот же индекс вопроса, но сообщение — чужое, из прошлого опросника.
+    cb = chat.callback("ai:qa:0:1", msg_id=555)
+    await ai_trainer.ai_setup_choice(cb, state)
+
+    setup = (await state.get_data())["ai_setup"]
+    assert setup["answers"] == []
+    assert setup["idx"] == 0
+    cb.answer.assert_awaited()
+    assert cb.answer.await_args.kwargs.get("show_alert") is True

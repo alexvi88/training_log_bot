@@ -11,6 +11,7 @@ from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import CallbackQuery
 
+import formatting
 from fsm import RoutineFlow
 from handlers import routines
 from seed_data import PROGRAM_BY_KEY
@@ -193,7 +194,10 @@ async def test_entering_a_target_saves_it_on_the_routine_exercise(fresh_db, user
     await routines.rtadd_target_entered(_make_message(user_id, "3x8-12"), state)
 
     entries = await db.list_routine_exercises(routine_id)
-    assert entries[0]["target"] == "3x8-12"
+    # Введённое человеком приводится к тому же виду, в котором схемы пишем мы
+    # сами: иначе в одном дне соседствуют «4×6–10» от генератора и «3x8-12» от
+    # руки — одна и та же вещь двумя наборами символов.
+    assert entries[0]["target"] == "3×8–12"
     assert await state.get_state() is None
 
 
@@ -573,3 +577,14 @@ async def test_renaming_rejects_something_that_is_not_a_program(fresh_db, user_i
     await routines.rt_program_rename(callback, await _make_state(user_id))
 
     callback.answer.assert_awaited_once_with("Программа не найдена", show_alert=True)
+
+
+async def test_target_normalization_keeps_what_it_cannot_parse():
+    """В каталоге есть «3×30–60 сек» — схема по времени. Строго отбивать
+    неразобранное значило бы запретить формат, который бот использует сам."""
+    assert formatting.normalize_routine_target("5 x 3 - 5") == "5×3–5"
+    assert formatting.normalize_routine_target("4Х8") == "4×8"
+    assert formatting.normalize_routine_target("3×30–60 сек") == "3×30–60 сек"
+    assert formatting.normalize_routine_target("как пойдёт") == "как пойдёт"
+    # Диапазон наоборот — не схема, а опечатка: оставляем как есть, не выдумываем.
+    assert formatting.normalize_routine_target("3x10-5") == "3x10-5"

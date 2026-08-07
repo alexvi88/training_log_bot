@@ -1241,7 +1241,7 @@ async def rt_clear_exercise_target(callback: CallbackQuery, state: FSMContext):
 
 @router.message(StateFilter(RoutineFlow.editing_exercise_target), F.text)
 async def rt_exercise_target_entered(message: Message, state: FSMContext):
-    target = message.text.strip()
+    target = formatting.normalize_routine_target(message.text)
     if not target:
         return
     data = await state.get_data()
@@ -1444,7 +1444,7 @@ async def rtadd_skip_target(callback: CallbackQuery, state: FSMContext):
 
 @router.message(StateFilter(RoutineFlow.adding_exercise_target), F.text)
 async def rtadd_target_entered(message: Message, state: FSMContext):
-    target = message.text.strip()
+    target = formatting.normalize_routine_target(message.text)
     if not target:
         return
     data = await state.get_data()

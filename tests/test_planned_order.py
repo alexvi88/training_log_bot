@@ -103,7 +103,7 @@ async def test_idle_screen_names_the_next_program_exercise_and_offers_the_rest(f
     kb = _last_keyboard(cb)
     texts = _button_texts(kb)
     assert "▶️ Разводка" in texts
-    assert "📋 Программа · осталось 2" in texts
+    assert "📋 Другое из плана · ещё 2" in texts
     assert "live:plan" in _callback_datas(kb)
 
 

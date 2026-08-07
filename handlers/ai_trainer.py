@@ -417,7 +417,11 @@ async def ai_to_menu(callback: CallbackQuery, state: FSMContext):
 
 BUILD_PROGRAM_INTRO = (
     "🤖 <b>ОКЕЙ, СОБИРАЕМ ПРОГРАММУ.</b>\n\n"
-    "Сейчас задам пару вопросов — отвечай, и заберёшь готовый план."
+    "Сейчас задам пару вопросов — отвечай, и заберёшь готовый план. "
+    # Опросник намеренно не тратит дневной лимит вопросов: между шагами модель
+    # не вызывается вовсе. Человек этого не знает и может отвечать «Собирай так»
+    # из экономии, получая программу хуже, чем мог бы.
+    "Вопросы бесплатные — дневной лимит они не едят."
 )
 
 # Уходит тренеру от лица пользователя, чтобы не заставлять его печатать этот же
@@ -2095,6 +2099,16 @@ async def _deliver_setup(
         await _handle_question(message, state, text, history_question=text, user_id=user_id)
         return
 
+    # Прошлый опросник мог остаться брошенным на середине — его вопрос висит в
+    # чате с живыми кнопками. Сам тап по ним теперь безвреден (сверяется msg_id),
+    # но кнопка, которая ничего не делает, — приглашение потыкать и решить, что
+    # бот сломался. Гасим, дописав, чем всё кончилось. На втором круге сюда не
+    # попадаем: там вопросы уже отвечены и в состоянии остался один счётчик.
+    stale_questions = previous.get("questions") or []
+    if stale_questions and int(previous.get("idx") or 0) < len(stale_questions):
+        await _close_setup_question(
+            message.bot, message.chat.id, previous, "⏹ Опросник отменён — начали заново"
+        )
     await state.update_data(
         ai_setup={
             "questions": questions,
@@ -2160,7 +2174,16 @@ async def ai_setup_choice(callback: CallbackQuery, state: FSMContext):
             "Этот вопрос уже позади — спрашивай что хочешь словами 👇", show_alert=True
         )
         return
-    if len(parts) != 4 or parts[2] != str(setup["idx"]):
+    # Индекса мало: он совпадает и у вопроса из ПРОШЛОГО, брошенного опросника,
+    # если тот остановился на том же шаге. Тап по такой кнопке (а она живёт в чате
+    # вечно) записывался ответом в текущий опросник — молча и не тем вариантом,
+    # который человек видел под пальцем. msg_id привязывает кнопки к конкретному
+    # сообщению, а его мы и так храним, чтобы их гасить.
+    if (
+        len(parts) != 4
+        or parts[2] != str(setup["idx"])
+        or getattr(callback.message, "message_id", None) != setup.get("msg_id")
+    ):
         await callback.answer("Этот вопрос уже позади — отвечай на нижний 👇", show_alert=True)
         return
     choices = setup["questions"][setup["idx"]].get("choices") or []
@@ -2237,6 +2260,11 @@ async def ai_question(message: Message, state: FSMContext):
             return
         try:
             await _close_setup_question(message.bot, message.chat.id, setup, f"✅ {question}")
+            # Ответ уже вписан в сам вопрос — исходную реплику убираем, иначе в
+            # чате он стоит дважды подряд. У ответа кнопкой такого дубля нет, и
+            # тексту незачем выглядеть иначе.
+            with suppress(TelegramBadRequest):
+                await message.delete()
             await _record_setup_answer(message, state, user_id, setup, question)
         finally:
             if last:
