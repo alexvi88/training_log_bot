@@ -350,6 +350,12 @@ CREATE TABLE IF NOT EXISTS cost_events (
     model TEXT,
     prompt_tokens INTEGER NOT NULL DEFAULT 0,
     completion_tokens INTEGER NOT NULL DEFAULT 0,
+    -- Часть prompt_tokens, приехавшая из кэша (у xAI она в 6-7 раз дешевле
+    -- обычного входа), и токены размышлений, которые тарифицируются как выход и
+    -- в completion_tokens не входят. Без этих двух колонок дневной отчёт считал
+    -- бы иначе, чем строка в логе, — то есть на один вопрос было бы два ответа.
+    cached_tokens INTEGER NOT NULL DEFAULT 0,
+    reasoning_tokens INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_cost_events_created ON cost_events (created_at);
@@ -619,6 +625,12 @@ async def _dedupe_exercise_links() -> None:
 async def _migrate_schema() -> None:
     """Upgrade older on-disk databases to the current column set in-place."""
     await _conn.execute("DROP INDEX IF EXISTS idx_exercises_user_name")
+
+    cost_cols = await _column_names("cost_events")
+    if "cached_tokens" not in cost_cols:
+        await _conn.execute("ALTER TABLE cost_events ADD COLUMN cached_tokens INTEGER NOT NULL DEFAULT 0")
+    if "reasoning_tokens" not in cost_cols:
+        await _conn.execute("ALTER TABLE cost_events ADD COLUMN reasoning_tokens INTEGER NOT NULL DEFAULT 0")
 
     workout_cols = await _column_names("workouts")
     if "source" not in workout_cols:
@@ -4820,6 +4832,7 @@ async def log_cost_event(
     prompt_tokens: int = 0,
     completion_tokens: int = 0,
     cached_tokens: int = 0,
+    reasoning_tokens: int = 0,
 ) -> None:
     """Строка в cost_events + строка в лог с ценой этого вызова.
 
@@ -4829,43 +4842,67 @@ async def log_cost_event(
     поиск по логам единым запросом его не находил. Новая модель, добавленная
     когда-нибудь ещё, попадёт в лог сама, без напоминания.
 
-    cached_tokens — сколько входа приехало из кэша провайдера, если он это
-    сообщает. Цену считаем по полной ставке за весь вход, поэтому при попадании в
-    кэш цифра — потолок, а не факт, и об этом честно написано в строке.
+    cached_tokens — часть входа, приехавшая из кэша провайдера: считается по
+    сниженной ставке (config.CACHED_INPUT_PRICE_MULTIPLIER). Пока множитель равен
+    единице, цена — честный потолок, и в строке про это сказано прямо.
+
+    reasoning_tokens — внутренние размышления модели, отдельный billable тип у
+    xAI: в completion_tokens они не входят и тарифицируются как выход.
     """
     price = (
         config.TRANSCRIPTION_PRICE_USD_PER_CALL
         if event_type == "transcription"
-        else config.call_price_usd(model or "", prompt_tokens, completion_tokens)
+        else config.call_price_usd(
+            model or "", prompt_tokens, completion_tokens, cached_tokens, reasoning_tokens
+        )
     )
+    notes = []
+    if cached_tokens:
+        notes.append(f"из кэша {cached_tokens}")
+    if reasoning_tokens:
+        notes.append(f"размышления {reasoning_tokens}")
     logger.info(
-        "cost %s %s user %s: %s+%s токенов%s, ~$%.4f%s",
+        "cost %s %s user %s: %s+%s токенов%s, ~$%.4f",
         event_type, model, user_id, prompt_tokens, completion_tokens,
-        f" (из кэша {cached_tokens})" if cached_tokens else "",
+        f" ({', '.join(notes)})" if notes else "",
         price,
-        " — потолок, кэш не учтён" if cached_tokens else "",
     )
     async with _write_lock:
         await conn().execute(
-            "INSERT INTO cost_events (user_id, event_type, model, prompt_tokens, completion_tokens, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (user_id, event_type, model, prompt_tokens, completion_tokens, now_iso()),
+            "INSERT INTO cost_events "
+            "(user_id, event_type, model, prompt_tokens, completion_tokens, "
+            " cached_tokens, reasoning_tokens, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (user_id, event_type, model, prompt_tokens, completion_tokens,
+             cached_tokens, reasoning_tokens, now_iso()),
         )
         await conn().commit()
 
 
 async def get_llm_cost_breakdown(date_str: str) -> dict[str, dict[str, int]]:
-    """Per-model {calls, prompt_tokens, completion_tokens} for llm_call events on a given calendar day."""
+    """Per-model токены за календарный день по событиям llm_call.
+
+    Кэш и размышления идут отдельными суммами, потому что тарифицируются иначе:
+    кэш дешевле входа, размышления считаются как выход. Без них отчёт считал бы
+    не то же, что строка в логе.
+    """
     cur = await conn().execute(
-        "SELECT model, COUNT(*), COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(completion_tokens), 0) "
+        "SELECT model, COUNT(*), COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(completion_tokens), 0), "
+        "COALESCE(SUM(cached_tokens), 0), COALESCE(SUM(reasoning_tokens), 0) "
         "FROM cost_events WHERE event_type = 'llm_call' AND date(created_at) = ? "
         "GROUP BY model",
         (date_str,),
     )
     rows = await cur.fetchall()
     return {
-        (model or "unknown"): {"calls": calls, "prompt_tokens": pt, "completion_tokens": ct}
-        for model, calls, pt, ct in rows
+        (model or "unknown"): {
+            "calls": calls,
+            "prompt_tokens": pt,
+            "completion_tokens": ct,
+            "cached_tokens": cached,
+            "reasoning_tokens": reasoning,
+        }
+        for model, calls, pt, ct, cached, reasoning in rows
     }
 
 

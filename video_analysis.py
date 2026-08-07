@@ -251,6 +251,11 @@ async def analyze(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             cached_tokens=getattr(details, "cached_tokens", 0) or 0,
+            reasoning_tokens=getattr(
+                getattr(response.usage, "completion_tokens_details", None),
+                "reasoning_tokens",
+                0,
+            ) or 0,
         )
     except Exception:
         logger.exception("failed to log video analysis cost event")

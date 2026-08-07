@@ -32,7 +32,11 @@ def _llm_cost(llm_breakdown: dict[str, dict[str, int]]) -> tuple[float, int, int
         # config.call_price_usd): суточная сумма и цена запроса не должны
         # расходиться из-за двух копий арифметики.
         total_cost += config.call_price_usd(
-            model, stats["prompt_tokens"], stats["completion_tokens"]
+            model,
+            stats["prompt_tokens"],
+            stats["completion_tokens"],
+            stats.get("cached_tokens", 0),
+            stats.get("reasoning_tokens", 0),
         )
         total_calls += stats["calls"]
         total_tokens += stats["prompt_tokens"] + stats["completion_tokens"]

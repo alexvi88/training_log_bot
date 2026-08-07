@@ -213,10 +213,17 @@ VIDEO_ANALYSIS_TEMPERATURE = float(os.getenv("VIDEO_ANALYSIS_TEMPERATURE", "0.2"
 # остальные квоты (db._quota_day).
 AI_VIDEO_DAILY_LIMIT = int(os.getenv("AI_VIDEO_DAILY_LIMIT", "10"))
 
-# Двадцать секунд — это подход целиком с запасом, а дальше растёт только цена:
-# токены у видео идут пропорционально длине. Кружок (video_note) до минуты
-# обрежется тем же лимитом.
-MAX_VIDEO_SECONDS = int(os.getenv("MAX_VIDEO_SECONDS", "20"))
+# Тридцать секунд — подход целиком даже с подходом к снаряду и паузами между
+# повторами. Двадцати боялись зря: живой прогон показал, что разбор ролика стоит
+# $0.0026, то есть 3% чека — остальное берёт основная модель, когда озвучивает
+# наблюдения. Токены у видео растут пропорционально длине, но с такой ставки
+# лишние десять секунд стоят десятые доли цента.
+#
+# Выше поднимать смысла нет: ролик всё равно упирается в MAX_VIDEO_BYTES, а
+# длинное видео сэмплируется реже — то есть теряет тот самый темп, ради которого
+# мы вообще берём видео, а не кадры. Кружок (video_note) до минуты обрежется этим
+# же лимитом.
+MAX_VIDEO_SECONDS = int(os.getenv("MAX_VIDEO_SECONDS", "30"))
 
 # Потолок Bot API на скачивание файла ботом — 20 МБ, и обойти его можно только
 # своим Bot API сервером. Двадцать секунд с телефона это 3–5 МБ, так что лимит
@@ -249,8 +256,20 @@ def video_analysis_available() -> bool:
 # per xAI's docs all sub-agents' tokens (reasoning + tool calls included) are
 # billed, not just the leader's — if the usage object we log doesn't already
 # sum across agents, this underestimates actual spend on that model. Not
-# verified either way; xAI's own `cost_in_usd_ticks` on the response would be
-# the authoritative number if this ever needs auditing.
+# verified either way.
+#
+# Стоимости в долларах на ответе чата xAI НЕ отдаёт — проверено по прото SDK:
+# `cost_usd_ticks` есть только у Batch API (batch_pb2.BatchCostBreakdown,
+# EndpointCost), у SamplingUsage такого поля нет. Прежний комментарий здесь
+# обещал его «на ответе» и посылал за авторитетной цифрой туда, где её нет.
+# Авторитетные источники — консоли: console.x.ai → Usage и Novita → Usage.
+#
+# Зато SamplingUsage отдаёт разбивку, из которой цену можно собрать точно:
+# prompt_text_tokens, cached_prompt_text_tokens, prompt_image_tokens,
+# completion_tokens и ОТДЕЛЬНО reasoning_tokens. Последние тарифицируются как
+# выход, по дорогой ставке, — поэтому в логе они печатаются отдельной цифрой:
+# если провайдер не включает их в completion_tokens, наш расчёт занижает
+# стоимость, и увидеть это можно только глазами на живых числах.
 LLM_PRICES_USD_PER_1K: dict[str, tuple[float, float]] = {
     "grok-4-1-fast": (0.0002, 0.0005),
     "grok-4.20-multi-agent": (0.00125, 0.0025),
@@ -268,19 +287,64 @@ except (TypeError, ValueError, IndexError, json.JSONDecodeError):
 DEFAULT_LLM_PRICE_USD_PER_1K: tuple[float, float] = (0.0002, 0.0005)
 
 
-def call_price_usd(model: str, prompt_tokens: int, completion_tokens: int) -> float:
+# Во сколько раз кэшированный вход дешевле обычного. 0.15 — по прайсу grok-4.5 в
+# console.x.ai: вход $2.00 за 1M, кэшированный вход $0.30 за 1M. То есть за
+# совпавший префикс платим 15% цены, и на наших запросах это главная экономия:
+# постоянная шапка (системный промпт + схемы 27 инструментов, вместе около
+# одиннадцати тысяч токенов) уезжает заново в каждом раунде tool-call'ов, и с
+# кэшем стоит копейки вместо трёх полных ставок.
+#
+# ВНИМАНИЕ на будущее: у xAI прайс двухступенчатый — при контексте свыше 200K
+# токенов все ставки удваиваются ($4 вход / $0.60 кэш / $12 выход). Таблица ниже
+# этого не знает и считает по дешёвой ступени. Пока наши запросы держатся в
+# пределах пятнадцати тысяч токенов, разницы нет; если контекст когда-нибудь
+# распухнет за 200K, расчёт начнёт занижать ровно вдвое.
+CACHED_INPUT_PRICE_MULTIPLIER = float(os.getenv("CACHED_INPUT_PRICE_MULTIPLIER", "0.15"))
+
+
+def call_price_usd(
+    model: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+    cached_tokens: int = 0,
+    reasoning_tokens: int = 0,
+) -> float:
     """Цена одного вызова в долларах по таблице выше.
 
     Одна формула на два потребителя: дневной отчёт (admin_tasks._llm_cost) и
-    строка в логе на каждый вызов (ai_trainer._log_llm_cost). Держать её в двух
-    местах — верный способ получить два разных ответа на один вопрос.
+    строка в логе на каждый вызов (db.log_cost_event). Держать её в двух местах —
+    верный способ получить два разных ответа на один вопрос.
 
     Лог с ценой нужен, чтобы смотреть расход сразу после запроса, а не ждать
     ночного отчёта: цена одного разбора видео или тяжёлого вопроса видна в
     момент, когда её ещё можно связать с тем, что происходило.
+
+    cached_tokens — часть prompt_tokens, приехавшая из кэша провайдера: она
+    считается по сниженной ставке (CACHED_INPUT_PRICE_MULTIPLIER), а остаток
+    входа — по полной.
+
+    reasoning_tokens — внутренние размышления модели. По прайсу xAI
+    (docs.x.ai/developers/pricing, «All standard token types are billed»)
+    это отдельный billable тип наравне с входом и выходом, и в completion_tokens
+    он не входит. Считаем его по ставке выхода: раньше эти токены не считались
+    вовсе, то есть расчёт занижал стоимость — ровно в обратную сторону от кэша,
+    из-за чего итог выглядел правдоподобным, будучи неверным дважды.
+
+    Чего эта функция не знает: вызовы серверных инструментов xAI (web_search,
+    x_search — $5 за 1000 вызовов сверх токенов). Они бывают только на поисковых
+    ответах и в usage не приходят, так что учесть их можно лишь отдельным
+    счётчиком вызовов.
     """
     inp, out = LLM_PRICES_USD_PER_1K.get(model, DEFAULT_LLM_PRICE_USD_PER_1K)
-    return prompt_tokens / 1000 * inp + completion_tokens / 1000 * out
+    # Больше входа, чем было, из кэша приехать не может — но провайдеру верить на
+    # слово тут нельзя: отрицательный «остаток» дал бы отрицательную цену.
+    cached = max(0, min(cached_tokens, prompt_tokens))
+    fresh = prompt_tokens - cached
+    return (
+        fresh / 1000 * inp
+        + cached / 1000 * inp * CACHED_INPUT_PRICE_MULTIPLIER
+        + (completion_tokens + max(0, reasoning_tokens)) / 1000 * out
+    )
 
 # Flat per-call estimate for voice transcription (OPENAI_TRANSCRIBE_MODEL) — the
 # API doesn't return token counts for audio, so this stands in for a real
