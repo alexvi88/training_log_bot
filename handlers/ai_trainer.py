@@ -426,8 +426,8 @@ BUILD_PROGRAM_INTRO = (
 # отмахивается, а вся суть этой кнопки — наоборот, провести через уточнения.
 BUILD_PROGRAM_SEED = (
     "Хочу собрать программу тренировок. Сначала задай мне уточняющие вопросы "
-    "по вводным, которых не видно из моей истории, и только после моих ответов "
-    "собирай программу."
+    "по вводным, которых не видно из моей истории, — через ask_setup_questions, "
+    "чтобы они пришли по одному, — и только после моих ответов собирай программу."
 )
 
 BUILD_WORKOUT_INTRO = (
@@ -445,9 +445,10 @@ BUILD_WORKOUT_INTRO = (
 BUILD_WORKOUT_SEED = (
     "Собери мне тренировку на сегодня — одну, прямо сейчас пойду по ней "
     "заниматься. Сначала посмотри get_muscle_recovery и реши, что сегодня "
-    "логичнее грузить, а что ещё не отдохнуло. Потом задай мне не больше двух "
-    "коротких вопросов (сколько есть времени и как самочувствие) и только "
-    "после ответов вызывай propose_program ровно с одним днём."
+    "логичнее грузить, а что ещё не отдохнуло. Потом задай мне через "
+    "ask_setup_questions не больше двух коротких вопросов (сколько есть времени "
+    "и как самочувствие) и только после ответов вызывай propose_program ровно "
+    "с одним днём."
 )
 
 
@@ -489,6 +490,10 @@ async def _start_ai_scenario(
         with suppress(TelegramBadRequest):
             await callback.answer()
         await state.set_state(AITrainerFlow.chatting)
+        # Новая просьба — новый опросник: недоотвеченные вопросы прошлого
+        # захода и его счётчик кругов (см. SETUP_MAX_ROUNDS) к ней отношения не
+        # имеют, а доживший счётчик упёр бы её в потолок с первого вопроса.
+        await state.update_data(ai_setup=None)
         # С клавиатурой, а не голым текстом: пока тренер думает, это единственный
         # экран на месте меню — а ответа может и не быть вовсе (сбой провайдера),
         # и без кнопок выход остался бы только через нижнее меню.
@@ -1734,6 +1739,17 @@ async def _handle_question(
         if action not in actions:
             actions.append(action)
 
+    # Опросник перед сборкой программы (см. ai_trainer.ask_setup_questions).
+    # Приезжает целиком одним вызовом — дальше бот крутит его сам, по одному
+    # вопросу на сообщение, ни разу не сходив к модели между ними.
+    setup_questions: list[dict] = []
+
+    async def collect_questions(questions: list[dict]) -> None:
+        # Новый опросник за тот же ход затирает предыдущий — как и черновик
+        # программы: показать человеку два опросника подряд нельзя.
+        setup_questions.clear()
+        setup_questions.extend(questions)
+
     # Размышления финального раунда. Пользователю они не показываются — они
     # нужны, чтобы уехать назад вместе с ответом в истории: по документации xAI
     # отсутствие reasoning_content в отправленной истории это причина промахов
@@ -1748,7 +1764,8 @@ async def _handle_question(
         answer = await ai_trainer.ask(
             user_id, question, history, image_data_url=image_data_url,
             on_status=display.set_status, on_program=collect_program,
-            on_action=collect_action, on_chunk=streamer.push,
+            on_action=collect_action, on_questions=collect_questions,
+            on_chunk=streamer.push,
             video_context=video_context, on_reasoning=collect_reasoning,
         )
     except Exception:
@@ -1850,6 +1867,325 @@ async def _handle_question(
     if not sent_rich:
         await _send_html_answer(message, placeholder, chunks, quota_html, reply_markup)
 
+    # Опросник — последним, уже под ответом: сначала человек читает, что тренер
+    # понял из истории, и только потом получает первый вопрос отдельным
+    # сообщением. Программа и опросник за один ход взаимоисключающи: если
+    # тренер уже собрал план, спрашивать вводные поздно и незачем.
+    await _deliver_setup(
+        message, state, user_id,
+        [] if program_draft else setup_questions,
+        goal=history_question,
+    )
+
+
+# ---------- опросник перед сборкой программы (ask_setup_questions) ----------
+
+# Сколько кругов уточнений подряд разрешаем одной просьбе. Второй круг нужен по
+# делу: увидев в ответах встречный вопрос или «хз», тренер вправе ответить и
+# переспросить то, что осталось открытым. А вот без потолка он способен гонять
+# уточнения по кругу, и человек не увидит программу никогда — поэтому на третий
+# заход опросник уже не показывается, а тренеру уходит прямое «собирай на
+# дефолтах» (см. _deliver_setup).
+SETUP_MAX_ROUNDS = 2
+
+# Подсказка под вопросом. Про «не знаю» сказано прямо и намеренно: без этого
+# человек, который не может ответить, либо выдумывает число, либо застревает —
+# а разобраться с «хз» и встречным вопросом умеет финальная сборка, ей эти
+# ответы уедут как есть.
+SETUP_HINT_WITH_CHOICES = "Жми вариант или напиши свой. Не знаешь — так и скажи, разберёмся."
+SETUP_HINT_TEXT_ONLY = "Ответь словами. Не знаешь — так и скажи, разберёмся."
+
+# Рамка, в которой ответы уезжают модели. Она же — единственное место, где
+# решается «это ответ или встречный вопрос»: локально таких детекторов нет и не
+# будет (в переписке люди не ставят вопросительных знаков, а «как получится» в
+# ответ на «сколько времени» — нормальный ответ), а модель в финальном вызове
+# видит и вопрос, и ответ, и всю историю разом.
+SETUP_ANSWERS_FRAME = (
+    "Это ответы человека на твои уточняющие вопросы. Если вместо ответа он задал "
+    "встречный вопрос или написал, что не знает, — ответь ему на это в тексте и, "
+    "если без этих данных программу собирать нельзя, вызови ask_setup_questions "
+    "заново ТОЛЬКО с теми вопросами, что остались открытыми. Если данных хватает — "
+    "не переспрашивай: возьми разумный дефолт и назови его вслух."
+)
+
+# Уходит модели вместо третьего круга уточнений подряд.
+SETUP_ENOUGH_FRAME = (
+    "Уточнения закончились — больше вопросов человеку я не задам. Собирай программу "
+    "на разумных дефолтах и назови их вслух: из чего исходил по дням, времени, "
+    "опыту и оборудованию."
+)
+
+
+def _active_setup(data: dict) -> Optional[dict]:
+    """Живой опросник из FSM — или None, если отвечать сейчас не на что.
+
+    Между концом опросника и ответом тренера в `ai_setup` остаётся один только
+    счётчик кругов (см. _finish_setup): вопросов там уже нет, и перехватывать
+    сообщения пользователя он не должен — иначе следующая реплика уехала бы
+    ответом в опросник, которого нет.
+    """
+    setup = data.get("ai_setup")
+    if not isinstance(setup, dict):
+        return None
+    questions = setup.get("questions") or []
+    if not questions or int(setup.get("idx") or 0) >= len(questions):
+        return None
+    return dict(setup)
+
+
+def _setup_question_html(
+    idx: int, total: int, question: str, has_choices: bool, answer: Optional[str] = None
+) -> str:
+    """Один вопрос отдельным сообщением: где мы в опроснике, сам вопрос и что дальше.
+
+    Номер и «из скольки» — не украшение: человек должен видеть, что это не
+    бесконечный допрос, а три-четыре тапа до программы.
+    """
+    head = f"🤖 <b>ВОПРОС {idx + 1} ИЗ {total}</b>"
+    if answer is not None:
+        return f"{head}\n\n{escape(question)}\n\n{escape(answer)}"
+    hint = SETUP_HINT_WITH_CHOICES if has_choices else SETUP_HINT_TEXT_ONLY
+    return f"{head}\n\n{escape(question)}\n\n<i>{hint}</i>"
+
+
+async def _show_setup_question(target: Message, state: FSMContext) -> None:
+    """Отправить текущий вопрос опросника отдельным сообщением."""
+    data = await state.get_data()
+    setup = _active_setup(data)
+    if setup is None:
+        return
+    idx = int(setup.get("idx") or 0)
+    questions = setup["questions"]
+    question = questions[idx]
+    choices = question.get("choices") or []
+    sent = await target.answer(
+        _setup_question_html(idx, len(questions), question["question"], bool(choices)),
+        parse_mode="HTML",
+        reply_markup=keyboards.ai_setup_question_keyboard(idx, choices),
+    )
+    # id сообщения нужен, чтобы погасить его кнопки, когда на вопрос ответят
+    # (в том числе текстом, а не тапом) — см. _close_setup_question.
+    setup["msg_id"] = getattr(sent, "message_id", None)
+    await state.update_data(ai_setup=setup)
+
+
+async def _close_setup_question(bot, chat_id: int, setup: dict, tail: str) -> None:
+    """Дописать в сообщение с вопросом то, что на него ответили, и снять кнопки.
+
+    Без этого в истории чата остаётся ряд одинаковых живых кнопок под каждым
+    отвеченным вопросом — а они в Telegram живут вечно и приглашают тапнуть
+    ещё раз.
+    """
+    msg_id = setup.get("msg_id")
+    if not msg_id:
+        return
+    idx = int(setup.get("idx") or 0)
+    questions = setup.get("questions") or []
+    if idx >= len(questions):
+        return
+    html = _setup_question_html(
+        idx, len(questions), questions[idx]["question"], has_choices=False, answer=tail
+    )
+    with suppress(TelegramBadRequest, TelegramAPIError):
+        await bot.edit_message_text(
+            chat_id=chat_id, message_id=msg_id, text=html, parse_mode="HTML", reply_markup=None
+        )
+
+
+def _setup_answers_text(setup: dict) -> str:
+    """Одно сообщение модели со всеми ответами разом — и исходной задачей.
+
+    Пропущенные («⏭ Собирай так» на середине) названы прямо: иначе тренер
+    решит, что вопрос просто потерялся, и переспросит его ещё раз.
+    """
+    questions = setup.get("questions") or []
+    answers = setup.get("answers") or []
+    lines = ["Вот ответы:"]
+    skipped = False
+    for idx, question in enumerate(questions):
+        if idx < len(answers):
+            lines.append(f"— {question['question']} — {answers[idx]}")
+        else:
+            skipped = True
+            lines.append(f"— {question['question']} — пропустил, не ответил")
+    goal = setup.get("goal")
+    if goal:
+        lines.append(f"\nИсходная задача: {goal}")
+    if skipped:
+        lines.append(
+            "На пропущенные отвечать не стал — возьми по ним разумные дефолты и "
+            "назови их вслух."
+        )
+    lines.append(SETUP_ANSWERS_FRAME)
+    return "\n".join(lines)
+
+
+async def _deliver_setup(
+    message: Message,
+    state: FSMContext,
+    user_id: int,
+    questions: list[dict],
+    goal: str,
+) -> None:
+    """Разложить собранный моделью опросник в FSM и показать первый вопрос.
+
+    Сюда же стекаются все три исхода хода: опросника нет (круг закрыт), опросник
+    есть (показываем), опросник есть, но круги кончились (уходим в сборку).
+    """
+    data = await state.get_data()
+    stored = data.get("ai_setup")
+    previous: dict = stored if isinstance(stored, dict) else {}
+    rounds = int(previous.get("rounds") or 0)
+    previous_goal = previous.get("goal")
+
+    if not questions:
+        # Тренер ответил без нового опросника — цикл уточнений закрыт, и
+        # счётчик кругов больше ничего не сторожит. Стереть его обязательно:
+        # иначе следующая, уже совсем другая просьба собрать программу
+        # упёрлась бы в потолок с первого же вопроса.
+        if previous:
+            await state.update_data(ai_setup=None)
+        return
+
+    if rounds > SETUP_MAX_ROUNDS:
+        # Мы внутри принудительной сборки (см. ниже) — и тренер опять просит
+        # уточнений. Тихо выбрасываем: ещё один заход по кругу человеку уже
+        # ничего не даст, а текст ответа у него на экране есть.
+        await state.update_data(ai_setup=None)
+        return
+
+    if rounds >= SETUP_MAX_ROUNDS:
+        # Круги кончились. Счётчик уводим ЗА потолок до вызова модели — это и
+        # есть тормоз рекурсии: опросник, который тренер соберёт в ответ на это
+        # сообщение, попадёт в ветку выше и никого не спросит.
+        await state.update_data(ai_setup={"rounds": rounds + 1, "goal": previous_goal})
+        text = SETUP_ENOUGH_FRAME
+        if previous_goal:
+            text = f"{text}\nИсходная задача: {previous_goal}"
+        await _handle_question(message, state, text, history_question=text, user_id=user_id)
+        return
+
+    await state.update_data(
+        ai_setup={
+            "questions": questions,
+            "answers": [],
+            "idx": 0,
+            # Исходная цель переживает круги: на втором заходе history_question
+            # — это уже простыня с ответами первого, и подставлять её целью
+            # значило бы вкладывать её саму в себя.
+            "goal": previous_goal or goal,
+            "rounds": rounds + 1,
+        }
+    )
+    await _show_setup_question(message, state)
+
+
+async def _finish_setup(target: Message, state: FSMContext, user_id: int, setup: dict) -> None:
+    """Опросник закончился — уходим за программой одним обычным вызовом модели."""
+    text = _setup_answers_text(setup)
+    # Гасим опросник ДО вызова модели: тренер думает десятки секунд, и всё это
+    # время человек может дописать ещё реплику — она обязана уехать вопросом, а
+    # не ответом в опросник, которого уже нет. Счётчик кругов переживает: он и
+    # есть потолок (см. SETUP_MAX_ROUNDS), а вопросов в нём не остаётся, так что
+    # перехватывать сообщения он не будет (см. _active_setup).
+    await state.update_data(
+        ai_setup={"rounds": int(setup.get("rounds") or 1), "goal": setup.get("goal")}
+    )
+    # В ai_history и в дневник переписки это уезжает как есть — человеческими
+    # строчками «вопрос — ответ», а не служебным JSON: get_full_chat_history
+    # читают и модель, и мы.
+    await _handle_question(target, state, text, history_question=text, user_id=user_id)
+
+
+async def _record_setup_answer(
+    target: Message, state: FSMContext, user_id: int, setup: dict, answer: str
+) -> None:
+    """Записать ответ на текущий вопрос и шагнуть дальше — или уйти в сборку.
+
+    Модель тут не вызывается вовсе: весь опросник уже лежит в FSM, а квоту и
+    ожидание «печатает…» стоит тратить один раз — на программу.
+    """
+    setup["answers"] = [*(setup.get("answers") or []), answer]
+    setup["idx"] = int(setup.get("idx") or 0) + 1
+    await state.update_data(ai_setup=setup)
+    if setup["idx"] < len(setup["questions"]):
+        await _show_setup_question(target, state)
+        return
+    await _finish_setup(target, state, user_id, setup)
+
+
+@router.callback_query(F.data.startswith("ai:qa:"))
+async def ai_setup_choice(callback: CallbackQuery, state: FSMContext):
+    """Тап по варианту ответа в опроснике перед сборкой программы.
+
+    Индекс вопроса в callback_data сверяется с текущим: кнопки под прошлыми
+    вопросами остаются в чате живыми, и тап по ним не должен записывать ответ
+    не туда (см. keyboards.ai_setup_question_keyboard).
+    """
+    parts = callback.data.split(":")
+    data = await state.get_data()
+    setup = _active_setup(data)
+    if setup is None:
+        await callback.answer(
+            "Этот вопрос уже позади — спрашивай что хочешь словами 👇", show_alert=True
+        )
+        return
+    if len(parts) != 4 or parts[2] != str(setup["idx"]):
+        await callback.answer("Этот вопрос уже позади — отвечай на нижний 👇", show_alert=True)
+        return
+    choices = setup["questions"][setup["idx"]].get("choices") or []
+    choice_index = int(parts[3]) if parts[3].isdigit() else -1
+    if not 0 <= choice_index < len(choices):
+        await callback.answer("Не нашёл такой вариант — напиши ответ словами 👇", show_alert=True)
+        return
+    answer = choices[choice_index]
+
+    user_id = callback.from_user.id
+    last = setup["idx"] + 1 >= len(setup["questions"])
+    # Бронь берём ДО записи ответа и только на последнем вопросе: за ним сразу
+    # идёт настоящий вызов модели, а промежуточные шаги её не трогают вовсе.
+    if last and not _try_claim_busy(user_id):
+        await callback.answer("Секунду, ещё думаю над прошлым вопросом 😅", show_alert=True)
+        return
+    try:
+        with suppress(TelegramBadRequest):
+            await callback.answer()
+        await _close_setup_question(callback.bot, callback.message.chat.id, setup, f"✅ {answer}")
+        await _record_setup_answer(callback.message, state, user_id, setup, answer)
+    finally:
+        if last:
+            _busy.discard(user_id)
+
+
+@router.callback_query(F.data == "ai:qskip")
+async def ai_setup_skip(callback: CallbackQuery, state: FSMContext):
+    """«⏭ Собирай так» — хватит уточнений, собирай на том, что уже есть.
+
+    Индекса вопроса тут нет намеренно: кнопка означает одно и то же на любом
+    шаге — закончить опросник прямо сейчас. Неотвеченные вопросы уедут модели
+    как пропущенные, и она возьмёт по ним дефолты (см. _setup_answers_text).
+    """
+    data = await state.get_data()
+    setup = _active_setup(data)
+    if setup is None:
+        await callback.answer(
+            "Уточнения уже позади — что поправить, пиши словами 👇", show_alert=True
+        )
+        return
+    user_id = callback.from_user.id
+    if not _try_claim_busy(user_id):
+        await callback.answer("Секунду, ещё думаю над прошлым вопросом 😅", show_alert=True)
+        return
+    try:
+        with suppress(TelegramBadRequest):
+            await callback.answer("Понял, собираю")
+        await _close_setup_question(
+            callback.bot, callback.message.chat.id, setup, "⏭ Собирай так"
+        )
+        await _finish_setup(callback.message, state, user_id, setup)
+    finally:
+        _busy.discard(user_id)
+
 
 @router.message(AITrainerFlow.chatting, F.text)
 async def ai_question(message: Message, state: FSMContext):
@@ -1857,6 +2193,26 @@ async def ai_question(message: Message, state: FSMContext):
     if not question:
         return
     user_id = message.from_user.id
+
+    # Опросник — ПЕРВЫМ делом, до брони и до квоты: пока он идёт, любой текст
+    # человека это ответ на текущий вопрос, а не вопрос тренеру. Даже встречное
+    # «а сколько вообще надо?» — гадать об этом локально мы не беремся, оно
+    # уедет модели вместе с самим вопросом, и разберётся с ним финальная сборка
+    # (см. SETUP_ANSWERS_FRAME).
+    setup = _active_setup(await state.get_data())
+    if setup is not None:
+        last = setup["idx"] + 1 >= len(setup["questions"])
+        if last and not _try_claim_busy(user_id):
+            await message.reply("Секунду, ещё думаю над прошлым вопросом 😅")
+            return
+        try:
+            await _close_setup_question(message.bot, message.chat.id, setup, f"✅ {question}")
+            await _record_setup_answer(message, state, user_id, setup, question)
+        finally:
+            if last:
+                _busy.discard(user_id)
+        return
+
     if not _try_claim_busy(user_id):
         await message.reply("Секунду, ещё думаю над прошлым вопросом 😅")
         return

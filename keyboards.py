@@ -270,6 +270,35 @@ def ai_program_preview_keyboard(
     return b.as_markup()
 
 
+def ai_setup_question_keyboard(
+    question_index: int, choices: Sequence[str] = ()
+) -> InlineKeyboardMarkup:
+    """Кнопки под одним вопросом опросника перед сборкой программы.
+
+    Индекс вопроса едет в callback_data каждого варианта не для красоты: кнопки
+    в чате живут вечно, и без него тап по варианту под ПРОШЛЫМ вопросом (человек
+    проскроллил вверх, передумал) записался бы ответом на текущий — молча и не
+    туда. Обработчик сверяет индекс с текущим и на несовпадении не трогает
+    ничего (см. handlers/ai_trainer.ai_setup_choice).
+
+    Каждый вариант своей строкой: ответы вроде «час-полтора» в паре Telegram
+    обрежет, и два варианта станут неотличимы.
+
+    «⏭ Собирай так» стоит всегда, даже когда вариантов нет: отмахнуться от
+    уточнений — законный ответ («да просто дай что-нибудь»), и без этой кнопки
+    единственным выходом из опросника было бы ответить на все вопросы.
+    """
+    b = InlineKeyboardBuilder()
+    for choice_index, choice in enumerate(choices):
+        b.button(
+            text=_shorten_label(choice, AI_MENTION_LABEL_LIMIT),
+            callback_data=f"ai:qa:{question_index}:{choice_index}",
+        )
+    b.button(text="⏭ Собирай так", callback_data="ai:qskip")
+    b.adjust(1)
+    return b.as_markup()
+
+
 def ai_program_saved_keyboard(program_id: int) -> InlineKeyboardMarkup:
     """После сохранения программы — прямая дорога в неё саму и в общий список.
 
