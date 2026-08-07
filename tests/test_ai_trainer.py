@@ -1155,3 +1155,70 @@ async def test_tools_are_sent_when_the_gate_breaks(fresh_db, user_id, monkeypatc
 
     main_call = client.chat.completions.create.await_args_list[-1].kwargs
     assert main_call.get("tools")
+
+
+# ---------- кэш: reasoning_content должен уезжать назад в истории ----------
+
+
+async def test_reasoning_content_is_reported_for_the_final_answer(
+    fresh_db, user_id, monkeypatch
+):
+    """По документации xAI отсутствие reasoning_content в отправленной назад
+    истории — причина промахов кэша номер один у ризонинговых моделей."""
+    gate = _response(content="SEARCH=NO\nDATA=NO")
+    answer = _response(content="ответ")
+    # xAI кладёт поле мимо OpenAI-схемы, поэтому SDK держит его в model_extra.
+    answer.choices[0].message.model_extra = {"reasoning_content": "думал вот так"}
+    client = _fake_client([gate, answer])
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+
+    seen: list[str] = []
+
+    async def on_reasoning(text: str) -> None:
+        seen.append(text)
+
+    await ai_trainer.ask(user_id, "креатин работает?", history=[], on_reasoning=on_reasoning)
+
+    assert seen == ["думал вот так"]
+
+
+async def test_reasoning_from_history_is_sent_back_to_the_model(
+    fresh_db, user_id, monkeypatch
+):
+    """Ключевое: поле должно доехать в messages следующего запроса — иначе
+    префикс не совпадёт с закэшированным и платим по полной за всю шапку."""
+    client = _fake_client([
+        _response(content="SEARCH=NO\nDATA=NO"),
+        _response(content="новый ответ"),
+    ])
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+
+    history = [
+        {"role": "user", "content": "прошлый вопрос"},
+        {"role": "assistant", "content": "прошлый ответ", "reasoning_content": "прошлые думы"},
+    ]
+    await ai_trainer.ask(user_id, "следующий вопрос", history=history)
+
+    sent = client.chat.completions.create.await_args_list[-1].kwargs["messages"]
+    assistant_msgs = [m for m in sent if m.get("role") == "assistant"]
+    assert assistant_msgs, "история не доехала до модели"
+    assert assistant_msgs[0].get("reasoning_content") == "прошлые думы"
+
+
+async def test_no_reasoning_key_when_the_model_returned_none(fresh_db, user_id, monkeypatch):
+    """Пустое поле — тоже изменение сообщения, и префикс оно ломает так же, как
+    отсутствующее. Поэтому ключа быть не должно вовсе."""
+    gate = _response(content="SEARCH=NO\nDATA=NO")
+    answer = _response(content="ответ")
+    answer.choices[0].message.model_extra = {}
+    client = _fake_client([gate, answer])
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+
+    seen: list[str] = []
+
+    async def on_reasoning(text: str) -> None:
+        seen.append(text)
+
+    await ai_trainer.ask(user_id, "вопрос", history=[], on_reasoning=on_reasoning)
+
+    assert seen == []

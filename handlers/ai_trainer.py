@@ -1734,12 +1734,22 @@ async def _handle_question(
         if action not in actions:
             actions.append(action)
 
+    # Размышления финального раунда. Пользователю они не показываются — они
+    # нужны, чтобы уехать назад вместе с ответом в истории: по документации xAI
+    # отсутствие reasoning_content в отправленной истории это причина промахов
+    # кэша номер один у ризонинговых моделей, а промах по нашей шапке в
+    # одиннадцать тысяч токенов стоит вчетверо дороже попадания.
+    reasoning_cell: dict[str, str] = {}
+
+    async def collect_reasoning(reasoning: str) -> None:
+        reasoning_cell["text"] = reasoning
+
     try:
         answer = await ai_trainer.ask(
             user_id, question, history, image_data_url=image_data_url,
             on_status=display.set_status, on_program=collect_program,
             on_action=collect_action, on_chunk=streamer.push,
-            video_context=video_context,
+            video_context=video_context, on_reasoning=collect_reasoning,
         )
     except Exception:
         logger.exception("AI trainer request failed for user %s", user_id)
@@ -1768,11 +1778,19 @@ async def _handle_question(
     quota_html = f"\n\n<i>Осталось вопросов сегодня: {left}</i>" if show_quota else ""
     quota_md = f"\n\n_Осталось вопросов сегодня: {left}_" if show_quota else ""
 
+    # reasoning_content едет в истории рядом с ответом — иначе следующий вопрос
+    # отдаёт Гроку не тот префикс, что был закэширован, и платим по полной за все
+    # одиннадцать тысяч токенов шапки. Ключа нет, когда модель размышлений не
+    # вернула: пустое поле — это тоже изменение сообщения, и оно ломает префикс
+    # так же, как отсутствующее.
+    assistant_entry: dict[str, Any] = {"role": "assistant", "content": answer}
+    if reasoning_cell.get("text"):
+        assistant_entry["reasoning_content"] = reasoning_cell["text"]
     history = (
         history
         + [
             {"role": "user", "content": history_question},
-            {"role": "assistant", "content": answer},
+            assistant_entry,
         ]
     )[-HISTORY_LIMIT:]
     # Черновик один на пользователя: новое предложение затирает старое. Но

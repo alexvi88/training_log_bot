@@ -90,6 +90,23 @@ MAX_ROUTINES_PER_USER = config.MAX_ROUTINES_PER_USER
 _client: Optional[AsyncOpenAI] = None
 
 
+def _reasoning_of(message_or_delta: Any) -> str:
+    """reasoning_content из ответа xAI, если он там есть.
+
+    Поле нестандартное для OpenAI-схемы, поэтому SDK кладёт его в model_extra, а
+    не в атрибут — читаем оба места. Нужно оно не для показа (пользователю
+    размышления не идут), а для КЭША: по документации xAI отсутствие
+    reasoning_content в отправленной назад истории — причина промахов номер один
+    у ризонинговых моделей, а промах по нашей шапке в одиннадцать тысяч токенов
+    стоит вчетверо дороже попадания.
+    """
+    direct = getattr(message_or_delta, "reasoning_content", None)
+    if direct:
+        return direct
+    extra = getattr(message_or_delta, "model_extra", None) or {}
+    return extra.get("reasoning_content") or ""
+
+
 async def _log_llm_cost(user_id: Optional[int], model: str, usage: Any) -> None:
     """Fire-and-forget cost_events row for a chat-completion call (see
     db.get_llm_cost_breakdown / admin_tasks.py's daily report).
@@ -3564,6 +3581,7 @@ async def ask(
     on_action: ActionCallback = None,
     on_chunk: ChunkCallback = None,
     video_context: Optional[str] = None,
+    on_reasoning: Optional[Callable[[str], Awaitable[None]]] = None,
 ) -> str:
     """Один вопрос пользователя → готовый текст ответа.
 
@@ -3630,6 +3648,7 @@ async def ask(
     return await _ask_plain(
         user_id, question, history, image_data_url, search_context, on_status, on_program,
         on_action, on_chunk, video_context, with_tools=gate.data,
+        on_reasoning=on_reasoning,
     )
 
 
@@ -3685,7 +3704,7 @@ async def _completion_round(
         )
         await _log_llm_cost(user_id, config.GROK_MODEL, getattr(response, "usage", None))
         m = response.choices[0].message
-        return (m.content or ""), list(m.tool_calls or [])
+        return (m.content or ""), list(m.tool_calls or []), _reasoning_of(m)
 
     stream = await client.chat.completions.create(
         model=config.GROK_MODEL, max_tokens=2048, messages=messages,
@@ -3695,6 +3714,7 @@ async def _completion_round(
         **tools_kwarg,
     )
     parts: list[str] = []
+    reasoning_parts: list[str] = []
     tool_calls: dict[int, dict[str, Any]] = {}
     usage = None
     last_flush: Optional[float] = None
@@ -3703,6 +3723,9 @@ async def _completion_round(
         if not event.choices:
             continue
         delta = event.choices[0].delta
+        reasoning_delta = _reasoning_of(delta)
+        if reasoning_delta:
+            reasoning_parts.append(reasoning_delta)
         for tc in getattr(delta, "tool_calls", None) or []:
             slot = tool_calls.setdefault(
                 tc.index, {"id": "", "name": "", "arguments": ""}
@@ -3726,7 +3749,11 @@ async def _completion_round(
                 last_flush = now
                 await on_chunk(text)
     await _log_llm_cost(user_id, config.GROK_MODEL, usage)
-    return "".join(parts), [_StreamedToolCall(slot) for slot in tool_calls.values()]
+    return (
+        "".join(parts),
+        [_StreamedToolCall(slot) for slot in tool_calls.values()],
+        "".join(reasoning_parts),
+    )
 
 
 class _StreamedToolCall:
@@ -3750,6 +3777,7 @@ async def _ask_plain(
     on_chunk: ChunkCallback = None,
     video_context: Optional[str] = None,
     with_tools: bool = True,
+    on_reasoning: Optional[Callable[[str], Awaitable[None]]] = None,
 ) -> str:
     client = _get_client()
     messages: list[dict[str, Any]] = [
@@ -3773,10 +3801,14 @@ async def _ask_plain(
         # (общее знание вроде «креатин работает?»), и тогда схемы 27 инструментов
         # не уезжают вовсе: это около 6900 токенов из каждого раунда. Раунд тут
         # заведомо один — вызвать модели нечего, она отвечает текстом.
-        content, tool_calls = await _completion_round(
+        content, tool_calls, reasoning = await _completion_round(
             client, messages, user_id, on_chunk, include_tools=with_tools
         )
         if not tool_calls:
+            # Размышления ФИНАЛЬНОГО раунда — то, что должно уехать назад вместе
+            # с ответом в истории (см. _reasoning_of и on_reasoning).
+            if on_reasoning and reasoning:
+                await on_reasoning(reasoning)
             break
         if on_status:
             variants = TOOL_STATUS_TEXTS.get(tool_calls[0].function.name, _DEFAULT_TOOL_STATUS)
@@ -3817,9 +3849,13 @@ async def _ask_plain(
         # видел провал и живую кнопку программы под ним разом (см. A12).
         # tools здесь физически не передаются: без них отвечать нечем, кроме
         # текста.
-        content, _ = await _completion_round(
+        content, _, reasoning = await _completion_round(
             client, messages, user_id, on_chunk, include_tools=False
         )
+        # Это тоже финальный ответ — значит и его размышления должны уехать в
+        # историю, иначе следующий вопрос промахнётся мимо кэша.
+        if on_reasoning and reasoning:
+            await on_reasoning(reasoning)
 
     text = (content or "").strip()
     return text or "Не получилось сформулировать ответ, попробуй переспросить."
