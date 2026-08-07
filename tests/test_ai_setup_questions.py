@@ -414,3 +414,11 @@ async def test_setup_survives_workout_scaffold_clear(fresh_db, user_id):
     await state_scaffold.clear_state_keep_workout(state)
 
     assert ai_trainer._active_setup(await state.get_data()) is not None
+
+
+def test_finishing_frames_demand_the_tool_call_not_just_a_retelling():
+    """Регрессия: закрывающий опросник фрейм объяснял только, как НЕ переспрашивать,
+    и модель послушно называла дефолты словами, останавливаясь на этом. Человек
+    отвечал на четыре вопроса и не получал ни состава, ни кнопки сохранения."""
+    for frame in (ai_trainer.SETUP_ANSWERS_FRAME, ai_trainer.SETUP_ENOUGH_FRAME):
+        assert "propose_program" in frame
