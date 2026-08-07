@@ -104,6 +104,60 @@ MAX_ROUTINES_PER_USER = config.MAX_ROUTINES_PER_USER
 _client: Optional[AsyncOpenAI] = None
 
 
+def _light_history(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Только видимые реплики: без tool-вызовов, их результатов и системных вставок.
+
+    Полную историю (с tool-сообщениями) храним ради кэша, но дешёвому гейту и шагу
+    поиска она не нужна и стоила бы токенов на каждый вопрос: им хватает того, о
+    чём говорили словами.
+    """
+    return [
+        m for m in history
+        if m.get("role") in ("user", "assistant")
+        and not m.get("tool_calls")
+        and (m.get("content") or "")
+    ]
+
+
+def _trim_wire_history(
+    history: list[dict[str, Any]], max_chars: int
+) -> list[dict[str, Any]]:
+    """Обрезать историю с начала, не сломав структуру запроса.
+
+    Резать где попало нельзя: сообщение role="tool" без своего
+    assistant(tool_calls) выше — невалидный запрос, и API отвергнет его целиком.
+    Поэтому режем ТОЛЬКО по границам, где следующее сообщение — user: там
+    начинается новый ход, и всё, что от него идёт, самодостаточно.
+
+    Любая обрезка ломает префикс и стоит одного промаха кэша, поэтому она редкая:
+    порог держим высоким (config.AI_WIRE_HISTORY_MAX_CHARS).
+    """
+    def size(msgs: list[dict[str, Any]]) -> int:
+        return len(json.dumps(msgs, ensure_ascii=False))
+
+    if size(history) <= max_chars:
+        return history
+    # Границы ходов — индексы user-сообщений, кроме нулевого: срезать до самого
+    # начала бессмысленно, это уже пустая история.
+    starts = [i for i, m in enumerate(history) if m.get("role") == "user" and i > 0]
+    for start in starts:
+        candidate = history[start:]
+        if size(candidate) <= max_chars:
+            logger.info(
+                "AI trainer wire history trimmed: %s сообщений → %s (лимит %s символов)",
+                len(history), len(candidate), max_chars,
+            )
+            return candidate
+    # Даже последний ход не влезает — оставляем его одного: обрезать внутрь хода
+    # нельзя, а отдать пустую историю значит потерять контекст разговора совсем.
+    last = history[starts[-1]:] if starts else history
+    logger.warning(
+        "AI trainer wire history: даже последний ход больше лимита (%s символов), оставляю как есть",
+        size(last),
+    )
+    return last
+
+
 async def _log_server_tool_calls(user_id: Optional[int], response: Any) -> None:
     """Вызовы серверных инструментов xAI — отдельная строка счёта, помимо токенов.
 
@@ -3821,11 +3875,23 @@ async def ask(
     on_chunk: ChunkCallback = None,
     video_context: Optional[str] = None,
     on_reasoning: Optional[Callable[[str], Awaitable[None]]] = None,
+    on_wire: Optional[Callable[[list[dict[str, Any]]], Awaitable[None]]] = None,
 ) -> str:
     """Один вопрос пользователя → готовый текст ответа.
 
-    history — прошлые реплики диалога в виде [{"role": ..., "content": <str>}]
-    (только видимый текст, без tool-сообщений — их таскать между ходами незачем).
+    history — то, что реально уехало модели в прошлый раз, включая её обращения к
+    инструментам и их результаты. Раньше сюда шли только видимые реплики, а
+    tool-сообщения выбрасывались как ненужные — но по документации xAI кэш живёт
+    ровно на НЕИЗМЕННОМ префиксе, и выброшенное сообщение это переписанная
+    история, то есть промах. В логах прода это выглядело так: внутри одного
+    вопроса раунды дописываются и кэш растёт (10752 → 11776 → 14080), а каждый
+    следующий вопрос начинается с 128.
+
+    on_wire — колбэк, которому по завершении хода отдаётся ровно тот список
+    сообщений, что уехал модели (без ведущего системного промпта: он собирается
+    заново каждый раз, потому что содержит дату). Его и надо сохранить как
+    историю для следующего вопроса — тогда следующий запрос ДОПИСЫВАЕТ, а не
+    переписывает.
 
     image_data_url — опционально, фото, которое пользователь прислал вместе с этим
     вопросом (data: URL, base64). Передаётся только в текущий ход; в history фото
@@ -3875,7 +3941,10 @@ async def ask(
     # поэтому вызывается он и при исчерпанной поисковой квоте: инструменты нужны
     # независимо от поиска, и экономить на этом решении нечего — вердикт всё
     # равно стоит доли цента, а лишние 6900 токенов схем в каждом раунде дороже.
-    gate = await _gate_verdict(user_id, question, history)
+    # Гейту и поиску — только видимые реплики: полная история нужна ради кэша
+    # основного вызова, а этим двум tool-сообщения стоили бы токенов ни за что.
+    light = _light_history(history)
+    gate = await _gate_verdict(user_id, question, light)
     if video_context:
         # Разбор ролика решается кадрами, а не сетью: наблюдения уже приехали от
         # модели, которая его смотрела. Гейт же судит по тексту вопроса, и на
@@ -3893,7 +3962,7 @@ async def ask(
     elif not gate.search:
         search_outcome = "skipped: gate says not needed"
     else:
-        search_context = await _web_search_findings(user_id, question, history, on_status)
+        search_context = await _web_search_findings(user_id, question, light, on_status)
         # «Нашёл» и «упал» — разные исходы, и путать их дорого: на неподдерживаемом
         # agent_count поиск падал ValueError ещё в chat.create, а в логе это
         # читалось как «сходил и ничего не нашёл» — функция была выключена месяцами.
@@ -3906,7 +3975,7 @@ async def ask(
     return await _ask_plain(
         user_id, question, history, image_data_url, search_context, on_status, on_program,
         on_action, on_chunk, video_context, with_tools=gate.data,
-        on_reasoning=on_reasoning, on_questions=on_questions,
+        on_reasoning=on_reasoning, on_questions=on_questions, on_wire=on_wire,
     )
 
 
@@ -4037,6 +4106,7 @@ async def _ask_plain(
     with_tools: bool = True,
     on_reasoning: Optional[Callable[[str], Awaitable[None]]] = None,
     on_questions: QuestionsCallback = None,
+    on_wire: Optional[Callable[[list[dict[str, Any]]], Awaitable[None]]] = None,
 ) -> str:
     client = _get_client()
     messages: list[dict[str, Any]] = [
@@ -4117,6 +4187,26 @@ async def _ask_plain(
             await on_reasoning(reasoning)
 
     text = (content or "").strip()
+
+    if on_wire:
+        # Финальный ответ модели дописываем сами: в messages он не попадал, потому
+        # что цикл на нём заканчивается. Без него следующий вопрос отдал бы
+        # историю, где на последний вопрос нет ответа, — то есть снова НЕ тот
+        # префикс, что закэширован.
+        final: dict[str, Any] = {"role": "assistant", "content": text}
+        if reasoning:
+            final["reasoning_content"] = reasoning
+        wire = messages[1:] + [final]  # без системного промпта: в нём дата, он пересобирается
+        # Фото в историю не кладём: это база64 на мегабайты в FSM-файле и повторная
+        # плата за image-токены на каждом следующем вопросе. Подменяем на текст
+        # вопроса — префикс рвётся с этого сообщения, но всё, что до него (шапка на
+        # одиннадцать тысяч токенов и прошлые ходы), продолжает попадать в кэш.
+        if image_data_url:
+            for m in wire:
+                if m.get("role") == "user" and not isinstance(m.get("content"), str):
+                    m["content"] = question
+        await on_wire(_trim_wire_history(wire, config.AI_WIRE_HISTORY_MAX_CHARS))
+
     return text or "Не получилось сформулировать ответ, попробуй переспросить."
 
 
@@ -4198,46 +4288,55 @@ async def _gate_verdict(
     При любой ошибке или неразборчивом ответе возвращаем значения по умолчанию
     (см. GateVerdict): не искать и данные всё-таки дать.
     """
-    try:
-        client = _get_client()
-        response = await client.chat.completions.create(
-            model=config.GROK_MODEL,
-            max_tokens=_SEARCH_GATE_MAX_TOKENS,
-            extra_body={"reasoning_effort": config.GROK_QUICK_REASONING_EFFORT},
-            # Свой слот кэша: у гейта системный промпт втрое короче основного и
-            # общего с ним почти ничего, а под одним conv-id они вытесняли друг
-            # друга — см. _cache_headers, там разобран лог прода.
-            extra_headers=_cache_headers(user_id, scope="gate"),
-            # Схема, а не два слова текстом: на текстовом формате модель нет-нет
-            # да возвращала ПУСТОЙ content (видели дважды в проде), и тогда
-            # вступали дефолты — то есть на «что нового в мире бодибилдинга»
-            # поиск молча не поднимался. Со structured output пустой или
-            # неполный вердикт становится невозможен, а не просто редок.
-            response_format={
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "gate_verdict",
-                    "strict": True,
-                    "schema": {
-                        "type": "object",
-                        "properties": {
-                            "search": {"type": "boolean"},
-                            "data": {"type": "boolean"},
-                        },
-                        "required": ["search", "data"],
-                        "additionalProperties": False,
+    # Гейту нужна ТЕМА вопроса, а не всё задание целиком. Вопрос с ответами на
+    # опросник программы приезжает на две тысячи токенов инструкций — и ровно на
+    # таких входах гейт дважды в проде вернул НОЛЬ выходных токенов, то есть съел
+    # бюджет и не решил ничего. Заодно экономия: гейт идёт на каждый вопрос.
+    if len(question) > config.AI_GATE_QUESTION_MAX_CHARS:
+        question = question[: config.AI_GATE_QUESTION_MAX_CHARS] + " […]"
+
+    # В переменной, чтобы повтор при пустом вердикте был ТОЧНОЙ копией запроса:
+    # разойдись они хоть заголовком — повтор пошёл бы в другой слот кэша.
+    request_kwargs: dict[str, Any] = {
+        "model": config.GROK_MODEL,
+        "max_tokens": _SEARCH_GATE_MAX_TOKENS,
+        "extra_body": {"reasoning_effort": config.GROK_QUICK_REASONING_EFFORT},
+        # Свой слот кэша: у гейта системный промпт втрое короче основного и
+        # общего с ним почти ничего, а под одним conv-id они вытесняли друг
+        # друга — см. _cache_headers, там разобран лог прода.
+        "extra_headers": _cache_headers(user_id, scope="gate"),
+        # Схема, а не два слова текстом: на текстовом формате разбор зависел от
+        # того, не обернёт ли модель ответ в markdown. Пустой content схема,
+        # правда, не лечит — заставить ответить по схеме можно только того, кто
+        # вообще отвечает; на это есть повтор ниже.
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "gate_verdict",
+                "strict": True,
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "search": {"type": "boolean"},
+                        "data": {"type": "boolean"},
                     },
+                    "required": ["search", "data"],
+                    "additionalProperties": False,
                 },
             },
-            messages=[
-                {
-                    "role": "system",
-                    "content": _search_decision_system_prompt(await _user_today(user_id)),
-                },
-                *history,
-                {"role": "user", "content": question},
-            ],
-        )
+        },
+        "messages": [
+            {
+                "role": "system",
+                "content": _search_decision_system_prompt(await _user_today(user_id)),
+            },
+            *history,
+            {"role": "user", "content": question},
+        ],
+    }
+    try:
+        client = _get_client()
+        response = await client.chat.completions.create(**request_kwargs)
     except Exception:
         logger.exception("AI trainer gate step failed, falling back to defaults")
         return GateVerdict(ok=False)
@@ -4246,10 +4345,24 @@ async def _gate_verdict(
     # lowercase true/false. Наследие прежнего формата, где сравнивали с YES/NO.
     verdict = (response.choices[0].message.content or "").strip()
     if not verdict:
-        # Пустой content — почти всегда обрезанный бюджет (см.
-        # _SEARCH_GATE_MAX_TOKENS). Раньше это молча означало «не искать», и
-        # отличить сломанный гейт от честного NO было нельзя ничем.
-        logger.warning("AI trainer gate returned an empty verdict, using defaults")
+        # Ноль выходных токенов при непустых размышлениях: ризонинговая модель
+        # иногда думает и не говорит. Бюджет тут не виноват (сотня размышлений
+        # против потолка в 512), и strict-схема этого не лечит — заставить
+        # ответить по схеме можно только того, кто вообще отвечает.
+        #
+        # Одна повторная попытка: стоит полцента, а без вердикта поиск не
+        # поднимется на вопросе, который его прямо просит («что нового в мире
+        # бодибилдинга»). Дважды подряд молчание — уже дефолты.
+        logger.warning("AI trainer gate returned an empty verdict, retrying once")
+        try:
+            response = await client.chat.completions.create(**request_kwargs)
+        except Exception:
+            logger.exception("AI trainer gate retry failed, falling back to defaults")
+            return GateVerdict(ok=False)
+        await _log_llm_cost(user_id, config.GROK_MODEL, getattr(response, "usage", None))
+        verdict = (response.choices[0].message.content or "").strip()
+    if not verdict:
+        logger.warning("AI trainer gate returned an empty verdict twice, using defaults")
         return GateVerdict(ok=False)
 
     defaults = GateVerdict()

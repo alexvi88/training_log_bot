@@ -1760,6 +1760,16 @@ async def _handle_question(
     async def collect_reasoning(reasoning: str) -> None:
         reasoning_cell["text"] = reasoning
 
+    # Ровно тот список сообщений, что уехал модели — включая её обращения к
+    # инструментам и их результаты. Его и сохраняем как историю: тогда следующий
+    # вопрос ДОПИСЫВАЕТ к неизменному префиксу, а не отдаёт переписанный, и кэш
+    # xAI попадает. Собранная руками пара «вопрос-ответ» этого не даёт: по их
+    # документации любое изменение ранних сообщений — промах.
+    wire_cell: dict[str, list] = {}
+
+    async def collect_wire(messages: list) -> None:
+        wire_cell["messages"] = messages
+
     try:
         answer = await ai_trainer.ask(
             user_id, question, history, image_data_url=image_data_url,
@@ -1767,6 +1777,7 @@ async def _handle_question(
             on_action=collect_action, on_questions=collect_questions,
             on_chunk=streamer.push,
             video_context=video_context, on_reasoning=collect_reasoning,
+            on_wire=collect_wire,
         )
     except Exception:
         logger.exception("AI trainer request failed for user %s", user_id)
@@ -1800,16 +1811,27 @@ async def _handle_question(
     # одиннадцать тысяч токенов шапки. Ключа нет, когда модель размышлений не
     # вернула: пустое поле — это тоже изменение сообщения, и оно ломает префикс
     # так же, как отсутствующее.
-    assistant_entry: dict[str, Any] = {"role": "assistant", "content": answer}
-    if reasoning_cell.get("text"):
-        assistant_entry["reasoning_content"] = reasoning_cell["text"]
-    history = (
-        history
-        + [
-            {"role": "user", "content": history_question},
-            assistant_entry,
-        ]
-    )[-HISTORY_LIMIT:]
+    if wire_cell.get("messages"):
+        # Фактическая история запроса — она уже обрезана по размеру в ai_trainer
+        # (_trim_wire_history) и по границам ходов, чтобы tool-сообщение не
+        # осталось без своего assistant(tool_calls). HISTORY_LIMIT тут не
+        # применяем: он считает реплики, а здесь сообщений на ход бывает с
+        # десяток, и обрезка по их числу рвала бы префикс на каждом ходе.
+        history = wire_cell["messages"]
+    else:
+        # Колбэк не сработал — значит ход упал где-то до конца. Собираем пару
+        # руками, как раньше: кэш на следующем вопросе промахнётся, зато
+        # разговор не потеряется.
+        assistant_entry: dict[str, Any] = {"role": "assistant", "content": answer}
+        if reasoning_cell.get("text"):
+            assistant_entry["reasoning_content"] = reasoning_cell["text"]
+        history = (
+            history
+            + [
+                {"role": "user", "content": history_question},
+                assistant_entry,
+            ]
+        )[-HISTORY_LIMIT:]
     # Черновик один на пользователя: новое предложение затирает старое. Но
     # обычный ход без предложения не должен его стирать (A9) — иначе вопрос
     # вдогонку («сколько отдыхать между подходами?») тушит ещё живую кнопку
