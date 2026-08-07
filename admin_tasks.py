@@ -28,8 +28,12 @@ def _llm_cost(llm_breakdown: dict[str, dict[str, int]]) -> tuple[float, int, int
     total_calls = 0
     total_tokens = 0
     for model, stats in llm_breakdown.items():
-        inp, out = config.LLM_PRICES_USD_PER_1K.get(model, config.DEFAULT_LLM_PRICE_USD_PER_1K)
-        total_cost += stats["prompt_tokens"] / 1000 * inp + stats["completion_tokens"] / 1000 * out
+        # Та же формула, что и в строке лога на каждый вызов (см.
+        # config.call_price_usd): суточная сумма и цена запроса не должны
+        # расходиться из-за двух копий арифметики.
+        total_cost += config.call_price_usd(
+            model, stats["prompt_tokens"], stats["completion_tokens"]
+        )
         total_calls += stats["calls"]
         total_tokens += stats["prompt_tokens"] + stats["completion_tokens"]
     return total_cost, total_calls, total_tokens

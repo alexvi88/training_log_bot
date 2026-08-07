@@ -92,14 +92,26 @@ _client: Optional[AsyncOpenAI] = None
 
 async def _log_llm_cost(user_id: Optional[int], model: str, usage: Any) -> None:
     """Fire-and-forget cost_events row for a chat-completion call (see
-    db.get_llm_cost_breakdown / admin_tasks.py's daily report)."""
+    db.get_llm_cost_breakdown / admin_tasks.py's daily report).
+
+    Цена того же вызова уходит и в лог: ночной отчёт показывает сумму за сутки, а
+    в логе видно каждый запрос отдельно — можно смотреть расход сразу, пока
+    помнишь, что именно спрашивали.
+    """
+    prompt_tokens = usage.prompt_tokens if usage else 0
+    completion_tokens = usage.completion_tokens if usage else 0
+    logger.info(
+        "LLM call %s for user %s: %s+%s tokens, ~$%.4f",
+        model, user_id, prompt_tokens, completion_tokens,
+        config.call_price_usd(model, prompt_tokens, completion_tokens),
+    )
     try:
         await db.log_cost_event(
             user_id,
             "llm_call",
             model=model,
-            prompt_tokens=usage.prompt_tokens if usage else 0,
-            completion_tokens=usage.completion_tokens if usage else 0,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
         )
     except Exception:
         logger.exception("failed to log llm cost event")
@@ -146,6 +158,12 @@ async def transcribe_voice(file_obj: Any, user_id: Optional[int] = None) -> str:
     response = await client.audio.transcriptions.create(
         model=config.OPENAI_TRANSCRIBE_MODEL,
         file=file_obj,
+    )
+    # У аудио API не возвращает токенов, поэтому и в отчёте, и здесь цена берётся
+    # плоской ставкой за вызов (config.TRANSCRIPTION_PRICE_USD_PER_CALL).
+    logger.info(
+        "transcription %s for user %s: ~$%.4f",
+        config.OPENAI_TRANSCRIBE_MODEL, user_id, config.TRANSCRIPTION_PRICE_USD_PER_CALL,
     )
     try:
         await db.log_cost_event(user_id, "transcription", model=config.OPENAI_TRANSCRIBE_MODEL)
@@ -3505,6 +3523,7 @@ async def ask(
     on_program: ProgramCallback = None,
     on_action: ActionCallback = None,
     on_chunk: ChunkCallback = None,
+    video_context: Optional[str] = None,
 ) -> str:
     """Один вопрос пользователя → готовый текст ответа.
 
@@ -3514,6 +3533,12 @@ async def ask(
     image_data_url — опционально, фото, которое пользователь прислал вместе с этим
     вопросом (data: URL, base64). Передаётся только в текущий ход; в history фото
     не попадают — модель не сможет пересмотреть их позже, только вспомнить по тексту.
+
+    video_context — опционально, наблюдения по присланному видео (см.
+    video_analysis.to_context_block). Приезжает контекстом ровно как результаты
+    веб-поиска: смотрит кадры отдельная модель, а говорит про них тренер —
+    голос у продукта один. Само видео сюда не попадает и в history тоже, только
+    текст наблюдений.
 
     on_status — опциональный колбэк, которому по ходу дела шлём текст того, что
     реально сейчас происходит (веб-поиск, конкретный tool-call), чтобы вызывающая
@@ -3558,7 +3583,7 @@ async def ask(
     )
     return await _ask_plain(
         user_id, question, history, image_data_url, search_context, on_status, on_program,
-        on_action, on_chunk,
+        on_action, on_chunk, video_context,
     )
 
 
@@ -3677,12 +3702,15 @@ async def _ask_plain(
     on_program: ProgramCallback = None,
     on_action: ActionCallback = None,
     on_chunk: ChunkCallback = None,
+    video_context: Optional[str] = None,
 ) -> str:
     client = _get_client()
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": _system_prompt(await _user_today(user_id))},
         *history,
     ]
+    if video_context:
+        messages.append({"role": "system", "content": video_context})
     if search_context:
         messages.append(
             {

@@ -184,6 +184,59 @@ AI_QUESTION_DAILY_LIMIT = int(os.getenv("AI_QUESTION_DAILY_LIMIT", "50"))
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_TRANSCRIBE_MODEL = os.getenv("OPENAI_TRANSCRIBE_MODEL", "gpt-4o-mini-transcribe")
 
+
+# --- Разбор техники по видео (Novita, Qwen3-VL — см. video_analysis.py) ------
+#
+# Grok видео на вход не берёт: в его chat-API есть text, image_url и общий
+# файловый аттач, а отдельного видео-типа нет — «Video» в консоли xAI это
+# grok-imagine, генерация. Поэтому кадры смотрит Qwen3-VL, а говорит по-прежнему
+# Grok (ai_trainer.ask, параметр video_context) — один персонаж на весь продукт.
+#
+# Novita OpenAI-совместима, поэтому третьего SDK не завелось: тот же пакет
+# openai, только другой base_url. Ключ отдельный от XAI_API_KEY и OPENAI_API_KEY.
+# Без ключа раздел просто не показывается, как и голосовой ввод без OPENAI_API_KEY.
+NOVITA_API_KEY = os.getenv("NOVITA_API_KEY", "")
+# С /v1 на конце — именно этот путь в curl-примере Novita
+# (api.novita.ai/openai/v1/chat/completions), а SDK дописывает к base_url только
+# /chat/completions. Без /v1 запрос ушёл бы мимо эндпоинта.
+NOVITA_BASE_URL = os.getenv("NOVITA_BASE_URL", "https://api.novita.ai/openai/v1")
+NOVITA_VIDEO_MODEL = os.getenv("NOVITA_VIDEO_MODEL", "qwen/qwen3-vl-235b-a22b-instruct")
+
+# У Novita в примерах стоит temperature=1 — для «опиши, что видно» это слишком
+# свободно: работа тут репортёрская, а не сочинительская, и лишняя свобода идёт
+# ровно в выдуманные наблюдения (см. фильтры в video_analysis._sanitize).
+VIDEO_ANALYSIS_TEMPERATURE = float(os.getenv("VIDEO_ANALYSIS_TEMPERATURE", "0.2"))
+
+# Сколько разборов видео в день на человека. Дороже обычного вопроса не сильно,
+# но заливать ролики можно быстрее, чем печатать вопросы, — и каждый ролик ещё и
+# качается из Telegram. Считается по календарному дню пользователя, как и
+# остальные квоты (db._quota_day).
+AI_VIDEO_DAILY_LIMIT = int(os.getenv("AI_VIDEO_DAILY_LIMIT", "10"))
+
+# Двадцать секунд — это подход целиком с запасом, а дальше растёт только цена:
+# токены у видео идут пропорционально длине. Кружок (video_note) до минуты
+# обрежется тем же лимитом.
+MAX_VIDEO_SECONDS = int(os.getenv("MAX_VIDEO_SECONDS", "20"))
+
+# Потолок Bot API на скачивание файла ботом — 20 МБ, и обойти его можно только
+# своим Bot API сервером. Двадцать секунд с телефона это 3–5 МБ, так что лимит
+# по длине упирается раньше; этот стоит вторым рубежом от 4K-роликов.
+MAX_VIDEO_BYTES = int(os.getenv("MAX_VIDEO_BYTES", str(20 * 1024 * 1024)))
+
+# Модель отдаёт структуру для другой модели, а не простыню для чтения, поэтому
+# потолок низкий. В живом прогоне «оцени технику» без структуры выходило ~1500
+# токенов и ехало сорок секунд — тут хватает вдвое меньшего.
+VIDEO_ANALYSIS_MAX_TOKENS = int(os.getenv("VIDEO_ANALYSIS_MAX_TOKENS", "1200"))
+
+# Своё время: разбор видео идёт до основного ответа тренера, и человек всё это
+# ждёт. Дольше двух минут ждать в зале никто не станет.
+VIDEO_ANALYSIS_TIMEOUT_SECONDS = float(os.getenv("VIDEO_ANALYSIS_TIMEOUT_SECONDS", "120"))
+
+
+def video_analysis_available() -> bool:
+    """Показывать ли разбор видео и принимать ли ролики в чате тренера."""
+    return bool(NOVITA_API_KEY)
+
 # --- LLM cost accounting for the daily admin report (see db.cost_events / ---
 # admin_tasks.py). ai_trainer.py logs a cost_events row per real chat-completion
 # call (model + prompt/completion tokens) and per voice transcription; the
@@ -202,6 +255,10 @@ LLM_PRICES_USD_PER_1K: dict[str, tuple[float, float]] = {
     "grok-4-1-fast": (0.0002, 0.0005),
     "grok-4.20-multi-agent": (0.00125, 0.0025),
     "grok-4.5-latest": (0.002, 0.006),
+    # Novita, разбор видео (video_analysis.py). $0.3/$1.5 за 1M по прайсу модели
+    # на novita.ai — здесь в $/1K, как и остальные строки таблицы. Видео на входе
+    # тарифицируется теми же входными токенами, отдельной ставки за секунду нет.
+    "qwen/qwen3-vl-235b-a22b-instruct": (0.0003, 0.0015),
 }
 try:
     for _model, _price in json.loads(os.getenv("LLM_PRICES_USD_PER_1K_JSON", "{}")).items():
@@ -209,6 +266,21 @@ try:
 except (TypeError, ValueError, IndexError, json.JSONDecodeError):
     pass
 DEFAULT_LLM_PRICE_USD_PER_1K: tuple[float, float] = (0.0002, 0.0005)
+
+
+def call_price_usd(model: str, prompt_tokens: int, completion_tokens: int) -> float:
+    """Цена одного вызова в долларах по таблице выше.
+
+    Одна формула на два потребителя: дневной отчёт (admin_tasks._llm_cost) и
+    строка в логе на каждый вызов (ai_trainer._log_llm_cost). Держать её в двух
+    местах — верный способ получить два разных ответа на один вопрос.
+
+    Лог с ценой нужен, чтобы смотреть расход сразу после запроса, а не ждать
+    ночного отчёта: цена одного разбора видео или тяжёлого вопроса видна в
+    момент, когда её ещё можно связать с тем, что происходило.
+    """
+    inp, out = LLM_PRICES_USD_PER_1K.get(model, DEFAULT_LLM_PRICE_USD_PER_1K)
+    return prompt_tokens / 1000 * inp + completion_tokens / 1000 * out
 
 # Flat per-call estimate for voice transcription (OPENAI_TRANSCRIBE_MODEL) — the
 # API doesn't return token counts for audio, so this stands in for a real

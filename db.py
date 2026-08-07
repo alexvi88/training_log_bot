@@ -200,6 +200,13 @@ CREATE TABLE IF NOT EXISTS ai_question_usage (
     PRIMARY KEY (telegram_id, date)
 );
 
+CREATE TABLE IF NOT EXISTS ai_video_usage (
+    telegram_id INTEGER NOT NULL,
+    date TEXT NOT NULL,
+    count INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (telegram_id, date)
+);
+
 CREATE TABLE IF NOT EXISTS ai_chat_messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     telegram_id INTEGER NOT NULL,
@@ -5100,6 +5107,26 @@ async def increment_ai_question_count(telegram_id: int) -> None:
     async with _write_lock:
         await conn().execute(
             "INSERT INTO ai_question_usage (telegram_id, date, count) VALUES (?, ?, 1) "
+            "ON CONFLICT (telegram_id, date) DO UPDATE SET count = count + 1",
+            (telegram_id, today),
+        )
+        await conn().commit()
+
+
+async def get_ai_video_count_today(telegram_id: int) -> int:
+    cur = await conn().execute(
+        "SELECT count FROM ai_video_usage WHERE telegram_id = ? AND date = ?",
+        (telegram_id, await _quota_day(telegram_id)),
+    )
+    row = await cur.fetchone()
+    return row["count"] if row else 0
+
+
+async def increment_ai_video_count(telegram_id: int) -> None:
+    today = await _quota_day(telegram_id)
+    async with _write_lock:
+        await conn().execute(
+            "INSERT INTO ai_video_usage (telegram_id, date, count) VALUES (?, ?, 1) "
             "ON CONFLICT (telegram_id, date) DO UPDATE SET count = count + 1",
             (telegram_id, today),
         )
