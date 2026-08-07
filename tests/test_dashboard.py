@@ -124,7 +124,7 @@ def test_build_workout_card_text():
     assert any("Тяга [спина]" in line for line in body)
     assert note == "Спал хорошо"
     assert footer.startswith("2 упражнения")
-    assert "5 сетов" in footer
+    assert "5 подходов" in footer
 
 
 def test_render_workout_card_returns_png():

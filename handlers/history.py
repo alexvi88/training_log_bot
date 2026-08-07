@@ -79,10 +79,16 @@ async def hist_search(message: Message, state: FSMContext):
         names, set_count = contents.get(w["id"], ([], 0))
         items.append({"id": w["id"], "label": formatting.format_date_ru(started)})
         entries.append((started, names, set_count))
+    # search_workouts_by_exercise режет выдачу LIMIT 20 — len(entries) врёт
+    # про общее число совпадений, если их больше. Настоящий счёт берём
+    # отдельным запросом без лимита и честно показываем «показаны N из M»,
+    # когда список обрезан.
+    total = await db.count_workouts_by_exercise(message.from_user.id, query)
+    count_label = str(total) if total <= len(entries) else f"{len(entries)} из {total}"
     kb = keyboards.history_list_keyboard(items, page=0, has_next=False)
     text = formatting.build_history_list(
         entries,
-        header=f"🔎 <b>Тренировки с «{escape(query)}»: {len(entries)}</b>",
+        header=f"🔎 <b>Тренировки с «{escape(query)}»: {count_label}</b>",
         footer="",
         empty=f"🔎 Ничего не нашёл по «{escape(query)}».",
     )
@@ -399,7 +405,8 @@ async def _delete_confirm_text(workout) -> str:
 
     lines = [f"Удалить тренировку\n<b>{escape(header)}</b>"]
     if summary:
-        set_word = formatting.plural_ru(set_count, ("сет", "сета", "сетов"))
+        # TONE_OF_VOICE.md: «подход», не «сет» — запрещённое слово словаря.
+        set_word = formatting.plural_ru(set_count, ("подход", "подхода", "подходов"))
         lines.append(f"<i>{escape(summary)} — {set_count} {set_word}</i>")
     lines.append("\nЭто действие нельзя отменить.")
     return "\n".join(lines)
@@ -607,9 +614,16 @@ async def _render_progress_view(ex_id: int, user, limit: int, origin: str = "all
     else:
         points: list[tuple[dt.datetime, float]] = []
         if sessions:
-            is_bw = sessions[-1].is_bodyweight_mode
+            # Каждая точка берёт метрику по режиму СВОЕЙ сессии, а не режиму
+            # последней тренировки в истории — упражнение, сменившее режим
+            # (например, подтягивания с весом → своим весом), раньше теряло
+            # реальный e1RM тяжёлых сессий: все точки красились в «повторы»,
+            # потому что последняя тренировка была без веса.
             points = [
-                (dt.datetime.fromisoformat(s.started_at), float(s.max_reps_in_set if is_bw else s.top_e1rm))
+                (
+                    dt.datetime.fromisoformat(s.started_at),
+                    float(s.max_reps_in_set if s.is_bodyweight_mode else s.top_e1rm),
+                )
                 for s in sessions
             ]
         comparison = analytics.compare_to_previous_session(sessions)
@@ -623,7 +637,13 @@ async def _render_progress_view(ex_id: int, user, limit: int, origin: str = "all
 
         png = None
         if sessions:
-            metric = "повторы" if sessions[-1].is_bodyweight_mode else "e1RM"
+            windowed = sessions[-limit:]
+            have_weighted = any(not s.is_bodyweight_mode for s in windowed)
+            have_bw = any(s.is_bodyweight_mode for s in windowed)
+            # Смешанная история в выбранном окне — подписываем ось честно
+            # обоими именами вместо того, чтобы называть повторы «e1RM» или
+            # наоборот.
+            metric = "e1RM / повторы" if have_weighted and have_bw else ("повторы" if have_bw else "e1RM")
             png = await asyncio.to_thread(
                 charts.render_metric_over_sessions,
                 points[-limit:],

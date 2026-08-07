@@ -344,8 +344,9 @@ async def editw_remove_exercise_confirm(callback: CallbackQuery, state: FSMConte
         name = block_exs[0]["display_name"] if block_exs else "упражнение"
     count = sum(1 for s in await db.list_sets_for_block(block_id) if s["exercise_id"] == ex_id)
     # Творительный падеж — фраза ниже ставит слово после «вместе с» («с 1
-    # сетом», «с 2 сетами»), а не «N сетов сделано», где верны формы выше.
-    word = formatting.plural_ru(count, ("сетом", "сетами", "сетами"))
+    # подходом», «с 2 подходами»), а не «N подходов сделано», где верны
+    # именительные формы. «Сет» запрещён словарём TONE_OF_VOICE — «подход».
+    word = formatting.plural_ru(count, ("подходом", "подходами", "подходами"))
     kb = keyboards.yes_no_keyboard(
         yes_cb=f"editw:rmex:{block_id}",
         no_cb="editw:back",

@@ -2384,6 +2384,25 @@ async def search_workouts_by_exercise(user_id: int, query: str, limit: int = 20)
     return await cur.fetchall()
 
 
+async def count_workouts_by_exercise(user_id: int, query: str) -> int:
+    """Total finished workouts matching `query`, ignoring the LIMIT in
+    `search_workouts_by_exercise` — the history search header needs the real
+    total ("N нашлось"), not "сколько влезло под LIMIT 20".
+    """
+    match, match_params = _stem_filter("e.display_name", query)
+    cur = await conn().execute(
+        "SELECT COUNT(DISTINCT w.id) FROM workouts w "
+        "JOIN workout_blocks b ON b.workout_id = w.id "
+        "JOIN block_exercises be ON be.block_id = b.id "
+        "JOIN exercises e ON e.id = be.exercise_id "
+        "WHERE w.user_id = ? AND w.status = 'finished' "
+        f"  AND {match}",
+        (user_id, *match_params),
+    )
+    (count,) = await cur.fetchone()
+    return count
+
+
 async def count_workouts(user_id: int, status: str = "finished") -> int:
     cur = await conn().execute(
         "SELECT COUNT(*) FROM workouts WHERE user_id = ? AND status = ?", (user_id, status)
