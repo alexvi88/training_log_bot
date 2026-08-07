@@ -1474,7 +1474,11 @@ def build_workout_card(
         tonnage += block.tonnage
 
     ex_word = plural_ru(exercise_count, ("упражнение", "упражнения", "упражнений"))
-    set_word = plural_ru(set_count, ("сет", "сета", "сетов"))
+    # TONE_OF_VOICE.md запрещает «сет» в прозе («суперсет» — ок) — словарь
+    # хочет «подход». Эта строка уходит и в текстовую карточку, и в
+    # PNG-картинку шеринга (charts.render_workout_card), так что видит её
+    # каждый пользователь на каждой законченной тренировке.
+    set_word = plural_ru(set_count, ("подход", "подхода", "подходов"))
     footer = (
         f"{exercise_count} {ex_word} · {set_count} {set_word} · "
         f"{format_weight(tonnage)}{u}"
@@ -2007,11 +2011,22 @@ def format_progress_screen(
             arrow = "↑" if delta > 0 else ("↓" if delta < 0 else "→")
             lines.append(f"e1RM: {arrow}{delta:+.1f}{u} {since}")
 
-    if is_bw:
-        best_reps = max(records.max_reps_at_weight.values()) if records.max_reps_at_weight else 0
-        lines.append(f"Рекорд повторов в сете: {best_reps}")
-    else:
+    # compute_personal_records honestly tracks both metrics independently of
+    # session mode (max_e1rm from weighted sets, max_reps_at_weight from every
+    # set including bodyweight ones) — but this screen used to pick only one
+    # of the two records to print, gated on sessions[-1] alone. An exercise
+    # that switched modes (e.g. weighted pull-ups, then bodyweight ones) lost
+    # whichever record belonged to the mode the *last* session happened not
+    # to be in — including a genuine, higher e1RM record vanishing from the
+    # screen entirely. Show each record whose mode actually occurs in the
+    # history, not just the last session's mode.
+    have_weighted = any(not s.is_bodyweight_mode for s in sessions if s.sets)
+    have_bw = any(s.is_bodyweight_mode for s in sessions if s.sets)
+    if have_weighted:
         lines.append(f"Рекорд: {format_set(records.best_e1rm_weight, records.best_e1rm_reps)} · e1RM {records.max_e1rm:.1f}{u}")
+    if have_bw:
+        best_reps = max(records.max_reps_at_weight.values()) if records.max_reps_at_weight else 0
+        lines.append(f"Рекорд повторов в подходе: {best_reps}")
 
     gold_lines = build_gold_book_lines(golds, unit=unit, is_bodyweight=is_bw)
     if gold_lines:
@@ -2020,13 +2035,19 @@ def format_progress_screen(
 
     header = "\n".join(lines)
     notes = session_notes or {}
+    # Каждая сессия подписывается своим собственным режимом (повторы или
+    # e1RM), а не режимом последней тренировки в истории — иначе тяжёлая
+    # тренировка с весом подписывалась бы «всего повторов», если человек
+    # позже перешёл на упражнение своим весом (и наоборот).
     blocks = [
-        _progress_session_block(s, is_bw, notes.get(s.workout_id)) for s in reversed(candidates)
+        _progress_session_block(s, s.is_bodyweight_mode, notes.get(s.workout_id))
+        for s in reversed(candidates)
     ]  # newest first
 
     # A bodyweight exercise's screen is measured in reps and never prints an
-    # e1RM, so there's nothing for the footnote to explain there.
-    footer = None if is_bw else E1RM_HINT
+    # e1RM, so there's nothing for the footnote to explain there — but if the
+    # history also has weighted sessions, the hint is still relevant.
+    footer = E1RM_HINT if have_weighted else None
 
     sep = "\n\n"
 

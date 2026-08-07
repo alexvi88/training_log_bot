@@ -936,3 +936,25 @@ async def test_long_meal_folds_extra_items_instead_of_dropping_them(monkeypatch,
     # Итог по-прежнему равен сумме строк, но теперь строки покрывают весь обед.
     assert result["calories"] == 1000
     assert result["protein"] == 100
+
+
+# ---------- находка 33: КБЖУ, которых не бывает ----------
+
+
+def test_negative_macros_from_the_model_are_dropped():
+    """Минус в ответе модели давал карточку «Итого: -165 ккал · Б-10 · Ж-5 ·
+    У-20», такая же строка ложилась в дневник и утягивала итог дня в минус."""
+    assert ai_trainer._as_macro(-400, ai_trainer.MAX_FOOD_KCAL) is None
+    assert ai_trainer._as_macro("-10 г", ai_trainer.MAX_FOOD_GRAMS) is None
+
+
+def test_absurdly_large_macros_are_dropped():
+    assert ai_trainer._as_macro(999999, ai_trainer.MAX_FOOD_KCAL) is None
+    assert ai_trainer._as_macro(50000, ai_trainer.MAX_FOOD_GRAMS) is None
+
+
+def test_plausible_macros_pass_through_untouched():
+    assert ai_trainer._as_macro("420 ккал", ai_trainer.MAX_FOOD_KCAL) == 420.0
+    assert ai_trainer._as_macro("~15 г", ai_trainer.MAX_FOOD_GRAMS) == 15.0
+    assert ai_trainer._as_macro(0, ai_trainer.MAX_FOOD_KCAL) == 0.0
+    assert ai_trainer._as_macro(None, ai_trainer.MAX_FOOD_KCAL) is None

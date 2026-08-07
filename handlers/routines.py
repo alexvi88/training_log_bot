@@ -1427,7 +1427,7 @@ async def _rtadd_ask_target(callback: CallbackQuery, state: FSMContext, exercise
     await state.set_state(RoutineFlow.adding_exercise_target)
     await ui.safe_edit(
         callback,
-        "Схема сетов/повторов для этого упражнения? Например «3x8-12». "
+        "Схема подходов/повторов для этого упражнения? Например «3x8-12». "
         "Или нажми «Пропустить».",
         reply_markup=keyboards.routine_exercise_target_keyboard("rtadd:notarget"),
     )

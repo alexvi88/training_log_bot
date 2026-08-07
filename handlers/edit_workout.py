@@ -82,7 +82,7 @@ async def _exercise_screen_payload(
     ]
     text = f"✏️ <b>{escape(name)}</b>"
     if items:
-        text += "\nНажми на сет, чтобы изменить или удалить.\n<i>Или напиши новый подход: «100 8».</i>"
+        text += "\nНажми на подход, чтобы изменить или удалить.\n<i>Или напиши новый подход: «100 8».</i>"
     else:
         text += "\n<i>Подходов нет. Напиши подход, например «100 8».</i>"
     return text, keyboards.edit_exercise_keyboard(block_id, exercise_id, items)
@@ -165,7 +165,7 @@ async def editw_to_top(callback: CallbackQuery, state: FSMContext):
 async def editw_pick_set(callback: CallbackQuery, state: FSMContext):
     set_id = int(callback.data.split(":")[2])
     if await db.get_set_owner(set_id) != callback.from_user.id:
-        await callback.answer("Сет не найден", show_alert=True)
+        await callback.answer("Подход не найден", show_alert=True)
         return
     row = await db.get_set(set_id)
     ex = await db.get_exercise(row["exercise_id"])
@@ -195,7 +195,7 @@ async def editw_back(callback: CallbackQuery, state: FSMContext):
 async def editw_delset(callback: CallbackQuery, state: FSMContext):
     set_id = int(callback.data.split(":")[2])
     if await db.get_set_owner(set_id) != callback.from_user.id:
-        await callback.answer("Сет не найден", show_alert=True)
+        await callback.answer("Подход не найден", show_alert=True)
         return
     workout_id = await _require_edit_workout_id(callback, state)
     if workout_id is None:
@@ -207,7 +207,7 @@ async def editw_delset(callback: CallbackQuery, state: FSMContext):
     # than getting bounced up to the list. The block still gets reaped once
     # they leave (editw_to_top / editw_done), same as before.
     await _on_workout_edited(workout_id, keep_block_id=data.get("edit_block_id"))
-    await callback.answer("Сет удалён")
+    await callback.answer("Подход удалён")
     await _back_to_current_screen(callback, state, workout_id)
 
 
@@ -215,7 +215,7 @@ async def editw_delset(callback: CallbackQuery, state: FSMContext):
 async def editw_editset_prompt(callback: CallbackQuery, state: FSMContext):
     set_id = int(callback.data.split(":")[2])
     if await db.get_set_owner(set_id) != callback.from_user.id:
-        await callback.answer("Сет не найден", show_alert=True)
+        await callback.answer("Подход не найден", show_alert=True)
         return
     await state.update_data(edit_set_id=set_id)
     await state.set_state(EditWorkoutFlow.editing_set)
@@ -258,7 +258,7 @@ async def editw_addset_prompt(callback: CallbackQuery, state: FSMContext):
     ex = await db.get_exercise(int(ex_id_str))
     await ui.safe_edit(
         callback,
-        f"Новый сет для «{ex['display_name']}» — напиши вес и повторы (например «100 8», можно «100x8x3»):",
+        f"Новый подход для «{ex['display_name']}» — напиши вес и повторы (например «100 8», можно «100x8x3»):",
         reply_markup=keyboards.cancel_keyboard("editw:back"),
     )
     await callback.answer()
@@ -344,8 +344,9 @@ async def editw_remove_exercise_confirm(callback: CallbackQuery, state: FSMConte
         name = block_exs[0]["display_name"] if block_exs else "упражнение"
     count = sum(1 for s in await db.list_sets_for_block(block_id) if s["exercise_id"] == ex_id)
     # Творительный падеж — фраза ниже ставит слово после «вместе с» («с 1
-    # сетом», «с 2 сетами»), а не «N сетов сделано», где верны формы выше.
-    word = formatting.plural_ru(count, ("сетом", "сетами", "сетами"))
+    # подходом», «с 2 подходами»), а не «N подходов сделано», где верны
+    # именительные формы. «Сет» запрещён словарём TONE_OF_VOICE — «подход».
+    word = formatting.plural_ru(count, ("подходом", "подходами", "подходами"))
     kb = keyboards.yes_no_keyboard(
         yes_cb=f"editw:rmex:{block_id}",
         no_cb="editw:back",
@@ -373,7 +374,11 @@ async def editw_remove_exercise(callback: CallbackQuery, state: FSMContext):
     if workout_id is None:
         return
     await db.delete_block_and_sets(block_id)
-    await db.set_workout_ai_comment(workout_id, None)
+    # Через общий хелпер, а не «сбросить комментарий и всё»: убрать упражнение
+    # целиком — то же самое для данных, что удалить его подходы по одному, и
+    # значки должны сниматься так же. Раньше «Клуб 140» за единственный сет на
+    # 150 кг оставался в профиле навсегда, хотя самого сета в истории уже нет.
+    await _on_workout_edited(workout_id)
     await callback.answer("Упражнение убрано из тренировки")
     await state.update_data(edit_block_id=None, edit_exercise_id=None)
     await show_edit_screen(callback, state, workout_id)
@@ -472,7 +477,7 @@ async def _editwex_finish(event, state: FSMContext, ex_id: int) -> None:
     await state.set_state(EditWorkoutFlow.adding_set)
     ex = await db.get_exercise(ex_id)
     text = (
-        f"«{ex['display_name']}» — напиши вес и повторы для первого сета "
+        f"«{ex['display_name']}» — напиши вес и повторы для первого подхода "
         "(например «100 8», можно «100x8x3»):"
     )
     kb = keyboards.cancel_keyboard("editw:back")

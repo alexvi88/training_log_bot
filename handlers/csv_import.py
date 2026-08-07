@@ -479,8 +479,18 @@ async def import_save(callback: CallbackQuery, state: FSMContext):
         )
         return
 
+    # Дата тренировки в файле — календарная, местная для пользователя, а
+    # started_at хранится в UTC и местный день восстанавливается прибавлением
+    # tz_offset (db._local_day). «Безопасный полдень» без поправки на офсет
+    # ловит верхнюю границу пикера часовых поясов (UTC+12,
+    # keyboards.py:1183): 12:00 + 12 часов перекатывается на полночь
+    # следующих суток. Сдвигаем полдень назад на величину офсета — тогда
+    # 12:00 + tz_offset - tz_offset снова даёт исходную дату при любом
+    # значении из диапазона пикера (-1…+12).
+    tz_offset = await db.user_tz_offset(user_id)
     for w in to_import:
-        started_at = f"{w['date']}T12:00:00"
+        local_noon = dt.datetime.fromisoformat(f"{w['date']}T12:00:00")
+        started_at = (local_noon - dt.timedelta(hours=tz_offset)).isoformat()
         workout_id = await db.create_finished_workout(user_id, started_at, started_at, source="import")
         for entry in w["entries"]:
             ex_id = resolved[entry["name"]]

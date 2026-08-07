@@ -269,14 +269,16 @@ async def test_removing_an_exercise_asks_first_and_says_how_much_goes(fresh_db, 
     assert len(await db.list_sets_for_block(block_id)) == 3
     sent = callback.message.answer.await_args
     text = sent.args[0] if sent.args else sent.kwargs["text"]
-    # Творительный падеж после «вместе с»: «3 сетами», а не именительное
-    # «3 сета» (находка 24 — plural_ru звали с формами не того падежа).
-    assert "Становая" in text and "вместе с 3 сетами" in text
+    # Творительный падеж после «вместе с»: «3 подходами», а не именительное
+    # «3 подхода» (находка 24 — plural_ru звали с формами не того падежа).
+    # Находка 31: слово «сет» само по себе запрещено словарём TONE_OF_VOICE —
+    # корень заменён на «подход» целиком, а не только падеж.
+    assert "Становая" in text and "вместе с 3 подходами" in text
 
 
 async def test_removing_an_exercise_uses_instrumental_case_for_one_set(fresh_db, user_id):
     """Regression for находка 24: with a single set the phrase must read
-    "с 1 сетом", not the nominative "с 1 сет" that plural_ru(1, ("сет", ...))
+    "с 1 подходом", not the nominative "с 1 подход" that plural_ru(1, ("подход", ...))
     used to produce when the tuple was borrowed from a different context."""
     db = fresh_db
     workout_id, block_id, ex_id = await _seed_workout(db, user_id, n_sets=1)
@@ -288,4 +290,4 @@ async def test_removing_an_exercise_uses_instrumental_case_for_one_set(fresh_db,
 
     sent = callback.message.answer.await_args
     text = sent.args[0] if sent.args else sent.kwargs["text"]
-    assert "вместе с 1 сетом" in text
+    assert "вместе с 1 подходом" in text
