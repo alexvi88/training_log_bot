@@ -262,7 +262,7 @@ async def test_streamed_round_returns_the_whole_text(monkeypatch):
     monkeypatch.setattr(ai_trainer, "MIN_FIRST_FLUSH_CHARS", 0)
     seen: list[str] = []
 
-    content, tool_calls = await ai_trainer._completion_round(
+    content, tool_calls, _reasoning = await ai_trainer._completion_round(
         client, [{"role": "user", "content": "?"}], user_id=1, on_chunk=_collector(seen),
     )
 
@@ -315,7 +315,7 @@ async def test_streamed_tool_calls_are_reassembled_from_deltas(monkeypatch):
     )
     monkeypatch.setattr(ai_trainer, "_log_llm_cost", AsyncMock())
 
-    _content, tool_calls = await ai_trainer._completion_round(
+    _content, tool_calls, _reasoning = await ai_trainer._completion_round(
         client, [{"role": "user", "content": "?"}], user_id=1, on_chunk=_collector([]),
     )
 
@@ -338,7 +338,7 @@ async def test_without_a_chunk_callback_the_call_is_not_streamed(monkeypatch):
     )
     monkeypatch.setattr(ai_trainer, "_log_llm_cost", AsyncMock())
 
-    content, _ = await ai_trainer._completion_round(client, [], user_id=1)
+    content, _, _reasoning = await ai_trainer._completion_round(client, [], user_id=1)
 
     assert content == "ответ"
     assert "stream" not in client.chat.completions.create.await_args.kwargs
