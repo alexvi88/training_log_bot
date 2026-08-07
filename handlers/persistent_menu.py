@@ -96,7 +96,8 @@ async def _open_ai_trainer(message: Message, state: FSMContext) -> None:
     await message.answer(
         text,
         reply_markup=await ai_keyboard(
-            message.from_user.id, presets=intro_presets() if fresh else ()
+            message.from_user.id,
+            presets=await intro_presets(message.from_user.id) if fresh else (),
         ),
         parse_mode="HTML",
     )

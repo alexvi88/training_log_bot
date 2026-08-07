@@ -1447,10 +1447,10 @@ async def test_mention_paging_arrows_fit_telegrams_callback_data_limit():
 # ---------- UX-мелочи релиза ----------
 
 
-async def test_intro_advertises_the_program_builder():
+async def test_intro_advertises_the_program_builder(fresh_db, user_id):
     """Сборка программы должна рекламироваться прямо на старте диалога — раньше
     примером в тексте интро, теперь кнопкой готового вопроса под ним."""
-    labels = [label for label, _cb in ai_trainer.intro_presets()]
+    labels = [label for label, _cb in await ai_trainer.intro_presets(user_id)]
     assert any("Составь мне программу" in label for label in labels)
 
 

@@ -104,12 +104,26 @@ PRESET_QUESTIONS: dict[str, tuple[str, str]] = {
 }
 
 
-def intro_presets() -> list[tuple[str, str]]:
-    """Кнопки готовых вопросов для интро + «Составь мне программу» — она не
-    вопрос, а готовый сценарий с уточнениями (ai:buildprog), поэтому живёт не в
-    PRESET_QUESTIONS, а переиспользует существующий обработчик."""
+async def intro_presets(user_id: int) -> list[tuple[str, str]]:
+    """Кнопки готовых вопросов для интро.
+
+    «Составь мне программу» и «Разбери видео подхода» — не вопросы, а сценарии
+    (ai:buildprog / ai:videohint), поэтому живут не в PRESET_QUESTIONS, а имеют
+    свои обработчики.
+
+    Про видео кнопка нужна только тем, кто ещё не пробовал: разбор видео —
+    единственная возможность бота, о которой невозможно догадаться самому (в чат
+    не написано «пришли ролик»). Поэтому она показывается, пока человек за
+    сегодня не разобрал ни одного ролика, и исчезает после первого — дальше он
+    уже знает, а место под ответом дорогое.
+
+    Скрыта она и когда разбор не подключён: обещать кнопкой то, что ответит
+    «пока не подключил», — худший вид рекламы.
+    """
     rows = [(label, f"ai:preset:{key}") for key, (label, _) in PRESET_QUESTIONS.items()]
     rows.append(("🗂 Составь мне программу", "ai:buildprog"))
+    if config.video_analysis_available() and not await db.get_ai_video_count_today(user_id):
+        rows.append(("🎥 Разбери видео подхода", "ai:videohint"))
     return rows
 
 # Shown instead of the full intro when returning to a conversation that's already
@@ -385,7 +399,8 @@ async def menu_ai(callback: CallbackQuery, state: FSMContext):
     # Готовые вопросы — только на свежем интро: посреди разговора они бы
     # читались как «тренер забыл, о чём речь».
     keyboard = await ai_keyboard(
-        callback.from_user.id, presets=intro_presets() if fresh else ()
+        callback.from_user.id,
+        presets=await intro_presets(callback.from_user.id) if fresh else (),
     )
     await ui.safe_edit(callback, text, reply_markup=keyboard, parse_mode="HTML")
     await callback.answer()
@@ -523,6 +538,38 @@ async def ai_preset_question(callback: CallbackQuery, state: FSMContext):
     _, question = preset
     intro = f"🤖 <b>ПРИНЯЛ ВОПРОС.</b>\n\n«{question}»"
     await _start_ai_scenario(callback, state, intro, question)
+
+
+VIDEO_HINT_TEXT = (
+    "🎥 <b>ДАВАЙ ПОСМОТРЮ.</b>\n\n"
+    "Пришли видео подхода прямо сюда — гляну технику и скажу, что править первым.\n\n"
+    "Как снять, чтобы я реально что-то увидел:\n"
+    "• сбоку, а не сзади — оттуда видно спину, траекторию грифа и колени\n"
+    "• чтобы влез весь подход: от старта до фиксации\n"
+    "• до 20 секунд, один подход\n\n"
+    "Звук не нужен, я смотрю только картинку."
+)
+
+
+@router.callback_query(F.data == "ai:videohint")
+async def ai_video_hint(callback: CallbackQuery, state: FSMContext):
+    """Кнопка «Разбери видео подхода» — подсказка, а не вопрос к модели.
+
+    Прислать ролик за человека нельзя, поэтому кнопка объясняет, как снять, и на
+    этом заканчивается: ни одного вызова модели, ни рубля, ни списанной квоты.
+    Заодно тут единственное место, где можно сказать про ракурс до съёмки, — на
+    разборе «сними сбоку» человек читает уже потратив попытку.
+    """
+    if not config.video_analysis_available():
+        await callback.answer("Разбор видео пока не подключён — это к админу бота.", show_alert=True)
+        return
+    await state.set_state(AITrainerFlow.chatting)
+    await callback.message.answer(
+        VIDEO_HINT_TEXT,
+        reply_markup=await ai_keyboard(callback.from_user.id),
+        parse_mode="HTML",
+    )
+    await callback.answer()
 
 
 @router.callback_query(F.data == "ai:resume_workout")

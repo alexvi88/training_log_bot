@@ -14,6 +14,7 @@ readers) doesn't apply to a single-connection app anyway.
 import asyncio
 import datetime as dt
 import json
+import logging
 import os
 import secrets
 import time
@@ -24,6 +25,8 @@ import aiosqlite
 import config
 import formatting
 from seed_data import BODYWEIGHT_TEMPLATES, EXERCISE_TEMPLATES, MUSCLE_GROUP_PRESETS
+
+logger = logging.getLogger(__name__)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -4816,7 +4819,32 @@ async def log_cost_event(
     model: Optional[str] = None,
     prompt_tokens: int = 0,
     completion_tokens: int = 0,
+    cached_tokens: int = 0,
 ) -> None:
+    """Строка в cost_events + строка в лог с ценой этого вызова.
+
+    Лог живёт здесь, а не у вызывающих, потому что здесь сходятся все платные
+    вызовы — Grok, Qwen на Novita, расшифровка голосовых. Пока каждый логировал
+    сам, формат разъезжался: у видео не было имени модели и фраза была своя, и
+    поиск по логам единым запросом его не находил. Новая модель, добавленная
+    когда-нибудь ещё, попадёт в лог сама, без напоминания.
+
+    cached_tokens — сколько входа приехало из кэша провайдера, если он это
+    сообщает. Цену считаем по полной ставке за весь вход, поэтому при попадании в
+    кэш цифра — потолок, а не факт, и об этом честно написано в строке.
+    """
+    price = (
+        config.TRANSCRIPTION_PRICE_USD_PER_CALL
+        if event_type == "transcription"
+        else config.call_price_usd(model or "", prompt_tokens, completion_tokens)
+    )
+    logger.info(
+        "cost %s %s user %s: %s+%s токенов%s, ~$%.4f%s",
+        event_type, model, user_id, prompt_tokens, completion_tokens,
+        f" (из кэша {cached_tokens})" if cached_tokens else "",
+        price,
+        " — потолок, кэш не учтён" if cached_tokens else "",
+    )
     async with _write_lock:
         await conn().execute(
             "INSERT INTO cost_events (user_id, event_type, model, prompt_tokens, completion_tokens, created_at) "

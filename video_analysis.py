@@ -242,13 +242,7 @@ async def analyze(
     usage = getattr(response, "usage", None)
     prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
     completion_tokens = getattr(usage, "completion_tokens", 0) or 0
-    # Цена в логе на каждый разбор — чтобы смотреть расход сразу после ролика, а
-    # не ждать ночного отчёта.
-    logger.info(
-        "video analysis for user %s: %s+%s tokens, ~$%.4f",
-        user_id, prompt_tokens, completion_tokens,
-        config.call_price_usd(config.NOVITA_VIDEO_MODEL, prompt_tokens, completion_tokens),
-    )
+    details = getattr(usage, "prompt_tokens_details", None)
     try:
         await db.log_cost_event(
             user_id,
@@ -256,6 +250,7 @@ async def analyze(
             model=config.NOVITA_VIDEO_MODEL,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
+            cached_tokens=getattr(details, "cached_tokens", 0) or 0,
         )
     except Exception:
         logger.exception("failed to log video analysis cost event")

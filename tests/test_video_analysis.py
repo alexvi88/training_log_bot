@@ -137,7 +137,9 @@ async def test_analyze_logs_real_usage_for_pricing(monkeypatch):
     """Цену считает дневной отчёт по usage — значит логировать надо настоящий."""
     logged = {}
 
-    async def fake_log(user_id, event_type, *, model=None, prompt_tokens=0, completion_tokens=0):
+    async def fake_log(
+        user_id, event_type, *, model=None, prompt_tokens=0, completion_tokens=0, cached_tokens=0
+    ):
         logged.update(
             user_id=user_id, event_type=event_type, model=model,
             prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
