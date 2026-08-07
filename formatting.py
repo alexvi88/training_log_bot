@@ -731,6 +731,39 @@ def markdown_tables_to_lines(text: str) -> str:
     out: list[str] = []
     i = 0
     while i < len(lines):
+        # Блок строк с палками, но БЕЗ строки-разделителя. Markdown-таблицей это не
+        # является, поэтому мимо ветки ниже он проходил насквозь — и до человека
+        # доезжал ровно палками («Этап | Ориентир | Фокус»). Модель забывает
+        # разделитель регулярно, и просьбы в промпте это не гарантируют, поэтому
+        # разворачиваем такой блок теми же строками, что и настоящую таблицу.
+        # Вход по ШАПКЕ: две палки и больше, то есть от трёх колонок. Одиночная
+        # палка слишком часто встречается в обычном тексте, чтобы считать её
+        # таблицей. А вот продолжение блока терпимее — одной палки достаточно:
+        # у кривой «таблицы» строки бывают короче шапки, и на такой строке блок
+        # обрывался, оставляя хвост палками на экране.
+        if (
+            lines[i].count("|") >= 2
+            and not _is_table_delimiter(lines[i])
+            and i + 1 < len(lines)
+            and "|" in lines[i + 1]
+            and not _is_table_delimiter(lines[i + 1])
+        ):
+            block: list[list[str]] = []
+            while i < len(lines) and "|" in lines[i] and not _is_table_delimiter(lines[i]):
+                block.append(_split_cells(lines[i]))
+                i += 1
+            header, *body_rows = block
+            for row in body_rows:
+                pairs = [
+                    f"{head}: {cell}"
+                    # strict=False намеренно: у кривой «таблицы» строки бывают
+                    # разной длины, и падать на этом нельзя — лишние ячейки просто
+                    # отбрасываются вместе с непарной шапкой.
+                    for head, cell in zip(header, row, strict=False)
+                    if cell and head
+                ]
+                out.append("• " + ", ".join(pairs) if pairs else "• " + " ".join(row))
+            continue
         if "|" in lines[i] and i + 1 < len(lines) and _is_table_delimiter(lines[i + 1]):
             header = _split_cells(lines[i])
             i += 2

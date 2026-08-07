@@ -1541,3 +1541,13 @@ async def test_tools_can_still_be_skipped_on_the_very_first_question(
 
     main_call = client.chat.completions.create.await_args_list[-1].kwargs
     assert "tools" not in main_call
+
+
+async def test_prompt_forbids_calling_a_triple_a_one_rep_max():
+    """В проде тренер написал «разово на штанге максимум 210», хотя двумя строками
+    выше стояло «210×3 (e1RM ~231)». И посчитал до 250 разрыв +40кг вместо +19:
+    занизил атлета и выдумал ему лишние килограммы работы."""
+    prompt = ai_trainer.SYSTEM_PROMPT
+    assert "НЕ РАЗОВЫЙ МАКСИМУМ" in prompt
+    assert "e1RM" in prompt
+    assert "+19" in prompt, "в промпте должен быть числовой пример ошибки"

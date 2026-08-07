@@ -1180,3 +1180,39 @@ def test_a_single_unbreakable_line_is_still_cut():
 
     assert len(clamped) <= formatting.CAPTION_LIMIT
     assert clamped.endswith("…")
+
+
+def test_pipe_rows_without_a_delimiter_become_lines():
+    """Модель регулярно пишет «таблицу» без строки-разделителя. Markdown-таблицей
+    это не является, поэтому блок проходил насквозь и доезжал до человека ровно
+    палками — в проде так уехала «Грубая дорожная карта»."""
+    raw = "Этап | Ориентир | Фокус\nСейчас | 210×1–3 | 200×4–5\nЦель | 250×1 | попытка"
+
+    out = formatting.markdown_tables_to_lines(raw)
+
+    assert "|" not in out
+    assert "Этап: Сейчас" in out
+    assert "Ориентир: 250×1" in out
+
+
+def test_ragged_pipe_rows_do_not_crash():
+    """У кривой «таблицы" строки бывают разной длины — падать на этом нельзя.
+
+    Порог — две палки и больше, то есть от трёх колонок: одиночная палка слишком
+    часто встречается в обычном тексте, чтобы считать её таблицей.
+    """
+    raw = "А | Б | В\nтолько | два\n3 | 4 | 5 | 6"
+
+    out = formatting.markdown_tables_to_lines(raw)
+
+    assert "А: 3" in out, "строка с лишними ячейками должна развернуться, а не упасть"
+
+
+def test_real_tables_still_go_the_old_way():
+    """Настоящую таблицу с разделителем не ломаем: у неё свой разбор."""
+    raw = "| Движение | Факт |\n|---|---|\n| Тяга | 210 |"
+
+    out = formatting.markdown_tables_to_lines(raw)
+
+    assert "|" not in out
+    assert "210" in out
