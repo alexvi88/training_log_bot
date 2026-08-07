@@ -90,6 +90,27 @@ MAX_ROUTINES_PER_USER = config.MAX_ROUTINES_PER_USER
 _client: Optional[AsyncOpenAI] = None
 
 
+async def _log_server_tool_calls(user_id: Optional[int], response: Any) -> None:
+    """Вызовы серверных инструментов xAI — отдельная строка счёта, помимо токенов.
+
+    web_search и x_search стоят $5 за 1000 вызовов СВЕРХ токенов, и в usage по
+    токенам их нет вовсе. В консоли за неделю это было видно как «Web searches:
+    136 calls — $0.68», то есть 15% текстового счёта, полностью невидимые у нас.
+
+    Считаем по response.server_side_tool_usage: SDK отдаёт Counter по списку
+    использованных инструментов, то есть настоящее число вызовов, а не «был или
+    не был». Пишем по строке на вызов — так дневной отчёт считает их простым
+    COUNT, как расшифровки голосовых, и новая колонка не нужна.
+    """
+    usage = getattr(response, "server_side_tool_usage", None) or {}
+    for tool_name, calls in usage.items():
+        for _ in range(max(0, int(calls))):
+            try:
+                await db.log_cost_event(user_id, "server_tool", model=tool_name)
+            except Exception:
+                logger.exception("failed to log server tool cost event")
+
+
 def _reasoning_of(message_or_delta: Any) -> str:
     """reasoning_content из ответа xAI, если он там есть.
 
@@ -3633,13 +3654,23 @@ async def ask(
     # независимо от поиска, и экономить на этом решении нечего — вердикт всё
     # равно стоит доли цента, а лишние 6900 токенов схем в каждом раунде дороже.
     gate = await _gate_verdict(user_id, question, history)
-    if await db.get_ai_search_count_today(user_id) >= config.AI_SEARCH_DAILY_LIMIT:
+    if video_context:
+        # Разбор ролика решается кадрами, а не сетью: наблюдения уже приехали от
+        # модели, которая его смотрела. Гейт же судит по тексту вопроса, и на
+        # «разбери технику приседа легенды Святослава» честно решает, что надо
+        # выяснить, кто это, — поднимая multi-agent с четырьмя агентами и платой
+        # $5 за 1000 вызовов инструментов за информацию, которая ответу не нужна.
+        search_outcome = "skipped: видео разбирается по кадрам, сеть не нужна"
+    elif await db.get_ai_search_count_today(user_id) >= config.AI_SEARCH_DAILY_LIMIT:
         search_outcome = "skipped: daily limit reached"
     elif not gate.search:
         search_outcome = "skipped: gate says not needed"
     else:
         search_context = await _web_search_findings(user_id, question, history, on_status)
-        search_outcome = "used" if search_context else "ran but found nothing"
+        # «Нашёл» и «упал» — разные исходы, и путать их дорого: на неподдерживаемом
+        # agent_count поиск падал ValueError ещё в chat.create, а в логе это
+        # читалось как «сходил и ничего не нашёл» — функция была выключена месяцами.
+        search_outcome = "used" if search_context else "ran but returned nothing (см. ERROR выше, если был)"
     logger.info(
         "AI trainer question from user %s: %r (web search: %s; данные пользователя: %s)",
         user_id, question, search_outcome,
@@ -4050,6 +4081,7 @@ async def _web_search_findings(
     )
 
     await _log_llm_cost(user_id, config.GROK_SEARCH_MODEL, getattr(response, "usage", None))
+    await _log_server_tool_calls(user_id, response)
     if not (response.citations or response.server_side_tool_usage):
         return None
     await db.increment_ai_search_count(user_id)
