@@ -50,10 +50,15 @@ async def _build_cost_report(date_str: str) -> str:
     analytics.build_report."""
     llm_breakdown = await db.get_llm_cost_breakdown(date_str)
     transcriptions = await db.get_transcription_count(date_str)
+    server_tools = await db.get_server_tool_count(date_str)
 
     llm_cost, llm_calls, llm_tokens = _llm_cost(llm_breakdown)
     transcription_cost = transcriptions * config.TRANSCRIPTION_PRICE_USD_PER_CALL
-    total_cost = llm_cost + transcription_cost
+    # Вызовы web_search/x_search: $5 за 1000 СВЕРХ токенов. В консоли за неделю это
+    # было $0.68 — пятнадцать процентов текстового счёта, которых отчёт не видел.
+    server_tool_calls = sum(server_tools.values())
+    server_tool_cost = server_tool_calls * config.SERVER_TOOL_PRICE_USD_PER_CALL
+    total_cost = llm_cost + transcription_cost + server_tool_cost
 
     lines = [
         "",
@@ -65,6 +70,10 @@ async def _build_cost_report(date_str: str) -> str:
         lines.append(f"  └ {model}: {stats['calls']} ({tok:,} ток.)".replace(",", " "))
     if transcriptions:
         lines.append(f"Голосовых распознано: {transcriptions} (~${transcription_cost:.2f})")
+    if server_tool_calls:
+        lines.append(f"Поиск в сети: {server_tool_calls} вызовов (~${server_tool_cost:.2f})")
+        for tool, calls in sorted(server_tools.items(), key=lambda x: -x[1]):
+            lines.append(f"  └ {tool}: {calls}")
     lines.append(f"💸 Итого расходы: ~${total_cost:.2f} (~${total_cost * 30:.0f}/мес)")
     return "\n".join(lines)
 

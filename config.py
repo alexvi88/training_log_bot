@@ -149,12 +149,28 @@ GROK_SEARCH_MODEL = os.getenv("GROK_SEARCH_MODEL", "grok-4.20-multi-agent")
 # most expensive tier (xAI's docs map an unset/high reasoning effort to 16
 # agents; all agents' tokens, including their own reasoning and tool calls,
 # get billed).
-# Два, а не четыре: по консоли xAI multi-agent — самая дорогая модель у бота
-# ($1.40 из $3.07 за неделю), и биллятся токены всех агентов сразу. Наш запрос
-# — «сходи в сеть и перескажи», а не «прочеши десяток источников параллельно»,
-# так что за четвёртым агентом стоит цена, а не находки. Поднять обратно
-# осмысленно ровно тогда, когда шаг станет настоящим research'ем.
-GROK_SEARCH_AGENT_COUNT = int(os.getenv("GROK_SEARCH_AGENT_COUNT", "2"))
+# ЧЕТЫРЕ, а не два. Двойка стояла тут ради экономии — multi-agent самая дорогая
+# модель у бота, и биллятся токены всех агентов сразу, — но SDK принимает только
+# 4 или 16 (xai_sdk.chat.AgentCountMap) и на двойке падает ValueError ещё в
+# chat.create, ДО запроса. То есть живой поиск не работал вовсе: каждая попытка
+# умирала на входе, а в логе это выглядело безобидным «ran but found nothing».
+# Экономия обернулась молча выключенной функцией.
+#
+# Допустимые значения зашиты здесь, чтобы кривое значение из окружения снова не
+# выключило поиск тихо: неподходящее заменяется ближайшим разрешённым с
+# предупреждением в лог. Настоящий рычаг экономии тут не число агентов, а гейт,
+# который решает, поднимать ли поиск вообще (см. ai_trainer._gate_verdict).
+_ALLOWED_AGENT_COUNTS = (4, 16)
+GROK_SEARCH_AGENT_COUNT = int(os.getenv("GROK_SEARCH_AGENT_COUNT", "4"))
+if GROK_SEARCH_AGENT_COUNT not in _ALLOWED_AGENT_COUNTS:
+    _fallback = min(_ALLOWED_AGENT_COUNTS, key=lambda n: abs(n - GROK_SEARCH_AGENT_COUNT))
+    print(
+        f"⚠️ GROK_SEARCH_AGENT_COUNT={GROK_SEARCH_AGENT_COUNT} не поддерживается "
+        f"(допустимы {list(_ALLOWED_AGENT_COUNTS)}); беру {_fallback}, иначе живой "
+        "поиск падал бы на каждом запросе",
+        flush=True,
+    )
+    GROK_SEARCH_AGENT_COUNT = _fallback
 
 # Отдельный потолок для шага живого поиска — он один ходит по SDK и один живёт
 # по другим часам, чем обычный запрос к модели: multi-agent действительно
@@ -345,6 +361,13 @@ def call_price_usd(
         + cached / 1000 * inp * CACHED_INPUT_PRICE_MULTIPLIER
         + (completion_tokens + max(0, reasoning_tokens)) / 1000 * out
     )
+
+# Вызовы серверных инструментов xAI (web_search, x_search) — $5 за 1000 вызовов
+# СВЕРХ токенов, по docs.x.ai/developers/pricing#tools-pricing. В usage по токенам
+# их нет, поэтому считаются отдельными событиями (см.
+# ai_trainer._log_server_tool_calls). В консоли за неделю это было «136 calls —
+# $0.68»: пятнадцать процентов текстового счёта, которых наш учёт не видел вовсе.
+SERVER_TOOL_PRICE_USD_PER_CALL = float(os.getenv("SERVER_TOOL_PRICE_USD_PER_CALL", "0.005"))
 
 # Flat per-call estimate for voice transcription (OPENAI_TRANSCRIBE_MODEL) — the
 # API doesn't return token counts for audio, so this stands in for a real

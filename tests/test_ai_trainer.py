@@ -611,7 +611,10 @@ async def test_ask_logs_question_without_search_usage(fresh_db, user_id, monkeyp
     assert "Как мои дела?" in message
     # The gate said yes, the search step just came back empty — the log now
     # names that outcome instead of flattening every no-search case to "False".
-    assert "web search: ran but found nothing" in message
+    # Формулировка «returned nothing», а не «found nothing»: на неподдерживаемом
+    # agent_count шаг падал ValueError ещё в chat.create, и «не нашёл» читалось
+    # как честный пустой результат — функция была выключена месяцами.
+    assert "web search: ran but returned nothing" in message
 
 
 async def test_web_search_findings_passes_only_server_side_tools(fresh_db, user_id, monkeypatch):
@@ -1222,3 +1225,81 @@ async def test_no_reasoning_key_when_the_model_returned_none(fresh_db, user_id, 
     await ai_trainer.ask(user_id, "вопрос", history=[], on_reasoning=on_reasoning)
 
     assert seen == []
+
+
+# ---------- живой поиск: конфиг, который его выключал ----------
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_agent_count_is_a_value_the_sdk_accepts():
+    """Двойка стояла ради экономии, а SDK принимает только 4 или 16 — на ней
+    поиск падал ValueError в chat.create, ДО запроса, месяцами."""
+    from xai_sdk.chat import AgentCountMap
+
+    assert config.GROK_SEARCH_AGENT_COUNT in AgentCountMap, (
+        f"SDK принимает {list(AgentCountMap.keys())}, "
+        f"а в конфиге {config.GROK_SEARCH_AGENT_COUNT} — поиск будет падать на каждом запросе"
+    )
+
+
+async def test_bad_agent_count_from_env_falls_back_instead_of_breaking_search(monkeypatch):
+    """Кривое значение из окружения не должно снова выключить поиск молча."""
+    import importlib
+
+    monkeypatch.setenv("GROK_SEARCH_AGENT_COUNT", "2")
+    reloaded = importlib.reload(config)
+    try:
+        from xai_sdk.chat import AgentCountMap
+
+        assert reloaded.GROK_SEARCH_AGENT_COUNT in AgentCountMap
+    finally:
+        monkeypatch.delenv("GROK_SEARCH_AGENT_COUNT", raising=False)
+        importlib.reload(config)
+
+
+async def test_video_questions_never_go_to_the_web(fresh_db, user_id, monkeypatch, caplog):
+    """Разбор ролика решается кадрами. Гейт же судит по тексту и на «разбери
+    технику приседа легенды Святослава» честно просит сеть — поднимая multi-agent
+    с четырьмя агентами и платой за вызовы инструментов ни за что."""
+    client = _fake_client([_response(content=_GATE_SEARCH), _response(content="разбор")])
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+    sdk_getter = AsyncMock()
+    monkeypatch.setattr(ai_trainer, "_get_sdk_client", sdk_getter)
+
+    with caplog.at_level(logging.INFO, logger="ai_trainer"):
+        await ai_trainer.ask(
+            user_id, "разбери технику приседа легенды Святослава",
+            history=[], video_context="наблюдения по кадрам",
+        )
+
+    sdk_getter.assert_not_awaited()
+    [record] = [r for r in caplog.records if "AI trainer question" in r.message]
+    assert "сеть не нужна" in record.getMessage()
+
+
+async def test_server_tool_calls_are_counted_for_billing(fresh_db, user_id, monkeypatch):
+    """web_search стоит $5 за 1000 вызовов СВЕРХ токенов, и в usage по токенам его
+    нет — без отдельного счёта отчёт занижал расход на всю эту статью."""
+    response = _xai_response(content="находки", citations=["http://example.com"])
+    response.server_side_tool_usage = {"SERVER_SIDE_TOOL_WEB_SEARCH": 3}
+    monkeypatch.setattr(
+        ai_trainer, "_get_sdk_client", AsyncMock(return_value=_fake_sdk_client(response))
+    )
+
+    await ai_trainer._web_search_findings(user_id, "что нового?", history=[])
+
+    today = fresh_db.now_iso()[:10]
+    assert await fresh_db.get_server_tool_count(today) == {"SERVER_SIDE_TOOL_WEB_SEARCH": 3}
+
+
+async def test_server_tool_cost_lands_in_the_daily_report(fresh_db, user_id):
+    import admin_tasks
+
+    for _ in range(4):
+        await fresh_db.log_cost_event(user_id, "server_tool", model="SERVER_SIDE_TOOL_WEB_SEARCH")
+
+    report = await admin_tasks._build_cost_report(fresh_db.now_iso()[:10])
+
+    assert "Поиск в сети: 4 вызовов" in report
+    expected = 4 * config.SERVER_TOOL_PRICE_USD_PER_CALL
+    assert f"${expected:.2f}" in report or "Итого расходы" in report

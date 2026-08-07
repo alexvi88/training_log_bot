@@ -4849,13 +4849,14 @@ async def log_cost_event(
     reasoning_tokens — внутренние размышления модели, отдельный billable тип у
     xAI: в completion_tokens они не входят и тарифицируются как выход.
     """
-    price = (
-        config.TRANSCRIPTION_PRICE_USD_PER_CALL
-        if event_type == "transcription"
-        else config.call_price_usd(
+    if event_type == "transcription":
+        price = config.TRANSCRIPTION_PRICE_USD_PER_CALL
+    elif event_type == "server_tool":
+        price = config.SERVER_TOOL_PRICE_USD_PER_CALL
+    else:
+        price = config.call_price_usd(
             model or "", prompt_tokens, completion_tokens, cached_tokens, reasoning_tokens
         )
-    )
     notes = []
     if cached_tokens:
         notes.append(f"из кэша {cached_tokens}")
@@ -4914,6 +4915,21 @@ async def get_transcription_count(date_str: str) -> int:
     )
     row = await cur.fetchone()
     return row[0] if row else 0
+
+
+async def get_server_tool_count(date_str: str) -> dict[str, int]:
+    """Вызовы серверных инструментов xAI за день, по инструментам.
+
+    Считаются строками (см. ai_trainer._log_server_tool_calls): у xAI это $5 за
+    1000 вызовов СВЕРХ токенов, и в usage по токенам их нет вовсе — без этой
+    выборки дневной отчёт занижал расход на всю эту статью.
+    """
+    cur = await conn().execute(
+        "SELECT model, COUNT(*) FROM cost_events "
+        "WHERE event_type = 'server_tool' AND date(created_at) = ? GROUP BY model",
+        (date_str,),
+    )
+    return {(model or "unknown"): calls for model, calls in await cur.fetchall()}
 
 
 async def prune_old_cost_events(retention_days: int) -> int:
