@@ -940,7 +940,7 @@ async def analyze_food(
         }
 
     items = []
-    for raw in (data.get("items") or [])[:6]:
+    for raw in (data.get("items") or []):
         if not isinstance(raw, dict):
             continue
         name = str(raw.get("name") or "").strip()
@@ -956,6 +956,21 @@ async def analyze_food(
         }
         _reconcile_macros(item)
         items.append(item)
+
+    # Длинный список схлопываем в одну строку вместо того, чтобы обрезать: раньше
+    # тут стоял [:6], а итог ниже пересчитывается по оставшимся пунктам — и обед
+    # из десяти позиций молча худел на пару сотен килокалорий, при том что в
+    # названии приёма пропавшие блюда упоминались.
+    if len(items) > MAX_FOOD_ITEMS:
+        rest = items[MAX_FOOD_ITEMS:]
+        word = formatting.plural_ru(len(rest), ("позиция", "позиции", "позиций"))
+        items = items[:MAX_FOOD_ITEMS] + [
+            {
+                "name": f"и ещё {len(rest)} {word}",
+                "portion": "",
+                **{f: _sum_field(rest, f) for f in ("calories", "protein", "fat", "carbs")},
+            }
+        ]
 
     estimate = {
         "is_food": is_food,
@@ -2982,6 +2997,10 @@ async def _log_food(
 # Длиннее в одну строку дневника всё равно не читается, а модель иногда
 # присылает туда целый абзац с рассуждением о пользе гречки.
 MAX_FOOD_DESCRIPTION = 200
+
+# Сколько блюд показываем построчно, прежде чем схлопнуть остаток в «и ещё N»:
+# карточка приёма пищи должна читаться с одного взгляда, а не быть простынёй.
+MAX_FOOD_ITEMS = 6
 
 
 # ---------- сравнение периодов ----------

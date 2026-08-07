@@ -897,3 +897,42 @@ async def test_unconfigured_model_says_so_instead_of_failing(user_id, monkeypatc
     message.reply.assert_awaited()
     assert "не настроено" in message.reply.call_args.args[0]
     assert await dbmod.count_food_days(user_id) == 0
+
+
+async def test_long_meal_folds_extra_items_instead_of_dropping_them(monkeypatch, user_id):
+    """Регрессия: список резался на шестой позиции, а итог пересчитывался по
+    оставшимся — обед из десяти блюд молча худел на пару сотен килокалорий, и
+    при этом в названии приёма пропавшие блюда упоминались."""
+    items = ", ".join(
+        f'{{"name": "блюдо {i}", "portion": "100 г", "calories": 100, '
+        f'"protein": 10, "fat": 0, "carbs": 15}}'
+        for i in range(1, 11)
+    )
+
+    async def fake_create(**kwargs):
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(
+                        content=f'{{"description": "Обед", "items": [{items}]}}'
+                    )
+                )
+            ],
+            usage=SimpleNamespace(prompt_tokens=10, completion_tokens=20),
+        )
+
+    monkeypatch.setattr(
+        ai_trainer,
+        "_get_client",
+        lambda: SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=fake_create))),
+    )
+
+    result = await ai_trainer.analyze_food(user_id, text="очень плотный обед")
+
+    # Шесть строк по одному блюду плюс одна свёрнутая — а не шесть и молчание.
+    assert len(result["items"]) == 7
+    assert result["items"][-1]["name"] == "и ещё 4 позиции"
+    assert result["items"][-1]["calories"] == 400
+    # Итог по-прежнему равен сумме строк, но теперь строки покрывают весь обед.
+    assert result["calories"] == 1000
+    assert result["protein"] == 100
