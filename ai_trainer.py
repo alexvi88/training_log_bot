@@ -614,9 +614,7 @@ DATA=NO — только для вопросов об общих знаниях,
 токенов, а ошибка в другую оставит тренера без доступа к данным, и он ответит
 общими словами вместо конкретики по человеку.
 
-Ответь РОВНО двумя строками, без пояснений:
-SEARCH=YES или SEARCH=NO
-DATA=YES или DATA=NO
+Ответь JSON-объектом: {"search": true|false, "data": true|false}
 """
 
 
@@ -3663,6 +3661,11 @@ async def ask(
         search_outcome = "skipped: видео разбирается по кадрам, сеть не нужна"
     elif await db.get_ai_search_count_today(user_id) >= config.AI_SEARCH_DAILY_LIMIT:
         search_outcome = "skipped: daily limit reached"
+    elif not gate.ok:
+        # Гейт не отработал — и это НЕ «решил, что не надо». Раньше оба случая
+        # писались одной фразой, и на вопросе «что нового в мире бодибилдинга»
+        # лог уверял, что поиск не нужен, хотя гейт просто вернул пустоту.
+        search_outcome = "skipped: ГЕЙТ СЛОМАЛСЯ, сработал дефолт (см. WARNING выше)"
     elif not gate.search:
         search_outcome = "skipped: gate says not needed"
     else:
@@ -3932,10 +3935,17 @@ class GateVerdict(NamedTuple):
     просто менее свежий), а данные наоборот — лучше дать зря, чем оставить
     тренера без доступа к истории, потому что тогда он ответит общими словами
     там, где от него ждут конкретику по человеку.
+
+    ok=False означает, что гейт не отработал и значения — дефолтные. Флаг нужен,
+    чтобы в логе не выдавать поломку за решение: «gate says not needed» на самом
+    деле стояло и там, где гейт вернул пустоту, — то есть на вопрос «что нового в
+    мире бодибилдинга» поиск не поднимался, а лог уверял, что он не нужен. Ровно
+    от этой путаницы предупреждает комментарий в ask().
     """
 
     search: bool = False
     data: bool = True
+    ok: bool = True
 
 
 async def _gate_verdict(
@@ -3973,6 +3983,27 @@ async def _gate_verdict(
             # общего с ним почти ничего, а под одним conv-id они вытесняли друг
             # друга — см. _cache_headers, там разобран лог прода.
             extra_headers=_cache_headers(user_id, scope="gate"),
+            # Схема, а не два слова текстом: на текстовом формате модель нет-нет
+            # да возвращала ПУСТОЙ content (видели дважды в проде), и тогда
+            # вступали дефолты — то есть на «что нового в мире бодибилдинга»
+            # поиск молча не поднимался. Со structured output пустой или
+            # неполный вердикт становится невозможен, а не просто редок.
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "gate_verdict",
+                    "strict": True,
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "search": {"type": "boolean"},
+                            "data": {"type": "boolean"},
+                        },
+                        "required": ["search", "data"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
             messages=[
                 {
                     "role": "system",
@@ -3984,36 +4015,34 @@ async def _gate_verdict(
         )
     except Exception:
         logger.exception("AI trainer gate step failed, falling back to defaults")
-        return GateVerdict()
+        return GateVerdict(ok=False)
     await _log_llm_cost(user_id, config.GROK_MODEL, getattr(response, "usage", None))
-    verdict = (response.choices[0].message.content or "").strip().upper()
+    # Без .upper(): регистр тут ломает разбор, потому что JSON требует именно
+    # lowercase true/false. Наследие прежнего формата, где сравнивали с YES/NO.
+    verdict = (response.choices[0].message.content or "").strip()
     if not verdict:
         # Пустой content — почти всегда обрезанный бюджет (см.
         # _SEARCH_GATE_MAX_TOKENS). Раньше это молча означало «не искать», и
         # отличить сломанный гейт от честного NO было нельзя ничем.
         logger.warning("AI trainer gate returned an empty verdict, using defaults")
-        return GateVerdict()
-
-    # Модель просят ответить двумя строками, но она нет-нет да обернёт их в
-    # markdown или кавычки — из-за «**SEARCH=YES**» терять живой поиск глупо.
-    # Поэтому не парсим построчно, а ищем ключ со значением в тексте целиком.
-    def _flag(key: str, default: bool) -> bool:
-        match = re.search(rf"{key}\s*[:=]\s*[*_`'\"«#\s]*(YES|NO)", verdict)
-        if match is None:
-            # Ключа нет — вердикт неполный. Молча взять default нельзя: на DATA
-            # это тихо отключило бы тренеру доступ к базе.
-            logger.warning(
-                "AI trainer gate verdict has no %s, using default %s (verdict: %r)",
-                key, default, verdict[:120],
-            )
-            return default
-        return match.group(1) == "YES"
+        return GateVerdict(ok=False)
 
     defaults = GateVerdict()
-    return GateVerdict(
-        search=_flag("SEARCH", defaults.search),
-        data=_flag("DATA", defaults.data),
-    )
+    try:
+        parsed = json.loads(verdict)
+        return GateVerdict(
+            search=bool(parsed["search"]),
+            data=bool(parsed["data"]),
+        )
+    except (ValueError, TypeError, KeyError):
+        # Со strict-схемой сюда попасть не должно, но молча подставить дефолты
+        # нельзя: на data это тихо отключило бы тренеру доступ к базе, а на search
+        # выдало бы поломку за решение «искать не надо».
+        logger.warning(
+            "AI trainer gate verdict is not the expected JSON, using defaults (verdict: %r)",
+            verdict[:200],
+        )
+        return defaults._replace(ok=False)
 
 
 async def _web_search_findings(
