@@ -45,7 +45,7 @@ async def test_record_line_shows_both_modes_when_history_has_both():
     )
 
     assert "e1RM" in text and f"{records.max_e1rm:.1f}" in text  # тяжёлый рекорд не потерялся
-    assert "Рекорд повторов в сете: 12" in text  # и рекорд повторов тоже на месте
+    assert "Рекорд повторов в подходе: 12" in text  # и рекорд повторов тоже на месте
 
 
 async def test_each_session_block_uses_its_own_mode_label():
@@ -83,11 +83,11 @@ async def test_pure_weighted_history_is_unchanged():
 # ---------- handler-level: chart points per-session, not per-last-session ----------
 
 
-async def test_chart_points_use_each_sessions_own_metric(fresh_db, user_id):
-    """До фикса точка тяжёлой сессии на графике подписывалась значением
-    «повторы» (число повторов, а не e1RM), если последняя тренировка в
-    истории упражнения была без веса — числа графика переставали отражать
-    реальный результат той тренировки."""
+async def test_chart_plots_one_metric_and_skips_the_other_mode(fresh_db, user_id):
+    """График остаётся про одну величину. Килограммы e1RM и голые повторы на
+    одной оси читаются как обвал силы (110 и 12 рядом), а раньше сессии с весом
+    вообще подписывались как «повторы». Сессии другого режима просто не
+    попадают на график — оба рекорда всё равно показаны текстом выше."""
     from handlers import history
 
     db = fresh_db
@@ -111,8 +111,7 @@ async def test_chart_points_use_each_sessions_own_metric(fresh_db, user_id):
         await history._render_progress_view(ex_id, user, 8)
 
     points = real_render.call_args.args[0]
-    assert len(points) == 2
-    # Первая (тяжёлая) точка — e1RM 100x5 по Epley = 116.666...; вторая
-    # (bodyweight) точка — просто число повторов, 12.
-    assert points[0][1] == pytest.approx(116.666, abs=0.01)
-    assert points[1][1] == 12.0
+    # Последняя тренировка — своим весом, значит график про повторы, и тяжёлая
+    # сессия в него не идёт: её 116.7 кг рядом с 12 повторами были бы обрывом.
+    assert [p[1] for p in points] == [12.0]
+    assert real_render.call_args.args[2] == "повторы"

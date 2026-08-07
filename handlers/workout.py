@@ -2532,7 +2532,7 @@ async def live_undo(callback: CallbackQuery, state: FSMContext):
     user = await db.get_user(callback.from_user.id)
     result = await _undo_last_set(callback.bot, state, user, data)
     if result.removed is None:
-        await callback.answer("Нет сетов для удаления")
+        await callback.answer("Нет подходов для удаления")
     else:
         w, r = result.removed
         await callback.answer(f"Удалил {formatting.format_set(w, r)}")

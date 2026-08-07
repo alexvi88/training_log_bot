@@ -2026,7 +2026,7 @@ def format_progress_screen(
         lines.append(f"Рекорд: {format_set(records.best_e1rm_weight, records.best_e1rm_reps)} · e1RM {records.max_e1rm:.1f}{u}")
     if have_bw:
         best_reps = max(records.max_reps_at_weight.values()) if records.max_reps_at_weight else 0
-        lines.append(f"Рекорд повторов в сете: {best_reps}")
+        lines.append(f"Рекорд повторов в подходе: {best_reps}")
 
     gold_lines = build_gold_book_lines(golds, unit=unit, is_bodyweight=is_bw)
     if gold_lines:

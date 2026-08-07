@@ -612,20 +612,21 @@ async def _render_progress_view(ex_id: int, user, limit: int, origin: str = "all
     if cached is not None:
         text, png = cached
     else:
-        points: list[tuple[dt.datetime, float]] = []
-        if sessions:
-            # Каждая точка берёт метрику по режиму СВОЕЙ сессии, а не режиму
-            # последней тренировки в истории — упражнение, сменившее режим
-            # (например, подтягивания с весом → своим весом), раньше теряло
-            # реальный e1RM тяжёлых сессий: все точки красились в «повторы»,
-            # потому что последняя тренировка была без веса.
-            points = [
-                (
-                    dt.datetime.fromisoformat(s.started_at),
-                    float(s.max_reps_in_set if s.is_bodyweight_mode else s.top_e1rm),
-                )
-                for s in sessions
-            ]
+        # У упражнения, сменившего режим (подтягивания с весом → своим весом),
+        # в истории живут две несопоставимые величины: килограммы e1RM и голые
+        # повторы. На одной оси они читаются как обвал силы — 110 и 12 рядом.
+        # Поэтому график остаётся про одну величину, а сессии другого режима в
+        # него просто не попадают: рекорды обоих режимов всё равно показаны
+        # текстом выше (formatting.format_progress_screen).
+        chart_is_bw = sessions[-1].is_bodyweight_mode if sessions else False
+        plotted = [s for s in sessions if s.is_bodyweight_mode == chart_is_bw]
+        points: list[tuple[dt.datetime, float]] = [
+            (
+                dt.datetime.fromisoformat(s.started_at),
+                float(s.max_reps_in_set if chart_is_bw else s.top_e1rm),
+            )
+            for s in plotted
+        ]
         comparison = analytics.compare_to_previous_session(sessions)
         records = analytics.compute_personal_records(sessions)
 
@@ -636,14 +637,8 @@ async def _render_progress_view(ex_id: int, user, limit: int, origin: str = "all
         )
 
         png = None
-        if sessions:
-            windowed = sessions[-limit:]
-            have_weighted = any(not s.is_bodyweight_mode for s in windowed)
-            have_bw = any(s.is_bodyweight_mode for s in windowed)
-            # Смешанная история в выбранном окне — подписываем ось честно
-            # обоими именами вместо того, чтобы называть повторы «e1RM» или
-            # наоборот.
-            metric = "e1RM / повторы" if have_weighted and have_bw else ("повторы" if have_bw else "e1RM")
+        if points:
+            metric = "повторы" if chart_is_bw else "e1RM"
             png = await asyncio.to_thread(
                 charts.render_metric_over_sessions,
                 points[-limit:],

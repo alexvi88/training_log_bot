@@ -1690,7 +1690,7 @@ def edit_exercise_keyboard(block_id: int, exercise_id: int, sets) -> InlineKeybo
     b = InlineKeyboardBuilder()
     for set_id, label in sets:
         b.button(text=label, callback_data=f"editw:set:{set_id}")
-    b.button(text="➕ Добавить сет", callback_data=f"editw:addset:{block_id}:{exercise_id}")
+    b.button(text="➕ Добавить подход", callback_data=f"editw:addset:{block_id}:{exercise_id}")
     b.button(text="🗑 Убрать упражнение целиком", callback_data=f"editw:rmexask:{block_id}")
     b.button(text="⬅️ К упражнениям", callback_data="editw:top")
     b.adjust(1)
@@ -1700,7 +1700,7 @@ def edit_exercise_keyboard(block_id: int, exercise_id: int, sets) -> InlineKeybo
 def set_actions_keyboard(set_id: int) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(text="✏️ Изменить вес/повторы", callback_data=f"editw:editset:{set_id}")
-    b.button(text="🗑 Удалить сет", callback_data=f"editw:delset:{set_id}")
+    b.button(text="🗑 Удалить подход", callback_data=f"editw:delset:{set_id}")
     b.button(text="⬅️ Назад", callback_data="editw:back")
     b.adjust(1)
     return b.as_markup()

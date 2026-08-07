@@ -664,7 +664,7 @@ def test_format_progress_screen_bodyweight_session():
     text = formatting.format_progress_screen("Подтягивания", sessions, None, records)
 
     assert "всего повторов 27" in text
-    assert "Рекорд повторов в сете: 15" in text
+    assert "Рекорд повторов в подходе: 15" in text
 
 
 def test_format_progress_screen_bodyweight_shows_rep_growth():
