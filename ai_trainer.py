@@ -9,7 +9,7 @@ user_id текущего пользователя на уровне executor'а,
 
 Пока у пользователя не исчерпана дневная квота (config.AI_SEARCH_DAILY_LIMIT),
 перед основным ответом дешёвый гейт-классификатор на config.GROK_MODEL (см.
-ask/_search_worth_it) решает, нужен ли вопросу живой поиск; и только если
+ask/_gate_verdict) решает, нужен ли вопросу живой поиск; и только если
 нужен — поднимается отдельный шаг через xAI's gRPC "Agent Tools" SDK на
 multi-agent-модели (config.GROK_SEARCH_MODEL) с web_search/x_search, без наших
 DB-инструментов. Инструменты приходится разводить по разным вызовам:
@@ -31,7 +31,7 @@ import logging
 import random
 import re
 from types import SimpleNamespace
-from typing import Any, Awaitable, Callable, Optional
+from typing import Any, Awaitable, Callable, NamedTuple, Optional
 
 from openai import AsyncOpenAI
 from xai_sdk import AsyncClient as AsyncXAIClient
@@ -193,7 +193,7 @@ _sdk_client: Optional[AsyncXAIClient] = None
 _sdk_client_lock = asyncio.Lock()
 
 
-def _cache_headers(user_id: Optional[int]) -> dict[str, str]:
+def _cache_headers(user_id: Optional[int], *, scope: str = "trainer") -> dict[str, str]:
     """Заголовок, которым xAI роутит запрос на тот же сервер, что и прошлый.
 
     Кэш входа у xAI работает сам по себе — платим за совпавший префикс по
@@ -203,11 +203,25 @@ def _cache_headers(user_id: Optional[int]) -> dict[str, str]:
     кэша по полной цене.
 
     Ключ — пользователь, потому что кэшируется ровно его растущий диалог:
-    общая часть (system + схемы инструментов, вместе около десяти тысяч
+    общая часть (system + схемы инструментов, вместе около одиннадцати тысяч
     токенов) одинакова у всех и осядет на его сервере с первого же запроса, а
     дальше к ней прирастает его собственная история.
+
+    scope разводит по разным ключам вызовы с РАЗНЫМИ системными промптами. У
+    гейта (_gate_verdict, SEARCH_DECISION_SYSTEM_PROMPT) промпт свой и втрое
+    короче, общего с основным у них почти ничего — а ходили они под одним
+    conv-id, то есть в один слот кэша. В логах прода это выглядело так:
+
+        14:57:20  main: 14855 токенов (из кэша 14080)   ← тепло
+        14:59:56  гейт: 1318 токенов  (из кэша 896)     ← гейт занял слот
+        15:00:06  main: 12203 токенов (из кэша 128)     ← основному не осталось
+
+    Между тёплым и холодным основным вызовом — две минуты и ни одного
+    перезапуска, так что дело не в TTL и не в деплое. Холодный основной вызов
+    стоит ~$0.026 против ~$0.006 тёплого, то есть вытеснение слота вчетверо
+    дороже самого запроса.
     """
-    return {"x-grok-conv-id": f"trainer-{user_id}"} if user_id is not None else {}
+    return {"x-grok-conv-id": f"{scope}-{user_id}"} if user_id is not None else {}
 
 
 async def _get_sdk_client() -> AsyncXAIClient:
@@ -541,17 +555,30 @@ def _search_system_prompt(today: dt.date) -> str:
 
 SEARCH_DECISION_SYSTEM_PROMPT = """\
 Ты — классификатор в AI-тренере (Telegram-бот дневника силовых тренировок).
-Твоя единственная задача: решить, нужен ли для ответа на последний вопрос
-пользователя живой поиск в интернете (свежие исследования, новости, цены,
-факты о внешнем мире, актуальные рекомендации по питанию/технике из открытых
-источников) — или на него можно ответить из данных самого пользователя и общих
-знаний.
+Ты принимаешь два независимых решения по последнему вопросу пользователя.
 
-Ответь РОВНО одним словом, без пояснений и знаков препинания:
-YES — если для хорошего ответа нужен свежий веб/X-поиск.
-NO — если не нужен (вопрос про тренировки, прогресс, данные или самочувствие
-самого пользователя, либо ответ не зависит от свежих данных из интернета).
-Если сомневаешься — отвечай NO.
+РЕШЕНИЕ 1 — SEARCH. Нужен ли живой поиск в интернете: свежие исследования,
+новости, цены, факты о внешнем мире, актуальные рекомендации из открытых
+источников. Если ответ не зависит от свежих данных из сети — не нужен.
+
+РЕШЕНИЕ 2 — DATA. Нужны ли тренеру ДАННЫЕ САМОГО ПОЛЬЗОВАТЕЛЯ из базы бота:
+его тренировки, подходы, веса, прогресс, рекорды, программы, вес тела, еда,
+история переписки. Нужны и тогда, когда пользователь просит что-то СДЕЛАТЬ с
+его данными: составить или изменить программу, записать еду или вес,
+переименовать упражнение, поделиться карточкой.
+
+DATA=NO — только для вопросов об общих знаниях, где личная история вообще не
+участвует: «креатин работает?», «сколько белка на кг?», «чем опасен читинг в
+тяге?». Как только в вопросе есть «мне», «мой», «у меня», «составь», «запиши»,
+«сколько я» — это DATA=YES.
+
+Если сомневаешься — DATA=YES. Ошибка в эту сторону стоит немного лишних
+токенов, а ошибка в другую оставит тренера без доступа к данным, и он ответит
+общими словами вместо конкретики по человеку.
+
+Ответь РОВНО двумя строками, без пояснений:
+SEARCH=YES или SEARCH=NO
+DATA=YES или DATA=NO
 """
 
 
@@ -3567,13 +3594,13 @@ async def ask(
     упражнение): колбэк получает подпись и callback_data будущей кнопки.
 
     Пока не исчерпана дневная квота поисковых ответов (config.AI_SEARCH_DAILY_LIMIT),
-    перед основным ответом дешёвый гейт на быстрой модели (см. _search_worth_it)
+    перед основным ответом дешёвый гейт (см. _gate_verdict)
     решает, нужен ли вопросу живой веб/X-поиск, и только на «да» поднимается
     отдельный дорогой шаг multi-agent поиска (см. _web_search_findings). Найденное
     (если есть) добавляется контекстом к основному REST-вызову с обычными
     инструментами.
     """
-    # Дешёвый гейт на быстрой модели (_search_worth_it) решает, стоит ли вообще
+    # Дешёвый гейт (_gate_verdict) решает, стоит ли вообще
     # поднимать дорогой multi-agent поиск, и только на «да» он запускается. Так
     # дорогая модель не дёргается на каждый вопрос (большинство — про личные данные,
     # поиска не требуют). Порядок в and важен: короткое замыкание не даёт вызвать
@@ -3583,20 +3610,26 @@ async def ask(
     # принёс». Сломанный гейт (см. _SEARCH_GATE_MAX_TOKENS) в этом логе был
     # неотличим от честного отказа — и потому прожил незамеченным.
     search_context = None
+    # Гейт решает сразу два вопроса — поиск и доступ к данным (см. GateVerdict),
+    # поэтому вызывается он и при исчерпанной поисковой квоте: инструменты нужны
+    # независимо от поиска, и экономить на этом решении нечего — вердикт всё
+    # равно стоит доли цента, а лишние 6900 токенов схем в каждом раунде дороже.
+    gate = await _gate_verdict(user_id, question, history)
     if await db.get_ai_search_count_today(user_id) >= config.AI_SEARCH_DAILY_LIMIT:
         search_outcome = "skipped: daily limit reached"
-    elif not await _search_worth_it(user_id, question, history):
+    elif not gate.search:
         search_outcome = "skipped: gate says not needed"
     else:
         search_context = await _web_search_findings(user_id, question, history, on_status)
         search_outcome = "used" if search_context else "ran but found nothing"
     logger.info(
-        "AI trainer question from user %s: %r (web search: %s)",
+        "AI trainer question from user %s: %r (web search: %s; данные пользователя: %s)",
         user_id, question, search_outcome,
+        "схемы отправлены" if gate.data else "схемы НЕ отправлены, гейт сказал не нужны",
     )
     return await _ask_plain(
         user_id, question, history, image_data_url, search_context, on_status, on_program,
-        on_action, on_chunk, video_context,
+        on_action, on_chunk, video_context, with_tools=gate.data,
     )
 
 
@@ -3716,6 +3749,7 @@ async def _ask_plain(
     on_action: ActionCallback = None,
     on_chunk: ChunkCallback = None,
     video_context: Optional[str] = None,
+    with_tools: bool = True,
 ) -> str:
     client = _get_client()
     messages: list[dict[str, Any]] = [
@@ -3735,7 +3769,13 @@ async def _ask_plain(
 
     content = ""
     for _ in range(MAX_TOOL_ROUNDS + 1):
-        content, tool_calls = await _completion_round(client, messages, user_id, on_chunk)
+        # with_tools=False — гейт решил, что данные пользователя вопросу не нужны
+        # (общее знание вроде «креатин работает?»), и тогда схемы 27 инструментов
+        # не уезжают вовсе: это около 6900 токенов из каждого раунда. Раунд тут
+        # заведомо один — вызвать модели нечего, она отвечает текстом.
+        content, tool_calls = await _completion_round(
+            client, messages, user_id, on_chunk, include_tools=with_tools
+        )
         if not tool_calls:
             break
         if on_status:
@@ -3817,13 +3857,33 @@ def _to_xai_messages(
 _SEARCH_GATE_MAX_TOKENS = 512
 
 
-async def _search_worth_it(
+class GateVerdict(NamedTuple):
+    """Что решил дешёвый гейт по вопросу: нужен ли поиск и нужны ли данные.
+
+    Оба поля «по умолчанию безопасны» в разные стороны, и это не симметрия, а
+    расчёт: не искать — дешевле и безопаснее (поиск дорогой, а без него ответ
+    просто менее свежий), а данные наоборот — лучше дать зря, чем оставить
+    тренера без доступа к истории, потому что тогда он ответит общими словами
+    там, где от него ждут конкретику по человеку.
+    """
+
+    search: bool = False
+    data: bool = True
+
+
+async def _gate_verdict(
     user_id: int,
     question: str,
     history: list[dict[str, Any]],
-) -> bool:
-    """Дешёвый гейт перед поиском: решаем на config.GROK_MODEL, нужен ли вопросу
-    живой веб/X-поиск вообще.
+) -> GateVerdict:
+    """Дешёвый гейт: решаем на config.GROK_MODEL, нужен ли вопросу живой
+    веб/X-поиск и нужны ли тренеру данные пользователя.
+
+    Второе решение экономит заметно больше первого. Схемы 27 инструментов — это
+    около 6900 токенов, которые уезжают в КАЖДОМ раунде tool-call'ов, и на
+    вопросе «креатин работает?» ни один из них не нужен: ответ пришёл одним
+    вызовом, без единого обращения к базе. Отдать в таком случае ноль схем —
+    минус две трети входа.
 
     Решение «искать или нет» — обычная классификация, ей не нужен веб-доступ,
     поэтому гонять на каждый вопрос отдельный шаг с config.GROK_SEARCH_MODEL
@@ -3833,8 +3893,8 @@ async def _search_worth_it(
     не передаём — тема поиска считывается по тексту, а фото у нас почти всегда
     личное (форма, еда), поиска не просит.
 
-    При любой ошибке/неоднозначности возвращаем False: не искать безопаснее и
-    дешевле, чем впустую дёргать дорогую модель.
+    При любой ошибке или неразборчивом ответе возвращаем значения по умолчанию
+    (см. GateVerdict): не искать и данные всё-таки дать.
     """
     try:
         client = _get_client()
@@ -3842,7 +3902,10 @@ async def _search_worth_it(
             model=config.GROK_MODEL,
             max_tokens=_SEARCH_GATE_MAX_TOKENS,
             extra_body={"reasoning_effort": config.GROK_QUICK_REASONING_EFFORT},
-            extra_headers=_cache_headers(user_id),
+            # Свой слот кэша: у гейта системный промпт втрое короче основного и
+            # общего с ним почти ничего, а под одним conv-id они вытесняли друг
+            # друга — см. _cache_headers, там разобран лог прода.
+            extra_headers=_cache_headers(user_id, scope="gate"),
             messages=[
                 {
                     "role": "system",
@@ -3853,19 +3916,37 @@ async def _search_worth_it(
             ],
         )
     except Exception:
-        logger.exception("AI trainer search-decision step failed, skipping live search")
-        return False
+        logger.exception("AI trainer gate step failed, falling back to defaults")
+        return GateVerdict()
     await _log_llm_cost(user_id, config.GROK_MODEL, getattr(response, "usage", None))
     verdict = (response.choices[0].message.content or "").strip().upper()
     if not verdict:
         # Пустой content — почти всегда обрезанный бюджет (см.
         # _SEARCH_GATE_MAX_TOKENS). Раньше это молча означало «не искать», и
         # отличить сломанный гейт от честного NO было нельзя ничем.
-        logger.warning("AI trainer search gate returned an empty verdict, skipping live search")
-        return False
-    # Модель просят ответить голым словом, но она нет-нет да обернёт его в
-    # markdown или кавычки — из-за «**YES**» терять живой поиск глупо.
-    return verdict.lstrip("*_`'\"«# ").startswith("YES")
+        logger.warning("AI trainer gate returned an empty verdict, using defaults")
+        return GateVerdict()
+
+    # Модель просят ответить двумя строками, но она нет-нет да обернёт их в
+    # markdown или кавычки — из-за «**SEARCH=YES**» терять живой поиск глупо.
+    # Поэтому не парсим построчно, а ищем ключ со значением в тексте целиком.
+    def _flag(key: str, default: bool) -> bool:
+        match = re.search(rf"{key}\s*[:=]\s*[*_`'\"«#\s]*(YES|NO)", verdict)
+        if match is None:
+            # Ключа нет — вердикт неполный. Молча взять default нельзя: на DATA
+            # это тихо отключило бы тренеру доступ к базе.
+            logger.warning(
+                "AI trainer gate verdict has no %s, using default %s (verdict: %r)",
+                key, default, verdict[:120],
+            )
+            return default
+        return match.group(1) == "YES"
+
+    defaults = GateVerdict()
+    return GateVerdict(
+        search=_flag("SEARCH", defaults.search),
+        data=_flag("DATA", defaults.data),
+    )
 
 
 async def _web_search_findings(
@@ -3897,7 +3978,7 @@ async def _web_search_findings(
 
     Фото пользователя в этот шаг НЕ передаём: оно почти всегда личное (форма,
     тело, еда), а тему поиска модель считывает по тексту — незачем форвардить
-    личную картинку во внешний веб/X-поиск (тот же довод, что и в _search_worth_it).
+    личную картинку во внешний веб/X-поиск (тот же довод, что и в _gate_verdict).
     """
     if on_status:
         await on_status("🔎 ищу свежую информацию в сети...")
