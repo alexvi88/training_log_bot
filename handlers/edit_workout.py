@@ -373,7 +373,11 @@ async def editw_remove_exercise(callback: CallbackQuery, state: FSMContext):
     if workout_id is None:
         return
     await db.delete_block_and_sets(block_id)
-    await db.set_workout_ai_comment(workout_id, None)
+    # Через общий хелпер, а не «сбросить комментарий и всё»: убрать упражнение
+    # целиком — то же самое для данных, что удалить его подходы по одному, и
+    # значки должны сниматься так же. Раньше «Клуб 140» за единственный сет на
+    # 150 кг оставался в профиле навсегда, хотя самого сета в истории уже нет.
+    await _on_workout_edited(workout_id)
     await callback.answer("Упражнение убрано из тренировки")
     await state.update_data(edit_block_id=None, edit_exercise_id=None)
     await show_edit_screen(callback, state, workout_id)

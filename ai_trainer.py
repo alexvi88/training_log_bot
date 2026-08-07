@@ -1035,6 +1035,28 @@ def _as_number(value: Any) -> Optional[float]:
     return None
 
 
+# Потолки на одну позицию приёма пищи. Как MAX_WEIGHT/MAX_REPS в parser.py, это
+# отбраковка невозможного, а не спор с человеком: столько за раз не съедают.
+MAX_FOOD_KCAL = 10000.0
+MAX_FOOD_GRAMS = 2000.0
+
+
+def _as_macro(value: Any, limit: float) -> Optional[float]:
+    """Число КБЖУ из ответа модели — или None, если оно не бывает.
+
+    Отрицательные и запредельные значения раньше ехали дальше как достоверные:
+    галлюцинация или битый JSON с минусом давали карточку «Итого: -165 ккал ·
+    Б-10 · Ж-5 · У-20», такая же строка ложилась в дневник и утягивала в минус
+    итог за день. None здесь честнее нуля: он означает «не знаю», и вся цепочка
+    ниже (_atwater_kcal, _sum_field, экраны) уже умеет с ним обращаться, а ноль
+    выглядел бы измеренным.
+    """
+    number = _as_number(value)
+    if number is None or number < 0 or number > limit:
+        return None
+    return number
+
+
 # Коэффициенты Атуотера — по ним калорийность считают на этикетках: белки и
 # углеводы по 4 ккал/г, жиры 9 ккал/г.
 _KCAL_PER_GRAM = {"protein": 4.0, "fat": 9.0, "carbs": 4.0}
@@ -1151,10 +1173,10 @@ async def analyze_food(
         item = {
             "name": name,
             "portion": str(raw.get("portion") or "").strip(),
-            "calories": _as_number(raw.get("calories")),
-            "protein": _as_number(raw.get("protein")),
-            "fat": _as_number(raw.get("fat")),
-            "carbs": _as_number(raw.get("carbs")),
+            "calories": _as_macro(raw.get("calories"), MAX_FOOD_KCAL),
+            "protein": _as_macro(raw.get("protein"), MAX_FOOD_GRAMS),
+            "fat": _as_macro(raw.get("fat"), MAX_FOOD_GRAMS),
+            "carbs": _as_macro(raw.get("carbs"), MAX_FOOD_GRAMS),
         }
         _reconcile_macros(item)
         items.append(item)
@@ -3219,8 +3241,9 @@ async def _estimate_missing_macros(user_id: int, description: str, entry: dict[s
         return False
     if not estimate.get("is_food"):
         return False
+    limits = {"calories": MAX_FOOD_KCAL}
     for key in ("calories", "protein", "fat", "carbs"):
-        entry[key] = _as_number(estimate.get(key))
+        entry[key] = _as_macro(estimate.get(key), limits.get(key, MAX_FOOD_GRAMS))
     _reconcile_macros(entry)
     return entry["calories"] is not None
 
@@ -3242,10 +3265,10 @@ async def _log_food(
     if not description:
         return {"error": "нужно описание того, что съели"}, None
     entry = {
-        "calories": _as_number(tool_input.get("calories")),
-        "protein": _as_number(tool_input.get("protein")),
-        "fat": _as_number(tool_input.get("fat")),
-        "carbs": _as_number(tool_input.get("carbs")),
+        "calories": _as_macro(tool_input.get("calories"), MAX_FOOD_KCAL),
+        "protein": _as_macro(tool_input.get("protein"), MAX_FOOD_GRAMS),
+        "fat": _as_macro(tool_input.get("fat"), MAX_FOOD_GRAMS),
+        "carbs": _as_macro(tool_input.get("carbs"), MAX_FOOD_GRAMS),
     }
     _reconcile_macros(entry)
     user = await db.get_user(user_id)

@@ -215,3 +215,24 @@ async def test_second_new_exercise_does_not_disturb_the_first(fresh_db, user_id)
     assert [(s["weight"], s["reps"]) for s in await db.list_sets_for_block(first_block)] == [(100.0, 5)]
     blocks = await db.list_blocks_for_workout(workout_id)
     assert len(blocks) == 2
+
+
+async def test_removing_an_exercise_takes_back_the_badges_its_sets_unlocked(fresh_db, user_id):
+    """Находка 32: значок «Клуб 140» за единственный сет на 150 кг оставался в
+    профиле навсегда, если убрать упражнение целиком, — хотя удаление того же
+    сета кнопкой на экране сета его корректно снимало."""
+    import achievement_sync
+
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    workout_id = await _make_finished_workout(db, user_id)
+    _, block_id = await _add_exercise_block(
+        db, user_id, workout_id, group_id, "Жим лёжа", sets=[(150.0, 3)]
+    )
+    await achievement_sync.resync(user_id)
+    assert "club140" in set(await db.list_achievement_codes(user_id))
+    state = await _make_state(user_id, workout_id)
+
+    await edit_workout.editw_remove_exercise(_make_callback(user_id, f"editw:rmex:{block_id}"), state)
+
+    assert "club140" not in set(await db.list_achievement_codes(user_id))
