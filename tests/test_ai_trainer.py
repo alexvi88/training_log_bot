@@ -1488,3 +1488,56 @@ async def test_search_daily_limit_is_sized_for_the_real_price():
     """Сорок ставилось, пока поиск был сломан и стоил ноль. Реальная цена вопроса
     с поиском — около $0.23, то есть сорок это $9 в день на человека."""
     assert config.AI_SEARCH_DAILY_LIMIT <= 10
+
+
+# ---------- поиск только по нашей теме, и схемы не ломают кэш ----------
+
+
+async def test_gate_prompt_keeps_search_on_our_topic():
+    """«Новости политики сегодня» ушли в живой поиск за 11 центов. Свежесть там
+    правда нужна — но тренеру политика не по профилю, а поиск стоит дорого."""
+    prompt = ai_trainer.SEARCH_DECISION_SYSTEM_PROMPT
+    assert "тренировки" in prompt and "питание" in prompt
+    assert "политик" in prompt.lower(), "гейт должен знать пример не-нашей темы"
+
+
+async def test_search_step_is_told_to_be_frugal():
+    """Одиннадцать запросов и 79 тысяч входных токенов на одном вопросе никто не
+    заказывал: содержимое страниц целиком идёт в оплату."""
+    assert "ЭКОНОМНО" in ai_trainer.SEARCH_SYSTEM_PROMPT
+
+
+async def test_tools_stay_on_once_a_conversation_has_history(fresh_db, user_id, monkeypatch):
+    """Схемы можно выбросить только на первом вопросе. Дальше промах по префиксу
+    дороже экономии: 30272 токена из кэша стоили $0.0105, а 17732 без кэша —
+    $0.0387. Меньше токенов, втрое дороже."""
+    client = _fake_client([
+        _response(content='{"search": false, "data": false}'),
+        _response(content="ответ"),
+    ])
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+    history = [
+        {"role": "user", "content": "как прогресс?"},
+        {"role": "assistant", "content": "растёт"},
+    ]
+
+    await ai_trainer.ask(user_id, "сколько белка на кг?", history=history)
+
+    main_call = client.chat.completions.create.await_args_list[-1].kwargs
+    assert main_call.get("tools"), "схемы выкинули посреди разговора — это промах кэша"
+
+
+async def test_tools_can_still_be_skipped_on_the_very_first_question(
+    fresh_db, user_id, monkeypatch
+):
+    """На первом вопросе кэшу терять нечего — префикса ещё нет, экономия чистая."""
+    client = _fake_client([
+        _response(content='{"search": false, "data": false}'),
+        _response(content="ответ"),
+    ])
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+
+    await ai_trainer.ask(user_id, "сколько белка на кг?", history=[])
+
+    main_call = client.chat.completions.create.await_args_list[-1].kwargs
+    assert "tools" not in main_call
