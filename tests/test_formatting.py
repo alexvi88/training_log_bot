@@ -968,7 +968,7 @@ def test_workout_card_footer_counts_every_set_not_the_collapsed_ones():
     _title, _body, footer, _note = formatting.build_workout_card(
         dt.datetime(2026, 7, 26, 13), blocks
     )
-    assert "5 сетов" in footer
+    assert "5 подходов" in footer
 
 
 def test_program_changes_report_a_rewritten_progression_rule():
