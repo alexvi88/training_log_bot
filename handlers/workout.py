@@ -335,6 +335,19 @@ async def _reply_transient(message: Message, text: str) -> None:
     )
 
 
+def _looks_like_a_set(text: str) -> bool:
+    """Похоже ли на запись подхода («100 8», «100x8x3», «+20 8»), а не на поиск.
+
+    Нужно там, где подход написать ещё некуда: в названиях упражнений цифр без
+    букв не бывает, так что спутать нечего.
+    """
+    try:
+        parse_sets_line(text)
+    except ParseError:
+        return False
+    return True
+
+
 async def _delete_message_later(bot, chat_id: int, message_id: int, delay: float) -> None:
     await asyncio.sleep(delay)
     with suppress(TelegramBadRequest):
@@ -1342,6 +1355,70 @@ async def _rebuild_planned_blocks_from_routine(workout_id: int, routine_id: int)
     ]
 
 
+async def resync_plan_with_routine(state: FSMContext, routine_id: int) -> str | None:
+    """Подтянуть остаток плана идущей тренировки под свежеотредактированную
+    программу. Возвращает короткую сводку изменений или None, если менять нечего.
+
+    Раньше план был снимком, снятым на старте дня: заменил упражнение в
+    программе посреди тренировки — экран «📋 Другое из плана» продолжал звать на
+    старое, а новое не появлялось вовсе. Согласовать их можно было только
+    завершив тренировку и начав заново.
+
+    Пересобираем не с нуля, а разницей — иначе бы вернулось всё, что человек
+    осознанно выкинул кнопкой «Убрать из плана» (см. plan_skipped_ids) или уже
+    успел сделать.
+    """
+    data = await state.get_data()
+    workout_id = data.get("workout_id")
+    planned = data.get("planned_blocks")
+    if workout_id is None or planned is None:
+        return None
+    workout = await db.get_workout(workout_id)
+    if workout is None or workout["status"] != "active" or workout["routine_id"] != routine_id:
+        return None
+
+    entries = await db.list_routine_exercises(routine_id)
+    in_routine = {ex["exercise_id"]: ex["target"] for ex in entries}
+    done = set(await db.list_exercise_ids_for_workout(workout_id))
+    skipped = set(data.get("plan_skipped_ids") or [])
+
+    kept, removed_ids = [], []
+    for block in planned:
+        ex_ids = [i for i in (block.get("exercise_ids") or []) if i in in_routine]
+        removed_ids += [i for i in (block.get("exercise_ids") or []) if i not in in_routine]
+        if not ex_ids:
+            continue
+        # Схемы подходов тоже свежие: правка «3×10» → «4×8» должна доехать.
+        targets = {i: in_routine[i] for i in ex_ids if in_routine[i]}
+        kept.append({**block, "exercise_ids": ex_ids, "targets": targets})
+
+    planned_ids = {i for block in kept for i in block["exercise_ids"]}
+    added_ids = [
+        ex_id for ex_id in in_routine
+        if ex_id not in planned_ids and ex_id not in done and ex_id not in skipped
+    ]
+    kept += [
+        {"exercise_ids": [ex_id], "targets": {ex_id: in_routine[ex_id]} if in_routine[ex_id] else {}}
+        for ex_id in added_ids
+    ]
+    if not added_ids and not removed_ids and kept == planned:
+        return None
+    await state.update_data(planned_blocks=kept)
+
+    async def names(ids: list[int]) -> str:
+        got = [await db.get_exercise(i) for i in ids]
+        return ", ".join(ex["display_name"] for ex in got if ex is not None)
+
+    parts = []
+    if added_ids:
+        parts.append(f"добавил {await names(added_ids)}")
+    if removed_ids:
+        parts.append(f"убрал {await names(removed_ids)}")
+    if not parts:
+        return "План текущей тренировки обновил."
+    return "План текущей тренировки обновил: " + " и ".join(parts) + "."
+
+
 async def _enter_live(
     callback: CallbackQuery, state: FSMContext, workout_id: int, delete_message: bool = True
 ):
@@ -1626,10 +1703,16 @@ async def _picker_screen_search(callback_or_message, state: FSMContext, user):
     own, templates = await _search_matches(callback_or_message.from_user.id, query)
     combined = [("ex", row) for row in own] + [("tpl", row) for row in templates]
     chunk = combined[page * size : (page + 1) * size]
+    # Кнопку «создать» показываем на любой выдаче, даже когда группа не выбрана:
+    # раньше поиск с экрана групп при пустом результате оставлял одно «Назад» —
+    # не нашли и создать нельзя. Группа у нового упражнения необязательна
+    # (db.create_exercise принимает None), так что запрещать было нечего.
     kb = keyboards.exercises_keyboard(
         [row for kind, row in chunk if kind == "ex"],
         prefix="pick", back_cb="back",
-        show_new_button=data.get("pending_group_id") is not None,
+        show_new_button=True,
+        new_text=None if combined else f"➕ Создать «{formatting.shorten(query, 28)}»",
+        new_cb="new" if combined else "newquery",
         page=page, has_next=(page + 1) * size < len(combined),
         templates=[row for kind, row in chunk if kind == "tpl"],
     )
@@ -1638,9 +1721,7 @@ async def _picker_screen_search(callback_or_message, state: FSMContext, user):
         word = formatting.plural_ru(total, ("совпадение", "совпадения", "совпадений"))
         hint = f"Результаты поиска «{escape(query)}» — {total} {word}:"
     else:
-        hint = f"Ничего не нашлось по «{escape(query)}»."
-        if data.get("pending_group_id") is not None:
-            hint += " Можно создать новое:"
+        hint = f"Ничего не нашлось по «{escape(query)}». Заведи своё или напиши иначе:"
     await state.update_data(picker_stage="exercises")
     await _refresh_live(callback_or_message.bot, state, user, data["workout_id"], hint, kb)
 
@@ -1718,6 +1799,14 @@ async def pick_exercise_search(message: Message, state: FSMContext):
     dropped — so the user can jump straight to an exercise by name without first
     drilling into its muscle group."""
     query = message.text.strip()
+    if _looks_like_a_set(query):
+        # Приветствие обещает «подход пишешь строкой — 100 8», а первое же
+        # действие новичка приводит сюда, где упражнения ещё нет. Раньше «100 8»
+        # уходило в поиск и возвращалось «ничего не нашлось» — инструкция
+        # выглядела враньём. Отвечаем тем, чего не хватает; подсказка и сам ввод
+        # растворятся сами.
+        await _reply_transient(message, "Сначала выбери упражнение — подход запишу сразу после.")
+        return
     await _delete_message(message)
     if not query:
         return
@@ -1734,10 +1823,16 @@ async def pick_exercise_search(message: Message, state: FSMContext):
 async def _new_exercise_entry_screen(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     user = await db.get_user(callback.from_user.id)
+    # Без выбранной группы браузер шаблонов показывать нечего — он листает
+    # шаблоны одной группы. Сюда можно прийти поиском с экрана групп.
+    has_group = data.get("pending_group_id") is not None
+    hint = (
+        "Напиши название нового упражнения или выбери из шаблонов:"
+        if has_group else "Напиши название нового упражнения:"
+    )
     await _refresh_live(
-        callback.bot, state, user, data["workout_id"],
-        "Напиши название нового упражнения или выбери из шаблонов:",
-        keyboards.new_exercise_entry_keyboard("pick"),
+        callback.bot, state, user, data["workout_id"], hint,
+        keyboards.new_exercise_entry_keyboard("pick", show_templates=has_group),
     )
 
 
@@ -1823,13 +1918,9 @@ def _suspicious_exercise_name_reason(name: str) -> str | None:
     return None
 
 
-@router.message(StateFilter(WorkoutFlow.creating_exercise_name), F.text)
-async def new_exercise_name_entered(message: Message, state: FSMContext):
-    name = message.text.strip()
-    if not name:
-        await message.reply("Название не может быть пустым")
-        return
-    await _delete_message(message)
+async def _create_exercise_named(event, state: FSMContext, name: str) -> None:
+    """Создать упражнение с готовым именем — общий хвост для набранного вручную
+    названия и для кнопки «➕ Создать «…»» из пустой выдачи поиска."""
     reason = _suspicious_exercise_name_reason(name)
     if reason:
         # A stray message typed while the bot happened to be waiting for a name
@@ -1837,17 +1928,41 @@ async def new_exercise_name_entered(message: Message, state: FSMContext):
         # so ask instead of silently blocking it.
         await state.update_data(pending_long_exercise_name=name)
         data = await state.get_data()
-        user = await db.get_user(message.from_user.id)
+        user = await db.get_user(event.from_user.id)
         kb = keyboards.yes_no_keyboard(
             yes_cb="pick:longname:yes", no_cb="pick:longname:no",
             yes_text="✅ Да, создать", no_text="✏️ Написать заново",
         )
         hint = f"«{escape(name)}» — {reason}. Всё верно, создать такое?"
-        await _refresh_live(message.bot, state, user, data["workout_id"], hint, kb)
+        await _refresh_live(event.bot, state, user, data["workout_id"], hint, kb)
         return
     data = await state.get_data()
-    ex_id = await db.create_exercise(message.from_user.id, name, data["pending_group_id"])
-    await _on_exercise_chosen(message, state, ex_id)
+    ex_id = await db.create_exercise(event.from_user.id, name, data.get("pending_group_id"))
+    await _on_exercise_chosen(event, state, ex_id)
+
+
+@router.callback_query(StateFilter(WorkoutFlow.picking_exercise), F.data == "pick:newquery")
+async def pick_new_from_query(callback: CallbackQuery, state: FSMContext):
+    """«➕ Создать «жим сидя»» с экрана, где поиск ничего не нашёл: имя уже
+    набрано, второй раз спрашивать его незачем."""
+    data = await state.get_data()
+    name = (data.get("pick_query") or "").strip()
+    if not name:
+        await callback.answer("Запрос потерялся — напиши название заново", show_alert=True)
+        return
+    await state.set_state(WorkoutFlow.creating_exercise_name)
+    await _create_exercise_named(callback, state, name)
+    await callback.answer()
+
+
+@router.message(StateFilter(WorkoutFlow.creating_exercise_name), F.text)
+async def new_exercise_name_entered(message: Message, state: FSMContext):
+    name = message.text.strip()
+    if not name:
+        await message.reply("Название не может быть пустым")
+        return
+    await _delete_message(message)
+    await _create_exercise_named(message, state, name)
 
 
 @router.callback_query(StateFilter(WorkoutFlow.creating_exercise_name), F.data == "pick:longname:yes")
@@ -1858,7 +1973,7 @@ async def pick_longname_confirmed(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Название потерялось, напиши заново", show_alert=True)
         return
     await state.update_data(pending_long_exercise_name=None)
-    ex_id = await db.create_exercise(callback.from_user.id, name, data["pending_group_id"])
+    ex_id = await db.create_exercise(callback.from_user.id, name, data.get("pending_group_id"))
     await _on_exercise_chosen(callback, state, ex_id)
 
 
@@ -2702,8 +2817,12 @@ async def live_plan_skip(callback: CallbackQuery, state: FSMContext):
     if not 0 <= index < len(planned):
         await callback.answer("Это упражнение уже не в плане")
         return
-    planned.pop(index)
-    await state.update_data(planned_blocks=planned)
+    dropped = planned.pop(index)
+    # Помним, что именно выкинули: правка программы по ходу тренировки
+    # пересобирает остаток плана (resync_plan_with_routine), и вернуть туда
+    # сломанный тренажёр было бы издевательством.
+    skipped = set(data.get("plan_skipped_ids") or []) | set(dropped.get("exercise_ids") or [])
+    await state.update_data(planned_blocks=planned, plan_skipped_ids=sorted(skipped))
     await _plan_screen(callback, state, removing=True)
     await callback.answer("Убрал")
 

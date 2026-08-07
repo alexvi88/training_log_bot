@@ -169,7 +169,7 @@ def test_keyboard_shows_only_a_page_of_mentions_with_a_next_arrow():
         "ai:excard:1", "ai:excard:2", "ai:excard:3",
     ]
     nav_row = rows[3]
-    assert [b.text for b in nav_row] == ["➡️"]
+    assert [b.text for b in nav_row] == [keyboards.PAGE_NEXT_TEXT]
     assert nav_row[0].callback_data == "ai:mpage:1:1,2,3,4,5"
 
 
@@ -179,7 +179,7 @@ def test_keyboard_second_page_shows_remaining_mentions_and_a_prev_arrow():
     rows = kb.inline_keyboard
     assert [b.callback_data for row in rows[:2] for b in row] == ["ai:excard:4", "ai:excard:5"]
     nav_row = rows[2]
-    assert [b.text for b in nav_row] == ["⬅️"]
+    assert [b.text for b in nav_row] == [keyboards.PAGE_PREV_TEXT]
     assert nav_row[0].callback_data == "ai:mpage:0:1,2,3,4,5"
 
 
