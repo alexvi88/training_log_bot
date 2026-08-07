@@ -21,8 +21,11 @@ def _message(duration=10, file_size=1024, caption=None, user_id=777):
     message = MagicMock()
     message.from_user = SimpleNamespace(id=user_id)
     message.caption = caption
-    message.video = SimpleNamespace(duration=duration, file_size=file_size)
+    message.video = SimpleNamespace(
+        duration=duration, file_size=file_size, mime_type="video/mp4"
+    )
     message.video_note = None
+    message.animation = None
     message.reply = AsyncMock()
     message.answer = AsyncMock(return_value=SimpleNamespace(delete=AsyncMock()))
     message.bot = MagicMock()
@@ -148,3 +151,42 @@ async def test_video_note_accepted(wired):
     await handler.ai_video_question(message, MagicMock())
 
     wired.analyze.assert_awaited_once()
+    # У кружка своего mime_type нет — подставляем mp4, а не падаем на getattr.
+    assert wired.analyze.await_args.kwargs["mime_type"] == "video/mp4"
+
+
+async def test_animation_accepted(wired):
+    """Ролик без аудиодорожки Telegram присылает как animation (в клиенте «GIF»).
+
+    Именно на этом фича молча не работала: фильтр ловил только video, и снятое
+    молча видео из зала улетало в общий fallback «Не понял».
+    """
+    message = _message()
+    message.video = None
+    message.animation = SimpleNamespace(duration=12, file_size=3072, mime_type="video/mp4")
+    await handler.ai_video_question(message, MagicMock())
+
+    wired.analyze.assert_awaited_once()
+
+
+async def test_animation_mime_type_passed_through(wired):
+    """Настоящий .gif приходит как image/gif — врать про тип в data: URL нельзя."""
+    message = _message()
+    message.video = None
+    message.animation = SimpleNamespace(duration=5, file_size=1024, mime_type="image/gif")
+    await handler.ai_video_question(message, MagicMock())
+
+    assert wired.analyze.await_args.kwargs["mime_type"] == "image/gif"
+
+
+async def test_animation_length_limit_applies(wired):
+    """Лимит длины не должен обходиться через тип: GIF считается так же."""
+    message = _message()
+    message.video = None
+    message.animation = SimpleNamespace(
+        duration=config.MAX_VIDEO_SECONDS + 5, file_size=1024, mime_type="video/mp4"
+    )
+    await handler.ai_video_question(message, MagicMock())
+
+    message.bot.download.assert_not_awaited()
+    wired.analyze.assert_not_awaited()

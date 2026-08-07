@@ -17,7 +17,7 @@ import ai_trainer
 import db
 import keyboards
 from fsm import AITrainerFlow
-from handlers.ai_trainer import INTRO_TEXT, RESUME_TEXT, ai_keyboard
+from handlers.ai_trainer import INTRO_TEXT, RESUME_TEXT, ai_keyboard, intro_presets
 
 router = Router(name="persistent_menu")
 
@@ -87,8 +87,19 @@ async def _open_ai_trainer(message: Message, state: FSMContext) -> None:
     await _clear_state_keep_workout(state)
     await state.set_state(AITrainerFlow.chatting)
     data = await state.get_data()
-    text = INTRO_TEXT if not data.get("ai_history") else RESUME_TEXT
-    await message.answer(text, reply_markup=await ai_keyboard(message.from_user.id), parse_mode="HTML")
+    fresh = not data.get("ai_history")
+    text = INTRO_TEXT if fresh else RESUME_TEXT
+    # Готовые вопросы — те же, что на инлайн-входе (menu:ai). Без них нижняя
+    # кнопка показывала интро, которое обещает «начни с готового вопроса на
+    # кнопках ниже», а под текстом было одно «Меню»: экран врал сам себе, и
+    # зависело это от того, каким из двух входов человек вошёл.
+    await message.answer(
+        text,
+        reply_markup=await ai_keyboard(
+            message.from_user.id, presets=intro_presets() if fresh else ()
+        ),
+        parse_mode="HTML",
+    )
 
 
 @router.message(F.text == keyboards.BTN_AI)
