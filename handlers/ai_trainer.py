@@ -24,6 +24,7 @@ import keyboards
 import program_mentions
 import running_texts
 import ui
+import video_analysis
 from fsm import AITrainerFlow
 
 router = Router(name="ai_trainer")
@@ -1614,6 +1615,7 @@ async def _handle_question(
     history_question: str,
     image_data_url: Optional[str] = None,
     user_id: Optional[int] = None,
+    video_context: Optional[str] = None,
 ) -> None:
     """Общая логика для текстовых и фото-вопросов: запрос к модели, история, отправка ответа.
 
@@ -1690,6 +1692,7 @@ async def _handle_question(
             user_id, question, history, image_data_url=image_data_url,
             on_status=display.set_status, on_program=collect_program,
             on_action=collect_action, on_chunk=streamer.push,
+            video_context=video_context,
         )
     except Exception:
         logger.exception("AI trainer request failed for user %s", user_id)
@@ -1819,6 +1822,85 @@ async def ai_photo_question(message: Message, state: FSMContext):
         history_question = f"[фото] {caption}" if caption else "[прислал фото]"
         await _handle_question(
             message, state, question, history_question=history_question, image_data_url=image_data_url
+        )
+    finally:
+        _busy.discard(user_id)
+
+
+DEFAULT_VIDEO_QUESTION = (
+    "Разбери мою технику по этому видео: что там видно и что мне поправить первым делом."
+)
+
+
+@router.message(AITrainerFlow.chatting, F.video | F.video_note)
+async def ai_video_question(message: Message, state: FSMContext):
+    """Ролик подхода → наблюдения от Qwen3-VL → ответ голосом тренера.
+
+    Порядок проверок — от самой дешёвой к самой дорогой: сначала настройка, потом
+    длина (её Telegram сообщает в апдейте, качать не нужно), потом дневная квота,
+    и только под конец скачивание с разбором. Иначе за отказ платили бы трафиком.
+    """
+    user_id = message.from_user.id
+    # Как и в фото-хендлере: занимаем до первого await, иначе два быстрых ролика
+    # проедут вдвоём через окно скачивания и оба уйдут в модель.
+    if not _try_claim_busy(user_id):
+        await message.reply("Секунду, ещё думаю над прошлым вопросом 😅")
+        return
+    try:
+        if not config.video_analysis_available():
+            await message.reply("Разбор видео пока не подключил. Напиши вопрос текстом.")
+            return
+
+        video = message.video or message.video_note
+        if video.duration and video.duration > config.MAX_VIDEO_SECONDS:
+            await message.reply(
+                f"Ролик длинный. Пришли до {config.MAX_VIDEO_SECONDS} секунд — "
+                "мне хватит одного подхода."
+            )
+            return
+
+        analyzed_today = await db.get_ai_video_count_today(user_id)
+        if analyzed_today >= config.AI_VIDEO_DAILY_LIMIT:
+            await message.reply(
+                f"На сегодня разобрал {config.AI_VIDEO_DAILY_LIMIT} видео — "
+                "это лимит. Приходи завтра, а пока спрашивай текстом.",
+                reply_markup=await ai_keyboard(user_id),
+            )
+            return
+
+        if video.file_size and video.file_size > config.MAX_VIDEO_BYTES:
+            await message.reply("Файл тяжёлый, я такой не вытяну. Сними покороче или полегче.")
+            return
+
+        status = await message.answer("🎥 Смотрю видео...")
+        try:
+            buf = await message.bot.download(video)
+            analysis = await video_analysis.analyze(buf.read(), user_id)
+        except Exception:
+            logger.exception("video download/analysis failed for user %s", user_id)
+            analysis = None
+        finally:
+            with suppress(TelegramBadRequest):
+                await status.delete()
+
+        if analysis is None:
+            await message.reply(
+                "Не смог разобрать это видео. Попробуй ещё раз или сними сбоку, "
+                "чтобы попал весь подход."
+            )
+            return
+
+        # Квота тратится только за разбор, который получился, — как и дневной
+        # счётчик вопросов, который списывается лишь при готовом ответе.
+        await db.increment_ai_video_count(user_id)
+
+        caption = (message.caption or "").strip()
+        question = caption or DEFAULT_VIDEO_QUESTION
+        history_question = f"[видео] {caption}" if caption else "[прислал видео подхода]"
+        await _handle_question(
+            message, state, question,
+            history_question=history_question,
+            video_context=video_analysis.to_context_block(analysis),
         )
     finally:
         _busy.discard(user_id)

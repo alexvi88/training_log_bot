@@ -3505,6 +3505,7 @@ async def ask(
     on_program: ProgramCallback = None,
     on_action: ActionCallback = None,
     on_chunk: ChunkCallback = None,
+    video_context: Optional[str] = None,
 ) -> str:
     """Один вопрос пользователя → готовый текст ответа.
 
@@ -3514,6 +3515,12 @@ async def ask(
     image_data_url — опционально, фото, которое пользователь прислал вместе с этим
     вопросом (data: URL, base64). Передаётся только в текущий ход; в history фото
     не попадают — модель не сможет пересмотреть их позже, только вспомнить по тексту.
+
+    video_context — опционально, наблюдения по присланному видео (см.
+    video_analysis.to_context_block). Приезжает контекстом ровно как результаты
+    веб-поиска: смотрит кадры отдельная модель, а говорит про них тренер —
+    голос у продукта один. Само видео сюда не попадает и в history тоже, только
+    текст наблюдений.
 
     on_status — опциональный колбэк, которому по ходу дела шлём текст того, что
     реально сейчас происходит (веб-поиск, конкретный tool-call), чтобы вызывающая
@@ -3558,7 +3565,7 @@ async def ask(
     )
     return await _ask_plain(
         user_id, question, history, image_data_url, search_context, on_status, on_program,
-        on_action, on_chunk,
+        on_action, on_chunk, video_context,
     )
 
 
@@ -3677,12 +3684,15 @@ async def _ask_plain(
     on_program: ProgramCallback = None,
     on_action: ActionCallback = None,
     on_chunk: ChunkCallback = None,
+    video_context: Optional[str] = None,
 ) -> str:
     client = _get_client()
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": _system_prompt(await _user_today(user_id))},
         *history,
     ]
+    if video_context:
+        messages.append({"role": "system", "content": video_context})
     if search_context:
         messages.append(
             {
