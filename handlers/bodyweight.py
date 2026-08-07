@@ -20,9 +20,10 @@ import charts
 import db
 import formatting
 import keyboards
+import timeutil
 import ui
 from fsm import BodyweightFlow
-from parser import ParseError, bodyweight_warning, parse_bodyweight
+from parser import ParseError, bodyweight_warning, parse_bodyweight_entry
 
 router = Router(name="bodyweight")
 
@@ -165,27 +166,38 @@ async def bw_undo(callback: CallbackQuery, state: FSMContext):
     await _render(callback, state)
 
 
+def _logged_at_for(date: dt.date | None) -> str | None:
+    """Метка времени для взвешивания задним числом. Полдень, а не полночь: экран
+    и график режут записи по дате, и середина дня не свалится в соседние сутки
+    ни при каком часовом поясе."""
+    if date is None:
+        return None
+    return dt.datetime.combine(date, dt.time(12, 0)).isoformat()
+
+
 @router.message(StateFilter(BodyweightFlow.viewing), F.text)
 async def bw_weight_entered(message: Message, state: FSMContext):
+    user = await db.get_user(message.from_user.id)
     try:
-        weight = parse_bodyweight(message.text)
+        weight, date = parse_bodyweight_entry(message.text, today=timeutil.user_today(user))
     except ParseError as e:
         await message.reply(e.message)
         return
-    user = await db.get_user(message.from_user.id)
     warning = bodyweight_warning(weight, user["unit"])
     if warning is not None:
         # A soft nudge, not a reject (see parser.bodyweight_warning) — hold the
         # value in state and ask, same pattern as the suspicious-set-weight
         # confirm. "Исправить" just leaves the screen for a retype.
-        await state.update_data(bw_pending_weight=weight)
+        await state.update_data(
+            bw_pending_weight=weight, bw_pending_date=date.isoformat() if date else None
+        )
         u = formatting.UNIT_LABELS.get(user["unit"], "кг")
         await message.reply(
             f"⚠️ {formatting.format_weight(weight)}{u}? {warning}\nЗаписываем?",
             reply_markup=keyboards.bodyweight_confirm_keyboard(),
         )
         return
-    await db.add_bodyweight_log(message.from_user.id, weight)
+    await db.add_bodyweight_log(message.from_user.id, weight, _logged_at_for(date))
     # The typed number itself is cleaned up so it doesn't clutter the chat;
     # the screen underneath is edited in place rather than deleted (see _render).
     with suppress(TelegramBadRequest):
@@ -202,8 +214,10 @@ async def bw_weight_confirm_yes(callback: CallbackQuery, state: FSMContext):
     if weight is None:
         await callback.answer()
         return
-    await db.add_bodyweight_log(callback.from_user.id, weight)
-    await state.update_data(bw_pending_weight=None)
+    raw_date = data.get("bw_pending_date")
+    date = dt.date.fromisoformat(raw_date) if raw_date else None
+    await db.add_bodyweight_log(callback.from_user.id, weight, _logged_at_for(date))
+    await state.update_data(bw_pending_weight=None, bw_pending_date=None)
     confirm_message = callback.message
     with suppress(TelegramBadRequest):
         await confirm_message.delete()
@@ -218,7 +232,7 @@ async def bw_weight_confirm_yes(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(StateFilter(BodyweightFlow.viewing), F.data == "bw:wconf:no")
 async def bw_weight_confirm_no(callback: CallbackQuery, state: FSMContext):
     """Throws the flagged entry away so the weight can simply be retyped."""
-    await state.update_data(bw_pending_weight=None)
+    await state.update_data(bw_pending_weight=None, bw_pending_date=None)
     with suppress(TelegramBadRequest):
         await callback.message.delete()
     await callback.answer("Не записал — пришли число ещё раз")

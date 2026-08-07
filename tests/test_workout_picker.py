@@ -6,6 +6,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
 
+import keyboards
 from fsm import WorkoutFlow
 from handlers import workout
 
@@ -59,6 +60,11 @@ def _make_message(user_id: int, text: str):
     message.bot = bot
     message.text = text
     message.delete = AsyncMock()
+    message.chat = SimpleNamespace(id=user_id)
+    message.message_id = 500
+    message.reply = AsyncMock(
+        return_value=SimpleNamespace(chat=SimpleNamespace(id=user_id), message_id=501)
+    )
     return message
 
 
@@ -196,7 +202,7 @@ async def test_search_results_are_paginated_instead_of_being_cut_off(fresh_db, u
 
     kb = message.bot.send_message.await_args.kwargs["reply_markup"]
     texts = [b.text for row in kb.inline_keyboard for b in row]
-    assert "➡️" in texts, "нет кнопки следующей страницы"
+    assert keyboards.PAGE_NEXT_TEXT in texts, "нет кнопки следующей страницы"
     # Тринадцать совпадений при странице в восемь — вторая страница обязана быть,
     # и «Жим штанги лёжа» должен быть достижим, а не срезан.
     assert sum(1 for t in texts if t.startswith("Жим")) <= 8
@@ -258,8 +264,50 @@ async def test_typing_no_match_in_exercise_picker_offers_to_create(fresh_db, use
     sent_text = message.bot.send_message.await_args.kwargs["text"]
     assert "Ничего не нашлось" in sent_text
     kb = message.bot.send_message.await_args.kwargs["reply_markup"]
+    buttons = [b for row in kb.inline_keyboard for b in row]
+    create = next(b for b in buttons if b.callback_data == "pick:newquery")
+    # Имя уже набрано — кнопка предлагает именно его, а не «новое упражнение».
+    assert "squat" in create.text
+
+
+async def test_no_match_without_group_still_offers_to_create(fresh_db, user_id):
+    """Поиск с экрана групп: `pending_group_id` пуст. Раньше кнопки «создать» тут
+    не было вовсе, и экран становился тупиком — не нашли и завести нельзя."""
+    state = await _make_state(user_id)
+    message = _make_message(user_id, "гиперэкстензия боком")
+
+    await workout.pick_exercise_search(message, state)
+
+    kb = message.bot.send_message.await_args.kwargs["reply_markup"]
     callback_datas = [b.callback_data for row in kb.inline_keyboard for b in row]
-    assert "pick:new" in callback_datas
+    assert "pick:newquery" in callback_datas
+
+
+async def test_create_from_query_uses_typed_name(fresh_db, user_id):
+    db = fresh_db
+    workout_id = await db.create_workout(user_id)
+    state = await _make_state(user_id, open_exercises=[], open_blocks={}, active_exercise_id=None)
+    await state.update_data(workout_id=workout_id, pick_query="Гиперэкстензия боком")
+    await state.set_state(WorkoutFlow.picking_exercise)
+    callback = _make_callback(user_id, "pick:newquery")
+
+    await workout.pick_new_from_query(callback, state)
+
+    names = [ex["display_name"] for ex in await db.list_user_exercises(user_id)]
+    assert "Гиперэкстензия боком" in names
+
+
+async def test_set_typed_in_picker_is_not_searched(fresh_db, user_id):
+    """«100 8» из приветственной инструкции: раньше уходило в поиск и возвращало
+    «ничего не нашлось» — первое же действие новичка упиралось в ошибку."""
+    state = await _make_state(user_id)
+    message = _make_message(user_id, "100 8")
+
+    await workout.pick_exercise_search(message, state)
+
+    message.reply.assert_awaited()
+    assert "выбери упражнение" in message.reply.await_args.args[0]
+    assert (await state.get_data()).get("pick_query") is None
 
 
 async def test_pick_page_advances_to_second_page_and_keeps_remainder(fresh_db, user_id):

@@ -169,3 +169,94 @@ async def test_no_rebuild_for_a_workout_without_a_routine(fresh_db, user_id):
     await workout._enter_live(cb, state, workout_id)
 
     assert (await state.get_data()).get("planned_blocks") is None
+
+
+# ---------- находка 5: правка программы по ходу тренировки ----------
+
+
+async def test_editing_the_program_mid_workout_adds_the_new_exercise_to_the_plan(fresh_db, user_id):
+    """Раньше план был снимком со старта дня: добавил упражнение в программу, а
+    «📋 Другое из плана» его не знало до конца тренировки."""
+    db = fresh_db
+    (bench, fly, dips), routine_id = await _start_program(
+        db, user_id, state := await _state(user_id),
+        [("Жим лёжа", "4x8"), ("Разводка", "3x12"), ("Брусья", None)],
+    )
+    group_id = await db.create_muscle_group(user_id, "Трицепс")
+    pushdown = await db.create_exercise(user_id, "Разгибания на блоке", group_id)
+    await db.add_routine_exercise(routine_id, pushdown, 3, "3x15")
+
+    note = await workout.resync_plan_with_routine(state, routine_id)
+
+    planned = (await state.get_data())["planned_blocks"]
+    assert pushdown in [i for b in planned for i in b["exercise_ids"]]
+    assert "Разгибания на блоке" in note
+
+
+async def test_removing_an_exercise_from_the_program_drops_it_from_the_plan(fresh_db, user_id):
+    db = fresh_db
+    (bench, fly, dips), routine_id = await _start_program(
+        db, user_id, state := await _state(user_id),
+        [("Жим лёжа", "4x8"), ("Разводка", "3x12"), ("Брусья", None)],
+    )
+    entries = await db.list_routine_exercises(routine_id)
+    await db.remove_routine_exercise(next(e["id"] for e in entries if e["exercise_id"] == dips))
+
+    note = await workout.resync_plan_with_routine(state, routine_id)
+
+    planned = (await state.get_data())["planned_blocks"]
+    assert dips not in [i for b in planned for i in b["exercise_ids"]]
+    assert "Брусья" in note
+
+
+async def test_a_new_set_scheme_reaches_the_running_plan(fresh_db, user_id):
+    db = fresh_db
+    (bench, fly, dips), routine_id = await _start_program(
+        db, user_id, state := await _state(user_id),
+        [("Жим лёжа", "4x8"), ("Разводка", "3x12"), ("Брусья", None)],
+    )
+    entries = await db.list_routine_exercises(routine_id)
+    await db.set_routine_exercise_target(
+        next(e["id"] for e in entries if e["exercise_id"] == fly), "5x5"
+    )
+
+    await workout.resync_plan_with_routine(state, routine_id)
+
+    planned = (await state.get_data())["planned_blocks"]
+    targets = {int(k): v for b in planned for k, v in (b.get("targets") or {}).items()}
+    assert targets[fly] == "5x5"
+
+
+async def test_an_exercise_dropped_from_the_plan_by_hand_does_not_come_back(fresh_db, user_id):
+    """«Убрать из плана» — про сломанный тренажёр здесь и сейчас, а не про
+    программу. Правка программы не должна возвращать его в очередь."""
+    db = fresh_db
+    (bench, fly, dips), routine_id = await _start_program(
+        db, user_id, state := await _state(user_id),
+        [("Жим лёжа", "4x8"), ("Разводка", "3x12"), ("Брусья", None)],
+    )
+    await state.update_data(
+        planned_blocks=[
+            b for b in (await state.get_data())["planned_blocks"]
+            if dips not in b["exercise_ids"]
+        ],
+        plan_skipped_ids=[dips],
+    )
+
+    await workout.resync_plan_with_routine(state, routine_id)
+
+    planned = (await state.get_data())["planned_blocks"]
+    assert dips not in [i for b in planned for i in b["exercise_ids"]]
+
+
+async def test_editing_someone_elses_program_leaves_the_running_plan_alone(fresh_db, user_id):
+    db = fresh_db
+    (bench, fly, dips), routine_id = await _start_program(
+        db, user_id, state := await _state(user_id),
+        [("Жим лёжа", "4x8"), ("Разводка", "3x12"), ("Брусья", None)],
+    )
+    before = (await state.get_data())["planned_blocks"]
+    other_routine = await db.create_routine(user_id, "Pull day")
+
+    assert await workout.resync_plan_with_routine(state, other_routine) is None
+    assert (await state.get_data())["planned_blocks"] == before

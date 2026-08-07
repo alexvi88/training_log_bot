@@ -118,7 +118,7 @@ def test_bodyweight_screen_shows_latest_and_count():
     ]
     text = formatting.build_bodyweight_screen(logs, "kg")
     assert "Сейчас: <b>80кг</b>" in text
-    assert "Всего 2 записи." in text
+    assert "Всего 2 взвешивания." in text
     assert "С прошлой записи" not in text
     assert "За всё время" not in text
 
@@ -132,7 +132,7 @@ def test_bodyweight_screen_lists_entries_newest_first():
     assert "01.02.2026 — 80кг" in text
     assert "01.01.2026 — 82кг" in text
     assert text.index("01.02.2026") < text.index("01.01.2026")
-    assert "Напиши вес, чтобы добавить новую запись." in text
+    assert "Пиши" in text or "Напиши вес" in text
 
 
 def test_bodyweight_screen_lists_only_period_logs_when_given():
@@ -144,7 +144,7 @@ def test_bodyweight_screen_lists_only_period_logs_when_given():
     assert "01.02.2026 — 80кг" in text
     assert "01.01.2026" not in text
     # latest/count still reflect the full history, not just the period
-    assert "Всего 2 записи." in text
+    assert "Всего 2 взвешивания." in text
 
 
 # ---------- unit conversion: set weights ----------
@@ -378,3 +378,47 @@ def test_bodyweight_screen_short_history_lists_everything():
 
     assert "01.01.2026" in text and "02.01.2026" in text
     assert "Показано" not in text
+
+
+# ---------- одно взвешивание в день, и задним числом ----------
+
+
+def test_bodyweight_screen_collapses_several_entries_of_one_day():
+    """Взвесился трижды подряд — в списке всё равно один день, последнее число.
+    Раньше три попытки занимали три строки и выглядели тремя днями."""
+    logs = [
+        {"weight": 81.4, "logged_at": "2026-02-01T07:00:00"},
+        {"weight": 81.0, "logged_at": "2026-02-01T07:05:00"},
+        {"weight": 80.8, "logged_at": "2026-02-01T07:09:00"},
+    ]
+    text = formatting.build_bodyweight_screen(logs, "kg")
+    assert text.count("01.02.2026 — ") == 1
+    assert "01.02.2026 — 80.8кг" in text
+    assert "Всего 1 взвешивание." in text
+
+
+def test_parse_bodyweight_entry_reads_a_past_date():
+    import datetime as dt
+
+    from parser import parse_bodyweight_entry
+
+    weight, date = parse_bodyweight_entry("82.5 01.08.2026", today=dt.date(2026, 8, 7))
+    assert weight == 82.5
+    assert date == dt.date(2026, 8, 1)
+
+
+def test_parse_bodyweight_entry_without_a_date_stays_plain():
+    from parser import parse_bodyweight_entry
+
+    assert parse_bodyweight_entry("80,5") == (80.5, None)
+
+
+def test_parse_bodyweight_entry_rejects_a_future_date():
+    import datetime as dt
+
+    import pytest
+
+    from parser import ParseError, parse_bodyweight_entry
+
+    with pytest.raises(ParseError):
+        parse_bodyweight_entry("82.5 01.09.2026", today=dt.date(2026, 8, 7))

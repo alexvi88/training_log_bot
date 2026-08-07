@@ -127,6 +127,13 @@ async def show_manage(event, state: FSMContext) -> None:
         await event.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
+@router.callback_query(F.data == "rt:noop")
+async def rt_noop(callback: CallbackQuery):
+    """Заглушка вместо неуместной стрелки (keyboards._move_arrows) — держит
+    колонки ровными и молчит в ответ на тап."""
+    await callback.answer()
+
+
 @router.callback_query(F.data == "rt:manage")
 async def rt_manage(callback: CallbackQuery, state: FSMContext):
     await state.set_state(None)
@@ -443,6 +450,11 @@ async def _show_routine_editor(event, state: FSMContext, routine_id: int) -> Non
     routine = await _owned_routine(event, routine_id)
     if routine is None:
         return
+    # Все правки состава приходят сюда, поэтому и остаток плана идущей
+    # тренировки подтягиваем здесь — одной точкой (находка 5).
+    from handlers.workout import resync_plan_with_routine
+
+    note = await resync_plan_with_routine(state, routine_id)
     exercises = await db.list_routine_exercises(routine_id)
     title = f"{routine['program_name']} · {routine['name']}" if routine["program_name"] else routine["name"]
     lines = [f"✏️ <b>{escape(title)}</b>", ""]
@@ -450,6 +462,8 @@ async def _show_routine_editor(event, state: FSMContext, routine_id: int) -> Non
         lines.append("✏️ — поменять схему подходов, 🗑 — убрать упражнение.")
     else:
         lines.append("Здесь пока нет упражнений.")
+    if note:
+        lines += ["", f"🔄 {escape(note)}"]
     kb = keyboards.routine_edit_keyboard(
         routine_id,
         [

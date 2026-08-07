@@ -2053,6 +2053,19 @@ def format_progress_screen(
     return text
 
 
+def _bodyweight_days(logs: list) -> list[tuple[dt.date, float]]:
+    """Одна строка на день — последнее взвешивание этого дня, по возрастанию дат.
+
+    Взвеситься можно и трижды подряд (переоделся, сходил в туалет, передумал), и
+    раньше каждая попытка занимала отдельную строку списка: три записи за одну
+    дату выглядели тремя днями. Вес — величина дня, а не минуты.
+    """
+    by_date: dict[dt.date, float] = {}
+    for r in logs:
+        by_date[dt.datetime.fromisoformat(r["logged_at"]).date()] = float(r["weight"])
+    return sorted(by_date.items())
+
+
 def build_bodyweight_screen(logs: list, unit: str = "kg", period_logs: list | None = None) -> str:
     """Text for the ⚖️ Вес тела screen: latest value, entry count, and a
     date - weight list for the selected period.
@@ -2071,33 +2084,31 @@ def build_bodyweight_screen(logs: list, unit: str = "kg", period_logs: list | No
     if not logs:
         return (
             "⚖️ <b>Дневник веса</b>\n\nПока нет ни одной записи.\n"
-            "Напиши вес — дальше буду показывать динамику."
+            "Напиши вес — дальше буду показывать динамику.\n"
+            "Взвешивался раньше? Пиши с датой: «82.5 01.08.2026»."
         )
+    days = _bodyweight_days(logs)
     latest = logs[-1]
     latest_weight = latest["weight"]
     d = dt.datetime.fromisoformat(latest["logged_at"])
-    n = plural_ru(len(logs), ("запись", "записи", "записей"))
+    n = plural_ru(len(days), ("взвешивание", "взвешивания", "взвешиваний"))
     head = [
         "⚖️ <b>Дневник веса</b>",
         "",
         f"Сейчас: <b>{format_weight(latest_weight)}{u}</b> {format_date_ru(d)}",
-        f"Всего {len(logs)} {n}.",
+        f"Всего {len(days)} {n}.",
         "",
     ]
 
-    entries = list(reversed(logs if period_logs is None else period_logs))
-    rendered = [
-        f"{dt.datetime.fromisoformat(r['logged_at']).strftime('%d.%m.%Y')} — "
-        f"{format_weight(r['weight'])}{u}"
-        for r in entries
-    ]
+    entries = list(reversed(_bodyweight_days(logs if period_logs is None else period_logs)))
+    rendered = [f"{day.strftime('%d.%m.%Y')} — {format_weight(weight)}{u}" for day, weight in entries]
 
     def assemble(keep: list[str]) -> str:
         lines = list(head) + keep
         if len(keep) < len(rendered):
             lines.append(f"<i>Показано {len(keep)} из {len(rendered)}</i>")
         lines.append("")
-        lines.append("Напиши вес, чтобы добавить новую запись.")
+        lines.append("Напиши вес — или вес и день, если взвешивался раньше: «82.5 01.08.2026».")
         return "\n".join(lines)
 
     kept = rendered

@@ -192,9 +192,13 @@ def ai_trainer_keyboard(
             refs.pop()
         joined = ",".join(refs)
         if page > 0:
-            page_nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"ai:mpage:{page - 1}:{joined}"))
+            page_nav.append(InlineKeyboardButton(
+                text=PAGE_PREV_TEXT, callback_data=f"ai:mpage:{page - 1}:{joined}"
+            ))
         if start + AI_MENTION_PAGE_SIZE < len(items):
-            page_nav.append(InlineKeyboardButton(text="➡️", callback_data=f"ai:mpage:{page + 1}:{joined}"))
+            page_nav.append(InlineKeyboardButton(
+                text=PAGE_NEXT_TEXT, callback_data=f"ai:mpage:{page + 1}:{joined}"
+            ))
     page_nav_rows = [page_nav] if page_nav else []
 
     action_rows = [
@@ -351,6 +355,12 @@ def groups_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+# Голая «➡️» в ряду с названиями упражнений читалась как оборванная кнопка, а не
+# как «дальше»: непонятно, листает она список или уводит с экрана. Подписываем.
+PAGE_PREV_TEXT = "⬅️ Предыдущие"
+PAGE_NEXT_TEXT = "Ещё ➡️"
+
+
 def named_buttons(items: list[tuple[str, str]]) -> list[list[InlineKeyboardButton]]:
     """items: list of (callback_data, name) pairs. One full-name button per row."""
     return [[InlineKeyboardButton(text=name, callback_data=cb)] for cb, name in items]
@@ -365,6 +375,8 @@ def exercises_keyboard(
     has_next: bool = False,
     templates=None,
     show_catalog_button: bool = False,
+    new_text: str | None = None,
+    new_cb: str = "new",
 ) -> InlineKeyboardMarkup:
     """templates: catalog exercises (db.search_exercise_templates) to offer
     alongside the user's own matches, marked "📋" and routed through
@@ -376,6 +388,11 @@ def exercises_keyboard(
     `{prefix}:catalog` — for screens (see handlers/routines.py's rtadd flow)
     that browse a group's own exercises but have no "➕ Новое упражнение" entry
     point of their own to reach the template browser through.
+
+    new_text/new_cb: override the "➕ Новое упражнение" label and callback. An
+    empty search result uses them to offer "➕ Создать «жим сидя»" straight from
+    the query, so a name the user has already typed doesn't have to be typed
+    again.
     """
     b = InlineKeyboardBuilder()
     items = [(f"{prefix}:ex:{ex['id']}", ex["display_name"]) for ex in exercises]
@@ -384,13 +401,15 @@ def exercises_keyboard(
         b.row(*row)
     nav = []
     if page > 0:
-        nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"{prefix}:page:{page - 1}"))
+        nav.append(InlineKeyboardButton(text=PAGE_PREV_TEXT, callback_data=f"{prefix}:page:{page - 1}"))
     if has_next:
-        nav.append(InlineKeyboardButton(text="➡️", callback_data=f"{prefix}:page:{page + 1}"))
+        nav.append(InlineKeyboardButton(text=PAGE_NEXT_TEXT, callback_data=f"{prefix}:page:{page + 1}"))
     if nav:
         b.row(*nav)
     if show_new_button:
-        b.row(InlineKeyboardButton(text="➕ Новое упражнение", callback_data=f"{prefix}:new"))
+        b.row(InlineKeyboardButton(
+            text=new_text or "➕ Новое упражнение", callback_data=f"{prefix}:{new_cb}"
+        ))
     if show_catalog_button:
         b.row(InlineKeyboardButton(text="📋 Каталог упражнений", callback_data=f"{prefix}:catalog"))
     b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"{prefix}:{back_cb}"))
@@ -720,17 +739,31 @@ def program_edit_keyboard(days, program_id: int) -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
+def _move_arrows(i: int, last: int, up_cb: str, down_cb: str) -> list[InlineKeyboardButton]:
+    """Две ячейки со стрелками — всегда две, даже когда стрелка неуместна.
+
+    Без заглушки у первой строки не было «⬆️», у последней «⬇️», и соседняя
+    кнопка съезжала на колонку влево: «✏️» первой строки оказывалась там, где у
+    средних стоит удаление. Ряды выглядели рваными, а промахнуться было легко.
+    Единственная строка не переставляется вовсе — там стрелок нет совсем.
+    """
+    if last <= 0:
+        return []
+    return [
+        InlineKeyboardButton(text="⬆️", callback_data=up_cb) if i > 0
+        else InlineKeyboardButton(text="·", callback_data="rt:noop"),
+        InlineKeyboardButton(text="⬇️", callback_data=down_cb) if i < last
+        else InlineKeyboardButton(text="·", callback_data="rt:noop"),
+    ]
+
+
 def program_day_order_keyboard(days, program_id: int) -> InlineKeyboardMarkup:
     """Стрелки для перестановки дней — та же механика, что у упражнений внутри
     дня (routine_edit_keyboard), этажом выше."""
     b = InlineKeyboardBuilder()
     last = len(days) - 1
     for i, d in enumerate(days):
-        row = []
-        if i > 0:
-            row.append(InlineKeyboardButton(text="⬆️", callback_data=f"rt:daymv:{d['id']}:up"))
-        if i < last:
-            row.append(InlineKeyboardButton(text="⬇️", callback_data=f"rt:daymv:{d['id']}:down"))
+        row = _move_arrows(i, last, f"rt:daymv:{d['id']}:up", f"rt:daymv:{d['id']}:down")
         row.append(InlineKeyboardButton(text=d["name"], callback_data=f"rt:view:{d['id']}"))
         b.row(*row)
     b.row(InlineKeyboardButton(text="⬅️ Готово", callback_data=f"rt:prg:{program_id}"))
@@ -863,11 +896,10 @@ def routine_edit_keyboard(routine_id: int, exercises=()) -> InlineKeyboardMarkup
     last = len(exercises) - 1
     for i, entry in enumerate(exercises):
         re_id, name = entry[0], entry[1]
-        row = []
-        if i > 0:
-            row.append(InlineKeyboardButton(text="⬆️", callback_data=f"rt:mvex:{routine_id}:{re_id}:up"))
-        if i < last:
-            row.append(InlineKeyboardButton(text="⬇️", callback_data=f"rt:mvex:{routine_id}:{re_id}:down"))
+        row = _move_arrows(
+            i, last,
+            f"rt:mvex:{routine_id}:{re_id}:up", f"rt:mvex:{routine_id}:{re_id}:down",
+        )
         row.append(InlineKeyboardButton(text="✏️", callback_data=f"rt:extarget:{routine_id}:{re_id}"))
         row.append(InlineKeyboardButton(text=f"🗑 {name}", callback_data=f"rt:rmex:{routine_id}:{re_id}"))
         b.row(*row)

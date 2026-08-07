@@ -12,6 +12,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import CallbackQuery
 
 import formatting
+import keyboards
 from fsm import RoutineFlow
 from handlers import routines
 from seed_data import PROGRAM_BY_KEY
@@ -588,3 +589,19 @@ async def test_target_normalization_keeps_what_it_cannot_parse():
     assert formatting.normalize_routine_target("как пойдёт") == "как пойдёт"
     # Диапазон наоборот — не схема, а опечатка: оставляем как есть, не выдумываем.
     assert formatting.normalize_routine_target("3x10-5") == "3x10-5"
+
+
+async def test_editor_rows_have_the_same_number_of_columns():
+    """Находка 4c: у первой строки не было «⬆️», у последней «⬇️», и «✏️»
+    съезжала на колонку влево — туда, где у соседей стоит удаление."""
+    kb = keyboards.routine_edit_keyboard(1, [(10, "Жим", "4x8"), (11, "Разводка", "3x12"), (12, "Брусья", None)])
+    exercise_rows = kb.inline_keyboard[:3]
+    assert {len(row) for row in exercise_rows} == {4}
+    # Заглушка молчит, а не переставляет.
+    assert kb.inline_keyboard[0][0].callback_data == "rt:noop"
+    assert kb.inline_keyboard[-1 - 2][1].callback_data == "rt:noop"
+
+
+async def test_a_single_exercise_gets_no_arrows_at_all():
+    kb = keyboards.routine_edit_keyboard(1, [(10, "Жим", "4x8")])
+    assert len(kb.inline_keyboard[0]) == 2  # ✏️ и 🗑, переставлять нечего

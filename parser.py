@@ -196,6 +196,22 @@ def parse_bodyweight(text: str) -> float:
     return weight
 
 
+def parse_bodyweight_entry(
+    text: str, today: dt.date | None = None
+) -> tuple[float, dt.date | None]:
+    """Вес и, если он указан, день взвешивания: «82.5» или «82.5 01.08.2026».
+
+    Дневник веса — про динамику, а начать её можно было только с сегодняшнего
+    дня: всё, что человек взвешивал до бота, внести было нельзя. Дата
+    необязательна и стоит после числа — обычный ввод не меняется.
+    """
+    raw = text.strip()
+    parts = raw.split(maxsplit=1)
+    if len(parts) == 2:
+        return parse_bodyweight(parts[0]), parse_ru_date(parts[1], today=today)
+    return parse_bodyweight(raw), None
+
+
 def bodyweight_warning(weight: float, unit: str = "kg") -> str | None:
     """A soft nudge — never blocks logging, unlike parse_bodyweight's hard
     ceiling — when a bodyweight entry falls outside a plausible human range for

@@ -24,6 +24,7 @@ import aiosqlite
 
 import config
 import formatting
+import search_terms
 from seed_data import BODYWEIGHT_TEMPLATES, EXERCISE_TEMPLATES, MUSCLE_GROUP_PRESETS
 
 logger = logging.getLogger(__name__)
@@ -585,6 +586,11 @@ async def init_db(db_path: str = config.DB_PATH) -> None:
     # one so Cyrillic search can be filtered in SQL instead of fetching every
     # row into the app and filtering there.
     await _conn.create_function("py_lower", 1, lambda s: s.lower() if s is not None else None)
+    # Тот же LOWER плюс ё→е: «жим лежа» и «жим лёжа» — один запрос, а в каталоге
+    # встречаются оба написания.
+    await _conn.create_function(
+        "py_fold", 1, lambda s: search_terms.fold(s) if s is not None else None
+    )
     # WAL: в режиме DELETE каждый коммит создаёт и удаляет файл журнала (две
     # операции с метаданными на запись) и писатель блокирует читателей — на
     # единственном соединении это значит, что INSERT подхода останавливает все
@@ -1657,22 +1663,42 @@ async def list_templates_in_group(group_id: int) -> list[aiosqlite.Row]:
 # этого «жим» отдавал алфавит («Жим Арнольда», «Жим в тренажёре»…), и то, что
 # человек искал на самом деле, оказывалось в хвосте — а хвост срезался лимитом.
 _RELEVANCE_RANK = (
-    "CASE WHEN py_lower({col}) = py_lower(?) THEN 0 "
-    "     WHEN py_lower({col}) LIKE py_lower(?) || '%' ESCAPE '\\' THEN 1 "
+    "CASE WHEN py_fold({col}) = py_fold(?) THEN 0 "
+    "     WHEN py_fold({col}) LIKE py_fold(?) || '%' ESCAPE '\\' THEN 1 "
     "     ELSE 2 END"
 )
 
 
+def _escape_like(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _stem_filter(col: str, query: str) -> tuple[str, list[str]]:
+    """Условие «в названии есть основы всех слов запроса» и параметры к нему.
+
+    По слову, а не одной подстрокой целиком: «жим лёжа» должен находить «Жим
+    штанги лёжа», где между словами запроса стоит третье. По основе, а не по
+    слову: «приседания» должны находить «Присед» (см. search_terms).
+    """
+    stems = search_terms.query_stems(query)
+    if not stems:
+        # Пустой запрос — не повод показать весь каталог.
+        return "0", []
+    clause = " AND ".join(f"py_fold({col}) LIKE '%' || ? || '%' ESCAPE '\\'" for _ in stems)
+    return clause, [_escape_like(s) for s in stems]
+
+
 async def search_exercises(user_id: int, query: str, limit: int = 20) -> list[aiosqlite.Row]:
-    escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    escaped = _escape_like(query)
     rank = _RELEVANCE_RANK.format(col="e.display_name")
+    match, match_params = _stem_filter("e.display_name", query)
     cur = await conn().execute(
         "SELECT * FROM exercises e WHERE e.user_id = ? AND e.is_archived = 0 AND e.is_template = 0 "
-        "AND py_lower(e.display_name) LIKE '%' || py_lower(?) || '%' ESCAPE '\\' "
+        f"AND {match} "
         f"AND {_VISIBLE_EXERCISE_FILTER} "
-        f"ORDER BY {rank}, e.last_used_at IS NULL, e.last_used_at DESC, py_lower(e.display_name) "
+        f"ORDER BY {rank}, e.last_used_at IS NULL, e.last_used_at DESC, py_fold(e.display_name) "
         "LIMIT ?",
-        (user_id, escaped, escaped, escaped, limit),
+        (user_id, *match_params, escaped, escaped, limit),
     )
     return await cur.fetchall()
 
@@ -1687,20 +1713,21 @@ async def search_exercise_templates(user_id: int, query: str, limit: int = 8) ->
     routers fork a matching template on tap (see keyboards.exercises_keyboard's
     `templates` param) instead of leaving them to build one from scratch.
     """
-    escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    escaped = _escape_like(query)
     rank = _RELEVANCE_RANK.format(col="t.display_name")
+    match, match_params = _stem_filter("t.display_name", query)
     cur = await conn().execute(
         "SELECT * FROM exercises t WHERE t.is_template = 1 "
-        "AND py_lower(t.display_name) LIKE '%' || py_lower(?) || '%' ESCAPE '\\' "
+        f"AND {match} "
         "AND NOT EXISTS ("
         "   SELECT 1 FROM exercises o WHERE o.user_id = ? AND o.is_template = 0 "
         "   AND o.is_archived = 0 AND py_lower(o.display_name) = py_lower(t.display_name)"
         ") "
-        # py_lower и здесь: бинарная коллация ставила «Жим в тренажёре Хаммер»
+        # py_fold и здесь: бинарная коллация ставила «Жим в тренажёре Хаммер»
         # раньше «Жим в тренажёре на плечи» — заглавная Х меньше строчной н.
-        f"ORDER BY {rank}, py_lower(t.display_name) "
+        f"ORDER BY {rank}, py_fold(t.display_name) "
         "LIMIT ?",
-        (escaped, user_id, escaped, escaped, limit),
+        (*match_params, user_id, escaped, escaped, limit),
     )
     return await cur.fetchall()
 
@@ -2343,16 +2370,16 @@ async def search_workouts_by_exercise(user_id: int, query: str, limit: int = 20)
     most recent first — the "в какой тренировке был жим" lookup, which the
     date-only history list can't answer.
     """
-    escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    match, match_params = _stem_filter("e.display_name", query)
     cur = await conn().execute(
         "SELECT DISTINCT w.* FROM workouts w "
         "JOIN workout_blocks b ON b.workout_id = w.id "
         "JOIN block_exercises be ON be.block_id = b.id "
         "JOIN exercises e ON e.id = be.exercise_id "
         "WHERE w.user_id = ? AND w.status = 'finished' "
-        "  AND py_lower(e.display_name) LIKE '%' || py_lower(?) || '%' ESCAPE '\\' "
+        f"  AND {match} "
         "ORDER BY w.started_at DESC LIMIT ?",
-        (user_id, escaped, limit),
+        (user_id, *match_params, limit),
     )
     return await cur.fetchall()
 
