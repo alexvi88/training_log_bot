@@ -654,7 +654,7 @@ async def test_calls_carry_the_cache_routing_header(fresh_db, user_id, monkeypat
     it, half the prompt tokens miss the cache and bill at full rate. Keyed per
     user: the shared system prompt and tool schemas settle on that user's
     server, and their own history grows on top of it."""
-    client = _fake_client([_response(tool_calls=[]), _response(content="ответ")])
+    client = _fake_client([_response(content=_GATE_NO_SEARCH), _response(content="ответ")])
     monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
 
     await ai_trainer.ask(user_id, "как жим?", history=[])
@@ -709,7 +709,8 @@ async def test_gate_defaults_keep_data_access_on_bad_output(fresh_db, user_id, m
     """Асимметрия намеренная: не искать безопасно, а вот отобрать у тренера
     данные — значит заставить его отвечать общими словами про личный вопрос."""
     for content in ("", "чепуха вместо json", '{"search": true}'):
-        client = _fake_client([_response(content=content)])
+        # Три ответа: на пустом вердикте гейт делает один повтор.
+        client = _fake_client([_response(content=content)] * 3)
         monkeypatch.setattr(ai_trainer, "_get_client", lambda c=client: c)
         verdict = await ai_trainer._gate_verdict(user_id, "Как мой прогресс?", history=[])
         assert verdict.data is True, f"на {content!r} тренер остался без данных"
@@ -1154,7 +1155,10 @@ async def test_tools_are_sent_when_gate_says_data_needed(fresh_db, user_id, monk
 async def test_tools_are_sent_when_the_gate_breaks(fresh_db, user_id, monkeypatch):
     """Сломанный гейт не должен тихо отбирать у тренера базу — он тогда отвечает
     общими словами там, где от него ждут конкретику по человеку."""
+    # Три ответа: на пустом вердикте гейт делает одну повторную попытку, и только
+    # молчание дважды подряд считается поломкой.
     client = _fake_client([
+        _response(content=""),
         _response(content=""),
         _response(content="ответ"),
     ])
@@ -1315,7 +1319,11 @@ async def test_broken_gate_is_not_logged_as_a_decision(fresh_db, user_id, monkey
     """В проде на «что нового в мире бодибилдинга» гейт вернул пустоту, сработал
     дефолт «не искать», а лог написал «gate says not needed» — то есть выдал
     поломку за решение. Ровно от этого предупреждает комментарий в ask()."""
-    client = _fake_client([_response(content=""), _response(content="ответ")])
+    # Два пустых: гейт делает одну повторную попытку, и только молчание дважды
+    # подряд считается поломкой.
+    client = _fake_client([
+        _response(content=""), _response(content=""), _response(content="ответ"),
+    ])
     monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
 
     with caplog.at_level(logging.INFO, logger="ai_trainer"):
@@ -1337,3 +1345,54 @@ async def test_broken_gate_still_leaves_the_trainer_his_data(fresh_db, user_id, 
 
     main_call = client.chat.completions.create.await_args_list[-1].kwargs
     assert main_call.get("tools")
+
+
+async def test_gate_does_not_read_the_whole_assignment(fresh_db, user_id, monkeypatch):
+    """Вопрос с ответами на опросник программы приезжает на две тысячи токенов
+    инструкций. Гейту нужна ТЕМА — и ровно на таких входах он в проде дважды
+    вернул ноль выходных токенов."""
+    client = _fake_client([_response(content=_GATE_NO_SEARCH), _response(content="ответ")])
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+    huge = "Вот ответы: " + "подробности " * 500
+
+    await ai_trainer._gate_verdict(user_id, huge, history=[])
+
+    sent = client.chat.completions.create.await_args.kwargs["messages"][-1]["content"]
+    assert len(sent) < len(huge)
+    assert len(sent) <= config.AI_GATE_QUESTION_MAX_CHARS + 10
+
+
+async def test_gate_retries_once_on_silence(fresh_db, user_id, monkeypatch):
+    """Ноль выходных токенов при непустых размышлениях — модель думает и не
+    говорит. Повтор стоит полцента, а без вердикта поиск не поднимется на
+    вопросе, который его прямо просит."""
+    client = _fake_client([_response(content=""), _response(content=_GATE_SEARCH)])
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+
+    verdict = await ai_trainer._gate_verdict(user_id, "что нового?", history=[])
+
+    assert client.chat.completions.create.await_count == 2
+    assert verdict.search is True
+    assert verdict.ok is True, "повтор удался — это не поломка"
+
+
+async def test_gate_retry_is_an_exact_copy_of_the_request(fresh_db, user_id, monkeypatch):
+    """Разойдись повтор хоть заголовком — он пошёл бы в другой слот кэша."""
+    client = _fake_client([_response(content=""), _response(content=_GATE_SEARCH)])
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+
+    await ai_trainer._gate_verdict(user_id, "что нового?", history=[])
+
+    first, second = client.chat.completions.create.await_args_list
+    assert first.kwargs == second.kwargs
+
+
+async def test_gate_gives_up_after_two_silences(fresh_db, user_id, monkeypatch):
+    client = _fake_client([_response(content=""), _response(content="")])
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+
+    verdict = await ai_trainer._gate_verdict(user_id, "что нового?", history=[])
+
+    assert client.chat.completions.create.await_count == 2
+    assert verdict.ok is False
+    assert verdict.data is True, "поломка не должна отбирать у тренера базу"
