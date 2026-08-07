@@ -1450,3 +1450,41 @@ async def test_freshness_markers_cover_the_phrasings_seen_in_prod():
     # А это личные вопросы — сети тут делать нечего.
     assert not ai_trainer._looks_like_it_needs_fresh_web("как мой прогресс?")
     assert not ai_trainer._looks_like_it_needs_fresh_web("сколько белка на кг веса?")
+
+
+# ---------- цена живого поиска: выводы из первого успешного прогона ----------
+
+
+async def test_search_step_does_not_fan_out_to_multiple_agents(fresh_db, user_id, monkeypatch):
+    """Первый живой поиск стоил $0.23, из них $0.19 — multi-agent и 18 вызовов
+    инструментов. Он не «ищет дешевле», он запускает четыре независимых агента, и
+    биллятся токены всех сразу. Дешевле четырёх SDK не принимает."""
+    sdk_client = _fake_sdk_client(_xai_response(content="находки", citations=["http://e.com"]))
+    monkeypatch.setattr(ai_trainer, "_get_sdk_client", AsyncMock(return_value=sdk_client))
+
+    await ai_trainer._web_search_findings(user_id, "что нового?", history=[])
+
+    kwargs = sdk_client.session.create_kwargs
+    assert "multi-agent" not in kwargs["model"]
+    assert "agent_count" not in kwargs, "фан-аут на четыре агента — это $0.19 за вопрос"
+
+
+async def test_agent_count_returns_if_a_multi_agent_model_is_configured(
+    fresh_db, user_id, monkeypatch
+):
+    """Если шаг однажды станет настоящим research'ем и multi-agent вернётся —
+    agent_count должен поехать снова, иначе SDK упадёт на дефолте."""
+    monkeypatch.setattr(config, "GROK_SEARCH_MODEL", "grok-4.20-multi-agent")
+    sdk_client = _fake_sdk_client(_xai_response(content="находки", citations=["http://e.com"]))
+    monkeypatch.setattr(ai_trainer, "_get_sdk_client", AsyncMock(return_value=sdk_client))
+
+    await ai_trainer._web_search_findings(user_id, "что нового?", history=[])
+
+    kwargs = sdk_client.session.create_kwargs
+    assert kwargs["agent_count"] == config.GROK_SEARCH_AGENT_COUNT
+
+
+async def test_search_daily_limit_is_sized_for_the_real_price():
+    """Сорок ставилось, пока поиск был сломан и стоил ноль. Реальная цена вопроса
+    с поиском — около $0.23, то есть сорок это $9 в день на человека."""
+    assert config.AI_SEARCH_DAILY_LIMIT <= 10

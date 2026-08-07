@@ -134,13 +134,28 @@ GROK_REASONING_EFFORT = os.getenv("GROK_REASONING_EFFORT", "low")
 GROK_QUICK_REASONING_EFFORT = os.getenv("GROK_QUICK_REASONING_EFFORT", "low")
 
 # Search-capable model used (via xAI's gRPC SDK, not the REST endpoint) when a
-# question is allowed web/X search access — same model name as fun_bot's
-# GROK_SEARCH_MODEL. Kept on grok-4.20-multi-agent rather than grok-4.5: per
-# xAI's pricing page, multi-agent is cheaper per token than grok-4.5 ($2.50 vs
-# $6.00/1M output), has a 1M context window vs 500k, and a 20% batch discount
-# grok-4.5 lacks. It's still current (not on xAI's May-2026 retirement list) —
-# don't "optimize" this to grok-4.5 on model-recency instinct alone.
-GROK_SEARCH_MODEL = os.getenv("GROK_SEARCH_MODEL", "grok-4.20-multi-agent")
+# question is allowed web/X search access.
+#
+# ТЕПЕРЬ grok-4.5, а не grok-4.20-multi-agent — и это не «оптимизация по
+# свежести модели», от которой предупреждал прежний комментарий здесь, а вывод из
+# первого живого поиска. Он показал, ЗА ЧТО платили:
+#
+#     multi-agent: 85217 входных токенов, 5438 размышлений      $0.099
+#     18 вызовов инструментов (14 web_search + 4 x_search)      $0.090
+#
+# Multi-agent дешевле грока за токен — это правда. Но он не «ищет дешевле», он
+# запускает ЧЕТЫРЕ независимых агента, каждый ищет сколько захочет, и биллятся
+# токены всех сразу. Дешевле четырёх не бывает: SDK принимает только 4 или 16.
+# То есть желание прежнего комментария (два агента ради экономии) невыполнимо в
+# принципе, и крутить agent_count смысла нет.
+#
+# Наш шаг — «сходи в сеть и перескажи», а не параллельный research по десятку
+# источников. Одному агенту grok-4.5 с теми же web_search/x_search это по силам,
+# а фан-аута вчетверо не будет ни по токенам, ни по вызовам инструментов.
+#
+# Если однажды шаг действительно станет research'ем — возвращать multi-agent
+# осмысленно, но тогда и лимит AI_SEARCH_DAILY_LIMIT надо считать заново.
+GROK_SEARCH_MODEL = os.getenv("GROK_SEARCH_MODEL", "grok-4.5-latest")
 
 # Parallel sub-agent count for the search step (xAI SDK's native agent_count
 # param — 4 or 16). Explicit and low: this step is one linear web/X lookup per
@@ -184,7 +199,20 @@ AI_SEARCH_TIMEOUT_SECONDS = float(os.getenv("AI_SEARCH_TIMEOUT_SECONDS", "180"))
 # Per-user daily cap on AI-trainer questions answered with web/X search access.
 # Guards against runaway search cost; once hit, the AI trainer still answers
 # normally (own tools only, no live search) until the next day.
-AI_SEARCH_DAILY_LIMIT = int(os.getenv("AI_SEARCH_DAILY_LIMIT", "40"))
+#
+# ПЯТЬ, а не сорок. Сорок стояло, пока поиск был сломан неподдерживаемым
+# agent_count и не стоил ничего: каждая попытка падала до запроса. Первый живой
+# поиск показал настоящую цену вопроса — около $0.23:
+#
+#     multi-agent   85217 входных токенов          $0.099
+#     18 вызовов инструментов (14 web + 4 X)       $0.090
+#     ответ тренера                                $0.040
+#
+# На сорока это до $9 в день на одного человека — втрое больше всего недельного
+# бюджета бота за один день одним пользователем. Пять — чтобы возможность
+# осталась, а тумбочка не опустела; поднимать осмысленно после того, как
+# подешевеет сам шаг (см. GROK_SEARCH_MODEL).
+AI_SEARCH_DAILY_LIMIT = int(os.getenv("AI_SEARCH_DAILY_LIMIT", "5"))
 
 # Soft per-user daily cap on AI-trainer questions overall (any kind). Guards
 # against a single user running up unbounded model cost; when hit, the trainer
@@ -259,11 +287,22 @@ VIDEO_ANALYSIS_TIMEOUT_SECONDS = float(os.getenv("VIDEO_ANALYSIS_TIMEOUT_SECONDS
 # Потолок на историю, которую храним для кэша (см. ai_trainer._trim_wire_history).
 # Держим целиком то, что уехало модели, включая tool-вызовы и их результаты: по
 # документации xAI кэш живёт ровно на неизменном префиксе, и любая переписанная
-# история — промах. Но результаты инструментов бывают на килобайты, а живёт это в
-# FSM-файле, который читается и пишется на каждый апдейт. 60 тысяч символов — это
-# примерно пятнадцать тысяч токенов диалога поверх шапки: хватает на длинный
-# разговор, и файл не раздувается.
-AI_WIRE_HISTORY_MAX_CHARS = int(os.getenv("AI_WIRE_HISTORY_MAX_CHARS", "60000"))
+# история — промах.
+#
+# 150 тысяч, а не 60: на 60 обрезка срабатывала уже на втором вопросе подряд
+# («34 сообщений → 20»), потому что результаты инструментов идут на килобайты. А
+# обрезка — это холодный промах на следующем запросе, и вот его цена по живым
+# логам:
+#
+#     холодный первый раунд   25106 токенов (из кэша 128)     $0.050
+#     тёплый после него       30272 токенов (из кэша 29696)   $0.011
+#
+# То есть держать историю ДЛИННЕЕ дешевле, чем обрезать: девяносто восемь
+# процентов её уезжает по кэш-ставке в 15%, а каждый промах платится целиком.
+# Выше поднимать не стоит — у xAI при 200K токенов контекста все ставки
+# удваиваются, а 150 тысяч символов это примерно сорок тысяч токенов истории
+# поверх одиннадцати тысяч шапки: до порога далеко, но запас нужен.
+AI_WIRE_HISTORY_MAX_CHARS = int(os.getenv("AI_WIRE_HISTORY_MAX_CHARS", "150000"))
 
 
 # Сколько символов вопроса показываем дешёвому гейту. Ему нужно понять ТЕМУ, а не
