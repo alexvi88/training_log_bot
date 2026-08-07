@@ -308,6 +308,33 @@ async def _delete_message(message: Message):
 _RECORD_MESSAGE_LIFETIME_SECONDS = 60
 
 
+# Сколько живёт сообщение о непонятом вводе. Успешный подход из чата удаляется
+# сразу, а ошибка раньше оставалась навсегда — после трёх опечаток подряд живой
+# трекер с кнопками уезжал вверх за три простыни с примерами, и до «Закончить
+# упражнение» приходилось скроллить. Полминуты хватает прочитать и исправиться.
+_INPUT_ERROR_LIFETIME_SECONDS = 30
+
+
+async def _reply_transient(message: Message, text: str) -> None:
+    """Ответить на неудачный ввод так, чтобы он не остался в чате навсегда.
+
+    Убираем обе стороны разговора — и подсказку, и сам неудачный ввод: подсказка
+    цитирует его, так что пока она висит, видно и что написали, и почему не
+    вышло, а потом чат снова состоит из одних подходов.
+    """
+    reply = await message.reply(text)
+    _spawn(
+        _delete_message_later(
+            message.bot, reply.chat.id, reply.message_id, _INPUT_ERROR_LIFETIME_SECONDS
+        )
+    )
+    _spawn(
+        _delete_message_later(
+            message.bot, message.chat.id, message.message_id, _INPUT_ERROR_LIFETIME_SECONDS
+        )
+    )
+
+
 async def _delete_message_later(bot, chat_id: int, message_id: int, delay: float) -> None:
     await asyncio.sleep(delay)
     with suppress(TelegramBadRequest):
@@ -376,6 +403,12 @@ def _logging_hint(
         base = "Вес и повторы через пробел, например «100 8»"
         if has_sets:
             base += " (можно только повторы — вес возьмётся с последнего подхода)"
+        # Голосовой ввод разбирает «сто на восемь» и дробные веса, но узнать о нём
+        # было неоткуда — а между подходами, с мелом на руках, это лучший способ
+        # записать. Строка только там, где инструкция и так показывается: мозолить
+        # ею глаза на каждом подходе незачем.
+        if ai_trainer.is_voice_configured():
+            base += "\n🎤 Руки заняты — надиктуй голосом: «сто на восемь»"
     # The program's recommended sets×reps, if this exercise was opened from a
     # routine that carries one — shown above the history/warning lines since
     # it's the plan for today, not a look back at a previous session.
@@ -1092,7 +1125,7 @@ async def quick_log_entered(message: Message, state: FSMContext):
     try:
         entries = parse_quick_workout(message.text)
     except ParseError as e:
-        await message.reply(e.message)
+        await _reply_transient(message, e.message)
         return
 
     user = await db.get_user(user_id)
@@ -2250,14 +2283,14 @@ async def log_set_text(message: Message, state: FSMContext):
     try:
         edit = parse_set_edit(text)
     except ParseError as e:
-        await message.reply(e.message)
+        await _reply_transient(message, e.message)
         return
     if edit is not None:
         index, new_set = edit
         try:
             await _apply_set_edit(state, data, active, index, new_set)
         except ParseError as e:
-            await message.reply(e.message)
+            await _reply_transient(message, e.message)
             return
         await _delete_message(message)
         user = await db.get_user(message.from_user.id)
@@ -2267,7 +2300,7 @@ async def log_set_text(message: Message, state: FSMContext):
     try:
         parsed = parse_sets_line(text)
     except ParseError as e:
-        await message.reply(e.message)
+        await _reply_transient(message, e.message)
         return
 
     user = await db.get_user(message.from_user.id)
@@ -2789,7 +2822,7 @@ async def finish_date_text(message: Message, state: FSMContext):
     try:
         date = parse_ru_date(message.text, today=timeutil.user_today(await db.get_user(message.from_user.id)))
     except ParseError as e:
-        await message.reply(e.message)
+        await _reply_transient(message, e.message)
         return
     data = await state.get_data()
     await _apply_finish_date(data["workout_id"], date)

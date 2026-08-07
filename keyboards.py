@@ -571,7 +571,11 @@ def exercise_picker_entry_keyboard(
         )
         b.button(text=label, callback_data="live:next_planned")
         if planned_left > 1:
-            b.button(text=f"📋 Программа · осталось {planned_left}", callback_data="live:plan")
+            # «Другое», а не «осталось»: порядок в программе — подсказка, а не
+            # рельсы (внутри экрана так и написано), но снаружи первая кнопка
+            # выглядела единственным путём, и про свободу выбора человек узнавал,
+            # только заглянув сюда.
+            b.button(text=f"📋 Другое из плана · ещё {planned_left}", callback_data="live:plan")
     b.button(text="➕ Упражнение", callback_data="live:add_exercise")
     if suggested is not None:
         ex_id, name = suggested
