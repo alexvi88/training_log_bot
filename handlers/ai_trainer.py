@@ -2138,7 +2138,16 @@ async def ai_setup_choice(callback: CallbackQuery, state: FSMContext):
             "Этот вопрос уже позади — спрашивай что хочешь словами 👇", show_alert=True
         )
         return
-    if len(parts) != 4 or parts[2] != str(setup["idx"]):
+    # Индекса мало: он совпадает и у вопроса из ПРОШЛОГО, брошенного опросника,
+    # если тот остановился на том же шаге. Тап по такой кнопке (а она живёт в чате
+    # вечно) записывался ответом в текущий опросник — молча и не тем вариантом,
+    # который человек видел под пальцем. msg_id привязывает кнопки к конкретному
+    # сообщению, а его мы и так храним, чтобы их гасить.
+    if (
+        len(parts) != 4
+        or parts[2] != str(setup["idx"])
+        or getattr(callback.message, "message_id", None) != setup.get("msg_id")
+    ):
         await callback.answer("Этот вопрос уже позади — отвечай на нижний 👇", show_alert=True)
         return
     choices = setup["questions"][setup["idx"]].get("choices") or []
