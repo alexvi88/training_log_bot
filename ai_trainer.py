@@ -4474,7 +4474,15 @@ async def _web_search_findings(
             ),
             tools=[xai_web_search(), xai_x_search()],
             max_tokens=1024,
-            agent_count=config.GROK_SEARCH_AGENT_COUNT,
+            # agent_count — параметр multi-agent-моделей, обычной он не нужен и
+            # SDK его для неё не ждёт. Передаём только когда модель правда
+            # multi-agent: см. config.GROK_SEARCH_MODEL, где разобрано, почему мы
+            # с него ушли.
+            **(
+                {"agent_count": config.GROK_SEARCH_AGENT_COUNT}
+                if "multi-agent" in config.GROK_SEARCH_MODEL
+                else {}
+            ),
         )
         response = await chat_session.sample()
     except Exception:
