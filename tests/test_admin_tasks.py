@@ -19,8 +19,14 @@ async def test_log_cost_event_and_get_llm_cost_breakdown_groups_by_model(fresh_d
 
     breakdown = await db.get_llm_cost_breakdown(today)
 
-    assert breakdown["grok-4-1-fast"] == {"calls": 2, "prompt_tokens": 300, "completion_tokens": 130}
-    assert breakdown["grok-4.20-multi-agent"] == {"calls": 1, "prompt_tokens": 10, "completion_tokens": 5}
+    assert breakdown["grok-4-1-fast"] == {
+            "calls": 2, "prompt_tokens": 300, "completion_tokens": 130,
+            "cached_tokens": 0, "reasoning_tokens": 0,
+        }
+    assert breakdown["grok-4.20-multi-agent"] == {
+            "calls": 1, "prompt_tokens": 10, "completion_tokens": 5,
+            "cached_tokens": 0, "reasoning_tokens": 0,
+        }
 
 
 async def test_get_llm_cost_breakdown_ignores_other_days_and_event_types(fresh_db, user_id):
@@ -36,7 +42,10 @@ async def test_get_llm_cost_breakdown_ignores_other_days_and_event_types(fresh_d
     today = db.now_iso()[:10]
     assert await db.get_llm_cost_breakdown(today) == {}
     assert await db.get_llm_cost_breakdown("2020-01-01") == {
-        "grok-4-1-fast": {"calls": 1, "prompt_tokens": 100, "completion_tokens": 50}
+        "grok-4-1-fast": {
+            "calls": 1, "prompt_tokens": 100, "completion_tokens": 50,
+            "cached_tokens": 0, "reasoning_tokens": 0,
+        }
     }
 
 
@@ -68,14 +77,23 @@ async def test_prune_old_cost_events_drops_only_stale_rows(fresh_db, user_id):
     assert deleted == 1
     today = db.now_iso()[:10]
     assert await db.get_llm_cost_breakdown(today) == {
-        "grok-4-1-fast": {"calls": 1, "prompt_tokens": 1, "completion_tokens": 1}
+        "grok-4-1-fast": {
+            "calls": 1, "prompt_tokens": 1, "completion_tokens": 1,
+            "cached_tokens": 0, "reasoning_tokens": 0,
+        }
     }
 
 
 def test_llm_cost_prices_by_model_with_default_fallback():
     breakdown = {
-        "grok-4-1-fast": {"calls": 2, "prompt_tokens": 1000, "completion_tokens": 1000},
-        "some-unpriced-model": {"calls": 1, "prompt_tokens": 1000, "completion_tokens": 1000},
+        "grok-4-1-fast": {
+            "calls": 2, "prompt_tokens": 1000, "completion_tokens": 1000,
+            "cached_tokens": 0, "reasoning_tokens": 0,
+        },
+        "some-unpriced-model": {
+            "calls": 1, "prompt_tokens": 1000, "completion_tokens": 1000,
+            "cached_tokens": 0, "reasoning_tokens": 0,
+        },
     }
 
     cost, calls, tokens = admin_tasks._llm_cost(breakdown)

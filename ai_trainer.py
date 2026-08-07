@@ -105,6 +105,21 @@ async def _log_llm_cost(user_id: Optional[int], model: str, usage: Any) -> None:
     # _cache_headers) стоит сильно дешевле полной ставки. Строку с ценой печатает
     # db.log_cost_event — там сходятся все платные вызовы.
     details = getattr(usage, "prompt_tokens_details", None)
+    # У xAI кэш и размышления лежат в разных полях usage, и какие из них приезжают
+    # через OpenAI-совместимый эндпоинт — вопрос открытый, поэтому читаем и те, и
+    # другие защитно, из обоих возможных мест (SamplingUsage в gRPC зовёт их
+    # cached_prompt_text_tokens и reasoning_tokens).
+    out_details = getattr(usage, "completion_tokens_details", None)
+    cached = (
+        getattr(details, "cached_tokens", None)
+        or getattr(usage, "cached_prompt_text_tokens", None)
+        or 0
+    )
+    reasoning = (
+        getattr(out_details, "reasoning_tokens", None)
+        or getattr(usage, "reasoning_tokens", None)
+        or 0
+    )
     try:
         await db.log_cost_event(
             user_id,
@@ -112,7 +127,8 @@ async def _log_llm_cost(user_id: Optional[int], model: str, usage: Any) -> None:
             model=model,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
-            cached_tokens=getattr(details, "cached_tokens", 0) or 0,
+            cached_tokens=cached,
+            reasoning_tokens=reasoning,
         )
     except Exception:
         logger.exception("failed to log llm cost event")
