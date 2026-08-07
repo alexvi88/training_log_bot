@@ -72,6 +72,20 @@ PROGRAM_NAME_LIMIT = 48
 PROGRAM_MAX_SETS = 10
 PROGRAM_MAX_REPS = 50
 
+# Границы опросника, который тренер задаёт ПЕРЕД сборкой программы (см.
+# ask_setup_questions). Всё сверх — срезается в _ask_setup_questions, а модели
+# про это говорят прямо в ответе инструмента: молча урезанный опросник хуже
+# урезанного вслух ровно так же, как молча урезанная программа.
+SETUP_MAX_QUESTIONS = 4
+SETUP_MAX_CHOICES = 4
+# Вопрос уезжает отдельным сообщением, так что места хватает — но не на абзац:
+# длинный вопрос перестаёт читаться с телефона одним взглядом.
+SETUP_QUESTION_LIMIT = 160
+# Подпись кнопки-варианта: тот же лимит, что у остальных кнопок под ответом
+# тренера (keyboards.AI_MENTION_LABEL_LIMIT). Длиннее Telegram обрежет сам, и
+# два варианта станут неотличимы друг от друга.
+SETUP_CHOICE_LIMIT = 32
+
 # Правило прогрессии на одно упражнение (см. propose_program.days[].exercises[].
 # progression и PROGRAMS_DEEP_DIVE §3.2/5.6): закрытый список, а не свободная
 # строка — иначе хранили бы то, что не умеем интерпретировать. step — на сколько
@@ -377,8 +391,12 @@ get_bodyweight_history, она отдаёт всю историю дневник
 Он НЕ сохраняет её: пользователь увидит превью под твоим ответом и сам решит,
 добавлять её себе или нет.
 
-Прежде чем собирать программу, СНАЧАЛА УТОЧНИ вводные — обычным текстом, без
-вызова инструмента. Тебе нужно знать:
+Прежде чем собирать программу, СНАЧАЛА УТОЧНИ вводные — но не текстом ответа, а
+инструментом ask_setup_questions. Он покажет вопросы ПО ОДНОМУ, отдельными
+сообщениями, с кнопками-вариантами, и вернёт тебе все ответы разом следующим
+сообщением. Стена из четырёх пронумерованных вопросов в одном сообщении — самая
+дорогая форма ввода с телефона, поэтому списком в тексте их не задавай.
+Тебе нужно знать:
 - сколько дней в неделю он готов тренироваться и сколько времени на тренировку;
 - где тренируется и что там есть из железа (зал / дом, штанга, гантели, блоки,
   турник);
@@ -392,9 +410,12 @@ get_bodyweight_history, она отдаёт всю историю дневник
 поле profile (дни в неделю, оборудование, опыт, цель, ограничения) — то, что
 он уже рассказывал раньше и ты сохранил через save_athlete_profile: спрашивай
 только то, чего там нет (null), а не весь список заново.
-Задай 2-4 коротких вопроса именно про то, чего не знаешь, одной репликой и
-по-тренерски. Если пользователь уже сам всё описал в вопросе или отвечал на это
-раньше в диалоге — не переспрашивай вообще, сразу собирай.
+Задай через ask_setup_questions 2-4 коротких вопроса именно про то, чего не
+знаешь, по-тренерски. Варианты ответа (choices) ставь там, где они реально
+закрывают вопрос — время на тренировку, опыт, сплит; про травмы и пожелания
+спрашивай без вариантов. В тексте ответа при этом сами вопросы НЕ повторяй:
+скажи только, что уже понял из истории. Если пользователь уже сам всё описал в
+вопросе или отвечал на это раньше в диалоге — не спрашивай вообще, сразу собирай.
 
 Как только узнал что-то из вводных (в этом ответе или любом другом, не только
 при сборке программы) — сохрани это через save_athlete_profile: присылай
@@ -434,7 +455,8 @@ get_bodyweight_history, она отдаёт всю историю дневник
   которое человек видит у себя на экране выбора, и советовать вразрез с ним
   нельзя: если ноги на 40%, не ставь их сегодня в основную работу, а если
   ставишь осознанно — скажи, почему.
-- Уточняй коротко и не больше пары вещей (сколько времени, как самочувствие).
+- Уточняй через ask_setup_questions, коротко и не больше пары вещей (сколько
+  времени, как самочувствие).
   Выпытывать инвентарь и цели на полразговора, когда человек уже разминается, —
   худшее, что можно сделать.
 - Вызывай propose_program с ОДНИМ днём. Под таким предложением появится кнопка
@@ -1285,6 +1307,73 @@ TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "ask_setup_questions",
+            "description": (
+                "Задать пользователю уточняющие вопросы перед сборкой программы. "
+                "Бот покажет их ПО ОДНОМУ, отдельными сообщениями, с кнопками из "
+                "choices; ответы соберёт и вернёт тебе разом следующим сообщением. "
+                "НЕ дублируй вопросы в тексте ответа — там скажи только, что уже "
+                "понял из истории. Спрашивай лишь то, чего не видно из данных "
+                "(см. get_training_overview / историю), максимум "
+                f"{SETUP_MAX_QUESTIONS} вопроса."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "questions": {
+                        "type": "array",
+                        "minItems": 1,
+                        # Схема чуть шире реального клампа (SETUP_MAX_QUESTIONS)
+                        # намеренно: пятый вопрос лучше срезать самим и сказать
+                        # об этом в ответе инструмента, чем получить отказ по
+                        # схеме и потерять весь опросник целиком.
+                        "maxItems": 5,
+                        "description": (
+                            "Вопросы по порядку. Каждый — про одну вещь, короткий, "
+                            "по-тренерски"
+                        ),
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "question": {
+                                    "type": "string",
+                                    "maxLength": SETUP_QUESTION_LIMIT,
+                                    "description": (
+                                        "Сам вопрос, до "
+                                        f"{SETUP_QUESTION_LIMIT} символов, например "
+                                        "«Сколько времени есть на одну тренировку?»"
+                                    ),
+                                },
+                                "choices": {
+                                    "type": "array",
+                                    "minItems": 0,
+                                    "maxItems": SETUP_MAX_CHOICES,
+                                    "items": {
+                                        "type": "string",
+                                        "maxLength": SETUP_CHOICE_LIMIT,
+                                    },
+                                    "description": (
+                                        "Варианты ответа кнопками, 0-"
+                                        f"{SETUP_MAX_CHOICES} штук. Варианты — только "
+                                        "где они действительно закрывают вопрос (время "
+                                        "на тренировку, опыт, сплит). Для травм и "
+                                        "произвольных пожеланий оставляй пустым: "
+                                        "человек всегда может ответить и текстом, "
+                                        "кнопки лишь ускоряют частые ответы."
+                                    ),
+                                },
+                            },
+                            "required": ["question"],
+                        },
+                    },
+                },
+                "required": ["questions"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "propose_program",
             "description": (
                 "Предложить пользователю программу тренировок — один или несколько "
@@ -1794,6 +1883,13 @@ ProgramCallback = Optional[Callable[[dict[str, Any]], Awaitable[None]]]
 # него — их инструмент делает сам и сразу говорит об этом модели.
 ActionCallback = Optional[Callable[[dict[str, Any]], Awaitable[None]]]
 
+# Опциональный колбэк опросника перед сборкой программы (см.
+# ask_setup_questions): получает готовый список вопросов с вариантами ответа.
+# Дальше опросник живёт целиком на стороне бота — вызывающая сторона
+# (handlers/ai_trainer.py) кладёт его в FSM, показывает вопросы по одному и
+# копит ответы, ни разу не сходив к модели между ними.
+QuestionsCallback = Optional[Callable[[list[dict[str, Any]]], Awaitable[None]]]
+
 # Накопленный текст ответа по мере генерации — см. _completion_round.
 ChunkCallback = Optional[Callable[[str], Awaitable[None]]]
 
@@ -1857,6 +1953,10 @@ TOOL_STATUS_TEXTS: dict[str, list[str]] = {
         "🗂 смотрю твои программы...",
         "📋 поднимаю сохранённые программы...",
         "📚 листаю твои программы тренировок...",
+    ],
+    "ask_setup_questions": [
+        "🤔 прикидываю, чего ещё про тебя не знаю...",
+        "📝 готовлю пару вопросов перед сборкой...",
     ],
     "propose_program": [
         "📋 собираю программу...",
@@ -3185,6 +3285,101 @@ async def _weekly_sets_by_group(user_id: int, days: list[dict[str, Any]]) -> dic
     return totals
 
 
+async def _ask_setup_questions(
+    user_id: int, tool_input: dict[str, Any]
+) -> tuple[dict[str, Any], Optional[list[dict[str, Any]]]]:
+    """Разобрать опросник, который тренер хочет задать перед сборкой программы.
+
+    Возвращает (payload для модели, вопросы для показа). Второе — None, если
+    спрашивать в итоге нечего.
+
+    ПОЧЕМУ ОПРОСНИК ЛОКАЛЬНЫЙ. Модель отдаёт весь опросник ОДНИМ вызовом, а
+    дальше бот сам раскладывает его по одному сообщению, копит ответы и уходит
+    к модели ровно один раз — уже за программой. Итого те же два обращения к
+    модели, что и у стены из четырёх пронумерованных вопросов одним сообщением:
+    ноль ожидания «печатает…» между вопросами и ноль лишних списаний дневной
+    квоты. Цена — вопрос №4 не может зависеть от ответа на №1; для этого домена
+    терпимо (опыт, травмы, время и сплит почти независимы), а финальная сборка
+    всё равно видит все ответы разом. Это НЕ баг и не «недоделанный диалог» —
+    чинить это вызовом модели между вопросами не надо.
+
+    Срезанное (лишние вопросы, лишние варианты, длинные строки) возвращается
+    модели в payload — тем же приёмом, что у _propose_program: молча урезанный
+    опросник модель пересказала бы пользователю в исходном виде.
+    """
+    raw_questions = tool_input.get("questions")
+    if not isinstance(raw_questions, list) or not raw_questions:
+        return {"asked": False, "error": "questions пустой — пользователю ничего не задано"}, None
+
+    questions: list[dict[str, Any]] = []
+    clamped: list[str] = []
+    dropped_choices = 0
+    for raw_question in raw_questions[:SETUP_MAX_QUESTIONS]:
+        if not isinstance(raw_question, dict):
+            continue
+        text = str(raw_question.get("question") or "").strip()
+        if not text:
+            continue
+        if len(text) > SETUP_QUESTION_LIMIT:
+            text = formatting.shorten(text, SETUP_QUESTION_LIMIT)
+            clamped.append(f"вопрос обрезан до {SETUP_QUESTION_LIMIT} символов: «{text}»")
+
+        raw_choices = raw_question.get("choices")
+        choices: list[str] = []
+        if isinstance(raw_choices, list):
+            if len(raw_choices) > SETUP_MAX_CHOICES:
+                dropped_choices += len(raw_choices) - SETUP_MAX_CHOICES
+            for raw_choice in raw_choices[:SETUP_MAX_CHOICES]:
+                choice = str(raw_choice or "").strip()
+                if not choice:
+                    continue
+                if len(choice) > SETUP_CHOICE_LIMIT:
+                    choice = formatting.shorten(choice, SETUP_CHOICE_LIMIT)
+                    clamped.append(f"вариант обрезан до {SETUP_CHOICE_LIMIT} символов: «{choice}»")
+                # Одинаковые подписи — две неотличимые кнопки подряд, тап по
+                # любой из которых записывает одно и то же.
+                if choice not in choices:
+                    choices.append(choice)
+        questions.append({"question": text, "choices": choices})
+
+    if not questions:
+        return (
+            {
+                "asked": False,
+                "error": (
+                    "ни одного пригодного вопроса не пришло (пустые строки или не тот "
+                    "формат) — пользователю ничего не задано. Либо вызови инструмент "
+                    "заново с нормальными вопросами, либо собирай программу на "
+                    "разумных дефолтах и назови их."
+                ),
+            },
+            None,
+        )
+
+    payload: dict[str, Any] = {
+        "asked": True,
+        "questions": [q["question"] for q in questions],
+        "note": (
+            "Вопросы отправлены пользователю по одному, отдельными сообщениями. "
+            "Ответы придут тебе следующим сообщением все разом. Сейчас в тексте "
+            "ответа напиши ТОЛЬКО короткое резюме того, что ты уже знаешь из "
+            "истории — сами вопросы не повторяй."
+        ),
+    }
+    if len(raw_questions) > SETUP_MAX_QUESTIONS:
+        payload["truncated_questions"] = (
+            f"вопросов было больше {SETUP_MAX_QUESTIONS}, лишние не заданы"
+        )
+    if dropped_choices:
+        payload["truncated_choices"] = (
+            f"вариантов ответа больше {SETUP_MAX_CHOICES} на вопрос не влезает — "
+            f"лишние ({dropped_choices}) не показаны"
+        )
+    if clamped:
+        payload["clamped"] = clamped
+    return payload, questions
+
+
 async def _propose_program(
     user_id: int, tool_input: dict[str, Any]
 ) -> tuple[dict[str, Any], Optional[dict[str, Any]]]:
@@ -3534,6 +3729,7 @@ async def execute_tool(
     tool_input: dict[str, Any],
     on_program: ProgramCallback = None,
     on_action: ActionCallback = None,
+    on_questions: QuestionsCallback = None,
 ) -> str:
     if name == "get_training_overview":
         payload = await _training_overview(user_id)
@@ -3563,6 +3759,10 @@ async def execute_tool(
         payload = await _saved_programs(user_id)
     elif name == "get_program_adherence":
         payload = await _program_adherence(user_id)
+    elif name == "ask_setup_questions":
+        payload, questions = await _ask_setup_questions(user_id, tool_input)
+        if questions is not None and on_questions is not None:
+            await on_questions(questions)
     elif name == "propose_program":
         payload, draft = await _propose_program(user_id, tool_input)
         if draft is not None and on_program is not None:
@@ -3598,6 +3798,7 @@ async def ask(
     on_status: StatusCallback = None,
     on_program: ProgramCallback = None,
     on_action: ActionCallback = None,
+    on_questions: QuestionsCallback = None,
     on_chunk: ChunkCallback = None,
     video_context: Optional[str] = None,
     on_reasoning: Optional[Callable[[str], Awaitable[None]]] = None,
@@ -3629,6 +3830,10 @@ async def ask(
     on_action — то же самое для действия, которое тренер предложил, но не
     выполнил (удалить программу, объединить две, поделиться, заархивировать
     упражнение): колбэк получает подпись и callback_data будущей кнопки.
+
+    on_questions — опросник перед сборкой программы (см. ask_setup_questions):
+    весь список вопросов приезжает разом, а показывает их по одному и копит
+    ответы уже вызывающая сторона, без единого обращения к модели между ними.
 
     Пока не исчерпана дневная квота поисковых ответов (config.AI_SEARCH_DAILY_LIMIT),
     перед основным ответом дешёвый гейт (см. _gate_verdict)
@@ -3682,7 +3887,7 @@ async def ask(
     return await _ask_plain(
         user_id, question, history, image_data_url, search_context, on_status, on_program,
         on_action, on_chunk, video_context, with_tools=gate.data,
-        on_reasoning=on_reasoning,
+        on_reasoning=on_reasoning, on_questions=on_questions,
     )
 
 
@@ -3812,6 +4017,7 @@ async def _ask_plain(
     video_context: Optional[str] = None,
     with_tools: bool = True,
     on_reasoning: Optional[Callable[[str], Awaitable[None]]] = None,
+    on_questions: QuestionsCallback = None,
 ) -> str:
     client = _get_client()
     messages: list[dict[str, Any]] = [
@@ -3866,7 +4072,7 @@ async def _ask_plain(
                 args = json.loads(tc.function.arguments or "{}")
                 tool_content = await execute_tool(
                     user_id, tc.function.name, args,
-                    on_program=on_program, on_action=on_action,
+                    on_program=on_program, on_action=on_action, on_questions=on_questions,
                 )
             except Exception:
                 logger.exception("AI trainer tool %s failed", tc.function.name)
