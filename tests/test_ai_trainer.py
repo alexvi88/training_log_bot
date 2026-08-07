@@ -1327,7 +1327,9 @@ async def test_broken_gate_is_not_logged_as_a_decision(fresh_db, user_id, monkey
     monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
 
     with caplog.at_level(logging.INFO, logger="ai_trainer"):
-        await ai_trainer.ask(user_id, "что нового в мире бодибилдинга?", history=[])
+        # Вопрос без признаков свежести: иначе сработала бы страховка и поиск
+        # всё-таки поднялся бы (см. _looks_like_it_needs_fresh_web).
+        await ai_trainer.ask(user_id, "как ощущения после зала?", history=[])
 
     [record] = [r for r in caplog.records if "AI trainer question" in r.message]
     message = record.getMessage()
@@ -1376,15 +1378,20 @@ async def test_gate_retries_once_on_silence(fresh_db, user_id, monkeypatch):
     assert verdict.ok is True, "повтор удался — это не поломка"
 
 
-async def test_gate_retry_is_an_exact_copy_of_the_request(fresh_db, user_id, monkeypatch):
-    """Разойдись повтор хоть заголовком — он пошёл бы в другой слот кэша."""
+async def test_gate_retry_differs_from_the_first_attempt(fresh_db, user_id, monkeypatch):
+    """Первая версия повтора была точной копией — ради кэша — и в проде честно
+    воспроизвела то же молчание токен в токен (696+0, потом снова 696+0).
+    Детерминированную модель бессмысленно просить дважды об одном и том же."""
     client = _fake_client([_response(content=""), _response(content=_GATE_SEARCH)])
     monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
 
     await ai_trainer._gate_verdict(user_id, "что нового?", history=[])
 
     first, second = client.chat.completions.create.await_args_list
-    assert first.kwargs == second.kwargs
+    assert second.kwargs["messages"] != first.kwargs["messages"]
+    # Отличие ровно одно — приписка, а не переделанный запрос.
+    assert len(second.kwargs["messages"]) == len(first.kwargs["messages"]) + 1
+    assert "просто верни JSON" in second.kwargs["messages"][-1]["content"]
 
 
 async def test_gate_gives_up_after_two_silences(fresh_db, user_id, monkeypatch):
@@ -1396,3 +1403,50 @@ async def test_gate_gives_up_after_two_silences(fresh_db, user_id, monkeypatch):
     assert client.chat.completions.create.await_count == 2
     assert verdict.ok is False
     assert verdict.data is True, "поломка не должна отбирать у тренера базу"
+
+
+async def test_dead_gate_still_searches_when_the_question_asks_for_freshness(
+    fresh_db, user_id, monkeypatch, caplog
+):
+    """Дефолт мёртвого гейта — «не искать», и на «что нового в мире бодибилдинга»
+    это оставляло человека без ответа по существу: модель рассказывала о мире,
+    которого уже нет. В проде так и было."""
+    client = _fake_client([
+        _response(content=""), _response(content=""), _response(content="ответ"),
+    ])
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+    findings = AsyncMock(return_value="в сети пишут вот что")
+    monkeypatch.setattr(ai_trainer, "_web_search_findings", findings)
+
+    with caplog.at_level(logging.INFO, logger="ai_trainer"):
+        await ai_trainer.ask(user_id, "что нового в мире бодибилдинга?", history=[])
+
+    findings.assert_awaited_once()
+    [record] = [r for r in caplog.records if "AI trainer question" in r.message]
+    assert "вопрос просит свежести" in record.getMessage()
+
+
+async def test_freshness_fallback_does_not_fire_on_personal_questions(
+    fresh_db, user_id, monkeypatch
+):
+    """Страховка про свежесть — не замена гейту: лишний шаг поиска стоит денег и
+    десятков секунд, а на личном вопросе в сети нет ничего."""
+    client = _fake_client([
+        _response(content=""), _response(content=""), _response(content="ответ"),
+    ])
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+    findings = AsyncMock(return_value="находки")
+    monkeypatch.setattr(ai_trainer, "_web_search_findings", findings)
+
+    await ai_trainer.ask(user_id, "сколько я жал в прошлый раз?", history=[])
+
+    findings.assert_not_awaited()
+
+
+async def test_freshness_markers_cover_the_phrasings_seen_in_prod():
+    assert ai_trainer._looks_like_it_needs_fresh_web("что нового в мире бодибилдинга")
+    assert ai_trainer._looks_like_it_needs_fresh_web("какие свежие исследования по креатину?")
+    assert ai_trainer._looks_like_it_needs_fresh_web("последние тренды в тренировках")
+    # А это личные вопросы — сети тут делать нечего.
+    assert not ai_trainer._looks_like_it_needs_fresh_web("как мой прогресс?")
+    assert not ai_trainer._looks_like_it_needs_fresh_web("сколько белка на кг веса?")

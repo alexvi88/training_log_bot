@@ -104,6 +104,25 @@ MAX_ROUTINES_PER_USER = config.MAX_ROUTINES_PER_USER
 _client: Optional[AsyncOpenAI] = None
 
 
+# Признаки того, что вопросу нужен свежий интернет. Нужны ТОЛЬКО когда гейт
+# вернул пустоту дважды: его дефолт — «не искать», и на «что нового в мире
+# бодибилдинга» это оставляло человека без ответа по существу, потому что модель
+# отвечала из памяти о мире, которого уже нет.
+#
+# Список нарочно короткий и про свежесть, а не про темы: тема — работа гейта, а
+# здесь только страховка от его молчания. Ложное срабатывание стоит одного шага
+# поиска, пропуск — качества ответа на прямой вопрос про новости.
+_FRESHNESS_MARKERS = (
+    "что нового", "новости", "свежие", "свежая", "последние", "актуальн",
+    "исследовани", "вышло", "вышел", "сейчас в", "тренды", "тренд",
+)
+
+
+def _looks_like_it_needs_fresh_web(question: str) -> bool:
+    low = question.lower()
+    return any(marker in low for marker in _FRESHNESS_MARKERS)
+
+
 def _light_history(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Только видимые реплики: без tool-вызовов, их результатов и системных вставок.
 
@@ -3954,6 +3973,15 @@ async def ask(
         search_outcome = "skipped: видео разбирается по кадрам, сеть не нужна"
     elif await db.get_ai_search_count_today(user_id) >= config.AI_SEARCH_DAILY_LIMIT:
         search_outcome = "skipped: daily limit reached"
+    elif not gate.ok and _looks_like_it_needs_fresh_web(question):
+        # Гейт молчит, но вопрос сам говорит, что ему нужна свежесть. Дефолт «не
+        # искать» тут стоил бы ответа по существу: на «что нового в мире
+        # бодибилдинга» модель рассказала бы о мире, которого уже нет.
+        search_context = await _web_search_findings(user_id, question, light, on_status)
+        search_outcome = (
+            "used (гейт сломался, но вопрос просит свежести)" if search_context
+            else "ran but returned nothing (гейт сломался, искали по признакам)"
+        )
     elif not gate.ok:
         # Гейт не отработал — и это НЕ «решил, что не надо». Раньше оба случая
         # писались одной фразой, и на вопросе «что нового в мире бодибилдинга»
@@ -4295,8 +4323,8 @@ async def _gate_verdict(
     if len(question) > config.AI_GATE_QUESTION_MAX_CHARS:
         question = question[: config.AI_GATE_QUESTION_MAX_CHARS] + " […]"
 
-    # В переменной, чтобы повтор при пустом вердикте был ТОЧНОЙ копией запроса:
-    # разойдись они хоть заголовком — повтор пошёл бы в другой слот кэша.
+    # В переменной, чтобы повтор при пустом вердикте отличался от первой попытки
+    # РОВНО одним добавленным сообщением, а не случайно чем-то ещё.
     request_kwargs: dict[str, Any] = {
         "model": config.GROK_MODEL,
         "max_tokens": _SEARCH_GATE_MAX_TOKENS,
@@ -4353,9 +4381,28 @@ async def _gate_verdict(
         # Одна повторная попытка: стоит полцента, а без вердикта поиск не
         # поднимется на вопросе, который его прямо просит («что нового в мире
         # бодибилдинга»). Дважды подряд молчание — уже дефолты.
-        logger.warning("AI trainer gate returned an empty verdict, retrying once")
+        # Повтор ДОЛЖЕН отличаться от первой попытки. Первая версия была точной
+        # копией — ради того, чтобы не уехать в другой слот кэша, — и в логах
+        # прода честно воспроизвела то же молчание токен в токен:
+        #   gate: 696+0 (размышления 100)  → пусто
+        #   gate: 696+0 (размышления 96)   → снова пусто
+        # Детерминированную модель бессмысленно просить дважды об одном и том же.
+        # Кэшем гейта тут жертвуем сознательно: его префикс — семь сотен токенов,
+        # это дешевле, чем остаться без вердикта.
+        logger.warning("AI trainer gate returned an empty verdict, retrying with a nudge")
+        retry_kwargs = dict(request_kwargs)
+        retry_kwargs["messages"] = [
+            *request_kwargs["messages"],
+            {
+                "role": "user",
+                "content": (
+                    "Ты не ответил ничего. Не размышляй, просто верни JSON: "
+                    '{"search": true|false, "data": true|false}'
+                ),
+            },
+        ]
         try:
-            response = await client.chat.completions.create(**request_kwargs)
+            response = await client.chat.completions.create(**retry_kwargs)
         except Exception:
             logger.exception("AI trainer gate retry failed, falling back to defaults")
             return GateVerdict(ok=False)
