@@ -78,13 +78,32 @@ READ_ONLY_TOOLS = frozenset(
 )
 
 # Пишущие инструменты, разрешённые снаружи, — подмножество
-# `ai_trainer._UNDOABLE_TOOLS`: там уже есть правило «делает сразу, откат
-# кнопкой», то есть их и так можно вызвать одной репликой без подтверждения.
-# Кнопки отката у MCP-клиента нет, поэтому `_call` подменяет им `note` в ответе
-# (см. ниже). Остальные undoable-инструменты (переименование, перенос в
-# группу, создание упражнения) сюда не идут — они не однострочные факты о
-# человеке, а правки структуры, ошибиться в которых снаружи легче.
-WRITE_TOOLS = frozenset({"log_bodyweight", "log_food"})
+# `ai_trainer._UNDOABLE_TOOLS`, отобранное по двум критериям:
+#
+# 1. Добавление, а не правка существующего: log_bodyweight, log_food,
+#    create_exercise, copy_program сами описаны как «ДЕЛАЕТ СРАЗУ — добавление
+#    ничего не портит». Новую строку легко найти и убрать вручную, если она
+#    лишняя.
+# 2. Удаление с полным восстановлением: delete_food_entry и
+#    delete_bodyweight_log удаляют конкретную запись (id — из get_food_diary /
+#    get_bodyweight_history), но их undo не «намекает вернуться и переделать»,
+#    а честно воссоздаёт ту же строку с теми же значениями (kind=
+#    food_restore/bodyweight_restore в handlers.ai_trainer._apply_undo). Это
+#    ближе к «сходить и обратно», чем к «мутации задним числом».
+#
+# Кнопки отката у MCP-клиента нет, поэтому `_call` подменяет `note` в ответе
+# (см. ниже) — вернуть удалённое всё равно можно, попросив то же самое ещё раз
+# в чате с тренером или в самом боте.
+#
+# rename_exercise, move_exercise_to_group и rename_program сюда осознанно НЕ
+# идут — это мутация БЕЗ восстановления исходного значения (откат меняет само
+# имя обратно, а не «отменяет» правку симметрично): переименовать не то
+# упражнение или программу снаружи легче, чем через бота (там подсказки,
+# автодополнение по точному имени).
+WRITE_TOOLS = frozenset({
+    "log_bodyweight", "log_food", "create_exercise", "copy_program",
+    "delete_food_entry", "delete_bodyweight_log",
+})
 
 EXPOSED_TOOLS = READ_ONLY_TOOLS | WRITE_TOOLS
 
@@ -116,26 +135,44 @@ def _user_id() -> int:
     return int(token.subject)
 
 
-async def _call(name: str, **arguments: Any) -> str:
+async def _call(tool_name: str, **arguments: Any) -> str:
     """Общий путь всех инструментов: личность → ридер/писатель AI-тренера.
+
+    Параметр называется `tool_name`, а не `name` — у create_exercise и
+    copy_program среди своих же аргументов есть `name` (название упражнения
+    / программы), и с `_call(name: str, **arguments)` вызов `_call("create_
+    exercise", name=name, group=group)` падал с «got multiple values for
+    argument 'name'»: kwarg `name` от инструмента сталкивался с позиционным
+    именем самого инструмента. Ловится только вызовом по проводу — с прямым
+    вызовом `execute_tool` в тестах коллизии нет, эту ошибку словил только
+    сквозной JSON-RPC тест.
 
     Возвращает JSON-строку — то, что видит модель внутри бота, с одной
     поправкой: у WRITE_TOOLS `note` рассчитан на модель тренера в Telegram
     («под ответом кнопка отката») — здесь такой кнопки нет, и тот же текст
-    внешнему клиенту был бы неправдой. Подменяем на `_MCP_WRITE_NOTE`.
+    внешнему клиенту был бы неправдой.
+
+    Заменяем подстрокой, а не блокирующей перезаписью всего поля: у части
+    инструментов `note` — это `_UNDO_NOTE` целиком (log_bodyweight,
+    log_food, create_exercise на успехе), а у copy_program — префикс плюс
+    он же («Копия «X» создана. {_UNDO_NOTE}»). У тех же create_exercise
+    бывают и совсем другие note («такое упражнение уже есть», «выбери
+    группу из списка») — их подмена исказила бы смысл, поэтому трогаем
+    только когда в тексте реально встретился `_UNDO_NOTE`.
     """
-    if name not in EXPOSED_TOOLS:
+    if tool_name not in EXPOSED_TOOLS:
         # Недостижимо через объявленные ниже инструменты; страховка от того,
         # что кто-то добавит вызов мимо белого списка.
-        raise ValueError(f"tool {name} is not exposed over MCP")
+        raise ValueError(f"tool {tool_name} is not exposed over MCP")
     user_id = _user_id()
-    logger.info("MCP tool %s for user %s", name, user_id)
-    raw = await ai_trainer.execute_tool(user_id, name, arguments)
-    if name not in WRITE_TOOLS:
+    logger.info("MCP tool %s for user %s", tool_name, user_id)
+    raw = await ai_trainer.execute_tool(user_id, tool_name, arguments)
+    if tool_name not in WRITE_TOOLS:
         return raw
     payload = json.loads(raw)
-    if "note" in payload:
-        payload["note"] = _MCP_WRITE_NOTE
+    note = payload.get("note")
+    if isinstance(note, str) and ai_trainer._UNDO_NOTE in note:
+        payload["note"] = note.replace(ai_trainer._UNDO_NOTE, _MCP_WRITE_NOTE)
     return json.dumps(payload, ensure_ascii=False)
 
 
@@ -154,10 +191,12 @@ def build_server() -> MCPServer:
         instructions=(
             "Данные тренировок одного пользователя Telegram-бота: история тренировок и подходов, "
             "прогресс по упражнениям, недельный объём по группам мышц, вес тела, дневник питания "
-            "и сохранённые программы. Почти всё только на чтение — кроме log_bodyweight и "
-            "log_food, которые пишут сразу и без подтверждения (правка потом — в самом боте). "
-            "Начинай с get_training_overview — оттуда видны единицы измерения (кг/фунты) и "
-            "точные названия упражнений, которые нужны остальным инструментам."
+            "и сохранённые программы. Почти всё только на чтение — кроме log_bodyweight, "
+            "log_food, create_exercise, copy_program, delete_food_entry и "
+            "delete_bodyweight_log: они пишут сразу и без подтверждения (переименование "
+            "и другая правка — только в самом боте). Начинай с get_training_overview — "
+            "оттуда видны единицы измерения (кг/фунты) и точные названия упражнений, "
+            "которые нужны остальным инструментам."
         ),
         version="1.0.0",
         auth_server_provider=mcp_oauth.TrainingLogOAuthProvider(),
@@ -271,6 +310,36 @@ def build_server() -> MCPServer:
             "log_food", description=description,
             calories=calories, protein=protein, fat=fat, carbs=carbs,
         )
+
+    @mcp.tool()
+    async def create_exercise(name: str, group: str) -> str:
+        """Завести своё упражнение, которого нет ни в списке пользователя, ни в
+        каталоге — пишет сразу, добавление ничего не портит. Сначала проверь
+        get_training_overview и list_exercise_catalog: если движение уже есть,
+        бери его, а не заводи второе с чуть другим названием. group — точное
+        имя группы мышц из get_training_overview или list_exercise_catalog."""
+        return await _call("create_exercise", name=name, group=group)
+
+    @mcp.tool()
+    async def copy_program(name: str, new_name: str | None = None) -> str:
+        """Дубликат сохранённой программы со всеми днями, упражнениями и схемами —
+        пишет сразу, копия ничего не портит. name — точное имя источника из
+        get_saved_programs. Без new_name имя возьмётся свободное рядом с
+        исходным («PPL (2)»)."""
+        return await _call("copy_program", name=name, new_name=new_name)
+
+    @mcp.tool()
+    async def delete_food_entry(entry_id: int) -> str:
+        """Убрать одну запись из дневника питания — пишет сразу. entry_id — точный
+        id из get_food_diary, не выдумывай; если человек не назвал, какую запись,
+        посмотри дневник и уточни, если записей за день несколько."""
+        return await _call("delete_food_entry", entry_id=entry_id)
+
+    @mcp.tool()
+    async def delete_bodyweight_log(log_id: int) -> str:
+        """Убрать одну запись веса — пишет сразу. log_id — точный id из
+        get_bodyweight_history, не выдумывай."""
+        return await _call("delete_bodyweight_log", log_id=log_id)
 
     return mcp
 

@@ -5484,6 +5484,11 @@ async def list_bodyweight_logs(telegram_id: int, limit: Optional[int] = None) ->
     return list(reversed(await cur.fetchall()))
 
 
+async def get_bodyweight_log(log_id: int) -> Optional[aiosqlite.Row]:
+    cur = await conn().execute("SELECT * FROM bodyweight_logs WHERE id = ?", (log_id,))
+    return await cur.fetchone()
+
+
 async def get_latest_bodyweight(telegram_id: int) -> Optional[aiosqlite.Row]:
     cur = await conn().execute(
         "SELECT * FROM bodyweight_logs WHERE telegram_id = ? ORDER BY logged_at DESC, id DESC LIMIT 1",

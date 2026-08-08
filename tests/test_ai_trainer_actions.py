@@ -367,6 +367,7 @@ async def test_every_self_acting_tool_offers_an_undo(fresh_db, user_id):
     assert set(ai_trainer._UNDOABLE_TOOLS) == {
         "log_bodyweight", "log_food", "create_exercise", "rename_exercise",
         "move_exercise_to_group", "rename_program", "copy_program",
+        "delete_food_entry", "delete_bodyweight_log",
     }
     # И ни один из них не должен заодно оказаться среди тех, что только предлагают.
     assert not set(ai_trainer._UNDOABLE_TOOLS) & set(ai_trainer._ACTION_TOOLS)
@@ -574,3 +575,67 @@ async def test_several_profile_writes_in_one_turn_add_no_buttons(fresh_db, user_
     assert captured == []
     user = await fresh_db.get_user(user_id)
     assert (user["experience"], user["goal"]) == ("новичок", "масса")
+
+
+# ---------- удаление записей веса и еды (delete_food_entry / delete_bodyweight_log) ----------
+
+
+async def test_delete_food_entry_removes_it_and_undo_restores_it_whole(fresh_db, user_id):
+    """Живой запрос из Claude Desktop: «удали эту запись» упирался в «у меня
+    нет инструмента на удаление» — get_food_diary не отдавал entry_id, и
+    убрать запись мог только человек руками в самом боте.
+
+    Откат тут — не «намекни переделать», а честное восстановление той же
+    строки: kind=food_restore в _apply_undo."""
+    entry_id = await fresh_db.add_food_entry(
+        user_id, eaten_on="2026-08-08", description="Протеиновый батончик",
+        calories=200, protein=20, fat=7, carbs=15,
+    )
+
+    action = await _call(user_id, "delete_food_entry", {"entry_id": entry_id})
+
+    assert action is not None and action["undo"]["kind"] == "food_restore"
+    assert await fresh_db.get_food_entry(entry_id) is None
+
+    assert await ai_handler._apply_undo(user_id, action["undo"]) is not None
+    restored = (await fresh_db.list_food_entries(user_id, "2026-08-08"))[0]
+    assert (restored["description"], restored["calories"]) == ("Протеиновый батончик", 200)
+
+
+async def test_delete_food_entry_refuses_someone_elses_row(fresh_db, user_id):
+    other = await fresh_db.get_or_create_user(telegram_id=user_id + 1, username="other")
+    entry_id = await fresh_db.add_food_entry(
+        other["telegram_id"], eaten_on="2026-08-08", description="Чужое"
+    )
+
+    payload = json.loads(
+        await ai_trainer.execute_tool(user_id, "delete_food_entry", {"entry_id": entry_id})
+    )
+
+    assert "error" in payload
+    assert await fresh_db.get_food_entry(entry_id) is not None
+
+
+async def test_delete_bodyweight_log_removes_it_and_undo_restores_it(fresh_db, user_id):
+    log_id = await fresh_db.add_bodyweight_log(user_id, 78.4, logged_at="2026-08-08T09:00:00")
+
+    action = await _call(user_id, "delete_bodyweight_log", {"log_id": log_id})
+
+    assert action is not None and action["undo"]["kind"] == "bodyweight_restore"
+    assert await fresh_db.list_bodyweight_logs(user_id) == []
+
+    assert await ai_handler._apply_undo(user_id, action["undo"]) is not None
+    logs = await fresh_db.list_bodyweight_logs(user_id)
+    assert [log["weight"] for log in logs] == [78.4]
+
+
+async def test_delete_bodyweight_log_refuses_someone_elses_row(fresh_db, user_id):
+    other = await fresh_db.get_or_create_user(telegram_id=user_id + 1, username="other")
+    log_id = await fresh_db.add_bodyweight_log(other["telegram_id"], 70.0)
+
+    payload = json.loads(
+        await ai_trainer.execute_tool(user_id, "delete_bodyweight_log", {"log_id": log_id})
+    )
+
+    assert "error" in payload
+    assert await fresh_db.get_bodyweight_log(log_id) is not None
