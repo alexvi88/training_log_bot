@@ -288,7 +288,7 @@ def ai_setup_question_keyboard(
     Каждый вариант своей строкой: ответы вроде «час-полтора» в паре Telegram
     обрежет, и два варианта станут неотличимы.
 
-    «⏭ Хватит вопросов, собирай» стоит всегда, даже когда вариантов нет: отмахнуться от
+    «⏭ Пропустить вопрос» стоит всегда, даже когда вариантов нет: отмахнуться от
     уточнений — законный ответ («да просто дай что-нибудь»), и без этой кнопки
     единственным выходом из опросника было бы ответить на все вопросы.
     """
@@ -298,7 +298,7 @@ def ai_setup_question_keyboard(
             text=_shorten_label(choice, AI_MENTION_LABEL_LIMIT),
             callback_data=f"ai:qa:{question_index}:{choice_index}",
         )
-    b.button(text="⏭ Хватит вопросов, собирай", callback_data="ai:qskip")
+    b.button(text="⏭ Пропустить вопрос", callback_data="ai:qskip")
     b.adjust(1)
     return b.as_markup()
 

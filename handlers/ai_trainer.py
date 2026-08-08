@@ -834,7 +834,14 @@ async def _register_undos(state: FSMContext, actions: list[dict]) -> list[dict]:
     seq = int(data.get("ai_undo_seq") or 0)
 
     out: list[dict] = []
+    pending: dict = {}
     for action in actions:
+        # Запись в профиль ждёт подтверждения: все поля за ход копятся в одно
+        # ожидание, чтобы под ответом стоял ОДИН вопрос, а не по вопросу на
+        # каждый вызов инструмента (сборка программы зовёт его несколько раз).
+        if action.get("profile_pending"):
+            pending.update(action["profile_pending"])
+            continue
         undo = action.get("undo")
         if undo is None:
             out.append(action)
@@ -847,7 +854,56 @@ async def _register_undos(state: FSMContext, actions: list[dict]) -> list[dict]:
     for stale in sorted(store, key=lambda k: int(k[1:]))[:-_UNDO_SLOTS]:
         del store[stale]
     await state.update_data(ai_undo=store, ai_undo_seq=seq)
+    if pending:
+        changed = ", ".join(ai_trainer.PROFILE_LABELS.get(k, k) for k in pending)
+        await state.update_data(ai_profile_pending=pending)
+        out.append({"label": f"✅ Запомнить: {formatting.shorten(changed, 24)}",
+                    "callback": "ai:profile:yes"})
+        out.append({"label": "✖️ Не запоминать", "callback": "ai:profile:no"})
     return out
+
+
+@router.callback_query(F.data == "ai:profile:yes")
+async def ai_profile_confirm(callback: CallbackQuery, state: FSMContext):
+    """«✅ Запомнить» — записать то, что тренер предложил запомнить о человеке.
+
+    Спрашиваем ДО записи, а не откатываем после: молчаливая правка, о которой
+    узнаёшь по кнопке «↩️ Забыть из профиля: дни в неде…», пугала и не читалась.
+    """
+    data = await state.get_data()
+    pending = data.get("ai_profile_pending") or {}
+    if not pending:
+        await callback.answer("Это предложение уже неактуально", show_alert=True)
+        return
+    await state.update_data(ai_profile_pending=None)
+    await db.update_user(callback.from_user.id, **pending)
+    changed = ", ".join(ai_trainer.PROFILE_LABELS.get(k, k) for k in pending)
+    await callback.answer(f"Запомнил: {changed}")
+    await _drop_profile_buttons(callback, state)
+
+
+@router.callback_query(F.data == "ai:profile:no")
+async def ai_profile_decline(callback: CallbackQuery, state: FSMContext):
+    await state.update_data(ai_profile_pending=None)
+    await callback.answer("Не записал")
+    await _drop_profile_buttons(callback, state)
+
+
+async def _drop_profile_buttons(callback: CallbackQuery, state: FSMContext) -> None:
+    """Убрать обе кнопки вопроса: он отвечен, а живые кнопки под отвеченным
+    вопросом — приглашение потыкать и решить, что бот сломался."""
+    data = await state.get_data()
+    gone = {"ai:profile:yes", "ai:profile:no"}
+    await state.update_data(
+        ai_actions=[a for a in (data.get("ai_actions") or []) if a.get("callback") not in gone]
+    )
+    rows = callback.message.reply_markup.inline_keyboard if callback.message.reply_markup else []
+    kept = [[b for b in row if b.callback_data not in gone] for row in rows]
+    kept = [row for row in kept if row]
+    with suppress(TelegramBadRequest):
+        await callback.message.edit_reply_markup(
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=kept) if kept else None
+        )
 
 
 async def _apply_undo(user_id: int, undo: dict) -> Optional[str]:
@@ -2054,7 +2110,7 @@ def _setup_answers_text(setup: dict) -> str:
     lines = ["Вот ответы:"]
     skipped = False
     for idx, question in enumerate(questions):
-        if idx < len(answers):
+        if idx < len(answers) and answers[idx] is not None:
             lines.append(f"— {question['question']} — {answers[idx]}")
         else:
             skipped = True
@@ -2166,6 +2222,8 @@ async def _record_setup_answer(
     Модель тут не вызывается вовсе: весь опросник уже лежит в FSM, а квоту и
     ожидание «печатает…» стоит тратить один раз — на программу.
     """
+    # None — «пропустил этот вопрос»: место в списке занимает, но ответом не
+    # притворяется (см. _setup_answers_text).
     setup["answers"] = [*(setup.get("answers") or []), answer]
     setup["idx"] = int(setup.get("idx") or 0) + 1
     await state.update_data(ai_setup=setup)
@@ -2229,11 +2287,15 @@ async def ai_setup_choice(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "ai:qskip")
 async def ai_setup_skip(callback: CallbackQuery, state: FSMContext):
-    """«⏭ Собирай так» — хватит уточнений, собирай на том, что уже есть.
+    """«⏭ Пропустить» — пропустить ЭТОТ вопрос и шагнуть к следующему.
 
-    Индекса вопроса тут нет намеренно: кнопка означает одно и то же на любом
-    шаге — закончить опросник прямо сейчас. Неотвеченные вопросы уедут модели
-    как пропущенные, и она возьмёт по ним дефолты (см. _setup_answers_text).
+    Раньше кнопка обрывала опросник целиком, и пропустить один неудобный вопрос
+    было нельзя — только все сразу. Пропустить всё по-прежнему можно, просто
+    тапов столько же, сколько вопросов; зато выбор перестал быть «или отвечай на
+    всё, или ни на что».
+
+    Индекса вопроса в callback_data нет намеренно: кнопка означает одно и то же
+    на любом шаге, а какой шаг текущий — знает состояние.
     """
     data = await state.get_data()
     setup = _active_setup(data)
@@ -2243,18 +2305,22 @@ async def ai_setup_skip(callback: CallbackQuery, state: FSMContext):
         )
         return
     user_id = callback.from_user.id
-    if not _try_claim_busy(user_id):
+    last = int(setup.get("idx") or 0) + 1 >= len(setup.get("questions") or [])
+    # Бронь — только на последнем шаге: за ним сразу идёт вызов модели, а
+    # промежуточные пропуски её не трогают (как и промежуточные ответы).
+    if last and not _try_claim_busy(user_id):
         await callback.answer("Секунду, ещё думаю над прошлым вопросом 😅", show_alert=True)
         return
     try:
         with suppress(TelegramBadRequest):
-            await callback.answer("Понял, собираю")
+            await callback.answer("Пропустил" if not last else "Понял, собираю")
         await _close_setup_question(
-            callback.bot, callback.message.chat.id, setup, "⏭ Собирай так"
+            callback.bot, callback.message.chat.id, setup, "⏭ Пропустил"
         )
-        await _finish_setup(callback.message, state, user_id, setup)
+        await _record_setup_answer(callback.message, state, user_id, setup, None)
     finally:
-        _busy.discard(user_id)
+        if last:
+            _busy.discard(user_id)
 
 
 @router.message(AITrainerFlow.chatting, F.text)

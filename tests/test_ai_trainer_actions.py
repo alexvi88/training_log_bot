@@ -472,19 +472,16 @@ async def test_moved_exercise_goes_back_to_its_old_group(fresh_db, user_id):
     assert (await fresh_db.get_exercise(ex_id))["primary_group_id"] == legs
 
 
-async def test_profile_undo_restores_only_the_fields_that_call_changed(fresh_db, user_id):
-    """Профиль тренер пишет не дожидаясь просьбы, и до этого его нельзя было ни
-    увидеть, ни откатить. Восстанавливать целиком нельзя: затёрло бы и то, что
-    человек успел поправить между записью и тапом."""
-    await ai_trainer.execute_tool(user_id, "save_athlete_profile", {"goal": "масса"})
+async def test_profile_is_offered_for_approval_instead_of_being_written(fresh_db, user_id):
+    """Профиль больше не правится молча: инструмент только предлагает запомнить,
+    а пишет уже подтверждение под ответом. Раньше запись шла сразу, а под
+    ответом висело «↩️ Забыть из профиля: дни в неде…» — человек не понимал ни
+    что это, ни что вообще записали."""
     action = await _call(user_id, "save_athlete_profile", {"limitations": "болит плечо"})
 
-    assert action["undo"]["before"] == {"limitations": None}
-    assert await ai_handler._apply_undo(user_id, action["undo"]) is not None
-
-    user = await fresh_db.get_user(user_id)
-    assert user["limitations"] is None
-    assert user["goal"] == "масса"  # чужое поле не тронуто
+    assert "undo" not in action
+    assert action["profile_pending"] == {"limitations": "болит плечо"}
+    assert (await fresh_db.get_user(user_id))["limitations"] is None, "до подтверждения — не пишем"
 
 
 async def test_undo_keys_survive_the_json_fsm_round_trip(fresh_db, user_id):
@@ -530,3 +527,24 @@ async def test_only_the_last_few_undos_are_kept(fresh_db, user_id):
     # Выживают свежие, а не первые попавшиеся.
     assert "u1" not in store
     assert f"u{ai_handler._UNDO_SLOTS + 4}" in store
+
+
+async def test_several_profile_writes_in_one_turn_ask_once(fresh_db, user_id):
+    """Сборка программы зовёт save_athlete_profile несколько раз за ход. Если бы
+    каждый вызов вешал свой вопрос, ответ утонул бы в подтверждениях — поля
+    копятся в одно ожидание и спрашиваются одной парой кнопок."""
+    from aiogram.fsm.context import FSMContext
+    from aiogram.fsm.storage.base import StorageKey
+    from aiogram.fsm.storage.memory import MemoryStorage
+
+    state = FSMContext(storage=MemoryStorage(), key=StorageKey(bot_id=1, chat_id=user_id, user_id=user_id))
+    actions = [
+        (await _call(user_id, "save_athlete_profile", {"days_per_week": 3})),
+        (await _call(user_id, "save_athlete_profile", {"goal": "масса"})),
+    ]
+
+    out = await ai_handler._register_undos(state, actions)
+
+    confirms = [a for a in out if a["callback"] == "ai:profile:yes"]
+    assert len(confirms) == 1
+    assert (await state.get_data())["ai_profile_pending"] == {"days_per_week": 3, "goal": "масса"}

@@ -133,13 +133,17 @@ async def test_profile_screen_shows_what_the_trainer_wrote(fresh_db, user_id):
     """Поля профиля пишет тренер, не дожидаясь просьбы (см.
     ai_trainer.save_athlete_profile) — до этого экрана их нельзя было ни
     увидеть, ни поправить, при том что от них зависит подбор программ."""
+    import json
+
     import ai_trainer
     import ui
 
-    await ai_trainer.execute_tool(
+    payload = json.loads(await ai_trainer.execute_tool(
         user_id, "save_athlete_profile",
         {"goal": "масса", "days_per_week": 4, "equipment": ["штанга", "гантели"]},
-    )
+    ))
+    # Профиль пишется только после «✅ Запомнить» под ответом тренера.
+    await fresh_db.update_user(user_id, **payload["fields"])
 
     seen = {}
 
@@ -218,10 +222,15 @@ async def test_profile_button_is_on_the_settings_screen():
 async def test_profile_screen_speaks_in_the_first_person(fresh_db, user_id):
     """Один персонаж на весь продукт (TONE_OF_VOICE.md): бот говорит «записал»,
     а не «тренер записал» — про самого себя в третьем лице он не говорит."""
+    import json
+
     import ai_trainer
     import ui
 
-    await ai_trainer.execute_tool(user_id, "save_athlete_profile", {"goal": "масса"})
+    payload = json.loads(
+        await ai_trainer.execute_tool(user_id, "save_athlete_profile", {"goal": "масса"})
+    )
+    await fresh_db.update_user(user_id, **payload["fields"])
 
     seen = {}
 
