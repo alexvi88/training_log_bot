@@ -467,7 +467,8 @@ async def _show_routine_editor(event, state: FSMContext, routine_id: int) -> Non
             + (f" — {escape(ex['target'])}" if ex["target"] else "")
             for i, ex in enumerate(exercises, start=1)
         ]
-        lines += ["", "⬆️ — поднять выше, ✏️ — схема подходов, 🗑 — убрать."]
+        lines += ["", "Тап по названию или ✏️ — схема подходов, ⬆️ — поднять "
+                      "(с первого — в конец), 🗑 — убрать."]
     else:
         lines.append("Здесь пока нет упражнений.")
     if note:

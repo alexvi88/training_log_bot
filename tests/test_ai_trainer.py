@@ -1048,13 +1048,12 @@ async def test_save_athlete_profile_tool_is_offered_to_the_model():
 
 
 async def test_save_athlete_profile_writes_only_the_provided_fields(fresh_db, user_id):
-    payload = json.loads(
-        await ai_trainer.execute_tool(
-            user_id, "save_athlete_profile",
-            {"days_per_week": 4, "goal": "масса", "equipment": ["штанга", "гантели"]},
-        )
+    payload = await _confirm_profile(
+        fresh_db, user_id,
+        {"days_per_week": 4, "goal": "масса", "equipment": ["штанга", "гантели"]},
     )
-    assert payload["saved"] is True
+    # Инструмент только предлагает запомнить — пишет уже подтверждение.
+    assert payload["saved"] is False
 
     user = await fresh_db.get_user(user_id)
     assert user["days_per_week"] == 4
@@ -1067,8 +1066,8 @@ async def test_save_athlete_profile_writes_only_the_provided_fields(fresh_db, us
 async def test_save_athlete_profile_partial_update_does_not_erase_earlier_fields(fresh_db, user_id):
     """Раньше эти ответы оседали только в переписке — здесь важно, что второй
     частичный вызов не стирает то, что записал первый."""
-    await ai_trainer.execute_tool(user_id, "save_athlete_profile", {"goal": "масса"})
-    await ai_trainer.execute_tool(user_id, "save_athlete_profile", {"days_per_week": 3})
+    await _confirm_profile(fresh_db, user_id, {"goal": "масса"})
+    await _confirm_profile(fresh_db, user_id, {"days_per_week": 3})
 
     user = await fresh_db.get_user(user_id)
     assert user["goal"] == "масса"
@@ -1615,22 +1614,20 @@ async def test_bare_no_is_not_recorded_as_a_limitation(fresh_db, user_id):
     профиль. Экран «Обо мне» подписан «Записал с твоих слов»."""
     result, _ = await ai_trainer._save_athlete_profile(user_id, {"limitations": "нет"})
 
-    assert result.get("saved") is False
+    assert "limitations" not in (result.get("fields") or {})
     assert (await fresh_db.get_user(user_id))["limitations"] is None
 
 
 async def test_a_real_limitation_is_still_recorded(fresh_db, user_id):
-    await ai_trainer._save_athlete_profile(user_id, {"limitations": "болит правое плечо"})
+    result, _ = await ai_trainer._save_athlete_profile(user_id, {"limitations": "болит правое плечо"})
 
-    assert (await fresh_db.get_user(user_id))["limitations"] == "болит правое плечо"
+    assert result["fields"]["limitations"] == "болит правое плечо"
 
 
 async def test_a_blank_limitation_does_not_block_the_other_fields(fresh_db, user_id):
-    await ai_trainer._save_athlete_profile(user_id, {"limitations": "нет", "goal": "масса"})
+    result, _ = await ai_trainer._save_athlete_profile(user_id, {"limitations": "нет", "goal": "масса"})
 
-    user = await fresh_db.get_user(user_id)
-    assert user["goal"] == "масса"
-    assert user["limitations"] is None
+    assert result["fields"] == {"goal": "масса"}
 
 async def test_prompt_forbids_calling_a_triple_a_one_rep_max():
     """В проде тренер написал «разово на штанге максимум 210», хотя двумя строками
@@ -1684,3 +1681,30 @@ async def test_prompt_forbids_promising_an_edit_without_doing_it():
     prompt = ai_trainer.SYSTEM_PROMPT
     assert "НИКОГДА не обещай действие вместо того, чтобы его сделать" in prompt
     assert "Обещание без\nвызова инструмента" in prompt
+
+
+async def test_prompt_keeps_heavy_lifts_out_of_high_rep_ranges():
+    """Живой прогон: под цель «становая 250» тренер поставил 4×5–8 в самой
+    становой. Восьмёрка там — не силовая работа, а испытание поясницы."""
+    prompt = ai_trainer.SYSTEM_PROMPT
+    assert "3-5 повторов" in prompt
+    assert "становая" in prompt.lower()
+
+async def _confirm_profile(db, user_id: int, tool_input: dict) -> dict:
+    """Прогнать инструмент и подтвердить запись — профиль теперь пишется только
+    после «✅ Запомнить» (см. handlers.ai_trainer.ai_profile_confirm)."""
+    import json as _json
+
+    payload = _json.loads(await ai_trainer.execute_tool(user_id, "save_athlete_profile", tool_input))
+    fields = payload.get("fields") or {}
+    if fields:
+        await db.update_user(user_id, **fields)
+    return payload
+
+
+async def test_prompt_forbids_claiming_the_profile_is_already_saved():
+    """Профиль пишется только после подтверждения под ответом, а модель раньше
+    бодро сообщала «запомнил» — и человек считал, что дело сделано."""
+    prompt = ai_trainer.SYSTEM_PROMPT
+    assert "не пиши «запомнил»" in prompt
+    assert "Предлагаю запомнить" in prompt

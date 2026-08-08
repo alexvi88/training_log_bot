@@ -323,10 +323,28 @@ async def test_answers_reach_history_in_human_readable_form(fresh_db, user_id, m
     assert "Сколько дней в неделю готов тренироваться? — 3 дня" in history[0]["content"]
 
 
-async def test_skip_midway_builds_on_partial_answers(fresh_db, user_id, monkeypatch):
+async def test_skip_midway_moves_to_the_next_question(fresh_db, user_id, monkeypatch):
+    """Раньше «пропустить» обрывало опросник целиком, и пропустить один неудобный
+    вопрос было нельзя — только все сразу. Теперь это ответ «пропустил» на
+    текущий вопрос, а модель ждёт до последнего."""
     calls: list = []
     monkeypatch.setattr(ai_trainer.ai_trainer, "ask", _ask_recording(calls))
     state = await _state_with_setup(user_id, idx=1, answers=["3 дня"])
+    chat = _Chat(user_id)
+
+    await ai_trainer.ai_setup_skip(chat.callback("ai:qskip"), state)
+
+    assert calls == [], "на середине модель не зовём"
+    setup = ai_trainer._active_setup(await state.get_data())
+    assert setup["idx"] == 2
+    assert setup["answers"] == ["3 дня", None]
+    assert chat.questions_shown, "следующий вопрос обязан показаться"
+
+
+async def test_skipping_the_last_question_builds_on_partial_answers(fresh_db, user_id, monkeypatch):
+    calls: list = []
+    monkeypatch.setattr(ai_trainer.ai_trainer, "ask", _ask_recording(calls))
+    state = await _state_with_setup(user_id, idx=2, answers=["3 дня", None])
     chat = _Chat(user_id)
 
     await ai_trainer.ai_setup_skip(chat.callback("ai:qskip"), state)

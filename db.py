@@ -4258,8 +4258,13 @@ async def remove_routine_exercise(routine_exercise_id: int) -> None:
 
 
 async def reorder_routine_exercise(routine_exercise_id: int, direction: str) -> None:
-    """Swap a routine exercise with its neighbor above ("up") or below ("down")
-    among the routine's visible (non-archived) exercises. No-op at either end."""
+    """Переставить упражнение дня относительно соседа: "up" — выше, "down" — ниже.
+
+    По кругу: у первого «выше» отправляет его в конец, у последнего «ниже» — в
+    начало. Иначе в редакторе с одной стрелкой (см. keyboards.routine_edit_keyboard)
+    первое упражнение было бы намертво приколочено к первому месту, а сдвинуть
+    его можно было бы только подняв по очереди все остальные.
+    """
     entry = await get_routine_exercise(routine_exercise_id)
     if entry is None:
         return
@@ -4268,17 +4273,26 @@ async def reorder_routine_exercise(routine_exercise_id: int, direction: str) -> 
     if routine_exercise_id not in ids:
         return
     idx = ids.index(routine_exercise_id)
-    neighbor_idx = idx - 1 if direction == "up" else idx + 1
-    if neighbor_idx < 0 or neighbor_idx >= len(ids):
+    if len(ids) < 2:
+        return
+    neighbor_idx = (idx - 1 if direction == "up" else idx + 1) % len(ids)
+    if neighbor_idx == idx:
         return
     a, b = exercises[idx], exercises[neighbor_idx]
+    if abs(neighbor_idx - idx) == 1:
+        # Обычный шаг — меняем местами с соседом.
+        pairs = [(a["id"], b["order_index"]), (b["id"], a["order_index"])]
+    else:
+        # Перенос через край: остальные сдвигаются на одну позицию, иначе обмен
+        # первого с последним перетасовал бы весь список, а не сдвинул на шаг.
+        rest = [ex for ex in exercises if ex["id"] != a["id"]]
+        order = [*rest, a] if direction == "up" else [a, *rest]
+        pairs = [(ex["id"], i) for i, ex in enumerate(order)]
     async with _write_lock:
-        await conn().execute(
-            "UPDATE routine_exercises SET order_index = ? WHERE id = ?", (b["order_index"], a["id"])
-        )
-        await conn().execute(
-            "UPDATE routine_exercises SET order_index = ? WHERE id = ?", (a["order_index"], b["id"])
-        )
+        for ex_id, order_index in pairs:
+            await conn().execute(
+                "UPDATE routine_exercises SET order_index = ? WHERE id = ?", (order_index, ex_id)
+            )
         await conn().commit()
 
 
