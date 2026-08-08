@@ -5580,6 +5580,25 @@ async def record_push(telegram_id: int, category: str, text: str, sent_on: str) 
         await conn().commit()
 
 
+async def list_announcement_recipients(category: str) -> list[int]:
+    """Кому ещё не уходила разовая рассылка `category` (см. announcements.py).
+
+    Отметка о доставке — строка в `pushes`, то есть та же таблица, что и у
+    ежедневных пушей: рассылка переживает перезапуск контейнера, докатку и
+    повторный деплой, а человек получает релизное сообщение ровно один раз.
+    Выключивший пуши в настройках сюда не попадает: разовая рассылка — это
+    тоже пуш, и тумблер должен значить то, что обещает.
+    """
+    cur = await conn().execute(
+        "SELECT telegram_id FROM users "
+        "WHERE pushes_enabled = 1 "
+        "AND telegram_id NOT IN (SELECT telegram_id FROM pushes WHERE category = ?) "
+        "ORDER BY telegram_id",
+        (category,),
+    )
+    return [row["telegram_id"] for row in await cur.fetchall()]
+
+
 async def has_push_today(telegram_id: int, today: str) -> bool:
     """Whether this user already got a daily-rotation push on this calendar date (YYYY-MM-DD).
 

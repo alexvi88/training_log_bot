@@ -67,6 +67,12 @@ MAX_PROGRAM_NAME_LENGTH = 48
 # to silence the daily job entirely without touching per-user opt-outs.
 ENGAGEMENT_ENABLED = os.getenv("ENGAGEMENT_ENABLED", "true").lower() == "true"
 
+# Разовые релизные рассылки (announcements.py) — отдельный тумблер от
+# ежедневных пушей: тот выключает реакцию на сигналы в дневнике, а этот —
+# анонс новой фичи, который уходит один раз всем. Выключать имеет смысл на
+# тестовом развороте, чтобы копия базы не разослала релиз повторно.
+ANNOUNCEMENTS_ENABLED = os.getenv("ANNOUNCEMENTS_ENABLED", "true").lower() == "true"
+
 # Local hour (0-23) at which the daily engagement job evaluates and sends pushes.
 # Час местный, и он применяется только к тем, у кого часовой пояс известен: кто
 # пояс не выставлял, получает пуш в час, безопасный для всех поясов аудитории
