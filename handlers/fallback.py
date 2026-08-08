@@ -16,6 +16,7 @@ main menu, group pickers) ends up here instead of being silently dropped.
 import logging
 
 from aiogram import Router
+from aiogram.enums import ContentType
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
@@ -47,8 +48,23 @@ class _CallbackAsMessage:
         return await self._bot.send_photo(self._chat_id, photo, **kwargs)
 
 
+# То, что человек послал сам и на что ответить «Не понял» уместно. Всё
+# остальное — служебные апдейты чата: закрепил сообщение, сменил фото чата,
+# включил таймер удаления. На них бот отвечал «Не понял 🤔», то есть огрызался
+# на действие, которого никто не совершал (человек закрепил сообщение — и
+# получил выговор). Перечисляем разрешённое, а не запрещённое: служебных типов
+# у Telegram шесть десятков и они прибывают с каждой версией API.
+_HUMAN_CONTENT = frozenset({
+    ContentType.TEXT, ContentType.PHOTO, ContentType.VIDEO, ContentType.VIDEO_NOTE,
+    ContentType.ANIMATION, ContentType.VOICE, ContentType.AUDIO, ContentType.DOCUMENT,
+    ContentType.STICKER,
+})
+
+
 @router.message()
 async def unhandled_text(message: Message) -> None:
+    if message.content_type not in _HUMAN_CONTENT:
+        return
     # Сюда чаще всего прилетает вопрос тренеру, напечатанный из главного меню
     # («составь мне программу»), — подсказываем дорогу к AI-тренеру, а не только
     # /start. Без детекции по словам: любой непонятый текст получает один ответ.

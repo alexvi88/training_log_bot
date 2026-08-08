@@ -599,7 +599,10 @@ propose_program и только потом описывай словами, чт
 Пользователь увидит превью правки и подтвердит её кнопкой; до тапа ничего не
 меняется, так что не пиши «поправил» — пиши, что правка ждёт подтверждения.
 Если человек просит не поправить, а собрать ещё одну программу вдобавок —
-replaces_program не передавай, иначе затрёшь старую.
+replaces_program не передавай, иначе затрёшь старую. И дай ей имя, которого у
+него ещё нет: две программы с одинаковым именем человек потом не различит ни в
+списке, ни в кнопках. Пусть из имени будет видно, чем она отличается («Верх/низ
+масса 2х — гантели», «Верх/низ масса 3х»).
 
 Кроме состава ты умеешь хозяйничать и в списке программ, и в списке упражнений
 пользователя, и в его дневниках. Не отправляй человека делать это руками через
@@ -1568,7 +1571,15 @@ TOOLS: list[dict[str, Any]] = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "name": {"type": "string", "maxLength": PROGRAM_NAME_LIMIT},
+                    "name": {
+                        "type": "string",
+                        "maxLength": PROGRAM_NAME_LIMIT,
+                        "description": (
+                            "Не занимай имя, которое уже есть в get_saved_programs: "
+                            "назови так, чтобы было видно отличие. Совпадение — "
+                            "только вместе с replaces_program."
+                        ),
+                    },
                     "replaces_program": {
                         "type": "string",
                         "description": (
@@ -4527,13 +4538,21 @@ async def _gate_verdict(
         # это дешевле, чем остаться без вердикта.
         logger.warning("AI trainer gate returned an empty verdict, retrying with a nudge")
         retry_kwargs = dict(request_kwargs)
+        # Убираем ровно то, что подозревается в молчании: размышления и строгую
+        # схему. Добавленной реплики оказалось мало — лог прода показал два
+        # пустых ответа подряд уже с ней (1803 токена, потом 1835), то есть
+        # модель послушно думала оба раза и оба раза ничего не сказала. Просить
+        # то же самое третьим способом смысла нет: меняем сам режим запроса.
+        retry_kwargs.pop("response_format", None)
+        retry_kwargs["extra_body"] = {"reasoning_effort": "none"}
         retry_kwargs["messages"] = [
             *request_kwargs["messages"],
             {
                 "role": "user",
                 "content": (
-                    "Ты не ответил ничего. Не размышляй, просто верни JSON: "
-                    '{"search": true|false, "data": true|false}'
+                    "Ты не ответил ничего. Не размышляй, ответь одной строкой "
+                    "ровно в этом виде, без markdown: "
+                    '{"search": true, "data": false}'
                 ),
             },
         ]
@@ -4550,7 +4569,11 @@ async def _gate_verdict(
 
     defaults = GateVerdict()
     try:
-        parsed = json.loads(verdict)
+        # Повтор идёт уже без strict-схемы (см. выше), а без неё модель вполне
+        # может обернуть ответ в ```json — вырезаем сам объект, иначе честный
+        # вердикт со второй попытки всё равно уехал бы в дефолты.
+        body = verdict[verdict.index("{") : verdict.rindex("}") + 1]
+        parsed = json.loads(body)
         return GateVerdict(
             search=bool(parsed["search"]),
             data=bool(parsed["data"]),

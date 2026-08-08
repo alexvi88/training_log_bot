@@ -38,6 +38,7 @@ def _make_message(user_id: int, text: str):
     msg.from_user = SimpleNamespace(id=user_id, username="tester")
     msg.text = text
     msg.answer = AsyncMock()
+    msg.reply = AsyncMock()
     return msg
 
 
@@ -513,9 +514,10 @@ async def test_opening_a_program_lists_its_days(fresh_db, user_id):
     kb = callback.message.answer.await_args.kwargs["reply_markup"]
     labels = [b.text for row in kb.inline_keyboard for b in row]
     day_names = [day_name for day_name, _ex in PROGRAM_BY_KEY["ppl"]["days"]]
-    # Первый день поднят наверх как «сегодня» — по нему программа и начинается,
-    # пока она ни разу не пройдена (см. db.next_program_day).
-    assert labels[0] == f"▶️ Сегодня: {day_names[0]}"
+    # Первый день поднят наверх — по нему программа и начинается, пока она ни
+    # разу не пройдена (см. db.next_program_day). Но не «сегодня»: расписания у
+    # программ нет, и на новой программе это было бы обещанием из ниоткуда.
+    assert labels[0] == f"▶️ Начать с: {day_names[0]}"
     assert labels[1 : len(day_names)] == day_names[1:]
     assert labels[-1] == "⬅️ Назад"
 
@@ -592,15 +594,20 @@ async def test_target_normalization_keeps_what_it_cannot_parse():
     # Диапазон наоборот — не схема, а опечатка: оставляем как есть, не выдумываем.
     assert formatting.normalize_routine_target("3x10-5") == "3x10-5"
 
-async def test_editor_row_puts_the_name_first_then_the_icons():
-    """Раскладка ряда: имя, ⬆️, ✏️, 🗑. Имя обрезаем сами — ряд делится поровну,
-    и на подпись остаётся четверть; полный состав стоит в тексте сообщения."""
+async def test_editor_row_puts_the_numbered_name_first_then_the_icons():
+    """Раскладка ряда: номер с именем, ⬆️, 🗑 — три колонки, не четыре.
+
+    Карандаша нет: он вёл туда же, куда тап по имени, а забирал четверть ряда
+    (Telegram делит ряд поровну) — и рядом стояли «Жим гантелей лё…» и «Жим
+    гантелей си…». Номер оставлен потому, что обрезка всё равно возможна, а по
+    номеру видно, какое именно упражнение из списка в тексте это ряд."""
     kb = keyboards.routine_edit_keyboard(1, [(10, "Присед в Смите", "3x5-10"), (11, "Тяга", None)])
 
     first = kb.inline_keyboard[0]
-    assert len(first) == 4
-    assert first[0].text == "Присед в Смите"
-    assert [b.text for b in first[1:]] == ["⬆️", "✏️", "🗑"]
+    assert len(first) == 3
+    assert first[0].text == "1. Присед в Смите"
+    assert [b.text for b in first[1:]] == ["⬆️", "🗑"]
+    assert kb.inline_keyboard[1][0].text == "2. Тяга"
 
 
 async def test_every_row_has_an_arrow_because_the_move_is_cyclic():
@@ -622,3 +629,58 @@ async def test_a_long_name_is_cut_by_us_with_an_ellipsis():
     kb = keyboards.routine_edit_keyboard(1, [(10, "Жим в тренажёре на плечи", None)])
 
     assert kb.inline_keyboard[0][0].text.endswith("…")
+
+
+async def test_a_day_cannot_take_the_name_of_another_day_in_the_same_program(
+    fresh_db, user_id
+):
+    """Два «Дня 1» в одной программе — это две одинаковые кнопки на экране, из
+    которых не выбрать. Многодневную программу от этого защищал отдельный
+    обработчик, а день переименовывался во что угодно молча."""
+    program_id = await fresh_db.create_program(user_id, "Сплит")
+    first = await fresh_db.create_routine(user_id, "День 1", program_id=program_id)
+    second = await fresh_db.create_routine(user_id, "День 2", program_id=program_id)
+
+    state = await _make_state(user_id)
+    await state.update_data(routine_rename_id=second)
+    message = _make_message(user_id, "День 1")
+
+    await routines.rt_rename_entered(message, state)
+
+    message.reply.assert_awaited_once()
+    assert "уже есть" in message.reply.await_args.args[0]
+    assert (await fresh_db.get_routine(second))["name"] == "День 2"
+    assert (await fresh_db.get_routine(first))["name"] == "День 1"
+
+
+async def test_the_same_day_name_in_a_different_program_is_fine(fresh_db, user_id):
+    """«День 1» есть в каждой второй программе — сверяемся только со своими."""
+    other = await fresh_db.create_program(user_id, "Старая")
+    await fresh_db.create_routine(user_id, "День 1", program_id=other)
+    mine = await fresh_db.create_program(user_id, "Новая")
+    day = await fresh_db.create_routine(user_id, "Первый", program_id=mine)
+
+    state = await _make_state(user_id)
+    await state.update_data(routine_rename_id=day)
+    message = _make_message(user_id, "День 1")
+
+    await routines.rt_rename_entered(message, state)
+
+    assert (await fresh_db.get_routine(day))["name"] == "День 1"
+
+
+async def test_a_standalone_routine_cannot_take_a_saved_program_name(fresh_db, user_id):
+    """В списке 🗂 Программы одиночные и многодневки лежат вперемешку — тёзки
+    там неразличимы ровно так же."""
+    await fresh_db.create_program(user_id, "Домашка")
+    solo = await fresh_db.create_routine(user_id, "Зал")
+
+    state = await _make_state(user_id)
+    await state.update_data(routine_rename_id=solo)
+    message = _make_message(user_id, "домашка")
+
+    await routines.rt_rename_entered(message, state)
+
+    message.reply.assert_awaited_once()
+    assert "уже есть" in message.reply.await_args.args[0]
+    assert (await fresh_db.get_routine(solo))["name"] == "Зал"

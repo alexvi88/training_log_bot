@@ -9,6 +9,7 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+from aiogram.enums import ContentType
 from aiogram.types import CallbackQuery
 
 from handlers import fallback
@@ -43,6 +44,7 @@ async def test_unhandled_text_points_to_ai_trainer_and_start():
     message = MagicMock()
     message.from_user = SimpleNamespace(id=1)
     message.text = "составь мне программу"
+    message.content_type = ContentType.TEXT
     message.reply = AsyncMock()
 
     await fallback.unhandled_text(message)
@@ -83,3 +85,18 @@ async def test_a_button_from_an_inaccessible_message_does_not_crash(fresh_db, us
 
     callback.answer.assert_awaited_once()
     callback.bot.send_message.assert_awaited()
+
+
+async def test_service_messages_get_no_answer_at_all():
+    """Закрепил человек сообщение бота — Telegram шлёт такой же апдейт, и бот
+    отвечал на него «Не понял 🤔». То есть выговор за действие, которого никто
+    не совершал: человек ничего боту не писал."""
+    message = MagicMock()
+    message.from_user = SimpleNamespace(id=1)
+    message.text = None
+    message.content_type = ContentType.PINNED_MESSAGE
+    message.reply = AsyncMock()
+
+    await fallback.unhandled_text(message)
+
+    message.reply.assert_not_awaited()

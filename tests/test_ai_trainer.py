@@ -1437,20 +1437,33 @@ async def test_gate_retries_once_on_silence(fresh_db, user_id, monkeypatch):
     assert verdict.ok is True, "повтор удался — это не поломка"
 
 
-async def test_gate_retry_differs_from_the_first_attempt(fresh_db, user_id, monkeypatch):
-    """Первая версия повтора была точной копией — ради кэша — и в проде честно
-    воспроизвела то же молчание токен в токен (696+0, потом снова 696+0).
-    Детерминированную модель бессмысленно просить дважды об одном и том же."""
+async def test_gate_retry_changes_the_mode_not_just_the_wording(fresh_db, user_id, monkeypatch):
+    """Приписки оказалось мало: прод дал два пустых ответа подряд уже с ней
+    (1803 токена, потом 1835) — модель послушно думала оба раза и оба раза
+    молчала. Значит, повтор обязан менять сам режим запроса: без размышлений и
+    без strict-схемы, ровно то, что подозревается в молчании."""
     client = _fake_client([_response(content=""), _response(content=_GATE_SEARCH)])
     monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
 
     await ai_trainer._gate_verdict(user_id, "что нового?", history=[])
 
     first, second = client.chat.completions.create.await_args_list
-    assert second.kwargs["messages"] != first.kwargs["messages"]
-    # Отличие ровно одно — приписка, а не переделанный запрос.
+    assert "response_format" in first.kwargs and "response_format" not in second.kwargs
+    assert second.kwargs["extra_body"] == {"reasoning_effort": "none"}
     assert len(second.kwargs["messages"]) == len(first.kwargs["messages"]) + 1
-    assert "просто верни JSON" in second.kwargs["messages"][-1]["content"]
+
+
+async def test_gate_reads_a_verdict_wrapped_in_markdown(fresh_db, user_id, monkeypatch):
+    """Повтор идёт без strict-схемы — значит, ответ может приехать в ```json.
+    Без вырезания объекта честный вердикт со второй попытки уехал бы в дефолты
+    наравне с молчанием."""
+    fenced = '```json\n{"search": true, "data": false}\n```'
+    client = _fake_client([_response(content=""), _response(content=fenced)])
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+
+    verdict = await ai_trainer._gate_verdict(user_id, "что нового?", history=[])
+
+    assert (verdict.search, verdict.data, verdict.ok) == (True, False, True)
 
 
 async def test_gate_gives_up_after_two_silences(fresh_db, user_id, monkeypatch):
