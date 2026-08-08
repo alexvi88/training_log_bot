@@ -19,6 +19,28 @@ _GATE_SEARCH = '{"search": true, "data": true}'
 _GATE_NO_SEARCH = '{"search": false, "data": true}'
 
 
+# Схемы 27 инструментов уезжают модели В КАЖДОМ раунде tool-call'ов, так что их
+# размер — постоянная статья расхода, а не разовая (LLM_COSTS.md, идея 3). Бюджет
+# в символах, а не в токенах: токенизатор xAI нам недоступен, а на живых замерах
+# 22.3к символов схем весили около 6.0к токенов — то есть ~3.7 символа на токен.
+_TOOL_SCHEMA_CHAR_BUDGET = 19_500
+
+
+async def test_tool_schemas_stay_within_their_character_budget():
+    """Описания легко отрастают обратно: каждая новая оговорка кажется бесплатной.
+
+    Она не бесплатная — она уезжает в каждом раунде каждого вопроса. Если тест
+    упал, сначала посмотри, не дублирует ли новое описание то, что уже сказано
+    JSON-ограничением (minimum/maxLength/enum): такую прозу модель и так видит
+    из схемы, и в описании она нужна только человеку.
+    """
+    total = sum(len(json.dumps(t, ensure_ascii=False)) for t in ai_trainer.TOOLS)
+    assert total <= _TOOL_SCHEMA_CHAR_BUDGET, (
+        f"схемы инструментов разрослись до {total} символов "
+        f"(бюджет {_TOOL_SCHEMA_CHAR_BUDGET})"
+    )
+
+
 async def _seed_bench_history(db, user_id: int, n_sessions: int = 3, exercise: str = "Жим лёжа") -> int:
     group_id = await db.create_muscle_group(user_id, "Грудь")
     ex_id = await db.create_exercise(user_id, exercise, group_id)
@@ -564,6 +586,47 @@ async def test_ask_skips_search_step_once_quota_exhausted(fresh_db, user_id, mon
     assert answer == "обычный ответ"
     # Дорогой шаг поиска всё равно не поднимается — квота исчерпана.
     sdk_getter.assert_not_awaited()
+
+
+async def test_ask_skips_search_once_the_global_cap_is_reached(fresh_db, user_id, monkeypatch):
+    """Личная квота умножается на число людей, глобальная — нет.
+
+    Атлет свою квоту не тратил: упёрлись в общий потолок, набитый другими.
+    """
+    monkeypatch.setattr(config, "AI_SEARCH_GLOBAL_DAILY_LIMIT", 3)
+    for other in (555, 666, 777):
+        await fresh_db.increment_ai_search_count(other)
+    assert await fresh_db.get_ai_search_count_today(user_id) == 0
+
+    client = _fake_client([_response(content=_GATE_SEARCH), _response(content="обычный ответ")])
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+    sdk_getter = AsyncMock()
+    monkeypatch.setattr(ai_trainer, "_get_sdk_client", sdk_getter)
+
+    answer = await ai_trainer.ask(user_id, "Что нового по креатину?", history=[])
+
+    assert answer == "обычный ответ"
+    sdk_getter.assert_not_awaited()
+
+
+async def test_global_search_cap_still_allows_search_below_it(fresh_db, user_id, monkeypatch):
+    """Обратная сторона того же теста: потолок не должен глушить поиск заранее."""
+    monkeypatch.setattr(config, "AI_SEARCH_GLOBAL_DAILY_LIMIT", 3)
+    await fresh_db.increment_ai_search_count(555)
+
+    assert await fresh_db.get_ai_search_count_global() == 1
+    assert await fresh_db.get_ai_search_count_global() < config.AI_SEARCH_GLOBAL_DAILY_LIMIT
+
+
+async def test_search_increment_moves_both_the_personal_and_the_global_counter(fresh_db, user_id):
+    """Разъедься счётчики — и один из двух потолков начнёт врать молча."""
+    await fresh_db.increment_ai_search_count(user_id)
+    await fresh_db.increment_ai_search_count(user_id)
+    await fresh_db.increment_ai_search_count(999)
+
+    assert await fresh_db.get_ai_search_count_today(user_id) == 2
+    assert await fresh_db.get_ai_search_count_today(999) == 1
+    assert await fresh_db.get_ai_search_count_global() == 3
 
 
 async def test_ask_answers_normally_when_search_step_raises(fresh_db, user_id, monkeypatch):

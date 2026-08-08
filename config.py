@@ -220,6 +220,21 @@ AI_SEARCH_TIMEOUT_SECONDS = float(os.getenv("AI_SEARCH_TIMEOUT_SECONDS", "180"))
 # подешевеет сам шаг (см. GROK_SEARCH_MODEL).
 AI_SEARCH_DAILY_LIMIT = int(os.getenv("AI_SEARCH_DAILY_LIMIT", "5"))
 
+# Тот же потолок, но на ВСЕХ пользователей за сутки (по UTC — счёт от провайдера
+# живёт по UTC, а не по местному времени атлета).
+#
+# Личный лимит не защищает от роста аудитории: он умножается на число людей.
+# Десять активных атлетов по пять поисков — это пятьдесят поисков, около $10 за
+# день, и ни одного сигнала до счёта в конце месяца. Глобальный потолок — единственное
+# место, где расход перестаёт зависеть от того, сколько людей пришло.
+#
+# Десять — это примерно $2 в день в худшем случае. Держим сознательно ниже
+# суммы личных квот: упереться в него должно быть событием, которое видно в
+# логе, а не нормой. Поднимать — вместе с общим кэшем находок поиска
+# (LLM_COSTS.md, идея 1): он делает второй одинаковый вопрос бесплатным, и тогда
+# тот же потолок начинает пропускать заметно больше людей.
+AI_SEARCH_GLOBAL_DAILY_LIMIT = int(os.getenv("AI_SEARCH_GLOBAL_DAILY_LIMIT", "10"))
+
 # Soft per-user daily cap on AI-trainer questions overall (any kind). Guards
 # against a single user running up unbounded model cost; when hit, the trainer
 # politely defers until the next day. Generous by default.
@@ -329,7 +344,7 @@ def video_analysis_available() -> bool:
 # report prices those against the tables below instead of a flat guess. $/1K
 # tokens as (input, output), keyed by the exact model name sent to the API.
 # Override without a code change via LLM_PRICES_USD_PER_1K_JSON, e.g.
-# '{"grok-4-1-fast": [0.0002, 0.0005]}'.
+# '{"grok-4.5-latest": [0.002, 0.006]}'.
 #
 # grok-4.20-multi-agent's rate here is xAI's short-context per-token price;
 # per xAI's docs all sub-agents' tokens (reasoning + tool calls included) are
@@ -350,6 +365,8 @@ def video_analysis_available() -> bool:
 # если провайдер не включает их в completion_tokens, наш расчёт занижает
 # стоимость, и увидеть это можно только глазами на живых числах.
 LLM_PRICES_USD_PER_1K: dict[str, tuple[float, float]] = {
+    # Снята xAI, в коде не используется. Строка оставлена, чтобы старые записи в
+    # cost_events считались по своей ставке, а не по дефолтной.
     "grok-4-1-fast": (0.0002, 0.0005),
     "grok-4.20-multi-agent": (0.00125, 0.0025),
     "grok-4.5-latest": (0.002, 0.006),
@@ -363,7 +380,20 @@ try:
         LLM_PRICES_USD_PER_1K[_model] = (float(_price[0]), float(_price[1]))
 except (TypeError, ValueError, IndexError, json.JSONDecodeError):
     pass
-DEFAULT_LLM_PRICE_USD_PER_1K: tuple[float, float] = (0.0002, 0.0005)
+# Ставка для модели, которой нет в таблице выше. ПЕССИМИСТИЧНАЯ намеренно — по
+# самой дорогой известной строке. Раньше здесь стояли (0.0002, 0.0005), то есть
+# ставка самой дешёвой модели (grok-4-1-fast, уже снятой): переключись мы на любую
+# новую модель, не добавив её в таблицу, — и лог с дневным отчётом занизили бы
+# расход в десять раз, молча. Занижать расход хуже, чем завышать: завышение
+# заметно и его идут проверять, занижение выглядит как хорошая новость.
+#
+# Максимум берём ПОЭЛЕМЕНТНО, а не max() по кортежам: кортежи сравниваются
+# лексикографически, и переопределение через LLM_PRICES_USD_PER_1K_JSON могло бы
+# подсунуть строку с самым дорогим входом и дешёвым выходом.
+DEFAULT_LLM_PRICE_USD_PER_1K: tuple[float, float] = (
+    max((p[0] for p in LLM_PRICES_USD_PER_1K.values()), default=0.002),
+    max((p[1] for p in LLM_PRICES_USD_PER_1K.values()), default=0.006),
+)
 
 
 # Во сколько раз кэшированный вход дешевле обычного. 0.15 — по прайсу grok-4.5 в
