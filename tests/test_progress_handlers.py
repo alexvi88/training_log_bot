@@ -359,3 +359,34 @@ async def test_progress_entry_shows_groups_once_a_workout_exists(fresh_db, user_
     cbs = [b.callback_data for row in kb.inline_keyboard for b in row]
     assert any(cb.startswith("prog:grp:") for cb in cbs)
     assert "menu:start_workout" not in cbs
+
+
+async def test_achievements_back_button_follows_the_entry_point(fresh_db, user_id):
+    """Слепая зона: у достижений два входа — главное меню и экран прогресса, — а
+    «назад» всегда вело в прогресс. Открывший из меню оказывался на экране,
+    которого не открывал."""
+    from handlers import history
+
+    for data, expected in (
+        ("menu:achievements", "hist:menu"),
+        ("menu:achievements:prog", "prog:groups"),
+    ):
+        callback = _make_callback(user_id, data)
+        await history.menu_achievements(callback, await _make_state(user_id))
+        kb = callback.message.answer.await_args.kwargs["reply_markup"]
+        backs = [b.callback_data for row in kb.inline_keyboard for b in row if "Назад" in b.text]
+        assert backs == [expected], data
+
+
+async def test_tapping_a_deleted_exercise_card_says_so_instead_of_crashing(fresh_db, user_id):
+    """Слепая зона «кнопки живут вечно»: открыл прогресс по упражнению, удалил
+    его в ⚙️ Упражнения, вернулся к старой карточке и ткнул. Рендер падал с
+    TypeError, а человек видел только крутящуюся кнопку."""
+    from handlers import history
+
+    callback = _make_callback(user_id, "prog:ex:999999")
+
+    await history.prog_show_exercise(callback, await _make_state(user_id))
+
+    callback.answer.assert_awaited()
+    assert "не найдено" in callback.answer.await_args.args[0]

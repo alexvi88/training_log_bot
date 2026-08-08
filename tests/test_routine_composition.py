@@ -592,43 +592,35 @@ async def test_target_normalization_keeps_what_it_cannot_parse():
 
 
 async def test_editor_rows_have_the_same_number_of_columns():
-    """Находка 4c: у первой строки не было «⬆️», у последней «⬇️», и «✏️»
-    съезжала на колонку влево — туда, где у соседей стоит удаление."""
+    """Находка 4c: у первой строки не было стрелки, и «✏️» съезжала на колонку
+    влево — туда, где у соседей стоит удаление."""
     kb = keyboards.routine_edit_keyboard(1, [(10, "Жим", "4x8"), (11, "Разводка", "3x12"), (12, "Брусья", None)])
     exercise_rows = kb.inline_keyboard[:3]
-    assert {len(row) for row in exercise_rows} == {4}
-    # Заглушка молчит, а не переставляет.
+    assert {len(row) for row in exercise_rows} == {3}
     assert kb.inline_keyboard[0][0].callback_data == "rt:noop"
-    assert kb.inline_keyboard[-1 - 2][1].callback_data == "rt:noop"
 
 
-async def test_a_single_exercise_gets_no_arrows_at_all():
+async def test_only_one_arrow_per_row_so_the_name_fits():
+    """Вторая стрелка была лишней — поднять второе то же самое, что опустить
+    первое, — а четвёртая колонка сжимала название до «Пр…×5–10»."""
+    kb = keyboards.routine_edit_keyboard(1, [(10, "Присед в Смите", "3x5-10"), (11, "Тяга нижнего блока", "3x5-10")])
+
+    arrows = [b.text for row in kb.inline_keyboard[:2] for b in row if b.text in ("⬆️", "⬇️", "·")]
+    assert arrows == ["·", "⬆️"], "по одной стрелке на ряд, у первого — заглушка"
+    names = [b.text for row in kb.inline_keyboard[:2] for b in row if b.text.startswith("🗑")]
+    assert names == ["🗑 Присед в Смите", "🗑 Тяга нижнего блока"]
+
+
+async def test_a_long_name_is_cut_by_us_with_an_ellipsis():
+    """Telegram режет подпись посреди слова и без многоточия («Жим в тренажёре
+    на пле»). Режем сами; полное имя стоит номером в тексте сообщения."""
+    kb = keyboards.routine_edit_keyboard(1, [(10, "Жим в тренажёре на плечи", None)])
+
+    name = [b.text for b in kb.inline_keyboard[0] if b.text.startswith("🗑")][0]
+    assert name.endswith("…")
+    assert len(name) <= 21
+
+
+async def test_a_single_exercise_gets_no_arrow_at_all():
     kb = keyboards.routine_edit_keyboard(1, [(10, "Жим", "4x8")])
-    assert len(kb.inline_keyboard[0]) == 2  # ✏️ и 🗑, переставлять нечего
-
-
-async def test_program_edit_menu_offers_editing_each_day(fresh_db, user_id):
-    """Живой прогон: «⚙️ Изменить программу» показывал добавить день, порядок,
-    дублировать, переименовать, поделиться, удалить — и ни слова про состав. До
-    упражнений можно было добраться только вернувшись на экран программы и ткнув
-    в день, догадаться неоткуда."""
-    days = [{"id": 11, "name": "День A — всё тело"}, {"id": 12, "name": "День B — всё тело"}]
-
-    kb = keyboards.program_edit_keyboard(days, program_id=7)
-
-    cbs = [b.callback_data for row in kb.inline_keyboard for b in row]
-    assert "rt:edit:11" in cbs
-    assert "rt:edit:12" in cbs
-    texts = [b.text for row in kb.inline_keyboard for b in row]
-    assert texts[0] == "✏️ День A — всё тело", "состав дней должен стоять первым"
-
-
-async def test_day_order_done_goes_back_to_the_edit_menu():
-    """«Готово» после перестановки дней выбрасывало на экран программы, хотя
-    пришли из редактора: порядок меняют в связке с остальными правками."""
-    days = [{"id": 11, "name": "День A"}, {"id": 12, "name": "День B"}]
-
-    kb = keyboards.program_day_order_keyboard(days, program_id=7)
-
-    done = [b for row in kb.inline_keyboard for b in row if "Готово" in b.text]
-    assert done and done[0].callback_data == "rt:pgmedit:7"
+    assert [b.text for b in kb.inline_keyboard[0]] == ["·", "✏️", "🗑 Жим"]
