@@ -4,6 +4,7 @@ import csv
 import io
 import json
 from html import escape
+from typing import Optional
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
@@ -52,12 +53,13 @@ async def settings_menu(callback: CallbackQuery, state: FSMContext):
     await show_settings(callback, state)
 
 
-def _profile_lines(user) -> list[str]:
-    """Профиль тренирующегося человеческим текстом, пустые поля — прочерком.
+def profile_rows(user) -> list[tuple[str, Optional[str]]]:
+    """Профиль тренирующегося парами «подпись — значение», None у пустых полей.
 
-    Прочерк, а не пропуск строки: половина ценности экрана в том, чтобы видеть,
-    чего тренер про тебя ещё НЕ знает — отсутствующая строка читалась бы как
-    «такого поля нет», а не «пусто».
+    Отсюда его берут два места: экран ⚙️ Настройки → 🤖 Что тренер про тебя
+    знает и напоминание о памяти на входе в диалог с тренером (см.
+    handlers.ai_trainer._memory_reminder). Порядок и подписи общие нарочно:
+    человек читает одно и то же в двух местах и не должен гадать, одно ли это.
     """
     equipment = user["equipment"]
     if equipment:
@@ -69,15 +71,25 @@ def _profile_lines(user) -> list[str]:
             # старой записи — показать как есть лучше, чем уронить экран.
             pass
     days = user["days_per_week"]
-    rows = [
+    return [
         ("Дней в неделю", str(days) if days else None),
         ("Опыт", user["experience"]),
         ("Цель", user["goal"]),
         ("Оборудование", equipment),
         ("Ограничения", user["limitations"]),
     ]
+
+
+def _profile_lines(user) -> list[str]:
+    """Тот же профиль строками для экрана, пустые поля — прочерком.
+
+    Прочерк, а не пропуск строки: половина ценности экрана в том, чтобы видеть,
+    чего тренер про тебя ещё НЕ знает — отсутствующая строка читалась бы как
+    «такого поля нет», а не «пусто».
+    """
     return [
-        f"<b>{label}:</b> {escape(str(value)) if value else '—'}" for label, value in rows
+        f"<b>{label}:</b> {escape(str(value)) if value else '—'}"
+        for label, value in profile_rows(user)
     ]
 
 

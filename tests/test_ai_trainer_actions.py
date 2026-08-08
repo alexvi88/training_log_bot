@@ -367,7 +367,6 @@ async def test_every_self_acting_tool_offers_an_undo(fresh_db, user_id):
     assert set(ai_trainer._UNDOABLE_TOOLS) == {
         "log_bodyweight", "log_food", "create_exercise", "rename_exercise",
         "move_exercise_to_group", "rename_program", "copy_program",
-        "save_athlete_profile",
     }
     # И ни один из них не должен заодно оказаться среди тех, что только предлагают.
     assert not set(ai_trainer._UNDOABLE_TOOLS) & set(ai_trainer._ACTION_TOOLS)
@@ -472,16 +471,46 @@ async def test_moved_exercise_goes_back_to_its_old_group(fresh_db, user_id):
     assert (await fresh_db.get_exercise(ex_id))["primary_group_id"] == legs
 
 
-async def test_profile_is_offered_for_approval_instead_of_being_written(fresh_db, user_id):
-    """Профиль больше не правится молча: инструмент только предлагает запомнить,
-    а пишет уже подтверждение под ответом. Раньше запись шла сразу, а под
-    ответом висело «↩️ Забыть из профиля: дни в неде…» — человек не понимал ни
-    что это, ни что вообще записали."""
+async def test_profile_is_written_at_once_and_without_any_button(fresh_db, user_id):
+    """Под записью в профиль не должно появиться ни одной кнопки.
+
+    Обе прошлые попытки — откат и подтверждение — вставали рядом с
+    «🗂 Забрать: <программа>» и отодвигали главное действие непонятной надписью
+    про профиль. Взамен память живая: правится словами (см. соседние тесты)."""
     action = await _call(user_id, "save_athlete_profile", {"limitations": "болит плечо"})
 
-    assert "undo" not in action
-    assert action["profile_pending"] == {"limitations": "болит плечо"}
-    assert (await fresh_db.get_user(user_id))["limitations"] is None, "до подтверждения — не пишем"
+    assert action is None
+    assert (await fresh_db.get_user(user_id))["limitations"] == "болит плечо"
+
+
+async def test_forget_erases_a_field_the_user_took_back(fresh_db, user_id):
+    """«Колено давно не болит» — записанного больше нет, и нового значения нет."""
+    await _call(user_id, "save_athlete_profile", {"limitations": "болит колено"})
+
+    payload = json.loads(
+        await ai_trainer.execute_tool(
+            user_id, "save_athlete_profile", {"forget": ["limitations"]}
+        )
+    )
+
+    assert payload["forgotten"] == ["limitations"]
+    assert (await fresh_db.get_user(user_id))["limitations"] is None
+
+
+async def test_forget_does_not_erase_what_the_same_call_just_wrote(fresh_db, user_id):
+    """Модель вполне может прислать и новое значение, и forget на то же поле —
+    «раньше болело колено, теперь плечо». Стереть тут значит потерять как раз
+    то, что человек только что сказал."""
+    payload = json.loads(
+        await ai_trainer.execute_tool(
+            user_id,
+            "save_athlete_profile",
+            {"limitations": "болит плечо", "forget": ["limitations"]},
+        )
+    )
+
+    assert payload["forgotten"] == []
+    assert (await fresh_db.get_user(user_id))["limitations"] == "болит плечо"
 
 
 async def test_undo_keys_survive_the_json_fsm_round_trip(fresh_db, user_id):
@@ -529,22 +558,19 @@ async def test_only_the_last_few_undos_are_kept(fresh_db, user_id):
     assert f"u{ai_handler._UNDO_SLOTS + 4}" in store
 
 
-async def test_several_profile_writes_in_one_turn_ask_once(fresh_db, user_id):
-    """Сборка программы зовёт save_athlete_profile несколько раз за ход. Если бы
-    каждый вызов вешал свой вопрос, ответ утонул бы в подтверждениях — поля
-    копятся в одно ожидание и спрашиваются одной парой кнопок."""
-    from aiogram.fsm.context import FSMContext
-    from aiogram.fsm.storage.base import StorageKey
-    from aiogram.fsm.storage.memory import MemoryStorage
+async def test_several_profile_writes_in_one_turn_add_no_buttons(fresh_db, user_id):
+    """Сборка программы зовёт save_athlete_profile несколько раз за ход — и ни
+    один из вызовов не должен ничего добавить под ответ."""
+    captured: list[dict] = []
 
-    state = FSMContext(storage=MemoryStorage(), key=StorageKey(bot_id=1, chat_id=user_id, user_id=user_id))
-    actions = [
-        (await _call(user_id, "save_athlete_profile", {"days_per_week": 3})),
-        (await _call(user_id, "save_athlete_profile", {"goal": "масса"})),
-    ]
+    async def on_action(action: dict) -> None:
+        captured.append(action)
 
-    out = await ai_handler._register_undos(state, actions)
+    for payload in ({"days_per_week": 3}, {"goal": "масса"}):
+        await ai_trainer.execute_tool(
+            user_id, "save_athlete_profile", payload, on_action=on_action
+        )
 
-    confirms = [a for a in out if a["callback"] == "ai:profile:yes"]
-    assert len(confirms) == 1
-    assert (await state.get_data())["ai_profile_pending"] == {"days_per_week": 3, "goal": "масса"}
+    assert captured == []
+    user = await fresh_db.get_user(user_id)
+    assert (user["days_per_week"], user["goal"]) == (3, "масса")
