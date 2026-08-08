@@ -19,11 +19,13 @@ _GATE_SEARCH = '{"search": true, "data": true}'
 _GATE_NO_SEARCH = '{"search": false, "data": true}'
 
 
-# Схемы 27 инструментов уезжают модели В КАЖДОМ раунде tool-call'ов, так что их
+# Схемы 29 инструментов уезжают модели В КАЖДОМ раунде tool-call'ов, так что их
 # размер — постоянная статья расхода, а не разовая (LLM_COSTS.md, идея 3). Бюджет
 # в символах, а не в токенах: токенизатор xAI нам недоступен, а на живых замерах
 # 22.3к символов схем весили около 6.0к токенов — то есть ~3.7 символа на токен.
-_TOOL_SCHEMA_CHAR_BUDGET = 19_500
+# Поднят с 19_500 под delete_food_entry/delete_bodyweight_log (~725 символов) —
+# та же кнопка отката, что у log_food/log_bodyweight, только для стирания.
+_TOOL_SCHEMA_CHAR_BUDGET = 20_300
 
 
 async def test_tool_schemas_stay_within_their_character_budget():
@@ -157,10 +159,13 @@ async def test_bodyweight_history_returns_full_log(fresh_db, user_id):
 
     payload = json.loads(await ai_trainer.execute_tool(user_id, "get_bodyweight_history", {}))
 
-    assert payload["entries"] == [
+    # id — чтобы delete_bodyweight_log мог сослаться на конкретную запись, а
+    # не только на «последнюю».
+    assert [{k: v for k, v in e.items() if k != "id"} for e in payload["entries"]] == [
         {"weight": 82.0, "date": "2026-01-01"},
         {"weight": 81.5, "date": "2026-02-01"},
     ]
+    assert all(isinstance(e["id"], int) for e in payload["entries"])
 
 
 async def test_bodyweight_history_does_not_leak_other_users_data(fresh_db, user_id):

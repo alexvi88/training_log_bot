@@ -962,6 +962,21 @@ async def _apply_undo(user_id: int, undo: dict) -> Optional[str]:
         await db.delete_food_entry(entry["id"])
         return "Убрал из дневника еды"
 
+    if kind == "food_restore":
+        # Откат delete_food_entry: не «отменить запись», а «отменить удаление» —
+        # воссоздаём строку с теми же полями, что были у стёртой.
+        await db.add_food_entry(
+            user_id, undo["eaten_on"], undo["description"],
+            details=undo.get("details"), calories=undo.get("calories"),
+            protein=undo.get("protein"), fat=undo.get("fat"), carbs=undo.get("carbs"),
+            photo_file_id=undo.get("photo_file_id"), source=undo.get("source") or "text",
+        )
+        return f"Вернул «{undo['description']}» в дневник"
+
+    if kind == "bodyweight_restore":
+        await db.add_bodyweight_log(user_id, undo["weight"], logged_at=undo.get("logged_at"))
+        return f"Вернул запись веса {undo['weight']:g}"
+
     if kind == "exercise_new":
         if await db.delete_exercise_if_unused(int(undo["id"]), user_id):
             return f"Убрал «{undo.get('name', '')}»".replace("«»", "упражнение")

@@ -487,8 +487,14 @@ async def fd_confirm(callback: CallbackQuery, state: FSMContext):
 # ---------- удаление и история ----------
 
 
-@router.callback_query(StateFilter(FoodDiaryFlow.viewing), F.data.startswith("fd:delask:"))
+@router.callback_query(F.data.startswith("fd:delask:"))
 async def fd_delete_ask(callback: CallbackQuery, state: FSMContext):
+    """Без StateFilter нарочно: это кнопка на уже отправленном сообщении, а не
+    перехватчик текста. Экран дневника питания живёт в чате сколько угодно —
+    человек мог за это время уйти в 🤖 AI-тренер и вернуться, и тап по старой
+    кнопке не должен упираться в «эта кнопка уже отработала своё» только
+    потому, что состояние успело смениться (та же причина, что у rt:pgmdelask
+    в handlers/routines.py)."""
     entry_id = int(callback.data.split(":")[2])
     entry = await db.get_food_entry(entry_id)
     if entry is None or entry["telegram_id"] != callback.from_user.id:
@@ -504,7 +510,7 @@ async def fd_delete_ask(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(StateFilter(FoodDiaryFlow.viewing), F.data.startswith("fd:del:"))
+@router.callback_query(F.data.startswith("fd:del:"))
 async def fd_delete(callback: CallbackQuery, state: FSMContext):
     entry_id = int(callback.data.split(":")[2])
     entry = await db.get_food_entry(entry_id)

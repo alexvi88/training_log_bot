@@ -1918,6 +1918,38 @@ TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "delete_food_entry",
+            "description": (
+                "Убрать одну запись из дневника питания. ДЕЛАЕТ СРАЗУ, под ответом "
+                "появится кнопка отката — скажи, что убрал, и упомяни её. entry_id — "
+                "точный id из get_food_diary, не выдумывай."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {"entry_id": {"type": "integer"}},
+                "required": ["entry_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_bodyweight_log",
+            "description": (
+                "Убрать одну запись веса. ДЕЛАЕТ СРАЗУ, под ответом появится кнопка "
+                "отката — скажи, что убрал, и упомяни её. log_id — точный id из "
+                "get_bodyweight_history, не выдумывай."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {"log_id": {"type": "integer"}},
+                "required": ["log_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "compare_periods",
             "description": (
                 "Что изменилось по ВСЕМ упражнениям за период: последние N дней против "
@@ -2480,7 +2512,11 @@ async def _bodyweight_history(user_id: int) -> dict[str, Any]:
     logs = await db.list_bodyweight_logs(user_id)
     return {
         "unit": user["unit"] if user else "kg",
-        "entries": [{"weight": r["weight"], "date": r["logged_at"][:10]} for r in logs],
+        # id — чтобы delete_bodyweight_log мог сослаться на конкретную запись,
+        # а не только на «последнюю».
+        "entries": [
+            {"id": r["id"], "weight": r["weight"], "date": r["logged_at"][:10]} for r in logs
+        ],
     }
 
 
@@ -2503,6 +2539,10 @@ async def _food_diary(user_id: int, days: int = 14) -> dict[str, Any]:
              "protein": 0.0, "fat": 0.0, "carbs": 0.0, "entries_without_macros": 0},
         )
         day["entries"].append({
+            # id — чтобы delete_food_entry мог сослаться на конкретную запись:
+            # без него убрать можно было только «последнюю», а её не всегда
+            # просят убрать.
+            "id": row["id"],
             "description": row["description"],
             "calories": row["calories"],
             "protein": row["protein"],
@@ -3333,6 +3373,85 @@ async def _log_food(
     )
 
 
+async def _delete_food_entry(
+    user_id: int, tool_input: dict[str, Any]
+) -> tuple[dict[str, Any], Optional[dict[str, Any]]]:
+    """Убрать запись из дневника питания — сразу, откат кнопкой возвращает её
+    целиком с теми же цифрами.
+
+    entry_id — точный id из get_food_diary (там он появился ровно для этого:
+    раньше убрать можно было только «последнюю» руками на экране 🍽 Дневник
+    еды, а тренер вообще не умел убирать чужие ошибки из дневника — ни свои
+    неверные оценки, ни то, что человек попросил стереть).
+    """
+    try:
+        entry_id = int(tool_input.get("entry_id"))
+    except (TypeError, ValueError):
+        return {"error": "entry_id должен быть числом — точным, из get_food_diary"}, None
+    entry = await db.get_food_entry(entry_id)
+    if entry is None or entry["telegram_id"] != user_id:
+        return {"error": "такой записи нет — возьми entry_id из get_food_diary"}, None
+    await db.delete_food_entry(entry_id)
+    return (
+        {
+            "ok": True,
+            "deleted": {"description": entry["description"], "date": entry["eaten_on"]},
+            "note": _UNDO_NOTE,
+        },
+        {
+            "label": f"↩️ Вернуть «{formatting.shorten(entry['description'], 24)}»",
+            "undo": {
+                "kind": "food_restore",
+                "eaten_on": entry["eaten_on"],
+                "description": entry["description"],
+                "details": entry["details"],
+                "calories": entry["calories"],
+                "protein": entry["protein"],
+                "fat": entry["fat"],
+                "carbs": entry["carbs"],
+                "photo_file_id": entry["photo_file_id"],
+                "source": entry["source"],
+            },
+        },
+    )
+
+
+async def _delete_bodyweight_log(
+    user_id: int, tool_input: dict[str, Any]
+) -> tuple[dict[str, Any], Optional[dict[str, Any]]]:
+    """Убрать одну запись веса — сразу, откат кнопкой возвращает её с тем же
+    числом и той же датой.
+
+    log_id — точный id из get_bodyweight_history. Отдельный инструмент от
+    «отменить последнюю» на экране 🏋️ Вес: между записью и просьбой стереть
+    человек мог взвеситься ещё раз, и снос последней утащил бы не то (та же
+    причина, что у db.delete_bodyweight_log).
+    """
+    try:
+        log_id = int(tool_input.get("log_id"))
+    except (TypeError, ValueError):
+        return {"error": "log_id должен быть числом — точным, из get_bodyweight_history"}, None
+    log = await db.get_bodyweight_log(log_id)
+    if log is None or log["telegram_id"] != user_id:
+        return {"error": "такой записи нет — возьми log_id из get_bodyweight_history"}, None
+    await db.delete_bodyweight_log(log_id, user_id)
+    return (
+        {
+            "ok": True,
+            "deleted": {"weight": log["weight"], "date": log["logged_at"][:10]},
+            "note": _UNDO_NOTE,
+        },
+        {
+            "label": f"↩️ Вернуть {log['weight']:g}",
+            "undo": {
+                "kind": "bodyweight_restore",
+                "weight": log["weight"],
+                "logged_at": log["logged_at"],
+            },
+        },
+    )
+
+
 # Длиннее в одну строку дневника всё равно не читается, а модель иногда
 # присылает туда целый абзац с рассуждением о пользе гречки.
 MAX_FOOD_DESCRIPTION = 200
@@ -3938,6 +4057,8 @@ _UNDOABLE_TOOLS = {
     "move_exercise_to_group": _move_exercise,
     "rename_program": _rename_program,
     "copy_program": _copy_program,
+    "delete_food_entry": _delete_food_entry,
+    "delete_bodyweight_log": _delete_bodyweight_log,
 }
 
 
