@@ -1568,3 +1568,12 @@ async def test_a_blank_limitation_does_not_block_the_other_fields(fresh_db, user
     user = await fresh_db.get_user(user_id)
     assert user["goal"] == "масса"
     assert user["limitations"] is None
+
+async def test_prompt_forbids_calling_a_triple_a_one_rep_max():
+    """В проде тренер написал «разово на штанге максимум 210», хотя двумя строками
+    выше стояло «210×3 (e1RM ~231)». И посчитал до 250 разрыв +40кг вместо +19:
+    занизил атлета и выдумал ему лишние килограммы работы."""
+    prompt = ai_trainer.SYSTEM_PROMPT
+    assert "НЕ РАЗОВЫЙ МАКСИМУМ" in prompt
+    assert "e1RM" in prompt
+    assert "+19" in prompt, "в промпте должен быть числовой пример ошибки"
