@@ -2238,6 +2238,30 @@ async def update_workout_date(workout_id: int, started_at: str, finished_at: Opt
         await conn().commit()
 
 
+async def shift_workout_set_timestamps(workout_id: int, seconds: float) -> None:
+    """Сдвинуть метки времени подходов тренировки на столько же, на сколько
+    сдвинули её саму.
+
+    Длительность на карточке считается по разбегу меток подходов, а не по
+    started/finished (находка 25: правка через пару часов после тренировки
+    читалась как двухчасовая сессия). Из-за этого перенос тренировки на другой
+    день молча стирал длительность: метки оставались на старом дне, фильтр
+    «не позже finished_at» отсекал их все разом, и разбег становился пустым.
+    Сдвигаем вместе — тогда и сессия остаётся целой, и защита из находки 25
+    работает: подход, дописанный после завершения, сдвигается ровно так же и
+    по-прежнему остаётся за границей.
+    """
+    if not seconds:
+        return
+    async with _write_lock:
+        await conn().execute(
+            "UPDATE sets SET created_at = datetime(created_at, ?) WHERE block_id IN ("
+            "  SELECT id FROM workout_blocks WHERE workout_id = ?)",
+            (f"{seconds:+.0f} seconds", workout_id),
+        )
+        await conn().commit()
+
+
 async def get_workout(workout_id: int) -> Optional[aiosqlite.Row]:
     cur = await conn().execute("SELECT * FROM workouts WHERE id = ?", (workout_id,))
     return await cur.fetchone()

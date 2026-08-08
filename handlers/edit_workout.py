@@ -234,7 +234,7 @@ async def editw_editset_entered(message: Message, state: FSMContext):
     try:
         parsed = parse_single_token(message.text)
     except ParseError as e:
-        await message.reply(e.message)
+        await ui.reply_transient(message, e.message)
         return
     data = await state.get_data()
     await db.update_set(data["edit_set_id"], parsed[0].weight, parsed[0].reps, parsed[0].rpe)
@@ -269,7 +269,7 @@ async def editw_addset_entered(message: Message, state: FSMContext):
     try:
         parsed = parse_sets_line(message.text)
     except ParseError as e:
-        await message.reply(e.message)
+        await ui.reply_transient(message, e.message)
         return
     data = await state.get_data()
     ex_id = data["add_exercise_id"]
@@ -309,7 +309,7 @@ async def editw_typed_set(message: Message, state: FSMContext):
     try:
         parsed = parse_sets_line(message.text)
     except ParseError as e:
-        await message.reply(e.message)
+        await ui.reply_transient(message, e.message)
         return
     block_exs = await db.get_block_exercises(block_id)
     order_in_round = next((be["order_in_block"] for be in block_exs if be["exercise_id"] == ex_id), 0)
@@ -567,6 +567,10 @@ async def _apply_edit_workout_date(workout_id: int, new_date: dt.date) -> None:
     await db.update_workout_date(
         workout_id, new_started.isoformat(timespec="seconds"), new_finished.isoformat(timespec="seconds")
     )
+    # Метки подходов едут следом: длительность на карточке считается по их
+    # разбегу, и оставшись на старом дне они целиком выпадали за границу
+    # «не позже finished_at» — тренировка молча теряла свои «· 32 мин».
+    await db.shift_workout_set_timestamps(workout_id, (new_started - started).total_seconds())
     # The date shift changes which prior session counts as "previous" for every
     # exercise in the workout, so a cached AI comment describing the old
     # comparison would go stale.
@@ -592,7 +596,7 @@ async def editw_date_entered(message: Message, state: FSMContext):
             message.text, today=timeutil.user_today(await db.get_user(message.from_user.id))
         )
     except ParseError as e:
-        await message.reply(e.message)
+        await ui.reply_transient(message, e.message)
         return
     data = await state.get_data()
     workout_id = data["edit_workout_id"]

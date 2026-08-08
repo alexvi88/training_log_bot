@@ -181,7 +181,7 @@ async def bw_weight_entered(message: Message, state: FSMContext):
     try:
         weight, date = parse_bodyweight_entry(message.text, today=timeutil.user_today(user))
     except ParseError as e:
-        await message.reply(e.message)
+        await ui.reply_transient(message, e.message)
         return
     warning = bodyweight_warning(weight, user["unit"])
     if warning is not None:

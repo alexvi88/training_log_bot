@@ -1,5 +1,6 @@
 """Shared helper for keeping bot screens at the bottom of the chat."""
 
+import asyncio
 import logging
 import re
 from contextlib import suppress
@@ -294,3 +295,45 @@ async def safe_edit_photo(
             reply_markup=reply_markup,
         )
     return await callback.bot.send_message(chat_id, _RESCUE_TEXT)
+
+# ---------- недолговечные ответы на неудачный ввод ----------
+
+# Сколько живёт сообщение о непонятом вводе. Успешный ввод из чата удаляется
+# сразу, а ошибка раньше оставалась навсегда — после трёх опечаток подряд экран
+# с кнопками уезжал вверх за три простыни с примерами. Полминуты хватает
+# прочитать и исправиться.
+INPUT_ERROR_LIFETIME_SECONDS = 30
+
+_background_tasks: set[asyncio.Task] = set()
+
+
+def _spawn(coro) -> asyncio.Task:
+    """Запустить в фоне, удерживая ссылку до завершения."""
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return task
+
+
+async def _delete_later(bot, chat_id: int, message_id: int, delay: float) -> None:
+    await asyncio.sleep(delay)
+    with suppress(TelegramBadRequest):
+        await bot.delete_message(chat_id=chat_id, message_id=message_id)
+
+
+async def reply_transient(message, text: str) -> None:
+    """Ответить на неудачный ввод так, чтобы он не остался в чате навсегда.
+
+    Убираем обе стороны разговора — и подсказку, и сам неудачный ввод: подсказка
+    цитирует его, так что пока она висит, видно и что написали, и почему не
+    вышло, а потом чат снова состоит из одних записей.
+
+    Живёт здесь, а не в handlers/workout: тем же самым болели редактор прошлой
+    тренировки, запись задним числом и дневник веса — там ошибки ввода копились
+    в чате, потому что помощник лежал в чужом модуле.
+    """
+    reply = await message.reply(text)
+    _spawn(_delete_later(message.bot, reply.chat.id, reply.message_id, INPUT_ERROR_LIFETIME_SECONDS))
+    _spawn(
+        _delete_later(message.bot, message.chat.id, message.message_id, INPUT_ERROR_LIFETIME_SECONDS)
+    )
