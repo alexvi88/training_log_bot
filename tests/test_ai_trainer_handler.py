@@ -717,10 +717,10 @@ async def test_program_preview_keeps_the_answer_and_offers_saving(fresh_db, user
 
     callback.message.answer.assert_awaited_once()
     kb = callback.message.answer.await_args.kwargs["reply_markup"]
-    # «К тренеру» — это выход: превью приходит отдельным сообщением и закрывает
-    # собой экран, а с двумя кнопками уйти можно было только согласившись или
-    # отказавшись. Посмотреть и вернуться к разговору тоже должно быть ходом.
-    assert _callbacks(kb) == ["ai:prog:save:1", "ai:prog:drop:1", "menu:ai"]
+    # Только сохранить и уйти. Отказ отдельной кнопкой не нужен — не сохранил,
+    # значит не сохранил, — а «❌ Не надо» вдобавок стирала черновик и делала
+    # кнопку «Забрать» под ответом тренера мёртвой.
+    assert _callbacks(kb) == ["ai:prog:save:1", "menu:ai"]
     callback.message.delete.assert_not_awaited()
 
 
@@ -1041,7 +1041,11 @@ async def test_conflict_copy_choice_saves_under_a_free_name(fresh_db, user_id):
     assert names == ["Верх/низ", "Верх/низ (2)"]
 
 
-async def test_dropping_a_program_removes_the_preview_and_the_draft(fresh_db, user_id):
+async def test_closing_a_preview_keeps_the_draft_alive(fresh_db, user_id):
+    """Старая «❌ Не надо» стирала черновик — и кнопка «🗂 Забрать: <программа>»
+    под самим ответом тренера становилась мёртвой: «это предложение уже
+    неактуально». Ничего неактуального не случилось, человек просто закрыл
+    экран. Кнопки в новых превью нет, но она висит под всеми прошлыми."""
     state = await _make_state(user_id)
     await state.update_data(ai_program_draft=_draft())
     callback = _make_callback(user_id, "ai:prog:drop:1")
@@ -1049,7 +1053,7 @@ async def test_dropping_a_program_removes_the_preview_and_the_draft(fresh_db, us
     await ai_trainer.ai_program_drop(callback, state)
 
     callback.message.delete.assert_awaited_once()
-    assert (await state.get_data()).get("ai_program_draft") is None
+    assert (await state.get_data()).get("ai_program_draft") is not None
     assert await fresh_db.list_routines(user_id) == []
 
 
