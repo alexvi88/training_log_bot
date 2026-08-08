@@ -1684,3 +1684,11 @@ async def test_prompt_forbids_promising_an_edit_without_doing_it():
     prompt = ai_trainer.SYSTEM_PROMPT
     assert "НИКОГДА не обещай действие вместо того, чтобы его сделать" in prompt
     assert "Обещание без\nвызова инструмента" in prompt
+
+
+async def test_prompt_keeps_heavy_lifts_out_of_high_rep_ranges():
+    """Живой прогон: под цель «становая 250» тренер поставил 4×5–8 в самой
+    становой. Восьмёрка там — не силовая работа, а испытание поясницы."""
+    prompt = ai_trainer.SYSTEM_PROMPT
+    assert "3-5 повторов" in prompt
+    assert "становая" in prompt.lower()

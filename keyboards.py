@@ -895,38 +895,28 @@ def routine_edit_menu_keyboard(routine_id: int, is_day: bool = False) -> InlineK
 
 
 def routine_edit_keyboard(routine_id: int, exercises=()) -> InlineKeyboardMarkup:
-    """Редактор состава дня: по ряду на упражнение — «наверх», ✏️ и 🗑 с именем.
+    """Редактор состава дня: имя первым, за ним ⬆️, ✏️ и 🗑.
 
-    Стрелка одна, а не две: поднять второе — то же самое, что опустить первое,
-    и вторая колонка только отбирала место у названия. С четырьмя колонками
-    Telegram сжимал его до «Пр…×5–10», и по такой кнопке нельзя было понять, что
-    удаляешь. Схема подходов из подписи убрана по той же причине — она есть в
-    тексте сообщения, где состав перечислен целиком.
+    Стрелка одна и работает по кругу: поднять второе — то же самое, что опустить
+    первое, а у первого «выше» отправляет его в конец. Вторая колонка только
+    отбирала место у названия — с четырьмя колонками Telegram сжимал его до
+    «Пр…×5–10», и по кнопке нельзя было понять, что удаляешь.
 
-    У первого упражнения поднимать некуда: вместо стрелки заглушка, иначе ряд
-    съезжает и «✏️» встаёт туда, где у соседей удаление.
-
-    ✏️ существует потому, что смена «3×10» на «4×8» иначе означала бы убрать
-    упражнение, добавить заново — оно улетает в конец — и поднимать стрелками:
-    до девяти тапов ради одного числа.
+    Имя всё равно обрезаем сами: ряд делится поровну, и на подпись остаётся
+    четверть. Полный состав с номерами и схемами стоит в тексте сообщения — там
+    и читают, а кнопки только действуют.
     """
     b = InlineKeyboardBuilder()
-    for i, entry in enumerate(exercises):
+    for entry in exercises:
         re_id, name = entry[0], entry[1]
-        up = (
-            InlineKeyboardButton(text="⬆️", callback_data=f"rt:mvex:{routine_id}:{re_id}:up")
-            if i else InlineKeyboardButton(text="·", callback_data="rt:noop")
-        )
         b.row(
-            up,
-            InlineKeyboardButton(text="✏️", callback_data=f"rt:extarget:{routine_id}:{re_id}"),
-            # Обрезаем сами, а не отдаём это Telegram: он режет посреди слова и
-            # без многоточия («Жим в тренажёре на пле»), а полное имя всё равно
-            # стоит номером в тексте сообщения.
             InlineKeyboardButton(
-                text=f"🗑 {_shorten_label(name, 18)}",
-                callback_data=f"rt:rmex:{routine_id}:{re_id}",
+                text=_shorten_label(name, 16),
+                callback_data=f"rt:extarget:{routine_id}:{re_id}",
             ),
+            InlineKeyboardButton(text="⬆️", callback_data=f"rt:mvex:{routine_id}:{re_id}:up"),
+            InlineKeyboardButton(text="✏️", callback_data=f"rt:extarget:{routine_id}:{re_id}"),
+            InlineKeyboardButton(text="🗑", callback_data=f"rt:rmex:{routine_id}:{re_id}"),
         )
     b.row(InlineKeyboardButton(text="➕ Добавить упражнение", callback_data=f"rt:addex:{routine_id}"))
     b.row(InlineKeyboardButton(text="⬅️ Готово", callback_data=f"rt:view:{routine_id}"))

@@ -1172,6 +1172,13 @@ def _truncate_block(
     return kept + note_lines
 
 
+# Программа не приговор: состав, порядок и схемы правятся руками в любой момент.
+# Без этой строчки человек считал предложение тренера единственным вариантом и
+# либо соглашался целиком, либо отказывался — хотя поменять одно упражнение
+# дешевле, чем пересобирать всё заново.
+_EDITABLE_LATER = "Потом всё правится: 🗂 Программы → ⚙️ Изменить программу — состав, порядок, схемы."
+
+
 def build_ai_program_preview(
     name: str, days: list[dict], replaces: Optional[dict] = None, notes: Optional[list[str]] = None,
     unit: Optional[str] = None,
@@ -1241,11 +1248,13 @@ def build_ai_program_preview(
         )
     elif len(days) == 1:
         tail.append("Добавлю как программу — начать по ней тренировку можно в один тап.")
+        tail.append(_EDITABLE_LATER)
     else:
         tail.append(
             f"Добавлю программу «{escape(name)}» из {len(days)} {day_word_gen} — "
             "начать тренировку по любому можно в один тап."
         )
+        tail.append(_EDITABLE_LATER)
     if new_names:
         # Родительный падеж множественного числа тут фиксированный, а не по
         # plural_ru(len(new_names), ...): «Новых для тебя» требует именно его

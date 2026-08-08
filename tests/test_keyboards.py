@@ -155,13 +155,13 @@ def test_routine_edit_keyboard_carries_the_removals():
     assert "rt:view:7" in cbs  # "готово" back to the program screen
 
 
-def test_routine_edit_keyboard_has_one_arrow_per_row():
-    """Стрелка только «наверх»: поднять второе — то же самое, что опустить
-    первое, а вторая колонка отбирала место у названия (оно сжималось до
-    «Пр…×5–10»). У первого упражнения поднимать некуда."""
+def test_routine_edit_keyboard_has_one_cyclic_arrow_per_row():
+    """Стрелка только «наверх» и работает по кругу: у первого она отправляет в
+    конец. Вторая колонка отбирала место у названия (оно сжималось до
+    «Пр…×5–10»), а без переноса через край первое упражнение не сдвинуть."""
     kb = keyboards.routine_edit_keyboard(7, [(11, "Жим"), (12, "Тяга"), (13, "Присед")])
     cbs = _callback_datas(kb)
-    assert "rt:mvex:7:11:up" not in cbs
+    assert "rt:mvex:7:11:up" in cbs
     assert "rt:mvex:7:12:up" in cbs
     assert "rt:mvex:7:13:up" in cbs
     assert not [c for c in cbs if c.endswith(":down")], "вниз больше не двигаем"

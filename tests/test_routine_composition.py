@@ -249,9 +249,11 @@ async def test_move_down_swaps_with_next_exercise(fresh_db, user_id):
     assert names == ["Разведения", "Жим лёжа", "Отжимания"]
 
 
-async def test_move_up_at_top_is_a_no_op(fresh_db, user_id):
+async def test_move_up_at_top_wraps_to_the_end(fresh_db, user_id):
+    """Стрелка в редакторе одна, и без переноса через край первое упражнение
+    было бы намертво приколочено к первому месту."""
     db = fresh_db
-    routine_id, _ = await _make_routine(db, user_id, ["Жим лёжа", "Разведения"])
+    routine_id, _ = await _make_routine(db, user_id, ["Жим лёжа", "Разведения", "Брусья"])
     entries = await db.list_routine_exercises(routine_id)
     first = entries[0]
     state = await _make_state(user_id)
@@ -261,7 +263,7 @@ async def test_move_up_at_top_is_a_no_op(fresh_db, user_id):
     )
 
     names = [r["display_name"] for r in await db.list_routine_exercises(routine_id)]
-    assert names == ["Жим лёжа", "Разведения"]
+    assert names == ["Разведения", "Брусья", "Жим лёжа"]
 
 
 async def test_move_rejects_someone_elses_routine(fresh_db, user_id):
@@ -590,37 +592,33 @@ async def test_target_normalization_keeps_what_it_cannot_parse():
     # Диапазон наоборот — не схема, а опечатка: оставляем как есть, не выдумываем.
     assert formatting.normalize_routine_target("3x10-5") == "3x10-5"
 
+async def test_editor_row_puts_the_name_first_then_the_icons():
+    """Раскладка ряда: имя, ⬆️, ✏️, 🗑. Имя обрезаем сами — ряд делится поровну,
+    и на подпись остаётся четверть; полный состав стоит в тексте сообщения."""
+    kb = keyboards.routine_edit_keyboard(1, [(10, "Присед в Смите", "3x5-10"), (11, "Тяга", None)])
 
-async def test_editor_rows_have_the_same_number_of_columns():
-    """Находка 4c: у первой строки не было стрелки, и «✏️» съезжала на колонку
-    влево — туда, где у соседей стоит удаление."""
-    kb = keyboards.routine_edit_keyboard(1, [(10, "Жим", "4x8"), (11, "Разводка", "3x12"), (12, "Брусья", None)])
-    exercise_rows = kb.inline_keyboard[:3]
-    assert {len(row) for row in exercise_rows} == {3}
-    assert kb.inline_keyboard[0][0].callback_data == "rt:noop"
+    first = kb.inline_keyboard[0]
+    assert len(first) == 4
+    assert first[0].text == "Присед в Смите"
+    assert [b.text for b in first[1:]] == ["⬆️", "✏️", "🗑"]
 
 
-async def test_only_one_arrow_per_row_so_the_name_fits():
-    """Вторая стрелка была лишней — поднять второе то же самое, что опустить
-    первое, — а четвёртая колонка сжимала название до «Пр…×5–10»."""
-    kb = keyboards.routine_edit_keyboard(1, [(10, "Присед в Смите", "3x5-10"), (11, "Тяга нижнего блока", "3x5-10")])
+async def test_every_row_has_an_arrow_because_the_move_is_cyclic():
+    kb = keyboards.routine_edit_keyboard(1, [(10, "Жим", None), (11, "Тяга", None), (12, "Присед", None)])
 
-    arrows = [b.text for row in kb.inline_keyboard[:2] for b in row if b.text in ("⬆️", "⬇️", "·")]
-    assert arrows == ["·", "⬆️"], "по одной стрелке на ряд, у первого — заглушка"
-    names = [b.text for row in kb.inline_keyboard[:2] for b in row if b.text.startswith("🗑")]
-    assert names == ["🗑 Присед в Смите", "🗑 Тяга нижнего блока"]
+    ups = [b.callback_data for row in kb.inline_keyboard[:3] for b in row if b.text == "⬆️"]
+    assert ups == ["rt:mvex:1:10:up", "rt:mvex:1:11:up", "rt:mvex:1:12:up"]
+
+
+async def test_tapping_the_name_opens_the_set_scheme():
+    """Имя — не украшение: тап по нему делает то же, что ✏️, иначе самая крупная
+    кнопка ряда была бы единственной неработающей."""
+    kb = keyboards.routine_edit_keyboard(1, [(10, "Жим", None)])
+
+    assert kb.inline_keyboard[0][0].callback_data == "rt:extarget:1:10"
 
 
 async def test_a_long_name_is_cut_by_us_with_an_ellipsis():
-    """Telegram режет подпись посреди слова и без многоточия («Жим в тренажёре
-    на пле»). Режем сами; полное имя стоит номером в тексте сообщения."""
     kb = keyboards.routine_edit_keyboard(1, [(10, "Жим в тренажёре на плечи", None)])
 
-    name = [b.text for b in kb.inline_keyboard[0] if b.text.startswith("🗑")][0]
-    assert name.endswith("…")
-    assert len(name) <= 21
-
-
-async def test_a_single_exercise_gets_no_arrow_at_all():
-    kb = keyboards.routine_edit_keyboard(1, [(10, "Жим", "4x8")])
-    assert [b.text for b in kb.inline_keyboard[0]] == ["·", "✏️", "🗑 Жим"]
+    assert kb.inline_keyboard[0][0].text.endswith("…")
