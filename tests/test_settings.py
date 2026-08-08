@@ -247,4 +247,56 @@ async def test_profile_screen_speaks_in_the_first_person(fresh_db, user_id):
         ui.safe_edit = original
 
     assert "Записал с твоих слов" in seen["text"]
-    assert "скажи мне" in seen["text"]
+    assert "напиши сюда" in seen["text"]
+
+
+async def test_profile_screen_listens_to_what_you_type(fresh_db, user_id):
+    """Экран зовёт написать, как правильно, — значит, у этого зова обязан быть
+    слушатель.
+
+    На проде было ровно наоборот: человек стоял на «ЧТО Я ПРО ТЕБЯ ЗНАЮ», писал
+    «убери дней в неделю и ограничения» и получал «Не понял 🤔 Вопрос тренеру —
+    жми AI-тренер». Экран врал прямым текстом."""
+    import ui
+    from fsm import AITrainerFlow, SettingsFlow
+
+    await fresh_db.update_user(user_id, goal="масса")
+    state = await _make_state(user_id)
+
+    async def fake_edit(callback, text, **kwargs):
+        return MagicMock()
+
+    original, ui.safe_edit = ui.safe_edit, fake_edit
+    try:
+        await settings.settings_profile(_make_callback(user_id, "settings:profile"), state)
+    finally:
+        ui.safe_edit = original
+
+    assert await state.get_state() == SettingsFlow.profile.state
+
+    seen = {}
+
+    async def fake_handle(message, st, question, history_question, **kwargs):
+        seen["question"] = question
+        seen["history"] = history_question
+
+    from handlers import ai_trainer as ai_handler
+
+    original_handle, ai_handler._handle_question = ai_handler._handle_question, fake_handle
+    try:
+        message = MagicMock()
+        message.text = "убери ограничения"
+        message.from_user = SimpleNamespace(id=user_id, username="tester")
+        message.reply = AsyncMock()
+        await settings.profile_correction(message, state)
+    finally:
+        ai_handler._handle_question = original_handle
+
+    # Тренеру уходит и сама фраза, и рамка про то, что это правка памяти, —
+    # иначе «убери ограничения» читается как правка программы.
+    assert "убери ограничения" in seen["question"]
+    assert "forget" in seen["question"]
+    assert seen["history"] == "убери ограничения"
+    # Дальше человек уже в разговоре: следующая реплика не должна упереться
+    # в «Не понял».
+    assert await state.get_state() == AITrainerFlow.chatting.state
