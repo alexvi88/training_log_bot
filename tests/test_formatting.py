@@ -1221,33 +1221,46 @@ def test_real_tables_still_go_the_old_way():
 # ---------- находка 44: одно правило прогрессии на всю программу ----------
 
 
-def test_one_shared_progression_rule_is_hoisted_once():
-    """Восемь одинаковых «⤴️ двойная прогрессия» подряд топили состав программы:
-    правило общее, а печаталось под каждым упражнением."""
+def test_progression_is_stated_once_even_when_steps_differ():
+    """Живой прогон: семнадцать строк «дошёл до 10 повторов — прибавь 2.5 к весу»
+    подряд, состав программы в них тонул. Шаг у каждого упражнения свой, поэтому
+    сверять надо тип правила, а не текст со шагом."""
     days = [
         {"name": "День 1", "items": [
-            {"name": "Тяга", "target": "4x3-5", "progression": {"rule": "double_progression"}},
-            {"name": "Жим", "target": "4x6-10", "progression": {"rule": "double_progression"}},
+            {"name": "Мостик", "target": "4x5-10",
+             "progression": {"rule": "double_progression", "reps_top": 10, "step": 2.5}},
+            {"name": "Жим ногами", "target": "3x5-10",
+             "progression": {"rule": "double_progression", "reps_top": 10, "step": 5}},
         ]},
         {"name": "День 2", "items": [
-            {"name": "Пресс", "target": "3x8-12", "progression": {"rule": "double_progression"}},
+            {"name": "Бицепс", "target": "2x5-10",
+             "progression": {"rule": "double_progression", "reps_top": 10, "step": 1}},
         ]},
     ]
-    text = formatting.build_ai_program_preview("Сила", days)
+
+    text = formatting.build_ai_program_preview("Ягодичные", days, unit="kg")
 
     assert text.count("двойная прогрессия") == 1
-    assert "⤴️ Везде: двойная прогрессия" in text
+    assert "⤴️ Везде двойная прогрессия" in text
+    # Шага в превью больше нет вовсе — его человек увидит в самой тренировке.
+    assert "прибавь 2.5" not in text
+    assert "прибавь 5" not in text
 
 
-def test_a_rule_that_differs_stays_next_to_its_exercise():
+def test_mixed_rule_kinds_still_print_per_exercise():
+    """Общей фразы нет — значит правила разного типа, и каждое стоит рядом со
+    своим упражнением: иначе про одно из них человек не узнает вовсе."""
     days = [
         {"name": "День 1", "items": [
-            {"name": "Тяга", "target": "4x3-5", "progression": {"rule": "double_progression"}},
-            {"name": "Жим", "target": "4x6-10", "progression": {"rule": "linear_load", "step": 2.5}},
+            {"name": "Тяга", "target": "4x3-5",
+             "progression": {"rule": "double_progression", "reps_top": 5, "step": 2.5}},
+            {"name": "Жим", "target": "4x6-10",
+             "progression": {"rule": "linear_load", "step": 2.5}},
         ]},
     ]
+
     text = formatting.build_ai_program_preview("Сила", days, unit="kg")
 
-    assert "Везде:" not in text
-    assert "двойная прогрессия" in text
+    assert "Везде" not in text
+    assert "дошёл до 5 повторов — прибавь 2.5кг" in text
     assert "+2.5кг каждую тренировку" in text

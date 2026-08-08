@@ -605,3 +605,30 @@ async def test_editor_rows_have_the_same_number_of_columns():
 async def test_a_single_exercise_gets_no_arrows_at_all():
     kb = keyboards.routine_edit_keyboard(1, [(10, "Жим", "4x8")])
     assert len(kb.inline_keyboard[0]) == 2  # ✏️ и 🗑, переставлять нечего
+
+
+async def test_program_edit_menu_offers_editing_each_day(fresh_db, user_id):
+    """Живой прогон: «⚙️ Изменить программу» показывал добавить день, порядок,
+    дублировать, переименовать, поделиться, удалить — и ни слова про состав. До
+    упражнений можно было добраться только вернувшись на экран программы и ткнув
+    в день, догадаться неоткуда."""
+    days = [{"id": 11, "name": "День A — всё тело"}, {"id": 12, "name": "День B — всё тело"}]
+
+    kb = keyboards.program_edit_keyboard(days, program_id=7)
+
+    cbs = [b.callback_data for row in kb.inline_keyboard for b in row]
+    assert "rt:edit:11" in cbs
+    assert "rt:edit:12" in cbs
+    texts = [b.text for row in kb.inline_keyboard for b in row]
+    assert texts[0] == "✏️ День A — всё тело", "состав дней должен стоять первым"
+
+
+async def test_day_order_done_goes_back_to_the_edit_menu():
+    """«Готово» после перестановки дней выбрасывало на экран программы, хотя
+    пришли из редактора: порядок меняют в связке с остальными правками."""
+    days = [{"id": 11, "name": "День A"}, {"id": 12, "name": "День B"}]
+
+    kb = keyboards.program_day_order_keyboard(days, program_id=7)
+
+    done = [b for row in kb.inline_keyboard for b in row if "Готово" in b.text]
+    assert done and done[0].callback_data == "rt:pgmedit:7"

@@ -540,7 +540,7 @@ async def test_every_edit_action_survived_the_move(fresh_db, user_id):
     await routines.rt_program_edit(callback, await _state(user_id))
 
     callbacks = [cb for _text, cb in _buttons(callback)]
-    assert callbacks == [
+    for action in (
         f"rt:dayadd:{program_id}",
         f"rt:dayorder:{program_id}",
         f"rt:pgmcopy:{program_id}",
@@ -548,7 +548,11 @@ async def test_every_edit_action_survived_the_move(fresh_db, user_id):
         f"share:prg:{program_id}",
         f"rt:pgmdelask:{program_id}",
         f"rt:prg:{program_id}",
-    ]
+    ):
+        assert action in callbacks, action
+    # Плюс правка состава каждого дня — её тут не было вовсе, и до упражнений
+    # приходилось возвращаться на экран программы (см. program_edit_keyboard).
+    assert [cb for cb in callbacks if cb.startswith("rt:edit:")]
 
 
 async def test_back_from_the_edit_screen_returns_to_the_program(fresh_db, user_id):
