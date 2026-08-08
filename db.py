@@ -4554,12 +4554,39 @@ async def rename_program(user_id: int, program_name: str, new_name: str) -> bool
     return await rename_program_by_id(program["id"], new_name)
 
 
+def _unique_sibling_name(name: str, taken: set[str]) -> str:
+    """Имя, не повторяющее уже занятые среди дней той же программы.
+
+    Дни программы — это кнопки на одном экране (keyboards.program_days_keyboard
+    и program_day_order_keyboard), и два «День 1» подряд там неразличимы.
+    Разводим суффиксом, а не отбрасыванием — состав у дней разный, и терять день
+    из-за совпавшего имени было бы куда хуже.
+    """
+    key = name.strip().lower()
+    if key not in taken:
+        taken.add(key)
+        return name
+    for suffix in range(2, 100):
+        marker = f" ({suffix})"
+        candidate = name[: config.MAX_PROGRAM_NAME_LENGTH - len(marker)].rstrip() + marker
+        if candidate.strip().lower() not in taken:
+            taken.add(candidate.strip().lower())
+            return candidate
+    taken.add(key)
+    return name
+
+
 async def merge_programs(user_id: int, source_id: int, target_id: int) -> None:
     """Fold every day of `source_id` into `target_id` and drop the empty shell.
 
     The explicit version of what renaming one program onto another used to do by
     accident — offered as a choice when rename_program_by_id reports a
     collision, so "actually yes, join them" stays possible.
+
+    Дни из source могут называться так же, как дни, уже стоящие в target, —
+    особенно часто, когда сливают программу с её же дубликатом («Дублировать»
+    даёт копии те же имена дней). Без переименования итог — несколько дней с
+    одинаковой подписью, из которых на экране программы не выбрать нужный.
     """
     source = await get_program(source_id)
     target = await get_program(target_id)
@@ -4567,13 +4594,15 @@ async def merge_programs(user_id: int, source_id: int, target_id: int) -> None:
         return
     if source["user_id"] != user_id or target["user_id"] != user_id:
         return
+    taken = {d["name"].strip().lower() for d in await list_program_days_by_id(target_id)}
     for day in await list_program_days_by_id(source_id):
+        name = _unique_sibling_name(day["name"], taken)
         async with _write_lock:
             await conn().execute(
-                "UPDATE routines SET program_id = ?, day_order = "
+                "UPDATE routines SET program_id = ?, name = ?, day_order = "
                 "(SELECT COALESCE(MAX(day_order), -1) + 1 FROM routines WHERE program_id = ?) "
                 "WHERE id = ?",
-                (target_id, target_id, day["id"]),
+                (target_id, name, target_id, day["id"]),
             )
             await conn().commit()
     async with _write_lock:
