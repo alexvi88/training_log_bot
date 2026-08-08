@@ -140,10 +140,9 @@ async def test_profile_screen_shows_what_the_trainer_wrote(fresh_db, user_id):
 
     payload = json.loads(await ai_trainer.execute_tool(
         user_id, "save_athlete_profile",
-        {"goal": "масса", "days_per_week": 4, "equipment": ["штанга", "гантели"]},
+        {"goal": "масса", "experience": "средний", "equipment": ["штанга", "гантели"]},
     ))
-    # Профиль пишется только после «✅ Запомнить» под ответом тренера.
-    await fresh_db.update_user(user_id, **payload["fields"])
+    assert payload["saved"] is True
 
     seen = {}
 
@@ -158,7 +157,7 @@ async def test_profile_screen_shows_what_the_trainer_wrote(fresh_db, user_id):
         ui.safe_edit = original
 
     assert "масса" in seen["text"]
-    assert "4" in seen["text"]
+    assert "средний" in seen["text"]
     # Оборудование лежит JSON-строкой, а показываться должно по-человечески.
     assert "штанга, гантели" in seen["text"]
     assert '["' not in seen["text"]
@@ -184,7 +183,8 @@ async def test_profile_screen_marks_what_is_still_unknown(fresh_db, user_id):
     # Считаем прочерки-значения, а не все тире в тексте — во вводной фразе
     # экрана своё.
     empty = [line for line in seen["text"].split("\n") if line.endswith("</b> —")]
-    assert len(empty) == 5
+    # Четыре, а не пять: дни в неделю тренер больше не запоминает.
+    assert len(empty) == 4
     assert "Ограничения" in seen["text"]
     # Пустое состояние зовёт, а не констатирует (см. TONE_OF_VOICE.md).
     assert "AI-тренер" in seen["text"]
