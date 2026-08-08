@@ -151,6 +151,14 @@ async def _owned_program(event, program_id: int):
     return program
 
 
+# Пустой день — это чаще всего только что созданный «📄 Пустой день», а не
+# последствие архивации. Про архив тут говорили всегда, и на свежесозданном дне
+# бот объяснял пустоту событием, которого не было. Говорим, что делать дальше:
+# кнопка «✏️ Редактировать → Изменить состав» — ровно то, зачем такой день и
+# заводят.
+_EMPTY_DAY_LINE = "Пока пусто — добавь упражнения через «✏️ Редактировать»."
+
+
 def _days_ago_label(iso: str, today: dt.date) -> str:
     days = (today - dt.datetime.fromisoformat(iso).date()).days
     if days <= 0:
@@ -173,7 +181,7 @@ async def _day_composition_blocks(days, *, history=None, today=None) -> list[str
         ex_lines = [
             f"• {escape(ex['display_name'])}" + (f" — {escape(ex['target'])}" if ex["target"] else "")
             for ex in exercises
-        ] or ["В дне нет упражнений (возможно, они были архивированы)."]
+        ] or [_EMPTY_DAY_LINE]
         when = ""
         if history is not None:
             entry = history.get(day["id"])
@@ -442,7 +450,7 @@ async def _show_routine_detail(event, state: FSMContext, routine_id: int) -> Non
             suffix = f" — {escape(ex['target'])}" if ex["target"] else ""
             lines.append(f"{i}. {escape(ex['display_name'])}{suffix}")
     else:
-        lines.append("Здесь нет упражнений (возможно, они были архивированы).")
+        lines.append(_EMPTY_DAY_LINE)
     kb = keyboards.routine_detail_keyboard(routine_id, program_id=routine["program_id"])
     text = "\n".join(lines)
     if isinstance(event, CallbackQuery):
@@ -1148,6 +1156,13 @@ async def rt_day_named(message: Message, state: FSMContext):
     if program is None:
         await state.set_state(None)
         await show_manage(message, state)
+        return
+    # Та же проверка, что на переименовании: живой прогон завёл в одной программе
+    # два «Тест верх 2» подряд — на экране программы это две одинаковые кнопки,
+    # из которых не выбрать, а «Копия «X»» предлагает имя тёзкой по умолчанию.
+    key = name.strip().lower()
+    if any(d["name"].strip().lower() == key for d in await db.list_program_days_by_id(program_id)):
+        await message.reply(f"День «{name}» в этой программе уже есть. Назови по-другому.")
         return
     routine_id = await db.create_routine(message.from_user.id, name, program_id=program_id)
     source_id = data.get("day_copy_from")

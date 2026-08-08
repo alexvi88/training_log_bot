@@ -682,3 +682,37 @@ async def test_a_standalone_routine_cannot_take_a_saved_program_name(fresh_db, u
     message.reply.assert_awaited_once()
     assert "уже есть" in message.reply.await_args.args[0]
     assert (await fresh_db.get_routine(solo))["name"] == "Зал"
+
+
+async def test_a_new_day_cannot_be_named_after_an_existing_one(fresh_db, user_id):
+    """Живой прогон завёл в одной программе два «Тест верх 2» подряд: проверка
+    стояла только на переименовании, а создание дня её не знало. На экране
+    программы это две одинаковые кнопки, из которых не выбрать."""
+    program_id = await fresh_db.create_program(user_id, "Сплит")
+    await fresh_db.create_routine(user_id, "Верх", program_id=program_id)
+
+    state = await _make_state(user_id)
+    await state.update_data(day_program_id=program_id, day_copy_from=None)
+    message = _make_message(user_id, "верх")
+
+    await routines.rt_day_named(message, state)
+
+    message.reply.assert_awaited_once()
+    assert "уже есть" in message.reply.await_args.args[0]
+    assert len(await fresh_db.list_program_days_by_id(program_id)) == 1
+
+
+async def test_an_empty_day_does_not_blame_archiving(fresh_db, user_id):
+    """«Возможно, они были архивированы» на только что созданном пустом дне —
+    объяснение событием, которого не было. Пустой день заводят как раз затем,
+    чтобы наполнить его руками."""
+    program_id = await fresh_db.create_program(user_id, "Сплит")
+    day = await fresh_db.create_routine(user_id, "Руки", program_id=program_id)
+
+    blocks = await routines._day_composition_blocks(
+        await fresh_db.list_program_days_by_id(program_id)
+    )
+
+    assert "архивирован" not in blocks[0]
+    assert "Редактировать" in blocks[0]
+    assert day is not None
