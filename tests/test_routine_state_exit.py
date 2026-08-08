@@ -220,7 +220,7 @@ async def test_an_open_workout_survives_leaving_a_routine_screen(fresh_db, user_
 async def test_backing_out_of_add_a_day_stops_the_next_snapshot_joining_that_program(
     fresh_db, user_id
 ):
-    """«➕ Добавить день → 🏋️ Из прошлой тренировки», потом «⬅️ Назад» к списку и
+    """«➕ Добавить день → 🏋️ Из тренировки», потом «⬅️ Назад» к списку и
     «➕ Из тренировки» — новая программа молча становилась ещё одним днём той
     программы, из которой человек уже ушёл: пометка о дне оставалась в data."""
     db = fresh_db

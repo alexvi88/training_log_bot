@@ -276,14 +276,21 @@ async def test_deleting_a_day_says_day_not_program(fresh_db, user_id):
     assert "день «Толкай»" in text and "Остальные дни останутся" in text
 
 
-async def test_deleting_a_standalone_program_still_says_program(fresh_db, user_id):
+async def test_deleting_a_standalone_program_says_it_plainly(fresh_db, user_id):
+    """Просто «Удалить»: кнопка стоит второй в ряду, и Telegram резал «Удалить
+    программу» до «🗑 Удал…ограмму». Слово «программу» тут ничего не уточняет —
+    на дне подпись своя, а экран подтверждения говорит полностью."""
     db = fresh_db
     rid = await db.create_routine(user_id, "Своя")
 
     callback = _make_callback(user_id, f"rt:view:{rid}")
     await routines.rt_view(callback, await _state(user_id))
 
-    assert ("🗑 Удалить программу", f"rt:delask:{rid}") in _buttons(callback)
+    assert ("🗑 Удалить", f"rt:delask:{rid}") in _buttons(callback)
+
+    confirm = _make_callback(user_id, f"rt:delask:{rid}")
+    await routines.rt_delete_confirm(confirm, await _state(user_id))
+    assert "Удалить программу «Своя»" in _last_text(confirm)
 
 
 async def test_deleting_a_day_returns_to_its_program(fresh_db, user_id):

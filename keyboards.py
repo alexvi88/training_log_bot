@@ -696,11 +696,12 @@ def program_days_keyboard(
     тремя одинаковыми кнопками и вспоминать, что вчера был «Толкай», приходилось
     самому — при том, что бот это знал (workouts.routine_id).
 
-    Подпись у неё зависит от `trained_before`, потому что «▶️ Сегодня: День 1»
-    было неправдой ровно там, где чаще всего и попадалось на глаза: на только
-    что собранной программе никакой очереди ещё нет, бот просто берёт первый
-    день — а слово «сегодня» обещает расписание, которого у программ нет вовсе.
-    Текст сообщения про очередь говорит по тому же условию (см.
+    И только при `trained_before` — то есть когда по программе уже ходили.
+    Раньше кнопка стояла всегда и на новой программе называла первый день
+    «сегодняшним»: очереди ещё нет, бот просто берёт первый по списку, а слово
+    обещало расписание, которого у программ нет вовсе. Выделять первый день на
+    новой программе не нужно и без вранья — он и так первый в списке. Текст
+    сообщения про очередь говорит по тому же условию (см.
     handlers.routines.show_program).
 
     Всё, что меняет программу, уехало за «⚙️ Изменить программу» (см.
@@ -710,15 +711,13 @@ def program_days_keyboard(
     девяти кнопок, стал из четырёх.
     """
     b = InlineKeyboardBuilder()
-    if next_day_id is not None:
-        today = next((d for d in days if d["id"] == next_day_id), None)
-        if today is not None:
-            label = "Дальше" if trained_before else "Начать с"
-            b.button(
-                text=f"▶️ {label}: {today['name']}", callback_data=f"rt:view:{today['id']}"
-            )
+    hoisted = None
+    if trained_before and next_day_id is not None:
+        hoisted = next((d for d in days if d["id"] == next_day_id), None)
+    if hoisted is not None:
+        b.button(text=f"▶️ Дальше: {hoisted['name']}", callback_data=f"rt:view:{hoisted['id']}")
     for d in days:
-        if d["id"] == next_day_id:
+        if hoisted is not None and d["id"] == hoisted["id"]:
             continue
         b.button(text=d["name"], callback_data=f"rt:view:{d['id']}")
     b.button(text="⚙️ Изменить программу", callback_data=f"rt:pgmedit:{program_id}")
@@ -806,7 +805,11 @@ def program_day_source_keyboard(program_id: int, days) -> InlineKeyboardMarkup:
     трёхдневку, захотел четвёртый день на руки, и пересобирать надо было всё."""
     b = InlineKeyboardBuilder()
     b.button(text="📄 Пустой день", callback_data=f"rt:dayblank:{program_id}")
-    b.button(text="🏋️ Из прошлой тренировки", callback_data=f"rt:daypickw:{program_id}:0")
+    # «Из тренировки», а не «из прошлой»: за кнопкой список всех проведённых
+    # тренировок с листалкой, а «прошлая» читается как «последняя» — будто выбора
+    # нет. Тем же словом эта кнопка названа и в списке программ («➕ Из
+    # тренировки»), и ведут они в один и тот же экран.
+    b.button(text="🏋️ Из тренировки", callback_data=f"rt:daypickw:{program_id}:0")
     for d in days:
         b.button(text=f"⧉ Копия «{d['name']}»", callback_data=f"rt:daycopy:{d['id']}")
     b.button(text="⬅️ Назад", callback_data=f"rt:prg:{program_id}")
@@ -871,6 +874,12 @@ def routine_detail_keyboard(routine_id: int, program_id: int | None = None) -> I
     программу» удаляла один день, а точно такая же кнопка этажом выше — всю
     программу, и по тексту подтверждения различить их было нельзя. Плюс «назад»
     у дня ведёт к списку дней, а не на самый верх.
+
+    Отсюда же и голое «🗑 Удалить» у одиночной: кнопка стоит второй в ряду, и
+    Telegram резал «Удалить программу» до «🗑 Удал…ограмму». Слово «программу»
+    тут ничего не уточняет — заголовок сообщения её и называет, а спутать не с
+    чем: на дне подпись своя, и она короткая. Экран подтверждения по-прежнему
+    говорит полностью, что именно сносим.
     """
     is_day = program_id is not None
     back = f"rt:prg:{program_id}" if is_day else "rt:manage"
@@ -879,7 +888,7 @@ def routine_detail_keyboard(routine_id: int, program_id: int | None = None) -> I
     b.row(
         InlineKeyboardButton(text="✏️ Редактировать", callback_data=f"rt:editmenu:{routine_id}"),
         InlineKeyboardButton(
-            text="🗑 Удалить день" if is_day else "🗑 Удалить программу",
+            text="🗑 Удалить день" if is_day else "🗑 Удалить",
             callback_data=f"rt:delask:{routine_id}",
         ),
     )
