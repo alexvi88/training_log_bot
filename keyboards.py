@@ -1558,6 +1558,20 @@ def push_cta_keyboard(text: str = "▶ Начать тренировку") -> In
     return b.as_markup()
 
 
+def announcement_keyboard(buttons: Sequence[tuple[str, str]]) -> InlineKeyboardMarkup:
+    """Кнопки под разовой релизной рассылкой (см. announcements.py).
+
+    По одной в строку: в анонсе их обычно две, и каждая — вход в свою фичу, а
+    не «да/нет». Две кнопки в ряд читаются как выбор из одного, а тут можно и
+    то, и другое.
+    """
+    b = InlineKeyboardBuilder()
+    for text, callback_data in buttons:
+        b.button(text=text, callback_data=callback_data)
+    b.adjust(1)
+    return b.as_markup()
+
+
 _CAL_WEEKDAYS = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
 _MONTHS_RU = [
     "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",

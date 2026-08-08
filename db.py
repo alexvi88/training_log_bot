@@ -183,6 +183,15 @@ CREATE TABLE IF NOT EXISTS pushes (
 CREATE INDEX IF NOT EXISTS idx_pushes_sent_at ON pushes (sent_at);
 CREATE INDEX IF NOT EXISTS idx_pushes_telegram_id ON pushes (telegram_id, sent_at);
 
+-- Разовые релизные рассылки: где сейчас каждая (см. announcements.py).
+-- status: preview — анонс показан админу и ждёт добра; approved — добро есть,
+-- рассылка идёт или будет продолжена на следующем старте; declined — отклонена.
+CREATE TABLE IF NOT EXISTS announcement_state (
+    key TEXT PRIMARY KEY,
+    status TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS push_rotation (
     telegram_id INTEGER NOT NULL,
     category TEXT NOT NULL,
@@ -5602,6 +5611,63 @@ async def record_push(telegram_id: int, category: str, text: str, sent_on: str) 
             (telegram_id, category, text, now_iso(), sent_on),
         )
         await conn().commit()
+
+
+async def get_announcement_status(key: str) -> str | None:
+    """Где сейчас разовая рассылка: None (ещё не показывали админу), 'preview',
+    'approved' или 'declined'. См. announcements.py."""
+    cur = await conn().execute("SELECT status FROM announcement_state WHERE key = ?", (key,))
+    row = await cur.fetchone()
+    return row["status"] if row else None
+
+
+async def set_announcement_status(key: str, status: str) -> None:
+    async with _write_lock:
+        await conn().execute(
+            "INSERT INTO announcement_state (key, status, updated_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET status = excluded.status, updated_at = excluded.updated_at",
+            (key, status, now_iso()),
+        )
+        await conn().commit()
+
+
+async def has_announcement_push(telegram_id: int, category: str) -> bool:
+    """Уходила ли этому человеку разовая рассылка `category`."""
+    cur = await conn().execute(
+        "SELECT 1 FROM pushes WHERE telegram_id = ? AND category = ? LIMIT 1",
+        (telegram_id, category),
+    )
+    return await cur.fetchone() is not None
+
+
+async def count_announcement_recipients(category: str) -> int:
+    cur = await conn().execute(
+        "SELECT COUNT(*) FROM users "
+        "WHERE pushes_enabled = 1 "
+        "AND telegram_id NOT IN (SELECT telegram_id FROM pushes WHERE category = ?)",
+        (category,),
+    )
+    (count,) = await cur.fetchone()
+    return count
+
+
+async def list_announcement_recipients(category: str) -> list[int]:
+    """Кому ещё не уходила разовая рассылка `category` (см. announcements.py).
+
+    Отметка о доставке — строка в `pushes`, то есть та же таблица, что и у
+    ежедневных пушей: рассылка переживает перезапуск контейнера, докатку и
+    повторный деплой, а человек получает релизное сообщение ровно один раз.
+    Выключивший пуши в настройках сюда не попадает: разовая рассылка — это
+    тоже пуш, и тумблер должен значить то, что обещает.
+    """
+    cur = await conn().execute(
+        "SELECT telegram_id FROM users "
+        "WHERE pushes_enabled = 1 "
+        "AND telegram_id NOT IN (SELECT telegram_id FROM pushes WHERE category = ?) "
+        "ORDER BY telegram_id",
+        (category,),
+    )
+    return [row["telegram_id"] for row in await cur.fetchall()]
 
 
 async def has_push_today(telegram_id: int, today: str) -> bool:

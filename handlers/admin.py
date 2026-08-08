@@ -14,6 +14,7 @@ from aiogram.types import CallbackQuery, Message
 
 import acquisition
 import activity_log
+import announcements
 import config
 import db
 import formatting
@@ -528,3 +529,95 @@ async def broadcast_send(callback: CallbackQuery, state: FSMContext):
     )
 
 
+
+
+# ---------- разовые релизные рассылки (announcements.py) ----------
+#
+# Механизм сам присылает админу анонс после разворота и ждёт добра — здесь
+# живут кнопки под этим превью и ручной вход в тот же экран.
+
+# Ключи рассылок, которые прямо сейчас разносятся этим процессом. Статус в базе
+# на это не годится: «approved» стоит и во время рассылки, и после
+# перезапуска посреди неё, а различать надо именно «уже жму, не жми второй раз».
+_sending: set[str] = set()
+
+
+@router.message(Command("announce"))
+async def cmd_announce(message: Message):
+    """Показать анонсы, ждущие решения, и что с ними.
+
+    Нужна, когда превью потерялось в чате (или ADMIN_ID выставили уже после
+    разворота): экран с кнопками можно вызвать руками, а не ждать следующего
+    рестарта.
+    """
+    if not _is_admin(message.from_user.id):
+        return
+    if not announcements.ANNOUNCEMENTS:
+        await message.answer("Нерассланных релизов нет.")
+        return
+    for ann in announcements.ANNOUNCEMENTS:
+        if ann.key in _sending:
+            await message.answer(f"Релиз «{ann.key}» рассылаю прямо сейчас.")
+            continue
+        status = await db.get_announcement_status(ann.key)
+        pending = await db.count_announcement_recipients(ann.key)
+        if status == announcements.STATUS_APPROVED and not pending:
+            await message.answer(f"Релиз «{ann.key}» разослан целиком.")
+            continue
+        if status == announcements.STATUS_APPROVED:
+            await message.answer(
+                f"Релиз «{ann.key}» одобрен, осталось разослать: {pending}. "
+                "Добью на следующем старте."
+            )
+            continue
+        if not ann.available():
+            await message.answer(
+                f"Релиз «{ann.key}» ждёт: фича, про которую он написан, в этом развороте выключена."
+            )
+            continue
+        # И «ещё не показывал», и «показывал», и «ты его отклонил» ведут сюда:
+        # раз позвали руками — показываем анонс и кнопки заново.
+        await announcements.send_preview(message.bot, ann)
+
+
+@router.callback_query(F.data.startswith("admin:ann:go:"))
+async def announcement_approve(callback: CallbackQuery):
+    if not _is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    key = callback.data.split(":", 3)[3]
+    ann = announcements.by_key(key)
+    if ann is None:
+        await callback.answer("Такого релиза больше нет в коде.", show_alert=True)
+        return
+    if key in _sending:
+        await callback.answer("Уже рассылаю.")
+        return
+    _sending.add(key)
+    await db.set_announcement_status(key, announcements.STATUS_APPROVED)
+    await callback.answer("Рассылка запущена…")
+    await ui.safe_edit(callback, f"📢 Релиз «{key}» пошёл по базе, отчитаюсь по завершении…")
+    # Отдельной задачей: рассылка на всю базу идёт минутами, а хендлер
+    # callback'а столько держать нельзя — Telegram ждёт ответа секунды.
+    asyncio.create_task(_run_announcement(callback.bot, ann))
+
+
+async def _run_announcement(bot, ann) -> None:
+    try:
+        await announcements.deliver_and_report(bot, ann)
+    finally:
+        _sending.discard(ann.key)
+
+
+@router.callback_query(F.data.startswith("admin:ann:no:"))
+async def announcement_decline(callback: CallbackQuery):
+    if not _is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    key = callback.data.split(":", 3)[3]
+    await db.set_announcement_status(key, announcements.STATUS_DECLINED)
+    await ui.safe_edit(
+        callback,
+        f"Релиз «{key}» не рассылаю. Передумаешь — /announce покажет его снова.",
+    )
+    await callback.answer()
