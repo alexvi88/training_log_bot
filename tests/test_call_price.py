@@ -94,3 +94,16 @@ def test_daily_report_agrees_with_per_call_price():
     assert report_cost == pytest.approx(expected)
     assert calls == 3
     assert tokens == 12_000 + 800 + 24_000 + 900
+
+
+def test_grok_43_price_matches_the_published_rates():
+    """docs.x.ai/developers/models/grok-4.3: вход $1.25/1M, выход $2.50/1M."""
+    assert config.LLM_PRICES_USD_PER_1K["grok-4.3-latest"] == (0.00125, 0.0025)
+
+
+def test_cache_share_matches_the_model_we_actually_run():
+    """Доля кэша одна на все модели, а прайс у каждой свой: 4.3 — $0.20 кэш при
+    $1.25 входа. Разъедется с GROK_MODEL — экономия в логах поедет молча."""
+    inp, _out = config.LLM_PRICES_USD_PER_1K[config.GROK_MODEL]
+    cached_per_1k = 0.0002  # $0.20 за 1M
+    assert pytest.approx(cached_per_1k / inp, abs=0.005) == config.CACHED_INPUT_PRICE_MULTIPLIER

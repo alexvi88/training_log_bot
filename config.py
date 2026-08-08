@@ -92,7 +92,7 @@ AI_WEEKLY_DIGEST_ENABLED = os.getenv("AI_WEEKLY_DIGEST_ENABLED", "true").lower()
 # key/env names as fun_bot, so one key serves both bots. The menu entry stays
 # visible but answers with a hint until the key is set.
 XAI_API_KEY = os.getenv("XAI_API_KEY", "")
-GROK_MODEL = os.getenv("GROK_MODEL", "grok-4.5-latest")
+GROK_MODEL = os.getenv("GROK_MODEL", "grok-4.3-latest")
 GROK_BASE_URL = os.getenv("GROK_BASE_URL", "https://api.x.ai/v1")
 
 # Hard ceiling on a single model call. The OpenAI SDK defaults to 600s, which
@@ -142,7 +142,7 @@ GROK_QUICK_REASONING_EFFORT = os.getenv("GROK_QUICK_REASONING_EFFORT", "low")
 # Search-capable model used (via xAI's gRPC SDK, not the REST endpoint) when a
 # question is allowed web/X search access.
 #
-# ТЕПЕРЬ grok-4.5, а не grok-4.20-multi-agent — и это не «оптимизация по
+# ТЕПЕРЬ обычный grok, а не grok-4.20-multi-agent — и это не «оптимизация по
 # свежести модели», от которой предупреждал прежний комментарий здесь, а вывод из
 # первого живого поиска. Он показал, ЗА ЧТО платили:
 #
@@ -156,12 +156,12 @@ GROK_QUICK_REASONING_EFFORT = os.getenv("GROK_QUICK_REASONING_EFFORT", "low")
 # принципе, и крутить agent_count смысла нет.
 #
 # Наш шаг — «сходи в сеть и перескажи», а не параллельный research по десятку
-# источников. Одному агенту grok-4.5 с теми же web_search/x_search это по силам,
+# источников. Одному агенту с теми же web_search/x_search это по силам,
 # а фан-аута вчетверо не будет ни по токенам, ни по вызовам инструментов.
 #
 # Если однажды шаг действительно станет research'ем — возвращать multi-agent
 # осмысленно, но тогда и лимит AI_SEARCH_DAILY_LIMIT надо считать заново.
-GROK_SEARCH_MODEL = os.getenv("GROK_SEARCH_MODEL", "grok-4.5-latest")
+GROK_SEARCH_MODEL = os.getenv("GROK_SEARCH_MODEL", "grok-4.3-latest")
 
 # Parallel sub-agent count for the search step (xAI SDK's native agent_count
 # param — 4 or 16). Explicit and low: this step is one linear web/X lookup per
@@ -370,6 +370,9 @@ LLM_PRICES_USD_PER_1K: dict[str, tuple[float, float]] = {
     "grok-4-1-fast": (0.0002, 0.0005),
     "grok-4.20-multi-agent": (0.00125, 0.0025),
     "grok-4.5-latest": (0.002, 0.006),
+    # По docs.x.ai/developers/models/grok-4.3: вход $1.25 за 1M, выход $2.50 за
+    # 1M. Заметно дешевле 4.5 ($2.00/$6.00) — на выходе втрое.
+    "grok-4.3-latest": (0.00125, 0.0025),
     # Novita, разбор видео (video_analysis.py). $0.3/$1.5 за 1M по прайсу модели
     # на novita.ai — здесь в $/1K, как и остальные строки таблицы. Видео на входе
     # тарифицируется теми же входными токенами, отдельной ставки за секунду нет.
@@ -396,19 +399,22 @@ DEFAULT_LLM_PRICE_USD_PER_1K: tuple[float, float] = (
 )
 
 
-# Во сколько раз кэшированный вход дешевле обычного. 0.15 — по прайсу grok-4.5 в
-# console.x.ai: вход $2.00 за 1M, кэшированный вход $0.30 за 1M. То есть за
-# совпавший префикс платим 15% цены, и на наших запросах это главная экономия:
+# Во сколько раз кэшированный вход дешевле обычного. 0.16 — по прайсу grok-4.3:
+# вход $1.25 за 1M, кэшированный $0.20 за 1M. (У 4.5 доля была 0.15: $2.00 и
+# $0.30.) Значение одно на все модели, так что при переезде его надо
+# пересчитывать вместе с моделью — иначе экономия в логах поедет.
+# За совпавший префикс платим 16% цены, и на наших запросах это главная экономия:
 # постоянная шапка (системный промпт + схемы 27 инструментов, вместе около
 # одиннадцати тысяч токенов) уезжает заново в каждом раунде tool-call'ов, и с
 # кэшем стоит копейки вместо трёх полных ставок.
 #
 # ВНИМАНИЕ на будущее: у xAI прайс двухступенчатый — при контексте свыше 200K
-# токенов все ставки удваиваются ($4 вход / $0.60 кэш / $12 выход). Таблица ниже
-# этого не знает и считает по дешёвой ступени. Пока наши запросы держатся в
+# токенов действует отдельная, более дорогая ставка (у 4.5 она была вдвое выше:
+# $4 вход / $0.60 кэш / $12 выход; для 4.3 её отдельно не смотрели). Таблица
+# выше этого не знает и считает по дешёвой ступени. Пока наши запросы держатся в
 # пределах пятнадцати тысяч токенов, разницы нет; если контекст когда-нибудь
-# распухнет за 200K, расчёт начнёт занижать ровно вдвое.
-CACHED_INPUT_PRICE_MULTIPLIER = float(os.getenv("CACHED_INPUT_PRICE_MULTIPLIER", "0.15"))
+# распухнет за 200K, расчёт начнёт занижать.
+CACHED_INPUT_PRICE_MULTIPLIER = float(os.getenv("CACHED_INPUT_PRICE_MULTIPLIER", "0.16"))
 
 
 def call_price_usd(
