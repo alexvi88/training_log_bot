@@ -13,6 +13,7 @@ import pytest
 
 import ai_trainer
 import mcp_server
+import timeutil
 
 
 @asynccontextmanager
@@ -111,20 +112,23 @@ def _headers(token: str | None, host: str = "training-log.example.com") -> dict[
 
 # ---------- что вообще выставлено наружу ----------
 
-def test_whitelist_contains_only_real_read_only_tools():
+def test_whitelist_contains_only_real_tools():
     """Белый список сверяется с инструментами AI-тренера: опечатка в имени —
     это молча не работающий инструмент, а лишнее имя — дыра наружу."""
     declared = {t["function"]["name"] for t in ai_trainer.TOOLS}
-    assert declared >= mcp_server.READ_ONLY_TOOLS
-    # Пишущие инструменты и переписка с тренером наружу не уходят.
+    assert declared >= mcp_server.EXPOSED_TOOLS
+    assert declared >= mcp_server.WRITE_TOOLS
+    # Пишущее наружу уходит только из ai_trainer._UNDOABLE_TOOLS (делает
+    # сразу, откат кнопкой) — остальное, включая переписку с тренером, нет.
+    assert set(ai_trainer._UNDOABLE_TOOLS) >= mcp_server.WRITE_TOOLS
     for forbidden in ("save_athlete_profile", "propose_program", "get_full_chat_history"):
         assert forbidden in declared, "инструмент переименовали — проверь белый список"
-        assert forbidden not in mcp_server.READ_ONLY_TOOLS
+        assert forbidden not in mcp_server.EXPOSED_TOOLS
 
 
 async def test_server_exposes_exactly_the_whitelist():
     tools = await mcp_server.build_server().list_tools()
-    assert {t.name for t in tools} == set(mcp_server.READ_ONLY_TOOLS)
+    assert {t.name for t in tools} == set(mcp_server.EXPOSED_TOOLS)
     # Пустых описаний быть не должно: по ним клиент выбирает инструмент.
     assert all((t.description or "").strip() for t in tools)
 
@@ -145,6 +149,48 @@ async def test_tool_call_returns_the_owners_data(fresh_db, user_id):
     assert status == 200
     result = json.loads(body)["result"]
     assert "Жим лёжа" in json.dumps(result, ensure_ascii=False)
+
+
+async def test_log_bodyweight_writes_and_hides_the_undo_button_note(fresh_db, user_id):
+    """Единственный пишущий путь наружу — и его нельзя перепутать с чтением:
+    вес обязан лечь в базу, а payload не должен обещать кнопку, которой у
+    MCP-клиента нет (_UNDO_NOTE рассчитан на модель тренера в Telegram)."""
+    token = await fresh_db.issue_mcp_token(user_id)
+
+    async with _running(mcp_server.build_app()) as post:
+        status, _, body = await post(
+            _rpc("tools/call", {"name": "log_bodyweight", "arguments": {"weight": 78.4}}),
+            _headers(token),
+        )
+
+    assert status == 200
+    text = json.loads(body)["result"]["content"][0]["text"]
+    assert "78.4" in text
+    assert "кнопка отката" not in text
+    assert "Дневник веса" in text
+    logs = await fresh_db.list_bodyweight_logs(user_id)
+    assert [log["weight"] for log in logs] == [78.4]
+
+
+async def test_log_food_writes_a_diary_entry(fresh_db, user_id):
+    token = await fresh_db.issue_mcp_token(user_id)
+
+    async with _running(mcp_server.build_app()) as post:
+        status, _, body = await post(
+            _rpc(
+                "tools/call",
+                {"name": "log_food", "arguments": {"description": "овсянка с бананом"}},
+            ),
+            _headers(token),
+        )
+
+    assert status == 200
+    text = json.loads(body)["result"]["content"][0]["text"]
+    assert "кнопка отката" not in text
+    assert "Дневник еды" in text
+    today = timeutil.user_today(await fresh_db.get_user(user_id)).isoformat()
+    entries = await fresh_db.list_food_entries(user_id, today)
+    assert [e["description"] for e in entries] == ["овсянка с бананом"]
 
 
 async def test_token_only_opens_its_own_data(fresh_db, user_id):
@@ -190,7 +236,7 @@ async def test_tools_list_over_the_wire(fresh_db, user_id):
         status, _, body = await post(_rpc("tools/list"), _headers(token))
     assert status == 200
     names = {t["name"] for t in json.loads(body)["result"]["tools"]}
-    assert names == set(mcp_server.READ_ONLY_TOOLS)
+    assert names == set(mcp_server.EXPOSED_TOOLS)
 
 
 async def test_public_host_is_not_rejected(fresh_db, user_id):

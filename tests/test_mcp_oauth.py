@@ -281,8 +281,10 @@ async def test_consent_page_names_the_app_and_what_it_gets(fresh_db, user_id):
     page = body.decode()
     assert status == 200
     assert "ChatGPT" in page
-    assert "только на чтение" in page
     assert "тренировки и подходы" in page
+    # Писать снаружи можно вес и еду (mcp_server.WRITE_TOOLS) — страница не
+    # обещает «только чтение», это было бы неправдой.
+    assert "Писать" in page
     # И страница не посылает никуда за кодом: он уже лежит в том сообщении бота,
     # из которого человек сюда пришёл. Разъехавшись с ботом, страница начинает
     # спорить с экраном, открытым у него на соседнем устройстве.
