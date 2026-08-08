@@ -514,11 +514,9 @@ async def test_opening_a_program_lists_its_days(fresh_db, user_id):
     kb = callback.message.answer.await_args.kwargs["reply_markup"]
     labels = [b.text for row in kb.inline_keyboard for b in row]
     day_names = [day_name for day_name, _ex in PROGRAM_BY_KEY["ppl"]["days"]]
-    # Первый день поднят наверх — по нему программа и начинается, пока она ни
-    # разу не пройдена (см. db.next_program_day). Но не «сегодня»: расписания у
-    # программ нет, и на новой программе это было бы обещанием из ниоткуда.
-    assert labels[0] == f"▶️ Начать с: {day_names[0]}"
-    assert labels[1 : len(day_names)] == day_names[1:]
+    # На новой программе дни идут просто списком: очереди ещё нет, а выделять
+    # первый день незачем — он и так первый (см. keyboards.program_days_keyboard).
+    assert labels[: len(day_names)] == day_names
     assert labels[-1] == "⬅️ Назад"
 
 

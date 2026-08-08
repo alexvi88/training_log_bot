@@ -634,7 +634,7 @@ async def rt_pickw_use(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("rt:daypickw:"))
 async def rt_day_from_workout(callback: CallbackQuery, state: FSMContext):
-    """«➕ Добавить день → 🏋️ Из прошлой тренировки»: тот же выбор исходной
+    """«➕ Добавить день → 🏋️ Из тренировки»: тот же выбор исходной
     тренировки, что и для новой программы, только результат становится днём уже
     существующей."""
     _, _, program_id_s, page_s = callback.data.split(":")
