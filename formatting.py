@@ -343,6 +343,14 @@ class ExerciseBlockView:
     # весу, один и тот же подход показывал 11.7 кг на экране тренировки и 105 кг
     # рекордом в зале славы. None — обычное железо: нагрузка равна записанному.
     set_loads: list[float] | None = None
+    # Рекорд, поставленный этим упражнением именно в этой тренировке: на
+    # сколько e1RM обошёл прошлый лучший, а для упражнений своим весом —
+    # повторы в подходе. Раньше это жило отдельным блоком «🔥 Рекорды и
+    # сравнения» под карточкой, где имя упражнения приходилось называть заново,
+    # и глаз бегал между двумя списками одного и того же. None — рекорда нет
+    # (или это первая сессия упражнения, бить нечего). См. view_builder.
+    record_e1rm_delta: float | None = None
+    record_reps: int | None = None
 
     def load_for(self, index: int) -> float:
         """Нагрузка подхода — то, по чему считается e1RM (не то, что показано)."""
@@ -363,6 +371,13 @@ class ExerciseBlockView:
     @property
     def tonnage(self) -> float:
         return sum(w * r for w, r in self.sets)
+
+    @property
+    def load_tonnage(self) -> float:
+        """Тоннаж по фактической нагрузке — то же, что считает
+        analytics.SessionStats.tonnage. Отличается от `tonnage` только там, где
+        записанный вес не равен нагрузке (подтягивания «0×12» — это не ноль)."""
+        return sum(self.load_for(i) * r for i, (_w, r) in enumerate(self.sets))
 
     @property
     def is_bodyweight(self) -> bool:
@@ -493,6 +508,47 @@ def _collapse_formatted_sets(formatted: list[str]) -> list[str]:
     return [f"{s} ×{n}" if n > 1 else s for s, n in collapsed]
 
 
+def format_block_record(
+    block: ExerciseBlockView, unit: str = "kg", show_extra: bool = True,
+    since: str | None = None,
+) -> str | None:
+    """Строка рекорда внутри блока упражнения — или None, если рекорда нет.
+
+    Стоит рядом с подходами, которыми рекорд и поставлен: отдельный список
+    «🔥 Рекорды и сравнения» под карточкой повторял имена упражнений и заставлял
+    читать одну тренировку дважды. 🔥 — закреплённое эмодзи рекорда
+    (TONE_OF_VOICE.md), и в блоке оно ровно одно.
+
+    Рекорд e1RM молчит при выключенных доп. цифрах: человек, убравший строку
+    «↳ e1RM», не должен получать e1RM через заднюю дверь. Рекорд повторов
+    показывается всегда — он про повторы, которые и так на экране.
+
+    since — дата, с которой стоял побитый рекорд; ставится, когда прошлый
+    лучший результат был на прошлой же тренировке (см. _render_single_block).
+    """
+    parts = _block_record_parts(block, unit, show_extra, since)
+    if parts is None:
+        return None
+    label, tail = parts
+    return f"🔥 <b>{label}</b> — {tail}"
+
+
+def _block_record_parts(
+    block: ExerciseBlockView, unit: str, show_extra: bool = True, since: str | None = None
+) -> tuple[str, str] | None:
+    """(подпись, продолжение) строки рекорда — общее у текстовой карточки и
+    картинки, которые различаются только оформлением."""
+    if block.record_reps is not None:
+        reps = block.record_reps
+        word = plural_ru(reps, ("повтор", "повтора", "повторов"))
+        return "Рекорд", f"{reps} {word} в подходе"
+    if block.record_e1rm_delta is not None and show_extra:
+        u = UNIT_LABELS.get(unit, "кг")
+        when = f" ({since})" if since else ""
+        return "Рекорд e1RM", f"на {block.record_e1rm_delta:.1f}{u} выше прошлого лучшего{when}"
+    return None
+
+
 def _render_single_block(block: ExerciseBlockView, show_extra: bool, unit: str = "kg") -> list[str]:
     u = UNIT_LABELS.get(unit, "кг")
     label = f"{escape(block.exercise_name)} [{escape(format_group_tag(block.group_name))}]"
@@ -504,13 +560,28 @@ def _render_single_block(block: ExerciseBlockView, show_extra: bool, unit: str =
         lines.extend(f"  • {s}" for s in _collapse_formatted_sets(formatted))
     else:
         lines.append("  <i>подходов нет</i>")
+    # Прошлый рекорд стоял с прошлой же тренировки — тогда «↑+5.7 vs 03.08» и
+    # «на 5.7 выше прошлого лучшего» это одно и то же число дважды. Дельта
+    # уезжает в строку рекорда вместе с датой, а строка e1RM остаётся голой.
+    prev_holds_the_record = (
+        block.record_e1rm_delta is not None
+        and block.prev_sets is not None
+        and block.prev_started_at is not None
+        and abs((block.top_e1rm - block.prev_top_e1rm) - block.record_e1rm_delta) < 0.05
+    )
     if show_extra and block.sets and not block.is_bodyweight:
         vs_prev = ""
-        if block.prev_sets and block.prev_started_at is not None:
+        if block.prev_sets and block.prev_started_at is not None and not prev_holds_the_record:
             when = format_date_short(block.prev_started_at)
             delta = block.top_e1rm - block.prev_top_e1rm
             vs_prev = f" ({_delta_arrow(delta)}{delta:+.1f}{u} vs {when})"
         lines.append(f"  ↳ e1RM {block.top_e1rm:.1f}{u}{vs_prev}")
+    record = format_block_record(
+        block, unit, show_extra,
+        since=format_date_short(block.prev_started_at) if prev_holds_the_record else None,
+    )
+    if record:
+        lines.append(f"  {record}")
     if block.prev_sets:
         formatted_prev = [format_set(w, r, block.prev_rpe_for(i)) for i, (w, r) in enumerate(block.prev_sets)]
         prev_str = ", ".join(_collapse_formatted_sets(formatted_prev))
@@ -1514,6 +1585,13 @@ def build_workout_card(
             body.append("  " + ", ".join(_collapse_formatted_sets(formatted)))
         else:
             body.append("  — без подходов")
+        # Рекорд едет и на картинку: её уносят в чат с друзьями, и «на 5.7кг
+        # выше прошлого лучшего» — ровно то, ради чего её уносят. ★ вместо 🔥
+        # — картинку рисует matplotlib, эмодзи там выходят пустыми квадратами
+        # (см. charts.render_workout_card), а звёздочка есть в шрифте.
+        record = _block_record_parts(block, unit)
+        if record:
+            body.append(f"  ★ {record[0]} — {record[1]}")
         exercise_count += 1
         set_count += len(block.sets)
         tonnage += block.tonnage
@@ -1655,38 +1733,6 @@ def _iso_to_ru(day: str) -> str:
         return format_day_month_ru(dt.date.fromisoformat(day))
     except ValueError:
         return ""
-
-
-def format_pr_detail(kind: str, value: float, extra: float | None = None, unit: str = "kg") -> str:
-    """A single PR line, scoped to an exercise that's already named by its surrounding header.
-
-    Без 🔥 в начале: блок целиком уже подписан «🔥 Рекорды и сравнения», и на
-    тренировке, где рекордов несколько, тот же огонёк повторялся в каждой
-    строке — сигнал перестаёт работать ровно тогда, когда его больше всего.
-    Строки идут маркером, как соседняя строка сравнения с её «↑».
-    """
-    u = UNIT_LABELS.get(unit, "кг")
-    if kind == "e1rm":
-        return f"• Новый рекорд e1RM: {value:.1f}{u}"
-    if kind == "reps":
-        # Только упражнения своим весом: вес там всегда 0, печатать нечего.
-        return f"• Новый рекорд повторов: {int(value)}"
-    return "• Новый рекорд"
-
-
-def build_exercise_highlights(groups: list[tuple[str, list[str], str | None]]) -> str:
-    """Render per-exercise PR/comparison call-outs grouped under each exercise name.
-
-    groups: list of (exercise_name, pr_detail_lines, comparison_line_or_None).
-    """
-    blocks = []
-    for name, pr_lines, comparison in groups:
-        lines = [f"<b>{escape(name)}</b>"]
-        lines.extend(pr_lines)
-        if comparison:
-            lines.append(comparison)
-        blocks.append("\n".join(lines))
-    return "\n\n".join(blocks)
 
 
 def format_new_achievements(new_codes: list[str]) -> str | None:
@@ -2216,12 +2262,6 @@ def _progression_reason(suggestion) -> str:
     if getattr(suggestion, "from_rule", False):
         return f" — по программе: взял {suggestion.from_reps} повторов, прибавляем"
     return f" — взял {suggestion.from_reps} повторов, добавляем вес"
-
-
-def format_comparison_line(e1rm_delta: float, unit: str = "kg") -> str:
-    u = UNIT_LABELS.get(unit, "кг")
-    arrow = "↑" if e1rm_delta > 0 else ("↓" if e1rm_delta < 0 else "→")
-    return f"{arrow} e1RM {e1rm_delta:+.1f}{u} vs предыдущего рекорда этого упражнения"
 
 
 # ---------- дневник питания ----------

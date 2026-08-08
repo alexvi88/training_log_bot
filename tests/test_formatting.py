@@ -544,59 +544,92 @@ def test_build_workout_preview_is_compact_no_1rm():
     assert "<i>подходов нет</i>" in lines  # exercise with no sets logged
 
 
-# ---------- format_pr_detail ----------
+# ---------- format_block_record ----------
 
 
-def test_format_pr_detail_e1rm():
-    text = formatting.format_pr_detail("e1rm", 133.3)
-    assert text == "• Новый рекорд e1RM: 133.3кг"
+def _record_block(**kwargs):
+    return formatting.ExerciseBlockView(
+        group_name="спина", exercise_name="Тяга", sets=[(100.0, 5)], **kwargs
+    )
 
 
-def test_format_pr_detail_bodyweight_reps():
-    text = formatting.format_pr_detail("reps", 12)
-    assert text == "• Новый рекорд повторов: 12"
+def test_format_block_record_e1rm_delta():
+    text = formatting.format_block_record(_record_block(record_e1rm_delta=9.1))
+    assert text == "🔥 <b>Рекорд e1RM</b> — на 9.1кг выше прошлого лучшего"
 
 
-def test_format_pr_detail_unknown_kind_falls_back():
-    assert formatting.format_pr_detail("tonnage", 1000) == "• Новый рекорд"
+def test_format_block_record_e1rm_respects_unit():
+    text = formatting.format_block_record(_record_block(record_e1rm_delta=9.1), unit="lb")
+    assert text.endswith("9.1lb выше прошлого лучшего")
 
 
-def test_format_pr_detail_respects_unit():
-    text = formatting.format_pr_detail("e1rm", 133.3, unit="lb")
-    assert text.endswith("lb")
+def test_format_block_record_e1rm_hidden_without_extra_stats():
+    block = _record_block(record_e1rm_delta=9.1)
+    assert formatting.format_block_record(block, show_extra=False) is None
 
 
-# ---------- build_exercise_highlights ----------
+def test_format_block_record_reps_survives_hidden_extra_stats():
+    block = _record_block(record_reps=15)
+    assert formatting.format_block_record(block, show_extra=False) == (
+        "🔥 <b>Рекорд</b> — 15 повторов в подходе"
+    )
 
 
-def test_build_exercise_highlights_groups_and_joins():
-    groups = [
-        ("Жим лёжа", ["🔥 Новый рекорд e1RM: 133.3 кг"], "↑ e1RM +5.0 кг vs прошлой тренировки этого упражнения"),
-        ("Подтягивания", ["🔥 Новый рекорд повторов: 15"], None),
-    ]
-    text = formatting.build_exercise_highlights(groups)
-    blocks = text.split("\n\n")
-    assert len(blocks) == 2
-    assert "<b>Жим лёжа</b>" in blocks[0]
-    assert "Новый рекорд e1RM" in blocks[0]
-    assert "vs прошлой тренировки" in blocks[0]
-    assert "<b>Подтягивания</b>" in blocks[1]
-    assert "vs прошлой" not in blocks[1]
+def test_format_block_record_reps_plural():
+    assert "2 повтора в подходе" in formatting.format_block_record(_record_block(record_reps=2))
 
 
-# ---------- format_comparison_line ----------
+def test_format_block_record_absent():
+    assert formatting.format_block_record(_record_block()) is None
 
 
-def test_format_comparison_line_up():
-    assert formatting.format_comparison_line(5.0).startswith("↑")
+def test_record_from_the_previous_session_prints_its_delta_once():
+    """Прошлый рекорд стоял с прошлой тренировки: «+9.1 vs 03.08» и «на 9.1
+    выше прошлого лучшего» — одно число, и печатается оно один раз."""
+    block = formatting.ExerciseBlockView(
+        group_name="спина",
+        exercise_name="Тяга",
+        sets=[(110.0, 5)],
+        prev_sets=[(100.0, 5)],
+        prev_started_at=dt.datetime(2026, 8, 3),
+    )
+    block.record_e1rm_delta = block.top_e1rm - block.prev_top_e1rm
+    text = formatting.build_workout_summary(dt.datetime(2026, 8, 7), [block])
+    assert "vs 03.08" not in text
+    assert "выше прошлого лучшего (03.08)" in text
 
 
-def test_format_comparison_line_down():
-    assert formatting.format_comparison_line(-5.0).startswith("↓")
+def test_record_older_than_the_previous_session_keeps_both_numbers():
+    """Рекорд с более старой тренировки — дельты разные, и обе несут смысл:
+    насколько выше прошлого раза и насколько выше лучшего за всё время."""
+    block = formatting.ExerciseBlockView(
+        group_name="спина",
+        exercise_name="Тяга",
+        sets=[(110.0, 5)],
+        prev_sets=[(90.0, 5)],
+        prev_started_at=dt.datetime(2026, 8, 3),
+        record_e1rm_delta=4.0,
+    )
+    text = formatting.build_workout_summary(dt.datetime(2026, 8, 7), [block])
+    assert "vs 03.08" in text
+    assert "на 4.0кг выше прошлого лучшего" in text
 
 
-def test_format_comparison_line_flat():
-    assert formatting.format_comparison_line(0.0).startswith("→")
+def test_render_block_puts_record_next_to_its_sets():
+    """Рекорд читается там же, где подходы, которыми он поставлен, — отдельного
+    списка «Рекорды и сравнения» под карточкой больше нет."""
+    block = formatting.ExerciseBlockView(
+        group_name="спина",
+        exercise_name="Тяга",
+        sets=[(100.0, 5)],
+        prev_sets=[(90.0, 5)],
+        prev_started_at=dt.datetime(2026, 8, 3),
+        record_e1rm_delta=9.1,
+    )
+    text = formatting.build_workout_summary(dt.datetime(2026, 8, 7), [block])
+    lines = text.split("\n")
+    e1rm_index = next(i for i, line in enumerate(lines) if "↳ e1RM" in line)
+    assert lines[e1rm_index + 1] == "  🔥 <b>Рекорд e1RM</b> — на 9.1кг выше прошлого лучшего"
 
 
 # ---------- format_progress_screen ----------
@@ -1216,6 +1249,17 @@ def test_real_tables_still_go_the_old_way():
 
     assert "|" not in out
     assert "210" in out
+
+
+def test_workout_card_image_carries_the_record_without_emoji():
+    """Картинку рисует matplotlib — эмодзи там пустые квадраты, поэтому рекорд
+    едет со звёздочкой. Но едет: ради него картинку и пересылают."""
+    block = formatting.ExerciseBlockView(
+        group_name="спина", exercise_name="Тяга", sets=[(110.0, 5)], record_e1rm_delta=5.7
+    )
+    _title, body, _footer, _note = formatting.build_workout_card(dt.datetime(2026, 8, 7), [block])
+    assert "  ★ Рекорд e1RM — на 5.7кг выше прошлого лучшего" in body
+    assert "🔥" not in "".join(body)
 
 
 # ---------- находка 44: одно правило прогрессии на всю программу ----------

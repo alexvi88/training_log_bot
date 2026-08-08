@@ -148,7 +148,8 @@ async def admin_history_item(callback: CallbackQuery, state: FSMContext):
         return
     user = await db.get_user(target_user_id)
     blocks = await view_builder.build_block_views(
-        workout_id, user["e1rm_formula"], previous_before=workout["started_at"]
+        workout_id, user["e1rm_formula"], previous_before=workout["started_at"],
+        mark_records=True,
     )
     started = dt.datetime.fromisoformat(workout["started_at"])
     duration_seconds = await view_builder.workout_duration_seconds(workout)

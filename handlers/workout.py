@@ -2705,9 +2705,9 @@ async def _program_complete_stats(workout_id: int) -> tuple[int, int, float]:
     """Cheap (exercise count, set count, tonnage-in-user-unit) for the "🎉
     Программа пройдена" screen.
 
-    Deliberately *not* `_record_highlights_and_summary` — that also walks every
-    exercise's whole history to compute PRs/comparisons, which is the right
-    cost for the one finish card at the end of the workout but wasted work for
+    Deliberately *not* `_finished_summary` — that also walks every exercise's
+    whole history for the «прошлая»/рекорд lines, which is the right cost for
+    the one finish card at the end of the workout but wasted work for
     an in-session moment that fires every time the plan empties out (including
     mid-workout, well before the user has decided to finish). Tonnage here is
     the same sum-of-weight×reps `analytics.SessionStats.tonnage` uses, just
@@ -2972,76 +2972,36 @@ async def cancel_finish(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-async def _record_highlights_and_summary(
+async def _finished_summary(
     workout, user, note: str | None
-) -> tuple[Callable[[int | None], str], str, float, float | None]:
-    """Recomputes the per-exercise PR/comparison highlights, this session's total
-    tonnage, and a builder for the header+sets summary text of a finished workout.
+) -> tuple[Callable[[int | None], str], float, float | None]:
+    """Собирает карточку завершённой тренировки: билдер текста «шапка + подходы»,
+    тоннаж этой сессии и её длительность.
 
-    The summary comes back as a callable(max_chars) rather than a finished
-    string: callers combine it with tonnage/highlights/achievements/AI-comment
-    text they assemble themselves, and only once all of that is known can the
-    summary's own length budget be computed (see formatting.fit_workout_text) —
-    building the final string here would be measuring the wrong thing.
+    Рекорды отдельным списком отсюда больше не возвращаются — они живут строкой
+    🔥 внутри своего же упражнения (view_builder.build_block_views(mark_records=True)).
 
-    Split out of _finalize_workout so the same computation can re-render the
-    completion card later when a note is attached via "📝 Заметка" — it only
-    depends on what's already saved in the DB, not on anything from the finish flow.
+    Текст приходит функцией callable(max_chars), а не готовой строкой: вызывающий
+    склеивает его с тоннажем/достижениями/комментарием AI, которые собирает сам,
+    и только когда всё это известно, считается бюджет длины самой сводки
+    (formatting.fit_workout_text) — собрать финальную строку здесь значило бы
+    мерить не то.
+
+    Вынесено из _finalize_workout, чтобы тем же кодом перерисовывать карточку
+    позже — когда к ней прицепили заметку через «📝 Заметка» или открыли из
+    истории: всё нужное уже лежит в базе, ничего из потока завершения не нужно.
     """
-    workout_id = workout["id"]
-    formula = user["e1rm_formula"]
-    exercise_ids = await db.list_exercise_ids_for_workout(workout_id)
-    highlight_groups: list[tuple[str, list[str], str | None]] = []
-    session_tonnage = 0.0
-    started_at = dt.datetime.fromisoformat(workout["started_at"])
-
-    for ex_id in exercise_ids:
-        ex = await db.get_exercise(ex_id)
-        history_rows = await db.list_sets_for_exercise(ex_id, exclude_workout_id=workout_id)
-        history_set_rows = [
-            analytics.SetRow(db.load_of(r), r["reps"], r["workout_id"], r["started_at"])
-            for r in history_rows
-            if r["started_at"] < workout["started_at"]
-        ]
-        prior_sessions = analytics.group_sets_by_session(history_set_rows)
-        for s in prior_sessions:
-            s.formula = formula
-
-        this_rows = await db.list_sets_for_workout_exercise(workout_id, ex_id)
-        this_set_rows = [
-            analytics.SetRow(db.load_of(r), r["reps"], workout_id, workout["started_at"])
-            for r in this_rows
-        ]
-        new_session = analytics.SessionStats(
-            workout_id=workout_id, started_at=workout["started_at"], sets=this_set_rows, formula=formula
-        )
-        if not new_session.sets:
-            continue
-        session_tonnage += new_session.tonnage
-
-        records = analytics.detect_new_records(prior_sessions, new_session)
-        # e1RM-рекорды в отдельные строки не идут — их покрывает строка
-        # сравнения ниже; остаются рекорды повторов упражнений своим весом.
-        pr_details = [
-            formatting.format_pr_detail(r.kind, r.value, r.extra, unit=user["unit"])
-            for r in records
-            if r.kind != "e1rm"
-        ]
-
-        comparison_line = None
-        if prior_sessions and not new_session.is_bodyweight_mode:
-            prior_pr = analytics.compute_personal_records(prior_sessions)
-            e1rm_delta = new_session.top_e1rm - prior_pr.max_e1rm
-            if e1rm_delta > 0:
-                comparison_line = formatting.format_comparison_line(e1rm_delta, unit=user["unit"])
-
-        if pr_details or comparison_line:
-            highlight_groups.append((ex["display_name"], pr_details, comparison_line))
-
     blocks = await view_builder.build_block_views(
-        workout_id, formula, previous_before=workout["started_at"]
+        workout["id"],
+        user["e1rm_formula"],
+        previous_before=workout["started_at"],
+        mark_records=True,
     )
     duration_seconds = await view_builder.workout_duration_seconds(workout)
+    started_at = dt.datetime.fromisoformat(workout["started_at"])
+    # По нагрузке, а не по записанному весу: подтягивания «0×12» — не ноль тонн,
+    # и зал славы считает их так же (db.load_of).
+    session_tonnage = sum(block.load_tonnage for block in blocks)
 
     def summary_fn(max_chars: int | None) -> str:
         return formatting.build_workout_summary(
@@ -3049,8 +3009,7 @@ async def _record_highlights_and_summary(
             duration_seconds=duration_seconds, unit=user["unit"], max_chars=max_chars,
         )
 
-    highlights = formatting.build_exercise_highlights(highlight_groups)
-    return summary_fn, highlights, session_tonnage, duration_seconds
+    return summary_fn, session_tonnage, duration_seconds
 
 
 _UNSET = object()
@@ -3085,8 +3044,8 @@ async def _rank_promotion(user_id: int, user) -> "analytics.Rank | None":
 
 
 async def _finished_workout_card_text(workout, user, note: str | None, comment=_UNSET) -> str:
-    """The completion card's body for an already-finished workout: sets, PR
-    highlights, tonnage-equivalent and any AI-trainer comment — everything
+    """The completion card's body for an already-finished workout: sets with
+    their own 🔥 record lines, tonnage-equivalent and any AI-trainer comment — everything
     that's still true if you look at the workout again later, e.g. right after
     attaching a note via "📝 Заметка", or when reopening it from history.
     Deliberately excludes the milestone/achievement banners, which only belong
@@ -3097,9 +3056,7 @@ async def _finished_workout_card_text(workout, user, note: str | None, comment=_
     itself, e.g. history's show_history_item generating a fresh comment via
     ai_trainer.ensure_workout_comment.
     """
-    summary_fn, highlights, session_tonnage, _duration = await _record_highlights_and_summary(
-        workout, user, note
-    )
+    summary_fn, session_tonnage, _duration = await _finished_summary(workout, user, note)
     suffix = ""
     equivalent = formatting.format_tonnage_equivalent(
         session_tonnage, seed=workout["id"], unit=user["unit"]
@@ -3107,9 +3064,6 @@ async def _finished_workout_card_text(workout, user, note: str | None, comment=_
     if equivalent:
         tonnage = formatting.format_tonnage(session_tonnage, user["unit"])
         suffix += f"\n\n🏋️ Суммарно за тренировку — {tonnage}. {equivalent}"
-    if highlights:
-        header = "🔥 <b>Рекорды и сравнения</b>"
-        suffix += f"\n{formatting.DIVIDER}\n{header}\n{formatting.collapsible_if_long(highlights)}"
     effective_comment = workout["ai_comment"] if comment is _UNSET else comment
     if effective_comment:
         suffix += "\n" + formatting.build_ai_comment_block(effective_comment)
@@ -3225,7 +3179,7 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
         return
     workout = await db.get_workout(workout_id)
 
-    summary_fn, highlights, session_tonnage, duration_seconds = await _record_highlights_and_summary(
+    summary_fn, session_tonnage, duration_seconds = await _finished_summary(
         workout, user, note
     )
     suffix = ""
@@ -3251,9 +3205,6 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
     if achievement_line:
         suffix += "\n\n" + achievement_line
 
-    if highlights:
-        header = "🔥 <b>Рекорды и сравнения</b>"
-        suffix += f"\n{formatting.DIVIDER}\n{header}\n{formatting.collapsible_if_long(highlights)}"
 
     prefix = "✅ Записал как прошлую тренировку\n\n" if is_backfill else ""
 
@@ -3297,6 +3248,6 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
     # черновик его программы переживают тренировки, сохраняем их.
     await clear_state_keep_ai(state)
     # No auto-sent menu message here on purpose: it used to bury the card (the
-    # PR/comparison highlights, the AI comment) the instant it appeared. The
+    # рекорды в упражнениях, the AI comment) the instant it appeared. The
     # card's own "🏠 Меню" button (live:back_to_menu below) opens the menu
     # in its place instead, so it's a beat the user chooses, not one forced on them.

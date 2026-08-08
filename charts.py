@@ -702,6 +702,10 @@ def render_workout_card(
     for line in body_lines:
         # exercise headers start at column 0; set lines are indented with two spaces.
         style = "exercise" if line and not line.startswith(" ") else "normal"
+        # Строка рекорда приходит со звёздочкой (formatting.build_workout_card) —
+        # на картинке она выделяется цветом, как и подпись внизу.
+        if line.lstrip().startswith("★"):
+            style = "accent"
         # Wrapped for the same reason the note above is: the figure is a fixed
         # 6.6in wide and nothing clips text, so an over-long line (a long exercise
         # name, or an exercise with many distinct sets) just ran off the right

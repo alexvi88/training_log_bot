@@ -823,8 +823,11 @@ async def comment_on_workout(user_id: int, workout_id: int) -> str:
         return "Тренировка не найдена."
     user = await db.get_user(user_id)
     started_at = dt.datetime.fromisoformat(workout["started_at"])
+    # mark_records: та же карточка, что видит человек, — включая строки рекордов.
+    # Без них модель хвалила «хороший вес» там, где стоял личный рекорд.
     blocks = await view_builder.build_block_views(
-        workout_id, user["e1rm_formula"], previous_before=workout["started_at"]
+        workout_id, user["e1rm_formula"], previous_before=workout["started_at"],
+        mark_records=True,
     )
     duration_seconds = await view_builder.workout_duration_seconds(workout)
     card_text = formatting.build_workout_summary(
