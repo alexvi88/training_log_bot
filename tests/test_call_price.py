@@ -29,6 +29,24 @@ def test_unknown_model_falls_back_to_default():
     assert config.call_price_usd("нет-такой-модели", 1000, 1000) == pytest.approx(inp + out)
 
 
+def test_default_price_is_the_most_expensive_known_rate():
+    """Модель не в таблице обязана считаться ДОРОГО, а не дёшево.
+
+    Дефолт когда-то был прибит к ставке grok-4-1-fast — самой дешёвой строке
+    таблицы, к тому же снятой моделью. Переключись мы на новую модель, забыв
+    добавить её в прайс, — лог и дневной отчёт занизили бы расход в десять раз и
+    молча: занижение выглядит как хорошая новость, его не идут проверять.
+    """
+    inp, out = config.DEFAULT_LLM_PRICE_USD_PER_1K
+    for model, (known_inp, known_out) in config.LLM_PRICES_USD_PER_1K.items():
+        assert inp >= known_inp, f"дефолт дешевле входа {model}"
+        assert out >= known_out, f"дефолт дешевле выхода {model}"
+    # Любой известный вызов не дороже такого же вызова по дефолтной ставке.
+    for model in config.LLM_PRICES_USD_PER_1K:
+        known = config.call_price_usd(model, 10_000, 1_000)
+        assert known <= config.call_price_usd("нет-такой-модели", 10_000, 1_000)
+
+
 def test_cached_input_is_cheaper_than_fresh(monkeypatch):
     """По прайсу grok-4.5: вход $2/1M, кэшированный $0.30/1M — то есть 0.15."""
     monkeypatch.setattr(config, "CACHED_INPUT_PRICE_MULTIPLIER", 0.15)
