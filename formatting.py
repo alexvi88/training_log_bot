@@ -1944,8 +1944,9 @@ def build_hall_of_fame(
     lines = []
     if rank is not None:
         lines.append(format_rank_line(rank, rank_gap))
-    w = plural_ru(total_workouts, ("тренировка", "тренировки", "тренировок"))
-    lines.append(f"🗓 Всего тренировок: <b>{total_workouts}</b> {w}")
+    # Без слова после числа: подпись «Всего тренировок» его уже произнесла, и
+    # строка читалась как «Всего тренировок: 20 тренировок».
+    lines.append(f"🗓 Всего тренировок: <b>{total_workouts}</b>")
 
     # `tonnage_kg` arrives in the user's own unit despite the name — a ton is a
     # ton, so convert before comparing against one (see format_tonnage).

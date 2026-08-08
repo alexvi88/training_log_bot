@@ -1543,6 +1543,32 @@ async def test_tools_can_still_be_skipped_on_the_very_first_question(
     assert "tools" not in main_call
 
 
+# ---------- находка 36: тренер не записывает того, чего не спрашивал ----------
+
+
+async def test_bare_no_is_not_recorded_as_a_limitation(fresh_db, user_id):
+    """Живой прогон: опросник спросил про дни, время, железо, опыт и цель — про
+    травмы не спрашивал вовсе, — а тренер отчитался «травм нет» и записал это в
+    профиль. Экран «Обо мне» подписан «Записал с твоих слов»."""
+    result, _ = await ai_trainer._save_athlete_profile(user_id, {"limitations": "нет"})
+
+    assert result.get("saved") is False
+    assert (await fresh_db.get_user(user_id))["limitations"] is None
+
+
+async def test_a_real_limitation_is_still_recorded(fresh_db, user_id):
+    await ai_trainer._save_athlete_profile(user_id, {"limitations": "болит правое плечо"})
+
+    assert (await fresh_db.get_user(user_id))["limitations"] == "болит правое плечо"
+
+
+async def test_a_blank_limitation_does_not_block_the_other_fields(fresh_db, user_id):
+    await ai_trainer._save_athlete_profile(user_id, {"limitations": "нет", "goal": "масса"})
+
+    user = await fresh_db.get_user(user_id)
+    assert user["goal"] == "масса"
+    assert user["limitations"] is None
+
 async def test_prompt_forbids_calling_a_triple_a_one_rep_max():
     """В проде тренер написал «разово на штанге максимум 210», хотя двумя строками
     выше стояло «210×3 (e1RM ~231)». И посчитал до 250 разрыв +40кг вместо +19:
