@@ -239,6 +239,33 @@ async def test_rewritten_text_comes_back_for_a_second_look(fresh_db, monkeypatch
     assert bot.texts_to(ADMIN_ID)[0] == ann.text
 
 
+async def test_preview_shown_before_fingerprints_existed_comes_back_once(fresh_db, monkeypatch):
+    """Анонс, повисший на проверке до появления отпечатков, показывается заново.
+
+    Живой случай: превью висело со старым текстом, отпечатка у записи не было,
+    и переписанная редакция не пришла — хотя весь смысл правки был в том,
+    чтобы прийти. Повторяется это ровно один раз: показ пишет отпечаток.
+    """
+    await _users(fresh_db, ADMIN_ID, 1)
+    monkeypatch.setattr(announcements.asyncio, "sleep", AsyncMock())
+    ann = _announcement()
+    monkeypatch.setattr(announcements, "ANNOUNCEMENTS", [ann])
+    await announcements.run_pending_announcements(FakeBot())
+    # Так выглядит запись, сделанная версией без отпечатков.
+    await fresh_db.conn().execute(
+        "UPDATE announcement_state SET text_hash = NULL WHERE key = ?", (ann.key,)
+    )
+    await fresh_db.conn().commit()
+
+    bot = FakeBot()
+    await announcements.run_pending_announcements(bot)
+    assert bot.texts_to(ADMIN_ID)[0] == ann.text
+
+    quiet = FakeBot()
+    await announcements.run_pending_announcements(quiet)
+    assert quiet.sent == []
+
+
 async def test_unchanged_text_stays_quiet_across_restarts(fresh_db, monkeypatch):
     await _users(fresh_db, ADMIN_ID, 1)
     monkeypatch.setattr(announcements.asyncio, "sleep", AsyncMock())

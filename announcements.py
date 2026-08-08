@@ -277,12 +277,19 @@ async def _report_to_admin(bot: Bot, ann: Announcement, sent: int, blocked: int,
 # ---------- фоновая задача старта ----------
 
 
-async def _text_changed(ann: Announcement) -> bool:
+async def _needs_second_look(ann: Announcement) -> bool:
+    """Стоит ли показать ждущий решения анонс заново.
+
+    Отпечатка нет — превью показала версия бота, которая их ещё не писала, и
+    сверить показанное не с чем. Сначала тут стояло «нет отпечатка — значит
+    тот же текст, молчим»; на живом развороте это и вышло боком: анонс к тому
+    моменту уже висел на проверке со старым текстом, отпечатка у него не было,
+    и переписанная редакция не пришла, хотя весь смысл правки был в том, чтобы
+    прийти. Показываем — и записываем отпечаток, так что повторяется это ровно
+    один раз на рассылку, а не на каждый рестарт.
+    """
     stored = await db.get_announcement_text_hash(ann.key)
-    # None — превью из версии, которая отпечатков ещё не писала. Считаем, что
-    # это тот же текст: показать лишний раз безобиднее, но дёргать админа на
-    # каждом рестарте после обновления — нет.
-    return stored is not None and stored != text_hash(ann)
+    return stored is None or stored != text_hash(ann)
 
 
 async def run_pending_announcements(bot: Bot) -> None:
@@ -292,7 +299,8 @@ async def run_pending_announcements(bot: Bot) -> None:
     десятый:
 
     * нет записи — показать админу и ждать;
-    * `preview` — админ ещё не ответил: молчим, пока текст не переписали;
+    * `preview` — админ ещё не ответил: молчим, пока текст и кнопки те же,
+      что он видел (сверяем по отпечатку — см. `_needs_second_look`);
     * `approved` — рассылка одобрена, но контейнер перезапустился посреди неё:
       дорассылаем оставшимся (получившие отсеиваются по `pushes`);
     * `declined` — забыли.
@@ -310,11 +318,11 @@ async def run_pending_announcements(bot: Bot) -> None:
                 await send_preview(bot, ann)
             elif status == STATUS_APPROVED:
                 await deliver_and_report(bot, ann)
-            elif status == STATUS_PREVIEW and await _text_changed(ann):
+            elif status == STATUS_PREVIEW and await _needs_second_look(ann):
                 # Текст переписали после показа: то, что админ видел, больше не
                 # существует, а новую редакцию никто не проверял. Показываем
-                # заново — заодно это единственный способ вернуть анонс,
-                # потерявшийся в чате, не вспоминая про /announce.
+                # заново — заодно это возвращает анонс, потерявшийся в чате,
+                # не вспоминая про /announce.
                 logger.info("Announcement %s changed since the preview, showing it again", ann.key)
                 await send_preview(bot, ann)
         except Exception:
