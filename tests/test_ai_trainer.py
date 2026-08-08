@@ -1587,3 +1587,20 @@ async def test_prompt_bans_telegraphic_style_and_slashes():
     assert "КОРОТКИЕ ФРАЗЫ" in prompt
     assert "Слэш — не слово" in prompt
     assert "гниёт" in prompt, "нужен пример выдуманной метафоры"
+
+
+async def test_prompt_ties_heavy_and_light_to_percent_of_e1rm():
+    """В проде тренер назвал 200/190/180/180 «четырьмя почти максимальными» и
+    отругал за них — при e1RM 231 это 87/82/78/78%, то есть один тяжёлый и три
+    бэкоффа. Ровно та схема, которую он тут же и посоветовал."""
+    prompt = ai_trainer.SYSTEM_PROMPT
+    assert "ПРОЦЕНТ ОТ e1RM" in prompt
+    assert "90%" in prompt, "нужен порог, ниже которого вес не «почти максимальный»"
+    assert "БЭКОФФ" in prompt.upper(), "убывающая лестница должна распознаваться"
+
+
+async def test_prompt_requires_owning_a_correction():
+    """«Не +40 от тройки» — опровержение своей же прошлой фразы, которую человек не
+    произносил. Теперь история диалога не переписывается, и тренер видит свои
+    старые ответы: он должен признавать ошибку от первого лица, а не спорить."""
+    assert "посчитал неверно" in ai_trainer.SYSTEM_PROMPT
