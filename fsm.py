@@ -40,6 +40,10 @@ class ProgressFlow(StatesGroup):
 
 class SettingsFlow(StatesGroup):
     menu = State()
+    # Экран «Что тренер про тебя знает». Отдельное состояние нужно ровно затем,
+    # чтобы у обещания «просто скажи мне, как правильно» был слушатель: в
+    # SettingsFlow.menu набранный текст уходил в никуда и получал «Не понял 🤔».
+    profile = State()
 
 
 class BackfillFlow(StatesGroup):

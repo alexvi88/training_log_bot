@@ -125,7 +125,6 @@ async def test_overview_reports_null_profile_fields_when_unknown(fresh_db, user_
     assert payload["profile"] == {
         "experience": None,
         "goal": None,
-        "days_per_week": None,
         "equipment": None,
         "limitations": None,
     }
@@ -137,6 +136,7 @@ async def test_overview_surfaces_a_saved_profile(fresh_db, user_id):
     иначе он продолжит переспрашивать одно и то же."""
     await fresh_db.update_user(
         user_id, experience="год-два", goal="масса", days_per_week=4,
+        # Дни в профиль больше не отдаются — колонка осталась, читателя у неё нет.
         equipment=json.dumps(["штанга", "гантели"], ensure_ascii=False),
         limitations="болит плечо",
     )
@@ -146,7 +146,6 @@ async def test_overview_surfaces_a_saved_profile(fresh_db, user_id):
     assert payload["profile"] == {
         "experience": "год-два",
         "goal": "масса",
-        "days_per_week": 4,
         "equipment": ["штанга", "гантели"],
         "limitations": "болит плечо",
     }
@@ -1050,12 +1049,11 @@ async def test_save_athlete_profile_tool_is_offered_to_the_model():
 async def test_save_athlete_profile_writes_only_the_provided_fields(fresh_db, user_id):
     payload = await _confirm_profile(
         fresh_db, user_id,
-        {"days_per_week": 4, "goal": "масса", "equipment": ["штанга", "гантели"]},
+        {"goal": "масса", "equipment": ["штанга", "гантели"]},
     )
     assert payload["saved"] is True
 
     user = await fresh_db.get_user(user_id)
-    assert user["days_per_week"] == 4
     assert user["goal"] == "масса"
     assert json.loads(user["equipment"]) == ["штанга", "гантели"]
     # Не присланное этим вызовом — не тронуто (осталось null).
@@ -1066,11 +1064,11 @@ async def test_save_athlete_profile_partial_update_does_not_erase_earlier_fields
     """Раньше эти ответы оседали только в переписке — здесь важно, что второй
     частичный вызов не стирает то, что записал первый."""
     await _confirm_profile(fresh_db, user_id, {"goal": "масса"})
-    await _confirm_profile(fresh_db, user_id, {"days_per_week": 3})
+    await _confirm_profile(fresh_db, user_id, {"experience": "новичок"})
 
     user = await fresh_db.get_user(user_id)
     assert user["goal"] == "масса"
-    assert user["days_per_week"] == 3
+    assert user["experience"] == "новичок"
 
 
 async def test_save_athlete_profile_with_nothing_useful_reports_not_saved(fresh_db, user_id):

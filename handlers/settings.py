@@ -8,7 +8,7 @@ from typing import Optional
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
-from aiogram.types import BufferedInputFile, CallbackQuery
+from aiogram.types import BufferedInputFile, CallbackQuery, Message
 
 import achievement_sync
 import config
@@ -16,7 +16,7 @@ import db
 import formatting
 import keyboards
 import ui
-from fsm import SettingsFlow
+from fsm import AITrainerFlow, SettingsFlow
 
 router = Router(name="settings")
 
@@ -70,9 +70,12 @@ def profile_rows(user) -> list[tuple[str, Optional[str]]]:
             # Поле пишет модель через json.dumps, но строка могла приехать и из
             # старой записи — показать как есть лучше, чем уронить экран.
             pass
-    days = user["days_per_week"]
+    # Дней в неделю тут нет: тренер их больше не запоминает — это параметр
+    # конкретной просьбы («собери на 2 дня»), а не факт о человеке, и
+    # запомненная двойка молча определяла все следующие программы (см.
+    # ai_trainer._save_athlete_profile). Колонка в базе осталась, но её никто
+    # не читает, так что и на экране ей делать нечего.
     return [
-        ("Дней в неделю", str(days) if days else None),
         ("Опыт", user["experience"]),
         ("Цель", user["goal"]),
         ("Оборудование", equipment),
@@ -102,10 +105,15 @@ async def settings_profile(callback: CallbackQuery, state: FSMContext):
     именно от них зависит, какую программу он соберёт.
     """
     user = await db.get_user(callback.from_user.id)
+    # Состояние, в котором у «просто скажи мне» есть слушатель (см.
+    # profile_correction ниже). Без него набранный тут текст попадал в общий
+    # «Не понял 🤔 Вопрос тренеру — жми "AI-тренер"», и экран врал прямым
+    # текстом: предлагал сказать, как правильно, и не слышал ответа.
+    await state.set_state(SettingsFlow.profile)
     lines = _profile_lines(user)
     known = any(not line.endswith("</b> —") for line in lines)
     tail = (
-        "Что-то не так — просто скажи мне, как правильно."
+        "Что-то не так — напиши сюда, как правильно, и я поправлю."
         if known
         else "Пока я про тебя ничего не знаю. Загляни в 🤖 AI-тренер и расскажи, "
              "чего хочешь от зала, — запомню и буду собирать программы под это."
@@ -120,6 +128,42 @@ async def settings_profile(callback: CallbackQuery, state: FSMContext):
         callback, text, reply_markup=keyboards.profile_keyboard(), parse_mode="HTML"
     )
     await callback.answer()
+
+
+PROFILE_EDIT_FRAME = (
+    "Человек пишет это, глядя на экран «Что я про тебя знаю» — то есть правит "
+    "твою память о себе, а не спрашивает про тренировки. Что просит убрать — "
+    "стирай через save_athlete_profile с forget, что просит поменять — пиши "
+    "туда же новым значением. Потом одной строкой скажи, что стало с профилем.\n\n"
+    "Его слова: "
+)
+
+
+@router.message(SettingsFlow.profile, F.text)
+async def profile_correction(message: Message, state: FSMContext):
+    """«Что-то не так — напиши сюда» — и текст правда уходит тренеру.
+
+    Правку памяти делает он же, тем же инструментом, что и запись: городить
+    отдельный редактор на пять полей ради «убери ограничения» — это пять
+    экранов там, где хватает одной фразы.
+    """
+    from handlers import ai_trainer as ai_handler
+
+    text = (message.text or "").strip()
+    if not text:
+        return
+    # Дальше человек уже в разговоре с тренером: он ответит текстом, и логично,
+    # что следующая реплика тоже уедет ему, а не упрётся в «Не понял».
+    await state.set_state(AITrainerFlow.chatting)
+    if not ai_handler._try_claim_busy(message.from_user.id):
+        await message.reply("Секунду, ещё думаю над прошлым вопросом 😅")
+        return
+    try:
+        await ai_handler._handle_question(
+            message, state, PROFILE_EDIT_FRAME + text, history_question=text
+        )
+    finally:
+        ai_handler._busy.discard(message.from_user.id)
 
 
 @router.callback_query(F.data == "settings:profileclear")

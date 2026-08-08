@@ -1203,7 +1203,7 @@ async def test_intro_shows_what_the_trainer_remembers_and_how_to_fix_it(
     и выход в меню, и перезапуск бота, поэтому свежее интро человек видит один
     раз в жизни — привяжи напоминание к нему, и его не увидит вообще никто."""
     monkeypatch.setattr(ai_trainer.ai_trainer, "is_configured", lambda: True)
-    await fresh_db.update_user(user_id, days_per_week=3, goal="масса")
+    await fresh_db.update_user(user_id, experience="новичок", goal="масса")
     state = await _make_state(user_id)
     await state.update_data(ai_history=[{"role": "user", "content": "как жим?"}])
     callback = _make_menu_ai_callback(user_id)
@@ -1213,7 +1213,7 @@ async def test_intro_shows_what_the_trainer_remembers_and_how_to_fix_it(
     call = callback.message.answer.await_args
     text = call.args[0] if call.args else call.kwargs["text"]
     assert "Что я про тебя помню" in text
-    assert "дней в неделю — 3" in text
+    assert "опыт — новичок" in text
     assert "цель — масса" in text
     assert "поправлю" in text
 

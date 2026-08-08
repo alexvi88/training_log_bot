@@ -566,11 +566,11 @@ async def test_several_profile_writes_in_one_turn_add_no_buttons(fresh_db, user_
     async def on_action(action: dict) -> None:
         captured.append(action)
 
-    for payload in ({"days_per_week": 3}, {"goal": "масса"}):
+    for payload in ({"experience": "новичок"}, {"goal": "масса"}):
         await ai_trainer.execute_tool(
             user_id, "save_athlete_profile", payload, on_action=on_action
         )
 
     assert captured == []
     user = await fresh_db.get_user(user_id)
-    assert (user["days_per_week"], user["goal"]) == (3, "масса")
+    assert (user["experience"], user["goal"]) == ("новичок", "масса")
