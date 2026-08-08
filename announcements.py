@@ -1,21 +1,32 @@
-"""Разовые релизные рассылки: одно сообщение про новую фичу, один раз на человека.
+"""Разовые релизные рассылки: сначала админу на проверку, потом всем.
 
 Зачем отдельный механизм, когда есть `/broadcast` и ежедневные пуши:
 
-* `/broadcast` — ручной: админ должен сидеть в чате с ботом и нажать кнопку.
-  Релиз выкатывается мержем, и рассылка должна уйти сама, без человека у
-  клавиатуры.
-* Ежедневный пуш (`engagement.py`) — это реакция на сигнал в дневнике
-  (пропуск, серия, звание). Релиз ни на какой сигнал не опирается: он про
-  продукт, а не про атлета, и приходит один раз всем.
+* `/broadcast` — ручной от начала до конца: админ должен сам написать текст,
+  сам собрать кнопки (а инлайн-кнопки он собрать и не может) и сам нажать
+  «Отправить». Релиз выкатывается мержем, и текст с кнопками должен приехать
+  вместе с кодом фичи, а не набираться руками в чате.
+* Ежедневный пуш (`engagement.py`) — реакция на сигнал в дневнике (пропуск,
+  серия, звание). Релиз ни на какой сигнал не опирается: он про продукт, а не
+  про атлета, и приходит один раз всем.
 
-Как это работает. Каждая рассылка — запись в `ANNOUNCEMENTS` со своим ключом.
-Ключ едет в `pushes.category`, и по нему же считается, кому ещё не уходило
-(`db.list_announcement_recipients`). Поэтому перезапуск контейнера,
-повторный деплой и докатка не рассылают ничего второй раз: отметка о доставке
-лежит в базе, а не в памяти процесса. Отправленную рассылку из `ANNOUNCEMENTS`
-можно удалить хоть в тот же день — ключи в базе останутся, и даже если запись
-вернут обратно, второй раз никто её не получит.
+## Как это идёт по шагам
+
+1. Бот поднялся после мержа. Через минуту он присылает анонс **админу** — ровно
+   в том виде, в каком его увидят люди: та же картинка, тот же текст, те же
+   рабочие кнопки. Следом — короткая справка «уйдёт N получателям» с двумя
+   кнопками: разослать или отклонить.
+2. Админ тыкает кнопки анонса и проверяет, что они ведут куда надо. Это живые
+   кнопки, а не картинка кнопок: они запускают те же сценарии, что у всех.
+3. Админ жмёт «Разослать всем» — и рассылка идёт. Или «Не надо» — и она больше
+   не всплывает.
+
+Ни один шаг не держится в памяти процесса: состояние лежит в
+`announcement_state`, а факт доставки конкретному человеку — строкой в
+`pushes` с ключом рассылки в `category`. Поэтому перезапуск контейнера на
+любом шаге ничего не ломает: анонс на проверке не показывается админу второй
+раз, одобренная рассылка продолжается с того места, где оборвалась, а
+получивший релиз не получит его снова.
 
 Звук. Весь бот стоит на `DefaultBotProperties(disable_notification=True)`,
 рассылка это наследует. Тихих часов тут нет намеренно: пояс у большинства
@@ -45,11 +56,14 @@ CAPTION_LIMIT = 1024
 # Пауза между отправками — тот же лимит ~30 сообщений в секунду, что у
 # /broadcast и у ежедневных пушей.
 SEND_DELAY = 0.05
-# Ждём, пока поллинг встанет на ноги, и только потом начинаем рассылку: первым
-# делом после старта бот должен отвечать живым людям, а не разгребать очередь
-# на всю базу. Заодно контейнер, который падает сразу после старта, не успеет
-# отправить ничего.
+# Ждём, пока поллинг встанет на ноги, и только потом трогаем админа: первым
+# делом после старта бот должен отвечать живым людям.
 STARTUP_DELAY_SECONDS = 60
+
+# Состояния рассылки в `announcement_state`.
+STATUS_PREVIEW = "preview"  # показана админу, ждёт добра
+STATUS_APPROVED = "approved"  # добро есть: идёт или будет продолжена на следующем старте
+STATUS_DECLINED = "declined"  # отклонена, больше не всплывает
 
 
 @dataclass
@@ -103,10 +117,20 @@ RELEASE_AI_PROGRAMS_AND_VIDEO = Announcement(
 ANNOUNCEMENTS: list[Announcement] = [RELEASE_AI_PROGRAMS_AND_VIDEO]
 
 
+def by_key(key: str) -> Announcement | None:
+    return next((a for a in ANNOUNCEMENTS if a.key == key), None)
+
+
 def _as_caption(text: str) -> str:
     if len(text) <= CAPTION_LIMIT:
         return text
     return text[: CAPTION_LIMIT - 1].rstrip() + "…"
+
+
+def _photo(ann: Announcement) -> FSInputFile | None:
+    if ann.image and os.path.exists(ann.image):
+        return FSInputFile(ann.image)
+    return None
 
 
 async def _send_one(bot: Bot, telegram_id: int, ann: Announcement) -> None:
@@ -136,10 +160,50 @@ async def _send_one(bot: Bot, telegram_id: int, ann: Announcement) -> None:
         ann._file_id.append(message.photo[-1].file_id)
 
 
-def _photo(ann: Announcement) -> FSInputFile | None:
-    if ann.image and os.path.exists(ann.image):
-        return FSInputFile(ann.image)
-    return None
+# ---------- шаг 1: показать админу ----------
+
+
+async def send_preview(bot: Bot, ann: Announcement) -> bool:
+    """Прислать админу сам анонс и под ним — кнопки «разослать / не надо».
+
+    Превью — это не описание рассылки, а она сама: тот же текст, та же
+    картинка, те же рабочие кнопки. Проверять анонс по его пересказу
+    бессмысленно — сломанную кнопку так не увидишь.
+    """
+    if not config.ADMIN_ID:
+        logger.warning("Announcement %s has nobody to approve it: ADMIN_ID is not set", ann.key)
+        return False
+    try:
+        await _send_one(bot, config.ADMIN_ID, ann)
+    except TelegramAPIError:
+        logger.exception("Failed to show announcement %s to admin", ann.key)
+        return False
+    # Показ админу — это и есть его экземпляр релиза: отмечаем доставку, иначе
+    # он получит то же самое второй раз вместе со всеми. Повторный показ
+    # (/announce) новой отметки не пишет — она уже стоит.
+    if not await db.has_announcement_push(config.ADMIN_ID, ann.key):
+        await db.record_push(config.ADMIN_ID, ann.key, ann.text, dt.date.today().isoformat())
+    pending = await db.count_announcement_recipients(ann.key)
+    try:
+        await bot.send_message(
+            config.ADMIN_ID,
+            f"👆 Так релиз «{ann.key}» увидят атлеты. Кнопки под ним рабочие — потыкай.\n\n"
+            f"Разослать {pending} получателям?",
+            reply_markup=keyboards.yes_no_keyboard(
+                f"admin:ann:go:{ann.key}",
+                f"admin:ann:no:{ann.key}",
+                yes_text="📢 Разослать всем",
+                no_text="Не надо",
+            ),
+        )
+    except TelegramAPIError:
+        logger.exception("Failed to show announcement %s to admin", ann.key)
+        return False
+    await db.set_announcement_status(ann.key, STATUS_PREVIEW)
+    return True
+
+
+# ---------- шаг 2: разослать ----------
 
 
 async def send_announcement(bot: Bot, ann: Announcement) -> tuple[int, int, int]:
@@ -177,22 +241,12 @@ async def send_announcement(bot: Bot, ann: Announcement) -> tuple[int, int, int]
     return sent, blocked, failed
 
 
-async def run_pending_announcements(bot: Bot) -> None:
-    """Фоновая задача старта: разослать всё, что ещё не разослано."""
-    if not config.ANNOUNCEMENTS_ENABLED or not ANNOUNCEMENTS:
-        return
-    await asyncio.sleep(STARTUP_DELAY_SECONDS)
-    for ann in ANNOUNCEMENTS:
-        if not ann.available():
-            logger.info("Announcement %s waits: the feature is off in this deploy", ann.key)
-            continue
-        try:
-            sent, blocked, failed = await send_announcement(bot, ann)
-        except Exception:
-            logger.exception("Announcement %s crashed", ann.key)
-            continue
-        if sent or failed:
-            await _report_to_admin(bot, ann, sent, blocked, failed)
+async def deliver_and_report(bot: Bot, ann: Announcement) -> tuple[int, int, int]:
+    """Разослать одобренный анонс и отчитаться админу."""
+    sent, blocked, failed = await send_announcement(bot, ann)
+    if sent or failed:
+        await _report_to_admin(bot, ann, sent, blocked, failed)
+    return sent, blocked, failed
 
 
 async def _report_to_admin(bot: Bot, ann: Announcement, sent: int, blocked: int, failed: int) -> None:
@@ -201,8 +255,40 @@ async def _report_to_admin(bot: Bot, ann: Announcement, sent: int, blocked: int,
     try:
         await bot.send_message(
             config.ADMIN_ID,
-            f"📢 Разовая рассылка «{ann.key}»: {sent} доставлено, "
+            f"📢 Релиз «{ann.key}» разослан: {sent} доставлено, "
             f"{blocked} заблокировали бота, {failed} ошибок.",
         )
     except TelegramAPIError:
         logger.exception("Failed to report announcement %s to admin", ann.key)
+
+
+# ---------- фоновая задача старта ----------
+
+
+async def run_pending_announcements(bot: Bot) -> None:
+    """Что делать с каждой рассылкой при старте бота.
+
+    Шаг определяется по состоянию в базе, а не по тому, первый это запуск или
+    десятый:
+
+    * нет записи — показать админу и ждать;
+    * `preview` — админ ещё не ответил, второй раз не дёргаем;
+    * `approved` — рассылка одобрена, но контейнер перезапустился посреди неё:
+      дорассылаем оставшимся (получившие отсеиваются по `pushes`);
+    * `declined` — забыли.
+    """
+    if not config.ANNOUNCEMENTS_ENABLED or not ANNOUNCEMENTS:
+        return
+    await asyncio.sleep(STARTUP_DELAY_SECONDS)
+    for ann in ANNOUNCEMENTS:
+        if not ann.available():
+            logger.info("Announcement %s waits: the feature is off in this deploy", ann.key)
+            continue
+        try:
+            status = await db.get_announcement_status(ann.key)
+            if status is None:
+                await send_preview(bot, ann)
+            elif status == STATUS_APPROVED:
+                await deliver_and_report(bot, ann)
+        except Exception:
+            logger.exception("Announcement %s crashed", ann.key)
