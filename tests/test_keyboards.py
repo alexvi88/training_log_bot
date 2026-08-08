@@ -155,16 +155,16 @@ def test_routine_edit_keyboard_carries_the_removals():
     assert "rt:view:7" in cbs  # "готово" back to the program screen
 
 
-def test_routine_edit_keyboard_move_buttons_skip_the_ends():
+def test_routine_edit_keyboard_has_one_arrow_per_row():
+    """Стрелка только «наверх»: поднять второе — то же самое, что опустить
+    первое, а вторая колонка отбирала место у названия (оно сжималось до
+    «Пр…×5–10»). У первого упражнения поднимать некуда."""
     kb = keyboards.routine_edit_keyboard(7, [(11, "Жим"), (12, "Тяга"), (13, "Присед")])
     cbs = _callback_datas(kb)
-    # First row can only move down, last row can only move up.
     assert "rt:mvex:7:11:up" not in cbs
-    assert "rt:mvex:7:11:down" in cbs
     assert "rt:mvex:7:12:up" in cbs
-    assert "rt:mvex:7:12:down" in cbs
     assert "rt:mvex:7:13:up" in cbs
-    assert "rt:mvex:7:13:down" not in cbs
+    assert not [c for c in cbs if c.endswith(":down")], "вниз больше не двигаем"
 
 
 def test_edit_workout_keyboard_is_one_row_per_exercise():

@@ -459,21 +459,21 @@ async def _show_routine_editor(event, state: FSMContext, routine_id: int) -> Non
     title = f"{routine['program_name']} · {routine['name']}" if routine["program_name"] else routine["name"]
     lines = [f"✏️ <b>{escape(title)}</b>", ""]
     if exercises:
-        lines.append("✏️ — поменять схему подходов, 🗑 — убрать упражнение.")
+        # Состав — нумерованным списком в тексте, потому что в подписи кнопки он
+        # не помещался: с четырьмя колонками Telegram сжимал название до
+        # «Пр…×5–10». Кнопки ниже ссылаются на эти же номера.
+        lines += [
+            f"{i}. {escape(ex['display_name'])}"
+            + (f" — {escape(ex['target'])}" if ex["target"] else "")
+            for i, ex in enumerate(exercises, start=1)
+        ]
+        lines += ["", "⬆️ — поднять выше, ✏️ — схема подходов, 🗑 — убрать."]
     else:
         lines.append("Здесь пока нет упражнений.")
     if note:
         lines += ["", f"🔄 {escape(note)}"]
     kb = keyboards.routine_edit_keyboard(
-        routine_id,
-        [
-            (
-                ex["id"],
-                f"{ex['display_name']} — {ex['target']}" if ex["target"] else ex["display_name"],
-                ex["target"],
-            )
-            for ex in exercises
-        ],
+        routine_id, [(ex["id"], ex["display_name"], ex["target"]) for ex in exercises]
     )
     text = "\n".join(lines)
     if isinstance(event, CallbackQuery):

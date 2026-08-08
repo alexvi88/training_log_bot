@@ -895,26 +895,39 @@ def routine_edit_menu_keyboard(routine_id: int, is_day: bool = False) -> InlineK
 
 
 def routine_edit_keyboard(routine_id: int, exercises=()) -> InlineKeyboardMarkup:
-    """The program's composition editor: `exercises` is (routine_exercise_id,
-    label, target) in program order, each row with move-up/move-down, an
-    edit-the-scheme button and a remove button. Reached deliberately, so
-    removal stays one tap here without a confirmation.
+    """Редактор состава дня: по ряду на упражнение — «наверх», ✏️ и 🗑 с именем.
 
-    The ✏️ button exists because changing «3×10» to «4×8» used to mean removing
-    the exercise (behind a confirmation), adding it back — where it lands at the
-    end — and walking it up with the arrows: up to nine taps for one number.
+    Стрелка одна, а не две: поднять второе — то же самое, что опустить первое,
+    и вторая колонка только отбирала место у названия. С четырьмя колонками
+    Telegram сжимал его до «Пр…×5–10», и по такой кнопке нельзя было понять, что
+    удаляешь. Схема подходов из подписи убрана по той же причине — она есть в
+    тексте сообщения, где состав перечислен целиком.
+
+    У первого упражнения поднимать некуда: вместо стрелки заглушка, иначе ряд
+    съезжает и «✏️» встаёт туда, где у соседей удаление.
+
+    ✏️ существует потому, что смена «3×10» на «4×8» иначе означала бы убрать
+    упражнение, добавить заново — оно улетает в конец — и поднимать стрелками:
+    до девяти тапов ради одного числа.
     """
     b = InlineKeyboardBuilder()
-    last = len(exercises) - 1
     for i, entry in enumerate(exercises):
         re_id, name = entry[0], entry[1]
-        row = _move_arrows(
-            i, last,
-            f"rt:mvex:{routine_id}:{re_id}:up", f"rt:mvex:{routine_id}:{re_id}:down",
+        up = (
+            InlineKeyboardButton(text="⬆️", callback_data=f"rt:mvex:{routine_id}:{re_id}:up")
+            if i else InlineKeyboardButton(text="·", callback_data="rt:noop")
         )
-        row.append(InlineKeyboardButton(text="✏️", callback_data=f"rt:extarget:{routine_id}:{re_id}"))
-        row.append(InlineKeyboardButton(text=f"🗑 {name}", callback_data=f"rt:rmex:{routine_id}:{re_id}"))
-        b.row(*row)
+        b.row(
+            up,
+            InlineKeyboardButton(text="✏️", callback_data=f"rt:extarget:{routine_id}:{re_id}"),
+            # Обрезаем сами, а не отдаём это Telegram: он режет посреди слова и
+            # без многоточия («Жим в тренажёре на пле»), а полное имя всё равно
+            # стоит номером в тексте сообщения.
+            InlineKeyboardButton(
+                text=f"🗑 {_shorten_label(name, 18)}",
+                callback_data=f"rt:rmex:{routine_id}:{re_id}",
+            ),
+        )
     b.row(InlineKeyboardButton(text="➕ Добавить упражнение", callback_data=f"rt:addex:{routine_id}"))
     b.row(InlineKeyboardButton(text="⬅️ Готово", callback_data=f"rt:view:{routine_id}"))
     return b.as_markup()

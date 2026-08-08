@@ -242,11 +242,16 @@ async def _send_rich_weekly(callback: CallbackQuery, text: str, table, kb) -> bo
     return True
 
 
-@router.callback_query(F.data == "menu:achievements")
+@router.callback_query(F.data.startswith("menu:achievements"))
 async def menu_achievements(callback: CallbackQuery, state: FSMContext):
-    """'🏆 Достижения' — reached from the Progress entry screen. Combines the
-    old standalone Hall of Fame screen (lifetime totals, personal records)
-    with the badge grid into one screen."""
+    """'🏆 Достижения' — экран зала славы и значков одним куском.
+
+    Входов два: главное меню и экран прогресса, — и «назад» обязано вести туда,
+    откуда пришли. Раньше оно всегда уводило в прогресс, и человек, открывший
+    достижения из меню, оказывался на экране, которого не открывал. Откуда
+    пришли, помним хвостом callback_data, а не состоянием: кнопка живёт в чате
+    вечно, и состояние к моменту тапа может быть уже любым.
+    """
     # Экран смотрят и посреди тренировки («сколько мне до значка»), поэтому
     # снимается только поток: каркас открытых упражнений должен уцелеть.
     await state_scaffold.clear_state_keep_workout(state)
@@ -263,14 +268,18 @@ async def menu_achievements(callback: CallbackQuery, state: FSMContext):
     budget = formatting.MESSAGE_LIMIT - formatting.telegram_length(ach_text) - 2
     hof_text = await build_hall_of_fame_text(callback.from_user.id, max_chars=budget)
     text = hof_text + "\n\n" + ach_text
+    from_progress = callback.data.endswith(":prog")
     kb = InlineKeyboardBuilder()
-    kb.button(text="🎖 Звания", callback_data="rank:ladder")
-    kb.button(text="⬅️ Назад", callback_data="prog:groups")
+    kb.button(text="🎖 Звания", callback_data="rank:ladder" + (":prog" if from_progress else ""))
+    # hist:menu — существующая ручка «в главное меню» (hist_to_menu ниже зовёт
+    # _show_main_menu); отдельной заводить незачем, а свежая строка вроде
+    # «menu:back» была бы кнопкой, которую никто не слушает.
+    kb.button(text="⬅️ Назад", callback_data="prog:groups" if from_progress else "hist:menu")
     kb.adjust(1)
     await ui.safe_edit(callback, text, reply_markup=kb.as_markup(), parse_mode="HTML")
 
 
-@router.callback_query(F.data == "rank:ladder")
+@router.callback_query(F.data.startswith("rank:ladder"))
 async def rank_ladder(callback: CallbackQuery, state: FSMContext):
     """«🎖 Звания» — вся лестница с порогами и правилом, по которому она считается.
 
@@ -294,7 +303,10 @@ async def rank_ladder(callback: CallbackQuery, state: FSMContext):
         per_week=per_week,
     )
     kb = InlineKeyboardBuilder()
-    kb.button(text="⬅️ Назад", callback_data="menu:achievements")
+    kb.button(
+        text="⬅️ Назад",
+        callback_data="menu:achievements" + (":prog" if callback.data.endswith(":prog") else ""),
+    )
     kb.adjust(1)
     await ui.safe_edit(callback, text, reply_markup=kb.as_markup(), parse_mode="HTML")
 
@@ -474,7 +486,7 @@ async def show_progress_entry(callback: CallbackQuery, state: FSMContext):
         groups, prefix="prog",
         extra_buttons=[
             ("📊 Неделя", "prog:week"),
-            ("🏆 Достижения", "menu:achievements"),
+            ("🏆 Достижения", "menu:achievements:prog"),
             ("⬅️ Назад", "prog:back"),
         ],
         show_all=True,
@@ -664,6 +676,12 @@ async def prog_show_exercise(callback: CallbackQuery, state: FSMContext):
     parts = callback.data.split(":")
     ex_id = int(parts[2])
     origin = parts[3] if len(parts) > 3 else "all"
+    # Кнопка живёт в чате вечно, а упражнение за это время могли удалить: тап по
+    # старой карточке падал с TypeError внутри рендера, и человек видел только
+    # крутящуюся кнопку, которая ничем не кончается.
+    if await db.get_exercise(ex_id) is None:
+        await callback.answer("Упражнение не найдено — его удалили", show_alert=True)
+        return
     await state.update_data(prog_exercise_id=ex_id, prog_origin=origin)
     user = await db.get_user(callback.from_user.id)
     text, png, kb = await _render_progress_view(ex_id, user, keyboards.DEFAULT_PROGRESS_LIMIT, origin)
