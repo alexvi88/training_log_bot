@@ -63,6 +63,8 @@ READ_ONLY_TOOLS = frozenset(
         "get_food_diary",
         "get_saved_programs",
         "get_program_adherence",
+        "get_muscle_recovery",
+        "compare_periods",
     }
 )
 
@@ -157,6 +159,13 @@ def build_server() -> MCPServer:
         return await _call("get_full_workout_history")
 
     @mcp.tool()
+    async def get_muscle_recovery() -> str:
+        """Насколько отдохнула каждая группа мышц: процент восстановления, когда
+        тренировали последний раз и сколько дней назад. 100% значит готова к тяжёлой
+        работе, ниже 85% — ещё не отдохнула. Для вопросов «что сегодня качать»."""
+        return await _call("get_muscle_recovery")
+
+    @mcp.tool()
     async def get_weekly_volume_by_group() -> str:
         """Объём (рабочие подходы) по группам мышц за текущую и прошлую неделю —
         чем нагрузка перекошена и что недобирает."""
@@ -189,6 +198,13 @@ def build_server() -> MCPServer:
     async def get_saved_programs() -> str:
         """Сохранённые программы пользователя: дни, упражнения и схемы подходов."""
         return await _call("get_saved_programs")
+
+    @mcp.tool()
+    async def compare_periods(days: int = 90) -> str:
+        """Что изменилось по всем упражнениям: последние N дней против предыдущих N
+        (по умолчанию 90) — тренировки, подходы, лучший e1RM и тоннаж в каждом окне
+        плюс разница, отдельно упражнения, которые бросил или начал делать."""
+        return await _call("compare_periods", days=max(7, min(int(days), 365)))
 
     @mcp.tool()
     async def get_program_adherence() -> str:
