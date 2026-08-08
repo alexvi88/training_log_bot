@@ -1216,3 +1216,38 @@ def test_real_tables_still_go_the_old_way():
 
     assert "|" not in out
     assert "210" in out
+
+
+# ---------- находка 44: одно правило прогрессии на всю программу ----------
+
+
+def test_one_shared_progression_rule_is_hoisted_once():
+    """Восемь одинаковых «⤴️ двойная прогрессия» подряд топили состав программы:
+    правило общее, а печаталось под каждым упражнением."""
+    days = [
+        {"name": "День 1", "items": [
+            {"name": "Тяга", "target": "4x3-5", "progression": {"rule": "double_progression"}},
+            {"name": "Жим", "target": "4x6-10", "progression": {"rule": "double_progression"}},
+        ]},
+        {"name": "День 2", "items": [
+            {"name": "Пресс", "target": "3x8-12", "progression": {"rule": "double_progression"}},
+        ]},
+    ]
+    text = formatting.build_ai_program_preview("Сила", days)
+
+    assert text.count("двойная прогрессия") == 1
+    assert "⤴️ Везде: двойная прогрессия" in text
+
+
+def test_a_rule_that_differs_stays_next_to_its_exercise():
+    days = [
+        {"name": "День 1", "items": [
+            {"name": "Тяга", "target": "4x3-5", "progression": {"rule": "double_progression"}},
+            {"name": "Жим", "target": "4x6-10", "progression": {"rule": "linear_load", "step": 2.5}},
+        ]},
+    ]
+    text = formatting.build_ai_program_preview("Сила", days, unit="kg")
+
+    assert "Везде:" not in text
+    assert "двойная прогрессия" in text
+    assert "+2.5кг каждую тренировку" in text

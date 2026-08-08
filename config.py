@@ -92,7 +92,7 @@ AI_WEEKLY_DIGEST_ENABLED = os.getenv("AI_WEEKLY_DIGEST_ENABLED", "true").lower()
 # key/env names as fun_bot, so one key serves both bots. The menu entry stays
 # visible but answers with a hint until the key is set.
 XAI_API_KEY = os.getenv("XAI_API_KEY", "")
-GROK_MODEL = os.getenv("GROK_MODEL", "grok-4.3-latest")
+GROK_MODEL = os.getenv("GROK_MODEL", "grok-4.5-latest")
 GROK_BASE_URL = os.getenv("GROK_BASE_URL", "https://api.x.ai/v1")
 
 # Hard ceiling on a single model call. The OpenAI SDK defaults to 600s, which
@@ -161,7 +161,7 @@ GROK_QUICK_REASONING_EFFORT = os.getenv("GROK_QUICK_REASONING_EFFORT", "low")
 #
 # Если однажды шаг действительно станет research'ем — возвращать multi-agent
 # осмысленно, но тогда и лимит AI_SEARCH_DAILY_LIMIT надо считать заново.
-GROK_SEARCH_MODEL = os.getenv("GROK_SEARCH_MODEL", "grok-4.3-latest")
+GROK_SEARCH_MODEL = os.getenv("GROK_SEARCH_MODEL", "grok-4.5-latest")
 
 # Parallel sub-agent count for the search step (xAI SDK's native agent_count
 # param — 4 or 16). Explicit and low: this step is one linear web/X lookup per
@@ -399,11 +399,11 @@ DEFAULT_LLM_PRICE_USD_PER_1K: tuple[float, float] = (
 )
 
 
-# Во сколько раз кэшированный вход дешевле обычного. 0.16 — по прайсу grok-4.3:
-# вход $1.25 за 1M, кэшированный $0.20 за 1M. (У 4.5 доля была 0.15: $2.00 и
-# $0.30.) Значение одно на все модели, так что при переезде его надо
-# пересчитывать вместе с моделью — иначе экономия в логах поедет.
-# За совпавший префикс платим 16% цены, и на наших запросах это главная экономия:
+# Во сколько раз кэшированный вход дешевле обычного. 0.15 — по прайсу grok-4.5:
+# вход $2.00 за 1M, кэшированный $0.30 за 1M. (У 4.3 доля 0.16: $1.25 и $0.20.)
+# Значение одно на все модели, так что при переезде его надо пересчитывать
+# вместе с моделью — иначе экономия в логах поедет; тест это стережёт.
+# За совпавший префикс платим 15% цены, и на наших запросах это главная экономия:
 # постоянная шапка (системный промпт + схемы 27 инструментов, вместе около
 # одиннадцати тысяч токенов) уезжает заново в каждом раунде tool-call'ов, и с
 # кэшем стоит копейки вместо трёх полных ставок.
@@ -414,7 +414,7 @@ DEFAULT_LLM_PRICE_USD_PER_1K: tuple[float, float] = (
 # выше этого не знает и считает по дешёвой ступени. Пока наши запросы держатся в
 # пределах пятнадцати тысяч токенов, разницы нет; если контекст когда-нибудь
 # распухнет за 200K, расчёт начнёт занижать.
-CACHED_INPUT_PRICE_MULTIPLIER = float(os.getenv("CACHED_INPUT_PRICE_MULTIPLIER", "0.16"))
+CACHED_INPUT_PRICE_MULTIPLIER = float(os.getenv("CACHED_INPUT_PRICE_MULTIPLIER", "0.15"))
 
 
 def call_price_usd(

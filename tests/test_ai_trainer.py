@@ -1676,3 +1676,11 @@ async def test_prompt_does_not_promise_the_start_button_under_the_message():
     prompt = ai_trainer.SYSTEM_PROMPT
     assert "Забрать" in prompt, "промпт должен называть кнопку, которая реально есть"
     assert "не обещай «Начать по ней» прямо под сообщением" in prompt
+
+
+async def test_prompt_forbids_promising_an_edit_without_doing_it():
+    """Живой прогон на grok-4.3: «Сейчас исправлю программу: ноль работы на низ»
+    — и конец хода. Ни новой программы, ни признака, что тренер ещё думает."""
+    prompt = ai_trainer.SYSTEM_PROMPT
+    assert "НИКОГДА не обещай действие вместо того, чтобы его сделать" in prompt
+    assert "Обещание без\nвызова инструмента" in prompt
