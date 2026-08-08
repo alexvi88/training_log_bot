@@ -340,7 +340,9 @@ async def hist_card(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Тренировка не найдена", show_alert=True)
         return
     user = await db.get_user(callback.from_user.id)
-    blocks = await view_builder.build_block_views(workout_id, user["e1rm_formula"])
+    blocks = await view_builder.build_block_views(
+        workout_id, user["e1rm_formula"], mark_records=True
+    )
     started = dt.datetime.fromisoformat(workout["started_at"])
     title, body, footer, note = formatting.build_workout_card(
         started, blocks, workout["note"], unit=user["unit"]

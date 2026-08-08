@@ -1249,3 +1249,14 @@ def test_real_tables_still_go_the_old_way():
 
     assert "|" not in out
     assert "210" in out
+
+
+def test_workout_card_image_carries_the_record_without_emoji():
+    """Картинку рисует matplotlib — эмодзи там пустые квадраты, поэтому рекорд
+    едет со звёздочкой. Но едет: ради него картинку и пересылают."""
+    block = formatting.ExerciseBlockView(
+        group_name="спина", exercise_name="Тяга", sets=[(110.0, 5)], record_e1rm_delta=5.7
+    )
+    _title, body, _footer, _note = formatting.build_workout_card(dt.datetime(2026, 8, 7), [block])
+    assert "  ★ Рекорд e1RM — на 5.7кг выше прошлого лучшего" in body
+    assert "🔥" not in "".join(body)

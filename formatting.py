@@ -526,17 +526,26 @@ def format_block_record(
     since — дата, с которой стоял побитый рекорд; ставится, когда прошлый
     лучший результат был на прошлой же тренировке (см. _render_single_block).
     """
+    parts = _block_record_parts(block, unit, show_extra, since)
+    if parts is None:
+        return None
+    label, tail = parts
+    return f"🔥 <b>{label}</b> — {tail}"
+
+
+def _block_record_parts(
+    block: ExerciseBlockView, unit: str, show_extra: bool = True, since: str | None = None
+) -> tuple[str, str] | None:
+    """(подпись, продолжение) строки рекорда — общее у текстовой карточки и
+    картинки, которые различаются только оформлением."""
     if block.record_reps is not None:
         reps = block.record_reps
         word = plural_ru(reps, ("повтор", "повтора", "повторов"))
-        return f"🔥 <b>Рекорд</b> — {reps} {word} в подходе"
+        return "Рекорд", f"{reps} {word} в подходе"
     if block.record_e1rm_delta is not None and show_extra:
         u = UNIT_LABELS.get(unit, "кг")
         when = f" ({since})" if since else ""
-        return (
-            f"🔥 <b>Рекорд e1RM</b> — на {block.record_e1rm_delta:.1f}{u} "
-            f"выше прошлого лучшего{when}"
-        )
+        return "Рекорд e1RM", f"на {block.record_e1rm_delta:.1f}{u} выше прошлого лучшего{when}"
     return None
 
 
@@ -1564,6 +1573,13 @@ def build_workout_card(
             body.append("  " + ", ".join(_collapse_formatted_sets(formatted)))
         else:
             body.append("  — без подходов")
+        # Рекорд едет и на картинку: её уносят в чат с друзьями, и «на 5.7кг
+        # выше прошлого лучшего» — ровно то, ради чего её уносят. ★ вместо 🔥
+        # — картинку рисует matplotlib, эмодзи там выходят пустыми квадратами
+        # (см. charts.render_workout_card), а звёздочка есть в шрифте.
+        record = _block_record_parts(block, unit)
+        if record:
+            body.append(f"  ★ {record[0]} — {record[1]}")
         exercise_count += 1
         set_count += len(block.sets)
         tonnage += block.tonnage
