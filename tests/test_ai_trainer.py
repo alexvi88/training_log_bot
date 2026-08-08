@@ -1577,3 +1577,13 @@ async def test_prompt_forbids_calling_a_triple_a_one_rep_max():
     assert "НЕ РАЗОВЫЙ МАКСИМУМ" in prompt
     assert "e1RM" in prompt
     assert "+19" in prompt, "в промпте должен быть числовой пример ошибки"
+
+
+async def test_prompt_bans_telegraphic_style_and_slashes():
+    """В проде тренер написал «слишком часто тяжёлый пол», «хват/срыв техникой»,
+    «мало еды/сна», «тяга гниёт» — выброшенные глаголы, слэши вместо слов и
+    выдуманные метафоры. Лаконичность он прочитал как право не договаривать."""
+    prompt = ai_trainer.SYSTEM_PROMPT
+    assert "КОРОТКИЕ ФРАЗЫ" in prompt
+    assert "Слэш — не слово" in prompt
+    assert "гниёт" in prompt, "нужен пример выдуманной метафоры"
