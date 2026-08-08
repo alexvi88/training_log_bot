@@ -4527,13 +4527,21 @@ async def _gate_verdict(
         # это дешевле, чем остаться без вердикта.
         logger.warning("AI trainer gate returned an empty verdict, retrying with a nudge")
         retry_kwargs = dict(request_kwargs)
+        # Убираем ровно то, что подозревается в молчании: размышления и строгую
+        # схему. Добавленной реплики оказалось мало — лог прода показал два
+        # пустых ответа подряд уже с ней (1803 токена, потом 1835), то есть
+        # модель послушно думала оба раза и оба раза ничего не сказала. Просить
+        # то же самое третьим способом смысла нет: меняем сам режим запроса.
+        retry_kwargs.pop("response_format", None)
+        retry_kwargs["extra_body"] = {"reasoning_effort": "none"}
         retry_kwargs["messages"] = [
             *request_kwargs["messages"],
             {
                 "role": "user",
                 "content": (
-                    "Ты не ответил ничего. Не размышляй, просто верни JSON: "
-                    '{"search": true|false, "data": true|false}'
+                    "Ты не ответил ничего. Не размышляй, ответь одной строкой "
+                    "ровно в этом виде, без markdown: "
+                    '{"search": true, "data": false}'
                 ),
             },
         ]
@@ -4550,7 +4558,11 @@ async def _gate_verdict(
 
     defaults = GateVerdict()
     try:
-        parsed = json.loads(verdict)
+        # Повтор идёт уже без strict-схемы (см. выше), а без неё модель вполне
+        # может обернуть ответ в ```json — вырезаем сам объект, иначе честный
+        # вердикт со второй попытки всё равно уехал бы в дефолты.
+        body = verdict[verdict.index("{") : verdict.rindex("}") + 1]
+        parsed = json.loads(body)
         return GateVerdict(
             search=bool(parsed["search"]),
             data=bool(parsed["data"]),

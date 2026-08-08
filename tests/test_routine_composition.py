@@ -513,9 +513,10 @@ async def test_opening_a_program_lists_its_days(fresh_db, user_id):
     kb = callback.message.answer.await_args.kwargs["reply_markup"]
     labels = [b.text for row in kb.inline_keyboard for b in row]
     day_names = [day_name for day_name, _ex in PROGRAM_BY_KEY["ppl"]["days"]]
-    # Первый день поднят наверх как «сегодня» — по нему программа и начинается,
-    # пока она ни разу не пройдена (см. db.next_program_day).
-    assert labels[0] == f"▶️ Сегодня: {day_names[0]}"
+    # Первый день поднят наверх — по нему программа и начинается, пока она ни
+    # разу не пройдена (см. db.next_program_day). Но не «сегодня»: расписания у
+    # программ нет, и на новой программе это было бы обещанием из ниоткуда.
+    assert labels[0] == f"▶️ Начать с: {day_names[0]}"
     assert labels[1 : len(day_names)] == day_names[1:]
     assert labels[-1] == "⬅️ Назад"
 
@@ -592,15 +593,20 @@ async def test_target_normalization_keeps_what_it_cannot_parse():
     # Диапазон наоборот — не схема, а опечатка: оставляем как есть, не выдумываем.
     assert formatting.normalize_routine_target("3x10-5") == "3x10-5"
 
-async def test_editor_row_puts_the_name_first_then_the_icons():
-    """Раскладка ряда: имя, ⬆️, ✏️, 🗑. Имя обрезаем сами — ряд делится поровну,
-    и на подпись остаётся четверть; полный состав стоит в тексте сообщения."""
+async def test_editor_row_puts_the_numbered_name_first_then_the_icons():
+    """Раскладка ряда: номер с именем, ⬆️, 🗑 — три колонки, не четыре.
+
+    Карандаша нет: он вёл туда же, куда тап по имени, а забирал четверть ряда
+    (Telegram делит ряд поровну) — и рядом стояли «Жим гантелей лё…» и «Жим
+    гантелей си…». Номер оставлен потому, что обрезка всё равно возможна, а по
+    номеру видно, какое именно упражнение из списка в тексте это ряд."""
     kb = keyboards.routine_edit_keyboard(1, [(10, "Присед в Смите", "3x5-10"), (11, "Тяга", None)])
 
     first = kb.inline_keyboard[0]
-    assert len(first) == 4
-    assert first[0].text == "Присед в Смите"
-    assert [b.text for b in first[1:]] == ["⬆️", "✏️", "🗑"]
+    assert len(first) == 3
+    assert first[0].text == "1. Присед в Смите"
+    assert [b.text for b in first[1:]] == ["⬆️", "🗑"]
+    assert kb.inline_keyboard[1][0].text == "2. Тяга"
 
 
 async def test_every_row_has_an_arrow_because_the_move_is_cyclic():

@@ -215,7 +215,11 @@ async def _show_program(event, state: FSMContext, program_id: int) -> None:
     )
     text = "\n\n".join(["\n".join(header), "\n\n".join(day_blocks) or "В программе нет дней.", tail])
     kb = keyboards.program_days_keyboard(
-        days, program_id, next_day_id=next_day["id"] if next_day else None
+        days, program_id, next_day_id=next_day["id"] if next_day else None,
+        # По истории, а не по факту наличия дня: очередь есть только у той
+        # программы, по которой уже ходили. Иначе кнопка называла «сегодняшним»
+        # просто первый день списка.
+        trained_before=bool(history),
     )
     if isinstance(event, CallbackQuery):
         await ui.safe_edit(event, text, reply_markup=kb, parse_mode="HTML")
@@ -467,7 +471,7 @@ async def _show_routine_editor(event, state: FSMContext, routine_id: int) -> Non
             + (f" — {escape(ex['target'])}" if ex["target"] else "")
             for i, ex in enumerate(exercises, start=1)
         ]
-        lines += ["", "Тап по названию или ✏️ — схема подходов, ⬆️ — поднять "
+        lines += ["", "Тап по названию — схема подходов, ⬆️ — поднять "
                       "(с первого — в конец), 🗑 — убрать."]
     else:
         lines.append("Здесь пока нет упражнений.")

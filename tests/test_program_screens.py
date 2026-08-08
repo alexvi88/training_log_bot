@@ -222,7 +222,8 @@ async def test_the_program_screen_leads_with_the_day_whose_turn_it_is(fresh_db, 
     await routines.rt_program(callback, await _state(user_id))
 
     labels = [text for text, _cb in _buttons(callback)]
-    assert labels[0] == "▶️ Сегодня: Тяни"
+    # «Дальше», а не «Сегодня»: по программе уже ходили, очередь настоящая.
+    assert labels[0] == "▶️ Дальше: Тяни"
     # И день не дублируется ниже собственной кнопкой.
     assert labels.count("Тяни") == 0
 

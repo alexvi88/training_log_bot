@@ -717,7 +717,10 @@ async def test_program_preview_keeps_the_answer_and_offers_saving(fresh_db, user
 
     callback.message.answer.assert_awaited_once()
     kb = callback.message.answer.await_args.kwargs["reply_markup"]
-    assert _callbacks(kb) == ["ai:prog:save:1", "ai:prog:drop:1"]
+    # «К тренеру» — это выход: превью приходит отдельным сообщением и закрывает
+    # собой экран, а с двумя кнопками уйти можно было только согласившись или
+    # отказавшись. Посмотреть и вернуться к разговору тоже должно быть ходом.
+    assert _callbacks(kb) == ["ai:prog:save:1", "ai:prog:drop:1", "menu:ai"]
     callback.message.delete.assert_not_awaited()
 
 
@@ -1777,3 +1780,39 @@ async def test_the_workout_picker_offers_todays_workout_to_everyone(fresh_db, us
 
     assert "ai:buildworkout" in callbacks
     assert "ai:buildprog" not in callbacks
+
+
+async def test_the_draft_button_is_not_doubled_by_a_link_to_the_old_namesake(
+    fresh_db, user_id
+):
+    """Тренер пересобрал программу под тем же именем, что уже сохранена, —
+    и под ответом вставали две кнопки подряд с одинаковой надписью:
+    «🗂 Забрать: Верх/низ масса 2x» и «🗂 Верх/низ масса 2x». Первая брала
+    черновик, вторая вела в прошлую одноимённую, и понять это было неоткуда."""
+    await fresh_db.create_program(user_id, "Верх/низ масса 2x")
+
+    kb = await ai_trainer.ai_keyboard(
+        user_id,
+        answer="Собрал «Верх/низ масса 2x» — забирай.",
+        program_name="Верх/низ масса 2x",
+        draft_id="7",
+    )
+
+    labels = [b.text for row in kb.inline_keyboard for b in row]
+    assert sum("Верх/низ масса 2x" in label for label in labels) == 1
+    assert "ai:prog:view:7" in _callbacks(kb)
+
+
+async def test_a_link_to_a_different_program_still_shows_up(fresh_db, user_id):
+    """Глушим только тёзку черновика: ссылка на другую программу, названную в
+    том же ответе, — как раз то, ради чего эти кнопки и заведены."""
+    await fresh_db.create_program(user_id, "Старый ППЛ")
+
+    kb = await ai_trainer.ai_keyboard(
+        user_id,
+        answer="Собрал «Верх/низ масса 2x» вместо «Старый ППЛ».",
+        program_name="Верх/низ масса 2x",
+        draft_id="7",
+    )
+
+    assert any(cb.startswith("rt:prg:") for cb in _callbacks(kb))

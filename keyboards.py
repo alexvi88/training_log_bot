@@ -270,6 +270,11 @@ def ai_program_preview_keyboard(
         callback_data=f"ai:prog:save:{draft_id}",
     )
     b.button(text="❌ Не надо", callback_data=f"ai:prog:drop:{draft_id}")
+    # Выход, а не только «да/нет». Превью приходит отдельным сообщением и
+    # закрывает собой экран: с двумя кнопками единственным способом уйти было
+    # согласиться или отказаться, а «посмотрел и вернулся к разговору» ходом не
+    # считалось вовсе.
+    b.button(text="⬅️ К тренеру", callback_data="menu:ai")
     b.adjust(1)
     return b.as_markup()
 
@@ -680,13 +685,23 @@ def routines_manage_keyboard(programs, routines, has_workouts: bool) -> InlineKe
     return b.as_markup()
 
 
-def program_days_keyboard(days, program_id: int, next_day_id: int | None = None) -> InlineKeyboardMarkup:
-    """Экран программы: какой день сегодня, остальные ниже, и одна кнопка правок.
+def program_days_keyboard(
+    days, program_id: int, next_day_id: int | None = None, trained_before: bool = False
+) -> InlineKeyboardMarkup:
+    """Экран программы: до какого дня дошла очередь, остальные ниже, и одна
+    кнопка правок.
 
     `next_day_id` — день, до которого дошла очередь (db.next_program_day). Он
-    поднят наверх отдельной кнопкой «▶️ Сегодня: …», потому что раньше три дня
-    сплита выглядели тремя одинаковыми кнопками и вспоминать, что вчера был
-    «Толкай», приходилось самому — при том, что бот это знал (workouts.routine_id).
+    поднят наверх отдельной кнопкой, потому что раньше три дня сплита выглядели
+    тремя одинаковыми кнопками и вспоминать, что вчера был «Толкай», приходилось
+    самому — при том, что бот это знал (workouts.routine_id).
+
+    Подпись у неё зависит от `trained_before`, потому что «▶️ Сегодня: День 1»
+    было неправдой ровно там, где чаще всего и попадалось на глаза: на только
+    что собранной программе никакой очереди ещё нет, бот просто берёт первый
+    день — а слово «сегодня» обещает расписание, которого у программ нет вовсе.
+    Текст сообщения про очередь говорит по тому же условию (см.
+    handlers.routines.show_program).
 
     Всё, что меняет программу, уехало за «⚙️ Изменить программу» (см.
     program_edit_keyboard). Шесть кнопок редактирования стояли ровно на пути
@@ -698,7 +713,10 @@ def program_days_keyboard(days, program_id: int, next_day_id: int | None = None)
     if next_day_id is not None:
         today = next((d for d in days if d["id"] == next_day_id), None)
         if today is not None:
-            b.button(text=f"▶️ Сегодня: {today['name']}", callback_data=f"rt:view:{today['id']}")
+            label = "Дальше" if trained_before else "Начать с"
+            b.button(
+                text=f"▶️ {label}: {today['name']}", callback_data=f"rt:view:{today['id']}"
+            )
     for d in days:
         if d["id"] == next_day_id:
             continue
@@ -895,27 +913,31 @@ def routine_edit_menu_keyboard(routine_id: int, is_day: bool = False) -> InlineK
 
 
 def routine_edit_keyboard(routine_id: int, exercises=()) -> InlineKeyboardMarkup:
-    """Редактор состава дня: имя первым, за ним ⬆️, ✏️ и 🗑.
+    """Редактор состава дня: номер с именем первым, за ним ⬆️ и 🗑.
 
     Стрелка одна и работает по кругу: поднять второе — то же самое, что опустить
     первое, а у первого «выше» отправляет его в конец. Вторая колонка только
-    отбирала место у названия — с четырьмя колонками Telegram сжимал его до
-    «Пр…×5–10», и по кнопке нельзя было понять, что удаляешь.
+    отбирала место у названия.
 
-    Имя всё равно обрезаем сами: ряд делится поровну, и на подпись остаётся
-    четверть. Полный состав с номерами и схемами стоит в тексте сообщения — там
-    и читают, а кнопки только действуют.
+    Карандаша нет по той же причине: он вёл ровно туда же, куда тап по имени, а
+    забирал четверть ряда. Ряд Telegram делит поровну, так что каждая лишняя
+    колонка режет подпись — с четырьмя было «Жим гантелей лё…» и «Жим гантелей
+    си…» рядом, с тремя влезает заметно больше.
+
+    Номер в подписи — чтобы обрезка перестала быть фатальной: «Тяга гантели в
+    наклоне» и «Тяга гантелей лёжа на наклонной скамье» обрезаются в одно и то
+    же, и без номера по кнопке не понять, какую из них удаляешь. Полный состав с
+    номерами и схемами стоит в тексте сообщения — там и читают.
     """
     b = InlineKeyboardBuilder()
-    for entry in exercises:
+    for position, entry in enumerate(exercises, start=1):
         re_id, name = entry[0], entry[1]
         b.row(
             InlineKeyboardButton(
-                text=_shorten_label(name, 16),
+                text=f"{position}. {_shorten_label(name, 22)}",
                 callback_data=f"rt:extarget:{routine_id}:{re_id}",
             ),
             InlineKeyboardButton(text="⬆️", callback_data=f"rt:mvex:{routine_id}:{re_id}:up"),
-            InlineKeyboardButton(text="✏️", callback_data=f"rt:extarget:{routine_id}:{re_id}"),
             InlineKeyboardButton(text="🗑", callback_data=f"rt:rmex:{routine_id}:{re_id}"),
         )
     b.row(InlineKeyboardButton(text="➕ Добавить упражнение", callback_data=f"rt:addex:{routine_id}"))
