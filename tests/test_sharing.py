@@ -740,3 +740,53 @@ async def test_a_program_with_one_empty_day_says_which_rule_dropped_it(fresh_db,
     assert "2 дня из 3" in text
     assert "пустые дни не передаются" in text
     assert "2 дня из 3" in callback.answer.await_args.args[0]
+
+
+# ---------- находки 40–42 ----------
+
+
+async def test_six_working_days_and_two_empty_do_not_claim_a_loss_that_did_not_happen(
+    fresh_db, user_id
+):
+    """Находка 42: всё содержимое уехало (шесть рабочих дней ровно в лимит), а
+    бот писал «уехало 6 из 8 — больше в одну визитку не влезает». Причину
+    выводили из счётчика, а не считали."""
+    db = fresh_db
+    program_id = await _program(
+        db, user_id, "Восьмидневка",
+        days=tuple(f"День {i}" for i in range(1, 9)),
+        empty=("День 7", "День 8"),
+    )
+
+    callback = await _tap(user_id, f"share:prg:{program_id}")
+
+    text = callback.message.answer.await_args.args[0]
+    assert "не влезает" not in text
+    assert "пустые дни не передаются" in text
+
+
+async def test_both_causes_at_once_are_named_both(fresh_db, user_id):
+    db = fresh_db
+    program_id = await _program(
+        db, user_id, "Девятидневка",
+        days=tuple(f"День {i}" for i in range(1, 10)),
+        empty=("День 9",),
+    )
+
+    callback = await _tap(user_id, f"share:prg:{program_id}")
+
+    text = callback.message.answer.await_args.args[0]
+    assert "пустые дни не передаются, а остальное не влезло" in text
+
+
+async def test_imported_program_name_fits_the_rename_limit(fresh_db, user_id):
+    """Находка 40: принятая программа выходила длиннее, чем разрешает её же
+    переименование, и починить имя было нечем."""
+    import config
+
+    long_name = "Моя суперская программа на массу и силу для профессионалов зала"
+    assert len(long_name) > config.MAX_PROGRAM_NAME_LENGTH
+
+    unique = await fresh_db.unique_program_name(user_id, long_name)
+
+    assert len(unique) <= config.MAX_PROGRAM_NAME_LENGTH

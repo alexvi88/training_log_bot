@@ -4057,6 +4057,10 @@ async def unique_program_name(user_id: int, name: str, suffix: Optional[str] = N
     Кандидаты с суффиксом ужимаются под MAX_PROGRAM_NAME_LENGTH: имя ровно в
     лимит получало « (2)» сверху, и такую программу потом нельзя было даже
     переименовать — ручной ввод длиннее лимита не принимается.
+
+    По той же причине режется и имя без суффикса: раньше ветка «коллизии нет»
+    возвращала что дали, и импорт чужой визитки заводил программу длиннее, чем
+    разрешает переименование, — исправить её было нечем.
     """
 
     def with_suffix(tail: str) -> str:
@@ -4064,7 +4068,7 @@ async def unique_program_name(user_id: int, name: str, suffix: Optional[str] = N
         room = config.MAX_PROGRAM_NAME_LENGTH - len(tail)
         return f"{name[:room].rstrip()}{tail}"
 
-    name = name.strip()
+    name = name.strip()[: config.MAX_PROGRAM_NAME_LENGTH].rstrip()
     if await find_program_by_name(user_id, name) is None:
         return name
     if suffix:

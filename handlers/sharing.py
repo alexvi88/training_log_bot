@@ -27,6 +27,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 import acquisition
+import config
 import db
 from formatting import MESSAGE_LIMIT, telegram_length
 from state_scaffold import clear_state_keep_ai
@@ -46,8 +47,16 @@ MAX_SHARED_EXERCISES = 30
 # поэтому _program_preview_lines ниже всё равно режет текст по факту, а не
 # полагается только на эти счётчики снапшота.
 MAX_SHARED_DAYS = 6
-MAX_NAME_LEN = 80
-MAX_DESCRIPTION_LEN = 1500
+
+# Пределы визитки — те же, что у ручного ввода, а не свои собственные. Раньше
+# здесь стоял общий MAX_NAME_LEN = 80 на всё, и принятая программа могла выйти
+# длиннее, чем разрешает её же переименование (48), а упражнение — длиннее, чем
+# разрешает создание (60). Исправить такое имя было нечем: экран переименования
+# отвечал «слишком длинное» на то самое имя, которое сам и завёл. Лимиты не
+# случайны — имя едет прямо в подпись кнопки списка.
+MAX_NAME_LEN = config.MAX_EXERCISE_NAME_LENGTH
+MAX_PROGRAM_NAME_LEN = config.MAX_PROGRAM_NAME_LENGTH
+MAX_DESCRIPTION_LEN = config.MAX_EXERCISE_DESCRIPTION_LENGTH
 
 # Версия формата payload'а в shared_items — токены уже гуляющие в чатах были
 # созданы без поля "v" (читатели ниже трактуют его отсутствие как v=0), но с
@@ -57,7 +66,14 @@ MAX_DESCRIPTION_LEN = 1500
 # v2 добавил "total_days": сколько дней было в программе до обрезки. У визиток
 # v0/v1 этого числа нет и восстановить его нечем (снапшот уже обрезан), поэтому
 # по ним считаем, что уехало всё — см. _program_days_totals.
-PAYLOAD_VERSION = 2
+#
+# v3 добавил "empty_days": сколько дней не уехало из-за пустоты. Причин
+# недобора две — пустой день и предел визитки, — а поля было одно, и причину
+# угадывали по счётчику: «ровно MAX_SHARED_DAYS в визитке — значит упёрлись в
+# лимит». Программа из шести рабочих дней и двух пустых уезжала со всем
+# содержимым, но получала «уехало 6 из 8 — больше не влезает»: потери не было,
+# а бот утверждал обратное. Теперь причины считаются, а не угадываются.
+PAYLOAD_VERSION = 3
 
 # Превью должно гарантированно влезать в лимит Telegram при ЛЮБОМ снапшоте —
 # в том числе созданном до появления MAX_SHARED_DAYS. Резервируем место под
@@ -124,14 +140,26 @@ def _omitted_days_note(payload: dict[str, Any]) -> Optional[str]:
     in_card, total = _program_days_totals(payload)
     if in_card >= total:
         return None
-    # Причина различима по числу: до лимита снапшот добирает только непустые
-    # дни, значит ровно MAX_SHARED_DAYS в визитке — это упёрлись в лимит.
-    reason = (
-        "больше в одну визитку не влезает"
-        if in_card >= MAX_SHARED_DAYS
-        else "пустые дни не передаются"
-    )
-    return f"⚠️ Уехало {in_card} {_days_word(in_card)} из {total} — {reason}."
+    return f"⚠️ Уехало {in_card} {_days_word(in_card)} из {total} — {_omitted_reason(payload)}."
+
+
+def _omitted_reason(payload: dict[str, Any]) -> str:
+    """Почему уехали не все дни. Причин две, и раньше их путали: обе выводились
+    из одного счётчика по правилу «ровно MAX_SHARED_DAYS в визитке — значит
+    лимит». Шесть рабочих дней и два пустых уезжали со всем содержимым, а
+    человек читал «больше не влезает» — про потерю, которой не было."""
+    in_card, total = _program_days_totals(payload)
+    empty = int(payload.get("empty_days", 0))
+    # v0–v2 счётчика пустых дней не несут, и восстановить его нечем — там
+    # называем факт без причины, а не выдумываем её.
+    if int(payload.get("v", 0)) < 3:
+        return "визитка вместила не всё"
+    over_limit = total - in_card - empty
+    if empty and over_limit > 0:
+        return "пустые дни не передаются, а остальное не влезло в одну визитку"
+    if empty:
+        return "пустые дни не передаются"
+    return "больше в одну визитку не влезает"
 
 
 def _routine_preview_lines(payload: dict[str, Any], budget: int = PREVIEW_BUDGET) -> list[str]:
@@ -222,7 +250,7 @@ async def share_routine(callback: CallbackQuery, state: FSMContext):
 
     payload = {
         "v": PAYLOAD_VERSION,
-        "name": routine["name"][:MAX_NAME_LEN],
+        "name": routine["name"][:MAX_PROGRAM_NAME_LEN],
         "exercises": [
             {"name": ex["display_name"][:MAX_NAME_LEN], "target": ex["target"]}
             for ex in exercises[:MAX_SHARED_EXERCISES]
@@ -251,15 +279,17 @@ async def _send_program_card(callback: CallbackQuery, program_id: int, program_n
     """
     days = await db.list_program_days_by_id(program_id)
     day_payloads = []
+    non_empty_days = 0
     for day in days:
-        if len(day_payloads) >= MAX_SHARED_DAYS:
-            break
         exercises = await db.list_routine_exercises(day["id"])
         if not exercises:
             continue
+        non_empty_days += 1
+        if len(day_payloads) >= MAX_SHARED_DAYS:
+            continue
         day_payloads.append(
             {
-                "name": day["name"][:MAX_NAME_LEN],
+                "name": day["name"][:MAX_PROGRAM_NAME_LEN],
                 "exercises": [
                     {"name": ex["display_name"][:MAX_NAME_LEN], "target": ex["target"]}
                     for ex in exercises[:MAX_SHARED_EXERCISES]
@@ -272,11 +302,14 @@ async def _send_program_card(callback: CallbackQuery, program_id: int, program_n
 
     payload = {
         "v": PAYLOAD_VERSION,
-        "name": program_name[:MAX_NAME_LEN],
+        "name": program_name[:MAX_PROGRAM_NAME_LEN],
         "days": day_payloads,
         # Сколько дней было в программе — единственное, из чего обе стороны
         # потом узнают, что уехало не всё (см. _omitted_days_note).
         "total_days": len(days),
+        # Отдельно от общего числа: без этого причину недобора приходилось
+        # угадывать по счётчику, и она угадывалась неверно (см. PAYLOAD_VERSION).
+        "empty_days": len(days) - non_empty_days,
     }
     token = await db.create_shared_item(callback.from_user.id, "program", json.dumps(payload, ensure_ascii=False))
     url = _deep_link(await get_bot_username(callback.bot), token)
@@ -529,7 +562,12 @@ async def _resolve_exercise(user_id: int, name: str) -> int:
 
     В отличие от create_routine_from_program, нерезолвящееся имя не
     выбрасывается: в чужой программе кастомные названия — норма, и потерять
-    половину упражнений при импорте хуже, чем создать их под «Другое»."""
+    половину упражнений при импорте хуже, чем создать их под «Другое».
+
+    Имя режем и здесь, а не только при сборке визитки: визитки со старым лимитом
+    (80 символов на всё) уже разосланы по чатам, и по ним всё ещё приходят имена
+    длиннее, чем разрешает ручной ввод."""
+    name = name.strip()[: config.MAX_EXERCISE_NAME_LENGTH].rstrip()
     existing = await db.find_exercise_by_name(user_id, name)
     if existing:
         return existing["id"]
@@ -621,20 +659,26 @@ async def share_add(callback: CallbackQuery, state: FSMContext):
         return
 
     # kind == "exercise"
-    existing = await db.find_exercise_by_name(user_id, payload["name"])
+    # Под лимиты ручного ввода: визитки со старым общим лимитом (80 на имя,
+    # 1500 на описание) уже разосланы, и по ним приезжает то, что сам человек
+    # у себя завести бы не смог.
+    name = payload["name"].strip()[: config.MAX_EXERCISE_NAME_LENGTH].rstrip()
+    existing = await db.find_exercise_by_name(user_id, name)
     if existing:
         await callback.message.edit_reply_markup(reply_markup=None)
-        await callback.answer(f"«{payload['name']}» у тебя уже есть", show_alert=True)
+        await callback.answer(f"«{name}» у тебя уже есть", show_alert=True)
         return
     group_id = await _resolve_group_id(user_id, payload.get("group"))
-    ex_id = await db.create_exercise(user_id, payload["name"], group_id)
+    ex_id = await db.create_exercise(user_id, name, group_id)
     if payload.get("description"):
-        await db.set_exercise_description(ex_id, payload["description"])
+        await db.set_exercise_description(
+            ex_id, payload["description"][: config.MAX_EXERCISE_DESCRIPTION_LENGTH]
+        )
     if payload.get("photo_file_id"):
         await db.set_exercise_photo(ex_id, payload["photo_file_id"])
     await callback.message.edit_reply_markup(reply_markup=None)
     await callback.message.answer(
-        f"✅ «{escape(payload['name'])}» добавлено — ⚙️ Упражнения.", parse_mode="HTML"
+        f"✅ «{escape(name)}» добавлено — ⚙️ Упражнения.", parse_mode="HTML"
     )
     await db.mark_shared_item_taken(token)
     await callback.answer("Добавил 👌")
