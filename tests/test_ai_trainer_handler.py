@@ -1153,6 +1153,33 @@ async def test_ai_build_program_releases_busy_on_a_stale_callback(fresh_db, user
     assert user_id not in ai_trainer._busy
 
 
+async def test_announcement_build_program_keeps_the_announcement_in_the_chat(
+    fresh_db, user_id, monkeypatch
+):
+    """Кнопка под релизной рассылкой не съедает саму рассылку.
+
+    Живой случай: тап по «🤖 Собрать программу» под анонсом — и анонс исчезал
+    из чата. Экранная кнопка так и должна работать (сценарий встаёт на место
+    меню), но рассылка не экран: под ней вторая кнопка, про разбор видео, и
+    вернуться к ней после первого тапа было уже некуда.
+    """
+    monkeypatch.setattr(ai_trainer.ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(ai_trainer.ai_trainer, "ask", AsyncMock(return_value="ок"))
+
+    state = await _make_state(user_id)
+    callback = _make_buildprog_callback(user_id)
+    callback.data = "ann:buildprog"
+    callback.message.edit_text = AsyncMock()
+
+    await ai_trainer.announcement_build_program(callback, state)
+
+    callback.message.delete.assert_not_awaited()
+    callback.message.edit_text.assert_not_awaited()
+    # А сценарий при этом стартовал — интро приехало отдельным сообщением.
+    callback.message.answer.assert_awaited()
+    assert await state.get_state() == "AITrainerFlow:chatting"
+
+
 # ---------- готовые вопросы на стартовом экране (ai:preset:*) ----------
 
 

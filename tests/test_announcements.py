@@ -223,6 +223,66 @@ async def test_restart_mid_broadcast_finishes_the_rest(fresh_db, monkeypatch):
     assert [chat_id for chat_id, _ in bot.sent if chat_id != ADMIN_ID] == [2]
 
 
+async def test_rewritten_text_comes_back_for_a_second_look(fresh_db, monkeypatch):
+    """Переписали анонс после показа — админ увидит новую редакцию, а не узнает
+    о ней из рассылки."""
+    await _users(fresh_db, ADMIN_ID, 1)
+    monkeypatch.setattr(announcements.asyncio, "sleep", AsyncMock())
+    ann = _announcement()
+    monkeypatch.setattr(announcements, "ANNOUNCEMENTS", [ann])
+    await announcements.run_pending_announcements(FakeBot())
+
+    ann.text = "ПРИВЕТ АТЛЕТ, а вот теперь по-другому."
+    bot = FakeBot()
+    await announcements.run_pending_announcements(bot)
+
+    assert bot.texts_to(ADMIN_ID)[0] == ann.text
+
+
+async def test_unchanged_text_stays_quiet_across_restarts(fresh_db, monkeypatch):
+    await _users(fresh_db, ADMIN_ID, 1)
+    monkeypatch.setattr(announcements.asyncio, "sleep", AsyncMock())
+    ann = _announcement()
+    monkeypatch.setattr(announcements, "ANNOUNCEMENTS", [ann])
+    await announcements.run_pending_announcements(FakeBot())
+
+    bot = FakeBot()
+    await announcements.run_pending_announcements(bot)
+
+    assert bot.sent == []
+
+
+async def test_changed_button_also_needs_a_second_look(fresh_db, monkeypatch):
+    """Кнопка — часть обещания: переехал callback, значит проверять заново."""
+    await _users(fresh_db, ADMIN_ID, 1)
+    monkeypatch.setattr(announcements.asyncio, "sleep", AsyncMock())
+    ann = _announcement()
+    monkeypatch.setattr(announcements, "ANNOUNCEMENTS", [ann])
+    await announcements.run_pending_announcements(FakeBot())
+
+    ann.buttons = [("🤖 Собрать программу", "ann:buildprog")]
+    bot = FakeBot()
+    await announcements.run_pending_announcements(bot)
+
+    assert bot.texts_to(ADMIN_ID)[0] == ann.text
+
+
+async def test_approved_release_ignores_a_later_text_edit(fresh_db, monkeypatch):
+    """Одобренная рассылка дорассылается, а не уходит на новый круг проверки."""
+    await _users(fresh_db, ADMIN_ID, 1, 2)
+    monkeypatch.setattr(announcements.asyncio, "sleep", AsyncMock())
+    ann = _announcement()
+    monkeypatch.setattr(announcements, "ANNOUNCEMENTS", [ann])
+    await announcements.send_preview(FakeBot(), ann)
+    await db_module.set_announcement_status(ann.key, announcements.STATUS_APPROVED)
+
+    ann.text = "ПРИВЕТ АТЛЕТ, правка на ходу."
+    bot = FakeBot()
+    await announcements.run_pending_announcements(bot)
+
+    assert {chat_id for chat_id, _ in bot.sent if chat_id != ADMIN_ID} == {1, 2}
+
+
 # ---------- сама доставка ----------
 
 
@@ -348,7 +408,7 @@ async def test_release_buttons_lead_into_the_two_features():
     которая молча ничего не делает.
     """
     callbacks = [data for _, data in announcements.RELEASE_AI_PROGRAMS_AND_VIDEO.buttons]
-    assert callbacks == ["ai:buildprog", "ai:videohint"]
+    assert callbacks == ["ann:buildprog", "ai:videohint"]
 
     source = (Path(__file__).resolve().parent.parent / "handlers" / "ai_trainer.py").read_text()
     for data in callbacks:
