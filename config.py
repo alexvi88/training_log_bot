@@ -214,6 +214,21 @@ AI_SEARCH_TIMEOUT_SECONDS = float(os.getenv("AI_SEARCH_TIMEOUT_SECONDS", "180"))
 # подешевеет сам шаг (см. GROK_SEARCH_MODEL).
 AI_SEARCH_DAILY_LIMIT = int(os.getenv("AI_SEARCH_DAILY_LIMIT", "5"))
 
+# Тот же потолок, но на ВСЕХ пользователей за сутки (по UTC — счёт от провайдера
+# живёт по UTC, а не по местному времени атлета).
+#
+# Личный лимит не защищает от роста аудитории: он умножается на число людей.
+# Десять активных атлетов по пять поисков — это пятьдесят поисков, около $10 за
+# день, и ни одного сигнала до счёта в конце месяца. Глобальный потолок — единственное
+# место, где расход перестаёт зависеть от того, сколько людей пришло.
+#
+# Десять — это примерно $2 в день в худшем случае. Держим сознательно ниже
+# суммы личных квот: упереться в него должно быть событием, которое видно в
+# логе, а не нормой. Поднимать — вместе с общим кэшем находок поиска
+# (LLM_COSTS.md, идея 1): он делает второй одинаковый вопрос бесплатным, и тогда
+# тот же потолок начинает пропускать заметно больше людей.
+AI_SEARCH_GLOBAL_DAILY_LIMIT = int(os.getenv("AI_SEARCH_GLOBAL_DAILY_LIMIT", "10"))
+
 # Soft per-user daily cap on AI-trainer questions overall (any kind). Guards
 # against a single user running up unbounded model cost; when hit, the trainer
 # politely defers until the next day. Generous by default.

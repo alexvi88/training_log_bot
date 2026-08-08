@@ -74,6 +74,16 @@ async def _build_cost_report(date_str: str) -> str:
         lines.append(f"Поиск в сети: {server_tool_calls} вызовов (~${server_tool_cost:.2f})")
         for tool, calls in sorted(server_tools.items(), key=lambda x: -x[1]):
             lines.append(f"  └ {tool}: {calls}")
+    # Отдельная строка только когда потолок реально сработал: иначе «дорогие
+    # сутки, в которых людям молча отказывали в свежести» выглядят в отчёте ровно
+    # как обычные. Вызовов инструментов для этого не хватает — их число зависит от
+    # того, сколько запросов сделала модель внутри одного поиска.
+    searches = await db.get_ai_search_count_global(date_str)
+    if searches >= config.AI_SEARCH_GLOBAL_DAILY_LIMIT:
+        lines.append(
+            f"⚠️ Общий потолок поисков исчерпан: {searches} из "
+            f"{config.AI_SEARCH_GLOBAL_DAILY_LIMIT} — дальше отвечали без свежести"
+        )
     lines.append(f"💸 Итого расходы: ~${total_cost:.2f} (~${total_cost * 30:.0f}/мес)")
     return "\n".join(lines)
 

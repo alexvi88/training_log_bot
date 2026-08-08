@@ -197,6 +197,16 @@ CREATE TABLE IF NOT EXISTS ai_search_usage (
     PRIMARY KEY (telegram_id, date)
 );
 
+-- Поиски всех пользователей за сутки. Отдельная таблица, а не SUM() по
+-- ai_search_usage: там date — КАЛЕНДАРНЫЙ ДЕНЬ ПОЛЬЗОВАТЕЛЯ, у разных часовых
+-- поясов он разный, и сумма по одной дате смешивала бы куски разных суток.
+-- Здесь дата всегда UTC: глобальный потолок про наш счёт от провайдера, а он
+-- живёт по UTC, а не по местному времени атлета.
+CREATE TABLE IF NOT EXISTS ai_search_global_usage (
+    date TEXT PRIMARY KEY,
+    count INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS ai_question_usage (
     telegram_id INTEGER NOT NULL,
     date TEXT NOT NULL,
@@ -5231,13 +5241,43 @@ async def get_ai_search_count_today(telegram_id: int) -> int:
     return row["count"] if row else 0
 
 
+def _utc_day() -> str:
+    """Сутки по UTC — для глобальных потолков, привязанных к счёту провайдера."""
+    return dt.datetime.now(dt.timezone.utc).date().isoformat()
+
+
+async def get_ai_search_count_global(date_str: Optional[str] = None) -> int:
+    """Сколько живых поисков сделали ВСЕ пользователи за сутки по UTC.
+
+    Без даты — за текущие сутки (так её спрашивает потолок в ai_trainer), с
+    датой — за конкретные (так её спрашивает дневной отчёт админу).
+    """
+    cur = await conn().execute(
+        "SELECT count FROM ai_search_global_usage WHERE date = ?",
+        (date_str or _utc_day(),),
+    )
+    row = await cur.fetchone()
+    return row["count"] if row else 0
+
+
 async def increment_ai_search_count(telegram_id: int) -> None:
+    """Плюс один поиск — и в личный счётчик, и в общий, одной транзакцией.
+
+    Оба счётчика двигаются вместе намеренно: разъедься они, и один из двух
+    потолков начнёт врать, а какой именно — станет видно только по счёту от
+    провайдера, то есть через месяц.
+    """
     today = await _quota_day(telegram_id)
     async with _write_lock:
         await conn().execute(
             "INSERT INTO ai_search_usage (telegram_id, date, count) VALUES (?, ?, 1) "
             "ON CONFLICT (telegram_id, date) DO UPDATE SET count = count + 1",
             (telegram_id, today),
+        )
+        await conn().execute(
+            "INSERT INTO ai_search_global_usage (date, count) VALUES (?, 1) "
+            "ON CONFLICT (date) DO UPDATE SET count = count + 1",
+            (_utc_day(),),
         )
         await conn().commit()
 
