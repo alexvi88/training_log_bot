@@ -288,7 +288,7 @@ def ai_setup_question_keyboard(
     Каждый вариант своей строкой: ответы вроде «час-полтора» в паре Telegram
     обрежет, и два варианта станут неотличимы.
 
-    «⏭ Собирай так» стоит всегда, даже когда вариантов нет: отмахнуться от
+    «⏭ Хватит вопросов, собирай» стоит всегда, даже когда вариантов нет: отмахнуться от
     уточнений — законный ответ («да просто дай что-нибудь»), и без этой кнопки
     единственным выходом из опросника было бы ответить на все вопросы.
     """
@@ -298,7 +298,7 @@ def ai_setup_question_keyboard(
             text=_shorten_label(choice, AI_MENTION_LABEL_LIMIT),
             callback_data=f"ai:qa:{question_index}:{choice_index}",
         )
-    b.button(text="⏭ Собирай так", callback_data="ai:qskip")
+    b.button(text="⏭ Хватит вопросов, собирай", callback_data="ai:qskip")
     b.adjust(1)
     return b.as_markup()
 
@@ -717,6 +717,12 @@ def program_edit_keyboard(days, program_id: int) -> InlineKeyboardMarkup:
     строки вместо четырёх.
     """
     b = InlineKeyboardBuilder()
+    # Состав дней — первым делом: «изменить программу» человек жмёт прежде всего
+    # чтобы поменять упражнения, а этого пункта тут не было вовсе. Добраться до
+    # состава можно было только вернувшись на экран программы и ткнув в день —
+    # догадаться неоткуда, экран правок про день не говорил ни слова.
+    for d in days:
+        b.button(text=f"✏️ {d['name']}", callback_data=f"rt:edit:{d['id']}")
     b.button(text="➕ Добавить день", callback_data=f"rt:dayadd:{program_id}")
     if len(days) > 1:
         b.button(text="🔀 Порядок дней", callback_data=f"rt:dayorder:{program_id}")
@@ -768,7 +774,11 @@ def program_day_order_keyboard(days, program_id: int) -> InlineKeyboardMarkup:
         row = _move_arrows(i, last, f"rt:daymv:{d['id']}:up", f"rt:daymv:{d['id']}:down")
         row.append(InlineKeyboardButton(text=d["name"], callback_data=f"rt:view:{d['id']}"))
         b.row(*row)
-    b.row(InlineKeyboardButton(text="⬅️ Готово", callback_data=f"rt:prg:{program_id}"))
+    # Назад — на шаг, откуда пришли («⚙️ Изменить программу»), а не сразу на
+    # экран программы: порядок дней меняют в связке с остальными правками, и
+    # выбрасывать человека из редактора после каждой значит заставлять его
+    # заходить туда заново.
+    b.row(InlineKeyboardButton(text="⬅️ Готово", callback_data=f"rt:pgmedit:{program_id}"))
     return b.as_markup()
 
 

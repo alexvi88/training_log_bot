@@ -1011,6 +1011,29 @@ def format_progression_rule(progression: Optional[dict], unit: Optional[str] = N
     return ""
 
 
+# Правило прогрессии общими словами, без шага: шаг у каждого упражнения свой
+# (2.5 на тяге, 5 на жиме ногами, 1 на разведениях), и печатать его построчно
+# значило семнадцать почти одинаковых строк подряд — состав программы в них
+# тонул. Сам шаг человек всё равно увидит в тренировке, когда бот предложит вес.
+_PROGRESSION_KIND_TEXT = {
+    "double_progression": "двойная прогрессия: дошёл до верха диапазона повторов — прибавь вес",
+    "linear_load": "линейная прогрессия: прибавляй вес каждую тренировку",
+}
+
+
+def progression_kind_line(days: list[dict]) -> str:
+    """Одна строка про прогрессию на всю программу — или пусто.
+
+    Пусто в двух случаях: правила разного типа (тогда их печатают поштучно, см.
+    build_ai_program_preview) и одно-единственное упражнение — там повторять
+    нечего, и точная строка со своим шагом полезнее общих слов.
+    """
+    rules = [(item.get("progression") or {}).get("rule") for day in days for item in day["items"]]
+    if len(rules) < 2 or len(set(rules)) != 1:
+        return ""
+    return _PROGRESSION_KIND_TEXT.get(rules[0], "")
+
+
 def build_program_changes(
     old_days: list[dict], new_days: list[dict], unit: Optional[str] = None
 ) -> list[str]:
@@ -1191,17 +1214,11 @@ def build_ai_program_preview(
         f"{len(days)} {day_word} · {total} {ex_word}",
     ]
 
-    # Правило прогрессии у всех упражнений обычно одно и то же, и построчно оно
-    # превращалось в восемь одинаковых «⤴️ двойная прогрессия» подряд — состав
-    # программы тонул в повторе. Общее правило выносим один раз в шапку, а под
-    # упражнениями оставляем только то, что из него выбивается.
-    rules = [
-        format_progression_rule(item.get("progression"), unit)
-        for day in days for item in day["items"]
-    ]
-    shared_note = rules[0] if len(rules) > 1 and all(r and r == rules[0] for r in rules) else ""
-    if shared_note:
-        lines.append(f"⤴️ Везде: {escape(shared_note)}")
+    # Прогрессия — общий принцип программы, а не свойство каждой строки: одна
+    # фраза сверху вместо семнадцати почти одинаковых под упражнениями.
+    shared_kind = progression_kind_line(days)
+    if shared_kind:
+        lines.append(f"⤴️ Везде {escape(shared_kind)}")
 
     composition: list[str] = []
     for day in days:
@@ -1210,9 +1227,11 @@ def build_ai_program_preview(
             target = item.get("target")
             suffix = f" — {escape(target)}" if target else ""
             composition.append(f"{i}. {escape(item['name'])}{suffix}")
-            prog_note = format_progression_rule(item.get("progression"), unit)
-            if prog_note and prog_note != shared_note:
-                composition.append(f"   ⤴️ {escape(prog_note)}")
+            # Поштучно — только когда общей фразы нет: правила разного типа.
+            if not shared_kind:
+                prog_note = format_progression_rule(item.get("progression"), unit)
+                if prog_note:
+                    composition.append(f"   ⤴️ {escape(prog_note)}")
 
     tail = ["", DIVIDER]
     if replaces:

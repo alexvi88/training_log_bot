@@ -14,6 +14,15 @@ from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 
 from handlers import ai_trainer as handler
 
+
+@pytest.fixture(autouse=True)
+def _show_draft_immediately(monkeypatch):
+    """Здесь проверяется механика черновика, а не порог первого показа
+    (handler.DRAFT_MIN_CHARS): у него свой тест ниже, а тут он только мешал бы
+    писать короткие говорящие строки."""
+    monkeypatch.setattr(handler, "DRAFT_MIN_CHARS", 0)
+
+
 pytestmark = pytest.mark.asyncio
 
 
@@ -353,3 +362,37 @@ async def test_flush_cadence_is_configurable():
 
     assert ai_trainer.STREAM_FLUSH_SECONDS == config.AI_STREAM_FLUSH_SECONDS
     assert 0 < config.AI_STREAM_FLUSH_SECONDS <= 2
+
+
+async def test_draft_waits_for_a_paragraph_before_showing_up(monkeypatch):
+    """Модель выдаёт вступительную фразу за секунду, а потом уходит думать и
+    ходить по инструментам на десятки секунд. Показанный сразу огрызок висел
+    застывшим и читался как зависший бот — до абзаца честнее держать
+    анимированный «думаю…»."""
+    monkeypatch.setattr(handler, "DRAFT_MIN_CHARS", 280)
+    msg = _message()
+    streamer = handler._DraftStreamer(msg)
+
+    await streamer.push("Смотрю твой жим")
+    await _settle()
+    assert msg.bot.send_message_draft.await_args_list == []
+
+    await streamer.push("Смотрю твой жим. " + "Дальше по подходам. " * 20)
+    await _settle()
+    assert msg.bot.send_message_draft.await_args_list, "после абзаца черновик обязан появиться"
+
+
+async def test_once_started_the_draft_keeps_streaming_short_updates(monkeypatch):
+    """Порог только на первый показ: дальше поток идёт как шёл, иначе текст
+    снова замирал бы между редкими длинными кусками."""
+    monkeypatch.setattr(handler, "DRAFT_MIN_CHARS", 280)
+    msg = _message()
+    streamer = handler._DraftStreamer(msg)
+
+    await streamer.push("Начало. " + "Дальше по подходам. " * 20)
+    await _settle()
+    before = len(msg.bot.send_message_draft.await_args_list)
+    await streamer.push("Начало. " + "Дальше по подходам. " * 20 + " И ещё строка.")
+    await _settle()
+
+    assert len(msg.bot.send_message_draft.await_args_list) > before

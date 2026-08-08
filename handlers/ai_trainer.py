@@ -69,6 +69,14 @@ DRAFT_MIN_INTERVAL = config.AI_DRAFT_INTERVAL_SECONDS
 # Дольше этого ждать флудвейт бессмысленно — ответ придёт раньше черновика.
 MAX_DRAFT_RETRY_WAIT = 5.0
 
+# Сколько текста должно накопиться, прежде чем черновик вообще покажется.
+# Модель успевает выдать вступительную фразу за секунду, а потом уходит думать
+# и ходить по инструментам на десятки секунд — и всё это время на экране висел
+# один застывший огрызок вместо живого «думаю…». Выглядело как зависший бот, а
+# не как работа. Ждём абзаца: до него честнее показывать анимированный
+# placeholder, а текст пускать уже потоком.
+DRAFT_MIN_CHARS = 280
+
 # Лимит на размер голосового (Telegram сам не режет сильнее, но перестрахуемся).
 MAX_VOICE_BYTES = 20 * 1024 * 1024
 
@@ -270,6 +278,11 @@ class _DraftStreamer:
     async def push(self, text: str) -> None:
         """Отдать черновику новый текст. Не ждёт сети — только будит писателя."""
         if not self._enabled or not text:
+            return
+        # Пока текста меньше абзаца, черновик не показываем вовсе (см.
+        # DRAFT_MIN_CHARS): один застывший огрызок читается как поломка. Порог
+        # только на ПЕРВЫЙ показ — дальше поток идёт как шёл.
+        if not self._started and len(text) < DRAFT_MIN_CHARS:
             return
         # Копим сырой текст целиком: во что именно он превратится на экране,
         # решает _draft_html уже в момент отправки — промежуточные состояния
@@ -1006,8 +1019,12 @@ async def ai_program_view(callback: CallbackQuery, state: FSMContext):
     if draft is None:
         return
     replaces = draft.get("replaces")
+    # Единицу передаём: без неё превью писало «прибавь 2.5 к весу» вместо
+    # «2.5кг» — а у lb-пользователя выдуманные килограммы были бы враньём.
+    user = await db.get_user(callback.from_user.id)
     text = formatting.build_ai_program_preview(
-        draft["name"], draft["days"], replaces=replaces, notes=draft.get("notes")
+        draft["name"], draft["days"], replaces=replaces, notes=draft.get("notes"),
+        unit=user["unit"] if user else None,
     )
     await callback.message.answer(
         text,
