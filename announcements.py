@@ -36,6 +36,7 @@
 
 import asyncio
 import datetime as dt
+import hashlib
 import logging
 import os
 from dataclasses import dataclass, field
@@ -95,15 +96,19 @@ RELEASE_AI_PROGRAMS_AND_VIDEO = Announcement(
     key="release_ai_programs_and_video",
     text=(
         "ПРИВЕТ АТЛЕТ, я подрос в двух местах.\n\n"
-        "🤖 <b>Составляю программы.</b> Скажешь, сколько дней в неделю тянешь и "
-        "к чему идёшь, — соберу план на недели вперёд: упражнения, подходы, веса. "
-        "Что-то не по тебе — скажи словами, переделаю.\n\n"
-        "🎥 <b>Смотрю технику по видео.</b> Пришли ролик подхода — гляну "
-        "траекторию грифа, спину и колени и скажу, что править первым.\n\n"
+        "🤖 <b>Составляю программы.</b> Задам пару вопросов — про дни, инвентарь "
+        "и цель — и соберу сплит: упражнения, подходы, повторы, как прибавлять. "
+        "Стартовые веса подскажу по твоей истории. Не по тебе — скажи словами, "
+        "переделаю.\n\n"
+        "🎥 <b>Смотрю технику по видео.</b> Пришли ролик подхода, снятый сбоку, — "
+        "гляну траекторию, спину и колени и скажу, что править первым.\n\n"
         "Обе штуки уже работают. Выбирай, с чего начнём."
     ),
+    # Кнопки ведут в те же сценарии, что и из меню, но своими callback'ами:
+    # экранные кнопки встают на место сообщения, с которого их нажали, а
+    # рассылку съедать нельзя — под ней вторая кнопка, и человек к ней вернётся.
     buttons=[
-        ("🤖 Собрать программу", "ai:buildprog"),
+        ("🤖 Собрать программу", "ann:buildprog"),
         ("🎥 Разобрать видео", "ai:videohint"),
     ],
     # Файла может и не быть: тогда уходит текстом. Картинку под релиз кладём
@@ -199,8 +204,15 @@ async def send_preview(bot: Bot, ann: Announcement) -> bool:
     except TelegramAPIError:
         logger.exception("Failed to show announcement %s to admin", ann.key)
         return False
-    await db.set_announcement_status(ann.key, STATUS_PREVIEW)
+    await db.set_announcement_status(ann.key, STATUS_PREVIEW, text_hash=text_hash(ann))
     return True
+
+
+def text_hash(ann: Announcement) -> str:
+    """Отпечаток того, что видел админ. Меняется вместе с текстом и кнопками —
+    и кнопка, ведущая не туда, тоже стоит повторной проверки."""
+    payload = ann.text + "|" + "|".join(f"{label}>{data}" for label, data in ann.buttons)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 # ---------- шаг 2: разослать ----------
@@ -265,6 +277,14 @@ async def _report_to_admin(bot: Bot, ann: Announcement, sent: int, blocked: int,
 # ---------- фоновая задача старта ----------
 
 
+async def _text_changed(ann: Announcement) -> bool:
+    stored = await db.get_announcement_text_hash(ann.key)
+    # None — превью из версии, которая отпечатков ещё не писала. Считаем, что
+    # это тот же текст: показать лишний раз безобиднее, но дёргать админа на
+    # каждом рестарте после обновления — нет.
+    return stored is not None and stored != text_hash(ann)
+
+
 async def run_pending_announcements(bot: Bot) -> None:
     """Что делать с каждой рассылкой при старте бота.
 
@@ -272,7 +292,7 @@ async def run_pending_announcements(bot: Bot) -> None:
     десятый:
 
     * нет записи — показать админу и ждать;
-    * `preview` — админ ещё не ответил, второй раз не дёргаем;
+    * `preview` — админ ещё не ответил: молчим, пока текст не переписали;
     * `approved` — рассылка одобрена, но контейнер перезапустился посреди неё:
       дорассылаем оставшимся (получившие отсеиваются по `pushes`);
     * `declined` — забыли.
@@ -290,5 +310,12 @@ async def run_pending_announcements(bot: Bot) -> None:
                 await send_preview(bot, ann)
             elif status == STATUS_APPROVED:
                 await deliver_and_report(bot, ann)
+            elif status == STATUS_PREVIEW and await _text_changed(ann):
+                # Текст переписали после показа: то, что админ видел, больше не
+                # существует, а новую редакцию никто не проверял. Показываем
+                # заново — заодно это единственный способ вернуть анонс,
+                # потерявшийся в чате, не вспоминая про /announce.
+                logger.info("Announcement %s changed since the preview, showing it again", ann.key)
+                await send_preview(bot, ann)
         except Exception:
             logger.exception("Announcement %s crashed", ann.key)

@@ -194,7 +194,11 @@ CREATE INDEX IF NOT EXISTS idx_pushes_telegram_id ON pushes (telegram_id, sent_a
 CREATE TABLE IF NOT EXISTS announcement_state (
     key TEXT PRIMARY KEY,
     status TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    -- Отпечаток текста, который админ видел на превью. Перепишут текст —
+    -- отпечаток разойдётся, и анонс покажется на проверку заново: одобряли
+    -- не эту редакцию (см. announcements.run_pending_announcements).
+    text_hash TEXT
 );
 
 CREATE TABLE IF NOT EXISTS push_rotation (
@@ -728,6 +732,12 @@ async def _migrate_schema() -> None:
         await _conn.execute(
             "UPDATE oauth_tokens SET connected_at = created_at WHERE connected_at IS NULL"
         )
+
+    # Разовые рассылки жили без отпечатка текста: превью показывали один раз, а
+    # переписанный после этого анонс уходил бы людям, не побывав на проверке.
+    announcement_cols = await _column_names("announcement_state")
+    if announcement_cols and "text_hash" not in announcement_cols:
+        await _conn.execute("ALTER TABLE announcement_state ADD COLUMN text_hash TEXT")
 
     shared_cols = await _column_names("shared_items")
     if "taken_count" not in shared_cols:
@@ -5674,6 +5684,13 @@ async def record_push(telegram_id: int, category: str, text: str, sent_on: str) 
         await conn().commit()
 
 
+async def get_announcement_text_hash(key: str) -> str | None:
+    """Отпечаток текста, показанного админу на превью, или None."""
+    cur = await conn().execute("SELECT text_hash FROM announcement_state WHERE key = ?", (key,))
+    row = await cur.fetchone()
+    return row["text_hash"] if row else None
+
+
 async def get_announcement_status(key: str) -> str | None:
     """Где сейчас разовая рассылка: None (ещё не показывали админу), 'preview',
     'approved' или 'declined'. См. announcements.py."""
@@ -5682,12 +5699,16 @@ async def get_announcement_status(key: str) -> str | None:
     return row["status"] if row else None
 
 
-async def set_announcement_status(key: str, status: str) -> None:
+async def set_announcement_status(key: str, status: str, text_hash: str | None = None) -> None:
     async with _write_lock:
         await conn().execute(
-            "INSERT INTO announcement_state (key, status, updated_at) VALUES (?, ?, ?) "
-            "ON CONFLICT(key) DO UPDATE SET status = excluded.status, updated_at = excluded.updated_at",
-            (key, status, now_iso()),
+            "INSERT INTO announcement_state (key, status, updated_at, text_hash) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET status = excluded.status, "
+            "updated_at = excluded.updated_at, "
+            # Отпечаток обновляет только показ превью; «одобрено»/«отклонено»
+            # приходят без него и затирать уже записанный не должны.
+            "text_hash = COALESCE(excluded.text_hash, announcement_state.text_hash)",
+            (key, status, now_iso(), text_hash),
         )
         await conn().commit()
 

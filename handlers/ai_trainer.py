@@ -528,13 +528,20 @@ BUILD_WORKOUT_SEED = (
 
 
 async def _start_ai_scenario(
-    callback: CallbackQuery, state: FSMContext, intro: str, seed: str
+    callback: CallbackQuery, state: FSMContext, intro: str, seed: str, keep_message: bool = False
 ) -> None:
     """Кнопка, которая сама начинает разговор с тренером за пользователя.
 
     Общая половина «Составить программу» и «Тренировка на сегодня»: обе не
     просто открывают чат, а сразу задают тренеру нужный вопрос — иначе, чтобы
     получить план, надо было самому догадаться попросить об этом словами.
+
+    `keep_message` — не съедать сообщение, на котором стояла кнопка. По
+    умолчанию сценарий встаёт на его место: кнопка живёт на экране меню, а
+    экран — расходник. Но та же кнопка стоит и под релизной рассылкой
+    (announcements.py), а рассылка — не экран: человек тапнул «собрать
+    программу», и анонс вместе со второй кнопкой, про разбор видео, исчезал из
+    чата навсегда.
 
     Дневной лимит проверяется ДО подмены экрана: раньше бодрое «ОКЕЙ, СОБИРАЕМ»
     успевало встать на место меню, и уже под ним приезжал отказ — человек терял
@@ -574,6 +581,7 @@ async def _start_ai_scenario(
         # и без кнопок выход остался бы только через нижнее меню.
         screen = await ui.safe_edit(
             callback, intro, reply_markup=await ai_keyboard(user_id), parse_mode="HTML",
+            delete=not keep_message,
         )
         await _handle_question(
             screen, state, seed, history_question=seed, user_id=user_id,
@@ -586,6 +594,19 @@ async def _start_ai_scenario(
 async def ai_build_program(callback: CallbackQuery, state: FSMContext):
     """«Составить с AI-тренером» в 🗂 Программы — многодневка на будущее."""
     await _start_ai_scenario(callback, state, BUILD_PROGRAM_INTRO, BUILD_PROGRAM_SEED)
+
+
+@router.callback_query(F.data == "ann:buildprog")
+async def announcement_build_program(callback: CallbackQuery, state: FSMContext):
+    """То же самое, но из релизной рассылки (announcements.py).
+
+    Отдельный callback, а не флаг в существующем: под рассылкой кнопка обязана
+    оставлять сообщение на месте, под экраном программ — обязана его заменять,
+    и решает это не пользователь, а то, откуда кнопка приехала.
+    """
+    await _start_ai_scenario(
+        callback, state, BUILD_PROGRAM_INTRO, BUILD_PROGRAM_SEED, keep_message=True
+    )
 
 
 @router.callback_query(F.data == "ai:buildworkout")
