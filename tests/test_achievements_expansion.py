@@ -1,4 +1,4 @@
-"""Расширение каталога ачивок: сессионные, календарные, RPE, разнообразие и
+"""Расширение каталога ачивок: сессионные, календарные, разнообразие и
 кросс-доменные (вес, еда).
 
 Все новые бейджи — агрегаты «лучшее/счётчик за всё время», поэтому resync
@@ -39,7 +39,7 @@ async def test_every_catalog_code_is_reachable():
         max_session_sets=40, max_session_tonnage_kg=9_000, max_session_exercises=12,
         has_superset=True, max_bodyweight_reps=30, early_workouts=20,
         has_weekend_pair=True, all_weekdays_covered=True, has_dec31=True,
-        max_rpe=10.0, rpe_sets=200, bodyweight_logs=50, food_diary_best_run=10,
+        bodyweight_logs=50, food_diary_best_run=10,
         workout_start_hour=6, workout_date=dt.date(2026, 1, 1),
         workout_duration_seconds=3 * 3600,
     )
@@ -56,13 +56,6 @@ async def test_session_records_are_lifetime_maxima_of_per_session_numbers():
 
     below = _ctx(max_session_sets=24, max_session_tonnage_kg=4_999, max_session_exercises=7)
     assert {"vol25", "session5t", "combine8"}.isdisjoint(earned_codes(below))
-
-
-async def test_rpe_family_requires_logged_rpe():
-    assert "rpe10" in earned_codes(_ctx(max_rpe=10.0))
-    assert "rpe10" not in earned_codes(_ctx(max_rpe=9.5))
-    assert "rpe10" not in earned_codes(_ctx(max_rpe=None))
-    assert "rpe100" in earned_codes(_ctx(rpe_sets=100))
 
 
 async def test_weekend_pair_means_same_weekend_not_any_two_days():
@@ -101,7 +94,7 @@ async def test_superset_and_volume_awarded_from_real_history(fresh_db, user_id):
 
     added, _removed = await achievement_sync.resync(user_id)
 
-    assert {"superset1", "vol25", "rpe10", "session5t"} <= set(added)
+    assert {"superset1", "vol25", "session5t"} <= set(added)
 
 
 async def test_deleting_the_record_workout_revokes_the_session_badges(fresh_db, user_id):

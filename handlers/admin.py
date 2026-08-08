@@ -176,7 +176,11 @@ async def _show_pushes_list(target: Message | CallbackQuery, state: FSMContext, 
             sent = dt.datetime.fromisoformat(p["sent_at"])
             who = f"@{p['username']}" if p["username"] else str(p["telegram_id"])
             category = push_texts.CATEGORY_LABELS.get(p["category"], p["category"])
-            body = f"«{p['text']}»" if p["text"] else "(без текста — только стикер)"
+            # Пуши с AI-комментарием бывают на несколько абзацев — 10 таких
+            # подряд валили Telegram-лимит в 4096 символов, и вместо списка
+            # приходило TelegramBadRequest: message is too long, а команда
+            # /pushes отвечала «Что-то пошло не так» вместо экрана.
+            body = f"«{formatting.shorten(p['text'], 200)}»" if p["text"] else "(без текста — только стикер)"
             entries.append(f"{sent.strftime('%d.%m %H:%M')} · {who} · {category}\n{body}")
         text = f"📬 Пуши ({total}), последние сверху:\n\n" + "\n\n".join(entries)
     else:
