@@ -146,11 +146,15 @@ async def intro_presets(user_id: int) -> list[tuple[str, str]]:
 MEMORY_REMINDER_DAYS = 7
 
 
-async def _memory_reminder(user_id: int, state: FSMContext) -> str:
+async def _memory_reminder(user_id: int) -> str:
     """Хвост к интро: что записано в профиле и как это поправить.
 
     Пусто, если тренер про человека ещё ничего не знает (хвалиться нечем) или
     если напоминание уже показывали на этой неделе.
+
+    Дата последнего показа лежит в базе, а не в FSM: /start чистит состояние
+    целиком, кроме трёх AI-ключей (см. state_scaffold.AI_STATE_KEYS), — с
+    отметкой в FSM напоминание вылезало бы на каждый тап «🏠 Меню» и обратно.
     """
     # Локальный импорт: экран профиля и этот хвост показывают одно и то же, но
     # тянуть друг друга на уровне модуля двум обработчикам незачем.
@@ -167,15 +171,14 @@ async def _memory_reminder(user_id: int, state: FSMContext) -> str:
     if not known:
         return ""
     today = timeutil.user_today(user)
-    data = await state.get_data()
-    last = data.get("ai_memory_shown")
+    last = user["profile_shown_on"]
     if last:
         try:
             if (today - dt.date.fromisoformat(str(last))).days < MEMORY_REMINDER_DAYS:
                 return ""
         except ValueError:
             pass
-    await state.update_data(ai_memory_shown=today.isoformat())
+    await db.update_user(user_id, profile_shown_on=today.isoformat())
     return (
         "\n\n🧠 <b>Что я про тебя помню:</b> "
         + "; ".join(known)
@@ -463,7 +466,7 @@ async def menu_ai(callback: CallbackQuery, state: FSMContext):
     # видит ровно один раз в жизни — а напоминание нужно как раз тем, кто
     # тренером пользуется. Это отдельный экран входа, а не вклинивание в ответ,
     # так что «потери контекста» тут не возникает.
-    text += await _memory_reminder(callback.from_user.id, state)
+    text += await _memory_reminder(callback.from_user.id)
     # Готовые вопросы — только на свежем интро: посреди разговора они бы
     # читались как «тренер забыл, о чём речь».
     keyboard = await ai_keyboard(
