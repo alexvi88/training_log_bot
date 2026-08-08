@@ -764,33 +764,28 @@ def program_edit_keyboard(days, program_id: int) -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
-def _move_arrows(i: int, last: int, up_cb: str, down_cb: str) -> list[InlineKeyboardButton]:
-    """Две ячейки со стрелками — всегда две, даже когда стрелка неуместна.
-
-    Без заглушки у первой строки не было «⬆️», у последней «⬇️», и соседняя
-    кнопка съезжала на колонку влево: «✏️» первой строки оказывалась там, где у
-    средних стоит удаление. Ряды выглядели рваными, а промахнуться было легко.
-    Единственная строка не переставляется вовсе — там стрелок нет совсем.
-    """
-    if last <= 0:
-        return []
-    return [
-        InlineKeyboardButton(text="⬆️", callback_data=up_cb) if i > 0
-        else InlineKeyboardButton(text="·", callback_data="rt:noop"),
-        InlineKeyboardButton(text="⬇️", callback_data=down_cb) if i < last
-        else InlineKeyboardButton(text="·", callback_data="rt:noop"),
-    ]
-
-
 def program_day_order_keyboard(days, program_id: int) -> InlineKeyboardMarkup:
-    """Стрелки для перестановки дней — та же механика, что у упражнений внутри
-    дня (routine_edit_keyboard), этажом выше."""
+    """Перестановка дней: номер с именем первым, за ним одна стрелка.
+
+    Ровно та же раскладка, что у упражнений внутри дня (routine_edit_keyboard),
+    и по тем же причинам. Было наоборот: две колонки стрелок, а название —
+    третьим, да ещё с пустышками «·» на краях списка, где стрелка не работала.
+    Читалось это как «⬆️ ⬇️ День 2», то есть сначала непонятно что, потом уже
+    про что.
+
+    Стрелка одна и ходит по кругу (db.reorder_program_day): поднять второй день
+    — то же самое, что опустить первый, а у первого «выше» отправляет его в
+    конец. Так пустышки не нужны вовсе.
+    """
     b = InlineKeyboardBuilder()
-    last = len(days) - 1
-    for i, d in enumerate(days):
-        row = _move_arrows(i, last, f"rt:daymv:{d['id']}:up", f"rt:daymv:{d['id']}:down")
-        row.append(InlineKeyboardButton(text=d["name"], callback_data=f"rt:view:{d['id']}"))
-        b.row(*row)
+    for position, d in enumerate(days, start=1):
+        b.row(
+            InlineKeyboardButton(
+                text=f"{position}. {_shorten_label(d['name'], 24)}",
+                callback_data=f"rt:view:{d['id']}",
+            ),
+            InlineKeyboardButton(text="⬆️", callback_data=f"rt:daymv:{d['id']}:up"),
+        )
     # Назад — на шаг, откуда пришли («⚙️ Изменить программу»), а не сразу на
     # экран программы: порядок дней меняют в связке с остальными правками, и
     # выбрасывать человека из редактора после каждой значит заставлять его

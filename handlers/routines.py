@@ -130,8 +130,11 @@ async def show_manage(event, state: FSMContext) -> None:
 
 @router.callback_query(F.data == "rt:noop")
 async def rt_noop(callback: CallbackQuery):
-    """Заглушка вместо неуместной стрелки (keyboards._move_arrows) — держит
-    колонки ровными и молчит в ответ на тап."""
+    """Заглушка на месте неуместной стрелки.
+
+    Клавиатур с такими кнопками больше не собирается — стрелка везде одна и
+    ходит по кругу, — но экраны с ними висят в чатах и тапабельны вечно, а без
+    обработчика тап улетел бы в фолбэк и выкинул человека в главное меню."""
     await callback.answer()
 
 
@@ -157,6 +160,10 @@ async def _owned_program(event, program_id: int):
 # кнопка «✏️ Редактировать → Изменить состав» — ровно то, зачем такой день и
 # заводят.
 _EMPTY_DAY_LINE = "Пока пусто — добавь упражнения через «✏️ Редактировать»."
+
+# Стрелка одна и ходит по кругу, поэтому объясняем — иначе «⬆️» у первого дня
+# выглядит сломанной кнопкой, хотя она отправляет его в конец.
+_DAY_ORDER_TEXT = "Порядок дней: ⬆️ — поднять выше (с первого — в конец)."
 
 
 def _days_ago_label(iso: str, today: dt.date) -> str:
@@ -1186,7 +1193,7 @@ async def rt_day_order(callback: CallbackQuery, state: FSMContext):
         return
     days = await db.list_program_days_by_id(program_id)
     await ui.safe_edit(
-        callback, "Порядок дней — стрелками:",
+        callback, _DAY_ORDER_TEXT,
         reply_markup=keyboards.program_day_order_keyboard(days, program_id),
     )
     await callback.answer()
@@ -1201,7 +1208,7 @@ async def rt_day_move(callback: CallbackQuery, state: FSMContext):
     await db.reorder_program_day(routine["id"], direction)
     days = await db.list_program_days_by_id(routine["program_id"])
     await ui.safe_edit(
-        callback, "Порядок дней — стрелками:",
+        callback, _DAY_ORDER_TEXT,
         reply_markup=keyboards.program_day_order_keyboard(days, routine["program_id"]),
     )
     await callback.answer()

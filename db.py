@@ -2537,8 +2537,6 @@ async def achievement_extremes(user_id: int) -> dict[str, Any]:
     per_session = dict(await cur.fetchone())
     cur = await conn().execute(
         "SELECT COALESCE(MAX(CASE WHEN s.weight = 0 THEN s.reps END), 0) AS max_bw_reps, "
-        "       MAX(s.rpe) AS max_rpe, "
-        "       COUNT(s.rpe) AS rpe_sets, "
         "       COUNT(DISTINCT e.primary_group_id) AS distinct_groups "
         "FROM sets s "
         "JOIN workout_blocks b ON b.id = s.block_id "
@@ -4160,27 +4158,39 @@ async def move_routine_to_program(routine_id: int, program_id: Optional[int]) ->
 
 
 async def reorder_program_day(routine_id: int, direction: str) -> None:
-    """Swap a day with its neighbour above ("up") or below ("down"). No-op at
-    either end — same shape as reorder_routine_exercise one level down."""
+    """Переставить день программы относительно соседа — по кругу.
+
+    Та же механика, что у reorder_routine_exercise этажом ниже, и по той же
+    причине: в экране с одной стрелкой первый день был бы намертво приколочен к
+    первому месту, а сдвинуть его можно было бы только подняв по очереди все
+    остальные.
+    """
     routine = await get_routine(routine_id)
     if routine is None or routine["program_id"] is None:
         return
     days = await list_program_days_by_id(routine["program_id"])
     ids = [d["id"] for d in days]
-    if routine_id not in ids:
+    if routine_id not in ids or len(ids) < 2:
         return
     idx = ids.index(routine_id)
-    neighbour = idx - 1 if direction == "up" else idx + 1
-    if not 0 <= neighbour < len(ids):
+    neighbour = (idx - 1 if direction == "up" else idx + 1) % len(ids)
+    if neighbour == idx:
         return
-    a, b = days[idx], days[neighbour]
+    a = days[idx]
+    if abs(neighbour - idx) == 1:
+        b = days[neighbour]
+        pairs = [(a["id"], b["day_order"]), (b["id"], a["day_order"])]
+    else:
+        # Перенос через край: остальные сдвигаются на одну позицию, иначе обмен
+        # первого с последним перетасовал бы весь список, а не сдвинул на шаг.
+        rest = [d for d in days if d["id"] != a["id"]]
+        order = [*rest, a] if direction == "up" else [a, *rest]
+        pairs = [(d["id"], i) for i, d in enumerate(order)]
     async with _write_lock:
-        await conn().execute(
-            "UPDATE routines SET day_order = ? WHERE id = ?", (b["day_order"], a["id"])
-        )
-        await conn().execute(
-            "UPDATE routines SET day_order = ? WHERE id = ?", (a["day_order"], b["id"])
-        )
+        for day_id, day_order in pairs:
+            await conn().execute(
+                "UPDATE routines SET day_order = ? WHERE id = ?", (day_order, day_id)
+            )
         await conn().commit()
 
 

@@ -55,8 +55,6 @@ CATALOG: list[Achievement] = [
     Achievement("early10", "🌄", "Клуб пяти утра", "10 тренировок до 7 утра"),
     Achievement("night_owl", "🦉", "Ночная смена", "Тренировка после 22:00"),
     Achievement("marathon", "⏳", "Марафонец", "Тренировка длиннее 2 часов"),
-    Achievement("rpe10", "💥", "До отказа", "Подход с RPE 10"),
-    Achievement("rpe100", "📓", "Честный дневник", "100 подходов с проставленным RPE"),
     Achievement("bwlog30", "📏", "Под контролем", "30 записей в дневнике веса"),
     Achievement("food7", "🍱", "Неделя учёта", "7 дней подряд с записями в дневнике еды"),
     Achievement("new_year", "🎄", "С Новым годом!", "Тренировка 1 января"),
@@ -101,8 +99,6 @@ class AchievementContext:
     has_weekend_pair: bool = False
     all_weekdays_covered: bool = False
     has_dec31: bool = False
-    max_rpe: Optional[float] = None
-    rpe_sets: int = 0
     bodyweight_logs: int = 0
     food_diary_best_run: int = 0
     # Attributes of the workout that just finished (None when evaluating aggregates only).
@@ -167,10 +163,6 @@ def earned_codes(ctx: AchievementContext) -> set[str]:
         codes.add("all_weekdays")
     if ctx.has_dec31:
         codes.add("dec31")
-    if ctx.max_rpe is not None and ctx.max_rpe >= 10:
-        codes.add("rpe10")
-    if ctx.rpe_sets >= 100:
-        codes.add("rpe100")
     if ctx.bodyweight_logs >= 30:
         codes.add("bwlog30")
     if ctx.food_diary_best_run >= 7:

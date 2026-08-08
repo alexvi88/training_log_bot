@@ -61,8 +61,6 @@ async def _aggregate_context(user_id: int) -> achievements.AchievementContext:
         has_weekend_pair=achievements.weekend_pair_exists(dates),
         all_weekdays_covered=len({d.weekday() for d in dates}) == 7,
         has_dec31=any((d.month, d.day) == (12, 31) for d in dates),
-        max_rpe=extremes["max_rpe"],
-        rpe_sets=extremes["rpe_sets"],
         bodyweight_logs=await db.count_bodyweight_logs(user_id),
         food_diary_best_run=achievements.longest_daily_run(food_days),
     )
