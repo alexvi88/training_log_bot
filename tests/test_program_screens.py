@@ -352,6 +352,22 @@ async def test_confirming_the_merge_joins_them(fresh_db, user_id):
     assert {p["name"]: p["day_count"] for p in await db.list_programs(user_id)} == {"Альфа": 2}
 
 
+async def test_merging_renames_days_that_clash_with_the_target(fresh_db, user_id):
+    """Живой прогон: слил дублированную программу саму с собой (те же имена дней
+    в обеих) и получил шесть дней с тремя парами одинаковых подписей — на
+    экране программы и в кнопках не выбрать, какой из двух «День 1» нужен."""
+    db = fresh_db
+    alpha = await _program(db, user_id, name="Масса", days=("День 1", "День 2"))
+    beta = await _program(db, user_id, name="Масса (2)", days=("День 1", "День 2"))
+
+    await routines.rt_program_merge(
+        _make_callback(user_id, f"rt:pgmmerge:{beta}:{alpha}"), await _state(user_id)
+    )
+
+    names = [d["name"] for d in await db.list_program_days_by_id(alpha)]
+    assert len(names) == len(set(n.lower() for n in names)) == 4
+
+
 async def test_an_over_long_name_is_refused_rather_than_breaking_the_list(fresh_db, user_id):
     db = fresh_db
     program_id = await _program(db, user_id)
