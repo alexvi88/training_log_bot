@@ -49,7 +49,7 @@ async def test_history_item_includes_tonnage_equivalent(fresh_db, user_id):
     assert "Это как" in text
 
 
-async def test_history_item_includes_pr_highlight_vs_prior_session(fresh_db, user_id):
+async def test_history_item_marks_record_inside_the_exercise(fresh_db, user_id):
     db = fresh_db
     group_id = await db.create_muscle_group(user_id, "Грудь")
     bench = await db.create_exercise(user_id, "Жим лёжа", group_id)
@@ -71,13 +71,18 @@ async def test_history_item_includes_pr_highlight_vs_prior_session(fresh_db, use
     assert await history.show_history_item(callback, w2)
 
     text = callback.message.answer.await_args.args[0]
-    assert "vs предыдущего рекорда" in text
+    # Рекорд стоит внутри своего упражнения, отдельного списка под карточкой нет.
+    lines = text.split("\n")
+    ex_index = next(i for i, line in enumerate(lines) if "Жим лёжа" in line)
+    record_index = next(i for i, line in enumerate(lines) if "Рекорд e1RM" in line)
+    assert ex_index < record_index < ex_index + 5
+    assert "Рекорды и сравнения" not in text
 
 
-async def test_history_item_folds_pr_highlights_when_long(fresh_db, user_id):
-    """A workout with several new-PR exercises produces a long highlights block
-    — in history (unlike the just-finished celebration screen) that goes behind
-    a tap, not straight into the reader's face."""
+async def test_history_item_records_do_not_add_a_second_list(fresh_db, user_id):
+    """Тренировка с рекордом в каждом упражнении: строк 🔥 столько же, сколько
+    упражнений, и все они внутри блоков — карточка не отращивает второй список
+    тех же рекордов под собой."""
     db = fresh_db
     group_id = await db.create_muscle_group(user_id, "Разное")
     exercises = [
@@ -103,6 +108,5 @@ async def test_history_item_folds_pr_highlights_when_long(fresh_db, user_id):
     assert await history.show_history_item(callback, w2)
 
     text = callback.message.answer.await_args.args[0]
-    assert "🔥 <b>Рекорды и сравнения</b>" in text
-    assert "<blockquote expandable>" in text
-    assert "vs предыдущего рекорда" in text
+    assert text.count("🔥 <b>Рекорд e1RM</b>") == len(exercises)
+    assert "Рекорды и сравнения" not in text
