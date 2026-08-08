@@ -1120,6 +1120,18 @@ def build_ai_program_preview(
         f"{len(days)} {day_word} · {total} {ex_word}",
     ]
 
+    # Правило прогрессии у всех упражнений обычно одно и то же, и построчно оно
+    # превращалось в восемь одинаковых «⤴️ двойная прогрессия» подряд — состав
+    # программы тонул в повторе. Общее правило выносим один раз в шапку, а под
+    # упражнениями оставляем только то, что из него выбивается.
+    rules = [
+        format_progression_rule(item.get("progression"), unit)
+        for day in days for item in day["items"]
+    ]
+    shared_note = rules[0] if len(rules) > 1 and all(r and r == rules[0] for r in rules) else ""
+    if shared_note:
+        lines.append(f"⤴️ Везде: {escape(shared_note)}")
+
     composition: list[str] = []
     for day in days:
         composition += ["", f"<b>{escape(day['name'])}</b>"]
@@ -1128,7 +1140,7 @@ def build_ai_program_preview(
             suffix = f" — {escape(target)}" if target else ""
             composition.append(f"{i}. {escape(item['name'])}{suffix}")
             prog_note = format_progression_rule(item.get("progression"), unit)
-            if prog_note:
+            if prog_note and prog_note != shared_note:
                 composition.append(f"   ⤴️ {escape(prog_note)}")
 
     tail = ["", DIVIDER]
