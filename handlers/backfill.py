@@ -89,7 +89,7 @@ async def bf_date_text(message: Message, state: FSMContext):
             message.text, today=timeutil.user_today(await db.get_user(message.from_user.id))
         )
     except ParseError as e:
-        await message.reply(e.message)
+        await ui.reply_transient(message, e.message)
         return
     await _date_chosen(message, state, date)
 

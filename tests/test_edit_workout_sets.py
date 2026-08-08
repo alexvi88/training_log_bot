@@ -3,7 +3,7 @@ emptied by deleting its last set shouldn't linger as a "подходов нет"
 row forever, and any cached AI-trainer comment must be dropped so it gets
 regenerated against the new numbers instead of describing stale ones."""
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from aiogram.fsm.context import FSMContext
@@ -34,7 +34,11 @@ def _make_message(user_id: int, text: str):
     msg = MagicMock()
     msg.from_user = SimpleNamespace(id=user_id, username="tester")
     msg.text = text
-    msg.reply = AsyncMock()
+    msg.chat = SimpleNamespace(id=user_id)
+    msg.message_id = 500
+    msg.reply = AsyncMock(
+        return_value=SimpleNamespace(chat=SimpleNamespace(id=user_id), message_id=501)
+    )
     msg.answer = AsyncMock(return_value=SimpleNamespace(message_id=1))
     msg.delete = AsyncMock()
     return msg
@@ -291,3 +295,74 @@ async def test_removing_an_exercise_uses_instrumental_case_for_one_set(fresh_db,
     sent = callback.message.answer.await_args
     text = sent.args[0] if sent.args else sent.kwargs["text"]
     assert "вместе с 1 подходом" in text
+
+
+# ---------- находки 38–39: перенос даты и вечные ошибки ввода ----------
+
+
+async def test_moving_a_workout_to_another_day_keeps_its_duration(fresh_db, user_id):
+    """Находка 38: длительность считается по разбегу меток подходов (находка 25),
+    а перенос двигал только started/finished — метки оставались на старом дне,
+    фильтр «не позже finished_at» отсекал их все, и «· 32 мин» исчезали."""
+    import datetime as dt
+
+    import view_builder
+
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    ex_id = await db.create_exercise(user_id, "Жим", group_id)
+    workout_id = await db.create_finished_workout(
+        user_id, "2026-08-07T10:00:00", "2026-08-07T11:00:00"
+    )
+    block_id = await db.create_block(workout_id, "single")
+    await db.add_block_exercise(block_id, ex_id, 0)
+    for i in range(2):
+        await db.add_set(block_id, ex_id, round_index=i + 1, order_in_round=0, weight=100.0, reps=8)
+    await db.conn().execute(
+        "UPDATE sets SET created_at = ? WHERE block_id = ?", ("2026-08-07T10:05:00", block_id)
+    )
+    await db.conn().execute(
+        "UPDATE sets SET created_at = ? WHERE block_id = ? AND round_index = 2",
+        ("2026-08-07T10:40:00", block_id),
+    )
+    await db.conn().commit()
+    before = await view_builder.workout_duration_seconds(await db.get_workout(workout_id))
+    assert before == 2100.0
+
+    await edit_workout._apply_edit_workout_date(workout_id, dt.date(2026, 8, 1))
+
+    after = await view_builder.workout_duration_seconds(await db.get_workout(workout_id))
+    assert after == before
+
+
+async def test_a_typo_in_the_past_workout_editor_does_not_stay_in_the_chat(fresh_db, user_id):
+    """Находка 39: исчезающие ошибки ввода жили только в handlers/workout, а
+    редактор прошлой тренировки, запись задним числом и дневник веса оставляли
+    простыню с примерами в чате навсегда."""
+    import ui
+
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    ex_id = await db.create_exercise(user_id, "Жим", group_id)
+    workout_id = await db.create_finished_workout(
+        user_id, "2026-08-07T10:00:00", "2026-08-07T11:00:00"
+    )
+    block_id = await db.create_block(workout_id, "single")
+    await db.add_block_exercise(block_id, ex_id, 0)
+    state = await _make_state(user_id, workout_id)
+    await state.set_state(EditWorkoutFlow.adding_set)
+    await state.update_data(edit_block_id=block_id, edit_exercise_id=ex_id)
+    message = _make_message(user_id, "абракадабра")
+
+    scheduled = []
+
+    def _capture(coro):
+        scheduled.append(coro)
+        coro.close()  # иначе pytest ругается на незапущенную корутину
+
+    with patch.object(ui, "_spawn", _capture):
+        await edit_workout.editw_addset_entered(message, state)
+
+    message.reply.assert_awaited()
+    # Обе стороны разговора поставлены на удаление: и подсказка, и сам ввод.
+    assert len(scheduled) == 2

@@ -308,31 +308,10 @@ async def _delete_message(message: Message):
 _RECORD_MESSAGE_LIFETIME_SECONDS = 60
 
 
-# Сколько живёт сообщение о непонятом вводе. Успешный подход из чата удаляется
-# сразу, а ошибка раньше оставалась навсегда — после трёх опечаток подряд живой
-# трекер с кнопками уезжал вверх за три простыни с примерами, и до «Закончить
-# упражнение» приходилось скроллить. Полминуты хватает прочитать и исправиться.
-_INPUT_ERROR_LIFETIME_SECONDS = 30
-
-
-async def _reply_transient(message: Message, text: str) -> None:
-    """Ответить на неудачный ввод так, чтобы он не остался в чате навсегда.
-
-    Убираем обе стороны разговора — и подсказку, и сам неудачный ввод: подсказка
-    цитирует его, так что пока она висит, видно и что написали, и почему не
-    вышло, а потом чат снова состоит из одних подходов.
-    """
-    reply = await message.reply(text)
-    _spawn(
-        _delete_message_later(
-            message.bot, reply.chat.id, reply.message_id, _INPUT_ERROR_LIFETIME_SECONDS
-        )
-    )
-    _spawn(
-        _delete_message_later(
-            message.bot, message.chat.id, message.message_id, _INPUT_ERROR_LIFETIME_SECONDS
-        )
-    )
+# Сам помощник живёт в ui: теми же вечными простынями с примерами болели и
+# редактор прошлой тренировки, и запись задним числом, и дневник веса.
+_reply_transient = ui.reply_transient
+_INPUT_ERROR_LIFETIME_SECONDS = ui.INPUT_ERROR_LIFETIME_SECONDS
 
 
 def _looks_like_a_set(text: str) -> bool:
