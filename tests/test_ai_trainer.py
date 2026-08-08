@@ -1449,7 +1449,10 @@ async def test_gate_retry_changes_the_mode_not_just_the_wording(fresh_db, user_i
 
     first, second = client.chat.completions.create.await_args_list
     assert "response_format" in first.kwargs and "response_format" not in second.kwargs
-    assert second.kwargs["extra_body"] == {"reasoning_effort": "none"}
+    # extra_body убран целиком: «none» xAI отвергает с 400 («This model does not
+    # support reasoning_effort value none»), а любое другое усилие — это то же
+    # самое, что уже промолчало.
+    assert "extra_body" in first.kwargs and "extra_body" not in second.kwargs
     assert len(second.kwargs["messages"]) == len(first.kwargs["messages"]) + 1
 
 
