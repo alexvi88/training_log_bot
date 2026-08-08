@@ -1193,6 +1193,45 @@ async def test_fresh_intro_offers_preset_question_buttons(fresh_db, user_id, mon
     assert callbacks.index("ai:preset:progress") < callbacks.index("ai:menu")
 
 
+async def test_intro_shows_what_the_trainer_remembers_and_how_to_fix_it(
+    fresh_db, user_id, monkeypatch
+):
+    """Профиль пишется без спроса и без кнопок — значит, человек должен хотя бы
+    видеть, что там записано, и знать, что это правится словами."""
+    monkeypatch.setattr(ai_trainer.ai_trainer, "is_configured", lambda: True)
+    await fresh_db.update_user(user_id, days_per_week=3, goal="масса")
+    state = await _make_state(user_id)
+    callback = _make_menu_ai_callback(user_id)
+
+    await ai_trainer.menu_ai(callback, state)
+
+    call = callback.message.answer.await_args
+    text = call.args[0] if call.args else call.kwargs["text"]
+    assert "Что я про тебя помню" in text
+    assert "дней в неделю — 3" in text
+    assert "цель — масса" in text
+    assert "поправлю" in text
+
+
+async def test_memory_reminder_stays_quiet_for_a_week(fresh_db, user_id, monkeypatch):
+    """На каждом заходе один и тот же список читался бы как шум."""
+    monkeypatch.setattr(ai_trainer.ai_trainer, "is_configured", lambda: True)
+    await fresh_db.update_user(user_id, goal="масса")
+    state = await _make_state(user_id)
+
+    first = await ai_trainer._memory_reminder(user_id, state)
+    second = await ai_trainer._memory_reminder(user_id, state)
+
+    assert "Что я про тебя помню" in first
+    assert second == ""
+
+
+async def test_memory_reminder_is_silent_when_nothing_is_known(fresh_db, user_id):
+    """Хвастаться нечем — и «я про тебя ничего не помню» тут не нужно."""
+    state = await _make_state(user_id)
+    assert await ai_trainer._memory_reminder(user_id, state) == ""
+
+
 async def test_resumed_conversation_has_no_preset_buttons(fresh_db, user_id, monkeypatch):
     """Посреди разговора стартовые вопросы читались бы как потеря контекста."""
     monkeypatch.setattr(ai_trainer.ai_trainer, "is_configured", lambda: True)

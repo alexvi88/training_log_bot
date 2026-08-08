@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import datetime as dt
 import json
 import logging
 import secrets
@@ -23,6 +24,7 @@ import formatting
 import keyboards
 import program_mentions
 import running_texts
+import timeutil
 import ui
 import video_analysis
 from fsm import AITrainerFlow
@@ -133,6 +135,53 @@ async def intro_presets(user_id: int) -> list[tuple[str, str]]:
     if config.video_analysis_available() and not await db.get_ai_video_count_today(user_id):
         rows.append(("🎥 Разбери видео подхода", "ai:videohint"))
     return rows
+
+# Как часто интро показывает, что тренер про человека помнит.
+#
+# Профиль он пишет сам и без спроса (см. ai_trainer._save_athlete_profile):
+# кнопок подтверждения там нет нарочно — они вставали рядом с «🗂 Забрать» и
+# отодвигали главное действие. Взамен память показывается вслух: неверная
+# строчка живёт максимум до следующего захода, а не годами. Неделя — потому что
+# профиль меняется медленно, а на каждом заходе это читалось бы как шум.
+MEMORY_REMINDER_DAYS = 7
+
+
+async def _memory_reminder(user_id: int, state: FSMContext) -> str:
+    """Хвост к интро: что записано в профиле и как это поправить.
+
+    Пусто, если тренер про человека ещё ничего не знает (хвалиться нечем) или
+    если напоминание уже показывали на этой неделе.
+    """
+    # Локальный импорт: экран профиля и этот хвост показывают одно и то же, но
+    # тянуть друг друга на уровне модуля двум обработчикам незачем.
+    from handlers import settings
+
+    user = await db.get_user(user_id)
+    if user is None:
+        return ""
+    known = [
+        f"{label.lower()} — {escape(str(value))}"
+        for label, value in settings.profile_rows(user)
+        if value
+    ]
+    if not known:
+        return ""
+    today = timeutil.user_today(user)
+    data = await state.get_data()
+    last = data.get("ai_memory_shown")
+    if last:
+        try:
+            if (today - dt.date.fromisoformat(str(last))).days < MEMORY_REMINDER_DAYS:
+                return ""
+        except ValueError:
+            pass
+    await state.update_data(ai_memory_shown=today.isoformat())
+    return (
+        "\n\n🧠 <b>Что я про тебя помню:</b> "
+        + "; ".join(known)
+        + ".\nЧто-то не так — скажи, поправлю."
+    )
+
 
 # Shown instead of the full intro when returning to a conversation that's already
 # going — repeating the whole "привет, вот что я умею" would read as if the
@@ -409,6 +458,10 @@ async def menu_ai(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     fresh = not data.get("ai_history")
     text = INTRO_TEXT if fresh else RESUME_TEXT
+    if fresh:
+        # Только на свежем интро: посреди разговора список «что я про тебя
+        # помню» читался бы как «тренер потерял нить».
+        text += await _memory_reminder(callback.from_user.id, state)
     # Готовые вопросы — только на свежем интро: посреди разговора они бы
     # читались как «тренер забыл, о чём речь».
     keyboard = await ai_keyboard(
@@ -834,14 +887,7 @@ async def _register_undos(state: FSMContext, actions: list[dict]) -> list[dict]:
     seq = int(data.get("ai_undo_seq") or 0)
 
     out: list[dict] = []
-    pending: dict = {}
     for action in actions:
-        # Запись в профиль ждёт подтверждения: все поля за ход копятся в одно
-        # ожидание, чтобы под ответом стоял ОДИН вопрос, а не по вопросу на
-        # каждый вызов инструмента (сборка программы зовёт его несколько раз).
-        if action.get("profile_pending"):
-            pending.update(action["profile_pending"])
-            continue
         undo = action.get("undo")
         if undo is None:
             out.append(action)
@@ -854,56 +900,7 @@ async def _register_undos(state: FSMContext, actions: list[dict]) -> list[dict]:
     for stale in sorted(store, key=lambda k: int(k[1:]))[:-_UNDO_SLOTS]:
         del store[stale]
     await state.update_data(ai_undo=store, ai_undo_seq=seq)
-    if pending:
-        changed = ", ".join(ai_trainer.PROFILE_LABELS.get(k, k) for k in pending)
-        await state.update_data(ai_profile_pending=pending)
-        out.append({"label": f"✅ Запомнить: {formatting.shorten(changed, 24)}",
-                    "callback": "ai:profile:yes"})
-        out.append({"label": "✖️ Не запоминать", "callback": "ai:profile:no"})
     return out
-
-
-@router.callback_query(F.data == "ai:profile:yes")
-async def ai_profile_confirm(callback: CallbackQuery, state: FSMContext):
-    """«✅ Запомнить» — записать то, что тренер предложил запомнить о человеке.
-
-    Спрашиваем ДО записи, а не откатываем после: молчаливая правка, о которой
-    узнаёшь по кнопке «↩️ Забыть из профиля: дни в неде…», пугала и не читалась.
-    """
-    data = await state.get_data()
-    pending = data.get("ai_profile_pending") or {}
-    if not pending:
-        await callback.answer("Это предложение уже неактуально", show_alert=True)
-        return
-    await state.update_data(ai_profile_pending=None)
-    await db.update_user(callback.from_user.id, **pending)
-    changed = ", ".join(ai_trainer.PROFILE_LABELS.get(k, k) for k in pending)
-    await callback.answer(f"Запомнил: {changed}")
-    await _drop_profile_buttons(callback, state)
-
-
-@router.callback_query(F.data == "ai:profile:no")
-async def ai_profile_decline(callback: CallbackQuery, state: FSMContext):
-    await state.update_data(ai_profile_pending=None)
-    await callback.answer("Не записал")
-    await _drop_profile_buttons(callback, state)
-
-
-async def _drop_profile_buttons(callback: CallbackQuery, state: FSMContext) -> None:
-    """Убрать обе кнопки вопроса: он отвечен, а живые кнопки под отвеченным
-    вопросом — приглашение потыкать и решить, что бот сломался."""
-    data = await state.get_data()
-    gone = {"ai:profile:yes", "ai:profile:no"}
-    await state.update_data(
-        ai_actions=[a for a in (data.get("ai_actions") or []) if a.get("callback") not in gone]
-    )
-    rows = callback.message.reply_markup.inline_keyboard if callback.message.reply_markup else []
-    kept = [[b for b in row if b.callback_data not in gone] for row in rows]
-    kept = [row for row in kept if row]
-    with suppress(TelegramBadRequest):
-        await callback.message.edit_reply_markup(
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=kept) if kept else None
-        )
 
 
 async def _apply_undo(user_id: int, undo: dict) -> Optional[str]:

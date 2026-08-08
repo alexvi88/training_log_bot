@@ -1052,8 +1052,7 @@ async def test_save_athlete_profile_writes_only_the_provided_fields(fresh_db, us
         fresh_db, user_id,
         {"days_per_week": 4, "goal": "масса", "equipment": ["штанга", "гантели"]},
     )
-    # Инструмент только предлагает запомнить — пишет уже подтверждение.
-    assert payload["saved"] is False
+    assert payload["saved"] is True
 
     user = await fresh_db.get_user(user_id)
     assert user["days_per_week"] == 4
@@ -1691,20 +1690,20 @@ async def test_prompt_keeps_heavy_lifts_out_of_high_rep_ranges():
     assert "становая" in prompt.lower()
 
 async def _confirm_profile(db, user_id: int, tool_input: dict) -> dict:
-    """Прогнать инструмент и подтвердить запись — профиль теперь пишется только
-    после «✅ Запомнить» (см. handlers.ai_trainer.ai_profile_confirm)."""
+    """Прогнать инструмент — профиль он пишет сам, сразу и без подтверждений
+    (см. ai_trainer._save_athlete_profile)."""
     import json as _json
 
-    payload = _json.loads(await ai_trainer.execute_tool(user_id, "save_athlete_profile", tool_input))
-    fields = payload.get("fields") or {}
-    if fields:
-        await db.update_user(user_id, **fields)
-    return payload
+    return _json.loads(
+        await ai_trainer.execute_tool(user_id, "save_athlete_profile", tool_input)
+    )
 
 
-async def test_prompt_forbids_claiming_the_profile_is_already_saved():
-    """Профиль пишется только после подтверждения под ответом, а модель раньше
-    бодро сообщала «запомнил» — и человек считал, что дело сделано."""
+async def test_prompt_tells_the_trainer_to_fix_memory_on_objection():
+    """Кнопок под записью в память нет: единственный способ поправить неверную
+    строчку — сказать тренеру словами, и промпт обязан это уметь."""
     prompt = ai_trainer.SYSTEM_PROMPT
-    assert "не пиши «запомнил»" in prompt
-    assert "Предлагаю запомнить" in prompt
+    assert "forget" in prompt
+    assert "затрёт старое" in prompt
+    # Обещать «спрошу разрешения» больше нельзя — разрешения никто не спрашивает.
+    assert "не пиши «запомнил»" not in prompt
