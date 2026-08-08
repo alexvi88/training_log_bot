@@ -51,7 +51,12 @@ CREATE TABLE IF NOT EXISTS users (
     goal TEXT,
     days_per_week INTEGER,
     equipment TEXT,
-    limitations TEXT
+    limitations TEXT,
+    -- Когда тренер в последний раз показывал человеку, что из этого помнит
+    -- (см. handlers.ai_trainer._memory_reminder). В FSM этой отметке не место:
+    -- /start чистит состояние целиком, кроме трёх AI-ключей, и напоминание
+    -- вылезало бы на каждый заход в диалог вместо раза в неделю.
+    profile_shown_on TEXT
 );
 
 CREATE TABLE IF NOT EXISTS muscle_groups (
@@ -734,6 +739,8 @@ async def _migrate_schema() -> None:
     for profile_col, col_type in (
         ("experience", "TEXT"), ("goal", "TEXT"), ("days_per_week", "INTEGER"),
         ("equipment", "TEXT"), ("limitations", "TEXT"),
+        # Дата последнего напоминания «что я про тебя помню» — см. схему выше.
+        ("profile_shown_on", "TEXT"),
     ):
         if profile_col not in user_cols:
             await _conn.execute(f"ALTER TABLE users ADD COLUMN {profile_col} {col_type}")

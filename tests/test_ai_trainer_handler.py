@@ -1222,19 +1222,32 @@ async def test_memory_reminder_stays_quiet_for_a_week(fresh_db, user_id, monkeyp
     """На каждом заходе один и тот же список читался бы как шум."""
     monkeypatch.setattr(ai_trainer.ai_trainer, "is_configured", lambda: True)
     await fresh_db.update_user(user_id, goal="масса")
-    state = await _make_state(user_id)
 
-    first = await ai_trainer._memory_reminder(user_id, state)
-    second = await ai_trainer._memory_reminder(user_id, state)
+    first = await ai_trainer._memory_reminder(user_id)
+    second = await ai_trainer._memory_reminder(user_id)
 
     assert "Что я про тебя помню" in first
     assert second == ""
 
 
+async def test_memory_reminder_pause_survives_a_state_reset(fresh_db, user_id):
+    """Отметка о показе живёт в базе, а не в FSM.
+
+    /start чистит состояние целиком, кроме трёх AI-ключей — с отметкой в FSM
+    напоминание вылезало бы на каждый тап «🏠 Меню» и обратно в тренера, а
+    именно этим оно и превращается в шум."""
+    await fresh_db.update_user(user_id, goal="масса")
+    state = await _make_state(user_id)
+
+    assert await ai_trainer._memory_reminder(user_id) != ""
+    await state.clear()
+
+    assert await ai_trainer._memory_reminder(user_id) == ""
+
+
 async def test_memory_reminder_is_silent_when_nothing_is_known(fresh_db, user_id):
     """Хвастаться нечем — и «я про тебя ничего не помню» тут не нужно."""
-    state = await _make_state(user_id)
-    assert await ai_trainer._memory_reminder(user_id, state) == ""
+    assert await ai_trainer._memory_reminder(user_id) == ""
 
 
 async def test_resumed_conversation_has_no_preset_buttons(fresh_db, user_id, monkeypatch):
