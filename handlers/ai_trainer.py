@@ -458,10 +458,12 @@ async def menu_ai(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     fresh = not data.get("ai_history")
     text = INTRO_TEXT if fresh else RESUME_TEXT
-    if fresh:
-        # Только на свежем интро: посреди разговора список «что я про тебя
-        # помню» читался бы как «тренер потерял нить».
-        text += await _memory_reminder(callback.from_user.id, state)
+    # И на интро, и на возврате в разговор. Только на свежем нельзя: ai_history
+    # переживает и выход в меню, и перезапуск бота, так что свежее интро человек
+    # видит ровно один раз в жизни — а напоминание нужно как раз тем, кто
+    # тренером пользуется. Это отдельный экран входа, а не вклинивание в ответ,
+    # так что «потери контекста» тут не возникает.
+    text += await _memory_reminder(callback.from_user.id, state)
     # Готовые вопросы — только на свежем интро: посреди разговора они бы
     # читались как «тренер забыл, о чём речь».
     keyboard = await ai_keyboard(

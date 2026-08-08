@@ -1197,10 +1197,15 @@ async def test_intro_shows_what_the_trainer_remembers_and_how_to_fix_it(
     fresh_db, user_id, monkeypatch
 ):
     """Профиль пишется без спроса и без кнопок — значит, человек должен хотя бы
-    видеть, что там записано, и знать, что это правится словами."""
+    видеть, что там записано, и знать, что это правится словами.
+
+    Проверяем на ВОЗВРАТЕ в разговор, а не на свежем интро: ai_history переживает
+    и выход в меню, и перезапуск бота, поэтому свежее интро человек видит один
+    раз в жизни — привяжи напоминание к нему, и его не увидит вообще никто."""
     monkeypatch.setattr(ai_trainer.ai_trainer, "is_configured", lambda: True)
     await fresh_db.update_user(user_id, days_per_week=3, goal="масса")
     state = await _make_state(user_id)
+    await state.update_data(ai_history=[{"role": "user", "content": "как жим?"}])
     callback = _make_menu_ai_callback(user_id)
 
     await ai_trainer.menu_ai(callback, state)
