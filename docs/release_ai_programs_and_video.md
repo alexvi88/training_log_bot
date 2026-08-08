@@ -28,26 +28,42 @@
 ## Картинка
 
 Файл кладём в `media/push/release_ai_programs_and_video.jpg`. Пока файла нет,
-рассылка уходит текстом — это не блокер для мержа, но с картинкой пуш заметно
-живее. Формат: 1280×720 (горизонталь читается в ленте Telegram лучше
-квадрата), до 1 МБ.
+анонс уходит текстом — это не блокер для мержа, но с картинкой релиз заметно
+живее. Квадрат 1024×1024, до 1 МБ — как у эталонного `coach_incoming_call.jpg`.
 
-Промпт для генерации:
+Стиль — общий для всех картинок продукта, правила в `TONE_OF_VOICE.md`
+(раздел «Стиль картинок»). Коротко: тот же тренер, что на пуш-картинке, жирный
+контур, плоская заливка, тёплый свет подвала. Проще всего рисовать с эталоном
+на входе: скормить генератору `media/push/coach_incoming_call.jpg` как
+референс персонажа и дать промпт ниже.
 
-> Cinematic photo of a basement gym at night, shot on 35mm film, shallow depth
-> of field. Foreground: a battered chalk-dusted barbell on rubber flooring. On
-> the wall behind it, an old whiteboard with a hand-drawn weekly training split
-> — four columns, simple marker strokes, no readable text — and next to it a
-> cheap CRT monitor showing a grainy freeze-frame of a lifter mid-squat with a
-> thin bar-path line traced over it. Single warm work lamp from the left, deep
-> shadows, dust in the light beam, cold blue spill from the monitor. Moody,
-> gritty, lived-in, no people in frame, no logos, no text overlays.
-> 16:9, high detail.
+> Bold-lined cartoon illustration in the style of a western comic book and
+> retro arcade cover art: thick black outlines, flat cel shading, saturated
+> warm palette, no photorealism, no 3D render.
+>
+> Character (keep identical to the reference): a huge middle-aged bodybuilder
+> gym coach, deep tan, heavy square jaw, short dark-brown hair slicked back,
+> gold aviator sunglasses, thick gold chain, black tank top. Calm, confident
+> expression — not shouting, not grinning. Framed from the waist up, centered,
+> facing the viewer, filling the frame.
+>
+> He holds a clipboard in one hand with a hand-drawn weekly training split on
+> it — four columns of tally marks and simple stick-figure icons, no readable
+> letters — and a smartphone in the other, its screen showing a grainy
+> freeze-frame of a lifter mid-squat with a thin glowing bar-path line traced
+> over the barbell.
+>
+> Background: a basement gym at night — red brick wall, a rack of dumbbells,
+> a mirror, a hanging lamp with warm amber glow, a window with an orange
+> sunset city skyline. Cold dark-grey iron against warm amber light.
+>
+> No text, no letters, no logos, no watermark, no other people in frame.
+> Square 1:1, 1024x1024, high detail.
 
-Что важно удержать при перегенерации: подвальная качалка, а не глянцевый
-фитнес-клуб; в кадре обе фичи — план на стене и кадр с траекторией грифа на
-экране; людей и читаемых надписей нет (текст на картинке Telegram сожмёт в
-кашу, а лица заставляют додумывать, кто это).
+Что важно удержать при перегенерации: это тот же тренер, что и на остальных
+картинках (лицо, очки, цепь, майка — не меняются); в кадре обе фичи — расписанный
+план в руках и траектория грифа на экране телефона; подвал, а не глянцевый клуб;
+надписей нет — весь текст живёт в подписи к сообщению.
 
 ## Порядок выката
 
