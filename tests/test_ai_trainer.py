@@ -1700,3 +1700,11 @@ async def _confirm_profile(db, user_id: int, tool_input: dict) -> dict:
     if fields:
         await db.update_user(user_id, **fields)
     return payload
+
+
+async def test_prompt_forbids_claiming_the_profile_is_already_saved():
+    """Профиль пишется только после подтверждения под ответом, а модель раньше
+    бодро сообщала «запомнил» — и человек считал, что дело сделано."""
+    prompt = ai_trainer.SYSTEM_PROMPT
+    assert "не пиши «запомнил»" in prompt
+    assert "Предлагаю запомнить" in prompt
