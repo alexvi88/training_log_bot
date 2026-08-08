@@ -38,6 +38,7 @@ def _make_message(user_id: int, text: str):
     msg.from_user = SimpleNamespace(id=user_id, username="tester")
     msg.text = text
     msg.answer = AsyncMock()
+    msg.reply = AsyncMock()
     return msg
 
 
@@ -628,3 +629,58 @@ async def test_a_long_name_is_cut_by_us_with_an_ellipsis():
     kb = keyboards.routine_edit_keyboard(1, [(10, "Жим в тренажёре на плечи", None)])
 
     assert kb.inline_keyboard[0][0].text.endswith("…")
+
+
+async def test_a_day_cannot_take_the_name_of_another_day_in_the_same_program(
+    fresh_db, user_id
+):
+    """Два «Дня 1» в одной программе — это две одинаковые кнопки на экране, из
+    которых не выбрать. Многодневную программу от этого защищал отдельный
+    обработчик, а день переименовывался во что угодно молча."""
+    program_id = await fresh_db.create_program(user_id, "Сплит")
+    first = await fresh_db.create_routine(user_id, "День 1", program_id=program_id)
+    second = await fresh_db.create_routine(user_id, "День 2", program_id=program_id)
+
+    state = await _make_state(user_id)
+    await state.update_data(routine_rename_id=second)
+    message = _make_message(user_id, "День 1")
+
+    await routines.rt_rename_entered(message, state)
+
+    message.reply.assert_awaited_once()
+    assert "уже есть" in message.reply.await_args.args[0]
+    assert (await fresh_db.get_routine(second))["name"] == "День 2"
+    assert (await fresh_db.get_routine(first))["name"] == "День 1"
+
+
+async def test_the_same_day_name_in_a_different_program_is_fine(fresh_db, user_id):
+    """«День 1» есть в каждой второй программе — сверяемся только со своими."""
+    other = await fresh_db.create_program(user_id, "Старая")
+    await fresh_db.create_routine(user_id, "День 1", program_id=other)
+    mine = await fresh_db.create_program(user_id, "Новая")
+    day = await fresh_db.create_routine(user_id, "Первый", program_id=mine)
+
+    state = await _make_state(user_id)
+    await state.update_data(routine_rename_id=day)
+    message = _make_message(user_id, "День 1")
+
+    await routines.rt_rename_entered(message, state)
+
+    assert (await fresh_db.get_routine(day))["name"] == "День 1"
+
+
+async def test_a_standalone_routine_cannot_take_a_saved_program_name(fresh_db, user_id):
+    """В списке 🗂 Программы одиночные и многодневки лежат вперемешку — тёзки
+    там неразличимы ровно так же."""
+    await fresh_db.create_program(user_id, "Домашка")
+    solo = await fresh_db.create_routine(user_id, "Зал")
+
+    state = await _make_state(user_id)
+    await state.update_data(routine_rename_id=solo)
+    message = _make_message(user_id, "домашка")
+
+    await routines.rt_rename_entered(message, state)
+
+    message.reply.assert_awaited_once()
+    assert "уже есть" in message.reply.await_args.args[0]
+    assert (await fresh_db.get_routine(solo))["name"] == "Зал"

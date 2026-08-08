@@ -9,6 +9,7 @@ once, then save it as your split.
 
 import datetime as dt
 from html import escape
+from typing import Optional
 
 from aiogram import BaseMiddleware, F, Router
 from aiogram.filters import StateFilter
@@ -471,8 +472,18 @@ async def _show_routine_editor(event, state: FSMContext, routine_id: int) -> Non
             + (f" — {escape(ex['target'])}" if ex["target"] else "")
             for i, ex in enumerate(exercises, start=1)
         ]
-        lines += ["", "Тап по названию — схема подходов, ⬆️ — поднять "
-                      "(с первого — в конец), 🗑 — убрать."]
+        # Списком, а не одной строкой через запятые: тап по названию — единственное
+        # действие тут, о котором нельзя догадаться по самой кнопке (иконки ⬆️ и 🗑
+        # говорят за себя, а название выглядит подписью, а не кнопкой). Раз оно
+        # держится на подсказке, подсказка обязана быть заметной и говорить, что
+        # именно поменяется.
+        lines += [
+            "",
+            "Что можно сделать:",
+            "• <b>тап по названию</b> — поменять подходы и повторы",
+            "• ⬆️ — поднять выше (с первого — в конец)",
+            "• 🗑 — убрать из дня",
+        ]
     else:
         lines.append("Здесь пока нет упражнений.")
     if note:
@@ -752,9 +763,43 @@ async def rt_rename_entered(message: Message, state: FSMContext):
         return
     data = await state.get_data()
     routine_id = data["routine_rename_id"]
+    routine = await _owned_routine(message, routine_id)
+    if routine is None:
+        await state.set_state(None)
+        await show_manage(message, state)
+        return
+    taken = await _name_taken(message.from_user.id, routine, name)
+    if taken:
+        # Многодневную программу от такого уже защищал rt_program_rename_entered
+        # («Программа «X» у тебя уже есть»), а день и одиночная программа
+        # переименовывались во что угодно молча. Два «Дня 1» в одной программе —
+        # это две одинаковые кнопки на экране, из которых не выбрать.
+        await message.reply(taken)
+        return
     await db.rename_routine(routine_id, name)
     await state.set_state(None)
     await _show_routine_detail(message, state, routine_id)
+
+
+async def _name_taken(user_id: int, routine, name: str) -> Optional[str]:
+    """Занято ли имя — текстом ошибки, либо None.
+
+    День сверяется с днями своей же программы (в разных программах «День 1»
+    сколько угодно), одиночная программа — с другими одиночными и с именами
+    многодневок: в списке 🗂 Программы они лежат вперемешку.
+    """
+    key = name.strip().lower()
+    if routine["program_id"] is not None:
+        siblings = await db.list_program_days_by_id(routine["program_id"])
+        if any(d["id"] != routine["id"] and d["name"].strip().lower() == key for d in siblings):
+            return f"День «{name}» в этой программе уже есть. Назови по-другому."
+        return None
+    others = await db.list_standalone_routines(user_id)
+    if any(r["id"] != routine["id"] and r["name"].strip().lower() == key for r in others):
+        return f"Программа «{name}» у тебя уже есть. Назови по-другому."
+    if await db.find_program_by_name(user_id, name) is not None:
+        return f"Программа «{name}» у тебя уже есть. Назови по-другому."
+    return None
 
 
 @router.callback_query(F.data.startswith("rt:pgmrename:"))
