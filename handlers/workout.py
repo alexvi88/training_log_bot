@@ -1585,10 +1585,13 @@ async def _picker_screen_groups(callback: CallbackQuery, state: FSMContext, show
     # actually trains most should be first, not alphabetical/catalog order.
     groups = await db.list_muscle_groups(callback.from_user.id, order_by_usage=True)
     hint = "<i>Выбери группу мышц или найди упражнение по названию:</i>"
-    bf_date = dt.date.fromisoformat(data["bf_date"]) if data.get("is_backfill") and data.get("bf_date") else None
-    recovery = await _recovery_line(callback.from_user.id, groups, as_of=bf_date)
-    if recovery:
-        hint = recovery + "\n\n" + hint
+    if not data.get("is_backfill"):
+        # Занесение задним числом — не «что тренировать сегодня»: отдых
+        # групп на момент бэкфилла человеку тут не решение принимать, а
+        # посторонний шум над тем, что он и так уже помнит и заносит.
+        recovery = await _recovery_line(callback.from_user.id, groups)
+        if recovery:
+            hint = recovery + "\n\n" + hint
     open_ids = data.get("open_exercises") or []
     partner_buttons: list[tuple[int, str]] = []
     if open_ids:
