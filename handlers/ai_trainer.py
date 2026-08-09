@@ -432,6 +432,17 @@ async def ai_keyboard(
     mentioned = await exercise_mentions.find_in_text(
         user_id, answer, limit=exercise_mentions.MAX_MENTIONS_TOTAL
     )
+    # Кроме упражнения, которое действие тут же предлагает заархивировать.
+    # Иначе под ответом вставали две кнопки подряд с одним и тем же именем —
+    # «🗄 В архив: Тестовое упражнение» и «📌 Тестовое упражнение», — и
+    # разница между ними («одна архивирует, другая просто открывает карточку»)
+    # неочевидна ни разу. Та же логика, что ниже у программ.
+    if actions:
+        acted_on = {a["label"] for a in actions}
+        mentioned = [
+            ex for ex in mentioned
+            if not any(ex["display_name"] in label for label in acted_on)
+        ]
     # Программы, названные в ответе, — ссылками на них же. Лимит общий с
     # упражнениями: под ответом место одно и то же.
     programs = await program_mentions.find_in_text(user_id, answer)
