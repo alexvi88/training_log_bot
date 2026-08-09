@@ -18,6 +18,7 @@ import logging
 import os
 import secrets
 import time
+from contextlib import suppress
 from typing import Any, Optional
 
 import aiosqlite
@@ -388,6 +389,46 @@ CREATE TABLE IF NOT EXISTS cost_events (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_cost_events_created ON cost_events (created_at);
+
+-- Оплаты звёздами (XTR), по строке на успешный платёж. Полный лог, а не
+-- состояние: состояние живёт в user_billing и пересчитывается, а здесь — чем
+-- именно человек заплатил и когда.
+--
+-- charge_id — telegram_payment_charge_id, он же ключ идемпотентности: Telegram
+-- умеет доставить successful_payment повторно (ретрай апдейта после обрыва), и
+-- без UNIQUE один платёж выдал бы доступ дважды. Он же — то, что надо назвать
+-- Telegram при возврате звёзд (refund_star_payment).
+--
+-- refunded_at ставится при возврате и не удаляет строку: вернувшийся платёж —
+-- такой же факт истории, как и состоявшийся, и в выручке он должен переставать
+-- считаться, а не исчезать.
+CREATE TABLE IF NOT EXISTS star_payments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    telegram_id INTEGER NOT NULL,
+    charge_id TEXT NOT NULL UNIQUE,
+    product TEXT NOT NULL,
+    stars INTEGER NOT NULL,
+    payload TEXT NOT NULL,
+    refunded_at TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_star_payments_user ON star_payments (telegram_id, id);
+CREATE INDEX IF NOT EXISTS idx_star_payments_created ON star_payments (created_at);
+
+-- Что у человека сейчас оплачено: до какой даты действует доступ и сколько
+-- разовых вопросов осталось. Строка заводится первой покупкой — у тех, кто не
+-- платил, её просто нет, и это отличается от «есть строка с нулями» только
+-- размером таблицы.
+--
+-- pro_until — UTC ISO. Продление считается от максимума из «сейчас» и текущей
+-- даты окончания: купить второй месяц, не дождавшись конца первого, должно
+-- добавлять срок, а не обнулять остаток.
+CREATE TABLE IF NOT EXISTS user_billing (
+    telegram_id INTEGER PRIMARY KEY,
+    pro_until TEXT,
+    pack_questions INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL
+);
 
 -- Сырой лог того, что человек делает в боте: каждое входящее сообщение и каждое
 -- нажатие кнопки, одной строкой (см. activity_log.py). Всё остальное, что видит
@@ -5423,6 +5464,181 @@ async def increment_ai_video_count(telegram_id: int) -> None:
             (telegram_id, today),
         )
         await conn().commit()
+
+
+async def get_ai_question_count_month(telegram_id: int) -> int:
+    """Сколько вопросов задано с первого числа текущего месяца пользователя.
+
+    Месяц берётся из того же локального дня, что и дневная квота (_quota_day):
+    иначе у человека в UTC+7 месячный счётчик обнулялся бы посреди дня, и
+    «осталось вопросов» на экране расходилось бы с тем, что считает лимит.
+    Суммируем по уже существующим дневным строкам — отдельного месячного
+    счётчика нет намеренно: два счётчика одного и того же неизбежно разъезжаются.
+    """
+    month = (await _quota_day(telegram_id))[:7]
+    cur = await conn().execute(
+        "SELECT COALESCE(SUM(count), 0) FROM ai_question_usage "
+        "WHERE telegram_id = ? AND date LIKE ?",
+        (telegram_id, f"{month}-%"),
+    )
+    row = await cur.fetchone()
+    return row[0] if row else 0
+
+
+# ---------- Монетизация: звёзды, доступ, разовые паки ----------
+#
+# Витрина и правила — billing.py, экраны — handlers/billing.py. Здесь только
+# факты: что оплачено, что потрачено и что вернули.
+
+
+async def get_billing(telegram_id: int) -> dict:
+    """Оплаченное состояние человека. Не платил — нули, а не None."""
+    cur = await conn().execute(
+        "SELECT pro_until, pack_questions FROM user_billing WHERE telegram_id = ?",
+        (telegram_id,),
+    )
+    row = await cur.fetchone()
+    if not row:
+        return {"pro_until": None, "pack_questions": 0}
+    return {"pro_until": row["pro_until"], "pack_questions": row["pack_questions"]}
+
+
+async def record_star_payment(
+    telegram_id: int, charge_id: str, product: str, stars: int, payload: str
+) -> bool:
+    """Записать оплату. False — такой charge_id уже есть, выдавать ничего не надо.
+
+    Возврат — это и есть защита от двойной выдачи: Telegram может прислать
+    successful_payment повторно, и решение «новый это платёж или тот же» должно
+    приниматься в базе под тем же UNIQUE, а не сравнением в памяти.
+    """
+    async with _write_lock:
+        cur = await conn().execute(
+            "INSERT OR IGNORE INTO star_payments "
+            "(telegram_id, charge_id, product, stars, payload, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (telegram_id, charge_id, product, stars, payload, now_iso()),
+        )
+        await conn().commit()
+        return cur.rowcount > 0
+
+
+async def extend_pro(telegram_id: int, days: int) -> str:
+    """Продлить доступ на days и вернуть новую дату окончания (UTC ISO).
+
+    От максимума из «сейчас» и текущей даты: второй месяц, купленный до конца
+    первого, добавляет срок, а не съедает остаток.
+    """
+    now = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
+    current = await get_billing(telegram_id)
+    base = now
+    if current["pro_until"]:
+        with suppress(ValueError):
+            base = max(base, dt.datetime.fromisoformat(current["pro_until"]))
+    until = (base + dt.timedelta(days=days)).isoformat(timespec="seconds")
+    async with _write_lock:
+        await conn().execute(
+            "INSERT INTO user_billing (telegram_id, pro_until, pack_questions, updated_at) "
+            "VALUES (?, ?, 0, ?) "
+            "ON CONFLICT (telegram_id) DO UPDATE SET pro_until = excluded.pro_until, "
+            "updated_at = excluded.updated_at",
+            (telegram_id, until, now_iso()),
+        )
+        await conn().commit()
+    return until
+
+
+async def add_pack_questions(telegram_id: int, count: int) -> int:
+    """Добавить разовые вопросы (отрицательное count — забрать) и вернуть остаток.
+
+    Ниже нуля остаток не уходит: возврат пака, из которого уже отвечено,
+    не должен оставлять человека в долгу.
+    """
+    async with _write_lock:
+        await conn().execute(
+            "INSERT INTO user_billing (telegram_id, pro_until, pack_questions, updated_at) "
+            "VALUES (?, NULL, MAX(0, ?), ?) "
+            "ON CONFLICT (telegram_id) DO UPDATE SET "
+            "pack_questions = MAX(0, pack_questions + ?), updated_at = excluded.updated_at",
+            (telegram_id, count, now_iso(), count),
+        )
+        await conn().commit()
+    return (await get_billing(telegram_id))["pack_questions"]
+
+
+async def consume_pack_question(telegram_id: int) -> bool:
+    """Списать один разовый вопрос. False — списывать было нечего.
+
+    Проверка и списание одним UPDATE ... WHERE pack_questions > 0: два вопроса,
+    отправленные одновременно с последним оставшимся, иначе списали бы его
+    дважды и увели остаток в минус.
+    """
+    async with _write_lock:
+        cur = await conn().execute(
+            "UPDATE user_billing SET pack_questions = pack_questions - 1, updated_at = ? "
+            "WHERE telegram_id = ? AND pack_questions > 0",
+            (now_iso(), telegram_id),
+        )
+        await conn().commit()
+        return cur.rowcount > 0
+
+
+async def get_star_payment(charge_id: str) -> Optional[dict]:
+    cur = await conn().execute(
+        "SELECT telegram_id, charge_id, product, stars, payload, refunded_at, created_at "
+        "FROM star_payments WHERE charge_id = ?",
+        (charge_id,),
+    )
+    row = await cur.fetchone()
+    return dict(row) if row else None
+
+
+async def mark_payment_refunded(charge_id: str) -> bool:
+    """Отметить платёж возвращённым. False — платежа нет или он уже возвращён."""
+    async with _write_lock:
+        cur = await conn().execute(
+            "UPDATE star_payments SET refunded_at = ? WHERE charge_id = ? AND refunded_at IS NULL",
+            (now_iso(), charge_id),
+        )
+        await conn().commit()
+        return cur.rowcount > 0
+
+
+async def star_revenue(days: int) -> dict:
+    """Звёзды и платежи за окно, без возвращённых — то, что реально осталось.
+
+    plus сколько всего людей когда-либо платили: конверсия считается от них, а
+    не от числа платежей (один человек продлевается много раз).
+    """
+    since = (dt.datetime.now(dt.timezone.utc).replace(tzinfo=None) - dt.timedelta(days=days)).isoformat()
+    cur = await conn().execute(
+        "SELECT COUNT(*), COALESCE(SUM(stars), 0), COUNT(DISTINCT telegram_id) "
+        "FROM star_payments WHERE refunded_at IS NULL AND created_at >= ?",
+        (since,),
+    )
+    payments, stars, buyers = await cur.fetchone()
+    cur = await conn().execute(
+        "SELECT COUNT(DISTINCT telegram_id) FROM star_payments WHERE refunded_at IS NULL"
+    )
+    (buyers_total,) = await cur.fetchone()
+    return {
+        "days": days,
+        "payments": payments,
+        "stars": stars,
+        "buyers": buyers,
+        "buyers_total": buyers_total,
+    }
+
+
+async def star_revenue_by_product(days: int) -> list[tuple[str, int, int]]:
+    """(товар, число покупок, звёзды) за окно — что именно покупают."""
+    since = (dt.datetime.now(dt.timezone.utc).replace(tzinfo=None) - dt.timedelta(days=days)).isoformat()
+    cur = await conn().execute(
+        "SELECT product, COUNT(*), COALESCE(SUM(stars), 0) FROM star_payments "
+        "WHERE refunded_at IS NULL AND created_at >= ? GROUP BY product ORDER BY SUM(stars) DESC",
+        (since,),
+    )
+    return [(r[0], r[1], r[2]) for r in await cur.fetchall()]
 
 
 # ---------- AI trainer: durable chat history ----------

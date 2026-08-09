@@ -15,6 +15,7 @@ from aiogram.types import CallbackQuery, Message
 import acquisition
 import activity_log
 import announcements
+import billing
 import config
 import db
 import formatting
@@ -392,8 +393,13 @@ async def cmd_growth(message: Message, state: FSMContext):
     funnel = await db.acquisition_funnel(days, alive_days=acquisition.ALIVE_WINDOW_DAYS)
     referrers = await db.top_referrers(GROWTH_REFERRERS)
     bot_username = await sharing.get_bot_username(message.bot)
+    # Деньги в том же окне, что и приход: «канал привёл 40 человек» и «за этот
+    # срок заплатили трое» — половинки одного вопроса, и смотреть их надо рядом.
+    revenue = await db.star_revenue(days)
+    by_product = await db.star_revenue_by_product(days)
     text = (
         f"{acquisition.format_funnel(funnel, days)}\n\n"
+        f"{billing.format_revenue(revenue, by_product)}\n\n"
         f"{acquisition.format_referrers(referrers)}\n\n"
         f"Ссылка под новый канал: <code>{acquisition.channel_link(bot_username, 'имя')}</code> — "
         f"вместо «имя» латиница, цифры и «_»."

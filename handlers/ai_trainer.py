@@ -17,6 +17,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import ai_trainer
+import billing
 import config
 import db
 import exercise_mentions
@@ -196,6 +197,48 @@ RESUME_TEXT = "🤖 <b>ТРЕНЕР НА СВЯЗИ.</b> Продолжаем �
 DAILY_LIMIT_TEXT = (
     "На сегодня лимит вопросов исчерпан 😮‍💨 Дай тренеру передохнуть — возвращайся завтра."
 )
+
+# Бесплатные вопросы месяца кончились. Не подколка и не упрёк: подкалываем
+# только за пропуски (TONE_OF_VOICE), а человек тут, наоборот, ходил к тренеру
+# так часто, что упёрся в потолок. Поэтому — что кончилось, что осталось
+# бесплатным навсегда и два выхода: подождать или забрать платное.
+MONTHLY_LIMIT_TEXT = (
+    "Бесплатные вопросы на этот месяц кончились — их {free} 😮‍💨\n\n"
+    "Дневник, история, графики и программы при тебе: их не трону никогда. "
+    "Первого числа счётчик обнулю, и спрашивай дальше.\n\n"
+    "Ждать не хочешь — забери платный доступ, там тренер без счётчика."
+)
+
+# То же самое, но человеку, которому платное ещё не показываем (меньше
+# config.PAYWALL_MIN_WORKOUTS закрытых тренировок): витрина ему сейчас
+# прочиталась бы как «бот оказался платным», поэтому только про сброс счётчика.
+MONTHLY_LIMIT_NO_OFFER_TEXT = (
+    "Бесплатные вопросы на этот месяц кончились — их {free} 😮‍💨\n\n"
+    "Дневник, история и графики при тебе. Первого числа счётчик обнулю — "
+    "возвращайся с вопросами."
+)
+
+
+async def _limit_screen(
+    user_id: int, allow: billing.Allowance
+) -> tuple[str, Optional[InlineKeyboardMarkup]]:
+    """Текст и клавиатура на исчерпанный лимит — какой именно кончился.
+
+    Дневной и месячный разводятся намеренно: «приходи завтра» человеку с
+    кончившимся месяцем — враньё, завтра ничего не изменится.
+    """
+    if allow.blocked_by != "month":
+        return DAILY_LIMIT_TEXT, await ai_keyboard(user_id)
+    if not await billing.may_offer(user_id):
+        return (
+            MONTHLY_LIMIT_NO_OFFER_TEXT.format(free=config.AI_QUESTION_MONTHLY_FREE),
+            await ai_keyboard(user_id),
+        )
+    return (
+        MONTHLY_LIMIT_TEXT.format(free=config.AI_QUESTION_MONTHLY_FREE),
+        keyboards.billing_paywall(),
+    )
+
 
 # Пользователи, чей вопрос сейчас обрабатывается — защита от параллельных запросов.
 _busy: set[int] = set()
@@ -573,7 +616,16 @@ async def _start_ai_scenario(
         )
         return
     user_id = callback.from_user.id
-    if await db.get_ai_question_count_today(user_id) >= config.AI_QUESTION_DAILY_LIMIT:
+    allow = await billing.allowance(user_id)
+    if not allow.allowed:
+        if allow.paywalled:
+            # Витрину показываем экраном, а не алертом: в алерте нет кнопок, и
+            # «забери платный доступ» осталось бы фразой без единого выхода.
+            text, markup = await _limit_screen(user_id, allow)
+            with suppress(TelegramBadRequest):
+                await callback.answer()
+            await callback.message.answer(text, reply_markup=markup)
+            return
         await callback.answer(
             "На сегодня лимит вопросов исчерпан 😮\u200d💨 Дай мне передохнуть, "
             "возвращайся завтра — а пока забери готовую в «✨ Готовые программы».",
@@ -1821,12 +1873,14 @@ async def _handle_question(
     reservation is already held and never touches `_busy` itself.
     """
     user_id = user_id if user_id is not None else message.from_user.id
-    asked_today = await db.get_ai_question_count_today(user_id)
-    if asked_today >= config.AI_QUESTION_DAILY_LIMIT:
-        # С той же клавиатурой, что у обычных ответов чата: сообщение о лимите
-        # становится нижним экраном переписки, и без кнопок из него оставался
-        # только выход через нижнее меню.
-        await message.reply(DAILY_LIMIT_TEXT, reply_markup=await ai_keyboard(user_id))
+    allow = await billing.allowance(user_id)
+    if not allow.allowed:
+        # С клавиатурой, а не голым текстом: сообщение о лимите становится
+        # нижним экраном переписки, и без кнопок из него оставался бы только
+        # выход через нижнее меню. Какой именно лимит кончился и что предложить
+        # взамен — решает _limit_screen.
+        text, markup = await _limit_screen(user_id, allow)
+        await message.reply(text, reply_markup=markup)
         return
 
     data = await state.get_data()
@@ -1935,13 +1989,20 @@ async def _handle_question(
             await running_task
         await streamer.close()
 
-    await db.increment_ai_question_count(user_id)
+    # Дневной счётчик двигается всегда, разовый пак — только когда бесплатные
+    # месяца уже кончились (см. billing.charge_question).
+    await billing.charge_question(user_id)
     # Warn before the wall, not at it — the old behaviour only ever mentioned the
     # limit by refusing.
-    left = config.AI_QUESTION_DAILY_LIMIT - (asked_today + 1)
+    left = max(0, allow.left - 1)
+    # Называем тот потолок, который упрётся первым: «осталось сегодня» человеку,
+    # у которого на самом деле кончается месяц, — это обещание, что завтра
+    # станет лучше, а завтра ничего не изменится.
+    budget_left = allow.free_left + allow.pack_left - 1
+    scope = "сегодня" if allow.is_pro or allow.day_left - 1 <= budget_left else "в этом месяце"
     show_quota = 0 < left <= _QUOTA_WARN_AT
-    quota_html = f"\n\n<i>Осталось вопросов сегодня: {left}</i>" if show_quota else ""
-    quota_md = f"\n\n_Осталось вопросов сегодня: {left}_" if show_quota else ""
+    quota_html = f"\n\n<i>Осталось вопросов {scope}: {left}</i>" if show_quota else ""
+    quota_md = f"\n\n_Осталось вопросов {scope}: {left}_" if show_quota else ""
 
     # reasoning_content едет в истории рядом с ответом — иначе следующий вопрос
     # отдаёт Гроку не тот префикс, что был закэширован, и платим по полной за все
@@ -2488,9 +2549,10 @@ async def ai_video_question(message: Message, state: FSMContext):
             return
 
         analyzed_today = await db.get_ai_video_count_today(user_id)
-        if analyzed_today >= config.AI_VIDEO_DAILY_LIMIT:
+        video_limit = await billing.video_daily_limit(user_id)
+        if analyzed_today >= video_limit:
             await message.reply(
-                f"На сегодня разобрал {config.AI_VIDEO_DAILY_LIMIT} видео — "
+                f"На сегодня разобрал {video_limit} видео — "
                 "это лимит. Приходи завтра, а пока спрашивай текстом.",
                 reply_markup=await ai_keyboard(user_id),
             )
