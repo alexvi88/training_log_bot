@@ -1834,6 +1834,25 @@ async def test_the_draft_button_is_not_doubled_by_a_link_to_the_old_namesake(
     assert "ai:prog:view:7" in _callbacks(kb)
 
 
+async def test_an_archive_proposal_is_not_doubled_by_a_mention_link(fresh_db, user_id):
+    """Живой прогон: тренер предложил заархивировать упражнение и в том же
+    ответе назвал его по имени — под ответом встали «🗄 В архив: Тестовое
+    упражнение» и «📌 Тестовое упражнение» подряд, разница между которыми
+    неочевидна ни разу."""
+    group = await fresh_db.create_muscle_group(user_id, "Плечи")
+    ex_id = await fresh_db.create_exercise(user_id, "Тестовое упражнение", group)
+
+    kb = await ai_trainer.ai_keyboard(
+        user_id,
+        answer="Тестовое упражнение нигде не используется — предлагаю в архив.",
+        actions=[{"label": "🗄 В архив: Тестовое упражнение", "callback": f"ai:exarchask:{ex_id}"}],
+    )
+
+    labels = [b.text for row in kb.inline_keyboard for b in row]
+    assert sum("Тестовое упражнение" in label for label in labels) == 1
+    assert "ai:exarchask:" + str(ex_id) in _callbacks(kb)
+
+
 async def test_a_link_to_a_different_program_still_shows_up(fresh_db, user_id):
     """Глушим только тёзку черновика: ссылка на другую программу, названную в
     том же ответе, — как раз то, ради чего эти кнопки и заведены."""
