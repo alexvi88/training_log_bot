@@ -191,6 +191,31 @@ async def test_tapping_template_previews_without_adding_it(fresh_db, user_id):
     assert await db.count_user_exercises(user_id) == 0
 
 
+async def test_preview_goes_out_as_rich_message_when_the_server_supports_it(
+    fresh_db, user_id
+):
+    """caption у обычного фото режется на 1024 символах — на rich-клиенте
+    (Bot API 10.2) фото и полное описание должны уйти одним сообщением вместо
+    photo+caption, и answer_photo вовсе не звать."""
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Спина")
+    template_id = await _template_id(db, "Спина", "Тяга гантели в наклоне")
+
+    state = await _make_state(user_id, exm_group_id=group_id)
+    await state.set_state(ExerciseManage.creating_exercise_name)
+    callback = _make_exercise_callback(user_id, f"exm:tpl:{template_id}")
+    callback.message.answer_rich = AsyncMock()
+
+    await exercises.exm_preview_template(callback, state)
+
+    callback.message.answer_rich.assert_awaited_once()
+    callback.message.answer_photo.assert_not_awaited()
+    rich = callback.message.answer_rich.await_args.kwargs["rich_message"]
+    assert '<img src="tg://photo?id=preview">' in rich.html
+    assert "Тяга гантели в наклоне" in rich.html
+    assert rich.media[0].id == "preview"
+
+
 async def test_confirming_template_add_forks_and_shows_full_card(fresh_db, user_id):
     db = fresh_db
     group_id = await db.create_muscle_group(user_id, "Спина")
