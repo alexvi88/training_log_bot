@@ -135,7 +135,15 @@ def earned_codes(ctx: AchievementContext) -> set[str]:
         if ctx.best_week_streak >= n:
             codes.add(code)
     for kg, code in _WEIGHT_TIERS:
-        if ctx.max_weight_kg >= kg:
+        # Допуск на округление при переключении кг↔lb: живой прогон снял
+        # «Клуб 180» у человека, который реально поднимал 180кг — 180 * lb/kg,
+        # округлённые до 0.1 при хранении в lb (db.scale_user_set_weights), и
+        # обратно в kg дают 179.99, а не 180.0. Единица измерения — это то, как
+        # число ПОКАЗЫВАЮТ, а не то, что человек поднял; предпочтение в
+        # отображении не должно стоить уже заработанного значка. 0.05кг —
+        # больше любой возможной ошибки одного шага округления (максимум
+        # ~0.023кг на round(x, 1) в lb).
+        if ctx.max_weight_kg >= kg - 0.05:
             codes.add(code)
     for kg, code in _TONNAGE_TIERS:
         if ctx.lifetime_tonnage_kg >= kg:
