@@ -67,7 +67,7 @@ async def test_long_exercise_names_are_not_truncated_anywhere(user_id):
     block = formatting.workout_pick_block(1, "15 июля", await view_builder.workout_pick_exercises(wid))
     assert "…" not in block
     for name in names:
-        assert f"• {name} [Грудь]" in block
+        assert f"• {name} [ГРУДЬ]" in block
 
 
 @pytest.mark.asyncio

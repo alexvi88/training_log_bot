@@ -87,7 +87,7 @@ async def test_stale_workout_warning_shows_what_was_logged(fresh_db, user_id):
 
     warning = message.answer.await_args_list[1].args[0]
     assert "Жим лёжа" in warning
-    assert "Грудь" in warning
+    assert "ГРУДЬ" in warning
     assert "100" in warning and "8" in warning
     assert "<b>" not in warning and "<i>" not in warning
 
