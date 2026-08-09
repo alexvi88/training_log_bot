@@ -31,6 +31,7 @@ from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
+import ai_limits
 import ai_trainer
 import db
 import formatting
@@ -269,6 +270,17 @@ async def _analyze_and_show(
         )
         return
 
+    # Единственная платная поверхность бота, которая раньше не считалась вовсе:
+    # вопросы, видео и поиск свои квоты имели, а фотографировать тарелку можно
+    # было бесконечно. Проверяем здесь, потому что сюда сходятся все три входа —
+    # фото, текст и правка «✏️ Поправить».
+    block = await ai_limits.check(message.from_user.id, ai_limits.KIND_FOOD)
+    if block is not None:
+        logger.info("food analysis blocked for user %s: %s", message.from_user.id, block.log)
+        await ai_limits.reply(message, block)
+        await state.set_state(FoodDiaryFlow.viewing)
+        return
+
     # Модели отдаём только пищевую часть прошлой догадки: file_id фотографии,
     # признак источника и вердикт is_food ей ни о чём не говорят, а место в
     # промпте занимают. Само фото при правке заново не пересылается — держать
@@ -311,6 +323,12 @@ async def _analyze_and_show(
         await state.set_state(FoodDiaryFlow.viewing)
         await state.update_data(fd_pending=None)
         return
+
+    # Квота тратится за состоявшийся разбор — как и у вопросов с видео: сбой
+    # провайдера не должен стоить человеку попытки. Списывается и за «это не
+    # еда», и за правку: платный вызов уже сделан, и деньгам всё равно, чем он
+    # кончился.
+    await db.increment_ai_food_count(message.from_user.id)
 
     if not estimate.get("is_food", True):
         # Модель уверенно говорит, что это не еда — не подсовываем «Всё верно?»
@@ -389,6 +407,20 @@ async def fd_text_entry(message: Message, state: FSMContext):
         # нечего проверять, это уже ровно то, что человек написал.
         await _save_now(message, state, _plain_text_pending(text))
         return
+
+    # Кончилась квота разборов — дневник не запирается: текст сохраняется как
+    # есть, тем же путём, что при выключенном КБЖУ. Пейволл на собственную еду —
+    # ровно то, за что нас понесли бы в отзывы (MONETIZATION.md), а разница для
+    # человека тут одна: сегодня без калорий.
+    block = await ai_limits.check(message.from_user.id, ai_limits.KIND_FOOD)
+    if block is not None:
+        if block.preview:
+            await ai_limits.reply(message, block)
+            return
+        await message.reply("Записал как есть — калории сегодня уже не считаю, вернусь к ним завтра.")
+        await _save_now(message, state, _plain_text_pending(text))
+        return
+
     await _analyze_and_show(message, state, text=text)
 
 

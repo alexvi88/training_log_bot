@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+import ai_limits
 import config
 import db
 from handlers import ai_trainer as handler
@@ -31,6 +32,12 @@ def _message(duration=10, file_size=1024, caption=None, user_id=777):
     message.bot = MagicMock()
     message.bot.download = AsyncMock(return_value=SimpleNamespace(read=lambda: b"bytes"))
     return message
+
+
+@pytest.fixture(autouse=True)
+def _cheap_day(monkeypatch):
+    """По умолчанию сутки дешёвые: потолок по деньгам проверяется отдельным тестом."""
+    monkeypatch.setattr(ai_limits, "daily_spend_usd", AsyncMock(return_value=0.0))
 
 
 @pytest.fixture(autouse=True)
@@ -103,6 +110,22 @@ async def test_daily_limit_blocks_before_download(monkeypatch, wired):
     message.bot.download.assert_not_awaited()
     wired.analyze.assert_not_awaited()
     assert str(config.AI_VIDEO_DAILY_LIMIT) in message.reply.await_args.args[0]
+
+
+async def test_daily_cost_cap_turns_video_off_before_download(monkeypatch, wired):
+    """Дорогие сутки выключают разбор видео у всех сразу — даже у того, кто
+    сегодня не прислал ни одного ролика."""
+    monkeypatch.setattr(
+        ai_limits, "daily_spend_usd",
+        AsyncMock(return_value=config.AI_DAILY_COST_SOFT_CAP_USD + 1),
+    )
+    monkeypatch.setattr(handler, "ai_keyboard", AsyncMock(return_value=None))
+    message = _message()
+    await handler.ai_video_question(message, MagicMock())
+
+    message.bot.download.assert_not_awaited()
+    wired.analyze.assert_not_awaited()
+    assert "завтра" in message.reply.await_args.args[0]
 
 
 async def test_oversized_file_rejected_before_download(wired):

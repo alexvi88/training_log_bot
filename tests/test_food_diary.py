@@ -11,6 +11,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import CallbackQuery, Message
 
 import ai_trainer
+import config
 import db as dbmod
 import formatting
 import keyboards
@@ -896,6 +897,66 @@ async def test_unconfigured_model_says_so_instead_of_failing(user_id, monkeypatc
 
     message.reply.assert_awaited()
     assert "не настроено" in message.reply.call_args.args[0]
+    assert await dbmod.count_food_days(user_id) == 0
+
+
+async def test_analysis_spends_the_daily_quota(user_id, monkeypatch):
+    """Разбор еды — платный вызов, и до этого он был единственным без счётчика."""
+    monkeypatch.setattr(food_diary.timeutil, "user_today", lambda user: dt.date(2026, 7, 20))
+    monkeypatch.setattr(food_diary.ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(
+        food_diary.ai_trainer, "analyze_food",
+        AsyncMock(return_value={"is_food": True, "description": "овсянка", "calories": 350}),
+    )
+    state = await _make_state(user_id)
+    await state.set_state(FoodDiaryFlow.viewing)
+
+    await food_diary.fd_text_entry(_make_message(user_id, text="овсянка"), state)
+
+    assert await dbmod.get_ai_food_count_today(user_id) == 1
+
+
+async def test_spent_quota_still_saves_the_text_without_the_model(user_id, monkeypatch):
+    """Кончилась квота — дневник не запирается: запись сохраняется как есть,
+    просто без калорий. Пейволл на собственную еду мы не ставим."""
+    monkeypatch.setattr(food_diary.timeutil, "user_today", lambda user: dt.date(2026, 7, 20))
+    monkeypatch.setattr(food_diary.ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(config, "AI_FOOD_DAILY_LIMIT", 1)
+    analyze = AsyncMock()
+    monkeypatch.setattr(food_diary.ai_trainer, "analyze_food", analyze)
+    await dbmod.increment_ai_food_count(user_id)
+
+    state = await _make_state(user_id)
+    await state.set_state(FoodDiaryFlow.viewing)
+    await state.update_data(fd_date="2026-07-20")
+    message = _make_message(user_id, text="гречка с курицей")
+
+    await food_diary.fd_text_entry(message, state)
+
+    analyze.assert_not_awaited()
+    entries = await dbmod.list_food_entries(user_id, "2026-07-20")
+    assert [e["description"] for e in entries] == ["гречка с курицей"]
+    assert entries[0]["calories"] is None
+    assert "завтра" in message.reply.await_args.args[0]
+
+
+async def test_spent_quota_stops_the_photo_before_the_model(user_id, monkeypatch):
+    """У фото такого запасного пути нет — просим написать словами."""
+    monkeypatch.setattr(food_diary.timeutil, "user_today", lambda user: dt.date(2026, 7, 20))
+    monkeypatch.setattr(food_diary.ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(config, "AI_FOOD_DAILY_LIMIT", 1)
+    analyze = AsyncMock()
+    monkeypatch.setattr(food_diary.ai_trainer, "analyze_food", analyze)
+    await dbmod.increment_ai_food_count(user_id)
+
+    state = await _make_state(user_id)
+    await state.set_state(FoodDiaryFlow.viewing)
+    message = _make_message(user_id)
+
+    await food_diary._analyze_and_show(message, state, image_data_url="data:image/jpeg;base64,x")
+
+    analyze.assert_not_awaited()
+    assert "словами" in message.reply.await_args.args[0]
     assert await dbmod.count_food_days(user_id) == 0
 
 

@@ -16,6 +16,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+import ai_limits
 import ai_trainer
 import billing
 import config
@@ -191,54 +192,6 @@ async def _memory_reminder(user_id: int) -> str:
 # going — repeating the whole "привет, вот что я умею" would read as if the
 # trainer had forgotten the last few messages.
 RESUME_TEXT = "🤖 <b>ТРЕНЕР НА СВЯЗИ.</b> Продолжаем — пиши вопрос 👇"
-
-# Общий текст дневного лимита: показывается и на вопрос в чате, и на кнопку
-# «Составить с AI-тренером» — расходовать они пытаются один и тот же счётчик.
-DAILY_LIMIT_TEXT = (
-    "На сегодня лимит вопросов исчерпан 😮‍💨 Дай тренеру передохнуть — возвращайся завтра."
-)
-
-# Бесплатные вопросы месяца кончились. Не подколка и не упрёк: подкалываем
-# только за пропуски (TONE_OF_VOICE), а человек тут, наоборот, ходил к тренеру
-# так часто, что упёрся в потолок. Поэтому — что кончилось, что осталось
-# бесплатным навсегда и два выхода: подождать или забрать платное.
-MONTHLY_LIMIT_TEXT = (
-    "Бесплатные вопросы на этот месяц кончились — их {free} 😮‍💨\n\n"
-    "Дневник, история, графики и программы при тебе: их не трону никогда. "
-    "Первого числа счётчик обнулю, и спрашивай дальше.\n\n"
-    "Ждать не хочешь — забери платный доступ, там тренер без счётчика."
-)
-
-# То же самое, но человеку, которому платное ещё не показываем (меньше
-# config.PAYWALL_MIN_WORKOUTS закрытых тренировок): витрина ему сейчас
-# прочиталась бы как «бот оказался платным», поэтому только про сброс счётчика.
-MONTHLY_LIMIT_NO_OFFER_TEXT = (
-    "Бесплатные вопросы на этот месяц кончились — их {free} 😮‍💨\n\n"
-    "Дневник, история и графики при тебе. Первого числа счётчик обнулю — "
-    "возвращайся с вопросами."
-)
-
-
-async def _limit_screen(
-    user_id: int, allow: billing.Allowance
-) -> tuple[str, Optional[InlineKeyboardMarkup]]:
-    """Текст и клавиатура на исчерпанный лимит — какой именно кончился.
-
-    Дневной и месячный разводятся намеренно: «приходи завтра» человеку с
-    кончившимся месяцем — враньё, завтра ничего не изменится.
-    """
-    if allow.blocked_by != "month":
-        return DAILY_LIMIT_TEXT, await ai_keyboard(user_id)
-    if not await billing.may_offer(user_id):
-        return (
-            MONTHLY_LIMIT_NO_OFFER_TEXT.format(free=config.AI_QUESTION_MONTHLY_FREE),
-            await ai_keyboard(user_id),
-        )
-    return (
-        MONTHLY_LIMIT_TEXT.format(free=config.AI_QUESTION_MONTHLY_FREE),
-        keyboards.billing_paywall(),
-    )
-
 
 # Пользователи, чей вопрос сейчас обрабатывается — защита от параллельных запросов.
 _busy: set[int] = set()
@@ -616,15 +569,17 @@ async def _start_ai_scenario(
         )
         return
     user_id = callback.from_user.id
-    allow = await billing.allowance(user_id)
-    if not allow.allowed:
-        if allow.paywalled:
-            # Витрину показываем экраном, а не алертом: в алерте нет кнопок, и
-            # «забери платный доступ» осталось бы фразой без единого выхода.
-            text, markup = await _limit_screen(user_id, allow)
-            with suppress(TelegramBadRequest):
-                await callback.answer()
-            await callback.message.answer(text, reply_markup=markup)
+    block = await ai_limits.check(user_id, ai_limits.KIND_QUESTION)
+    if block is not None:
+        logger.info("AI program builder blocked for user %s: %s", user_id, block.log)
+        if block.preview or block.kind == ai_limits.KIND_QUESTION_MONTH:
+            # Сообщением, а не алертом, по одной и той же причине: в алерт не
+            # положишь ни кнопку «Понятно» своим, ни кнопку на витрину тому, у
+            # кого кончился бесплатный месяц, — а без них обе фразы становятся
+            # тупиком. Заодно текст про «приходи завтра» ниже достаётся только
+            # тому, кому завтра правда поможет.
+            await ai_limits.reply(callback.message, block)
+            await callback.answer()
             return
         await callback.answer(
             "На сегодня лимит вопросов исчерпан 😮\u200d💨 Дай мне передохнуть, "
@@ -968,7 +923,7 @@ _PROGRAM_GONE = (
 _UNDO_SLOTS = 8
 
 
-async def _register_undos(state: FSMContext, actions: list[dict]) -> list[dict]:
+async def _register_actions(state: FSMContext, actions: list[dict]) -> list[dict]:
     """Описания откатов — в FSM, а в кнопку — короткий ключ на них.
 
     В callback_data 64 байта, а откату нужно то, что туда не влезает: старое
@@ -980,27 +935,45 @@ async def _register_undos(state: FSMContext, actions: list[dict]) -> list[dict]:
     загрузке честно превращает «7» обратно в int 7, и после перезапуска бота
     поиск по строковому ключу из callback_data не нашёл бы ничего.
 
-    Действия, у которых отката нет (они, наоборот, ждут подтверждения — см.
-    ai_trainer._ACTION_TOOLS), проходят насквозь нетронутыми.
+    Так же и письмо разработчику (см. ai_trainer.send_feedback_to_admin): в
+    кнопке ключ, а сам текст — в FSM, потому что в callback_data он не влез бы
+    даже в обрезанном виде.
+
+    Действия, у которых нет ни того, ни другого (они ждут подтверждения по
+    готовой callback_data — см. ai_trainer._ACTION_TOOLS), проходят насквозь
+    нетронутыми.
     """
     data = await state.get_data()
     store = dict(data.get("ai_undo") or {})
     seq = int(data.get("ai_undo_seq") or 0)
+    feedback_store = dict(data.get("ai_feedback") or {})
+    feedback_seq = int(data.get("ai_feedback_seq") or 0)
 
     out: list[dict] = []
     for action in actions:
         undo = action.get("undo")
-        if undo is None:
+        feedback = action.get("feedback")
+        if undo is not None:
+            seq += 1
+            key = f"u{seq}"
+            store[key] = undo
+            out.append({"label": action["label"], "callback": f"ai:undo:{key}"})
+        elif feedback is not None:
+            feedback_seq += 1
+            key = f"f{feedback_seq}"
+            feedback_store[key] = feedback
+            out.append({"label": action["label"], "callback": f"ai:fb:{key}"})
+        else:
             out.append(action)
-            continue
-        seq += 1
-        key = f"u{seq}"
-        store[key] = undo
-        out.append({"label": action["label"], "callback": f"ai:undo:{key}"})
 
     for stale in sorted(store, key=lambda k: int(k[1:]))[:-_UNDO_SLOTS]:
         del store[stale]
-    await state.update_data(ai_undo=store, ai_undo_seq=seq)
+    for stale in sorted(feedback_store, key=lambda k: int(k[1:]))[:-_UNDO_SLOTS]:
+        del feedback_store[stale]
+    await state.update_data(
+        ai_undo=store, ai_undo_seq=seq,
+        ai_feedback=feedback_store, ai_feedback_seq=feedback_seq,
+    )
     return out
 
 
@@ -1124,10 +1097,15 @@ async def ai_undo(callback: CallbackQuery, state: FSMContext):
         )
         return
     await callback.answer(done)
+    await _drop_used_button(callback, state, data)
 
-    # Кнопка отработала — убираем её, чтобы она не выглядела всё ещё живой.
-    # Остальные кнопки под этим ответом (ссылки на упражнения, другие откаты)
-    # остаются: ответ тренера никуда не делся, по нему ещё ходят.
+
+async def _drop_used_button(callback: CallbackQuery, state: FSMContext, data: dict) -> None:
+    """Кнопка отработала — убираем её, чтобы она не выглядела всё ещё живой.
+
+    Остальные кнопки под этим ответом (ссылки на упражнения, другие откаты)
+    остаются: ответ тренера никуда не делся, по нему ещё ходят.
+    """
     actions = [a for a in (data.get("ai_actions") or []) if a.get("callback") != callback.data]
     await state.update_data(ai_actions=actions)
     rows = (callback.message.reply_markup.inline_keyboard if callback.message.reply_markup else [])
@@ -1137,6 +1115,58 @@ async def ai_undo(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_reply_markup(
             reply_markup=InlineKeyboardMarkup(inline_keyboard=kept) if kept else None
         )
+
+
+@router.callback_query(F.data.startswith("ai:fb:"))
+async def ai_send_feedback(callback: CallbackQuery, state: FSMContext):
+    """«📬 Передать разработчику» под ответом тренера.
+
+    Письмо собрал тренер (ai_trainer.send_feedback_to_admin), а отправляет его
+    тап человека — как и всё остальное, что уходит наружу. Маршрут тот же, что у
+    команды /feedback, только приходит уже разобранным: что человек сказал и что
+    тренер из него вытянул.
+
+    Ключ из хранилища забираем ПОСЛЕ удачной отправки: сеть тут отвечает не
+    всегда, и вычеркнутое до отправки письмо человек уже ничем бы не повторил.
+    Двойной тап поэтому теоретически может уехать дважды — дубль в чате админа
+    дешевле потерянного отзыва.
+    """
+    key = callback.data.split(":", 2)[2]
+    data = await state.get_data()
+    store = dict(data.get("ai_feedback") or {})
+    letter = store.get(key)
+    if letter is None:
+        await callback.answer(
+            "Это уже передал — или кнопка от слишком старого ответа.", show_alert=True
+        )
+        return
+    if config.ADMIN_ID is None:
+        await callback.answer(
+            "Сейчас передать не выйдет. Попробуй ещё раз через /feedback.",
+            show_alert=True,
+        )
+        return
+
+    who = f"@{callback.from_user.username}" if callback.from_user.username else str(callback.from_user.id)
+    header = (
+        f"📬 {letter.get('label', 'Фидбек')} от {who} (id {callback.from_user.id}), "
+        "через AI-тренера:"
+    )
+    try:
+        await callback.bot.send_message(
+            config.ADMIN_ID, f"{header}\n\n{escape(letter['text'])}", parse_mode="HTML"
+        )
+    except TelegramAPIError:
+        logger.exception("feedback relay failed for user %s", callback.from_user.id)
+        await callback.answer(
+            "Не дошло. Нажми ещё раз или напиши /feedback.", show_alert=True
+        )
+        return
+
+    del store[key]
+    await state.update_data(ai_feedback=store)
+    await callback.answer("Передал 🙌 Спасибо!")
+    await _drop_used_button(callback, state, data)
 
 
 def _draft_id_from(callback_data: str) -> str:
@@ -1873,14 +1903,18 @@ async def _handle_question(
     reservation is already held and never touches `_busy` itself.
     """
     user_id = user_id if user_id is not None else message.from_user.id
+    # Остаток нужен уже здесь: под ответом он превращается в предупреждение
+    # «осталось N» (ниже), и считать его после списания было бы поздно.
     allow = await billing.allowance(user_id)
-    if not allow.allowed:
-        # С клавиатурой, а не голым текстом: сообщение о лимите становится
-        # нижним экраном переписки, и без кнопок из него оставался бы только
-        # выход через нижнее меню. Какой именно лимит кончился и что предложить
-        # взамен — решает _limit_screen.
-        text, markup = await _limit_screen(user_id, allow)
-        await message.reply(text, reply_markup=markup)
+    # Дневная квота вопросов, месячный пейволл и суточный стоп по деньгам —
+    # одной проверкой (см.
+    # ai_limits.check). С той же клавиатурой, что у обычных ответов чата:
+    # сообщение о лимите становится нижним экраном переписки, и без кнопок из
+    # него оставался только выход через нижнее меню.
+    block = await ai_limits.check(user_id, ai_limits.KIND_QUESTION)
+    if block is not None:
+        logger.info("AI question blocked for user %s: %s", user_id, block.log)
+        await ai_limits.reply(message, block, reply_markup=await ai_keyboard(user_id))
         return
 
     data = await state.get_data()
@@ -1961,6 +1995,14 @@ async def _handle_question(
     async def collect_wire(messages: list) -> None:
         wire_cell["messages"] = messages
 
+    # Поисковый потолок сработал — обычный атлет об этом не узнаёт (ответ просто
+    # идёт без свежести), а свой аккаунт получает предупреждение с кнопкой. Само
+    # решение принимается внутри ask(), где ни бота, ни экрана нет.
+    async def warn_about_limit(block) -> None:
+        logger.info("AI search blocked for user %s: %s", user_id, block.log)
+        with suppress(TelegramAPIError):
+            await ai_limits.reply(message, block)
+
     try:
         answer = await ai_trainer.ask(
             user_id, question, history, image_data_url=image_data_url,
@@ -1968,7 +2010,7 @@ async def _handle_question(
             on_action=collect_action, on_questions=collect_questions,
             on_chunk=streamer.push,
             video_context=video_context, on_reasoning=collect_reasoning,
-            on_wire=collect_wire,
+            on_wire=collect_wire, on_limit=warn_about_limit,
         )
     except Exception:
         logger.exception("AI trainer request failed for user %s", user_id)
@@ -2057,7 +2099,7 @@ async def _handle_question(
     # причине, что и черновик: вопрос вдогонку тушил бы ещё живую кнопку под
     # прошлым ответом.
     if actions:
-        actions = await _register_undos(state, actions)
+        actions = await _register_actions(state, actions)
         await state.update_data(ai_actions=actions)
 
     # Full, permanent log — separate from the live window above, which is capped
@@ -2548,14 +2590,12 @@ async def ai_video_question(message: Message, state: FSMContext):
             )
             return
 
-        analyzed_today = await db.get_ai_video_count_today(user_id)
-        video_limit = await billing.video_daily_limit(user_id)
-        if analyzed_today >= video_limit:
-            await message.reply(
-                f"На сегодня разобрал {video_limit} видео — "
-                "это лимит. Приходи завтра, а пока спрашивай текстом.",
-                reply_markup=await ai_keyboard(user_id),
-            )
+        # Дневная квота роликов и суточный потолок по деньгам — до скачивания:
+        # ролик тянется из Telegram мегабайтами, и делать это ради отказа глупо.
+        block = await ai_limits.check(user_id, ai_limits.KIND_VIDEO)
+        if block is not None:
+            logger.info("AI video blocked for user %s: %s", user_id, block.log)
+            await ai_limits.reply(message, block, reply_markup=await ai_keyboard(user_id))
             return
 
         if video.file_size and video.file_size > config.MAX_VIDEO_BYTES:
@@ -2620,6 +2660,16 @@ async def ai_voice_question(message: Message, state: FSMContext):
             return
         if message.voice.duration and message.voice.duration > MAX_VOICE_SECONDS:
             await message.reply("Голосовое слишком длинное, запиши покороче.")
+            return
+
+        # Квота — ДО расшифровки, а не после. Раньше проверка стояла глубже, уже
+        # в _handle_question: человек с выбранной квотой ответа не получал, но
+        # каждое голосовое всё равно уезжало в распознавание и стоило нам своих
+        # $0.006 — платный вызов без единого шанса дойти до ответа.
+        block = await ai_limits.check(user_id, ai_limits.KIND_QUESTION)
+        if block is not None:
+            logger.info("AI voice blocked for user %s: %s", user_id, block.log)
+            await ai_limits.reply(message, block, reply_markup=await ai_keyboard(user_id))
             return
 
         voice_file = await _download_voice_as_file(message)

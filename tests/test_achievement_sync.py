@@ -220,3 +220,29 @@ async def test_switching_units_does_not_hand_out_every_weight_club(fresh_db, use
     codes = await db.list_achievement_codes(user_id)
     assert "club100" in codes  # still a real 100kg lift
     assert {"club140", "club180", "club220"}.isdisjoint(codes)
+
+
+async def test_switching_units_does_not_take_back_a_badge_on_the_boundary(fresh_db, user_id):
+    """Живой прогон: человек реально поднял 180кг («Клуб 180» открыт), переключил
+    единицы на lb — и значок пропал. Причина: db.scale_user_set_weights хранит
+    вес округлённым до 0.1 в новой единице, и 180кг → 396.8lb → обратно в кг —
+    это уже 179.98, не 180.0. Единица измерения — как число показывают, не то,
+    что человек поднял; переключение не должно стоить уже заработанного."""
+    db = fresh_db
+    gid = await db.create_muscle_group(user_id, "Ноги")
+    ex_id = await db.create_exercise(user_id, "Присед", gid)
+    workout_id = await db.create_workout(user_id)
+    block_id = await db.create_block(workout_id, "single")
+    await db.add_block_exercise(block_id, ex_id, 0)
+    await db.add_set(block_id, ex_id, 1, 0, 180, 5)  # ровно 180кг
+    await db.finish_workout(workout_id)
+    await achievement_sync.resync(user_id)
+    assert "club180" in await db.list_achievement_codes(user_id)
+
+    # Тот же путь, что и handlers.settings.settings_unit: конвертация,
+    # округление до 0.1 в БД, полный ресинк (award + revoke).
+    await db.scale_user_set_weights(user_id, config.LB_PER_KG)
+    await db.update_user(user_id, unit="lb")
+    await achievement_sync.resync(user_id)
+
+    assert "club180" in await db.list_achievement_codes(user_id)

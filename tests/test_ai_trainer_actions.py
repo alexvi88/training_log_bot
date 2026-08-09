@@ -337,6 +337,7 @@ from aiogram.fsm.context import FSMContext  # noqa: E402
 from aiogram.fsm.storage.base import StorageKey  # noqa: E402
 from aiogram.fsm.storage.memory import MemoryStorage  # noqa: E402
 
+import config  # noqa: E402
 import handlers.ai_trainer as ai_handler  # noqa: E402
 
 
@@ -521,7 +522,7 @@ async def test_undo_keys_survive_the_json_fsm_round_trip(fresh_db, user_id):
     import fsm_storage
 
     state = _state(user_id)
-    buttons = await ai_handler._register_undos(
+    buttons = await ai_handler._register_actions(
         state, [{"label": "↩️ Отменить", "undo": {"kind": "bodyweight", "id": 1}}]
     )
     key = buttons[0]["callback"].split(":", 2)[2]
@@ -537,7 +538,7 @@ async def test_actions_awaiting_confirmation_pass_through_untouched(fresh_db, us
     state = _state(user_id)
     original = {"label": "🗑 Удалить: X", "callback": "rt:pgmdelask:5"}
 
-    out = await ai_handler._register_undos(state, [dict(original)])
+    out = await ai_handler._register_actions(state, [dict(original)])
 
     assert out == [original]
     assert not (await state.get_data()).get("ai_undo")
@@ -548,7 +549,7 @@ async def test_only_the_last_few_undos_are_kept(fresh_db, user_id):
     описания откатов вечно незачем."""
     state = _state(user_id)
     for i in range(ai_handler._UNDO_SLOTS + 4):
-        await ai_handler._register_undos(
+        await ai_handler._register_actions(
             state, [{"label": "↩️", "undo": {"kind": "bodyweight", "id": i}}]
         )
 
@@ -639,3 +640,66 @@ async def test_delete_bodyweight_log_refuses_someone_elses_row(fresh_db, user_id
 
     assert "error" in payload
     assert await fresh_db.get_bodyweight_log(log_id) is not None
+
+
+# ---------- жалоба на бот, сказанная тренеру ----------
+
+
+async def test_feedback_is_only_offered_never_sent(fresh_db, user_id, monkeypatch):
+    """Письмо уходит наружу, живому человеку, — значит, отправляет его тап, а
+    не модель. И текст письма едет в описании кнопки, а не в callback_data:
+    туда он не влез бы даже обрезанным."""
+    monkeypatch.setattr(config, "ADMIN_ID", 999)
+
+    action = await _call(
+        user_id,
+        "send_feedback_to_admin",
+        {"message": "Объём за неделю считает без суперсетов", "kind": "bug"},
+    )
+
+    assert action is not None
+    assert action["label"] == "📬 Передать разработчику"
+    assert action["feedback"]["text"] == "Объём за неделю считает без суперсетов"
+    assert action["feedback"]["label"] == ai_trainer.FEEDBACK_KIND_LABELS["bug"]
+
+
+async def test_feedback_without_text_is_refused(fresh_db, user_id, monkeypatch):
+    monkeypatch.setattr(config, "ADMIN_ID", 999)
+
+    payload = json.loads(
+        await ai_trainer.execute_tool(user_id, "send_feedback_to_admin", {"message": "   "})
+    )
+
+    assert "error" in payload
+
+
+async def test_feedback_with_nobody_to_send_it_to_gives_no_button(fresh_db, user_id, monkeypatch):
+    """Кнопка, которая заведомо ничего не отправит, хуже её отсутствия."""
+    monkeypatch.setattr(config, "ADMIN_ID", None)
+
+    captured: list[dict] = []
+
+    async def on_action(action: dict) -> None:
+        captured.append(action)
+
+    payload = json.loads(
+        await ai_trainer.execute_tool(
+            user_id, "send_feedback_to_admin", {"message": "не работает кнопка"},
+            on_action=on_action,
+        )
+    )
+
+    assert "error" in payload
+    assert captured == []
+
+
+async def test_feedback_letter_is_capped(fresh_db, user_id, monkeypatch):
+    """maxLength в схеме — просьба к модели, а не гарантия; в сообщение
+    Telegram письмо должно влезть вместе с шапкой."""
+    monkeypatch.setattr(config, "ADMIN_ID", 999)
+
+    action = await _call(
+        user_id, "send_feedback_to_admin", {"message": "а" * (ai_trainer.FEEDBACK_MAX_LEN + 500)}
+    )
+
+    assert len(action["feedback"]["text"]) == ai_trainer.FEEDBACK_MAX_LEN

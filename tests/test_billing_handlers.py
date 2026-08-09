@@ -11,9 +11,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+import ai_limits
 import billing
 import config
-from handlers import ai_trainer as ai_handler
 from handlers import billing as handler
 
 pytestmark = pytest.mark.asyncio
@@ -263,23 +263,25 @@ async def test_offer_screen_off_when_selling_is_off(fresh_db, user_id, monkeypat
 
     assert message.answer.await_args.kwargs["reply_markup"] is None
 
-# --- Пейволл в самом тренере ------------------------------------------------
+# --- Пейволл как лимит ------------------------------------------------------
 #
-# Экран лимита — единственное место, где человек узнаёт о платном сам, не
-# заходя в /premium. Ошибиться тут можно двумя способами, и оба дорогие: обещать
-# «приходи завтра» тому, у кого кончился месяц (завтра ничего не изменится), и
-# показать витрину новичку (читается как «бот оказался платным»).
+# Пейволл живёт в ai_limits вместе с остальными потолками (ai_limits.py): это
+# такой же ответ на вопрос «делаем этот дорогой шаг или нет». Ошибиться тут
+# можно двумя способами, и оба дорогие: обещать «приходи завтра» тому, у кого
+# кончился месяц (завтра ничего не изменится), и показать витрину новичку
+# (читается как «бот оказался платным»).
 
 
 async def test_day_limit_still_says_come_back_tomorrow(fresh_db, user_id, monkeypatch):
     monkeypatch.setattr(config, "AI_QUESTION_DAILY_LIMIT", 1)
-    monkeypatch.setattr(ai_handler, "ai_keyboard", AsyncMock(return_value="ai-kb"))
     await billing.charge_question(user_id)
 
-    text, markup = await ai_handler._limit_screen(user_id, await billing.allowance(user_id))
+    block = await ai_limits.check(user_id, ai_limits.KIND_QUESTION)
 
-    assert text == ai_handler.DAILY_LIMIT_TEXT
-    assert markup == "ai-kb"
+    assert block.kind == ai_limits.KIND_QUESTION
+    assert block.user_text == ai_limits.QUESTION_LIMIT_TEXT
+    # Витрины тут нет: человеку надо просто дождаться завтра.
+    assert block.markup is None
 
 
 async def test_month_limit_offers_the_paid_way_out(fresh_db, user_id, monkeypatch):
@@ -287,21 +289,49 @@ async def test_month_limit_offers_the_paid_way_out(fresh_db, user_id, monkeypatc
     monkeypatch.setattr(config, "PAYWALL_MIN_WORKOUTS", 0)
     await billing.charge_question(user_id)
 
-    text, markup = await ai_handler._limit_screen(user_id, await billing.allowance(user_id))
+    block = await ai_limits.check(user_id, ai_limits.KIND_QUESTION)
 
-    assert "месяц" in text
+    assert block.kind == ai_limits.KIND_QUESTION_MONTH
+    assert "месяц" in block.user_text
     # Дневник остаётся при человеке — это обещание держится и на пейволле.
-    assert "Дневник" in text
-    assert markup is not None
+    assert "Дневник" in block.user_text
+    # Кнопка на витрину едет с самим отказом: без неё предложение — тупик.
+    assert block.markup is not None
 
 
 async def test_month_limit_stays_quiet_for_a_newcomer(fresh_db, user_id, monkeypatch):
     monkeypatch.setattr(config, "AI_QUESTION_MONTHLY_FREE", 1)
     monkeypatch.setattr(config, "PAYWALL_MIN_WORKOUTS", 5)
-    monkeypatch.setattr(ai_handler, "ai_keyboard", AsyncMock(return_value="ai-kb"))
     await billing.charge_question(user_id)
 
-    text, _ = await ai_handler._limit_screen(user_id, await billing.allowance(user_id))
+    block = await ai_limits.check(user_id, ai_limits.KIND_QUESTION)
 
-    assert "платный доступ" not in text
-    assert "Первого числа" in text
+    assert block.kind == ai_limits.KIND_QUESTION_MONTH
+    assert "платный доступ" not in block.user_text
+    assert "Первого числа" in block.user_text
+    assert block.markup is None
+
+
+async def test_paid_access_lifts_the_month(fresh_db, user_id, monkeypatch):
+    monkeypatch.setattr(config, "AI_QUESTION_MONTHLY_FREE", 1)
+    await billing.charge_question(user_id)
+    await billing.grant(user_id, billing.PRO_MONTH)
+
+    assert await ai_limits.check(user_id, ai_limits.KIND_QUESTION) is None
+
+
+async def test_paid_access_widens_the_video_cap(fresh_db, user_id, monkeypatch):
+    """Отказ обязан называть тот лимит, который действует у этого человека."""
+    monkeypatch.setattr(config, "AI_VIDEO_DAILY_LIMIT", 2)
+    monkeypatch.setattr(config, "AI_VIDEO_DAILY_LIMIT_PRO", 4)
+    await billing.grant(user_id, billing.PRO_MONTH)
+    for _ in range(2):
+        await fresh_db.increment_ai_video_count(user_id)
+
+    assert await ai_limits.check(user_id, ai_limits.KIND_VIDEO) is None
+
+    for _ in range(2):
+        await fresh_db.increment_ai_video_count(user_id)
+    block = await ai_limits.check(user_id, ai_limits.KIND_VIDEO)
+
+    assert "4 видео" in block.user_text

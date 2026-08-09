@@ -1539,6 +1539,16 @@ def food_confirm_keyboard() -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
+def limit_ack_keyboard(kind: str) -> InlineKeyboardMarkup:
+    """Под предупреждением о лимите на своём аккаунте (см. ai_limits.preview_text).
+
+    Одна кнопка: нажал — и до конца суток этот вид лимита тебя пропускает.
+    """
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="👌 Понятно, пропускай", callback_data=f"ail:ack:{kind}"))
+    return b.as_markup()
+
+
 def food_history_keyboard(days: Sequence[dt.date], page: int, has_next: bool) -> InlineKeyboardMarkup:
     """Дни с записями, по два в ряд — что в них было, расписано в тексте экрана."""
     b = InlineKeyboardBuilder()

@@ -101,6 +101,9 @@ class Allowance:
     pro_until: Optional[dt.datetime]
     left: int
     day_left: int
+    # Суточный потолок, действующий именно у этого человека (у оплаченного он
+    # выше). Нужен там, где отказ называет число: врать про чужой лимит нельзя.
+    day_limit: int
     free_left: int
     pack_left: int
     blocked_by: Optional[str]
@@ -136,7 +139,7 @@ async def allowance(user_id: int) -> Allowance:
         # оглядки на счётчик» было бы неправдой.
         return Allowance(
             is_pro=True, pro_until=until, left=day_left, day_left=day_left,
-            free_left=0, pack_left=row["pack_questions"],
+            day_limit=daily_cap, free_left=0, pack_left=row["pack_questions"],
             blocked_by="day" if day_left == 0 else None,
         )
 
@@ -153,7 +156,8 @@ async def allowance(user_id: int) -> Allowance:
         blocked_by = "day" if day_left == 0 and budget > 0 else "month"
     return Allowance(
         is_pro=False, pro_until=until, left=left, day_left=day_left,
-        free_left=free_left, pack_left=pack_left, blocked_by=blocked_by,
+        day_limit=daily_cap, free_left=free_left, pack_left=pack_left,
+        blocked_by=blocked_by,
     )
 
 
