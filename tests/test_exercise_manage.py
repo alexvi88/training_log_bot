@@ -216,6 +216,27 @@ async def test_preview_goes_out_as_rich_message_when_the_server_supports_it(
     assert rich.media[0].id == "preview"
 
 
+async def test_rich_preview_uses_br_not_bare_newlines(fresh_db, user_id):
+    """Живой прогон: описание с несколькими шагами («1. ... \\n2. ... \\n3. ...»)
+    приходило одной слипшейся строкой — rich `html` это настоящий HTML, а не
+    обычный текст/подпись, и голый «\\n» в нём ничего не значит, ровно как в
+    браузере. Без замены на <br> вся техника выполнения превращалась в кашу."""
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Спина")
+    template_id = await _template_id(db, "Спина", "Тяга штанги в наклоне")
+
+    state = await _make_state(user_id, exm_group_id=group_id)
+    await state.set_state(ExerciseManage.creating_exercise_name)
+    callback = _make_exercise_callback(user_id, f"exm:tpl:{template_id}")
+    callback.message.answer_rich = AsyncMock()
+
+    await exercises.exm_preview_template(callback, state)
+
+    rich = callback.message.answer_rich.await_args.kwargs["rich_message"]
+    assert "\n" not in rich.html
+    assert rich.html.count("<br>") >= 4  # фото→текст + пустая строка + шаги 1-2-3
+
+
 async def test_confirming_template_add_forks_and_shows_full_card(fresh_db, user_id):
     db = fresh_db
     group_id = await db.create_muscle_group(user_id, "Спина")
