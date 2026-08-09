@@ -2663,8 +2663,19 @@ async def list_finished_workouts_meta(user_id: int) -> list[aiosqlite.Row]:
 
 
 async def hall_of_fame_aggregates(user_id: int) -> dict[str, float]:
-    """Lifetime totals for the Hall of Fame: tonnage moved, total working sets,
-    and the longest single finished workout (seconds). All over finished workouts."""
+    """Lifetime totals for the Hall of Fame: tonnage moved and total working
+    sets, over all finished workouts.
+
+    Не включает длину самой долгой тренировки: раньше она считалась тут же,
+    сырым started_at/finished_at — тем же способом, от которого
+    view_builder.workout_duration_seconds специально ушёл (находка 25:
+    разрыв между стартом и финишем — это не время тренировки, если человек
+    отвлёкся на часы, а не тренировался). Из-за этого «Самая длинная
+    тренировка» на экране Достижений показывала часы явно нетренировочного
+    простоя, а «Марафонец» (то же самое правило «длиннее 2 часов») на неё же
+    не срабатывал — прямая нестыковка на одном экране. Теперь оба числа
+    считает один и тот же view_builder.longest_workout_seconds.
+    """
     cur = await conn().execute(
         "SELECT COALESCE(SUM(COALESCE(s.load_weight, s.weight) * s.reps), 0) AS tonnage, COUNT(s.id) AS sets_count "
         "FROM sets s "
@@ -2674,16 +2685,9 @@ async def hall_of_fame_aggregates(user_id: int) -> dict[str, float]:
         (user_id,),
     )
     row = await cur.fetchone()
-    cur2 = await conn().execute(
-        "SELECT MAX((julianday(finished_at) - julianday(started_at)) * 86400.0) AS longest "
-        "FROM workouts WHERE user_id = ? AND status = 'finished' AND finished_at IS NOT NULL",
-        (user_id,),
-    )
-    longest = (await cur2.fetchone())["longest"]
     return {
         "tonnage": row["tonnage"] or 0.0,
         "sets_count": row["sets_count"] or 0,
-        "longest_workout_seconds": longest or 0.0,
     }
 
 
