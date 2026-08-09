@@ -19,13 +19,15 @@ _GATE_SEARCH = '{"search": true, "data": true}'
 _GATE_NO_SEARCH = '{"search": false, "data": true}'
 
 
-# Схемы 29 инструментов уезжают модели В КАЖДОМ раунде tool-call'ов, так что их
+# Схемы 31 инструмента уезжают модели В КАЖДОМ раунде tool-call'ов, так что их
 # размер — постоянная статья расхода, а не разовая (LLM_COSTS.md, идея 3). Бюджет
 # в символах, а не в токенах: токенизатор xAI нам недоступен, а на живых замерах
 # 22.3к символов схем весили около 6.0к токенов — то есть ~3.7 символа на токен.
 # Поднят с 19_500 под delete_food_entry/delete_bodyweight_log (~725 символов) —
 # та же кнопка отката, что у log_food/log_bodyweight, только для стирания.
-_TOOL_SCHEMA_CHAR_BUDGET = 20_300
+# Поднят с 20_300 под send_feedback_to_admin (~470 символов): жалобы на бот
+# люди говорят тренеру, а не в /feedback, и раньше они там и оставались.
+_TOOL_SCHEMA_CHAR_BUDGET = 20_800
 
 
 async def test_tool_schemas_stay_within_their_character_budget():

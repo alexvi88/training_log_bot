@@ -916,7 +916,7 @@ _PROGRAM_GONE = (
 _UNDO_SLOTS = 8
 
 
-async def _register_undos(state: FSMContext, actions: list[dict]) -> list[dict]:
+async def _register_actions(state: FSMContext, actions: list[dict]) -> list[dict]:
     """Описания откатов — в FSM, а в кнопку — короткий ключ на них.
 
     В callback_data 64 байта, а откату нужно то, что туда не влезает: старое
@@ -928,27 +928,45 @@ async def _register_undos(state: FSMContext, actions: list[dict]) -> list[dict]:
     загрузке честно превращает «7» обратно в int 7, и после перезапуска бота
     поиск по строковому ключу из callback_data не нашёл бы ничего.
 
-    Действия, у которых отката нет (они, наоборот, ждут подтверждения — см.
-    ai_trainer._ACTION_TOOLS), проходят насквозь нетронутыми.
+    Так же и письмо разработчику (см. ai_trainer.send_feedback_to_admin): в
+    кнопке ключ, а сам текст — в FSM, потому что в callback_data он не влез бы
+    даже в обрезанном виде.
+
+    Действия, у которых нет ни того, ни другого (они ждут подтверждения по
+    готовой callback_data — см. ai_trainer._ACTION_TOOLS), проходят насквозь
+    нетронутыми.
     """
     data = await state.get_data()
     store = dict(data.get("ai_undo") or {})
     seq = int(data.get("ai_undo_seq") or 0)
+    feedback_store = dict(data.get("ai_feedback") or {})
+    feedback_seq = int(data.get("ai_feedback_seq") or 0)
 
     out: list[dict] = []
     for action in actions:
         undo = action.get("undo")
-        if undo is None:
+        feedback = action.get("feedback")
+        if undo is not None:
+            seq += 1
+            key = f"u{seq}"
+            store[key] = undo
+            out.append({"label": action["label"], "callback": f"ai:undo:{key}"})
+        elif feedback is not None:
+            feedback_seq += 1
+            key = f"f{feedback_seq}"
+            feedback_store[key] = feedback
+            out.append({"label": action["label"], "callback": f"ai:fb:{key}"})
+        else:
             out.append(action)
-            continue
-        seq += 1
-        key = f"u{seq}"
-        store[key] = undo
-        out.append({"label": action["label"], "callback": f"ai:undo:{key}"})
 
     for stale in sorted(store, key=lambda k: int(k[1:]))[:-_UNDO_SLOTS]:
         del store[stale]
-    await state.update_data(ai_undo=store, ai_undo_seq=seq)
+    for stale in sorted(feedback_store, key=lambda k: int(k[1:]))[:-_UNDO_SLOTS]:
+        del feedback_store[stale]
+    await state.update_data(
+        ai_undo=store, ai_undo_seq=seq,
+        ai_feedback=feedback_store, ai_feedback_seq=feedback_seq,
+    )
     return out
 
 
@@ -1072,10 +1090,15 @@ async def ai_undo(callback: CallbackQuery, state: FSMContext):
         )
         return
     await callback.answer(done)
+    await _drop_used_button(callback, state, data)
 
-    # Кнопка отработала — убираем её, чтобы она не выглядела всё ещё живой.
-    # Остальные кнопки под этим ответом (ссылки на упражнения, другие откаты)
-    # остаются: ответ тренера никуда не делся, по нему ещё ходят.
+
+async def _drop_used_button(callback: CallbackQuery, state: FSMContext, data: dict) -> None:
+    """Кнопка отработала — убираем её, чтобы она не выглядела всё ещё живой.
+
+    Остальные кнопки под этим ответом (ссылки на упражнения, другие откаты)
+    остаются: ответ тренера никуда не делся, по нему ещё ходят.
+    """
     actions = [a for a in (data.get("ai_actions") or []) if a.get("callback") != callback.data]
     await state.update_data(ai_actions=actions)
     rows = (callback.message.reply_markup.inline_keyboard if callback.message.reply_markup else [])
@@ -1085,6 +1108,58 @@ async def ai_undo(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_reply_markup(
             reply_markup=InlineKeyboardMarkup(inline_keyboard=kept) if kept else None
         )
+
+
+@router.callback_query(F.data.startswith("ai:fb:"))
+async def ai_send_feedback(callback: CallbackQuery, state: FSMContext):
+    """«📬 Передать разработчику» под ответом тренера.
+
+    Письмо собрал тренер (ai_trainer.send_feedback_to_admin), а отправляет его
+    тап человека — как и всё остальное, что уходит наружу. Маршрут тот же, что у
+    команды /feedback, только приходит уже разобранным: что человек сказал и что
+    тренер из него вытянул.
+
+    Ключ из хранилища забираем ПОСЛЕ удачной отправки: сеть тут отвечает не
+    всегда, и вычеркнутое до отправки письмо человек уже ничем бы не повторил.
+    Двойной тап поэтому теоретически может уехать дважды — дубль в чате админа
+    дешевле потерянного отзыва.
+    """
+    key = callback.data.split(":", 2)[2]
+    data = await state.get_data()
+    store = dict(data.get("ai_feedback") or {})
+    letter = store.get(key)
+    if letter is None:
+        await callback.answer(
+            "Это уже передал — или кнопка от слишком старого ответа.", show_alert=True
+        )
+        return
+    if config.ADMIN_ID is None:
+        await callback.answer(
+            "Сейчас передать не выйдет. Попробуй ещё раз через /feedback.",
+            show_alert=True,
+        )
+        return
+
+    who = f"@{callback.from_user.username}" if callback.from_user.username else str(callback.from_user.id)
+    header = (
+        f"📬 {letter.get('label', 'Фидбек')} от {who} (id {callback.from_user.id}), "
+        "через AI-тренера:"
+    )
+    try:
+        await callback.bot.send_message(
+            config.ADMIN_ID, f"{header}\n\n{escape(letter['text'])}", parse_mode="HTML"
+        )
+    except TelegramAPIError:
+        logger.exception("feedback relay failed for user %s", callback.from_user.id)
+        await callback.answer(
+            "Не дошло. Нажми ещё раз или напиши /feedback.", show_alert=True
+        )
+        return
+
+    del store[key]
+    await state.update_data(ai_feedback=store)
+    await callback.answer("Передал 🙌 Спасибо!")
+    await _drop_used_button(callback, state, data)
 
 
 def _draft_id_from(callback_data: str) -> str:
@@ -1996,7 +2071,7 @@ async def _handle_question(
     # причине, что и черновик: вопрос вдогонку тушил бы ещё живую кнопку под
     # прошлым ответом.
     if actions:
-        actions = await _register_undos(state, actions)
+        actions = await _register_actions(state, actions)
         await state.update_data(ai_actions=actions)
 
     # Full, permanent log — separate from the live window above, which is capped
