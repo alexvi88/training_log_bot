@@ -39,7 +39,7 @@ import timeutil
 import ui
 import view_builder
 import voice_parse
-from fsm import WorkoutFlow
+from fsm import BackfillFlow, WorkoutFlow
 from parser import (
     ParsedSet,
     ParseError,
@@ -562,6 +562,21 @@ async def _back_after_cancel(callback: CallbackQuery, state: FSMContext, user):
         # not drop the user on the same "add exercise to begin" screen.
         await db.discard_workout(workout_id)
         await _clear_sticky_photo(callback.bot, state)
+        if data.get("is_backfill"):
+            # У бэкфилла своя предыдущая ступень — календарь: без этого
+            # «Назад» с самого первого экрана выбора группы выкидывало в общее
+            # меню, будто перед этим ничего не выбирали, хотя дата уже была.
+            from handlers.backfill import _BACKFILL_PROMPT
+
+            await clear_state_keep_ai(state)
+            await state.set_state(BackfillFlow.awaiting_date)
+            today = timeutil.user_today(user)
+            await ui.safe_edit(
+                callback,
+                _BACKFILL_PROMPT,
+                reply_markup=keyboards.calendar_keyboard("bf", today.year, today.month, today=today),
+            )
+            return
         # Тренировка отменена — каркас чистим, но переписку с AI-тренером и
         # черновик его программы сохраняем: они переживают тренировки.
         await clear_state_keep_ai(state)
