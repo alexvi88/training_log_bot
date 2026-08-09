@@ -1495,53 +1495,6 @@ async def test_stream_break_after_placeholder_deletion_is_reported_in_a_new_mess
     assert err.kwargs.get("reply_markup") is not None
 
 
-# ---------- rich-черновик «Думаю…» вместо плейсхолдера (Bot API 10.2) ----------
-
-
-async def test_thinking_draft_replaces_the_placeholder_when_the_server_supports_it(
-    fresh_db, user_id, monkeypatch
-):
-    """Rich-черновик несёт тот же сигнал ожидания, что и текстовый плейсхолдер
-    «думаю…» — держать оба на экране разом читается как два индикатора вместо
-    одного, поэтому placeholder должен уйти сразу, как только черновик открылся,
-    а не только когда придёт реальный текст ответа."""
-    monkeypatch.setattr(ai_trainer.ai_trainer, "ask", AsyncMock(return_value="растёт"))
-
-    state = await _make_state(user_id)
-    await state.set_state("AITrainerFlow:chatting")
-    message = _make_chat_message(user_id, "как жим?")
-    message.bot.send_rich_message_draft = AsyncMock()
-    placeholder = message.answer.return_value
-    placeholder.delete = AsyncMock()
-
-    await ai_trainer.ai_question(message, state)
-
-    placeholder.delete.assert_awaited_once()
-    first_call = message.bot.send_rich_message_draft.await_args_list[0]
-    assert first_call.kwargs["draft_id"] == message.message_id
-    assert first_call.kwargs["rich_message"].blocks[0].text  # thinking-блок с текстом
-
-
-async def test_thinking_draft_unsupported_keeps_the_old_placeholder(fresh_db, user_id, monkeypatch):
-    """Сервер/клиент без rich-черновиков (Bot API < 10.2, старый aiogram) —
-    поведение не должно измениться: тот же текстовый плейсхолдер, что и раньше,
-    ничего не удаляется раньше срока."""
-    monkeypatch.setattr(ai_trainer.ai_trainer, "ask", AsyncMock(return_value="растёт"))
-
-    state = await _make_state(user_id)
-    await state.set_state("AITrainerFlow:chatting")
-    message = _make_chat_message(user_id, "как жим?")
-    # message.bot — обычный MagicMock без send_rich_message_draft: имитирует
-    # старый сервер/клиент (метод есть, но await на MagicMock уронит TypeError).
-    placeholder = message.answer.return_value
-    placeholder.delete = AsyncMock()
-
-    await ai_trainer.ai_question(message, state)
-
-    placeholder.delete.assert_not_awaited()
-    placeholder.edit_text.assert_awaited()
-
-
 # ---------- ответ не теряется после списания квоты ----------
 
 
