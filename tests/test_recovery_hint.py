@@ -141,6 +141,51 @@ async def test_recovery_as_of_backfill_date_still_uses_an_earlier_real_session(f
     assert "ноги" in await workout._recovery_line(user_id, groups, as_of=bf_date)
 
 
+async def test_backfill_picker_screen_has_no_recovery_hint_at_all(fresh_db, user_id, monkeypatch):
+    """Занесение задним числом — не «что тренировать сегодня»: отдых групп на
+    дату бэкфилла человеку тут не помогает решать, а лишний шум над тем, что
+    он и так уже помнит. Убрано целиком, не просто пересчитано под bf_date."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock
+
+    from handlers import workout
+
+    db = fresh_db
+    chest = await db.create_muscle_group(user_id, "Грудь")
+    bench = await db.create_exercise(user_id, "Жим", chest)
+    later = dt.date(2026, 8, 6)
+    workout_id = await db.create_workout(user_id, started_at=f"{later.isoformat()}T10:00:00")
+    block_id = await db.create_block(workout_id, "single")
+    await db.add_block_exercise(block_id, bench, 0)
+    for _ in range(12):
+        await db.append_set(block_id, bench, 0, 100.0, 5)
+    await db.finish_workout(workout_id, finished_at=f"{later.isoformat()}T11:00:00")
+
+    captured = {}
+
+    async def fake_refresh_live(bot, state, user, wid, hint, kb):
+        captured["hint"] = hint
+
+    monkeypatch.setattr(workout, "_refresh_live", fake_refresh_live)
+
+    bf_workout_id = await db.create_workout(
+        user_id, started_at="2026-08-07T12:00:00", status="backfill"
+    )
+    state = SimpleNamespace(
+        get_data=AsyncMock(return_value={
+            "workout_id": bf_workout_id, "is_backfill": True, "bf_date": "2026-08-07",
+        }),
+        update_data=AsyncMock(),
+    )
+    callback = MagicMock()
+    callback.from_user = SimpleNamespace(id=user_id)
+    callback.bot = MagicMock()
+
+    await workout._picker_screen_groups(callback, state)
+
+    assert "Ещё не отдохнули" not in captured["hint"]
+
+
 async def test_last_session_by_group_before_excludes_later_sessions(fresh_db, user_id):
     db = fresh_db
     legs = await db.create_muscle_group(user_id, "Ноги")

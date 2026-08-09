@@ -52,7 +52,7 @@ def test_build_workout_summary_weighted_exercise_shows_e1rm():
         ExerciseBlockView(group_name="грудь", exercise_name="Жим лёжа", sets=[(100.0, 8), (100.0, 6)])
     ]
     text = formatting.build_workout_summary(started, blocks)
-    assert "Жим лёжа [грудь]" in text
+    assert "Жим лёжа [ГРУДЬ]" in text
     assert "100×8" in text and "100×6" in text
     assert "e1RM" in text
 

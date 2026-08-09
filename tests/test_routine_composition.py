@@ -445,8 +445,8 @@ async def test_the_source_list_spells_out_every_workout_above_numbered_buttons(f
     text = callback.message.answer.await_args.args[0]
     assert text.startswith("🗂 Из какой тренировки создать программу?")
     assert "<b>1 · 15.07.2026 (ср)</b>" in text
-    assert "• Приседания со штангой на плечах [Грудь]" in text
-    assert "• Жим штанги лёжа широким хватом [Грудь]" in text
+    assert "• Приседания со штангой на плечах [ГРУДЬ]" in text
+    assert "• Жим штанги лёжа широким хватом [ГРУДЬ]" in text
 
     kb = callback.message.answer.await_args.kwargs["reply_markup"]
     button = next(b for row in kb.inline_keyboard for b in row if b.callback_data == f"rt:pickw:item:{wid}")
