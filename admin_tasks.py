@@ -85,6 +85,19 @@ async def _build_cost_report(date_str: str) -> str:
             f"{config.AI_SEARCH_GLOBAL_DAILY_LIMIT} — дальше отвечали без свежести"
         )
     lines.append(f"💸 Итого расходы: ~${total_cost:.2f} (~${total_cost * 30:.0f}/мес)")
+    # Сутки, упёршиеся в потолок по деньгам, обязаны быть видны в отчёте отдельной
+    # строкой: иначе «дорогой день, в котором половина функций молча выключилась»
+    # выглядит ровно как обычный, только с суммой побольше.
+    if config.AI_DAILY_COST_HARD_STOP_USD > 0 and total_cost >= config.AI_DAILY_COST_HARD_STOP_USD:
+        lines.append(
+            f"🛑 Жёсткий стоп сработал (потолок ${config.AI_DAILY_COST_HARD_STOP_USD:.0f}) — "
+            "тренер молчал до полуночи UTC"
+        )
+    elif config.AI_DAILY_COST_SOFT_CAP_USD > 0 and total_cost >= config.AI_DAILY_COST_SOFT_CAP_USD:
+        lines.append(
+            f"⚠️ Потолок расходов пройден (${config.AI_DAILY_COST_SOFT_CAP_USD:.0f}) — "
+            "поиск, видео и разбор еды выключались"
+        )
     return "\n".join(lines)
 
 
@@ -104,6 +117,7 @@ async def _send_daily_report(bot: Bot) -> None:
     )
     await db.prune_old_cost_events(config.COST_EVENTS_RETENTION_DAYS)
     await db.prune_old_user_events(config.ACTIVITY_RETENTION_DAYS)
+    await db.prune_old_limit_acks()
     cutoff = (
         dt.datetime.now() - dt.timedelta(days=config.SHARED_ITEMS_RETENTION_DAYS)
     ).isoformat(timespec="seconds")

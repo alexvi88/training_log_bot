@@ -42,6 +42,7 @@ from xai_sdk.chat import user as xai_user
 from xai_sdk.tools import web_search as xai_web_search
 from xai_sdk.tools import x_search as xai_x_search
 
+import ai_limits
 import analytics
 import config
 import db
@@ -4132,6 +4133,25 @@ async def execute_tool(
 
 # ---------- agentic loop ----------
 
+async def _search_block(
+    user_id: int, on_limit: Optional[Callable[[Any], Awaitable[None]]]
+) -> Optional[ai_limits.Block]:
+    """Что мешает поднять живой поиск — личная квота, общий потолок или деньги.
+
+    Порядок проверок — от личного к общему: на «личный лимит» в логе смотреть
+    незачем, а «упёрлись в ОБЩИЙ потолок» и «сутки дороже потолка» — это уже
+    события, и путать их между собой нельзя.
+    """
+    for kind in (ai_limits.KIND_SEARCH, ai_limits.KIND_SEARCH_GLOBAL):
+        block = await ai_limits.check(user_id, kind)
+        if block is None:
+            continue
+        if block.preview and on_limit is not None:
+            await on_limit(block)
+        return block
+    return None
+
+
 async def ask(
     user_id: int,
     question: str,
@@ -4145,6 +4165,7 @@ async def ask(
     video_context: Optional[str] = None,
     on_reasoning: Optional[Callable[[str], Awaitable[None]]] = None,
     on_wire: Optional[Callable[[list[dict[str, Any]]], Awaitable[None]]] = None,
+    on_limit: Optional[Callable[[Any], Awaitable[None]]] = None,
 ) -> str:
     """Один вопрос пользователя → готовый текст ответа.
 
@@ -4176,6 +4197,12 @@ async def ask(
     реально сейчас происходит (веб-поиск, конкретный tool-call), чтобы вызывающая
     сторона могла показать это пользователю вместо голого "думаю" (см.
     handlers/ai_trainer.py).
+
+    on_limit — опциональный колбэк, которому отдаётся ai_limits.Block, когда
+    поисковый шаг не состоялся из-за потолка. Обычный атлет об этом ничего не
+    узнаёт (ответ просто идёт без свежести), а свой аккаунт получает
+    предупреждение — ради него колбэк и заведён: изнутри ask() сообщение в чат
+    не отправишь, здесь нет ни бота, ни экрана.
 
     on_program — опциональный колбэк с черновиком программы, если тренер за этот
     ход собрал её (см. propose_program). Текст ответа при этом обычный: черновик
@@ -4221,16 +4248,13 @@ async def ask(
         # выяснить, кто это, — поднимая multi-agent с четырьмя агентами и платой
         # $5 за 1000 вызовов инструментов за информацию, которая ответу не нужна.
         search_outcome = "skipped: видео разбирается по кадрам, сеть не нужна"
-    elif await db.get_ai_search_count_today(user_id) >= config.AI_SEARCH_DAILY_LIMIT:
-        search_outcome = "skipped: daily limit reached"
-    elif await db.get_ai_search_count_global() >= config.AI_SEARCH_GLOBAL_DAILY_LIMIT:
-        # Личная квота умножается на число людей, глобальная — нет. Исход пишем
-        # отдельной фразой: «упёрлись в общий потолок» — это сигнал, что сутки
-        # были дорогими, а «личный лимит» — обычное дело одного активного атлета.
-        search_outcome = (
-            f"skipped: ОБЩИЙ суточный потолок поисков исчерпан "
-            f"({config.AI_SEARCH_GLOBAL_DAILY_LIMIT} на всех за сутки)"
-        )
+    elif (search_block := await _search_block(user_id, on_limit)) is not None:
+        # Личная квота, общий потолок поисков и суточный потолок по деньгам —
+        # все три через ai_limits, чтобы решение о дорогом шаге принималось в
+        # одном месте. Исход пишем словами: «упёрлись в общий потолок» — сигнал,
+        # что сутки были дорогими, а «личный лимит» — обычное дело одного
+        # активного атлета.
+        search_outcome = f"skipped: {search_block.log}"
     elif not gate.ok and _looks_like_it_needs_fresh_web(question):
         # Гейт молчит, но вопрос сам говорит, что ему нужна свежесть. Дефолт «не
         # искать» тут стоил бы ответа по существу: на «что нового в мире

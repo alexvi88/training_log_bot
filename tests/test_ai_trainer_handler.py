@@ -185,6 +185,27 @@ async def test_ai_voice_question_forwards_transcribed_text_as_question(fresh_db,
     )
 
 
+async def test_ai_voice_question_checks_quota_before_transcribing(fresh_db, user_id, monkeypatch):
+    """Расшифровка — платный вызов ($0.006), и раньше он уезжал в OpenAI даже у
+    человека с выбранной квотой: ответа тот всё равно не получал, а мы платили."""
+    import config
+    import db
+
+    monkeypatch.setattr(ai_trainer.ai_trainer, "is_voice_configured", lambda: True)
+    transcribe = AsyncMock(return_value="как мой прогресс")
+    monkeypatch.setattr(ai_trainer.ai_trainer, "transcribe_voice", transcribe)
+    monkeypatch.setattr(ai_trainer, "ai_keyboard", AsyncMock(return_value=None))
+    for _ in range(config.AI_QUESTION_DAILY_LIMIT):
+        await db.increment_ai_question_count(user_id)
+
+    message = _make_voice_message(user_id)
+    await ai_trainer.ai_voice_question(message, await _make_state(user_id))
+
+    transcribe.assert_not_awaited()
+    message.bot.download.assert_not_awaited()
+    assert "лимит" in message.reply.await_args.args[0]
+
+
 def _make_message(user_id: int, text: str):
     message = MagicMock()
     message.text = text
