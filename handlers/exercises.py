@@ -5,7 +5,7 @@ from contextlib import suppress
 from html import escape
 
 from aiogram import F, Router
-from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import (
@@ -14,8 +14,6 @@ from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     InputMediaPhoto,
-    InputRichMessage,
-    InputRichMessageMedia,
     Message,
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -212,40 +210,17 @@ async def exm_preview_template(callback: CallbackQuery, state: FSMContext):
     with suppress(TelegramBadRequest):
         await callback.message.delete()
     if images:
-        if not await _send_rich_photo_preview(callback.message, images[0], text, kb):
-            await callback.message.answer_photo(
-                FSInputFile(images[0]), caption=text, reply_markup=kb, parse_mode="HTML"
-            )
+        # Rich-сообщение (Bot API 10.2, InputRichMessage) пробовали вместо
+        # photo+caption — фиксить обрезку описания на 1024 символах. Живой
+        # прогон: Telegram Web принимает отправку без ошибки, но фото молча
+        # не показывает — хуже старого поведения, а не деградирует к нему,
+        # и это никаким try/except на стороне бота не поймать. Откатили.
+        await callback.message.answer_photo(
+            FSInputFile(images[0]), caption=text, reply_markup=kb, parse_mode="HTML"
+        )
     else:
         await callback.message.answer(text, reply_markup=kb, parse_mode="HTML")
     await callback.answer()
-
-
-async def _send_rich_photo_preview(message: Message, image_path: str, text_html: str, kb) -> bool:
-    """Фото и текст одним rich-сообщением (Bot API 10.2) вместо photo+caption.
-
-    caption у обычного фото режется на 1024 символах — описание упражнения с
-    техникой в это не всегда влезает. False — rich не поддержан (сервер/клиент
-    ниже 10.2, старый aiogram), и вызывающая сторона шлёт как раньше.
-
-    text_html собран для обычного текста/подписи, где перевод строки сам по
-    себе — уже перенос; в rich `html` это настоящий HTML, и голый «\n» там —
-    незначащий пробел, как в браузере. Живой прогон: без замены на <br> все
-    подряд идущие абзацы и нумерованные шаги слипались в одну строку."""
-    html_with_breaks = text_html.replace("\n", "<br>")
-    try:
-        await message.answer_rich(
-            rich_message=InputRichMessage(
-                html=f'<img src="tg://photo?id=preview"><br><br>{html_with_breaks}',
-                media=[
-                    InputRichMessageMedia(id="preview", media=InputMediaPhoto(media=FSInputFile(image_path)))
-                ],
-            ),
-            reply_markup=kb,
-        )
-    except (TelegramAPIError, AttributeError, TypeError):
-        return False
-    return True
 
 
 @router.callback_query(
