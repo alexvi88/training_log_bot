@@ -226,11 +226,17 @@ async def _send_rich_photo_preview(message: Message, image_path: str, text_html:
 
     caption у обычного фото режется на 1024 символах — описание упражнения с
     техникой в это не всегда влезает. False — rich не поддержан (сервер/клиент
-    ниже 10.2, старый aiogram), и вызывающая сторона шлёт как раньше."""
+    ниже 10.2, старый aiogram), и вызывающая сторона шлёт как раньше.
+
+    text_html собран для обычного текста/подписи, где перевод строки сам по
+    себе — уже перенос; в rich `html` это настоящий HTML, и голый «\n» там —
+    незначащий пробел, как в браузере. Живой прогон: без замены на <br> все
+    подряд идущие абзацы и нумерованные шаги слипались в одну строку."""
+    html_with_breaks = text_html.replace("\n", "<br>")
     try:
         await message.answer_rich(
             rich_message=InputRichMessage(
-                html=f'<img src="tg://photo?id=preview">\n\n{text_html}',
+                html=f'<img src="tg://photo?id=preview"><br><br>{html_with_breaks}',
                 media=[
                     InputRichMessageMedia(id="preview", media=InputMediaPhoto(media=FSInputFile(image_path)))
                 ],
