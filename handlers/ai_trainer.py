@@ -16,6 +16,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+import ai_limits
 import ai_trainer
 import config
 import db
@@ -190,12 +191,6 @@ async def _memory_reminder(user_id: int) -> str:
 # going — repeating the whole "привет, вот что я умею" would read as if the
 # trainer had forgotten the last few messages.
 RESUME_TEXT = "🤖 <b>ТРЕНЕР НА СВЯЗИ.</b> Продолжаем — пиши вопрос 👇"
-
-# Общий текст дневного лимита: показывается и на вопрос в чате, и на кнопку
-# «Составить с AI-тренером» — расходовать они пытаются один и тот же счётчик.
-DAILY_LIMIT_TEXT = (
-    "На сегодня лимит вопросов исчерпан 😮‍💨 Дай тренеру передохнуть — возвращайся завтра."
-)
 
 # Пользователи, чей вопрос сейчас обрабатывается — защита от параллельных запросов.
 _busy: set[int] = set()
@@ -573,7 +568,15 @@ async def _start_ai_scenario(
         )
         return
     user_id = callback.from_user.id
-    if await db.get_ai_question_count_today(user_id) >= config.AI_QUESTION_DAILY_LIMIT:
+    block = await ai_limits.check(user_id, ai_limits.KIND_QUESTION)
+    if block is not None:
+        logger.info("AI program builder blocked for user %s: %s", user_id, block.log)
+        if block.preview:
+            # Предупреждение своим — сообщением, а не алертом: в алерт кнопку
+            # «Понятно» не положишь, а без неё лимит не пропустит и дальше.
+            await ai_limits.reply(callback.message, block)
+            await callback.answer()
+            return
         await callback.answer(
             "На сегодня лимит вопросов исчерпан 😮\u200d💨 Дай мне передохнуть, "
             "возвращайся завтра — а пока забери готовую в «✨ Готовые программы».",
@@ -1822,11 +1825,14 @@ async def _handle_question(
     """
     user_id = user_id if user_id is not None else message.from_user.id
     asked_today = await db.get_ai_question_count_today(user_id)
-    if asked_today >= config.AI_QUESTION_DAILY_LIMIT:
-        # С той же клавиатурой, что у обычных ответов чата: сообщение о лимите
-        # становится нижним экраном переписки, и без кнопок из него оставался
-        # только выход через нижнее меню.
-        await message.reply(DAILY_LIMIT_TEXT, reply_markup=await ai_keyboard(user_id))
+    # Дневная квота вопросов и суточный стоп по деньгам — одной проверкой (см.
+    # ai_limits.check). С той же клавиатурой, что у обычных ответов чата:
+    # сообщение о лимите становится нижним экраном переписки, и без кнопок из
+    # него оставался только выход через нижнее меню.
+    block = await ai_limits.check(user_id, ai_limits.KIND_QUESTION)
+    if block is not None:
+        logger.info("AI question blocked for user %s: %s", user_id, block.log)
+        await ai_limits.reply(message, block, reply_markup=await ai_keyboard(user_id))
         return
 
     data = await state.get_data()
@@ -1907,6 +1913,14 @@ async def _handle_question(
     async def collect_wire(messages: list) -> None:
         wire_cell["messages"] = messages
 
+    # Поисковый потолок сработал — обычный атлет об этом не узнаёт (ответ просто
+    # идёт без свежести), а свой аккаунт получает предупреждение с кнопкой. Само
+    # решение принимается внутри ask(), где ни бота, ни экрана нет.
+    async def warn_about_limit(block) -> None:
+        logger.info("AI search blocked for user %s: %s", user_id, block.log)
+        with suppress(TelegramAPIError):
+            await ai_limits.reply(message, block)
+
     try:
         answer = await ai_trainer.ask(
             user_id, question, history, image_data_url=image_data_url,
@@ -1914,7 +1928,7 @@ async def _handle_question(
             on_action=collect_action, on_questions=collect_questions,
             on_chunk=streamer.push,
             video_context=video_context, on_reasoning=collect_reasoning,
-            on_wire=collect_wire,
+            on_wire=collect_wire, on_limit=warn_about_limit,
         )
     except Exception:
         logger.exception("AI trainer request failed for user %s", user_id)
@@ -2487,13 +2501,12 @@ async def ai_video_question(message: Message, state: FSMContext):
             )
             return
 
-        analyzed_today = await db.get_ai_video_count_today(user_id)
-        if analyzed_today >= config.AI_VIDEO_DAILY_LIMIT:
-            await message.reply(
-                f"На сегодня разобрал {config.AI_VIDEO_DAILY_LIMIT} видео — "
-                "это лимит. Приходи завтра, а пока спрашивай текстом.",
-                reply_markup=await ai_keyboard(user_id),
-            )
+        # Дневная квота роликов и суточный потолок по деньгам — до скачивания:
+        # ролик тянется из Telegram мегабайтами, и делать это ради отказа глупо.
+        block = await ai_limits.check(user_id, ai_limits.KIND_VIDEO)
+        if block is not None:
+            logger.info("AI video blocked for user %s: %s", user_id, block.log)
+            await ai_limits.reply(message, block, reply_markup=await ai_keyboard(user_id))
             return
 
         if video.file_size and video.file_size > config.MAX_VIDEO_BYTES:
@@ -2558,6 +2571,16 @@ async def ai_voice_question(message: Message, state: FSMContext):
             return
         if message.voice.duration and message.voice.duration > MAX_VOICE_SECONDS:
             await message.reply("Голосовое слишком длинное, запиши покороче.")
+            return
+
+        # Квота — ДО расшифровки, а не после. Раньше проверка стояла глубже, уже
+        # в _handle_question: человек с выбранной квотой ответа не получал, но
+        # каждое голосовое всё равно уезжало в распознавание и стоило нам своих
+        # $0.006 — платный вызов без единого шанса дойти до ответа.
+        block = await ai_limits.check(user_id, ai_limits.KIND_QUESTION)
+        if block is not None:
+            logger.info("AI voice blocked for user %s: %s", user_id, block.log)
+            await ai_limits.reply(message, block, reply_markup=await ai_keyboard(user_id))
             return
 
         voice_file = await _download_voice_as_file(message)

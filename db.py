@@ -239,6 +239,25 @@ CREATE TABLE IF NOT EXISTS ai_video_usage (
     PRIMARY KEY (telegram_id, date)
 );
 
+CREATE TABLE IF NOT EXISTS ai_food_usage (
+    telegram_id INTEGER NOT NULL,
+    date TEXT NOT NULL,
+    count INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (telegram_id, date)
+);
+
+-- «Понятно» на предупреждении о лимите (см. ai_limits.py): свои аккаунты видят
+-- потолок первый раз за сутки и дальше в этот день проходят сквозь него. Строка,
+-- а не флаг в памяти: перезапуск контейнера не должен показывать одно и то же
+-- предупреждение заново — оно тем и ценно, что означает «сегодня это случилось
+-- впервые».
+CREATE TABLE IF NOT EXISTS ai_limit_ack (
+    telegram_id INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    date TEXT NOT NULL,
+    PRIMARY KEY (telegram_id, kind, date)
+);
+
 CREATE TABLE IF NOT EXISTS ai_chat_messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     telegram_id INTEGER NOT NULL,
@@ -5113,6 +5132,39 @@ async def get_server_tool_count(date_str: str) -> dict[str, int]:
     return {(model or "unknown"): calls for model, calls in await cur.fetchall()}
 
 
+async def get_cost_total_usd(date_str: Optional[str] = None) -> float:
+    """Во сколько обошлись сутки — все платные вызовы, одной суммой.
+
+    Без даты — за текущие сутки по UTC (так её спрашивает потолок в ai_limits),
+    с датой — за конкретные (так её спрашивает ночной отчёт).
+
+    Считается тем же `config.call_price_usd`, что и строка в логе на каждый
+    вызов, и по тем же строкам, что читает отчёт: разойдись эти две цифры, и
+    «бот выключил поиск» перестало бы сходиться с «в отчёте было $6».
+    Агрегатом, а не построчно: зовётся перед каждым дорогим шагом.
+
+    Цена линейна по токенам, поэтому сумма токенов, посчитанная по ставке
+    модели, равна сумме цен по строкам — группировать нужно по модели И типу
+    события, потому что у расшифровок и вызовов инструментов ставка плоская.
+    """
+    cur = await conn().execute(
+        "SELECT event_type, model, COUNT(*), "
+        "COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(completion_tokens), 0), "
+        "COALESCE(SUM(cached_tokens), 0), COALESCE(SUM(reasoning_tokens), 0) "
+        "FROM cost_events WHERE date(created_at) = ? GROUP BY event_type, model",
+        (date_str or _utc_day(),),
+    )
+    total = 0.0
+    for event_type, model, calls, prompt, completion, cached, reasoning in await cur.fetchall():
+        if event_type == "transcription":
+            total += calls * config.TRANSCRIPTION_PRICE_USD_PER_CALL
+        elif event_type == "server_tool":
+            total += calls * config.SERVER_TOOL_PRICE_USD_PER_CALL
+        else:
+            total += config.call_price_usd(model or "", prompt, completion, cached, reasoning)
+    return total
+
+
 async def prune_old_cost_events(retention_days: int) -> int:
     """Drop cost_events older than retention_days — only the daily report/backup job reads
     this table, and only ever one day back, so nothing needs it to grow forever."""
@@ -5423,6 +5475,56 @@ async def increment_ai_video_count(telegram_id: int) -> None:
             (telegram_id, today),
         )
         await conn().commit()
+
+
+async def get_ai_food_count_today(telegram_id: int) -> int:
+    cur = await conn().execute(
+        "SELECT count FROM ai_food_usage WHERE telegram_id = ? AND date = ?",
+        (telegram_id, await _quota_day(telegram_id)),
+    )
+    row = await cur.fetchone()
+    return row["count"] if row else 0
+
+
+async def increment_ai_food_count(telegram_id: int) -> None:
+    today = await _quota_day(telegram_id)
+    async with _write_lock:
+        await conn().execute(
+            "INSERT INTO ai_food_usage (telegram_id, date, count) VALUES (?, ?, 1) "
+            "ON CONFLICT (telegram_id, date) DO UPDATE SET count = count + 1",
+            (telegram_id, today),
+        )
+        await conn().commit()
+
+
+# ---------- «Понятно» на предупреждении о лимите (см. ai_limits.py) ----------
+
+
+async def has_limit_ack(telegram_id: int, kind: str, date_str: str) -> bool:
+    cur = await conn().execute(
+        "SELECT 1 FROM ai_limit_ack WHERE telegram_id = ? AND kind = ? AND date = ?",
+        (telegram_id, kind, date_str),
+    )
+    return await cur.fetchone() is not None
+
+
+async def record_limit_ack(telegram_id: int, kind: str, date_str: str) -> None:
+    async with _write_lock:
+        await conn().execute(
+            "INSERT OR IGNORE INTO ai_limit_ack (telegram_id, kind, date) VALUES (?, ?, ?)",
+            (telegram_id, kind, date_str),
+        )
+        await conn().commit()
+
+
+async def prune_old_limit_acks(keep_days: int = 7) -> int:
+    """Расписки старше недели. Читаются они только за сегодня, но таблица иначе
+    растёт вечно — как и cost_events, чистим в том же ночном джобе."""
+    cutoff = (dt.date.today() - dt.timedelta(days=keep_days)).isoformat()
+    async with _write_lock:
+        cur = await conn().execute("DELETE FROM ai_limit_ack WHERE date < ?", (cutoff,))
+        await conn().commit()
+        return cur.rowcount
 
 
 # ---------- AI trainer: durable chat history ----------

@@ -4,6 +4,7 @@ activity_log.py)."""
 
 import asyncio
 import datetime as dt
+from contextlib import suppress
 from html import escape
 
 from aiogram import F, Router
@@ -14,6 +15,7 @@ from aiogram.types import CallbackQuery, Message
 
 import acquisition
 import activity_log
+import ai_limits
 import announcements
 import config
 import db
@@ -35,6 +37,28 @@ AI_DIALOGS_TG_CHUNK = 4000
 
 def _is_admin(telegram_id: int) -> bool:
     return config.ADMIN_ID is not None and telegram_id == config.ADMIN_ID
+
+
+@router.callback_query(F.data.startswith("ail:ack:"))
+async def limit_ack(callback: CallbackQuery):
+    """«Понятно» на предупреждении о лимите — до конца суток он пропускает.
+
+    Живёт здесь, а не рядом с самими лимитами: кнопку видят только свои
+    аккаунты (config.limit_preview_ids), и роутер админки подключён раньше
+    остальных — расписка не должна зависеть от того, на каком экране человек
+    поймал предупреждение.
+    """
+    user_id = callback.from_user.id
+    if user_id not in config.limit_preview_ids():
+        await callback.answer()
+        return
+    kind = callback.data.split(":", 2)[2]
+    await ai_limits.record_ack(user_id, kind)
+    with suppress(TelegramAPIError):
+        await callback.message.edit_text(
+            f"{callback.message.text}\n\n👌 Понял, до конца суток пропускаю."
+        )
+    await callback.answer("Пропускаю до конца суток")
 
 
 async def _show_users_list(target: Message | CallbackQuery, state: FSMContext, page: int):
