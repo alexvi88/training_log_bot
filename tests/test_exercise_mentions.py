@@ -212,3 +212,22 @@ def test_fully_named_variant_goes_first_but_the_other_stays():
     dumbbells = _ex(11, "Жим лёжа", "Жим лёжа · гантели")
     found = exercise_mentions.find_mentions("Ставь жим лёжа гантели в начало", [barbell, dumbbells])
     assert [r["id"] for r in found] == [11, 10]
+
+
+def test_a_common_word_that_also_names_an_exercise_is_not_linked_on_its_own():
+    """Живой прогон: тренер написал «до нижней планки не хватает» (планка =
+    порог, идиома) и получил кнопку на упражнение «Планка», которого в
+    разговоре не было вовсе — обычное слово совпало с однословным названием."""
+    plank = _ex(40, "Планка")
+    found = exercise_mentions.find_mentions(
+        "При весе 83 кг до нижней планки не хватает 40 г белка", [plank]
+    )
+    assert found == []
+
+
+def test_a_multiword_name_containing_the_ambiguous_word_still_links():
+    """Исключение — только на голое однословное совпадение; «Планка на локтях»
+    как название по-прежнему находится."""
+    plank_variant = _ex(41, "Планка на локтях")
+    found = exercise_mentions.find_mentions("Замени на планка на локтях", [plank_variant])
+    assert _names(found) == ["Планка на локтях"]
