@@ -745,7 +745,11 @@ async def _main_menu_kb(user_id: int, active) -> InlineKeyboardMarkup:
     # get a first record in, and once there is history the normal flows are
     # better (they know the exercises, the targets and the progression).
     has_history = await db.count_workouts(user_id) > 0
-    return keyboards.main_menu(bool(active), show_quick_log=not has_history)
+    return keyboards.main_menu(
+        bool(active),
+        show_quick_log=not has_history,
+        community_url=config.COMMUNITY_CHAT_URL if config.community_available() else None,
+    )
 
 
 _WORKOUT_SCAFFOLD_KEYS = (

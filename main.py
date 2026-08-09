@@ -28,6 +28,7 @@ from handlers import (
     ai_trainer,
     backfill,
     bodyweight,
+    community,
     csv_import,
     edit_workout,
     exercise_resolve,
@@ -196,6 +197,9 @@ def setup_routers(dp: Dispatcher) -> None:
     # Same reason: /game — одна команда без состояний, и она должна долетать
     # из любого сценария.
     dp.include_router(game.router)
+    # Та же причина: /community — одна команда без состояний, и она нужна из
+    # любого сценария, хоть посреди тренировки.
+    dp.include_router(community.router)
     # Same reason as admin/feedback above: /food_diary and the fd:* callbacks
     # must reach their router even when the user is mid-workout.
     dp.include_router(food_diary.router)
@@ -233,6 +237,10 @@ def _public_commands() -> list[BotCommand]:
     if config.mcp_available():
         commands.append(BotCommand(command="mcp", description="Подключить данные к Claude и ChatGPT"))
         commands.append(BotCommand(command="game", description="Мини-игра «Кач-Раннер»"))
+    # Та же логика: команда обещает работающий вход, а без адреса группы вести
+    # некуда (см. handlers/community.py).
+    if config.community_available():
+        commands.append(BotCommand(command="community", description="Чат атлетов"))
     return commands
 
 
