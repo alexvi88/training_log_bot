@@ -220,6 +220,19 @@ async def workout_duration_seconds(workout) -> float | None:
     return seconds
 
 
+async def longest_workout_seconds(user_id: int) -> float:
+    """Самая долгая тренировка для экрана Достижений — тем же правилом, что
+    и «Марафонец» (achievements.py): без этого разные числа для одного и
+    того же понятия расходились на одном экране (см. hall_of_fame_aggregates).
+    """
+    longest = 0.0
+    for workout in await db.list_finished_workouts_meta(user_id):
+        seconds = await workout_duration_seconds(workout)
+        if seconds is not None and seconds > longest:
+            longest = seconds
+    return longest
+
+
 async def _prior_sessions(
     exercise_id: int, workout_id: int, before: str, formula: str
 ) -> list[analytics.SessionStats]:

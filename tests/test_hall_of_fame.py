@@ -63,6 +63,37 @@ async def test_aggregates_and_build_text(fresh_db, user_id):
     assert "Поднято за всё время" in text
 
 
+@pytest.mark.asyncio
+async def test_longest_workout_ignores_wall_clock_idle_time(fresh_db, user_id):
+    """Живой прогон: экран Достижений показывал «Самая длинная тренировка:
+    9 ч 51 мин», а «🔒 Марафонец — Тренировка длиннее 2 часов» рядом же
+    оставался запертым — прямая нестыковка. Причина была в том, что
+    db.hall_of_fame_aggregates мерил сырой started_at→finished_at (человек
+    оставил тренировку открытой на часы, а не тренировался всё это время),
+    а Марафонец — честный интервал между первым и последним подходом
+    (view_builder.workout_duration_seconds). Число на экране обязано быть
+    тем же самым, что решает достижение."""
+    import view_builder
+
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    bench = await db.create_exercise(user_id, "Жим лёжа", group_id)
+    wid = await db.create_workout(user_id, started_at="2026-08-08T09:00:00")
+    block_id = await db.create_block(wid, "single")
+    await db.add_block_exercise(block_id, bench, 0)
+    # Оба подхода реально сделаны за 5 минут — тренировка короткая.
+    await db.append_set(block_id, bench, 0, 0, 100.0, 5)
+    await db.append_set(block_id, bench, 1, 0, 100.0, 5)
+    # Но закрыл её человек только вечером — часы простоя, не тренировки.
+    await db.finish_workout(wid, finished_at="2026-08-08T18:51:00")
+
+    agg = await db.hall_of_fame_aggregates(user_id)
+    assert "longest_workout_seconds" not in agg
+
+    longest = await view_builder.longest_workout_seconds(user_id)
+    assert longest < 3600, "простой между стартом и финишем не должен считаться тренировкой"
+
+
 def test_hall_of_fame_folds_the_whole_record_list():
     lifts = [(f"Упражнение {i}", 100.0 + i, 5, 130.0 - i) for i in range(8)]
     text = formatting.build_hall_of_fame(
