@@ -11,6 +11,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
 
+import config
 from handlers import ai_trainer
 
 pytestmark = pytest.mark.asyncio
@@ -1652,7 +1653,7 @@ def _make_undo_callback(user_id: int, data: str, buttons: list[str]):
 async def test_undo_button_reverts_and_disappears(fresh_db, user_id):
     log_id = await fresh_db.add_bodyweight_log(user_id, 78.4)
     state = await _make_state(user_id)
-    buttons = await ai_trainer._register_undos(
+    buttons = await ai_trainer._register_actions(
         state, [{"label": "↩️ Отменить: 78.4 kg", "undo": {"kind": "bodyweight", "id": log_id}}]
     )
     data = buttons[0]["callback"]
@@ -1674,7 +1675,7 @@ async def test_a_second_tap_on_the_same_undo_does_nothing(fresh_db, user_id):
     запись, которую человек успел сделать после первого."""
     log_id = await fresh_db.add_bodyweight_log(user_id, 78.4)
     state = await _make_state(user_id)
-    buttons = await ai_trainer._register_undos(
+    buttons = await ai_trainer._register_actions(
         state, [{"label": "↩️", "undo": {"kind": "bodyweight", "id": log_id}}]
     )
     data = buttons[0]["callback"]
@@ -1697,7 +1698,7 @@ async def test_undo_of_someone_elses_row_is_refused(fresh_db, user_id):
     foreign_log = await fresh_db.add_bodyweight_log(other_id, 90.0)
 
     state = await _make_state(user_id)
-    buttons = await ai_trainer._register_undos(
+    buttons = await ai_trainer._register_actions(
         state, [{"label": "↩️", "undo": {"kind": "bodyweight", "id": foreign_log}}]
     )
     callback = _make_undo_callback(user_id, buttons[0]["callback"], [buttons[0]["callback"]])
@@ -1706,6 +1707,90 @@ async def test_undo_of_someone_elses_row_is_refused(fresh_db, user_id):
 
     assert callback.answer.await_args.kwargs.get("show_alert") is True
     assert len(await fresh_db.list_bodyweight_logs(other_id)) == 1
+
+
+# ---------- «📬 Передать разработчику» под ответом тренера ----------
+
+
+def _make_feedback_callback(user_id: int, data: str, buttons: list[str]):
+    callback = _make_undo_callback(user_id, data, buttons)
+    callback.bot = AsyncMock()
+    return callback
+
+
+async def _feedback_button(state, text: str = "Объём считает без суперсетов") -> str:
+    buttons = await ai_trainer._register_actions(
+        state,
+        [{"label": "📬 Передать разработчику", "feedback": {"text": text, "label": "🐞 Баг"}}],
+    )
+    await state.update_data(ai_actions=buttons)
+    return buttons[0]["callback"]
+
+
+async def test_feedback_button_sends_the_letter_to_the_admin(fresh_db, user_id, monkeypatch):
+    monkeypatch.setattr(config, "ADMIN_ID", 999)
+    state = await _make_state(user_id)
+    data = await _feedback_button(state)
+
+    callback = _make_feedback_callback(user_id, data, [data, "ai:menu"])
+    await ai_trainer.ai_send_feedback(callback, state)
+
+    chat_id, text = callback.bot.send_message.await_args.args
+    assert chat_id == 999
+    assert "@tester" in text and str(user_id) in text
+    assert "🐞 Баг" in text
+    assert "Объём считает без суперсетов" in text
+    # Отработавшая кнопка убирается, соседние остаются.
+    kept = callback.message.edit_reply_markup.await_args.kwargs["reply_markup"]
+    assert [b.callback_data for row in kept.inline_keyboard for b in row] == ["ai:menu"]
+
+
+async def test_a_second_tap_does_not_send_the_letter_twice(fresh_db, user_id, monkeypatch):
+    monkeypatch.setattr(config, "ADMIN_ID", 999)
+    state = await _make_state(user_id)
+    data = await _feedback_button(state)
+
+    await ai_trainer.ai_send_feedback(_make_feedback_callback(user_id, data, [data]), state)
+    second = _make_feedback_callback(user_id, data, [data])
+    await ai_trainer.ai_send_feedback(second, state)
+
+    second.bot.send_message.assert_not_awaited()
+    assert second.answer.await_args.kwargs.get("show_alert") is True
+
+
+async def test_letter_survives_a_failed_send(fresh_db, user_id, monkeypatch):
+    """Вычеркнутое из хранилища до отправки письмо человек уже ничем бы не
+    повторил — а сеть тут отвечает не всегда."""
+    from aiogram.exceptions import TelegramAPIError
+
+    monkeypatch.setattr(config, "ADMIN_ID", 999)
+    state = await _make_state(user_id)
+    data = await _feedback_button(state)
+
+    failing = _make_feedback_callback(user_id, data, [data])
+    failing.bot.send_message.side_effect = TelegramAPIError(method=None, message="boom")
+    await ai_trainer.ai_send_feedback(failing, state)
+
+    assert failing.answer.await_args.kwargs.get("show_alert") is True
+    # Кнопка на месте, и повторный тап доносит письмо.
+    failing.message.edit_reply_markup.assert_not_awaited()
+    retry = _make_feedback_callback(user_id, data, [data])
+    await ai_trainer.ai_send_feedback(retry, state)
+    retry.bot.send_message.assert_awaited_once()
+
+
+async def test_feedback_button_with_no_admin_configured_says_what_to_do(
+    fresh_db, user_id, monkeypatch
+):
+    monkeypatch.setattr(config, "ADMIN_ID", None)
+    state = await _make_state(user_id)
+    data = await _feedback_button(state)
+
+    callback = _make_feedback_callback(user_id, data, [data])
+    await ai_trainer.ai_send_feedback(callback, state)
+
+    callback.bot.send_message.assert_not_awaited()
+    assert "/feedback" in callback.answer.await_args.args[0]
 
 
 # ---------- «▶️ Начать по ней»: план в работу, программа не заводится ----------
