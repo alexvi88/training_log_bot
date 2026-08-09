@@ -236,6 +236,65 @@ class _RunningDisplay:
                     await self._placeholder.edit_text(self._last_text)
 
 
+async def _open_thinking_draft(message: Message, draft_id: int, text: str) -> bool:
+    """Открыть черновик нативным блоком «Думаю…» (Bot API 10.2) вместо своего
+    плейсхолдера — тем же draft_id, что возьмёт _DraftStreamer для реального
+    текста: одна и та же анимация клиента продолжается, а не начинается заново.
+
+    Локальный импорт — как и у _rich (см. ниже): на aiogram без
+    InputRichBlockThinking это ImportError, а не падение всего модуля при
+    старте. False — рич-черновики не поддержаны (сервер/клиент ниже 10.2,
+    старый aiogram), вызывающая сторона остаётся на обычном плейсхолдере."""
+    try:
+        from aiogram.types import InputRichBlockThinking, InputRichMessage
+
+        await message.bot.send_rich_message_draft(
+            chat_id=message.chat.id,
+            draft_id=draft_id,
+            rich_message=InputRichMessage(blocks=[InputRichBlockThinking(text=text)]),
+        )
+    except (TelegramAPIError, AttributeError, TypeError, ImportError):
+        return False
+    return True
+
+
+class _ThinkingDisplay:
+    """То же самое, что _RunningDisplay, но статус живёт в нативном
+    rich-черновике (см. _open_thinking_draft) вместо отдельного сообщения —
+    заменяет плейсхолдер целиком, а не дублирует его вторым индикатором."""
+
+    def __init__(self, message: Message, draft_id: int, initial_text: str, pool: list[str]) -> None:
+        self._message = message
+        self._draft_id = draft_id
+        self._last_text = initial_text
+        self._pool = pool
+        self._lock = asyncio.Lock()
+
+    async def _push(self, text: str) -> None:
+        with suppress(TelegramAPIError, AttributeError, TypeError, ImportError):
+            from aiogram.types import InputRichBlockThinking, InputRichMessage
+
+            await self._message.bot.send_rich_message_draft(
+                chat_id=self._message.chat.id,
+                draft_id=self._draft_id,
+                rich_message=InputRichMessage(blocks=[InputRichBlockThinking(text=text)]),
+            )
+
+    async def set_status(self, text: str) -> None:
+        async with self._lock:
+            if text == self._last_text:
+                return
+            self._last_text = text
+            await self._push(text)
+
+    async def cycle_idle(self) -> None:
+        while True:
+            await asyncio.sleep(RUNNING_INTERVAL)
+            async with self._lock:
+                self._last_text = running_texts.pick_different(self._pool, self._last_text)
+                await self._push(self._last_text)
+
+
 def _draft_tail(text: str, limit: int = MAX_DRAFT_CHARS) -> str:
     """Хвост ответа для черновика, прижатый к началу строки.
 
@@ -1921,7 +1980,22 @@ async def _handle_question(
     running_pool = running_texts.pool_for(question)
     running_text = running_texts.pick(running_pool)
     placeholder = await message.answer(running_text)
-    display = _RunningDisplay(placeholder, running_text, running_pool)
+    # _DraftStreamer тоже возьмёт message.message_id как draft_id для реального
+    # текста — тем же id открываем и rich-черновик, чтобы клиент доанимировал
+    # переход «Думаю…» → ответ, а не начал новый черновик поверх старого.
+    draft_id = message.message_id
+    thinking_native = await _open_thinking_draft(message, draft_id, running_text)
+    if thinking_native:
+        # Rich-черновик уже несёт тот же сигнал ожидания — держать рядом ещё
+        # и текстовый плейсхолдер значит показать два индикатора разом.
+        # edit_text на удалённом сообщении ниже по коду уже штатно
+        # фолбэчится на message.answer (см. _send_html_answer), так что удалить
+        # placeholder заранее безопасно.
+        with suppress(TelegramBadRequest):
+            await placeholder.delete()
+        display = _ThinkingDisplay(message, draft_id, running_text, running_pool)
+    else:
+        display = _RunningDisplay(placeholder, running_text, running_pool)
     running_task = asyncio.create_task(display.cycle_idle())
 
     async def on_draft_start() -> None:
@@ -1930,11 +2004,14 @@ async def _handle_question(
         # stale copy of the same signal — drop it rather than leave both on
         # screen. edit_text on a deleted message just falls back to a fresh
         # send later (see the final-answer loop below), so this is safe.
+        # (When thinking_native is True the placeholder is already gone —
+        # only the idle-cycling task is left to stop here.)
         running_task.cancel()
         with suppress(asyncio.CancelledError):
             await running_task
-        with suppress(TelegramBadRequest):
-            await placeholder.delete()
+        if not thinking_native:
+            with suppress(TelegramBadRequest):
+                await placeholder.delete()
 
     streamer = _DraftStreamer(message, on_start=on_draft_start)
 
