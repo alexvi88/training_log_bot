@@ -66,6 +66,32 @@ async def test_start_warns_and_offers_buttons_for_stale_workout(fresh_db, user_i
     assert f"stale:delete:{workout_id}" in callback_datas
 
 
+async def test_stale_workout_warning_shows_what_was_logged(fresh_db, user_id):
+    """Раньше «завершить задним числом» или «удалить» решали вслепую, уже не
+    помня, что вообще успели записать. Состав — без HTML-тегов буквами: у
+    сообщения нет parse_mode (entities заняты под часовой пояс в дате), так
+    что <b>/<i> отрендерились бы как есть."""
+    db = fresh_db
+    stale_started = dt.datetime.now() - dt.timedelta(hours=config.STALE_WORKOUT_HOURS + 1)
+    workout_id = await db.create_workout(user_id, started_at=stale_started.isoformat())
+    group = await db.create_muscle_group(user_id, "Грудь")
+    ex = await db.create_exercise(user_id, "Жим лёжа", group)
+    block_id = await db.create_block(workout_id, "single")
+    await db.add_block_exercise(block_id, ex, 0)
+    await db.append_set(block_id, ex, 0, 100.0, 8)
+
+    message = _make_message(user_id)
+    state = await _make_state(user_id)
+
+    await workout.cmd_start(message, state)
+
+    warning = message.answer.await_args_list[1].args[0]
+    assert "Жим лёжа" in warning
+    assert "Грудь" in warning
+    assert "100" in warning and "8" in warning
+    assert "<b>" not in warning and "<i>" not in warning
+
+
 async def test_start_does_not_warn_for_recent_workout(fresh_db, user_id):
     db = fresh_db
     await db.create_workout(user_id)

@@ -629,6 +629,20 @@ def build_workout_summary(
     return text
 
 
+def workout_composition(blocks: list[BlockView], unit: str = "kg") -> str:
+    """Состав тренировки — упражнения, группы и подходы, без даты/заголовка,
+    без тоннажа и рекордов. Для мест, где дата и так названа отдельной фразой
+    (предупреждение о незакрытой тренировке): полный build_workout_summary
+    поверх неё дал бы вторую дату и заголовок над тем же самым списком.
+    """
+    lines: list[str] = []
+    for i, block in enumerate(blocks):
+        if i > 0:
+            lines.append("")
+        lines.extend(_render_single_block(block, show_extra=False, unit=unit))
+    return "\n".join(lines)
+
+
 def fit_workout_text(build_summary, suffix: str, limit: int = MESSAGE_LIMIT) -> str:
     """Guards a workout card against Telegram's 4096-char message cap.
 

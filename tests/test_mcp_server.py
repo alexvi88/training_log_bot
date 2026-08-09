@@ -167,7 +167,10 @@ async def test_log_bodyweight_writes_and_hides_the_undo_button_note(fresh_db, us
     text = json.loads(body)["result"]["content"][0]["text"]
     assert "78.4" in text
     assert "кнопка отката" not in text
-    assert "Дневник веса" in text
+    # Не «Дневник веса»/«Дневник еды» конкретно: этот текст общий на все шесть
+    # WRITE_TOOLS, включая create_exercise и copy_program, у которых таких
+    # экранов нет вовсе.
+    assert "в самом боте" in text
     logs = await fresh_db.list_bodyweight_logs(user_id)
     assert [log["weight"] for log in logs] == [78.4]
 
@@ -187,7 +190,7 @@ async def test_log_food_writes_a_diary_entry(fresh_db, user_id):
     assert status == 200
     text = json.loads(body)["result"]["content"][0]["text"]
     assert "кнопка отката" not in text
-    assert "Дневник еды" in text
+    assert "в самом боте" in text
     today = timeutil.user_today(await fresh_db.get_user(user_id)).isoformat()
     entries = await fresh_db.list_food_entries(user_id, today)
     assert [e["description"] for e in entries] == ["овсянка с бананом"]
@@ -234,6 +237,12 @@ async def test_create_exercise_writes_it(fresh_db, user_id):
     assert status == 200
     text = json.loads(body)["result"]["content"][0]["text"]
     assert "кнопка отката" not in text
+    # Живой прогон поймал именно тут: первая версия _MCP_WRITE_NOTE была
+    # скопирована с log_bodyweight/log_food и говорила «поправить можно в
+    # 🏋️ Дневник веса или 🍽 Дневник еды» — неправда для упражнения, у него
+    # такого экрана нет вовсе.
+    assert "Дневник веса" not in text
+    assert "Дневник еды" not in text
     assert await fresh_db.find_exercise_by_name(user_id, "Гак-присед") is not None
     assert group is not None
 
