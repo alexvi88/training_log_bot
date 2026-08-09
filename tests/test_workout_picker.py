@@ -379,6 +379,36 @@ async def test_pick_cancel_on_fresh_empty_workout_discards_it_and_returns_to_men
     assert "АТЛЕТ" in text  # main menu greeting/onboarding, not the live tracker
 
 
+async def test_pick_cancel_on_empty_backfill_workout_returns_to_the_calendar(fresh_db, user_id):
+    """Живой прогон: выбрал дату в бэкфилле, на экране групп сразу нажал
+    «Назад» — и попал в общее меню, будто даты не выбирал вообще. Бэкфилл
+    заходит на этот экран не с главного меню, а с календаря, и «Назад» с
+    первого шага должен возвращать туда же, а не сбрасывать весь заход."""
+    db = fresh_db
+    workout_id = await db.create_workout(user_id, started_at="2026-08-03T12:00:00", status="backfill")
+
+    state = await _make_state(user_id, is_backfill=True, bf_date="2026-08-03")
+    await state.update_data(workout_id=workout_id)
+    await state.set_state(WorkoutFlow.picking_group)
+    callback = _make_callback(user_id, "pick:cancel")
+    callback.message = MagicMock()
+    callback.message.delete = AsyncMock()
+    callback.message.answer = AsyncMock(return_value=SimpleNamespace(message_id=999))
+    callback.message.edit_text = AsyncMock()
+    callback.message.text = "some text"
+    callback.message.chat = SimpleNamespace(id=user_id)
+    callback.message.message_id = 1
+
+    await workout.pick_cancel(callback, state)
+
+    assert await db.get_workout(workout_id) is None
+    from fsm import BackfillFlow
+
+    assert await state.get_state() == BackfillFlow.awaiting_date.state
+    text = callback.message.answer.await_args.args[0]
+    assert "дату" in text.lower()  # the calendar prompt, not the main-menu greeting
+
+
 async def test_finishing_last_exercise_suggests_what_came_next_last_time(fresh_db, user_id):
     db = fresh_db
     group_id = await db.create_muscle_group(user_id, "Грудь")

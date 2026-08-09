@@ -36,10 +36,18 @@ def persistent_menu() -> ReplyKeyboardMarkup:
     )
 
 
-def main_menu(has_active_workout: bool, show_quick_log: bool = False) -> InlineKeyboardMarkup:
+def main_menu(
+    has_active_workout: bool,
+    show_quick_log: bool = False,
+    community_url: str | None = None,
+) -> InlineKeyboardMarkup:
     """show_quick_log: offered while the diary is still empty. A first-time user
     has nothing to look at and a whole training history behind them — letting
-    them type one line of it beats walking the picker for the first record."""
+    them type one line of it beats walking the picker for the first record.
+
+    community_url: адрес общей группы (config.COMMUNITY_CHAT_URL). Кнопка —
+    url, а не callback: чат живёт снаружи бота, и промежуточный экран между
+    нажатием и группой ничего бы не добавил."""
     b = InlineKeyboardBuilder()
     if has_active_workout:
         b.button(text="▶️ ПРОДОЛЖИТЬ ТРЕНИРОВКУ", callback_data="menu:resume_workout")
@@ -58,10 +66,13 @@ def main_menu(has_active_workout: bool, show_quick_log: bool = False) -> InlineK
     b.button(text="🏆 Достижения", callback_data="menu:achievements")
     b.button(text="🔧 Настройки", callback_data="menu:settings")
     b.button(text="🤖 AI-тренер", callback_data="menu:ai")
+    if community_url:
+        b.button(text="💬 Чат атлетов", url=community_url)
     # start/resume and quick-log (if shown) full width, then pairs:
     # Прогресс·История, Упражнения·Программы, Дневник веса·Дневник еды,
-    # Достижения·Настройки, then AI-тренер full width at the very bottom.
-    b.adjust(*([1, 1] if show_quick_log else [1]), 2, 2, 2, 2, 1)
+    # Достижения·Настройки, then AI-тренер full width at the very bottom,
+    # и под ним — чат сообщества, если он заведён.
+    b.adjust(*([1, 1] if show_quick_log else [1]), 2, 2, 2, 2, 1, *([1] if community_url else []))
     return b.as_markup()
 
 

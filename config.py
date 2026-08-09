@@ -655,3 +655,18 @@ PAYWALL_MIN_WORKOUTS = int(os.getenv("PAYWALL_MIN_WORKOUTS", "5"))
 def stars_enabled() -> bool:
     """Показывать ли витрину и принимать ли оплату."""
     return STARS_PAYMENTS_ENABLED
+
+
+# --- Общий чат сообщества --------------------------------------------------
+#
+# Обычная телеграм-группа, где атлеты разговаривают друг с другом. Бот в неё не
+# ходит и ничего туда не пишет — он только даёт дорогу: кнопка в главном меню и
+# команда /community. Ссылка приглашения (https://t.me/... или t.me/+...) —
+# единственный параметр, и без неё раздела в боте нет вовсе: кнопка в никуда
+# хуже отсутствующей кнопки.
+COMMUNITY_CHAT_URL = os.getenv("COMMUNITY_CHAT_URL", "").strip()
+
+
+def community_available() -> bool:
+    """Показывать ли вход в общий чат."""
+    return COMMUNITY_CHAT_URL.startswith(("https://t.me/", "http://t.me/", "tg://"))

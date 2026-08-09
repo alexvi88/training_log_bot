@@ -39,7 +39,7 @@ import timeutil
 import ui
 import view_builder
 import voice_parse
-from fsm import WorkoutFlow
+from fsm import BackfillFlow, WorkoutFlow
 from parser import (
     ParsedSet,
     ParseError,
@@ -562,6 +562,21 @@ async def _back_after_cancel(callback: CallbackQuery, state: FSMContext, user):
         # not drop the user on the same "add exercise to begin" screen.
         await db.discard_workout(workout_id)
         await _clear_sticky_photo(callback.bot, state)
+        if data.get("is_backfill"):
+            # У бэкфилла своя предыдущая ступень — календарь: без этого
+            # «Назад» с самого первого экрана выбора группы выкидывало в общее
+            # меню, будто перед этим ничего не выбирали, хотя дата уже была.
+            from handlers.backfill import _BACKFILL_PROMPT
+
+            await clear_state_keep_ai(state)
+            await state.set_state(BackfillFlow.awaiting_date)
+            today = timeutil.user_today(user)
+            await ui.safe_edit(
+                callback,
+                _BACKFILL_PROMPT,
+                reply_markup=keyboards.calendar_keyboard("bf", today.year, today.month, today=today),
+            )
+            return
         # Тренировка отменена — каркас чистим, но переписку с AI-тренером и
         # черновик его программы сохраняем: они переживают тренировки.
         await clear_state_keep_ai(state)
@@ -745,7 +760,11 @@ async def _main_menu_kb(user_id: int, active) -> InlineKeyboardMarkup:
     # get a first record in, and once there is history the normal flows are
     # better (they know the exercises, the targets and the progression).
     has_history = await db.count_workouts(user_id) > 0
-    return keyboards.main_menu(bool(active), show_quick_log=not has_history)
+    return keyboards.main_menu(
+        bool(active),
+        show_quick_log=not has_history,
+        community_url=config.COMMUNITY_CHAT_URL if config.community_available() else None,
+    )
 
 
 _WORKOUT_SCAFFOLD_KEYS = (
@@ -889,8 +908,7 @@ _HELP_FULL = (
     "<b>ПОДХОД:</b>\n"
     "• <b><code>100 8</code></b> = <b><code>100x8</code></b> — 100 кг × 8 повторов\n"
     "• <b><code>100 8 3</code></b> = <b><code>100x8x3</code></b> — сразу 3 подхода\n"
-    "• <b><code>8</code></b> — только повторы, вес возьмётся с прошлого подхода "
-    "(удобно для своего веса — подтягивания, отжимания)\n"
+    "• <b><code>8</code></b> — только повторы, вес возьмётся с прошлого подхода\n"
     "• <b><code>+20 8</code></b> — то же, что <code>20 8</code>; «+» для себя, "
     "если считаешь это довеском к своему весу\n"
     "• <b><code>100x8@9</code></b> — RPE, сложность подхода 1–10\n"
