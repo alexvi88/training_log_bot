@@ -815,6 +815,64 @@ async def ai_exercise_archive(callback: CallbackQuery, state: FSMContext):
         )
 
 
+@router.callback_query(F.data.startswith("ai:exarchaskmulti:"))
+async def ai_exercise_archive_confirm_multi(callback: CallbackQuery, state: FSMContext):
+    """«Точно всё в архив?» для пачки сразу (ai_trainer._archive_exercises).
+
+    Имена перечисляются поимённо, а не только числом — массовое действие не
+    должно прятать, что именно уйдёт в архив, за одной цифрой в кнопке.
+    """
+    key = callback.data.split(":", 2)[2]
+    ids = (await state.get_data()).get("ai_archive", {}).get(key)
+    if not ids:
+        await callback.answer("Список устарел, спроси тренера ещё раз", show_alert=True)
+        return
+    exercises = [
+        ex for ex in [await db.get_exercise(ex_id) for ex_id in ids]
+        if ex is not None and ex["user_id"] == callback.from_user.id and not ex["is_template"]
+    ]
+    if not exercises:
+        await callback.answer("Упражнения не найдены", show_alert=True)
+        return
+    names = "\n".join(f"• {escape(ex['display_name'])}" for ex in exercises)
+    await callback.message.answer(
+        f"Убрать из списка упражнений ({len(exercises)}) — история и рекорды останутся, "
+        f"вернуть можно в ⚙️ Упражнения → 🗄 Архив:\n\n{names}",
+        reply_markup=keyboards.yes_no_keyboard(
+            yes_cb=f"ai:exarchyesmulti:{key}", no_cb="ai:menu",
+            yes_text=f"🗄 В архив всё ({len(exercises)})", no_text="❌ Отмена",
+        ),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("ai:exarchyesmulti:"))
+async def ai_exercise_archive_multi(callback: CallbackQuery, state: FSMContext):
+    key = callback.data.split(":", 2)[2]
+    ids = (await state.get_data()).get("ai_archive", {}).get(key) or []
+    archived = []
+    for ex_id in ids:
+        ex = await db.get_exercise(ex_id)
+        if ex is None or ex["user_id"] != callback.from_user.id or ex["is_template"]:
+            continue
+        if ex["is_archived"]:
+            continue
+        await db.archive_exercise(ex_id)
+        archived.append(ex["display_name"])
+    await callback.answer(f"В архиве: {len(archived)}" if archived else "Уже в архиве")
+    text = (
+        "🗄 В архиве:\n" + "\n".join(f"• {escape(n)}" for n in archived)
+        if archived else "Это всё уже было в архиве."
+    )
+    with suppress(TelegramBadRequest):
+        await callback.message.edit_text(
+            text,
+            reply_markup=await ai_keyboard(callback.from_user.id),
+            parse_mode="HTML",
+        )
+
+
 @router.callback_query(F.data.startswith("ai:tpladd:"))
 async def ai_add_template(callback: CallbackQuery, state: FSMContext):
     """Каталожное упражнение из ответа тренера, которого у пользователя ещё
@@ -950,11 +1008,14 @@ async def _register_actions(state: FSMContext, actions: list[dict]) -> list[dict
     seq = int(data.get("ai_undo_seq") or 0)
     feedback_store = dict(data.get("ai_feedback") or {})
     feedback_seq = int(data.get("ai_feedback_seq") or 0)
+    archive_store = dict(data.get("ai_archive") or {})
+    archive_seq = int(data.get("ai_archive_seq") or 0)
 
     out: list[dict] = []
     for action in actions:
         undo = action.get("undo")
         feedback = action.get("feedback")
+        archive_ids = action.get("archive_ids")
         if undo is not None:
             seq += 1
             key = f"u{seq}"
@@ -969,6 +1030,14 @@ async def _register_actions(state: FSMContext, actions: list[dict]) -> list[dict
             key = f"f{feedback_seq}"
             feedback_store[key] = feedback
             out.append({"label": action["label"], "callback": f"ai:fb:{key}"})
+        elif archive_ids is not None:
+            # Список id упражнений на массовую архивацию (ai_trainer._archive_exercises)
+            # — как и с фидбеком, в 64 байта callback_data влезает не список
+            # (два десятка id это уже под сотню байт), а короткий ключ на него.
+            archive_seq += 1
+            key = f"a{archive_seq}"
+            archive_store[key] = archive_ids
+            out.append({"label": action["label"], "callback": f"ai:exarchaskmulti:{key}"})
         else:
             out.append(action)
 
@@ -976,9 +1045,12 @@ async def _register_actions(state: FSMContext, actions: list[dict]) -> list[dict
         del store[stale]
     for stale in sorted(feedback_store, key=lambda k: int(k[1:]))[:-_UNDO_SLOTS]:
         del feedback_store[stale]
+    for stale in sorted(archive_store, key=lambda k: int(k[1:]))[:-_UNDO_SLOTS]:
+        del archive_store[stale]
     await state.update_data(
         ai_undo=store, ai_undo_seq=seq,
         ai_feedback=feedback_store, ai_feedback_seq=feedback_seq,
+        ai_archive=archive_store, ai_archive_seq=archive_seq,
     )
     return out
 

@@ -629,11 +629,16 @@ replaces_program не передавай, иначе затрёшь старую
   merge_programs, archive_exercise, share_program, send_feedback_to_admin. Под ответом появится кнопка,
   и сделает это тап пользователя. Не пиши «удалил», «объединил», «отправил» —
   пиши, что готов и кнопка ниже. Несколько таких за раз — вызови инструмент по
-  разу на каждое.
+  разу на каждое; ИСКЛЮЧЕНИЕ — упражнения: несколько сразу («заархивируй все
+  неиспользуемые», «убери дубли после импорта») идут ОДНИМ вызовом
+  archive_exercises со списком имён, а не циклом archive_exercise — иначе под
+  ответом встанет по кнопке на каждое упражнение вместо одной на все. В самом
+  тексте ответа перечисли поимённо, что предлагаешь убрать, — это не заменяет
+  список на кнопке-подтверждении, но человек должен видеть его сразу, до тапа.
 
 Осторожно с «убери X»: чаще всего это «убери из программы» (propose_program с
-replaces_program), а не «убери из списка упражнений» (archive_exercise). Если
-из фразы не ясно — спроси, а не угадывай.
+replaces_program), а не «убери из списка упражнений» (archive_exercise /
+archive_exercises). Если из фразы не ясно — спроси, а не угадывай.
 
 Дневники ты не только читаешь: вес и еду, сказанные между делом («кстати, 78.4
 сегодня», «на обед была гречка с курицей»), записывай сразу, не заставляя
@@ -1886,11 +1891,10 @@ TOOLS: list[dict[str, Any]] = [
         "function": {
             "name": "archive_exercise",
             "description": (
-                "Убрать упражнение из списков пользователя («я это больше не делаю»). "
-                "САМ НЕ АРХИВИРУЕТ: под ответом появится кнопка. Осторожно с «убери X» — "
-                "она одинаково часто значит «из программы» (это propose_program с "
-                "replaces_program), а не «из списка упражнений»; не уверен — спроси. "
-                "История и рекорды остаются, вернуть можно в ⚙️ Упражнения → 🗄 Архив."
+                "Убрать ОДНО упражнение из списков пользователя («я это больше не делаю»). "
+                "Несколько сразу — archive_exercises, не циклом. САМ НЕ АРХИВИРУЕТ: под "
+                "ответом появится кнопка. Осторожно с «убери X» — часто это «из программы» "
+                "(propose_program с replaces_program), а не «из списка»; не уверен — спроси."
             ),
             "parameters": {
                 "type": "object",
@@ -1898,6 +1902,28 @@ TOOLS: list[dict[str, Any]] = [
                     "name": {"type": "string", "description": "Точное название упражнения"},
                 },
                 "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "archive_exercises",
+            "description": (
+                "Убрать НЕСКОЛЬКО упражнений разом — одна кнопка на все, не цикл из "
+                "archive_exercise. САМ НЕ АРХИВИРУЕТ. В тексте ответа перечисли поимённо, "
+                "что предлагаешь убрать."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "names": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Точные названия упражнений",
+                    },
+                },
+                "required": ["names"],
             },
         },
     },
@@ -2223,6 +2249,7 @@ TOOL_STATUS_TEXTS: dict[str, list[str]] = {
     "rename_exercise": ["✏️ переименовываю упражнение..."],
     "move_exercise_to_group": ["🗂 переношу упражнение в другую группу..."],
     "archive_exercise": ["🗄 нахожу упражнение, которое убираем..."],
+    "archive_exercises": ["🗄 собираю список того, что убираем..."],
     "log_bodyweight": ["⚖️ записываю вес..."],
     "log_food": ["🍽 записываю в дневник еды..."],
     "compare_periods": [
@@ -3490,6 +3517,45 @@ async def _archive_exercise(
     )
 
 
+async def _archive_exercises(
+    user_id: int, tool_input: dict[str, Any]
+) -> tuple[dict[str, Any], Optional[dict[str, Any]]]:
+    """Как _archive_exercise, но несколько сразу — одна кнопка на все, а не
+    одна на каждое (иначе «заархивируй 23 неиспользуемых» кладёт под ответом
+    23 одинаковые кнопки подряд). Список id уходит через action["archive_ids"]
+    — handlers.ai_trainer._register_actions прячет его в FSM за коротким
+    ключом, потому что в 64 байта callback_data два десятка id не влезают."""
+    names = [str(n).strip() for n in (tool_input.get("names") or []) if str(n).strip()]
+    resolved = []
+    missing = []
+    for name in names:
+        exercise = await _resolve_own_exercise(user_id, name)
+        if exercise is None:
+            missing.append(name)
+        else:
+            resolved.append(exercise)
+    if not resolved:
+        return await _no_such_exercise(user_id, names[0] if names else ""), None
+    listed = ", ".join(ex["display_name"] for ex in resolved)
+    note = (
+        f"НЕ АРХИВИРОВАНО. Под ответом кнопка «🗄 В архив всё ({len(resolved)})» "
+        f"— архивирует разом: {listed}."
+    )
+    if missing:
+        note += f" Не нашёл: {', '.join(missing)}."
+    return (
+        {
+            "ok": True,
+            "proposed": {"names": [ex["display_name"] for ex in resolved]},
+            "note": note,
+        },
+        {
+            "label": f"🗄 В архив всё ({len(resolved)})",
+            "archive_ids": [ex["id"] for ex in resolved],
+        },
+    )
+
+
 # ---------- дневники: вес тела и еда ----------
 
 
@@ -4277,6 +4343,7 @@ _ACTION_TOOLS = {
     "merge_programs": _merge_programs,
     "share_program": _share_program,
     "archive_exercise": _archive_exercise,
+    "archive_exercises": _archive_exercises,
     "send_feedback_to_admin": _send_feedback,
 }
 

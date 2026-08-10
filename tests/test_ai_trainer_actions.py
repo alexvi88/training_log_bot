@@ -177,6 +177,47 @@ async def test_archive_exercise_only_proposes(fresh_db, user_id):
     assert (await dbmod.get_exercise(fly))["is_archived"] == 0
 
 
+async def test_archive_exercises_proposes_one_action_for_all(fresh_db, user_id):
+    """Живой репорт: «заархивируй все неиспользуемые» на 23 упражнения
+    поставило под ответом 23 кнопки «В архив: X» подряд, вызвав
+    archive_exercise в цикле — должна быть одна кнопка на все сразу."""
+    db = fresh_db
+    group = await db.create_muscle_group(user_id, "Другое")
+    fly = await db.create_exercise(user_id, "Сведения", group)
+    curl = await db.create_exercise(user_id, "Подъём на бицепс", group)
+
+    payload, action = await ai_trainer._archive_exercises(
+        user_id, {"names": ["Сведения", "Подъём на бицепс"]}
+    )
+
+    assert action["label"] == "🗄 В архив всё (2)"
+    assert set(action["archive_ids"]) == {fly, curl}
+    assert "НЕ АРХИВИРОВАНО" in payload["note"]
+    assert "Сведения" in payload["note"] and "Подъём на бицепс" in payload["note"]
+    assert (await dbmod.get_exercise(fly))["is_archived"] == 0
+    assert (await dbmod.get_exercise(curl))["is_archived"] == 0
+
+
+async def test_archive_exercises_names_the_ones_it_could_not_find(fresh_db, user_id):
+    db = fresh_db
+    group = await db.create_muscle_group(user_id, "Другое")
+    fly = await db.create_exercise(user_id, "Сведения", group)
+
+    payload, action = await ai_trainer._archive_exercises(
+        user_id, {"names": ["Сведения", "Придуманное упражнение"]}
+    )
+
+    assert action["archive_ids"] == [fly]
+    assert "Придуманное упражнение" in payload["note"]
+
+
+async def test_archive_exercises_errors_when_none_resolve(fresh_db, user_id):
+    payload, action = await ai_trainer._archive_exercises(user_id, {"names": ["Несуществующее"]})
+
+    assert action is None
+    assert "error" in payload
+
+
 async def test_exercise_tools_do_not_touch_catalog_templates(fresh_db, user_id):
     """«Переименуй жим» про шаблон каталога переименовало бы его всем."""
     templates = await dbmod.list_all_exercise_templates()

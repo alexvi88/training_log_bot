@@ -227,3 +227,54 @@ async def test_archive_refuses_someone_elses_exercise(fresh_db, user_id):
 
     cb.answer.assert_awaited_once_with("Упражнение не найдено", show_alert=True)
     assert (await dbmod.get_exercise(theirs))["is_archived"] == 0
+
+
+async def test_archive_multi_button_asks_names_and_then_archives_all(fresh_db, user_id):
+    """Живой репорт: массовая архивация ставила под ответом кнопку на каждое
+    упражнение — теперь одна кнопка на все, но экран подтверждения обязан
+    называть их поимённо, не только числом."""
+    from handlers import ai_trainer as handler
+
+    db = fresh_db
+    group = await db.create_muscle_group(user_id, "Другое")
+    fly = await db.create_exercise(user_id, "Сведения", group)
+    curl = await db.create_exercise(user_id, "Подъём на бицепс", group)
+    state = await _state(user_id)
+    await state.update_data(ai_archive={"a1": [fly, curl]})
+
+    ask = _make_callback(user_id, "ai:exarchaskmulti:a1")
+    await handler.ai_exercise_archive_confirm_multi(ask, state)
+
+    text = ask.message.answer.await_args.args[0]
+    assert "Сведения" in text and "Подъём на бицепс" in text
+    kb = ask.message.answer.await_args.kwargs["reply_markup"]
+    assert [b.callback_data for row in kb.inline_keyboard for b in row] == [
+        "ai:exarchyesmulti:a1", "ai:menu",
+    ]
+    assert (await dbmod.get_exercise(fly))["is_archived"] == 0
+
+    yes = _make_callback(user_id, "ai:exarchyesmulti:a1")
+    await handler.ai_exercise_archive_multi(yes, state)
+
+    assert (await dbmod.get_exercise(fly))["is_archived"] == 1
+    assert (await dbmod.get_exercise(curl))["is_archived"] == 1
+    done_text = yes.message.edit_text.await_args.args[0]
+    assert "Сведения" in done_text and "Подъём на бицепс" in done_text
+
+
+async def test_archive_multi_skips_ids_from_someone_else(fresh_db, user_id):
+    from handlers import ai_trainer as handler
+
+    db = fresh_db
+    other = await db.get_or_create_user(telegram_id=223, username="other2")
+    their_group = await db.create_muscle_group(other["telegram_id"], "Другое")
+    theirs = await db.create_exercise(other["telegram_id"], "Чужое", their_group)
+    group = await db.create_muscle_group(user_id, "Другое")
+    mine = await db.create_exercise(user_id, "Моё", group)
+    state = await _state(user_id)
+    await state.update_data(ai_archive={"a1": [theirs, mine]})
+
+    await handler.ai_exercise_archive_multi(_make_callback(user_id, "ai:exarchyesmulti:a1"), state)
+
+    assert (await dbmod.get_exercise(theirs))["is_archived"] == 0
+    assert (await dbmod.get_exercise(mine))["is_archived"] == 1
