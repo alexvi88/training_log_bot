@@ -1842,3 +1842,35 @@ def csv_column_options_keyboard(headers: list[str], prefix: str, allow_skip: boo
         InlineKeyboardButton(text="❌ Отмена", callback_data="imp:cancel"),
     )
     return b.as_markup()
+
+
+def billing_offer(
+    show_pro: bool = True,
+    show_pack: bool = True,
+    pro_stars: int = 0,
+    pack_stars: int = 0,
+    back_to: str = "menu:ai",
+) -> InlineKeyboardMarkup:
+    """Витрина: месяц доступа и разовый пак. Звёздочка в подписи — валюта, а не
+    украшение (см. TONE_OF_VOICE, эмодзи-иконки): Telegram рисует цену в
+    звёздах ровно так же, и кнопка должна совпадать со счётом, который за ней
+    откроется."""
+    b = InlineKeyboardBuilder()
+    if show_pro:
+        b.button(text=f"⭐ Тренер на месяц — {pro_stars}", callback_data="buy:pro_month")
+    if show_pack:
+        b.button(text=f"⭐ Пак вопросов — {pack_stars}", callback_data="buy:question_pack")
+    b.button(text="⬅️ Назад", callback_data=back_to)
+    b.adjust(1)
+    return b.as_markup()
+
+
+def billing_paywall() -> InlineKeyboardMarkup:
+    """Клавиатура под сообщением «бесплатные кончились»: та же витрина, но
+    вход в неё — отдельным экраном, а не сразу счётом. Между «кончилось» и
+    списанием звёзд должен быть ровно один осознанный тап, а не случайный."""
+    b = InlineKeyboardBuilder()
+    b.button(text="⭐ Что даёт платный доступ", callback_data="billing:offer")
+    b.button(text="⬅️ К тренеру", callback_data="menu:ai")
+    b.adjust(1)
+    return b.as_markup()

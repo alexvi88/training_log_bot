@@ -27,6 +27,7 @@ from handlers import (
     admin,
     ai_trainer,
     backfill,
+    billing,
     bodyweight,
     community,
     csv_import,
@@ -200,6 +201,11 @@ def setup_routers(dp: Dispatcher) -> None:
     # Та же причина: /community — одна команда без состояний, и она нужна из
     # любого сценария, хоть посреди тренировки.
     dp.include_router(community.router)
+    # Впереди сценарных роутеров по той же причине, но с добавкой: платёжные
+    # апдейты (pre_checkout_query и successful_payment) приходят вне любого
+    # состояния, а на pre_checkout у нас ровно 10 секунд — застрять в чужом
+    # catch-all такому апдейту нельзя (оплата отвалится с деньгами у человека).
+    dp.include_router(billing.router)
     # Same reason as admin/feedback above: /food_diary and the fd:* callbacks
     # must reach their router even when the user is mid-workout.
     dp.include_router(food_diary.router)
@@ -230,6 +236,10 @@ def _public_commands() -> list[BotCommand]:
         BotCommand(command="food_diary", description="Дневник еды"),
         BotCommand(command="feedback", description="Отзыв / баг / идея"),
     ]
+    # Витрина в «/»-меню только когда продажа включена: команда там обещает
+    # работающую функцию, а с выключенными звёздами обещать нечего.
+    if config.stars_enabled():
+        commands.append(BotCommand(command="premium", description="Платный доступ к тренеру"))
     # Только когда MCP реально куда-то ведёт: команда в «/»-меню обещает
     # работающую функцию, а без публичного адреса обещать нечего. /game
     # раздаёт страница того же сервера (см. handlers/game.game_url), так что

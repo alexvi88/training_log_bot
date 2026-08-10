@@ -18,6 +18,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import ai_limits
 import ai_trainer
+import billing
 import config
 import db
 import exercise_mentions
@@ -573,9 +574,12 @@ async def _start_ai_scenario(
     block = await ai_limits.check(user_id, ai_limits.KIND_QUESTION)
     if block is not None:
         logger.info("AI program builder blocked for user %s: %s", user_id, block.log)
-        if block.preview:
-            # Предупреждение своим — сообщением, а не алертом: в алерт кнопку
-            # «Понятно» не положишь, а без неё лимит не пропустит и дальше.
+        if block.preview or block.kind == ai_limits.KIND_QUESTION_MONTH:
+            # Сообщением, а не алертом, по одной и той же причине: в алерт не
+            # положишь ни кнопку «Понятно» своим, ни кнопку на витрину тому, у
+            # кого кончился бесплатный месяц, — а без них обе фразы становятся
+            # тупиком. Заодно текст про «приходи завтра» ниже достаётся только
+            # тому, кому завтра правда поможет.
             await ai_limits.reply(callback.message, block)
             await callback.answer()
             return
@@ -1901,8 +1905,11 @@ async def _handle_question(
     reservation is already held and never touches `_busy` itself.
     """
     user_id = user_id if user_id is not None else message.from_user.id
-    asked_today = await db.get_ai_question_count_today(user_id)
-    # Дневная квота вопросов и суточный стоп по деньгам — одной проверкой (см.
+    # Остаток нужен уже здесь: под ответом он превращается в предупреждение
+    # «осталось N» (ниже), и считать его после списания было бы поздно.
+    allow = await billing.allowance(user_id)
+    # Дневная квота вопросов, месячный пейволл и суточный стоп по деньгам —
+    # одной проверкой (см.
     # ai_limits.check). С той же клавиатурой, что у обычных ответов чата:
     # сообщение о лимите становится нижним экраном переписки, и без кнопок из
     # него оставался только выход через нижнее меню.
@@ -2026,13 +2033,20 @@ async def _handle_question(
             await running_task
         await streamer.close()
 
-    await db.increment_ai_question_count(user_id)
+    # Дневной счётчик двигается всегда, разовый пак — только когда бесплатные
+    # месяца уже кончились (см. billing.charge_question).
+    await billing.charge_question(user_id)
     # Warn before the wall, not at it — the old behaviour only ever mentioned the
     # limit by refusing.
-    left = config.AI_QUESTION_DAILY_LIMIT - (asked_today + 1)
+    left = max(0, allow.left - 1)
+    # Называем тот потолок, который упрётся первым: «осталось сегодня» человеку,
+    # у которого на самом деле кончается месяц, — это обещание, что завтра
+    # станет лучше, а завтра ничего не изменится.
+    budget_left = allow.free_left + allow.pack_left - 1
+    scope = "сегодня" if allow.is_pro or allow.day_left - 1 <= budget_left else "в этом месяце"
     show_quota = 0 < left <= _QUOTA_WARN_AT
-    quota_html = f"\n\n<i>Осталось вопросов сегодня: {left}</i>" if show_quota else ""
-    quota_md = f"\n\n_Осталось вопросов сегодня: {left}_" if show_quota else ""
+    quota_html = f"\n\n<i>Осталось вопросов {scope}: {left}</i>" if show_quota else ""
+    quota_md = f"\n\n_Осталось вопросов {scope}: {left}_" if show_quota else ""
 
     # reasoning_content едет в истории рядом с ответом — иначе следующий вопрос
     # отдаёт Гроку не тот префикс, что был закэширован, и платим по полной за все
