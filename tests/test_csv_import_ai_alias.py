@@ -150,6 +150,33 @@ async def test_aliased_exercise_keeps_its_own_name_but_links_template_media(
     assert exercise_media.catalog_key(ex) == "Жим штанги лёжа"
 
 
+async def test_matching_unresolved_names_sends_a_progress_message_first(
+    fresh_db, user_id, monkeypatch
+):
+    """Модель отвечает не мгновенно — импорт из Hevy почти всегда идёт этим
+    путём (английские имена против русского каталога), и без знака, что файл
+    вообще читается, выглядит как зависший бот."""
+    async def fake_match(uid, names):
+        return {"Bench Press (Barbell)": "Жим штанги лёжа"}
+
+    monkeypatch.setattr(ai_trainer, "match_exercise_names_to_catalog", fake_match)
+
+    raw = (
+        b'"title","start_time","end_time","description","exercise_title","superset_id",'
+        b'"exercise_notes","set_index","set_type","weight_kg","reps","distance_km",'
+        b'"duration_seconds","rpe"\n'
+        b'"Push","7 Aug 2026, 08:27","7 Aug 2026, 08:28","","Bench Press (Barbell)",,'
+        b'"",0,"normal",100,8,,,\n'
+    )
+    message = _message(user_id, "workout_data.csv", raw)
+    state = FSMContext(storage=MemoryStorage(), key=StorageKey(bot_id=1, chat_id=user_id, user_id=user_id))
+
+    await csv_import.import_file_received(message, state)
+
+    texts = [call.args[0] for call in message.answer.await_args_list]
+    assert any("Сверяю названия" in t for t in texts[:-1]), texts
+
+
 async def test_alias_does_not_relink_an_already_existing_exercise(fresh_db, user_id, monkeypatch):
     """Имя уже есть в списке пользователя под своей историей — импорт не должен
     тихо перепривязывать его медиа к шаблону задним числом."""

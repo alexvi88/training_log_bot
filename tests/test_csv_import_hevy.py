@@ -36,6 +36,14 @@ def test_hevy_date_formats_are_understood():
     assert _parse_row_date("21 Dec 2025").isoformat() == "2025-12-21"
 
 
+def test_hevy_russian_locale_dates_are_understood():
+    """Живой файл: Hevy на телефоне с русским языком пишет "10 авг. 2026,
+    19:21" — с точкой после сокращения месяца, которой нет в английском
+    варианте. Раньше это падало на "не понял дату" уже на этапе подтверждения."""
+    assert _parse_row_date("10 авг. 2026, 19:21").isoformat() == "2026-08-10"
+    assert _parse_row_date("21 дек. 2025").isoformat() == "2025-12-21"
+
+
 def test_hevy_columns_auto_detect_without_manual_mapping():
     headers, _rows, _has_header = _read_table(HEVY_SAMPLE)
     mapping = _auto_detect(headers)
