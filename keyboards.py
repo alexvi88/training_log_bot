@@ -22,8 +22,14 @@ BTN_MENU = "Меню"
 BTN_AI = "AI-тренер"
 
 # Bump whenever persistent_menu()'s button set changes so every user gets the
-# new layout next time cmd_start runs (see users.reply_keyboard_version).
-PERSISTENT_MENU_VERSION = 2
+# new layout next time cmd_start runs (see users.reply_keyboard_version). Also
+# bump this — even with the layout unchanged — whenever a bug is fixed in how
+# the keyboard gets attached: users already marked "up to date" under the old,
+# buggy attach never get a re-send otherwise, so a bugfix alone can't reach
+# them. That's what forced v3: the carrier-delete bug (see
+# handlers/persistent_menu.py) had already wiped the keyboard on Android
+# before the fix landed, and those users' version was already current.
+PERSISTENT_MENU_VERSION = 3
 
 
 def persistent_menu() -> ReplyKeyboardMarkup:
