@@ -2251,6 +2251,109 @@ _CATALOG_BY_GROUP: dict[str, list[str]] = {}
 for _group, _name in EXERCISE_TEMPLATES:
     _CATALOG_BY_GROUP.setdefault(_group, []).append(_name)
 
+_EXERCISE_ALIAS_SYSTEM_PROMPT = (
+    "Тебе присылают названия упражнений, которые человек принёс с миграцией из "
+    "другого приложения (Hevy, Strong и т.п.) — обычно по-английски, с названием "
+    "снаряда в скобках, — и каталог упражнений бота по-русски. Для каждого "
+    "присланного названия, которое явно означает то же самое движение и снаряд, "
+    "что и что-то из каталога (пример: «Bench Press (Barbell)» = «Жим штанги "
+    "лёжа»), верни пару import_name/catalog_name, где catalog_name — ТОЧНАЯ строка "
+    "из присланного каталога, символ в символ. Если для имени нет уверенного "
+    "совпадения в каталоге (незнакомое движение, кардио, растяжка, снаряд другого "
+    "типа) — просто не включай эту пару в ответ. Не выдумывай названий вне каталога."
+)
+
+_EXERCISE_ALIAS_SCHEMA = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "exercise_aliases",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "matches": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "import_name": {"type": "string"},
+                            "catalog_name": {"type": "string"},
+                        },
+                        "required": ["import_name", "catalog_name"],
+                        "additionalProperties": False,
+                    },
+                }
+            },
+            "required": ["matches"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+
+async def match_exercise_names_to_catalog(user_id: int, names: list[str]) -> dict[str, str]:
+    """Названия упражнений из чужого экспорта (Hevy и т.п.) → точные имена из
+    нашего каталога, если модель уверена, что это то же движение — на лету, при
+    каждом импорте, а не по зашитому вручную словарю: у Hevy сотни вариантов
+    названий, и ошибиться в написанном руками списке проще, чем спросить
+    модель точь-в-точь по каталогу, который и так уже есть.
+
+    Совпавшее имя резолвится через db.get_or_create_user_exercise_by_name —
+    оно форкает шаблон целиком, вместе с фото и описанием техники (см.
+    handlers/exercise_resolve.py:resolve_pick_template, тот же путь для
+    ручного выбора). Не совпавшее идёт по обычному пути ручного разрешения
+    (handlers/csv_import.py), как и раньше.
+
+    Пустой словарь, если модель не настроена, недоступна или ответ не
+    разобрать, — импорт при этом не должен падать, просто ничего не
+    подставится само и человек разрешит имена руками.
+    """
+    if not names or not is_configured():
+        return {}
+    catalog_flat = [name for group_names in _CATALOG_BY_GROUP.values() for name in group_names]
+    try:
+        client = _get_client()
+        response = await client.chat.completions.create(
+            model=config.GROK_MODEL,
+            max_tokens=2000,
+            extra_body={"reasoning_effort": config.GROK_QUICK_REASONING_EFFORT},
+            response_format=_EXERCISE_ALIAS_SCHEMA,
+            messages=[
+                {"role": "system", "content": _EXERCISE_ALIAS_SYSTEM_PROMPT},
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {"import_names": names, "catalog": catalog_flat}, ensure_ascii=False
+                    ),
+                },
+            ],
+        )
+    except Exception:
+        logger.exception("exercise alias matching failed for user %s", user_id)
+        return {}
+    await _log_llm_cost(user_id, config.GROK_MODEL, getattr(response, "usage", None))
+    try:
+        data = _extract_json_object(response.choices[0].message.content or "")
+    except ValueError:
+        return {}
+    raw_matches = data.get("matches") if isinstance(data, dict) else None
+    if not isinstance(raw_matches, list):
+        return {}
+    catalog_set = set(catalog_flat)
+    names_set = set(names)
+    result: dict[str, str] = {}
+    for pair in raw_matches:
+        if not isinstance(pair, dict):
+            continue
+        imp, cat = pair.get("import_name"), pair.get("catalog_name")
+        # Обе проверки защищают от того же класса ошибки, что и везде в
+        # тренере: модель отвечает по СВОЕЙ схеме, но не обязана ограничиться
+        # тем, что реально прислали — имя не из запроса или каталог,
+        # которого нет в списке, тут ничем не лучше выдумки.
+        if isinstance(imp, str) and isinstance(cat, str) and imp in names_set and cat in catalog_set:
+            result[imp] = cat
+    return result
+
 
 def _fmt_set(row: Any) -> str:
     """'100x8' or, when RPE was logged, '100x8@9' — as the model sees a set."""
