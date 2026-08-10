@@ -32,11 +32,21 @@ ONE_DAY = [
 
 
 def _callback(user_id: int, data: str = "imp:save"):
+    message = MagicMock()
+    message.chat = SimpleNamespace(id=user_id)
+    message.message_id = 1
+    message.text = "экран"
+    message.photo = None
+    message.edit_text = AsyncMock(return_value=True)
+    message.answer = AsyncMock(
+        return_value=SimpleNamespace(message_id=999, chat=SimpleNamespace(id=user_id))
+    )
+    message.delete = AsyncMock()
     callback = MagicMock()
     callback.from_user = SimpleNamespace(id=user_id, username="tester")
     callback.data = data
     callback.answer = AsyncMock()
-    callback.message = MagicMock()
+    callback.message = message
     return callback
 
 

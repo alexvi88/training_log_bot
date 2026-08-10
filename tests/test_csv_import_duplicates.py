@@ -28,11 +28,21 @@ TWO_DAYS = [
 
 
 def _callback(user_id: int, data: str = "imp:save"):
+    message = MagicMock()
+    message.chat = SimpleNamespace(id=user_id)
+    message.message_id = 1
+    message.text = "экран"
+    message.photo = None
+    message.edit_text = AsyncMock(return_value=True)
+    message.answer = AsyncMock(
+        return_value=SimpleNamespace(message_id=999, chat=SimpleNamespace(id=user_id))
+    )
+    message.delete = AsyncMock()
     callback = MagicMock()
     callback.from_user = SimpleNamespace(id=user_id, username="tester")
     callback.data = data
     callback.answer = AsyncMock()
-    callback.message = MagicMock()
+    callback.message = message
     return callback
 
 
@@ -68,6 +78,21 @@ def alerts(monkeypatch):
 async def squat(fresh_db, user_id):
     gid = await fresh_db.create_muscle_group(user_id, "Ноги")
     return await fresh_db.create_exercise(user_id, "Присед", gid)
+
+
+async def test_save_shows_a_progress_message_before_writing(fresh_db, user_id, squat, alerts):
+    """Запись подходов по одному плюс пересчёт ачивок — не мгновенно на файле
+    из нескольких тренировок, а кнопка до этого момента ничем не показывала,
+    что вообще что-то происходит."""
+    callback = _callback(user_id)
+
+    await csv_import.import_save(callback, await _state(user_id, TWO_DAYS, squat))
+
+    calls = [
+        c.args[0] for mock in (callback.message.edit_text, callback.message.answer)
+        for c in mock.await_args_list if c.args
+    ]
+    assert any("Загружаю" in t for t in calls), calls
 
 
 async def test_sending_the_same_file_twice_does_not_double_the_history(
