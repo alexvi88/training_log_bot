@@ -3,6 +3,7 @@
 import csv
 import datetime as dt
 import io
+import re
 from typing import Optional
 
 from aiogram import F, Router
@@ -26,14 +27,24 @@ FIELD_LABELS = {"date": "дата", "exercise": "упражнение", "weight"
 # Кандидаты в разделители: свой экспорт пишет запятую, но «Сохранить как CSV»
 # в русском Excel даёт «;» (и запятую внутри дробей), а Google Sheets — табы.
 DELIMITERS = ",;\t|"
+# start_time/exercise_title/weight_kg/set_index/set_type — колонки родного
+# экспорта Hevy: самого частого источника миграции. Без них файл оттуда не
+# автоопределялся ни по одному из четырёх обязательных полей и упирался в
+# ручной маппинг с нуля.
 SYNONYMS = {
-    "date": {"дата", "date", "started_at"},
-    "exercise": {"упражнение", "exercise"},
-    "weight": {"вес", "weight"},
+    "date": {"дата", "date", "started_at", "start_time"},
+    "exercise": {"упражнение", "exercise", "exercise_title"},
+    "weight": {"вес", "weight", "weight_kg"},
     "reps": {"повторы", "reps"},
-    "round": {"подход", "раунд", "round", "set", "round_index"},
+    "round": {"подход", "раунд", "round", "set", "round_index", "set_index"},
     "rpe": {"rpe", "рпе"},
+    # Не обязательное поле — участвует только в автоопределении: если колонка
+    # нашлась, разминочные подходы (Hevy: set_type=warmup) не попадают в
+    # историю. Иначе разминка с лёгким весом искажала бы рекорды и тоннаж
+    # ровно так же, как и обычный подход, — но пользователь её таковой не считал.
+    "type": {"set_type", "тип", "тип подхода"},
 }
+_WARMUP_TYPES = {"warmup", "разминка", "разминочный"}
 
 
 @router.callback_query(F.data == "settings:import")
@@ -42,7 +53,7 @@ async def import_start(callback: CallbackQuery, state: FSMContext):
     await ui.safe_edit(
         callback,
         "📥 Пришли CSV-файл с колонками «дата, упражнение, вес, повторы» "
-        "(подойдёт экспорт из этого бота).",
+        "(подойдёт экспорт из этого бота или из Hevy).",
         reply_markup=keyboards.cancel_keyboard("imp:cancel"),
     )
     await callback.answer()
@@ -229,12 +240,32 @@ async def import_mapping_back(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+# Hevy пишет дату/время английским месяцем-аббревиатурой («7 Aug 2026, 08:27»,
+# без ведущего нуля у дня) — своего формата в parse_ru_date/ISO для этого нет.
+# Список руками, а не через locale/strptime («%b»): locale контейнера решает,
+# на каком языке страптайм ждёт месяц, и «Aug» на сервере с русской локалью
+# незаметно перестал бы разбираться.
+_MONTH_ABBR_EN = {
+    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+    "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+}
+_HEVY_DATE_RE = re.compile(
+    r"^(?P<d>\d{1,2}) (?P<mon>[A-Za-z]{3}) (?P<y>\d{4})(?:,\s*\d{1,2}:\d{2})?$"
+)
+
+
 def _parse_row_date(text: str) -> dt.date:
     text = text.strip()
     try:
         return parse_ru_date(text)
     except ParseError:
         pass
+    match = _HEVY_DATE_RE.match(text)
+    if match and match["mon"].lower() in _MONTH_ABBR_EN:
+        try:
+            return dt.date(int(match["y"]), _MONTH_ABBR_EN[match["mon"].lower()], int(match["d"]))
+        except ValueError:
+            raise ParseError(f"не понял дату «{text}»") from None
     try:
         if "t" in text.lower():
             return dt.datetime.fromisoformat(text).date()
@@ -275,6 +306,12 @@ def _build_workout_groups(rows: list[list[str]], mapping: dict[str, int], first_
 
     for line_no, row in enumerate(rows, start=first_line):
         if not row or all(not c.strip() for c in row):
+            continue
+        # Разминочный подход (Hevy: set_type=warmup) — не рабочий: лёгкий вес
+        # на нём иначе искажал бы рекорды и тоннаж наравне с обычным.
+        if "type" in mapping and mapping["type"] < len(row) and (
+            row[mapping["type"]].strip().lower() in _WARMUP_TYPES
+        ):
             continue
         try:
             date_val = _parse_row_date(row[mapping["date"]])
