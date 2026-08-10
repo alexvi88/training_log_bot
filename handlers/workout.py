@@ -669,12 +669,21 @@ def _try_claim_weight_confirm(user_id: int) -> bool:
     return True
 
 
-# Окно, за которое ищутся самые частые движения, и сколько тренировок берётся в
-# спарклайн. Восемь недель — то же окно, по которому считается звание
-# (analytics.RANK_FREQUENCY_WEEKS): «что я сейчас делаю», а не «что делал когда-то».
+# Окно, за которое ищутся частые движения и считается их рост e1RM. Восемь
+# недель — то же окно, по которому считается звание (analytics.RANK_FREQUENCY_WEEKS):
+# «что я сейчас делаю», а не «что делал когда-то».
 _LIFT_WINDOW_WEEKS = 8
-_LIFT_SESSIONS = 8
-_LIFT_COUNT = 3
+# Кандидатов на плитки роста берётся больше, чем плиток в сводке: рост считается
+# честно (максимум ДО окна против максимума ВНУТРИ), и у многих частых движений
+# он окажется нулевым или отрицательным — их форматтер потом отбросит. Без
+# запаса сводка часто оставалась бы вовсе без плиток, хотя настоящий прогресс
+# у человека где-то в его пятом-шестом по частоте движении и был.
+_LIFT_CANDIDATES = 12
+
+# Календарь посещений в сводке — 30 дней, а не год: короткое окно совпадает с
+# тем, что человек и так помнит, и не выглядит пустым островком у тех, кто
+# тренируется недавно.
+_CALENDAR_WINDOW_DAYS = 30
 
 
 async def _menu_view(user_id: int) -> tuple[str, bytes | None]:
@@ -703,13 +712,18 @@ async def _menu_view(user_id: int) -> tuple[str, bytes | None]:
     # Движения — самые частые за окно, по числу тренировок. Не «базовые»: типа
     # движения в базе нет, и выбирать жим/присед/тягу пришлось бы по каталожным
     # именам, а у человека со своими названиями список оказался бы пустым.
+    # Кандидатов берётся с запасом (_LIFT_CANDIDATES) — формула роста ниже
+    # отбросит те, что не выросли, и без запаса плиток часто не осталось бы
+    # вовсе.
     lift_start = today - dt.timedelta(weeks=_LIFT_WINDOW_WEEKS)
-    lifts: list[tuple[str, list[float]]] = []
+    growth: list[tuple[str, float, float]] = []
     for row in await db.top_exercises_by_frequency(
-        user_id, lift_start.isoformat(), today.isoformat(), limit=_LIFT_COUNT
+        user_id, lift_start.isoformat(), today.isoformat(), limit=_LIFT_CANDIDATES
     ):
-        series = await db.exercise_e1rm_series(user_id, row["id"], _LIFT_SESSIONS, formula)
-        lifts.append((row["display_name"], series))
+        before_max, window_max = await db.exercise_e1rm_growth(
+            user_id, row["id"], lift_start.isoformat(), formula
+        )
+        growth.append((row["display_name"], before_max, window_max))
 
     agg = await db.hall_of_fame_aggregates(user_id)
     rank = analytics.rank_for(
@@ -719,43 +733,33 @@ async def _menu_view(user_id: int) -> tuple[str, bytes | None]:
     )
     headline = formatting.menu_headline(dashboard)
     tiles = formatting.menu_tiles(dashboard, tonnage, records, user["unit"])
-    lift_cards = formatting.menu_lift_cards(lifts, user["unit"])
+    lift_tiles = formatting.menu_lift_tiles(growth, user["unit"])
 
     # Ключ кэша собран из того, что реально нарисуется, а не из «даты и числа
     # тренировок»: объём, тоннаж и e1RM меняются от подходов, поэтому по прежнему
     # ключу картинка застывала — дописал четыре подхода в уже закрытую
-    # тренировку, а на экране всё прежнее. Серии округляются, чтобы дрожание
-    # десятых долей не считалось изменением и не гоняло отрисовку зря.
+    # тренировку, а на экране всё прежнее.
     cache_key = (
         today, len(dates), max(dates), headline, rank.level, tuple(tiles),
-        tuple(volume_rows), volume_title,
-        tuple((name, tuple(round(v, 1) for v in series)) for name, series, _, _ in lift_cards),
+        tuple(volume_rows), volume_title, tuple(lift_tiles),
     )
     cached = _heatmap_cache.get(user_id)
     if cached is not None and cached[0] == cache_key:
         return _GREETING, cached[1]
 
-    this_monday = today - dt.timedelta(days=today.weekday())
-    # Год целиком, а не от первой тренировки. Обрезка по началу истории имела
-    # смысл в render_year_heatmap, где ширина картинки росла вместе с числом
-    # недель, — там она экономила место. В сводке ширина фиксирована, поэтому та
-    # же обрезка пустоту не экономит, а создаёт: у человека с девятью неделями
-    # сетка превращалась в островок посреди пустой полосы. Пустые недели до старта
-    # рисуются серым, как в гитхабе, и заодно честно показывают, что человек тут
-    # недавно.
-    heatmap_start = this_monday - dt.timedelta(weeks=52)
-    # Счётчик под календарём считает только нарисованные клетки: подписать
-    # «312 тренировок» под сеткой, которая показывает год из трёх, значило бы
-    # объяснять картинку числом, которого в ней нет.
+    # 30 дней, а не от первой тренировки: короткое окно не растягивается под
+    # длину истории и не выглядит пустым островком у тех, кто тренируется
+    # недавно, — те же 30 дней и так уже подписаны в тайтле над плитками.
+    calendar_start = today - dt.timedelta(days=_CALENDAR_WINDOW_DAYS - 1)
     calendar_title, calendar_note = formatting.menu_calendar_caption(
-        sum(1 for day in dates if day >= heatmap_start)
+        sum(1 for day in dates if day >= calendar_start)
     )
     png = await asyncio.to_thread(
         charts.render_menu_dashboard,
-        Counter(dates), today, heatmap_start, headline, rank.name.upper(),
-        tiles, volume_rows, volume_title, lift_cards,
+        Counter(dates), today, calendar_start, headline, rank.name.upper(),
+        tiles, volume_rows, volume_title, lift_tiles,
         calendar_title, calendar_note,
-        formatting.MENU_LIFTS_TITLE if lift_cards else "", formatting.MENU_LIFTS_NOTE,
+        formatting.MENU_LIFTS_TITLE if lift_tiles else "", formatting.MENU_LIFTS_NOTE,
     )
     _heatmap_cache[user_id] = (cache_key, png)
     return _GREETING, png
