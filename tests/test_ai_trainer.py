@@ -1517,6 +1517,17 @@ async def test_prompt_requires_owning_a_correction():
     assert "посчитал неверно" in ai_trainer.SYSTEM_PROMPT
 
 
+async def test_prompt_knows_about_csv_import():
+    """Живой репорт: на голосовой вопрос «как импортировать историю тренировок
+    из Heavy?» тренер ответил «не вижу отдельной кнопки импорт... сам историю
+    из другого приложения подтянуть не умею» — хотя импорт CSV (и автораспознавание
+    колонок Hevy) в боте уже есть, просто не через инструмент тренера."""
+    prompt = ai_trainer.SYSTEM_PROMPT
+    assert "Импорт CSV" in prompt
+    assert "Hevy" in prompt
+    assert "нет и что перенести историю нельзя" in prompt
+
+
 async def test_prompt_does_not_promise_the_start_button_under_the_message():
     """Находка 43: тренер писал «Под сообщением превью и кнопка ▶️ Начать по
     ней», а под сообщением стояла одна «🗂 Забрать: …» — превью и «Начать по

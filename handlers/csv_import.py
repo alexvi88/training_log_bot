@@ -50,7 +50,7 @@ async def import_start(callback: CallbackQuery, state: FSMContext):
         callback,
         "📥 Пришли CSV-файл с колонками «дата, упражнение, вес, повторы».\n\n"
         "Также подойдёт импорт из Hevy: в Hevy — ⚙️ Settings → Export & Import "
-        "Data, файл CSV прилетит на почту.",
+        "Data, экспорт придёт на почту файлом CSV — скачай его и пришли мне сюда.",
         reply_markup=keyboards.cancel_keyboard("imp:cancel"),
     )
     await callback.answer()
@@ -246,8 +246,16 @@ _MONTH_ABBR_EN = {
     "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
     "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
 }
+# Hevy пишет дату на языке телефона, а не только по-английски — на русской
+# локали это "10 авг. 2026, 19:21" (с точкой после сокращения месяца, которой
+# нет у английского варианта).
+_MONTH_ABBR_RU = {
+    "янв": 1, "фев": 2, "мар": 3, "апр": 4, "май": 5, "июн": 6,
+    "июл": 7, "авг": 8, "сен": 9, "окт": 10, "ноя": 11, "дек": 12,
+}
+_MONTH_ABBR = {**_MONTH_ABBR_EN, **_MONTH_ABBR_RU}
 _HEVY_DATE_RE = re.compile(
-    r"^(?P<d>\d{1,2}) (?P<mon>[A-Za-z]{3}) (?P<y>\d{4})(?:,\s*\d{1,2}:\d{2})?$"
+    r"^(?P<d>\d{1,2}) (?P<mon>[A-Za-zА-Яа-яЁё]{3})\.? (?P<y>\d{4})(?:,\s*\d{1,2}:\d{2})?$"
 )
 
 
@@ -258,9 +266,9 @@ def _parse_row_date(text: str) -> dt.date:
     except ParseError:
         pass
     match = _HEVY_DATE_RE.match(text)
-    if match and match["mon"].lower() in _MONTH_ABBR_EN:
+    if match and match["mon"].lower() in _MONTH_ABBR:
         try:
-            return dt.date(int(match["y"]), _MONTH_ABBR_EN[match["mon"].lower()], int(match["d"]))
+            return dt.date(int(match["y"]), _MONTH_ABBR[match["mon"].lower()], int(match["d"]))
         except ValueError:
             raise ParseError(f"не понял дату «{text}»") from None
     try:
@@ -418,6 +426,15 @@ async def _finish_mapping(event, state: FSMContext) -> None:
     # человек не должен терять привычное название истории только потому, что
     # оно нашлось в каталоге под другим языком.
     if unresolved:
+        # Совпадение через модель — сетевой вызов, секунды, а импорт из Hevy
+        # почти всегда приносит нулевой процент точных совпадений (имена
+        # английские против русского каталога) и молчит всё это время — без
+        # знака, что файл вообще читается, выглядит как зависший бот.
+        progress_text = "⏳ Сверяю названия упражнений с каталогом, момент..."
+        if isinstance(event, CallbackQuery):
+            await event.message.answer(progress_text)
+        else:
+            await event.answer(progress_text)
         aliases = await ai_trainer.match_exercise_names_to_catalog(user_id, unresolved)
         for name, catalog_name in aliases.items():
             ex_id = await db.create_exercise_matching_catalog_name(user_id, name, catalog_name)
