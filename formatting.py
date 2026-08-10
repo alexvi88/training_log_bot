@@ -533,7 +533,6 @@ def _collapse_formatted_sets(formatted: list[str]) -> list[str]:
 
 def format_block_record(
     block: ExerciseBlockView, unit: str = "kg", show_extra: bool = True,
-    since: str | None = None,
 ) -> str | None:
     """Строка рекорда внутри блока упражнения — или None, если рекорда нет.
 
@@ -545,11 +544,8 @@ def format_block_record(
     Рекорд e1RM молчит при выключенных доп. цифрах: человек, убравший строку
     «↳ e1RM», не должен получать e1RM через заднюю дверь. Рекорд повторов
     показывается всегда — он про повторы, которые и так на экране.
-
-    since — дата, с которой стоял побитый рекорд; ставится, когда прошлый
-    лучший результат был на прошлой же тренировке (см. _render_single_block).
     """
-    parts = _block_record_parts(block, unit, show_extra, since)
+    parts = _block_record_parts(block, unit, show_extra)
     if parts is None:
         return None
     label, tail = parts
@@ -557,7 +553,7 @@ def format_block_record(
 
 
 def _block_record_parts(
-    block: ExerciseBlockView, unit: str, show_extra: bool = True, since: str | None = None
+    block: ExerciseBlockView, unit: str, show_extra: bool = True
 ) -> tuple[str, str] | None:
     """(подпись, продолжение) строки рекорда — общее у текстовой карточки и
     картинки, которые различаются только оформлением."""
@@ -567,8 +563,7 @@ def _block_record_parts(
         return "Рекорд", f"{reps} {word} в подходе"
     if block.record_e1rm_delta is not None and show_extra:
         u = UNIT_LABELS.get(unit, "кг")
-        when = f" ({since})" if since else ""
-        return "Рекорд e1RM", f"на {block.record_e1rm_delta:.1f}{u} выше прошлого лучшего{when}"
+        return "Рекорд e1RM", f"на {block.record_e1rm_delta:.1f}{u} выше прошлого"
     return None
 
 
@@ -584,8 +579,8 @@ def _render_single_block(block: ExerciseBlockView, show_extra: bool, unit: str =
     else:
         lines.append("  <i>подходов нет</i>")
     # Прошлый рекорд стоял с прошлой же тренировки — тогда «↑+5.7 vs 03.08» и
-    # «на 5.7 выше прошлого лучшего» это одно и то же число дважды. Дельта
-    # уезжает в строку рекорда вместе с датой, а строка e1RM остаётся голой.
+    # «на 5.7 выше прошлого» это одно и то же число дважды. Строка e1RM в этом
+    # случае остаётся голой — сравнение уже сказано строкой рекорда.
     prev_holds_the_record = (
         block.record_e1rm_delta is not None
         and block.prev_sets is not None
@@ -599,10 +594,7 @@ def _render_single_block(block: ExerciseBlockView, show_extra: bool, unit: str =
             delta = block.top_e1rm - block.prev_top_e1rm
             vs_prev = f" ({_delta_arrow(delta)}{delta:+.1f}{u} vs {when})"
         lines.append(f"  ↳ e1RM {block.top_e1rm:.1f}{u}{vs_prev}")
-    record = format_block_record(
-        block, unit, show_extra,
-        since=format_date_short(block.prev_started_at) if prev_holds_the_record else None,
-    )
+    record = format_block_record(block, unit, show_extra)
     if record:
         lines.append(f"  {record}")
     if block.prev_sets:
@@ -1659,7 +1651,7 @@ def build_workout_card(
         else:
             body.append("  — без подходов")
         # Рекорд едет и на картинку: её уносят в чат с друзьями, и «на 5.7кг
-        # выше прошлого лучшего» — ровно то, ради чего её уносят. ★ вместо 🔥
+        # выше прошлого» — ровно то, ради чего её уносят. ★ вместо 🔥
         # — картинку рисует matplotlib, эмодзи там выходят пустыми квадратами
         # (см. charts.render_workout_card), а звёздочка есть в шрифте.
         record = _block_record_parts(block, unit)

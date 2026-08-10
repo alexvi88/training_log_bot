@@ -555,12 +555,12 @@ def _record_block(**kwargs):
 
 def test_format_block_record_e1rm_delta():
     text = formatting.format_block_record(_record_block(record_e1rm_delta=9.1))
-    assert text == "🔥 <b>Рекорд e1RM</b> — на 9.1кг выше прошлого лучшего"
+    assert text == "🔥 <b>Рекорд e1RM</b> — на 9.1кг выше прошлого"
 
 
 def test_format_block_record_e1rm_respects_unit():
     text = formatting.format_block_record(_record_block(record_e1rm_delta=9.1), unit="lb")
-    assert text.endswith("9.1lb выше прошлого лучшего")
+    assert text.endswith("9.1lb выше прошлого")
 
 
 def test_format_block_record_e1rm_hidden_without_extra_stats():
@@ -585,7 +585,7 @@ def test_format_block_record_absent():
 
 def test_record_from_the_previous_session_prints_its_delta_once():
     """Прошлый рекорд стоял с прошлой тренировки: «+9.1 vs 03.08» и «на 9.1
-    выше прошлого лучшего» — одно число, и печатается оно один раз."""
+    выше прошлого» — одно число, и печатается оно один раз."""
     block = formatting.ExerciseBlockView(
         group_name="спина",
         exercise_name="Тяга",
@@ -596,7 +596,7 @@ def test_record_from_the_previous_session_prints_its_delta_once():
     block.record_e1rm_delta = block.top_e1rm - block.prev_top_e1rm
     text = formatting.build_workout_summary(dt.datetime(2026, 8, 7), [block])
     assert "vs 03.08" not in text
-    assert "выше прошлого лучшего (03.08)" in text
+    assert "выше прошлого" in text
 
 
 def test_record_older_than_the_previous_session_keeps_both_numbers():
@@ -612,7 +612,7 @@ def test_record_older_than_the_previous_session_keeps_both_numbers():
     )
     text = formatting.build_workout_summary(dt.datetime(2026, 8, 7), [block])
     assert "vs 03.08" in text
-    assert "на 4.0кг выше прошлого лучшего" in text
+    assert "на 4.0кг выше прошлого" in text
 
 
 def test_render_block_puts_record_next_to_its_sets():
@@ -629,7 +629,7 @@ def test_render_block_puts_record_next_to_its_sets():
     text = formatting.build_workout_summary(dt.datetime(2026, 8, 7), [block])
     lines = text.split("\n")
     e1rm_index = next(i for i, line in enumerate(lines) if "↳ e1RM" in line)
-    assert lines[e1rm_index + 1] == "  🔥 <b>Рекорд e1RM</b> — на 9.1кг выше прошлого лучшего"
+    assert lines[e1rm_index + 1] == "  🔥 <b>Рекорд e1RM</b> — на 9.1кг выше прошлого"
 
 
 # ---------- format_progress_screen ----------
@@ -1258,7 +1258,7 @@ def test_workout_card_image_carries_the_record_without_emoji():
         group_name="спина", exercise_name="Тяга", sets=[(110.0, 5)], record_e1rm_delta=5.7
     )
     _title, body, _footer, _note = formatting.build_workout_card(dt.datetime(2026, 8, 7), [block])
-    assert "  ★ Рекорд e1RM — на 5.7кг выше прошлого лучшего" in body
+    assert "  ★ Рекорд e1RM — на 5.7кг выше прошлого" in body
     assert "🔥" not in "".join(body)
 
 
