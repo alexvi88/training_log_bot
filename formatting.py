@@ -1505,11 +1505,9 @@ def weekly_volume_panel(
     return f"ОБЪЁМ {days_window_label(VOLUME_WINDOW_DAYS)} · {total} {word}", rows
 
 
-# Подписи блоков сводки, у которых нет своего числа в заголовке. Без них блок —
-# это просто клетки или просто цифры: календарь без подписи не отличить от
-# декорации, а «101 кг» под именем упражнения читается как поднятый вес, хотя это
-# расчётный максимум.
-MENU_CALENDAR_TITLE = "ПОСЕЩЕНИЯ · 30 ДНЕЙ"
+# Подпись блока плиток роста — у него нет своего числа в заголовке, и без
+# подписи «101 кг» под именем упражнения читалось бы как поднятый вес, хотя
+# это расчётный максимум.
 MENU_LIFTS_TITLE = "РОСТ e1RM ЗА 8 НЕДЕЛЬ"
 MENU_LIFTS_NOTE = "e1RM — РАСЧЁТНЫЙ МАКСИМУМ"
 
@@ -1527,17 +1525,6 @@ def days_window_label(days: int) -> str:
     каждый раз заново решать, что перед ним, — а решать тут нечего.
     """
     return f"ЗА {days} {plural_ru(days, ('ДЕНЬ', 'ДНЯ', 'ДНЕЙ'))}"
-
-
-def menu_calendar_caption(workouts: int) -> tuple[str, str]:
-    """(заголовок, примечание) для календаря: что это за клетки и сколько их.
-
-    Капсом, как все остальные подписи блоков. Единственная строчная надпись среди
-    них выглядела набранной другим кеглем, хотя кегль тот же: у капители больше
-    высота знака, и на одном размере она читается крупнее.
-    """
-    word = plural_ru(workouts, ("ТРЕНИРОВКА", "ТРЕНИРОВКИ", "ТРЕНИРОВОК"))
-    return MENU_CALENDAR_TITLE, f"{workouts} {word}"
 
 
 def menu_headline(dashboard) -> str:
@@ -1593,8 +1580,8 @@ def menu_tiles(dashboard, tonnage: float, records: int, unit: str = "kg") -> lis
 
 def menu_lift_tiles(
     growth: list[tuple[str, float, float]], unit: str = "kg"
-) -> list[tuple[str, str, str, bool]]:
-    """(имя, «+NN%», «227кг vs 220кг», лучший ли рост) — плитки роста e1RM.
+) -> list[tuple[str, str, str]]:
+    """(имя, «+NN%», «227кг vs 220кг») — плитки роста e1RM.
 
     `growth` — тройки (имя, e1RM до окна, e1RM внутри окна) от
     db.exercise_e1rm_growth. Упражнения без роста (нет базы до окна, или
@@ -1602,9 +1589,8 @@ def menu_lift_tiles(
     0%» ничего не сообщает и просто занимает место, которое мог бы занять
     настоящий прогресс по другому движению.
 
-    Сортировка — по проценту роста: так самый заметный прогресс всегда в
-    первой плитке, и «лучший рост» — это она и есть, без отдельного флага,
-    который дальше пришлось бы держать в синхроне с сортировкой.
+    Сортировка — по проценту роста: самый заметный прогресс всегда в первой
+    плитке.
 
     Имя не обрезается: это выбор, а не карточки со спарклайном, где ширина
     буквально занята линией. Полное название важнее аккуратной колонки.
@@ -1616,11 +1602,11 @@ def menu_lift_tiles(
         if before > 0 and window > before
     ]
     rows.sort(key=lambda r: (r[2] - r[1]) / r[1], reverse=True)
-    tiles: list[tuple[str, str, str, bool]] = []
-    for i, (name, before, window) in enumerate(rows[:_LIFT_TILE_COUNT]):
+    tiles: list[tuple[str, str, str]] = []
+    for name, before, window in rows[:_LIFT_TILE_COUNT]:
         pct = (window - before) / before * 100
         abs_str = f"{window:.0f}{u} vs {before:.0f}{u}"
-        tiles.append((name.upper(), f"+{pct:.0f}%", abs_str, i == 0))
+        tiles.append((name.upper(), f"+{pct:.0f}%", abs_str))
     return tiles
 
 

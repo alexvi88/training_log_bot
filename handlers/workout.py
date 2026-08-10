@@ -3,7 +3,6 @@
 import asyncio
 import datetime as dt
 import logging
-from collections import Counter
 from contextlib import suppress
 from dataclasses import dataclass
 from html import escape
@@ -680,16 +679,11 @@ _LIFT_WINDOW_WEEKS = 8
 # у человека где-то в его пятом-шестом по частоте движении и был.
 _LIFT_CANDIDATES = 12
 
-# Календарь посещений в сводке — 30 дней, а не год: короткое окно совпадает с
-# тем, что человек и так помнит, и не выглядит пустым островком у тех, кто
-# тренируется недавно.
-_CALENDAR_WINDOW_DAYS = 30
-
 
 async def _menu_view(user_id: int) -> tuple[str, bytes | None]:
     """Greeting, plus the summary image — headline, tiles, weekly volume per
-    muscle group, the flattened year calendar and the athlete's most-frequent
-    movements with their e1RM trend — once they have any finished workouts.
+    muscle group and the athlete's most-frequent movements with their e1RM
+    growth — once they have any finished workouts.
     """
     user = await db.get_user(user_id)
     today = timeutil.user_today(user)
@@ -747,18 +741,9 @@ async def _menu_view(user_id: int) -> tuple[str, bytes | None]:
     if cached is not None and cached[0] == cache_key:
         return _GREETING, cached[1]
 
-    # 30 дней, а не от первой тренировки: короткое окно не растягивается под
-    # длину истории и не выглядит пустым островком у тех, кто тренируется
-    # недавно, — те же 30 дней и так уже подписаны в тайтле над плитками.
-    calendar_start = today - dt.timedelta(days=_CALENDAR_WINDOW_DAYS - 1)
-    calendar_title, calendar_note = formatting.menu_calendar_caption(
-        sum(1 for day in dates if day >= calendar_start)
-    )
     png = await asyncio.to_thread(
         charts.render_menu_dashboard,
-        Counter(dates), today, calendar_start, headline, rank.name.upper(),
-        tiles, volume_rows, volume_title, lift_tiles,
-        calendar_title, calendar_note,
+        headline, rank.name.upper(), tiles, volume_rows, volume_title, lift_tiles,
         formatting.MENU_LIFTS_TITLE if lift_tiles else "", formatting.MENU_LIFTS_NOTE,
     )
     _heatmap_cache[user_id] = (cache_key, png)

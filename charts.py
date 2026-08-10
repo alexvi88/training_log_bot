@@ -304,7 +304,6 @@ DASH_GAP = 0.34               # распорка между виджетами, 
 DASH_PAD = 0.14               # распорка внутри группы, без линейки
 DASH_CARD = "#171d26"
 DASH_RULE = "#2b3543"
-DASH_GOLD = "#e0a845"   # рамка «сегодня» в календаре и лучшей плитки роста
 
 # Типографика сводки: шесть роле́й вместо одиннадцати случайных размеров. До этого
 # в одной картинке жили 6, 6.5, 7, 7.5, 8, 8.5, 9, 10, 13.5, 15 и 23 pt, причём
@@ -349,8 +348,10 @@ def _shrink_to_fit(fig, txt, max_width: float, min_size: float = 13.0) -> None:
 _LIFT_UNIT_IN = _DASH_VOL_STEP
 _LIFT_TOP = -1.4          # верх полосы — как у панели объёма
 _LIFT_COLS = 3
-_LIFT_ROW_H = 2.0         # высота одной плитки, в тех же единицах
-_LIFT_ROW_GAP = 0.3
+# Плитки крупнее, чем были: без календаря высота сводки освободилась, и это
+# место логичнее отдать самому виджету с прогрессом, а не оставлять пустым.
+_LIFT_ROW_H = 2.9         # высота одной плитки, в тех же единицах
+_LIFT_ROW_GAP = 0.35
 _LIFT_ROWS_TOP = (0.0, _LIFT_ROW_H + _LIFT_ROW_GAP)
 _LIFT_BOTTOM = _LIFT_ROWS_TOP[-1] + _LIFT_ROW_H + 0.25
 _DASH_LIFTS_H = _LIFT_UNIT_IN * (_LIFT_BOTTOM - _LIFT_TOP)
@@ -374,159 +375,58 @@ def _dash_section(ax, title: str, note: str = "", note_colour: str = HEATMAP_FIL
                 ha="right", va="center")
 
 
-# Календарь сводки — плоские клетки-числа месяца, а не гитхабовская тепловая
-# полоса по годам: 30 дней и так укладываются в 5-6 недель. Клетка держит
-# фиксированный размер (как раньше — 0.119 дюйма у гитхабовской версии), а не
-# выводится из полной ширины картинки: семь колонок, растянутых на всю ширину
-# в 6.67 дюйма, дают клетку почти в дюйм — вчетверо крупнее настоящего
-# календаря, и лишний воздух в блоке при этом раздувает всю картинку по
-# высоте, отчего соседние виджеты кажутся тоньше и мельче, чем есть.
-_DASH_CAL_CELL_IN = 0.42
-_DASH_CAL_COLUMNS = 7              # неделя — строка календаря, не колонка
-_DASH_CAL_TOP_UNITS = -2.1         # заголовок блока + строка дней недели
-_DASH_CAL_BOTTOM_PAD = 0.35
-_WEEKDAYS_RU = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
-
-
-def _dash_calendar_weeks(today: dt.date, start: dt.date) -> int:
-    """Сколько строк займёт календарь: окно почти никогда не совпадает с
-    границами недели, так что даже 30 дней иногда ложатся в шесть неполных
-    строк, а не в ровные пять."""
-    monday = start - dt.timedelta(days=start.weekday())
-    return (today - monday).days // 7 + 1
-
-
-def _dash_calendar_height(weeks: int) -> float:
-    """Высота блока календаря в дюймах — производная от размера клетки и числа
-    строк.
-
-    Считается, а не задаётся: у оси включён equal-аспект, и если высоту полосы
-    назначить independently, matplotlib впишет данные внутрь, оставив поля сверху
-    и снизу, и сетка перестанет попадать в свою же подпись.
-    """
-    return _DASH_CAL_CELL_IN * (weeks + _DASH_CAL_BOTTOM_PAD - _DASH_CAL_TOP_UNITS)
-
-
-def _dash_month_calendar(
-    ax, day_counts, today: dt.date, start: dt.date, gold: str,
-    title: str = "", note: str = "",
-) -> None:
-    """Календарь окна клетками с номером дня — заполненная клетка вместо
-    подписи внутри неё была бы вернее по духу гитхаба, но число даёт то, чего
-    тепловая карта никогда не давала: ответ на «а какого числа я был в зале»
-    без пересчёта клеток от края.
-
-    Сегодняшняя клетка обведена золотой рамкой — без заливки и подписи: заливка
-    сама по себе уже говорит «тренировался/нет», а вторая заливка поверх первой
-    означала бы два разных факта одним и тем же приёмом.
-    """
-    monday = start - dt.timedelta(days=start.weekday())
-    weeks = max((today - monday).days // 7 + 1, 1)
-    ax.set_aspect("equal")
-    # Клетка фиксированного размера, а не во всю ширину картинки: сетка из семи
-    # колонок центрируется в оставшемся просторе, как настоящий календарь на
-    # столе, а не растягивается в баннер.
-    x_units_total = DASH_WIDTH_IN / _DASH_CAL_CELL_IN
-    left_units = (x_units_total - _DASH_CAL_COLUMNS) / 2
-    ax.set_xlim(-left_units, x_units_total - left_units)
-    ax.set_ylim(weeks + _DASH_CAL_BOTTOM_PAD, _DASH_CAL_TOP_UNITS)
-
-    blended = ax.get_yaxis_transform()
-    if title:
-        ax.text(DASH_LEFT, -1.65, title, color="#9aa4b2", fontsize=DASH_FS_LABEL,
-                fontweight="bold", va="center", transform=blended)
-    if note:
-        ax.text(DASH_RIGHT, -1.65, note, color=HEATMAP_FILLED, fontsize=DASH_FS_CAPTION,
-                ha="right", va="center", transform=blended)
-
-    for col, label in enumerate(_WEEKDAYS_RU):
-        ax.text(col + 0.5, -0.55, label, color="#6b7684", fontsize=DASH_FS_MICRO,
-                ha="center", va="center")
-
-    for w in range(weeks):
-        for col in range(7):
-            day = monday + dt.timedelta(weeks=w, days=col)
-            if day < start or day > today:
-                continue
-            trained = day_counts.get(day, 0) > 0
-            colour = HEATMAP_FILLED if trained else HEATMAP_EMPTY
-            _rounded_cell(ax, col, w, 1, colour)
-            ax.text(col + 0.5, w + 0.5, str(day.day),
-                    color="#12161d" if trained else "#6b7684",
-                    fontsize=DASH_FS_MICRO, fontweight="bold" if trained else "normal",
-                    ha="center", va="center", zorder=2)
-            if day == today:
-                pad = 0.08
-                ax.add_patch(
-                    FancyBboxPatch(
-                        (col + pad, w + pad), 1 - 2 * pad, 1 - 2 * pad,
-                        boxstyle="round,pad=0,rounding_size=0.14",
-                        linewidth=1.6, edgecolor=gold, facecolor="none", zorder=3,
-                    )
-                )
-
-
 def _dash_growth_tiles(
-    fig, ax, tiles, fg: str, dim: str, ok: str, gold: str, title: str = "", note: str = "",
+    fig, ax, tiles, fg: str, dim: str, ok: str, title: str = "", note: str = "",
 ) -> None:
     """Плитки роста e1RM: 2 строки по 3, имя — процент — «227кг vs 220кг».
 
     `tiles` — то, что вернул formatting.menu_lift_tiles: только выросшие
-    движения, отсортированные по проценту роста, лучшее — первым. У первой
-    плитки рамка золотая — единственная пометка «лучший рост», без подписи и
-    эмодзи: рамка одной плитки среди одинаковых остальных читается сама, а
-    подпись или значок повторяли бы то же самое вторым способом.
+    движения, отсортированные по проценту роста.
 
     Имя не обрезается многоточием, но и не вылезает за плитку — вместо этого
-    сжимается по кеглю до нужной ширины, тем же приёмом, что и заголовок
-    (_shrink_to_fit): длинное каталожное имя из Hevy иначе рисовалось поверх
-    соседней плитки, а не переносилось и не обрезалось.
+    все шесть имён сжимаются по кеглю до общего размера, в котором помещается
+    самое длинное: единый кегль сначала находится для каждой плитки отдельно
+    (_shrink_to_fit), а затем всем шести назначается наименьший из найденных.
+    Разный кегль от плитки к плитке выглядел бы небрежностью, а не решением —
+    длинное каталожное имя из Hevy иначе либо рисовалось поверх соседней
+    плитки, либо становилось заметно мельче своих соседей.
     """
     ax.set_ylim(_LIFT_BOTTOM, _LIFT_TOP)
     if title:
         _dash_section(ax, title, note)
     tile_w = (DASH_RIGHT - DASH_LEFT - 0.02 * (_LIFT_COLS - 1)) / _LIFT_COLS
-    for i, (name, pct, abs_str, best) in enumerate(tiles):
+    pad_x = 0.028
+    name_texts = []
+    for i, (name, pct, abs_str) in enumerate(tiles):
         row, col = divmod(i, _LIFT_COLS)
         x = DASH_LEFT + col * (tile_w + 0.02)
         y = _LIFT_ROWS_TOP[row]
         _dash_card(ax, x, y, tile_w, _LIFT_ROW_H)
-        if best:
-            pad = 0.02
-            ax.add_patch(
-                FancyBboxPatch(
-                    (x + pad, y + pad), tile_w - 2 * pad, _LIFT_ROW_H - 2 * pad,
-                    boxstyle="round,pad=0,rounding_size=0.02",
-                    linewidth=1.6, edgecolor=gold, facecolor="none", zorder=1,
-                )
-            )
-        pad_x = 0.028
-        name_txt = ax.text(x + pad_x, y + _LIFT_ROW_H * 0.24, name, color=dim,
-                            fontsize=DASH_FS_CAPTION, va="center")
-        _shrink_to_fit(fig, name_txt, tile_w - 2 * pad_x, min_size=5.0)
+        name_texts.append(ax.text(x + pad_x, y + _LIFT_ROW_H * 0.24, name, color=dim,
+                                   fontsize=DASH_FS_CAPTION, va="center"))
         ax.text(x + pad_x, y + _LIFT_ROW_H * 0.58, pct, color=ok, fontsize=DASH_FS_VALUE,
                 fontweight="bold", va="center")
         ax.text(x + pad_x, y + _LIFT_ROW_H * 0.85, abs_str, color=dim,
                 fontsize=DASH_FS_MICRO, va="center")
+    for txt in name_texts:
+        _shrink_to_fit(fig, txt, tile_w - 2 * pad_x, min_size=5.0)
+    uniform_size = min((txt.get_fontsize() for txt in name_texts), default=DASH_FS_CAPTION)
+    for txt in name_texts:
+        txt.set_fontsize(uniform_size)
 
 
 def render_menu_dashboard(
-    day_counts: dict[dt.date, int],
-    today: dt.date,
-    start: dt.date,
     headline: str,
     badge: str = "",
     tiles: list[tuple[str, str]] | None = None,
     volume_rows: list[tuple[str, int, str]] | None = None,
     volume_title: str = "",
-    lift_tiles: list[tuple[str, str, str, bool]] | None = None,
-    calendar_title: str = "",
-    calendar_note: str = "",
+    lift_tiles: list[tuple[str, str, str]] | None = None,
     lifts_title: str = "",
     lifts_note: str = "",
 ) -> bytes:
-    """Сводка для сообщения меню: крупное число, плитки, коридор по группам,
-    30-дневный календарь и плитки роста e1RM.
+    """Сводка для сообщения меню: крупное число, плитки, коридор по группам и
+    плитки роста e1RM.
 
     Каждый виджет — своя ось со своей системой координат, между ними полосы-
     распорки. Воздух добавляется распоркой, а не растягиванием виджета: внутри
@@ -540,13 +440,10 @@ def render_menu_dashboard(
     """
     BG, FG, MUTED, DIM = "#12161d", "#e6e6e6", "#9aa4b2", "#6b7684"
     OK = "#45b97c"
-    GOLD = DASH_GOLD
 
     tiles = list(tiles or ())
     rows = list(volume_rows or ())
     lift_tiles = list(lift_tiles or ())
-
-    cal_weeks = _dash_calendar_weeks(today, start)
 
     # «pad:» — распорка без линейки, «gap:» — с линейкой. Заголовок и плитки
     # разделять нечем: это одна группа, крупное число и его расшифровка.
@@ -555,7 +452,6 @@ def render_menu_dashboard(
         layout += [("pad:tiles", DASH_PAD), ("tiles", _DASH_TILES_H)]
     if rows:
         layout += [("gap:vol", DASH_GAP), ("vol", 0.34 + _DASH_VOL_STEP * len(rows))]
-    layout += [("gap:cal", DASH_GAP), ("cal", _dash_calendar_height(cal_weeks))]
     if lift_tiles:
         layout += [("gap:lifts", DASH_GAP), ("lifts", _DASH_LIFTS_H)]
 
@@ -611,10 +507,8 @@ def render_menu_dashboard(
         ax = band("vol")
         _draw_volume_panel(ax, rows, volume_title, BG, FG, MUTED)
 
-    _dash_month_calendar(band("cal"), day_counts, today, start, GOLD, calendar_title, calendar_note)
-
     if lift_tiles:
-        _dash_growth_tiles(fig, band("lifts"), lift_tiles, FG, DIM, OK, GOLD, lifts_title, lifts_note)
+        _dash_growth_tiles(fig, band("lifts"), lift_tiles, FG, DIM, OK, lifts_title, lifts_note)
 
     for key in bands:
         if not key.startswith("gap:"):

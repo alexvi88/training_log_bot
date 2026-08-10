@@ -329,7 +329,7 @@ def test_the_week_tile_is_skipped_when_it_would_repeat_the_month():
 def test_growth_tiles_carry_percent_and_absolute_values():
     tiles = formatting.menu_lift_tiles([("Жим штанги лёжа", 100.0, 112.0)])
 
-    assert tiles == [("ЖИМ ШТАНГИ ЛЁЖА", "+12%", "112кг vs 100кг", True)]
+    assert tiles == [("ЖИМ ШТАНГИ ЛЁЖА", "+12%", "112кг vs 100кг")]
 
 
 def test_a_drop_does_not_get_a_tile():
@@ -348,15 +348,13 @@ def test_a_movement_without_a_baseline_is_dropped():
     assert formatting.menu_lift_tiles([("Жим", 0.0, 100.0)]) == []
 
 
-def test_best_growth_is_first_and_flagged():
+def test_best_growth_is_first():
     tiles = formatting.menu_lift_tiles([
         ("Жим", 100.0, 105.0),      # +5%
         ("Присед", 100.0, 120.0),   # +20%
     ])
 
     assert [t[0] for t in tiles] == ["ПРИСЕД", "ЖИМ"]
-    assert tiles[0][3] is True
-    assert tiles[1][3] is False
 
 
 def test_more_than_six_growing_exercises_is_capped():
@@ -378,14 +376,12 @@ def test_names_are_never_truncated():
 
 
 def _render(**kwargs):
-    today = dt.date(2026, 8, 4)
     base = dict(
-        day_counts={today: 1}, today=today, start=today - dt.timedelta(days=29),
         headline="9 недель подряд", badge="ТЯЖЕЛОВЕС",
         tiles=[("ТРЕНИРОВОК ЗА 30 ДНЕЙ", "12"), ("ТОННАЖ ЗА 7 ДНЕЙ", "24.5 т"), ("РЕКОРДОВ 7 Д", "3")],
         volume_rows=[("СПИНА", 14, "high"), ("ГРУДЬ", 9, "in_range"), ("НОГИ", 0, "none")],
         volume_title="ОБЪЁМ ЗА 7 ДНЕЙ · 23 ПОДХОДА",
-        lift_tiles=[("ЖИМ ЛЁЖА", "+12%", "112кг vs 100кг", True)],
+        lift_tiles=[("ЖИМ ЛЁЖА", "+12%", "112кг vs 100кг")],
     )
     base.update(kwargs)
     return charts.render_menu_dashboard(**base)
@@ -418,9 +414,9 @@ def test_a_full_summary_is_a_portrait():
             ("ДРУГОЕ", 0, "none"),
         ],
         lift_tiles=[
-            ("ЖИМ ЛЁЖА", "+12%", "112кг vs 100кг", True),
-            ("ПРИСЕД", "+13%", "158кг vs 140кг", False),
-            ("ТЯГА", "+7%", "192кг vs 180кг", False),
+            ("ЖИМ ЛЁЖА", "+12%", "112кг vs 100кг"),
+            ("ПРИСЕД", "+13%", "158кг vs 140кг"),
+            ("ТЯГА", "+7%", "192кг vs 180кг"),
         ],
     ))
 
@@ -452,7 +448,7 @@ def test_the_dividers_are_actually_drawn():
 
 
 def test_a_single_growth_tile_still_renders():
-    assert _render(lift_tiles=[("ЖИМ", "+5%", "105кг vs 100кг", True)])[:8] == b"\x89PNG\r\n\x1a\n"
+    assert _render(lift_tiles=[("ЖИМ", "+5%", "105кг vs 100кг")])[:8] == b"\x89PNG\r\n\x1a\n"
 
 
 def test_a_long_headline_stops_before_the_rank_badge():
@@ -475,62 +471,6 @@ def test_a_long_headline_stops_before_the_rank_badge():
     )
 
 
-def test_the_calendar_cell_does_not_grow_with_the_picture_width():
-    """Клетка держит свой размер, а не выводится из полной ширины картинки —
-    иначе семь колонок, растянутых на всю ширину, дают клетку почти в дюйм,
-    вчетверо крупнее настоящего календаря, и раздувают всю картинку по высоте.
-    """
-    assert charts._DASH_CAL_CELL_IN < 0.6
-
-
-def test_the_calendar_is_centred_not_stretched():
-    """Сетка из семи колонок при фиксированной клетке меньше полной ширины
-    картинки — и должна стоять по центру, а не прижиматься к левому краю."""
-    import io
-
-    from PIL import Image
-
-    today = dt.date(2026, 8, 4)
-    img = Image.open(io.BytesIO(_render(
-        day_counts={}, today=today, start=today - dt.timedelta(days=29),
-    ))).convert("RGB")
-    width = img.size[0]
-    grid_width = charts._DASH_CAL_COLUMNS * charts._DASH_CAL_CELL_IN * 150
-
-    assert grid_width < width * 0.7
-
-
-def test_a_window_that_does_not_align_to_weeks_takes_an_extra_row():
-    """30 дней почти никогда не укладываются в ровные недели: если день начала
-    окна не понедельник, последняя неполная неделя всё равно требует своей
-    строки, а не обрезается."""
-    today = dt.date(2026, 8, 4)   # вторник
-    this_monday = today - dt.timedelta(days=today.weekday())
-    aligned = this_monday - dt.timedelta(weeks=3)   # понедельник, ровно 4 недели до сегодня
-
-    assert charts._dash_calendar_weeks(today, aligned) == 4
-    assert charts._dash_calendar_weeks(today, aligned - dt.timedelta(days=1)) == 5
-
-
-def test_today_gets_a_gold_outline_not_a_fill():
-    """Сегодняшняя клетка выделяется рамкой без заливки: заливка уже занята
-    фактом «тренировался/нет», и второй смысл той же заливкой не влезает."""
-    import io
-
-    from PIL import Image
-
-    today = dt.date(2026, 8, 4)
-    img = Image.open(io.BytesIO(_render(
-        day_counts={}, today=today, start=today - dt.timedelta(days=29),
-    ))).convert("RGB")
-    gold = tuple(int(charts.DASH_GOLD[i:i + 2], 16) for i in (1, 3, 5))
-    width, height = img.size
-
-    assert any(
-        img.getpixel((x, y)) == gold for y in range(height) for x in range(width)
-    )
-
-
 def test_the_growth_tiles_share_row_pitch_with_the_volume_panel():
     """Плитки роста размечены тем же шагом, что и коридор объёма — так же, как
     раньше карточки движений: сравниваем шаг, а не пиксели, которые поедут от
@@ -540,23 +480,28 @@ def test_the_growth_tiles_share_row_pitch_with_the_volume_panel():
     assert abs(charts._LIFT_UNIT_IN * lift_units - charts._DASH_LIFTS_H) < 1e-9
 
 
-def test_only_the_best_growth_tile_gets_a_gold_border():
-    """Единственная пометка «лучший рост» — золотая рамка первой плитки, без
-    подписи и эмодзи: у второй плитки её быть не должно."""
-    import io
+def test_a_long_name_does_not_make_tiles_different_sizes():
+    """Раньше каждое имя сжималось независимо: у длинного каталожного имени
+    ('CHEST PRESS MACHINE - HORIZONTAL') кегль падал сильнее, чем у короткого
+    соседа, и плитки выглядели разнокалиберными. Теперь всем шести назначается
+    один и тот же кегль — наименьший из тех, что нашёл каждый сам по себе."""
+    fig = charts._new_figure(figsize=(charts.DASH_WIDTH_IN, 3), dpi=150)
+    ax = fig.add_axes([0, 0, 1, 1])
+    ax.axis("off")
+    ax.set_xlim(0, 1)
+    tiles = [
+        ("CHEST PRESS MACHINE - HORIZONTAL", "+60%", "115кг vs 72кг"),
+        ("ПРИСЕД", "+5%", "126кг vs 120кг"),
+        ("ТЯГА", "+3%", "180кг vs 175кг"),
+    ]
 
-    from PIL import Image
+    charts._dash_growth_tiles(fig, ax, tiles, "#e6e6e6", "#6b7684", "#45b97c")
 
-    img = Image.open(io.BytesIO(_render(lift_tiles=[
-        ("ЖИМ", "+20%", "120кг vs 100кг", True),
-        ("ПРИСЕД", "+5%", "126кг vs 120кг", False),
-    ]))).convert("RGB")
-    gold = tuple(int(charts.DASH_GOLD[i:i + 2], 16) for i in (1, 3, 5))
-    width, height = img.size
-
-    assert any(
-        img.getpixel((x, y)) == gold for y in range(height) for x in range(width)
-    )
+    name_sizes = {
+        txt.get_fontsize() for txt in ax.texts
+        if txt.get_text() in {t[0] for t in tiles}
+    }
+    assert len(name_sizes) == 1
 
 
 # ---------- экран меню ----------
