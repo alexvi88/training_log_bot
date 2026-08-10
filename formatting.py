@@ -984,6 +984,14 @@ def build_ai_comment_block(comment: str) -> str:
     return f"{DIVIDER}\n🤖 <b>Комментарий AI-тренера</b>\n{collapsible_if_long(ai_markdown_to_html(comment))}"
 
 
+def build_ai_comment_placeholder() -> str:
+    """Пока комментарий генерируется в фоне (handlers.workout._attach_ai_comment) —
+    карточка уходит без него и правится позже, и без этой строки человек видит
+    ровно те же цифры, что и без AI-комментариев вовсе, и не понимает, ждать ли
+    ответ или функция просто выключена."""
+    return f"{DIVIDER}\n🤖 <i>Разбираю тренировку...</i>"
+
+
 
 
 def _day_key(name: str) -> str:

@@ -193,14 +193,46 @@ async def test_ai_comment_generated_in_background_after_finalize(fresh_db, user_
 
     first_text = bot.edit_message_text.await_args_list[0].kwargs["text"]
     assert "Отличная работа!" not in first_text
+    # Регрессия: без плейсхолдера карточка без комментария неотличима от той, у
+    # кого AI-комментарии выключены вовсе — человек не понимает, ждать ли ответ.
+    assert "Разбираю тренировку" in first_text
 
     pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
     await asyncio.gather(*pending)
 
     last_text = bot.edit_message_text.await_args_list[-1].kwargs["text"]
     assert "Отличная работа!" in last_text
+    assert "Разбираю тренировку" not in last_text
     saved = await db.get_workout(workout_id)
     assert saved["ai_comment"] == "Отличная работа!"
+
+
+async def test_ai_comment_placeholder_is_cleared_on_failure(fresh_db, user_id, monkeypatch):
+    """Регрессия: на упавшем разборе правился только reply_markup, а плейсхолдер
+    «Разбираю тренировку...» так и оставался в тексте карточки навсегда — рядом
+    с кнопкой «Разобрать», которая противоречит тексту над ней."""
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    bench = await db.create_exercise(user_id, "Bench press", group_id)
+    workout_id = await db.create_workout(user_id)
+    await _log_bench_set(db, workout_id, bench, 100, 5)
+    await db.update_user(user_id, ai_comments_enabled=1)
+
+    monkeypatch.setattr(workout.ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(
+        workout.ai_trainer, "comment_on_workout", AsyncMock(side_effect=RuntimeError("llm down"))
+    )
+
+    bot = _make_bot()
+    state = await _make_state(user_id, workout_id=workout_id)
+    callback = _make_callback(user_id, bot)
+
+    await workout._finalize_workout(callback, state, note=None)
+    pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+    await asyncio.gather(*pending)
+
+    last_text = bot.edit_message_text.await_args_list[-1].kwargs["text"]
+    assert "Разбираю тренировку" not in last_text
 
 
 async def test_background_tasks_are_kept_referenced_until_they_finish(fresh_db, user_id):
