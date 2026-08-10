@@ -1304,8 +1304,9 @@ async def test_memory_reminder_is_silent_when_nothing_is_known(fresh_db, user_id
     assert await ai_trainer._memory_reminder(user_id) == ""
 
 
-async def test_resumed_conversation_has_no_preset_buttons(fresh_db, user_id, monkeypatch):
-    """Посреди разговора стартовые вопросы читались бы как потеря контекста."""
+async def test_returning_via_menu_still_offers_preset_buttons(fresh_db, user_id, monkeypatch):
+    """Заход через меню — отдельный экран входа, а не вклинивание в чужой ответ:
+    пресеты стоят на нём независимо от того, шёл ли уже разговор."""
     monkeypatch.setattr(ai_trainer.ai_trainer, "is_configured", lambda: True)
     state = await _make_state(user_id)
     await state.update_data(ai_history=[{"role": "user", "content": "как жим?"}])
@@ -1314,7 +1315,7 @@ async def test_resumed_conversation_has_no_preset_buttons(fresh_db, user_id, mon
     await ai_trainer.menu_ai(callback, state)
 
     kb = callback.message.answer.await_args.kwargs["reply_markup"]
-    assert not any(cb.startswith("ai:preset:") for cb in _callbacks(kb))
+    assert any(cb.startswith("ai:preset:") for cb in _callbacks(kb))
 
 
 async def test_preset_tap_seeds_the_conversation_with_the_full_question(

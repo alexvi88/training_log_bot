@@ -67,9 +67,14 @@ async def _attach_ai_comment(
         comment = await ai_trainer.comment_on_workout(user_id, workout_id)
     except Exception:
         logger.exception("AI trainer workout comment failed for workout %s", workout_id)
+        # base_text не несёт плейсхолдер «Разбираю тренировку...» — он был только
+        # в отправленном сообщении (см. _finalize_workout), и без правки текста
+        # тут человек навсегда остался бы с «разбираю», под которым внезапно
+        # появилась кнопка «Разобрать» — то есть с двумя взаимоисключающими
+        # сигналами сразу.
         with suppress(TelegramBadRequest):
-            await bot.edit_message_reply_markup(
-                chat_id=chat_id, message_id=message_id,
+            await bot.edit_message_text(
+                chat_id=chat_id, message_id=message_id, text=base_text, parse_mode="HTML",
                 reply_markup=keyboards.workout_card_keyboard(workout_id, show_ai_button=True),
             )
         return
@@ -80,9 +85,13 @@ async def _attach_ai_comment(
     if formatting.telegram_length(new_text) > formatting.MESSAGE_LIMIT:
         # A long card plus a comment can pass Telegram's cap; the edit is
         # suppressed on failure, so the comment would just never appear.
+        # Текст карточки тоже правим на base_text — иначе плейсхолдер «Разбираю
+        # тренировку...» так и остаётся под уже пришедшим отдельным сообщением
+        # с комментарием.
         with suppress(TelegramBadRequest):
-            await bot.edit_message_reply_markup(
-                chat_id=chat_id, message_id=message_id, reply_markup=card_kb
+            await bot.edit_message_text(
+                chat_id=chat_id, message_id=message_id, text=base_text, parse_mode="HTML",
+                reply_markup=card_kb,
             )
         with suppress(TelegramBadRequest):
             await bot.send_message(chat_id=chat_id, text=comment_block, parse_mode="HTML")
@@ -3262,17 +3271,25 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
         show_ai_button=existing_comment is None and not needs_ai_comment and ai_trainer.is_configured(),
         show_achievements=bool(new_badges),
     )
+    # Комментарий генерируется в фоне (_attach_ai_comment) и без этой строки
+    # карточка ничем не отличается от той, у кого AI-комментарии выключены —
+    # человек не понимает, ждать ли ответ или функции просто нет.
+    sent_text = full_text
+    if needs_ai_comment:
+        with_placeholder = full_text + "\n" + formatting.build_ai_comment_placeholder()
+        if formatting.telegram_length(with_placeholder) <= formatting.MESSAGE_LIMIT:
+            sent_text = with_placeholder
     message_id = data["live_message_id"]
     try:
         sent = await bot.edit_message_text(
-            chat_id=data["live_chat_id"], message_id=message_id, text=full_text,
+            chat_id=data["live_chat_id"], message_id=message_id, text=sent_text,
             parse_mode="HTML", reply_markup=card_kb,
         )
         if isinstance(sent, Message):
             message_id = sent.message_id
     except TelegramBadRequest:
         sent = await bot.send_message(
-            chat_id=data["live_chat_id"], text=full_text, parse_mode="HTML", reply_markup=card_kb
+            chat_id=data["live_chat_id"], text=sent_text, parse_mode="HTML", reply_markup=card_kb
         )
         message_id = sent.message_id
 

@@ -1,9 +1,9 @@
 """Кнопка «Разбери видео подхода» в быстром наборе.
 
 Разбор видео — единственная возможность бота, о которой нельзя догадаться: в чате
-нигде не написано «пришли ролик». Поэтому кнопка есть, пока человек за сегодня не
-разобрал ни одного видео, и исчезает после первого — дальше он уже знает, а место
-под ответом дорогое.
+нигде не написано «пришли ролик». Поэтому кнопка есть всегда, независимо от того,
+сколько видео уже разобрано сегодня, — дневную квоту сдерживает не кнопка, а
+ai_limits.KIND_VIDEO у самого разбора.
 """
 
 from types import SimpleNamespace
@@ -30,10 +30,13 @@ async def test_button_shown_before_first_video_today(fresh_db, user_id):
     assert VIDEO_LABEL in labels
 
 
-async def test_button_hidden_after_first_video_today(monkeypatch, fresh_db, user_id):
+async def test_button_still_shown_after_videos_today(monkeypatch, fresh_db, user_id):
+    """Регрессия: кнопка раньше пряталась после первого разбора — человек,
+    вернувшийся во второй раз за день, терял единственную подсказку про фичу,
+    хотя сам разбор всё ещё ограничен только дневной квотой, а не кнопкой."""
     monkeypatch.setattr(db, "get_ai_video_count_today", AsyncMock(return_value=1))
     labels = [label for label, _cb in await handler.intro_presets(user_id)]
-    assert VIDEO_LABEL not in labels
+    assert VIDEO_LABEL in labels
     # Остальные готовые вопросы никуда не делись.
     assert any("Как мой прогресс" in label for label in labels)
 

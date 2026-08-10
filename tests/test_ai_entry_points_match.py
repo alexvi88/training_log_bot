@@ -67,8 +67,9 @@ async def test_bottom_button_keeps_promise_of_the_intro_text(fresh_db, user_id):
     assert len(_labels(markup)) > 1
 
 
-async def test_resumed_conversation_has_no_presets(fresh_db, user_id):
-    """Посреди разговора готовые вопросы читались бы как «тренер забыл, о чём речь»."""
+async def test_returning_to_a_resumed_conversation_still_has_presets(fresh_db, user_id):
+    """Заход через меню — отдельный экран входа, а не вклинивание в чужой ответ:
+    пресеты стоят на нём независимо от того, шёл ли уже разговор."""
     state = _state(user_id)
     await state.update_data(ai_history=[{"role": "user", "content": "хай"}])
 
@@ -77,4 +78,4 @@ async def test_resumed_conversation_has_no_presets(fresh_db, user_id):
 
     shown = _labels(message.answer.await_args.kwargs["reply_markup"])
     for label, _cb in await ai_handler.intro_presets(user_id):
-        assert label not in shown
+        assert label in shown
