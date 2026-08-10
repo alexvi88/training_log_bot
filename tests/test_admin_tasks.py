@@ -2,6 +2,7 @@
 
 import asyncio
 import datetime as dt
+import os
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -148,10 +149,86 @@ async def test_daily_report_prunes_expired_share_cards(fresh_db, monkeypatch):
     bot.send_document = AsyncMock()
     monkeypatch.setattr(config, "ADMIN_ID", 1)
 
-    await admin_tasks._send_daily_report(bot)
+    await admin_tasks._send_daily_report(bot, backup_path=None)
 
     assert await fresh_db.get_shared_item(fresh) is not None
     assert await fresh_db.get_shared_item(stale) is None
+
+
+async def test_disk_backup_is_created_next_to_the_db(fresh_db, tmp_path, monkeypatch):
+    """Регрессия: единственный бэкап уходил документом в личку ADMIN_ID — если
+    админ потерян/сменился, бэкапов не остаётся вовсе. Теперь копия на диске
+    не зависит от Telegram и от ADMIN_ID."""
+    monkeypatch.setattr(config, "DB_PATH", str(tmp_path / "training_log.db"))
+    backup_dir = admin_tasks._backup_dir()
+
+    path = await admin_tasks._rotate_disk_backup()
+
+    assert os.path.exists(path)
+    assert os.path.dirname(path) == backup_dir
+
+
+def test_prune_stale_backups_keeps_only_the_newest_n(tmp_path):
+    backup_dir = str(tmp_path)
+    for day in ("2026-01-01", "2026-01-02", "2026-01-03"):
+        open(os.path.join(backup_dir, f"training_log_backup_{day}.db"), "w").close()
+
+    admin_tasks._prune_stale_backups(backup_dir, keep=2)
+
+    files = sorted(os.listdir(backup_dir))
+    assert files == ["training_log_backup_2026-01-02.db", "training_log_backup_2026-01-03.db"]
+
+
+def test_prune_stale_backups_does_nothing_when_keep_is_zero(tmp_path):
+    backup_dir = str(tmp_path)
+    open(os.path.join(backup_dir, "training_log_backup_2026-01-01.db"), "w").close()
+
+    admin_tasks._prune_stale_backups(backup_dir, keep=0)
+
+    assert os.listdir(backup_dir) == ["training_log_backup_2026-01-01.db"]
+
+
+async def test_backup_staleness_check_alerts_admin_when_backup_is_old(fresh_db, tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "DB_PATH", str(tmp_path / "training_log.db"))
+    monkeypatch.setattr(config, "ADMIN_ID", 42)
+    monkeypatch.setattr(config, "BACKUP_STALE_ALERT_HOURS", 26)
+    backup_dir = admin_tasks._backup_dir()
+    os.makedirs(backup_dir, exist_ok=True)
+    stale_path = os.path.join(backup_dir, "training_log_backup_2020-01-01.db")
+    open(stale_path, "w").close()
+    old_mtime = dt.datetime.now().timestamp() - 30 * 3600
+    os.utime(stale_path, (old_mtime, old_mtime))
+
+    bot = MagicMock()
+    bot.send_message = AsyncMock()
+
+    async def _stop(_seconds):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(admin_tasks.asyncio, "sleep", _stop)
+    with pytest.raises(asyncio.CancelledError):
+        await admin_tasks.run_backup_staleness_check(bot)
+
+    bot.send_message.assert_awaited_once()
+    assert bot.send_message.await_args.kwargs["chat_id"] == 42
+
+
+async def test_backup_staleness_check_stays_quiet_for_a_fresh_backup(fresh_db, tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "DB_PATH", str(tmp_path / "training_log.db"))
+    monkeypatch.setattr(config, "ADMIN_ID", 42)
+    await admin_tasks._rotate_disk_backup()
+
+    bot = MagicMock()
+    bot.send_message = AsyncMock()
+
+    async def _stop(_seconds):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(admin_tasks.asyncio, "sleep", _stop)
+    with pytest.raises(asyncio.CancelledError):
+        await admin_tasks.run_backup_staleness_check(bot)
+
+    bot.send_message.assert_not_awaited()
 
 
 @pytest.mark.asyncio

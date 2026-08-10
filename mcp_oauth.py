@@ -88,6 +88,15 @@ CONSENT_FAILURE_WINDOW = 600
 CONSENT_FAILURE_LIMIT_PER_IP = 10
 CONSENT_FAILURE_LIMIT_TOTAL = 60
 
+# Регистрация клиента (POST /register, RFC 7591) — анонимный эндпоинт по
+# спецификации: SDK и db.save_oauth_client ограничивают только размер
+# метаданных (см. db.OAUTH_CLIENT_METADATA_LIMIT), не частоту. Без счётчика
+# анонимный флуд может нарастить oauth_clients за часы — прополка неиспользуемых
+# регистраций идёт раз в сутки (db.purge_expired_oauth). Окно и предел — те же
+# порядки, что и у CONSENT_FAILURE_*, тот же класс защиты.
+REGISTER_RATE_LIMIT_WINDOW = 600
+REGISTER_RATE_LIMIT_PER_IP = 10
+
 # `client_id` статического токена. Токен выпускает бот, а не приложение, так что
 # клиента у него нет — но `AccessToken.client_id` обязателен, и осмысленное
 # значение лучше пустой строки: оно видно в логах вызовов.
@@ -371,6 +380,10 @@ class TrainingLogOAuthProvider:
         row = await db.get_oauth_access_token(token)
         if row is not None:
             if row["expires_at"] < time.time():
+                # Различаем «истёк» и «не найден» в логе — обе ветки раньше
+                # возвращали один и тот же None, и разобрать жалобу «почему
+                # отвалился коннектор» можно было только руками по базе.
+                logger.info("MCP OAuth: access token expired (client %s)", row["client_id"])
                 return None
             await db.touch_oauth_token(token)
             return AccessToken(
@@ -383,6 +396,7 @@ class TrainingLogOAuthProvider:
             )
         user_id = await db.resolve_mcp_token(token)
         if user_id is None:
+            logger.info("MCP OAuth: access token not found (neither OAuth nor static)")
             return None
         # Срок не выставляем: статический токен бессрочен, пока его не отозвали
         # в боте.
@@ -582,6 +596,44 @@ def _client_ip(request: Request) -> Optional[str]:
     if forwarded:
         return forwarded.split(",")[-1].strip() or None
     return request.client.host if request.client else None
+
+
+class RegisterRateLimitMiddleware:
+    """Ограничивает POST /register по IP — единственная защита, которой у
+    динамической регистрации клиентов не было вовсе (см. REGISTER_RATE_LIMIT_*).
+
+    Лимит держится в памяти процесса, а не в БД: это грубый предохранитель от
+    анонимного флуда, а не точный аудит вроде oauth_consent_failures, и не
+    обязан переживать рестарт контейнера.
+    """
+
+    def __init__(self, app):
+        self._app = app
+        self._hits: dict[str, list[float]] = {}
+
+    def _allow(self, ip: Optional[str]) -> bool:
+        key = ip or "(unknown)"
+        now = time.monotonic()
+        window_start = now - REGISTER_RATE_LIMIT_WINDOW
+        hits = [t for t in self._hits.get(key, []) if t > window_start]
+        hits.append(now)
+        self._hits[key] = hits
+        return len(hits) <= REGISTER_RATE_LIMIT_PER_IP
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or scope["method"] != "POST" or scope["path"] != "/register":
+            await self._app(scope, receive, send)
+            return
+        request = Request(scope, receive)
+        if self._allow(_client_ip(request)):
+            await self._app(scope, receive, send)
+            return
+        response = Response(
+            json.dumps({"error": "too_many_requests", "error_description": "Слишком много регистраций, попробуй позже."}),
+            status_code=429,
+            media_type="application/json",
+        )
+        await response(scope, receive, send)
 
 
 async def _named_client(consent) -> tuple[str, str]:

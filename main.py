@@ -292,8 +292,9 @@ async def main() -> None:
     setup_routers(dp)
 
     admin_job = asyncio.create_task(admin_tasks.run_daily_admin_jobs(bot))
+    backup_watch_job = asyncio.create_task(admin_tasks.run_backup_staleness_check(bot))
     engagement_job = asyncio.create_task(engagement.run_daily_engagement_job(bot))
-    background = [admin_job, engagement_job]
+    background = [admin_job, backup_watch_job, engagement_job]
     # Разовые релизные рассылки: уходят сами после разворота, один раз на
     # человека (отметка о доставке — в базе, см. announcements.py).
     background.append(asyncio.create_task(announcements.run_pending_announcements(bot)))

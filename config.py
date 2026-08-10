@@ -15,6 +15,17 @@ ADMIN_ID = int(os.getenv("ADMIN_ID")) if os.getenv("ADMIN_ID") else None
 # Deployment clock is UTC (see timeutil.py); 7 UTC == 10:00 MSK (UTC+3).
 ADMIN_REPORT_HOUR = int(os.getenv("ADMIN_REPORT_HOUR", "7"))
 
+# Второй экземпляр бэкапа — на диске рядом с рабочей базой, а не только
+# документом в личке ADMIN_ID (см. admin_tasks._rotate_disk_backup). Если
+# админ удалит сообщение, заблокирует бота или ADMIN_ID сменится при
+# редеплое, единственная копия не должна пропадать вместе с этим.
+BACKUP_KEEP_COUNT = int(os.getenv("BACKUP_KEEP_COUNT", "7"))
+
+# Сколько часов без успешного бэкапа считается тревогой — с запасом сверх
+# суток (джоба раз в сутки), чтобы один медленный прогон не поднимал ложную
+# тревогу.
+BACKUP_STALE_ALERT_HOURS = int(os.getenv("BACKUP_STALE_ALERT_HOURS", "26"))
+
 # Второй «свой» аккаунт — тот, с которого бот проверяется живьём. Отличается от
 # ADMIN_ID только тем, что не получает ночной отчёт: в лимитах (см. ai_limits.py)
 # оба ведут себя одинаково.

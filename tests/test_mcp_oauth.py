@@ -725,6 +725,28 @@ async def test_an_expired_access_token_stops_working(fresh_db, user_id):
     assert status == 401
 
 
+async def test_expired_and_missing_tokens_are_distinguishable_in_the_log(
+    fresh_db, user_id, caplog
+):
+    """Регрессия: обе ветки возвращали один и тот же None без единой строки в
+    логе — жалобу «почему отвалился коннектор» (истёк токен, потерян refresh,
+    отозван вручную) можно было разобрать только походом в базу руками."""
+    app = mcp_server.build_app()
+    with caplog.at_level(logging.INFO):
+        async with _running(app):
+            tokens = await _connect(app, user_id)
+            await fresh_db.conn().execute(
+                "UPDATE oauth_tokens SET expires_at = ? WHERE access_token = ?",
+                (time.time() - 1, tokens["access_token"]),
+            )
+            await fresh_db.conn().commit()
+            await _tool_call(app, tokens["access_token"])
+            await _tool_call(app, "totally-unknown-token")
+
+    assert "access token expired" in caplog.text
+    assert "access token not found" in caplog.text
+
+
 async def test_secrets_do_not_reach_the_logs(fresh_db, user_id, caplog):
     """В базе токены лежат открытыми — отдельного хранилища секретов у бота нет.
     Единственное, что можно сделать сверх этого: не разносить их по логам, куда
@@ -1019,6 +1041,30 @@ async def test_registration_refuses_a_giant_body(fresh_db, user_id):
     assert status == 400
     cur = await fresh_db.conn().execute("SELECT COUNT(*) AS n FROM oauth_clients")
     assert (await cur.fetchone())["n"] == 0
+
+
+async def test_registration_is_rate_limited_per_ip(fresh_db, user_id, monkeypatch):
+    """Регрессия: /register ограничивал только размер тела, а не частоту — с
+    одного адреса можно было регистрировать клиентов без счёта вообще, раздувая
+    oauth_clients до следующей суточной прополки."""
+    monkeypatch.setattr(mcp_oauth, "REGISTER_RATE_LIMIT_PER_IP", 3)
+    app = mcp_server.build_app()
+    async with _running(app):
+        for _ in range(3):
+            assert await _register(app)
+        status, _, body = await _asgi(
+            app,
+            "POST",
+            "/register",
+            json_body={
+                "client_name": "Claude",
+                "redirect_uris": [REDIRECT_URI],
+                "grant_types": ["authorization_code"],
+                "response_types": ["code"],
+                "token_endpoint_auth_method": "none",
+            },
+        )
+    assert status == 429, body
 
 
 def test_a_hostile_name_stays_text_and_stays_short():

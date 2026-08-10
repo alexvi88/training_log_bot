@@ -1052,6 +1052,25 @@ def history_list_keyboard(workouts, page: int, has_next: bool) -> InlineKeyboard
     return b.as_markup()
 
 
+def history_search_keyboard(workouts, page: int, has_next: bool) -> InlineKeyboardMarkup:
+    """Same tap targets as history_list_keyboard, but paging keeps the search
+    query alive (hist:spage:N vs hist:page:N) — a frequent exercise's old
+    workouts used to be unreachable past the first 20 matches."""
+    b = InlineKeyboardBuilder()
+    for w in workouts:
+        b.button(text=w["label"], callback_data=f"hist:item:{w['id']}")
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text=PAGE_PREV_TEXT, callback_data=f"hist:spage:{page - 1}"))
+    if has_next:
+        nav.append(InlineKeyboardButton(text=PAGE_NEXT_TEXT, callback_data=f"hist:spage:{page + 1}"))
+    b.adjust(2)
+    if nav:
+        b.row(*nav)
+    b.row(InlineKeyboardButton(text="🏠 Меню", callback_data="hist:menu"))
+    return b.as_markup()
+
+
 def repeat_list_keyboard(workouts, page: int, has_next: bool) -> InlineKeyboardMarkup:
     """Pick which past workout to repeat: one button per session, plus paging and
     a way back to the fresh-workout picker."""

@@ -2490,7 +2490,7 @@ async def log_set_voice(message: Message, state: FSMContext):
         await message.reply("⚠️ Не разобрал голосовое, попробуй ещё раз или напиши текстом.")
         return
 
-    line = voice_parse.transcript_to_sets_line(transcript or "")
+    line, dropped_sets = voice_parse.transcript_to_sets_line_with_hint(transcript or "")
     try:
         parsed = parse_sets_line(line) if line else None
     except ParseError:
@@ -2499,6 +2499,11 @@ async def log_set_voice(message: Message, state: FSMContext):
         heard = f" (услышал: «{escape(transcript)}»)" if transcript else ""
         await message.reply(f"Не понял вес и повторы из голосового{heard}. Скажи, например, «сто на восемь».")
         return
+    if dropped_sets:
+        # "100 8 три подхода" пишет один подход, а число подходов из речи молча
+        # выбрасывается (см. voice_parse) — без этой строки человек решит, что
+        # записались все три.
+        await message.reply("Записал один подход. Если их несколько — продиктуй каждый отдельно.")
 
     data = await state.get_data()
     data = await _discard_superseded_confirmation(message.bot, state, data)

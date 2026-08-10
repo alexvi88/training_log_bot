@@ -5,6 +5,8 @@ import datetime as dt
 import logging
 import os
 import tempfile
+from contextlib import suppress
+from typing import Optional
 
 from aiogram import Bot
 from aiogram.types import FSInputFile
@@ -13,6 +15,8 @@ import config
 import db
 
 logger = logging.getLogger(__name__)
+
+_BACKUP_PREFIX = "training_log_backup_"
 
 
 def _seconds_until_next_run(hour: int) -> float:
@@ -101,7 +105,86 @@ async def _build_cost_report(date_str: str) -> str:
     return "\n".join(lines)
 
 
-async def _send_daily_report(bot: Bot) -> None:
+def _backup_dir() -> str:
+    return os.path.join(os.path.dirname(config.DB_PATH) or ".", "backups")
+
+
+def _prune_stale_backups(backup_dir: str, keep: int) -> None:
+    """Держит на диске только keep самых свежих (по имени — оно же дата)
+    копий, удаляя остальное. keep<=0 значит «не чистить»."""
+    if keep <= 0:
+        return
+    existing = sorted(f for f in os.listdir(backup_dir) if f.startswith(_BACKUP_PREFIX))
+    for stale in existing[:-keep]:
+        with suppress(OSError):
+            os.remove(os.path.join(backup_dir, stale))
+
+
+async def _rotate_disk_backup() -> str:
+    """Вторая копия БД на диске рядом с рабочей — независимая от Telegram и от
+    ADMIN_ID. Единственная копия раньше уходила одним документом в личку
+    админа: удалённое сообщение, блокировка бота или смена ADMIN_ID при
+    редеплое оставляли бота вообще без бэкапов, и никто бы не узнал об этом до
+    аварии."""
+    backup_dir = _backup_dir()
+    os.makedirs(backup_dir, exist_ok=True)
+    name = f"{_BACKUP_PREFIX}{dt.date.today().isoformat()}.db"
+    path = os.path.join(backup_dir, name)
+    if os.path.exists(path):
+        # VACUUM INTO требует отсутствующий файл назначения — второй прогон в
+        # те же сутки (например, после рестарта) иначе падает на ровном месте.
+        os.remove(path)
+    await db.backup_to_file(path)
+    _prune_stale_backups(backup_dir, config.BACKUP_KEEP_COUNT)
+    return path
+
+
+def _latest_backup_age_hours() -> Optional[float]:
+    """Часов с последнего успешного бэкапа на диске, или None, если их нет вовсе
+    (свежий диск/первый запуск — это не тревога, а стартовое состояние)."""
+    backup_dir = _backup_dir()
+    if not os.path.isdir(backup_dir):
+        return None
+    files = [f for f in os.listdir(backup_dir) if f.startswith(_BACKUP_PREFIX)]
+    if not files:
+        return None
+    newest = max(
+        os.path.getmtime(os.path.join(backup_dir, f)) for f in files
+    )
+    return (dt.datetime.now().timestamp() - newest) / 3600
+
+
+async def run_backup_staleness_check(bot: Bot) -> None:
+    """Раз в час проверяет, не протухли ли бэкапы на диске, и алертит, если да.
+
+    Отдельная задача, а не проверка внутри суточной джобы: суточная джоба сама
+    может не запуститься (см. run_daily_admin_jobs) или упасть посреди работы
+    — а именно это и надо заметить, а не только исправно отчитываться, когда
+    всё и так хорошо.
+    """
+    while True:
+        try:
+            age = _latest_backup_age_hours()
+            if age is not None and age > config.BACKUP_STALE_ALERT_HOURS:
+                logger.error(
+                    "DB backup is stale: last one is %.1f hours old (alert threshold %s)",
+                    age, config.BACKUP_STALE_ALERT_HOURS,
+                )
+                if config.ADMIN_ID:
+                    with suppress(Exception):
+                        await bot.send_message(
+                            chat_id=config.ADMIN_ID,
+                            text=(
+                                f"🛑 Бэкап базы не обновлялся {age:.0f} ч. — "
+                                "проверь суточную джобу (admin_tasks.run_daily_admin_jobs)."
+                            ),
+                        )
+        except Exception:
+            logger.exception("Backup staleness check failed")
+        await asyncio.sleep(3600)
+
+
+async def _send_daily_report(bot: Bot, backup_path: Optional[str]) -> None:
     yesterday = dt.date.today() - dt.timedelta(days=1)
     yesterday_str = yesterday.isoformat()
     stats = await db.daily_workout_stats(yesterday_str)
@@ -123,16 +206,28 @@ async def _send_daily_report(bot: Bot) -> None:
     ).isoformat(timespec="seconds")
     await db.delete_shared_items_older_than(cutoff)
 
-    backup_name = f"training_log_backup_{dt.date.today().isoformat()}.db"
-    backup_path = os.path.join(tempfile.gettempdir(), backup_name)
-    if os.path.exists(backup_path):
-        os.remove(backup_path)
-    try:
-        await db.backup_to_file(backup_path)
-        await bot.send_document(chat_id=config.ADMIN_ID, document=FSInputFile(backup_path, filename=backup_name))
-    finally:
-        if os.path.exists(backup_path):
-            os.remove(backup_path)
+    # Документом уходит та же копия, что уже легла на диск (см.
+    # _rotate_disk_backup) — не делаем вторую только ради Telegram: если диск
+    # уже подтвердил бэкап, доставка в личку админа лишь дублирует его, а не
+    # является единственным способом его получить, как было раньше.
+    if backup_path and os.path.exists(backup_path):
+        await bot.send_document(
+            chat_id=config.ADMIN_ID,
+            document=FSInputFile(backup_path, filename=os.path.basename(backup_path)),
+        )
+    else:
+        # Ротация на диске не удалась — тогда хотя бы личное сообщение
+        # получает временную копию, чтобы день не остался вовсе без бэкапа.
+        backup_name = f"{_BACKUP_PREFIX}{dt.date.today().isoformat()}.db"
+        tmp_path = os.path.join(tempfile.gettempdir(), backup_name)
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        try:
+            await db.backup_to_file(tmp_path)
+            await bot.send_document(chat_id=config.ADMIN_ID, document=FSInputFile(tmp_path, filename=backup_name))
+        finally:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
 
 
 async def run_oauth_purge_job() -> None:
@@ -155,11 +250,21 @@ async def run_oauth_purge_job() -> None:
 
 
 async def run_daily_admin_jobs(bot: Bot) -> None:
-    if not config.ADMIN_ID:
-        return
+    """Бэкап на диск идёт каждый день независимо от ADMIN_ID — раньше вся
+    джоба (а с ней и единственный бэкап) не стартовала вовсе без своего
+    аккаунта админа, и смена/потеря ADMIN_ID при редеплое молча останавливала
+    бэкапы насовсем. Отчёт и документ в личку — по-прежнему только с ADMIN_ID.
+    """
     while True:
         await asyncio.sleep(_seconds_until_next_run(config.ADMIN_REPORT_HOUR))
+        backup_path = None
         try:
-            await _send_daily_report(bot)
+            backup_path = await _rotate_disk_backup()
         except Exception:
-            logger.exception("Daily admin report/backup failed")
+            logger.exception("Daily DB backup failed")
+        if not config.ADMIN_ID:
+            continue
+        try:
+            await _send_daily_report(bot, backup_path)
+        except Exception:
+            logger.exception("Daily admin report failed")

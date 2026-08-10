@@ -6,6 +6,8 @@
 запуске после релиза. Поэтому здесь база создаётся файлом, в неё вносится
 «старое» состояние, и `init_db` прогоняется по ней вторым разом — как в бою.
 """
+from unittest.mock import AsyncMock
+
 import aiosqlite
 
 import db as db_module
@@ -79,4 +81,28 @@ async def test_a_second_start_is_a_no_op(tmp_path):
     try:
         assert "stickers_enabled" not in await _columns("users")
     finally:
+        await db_module.close_db()
+
+
+async def test_wal_pragma_failure_falls_back_instead_of_crashing_startup(monkeypatch):
+    """Регрессия: на смонтированном сетевом томе PRAGMA journal_mode=WAL иногда
+    падает с "disk I/O error" (см. докстринг db.py) — старт бота не должен
+    зависеть от того, разрешит ли конкретный том WAL именно сегодня."""
+    calls = []
+
+    async def flaky_execute(sql, *a, **kw):
+        if sql == "PRAGMA journal_mode=WAL":
+            calls.append(sql)
+            raise aiosqlite.OperationalError("disk I/O error")
+        return await real_execute(sql, *a, **kw)
+
+    await db_module.init_db(":memory:")
+    real_execute = db_module._conn.execute
+    monkeypatch.setattr(db_module._conn, "execute", flaky_execute)
+    monkeypatch.setattr(db_module.asyncio, "sleep", AsyncMock())
+    try:
+        await db_module._enable_wal_with_fallback()  # must not raise
+        assert len(calls) == 3  # исчерпал все попытки и сдался
+    finally:
+        monkeypatch.setattr(db_module._conn, "execute", real_execute)
         await db_module.close_db()

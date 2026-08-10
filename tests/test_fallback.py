@@ -71,6 +71,22 @@ async def test_an_unhandled_button_answers_and_opens_the_menu(fresh_db, user_id)
     assert callback.bot.send_message.await_args.args[0] == user_id
 
 
+async def test_an_unhandled_button_is_logged_separately_by_prefix(fresh_db, user_id):
+    """Регрессия: обычная запись KIND_CALLBACK одинакова для живой и протухшей
+    кнопки — без отдельного вида события вспышку одного префикса (регресс
+    роутинга) было не отличить от фонового шума устаревших экранов."""
+    callback = _callback(user_id, data="wo:set:12:3")
+    state = MagicMock()
+    state.get_data = AsyncMock(return_value={})
+    state.clear = AsyncMock()
+    state.update_data = AsyncMock()
+
+    await fallback.unhandled_callback(callback, state)
+
+    rows = await fresh_db.count_unhandled_callbacks_by_prefix("2000-01-01T00:00:00")
+    assert [(r["prefix"], r["n"]) for r in rows] == [("wo:set", 1)]
+
+
 async def test_a_button_from_an_inaccessible_message_does_not_crash(fresh_db, user_id):
     """Сообщение старше суток Telegram отдаёт как `InaccessibleMessage`: у него
     нет ни `.text`, ни `.answer`. Обращаться к ним — `AttributeError` вместо

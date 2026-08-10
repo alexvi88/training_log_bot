@@ -57,6 +57,39 @@ async def show_history_list(callback: CallbackQuery, state: FSMContext, page: in
     await callback.answer()
 
 
+HISTORY_SEARCH_PAGE_SIZE = 20
+
+
+async def _render_search_page(user_id: int, query: str, page: int):
+    """Одна страница поиска по истории — общий кусок для первого показа и
+    перелистывания (hist:spage:N), чтобы старые тренировки частого упражнения
+    оставались достижимы, а не терялись за первыми 20 совпадениями."""
+    offset = page * HISTORY_SEARCH_PAGE_SIZE
+    workouts = await db.search_workouts_by_exercise(
+        user_id, query, limit=HISTORY_SEARCH_PAGE_SIZE, offset=offset
+    )
+    contents = await db.list_workout_contents([w["id"] for w in workouts])
+    items = []
+    entries = []
+    for w in workouts:
+        started = dt.datetime.fromisoformat(w["started_at"])
+        names, set_count = contents.get(w["id"], ([], 0))
+        items.append({"id": w["id"], "label": formatting.format_date_ru(started)})
+        entries.append((started, names, set_count))
+    total = await db.count_workouts_by_exercise(user_id, query)
+    shown_so_far = offset + len(entries)
+    has_next = shown_so_far < total
+    count_label = str(total) if shown_so_far >= total else f"{shown_so_far} из {total}"
+    kb = keyboards.history_search_keyboard(items, page, has_next)
+    text = formatting.build_history_list(
+        entries,
+        header=f"🔎 <b>Тренировки с «{escape(query)}»: {count_label}</b>",
+        footer="",
+        empty=f"🔎 Ничего не нашёл по «{escape(query)}».",
+    )
+    return text, kb
+
+
 @router.message(StateFilter(HistoryFlow.browsing), F.text)
 async def hist_search(message: Message, state: FSMContext):
     """Typing while browsing history filters it by exercise name.
@@ -70,29 +103,21 @@ async def hist_search(message: Message, state: FSMContext):
         await message.delete()
     if not query:
         return
-    workouts = await db.search_workouts_by_exercise(message.from_user.id, query)
-    contents = await db.list_workout_contents([w["id"] for w in workouts])
-    items = []
-    entries = []
-    for w in workouts:
-        started = dt.datetime.fromisoformat(w["started_at"])
-        names, set_count = contents.get(w["id"], ([], 0))
-        items.append({"id": w["id"], "label": formatting.format_date_ru(started)})
-        entries.append((started, names, set_count))
-    # search_workouts_by_exercise режет выдачу LIMIT 20 — len(entries) врёт
-    # про общее число совпадений, если их больше. Настоящий счёт берём
-    # отдельным запросом без лимита и честно показываем «показаны N из M»,
-    # когда список обрезан.
-    total = await db.count_workouts_by_exercise(message.from_user.id, query)
-    count_label = str(total) if total <= len(entries) else f"{len(entries)} из {total}"
-    kb = keyboards.history_list_keyboard(items, page=0, has_next=False)
-    text = formatting.build_history_list(
-        entries,
-        header=f"🔎 <b>Тренировки с «{escape(query)}»: {count_label}</b>",
-        footer="",
-        empty=f"🔎 Ничего не нашёл по «{escape(query)}».",
-    )
+    await state.update_data(history_search_query=query)
+    text, kb = await _render_search_page(message.from_user.id, query, page=0)
     await message.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
+@router.callback_query(StateFilter(HistoryFlow.browsing), F.data.startswith("hist:spage:"))
+async def hist_search_page(callback: CallbackQuery, state: FSMContext):
+    page = int(callback.data.split(":")[2])
+    query = (await state.get_data()).get("history_search_query", "")
+    if not query:
+        await callback.answer()
+        return
+    text, kb = await _render_search_page(callback.from_user.id, query, page)
+    await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML")
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("hist:page:"))

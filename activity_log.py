@@ -36,6 +36,12 @@ MAX_CONTENT_LEN = 1000
 
 KIND_MESSAGE = "message"
 KIND_CALLBACK = "callback"
+# Отдельный вид — для нажатий, до которых не дотянулся ни один обработчик
+# (handlers/fallback.py). Обычная запись KIND_CALLBACK пишется для любого
+# нажатия одинаково, живого или протухшего, поэтому по ней не отличить
+# редкую устаревшую кнопку от вспышки одного и того же префикса — то есть
+# от регресса роутинга. См. record_unhandled_callback.
+KIND_CALLBACK_UNHANDLED = "callback_unhandled"
 
 # Нетекстовые сообщения: сам файл не хранится, но факт «прислал голосовое» —
 # ровно та часть картины, которой иначе не видно.
@@ -104,6 +110,24 @@ async def record_callback(callback: CallbackQuery) -> None:
     label = button_label(callback)
     await db.log_user_event(
         callback.from_user.id, KIND_CALLBACK, _truncate(label or data or "(кнопка)"), data or None
+    )
+
+
+def callback_prefix(data: str) -> str:
+    """Первые два сегмента callback_data («hist:page», «wo:set») — достаточно
+    грубо, чтобы сгруппировать нажатия по экрану, но не по конкретному id."""
+    return ":".join(data.split(":")[:2]) if data else "(пусто)"
+
+
+async def record_unhandled_callback(callback: CallbackQuery) -> None:
+    """Нажатие, до которого не дотянулся ни один обработчик — отдельно от
+    обычных KIND_CALLBACK, чтобы вспышка одного префикса (регресс роутинга)
+    была видна отдельно от фонового шума легитимно устаревших экранов."""
+    if callback.from_user is None:
+        return
+    data = callback.data or ""
+    await db.log_user_event(
+        callback.from_user.id, KIND_CALLBACK_UNHANDLED, callback_prefix(data), data or None
     )
 
 

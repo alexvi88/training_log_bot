@@ -164,3 +164,24 @@ async def test_confirmation_without_duplicates_looks_as_before(fresh_db, user_id
     assert "уже есть" not in text
     assert "Загрузить?" in text
     assert "imp:save" in buttons and "imp:saveall" not in buttons
+
+
+async def test_same_day_different_exercise_is_not_treated_as_a_duplicate(
+    fresh_db, user_id, squat, alerts
+):
+    """Регрессия: раньше любая тренировка в этот день (пусть даже совсем другое
+    упражнение — ручная запись жима) заставляла молча пропустить весь день из
+    файла, хотя ни один подход в нём реально не задваивался."""
+    db = fresh_db
+    gid = await db.create_muscle_group(user_id, "Грудь")
+    bench = await db.create_exercise(user_id, "Жим", gid)
+    started_at = "2026-05-04T09:00:00"
+    workout_id = await db.create_finished_workout(user_id, started_at, started_at)
+    block_id = await db.create_block(workout_id, "single")
+    await db.add_block_exercise(block_id, bench, 0)
+    await db.add_set(block_id, bench, 1, 0, 60.0, 10, None)
+
+    await csv_import.import_save(_callback(user_id), await _state(user_id, TWO_DAYS[:1], squat))
+
+    assert await _totals(db, user_id) == (2, 3)
+    assert "пропущено" not in alerts[-1]

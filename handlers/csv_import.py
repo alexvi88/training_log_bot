@@ -3,6 +3,7 @@
 import csv
 import datetime as dt
 import io
+from typing import Optional
 
 from aiogram import F, Router
 from aiogram.filters import StateFilter
@@ -404,16 +405,36 @@ def _format_dates(date_isos: list[str], limit: int = 10) -> str:
     return shown
 
 
-async def _duplicate_dates(user_id: int, workouts: list[dict]) -> set[str]:
-    """Даты из файла, на которые у человека уже есть завершённая тренировка.
+async def _duplicate_dates(
+    user_id: int, workouts: list[dict], resolved: Optional[dict[str, int]] = None
+) -> set[str]:
+    """Даты из файла, на которые у человека уже есть завершённая тренировка С
+    ХОТЯ БЫ ОДНИМ ИЗ ТЕХ ЖЕ УПРАЖНЕНИЙ.
 
     Главная защита от повторной загрузки того же файла: раньше её не было
     вообще, и второй присланный файл молча удваивал историю (20 тренировок и
     400 подходов превращались в 40 и 800), а пересчёт ачивок закреплял это по
     удвоенному тоннажу. Разгребать приходилось руками, по одной тренировке.
+
+    Сравнение раньше шло по одной дате целиком: любая существующая тренировка
+    в этот день (даже ручная запись веса или совсем другое упражнение)
+    заставляла молча пропустить весь день из файла. resolved (name → exercise
+    id) сужает совпадение до реального пересечения упражнений — без него
+    (например, до разрешения незнакомых названий) откатываемся к старому
+    поведению по дате целиком, потому что сравнивать пока не с чем.
     """
-    have = set(await db.list_finished_workout_dates(user_id))
-    return {w["date"] for w in workouts if w["date"] in have}
+    if resolved is None:
+        have_dates = set(await db.list_finished_workout_dates(user_id))
+        return {w["date"] for w in workouts if w["date"] in have_dates}
+    have = await db.list_finished_workout_exercise_ids_by_date(user_id)
+    dup = set()
+    for w in workouts:
+        existing = have.get(w["date"])
+        if not existing:
+            continue
+        if any(resolved.get(entry["name"]) in existing for entry in w["entries"]):
+            dup.add(w["date"])
+    return dup
 
 
 async def show_confirmation(event, state: FSMContext) -> None:
@@ -421,7 +442,7 @@ async def show_confirmation(event, state: FSMContext) -> None:
     workouts = data["imp_workouts"]
     total_sets = sum(len(entry["sets"]) for w in workouts for entry in w["entries"])
     total_exercises = sum(len(w["entries"]) for w in workouts)
-    dup = await _duplicate_dates(event.from_user.id, workouts)
+    dup = await _duplicate_dates(event.from_user.id, workouts, data.get("imp_resolved"))
     fresh = [w for w in workouts if w["date"] not in dup]
 
     w_word = formatting.plural_ru(len(workouts), ("тренировка", "тренировки", "тренировок"))
@@ -466,7 +487,7 @@ async def import_save(callback: CallbackQuery, state: FSMContext):
 
     # Считаем дубли здесь, а не только на экране подтверждения: между показом и
     # нажатием могла появиться тренировка, да и «Загрузить» легко нажать дважды.
-    skip = set() if force else await _duplicate_dates(user_id, workouts)
+    skip = set() if force else await _duplicate_dates(user_id, workouts, resolved)
     to_import = [w for w in workouts if w["date"] not in skip]
 
     if not to_import:
