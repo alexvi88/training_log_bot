@@ -1095,6 +1095,7 @@ def _make_buildprog_callback(user_id: int):
     intro_screen.chat = SimpleNamespace(id=user_id)
     intro_screen.message_id = 9
     intro_screen.answer = AsyncMock(return_value=thinking_placeholder)
+    intro_screen.reply = AsyncMock()
 
     screen = MagicMock()
     screen.chat = SimpleNamespace(id=user_id)
@@ -1628,6 +1629,29 @@ async def test_ai_build_program_refuses_before_burning_the_screen(fresh_db, user
     # И экран не должен утащить человека в чат с тренером, куда он не попал.
     assert await state.get_state() is None
     assert user_id not in ai_trainer._busy
+
+
+async def test_ai_build_program_preview_still_asks_the_model(fresh_db, user_id, monkeypatch):
+    """Регрессия: превью-предупреждение своим аккаунтам раньше съедало сам
+    вопрос — «Понятно» лечило только следующую попытку, а этот запрос
+    приходилось слать заново. Модель должна получить вопрос сразу же."""
+    monkeypatch.setattr(ai_trainer.ai_trainer, "is_configured", lambda: True)
+    ask = AsyncMock(return_value="Ответ тренера")
+    monkeypatch.setattr(ai_trainer.ai_trainer, "ask", ask)
+    monkeypatch.setattr(
+        ai_trainer.ai_limits, "check",
+        AsyncMock(return_value=ai_trainer.ai_limits.Block(
+            kind="question", log="question preview", user_text="лимит рядом", preview=True,
+        )),
+    )
+
+    state = await _make_state(user_id)
+    callback = _make_buildprog_callback(user_id)
+    callback.message.reply = AsyncMock()
+
+    await ai_trainer.ai_build_program(callback, state)
+
+    ask.assert_awaited()
 
 
 # ---------- кнопка отката под ответом тренера ----------
