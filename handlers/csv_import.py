@@ -38,13 +38,7 @@ SYNONYMS = {
     "reps": {"повторы", "reps"},
     "round": {"подход", "раунд", "round", "set", "round_index", "set_index"},
     "rpe": {"rpe", "рпе"},
-    # Не обязательное поле — участвует только в автоопределении: если колонка
-    # нашлась, разминочные подходы (Hevy: set_type=warmup) не попадают в
-    # историю. Иначе разминка с лёгким весом искажала бы рекорды и тоннаж
-    # ровно так же, как и обычный подход, — но пользователь её таковой не считал.
-    "type": {"set_type", "тип", "тип подхода"},
 }
-_WARMUP_TYPES = {"warmup", "разминка", "разминочный"}
 
 
 @router.callback_query(F.data == "settings:import")
@@ -306,12 +300,6 @@ def _build_workout_groups(rows: list[list[str]], mapping: dict[str, int], first_
 
     for line_no, row in enumerate(rows, start=first_line):
         if not row or all(not c.strip() for c in row):
-            continue
-        # Разминочный подход (Hevy: set_type=warmup) — не рабочий: лёгкий вес
-        # на нём иначе искажал бы рекорды и тоннаж наравне с обычным.
-        if "type" in mapping and mapping["type"] < len(row) and (
-            row[mapping["type"]].strip().lower() in _WARMUP_TYPES
-        ):
             continue
         try:
             date_val = _parse_row_date(row[mapping["date"]])

@@ -141,3 +141,10 @@ async def test_help_spells_out_the_term_on_the_full_screen():
     expanded half: the short screen answers "как записать подход" and nothing else."""
     assert "расчётный максимум в упражнении" in workout._HELP_FULL
     assert "e1RM" not in workout._HELP_SHORT
+
+
+async def test_help_full_points_migrating_users_to_csv_import():
+    """Онбординг намеренно не упоминает импорт (место дороже), но человек с
+    историей из Hevy/Strong должен где-то узнать, что не обязан начинать с нуля."""
+    assert "Импорт CSV" in workout._HELP_FULL
+    assert "Hevy" in workout._HELP_FULL

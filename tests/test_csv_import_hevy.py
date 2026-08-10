@@ -1,10 +1,11 @@
 """Импорт нативного экспорта Hevy — самого частого источника миграции.
 
-Раньше файл из Hevy (start_time, exercise_title, weight_kg, set_index,
-set_type — колонки, не совпадающие ни с одним из наших синонимов) не
-автоопределялся ни по одному из четырёх обязательных полей: человек проходил
-маппинг с нуля, а разминочные подходы (set_type=warmup) писались в историю
-наравне с рабочими, искажая рекорды и тоннаж.
+Раньше файл из Hevy (start_time, exercise_title, weight_kg, set_index —
+колонки, не совпадающие ни с одним из наших синонимов) не автоопределялся ни
+по одному из четырёх обязательных полей: человек проходил маппинг с нуля.
+Разминочные подходы (Hevy: set_type) импортируются как обычные — у нас нет
+своего понятия «разминка», и фильтровать их не стали: пусть решает сам
+пользователь, стоит ли их чистить руками.
 """
 
 from types import SimpleNamespace
@@ -40,20 +41,17 @@ def test_hevy_columns_auto_detect_without_manual_mapping():
     mapping = _auto_detect(headers)
     assert {"date", "exercise", "weight", "reps"} <= mapping.keys()
     assert mapping["round"] == headers.index("set_index")
-    assert mapping["type"] == headers.index("set_type")
 
 
-def test_warmup_sets_are_dropped_from_history():
+def test_all_sets_import_including_warmups():
     headers, rows, _ = _read_table(HEVY_SAMPLE)
     mapping = _auto_detect(headers)
 
     workouts = _build_workout_groups(rows, mapping)
 
     (workout,) = workouts
-    names = [e["name"] for e in workout["entries"]]
-    assert "Bench Press (Barbell)" in names
     bench_sets = next(e for e in workout["entries"] if e["name"] == "Bench Press (Barbell)")["sets"]
-    assert bench_sets == [[100.0, 8, None]]  # только рабочий подход, разминка не попала
+    assert bench_sets == [[50.0, 10, None], [100.0, 8, None]]
 
 
 def test_bodyweight_style_blank_weight_still_imports():
@@ -88,4 +86,4 @@ async def test_hevy_file_goes_from_upload_straight_to_confirmation(fresh_db, use
     assert message.reply.await_count == 0, "никаких «не понял дату» и вопросов маппинга"
     assert await state.get_state() == ImportFlow.confirming
     text = message.answer.await_args.args[0]
-    assert "1 тренировка" in text and "2 подхода" in text  # разминка не считается
+    assert "1 тренировка" in text and "3 подхода" in text
