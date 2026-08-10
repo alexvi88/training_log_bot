@@ -472,3 +472,31 @@ async def test_release_buttons_lead_into_the_two_features():
     source = (Path(__file__).resolve().parent.parent / "handlers" / "ai_trainer.py").read_text()
     for data in callbacks:
         assert f'F.data == "{data}"' in source
+
+
+async def test_ai_actions_release_text_speaks_in_the_coach_voice():
+    ann = announcements.RELEASE_AI_TRAINER_ACTIONS
+    assert ann.text.startswith("ПРИВЕТ АТЛЕТ, ")
+    assert len(ann.text) <= announcements.CAPTION_LIMIT
+
+
+async def test_ai_actions_release_button_leads_into_the_trainer_chat():
+    callbacks = [data for _, data in announcements.RELEASE_AI_TRAINER_ACTIONS.buttons]
+    assert callbacks == ["menu:ai"]
+
+    source = (Path(__file__).resolve().parent.parent / "handlers" / "ai_trainer.py").read_text()
+    for data in callbacks:
+        assert f'F.data == "{data}"' in source
+
+
+async def test_ai_actions_release_only_advertises_tools_that_actually_exist():
+    """Пуш обязан быть правдой (TONE_OF_VOICE.md) — примеры фраз должны бить в
+    реально существующие write-инструменты тренера, а не в то, чего ещё нет."""
+    import ai_trainer
+
+    write_tools = set(ai_trainer._ACTION_TOOLS) | set(ai_trainer._UNDOABLE_TOOLS)
+    assert {
+        "log_bodyweight", "log_food", "create_exercise", "rename_exercise",
+        "move_exercise_to_group", "archive_exercise", "copy_program",
+        "rename_program", "merge_programs", "delete_program", "share_program",
+    } <= write_tools
