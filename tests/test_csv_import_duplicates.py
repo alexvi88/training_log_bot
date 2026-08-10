@@ -122,6 +122,49 @@ async def test_overlapping_file_imports_only_the_new_dates(fresh_db, user_id, sq
     assert "пропущено 1" in alerts[-1]
 
 
+async def test_double_tap_on_save_does_not_import_the_file_twice(
+    fresh_db, user_id, squat, alerts
+):
+    """Живой сценарий: два колбэка «Загрузить» почти одновременно (двойной тап,
+    или Telegram, повторно доставивший тот же апдейт) — раньше оба видели
+    одинаковый ImportFlow.confirming и оба независимо писали файл в базу."""
+    import asyncio
+
+    db = fresh_db
+
+    await asyncio.gather(
+        csv_import.import_save(_callback(user_id), await _state(user_id, TWO_DAYS, squat)),
+        csv_import.import_save(_callback(user_id), await _state(user_id, TWO_DAYS, squat)),
+    )
+
+    assert await _totals(db, user_id) == (2, 3)
+
+
+async def test_a_failing_workout_does_not_abort_the_rest_of_the_import(
+    fresh_db, user_id, squat, alerts, monkeypatch
+):
+    """Одна тренировка сломалась посреди записи (DB-ошибка, необработанное
+    исключение) — соседние в том же файле не должны от этого пострадать, а
+    сломанная не должна остаться в базе наполовину записанной."""
+    db = fresh_db
+    real_add_set = db.add_set
+    calls = {"n": 0}
+
+    async def flaky_add_set(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 3:  # оба подхода первой тренировки прошли, это уже вторая
+            raise RuntimeError("boom")
+        return await real_add_set(*args, **kwargs)
+
+    monkeypatch.setattr(db, "add_set", flaky_add_set)
+
+    await csv_import.import_save(_callback(user_id), await _state(user_id, TWO_DAYS, squat))
+
+    # Первая тренировка (2 подхода) успела записаться целиком, вторая — нет ни капли.
+    assert await _totals(db, user_id) == (1, 2)
+    assert "не получилось" in alerts[-1]
+
+
 async def test_load_everything_button_still_allows_a_deliberate_duplicate(
     fresh_db, user_id, squat, alerts
 ):
