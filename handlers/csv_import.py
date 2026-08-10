@@ -4,6 +4,7 @@ import csv
 import datetime as dt
 import io
 import re
+from html import escape
 from typing import Optional
 
 from aiogram import F, Router
@@ -47,8 +48,9 @@ async def import_start(callback: CallbackQuery, state: FSMContext):
     await state.set_state(ImportFlow.awaiting_file)
     await ui.safe_edit(
         callback,
-        "📥 Пришли CSV-файл с колонками «дата, упражнение, вес, повторы» "
-        "(подойдёт экспорт из этого бота или из Hevy).",
+        "📥 Пришли CSV-файл с колонками «дата, упражнение, вес, повторы».\n\n"
+        "Также подойдёт импорт из Hevy: в Hevy — ⚙️ Settings → Export & Import "
+        "Data, файл CSV прилетит на почту.",
         reply_markup=keyboards.cancel_keyboard("imp:cancel"),
     )
     await callback.answer()
@@ -411,12 +413,14 @@ async def _finish_mapping(event, state: FSMContext) -> None:
     # Импорт часто приносит чужие названия (Hevy пишет по-английски: "Bench
     # Press (Barbell)"), которые не совпадут с русским каталогом ни разу — но
     # часто означают ровно то же движение. Модель переводит их в точные
-    # имена каталога на лету; совпавшее форкается сразу с фото и описанием
-    # техники, а не голым, как обычное «создать новое».
+    # имена каталога на лету; совпавшее заводится под СВОИМ именем (тем, что
+    # было в файле), а фото и описание техники подтягиваются от шаблона —
+    # человек не должен терять привычное название истории только потому, что
+    # оно нашлось в каталоге под другим языком.
     if unresolved:
         aliases = await ai_trainer.match_exercise_names_to_catalog(user_id, unresolved)
         for name, catalog_name in aliases.items():
-            ex_id = await db.get_or_create_user_exercise_by_name(user_id, catalog_name)
+            ex_id = await db.create_exercise_matching_catalog_name(user_id, name, catalog_name)
             if ex_id is not None:
                 resolved[name] = ex_id
         unresolved = [n for n in unresolved if n not in aliases]
@@ -436,13 +440,6 @@ async def on_exercises_resolved(event, state: FSMContext) -> None:
     resolved.update(data.get("resolve_resolved") or {})
     await state.update_data(imp_resolved=resolved)
     await show_confirmation(event, state)
-
-
-def _format_dates(date_isos: list[str], limit: int = 10) -> str:
-    shown = ", ".join(formatting.format_date_ru(dt.date.fromisoformat(d)) for d in date_isos[:limit])
-    if len(date_isos) > limit:
-        shown += f" и ещё {len(date_isos) - limit}"
-    return shown
 
 
 async def _duplicate_dates(
@@ -477,42 +474,62 @@ async def _duplicate_dates(
     return dup
 
 
+def _import_entry_lines(entries: list[dict]) -> list[str]:
+    """Упражнения одной тренировки, каждое со своими подходами — тот же
+    терсный стиль, что и «повторить тренировку» / живой трекер уже
+    завершённого упражнения: имя, потом веса×повторы через запятую."""
+    lines = []
+    for entry in entries:
+        lines.append(f"<b>{escape(entry['name'])}</b>")
+        lines.append(", ".join(formatting.format_set(w, r, rpe) for w, r, rpe in entry["sets"]))
+    return lines
+
+
+async def _render_confirmation_page(event, state: FSMContext, page: int) -> None:
+    """Одна тренировка из файла — подробно, как карточка в истории, с
+    переключалками между тренировками файла. Решение «загрузить» общее для
+    всех и не листается вместе со страницами: дубли не пропускаются молча —
+    отмечены прямо в заголовке той тренировки, которую заденут."""
+    data = await state.get_data()
+    workouts = data["imp_workouts"]
+    dup = set(data.get("imp_dup") or [])
+    page = max(0, min(page, len(workouts) - 1))
+    w = workouts[page]
+
+    date_label = formatting.format_date_ru(dt.date.fromisoformat(w["date"]))
+    header = f"<b>{page + 1} из {len(workouts)} · {date_label}</b>"
+    if w["date"] in dup:
+        header += "\n⚠️ Эта дата уже есть в истории — пропущу при обычной загрузке."
+    total_sets = sum(len(e["sets"]) for e in w["entries"])
+    e_word = formatting.plural_ru(len(w["entries"]), ("упражнение", "упражнения", "упражнений"))
+    s_word = formatting.plural_ru(total_sets, ("подход", "подхода", "подходов"))
+    lines = [header, f"{len(w['entries'])} {e_word}, {total_sets} {s_word}", ""]
+    lines.extend(_import_entry_lines(w["entries"]))
+
+    new_count = len(workouts) - len(dup)
+    kb = keyboards.csv_import_page_keyboard(page, len(workouts), new_count, len(dup))
+    text = "\n".join(lines)
+    await state.update_data(imp_confirm_page=page)
+    if isinstance(event, CallbackQuery):
+        await ui.safe_edit(event, text, reply_markup=kb, parse_mode="HTML")
+    else:
+        await event.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
 async def show_confirmation(event, state: FSMContext) -> None:
     data = await state.get_data()
     workouts = data["imp_workouts"]
-    total_sets = sum(len(entry["sets"]) for w in workouts for entry in w["entries"])
-    total_exercises = sum(len(w["entries"]) for w in workouts)
     dup = await _duplicate_dates(event.from_user.id, workouts, data.get("imp_resolved"))
-    fresh = [w for w in workouts if w["date"] not in dup]
-
-    w_word = formatting.plural_ru(len(workouts), ("тренировка", "тренировки", "тренировок"))
-    e_word = formatting.plural_ru(total_exercises, ("упражнение", "упражнения", "упражнений"))
-    s_word = formatting.plural_ru(total_sets, ("подход", "подхода", "подходов"))
-    lines = [
-        f"📋 В файле: {len(workouts)} {w_word} ({_format_dates([w['date'] for w in workouts])}), "
-        f"{total_exercises} {e_word}, {total_sets} {s_word}."
-    ]
-    # Дубли не пропускаются молча: молчаливый пропуск так же непонятен, как
-    # молчаливое удвоение — человек должен видеть, что именно загрузится.
-    if dup and not fresh:
-        lines.append("\n⚠️ Все эти даты уже есть в твоей истории — похоже, файл уже загружен.")
-    elif dup:
-        d_word = formatting.plural_ru(len(dup), ("дата", "даты", "дат"))
-        lines.append(
-            f"\n⚠️ {len(dup)} {d_word} уже есть в истории "
-            f"({_format_dates(sorted(dup), limit=5)}) — пропущу, чтобы не задваивать.\n"
-            f"Загружу {len(fresh)} {formatting.plural_ru(len(fresh), ('тренировку', 'тренировки', 'тренировок'))}."
-        )
-    else:
-        lines.append("Загрузить?")
-
+    await state.update_data(imp_dup=sorted(dup))
     await state.set_state(ImportFlow.confirming)
-    kb = keyboards.csv_import_confirm_keyboard(len(fresh), len(dup))
-    text = "\n".join(lines)
-    if isinstance(event, CallbackQuery):
-        await ui.safe_edit(event, text, reply_markup=kb)
-    else:
-        await event.answer(text, reply_markup=kb)
+    await _render_confirmation_page(event, state, 0)
+
+
+@router.callback_query(StateFilter(ImportFlow.confirming), F.data.startswith("imp:page:"))
+async def import_confirm_page(callback: CallbackQuery, state: FSMContext):
+    page = int(callback.data.split(":")[2])
+    await _render_confirmation_page(callback, state, page)
+    await callback.answer()
 
 
 @router.callback_query(StateFilter(ImportFlow.confirming), F.data.in_({"imp:save", "imp:saveall"}))

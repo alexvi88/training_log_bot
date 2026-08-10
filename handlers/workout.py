@@ -148,6 +148,12 @@ async def _refresh_live(bot, state: FSMContext, user, workout_id: int, hint, key
     if data.get("is_backfill") and data.get("bf_date"):
         date = dt.date.fromisoformat(data["bf_date"])
         text = f"📅 {formatting.format_date_ru(date)}\n\n{text}"
+    elif blocks:
+        # Только когда в тренировке уже есть открытое/залогированное
+        # упражнение — тот же слот-сообщение используется и до этого, для
+        # экранов-пикеров («выбери группу», «повторить тренировку» и т.п.),
+        # и там заголовок был бы не про эту тренировку, а про сам выбор.
+        text = f"🏋️ <b>ТЕКУЩАЯ ТРЕНИРОВКА</b>\n\n{text}"
     if chat_bottom.is_at_bottom(chat_id, message_id):
         try:
             await bot.edit_message_text(

@@ -122,9 +122,16 @@ def _message_event(user_id: int):
     return event
 
 
-async def _confirmation(user_id: int, workouts, ex_id: int):
+async def _confirmation(user_id: int, workouts, ex_id: int, page: int = 0):
     event = _message_event(user_id)
-    await csv_import.show_confirmation(event, await _state(user_id, workouts, ex_id))
+    state = await _state(user_id, workouts, ex_id)
+    await csv_import.show_confirmation(event, state)
+    if page:
+        # _render_confirmation_page treats a plain Message the same as the
+        # first page — simplest way to look at another page in a test
+        # without wiring up the full CallbackQuery/ui.safe_edit machinery.
+        event = _message_event(user_id)
+        await csv_import._render_confirmation_page(event, state, page)
     call = event.answer.await_args
     text = call.args[0] if call.args else call.kwargs["text"]
     kb = call.kwargs["reply_markup"]
@@ -134,15 +141,18 @@ async def _confirmation(user_id: int, workouts, ex_id: int):
 async def test_confirmation_names_the_dates_that_are_already_in_history(
     fresh_db, user_id, squat, alerts
 ):
+    """Дубль (04.05.2026) отмечен прямо на своей странице, а не общей фразой
+    поверх всего файла — на соседней (новой) дате отметки нет."""
     await csv_import.import_save(_callback(user_id), await _state(user_id, TWO_DAYS[:1], squat))
 
-    text, buttons = await _confirmation(user_id, TWO_DAYS, squat)
+    dup_text, dup_buttons = await _confirmation(user_id, TWO_DAYS, squat, page=0)
+    assert "04.05.2026" in dup_text
+    assert "уже есть в истории" in dup_text
+    assert "imp:save" in dup_buttons and "imp:saveall" in dup_buttons
 
-    assert "уже есть в истории" in text
-    assert text.count("04.05.2026") == 2        # и в списке файла, и среди совпавших
-    assert "06.05.2026" in text.split("⚠️")[0]  # новая дата — только в списке файла
-    assert "Загружу 1 тренировку" in text
-    assert "imp:save" in buttons and "imp:saveall" in buttons
+    fresh_text, _ = await _confirmation(user_id, TWO_DAYS, squat, page=1)
+    assert "06.05.2026" in fresh_text
+    assert "уже есть" not in fresh_text
 
 
 async def test_confirmation_of_a_fully_duplicate_file_has_no_plain_load_button(
@@ -152,7 +162,7 @@ async def test_confirmation_of_a_fully_duplicate_file_has_no_plain_load_button(
 
     text, buttons = await _confirmation(user_id, TWO_DAYS, squat)
 
-    assert "похоже, файл уже загружен" in text
+    assert "уже есть в истории" in text
     assert "imp:save" not in buttons            # нечего загружать «как обычно»
     assert "imp:saveall" in buttons             # но настоять всё ещё можно
     assert "imp:cancel" in buttons
@@ -162,7 +172,6 @@ async def test_confirmation_without_duplicates_looks_as_before(fresh_db, user_id
     text, buttons = await _confirmation(user_id, TWO_DAYS, squat)
 
     assert "уже есть" not in text
-    assert "Загрузить?" in text
     assert "imp:save" in buttons and "imp:saveall" not in buttons
 
 

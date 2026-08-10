@@ -4777,6 +4777,46 @@ async def get_or_create_user_exercise_by_name(user_id: int, name: str) -> Option
     return None
 
 
+async def create_exercise_matching_catalog_name(
+    user_id: int, name: str, catalog_name: str
+) -> Optional[int]:
+    """Create the user's own exercise under `name` — their own spelling, e.g. a
+    migrated app's original name ("Bench Press (Barbell)") — but link it to
+    `catalog_name`'s template for its photo and technique description.
+
+    Unlike fork_exercise_from_template, the display name is NOT overwritten
+    with the template's: a CSV import (see
+    ai_trainer.match_exercise_names_to_catalog) brings names the person may
+    still recognize their history by, and silently rewriting "Bench Press
+    (Barbell)" to "Жим штанги лёжа" would erase that on the way in. The link
+    goes through `original_name` instead — the same rename-proof key
+    exercise_media.catalog_key already uses to survive a manual rename.
+
+    Returns None if catalog_name doesn't match any template. If `name`
+    already exists as the user's own exercise, returns its id untouched —
+    an existing exercise's media link isn't something a later import should
+    silently repoint.
+    """
+    template = await _find_global_template_by_name(catalog_name)
+    if template is None:
+        return None
+    existing = await find_exercise_by_name(user_id, name)
+    if existing is not None:
+        return existing["id"]
+    ex_id = await create_exercise(
+        user_id, name, template["primary_group_id"],
+        template["equipment"], bool(template["unilateral"]), template["attachment"],
+    )
+    async with _write_lock:
+        await conn().execute(
+            "UPDATE exercises SET original_name = ?, bodyweight_load = ?, bodyweight_factor = ? "
+            "WHERE id = ?",
+            (template["name"], template["bodyweight_load"], template["bodyweight_factor"], ex_id),
+        )
+        await conn().commit()
+    return ex_id
+
+
 async def exercise_group_name(user_id: int, name: str) -> Optional[str]:
     """Группа мышц упражнения по имени — тем же порядком, что resolve_exercise_name.
 

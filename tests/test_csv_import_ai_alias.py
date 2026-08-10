@@ -111,12 +111,16 @@ def _message(user_id: int, filename: str, raw: bytes):
     return message
 
 
-async def test_aliased_exercise_forks_the_template_with_photo_and_description(
+async def test_aliased_exercise_keeps_its_own_name_but_links_template_media(
     fresh_db, user_id, monkeypatch
 ):
-    """Совпавшее по смыслу имя не создаёт голое упражнение — форкает шаблон
-    целиком, тем же путём, что и ручной выбор из каталога на экране разрешения."""
+    """Совпавшее по смыслу имя не переименовывается в русское название каталога
+    — человек не должен терять привычное имя из своей истории только потому,
+    что оно нашлось в каталоге на другом языке. Фото и описание техники при
+    этом подтягиваются от шаблона через original_name (тот же rename-proof
+    ключ, что и у обычного форка)."""
     db = fresh_db
+    import exercise_media
 
     async def fake_match(uid, names):
         assert names == ["Bench Press (Barbell)"]
@@ -138,9 +142,26 @@ async def test_aliased_exercise_forks_the_template_with_photo_and_description(
 
     # Никакого ручного разрешения — сразу подтверждение.
     assert await state.get_state() == ImportFlow.confirming
-    ex = await db.find_exercise_by_name(user_id, "Жим штанги лёжа")
+    # Своё оригинальное имя осталось как было — не подменилось русским каталожным.
+    assert await db.find_exercise_by_name(user_id, "Жим штанги лёжа") is None
+    ex = await db.find_exercise_by_name(user_id, "Bench Press (Barbell)")
     assert ex is not None
-    assert ex["is_template"] == 0  # это уже своя копия, форкнутая от шаблона
+    assert ex["is_template"] == 0
+    assert exercise_media.catalog_key(ex) == "Жим штанги лёжа"
+
+
+async def test_alias_does_not_relink_an_already_existing_exercise(fresh_db, user_id, monkeypatch):
+    """Имя уже есть в списке пользователя под своей историей — импорт не должен
+    тихо перепривязывать его медиа к шаблону задним числом."""
+    db = fresh_db
+    gid = await db.create_muscle_group(user_id, "Спина")
+    own_id = await db.create_exercise(user_id, "Bench Press (Barbell)", gid)
+
+    ex_id = await db.create_exercise_matching_catalog_name(
+        user_id, "Bench Press (Barbell)", "Жим штанги лёжа"
+    )
+
+    assert ex_id == own_id
 
 
 async def test_unmatched_names_still_go_through_manual_resolve(fresh_db, user_id, monkeypatch):
