@@ -331,7 +331,11 @@ async def test_second_run_sends_nothing(fresh_db):
     assert bot.sent == []
 
 
-async def test_new_user_after_the_release_still_gets_it(fresh_db):
+async def test_send_announcement_itself_does_not_gate_by_signup_time(fresh_db):
+    """send_announcement() — низкоуровневая доставка без approved-отметки в
+    announcement_state, так что cutoff по created_at тут не действует (см.
+    test_new_signups_after_approval_do_not_get_an_old_release ниже за тем,
+    как это устроено в реальном потоке через run_pending_announcements)."""
     await _users(fresh_db, 1)
     ann = _announcement()
     await announcements.send_announcement(FakeBot(), ann)
@@ -340,6 +344,34 @@ async def test_new_user_after_the_release_still_gets_it(fresh_db):
     bot = FakeBot()
     assert await announcements.send_announcement(bot, ann) == (1, 0, 0)
     assert [chat_id for chat_id, _ in bot.sent] == [2]
+
+
+async def test_new_signups_after_approval_do_not_get_an_old_release(fresh_db, monkeypatch):
+    """Живой прогон: релиз одобрили давно, а спустя недели он продолжал капать
+    новым атлетам — тем, для кого фича никогда не была новостью, они с самого
+    начала застали её готовой. Кто зарегистрировался ДО одобрения — получает
+    релиз как обычно; кто ПОСЛЕ — молча пропускается."""
+    monkeypatch.setattr(announcements.asyncio, "sleep", AsyncMock())
+    await _users(fresh_db, ADMIN_ID, 1)
+    ann = _announcement()
+    monkeypatch.setattr(announcements, "ANNOUNCEMENTS", [ann])
+    await announcements.send_preview(FakeBot(), ann)
+    await db_module.set_announcement_status(ann.key, announcements.STATUS_APPROVED)
+
+    await _users(fresh_db, 2)
+    # На секундную точность часов теста не полагаемся: явно отодвигаем
+    # регистрацию нового атлета в будущее относительно момента одобрения,
+    # который мог случиться в ту же секунду.
+    await fresh_db.conn().execute(
+        "UPDATE users SET created_at = '2099-01-01T00:00:00' WHERE telegram_id = 2"
+    )
+    await fresh_db.conn().commit()
+
+    bot = FakeBot()
+    await announcements.run_pending_announcements(bot)
+
+    recipients = {chat_id for chat_id, _ in bot.sent if chat_id != ADMIN_ID}
+    assert recipients == {1}, "новый атлет не должен получать релиз, вышедший до его регистрации"
 
 
 async def test_pushes_off_means_no_announcement(fresh_db):

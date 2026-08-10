@@ -5876,8 +5876,11 @@ async def count_announcement_recipients(category: str) -> int:
     cur = await conn().execute(
         "SELECT COUNT(*) FROM users "
         "WHERE pushes_enabled = 1 "
-        "AND telegram_id NOT IN (SELECT telegram_id FROM pushes WHERE category = ?)",
-        (category,),
+        "AND telegram_id NOT IN (SELECT telegram_id FROM pushes WHERE category = ?) "
+        "AND created_at <= COALESCE("
+        "  (SELECT updated_at FROM announcement_state WHERE key = ? AND status = 'approved'),"
+        "  created_at)",
+        (category, category),
     )
     (count,) = await cur.fetchone()
     return count
@@ -5891,13 +5894,24 @@ async def list_announcement_recipients(category: str) -> list[int]:
     повторный деплой, а человек получает релизное сообщение ровно один раз.
     Выключивший пуши в настройках сюда не попадает: разовая рассылка — это
     тоже пуш, и тумблер должен значить то, что обещает.
+
+    Живой прогон: рассылку одобрили давно, а спустя недели релиз продолжал
+    капать новым атлетам — тем, для кого это не новость, а то, с чем они
+    впервые встретились. Cutoff по `created_at <= (момент одобрения)`:
+    зарегистрировался раньше — застал релиз, зарегистрировался позже —
+    просто увидел готовую фичу, рассказывать ему о ней как о новинке нечего.
+    Пока рассылка ещё не одобрена (approved-строки нет), фильтр не режет
+    никого — это ровно то число, что видит админ на превью.
     """
     cur = await conn().execute(
         "SELECT telegram_id FROM users "
         "WHERE pushes_enabled = 1 "
         "AND telegram_id NOT IN (SELECT telegram_id FROM pushes WHERE category = ?) "
+        "AND created_at <= COALESCE("
+        "  (SELECT updated_at FROM announcement_state WHERE key = ? AND status = 'approved'),"
+        "  created_at) "
         "ORDER BY telegram_id",
-        (category,),
+        (category, category),
     )
     return [row["telegram_id"] for row in await cur.fetchall()]
 
