@@ -475,14 +475,29 @@ def test_a_long_headline_stops_before_the_rank_badge():
     )
 
 
-def test_the_calendar_grid_fits_the_fixed_width():
-    """Клетка выводится из ширины, поэтому левый и правый запас плюс семь
-    колонок недели обязаны укладываться в неё без остатка."""
-    x_units = charts.DASH_WIDTH_IN / charts._DASH_CELL_IN
+def test_the_calendar_cell_does_not_grow_with_the_picture_width():
+    """Клетка держит свой размер, а не выводится из полной ширины картинки —
+    иначе семь колонок, растянутых на всю ширину, дают клетку почти в дюйм,
+    вчетверо крупнее настоящего календаря, и раздувают всю картинку по высоте.
+    """
+    assert charts._DASH_CAL_CELL_IN < 0.6
 
-    assert x_units == (
-        charts._DASH_CAL_LEFT_UNITS + charts._DASH_CAL_COLUMNS + charts._DASH_CAL_RIGHT_UNITS
-    )
+
+def test_the_calendar_is_centred_not_stretched():
+    """Сетка из семи колонок при фиксированной клетке меньше полной ширины
+    картинки — и должна стоять по центру, а не прижиматься к левому краю."""
+    import io
+
+    from PIL import Image
+
+    today = dt.date(2026, 8, 4)
+    img = Image.open(io.BytesIO(_render(
+        day_counts={}, today=today, start=today - dt.timedelta(days=29),
+    ))).convert("RGB")
+    width = img.size[0]
+    grid_width = charts._DASH_CAL_COLUMNS * charts._DASH_CAL_CELL_IN * 150
+
+    assert grid_width < width * 0.7
 
 
 def test_a_window_that_does_not_align_to_weeks_takes_an_extra_row():
