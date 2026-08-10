@@ -29,6 +29,29 @@ def test_exercise_picker_entry_keyboard_offers_menu_exit_when_empty():
     assert "🏁 Завершить тренировку" not in _button_texts(kb)
 
 
+def test_csv_import_page_keyboard_says_load_all_without_duplicates():
+    """Без дублей загружаемое число и так видно в заголовке экрана — кнопка с
+    тем же числом («Загрузить 2») просто повторяла его, а не добавляла смысл."""
+    kb = keyboards.csv_import_page_keyboard(page=0, total_pages=1, new_count=2, dup_count=0)
+    assert "✅ Загрузить всё" in _button_texts(kb)
+    assert not any("Загрузить 2" in t for t in _button_texts(kb))
+
+
+def test_csv_import_page_keyboard_names_the_count_when_some_are_duplicates():
+    """С дублями «всё» уже занято соседней кнопкой (включая дубли) — здесь
+    число обязано остаться, иначе непонятно, сколько загрузится «как обычно»."""
+    kb = keyboards.csv_import_page_keyboard(page=0, total_pages=1, new_count=2, dup_count=1)
+    assert "✅ Загрузить новые (2)" in _button_texts(kb)
+    assert "⚠️ Загрузить всё (3), включая дубли" in _button_texts(kb)
+
+
+def test_csv_import_page_keyboard_paginates_by_page_not_by_workout():
+    kb = keyboards.csv_import_page_keyboard(page=0, total_pages=3, new_count=20, dup_count=0)
+    callbacks = [b.callback_data for row in kb.inline_keyboard for b in row]
+    assert "imp:page:1" in callbacks
+    assert "imp:page:-1" not in callbacks
+
+
 def test_exercise_picker_entry_keyboard_offers_recent_exercises_one_per_row():
     kb = keyboards.exercise_picker_entry_keyboard(recent=[(5, "Pull down"), (6, "Seated row")])
     texts = _button_texts(kb)

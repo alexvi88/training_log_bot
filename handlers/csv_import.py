@@ -4,7 +4,6 @@ import csv
 import datetime as dt
 import io
 import re
-from html import escape
 from typing import Optional
 
 from aiogram import F, Router
@@ -491,41 +490,35 @@ async def _duplicate_dates(
     return dup
 
 
-def _import_entry_lines(entries: list[dict]) -> list[str]:
-    """Упражнения одной тренировки, каждое со своими подходами — тот же
-    терсный стиль, что и «повторить тренировку» / живой трекер уже
-    завершённого упражнения: имя, потом веса×повторы через запятую."""
-    lines = []
-    for entry in entries:
-        lines.append(f"<b>{escape(entry['name'])}</b>")
-        lines.append(", ".join(formatting.format_set(w, r, rpe) for w, r, rpe in entry["sets"]))
-    return lines
+IMPORT_PAGE_SIZE = 8
 
 
 async def _render_confirmation_page(event, state: FSMContext, page: int) -> None:
-    """Одна тренировка из файла — подробно, как карточка в истории, с
-    переключалками между тренировками файла. Решение «загрузить» общее для
-    всех и не листается вместе со страницами: дубли не пропускаются молча —
-    отмечены прямо в заголовке той тренировки, которую заденут."""
+    """Несколько тренировок на странице, как в 📚 Истории: дата и до трёх
+    упражнений короткими буллитами вместо подробного разбора каждого
+    подхода — это превью будущей истории, а не отдельный, более тяжёлый
+    экран. Решение «загрузить» общее для всех страниц и не листается вместе
+    с ними; дубли не пропускаются молча — отмечены прямо у своей даты."""
     data = await state.get_data()
     workouts = data["imp_workouts"]
     dup = set(data.get("imp_dup") or [])
-    page = max(0, min(page, len(workouts) - 1))
-    w = workouts[page]
+    total_pages = max(1, -(-len(workouts) // IMPORT_PAGE_SIZE))
+    page = max(0, min(page, total_pages - 1))
+    start = page * IMPORT_PAGE_SIZE
+    page_workouts = workouts[start:start + IMPORT_PAGE_SIZE]
 
-    date_label = formatting.format_date_ru(dt.date.fromisoformat(w["date"]))
-    header = f"<b>{page + 1} из {len(workouts)} · {date_label}</b>"
-    if w["date"] in dup:
-        header += "\n⚠️ Эта дата уже есть в истории — пропущу при обычной загрузке."
-    total_sets = sum(len(e["sets"]) for e in w["entries"])
-    e_word = formatting.plural_ru(len(w["entries"]), ("упражнение", "упражнения", "упражнений"))
-    s_word = formatting.plural_ru(total_sets, ("подход", "подхода", "подходов"))
-    lines = [header, f"{len(w['entries'])} {e_word}, {total_sets} {s_word}", ""]
-    lines.extend(_import_entry_lines(w["entries"]))
+    entries = [
+        (dt.date.fromisoformat(w["date"]), [e["name"] for e in w["entries"]])
+        for w in page_workouts
+    ]
+    word = formatting.plural_ru(len(workouts), ("тренировка", "тренировки", "тренировок"))
+    header = f"📥 <b>Импорт: {len(workouts)} {word}</b>"
+    if total_pages > 1:
+        header += f" · стр. {page + 1}/{total_pages}"
+    text = formatting.build_import_confirmation_list(entries, dup, header)
 
     new_count = len(workouts) - len(dup)
-    kb = keyboards.csv_import_page_keyboard(page, len(workouts), new_count, len(dup))
-    text = "\n".join(lines)
+    kb = keyboards.csv_import_page_keyboard(page, total_pages, new_count, len(dup))
     await state.update_data(imp_confirm_page=page)
     if isinstance(event, CallbackQuery):
         await ui.safe_edit(event, text, reply_markup=kb, parse_mode="HTML")

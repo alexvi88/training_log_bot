@@ -458,6 +458,31 @@ def build_history_list(
     return "\n".join(lines)
 
 
+def build_import_confirmation_list(
+    entries: list[tuple[dt.date, list[str]]],
+    dup_dates: set,
+    header: str,
+) -> str:
+    """Same shape as build_history_list (date, then a few exercise names as
+    bullets) — an import confirmation is a preview of history-to-be, and
+    showed as a wall of per-set weights it read as a completely different,
+    more overwhelming screen instead of just more of the same list. Dates
+    already in `dup_dates` are flagged inline, since with several workouts per
+    page a single blanket warning can't say which ones are affected."""
+    lines = [header]
+    for date, names in entries:
+        head = f"<b>{format_date_ru(date)}</b>"
+        if date.isoformat() in dup_dates:
+            head += " ⚠️ уже есть в истории"
+        lines.append("")
+        lines.append(head)
+        if names:
+            lines.extend(f"<i>{b}</i>" for b in _history_bullets(names))
+        else:
+            lines.append("<i>пусто</i>")
+    return "\n".join(lines)
+
+
 def _delta_arrow(delta: float) -> str:
     return "↑" if delta > 0 else ("↓" if delta < 0 else "→")
 

@@ -141,18 +141,20 @@ async def _confirmation(user_id: int, workouts, ex_id: int, page: int = 0):
 async def test_confirmation_names_the_dates_that_are_already_in_history(
     fresh_db, user_id, squat, alerts
 ):
-    """Дубль (04.05.2026) отмечен прямо на своей странице, а не общей фразой
-    поверх всего файла — на соседней (новой) дате отметки нет."""
+    """Дубль (04.05.2026) отмечен прямо у своей даты в списке, а не общей
+    фразой поверх всего файла — у соседней (новой) даты отметки нет."""
     await csv_import.import_save(_callback(user_id), await _state(user_id, TWO_DAYS[:1], squat))
 
-    dup_text, dup_buttons = await _confirmation(user_id, TWO_DAYS, squat, page=0)
-    assert "04.05.2026" in dup_text
-    assert "уже есть в истории" in dup_text
-    assert "imp:save" in dup_buttons and "imp:saveall" in dup_buttons
+    text, buttons = await _confirmation(user_id, TWO_DAYS, squat)
 
-    fresh_text, _ = await _confirmation(user_id, TWO_DAYS, squat, page=1)
-    assert "06.05.2026" in fresh_text
-    assert "уже есть" not in fresh_text
+    assert "04.05.2026" in text and "06.05.2026" in text
+    assert "уже есть в истории" in text
+    lines = text.splitlines()
+    dup_line = next(line for line in lines if "04.05.2026" in line)
+    fresh_line = next(line for line in lines if "06.05.2026" in line)
+    assert "уже есть" in dup_line
+    assert "уже есть" not in fresh_line
+    assert "imp:save" in buttons and "imp:saveall" in buttons
 
 
 async def test_confirmation_of_a_fully_duplicate_file_has_no_plain_load_button(
