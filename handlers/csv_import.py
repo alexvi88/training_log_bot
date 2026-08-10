@@ -16,12 +16,29 @@ import ai_trainer
 import db
 import formatting
 import keyboards
+import timeutil
 import ui
 from fsm import ImportFlow
 from parser import MAX_REPS, MAX_WEIGHT, ParseError, parse_ru_date
-from state_scaffold import clear_state_keep_ai
+from state_scaffold import clear_state_keep_workout
 
 router = Router(name="csv_import")
+
+# Кто прямо сейчас пишет импортированные тренировки в базу — двойной тап по
+# «Загрузить» (или медленный ответ Telegram на первый тап) иначе запускает
+# import_save дважды почти одновременно: оба видят одно и то же ImportFlow.
+# confirming, оба независимо проверяют дубли до того, как первый успел
+# что-то закоммитить, и оба записывают файл целиком. Тот же приём, что
+# ai_trainer._try_claim_busy — atomically check-and-reserve без await между
+# проверкой и добавлением, чтобы asyncio не успел переключиться в зазоре.
+_saving: set[int] = set()
+
+
+def _try_claim_saving(user_id: int) -> bool:
+    if user_id in _saving:
+        return False
+    _saving.add(user_id)
+    return True
 
 REQUIRED_FIELDS = ["date", "exercise", "weight", "reps"]
 FIELD_LABELS = {"date": "дата", "exercise": "упражнение", "weight": "вес", "reps": "повторы", "round": "номер подхода"}
@@ -258,12 +275,16 @@ _HEVY_DATE_RE = re.compile(
 )
 
 
-def _parse_row_date(text: str) -> dt.date:
+def _parse_row_date(text: str, today: Optional[dt.date] = None) -> dt.date:
     text = text.strip()
     try:
-        return parse_ru_date(text)
-    except ParseError:
-        pass
+        return parse_ru_date(text, today)
+    except ParseError as e:
+        # "будущем" — dd.mm.yyyy разобрался, но дата не прошла проверку на
+        # будущее: это не "формат не тот", а настоящая ошибка данных, и топить
+        # её в общем "не понял дату" ниже, пробуя чужие форматы, не стоит.
+        if "будущем" in e.message:
+            raise
     match = _HEVY_DATE_RE.match(text)
     if match and match["mon"].lower() in _MONTH_ABBR:
         try:
@@ -278,13 +299,25 @@ def _parse_row_date(text: str) -> dt.date:
         raise ParseError(f"не понял дату «{text}»") from None
 
 
+# Запятая-разделитель тысяч: ровно три цифры в каждой группе после первой
+# ("1,200", "1,234,000.5") — так группирует английский/американский экспорт.
+# Десятичная запятая ("100,5") этому не соответствует почти никогда: дробная
+# часть веса/повторов редко бывает ровно трёхзначной. Без этого различия
+# "1,200" (=1200) молча превращался в 1.2 — тихая порча веса без единой ошибки.
+_THOUSANDS_COMMA_RE = re.compile(r"^\d{1,3}(,\d{3})+(\.\d+)?$")
+
+
 def _parse_number(text: str) -> float:
     """Дробное из ячейки: «100.5», «100,5» и «1 000» — одно и то же число.
 
     Запятая как десятичный разделитель — норма для русской локали Excel, а
-    пробел там же приезжает разрядным разделителем.
+    пробел там же приезжает разрядным разделителем. «1,200» из
+    английского/американского экспорта — другой случай: там запятая между
+    разрядами тысяч, а не дробная часть (см. _THOUSANDS_COMMA_RE).
     """
-    return float(text.replace(",", ".").replace(" ", "").replace("\xa0", ""))
+    text = text.strip()
+    text = text.replace(",", "") if _THOUSANDS_COMMA_RE.match(text) else text.replace(",", ".")
+    return float(text.replace(" ", "").replace("\xa0", ""))
 
 
 def _parse_count(text: str, label: str) -> int:
@@ -303,7 +336,10 @@ def _parse_count(text: str, label: str) -> int:
     return int(value)
 
 
-def _build_workout_groups(rows: list[list[str]], mapping: dict[str, int], first_line: int = 2) -> list[dict]:
+def _build_workout_groups(
+    rows: list[list[str]], mapping: dict[str, int], first_line: int = 2,
+    today: Optional[dt.date] = None,
+) -> list[dict]:
     groups: dict[str, dict[str, list[tuple]]] = {}
     name_order: dict[str, list[str]] = {}
     date_order: list[str] = []
@@ -312,7 +348,7 @@ def _build_workout_groups(rows: list[list[str]], mapping: dict[str, int], first_
         if not row or all(not c.strip() for c in row):
             continue
         try:
-            date_val = _parse_row_date(row[mapping["date"]])
+            date_val = _parse_row_date(row[mapping["date"]], today)
             name = row[mapping["exercise"]].strip()
             weight_text = row[mapping["weight"]].strip()
             try:
@@ -321,7 +357,7 @@ def _build_workout_groups(rows: list[list[str]], mapping: dict[str, int], first_
                 raise ParseError(f"не понял вес «{weight_text}»") from None
             reps = _parse_count(row[mapping["reps"]].strip(), "повторы")
             round_val = None
-            if "round" in mapping:
+            if "round" in mapping and mapping["round"] < len(row):
                 round_text = row[mapping["round"]].strip()
                 round_val = _parse_count(round_text, "номер подхода") if round_text else None
             rpe_val = None
@@ -392,9 +428,12 @@ async def _finish_mapping(event, state: FSMContext) -> None:
         else:
             await event.answer(text, reply_markup=kb)
 
+    user = await db.get_user(event.from_user.id)
     try:
         workouts = _build_workout_groups(
-            data["imp_rows"], data["imp_mapping"], first_line=2 if data.get("imp_has_header", True) else 1
+            data["imp_rows"], data["imp_mapping"],
+            first_line=2 if data.get("imp_has_header", True) else 1,
+            today=timeutil.user_today(user),
         )
     except ParseError as e:
         await _back_to_file(f"Ошибка в файле: {e.message}\nИсправь файл и пришли заново.")
@@ -439,7 +478,12 @@ async def _finish_mapping(event, state: FSMContext) -> None:
             ex_id = await db.create_exercise_matching_catalog_name(user_id, name, catalog_name)
             if ex_id is not None:
                 resolved[name] = ex_id
-        unresolved = [n for n in unresolved if n not in aliases]
+        # Не "not in aliases": catalog_name может не найтись ни одним шаблоном
+        # (create_exercise_matching_catalog_name вернёт None) — тогда имя есть
+        # в aliases, но resolved для него не заполнен, и не отфильтрованное
+        # отсюда имя тихо пропадает — не резолвится, не уходит на ручное
+        # разрешение, а потом валит import_save с KeyError на resolved[name].
+        unresolved = [n for n in unresolved if n not in resolved]
 
     await state.update_data(imp_resolved=resolved)
 
@@ -544,6 +588,21 @@ async def import_confirm_page(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(StateFilter(ImportFlow.confirming), F.data.in_({"imp:save", "imp:saveall"}))
 async def import_save(callback: CallbackQuery, state: FSMContext):
+    user_id = callback.from_user.id
+    if not _try_claim_saving(user_id):
+        # Второй тап (или второй, догоняющий, callback того же тапа) застаёт
+        # первый уже посреди записи — без этой брони оба видят один и тот же
+        # ImportFlow.confirming, оба независимо считают дубли до того, как
+        # первый успел что-то закоммитить, и файл записывается дважды.
+        await callback.answer("Уже гружу, подожди немного")
+        return
+    try:
+        await _do_import_save(callback, state)
+    finally:
+        _saving.discard(user_id)
+
+
+async def _do_import_save(callback: CallbackQuery, state: FSMContext) -> None:
     data = await state.get_data()
     workouts = data["imp_workouts"]
     resolved = data["imp_resolved"]
@@ -553,14 +612,16 @@ async def import_save(callback: CallbackQuery, state: FSMContext):
     force = callback.data == "imp:saveall"
 
     # Считаем дубли здесь, а не только на экране подтверждения: между показом и
-    # нажатием могла появиться тренировка, да и «Загрузить» легко нажать дважды.
+    # нажатием могла появиться тренировка.
     skip = set() if force else await _duplicate_dates(user_id, workouts, resolved)
     to_import = [w for w in workouts if w["date"] not in skip]
 
     if not to_import:
-        # Импорт закончился ничем — но переписка с AI-тренером и черновик его
-        # программы к нему отношения не имеют, сохраняем их.
-        await clear_state_keep_ai(state)
+        # Импорт достижим и посреди незакрытой тренировки (через ⚙️ Настройки) —
+        # тот же _clear_state_keep_workout, что и у остальных разделов с тем же
+        # свойством (дневник еды, история, /mcp), а не голый clear(), который
+        # стирал бы каркас открытых упражнений и остаток плана программы.
+        await clear_state_keep_workout(state)
         from handlers.settings import show_settings
         await show_settings(
             callback, state, alert="Эти тренировки уже есть в истории — ничего не добавил"
@@ -581,45 +642,62 @@ async def import_save(callback: CallbackQuery, state: FSMContext):
     # 12:00 + tz_offset - tz_offset снова даёт исходную дату при любом
     # значении из диапазона пикера (-1…+12).
     tz_offset = await db.user_tz_offset(user_id)
+    imported = 0
+    failed = 0
     for w in to_import:
+        # Каждая тренировка своей попыткой: подходы коммитятся по одному
+        # (db._write_lock — на отдельный statement, не на всю пачку), так что
+        # исключение посреди записи одной тренировки не должно портить уже
+        # успешно записанные соседние и не должно оставлять эту наполовину
+        # записанной — следующий "Загрузить" молча принял бы такую дату за уже
+        # импортированную (см. _duplicate_dates) и не долил бы остаток.
         local_noon = dt.datetime.fromisoformat(f"{w['date']}T12:00:00")
         started_at = (local_noon - dt.timedelta(hours=tz_offset)).isoformat()
         workout_id = await db.create_finished_workout(user_id, started_at, started_at, source="import")
-        for entry in w["entries"]:
-            ex_id = resolved[entry["name"]]
-            block_id = await db.create_block(workout_id, "single")
-            await db.add_block_exercise(block_id, ex_id, 0)
-            await db.touch_exercise_last_used(ex_id)
-            for idx, (weight, reps, rpe) in enumerate(entry["sets"], start=1):
-                await db.add_set(block_id, ex_id, idx, 0, weight, reps, rpe)
+        try:
+            for entry in w["entries"]:
+                ex_id = resolved[entry["name"]]
+                block_id = await db.create_block(workout_id, "single")
+                await db.add_block_exercise(block_id, ex_id, 0)
+                await db.touch_exercise_last_used(ex_id)
+                for idx, (weight, reps, rpe) in enumerate(entry["sets"], start=1):
+                    await db.add_set(block_id, ex_id, idx, 0, weight, reps, rpe)
+        except Exception:
+            await db.discard_workout(workout_id)
+            failed += 1
+            continue
+        imported += 1
 
     # A year of imported history can complete streaks, weight clubs and tonnage
     # badges all at once. Without this the grid stays empty until the next live
     # workout happens to trigger an evaluation — the same resync the history and
     # edit screens already run after changing the past.
-    await achievement_sync.resync(user_id)
+    if imported:
+        await achievement_sync.resync(user_id)
 
-    # Импорт завершён — а переписка с AI-тренером и черновик его программы
-    # переживают такие потоки, их не трогаем.
-    await clear_state_keep_ai(state)
+    # См. комментарий выше про to_import: тренировка, из которой зашли за
+    # импортом, могла остаться незакрытой.
+    await clear_state_keep_workout(state)
     # show_settings redraws this very message, so a "✅ Импортировано N" written
     # here would live for milliseconds — it goes in the alert instead.
-    n = len(to_import)
+    n = imported
     word = formatting.plural_ru(n, ("тренировка", "тренировки", "тренировок"))
     alert = f"✅ Импортировано {n} {word}"
     if skip:
         # Пропуск озвучиваем в том же алерте: иначе «импортировано 5» вместо
         # ожидаемых 25 выглядит как потеря данных.
         alert += f", пропущено {len(skip)} (уже были в истории)"
+    if failed:
+        alert += f", не получилось {failed} — попробуй прислать файл ещё раз"
     from handlers.settings import show_settings
     await show_settings(callback, state, alert=alert)
 
 
 @router.callback_query(F.data == "imp:cancel")
 async def import_cancel(callback: CallbackQuery, state: FSMContext):
-    # Отмена импорта не отменяет переписку с AI-тренером и черновик его
-    # программы — сохраняем их.
-    await clear_state_keep_ai(state)
+    # Отмена импорта не должна отменять и незакрытую тренировку, из которой
+    # сюда зашли, — см. комментарий в import_save.
+    await clear_state_keep_workout(state)
     from handlers.settings import show_settings
     await show_settings(callback, state)
     await callback.answer("Отменено")

@@ -211,3 +211,32 @@ async def test_unmatched_names_still_go_through_manual_resolve(fresh_db, user_id
 
     from fsm import ResolveFlow
     assert await state.get_state() == ResolveFlow.picking
+
+
+async def test_alias_to_a_nonexistent_catalog_name_still_goes_to_manual_resolve(
+    fresh_db, user_id, monkeypatch
+):
+    """Модель может назвать catalog_name, которого на самом деле нет ни одним
+    шаблоном (create_exercise_matching_catalog_name тогда вернёт None) — имя
+    не должно тихо потеряться (не резолвится, не уходит на разрешение), а
+    потом ронять import_save KeyError'ом на resolved[name]."""
+    async def fake_match(uid, names):
+        return {"Bench Press (Barbell)": "Совсем не то, чего нет в каталоге"}
+
+    monkeypatch.setattr(ai_trainer, "match_exercise_names_to_catalog", fake_match)
+
+    raw = (
+        b'"title","start_time","end_time","description","exercise_title","superset_id",'
+        b'"exercise_notes","set_index","set_type","weight_kg","reps","distance_km",'
+        b'"duration_seconds","rpe"\n'
+        b'"Push","7 Aug 2026, 08:27","7 Aug 2026, 08:28","","Bench Press (Barbell)",,'
+        b'"",0,"normal",100,8,,,\n'
+    )
+    message = _message(user_id, "workout_data.csv", raw)
+    state = FSMContext(storage=MemoryStorage(), key=StorageKey(bot_id=1, chat_id=user_id, user_id=user_id))
+
+    await csv_import.import_file_received(message, state)
+
+    from fsm import ResolveFlow
+    assert await state.get_state() == ResolveFlow.picking
+    assert "Bench Press (Barbell)" not in (await state.get_data()).get("imp_resolved", {})

@@ -137,6 +137,18 @@ def test_fractional_reps_are_rejected_by_name():
     assert "повторы: «8.5» — не целое число" in excinfo.value.message
 
 
+def test_thousands_comma_is_not_read_as_a_decimal_point():
+    """Английский/американский экспорт группирует тысячи запятой: «1,200»
+    значит 1200, а не 1.2. Раньше запятая всегда читалась как десятичная
+    точка — тихая порча веса без единой ошибки импорта."""
+    from handlers.csv_import import _parse_number
+
+    assert _parse_number("1,200") == 1200.0
+    assert _parse_number("1,234,000.5") == 1234000.5
+    # Десятичная запятая — обычный случай, не должен сломаться.
+    assert _parse_number("100,5") == 100.5
+
+
 def test_unparsable_weight_names_the_cell():
     with pytest.raises(ParseError) as excinfo:
         _build_workout_groups([["2025-01-02", "Жим лёжа", "сто", "8"]], MAPPING)
@@ -147,6 +159,35 @@ def test_short_row_complains_about_columns_not_about_numbers():
     with pytest.raises(ParseError) as excinfo:
         _build_workout_groups([["2025-01-02", "Жим лёжа", "100"]], MAPPING)
     assert "колонок меньше" in excinfo.value.message
+
+
+def test_a_row_missing_the_optional_round_column_still_imports():
+    """У rpe уже была та же терпимость к рваным строкам — у round её не было:
+    ряд без опциональной хвостовой колонки (например, Hevy set_index) валил
+    файл целиком на «колонок меньше», хотя round там просто не указан."""
+    mapping = {**MAPPING, "round": 4}
+    workouts = _build_workout_groups(
+        [["2025-01-02", "Жим лёжа", "100", "8"]], mapping
+    )
+    assert workouts[0]["entries"][0]["sets"][0] == [100.0, 8, None]
+
+
+def test_build_workout_groups_checks_the_future_against_the_passed_in_today():
+    """dd.mm.yyyy-дата сверяется с «сегодня» по умолчанию через серверные часы
+    (parser.parse_ru_date). Пользователь с положительным tz_offset может
+    ре-импортировать свою же вчерашнюю (по UTC) тренировку и получить «дата в
+    будущем» — _finish_mapping обязан прокидывать локальное «сегодня»
+    пользователя, а не полагаться на дефолт."""
+    import datetime as dt
+
+    user_tomorrow = dt.date.today() + dt.timedelta(days=1)
+    row = [[user_tomorrow.strftime("%d.%m.%Y"), "Жим лёжа", "100", "8"]]
+
+    with pytest.raises(ParseError, match="будущем"):
+        _build_workout_groups(row, MAPPING)
+
+    workouts = _build_workout_groups(row, MAPPING, today=user_tomorrow)
+    assert workouts[0]["date"] == user_tomorrow.isoformat()
 
 
 # ---------- тексты ----------
