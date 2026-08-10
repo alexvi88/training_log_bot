@@ -1828,6 +1828,32 @@ def csv_import_confirm_keyboard(new_count: int, dup_count: int) -> InlineKeyboar
     return b.as_markup()
 
 
+def csv_import_page_keyboard(
+    page: int, total_workouts: int, new_count: int, dup_count: int
+) -> InlineKeyboardMarkup:
+    """Экран подтверждения импорта — по тренировке за раз, как карточка в
+    истории: переключалки влево/вправо между тренировками файла, а решение
+    «загрузить» общее для всех и не зависит от того, на какой странице стоишь.
+    """
+    b = InlineKeyboardBuilder()
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text=PAGE_PREV_TEXT, callback_data=f"imp:page:{page - 1}"))
+    if page + 1 < total_workouts:
+        nav.append(InlineKeyboardButton(text=PAGE_NEXT_TEXT, callback_data=f"imp:page:{page + 1}"))
+    if nav:
+        b.row(*nav)
+    if new_count:
+        b.row(InlineKeyboardButton(text=f"✅ Загрузить {new_count}", callback_data="imp:save"))
+    if dup_count:
+        total = new_count + dup_count
+        b.row(InlineKeyboardButton(
+            text=f"⚠️ Загрузить всё ({total}), включая дубли", callback_data="imp:saveall"
+        ))
+    b.row(InlineKeyboardButton(text="❌ Отмена", callback_data="imp:cancel"))
+    return b.as_markup()
+
+
 def csv_column_options_keyboard(headers: list[str], prefix: str, allow_skip: bool = False) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     for idx, header in enumerate(headers):

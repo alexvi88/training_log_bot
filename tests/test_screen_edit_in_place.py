@@ -188,6 +188,31 @@ async def test_live_screen_is_edited_after_the_typed_set_is_tidied_away(fresh_db
     assert (await state.get_data())["live_message_id"] == SCREEN_ID
 
 
+async def test_live_screen_gets_a_title_once_something_is_logged(fresh_db, user_id):
+    """«ТЕКУЩАЯ ТРЕНИРОВКА» появляется, только когда в тренировке реально есть
+    открытое/залогированное упражнение — без этого условия заголовок протекал
+    и в экраны-пикеры (выбор группы, «повторить тренировку»), которые рисуются
+    в тот же слот сообщения, но заголовок там был не про них."""
+    workout_id = await fresh_db.create_workout(user_id)
+    state = await _live_state(user_id, workout_id)
+    bot = _make_bot()
+    user = await fresh_db.get_user(user_id)
+
+    await workout._refresh_live(bot, state, user, workout_id, None, None)
+    empty_text = bot.send_message.await_args.kwargs["text"]
+    assert "ТЕКУЩАЯ ТРЕНИРОВКА" not in empty_text
+
+    group_id = await fresh_db.create_muscle_group(user_id, "Грудь")
+    ex_id = await fresh_db.create_exercise(user_id, "Жим лёжа", group_id)
+    block_id = await fresh_db.create_block(workout_id, "single")
+    await fresh_db.add_block_exercise(block_id, ex_id, 0)
+    await fresh_db.add_set(block_id, ex_id, 1, 0, 100.0, 5, None)
+
+    await workout._refresh_live(bot, state, user, workout_id, None, None)
+    text = bot.send_message.await_args.kwargs["text"]
+    assert text.startswith("🏋️ <b>ТЕКУЩАЯ ТРЕНИРОВКА</b>\n\n")
+
+
 async def test_live_screen_is_resent_when_a_record_set_stays_in_the_chat(fresh_db, user_id):
     """A record keeps its 🔥 message in the chat, so an edit would strand the
     tracker above it — that path still deletes and resends."""

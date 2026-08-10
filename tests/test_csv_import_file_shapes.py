@@ -100,7 +100,7 @@ async def test_russian_excel_file_goes_from_upload_straight_to_confirmation(fres
     assert message.reply.await_count == 0, "никаких «не понял дату»"
     assert await state.get_state() == ImportFlow.confirming
     text = message.answer.await_args.args[0]
-    assert "1 тренировка" in text and "2 подхода" in text
+    assert "1 из 1" in text and "2 подхода" in text
 
 
 async def test_a_single_column_file_says_so_instead_of_dying_on_the_date():
@@ -177,7 +177,7 @@ async def test_confirmation_agrees_in_number_for_one_of_everything(fresh_db, use
         imp_workouts=[{"date": "2026-05-04", "entries": [{"name": "Присед", "sets": [(100.0, 5, None)]}]}],
         imp_resolved={},
     )
-    assert "1 тренировка" in text and "1 упражнение" in text and "1 подход." in text
+    assert "1 из 1" in text and "1 упражнение" in text and "1 подход" in text
 
 
 async def test_confirmation_agrees_in_number_for_five(fresh_db, user_id):
@@ -188,7 +188,7 @@ async def test_confirmation_agrees_in_number_for_five(fresh_db, user_id):
         imp_workouts=[{"date": "2026-05-04", "entries": entries}],
         imp_resolved={},
     )
-    assert "1 тренировка" in text and "5 упражнений" in text and "25 подходов" in text
+    assert "1 из 1" in text and "5 упражнений" in text and "25 подходов" in text
 
 
 async def test_a_file_of_blank_rows_never_offers_to_load_zero_workouts(fresh_db, user_id):
