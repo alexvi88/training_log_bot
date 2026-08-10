@@ -121,7 +121,14 @@ async def show_manage(event, state: FSMContext) -> None:
             "Хочешь под себя — <b>AI-тренер</b> спросит пару вещей и соберёт.\n"
             "А если уже потренировался — можно сохранить эту тренировку как программу."
         )
-    kb = keyboards.routines_manage_keyboard(programs, routines, has_workouts=has_workouts)
+    # «⬅️ Назад» вместо «🏠 Меню», когда сюда попали с экрана выбора группы
+    # мышц/упражнения свежей тренировки (см. rt_manage) — иначе единственный
+    # путь обратно был через главное меню, хотя тренировка уже начата и ждёт
+    # ровно там, откуда пришли.
+    back_to_picker = bool((await state.get_data()).get("rt_manage_from_picker"))
+    kb = keyboards.routines_manage_keyboard(
+        programs, routines, has_workouts=has_workouts, back_to_picker=back_to_picker
+    )
     if isinstance(event, CallbackQuery):
         await ui.safe_edit(event, text, reply_markup=kb, parse_mode="HTML")
     else:
@@ -140,7 +147,13 @@ async def rt_noop(callback: CallbackQuery):
 
 @router.callback_query(F.data == "rt:manage")
 async def rt_manage(callback: CallbackQuery, state: FSMContext):
+    # Со свежей, ещё не начатой тренировки («🗂 Выбрать программу» на экране
+    # выбора группы мышц) сюда попадают в процессе старта — запоминаем это,
+    # чтобы «⬅️ Назад»/«🏠 Меню» ниже вернул именно туда, а не в главное меню
+    # мимо уже начатой тренировки (см. show_manage, rt_menu).
+    from_picker = await state.get_state() == WorkoutFlow.picking_group
     await state.set_state(None)
+    await state.update_data(rt_manage_from_picker=from_picker)
     await show_manage(callback, state)
     await callback.answer()
 
@@ -302,6 +315,14 @@ async def rt_program_days_legacy(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "rt:menu")
 async def rt_menu(callback: CallbackQuery, state: FSMContext):
+    if (await state.get_data()).get("rt_manage_from_picker"):
+        from handlers.workout import _picker_screen_groups
+
+        await state.set_state(WorkoutFlow.picking_group)
+        await state.update_data(rt_manage_from_picker=False)
+        await _picker_screen_groups(callback, state)
+        await callback.answer()
+        return
     from handlers.workout import _show_main_menu
     await _show_main_menu(callback, state)
     await callback.answer()

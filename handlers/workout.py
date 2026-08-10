@@ -778,7 +778,10 @@ async def _main_menu_kb(user_id: int, active) -> InlineKeyboardMarkup:
     return keyboards.main_menu(
         bool(active),
         show_quick_log=not has_history,
-        community_url=config.COMMUNITY_CHAT_URL if config.community_available() else None,
+        # Кнопка "💬 Чат атлетов" временно снята с главного меню (не с
+        # /community — та команда работает как раньше), пока чат не готов
+        # показывать всем.
+        community_url=None,
     )
 
 
@@ -1604,25 +1607,6 @@ async def _picker_screen_groups(callback: CallbackQuery, state: FSMContext, show
     # Mid-workout, adding an exercise is time pressure — the groups the user
     # actually trains most should be first, not alphabetical/catalog order.
     groups = await db.list_muscle_groups(callback.from_user.id, order_by_usage=True)
-    hint = "<i>Выбери группу мышц или найди упражнение по названию:</i>"
-    if not data.get("is_backfill"):
-        # Занесение задним числом — не «что тренировать сегодня»: отдых
-        # групп на момент бэкфилла человеку тут не решение принимать, а
-        # посторонний шум над тем, что он и так уже помнит и заносит.
-        recovery = await _recovery_line(callback.from_user.id, groups)
-        if recovery:
-            hint = recovery + "\n\n" + hint
-    open_ids = data.get("open_exercises") or []
-    partner_buttons: list[tuple[int, str]] = []
-    if open_ids:
-        names = [escape((await db.get_exercise(eid))["display_name"]) for eid in open_ids]
-        hint = "Открыто сейчас: " + ", ".join(names) + "\n" + hint
-        active = data.get("active_exercise_id")
-        if active is not None:
-            partners = await db.list_superset_partners(
-                callback.from_user.id, active, limit=2, exclude_ids=tuple(open_ids)
-            )
-            partner_buttons = [(p["id"], p["display_name"]) for p in partners]
     extra = []
     top_buttons: list[tuple[str, str]] = []
     if show_program_button:
@@ -1692,6 +1676,34 @@ async def _picker_screen_groups(callback: CallbackQuery, state: FSMContext, show
     # Not a "cancel the workout" — pick:cancel just returns to whatever screen was
     # open before (see _back_after_cancel), so it reads as "⬅️ Назад", not "❌ Отмена".
     extra.append(("⬅️ Назад", "pick:cancel"))
+
+    # top_buttons — конкретные дни программ, которыми человек сейчас ходит:
+    # без упоминания их в тексте подсказка говорила только про группы мышц и
+    # поиск по названию, будто кнопки сверху экрана вообще не про тренировку.
+    hint = (
+        "<i>Продолжи по программе сверху или выбери группу мышц / найди упражнение по названию:</i>"
+        if top_buttons else
+        "<i>Выбери группу мышц или найди упражнение по названию:</i>"
+    )
+    if not data.get("is_backfill"):
+        # Занесение задним числом — не «что тренировать сегодня»: отдых
+        # групп на момент бэкфилла человеку тут не решение принимать, а
+        # посторонний шум над тем, что он и так уже помнит и заносит.
+        recovery = await _recovery_line(callback.from_user.id, groups)
+        if recovery:
+            hint = recovery + "\n\n" + hint
+    open_ids = data.get("open_exercises") or []
+    partner_buttons: list[tuple[int, str]] = []
+    if open_ids:
+        names = [escape((await db.get_exercise(eid))["display_name"]) for eid in open_ids]
+        hint = "Открыто сейчас: " + ", ".join(names) + "\n" + hint
+        active = data.get("active_exercise_id")
+        if active is not None:
+            partners = await db.list_superset_partners(
+                callback.from_user.id, active, limit=2, exclude_ids=tuple(open_ids)
+            )
+            partner_buttons = [(p["id"], p["display_name"]) for p in partners]
+
     kb = keyboards.groups_keyboard(
         groups, prefix="pick", extra_buttons=extra, show_all=True,
         partner_buttons=partner_buttons, top_buttons=top_buttons,

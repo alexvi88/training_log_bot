@@ -615,13 +615,14 @@ async def test_pick_template_add_forks_and_enters_logging(fresh_db, user_id):
 # ---------- "Составить программу с AI" on the fresh-workout picker ----------
 
 
-async def _picker_keyboard(db, user_id, monkeypatch):
-    """Render the first picker screen of a fresh workout and return its keyboard.
-    _refresh_live is stubbed — the keyboard is the subject here, not the live
-    tracker it gets rendered into."""
+async def _picker_screen(db, user_id, monkeypatch):
+    """Render the first picker screen of a fresh workout and return its
+    (hint, keyboard). _refresh_live is stubbed — the rendered content is the
+    subject here, not the live tracker it gets rendered into."""
     captured = {}
 
     async def fake_refresh_live(bot, state, user, workout_id, hint, kb):
+        captured["hint"] = hint
         captured["kb"] = kb
 
     monkeypatch.setattr(workout, "_refresh_live", fake_refresh_live)
@@ -633,7 +634,12 @@ async def _picker_keyboard(db, user_id, monkeypatch):
 
     await workout._picker_screen_groups(callback, state, show_program_button=True)
 
-    return captured["kb"]
+    return captured["hint"], captured["kb"]
+
+
+async def _picker_keyboard(db, user_id, monkeypatch):
+    _, kb = await _picker_screen(db, user_id, monkeypatch)
+    return kb
 
 
 async def _picker_extra_callbacks(db, user_id, monkeypatch) -> list[str]:
@@ -699,6 +705,31 @@ async def test_picker_shows_a_button_for_a_recently_trained_program(fresh_db, us
     # Не список дней, а сразу карточка следующего по очереди — «Ноги» уже
     # сделаны, значит на очереди «Верх» (см. db.next_program_day).
     assert ("🗂 Верх/низ · Верх", f"rt:view:{upper}") in buttons
+
+
+async def test_picker_hint_mentions_the_program_buttons_shown_above_it(
+    fresh_db, user_id, monkeypatch
+):
+    """Живой репорт: экран показывал кнопки с днями программ сверху ("Верх/низ
+    масса 2х · День 2 — Низ"), а подсказка под ними говорила только "Выбери
+    группу мышц или найди упражнение по названию" — ни слова про то, что
+    сверху вообще есть кнопки программы."""
+    program_id = await fresh_db.create_program(user_id, "Верх/низ")
+    legs = await fresh_db.create_routine(user_id, "Ноги", program_id=program_id)
+    await fresh_db.create_routine(user_id, "Верх", program_id=program_id)
+    wid = await fresh_db.create_workout(user_id, routine_id=legs)
+    await fresh_db.finish_workout(wid)
+
+    hint, _ = await _picker_screen(fresh_db, user_id, monkeypatch)
+
+    assert "по программе" in hint
+
+
+async def test_picker_hint_without_programs_only_talks_about_groups(fresh_db, user_id, monkeypatch):
+    hint, _ = await _picker_screen(fresh_db, user_id, monkeypatch)
+
+    assert "по программе" not in hint
+    assert "Выбери группу мышц" in hint
 
 
 async def test_picker_ignores_programs_not_trained_recently(fresh_db, user_id, monkeypatch):
@@ -804,6 +835,80 @@ async def test_both_doors_into_the_ai_program_builder_are_labelled_the_same(
     )
 
     assert from_picker == from_manage
+
+
+def _full_callback(user_id: int, data: str):
+    """Like _make_callback, but a real CallbackQuery spec (so isinstance checks
+    in show_manage/ui.safe_edit pick the right branch) with a real-enough
+    .message instead of an untouched MagicMock."""
+    from aiogram.types import CallbackQuery
+
+    message = MagicMock()
+    message.chat = SimpleNamespace(id=user_id)
+    message.message_id = 1
+    message.text = "экран"
+    message.photo = None
+    message.edit_text = AsyncMock(return_value=True)
+    message.answer = AsyncMock(
+        return_value=SimpleNamespace(message_id=999, chat=SimpleNamespace(id=user_id))
+    )
+    message.delete = AsyncMock()
+    callback = MagicMock(spec=CallbackQuery)
+    callback.from_user = SimpleNamespace(id=user_id, username="tester")
+    callback.bot = _make_callback(user_id, data).bot
+    callback.data = data
+    callback.answer = AsyncMock()
+    callback.message = message
+    return callback
+
+
+async def test_choosing_a_program_from_a_fresh_workout_can_step_back_to_the_picker(
+    fresh_db, user_id, monkeypatch
+):
+    """Живой репорт: «начать тренировку → выбрать программу» — и там нет пути
+    назад, только «🏠 Меню», которое уводит мимо уже начатой тренировки. Тапнув
+    «🗂 Выбрать программу» с экрана выбора группы мышц, человек должен вернуться
+    туда же, а не в главное меню."""
+    from handlers import routines
+
+    workout_id = await fresh_db.create_workout(user_id)
+    state = await _make_state(user_id, open_exercises=[], active_exercise_id=None)
+    await state.update_data(workout_id=workout_id)
+    await state.set_state(WorkoutFlow.picking_group)
+
+    manage_callback = _full_callback(user_id, "rt:manage")
+    await routines.rt_manage(manage_callback, state)
+
+    manage_call = (
+        manage_callback.message.edit_text.await_args
+        or manage_callback.message.answer.await_args
+    )
+    manage_kb = manage_call.kwargs["reply_markup"]
+    back_button = manage_kb.inline_keyboard[-1][0]
+    assert back_button.text == "⬅️ Назад"
+    assert back_button.callback_data == "rt:menu"
+
+    main_menu_called = False
+
+    async def fake_show_main_menu(*args, **kwargs):
+        nonlocal main_menu_called
+        main_menu_called = True
+
+    monkeypatch.setattr(workout, "_show_main_menu", fake_show_main_menu)
+    captured = {}
+
+    async def fake_refresh_live(bot, state, user, wid, hint, kb):
+        captured["kb"] = kb
+
+    monkeypatch.setattr(workout, "_refresh_live", fake_refresh_live)
+
+    menu_callback = _full_callback(user_id, "rt:menu")
+    await routines.rt_menu(menu_callback, state)
+
+    assert not main_menu_called, "должно вернуть на пикер, а не в главное меню"
+    assert await state.get_state() == WorkoutFlow.picking_group
+    callbacks = [b.callback_data for row in captured["kb"].inline_keyboard for b in row]
+    assert any(cb.startswith("pick:") for cb in callbacks)
 
 
 async def test_long_name_warning_declines_symbol_count_correctly():
