@@ -94,4 +94,4 @@ async def test_hevy_file_goes_from_upload_straight_to_confirmation(fresh_db, use
     assert message.reply.await_count == 0, "никаких «не понял дату» и вопросов маппинга"
     assert await state.get_state() == ImportFlow.confirming
     text = message.answer.await_args.args[0]
-    assert "1 из 1" in text and "3 подхода" in text
+    assert "1 тренировка" in text and "Bench Press (Barbell)" in text

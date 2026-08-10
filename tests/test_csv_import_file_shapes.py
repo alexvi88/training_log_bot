@@ -100,7 +100,7 @@ async def test_russian_excel_file_goes_from_upload_straight_to_confirmation(fres
     assert message.reply.await_count == 0, "никаких «не понял дату»"
     assert await state.get_state() == ImportFlow.confirming
     text = message.answer.await_args.args[0]
-    assert "1 из 1" in text and "2 подхода" in text
+    assert "1 тренировка" in text and "Жим лёжа" in text
 
 
 async def test_a_single_column_file_says_so_instead_of_dying_on_the_date():
@@ -177,10 +177,12 @@ async def test_confirmation_agrees_in_number_for_one_of_everything(fresh_db, use
         imp_workouts=[{"date": "2026-05-04", "entries": [{"name": "Присед", "sets": [(100.0, 5, None)]}]}],
         imp_resolved={},
     )
-    assert "1 из 1" in text and "1 упражнение" in text and "1 подход" in text
+    assert "1 тренировка" in text and "Присед" in text
 
 
-async def test_confirmation_agrees_in_number_for_five(fresh_db, user_id):
+async def test_confirmation_lists_up_to_three_exercises_and_collapses_the_rest(fresh_db, user_id):
+    """Пять упражнений в одной тренировке — экран подтверждения показывает их
+    так же, как история: до трёх буллитами, остальные одной строкой "+N"."""
     entries = [{"name": f"Упр {i}", "sets": [(100.0, 5, None)] * 5} for i in range(5)]
     text, _ = await _render(
         user_id,
@@ -188,7 +190,44 @@ async def test_confirmation_agrees_in_number_for_five(fresh_db, user_id):
         imp_workouts=[{"date": "2026-05-04", "entries": entries}],
         imp_resolved={},
     )
-    assert "1 из 1" in text and "5 упражнений" in text and "25 подходов" in text
+    assert "1 тренировка" in text
+    assert "Упр 0" in text and "Упр 1" in text and "Упр 2" in text
+    assert "Упр 3" not in text and "Упр 4" not in text
+    assert "+2 других" in text
+
+
+async def test_confirmation_shows_several_workouts_per_page(fresh_db, user_id):
+    """Раньше подтверждение листало по одной тренировке за раз — теперь, как в
+    истории, несколько тренировок сразу на одной странице сообщения."""
+    workouts = [
+        {"date": f"2026-05-{day:02d}", "entries": [{"name": "Присед", "sets": [(100.0, 5, None)]}]}
+        for day in range(1, 4)
+    ]
+    text, _ = await _render(
+        user_id, csv_import.show_confirmation, imp_workouts=workouts, imp_resolved={}
+    )
+    assert "3 тренировки" in text
+    assert "01.05.2026" in text and "02.05.2026" in text and "03.05.2026" in text
+    assert "стр." not in text, "все три уместились на одной странице — номер страницы лишний"
+
+
+async def test_confirmation_paginates_past_the_page_size(fresh_db, user_id):
+    workouts = [
+        {"date": f"2026-05-{day:02d}", "entries": [{"name": "Присед", "sets": [(100.0, 5, None)]}]}
+        for day in range(1, 10)
+    ]
+    text, state = await _render(
+        user_id, csv_import.show_confirmation, imp_workouts=workouts, imp_resolved={}
+    )
+    assert "9 тренировок" in text
+    assert "стр. 1/2" in text
+    assert "09.05.2026" not in text, "девятая тренировка должна быть на второй странице"
+
+    event = _message_event(user_id)
+    await csv_import._render_confirmation_page(event, state, 1)
+    page2_text = event.answer.await_args.args[0]
+    assert "09.05.2026" in page2_text
+    assert "стр. 2/2" in page2_text
 
 
 async def test_a_file_of_blank_rows_never_offers_to_load_zero_workouts(fresh_db, user_id):
