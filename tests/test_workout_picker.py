@@ -662,6 +662,21 @@ async def test_picker_offers_building_a_program_when_the_user_has_none(
     assert "ai:buildprog" in callbacks
 
 
+async def test_picker_orders_program_before_repeat_before_ai_buildworkout(
+    fresh_db, user_id, monkeypatch
+):
+    """«Выбрать программу», потом «Повторить тренировку», потом «Собрать на
+    сегодня» — в этом порядке, а не как они исторически появлялись в коде."""
+    monkeypatch.setattr(workout.ai_trainer, "is_configured", lambda: True)
+    await fresh_db.create_workout(user_id)
+    await fresh_db.finish_workout(await fresh_db.create_workout(user_id))
+
+    callbacks = await _picker_extra_callbacks(fresh_db, user_id, monkeypatch)
+    order = [c for c in callbacks if c in ("rt:manage", "pick:repeat", "ai:buildworkout")]
+
+    assert order == ["rt:manage", "pick:repeat", "ai:buildworkout"]
+
+
 async def test_picker_hides_the_ai_program_button_once_a_program_exists(
     fresh_db, user_id, monkeypatch
 ):

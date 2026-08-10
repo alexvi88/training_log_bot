@@ -1634,12 +1634,12 @@ async def _picker_screen_groups(callback: CallbackQuery, state: FSMContext, show
                 top_buttons.append((f"🗂 {p['name']} · {next_day['name']}", f"rt:view:{next_day['id']}"))
             else:
                 top_buttons.append((f"🗂 {p['name']}", f"rt:view:{p['routine_id']}"))
-        # Offered only on the very first picker screen of a fresh workout: pick
-        # any past session to re-run for people who train A/B without a saved
-        # program, plus the shortcut into saved programs.
+        # Offered only on the very first picker screen of a fresh workout: the
+        # shortcut into saved programs, plus picking any past session to
+        # re-run for people who train A/B without a saved program.
+        extra.append(("🗂 Выбрать программу", "rt:manage"))
         if await db.count_workouts(callback.from_user.id) > 0:
             extra.append(("🔁 Повторить тренировку", "pick:repeat"))
-        extra.append(("🗂 Выбрать программу", "rt:manage"))
         if ai_trainer.is_configured():
             # Тренировка на сегодня, а не программа: сюда приходят тренироваться,
             # и полезен тот вопрос, который человек себе прямо сейчас и задаёт —
