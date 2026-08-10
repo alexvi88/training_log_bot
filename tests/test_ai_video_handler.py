@@ -107,6 +107,26 @@ async def test_daily_limit_blocks_before_download(monkeypatch, wired):
     assert str(config.AI_VIDEO_DAILY_LIMIT) in message.reply.await_args.args[0]
 
 
+async def test_preview_block_still_analyzes_video(monkeypatch, wired):
+    """Регрессия: у своего аккаунта первое превью-предупреждение за сутки
+    раньше проглатывало сам ролик — «Понятно» лечило только следующую попытку,
+    а этот вопрос надо было слать заново. Разбор должен идти сразу же."""
+    monkeypatch.setattr(
+        handler.ai_limits, "check",
+        AsyncMock(return_value=handler.ai_limits.Block(
+            kind="video", log="video preview", user_text="лимит рядом", preview=True,
+        )),
+    )
+    monkeypatch.setattr(handler, "ai_keyboard", AsyncMock(return_value=None))
+    message = _message()
+    await handler.ai_video_question(message, MagicMock())
+
+    wired.analyze.assert_awaited_once()
+    wired.handle.assert_awaited_once()
+    db.increment_ai_video_count.assert_awaited_once()
+    message.reply.assert_awaited()
+
+
 async def test_daily_cost_cap_turns_video_off_before_download(monkeypatch, wired):
     """Дорогие сутки выключают разбор видео у всех сразу — даже у того, кто
     сегодня не прислал ни одного ролика."""

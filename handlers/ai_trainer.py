@@ -579,16 +579,19 @@ async def _start_ai_scenario(
         logger.info("AI program builder blocked for user %s: %s", user_id, block.log)
         if block.preview:
             # Предупреждение своим — сообщением, а не алертом: в алерт кнопку
-            # «Понятно» не положишь, а без неё лимит не пропустит и дальше.
+            # «Понятно» не положишь. Сам вопрос при этом всё равно уходит —
+            # preview показывает, что увидел бы обычный атлет, а не отменяет
+            # действие, которое его вызвало (раньше «Понятно» снимало лимит
+            # только на будущее, а текущий запрос приходилось повторять).
             await ai_limits.reply(callback.message, block)
             await callback.answer()
+        else:
+            await callback.answer(
+                "На сегодня лимит вопросов исчерпан 😮\u200d💨 Дай мне передохнуть, "
+                "возвращайся завтра — а пока забери готовую в «✨ Готовые программы».",
+                show_alert=True,
+            )
             return
-        await callback.answer(
-            "На сегодня лимит вопросов исчерпан 😮\u200d💨 Дай мне передохнуть, "
-            "возвращайся завтра — а пока забери готовую в «✨ Готовые программы».",
-            show_alert=True,
-        )
-        return
     if not _try_claim_busy(user_id):
         await callback.answer("Секунду, ещё думаю над прошлым вопросом 😅", show_alert=True)
         return
@@ -1990,7 +1993,11 @@ async def _handle_question(
     if block is not None:
         logger.info("AI question blocked for user %s: %s", user_id, block.log)
         await ai_limits.reply(message, block, reply_markup=await ai_keyboard(user_id))
-        return
+        # preview — свой аккаунт, ещё не нажавший «Понятно» сегодня: вопрос
+        # всё равно уходит, предупреждение не отменяет действие, которое его
+        # вызвало (см. ai_limits.py и такую же развилку в других вызовах check).
+        if not block.preview:
+            return
 
     data = await state.get_data()
     history = data.get("ai_history", [])
@@ -2664,7 +2671,12 @@ async def ai_video_question(message: Message, state: FSMContext):
         if block is not None:
             logger.info("AI video blocked for user %s: %s", user_id, block.log)
             await ai_limits.reply(message, block, reply_markup=await ai_keyboard(user_id))
-            return
+            # preview — свой аккаунт, ещё не нажавший «Понятно» сегодня: разбор
+            # всё равно идёт, предупреждение не отменяет ролик, который его
+            # вызвал (иначе «Понятно» снимало бы лимит только на будущее, а
+            # присланное видео пришлось бы слать заново).
+            if not block.preview:
+                return
 
         if video.file_size and video.file_size > config.MAX_VIDEO_BYTES:
             await message.reply("Файл тяжёлый, я такой не вытяну. Сними покороче или полегче.")
@@ -2738,7 +2750,11 @@ async def ai_voice_question(message: Message, state: FSMContext):
         if block is not None:
             logger.info("AI voice blocked for user %s: %s", user_id, block.log)
             await ai_limits.reply(message, block, reply_markup=await ai_keyboard(user_id))
-            return
+            # preview — свой аккаунт, ещё не нажавший «Понятно» сегодня:
+            # расшифровка и ответ всё равно идут, см. тот же комментарий у
+            # video-хендлера чуть выше по файлу.
+            if not block.preview:
+                return
 
         voice_file = await _download_voice_as_file(message)
         if voice_file is None:

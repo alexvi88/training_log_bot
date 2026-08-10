@@ -4460,8 +4460,14 @@ async def _search_block(
         block = await ai_limits.check(user_id, kind)
         if block is None:
             continue
-        if block.preview and on_limit is not None:
-            await on_limit(block)
+        if block.preview:
+            # Свой аккаунт, ещё не нажавший «Понятно» сегодня: показываем, что
+            # увидел бы обычный атлет, но сам поиск не отменяем — иначе
+            # «Понятно» снимало бы лимит только на будущее, а этот, уже
+            # заданный вопрос всё равно ушёл бы без свежих данных.
+            if on_limit is not None:
+                await on_limit(block)
+            continue
         return block
     return None
 

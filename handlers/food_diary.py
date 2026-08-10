@@ -278,8 +278,11 @@ async def _analyze_and_show(
     if block is not None:
         logger.info("food analysis blocked for user %s: %s", message.from_user.id, block.log)
         await ai_limits.reply(message, block)
-        await state.set_state(FoodDiaryFlow.viewing)
-        return
+        # preview — свой аккаунт, ещё не нажавший «Понятно» сегодня: разбор
+        # всё равно идёт, предупреждение не отменяет то, что его вызвало.
+        if not block.preview:
+            await state.set_state(FoodDiaryFlow.viewing)
+            return
 
     # Модели отдаём только пищевую часть прошлой догадки: file_id фотографии,
     # признак источника и вердикт is_food ей ни о чём не говорят, а место в
@@ -415,11 +418,13 @@ async def fd_text_entry(message: Message, state: FSMContext):
     block = await ai_limits.check(message.from_user.id, ai_limits.KIND_FOOD)
     if block is not None:
         if block.preview:
+            # Свой аккаунт, ещё не нажавший «Понятно» сегодня: разбор всё
+            # равно идёт — предупреждение не отменяет то, что его вызвало.
             await ai_limits.reply(message, block)
+        else:
+            await message.reply("Записал как есть — калории сегодня уже не считаю, вернусь к ним завтра.")
+            await _save_now(message, state, _plain_text_pending(text))
             return
-        await message.reply("Записал как есть — калории сегодня уже не считаю, вернусь к ним завтра.")
-        await _save_now(message, state, _plain_text_pending(text))
-        return
 
     await _analyze_and_show(message, state, text=text)
 
