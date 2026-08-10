@@ -12,6 +12,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 import achievement_sync
+import ai_trainer
 import db
 import formatting
 import keyboards
@@ -406,6 +407,20 @@ async def _finish_mapping(event, state: FSMContext) -> None:
             resolved[name] = ex["id"]
         else:
             unresolved.append(name)
+
+    # Импорт часто приносит чужие названия (Hevy пишет по-английски: "Bench
+    # Press (Barbell)"), которые не совпадут с русским каталогом ни разу — но
+    # часто означают ровно то же движение. Модель переводит их в точные
+    # имена каталога на лету; совпавшее форкается сразу с фото и описанием
+    # техники, а не голым, как обычное «создать новое».
+    if unresolved:
+        aliases = await ai_trainer.match_exercise_names_to_catalog(user_id, unresolved)
+        for name, catalog_name in aliases.items():
+            ex_id = await db.get_or_create_user_exercise_by_name(user_id, catalog_name)
+            if ex_id is not None:
+                resolved[name] = ex_id
+        unresolved = [n for n in unresolved if n not in aliases]
+
     await state.update_data(imp_resolved=resolved)
 
     if unresolved:
