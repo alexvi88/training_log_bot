@@ -480,11 +480,13 @@ async def menu_ai(callback: CallbackQuery, state: FSMContext):
     # тренером пользуется. Это отдельный экран входа, а не вклинивание в ответ,
     # так что «потери контекста» тут не возникает.
     text += await _memory_reminder(callback.from_user.id)
-    # Готовые вопросы — только на свежем интро: посреди разговора они бы
-    # читались как «тренер забыл, о чём речь».
+    # Готовые вопросы — на любом заходе через меню, свежем или нет: это
+    # отдельный экран входа, а не вклинивание в ответ посреди разговора, так
+    # что «тренер забыл, о чём речь» тут не читается — человек сам вернулся на
+    # этот экран, а не получил его посреди чужого ответа.
     keyboard = await ai_keyboard(
         callback.from_user.id,
-        presets=await intro_presets(callback.from_user.id) if fresh else (),
+        presets=await intro_presets(callback.from_user.id),
     )
     await ui.safe_edit(callback, text, reply_markup=keyboard, parse_mode="HTML")
     await callback.answer()

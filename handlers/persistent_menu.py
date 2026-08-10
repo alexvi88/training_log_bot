@@ -89,15 +89,16 @@ async def _open_ai_trainer(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     fresh = not data.get("ai_history")
     text = INTRO_TEXT if fresh else RESUME_TEXT
-    # Готовые вопросы — те же, что на инлайн-входе (menu:ai). Без них нижняя
-    # кнопка показывала интро, которое обещает «начни с готового вопроса на
-    # кнопках ниже», а под текстом было одно «Меню»: экран врал сам себе, и
-    # зависело это от того, каким из двух входов человек вошёл.
+    # Готовые вопросы — те же, что на инлайн-входе (menu:ai), и на любом
+    # заходе, свежем или нет: это отдельный экран входа, а не вклинивание в
+    # ответ. Без них нижняя кнопка показывала интро, которое обещает «начни с
+    # готового вопроса на кнопках ниже», а под текстом было одно «Меню»: экран
+    # врал сам себе, и зависело это от того, каким из двух входов человек вошёл.
     await message.answer(
         text,
         reply_markup=await ai_keyboard(
             message.from_user.id,
-            presets=await intro_presets(message.from_user.id) if fresh else (),
+            presets=await intro_presets(message.from_user.id),
         ),
         parse_mode="HTML",
     )
