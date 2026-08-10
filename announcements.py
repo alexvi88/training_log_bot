@@ -117,9 +117,24 @@ RELEASE_AI_PROGRAMS_AND_VIDEO = Announcement(
     available=config.video_analysis_available,
 )
 
+RELEASE_AI_TRAINER_ACTIONS = Announcement(
+    key="release_ai_trainer_actions",
+    text=(
+        "ПРИВЕТ АТЛЕТ, тренер умеет не только отвечать — он ещё и делает сам.\n\n"
+        "⚖️ <b>Пишет вес и еду.</b> «Вешу 78.4» — ляжет в дневник веса. «Занеси: "
+        "овсянка с бананом» — в дневник еды, калории посчитает сам, если не назвал.\n\n"
+        "⚙️ <b>Заводит и правит упражнения.</b> «Заведи упражнение...», «перенеси "
+        "жим в грудь», «переименуй становую в сумо», «убери приседания из списка».\n\n"
+        "🗂 <b>Управляет программами.</b> «Скопируй Верх/низ», «объедини две ...», "
+        "«удали старую», «поделись программой с другом».\n\n"
+        "Под каждым таким ответом — кнопка отката, если передумал."
+    ),
+    buttons=[("🤖 Спросить тренера", "menu:ai")],
+)
+
 # Что ещё не разослано. Отправленную рассылку отсюда убираем — база помнит её
 # и без этого списка.
-ANNOUNCEMENTS: list[Announcement] = [RELEASE_AI_PROGRAMS_AND_VIDEO]
+ANNOUNCEMENTS: list[Announcement] = [RELEASE_AI_PROGRAMS_AND_VIDEO, RELEASE_AI_TRAINER_ACTIONS]
 
 
 def by_key(key: str) -> Announcement | None:
