@@ -375,15 +375,14 @@ def _dash_section(ax, title: str, note: str = "", note_colour: str = HEATMAP_FIL
 
 
 # Календарь сводки — плоские клетки-числа месяца, а не гитхабовская тепловая
-# полоса по годам: 30 дней и так укладываются в 5-6 недель, и растягивать их на
-# всю ширину незачем — квадратная клетка со своим номером дня читается как
-# настоящий календарь, а не как индикатор.
-_DASH_CAL_LEFT_UNITS = 0.3
-_DASH_CAL_RIGHT_UNITS = 0.3
+# полоса по годам: 30 дней и так укладываются в 5-6 недель. Клетка держит
+# фиксированный размер (как раньше — 0.119 дюйма у гитхабовской версии), а не
+# выводится из полной ширины картинки: семь колонок, растянутых на всю ширину
+# в 6.67 дюйма, дают клетку почти в дюйм — вчетверо крупнее настоящего
+# календаря, и лишний воздух в блоке при этом раздувает всю картинку по
+# высоте, отчего соседние виджеты кажутся тоньше и мельче, чем есть.
+_DASH_CAL_CELL_IN = 0.42
 _DASH_CAL_COLUMNS = 7              # неделя — строка календаря, не колонка
-_DASH_CELL_IN = DASH_WIDTH_IN / (
-    _DASH_CAL_LEFT_UNITS + _DASH_CAL_COLUMNS + _DASH_CAL_RIGHT_UNITS
-)
 _DASH_CAL_TOP_UNITS = -2.1         # заголовок блока + строка дней недели
 _DASH_CAL_BOTTOM_PAD = 0.35
 _WEEKDAYS_RU = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
@@ -405,7 +404,7 @@ def _dash_calendar_height(weeks: int) -> float:
     назначить independently, matplotlib впишет данные внутрь, оставив поля сверху
     и снизу, и сетка перестанет попадать в свою же подпись.
     """
-    return _DASH_CELL_IN * (weeks + _DASH_CAL_BOTTOM_PAD - _DASH_CAL_TOP_UNITS)
+    return _DASH_CAL_CELL_IN * (weeks + _DASH_CAL_BOTTOM_PAD - _DASH_CAL_TOP_UNITS)
 
 
 def _dash_month_calendar(
@@ -424,7 +423,12 @@ def _dash_month_calendar(
     monday = start - dt.timedelta(days=start.weekday())
     weeks = max((today - monday).days // 7 + 1, 1)
     ax.set_aspect("equal")
-    ax.set_xlim(-_DASH_CAL_LEFT_UNITS, _DASH_CAL_COLUMNS + _DASH_CAL_RIGHT_UNITS)
+    # Клетка фиксированного размера, а не во всю ширину картинки: сетка из семи
+    # колонок центрируется в оставшемся просторе, как настоящий календарь на
+    # столе, а не растягивается в баннер.
+    x_units_total = DASH_WIDTH_IN / _DASH_CAL_CELL_IN
+    left_units = (x_units_total - _DASH_CAL_COLUMNS) / 2
+    ax.set_xlim(-left_units, x_units_total - left_units)
     ax.set_ylim(weeks + _DASH_CAL_BOTTOM_PAD, _DASH_CAL_TOP_UNITS)
 
     blended = ax.get_yaxis_transform()
@@ -463,7 +467,7 @@ def _dash_month_calendar(
 
 
 def _dash_growth_tiles(
-    ax, tiles, fg: str, dim: str, ok: str, gold: str, title: str = "", note: str = "",
+    fig, ax, tiles, fg: str, dim: str, ok: str, gold: str, title: str = "", note: str = "",
 ) -> None:
     """Плитки роста e1RM: 2 строки по 3, имя — процент — «227кг vs 220кг».
 
@@ -472,6 +476,11 @@ def _dash_growth_tiles(
     плитки рамка золотая — единственная пометка «лучший рост», без подписи и
     эмодзи: рамка одной плитки среди одинаковых остальных читается сама, а
     подпись или значок повторяли бы то же самое вторым способом.
+
+    Имя не обрезается многоточием, но и не вылезает за плитку — вместо этого
+    сжимается по кеглю до нужной ширины, тем же приёмом, что и заголовок
+    (_shrink_to_fit): длинное каталожное имя из Hevy иначе рисовалось поверх
+    соседней плитки, а не переносилось и не обрезалось.
     """
     ax.set_ylim(_LIFT_BOTTOM, _LIFT_TOP)
     if title:
@@ -492,8 +501,9 @@ def _dash_growth_tiles(
                 )
             )
         pad_x = 0.028
-        ax.text(x + pad_x, y + _LIFT_ROW_H * 0.24, name, color=dim,
-                fontsize=DASH_FS_CAPTION, va="center")
+        name_txt = ax.text(x + pad_x, y + _LIFT_ROW_H * 0.24, name, color=dim,
+                            fontsize=DASH_FS_CAPTION, va="center")
+        _shrink_to_fit(fig, name_txt, tile_w - 2 * pad_x, min_size=5.0)
         ax.text(x + pad_x, y + _LIFT_ROW_H * 0.58, pct, color=ok, fontsize=DASH_FS_VALUE,
                 fontweight="bold", va="center")
         ax.text(x + pad_x, y + _LIFT_ROW_H * 0.85, abs_str, color=dim,
@@ -604,7 +614,7 @@ def render_menu_dashboard(
     _dash_month_calendar(band("cal"), day_counts, today, start, GOLD, calendar_title, calendar_note)
 
     if lift_tiles:
-        _dash_growth_tiles(band("lifts"), lift_tiles, FG, DIM, OK, GOLD, lifts_title, lifts_note)
+        _dash_growth_tiles(fig, band("lifts"), lift_tiles, FG, DIM, OK, GOLD, lifts_title, lifts_note)
 
     for key in bands:
         if not key.startswith("gap:"):
