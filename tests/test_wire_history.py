@@ -136,9 +136,6 @@ def _fake_client(responses):
     )
 
 
-_GATE = '{"search": false, "data": true}'
-
-
 async def _store(sink: list, messages: list) -> None:
     sink.append(messages)
 
@@ -148,7 +145,7 @@ async def test_wire_carries_the_answer_so_the_next_question_appends(
 ):
     """Финальный ответ в messages не попадал — цикл на нём заканчивается. Без него
     история отдаёт вопрос без ответа, то есть снова не тот префикс."""
-    client = _fake_client([_response(content=_GATE), _response(content="жми дальше", reasoning="думал")])
+    client = _fake_client([_response(content="жми дальше", reasoning="думал")])
     monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
     seen: list = []
 
@@ -169,7 +166,7 @@ async def test_wire_carries_the_answer_so_the_next_question_appends(
 async def test_photo_is_not_stored_in_history(fresh_db, user_id, monkeypatch):
     """База64 картинки в FSM — это мегабайты в файле, который читается на каждый
     апдейт, плюс повторная плата за image-токены на каждом следующем вопросе."""
-    client = _fake_client([_response(content=_GATE), _response(content="вижу еду")])
+    client = _fake_client([_response(content="вижу еду")])
     monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
     seen: list = []
 
@@ -189,7 +186,7 @@ async def test_photo_is_not_stored_in_history(fresh_db, user_id, monkeypatch):
 async def test_video_observations_stay_in_history(fresh_db, user_id, monkeypatch):
     """Чтобы на «точно нет ошибок?» тренер помнил, что именно видел на ролике —
     раньше этот контекст терялся сразу после ответа."""
-    client = _fake_client([_response(content=_GATE), _response(content="норм")])
+    client = _fake_client([_response(content="норм")])
     monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
     seen: list = []
 
