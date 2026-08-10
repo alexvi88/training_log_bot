@@ -27,7 +27,10 @@ _GATE_NO_SEARCH = '{"search": false, "data": true}'
 # та же кнопка отката, что у log_food/log_bodyweight, только для стирания.
 # Поднят с 20_300 под send_feedback_to_admin (~470 символов): жалобы на бот
 # люди говорят тренеру, а не в /feedback, и раньше они там и оставались.
-_TOOL_SCHEMA_CHAR_BUDGET = 20_800
+# Поднят с 20_800 под archive_exercises (~330 символов): «заархивируй все
+# неиспользуемые» вызывало archive_exercise в цикле — одна кнопка на каждое
+# упражнение вместо одной на все.
+_TOOL_SCHEMA_CHAR_BUDGET = 21_200
 
 
 async def test_tool_schemas_stay_within_their_character_budget():
