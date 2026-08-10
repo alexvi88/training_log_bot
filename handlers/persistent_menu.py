@@ -32,16 +32,18 @@ async def attach_silently(message: Message, user_id: int) -> None:
 
     A reply keyboard can only arrive attached to a message, and every screen
     here already carries an inline keyboard instead, so there's nothing to ride
-    along with: the carrier is sent and deleted straight away. Telegram keeps
-    the keyboard once it's set — deleting the message that set it doesn't take
-    it back down.
+    along with: the carrier is a standalone message. It used to be deleted
+    right after sending on the assumption that Telegram keeps the keyboard
+    once it's set — true on iOS, but live reports from Android showed the
+    persistent row vanishing entirely after the carrier that attached it was
+    deleted. One extra "⌨️" line in the chat is a small, permanent cost next
+    to a client where the main navigation silently doesn't exist.
 
     Bumps reply_keyboard_version so the middleware, which runs after the
     handler and re-reads the row, sees an up-to-date user and stays quiet.
     """
     with suppress(TelegramBadRequest):
-        carrier = await message.answer("⌨️", reply_markup=keyboards.persistent_menu())
-        await carrier.delete()
+        await message.answer("⌨️", reply_markup=keyboards.persistent_menu())
     await db.update_user(user_id, reply_keyboard_version=keyboards.PERSISTENT_MENU_VERSION)
 
 
