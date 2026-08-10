@@ -2909,6 +2909,39 @@ async def exercise_e1rm_series(
     return [row["e1rm"] for row in reversed(await cur.fetchall())]
 
 
+async def exercise_e1rm_growth(
+    user_id: int,
+    exercise_id: int,
+    window_start_date: str,
+    formula: str = "epley",
+    *,
+    tz_offset: Optional[int] = None,
+) -> tuple[float, float]:
+    """(лучший e1RM ДО окна, лучший e1RM ВНУТРИ окна) — база и результат для
+    плитки роста.
+
+    Одна база на всю историю до окна, а не первая точка внутри него: серия
+    «220, 210, 227» за 8 недель иначе читалась бы как рост с 220 до 227, хотя
+    человек на самом деле проседал и только сейчас вернулся выше своего же
+    старого максимума — а прирост, который стоит показывать, это разница
+    именно с ним.
+    """
+    day = _local_day("w.started_at", await _tz_offset_of(user_id, tz_offset))
+    e1rm = _e1rm_sql(formula)
+    cur = await conn().execute(
+        f"SELECT COALESCE(MAX(CASE WHEN {day} < ? THEN {e1rm} END), 0) AS before_max, "
+        f"       COALESCE(MAX(CASE WHEN {day} >= ? THEN {e1rm} END), 0) AS window_max "
+        "FROM sets s "
+        "JOIN workout_blocks b ON b.id = s.block_id "
+        "JOIN workouts w ON w.id = b.workout_id "
+        "WHERE w.user_id = ? AND w.status = 'finished' "
+        "AND s.exercise_id = ? AND s.reps > 0",
+        (window_start_date, window_start_date, user_id, exercise_id),
+    )
+    row = await cur.fetchone()
+    return row["before_max"], row["window_max"]
+
+
 async def daily_tonnage(
     user_id: int, start_date: str, end_date: str, *, tz_offset: Optional[int] = None
 ) -> dict[str, float]:

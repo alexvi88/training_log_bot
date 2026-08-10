@@ -304,6 +304,7 @@ DASH_GAP = 0.34               # распорка между виджетами, 
 DASH_PAD = 0.14               # распорка внутри группы, без линейки
 DASH_CARD = "#171d26"
 DASH_RULE = "#2b3543"
+DASH_GOLD = "#e0a845"   # рамка «сегодня» в календаре и лучшей плитки роста
 
 # Типографика сводки: шесть роле́й вместо одиннадцати случайных размеров. До этого
 # в одной картинке жили 6, 6.5, 7, 7.5, 8, 8.5, 9, 10, 13.5, 15 и 23 pt, причём
@@ -342,34 +343,17 @@ def _shrink_to_fit(fig, txt, max_width: float, min_size: float = 13.0) -> None:
     while txt.get_fontsize() > min_size and txt.get_window_extent(renderer).width > limit:
         txt.set_fontsize(txt.get_fontsize() - 0.5)
 
-# Карточка движения размечена тем же шагом, что и строка коридора объёма, и
-# высота блока выводится из разметки, а не наоборот. Раньше было наоборот: блоку
-# назначались 2.45 дюйма на 3.6 единицы оси, единица выходила 0.68 дюйма — вдвое
-# крупнее соседней панели. Отступ «в одну единицу» между подписью блока и именем
-# движения из-за этого занимал сотню пикселей пустоты, а на сам график
-# оставалось меньше её. Теперь единица одна на оба блока, воздух между строками
-# такой же плотный, как в коридоре, а всё сэкономленное ушло в высоту линии.
+# Плитки роста — 2 строки по 3, без спарклайна: рост уже назван числом
+# (процентом), и линия рядом с ним не добавляет факта, только площадь. Единица
+# та же, что у коридора объёма — воздух между блоками сводки везде одинаковый.
 _LIFT_UNIT_IN = _DASH_VOL_STEP
 _LIFT_TOP = -1.4          # верх полосы — как у панели объёма
-_LIFT_NAME_Y = 0.0        # имя движения: первая строка блока
-_LIFT_VALUE_Y = 0.85      # под ним крупное число и изменение
-# Куда линия движения падает и откуда поднимается, в тех же единицах.
-_LIFT_LINE_TOP = 1.45
-_LIFT_LINE_BOTTOM = 5.65
-_LIFT_BOTTOM = 6.2
-_LIFT_LINE_HEIGHT = _LIFT_LINE_BOTTOM - _LIFT_LINE_TOP
+_LIFT_COLS = 3
+_LIFT_ROW_H = 2.0         # высота одной плитки, в тех же единицах
+_LIFT_ROW_GAP = 0.3
+_LIFT_ROWS_TOP = (0.0, _LIFT_ROW_H + _LIFT_ROW_GAP)
+_LIFT_BOTTOM = _LIFT_ROWS_TOP[-1] + _LIFT_ROW_H + 0.25
 _DASH_LIFTS_H = _LIFT_UNIT_IN * (_LIFT_BOTTOM - _LIFT_TOP)
-# Низ блока, когда ни у одного движения нет линии: место под график не
-# отводится. Иначе у человека, у которого каждое движение сделано один раз,
-# внизу сводки висела пустая полоса в три сантиметра — и читалась как «график
-# не нарисовался», хотя рисовать было нечего.
-_LIFT_BOTTOM_BARE = _LIFT_VALUE_Y + 0.7
-
-# Сколько карточек движений размечается по ширине независимо от того, сколько
-# их пришло. Одна карточка на всю ширину — это спарклайн длиной в картинку, и
-# +5 кг на нём выглядят как рывок через полстраницы: наклон линии читается на
-# глаз, а её длина — нет. Пустое место справа честнее.
-_LIFT_SLOTS = 3
 
 
 def _dash_card(ax, x, y, w, h, colour=DASH_CARD) -> None:
@@ -390,146 +374,130 @@ def _dash_section(ax, title: str, note: str = "", note_colour: str = HEATMAP_FIL
                 ha="right", va="center")
 
 
-# Календарь сводки — тот же гитхабовский, что и раньше: квадратная клетка.
-# Сплющивать его было ошибкой. Клетка держится ровно 0.119 дюйма, а высота блока
-# из неё выводится, поэтому масштаб не зависит от длины истории: у человека с
-# девятью неделями клетки такие же, просто занимают левую часть полосы, — как в
-# гитхабе у молодого аккаунта. Растягивание девяти колонок на всю ширину давало
-# полосы 8:1, на календарь уже не похожие.
-_DASH_CAL_LEFT_UNITS = 3.4         # слева от сетки — подписи Пн/Ср/Пт
-# Справа тоже нужен запас, и раньше его не было: клетка выводилась из ширины на 56
-# юнитов, а колонок в полном годе 53 плюс 3.4 слева — последняя неделя (та самая,
-# в которой человек тренируется прямо сейчас) уезжала за край обрезанной, а
-# подпись текущего месяца не рисовалась вовсе, потому что не влезала. Запас
-# рассчитан на трёхбуквенное «Авг» у самой правой колонки.
-_DASH_CAL_RIGHT_UNITS = 2.4
-_DASH_CAL_COLUMNS = 53             # 52 недели назад плюс текущая
+# Календарь сводки — плоские клетки-числа месяца, а не гитхабовская тепловая
+# полоса по годам: 30 дней и так укладываются в 5-6 недель, и растягивать их на
+# всю ширину незачем — квадратная клетка со своим номером дня читается как
+# настоящий календарь, а не как индикатор.
+_DASH_CAL_LEFT_UNITS = 0.3
+_DASH_CAL_RIGHT_UNITS = 0.3
+_DASH_CAL_COLUMNS = 7              # неделя — строка календаря, не колонка
 _DASH_CELL_IN = DASH_WIDTH_IN / (
     _DASH_CAL_LEFT_UNITS + _DASH_CAL_COLUMNS + _DASH_CAL_RIGHT_UNITS
 )
-_DASH_CAL_TOP_UNITS = -4.0         # место над сеткой под месяцы и заголовок
-_DASH_CAL_BOTTOM_UNITS = 7.6
-# Ширина подписи месяца в юнитах: три буквы шрифтом DASH_FS_MICRO. Нужна, чтобы
-# решать, влезает ли подпись, а не гадать по номеру колонки.
-_DASH_CAL_MONTH_UNITS = 1.6
+_DASH_CAL_TOP_UNITS = -2.1         # заголовок блока + строка дней недели
+_DASH_CAL_BOTTOM_PAD = 0.35
+_WEEKDAYS_RU = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
 
 
-def _dash_calendar_height() -> float:
-    """Высота блока календаря в дюймах — производная от размера клетки.
+def _dash_calendar_weeks(today: dt.date, start: dt.date) -> int:
+    """Сколько строк займёт календарь: окно почти никогда не совпадает с
+    границами недели, так что даже 30 дней иногда ложатся в шесть неполных
+    строк, а не в ровные пять."""
+    monday = start - dt.timedelta(days=start.weekday())
+    return (today - monday).days // 7 + 1
+
+
+def _dash_calendar_height(weeks: int) -> float:
+    """Высота блока календаря в дюймах — производная от размера клетки и числа
+    строк.
 
     Считается, а не задаётся: у оси включён equal-аспект, и если высоту полосы
     назначить independently, matplotlib впишет данные внутрь, оставив поля сверху
     и снизу, и сетка перестанет попадать в свою же подпись.
     """
-    return _DASH_CELL_IN * (_DASH_CAL_BOTTOM_UNITS - _DASH_CAL_TOP_UNITS)
+    return _DASH_CELL_IN * (weeks + _DASH_CAL_BOTTOM_PAD - _DASH_CAL_TOP_UNITS)
 
 
-def _dash_year_calendar(
-    ax, day_counts, today: dt.date, start: dt.date, title: str = "", note: str = ""
+def _dash_month_calendar(
+    ax, day_counts, today: dt.date, start: dt.date, gold: str,
+    title: str = "", note: str = "",
 ) -> None:
-    """Календарь года клетками, как в render_year_heatmap.
+    """Календарь окна клетками с номером дня — заполненная клетка вместо
+    подписи внутри неё была бы вернее по духу гитхаба, но число даёт то, чего
+    тепловая карта никогда не давала: ответ на «а какого числа я был в зале»
+    без пересчёта клеток от края.
 
-    Заголовок рисуется в смешанной системе координат (x — доля ширины оси, y — в
-    данных): по x он обязан встать на тот же DASH_LEFT, что подписи остальных
-    виджетов, а сама ось размечена неделями, и «неделя −3.4» уехала бы к самому
-    краю картинки. Именно так он и стоял в первой версии — на 0.004 ширины вместо
-    0.04, из-за чего заголовки блоков не сходились по левому краю.
+    Сегодняшняя клетка обведена золотой рамкой — без заливки и подписи: заливка
+    сама по себе уже говорит «тренировался/нет», а вторая заливка поверх первой
+    означала бы два разных факта одним и тем же приёмом.
     """
-    start = start - dt.timedelta(days=start.weekday())
-    columns = max((today - start).days // 7 + 1, 1)
-    x_units = DASH_WIDTH_IN / _DASH_CELL_IN
-    # Короткая история год не заполняет, и прижатая влево сетка читается островком
-    # в углу с пустотой до правого края. Центрируем её: тогда пустота
-    # симметрична и выглядит выбором, а не обрезком. Клетка при этом остаётся того
-    # же размера — растянуть девять недель на всю ширину значило бы вернуть полосы
-    # 8:1, из-за которых сплющивание и выбросили.
-    content_units = (DASH_RIGHT - DASH_LEFT) * x_units
-    left_units = _DASH_CAL_LEFT_UNITS
-    if columns < content_units:
-        left_units = max(left_units, (x_units - columns) / 2)
+    monday = start - dt.timedelta(days=start.weekday())
+    weeks = max((today - monday).days // 7 + 1, 1)
     ax.set_aspect("equal")
-    ax.set_xlim(-left_units, x_units - left_units)
-    ax.set_ylim(_DASH_CAL_BOTTOM_UNITS, _DASH_CAL_TOP_UNITS)
+    ax.set_xlim(-_DASH_CAL_LEFT_UNITS, _DASH_CAL_COLUMNS + _DASH_CAL_RIGHT_UNITS)
+    ax.set_ylim(weeks + _DASH_CAL_BOTTOM_PAD, _DASH_CAL_TOP_UNITS)
 
     blended = ax.get_yaxis_transform()
     if title:
-        ax.text(DASH_LEFT, -3.3, title, color="#9aa4b2", fontsize=DASH_FS_LABEL,
+        ax.text(DASH_LEFT, -1.65, title, color="#9aa4b2", fontsize=DASH_FS_LABEL,
                 fontweight="bold", va="center", transform=blended)
     if note:
-        ax.text(DASH_RIGHT, -3.3, note, color=HEATMAP_FILLED, fontsize=DASH_FS_CAPTION,
+        ax.text(DASH_RIGHT, -1.65, note, color=HEATMAP_FILLED, fontsize=DASH_FS_CAPTION,
                 ha="right", va="center", transform=blended)
 
-    for col in range(columns):
-        monday = start + dt.timedelta(weeks=col)
-        for row in range(7):
-            day = monday + dt.timedelta(days=row)
-            if day > today:
+    for col, label in enumerate(_WEEKDAYS_RU):
+        ax.text(col + 0.5, -0.55, label, color="#6b7684", fontsize=DASH_FS_MICRO,
+                ha="center", va="center")
+
+    for w in range(weeks):
+        for col in range(7):
+            day = monday + dt.timedelta(weeks=w, days=col)
+            if day < start or day > today:
                 continue
-            colour = HEATMAP_FILLED if day_counts.get(day, 0) > 0 else HEATMAP_EMPTY
-            _rounded_cell(ax, col, row, 1, colour)
-        # Подпись рисуется, если она целиком влезает до правого края полосы, а не
-        # «кроме двух последних колонок», как раньше. Правило по номеру колонки
-        # выбрасывало подпись текущего месяца всегда — а это единственный месяц,
-        # который человеку и интересен: на скриншоте августа не было вовсе.
-        new_month = col > 0 and monday.month != (monday - dt.timedelta(weeks=1)).month
-        room_right = (x_units - left_units) - col
-        if new_month and room_right >= _DASH_CAL_MONTH_UNITS:
-            ax.text(col, -1.1, _MONTHS_RU[monday.month - 1], color="#6b7684",
-                    fontsize=DASH_FS_MICRO, va="center")
+            trained = day_counts.get(day, 0) > 0
+            colour = HEATMAP_FILLED if trained else HEATMAP_EMPTY
+            _rounded_cell(ax, col, w, 1, colour)
+            ax.text(col + 0.5, w + 0.5, str(day.day),
+                    color="#12161d" if trained else "#6b7684",
+                    fontsize=DASH_FS_MICRO, fontweight="bold" if trained else "normal",
+                    ha="center", va="center", zorder=2)
+            if day == today:
+                pad = 0.08
+                ax.add_patch(
+                    FancyBboxPatch(
+                        (col + pad, w + pad), 1 - 2 * pad, 1 - 2 * pad,
+                        boxstyle="round,pad=0,rounding_size=0.14",
+                        linewidth=1.6, edgecolor=gold, facecolor="none", zorder=3,
+                    )
+                )
 
-    for row, label in ((0, "Пн"), (2, "Ср"), (4, "Пт")):
-        ax.text(-0.6, row + 0.55, label, color="#6b7684", fontsize=DASH_FS_MICRO,
-                ha="right", va="center")
 
-
-def _dash_lifts(
-    ax, lifts, fg: str, dim: str, ok: str, title: str = "", note: str = "",
-    bottom: float = _LIFT_BOTTOM,
+def _dash_growth_tiles(
+    ax, tiles, fg: str, dim: str, ok: str, gold: str, title: str = "", note: str = "",
 ) -> None:
-    """Карточки движений: имя, текущий e1RM, изменение и спарклайн.
+    """Плитки роста e1RM: 2 строки по 3, имя — процент — «227кг vs 220кг».
 
-    Спарклайн нормируется на свой собственный размах, а не на общий: у жима и
-    тяги разные веса, и общая шкала расплющила бы жим в прямую. Сравнивать эти
-    три линии между собой не нужно — каждая отвечает на «я тут расту?».
-
-    Ширина карточки — всегда треть полосы, даже когда движений одно или два:
-    см. _LIFT_SLOTS.
+    `tiles` — то, что вернул formatting.menu_lift_tiles: только выросшие
+    движения, отсортированные по проценту роста, лучшее — первым. У первой
+    плитки рамка золотая — единственная пометка «лучший рост», без подписи и
+    эмодзи: рамка одной плитки среди одинаковых остальных читается сама, а
+    подпись или значок повторяли бы то же самое вторым способом.
     """
-    ax.set_ylim(bottom, _LIFT_TOP)
+    ax.set_ylim(_LIFT_BOTTOM, _LIFT_TOP)
     if title:
         _dash_section(ax, title, note)
-    slots = max(len(lifts), _LIFT_SLOTS)
-    box = (DASH_RIGHT - DASH_LEFT - 0.02 * (slots - 1)) / slots
-    for i, (name, series, value, delta) in enumerate(lifts):
-        x0 = DASH_LEFT + i * (box + 0.02)
-        ax.text(x0, _LIFT_NAME_Y, name, color=dim, fontsize=DASH_FS_CAPTION, va="center")
-        ax.text(x0, _LIFT_VALUE_Y, value, color=fg, fontsize=DASH_FS_VALUE,
+    tile_w = (DASH_RIGHT - DASH_LEFT - 0.02 * (_LIFT_COLS - 1)) / _LIFT_COLS
+    for i, (name, pct, abs_str, best) in enumerate(tiles):
+        row, col = divmod(i, _LIFT_COLS)
+        x = DASH_LEFT + col * (tile_w + 0.02)
+        y = _LIFT_ROWS_TOP[row]
+        _dash_card(ax, x, y, tile_w, _LIFT_ROW_H)
+        if best:
+            pad = 0.02
+            ax.add_patch(
+                FancyBboxPatch(
+                    (x + pad, y + pad), tile_w - 2 * pad, _LIFT_ROW_H - 2 * pad,
+                    boxstyle="round,pad=0,rounding_size=0.02",
+                    linewidth=1.6, edgecolor=gold, facecolor="none", zorder=1,
+                )
+            )
+        pad_x = 0.028
+        ax.text(x + pad_x, y + _LIFT_ROW_H * 0.24, name, color=dim,
+                fontsize=DASH_FS_CAPTION, va="center")
+        ax.text(x + pad_x, y + _LIFT_ROW_H * 0.58, pct, color=ok, fontsize=DASH_FS_VALUE,
                 fontweight="bold", va="center")
-        if delta:
-            # Минус не красится в зелёное: цвет здесь — единственное, что отличает
-            # «вырос» от «просел», и покрасить откат как рост значило бы врать.
-            ax.text(x0 + box, _LIFT_VALUE_Y, delta, color=ok if delta.startswith("+") else dim,
-                    fontsize=DASH_FS_NUMBER, fontweight="bold", ha="right", va="center")
-        if len(series) < 2:
-            continue
-        low, high = min(series), max(series)
-        # Диапазон линии снизу ограничен: без этого +1 кг шума на 220-килограммовой
-        # тяге рисовался бы во всю высоту блока и читался как рывок. Порог в 4% от
-        # рабочего веса оставляет настоящий рост во всю высоту, а дрожание — почти
-        # плоским, каким оно и является.
-        # Нижний предел — ещё и защита от деления на ноль: серия из одних нулей
-        # (упражнение на своём весе, пока человек ни разу не взвесился) роняла
-        # весь экран, а с ним и /start, потому что сводка рисуется на обоих.
-        span = max(high - low, (low + high) / 2 * 0.02) or 1.0
-        xs = [x0 + k * box / (len(series) - 1) for k in range(len(series))]
-        ys = [_LIFT_LINE_BOTTOM - (v - low) / span * _LIFT_LINE_HEIGHT for v in series]
-        # Заливка под линией: на графике высотой в сантиметр форма от неё
-        # читается заметно лучше, чем от одной линии, — глаз ловит площадь
-        # раньше, чем наклон.
-        ax.fill_between(xs, ys, _LIFT_LINE_BOTTOM, color=HEATMAP_FILLED,
-                        alpha=0.16, linewidth=0)
-        ax.plot(xs, ys, color=HEATMAP_FILLED, linewidth=2.0, solid_capstyle="round")
-        ax.plot([xs[-1]], [ys[-1]], marker="o", markersize=3.8, color=fg)
+        ax.text(x + pad_x, y + _LIFT_ROW_H * 0.85, abs_str, color=dim,
+                fontsize=DASH_FS_MICRO, va="center")
 
 
 def render_menu_dashboard(
@@ -541,14 +509,14 @@ def render_menu_dashboard(
     tiles: list[tuple[str, str]] | None = None,
     volume_rows: list[tuple[str, int, str]] | None = None,
     volume_title: str = "",
-    lifts: list[tuple[str, list[float], str, str]] | None = None,
+    lift_tiles: list[tuple[str, str, str, bool]] | None = None,
     calendar_title: str = "",
     calendar_note: str = "",
     lifts_title: str = "",
     lifts_note: str = "",
 ) -> bytes:
     """Сводка для сообщения меню: крупное число, плитки, коридор по группам,
-    сплющенный календарь за год и движения с трендом e1RM.
+    30-дневный календарь и плитки роста e1RM.
 
     Каждый виджет — своя ось со своей системой координат, между ними полосы-
     распорки. Воздух добавляется распоркой, а не растягиванием виджета: внутри
@@ -562,10 +530,13 @@ def render_menu_dashboard(
     """
     BG, FG, MUTED, DIM = "#12161d", "#e6e6e6", "#9aa4b2", "#6b7684"
     OK = "#45b97c"
+    GOLD = DASH_GOLD
 
     tiles = list(tiles or ())
     rows = list(volume_rows or ())
-    lifts = list(lifts or ())
+    lift_tiles = list(lift_tiles or ())
+
+    cal_weeks = _dash_calendar_weeks(today, start)
 
     # «pad:» — распорка без линейки, «gap:» — с линейкой. Заголовок и плитки
     # разделять нечем: это одна группа, крупное число и его расшифровка.
@@ -574,12 +545,9 @@ def render_menu_dashboard(
         layout += [("pad:tiles", DASH_PAD), ("tiles", _DASH_TILES_H)]
     if rows:
         layout += [("gap:vol", DASH_GAP), ("vol", 0.34 + _DASH_VOL_STEP * len(rows))]
-    layout += [("gap:cal", DASH_GAP), ("cal", _dash_calendar_height())]
-    # Блок движений без единой линии — это только имена и числа, и высоту он
-    # занимает по ним, а не по графику, которого нет.
-    lifts_bottom = _LIFT_BOTTOM if any(len(s) >= 2 for _, s, _, _ in lifts) else _LIFT_BOTTOM_BARE
-    if lifts:
-        layout += [("gap:lifts", DASH_GAP), ("lifts", _LIFT_UNIT_IN * (lifts_bottom - _LIFT_TOP))]
+    layout += [("gap:cal", DASH_GAP), ("cal", _dash_calendar_height(cal_weeks))]
+    if lift_tiles:
+        layout += [("gap:lifts", DASH_GAP), ("lifts", _DASH_LIFTS_H)]
 
     fig_h = sum(h for _, h in layout)
     fig = _new_figure(figsize=(DASH_WIDTH_IN, fig_h), dpi=150)
@@ -633,10 +601,10 @@ def render_menu_dashboard(
         ax = band("vol")
         _draw_volume_panel(ax, rows, volume_title, BG, FG, MUTED)
 
-    _dash_year_calendar(band("cal"), day_counts, today, start, calendar_title, calendar_note)
+    _dash_month_calendar(band("cal"), day_counts, today, start, GOLD, calendar_title, calendar_note)
 
-    if lifts:
-        _dash_lifts(band("lifts"), lifts, FG, DIM, OK, lifts_title, lifts_note, lifts_bottom)
+    if lift_tiles:
+        _dash_growth_tiles(band("lifts"), lift_tiles, FG, DIM, OK, GOLD, lifts_title, lifts_note)
 
     for key in bands:
         if not key.startswith("gap:"):

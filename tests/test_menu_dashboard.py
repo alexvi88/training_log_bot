@@ -13,10 +13,10 @@
 """
 import datetime as dt
 from types import SimpleNamespace
-from unittest.mock import MagicMock
 
 import charts
 import formatting
+from analytics import e1rm as analytics_e1rm
 from handlers import workout as workout_handlers
 
 BENCH = "Жим штанги лёжа"
@@ -167,6 +167,55 @@ async def test_the_series_is_capped_at_the_asked_number_of_sessions(fresh_db, us
     assert len(await db.exercise_e1rm_series(user_id, bench, sessions=4)) == 4
 
 
+# ---------- рост e1RM за окно ----------
+
+
+async def test_growth_compares_the_window_against_everything_before_it(fresh_db, user_id):
+    db = fresh_db
+    today = dt.date.today()
+    bench = await _own(db, user_id, BENCH)
+    window_start = today - dt.timedelta(weeks=8)
+    await _session(db, user_id, window_start - dt.timedelta(days=10), [(bench, 100, 5, 1)])
+    await _session(db, user_id, today - dt.timedelta(days=1), [(bench, 110, 5, 1)])
+
+    before, window = await db.exercise_e1rm_growth(user_id, bench, window_start.isoformat())
+
+    assert before == analytics_e1rm(100.0, 5)
+    assert window == analytics_e1rm(110.0, 5)
+
+
+async def test_growth_baseline_is_the_best_before_the_window_not_the_first_point_inside_it(
+    fresh_db, user_id,
+):
+    """Серия «220, 210, 227» за окно не читается как рост с 220 до 227: правильная
+    база — лучший результат ДО окна, а не первая точка внутри него."""
+    db = fresh_db
+    today = dt.date.today()
+    bench = await _own(db, user_id, BENCH)
+    window_start = today - dt.timedelta(weeks=8)
+    await _session(db, user_id, window_start - dt.timedelta(days=5), [(bench, 220, 5, 1)])
+    await _session(db, user_id, window_start + dt.timedelta(days=1), [(bench, 210, 5, 1)])
+    await _session(db, user_id, today - dt.timedelta(days=1), [(bench, 227, 5, 1)])
+
+    before, window = await db.exercise_e1rm_growth(user_id, bench, window_start.isoformat())
+
+    assert before == analytics_e1rm(220.0, 5)
+    assert window == analytics_e1rm(227.0, 5)
+
+
+async def test_growth_with_no_history_before_the_window_has_no_baseline(fresh_db, user_id):
+    db = fresh_db
+    today = dt.date.today()
+    bench = await _own(db, user_id, BENCH)
+    window_start = today - dt.timedelta(weeks=8)
+    await _session(db, user_id, today - dt.timedelta(days=1), [(bench, 100, 5, 1)])
+
+    before, window = await db.exercise_e1rm_growth(user_id, bench, window_start.isoformat())
+
+    assert before == 0
+    assert window == analytics_e1rm(100.0, 5)
+
+
 # ---------- тоннаж и рекорды ----------
 
 
@@ -277,38 +326,52 @@ def test_the_week_tile_is_skipped_when_it_would_repeat_the_month():
     assert [label for label, _ in tiles] == ["ТРЕНИРОВОК ЗА 30 ДНЕЙ", "ТОННАЖ ЗА 7 ДНЕЙ"]
 
 
-def test_lift_cards_carry_the_current_value_and_the_change():
-    cards = formatting.menu_lift_cards([("Жим штанги лёжа", [100.0, 108.0, 112.0])])
+def test_growth_tiles_carry_percent_and_absolute_values():
+    tiles = formatting.menu_lift_tiles([("Жим штанги лёжа", 100.0, 112.0)])
 
-    assert cards == [("ЖИМ ШТАНГИ ЛЁЖА", [100.0, 108.0, 112.0], "112 кг", "+12")]
-
-
-def test_a_drop_is_not_dressed_up_as_growth():
-    assert formatting.menu_lift_cards([("Присед", [120.0, 110.0])])[0][3] == "-10"
+    assert tiles == [("ЖИМ ШТАНГИ ЛЁЖА", "+12%", "112кг vs 100кг", True)]
 
 
-def test_the_change_is_measured_across_the_whole_series():
-    """Между двумя последними точками e1RM гуляет от самочувствия, и такой «минус»
-    сообщал бы про сон, а не про прогресс."""
-    cards = formatting.menu_lift_cards([("Жим", [100.0, 130.0, 125.0])])
-
-    assert cards[0][3] == "+25"
+def test_a_drop_does_not_get_a_tile():
+    """Плитка существует, чтобы показать рост — для просевшего движения плитки
+    просто нет, а не плитка с минусом."""
+    assert formatting.menu_lift_tiles([("Присед", 120.0, 110.0)]) == []
 
 
-def test_a_flat_series_shows_no_change_at_all():
-    assert formatting.menu_lift_cards([("Жим", [100.0, 100.0])])[0][3] == ""
+def test_a_flat_result_is_not_growth():
+    assert formatting.menu_lift_tiles([("Жим", 100.0, 100.0)]) == []
 
 
-def test_a_long_movement_name_is_truncated_not_wrapped():
-    """Карточка — треть ширины картинки: длинное имя залезало бы на соседнюю."""
-    label = formatting.menu_lift_cards([("Жим штанги на наклонной скамье вниз головой", [90.0])])[0][0]
-
-    assert label.endswith("…")
-    assert len(label) <= 22
+def test_a_movement_without_a_baseline_is_dropped():
+    """До окна упражнения не было вовсе — не с чем сравнивать рост, и «e1RM внутри
+    окна вырос с нуля» — не факт, который стоит показывать плиткой."""
+    assert formatting.menu_lift_tiles([("Жим", 0.0, 100.0)]) == []
 
 
-def test_a_movement_without_a_series_is_dropped():
-    assert formatting.menu_lift_cards([("Жим", [])]) == []
+def test_best_growth_is_first_and_flagged():
+    tiles = formatting.menu_lift_tiles([
+        ("Жим", 100.0, 105.0),      # +5%
+        ("Присед", 100.0, 120.0),   # +20%
+    ])
+
+    assert [t[0] for t in tiles] == ["ПРИСЕД", "ЖИМ"]
+    assert tiles[0][3] is True
+    assert tiles[1][3] is False
+
+
+def test_more_than_six_growing_exercises_is_capped():
+    growth = [(f"Упражнение {i}", 100.0, 100.0 + i) for i in range(1, 9)]
+
+    assert len(formatting.menu_lift_tiles(growth)) == 6
+
+
+def test_names_are_never_truncated():
+    """Плитка не спарклайн: место под линию не нужно, и длинное имя влезает
+    целиком — обрезать его больше незачем."""
+    name = "Жим штанги на наклонной скамье вниз головой"
+    tiles = formatting.menu_lift_tiles([(name, 100.0, 110.0)])
+
+    assert tiles[0][0] == name.upper()
 
 
 # ---------- отрисовка ----------
@@ -317,12 +380,12 @@ def test_a_movement_without_a_series_is_dropped():
 def _render(**kwargs):
     today = dt.date(2026, 8, 4)
     base = dict(
-        day_counts={today: 1}, today=today, start=today - dt.timedelta(weeks=30),
+        day_counts={today: 1}, today=today, start=today - dt.timedelta(days=29),
         headline="9 недель подряд", badge="ТЯЖЕЛОВЕС",
         tiles=[("ТРЕНИРОВОК ЗА 30 ДНЕЙ", "12"), ("ТОННАЖ ЗА 7 ДНЕЙ", "24.5 т"), ("РЕКОРДОВ 7 Д", "3")],
         volume_rows=[("СПИНА", 14, "high"), ("ГРУДЬ", 9, "in_range"), ("НОГИ", 0, "none")],
         volume_title="ОБЪЁМ ЗА 7 ДНЕЙ · 23 ПОДХОДА",
-        lifts=[("ЖИМ ЛЁЖА", [100.0, 112.0], "112 кг", "+12")],
+        lift_tiles=[("ЖИМ ЛЁЖА", "+12%", "112кг vs 100кг", True)],
     )
     base.update(kwargs)
     return charts.render_menu_dashboard(**base)
@@ -338,7 +401,7 @@ def test_the_source_width_is_fixed_whatever_is_inside():
     пузыря, значит размер элемента на экране обратно пропорционален ширине
     исходника. Широкая картинка мельчит всё, что в ней есть, поэтому ширина —
     константа, а расти сводке позволено только вниз."""
-    narrow = _png_size(_render(volume_rows=[], volume_title="", lifts=[]))
+    narrow = _png_size(_render(volume_rows=[], volume_title="", lift_tiles=[]))
     wide_payload = _png_size(_render())
 
     assert narrow[0] == wide_payload[0] == round(charts.DASH_WIDTH_IN * 150)
@@ -354,10 +417,10 @@ def test_a_full_summary_is_a_portrait():
             ("ПЛЕЧИ", 7, "in_range"), ("БИЦЕПС", 5, "low"), ("НОГИ", 4, "low"),
             ("ДРУГОЕ", 0, "none"),
         ],
-        lifts=[
-            ("ЖИМ ЛЁЖА", [100.0, 112.0], "112 кг", "+12"),
-            ("ПРИСЕД", [140.0, 158.0], "158 кг", "+18"),
-            ("ТЯГА", [180.0, 192.0], "192 кг", "+12"),
+        lift_tiles=[
+            ("ЖИМ ЛЁЖА", "+12%", "112кг vs 100кг", True),
+            ("ПРИСЕД", "+13%", "158кг vs 140кг", False),
+            ("ТЯГА", "+7%", "192кг vs 180кг", False),
         ],
     ))
 
@@ -368,7 +431,7 @@ def test_every_widget_can_be_absent():
     """У нового пользователя нет ни объёма, ни движений, а пустой блок сообщал бы
     только то, что он пуст."""
     full = _png_size(_render())[1]
-    bare = _png_size(_render(tiles=[], volume_rows=[], volume_title="", lifts=[], badge=""))[1]
+    bare = _png_size(_render(tiles=[], volume_rows=[], volume_title="", lift_tiles=[], badge=""))[1]
 
     assert bare < full
 
@@ -388,54 +451,8 @@ def test_the_dividers_are_actually_drawn():
     assert sum(1 for px in column if px == rule) >= 3   # плитки/объём, объём/год, год/движения
 
 
-def test_a_flat_series_does_not_divide_by_zero():
-    assert _render(lifts=[("ЖИМ", [100.0, 100.0, 100.0], "100 кг", "")])[:8] == b"\x89PNG\r\n\x1a\n"
-
-
-def test_an_all_zero_series_does_not_take_the_whole_menu_down():
-    """Ноль во всей серии — не выдумка: e1RM упражнения на своём весе равен нулю,
-    пока человек ни разу не взвесился, а подтягивания легко попадают в топ-3
-    частых. Порог шума считался от среднего, то есть тоже нулём, — и главный
-    экран падал целиком, вместе с /start, потому что сводка рисуется на обоих."""
-    assert _render(lifts=[("ПОДТЯГИВАНИЯ", [0.0, 0.0, 0.0, 0.0], "0 кг", "")])[:8] == (
-        b"\x89PNG\r\n\x1a\n"
-    )
-
-
-def test_a_single_point_series_renders_without_a_line():
-    assert _render(lifts=[("ЖИМ", [100.0], "100 кг", "")])[:8] == b"\x89PNG\r\n\x1a\n"
-
-
-def test_a_block_without_a_single_line_does_not_reserve_room_for_graphs():
-    """Если ни у одного движения нет второй точки, рисовать нечего — и высоту
-    под график блок не занимает. Иначе внизу сводки висела пустая полоса в три
-    сантиметра, и читалась она как «график не нарисовался»."""
-    trend = _png_size(_render(lifts=[("ЖИМ", [100.0, 112.0], "112 кг", "+12")]))[1]
-    bare = _png_size(_render(lifts=[("ЖИМ", [100.0], "100 кг", "")]))[1]
-
-    assert bare < trend
-
-
-def test_one_movement_gets_a_third_of_the_width_not_all_of_it():
-    """Спарклайн на всю ширину картинки превращает +5 кг в рывок через
-    полстраницы: наклон линии глаз читает, а её длину — нет. У человека с одним
-    частым движением карточка та же, что была бы в тройке, а справа пусто."""
-    import io
-
-    from PIL import Image
-
-    img = Image.open(io.BytesIO(_render(lifts=[("ЖИМ", [100.0, 112.0], "112 кг", "+12")]))).convert("RGB")
-    width, height = img.size
-    line = tuple(int(charts.HEATMAP_FILLED[i:i + 2], 16) for i in (1, 3, 5))
-    # Нижняя пятая часть картинки — уже только поле спарклайна: ни клеток
-    # календаря, ни примечания блока, покрашенных тем же акцентом, там нет.
-    rightmost = max(
-        (x for y in range(int(height * 0.8), height) for x in range(width)
-         if img.getpixel((x, y)) == line),
-        default=0,
-    )
-
-    assert rightmost < width * 0.45
+def test_a_single_growth_tile_still_renders():
+    assert _render(lift_tiles=[("ЖИМ", "+5%", "105кг vs 100кг", True)])[:8] == b"\x89PNG\r\n\x1a\n"
 
 
 def test_a_long_headline_stops_before_the_rank_badge():
@@ -458,55 +475,73 @@ def test_a_long_headline_stops_before_the_rank_badge():
     )
 
 
-def test_the_year_grid_fits_with_room_for_the_last_month():
-    """Клетка выводится из ширины, поэтому запас справа обязан быть в формуле.
-
-    Его там не было: 53 колонки полного года плюс 3.4 юнита под Пн/Ср/Пт не
-    влезали в 56, и последняя неделя — та, в которой человек тренируется прямо
-    сейчас, — уезжала за край обрезанной.
-    """
+def test_the_calendar_grid_fits_the_fixed_width():
+    """Клетка выводится из ширины, поэтому левый и правый запас плюс семь
+    колонок недели обязаны укладываться в неё без остатка."""
     x_units = charts.DASH_WIDTH_IN / charts._DASH_CELL_IN
 
-    assert x_units >= charts._DASH_CAL_LEFT_UNITS + charts._DASH_CAL_COLUMNS
-    last_col = charts._DASH_CAL_COLUMNS - 1
-    assert x_units >= (
-        charts._DASH_CAL_LEFT_UNITS + last_col + charts._DASH_CAL_MONTH_UNITS
+    assert x_units == (
+        charts._DASH_CAL_LEFT_UNITS + charts._DASH_CAL_COLUMNS + charts._DASH_CAL_RIGHT_UNITS
     )
 
 
-def test_the_current_month_is_labelled():
-    """Подпись рисовалась «кроме двух последних колонок» — то есть текущий месяц
-    не подписывался никогда, хотя он единственный, который человеку и интересен."""
-    ax = MagicMock()
+def test_a_window_that_does_not_align_to_weeks_takes_an_extra_row():
+    """30 дней почти никогда не укладываются в ровные недели: если день начала
+    окна не понедельник, последняя неполная неделя всё равно требует своей
+    строки, а не обрезается."""
+    today = dt.date(2026, 8, 4)   # вторник
+    this_monday = today - dt.timedelta(days=today.weekday())
+    aligned = this_monday - dt.timedelta(weeks=3)   # понедельник, ровно 4 недели до сегодня
+
+    assert charts._dash_calendar_weeks(today, aligned) == 4
+    assert charts._dash_calendar_weeks(today, aligned - dt.timedelta(days=1)) == 5
+
+
+def test_today_gets_a_gold_outline_not_a_fill():
+    """Сегодняшняя клетка выделяется рамкой без заливки: заливка уже занята
+    фактом «тренировался/нет», и второй смысл той же заливкой не влезает."""
+    import io
+
+    from PIL import Image
+
     today = dt.date(2026, 8, 4)
+    img = Image.open(io.BytesIO(_render(
+        day_counts={}, today=today, start=today - dt.timedelta(days=29),
+    ))).convert("RGB")
+    gold = tuple(int(charts.DASH_GOLD[i:i + 2], 16) for i in (1, 3, 5))
+    width, height = img.size
 
-    charts._dash_year_calendar(ax, {}, today, today - dt.timedelta(weeks=52))
+    assert any(
+        img.getpixel((x, y)) == gold for y in range(height) for x in range(width)
+    )
 
-    labels = [call.args[2] for call in ax.text.call_args_list if len(call.args) > 2]
-    assert "Авг" in labels
 
-
-def test_the_lift_card_is_spaced_like_the_volume_row():
-    """Блок движений размечен тем же шагом, что и коридор объёма.
-
-    Он задавался наоборот — блоку назначалась высота в дюймах, а разметка жила в
-    единицах оси, — и единица выходила вдвое крупнее соседней панели. Отступ «в
-    одну единицу» между подписью блока и именем движения из-за этого занимал
-    сотню пикселей пустоты. Сравниваем шаг, а не пиксели: пиксели поедут от
-    любой правки шрифта, а «два блока разъехались по плотности» — не поедет.
-    """
+def test_the_growth_tiles_share_row_pitch_with_the_volume_panel():
+    """Плитки роста размечены тем же шагом, что и коридор объёма — так же, как
+    раньше карточки движений: сравниваем шаг, а не пиксели, которые поедут от
+    любой правки шрифта."""
     assert charts._LIFT_UNIT_IN == charts._DASH_VOL_STEP
     lift_units = charts._LIFT_BOTTOM - charts._LIFT_TOP
     assert abs(charts._LIFT_UNIT_IN * lift_units - charts._DASH_LIFTS_H) < 1e-9
 
 
-def test_the_sparkline_gets_most_of_its_card():
-    """Спарклайн — единственное, зачем этот блок нужен: остальное в нём и так есть
-    текстом. Раньше на линию приходилось меньше трети высоты блока, остальное
-    съедали отступы, и рост в ней было не разглядеть."""
-    line_share = charts._LIFT_LINE_HEIGHT / (charts._LIFT_BOTTOM - charts._LIFT_TOP)
+def test_only_the_best_growth_tile_gets_a_gold_border():
+    """Единственная пометка «лучший рост» — золотая рамка первой плитки, без
+    подписи и эмодзи: у второй плитки её быть не должно."""
+    import io
 
-    assert line_share > 0.5
+    from PIL import Image
+
+    img = Image.open(io.BytesIO(_render(lift_tiles=[
+        ("ЖИМ", "+20%", "120кг vs 100кг", True),
+        ("ПРИСЕД", "+5%", "126кг vs 120кг", False),
+    ]))).convert("RGB")
+    gold = tuple(int(charts.DASH_GOLD[i:i + 2], 16) for i in (1, 3, 5))
+    width, height = img.size
+
+    assert any(
+        img.getpixel((x, y)) == gold for y in range(height) for x in range(width)
+    )
 
 
 # ---------- экран меню ----------
@@ -539,3 +574,20 @@ async def test_new_sets_in_a_closed_workout_refresh_the_summary(fresh_db, user_i
 
     assert first is not None and second is not None
     assert first != second
+
+
+async def test_menu_view_only_draws_growth_that_actually_happened(fresh_db, user_id):
+    """Присед не вырос — плитки для него быть не должно, даже если он самое
+    частое движение человека за окно."""
+    db = fresh_db
+    workout_handlers._heatmap_cache.pop(user_id, None)
+    today = dt.date.today()
+    bench, squat = await _own(db, user_id, BENCH), await _own(db, user_id, SQUAT)
+    for offset in (30, 20, 10, 1):
+        await _session(db, user_id, today - dt.timedelta(days=offset), [(squat, 120, 5, 3)])
+    await _session(db, user_id, today - dt.timedelta(weeks=10), [(bench, 100, 5, 3)])
+    await _session(db, user_id, today - dt.timedelta(days=1), [(bench, 120, 5, 3)])
+
+    _, png = await workout_handlers._menu_view(user_id)
+
+    assert png is not None

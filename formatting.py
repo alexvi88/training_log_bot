@@ -1505,17 +1505,18 @@ def weekly_volume_panel(
     return f"ОБЪЁМ {days_window_label(VOLUME_WINDOW_DAYS)} · {total} {word}", rows
 
 
-# Сколько символов имени движения влезает в карточку сводки. Ширина карточки —
-# треть картинки, шрифт 7pt: дальше имя лезет на соседнюю карточку.
-_LIFT_NAME_LIMIT = 22
-
 # Подписи блоков сводки, у которых нет своего числа в заголовке. Без них блок —
 # это просто клетки или просто цифры: календарь без подписи не отличить от
 # декорации, а «101 кг» под именем упражнения читается как поднятый вес, хотя это
 # расчётный максимум.
-MENU_CALENDAR_TITLE = "ПОСЕЩЕНИЯ · ГОД"
-MENU_LIFTS_TITLE = "ЧТО ДЕЛАЕШЬ ЧАЩЕ ВСЕГО"
-MENU_LIFTS_NOTE = "РАСЧЁТНЫЙ МАКСИМУМ"
+MENU_CALENDAR_TITLE = "ПОСЕЩЕНИЯ · 30 ДНЕЙ"
+MENU_LIFTS_TITLE = "РОСТ e1RM ЗА 8 НЕДЕЛЬ"
+MENU_LIFTS_NOTE = "e1RM — РАСЧЁТНЫЙ МАКСИМУМ"
+
+# Сколько плиток роста рисуется независимо от того, сколько упражнений выросло:
+# 2×3 в раскладке _dash_growth_tiles. Больше шести на узкой картинке уже не
+# читаются, а меньше — на широких плитках остаётся пусто.
+_LIFT_TILE_COUNT = 6
 
 
 def days_window_label(days: int) -> str:
@@ -1590,37 +1591,37 @@ def menu_tiles(dashboard, tonnage: float, records: int, unit: str = "kg") -> lis
     return tiles
 
 
-def menu_lift_cards(
-    lifts: list[tuple[str, list[float]]], unit: str = "kg"
-) -> list[tuple[str, list[float], str, str]]:
-    """(имя, серия, текущий e1RM, изменение) для карточек движений.
+def menu_lift_tiles(
+    growth: list[tuple[str, float, float]], unit: str = "kg"
+) -> list[tuple[str, str, str, bool]]:
+    """(имя, «+NN%», «227кг vs 220кг», лучший ли рост) — плитки роста e1RM.
 
-    `lifts` — то, что вернули db.top_exercises_by_frequency и
-    db.exercise_e1rm_series: самые частые упражнения человека, а не «базовые».
-    Понятия базового движения в базе нет (тип движения нигде не заполняется), так
-    что выбирать «жим/присед/тяга» пришлось бы по именам из каталога — и у
-    человека со своими названиями там оказалось бы пусто.
+    `growth` — тройки (имя, e1RM до окна, e1RM внутри окна) от
+    db.exercise_e1rm_growth. Упражнения без роста (нет базы до окна, или
+    результат внутри окна её не превысил) в сводку не попадают: плитка «рост
+    0%» ничего не сообщает и просто занимает место, которое мог бы занять
+    настоящий прогресс по другому движению.
 
-    Изменение — между первой и последней точкой серии, а не между двумя
-    последними: на одной тренировке e1RM гуляет от самочувствия, и такой «минус»
-    сообщал бы про сон, а не про прогресс.
+    Сортировка — по проценту роста: так самый заметный прогресс всегда в
+    первой плитке, и «лучший рост» — это она и есть, без отдельного флага,
+    который дальше пришлось бы держать в синхроне с сортировкой.
+
+    Имя не обрезается: это выбор, а не карточки со спарклайном, где ширина
+    буквально занята линией. Полное название важнее аккуратной колонки.
     """
     u = UNIT_LABELS.get(unit, "кг")
-    cards: list[tuple[str, list[float], str, str]] = []
-    for name, series in lifts:
-        if not series:
-            continue
-        label = name.upper()
-        if len(label) > _LIFT_NAME_LIMIT:
-            label = label[: _LIFT_NAME_LIMIT - 1].rstrip() + "…"
-        current = f"{series[-1]:.0f} {u}"
-        delta = ""
-        if len(series) >= 2:
-            diff = round(series[-1] - series[0])
-            if diff:
-                delta = f"{diff:+.0f}"
-        cards.append((label, series, current, delta))
-    return cards
+    rows = [
+        (name, before, window)
+        for name, before, window in growth
+        if before > 0 and window > before
+    ]
+    rows.sort(key=lambda r: (r[2] - r[1]) / r[1], reverse=True)
+    tiles: list[tuple[str, str, str, bool]] = []
+    for i, (name, before, window) in enumerate(rows[:_LIFT_TILE_COUNT]):
+        pct = (window - before) / before * 100
+        abs_str = f"{window:.0f}{u} vs {before:.0f}{u}"
+        tiles.append((name.upper(), f"+{pct:.0f}%", abs_str, i == 0))
+    return tiles
 
 
 def build_workout_card(
