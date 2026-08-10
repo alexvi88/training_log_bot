@@ -76,7 +76,12 @@ async def test_middleware_skips_users_never_seen_before(fresh_db):
 async def test_first_start_attaches_keyboard_without_the_update_notice(fresh_db):
     """Новичок на первом /start получает клавиатуру, но не сообщение «⌨️ Обновил
     меню под полем ввода»: обновлять ему нечего, а первый экран — единственный,
-    который продаёт бота."""
+    который продаёт бота.
+
+    Носитель клавиатуры больше не удаляется сразу же: живые репорты с Android
+    показали, что удаление сообщения, которым прикреплена reply-клавиатура,
+    там уносит с собой и саму клавиатуру — на iOS такого не было, и ровно
+    поэтому баг долго не замечали."""
     from handlers import workout
 
     message = _make_message(222222)
@@ -97,7 +102,7 @@ async def test_first_start_attaches_keyboard_without_the_update_notice(fresh_db)
         if isinstance(call.kwargs.get("reply_markup"), ReplyKeyboardMarkup)
     ]
     assert len(keyboard_calls) == 1
-    carrier.assert_awaited_once()  # носитель клавиатуры сразу удалён
+    carrier.assert_not_awaited()  # носитель больше не удаляется — держит клавиатуру на Android
     user = await fresh_db.get_user(222222)
     assert user["reply_keyboard_version"] == keyboards.PERSISTENT_MENU_VERSION
 
