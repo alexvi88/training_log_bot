@@ -68,10 +68,20 @@ async def test_import_awards_achievements_for_the_imported_history(fresh_db, use
         imp_resolved={"Присед": ex_id},
     )
 
+    message = MagicMock()
+    message.chat = SimpleNamespace(id=user_id)
+    message.message_id = 1
+    message.text = "экран"
+    message.photo = None
+    message.edit_text = AsyncMock(return_value=True)
+    message.answer = AsyncMock(
+        return_value=SimpleNamespace(message_id=999, chat=SimpleNamespace(id=user_id))
+    )
+    message.delete = AsyncMock()
     callback = MagicMock()
     callback.from_user = SimpleNamespace(id=user_id, username="tester")
     callback.answer = AsyncMock()
-    callback.message = MagicMock()
+    callback.message = message
 
     async def fake_show_settings(event, state, alert=None):
         return None
