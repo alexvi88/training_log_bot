@@ -472,3 +472,18 @@ async def test_release_buttons_lead_into_the_two_features():
     source = (Path(__file__).resolve().parent.parent / "handlers" / "ai_trainer.py").read_text()
     for data in callbacks:
         assert f'F.data == "{data}"' in source
+
+
+async def test_hevy_release_text_speaks_in_the_coach_voice():
+    ann = announcements.RELEASE_HEVY_IMPORT
+    assert ann.text.startswith("ПРИВЕТ АТЛЕТ, ")
+    assert len(ann.text) <= announcements.CAPTION_LIMIT
+
+
+async def test_hevy_release_button_leads_into_the_import_flow():
+    callbacks = [data for _, data in announcements.RELEASE_HEVY_IMPORT.buttons]
+    assert callbacks == ["settings:import"]
+
+    source = (Path(__file__).resolve().parent.parent / "handlers" / "csv_import.py").read_text()
+    for data in callbacks:
+        assert f'F.data == "{data}"' in source

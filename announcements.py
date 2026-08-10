@@ -117,9 +117,23 @@ RELEASE_AI_PROGRAMS_AND_VIDEO = Announcement(
     available=config.video_analysis_available,
 )
 
+RELEASE_HEVY_IMPORT = Announcement(
+    key="release_hevy_import",
+    text=(
+        "ПРИВЕТ АТЛЕТ, теперь умею принимать историю из Hevy.\n\n"
+        "В Hevy: ⚙️ <b>Settings</b> → <b>Export &amp; Import Data</b> — файл CSV "
+        "прилетит на почту. Пришли его сюда, в ⚙️ Настройки → 📥 Импорт CSV, "
+        "и я сам разберу тренировки, упражнения и подходы по датам.\n\n"
+        "Совпавшее с нашим каталогом (жимы, тяги, приседания и т.п.) подтянет "
+        "фото и описание техники само — можно не создавать заново.\n\n"
+        "Жми и заливай:"
+    ),
+    buttons=[("📥 Импорт из Hevy", "settings:import")],
+)
+
 # Что ещё не разослано. Отправленную рассылку отсюда убираем — база помнит её
 # и без этого списка.
-ANNOUNCEMENTS: list[Announcement] = [RELEASE_AI_PROGRAMS_AND_VIDEO]
+ANNOUNCEMENTS: list[Announcement] = [RELEASE_AI_PROGRAMS_AND_VIDEO, RELEASE_HEVY_IMPORT]
 
 
 def by_key(key: str) -> Announcement | None:
