@@ -432,8 +432,12 @@ async def ai_keyboard(
     # «🗄 В архив: Тестовое упражнение» и «📌 Тестовое упражнение», — и
     # разница между ними («одна архивирует, другая просто открывает карточку»)
     # неочевидна ни разу. Та же логика, что ниже у программ.
+    #
+    # Откаты (create/rename/move — is_undo) сюда не попадают: «↩️ Убрать
+    # «X»» и «📌 X» — это не дубли одного и того же, а отмена и просмотр,
+    # и сразу после создания упражнения обе кнопки нужны одновременно.
     if actions:
-        acted_on = {a["label"] for a in actions}
+        acted_on = {a["label"] for a in actions if not a.get("is_undo")}
         mentioned = [
             ex for ex in mentioned
             if not any(ex["display_name"] in label for label in acted_on)
@@ -955,7 +959,11 @@ async def _register_actions(state: FSMContext, actions: list[dict]) -> list[dict
             seq += 1
             key = f"u{seq}"
             store[key] = undo
-            out.append({"label": action["label"], "callback": f"ai:undo:{key}"})
+            # is_undo отличает «откатить уже сделанное» от «предложил, но не
+            # сделал» — см. ai_keyboard: только вторые исключают дублирующую
+            # ссылку 📌 на то же упражнение, у первых отмена и просмотр карточки
+            # это две разные полезные вещи, а не одна и та же под двумя ярлыками.
+            out.append({"label": action["label"], "callback": f"ai:undo:{key}", "is_undo": True})
         elif feedback is not None:
             feedback_seq += 1
             key = f"f{feedback_seq}"

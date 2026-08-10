@@ -1958,6 +1958,28 @@ async def test_an_archive_proposal_is_not_doubled_by_a_mention_link(fresh_db, us
     assert "ai:exarchask:" + str(ex_id) in _callbacks(kb)
 
 
+async def test_an_undo_action_gets_its_mention_link_too(fresh_db, user_id):
+    """Регрессия: создание/переименование/перенос упражнения (is_undo) — это не
+    предложение архивации, «↩️ Убрать» и «📌 X» тут не дубли одной и той же
+    кнопки, а отмена и просмотр карточки, и обе нужны сразу после создания."""
+    group = await fresh_db.create_muscle_group(user_id, "Спина")
+    await fresh_db.create_exercise(user_id, "conventional deadlift - 1arm", group)
+
+    kb = await ai_trainer.ai_keyboard(
+        user_id,
+        answer="Готово: conventional deadlift - 1arm лежит в группе «Спина».",
+        actions=[{
+            "label": "↩️ Убрать «conventional deadlift - 1arm»",
+            "callback": "ai:undo:u1",
+            "is_undo": True,
+        }],
+    )
+
+    labels = [b.text for row in kb.inline_keyboard for b in row]
+    assert any(label.startswith("↩️ Убрать") for label in labels)
+    assert any(label == "📌 conventional deadlift - 1arm" for label in labels)
+
+
 async def test_a_link_to_a_different_program_still_shows_up(fresh_db, user_id):
     """Глушим только тёзку черновика: ссылка на другую программу, названную в
     том же ответе, — как раз то, ради чего эти кнопки и заведены."""
