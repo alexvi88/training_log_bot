@@ -1823,10 +1823,10 @@ async def _send_rich_answer(
     for i, chunk in enumerate(chunks):
         is_last = i == len(chunks) - 1
         chunk_markup = markup if is_last else None
-        # Заголовки в rich — это статейная вёрстка: крупный кегль и широкие
-        # поля, из-за которых ответ разъезжается пустотой на пол-экрана. Шлём
-        # рич ради таблиц, поэтому заголовки заранее опускаем до жирной строки.
-        text = formatting.markdown_headings_to_bold(chunk) + (quota_md if is_last else "")
+        # Заголовки идут как есть — настоящим rich-заголовком, а не жирной
+        # строкой: ответ и без того густо заполнен жирным текстом, и жирный
+        # «заголовок» в нём просто терялся, не выделяясь среди остального.
+        text = chunk + (quota_md if is_last else "")
         if i == 0:
             # placeholder мог быть уже удалён (черновик его гасит, см.
             # on_draft_start) — тогда правка не пройдёт, и это не повод считать,

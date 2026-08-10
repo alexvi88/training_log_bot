@@ -345,12 +345,11 @@ async def test_answer_goes_out_as_a_rich_message_when_the_server_supports_it(
     placeholder.edit_text.assert_not_awaited()
 
 
-async def test_headings_are_flattened_to_bold_before_going_out_as_rich(
-    fresh_db, user_id, monkeypatch
-):
-    """A real heading is laid out like an article — big type, wide margins above
-    and below — which is what blows the answer apart with whitespace. The rich
-    message is sent for its tables, not for that."""
+async def test_headings_go_out_as_real_rich_headings(fresh_db, user_id, monkeypatch):
+    """Живой прогон: заголовки уплощали до жирной строки, но ответ и так
+    густо усыпан жирным текстом — жирный «заголовок» на этом фоне терялся,
+    ничем не выделяясь. Markdown уходит как есть, Telegram сам рисует
+    заголовок заголовком (это и есть весь смысл rich, см. _send_rich_answer)."""
     answer = f"## Твои цифры\n\n{_TABLE_ANSWER}"
     monkeypatch.setattr(ai_trainer.ai_trainer, "ask", AsyncMock(return_value=answer))
 
@@ -363,8 +362,7 @@ async def test_headings_are_flattened_to_bold_before_going_out_as_rich(
     await ai_trainer.ai_question(message, state)
 
     sent = placeholder.bot.edit_message_text.await_args.kwargs["rich_message"].markdown
-    assert "## Твои цифры" not in sent
-    assert "**Твои цифры**" in sent
+    assert "## Твои цифры" in sent
     # The table itself is untouched — that's the whole reason for going rich.
     assert "| **squat** | 140×6 |" in sent
 
