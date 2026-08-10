@@ -3,6 +3,7 @@
 import csv
 import datetime as dt
 import io
+import re
 from typing import Optional
 
 from aiogram import F, Router
@@ -11,6 +12,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 import achievement_sync
+import ai_trainer
 import db
 import formatting
 import keyboards
@@ -26,12 +28,16 @@ FIELD_LABELS = {"date": "дата", "exercise": "упражнение", "weight"
 # Кандидаты в разделители: свой экспорт пишет запятую, но «Сохранить как CSV»
 # в русском Excel даёт «;» (и запятую внутри дробей), а Google Sheets — табы.
 DELIMITERS = ",;\t|"
+# start_time/exercise_title/weight_kg/set_index/set_type — колонки родного
+# экспорта Hevy: самого частого источника миграции. Без них файл оттуда не
+# автоопределялся ни по одному из четырёх обязательных полей и упирался в
+# ручной маппинг с нуля.
 SYNONYMS = {
-    "date": {"дата", "date", "started_at"},
-    "exercise": {"упражнение", "exercise"},
-    "weight": {"вес", "weight"},
+    "date": {"дата", "date", "started_at", "start_time"},
+    "exercise": {"упражнение", "exercise", "exercise_title"},
+    "weight": {"вес", "weight", "weight_kg"},
     "reps": {"повторы", "reps"},
-    "round": {"подход", "раунд", "round", "set", "round_index"},
+    "round": {"подход", "раунд", "round", "set", "round_index", "set_index"},
     "rpe": {"rpe", "рпе"},
 }
 
@@ -42,7 +48,7 @@ async def import_start(callback: CallbackQuery, state: FSMContext):
     await ui.safe_edit(
         callback,
         "📥 Пришли CSV-файл с колонками «дата, упражнение, вес, повторы» "
-        "(подойдёт экспорт из этого бота).",
+        "(подойдёт экспорт из этого бота или из Hevy).",
         reply_markup=keyboards.cancel_keyboard("imp:cancel"),
     )
     await callback.answer()
@@ -229,12 +235,32 @@ async def import_mapping_back(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+# Hevy пишет дату/время английским месяцем-аббревиатурой («7 Aug 2026, 08:27»,
+# без ведущего нуля у дня) — своего формата в parse_ru_date/ISO для этого нет.
+# Список руками, а не через locale/strptime («%b»): locale контейнера решает,
+# на каком языке страптайм ждёт месяц, и «Aug» на сервере с русской локалью
+# незаметно перестал бы разбираться.
+_MONTH_ABBR_EN = {
+    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+    "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+}
+_HEVY_DATE_RE = re.compile(
+    r"^(?P<d>\d{1,2}) (?P<mon>[A-Za-z]{3}) (?P<y>\d{4})(?:,\s*\d{1,2}:\d{2})?$"
+)
+
+
 def _parse_row_date(text: str) -> dt.date:
     text = text.strip()
     try:
         return parse_ru_date(text)
     except ParseError:
         pass
+    match = _HEVY_DATE_RE.match(text)
+    if match and match["mon"].lower() in _MONTH_ABBR_EN:
+        try:
+            return dt.date(int(match["y"]), _MONTH_ABBR_EN[match["mon"].lower()], int(match["d"]))
+        except ValueError:
+            raise ParseError(f"не понял дату «{text}»") from None
     try:
         if "t" in text.lower():
             return dt.datetime.fromisoformat(text).date()
@@ -381,6 +407,20 @@ async def _finish_mapping(event, state: FSMContext) -> None:
             resolved[name] = ex["id"]
         else:
             unresolved.append(name)
+
+    # Импорт часто приносит чужие названия (Hevy пишет по-английски: "Bench
+    # Press (Barbell)"), которые не совпадут с русским каталогом ни разу — но
+    # часто означают ровно то же движение. Модель переводит их в точные
+    # имена каталога на лету; совпавшее форкается сразу с фото и описанием
+    # техники, а не голым, как обычное «создать новое».
+    if unresolved:
+        aliases = await ai_trainer.match_exercise_names_to_catalog(user_id, unresolved)
+        for name, catalog_name in aliases.items():
+            ex_id = await db.get_or_create_user_exercise_by_name(user_id, catalog_name)
+            if ex_id is not None:
+                resolved[name] = ex_id
+        unresolved = [n for n in unresolved if n not in aliases]
+
     await state.update_data(imp_resolved=resolved)
 
     if unresolved:
