@@ -20,6 +20,8 @@ from aiogram.enums import ContentType
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
+import activity_log
+
 router = Router(name="fallback")
 
 logger = logging.getLogger(__name__)
@@ -84,9 +86,16 @@ async def unhandled_callback(callback: CallbackQuery, state: FSMContext) -> None
     """
     from handlers.workout import cmd_start
 
-    # Данные кнопки в лог: это единственный след, по которому потом видно, какой
-    # экран остался без обработчика (сам callback в dp.errors не попадает).
+    # Данные кнопки в лог и в activity_log отдельным видом события: это
+    # единственный след, по которому потом видно, какой экран остался без
+    # обработчика (сам callback в dp.errors не попадает), и по которому можно
+    # отличить редкую протухшую кнопку от вспышки одного префикса — регресса
+    # роутинга (см. db.count_unhandled_callbacks_by_prefix).
     logger.info("Unhandled callback %s from user %s", callback.data, callback.from_user.id)
+    try:
+        await activity_log.record_unhandled_callback(callback)
+    except Exception:
+        logger.exception("Failed to log unhandled callback")
     await callback.answer("Эта кнопка уже отработала своё — открыл меню.")
     if callback.message is None:  # pragma: no cover — Telegram всегда даёт message
         return

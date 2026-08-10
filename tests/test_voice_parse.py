@@ -2,7 +2,7 @@
 import pytest
 
 from parser import parse_sets_line
-from voice_parse import transcript_to_sets_line
+from voice_parse import transcript_to_sets_line, transcript_to_sets_line_with_hint
 
 
 @pytest.mark.parametrize(
@@ -28,6 +28,20 @@ def test_transcripts_map_to_lines(text, expected):
 def test_no_numbers_returns_none():
     assert transcript_to_sets_line("давай запиши подход") is None
     assert transcript_to_sets_line("") is None
+
+
+def test_dropped_set_count_is_flagged():
+    """Регрессия: «сто на восемь три подхода» молча пишет один подход — вызывающий
+    должен узнать об этом и предупредить человека, а не сделать вид, что записал все."""
+    line, dropped = transcript_to_sets_line_with_hint("сто на восемь три подхода")
+    assert line == "100 8"
+    assert dropped is True
+
+
+def test_no_dropped_hint_for_a_plain_weight_and_reps():
+    line, dropped = transcript_to_sets_line_with_hint("сто на восемь")
+    assert line == "100 8"
+    assert dropped is False
 
 
 def test_output_is_parseable():

@@ -376,3 +376,29 @@ async def test_call_without_an_authenticated_user_raises_unauthorized(fresh_db, 
     запроса её нет — и инструмент обязан отказать, а не отдать чьи-то данные."""
     with pytest.raises(mcp_server.Unauthorized):
         await mcp_server._call("get_training_overview")
+
+
+async def test_serve_restarts_after_a_crash_instead_of_dying_silently(monkeypatch):
+    """Регрессия: server.serve() падал без обёртки retry — /mcp тихо умирал до
+    следующего редеплоя, а бот в Telegram продолжал отвечать как ни в чём не
+    бывало (см. admin_tasks.run_oauth_purge_job — тот же паттерн retry-loop)."""
+    monkeypatch.setattr(mcp_server, "build_app", lambda: object())
+    monkeypatch.setattr(mcp_server, "MCP_RESTART_DELAY_SECONDS", 0)
+    attempts = []
+
+    class FlakyServer:
+        def __init__(self, config):
+            pass
+
+        async def serve(self):
+            attempts.append(1)
+            if len(attempts) < 2:
+                raise RuntimeError("port taken")
+            return  # чистая остановка на второй попытке
+
+    monkeypatch.setattr(mcp_server.uvicorn, "Server", FlakyServer)
+    monkeypatch.setattr(mcp_server.uvicorn, "Config", lambda *a, **kw: None)
+
+    await mcp_server.serve()
+
+    assert len(attempts) == 2

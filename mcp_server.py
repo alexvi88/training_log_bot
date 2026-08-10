@@ -36,6 +36,7 @@ AI-клиентов (Claude Desktop / Claude Code / любой MCP-клиент)
   каждый POST самодостаточен.
 """
 
+import asyncio
 import json
 import logging
 from typing import Any
@@ -54,6 +55,11 @@ logger = logging.getLogger(__name__)
 
 # Путь, на котором отвечает MCP. Совпадает с тем, что показывает экран /mcp.
 MCP_PATH = "/mcp"
+
+# Пауза перед перезапуском упавшего server.serve() — не мгновенно, чтобы
+# падение на каждой попытке (например, порт ещё не освободился) не крутило
+# цикл вхолостую и не заливало лог.
+MCP_RESTART_DELAY_SECONDS = 5
 
 # Инструменты `ai_trainer.execute_tool`, которые разрешено звать снаружи. Здесь
 # нет `get_full_chat_history` (переписка с тренером — самое личное, что есть в
@@ -169,7 +175,7 @@ async def _call(tool_name: str, **arguments: Any) -> str:
         raise ValueError(f"tool {tool_name} is not exposed over MCP")
     user_id = _user_id()
     logger.info("MCP tool %s for user %s", tool_name, user_id)
-    raw = await ai_trainer.execute_tool(user_id, tool_name, arguments)
+    raw = await ai_trainer.execute_tool(user_id, tool_name, arguments, source="mcp")
     if tool_name not in WRITE_TOOLS:
         return raw
     payload = json.loads(raw)
@@ -252,7 +258,10 @@ def build_server() -> MCPServer:
     @mcp.tool()
     async def get_exercise_progress(exercise_name: str) -> str:
         """Динамика по одному упражнению: подходы по датам, рабочие веса, e1RM,
-        рекорды. exercise_name — точное название из get_training_overview."""
+        рекорды. exercise_name — точное название из get_training_overview. Если
+        total_sessions: 0 (sessions — пустой список) — у упражнения нет ни одной
+        записи; не придумывай дату, подходы или e1RM для него — скажи прямо, что
+        данных пока нет."""
         return await _call("get_exercise_progress", exercise_name=exercise_name)
 
     @mcp.tool()
@@ -370,12 +379,17 @@ def build_app():
     запросом всё равно должен лежать секрет, которого у чужой страницы нет.
     """
     mcp = build_server()
-    return mcp.streamable_http_app(
+    app = mcp.streamable_http_app(
         streamable_http_path=MCP_PATH,
         stateless_http=True,
         json_response=True,
         transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
     )
+    # SDK's dynamic client registration (RFC 7591) caps only metadata size
+    # (see TrainingLogOAuthProvider.register_client / db.OAUTH_CLIENT_METADATA_LIMIT),
+    # not request frequency — an anonymous flood can grow oauth_clients for hours
+    # before the once-a-day prune catches up.
+    return mcp_oauth.RegisterRateLimitMiddleware(app)
 
 
 async def serve() -> None:
@@ -383,6 +397,14 @@ async def serve() -> None:
 
     Падение сервера не должно ронять бота: Telegram-часть — основная, а MCP
     отвалившийся с ошибкой порта заметят лишь те, кто им пользуется.
+
+    Неустранимую ошибку конфигурации (сборка приложения) ретраить незачем —
+    MCP_PUBLIC_URL сам себя не починит между попытками, и мгновенный цикл
+    исключений только зальёт лог. А вот падение уже поднятого server.serve()
+    (например, временная проблема с портом) раньше молча оставляло /mcp
+    мёртвым до следующего редеплоя — бот при этом продолжал отвечать в
+    Telegram, и заметить пропажу было нечем. Здесь та же схема retry-loop,
+    что и в admin_tasks.run_oauth_purge_job.
     """
     try:
         # Сборка приложения — тоже под перехватом, и это не перестраховка: OAuth
@@ -397,17 +419,20 @@ async def serve() -> None:
             "Проверь MCP_PUBLIC_URL — для OAuth он обязан быть https://"
         )
         return
-    server = uvicorn.Server(
-        uvicorn.Config(
-            app,
-            host="0.0.0.0",  # noqa: S104 — контейнер, наружу торчит один порт
-            port=config.MCP_PORT,
-            log_level="info",
-            access_log=False,
+    while True:
+        server = uvicorn.Server(
+            uvicorn.Config(
+                app,
+                host="0.0.0.0",  # noqa: S104 — контейнер, наружу торчит один порт
+                port=config.MCP_PORT,
+                log_level="info",
+                access_log=False,
+            )
         )
-    )
-    logger.info("MCP server listening on :%s%s", config.MCP_PORT, MCP_PATH)
-    try:
-        await server.serve()
-    except Exception:
-        logger.exception("MCP server stopped")
+        logger.info("MCP server listening on :%s%s", config.MCP_PORT, MCP_PATH)
+        try:
+            await server.serve()
+            return  # чистая остановка (например, отмена задачи) — не падение
+        except Exception:
+            logger.exception("MCP server crashed, restarting in %ss", MCP_RESTART_DELAY_SECONDS)
+        await asyncio.sleep(MCP_RESTART_DELAY_SECONDS)

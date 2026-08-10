@@ -216,7 +216,7 @@ def _reasoning_of(message_or_delta: Any) -> str:
     return extra.get("reasoning_content") or ""
 
 
-async def _log_llm_cost(user_id: Optional[int], model: str, usage: Any) -> None:
+async def _log_llm_cost(user_id: Optional[int], model: str, usage: Any, *, source: str = "bot") -> None:
     """Fire-and-forget cost_events row for a chat-completion call (see
     db.get_llm_cost_breakdown / admin_tasks.py's daily report).
 
@@ -255,6 +255,7 @@ async def _log_llm_cost(user_id: Optional[int], model: str, usage: Any) -> None:
             completion_tokens=completion_tokens,
             cached_tokens=cached,
             reasoning_tokens=reasoning,
+            source=source,
         )
     except Exception:
         logger.exception("failed to log llm cost event")
@@ -1204,6 +1205,7 @@ async def analyze_food(
     previous: Optional[dict[str, Any]] = None,
     correction: str = "",
     with_macros: bool = True,
+    source: str = "bot",
 ) -> dict[str, Any]:
     """Что человек съел → структурированная оценка приёма пищи.
 
@@ -1251,7 +1253,7 @@ async def analyze_food(
             {"role": "user", "content": _plain_user_content("\n\n".join(parts), image_data_url)},
         ],
     )
-    await _log_llm_cost(user_id, config.GROK_MODEL, getattr(response, "usage", None))
+    await _log_llm_cost(user_id, config.GROK_MODEL, getattr(response, "usage", None), source=source)
     data = _extract_json_object(response.choices[0].message.content or "")
     is_food = bool(data.get("is_food", True))
 
@@ -3417,7 +3419,9 @@ async def _log_bodyweight(
 _FOOD_ESTIMATE_TIMEOUT = 30
 
 
-async def _estimate_missing_macros(user_id: int, description: str, entry: dict[str, Any]) -> bool:
+async def _estimate_missing_macros(
+    user_id: int, description: str, entry: dict[str, Any], *, source: str = "ai_chat"
+) -> bool:
     """Досчитать КБЖУ по описанию тем же оценщиком, что и экран дневника.
 
     True — цифры проставлены. False — оценщик не увидел еды, не уложился в
@@ -3427,7 +3431,7 @@ async def _estimate_missing_macros(user_id: int, description: str, entry: dict[s
         return False
     try:
         estimate = await asyncio.wait_for(
-            analyze_food(user_id, text=description), timeout=_FOOD_ESTIMATE_TIMEOUT
+            analyze_food(user_id, text=description, source=source), timeout=_FOOD_ESTIMATE_TIMEOUT
         )
     except Exception:
         logger.exception("food estimate failed for user %s", user_id)
@@ -3442,7 +3446,7 @@ async def _estimate_missing_macros(user_id: int, description: str, entry: dict[s
 
 
 async def _log_food(
-    user_id: int, tool_input: dict[str, Any]
+    user_id: int, tool_input: dict[str, Any], *, source: str = "ai_chat"
 ) -> tuple[dict[str, Any], Optional[dict[str, Any]]]:
     """Записать съеденное — сразу, по той же причине, что и вес.
 
@@ -3467,7 +3471,15 @@ async def _log_food(
     user = await db.get_user(user_id)
     estimated = False
     if entry["calories"] is None and user["food_macros_enabled"]:
-        estimated = await _estimate_missing_macros(user_id, description, entry)
+        # Тот же платный вызов, что и у экрана дневника еды (analyze_food) —
+        # значит и та же квота: без этой проверки чат с тренером и MCP были
+        # единственными путями к analyze_food, вообще не считавшими расход.
+        block = await ai_limits.check(user_id, ai_limits.KIND_FOOD)
+        if block is None:
+            estimated = await _estimate_missing_macros(user_id, description, entry, source=source)
+            await db.increment_ai_food_count(user_id)
+        else:
+            logger.info("food macro estimate blocked (ai_chat/mcp) for user %s: %s", user_id, block.log)
     eaten_on = timeutil.user_today(user).isoformat()
     entry_id = await db.add_food_entry(
         user_id, eaten_on, description[:MAX_FOOD_DESCRIPTION],
@@ -4187,6 +4199,8 @@ async def execute_tool(
     on_program: ProgramCallback = None,
     on_action: ActionCallback = None,
     on_questions: QuestionsCallback = None,
+    *,
+    source: str = "ai_chat",
 ) -> str:
     if name == "get_training_overview":
         payload = await _training_overview(user_id)
@@ -4234,7 +4248,10 @@ async def execute_tool(
         # одинаково — различаются они только тем, что кнопка означает: у
         # _ACTION_TOOLS она делает дело, у _UNDOABLE_TOOLS отменяет уже сделанное.
         tool = _ACTION_TOOLS.get(name) or _UNDOABLE_TOOLS[name]
-        payload, action = await tool(user_id, tool_input)
+        if name == "log_food":
+            payload, action = await tool(user_id, tool_input, source=source)
+        else:
+            payload, action = await tool(user_id, tool_input)
         if action is not None and on_action is not None:
             await on_action(action)
             # Запись веса — единственное действие тут, у которого есть свой

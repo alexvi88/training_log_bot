@@ -10,9 +10,11 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from test_mcp_server import _running
 
 import config
 import game_server
+import mcp_server
 from handlers import game as game_handler
 
 pytestmark = pytest.mark.asyncio
@@ -57,6 +59,15 @@ async def test_stale_and_future_init_data_are_rejected(monkeypatch):
 
 async def test_empty_init_data_is_rejected():
     assert game_server.validate_init_data("") is None
+
+
+async def test_init_data_without_a_hash_param_is_rejected(monkeypatch):
+    """Не только пустая строка — initData, из которого просто вырезали hash
+    (а не подделали), обязана падать в ту же ветку отказа, что и битая подпись."""
+    monkeypatch.setattr(config, "BOT_TOKEN", TOKEN)
+    params = dict(urllib.parse.parse_qsl(_signed_init_data(), keep_blank_values=True))
+    del params["hash"]
+    assert game_server.validate_init_data(urllib.parse.urlencode(params)) is None
 
 
 # ---------- границы результата ----------
@@ -215,3 +226,80 @@ async def test_cmd_game_without_server_says_so(fresh_db, user_id, monkeypatch):
     text = message.answer.await_args.args[0]
     assert "не подключена" in text
     assert message.answer.await_args.kwargs.get("reply_markup") is None
+
+
+# ---------- /game-result по настоящему ASGI-проводу ----------
+
+
+async def _post_game_result(app, body: dict) -> tuple[int, bytes]:
+    """Один POST /game-result по настоящему ASGI-интерфейсу — тот же провод,
+    которым бьёт мини-приложение Telegram, без токена и без MCP-обвязки."""
+    payload = json.dumps(body).encode()
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "https",
+        "path": game_server.RESULT_PATH,
+        "raw_path": game_server.RESULT_PATH.encode(),
+        "query_string": b"",
+        "root_path": "",
+        "headers": [(b"content-type", b"application/json")],
+        "client": ("127.0.0.1", 12345),
+        "server": ("training-log.example.com", 443),
+    }
+    sent: list[dict] = []
+
+    async def receive():
+        return {"type": "http.request", "body": payload, "more_body": False}
+
+    async def send(message):
+        sent.append(message)
+
+    await app(scope, receive, send)
+    start = next(m for m in sent if m["type"] == "http.response.start")
+    body_out = b"".join(m.get("body", b"") for m in sent if m["type"] == "http.response.body")
+    return start["status"], body_out
+
+
+async def test_game_result_endpoint_rejects_a_forged_signature(fresh_db, monkeypatch):
+    """Регрессия: единственная защита публичного write-эндпоинта — подпись
+    initData — не была проверена ни разу на реальном HTTP-проводе, только
+    через прямой вызов validate_init_data в обход роутинга и парсинга тела."""
+    monkeypatch.setattr(config, "BOT_TOKEN", TOKEN)
+    app = mcp_server.build_app()
+    async with _running(app):
+        status, body = await _post_game_result(
+            app,
+            {
+                "initData": _signed_init_data(user_id=42, token="999:OTHER_TOKEN"),
+                "result": {"distance": 100, "score": 10, "fighter": "power"},
+            },
+        )
+    assert status == 403, body
+    assert await fresh_db.get_game_best_distance(42) == 0
+
+
+async def test_game_result_endpoint_rejects_missing_init_data(fresh_db):
+    app = mcp_server.build_app()
+    async with _running(app):
+        status, body = await _post_game_result(
+            app, {"result": {"distance": 100, "score": 10, "fighter": "power"}}
+        )
+    assert status == 403, body
+
+
+async def test_game_result_endpoint_accepts_a_validly_signed_result(fresh_db, monkeypatch):
+    monkeypatch.setattr(config, "BOT_TOKEN", TOKEN)
+    app = mcp_server.build_app()
+    async with _running(app):
+        status, body = await _post_game_result(
+            app,
+            {
+                "initData": _signed_init_data(user_id=42),
+                "result": {"distance": 400, "score": 50, "fighter": "power", "gameTimestamp": 1},
+            },
+        )
+    assert status == 200, body
+    assert await fresh_db.get_game_best_distance(42) == 400

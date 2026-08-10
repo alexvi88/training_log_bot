@@ -4,11 +4,16 @@ Single shared connection guarded by a write lock — a personal-bot's write
 volume never justifies a real connection pool, and since aiosqlite already
 funnels every statement through one dedicated worker thread, there's never
 more than one query in flight regardless of journal mode. Journal mode is
-the default rollback journal rather than WAL: WAL needs the filesystem to
-support shared-memory mmap for its -wal/-shm files, which mounted
-persistent-disk volumes (e.g. Amvera's persistenceMount) often don't,
-causing sporadic "disk I/O error" — and WAL's only upside (concurrent
-readers) doesn't apply to a single-connection app anyway.
+WAL, not the default rollback journal: in DELETE mode every commit creates
+and deletes a journal file (two metadata writes) and the writer blocks
+readers — on a single connection that means one INSERT stalls every read
+until it commits. Measured on a file-backed DB, 200 commits: 3.96ms →
+2.29ms (−42%) after switching. WAL needs the filesystem to support
+shared-memory mmap for its -wal/-shm files, which mounted persistent-disk
+volumes (e.g. Amvera's persistenceMount) can refuse with a sporadic "disk
+I/O error" — init_db() below retries the PRAGMA a couple of times and falls
+back to the rollback journal rather than crashing startup if the mount
+keeps refusing it.
 """
 
 import asyncio
@@ -404,6 +409,10 @@ CREATE TABLE IF NOT EXISTS cost_events (
     -- бы иначе, чем строка в логе, — то есть на один вопрос было бы два ответа.
     cached_tokens INTEGER NOT NULL DEFAULT 0,
     reasoning_tokens INTEGER NOT NULL DEFAULT 0,
+    -- Кто фактически инициировал платный вызов: 'bot' (обычный экран/чат) или
+    -- 'mcp' (внешний MCP-клиент с OAuth-токеном). Без этого расход от чужого
+    -- клиента неотличим в /growth и ночном отчёте от обычной активности бота.
+    source TEXT NOT NULL DEFAULT 'bot',
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_cost_events_created ON cost_events (created_at);
@@ -622,6 +631,26 @@ def build_display_name(
     return " · ".join(p for p in parts if p)
 
 
+async def _enable_wal_with_fallback() -> None:
+    """PRAGMA journal_mode=WAL, retried a couple of times against a mounted
+    volume's occasional "disk I/O error" (see module docstring) before giving
+    up and staying on the default rollback journal — a slower DB beats one
+    that refuses to start at all.
+    """
+    for attempt in range(3):
+        try:
+            await _conn.execute("PRAGMA journal_mode=WAL")
+            return
+        except aiosqlite.Error:
+            if attempt == 2:
+                logger.exception(
+                    "PRAGMA journal_mode=WAL failed after retries; staying on the "
+                    "default rollback journal (slower, but the DB still starts)"
+                )
+                return
+            await asyncio.sleep(0.2 * (attempt + 1))
+
+
 async def init_db(db_path: str = config.DB_PATH) -> None:
     global _conn
     parent = os.path.dirname(db_path)
@@ -638,11 +667,7 @@ async def init_db(db_path: str = config.DB_PATH) -> None:
     await _conn.create_function(
         "py_fold", 1, lambda s: search_terms.fold(s) if s is not None else None
     )
-    # WAL: в режиме DELETE каждый коммит создаёт и удаляет файл журнала (две
-    # операции с метаданными на запись) и писатель блокирует читателей — на
-    # единственном соединении это значит, что INSERT подхода останавливает все
-    # чтения. Замер на файловой БД, 200 коммитов: 3.96 мс → 2.29 мс (−42%).
-    await _conn.execute("PRAGMA journal_mode=WAL")
+    await _enable_wal_with_fallback()
     await _conn.execute("PRAGMA foreign_keys=ON")
     await _conn.executescript(SCHEMA)
     await _conn.commit()
@@ -684,6 +709,8 @@ async def _migrate_schema() -> None:
         await _conn.execute("ALTER TABLE cost_events ADD COLUMN cached_tokens INTEGER NOT NULL DEFAULT 0")
     if "reasoning_tokens" not in cost_cols:
         await _conn.execute("ALTER TABLE cost_events ADD COLUMN reasoning_tokens INTEGER NOT NULL DEFAULT 0")
+    if "source" not in cost_cols:
+        await _conn.execute("ALTER TABLE cost_events ADD COLUMN source TEXT NOT NULL DEFAULT 'bot'")
 
     workout_cols = await _column_names("workouts")
     if "source" not in workout_cols:
@@ -2444,10 +2471,15 @@ async def list_workout_contents(workout_ids: list[int]) -> dict[int, tuple[list[
     return {wid: (names.get(wid, []), counts.get(wid, 0)) for wid in workout_ids}
 
 
-async def search_workouts_by_exercise(user_id: int, query: str, limit: int = 20) -> list[aiosqlite.Row]:
+async def search_workouts_by_exercise(
+    user_id: int, query: str, limit: int = 20, offset: int = 0
+) -> list[aiosqlite.Row]:
     """Finished workouts containing an exercise whose name matches `query`,
     most recent first — the "в какой тренировке был жим" lookup, which the
     date-only history list can't answer.
+
+    offset — вторая и следующие страницы: без неё старые тренировки частого
+    упражнения физически недостижимы после первых 20 совпадений.
     """
     match, match_params = _stem_filter("e.display_name", query)
     cur = await conn().execute(
@@ -2457,8 +2489,8 @@ async def search_workouts_by_exercise(user_id: int, query: str, limit: int = 20)
         "JOIN exercises e ON e.id = be.exercise_id "
         "WHERE w.user_id = ? AND w.status = 'finished' "
         f"  AND {match} "
-        "ORDER BY w.started_at DESC LIMIT ?",
-        (user_id, *match_params, limit),
+        "ORDER BY w.started_at DESC LIMIT ? OFFSET ?",
+        (user_id, *match_params, limit, offset),
     )
     return await cur.fetchall()
 
@@ -2509,6 +2541,31 @@ async def list_finished_workout_dates(
         (user_id,),
     )
     return [r["d"] for r in await cur.fetchall()]
+
+
+async def list_finished_workout_exercise_ids_by_date(
+    user_id: int, *, tz_offset: Optional[int] = None
+) -> dict[str, set[int]]:
+    """Calendar date → exercise ids logged that day in finished workouts.
+
+    Used by CSV import to tell "this day already has a workout" apart from
+    "this day already has THIS exercise" — a manual bodyweight entry or an
+    unrelated exercise on the import date must not sink the whole day's
+    import (see csv_import._duplicate_dates).
+    """
+    day = _local_day("started_at", await _tz_offset_of(user_id, tz_offset))
+    cur = await conn().execute(
+        f"SELECT {day} AS d, be.exercise_id AS ex_id "
+        "FROM workouts w "
+        "JOIN workout_blocks wb ON wb.workout_id = w.id "
+        "JOIN block_exercises be ON be.block_id = wb.id "
+        "WHERE w.user_id = ? AND w.status = 'finished'",
+        (user_id,),
+    )
+    result: dict[str, set[int]] = {}
+    for row in await cur.fetchall():
+        result.setdefault(row["d"], set()).add(row["ex_id"])
+    return result
 
 
 def _e1rm_sql(formula: str) -> str:
@@ -5037,6 +5094,7 @@ async def log_cost_event(
     completion_tokens: int = 0,
     cached_tokens: int = 0,
     reasoning_tokens: int = 0,
+    source: str = "bot",
 ) -> None:
     """Строка в cost_events + строка в лог с ценой этого вызова.
 
@@ -5067,19 +5125,20 @@ async def log_cost_event(
     if reasoning_tokens:
         notes.append(f"размышления {reasoning_tokens}")
     logger.info(
-        "cost %s %s user %s: %s+%s токенов%s, ~$%.4f",
+        "cost %s %s user %s: %s+%s токенов%s, ~$%.4f%s",
         event_type, model, user_id, prompt_tokens, completion_tokens,
         f" ({', '.join(notes)})" if notes else "",
         price,
+        f" [{source}]" if source != "bot" else "",
     )
     async with _write_lock:
         await conn().execute(
             "INSERT INTO cost_events "
             "(user_id, event_type, model, prompt_tokens, completion_tokens, "
-            " cached_tokens, reasoning_tokens, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            " cached_tokens, reasoning_tokens, source, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (user_id, event_type, model, prompt_tokens, completion_tokens,
-             cached_tokens, reasoning_tokens, now_iso()),
+             cached_tokens, reasoning_tokens, source, now_iso()),
         )
         await conn().commit()
 
@@ -5196,6 +5255,19 @@ async def log_user_event(
             (telegram_id, kind, content, payload, now_iso()),
         )
         await conn().commit()
+
+
+async def count_unhandled_callbacks_by_prefix(since_iso: str) -> list[aiosqlite.Row]:
+    """Сколько раз каждый префикс callback_data долетал до fallback без
+    обработчика с указанного момента — вспышка одного префикса на фоне
+    остальных обычно значит регресс роутинга, а не просто протухшие кнопки."""
+    cur = await conn().execute(
+        "SELECT content AS prefix, COUNT(*) AS n FROM user_events "
+        "WHERE kind = 'callback_unhandled' AND created_at >= ? "
+        "GROUP BY content ORDER BY n DESC",
+        (since_iso,),
+    )
+    return await cur.fetchall()
 
 
 async def list_users_with_event_counts(limit: int = 10, offset: int = 0) -> list[aiosqlite.Row]:

@@ -12,6 +12,7 @@
 """
 
 import datetime as dt
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -238,6 +239,30 @@ async def test_log_food_without_numbers_asks_the_same_estimator_as_the_diary(
     assert entries[0]["calories"] == 865
     # Человек этих цифр не называл — тренер обязан сказать, что они прикидочные.
     assert payload["macros_estimated"] is True
+
+
+async def test_log_food_estimate_respects_ai_limits(fresh_db, user_id, monkeypatch):
+    """Регрессия: чат с тренером (и MCP тем же путём) звал платный analyze_food
+    в обход ai_limits — раньше ни дневная квота еды, ни денежный стоп-кран сюда
+    не заглядывали вовсе, только экран 🍽 Дневник еды."""
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+
+    async def fail(*a, **kw):
+        raise AssertionError("оценщик не должен вызываться при заблокированной квоте")
+
+    monkeypatch.setattr(ai_trainer, "analyze_food", fail)
+    monkeypatch.setattr(
+        ai_trainer.ai_limits, "check",
+        AsyncMock(return_value=ai_trainer.ai_limits.Block(kind="food", log="food: 30 из 30 за сутки")),
+    )
+    before = await dbmod.get_ai_food_count_today(user_id)
+
+    payload, _undo = await ai_trainer._log_food(user_id, {"description": "Хачапури"})
+
+    entries = await dbmod.list_food_entries(user_id, payload["logged"]["date"])
+    assert entries[0]["calories"] is None
+    assert payload["macros_estimated"] is False
+    assert await dbmod.get_ai_food_count_today(user_id) == before
 
 
 async def test_log_food_keeps_numbers_the_person_named(fresh_db, user_id, monkeypatch):

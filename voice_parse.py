@@ -140,16 +140,29 @@ def transcript_to_sets_line(text: str) -> str | None:
     """Best-effort "100 8, 95 8"-style line from a transcript, or None if no
     numbers were found. Only weight+reps are taken per chunk — spoken set counts
     are dropped rather than guessed at."""
+    line, _ = transcript_to_sets_line_with_hint(text)
+    return line
+
+
+def transcript_to_sets_line_with_hint(text: str) -> tuple[str | None, bool]:
+    """Same as `transcript_to_sets_line`, plus whether a trailing number (a
+    spoken set count, "...три подхода") was dropped from any chunk — the caller
+    can then warn the user that only one set from that phrase was recorded,
+    instead of silently under-logging "100 8 три подхода" as a single set.
+    """
     if not text:
-        return None
+        return None, False
     lines: list[str] = []
+    dropped = False
     for chunk in _CHUNK_SPLIT_RE.split(text):
         nums = _chunk_to_numbers(chunk)
         if not nums:
             continue
+        if len(nums) > 2 and nums[2] > 1:
+            dropped = True
         nums = nums[:2]  # weight, reps — ignore any trailing "three sets"
         if len(nums) == 1:
             lines.append(_format_number(nums[0]))  # a lone number = bodyweight reps
         else:
             lines.append(f"{_format_number(nums[0])} {_format_number(nums[1])}")
-    return ", ".join(lines) if lines else None
+    return (", ".join(lines) if lines else None), dropped
