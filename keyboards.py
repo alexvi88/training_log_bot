@@ -675,11 +675,17 @@ def planned_plan_keyboard(items: list[tuple[int, str]], *, removing: bool = Fals
     return b.as_markup()
 
 
-def routines_manage_keyboard(programs, routines, has_workouts: bool) -> InlineKeyboardMarkup:
+def routines_manage_keyboard(
+    programs, routines, has_workouts: bool, back_to_picker: bool = False
+) -> InlineKeyboardMarkup:
     """`programs` — многодневки одной строкой каждая (см. db.list_programs): их
     дни лежат за вторым экраном, иначе трёхдневный сплит занимает три кнопки и
     список перестаёт читаться. `routines` — одиночные программы, у них второго
-    уровня нет и они ведут сразу в карточку."""
+    уровня нет и они ведут сразу в карточку.
+
+    `back_to_picker` — сюда попали с экрана выбора группы мышц уже начатой
+    тренировки («🗂 Выбрать программу»): последняя кнопка ведёт назад туда же,
+    а не в главное меню мимо тренировки, которая всё это время ждёт."""
     b = InlineKeyboardBuilder()
     for p in programs:
         word = formatting.plural_ru(p["day_count"], ("день", "дня", "дней"))
@@ -697,7 +703,7 @@ def routines_manage_keyboard(programs, routines, has_workouts: bool) -> InlineKe
     b.button(text="🤖 Составить с AI-тренером", callback_data="ai:buildprog")
     if has_workouts:
         b.button(text="➕ Из тренировки", callback_data="rt:pickw:page:0")
-    b.button(text="🏠 Меню", callback_data="rt:menu")
+    b.button(text="⬅️ Назад" if back_to_picker else "🏠 Меню", callback_data="rt:menu")
     b.adjust(1)
     return b.as_markup()
 
