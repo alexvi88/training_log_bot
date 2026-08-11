@@ -438,3 +438,141 @@ async def test_context_block_tells_the_coach_to_stay_out_of_the_log():
     block = video_analysis.to_context_block(_analysis())
     assert "в дневник без надобности не лезь" in block
     assert "прогресс" in block
+
+
+# ---------- ракурс и время: проверки, которые не требуют модели ----------
+
+
+async def test_observation_citing_a_frame_outside_the_clip_is_dropped():
+    """Живой провал: присед на 7 секунд, а модель писала «в повторах (0:12-0:16)
+    глубина уменьшается». Кадров 0:12 и 0:16 не существовало — значит наблюдение
+    сочинено целиком, и доказательство в evidence указывает в пустоту.
+
+    Самая дешёвая проверка на выдумку: длину ролика сообщает Telegram, никакой
+    модели для этого не нужно.
+    """
+    out = video_analysis._sanitize(
+        _analysis(observations=[
+            {"what": "глубина падает", "when": "0:12-0:16",
+             "evidence": "в повторах 3-4 таз выше", "severity": "мешает"},
+            {"what": "колени внутрь", "when": "0:03",
+             "evidence": "на 0:03 колени к центру", "severity": "мешает"},
+        ]),
+        duration=7,
+    )
+    assert [o["what"] for o in out["observations"]] == ["колени внутрь"]
+
+
+async def test_timecode_just_past_the_end_is_tolerated():
+    """«0:07» на границе семисекундного ролика — округление, а не ложь."""
+    out = video_analysis._sanitize(
+        _analysis(observations=[
+            {"what": "рывок вверху", "when": "0:07", "evidence": "видно", "severity": "мелочь"},
+        ]),
+        duration=7,
+    )
+    assert len(out["observations"]) == 1
+
+
+async def test_checkpoint_keeps_verdict_but_loses_invented_timecode():
+    """Вердикт может быть верным, врут цифры — тренер не должен ссылаться на
+    кадр, которого не было."""
+    checklist = _checklist(**{"амплитуда": "отклонение"})
+    for item in checklist:
+        if item["point"] == "амплитуда":
+            item["when"] = "0:14"
+            item["what_i_see"] = "к повторам на 0:14 глубина короче"
+    out = video_analysis._sanitize(_analysis(checklist=checklist), duration=7)
+
+    amp = next(i for i in out["checklist"] if i["point"] == "амплитуда")
+    assert amp["verdict"] == "отклонение"
+    assert amp["when"] is None
+    assert amp["invented_moments"] is True
+
+
+async def test_timecodes_are_not_checked_without_a_known_duration():
+    """Длины нет — проверять нечем, и выбрасывать наблюдения не за что."""
+    out = video_analysis._sanitize(
+        _analysis(observations=[
+            {"what": "глубина падает", "when": "9:99", "evidence": "видно", "severity": "мешает"},
+        ]),
+    )
+    assert len(out["observations"]) == 1
+
+
+async def test_side_view_claiming_knee_valgus_is_flagged(caplog):
+    """Геометрия, а не вкус: вальгус коленей с профиля не виден. Ровно так
+    развалился разбор приседа — ракурс сбоку назвали «спереди», от спины
+    увернулись, а колени внутрь сочинили."""
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="video_analysis"):
+        checklist = _checklist(**{"колени и локти": "отклонение"})
+        for item in checklist:
+            if item["point"] == "колени и локти":
+                item["what_i_see"] = "колени сваливаются внутрь в нижней точке"
+        video_analysis._sanitize(
+            _analysis(checklist=checklist, view={"angle": "сбоку", "usable": True, "problem": ""})
+        )
+
+    assert any("с профиля это не видно" in r.message for r in caplog.records)
+
+
+async def test_side_view_dodging_the_spine_is_flagged(caplog):
+    """«Профиль позвоночника не виден» при боковой съёмке — отписка от главного."""
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="video_analysis"):
+        video_analysis._sanitize(
+            _analysis(
+                checklist=_checklist(**{"спина": "не видно"}),
+                view={"angle": "сбоку", "usable": True, "problem": ""},
+            )
+        )
+
+    assert any("сбоку она видна" in r.message for r in caplog.records)
+
+
+async def test_front_view_judging_the_spine_is_flagged(caplog):
+    """И обратное: спереди профиль спины не виден, судить о нём нельзя."""
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="video_analysis"):
+        video_analysis._sanitize(
+            _analysis(
+                checklist=_checklist(**{"спина": "отклонение"}),
+                view={"angle": "спереди", "usable": True, "problem": ""},
+            )
+        )
+
+    assert any("не виден" in r.message for r in caplog.records)
+
+
+async def test_context_block_passes_the_angle_reasoning_to_the_coach():
+    """Тренер должен видеть, ПО ЧЕМУ модель решила, что ракурс такой, — иначе
+    неверный ракурс не отличить от верного."""
+    block = video_analysis.to_context_block(
+        _analysis(view={
+            "angle": "сбоку", "why": "корпус в профиль, одно плечо перекрывает другое",
+            "usable": True, "problem": "",
+        })
+    )
+    assert "одно плечо перекрывает другое" in block
+
+
+async def test_analyze_tells_the_model_how_long_the_clip_is(monkeypatch):
+    monkeypatch.setattr(video_analysis.db, "log_cost_event", AsyncMock())
+    client = MagicMock()
+    client.chat.completions.create = AsyncMock(
+        return_value=SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps(_analysis())))],
+            usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1),
+        )
+    )
+    monkeypatch.setattr(video_analysis, "_get_client", lambda: client)
+
+    await video_analysis.analyze(b"bytes", 1, duration_seconds=7)
+
+    content = client.chat.completions.create.call_args.kwargs["messages"][1]["content"]
+    text = next(p["text"] for p in content if p["type"] == "text")
+    assert "7 секунд" in text
