@@ -2573,7 +2573,30 @@ async def ai_question(message: Message, state: FSMContext):
     # «а сколько вообще надо?» — гадать об этом локально мы не беремся, оно
     # уедет модели вместе с самим вопросом, и разберётся с ним финальная сборка
     # (см. SETUP_ANSWERS_FRAME).
-    setup = _active_setup(await state.get_data())
+    data = await state.get_data()
+
+    # Ждём название упражнения к присланному ролику — значит этот текст ответ на
+    # него, а не новый вопрос тренеру. Тот же приём, что и с опросником ниже:
+    # перехват внутри хендлера по состоянию, а не отдельным фильтром.
+    pending = data.get("aivid_pending")
+    if pending:
+        if not _try_claim_busy(user_id):
+            await message.reply("Секунду, ещё думаю над прошлым вопросом 😅")
+            return
+        try:
+            await state.update_data(aivid_pending=None)
+            await _analyze_video_and_answer(
+                message, state, user_id,
+                file_id=pending["file_id"],
+                mime_type=pending.get("mime_type") or "video/mp4",
+                duration=pending.get("duration"),
+                exercise_hint=question,
+            )
+        finally:
+            _busy.discard(user_id)
+        return
+
+    setup = _active_setup(data)
     if setup is not None:
         last = setup["idx"] + 1 >= len(setup["questions"])
         if last and not _try_claim_busy(user_id):
@@ -2638,13 +2661,40 @@ DEFAULT_VIDEO_QUESTION = (
 VIDEO_EXERCISE_CHOICES = 6
 
 
-def _video_exercise_keyboard(names: list[str]) -> InlineKeyboardMarkup:
+def _video_exercise_keyboard(names: list[str], page: int, total: int) -> InlineKeyboardMarkup:
+    """Страница каталога + листалка.
+
+    Имена уезжают не в callback_data, а в FSM: там кириллица, а у Telegram на
+    callback_data 64 БАЙТА, и «Разгибания на трицепс в кроссовере» в них не
+    влезет. По индексу же всегда влезает.
+    """
     kb = InlineKeyboardBuilder()
     for i, name in enumerate(names):
         kb.button(text=name, callback_data=f"aivid:ex:{i}")
-    kb.button(text="Разбери так, без названия", callback_data="aivid:skip")
     kb.adjust(1)
+
+    nav = InlineKeyboardBuilder()
+    if page > 0:
+        nav.button(text="← назад", callback_data=f"aivid:page:{page - 1}")
+    if (page + 1) * VIDEO_EXERCISE_CHOICES < total:
+        nav.button(text="ещё →", callback_data=f"aivid:page:{page + 1}")
+    if nav.buttons:
+        kb.attach(nav)
+        nav.adjust(2)
+
+    tail = InlineKeyboardBuilder()
+    tail.button(text="Разбери так, без названия", callback_data="aivid:skip")
+    tail.adjust(1)
+    kb.attach(tail)
     return kb.as_markup()
+
+
+async def _video_exercise_page(user_id: int, page: int) -> tuple[list[str], int]:
+    rows = await db.list_user_exercises(
+        user_id, limit=VIDEO_EXERCISE_CHOICES, offset=page * VIDEO_EXERCISE_CHOICES
+    )
+    total = await db.count_user_exercises(user_id)
+    return [r["display_name"] for r in rows], total
 
 
 async def _analyze_video_and_answer(
@@ -2772,21 +2822,22 @@ async def ai_video_question(message: Message, state: FSMContext):
             )
             return
 
-        rows = await db.list_user_exercises(user_id, limit=VIDEO_EXERCISE_CHOICES)
-        names = [r["display_name"] for r in rows]
+        names, total = await _video_exercise_page(user_id, 0)
         await state.update_data(
             aivid_pending={
                 "file_id": video.file_id,
                 "mime_type": mime_type,
                 "duration": video.duration,
                 "names": names,
+                "page": 0,
             }
         )
         await message.reply(
             "Принял ролик. Что за упражнение?\n\n"
-            "Спрашиваю до того, как смотреть: угадаю неверно — разберу по чужим "
-            "меркам, а это хуже, чем не разобрать вовсе.",
-            reply_markup=_video_exercise_keyboard(names),
+            "Напиши название ответом или выбери из своих ниже. Спрашиваю до того, "
+            "как смотреть: угадаю неверно — разберу по чужим меркам, а это хуже, "
+            "чем не разобрать вовсе.",
+            reply_markup=_video_exercise_keyboard(names, 0, total),
         )
     finally:
         _busy.discard(user_id)
@@ -2801,12 +2852,28 @@ async def ai_video_exercise_chosen(callback: CallbackQuery, state: FSMContext):
     if not pending:
         await callback.answer("Ролик потерялся, пришли заново", show_alert=True)
         return
+    choice = callback.data.split(":", 2)[-1]
+
+    # Листание каталога ролик не трогает и замок не занимает — это ещё вопрос,
+    # а не ответ.
+    if callback.data.startswith("aivid:page:"):
+        await callback.answer()
+        page = max(0, int(choice) if choice.isdigit() else 0)
+        names, total = await _video_exercise_page(user_id, page)
+        pending["names"] = names
+        pending["page"] = page
+        await state.update_data(aivid_pending=pending)
+        with suppress(TelegramBadRequest):
+            await callback.message.edit_reply_markup(
+                reply_markup=_video_exercise_keyboard(names, page, total)
+            )
+        return
+
     if not _try_claim_busy(user_id):
         await callback.answer("Секунду, ещё думаю над прошлым вопросом")
         return
     try:
         await callback.answer()
-        choice = callback.data.split(":", 2)[-1]
         names = pending.get("names") or []
         exercise = None
         if choice != "skip":

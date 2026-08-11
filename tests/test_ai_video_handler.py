@@ -91,6 +91,7 @@ def wired(monkeypatch):
         db, "list_user_exercises",
         AsyncMock(return_value=[{"display_name": "Присед со штангой"}]),
     )
+    monkeypatch.setattr(db, "count_user_exercises", AsyncMock(return_value=1))
     handle = AsyncMock()
     monkeypatch.setattr(handler, "_handle_question", handle)
     return SimpleNamespace(analyze=analyze, handle=handle)
@@ -342,3 +343,94 @@ async def test_busy_released_after_the_button_path(wired):
     message = _message()
     await _send_and_name(message)
     assert 777 not in handler._busy
+
+
+# ---------- название текстом и листалка по каталогу ----------
+
+
+async def test_typed_answer_becomes_the_exercise_name(wired):
+    """Пока висит непрослушанный ролик, текст — это ответ про упражнение, а не
+    новый вопрос тренеру. Перехват внутри хендлера по состоянию, тем же приёмом,
+    что и опросник."""
+    message = _message()
+    state = _state()
+    await handler.ai_video_question(message, state)
+
+    answer = _message()
+    answer.text = "румынская тяга"
+    await handler.ai_question(answer, state)
+
+    assert wired.analyze.await_args.kwargs["exercise_hint"] == "румынская тяга"
+
+
+async def test_pending_video_is_cleared_so_the_next_text_is_a_normal_question(wired):
+    """Иначе следующий вопрос тренеру молча уехал бы как название упражнения."""
+    message = _message()
+    state = _state()
+    await handler.ai_video_question(message, state)
+
+    answer = _message()
+    answer.text = "жим лёжа"
+    await handler.ai_question(answer, state)
+
+    assert (await state.get_data()).get("aivid_pending") is None
+
+
+async def test_catalog_can_be_paged_without_touching_the_video(wired, monkeypatch):
+    """Листание — это ещё вопрос, а не ответ: ролик не качается, замок не занят."""
+    monkeypatch.setattr(db, "count_user_exercises", AsyncMock(return_value=20))
+    message = _message()
+    state = _state()
+    await handler.ai_video_question(message, state)
+
+    callback = MagicMock()
+    callback.from_user = message.from_user
+    callback.data = "aivid:page:1"
+    callback.answer = AsyncMock()
+    callback.message = message
+    callback.message.edit_reply_markup = AsyncMock()
+    await handler.ai_video_exercise_chosen(callback, state)
+
+    wired.analyze.assert_not_awaited()
+    assert 777 not in handler._busy
+    assert (await state.get_data())["aivid_pending"]["page"] == 1
+    assert db.list_user_exercises.await_args.kwargs["offset"] == handler.VIDEO_EXERCISE_CHOICES
+
+
+async def test_pager_arrows_appear_only_where_there_is_somewhere_to_go(monkeypatch, wired):
+    monkeypatch.setattr(db, "count_user_exercises", AsyncMock(return_value=20))
+    message = _message()
+    await handler.ai_video_question(message, _state())
+
+    labels = [
+        b.text for row in message.reply.await_args.kwargs["reply_markup"].inline_keyboard
+        for b in row
+    ]
+    assert any("ещё" in label for label in labels)
+    # С первой страницы назад некуда.
+    assert not any("назад" in label for label in labels)
+
+
+async def test_long_exercise_name_survives_the_64_byte_callback_limit(monkeypatch, wired):
+    """Кириллица в callback_data не помещается — имена живут в FSM, в кнопке индекс."""
+    long_name = "Разгибания на трицепс в кроссовере с канатной рукоятью"
+    monkeypatch.setattr(
+        db, "list_user_exercises", AsyncMock(return_value=[{"display_name": long_name}])
+    )
+    message = _message()
+    state = _state()
+    await handler.ai_video_question(message, state)
+
+    markup = message.reply.await_args.kwargs["reply_markup"]
+    data = [b.callback_data for row in markup.inline_keyboard for b in row]
+    assert all(len(d.encode()) <= 64 for d in data)
+
+    callback = MagicMock()
+    callback.from_user = message.from_user
+    callback.data = "aivid:ex:0"
+    callback.answer = AsyncMock()
+    callback.message = message
+    callback.message.edit_reply_markup = AsyncMock()
+    await handler.ai_video_exercise_chosen(callback, state)
+
+    assert wired.analyze.await_args.kwargs["exercise_hint"] == long_name
