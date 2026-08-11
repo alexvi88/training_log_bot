@@ -394,14 +394,25 @@ def _sanitize(data: dict[str, Any]) -> dict[str, Any]:
     # checklist едет тренеру целиком (см. to_context_block), так что отклонение
     # до него доедет и так. Но в лог это надо, иначе молчание тренера про
     # реальный косяк снова будет неотличимо от честного «не нашли».
-    lost = [
-        item["point"] for item in checklist
-        if item["verdict"] == "отклонение"
-        and not any(item["point"] in f"{o.get('what')} {o.get('evidence')}".lower()
-                    for o in observations)
-    ]
-    if lost:
-        logger.info("video sanitize: отклонение по точкам %s не попало в observations", lost)
+    flagged = [item["point"] for item in checklist if item["verdict"] == "отклонение"]
+    # Раньше здесь наблюдение сопоставлялось с точкой по вхождению её названия в
+    # текст — и на живом прогоне это дало ложную тревогу: модель нашла «таз
+    # поднимается раньше плеч», слов «порядок движения» там, разумеется, нет.
+    # Формулировки наблюдений свободные, названия точек наши, и совпадать они не
+    # обязаны. Лог, срабатывающий на каждом втором ролике, хуже отсутствия лога:
+    # он приучает не смотреть. Поэтому кричим только про случай, где тренер
+    # действительно останется без слов, — отклонения есть, наблюдений ноль.
+    if flagged and not observations:
+        logger.warning(
+            "video sanitize: отклонения по точкам %s есть, а observations пуст — "
+            "тренер узнает о них только из checklist",
+            flagged,
+        )
+    elif flagged:
+        logger.info(
+            "video sanitize: отклонений по точкам %s, наблюдений %s",
+            len(flagged), len(observations),
+        )
 
     return {
         "exercise": (data.get("exercise") or "не определил"),
