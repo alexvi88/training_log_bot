@@ -2686,14 +2686,8 @@ async def ai_video_question(message: Message, state: FSMContext):
         try:
             buf = await message.bot.download(video)
             # video_note своего mime_type не несёт — там всегда mp4.
-            # duration отдаёт сам Telegram, и модели её надо сказать: без этого
-            # она сочиняет тайм-коды за пределами ролика (живой провал — присед
-            # на 7 секунд с наблюдениями «в повторах на 0:12-0:16»). Заодно по
-            # ней в _sanitize отсеиваются наблюдения про несуществующие кадры.
             analysis = await video_analysis.analyze(
-                buf.read(), user_id,
-                mime_type=getattr(video, "mime_type", None) or "video/mp4",
-                duration_seconds=video.duration or None,
+                buf.read(), user_id, mime_type=getattr(video, "mime_type", None) or "video/mp4"
             )
         except Exception:
             logger.exception("video download/analysis failed for user %s", user_id)
