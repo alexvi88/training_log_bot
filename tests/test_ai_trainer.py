@@ -1573,3 +1573,26 @@ async def test_prompt_tells_the_trainer_to_fix_memory_on_objection():
     assert "затрёт старое" in prompt
     # Обещать «спрошу разрешения» больше нельзя — разрешения никто не спрашивает.
     assert "не пиши «запомнил»" not in prompt
+
+
+async def test_big_three_low_reps_are_not_treated_as_missing_the_range():
+    """Живой комментарий: «conventional deadlift — все рабочие на 4: диапазон
+    5–10 ты не добрал, сбрось вес и добей хотя бы 5–6 чистых».
+
+    Для приседа, становой и жима лёжа это неверный совет: 1-5 повторов там
+    штатный силовой протокол, а не недобор. Человек, тянущий близко к максимуму,
+    читает такое как «тренер не понял, о чём я».
+    """
+    prompt = ai_trainer.WORKOUT_COMMENT_SYSTEM_PROMPT
+    assert "Присед, становая и жим лёжа" in prompt
+    assert "не недобор диапазона" in prompt
+    # Прямо запрещены обе формулировки из живого провала.
+    assert "диапазон 5-10 ты не добрал" in prompt
+    assert "сбросить вес и добить до 5-6" in prompt
+
+
+async def test_big_three_exception_reaches_the_methodology_too():
+    """Не только комментарий по тренировке, но и сборка программ: иначе тренер
+    напишет тройку в становой и тут же сам себя поправит на разборе."""
+    assert "жим лёжа: тяжёлые осевые" in ai_trainer.SYSTEM_PROMPT
+    assert "прогрессируют весом, а не повторами" in ai_trainer.SYSTEM_PROMPT
