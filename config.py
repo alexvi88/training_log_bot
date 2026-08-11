@@ -391,6 +391,22 @@ VIDEO_ANALYSIS_MAX_TOKENS = int(os.getenv("VIDEO_ANALYSIS_MAX_TOKENS", "8000"))
 # токены, и сам разбор.
 VIDEO_ANALYSIS_TIMEOUT_SECONDS = float(os.getenv("VIDEO_ANALYSIS_TIMEOUT_SECONDS", "180"))
 
+# Строгий JSON-режим провайдера (response_format={"type": "json_object"}).
+# ВЫКЛЮЧЕН по умолчанию, и это не осторожность, а прод: Novita отдаёт на него
+# 400 INVALID_REQUEST_BODY — «model: qwen/qwen3-vl-235b-a22b-thinking does not
+# support feature: structured-outputs». Instruct эту фичу поддерживал, thinking
+# нет, и переключение модели молча положило разбор видео целиком: падал КАЖДЫЙ
+# вызов, человек получал «Не смог разобрать это видео».
+#
+# Терять тут нечего: JSON и так вытаскивается из ответа руками
+# (video_analysis._strip_reasoning снимает <think>, ```json и болтовню вокруг
+# объекта), а промпт требует «строго одним JSON-объектом». Флаг оставлен, чтобы
+# включить режим обратно одной переменной, если провайдер и модель его умеют, —
+# без выкатки кода.
+VIDEO_ANALYSIS_JSON_MODE = os.getenv("VIDEO_ANALYSIS_JSON_MODE", "false").lower() not in (
+    "false", "0", "no",
+)
+
 
 # Потолок на историю, которую храним для кэша (см. ai_trainer._trim_wire_history).
 # Держим целиком то, что уехало модели, включая tool-вызовы и их результаты: по
