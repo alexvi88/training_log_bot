@@ -18,14 +18,25 @@ import video_analysis
 pytestmark = pytest.mark.asyncio
 
 
+def _checklist(**verdicts):
+    """Семь точек, по умолчанию все пройдены с описанием увиденного."""
+    return [
+        {
+            "point": point,
+            "verdict": verdicts.get(point, "норма"),
+            "what_i_see": f"по {point} в кадре видно вот это",
+            "when": "0:04",
+        }
+        for point in video_analysis.CHECKPOINTS
+    ]
+
+
 def _analysis(**over):
     base = {
         "exercise": "становая тяга",
         "reps_seen": 3,
         "view": {"angle": "сбоку", "usable": True, "problem": ""},
-        "description": [
-            {"aspect": "траектория снаряда", "what_i_see": "гриф идёт по ногам", "when": "0:04"}
-        ],
+        "checklist": _checklist(),
         "observations": [],
         "not_visible": [],
         "camera_advice": "",
@@ -115,6 +126,56 @@ async def test_context_block_states_empty_findings_honestly():
     assert "Отклонений не нашли" in block
     assert "Не выдумывай ошибку" in block
     assert "становая тяга" in block
+    # Живой провал: на пустом списке тренер сказал «чинить нечего, оставляй
+    # такой рисунок и наращивай нагрузку» — похвалил технику и велел грузить её,
+    # не имея ни одного наблюдения. Запрет на это должен доезжать до него текстом.
+    assert "не хвали" in block
+    assert "добавлять вес" in block
+
+
+async def test_checkpoint_marked_normal_without_evidence_becomes_unseen():
+    """«Норма» без описания — проставленная галочка, а не осмотр.
+
+    Дороже любой другой ошибки: тренер верит «норме» и советует грузить вес.
+    """
+    checklist = _checklist()
+    checklist[0]["what_i_see"] = "   "
+    out = video_analysis._sanitize(_analysis(checklist=checklist))
+    spine = next(item for item in out["checklist"] if item["point"] == "спина")
+    assert spine["verdict"] == "не видно"
+
+
+async def test_skipped_checkpoint_is_not_invented_as_normal():
+    """Точку, которую модель не прошла, не достраиваем — тренер узнает правду.
+
+    Ровно этот провал и видели живьём: модель описала стопы, гриф, разгибание,
+    фиксацию и повторы, молча пропустив спину, — и вернула ноль отклонений.
+    """
+    checklist = [item for item in _checklist() if item["point"] != "спина"]
+    out = video_analysis._sanitize(_analysis(checklist=checklist))
+
+    assert [item["point"] for item in out["checklist"]] == [
+        p for p in video_analysis.CHECKPOINTS if p != "спина"
+    ]
+    block = video_analysis.to_context_block(out)
+    assert "не смотрели вовсе: спина" in block
+
+
+async def test_checklist_reordered_to_our_order_and_junk_points_dropped():
+    checklist = list(reversed(_checklist())) + [
+        {"point": "настрой", "verdict": "норма", "what_i_see": "собран"}
+    ]
+    out = video_analysis._sanitize(_analysis(checklist=checklist))
+    assert [item["point"] for item in out["checklist"]] == list(video_analysis.CHECKPOINTS)
+
+
+async def test_checkpoint_deviation_reaches_coach_even_without_observation():
+    """Модель теряет своё наблюдение между шагом 1 и шагом 2 — косяк не должен пропасть."""
+    out = video_analysis._sanitize(
+        _analysis(checklist=_checklist(**{"спина": "отклонение"}), observations=[])
+    )
+    block = video_analysis.to_context_block(out)
+    assert "спина [ОТКЛОНЕНИЕ]" in block
 
 
 async def test_context_block_carries_severity_and_confidence():
