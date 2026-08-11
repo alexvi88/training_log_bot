@@ -615,13 +615,16 @@ async def test_own_description_overrides_template_default_in_the_card_text(fresh
     group_id = await db.create_muscle_group(user_id, "Грудь")
     ex_id = await db.create_exercise(user_id, "Присед со штангой", group_id)
     default_text = exercises._exercise_info_text(await db.get_exercise(ex_id))
-    assert "1." in default_text  # sanity check: the template default was actually shown
+    first_step = "1. Установите штангу"
+    assert first_step in default_text  # sanity check: the template default was actually shown
 
     await db.set_exercise_description(ex_id, "Моя версия — колени наружу")
     overridden_text = exercises._exercise_info_text(await db.get_exercise(ex_id))
 
     assert "Моя версия — колени наружу" in overridden_text
-    assert "1." not in overridden_text  # the numbered template steps are gone, not appended
+    # A bare "1." also matches the "Создано: 11.08.2026" line the card carries,
+    # so this checks for the actual template step text going away, not a digit.
+    assert first_step not in overridden_text  # the numbered template steps are gone, not appended
 
 
 async def test_created_date_is_shown_russian_style_not_iso(fresh_db, user_id):
