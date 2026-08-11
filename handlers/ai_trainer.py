@@ -2632,6 +2632,78 @@ DEFAULT_VIDEO_QUESTION = (
 )
 
 
+# Сколько своих упражнений показать кнопками, когда спрашиваем «что это было».
+# Список из db.list_user_exercises отсортирован по частоте использования, так что
+# нужное почти всегда в первых строках, а длинная простыня в зале только мешает.
+VIDEO_EXERCISE_CHOICES = 6
+
+
+def _video_exercise_keyboard(names: list[str]) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    for i, name in enumerate(names):
+        kb.button(text=name, callback_data=f"aivid:ex:{i}")
+    kb.button(text="Разбери так, без названия", callback_data="aivid:skip")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+async def _analyze_video_and_answer(
+    message: Message,
+    state: FSMContext,
+    user_id: int,
+    *,
+    file_id: str,
+    mime_type: str,
+    duration: Optional[int],
+    exercise_hint: Optional[str],
+    caption: str = "",
+) -> None:
+    """Скачать ролик, разобрать и ответить голосом тренера.
+
+    Вынесено из хендлера, потому что путей сюда два: ролик с подписью разбирается
+    сразу, а ролик без подписи — только после того, как атлет назовёт упражнение
+    кнопкой. Скачиваем по file_id, а не по объекту из апдейта: между вопросом и
+    ответом проходит время, и держать всё это в памяти незачем.
+    """
+    status = await message.answer("🎥 Смотрю видео...")
+    try:
+        buf = await message.bot.download(file_id)
+        # Упражнение из подписи или из кнопки — источник надёжнее глаз модели.
+        # Живой провал: тягу штанги к поясу она приняла за становую и выдала три
+        # классические ошибки становой, которых в кадре не было.
+        analysis = await video_analysis.analyze(
+            buf.read(), user_id,
+            mime_type=mime_type,
+            exercise_hint=exercise_hint,
+        )
+    except Exception:
+        logger.exception("video download/analysis failed for user %s", user_id)
+        analysis = None
+    finally:
+        with suppress(TelegramBadRequest):
+            await status.delete()
+
+    if analysis is None:
+        await message.reply(
+            "Не смог разобрать это видео. Попробуй ещё раз или сними сбоку, "
+            "чтобы попал весь подход."
+        )
+        return
+
+    # Квота тратится только за разбор, который получился, — как и дневной
+    # счётчик вопросов, который списывается лишь при готовом ответе.
+    await db.increment_ai_video_count(user_id)
+
+    asked = caption or (f"Разбери технику: {exercise_hint}." if exercise_hint else "")
+    question = asked or DEFAULT_VIDEO_QUESTION
+    history_question = f"[видео] {asked}" if asked else "[прислал видео подхода]"
+    await _handle_question(
+        message, state, question,
+        history_question=history_question,
+        video_context=video_analysis.to_context_block(analysis),
+    )
+
+
 @router.message(AITrainerFlow.chatting, F.video | F.video_note | F.animation)
 async def ai_video_question(message: Message, state: FSMContext):
     """Ролик подхода → наблюдения от Qwen3-VL → ответ голосом тренера.
@@ -2639,6 +2711,13 @@ async def ai_video_question(message: Message, state: FSMContext):
     Порядок проверок — от самой дешёвой к самой дорогой: сначала настройка, потом
     длина (её Telegram сообщает в апдейте, качать не нужно), потом дневная квота,
     и только под конец скачивание с разбором. Иначе за отказ платили бы трафиком.
+
+    Упражнение спрашивается ДО разбора, а не после. Раньше модель угадывала его
+    сама, и на неуверенной догадке тренер переспрашивал — но ролик к тому моменту
+    был уже посмотрен и оплачен, а наблюдения собраны под чужое движение и
+    переиспользовать их нельзя. Полторы минуты и три цента впустую, плюс списанный
+    вопрос из дневной квоты за то, что бот не разобрался. Вопрос кнопками не стоит
+    ни одного вызова модели.
 
     animation в фильтре обязателен: ролик БЕЗ АУДИОДОРОЖКИ Telegram отдаёт не как
     video, а как animation (в клиенте он подписан «GIF»), и снятое в зале видео
@@ -2682,44 +2761,68 @@ async def ai_video_question(message: Message, state: FSMContext):
             await message.reply("Файл тяжёлый, я такой не вытяну. Сними покороче или полегче.")
             return
 
-        status = await message.answer("🎥 Смотрю видео...")
-        try:
-            buf = await message.bot.download(video)
-            # video_note своего mime_type не несёт — там всегда mp4.
-            # Подпись к ролику уезжает в разбор как источник упражнения: назвал
-            # атлет — верим ему, а не глазам модели. Живой провал: тягу штанги к
-            # поясу она приняла за становую и выдала три классические ошибки
-            # становой, которых в кадре не было.
-            analysis = await video_analysis.analyze(
-                buf.read(), user_id,
-                mime_type=getattr(video, "mime_type", None) or "video/mp4",
-                exercise_hint=(message.caption or "").strip() or None,
-            )
-        except Exception:
-            logger.exception("video download/analysis failed for user %s", user_id)
-            analysis = None
-        finally:
-            with suppress(TelegramBadRequest):
-                await status.delete()
-
-        if analysis is None:
-            await message.reply(
-                "Не смог разобрать это видео. Попробуй ещё раз или сними сбоку, "
-                "чтобы попал весь подход."
+        caption = (message.caption or "").strip()
+        mime_type = getattr(video, "mime_type", None) or "video/mp4"
+        if caption:
+            # Подписал сам — спрашивать нечего, это и есть название.
+            await _analyze_video_and_answer(
+                message, state, user_id,
+                file_id=video.file_id, mime_type=mime_type, duration=video.duration,
+                exercise_hint=caption, caption=caption,
             )
             return
 
-        # Квота тратится только за разбор, который получился, — как и дневной
-        # счётчик вопросов, который списывается лишь при готовом ответе.
-        await db.increment_ai_video_count(user_id)
+        rows = await db.list_user_exercises(user_id, limit=VIDEO_EXERCISE_CHOICES)
+        names = [r["display_name"] for r in rows]
+        await state.update_data(
+            aivid_pending={
+                "file_id": video.file_id,
+                "mime_type": mime_type,
+                "duration": video.duration,
+                "names": names,
+            }
+        )
+        await message.reply(
+            "Принял ролик. Что за упражнение?\n\n"
+            "Спрашиваю до того, как смотреть: угадаю неверно — разберу по чужим "
+            "меркам, а это хуже, чем не разобрать вовсе.",
+            reply_markup=_video_exercise_keyboard(names),
+        )
+    finally:
+        _busy.discard(user_id)
 
-        caption = (message.caption or "").strip()
-        question = caption or DEFAULT_VIDEO_QUESTION
-        history_question = f"[видео] {caption}" if caption else "[прислал видео подхода]"
-        await _handle_question(
-            message, state, question,
-            history_question=history_question,
-            video_context=video_analysis.to_context_block(analysis),
+
+@router.callback_query(AITrainerFlow.chatting, F.data.startswith("aivid:"))
+async def ai_video_exercise_chosen(callback: CallbackQuery, state: FSMContext):
+    """Атлет назвал упражнение — теперь можно смотреть ролик."""
+    user_id = callback.from_user.id
+    data = await state.get_data()
+    pending = data.get("aivid_pending")
+    if not pending:
+        await callback.answer("Ролик потерялся, пришли заново", show_alert=True)
+        return
+    if not _try_claim_busy(user_id):
+        await callback.answer("Секунду, ещё думаю над прошлым вопросом")
+        return
+    try:
+        await callback.answer()
+        choice = callback.data.split(":", 2)[-1]
+        names = pending.get("names") or []
+        exercise = None
+        if choice != "skip":
+            try:
+                exercise = names[int(choice)]
+            except (ValueError, IndexError):
+                exercise = None
+        await state.update_data(aivid_pending=None)
+        with suppress(TelegramBadRequest):
+            await callback.message.edit_reply_markup(reply_markup=None)
+        await _analyze_video_and_answer(
+            callback.message, state, user_id,
+            file_id=pending["file_id"],
+            mime_type=pending.get("mime_type") or "video/mp4",
+            duration=pending.get("duration"),
+            exercise_hint=exercise,
         )
     finally:
         _busy.discard(user_id)
