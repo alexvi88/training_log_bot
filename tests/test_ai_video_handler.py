@@ -110,8 +110,10 @@ async def test_video_analyzed_and_handed_to_trainer(wired):
 
 
 async def test_caption_becomes_the_question(wired):
+    """Подпись — вопрос человека, и он доезжает до тренера даже когда названия
+    упражнения в ней нет и пришлось спросить отдельно."""
     message = _message(caption="почему поясницу тянет")
-    await handler.ai_video_question(message, _state())
+    await _send_and_name(message, choice="aivid:ex:0")
 
     args = wired.handle.await_args.args
     assert args[2] == "почему поясницу тянет"
@@ -301,14 +303,58 @@ async def test_the_question_offers_the_athletes_own_exercises(wired):
     assert any("без названия" in label for label in labels)
 
 
-async def test_captioned_video_skips_the_question_entirely(wired):
-    """Подписал сам — спрашивать нечего, это и есть название."""
+async def test_caption_naming_a_known_exercise_skips_the_question(monkeypatch, wired):
+    """Назвал упражнение в подписи — спрашивать нечего."""
+    monkeypatch.setattr(
+        db, "list_user_exercises",
+        AsyncMock(return_value=[{"display_name": "Румынская тяга"}]),
+    )
     message = _message(caption="румынская тяга")
     await handler.ai_video_question(message, _state())
 
     wired.analyze.assert_awaited_once()
-    assert wired.analyze.await_args.kwargs["exercise_hint"] == "румынская тяга"
+    # В разбор уезжает название из каталога, а не то, как его набрали.
+    assert wired.analyze.await_args.kwargs["exercise_hint"] == "Румынская тяга"
     message.reply.assert_not_awaited()
+
+
+async def test_caption_that_is_not_an_exercise_still_asks(wired):
+    """Живой провал: «оцени технику» засчитывали ЗА НАЗВАНИЕ и уходили в разбор
+    мимо вопроса. Модель не находила там движения, угадывала становую и
+    возвращала среднюю уверенность — то есть ровно тот дорогой путь, ради
+    отмены которого вопрос и заводили."""
+    message = _message(caption="оцени технику")
+    await handler.ai_video_question(message, _state())
+
+    wired.analyze.assert_not_awaited()
+    message.bot.download.assert_not_awaited()
+    assert "Что за упражнение" in message.reply.await_args.args[0]
+
+
+async def test_exercise_named_inside_a_longer_caption_counts(monkeypatch, wired):
+    monkeypatch.setattr(
+        db, "list_user_exercises",
+        AsyncMock(return_value=[{"display_name": "Жим лёжа"}]),
+    )
+    message = _message(caption="вот жим лёжа, глянь локти")
+    await handler.ai_video_question(message, _state())
+
+    assert wired.analyze.await_args.kwargs["exercise_hint"] == "Жим лёжа"
+
+
+async def test_longest_catalog_match_wins(monkeypatch, wired):
+    """«Жим лёжа узким хватом» точнее, чем «Жим лёжа», а короткое совпадает всегда."""
+    monkeypatch.setattr(
+        db, "list_user_exercises",
+        AsyncMock(return_value=[
+            {"display_name": "Жим лёжа"},
+            {"display_name": "Жим лёжа узким хватом"},
+        ]),
+    )
+    message = _message(caption="жим лёжа узким хватом")
+    await handler.ai_video_question(message, _state())
+
+    assert wired.analyze.await_args.kwargs["exercise_hint"] == "Жим лёжа узким хватом"
 
 
 async def test_chosen_exercise_reaches_the_analysis(wired):

@@ -2591,6 +2591,7 @@ async def ai_question(message: Message, state: FSMContext):
                 mime_type=pending.get("mime_type") or "video/mp4",
                 duration=pending.get("duration"),
                 exercise_hint=question,
+                caption=pending.get("caption") or "",
             )
         finally:
             _busy.discard(user_id)
@@ -2695,6 +2696,34 @@ async def _video_exercise_page(user_id: int, page: int) -> tuple[list[str], int]
     )
     total = await db.count_user_exercises(user_id)
     return [r["display_name"] for r in rows], total
+
+
+async def _exercise_from_caption(user_id: int, caption: str) -> Optional[str]:
+    """Подпись к ролику → название упражнения, если оно там вообще есть.
+
+    Живой провал: подпись «оцени технику» принимали ЗА НАЗВАНИЕ и уходили прямо
+    в разбор мимо вопроса. Модель, получив «оцени технику» вместо движения,
+    честно не нашла там упражнения, угадала становую и вернула среднюю
+    уверенность — то есть ровно тот дорогой путь, ради отмены которого вопрос и
+    заводили: разбор оплачен, полторы минуты потрачены, вопрос списан с квоты.
+
+    Проверяем по каталогу самого атлета, а не по словарю ключевых слов: там
+    лежат его собственные названия, включая переименованные и заведённые
+    руками. Не нашли — значит подписи про упражнение не было, и надо спросить.
+    """
+    low = caption.casefold()
+    best: Optional[str] = None
+    for row in await db.list_user_exercises(user_id):
+        name = row["display_name"]
+        folded = name.casefold()
+        # В обе стороны: подпись «румынская тяга» при упражнении «Румынская тяга
+        # со штангой» и наоборот, короткое имя внутри длинной подписи.
+        # Из нескольких совпадений берём самое длинное: «жим лёжа узким хватом»
+        # точнее, чем «жим лёжа», а короткое совпадает всегда.
+        matched = folded in low or low in folded
+        if matched and (best is None or len(name) > len(best)):
+            best = name
+    return best
 
 
 async def _analyze_video_and_answer(
@@ -2813,12 +2842,16 @@ async def ai_video_question(message: Message, state: FSMContext):
 
         caption = (message.caption or "").strip()
         mime_type = getattr(video, "mime_type", None) or "video/mp4"
-        if caption:
-            # Подписал сам — спрашивать нечего, это и есть название.
+
+        # Подпись — это не обязательно название. «Оцени технику» раньше уезжало
+        # в разбор как упражнение и отменяло весь вопрос; название засчитываем
+        # только когда оно и правда есть в каталоге атлета.
+        named = await _exercise_from_caption(user_id, caption) if caption else None
+        if named:
             await _analyze_video_and_answer(
                 message, state, user_id,
                 file_id=video.file_id, mime_type=mime_type, duration=video.duration,
-                exercise_hint=caption, caption=caption,
+                exercise_hint=named, caption=caption,
             )
             return
 
@@ -2830,6 +2863,9 @@ async def ai_video_question(message: Message, state: FSMContext):
                 "duration": video.duration,
                 "names": names,
                 "page": 0,
+                # Подпись не теряем: «оцени технику» это вопрос человека, и он
+                # должен доехать до тренера вместе с разбором.
+                "caption": caption,
             }
         )
         await message.reply(
@@ -2890,6 +2926,7 @@ async def ai_video_exercise_chosen(callback: CallbackQuery, state: FSMContext):
             mime_type=pending.get("mime_type") or "video/mp4",
             duration=pending.get("duration"),
             exercise_hint=exercise,
+            caption=pending.get("caption") or "",
         )
     finally:
         _busy.discard(user_id)
