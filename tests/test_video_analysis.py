@@ -425,3 +425,16 @@ async def test_warns_when_deviations_exist_but_observations_empty(caplog):
         )
 
     assert any("observations пуст" in r.message for r in caplog.records)
+
+
+async def test_context_block_tells_the_coach_to_stay_out_of_the_log():
+    """Живой прогон: на «разбери технику» Grok сходил в базу дважды.
+
+    Из данных он взял ровно одну фразу — «веса рабочие серьёзные, значит косяк
+    не мелочь». Стоила она двух лишних раундов (~6.4¢) и девяти секунд ожидания
+    человека в зале, притом что блины видно прямо на видео. Не запрет: спросят
+    про прогресс — сходит.
+    """
+    block = video_analysis.to_context_block(_analysis())
+    assert "в дневник без надобности не лезь" in block
+    assert "прогресс" in block
