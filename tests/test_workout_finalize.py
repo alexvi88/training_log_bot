@@ -255,3 +255,39 @@ async def test_background_tasks_are_kept_referenced_until_they_finish(fresh_db, 
     release.set()
     await task
     assert task not in workout._background_tasks
+
+
+# ---------- карточка итога — запись, а не одноразовый экран ----------
+
+
+async def test_menu_from_the_finished_card_keeps_the_card(monkeypatch):
+    """Человек дожимает последний подход, читает итог с тоннажем, рекордами и
+    комментарием тренера, уходит в меню — и итог исчезал из чата навсегда.
+
+    Перечитать было негде: карточка единственное место, где тренировка показана
+    целиком. То же основание, по которому не удаляется экран чата с AI-тренером.
+    """
+    seen = {}
+
+    async def fake_menu(callback, state, delete_current=True):
+        seen["delete_current"] = delete_current
+
+    monkeypatch.setattr(workout, "_show_main_menu", fake_menu)
+    callback = MagicMock()
+    callback.from_user = SimpleNamespace(id=1)
+    callback.answer = AsyncMock()
+
+    await workout.live_back_to_menu(callback, MagicMock())
+
+    assert seen["delete_current"] is False
+
+
+async def test_achievements_from_the_finished_card_keep_it_too():
+    """У «🏆 Достижения» на карточке своя ручка: из меню и из прогресса экран
+    обязан заменять предыдущий, а с карточки — нет."""
+    from keyboards import workout_card_keyboard
+
+    kb = workout_card_keyboard(workout_id=7, show_achievements=True)
+    data = [b.callback_data for row in kb.inline_keyboard for b in row]
+    assert "menu:achievements:card" in data
+    assert "menu:achievements" not in data
