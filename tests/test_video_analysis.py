@@ -323,12 +323,58 @@ async def test_the_prompt_biases_doubt_towards_flagging_not_towards_praise():
     assert "Сомневаешься" in video_analysis.SYSTEM_PROMPT
 
 
-async def test_the_prompt_carries_per_exercise_failure_modes():
-    """Не «как надо делать» (это модель пересказывает как увиденное), а куда
-    смотреть: типовые провалы по основным движениям."""
+async def test_the_prompt_no_longer_hands_out_per_exercise_failure_lists():
+    """Список типовых провалов по упражнениям убран, и это не упрощение.
+
+    Живой провал: тягу штанги к поясу модель приняла за становую — и выдала
+    ровно три пункта, которые мы сами же перечислили в промпте для становой
+    (круглая поясница, таз раньше плеч, гриф от голени). Не потому что видела
+    их, а потому что для становой это самый частый набор. Список превратился в
+    шпаргалку с «правильными ответами» под неверную догадку.
+
+    Та же ловушка, из-за которой мы отказывались подавать сюда техничку из
+    exercise_descriptions, просто с другой стороны: не «как надо», а «как
+    обычно ломается». Пересказывается и то и другое одинаково охотно.
+    """
     prompt = video_analysis.SYSTEM_PROMPT
-    assert "таз стреляет" in prompt   # становая
-    assert "колени сваливаются внутрь" in prompt        # присед
+    assert "таз стреляет" not in prompt
+    assert "колени сваливаются внутрь на подъёме" not in prompt
+    assert "НЕ подгоняй наблюдения под типовые ошибки" in prompt
+
+
+async def test_named_exercise_from_the_caption_beats_the_models_eyes(monkeypatch):
+    """Подпись атлета надёжнее глаз модели, и она обрывает подгонку."""
+    monkeypatch.setattr(video_analysis.db, "log_cost_event", AsyncMock())
+    client = MagicMock()
+    client.chat.completions.create = AsyncMock(
+        return_value=SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps(_analysis())))],
+            usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1),
+        )
+    )
+    monkeypatch.setattr(video_analysis, "_get_client", lambda: client)
+
+    await video_analysis.analyze(b"bytes", 1, exercise_hint="тяга штанги к поясу")
+
+    content = client.chat.completions.create.call_args.kwargs["messages"][1]["content"]
+    text = next(part["text"] for part in content if part["type"] == "text")
+    assert "тяга штанги к поясу" in text
+    assert "верь подписи" in text
+
+
+async def test_low_exercise_confidence_makes_the_coach_ask_first():
+    """Не уверен в упражнении — спроси, а не разбирай наугад."""
+    block = video_analysis.to_context_block(_analysis(exercise_confidence="низкая"))
+    assert "уверенность низкая" in block
+    assert "сначала спроси" in block
+
+
+async def test_coach_is_told_not_to_relabel_findings_onto_a_corrected_exercise():
+    """Живой провал: атлет поправил упражнение, и тренер переклеил на него те же
+    три наблюдения — собранные под другое движение и, возможно, подогнанные под
+    его типовые ошибки."""
+    block = video_analysis.to_context_block(_analysis())
+    assert "НЕ переклеивай" in block
 
 
 async def test_json_mode_is_off_by_default(monkeypatch):
