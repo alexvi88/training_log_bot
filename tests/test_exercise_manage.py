@@ -8,6 +8,7 @@ from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
 
 import config
+import exercise_descriptions
 from fsm import ExerciseManage
 from handlers import exercises
 
@@ -614,17 +615,20 @@ async def test_own_description_overrides_template_default_in_the_card_text(fresh
     db = fresh_db
     group_id = await db.create_muscle_group(user_id, "Грудь")
     ex_id = await db.create_exercise(user_id, "Присед со штангой", group_id)
+    # Проверяем по самому тексту шаблона, а не по «есть ли в карточке "1."»: тем
+    # же «1.» заканчивается каждая вторая дата создания (11.08, 01.09, …), и в
+    # такие дни тест падал на ровном месте — карточка была правильной.
+    template_step = exercise_descriptions.get_description("Присед со штангой")
+    assert template_step  # sanity check: у этого упражнения есть описание-шаблон
+
     default_text = exercises._exercise_info_text(await db.get_exercise(ex_id))
-    first_step = "1. Установите штангу"
-    assert first_step in default_text  # sanity check: the template default was actually shown
+    assert template_step in default_text  # sanity check: the template default was actually shown
 
     await db.set_exercise_description(ex_id, "Моя версия — колени наружу")
     overridden_text = exercises._exercise_info_text(await db.get_exercise(ex_id))
 
     assert "Моя версия — колени наружу" in overridden_text
-    # A bare "1." also matches the "Создано: 11.08.2026" line the card carries,
-    # so this checks for the actual template step text going away, not a digit.
-    assert first_step not in overridden_text  # the numbered template steps are gone, not appended
+    assert template_step not in overridden_text  # шаблонные шаги ушли, а не дописались
 
 
 async def test_created_date_is_shown_russian_style_not_iso(fresh_db, user_id):
