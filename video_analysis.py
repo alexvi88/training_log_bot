@@ -430,6 +430,13 @@ async def analyze(
     чужой вывеской.
     """
     data_url = f"data:{mime_type};base64," + base64.b64encode(video_bytes).decode()
+    # response_format добавляется только по флагу: не всякая модель умеет строгий
+    # JSON, и провайдер отвечает на неподдерживаемый параметр не мягким
+    # игнорированием, а 400 — то есть разбор падает целиком (см.
+    # config.VIDEO_ANALYSIS_JSON_MODE). Ответ мы всё равно разбираем руками.
+    extra: dict[str, Any] = {}
+    if config.VIDEO_ANALYSIS_JSON_MODE:
+        extra["response_format"] = {"type": "json_object"}
     try:
         response = await _get_client().chat.completions.create(
             model=config.NOVITA_VIDEO_MODEL,
@@ -445,7 +452,7 @@ async def analyze(
             ],
             max_tokens=config.VIDEO_ANALYSIS_MAX_TOKENS,
             temperature=config.VIDEO_ANALYSIS_TEMPERATURE,
-            response_format={"type": "json_object"},
+            **extra,
         )
     except Exception:
         logger.exception("video analysis call failed for user %s", user_id)

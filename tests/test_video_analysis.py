@@ -329,3 +329,65 @@ async def test_the_prompt_carries_per_exercise_failure_modes():
     prompt = video_analysis.SYSTEM_PROMPT
     assert "таз стреляет" in prompt   # становая
     assert "колени сваливаются внутрь" in prompt        # присед
+
+
+async def test_json_mode_is_off_by_default(monkeypatch):
+    """Прод лёг ровно на этом: Novita отдаёт 400 INVALID_REQUEST_BODY —
+    «qwen3-vl-235b-a22b-thinking does not support feature: structured-outputs».
+    Instruct фичу умел, thinking нет, и переключение модели положило КАЖДЫЙ
+    разбор. Неподдерживаемый параметр провайдер не игнорирует, а роняет запрос,
+    поэтому по умолчанию его не шлём вовсе."""
+    monkeypatch.setattr(video_analysis.db, "log_cost_event", AsyncMock())
+    monkeypatch.setattr(config, "VIDEO_ANALYSIS_JSON_MODE", False)
+    client = MagicMock()
+    client.chat.completions.create = AsyncMock(
+        return_value=SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps(_analysis())))],
+            usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1),
+        )
+    )
+    monkeypatch.setattr(video_analysis, "_get_client", lambda: client)
+
+    await video_analysis.analyze(b"bytes", 1)
+
+    assert "response_format" not in client.chat.completions.create.call_args.kwargs
+
+
+async def test_json_mode_can_be_switched_back_on(monkeypatch):
+    """Флаг — чтобы вернуть строгий JSON одной переменной, когда модель его умеет."""
+    monkeypatch.setattr(video_analysis.db, "log_cost_event", AsyncMock())
+    monkeypatch.setattr(config, "VIDEO_ANALYSIS_JSON_MODE", True)
+    client = MagicMock()
+    client.chat.completions.create = AsyncMock(
+        return_value=SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps(_analysis())))],
+            usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1),
+        )
+    )
+    monkeypatch.setattr(video_analysis, "_get_client", lambda: client)
+
+    await video_analysis.analyze(b"bytes", 1)
+
+    kwargs = client.chat.completions.create.call_args.kwargs
+    assert kwargs["response_format"] == {"type": "json_object"}
+
+
+async def test_bare_json_without_strict_mode_still_parses(monkeypatch):
+    """Раз строгий режим выключен, разбор ответа держится на нашем парсере —
+    он и есть страховка, а не response_format."""
+    monkeypatch.setattr(video_analysis.db, "log_cost_event", AsyncMock())
+    monkeypatch.setattr(config, "VIDEO_ANALYSIS_JSON_MODE", False)
+    content = "Разбор готов:\n```json\n" + json.dumps(_analysis()) + "\n```\nВсё."
+    client = MagicMock()
+    client.chat.completions.create = AsyncMock(
+        return_value=SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content=content))],
+            usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1),
+        )
+    )
+    monkeypatch.setattr(video_analysis, "_get_client", lambda: client)
+
+    out = await video_analysis.analyze(b"bytes", 1)
+
+    assert out is not None
+    assert out["exercise"] == "становая тяга"
