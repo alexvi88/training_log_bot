@@ -301,7 +301,7 @@ def render_year_heatmap(
 DASH_WIDTH_IN = 6.67          # 1000 px при 150 dpi
 DASH_LEFT, DASH_RIGHT = 0.04, 0.96
 DASH_GAP = 0.34               # распорка между виджетами, с линейкой
-DASH_PAD = 0.14               # распорка внутри группы, без линейки
+DASH_PAD = 0.08               # распорка внутри группы, без линейки
 DASH_CARD = "#171d26"
 DASH_RULE = "#2b3543"
 
@@ -319,7 +319,7 @@ DASH_FS_MICRO = 6.5     # месяцы и дни недели календаря
 
 # Высоты виджетов в дюймах. Строка коридора и карточка движения заданы шагом,
 # чтобы блок рос от числа строк, а не растягивал их.
-_DASH_HEAD_H = 0.58
+_DASH_HEAD_H = 0.46
 _DASH_TILES_H = 0.86
 _DASH_VOL_STEP = 0.30
 
@@ -376,12 +376,15 @@ def _dash_section(ax, title: str, note: str = "", note_colour: str = HEATMAP_FIL
 
 
 def _dash_growth_tiles(
-    fig, ax, tiles, fg: str, dim: str, ok: str, title: str = "", note: str = "",
+    fig, ax, tiles, fg: str, dim: str, accent: str, title: str = "", note: str = "",
 ) -> None:
     """Плитки роста e1RM: 2 строки по 3, имя — процент — «227кг vs 220кг».
 
     `tiles` — то, что вернул formatting.menu_lift_tiles: только выросшие
-    движения, отсортированные по проценту роста.
+    движения, отсортированные по проценту роста. Процент — синим (тот же
+    акцент, что у плашки звания и примечаний блоков), а не зелёным: зелёный
+    уже занят статусом коридора объёма («в норме»), и тот же цвет у процента
+    роста читался бы как ещё один статус, а не как отдельная цифра.
 
     Имя не обрезается многоточием, но и не вылезает за плитку — вместо этого
     все шесть имён сжимаются по кеглю до общего размера, в котором помещается
@@ -404,7 +407,7 @@ def _dash_growth_tiles(
         _dash_card(ax, x, y, tile_w, _LIFT_ROW_H)
         name_texts.append(ax.text(x + pad_x, y + _LIFT_ROW_H * 0.24, name, color=dim,
                                    fontsize=DASH_FS_CAPTION, va="center"))
-        ax.text(x + pad_x, y + _LIFT_ROW_H * 0.58, pct, color=ok, fontsize=DASH_FS_VALUE,
+        ax.text(x + pad_x, y + _LIFT_ROW_H * 0.58, pct, color=accent, fontsize=DASH_FS_VALUE,
                 fontweight="bold", va="center")
         ax.text(x + pad_x, y + _LIFT_ROW_H * 0.85, abs_str, color=dim,
                 fontsize=DASH_FS_MICRO, va="center")
@@ -439,7 +442,6 @@ def render_menu_dashboard(
     ни движений, и пустой блок сообщал бы только то, что он пуст.
     """
     BG, FG, MUTED, DIM = "#12161d", "#e6e6e6", "#9aa4b2", "#6b7684"
-    OK = "#45b97c"
 
     tiles = list(tiles or ())
     rows = list(volume_rows or ())
@@ -508,7 +510,7 @@ def render_menu_dashboard(
         _draw_volume_panel(ax, rows, volume_title, BG, FG, MUTED)
 
     if lift_tiles:
-        _dash_growth_tiles(fig, band("lifts"), lift_tiles, FG, DIM, OK, lifts_title, lifts_note)
+        _dash_growth_tiles(fig, band("lifts"), lift_tiles, FG, DIM, HEATMAP_FILLED, lifts_title, lifts_note)
 
     for key in bands:
         if not key.startswith("gap:"):
