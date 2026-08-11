@@ -391,3 +391,50 @@ async def test_bare_json_without_strict_mode_still_parses(monkeypatch):
 
     assert out is not None
     assert out["exercise"] == "становая тяга"
+
+
+async def test_no_false_alarm_when_observation_wording_differs_from_point_name(caplog):
+    """Живой прогон: точка «порядок движения» → наблюдение «таз поднимается
+    раньше плеч». Названия точек наши, формулировки модели свободные, совпадать
+    они не обязаны — и прежняя проверка по подстроке кричала о потере на
+    каждом ролике. Лог, срабатывающий всегда, приучает не смотреть."""
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="video_analysis"):
+        video_analysis._sanitize(
+            _analysis(
+                checklist=_checklist(**{"порядок движения": "отклонение"}),
+                observations=[{
+                    "what": "таз поднимается раньше плеч",
+                    "evidence": "на 0:03 таз вверху, гриф ниже колен",
+                    "severity": "мешает",
+                }],
+            )
+        )
+
+    assert not caplog.records
+
+
+async def test_warns_when_deviations_exist_but_observations_empty(caplog):
+    """А вот это настоящая потеря — про неё предупредить обязаны."""
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="video_analysis"):
+        video_analysis._sanitize(
+            _analysis(checklist=_checklist(**{"спина": "отклонение"}), observations=[])
+        )
+
+    assert any("observations пуст" in r.message for r in caplog.records)
+
+
+async def test_context_block_tells_the_coach_to_stay_out_of_the_log():
+    """Живой прогон: на «разбери технику» Grok сходил в базу дважды.
+
+    Из данных он взял ровно одну фразу — «веса рабочие серьёзные, значит косяк
+    не мелочь». Стоила она двух лишних раундов (~6.4¢) и девяти секунд ожидания
+    человека в зале, притом что блины видно прямо на видео. Не запрет: спросят
+    про прогресс — сходит.
+    """
+    block = video_analysis.to_context_block(_analysis())
+    assert "в дневник без надобности не лезь" in block
+    assert "прогресс" in block
