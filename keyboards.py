@@ -1135,7 +1135,13 @@ def workout_card_keyboard(
     if show_ai_button:
         b.row(InlineKeyboardButton(text="🤖 Комментарий AI-тренера", callback_data=f"ai:comment:{workout_id}"))
     if show_achievements:
-        b.row(InlineKeyboardButton(text="🏆 Достижения", callback_data="menu:achievements"))
+        # Суффикс :card — «пришли с карточки законченной тренировки», по образцу
+        # существующего :prog. Нужен, чтобы экран достижений НЕ съел карточку:
+        # из главного меню и из прогресса удалять экран под собой правильно, а
+        # карточка это запись в ленте, и второй раз её взять неоткуда.
+        b.row(InlineKeyboardButton(
+            text="🏆 Достижения", callback_data="menu:achievements:card"
+        ))
     b.row(
         InlineKeyboardButton(text="🖼 Картинка", callback_data=f"hist:card:{workout_id}"),
         InlineKeyboardButton(text="📝 Заметка", callback_data=f"live:addnote:{workout_id}"),

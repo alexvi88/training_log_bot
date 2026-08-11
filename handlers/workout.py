@@ -1042,8 +1042,18 @@ async def _show_main_menu(callback: CallbackQuery, state: FSMContext, delete_cur
 @router.callback_query(F.data == "live:back_to_menu")
 async def live_back_to_menu(callback: CallbackQuery, state: FSMContext):
     """"🏠 Меню" on the just-finished workout card — see _finalize_workout,
-    which stopped auto-sending the menu so the card isn't buried under it."""
-    await _show_main_menu(callback, state)
+    which stopped auto-sending the menu so the card isn't buried under it.
+
+    delete_current=False: карточка законченной тренировки — ЗАПИСЬ, а не
+    одноразовый экран. Раньше «Меню» её сносило: человек дожимал последний
+    подход, читал итог с тоннажем, рекордами и комментарием тренера, уходил в
+    меню — и итог исчезал из чата навсегда. Перечитать было негде, хотя это
+    единственное место, где тренировка показана целиком.
+
+    Ровно то же основание, по которому не удаляется экран чата с AI-тренером:
+    сообщение принадлежит истории человека, а не навигации.
+    """
+    await _show_main_menu(callback, state, delete_current=False)
     await callback.answer()
 
 
@@ -3301,5 +3311,10 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
     await clear_state_keep_ai(state)
     # No auto-sent menu message here on purpose: it used to bury the card (the
     # рекорды в упражнениях, the AI comment) the instant it appeared. The
-    # card's own "🏠 Меню" button (live:back_to_menu below) opens the menu
-    # in its place instead, so it's a beat the user chooses, not one forced on them.
+    # card's own "🏠 Меню" button (live:back_to_menu below) opens the menu when
+    # the user chooses that beat, instead of one forced on them.
+    #
+    # Меню приходит ОТДЕЛЬНЫМ сообщением, а не на месте карточки: раньше оно её
+    # затирало, и итог тренировки — тоннаж, рекорды, комментарий тренера —
+    # исчезал из чата навсегда, хотя это единственное место, где тренировка
+    # показана целиком. Карточка это запись, а не одноразовый экран.

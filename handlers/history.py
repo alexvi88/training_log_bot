@@ -294,6 +294,11 @@ async def menu_achievements(callback: CallbackQuery, state: FSMContext):
     hof_text = await build_hall_of_fame_text(callback.from_user.id, max_chars=budget)
     text = hof_text + "\n\n" + ach_text
     from_progress = callback.data.endswith(":prog")
+    # С карточки законченной тренировки экран приходит ОТДЕЛЬНЫМ сообщением:
+    # карточка — единственное место, где тренировка показана целиком, и удалять
+    # её под достижениями значит терять итог навсегда. Из меню и из прогресса
+    # экран по-прежнему заменяет собой предыдущий.
+    from_card = callback.data.endswith(":card")
     kb = InlineKeyboardBuilder()
     kb.button(text="🎖 Звания", callback_data="rank:ladder" + (":prog" if from_progress else ""))
     # hist:menu — существующая ручка «в главное меню» (hist_to_menu ниже зовёт
@@ -301,7 +306,9 @@ async def menu_achievements(callback: CallbackQuery, state: FSMContext):
     # «menu:back» была бы кнопкой, которую никто не слушает.
     kb.button(text="⬅️ Назад", callback_data="prog:groups" if from_progress else "hist:menu")
     kb.adjust(1)
-    await ui.safe_edit(callback, text, reply_markup=kb.as_markup(), parse_mode="HTML")
+    await ui.safe_edit(
+        callback, text, reply_markup=kb.as_markup(), parse_mode="HTML", delete=not from_card
+    )
 
 
 @router.callback_query(F.data.startswith("rank:ladder"))
