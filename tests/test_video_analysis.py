@@ -273,3 +273,59 @@ async def test_analyze_returns_none_when_provider_fails(monkeypatch):
     monkeypatch.setattr(video_analysis, "_get_client", lambda: client)
 
     assert await video_analysis.analyze(b"bytes", 1) is None
+
+
+# ---------- ответ thinking-модели ----------
+
+
+async def test_reasoning_block_is_stripped_before_parsing():
+    """Thinking печатает цепочку в тот же content, что и ответ. Без чистки
+    json.loads падает, и разбор целиком уходит в None — то есть переключение на
+    thinking просто выключило бы фичу."""
+    raw = '<think>Смотрю на поясницу, к середине подъёма она круглится.</think>\n{"exercise": "становая"}'
+
+    assert json.loads(video_analysis._strip_reasoning(raw)) == {"exercise": "становая"}
+
+
+async def test_json_fence_and_chatter_around_the_object_are_stripped():
+    """Модель то обрамляет ответ ```json, то дописывает текст до и после."""
+    fenced = '```json\n{"exercise": "присед"}\n```'
+    chatty = 'Вот разбор:\n{"exercise": "присед"}\nГотово.'
+
+    assert json.loads(video_analysis._strip_reasoning(fenced)) == {"exercise": "присед"}
+    assert json.loads(video_analysis._strip_reasoning(chatty)) == {"exercise": "присед"}
+
+
+async def test_analyze_parses_a_thinking_response(monkeypatch):
+    """Полный путь: ответ с рассуждением доезжает до разобранной структуры."""
+    monkeypatch.setattr(video_analysis.db, "log_cost_event", AsyncMock())
+    content = "<think>долго думаю</think>\n" + json.dumps(_analysis())
+    client = MagicMock()
+    client.chat.completions.create = AsyncMock(
+        return_value=SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content=content))],
+            usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1),
+        )
+    )
+    monkeypatch.setattr(video_analysis, "_get_client", lambda: client)
+
+    out = await video_analysis.analyze(b"bytes", 1)
+
+    assert out is not None
+    assert out["exercise"] == "становая тяга"
+
+
+async def test_the_prompt_biases_doubt_towards_flagging_not_towards_praise():
+    """Калибровка, ради которой промпт и правился: сомнение округляется в
+    «отклонение с низкой уверенностью», а не в «норму». Молчание тренер читает
+    как «техника в порядке» и советует добавить вес."""
+    assert "confidence" in video_analysis.SYSTEM_PROMPT
+    assert "Сомневаешься" in video_analysis.SYSTEM_PROMPT
+
+
+async def test_the_prompt_carries_per_exercise_failure_modes():
+    """Не «как надо делать» (это модель пересказывает как увиденное), а куда
+    смотреть: типовые провалы по основным движениям."""
+    prompt = video_analysis.SYSTEM_PROMPT
+    assert "таз стреляет" in prompt   # становая
+    assert "колени сваливаются внутрь" in prompt        # присед

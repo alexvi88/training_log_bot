@@ -17,6 +17,7 @@
 import base64
 import json
 import logging
+import re
 from typing import Any, Optional
 
 from openai import AsyncOpenAI
@@ -116,8 +117,49 @@ SYSTEM_PROMPT = """\
 7. «повторы между собой» — меняется ли рисунок движения от первого повтора к
    последнему.
 
+Если упражнение опознано и оно есть в списке ниже — пройди дополнительно его
+типовые провалы. Это не «как надо делать», а куда смотреть в первую очередь:
+
+- Становая: поясница круглится на съёме и в первой трети подъёма; таз стреляет
+  вверх раньше плеч (штанга ещё внизу, а ноги уже разогнуты); гриф отходит от
+  голени вперёд; срыв рывком с провисших рук; переразгибание назад вверху.
+- Присед: колени сваливаются внутрь на подъёме; таз подворачивается в нижней
+  точке; корпус валится вперёд и присед превращается в наклон; глубина не
+  доходит; пятки отрываются.
+- Жим лёжа: локти развёрнуты в стороны почти на 90°; лопатки уезжают вперёд;
+  гриф отбивается от груди; выключение не доводится; траектория гуляет к
+  животу или к голове от повтора к повтору.
+- Тяга в наклоне: корпус подкидывается рывком, работая как рычаг; поясница
+  круглится; гриф не доходит до корпуса.
+- Жим стоя: поясница уходит в прогиб вместо работы плечами; гриф не выходит на
+  линию над серединой стопы; корпус подрабатывает ногами там, где жим строгий.
+- Подтягивания и тяга верхнего блока: раскачка и подрыв корпусом; вис не
+  доводится внизу; амплитуда режется вверху.
+
+Упражнения нет в списке — работай по семи точкам, этого достаточно.
+
 По каждому пункту: verdict — «норма», «отклонение» или «не видно», и поле
 what_i_see, которое ОБЯЗАТЕЛЬНО заполнено во всех трёх случаях.
+
+ГДЕ ПРОХОДИТ ГРАНИЦА между «норма» и «отклонение» — читай, здесь калибровка.
+
+«норма» значит «я посмотрел и там ДЕЙСТВИТЕЛЬНО хорошо», а не «ничего не
+бросилось в глаза». Между этими двумя вещами вся разница.
+
+Сомневаешься между «норма» и «отклонение» — ставь «отклонение» с confidence
+«низкая». Цена ошибок разная и несимметричная: помеченное отклонение с низкой
+уверенностью тренер подаст мягко, как «глянь на это», и человек ничего не
+теряет. А пропущенное отклонение превращается в молчание, молчание тренер
+читает как «техника в порядке» и советует добавить вес на кривом паттерне.
+
+Семь «норма» подряд — исход РЕДКИЙ. Обычный ролик из зала снят на рабочем
+весе, и там почти всегда есть что подправить хотя бы по мелочи. Если у тебя
+получилось чисто по всем семи — вернись и перепроверь спину и порядок движения
+отдельно, чаще всего провал прячется именно там.
+
+При этом выдумывать нечего: «отклонение» без того, что видно в кадре, — такая
+же ложь, как «норма» не глядя. Не ищи брак ради брака, но и не округляй
+сомнение в пользу атлета.
 
 what_i_see описывает ЭТОТ кадр, а не правило упражнения. «Спина прямая, как и
 должно быть» — правило, так нельзя. «На съёме поясница держит прогиб, лопатки
@@ -224,6 +266,33 @@ _UNOBSERVABLE_MARKERS = (
 _SEVERITY_ORDER = {"мешает": 0, "стоит поправить": 1, "мелочь": 2}
 
 _VERDICTS = ("норма", "отклонение", "не видно")
+
+# Thinking-модель печатает цепочку рассуждений в тот же content, что и ответ, и
+# заворачивает её в <think>…</think>. json.loads на таком тексте падает, и весь
+# разбор уходит в None — то есть переключение на thinking без этой чистки просто
+# выключило бы фичу целиком.
+_THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+# Незакрытый <think> — обрыв по потолку токенов посреди рассуждения. JSON в этом
+# случае не начинался, спасать нечего, но отличать это в логах нужно.
+_UNCLOSED_THINK_RE = re.compile(r"<think>", re.IGNORECASE)
+
+
+def _strip_reasoning(raw: str) -> str:
+    """Убрать цепочку рассуждений, оставив JSON.
+
+    Модель иногда печатает <think> вокруг рассуждения, иногда обрамляет ответ
+    ```json … ```, а иногда делает и то и другое. Режем оба слоя и на всякий
+    случай берём текст от первой { до последней } — лишняя болтовня до или
+    после объекта встречается и без всяких маркеров.
+    """
+    text = _THINK_BLOCK_RE.sub("", raw).strip()
+    if text.startswith("```"):
+        text = text.split("\n", 1)[-1] if "\n" in text else text
+        text = text.rsplit("```", 1)[0]
+    start, end = text.find("{"), text.rfind("}")
+    if start != -1 and end > start:
+        return text[start : end + 1]
+    return text.strip()
 
 
 def _is_unobservable(text: str) -> bool:
@@ -390,6 +459,16 @@ async def analyze(
     prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
     completion_tokens = getattr(usage, "completion_tokens", 0) or 0
     details = getattr(usage, "prompt_tokens_details", None)
+    reasoning_tokens = getattr(
+        getattr(usage, "completion_tokens_details", None), "reasoning_tokens", 0
+    ) or 0
+    # Рассуждение отдельной цифрой: на thinking оно тарифицируется как выход и
+    # обычно длиннее самого JSON, так что это главная статья расхода — и первое,
+    # на что смотреть, если счёт окажется больше ожидаемого.
+    logger.info(
+        "video analysis usage: prompt=%s completion=%s (reasoning=%s) model=%s",
+        prompt_tokens, completion_tokens, reasoning_tokens, config.NOVITA_VIDEO_MODEL,
+    )
     try:
         await db.log_cost_event(
             user_id,
@@ -398,23 +477,42 @@ async def analyze(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             cached_tokens=getattr(details, "cached_tokens", 0) or 0,
-            reasoning_tokens=getattr(
-                getattr(response.usage, "completion_tokens_details", None),
-                "reasoning_tokens",
-                0,
-            ) or 0,
+            reasoning_tokens=reasoning_tokens,
         )
     except Exception:
         logger.exception("failed to log video analysis cost event")
 
     raw = (response.choices[0].message.content or "").strip()
+    payload = _strip_reasoning(raw)
     try:
-        parsed = json.loads(raw)
+        parsed = json.loads(payload)
     except (ValueError, TypeError):
-        logger.warning("video analysis returned non-JSON for user %s: %r", user_id, raw[:300])
+        # Оборванное рассуждение и мусор вместо JSON — разные поломки: первая
+        # лечится потолком токенов (VIDEO_ANALYSIS_MAX_TOKENS), вторая промптом.
+        truncated = bool(_UNCLOSED_THINK_RE.search(raw)) and "</think>" not in raw.lower()
+        logger.warning(
+            "video analysis returned non-JSON for user %s (%s, completion_tokens=%s): %r",
+            user_id,
+            "оборвано на рассуждении" if truncated else "не JSON",
+            completion_tokens,
+            raw[:300],
+        )
         return None
     if not isinstance(parsed, dict):
         return None
+    # Что модель на самом деле написала по каждой точке — до всякой чистки.
+    # Без этой строки нельзя отличить «не увидела круглую спину» от «увидела и
+    # проштамповала норму учебной фразой»: наружу оба случая выглядят одинаково
+    # (тренер молчит), а чинятся противоположным — первое кадрами, второе
+    # промптом. Раньше в логах были только счётчики, и выбирать приходилось
+    # наугад.
+    for item in parsed.get("checklist") or []:
+        if isinstance(item, dict):
+            logger.info(
+                "video checkpoint | %s | %s | %s",
+                item.get("point"), item.get("verdict"),
+                str(item.get("what_i_see") or "")[:200],
+            )
     return _sanitize(parsed)
 
 

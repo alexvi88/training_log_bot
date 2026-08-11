@@ -17,11 +17,25 @@ def test_price_matches_table():
 
 
 def test_video_model_priced_from_its_own_row():
-    """$0.3/$1.5 за 1M — то есть 24k входа и 900 выхода дают около полутора центов."""
+    """Текущая модель разбора — thinking-вариант, $0.98/$3.95 за 1M.
+
+    24k входа и 900 выхода дают около 2.7 цента, и это ещё БЕЗ рассуждения:
+    reasoning-токены тарифицируются как выход и обычно длиннее самого JSON,
+    так что живой чек выйдет заметно больше. На instruct та же арифметика
+    давала полтора цента — разница и есть цена внимательности.
+    """
+    inp, out = config.LLM_PRICES_USD_PER_1K[config.NOVITA_VIDEO_MODEL]
     price = config.call_price_usd(config.NOVITA_VIDEO_MODEL, 24_000, 900)
-    assert price == pytest.approx(24_000 / 1000 * 0.0003 + 900 / 1000 * 0.0015)
+    assert price == pytest.approx(24_000 / 1000 * inp + 900 / 1000 * out)
     # Порядок величины: разбор видео стоит центы, а не доллары.
-    assert 0.001 < price < 0.05
+    assert 0.001 < price < 0.10
+
+
+def test_the_video_model_has_its_own_price_row():
+    """Модель без своей строки считается по ДЕФОЛТНОЙ пессимистичной ставке, и
+    дневной отчёт по деньгам начинает врать молча. Переключили модель — обязаны
+    завести ей цену."""
+    assert config.NOVITA_VIDEO_MODEL in config.LLM_PRICES_USD_PER_1K
 
 
 def test_unknown_model_falls_back_to_default():
