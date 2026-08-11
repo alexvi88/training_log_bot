@@ -2686,8 +2686,14 @@ async def ai_video_question(message: Message, state: FSMContext):
         try:
             buf = await message.bot.download(video)
             # video_note своего mime_type не несёт — там всегда mp4.
+            # Подпись к ролику уезжает в разбор как источник упражнения: назвал
+            # атлет — верим ему, а не глазам модели. Живой провал: тягу штанги к
+            # поясу она приняла за становую и выдала три классические ошибки
+            # становой, которых в кадре не было.
             analysis = await video_analysis.analyze(
-                buf.read(), user_id, mime_type=getattr(video, "mime_type", None) or "video/mp4"
+                buf.read(), user_id,
+                mime_type=getattr(video, "mime_type", None) or "video/mp4",
+                exercise_hint=(message.caption or "").strip() or None,
             )
         except Exception:
             logger.exception("video download/analysis failed for user %s", user_id)
