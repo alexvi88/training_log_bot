@@ -406,3 +406,47 @@ def test_no_reps_row_until_there_is_a_weight_to_reuse():
     kb = keyboards.logging_keyboard([(1, "Bench")], active_id=1, has_sets=False)
     cbs = [b.callback_data for row in kb.inline_keyboard for b in row]
     assert not any(c.startswith("live:reps:") for c in cbs)
+
+
+def test_reps_row_is_captioned_with_the_weight():
+    """Шесть цифр без единого слова — загадка. Подпись называет вес, к которому
+    они относятся, и этого хватает, чтобы понять остальное."""
+    hint = workout._logging_hint(
+        None, True, "kg", False, [(25.0, 10)],
+        show_instruction=False, reps_row=(25.0, 10, False),
+    )
+    assert "повторы на 25кг" in hint
+
+
+def test_caption_says_when_the_weight_came_from_last_time():
+    """«Как в прошлый раз» — только когда это правда: на первом подходе вес взят
+    с прошлой тренировки, и человек должен видеть, откуда он."""
+    from_last = workout._logging_hint(
+        None, False, "kg", False, [], show_instruction=False, reps_row=(25.0, 10, True),
+    )
+    from_today = workout._logging_hint(
+        None, True, "kg", False, [(25.0, 10)],
+        show_instruction=False, reps_row=(25.0, 10, False),
+    )
+    assert "как в прошлый раз" in from_last
+    assert "как в прошлый раз" not in from_today
+
+
+def test_caption_shows_even_for_seasoned_users():
+    """Подсказка ввода гаснет у опытных, а ряд цифр видят все — включая тех, для
+    кого он появился впервые после обновления. Подпись не под show_instruction."""
+    hint = workout._logging_hint(
+        None, True, "kg", False, [(25.0, 10)],
+        show_instruction=False, reps_row=(25.0, 10, False),
+    )
+    assert "🔢" in hint
+    assert "через пробел" not in hint
+
+
+def test_reps_row_falls_back_to_last_session_before_the_first_set():
+    """Первый подход — там кнопки полезнее всего: человек подошёл к снаряду и
+    почти всегда начинает с того же веса, что и в прошлый раз."""
+    assert workout._reps_row_basis([], [(25.0, 12, None), (25.0, 10, None)]) == (25.0, 10, True)
+    assert workout._reps_row_basis([(30.0, 8)], [(25.0, 10, None)]) == (30.0, 8, False)
+    # Ни сегодня, ни в прошлый раз — брать вес неоткуда, ряда нет.
+    assert workout._reps_row_basis([], None) is None

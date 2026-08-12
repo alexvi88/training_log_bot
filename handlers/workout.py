@@ -403,6 +403,7 @@ def _logging_hint(
     formula: str = config.DEFAULT_E1RM_FORMULA,
     target: str | None = None,
     progression_rule: dict | None = None,
+    reps_row: tuple[float, int, bool] | None = None,
 ) -> str:
     base = None
     if show_instruction:
@@ -418,6 +419,20 @@ def _logging_hint(
     # The program's recommended sets×reps, if this exercise was opened from a
     # routine that carries one — shown above the history/warning lines since
     # it's the plan for today, not a look back at a previous session.
+    # Ряд цифр над кнопками — сам по себе загадка: шесть чисел без единого
+    # слова. Подпись называет вес, к которому они относятся, и этого хватает,
+    # чтобы понять всё остальное. Не под show_instruction: подсказка ввода
+    # показывается только новичкам, а ряд видят все, включая тех, кто в боте
+    # давно и для кого он появился впервые.
+    reps_row_line = ""
+    if reps_row:
+        row_weight, _row_reps, from_last_time = reps_row
+        u = formatting.UNIT_LABELS.get(unit, "кг")
+        weight_str = f"{formatting.format_weight(row_weight)}{u}"
+        # В скобках, а не через тире: тире в строке уже одно, и два подряд
+        # читаются как обрывок мысли.
+        suffix = " (как в прошлый раз)" if from_last_time else ""
+        reps_row_line = f"🔢 Цифрами сверху — повторы на {weight_str}{suffix}\n"
     target_line = f"📋 План: {target}\n" if target else ""
     warning = _suspicious_weight_warning(last_session, today_sets, unit)
     if warning and confirmed_weight is not None and today_sets and today_sets[-1][0] == confirmed_weight:
@@ -426,7 +441,7 @@ def _logging_hint(
         # that arrive by other routes ("N: 100 8" edits) still get the nudge.
         warning = None
     warning_line = f"{warning}\n" if warning else ""
-    lead = f"{target_line}{warning_line}"
+    lead = f"{reps_row_line}{target_line}{warning_line}"
     if last_session:
         sets_str = ", ".join(formatting.format_set(w, r, rpe) for w, r, rpe in last_session)
         line = f"💡 В прошлый раз: {sets_str}"
@@ -514,6 +529,30 @@ async def _exercise_history(
     return last_session, analytics.infer_weight_step(r["weight"] for r in rows)
 
 
+def _reps_row_basis(
+    today_sets: list[tuple[float, int]],
+    last_session: list[tuple[float, int, float | None]] | None,
+) -> tuple[float, int, bool] | None:
+    """От чего отталкивается ряд «тот же вес, другие повторы»: (вес, повторы, из_прошлого).
+
+    Сегодняшний последний подход, а если его ещё нет — последний подход этого же
+    упражнения в прошлый раз. Иначе первый подход остаётся без кнопок ровно там,
+    где они полезнее всего: человек подошёл к снаряду и почти всегда начинает с
+    того же веса, что и в прошлый раз, — он и так уже показан строкой
+    «💡 В прошлый раз».
+
+    Третьим значением — откуда взят вес: подпись под кнопками говорит «как в
+    прошлый раз» только когда это правда.
+    """
+    if today_sets:
+        weight, reps = today_sets[-1]
+        return weight, reps, False
+    if last_session:
+        weight, reps, _rpe = last_session[-1]
+        return weight, reps, True
+    return None
+
+
 async def _render_logging_screen(bot, state: FSMContext, user):
     data = await state.get_data()
     open_ids: list[int] = data.get("open_exercises") or []
@@ -538,6 +577,10 @@ async def _render_logging_screen(bot, state: FSMContext, user):
         dt.date.fromisoformat(d) for d in await db.list_finished_workout_dates(user["telegram_id"])
     ]
     show_instruction = not analytics.is_seasoned(recent_dates, timeutil.user_today(user))
+    # Ряд «тот же вес, другие повторы» (см. keyboards.reps_window) — от
+    # сегодняшнего последнего подхода, а до первого от прошлой тренировки. Нужен
+    # и подсказке (назвать вес под цифрами), и клавиатуре (какие цифры рисовать).
+    reps_basis = _reps_row_basis(today_sets, last_session_sets.get(active))
     hint = _logging_hint(
         last_session_sets.get(active),
         has_sets,
@@ -545,6 +588,7 @@ async def _render_logging_screen(bot, state: FSMContext, user):
         bool(user["progression_hint_enabled"]),
         today_sets,
         show_instruction=show_instruction,
+        reps_row=reps_basis,
         inferred_step=weight_steps.get(active),
         confirmed_weight=(data.get("confirmed_weights") or {}).get(active),
         formula=user["e1rm_formula"],
@@ -557,11 +601,9 @@ async def _render_logging_screen(bot, state: FSMContext, user):
             if active is not None else None
         ),
     )
-    # Повторы последнего подхода — из них собирается ряд «тот же вес, другие
-    # повторы» (см. keyboards.reps_window).
     kb = keyboards.logging_keyboard(
         open_items, active, has_sets,
-        last_reps=active_block_sets[-1]["reps"] if active_block_sets else None,
+        last_reps=reps_basis[1] if reps_basis else None,
     )
     await _sync_sticky_photo(bot, state, active)
     await _refresh_live(bot, state, user, data["workout_id"], hint, kb, note=active_note)
@@ -2642,9 +2684,17 @@ async def live_reps_button(callback: CallbackQuery, state: FSMContext):
     active = data.get("active_exercise_id")
     block_id = (data.get("open_blocks") or {}).get(active)
     sets = await db.list_sets_for_block(block_id) if block_id else []
-    if not sets:
+    # Вес берётся тем же правилом, что и рисуется ряд: сегодняшний последний
+    # подход, а до первого — прошлая тренировка. Иначе кнопки на первом подходе
+    # были бы нажимаемы, но записывать им нечего.
+    basis = _reps_row_basis(
+        [(r["weight"], r["reps"]) for r in sets],
+        (data.get("last_session_sets") or {}).get(active),
+    )
+    if basis is None or block_id is None:
         await callback.answer("Сначала запиши подход — с него возьму вес")
         return
+    weight = basis[0]
     try:
         reps = int(callback.data.split(":")[2])
     except (IndexError, ValueError):
@@ -2654,7 +2704,6 @@ async def live_reps_button(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
         return
 
-    weight = sets[-1]["weight"]
     user = await db.get_user(callback.from_user.id)
     await _log_one(block_id, active, weight, reps, None)
     last_by = dict(data.get("last_by_exercise") or {})
