@@ -57,9 +57,6 @@ LB_PER_KG = 2.20462
 # e1RM formula: "epley" or "brzycki"
 DEFAULT_E1RM_FORMULA = os.getenv("E1RM_FORMULA", "epley")
 
-# How many sessions to keep visible in the progress screen by default.
-PROGRESS_HISTORY_LIMIT = 8
-
 # Hours after which an abandoned active workout triggers a prompt to finish/discard.
 STALE_WORKOUT_HOURS = 6
 

@@ -1449,26 +1449,6 @@ def format_tonnage_equivalent(total: float, seed: int = 0, unit: str = "kg") -> 
     return f"Это как {count} {noun} {emoji}"
 
 
-def dashboard_stat_lines(dashboard) -> list[tuple[str, str]]:
-    """(label, value) pairs drawn inside the main-menu heatmap image.
-
-    Empty list for a brand-new user (nothing to show yet).
-    """
-    if dashboard.total_workouts == 0:
-        return []
-    lines: list[tuple[str, str]] = []
-    if dashboard.week_streak >= 2:
-        weeks = plural_ru(dashboard.week_streak, ("неделю", "недели", "недель"))
-        lines.append(("Серия: ", f"{dashboard.week_streak} {weeks} подряд"))
-
-    week_word = plural_ru(dashboard.this_week, ("тренировка", "тренировки", "тренировок"))
-    lines.append(("Эта неделя: ", f"{dashboard.this_week} {week_word}"))
-
-    month_word = plural_ru(dashboard.last_30_days, ("тренировка", "тренировки", "тренировок"))
-    lines.append(("Последние 30 дней: ", f"{dashboard.last_30_days} {month_word}"))
-    return lines
-
-
 # Подпись группы, под которую бот не смог определить мышцу. Своя строка, а не
 # пропуск: подходы сделаны, и прятать их из суммы значило бы показывать неверный
 # итог.

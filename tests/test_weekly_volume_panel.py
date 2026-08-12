@@ -130,14 +130,13 @@ def test_one_heavy_group_does_not_flatten_the_rest():
 
 
 def test_the_panel_renders_and_makes_the_image_taller():
-    today = dt.date(2026, 8, 4)
-    start = today - dt.timedelta(weeks=8)
-    stats = [("Эта неделя: ", "3 тренировки")]
     rows = [("СПИНА", 14, "high"), ("ГРУДЬ", 9, "in_range"), ("НОГИ", 0, "none")]
 
-    without = charts.render_year_heatmap({today: 1}, today, start, stats)
-    with_panel = charts.render_year_heatmap(
-        {today: 1}, today, start, stats, rows, "ОБЪЁМ ЗА 7 ДНЕЙ · 23 ПОДХОДА"
+    without = charts.render_menu_dashboard("3 тренировки за 30 дней")
+    with_panel = charts.render_menu_dashboard(
+        "3 тренировки за 30 дней",
+        volume_rows=rows,
+        volume_title="ОБЪЁМ ЗА 7 ДНЕЙ · 23 ПОДХОДА",
     )
 
     assert _png_size(with_panel)[1] > _png_size(without)[1]
@@ -147,12 +146,8 @@ def test_the_panel_renders_and_makes_the_image_taller():
 def test_an_empty_row_list_leaves_the_old_picture_untouched():
     """Пустой список строк — это отсутствие панели, а не панель без строк: у
     нового пользователя картинка должна остаться в точности прежней."""
-    today = dt.date(2026, 8, 4)
-    start = today - dt.timedelta(weeks=8)
-    stats = [("Эта неделя: ", "1 тренировка")]
-
-    assert charts.render_year_heatmap({today: 1}, today, start, stats) == \
-        charts.render_year_heatmap({today: 1}, today, start, stats, [], "")
+    assert charts.render_menu_dashboard("1 тренировка за 30 дней") == \
+        charts.render_menu_dashboard("1 тренировка за 30 дней", volume_rows=[], volume_title="")
 
 
 # ---------- окно в семь дней ----------
