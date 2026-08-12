@@ -371,3 +371,38 @@ def test_suspicious_weight_warning_silent_for_plausible_progression():
     because it's well above last session's."""
     last_session = [(140.0, 6, None)]
     assert workout._suspicious_weight_warning(last_session, today_sets=[(200.0, 5)]) is None
+
+
+# ---------- «тот же вес, другие повторы» ----------
+
+
+def test_reps_window_centres_on_the_last_set():
+    assert keyboards.reps_window(10) == [7, 8, 9, 10, 11, 12]
+    # Запас вниз больше: следующий подход внутри упражнения чаще выходит хуже
+    # предыдущего, а не лучше — усталость копится.
+    assert keyboards.reps_window(10).index(10) == 3
+
+
+def test_reps_window_slides_up_instead_of_shrinking_near_one():
+    """После двойки нужны «1 2 3 4 5 6», а не «1 2 3 4»: иначе у того, кто
+    работает в силовом диапазоне, кнопок почти не остаётся."""
+    for last in (1, 2, 3):
+        window = keyboards.reps_window(last)
+        assert len(window) == 6
+        assert window[0] == 1
+        assert last in window
+
+
+def test_reps_row_appears_above_the_other_controls():
+    kb = keyboards.logging_keyboard([(1, "Bench")], active_id=1, has_sets=True, last_reps=10)
+    rows = [[b.callback_data for b in row] for row in kb.inline_keyboard]
+    assert rows[0] == [f"live:reps:{n}" for n in (7, 8, 9, 10, 11, 12)]
+    # Шесть однозначных кнопок в одной строке — в отличие от «Удалить последний»,
+    # которую в половинную колонку не втиснуть.
+    assert len(kb.inline_keyboard[0]) == 6
+
+
+def test_no_reps_row_until_there_is_a_weight_to_reuse():
+    kb = keyboards.logging_keyboard([(1, "Bench")], active_id=1, has_sets=False)
+    cbs = [b.callback_data for row in kb.inline_keyboard for b in row]
+    assert not any(c.startswith("live:reps:") for c in cbs)

@@ -557,7 +557,12 @@ async def _render_logging_screen(bot, state: FSMContext, user):
             if active is not None else None
         ),
     )
-    kb = keyboards.logging_keyboard(open_items, active, has_sets)
+    # Повторы последнего подхода — из них собирается ряд «тот же вес, другие
+    # повторы» (см. keyboards.reps_window).
+    kb = keyboards.logging_keyboard(
+        open_items, active, has_sets,
+        last_reps=active_block_sets[-1]["reps"] if active_block_sets else None,
+    )
     await _sync_sticky_photo(bot, state, active)
     await _refresh_live(bot, state, user, data["workout_id"], hint, kb, note=active_note)
 
@@ -2618,6 +2623,46 @@ async def live_repeat_set(callback: CallbackQuery, state: FSMContext):
     else:
         w, r, rpe = result
         await callback.answer(f"➕ {formatting.format_set(w, r, rpe)}")
+
+
+@router.callback_query(StateFilter(WorkoutFlow.logging_set), F.data.startswith("live:reps:"))
+async def live_reps_button(callback: CallbackQuery, state: FSMContext):
+    """«Тот же вес, столько повторов» — ряд цифр над кнопками трекера.
+
+    Самый частый следующий шаг в зале: вес держится весь подход, а повторы
+    плывут от усталости, и печатать «25 9» ради одной изменившейся цифры
+    незачем. Серединная цифра ряда совпадает с прошлым подходом, то есть
+    закрывает и повтор один в один.
+
+    RPE с прошлого подхода НЕ копируется, в отличие от «=»: там подход тот же
+    самый, а здесь повторов другое число — значит и тяжесть другая, и
+    переносить старую оценку было бы выдумкой за человека.
+    """
+    data = await state.get_data()
+    active = data.get("active_exercise_id")
+    block_id = (data.get("open_blocks") or {}).get(active)
+    sets = await db.list_sets_for_block(block_id) if block_id else []
+    if not sets:
+        await callback.answer("Сначала запиши подход — с него возьму вес")
+        return
+    try:
+        reps = int(callback.data.split(":")[2])
+    except (IndexError, ValueError):
+        await callback.answer()
+        return
+    if reps < 1:
+        await callback.answer()
+        return
+
+    weight = sets[-1]["weight"]
+    user = await db.get_user(callback.from_user.id)
+    await _log_one(block_id, active, weight, reps, None)
+    last_by = dict(data.get("last_by_exercise") or {})
+    last_by[active] = (weight, reps)
+    await state.update_data(last_by_exercise=last_by)
+    await _render_logging_screen(callback.bot, state, user)
+    await callback.answer(f"➕ {formatting.format_set(weight, reps)}")
+
 
 
 @router.callback_query(StateFilter(WorkoutFlow.logging_set), F.data == "live:finish_exercise")

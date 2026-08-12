@@ -521,10 +521,32 @@ def _tab_label(name: str, limit: int) -> str:
     return cut + "…"
 
 
+# Окно повторов для кнопок «тот же вес, другие повторы»: три ниже последнего,
+# сам последний, два выше. Шесть однозначных цифр спокойно живут в одной строке —
+# в отличие от «↩️ Удалить последний», которую в половинную колонку не втиснуть.
+#
+# Асимметрия окна намеренная: чаще следующий подход выходит НЕ лучше предыдущего,
+# а хуже — усталость копится внутри упражнения. Поэтому запас вниз больше.
+_REPS_BELOW = 3
+_REPS_ABOVE = 2
+
+
+def reps_window(last_reps: int) -> list[int]:
+    """Какие повторы предложить кнопками после подхода на last_reps.
+
+    Ноль и отрицательные повторы не бывают, поэтому окно у самого низа
+    сдвигается вверх, а не обрезается: после двойки нужны «1 2 3 4 5 6», а не
+    «1 2 3 4», иначе у тех, кто работает в силовом диапазоне, кнопок почти нет.
+    """
+    start = max(1, last_reps - _REPS_BELOW)
+    return list(range(start, start + _REPS_BELOW + _REPS_ABOVE + 1))
+
+
 def logging_keyboard(
     open_items: list[tuple[int, str]],
     active_id: int | None,
     has_sets: bool = True,
+    last_reps: int | None = None,
 ) -> InlineKeyboardMarkup:
     """Set-logging keyboard: tabs to switch between exercises open in parallel, plus controls.
 
@@ -534,11 +556,11 @@ def logging_keyboard(
     The "➕ Суперсет"/"📝 Заметка" row is always available; once a set is logged,
     "↩️ Удалить последний" appears directly above "✅ Закончить упражнение".
 
-    Кнопки повтора здесь нет намеренно (см. live:repeat в handlers/workout —
-    обработчик подключён, но кнопку к нему убрали в #164). Пробовали вернуть:
-    в пару к «Удалить последний» она не встаёт — та занимает двадцать символов
-    и в половинной колонке обрежется многоточием, — а своей строкой удлиняет и
-    без того высокий экран с вкладками. Повтор остаётся на «=» текстом.
+    last_reps — повторы последнего записанного подхода. Есть они, значит есть и
+    вес, и над остальными кнопками встаёт ряд цифр «тот же вес, другие
+    повторы»: 25×10 → 7 8 9 10 11 12. Отдельной кнопки «🔁 Повторить» тут нет и
+    не нужно — серединная цифра это она и есть, а словом она на этот экран не
+    влезала (двадцать символов у соседки по строке, см. #164).
     """
     b = InlineKeyboardBuilder()
     if len(open_items) > 1:
@@ -558,6 +580,16 @@ def logging_keyboard(
     if active_id is not None:
         top_row.append(InlineKeyboardButton(text="📝 Заметка", callback_data=f"live:note:{active_id}"))
     if has_sets:
+        # Тот же вес, другие повторы — одним тапом. Самый частый следующий шаг в
+        # зале: вес не меняется весь подход, а повторы плывут от усталости, и
+        # печатать «25 9» ради одной изменившейся цифры не хочется. Серединная
+        # кнопка заодно закрывает повтор один в один — та самая «🔁 Повторить»,
+        # которой на этом экране не нашлось места (см. историю в #164).
+        if last_reps:
+            b.row(*[
+                InlineKeyboardButton(text=str(n), callback_data=f"live:reps:{n}")
+                for n in reps_window(last_reps)
+            ])
         b.row(*top_row)
         b.row(InlineKeyboardButton(text="↩️ Удалить последний", callback_data="live:undo"))
         b.row(InlineKeyboardButton(text="✅ Закончить упражнение", callback_data="live:finish_exercise"))
