@@ -5359,6 +5359,39 @@ async def weekly_exercise_rollup(
     return await cur.fetchall()
 
 
+async def exercise_history_spans(
+    user_id: int, *, tz_offset: Optional[int] = None
+) -> list[aiosqlite.Row]:
+    """Для каждого упражнения — сколько раз оно встречалось и в каком окне.
+
+    Один агрегат вместо перечитывания всей истории по тренировкам: разбору
+    после импорта (ai_trainer.import_history_overview) нужны только даты
+    первой и последней сессии на упражнение и их число — «бросил присед в
+    марте» видно по разрыву между последней датой упражнения и последней
+    датой во всей истории, а не по самим подходам.
+
+    Даты — местные календарные (см. _local_day), а не сырой UTC из started_at:
+    иначе сессия под утро могла бы округлиться на день раньше или позже, чем
+    в остальном боте, и «последний раз тогда-то» не совпало бы с тем, что
+    человек видит в истории.
+    """
+    day = _local_day("w.started_at", await _tz_offset_of(user_id, tz_offset))
+    cur = await conn().execute(
+        "SELECT e.display_name, g.name AS group_name, COUNT(DISTINCT w.id) AS sessions, "
+        f"MIN({day}) AS first_at, MAX({day}) AS last_at "
+        "FROM sets s "
+        "JOIN block_exercises be ON be.block_id = s.block_id AND be.exercise_id = s.exercise_id "
+        "JOIN workout_blocks b ON b.id = s.block_id "
+        "JOIN workouts w ON w.id = b.workout_id "
+        "JOIN exercises e ON e.id = s.exercise_id "
+        "LEFT JOIN muscle_groups g ON g.id = e.primary_group_id "
+        "WHERE w.user_id = ? AND w.status = 'finished' "
+        "GROUP BY e.id ORDER BY sessions DESC",
+        (user_id,),
+    )
+    return await cur.fetchall()
+
+
 async def tonnage_since(
     user_id: int, since_date: str, *, tz_offset: Optional[int] = None
 ) -> float:

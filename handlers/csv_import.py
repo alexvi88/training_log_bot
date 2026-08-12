@@ -1,12 +1,16 @@
 """§A3 — CSV import (round-trip with the §9 export): дата, упражнение, вес, повторы[, подход]."""
 
+import asyncio
 import csv
 import datetime as dt
 import io
+import logging
 import re
+from contextlib import suppress
 from typing import Optional
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
@@ -23,6 +27,39 @@ from parser import MAX_REPS, MAX_WEIGHT, ParseError, parse_ru_date
 from state_scaffold import clear_state_keep_workout
 
 router = Router(name="csv_import")
+
+logger = logging.getLogger(__name__)
+
+# Тот же приём, что у handlers.workout._background_tasks: голая ссылка цикла
+# на create_task — слабая, и без своей задача может собраться сборщиком мусора
+# на середине ожидания ответа модели.
+_background_tasks: set[asyncio.Task] = set()
+
+
+def _spawn(coro) -> asyncio.Task:
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return task
+
+
+async def _attach_import_overview(bot, chat_id: int, user_id: int) -> None:
+    """«Вижу два года жима, присед бросил в марте» — одно сообщение фоном,
+    следом за экраном «Импортировано N», а не вместо него: сама загрузка уже
+    закончилась и экран ушёл в настройки, ждать модель на этом месте было бы
+    чистой задержкой без выгоды (тот же приём, что у workout._attach_ai_comment).
+    """
+    try:
+        overview = await ai_trainer.import_history_overview(user_id)
+    except Exception:
+        logger.exception("AI import overview failed for user %s", user_id)
+        return
+    if not overview:
+        return
+    with suppress(TelegramBadRequest):
+        await bot.send_message(
+            chat_id, formatting.ai_markdown_to_html(overview), parse_mode="HTML"
+        )
 
 # Кто прямо сейчас пишет импортированные тренировки в базу — двойной тап по
 # «Загрузить» (или медленный ответ Telegram на первый тап) иначе запускает
@@ -674,6 +711,13 @@ async def _do_import_save(callback: CallbackQuery, state: FSMContext) -> None:
     # edit screens already run after changing the past.
     if imported:
         await achievement_sync.resync(user_id)
+        # Момент, когда перебежчик из другого приложения решает, оставаться
+        # ли, — и сейчас после импорта тишина. Фоном, чтобы не держать
+        # человека перед «⏳ Загружаю тренировки»: экран уходит в настройки
+        # сразу, разбор придёт следующим сообщением, когда будет готов.
+        # Гейт по размеру истории — внутри import_history_overview, не тут:
+        # решает вся история пользователя, а не только этот файл.
+        _spawn(_attach_import_overview(callback.bot, callback.message.chat.id, user_id))
 
     # См. комментарий выше про to_import: тренировка, из которой зашли за
     # импортом, могла остаться незакрытой.

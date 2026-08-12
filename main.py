@@ -33,6 +33,7 @@ from handlers import (
     edit_workout,
     exercise_resolve,
     exercises,
+    factcheck,
     fallback,
     feedback,
     food_diary,
@@ -200,6 +201,11 @@ def setup_routers(dp: Dispatcher) -> None:
     # Та же причина: /community — одна команда без состояний, и она нужна из
     # любого сценария, хоть посреди тренировки.
     dp.include_router(community.router)
+    # Форвард — самостоятельное действие, а не ответ на вопрос текущего экрана
+    # (см. handlers/factcheck.py): должен перехватываться раньше состояний
+    # FSM, иначе посреди тренировки или чата с тренером его съел бы их
+    # catch-all текстовый обработчик.
+    dp.include_router(factcheck.router)
     # Same reason as admin/feedback above: /food_diary and the fd:* callbacks
     # must reach their router even when the user is mid-workout.
     dp.include_router(food_diary.router)
