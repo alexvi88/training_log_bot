@@ -184,8 +184,16 @@ async def test_tapping_template_previews_without_adding_it(fresh_db, user_id):
 
     await exercises.exm_preview_template(callback, state)
 
-    assert callback.message.answer_photo.await_count == 1
-    kb = callback.message.answer_photo.await_args.kwargs["reply_markup"]
+    # Обе позиции упражнения, а не одна: раньше уходило images[0], и второй
+    # кадр — конечное положение — молча терялся, то есть по картинке не было
+    # видно самого движения.
+    media = callback.message.answer_media_group.await_args.args[0]
+    assert len(media) == 2
+    assert media[0].caption and media[1].caption is None
+
+    # Клавиатура не влезает в медиагруппу, поэтому приезжает следующим
+    # сообщением — тем же приёмом, что и карточка упражнения.
+    kb = callback.message.answer.await_args.kwargs["reply_markup"]
     callback_datas = [b.callback_data for row in kb.inline_keyboard for b in row]
     assert f"exm:tpladd:{template_id}" in callback_datas
     # not added yet
