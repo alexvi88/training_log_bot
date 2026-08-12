@@ -532,8 +532,8 @@ def logging_keyboard(
     navigation/utility actions, not numeric input, to keep it short.
 
     The "➕ Суперсет"/"📝 Заметка" row is always available; once a set is logged,
-    "🔁 Повторить"/"↩️ Удалить последний" appear directly above "✅ Закончить
-    упражнение".
+    "🔁 Повторить" and "↩️ Удалить последний" appear above "✅ Закончить
+    упражнение", each on its own full-width row.
 
     Повтор — самое частое действие в зале: тот же вес, те же повторы. Он и
     раньше работал, но только как «=» текстом (см. handlers/workout,
@@ -562,10 +562,19 @@ def logging_keyboard(
         top_row.append(InlineKeyboardButton(text="📝 Заметка", callback_data=f"live:note:{active_id}"))
     if has_sets:
         b.row(*top_row)
-        b.row(
-            InlineKeyboardButton(text="🔁 Повторить", callback_data="live:repeat"),
-            InlineKeyboardButton(text="↩️ Удалить последний", callback_data="live:undo"),
-        )
+        # Каждая своей строкой, хотя обе про последний подход и просились в
+        # пару. «↩️ Удалить последний» — двадцать символов, столько же, сколько
+        # у «Закончить упражнение», которая занимает строку целиком; в
+        # половинной колонке Telegram обрежет её многоточием. Тем же кончилась
+        # попытка ужать туда названия упражнений — см. комментарий про «triceps
+        # block - si…» выше. Пара «Суперсет»/«Заметка» живёт только потому, что
+        # обе по девять-десять символов.
+        #
+        # Сокращать до «↩️ Удалить» ради одной строки не стоит: в зале это
+        # читается как «удалить упражнение», а цена ошибки у этих двух действий
+        # разная.
+        b.row(InlineKeyboardButton(text="🔁 Повторить", callback_data="live:repeat"))
+        b.row(InlineKeyboardButton(text="↩️ Удалить последний", callback_data="live:undo"))
         b.row(InlineKeyboardButton(text="✅ Закончить упражнение", callback_data="live:finish_exercise"))
     else:
         b.row(*top_row)

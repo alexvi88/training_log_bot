@@ -279,15 +279,17 @@ def test_repeat_stays_hidden_until_the_first_set():
     assert "live:note:1" in cbs
 
 
-def test_repeat_and_undo_share_one_row():
-    """Оба действия про последний подход — одно копирует, другое убирает, — и
-    в одной строке не съедают лишнюю высоту у экрана, где и так есть вкладки."""
+def test_last_set_buttons_each_get_a_full_width_row():
+    """Обе просились в одну строку — оба действия про последний подход. Но
+    «↩️ Удалить последний» это двадцать символов, столько же, сколько у
+    «Закончить упражнение» на всю строку, и в половинной колонке Telegram
+    обрежет её многоточием. Пара «Суперсет»/«Заметка» живёт только потому, что
+    обе по девять-десять символов.
+    """
     kb = keyboards.logging_keyboard([(1, "Bench")], active_id=1, has_sets=True)
-    row = next(
-        r for r in kb.inline_keyboard
-        if any(b.callback_data == "live:repeat" for b in r)
-    )
-    assert [b.callback_data for b in row] == ["live:repeat", "live:undo"]
+    for cb in ("live:repeat", "live:undo"):
+        row = next(r for r in kb.inline_keyboard if any(b.callback_data == cb for b in r))
+        assert len(row) == 1, f"{cb} должна занимать строку целиком"
 
 
 def test_logging_keyboard_note_button_is_labelled():
