@@ -174,7 +174,7 @@ def test_build_workout_summary_collapses_identical_consecutive_sets():
         )
     ]
     text = formatting.build_workout_summary(started, blocks)
-    assert "190×5 ×3" in text
+    assert "190×5 · 3 подхода" in text
     assert "190×5, 190×5" not in text
 
 
@@ -199,7 +199,7 @@ def test_build_workout_summary_collapses_previous_session_sets_too():
         )
     ]
     text = formatting.build_workout_summary(started, blocks)
-    assert "[прошлая: 180×6 ×3]" in text
+    assert "[прошлая: 180×6 · 3 подхода]" in text
 
 
 def test_build_workout_summary_max_chars_drops_oldest_exercises():
@@ -612,7 +612,7 @@ def test_record_older_than_the_previous_session_keeps_both_numbers():
     )
     text = formatting.build_workout_summary(dt.datetime(2026, 8, 7), [block])
     assert "vs 03.08" in text
-    assert "на 4.0кг выше прошлого" in text
+    assert "на 4кг выше прошлого" in text
 
 
 def test_render_block_puts_record_next_to_its_sets():
@@ -675,10 +675,10 @@ def test_format_progress_screen_weighted_shows_total_growth():
 
     assert "<b>Жим лёжа</b>" in text
     assert "e1RM" in text
-    assert "e1RM: ↑+6.3кг с первой тренировки" in text
+    assert "e1RM: ↑6.3кг с первой тренировки" in text
     assert "/нед" not in text
     assert "vs прошлой тренировки" not in text
-    assert "Рекорд: 105×8 · e1RM 140.0кг" in text
+    assert "Рекорд: 105×8 · e1RM 140кг" in text
 
 
 def test_format_progress_screen_single_session_has_no_growth_line():
@@ -709,7 +709,7 @@ def test_format_progress_screen_bodyweight_shows_rep_growth():
 
     text = formatting.format_progress_screen("Подтягивания", sessions, None, records)
 
-    assert "Повторы: ↑+4 с первой тренировки" in text
+    assert "Повторы: ↑4 с первой тренировки" in text
 
 
 def test_format_progress_screen_respects_limit():
@@ -766,14 +766,14 @@ def test_format_progress_screen_delta_scopes_to_selected_period_not_all_time():
 
     expected_period_delta = analytics.e1rm(110.0, 8, "epley") - analytics.e1rm(109.0, 8, "epley")
     text = formatting.format_progress_screen("Жим лёжа", sessions, None, records, limit=2)
-    assert f"e1RM: ↑+{expected_period_delta:.1f}кг за период" in text
+    assert f"e1RM: ↑{formatting.format_weight(expected_period_delta)}кг за период" in text
     assert "с первой тренировки" not in text
 
     # Selecting "Все" (limit covers the whole history) goes back to the
     # from-the-beginning framing, since the window and the full history now match.
     expected_all_time_delta = analytics.e1rm(110.0, 8, "epley") - analytics.e1rm(101.0, 8, "epley")
     text_all = formatting.format_progress_screen("Жим лёжа", sessions, None, records, limit=10)
-    assert f"e1RM: ↑+{expected_all_time_delta:.1f}кг с первой тренировки" in text_all
+    assert f"e1RM: ↑{formatting.format_weight(expected_all_time_delta)}кг с первой тренировки" in text_all
 
 
 def test_logging_hint_omits_progression_when_disabled():
@@ -990,7 +990,7 @@ def test_workout_card_collapses_identical_sets_like_the_text_card():
         dt.datetime(2026, 7, 26, 13), blocks
     )
     sets_line = body[1]
-    assert "83.6×8 ×10" in sets_line
+    assert "83.6×8 · 10 подходов" in sets_line
     assert sets_line.count("83.6×8") == 1
 
 
@@ -1308,3 +1308,43 @@ def test_mixed_rule_kinds_still_print_per_exercise():
     assert "Везде" not in text
     assert "дошёл до 5 повторов — прибавь 2.5кг" in text
     assert "+2.5кг каждую тренировку" in text
+
+
+# ---------- знак у стрелки, лишний ноль, число подходов ----------
+
+
+def test_format_delta_does_not_repeat_the_sign_next_to_the_arrow():
+    """На проде карточка показывала «↓-38.0кг vs 11.08»: стрелка уже несёт знак,
+    а форматтер печатал его второй раз — читалось как опечатка."""
+    assert formatting.format_delta(-38.0) == "↓38кг"
+    assert formatting.format_delta(2.5) == "↑2.5кг"
+    assert formatting.format_delta(0) == "→0кг"
+
+
+def test_format_delta_reps_does_not_repeat_the_sign_either():
+    assert formatting.format_delta_reps(-2) == "↓2"
+    assert formatting.format_delta_reps(3) == "↑3"
+    assert formatting.format_delta_reps(0) == "→0"
+
+
+def test_format_delta_drops_the_trailing_zero_like_every_other_weight():
+    """«↓38кг», не «↓38.0кг» — тот же format_weight, что и у всех остальных весов."""
+    assert formatting.format_delta(-38.0) == "↓38кг"
+    assert formatting.format_delta(-38.25) == "↓38.2кг"
+
+
+def test_collapsed_sets_spell_out_the_word_instead_of_a_multiplier():
+    """«80×9 ×2» рядом с «80×9» читалось как ещё один вес на два повтора."""
+    assert formatting._collapse_formatted_sets(["80×9", "80×9"]) == ["80×9 · 2 подхода"]
+    assert formatting._collapse_formatted_sets(["80×9"] * 5) == ["80×9 · 5 подходов"]
+    # Одиночный подход остаётся как был — приписки «· 1 подход» быть не должно.
+    assert formatting._collapse_formatted_sets(["80×9", "75×10"]) == ["80×9", "75×10"]
+
+
+def test_collapsed_sets_declension_follows_russian_rules():
+    assert formatting._sets_word(1) == "подход"
+    assert formatting._sets_word(3) == "подхода"
+    assert formatting._sets_word(7) == "подходов"
+    assert formatting._sets_word(11) == "подходов"
+    assert formatting._sets_word(21) == "подход"
+    assert formatting._sets_word(22) == "подхода"

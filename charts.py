@@ -14,6 +14,26 @@ from matplotlib.figure import Figure  # noqa: E402
 from matplotlib.patches import FancyBboxPatch, Rectangle  # noqa: E402
 
 from analytics import WEEKLY_VOLUME_MAX, WEEKLY_VOLUME_MIN, linear_trend  # noqa: E402
+from formatting import format_weight  # noqa: E402
+
+
+def _arrow(delta: float) -> str:
+    return "↑" if delta > 0 else ("↓" if delta < 0 else "→")
+
+
+def _trend_title(title: str, trend, values: list[float], show_weekly_rate: bool) -> str:
+    """Заголовок графика со стрелкой изменения.
+
+    Стрелка уже несёт знак, поэтому число рядом с ней печатается по модулю:
+    «↓ -38.0» читалось как опечатка — тот же баг, что правил
+    `formatting.format_delta`. Вес идёт через `format_weight`, чтобы не
+    оставалось лишнего нуля («↓ 38», не «↓ 38.0»).
+    """
+    if show_weekly_rate:
+        direction = 1 if trend.direction == "up" else (-1 if trend.direction == "down" else 0)
+        return f"{title}  {_arrow(direction)} {abs(trend.slope_per_week):.2f}/нед"
+    delta = values[-1] - values[0]
+    return f"{title}  {_arrow(delta)} {format_weight(abs(delta))}"
 
 
 # Figures are built directly rather than through pyplot: pyplot keeps a single
@@ -67,13 +87,7 @@ def render_metric_over_sessions(
         slope_per_day = trend.slope_per_week / 7
         trend_y = [trend.intercept + slope_per_day * x for x in xs_days]
         ax.plot(dates, trend_y, linestyle="--", color="#cc3333", alpha=0.7)
-        if show_weekly_rate:
-            arrow = "↑" if trend.direction == "up" else ("↓" if trend.direction == "down" else "→")
-            ax.set_title(f"{title}  {arrow} {trend.slope_per_week:+.2f}/нед")
-        else:
-            delta = values[-1] - values[0]
-            arrow = "↑" if delta > 0 else ("↓" if delta < 0 else "→")
-            ax.set_title(f"{title}  {arrow} {delta:+.1f}")
+        ax.set_title(_trend_title(title, trend, values, show_weekly_rate))
     else:
         ax.set_title(title)
 

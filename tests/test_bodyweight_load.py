@@ -206,7 +206,7 @@ async def test_card_e1rm_is_the_same_number_as_the_record(fresh_db, user_id):
     assert record > 100  # 90 кг на 5 повторов
     assert blocks[0].top_e1rm == record
     # И на самой карточке видно то же число, а не сырые 11.7.
-    assert f"e1RM {record:.1f}" in formatting.build_workout_summary(
+    assert f"e1RM {formatting.format_weight(record)}" in formatting.build_workout_summary(
         dt.datetime.now(), blocks
     )
 

@@ -487,6 +487,23 @@ def _delta_arrow(delta: float) -> str:
     return "↑" if delta > 0 else ("↓" if delta < 0 else "→")
 
 
+def format_delta(delta: float, unit: str = "kg") -> str:
+    """Стрелка и величина изменения БЕЗ знака: «↓38кг», «↑2.5кг», «→0кг».
+
+    Знак несёт стрелка, поэтому «+»/«−» рядом с ней — второй знак об одном и том
+    же. На проде это выглядело как «↓-38.0кг vs 11.08» и читалось как опечатка.
+    Заодно вес идёт через format_weight: «66кг» вместо «66.0кг» — в остальной
+    карточке веса давно так и печатаются.
+    """
+    u = UNIT_LABELS.get(unit, "кг")
+    return f"{_delta_arrow(delta)}{format_weight(abs(delta))}{u}"
+
+
+def format_delta_reps(delta: int) -> str:
+    """То же для повторов: «↑3», «↓2», «→0» — без второго знака рядом со стрелкой."""
+    return f"{_delta_arrow(delta)}{abs(delta)}"
+
+
 def to_kg(total: float, unit: str = "kg") -> float:
     """Weights are stored in whatever unit the user picked, so anything compared
     against a real-world quantity (a ton, an elephant) has to be normalized."""
@@ -528,7 +545,23 @@ def _collapse_formatted_sets(formatted: list[str]) -> list[str]:
             collapsed[-1] = (s, collapsed[-1][1] + 1)
         else:
             collapsed.append((s, 1))
-    return [f"{s} ×{n}" if n > 1 else s for s, n in collapsed]
+    # «80×9 · 2 подхода», а не «80×9 ×2»: счётчик тем же знаком «×», что и
+    # вес×повторы, склеивался глазом в «80×9×2» — читалось как один подход с
+    # третьим числом.
+    return [
+        f"{s} · {n} " + _sets_word(n) if n > 1 else s
+        for s, n in collapsed
+    ]
+
+
+def _sets_word(n: int) -> str:
+    """«подход» / «подхода» / «подходов» — счётчик стоит рядом с числом, и
+    «2 подходов» бросается в глаза сильнее, чем экономия на согласовании."""
+    if n % 10 == 1 and n % 100 != 11:
+        return "подход"
+    if n % 10 in (2, 3, 4) and n % 100 not in (12, 13, 14):
+        return "подхода"
+    return "подходов"
 
 
 def format_block_record(
@@ -563,7 +596,7 @@ def _block_record_parts(
         return "Рекорд", f"{reps} {word} в подходе"
     if block.record_e1rm_delta is not None and show_extra:
         u = UNIT_LABELS.get(unit, "кг")
-        return "Рекорд e1RM", f"на {block.record_e1rm_delta:.1f}{u} выше прошлого"
+        return "Рекорд e1RM", f"на {format_weight(block.record_e1rm_delta)}{u} выше прошлого"
     return None
 
 
@@ -592,8 +625,8 @@ def _render_single_block(block: ExerciseBlockView, show_extra: bool, unit: str =
         if block.prev_sets and block.prev_started_at is not None and not prev_holds_the_record:
             when = format_date_short(block.prev_started_at)
             delta = block.top_e1rm - block.prev_top_e1rm
-            vs_prev = f" ({_delta_arrow(delta)}{delta:+.1f}{u} vs {when})"
-        lines.append(f"  ↳ e1RM {block.top_e1rm:.1f}{u}{vs_prev}")
+            vs_prev = f" ({format_delta(delta, unit)} vs {when})"
+        lines.append(f"  ↳ e1RM {format_weight(block.top_e1rm)}{u}{vs_prev}")
     record = format_block_record(block, unit, show_extra)
     if record:
         lines.append(f"  {record}")
@@ -1771,7 +1804,7 @@ def build_gold_book_lines(golds, unit: str = "kg", is_bodyweight: bool = False) 
         return ["🥇 <b>Золотая книга</b>",
                 dated("Повторы", str(golds.max_reps), golds.max_reps_date)]
 
-    rows = [("e1RM", f"{golds.best_e1rm:.1f}{u} ({format_set(golds.best_e1rm_weight, golds.best_e1rm_reps)})",
+    rows = [("e1RM", f"{format_weight(golds.best_e1rm)}{u} ({format_set(golds.best_e1rm_weight, golds.best_e1rm_reps)})",
              golds.best_e1rm_date)]
     weight_set = (golds.max_weight, golds.max_weight_reps)
     if weight_set != (golds.best_e1rm_weight, golds.best_e1rm_reps):
@@ -2113,7 +2146,7 @@ def _progress_session_block(session, is_bodyweight: bool, note: str | None = Non
     tail = (
         f"всего повторов {session.total_reps}"
         if is_bodyweight
-        else f"e1RM {session.top_e1rm:.1f}"
+        else f"e1RM {format_weight(session.top_e1rm)}"
     )
     note_line = f"\n📝 <i>{escape(note)}</i>" if note else ""
     return f"<b>{format_date_ru(d)}</b>\n{sets_str}\n{tail}{note_line}"
@@ -2148,12 +2181,10 @@ def format_progress_screen(
         since = "с первой тренировки" if len(candidates) == len(window) else "за период"
         if is_bw:
             delta = last.max_reps_in_set - first.max_reps_in_set
-            arrow = "↑" if delta > 0 else ("↓" if delta < 0 else "→")
-            lines.append(f"Повторы: {arrow}{delta:+d} {since}")
+            lines.append(f"Повторы: {format_delta_reps(delta)} {since}")
         else:
             delta = last.top_e1rm - first.top_e1rm
-            arrow = "↑" if delta > 0 else ("↓" if delta < 0 else "→")
-            lines.append(f"e1RM: {arrow}{delta:+.1f}{u} {since}")
+            lines.append(f"e1RM: {format_delta(delta, unit)} {since}")
 
     # compute_personal_records honestly tracks both metrics independently of
     # session mode (max_e1rm from weighted sets, max_reps_at_weight from every
@@ -2167,7 +2198,7 @@ def format_progress_screen(
     have_weighted = any(not s.is_bodyweight_mode for s in sessions if s.sets)
     have_bw = any(s.is_bodyweight_mode for s in sessions if s.sets)
     if have_weighted:
-        lines.append(f"Рекорд: {format_set(records.best_e1rm_weight, records.best_e1rm_reps)} · e1RM {records.max_e1rm:.1f}{u}")
+        lines.append(f"Рекорд: {format_set(records.best_e1rm_weight, records.best_e1rm_reps)} · e1RM {format_weight(records.max_e1rm)}{u}")
     if have_bw:
         best_reps = max(records.max_reps_at_weight.values()) if records.max_reps_at_weight else 0
         lines.append(f"Рекорд повторов в подходе: {best_reps}")
