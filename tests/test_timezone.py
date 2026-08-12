@@ -195,14 +195,6 @@ def test_calendar_marks_the_given_today_not_the_servers():
     assert "bf:date:2026-07-29" not in cbs
 
 
-def test_quick_dates_follow_the_given_today():
-    kb = keyboards.date_quick_keyboard("bf", today=dt.date(2026, 7, 28))
-    cbs = [b.callback_data for row in kb.inline_keyboard for b in row]
-    assert "bf:date:2026-07-28" in cbs  # Сегодня
-    assert "bf:date:2026-07-27" in cbs  # Вчера
-    assert "bf:date:2026-07-26" in cbs  # Позавчера
-
-
 def test_parse_ru_date_accepts_the_users_today():
     """At UTC+13 the user's today can be the server's tomorrow — typing their own
     date shouldn't come back as "дата в будущем"."""

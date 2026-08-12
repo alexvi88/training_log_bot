@@ -108,23 +108,11 @@ def render_metric_over_sessions(
     return _fig_to_png(fig, dpi=100)
 
 
-# Binary marker for the year heatmap: trained that day, or not. No count-based shading —
-# a day essentially never has more than one workout, so a colour ramp would just be noise.
+# Фон и акцент сводки. Имена достались от тепловой карты, которая раньше жила на
+# главном экране; те же два цвета носят на себе плашка звания, карточки движений
+# и заголовки блоков.
 HEATMAP_EMPTY = "#1e242e"
 HEATMAP_FILLED = "#4f8cff"  # same accent used elsewhere (e.g. render_workout_card)
-
-_MONTHS_RU = ["Янв", "Фев", "Мар", "Апр", "Май", "Июн", "Июл", "Авг", "Сен", "Окт", "Ноя", "Дек"]
-
-
-def _rounded_cell(ax, x: float, y: float, size: float, colour: str) -> None:
-    pad = size * 0.1
-    ax.add_patch(
-        FancyBboxPatch(
-            (x + pad, y + pad), size - 2 * pad, size - 2 * pad,
-            boxstyle="round,pad=0,rounding_size=0.14",
-            linewidth=0, facecolor=colour,
-        )
-    )
 
 
 # Цвета статусов недельного объёма (см. analytics.classify_weekly_volume). Цвет
@@ -145,8 +133,8 @@ _VOL_TRACK_RIGHT = 0.945
 _VOL_NUMBER_RIGHT = 0.99
 
 # Толщина полосы в точках. Скруглённые концы даёт кап линии, а не
-# FancyBboxPatch, как в клетках календаря: у панели объёма оси не
-# равномасштабны, и скругление, заданное в данных, растянулось бы в овал.
+# FancyBboxPatch: у панели объёма оси не равномасштабны, и скругление,
+# заданное в данных, растянулось бы в овал.
 _VOL_BAR_WIDTH = 7.5
 
 
@@ -222,89 +210,6 @@ def _draw_volume_panel(
         )
 
 
-def render_year_heatmap(
-    day_counts: dict[dt.date, int],
-    today: dt.date,
-    start: dt.date,
-    stat_lines: list[tuple[str, str]],
-    volume_rows: list[tuple[str, int, str]] | None = None,
-    volume_title: str = "",
-) -> bytes:
-    """GitHub-style contribution calendar: week columns x 7 day rows, Monday on top.
-
-    `stat_lines` is a list of (label, value) pairs (e.g. "Серия: " / "5 недель
-    подряд") rendered as a header above the grid, label in muted ink and value
-    bold — this is the dashboard's streak/this-week/30-day summary, drawn into
-    the image itself rather than as separate caption text. The grid runs from
-    `start` (typically the Monday of the user's first workout, capped at a
-    year back) through `today`, so it doesn't waste columns on weeks before
-    the user began.
-
-    `volume_rows` — (название группы, подходов, статус) для панели недельного
-    объёма, которая рисуется между статистикой и календарём; порядок строк
-    задаёт вызывающая сторона (см. formatting.weekly_volume_panel). Пустой
-    список — панели нет совсем: семь нулей ничего не сообщают, а место занимают.
-    """
-    BG = "#12161d"
-    FG = "#e6e6e6"
-    MUTED = "#9aa4b2"
-
-    start = start - dt.timedelta(days=start.weekday())  # snap to Monday
-    columns = (today - start).days // 7 + 1
-
-    rows = list(volume_rows or ())
-    stats_h = 0.36 + 0.24 * max(len(stat_lines), 1)
-    vol_h = 0.0 if not rows else 0.30 + 0.26 * len(rows)
-    grid_w = max(6.6, 2.4 + columns * 0.19)
-    grid_h = 2.4
-    fig_w, fig_h = grid_w, stats_h + vol_h + grid_h
-
-    fig = _new_figure(figsize=(fig_w, fig_h), dpi=150)
-    fig.patch.set_facecolor(BG)
-
-    text_ax = fig.add_axes([0, 1 - stats_h / fig_h, 1, stats_h / fig_h])
-    text_ax.set_facecolor(BG)
-    text_ax.axis("off")
-    text_ax.set_xlim(0, 1)
-    text_ax.set_ylim(0, 1)
-
-    row_frac = 1 / (len(stat_lines) + 0.6) if stat_lines else 1
-    for i, (label, value) in enumerate(stat_lines):
-        y = 1 - (i + 0.85) * row_frac
-        label_text = text_ax.text(0.04, y, label, color=MUTED, fontsize=10.5, va="center")
-        fig.canvas.draw()
-        bbox = label_text.get_window_extent(renderer=fig.canvas.get_renderer())
-        bbox_axes = bbox.transformed(text_ax.transAxes.inverted())
-        text_ax.text(bbox_axes.x1, y, value, color=FG, fontsize=10.5, fontweight="bold", va="center")
-
-    if rows:
-        vol_ax = fig.add_axes([0, grid_h / fig_h, 1, vol_h / fig_h])
-        _draw_volume_panel(vol_ax, rows, volume_title, BG, FG, MUTED)
-
-    grid_ax = fig.add_axes([0, 0, 1, grid_h / fig_h])
-    grid_ax.set_facecolor(BG)
-    grid_ax.axis("off")
-    grid_ax.set_aspect("equal")
-    grid_ax.set_xlim(-3.2, columns + 0.4)
-    grid_ax.set_ylim(9.2, -3.4)  # inverted so Monday's row sits on top
-
-    for col in range(columns):
-        monday = start + dt.timedelta(weeks=col)
-        for row in range(7):
-            day = monday + dt.timedelta(days=row)
-            if day > today:
-                continue
-            colour = HEATMAP_FILLED if day_counts.get(day, 0) > 0 else HEATMAP_EMPTY
-            _rounded_cell(grid_ax, col, row, 1, colour)
-        if col > 0 and monday.month != (monday - dt.timedelta(weeks=1)).month:
-            grid_ax.text(col + 0.1, -0.7, _MONTHS_RU[monday.month - 1], color=MUTED, fontsize=7, va="center")
-
-    for row, label in ((0, "Пн"), (2, "Ср"), (4, "Пт")):
-        grid_ax.text(-0.5, row + 0.55, label, color=MUTED, fontsize=7, ha="right", va="center")
-
-    return _fig_to_png(fig)
-
-
 # ---------- сводка на главном экране ----------
 
 # Сводка живёт в том же сообщении меню, что и раньше жила одна тепловая карта.
@@ -329,7 +234,7 @@ DASH_FS_VALUE = 15      # число карточки: плитка, движе�
 DASH_FS_NUMBER = 10     # число в строке: подходы, изменение e1RM
 DASH_FS_LABEL = 8.5     # подпись блока, плашка звания
 DASH_FS_CAPTION = 7.5   # имя элемента, примечание блока
-DASH_FS_MICRO = 6.5     # месяцы и дни недели календаря
+DASH_FS_MICRO = 6.5     # абсолютная прибавка под процентом в карточке движения
 
 # Высоты виджетов в дюймах. Строка коридора и карточка движения заданы шагом,
 # чтобы блок рос от числа строк, а не растягивал их.

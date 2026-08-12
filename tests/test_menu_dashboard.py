@@ -121,52 +121,6 @@ async def test_ties_are_ordered_stably(fresh_db, user_id):
     assert first == ["Жим штанги лёжа", "Присед со штангой"]
 
 
-# ---------- серия e1RM ----------
-
-
-async def test_one_point_per_session_ascending(fresh_db, user_id):
-    """Внутри дня e1RM гуляет от разминочных и откатных подходов: линия из
-    подходов была бы пилой вместо тренда."""
-    db = fresh_db
-    today = dt.date.today()
-    bench = await _own(db, user_id, BENCH)
-    await _session(db, user_id, today - dt.timedelta(days=6), [(bench, 100, 5, 3)])
-    await _session(db, user_id, today - dt.timedelta(days=3), [(bench, 110, 5, 3)])
-
-    series = await db.exercise_e1rm_series(user_id, bench)
-
-    assert len(series) == 2
-    assert series[0] < series[1]
-
-
-async def test_the_series_takes_the_best_set_of_the_day(fresh_db, user_id):
-    db = fresh_db
-    today = dt.date.today()
-    bench = await _own(db, user_id, BENCH)
-    stamp = dt.datetime.combine(today, dt.time(19, 0)).isoformat()
-    workout_id = await db.create_finished_workout(user_id, stamp, stamp)
-    block_id = await db.create_block(workout_id, "single")
-    await db.add_block_exercise(block_id, bench, 0)
-    await db.add_set(block_id, bench, 0, 0, 60.0, 10)    # разминка
-    await db.add_set(block_id, bench, 1, 0, 100.0, 5)    # рабочий
-    await db.add_set(block_id, bench, 2, 0, 80.0, 8)     # откатный
-
-    import analytics
-    series = await db.exercise_e1rm_series(user_id, bench)
-
-    assert series == [analytics.e1rm(100.0, 5)]
-
-
-async def test_the_series_is_capped_at_the_asked_number_of_sessions(fresh_db, user_id):
-    db = fresh_db
-    today = dt.date.today()
-    bench = await _own(db, user_id, BENCH)
-    for offset in range(10):
-        await _session(db, user_id, today - dt.timedelta(days=offset), [(bench, 100, 5, 1)])
-
-    assert len(await db.exercise_e1rm_series(user_id, bench, sessions=4)) == 4
-
-
 # ---------- рост e1RM за окно ----------
 
 

@@ -72,10 +72,6 @@ def _copyable(value: str) -> str:
     return f"<pre>{escape(value)}</pre>"
 
 
-def _address() -> str:
-    return f"🌐 <b>Адрес для коннектора:</b>\n{_copyable(_server_url())}"
-
-
 def _credentials(token: str, with_address: bool = True) -> str:
     """Токен и адрес — то, что нужно подставить в клиент с заголовком.
 

@@ -5,7 +5,7 @@ import datetime as dt
 import pytest
 
 import analytics
-from analytics import NewRecord, SessionStats, SetRow
+from analytics import SessionStats, SetRow
 
 # ---------- e1RM formulas ----------
 
@@ -196,65 +196,6 @@ def test_compute_personal_records_tracks_best_across_sessions():
     )
     assert pr.best_e1rm_weight == best.weight
     assert pr.best_e1rm_reps == best.reps
-
-
-# ---------- detect_new_records ----------
-
-
-def test_detect_new_records_first_ever_session_is_a_record():
-    new_session = SessionStats(1, "2026-06-01T10:00:00", [SetRow(100, 8)])
-    records = analytics.detect_new_records([], new_session)
-    kinds = {r.kind for r in records}
-    assert kinds == {"e1rm"}
-
-
-def test_detect_new_records_no_pr_when_below_history():
-    history = [SessionStats(1, "2026-06-01T10:00:00", [SetRow(120, 8)])]
-    new_session = SessionStats(2, "2026-06-08T10:00:00", [SetRow(120, 5)])
-    records = analytics.detect_new_records(history, new_session)
-    assert records == []
-
-
-def test_detect_new_records_weighted_exercise_never_gets_a_reps_record():
-    # Раньше «повторы на весе» считались рекордом на каждый новый вес — теперь
-    # для упражнений с весом единственный вид рекорда — e1RM. Более лёгкий сет
-    # ниже исторического e1RM рекордом не считается вовсе.
-    history = [SessionStats(1, "2026-06-01T10:00:00", [SetRow(120, 8)])]
-    new_session = SessionStats(2, "2026-06-08T10:00:00", [SetRow(100, 8)])
-    assert analytics.detect_new_records(history, new_session) == []
-
-
-def test_detect_new_records_e1rm_pr_detected():
-    history = [SessionStats(1, "2026-06-01T10:00:00", [SetRow(100, 8)])]
-    new_session = SessionStats(2, "2026-06-08T10:00:00", [SetRow(110, 8)])
-    records = analytics.detect_new_records(history, new_session)
-    e1rm_records = [r for r in records if r.kind == "e1rm"]
-    assert len(e1rm_records) == 1
-    assert e1rm_records[0].value == pytest.approx(analytics.epley_e1rm(110, 8))
-
-
-def test_detect_new_records_more_reps_at_the_same_weight_is_an_e1rm_record():
-    # 100×8 против 100×5 в истории — рекорд есть, но он e1RM, без отдельной
-    # записи «рекорд повторов».
-    history = [SessionStats(1, "2026-06-01T10:00:00", [SetRow(100, 5)])]
-    new_session = SessionStats(2, "2026-06-08T10:00:00", [SetRow(100, 8)])
-    records = analytics.detect_new_records(history, new_session)
-    assert {r.kind for r in records} == {"e1rm"}
-
-
-def test_detect_new_records_bodyweight_reps_pr():
-    # У упражнений своим весом e1RM тождественно нулю — рекорд там один:
-    # повторы в сете, и он по-прежнему детектируется.
-    history = [SessionStats(1, "2026-06-01T10:00:00", [SetRow(0, 10)])]
-    new_session = SessionStats(2, "2026-06-08T10:00:00", [SetRow(0, 8), SetRow(0, 12)])
-    records = analytics.detect_new_records(history, new_session)
-    assert records == [NewRecord(kind="reps", value=12)]
-
-
-def test_detect_new_records_bodyweight_no_pr_when_below_history():
-    history = [SessionStats(1, "2026-06-01T10:00:00", [SetRow(0, 15)])]
-    new_session = SessionStats(2, "2026-06-08T10:00:00", [SetRow(0, 12)])
-    assert analytics.detect_new_records(history, new_session) == []
 
 
 # ---------- compare_to_previous_session ----------

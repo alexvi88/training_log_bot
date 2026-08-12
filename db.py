@@ -1540,12 +1540,6 @@ async def archive_muscle_group(group_id: int) -> None:
         await conn().commit()
 
 
-async def unarchive_muscle_group(group_id: int) -> None:
-    async with _write_lock:
-        await conn().execute("UPDATE muscle_groups SET is_archived = 0 WHERE id = ?", (group_id,))
-        await conn().commit()
-
-
 # ---------- exercises ----------
 
 # An exercise auto-created purely as a side effect of adding a ready-made program
@@ -2898,28 +2892,6 @@ async def top_exercises_by_frequency(
     return await cur.fetchall()
 
 
-async def exercise_e1rm_series(
-    user_id: int, exercise_id: int, sessions: int = 8, formula: str = "epley"
-) -> list[float]:
-    """Лучший e1RM упражнения в каждой из последних `sessions` тренировок, по
-    возрастанию даты — точки для спарклайна.
-
-    Одна точка на тренировку, а не на подход: внутри дня e1RM гуляет от
-    разминочных и откатных подходов, и линия из подходов показывала бы пилу
-    вместо тренда.
-    """
-    cur = await conn().execute(
-        f"SELECT MAX({_e1rm_sql(formula)}) AS e1rm FROM sets s "
-        "JOIN workout_blocks b ON b.id = s.block_id "
-        "JOIN workouts w ON w.id = b.workout_id "
-        "WHERE w.user_id = ? AND w.status = 'finished' "
-        "AND s.exercise_id = ? AND s.reps > 0 "
-        "GROUP BY w.id ORDER BY w.started_at DESC, w.id DESC LIMIT ?",
-        (user_id, exercise_id, sessions),
-    )
-    return [row["e1rm"] for row in reversed(await cur.fetchall())]
-
-
 async def exercise_e1rm_growth(
     user_id: int,
     exercise_id: int,
@@ -3778,21 +3750,6 @@ async def issue_oauth_link_code(
         except Exception:
             await conn().rollback()
             raise
-
-
-async def get_live_oauth_link_code(user_id: int) -> Optional[str]:
-    """Действующий код пользователя, если он ещё жив.
-
-    Нужен, чтобы повторное открытие инструкции не гасило код, который человек
-    уже скопировал: он вернулся перечитать шаг, а код в браузере от этого мёртвым
-    становиться не должен.
-    """
-    cur = await conn().execute(
-        "SELECT code FROM oauth_link_codes WHERE user_id = ? AND expires_at > ?",
-        (user_id, time.time()),
-    )
-    row = await cur.fetchone()
-    return row["code"] if row else None
 
 
 async def verify_oauth_link_code(

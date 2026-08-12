@@ -1765,33 +1765,6 @@ def calendar_keyboard(prefix: str, year: int, month: int, today: dt.date | None 
     return b.as_markup()
 
 
-def date_quick_keyboard(prefix: str, today: dt.date | None = None) -> InlineKeyboardMarkup:
-    """today: the user's own date — "Сегодня" must mean their today, not the
-    server's, or it silently logs to the wrong day near midnight."""
-    b = InlineKeyboardBuilder()
-    today = today or dt.date.today()
-    quick_dates = [
-        ("Сегодня", today),
-        ("Вчера", today - dt.timedelta(days=1)),
-        ("Позавчера", today - dt.timedelta(days=2)),
-    ]
-    for label, d in quick_dates:
-        b.button(text=label, callback_data=f"{prefix}:date:{d.isoformat()}")
-    b.button(text="❌ Отмена", callback_data=f"{prefix}:cancel")
-    b.adjust(3, 1)
-    return b.as_markup()
-
-
-def confirm_cancel_keyboard(
-    confirm_cb: str, cancel_cb: str, confirm_text: str = "✅ Сохранить", cancel_text: str = "❌ Отмена"
-) -> InlineKeyboardMarkup:
-    b = InlineKeyboardBuilder()
-    b.button(text=confirm_text, callback_data=confirm_cb)
-    b.button(text=cancel_text, callback_data=cancel_cb)
-    b.adjust(1)
-    return b.as_markup()
-
-
 def exercise_resolve_keyboard(
     candidates, name: str, prefix: str, remaining: int = 0, templates=()
 ) -> InlineKeyboardMarkup:
@@ -1862,26 +1835,6 @@ def set_actions_keyboard(set_id: int) -> InlineKeyboardMarkup:
     b.button(text="✏️ Изменить вес/повторы", callback_data=f"editw:editset:{set_id}")
     b.button(text="🗑 Удалить подход", callback_data=f"editw:delset:{set_id}")
     b.button(text="⬅️ Назад", callback_data="editw:back")
-    b.adjust(1)
-    return b.as_markup()
-
-
-def csv_import_confirm_keyboard(new_count: int, dup_count: int) -> InlineKeyboardMarkup:
-    """Кнопки подтверждения импорта CSV.
-
-    Дубли по датам ни пропускаются молча, ни грузятся молча: обычная кнопка
-    берёт только новые даты (и говорит, сколько их), а вторая появляется лишь
-    при дублях — для тех, кто действительно тренировался в тот день дважды.
-    Если новых дат нет, кнопки «загрузить N» нет вообще: одна и та же история
-    дважды — это тот самый баг, из-за которого её потом удаляли по одной.
-    """
-    b = InlineKeyboardBuilder()
-    if new_count:
-        b.button(text=f"✅ Загрузить {new_count}", callback_data="imp:save")
-    if dup_count:
-        total = new_count + dup_count
-        b.button(text=f"⚠️ Загрузить всё ({total}), включая дубли", callback_data="imp:saveall")
-    b.button(text="❌ Отмена", callback_data="imp:cancel")
     b.adjust(1)
     return b.as_markup()
 

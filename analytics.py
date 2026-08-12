@@ -339,41 +339,6 @@ def compute_personal_records(sessions: list[SessionStats]) -> PersonalRecords:
 
 
 @dataclass
-class NewRecord:
-    kind: str  # "e1rm" | "reps" (reps — только для упражнений своим весом)
-    value: float
-    extra: Optional[float] = None
-
-
-def detect_new_records(
-    history_sessions: list[SessionStats], new_session: SessionStats
-) -> list[NewRecord]:
-    """Compare a freshly finished session against all prior sessions for the same exercise.
-
-    Рекорды считаются только по e1RM: «повторы на весе» давали отметку чуть ли
-    не на каждый сет с новым весом, и слово «рекорд» переставало что-то значить.
-    Исключение — упражнения своим весом: e1RM там тождественно нулю, и повторы
-    в сете остаются единственным осмысленным рекордом.
-    """
-    prior_pr = compute_personal_records(history_sessions)
-    records: list[NewRecord] = []
-
-    if new_session.is_bodyweight_mode:
-        prev_best = max(prior_pr.max_reps_at_weight.values(), default=0)
-        best = new_session.max_reps_in_set
-        if best > prev_best:
-            records.append(NewRecord(kind="reps", value=best))
-        return records
-
-    for s in new_session.sets:
-        val = e1rm(s.weight, s.reps, new_session.formula)
-        if val > prior_pr.max_e1rm:
-            records.append(NewRecord(kind="e1rm", value=val))
-            prior_pr.max_e1rm = val
-    return records
-
-
-@dataclass
 class ComparisonDelta:
     e1rm_delta: float
     tonnage_delta: float
