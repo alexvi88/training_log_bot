@@ -3229,7 +3229,31 @@ async def _finished_workout_card_text(workout, user, note: str | None, comment=_
     effective_comment = workout["ai_comment"] if comment is _UNSET else comment
     if effective_comment:
         suffix += "\n" + formatting.build_ai_comment_block(effective_comment)
+    if await _should_explain_e1rm(user, summary_fn):
+        suffix += "\n\n" + formatting.E1RM_HINT
     return formatting.fit_workout_text(summary_fn, suffix)
+
+
+# Сколько первых тренировок карточка объясняет e1RM. Дальше строка молчит: под
+# карточкой, которую читают после каждой тренировки, постоянная сноска — это
+# то, что пролистывают, а не читают (см. formatting.E1RM_HINT). На экране
+# прогресса она стоит всегда — туда и приходят разбираться с метрикой.
+_E1RM_HINT_WORKOUTS = 5
+
+
+async def _should_explain_e1rm(user, summary_fn) -> bool:
+    """Новичку — расшифровка e1RM под карточкой.
+
+    Аббревиатура, за которой стоит расчёт, а не поднятый вес: само число ничем
+    об этом не намекает. Три условия, и все обязательны — выключенные доп.
+    цифры (e1RM в карточке нет вовсе), шестая тренировка (уже насмотрелся) и
+    карточка без единой строки e1RM (одни подтягивания — объяснять нечего).
+    """
+    if not user["show_extra_stats"]:
+        return False
+    if await db.count_workouts(user["telegram_id"], "finished") > _E1RM_HINT_WORKOUTS:
+        return False
+    return "e1RM" in summary_fn(None)
 
 
 _NOTE_FLOW_KEYS = ("note_workout_id", "note_chat_id", "note_message_id", "note_return_state")

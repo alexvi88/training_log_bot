@@ -54,10 +54,12 @@ FOLD_MIN_CHARS = 300
 
 # e1RM is an abbreviation for a concept most people have never met, and the
 # number itself gives no hint that it's a calculation rather than a lift that
-# happened. The footnote lives on the progress screen and nowhere else: that's
-# the screen you open to interpret the metric, so a permanent line there is
-# reference material — under the workout card, read after every session, the
-# same line would just be something to scroll past.
+# happened. The footnote is permanent on the progress screen: that's the screen
+# you open to interpret the metric, so a standing line there is reference
+# material. Under the completion card it shows only for the first few workouts
+# (handlers.workout._should_explain_e1rm) — that card is where a newcomer meets
+# the term, but it's also read after every session, and a permanent line there
+# would be something to scroll past instead of read.
 E1RM_HINT = (
     "ℹ️ <i>e1RM — расчётный максимум в упражнении: какой вес ты смог бы поднять "
     "на один раз (посчитано на основе весов и повторов).</i>"
