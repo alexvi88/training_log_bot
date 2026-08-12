@@ -74,7 +74,7 @@ async def test_history_item_marks_record_inside_the_exercise(fresh_db, user_id):
     # Рекорд стоит внутри своего упражнения, отдельного списка под карточкой нет.
     lines = text.split("\n")
     ex_index = next(i for i, line in enumerate(lines) if "Жим лёжа" in line)
-    record_index = next(i for i, line in enumerate(lines) if "Рекорд e1RM" in line)
+    record_index = next(i for i, line in enumerate(lines) if "к рекорду" in line)
     assert ex_index < record_index < ex_index + 5
     assert "Рекорды и сравнения" not in text
 
@@ -108,5 +108,5 @@ async def test_history_item_records_do_not_add_a_second_list(fresh_db, user_id):
     assert await history.show_history_item(callback, w2)
 
     text = callback.message.answer.await_args.args[0]
-    assert text.count("🔥 <b>Рекорд e1RM</b>") == len(exercises)
+    assert text.count("🔥 +") == len(exercises)
     assert "Рекорды и сравнения" not in text

@@ -549,25 +549,28 @@ def format_block_record(
     «↳ e1RM», не должен получать e1RM через заднюю дверь. Рекорд повторов
     показывается всегда — он про повторы, которые и так на экране.
     """
-    parts = _block_record_parts(block, unit, show_extra)
-    if parts is None:
-        return None
-    label, tail = parts
-    return f"🔥 <b>{label}</b> — {tail}"
+    text = _block_record_text(block, unit, show_extra)
+    return None if text is None else f"🔥 {text}"
 
 
-def _block_record_parts(
+def _block_record_text(
     block: ExerciseBlockView, unit: str, show_extra: bool = True
-) -> tuple[str, str] | None:
-    """(подпись, продолжение) строки рекорда — общее у текстовой карточки и
-    картинки, которые различаются только оформлением."""
+) -> str | None:
+    """Фраза рекорда без значка — общая у текстовой карточки и картинки,
+    которые различаются только им (🔥 против ★).
+
+    Коротко и числом вперёд: «+1.3кг к рекорду», а не «Рекорд e1RM — на 1.3кг
+    выше прошлого». На тренировке, где рекорд стоит в каждом из шести блоков,
+    длинное предложение шесть раз подряд превращало карточку в полотно, а само
+    число — то единственное, что человек тут читает, — стояло в середине.
+    """
     if block.record_reps is not None:
         reps = block.record_reps
         word = plural_ru(reps, ("повтор", "повтора", "повторов"))
-        return "Рекорд", f"{reps} {word} в подходе"
+        return f"Рекорд — {reps} {word} в подходе"
     if block.record_e1rm_delta is not None and show_extra:
         u = UNIT_LABELS.get(unit, "кг")
-        return "Рекорд e1RM", f"на {format_weight(block.record_e1rm_delta)}{u} выше прошлого"
+        return f"+{format_weight(block.record_e1rm_delta)}{u} к рекорду"
     return None
 
 
@@ -1655,9 +1658,9 @@ def build_workout_card(
         # выше прошлого» — ровно то, ради чего её уносят. ★ вместо 🔥
         # — картинку рисует matplotlib, эмодзи там выходят пустыми квадратами
         # (см. charts.render_workout_card), а звёздочка есть в шрифте.
-        record = _block_record_parts(block, unit)
+        record = _block_record_text(block, unit)
         if record:
-            body.append(f"  ★ {record[0]} — {record[1]}")
+            body.append(f"  ★ {record}")
         exercise_count += 1
         set_count += len(block.sets)
         tonnage += block.tonnage
