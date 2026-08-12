@@ -256,40 +256,21 @@ async def test_voice_unparseable_asks_to_retry(fresh_db, user_id, monkeypatch):
     assert "Не понял" in message.reply.await_args.args[0]
 
 
-def test_logging_keyboard_has_repeat_once_there_is_something_to_repeat():
-    """«🔁 Повторить» вернулась на экран трекера (убрана была в #164).
+def test_logging_keyboard_omits_repeat_but_keeps_note():
+    """Кнопки повтора на экране нет — при живом обработчике live:repeat.
 
-    Повтор — самое частое действие в зале, и он всё это время работал: и «=»
-    текстом, и обработчик live:repeat, к которому просто не вело ни одной
-    кнопки. Про «=» знает тот, кто читал справку, а руками в хлорке проще
-    ткнуть.
+    Пробовали вернуть: в пару к «↩️ Удалить последний» она не встаёт (двадцать
+    символов, в половинной колонке обрежется), а своей строкой удлиняет и без
+    того высокий экран с вкладками. Повтор остаётся на «=» текстом.
     """
+    for has_sets in (True, False):
+        kb = keyboards.logging_keyboard([(1, "Bench")], active_id=1, has_sets=has_sets)
+        cbs = [b.callback_data for row in kb.inline_keyboard for b in row]
+        assert "live:repeat" not in cbs
+        assert "live:note:1" in cbs
     kb = keyboards.logging_keyboard([(1, "Bench")], active_id=1, has_sets=True)
     cbs = [b.callback_data for row in kb.inline_keyboard for b in row]
-    assert "live:repeat" in cbs
     assert "live:undo" in cbs
-    assert "live:note:1" in cbs
-
-
-def test_repeat_stays_hidden_until_the_first_set():
-    """Повторять нечего, пока ни одного подхода не записано."""
-    kb = keyboards.logging_keyboard([(1, "Bench")], active_id=1, has_sets=False)
-    cbs = [b.callback_data for row in kb.inline_keyboard for b in row]
-    assert "live:repeat" not in cbs
-    assert "live:note:1" in cbs
-
-
-def test_last_set_buttons_each_get_a_full_width_row():
-    """Обе просились в одну строку — оба действия про последний подход. Но
-    «↩️ Удалить последний» это двадцать символов, столько же, сколько у
-    «Закончить упражнение» на всю строку, и в половинной колонке Telegram
-    обрежет её многоточием. Пара «Суперсет»/«Заметка» живёт только потому, что
-    обе по девять-десять символов.
-    """
-    kb = keyboards.logging_keyboard([(1, "Bench")], active_id=1, has_sets=True)
-    for cb in ("live:repeat", "live:undo"):
-        row = next(r for r in kb.inline_keyboard if any(b.callback_data == cb for b in r))
-        assert len(row) == 1, f"{cb} должна занимать строку целиком"
 
 
 def test_logging_keyboard_note_button_is_labelled():
