@@ -579,23 +579,25 @@ def logging_keyboard(
     top_row = [InlineKeyboardButton(text="➕ Суперсет", callback_data="live:add_exercise")]
     if active_id is not None:
         top_row.append(InlineKeyboardButton(text="📝 Заметка", callback_data=f"live:note:{active_id}"))
+    # Тот же вес, другие повторы — одним тапом. Самый частый следующий шаг в
+    # зале: вес не меняется весь подход, а повторы плывут от усталости, и
+    # печатать «25 9» ради одной изменившейся цифры не хочется. Серединная
+    # кнопка заодно закрывает повтор один в один — та самая «🔁 Повторить»,
+    # которой на этом экране не нашлось места (см. историю в #164).
+    #
+    # Ряд НЕ внутри has_sets: на первом подходе подходов сегодня ещё нет, а вес и
+    # повторы берутся с прошлой тренировки (см. _reps_row_basis), и именно там
+    # кнопки полезнее всего. Пока это лежало в ветке has_sets, до last_reps дело
+    # просто не доходило — ряд не показывался ровно на первом подходе.
+    if last_reps:
+        b.row(*[
+            InlineKeyboardButton(text=str(n), callback_data=f"live:reps:{n}")
+            for n in reps_window(last_reps)
+        ])
+    b.row(*top_row)
     if has_sets:
-        # Тот же вес, другие повторы — одним тапом. Самый частый следующий шаг в
-        # зале: вес не меняется весь подход, а повторы плывут от усталости, и
-        # печатать «25 9» ради одной изменившейся цифры не хочется. Серединная
-        # кнопка заодно закрывает повтор один в один — та самая «🔁 Повторить»,
-        # которой на этом экране не нашлось места (см. историю в #164).
-        if last_reps:
-            b.row(*[
-                InlineKeyboardButton(text=str(n), callback_data=f"live:reps:{n}")
-                for n in reps_window(last_reps)
-            ])
-        b.row(*top_row)
         b.row(InlineKeyboardButton(text="↩️ Удалить последний", callback_data="live:undo"))
-        b.row(InlineKeyboardButton(text="✅ Закончить упражнение", callback_data="live:finish_exercise"))
-    else:
-        b.row(*top_row)
-        b.row(InlineKeyboardButton(text="✅ Закончить упражнение", callback_data="live:finish_exercise"))
+    b.row(InlineKeyboardButton(text="✅ Закончить упражнение", callback_data="live:finish_exercise"))
     return b.as_markup()
 
 
