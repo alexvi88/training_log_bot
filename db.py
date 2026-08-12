@@ -1761,13 +1761,24 @@ def _stem_filter(col: str, query: str) -> tuple[str, list[str]]:
     По слову, а не одной подстрокой целиком: «жим лёжа» должен находить «Жим
     штанги лёжа», где между словами запроса стоит третье. По основе, а не по
     слову: «приседания» должны находить «Присед» (см. search_terms).
+
+    Каждое слово превращается в ГРУППУ вариантов: сама основа плюс синонимы, и
+    внутри группы достаточно любого совпадения. Иначе человек, назвавший
+    упражнение своим словом, не находит ничего: «махи в стороны» при каталожном
+    «Разведение гантелей в стороны», «икры» при «Подъёме на носки». Стемминг
+    такое не лечит — слова не однокоренные (см. search_terms.query_groups).
     """
-    stems = search_terms.query_stems(query)
-    if not stems:
+    groups = search_terms.query_groups(query)
+    if not groups:
         # Пустой запрос — не повод показать весь каталог.
         return "0", []
-    clause = " AND ".join(f"py_fold({col}) LIKE '%' || ? || '%' ESCAPE '\\'" for _ in stems)
-    return clause, [_escape_like(s) for s in stems]
+    params: list[str] = []
+    clauses = []
+    for variants in groups:
+        ors = " OR ".join(f"py_fold({col}) LIKE '%' || ? || '%' ESCAPE '\\'" for _ in variants)
+        clauses.append(f"({ors})")
+        params.extend(_escape_like(v) for v in variants)
+    return " AND ".join(clauses), params
 
 
 async def search_exercises(user_id: int, query: str, limit: int = 20) -> list[aiosqlite.Row]:

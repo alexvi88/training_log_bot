@@ -2383,7 +2383,7 @@ async def _repeat_last_set(
     bot, state: FSMContext, user, data: dict
 ) -> tuple[float, int, float | None] | None:
     """Core of "log a copy of the active exercise's last set", shared by the
-    (currently button-less, see #164) repeat action and the "=" text command.
+    "🔁 Повторить" button, the live:repeat action and the "=" text command.
     Returns the (weight, reps, rpe) that was logged, or None if there was
     nothing yet to repeat."""
     active = data.get("active_exercise_id")
@@ -2603,10 +2603,12 @@ async def live_undo(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(StateFilter(WorkoutFlow.logging_set), F.data == "live:repeat")
 async def live_repeat_set(callback: CallbackQuery, state: FSMContext):
-    """One-tap copy of the last logged set — the "same weight, same reps" case that's
-    the most common in the gym, without retyping it with chalky hands. No button
-    currently sends this callback (trimmed in #164) — "=" typed in the tracker
-    is the live path now; this stays wired in case a button returns to it."""
+    """One-tap copy of the last logged set — the "same weight, same reps" case
+    that's the most common in the gym, without retyping it with chalky hands.
+
+    Кнопка «🔁 Повторить» в трекере (keyboards.logging_keyboard) шлёт сюда же,
+    куда и «=» текстом: про «=» знает только тот, кто читал справку. Обработчик
+    простоял подключённым без единой кнопки с #164."""
     data = await state.get_data()
     user = await db.get_user(callback.from_user.id)
     result = await _repeat_last_set(callback.bot, state, user, data)

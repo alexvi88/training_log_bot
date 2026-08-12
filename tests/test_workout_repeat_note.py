@@ -256,17 +256,38 @@ async def test_voice_unparseable_asks_to_retry(fresh_db, user_id, monkeypatch):
     assert "Не понял" in message.reply.await_args.args[0]
 
 
-def test_logging_keyboard_omits_repeat_but_keeps_note():
-    # The 🔁 Повторить button was removed from the live logging screen; 📝 note
-    # took over the slot freed by dropping the redundant "ℹ️ Упражнение" card.
-    for has_sets in (True, False):
-        kb = keyboards.logging_keyboard([(1, "Bench")], active_id=1, has_sets=has_sets)
-        cbs = [b.callback_data for row in kb.inline_keyboard for b in row]
-        assert "live:repeat" not in cbs
-        assert "live:note:1" in cbs
+def test_logging_keyboard_has_repeat_once_there_is_something_to_repeat():
+    """«🔁 Повторить» вернулась на экран трекера (убрана была в #164).
+
+    Повтор — самое частое действие в зале, и он всё это время работал: и «=»
+    текстом, и обработчик live:repeat, к которому просто не вело ни одной
+    кнопки. Про «=» знает тот, кто читал справку, а руками в хлорке проще
+    ткнуть.
+    """
     kb = keyboards.logging_keyboard([(1, "Bench")], active_id=1, has_sets=True)
     cbs = [b.callback_data for row in kb.inline_keyboard for b in row]
+    assert "live:repeat" in cbs
     assert "live:undo" in cbs
+    assert "live:note:1" in cbs
+
+
+def test_repeat_stays_hidden_until_the_first_set():
+    """Повторять нечего, пока ни одного подхода не записано."""
+    kb = keyboards.logging_keyboard([(1, "Bench")], active_id=1, has_sets=False)
+    cbs = [b.callback_data for row in kb.inline_keyboard for b in row]
+    assert "live:repeat" not in cbs
+    assert "live:note:1" in cbs
+
+
+def test_repeat_and_undo_share_one_row():
+    """Оба действия про последний подход — одно копирует, другое убирает, — и
+    в одной строке не съедают лишнюю высоту у экрана, где и так есть вкладки."""
+    kb = keyboards.logging_keyboard([(1, "Bench")], active_id=1, has_sets=True)
+    row = next(
+        r for r in kb.inline_keyboard
+        if any(b.callback_data == "live:repeat" for b in r)
+    )
+    assert [b.callback_data for b in row] == ["live:repeat", "live:undo"]
 
 
 def test_logging_keyboard_note_button_is_labelled():

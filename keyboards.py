@@ -532,7 +532,16 @@ def logging_keyboard(
     navigation/utility actions, not numeric input, to keep it short.
 
     The "➕ Суперсет"/"📝 Заметка" row is always available; once a set is logged,
-    "↩️ Удалить последний" appears directly above "✅ Закончить упражнение".
+    "🔁 Повторить"/"↩️ Удалить последний" appear directly above "✅ Закончить
+    упражнение".
+
+    Повтор — самое частое действие в зале: тот же вес, те же повторы. Он и
+    раньше работал, но только как «=» текстом (см. handlers/workout,
+    live:repeat — обработчик всё это время был подключён, кнопку к нему убрали
+    в #164). Про «=» знает тот, кто читал справку, а руками в хлорке проще
+    ткнуть. Встаёт в одну строку с «Удалить последний»: оба действия про
+    последний подход — одно его копирует, другое убирает, — так что лишней
+    строки на экране не появляется.
     """
     b = InlineKeyboardBuilder()
     if len(open_items) > 1:
@@ -553,7 +562,10 @@ def logging_keyboard(
         top_row.append(InlineKeyboardButton(text="📝 Заметка", callback_data=f"live:note:{active_id}"))
     if has_sets:
         b.row(*top_row)
-        b.row(InlineKeyboardButton(text="↩️ Удалить последний", callback_data="live:undo"))
+        b.row(
+            InlineKeyboardButton(text="🔁 Повторить", callback_data="live:repeat"),
+            InlineKeyboardButton(text="↩️ Удалить последний", callback_data="live:undo"),
+        )
         b.row(InlineKeyboardButton(text="✅ Закончить упражнение", callback_data="live:finish_exercise"))
     else:
         b.row(*top_row)
