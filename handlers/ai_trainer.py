@@ -986,6 +986,40 @@ _PROGRAM_GONE = (
 _UNDO_SLOTS = 8
 
 
+def _fold_undo_actions(
+    out: list[dict], store: dict, seq: int
+) -> tuple[list[dict], dict, int]:
+    """Несколько откатов за один ход — одной кнопкой на всё.
+
+    Просьба «удали всё из дневника еды» превращается в двадцать с лишним
+    вызовов, у каждого свой откат. Под ответом помещается keyboards.MAX_AI_ACTIONS
+    кнопок, то есть первые три: остальные восемнадцать записей вернуть было
+    нечем, а тренер при этом писал «отменишь кнопками отката ниже» — обещание,
+    которого экран не выполнял. Три кнопки с чужими названиями («Вернуть
+    «каша»») ещё и не давали понять, что вообще откатывается.
+
+    Поэтому откаты одного хода складываются в один: тап возвращает всё, что
+    этот ход сделал, в обратном порядке. Кнопка встаёт на место первого отката —
+    выше действий, которые тренер только предложил.
+    """
+    undo_slots = [i for i, a in enumerate(out) if a.get("is_undo")]
+    if len(undo_slots) < 2:
+        return out, store, seq
+    keys = [out[i]["callback"].split(":", 2)[2] for i in undo_slots]
+    items = [store.pop(k) for k in keys]
+    seq += 1
+    key = f"u{seq}"
+    store[key] = {"kind": "batch", "items": items}
+    word = formatting.plural_ru(len(items), ("изменение", "изменения", "изменений"))
+    folded = {
+        "label": f"↩️ Отменить всё — {len(items)} {word}",
+        "callback": f"ai:undo:{key}",
+        "is_undo": True,
+    }
+    rest = [a for i, a in enumerate(out) if i not in set(undo_slots)]
+    return rest[: undo_slots[0]] + [folded] + rest[undo_slots[0] :], store, seq
+
+
 async def _register_actions(state: FSMContext, actions: list[dict]) -> list[dict]:
     """Описания откатов — в FSM, а в кнопку — короткий ключ на них.
 
@@ -1044,6 +1078,8 @@ async def _register_actions(state: FSMContext, actions: list[dict]) -> list[dict
         else:
             out.append(action)
 
+    out, store, seq = _fold_undo_actions(out, store, seq)
+
     for stale in sorted(store, key=lambda k: int(k[1:]))[:-_UNDO_SLOTS]:
         del store[stale]
     for stale in sorted(feedback_store, key=lambda k: int(k[1:]))[:-_UNDO_SLOTS]:
@@ -1066,6 +1102,24 @@ async def _apply_undo(user_id: int, undo: dict) -> Optional[str]:
     прошлый ход — но сама строка в базе к этому моменту могла и смениться.
     """
     kind = undo.get("kind")
+
+    if kind == "batch":
+        # В обратном порядке: ход мог сначала создать упражнение, а потом
+        # записать в него подход — снимать надо с конца, иначе откат упрётся
+        # в то, что ещё на нём висит.
+        items = list(undo.get("items") or [])
+        done = 0
+        for item in reversed(items):
+            if await _apply_undo(user_id, item) is not None:
+                done += 1
+        if done == 0:
+            return None
+        word = formatting.plural_ru(done, ("изменение", "изменения", "изменений"))
+        if done < len(items):
+            # Часть уже не откатывалась — молчать об этом нельзя: человек
+            # решит, что вернулось всё.
+            return f"Вернул {done} {word} из {len(items)} — остальное уже правили руками"
+        return f"Вернул {done} {word}"
 
     if kind == "bodyweight":
         if await db.delete_bodyweight_log(int(undo["id"]), user_id):

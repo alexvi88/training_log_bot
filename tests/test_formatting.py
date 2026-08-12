@@ -166,19 +166,9 @@ def test_build_workout_summary_bodyweight_exercise_shows_no_delta_line():
     assert "[прошлая: 0×15]" in text
 
 
-def test_build_workout_summary_collapses_identical_consecutive_sets():
-    started = dt.datetime(2026, 6, 26, 18, 0)
-    blocks = [
-        ExerciseBlockView(
-            group_name="спина", exercise_name="Становая", sets=[(190.0, 5), (190.0, 5), (190.0, 5)]
-        )
-    ]
-    text = formatting.build_workout_summary(started, blocks)
-    assert "190×5 · 3 подхода" in text
-    assert "190×5, 190×5" not in text
-
-
-def test_build_workout_summary_does_not_collapse_non_consecutive_matches():
+def test_build_workout_summary_keeps_every_set_in_its_own_place():
+    """Порядок подходов — факт тренировки, а не шум: ни один не склеивается
+    с соседом и ни один не выпадает."""
     started = dt.datetime(2026, 6, 26, 18, 0)
     blocks = [
         ExerciseBlockView(
@@ -186,20 +176,7 @@ def test_build_workout_summary_does_not_collapse_non_consecutive_matches():
         )
     ]
     text = formatting.build_workout_summary(started, blocks)
-    assert "×2" not in text
-    assert "100×8" in text and "90×8" in text
-
-
-def test_build_workout_summary_collapses_previous_session_sets_too():
-    started = dt.datetime(2026, 6, 26, 18, 0)
-    blocks = [
-        ExerciseBlockView(
-            group_name="спина", exercise_name="Становая",
-            sets=[(190.0, 5)], prev_sets=[(180.0, 6), (180.0, 6), (180.0, 6)],
-        )
-    ]
-    text = formatting.build_workout_summary(started, blocks)
-    assert "[прошлая: 180×6 · 3 подхода]" in text
+    assert "  100×8, 90×8, 100×8" in text
 
 
 def test_build_workout_summary_max_chars_drops_oldest_exercises():
@@ -976,10 +953,10 @@ def test_history_list_marks_a_workout_with_no_exercises():
 # ---------- build_workout_card (the shareable image's text) ----------
 
 
-def test_workout_card_collapses_identical_sets_like_the_text_card():
-    """The image is what gets posted, and it was still spelling out every set
-    long after the message card learned to fold them — which is also what pushed
-    its lines past the card's fixed width."""
+def test_workout_card_prints_sets_on_one_line_like_the_text_card():
+    """Картинка и текст печатают подходы одинаково — строкой через запятую,
+    каждый подход своей записью. Ширину держит перенос (_wrap_card_line),
+    а не свёртка."""
     blocks = [
         ExerciseBlockView(
             group_name="грудь", exercise_name="chest press - horizontal machine",
@@ -990,8 +967,8 @@ def test_workout_card_collapses_identical_sets_like_the_text_card():
         dt.datetime(2026, 7, 26, 13), blocks
     )
     sets_line = body[1]
-    assert "83.6×8 · 10 подходов" in sets_line
-    assert sets_line.count("83.6×8") == 1
+    assert sets_line.count("83.6×8") == 10
+    assert "подходов)" not in sets_line
 
 
 def test_workout_card_footer_counts_every_set_not_the_collapsed_ones():
@@ -1333,18 +1310,35 @@ def test_format_delta_drops_the_trailing_zero_like_every_other_weight():
     assert formatting.format_delta(-38.25) == "↓38.2кг"
 
 
-def test_collapsed_sets_spell_out_the_word_instead_of_a_multiplier():
-    """«80×9 ×2» рядом с «80×9» читалось как ещё один вес на два повтора."""
-    assert formatting._collapse_formatted_sets(["80×9", "80×9"]) == ["80×9 · 2 подхода"]
-    assert formatting._collapse_formatted_sets(["80×9"] * 5) == ["80×9 · 5 подходов"]
-    # Одиночный подход остаётся как был — приписки «· 1 подход» быть не должно.
-    assert formatting._collapse_formatted_sets(["80×9", "75×10"]) == ["80×9", "75×10"]
+def test_workout_summary_does_not_collapse_identical_sets_at_all():
+    """«180×4, 180×4» честнее любой приписки: «×2» склеивалось глазом в один
+    подход с третьим числом, «(2 подхода)» в списке через запятую повисало так,
+    будто счёт про весь список. В одну строку экономить строки уже нечего."""
+    blocks = [
+        ExerciseBlockView(
+            group_name="спина", exercise_name="Становая",
+            sets=[(190.0, 4), (205.0, 4), (180.0, 4), (180.0, 4)],
+            prev_sets=[(200.0, 4), (180.0, 4), (180.0, 4)],
+            prev_started_at=dt.datetime(2026, 6, 19),
+        )
+    ]
+    text = formatting.build_workout_summary(dt.datetime(2026, 6, 26, 18), blocks)
+    assert "  190×4, 205×4, 180×4, 180×4" in text
+    assert "[прошлая: 200×4, 180×4, 180×4]" in text
+    for tail in ("×2", "подхода)", "· 2"):
+        assert tail not in text
 
 
-def test_collapsed_sets_declension_follows_russian_rules():
-    assert formatting._sets_word(1) == "подход"
-    assert formatting._sets_word(3) == "подхода"
-    assert formatting._sets_word(7) == "подходов"
-    assert formatting._sets_word(11) == "подходов"
-    assert formatting._sets_word(21) == "подход"
-    assert formatting._sets_word(22) == "подхода"
+def test_workout_summary_prints_todays_sets_on_one_line_like_the_previous_ones():
+    """Столбик буллетов на восемь упражнений разгонял карточку на три экрана,
+    и одна тренировка выглядела в двух видах: сегодня столбиком, прошлая —
+    строкой. Живой трекер (_tracker_body) печатает подходы строкой тоже."""
+    blocks = [
+        ExerciseBlockView(
+            group_name="спина", exercise_name="Становая",
+            sets=[(190.0, 4), (205.0, 4), (180.0, 4), (180.0, 4)],
+        )
+    ]
+    text = formatting.build_workout_summary(dt.datetime(2026, 6, 26, 18), blocks)
+    assert "  190×4, 205×4, 180×4, 180×4" in text
+    assert "• 190×4" not in text

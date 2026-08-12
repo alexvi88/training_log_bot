@@ -5,6 +5,11 @@ out anywhere, so a user who doesn't know the term reads the whole app in units
 they can't interpret. The explanation lives on the one screen you open *to
 interpret* the metric — permanently, since that's reference material — plus the
 two places a user goes looking on purpose (/help and the formula setting).
+
+The completion card is the exception that proves the rule: that's where a
+newcomer meets e1RM for the first time, so it explains the term for the first
+few workouts and then goes quiet. A permanent footnote under a card read after
+every single session is something to scroll past, not something to read.
 """
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -122,18 +127,44 @@ async def test_caption_with_the_footnote_still_fits_telegram(fresh_db, user_id):
     assert formatting.telegram_length(caption) <= formatting.CAPTION_LIMIT
 
 
-async def test_workout_card_stays_free_of_the_explanation(fresh_db, user_id):
-    """The completion card is read after every session; a permanent footnote
-    under it would be something to scroll past, not something to read."""
-    ex_id = await _seed_exercise(fresh_db, user_id, 100, 8, n=1)
-    saved = await fresh_db.get_workout((await fresh_db.list_workouts(user_id, limit=1))[0]["id"])
-    user = await fresh_db.get_user(user_id)
+async def _card_text(db, user_id: int) -> str:
+    saved = await db.get_workout((await db.list_workouts(user_id, limit=1))[0]["id"])
+    return await workout._finished_workout_card_text(
+        saved, await db.get_user(user_id), note=None, comment=None
+    )
 
-    text = await workout._finished_workout_card_text(saved, user, note=None)
+
+async def test_the_first_workout_cards_explain_the_metric(fresh_db, user_id):
+    """Карточка — первое место, где новичок вообще встречает e1RM: аббревиатура,
+    за которой стоит расчёт, а не поднятый вес."""
+    await _seed_exercise(fresh_db, user_id, 100, 8, n=1)
+
+    text = await _card_text(fresh_db, user_id)
+
+    assert "e1RM" in text
+    assert formatting.E1RM_HINT in text
+
+
+async def test_the_card_footnote_stops_once_the_athlete_has_seen_it(fresh_db, user_id):
+    """Постоянная сноска под карточкой, которую читают после каждой тренировки,
+    — это то, что пролистывают. Разбираться с метрикой приходят на экран
+    прогресса, там она и стоит всегда."""
+    await _seed_exercise(fresh_db, user_id, 100, 8, n=workout._E1RM_HINT_WORKOUTS + 1)
+
+    text = await _card_text(fresh_db, user_id)
 
     assert "e1RM" in text
     assert formatting.E1RM_HINT not in text
-    assert ex_id  # seeded exercise is what put the e1RM on the card
+
+
+async def test_no_card_footnote_when_extra_stats_are_off(fresh_db, user_id):
+    """Выключенные доп. цифры — e1RM на карточке нет вовсе, объяснять нечего."""
+    await _seed_exercise(fresh_db, user_id, 100, 8, n=1)
+    await fresh_db.update_user(user_id, show_extra_stats=0)
+
+    text = await _card_text(fresh_db, user_id)
+
+    assert "e1RM" not in text
 
 
 async def test_help_spells_out_the_term_on_the_full_screen():

@@ -54,10 +54,12 @@ FOLD_MIN_CHARS = 300
 
 # e1RM is an abbreviation for a concept most people have never met, and the
 # number itself gives no hint that it's a calculation rather than a lift that
-# happened. The footnote lives on the progress screen and nowhere else: that's
-# the screen you open to interpret the metric, so a permanent line there is
-# reference material — under the workout card, read after every session, the
-# same line would just be something to scroll past.
+# happened. The footnote is permanent on the progress screen: that's the screen
+# you open to interpret the metric, so a standing line there is reference
+# material. Under the completion card it shows only for the first few workouts
+# (handlers.workout._should_explain_e1rm) — that card is where a newcomer meets
+# the term, but it's also read after every session, and a permanent line there
+# would be something to scroll past instead of read.
 E1RM_HINT = (
     "ℹ️ <i>e1RM — расчётный максимум в упражнении: какой вес ты смог бы поднять "
     "на один раз (посчитано на основе весов и повторов).</i>"
@@ -533,37 +535,6 @@ def format_tonnage(total: float, unit: str = "kg") -> str:
     return f"{total:.0f}{u}"
 
 
-def _collapse_formatted_sets(formatted: list[str]) -> list[str]:
-    """Merges a run of consecutive, identically-formatted sets into one entry
-    with an "×N" suffix — the same notation the parser already accepts on input
-    (e.g. "100x8x3"), so a straight run of work sets reads as one line instead
-    of N on the finished-workout card.
-    """
-    collapsed: list[tuple[str, int]] = []
-    for s in formatted:
-        if collapsed and collapsed[-1][0] == s:
-            collapsed[-1] = (s, collapsed[-1][1] + 1)
-        else:
-            collapsed.append((s, 1))
-    # «80×9 · 2 подхода», а не «80×9 ×2»: счётчик тем же знаком «×», что и
-    # вес×повторы, склеивался глазом в «80×9×2» — читалось как один подход с
-    # третьим числом.
-    return [
-        f"{s} · {n} " + _sets_word(n) if n > 1 else s
-        for s, n in collapsed
-    ]
-
-
-def _sets_word(n: int) -> str:
-    """«подход» / «подхода» / «подходов» — счётчик стоит рядом с числом, и
-    «2 подходов» бросается в глаза сильнее, чем экономия на согласовании."""
-    if n % 10 == 1 and n % 100 != 11:
-        return "подход"
-    if n % 10 in (2, 3, 4) and n % 100 not in (12, 13, 14):
-        return "подхода"
-    return "подходов"
-
-
 def format_block_record(
     block: ExerciseBlockView, unit: str = "kg", show_extra: bool = True,
 ) -> str | None:
@@ -607,8 +578,18 @@ def _render_single_block(block: ExerciseBlockView, show_extra: bool, unit: str =
     if block.note:
         lines.append(f"  📝 <i>{escape(block.note)}</i>")
     if block.sets:
+        # Одной строкой через запятую — тем же форматом, которым ниже печатается
+        # «[прошлая: …]». Столбик буллетов на восемь упражнений разгонял карточку
+        # на три экрана, и одна и та же тренировка выглядела в двух разных видах:
+        # сегодняшние подходы столбиком, прошлые — строкой.
+        #
+        # Одинаковые подходы подряд НЕ сворачиваются: «180×4, 180×4» честнее
+        # любой приписки. «180×4 ×2» склеивалось глазом в один подход с третьим
+        # числом, «180×4 (2 подхода)» в списке через запятую повисало так, будто
+        # счёт про весь список. Когда подходы стояли столбиком, свёртка экономила
+        # строки — в одну строку экономить уже нечего.
         formatted = [format_set(w, r, block.rpe_for(i)) for i, (w, r) in enumerate(block.sets)]
-        lines.extend(f"  • {s}" for s in _collapse_formatted_sets(formatted))
+        lines.append(f"  {', '.join(formatted)}")
     else:
         lines.append("  <i>подходов нет</i>")
     # Прошлый рекорд стоял с прошлой же тренировки — тогда «↑+5.7 vs 03.08» и
@@ -632,7 +613,7 @@ def _render_single_block(block: ExerciseBlockView, show_extra: bool, unit: str =
         lines.append(f"  {record}")
     if block.prev_sets:
         formatted_prev = [format_set(w, r, block.prev_rpe_for(i)) for i, (w, r) in enumerate(block.prev_sets)]
-        prev_str = ", ".join(_collapse_formatted_sets(formatted_prev))
+        prev_str = ", ".join(formatted_prev)
         lines.append(f"<i>  [прошлая: {prev_str}]</i>")
     return lines
 
@@ -1667,7 +1648,7 @@ def build_workout_card(
             # work sets otherwise spells every one of them out, which on the image
             # is what pushes the line past the card's width.
             formatted = [format_set(w, r, block.rpe_for(i)) for i, (w, r) in enumerate(block.sets)]
-            body.append("  " + ", ".join(_collapse_formatted_sets(formatted)))
+            body.append("  " + ", ".join(formatted))
         else:
             body.append("  — без подходов")
         # Рекорд едет и на картинку: её уносят в чат с друзьями, и «на 5.7кг

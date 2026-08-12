@@ -769,3 +769,101 @@ async def test_feedback_letter_is_capped(fresh_db, user_id, monkeypatch):
     )
 
     assert len(action["feedback"]["text"]) == ai_trainer.FEEDBACK_MAX_LEN
+
+
+# ---------- один ход — одна кнопка отката ----------
+
+
+async def test_many_undos_in_one_turn_fold_into_a_single_button(fresh_db, user_id):
+    """«Удали всё из дневника еды» — это два десятка вызовов, у каждого свой
+    откат. Под ответ влезало keyboards.MAX_AI_ACTIONS кнопок, то есть первые
+    три: остальные записи вернуть было нечем, а тренер писал «отменишь
+    кнопками отката ниже»."""
+    state = _state(user_id)
+
+    buttons = await ai_handler._register_actions(
+        state,
+        [
+            {"label": f"↩️ Вернуть «еда {i}»", "undo": {"kind": "bodyweight", "id": i}}
+            for i in range(1, 22)
+        ],
+    )
+
+    assert len(buttons) == 1
+    assert buttons[0]["label"] == "↩️ Отменить всё — 21 изменение"
+    assert buttons[0]["is_undo"] is True
+    store = (await state.get_data())["ai_undo"]
+    assert len(store) == 1
+    folded = next(iter(store.values()))
+    assert folded["kind"] == "batch"
+    assert len(folded["items"]) == 21
+
+
+async def test_a_single_undo_keeps_its_own_name(fresh_db, user_id):
+    """Одна правка — одна понятная кнопка: «Отменить всё» вместо «Вернуть имя
+    «Жим»» скрывало бы, что именно откатывается."""
+    state = _state(user_id)
+
+    buttons = await ai_handler._register_actions(
+        state, [{"label": "↩️ Вернуть имя «Жим»", "undo": {"kind": "bodyweight", "id": 1}}]
+    )
+
+    assert [b["label"] for b in buttons] == ["↩️ Вернуть имя «Жим»"]
+
+
+async def test_folding_leaves_proposed_actions_where_they_were(fresh_db, user_id):
+    """Откаты складываются между собой, но не съедают кнопки, которые тренер
+    только предложил, — и общая встаёт на место первого отката."""
+    state = _state(user_id)
+
+    buttons = await ai_handler._register_actions(
+        state,
+        [
+            {"label": "🗄 В архив: Жим", "callback": "rt:exarchask:5"},
+            {"label": "↩️ Вернуть A", "undo": {"kind": "bodyweight", "id": 1}},
+            {"label": "↩️ Вернуть B", "undo": {"kind": "bodyweight", "id": 2}},
+        ],
+    )
+
+    assert [b["label"] for b in buttons] == [
+        "🗄 В архив: Жим",
+        "↩️ Отменить всё — 2 изменения",
+    ]
+
+
+async def test_folded_undo_rolls_every_change_back(fresh_db, user_id):
+    """Тап по общей кнопке возвращает всё, что сделал этот ход."""
+    db = fresh_db
+    ids = [await db.add_food_entry(user_id, "2026-08-08", f"еда {i}") for i in range(3)]
+
+    done = await ai_handler._apply_undo(
+        user_id, {"kind": "batch", "items": [{"kind": "food", "id": i} for i in ids]}
+    )
+
+    assert done == "Вернул 3 изменения"
+    assert await db.list_food_entries(user_id, "2026-08-08") == []
+
+
+async def test_folded_undo_says_how_much_it_could_not_return(fresh_db, user_id):
+    """Часть записей успели поправить руками — молчать об этом нельзя: человек
+    решит, что вернулось всё."""
+    db = fresh_db
+    kept = await db.add_food_entry(user_id, "2026-08-08", "каша")
+
+    done = await ai_handler._apply_undo(
+        user_id,
+        {"kind": "batch", "items": [{"kind": "food", "id": kept}, {"kind": "food", "id": 999999}]},
+    )
+
+    assert done == "Вернул 1 изменение из 2 — остальное уже правили руками"
+
+
+async def test_folded_undo_reports_failure_when_nothing_came_back(fresh_db, user_id):
+    """Ни одного отката — это не «вернул 0», а честное «не вышло»: обработчик
+    покажет алерт вместо бодрого подтверждения."""
+    done = await ai_handler._apply_undo(
+        user_id,
+        {"kind": "batch", "items": [{"kind": "food", "id": 999998}, {"kind": "food", "id": 999999}]},
+    )
+
+    assert done is None
