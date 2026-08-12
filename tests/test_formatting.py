@@ -592,9 +592,10 @@ def test_record_older_than_the_previous_session_keeps_both_numbers():
     assert "🔥 +4кг к рекорду" in text
 
 
-def test_render_block_puts_record_next_to_its_sets():
-    """Рекорд читается там же, где подходы, которыми он поставлен, — отдельного
-    списка «Рекорды и сравнения» под карточкой больше нет."""
+def test_render_block_puts_record_right_under_its_sets():
+    """Рекорд стоит сразу под подходами, которыми он и поставлен: это главное,
+    что человек в блоке ищет, и оно не ждёт своей очереди за расчётным
+    максимумом. Отдельного списка «Рекорды и сравнения» под карточкой нет."""
     block = formatting.ExerciseBlockView(
         group_name="спина",
         exercise_name="Тяга",
@@ -604,9 +605,14 @@ def test_render_block_puts_record_next_to_its_sets():
         record_e1rm_delta=9.1,
     )
     text = formatting.build_workout_summary(dt.datetime(2026, 8, 7), [block])
-    lines = text.split("\n")
-    e1rm_index = next(i for i, line in enumerate(lines) if "↳ e1RM" in line)
-    assert lines[e1rm_index + 1] == "  🔥 +9.1кг к рекорду"
+    lines = [line for line in text.split("\n") if line.strip()]
+
+    assert lines[-4:] == [
+        "  100×5",
+        "  🔥 +9.1кг к рекорду",
+        "  ↳ e1RM 116.7кг (↑11.7кг vs 03.08)",
+        "<i>  [прошлая: 90×5]</i>",
+    ]
 
 
 # ---------- format_progress_screen ----------

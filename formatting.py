@@ -604,6 +604,12 @@ def _render_single_block(block: ExerciseBlockView, show_extra: bool, unit: str =
         and block.prev_started_at is not None
         and abs((block.top_e1rm - block.prev_top_e1rm) - block.record_e1rm_delta) < 0.05
     )
+    # Порядок строк: подходы → рекорд → e1RM → прошлая. Рекорд стоит сразу под
+    # подходами, которыми он и поставлен, — это главное, что человек в блоке
+    # ищет, и оно не должно ждать своей очереди за расчётным максимумом.
+    record = format_block_record(block, unit, show_extra)
+    if record:
+        lines.append(f"  {record}")
     if show_extra and block.sets and not block.is_bodyweight:
         vs_prev = ""
         if block.prev_sets and block.prev_started_at is not None and not prev_holds_the_record:
@@ -611,9 +617,6 @@ def _render_single_block(block: ExerciseBlockView, show_extra: bool, unit: str =
             delta = block.top_e1rm - block.prev_top_e1rm
             vs_prev = f" ({format_delta(delta, unit)} vs {when})"
         lines.append(f"  ↳ e1RM {format_weight(block.top_e1rm)}{u}{vs_prev}")
-    record = format_block_record(block, unit, show_extra)
-    if record:
-        lines.append(f"  {record}")
     if block.prev_sets:
         formatted_prev = [format_set(w, r, block.prev_rpe_for(i)) for i, (w, r) in enumerate(block.prev_sets)]
         prev_str = ", ".join(formatted_prev)
