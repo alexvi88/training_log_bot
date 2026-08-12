@@ -174,7 +174,7 @@ def test_build_workout_summary_collapses_identical_consecutive_sets():
         )
     ]
     text = formatting.build_workout_summary(started, blocks)
-    assert "190×5 · 3 подхода" in text
+    assert "190×5 (3 подхода)" in text
     assert "190×5, 190×5" not in text
 
 
@@ -199,7 +199,7 @@ def test_build_workout_summary_collapses_previous_session_sets_too():
         )
     ]
     text = formatting.build_workout_summary(started, blocks)
-    assert "[прошлая: 180×6 · 3 подхода]" in text
+    assert "[прошлая: 180×6 (3 подхода)]" in text
 
 
 def test_build_workout_summary_max_chars_drops_oldest_exercises():
@@ -990,7 +990,7 @@ def test_workout_card_collapses_identical_sets_like_the_text_card():
         dt.datetime(2026, 7, 26, 13), blocks
     )
     sets_line = body[1]
-    assert "83.6×8 · 10 подходов" in sets_line
+    assert "83.6×8 (10 подходов)" in sets_line
     assert sets_line.count("83.6×8") == 1
 
 
@@ -1335,8 +1335,8 @@ def test_format_delta_drops_the_trailing_zero_like_every_other_weight():
 
 def test_collapsed_sets_spell_out_the_word_instead_of_a_multiplier():
     """«80×9 ×2» рядом с «80×9» читалось как ещё один вес на два повтора."""
-    assert formatting._collapse_formatted_sets(["80×9", "80×9"]) == ["80×9 · 2 подхода"]
-    assert formatting._collapse_formatted_sets(["80×9"] * 5) == ["80×9 · 5 подходов"]
+    assert formatting._collapse_formatted_sets(["80×9", "80×9"]) == ["80×9 (2 подхода)"]
+    assert formatting._collapse_formatted_sets(["80×9"] * 5) == ["80×9 (5 подходов)"]
     # Одиночный подход остаётся как был — приписки «· 1 подход» быть не должно.
     assert formatting._collapse_formatted_sets(["80×9", "75×10"]) == ["80×9", "75×10"]
 
@@ -1348,3 +1348,18 @@ def test_collapsed_sets_declension_follows_russian_rules():
     assert formatting._sets_word(11) == "подходов"
     assert formatting._sets_word(21) == "подход"
     assert formatting._sets_word(22) == "подхода"
+
+
+def test_workout_summary_prints_todays_sets_on_one_line_like_the_previous_ones():
+    """Столбик буллетов на восемь упражнений разгонял карточку на три экрана,
+    и одна тренировка выглядела в двух видах: сегодня столбиком, прошлая —
+    строкой. Живой трекер (_tracker_body) печатает подходы строкой тоже."""
+    blocks = [
+        ExerciseBlockView(
+            group_name="спина", exercise_name="Становая",
+            sets=[(190.0, 4), (205.0, 4), (180.0, 4), (180.0, 4)],
+        )
+    ]
+    text = formatting.build_workout_summary(dt.datetime(2026, 6, 26, 18), blocks)
+    assert "  190×4, 205×4, 180×4 (2 подхода)" in text
+    assert "• 190×4" not in text

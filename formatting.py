@@ -548,8 +548,11 @@ def _collapse_formatted_sets(formatted: list[str]) -> list[str]:
     # «80×9 · 2 подхода», а не «80×9 ×2»: счётчик тем же знаком «×», что и
     # вес×повторы, склеивался глазом в «80×9×2» — читалось как один подход с
     # третьим числом.
+    # Счётчик в скобках, а не через «·»: подходы теперь печатаются одной строкой
+    # через запятую, и «134×10 · 2 подхода, 120×12 · 2 подхода» читается так,
+    # будто счёт относится ко всему списку. Скобка привязывает его к своему весу.
     return [
-        f"{s} · {n} " + _sets_word(n) if n > 1 else s
+        f"{s} ({n} {_sets_word(n)})" if n > 1 else s
         for s, n in collapsed
     ]
 
@@ -607,8 +610,12 @@ def _render_single_block(block: ExerciseBlockView, show_extra: bool, unit: str =
     if block.note:
         lines.append(f"  📝 <i>{escape(block.note)}</i>")
     if block.sets:
+        # Одной строкой через запятую — тем же форматом, которым ниже печатается
+        # «[прошлая: …]». Столбик буллетов на восемь упражнений разгонял карточку
+        # на три экрана, и одна и та же тренировка выглядела в двух разных видах:
+        # сегодняшние подходы столбиком, прошлые — строкой.
         formatted = [format_set(w, r, block.rpe_for(i)) for i, (w, r) in enumerate(block.sets)]
-        lines.extend(f"  • {s}" for s in _collapse_formatted_sets(formatted))
+        lines.append(f"  {', '.join(_collapse_formatted_sets(formatted))}")
     else:
         lines.append("  <i>подходов нет</i>")
     # Прошлый рекорд стоял с прошлой же тренировки — тогда «↑+5.7 vs 03.08» и
