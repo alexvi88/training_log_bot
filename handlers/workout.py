@@ -424,6 +424,9 @@ def _logging_hint(
     # чтобы понять всё остальное. Не под show_instruction: подсказка ввода
     # показывается только новичкам, а ряд видят все, включая тех, кто в боте
     # давно и для кого он появился впервые.
+    # Строка идёт В САМЫЙ НИЗ подсказки: это мелкая справка про кнопки, а не
+    # факт о тренировке. Сверху её место занимают план на сегодня и
+    # предупреждение о подозрительном весе — то, что человек обязан прочитать.
     reps_row_line = ""
     if reps_row:
         row_weight, _row_reps, from_last_time = reps_row
@@ -441,7 +444,7 @@ def _logging_hint(
         # that arrive by other routes ("N: 100 8" edits) still get the nudge.
         warning = None
     warning_line = f"{warning}\n" if warning else ""
-    lead = f"{reps_row_line}{target_line}{warning_line}"
+    lead = f"{target_line}{warning_line}"
     if last_session:
         sets_str = ", ".join(formatting.format_set(w, r, rpe) for w, r, rpe in last_session)
         line = f"💡 В прошлый раз: {sets_str}"
@@ -457,10 +460,18 @@ def _logging_hint(
                     for w, r in (today_sets or [])
                 )
                 line += f"\n{formatting.format_progression_hint(suggestion, achieved)}"
-        return f"{lead}<i>{line}</i>\n\n{base}" if base else f"{lead}<i>{line}</i>"
-    if lead:
-        return f"{lead}\n{base}" if base else lead.rstrip("\n")
-    return base or ""
+        body = f"{lead}<i>{line}</i>\n\n{base}" if base else f"{lead}<i>{line}</i>"
+    elif lead:
+        body = f"{lead}\n{base}" if base else lead.rstrip("\n")
+    else:
+        body = base or ""
+    # Справка про кнопки приклеивается последней и отделяется чертой: выше идут
+    # план на сегодня, предупреждение о весе и прошлый раз — то, что человек
+    # читает, а это подпись к цифрам, и мешаться с целями ей нечего.
+    if reps_row_line:
+        footer = reps_row_line.rstrip("\n")
+        return f"{body}\n{formatting.DIVIDER}\n{footer}" if body else footer
+    return body
 
 
 async def _sets_beat_record(

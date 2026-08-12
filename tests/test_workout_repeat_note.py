@@ -383,9 +383,23 @@ def test_reps_window_centres_on_the_last_set():
     assert keyboards.reps_window(10).index(10) == 3
 
 
+def test_reps_window_keeps_six_buttons_from_four_reps_up():
+    """Рабочий диапазон: три ниже, два выше, всегда шесть кнопок."""
+    for last in (4, 5, 7, 8, 10, 12, 20):
+        window = keyboards.reps_window(last)
+        assert window == list(range(last - 3, last + 3)), last
+        assert len(window) == 6
+
+
 def test_reps_window_slides_up_instead_of_shrinking_near_one():
     """После двойки нужны «1 2 3 4 5 6», а не «1 2 3 4»: иначе у того, кто
-    работает в силовом диапазоне, кнопок почти не остаётся."""
+    работает в силовом диапазоне, кнопок почти не остаётся.
+
+    Цена этого — на 1-3 повторах асимметрия переворачивается: у тройки выходит
+    два варианта ниже и три выше, потому что ниже единицы повторов не бывает и
+    окну некуда расти вниз. Шесть кнопок выбраны осознанно как важнее ровной
+    асимметрии, а случай редкий: последний подход на 1-3 повтора.
+    """
     for last in (1, 2, 3):
         window = keyboards.reps_window(last)
         assert len(window) == 6
