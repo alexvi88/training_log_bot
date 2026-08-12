@@ -584,8 +584,11 @@ async def test_pick_template_previews_without_adding_it(fresh_db, user_id):
 
     await workout.pick_template_preview(callback, state)
 
-    callback.message.answer_photo.assert_awaited_once()
-    kb = callback.message.answer_photo.await_args.kwargs["reply_markup"]
+    # Обе позиции, а не images[0] — тот же помощник, что и на экране каталога.
+    media = callback.message.answer_media_group.await_args.args[0]
+    assert len(media) == 2
+
+    kb = callback.message.answer.await_args.kwargs["reply_markup"]
     callback_datas = [b.callback_data for row in kb.inline_keyboard for b in row]
     assert f"pick:tpladd:{template_id}" in callback_datas
     assert await db.count_user_exercises(user_id) == 0

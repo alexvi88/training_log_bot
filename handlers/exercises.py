@@ -209,17 +209,12 @@ async def exm_preview_template(callback: CallbackQuery, state: FSMContext):
     images = exercise_media.get_images(template["name"])
     with suppress(TelegramBadRequest):
         await callback.message.delete()
-    if images:
-        # Rich-сообщение (Bot API 10.2, InputRichMessage) пробовали вместо
-        # photo+caption — фиксить обрезку описания на 1024 символах. Живой
-        # прогон: Telegram Web принимает отправку без ошибки, но фото молча
-        # не показывает — хуже старого поведения, а не деградирует к нему,
-        # и это никаким try/except на стороне бота не поймать. Откатили.
-        await callback.message.answer_photo(
-            FSInputFile(images[0]), caption=text, reply_markup=kb, parse_mode="HTML"
-        )
-    else:
-        await callback.message.answer(text, reply_markup=kb, parse_mode="HTML")
+    # Rich-сообщение (Bot API 10.2, InputRichMessage) пробовали вместо
+    # photo+caption — фиксить обрезку описания на 1024 символах. Живой
+    # прогон: Telegram Web принимает отправку без ошибки, но фото молча
+    # не показывает — хуже старого поведения, а не деградирует к нему,
+    # и это никаким try/except на стороне бота не поймать. Откатили.
+    await _send_template_preview(callback.message, template, text, kb, images)
     await callback.answer()
 
 
@@ -418,6 +413,44 @@ async def _exercise_group_name(ex) -> str | None:
         return None
     group = await db.get_muscle_group(ex["primary_group_id"])
     return group["name"] if group else None
+
+
+async def _send_template_preview(message, template, text: str, kb, images: list[str]) -> None:
+    """Предпросмотр шаблона: ОБЕ позиции упражнения плюс кнопки.
+
+    Раньше отправлялось images[0] — одна картинка из двух, вторая молча
+    выбрасывалась. Причина была техническая: у медиагруппы не может быть
+    инлайн-клавиатуры, а тут нужны «Добавить» и «Назад», поэтому брали
+    answer_photo, который держит и то и другое, но показывает один кадр. Для
+    упражнения это половина смысла: пара — начальное и конечное положение, и
+    без второго кадра не видно самого движения.
+
+    Решение то же, каким уже сделана карточка упражнения (см.
+    _send_exercise_images и _render_exercise_card): картинки уходят
+    медиагруппой с описанием в подписи, а кнопки — следующим сообщением, где
+    остаётся только название. Название там не для красоты: фото уезжает вверх
+    при прокрутке, и голое «Управление» не говорит, к чему кнопки.
+    """
+    if not images:
+        await message.answer(text, reply_markup=kb, parse_mode="HTML")
+        return
+    if len(images) == 1:
+        await message.answer_photo(
+            FSInputFile(images[0]), caption=text, reply_markup=kb, parse_mode="HTML"
+        )
+        return
+    media = [
+        InputMediaPhoto(
+            media=FSInputFile(path),
+            caption=formatting.clamp_caption(text) if i == 0 else None,
+            parse_mode="HTML" if i == 0 else None,
+        )
+        for i, path in enumerate(images)
+    ]
+    await message.answer_media_group(media)
+    await message.answer(
+        f"<b>{escape(template['display_name'])}</b>", reply_markup=kb, parse_mode="HTML"
+    )
 
 
 async def _exercise_detail_payload(ex, state: FSMContext, with_info: bool = True):

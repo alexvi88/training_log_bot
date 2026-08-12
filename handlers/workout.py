@@ -1932,12 +1932,12 @@ async def pick_template_preview(callback: CallbackQuery, state: FSMContext):
     text = _exercise_info_text(template, with_created=False)
     kb = keyboards.template_preview_keyboard(template_id, prefix="pick")
     images = exercise_media.get_images(template["name"])
-    if images:
-        await callback.message.answer_photo(
-            FSInputFile(images[0]), caption=text, reply_markup=kb, parse_mode="HTML"
-        )
-    else:
-        await callback.message.answer(text, reply_markup=kb, parse_mode="HTML")
+    # Обе позиции, а не images[0]: пара кадров — начальное и конечное положение,
+    # и по одному не видно самого движения. Помощник общий с экраном каталога,
+    # там же и разбор, почему клавиатура едет отдельным сообщением.
+    from handlers.exercises import _send_template_preview
+
+    await _send_template_preview(callback.message, template, text, kb, images)
     await callback.answer()
 
 
