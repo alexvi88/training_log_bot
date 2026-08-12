@@ -532,12 +532,12 @@ def _record_block(**kwargs):
 
 def test_format_block_record_e1rm_delta():
     text = formatting.format_block_record(_record_block(record_e1rm_delta=9.1))
-    assert text == "🔥 <b>Рекорд e1RM</b> — на 9.1кг выше прошлого"
+    assert text == "🔥 +9.1кг к рекорду"
 
 
 def test_format_block_record_e1rm_respects_unit():
     text = formatting.format_block_record(_record_block(record_e1rm_delta=9.1), unit="lb")
-    assert text.endswith("9.1lb выше прошлого")
+    assert text == "🔥 +9.1lb к рекорду"
 
 
 def test_format_block_record_e1rm_hidden_without_extra_stats():
@@ -548,7 +548,7 @@ def test_format_block_record_e1rm_hidden_without_extra_stats():
 def test_format_block_record_reps_survives_hidden_extra_stats():
     block = _record_block(record_reps=15)
     assert formatting.format_block_record(block, show_extra=False) == (
-        "🔥 <b>Рекорд</b> — 15 повторов в подходе"
+        "🔥 Рекорд — 15 повторов в подходе"
     )
 
 
@@ -573,7 +573,7 @@ def test_record_from_the_previous_session_prints_its_delta_once():
     block.record_e1rm_delta = block.top_e1rm - block.prev_top_e1rm
     text = formatting.build_workout_summary(dt.datetime(2026, 8, 7), [block])
     assert "vs 03.08" not in text
-    assert "выше прошлого" in text
+    assert "к рекорду" in text
 
 
 def test_record_older_than_the_previous_session_keeps_both_numbers():
@@ -589,7 +589,7 @@ def test_record_older_than_the_previous_session_keeps_both_numbers():
     )
     text = formatting.build_workout_summary(dt.datetime(2026, 8, 7), [block])
     assert "vs 03.08" in text
-    assert "на 4кг выше прошлого" in text
+    assert "🔥 +4кг к рекорду" in text
 
 
 def test_render_block_puts_record_next_to_its_sets():
@@ -606,7 +606,7 @@ def test_render_block_puts_record_next_to_its_sets():
     text = formatting.build_workout_summary(dt.datetime(2026, 8, 7), [block])
     lines = text.split("\n")
     e1rm_index = next(i for i, line in enumerate(lines) if "↳ e1RM" in line)
-    assert lines[e1rm_index + 1] == "  🔥 <b>Рекорд e1RM</b> — на 9.1кг выше прошлого"
+    assert lines[e1rm_index + 1] == "  🔥 +9.1кг к рекорду"
 
 
 # ---------- format_progress_screen ----------
@@ -1235,7 +1235,7 @@ def test_workout_card_image_carries_the_record_without_emoji():
         group_name="спина", exercise_name="Тяга", sets=[(110.0, 5)], record_e1rm_delta=5.7
     )
     _title, body, _footer, _note = formatting.build_workout_card(dt.datetime(2026, 8, 7), [block])
-    assert "  ★ Рекорд e1RM — на 5.7кг выше прошлого" in body
+    assert "  ★ +5.7кг к рекорду" in body
     assert "🔥" not in "".join(body)
 
 
@@ -1342,3 +1342,17 @@ def test_workout_summary_prints_todays_sets_on_one_line_like_the_previous_ones()
     text = formatting.build_workout_summary(dt.datetime(2026, 6, 26, 18), blocks)
     assert "  190×4, 205×4, 180×4, 180×4" in text
     assert "• 190×4" not in text
+
+
+def test_record_line_leads_with_the_number_not_the_word():
+    """«+1.3кг к рекорду», а не «Рекорд e1RM — на 1.3кг выше прошлого»: на
+    тренировке, где рекорд стоит в каждом из шести блоков, длинное предложение
+    шесть раз подряд превращало карточку в полотно, а число — единственное, что
+    тут читают, — стояло в середине."""
+    block = ExerciseBlockView(
+        group_name="спина", exercise_name="Тяга", sets=[(110.0, 5)], record_e1rm_delta=1.3
+    )
+    text = formatting.build_workout_summary(dt.datetime(2026, 8, 11), [block])
+
+    assert "  🔥 +1.3кг к рекорду" in text
+    assert "выше прошлого" not in text
