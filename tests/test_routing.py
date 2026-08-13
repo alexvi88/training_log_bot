@@ -11,10 +11,10 @@ from unittest.mock import AsyncMock
 import pytest
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.context import FSMContext
-from aiogram.types import Chat, Message, Update, User
+from aiogram.types import Chat, Message, MessageOriginChannel, Update, User
 
 import main
-from fsm import FeedbackFlow
+from fsm import AITrainerFlow, FeedbackFlow
 
 pytestmark = pytest.mark.asyncio
 
@@ -33,7 +33,7 @@ def dispatcher() -> Dispatcher:
     return dp
 
 
-async def _feed(dp: Dispatcher, text: str) -> list[str]:
+async def _feed(dp: Dispatcher, text: str, *, forward_origin=None) -> list[str]:
     """Прогнать сообщение через маршрутизацию и вернуть, кто его забрал.
 
     Хендлеры на время прогона подменяются заглушками (нам нужен победитель, а
@@ -63,6 +63,7 @@ async def _feed(dp: Dispatcher, text: str) -> list[str]:
         chat=Chat(id=_CHAT_ID, type="private"),
         from_user=User(id=_CHAT_ID, is_bot=False, first_name="Recipient"),
         text=text,
+        forward_origin=forward_origin,
     ).as_(bot)
     try:
         await dp.feed_update(bot, Update(update_id=1, message=message))
@@ -131,6 +132,29 @@ async def test_plain_start_still_opens_the_main_menu(dispatcher):
     """При этом обычный /start обязан остаться за workout.cmd_start —
     лечение не должно увести к шарингу всех подряд."""
     assert await _feed(dispatcher, "/start") == ["handlers.workout.cmd_start"]
+
+
+async def test_forwarded_post_reaches_factcheck_even_mid_ai_chat(dispatcher, monkeypatch):
+    """Регрессия на handlers/factcheck.py: форвард — самостоятельное действие,
+    а не ответ на вопрос текущего экрана, и должен перехватываться раньше
+    состояний FSM. Без этого форвард поста посреди диалога с тренером ушёл бы
+    в ai_trainer.ai_question — «вопросом» с чужим текстом внутри, а не разбором."""
+    import ai_trainer
+
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    origin = MessageOriginChannel(
+        type="channel", date=dt.datetime.now(),
+        chat=Chat(id=-100, type="channel"), message_id=1,
+    )
+    fsm = _fsm(dispatcher)
+    await fsm.set_state(AITrainerFlow.chatting)
+    try:
+        winners = await _feed(
+            dispatcher, "х" * 50, forward_origin=origin,
+        )
+        assert winners == ["handlers.factcheck.factcheck_forward"]
+    finally:
+        await fsm.clear()
 
 
 @pytest.mark.filterwarnings("ignore::pytest.PytestWarning")
