@@ -41,6 +41,11 @@ _CHARACTERISTIC_QUESTIONS = {
     running_texts.MOTIVATION: "Что-то лень тренироваться, пропала мотивация",
     running_texts.HISTORY: "Покажи историю моих тренировок за прошлый месяц",
     running_texts.TODAY: "Что делать сегодня на тренировке?",
+    running_texts.PHARMA: "Что думаешь про оземпик для снижения веса?",
+    running_texts.SUPPLEMENTS: "Стоит ли пить креатин и когда его принимать?",
+    running_texts.EQUIPMENT: "Чем заменить приседания, если тренируюсь дома?",
+    running_texts.SLEEP: "Плохо сплю последнее время, влияет ли это на силу?",
+    running_texts.WARMUP: "Нужна ли разминка перед тяжёлым жимом?",
 }
 
 
@@ -49,6 +54,36 @@ def test_characteristic_question_picks_its_own_topic(topic, question):
     assert running_texts.classify(question) == topic
     # И пул для этой темы реально существует и не путается с чужим.
     assert running_texts.pool_for(question) is running_texts.POOLS[topic]
+
+
+def test_pharma_wins_over_bodyweight_on_a_drug_question():
+    """Регрессия с прода: пересланный пост «снижение индекса массы тела на
+    оземпике» ловился стемом «масс» и получал пул про дневник веса — бот обещал
+    поискать, «не слишком ли быстро уходит вес», хотя ни в какой дневник не
+    смотрел. Вопрос про препарат — это про препарат."""
+    post = (
+        "Вот хороший пример снижения индекса массы тела на оземпике/семаглутид. "
+        "Человек при этом в зал не ходил."
+    )
+    assert running_texts.classify(post) == running_texts.PHARMA
+
+
+def test_today_pool_never_claims_a_workout_or_program_exists():
+    """«Что сегодня качать» спрашивают чаще всего ДО тренировки и нередко без
+    программы вовсе, а пул выбирается по одному слову «сегодня» — до единого
+    вызова инструмента. Фраза вроде «проверяю активную тренировку» была бы
+    утверждением о данных, которых нет (TONE_OF_VOICE.md)."""
+    forbidden = ("активную тренировку", "текущую тренировку", "по программе", "расписание")
+    for phrase in running_texts.TODAY_POOL:
+        assert not any(claim in phrase for claim in forbidden), phrase
+
+
+def test_fact_check_pool_talks_about_the_post_not_about_user_data():
+    """Разбор пересланного поста читает чужой текст, а не дневники — обещать
+    заглянуть в них тут нельзя тем более."""
+    forbidden = ("дневник", "твои веса", "историю тренировок", "взвешивани")
+    for phrase in running_texts.FACT_CHECK_POOL:
+        assert not any(claim in phrase for claim in forbidden), phrase
 
 
 def test_unrelated_question_falls_back_to_default():
@@ -93,6 +128,14 @@ def test_pool_count_grew_well_past_the_original_flat_list():
     заметно больше, иначе "разнообразие" осталось на бумаге."""
     total = sum(len(pool) for pool in running_texts.POOLS.values())
     assert total > 100
+
+
+def test_fact_check_pool_is_big_enough_for_honest_rotation():
+    """У разбора поста свой пул, не тема по ключевым словам, — но ротация ему
+    нужна такая же честная, как остальным."""
+    pool = running_texts.FACT_CHECK_POOL
+    assert len(pool) > 1
+    assert len(set(pool)) == len(pool)
 
 
 # ---------- ротация ----------
