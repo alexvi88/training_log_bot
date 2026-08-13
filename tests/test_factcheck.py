@@ -13,13 +13,25 @@ import pytest
 
 import ai_limits
 import ai_trainer
+import running_texts
 from handlers import factcheck
 
 
-def _message(text="х" * 50, forwarded=True, user_id=777):
+def _message(text="х" * 50, forwarded=True, user_id=777, *, caption=None, photo=None):
+    """Дубль форварда.
+
+    Все «не наши» типы вложений выставляются в None явно: у MagicMock любой
+    неупомянутый атрибут — правдивый мок, так что без этого фильтр видел бы в
+    каждом сообщении и видео, и документ разом (и отсеивал бы всё)."""
     message = MagicMock()
     message.from_user = SimpleNamespace(id=user_id)
     message.text = text
+    message.caption = caption
+    message.photo = photo
+    message.video = None
+    message.video_note = None
+    message.animation = None
+    message.document = None
     message.forward_origin = SimpleNamespace(type="channel") if forwarded else None
     message.reply = AsyncMock(return_value=SimpleNamespace(edit_text=AsyncMock()))
     return message
@@ -43,10 +55,25 @@ def test_filter_ignores_non_forwarded_text():
     assert not factcheck._looks_like_a_forwarded_post(_message(forwarded=False))
 
 
-def test_filter_ignores_forwarded_media_without_text():
-    """Форвард фото с подписью-«текст» — caption, не text; message.text там None."""
-    message = _message(forwarded=True)
-    message.text = None
+def test_filter_takes_a_forwarded_photo_with_a_caption():
+    """Пост из канала чаще всего приходит картинкой с текстом в caption — и
+    именно они проваливались мимо разбора в первой версии, потому что фильтр
+    смотрел только message.text."""
+    message = _message(text=None, caption="х" * 50, photo=[SimpleNamespace(file_size=1024)])
+    assert factcheck._looks_like_a_forwarded_post(message)
+
+
+def test_filter_ignores_forwarded_media_with_no_text_at_all():
+    """Голая картинка без подписи — разбирать нечего, пусть идёт дальше."""
+    message = _message(text=None, photo=[SimpleNamespace(file_size=1024)])
+    assert not factcheck._looks_like_a_forwarded_post(message)
+
+
+def test_filter_ignores_forwarded_video():
+    """Видео — не наш случай: перехватить и промолчать хуже, чем не
+    перехватывать (ролик подхода разбирает чат тренера, а не фактчек)."""
+    message = _message()
+    message.video = SimpleNamespace(duration=10)
     assert not factcheck._looks_like_a_forwarded_post(message)
 
 
@@ -99,7 +126,8 @@ async def test_forward_shows_placeholder_then_edits_to_verdict(monkeypatch):
 
     await factcheck.factcheck_forward(message)
 
-    message.reply.assert_awaited_once_with(factcheck._PLACEHOLDER)
+    message.reply.assert_awaited_once()
+    assert message.reply.await_args.args[0] in running_texts.FACT_CHECK_POOL
     sent = message.reply.return_value
     sent.edit_text.assert_awaited_once()
     assert "Дело" in sent.edit_text.await_args.args[0]
@@ -141,4 +169,4 @@ async def test_preview_account_gets_warning_but_still_receives_verdict(monkeypat
     await factcheck.factcheck_forward(message)
 
     ai_limits.reply.assert_awaited_once()
-    message.reply.assert_awaited_once_with(factcheck._PLACEHOLDER)
+    assert message.reply.await_args.args[0] in running_texts.FACT_CHECK_POOL
