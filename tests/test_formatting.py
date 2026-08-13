@@ -782,8 +782,8 @@ def test_logging_hint_puts_goal_on_its_own_line():
 def test_progression_hint_says_why_the_weight_went_up():
     """A jumped target looks arbitrary without the reason behind it — the
     commonest complaint about apps that prescribe weights."""
-    s = analytics.suggest_progression([(100.0, 10)])
-    assert formatting.format_progression_hint(s) == "🎯 Цель: 102.5×9 — взял 10 повторов, добавляем вес"
+    s = analytics.suggest_progression([(100.0, 12)])
+    assert formatting.format_progression_hint(s) == "🎯 Цель: 102.5×11 — взял 12 повторов, добавляем вес"
 
 
 def test_progression_hint_stays_terse_when_only_a_rep_is_added():
@@ -795,22 +795,22 @@ def test_progression_hint_stays_terse_when_only_a_rep_is_added():
 
 def test_logging_hint_uses_the_exercises_own_weight_step():
     from handlers.workout import _logging_hint
-    last = [(22.0, 10, None)]  # dumbbells, 2kg apart -> 24, not 24.5
+    last = [(22.0, 12, None)]  # dumbbells, 2kg apart -> 24, not 24.5
     hint = _logging_hint(last, has_sets=True, unit="kg", show_progression=True, inferred_step=2.0)
-    assert "🎯 Цель: 24×7" in hint
+    assert "🎯 Цель: 24×9" in hint
 
 
 def test_logging_hint_bumps_heavy_lifts_by_five():
     from handlers.workout import _logging_hint
-    hint = _logging_hint([(200.0, 10, None)], has_sets=True, unit="kg", show_progression=True)
-    assert "🎯 Цель: 205×9" in hint
+    hint = _logging_hint([(200.0, 12, None)], has_sets=True, unit="kg", show_progression=True)
+    assert "🎯 Цель: 205×11" in hint
 
 
 def test_logging_hint_shows_achieved_goal_when_today_sets_meet_target():
     from handlers.workout import _logging_hint
-    last = [(100.0, 10, None)]  # top of rep range -> next goal is +2.5kg x 9
-    not_yet = _logging_hint(last, has_sets=True, unit="kg", show_progression=True, today_sets=[(100.0, 10)])
-    achieved = _logging_hint(last, has_sets=True, unit="kg", show_progression=True, today_sets=[(102.5, 9)])
+    last = [(100.0, 12, None)]  # top of rep range -> next goal is +2.5kg x 11
+    not_yet = _logging_hint(last, has_sets=True, unit="kg", show_progression=True, today_sets=[(100.0, 12)])
+    achieved = _logging_hint(last, has_sets=True, unit="kg", show_progression=True, today_sets=[(102.5, 11)])
     assert "🎯" in not_yet and "✅" not in not_yet
     assert "✅" in achieved and "Цель выполнена" in achieved
     assert "🎯" not in achieved

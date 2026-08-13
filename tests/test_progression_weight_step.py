@@ -30,25 +30,25 @@ async def _exercise(db, user_id, name="Жим гантелей"):
 async def test_step_inferred_from_dumbbell_history(fresh_db, user_id):
     db = fresh_db
     ex_id = await _exercise(db, user_id)
-    await _log_session(db, user_id, ex_id, 14, [(20.0, 10)])
-    await _log_session(db, user_id, ex_id, 7, [(22.0, 10)])
-    await _log_session(db, user_id, ex_id, 1, [(24.0, 10)])
+    await _log_session(db, user_id, ex_id, 14, [(20.0, 12)])
+    await _log_session(db, user_id, ex_id, 7, [(22.0, 12)])
+    await _log_session(db, user_id, ex_id, 1, [(24.0, 12)])
 
     last_session, step = await workout._exercise_history(ex_id)
 
-    assert last_session == [(24.0, 10, None)]
+    assert last_session == [(24.0, 12, None)]
     assert step == pytest.approx(2.0)
     hint = workout._logging_hint(
         last_session, has_sets=True, unit="kg", show_progression=True, inferred_step=step
     )
-    assert "🎯 Цель: 26×7" in hint  # a dumbbell that exists, not 26.5
+    assert "🎯 Цель: 26×9" in hint  # a dumbbell that exists, not 26.5
 
 
 @pytest.mark.asyncio
 async def test_backoff_sets_do_not_become_the_step(fresh_db, user_id):
     db = fresh_db
     ex_id = await _exercise(db, user_id, "Жим лёжа")
-    await _log_session(db, user_id, ex_id, 1, [(100.0, 10), (80.0, 10)])
+    await _log_session(db, user_id, ex_id, 1, [(100.0, 12), (80.0, 12)])
 
     last_session, step = await workout._exercise_history(ex_id)
 
@@ -56,14 +56,14 @@ async def test_backoff_sets_do_not_become_the_step(fresh_db, user_id):
     hint = workout._logging_hint(
         last_session, has_sets=True, unit="kg", show_progression=True, inferred_step=step
     )
-    assert "🎯 Цель: 102.5×9" in hint
+    assert "🎯 Цель: 102.5×11" in hint
 
 
 @pytest.mark.asyncio
 async def test_first_ever_session_falls_back_to_the_default_step(fresh_db, user_id):
     db = fresh_db
     ex_id = await _exercise(db, user_id, "Тяга блока")
-    await _log_session(db, user_id, ex_id, 1, [(50.0, 10)])
+    await _log_session(db, user_id, ex_id, 1, [(50.0, 12)])
 
     last_session, step = await workout._exercise_history(ex_id)
 
@@ -71,21 +71,21 @@ async def test_first_ever_session_falls_back_to_the_default_step(fresh_db, user_
     hint = workout._logging_hint(
         last_session, has_sets=True, unit="kg", show_progression=True, inferred_step=step
     )
-    assert "🎯 Цель: 52.5×8" in hint
+    assert "🎯 Цель: 52.5×10" in hint
 
 
 @pytest.mark.asyncio
 async def test_heavy_lift_without_history_jumps_by_five(fresh_db, user_id):
     db = fresh_db
     ex_id = await _exercise(db, user_id, "Становая")
-    await _log_session(db, user_id, ex_id, 1, [(210.0, 10)])
+    await _log_session(db, user_id, ex_id, 1, [(210.0, 12)])
 
     last_session, step = await workout._exercise_history(ex_id)
 
     hint = workout._logging_hint(
         last_session, has_sets=True, unit="kg", show_progression=True, inferred_step=step
     )
-    assert "🎯 Цель: 215×9" in hint
+    assert "🎯 Цель: 215×11" in hint
 
 
 def test_the_programs_rep_ceiling_beats_the_global_default():

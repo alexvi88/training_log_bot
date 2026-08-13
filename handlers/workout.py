@@ -403,7 +403,7 @@ def _logging_hint(
     formula: str = config.DEFAULT_E1RM_FORMULA,
     target: str | None = None,
     progression_rule: dict | None = None,
-    reps_row: tuple[float, int, bool] | None = None,
+    reps_row: tuple[float, int] | None = None,
 ) -> str:
     base = None
     if show_instruction:
@@ -429,13 +429,17 @@ def _logging_hint(
     # предупреждение о подозрительном весе — то, что человек обязан прочитать.
     reps_row_line = ""
     if reps_row:
-        row_weight, _row_reps, from_last_time = reps_row
+        row_weight, _row_reps = reps_row
         u = formatting.UNIT_LABELS.get(unit, "кг")
         weight_str = f"{formatting.format_weight(row_weight)}{u}"
-        # В скобках, а не через тире: тире в строке уже одно, и два подряд
-        # читаются как обрывок мысли.
-        suffix = " (как в прошлый раз)" if from_last_time else ""
-        reps_row_line = f"🔢 Цифрами сверху — повторы на {weight_str}{suffix}\n"
+        # Ни «сверху», ни «(как в прошлый раз)». Первое было указателем на ряд
+        # кнопок, но подпись стоит в самом низу сообщения, а цифры — под ней:
+        # слово гнало глаз вверх, в текст, где цифр нет. Ряд теперь первый под
+        # сообщением (см. keyboards.logging_keyboard), и соседство указывает
+        # лучше слова. Второе повторяло строку «💡 В прошлый раз» дословно, а
+        # когда в прошлый раз весов было несколько (190, 205, 180, 180), ещё и
+        # спорило с ней: 180 — вес последнего подхода, а не «прошлого раза».
+        reps_row_line = f"🔢 Цифры — повторы на {weight_str}\n"
     target_line = f"📋 План: {target}\n" if target else ""
     warning = _suspicious_weight_warning(last_session, today_sets, unit)
     if warning and confirmed_weight is not None and today_sets and today_sets[-1][0] == confirmed_weight:
@@ -543,24 +547,20 @@ async def _exercise_history(
 def _reps_row_basis(
     today_sets: list[tuple[float, int]],
     last_session: list[tuple[float, int, float | None]] | None,
-) -> tuple[float, int, bool] | None:
-    """От чего отталкивается ряд «тот же вес, другие повторы»: (вес, повторы, из_прошлого).
+) -> tuple[float, int] | None:
+    """От чего отталкивается ряд «тот же вес, другие повторы»: (вес, повторы).
 
     Сегодняшний последний подход, а если его ещё нет — последний подход этого же
     упражнения в прошлый раз. Иначе первый подход остаётся без кнопок ровно там,
     где они полезнее всего: человек подошёл к снаряду и почти всегда начинает с
     того же веса, что и в прошлый раз, — он и так уже показан строкой
     «💡 В прошлый раз».
-
-    Третьим значением — откуда взят вес: подпись под кнопками говорит «как в
-    прошлый раз» только когда это правда.
     """
     if today_sets:
-        weight, reps = today_sets[-1]
-        return weight, reps, False
+        return today_sets[-1]
     if last_session:
         weight, reps, _rpe = last_session[-1]
-        return weight, reps, True
+        return weight, reps
     return None
 
 
