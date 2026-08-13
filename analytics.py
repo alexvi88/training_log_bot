@@ -358,9 +358,13 @@ def compare_to_previous_session(sessions: list[SessionStats]) -> Optional[Compar
 
 
 # Default hypertrophy working range the progression assistant nudges toward
-# (matches the AI trainer's methodology: 5-10 reps, double progression).
+# (matches the AI trainer's methodology: 5-12 reps, double progression).
+#
+# The top of the range is where double progression flips from "add a rep" to
+# "add weight" (see suggest_progression), so 12 is a push, not a ceiling to
+# settle at: hit it and the next session's hint asks for the heavier bar.
 REP_RANGE_MIN = 5
-REP_RANGE_MAX = 10
+REP_RANGE_MAX = 12
 
 # Целевой недельный объём на группу мышц, в рабочих подходах. Round numbers
 # rather than a citation: the dose-response literature usually quotes ~10

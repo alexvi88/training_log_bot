@@ -416,6 +416,19 @@ def test_reps_row_appears_above_the_other_controls():
     assert len(kb.inline_keyboard[0]) == 6
 
 
+def test_reps_row_stays_first_even_inside_a_superset():
+    """Иначе место ряда зависело от размера суперсета: без него первый ряд, с
+    двумя упражнениями третий, с тремя четвёртый. Шесть одинаковых цифр труднее
+    всего зацепить глазом, и именно им нужно постоянное место — вкладки
+    подписаны словами, их находишь чтением."""
+    kb = keyboards.logging_keyboard(
+        [(1, "Bench"), (2, "Row"), (3, "Curl")], active_id=1, has_sets=True, last_reps=10
+    )
+    rows = [[b.callback_data for b in row] for row in kb.inline_keyboard]
+    assert rows[0] == [f"live:reps:{n}" for n in (7, 8, 9, 10, 11, 12)]
+    assert rows[1:4] == [["live:switch:1"], ["live:switch:2"], ["live:switch:3"]]
+
+
 def test_no_reps_row_until_there_is_a_weight_to_reuse():
     kb = keyboards.logging_keyboard([(1, "Bench")], active_id=1, has_sets=False)
     cbs = [b.callback_data for row in kb.inline_keyboard for b in row]
@@ -427,23 +440,28 @@ def test_reps_row_is_captioned_with_the_weight():
     они относятся, и этого хватает, чтобы понять остальное."""
     hint = workout._logging_hint(
         None, True, "kg", False, [(25.0, 10)],
-        show_instruction=False, reps_row=(25.0, 10, False),
+        show_instruction=False, reps_row=(25.0, 10),
     )
-    assert "повторы на 25кг" in hint
+    assert "Цифрами — повторы на 25кг" in hint
 
 
-def test_caption_says_when_the_weight_came_from_last_time():
-    """«Как в прошлый раз» — только когда это правда: на первом подходе вес взят
-    с прошлой тренировки, и человек должен видеть, откуда он."""
+def test_caption_does_not_re_explain_where_the_weight_came_from():
+    """«(как в прошлый раз)» повторяло строку «💡 В прошлый раз» дословно, а когда
+    весов в прошлый раз было несколько — ещё и спорило с ней: вес взят с
+    ПОСЛЕДНЕГО подхода, а не с «прошлого раза» целиком. И «сверху» тоже нет:
+    подпись стоит в самом низу сообщения, а цифры под ней — слово гнало глаз
+    вверх, в текст, где цифр нет."""
     from_last = workout._logging_hint(
-        None, False, "kg", False, [], show_instruction=False, reps_row=(25.0, 10, True),
+        None, False, "kg", False, [], show_instruction=False, reps_row=(25.0, 10),
     )
     from_today = workout._logging_hint(
         None, True, "kg", False, [(25.0, 10)],
-        show_instruction=False, reps_row=(25.0, 10, False),
+        show_instruction=False, reps_row=(25.0, 10),
     )
-    assert "как в прошлый раз" in from_last
-    assert "как в прошлый раз" not in from_today
+    assert "как в прошлый раз" not in from_last
+    assert "сверху" not in from_last
+    assert from_last.endswith("🔢 Цифрами — повторы на 25кг")
+    assert from_today.endswith("🔢 Цифрами — повторы на 25кг")
 
 
 def test_caption_shows_even_for_seasoned_users():
@@ -451,7 +469,7 @@ def test_caption_shows_even_for_seasoned_users():
     кого он появился впервые после обновления. Подпись не под show_instruction."""
     hint = workout._logging_hint(
         None, True, "kg", False, [(25.0, 10)],
-        show_instruction=False, reps_row=(25.0, 10, False),
+        show_instruction=False, reps_row=(25.0, 10),
     )
     assert "🔢" in hint
     assert "через пробел" not in hint
@@ -460,7 +478,7 @@ def test_caption_shows_even_for_seasoned_users():
 def test_reps_row_falls_back_to_last_session_before_the_first_set():
     """Первый подход — там кнопки полезнее всего: человек подошёл к снаряду и
     почти всегда начинает с того же веса, что и в прошлый раз."""
-    assert workout._reps_row_basis([], [(25.0, 12, None), (25.0, 10, None)]) == (25.0, 10, True)
-    assert workout._reps_row_basis([(30.0, 8)], [(25.0, 10, None)]) == (30.0, 8, False)
+    assert workout._reps_row_basis([], [(25.0, 12, None), (25.0, 10, None)]) == (25.0, 10)
+    assert workout._reps_row_basis([(30.0, 8)], [(25.0, 10, None)]) == (30.0, 8)
     # Ни сегодня, ни в прошлый раз — брать вес неоткуда, ряда нет.
     assert workout._reps_row_basis([], None) is None

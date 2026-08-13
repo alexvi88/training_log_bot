@@ -226,31 +226,31 @@ def test_suggest_progression_add_reps_below_top_of_range():
 
 
 def test_suggest_progression_add_weight_when_top_of_range_reached():
-    s = analytics.suggest_progression([(100, 10), (100, 10)])
+    s = analytics.suggest_progression([(100, 12), (100, 12)])
     assert s.action == "add_weight"
     assert s.target_weight == pytest.approx(102.5)
-    # Not REP_RANGE_MIN: 102.5x5 would be a weaker session than 100x10.
-    assert s.target_reps == 9
+    # Not REP_RANGE_MIN: 102.5x5 would be a weaker session than 100x12.
+    assert s.target_reps == 11
 
 
 def test_suggest_progression_weight_bump_never_lowers_the_bar():
     # The reported bug: 127x10 came back as "129.5 x 5", an e1RM of ~151 against
     # the ~169 already lifted — a goal that asks for less than last time.
-    s = analytics.suggest_progression([(127.0, 10)])
+    s = analytics.suggest_progression([(127.0, 12)])
     assert s.target_weight == pytest.approx(129.5)
-    assert analytics.e1rm(s.target_weight, s.target_reps) >= analytics.e1rm(127.0, 10) * 0.99
+    assert analytics.e1rm(s.target_weight, s.target_reps) >= analytics.e1rm(127.0, 12) * 0.99
 
 
 def test_suggest_progression_reps_capped_at_top_of_range():
-    # 15 reps is far past the range; a single weight step can't hold that e1RM
-    # inside the range, so the target caps out rather than chasing 14 reps.
-    s = analytics.suggest_progression([(127.0, 15)])
+    # 18 reps is far past the range; a single weight step can't hold that e1RM
+    # inside the range, so the target caps out rather than chasing 17 reps.
+    s = analytics.suggest_progression([(127.0, 18)])
     assert s.target_reps == analytics.REP_RANGE_MAX
 
 
 def test_suggest_progression_big_jump_can_restart_at_bottom_of_range():
     # A 20% jump (light dumbbells stepping 10 -> 12) outruns the reps it costs.
-    s = analytics.suggest_progression([(10.0, 10)], inferred_step=2.0)
+    s = analytics.suggest_progression([(10.0, 12)], inferred_step=2.0)
     assert (s.target_weight, s.target_reps) == (12.0, analytics.REP_RANGE_MIN)
 
 
@@ -271,18 +271,18 @@ def test_suggest_progression_none_when_no_sets():
 
 
 def test_suggest_progression_heavy_lift_jumps_by_five():
-    s = analytics.suggest_progression([(200, 10)])
+    s = analytics.suggest_progression([(200, 12)])
     assert s.target_weight == pytest.approx(205)
 
 
 def test_suggest_progression_uses_inferred_step_when_finer_than_default():
-    s = analytics.suggest_progression([(50, 10)], inferred_step=2.0)
+    s = analytics.suggest_progression([(50, 12)], inferred_step=2.0)
     assert s.target_weight == pytest.approx(52.0)
 
 
 def test_suggest_progression_ignores_inferred_step_coarser_than_default():
     # A 20kg gap is a backoff set, not the rack's increment.
-    s = analytics.suggest_progression([(100, 10)], inferred_step=20.0)
+    s = analytics.suggest_progression([(100, 12)], inferred_step=20.0)
     assert s.target_weight == pytest.approx(102.5)
 
 

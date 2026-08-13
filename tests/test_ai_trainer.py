@@ -1587,7 +1587,7 @@ async def test_big_three_low_reps_are_not_treated_as_missing_the_range():
     assert "Присед, становая и жим лёжа" in prompt
     assert "не недобор диапазона" in prompt
     # Прямо запрещены обе формулировки из живого провала.
-    assert "диапазон 5-10 ты не добрал" in prompt
+    assert "диапазон 5-12 ты не добрал" in prompt
     assert "сбросить вес и добить до 5-6" in prompt
 
 
