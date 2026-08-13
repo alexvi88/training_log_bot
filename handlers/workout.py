@@ -439,7 +439,8 @@ def _logging_hint(
         # лучше слова. Второе повторяло строку «💡 В прошлый раз» дословно, а
         # когда в прошлый раз весов было несколько (190, 205, 180, 180), ещё и
         # спорило с ней: 180 — вес последнего подхода, а не «прошлого раза».
-        reps_row_line = f"🔢 Цифры — повторы на {weight_str}\n"
+        # Творительный падеж («цифрами», не «цифры») — решение владельца продукта.
+        reps_row_line = f"🔢 Цифрами — повторы на {weight_str}\n"
     target_line = f"📋 План: {target}\n" if target else ""
     warning = _suspicious_weight_warning(last_session, today_sets, unit)
     if warning and confirmed_weight is not None and today_sets and today_sets[-1][0] == confirmed_weight:
