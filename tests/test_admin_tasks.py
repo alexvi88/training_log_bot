@@ -188,6 +188,65 @@ def test_prune_stale_backups_does_nothing_when_keep_is_zero(tmp_path):
     assert os.listdir(backup_dir) == ["training_log_backup_2026-01-01.db"]
 
 
+async def test_startup_catches_up_a_backup_that_missed_its_daily_window(
+    fresh_db, tmp_path, monkeypatch
+):
+    """Регрессия с прода (26.4 часа без копии): расписание живёт только в памяти
+    процесса, и рестарт после ADMIN_REPORT_HOUR отправлял следующий запуск на
+    сутки вперёд — пропущенный день не догонял никто."""
+    monkeypatch.setattr(config, "DB_PATH", str(tmp_path / "training_log.db"))
+    monkeypatch.setattr(config, "BACKUP_CATCHUP_HOURS", 24)
+    backup_dir = admin_tasks._backup_dir()
+    os.makedirs(backup_dir, exist_ok=True)
+    stale_path = os.path.join(backup_dir, "training_log_backup_2020-01-01.db")
+    open(stale_path, "w").close()
+    old_mtime = dt.datetime.now().timestamp() - 26 * 3600
+    os.utime(stale_path, (old_mtime, old_mtime))
+
+    await admin_tasks._catch_up_missed_backup()
+
+    today = os.path.join(backup_dir, f"training_log_backup_{dt.date.today().isoformat()}.db")
+    assert os.path.exists(today), "пропущенное окно должно догоняться на старте"
+
+
+async def test_startup_makes_the_very_first_backup_on_a_fresh_disk(
+    fresh_db, tmp_path, monkeypatch
+):
+    """Бэкапов нет вовсе — новый инстанс не должен жить без единой копии до
+    первого ADMIN_REPORT_HOUR."""
+    monkeypatch.setattr(config, "DB_PATH", str(tmp_path / "training_log.db"))
+
+    await admin_tasks._catch_up_missed_backup()
+
+    backup_dir = admin_tasks._backup_dir()
+    assert os.listdir(backup_dir), "на свежем диске копия нужна сразу"
+
+
+async def test_startup_does_not_duplicate_a_fresh_backup(fresh_db, tmp_path, monkeypatch):
+    """Само по себе самоограничивается: первый догон обнуляет возраст, и десять
+    рестартов подряд не должны сделать десять копий."""
+    monkeypatch.setattr(config, "DB_PATH", str(tmp_path / "training_log.db"))
+    monkeypatch.setattr(config, "BACKUP_CATCHUP_HOURS", 24)
+    await admin_tasks._rotate_disk_backup()
+
+    rotate = AsyncMock()
+    monkeypatch.setattr(admin_tasks, "_rotate_disk_backup", rotate)
+    await admin_tasks._catch_up_missed_backup()
+
+    rotate.assert_not_called()
+
+
+async def test_catch_up_failure_does_not_stop_the_daily_job(fresh_db, tmp_path, monkeypatch):
+    """Диск полон, права слетели — суточная джоба всё равно обязана встать на
+    расписание, а не упасть на старте вместе с догоном."""
+    monkeypatch.setattr(config, "DB_PATH", str(tmp_path / "training_log.db"))
+    monkeypatch.setattr(
+        admin_tasks, "_rotate_disk_backup", AsyncMock(side_effect=OSError("disk full"))
+    )
+
+    await admin_tasks._catch_up_missed_backup()  # не должно бросить
+
+
 async def test_backup_staleness_check_alerts_admin_when_backup_is_old(fresh_db, tmp_path, monkeypatch):
     monkeypatch.setattr(config, "DB_PATH", str(tmp_path / "training_log.db"))
     monkeypatch.setattr(config, "ADMIN_ID", 42)
