@@ -270,6 +270,41 @@ async def test_backup_staleness_check_alerts_admin_when_backup_is_old(fresh_db, 
 
     bot.send_message.assert_awaited_once()
     assert bot.send_message.await_args.kwargs["chat_id"] == 42
+    today = os.path.join(backup_dir, f"training_log_backup_{dt.date.today().isoformat()}.db")
+    assert os.path.exists(today), "часовая проверка обязана не только алертить, но и чинить"
+    text = bot.send_message.await_args.kwargs["text"]
+    assert "сделал сам" in text
+
+
+async def test_backup_staleness_check_reports_a_failed_repair(fresh_db, tmp_path, monkeypatch):
+    """Копия не пишется на диск — это другая беда, чем «джоба не проснулась», и
+    админ должен увидеть именно её, с текстом ошибки."""
+    monkeypatch.setattr(config, "DB_PATH", str(tmp_path / "training_log.db"))
+    monkeypatch.setattr(config, "ADMIN_ID", 42)
+    monkeypatch.setattr(config, "BACKUP_STALE_ALERT_HOURS", 26)
+    backup_dir = admin_tasks._backup_dir()
+    os.makedirs(backup_dir, exist_ok=True)
+    stale_path = os.path.join(backup_dir, "training_log_backup_2020-01-01.db")
+    open(stale_path, "w").close()
+    old_mtime = dt.datetime.now().timestamp() - 30 * 3600
+    os.utime(stale_path, (old_mtime, old_mtime))
+    monkeypatch.setattr(
+        admin_tasks, "_rotate_disk_backup", AsyncMock(side_effect=OSError("disk full"))
+    )
+
+    bot = MagicMock()
+    bot.send_message = AsyncMock()
+
+    async def _stop(_seconds):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(admin_tasks.asyncio, "sleep", _stop)
+    with pytest.raises(asyncio.CancelledError):
+        await admin_tasks.run_backup_staleness_check(bot)
+
+    text = bot.send_message.await_args.kwargs["text"]
+    assert "disk full" in text
+    assert "не вышло" in text
 
 
 async def test_backup_staleness_check_stays_quiet_for_a_fresh_backup(fresh_db, tmp_path, monkeypatch):
