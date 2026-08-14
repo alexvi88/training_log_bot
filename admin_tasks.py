@@ -155,12 +155,24 @@ def _latest_backup_age_hours() -> Optional[float]:
 
 
 async def run_backup_staleness_check(bot: Bot) -> None:
-    """Раз в час проверяет, не протухли ли бэкапы на диске, и алертит, если да.
+    """Раз в час проверяет, не протухли ли бэкапы на диске, и чинит, если да.
 
     Отдельная задача, а не проверка внутри суточной джобы: суточная джоба сама
     может не запуститься (см. run_daily_admin_jobs) или упасть посреди работы
     — а именно это и надо заметить, а не только исправно отчитываться, когда
     всё и так хорошо.
+
+    Чинит, а не только алертит: раньше эта проверка умела ровно одно — писать
+    админу «проверь суточную джобу», и повторяла это каждый час, пока человек
+    не дойдёт до контейнера руками. Копия при этом так и не появлялась. Причин
+    у пропуска много (уехавшее расписание, умершая задача, неудачная запись на
+    диск), а лечение одно — сделать копию сейчас, — поэтому оно и делается
+    здесь, не дожидаясь следующего ADMIN_REPORT_HOUR.
+
+    Сообщение админу уходит в любом случае, но разное: получилось — «отставал,
+    сделал сам, суточная джоба всё равно сломана»; не получилось — «и починить
+    не вышло» с текстом ошибки. Спама из этого не выходит: удачный догон
+    обнуляет возраст, и следующий час проверку проходит молча.
     """
     while True:
         try:
@@ -170,18 +182,37 @@ async def run_backup_staleness_check(bot: Bot) -> None:
                     "DB backup is stale: last one is %.1f hours old (alert threshold %s)",
                     age, config.BACKUP_STALE_ALERT_HOURS,
                 )
-                if config.ADMIN_ID:
-                    with suppress(Exception):
-                        await bot.send_message(
-                            chat_id=config.ADMIN_ID,
-                            text=(
-                                f"🛑 Бэкап базы не обновлялся {age:.0f} ч. — "
-                                "проверь суточную джобу (admin_tasks.run_daily_admin_jobs)."
-                            ),
-                        )
+                await _repair_stale_backup(bot, age)
         except Exception:
             logger.exception("Backup staleness check failed")
         await asyncio.sleep(3600)
+
+
+async def _repair_stale_backup(bot: Bot, age: float) -> None:
+    """Догоняет пропущенную копию прямо из часовой проверки и рассказывает об
+    этом админу. Ошибку записи не проглатывает: без неё «бэкапов нет» и «бэкап
+    не пишется на диск» выглядят с той стороны одинаково."""
+    error: Optional[str] = None
+    try:
+        await _rotate_disk_backup()
+    except Exception as exc:
+        logger.exception("Stale-backup repair failed")
+        error = f"{type(exc).__name__}: {exc}"
+    if not config.ADMIN_ID:
+        return
+    if error:
+        text = (
+            f"🛑 Бэкап базы не обновлялся {age:.0f} ч., и сделать копию сейчас не вышло: "
+            f"{error}\nСмотри логи (admin_tasks._rotate_disk_backup)."
+        )
+    else:
+        text = (
+            f"⚠️ Бэкап базы отставал {age:.0f} ч. — копию сделал сам, база в порядке.\n"
+            "Суточная джоба всё равно не отработала, проверь "
+            "admin_tasks.run_daily_admin_jobs."
+        )
+    with suppress(Exception):
+        await bot.send_message(chat_id=config.ADMIN_ID, text=text)
 
 
 async def _send_daily_report(bot: Bot, backup_path: Optional[str]) -> None:
@@ -271,16 +302,19 @@ async def _catch_up_missed_backup() -> None:
     рестарт может случиться когда угодно — дублировать его на каждом подъёме
     значило бы чинить бэкапы ценой спама.
     """
-    age = _latest_backup_age_hours()
-    if age is not None and age < config.BACKUP_CATCHUP_HOURS:
-        return
-    logger.warning(
-        "Бэкап пропустил суточное окно (возраст %s) — делаю копию сейчас",
-        "нет копий" if age is None else f"{age:.1f} ч",
-    )
     try:
+        age = _latest_backup_age_hours()
+        if age is not None and age < config.BACKUP_CATCHUP_HOURS:
+            return
+        logger.warning(
+            "Бэкап пропустил суточное окно (возраст %s) — делаю копию сейчас",
+            "нет копий" if age is None else f"{age:.1f} ч",
+        )
         await _rotate_disk_backup()
     except Exception:
+        # Всё целиком, а не только запись копии: этот вызов стоит ПЕРЕД вечным
+        # циклом суточной джобы, и любое исключение отсюда убивало бы задачу
+        # молча — вместе с бэкапами на всю жизнь процесса.
         logger.exception("Catch-up DB backup failed")
 
 

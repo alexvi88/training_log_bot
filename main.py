@@ -297,6 +297,17 @@ async def main() -> None:
     dp.callback_query.outer_middleware(refresh_menu_middleware)
     setup_routers(dp)
 
+    def _log_if_task_dies(task: asyncio.Task) -> None:
+        """Фоновая задача, умершая от исключения, до сих пор уходила в тишину:
+        `create_task` держит результат в себе, никто его не читает — и «бэкапов
+        нет вторые сутки» выглядело так же, как «всё работает». Отмена при
+        остановке бота — не авария, её пропускаем."""
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error("Фоновая задача %s умерла", task.get_name(), exc_info=exc)
+
     admin_job = asyncio.create_task(admin_tasks.run_daily_admin_jobs(bot))
     backup_watch_job = asyncio.create_task(admin_tasks.run_backup_staleness_check(bot))
     engagement_job = asyncio.create_task(engagement.run_daily_engagement_job(bot))
@@ -317,6 +328,8 @@ async def main() -> None:
         import mcp_server
 
         background.append(asyncio.create_task(mcp_server.serve()))
+    for task in background:
+        task.add_done_callback(_log_if_task_dies)
     try:
         await dp.start_polling(bot)
     finally:
