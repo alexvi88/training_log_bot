@@ -12,7 +12,7 @@
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { height: 100%; }
   body {
-    background: linear-gradient(135deg, #14110f 0%, #221812 50%, #0d1a2e 100%);
+    background: linear-gradient(135deg, #2a2018 0%, #3a2a1c 50%, #1c2c46 100%);
     font-family: 'Courier New', monospace;
     color: #fff;
     overflow: hidden;
@@ -160,11 +160,13 @@
 if (window.Telegram?.WebApp) Telegram.WebApp.expand();
 
 // ── КАЧКИ (набор и рисовалка — как в game.html, страница самостоятельная) ───
+// Насыщенные тёплые цвета — своя команда должна читаться боковым зрением как
+// один тёплый лагерь против холодной вражеской толпы (см. ENEMY_TYPES ниже).
 const FIGHTERS = {
-  power:  { name: 'Пауэрлифтер', tag: 'сила',         top: '#8f2a20', bottom: '#2b2d34', skin: '#e0b08a', head: 'bandana',  hair: '#31241c', acc: '#b8860b', belt: true, bulk: 1.18 },
-  cross:  { name: 'Кроссфитер',  tag: 'функционалка', top: '#276f66', bottom: '#31343d', skin: '#caa27e', head: 'headband', hair: '#20180f', acc: '#f2ede3', bulk: 1.0 },
-  wrestle:{ name: 'Борец',       tag: 'захват',       top: '#7a2b3f', bottom: '#7a2b3f', skin: '#dba184', head: 'short',    hair: '#2a1f16', acc: '#7a2b3f', singlet: true, ears: true, bulk: 1.12 },
-  build:  { name: 'Бодибилдер',  tag: 'мышцы',        top: '#cf9455', bottom: '#23252c', skin: '#cf9455', head: 'short',    hair: '#241a12', acc: '#d9a013', shirtless: true, bulk: 1.22 },
+  power:  { name: 'Пауэрлифтер', tag: 'сила',         top: '#e8432a', bottom: '#2b2d34', skin: '#e0b08a', head: 'bandana',  hair: '#31241c', acc: '#ffb83d', belt: true, bulk: 1.18 },
+  cross:  { name: 'Кроссфитер',  tag: 'функционалка', top: '#ff8c3c', bottom: '#31343d', skin: '#caa27e', head: 'headband', hair: '#20180f', acc: '#fff3df', bulk: 1.0 },
+  wrestle:{ name: 'Борец',       tag: 'захват',       top: '#e0245e', bottom: '#e0245e', skin: '#dba184', head: 'short',    hair: '#2a1f16', acc: '#e0245e', singlet: true, ears: true, bulk: 1.12 },
+  build:  { name: 'Бодибилдер',  tag: 'мышцы',        top: '#e8a34d', bottom: '#23252c', skin: '#e8a34d', head: 'short',    hair: '#241a12', acc: '#ffcc33', shirtless: true, bulk: 1.22 },
 };
 let selectedFighter = 'power';
 
@@ -340,7 +342,7 @@ const fmt = n => String(Math.round(n));
 // ── 3D-МИР: игровые координаты (worldX -1..1, z 0..ZFAR) → сцена Three.js ────
 // Игровая логика вся в этих условных единицах (как и была), а в сцену её
 // переводят только при размещении мешей и при проекции точек на HUD-канвас.
-const ZFAR = 3.4;                 // глубина спавна препятствий (игровые unit)
+const ZFAR = 4.3;                  // глубина спавна препятствий (игровые unit) — увеличена вместе со скоростью, чтобы препятствия успевали читаться
 const TRACK_HALF3 = 4.3;          // половина ширины дорожки в мире Three.js
 const Z_SCALE = 6.4;              // игровой z (подход препятствий) → мир
 const FOLLOWER_Z_SCALE = 4.4;     // «за лидером» — своя, более плотная шкала (колонна вглубь)
@@ -392,11 +394,13 @@ function weightsFor(d) {
 }
 let firstGateDone = false;
 function pickEventType() {
-  // Первое событие — гарантированные ворота метров через 45-50 (~7-8с):
-  // на этой дистанции они всегда «обе стороны в плюс» (см. spawnGate), так
-  // что соло-боец успевает подрасти до первой боевой волны — она стартует
-  // отдельным таймером в те же первые секунды (см. nextWaveAt в resetGame).
-  if (!firstGateDone && dist >= 45) { firstGateDone = true; return commitEvent('gate'); }
+  // Первое событие — гарантированные ворота метров через 10-12 (около
+  // секунды на стартовой скорости): пустого разбега быть не должно, игрок
+  // жмёт на газ и сразу видит первое действие. На этой дистанции ворота
+  // всегда «обе стороны в плюс» (см. spawnGate), так что соло-боец успевает
+  // подрасти до первой боевой волны — она стартует отдельным таймером в те
+  // же первые секунды (см. nextWaveAt в resetGame).
+  if (!firstGateDone && dist >= 10) { firstGateDone = true; return commitEvent('gate'); }
   const w = weightsFor(dist);
   const weighted = Object.keys(w).map(k => {
     let v = Math.max(0.01, w[k]);
@@ -423,7 +427,9 @@ function spreadX(range) {
 }
 
 const SQUAD_START = 1, SQUAD_CAP = 999;
-const SPEED_START = 5.5, SPEED_RAMP = 0.045, SPEED_CAP = 15;
+// Забег стартует уже на бодрой скорости и разгоняется заметно быстрее —
+// раньше десять секунд раскачки читались как «вялая прогулка».
+const SPEED_START = 8.5, SPEED_RAMP = 0.09, SPEED_CAP = 22;
 // Комбо: серия сбитых блинов без пропущенного удара — растущий множитель
 // очков и звук с повышающимся тоном на каждый шаг. Промах — заметный слом.
 let combo = 0, comboBestTone = 0;
@@ -493,12 +499,12 @@ function resetGame() {
   lastMile = 0; nextBossMile = 1200;
   // Честный рандом и на старте: первое событие тоже тянем из пула, просто
   // близко и из его лёгкой части.
-  nextEventAt = rnd(14, 22); eventHistory.length = 0; lastEventWorldX = 0;
+  // Пустого разбега быть не должно: первое рядовое событие и первая волна
+  // приходят в первые одну-две секунды, дальше поток не пересыхает (гэпы
+  // ниже подобраны так, чтобы на дорожке почти всегда что-то было).
+  nextEventAt = rnd(2, 4); eventHistory.length = 0; lastEventWorldX = 0;
   firstGateDone = false;
-  // Первая волна — в первые 5-8 секунд (при старт-скорости это дистанция
-  // 30-45м), дальше волны идут регулярно и учащаются к концу забега — см.
-  // формулу gap в update().
-  nextWaveAt = rnd(30, 45);
+  nextWaveAt = rnd(4, 8);
   fireTimer = 0; combo = 0; weaponLevel = 0; weaponTimer = 0;
   obstacles.length = 0; bonuses.length = 0; crates.length = 0; bullets.length = 0;
   parts.length = 0; toasts.length = 0;
@@ -530,9 +536,11 @@ const SPRING_K = 7.5;
 // корень из численности. Узкая колонна тут не годится — сорок бойцов в ней
 // уезжали на два десятка единиц назад, то есть за камеру, и в кадре оставались
 // первые ряды: счётчик показывал сорок, на дорожке стояло семь.
-// Шаги подобраны в мире: 0.42 вбок и 0.40 вглубь при бойце шириной ~0.32.
-const STEP_X = 0.42 / TRACK_HALF3;
-const STEP_Z = 0.40 / FOLLOWER_Z_SCALE;
+// Шаги подобраны в мире: 0.63 вбок и 0.60 вглубь при бойце шириной ~0.48 —
+// оба масштабированы вместе с CHAR_SCALE (было 0.42/0.40 при бойце ~0.32),
+// иначе увеличенные фигуры начинают перекрывать друг друга в строю.
+const STEP_X = 0.63 / TRACK_HALF3;
+const STEP_Z = 0.60 / FOLLOWER_Z_SCALE;
 let formCols = 2, formRows = 1, formScale = 1;
 function updateFormation() {
   const n = followers.length + 1;
@@ -572,11 +580,18 @@ function updateFollowers(dt) {
 }
 
 // ── ЧАСТИЦЫ И ЦИФРЫ ──────────────────────────────────────────────────────────
+// Крупнее и гуще прежнего — удары должны быть видны сразу, не теряться в кадре.
 function burst(x, y, color, n = 10, sp = 180) {
-  for (let i = 0; i < n; i++) {
-    const a = rnd(0, Math.PI * 2), v = rnd(sp * 0.3, sp);
-    parts.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v - 60, life: rnd(0.3, 0.7), color, r: rnd(2, 4) });
+  for (let i = 0; i < Math.round(n * 1.3); i++) {
+    const a = rnd(0, Math.PI * 2), v = rnd(sp * 0.35, sp * 1.15);
+    parts.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v - 60, life: rnd(0.32, 0.75), color, r: rnd(3, 7) });
   }
+}
+// Ударная волна — расширяющееся кольцо на месте крупного попадания (блин
+// разбит, волна сметена, ворота пройдены, босс/гигант дожаты): дёшево
+// (один stroke в 2D-слое) и хорошо читается даже боковым зрением.
+function shockwave(x, y, color, maxR = 90, life = 0.34) {
+  parts.push({ x, y, vx: 0, vy: 0, life, life0: life, color, ring: true, maxR });
 }
 // Крупные читаемые цифры с обводкой — «+2», «×2», «−15» — у места события.
 function popNumber(text, color, x, y, big) {
@@ -614,17 +629,18 @@ function updateFloorStripes() {
 function buildHall() {
   const floorLen = ZFAR * Z_SCALE + 30;
   const floorGeo = new THREE.PlaneGeometry(TRACK_HALF3 * 2, floorLen, 1, 40);
-  // Три плана по светлоте: дальний фон/туман — самый тёмный и холодный, пол —
-  // средний нейтральный (не тонет в один и тот же тёплый коричневый со стенами
-  // и лампами), фигуры и награды — светлые пятна поверх обоих.
-  floorMat = new THREE.MeshLambertMaterial({ color: 0x3c3630 });
+  // Три плана по светлоте, вытянутые из подвальной черноты в светлый насыщенный
+  // зал: пол — средний по светлоте и слегка холодный (не тонет в тёплом буром
+  // тоне вместе со стенами и лампами), стены и дальний план заметно светлее
+  // черноты, фигуры и награды — самые светлые пятна поверх обоих.
+  floorMat = new THREE.MeshLambertMaterial({ color: 0x5c6472 });
   const floor = new THREE.Mesh(floorGeo, floorMat);
   floor.rotation.x = -Math.PI / 2;
   floor.position.set(0, 0, -floorLen / 2 + 6);
   floor.userData.baseY = 0;
   scene.add(floor);
   // Продольные полосы дорожки — тонкие светлые рейки по полу
-  const stripeMat = new THREE.MeshBasicMaterial({ color: 0xf2ede3, transparent: true, opacity: 0.12 });
+  const stripeMat = new THREE.MeshBasicMaterial({ color: 0xf2ede3, transparent: true, opacity: 0.24 });
   [-0.55, 0, 0.55].forEach(sx => {
     const g = new THREE.PlaneGeometry(0.05, floorLen);
     const m = new THREE.Mesh(g, stripeMat);
@@ -633,11 +649,12 @@ function buildHall() {
     scene.add(m);
   });
   buildFloorStripes();
-  // Стены зала — узкие холодно-тёмные полосы по бокам дорожки (темнее пола,
-  // но не сливаются с самым дальним туманом).
+  // Стены зала — холодные, но заметно светлее пола нет нужды: держим их темнее
+  // пола ради глубины кадра, но далеко не чёрные — иначе силуэты у края снова
+  // тонут, как раньше.
   const wallGeo = new THREE.PlaneGeometry(6, floorLen);
-  wallMatL = new THREE.MeshLambertMaterial({ color: 0x241f28, side: THREE.DoubleSide });
-  wallMatR = new THREE.MeshLambertMaterial({ color: 0x241f28, side: THREE.DoubleSide });
+  wallMatL = new THREE.MeshLambertMaterial({ color: 0x3c4258, side: THREE.DoubleSide });
+  wallMatR = new THREE.MeshLambertMaterial({ color: 0x3c4258, side: THREE.DoubleSide });
   const wallL = new THREE.Mesh(wallGeo, wallMatL);
   wallL.rotation.y = Math.PI / 2;
   wallL.position.set(-TRACK_HALF3 - 0.2, 3, -floorLen / 2 + 6);
@@ -650,35 +667,41 @@ function buildHall() {
   // светящийся ореол (билборд с радиальным градиентом, без хлопотного
   // постпроцесса) — не заливают всё, но читаются как настоящий свет лампы.
   const haloTex = lampHaloTexture();
-  const haloMat = new THREE.SpriteMaterial({ map: haloTex, color: 0xffb060, transparent: true, opacity: 0.55, depthWrite: false });
+  const haloMat = new THREE.SpriteMaterial({ map: haloTex, color: 0xffb060, transparent: true, opacity: 0.7, depthWrite: false });
   for (let i = 0; i < 8; i++) {
     const lz = -i * 5.5;
-    const lamp = new THREE.PointLight(0xffb060, 2.6, 12, 2);
+    const lamp = new THREE.PointLight(0xffb060, 3.4, 14, 2);
     lamp.position.set(0, 3.6, lz);
     scene.add(lamp);
     const halo = new THREE.Sprite(haloMat.clone());
     halo.position.set(0, 3.6, lz);
-    halo.scale.set(3.2, 3.2, 1);
+    halo.scale.set(3.6, 3.6, 1);
     scene.add(halo);
   }
+  // Общая экспозиция — вверх: игра должна читаться при дневном свете на
+  // телефоне, а не только в тёмной комнате. Тёплые лампы (выше) остаются
+  // акцентом характера зала, но не единственным источником света — базовую
+  // яркость держат hemisphere + ambient + key.
+  scene.add(new THREE.HemisphereLight(0xfff0d8, 0x3a4560, 0.95));
+  scene.add(new THREE.AmbientLight(0xffffff, 0.42));
   // Ключевой свет — тёплый, сверху-сбоку, лепит объём фигур не в лоб.
-  scene.add(new THREE.HemisphereLight(0xffd9a8, 0x201828, 0.55));
-  const key = new THREE.DirectionalLight(0xffe6bf, 1.8);
+  const key = new THREE.DirectionalLight(0xffe6bf, 2.3);
   key.position.set(7, 9, 3);
   scene.add(key);
-  // Слабая заливка с другой стороны — не даёт теневой половине фигур
-  // проваливаться в черноту.
-  const fill = new THREE.DirectionalLight(0x8fb0ff, 0.35);
+  // Заливка с другой стороны — не даёт теневой половине фигур проваливаться в
+  // черноту, светлее прежнего вместе с общим подъёмом экспозиции.
+  const fill = new THREE.DirectionalLight(0x9fc0ff, 0.6);
   fill.position.set(-6, 4, 4);
   scene.add(fill);
   // Контровой свет — холодный, светит навстречу (из глубины дорожки), чтобы
   // край силуэта отделялся от тёплого фона, а не сливался с ним.
-  const rim = new THREE.DirectionalLight(0x8fd0ff, 1.4);
+  const rim = new THREE.DirectionalLight(0x9fd8ff, 1.5);
   rim.position.set(-2.5, 4.5, -18);
   scene.add(rim);
-  // Туман — холоднее и темнее пола/стен, даёт дальнему плану глубину.
-  scene.fog = new THREE.Fog(0x100d16, 11, floorLen * 0.78);
-  scene.background = new THREE.Color(0x100d16);
+  // Туман — светлая холодная дымка, не смоляная чернота: даёт дальнему плану
+  // глубину, но не топит зал.
+  scene.fog = new THREE.Fog(0x2e3450, 12, floorLen * 0.82);
+  scene.background = new THREE.Color(0x2e3450);
   buildHallProps(floorLen);
 }
 // Радиальная текстура для ореола лампы — рисуется один раз на маленьком
@@ -703,23 +726,23 @@ function buildHallProps(floorLen) {
   const grad = toonGradient();
   const spacing = 5.4; // плотнее прежнего — обстановка мелькает заметно чаще
   const n = Math.max(8, Math.floor(floorLen / spacing));
-  const rackMat = new THREE.MeshToonMaterial({ color: 0x5a6068, gradientMap: grad });
+  const rackMat = new THREE.MeshToonMaterial({ color: 0x9aa2ac, gradientMap: grad });
   const posts = new THREE.InstancedMesh(new THREE.BoxGeometry(0.16, 2.1, 0.16), rackMat, n * 4);
   const bars = new THREE.InstancedMesh(new THREE.BoxGeometry(0.85, 0.1, 0.1), rackMat, n * 2);
   const plateGeo = new THREE.CylinderGeometry(0.34, 0.34, 0.1, 12); plateGeo.rotateZ(Math.PI / 2);
-  const plateMat = new THREE.MeshToonMaterial({ color: 0x8f2a20, gradientMap: grad });
+  const plateMat = new THREE.MeshToonMaterial({ color: 0xd8442e, gradientMap: grad });
   const plates = new THREE.InstancedMesh(plateGeo, plateMat, n * 4);
-  const mirrorMat = new THREE.MeshBasicMaterial({ color: 0xbfe6ff, transparent: true, opacity: 0.22 });
+  const mirrorMat = new THREE.MeshBasicMaterial({ color: 0xd8f0ff, transparent: true, opacity: 0.32 });
   const mirrors = new THREE.InstancedMesh(new THREE.PlaneGeometry(1.5, 2.1), mirrorMat, Math.ceil(n / 2) * 2);
   // Блик на зеркале — узкая яркая полоса поверх, чтобы «стекло» читалось, а
   // не просто голубая плашка.
-  const glintMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.28 });
+  const glintMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.4 });
   const glints = new THREE.InstancedMesh(new THREE.PlaneGeometry(0.22, 1.9), glintMat, Math.ceil(n / 2) * 2);
   // Трубы под потолком — вдоль всего зала, две штуки на сторону.
-  const pipeMat = new THREE.MeshToonMaterial({ color: 0x454a52, gradientMap: grad });
+  const pipeMat = new THREE.MeshToonMaterial({ color: 0x767e88, gradientMap: grad });
   const pipes = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.09, 0.09, floorLen, 8), pipeMat, 4);
   // Вентиляторы под потолком — диск с ободом, изредка вдоль дорожки.
-  const fanMat = new THREE.MeshToonMaterial({ color: 0x30343a, gradientMap: grad });
+  const fanMat = new THREE.MeshToonMaterial({ color: 0x565c66, gradientMap: grad });
   const fans = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.55, 0.55, 0.08, 16), fanMat, Math.ceil(n / 4) * 2);
   let pi = 0, bi = 0, gi = 0, mi = 0, fi = 0;
   const m4 = new THREE.Matrix4();
@@ -839,12 +862,21 @@ function spawnBonus() {
 // Пять силуэтов из чужого зала — цвет холодный/ядовитый (свои у нас всегда
 // тёплые, см. FIGHTERS), чтобы две толпы читались мгновенно даже боковым
 // зрением, а рост/ширина/снаряжение в руках говорили за тип без подписей.
+// Холодные звонкие цвета — чистые, не приглушённые, чтобы враги читались с
+// первого взгляда как «чужие» рядом с тёплой своей толпой (см. FIGHTERS).
+// hpUnit — реальный запас прочности одной головы типа: бой теперь считает
+// его честно (см. mkGroup/попадание пули в update()), а не только раскраску
+// лейбла — иначе тяжеловес умирал от одного щелчка ровно как бегун.
 const ENEMY_TYPES = {
-  runner:  { name: 'БЕГУН',     top: '#8fd14f', skin: '#5a9a3a', bottom: '#3a6a24', scale: 0.80, hpUnit: 1,  dmgUnit: 1.0, speedMult: 1.65, gearProp: null },
-  bruiser: { name: 'ТЯЖЕЛОВЕС', top: '#3a5a78', skin: '#28405a', bottom: '#1c2c3e', scale: 1.55, hpUnit: 7,  dmgUnit: 3.4, speedMult: 0.58, gearProp: null },
-  shield:  { name: 'ЩИТОВИК',   top: '#2f6f6a', skin: '#1f4d48', bottom: '#173a36', scale: 1.18, hpUnit: 3,  dmgUnit: 1.8, speedMult: 0.80, gearProp: 'plate', blockDmg: 4.2 },
-  shooter: { name: 'СТРЕЛОК',   top: '#6a3a8a', skin: '#48276a', bottom: '#301c4a', scale: 0.95, hpUnit: 2,  dmgUnit: 0,   speedMult: 0.42, gearProp: null, ranged: true, stopZ: 0.85 },
-  leader:  { name: 'ВОЖАК',     top: '#2fb0c0', skin: '#1c7d8a', bottom: '#134f58', scale: 2.05, hpUnit: 20, dmgUnit: 6.0, speedMult: 0.55, gearProp: 'crown', isLeader: true },
+  runner:  { name: 'БЕГУН',     top: '#4ade80', skin: '#16803c', bottom: '#0f5c2c', scale: 0.80, hpUnit: 1,   dmgUnit: 1.0, speedMult: 1.65, gearProp: null },
+  bruiser: { name: 'ТЯЖЕЛОВЕС', top: '#3b82f6', skin: '#1e40af', bottom: '#16297a', scale: 1.55, hpUnit: 11,  dmgUnit: 3.4, speedMult: 0.58, gearProp: null },
+  shield:  { name: 'ЩИТОВИК',   top: '#22d3ee', skin: '#0e7490', bottom: '#0a5866', scale: 1.18, hpUnit: 15,  dmgUnit: 1.8, speedMult: 0.80, gearProp: 'plate', blockDmg: 4.2 },
+  shooter: { name: 'СТРЕЛОК',   top: '#c026d3', skin: '#701a75', bottom: '#4c1259', scale: 0.95, hpUnit: 4,   dmgUnit: 0,   speedMult: 0.42, gearProp: null, ranged: true, stopZ: 0.85 },
+  leader:  { name: 'ВОЖАК',     top: '#14b8a6', skin: '#0f766e', bottom: '#0b5852', scale: 2.05, hpUnit: 55,  dmgUnit: 6.0, speedMult: 0.55, gearProp: 'crown', isLeader: true },
+  // Гигант — редкое рубежное событие внутри волны, не рядовой тип: гриф со
+  // штангой как дубина, огромный запас хода и здоровья, идёт медленно и
+  // виден издалека — заставляет копить оружие и маневрировать, а не отстреливаться на бегу.
+  giant:   { name: 'ГИГАНТ',    top: '#475569', skin: '#1e293b', bottom: '#0f172a', scale: 3.3,  hpUnit: 480, dmgUnit: 22,  speedMult: 0.30, gearProp: 'barbell', isGiant: true },
 };
 const ENEMY_TYPE_KEYS = Object.keys(ENEMY_TYPES);
 // Какие типы уже "в ходу" на этой дистанции — состав волны меняется по мере
@@ -859,7 +891,14 @@ function waveTypeUnlocks(d) {
 }
 function mkGroup(type, count) {
   count = Math.max(1, Math.round(count));
-  return { type, count, countMax: count, z: ZFAR + rnd(-0.05, 0.05), fireTimer: rnd(0.7, 1.3) };
+  const hpUnit = ENEMY_TYPES[type].hpUnit || 1;
+  // hp — честный пул прочности группы (count голов × hpUnit); count теперь
+  // считается ОТ hp (см. попадание пули в update()), а не наоборот — так
+  // цифра над толпой реально тикает по мере того, как отряд её прожигает.
+  const hp = count * hpUnit;
+  // seed — стабильный на весь забег группы разброс размера особей (см.
+  // syncEnemyCrowd): толпа не должна выглядеть клонами одного роста.
+  return { type, count, countMax: count, hp, hpMax: hp, z: ZFAR + rnd(-0.05, 0.05), fireTimer: rnd(0.7, 1.3), seed: rnd(0, 1000) };
 }
 function spawnWave() {
   // Волна растёт от дистанции, но подпирается мягким потолком от размера
@@ -867,10 +906,12 @@ function spawnWave() {
   // встречных, а тот, кто просел, тонет. Без потолка кривая обгоняла отряд уже
   // к третьей минуте — забег обрывался на шестерых бойцах. Сама волна теперь
   // спавнится своим отдельным таймером (см. nextWaveAt) — дорожка пустой не
-  // бывает независимо от рядового потока ворот/блинов/бонусов.
-  const raw = 2 + Math.pow(Math.max(0, dist) / 240, 1.5) * 9 + rnd(-1, 4);
-  const softCap = dist < 500 ? Math.max(6, squad * 1.7) : Math.max(12, squad * 2.4);
-  const total = Math.round(clamp(Math.min(raw, softCap), 2, 3000));
+  // бывает независимо от рядового потока ворот/блинов/бонусов. Плотность и
+  // потолок подняты заметно — «десяток фигур» не читается как встречная
+  // толпа, нужна густая масса, как в референсе.
+  const raw = 3 + Math.pow(Math.max(0, dist) / 200, 1.55) * 13 + rnd(-1, 5);
+  const softCap = dist < 500 ? Math.max(9, squad * 2.2) : Math.max(16, squad * 3.2);
+  const total = Math.round(clamp(Math.min(raw, softCap), 3, 4000));
   const formation = pick(['wedge', 'wedge', 'wall', 'flanks', 'scatter']);
   const jitter = formation === 'scatter' ? Array.from({ length: 12 }, () => rnd(-0.7, 0.7)) : null;
 
@@ -895,6 +936,13 @@ function spawnWave() {
     given += n;
     groups.push(mkGroup(k, n));
   });
+  // Гигант — не рядовой участник численности волны, а редкое отдельное
+  // событие поверх неё: максимум один на дорожке, огромный запас хода, тянет
+  // игрока сфокусировать огонь или уйти в объезд.
+  const hasGiant = obstacles.some(o => o.kind === 'wave' && o.groups.some(g => g.type === 'giant' && g.hp > 0));
+  if (!hasGiant && dist >= 420 && Math.random() < clamp((dist - 420) / 900, 0, 0.16)) {
+    groups.push(mkGroup('giant', 1));
+  }
   obstacles.push({
     kind: 'wave', worldX: spreadX(0.55), groups, formation, jitter,
     speedMult: rnd(0.9, 1.15),
@@ -941,6 +989,15 @@ function spawnCrate() {
 // Дискретных объектов на экране мало одновременно (десяток), поэтому не
 // инстансим — обычные Mesh, диффим по идентичности JS-объекта каждый кадр.
 const meshFor = new Map();
+// Жирный чёрный контур для одиночных мешей — тот же приём, что и в
+// InstancedMesh-толпе (см. OUTLINE_K): чуть увеличенный чёрный BackSide-клон,
+// добавленный ребёнком в тот же локальный ноль координат.
+function addOutline(mesh, geo, scale) {
+  const out = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: 0x0a0705, side: THREE.BackSide }));
+  out.scale.setScalar(scale || OUTLINE_K);
+  mesh.add(out);
+  return out;
+}
 function disposeMesh(m) {
   m.traverse(n => { if (n.geometry) n.geometry.dispose(); if (n.material) (Array.isArray(n.material) ? n.material : [n.material]).forEach(mm => mm.dispose()); });
   if (m.parent) m.parent.remove(m);
@@ -949,9 +1006,10 @@ function createMeshFor(o) {
   if (o.kind === 'plate') {
     const geo = new THREE.CylinderGeometry(0.46, 0.46, 0.16, 20);
     geo.rotateX(Math.PI / 2);
-    const mesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: 0xc0392b }));
-    const rim = new THREE.Mesh(new THREE.TorusGeometry(0.42, 0.05, 8, 20), new THREE.MeshLambertMaterial({ color: 0x5a1912 }));
+    const mesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: 0xd8442e }));
+    const rim = new THREE.Mesh(new THREE.TorusGeometry(0.42, 0.05, 8, 20), new THREE.MeshLambertMaterial({ color: 0x7a2418 }));
     mesh.add(rim);
+    addOutline(mesh, geo, 1.16);
     return mesh;
   }
   if (o.kind === 'gate') {
@@ -974,6 +1032,7 @@ function createMeshFor(o) {
       }));
       door.add(rim);
       door.userData.rim = rim;
+      addOutline(door, doorGeo, 1.1);
       return door;
     };
     const left = mkDoor(leftGood, -TRACK_HALF3 * 0.5);
@@ -988,27 +1047,35 @@ function createMeshFor(o) {
     const postGeo = new THREE.BoxGeometry(0.22, 1.9, 0.22);
     const pL = new THREE.Mesh(postGeo, postMat); pL.position.set(-TRACK_HALF3 * 0.56, 0.95, 0);
     const pR = new THREE.Mesh(postGeo, postMat); pR.position.set(TRACK_HALF3 * 0.56, 0.95, 0);
-    const bar = new THREE.Mesh(new THREE.BoxGeometry(TRACK_HALF3 * 1.12, 0.22, 0.22), new THREE.MeshLambertMaterial({ color: 0x9aa0ab }));
+    const barGeo = new THREE.BoxGeometry(TRACK_HALF3 * 1.12, 0.22, 0.22);
+    const bar = new THREE.Mesh(barGeo, new THREE.MeshLambertMaterial({ color: 0x9aa0ab }));
     bar.position.set(0, 1.55, 0);
     const plGeo = new THREE.CylinderGeometry(0.55, 0.55, 0.32, 16); plGeo.rotateZ(Math.PI / 2);
-    const plMat = new THREE.MeshLambertMaterial({ color: 0xc0392b });
+    const plMat = new THREE.MeshLambertMaterial({ color: 0xd8442e });
     const plL = new THREE.Mesh(plGeo, plMat); plL.position.set(-TRACK_HALF3 * 0.56, 1.55, 0);
     const plR = new THREE.Mesh(plGeo, plMat); plR.position.set(TRACK_HALF3 * 0.56, 1.55, 0);
+    [pL, pR].forEach(m => addOutline(m, postGeo, 1.18));
+    addOutline(bar, barGeo, 1.15);
+    [plL, plR].forEach(m => addOutline(m, plGeo, 1.14));
     g.add(pL, pR, bar, plL, plR);
     return g;
   }
   if (o.idx !== undefined) { // ящик с оружием
     const w = WEAPONS[o.idx];
     const g = new THREE.Group();
-    const box = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.6, 0.7), new THREE.MeshLambertMaterial({ color: 0x3a2c1e }));
-    const edges = new THREE.LineSegments(new THREE.EdgesGeometry(box.geometry), new THREE.LineBasicMaterial({ color: new THREE.Color(w.color) }));
+    const boxGeo = new THREE.BoxGeometry(0.7, 0.6, 0.7);
+    const box = new THREE.Mesh(boxGeo, new THREE.MeshLambertMaterial({ color: 0x5a4630 }));
+    const edges = new THREE.LineSegments(new THREE.EdgesGeometry(boxGeo), new THREE.LineBasicMaterial({ color: new THREE.Color(w.color) }));
     box.add(edges);
+    addOutline(box, boxGeo, 1.16);
     g.add(box);
     return g;
   }
   // бонус (preworkout/belt/dumbbell)
   const d = BONUS_TYPES[o.type];
-  const mesh = new THREE.Mesh(new THREE.IcosahedronGeometry(0.34, 0), new THREE.MeshLambertMaterial({ color: new THREE.Color(d.color) }));
+  const bonusGeo = new THREE.IcosahedronGeometry(0.34, 0);
+  const mesh = new THREE.Mesh(bonusGeo, new THREE.MeshLambertMaterial({ color: new THREE.Color(d.color) }));
+  addOutline(mesh, bonusGeo, 1.18);
   return mesh;
 }
 function updateMeshFor(o, m) {
@@ -1073,11 +1140,28 @@ function drawObstacleLabels() {
       textChip(label2, (mid.x + farE.x) / 2, mid.y, fs, '#ffffff');
     } else if (o.kind === 'wave') {
       // Каждый живой тип в волне — свой цвет и своя цифра над головой, чтобы
-      // отличать их в бою на глаз, не только по силуэту.
+      // отличать их в бою на глаз, не только по силуэту. Цифра всегда — живой
+      // остаток hp-пула группы (см. mkGroup/попадание пули), поэтому она
+      // реально тикает вниз по мере обстрела, а не стоит на месте.
       o.groups.forEach(g => {
         if (g.count <= 0) return;
         const def = ENEMY_TYPES[g.type];
         const p = projectPoint(o.worldX, g.z, 1.55 * def.scale);
+        if (def.isGiant) {
+          // Гигант — редкое событие: число жизней крупное и заметное прямо
+          // над ним, плюс полоса здоровья на весь верх экрана, пока он жив —
+          // игрок обязан видеть, что реально его дожимает.
+          const fs = Math.max(22, 36 * fakeScale(g.z));
+          textChip(fmt(Math.ceil(g.hp)), p.x, p.y, fs, '#ffdf70');
+          const bw = W * 0.62, bx0 = W / 2 - bw / 2, by = H * 0.10;
+          const frac = clamp(g.hp / g.hpMax, 0, 1);
+          hctx.fillStyle = 'rgba(0,0,0,0.45)'; hctx.fillRect(bx0 - 4, by - 4, bw + 8, 22);
+          hctx.fillStyle = 'rgba(255,255,255,0.12)'; hctx.fillRect(bx0, by, bw, 14);
+          hctx.fillStyle = 'rgba(255,140,40,' + (0.55 + 0.45 * frac) + ')'; hctx.fillRect(bx0, by, bw * frac, 14);
+          hctx.font = "800 12px 'Courier New', monospace"; hctx.fillStyle = CHALK; hctx.textAlign = 'center';
+          hctx.fillText('ГИГАНТ · ' + fmt(Math.ceil(g.hp)), W / 2, by + 11);
+          return;
+        }
         const fs = Math.max(13, (def.isLeader ? 30 : 23) * fakeScale(g.z));
         const col = def.isLeader ? C_GOLD : (def.ranged ? '#e6a6ff' : (def.hpUnit >= 6 ? '#bfe0ff' : '#bfe89a'));
         textChip(fmt(g.count), p.x, p.y, fs, col);
@@ -1296,9 +1380,9 @@ const PLAYER_CAP = 240;
 // Бюджет отрисовки врагов бьётся по типам — так у каждого свой цвет рига
 // (InstancedMesh не красится поинстансно на MeshToonMaterial, поэтому пять
 // типов — это пять отдельных ригов, не один общий).
-const ENEMY_CAP_BY_TYPE = { runner: 90, bruiser: 34, shield: 26, shooter: 26, leader: 10 };
-const CHAR_SCALE = 0.7; // боец ≈ десятая часть высоты экрана, не половина
-const OUTLINE_K = 1.16;
+const ENEMY_CAP_BY_TYPE = { runner: 150, bruiser: 55, shield: 42, shooter: 42, leader: 14, giant: 2 };
+const CHAR_SCALE = 1.05; // крупнее прежнего в ~1.5 раза — герой ближе к центру кадра
+const OUTLINE_K = 1.4; // жирный мультяшный контур — было еле заметное 1.16
 // Ступенчатая (тон-в-тон) градация света — как в мультяшных раннерах, не
 // плоский Lambert: 4 шага яркости через crisp-текстуру без интерполяции.
 let _toonGrad = null;
@@ -1311,12 +1395,20 @@ function toonGradient() {
   _toonGrad.minFilter = THREE.NearestFilter; _toonGrad.magFilter = THREE.NearestFilter;
   return _toonGrad;
 }
+// Риг тела — 12 инстансед-мешей на команду (в пределах ориентира 10-12):
+// торс+контур, голова+контур, кепка, рука+контур, плечи/кисти одним шаром,
+// нога+контур, стопа, тень. Руки и ноги — сужающиеся цилиндры (не бруски),
+// плечи-дельты и кисти сидят на одной геометрии шара (4 инстанса на бойца) —
+// дешёвый способ дать телу суставы без лишних мешей.
 function buildCrowdRig(cap, colors) {
   const grad = toonGradient();
-  const torsoGeo = new THREE.BoxGeometry(0.46, 0.62, 0.28);
-  const headGeo = new THREE.SphereGeometry(0.2, 8, 6);
-  const armGeo = new THREE.BoxGeometry(0.13, 0.5, 0.13); armGeo.translate(0, -0.25, 0);
-  const legGeo = new THREE.BoxGeometry(0.16, 0.58, 0.16); legGeo.translate(0, -0.29, 0);
+  const torsoGeo = new THREE.BoxGeometry(0.5, 0.64, 0.30);
+  const headGeo = new THREE.SphereGeometry(0.22, 8, 6);
+  const capGeo = new THREE.CylinderGeometry(0.17, 0.22, 0.13, 8);
+  const armGeo = new THREE.CylinderGeometry(0.055, 0.085, 0.52, 6); armGeo.translate(0, -0.26, 0);
+  const jointGeo = new THREE.SphereGeometry(0.10, 6, 6);
+  const legGeo = new THREE.CylinderGeometry(0.075, 0.105, 0.6, 6); legGeo.translate(0, -0.3, 0);
+  const footGeo = new THREE.BoxGeometry(0.23, 0.09, 0.33);
   const shadowGeo = new THREE.CircleGeometry(0.34, 12);
   const mkMain = (geo, color, count) => {
     const mesh = new THREE.InstancedMesh(geo, new THREE.MeshToonMaterial({ color, gradientMap: grad }), count);
@@ -1329,56 +1421,104 @@ function buildCrowdRig(cap, colors) {
   return {
     torso: mkMain(torsoGeo, colors.top, cap), torsoOut: mkOutline(torsoGeo, cap),
     head: mkMain(headGeo, colors.skin, cap), headOut: mkOutline(headGeo, cap),
+    cap: mkMain(capGeo, shade(colors.top, 0.62), cap),
     arm: mkMain(armGeo, colors.skin, cap * 2), armOut: mkOutline(armGeo, cap * 2),
+    joint: mkMain(jointGeo, colors.skin, cap * 4),
     leg: mkMain(legGeo, colors.bottom, cap * 2), legOut: mkOutline(legGeo, cap * 2),
+    foot: mkMain(footGeo, 0x1c1c22, cap * 2),
     shadow: mkMain(shadowGeo, 0x000000, cap),
   };
 }
 let playerRig = null, enemyRigs = null;
-let shieldGearMesh = null, leaderGearMesh = null;
-const SHIELD_GEAR_CAP = ENEMY_CAP_BY_TYPE.shield, LEADER_GEAR_CAP = ENEMY_CAP_BY_TYPE.leader;
+let shieldGearMesh = null, leaderGearMesh = null, giantBarMesh = null, giantPlateMesh = null;
+const SHIELD_GEAR_CAP = ENEMY_CAP_BY_TYPE.shield, LEADER_GEAR_CAP = ENEMY_CAP_BY_TYPE.leader, GIANT_GEAR_CAP = ENEMY_CAP_BY_TYPE.giant;
 // Снаряжение в руках/на голове — то, что отличает силуэт типа сильнее
-// цвета: блин-щит у щитовика, обруч-корона у вожака. Дешёвый инстансинг,
-// позиции считаются вместе с телом в syncEnemyCrowd().
+// цвета: блин-щит у щитовика, обруч-корона у вожака, гриф со штангой (как
+// дубина, а не меч — так оружие остаётся в теме подвальной качалки) у
+// гиганта. Дешёвый инстансинг, позиции считаются вместе с телом в
+// syncEnemyCrowd().
 function buildEnemyGearMeshes() {
+  const grad = toonGradient();
   const plateGeo = new THREE.CylinderGeometry(0.3, 0.3, 0.09, 14); plateGeo.rotateX(Math.PI / 2);
   shieldGearMesh = new THREE.InstancedMesh(plateGeo, new THREE.MeshLambertMaterial({ color: 0xc0392b }), SHIELD_GEAR_CAP);
   shieldGearMesh.count = 0; scene.add(shieldGearMesh);
   const crownGeo = new THREE.TorusGeometry(0.24, 0.045, 6, 14);
   leaderGearMesh = new THREE.InstancedMesh(crownGeo, new THREE.MeshBasicMaterial({ color: 0xffd700 }), LEADER_GEAR_CAP);
   leaderGearMesh.count = 0; scene.add(leaderGearMesh);
+  // Дубина гиганта — гриф-цилиндр (сужается к рукояти) плюс два блина на
+  // рабочем конце, вместе читаются как тяжёлая палица из зала.
+  const barGeo = new THREE.CylinderGeometry(0.045, 0.075, 1.5, 8);
+  giantBarMesh = new THREE.InstancedMesh(barGeo, new THREE.MeshToonMaterial({ color: 0x8a8f99, gradientMap: grad }), GIANT_GEAR_CAP);
+  giantBarMesh.count = 0; scene.add(giantBarMesh);
+  const gPlateGeo = new THREE.CylinderGeometry(0.24, 0.24, 0.13, 12); gPlateGeo.rotateX(Math.PI / 2);
+  giantPlateMesh = new THREE.InstancedMesh(gPlateGeo, new THREE.MeshToonMaterial({ color: 0xd8442e, gradientMap: grad }), GIANT_GEAR_CAP * 2);
+  giantPlateMesh.count = 0; scene.add(giantPlateMesh);
 }
+// Переиспользуемые scratch-объекты — setPart дёргается ~12 раз на бойца,
+// при отряде в полторы сотни это тысячи вызовов за кадр: аллокация новых
+// Vector3/Quaternion/Matrix4 на каждый вызов реально давила на GC и роняла
+// кадр. Один и тот же набор объектов, просто переписываемый — тот же
+// результат (setMatrixAt копирует значения), без мусора на сборщик.
+// THREE ещё не гарантированно загружен на момент парсинга этого <script> (см.
+// boot() ниже — three.min.js подтягивается асинхронно), поэтому scratch-
+// объекты создаются лениво при первом вызове, а не на верхнем уровне модуля.
+let _sPos = null, _sQuat = null, _sEuler = null, _sScale = null, _sM4 = null, _SHADOW_Q = null;
 function setPart(mesh, outlineMesh, idx, x, y, z, rotX, scale) {
-  const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(rotX, 0, 0));
-  const pos = new THREE.Vector3(x, y, z);
-  mesh.setMatrixAt(idx, new THREE.Matrix4().compose(pos, q, new THREE.Vector3(scale, scale, scale)));
+  if (!_sPos) {
+    _sPos = new THREE.Vector3(); _sQuat = new THREE.Quaternion(); _sEuler = new THREE.Euler();
+    _sScale = new THREE.Vector3(); _sM4 = new THREE.Matrix4();
+    _SHADOW_Q = new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0));
+  }
+  _sEuler.set(rotX, 0, 0);
+  _sQuat.setFromEuler(_sEuler);
+  _sPos.set(x, y, z);
+  _sScale.set(scale, scale, scale);
+  mesh.setMatrixAt(idx, _sM4.compose(_sPos, _sQuat, _sScale));
   if (outlineMesh) {
     const s = scale * OUTLINE_K;
-    outlineMesh.setMatrixAt(idx, new THREE.Matrix4().compose(pos, q, new THREE.Vector3(s, s, s)));
+    _sScale.set(s, s, s);
+    outlineMesh.setMatrixAt(idx, _sM4.compose(_sPos, _sQuat, _sScale));
   }
 }
-// Ставит одного бойца (торс+голова+руки+ноги+тень) в мировые координаты сцены.
+// Ставит одного бойца (торс+голова+кепка+руки+плечи/кисти+ноги+стопы+тень) в
+// мировые координаты сцены. Плечи-дельты и кисти — одна геометрия шара на
+// четыре точки бойца (idx*4..idx*4+3), стопы — по одной на ногу (idx*2/+1).
 function placeCharacter(rig, idx, x3, z3, phase, bob, scaleMul) {
   const S = CHAR_SCALE * (scaleMul || 1);
   const legL = Math.sin(phase) * 0.55, legR = -legL;
   const armL = -legL * 0.7, armR = -legR * 0.7;
   const bobY = Math.abs(Math.sin(phase)) * 0.045 * bob * S;
+  const hx = 0.27 * S, hipx = 0.12 * S;
+  const shY = 1.12 * S + bobY, hipY = 0.56 * S;
+  const headY = 1.34 * S + bobY;
   setPart(rig.torso, rig.torsoOut, idx, x3, 0.85 * S + bobY, z3, 0, S);
-  setPart(rig.head, rig.headOut, idx, x3, 1.32 * S + bobY, z3, 0, S);
-  setPart(rig.arm, rig.armOut, idx * 2, x3 - 0.27 * S, 1.12 * S + bobY, z3, armL, S);
-  setPart(rig.arm, rig.armOut, idx * 2 + 1, x3 + 0.27 * S, 1.12 * S + bobY, z3, armR, S);
-  setPart(rig.leg, rig.legOut, idx * 2, x3 - 0.12 * S, 0.56 * S, z3, legL, S);
-  setPart(rig.leg, rig.legOut, idx * 2 + 1, x3 + 0.12 * S, 0.56 * S, z3, legR, S);
-  const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0));
-  rig.shadow.setMatrixAt(idx, new THREE.Matrix4().compose(new THREE.Vector3(x3, 0.012, z3), q, new THREE.Vector3(S, S, S)));
+  setPart(rig.head, rig.headOut, idx, x3, headY, z3, 0, S);
+  setPart(rig.cap, null, idx, x3, headY + 0.24 * S, z3, 0, S);
+  setPart(rig.arm, rig.armOut, idx * 2, x3 - hx, shY, z3, armL, S);
+  setPart(rig.arm, rig.armOut, idx * 2 + 1, x3 + hx, shY, z3, armR, S);
+  const armLen = 0.5 * S;
+  setPart(rig.joint, null, idx * 4, x3 - hx, shY, z3, 0, S * 0.72);
+  setPart(rig.joint, null, idx * 4 + 1, x3 + hx, shY, z3, 0, S * 0.72);
+  setPart(rig.joint, null, idx * 4 + 2, x3 - hx, shY - armLen * Math.cos(armL), z3 + armLen * Math.sin(armL), 0, S * 0.62);
+  setPart(rig.joint, null, idx * 4 + 3, x3 + hx, shY - armLen * Math.cos(armR), z3 + armLen * Math.sin(armR), 0, S * 0.62);
+  setPart(rig.leg, rig.legOut, idx * 2, x3 - hipx, hipY, z3, legL, S);
+  setPart(rig.leg, rig.legOut, idx * 2 + 1, x3 + hipx, hipY, z3, legR, S);
+  const legLen = 0.58 * S;
+  setPart(rig.foot, null, idx * 2, x3 - hipx, hipY - legLen * Math.cos(legL), z3 + legLen * Math.sin(legL), 0, S);
+  setPart(rig.foot, null, idx * 2 + 1, x3 + hipx, hipY - legLen * Math.cos(legR), z3 + legLen * Math.sin(legR), 0, S);
+  _sPos.set(x3, 0.012, z3); _sScale.set(S, S, S);
+  rig.shadow.setMatrixAt(idx, _sM4.compose(_sPos, _SHADOW_Q, _sScale));
 }
 function finishRig(rig, count) {
   rig.torso.count = count; rig.torsoOut.count = count;
   rig.head.count = count; rig.headOut.count = count;
+  rig.cap.count = count;
   rig.shadow.count = count;
   rig.arm.count = count * 2; rig.armOut.count = count * 2;
+  rig.joint.count = count * 4;
   rig.leg.count = count * 2; rig.legOut.count = count * 2;
-  [rig.torso, rig.torsoOut, rig.head, rig.headOut, rig.arm, rig.armOut, rig.leg, rig.legOut, rig.shadow]
+  rig.foot.count = count * 2;
+  [rig.torso, rig.torsoOut, rig.head, rig.headOut, rig.cap, rig.arm, rig.armOut, rig.joint, rig.leg, rig.legOut, rig.foot, rig.shadow]
     .forEach(m => { m.instanceMatrix.needsUpdate = true; });
 }
 function applyFighterColors() {
@@ -1386,7 +1526,9 @@ function applyFighterColors() {
   const f = FIGHTERS[selectedFighter];
   playerRig.torso.material.color.set(f.top);
   playerRig.head.material.color.set(f.skin);
+  playerRig.cap.material.color.set(shade(f.top, 0.62));
   playerRig.arm.material.color.set(f.skin);
+  playerRig.joint.material.color.set(f.skin);
   playerRig.leg.material.color.set(f.bottom);
 }
 // Обновляет позиции всей толпы (лидер + отряд) — followers уже посчитаны
@@ -1415,7 +1557,7 @@ function syncEnemyCrowd() {
   if (!enemyRigs) return;
   if (!_m4) { _m4 = new THREE.Matrix4(); _q0 = new THREE.Quaternion(); }
   const idxByType = {}; ENEMY_TYPE_KEYS.forEach(k => idxByType[k] = 0);
-  let shieldN = 0, leaderN = 0;
+  let shieldN = 0, leaderN = 0, giantBarN = 0, giantPlateN = 0;
   for (const o of obstacles) {
     if (o.kind !== 'wave') continue;
     for (const g of o.groups) {
@@ -1430,14 +1572,36 @@ function syncEnemyCrowd() {
         const s = waveSlot(o, i, shown);
         const x3 = worldX3(o.worldX + s.dx);
         const z3 = obstacleZ3(g.z + s.dz);
-        placeCharacter(rig, idx, x3, z3, i * 1.7 + t * 3, 1, def.scale);
+        // Разброс размера внутри типа — стабильный на особь (seed группы +
+        // индекс), не мигает по кадрам: толпа не выглядит клонами одного роста.
+        const variance = def.isGiant ? 1 : (0.82 + 0.36 * (0.5 + 0.5 * Math.sin(g.seed + i * 12.9898)));
+        const iScale = def.scale * variance;
+        placeCharacter(rig, idx, x3, z3, i * 1.7 + t * 3, 1, iScale);
         if (def.gearProp === 'plate' && shieldGearMesh && shieldN < SHIELD_GEAR_CAP) {
-          _m4.compose(new THREE.Vector3(x3, 0.95 * CHAR_SCALE * def.scale, z3 + 0.22 * def.scale), _q0, new THREE.Vector3(def.scale, def.scale, def.scale));
+          _m4.compose(new THREE.Vector3(x3, 0.95 * CHAR_SCALE * iScale, z3 + 0.22 * iScale), _q0, new THREE.Vector3(iScale, iScale, iScale));
           shieldGearMesh.setMatrixAt(shieldN++, _m4);
         }
         if (def.gearProp === 'crown' && leaderGearMesh && leaderN < LEADER_GEAR_CAP) {
-          _m4.compose(new THREE.Vector3(x3, 1.55 * CHAR_SCALE * def.scale, z3), _q0, new THREE.Vector3(def.scale, def.scale, def.scale));
+          _m4.compose(new THREE.Vector3(x3, 1.55 * CHAR_SCALE * iScale, z3), _q0, new THREE.Vector3(iScale, iScale, iScale));
           leaderGearMesh.setMatrixAt(leaderN++, _m4);
+        }
+        if (def.gearProp === 'barbell' && giantBarMesh && giantBarN < GIANT_GEAR_CAP) {
+          // Дубина держится наперевес у правой руки: гриф под наклоном,
+          // рабочий (тяжёлый) конец с блинами внизу-впереди — читается как
+          // занесённое оружие, а не декорация.
+          const S = CHAR_SCALE * iScale;
+          const gripX = x3 + 0.42 * S, gripY = 1.15 * S, gripZ = z3 + 0.05 * S;
+          const tilt = 0.55;
+          const barQ = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, -tilt));
+          _m4.compose(new THREE.Vector3(gripX, gripY, gripZ), barQ, new THREE.Vector3(S, S, S));
+          giantBarMesh.setMatrixAt(giantBarN++, _m4);
+          const barLen = 1.5 * S;
+          const tipX = gripX + Math.sin(tilt) * barLen * 0.42, tipY = gripY - Math.cos(tilt) * barLen * 0.42;
+          [-0.09, 0.09].forEach(off => {
+            if (giantPlateN >= GIANT_GEAR_CAP * 2) return;
+            _m4.compose(new THREE.Vector3(tipX + off * S, tipY, gripZ), barQ, new THREE.Vector3(S, S, S));
+            giantPlateMesh.setMatrixAt(giantPlateN++, _m4);
+          });
         }
         idx++;
       }
@@ -1447,6 +1611,8 @@ function syncEnemyCrowd() {
   ENEMY_TYPE_KEYS.forEach(k => finishRig(enemyRigs[k], idxByType[k]));
   if (shieldGearMesh) { shieldGearMesh.count = shieldN; shieldGearMesh.instanceMatrix.needsUpdate = true; }
   if (leaderGearMesh) { leaderGearMesh.count = leaderN; leaderGearMesh.instanceMatrix.needsUpdate = true; }
+  if (giantBarMesh) { giantBarMesh.count = giantBarN; giantBarMesh.instanceMatrix.needsUpdate = true; }
+  if (giantPlateMesh) { giantPlateMesh.count = giantPlateN; giantPlateMesh.instanceMatrix.needsUpdate = true; }
 }
 
 // ── УПРАВЛЕНИЕ ──────────────────────────────────────────────────────────────
@@ -1655,13 +1821,13 @@ function update(dt) {
     else if (kind === 'gate') spawnGate();
     else if (kind === 'bonus') spawnBonus();
     else if (kind === 'crate') spawnCrate();
-    nextEventAt = dist + rnd(15, 26);
+    nextEventAt = dist + rnd(11, 19);
   }
   // Волны — свой, более частый и не пересыхающий поток: дорожка никогда не
-  // бывает пустой, и к концу забега враги идут гуще.
+  // бывает пустой ни в начале, ни посреди забега, и к концу враги идут гуще.
   if (state === 'game' && dist >= nextWaveAt) {
     spawnWave();
-    const gap = clamp(110 - dist / 9, 42, 110);
+    const gap = clamp(72 - dist / 12, 26, 72);
     nextWaveAt = dist + rnd(gap * 0.7, gap);
   }
 
@@ -1686,7 +1852,11 @@ function update(dt) {
           const def = ENEMY_TYPES[hitFg.type];
           // Щитовик с блином в руках — слабые снаряды в лоб почти не берут.
           if (def.blockDmg && bl.dmg < def.blockDmg) { blocked = true; dmgInt = 0; }
-          hitFg.count = Math.max(0, hitFg.count - dmgInt);
+          // Урон бьёт в честный пул hp группы (count голов × hpUnit), а
+          // видимое число голов пересчитывается от него — так тяжеловес и
+          // вожак реально держат несколько секунд огня, а не тают от щелчка.
+          hitFg.hp = Math.max(0, hitFg.hp - dmgInt);
+          hitFg.count = Math.min(hitFg.countMax, Math.ceil(hitFg.hp / (def.hpUnit || 1)));
         } else {
           target.hp = Math.max(0, target.hp - dmgInt);
         }
@@ -1705,6 +1875,7 @@ function update(dt) {
             score += gain;
             shake(5); sPop(); hitStop(0.02);
             burst(p.x, p.y, '#ffb347', 20, 260);
+            shockwave(p.x, p.y, '#ffb347', 100, 0.32);
             popNumber('+' + fmt(gain), C_GOLD, p.x, p.y - 10, true);
             obstacles.splice(obstacles.indexOf(target), 1);
           } else if (target.kind === 'wave') {
@@ -1712,6 +1883,7 @@ function update(dt) {
             score += gain;
             shake(4); sPop();
             burst(p.x, p.y, '#bfe89a', 18, 240);
+            shockwave(p.x, p.y, '#bfe89a', 130, 0.4);
             popNumber('ВОЛНА СМЕТЕНА +' + fmt(gain), C_GREEN, p.x, p.y - 10, true);
             obstacles.splice(obstacles.indexOf(target), 1);
           }
@@ -1770,11 +1942,13 @@ function update(dt) {
         if (good) {
           sGateUp(); shake(4); squadPulse = 1; flash('green', 200);
           burst(p.x, p.y - 30, C_GREEN, 22, 240);
+          shockwave(p.x, p.y - 30, C_GREEN, 140, 0.36);
           for (let k = 0; k < 3; k++) popNumber(eff.label, C_GREEN, p.x + rnd(-30, 30), p.y - 40 - k * 22, true);
         } else {
           comboBreak();
           sGateDown(); shake(7); hitStop(0.03); flash('red', 220);
           burst(p.x, p.y - 20, '#ff4444', 16, 220);
+          shockwave(p.x, p.y - 20, '#ff4444', 110, 0.32);
           popNumber(eff.label, '#ff4444', p.x, p.y - 40, true);
         }
         maxSquad = Math.max(maxSquad, squad);
@@ -1797,6 +1971,7 @@ function update(dt) {
           flash('white', 90); setTimeout(() => flash('gold', 380), 90);
           const p = projectPoint(0, o.z);
           burst(p.x, p.y, C_GOLD, 46, 340);
+          shockwave(p.x, p.y, C_GOLD, 200, 0.5);
           score += 400; squad = Math.min(SQUAD_CAP, squad + 40); maxSquad = Math.max(maxSquad, squad);
           popNumber('ШТАНГА ВЗЯТА! +40', C_GOLD, W / 2, H * 0.3, true);
           obstacles.splice(i, 1);
@@ -1807,6 +1982,7 @@ function update(dt) {
           hitStop(0.06); shake(24); sBossLose(); flash('red', 420);
           const p = projectPoint(0, o.z);
           burst(p.x, p.y, C_RAGE, 34, 300);
+          shockwave(p.x, p.y, C_RAGE, 160, 0.42);
           popNumber('−' + fmt(loss), '#ff4444', W / 2, H * 0.3, true);
           obstacles.splice(i, 1);
           if (squad <= 0) { die(); return; }
@@ -1861,11 +2037,12 @@ function update(dt) {
           burst(p.x, p.y - 20, '#bfe89a', Math.min(40, 14 + loss), 280);
           if (enemyLeft <= 0) {
             score += g.countMax * (def.isLeader ? 4 : 1);
-            popNumber((def.isLeader ? 'ВОЖАК СЛОМЛЕН −' : 'ОТРЯД ПРОДАВИЛ −') + fmt(loss), C_GREEN, W / 2, GROUND_F * H - 90, true);
+            shockwave(p.x, p.y - 20, def.isGiant ? '#ffdf70' : '#bfe89a', def.isGiant ? 170 : 110, 0.36);
+            popNumber((def.isLeader ? 'ВОЖАК СЛОМЛЕН −' : (def.isGiant ? 'ГИГАНТ ПОВЕРЖЕН −' : 'ОТРЯД ПРОДАВИЛ −')) + fmt(loss), C_GREEN, W / 2, GROUND_F * H - 90, true);
           } else {
             popNumber('−' + fmt(loss), '#ff4444', W / 2, GROUND_F * H - 90, true);
           }
-          g.count = 0;
+          g.count = 0; g.hp = 0;
           if (squad <= 0) { die(); return; }
         }
       }
@@ -1898,6 +2075,7 @@ function update(dt) {
       const p = projectPoint(squadWorldX, 0.1);
       sWeaponUp(); shake(5); flash('gold', 220);
       burst(p.x, p.y - 20, WEAPONS[cr.idx].color, 20, 240);
+      shockwave(p.x, p.y - 20, WEAPONS[cr.idx].color, 120, 0.34);
       popNumber(WEAPONS[cr.idx].name + '!', WEAPONS[cr.idx].color, p.x, p.y - 46, true);
       crates.splice(i, 1); continue;
     }
@@ -1946,8 +2124,11 @@ function updateCamera(dt) {
   // Камера отъезжает по мере роста орды: строй всегда виден целиком, и это же
   // даёт ощущение масштаба — было двое, камера близко; стало двести, видно поле.
   const depth = formRows * STEP_Z * FOLLOWER_Z_SCALE * formScale;
-  camera.position.set(leadX * 0.35 + shakeX, 6.0 + depth * 0.34 + shakeY, 9.0 + depth * 0.62 + punch);
-  camera.lookAt(leadX * 0.55, 1.05, -6.0 + depth * 0.25);
+  // Точка взгляда поднята и толпа держится ближе к центру кадра (фигуры
+  // выросли ~в полтора раза, см. CHAR_SCALE/STEP_X/STEP_Z) — раньше отряд
+  // жался к нижнему краю экрана.
+  camera.position.set(leadX * 0.35 + shakeX, 6.4 + depth * 0.34 + shakeY, 9.6 + depth * 0.62 + punch);
+  camera.lookAt(leadX * 0.55, 1.45, -6.0 + depth * 0.25);
   camera.rotation.z = camYaw * 0.5;
   // Угол обзора слегка растёт со скоростью — дешёвый и очень заметный приём
   // разгона: чем быстрее забег, тем шире и "летящее" кадр.
@@ -1983,7 +2164,16 @@ function render() {
 
   drawObstacleLabels();
 
-  parts.forEach(p => { hctx.globalAlpha = Math.max(0, p.life * 1.6); hctx.fillStyle = p.color; hctx.fillRect(p.x, p.y, p.r, p.r); });
+  parts.forEach(p => {
+    if (p.ring) {
+      const prog = clamp(1 - Math.max(0, p.life) / p.life0, 0, 1);
+      hctx.globalAlpha = Math.max(0, 1 - prog) * 0.85;
+      hctx.strokeStyle = p.color; hctx.lineWidth = 5 + 12 * (1 - prog);
+      hctx.beginPath(); hctx.arc(p.x, p.y, Math.max(1, p.maxR * prog), 0, Math.PI * 2); hctx.stroke();
+      return;
+    }
+    hctx.globalAlpha = Math.max(0, p.life * 1.6); hctx.fillStyle = p.color; hctx.fillRect(p.x, p.y, p.r, p.r);
+  });
   hctx.globalAlpha = 1;
 
   toasts.forEach(ts => {
@@ -2042,7 +2232,7 @@ function render() {
 // ── ИНИЦИАЛИЗАЦИЯ THREE.JS И ЗАПУСК ─────────────────────────────────────────
 function initThree() {
   scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x100d16);
+  scene.background = new THREE.Color(0x2e3450);
   camera = new THREE.PerspectiveCamera(FOV_BASE, W / H, 0.1, 200);
   camFov = FOV_BASE;
   renderer = new THREE.WebGLRenderer({ canvas: cv, antialias: true, alpha: false });
