@@ -11,6 +11,7 @@
 отката, а откат — вернуть как было.
 """
 
+import asyncio
 import datetime as dt
 from unittest.mock import AsyncMock
 
@@ -336,6 +337,36 @@ async def test_log_food_does_not_invent_numbers_for_a_non_meal(fresh_db, user_id
     entries = await dbmod.list_food_entries(user_id, payload["logged"]["date"])
     assert entries[0]["calories"] is None
     assert payload["macros_estimated"] is False
+
+
+async def test_estimate_missing_macros_lets_a_timed_out_call_finish_in_background(
+    fresh_db, user_id, monkeypatch
+):
+    """asyncio.wait_for cancels what it wraps on timeout — if analyze_food had
+    already reached the provider by then, that used to cancel the request
+    client-side before its own cost-logging line ever ran, losing a call we
+    were billed for. asyncio.shield keeps the underlying call alive past the
+    timeout: we stop waiting for its answer, but it still runs to completion
+    (and logs its own cost) in the background."""
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(ai_trainer, "_FOOD_ESTIMATE_TIMEOUT", 0.01)
+
+    finished = asyncio.Event()
+
+    async def slow_analyze(uid, text="", **kwargs):
+        await asyncio.sleep(0.05)  # дольше таймаута — успевает состояться
+        finished.set()
+        return {"is_food": True, "calories": 300, "protein": 10, "fat": 5, "carbs": 40}
+
+    monkeypatch.setattr(ai_trainer, "analyze_food", slow_analyze)
+
+    entry: dict = {}
+    got = await ai_trainer._estimate_missing_macros(user_id, "что-то съел", entry)
+
+    assert got is False  # тайм-аут снаружи всё равно честно отдаёт "не успел"
+    assert entry == {}  # запись не подождала цифр — они не пишутся в неё
+
+    await asyncio.wait_for(finished.wait(), timeout=1)  # но вызов реально состоялся
 
 
 # ---------- сравнение периодов ----------
