@@ -1867,6 +1867,14 @@ async def ai_comment_workout(callback: CallbackQuery, state: FSMContext):
 
     Работает и на свежезавершённой карточке, и на карточке из истории: правит то же
     сообщение на месте, убирая из клавиатуры только саму эту кнопку.
+
+    Когда комментарий ещё не сгенерирован, тап — платный вызов
+    (ai_trainer.comment_on_workout), и его накрывают те же замки, что и у любого
+    другого AI-входа: `_try_claim_busy` от двойного тапа (без него два быстрых
+    тапа уходят в модель оба) и `ai_limits.hard_stop_block` от HARD-стопа по
+    деньгам (личной квоты под эту кнопку нет и заводить новую ради одной кнопки
+    не стоит — см. её докстринг). Уже сохранённый комментарий ничего не стоит и
+    оба замка не трогает.
     """
     workout_id = int(callback.data.split(":")[2])
     workout = await db.get_workout(workout_id)
@@ -1876,17 +1884,32 @@ async def ai_comment_workout(callback: CallbackQuery, state: FSMContext):
     if not ai_trainer.is_configured():
         await callback.answer("AI-тренер не настроен.", show_alert=True)
         return
-    await callback.answer()
 
+    user_id = callback.from_user.id
     comment = workout["ai_comment"]
     if not comment:
-        try:
-            comment = await ai_trainer.comment_on_workout(callback.from_user.id, workout_id)
-        except Exception:
-            logger.exception("AI trainer workout comment failed for workout %s", workout_id)
-            await callback.message.answer("⚠️ Не получилось получить комментарий, попробуй ещё раз позже.")
+        if not _try_claim_busy(user_id):
+            await callback.answer("Секунду, ещё думаю над прошлым вопросом 😅", show_alert=True)
             return
-        await db.set_workout_ai_comment(workout_id, comment)
+        try:
+            block = await ai_limits.hard_stop_block()
+            if block is not None:
+                logger.info("AI workout comment blocked for user %s: %s", user_id, block.log)
+                await callback.answer()
+                await ai_limits.reply(callback.message, block, reply_markup=await ai_keyboard(user_id))
+                return
+            await callback.answer()
+            try:
+                comment = await ai_trainer.comment_on_workout(user_id, workout_id)
+            except Exception:
+                logger.exception("AI trainer workout comment failed for workout %s", workout_id)
+                await callback.message.answer("⚠️ Не получилось получить комментарий, попробуй ещё раз позже.")
+                return
+            await db.set_workout_ai_comment(workout_id, comment)
+        finally:
+            _busy.discard(user_id)
+    else:
+        await callback.answer()
 
     comment_block = formatting.build_ai_comment_block(comment)
     new_text = (callback.message.html_text or "") + "\n" + comment_block
@@ -2955,6 +2978,19 @@ async def ai_video_question(message: Message, state: FSMContext):
             # присланное видео пришлось бы слать заново).
             if not block.preview:
                 return
+
+        # Разбор ролика сам по себе платный (video_analysis.analyze), а ответ на
+        # него дальше идёт через _handle_question — которая накрыта своей же
+        # квотой вопросов и списывает её ТОЛЬКО при готовом ответе. Раньше эта
+        # квота проверялась именно там, то есть уже ПОСЛЕ скачивания и разбора:
+        # видео с исчерпанной квотой вопросов всё равно оплачивалось целиком, а
+        # честный отказ приходил только на последнем шаге. Проверяем обе квоты
+        # здесь, до единого байта трафика.
+        block = await ai_limits.check(user_id, ai_limits.KIND_QUESTION)
+        if block is not None:
+            logger.info("AI video blocked (question quota) for user %s: %s", user_id, block.log)
+            await ai_limits.reply(message, block, reply_markup=await ai_keyboard(user_id))
+            return
 
         if video.file_size and video.file_size > config.MAX_VIDEO_BYTES:
             await message.reply(

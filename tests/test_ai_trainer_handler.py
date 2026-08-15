@@ -717,6 +717,103 @@ async def test_short_card_still_gets_the_comment_appended_in_place(fresh_db, use
     callback.message.edit_text.assert_awaited_once()
     assert "Коротко и по делу" in callback.message.edit_text.await_args.args[0]
 
+
+async def test_comment_button_refuses_a_double_tap(fresh_db, user_id, monkeypatch):
+    """Without the busy claim, two fast taps both reach comment_on_workout —
+    double the Grok cost for one card."""
+    import ai_trainer as ai_trainer_module
+    import db as dbmod
+
+    workout_id = await dbmod.create_workout(user_id)
+    await dbmod.finish_workout(workout_id)
+
+    monkeypatch.setattr(ai_trainer_module, "is_configured", lambda: True)
+    ai_trainer._busy.add(user_id)
+    try:
+        callback = _make_callback(user_id, f"ai:comment:{workout_id}")
+        callback.message.reply_markup = None
+
+        await ai_trainer.ai_comment_workout(callback, await _make_state(user_id))
+
+        callback.answer.assert_awaited_once_with("Секунду, ещё думаю над прошлым вопросом 😅", show_alert=True)
+        assert (await dbmod.get_workout(workout_id))["ai_comment"] is None
+    finally:
+        ai_trainer._busy.discard(user_id)
+
+
+async def test_comment_button_releases_busy_after_a_successful_comment(fresh_db, user_id, monkeypatch):
+    import ai_trainer as ai_trainer_module
+    import db as dbmod
+
+    workout_id = await dbmod.create_workout(user_id)
+    await dbmod.finish_workout(workout_id)
+
+    monkeypatch.setattr(ai_trainer_module, "is_configured", lambda: True)
+    monkeypatch.setattr(ai_trainer_module, "comment_on_workout", AsyncMock(return_value="Держи темп."))
+
+    callback = _make_callback(user_id, f"ai:comment:{workout_id}")
+    callback.message.html_text = "Карточка тренировки"
+    callback.message.reply_markup = None
+    callback.message.edit_text = AsyncMock()
+
+    await ai_trainer.ai_comment_workout(callback, await _make_state(user_id))
+
+    assert user_id not in ai_trainer._busy
+
+
+async def test_comment_button_respects_the_money_hard_stop(fresh_db, user_id, monkeypatch):
+    """No dedicated quota for this button, but the money HARD-stop must still
+    hold it — otherwise a HARD-stop day keeps paying for on-demand comments."""
+    import ai_limits
+    import ai_trainer as ai_trainer_module
+    import db as dbmod
+
+    workout_id = await dbmod.create_workout(user_id)
+    await dbmod.finish_workout(workout_id)
+
+    monkeypatch.setattr(ai_trainer_module, "is_configured", lambda: True)
+    monkeypatch.setattr(ai_limits, "daily_spend_usd", AsyncMock(return_value=10**9))
+    paid_call = AsyncMock()
+    monkeypatch.setattr(ai_trainer_module, "comment_on_workout", paid_call)
+
+    callback = _make_callback(user_id, f"ai:comment:{workout_id}")
+    callback.message.reply_markup = None
+    callback.message.reply = AsyncMock()
+
+    await ai_trainer.ai_comment_workout(callback, await _make_state(user_id))
+
+    paid_call.assert_not_awaited()
+    assert (await dbmod.get_workout(workout_id))["ai_comment"] is None
+    assert user_id not in ai_trainer._busy  # замок отпущен даже на отказе
+
+
+async def test_comment_button_skips_the_hard_stop_when_already_cached(fresh_db, user_id, monkeypatch):
+    """A comment already on the card is free to show — no busy claim, no money
+    check, no new call needed."""
+    import ai_limits
+    import ai_trainer as ai_trainer_module
+    import db as dbmod
+
+    workout_id = await dbmod.create_workout(user_id)
+    await dbmod.finish_workout(workout_id)
+    await dbmod.set_workout_ai_comment(workout_id, "Уже посчитано.")
+
+    monkeypatch.setattr(ai_trainer_module, "is_configured", lambda: True)
+    monkeypatch.setattr(ai_limits, "daily_spend_usd", AsyncMock(return_value=10**9))
+    paid_call = AsyncMock()
+    monkeypatch.setattr(ai_trainer_module, "comment_on_workout", paid_call)
+
+    callback = _make_callback(user_id, f"ai:comment:{workout_id}")
+    callback.message.html_text = "Карточка тренировки"
+    callback.message.reply_markup = None
+    callback.message.edit_text = AsyncMock()
+
+    await ai_trainer.ai_comment_workout(callback, await _make_state(user_id))
+
+    paid_call.assert_not_awaited()
+    assert "Уже посчитано" in callback.message.edit_text.await_args.args[0]
+
+
 # ---------- program the trainer proposed (ai:prog:*) ----------
 
 
