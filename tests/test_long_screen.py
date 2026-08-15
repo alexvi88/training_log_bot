@@ -248,7 +248,7 @@ async def test_safe_edit_leaves_a_way_back_when_nothing_sends():
     await ui.safe_edit(callback, "экран", parse_mode="HTML")
 
     assert callback.bot.send_message.await_count == 2
-    assert "/start" in callback.bot.send_message.await_args.args[1]
+    assert "Меню" in callback.bot.send_message.await_args.args[1]
 
 
 # ---------- safe_edit_photo ----------
@@ -279,4 +279,4 @@ async def test_safe_edit_photo_leaves_a_way_back_when_nothing_sends():
     await ui.safe_edit_photo(callback, b"png", "chart.png", "подпись")
 
     callback.bot.send_message.assert_awaited_once()
-    assert "/start" in callback.bot.send_message.await_args.args[1]
+    assert "Меню" in callback.bot.send_message.await_args.args[1]

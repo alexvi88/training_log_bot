@@ -11,6 +11,8 @@ from aiogram.types import (
     BotCommandScopeDefault,
     CallbackQuery,
     ErrorEvent,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
     Message,
 )
 
@@ -87,7 +89,14 @@ class IgnoreStaleCallbackMiddleware(BaseMiddleware):
             raise
 
 
-_GENERIC_ERROR_TEXT = "⚠️ Что-то пошло не так — бывает даже у чемпионов. Жми /start, вернёмся в меню."
+_GENERIC_ERROR_TEXT = "⚠️ Что-то пошло не так — бывает даже у чемпионов. Жми «Меню» внизу — и погнали дальше."
+
+# Реюзаем готовый колбэк «🏠 Меню» с карточки тренировки (handlers/workout.py,
+# live_back_to_menu) — он и так открывает главное меню независимо от того, что
+# сейчас на экране, так что годится и здесь без своего обработчика.
+_BACK_TO_MENU_MARKUP = InlineKeyboardMarkup(
+    inline_keyboard=[[InlineKeyboardButton(text="🏠 Меню", callback_data="live:back_to_menu")]]
+)
 
 
 def _error_chat_id(update) -> int | None:
@@ -134,7 +143,7 @@ async def on_unhandled_error(event: ErrorEvent, bot: Bot | None = None) -> bool:
         bot = getattr(update, "bot", None)
     if chat_id is not None and bot is not None:
         with suppress(Exception):
-            await bot.send_message(chat_id, _GENERIC_ERROR_TEXT)
+            await bot.send_message(chat_id, _GENERIC_ERROR_TEXT, reply_markup=_BACK_TO_MENU_MARKUP)
     return True
 
 
