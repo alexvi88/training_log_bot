@@ -14,7 +14,7 @@ from handlers import ai_trainer
 
 pytestmark = pytest.mark.asyncio
 
-_HINT = "могу сам записать"
+_HINT = "могу сам занести"
 
 
 def _make_chat_message(user_id: int, text: str):
