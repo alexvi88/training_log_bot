@@ -84,7 +84,7 @@ async def send_donate_invoice(callback: CallbackQuery):
     await callback.answer()
     await callback.message.answer_invoice(
         title="Поддержать проект",
-        description=f"Донат {stars} ⭐ — дневнику и AI-тренеру, без ответной выдачи.",
+        description=f"{stars} ⭐ на железо: сервер, картинки, счета за модель. Спасибо, что тянешь проект со мной.",
         # Payload возвращается в successful_payment нетронутым — по нему и
         # проверяем сумму и владельца счёта. user_id кладём тем же приёмом,
         # что и у будущего billing: платёж, пересланный в другой чат, не
@@ -147,8 +147,7 @@ async def donate_paid(message: Message):
         user_id, stars, payment.telegram_payment_charge_id,
     )
     await message.answer(
-        f"Записал донат: {stars} ⭐. Спасибо — идёт на железо.\n"
-        "Дневник как был бесплатным для всех, так и остаётся: этот донат ничего не открывает и ничего не меняет.",
+        f"🔥 {stars} ⭐ — принял! Вот это по-нашему, уважение. Всё пойдёт на железо.",
     )
     if config.ADMIN_ID:
         who = f"@{message.from_user.username}" if message.from_user.username else str(user_id)
