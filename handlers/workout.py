@@ -390,6 +390,42 @@ def _suspicious_weight_warning(
     )
 
 
+# Первые три раза за жизнь аккаунта, когда под сообщением встаёт ряд голых
+# цифр «тот же вес, другие повторы» (см. keyboards.reps_window), даём в тексте
+# экрана прямую подпись над рядом — не «догадайся про кнопки внизу сам».
+# Постоянная строка ниже («🔢 Жми повторы — запишу подход на …», см.
+# reps_row_line) уже называет вес, но не говорит, что цифры вообще значат
+# «повторы» и что их можно жать вместо ввода текста — это и закрывает эта
+# подпись, и закрывает один раз, а не постоянно: три показа достаточно, чтобы
+# заметить (первый мог потеряться на бегу в зал), а вешать её над рядом
+# навсегда — плодить текст там, где уже есть постоянная подпись.
+_REPS_ROW_HINT_TEXT = "Цифры внизу — тот же вес, выбери повторы"
+_REPS_ROW_HINT_KIND_PREFIX = "reps_row_hint_"
+_REPS_ROW_HINT_SHOWS = 3
+# «Дата» для has_limit_ack/record_limit_ack — не календарная: счётчику нужно
+# жить всю жизнь аккаунта, а prune_old_limit_acks (admin_tasks.py) раз в сутки
+# чистит записи с датой раньше недельного cutoff. Настоящую дату оно бы стёрло
+# уже на вторую ночь. Сентинел из будущего под эту метлу не попадает никогда.
+_REPS_ROW_HINT_SENTINEL_DATE = "9999-12-31"
+
+
+async def _maybe_reps_row_hint(user_id: int) -> str:
+    """Подпись для новичка над рядом кнопок «тот же вес, другие повторы» — см.
+    _REPS_ROW_HINT_TEXT. Ровно первые _REPS_ROW_HINT_SHOWS раз, когда ряд
+    вообще показывается этому человеку (независимо от даты и упражнения), а
+    дальше тихо ничего не возвращает. Три независимых kind вместо одного
+    счётчика — тот же приём, что и «Понятно» на лимитах (ai_limits.py):
+    проверка и отметка одним INSERT OR IGNORE, без гонки при двух показах
+    подряд с разных апдейтов."""
+    for n in range(1, _REPS_ROW_HINT_SHOWS + 1):
+        kind = f"{_REPS_ROW_HINT_KIND_PREFIX}{n}"
+        if await db.has_limit_ack(user_id, kind, _REPS_ROW_HINT_SENTINEL_DATE):
+            continue
+        await db.record_limit_ack(user_id, kind, _REPS_ROW_HINT_SENTINEL_DATE)
+        return _REPS_ROW_HINT_TEXT
+    return ""
+
+
 def _logging_hint(
     last_session: list[tuple[float, int, float | None]] | None,
     has_sets: bool,
@@ -404,6 +440,7 @@ def _logging_hint(
     progression_rule: dict | None = None,
     reps_row: tuple[float, int] | None = None,
     show_format_hint: bool = False,
+    reps_row_hint: str = "",
 ) -> str:
     base = None
     if show_instruction:
@@ -444,7 +481,11 @@ def _logging_hint(
         # читалось ребусом («повторы на» — это существительное или команда?).
         # Новая формулировка называет оба действия прямо: жмёт человек, пишет
         # тренер — «Жми повторы — запишу подход на 25кг».
-        reps_row_line = f"🔢 Жми повторы — запишу подход на {weight_str}\n"
+        # Подсказка для новичка (_REPS_ROW_HINT_TEXT) встаёт ПЕРЕД этой строкой,
+        # не вместо неё: первые несколько раз человеку нужно и «это вообще про
+        # повторы», и «на каком весе» — дальше остаётся только вес, его хватает.
+        hint_prefix = f"{reps_row_hint}\n" if reps_row_hint else ""
+        reps_row_line = f"{hint_prefix}🔢 Жми повторы — запишу подход на {weight_str}\n"
     # Показывается только пока в дневнике вообще нет ни одного подхода — гаснет
     # сразу после первого же удачного, не дожидаясь конца тренировки или того,
     # пока человек «наберёт стаж» (это уже show_instruction — тот держится
@@ -614,6 +655,7 @@ async def _render_logging_screen(bot, state: FSMContext, user):
     # сегодняшнего последнего подхода, а до первого от прошлой тренировки. Нужен
     # и подсказке (назвать вес под цифрами), и клавиатуре (какие цифры рисовать).
     reps_basis = _reps_row_basis(today_sets, last_session)
+    reps_row_hint = await _maybe_reps_row_hint(user["telegram_id"]) if reps_basis else ""
     hint = _logging_hint(
         last_session,
         has_sets,
@@ -623,6 +665,7 @@ async def _render_logging_screen(bot, state: FSMContext, user):
         show_instruction=show_instruction,
         show_format_hint=show_format_hint,
         reps_row=reps_basis,
+        reps_row_hint=reps_row_hint,
         inferred_step=weight_steps.get(active),
         confirmed_weight=(data.get("confirmed_weights") or {}).get(active),
         formula=user["e1rm_formula"],
