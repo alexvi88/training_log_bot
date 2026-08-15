@@ -444,11 +444,43 @@ function beep(freq, dur, type = 'square', vol = 0.05, slide = 0) {
     o.start(); o.stop(AC.currentTime + dur);
   } catch (e) {}
 }
-const sJump = () => beep(300, .12, 'square', .04, 220);
-const sDouble = () => beep(420, .12, 'square', .04, 260);
-const sPick = () => beep(760, .08, 'triangle', .05, 140);
-const sPower = () => { beep(500, .15, 'sawtooth', .05, 400); setTimeout(() => beep(900, .2, 'sawtooth', .04, 300), 90); };
-const sDie = () => { beep(220, .25, 'sawtooth', .06, -160); setTimeout(() => beep(120, .4, 'square', .05, -60), 140); };
+// Короткий шум — щелчок подошвы, пыль на приземлении, разлёт.
+function noiseBurst(dur = 0.09, vol = 0.04, hp = 1400) {
+  if (muted) return;
+  try {
+    if (!AC) AC = new (window.AudioContext || window.webkitAudioContext)();
+    const n = Math.max(1, Math.floor(AC.sampleRate * dur));
+    const buf = AC.createBuffer(1, n, AC.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / n);
+    const src = AC.createBufferSource(); src.buffer = buf;
+    const f = AC.createBiquadFilter(); f.type = 'highpass'; f.frequency.value = hp;
+    const g = AC.createGain(); g.gain.value = vol;
+    src.connect(f); f.connect(g); g.connect(AC.destination);
+    src.start();
+  } catch (e) {}
+}
+// Удар — синус с падающей высотой плюс щелчок: «бум», а не низкий квадрат.
+// Пила и квадрат на низах звучат как метеоризм, поэтому их тут больше нет.
+function thud(f0 = 190, f1 = 52, dur = 0.18, vol = 0.07) {
+  if (muted) return;
+  try {
+    if (!AC) AC = new (window.AudioContext || window.webkitAudioContext)();
+    const o = AC.createOscillator(), g = AC.createGain();
+    o.type = 'sine'; o.frequency.setValueAtTime(f0, AC.currentTime);
+    o.frequency.exponentialRampToValueAtTime(Math.max(20, f1), AC.currentTime + dur);
+    g.gain.setValueAtTime(vol, AC.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.0001, AC.currentTime + dur);
+    o.connect(g); g.connect(AC.destination);
+    o.start(); o.stop(AC.currentTime + dur);
+    noiseBurst(Math.min(0.05, dur * 0.4), vol * 0.45);
+  } catch (e) {}
+}
+const sJump = () => { beep(560, .07, 'triangle', .035, 260); noiseBurst(.05, .03, 2200); };
+const sDouble = () => beep(760, .07, 'triangle', .035, 320);
+const sPick = () => beep(880, .06, 'triangle', .04, 180);
+const sPower = () => { beep(620, .08, 'triangle', .05, 200); setTimeout(() => beep(880, .09, 'triangle', .045, 260), 60); setTimeout(() => beep(1180, .11, 'sine', .04, 200), 130); };
+const sDie = () => { thud(200, 44, .38, .085); setTimeout(() => thud(150, 36, .5, .07), 150); };
 
 // ── СОСТОЯНИЕ ИГРЫ (правила и баланс — как были, без изменений) ─────────────
 const GROUND = () => H * 0.80;
@@ -491,10 +523,15 @@ const QUIPS = [
 ];
 
 // ── ЛОКАЦИИ (смысл сохранён: три биома по мере забега, теперь — 3D-палитра) ──
+// Палитра по ролям, не по «теме зоны»: фон/стены — самое тёмное, пол — на
+// ступень светлее, дорожка — ещё светлее (нейтральные, малонасыщенные тона),
+// стойки — светлее пола (металл), лампа — единственный яркий тёплый/неоновый
+// акцент. Персонаж (цвета из FIGHTERS) всегда светлее и теплее всего этого —
+// иначе тёплый свет лампы красит все поверхности в один тон и фигура тонет.
 const ZONES = [
-  { name: 'ПОДВАЛ',   fog: 0x241a13, floor: 0x2a211a, track: 0x6b5636, wall: 0x3a2c20, prop: 0x4a3a2b, lamp: 0xffb060, kind: 'gym' },
-  { name: 'НЕОН-ЗАЛ', fog: 0x141b33, floor: 0x151b2e, track: 0x35406e, wall: 0x1c2440, prop: 0x2c3a63, lamp: 0x39d2c4, lamp2: 0xff5a96, kind: 'neon' },
-  { name: 'УЛИЦА',    fog: 0x1c2033, floor: 0x191c26, track: 0x454b63, wall: 0x232840, prop: 0x333849, lamp: 0xffc93c, kind: 'street' },
+  { name: 'ПОДВАЛ',   fog: 0x181514, floor: 0x322d2b, track: 0x4d453e, wall: 0x141110, prop: 0x686059, lamp: 0xffb060, kind: 'gym' },
+  { name: 'НЕОН-ЗАЛ', fog: 0x121320, floor: 0x22212f, track: 0x3a3750, wall: 0x0f0f18, prop: 0x50506c, lamp: 0x39d2c4, lamp2: 0xff5a96, kind: 'neon' },
+  { name: 'УЛИЦА',    fog: 0x13151c, floor: 0x21242e, track: 0x393e4a, wall: 0x0f1116, prop: 0x4c525e, lamp: 0xffc93c, kind: 'street' },
 ];
 const ZONE_LEN = 600;
 function zoneIndex() { return Math.floor(dist / ZONE_LEN) % ZONES.length; }
@@ -852,7 +889,7 @@ let toonGradient = null;
 function makeToonGradient() {
   const c = document.createElement('canvas'); c.width = 4; c.height = 1;
   const cx = c.getContext('2d');
-  const shades = [80, 150, 205, 255];
+  const shades = [105, 168, 215, 255];
   for (let i = 0; i < 4; i++) { cx.fillStyle = 'rgb(' + shades[i] + ',' + shades[i] + ',' + shades[i] + ')'; cx.fillRect(i, 0, 1, 1); }
   const tex = new THREE.CanvasTexture(c);
   tex.minFilter = THREE.NearestFilter; tex.magFilter = THREE.NearestFilter; tex.generateMipmaps = false;
@@ -884,22 +921,22 @@ function initThree() {
   scene.background = new THREE.Color(ZONES[0].fog);
   scene.fog = new THREE.Fog(ZONES[0].fog, 16, 60);
 
-  camera = new THREE.PerspectiveCamera(50, 1, 0.1, 120);
+  camera = new THREE.PerspectiveCamera(60, 1, 0.1, 120);
 
   renderer = new THREE.WebGLRenderer({ canvas: cv, antialias: true, alpha: false });
   renderer.setClearColor(ZONES[0].fog);
 
   // Свет: сильный ключевой сверху-сбоку + слабая заливка + контровой,
   // отделяющий силуэт атлета от тёмного фона.
-  const ambient = new THREE.AmbientLight(0xaebbe6, 0.42);
+  const ambient = new THREE.AmbientLight(0xc2c8e0, 0.6);
   scene.add(ambient);
-  const key = new THREE.DirectionalLight(0xfff0cf, 1.5);
+  const key = new THREE.DirectionalLight(0xfff2d8, 1.85);
   key.position.set(-5, 10, 6);
   scene.add(key);
-  const fillL = new THREE.DirectionalLight(0x8fb0ff, 0.32);
+  const fillL = new THREE.DirectionalLight(0x8fb0ff, 0.42);
   fillL.position.set(5, 3, 4);
   scene.add(fillL);
-  const rim = new THREE.DirectionalLight(0xffffff, 1.05);
+  const rim = new THREE.DirectionalLight(0xffffff, 1.3);
   rim.position.set(0, 6, -10); // впереди и выше — светит игроку в спину, навстречу камере
   scene.add(rim);
 
@@ -1292,17 +1329,20 @@ function scrollZ(row, spacing, halfCount, speed) {
 
 // ── Декор по бокам (стойки/лампы/здания) — позиции считаются из dist ───────
 function updateDecor() {
+  // Камера смотрит сбоку, поэтому обстановка живёт только на дальней стороне:
+  // всё, что оказалось бы между камерой и бегущим, закрывало бы игрока. Вместо
+  // одного ряда с каждой стороны — два ряда в глубину на дальней.
   const PSPACING = 2.0, PN = propMesh.count, PHALF = PN / 2;
   for (let i = 0; i < PN; i++) {
-    const side = (i % 2 === 0) ? -1 : 1;
+    const far = (i % 2 === 0) ? 3.6 : 5.4;
     const row = Math.floor(i / 2);
     const z = scrollZ(row, PSPACING, PHALF, 0.95);
-    dummy.position.set(side * 3.6, 0.95, z);
+    dummy.position.set(-far, 0.95, z);
     dummy.rotation.set(0, 0, 0);
     dummy.scale.set(1, 1, 1);
     dummy.updateMatrix();
     propMesh.setMatrixAt(i, dummy.matrix);
-    dummy.position.set(side * 3.6, 1.95, z);
+    dummy.position.set(-far, 1.95, z);
     dummy.updateMatrix();
     propBarMesh.setMatrixAt(i, dummy.matrix);
   }
@@ -1311,11 +1351,11 @@ function updateDecor() {
 
   const BSPACING = 3.4, BN = buildingMesh.count, BHALF = BN / 2;
   for (let i = 0; i < BN; i++) {
-    const side = (i % 2 === 0) ? -1 : 1;
+    const far = (i % 2 === 0) ? 5.4 : 6.7;
     const row = Math.floor(i / 2);
     const h = 1.6 + ((row * 7) % 5) * 0.85;
     const z = scrollZ(row, BSPACING, BHALF, 0.6);
-    dummy.position.set(side * 5.2, h / 2, z);
+    dummy.position.set(-far, h / 2, z);
     dummy.rotation.set(0, 0, 0);
     dummy.scale.set(1, h, 1);
     dummy.updateMatrix();
@@ -1330,12 +1370,13 @@ function updateDecor() {
     const z = scrollZ(row, LSPACING, LHALF, 0.95);
     const mesh = (i % 2 === 0) ? lampMeshA : lampMeshB;
     const idx = Math.floor(i / 2);
-    dummy.position.set(side * 4.6, 2.9, z);
+    const lx = -(side === -1 ? 4.6 : 6.4);
+    dummy.position.set(lx, 2.9, z);
     dummy.rotation.set(0, 0, 0);
     dummy.scale.set(1, 1, 1);
     dummy.updateMatrix();
     mesh.setMatrixAt(idx, dummy.matrix);
-    dummy.position.set(side * 4.6, 1.55, z);
+    dummy.position.set(lx, 1.55, z);
     dummy.updateMatrix();
     lampPostMesh.setMatrixAt(i, dummy.matrix);
   }
@@ -1448,16 +1489,21 @@ function updatePlayerPose(dt) {
   shadowBlob.mesh.material.opacity = 0.35 * shrink;
 }
 
-// ── Камера: далеко и высоко позади игрока, наклонена вниз по ходу движения —
-// фигура держит ~1/6 высоты экрана, вперёд видно достаточно, чтобы читать
-// препятствия заранее, а не встречать их под ногами.
+// ── Камера: три четверти сбоку-сзади. Чистый затылок для этой игры не годится
+// — прыжок и подкат про высоту препятствия и дугу полёта, а с затылка ни того,
+// ни другого не видно. Но и чистый бок в вертикальном экране не работает:
+// горизонтальный угол обзора у портретного кадра узкий, и впереди не видно
+// ничего. Отсюда компромисс: камера смещена вбок настолько, чтобы читался
+// профиль прыжка, и отодвинута назад настолько, чтобы дорожка просматривалась.
 function updateCamera(dt) {
-  const baseY = 4.3, baseZ = 13.5;
+  const baseX = 1.8, baseY = 4.0, baseZ = 9.0;
   let shakeX = 0, shakeY = 0;
   if (shakeT > 0) { shakeX = rnd(-0.12, 0.12) * shakeT; shakeY = rnd(-0.08, 0.08) * shakeT; }
-  const jumpLift = playerModel ? Math.max(0, toWY(P.y) - toWY(GROUND())) * 0.18 : 0;
-  camera.position.set(shakeX, baseY + jumpLift + shakeY, baseZ);
-  camera.lookAt(0, 0.85 + jumpLift * 0.4, -10);
+  // На прыжке камера чуть подаётся вверх, но не следует за игроком один в один:
+  // так видно, насколько высоко он ушёл от пола.
+  const jumpLift = playerModel ? Math.max(0, toWY(P.y) - toWY(GROUND())) * 0.22 : 0;
+  camera.position.set(baseX + shakeX, baseY + jumpLift + shakeY, baseZ);
+  camera.lookAt(0, 1.0 + jumpLift * 0.35, -8.0);
 }
 
 function renderRageOverlay() {
