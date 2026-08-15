@@ -178,6 +178,17 @@ def test_routine_edit_keyboard_carries_the_removals():
     assert "rt:view:7" in cbs  # "готово" back to the program screen
 
 
+def test_routine_edit_keyboard_arms_only_the_targeted_row():
+    """`armed_re_id` swaps just that row's 🗑 for a "❗ Точно?" bound to
+    rt:rmexyes — the second tap of the two-tap confirm — leaving every other
+    row's plain 🗑 (rt:rmex) untouched."""
+    kb = keyboards.routine_edit_keyboard(7, [(11, "Жим"), (12, "Тяга")], armed_re_id=11)
+    buttons = {b.callback_data: b.text for row in kb.inline_keyboard for b in row}
+    assert buttons["rt:rmexyes:7:11"] == "❗ Точно?"
+    assert "rt:rmex:7:11" not in buttons
+    assert buttons["rt:rmex:7:12"] == "🗑"
+
+
 def test_routine_edit_keyboard_has_one_cyclic_arrow_per_row():
     """Стрелка только «наверх» и работает по кругу: у первого она отправляет в
     конец. Вторая колонка отбирала место у названия (оно сжималось до

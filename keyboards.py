@@ -1000,7 +1000,9 @@ def routine_edit_menu_keyboard(routine_id: int, is_day: bool = False) -> InlineK
     return b.as_markup()
 
 
-def routine_edit_keyboard(routine_id: int, exercises=()) -> InlineKeyboardMarkup:
+def routine_edit_keyboard(
+    routine_id: int, exercises=(), armed_re_id: Optional[int] = None
+) -> InlineKeyboardMarkup:
     """Редактор состава дня: номер с именем первым, за ним ⬆️ и 🗑.
 
     Стрелка одна и работает по кругу: поднять второе — то же самое, что опустить
@@ -1016,17 +1018,29 @@ def routine_edit_keyboard(routine_id: int, exercises=()) -> InlineKeyboardMarkup
     наклоне» и «Тяга гантелей лёжа на наклонной скамье» обрезаются в одно и то
     же, и без номера по кнопке не понять, какую из них удаляешь. Полный состав с
     номерами и схемами стоит в тексте сообщения — там и читают.
+
+    `armed_re_id` — вторая ступень удаления: первый тап по 🗑 не сносит строку
+    сразу, а превращает именно эту кнопку в «❗ Точно?» (см. handlers.routines);
+    полноэкранное «Убрать «Жим»?» под самое частое действие в редакторе было
+    лишним скачком экрана. Второй тап по тому же месту делает саму работу, а
+    не подтвердивший таймаут возвращает 🗑 обратно.
     """
     b = InlineKeyboardBuilder()
     for position, entry in enumerate(exercises, start=1):
         re_id, name = entry[0], entry[1]
+        if re_id == armed_re_id:
+            remove_button = InlineKeyboardButton(
+                text="❗ Точно?", callback_data=f"rt:rmexyes:{routine_id}:{re_id}"
+            )
+        else:
+            remove_button = InlineKeyboardButton(text="🗑", callback_data=f"rt:rmex:{routine_id}:{re_id}")
         b.row(
             InlineKeyboardButton(
                 text=f"{position}. {_shorten_label(name, 22)}",
                 callback_data=f"rt:extarget:{routine_id}:{re_id}",
             ),
             InlineKeyboardButton(text="⬆️", callback_data=f"rt:mvex:{routine_id}:{re_id}:up"),
-            InlineKeyboardButton(text="🗑", callback_data=f"rt:rmex:{routine_id}:{re_id}"),
+            remove_button,
         )
     b.row(InlineKeyboardButton(text="➕ Добавить упражнение", callback_data=f"rt:addex:{routine_id}"))
     b.row(InlineKeyboardButton(text="⬅️ Готово", callback_data=f"rt:view:{routine_id}"))
