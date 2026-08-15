@@ -219,6 +219,21 @@ def _reasoning_of(message_or_delta: Any) -> str:
     return extra.get("reasoning_content") or ""
 
 
+def _estimate_tokens_from_text(text: str) -> int:
+    """Грубая прикидка токенов, когда провайдер их не прислал (см. _completion_round).
+
+    ~4 символа на токен — не точная ставка ни для английского, ни тем более для
+    русского текста, но это не финальная цифра в отчёте, а fallback на случай
+    оборванного стрима: лучше приблизительно посчитанные деньги, чем молча
+    потерянное cost-событие.
+    """
+    return max(0, len(text) // 4)
+
+
+def _estimate_tokens_from_messages(messages: list[dict[str, Any]]) -> int:
+    return _estimate_tokens_from_text(json.dumps(messages, ensure_ascii=False))
+
+
 async def _log_llm_cost(user_id: Optional[int], model: str, usage: Any, *, source: str = "bot") -> None:
     """Fire-and-forget cost_events row for a chat-completion call (see
     db.get_llm_cost_breakdown / admin_tasks.py's daily report).
@@ -275,6 +290,10 @@ def _get_client() -> AsyncOpenAI:
             api_key=config.XAI_API_KEY,
             base_url=config.GROK_BASE_URL,
             timeout=config.AI_REQUEST_TIMEOUT_SECONDS,
+            # SDK's default (2 retries) silently re-fires a paid completion on
+            # timeout/5xx — up to three billed generations for one user tap.
+            # Retrying that ourselves, on purpose, is a separate decision.
+            max_retries=0,
         )
     return _client
 
@@ -290,7 +309,9 @@ def _get_audio_client() -> AsyncOpenAI:
     global _audio_client
     if _audio_client is None:
         _audio_client = AsyncOpenAI(
-            api_key=config.OPENAI_API_KEY, timeout=config.AI_REQUEST_TIMEOUT_SECONDS
+            api_key=config.OPENAI_API_KEY,
+            timeout=config.AI_REQUEST_TIMEOUT_SECONDS,
+            max_retries=0,  # same reasoning as _get_client — no silent paid retries
         )
     return _audio_client
 
@@ -1022,7 +1043,11 @@ async def comment_on_workout(user_id: int, workout_id: int) -> str:
         model=config.GROK_MODEL,
         max_tokens=700,
         extra_body={"reasoning_effort": config.GROK_QUICK_REASONING_EFFORT},
-        extra_headers=_cache_headers(user_id),
+        # Свой scope: system-промпт (WORKOUT_COMMENT_SYSTEM_PROMPT) не имеет
+        # ничего общего с шапкой основного чата (ask/_ask_plain) — под тем же
+        # conv-id, что и main, это гарантированный промах по нему на СЛЕДУЮЩИЙ
+        # вопрос тренеру (см. docstring _cache_headers).
+        extra_headers=_cache_headers(user_id, scope="workout_comment"),
         messages=[
             {
                 "role": "system",
@@ -1043,6 +1068,11 @@ async def ensure_workout_comment(user: Any, workout_id: int) -> Optional[str]:
 
     Возвращает None, если показывать пока нечего (комментарии выключены и ещё не
     запрошены вручную, или AI-тренер не настроен на сервере).
+
+    Фоновый вызов (карточка тренировки рендерится и без него), поэтому в день
+    HARD-стопа по деньгам молча выходит без комментария — то же, что показал бы
+    любой другой платный шаг в этот день, только без сообщения пользователю
+    (спрашивать он ничего не спрашивал).
     """
     workout = await db.get_workout(workout_id)
     if workout is None:
@@ -1050,6 +1080,8 @@ async def ensure_workout_comment(user: Any, workout_id: int) -> Optional[str]:
     if workout["ai_comment"]:
         return workout["ai_comment"]
     if not user["ai_comments_enabled"] or not is_configured():
+        return None
+    if await ai_limits.spend_level() == ai_limits.KIND_SPEND_HARD:
         return None
     comment = await comment_on_workout(user["telegram_id"], workout_id)
     await db.set_workout_ai_comment(workout_id, comment)
@@ -1091,8 +1123,13 @@ async def weekly_digest(user_id: int) -> Optional[str]:
 
     One plain completion (no tools) over a compact summary of the week's volume,
     tonnage, and workout count. Used by the engagement job's Sunday digest slot.
+
+    Фоновая рассылка — молча выходит на HARD-стопе по деньгам, без сообщения:
+    это не ответ на чей-то вопрос, отказывать некому.
     """
     if not is_configured():
+        return None
+    if await ai_limits.spend_level() == ai_limits.KIND_SPEND_HARD:
         return None
     user = await db.get_user(user_id)
     if user is None:
@@ -1124,7 +1161,10 @@ async def weekly_digest(user_id: int) -> Optional[str]:
             model=config.GROK_MODEL,
             max_tokens=500,
             extra_body={"reasoning_effort": config.GROK_QUICK_REASONING_EFFORT},
-            extra_headers=_cache_headers(user_id),
+            # Свой scope — WEEKLY_DIGEST_SYSTEM_PROMPT не похож на шапку
+            # основного чата, под общим conv-id вытеснял бы её слот раз в
+            # неделю (см. docstring _cache_headers).
+            extra_headers=_cache_headers(user_id, scope="weekly_digest"),
             messages=[
                 {"role": "system", "content": WEEKLY_DIGEST_SYSTEM_PROMPT},
                 {"role": "user", "content": summary},
@@ -1521,7 +1561,10 @@ async def analyze_food(
         model=config.GROK_MODEL,
         max_tokens=700 if with_macros else 200,
         extra_body={"reasoning_effort": config.GROK_QUICK_REASONING_EFFORT},
-        extra_headers=_cache_headers(user_id),
+        # Свой scope — FOOD_ANALYSIS_SYSTEM_PROMPT/FOOD_DESCRIBE_SYSTEM_PROMPT не
+        # похожи на шапку основного чата, под общим conv-id вытесняли бы её слот
+        # на каждый разбор еды (см. docstring _cache_headers).
+        extra_headers=_cache_headers(user_id, scope="food"),
         messages=[
             {
                 "role": "system",
@@ -3888,10 +3931,21 @@ async def _estimate_missing_macros(
     """
     if not is_configured():
         return False
+    # asyncio.wait_for cancels the wrapped coroutine on timeout — if the model
+    # request had already reached the provider by then, cancellation stops us
+    # from ever reaching analyze_food's own _log_llm_cost call, so a real,
+    # billed call went unlogged. asyncio.shield keeps the call itself running
+    # in the background past the timeout: we stop waiting for its *result*,
+    # but it still finishes and logs its own cost when it does.
+    task = asyncio.ensure_future(analyze_food(user_id, text=description, source=source))
     try:
-        estimate = await asyncio.wait_for(
-            analyze_food(user_id, text=description, source=source), timeout=_FOOD_ESTIMATE_TIMEOUT
+        estimate = await asyncio.wait_for(asyncio.shield(task), timeout=_FOOD_ESTIMATE_TIMEOUT)
+    except asyncio.TimeoutError:
+        logger.warning(
+            "food estimate timed out for user %s — оставляю досчитывать в фоне, "
+            "cost-событие запишет сама (см. asyncio.shield)", user_id,
         )
+        return False
     except Exception:
         logger.exception("food estimate failed for user %s", user_id)
         return False
@@ -5003,37 +5057,56 @@ async def _completion_round(
     tool_calls: dict[int, dict[str, Any]] = {}
     usage = None
     last_flush: Optional[float] = None
-    async for event in stream:
-        usage = getattr(event, "usage", None) or usage
-        if not event.choices:
-            continue
-        delta = event.choices[0].delta
-        reasoning_delta = _reasoning_of(delta)
-        if reasoning_delta:
-            reasoning_parts.append(reasoning_delta)
-        for tc in getattr(delta, "tool_calls", None) or []:
-            slot = tool_calls.setdefault(
-                tc.index, {"id": "", "name": "", "arguments": ""}
+    # xAI sends `usage` only on the final chunk. A timeout/cancellation/network
+    # drop partway through the `async for` used to leave `_log_llm_cost` never
+    # called at all — tokens the provider already billed us for went unlogged.
+    # `finished` tells the `finally` below whether the loop actually reached
+    # that final chunk, so it only reaches for the fallback estimate on abort.
+    finished = False
+    try:
+        async for event in stream:
+            usage = getattr(event, "usage", None) or usage
+            if not event.choices:
+                continue
+            delta = event.choices[0].delta
+            reasoning_delta = _reasoning_of(delta)
+            if reasoning_delta:
+                reasoning_parts.append(reasoning_delta)
+            for tc in getattr(delta, "tool_calls", None) or []:
+                slot = tool_calls.setdefault(
+                    tc.index, {"id": "", "name": "", "arguments": ""}
+                )
+                slot["id"] += tc.id or ""
+                if tc.function:
+                    slot["name"] += tc.function.name or ""
+                    slot["arguments"] += tc.function.arguments or ""
+            if delta.content:
+                parts.append(delta.content)
+                text = "".join(parts)
+                now = asyncio.get_running_loop().time()
+                # Before the first flush, time elapsed alone isn't a good signal —
+                # the wait for the model's first token already eats into it — so
+                # the first flush also needs enough text to be worth showing.
+                ready = (
+                    (last_flush is None and len(text) >= MIN_FIRST_FLUSH_CHARS)
+                    or (last_flush is not None and now - last_flush >= STREAM_FLUSH_SECONDS)
+                )
+                if ready:
+                    last_flush = now
+                    await on_chunk(text)
+        finished = True
+    finally:
+        if usage is None and not finished:
+            # Aborted before the final chunk arrived, so there's no real usage
+            # to report. Best available estimate: ~4 chars/token over the
+            # prompt actually sent and whatever completion text streamed back
+            # before the drop — better than silently losing the event, and the
+            # only signal we have without the provider's own count.
+            usage = SimpleNamespace(
+                prompt_tokens=_estimate_tokens_from_messages(messages),
+                completion_tokens=_estimate_tokens_from_text("".join(parts)),
             )
-            slot["id"] += tc.id or ""
-            if tc.function:
-                slot["name"] += tc.function.name or ""
-                slot["arguments"] += tc.function.arguments or ""
-        if delta.content:
-            parts.append(delta.content)
-            text = "".join(parts)
-            now = asyncio.get_running_loop().time()
-            # Before the first flush, time elapsed alone isn't a good signal —
-            # the wait for the model's first token already eats into it — so
-            # the first flush also needs enough text to be worth showing.
-            ready = (
-                (last_flush is None and len(text) >= MIN_FIRST_FLUSH_CHARS)
-                or (last_flush is not None and now - last_flush >= STREAM_FLUSH_SECONDS)
-            )
-            if ready:
-                last_flush = now
-                await on_chunk(text)
-    await _log_llm_cost(user_id, config.GROK_MODEL, usage)
+        await _log_llm_cost(user_id, config.GROK_MODEL, usage)
     return (
         "".join(parts),
         [_StreamedToolCall(slot) for slot in tool_calls.values()],

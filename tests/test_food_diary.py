@@ -209,6 +209,28 @@ async def test_totals_reconcile_with_the_breakdown(monkeypatch, user_id):
         assert item["calories"] == item["protein"] * 4 + item["fat"] * 9 + item["carbs"] * 4
 
 
+async def test_analyze_food_uses_its_own_cache_slot(monkeypatch, user_id):
+    """FOOD_ANALYSIS_SYSTEM_PROMPT не похож на шапку основного чата — под общим
+    conv-id вытеснял бы её слот на каждый разбор еды."""
+    captured = {}
+
+    async def fake_create(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content='{"description": "еда"}'))],
+            usage=None,
+        )
+
+    monkeypatch.setattr(
+        ai_trainer, "_get_client",
+        lambda: SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=fake_create))),
+    )
+
+    await ai_trainer.analyze_food(user_id, text="овсянка")
+
+    assert captured["extra_headers"]["x-grok-conv-id"] == f"food-{user_id}"
+
+
 async def test_analyze_food_sends_image_and_correction(monkeypatch, user_id):
     captured = {}
 

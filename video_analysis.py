@@ -41,6 +41,9 @@ def _get_client() -> AsyncOpenAI:
             api_key=config.NOVITA_API_KEY,
             base_url=config.NOVITA_BASE_URL,
             timeout=config.VIDEO_ANALYSIS_TIMEOUT_SECONDS,
+            # SDK's default (2 retries) would silently re-fire a paid video
+            # analysis call on timeout/5xx — up to three billed calls per video.
+            max_retries=0,
         )
     return _client
 

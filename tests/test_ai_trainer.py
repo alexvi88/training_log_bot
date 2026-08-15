@@ -628,6 +628,33 @@ async def test_the_cache_header_is_omitted_when_there_is_no_user():
     assert ai_trainer._cache_headers(None) == {}
 
 
+async def test_workout_comment_uses_its_own_cache_slot(fresh_db, user_id, monkeypatch):
+    """WORKOUT_COMMENT_SYSTEM_PROMPT не похож на шапку основного чата — под
+    общим conv-id вытеснял бы её слот на каждый комментарий к тренировке."""
+    workout_id = await fresh_db.create_workout(user_id)
+    await fresh_db.finish_workout(workout_id)
+    client = _fake_client([_response(content="Хорошая тренировка.")])
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+
+    await ai_trainer.comment_on_workout(user_id, workout_id)
+
+    headers = client.chat.completions.create.await_args.kwargs["extra_headers"]
+    assert headers["x-grok-conv-id"] == f"workout_comment-{user_id}"
+
+
+async def test_weekly_digest_uses_its_own_cache_slot(fresh_db, user_id, monkeypatch):
+    """WEEKLY_DIGEST_SYSTEM_PROMPT — тоже свой промпт, и раз в неделю он не
+    должен занимать слот основного разговора."""
+    monkeypatch.setattr(config, "XAI_API_KEY", "test-key")
+    client = _fake_client([_response(content="Итоги недели.")])
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+
+    await ai_trainer.weekly_digest(user_id)
+
+    headers = client.chat.completions.create.await_args.kwargs["extra_headers"]
+    assert headers["x-grok-conv-id"] == f"weekly_digest-{user_id}"
+
+
 async def test_gate_parses_both_verdicts(fresh_db, user_id, monkeypatch):
     client = _fake_client([_response(content='{"search": true, "data": false}')])
     monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
@@ -827,6 +854,26 @@ async def test_model_clients_are_built_with_a_timeout(monkeypatch):
 
     assert captured["timeout"] == config.AI_REQUEST_TIMEOUT_SECONDS
     assert captured["timeout"] < 600
+    # The SDK's own default is 2 retries — a hung/5xx completion would then get
+    # silently re-fired, up to three billed generations for one user tap.
+    assert captured["max_retries"] == 0
+
+
+async def test_audio_client_disables_sdk_retries(monkeypatch):
+    import ai_trainer as module
+
+    captured = {}
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(module, "AsyncOpenAI", FakeClient)
+    monkeypatch.setattr(module, "_audio_client", None)
+
+    module._get_audio_client()
+
+    assert captured["max_retries"] == 0
 
 
 async def test_food_diary_tool_groups_entries_by_day_with_totals(fresh_db, user_id):
@@ -975,6 +1022,46 @@ async def test_save_athlete_profile_partial_update_does_not_erase_earlier_fields
 async def test_save_athlete_profile_with_nothing_useful_reports_not_saved(fresh_db, user_id):
     payload = json.loads(await ai_trainer.execute_tool(user_id, "save_athlete_profile", {}))
     assert payload["saved"] is False
+
+
+async def test_weekly_digest_stays_silent_on_the_hard_stop(fresh_db, user_id, monkeypatch):
+    """Фоновая рассылка — не отвечает на чей-то вопрос, поэтому в день HARD-стопа
+    просто молчит, не тратя ни цента, и не шлёт пользователю никакого текста."""
+    import ai_limits
+
+    monkeypatch.setattr(config, "XAI_API_KEY", "test-key")
+    monkeypatch.setattr(ai_limits, "daily_spend_usd", AsyncMock(return_value=10**9))
+    client = _fake_client([_response(content="Итоги недели.")])
+    create = client.chat.completions.create
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+
+    result = await ai_trainer.weekly_digest(user_id)
+
+    assert result is None
+    create.assert_not_awaited()
+
+
+async def test_ensure_workout_comment_stays_silent_on_the_hard_stop(fresh_db, user_id, monkeypatch):
+    """Автокомментарий после тренировки — тоже фоновый шаг: карточка рендерится
+    и без него, так что HARD-стоп по деньгам просто гасит его молча."""
+    import ai_limits
+    import db as dbmod
+
+    monkeypatch.setattr(config, "XAI_API_KEY", "test-key")
+    await dbmod.update_user(user_id, ai_comments_enabled=1)
+    workout_id = await dbmod.create_workout(user_id)
+    await dbmod.finish_workout(workout_id)
+    user = await dbmod.get_user(user_id)
+
+    monkeypatch.setattr(ai_limits, "daily_spend_usd", AsyncMock(return_value=10**9))
+    client = _fake_client([_response(content="Хорошая тренировка.")])
+    create = client.chat.completions.create
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+
+    result = await ai_trainer.ensure_workout_comment(user, workout_id)
+
+    assert result is None
+    create.assert_not_awaited()
 
 
 async def test_weekly_digest_summary_includes_food_when_the_diary_has_any(fresh_db, user_id):

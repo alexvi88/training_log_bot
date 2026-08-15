@@ -143,6 +143,29 @@ async def test_hard_stop_holds_own_accounts_too(user_id, monkeypatch):
     assert not block.preview
 
 
+async def test_hard_stop_block_is_none_below_the_hard_cap(user_id, monkeypatch, free):
+    """Ниже HARD платные входы без своей квоты (кнопка комментария и т.п.) не
+    должны спотыкаться о деньги вовсе."""
+    assert await ai_limits.hard_stop_block() is None
+
+
+async def test_hard_stop_block_fires_on_the_hard_cap(user_id, monkeypatch, free):
+    _spend(monkeypatch, config.AI_DAILY_COST_HARD_STOP_USD)
+
+    block = await ai_limits.hard_stop_block()
+    assert block is not None
+    assert block.kind == ai_limits.KIND_SPEND_HARD
+    assert "завтра" in block.user_text
+
+
+async def test_hard_stop_block_ignores_the_soft_cap(user_id, monkeypatch, free):
+    """SOFT выключает только «лишние» дорогие шаги (_EXTRAS) — вход без личной
+    квоты этим списком не покрыт, так что SOFT его не трогает вовсе."""
+    _spend(monkeypatch, config.AI_DAILY_COST_SOFT_CAP_USD)
+
+    assert await ai_limits.hard_stop_block() is None
+
+
 # ---------- личные квоты ----------
 
 

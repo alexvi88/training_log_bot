@@ -484,3 +484,19 @@ async def test_context_block_tells_the_coach_to_stay_out_of_the_log():
     block = video_analysis.to_context_block(_analysis())
     assert "в дневник без надобности не лезь" in block
     assert "прогресс" in block
+
+async def test_client_disables_sdk_retries(monkeypatch):
+    """The SDK's own default (2 retries) would silently re-fire a paid video
+    analysis call on timeout/5xx — up to three billed calls for one video."""
+    captured = {}
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(video_analysis, "AsyncOpenAI", FakeClient)
+    monkeypatch.setattr(video_analysis, "_client", None)
+
+    video_analysis._get_client()
+
+    assert captured["max_retries"] == 0
