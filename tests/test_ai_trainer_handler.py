@@ -135,7 +135,9 @@ async def test_ai_voice_question_rejects_too_large_file(fresh_db, user_id, monke
     await ai_trainer.ai_voice_question(message, state)
 
     message.reply.assert_awaited_once()
-    assert "большое" in message.reply.await_args.args[0]
+    text = message.reply.await_args.args[0]
+    assert "большое" in text
+    assert str(ai_trainer.MAX_VOICE_BYTES // (1024 * 1024)) in text
     message.bot.download.assert_not_awaited()
 
 

@@ -383,7 +383,9 @@ async def _analyze_and_show(
 async def fd_photo_entry(message: Message, state: FSMContext):
     image_data_url = await _download_photo_as_data_url(message)
     if image_data_url is None:
-        await message.reply("Фото слишком большое, пришли поменьше.")
+        await message.reply(
+            f"Фото слишком большое — уложись в {MAX_IMAGE_BYTES // (1024 * 1024)} МБ."
+        )
         return
     await _analyze_and_show(
         message,

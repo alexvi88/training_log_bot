@@ -2729,7 +2729,9 @@ async def ai_photo_question(message: Message, state: FSMContext):
 
         image_data_url = await _download_photo_as_data_url(message)
         if image_data_url is None:
-            await message.reply("Фото слишком большое, пришли поменьше.")
+            await message.reply(
+                f"Фото слишком большое — уложись в {MAX_IMAGE_BYTES // (1024 * 1024)} МБ."
+            )
             return
 
         history_question = f"[фото] {caption}" if caption else "[прислал фото]"
@@ -2926,7 +2928,10 @@ async def ai_video_question(message: Message, state: FSMContext):
                 return
 
         if video.file_size and video.file_size > config.MAX_VIDEO_BYTES:
-            await message.reply("Файл тяжёлый, я такой не вытяну. Сними покороче или полегче.")
+            await message.reply(
+                f"Файл тяжёлый, я такой не вытяну — уложись в "
+                f"{config.MAX_VIDEO_BYTES // (1024 * 1024)} МБ. Сними покороче или полегче."
+            )
             return
 
         caption = (message.caption or "").strip()
@@ -3060,7 +3065,10 @@ async def ai_voice_question(message: Message, state: FSMContext):
 
         voice_file = await _download_voice_as_file(message)
         if voice_file is None:
-            await message.reply("Голосовое слишком большое, запиши покороче.")
+            await message.reply(
+                f"Голосовое слишком большое — уложись в "
+                f"{MAX_VOICE_BYTES // (1024 * 1024)} МБ, запиши покороче."
+            )
             return
 
         try:

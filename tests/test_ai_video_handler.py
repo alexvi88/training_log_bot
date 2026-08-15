@@ -184,6 +184,7 @@ async def test_oversized_file_rejected_before_download(wired):
 
     message.bot.download.assert_not_awaited()
     wired.analyze.assert_not_awaited()
+    assert str(config.MAX_VIDEO_BYTES // (1024 * 1024)) in message.reply.await_args.args[0]
 
 
 async def test_missing_key_tells_user_to_type(monkeypatch, wired):
