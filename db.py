@@ -1414,12 +1414,20 @@ async def _migrate_muscle_groups() -> None:
 # ---------- users ----------
 
 async def get_or_create_user(telegram_id: int, username: Optional[str]) -> aiosqlite.Row:
+    """The user's row, creating it if this is their first /start.
+
+    Check and insert happen under the same lock — same reasoning as
+    get_or_create_active_workout: a double-fired first update (aiogram
+    processes updates concurrently) had both see no row and both try to
+    INSERT, and the loser died with an IntegrityError on the telegram_id
+    unique constraint instead of just returning the row the winner made.
+    """
     db = conn()
-    cur = await db.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,))
-    row = await cur.fetchone()
-    if row:
-        return row
     async with _write_lock:
+        cur = await db.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,))
+        row = await cur.fetchone()
+        if row:
+            return row
         await db.execute(
             "INSERT INTO users (telegram_id, username, created_at, unit, e1rm_formula, tz_offset) "
             "VALUES (?, ?, ?, ?, ?, ?)",
@@ -1438,8 +1446,8 @@ async def get_or_create_user(telegram_id: int, username: Optional[str]) -> aiosq
             ),
         )
         await db.commit()
-    cur = await db.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,))
-    return await cur.fetchone()
+        cur = await db.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,))
+        return await cur.fetchone()
 
 
 async def get_user(telegram_id: int) -> Optional[aiosqlite.Row]:
