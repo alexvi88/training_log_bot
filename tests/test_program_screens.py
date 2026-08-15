@@ -17,7 +17,7 @@ from aiogram.types import CallbackQuery
 import config
 from fsm import RoutineFlow
 from handlers import routines
-from seed_data import PROGRAM_BY_KEY
+from seed_data import PROGRAM_BY_KEY, WORKOUT_PROGRAMS
 
 pytestmark = pytest.mark.asyncio
 
@@ -131,6 +131,64 @@ async def test_catalog_add_respects_the_day_budget(fresh_db, user_id):
 
     assert await db.count_routines(user_id) == config.MAX_ROUTINES_PER_USER
     assert "не влезет" in callback.answer.await_args.args[0]
+
+
+# ---------- каталог: чем программы отличаются друг от друга ----------
+
+
+async def test_catalog_screen_says_who_each_program_is_for(user_id):
+    """Кнопка вмещает только название, и выбор делался по нему одному."""
+    callback = _make_callback(user_id, "rt:programs")
+    await routines.rt_programs(callback, await _state(user_id))
+
+    text = _last_text(callback)
+    for program in WORKOUT_PROGRAMS:
+        assert program["name"] in text
+        assert program["meta"] in text
+
+
+async def test_added_catalog_program_keeps_its_description_until_first_workout(
+    fresh_db, user_id
+):
+    """«Кому это и как часто» человек читал один раз в каталоге и больше
+    никогда, хотя решение «моё ли это» пересматривают как раз потом."""
+    db = fresh_db
+    state = await _state(user_id)
+    callback = _make_callback(user_id, "rt:progadd:ppl")
+    await routines.rt_program_add(callback, state)
+
+    program = PROGRAM_BY_KEY["ppl"]
+    text = _last_text(callback)
+    assert program["meta"] in text
+    assert program["description"] in text
+
+    # Сходили по ней — простыня над кнопкой «начать» больше не нужна, но
+    # строка «кому и как часто» остаётся.
+    program_id = (await db.list_programs(user_id))[0]["id"]
+    day = (await db.list_program_days_by_id(program_id))[0]
+    workout_id = await db.create_workout(user_id, routine_id=day["id"])
+    await db.finish_workout(workout_id)
+
+    callback = _make_callback(user_id, f"rt:prg:{program_id}")
+    await routines.rt_program(callback, state)
+
+    text = _last_text(callback)
+    assert program["meta"] in text
+    assert program["description"] not in text
+
+
+async def test_own_program_screen_survives_a_non_catalog_source(fresh_db, user_id):
+    """source='shared' кладёт в source_ref @username, а не ключ каталога."""
+    db = fresh_db
+    program_id = await db.create_program(
+        user_id, "Из чата", source="shared", source_ref="@vasya"
+    )
+    await db.create_routine(user_id, "День 1", program_id=program_id)
+
+    callback = _make_callback(user_id, f"rt:prg:{program_id}")
+    await routines.rt_program(callback, await _state(user_id))
+
+    assert "Из чата" in _last_text(callback)
 
 
 # ---------- дни: добавить, скопировать, переставить, вынести ----------

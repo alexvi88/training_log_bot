@@ -158,6 +158,21 @@ async def rt_manage(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+def _catalog_source(program):
+    """Каталожная карточка, из которой выросла эта программа, или None.
+
+    Ключ каталога уже лежит в programs.source_ref (handlers.routines
+    ._instantiate_catalog_program), поэтому описание не дублируется в БД: оно
+    живёт в seed_data и правится вместе с каталогом — у всех сразу, включая
+    тех, кто взял программу год назад. Программа могла прийти и из чужого
+    экспорта (source='shared'), где source_ref — это @username, а не ключ:
+    промах по словарю тут нормальный случай, а не ошибка.
+    """
+    if program["source"] != "catalog":
+        return None
+    return PROGRAM_BY_KEY.get(program["source_ref"] or "")
+
+
 async def _owned_program(event, program_id: int):
     program = await db.get_program(program_id)
     if program is None or program["user_id"] != event.from_user.id:
@@ -237,6 +252,16 @@ async def _show_program(event, state: FSMContext, program_id: int) -> None:
     if total:
         word = formatting.plural_ru(total, ("тренировка", "тренировки", "тренировок"))
         header.append(f"<i>{total} {word} по ней</i>")
+    # Каталожная программа теряла всё, кроме состава: «кому это и как часто»
+    # человек читал один раз в каталоге и больше никогда, хотя решение «моё ли
+    # это» пересматривают как раз потом. Строку meta показываем всегда, а
+    # полное описание — пока по программе не сходили ни разу: дальше оно
+    # превращается в простыню над кнопкой «начать».
+    catalog = _catalog_source(program)
+    if catalog is not None:
+        header.append(f"<i>{escape(catalog['meta'])}</i>")
+        if not total:
+            header.append(f"\n{escape(catalog['description'])}")
     tail = (
         f"Дальше по кругу — <b>{escape(next_day['name'])}</b>."
         if next_day is not None and history
@@ -332,10 +357,19 @@ async def rt_menu(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "rt:programs")
 async def rt_programs(callback: CallbackQuery, state: FSMContext):
+    # Кнопка вмещает только название, и до этого весь выбор человек делал по
+    # нему одному: чем «Верх / Низ» отличается от «Толкай / Тяни / Ноги» и
+    # какая из них про два вечера в неделю, выяснялось только заходом внутрь
+    # каждой. Строка meta у каждой программы уже написана — показываем её
+    # списком над кнопками, в том же порядке.
+    catalog = "\n".join(
+        f"<b>{escape(p['name'])}</b> — {escape(p['meta'])}" for p in WORKOUT_PROGRAMS
+    )
     text = (
         "✨ <b>ГОТОВЫЕ ПРОГРАММЫ</b>\n\n"
         "Выбери готовую программу — её дни добавятся тебе в «Программы», и ты "
-        "начнёшь тренировку в один тап. Все нужные упражнения появятся в твоём списке."
+        "начнёшь тренировку в один тап. Все нужные упражнения появятся в твоём "
+        f"списке.\n\n{catalog}"
     )
     kb = keyboards.programs_catalog_keyboard(WORKOUT_PROGRAMS)
     await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML")

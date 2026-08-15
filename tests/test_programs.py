@@ -25,6 +25,14 @@ def test_programs_have_days_and_exercises():
             assert exercises, f"day {day_name!r} in {p['key']} has no exercises"
 
 
+def test_programs_say_who_they_are_for():
+    """meta и description — не украшение: каталог показывает meta списком, а
+    карточка добавленной программы — оба поля (handlers.routines._show_program)."""
+    for p in WORKOUT_PROGRAMS:
+        assert p["meta"].strip(), f"program {p['key']} has no meta"
+        assert p["description"].strip(), f"program {p['key']} has no description"
+
+
 def test_every_program_exercise_exists_in_catalog():
     """Every referenced exercise must be a known global template so it resolves."""
     for p in WORKOUT_PROGRAMS:
