@@ -410,53 +410,71 @@ function popNumber(text, color, x, y, big) {
 }
 
 // ── ФОН ЗАЛА (перспективный коридор) ────────────────────────────────────────
+// Дорожка должна читаться широкой почти на всю ширину экрана у низа кадра,
+// с узкими полями-стенами по бокам — не воронка с чёрными пустырями.
 function drawHall() {
   const hy = HORIZON_F * H, gy = GROUND_F * H;
   const skyG = ctx.createLinearGradient(0, 0, 0, hy);
-  skyG.addColorStop(0, '#100c0a'); skyG.addColorStop(1, '#241812');
+  skyG.addColorStop(0, '#0e0a08'); skyG.addColorStop(1, '#201510');
   ctx.fillStyle = skyG; ctx.fillRect(0, 0, W, hy);
 
-  // Пол-трапеция
+  // Стены зала снаружи дорожки (worldX за пределами ±1) — тёмный кирпич,
+  // не заходит на пол и не засвечивает его.
   const near = projectPoint(-1, 0), nearR = projectPoint(1, 0);
   const far = projectPoint(-1, ZFAR), farR = projectPoint(1, ZFAR);
+  const wallNear = projectPoint(-1.35, 0), wallNearR = projectPoint(1.35, 0);
+  const wallFar = projectPoint(-1.35, ZFAR), wallFarR = projectPoint(1.35, ZFAR);
+  ctx.fillStyle = '#241a15';
+  ctx.beginPath();
+  ctx.moveTo(wallFar.x, wallFar.y); ctx.lineTo(far.x, far.y);
+  ctx.lineTo(near.x, near.y); ctx.lineTo(wallNear.x, wallNear.y);
+  ctx.closePath(); ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(wallFarR.x, wallFarR.y); ctx.lineTo(farR.x, farR.y);
+  ctx.lineTo(nearR.x, nearR.y); ctx.lineTo(wallNearR.x, wallNearR.y);
+  ctx.closePath(); ctx.fill();
+
+  // Пол-трапеция — заметно светлее стен, чтобы граница дорожки читалась сразу.
   const floorG = ctx.createLinearGradient(0, hy, 0, gy);
-  floorG.addColorStop(0, '#1c140f'); floorG.addColorStop(1, '#2c2119');
+  floorG.addColorStop(0, '#241a13'); floorG.addColorStop(1, '#3a2c1e');
   ctx.fillStyle = floorG;
   ctx.beginPath();
   ctx.moveTo(far.x, far.y); ctx.lineTo(farR.x, farR.y);
   ctx.lineTo(nearR.x, nearR.y); ctx.lineTo(near.x, near.y);
   ctx.closePath(); ctx.fill();
 
-  // Продольные полосы дорожки (радиальные — не скроллятся)
-  ctx.strokeStyle = 'rgba(242,237,227,0.10)'; ctx.lineWidth = 1;
-  [-0.55, 0, 0.55].forEach(lx => {
-    const a = projectPoint(lx, 0), b = projectPoint(lx, ZFAR);
-    ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
-  });
-  // Поперечные рейки — скроллятся навстречу игроку, дают чувство разгона
-  ctx.strokeStyle = 'rgba(242,237,227,0.14)'; ctx.lineWidth = 2;
+  // Границы дорожки — яркая тонкая линия по краям на всю глубину.
+  ctx.strokeStyle = 'rgba(255,210,150,0.28)'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(near.x, near.y); ctx.lineTo(far.x, far.y); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(nearR.x, nearR.y); ctx.lineTo(farR.x, farR.y); ctx.stroke();
+  // Едва заметная центральная линия
+  const midN = projectPoint(0, 0), midF = projectPoint(0, ZFAR);
+  ctx.strokeStyle = 'rgba(242,237,227,0.08)'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(midN.x, midN.y); ctx.lineTo(midF.x, midF.y); ctx.stroke();
+
+  // Поперечные рейки — скроллятся навстречу игроку, дают чувство разгона.
+  ctx.strokeStyle = 'rgba(242,237,227,0.16)'; ctx.lineWidth = 2;
   const frac = trackScroll % 1;
   for (let k = 0; k <= Math.ceil(ZFAR) + 1; k++) {
     const z = k - frac;
     if (z < 0 || z > ZFAR) continue;
     const a = projectPoint(-1, z), b = projectPoint(1, z);
-    ctx.globalAlpha = 0.5 + 0.5 * (1 - z / ZFAR);
+    ctx.globalAlpha = 0.4 + 0.5 * (1 - z / ZFAR);
     ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
   }
   ctx.globalAlpha = 1;
 
-  // Кирпичные стены и лампы по бокам, сходящиеся к горизонту
-  ctx.fillStyle = 'rgba(60,42,30,0.55)';
-  ctx.beginPath(); ctx.moveTo(0, hy); ctx.lineTo(far.x, far.y); ctx.lineTo(far.x, hy - 40); ctx.lineTo(0, hy - 60); ctx.closePath(); ctx.fill();
-  ctx.beginPath(); ctx.moveTo(W, hy); ctx.lineTo(farR.x, farR.y); ctx.lineTo(farR.x, hy - 40); ctx.lineTo(W, hy - 60); ctx.closePath(); ctx.fill();
-  for (let k = 0; k <= 3; k++) {
-    const z = ((k - frac % 1) + 4) % 4 * (ZFAR / 4) + 0.3;
+  // Лампы по кромке стен — компактный тёплый свет, не заливает весь экран.
+  for (let k = 0; k <= 4; k++) {
+    const z = ((k - frac % 1) + 5) % 5 * (ZFAR / 4.2) + 0.2;
     if (z > ZFAR) continue;
+    const pr = projectZ(z);
     [-1.02, 1.02].forEach(side => {
       const p = projectPoint(side, z);
-      const g = ctx.createRadialGradient(p.x, p.y, 1, p.x, p.y, 60 * p.scale);
-      g.addColorStop(0, 'rgba(255,190,120,' + (0.35 * p.scale) + ')'); g.addColorStop(1, 'rgba(255,190,120,0)');
-      ctx.fillStyle = g; ctx.fillRect(p.x - 60 * p.scale, p.y - 60 * p.scale, 120 * p.scale, 120 * p.scale);
+      const rad = 34 * pr.scale;
+      const g = ctx.createRadialGradient(p.x, p.y - 10 * pr.scale, 1, p.x, p.y - 10 * pr.scale, rad);
+      g.addColorStop(0, 'rgba(255,190,120,' + (0.4 * pr.scale) + ')'); g.addColorStop(1, 'rgba(255,190,120,0)');
+      ctx.fillStyle = g; ctx.fillRect(p.x - rad, p.y - rad - 10 * pr.scale, rad * 2, rad * 2);
     });
   }
 }
@@ -777,14 +795,115 @@ function drawAthlete(c, fighter, opts) {
   }
   c.restore();
 }
-// Дешёвая отрисовка дальних рядов толпы — силуэт без деталей, для 60 fps
-// при большом отряде.
+// Голова со спины: лица не видно, зато видно то, что как раз узнаваемо
+// сзади — узел банданы, полоску на хвостике кроссфитера, уши борца.
+function drawHeadBack(c, f, hx, hy) {
+  const skinD = shade(f.skin, 0.8);
+  c.fillStyle = f.hair || skinD;
+  c.beginPath(); c.arc(hx, hy, 7.6, 0, 7); c.fill();
+  c.fillStyle = f.ears ? '#c98a7a' : skinD;
+  c.beginPath(); c.arc(hx - 7.3, hy + 1, f.ears ? 2.6 : 1.8, 0, 7); c.fill();
+  c.beginPath(); c.arc(hx + 7.3, hy + 1, f.ears ? 2.6 : 1.8, 0, 7); c.fill();
+  if (f.head === 'bandana') {
+    c.fillStyle = f.acc;
+    c.beginPath(); c.arc(hx, hy - 0.5, 7.9, 0, 7); c.fill();
+    // узел и свисающие хвостики платка — характерная деталь именно со спины
+    c.fillStyle = shade(f.acc, 0.68);
+    c.beginPath(); c.arc(hx, hy + 3, 2.6, 0, 7); c.fill();
+    c.beginPath(); c.moveTo(hx - 2.4, hy + 4); c.lineTo(hx - 4, hy + 11); c.lineTo(hx - 1, hy + 10.5); c.closePath(); c.fill();
+    c.beginPath(); c.moveTo(hx + 2.4, hy + 4); c.lineTo(hx + 4.4, hy + 10.5); c.lineTo(hx + 1, hy + 10); c.closePath(); c.fill();
+  } else if (f.head === 'headband') {
+    c.fillStyle = f.acc;
+    c.beginPath(); c.arc(hx, hy + 1.5, 5.2, 0, 7); c.fill();
+  } else if (f.head === 'short') {
+    c.fillStyle = shade(f.hair, 0.9);
+    c.beginPath(); c.arc(hx, hy, 7.6, 0, 7); c.fill();
+  }
+}
+// Отряд бежит от камеры — вид со спины: затылок и плечи, спина, ноги
+// попеременно уходят под корпус. Отдельная функция, не профиль из game.html.
+function drawAthleteBack(c, fighter, opts) {
+  const { run = 0, rage = false, shield: sh = false, scale = 1, idle = false } = opts || {};
+  const f = FIGHTERS[fighter];
+  const B = f.bulk || 1;
+  const torsoCol = (f.shirtless || f.singlet) ? f.skin : f.top;
+  const torsoD = shade(torsoCol, 0.8);
+  const skinD = shade(f.skin, 0.8);
+  c.save(); c.scale(scale, scale);
+  if (rage) {
+    c.fillStyle = 'rgba(255,90,54,0.20)';
+    c.beginPath(); c.arc(0, -40, 34, 0, 7); c.fill();
+  }
+  const s = idle ? 0 : run; // -1..1, фаза бега
+  const stance = idle ? 1 : 0;
+  // Ноги видны со спины почти вертикально — приподнимаются попеременно.
+  const leg = (side, col, dark) => {
+    const lift = Math.max(0, side * s);
+    const hipX = side * (5 + 2 * stance), hipY = -30;
+    const kneeX = hipX + side * 1.6, kneeY = -16 + lift * 4;
+    const footX = hipX + side * 2.2, footY = -3 - lift * 10;
+    limb(c, [hipX, hipY, kneeX, kneeY, footX, footY], 9 * B, col);
+    drawShoe(c, footX, footY + 2, dark);
+  };
+  const arm = (side, col) => {
+    const aw = idle ? side * 0.22 : -side * s;
+    const shX = side * 13 * B, shY = -55;
+    const elX = shX + aw * 7, elY = shY + 14;
+    const haX = elX + aw * 6, haY = elY + 11;
+    limb(c, [shX, shY, elX, elY, haX, haY], 7.6 * B, col);
+    c.fillStyle = col; c.beginPath(); c.arc(shX, shY - 1, 5 * B, 0, 7); c.fill();
+  };
+  leg(-1, skinD, true);
+  arm(-1, skinD);
+  // шорты
+  c.fillStyle = f.bottom;
+  c.beginPath(); c.roundRect(-10 * B, -37, 20 * B, 15, 5); c.fill();
+  c.fillStyle = shade(f.bottom, 0.75); c.fillRect(2 * B, -37, 3 * B, 15);
+  // торс со спины: широкие плечи, сужение к пояснице
+  c.fillStyle = torsoCol;
+  c.beginPath();
+  c.moveTo(-9 * B, -33);
+  c.quadraticCurveTo(-15 * B, -45, -16 * B, -56);
+  c.quadraticCurveTo(-7, -63, 0, -63);
+  c.quadraticCurveTo(7, -63, 16 * B, -56);
+  c.quadraticCurveTo(15 * B, -45, 9 * B, -33);
+  c.closePath(); c.fill();
+  // лопатки — мягкие объёмы
+  c.fillStyle = torsoD;
+  c.beginPath(); c.arc(-6 * B, -50, 4 * B, 0, 7); c.fill();
+  c.beginPath(); c.arc(6 * B, -50, 4 * B, 0, 7); c.fill();
+  c.strokeStyle = shade(torsoCol, 0.65); c.lineWidth = 1;
+  c.beginPath(); c.moveTo(0, -58); c.lineTo(0, -35); c.stroke();
+  if (f.singlet) {
+    c.strokeStyle = f.top; c.lineWidth = 4 * B; c.lineCap = 'butt';
+    c.beginPath(); c.moveTo(-9 * B, -56); c.lineTo(6 * B, -34); c.stroke();
+    c.beginPath(); c.moveTo(9 * B, -56); c.lineTo(-6 * B, -34); c.stroke();
+    c.lineCap = 'round';
+  }
+  if (f.belt) { c.fillStyle = f.acc; c.fillRect(-10 * B, -39, 20 * B, 5.5); }
+  leg(1, f.skin, false);
+  limb(c, [0, -58, 0, -64], 6.5 * B, f.skin);
+  drawHeadBack(c, f, 0, -68);
+  arm(1, f.skin);
+  if (sh) {
+    c.strokeStyle = '#7ea8ff'; c.lineWidth = 2.2; c.globalAlpha = 0.6 + 0.3 * Math.sin(t * 8);
+    c.beginPath(); c.arc(0, -34, 40, 0, 7); c.stroke(); c.globalAlpha = 1;
+  }
+  c.restore();
+}
+// Дешёвая отрисовка дальних рядов толпы (тоже со спины) — силуэт без
+// деталей, для 60 fps при большом отряде.
 function drawFollowerSimple(x, y, scale, f, phase) {
-  const bob = Math.sin(phase) * 3 * scale;
+  const bob = Math.sin(phase) * 2 * scale;
   ctx.save(); ctx.translate(x, y + bob);
-  ctx.fillStyle = f.top; ctx.fillRect(-9 * scale, -34 * scale, 18 * scale, 22 * scale);
-  ctx.fillStyle = f.skin; ctx.beginPath(); ctx.arc(0, -40 * scale, 7 * scale, 0, 7); ctx.fill();
-  ctx.fillStyle = f.bottom; ctx.fillRect(-7 * scale, -14 * scale, 14 * scale, 14 * scale);
+  ctx.fillStyle = f.top;
+  ctx.beginPath();
+  ctx.moveTo(-8 * scale, -34 * scale); ctx.lineTo(8 * scale, -34 * scale);
+  ctx.lineTo(6 * scale, -14 * scale); ctx.lineTo(-6 * scale, -14 * scale);
+  ctx.closePath(); ctx.fill();
+  ctx.fillStyle = f.hair || f.skin; ctx.beginPath(); ctx.arc(0, -39 * scale, 5.4 * scale, 0, 7); ctx.fill();
+  ctx.fillStyle = f.bottom; ctx.fillRect(-6 * scale, -14 * scale, 12 * scale, 12 * scale);
+  ctx.fillStyle = f.skin; ctx.fillRect(-6 * scale, -3 * scale, 4 * scale, 8 * scale); ctx.fillRect(2 * scale, -3 * scale, 4 * scale, 8 * scale);
   ctx.restore();
 }
 
