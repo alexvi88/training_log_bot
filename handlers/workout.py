@@ -1144,6 +1144,19 @@ async def menu_settings(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "menu:start_workout")
 async def start_workout(callback: CallbackQuery, state: FSMContext):
+    await _start_workout(callback, state, delete_message=True)
+
+
+@router.callback_query(F.data == "push:start_workout")
+async def start_workout_from_push(callback: CallbackQuery, state: FSMContext):
+    """Same button, but the tap came from a push notification's CTA — callback.message
+    there is the push itself, not the bot's own disposable menu screen, so it must not
+    be deleted (same reasoning as _enter_live's delete_message=False for the AI-тренер
+    chat)."""
+    await _start_workout(callback, state, delete_message=False)
+
+
+async def _start_workout(callback: CallbackQuery, state: FSMContext, delete_message: bool):
     # Answered up front: neither branch below has anything to tell Telegram about
     # the tap itself, and _enter_live doesn't answer internally — left this way,
     # the active-workout branch used to leave the button spinning until Telegram
@@ -1154,10 +1167,11 @@ async def start_workout(callback: CallbackQuery, state: FSMContext):
     # creating, is what stops a double tap from opening two of them.
     workout_id, created = await db.get_or_create_active_workout(callback.from_user.id)
     if not created:
-        await _enter_live(callback, state, workout_id)
+        await _enter_live(callback, state, workout_id, delete_message=delete_message)
         return
     await _reset_new_workout_scaffold(state)
-    await _delete_message(callback.message)
+    if delete_message:
+        await _delete_message(callback.message)
     sent = await callback.message.answer("🏋️ Тренировка начата — погнали")
     await state.update_data(
         workout_id=workout_id, live_chat_id=sent.chat.id, live_message_id=sent.message_id,
