@@ -748,6 +748,7 @@ async def test_picker_hint_without_programs_only_talks_about_groups(fresh_db, us
 
     assert "по программе" not in hint
     assert "Выбери группу мышц" in hint
+    assert "напиши название" in hint
 
 
 async def test_picker_ignores_programs_not_trained_recently(fresh_db, user_id, monkeypatch):

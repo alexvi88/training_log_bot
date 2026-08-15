@@ -100,3 +100,35 @@ async def test_instruction_still_shown_one_workout_short_of_threshold(fresh_db, 
     await workout._render_logging_screen(bot, state, user)
 
     assert _INSTRUCTION in _make_bot.sent_text
+
+
+# ---------- задание №5: подсказка формата на самом первом вводе ----------
+
+_FORMAT_HINT = "Вес и повторы одной строкой"
+
+
+@pytest.mark.asyncio
+async def test_format_hint_shown_when_no_set_was_ever_logged(fresh_db, user_id):
+    db = fresh_db
+    state = await _setup(db, user_id, n_recent_workouts=0)
+    user = await db.get_user(user_id)
+    bot = _make_bot()
+
+    await workout._render_logging_screen(bot, state, user)
+
+    assert _FORMAT_HINT in _make_bot.sent_text
+
+
+@pytest.mark.asyncio
+async def test_format_hint_hidden_once_any_set_exists(fresh_db, user_id):
+    """Даже одна запись где угодно в дневнике гасит подсказку — это не про
+    «давно тренируется» (см. show_instruction/is_seasoned выше), а про сам
+    факт первого удачного подхода."""
+    db = fresh_db
+    state = await _setup(db, user_id, n_recent_workouts=1)
+    user = await db.get_user(user_id)
+    bot = _make_bot()
+
+    await workout._render_logging_screen(bot, state, user)
+
+    assert _FORMAT_HINT not in _make_bot.sent_text

@@ -833,7 +833,7 @@ async def test_group_creation_leaves_a_single_screen(fresh_db, user_id):
 
     assert message.answer.await_count == 1
     text = message.answer.await_args.args[0]
-    assert "выбери группу мышц" in text
+    assert "Выбери группу мышц" in text
     groups = {g["name"] for g in await fresh_db.list_muscle_groups(user_id)}
     assert "Предплечья" in groups
 

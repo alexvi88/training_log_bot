@@ -44,12 +44,15 @@ def persistent_menu() -> ReplyKeyboardMarkup:
 
 def main_menu(
     has_active_workout: bool,
-    show_quick_log: bool = False,
+    show_import_button: bool = False,
     community_url: str | None = None,
 ) -> InlineKeyboardMarkup:
-    """show_quick_log: offered while the diary is still empty. A first-time user
-    has nothing to look at and a whole training history behind them — letting
-    them type one line of it beats walking the picker for the first record.
+    """show_import_button: offered while the diary is still empty (same condition
+    that used to gate the now-removed "✍️ Записать прошлую тренировку" quick-log
+    button — see handlers.workout._main_menu_kb). A first-time user with a whole
+    training history in Hevy or another app shouldn't start this diary from
+    zero — the import flow (settings:import) closes that gap directly, so the
+    dedicated one-line quick-log flow was retired rather than kept alongside it.
 
     community_url: адрес общей группы (config.COMMUNITY_CHAT_URL). Кнопка —
     url, а не callback: чат живёт снаружи бота, и промежуточный экран между
@@ -59,10 +62,10 @@ def main_menu(
         b.button(text="▶️ ПРОДОЛЖИТЬ ТРЕНИРОВКУ", callback_data="menu:resume_workout")
     else:
         b.button(text="🏋️ НАЧАТЬ ТРЕНИРОВКУ", callback_data="menu:start_workout")
-    # Also on the persistent keyboard, but the menu is what a new user reads to
-    # find out what the bot does — and "menu:ai" had a handler no keyboard sent.
-    if show_quick_log:
-        b.button(text="✍️ Записать прошлую тренировку", callback_data="menu:quicklog")
+    # Тот же callback, что и «📥 Импорт CSV» в настройках (settings:import,
+    # см. handlers/csv_import.py) — второй вход в один и тот же флоу, не новый.
+    if show_import_button:
+        b.button(text="📥 Перенести историю из Hevy", callback_data="settings:import")
     b.button(text="📈 Прогресс", callback_data="menu:progress")
     b.button(text="📚 История", callback_data="menu:history")
     b.button(text="⚙️ Упражнения", callback_data="menu:exercises")
@@ -74,11 +77,11 @@ def main_menu(
     b.button(text="🤖 AI-тренер", callback_data="menu:ai")
     if community_url:
         b.button(text="💬 Чат атлетов", url=community_url)
-    # start/resume and quick-log (if shown) full width, then pairs:
+    # start/resume and the import button (if shown) full width, then pairs:
     # Прогресс·История, Упражнения·Программы, Дневник веса·Дневник еды,
     # Достижения·Настройки, then AI-тренер full width at the very bottom,
     # и под ним — чат сообщества, если он заведён.
-    b.adjust(*([1, 1] if show_quick_log else [1]), 2, 2, 2, 2, 1, *([1] if community_url else []))
+    b.adjust(*([1, 1] if show_import_button else [1]), 2, 2, 2, 2, 1, *([1] if community_url else []))
     return b.as_markup()
 
 

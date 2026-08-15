@@ -39,7 +39,12 @@ async def _groups_payload(user_id: int):
     b.adjust(2)
     b.row(InlineKeyboardButton(text="➕ Новая группа", callback_data="exm:newgroup"))
     b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="exm:back"))
-    return "⚙️ Упражнения — выбери группу мышц:", b.as_markup()
+    text = (
+        "⚙️ <b>МОИ УПРАЖНЕНИЯ</b>\n\n"
+        "Твоя картотека: переименовать, объединить дубли, завести своё. "
+        "Выбери группу мышц:"
+    )
+    return text, b.as_markup()
 
 
 async def show_exercise_groups(callback: CallbackQuery, state: FSMContext):
@@ -49,7 +54,7 @@ async def show_exercise_groups(callback: CallbackQuery, state: FSMContext):
     await state.update_data(exm_from_ai=False)
     await state.set_state(ExerciseManage.picking_group)
     text, kb = await _groups_payload(callback.from_user.id)
-    await ui.safe_edit(callback, text, reply_markup=kb)
+    await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML")
     await callback.answer()
 
 
@@ -1089,5 +1094,5 @@ async def exm_new_group_entered(message: Message, state: FSMContext):
     # separate "Группа «X» создана." and the placeholder it used to edit were
     # both just litter left in the chat.
     text, kb = await _groups_payload(message.from_user.id)
-    await message.answer(text, reply_markup=kb)
+    await message.answer(text, reply_markup=kb, parse_mode="HTML")
     await state.set_state(ExerciseManage.picking_group)
