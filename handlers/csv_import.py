@@ -86,14 +86,26 @@ DELIMITERS = ",;\t|"
 # экспорта Hevy: самого частого источника миграции. Без них файл оттуда не
 # автоопределялся ни по одному из четырёх обязательных полей и упирался в
 # ручной маппинг с нуля.
+# exercise name/set order — второй такой источник, Strong: у него дата и вес
+# называются как у нас ("Date", "Weight"), а упражнение и номер подхода — нет,
+# и человек всё равно шёл в ручной маппинг ради двух полей из четырёх.
 SYNONYMS = {
     "date": {"дата", "date", "started_at", "start_time"},
-    "exercise": {"упражнение", "exercise", "exercise_title"},
+    "exercise": {"упражнение", "exercise", "exercise_title", "exercise name"},
     "weight": {"вес", "weight", "weight_kg"},
     "reps": {"повторы", "reps"},
-    "round": {"подход", "раунд", "round", "set", "round_index", "set_index"},
+    "round": {"подход", "раунд", "round", "set", "round_index", "set_index", "set order"},
     "rpe": {"rpe", "рпе"},
 }
+# Единицы в скобках у заголовка — «Weight (kg)», «Weight (lbs)», «Distance (m)»:
+# Strong подписывает ими колонки по настройкам аккаунта, и без этой срезки один
+# и тот же экспорт автоопределялся у одного человека и не автоопределялся у
+# другого — только потому, что тот считает вес в фунтах.
+_HEADER_UNITS_RE = re.compile(r"\s*\([^()]*\)\s*$")
+
+
+def _normalize_header(text: str) -> str:
+    return _HEADER_UNITS_RE.sub("", text.strip().lower()).strip()
 
 
 @router.callback_query(F.data == "settings:import")
@@ -102,15 +114,17 @@ async def import_start(callback: CallbackQuery, state: FSMContext):
     await ui.safe_edit(
         callback,
         "📥 Пришли CSV-файл с колонками «дата, упражнение, вес, повторы».\n\n"
-        "Также подойдёт импорт из Hevy: в Hevy — ⚙️ Settings → Export & Import "
-        "Data, экспорт придёт на почту файлом CSV — скачай его и пришли мне сюда.",
+        "Переезжаешь из Hevy — Settings → Export & Import Data, экспорт придёт "
+        "на почту файлом CSV.\n"
+        "Из Strong — Settings → Export Strong Data, файл сохранится на телефон.\n"
+        "И тот и другой присылай мне как есть, руками подгонять ничего не надо.",
         reply_markup=keyboards.cancel_keyboard("imp:cancel"),
     )
     await callback.answer()
 
 
 def _auto_detect(headers: list[str]) -> dict[str, int]:
-    lowered = [h.strip().lower() for h in headers]
+    lowered = [_normalize_header(h) for h in headers]
     mapping: dict[str, int] = {}
     for field, names in SYNONYMS.items():
         for idx, h in enumerate(lowered):
@@ -357,6 +371,21 @@ def _parse_number(text: str) -> float:
     return float(text.replace(" ", "").replace("\xa0", ""))
 
 
+# Фунты в весе — не косметика заголовка, а другая величина: без пересчёта
+# «225 lbs» легли бы в историю как 225 кг, стали бы вечным рекордом упражнения
+# и разом открыли бы весовые клубы, которые уже не отбираются. Строка «Weight
+# (lbs)» бывает только у Strong: он подписывает колонку единицей аккаунта.
+_LBS_IN_KG = 0.45359237
+_LBS_HEADER_RE = re.compile(r"\((?:lb|lbs|pounds?)\)\s*$", re.IGNORECASE)
+
+
+def _weight_factor(headers: list[str], mapping: dict[str, int]) -> float:
+    idx = mapping.get("weight")
+    if idx is None or idx >= len(headers):
+        return 1.0
+    return _LBS_IN_KG if _LBS_HEADER_RE.search(headers[idx].strip()) else 1.0
+
+
 def _parse_count(text: str, label: str) -> int:
     """Целое из ячейки, терпимое к «8.0».
 
@@ -373,9 +402,36 @@ def _parse_count(text: str, label: str) -> int:
     return int(value)
 
 
+def _is_not_a_set(row: list[str], mapping: dict[str, int]) -> bool:
+    """Строка без нагрузки: и вес, и повторы либо пусты, либо нули.
+
+    Strong держит в одной таблице силовые и кардио: у пробежки Weight и Reps
+    равны нулю, а работа лежит в Distance/Seconds, которых у нас нет. Раньше
+    такая строка валила весь файл целиком («повторы должны быть больше 0») —
+    человек с одной пробежкой за год не мог перенести историю вообще. Импортировать
+    в ней нечего, поэтому пропускаем; если пусты все строки, дальше сработает
+    «не нашёл ни одной строки с подходами» и импорт всё равно не пройдёт молча.
+    """
+    for field in ("weight", "reps"):
+        idx = mapping.get(field)
+        if idx is None or idx >= len(row):
+            continue
+        text = row[idx].strip()
+        if not text:
+            continue
+        try:
+            if _parse_number(text) != 0:
+                return False
+        except ValueError:
+            # Нечисловая ячейка — не наше дело: пусть об этом скажет разбор ниже
+            # своей строкой с номером, а не тихий пропуск.
+            return False
+    return True
+
+
 def _build_workout_groups(
     rows: list[list[str]], mapping: dict[str, int], first_line: int = 2,
-    today: Optional[dt.date] = None,
+    today: Optional[dt.date] = None, weight_factor: float = 1.0,
 ) -> list[dict]:
     groups: dict[str, dict[str, list[tuple]]] = {}
     name_order: dict[str, list[str]] = {}
@@ -384,12 +440,16 @@ def _build_workout_groups(
     for line_no, row in enumerate(rows, start=first_line):
         if not row or all(not c.strip() for c in row):
             continue
+        if _is_not_a_set(row, mapping):
+            continue
         try:
             date_val = _parse_row_date(row[mapping["date"]], today)
             name = row[mapping["exercise"]].strip()
             weight_text = row[mapping["weight"]].strip()
             try:
-                weight = _parse_number(weight_text) if weight_text else 0.0
+                weight = _parse_number(weight_text) * weight_factor if weight_text else 0.0
+                if weight_factor != 1.0:
+                    weight = round(weight, 1)
             except ValueError:
                 raise ParseError(f"не понял вес «{weight_text}»") from None
             reps = _parse_count(row[mapping["reps"]].strip(), "повторы")
@@ -471,6 +531,10 @@ async def _finish_mapping(event, state: FSMContext) -> None:
             data["imp_rows"], data["imp_mapping"],
             first_line=2 if data.get("imp_has_header", True) else 1,
             today=timeutil.user_today(user),
+            # Считаем здесь, а не при приёме файла: колонку веса могли выбрать
+            # руками, и единица берётся из заголовка той колонки, что выбрана в
+            # итоге, — какой бы дорогой она сюда ни пришла.
+            weight_factor=_weight_factor(data.get("imp_headers") or [], data["imp_mapping"]),
         )
     except ParseError as e:
         await _back_to_file(f"Ошибка в файле: {e.message}\nИсправь файл и пришли заново.")
