@@ -5945,11 +5945,16 @@ async def get_ai_search_count_global(date_str: Optional[str] = None) -> int:
 
 
 async def increment_ai_search_count(telegram_id: int) -> None:
-    """Плюс один поиск — и в личный счётчик, и в общий, одной транзакцией.
+    """Плюс один личный поиск (см. `try_increment_ai_search_count_global` для
+    общего потолка — он теперь резервируется отдельно, ДО сетевого похода, а
+    не одной транзакцией вместе с этим счётчиком).
 
-    Оба счётчика двигаются вместе намеренно: разъедься они, и один из двух
-    потолков начнёт врать, а какой именно — станет видно только по счёту от
-    провайдера, то есть через месяц.
+    Личный счётчик по-прежнему двигается ПОСЛЕ реальной находки (контракт
+    «квота списывается только за состоявшийся поиск», как у вопросов и еды):
+    гонка тут — один и тот же человек присылает два вопроса подряд, а не сто
+    разных людей одновременно, — и `ai_trainer._search_block` уже сериализует
+    поисковые шаги одного пользователя через `ai_limits.check`, так что цена
+    редкого перерасхода на единицу меньше цены усложнения контракта.
     """
     today = await _quota_day(telegram_id)
     async with _write_lock:
@@ -5958,12 +5963,54 @@ async def increment_ai_search_count(telegram_id: int) -> None:
             "ON CONFLICT (telegram_id, date) DO UPDATE SET count = count + 1",
             (telegram_id, today),
         )
-        await conn().execute(
-            "INSERT INTO ai_search_global_usage (date, count) VALUES (?, 1) "
-            "ON CONFLICT (date) DO UPDATE SET count = count + 1",
-            (_utc_day(),),
-        )
         await conn().commit()
+
+
+async def try_increment_ai_search_count_global(limit: int, date_str: Optional[str] = None) -> bool:
+    """Атомарно занять один слот в ОБЩЕМ (на всех пользователей сразу) потолке
+    живых поисков — до сетевого похода, а не после.
+
+    Раньше место резервировалось так: прочитать счётчик (`ai_limits.check`),
+    решить «можно», сходить в сеть (секунды), и только если нашлось что-то
+    полезное — увеличить счётчик. Между чтением и записью гонка была РЕАЛЬНОЙ,
+    потому что она не про одного человека (его вопросы и так сериализует
+    `ai_limits.check`/`_search_block` внутри одного запроса) — она про N
+    разных людей, чьи вопросы пришли параллельно и все успели прочитать один
+    и тот же счётчик ДО того, как кто-либо из них его увеличил. Личная квота
+    такого не боится (она про одного человека и одну переписку), а общий
+    потолок — это ровно тот случай, где гонка опаснее контракта «квота
+    списывается только за находку»: лучше иногда зарезервировать слот под
+    поиск, который не найдёт ничего полезного, чем пропустить N поисков сверх
+    потолка одновременным всплеском.
+
+    `UPDATE ... WHERE count < limit` — одно атомарное выражение SQLite: даже
+    без внешнего `_write_lock` (который тут всё равно есть, для единообразия)
+    два одновременных запроса не могут оба увидеть count=9 из 10 и оба его
+    провести — rowcount у одного из них будет 0.
+
+    limit <= 0 — потолок снят переменной окружения: обычный инкремент без
+    ограничения, тем же способом, что и у `_exhausted` в ai_limits.py.
+    """
+    today = date_str or _utc_day()
+    async with _write_lock:
+        await conn().execute(
+            "INSERT INTO ai_search_global_usage (date, count) VALUES (?, 0) "
+            "ON CONFLICT (date) DO NOTHING",
+            (today,),
+        )
+        if limit > 0:
+            cur = await conn().execute(
+                "UPDATE ai_search_global_usage SET count = count + 1 "
+                "WHERE date = ? AND count < ?",
+                (today, limit),
+            )
+        else:
+            cur = await conn().execute(
+                "UPDATE ai_search_global_usage SET count = count + 1 WHERE date = ?",
+                (today,),
+            )
+        await conn().commit()
+        return cur.rowcount > 0
 
 
 async def get_ai_question_count_today(telegram_id: int) -> int:
@@ -5984,6 +6031,50 @@ async def increment_ai_question_count(telegram_id: int) -> None:
             (telegram_id, today),
         )
         await conn().commit()
+
+
+async def try_increment_ai_question_count(telegram_id: int, limit: int) -> bool:
+    """Атомарно списать один вопрос из дневной квоты — но только если она ещё
+    не выбрана к моменту записи.
+
+    Контракт «квота списывается только при готовом ответе» (см. комментарий
+    в handlers/ai_trainer.py у вызова) тут НЕ меняется: списание по-прежнему
+    происходит ПОСЛЕ ответа модели, не до него, — сорвавшийся у провайдера
+    запрос по-прежнему не стоит человеку вопроса. Меняется только сама
+    операция списания: раньше «прочитать счётчик» (для проверки лимита) и
+    «увеличить его» были двумя разными обращениями к базе с самим ответом
+    модели между ними — и в этом промежутке гонка была возможна, пусть и
+    маловероятна (см. `handlers/ai_trainer._try_claim_busy`, который и так
+    не даёт ОДНОМУ пользователю иметь два вопроса в полёте одновременно).
+    Теперь это одно атомарное `UPDATE ... WHERE count < limit`: даже если
+    что-то в будущем ослабит защиту busy-замка, счётчик не сможет перескочить
+    свой потолок больше чем на действие, которое СТРОГО единственным успело
+    в него попасть.
+
+    limit <= 0 — квота снята (см. `AI_QUESTION_DAILY_LIMIT=0` как переменная
+    окружения) — обычный инкремент без ограничения.
+    """
+    today = await _quota_day(telegram_id)
+    async with _write_lock:
+        await conn().execute(
+            "INSERT INTO ai_question_usage (telegram_id, date, count) VALUES (?, ?, 0) "
+            "ON CONFLICT (telegram_id, date) DO NOTHING",
+            (telegram_id, today),
+        )
+        if limit > 0:
+            cur = await conn().execute(
+                "UPDATE ai_question_usage SET count = count + 1 "
+                "WHERE telegram_id = ? AND date = ? AND count < ?",
+                (telegram_id, today, limit),
+            )
+        else:
+            cur = await conn().execute(
+                "UPDATE ai_question_usage SET count = count + 1 "
+                "WHERE telegram_id = ? AND date = ?",
+                (telegram_id, today),
+            )
+        await conn().commit()
+        return cur.rowcount > 0
 
 
 async def get_ai_video_count_today(telegram_id: int) -> int:

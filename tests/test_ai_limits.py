@@ -6,6 +6,7 @@
 включая свои аккаунты, — иначе стоп-краном он не является.
 """
 
+import asyncio
 from unittest.mock import AsyncMock
 
 import pytest
@@ -203,9 +204,14 @@ async def test_search_block_stays_silent_for_the_athlete(user_id, monkeypatch, f
 
 
 async def test_global_search_cap_is_shared_between_people(user_id, monkeypatch, free):
-    """Личная квота умножается на число людей, общая — нет."""
+    """Личная квота умножается на число людей, общая — нет.
+
+    Общий счётчик теперь резервируется атомарно и ДО сетевого похода (см.
+    db.try_increment_ai_search_count_global и ai_trainer._search_block), а не
+    одной транзакцией вместе с личным — поэтому сеется он тут напрямую.
+    """
     monkeypatch.setattr(config, "AI_SEARCH_GLOBAL_DAILY_LIMIT", 1)
-    await dbmod.increment_ai_search_count(user_id)
+    await dbmod.try_increment_ai_search_count_global(config.AI_SEARCH_GLOBAL_DAILY_LIMIT)
 
     stranger = 999_111
     assert await ai_limits.check(stranger, ai_limits.KIND_SEARCH) is None
@@ -260,6 +266,56 @@ async def test_strangers_never_get_the_warning(user_id, monkeypatch, free):
 
     block = await ai_limits.check(user_id, ai_limits.KIND_FOOD)
     assert block is not None and not block.preview
+
+
+# ---------- атомарный check-and-increment (гонка «прочитал → подождал → списал») ----------
+#
+# Раньше решение «можно» принималось чтением счётчика, а списание —
+# отдельным запросом секундами позже, после ответа модели. Между ними была
+# гонка: два параллельных запроса читали один и тот же счётчик до того, как
+# любой из них его увеличил, и оба проходили. `try_increment_ai_*` сводит
+# проверку и запись в одно атомарное `UPDATE ... WHERE count < limit`.
+
+
+async def test_try_increment_question_count_stops_exactly_at_the_limit(user_id):
+    for _ in range(3):
+        assert await dbmod.try_increment_ai_question_count(user_id, limit=3) is True
+    # Четвёртая попытка — гонка (или просто перебор): счётчик уже на потолке,
+    # и rowcount у UPDATE обязан быть 0, а не молча перескочить дальше.
+    assert await dbmod.try_increment_ai_question_count(user_id, limit=3) is False
+    assert await dbmod.get_ai_question_count_today(user_id) == 3
+
+
+async def test_try_increment_question_count_unlimited_when_limit_is_zero_or_less(fresh_db):
+    for limit in (0, -1):
+        user_id = 555_000 + limit
+        for _ in range(5):
+            assert await dbmod.try_increment_ai_question_count(user_id, limit=limit) is True
+        assert await dbmod.get_ai_question_count_today(user_id) == 5
+
+
+async def test_try_increment_search_global_stops_exactly_at_the_limit(fresh_db):
+    for _ in range(2):
+        assert await dbmod.try_increment_ai_search_count_global(limit=2) is True
+    assert await dbmod.try_increment_ai_search_count_global(limit=2) is False
+    assert await dbmod.get_ai_search_count_global() == 2
+
+
+async def test_try_increment_search_global_unlimited_when_limit_is_zero_or_less(fresh_db):
+    for _ in range(4):
+        assert await dbmod.try_increment_ai_search_count_global(limit=0) is True
+    assert await dbmod.get_ai_search_count_global() == 4
+
+
+async def test_try_increment_search_global_survives_a_burst_of_concurrent_callers(fresh_db):
+    """То самое: N «параллельных» вызовов (тут — конкурентных корутин на одном
+    event loop, что и создавало реальную гонку в проде между чтением и
+    записью) не должны провести общий счётчик дальше потолка."""
+    results = await asyncio.gather(
+        *(dbmod.try_increment_ai_search_count_global(limit=5) for _ in range(20))
+    )
+    assert sum(results) == 5
+    assert await dbmod.get_ai_search_count_global() == 5
 
 
 async def test_ack_lives_by_the_same_clock_as_its_limit(user_id, monkeypatch):

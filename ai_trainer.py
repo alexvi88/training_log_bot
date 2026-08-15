@@ -4912,6 +4912,24 @@ async def _search_block(
                 await on_limit(block)
             continue
         return block
+    # Прочитанные выше значения разрешают поиск, но общий потолок делят ВСЕ
+    # пользователи разом, а от этой строки до сетевого похода в
+    # _web_search_findings — секунды. Личную гонку (тот же человек спросил
+    # дважды подряд) уже гасит busy-замок в handlers/ai_trainer.py, а вот
+    # параллельный всплеск вопросов от РАЗНЫХ людей мог бы весь пройти мимо
+    # read-проверки выше и провалиться сквозь потолок вместе. Тут гонка
+    # опаснее контракта «квота списывается только за находку» — поэтому
+    # резервируем место атомарно ДО вызова, а не после (см.
+    # db.try_increment_ai_search_count_global).
+    if not await db.try_increment_ai_search_count_global(config.AI_SEARCH_GLOBAL_DAILY_LIMIT):
+        logger.warning(
+            "AI global search cap: атомарная бронь не досталась — параллельный "
+            "всплеск запросов забрал последний слот между чтением счётчика и этой строкой"
+        )
+        return ai_limits.Block(
+            kind=ai_limits.KIND_SEARCH_GLOBAL,
+            log="search_global: race lost at atomic reserve",
+        )
     return None
 
 
@@ -5622,5 +5640,8 @@ async def _web_search_findings(
     await _log_server_tool_calls(user_id, response)
     if not (response.citations or response.server_side_tool_usage):
         return None
+    # Личный счётчик — единственное, что двигается тут: общий потолок уже
+    # зарезервирован раньше, в _search_block, атомарно и ДО этого сетевого
+    # похода (см. db.try_increment_ai_search_count_global).
     await db.increment_ai_search_count(user_id)
     return (response.content or "").strip() or None

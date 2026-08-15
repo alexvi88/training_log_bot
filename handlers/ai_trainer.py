@@ -2286,7 +2286,13 @@ async def _handle_question(
                 await running_task
         await streamer.close()
 
-    await db.increment_ai_question_count(user_id)
+    # Атомарно: UPDATE ... WHERE count < limit одним выражением, а не
+    # «прочитал (asked_today выше) → посчитал → увеличил» — тот же счётчик,
+    # который раньше двигался обычным инкрементом, теперь не может перескочить
+    # свой потолок (см. db.try_increment_ai_question_count). Списание
+    # по-прежнему ПОСЛЕ ответа: сорвавшийся у провайдера запрос не должен
+    # стоить человеку вопроса.
+    await db.try_increment_ai_question_count(user_id, config.AI_QUESTION_DAILY_LIMIT)
     # Warn before the wall, not at it — the old behaviour only ever mentioned the
     # limit by refusing.
     left = config.AI_QUESTION_DAILY_LIMIT - (asked_today + 1)

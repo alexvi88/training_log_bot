@@ -619,6 +619,45 @@ async def test_ask_passes_user_question_and_history(fresh_db, user_id, monkeypat
     ]
 
 
+# ---------- _search_block: атомарная бронь общего потолка ----------
+#
+# Личная квота и деньги решаются обычным (read) ai_limits.check — гонка там
+# не критична (см. db.py, увеличение личного и общего счётчиков разведено).
+# Общий потолок поисков делят ВСЕ пользователи сразу, и между read-проверкой
+# и стартом _web_search_findings — секунды, за которые параллельный всплеск
+# от разных людей мог бы пройти ту же самую read-проверку хором. Поэтому
+# _search_block резервирует место в общем счётчике атомарно, прямо тут, ДО
+# возврата "можно" наружу.
+
+
+async def test_search_block_allows_search_and_reserves_the_global_slot(fresh_db, user_id):
+    assert await ai_trainer._search_block(user_id, on_limit=None) is None
+    assert await fresh_db.get_ai_search_count_global() == 1
+
+
+async def test_search_block_blocks_when_the_atomic_reserve_loses_the_race(fresh_db, user_id, monkeypatch):
+    """Read-проверка выше пропустила (потолок ещё не выбран по её данным), но
+    атомарная бронь проиграла гонку — значит место кто-то забрал первым, и
+    поиск обязан не состояться, а не молча перескочить потолок."""
+    monkeypatch.setattr(ai_trainer.db, "try_increment_ai_search_count_global", AsyncMock(return_value=False))
+
+    block = await ai_trainer._search_block(user_id, on_limit=None)
+
+    assert block is not None
+    assert block.kind == ai_limits.KIND_SEARCH_GLOBAL
+
+
+async def test_search_block_reserves_only_once_per_call(fresh_db, user_id, monkeypatch):
+    """Не должно резервировать место дважды за один вызов — иначе один вопрос
+    тратит два слота общего потолка вместо одного."""
+    reserve = AsyncMock(return_value=True)
+    monkeypatch.setattr(ai_trainer.db, "try_increment_ai_search_count_global", reserve)
+
+    await ai_trainer._search_block(user_id, on_limit=None)
+
+    reserve.assert_awaited_once()
+
+
 # ---------- search step (_web_search_findings, server-side-only web/X search) ----------
 #
 # _web_search_findings never mixes our DB function-tools with the multi-agent
@@ -668,21 +707,23 @@ async def test_ask_never_performs_live_search_while_the_gate_is_disabled(
 async def test_global_search_cap_still_allows_search_below_it(fresh_db, user_id, monkeypatch):
     """Обратная сторона того же теста: потолок не должен глушить поиск заранее."""
     monkeypatch.setattr(config, "AI_SEARCH_GLOBAL_DAILY_LIMIT", 3)
-    await fresh_db.increment_ai_search_count(555)
+    await fresh_db.try_increment_ai_search_count_global(config.AI_SEARCH_GLOBAL_DAILY_LIMIT)
 
     assert await fresh_db.get_ai_search_count_global() == 1
     assert await fresh_db.get_ai_search_count_global() < config.AI_SEARCH_GLOBAL_DAILY_LIMIT
 
 
-async def test_search_increment_moves_both_the_personal_and_the_global_counter(fresh_db, user_id):
-    """Разъедься счётчики — и один из двух потолков начнёт врать молча."""
+async def test_search_increment_moves_only_the_personal_counter(fresh_db, user_id):
+    """Общий потолок теперь резервируется отдельно и ДО сетевого похода (см.
+    db.try_increment_ai_search_count_global и ai_trainer._search_block) —
+    личный `increment_ai_search_count` двигает только личный счётчик."""
     await fresh_db.increment_ai_search_count(user_id)
     await fresh_db.increment_ai_search_count(user_id)
     await fresh_db.increment_ai_search_count(999)
 
     assert await fresh_db.get_ai_search_count_today(user_id) == 2
     assert await fresh_db.get_ai_search_count_today(999) == 1
-    assert await fresh_db.get_ai_search_count_global() == 3
+    assert await fresh_db.get_ai_search_count_global() == 0
 
 
 async def test_ask_logs_question_without_search_usage(fresh_db, user_id, monkeypatch, caplog):
