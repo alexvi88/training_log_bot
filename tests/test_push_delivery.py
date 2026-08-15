@@ -77,6 +77,10 @@ async def test_push_cta_continues_the_coach_line_per_category(fresh_db, user_id)
 
 
 async def test_push_without_cta_omits_the_keyboard(fresh_db, user_id):
+    """С with_cta=False клавиатуры нет вовсе — но только если некому показать
+    и одноразовую подсказку про пояс: она сама по себе строка с кнопкой, и
+    её проверяет отдельный тест (test_timezone.py)."""
+    await fresh_db.mark_tz_set_by_user(user_id)
     bot = _bot()
     decision = engagement.PushDecision(push_texts.WEEKLY_DIGEST, "текст", with_cta=False)
 

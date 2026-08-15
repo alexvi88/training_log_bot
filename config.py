@@ -56,6 +56,13 @@ def limit_preview_ids() -> set[int]:
 
 DEFAULT_UNIT = "kg"
 
+# Часовой пояс нового атлета, пока он сам его не поправил в настройках.
+# Аудитория русскоязычная, и Москва (UTC+3) — самая частая точка старта; это
+# только дефолт НОВОЙ записи (db.get_or_create_user) — у существующих
+# пользователей значение не трогаем: они либо уже выставили свой пояс, либо
+# годами жили с прежним дефолтом, и менять его задним числом никто не просил.
+DEFAULT_TZ_OFFSET = 3
+
 # Pounds per kilogram — used to convert every stored weight when a user
 # switches units, so history stays physically correct instead of just relabeled.
 LB_PER_KG = 2.20462

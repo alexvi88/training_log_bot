@@ -37,6 +37,12 @@ def _callback(user_id: int, data: str = "imp:save"):
     message.answer = AsyncMock(
         return_value=SimpleNamespace(message_id=999, chat=SimpleNamespace(id=user_id))
     )
+    # import_save теперь после успеха рисует главное меню (_show_main_menu), а
+    # оно умеет прислать дашборд картинкой — этому мок-сообщению нужен
+    # awaitable answer_photo, иначе реальный _show_main_menu упадёт на await.
+    message.answer_photo = AsyncMock(
+        return_value=SimpleNamespace(chat=SimpleNamespace(id=user_id), message_id=1000)
+    )
     message.delete = AsyncMock()
     callback = MagicMock()
     callback.from_user = SimpleNamespace(id=user_id, username="tester")
@@ -64,13 +70,26 @@ async def _totals(db, user_id: int) -> tuple[int, int]:
 
 @pytest.fixture
 def alerts(monkeypatch):
-    """Импорт рапортует алертом поверх перерисованных настроек — ловим его."""
+    """Импорт теперь рапортует алертом поверх главного меню (не настроек) —
+    через callback.answer(show_alert=True). Ловим его, оборачивая фабрику
+    колбэков этого модуля: сам _callback() продолжает жить как раньше, только
+    его callback.answer запоминает текст алерта."""
+    import sys
+
     seen: list[str] = []
+    original_callback = _callback
 
-    async def fake_show_settings(event, state, alert=None):
-        seen.append(alert)
+    def wrapped(user_id: int, data: str = "imp:save"):
+        callback = original_callback(user_id, data)
 
-    monkeypatch.setattr("handlers.settings.show_settings", fake_show_settings)
+        async def _answer(text=None, **kwargs):
+            if kwargs.get("show_alert"):
+                seen.append(text)
+
+        callback.answer = AsyncMock(side_effect=_answer)
+        return callback
+
+    monkeypatch.setattr(sys.modules[__name__], "_callback", wrapped)
     return seen
 
 

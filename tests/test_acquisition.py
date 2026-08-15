@@ -341,3 +341,37 @@ def test_format_funnel_empty_tells_next_step():
 
 def test_format_referrers_empty_tells_next_step():
     assert "картинке" in acquisition.format_referrers([])
+
+
+# ---------- еженедельная сводка воронки для админа ----------
+
+
+def test_weekly_funnel_digest_reports_the_week_totals():
+    rows = [
+        _row(source="src_a", users=6, started=5, logged_set=4, finished=3),
+        _row(source="src_b", users=4, started=1, logged_set=0, finished=0),
+    ]
+    text = acquisition.build_weekly_funnel_digest(rows, days=7)
+    assert "10 новых" in text
+    assert "6 начали тренировку" in text
+    assert "4 записали подход" in text
+    assert "3 завершили первую" in text
+
+
+def test_weekly_funnel_digest_names_the_worst_converting_source():
+    """src_b — 0 из 4 дошли до конца, и это худший результат при достаточной
+    выборке — src_c с одним человеком в неё не входит (шум, не сигнал)."""
+    rows = [
+        _row(source="src_a", users=6, started=5, logged_set=4, finished=3),
+        _row(source="src_b", users=4, started=1, logged_set=0, finished=0),
+        _row(source="src_c", users=1, started=0, logged_set=0, finished=0),
+    ]
+    text = acquisition.build_weekly_funnel_digest(rows, days=7)
+    assert acquisition._source_title("src_b") in text
+    assert "0 из 4" in text
+    assert acquisition._source_title("src_c") not in text
+
+
+def test_weekly_funnel_digest_is_honest_about_zero_newcomers():
+    text = acquisition.build_weekly_funnel_digest([], days=7)
+    assert "не пришло" in text

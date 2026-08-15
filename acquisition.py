@@ -187,6 +187,49 @@ def format_onboarding_funnel(rows: Iterable[Any], days: int) -> str:
     return "\n".join(lines)
 
 
+# Ниже скольких новичков источник не называем «хуже всех» — 1-2 человека
+# дают 0% или 100% на ровном месте, и такая «диагностика» — шум, а не сигнал
+# (см. engagement._maybe_send_admin_funnel_digest).
+WEEKLY_DIGEST_MIN_SOURCE_SAMPLE = 3
+
+
+def build_weekly_funnel_digest(rows: Iterable[Any], days: int) -> str:
+    """Еженедельная сводка воронки новичка для админа — от лица тренера, не
+    телеметрией: та же арифметика, что у format_onboarding_funnel, но с
+    прицелом на одно число, которое реально требует внимания — какой источник
+    хуже всех доводит до конца.
+
+    Ноль новых за неделю — не молчание, а честная строка: тишина каждый
+    понедельник неотличима от того, что джоба вообще не сработала, а «новых не
+    было» сразу видно, что цикл живой и просто нечего разбирать.
+    """
+    rows = list(rows)
+    head = f"🧭 <b>ВОРОНКА ЗА НЕДЕЛЮ · {days} дн.</b>"
+    total = sum(r["users"] for r in rows)
+    if total == 0:
+        return f"{head}\n\nЗа неделю новых атлетов не пришло — посмотрю ещё раз через неделю."
+    started = sum(r["started"] for r in rows)
+    logged_set = sum(r["logged_set"] for r in rows)
+    finished = sum(r["finished"] for r in rows)
+    lines = [
+        head,
+        "",
+        f"За неделю {total} новых: {started} начали тренировку "
+        f"({_percent(started, total)}%), {logged_set} записали подход "
+        f"({_percent(logged_set, total)}%), {finished} завершили первую "
+        f"({_percent(finished, total)}%).",
+    ]
+    candidates = [r for r in rows if r["users"] >= WEEKLY_DIGEST_MIN_SOURCE_SAMPLE]
+    if candidates:
+        worst = min(candidates, key=lambda r: r["finished"] / r["users"])
+        lines.append(
+            f"\nХуже всех конвертит источник {_source_title(worst['source'])} — "
+            f"{worst['finished']} из {worst['users']} дошли до конца "
+            f"({_percent(worst['finished'], worst['users'])}%)."
+        )
+    return "\n".join(lines)
+
+
 def format_referrers(rows: Iterable[Any]) -> str:
     """Кто приводит людей — тех, кто дошёл до первой тренировки, а не просто открыл бота."""
     rows = list(rows)

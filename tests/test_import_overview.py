@@ -71,14 +71,35 @@ async def test_exercise_history_spans_orders_by_session_count(fresh_db, user_id)
 # ---------- ai_trainer.import_history_overview ----------
 
 
-async def test_no_overview_below_the_minimum_workout_count(fresh_db, user_id, monkeypatch):
-    """Одна-две только что записанные тренировки — не история, разбирать нечего."""
+async def test_below_the_minimum_workout_count_gets_a_deterministic_reply(
+    fresh_db, user_id, monkeypatch
+):
+    """Одна-две только что записанные тренировки — не история, моделью
+    разбирать нечего, но тишины тоже быть не должно: детерминированная
+    реплика собирается кодом, без единого обращения к модели."""
     db = fresh_db
     monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
     group = await db.create_muscle_group(user_id, "Грудь")
     bench = await db.create_exercise(user_id, "Жим", group)
     await _log(db, user_id, bench, "2026-08-01")
     await _log(db, user_id, bench, "2026-08-03")
+
+    create = AsyncMock()
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: _client(create))
+
+    result = await ai_trainer.import_history_overview(user_id)
+
+    assert result == (
+        "Перенёс 2 тренировки — среди них жим. Продолжай, с третьей начну "
+        "разбирать твои привычки."
+    )
+    create.assert_not_called()
+
+
+async def test_zero_workouts_stay_silent(fresh_db, user_id, monkeypatch):
+    """Файл целиком дублировал уже существующие даты — переносить нечего, а
+    не рассказать разбор: реплика не появляется совсем."""
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
 
     create = AsyncMock()
     monkeypatch.setattr(ai_trainer, "_get_client", lambda: _client(create))
@@ -143,3 +164,27 @@ async def test_overview_returns_none_on_model_failure(fresh_db, user_id, monkeyp
     )
 
     assert await ai_trainer.import_history_overview(user_id) is None
+
+
+# ---------- доставка: под сообщением с разбором есть кнопка-CTA ----------
+
+
+async def test_attached_overview_carries_the_cta_button(fresh_db, user_id, monkeypatch):
+    """Разбор истории — не тупиковый монолог: под ним живёт кнопка, которая
+    сразу задаёт тренеру готовый вопрос про эту же историю."""
+    import handlers.csv_import as csv_import
+    import keyboards
+
+    async def fake_overview(uid):
+        return "Вижу два года жима."
+
+    monkeypatch.setattr(csv_import.ai_trainer, "import_history_overview", fake_overview)
+
+    bot = SimpleNamespace(send_message=AsyncMock())
+
+    await csv_import._attach_import_overview(bot, user_id, user_id)
+
+    kwargs = bot.send_message.await_args.kwargs
+    expected_kb = keyboards.import_overview_cta_keyboard()
+    assert kwargs["reply_markup"].inline_keyboard[0][0].callback_data == \
+        expected_kb.inline_keyboard[0][0].callback_data

@@ -567,7 +567,10 @@ async def _render_progress_exercise_list(callback: CallbackQuery, state: FSMCont
         b.row(*nav)
     b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="prog:groups"))
     if exercises:
-        text = "📈 Прогресс — выбери упражнение или напиши название для поиска:"
+        # Тот же приём, что у экранов групп и списков упражнений в других
+        # разделах — «или просто напиши название, например «жим»» вместо
+        # суховатого «для поиска».
+        text = "📈 Прогресс: выбери упражнение — или просто напиши название, например «жим»:"
     else:
         text = "Пока нет своих упражнений с историей в этой группе. Можно написать название для поиска."
     await ui.safe_edit(callback, text, reply_markup=b.as_markup())
