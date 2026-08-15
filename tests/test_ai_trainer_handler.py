@@ -1001,7 +1001,7 @@ async def test_partial_save_failure_keeps_the_old_program_intact(fresh_db, user_
     assert (await state.get_data())["ai_program_draft"] == draft
     assert len(await fresh_db.list_programs(user_id)) == 1
     text = callback.message.answer.await_args.args[0]
-    assert "Не получилось" in text and "ещё раз" in text
+    assert "Не смог" in text and "ещё раз" in text
 
 
 async def test_saving_a_stale_draft_alerts_and_writes_nothing(fresh_db, user_id):
@@ -1628,7 +1628,7 @@ async def test_failed_save_restores_the_draft_and_removes_the_stub_program(fresh
     # Черновик вернулся в FSM, человеку сказано честно и предложено повторить.
     assert (await state.get_data())["ai_program_draft"] == draft
     text = callback.message.answer.await_args.args[0]
-    assert "Не получилось" in text and "ещё раз" in text
+    assert "Не смог" in text and "ещё раз" in text
 
     # Кнопка действительно живая: повторный тап после починки сохраняет всё —
     # без удаления обрубка он упёрся бы в конфликт имён вместо сохранения.
@@ -1666,7 +1666,7 @@ async def test_stream_break_after_placeholder_deletion_is_reported_in_a_new_mess
     # Первый message.answer — placeholder «думаю…», второй — сама ошибка.
     assert message.answer.await_count == 2
     err = message.answer.await_args
-    assert "Не получилось" in err.args[0]
+    assert "Не смог" in err.args[0]
     assert err.kwargs.get("reply_markup") is not None
 
 

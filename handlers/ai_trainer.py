@@ -485,7 +485,7 @@ async def ai_keyboard(
 async def menu_ai(callback: CallbackQuery, state: FSMContext):
     if not ai_trainer.is_configured():
         await callback.answer(
-            "AI-тренер пока не подключён — это к админу бота.",
+            "AI-тренер пока не подключён — загляни позже.",
             show_alert=True,
         )
         return
@@ -587,7 +587,7 @@ async def _start_ai_scenario(
     """
     if not ai_trainer.is_configured():
         await callback.answer(
-            "AI-тренер пока не подключён — это к админу бота.",
+            "AI-тренер пока не подключён — загляни позже.",
             show_alert=True,
         )
         return
@@ -605,8 +605,7 @@ async def _start_ai_scenario(
             await callback.answer()
         else:
             await callback.answer(
-                "На сегодня лимит вопросов исчерпан 😮\u200d💨 Дай мне передохнуть, "
-                "возвращайся завтра — а пока забери готовую в «✨ Готовые программы».",
+                f"{ai_limits.QUESTION_LIMIT_TEXT} А пока забери готовую в «✨ Готовые программы».",
                 show_alert=True,
             )
             return
@@ -732,7 +731,7 @@ async def ai_video_hint(callback: CallbackQuery, state: FSMContext):
     разборе «сними сбоку» человек читает уже потратив попытку.
     """
     if not config.video_analysis_available():
-        await callback.answer("Разбор видео пока не подключён — это к админу бота.", show_alert=True)
+        await callback.answer("Разбор видео пока не подключён — загляни позже.", show_alert=True)
         return
     await state.set_state(AITrainerFlow.chatting)
     await callback.message.answer(
@@ -1720,11 +1719,11 @@ async def _finalize_program_save(
 # Тексты честного отказа при упавшем сохранении: кнопка «ещё раз» рядом, потому
 # что черновик к этому моменту уже возвращён в FSM и она снова живая.
 _SAVE_FAILED_NEW = (
-    "⚠️ Не получилось сохранить программу — ничего не записал.\n"
+    "⚠️ Не смог сохранить программу — ничего не записал.\n"
     "Предложение тренера живо: нажми кнопку ещё раз."
 )
 _SAVE_FAILED_REPLACE = (
-    "⚠️ Не получилось обновить программу: часть новых дней могла успеть добавиться "
+    "⚠️ Не смог обновить программу: часть новых дней могла успеть добавиться "
     "рядом со старыми — загляни в «🗂 Программы» и проверь.\n"
     "Предложение тренера живо: нажми кнопку ещё раз."
 )
@@ -1903,7 +1902,7 @@ async def ai_comment_workout(callback: CallbackQuery, state: FSMContext):
                 comment = await ai_trainer.comment_on_workout(user_id, workout_id)
             except Exception:
                 logger.exception("AI trainer workout comment failed for workout %s", workout_id)
-                await callback.message.answer("⚠️ Не получилось получить комментарий, попробуй ещё раз позже.")
+                await callback.message.answer("⚠️ Не смог получить комментарий — попробуй ещё раз позже.")
                 return
             await db.set_workout_ai_comment(workout_id, comment)
         finally:
@@ -2214,7 +2213,7 @@ async def _handle_question(
         )
     except Exception:
         logger.exception("AI trainer request failed for user %s", user_id)
-        error_text = "⚠️ Не получилось получить ответ, попробуй ещё раз чуть позже."
+        error_text = "⚠️ Не смог получить ответ — попробуй ещё раз чуть позже."
         error_kb = await ai_keyboard(user_id)
         try:
             await placeholder.edit_text(error_text, reply_markup=error_kb)
