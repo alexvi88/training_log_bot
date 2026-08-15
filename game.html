@@ -143,6 +143,15 @@
   }
   #rage-overlay.active { display: block; }
 
+  /* ── ВИНЬЕТКА: тёмная рамка кадра снизу/по углам — глубина профильного вида ── */
+  #vignette {
+    position: fixed; inset: 0; pointer-events: none; z-index: 8; display: none;
+    background:
+      linear-gradient(to top, rgba(6,5,4,0.60) 0%, rgba(6,5,4,0.22) 16%, transparent 34%),
+      radial-gradient(ellipse at 50% 40%, transparent 55%, rgba(4,3,3,0.38) 100%);
+  }
+  #vignette.active { display: block; }
+
   /* ── ЭКРАН ОШИБКИ ЗАПУСКА ── */
   #screen-error .screen-inner { text-align: center; gap: 12px; }
   #screen-error .subtitle { color: #ddd; }
@@ -160,6 +169,7 @@
 </div>
 <div id="toast-layer"></div>
 <div id="rage-overlay"></div>
+<div id="vignette"></div>
 <div id="flash"></div>
 
 <!-- ЭКРАН 1: выбор качка -->
@@ -676,8 +686,12 @@ function showScreen(id) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   cv.classList.remove('active');
   document.getElementById('hud').classList.remove('active');
-  if (id === 'game') { cv.classList.add('active'); document.getElementById('hud').classList.add('active'); }
-  else document.getElementById(id).classList.add('active');
+  document.getElementById('vignette').classList.remove('active');
+  if (id === 'game') {
+    cv.classList.add('active');
+    document.getElementById('hud').classList.add('active');
+    document.getElementById('vignette').classList.add('active');
+  } else document.getElementById(id).classList.add('active');
 }
 function flash(color) {
   const el = document.getElementById('flash');
@@ -854,6 +868,8 @@ let renderer = null, scene = null, camera = null;
 let sceneObstacles = null, decorGroup = null, particleGroup = null;
 let floorMesh = null, trackMesh = null, stripeMesh = null, wallL = null, wallR = null;
 let propMesh = null, propBarMesh = null, lampMeshA = null, lampMeshB = null, lampPostMesh = null, buildingMesh = null;
+let farDecorMesh = null, mirrorMesh = null, plateDecorMesh = null;
+let haloGeo = null, haloMeshA = null, haloMeshB = null;
 let itemMeshes = {}; // type -> InstancedMesh
 const ITEM_CAP = 48;
 let playerModel = null; // { group, parts }
@@ -919,9 +935,13 @@ function initThree() {
 
   scene = new THREE.Scene();
   scene.background = new THREE.Color(ZONES[0].fog);
-  scene.fog = new THREE.Fog(ZONES[0].fog, 16, 60);
+  // Ближний/дальний план тумана теперь считается от боковой камеры (см.
+  // updateCamera): расстояния от неё до точек сцены различаются в основном
+  // по X (пол/декор ближе к камере на +X, дальняя стена — на -X), поэтому
+  // диапазон подобран под эту геометрию, а не под старую камеру сзади.
+  scene.fog = new THREE.Fog(ZONES[0].fog, 9, 42);
 
-  camera = new THREE.PerspectiveCamera(60, 1, 0.1, 120);
+  camera = new THREE.PerspectiveCamera(55, 1, 0.1, 120);
 
   renderer = new THREE.WebGLRenderer({ canvas: cv, antialias: true, alpha: false });
   renderer.setClearColor(ZONES[0].fog);
@@ -940,9 +960,14 @@ function initThree() {
   rim.position.set(0, 6, -10); // впереди и выше — светит игроку в спину, навстречу камере
   scene.add(rim);
 
-  // Пол: контрастная дорожка на тёмном фоне зала
+  // Пол: контрастная дорожка на тёмном фоне зала. Ширина (по X) теперь —
+  // это то, что при боковой камере уходит В ГЛУБИНУ кадра (грейзинг-плоскость
+  // под пологим углом сверху), а не «вбок», как было при камере сзади: если
+  // оставить старые 30 юнитов, пол при виде сбоку разъезжается в размытое
+  // трапециевидное пятно на пол-экрана. 15 — впритык к стенам (±7.4), лишнего
+  // не видно.
   floorMesh = new THREE.Mesh(
-    new THREE.PlaneGeometry(30, 260),
+    new THREE.PlaneGeometry(15, 260),
     toonMat(ZONES[0].floor)
   );
   floorMesh.rotation.x = -Math.PI / 2;
@@ -950,7 +975,7 @@ function initThree() {
   scene.add(floorMesh);
 
   trackMesh = new THREE.Mesh(
-    new THREE.PlaneGeometry(2.6, 260),
+    new THREE.PlaneGeometry(3.4, 260),
     toonMat(ZONES[0].track)
   );
   trackMesh.rotation.x = -Math.PI / 2;
@@ -965,18 +990,39 @@ function initThree() {
   );
   scene.add(stripeMesh);
 
-  // Стены по бокам зала
+  // Стены по бокам зала. Камера теперь стоит сбоку далеко на +X (см.
+  // updateCamera) — ближняя к ней стена (wallR, тоже +X) торчала бы изнанкой
+  // прямо в кадре, поэтому она скрыта. Дальняя (wallL) остаётся — она фон.
   const wallGeo = new THREE.BoxGeometry(0.6, 7, 260);
   wallL = new THREE.Mesh(wallGeo, toonMat(ZONES[0].wall));
   wallL.position.set(-7.4, 3.4, -80);
   wallR = wallL.clone(); wallR.material = wallL.material.clone(); wallR.position.x = 7.4;
+  wallR.visible = false;
   scene.add(wallL, wallR);
+
+  // Дальний силуэтный слой — контуры стоек за главной стеной, самый тёмный
+  // и самый медленный план (параллакс): даёт глубину «зал уходит вдаль».
+  farDecorMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(0.7, 2.6, 0.5), toonMat(hexShade(ZONES[0].wall, 1.35)), 20);
+  scene.add(farDecorMesh);
+
+  // Зеркала на дальней стене — холодный светлый прямоугольник, читается как
+  // мутное отражение зала, не более. Дешёвый способ «зал выглядит залом».
+  mirrorMesh = new THREE.InstancedMesh(
+    new THREE.PlaneGeometry(1.5, 2.1),
+    new THREE.MeshBasicMaterial({ color: 0x9fb4d8, transparent: true, opacity: 0.16, side: THREE.DoubleSide }),
+    6
+  );
+  scene.add(mirrorMesh);
 
   // Ряды тренажёров/стоек по бокам — плотные, InstancedMesh (тело + верхняя перекладина)
   propMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(0.8, 1.9, 0.6), toonMat(ZONES[0].prop), 36);
   scene.add(propMesh);
   propBarMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(0.95, 0.14, 0.7), toonMat(0x8a8f9a), 36);
   scene.add(propBarMesh);
+
+  // Блины на полу вдоль дорожки — мелкая деталь, что зал обжитой
+  plateDecorMesh = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.22, 0.22, 0.05, 12), toonMat(0x2a2622), 14);
+  scene.add(plateDecorMesh);
 
   // Здания уличной зоны — InstancedMesh
   buildingMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(1.6, 1, 1.6), toonMat(0x11162a), 18);
@@ -992,6 +1038,12 @@ function initThree() {
   scene.add(lampMeshA, lampMeshB);
   lampPostMesh = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.045, 0.045, 2.6, 6), toonMat(0x2a2118), 16);
   scene.add(lampPostMesh);
+  // Ореол вокруг лампы — мягкий диск на additive blending, развёрнутый на
+  // камеру (она стоит сбоку по +X, поэтому плоскость смотрит по +X).
+  haloGeo = new THREE.CircleGeometry(0.62, 12);
+  haloMeshA = new THREE.InstancedMesh(haloGeo, new THREE.MeshBasicMaterial({ color: 0xffb060, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false }), 8);
+  haloMeshB = new THREE.InstancedMesh(haloGeo, new THREE.MeshBasicMaterial({ color: 0xffb060, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false }), 8);
+  scene.add(haloMeshA, haloMeshB);
 
   sceneObstacles = new THREE.Group(); scene.add(sceneObstacles);
   decorGroup = new THREE.Group(); scene.add(decorGroup);
@@ -1029,14 +1081,36 @@ function resize3D() {
 }
 window.addEventListener('resize', resize3D);
 
+// ── Силуэт по персонажу: чистого bulk мало — пауэрлифтер должен читаться
+// массивным и широким, кроссфитер поджарым, борец низким и широким, а
+// бодибилдер — гипертрофированными плечами при узкой талии. Модификаторы
+// чисто визуальные (коллизии по-прежнему считаются в 2D px, см. P.w/P.h) —
+// баланс и правила игры не трогают ни на йоту.
+const BODY_SHAPE = {
+  power:   { shoulder: 1.16, waist: 1.10, hip: 1.14, girth: 1.10, height: 1.00 },
+  cross:   { shoulder: 0.94, waist: 0.82, hip: 0.90, girth: 0.90, height: 1.05 },
+  wrestle: { shoulder: 1.08, waist: 1.08, hip: 1.20, girth: 1.12, height: 0.86 },
+  build:   { shoulder: 1.46, waist: 0.68, hip: 0.80, girth: 0.98, height: 1.00 },
+};
+const SHAPE_DEFAULT = { shoulder: 1, waist: 1, hip: 1, girth: 1, height: 1 };
+// ВАЖНО: персонажа нельзя визуально увеличивать независимо от мира — высота
+// прыжка и высота препятствий (рейки стойки, перекладина) считаются в одних
+// мировых единицах (UNIT, см. buildObstacleMesh), и если раздуть только
+// меш игрока, подкат перестанет выглядеть как «присел под штангу», а прыжок
+// — как «перепрыгнул гантель». Кадр под персонажа подбирается камерой
+// (updateCamera), а не масштабом модели.
+const PLAYER_VISUAL_SCALE = 1;
+
 // ── Игрок: группа из примитивов, собирается один раз на выбор персонажа ────
 // Читаемый силуэт: плечи заметно шире таза, торс сужается к поясу (конус, а
-// не ровная капсула), отдельная шея, кисти и стопы своим объёмом, конечности
-// тоньше корпуса. Контур — увеличенный BackSide-двойник на каждом меше.
+// не ровная капсула), отдельная шея, дельты отдельным объёмом, бицепс и
+// предплечье раздельно, бедро и голень раздельно, кисти и стопы своим
+// объёмом, суставы прикрыты шарами. Контур — увеличенный BackSide-двойник.
 function buildPlayerModel(key) {
   if (playerModel) { scene.remove(playerModel.group); disposeObject(playerModel.group); }
   const f = FIGHTERS[key];
   const B = f.bulk || 1;
+  const shape = BODY_SHAPE[key] || SHAPE_DEFAULT;
   const torsoColor = colorNum((f.shirtless || f.singlet) ? f.skin : f.top);
   const skinColor = colorNum(f.skin);
   const bottomColor = colorNum(f.bottom);
@@ -1049,6 +1123,7 @@ function buildPlayerModel(key) {
   const skinMat = toonMat(skinColor);
   const skinMatD = toonMat(hexShade(f.skin, 0.8));
   const bottomMat = toonMat(bottomColor);
+  const bandMat = toonMat(hexShade(f.skin, 0.6));
 
   const hipY = 0.62;
   // Верхняя часть тела — отдельная группа с осью вращения на уровне бёдер:
@@ -1057,27 +1132,56 @@ function buildPlayerModel(key) {
   upperBody.position.set(0, hipY, 0);
   group.add(upperBody);
 
-  // Торс: конус (шире у плеч, уже у пояса) вместо ровной капсулы — даёт V-силуэт.
-  const torso = new THREE.Mesh(new THREE.CylinderGeometry(0.30 * B, 0.20 * B, 0.62, 8), torsoMat);
+  // Торс: конус (шире у плеч, уже у пояса) вместо ровной капсулы — даёт V-силуэт,
+  // а ширина груди/талии по shape различает персонажей даже в одном цвете майки.
+  const chestR = 0.30 * B * shape.shoulder, waistR = 0.20 * B * shape.waist;
+  const torso = new THREE.Mesh(new THREE.CylinderGeometry(chestR, waistR, 0.62, 10), torsoMat);
   torso.position.set(0, 0.33, 0);
   upperBody.add(torso);
-  const chestCap = new THREE.Mesh(new THREE.SphereGeometry(0.30 * B, 8, 6, 0, Math.PI * 2, 0, Math.PI * 0.5), torsoMat);
+  // Купол торса дампится отдельно от ширины плеч: если брать полный chestR
+  // (у бодибилдера/пауэрлифтера это > 0.5), купол физически перекрывает шею
+  // и голову — читалось одним слитным шаром. Ширину плеч всё равно даёт
+  // дельта на руке (ниже), поэтому куполу хватает мягкого прироста.
+  const chestCapR = 0.30 * B * (1 + (shape.shoulder - 1) * 0.35);
+  const chestCap = new THREE.Mesh(new THREE.SphereGeometry(chestCapR, 10, 6, 0, Math.PI * 2, 0, Math.PI * 0.5), torsoMat);
   chestCap.position.set(0, 0.64, 0);
   upperBody.add(chestCap);
+  // Просвет для шеи растёт вместе с куполом, чтобы у широкоплечих персонажей
+  // голова всегда оставалась явно отделённым объёмом, а не тонула в плечах.
+  const neckClearance = Math.max(0, chestCapR - 0.32) * 0.85;
 
-  const pelvis = new THREE.Mesh(new THREE.BoxGeometry(0.36 * B, 0.22, 0.26), bottomMat);
+  // Борцовское трико — отдельная тонкая «рубашка» поверх торса своим цветом
+  // (f.top), иначе борец и голый по пояс бодибилдер неотличимы силуэтом.
+  if (f.singlet) {
+    const singletMat = toonMat(colorNum(f.top));
+    const singlet = new THREE.Mesh(new THREE.CylinderGeometry(chestR * 1.03, waistR * 1.05, 0.48, 10), singletMat);
+    singlet.position.set(0, 0.30, 0);
+    upperBody.add(singlet);
+    const strapGeo = new THREE.BoxGeometry(0.045, 0.22, 0.05);
+    const strapL = new THREE.Mesh(strapGeo, singletMat); strapL.position.set(-chestR * 0.55, 0.56, 0.05);
+    const strapR = strapL.clone(); strapR.position.x = chestR * 0.55;
+    upperBody.add(strapL, strapR);
+  }
+
+  const pelvis = new THREE.Mesh(new THREE.BoxGeometry(0.36 * B * shape.hip, 0.22, 0.27), bottomMat);
   pelvis.position.set(0, hipY + 0.02, 0);
   group.add(pelvis);
 
   // Шея — отдельный объём между плечами и головой, иначе голова «сидит» на торсе
-  const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.10, 0.16, 8), skinMat);
-  neck.position.set(0, 0.75, 0);
+  const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.10, 0.16 + neckClearance, 8), skinMat);
+  neck.position.set(0, 0.75 + neckClearance * 0.5, 0);
   upperBody.add(neck);
 
-  const headLocalY = 0.92;
+  const headLocalY = 0.92 + neckClearance;
   const head = new THREE.Mesh(new THREE.SphereGeometry(0.185, 12, 10), skinMat);
   head.position.set(0, headLocalY, 0.02);
   upperBody.add(head);
+  // Затылок — чуть приплюснутая сфера сзади головы, чтобы голова не читалась
+  // идеальным шаром сзади (особенно важно теперь, когда камера сбоку).
+  const backHead = new THREE.Mesh(new THREE.SphereGeometry(0.175, 10, 8), skinMatD || skinMat);
+  backHead.position.set(0, headLocalY - 0.01, -0.05);
+  backHead.scale.set(1, 1, 0.7);
+  upperBody.add(backHead);
 
   // Причёска/убор — по f.head, цвет f.hair либо f.acc (бандана/повязка)
   let hairMesh = null;
@@ -1103,7 +1207,7 @@ function buildPlayerModel(key) {
 
   // Пояс пауэрлифтера
   if (f.belt) {
-    const belt = new THREE.Mesh(new THREE.BoxGeometry(0.40 * B, 0.09, 0.28), toonMat(accColor));
+    const belt = new THREE.Mesh(new THREE.BoxGeometry(0.40 * B * shape.hip, 0.09, 0.29), toonMat(accColor));
     belt.position.set(0, hipY + 0.14, 0);
     group.add(belt);
   }
@@ -1114,10 +1218,21 @@ function buildPlayerModel(key) {
     const lowerLen = isArm ? 0.26 : 0.38;
     const thickness = (isArm ? 0.075 : 0.10) * B;
     const col = isArm ? skinMat : (side < 0 ? skinMatD : skinMat);
+
+    // Дельта (плечо) — отдельный, заметно больший объём поверх сустава: то,
+    // из-за чего бодибилдер и пауэрлифтер читаются широкоплечими на силуэте,
+    // а не только по цвету майки.
+    if (isArm) {
+      const delt = new THREE.Mesh(new THREE.SphereGeometry(thickness * 1.35 * shape.shoulder, 9, 7), col);
+      delt.position.set(side * thickness * 0.55, thickness * 0.1, 0);
+      delt.scale.set(1, 0.85, 1);
+      pivot.add(delt);
+    }
     const jointGeo = new THREE.SphereGeometry(thickness * 1.02, 8, 6);
     const topJoint = new THREE.Mesh(jointGeo, col);
     pivot.add(topJoint);
 
+    // Бицепс/бедро — верхний сегмент
     const upper = new THREE.Mesh(new THREE.CapsuleGeometry(thickness, upperLen, 2, 6), col);
     upper.position.y = -upperLen / 2 - thickness * 0.35;
     pivot.add(upper);
@@ -1129,13 +1244,14 @@ function buildPlayerModel(key) {
     const kneeJoint = new THREE.Mesh(new THREE.SphereGeometry(thickness * 0.86, 8, 6), col);
     kneePivot.add(kneeJoint);
 
+    // Предплечье/голень — нижний сегмент, чуть тоньше верхнего
     const lower = new THREE.Mesh(new THREE.CapsuleGeometry(thickness * 0.8, lowerLen, 2, 6), col);
     lower.position.y = -lowerLen / 2 - thickness * 0.3;
     kneePivot.add(lower);
 
     let extra = null;
     if (!isArm) {
-      // Стопа/ботинок — отдельный объём, темнее ноги, с плоской подошвой
+      // Стопа/кроссовка — отдельный объём, темнее ноги, с плоской подошвой
       extra = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.09, 0.24), toonMat(side < 0 ? 0x33373f : 0x454a55));
       extra.position.y = -lowerLen - thickness * 0.42;
       kneePivot.add(extra);
@@ -1143,6 +1259,11 @@ function buildPlayerModel(key) {
       sole.position.y = -lowerLen - thickness * 0.42 - 0.06;
       kneePivot.add(sole);
     } else {
+      // Бинт на запястье — тёмное кольцо перед кистью
+      const wrist = new THREE.Mesh(new THREE.CylinderGeometry(thickness * 0.95, thickness * 0.95, 0.06, 8), bandMat);
+      wrist.rotation.x = Math.PI / 2;
+      wrist.position.y = -lowerLen - thickness * 0.32;
+      kneePivot.add(wrist);
       // Кисть — отдельная сфера на конце предплечья
       const hand = new THREE.Mesh(new THREE.SphereGeometry(thickness * 1.15, 8, 6), col);
       hand.position.y = -lowerLen - thickness * 0.5;
@@ -1152,18 +1273,20 @@ function buildPlayerModel(key) {
     return { pivot, kneePivot, upper, lower, shoe: extra };
   }
 
-  const legL = makeLimb(false, -1); legL.pivot.position.set(-0.14 * B, hipY, 0);
-  const legR = makeLimb(false, 1); legR.pivot.position.set(0.14 * B, hipY, 0);
-  const armL = makeLimb(true, -1); armL.pivot.position.set(-0.34 * B, hipY + 0.68, 0);
-  const armR = makeLimb(true, 1); armR.pivot.position.set(0.34 * B, hipY + 0.68, 0);
+  const legL = makeLimb(false, -1); legL.pivot.position.set(-0.14 * B * shape.hip, hipY, 0);
+  const legR = makeLimb(false, 1); legR.pivot.position.set(0.14 * B * shape.hip, hipY, 0);
+  const armL = makeLimb(true, -1); armL.pivot.position.set(-0.34 * B * shape.shoulder, hipY + 0.68, 0);
+  const armR = makeLimb(true, 1); armR.pivot.position.set(0.34 * B * shape.shoulder, hipY + 0.68, 0);
   group.add(legL.pivot, legR.pivot, armL.pivot, armR.pivot);
 
-  group.scale.setScalar(1);
+  // Общий силуэт (шире/уже, ниже/выше) — girth/height множатся к squash-stretch
+  // каждый кадр в updatePlayerPose, тут только стартовое значение.
+  group.scale.set(shape.girth * PLAYER_VISUAL_SCALE, shape.height * PLAYER_VISUAL_SCALE, shape.girth * PLAYER_VISUAL_SCALE);
   group.position.set(0, 0, 0);
   scene.add(group);
-  addOutlines(group, 1.1);
+  addOutlines(group, 1.16);
 
-  playerModel = { group, upperBody, torso, head, legL, legR, armL, armR, key, B };
+  playerModel = { group, upperBody, torso, head, legL, legR, armL, armR, key, B, shape, headLocalY };
 }
 
 // ── Препятствия: примитивы вместо ctx-фигур, коллизии не изменились ────────
@@ -1314,9 +1437,23 @@ function applyZoneColors() {
   propMesh.visible = !(z.kind === 'street' && zb > 0.5);
   propBarMesh.visible = propMesh.visible;
 
-  // Лампы: тёплые в подвале/улице, двухцветный неон в неон-зале
+  // Лампы: тёплые в подвале/улице, двухцветный неон в неон-зале — тот же цвет
+  // держит и ореол, чтобы засветка вокруг лампы совпадала с самой лампой.
   lampMeshA.material.color.set(z.lamp);
   lampMeshB.material.color.set(z.kind === 'neon' ? (z.lamp2 || z.lamp) : z.lamp);
+  haloMeshA.material.color.set(z.lamp);
+  haloMeshB.material.color.set(z.kind === 'neon' ? (z.lamp2 || z.lamp) : z.lamp);
+
+  // Дальний силуэтный слой — темнее стены, задаёт «зал уходит вдаль»
+  farDecorMesh.material.color.set(hexShade(wall, 1.5));
+
+  // Настроение по зонам: зеркала и блины — гимовская деталь, на улице их нет;
+  // в неон-зале зеркала чуть ярче (эффект подсветки клуба).
+  const gymLike = !(z.kind === 'street' && zb > 0.3);
+  mirrorMesh.visible = gymLike;
+  plateDecorMesh.visible = gymLike;
+  mirrorMesh.material.opacity = z.kind === 'neon' ? 0.24 : 0.16;
+  mirrorMesh.material.color.set(z.kind === 'neon' ? 0x8fd8ea : 0x9fb4d8);
 }
 
 // Обёртка над модулем: даёт «бегущую дорожку» позиций от -range до 0,
@@ -1369,6 +1506,7 @@ function updateDecor() {
     const row = Math.floor(i / 2);
     const z = scrollZ(row, LSPACING, LHALF, 0.95);
     const mesh = (i % 2 === 0) ? lampMeshA : lampMeshB;
+    const haloMesh = (i % 2 === 0) ? haloMeshA : haloMeshB;
     const idx = Math.floor(i / 2);
     const lx = -(side === -1 ? 4.6 : 6.4);
     dummy.position.set(lx, 2.9, z);
@@ -1376,6 +1514,12 @@ function updateDecor() {
     dummy.scale.set(1, 1, 1);
     dummy.updateMatrix();
     mesh.setMatrixAt(idx, dummy.matrix);
+    // Ореол чуть позади лампы (в сторону дальней стены) и развёрнут на камеру (+X)
+    dummy.position.set(lx - 0.05, 2.9, z);
+    dummy.rotation.set(0, Math.PI / 2, 0);
+    dummy.updateMatrix();
+    haloMesh.setMatrixAt(idx, dummy.matrix);
+    dummy.rotation.set(0, 0, 0);
     dummy.position.set(lx, 1.55, z);
     dummy.updateMatrix();
     lampPostMesh.setMatrixAt(i, dummy.matrix);
@@ -1383,6 +1527,45 @@ function updateDecor() {
   lampMeshA.instanceMatrix.needsUpdate = true;
   lampMeshB.instanceMatrix.needsUpdate = true;
   lampPostMesh.instanceMatrix.needsUpdate = true;
+  haloMeshA.instanceMatrix.needsUpdate = true;
+  haloMeshB.instanceMatrix.needsUpdate = true;
+
+  // Дальний силуэтный слой — за главной стеной, самый медленный (глубже всех)
+  const FSPACING = 2.6, FN = farDecorMesh.count, FHALF = FN;
+  for (let i = 0; i < FN; i++) {
+    const z = scrollZ(i, FSPACING, FHALF, 0.5);
+    dummy.position.set(-9.2, 1.3, z);
+    dummy.rotation.set(0, 0, 0);
+    dummy.scale.set(1, 1, 1);
+    dummy.updateMatrix();
+    farDecorMesh.setMatrixAt(i, dummy.matrix);
+  }
+  farDecorMesh.instanceMatrix.needsUpdate = true;
+
+  // Зеркала на дальней стене — крупные, редкие, чуть медленнее пола
+  const MSPACING = 9.5, MN = mirrorMesh.count, MHALF = MN;
+  for (let i = 0; i < MN; i++) {
+    const z = scrollZ(i, MSPACING, MHALF, 0.9);
+    dummy.position.set(-7.05, 1.9, z);
+    dummy.rotation.set(0, Math.PI / 2, 0);
+    dummy.scale.set(1, 1, 1);
+    dummy.updateMatrix();
+    mirrorMesh.setMatrixAt(i, dummy.matrix);
+  }
+  mirrorMesh.instanceMatrix.needsUpdate = true;
+
+  // Блины на полу — деталь под ногами, ближе к дорожке, самый быстрый декор-слой
+  const PLSPACING = 6.5, PLN = plateDecorMesh.count, PLHALF = PLN;
+  for (let i = 0; i < PLN; i++) {
+    const side = (i % 2 === 0) ? -1 : 1;
+    const z = scrollZ(Math.floor(i / 2), PLSPACING, PLHALF / 2, 1.05);
+    dummy.position.set(side * 2.0, 0.025, z);
+    dummy.rotation.set(0, i * 0.7, 0);
+    dummy.scale.set(1, 1, 1);
+    dummy.updateMatrix();
+    plateDecorMesh.setMatrixAt(i, dummy.matrix);
+  }
+  plateDecorMesh.instanceMatrix.needsUpdate = true;
 }
 
 // ── Полосы разметки на дорожке — летят на игрока, дают ощущение скорости ───
@@ -1437,20 +1620,29 @@ function updateObstacleMeshes() {
 let prevOnGround = true, squash = 0;
 function updatePlayerPose(dt) {
   if (!playerModel) return;
-  const { group, upperBody, head, legL, legR, armL, armR, B } = playerModel;
+  const { group, upperBody, head, legL, legR, armL, armR, shape, headLocalY } = playerModel;
+  const sh = shape || SHAPE_DEFAULT;
   const sliding = P.slideT > 0;
   const airborne = !P.onGround;
 
   group.position.set(0, Math.max(0, toWY(P.y) - toWY(GROUND())), 0);
-  // приземление: squash-stretch
+  // Приземление: squash-stretch поверх собственного силуэта персонажа (girth/
+  // height из BODY_SHAPE) — иначе на каждом кадре сбрасывало бы борца и
+  // бодибилдера обратно к пропорциям 1:1:1.
   if (P.onGround && !prevOnGround) squash = 1;
   prevOnGround = P.onGround;
   if (squash > 0) squash = Math.max(0, squash - dt * 4);
   const sq = 1 - squash * 0.16;
-  group.scale.set(1 + squash * 0.12, sq, 1 + squash * 0.12);
+  const gx = sh.girth * PLAYER_VISUAL_SCALE, gy = sh.height * PLAYER_VISUAL_SCALE;
+  group.scale.set(gx * (1 + squash * 0.12), gy * sq, gx * (1 + squash * 0.12));
+
+  // Наклон плеч в противофазе с тазом (поворот вокруг вертикали) и лёгкое
+  // качание головы на бегу — без них бег читается как марш манекена.
+  let shoulderTwist = 0, headBob = 0;
 
   if (sliding) {
     upperBody.rotation.x = -1.15;
+    upperBody.rotation.y = 0;
     head.rotation.x = 0.5;
     legL.pivot.rotation.x = -0.9; legR.pivot.rotation.x = -1.3;
     legL.kneePivot.rotation.x = 0.2; legR.kneePivot.rotation.x = 0.1;
@@ -1458,6 +1650,7 @@ function updatePlayerPose(dt) {
     armL.kneePivot.rotation.x = 0.3; armR.kneePivot.rotation.x = 0.3;
   } else if (airborne) {
     upperBody.rotation.x = -0.12;
+    upperBody.rotation.y *= 0.8;
     head.rotation.x = 0;
     const tuck = P.vy < 0 ? 0.9 : 0.5;
     legL.pivot.rotation.x = tuck; legR.pivot.rotation.x = tuck * 0.7;
@@ -1466,13 +1659,17 @@ function updatePlayerPose(dt) {
     armL.kneePivot.rotation.x = -0.4; armR.kneePivot.rotation.x = -0.4;
   } else {
     const s = Math.sin(P.runPhase * 14);
-    upperBody.rotation.x = 0.06 + Math.abs(s) * 0.02;
+    shoulderTwist = -s * 0.16; // плечи против таза: таз качает бёдра по s, плечи — по -s
+    headBob = Math.abs(Math.sin(P.runPhase * 28)) * 0.025; // качание головы на каждый шаг
+    upperBody.rotation.x = 0.14 + Math.abs(s) * 0.03; // наклон корпуса вперёд на бегу
+    upperBody.rotation.y = shoulderTwist;
     head.rotation.x = 0.02;
     legL.pivot.rotation.x = s * 0.9; legR.pivot.rotation.x = -s * 0.9;
     legL.kneePivot.rotation.x = Math.max(0, -s) * 1.3; legR.kneePivot.rotation.x = Math.max(0, s) * 1.3;
     armL.pivot.rotation.x = -s * 0.7; armR.pivot.rotation.x = s * 0.7;
     armL.kneePivot.rotation.x = Math.max(0, s) * 0.6; armR.kneePivot.rotation.x = Math.max(0, -s) * 0.6;
   }
+  head.position.y = headLocalY - headBob;
 
   if (P.rageT > 0) {
     const wob = Math.sin(t * 24) * 0.03;
@@ -1489,21 +1686,35 @@ function updatePlayerPose(dt) {
   shadowBlob.mesh.material.opacity = 0.35 * shrink;
 }
 
-// ── Камера: три четверти сбоку-сзади. Чистый затылок для этой игры не годится
-// — прыжок и подкат про высоту препятствия и дугу полёта, а с затылка ни того,
-// ни другого не видно. Но и чистый бок в вертикальном экране не работает:
-// горизонтальный угол обзора у портретного кадра узкий, и впереди не видно
-// ничего. Отсюда компромисс: камера смещена вбок настолько, чтобы читался
-// профиль прыжка, и отодвинута назад настолько, чтобы дорожка просматривалась.
+// ── Камера: честный вид СБОКУ (профиль), как в классическом сайд-скроллере.
+// Мир устроен так, что бегун всегда стоит в (0, y, 0), а всё остальное
+// (препятствия, декор) едет к нему по Z. Значит камера, направленная почти
+// точно вдоль -X, превращает мировую глубину (Z) в горизонталь кадра, а
+// высоту (Y) — в вертикаль: прыжок читается как дуга, подкат — как присед.
+//
+// Почему X такой большой (не 6-8, а ~23): в портретном экране (390×844)
+// вертикальный FOV камеры (60°) даёт узкий горизонтальный — около 24°. Если
+// подъехать близко, вперёд по ходу движения не видно вообще ничего — ровно
+// та ошибка, которую заказчик уже один раз словил. На дистанции ~23 при
+// горизонтальном FOV ~24° в кадр попадает около 10-12 мировых единиц дорожки
+// (23 * tan(12°) * 2 ≈ 9.8), и перспектива на таком удалении почти ортографична
+// — то, что и нужно для профиля. Ближняя к камере стена (wallR, тоже на +X)
+// спрятана в initThree — иначе в кадре была бы её чёрная изнанка.
+const CAM_X = 13.0, CAM_Y = 2.3, CAM_Z_BEHIND = 0.8; // Z-офсет камеры и точки
+// прицеливания небольшие и НЕ равны — так композиция сдвинута к «позади»
+// игрока (больше кадра остаётся для «впереди»), но угол камеры остаётся
+// почти чистым профилем (полкадра по горизонтали — ~6 мировых единиц при
+// X=23, поэтому офсет в -2..-3 уже заметно смещает композицию, а не выносит
+// игрока за кадр, как было при -5.6).
+const CAM_LOOK_Y = 1.15, CAM_LOOK_Z_AHEAD = -1.1;
 function updateCamera(dt) {
-  const baseX = 1.8, baseY = 4.0, baseZ = 9.0;
   let shakeX = 0, shakeY = 0;
   if (shakeT > 0) { shakeX = rnd(-0.12, 0.12) * shakeT; shakeY = rnd(-0.08, 0.08) * shakeT; }
   // На прыжке камера чуть подаётся вверх, но не следует за игроком один в один:
-  // так видно, насколько высоко он ушёл от пола.
+  // так видно, насколько высоко он ушёл от пола, а фигура не улетает за край.
   const jumpLift = playerModel ? Math.max(0, toWY(P.y) - toWY(GROUND())) * 0.22 : 0;
-  camera.position.set(baseX + shakeX, baseY + jumpLift + shakeY, baseZ);
-  camera.lookAt(0, 1.0 + jumpLift * 0.35, -8.0);
+  camera.position.set(CAM_X + shakeX, CAM_Y + jumpLift * 0.35 + shakeY, CAM_Z_BEHIND);
+  camera.lookAt(0, CAM_LOOK_Y + jumpLift * 0.3, CAM_LOOK_Z_AHEAD);
 }
 
 function renderRageOverlay() {
