@@ -597,15 +597,24 @@ async def _render_logging_screen(bot, state: FSMContext, user):
     ]
     show_instruction = not analytics.is_seasoned(recent_dates, timeutil.user_today(user))
     show_format_hint = not await db.has_any_set(user["telegram_id"])
+    # Занесение задним числом истории не показывает. «В прошлый раз» и цель
+    # прогрессии считаются от ПОСЛЕДНЕЙ тренировки в базе, а она у бэкфилла
+    # почти всегда позже заносимой даты: занося 3 августа, человек видел веса с
+    # 6-го и цель, посчитанную от них, — то есть подсказку из будущего той
+    # записи, которую он делает. Тот же случай, что и с восстановлением групп на
+    # экране выбора: заднее число — это перенос уже случившегося, а не решение,
+    # с чем подходить к снаряду.
+    is_backfill = bool(data.get("is_backfill"))
+    last_session = None if is_backfill else last_session_sets.get(active)
     # Ряд «тот же вес, другие повторы» (см. keyboards.reps_window) — от
     # сегодняшнего последнего подхода, а до первого от прошлой тренировки. Нужен
     # и подсказке (назвать вес под цифрами), и клавиатуре (какие цифры рисовать).
-    reps_basis = _reps_row_basis(today_sets, last_session_sets.get(active))
+    reps_basis = _reps_row_basis(today_sets, last_session)
     hint = _logging_hint(
-        last_session_sets.get(active),
+        last_session,
         has_sets,
         user["unit"],
-        bool(user["progression_hint_enabled"]),
+        bool(user["progression_hint_enabled"]) and not is_backfill,
         today_sets,
         show_instruction=show_instruction,
         show_format_hint=show_format_hint,
@@ -613,13 +622,13 @@ async def _render_logging_screen(bot, state: FSMContext, user):
         inferred_step=weight_steps.get(active),
         confirmed_weight=(data.get("confirmed_weights") or {}).get(active),
         formula=user["e1rm_formula"],
-        target=(data.get("exercise_targets") or {}).get(active),
+        target=None if is_backfill else (data.get("exercise_targets") or {}).get(active),
         # Правило прогрессии из программы, по которой идёт тренировка: пока его
         # никто отсюда не читал, «доходишь до 8 — прибавляй 2.5» оставалось
         # текстом в превью и на цель не влияло.
         progression_rule=(
             await db.progression_rule_for_workout(data["workout_id"], active)
-            if active is not None else None
+            if active is not None and not is_backfill else None
         ),
     )
     kb = keyboards.logging_keyboard(
@@ -2220,8 +2229,13 @@ def _weight_confirm_prompt(
     Повторы проверяются здесь же и без истории: подозрительный вес виден только
     на фоне прошлого раза, а полторы сотни повторов подозрительны сами по себе —
     в том числе на первом подходе нового упражнения, где сравнивать не с чем.
+
+    У бэкфилла «прошлого раза» нет: последняя тренировка в базе случилась позже
+    заносимой даты, и сверять с ней вес — то же самое, что спрашивать «а почему
+    не как через три дня». Остаётся только проверка повторов, ей история не
+    нужна.
     """
-    last_session = (data.get("last_session_sets") or {}).get(active)
+    last_session = None if data.get("is_backfill") else (data.get("last_session_sets") or {}).get(active)
     for ps in resolved:
         warning = _suspicious_weight_warning(last_session, [(ps.weight, ps.reps)], unit)
         if warning:
