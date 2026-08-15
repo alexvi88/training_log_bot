@@ -1168,6 +1168,39 @@ _IMPORT_OVERVIEW_QUIET_DAYS = 60
 # Меньше и уже привычек не разглядеть — только что записанные тренировки
 # сегодняшнего дня выглядели бы как «вся история».
 _IMPORT_OVERVIEW_MIN_WORKOUTS = 3
+# Сколько упражнений называть по имени в короткой реплике ниже порога —
+# больше двух-трёх превращает «вижу жим и тягу» обратно в конспект.
+_SMALL_OVERVIEW_TOP_EXERCISES = 3
+
+
+def _join_ru(names: list[str]) -> str:
+    """«жим», «жим и тяга», «жим, тяга и присед» — без Оксфордской запятой,
+    как в обычной русской речи тренера, а не в списке через точку с запятой."""
+    if len(names) == 1:
+        return names[0]
+    return f"{', '.join(names[:-1])} и {names[-1]}"
+
+
+async def _small_import_overview(user_id: int, dates: list[str]) -> str:
+    """Детерминированная реплика вместо тишины ниже `_IMPORT_OVERVIEW_MIN_WORKOUTS`:
+    моделью тут разбирать нечего (1-2 тренировки — не привычка), но человек
+    только что явно нажал «Загрузить» и заслуживает подтверждения, что перенос
+    правда сработал, а не завис. Никакого completion — считаем то же самое,
+    что и остальная сводка (db.exercise_history_spans), просто говорим об этом
+    сами, без модели.
+    """
+    word = formatting.plural_ru(len(dates), ("тренировку", "тренировки", "тренировок"))
+    spans = await db.exercise_history_spans(user_id)
+    # Список — именительным падежом («жим, тяга»), не винительным: имя
+    # упражнения приходит от пользователя произвольным и непредсказуемо
+    # склоняемым текстом, а «среди них — …» не требует согласования с глаголом,
+    # как потребовало бы «вижу жим и тягу».
+    names = _join_ru([row["display_name"].lower() for row in spans[:_SMALL_OVERVIEW_TOP_EXERCISES]])
+    seen = f" — среди них {names}" if names else ""
+    return (
+        f"Перенёс {len(dates)} {word}{seen}. Продолжай, с третьей начну "
+        "разбирать твои привычки."
+    )
 
 
 async def import_history_overview(user_id: int) -> Optional[str]:
@@ -1179,11 +1212,19 @@ async def import_history_overview(user_id: int) -> Optional[str]:
     уже посчитана кодом (db.exercise_history_spans) — что бросилось в глаза,
     решает модель, а какие упражнения и даты существуют — решают факты, не
     догадка модели по сырым подходам.
+
+    Ниже порога (`_IMPORT_OVERVIEW_MIN_WORKOUTS`) модель вообще не зовём: 1-2
+    тренировки — не история, там разбирать нечего, а тишина после явного
+    импорта хуже короткой детерминированной реплики. Пустая история (0
+    тренировок — файл целиком дублировал уже существующие даты) не получает
+    даже её: там перенести нечего, а не рассказать разбор.
     """
-    if not is_configured():
-        return None
     dates = await db.list_finished_workout_dates(user_id)
+    if not dates:
+        return None
     if len(dates) < _IMPORT_OVERVIEW_MIN_WORKOUTS:
+        return await _small_import_overview(user_id, dates)
+    if not is_configured():
         return None
     spans = await db.exercise_history_spans(user_id)
     if not spans:

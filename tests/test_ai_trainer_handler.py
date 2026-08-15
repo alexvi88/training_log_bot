@@ -1401,6 +1401,43 @@ async def test_stale_preset_button_alerts_instead_of_crashing(fresh_db, user_id,
     assert await state.get_state() is None
 
 
+# ---------- кнопка под AI-разбором истории после импорта (ai:import_cta) ----------
+
+
+async def test_import_overview_has_a_cta_button():
+    """Разбор истории после импорта — не монолог: под ним есть кнопка со
+    следующим шагом в разговор с тренером (см. handlers.csv_import.
+    _attach_import_overview)."""
+    import keyboards
+
+    kb = keyboards.import_overview_cta_keyboard()
+    assert _callbacks(kb) == ["ai:import_cta"]
+
+
+async def test_import_cta_tap_asks_the_seeded_question(fresh_db, user_id, monkeypatch):
+    """Тап уводит в AI-чат и сразу задаёт готовый вопрос про историю пользователя
+    — тем же путём, что и готовые вопросы интро (ai_limits, история, busy-бронь)."""
+    monkeypatch.setattr(ai_trainer.ai_trainer, "is_configured", lambda: True)
+
+    captured = {}
+
+    async def fake_ask(uid, question, history, **kwargs):
+        captured["question"] = question
+        return "Стал сильнее — жим и присед оба выросли."
+
+    monkeypatch.setattr(ai_trainer.ai_trainer, "ask", fake_ask)
+
+    state = await _make_state(user_id)
+    callback = _make_buildprog_callback(user_id)
+    callback.data = "ai:import_cta"
+
+    await ai_trainer.ai_import_cta(callback, state)
+
+    assert captured["question"] == ai_trainer.IMPORT_CTA_QUESTION
+    assert await state.get_state() == "AITrainerFlow:chatting"
+    assert await fresh_db.get_ai_question_count_today(user_id) == 1
+
+
 async def test_ai_build_program_asks_the_trainer_to_lead_with_questions(fresh_db, user_id):
     """The button promises "сейчас задам пару вопросов", and the system prompt
     lets the trainer skip straight to a draft on sensible defaults — so the

@@ -46,8 +46,11 @@ def _spawn(coro) -> asyncio.Task:
 async def _attach_import_overview(bot, chat_id: int, user_id: int) -> None:
     """«Вижу два года жима, присед бросил в марте» — одно сообщение фоном,
     следом за экраном «Импортировано N», а не вместо него: сама загрузка уже
-    закончилась и экран ушёл в настройки, ждать модель на этом месте было бы
-    чистой задержкой без выгоды (тот же приём, что у workout._attach_ai_comment).
+    закончилась и экран ушёл в главное меню, ждать модель на этом месте было
+    бы чистой задержкой без выгоды (тот же приём, что у
+    workout._attach_ai_comment). Ниже порога тренировок в истории эта же
+    функция вернёт детерминированную реплику без обращения к модели —
+    см. ai_trainer.import_history_overview.
     """
     try:
         overview = await ai_trainer.import_history_overview(user_id)
@@ -57,8 +60,14 @@ async def _attach_import_overview(bot, chat_id: int, user_id: int) -> None:
     if not overview:
         return
     with suppress(TelegramBadRequest):
+        # Кнопка под разбором — иначе это монолог тренера, а не начало
+        # разговора: человек только что перенёс историю, и логичный
+        # следующий шаг — спросить про неё же, а не печатать вопрос заново
+        # (см. handlers.ai_trainer.ai_import_cta и keyboards.
+        # import_overview_cta_keyboard).
         await bot.send_message(
-            chat_id, formatting.ai_markdown_to_html(overview), parse_mode="HTML"
+            chat_id, formatting.ai_markdown_to_html(overview), parse_mode="HTML",
+            reply_markup=keyboards.import_overview_cta_keyboard(),
         )
 
 # Кто прямо сейчас пишет импортированные тренировки в базу — двойной тап по
@@ -659,10 +668,12 @@ async def _do_import_save(callback: CallbackQuery, state: FSMContext) -> None:
         # свойством (дневник еды, история, /mcp), а не голый clear(), который
         # стирал бы каркас открытых упражнений и остаток плана программы.
         await clear_state_keep_workout(state)
-        from handlers.settings import show_settings
-        await show_settings(
-            callback, state, alert="Эти тренировки уже есть в истории — ничего не добавил"
-        )
+        # Главное меню, а не настройки — тот же приём, что и ниже для
+        # успешного импорта: человек и тут смотрит на свой дашборд, а не на
+        # экран, откуда он в импорт мог и не заходить.
+        from handlers.workout import _show_main_menu
+        await _show_main_menu(callback, state)
+        await callback.answer("Эти тренировки уже есть в истории — ничего не добавил", show_alert=True)
         return
 
     # Запись подходов по одному плюс пересчёт ачивок (ниже) — для файла на
@@ -722,8 +733,11 @@ async def _do_import_save(callback: CallbackQuery, state: FSMContext) -> None:
     # См. комментарий выше про to_import: тренировка, из которой зашли за
     # импортом, могла остаться незакрытой.
     await clear_state_keep_workout(state)
-    # show_settings redraws this very message, so a "✅ Импортировано N" written
-    # here would live for milliseconds — it goes in the alert instead.
+    # Главное меню, а не настройки, независимо от того, откуда зашли за
+    # импортом (кнопка пустого меню или ⚙️ Настройки) — момент «смотри, вся
+    # история переехала» лучше всего виден на дашборде, который импорт только
+    # что наполнил. Само перерисованное сообщение уходит в короткую подпись
+    # экрана, полный счёт остаётся в alert'е, как и раньше.
     n = imported
     word = formatting.plural_ru(n, ("тренировка", "тренировки", "тренировок"))
     alert = f"✅ Импортировано {n} {word}"
@@ -733,8 +747,9 @@ async def _do_import_save(callback: CallbackQuery, state: FSMContext) -> None:
         alert += f", пропущено {len(skip)} (уже были в истории)"
     if failed:
         alert += f", не получилось {failed} — попробуй прислать файл ещё раз"
-    from handlers.settings import show_settings
-    await show_settings(callback, state, alert=alert)
+    from handlers.workout import _show_main_menu
+    await _show_main_menu(callback, state)
+    await callback.answer(alert, show_alert=True)
 
 
 @router.callback_query(F.data == "imp:cancel")

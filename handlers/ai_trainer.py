@@ -672,6 +672,23 @@ async def ai_preset_question(callback: CallbackQuery, state: FSMContext):
     await _start_ai_scenario(callback, state, intro, question)
 
 
+# Кнопка под AI-разбором истории сразу после импорта (см. handlers.csv_import.
+# _attach_import_overview) — не в PRESET_QUESTIONS: та живёт только на интро,
+# а эта — под конкретным сообщением с разбором, и на обычном интро дублировать
+# её незачем.
+IMPORT_CTA_QUESTION = "Я стал сильнее за этот год, судя по моей истории?"
+
+
+@router.callback_query(F.data == "ai:import_cta")
+async def ai_import_cta(callback: CallbackQuery, state: FSMContext):
+    """Тот же путь, что у готовых вопросов интро (ai_preset_question) — превращает
+    разбор истории после импорта из монолога в начало разговора: тап сразу
+    входит в чат с тренером и задаёт вопрос про эту же историю, той же
+    механикой (лимиты, busy-бронь, история диалога — всё как у обычного вопроса)."""
+    intro = f"🤖 <b>ПРИНЯЛ ВОПРОС.</b>\n\n«{IMPORT_CTA_QUESTION}»"
+    await _start_ai_scenario(callback, state, intro, IMPORT_CTA_QUESTION)
+
+
 VIDEO_HINT_TEXT = (
     "🎥 <b>ДАВАЙ ПОСМОТРЮ.</b>\n\n"
     "Пришли видео подхода прямо сюда — гляну технику и скажу, что править первым.\n\n"

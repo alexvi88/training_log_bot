@@ -1,7 +1,7 @@
 """Inline keyboard builders. Callback data uses a short `prefix:arg` scheme."""
 
 import datetime as dt
-from typing import Any, Sequence
+from typing import Any, Optional, Sequence
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -1693,20 +1693,44 @@ def feedback_keyboard() -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
-def push_cta_keyboard(text: str = "▶ Начать тренировку") -> InlineKeyboardMarkup:
+def push_cta_keyboard(
+    text: Optional[str] = "▶ Начать тренировку", *, with_tz_hint: bool = False
+) -> InlineKeyboardMarkup:
     """Attached to daily-rotation push notifications: routes straight into starting a workout.
 
     `text` меняется по категории пуша (см. engagement.PUSH_CTA_BY_CATEGORY):
     кнопка — последняя строка пуша, и «▶ Начать тренировку» под «серия на кону»
     звучит как реклама, а «▶ Спасти серию» — как продолжение реплики тренера.
+    `text=None` — только строка про пояс, без основной кнопки (у дайджестов
+    своей CTA нет, см. PushDecision.with_cta).
 
     Отдельный callback_data от главного меню (`push:start_workout`, не
     `menu:start_workout`) — не однофамилец: тот хендлер удаляет
     callback.message, что для меню правильно (это его собственный одноразовый
     экран), а тут callback.message — сам пуш, и его нужно оставить в чате.
+
+    `with_tz_hint` — вторая строка под ПЕРВЫМ пушем, который вообще получает
+    человек (см. engagement._deliver и db.tz_push_hint_shown): часы у бота
+    свои, а пояс — предположение, и если пуш пришёл не вовремя, тут же есть
+    кнопка это поправить. Ведёт в уже существующий пикер (settings:tz), а не
+    в свой отдельный экран.
     """
     b = InlineKeyboardBuilder()
-    b.button(text=text, callback_data="push:start_workout")
+    if text:
+        b.button(text=text, callback_data="push:start_workout")
+    if with_tz_hint:
+        b.button(text="🕐 Пуш пришёл не вовремя? Скажи пояс", callback_data="settings:tz")
+    b.adjust(1)
+    return b.as_markup()
+
+
+def import_overview_cta_keyboard() -> InlineKeyboardMarkup:
+    """Под AI-разбором истории сразу после импорта (см. handlers.csv_import.
+    _attach_import_overview) — разбор сам по себе монолог, а кнопка сразу
+    задаёт тренеру готовый вопрос про эту же историю, тем же путём, что и
+    готовые вопросы интро (см. handlers.ai_trainer.ai_import_cta)."""
+    b = InlineKeyboardBuilder()
+    b.button(text="🤖 Я стал сильнее за этот год?", callback_data="ai:import_cta")
     return b.as_markup()
 
 

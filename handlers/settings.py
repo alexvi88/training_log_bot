@@ -278,6 +278,11 @@ async def settings_timezone_set(callback: CallbackQuery, state: FSMContext):
     user = await db.get_user(callback.from_user.id)
     changed = user is not None and user["tz_offset"] != offset
     await db.update_user(callback.from_user.id, tz_offset=offset)
+    # Отдельная отметка от самого значения: дефолт у новичка теперь и так не
+    # ноль (см. config.DEFAULT_TZ_OFFSET), так что «пояс осознанно выбран» —
+    # это факт про действие, а не про число. См. engagement._deliver — на неё
+    # опирается подсказка «пуш пришёл не вовремя?» под первым пушем.
+    await db.mark_tz_set_by_user(callback.from_user.id)
     if changed:
         # Часть значков считается по календарным дням, а дни — местные
         # (db.list_finished_workout_dates): стрик по неделям, пара выходных,
