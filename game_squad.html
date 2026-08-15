@@ -1067,7 +1067,7 @@ function drawAthlete(c, fighter, opts) {
 // части свой инстансед-двойник той же геометрии чуть крупнее, чёрный,
 // side:BackSide — рисуется первым и даёт жёсткий тёмный контур силуэта.
 const PLAYER_CAP = 240, ENEMY_CAP = 220;
-const CHAR_SCALE = 0.46; // боец ≈ десятая часть высоты экрана, не половина
+const CHAR_SCALE = 0.7; // боец ≈ десятая часть высоты экрана, не половина
 const OUTLINE_K = 1.16;
 // Ступенчатая (тон-в-тон) градация света — как в мультяшных раннерах, не
 // плоский Lambert: 4 шага яркости через crisp-текстуру без интерполяции.
@@ -1638,8 +1638,8 @@ function updateCamera(dt) {
   const punch = clamp(shakeAmp * 0.01, 0, 0.5); // толчок назад на сильных ударах
   // Камера выше и дальше, чем раньше: сотня бойцов должна помещаться в
   // кадр колонной, уходящей вглубь, а не лезть в объектив передними рядами.
-  camera.position.set(leadX * 0.35 + shakeX, 6.8 + shakeY, 10.5 + punch);
-  camera.lookAt(leadX * 0.55, 1.1, -6.5);
+  camera.position.set(leadX * 0.35 + shakeX, 6.0 + shakeY, 9.0 + punch);
+  camera.lookAt(leadX * 0.55, 1.05, -6.0);
   camera.rotation.z = camYaw * 0.5;
 }
 
