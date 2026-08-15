@@ -341,7 +341,11 @@ async def main() -> None:
     admin_job = asyncio.create_task(admin_tasks.run_daily_admin_jobs(bot))
     backup_watch_job = asyncio.create_task(admin_tasks.run_backup_staleness_check(bot))
     engagement_job = asyncio.create_task(engagement.run_daily_engagement_job(bot))
-    background = [admin_job, backup_watch_job, engagement_job]
+    # Ретенш-чистка не зависит ни от ADMIN_ID, ни от того, дошёл ли отчёт (см.
+    # admin_tasks.run_retention_cleanup_job) — та же причина, по которой
+    # прополка OAuth ниже уже вынесена отдельно.
+    retention_job = asyncio.create_task(admin_tasks.run_retention_cleanup_job())
+    background = [admin_job, backup_watch_job, engagement_job, retention_job]
     # Разовые релизные рассылки: уходят сами после разворота, один раз на
     # человека (отметка о доставке — в базе, см. announcements.py).
     background.append(asyncio.create_task(announcements.run_pending_announcements(bot)))

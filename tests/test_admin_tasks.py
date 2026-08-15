@@ -132,11 +132,11 @@ async def test_build_cost_report_omits_transcription_line_when_none(fresh_db, us
 
 
 @pytest.mark.asyncio
-async def test_daily_report_prunes_expired_share_cards(fresh_db, monkeypatch):
-    """`shared_items` рос монотонно: каждое «📤 Поделиться» — строка навсегда,
-    и ничто её не убирало."""
+async def test_daily_report_no_longer_prunes_share_cards_itself(fresh_db, monkeypatch):
+    """Отчёт админу больше не тащит за собой ретенш-чистку (см.
+    test_the_retention_cleanup_runs_on_its_own) — она вынесена в отдельную
+    задачу, чтобы не зависеть от ADMIN_ID и доставки самого отчёта."""
     old = (dt.datetime.now() - dt.timedelta(days=config.SHARED_ITEMS_RETENTION_DAYS + 1))
-    fresh = await fresh_db.create_shared_item(1, "routine", "{}")
     stale = await fresh_db.create_shared_item(1, "routine", "{}")
     await fresh_db.conn().execute(
         "UPDATE shared_items SET created_at = ? WHERE token = ?",
@@ -150,6 +150,40 @@ async def test_daily_report_prunes_expired_share_cards(fresh_db, monkeypatch):
     monkeypatch.setattr(config, "ADMIN_ID", 1)
 
     await admin_tasks._send_daily_report(bot, backup_path=None)
+
+    assert await fresh_db.get_shared_item(stale) is not None
+
+
+@pytest.mark.asyncio
+async def test_the_retention_cleanup_runs_on_its_own(fresh_db, monkeypatch):
+    """Ретенш-чистка (cost_events/user_events/limit_acks/shared_items) живёт
+    отдельной задачей, а не внутри отчёта админу: там она стояла за
+    `bot.send_message`, то есть не выполнялась вовсе без ADMIN_ID и пропадала
+    в тот день, когда админ заблокировал бота."""
+    monkeypatch.setattr(config, "ADMIN_ID", None)
+    old = (dt.datetime.now() - dt.timedelta(days=config.SHARED_ITEMS_RETENTION_DAYS + 1))
+    fresh = await fresh_db.create_shared_item(1, "routine", "{}")
+    stale = await fresh_db.create_shared_item(1, "routine", "{}")
+    await fresh_db.conn().execute(
+        "UPDATE shared_items SET created_at = ? WHERE token = ?",
+        (old.isoformat(timespec="seconds"), stale),
+    )
+    await fresh_db.conn().commit()
+
+    # Один проход и выход: задача бесконечная, а тело идёт ПОСЛЕ sleep (как и в
+    # run_daily_admin_jobs — ждём назначенный час, потом работаем), так что
+    # первый sleep пропускаем, а на втором обрываем цикл.
+    calls = 0
+
+    async def _stop(_seconds):
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            raise asyncio.CancelledError
+
+    monkeypatch.setattr(admin_tasks.asyncio, "sleep", _stop)
+    with pytest.raises(asyncio.CancelledError):
+        await admin_tasks.run_retention_cleanup_job()
 
     assert await fresh_db.get_shared_item(fresh) is not None
     assert await fresh_db.get_shared_item(stale) is None
