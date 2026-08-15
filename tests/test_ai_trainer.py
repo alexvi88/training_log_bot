@@ -508,7 +508,11 @@ async def test_ask_passes_user_question_and_history(fresh_db, user_id, monkeypat
 
     messages = client.chat.completions.create.await_args.kwargs["messages"]
     assert messages[0]["role"] == "system"
-    assert messages[1:] == [*history, {"role": "user", "content": "новый вопрос"}]
+    today = await ai_trainer._user_today(user_id)
+    assert messages[1:] == [
+        *history,
+        {"role": "user", "content": f"новый вопрос\n\nСегодня {today.isoformat()}."},
+    ]
 
 
 # ---------- search step (_web_search_findings, server-side-only web/X search) ----------
@@ -731,8 +735,9 @@ async def test_ask_plain_sends_multimodal_content_when_image_present(fresh_db, u
     assert answer == "вижу фото"
     messages = client.chat.completions.create.await_args.kwargs["messages"]
     user_content = messages[-1]["content"]
+    today = await ai_trainer._user_today(user_id)
     assert user_content == [
-        {"type": "text", "text": "что на фото?"},
+        {"type": "text", "text": f"что на фото?\n\nСегодня {today.isoformat()}."},
         {"type": "image_url", "image_url": {"url": _FAKE_IMAGE_DATA_URL}},
     ]
 
@@ -744,7 +749,8 @@ async def test_ask_plain_sends_plain_text_content_without_image(fresh_db, user_i
     await ai_trainer._ask_plain(user_id, "просто текст", history=[])
 
     messages = client.chat.completions.create.await_args.kwargs["messages"]
-    assert messages[-1]["content"] == "просто текст"
+    today = await ai_trainer._user_today(user_id)
+    assert messages[-1]["content"] == f"просто текст\n\nСегодня {today.isoformat()}."
 
 
 async def test_to_xai_messages_includes_image_content():
@@ -1046,12 +1052,53 @@ async def test_the_trainer_uses_the_athletes_day_not_the_servers(fresh_db, user_
     assert trainer_today == timeutil.user_today(await fresh_db.get_user(user_id))
 
 
-async def test_the_date_in_the_prompt_is_the_athletes_date():
-    import datetime as dt
+async def test_the_system_prompt_carries_no_date():
+    """Дата раньше вклеивалась прямо в системный промпт — самое первое
+    сообщение запроса, общее для ВСЕХ пользователей и КАЖДОГО хода. Смена даты
+    раз в сутки рвала кэшированный префикс целиком (шапка + вся история)
+    сразу у всех. Промпт теперь принимает ноль аргументов и байт-в-байт
+    одинаков в любой день — дата уезжает отдельно, см. _ask_plain."""
+    assert ai_trainer._system_prompt() == ai_trainer.SYSTEM_PROMPT
+    assert "Сегодня" not in ai_trainer._system_prompt()
 
-    prompt = ai_trainer._system_prompt(dt.date(2026, 8, 4))
 
-    assert "Сегодня 2026-08-04." in prompt
+async def test_ask_plain_appends_the_date_to_the_last_user_message(fresh_db, user_id, monkeypatch):
+    """Дата теперь едет в хвосте последнего user-сообщения, а не в системном
+    промпте — так меняется только этот, самый последний ход запроса, а общая
+    шапка (система + схемы инструментов) остаётся стабильной изо дня в день."""
+    await fresh_db.update_user(user_id, tz_offset=0)
+    client = _fake_client([_response(content="ок")])
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+
+    await ai_trainer._ask_plain(user_id, "Что сегодня делать?", history=[])
+
+    messages = client.chat.completions.create.await_args_list[-1].kwargs["messages"]
+    assert messages[0]["role"] == "system"
+    assert "Сегодня" not in messages[0]["content"]
+    last_user = messages[-1]
+    assert last_user["role"] == "user"
+    today = await ai_trainer._user_today(user_id)
+    assert last_user["content"] == f"Что сегодня делать?\n\nСегодня {today.isoformat()}."
+
+
+async def test_wire_history_keeps_the_dated_question_for_the_next_turn(fresh_db, user_id, monkeypatch):
+    """on_wire сохраняет именно то, что уехало модели — включая дату, вшитую в
+    хвост user-сообщения. Следующий вопрос допишет уже свежую дату, а этот ход
+    честно остаётся с той датой, которой был задан."""
+    client = _fake_client([_response(content="ок")])
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+    wires = []
+
+    async def capture(wire):
+        wires.append(wire)
+
+    await ai_trainer._ask_plain(user_id, "Вопрос", history=[], on_wire=capture)
+
+    wire = wires[0]
+    assert wire[0]["role"] == "user"
+    today = await ai_trainer._user_today(user_id)
+    assert wire[0]["content"] == f"Вопрос\n\nСегодня {today.isoformat()}."
+    assert wire[1] == {"role": "assistant", "content": "ок"}
 
 
 async def test_the_search_prompts_carry_a_date_too():

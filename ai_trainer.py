@@ -793,8 +793,18 @@ async def _user_today(user_id: int) -> dt.date:
     return timeutil.user_today(await db.get_user(user_id))
 
 
-def _system_prompt(today: dt.date) -> str:
-    return SYSTEM_PROMPT + f"\nСегодня {today.isoformat()}."
+def _system_prompt() -> str:
+    """Системный промпт основного чата — байт-в-байт одинаковый у всех вопросов.
+
+    Раньше сюда вклеивалась дата («Сегодня …»), а это самое первое сообщение
+    запроса — общее для ВСЕХ пользователей и для КАЖДОГО хода разговора.
+    Смена даты раз в сутки рвала кэшированный префикс целиком (шапка на
+    одиннадцать тысяч токенов + вся история конкретного пользователя) у
+    каждого атлета одновременно. Дата тренеру по-прежнему нужна — она едет в
+    конце последнего user-сообщения (см. _ask_plain), а не в системном
+    промпте: там она разъезжается по одному ходу за раз, а не по всем сразу.
+    """
+    return SYSTEM_PROMPT
 
 
 SEARCH_SYSTEM_PROMPT = """\
@@ -4790,10 +4800,11 @@ async def ask(
     следующий вопрос начинается с 128.
 
     on_wire — колбэк, которому по завершении хода отдаётся ровно тот список
-    сообщений, что уехал модели (без ведущего системного промпта: он собирается
-    заново каждый раз, потому что содержит дату). Его и надо сохранить как
-    историю для следующего вопроса — тогда следующий запрос ДОПИСЫВАЕТ, а не
-    переписывает.
+    сообщений, что уехал модели (без ведущего системного промпта — он не
+    входит в историю и добавляется заново на каждый запрос, но теперь не
+    зависит от даты и байт-в-байт одинаков у всех ходов, см. _system_prompt).
+    Его и надо сохранить как историю для следующего вопроса — тогда следующий
+    запрос ДОПИСЫВАЕТ, а не переписывает.
 
     image_data_url — опционально, фото, которое пользователь прислал вместе с этим
     вопросом (data: URL, base64). Передаётся только в текущий ход; в history фото
@@ -5057,7 +5068,7 @@ async def _ask_plain(
 ) -> str:
     client = _get_client()
     messages: list[dict[str, Any]] = [
-        {"role": "system", "content": _system_prompt(await _user_today(user_id))},
+        {"role": "system", "content": _system_prompt()},
         *history,
     ]
     if video_context:
@@ -5069,7 +5080,16 @@ async def _ask_plain(
                 "content": f"Результаты живого веб/X-поиска по текущему вопросу пользователя:\n{search_context}",
             }
         )
-    messages.append({"role": "user", "content": _plain_user_content(question, image_data_url)})
+    # Дата едет тут, в хвосте последнего user-сообщения, а не в системном
+    # промпте (см. _system_prompt): так меняется только этот, самый последний
+    # ход, а не общая для всех шапка запроса. Дальше эта же дата остаётся
+    # вморожена в сохранённую историю — прошлые ходы честно помнят, каким
+    # днём они были заданы, а следующий вопрос допишет уже свежую.
+    today = await _user_today(user_id)
+    question_with_date = f"{question}\n\nСегодня {today.isoformat()}."
+    messages.append(
+        {"role": "user", "content": _plain_user_content(question_with_date, image_data_url)}
+    )
 
     content = ""
     for _ in range(MAX_TOOL_ROUNDS + 1):
@@ -5143,7 +5163,7 @@ async def _ask_plain(
         final: dict[str, Any] = {"role": "assistant", "content": text}
         if reasoning:
             final["reasoning_content"] = reasoning
-        wire = messages[1:] + [final]  # без системного промпта: в нём дата, он пересобирается
+        wire = messages[1:] + [final]  # без системного промпта: он собирается заново на каждый ход
         # Фото в историю не кладём: это база64 на мегабайты в FSM-файле и повторная
         # плата за image-токены на каждом следующем вопросе. Подменяем на текст
         # вопроса — префикс рвётся с этого сообщения, но всё, что до него (шапка на
@@ -5151,7 +5171,7 @@ async def _ask_plain(
         if image_data_url:
             for m in wire:
                 if m.get("role") == "user" and not isinstance(m.get("content"), str):
-                    m["content"] = question
+                    m["content"] = question_with_date
         await on_wire(_trim_wire_history(wire, config.AI_WIRE_HISTORY_MAX_CHARS))
 
     return text or "Не получилось сформулировать ответ, попробуй переспросить."

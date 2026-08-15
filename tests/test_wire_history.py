@@ -155,11 +155,13 @@ async def test_wire_carries_the_answer_so_the_next_question_appends(
 
     wire = seen[0]
     assert [m["role"] for m in wire] == ["user", "assistant"]
-    assert wire[0]["content"] == "как прогресс?"
+    today = await ai_trainer._user_today(user_id)
+    assert wire[0]["content"] == f"как прогресс?\n\nСегодня {today.isoformat()}."
     assert wire[-1]["content"] == "жми дальше"
     # Размышления обязаны уехать назад — это причина промахов номер один по докам xAI.
     assert wire[-1]["reasoning_content"] == "думал"
-    # Системного промпта в истории нет: он содержит дату и пересобирается.
+    # Системного промпта в истории нет: он не входит в историю и пересобирается
+    # заново на каждый запрос (и теперь не зависит от даты).
     assert all(m["role"] != "system" for m in wire)
 
 
@@ -179,8 +181,10 @@ async def test_photo_is_not_stored_in_history(fresh_db, user_id, monkeypatch):
     dumped = json.dumps(seen[0], ensure_ascii=False)
     assert "base64" not in dumped
     assert "AAAA" not in dumped
-    # Вместо картинки — текст вопроса, чтобы сообщение осталось валидным.
-    assert seen[0][0]["content"] == "что тут по калориям?"
+    # Вместо картинки — текст вопроса (с датой, как и уехало модели), чтобы
+    # сообщение осталось валидным.
+    today = await ai_trainer._user_today(user_id)
+    assert seen[0][0]["content"] == f"что тут по калориям?\n\nСегодня {today.isoformat()}."
 
 
 async def test_video_observations_stay_in_history(fresh_db, user_id, monkeypatch):
