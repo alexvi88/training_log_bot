@@ -738,6 +738,30 @@ async def test_editing_marks_the_draft_as_replacing_the_saved_program(fresh_db, 
     assert {r["id"] for r in await fresh_db.list_routines(user_id)} == before
 
 
+async def test_proposal_carries_the_description_into_the_draft(fresh_db, user_id):
+    """Описание едет в черновике и ложится в programs.description при
+    сохранении — иначе экран программы остаётся списком упражнений."""
+    _, draft = await _propose(
+        user_id,
+        {
+            "name": "Верх/низ",
+            "description": "  Два дня\n\nна всё тело.  ",
+            "days": [_day("Низ", [{"name": TEMPLATE_B}])],
+        },
+    )
+
+    # Заодно схлопнутые переносы: описание живёт одной строкой над списком дней.
+    assert draft["description"] == "Два дня на всё тело."
+
+
+async def test_proposal_without_a_description_leaves_it_empty(fresh_db, user_id):
+    _, draft = await _propose(
+        user_id, {"name": "Верх/низ", "days": [_day("Низ", [{"name": TEMPLATE_B}])]}
+    )
+
+    assert draft["description"] is None
+
+
 async def test_unknown_program_name_falls_back_to_a_new_program(fresh_db, user_id):
     """Промах по имени не должен молча снести что-то похожее — правка просто
     становится новым предложением, а модели говорят, что имя не найдено."""

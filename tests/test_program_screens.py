@@ -147,9 +147,7 @@ async def test_catalog_screen_says_who_each_program_is_for(user_id):
         assert program["meta"] in text
 
 
-async def test_added_catalog_program_keeps_its_description_until_first_workout(
-    fresh_db, user_id
-):
+async def test_added_catalog_program_keeps_its_description(fresh_db, user_id):
     """«Кому это и как часто» человек читал один раз в каталоге и больше
     никогда, хотя решение «моё ли это» пересматривают как раз потом."""
     db = fresh_db
@@ -162,9 +160,11 @@ async def test_added_catalog_program_keeps_its_description_until_first_workout(
     assert program["meta"] in text
     assert program["description"] in text
 
-    # Сходили по ней — простыня над кнопкой «начать» больше не нужна, но
-    # строка «кому и как часто» остаётся.
+    # Описание легло в саму программу, а не только отрисовалось из каталога.
     program_id = (await db.list_programs(user_id))[0]["id"]
+    assert (await db.get_program(program_id))["description"] == program["description"]
+
+    # И остаётся на месте, когда по программе уже ходили.
     day = (await db.list_program_days_by_id(program_id))[0]
     workout_id = await db.create_workout(user_id, routine_id=day["id"])
     await db.finish_workout(workout_id)
@@ -173,8 +173,35 @@ async def test_added_catalog_program_keeps_its_description_until_first_workout(
     await routines.rt_program(callback, state)
 
     text = _last_text(callback)
-    assert program["meta"] in text
-    assert program["description"] not in text
+    assert "1 тренировка по ней · " + program["meta"] in text
+    assert program["description"] in text
+
+
+async def test_legacy_catalog_program_falls_back_to_the_seed_description(fresh_db, user_id):
+    """Программы, добавленные до появления programs.description, ничего не
+    потеряли: ключ каталога лежит в source_ref, текст берётся по нему."""
+    db = fresh_db
+    program_id = await db.create_program(user_id, "Старый PPL", source="catalog", source_ref="ppl")
+    await db.create_routine(user_id, "Толкай", program_id=program_id)
+
+    callback = _make_callback(user_id, f"rt:prg:{program_id}")
+    await routines.rt_program(callback, await _state(user_id))
+
+    assert PROGRAM_BY_KEY["ppl"]["description"] in _last_text(callback)
+
+
+async def test_ai_program_shows_the_description_the_trainer_wrote(fresh_db, user_id):
+    """Ради этого всё и затевалось: программа от тренера — не каталожная, и
+    описания у неё не было вовсе, только списки упражнений."""
+    db = fresh_db
+    about = "Три дня по функции: жим, тяга, ноги. Держи 5–10 повторов и добавляй вес, когда взял верх диапазона."
+    program_id = await db.create_program(user_id, "PPL гипертрофия 3 дня", source="ai", description=about)
+    await db.create_routine(user_id, "День 1 — Жим", program_id=program_id)
+
+    callback = _make_callback(user_id, f"rt:prg:{program_id}")
+    await routines.rt_program(callback, await _state(user_id))
+
+    assert about in _last_text(callback)
 
 
 async def test_own_program_screen_survives_a_non_catalog_source(fresh_db, user_id):

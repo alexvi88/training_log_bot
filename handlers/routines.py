@@ -161,12 +161,12 @@ async def rt_manage(callback: CallbackQuery, state: FSMContext):
 def _catalog_source(program):
     """Каталожная карточка, из которой выросла эта программа, или None.
 
-    Ключ каталога уже лежит в programs.source_ref (handlers.routines
-    ._instantiate_catalog_program), поэтому описание не дублируется в БД: оно
-    живёт в seed_data и правится вместе с каталогом — у всех сразу, включая
-    тех, кто взял программу год назад. Программа могла прийти и из чужого
-    экспорта (source='shared'), где source_ref — это @username, а не ключ:
-    промах по словарю тут нормальный случай, а не ошибка.
+    Ключ каталога лежит в programs.source_ref (_instantiate_catalog_program),
+    и по нему берутся две вещи: строка meta («кому это и как часто»), которой в
+    базе нет вовсе, и описание для программ, добавленных до появления колонки
+    programs.description. Программа могла прийти и из чужого экспорта
+    (source='import'), где source_ref — это @username, а не ключ: промах по
+    словарю тут нормальный случай, а не ошибка.
     """
     if program["source"] != "catalog":
         return None
@@ -249,19 +249,25 @@ async def _show_program(event, state: FSMContext, program_id: int) -> None:
     # можно удалить, а тренировки по ним честно остаются в истории, и счётчик
     # не должен проседать следом (находка 22).
     total = await db.program_total_workouts(program_id)
+    catalog = _catalog_source(program)
+    # Счётчик и meta — одной строкой через «·», как в самой meta: две подряд
+    # курсивные строки под заголовком читаются как сбитая вёрстка.
+    subtitle = []
     if total:
         word = formatting.plural_ru(total, ("тренировка", "тренировки", "тренировок"))
-        header.append(f"<i>{total} {word} по ней</i>")
-    # Каталожная программа теряла всё, кроме состава: «кому это и как часто»
-    # человек читал один раз в каталоге и больше никогда, хотя решение «моё ли
-    # это» пересматривают как раз потом. Строку meta показываем всегда, а
-    # полное описание — пока по программе не сходили ни разу: дальше оно
-    # превращается в простыню над кнопкой «начать».
-    catalog = _catalog_source(program)
+        subtitle.append(f"{total} {word} по ней")
     if catalog is not None:
-        header.append(f"<i>{escape(catalog['meta'])}</i>")
-        if not total:
-            header.append(f"\n{escape(catalog['description'])}")
+        subtitle.append(escape(catalog["meta"]))
+    if subtitle:
+        header.append(f"<i>{' · '.join(subtitle)}</i>")
+    # Экран программы состоял из одних списков упражнений: зачем эта программа
+    # такая — не помнил никто, включая того, кто заказал её у тренера. Описание
+    # пишется при создании (programs.description) всеми дверьми сразу; у
+    # каталожных программ, добавленных до этой колонки, оно берётся из
+    # seed_data по ключу — там оно и так было.
+    description = program["description"] or (catalog["description"] if catalog else None)
+    if description:
+        header.append(f"\n{escape(description)}")
     tail = (
         f"Дальше по кругу — <b>{escape(next_day['name'])}</b>."
         if next_day is not None and history
@@ -406,7 +412,8 @@ async def rt_program_detail(callback: CallbackQuery, state: FSMContext):
 
 async def _instantiate_catalog_program(user_id: int, key: str, name: str) -> int:
     program_id = await db.create_program(
-        user_id, name, source="catalog", source_ref=key
+        user_id, name, source="catalog", source_ref=key,
+        description=PROGRAM_BY_KEY[key]["description"],
     )
     for day_name, exercises in PROGRAM_BY_KEY[key]["days"]:
         await db.create_routine_from_program(user_id, day_name, exercises, program_id=program_id)

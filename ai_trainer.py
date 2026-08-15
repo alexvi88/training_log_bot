@@ -70,6 +70,9 @@ FULL_WORKOUT_HISTORY_LIMIT = 200
 PROGRAM_MAX_DAYS = 6
 PROGRAM_MAX_EXERCISES_PER_DAY = 12
 PROGRAM_NAME_LIMIT = 48
+# Описание программы (programs.description) — тот же потолок, что и у базы:
+# модель должна знать границу до вызова, а не узнавать об обрезке после.
+PROGRAM_DESCRIPTION_LIMIT = db.PROGRAM_DESCRIPTION_LIMIT
 PROGRAM_MAX_SETS = 10
 PROGRAM_MAX_REPS = 50
 
@@ -1808,8 +1811,8 @@ TOOLS: list[dict[str, Any]] = [
                 "травмы); чего не знаешь — спроси текстом, без этого вызова. Названия "
                 "упражнений ТОЧНО из list_exercise_catalog или из списка пользователя "
                 "(get_training_overview); не совпавшие в программу не попадут и "
-                "вернутся в поле unresolved. После вызова опиши программу словами: "
-                "логику сплита, прогрессию, на что смотреть.\n"
+                "вернутся в поле unresolved. После вызова разбери программу словами: "
+                "прогрессию и на что смотреть.\n"
                 "Правка сохранённой программы — этим же инструментом: её точное имя в "
                 "replaces_program и программа ЦЕЛИКОМ, включая неменявшиеся дни. "
                 "Частичную правку не понимает: что не прислал, то пропадёт."
@@ -1832,6 +1835,15 @@ TOOLS: list[dict[str, Any]] = [
                             "Только для правки: точное имя сохранённой программы (из "
                             "get_saved_programs), которую это предложение заменяет "
                             "целиком. Для новой программы не передавай."
+                        ),
+                    },
+                    "description": {
+                        "type": "string",
+                        "maxLength": PROGRAM_DESCRIPTION_LIMIT,
+                        "description": (
+                            "1–3 фразы: кому программа и по какой логике собрана. "
+                            "Висит на её экране над списком дней, поэтому состав "
+                            "дней тут не пересказывай. На «ты», без приветствия."
                         ),
                     },
                     "days": {
@@ -3364,7 +3376,13 @@ async def _copy_program(
         return {"error": over_budget}, None
     wanted = str(tool_input.get("new_name") or "").strip() or target["name"]
     copy_name = await db.unique_program_name(user_id, wanted)
-    copy_id = await db.create_program(user_id, copy_name)
+    # Копия наследует описание оригинала: у многодневки оно лежит в programs, у
+    # одиночного дня программы нет вовсе — брать неоткуда.
+    source_program = await db.get_program(target["id"]) if target["kind"] == "program" else None
+    copy_id = await db.create_program(
+        user_id, copy_name,
+        description=source_program["description"] if source_program else None,
+    )
     if copy_id is None:  # разошлись с параллельной вставкой — имени уже нет
         return {"error": f"«{copy_name}» успели занять, попробуй другое имя"}, None
     for day in source_days:
@@ -4369,7 +4387,17 @@ async def _propose_program(
             else f"День «{dd['day']}» не вошёл — ни одно упражнение из него не нашлось."
         )
 
-    return payload, {"name": program_name, "days": days, "replaces": replaces, "notes": notes}
+    return payload, {
+        "name": program_name,
+        # Описание едет в черновике и ложится в programs.description при
+        # сохранении: то, что модель рассказывает о программе в чате, живёт
+        # ровно до следующего сообщения, а экран программы человек открывает
+        # перед каждой тренировкой.
+        "description": db.clean_program_description(tool_input.get("description")),
+        "days": days,
+        "replaces": replaces,
+        "notes": notes,
+    }
 
 
 async def _program_adherence(user_id: int) -> dict[str, Any]:

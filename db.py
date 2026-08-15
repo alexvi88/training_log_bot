@@ -327,6 +327,13 @@ CREATE TABLE IF NOT EXISTS shared_items (
 -- `source` is where the program came from (manual|workout|catalog|ai|import) and
 -- `source_ref` the detail worth keeping: the catalog key, or the @username who
 -- shared it. Used for attribution on the program card, never for behaviour.
+--
+-- `description` — пара фраз о самой программе: кому она, по какой логике
+-- собрана, за чем следить. До неё экран программы состоял из одних списков
+-- упражнений, и зачем эта программа такая — не помнил никто, включая того, кто
+-- её заказал у тренера. Пишется всеми четырьмя дверьми (каталог кладёт текст из
+-- seed_data, AI-тренер — своё описание к предложению, импорт переносит чужое),
+-- NULL у старых строк и у программ, собранных руками.
 CREATE TABLE IF NOT EXISTS programs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL,
@@ -334,7 +341,8 @@ CREATE TABLE IF NOT EXISTS programs (
     name_key TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
     source TEXT NOT NULL DEFAULT 'manual',
-    source_ref TEXT
+    source_ref TEXT,
+    description TEXT
 );
 -- The index is the point of the table: a name collision is now an error the
 -- caller has to handle, not a silent merge.
@@ -893,6 +901,8 @@ async def _migrate_schema() -> None:
     program_cols = await _column_names("programs")
     if "name_key" not in program_cols:
         await _conn.execute("ALTER TABLE programs ADD COLUMN name_key TEXT NOT NULL DEFAULT ''")
+    if "description" not in program_cols:
+        await _conn.execute("ALTER TABLE programs ADD COLUMN description TEXT")
     await _conn.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_programs_user_name ON programs (user_id, name_key)"
     )
@@ -4203,8 +4213,44 @@ def _program_key(name: str) -> str:
     return name.strip().lower()
 
 
+# Описание программы живёт на экране прямо над списком дней, и в него упирается
+# кнопка «начать тренировку»: абзац оттуда её просто выдавит за экран. Режем
+# один раз, при записи, а не при каждом показе — иначе присланное по API
+# сочинение чинилось бы в трёх местах сразу.
+PROGRAM_DESCRIPTION_LIMIT = 400
+
+
+def clean_program_description(text: Optional[str]) -> Optional[str]:
+    """Описание, готовое лечь в базу: без пустых строк и без простыни."""
+    if not text:
+        return None
+    cleaned = " ".join(text.split())
+    if not cleaned:
+        return None
+    return cleaned[:PROGRAM_DESCRIPTION_LIMIT]
+
+
+async def set_program_description(program_id: int, description: Optional[str]) -> None:
+    """Переписать описание — правка программы тренером меняет и его тоже.
+
+    Отдельным вызовом, а не полем в rename_program_by_id: имя может не влезть
+    из-за занятости (уникальный индекс), а описание не конфликтует ни с чем и
+    не должно ехать за именем в тот же отказ.
+    """
+    async with _write_lock:
+        await conn().execute(
+            "UPDATE programs SET description = ? WHERE id = ?",
+            (clean_program_description(description), program_id),
+        )
+        await conn().commit()
+
+
 async def create_program(
-    user_id: int, name: str, source: str = "manual", source_ref: Optional[str] = None
+    user_id: int,
+    name: str,
+    source: str = "manual",
+    source_ref: Optional[str] = None,
+    description: Optional[str] = None,
 ) -> Optional[int]:
     """A new program, or None if the user already has one by that name.
 
@@ -4217,9 +4263,13 @@ async def create_program(
     async with _write_lock:
         try:
             cur = await conn().execute(
-                "INSERT INTO programs (user_id, name, name_key, created_at, source, source_ref) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (user_id, name.strip(), _program_key(name), now_iso(), source, source_ref),
+                "INSERT INTO programs "
+                "(user_id, name, name_key, created_at, source, source_ref, description) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    user_id, name.strip(), _program_key(name), now_iso(),
+                    source, source_ref, clean_program_description(description),
+                ),
             )
         except aiosqlite.IntegrityError:
             return None

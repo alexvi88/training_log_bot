@@ -181,6 +181,42 @@ async def test_accepting_a_shared_program_creates_one_routine_per_day(fresh_db, 
     callback.message.edit_reply_markup.assert_awaited()
 
 
+async def test_shared_program_carries_its_description_to_the_recipient(fresh_db, user_id):
+    """Получателю описание нужнее, чем автору: он видит чужую программу впервые."""
+    db = fresh_db
+    program_id = await _program_with_two_days(db, user_id)
+    about = "Два дня: ноги и верх. Между ними не меньше двух суток отдыха."
+    await db.set_program_description(program_id, about)
+    await _tap(user_id, f"share:prg:{program_id}")
+    token = await _last_share_token(db)
+
+    recipient = (await db.get_or_create_user(telegram_id=556, username="r4"))["telegram_id"]
+    await db.create_muscle_group(recipient, "Другое")
+    await sharing.share_add(_make_callback(recipient, f"share:add:{token}"), await _state(recipient))
+
+    imported = (await db.find_program_by_name(recipient, "Сплит"))["id"]
+    assert (await db.get_program(imported))["description"] == about
+
+
+async def test_old_share_snapshots_without_a_description_still_import(fresh_db, user_id):
+    """Визитки версии 3 описания не несут — .get, а не payload["description"]."""
+    db = fresh_db
+    token = await db.create_shared_item(
+        user_id, "program",
+        json.dumps({"v": 3, "name": "Старый сплит", "days": [
+            {"name": "Ноги", "exercises": [{"name": "Присед", "target": "3×5"}]}
+        ]}, ensure_ascii=False),
+    )
+
+    recipient = (await db.get_or_create_user(telegram_id=557, username="r5"))["telegram_id"]
+    await db.create_muscle_group(recipient, "Другое")
+    await sharing.share_add(_make_callback(recipient, f"share:add:{token}"), await _state(recipient))
+
+    imported = await db.find_program_by_name(recipient, "Старый сплит")
+    assert imported is not None
+    assert imported["description"] is None
+
+
 async def test_share_survives_deleting_the_original(fresh_db, user_id):
     """Шарится снапшот: удаление рутины после создания визитки не ломает ссылку."""
     db = fresh_db
