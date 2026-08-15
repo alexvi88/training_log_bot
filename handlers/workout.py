@@ -862,6 +862,7 @@ async def _main_menu_kb(user_id: int, active) -> InlineKeyboardMarkup:
         # /community — та команда работает как раньше), пока чат не готов
         # показывать всем.
         community_url=None,
+        show_donate=config.DONATIONS_ENABLED,
     )
 
 

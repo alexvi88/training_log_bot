@@ -417,6 +417,23 @@ CREATE TABLE IF NOT EXISTS game_results (
 );
 CREATE INDEX IF NOT EXISTS idx_game_results_user ON game_results (telegram_id, distance);
 
+-- Донат «Поддержать проект» (handlers/donate.py) — обычный invoice в XTR,
+-- без выдачи чего-либо взамен. Ничего общего с будущим billing из PR #386:
+-- отдельная маленькая таблица, а не переиспользование их star_payments.
+--
+-- charge_id — telegram_payment_charge_id, ключ идемпотентности: Telegram
+-- умеет доставить successful_payment повторно (ретрай апдейта после
+-- обрыва), и без UNIQUE один донат превратился бы в два ряда и две
+-- благодарности.
+CREATE TABLE IF NOT EXISTS donations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    charge_id TEXT NOT NULL UNIQUE,
+    stars INTEGER NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_donations_created ON donations (created_at);
+
 CREATE TABLE IF NOT EXISTS cost_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER,
@@ -6368,3 +6385,33 @@ async def get_game_best_distance(telegram_id: int) -> int:
     )
     (best,) = await cur.fetchone()
     return best or 0
+
+
+# ---------- донат «Поддержать проект» ----------
+
+
+async def record_donation(user_id: int, charge_id: str, stars: int) -> bool:
+    """Записать донат. False — такой charge_id уже есть: Telegram доставил
+    successful_payment повторно, и повторную благодарность/уведомление админу
+    слать не надо (см. handlers/donate.py)."""
+    async with _write_lock:
+        cur = await conn().execute(
+            "INSERT OR IGNORE INTO donations (user_id, charge_id, stars, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (user_id, charge_id, stars, now_iso()),
+        )
+        await conn().commit()
+        return cur.rowcount > 0
+
+
+async def donation_totals(days: int = 30) -> tuple[int, int]:
+    """(звёзд, человек) за последние `days` дней — для /growth. Идемпотентность
+    по charge_id (record_donation) уже гарантирует, что повторно доставленный
+    платёж не задвоит сумму."""
+    since = (dt.datetime.now() - dt.timedelta(days=days)).isoformat(timespec="seconds")
+    cur = await conn().execute(
+        "SELECT COALESCE(SUM(stars), 0), COUNT(DISTINCT user_id) FROM donations WHERE created_at >= ?",
+        (since,),
+    )
+    stars, people = await cur.fetchone()
+    return stars, people
