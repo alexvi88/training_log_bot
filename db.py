@@ -158,8 +158,10 @@ CREATE INDEX IF NOT EXISTS idx_block_exercises_block ON block_exercises (block_i
 -- вставляло вторую строку молча (db.merge_exercises), а суперсет с одним и тем
 -- же движением в обеих половинах ломает и живой экран, и правку прошлой
 -- тренировки. Второй рубеж — сама merge_exercises чистит коллизию до переноса.
-CREATE UNIQUE INDEX IF NOT EXISTS idx_block_exercises_unique
-    ON block_exercises (block_id, exercise_id);
+-- Not created here: on an upgrade from an old on-disk DB, dupes from the merge
+-- bug above may already exist, and CREATE UNIQUE INDEX would fail outright
+-- before _migrate_schema gets a chance to run _dedupe_exercise_links.
+-- _migrate_schema creates it right after that call.
 
 -- A note ("!болит плечо", "new training scheme") is tied to one workout's
 -- attempt at an exercise, not the exercise itself — it shouldn't resurface on
@@ -407,8 +409,8 @@ CREATE TABLE IF NOT EXISTS routine_exercises (
 );
 CREATE INDEX IF NOT EXISTS idx_routine_exercises_routine ON routine_exercises (routine_id);
 -- То же этажом выше: день программы не должен содержать одно упражнение дважды.
-CREATE UNIQUE INDEX IF NOT EXISTS idx_routine_exercises_unique
-    ON routine_exercises (routine_id, exercise_id);
+-- Not created here for the same reason idx_block_exercises_unique isn't (see
+-- above): _migrate_schema creates it after _dedupe_exercise_links runs.
 
 -- Результаты забегов мини-игры «Кач-Раннер» (см. game_server.py): каждая
 -- завершённая попытка одной строкой, рекорд — MAX(distance) по пользователю.
@@ -944,6 +946,14 @@ async def _migrate_schema() -> None:
         await _conn.execute("ALTER TABLE routine_exercises ADD COLUMN progression TEXT")
 
     await _dedupe_exercise_links()
+    await _conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_block_exercises_unique "
+        "ON block_exercises (block_id, exercise_id)"
+    )
+    await _conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_routine_exercises_unique "
+        "ON routine_exercises (routine_id, exercise_id)"
+    )
 
     routine_cols = await _column_names("routines")
     if "program_name" not in routine_cols:
