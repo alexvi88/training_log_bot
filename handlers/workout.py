@@ -1816,7 +1816,9 @@ async def _picker_screen_exercises(callback: CallbackQuery, state: FSMContext):
         page=page, has_next=has_next, templates=templates,
     )
     if exercises:
-        hint = "Выбери упражнение или напиши название для поиска:"
+        # Тот же приём, что у экрана групп чуть выше (pick:back) — «или просто
+        # напиши название, например «жим»» вместо суховатого «для поиска».
+        hint = "Выбери упражнение — или просто напиши название, например «жим»:"
     elif templates:
         hint = "Выбери из каталога или напиши название для поиска:"
     else:

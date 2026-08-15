@@ -447,7 +447,12 @@ async def _editwex_exercise_list_screen(callback: CallbackQuery, state: FSMConte
     kb = keyboards.exercises_keyboard(
         exercises, prefix="editwex", show_new_button=False, back_cb="back", page=page, has_next=has_next,
     )
-    text = "Выбери упражнение или напиши название для поиска:" if exercises else "Пусто здесь — напиши название для поиска."
+    # Тот же приём, что у экрана групп (editwex: pick group) — «или просто
+    # напиши название, например «жим»» вместо суховатого «для поиска».
+    text = (
+        "Выбери упражнение — или просто напиши название, например «жим»:"
+        if exercises else "Пусто здесь — напиши название для поиска."
+    )
     await ui.safe_edit(callback, text, reply_markup=kb)
 
 

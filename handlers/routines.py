@@ -1478,7 +1478,12 @@ async def _rtadd_exercise_list_screen(callback: CallbackQuery, state: FSMContext
         exercises, prefix="rtadd", show_new_button=False, back_cb="back", page=page, has_next=has_next,
         show_catalog_button=group_id is not None,
     )
-    text = "Выбери упражнение или напиши название для поиска:" if exercises else "Пусто здесь — напиши название для поиска."
+    # Тот же приём, что у экрана групп (routines: pick group) — «или просто
+    # напиши название, например «жим»» вместо суховатого «для поиска».
+    text = (
+        "Выбери упражнение — или просто напиши название, например «жим»:"
+        if exercises else "Пусто здесь — напиши название для поиска."
+    )
     await ui.safe_edit(callback, text, reply_markup=kb)
 
 
