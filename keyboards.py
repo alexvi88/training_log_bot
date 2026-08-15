@@ -1622,13 +1622,13 @@ def food_day_keyboard(date: dt.date, entry_ids: Sequence[int], today: dt.date) -
             width=4,
         )
     prev_day = date - dt.timedelta(days=1)
-    nav = [InlineKeyboardButton(text=f"⬅️ {formatting.format_day_month_ru(prev_day)}",
+    nav = [InlineKeyboardButton(text=f"⬅️ {formatting.format_day_month_ru(prev_day, today=today)}",
                                 callback_data=f"fd:day:{prev_day.isoformat()}")]
     if date < today:
         next_day = date + dt.timedelta(days=1)
         nav.append(
             InlineKeyboardButton(
-                text=f"{formatting.format_day_month_ru(next_day)} ➡️",
+                text=f"{formatting.format_day_month_ru(next_day, today=today)} ➡️",
                 callback_data=f"fd:day:{next_day.isoformat()}",
             )
         )
@@ -1672,11 +1672,21 @@ def limit_ack_keyboard(kind: str) -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
-def food_history_keyboard(days: Sequence[dt.date], page: int, has_next: bool) -> InlineKeyboardMarkup:
-    """Дни с записями, по два в ряд — что в них было, расписано в тексте экрана."""
+def food_history_keyboard(
+    days: Sequence[dt.date], page: int, has_next: bool, today: dt.date | None = None
+) -> InlineKeyboardMarkup:
+    """Дни с записями, по два в ряд — что в них было, расписано в тексте экрана.
+
+    Формат подписи — тот же, что у навигации по дням (`food_day_keyboard`):
+    «14 августа», год дописывается только если он не текущий. Раньше тут стоял
+    отдельный `%d.%m.%Y`, и в одном дневнике день читался то словом, то цифрами.
+    """
+    today = today or dt.date.today()
     b = InlineKeyboardBuilder()
     for d in days:
-        b.button(text=d.strftime("%d.%m.%Y"), callback_data=f"fd:day:{d.isoformat()}")
+        b.button(
+            text=formatting.format_day_month_ru(d, today=today), callback_data=f"fd:day:{d.isoformat()}"
+        )
     b.adjust(2)
     nav = []
     if page > 0:

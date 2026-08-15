@@ -493,7 +493,33 @@ def test_history_list_empty():
 
 
 def test_format_day_month_ru():
-    assert formatting.format_day_month_ru(dt.date(2026, 7, 20)) == "20 июля"
+    assert formatting.format_day_month_ru(dt.date(2026, 7, 20), today=dt.date(2026, 8, 1)) == "20 июля"
+
+
+def test_format_day_month_ru_adds_year_only_when_not_current():
+    """Год не несёт новой информации в пределах текущего года — на кнопке он
+    только отъедает место у самой даты."""
+    assert (
+        formatting.format_day_month_ru(dt.date(2025, 7, 20), today=dt.date(2026, 8, 1))
+        == "20 июля 2025"
+    )
+
+
+def test_food_history_keyboard_matches_day_nav_date_format():
+    """История («14 августа») и навигация по дням (food_day_keyboard) должны
+    читаться одинаково — раньше история показывала «14.08.2026»."""
+    today = dt.date(2026, 8, 15)
+    kb = keyboards.food_history_keyboard([dt.date(2026, 8, 14)], page=0, has_next=False, today=today)
+    texts = [b.text for row in kb.inline_keyboard for b in row]
+    assert "14 августа" in texts
+    assert not any("." in t for t in texts)  # никакого дд.мм.гггг
+
+
+def test_food_history_keyboard_shows_year_for_a_past_year_day():
+    today = dt.date(2026, 8, 15)
+    kb = keyboards.food_history_keyboard([dt.date(2025, 8, 14)], page=0, has_next=False, today=today)
+    texts = [b.text for row in kb.inline_keyboard for b in row]
+    assert "14 августа 2025" in texts
 
 
 # ---------- клавиатуры ----------

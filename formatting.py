@@ -305,9 +305,15 @@ _MONTHS_RU_GEN = [
 ]
 
 
-def format_day_month_ru(d: dt.date) -> str:
-    """"20 июля" — for prose and button labels, where dd.mm.yyyy reads as a form field."""
-    return f"{d.day} {_MONTHS_RU_GEN[d.month - 1]}"
+def format_day_month_ru(d: dt.date, today: dt.date | None = None) -> str:
+    """"20 июля" — for prose and button labels, where dd.mm.yyyy reads as a form
+    field. Год добавляется только когда он не текущий ("20 июля 2025") — иначе
+    он не несёт новой информации, а на кнопке отъедает место у самой даты."""
+    base = f"{d.day} {_MONTHS_RU_GEN[d.month - 1]}"
+    today = today or dt.date.today()
+    if d.year != today.year:
+        return f"{base} {d.year}"
+    return base
 
 
 def format_duration(seconds: float) -> str:
