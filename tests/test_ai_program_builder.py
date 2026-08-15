@@ -754,12 +754,23 @@ async def test_proposal_carries_the_description_into_the_draft(fresh_db, user_id
     assert draft["description"] == "Два дня на всё тело."
 
 
-async def test_proposal_without_a_description_leaves_it_empty(fresh_db, user_id):
-    _, draft = await _propose(
+async def test_proposal_without_a_description_still_reaches_the_user(fresh_db, user_id):
+    """description обязательно в схеме, но обязательность у модели — не
+    гарантия. Пропущенная пара фраз не должна стоить человеку всей программы:
+    превью показываем, а модели говорим, чего не хватает."""
+    payload, draft = await _propose(
         user_id, {"name": "Верх/низ", "days": [_day("Низ", [{"name": TEMPLATE_B}])]}
     )
 
     assert draft["description"] is None
+    assert payload["shown_to_user"] is True
+    assert "description_missing" in payload
+
+
+def test_program_proposal_requires_a_description():
+    """Программа без пары фраз о себе — это экран из одних списков упражнений."""
+    (tool,) = [t for t in ai_trainer.TOOLS if t["function"]["name"] == "propose_program"]
+    assert "description" in tool["function"]["parameters"]["required"]
 
 
 async def test_unknown_program_name_falls_back_to_a_new_program(fresh_db, user_id):

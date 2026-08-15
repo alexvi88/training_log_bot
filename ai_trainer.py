@@ -1842,8 +1842,8 @@ TOOLS: list[dict[str, Any]] = [
                         "maxLength": PROGRAM_DESCRIPTION_LIMIT,
                         "description": (
                             "1–3 фразы: кому программа и по какой логике собрана. "
-                            "Висит на её экране над списком дней, поэтому состав "
-                            "дней тут не пересказывай. На «ты», без приветствия."
+                            "Висит на её экране над списком дней — состав дней не "
+                            "пересказывай. На «ты», без приветствия."
                         ),
                     },
                     "days": {
@@ -1934,7 +1934,7 @@ TOOLS: list[dict[str, Any]] = [
                         },
                     },
                 },
-                "required": ["name", "days"],
+                "required": ["name", "description", "days"],
             },
         },
     },
@@ -4216,6 +4216,12 @@ async def _propose_program(
         return {"error": "days пустой — программа не показана пользователю"}, None
 
     program_name, program_name_truncated = _clean_program_name(tool_input.get("name"), "Программа")
+    # description объявлено обязательным в схеме, но обязательность у модели —
+    # не гарантия: пропущенное поле не должно ронять предложение, иначе человек
+    # не увидит собранную программу из-за отсутствующей пары фраз. Программу
+    # показываем, а модели говорим, чего не хватает — тем же способом, что и про
+    # урезанные дни: пусть допишет вызовом заново.
+    description = db.clean_program_description(tool_input.get("description"))
     replaces, replaces_error = await _resolve_replaced_program(
         user_id, tool_input.get("replaces_program")
     )
@@ -4339,6 +4345,12 @@ async def _propose_program(
         )
     if program_name_truncated:
         payload["program_name_truncated"] = f"имя программы обрезано до {PROGRAM_NAME_LIMIT} символов"
+    if not description:
+        payload["description_missing"] = (
+            "description не прислан — программа сохранится без описания, и на её "
+            "экране останутся одни списки упражнений. Вызови propose_program "
+            "заново с тем же составом и парой фраз о программе."
+        )
     if dropped_days:
         payload["dropped_days"] = dropped_days
         payload["dropped_days_note"] = (
@@ -4393,7 +4405,7 @@ async def _propose_program(
         # сохранении: то, что модель рассказывает о программе в чате, живёт
         # ровно до следующего сообщения, а экран программы человек открывает
         # перед каждой тренировкой.
-        "description": db.clean_program_description(tool_input.get("description")),
+        "description": description,
         "days": days,
         "replaces": replaces,
         "notes": notes,
