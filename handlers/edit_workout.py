@@ -236,8 +236,18 @@ async def editw_editset_entered(message: Message, state: FSMContext):
     except ParseError as e:
         await ui.reply_transient(message, e.message)
         return
+    if len(parsed) != 1:
+        await ui.reply_transient(
+            message, "Тут правится один подход. Напиши один вес и повторы — например «100 8»"
+        )
+        return
     data = await state.get_data()
-    await db.update_set(data["edit_set_id"], parsed[0].weight, parsed[0].reps, parsed[0].rpe)
+    new_set = parsed[0]
+    weight = new_set.weight
+    if new_set.weight_omitted:
+        row = await db.get_set(data["edit_set_id"])
+        weight = row["weight"]
+    await db.update_set(data["edit_set_id"], weight, new_set.reps, new_set.rpe)
     await _on_workout_edited(data["edit_workout_id"])
     # No "Готово." reply: the redrawn screen below already shows the new value,
     # and a confirmation reply would stay in the chat forever (the user's own

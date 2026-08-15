@@ -161,6 +161,74 @@ async def test_editing_a_set_clears_cached_ai_comment(fresh_db, user_id):
     assert workout["ai_comment"] is None
 
 
+async def test_editing_a_set_with_full_weight_and_reps_works_as_before(fresh_db, user_id):
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Бицепс")
+    workout_id = await _make_finished_workout(db, user_id)
+    _, _, [set_id] = await _add_exercise_block(
+        db, user_id, workout_id, group_id, "Подъём на бицепс", sets=[(100.0, 8)]
+    )
+    state = await _make_state(user_id, workout_id)
+    await state.update_data(edit_set_id=set_id)
+
+    await edit_workout.editw_editset_entered(_make_message(user_id, "110 5"), state)
+
+    row = await db.get_set(set_id)
+    assert (row["weight"], row["reps"]) == (110.0, 5)
+
+
+async def test_editing_a_set_with_bare_reps_keeps_the_existing_weight(fresh_db, user_id):
+    """Находка: ввод голого числа повторов («8») при правке подхода 100×8
+    обнулял вес — parse_single_token возвращает weight_omitted=True для «8»,
+    а хендлер писал 0.0 как есть. Правка должна сохранять вес подхода, как это
+    уже делает живой трекер (handlers.workout._apply_set_edit)."""
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Бицепс")
+    workout_id = await _make_finished_workout(db, user_id)
+    _, _, [set_id] = await _add_exercise_block(
+        db, user_id, workout_id, group_id, "Подъём на бицепс", sets=[(100.0, 8)]
+    )
+    state = await _make_state(user_id, workout_id)
+    await state.update_data(edit_set_id=set_id)
+
+    await edit_workout.editw_editset_entered(_make_message(user_id, "8"), state)
+
+    row = await db.get_set(set_id)
+    assert (row["weight"], row["reps"]) == (100.0, 8)
+
+
+async def test_editing_a_set_rejects_a_multi_set_token(fresh_db, user_id):
+    """«100x8x3» разворачивается в три подхода — правка одного подхода не
+    может незаметно взять только первый и выбросить остальное. Должна прийти
+    ошибка голосом тренера, а сам подход остаться нетронутым."""
+    import ui
+
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Бицепс")
+    workout_id = await _make_finished_workout(db, user_id)
+    _, _, [set_id] = await _add_exercise_block(
+        db, user_id, workout_id, group_id, "Подъём на бицепс", sets=[(100.0, 8)]
+    )
+    state = await _make_state(user_id, workout_id)
+    await state.update_data(edit_set_id=set_id)
+    message = _make_message(user_id, "100x8x3")
+
+    scheduled = []
+
+    def _capture(coro):
+        scheduled.append(coro)
+        coro.close()
+
+    with patch.object(ui, "_spawn", _capture):
+        await edit_workout.editw_editset_entered(message, state)
+
+    row = await db.get_set(set_id)
+    assert (row["weight"], row["reps"]) == (100.0, 8)
+    message.reply.assert_awaited()
+    text = message.reply.await_args.args[0]
+    assert "один подход" in text
+
+
 # ---------- two-level edit screen (exercise list → that exercise's sets) ----------
 
 
