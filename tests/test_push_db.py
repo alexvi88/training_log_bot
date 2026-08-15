@@ -25,6 +25,54 @@ async def test_has_push_today_true_only_after_a_push_is_recorded(fresh_db, user_
     assert await db.has_push_today(user_id, today) is True
 
 
+async def test_has_push_today_excludes_named_categories(fresh_db, user_id):
+    """A one-off admin report reuses `pushes` for its own dedup bookkeeping —
+    it must not eat the recipient's daily-rotation push slot for the day."""
+    db = fresh_db
+    today = "2026-05-04"
+    await db.record_push(user_id, "admin_funnel_digest", "сводка", today)
+
+    assert await db.has_push_today(user_id, today) is True
+    assert await db.has_push_today(user_id, today, exclude_categories=("admin_funnel_digest",)) is False
+
+    # A real daily-rotation push still counts, even alongside an excluded one.
+    await db.record_push(user_id, "skip_3", "третий день", today)
+    assert await db.has_push_today(user_id, today, exclude_categories=("admin_funnel_digest",)) is True
+
+
+async def test_prune_old_pushes_keeps_recent_and_protected_categories(fresh_db, user_id):
+    db = fresh_db
+    old_date = "2020-01-01T00:00:00"
+    recent_date = "2026-08-01T00:00:00"
+    await db.conn().execute(
+        "INSERT INTO pushes (telegram_id, category, text, sent_at, sent_on) VALUES (?, ?, ?, ?, ?)",
+        (user_id, "skip_3", "старый", old_date, "2020-01-01"),
+    )
+    await db.conn().execute(
+        "INSERT INTO pushes (telegram_id, category, text, sent_at, sent_on) VALUES (?, ?, ?, ?, ?)",
+        (user_id, "release_x", "старый анонс", old_date, "2020-01-01"),
+    )
+    await db.conn().execute(
+        "INSERT INTO pushes (telegram_id, category, text, sent_at, sent_on) VALUES (?, ?, ?, ?, ?)",
+        (user_id, "skip_3", "свежий", recent_date, "2026-08-01"),
+    )
+    await db.conn().commit()
+
+    deleted = await db.prune_old_pushes(30, keep_categories=("release_x",))
+
+    assert deleted == 1  # only the old, non-protected row
+    remaining = {(r["category"], r["text"]) for r in await db.list_recent_pushes(limit=10)}
+    assert remaining == {("release_x", "старый анонс"), ("skip_3", "свежий")}
+
+
+async def test_pushes_table_has_a_category_index(fresh_db):
+    """count_announcement_recipients/list_announcement_recipients/has_announcement_push
+    all filter `pushes` by category alone — see _migrate_schema."""
+    cur = await fresh_db.conn().execute("PRAGMA index_list(pushes)")
+    names = {row["name"] for row in await cur.fetchall()}
+    assert "idx_pushes_category" in names
+
+
 async def test_rotation_bag_round_trips(fresh_db, user_id):
     db = fresh_db
     assert await db.get_rotation_bag(user_id, "skip_3") == []

@@ -992,6 +992,13 @@ async def _migrate_schema() -> None:
         # Best available approximation for rows sent before the column existed:
         # the server date they were written on.
         await _conn.execute("UPDATE pushes SET sent_on = date(sent_at) WHERE sent_on IS NULL")
+    # has_announcement_push/count_announcement_recipients/list_announcement_recipients
+    # all filter `pushes` by category alone (no telegram_id, no date), and the
+    # table only grows — every announcement/report checks its own recipient
+    # list against the *whole* table on every call. Added here rather than in
+    # the executescript SCHEMA so an existing on-disk DB (already past the
+    # CREATE TABLE IF NOT EXISTS) picks it up too.
+    await _conn.execute("CREATE INDEX IF NOT EXISTS idx_pushes_category ON pushes (category)")
 
     await _conn.commit()
 
@@ -3014,9 +3021,19 @@ async def list_food_entry_dates(telegram_id: int) -> list[str]:
 
 async def max_weight_ever(user_id: int) -> float:
     """Heaviest single set (any exercise) across finished workouts — for weight-club
-    achievements."""
+    achievements.
+
+    Goes through LOAD_WEIGHT_SQL rather than raw `s.weight`, same as every
+    other tonnage/e1RM aggregate: on an assisted movement (gravitron, band)
+    the recorded weight is the *assist*, and crediting it straight to the
+    club max let a light assist number stand in for a heavy lift, or — worse
+    — read as the person's own bodyweight-minus-assist load being ignored
+    entirely. `load_weight` already holds the correctly-computed effective
+    load for these sets (see effective_load/_load_weight_for); plain iron
+    keeps reading as `s.weight` since load_weight is NULL for it (COALESCE).
+    """
     cur = await conn().execute(
-        "SELECT COALESCE(MAX(s.weight), 0) AS mx FROM sets s "
+        f"SELECT COALESCE(MAX({LOAD_WEIGHT_SQL}), 0) AS mx FROM sets s "
         "JOIN workout_blocks b ON b.id = s.block_id "
         "JOIN workouts w ON w.id = b.workout_id "
         "WHERE w.user_id = ? AND w.status = 'finished'",
@@ -6424,7 +6441,9 @@ async def list_announcement_recipients(category: str) -> list[int]:
     return [row["telegram_id"] for row in await cur.fetchall()]
 
 
-async def has_push_today(telegram_id: int, today: str) -> bool:
+async def has_push_today(
+    telegram_id: int, today: str, *, exclude_categories: tuple[str, ...] = ()
+) -> bool:
     """Whether this user already got a daily-rotation push on this calendar date (YYYY-MM-DD).
 
     Matches on the stored local date, not on `date(sent_at)`: the caller asks
@@ -6433,11 +6452,30 @@ async def has_push_today(telegram_id: int, today: str) -> bool:
     the *next* server date — so the check said "already pushed today" and
     silently dropped every other day's push. `COALESCE` covers rows written
     before the column existed.
+
+    `exclude_categories` — categories that must not count toward "already
+    pushed today", because they aren't a player-facing daily push someone
+    could get twice: a one-off admin report (e.g. a weekly funnel digest)
+    reuses the `pushes` table purely for its own dedup bookkeeping, and its
+    row shouldn't let it silently eat the admin's own streak/skip push that
+    day. A one-time *release announcement* is deliberately not something
+    this function is asked to exclude by default — capping at one message a
+    day for someone who just got an announcement is the same antispam
+    guarantee the daily-rotation push already relies on elsewhere; only
+    reports that exist purely for bookkeeping belong in this list.
     """
-    cur = await conn().execute(
-        "SELECT 1 FROM pushes WHERE telegram_id = ? AND COALESCE(sent_on, date(sent_at)) = ? LIMIT 1",
-        (telegram_id, today),
-    )
+    if exclude_categories:
+        placeholders = ",".join("?" for _ in exclude_categories)
+        cur = await conn().execute(
+            "SELECT 1 FROM pushes WHERE telegram_id = ? AND COALESCE(sent_on, date(sent_at)) = ? "
+            f"AND category NOT IN ({placeholders}) LIMIT 1",
+            (telegram_id, today, *exclude_categories),
+        )
+    else:
+        cur = await conn().execute(
+            "SELECT 1 FROM pushes WHERE telegram_id = ? AND COALESCE(sent_on, date(sent_at)) = ? LIMIT 1",
+            (telegram_id, today),
+        )
     return await cur.fetchone() is not None
 
 
@@ -6454,6 +6492,33 @@ async def has_push_on(telegram_id: int, category: str, dedup_key: str) -> bool:
         (telegram_id, category, dedup_key),
     )
     return await cur.fetchone() is not None
+
+
+async def prune_old_pushes(retention_days: int, *, keep_categories: tuple[str, ...] = ()) -> int:
+    """Drop `pushes` rows older than retention_days, except `keep_categories`.
+
+    A daily-rotation push (streak, skip, digest…) is pure history once sent —
+    nothing ever re-checks whether a specific one went out weeks ago, only
+    has_push_today's same-day lookup, which idx_pushes_telegram_id already
+    serves fine. A one-time release announcement is the opposite:
+    list_announcement_recipients/has_announcement_push depend on its row
+    surviving *forever* — that's the only memory of "already got this
+    release", and a rollout can take months to reach everyone. Pruning those
+    would make the announcement go out to people twice. `keep_categories`
+    (see admin_tasks.py) is how callers protect them from this prune.
+    """
+    cutoff = (dt.datetime.now() - dt.timedelta(days=retention_days)).isoformat(timespec="seconds")
+    if keep_categories:
+        placeholders = ",".join("?" for _ in keep_categories)
+        query = f"DELETE FROM pushes WHERE sent_at < ? AND category NOT IN ({placeholders})"
+        params = (cutoff, *keep_categories)
+    else:
+        query = "DELETE FROM pushes WHERE sent_at < ?"
+        params = (cutoff,)
+    async with _write_lock:
+        cur = await conn().execute(query, params)
+        await conn().commit()
+        return cur.rowcount
 
 
 async def count_pushes() -> int:

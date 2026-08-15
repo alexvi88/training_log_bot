@@ -11,12 +11,18 @@ from typing import Optional
 from aiogram import Bot
 from aiogram.types import FSInputFile
 
+import announcements
 import config
 import db
 
 logger = logging.getLogger(__name__)
 
 _BACKUP_PREFIX = "training_log_backup_"
+
+# Daily-rotation pushes are pure history past this many days; kept out of
+# config.py deliberately narrow (only this job reads it) — see
+# db.prune_old_pushes for why announcement categories are exempt below.
+PUSH_RETENTION_DAYS = 90
 
 
 def _seconds_until_next_run(hour: int) -> float:
@@ -261,6 +267,10 @@ async def _run_retention_cleanup() -> None:
     await db.prune_old_cost_events(config.COST_EVENTS_RETENTION_DAYS)
     await db.prune_old_user_events(config.ACTIVITY_RETENTION_DAYS)
     await db.prune_old_limit_acks()
+    await db.prune_old_pushes(
+        PUSH_RETENTION_DAYS,
+        keep_categories=tuple(ann.key for ann in announcements.ANNOUNCEMENTS),
+    )
     cutoff = (
         dt.datetime.now() - dt.timedelta(days=config.SHARED_ITEMS_RETENTION_DAYS)
     ).isoformat(timespec="seconds")
