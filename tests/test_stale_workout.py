@@ -256,6 +256,63 @@ async def test_stale_delete_requires_confirmation_then_deletes(fresh_db, user_id
     assert await db.get_workout(workout_id) is None
 
 
+async def test_stale_warning_does_not_repeat_within_the_same_local_day(fresh_db, user_id):
+    """Каждый заход в меню (в том числе кнопкой «🏠 Меню») дёргает cmd_start —
+    без троттлинга предупреждение сыпалось на каждый такой заход."""
+    db = fresh_db
+    stale_started = dt.datetime.now() - dt.timedelta(hours=config.STALE_WORKOUT_HOURS + 1)
+    await db.create_workout(user_id, started_at=stale_started.isoformat())
+
+    state = await _make_state(user_id)
+
+    first = _make_message(user_id)
+    await workout.cmd_start(first, state)
+    assert first.answer.await_count == 2  # меню + предупреждение
+
+    second = _make_message(user_id)
+    await workout.cmd_start(second, state)
+    assert second.answer.await_count == 1  # только меню — предупреждение уже показывали сегодня
+
+
+async def test_stale_warning_repeats_the_next_local_day(fresh_db, user_id):
+    db = fresh_db
+    stale_started = dt.datetime.now() - dt.timedelta(hours=config.STALE_WORKOUT_HOURS + 1)
+    await db.create_workout(user_id, started_at=stale_started.isoformat())
+    yesterday = (dt.date.today() - dt.timedelta(days=1)).isoformat()
+    await db.record_limit_ack(user_id, workout.STALE_WORKOUT_WARNING_KIND, yesterday)
+
+    message = _make_message(user_id)
+    state = await _make_state(user_id)
+
+    await workout.cmd_start(message, state)
+
+    assert message.answer.await_count == 2  # вчерашняя расписка не гасит сегодняшнее предупреждение
+
+
+async def test_resume_workout_button_reaches_stale_workout_even_when_warning_is_muted(
+    fresh_db, user_id
+):
+    """Троттлинг прячет только сам алерт — «▶ ПРОДОЛЖИТЬ ТРЕНИРОВКУ» в меню
+    обязана оставаться другим путём к висящей тренировке."""
+    db = fresh_db
+    stale_started = dt.datetime.now() - dt.timedelta(hours=config.STALE_WORKOUT_HOURS + 1)
+    workout_id = await db.create_workout(user_id, started_at=stale_started.isoformat())
+    today = dt.date.today().isoformat()
+    await db.record_limit_ack(user_id, workout.STALE_WORKOUT_WARNING_KIND, today)
+
+    kb = await workout._main_menu_kb(user_id, await db.get_active_workout(user_id))
+    callback_datas = [b.callback_data for row in kb.inline_keyboard for b in row]
+    assert "menu:resume_workout" in callback_datas
+
+    message = _make_message(user_id)
+    state = await _make_state(user_id)
+    await workout.cmd_start(message, state)
+    assert message.answer.await_count == 1  # предупреждение спрятано …
+
+    active = await db.get_active_workout(user_id)
+    assert active["id"] == workout_id  # … но сама тренировка никуда не делась
+
+
 async def test_double_tap_on_start_opens_one_workout_not_two(fresh_db, user_id):
     """aiogram handles updates concurrently, so two taps both used to see "no
     active workout" and create one each. The loser became a permanent ghost:

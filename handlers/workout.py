@@ -922,6 +922,14 @@ async def _clear_state_keep_workout(state: FSMContext) -> None:
         await state.update_data(**preserved)
 
 
+# Отметка «уже показывал сегодня» для предупреждения о висящей тренировке —
+# та же таблица разовых расписок, что и у предупреждения о лимите (ai_limits),
+# просто под своим kind: она и так хранит (telegram_id, kind, date) без
+# привязки к конкретному виду лимита, так что заводить отдельное хранилище
+# под ещё одну «раз в сутки» отметку незачем.
+STALE_WORKOUT_WARNING_KIND = "stale_workout_warning"
+
+
 @router.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext, command: CommandObject | None = None):
     """Главное меню — и единственное место, где считается источник новичка.
@@ -958,31 +966,46 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject 
         started = dt.datetime.fromisoformat(active["started_at"])
         if (dt.datetime.now() - started).total_seconds() > config.STALE_WORKOUT_HOURS * 3600:
             user = await db.get_user(message.from_user.id)
-            local = timeutil.to_user_local(started, user)
-            # Время висящей тренировки — единственное место, где бот называет
-            # конкретный момент, а не дату: пусть клиент покажет его в поясе
-            # смотрящего (пояс в настройках выставляет меньшинство).
-            stamp, entity = formatting.local_time_entity(
-                started, f"{formatting.format_date_ru(local)}, {local:%H:%M}"
+            # Каждый вход в меню (в том числе кнопкой «🏠 Меню») раньше
+            # перепоказывал это предупреждение заново — тренировка не
+            # становится «более висящей» от третьего захода за час, а шум
+            # только раздражает. «▶ ПРОДОЛЖИТЬ ТРЕНИРОВКУ» в самом меню
+            # (main_menu_kb выше) остаётся отдельным и всегда видимым путём к
+            # ней, так что скрыть повтор предупреждения безопасно — дорога до
+            # висящей тренировки не исчезает, только этот конкретный алерт.
+            today = timeutil.user_today(user).isoformat()
+            already_shown = await db.has_limit_ack(
+                message.from_user.id, STALE_WORKOUT_WARNING_KIND, today
             )
-            warning = f"⚠️ У тебя висит тренировка с {stamp} — забыл закрыть?"
-            # Состав тренировки под предупреждением: раньше «завершить задним
-            # числом» или «удалить» приходилось решать вслепую, не помня уже,
-            # что вообще успел записать несколько дней назад. Без рекордов и
-            # тоннажа — их для незакрытой сессии считать ещё рано.
-            blocks = await view_builder.build_block_views(active["id"], user["e1rm_formula"])
-            if blocks:
-                # strip_tags, а не HTML: у сообщения нет parse_mode — «стамп»
-                # выше идёт entities-меткой (часовой пояс смотрящего, Bot API
-                # 9.5), а entities и parse_mode Telegram вместе не принимает.
-                # С <b>/<i> без разбора человек увидел бы теги буквами.
-                composition = formatting.workout_composition(blocks, unit=user["unit"])
-                warning += "\n\n" + formatting.strip_tags(composition)
-            await message.answer(
-                warning,
-                entities=formatting.entities_at(warning, stamp, entity),
-                reply_markup=keyboards.stale_workout_keyboard(active["id"]),
-            )
+            if not already_shown:
+                await db.record_limit_ack(
+                    message.from_user.id, STALE_WORKOUT_WARNING_KIND, today
+                )
+                local = timeutil.to_user_local(started, user)
+                # Время висящей тренировки — единственное место, где бот называет
+                # конкретный момент, а не дату: пусть клиент покажет его в поясе
+                # смотрящего (пояс в настройках выставляет меньшинство).
+                stamp, entity = formatting.local_time_entity(
+                    started, f"{formatting.format_date_ru(local)}, {local:%H:%M}"
+                )
+                warning = f"⚠️ У тебя висит тренировка с {stamp} — забыл закрыть?"
+                # Состав тренировки под предупреждением: раньше «завершить задним
+                # числом» или «удалить» приходилось решать вслепую, не помня уже,
+                # что вообще успел записать несколько дней назад. Без рекордов и
+                # тоннажа — их для незакрытой сессии считать ещё рано.
+                blocks = await view_builder.build_block_views(active["id"], user["e1rm_formula"])
+                if blocks:
+                    # strip_tags, а не HTML: у сообщения нет parse_mode — «стамп»
+                    # выше идёт entities-меткой (часовой пояс смотрящего, Bot API
+                    # 9.5), а entities и parse_mode Telegram вместе не принимает.
+                    # С <b>/<i> без разбора человек увидел бы теги буквами.
+                    composition = formatting.workout_composition(blocks, unit=user["unit"])
+                    warning += "\n\n" + formatting.strip_tags(composition)
+                await message.answer(
+                    warning,
+                    entities=formatting.entities_at(warning, stamp, entity),
+                    reply_markup=keyboards.stale_workout_keyboard(active["id"]),
+                )
 
 
 # Справка живёт в двух экранах: первый закрывает то, что нужно 95% времени
