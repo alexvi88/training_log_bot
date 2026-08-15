@@ -279,6 +279,78 @@ async def _log_llm_cost(user_id: Optional[int], model: str, usage: Any, *, sourc
         logger.exception("failed to log llm cost event")
 
 
+class LimitBlocked(Exception):
+    """Настоящий (не preview) отказ ai_limits.check внутри paid_call.
+
+    block несёт всё, что нужно вызывающей стороне, чтобы показать отказ
+    голосом тренера (block.user_text) — так же, как она делает это сегодня
+    после ручного `ai_limits.check` в хендлерах.
+    """
+
+    def __init__(self, block: ai_limits.Block) -> None:
+        super().__init__(block.log)
+        self.block = block
+
+
+async def paid_call(
+    user_id: Optional[int],
+    kind: Optional[str],
+    coro_factory: Callable[[], Awaitable[Any]],
+    *,
+    model: str = config.GROK_MODEL,
+    source: str = "bot",
+    on_block: Optional[Callable[[ai_limits.Block], Awaitable[None]]] = None,
+) -> Any:
+    """Единая обёртка «проверить лимит → вызвать модель → залогировать цену»
+    для НЕстримящих платных вызовов (`client.chat.completions.create`, один
+    ответ, без чанков). Основной агентный `ask()`/`_completion_round` сюда не
+    входит — у стрима свой preview и своя раздача чанков по ходу генерации.
+
+    Раньше эти три шага собирались руками в каждом месте вызова, и часть
+    новых платных вызовов регулярно забывала кусок: то `ai_limits.check`
+    вообще не звался (`comment_on_workout`, `weekly_digest` — до этой правки),
+    то cost-событие терялось, если код после ответа модели падал раньше
+    `_log_llm_cost`. Следующий платный вызов через `paid_call` написать
+    ПРОЩЕ, чем мимо неё: `await paid_call(user_id, kind, lambda: client.chat.
+    completions.create(...))` — check, сам вызов и cost-событие уже внутри.
+
+    kind — вид лимита (`ai_limits.KIND_*`) для проверки ПЕРЕД вызовом.
+    `None` — у шага нет своей персональной квоты (он не то, что просит
+    пользователь и что можно исчерпать за день, а системный шаг: комментарий
+    к тренировке, недельный дайджест, разбор импорта — их квота — количество
+    тренировок/дней, а не число обращений к модели). Тогда `ai_limits.check`
+    не зовётся вовсе, вместо того чтобы придумывать для него кем-то не
+    заведённый `kind`.
+
+    Настоящий (не preview) блок поднимает `LimitBlocked` ДО вызова —
+    `coro_factory` в этом случае не вызывается ни разу. preview (свой
+    аккаунт, ещё не нажавший «Понятно» сегодня) не отменяет шаг нигде в
+    проекте — тут так же: `coro_factory` вызывается как обычно, а `on_block`
+    получает `Block`, чтобы вызывающая сторона могла показать предупреждение
+    (см. `warn_about_limit` в handlers/ai_trainer.py).
+
+    Cost-событие пишется в `finally`, а не после успешной обработки ответа:
+    `analyze_food` кидает `ValueError` на битом JSON уже ПОСЛЕ того, как
+    деньги потрачены, и без `finally` такой вызов остался бы невидим и в
+    логе, и в дневном отчёте.
+    """
+    if kind is not None:
+        block = await ai_limits.check(user_id, kind)
+        if block is not None:
+            if block.preview:
+                if on_block is not None:
+                    await on_block(block)
+            else:
+                raise LimitBlocked(block)
+    response = None
+    try:
+        response = await coro_factory()
+        return response
+    finally:
+        if response is not None:
+            await _log_llm_cost(user_id, model, getattr(response, "usage", None), source=source)
+
+
 def is_configured() -> bool:
     return bool(config.XAI_API_KEY)
 
@@ -1040,25 +1112,27 @@ async def comment_on_workout(user_id: int, workout_id: int) -> str:
     )
 
     client = _get_client()
-    response = await client.chat.completions.create(
-        model=config.GROK_MODEL,
-        max_tokens=700,
-        extra_body={"reasoning_effort": config.GROK_QUICK_REASONING_EFFORT},
-        # Свой scope: system-промпт (WORKOUT_COMMENT_SYSTEM_PROMPT) не имеет
-        # ничего общего с шапкой основного чата (ask/_ask_plain) — под тем же
-        # conv-id, что и main, это гарантированный промах по нему на СЛЕДУЮЩИЙ
-        # вопрос тренеру (см. docstring _cache_headers).
-        extra_headers=_cache_headers(user_id, scope="workout_comment"),
-        messages=[
-            {
-                "role": "system",
-                "content": WORKOUT_COMMENT_SYSTEM_PROMPT
-                + f"\nСегодня {timeutil.user_today(user).isoformat()}.",
-            },
-            {"role": "user", "content": card_text},
-        ],
+    response = await paid_call(
+        user_id, None,
+        lambda: client.chat.completions.create(
+            model=config.GROK_MODEL,
+            max_tokens=700,
+            extra_body={"reasoning_effort": config.GROK_QUICK_REASONING_EFFORT},
+            # Свой scope: system-промпт (WORKOUT_COMMENT_SYSTEM_PROMPT) не имеет
+            # ничего общего с шапкой основного чата (ask/_ask_plain) — под тем же
+            # conv-id, что и main, это гарантированный промах по нему на СЛЕДУЮЩИЙ
+            # вопрос тренеру (см. docstring _cache_headers).
+            extra_headers=_cache_headers(user_id, scope="workout_comment"),
+            messages=[
+                {
+                    "role": "system",
+                    "content": WORKOUT_COMMENT_SYSTEM_PROMPT
+                    + f"\nСегодня {timeutil.user_today(user).isoformat()}.",
+                },
+                {"role": "user", "content": card_text},
+            ],
+        ),
     )
-    await _log_llm_cost(user_id, config.GROK_MODEL, getattr(response, "usage", None))
     text = (response.choices[0].message.content or "").strip()
     return text or "Не получилось сформулировать комментарий, попробуй ещё раз позже."
 
@@ -1158,23 +1232,25 @@ async def weekly_digest(user_id: int) -> Optional[str]:
 
     client = _get_client()
     try:
-        response = await client.chat.completions.create(
-            model=config.GROK_MODEL,
-            max_tokens=500,
-            extra_body={"reasoning_effort": config.GROK_QUICK_REASONING_EFFORT},
-            # Свой scope — WEEKLY_DIGEST_SYSTEM_PROMPT не похож на шапку
-            # основного чата, под общим conv-id вытеснял бы её слот раз в
-            # неделю (см. docstring _cache_headers).
-            extra_headers=_cache_headers(user_id, scope="weekly_digest"),
-            messages=[
-                {"role": "system", "content": WEEKLY_DIGEST_SYSTEM_PROMPT},
-                {"role": "user", "content": summary},
-            ],
+        response = await paid_call(
+            user_id, None,
+            lambda: client.chat.completions.create(
+                model=config.GROK_MODEL,
+                max_tokens=500,
+                extra_body={"reasoning_effort": config.GROK_QUICK_REASONING_EFFORT},
+                # Свой scope — WEEKLY_DIGEST_SYSTEM_PROMPT не похож на шапку
+                # основного чата, под общим conv-id вытеснял бы её слот раз в
+                # неделю (см. docstring _cache_headers).
+                extra_headers=_cache_headers(user_id, scope="weekly_digest"),
+                messages=[
+                    {"role": "system", "content": WEEKLY_DIGEST_SYSTEM_PROMPT},
+                    {"role": "user", "content": summary},
+                ],
+            ),
         )
     except Exception:
         logger.exception("AI weekly digest generation failed for user %s", user_id)
         return None
-    await _log_llm_cost(user_id, config.GROK_MODEL, getattr(response, "usage", None))
     text = (response.choices[0].message.content or "").strip()
     return text or None
 
@@ -1312,20 +1388,22 @@ async def import_history_overview(user_id: int) -> Optional[str]:
 
     client = _get_client()
     try:
-        response = await client.chat.completions.create(
-            model=config.GROK_MODEL,
-            max_tokens=500,
-            extra_body={"reasoning_effort": config.GROK_QUICK_REASONING_EFFORT},
-            extra_headers=_cache_headers(user_id, scope="import_overview"),
-            messages=[
-                {"role": "system", "content": IMPORT_OVERVIEW_SYSTEM_PROMPT},
-                {"role": "user", "content": "\n".join(lines)},
-            ],
+        response = await paid_call(
+            user_id, None,
+            lambda: client.chat.completions.create(
+                model=config.GROK_MODEL,
+                max_tokens=500,
+                extra_body={"reasoning_effort": config.GROK_QUICK_REASONING_EFFORT},
+                extra_headers=_cache_headers(user_id, scope="import_overview"),
+                messages=[
+                    {"role": "system", "content": IMPORT_OVERVIEW_SYSTEM_PROMPT},
+                    {"role": "user", "content": "\n".join(lines)},
+                ],
+            ),
         )
     except Exception:
         logger.exception("AI import overview generation failed for user %s", user_id)
         return None
-    await _log_llm_cost(user_id, config.GROK_MODEL, getattr(response, "usage", None))
     text = (response.choices[0].message.content or "").strip()
     return text or None
 
@@ -1558,23 +1636,31 @@ async def analyze_food(
     if not parts:
         parts.append("Данных нет — верни description с пустой строкой.")
 
-    response = await client.chat.completions.create(
-        model=config.GROK_MODEL,
-        max_tokens=700 if with_macros else 200,
-        extra_body={"reasoning_effort": config.GROK_QUICK_REASONING_EFFORT},
-        # Свой scope — FOOD_ANALYSIS_SYSTEM_PROMPT/FOOD_DESCRIBE_SYSTEM_PROMPT не
-        # похожи на шапку основного чата, под общим conv-id вытесняли бы её слот
-        # на каждый разбор еды (см. docstring _cache_headers).
-        extra_headers=_cache_headers(user_id, scope="food"),
-        messages=[
-            {
-                "role": "system",
-                "content": FOOD_ANALYSIS_SYSTEM_PROMPT if with_macros else FOOD_DESCRIBE_SYSTEM_PROMPT,
-            },
-            {"role": "user", "content": _plain_user_content("\n\n".join(parts), image_data_url)},
-        ],
+    # kind=None: квота еды (KIND_FOOD) уже проверена вызывающим хендлером ДО
+    # этого вызова (handlers/food_diary.py) — там же решается, показывать ли
+    # отказ и звать ли модель вовсе. Повторная проверка тут была бы либо
+    # немой (preview уже показан выше), либо дублирующим отказом без адресата
+    # (тут нет ни message, ни клавиатуры, чтобы что-то ответить).
+    response = await paid_call(
+        user_id, None,
+        lambda: client.chat.completions.create(
+            model=config.GROK_MODEL,
+            max_tokens=700 if with_macros else 200,
+            extra_body={"reasoning_effort": config.GROK_QUICK_REASONING_EFFORT},
+            # Свой scope — FOOD_ANALYSIS_SYSTEM_PROMPT/FOOD_DESCRIBE_SYSTEM_PROMPT не
+            # похожи на шапку основного чата, под общим conv-id вытесняли бы её слот
+            # на каждый разбор еды (см. docstring _cache_headers).
+            extra_headers=_cache_headers(user_id, scope="food"),
+            messages=[
+                {
+                    "role": "system",
+                    "content": FOOD_ANALYSIS_SYSTEM_PROMPT if with_macros else FOOD_DESCRIBE_SYSTEM_PROMPT,
+                },
+                {"role": "user", "content": _plain_user_content("\n\n".join(parts), image_data_url)},
+            ],
+        ),
+        source=source,
     )
-    await _log_llm_cost(user_id, config.GROK_MODEL, getattr(response, "usage", None), source=source)
     data = _extract_json_object(response.choices[0].message.content or "")
     is_food = bool(data.get("is_food", True))
 

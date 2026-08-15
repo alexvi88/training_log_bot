@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+import ai_limits
 import ai_trainer
 import config
 import timeutil
@@ -64,6 +65,109 @@ async def _seed_bench_history(db, user_id: int, n_sessions: int = 3, exercise: s
         await db.add_block_exercise(block_id, ex_id, 0)
         await db.add_set(block_id, ex_id, round_index=1, order_in_round=0, weight=100.0 + i, reps=8)
     return ex_id
+
+
+# ---------- paid_call ----------
+#
+# Единая обёртка «проверить лимит → вызвать → залогировать цену» для
+# нестримящих платных вызовов (см. её докстринг). ask()/_completion_round
+# сюда не входят — у них своя, стримящая, история.
+
+
+def _usage_response(content="ответ", prompt_tokens=10, completion_tokens=5):
+    return SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content=content))],
+        usage=SimpleNamespace(prompt_tokens=prompt_tokens, completion_tokens=completion_tokens),
+    )
+
+
+async def test_paid_call_with_no_kind_skips_the_limit_check(user_id, monkeypatch):
+    """kind=None — у шага нет своей квоты (comment_on_workout, weekly_digest,
+    import_history_overview): ai_limits.check не должен звать ся вовсе."""
+    check = AsyncMock()
+    monkeypatch.setattr(ai_trainer.ai_limits, "check", check)
+    coro_factory = AsyncMock(return_value=_usage_response())
+
+    result = await ai_trainer.paid_call(user_id, None, coro_factory)
+
+    check.assert_not_called()
+    coro_factory.assert_awaited_once()
+    assert result.choices[0].message.content == "ответ"
+
+
+async def test_paid_call_logs_cost_after_a_successful_response(fresh_db, user_id, monkeypatch):
+    """Cost-событие не должно теряться — это и есть весь смысл обёртки."""
+    log_cost = AsyncMock()
+    monkeypatch.setattr(ai_trainer.db, "log_cost_event", log_cost)
+    coro_factory = AsyncMock(return_value=_usage_response(prompt_tokens=100, completion_tokens=7))
+
+    await ai_trainer.paid_call(user_id, None, coro_factory, model="grok-test")
+
+    log_cost.assert_awaited_once()
+    assert log_cost.await_args.kwargs["model"] == "grok-test"
+    assert log_cost.await_args.kwargs["prompt_tokens"] == 100
+    assert log_cost.await_args.kwargs["completion_tokens"] == 7
+
+
+async def test_paid_call_still_logs_cost_when_caller_fails_after_the_response(fresh_db, user_id, monkeypatch):
+    """Ответ получен (деньги потрачены), а разбор ответа после paid_call упал —
+    cost-событие всё равно обязано уйти (см. analyze_food и битый JSON)."""
+    log_cost = AsyncMock()
+    monkeypatch.setattr(ai_trainer.db, "log_cost_event", log_cost)
+    coro_factory = AsyncMock(return_value=_usage_response())
+
+    await ai_trainer.paid_call(user_id, None, coro_factory)
+    # Дальше по коду вызывающая сторона (analyze_food) разбирает
+    # response.choices[0].message.content как JSON и может упасть на битом
+    # ответе — но к этому моменту paid_call уже вернулась, а значит cost-
+    # событие из finally уже ушло, независимо от того, что случится дальше.
+    with pytest.raises(ValueError):
+        raise ValueError("битый JSON")
+
+    log_cost.assert_awaited_once()
+
+
+async def test_paid_call_does_not_log_cost_when_the_call_itself_fails(user_id, monkeypatch):
+    """Сетевая ошибка до ответа — платить не за что, cost-событие не пишем."""
+    log_cost = AsyncMock()
+    monkeypatch.setattr(ai_trainer.db, "log_cost_event", log_cost)
+    coro_factory = AsyncMock(side_effect=RuntimeError("сеть легла"))
+
+    with pytest.raises(RuntimeError):
+        await ai_trainer.paid_call(user_id, None, coro_factory)
+
+    log_cost.assert_not_called()
+
+
+async def test_paid_call_blocks_before_calling_when_limit_is_exhausted(user_id, monkeypatch):
+    """Настоящий (не preview) отказ — coro_factory не должен вызываться вовсе:
+    иначе деньги улетают на шаг, который и так решено не показывать."""
+    block = ai_limits.Block(kind=ai_limits.KIND_QUESTION, log="exhausted", user_text="Лимит исчерпан")
+    monkeypatch.setattr(ai_trainer.ai_limits, "check", AsyncMock(return_value=block))
+    coro_factory = AsyncMock(return_value=_usage_response())
+
+    with pytest.raises(ai_trainer.LimitBlocked) as exc_info:
+        await ai_trainer.paid_call(user_id, ai_limits.KIND_QUESTION, coro_factory)
+
+    assert exc_info.value.block is block
+    coro_factory.assert_not_called()
+
+
+async def test_paid_call_preview_still_calls_and_notifies(user_id, monkeypatch):
+    """preview (свой аккаунт, ещё не нажавший «Понятно») не отменяет шаг нигде
+    в проекте — тут так же: вызов идёт, а on_block получает Block."""
+    block = ai_limits.Block(kind=ai_limits.KIND_QUESTION, log="preview", user_text="увидел бы", preview=True)
+    monkeypatch.setattr(ai_trainer.ai_limits, "check", AsyncMock(return_value=block))
+    coro_factory = AsyncMock(return_value=_usage_response())
+    on_block = AsyncMock()
+
+    result = await ai_trainer.paid_call(
+        user_id, ai_limits.KIND_QUESTION, coro_factory, on_block=on_block,
+    )
+
+    coro_factory.assert_awaited_once()
+    on_block.assert_awaited_once_with(block)
+    assert result.choices[0].message.content == "ответ"
 
 
 # ---------- tool executors ----------
