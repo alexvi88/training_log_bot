@@ -84,7 +84,7 @@ async def send_donate_invoice(callback: CallbackQuery):
     await callback.answer()
     await callback.message.answer_invoice(
         title="Поддержать проект",
-        description=f"Донат {stars} ⭐ — дневнику и AI-тренеру, без ответной выдачи.",
+        description=f"{stars} ⭐ на железо: сервер, картинки, счета за модель. Спасибо, что тянешь проект со мной.",
         # Payload возвращается в successful_payment нетронутым — по нему и
         # проверяем сумму и владельца счёта. user_id кладём тем же приёмом,
         # что и у будущего billing: платёж, пересланный в другой чат, не
