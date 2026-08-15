@@ -341,3 +341,24 @@ async def reply_transient(message, text: str) -> None:
     _spawn(
         _delete_later(message.bot, message.chat.id, message.message_id, INPUT_ERROR_LIFETIME_SECONDS)
     )
+
+
+# ---------- «экран устарел»: карточка ссылается на удалённую запись ----------
+
+# Карточки упражнения и тренировки открываются по id, зашитому в кнопку — если
+# запись успели удалить или смержить где-то ещё, старая кнопка ведёт в никуда.
+# Безличное «не найдено» не говорит, что делать дальше (TONE_OF_VOICE:
+# «Ошибки: что случилось + как исправить»), поэтому оба текста называют экран,
+# который надо открыть заново, вместо того чтобы просто констатировать факт.
+EXERCISE_NOT_FOUND_TEXT = "Не нашёл это упражнение — экран устарел. Открой ⚙️ Упражнения заново"
+WORKOUT_NOT_FOUND_TEXT = "Не нашёл эту тренировку — экран устарел. Открой 📚 Историю заново"
+
+
+async def alert_exercise_not_found(callback) -> None:
+    """Кнопка карточки упражнения ссылается на id, которого больше нет."""
+    await callback.answer(EXERCISE_NOT_FOUND_TEXT, show_alert=True)
+
+
+async def alert_workout_not_found(callback) -> None:
+    """Кнопка карточки тренировки ссылается на id, которого больше нет."""
+    await callback.answer(WORKOUT_NOT_FOUND_TEXT, show_alert=True)

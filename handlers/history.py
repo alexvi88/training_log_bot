@@ -353,7 +353,7 @@ async def show_history_item(callback: CallbackQuery, workout_id: int) -> bool:
 
     workout = await db.get_workout(workout_id)
     if workout is None or workout["user_id"] != callback.from_user.id:
-        await callback.answer("Тренировка не найдена", show_alert=True)
+        await ui.alert_workout_not_found(callback)
         return False
     user = await db.get_user(callback.from_user.id)
     comment = await ai_trainer.ensure_workout_comment(user, workout_id)
@@ -381,7 +381,7 @@ async def hist_card(callback: CallbackQuery, state: FSMContext):
     workout_id = int(callback.data.split(":")[2])
     workout = await db.get_workout(workout_id)
     if workout is None or workout["user_id"] != callback.from_user.id:
-        await callback.answer("Тренировка не найдена", show_alert=True)
+        await ui.alert_workout_not_found(callback)
         return
     user = await db.get_user(callback.from_user.id)
     blocks = await view_builder.build_block_views(
@@ -418,7 +418,7 @@ async def hist_edit(callback: CallbackQuery, state: FSMContext):
     workout_id = int(callback.data.split(":")[2])
     workout = await db.get_workout(workout_id)
     if workout is None or workout["user_id"] != callback.from_user.id:
-        await callback.answer("Тренировка не найдена", show_alert=True)
+        await ui.alert_workout_not_found(callback)
         return
     from handlers.edit_workout import show_edit_screen
     await show_edit_screen(callback, state, workout_id)
@@ -463,7 +463,7 @@ async def hist_delete_confirm(callback: CallbackQuery, state: FSMContext):
     workout_id = int(callback.data.split(":")[2])
     workout = await db.get_workout(workout_id)
     if workout is None or workout["user_id"] != callback.from_user.id:
-        await callback.answer("Тренировка не найдена", show_alert=True)
+        await ui.alert_workout_not_found(callback)
         return
     kb = keyboards.yes_no_keyboard(
         yes_cb=f"hist:delyes:{workout_id}",
@@ -483,7 +483,7 @@ async def hist_delete(callback: CallbackQuery, state: FSMContext):
     workout_id = int(callback.data.split(":")[2])
     workout = await db.get_workout(workout_id)
     if workout is None or workout["user_id"] != callback.from_user.id:
-        await callback.answer("Тренировка не найдена", show_alert=True)
+        await ui.alert_workout_not_found(callback)
         return
     await db.discard_workout(workout_id)
     # Deleting the workout has to delete what it earned too: a set typed as 500кг
@@ -715,7 +715,7 @@ async def prog_show_exercise(callback: CallbackQuery, state: FSMContext):
     # старой карточке падал с TypeError внутри рендера, и человек видел только
     # крутящуюся кнопку, которая ничем не кончается.
     if await db.get_exercise(ex_id) is None:
-        await callback.answer("Упражнение не найдено — его удалили", show_alert=True)
+        await ui.alert_exercise_not_found(callback)
         return
     await state.update_data(prog_exercise_id=ex_id, prog_origin=origin)
     user = await db.get_user(callback.from_user.id)

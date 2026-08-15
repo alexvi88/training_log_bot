@@ -533,7 +533,7 @@ async def exm_edit_menu(callback: CallbackQuery, state: FSMContext):
     ex_id = int(callback.data.split(":")[2])
     ex = await db.get_exercise(ex_id)
     if ex is None or ex["user_id"] != callback.from_user.id:
-        await callback.answer("Упражнение не найдено", show_alert=True)
+        await ui.alert_exercise_not_found(callback)
         return
     # Also reachable as a "❌ Отмена" target from editing_name/editing_group/
     # editing_description/awaiting_photo — reset out of whichever of those got
@@ -595,7 +595,7 @@ async def send_exercise_card(message: Message, state: FSMContext, user_id: int, 
 async def _render_exercise_card(callback: CallbackQuery, state: FSMContext, ex_id: int) -> None:
     ex = await db.get_exercise(ex_id)
     if ex is None or ex["user_id"] != callback.from_user.id:
-        await callback.answer("Упражнение не найдено", show_alert=True)
+        await ui.alert_exercise_not_found(callback)
         return
     await state.update_data(exm_exercise_id=ex_id)
     has_images = await _send_exercise_images(callback.message, ex, state)
@@ -623,7 +623,7 @@ async def exm_add_photo(callback: CallbackQuery, state: FSMContext):
     ex_id = int(callback.data.split(":")[2])
     ex = await db.get_exercise(ex_id)
     if ex is None or ex["user_id"] != callback.from_user.id:
-        await callback.answer("Упражнение не найдено", show_alert=True)
+        await ui.alert_exercise_not_found(callback)
         return
     await state.update_data(exm_exercise_id=ex_id)
     await state.set_state(ExerciseManage.awaiting_photo)
@@ -655,7 +655,7 @@ async def exm_delete_photo_confirm(callback: CallbackQuery, state: FSMContext):
     ex_id = int(callback.data.split(":")[2])
     ex = await db.get_exercise(ex_id)
     if ex is None or ex["user_id"] != callback.from_user.id or not ex["custom_photo_file_id"]:
-        await callback.answer("Упражнение не найдено", show_alert=True)
+        await ui.alert_exercise_not_found(callback)
         return
     kb = keyboards.yes_no_keyboard(
         yes_cb=f"exm:delphotoyes:{ex_id}",
@@ -672,7 +672,7 @@ async def exm_delete_photo(callback: CallbackQuery, state: FSMContext):
     ex_id = int(callback.data.split(":")[2])
     ex = await db.get_exercise(ex_id)
     if ex is None or ex["user_id"] != callback.from_user.id:
-        await callback.answer("Упражнение не найдено", show_alert=True)
+        await ui.alert_exercise_not_found(callback)
         return
     await db.delete_exercise_photo(ex_id)
     await callback.answer("Фото удалено")
@@ -696,7 +696,7 @@ async def exm_merge_start(callback: CallbackQuery, state: FSMContext):
     ex_id = int(callback.data.split(":")[2])
     ex = await db.get_exercise(ex_id)
     if ex is None or ex["user_id"] != callback.from_user.id:
-        await callback.answer("Упражнение не найдено", show_alert=True)
+        await ui.alert_exercise_not_found(callback)
         return
     await state.update_data(exm_merge_source_id=ex_id)
     await state.set_state(ExerciseManage.picking_merge_target)
@@ -734,7 +734,7 @@ async def exm_merge_pick(callback: CallbackQuery, state: FSMContext):
     source = await db.get_exercise(source_id) if source_id else None
     target = await db.get_exercise(target_id)
     if source is None or target is None or target["user_id"] != callback.from_user.id:
-        await callback.answer("Упражнение не найдено", show_alert=True)
+        await ui.alert_exercise_not_found(callback)
         return
     kb = keyboards.yes_no_keyboard(
         yes_cb=f"exm:mergeyes:{target_id}",
@@ -758,7 +758,7 @@ async def exm_merge_confirm(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     source_id = data.get("exm_merge_source_id")
     if source_id is None:
-        await callback.answer("Упражнение не найдено", show_alert=True)
+        await ui.alert_exercise_not_found(callback)
         return
     outcome = await db.merge_exercises(callback.from_user.id, keep_id=target_id, drop_id=source_id)
     if outcome != db.MERGE_OK:
@@ -828,7 +828,7 @@ async def exm_edit_name(callback: CallbackQuery, state: FSMContext):
     ex_id = int(callback.data.split(":")[2])
     ex = await db.get_exercise(ex_id)
     if ex is None or ex["user_id"] != callback.from_user.id:
-        await callback.answer("Упражнение не найдено", show_alert=True)
+        await ui.alert_exercise_not_found(callback)
         return
     await state.update_data(exm_exercise_id=ex_id)
     await state.set_state(ExerciseManage.editing_name)
@@ -909,7 +909,7 @@ async def exm_edit_group(callback: CallbackQuery, state: FSMContext):
     ex_id = int(callback.data.split(":")[2])
     ex = await db.get_exercise(ex_id)
     if ex is None or ex["user_id"] != callback.from_user.id:
-        await callback.answer("Упражнение не найдено", show_alert=True)
+        await ui.alert_exercise_not_found(callback)
         return
     await state.update_data(exm_exercise_id=ex_id)
     await state.set_state(ExerciseManage.editing_group)
@@ -943,7 +943,7 @@ async def exm_edit_group_picked(callback: CallbackQuery, state: FSMContext):
     ex_id = data.get("exm_exercise_id")
     ex = await db.get_exercise(ex_id) if ex_id else None
     if ex is None or ex["user_id"] != callback.from_user.id:
-        await callback.answer("Упражнение не найдено", show_alert=True)
+        await ui.alert_exercise_not_found(callback)
         return
     await db.update_exercise_group(ex_id, group_id)
     await state.set_state(ExerciseManage.picking_exercise)
@@ -961,7 +961,7 @@ async def exm_edit_description(callback: CallbackQuery, state: FSMContext):
     ex_id = int(callback.data.split(":")[2])
     ex = await db.get_exercise(ex_id)
     if ex is None or ex["user_id"] != callback.from_user.id:
-        await callback.answer("Упражнение не найдено", show_alert=True)
+        await ui.alert_exercise_not_found(callback)
         return
     await state.update_data(exm_exercise_id=ex_id)
     await state.set_state(ExerciseManage.editing_description)
@@ -1013,7 +1013,7 @@ async def exm_archive_exercise_confirm(callback: CallbackQuery, state: FSMContex
     ex_id = int(callback.data.split(":")[2])
     ex = await db.get_exercise(ex_id)
     if ex is None or ex["user_id"] != callback.from_user.id:
-        await callback.answer("Упражнение не найдено", show_alert=True)
+        await ui.alert_exercise_not_found(callback)
         return
     kb = keyboards.yes_no_keyboard(
         yes_cb=f"exm:archiveyes:{ex_id}",
@@ -1035,7 +1035,7 @@ async def exm_archive_exercise(callback: CallbackQuery, state: FSMContext):
     ex_id = int(callback.data.split(":")[2])
     ex = await db.get_exercise(ex_id)
     if ex is None or ex["user_id"] != callback.from_user.id:
-        await callback.answer("Упражнение не найдено", show_alert=True)
+        await ui.alert_exercise_not_found(callback)
         return
     await db.archive_exercise(ex_id)
     await callback.answer("Упражнение архивировано")
@@ -1065,7 +1065,7 @@ async def exm_unarchive_exercise(callback: CallbackQuery, state: FSMContext):
     ex_id = int(callback.data.split(":")[2])
     ex = await db.get_exercise(ex_id)
     if ex is None or ex["user_id"] != callback.from_user.id:
-        await callback.answer("Упражнение не найдено", show_alert=True)
+        await ui.alert_exercise_not_found(callback)
         return
     await db.unarchive_exercise(ex_id)
     await callback.answer("Упражнение возвращено из архива")

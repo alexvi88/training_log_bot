@@ -9,6 +9,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 
 import config
 import exercise_descriptions
+import ui
 from fsm import ExerciseManage
 from handlers import exercises
 
@@ -296,7 +297,7 @@ async def test_unarchive_rejects_someone_elses_exercise(fresh_db, user_id):
 
     await exercises.exm_unarchive_exercise(callback, state)
 
-    callback.answer.assert_awaited_once_with("Упражнение не найдено", show_alert=True)
+    callback.answer.assert_awaited_once_with(ui.EXERCISE_NOT_FOUND_TEXT, show_alert=True)
     ex = await db.get_exercise(other_ex)
     assert ex["is_archived"] == 1
 
@@ -417,7 +418,7 @@ async def test_edit_group_rejects_someone_elses_exercise(fresh_db, user_id):
 
     await exercises.exm_edit_group(callback, state)
 
-    callback.answer.assert_awaited_once_with("Упражнение не найдено", show_alert=True)
+    callback.answer.assert_awaited_once_with(ui.EXERCISE_NOT_FOUND_TEXT, show_alert=True)
 
 
 # ---------- exercise photo upload ----------
