@@ -147,8 +147,7 @@ async def donate_paid(message: Message):
         user_id, stars, payment.telegram_payment_charge_id,
     )
     await message.answer(
-        f"Записал донат: {stars} ⭐. Спасибо — идёт на железо.\n"
-        "Дневник как был бесплатным для всех, так и остаётся: этот донат ничего не открывает и ничего не меняет.",
+        f"🔥 {stars} ⭐ — принял! Вот это по-нашему, уважение. Всё пойдёт на железо.",
     )
     if config.ADMIN_ID:
         who = f"@{message.from_user.username}" if message.from_user.username else str(user_id)

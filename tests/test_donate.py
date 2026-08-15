@@ -212,7 +212,7 @@ async def test_payment_thanks_the_donor(fresh_db):
 
     text = message.answer.await_args.args[0]
     assert "150" in text
-    assert "бесплатным" in text
+    assert "железо" in text
 
 
 async def test_payment_notifies_admin_with_the_charge_id(fresh_db, monkeypatch):
