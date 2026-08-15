@@ -20,6 +20,24 @@ from state_scaffold import clear_state_keep_ai
 
 router = Router(name="backfill")
 
+# Guards date-picking against a double tap (calendar cell / "Сегодня"/"Вчера" /
+# typed date): _date_chosen creates a workout row before the flow moves state
+# past BackfillFlow.awaiting_date, so two callbacks racing on the same tap
+# would each create their own db.create_workout — one of them winning the
+# state.update_data write and the other left as an orphaned "backfill"-status
+# workout nobody ever finishes. Same shape as handlers.workout._confirming.
+_picking: set[int] = set()
+
+
+def _try_claim_picking(user_id: int) -> bool:
+    """Atomically check-and-reserve `_picking` for this user — no `await`
+    between the membership check and the `.add()`, same reasoning as
+    ai_trainer._try_claim_busy."""
+    if user_id in _picking:
+        return False
+    _picking.add(user_id)
+    return True
+
 
 _BACKFILL_PROMPT = "📅 На какую дату занести тренировку?\nВыбери в календаре или напиши дату в формате дд.мм.гггг:"
 
@@ -56,17 +74,27 @@ async def bf_noop(callback: CallbackQuery):
 
 
 async def _date_chosen(event, state: FSMContext, date: dt.date):
-    """Open the exact same exercise picker / set-logging flow as a live workout, dated in the past."""
+    """Open the exact same exercise picker / set-logging flow as a live workout, dated in the past.
+
+    The greeting is sent, then the workout row is created and wired into
+    state, *before* the old calendar prompt is touched at all — its cleanup
+    is left to `_picker_screen_groups`'s own `ui.safe_edit`, which already
+    deletes it under `suppress(TelegramBadRequest)`. That ordering means a
+    stale/already-gone prompt can never abort the flow partway through and
+    leave the just-created "backfill" workout with nothing in state pointing
+    at it — the previous order deleted the prompt (unsuppressed) first, so a
+    failure there orphaned the row.
+    """
     from handlers.workout import _picker_screen_groups
 
-    started_at = f"{date.isoformat()}T12:00:00"
-    workout_id = await db.create_workout(event.from_user.id, started_at=started_at, status="backfill")
     greeting = f"🏋️ Тренировка — {formatting.format_date_ru(date)}"
     if isinstance(event, CallbackQuery):
-        await event.message.delete()
         sent = await event.message.answer(greeting)
     else:
         sent = await event.answer(greeting)
+
+    started_at = f"{date.isoformat()}T12:00:00"
+    workout_id = await db.create_workout(event.from_user.id, started_at=started_at, status="backfill")
     await state.update_data(
         workout_id=workout_id, live_chat_id=sent.chat.id, live_message_id=sent.message_id,
         last_by_exercise={}, is_backfill=True, bf_date=date.isoformat(),
@@ -77,21 +105,38 @@ async def _date_chosen(event, state: FSMContext, date: dt.date):
 
 @router.callback_query(StateFilter(BackfillFlow.awaiting_date), F.data.startswith("bf:date:"))
 async def bf_date_quick(callback: CallbackQuery, state: FSMContext):
-    date = dt.date.fromisoformat(callback.data.split(":", 2)[2])
-    await _date_chosen(callback, state, date)
-    await callback.answer()
+    """Claims `_picking` before the first `await`: two fast taps on the same
+    calendar cell (or "Сегодня"/"Вчера") both pass StateFilter before either
+    moves the state past awaiting_date, so without this guard both would call
+    _date_chosen and create their own backfill workout."""
+    user_id = callback.from_user.id
+    if not _try_claim_picking(user_id):
+        await callback.answer()
+        return
+    try:
+        date = dt.date.fromisoformat(callback.data.split(":", 2)[2])
+        await _date_chosen(callback, state, date)
+        await callback.answer()
+    finally:
+        _picking.discard(user_id)
 
 
 @router.message(StateFilter(BackfillFlow.awaiting_date), F.text)
 async def bf_date_text(message: Message, state: FSMContext):
-    try:
-        date = parse_ru_date(
-            message.text, today=timeutil.user_today(await db.get_user(message.from_user.id))
-        )
-    except ParseError as e:
-        await ui.reply_transient(message, e.message)
+    user_id = message.from_user.id
+    if not _try_claim_picking(user_id):
         return
-    await _date_chosen(message, state, date)
+    try:
+        try:
+            date = parse_ru_date(
+                message.text, today=timeutil.user_today(await db.get_user(user_id))
+            )
+        except ParseError as e:
+            await ui.reply_transient(message, e.message)
+            return
+        await _date_chosen(message, state, date)
+    finally:
+        _picking.discard(user_id)
 
 
 @router.callback_query(StateFilter(BackfillFlow.awaiting_date), F.data == "bf:cancel")
@@ -101,4 +146,4 @@ async def bf_cancel(callback: CallbackQuery, state: FSMContext):
     await clear_state_keep_ai(state)
     from handlers.workout import _show_main_menu
     await _show_main_menu(callback, state)
-    await callback.answer("Отменено")
+    await callback.answer("Отменил")

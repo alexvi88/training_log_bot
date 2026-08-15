@@ -219,6 +219,21 @@ def _reasoning_of(message_or_delta: Any) -> str:
     return extra.get("reasoning_content") or ""
 
 
+def _estimate_tokens_from_text(text: str) -> int:
+    """Грубая прикидка токенов, когда провайдер их не прислал (см. _completion_round).
+
+    ~4 символа на токен — не точная ставка ни для английского, ни тем более для
+    русского текста, но это не финальная цифра в отчёте, а fallback на случай
+    оборванного стрима: лучше приблизительно посчитанные деньги, чем молча
+    потерянное cost-событие.
+    """
+    return max(0, len(text) // 4)
+
+
+def _estimate_tokens_from_messages(messages: list[dict[str, Any]]) -> int:
+    return _estimate_tokens_from_text(json.dumps(messages, ensure_ascii=False))
+
+
 async def _log_llm_cost(user_id: Optional[int], model: str, usage: Any, *, source: str = "bot") -> None:
     """Fire-and-forget cost_events row for a chat-completion call (see
     db.get_llm_cost_breakdown / admin_tasks.py's daily report).
@@ -264,6 +279,78 @@ async def _log_llm_cost(user_id: Optional[int], model: str, usage: Any, *, sourc
         logger.exception("failed to log llm cost event")
 
 
+class LimitBlocked(Exception):
+    """Настоящий (не preview) отказ ai_limits.check внутри paid_call.
+
+    block несёт всё, что нужно вызывающей стороне, чтобы показать отказ
+    голосом тренера (block.user_text) — так же, как она делает это сегодня
+    после ручного `ai_limits.check` в хендлерах.
+    """
+
+    def __init__(self, block: ai_limits.Block) -> None:
+        super().__init__(block.log)
+        self.block = block
+
+
+async def paid_call(
+    user_id: Optional[int],
+    kind: Optional[str],
+    coro_factory: Callable[[], Awaitable[Any]],
+    *,
+    model: str = config.GROK_MODEL,
+    source: str = "bot",
+    on_block: Optional[Callable[[ai_limits.Block], Awaitable[None]]] = None,
+) -> Any:
+    """Единая обёртка «проверить лимит → вызвать модель → залогировать цену»
+    для НЕстримящих платных вызовов (`client.chat.completions.create`, один
+    ответ, без чанков). Основной агентный `ask()`/`_completion_round` сюда не
+    входит — у стрима свой preview и своя раздача чанков по ходу генерации.
+
+    Раньше эти три шага собирались руками в каждом месте вызова, и часть
+    новых платных вызовов регулярно забывала кусок: то `ai_limits.check`
+    вообще не звался (`comment_on_workout`, `weekly_digest` — до этой правки),
+    то cost-событие терялось, если код после ответа модели падал раньше
+    `_log_llm_cost`. Следующий платный вызов через `paid_call` написать
+    ПРОЩЕ, чем мимо неё: `await paid_call(user_id, kind, lambda: client.chat.
+    completions.create(...))` — check, сам вызов и cost-событие уже внутри.
+
+    kind — вид лимита (`ai_limits.KIND_*`) для проверки ПЕРЕД вызовом.
+    `None` — у шага нет своей персональной квоты (он не то, что просит
+    пользователь и что можно исчерпать за день, а системный шаг: комментарий
+    к тренировке, недельный дайджест, разбор импорта — их квота — количество
+    тренировок/дней, а не число обращений к модели). Тогда `ai_limits.check`
+    не зовётся вовсе, вместо того чтобы придумывать для него кем-то не
+    заведённый `kind`.
+
+    Настоящий (не preview) блок поднимает `LimitBlocked` ДО вызова —
+    `coro_factory` в этом случае не вызывается ни разу. preview (свой
+    аккаунт, ещё не нажавший «Понятно» сегодня) не отменяет шаг нигде в
+    проекте — тут так же: `coro_factory` вызывается как обычно, а `on_block`
+    получает `Block`, чтобы вызывающая сторона могла показать предупреждение
+    (см. `warn_about_limit` в handlers/ai_trainer.py).
+
+    Cost-событие пишется в `finally`, а не после успешной обработки ответа:
+    `analyze_food` кидает `ValueError` на битом JSON уже ПОСЛЕ того, как
+    деньги потрачены, и без `finally` такой вызов остался бы невидим и в
+    логе, и в дневном отчёте.
+    """
+    if kind is not None:
+        block = await ai_limits.check(user_id, kind)
+        if block is not None:
+            if block.preview:
+                if on_block is not None:
+                    await on_block(block)
+            else:
+                raise LimitBlocked(block)
+    response = None
+    try:
+        response = await coro_factory()
+        return response
+    finally:
+        if response is not None:
+            await _log_llm_cost(user_id, model, getattr(response, "usage", None), source=source)
+
+
 def is_configured() -> bool:
     return bool(config.XAI_API_KEY)
 
@@ -275,6 +362,10 @@ def _get_client() -> AsyncOpenAI:
             api_key=config.XAI_API_KEY,
             base_url=config.GROK_BASE_URL,
             timeout=config.AI_REQUEST_TIMEOUT_SECONDS,
+            # SDK's default (2 retries) silently re-fires a paid completion on
+            # timeout/5xx — up to three billed generations for one user tap.
+            # Retrying that ourselves, on purpose, is a separate decision.
+            max_retries=0,
         )
     return _client
 
@@ -290,7 +381,9 @@ def _get_audio_client() -> AsyncOpenAI:
     global _audio_client
     if _audio_client is None:
         _audio_client = AsyncOpenAI(
-            api_key=config.OPENAI_API_KEY, timeout=config.AI_REQUEST_TIMEOUT_SECONDS
+            api_key=config.OPENAI_API_KEY,
+            timeout=config.AI_REQUEST_TIMEOUT_SECONDS,
+            max_retries=0,  # same reasoning as _get_client — no silent paid retries
         )
     return _audio_client
 
@@ -375,7 +468,8 @@ SYSTEM_PROMPT = """\
 Характер: суровый, но поддерживающий опытный тренер, вайб подвальной качалки — прямо,
 жёстко и без розовых соплей, но искренне за прогресс пользователя и всегда на его
 стороне. При этом реально шаришь за науку, медицину и питание — объясняешь доказательно
-и просто, не льстишь и не выдумываешь.
+и просто, не льстишь и не выдумываешь. Без токсичности, сарказма и шейминга — не
+давишь виной за пропуски, малый объём, лёгкий вес и т.п.
 
 Твоя методика тренировок на гипертрофию, которую советуешь по умолчанию, если
 пользователь явно не просит другой подход, — ОДНА и та же для любой мышечной
@@ -468,8 +562,8 @@ get_bodyweight_history, она отдаёт всю историю дневник
 Если спрашивают, как перенести историю тренировок из другого приложения (Hevy,
 Strong и т.п.) — такая функция в боте ЕСТЬ, инструмента для неё у тебя нет, но
 путь есть: ⚙️ Настройки → 📥 Импорт CSV. Бот сам распознаёт колонки экспорта
-Hevy — можно прислать файл как есть, без ручной подгонки. Не говори, что импорта
-нет и что перенести историю нельзя.
+Hevy и Strong — можно прислать файл как есть, без ручной подгонки. Не говори,
+что импорта нет и что перенести историю нельзя.
 
 Также есть инструмент list_exercise_catalog — полный каталог упражнений-шаблонов
 бота по группам мышц. Используй его вместе со списком упражнений пользователя
@@ -797,8 +891,18 @@ async def _user_today(user_id: int) -> dt.date:
     return timeutil.user_today(await db.get_user(user_id))
 
 
-def _system_prompt(today: dt.date) -> str:
-    return SYSTEM_PROMPT + f"\nСегодня {today.isoformat()}."
+def _system_prompt() -> str:
+    """Системный промпт основного чата — байт-в-байт одинаковый у всех вопросов.
+
+    Раньше сюда вклеивалась дата («Сегодня …»), а это самое первое сообщение
+    запроса — общее для ВСЕХ пользователей и для КАЖДОГО хода разговора.
+    Смена даты раз в сутки рвала кэшированный префикс целиком (шапка на
+    одиннадцать тысяч токенов + вся история конкретного пользователя) у
+    каждого атлета одновременно. Дата тренеру по-прежнему нужна — она едет в
+    конце последнего user-сообщения (см. _ask_plain), а не в системном
+    промпте: там она разъезжается по одному ходу за раз, а не по всем сразу.
+    """
+    return SYSTEM_PROMPT
 
 
 SEARCH_SYSTEM_PROMPT = """\
@@ -1012,21 +1116,27 @@ async def comment_on_workout(user_id: int, workout_id: int) -> str:
     )
 
     client = _get_client()
-    response = await client.chat.completions.create(
-        model=config.GROK_MODEL,
-        max_tokens=700,
-        extra_body={"reasoning_effort": config.GROK_QUICK_REASONING_EFFORT},
-        extra_headers=_cache_headers(user_id),
-        messages=[
-            {
-                "role": "system",
-                "content": WORKOUT_COMMENT_SYSTEM_PROMPT
-                + f"\nСегодня {timeutil.user_today(user).isoformat()}.",
-            },
-            {"role": "user", "content": card_text},
-        ],
+    response = await paid_call(
+        user_id, None,
+        lambda: client.chat.completions.create(
+            model=config.GROK_MODEL,
+            max_tokens=700,
+            extra_body={"reasoning_effort": config.GROK_QUICK_REASONING_EFFORT},
+            # Свой scope: system-промпт (WORKOUT_COMMENT_SYSTEM_PROMPT) не имеет
+            # ничего общего с шапкой основного чата (ask/_ask_plain) — под тем же
+            # conv-id, что и main, это гарантированный промах по нему на СЛЕДУЮЩИЙ
+            # вопрос тренеру (см. docstring _cache_headers).
+            extra_headers=_cache_headers(user_id, scope="workout_comment"),
+            messages=[
+                {
+                    "role": "system",
+                    "content": WORKOUT_COMMENT_SYSTEM_PROMPT
+                    + f"\nСегодня {timeutil.user_today(user).isoformat()}.",
+                },
+                {"role": "user", "content": card_text},
+            ],
+        ),
     )
-    await _log_llm_cost(user_id, config.GROK_MODEL, getattr(response, "usage", None))
     text = (response.choices[0].message.content or "").strip()
     return text or "Не получилось сформулировать комментарий, попробуй ещё раз позже."
 
@@ -1037,6 +1147,11 @@ async def ensure_workout_comment(user: Any, workout_id: int) -> Optional[str]:
 
     Возвращает None, если показывать пока нечего (комментарии выключены и ещё не
     запрошены вручную, или AI-тренер не настроен на сервере).
+
+    Фоновый вызов (карточка тренировки рендерится и без него), поэтому в день
+    HARD-стопа по деньгам молча выходит без комментария — то же, что показал бы
+    любой другой платный шаг в этот день, только без сообщения пользователю
+    (спрашивать он ничего не спрашивал).
     """
     workout = await db.get_workout(workout_id)
     if workout is None:
@@ -1044,6 +1159,8 @@ async def ensure_workout_comment(user: Any, workout_id: int) -> Optional[str]:
     if workout["ai_comment"]:
         return workout["ai_comment"]
     if not user["ai_comments_enabled"] or not is_configured():
+        return None
+    if await ai_limits.spend_level() == ai_limits.KIND_SPEND_HARD:
         return None
     comment = await comment_on_workout(user["telegram_id"], workout_id)
     await db.set_workout_ai_comment(workout_id, comment)
@@ -1085,8 +1202,13 @@ async def weekly_digest(user_id: int) -> Optional[str]:
 
     One plain completion (no tools) over a compact summary of the week's volume,
     tonnage, and workout count. Used by the engagement job's Sunday digest slot.
+
+    Фоновая рассылка — молча выходит на HARD-стопе по деньгам, без сообщения:
+    это не ответ на чей-то вопрос, отказывать некому.
     """
     if not is_configured():
+        return None
+    if await ai_limits.spend_level() == ai_limits.KIND_SPEND_HARD:
         return None
     user = await db.get_user(user_id)
     if user is None:
@@ -1114,20 +1236,25 @@ async def weekly_digest(user_id: int) -> Optional[str]:
 
     client = _get_client()
     try:
-        response = await client.chat.completions.create(
-            model=config.GROK_MODEL,
-            max_tokens=500,
-            extra_body={"reasoning_effort": config.GROK_QUICK_REASONING_EFFORT},
-            extra_headers=_cache_headers(user_id),
-            messages=[
-                {"role": "system", "content": WEEKLY_DIGEST_SYSTEM_PROMPT},
-                {"role": "user", "content": summary},
-            ],
+        response = await paid_call(
+            user_id, None,
+            lambda: client.chat.completions.create(
+                model=config.GROK_MODEL,
+                max_tokens=500,
+                extra_body={"reasoning_effort": config.GROK_QUICK_REASONING_EFFORT},
+                # Свой scope — WEEKLY_DIGEST_SYSTEM_PROMPT не похож на шапку
+                # основного чата, под общим conv-id вытеснял бы её слот раз в
+                # неделю (см. docstring _cache_headers).
+                extra_headers=_cache_headers(user_id, scope="weekly_digest"),
+                messages=[
+                    {"role": "system", "content": WEEKLY_DIGEST_SYSTEM_PROMPT},
+                    {"role": "user", "content": summary},
+                ],
+            ),
         )
     except Exception:
         logger.exception("AI weekly digest generation failed for user %s", user_id)
         return None
-    await _log_llm_cost(user_id, config.GROK_MODEL, getattr(response, "usage", None))
     text = (response.choices[0].message.content or "").strip()
     return text or None
 
@@ -1265,20 +1392,22 @@ async def import_history_overview(user_id: int) -> Optional[str]:
 
     client = _get_client()
     try:
-        response = await client.chat.completions.create(
-            model=config.GROK_MODEL,
-            max_tokens=500,
-            extra_body={"reasoning_effort": config.GROK_QUICK_REASONING_EFFORT},
-            extra_headers=_cache_headers(user_id, scope="import_overview"),
-            messages=[
-                {"role": "system", "content": IMPORT_OVERVIEW_SYSTEM_PROMPT},
-                {"role": "user", "content": "\n".join(lines)},
-            ],
+        response = await paid_call(
+            user_id, None,
+            lambda: client.chat.completions.create(
+                model=config.GROK_MODEL,
+                max_tokens=500,
+                extra_body={"reasoning_effort": config.GROK_QUICK_REASONING_EFFORT},
+                extra_headers=_cache_headers(user_id, scope="import_overview"),
+                messages=[
+                    {"role": "system", "content": IMPORT_OVERVIEW_SYSTEM_PROMPT},
+                    {"role": "user", "content": "\n".join(lines)},
+                ],
+            ),
         )
     except Exception:
         logger.exception("AI import overview generation failed for user %s", user_id)
         return None
-    await _log_llm_cost(user_id, config.GROK_MODEL, getattr(response, "usage", None))
     text = (response.choices[0].message.content or "").strip()
     return text or None
 
@@ -1511,20 +1640,31 @@ async def analyze_food(
     if not parts:
         parts.append("Данных нет — верни description с пустой строкой.")
 
-    response = await client.chat.completions.create(
-        model=config.GROK_MODEL,
-        max_tokens=700 if with_macros else 200,
-        extra_body={"reasoning_effort": config.GROK_QUICK_REASONING_EFFORT},
-        extra_headers=_cache_headers(user_id),
-        messages=[
-            {
-                "role": "system",
-                "content": FOOD_ANALYSIS_SYSTEM_PROMPT if with_macros else FOOD_DESCRIBE_SYSTEM_PROMPT,
-            },
-            {"role": "user", "content": _plain_user_content("\n\n".join(parts), image_data_url)},
-        ],
+    # kind=None: квота еды (KIND_FOOD) уже проверена вызывающим хендлером ДО
+    # этого вызова (handlers/food_diary.py) — там же решается, показывать ли
+    # отказ и звать ли модель вовсе. Повторная проверка тут была бы либо
+    # немой (preview уже показан выше), либо дублирующим отказом без адресата
+    # (тут нет ни message, ни клавиатуры, чтобы что-то ответить).
+    response = await paid_call(
+        user_id, None,
+        lambda: client.chat.completions.create(
+            model=config.GROK_MODEL,
+            max_tokens=700 if with_macros else 200,
+            extra_body={"reasoning_effort": config.GROK_QUICK_REASONING_EFFORT},
+            # Свой scope — FOOD_ANALYSIS_SYSTEM_PROMPT/FOOD_DESCRIBE_SYSTEM_PROMPT не
+            # похожи на шапку основного чата, под общим conv-id вытесняли бы её слот
+            # на каждый разбор еды (см. docstring _cache_headers).
+            extra_headers=_cache_headers(user_id, scope="food"),
+            messages=[
+                {
+                    "role": "system",
+                    "content": FOOD_ANALYSIS_SYSTEM_PROMPT if with_macros else FOOD_DESCRIBE_SYSTEM_PROMPT,
+                },
+                {"role": "user", "content": _plain_user_content("\n\n".join(parts), image_data_url)},
+            ],
+        ),
+        source=source,
     )
-    await _log_llm_cost(user_id, config.GROK_MODEL, getattr(response, "usage", None), source=source)
     data = _extract_json_object(response.choices[0].message.content or "")
     is_food = bool(data.get("is_food", True))
 
@@ -3883,10 +4023,21 @@ async def _estimate_missing_macros(
     """
     if not is_configured():
         return False
+    # asyncio.wait_for cancels the wrapped coroutine on timeout — if the model
+    # request had already reached the provider by then, cancellation stops us
+    # from ever reaching analyze_food's own _log_llm_cost call, so a real,
+    # billed call went unlogged. asyncio.shield keeps the call itself running
+    # in the background past the timeout: we stop waiting for its *result*,
+    # but it still finishes and logs its own cost when it does.
+    task = asyncio.ensure_future(analyze_food(user_id, text=description, source=source))
     try:
-        estimate = await asyncio.wait_for(
-            analyze_food(user_id, text=description, source=source), timeout=_FOOD_ESTIMATE_TIMEOUT
+        estimate = await asyncio.wait_for(asyncio.shield(task), timeout=_FOOD_ESTIMATE_TIMEOUT)
+    except asyncio.TimeoutError:
+        logger.warning(
+            "food estimate timed out for user %s — оставляю досчитывать в фоне, "
+            "cost-событие запишет сама (см. asyncio.shield)", user_id,
         )
+        return False
     except Exception:
         logger.exception("food estimate failed for user %s", user_id)
         return False
@@ -4766,6 +4917,24 @@ async def _search_block(
                 await on_limit(block)
             continue
         return block
+    # Прочитанные выше значения разрешают поиск, но общий потолок делят ВСЕ
+    # пользователи разом, а от этой строки до сетевого похода в
+    # _web_search_findings — секунды. Личную гонку (тот же человек спросил
+    # дважды подряд) уже гасит busy-замок в handlers/ai_trainer.py, а вот
+    # параллельный всплеск вопросов от РАЗНЫХ людей мог бы весь пройти мимо
+    # read-проверки выше и провалиться сквозь потолок вместе. Тут гонка
+    # опаснее контракта «квота списывается только за находку» — поэтому
+    # резервируем место атомарно ДО вызова, а не после (см.
+    # db.try_increment_ai_search_count_global).
+    if not await db.try_increment_ai_search_count_global(config.AI_SEARCH_GLOBAL_DAILY_LIMIT):
+        logger.warning(
+            "AI global search cap: атомарная бронь не досталась — параллельный "
+            "всплеск запросов забрал последний слот между чтением счётчика и этой строкой"
+        )
+        return ai_limits.Block(
+            kind=ai_limits.KIND_SEARCH_GLOBAL,
+            log="search_global: race lost at atomic reserve",
+        )
     return None
 
 
@@ -4795,10 +4964,11 @@ async def ask(
     следующий вопрос начинается с 128.
 
     on_wire — колбэк, которому по завершении хода отдаётся ровно тот список
-    сообщений, что уехал модели (без ведущего системного промпта: он собирается
-    заново каждый раз, потому что содержит дату). Его и надо сохранить как
-    историю для следующего вопроса — тогда следующий запрос ДОПИСЫВАЕТ, а не
-    переписывает.
+    сообщений, что уехал модели (без ведущего системного промпта — он не
+    входит в историю и добавляется заново на каждый запрос, но теперь не
+    зависит от даты и байт-в-байт одинаков у всех ходов, см. _system_prompt).
+    Его и надо сохранить как историю для следующего вопроса — тогда следующий
+    запрос ДОПИСЫВАЕТ, а не переписывает.
 
     image_data_url — опционально, фото, которое пользователь прислал вместе с этим
     вопросом (data: URL, base64). Передаётся только в текущий ход; в history фото
@@ -4997,37 +5167,56 @@ async def _completion_round(
     tool_calls: dict[int, dict[str, Any]] = {}
     usage = None
     last_flush: Optional[float] = None
-    async for event in stream:
-        usage = getattr(event, "usage", None) or usage
-        if not event.choices:
-            continue
-        delta = event.choices[0].delta
-        reasoning_delta = _reasoning_of(delta)
-        if reasoning_delta:
-            reasoning_parts.append(reasoning_delta)
-        for tc in getattr(delta, "tool_calls", None) or []:
-            slot = tool_calls.setdefault(
-                tc.index, {"id": "", "name": "", "arguments": ""}
+    # xAI sends `usage` only on the final chunk. A timeout/cancellation/network
+    # drop partway through the `async for` used to leave `_log_llm_cost` never
+    # called at all — tokens the provider already billed us for went unlogged.
+    # `finished` tells the `finally` below whether the loop actually reached
+    # that final chunk, so it only reaches for the fallback estimate on abort.
+    finished = False
+    try:
+        async for event in stream:
+            usage = getattr(event, "usage", None) or usage
+            if not event.choices:
+                continue
+            delta = event.choices[0].delta
+            reasoning_delta = _reasoning_of(delta)
+            if reasoning_delta:
+                reasoning_parts.append(reasoning_delta)
+            for tc in getattr(delta, "tool_calls", None) or []:
+                slot = tool_calls.setdefault(
+                    tc.index, {"id": "", "name": "", "arguments": ""}
+                )
+                slot["id"] += tc.id or ""
+                if tc.function:
+                    slot["name"] += tc.function.name or ""
+                    slot["arguments"] += tc.function.arguments or ""
+            if delta.content:
+                parts.append(delta.content)
+                text = "".join(parts)
+                now = asyncio.get_running_loop().time()
+                # Before the first flush, time elapsed alone isn't a good signal —
+                # the wait for the model's first token already eats into it — so
+                # the first flush also needs enough text to be worth showing.
+                ready = (
+                    (last_flush is None and len(text) >= MIN_FIRST_FLUSH_CHARS)
+                    or (last_flush is not None and now - last_flush >= STREAM_FLUSH_SECONDS)
+                )
+                if ready:
+                    last_flush = now
+                    await on_chunk(text)
+        finished = True
+    finally:
+        if usage is None and not finished:
+            # Aborted before the final chunk arrived, so there's no real usage
+            # to report. Best available estimate: ~4 chars/token over the
+            # prompt actually sent and whatever completion text streamed back
+            # before the drop — better than silently losing the event, and the
+            # only signal we have without the provider's own count.
+            usage = SimpleNamespace(
+                prompt_tokens=_estimate_tokens_from_messages(messages),
+                completion_tokens=_estimate_tokens_from_text("".join(parts)),
             )
-            slot["id"] += tc.id or ""
-            if tc.function:
-                slot["name"] += tc.function.name or ""
-                slot["arguments"] += tc.function.arguments or ""
-        if delta.content:
-            parts.append(delta.content)
-            text = "".join(parts)
-            now = asyncio.get_running_loop().time()
-            # Before the first flush, time elapsed alone isn't a good signal —
-            # the wait for the model's first token already eats into it — so
-            # the first flush also needs enough text to be worth showing.
-            ready = (
-                (last_flush is None and len(text) >= MIN_FIRST_FLUSH_CHARS)
-                or (last_flush is not None and now - last_flush >= STREAM_FLUSH_SECONDS)
-            )
-            if ready:
-                last_flush = now
-                await on_chunk(text)
-    await _log_llm_cost(user_id, config.GROK_MODEL, usage)
+        await _log_llm_cost(user_id, config.GROK_MODEL, usage)
     return (
         "".join(parts),
         [_StreamedToolCall(slot) for slot in tool_calls.values()],
@@ -5062,7 +5251,7 @@ async def _ask_plain(
 ) -> str:
     client = _get_client()
     messages: list[dict[str, Any]] = [
-        {"role": "system", "content": _system_prompt(await _user_today(user_id))},
+        {"role": "system", "content": _system_prompt()},
         *history,
     ]
     if video_context:
@@ -5074,7 +5263,16 @@ async def _ask_plain(
                 "content": f"Результаты живого веб/X-поиска по текущему вопросу пользователя:\n{search_context}",
             }
         )
-    messages.append({"role": "user", "content": _plain_user_content(question, image_data_url)})
+    # Дата едет тут, в хвосте последнего user-сообщения, а не в системном
+    # промпте (см. _system_prompt): так меняется только этот, самый последний
+    # ход, а не общая для всех шапка запроса. Дальше эта же дата остаётся
+    # вморожена в сохранённую историю — прошлые ходы честно помнят, каким
+    # днём они были заданы, а следующий вопрос допишет уже свежую.
+    today = await _user_today(user_id)
+    question_with_date = f"{question}\n\nСегодня {today.isoformat()}."
+    messages.append(
+        {"role": "user", "content": _plain_user_content(question_with_date, image_data_url)}
+    )
 
     content = ""
     for _ in range(MAX_TOOL_ROUNDS + 1):
@@ -5148,7 +5346,7 @@ async def _ask_plain(
         final: dict[str, Any] = {"role": "assistant", "content": text}
         if reasoning:
             final["reasoning_content"] = reasoning
-        wire = messages[1:] + [final]  # без системного промпта: в нём дата, он пересобирается
+        wire = messages[1:] + [final]  # без системного промпта: он собирается заново на каждый ход
         # Фото в историю не кладём: это база64 на мегабайты в FSM-файле и повторная
         # плата за image-токены на каждом следующем вопросе. Подменяем на текст
         # вопроса — префикс рвётся с этого сообщения, но всё, что до него (шапка на
@@ -5156,7 +5354,7 @@ async def _ask_plain(
         if image_data_url:
             for m in wire:
                 if m.get("role") == "user" and not isinstance(m.get("content"), str):
-                    m["content"] = question
+                    m["content"] = question_with_date
         await on_wire(_trim_wire_history(wire, config.AI_WIRE_HISTORY_MAX_CHARS))
 
     return text or "Не получилось сформулировать ответ, попробуй переспросить."
@@ -5447,5 +5645,8 @@ async def _web_search_findings(
     await _log_server_tool_calls(user_id, response)
     if not (response.citations or response.server_side_tool_usage):
         return None
+    # Личный счётчик — единственное, что двигается тут: общий потолок уже
+    # зарезервирован раньше, в _search_block, атомарно и ДО этого сетевого
+    # похода (см. db.try_increment_ai_search_count_global).
     await db.increment_ai_search_count(user_id)
     return (response.content or "").strip() or None

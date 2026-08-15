@@ -45,6 +45,23 @@ router = Router(name="food_diary")
 
 logger = logging.getLogger(__name__)
 
+# Guards "fd:ok" against a double tap: fd_pending is only cleared inside
+# _show_day, after db.add_food_entry has already run — and two callbacks from
+# the same user can run concurrently, each reading its own snapshot of state
+# with fd_pending still set, so the second tap would save the same meal a
+# second time. Same shape as handlers.workout._confirming / _try_claim_weight_confirm.
+_confirming: set[int] = set()
+
+
+def _try_claim_confirming(user_id: int) -> bool:
+    """Atomically check-and-reserve `_confirming` for this user — no `await`
+    between the membership check and the `.add()`, same reasoning as
+    ai_trainer._try_claim_busy."""
+    if user_id in _confirming:
+        return False
+    _confirming.add(user_id)
+    return True
+
 # Телеграмовское фото и так пережато, но подпирать base64-раздутым мегабайтником
 # запрос к модели незачем — тот же порог, что у фото-вопросов AI-тренеру.
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
@@ -366,7 +383,9 @@ async def _analyze_and_show(
 async def fd_photo_entry(message: Message, state: FSMContext):
     image_data_url = await _download_photo_as_data_url(message)
     if image_data_url is None:
-        await message.reply("Фото слишком большое, пришли поменьше.")
+        await message.reply(
+            f"Фото слишком большое — уложись в {MAX_IMAGE_BYTES // (1024 * 1024)} МБ."
+        )
         return
     await _analyze_and_show(
         message,
@@ -512,13 +531,25 @@ async def _save_now(event, state: FSMContext, pending: dict[str, Any]) -> None:
 
 @router.callback_query(StateFilter(FoodDiaryFlow.confirming), F.data == "fd:ok")
 async def fd_confirm(callback: CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    pending = data.get("fd_pending")
-    if not pending:
-        await callback.answer("Нечего сохранять", show_alert=True)
+    """Claims `_confirming` before the first `await`: two fast taps on
+    «Записал 👌» both read `fd_pending` while it's still set (each holds its
+    own snapshot), so without this guard both would call db.add_food_entry —
+    clearing fd_pending only stops a *later* tap, not a second one racing the
+    first."""
+    user_id = callback.from_user.id
+    if not _try_claim_confirming(user_id):
+        await callback.answer()
         return
-    await _save_now(callback, state, pending)
-    await callback.answer("Записал 👌")
+    try:
+        data = await state.get_data()
+        pending = data.get("fd_pending")
+        if not pending:
+            await callback.answer("Нечего сохранять", show_alert=True)
+            return
+        await _save_now(callback, state, pending)
+        await callback.answer("Записал 👌")
+    finally:
+        _confirming.discard(user_id)
 
 
 # ---------- удаление и история ----------

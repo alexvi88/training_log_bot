@@ -11,12 +11,18 @@ from typing import Optional
 from aiogram import Bot
 from aiogram.types import FSInputFile
 
+import announcements
 import config
 import db
 
 logger = logging.getLogger(__name__)
 
 _BACKUP_PREFIX = "training_log_backup_"
+
+# Daily-rotation pushes are pure history past this many days; kept out of
+# config.py deliberately narrow (only this job reads it) — see
+# db.prune_old_pushes for why announcement categories are exempt below.
+PUSH_RETENTION_DAYS = 90
 
 
 def _seconds_until_next_run(hour: int) -> float:
@@ -229,13 +235,6 @@ async def _send_daily_report(bot: Bot, backup_path: Optional[str]) -> None:
             f"{cost_report}"
         ),
     )
-    await db.prune_old_cost_events(config.COST_EVENTS_RETENTION_DAYS)
-    await db.prune_old_user_events(config.ACTIVITY_RETENTION_DAYS)
-    await db.prune_old_limit_acks()
-    cutoff = (
-        dt.datetime.now() - dt.timedelta(days=config.SHARED_ITEMS_RETENTION_DAYS)
-    ).isoformat(timespec="seconds")
-    await db.delete_shared_items_older_than(cutoff)
 
     # Документом уходит та же копия, что уже легла на диск (см.
     # _rotate_disk_backup) — не делаем вторую только ради Telegram: если диск
@@ -259,6 +258,41 @@ async def _send_daily_report(bot: Bot, backup_path: Optional[str]) -> None:
         finally:
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)
+
+
+async def _run_retention_cleanup() -> None:
+    """Стереть то, что дольше положенного лежит в базе — стоимость AI-вызовов,
+    сырой лог действий, отметки о показанных предупреждениях лимита, отданные
+    ссылки на общие тренировки."""
+    await db.prune_old_cost_events(config.COST_EVENTS_RETENTION_DAYS)
+    await db.prune_old_user_events(config.ACTIVITY_RETENTION_DAYS)
+    await db.prune_old_limit_acks()
+    await db.prune_old_pushes(
+        PUSH_RETENTION_DAYS,
+        keep_categories=tuple(ann.key for ann in announcements.ANNOUNCEMENTS),
+    )
+    cutoff = (
+        dt.datetime.now() - dt.timedelta(days=config.SHARED_ITEMS_RETENTION_DAYS)
+    ).isoformat(timespec="seconds")
+    await db.delete_shared_items_older_than(cutoff)
+
+
+async def run_retention_cleanup_job() -> None:
+    """Суточная чистка ретеншна — отдельной задачей, как и прополка OAuth.
+
+    Раньше эти четыре prune-вызова жили внутри `_send_daily_report`, ПОСЛЕ
+    `bot.send_message` админу: без `ADMIN_ID` весь `run_daily_admin_jobs`
+    выходит сразу же (см. проверку в начале), а если админ заблокировал бота,
+    `send_message` бросает исключение раньше, чем очередь доходит до чистки.
+    В обоих случаях таблицы не чистились бы совсем — тот же самый долг, что
+    был у прополки OAuth до её выделения (см. run_oauth_purge_job).
+    """
+    while True:
+        await asyncio.sleep(_seconds_until_next_run(config.ADMIN_REPORT_HOUR))
+        try:
+            await _run_retention_cleanup()
+        except Exception:
+            logger.exception("Retention cleanup failed")
 
 
 async def run_oauth_purge_job() -> None:

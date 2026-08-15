@@ -116,6 +116,16 @@ ENGAGEMENT_ENABLED = os.getenv("ENGAGEMENT_ENABLED", "true").lower() == "true"
 # тестовом развороте, чтобы копия базы не разослала релиз повторно.
 ANNOUNCEMENTS_ENABLED = os.getenv("ANNOUNCEMENTS_ENABLED", "true").lower() == "true"
 
+# Донат «Поддержать проект» (см. handlers/donate.py, MONETIZATION.md п.4) —
+# обычный invoice в XTR без выдачи чего-либо взамен и без связи с монетизацией
+# AI-тренера (PR #386): лимиты не трогает, запускается независимо и раньше.
+# Выключатель прячет кнопку в главном меню и гасит устаревшие callback'и —
+# на случай тестового окружения или если донат решат временно снять.
+DONATIONS_ENABLED = os.getenv("DONATIONS_ENABLED", "true").lower() == "true"
+
+# Пресеты на экране доната, в звёздах — решение записано в MONETIZATION.md.
+DONATE_PRESETS_STARS: tuple[int, ...] = (50, 150, 500)
+
 # Local hour (0-23) at which the daily engagement job evaluates and sends pushes.
 # Час местный, и он применяется только к тем, у кого часовой пояс известен: кто
 # пояс не выставлял, получает пуш в час, безопасный для всех поясов аудитории

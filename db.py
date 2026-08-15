@@ -74,7 +74,12 @@ CREATE TABLE IF NOT EXISTS users (
     -- подсказка под первым пушем (engagement._deliver) не должна лезть к тем,
     -- кто пояс уже выбрал.
     tz_set_by_user INTEGER NOT NULL DEFAULT 0,
-    tz_push_hint_shown INTEGER NOT NULL DEFAULT 0
+    tz_push_hint_shown INTEGER NOT NULL DEFAULT 0,
+    -- Одноразовая подсказка под первым ответом AI-тренера: он не только
+    -- отвечает, но и умеет сам записать вес, завести упражнение, посчитать еду
+    -- (см. handlers.ai_trainer.ACTIONS_HINT_TEXT). Один раз за жизнь аккаунта —
+    -- дальше молчим: занос данных через модель платный, промоутить его нельзя.
+    ai_actions_hint_shown INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS muscle_groups (
@@ -153,8 +158,10 @@ CREATE INDEX IF NOT EXISTS idx_block_exercises_block ON block_exercises (block_i
 -- вставляло вторую строку молча (db.merge_exercises), а суперсет с одним и тем
 -- же движением в обеих половинах ломает и живой экран, и правку прошлой
 -- тренировки. Второй рубеж — сама merge_exercises чистит коллизию до переноса.
-CREATE UNIQUE INDEX IF NOT EXISTS idx_block_exercises_unique
-    ON block_exercises (block_id, exercise_id);
+-- Not created here: on an upgrade from an old on-disk DB, dupes from the merge
+-- bug above may already exist, and CREATE UNIQUE INDEX would fail outright
+-- before _migrate_schema gets a chance to run _dedupe_exercise_links.
+-- _migrate_schema creates it right after that call.
 
 -- A note ("!болит плечо", "new training scheme") is tied to one workout's
 -- attempt at an exercise, not the exercise itself — it shouldn't resurface on
@@ -402,8 +409,8 @@ CREATE TABLE IF NOT EXISTS routine_exercises (
 );
 CREATE INDEX IF NOT EXISTS idx_routine_exercises_routine ON routine_exercises (routine_id);
 -- То же этажом выше: день программы не должен содержать одно упражнение дважды.
-CREATE UNIQUE INDEX IF NOT EXISTS idx_routine_exercises_unique
-    ON routine_exercises (routine_id, exercise_id);
+-- Not created here for the same reason idx_block_exercises_unique isn't (see
+-- above): _migrate_schema creates it after _dedupe_exercise_links runs.
 
 -- Результаты забегов мини-игры «Кач-Раннер» (см. game_server.py): каждая
 -- завершённая попытка одной строкой, рекорд — MAX(distance) по пользователю.
@@ -416,6 +423,23 @@ CREATE TABLE IF NOT EXISTS game_results (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_game_results_user ON game_results (telegram_id, distance);
+
+-- Донат «Поддержать проект» (handlers/donate.py) — обычный invoice в XTR,
+-- без выдачи чего-либо взамен. Ничего общего с будущим billing из PR #386:
+-- отдельная маленькая таблица, а не переиспользование их star_payments.
+--
+-- charge_id — telegram_payment_charge_id, ключ идемпотентности: Telegram
+-- умеет доставить successful_payment повторно (ретрай апдейта после
+-- обрыва), и без UNIQUE один донат превратился бы в два ряда и две
+-- благодарности.
+CREATE TABLE IF NOT EXISTS donations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    charge_id TEXT NOT NULL UNIQUE,
+    stars INTEGER NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_donations_created ON donations (created_at);
 
 CREATE TABLE IF NOT EXISTS cost_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -611,6 +635,13 @@ def now_iso() -> str:
 def _local_day(column: str, tz_offset: int) -> str:
     """SQL-выражение «календарный день по часам пользователя» для UTC-столбца."""
     return f"date({column}, '{int(tz_offset):+d} hours')"
+
+
+def _local_hour(column: str, tz_offset: int) -> str:
+    """SQL-выражение «час по часам пользователя» для UTC-столбца — тот же
+    сдвиг, что и _local_day, только для ачивок «Ранняя пташка»/«Ночная смена»,
+    которые до этого сверялись с часом сервера (UTC) напрямую."""
+    return f"CAST(strftime('%H', {column}, '{int(tz_offset):+d} hours') AS INTEGER)"
 
 
 async def user_tz_offset(user_id: int) -> int:
@@ -899,6 +930,13 @@ async def _migrate_schema() -> None:
         # «часы сбились — скажи пояс» живёт под первым пушем и не должна
         # повторяться под вторым.
         await _conn.execute("ALTER TABLE users ADD COLUMN tz_push_hint_shown INTEGER NOT NULL DEFAULT 0")
+    if "ai_actions_hint_shown" not in user_cols:
+        # Одноразовая отметка — та же идея, что voice_hint_shown выше: подсказка
+        # «могу и сам записать» живёт под первым ответом AI-тренера и не должна
+        # повторяться под вторым (см. handlers.ai_trainer.ACTIONS_HINT_TEXT).
+        await _conn.execute(
+            "ALTER TABLE users ADD COLUMN ai_actions_hint_shown INTEGER NOT NULL DEFAULT 0"
+        )
 
     set_cols = await _column_names("sets")
     if "is_warmup" in set_cols:
@@ -915,6 +953,14 @@ async def _migrate_schema() -> None:
         await _conn.execute("ALTER TABLE routine_exercises ADD COLUMN progression TEXT")
 
     await _dedupe_exercise_links()
+    await _conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_block_exercises_unique "
+        "ON block_exercises (block_id, exercise_id)"
+    )
+    await _conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_routine_exercises_unique "
+        "ON routine_exercises (routine_id, exercise_id)"
+    )
 
     routine_cols = await _column_names("routines")
     if "program_name" not in routine_cols:
@@ -946,6 +992,13 @@ async def _migrate_schema() -> None:
         # Best available approximation for rows sent before the column existed:
         # the server date they were written on.
         await _conn.execute("UPDATE pushes SET sent_on = date(sent_at) WHERE sent_on IS NULL")
+    # has_announcement_push/count_announcement_recipients/list_announcement_recipients
+    # all filter `pushes` by category alone (no telegram_id, no date), and the
+    # table only grows — every announcement/report checks its own recipient
+    # list against the *whole* table on every call. Added here rather than in
+    # the executescript SCHEMA so an existing on-disk DB (already past the
+    # CREATE TABLE IF NOT EXISTS) picks it up too.
+    await _conn.execute("CREATE INDEX IF NOT EXISTS idx_pushes_category ON pushes (category)")
 
     await _conn.commit()
 
@@ -1375,12 +1428,20 @@ async def _migrate_muscle_groups() -> None:
 # ---------- users ----------
 
 async def get_or_create_user(telegram_id: int, username: Optional[str]) -> aiosqlite.Row:
+    """The user's row, creating it if this is their first /start.
+
+    Check and insert happen under the same lock — same reasoning as
+    get_or_create_active_workout: a double-fired first update (aiogram
+    processes updates concurrently) had both see no row and both try to
+    INSERT, and the loser died with an IntegrityError on the telegram_id
+    unique constraint instead of just returning the row the winner made.
+    """
     db = conn()
-    cur = await db.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,))
-    row = await cur.fetchone()
-    if row:
-        return row
     async with _write_lock:
+        cur = await db.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,))
+        row = await cur.fetchone()
+        if row:
+            return row
         await db.execute(
             "INSERT INTO users (telegram_id, username, created_at, unit, e1rm_formula, tz_offset) "
             "VALUES (?, ?, ?, ?, ?, ?)",
@@ -1399,8 +1460,8 @@ async def get_or_create_user(telegram_id: int, username: Optional[str]) -> aiosq
             ),
         )
         await db.commit()
-    cur = await db.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,))
-    return await cur.fetchone()
+        cur = await db.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,))
+        return await cur.fetchone()
 
 
 async def get_user(telegram_id: int) -> Optional[aiosqlite.Row]:
@@ -2323,74 +2384,83 @@ async def merge_exercises(user_id: int, keep_id: int, drop_id: int) -> str:
     ):
         return MERGE_IN_ACTIVE_WORKOUT
 
+    # Каждый DML ниже под одной транзакцией: частичный перенос, брошенный на
+    # середине (см. discard_workout про то же рассуждение), оставил бы историю
+    # переехавшей только наполовину — часть подходов уже на keep_id, часть ещё
+    # на drop_id, который следующая строка вот-вот удалит совсем.
     async with _write_lock:
-        await conn().execute(
-            "UPDATE sets SET exercise_id = ? WHERE exercise_id = ?", (keep_id, drop_id)
-        )
-        # block_exercises: у одного блока (суперсета) могли быть оба упражнения.
-        # UNIQUE на (block_id, exercise_id) нет, так что БД пропустила бы дубль
-        # молча — блок с одной и той же строкой дважды ломает и экран живой
-        # сессии, и редактирование прошлой тренировки.
-        await conn().execute(
-            "DELETE FROM block_exercises WHERE exercise_id = ? AND block_id IN "
-            "(SELECT block_id FROM block_exercises WHERE exercise_id = ?)",
-            (drop_id, keep_id),
-        )
-        await conn().execute(
-            "UPDATE block_exercises SET exercise_id = ? WHERE exercise_id = ?", (keep_id, drop_id)
-        )
-        # routine_exercises: то же самое днём программы. Схему и правило
-        # прогрессии подбираем со стороны, которую убираем, если у оставшейся
-        # их нет, — иначе объединение молча обнуляло бы «4×8».
-        await conn().execute(
-            "UPDATE routine_exercises SET "
-            "  target = COALESCE(target, (SELECT d.target FROM routine_exercises d "
-            "    WHERE d.exercise_id = ? AND d.routine_id = routine_exercises.routine_id)), "
-            "  progression = COALESCE(progression, (SELECT d.progression FROM routine_exercises d "
-            "    WHERE d.exercise_id = ? AND d.routine_id = routine_exercises.routine_id)) "
-            "WHERE exercise_id = ? AND routine_id IN "
-            "  (SELECT routine_id FROM routine_exercises WHERE exercise_id = ?)",
-            (drop_id, drop_id, keep_id, drop_id),
-        )
-        await conn().execute(
-            "DELETE FROM routine_exercises WHERE exercise_id = ? AND routine_id IN "
-            "(SELECT routine_id FROM routine_exercises WHERE exercise_id = ?)",
-            (drop_id, keep_id),
-        )
-        await conn().execute(
-            "UPDATE routine_exercises SET exercise_id = ? WHERE exercise_id = ?", (keep_id, drop_id)
-        )
-        # exercise_notes is keyed on (workout_id, exercise_id) — if a workout
-        # already has a note under keep_id, drop_id's note for that same
-        # workout would collide with the row it's about to become, so it's
-        # dropped in favor of keep's.
-        await conn().execute(
-            "DELETE FROM exercise_notes WHERE exercise_id = ? AND workout_id IN "
-            "(SELECT workout_id FROM exercise_notes WHERE exercise_id = ?)",
-            (drop_id, keep_id),
-        )
-        await conn().execute(
-            "UPDATE exercise_notes SET exercise_id = ? WHERE exercise_id = ?", (keep_id, drop_id)
-        )
-        if drop["last_used_at"] and (not keep["last_used_at"] or drop["last_used_at"] > keep["last_used_at"]):
-            await conn().execute(
-                "UPDATE exercises SET last_used_at = ? WHERE id = ?", (drop["last_used_at"], keep_id)
+        db = conn()
+        try:
+            await db.execute(
+                "UPDATE sets SET exercise_id = ? WHERE exercise_id = ?", (keep_id, drop_id)
             )
-        if not keep["description"] and drop["description"]:
-            await conn().execute(
-                "UPDATE exercises SET description = ? WHERE id = ?", (drop["description"], keep_id)
+            # block_exercises: у одного блока (суперсета) могли быть оба упражнения.
+            # UNIQUE на (block_id, exercise_id) нет, так что БД пропустила бы дубль
+            # молча — блок с одной и той же строкой дважды ломает и экран живой
+            # сессии, и редактирование прошлой тренировки.
+            await db.execute(
+                "DELETE FROM block_exercises WHERE exercise_id = ? AND block_id IN "
+                "(SELECT block_id FROM block_exercises WHERE exercise_id = ?)",
+                (drop_id, keep_id),
             )
-        if not keep["custom_photo_file_id"] and drop["custom_photo_file_id"]:
-            await conn().execute(
-                "UPDATE exercises SET custom_photo_file_id = ? WHERE id = ?",
-                (drop["custom_photo_file_id"], keep_id),
+            await db.execute(
+                "UPDATE block_exercises SET exercise_id = ? WHERE exercise_id = ?", (keep_id, drop_id)
             )
-        if not keep["notes"] and drop["notes"]:
-            await conn().execute(
-                "UPDATE exercises SET notes = ? WHERE id = ?", (drop["notes"], keep_id)
+            # routine_exercises: то же самое днём программы. Схему и правило
+            # прогрессии подбираем со стороны, которую убираем, если у оставшейся
+            # их нет, — иначе объединение молча обнуляло бы «4×8».
+            await db.execute(
+                "UPDATE routine_exercises SET "
+                "  target = COALESCE(target, (SELECT d.target FROM routine_exercises d "
+                "    WHERE d.exercise_id = ? AND d.routine_id = routine_exercises.routine_id)), "
+                "  progression = COALESCE(progression, (SELECT d.progression FROM routine_exercises d "
+                "    WHERE d.exercise_id = ? AND d.routine_id = routine_exercises.routine_id)) "
+                "WHERE exercise_id = ? AND routine_id IN "
+                "  (SELECT routine_id FROM routine_exercises WHERE exercise_id = ?)",
+                (drop_id, drop_id, keep_id, drop_id),
             )
-        await conn().execute("DELETE FROM exercises WHERE id = ?", (drop_id,))
-        await conn().commit()
+            await db.execute(
+                "DELETE FROM routine_exercises WHERE exercise_id = ? AND routine_id IN "
+                "(SELECT routine_id FROM routine_exercises WHERE exercise_id = ?)",
+                (drop_id, keep_id),
+            )
+            await db.execute(
+                "UPDATE routine_exercises SET exercise_id = ? WHERE exercise_id = ?", (keep_id, drop_id)
+            )
+            # exercise_notes is keyed on (workout_id, exercise_id) — if a workout
+            # already has a note under keep_id, drop_id's note for that same
+            # workout would collide with the row it's about to become, so it's
+            # dropped in favor of keep's.
+            await db.execute(
+                "DELETE FROM exercise_notes WHERE exercise_id = ? AND workout_id IN "
+                "(SELECT workout_id FROM exercise_notes WHERE exercise_id = ?)",
+                (drop_id, keep_id),
+            )
+            await db.execute(
+                "UPDATE exercise_notes SET exercise_id = ? WHERE exercise_id = ?", (keep_id, drop_id)
+            )
+            if drop["last_used_at"] and (not keep["last_used_at"] or drop["last_used_at"] > keep["last_used_at"]):
+                await db.execute(
+                    "UPDATE exercises SET last_used_at = ? WHERE id = ?", (drop["last_used_at"], keep_id)
+                )
+            if not keep["description"] and drop["description"]:
+                await db.execute(
+                    "UPDATE exercises SET description = ? WHERE id = ?", (drop["description"], keep_id)
+                )
+            if not keep["custom_photo_file_id"] and drop["custom_photo_file_id"]:
+                await db.execute(
+                    "UPDATE exercises SET custom_photo_file_id = ? WHERE id = ?",
+                    (drop["custom_photo_file_id"], keep_id),
+                )
+            if not keep["notes"] and drop["notes"]:
+                await db.execute(
+                    "UPDATE exercises SET notes = ? WHERE id = ?", (drop["notes"], keep_id)
+                )
+            await db.execute("DELETE FROM exercises WHERE id = ?", (drop_id,))
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
     return MERGE_OK
 
 
@@ -2752,6 +2822,22 @@ async def mark_tz_push_hint_shown(user_id: int) -> None:
         await conn().commit()
 
 
+async def claim_ai_actions_hint(user_id: int) -> bool:
+    """True ровно один раз за жизнь аккаунта — пора показать подсказку «могу и
+    сам записать» под первым ответом AI-тренера (см. handlers.ai_trainer.
+    ACTIONS_HINT_TEXT). Проверка и отметка одним UPDATE под общим замком — тот
+    же приём, что у register_manual_sets_and_check_hint: два ответа, пришедших
+    подряд, не смогут оба решить, что подсказку ещё не показывали."""
+    async with _write_lock:
+        cur = await conn().execute(
+            "UPDATE users SET ai_actions_hint_shown = 1 "
+            "WHERE telegram_id = ? AND ai_actions_hint_shown = 0",
+            (user_id,),
+        )
+        await conn().commit()
+        return cur.rowcount > 0
+
+
 async def has_manual_set(user_id: int) -> bool:
     """Дешёвая проверка «записал ли человек хоть один подход сам» — гасит
     подсказку про формат «100 8» на экране открытого упражнения.
@@ -2857,12 +2943,19 @@ async def max_e1rm_before_workout(
     return (await cur.fetchone())["mx"]
 
 
-async def achievement_extremes(user_id: int) -> dict[str, Any]:
+async def achievement_extremes(
+    user_id: int, *, tz_offset: Optional[int] = None
+) -> dict[str, Any]:
     """Пер-сессионные экстремумы и счётчики для новых семей ачивок — одним
     проходом по finished-тренировкам, чтобы resync не ходил по ним по одной.
 
     Тоннаж и повторы — сырые, в единицах пользователя: нормализация в кг
     остаётся на achievement_sync, как и у остальных полей контекста.
+
+    early_workouts режется местным часом пользователя (см. _local_hour) — до
+    этого «до 7 утра» сверялось с часом сервера (UTC) и «Клуб пяти утра»
+    (early10) мог не совпасть с тем, что человек видел на «Ранней пташке»,
+    которая для только что закрытой тренировки уже использует местный час.
     """
     cur = await conn().execute(
         "SELECT COALESCE(MAX(sets_count), 0) AS max_sets, "
@@ -2895,12 +2988,18 @@ async def achievement_extremes(user_id: int) -> dict[str, Any]:
         "SELECT EXISTS("
         "  SELECT 1 FROM workout_blocks b JOIN workouts w ON w.id = b.workout_id "
         "  WHERE w.user_id = ? AND w.status = 'finished' AND b.type != 'single'"
-        ") AS has_superset, "
-        "(SELECT COUNT(*) FROM workouts w2 WHERE w2.user_id = ? AND w2.status = 'finished' "
-        " AND CAST(strftime('%H', w2.started_at) AS INTEGER) < 7) AS early_workouts",
-        (user_id, user_id),
+        ") AS has_superset",
+        (user_id,),
     )
     extra = dict(await cur.fetchone())
+    hour = _local_hour("w2.started_at", await _tz_offset_of(user_id, tz_offset))
+    cur = await conn().execute(
+        f"SELECT COUNT(*) AS early_workouts FROM workouts w2 "
+        "WHERE w2.user_id = ? AND w2.status = 'finished' "
+        f"AND {hour} < 7",
+        (user_id,),
+    )
+    extra["early_workouts"] = (await cur.fetchone())["early_workouts"]
     return {**per_session, **per_set, **extra}
 
 
@@ -2922,9 +3021,19 @@ async def list_food_entry_dates(telegram_id: int) -> list[str]:
 
 async def max_weight_ever(user_id: int) -> float:
     """Heaviest single set (any exercise) across finished workouts — for weight-club
-    achievements."""
+    achievements.
+
+    Goes through LOAD_WEIGHT_SQL rather than raw `s.weight`, same as every
+    other tonnage/e1RM aggregate: on an assisted movement (gravitron, band)
+    the recorded weight is the *assist*, and crediting it straight to the
+    club max let a light assist number stand in for a heavy lift, or — worse
+    — read as the person's own bodyweight-minus-assist load being ignored
+    entirely. `load_weight` already holds the correctly-computed effective
+    load for these sets (see effective_load/_load_weight_for); plain iron
+    keeps reading as `s.weight` since load_weight is NULL for it (COALESCE).
+    """
     cur = await conn().execute(
-        "SELECT COALESCE(MAX(s.weight), 0) AS mx FROM sets s "
+        f"SELECT COALESCE(MAX({LOAD_WEIGHT_SQL}), 0) AS mx FROM sets s "
         "JOIN workout_blocks b ON b.id = s.block_id "
         "JOIN workouts w ON w.id = b.workout_id "
         "WHERE w.user_id = ? AND w.status = 'finished'",
@@ -3528,12 +3637,22 @@ async def delete_block_and_sets(block_id: int) -> None:
     """Drop a block along with every set it holds — "remove this exercise from
     a past workout entirely". delete_block on its own assumes the block is
     already empty (every existing caller empties it first); this is for the
-    one case where it isn't."""
+    one case where it isn't.
+
+    Same rollback rule as discard_workout: a partial delete left uncommitted
+    would ride in on the next unrelated commit on this connection and leave
+    the block gutted without actually being gone.
+    """
     async with _write_lock:
-        await conn().execute("DELETE FROM sets WHERE block_id = ?", (block_id,))
-        await conn().execute("DELETE FROM block_exercises WHERE block_id = ?", (block_id,))
-        await conn().execute("DELETE FROM workout_blocks WHERE id = ?", (block_id,))
-        await conn().commit()
+        db = conn()
+        try:
+            await db.execute("DELETE FROM sets WHERE block_id = ?", (block_id,))
+            await db.execute("DELETE FROM block_exercises WHERE block_id = ?", (block_id,))
+            await db.execute("DELETE FROM workout_blocks WHERE id = ?", (block_id,))
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
 
 
 async def list_sets_for_block(block_id: int) -> list[aiosqlite.Row]:
@@ -5422,6 +5541,23 @@ async def log_cost_event(
         await conn().commit()
 
 
+def _day_bounds(date_str: str) -> tuple[str, str]:
+    """[start, end) для календарного дня `date_str` (YYYY-MM-DD), в тех же
+    ISO-строках, что и created_at.
+
+    Замена `date(created_at) = ?`: та форма считает верно, но не сарганивает
+    idx_cost_events_created (индекс по сырому created_at, а не по значению
+    функции над ним) — на выборке за один день это full table scan там, где
+    таблица растёт вечно. Диапазон `created_at >= start AND created_at < end`
+    читает тот же индекс по range scan. Строковое сравнение ISO-меток даёт то
+    же самое множество строк: created_at всегда длиннее date_str-префикса
+    (есть время), так что лексикографическое `>=`/`<` совпадает с датным.
+    """
+    start = dt.date.fromisoformat(date_str)
+    end = start + dt.timedelta(days=1)
+    return start.isoformat(), end.isoformat()
+
+
 async def get_llm_cost_breakdown(date_str: str) -> dict[str, dict[str, int]]:
     """Per-model токены за календарный день по событиям llm_call.
 
@@ -5429,12 +5565,13 @@ async def get_llm_cost_breakdown(date_str: str) -> dict[str, dict[str, int]]:
     кэш дешевле входа, размышления считаются как выход. Без них отчёт считал бы
     не то же, что строка в логе.
     """
+    start, end = _day_bounds(date_str)
     cur = await conn().execute(
         "SELECT model, COUNT(*), COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(completion_tokens), 0), "
         "COALESCE(SUM(cached_tokens), 0), COALESCE(SUM(reasoning_tokens), 0) "
-        "FROM cost_events WHERE event_type = 'llm_call' AND date(created_at) = ? "
+        "FROM cost_events WHERE event_type = 'llm_call' AND created_at >= ? AND created_at < ? "
         "GROUP BY model",
-        (date_str,),
+        (start, end),
     )
     rows = await cur.fetchall()
     return {
@@ -5451,9 +5588,11 @@ async def get_llm_cost_breakdown(date_str: str) -> dict[str, dict[str, int]]:
 
 async def get_transcription_count(date_str: str) -> int:
     """Voice-message transcription calls (config.OPENAI_TRANSCRIBE_MODEL) on a given calendar day."""
+    start, end = _day_bounds(date_str)
     cur = await conn().execute(
-        "SELECT COUNT(*) FROM cost_events WHERE event_type = 'transcription' AND date(created_at) = ?",
-        (date_str,),
+        "SELECT COUNT(*) FROM cost_events WHERE event_type = 'transcription' "
+        "AND created_at >= ? AND created_at < ?",
+        (start, end),
     )
     row = await cur.fetchone()
     return row[0] if row else 0
@@ -5466,10 +5605,11 @@ async def get_server_tool_count(date_str: str) -> dict[str, int]:
     1000 вызовов СВЕРХ токенов, и в usage по токенам их нет вовсе — без этой
     выборки дневной отчёт занижал расход на всю эту статью.
     """
+    start, end = _day_bounds(date_str)
     cur = await conn().execute(
         "SELECT model, COUNT(*) FROM cost_events "
-        "WHERE event_type = 'server_tool' AND date(created_at) = ? GROUP BY model",
-        (date_str,),
+        "WHERE event_type = 'server_tool' AND created_at >= ? AND created_at < ? GROUP BY model",
+        (start, end),
     )
     return {(model or "unknown"): calls for model, calls in await cur.fetchall()}
 
@@ -5489,12 +5629,13 @@ async def get_cost_total_usd(date_str: Optional[str] = None) -> float:
     модели, равна сумме цен по строкам — группировать нужно по модели И типу
     события, потому что у расшифровок и вызовов инструментов ставка плоская.
     """
+    start, end = _day_bounds(date_str or _utc_day())
     cur = await conn().execute(
         "SELECT event_type, model, COUNT(*), "
         "COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(completion_tokens), 0), "
         "COALESCE(SUM(cached_tokens), 0), COALESCE(SUM(reasoning_tokens), 0) "
-        "FROM cost_events WHERE date(created_at) = ? GROUP BY event_type, model",
-        (date_str or _utc_day(),),
+        "FROM cost_events WHERE created_at >= ? AND created_at < ? GROUP BY event_type, model",
+        (start, end),
     )
     total = 0.0
     for event_type, model, calls, prompt, completion, cached, reasoning in await cur.fetchall():
@@ -5804,11 +5945,16 @@ async def get_ai_search_count_global(date_str: Optional[str] = None) -> int:
 
 
 async def increment_ai_search_count(telegram_id: int) -> None:
-    """Плюс один поиск — и в личный счётчик, и в общий, одной транзакцией.
+    """Плюс один личный поиск (см. `try_increment_ai_search_count_global` для
+    общего потолка — он теперь резервируется отдельно, ДО сетевого похода, а
+    не одной транзакцией вместе с этим счётчиком).
 
-    Оба счётчика двигаются вместе намеренно: разъедься они, и один из двух
-    потолков начнёт врать, а какой именно — станет видно только по счёту от
-    провайдера, то есть через месяц.
+    Личный счётчик по-прежнему двигается ПОСЛЕ реальной находки (контракт
+    «квота списывается только за состоявшийся поиск», как у вопросов и еды):
+    гонка тут — один и тот же человек присылает два вопроса подряд, а не сто
+    разных людей одновременно, — и `ai_trainer._search_block` уже сериализует
+    поисковые шаги одного пользователя через `ai_limits.check`, так что цена
+    редкого перерасхода на единицу меньше цены усложнения контракта.
     """
     today = await _quota_day(telegram_id)
     async with _write_lock:
@@ -5817,12 +5963,54 @@ async def increment_ai_search_count(telegram_id: int) -> None:
             "ON CONFLICT (telegram_id, date) DO UPDATE SET count = count + 1",
             (telegram_id, today),
         )
-        await conn().execute(
-            "INSERT INTO ai_search_global_usage (date, count) VALUES (?, 1) "
-            "ON CONFLICT (date) DO UPDATE SET count = count + 1",
-            (_utc_day(),),
-        )
         await conn().commit()
+
+
+async def try_increment_ai_search_count_global(limit: int, date_str: Optional[str] = None) -> bool:
+    """Атомарно занять один слот в ОБЩЕМ (на всех пользователей сразу) потолке
+    живых поисков — до сетевого похода, а не после.
+
+    Раньше место резервировалось так: прочитать счётчик (`ai_limits.check`),
+    решить «можно», сходить в сеть (секунды), и только если нашлось что-то
+    полезное — увеличить счётчик. Между чтением и записью гонка была РЕАЛЬНОЙ,
+    потому что она не про одного человека (его вопросы и так сериализует
+    `ai_limits.check`/`_search_block` внутри одного запроса) — она про N
+    разных людей, чьи вопросы пришли параллельно и все успели прочитать один
+    и тот же счётчик ДО того, как кто-либо из них его увеличил. Личная квота
+    такого не боится (она про одного человека и одну переписку), а общий
+    потолок — это ровно тот случай, где гонка опаснее контракта «квота
+    списывается только за находку»: лучше иногда зарезервировать слот под
+    поиск, который не найдёт ничего полезного, чем пропустить N поисков сверх
+    потолка одновременным всплеском.
+
+    `UPDATE ... WHERE count < limit` — одно атомарное выражение SQLite: даже
+    без внешнего `_write_lock` (который тут всё равно есть, для единообразия)
+    два одновременных запроса не могут оба увидеть count=9 из 10 и оба его
+    провести — rowcount у одного из них будет 0.
+
+    limit <= 0 — потолок снят переменной окружения: обычный инкремент без
+    ограничения, тем же способом, что и у `_exhausted` в ai_limits.py.
+    """
+    today = date_str or _utc_day()
+    async with _write_lock:
+        await conn().execute(
+            "INSERT INTO ai_search_global_usage (date, count) VALUES (?, 0) "
+            "ON CONFLICT (date) DO NOTHING",
+            (today,),
+        )
+        if limit > 0:
+            cur = await conn().execute(
+                "UPDATE ai_search_global_usage SET count = count + 1 "
+                "WHERE date = ? AND count < ?",
+                (today, limit),
+            )
+        else:
+            cur = await conn().execute(
+                "UPDATE ai_search_global_usage SET count = count + 1 WHERE date = ?",
+                (today,),
+            )
+        await conn().commit()
+        return cur.rowcount > 0
 
 
 async def get_ai_question_count_today(telegram_id: int) -> int:
@@ -5843,6 +6031,50 @@ async def increment_ai_question_count(telegram_id: int) -> None:
             (telegram_id, today),
         )
         await conn().commit()
+
+
+async def try_increment_ai_question_count(telegram_id: int, limit: int) -> bool:
+    """Атомарно списать один вопрос из дневной квоты — но только если она ещё
+    не выбрана к моменту записи.
+
+    Контракт «квота списывается только при готовом ответе» (см. комментарий
+    в handlers/ai_trainer.py у вызова) тут НЕ меняется: списание по-прежнему
+    происходит ПОСЛЕ ответа модели, не до него, — сорвавшийся у провайдера
+    запрос по-прежнему не стоит человеку вопроса. Меняется только сама
+    операция списания: раньше «прочитать счётчик» (для проверки лимита) и
+    «увеличить его» были двумя разными обращениями к базе с самим ответом
+    модели между ними — и в этом промежутке гонка была возможна, пусть и
+    маловероятна (см. `handlers/ai_trainer._try_claim_busy`, который и так
+    не даёт ОДНОМУ пользователю иметь два вопроса в полёте одновременно).
+    Теперь это одно атомарное `UPDATE ... WHERE count < limit`: даже если
+    что-то в будущем ослабит защиту busy-замка, счётчик не сможет перескочить
+    свой потолок больше чем на действие, которое СТРОГО единственным успело
+    в него попасть.
+
+    limit <= 0 — квота снята (см. `AI_QUESTION_DAILY_LIMIT=0` как переменная
+    окружения) — обычный инкремент без ограничения.
+    """
+    today = await _quota_day(telegram_id)
+    async with _write_lock:
+        await conn().execute(
+            "INSERT INTO ai_question_usage (telegram_id, date, count) VALUES (?, ?, 0) "
+            "ON CONFLICT (telegram_id, date) DO NOTHING",
+            (telegram_id, today),
+        )
+        if limit > 0:
+            cur = await conn().execute(
+                "UPDATE ai_question_usage SET count = count + 1 "
+                "WHERE telegram_id = ? AND date = ? AND count < ?",
+                (telegram_id, today, limit),
+            )
+        else:
+            cur = await conn().execute(
+                "UPDATE ai_question_usage SET count = count + 1 "
+                "WHERE telegram_id = ? AND date = ?",
+                (telegram_id, today),
+            )
+        await conn().commit()
+        return cur.rowcount > 0
 
 
 async def get_ai_video_count_today(telegram_id: int) -> int:
@@ -5979,6 +6211,22 @@ async def get_bodyweight_log(log_id: int) -> Optional[aiosqlite.Row]:
     return await cur.fetchone()
 
 
+async def list_bodyweight_logs_page(
+    telegram_id: int, limit: int, offset: int = 0
+) -> list[aiosqlite.Row]:
+    """A page of bodyweight entries, newest-first, for the "✏️ Записи" screen
+    where any entry (not just the last one) can be deleted — see
+    handlers/bodyweight.py:bw_list. Unlike list_bodyweight_logs (oldest-first,
+    for charting), the newest-first order here matches how the screen numbers
+    its delete buttons page by page."""
+    cur = await conn().execute(
+        "SELECT * FROM bodyweight_logs WHERE telegram_id = ? "
+        "ORDER BY logged_at DESC, id DESC LIMIT ? OFFSET ?",
+        (telegram_id, limit, offset),
+    )
+    return await cur.fetchall()
+
+
 async def get_latest_bodyweight(telegram_id: int) -> Optional[aiosqlite.Row]:
     cur = await conn().execute(
         "SELECT * FROM bodyweight_logs WHERE telegram_id = ? ORDER BY logged_at DESC, id DESC LIMIT 1",
@@ -5987,24 +6235,14 @@ async def get_latest_bodyweight(telegram_id: int) -> Optional[aiosqlite.Row]:
     return await cur.fetchone()
 
 
-async def delete_last_bodyweight(telegram_id: int) -> Optional[aiosqlite.Row]:
-    row = await get_latest_bodyweight(telegram_id)
-    if row is None:
-        return None
-    async with _write_lock:
-        await conn().execute("DELETE FROM bodyweight_logs WHERE id = ?", (row["id"],))
-        await conn().commit()
-    return row
-
-
 async def delete_bodyweight_log(log_id: int, telegram_id: int) -> bool:
-    """Убрать одну конкретную запись веса — ту, а не последнюю.
+    """Убрать одну конкретную запись веса — по id, а не только последнюю.
 
-    delete_last_bodyweight хватает экрану 🏋️ Вес, где отменяют только что
-    набранное. Откату записи, сделанной AI-тренером, — нет: между записью и
-    тапом по «↩️ Отменить» человек мог взвеситься ещё раз руками, и снос
-    последней утащил бы не то. Отсюда id — и проверка владельца при нём: id
-    приезжает из callback_data, то есть от клиента.
+    Экран 🏋️ Вес (handlers/bodyweight.py:bw_delete_record) и AI-тренер (откат
+    записи, сделанной им самим) оба удаляют так: между записью и удалением
+    человек мог взвеситься ещё раз руками, и снос последней утащил бы не то.
+    Отсюда id — и проверка владельца при нём: id приезжает из callback_data,
+    то есть от клиента.
     """
     async with _write_lock:
         cur = await conn().execute(
@@ -6300,7 +6538,9 @@ async def list_announcement_recipients(category: str) -> list[int]:
     return [row["telegram_id"] for row in await cur.fetchall()]
 
 
-async def has_push_today(telegram_id: int, today: str) -> bool:
+async def has_push_today(
+    telegram_id: int, today: str, *, exclude_categories: tuple[str, ...] = ()
+) -> bool:
     """Whether this user already got a daily-rotation push on this calendar date (YYYY-MM-DD).
 
     Matches on the stored local date, not on `date(sent_at)`: the caller asks
@@ -6309,11 +6549,30 @@ async def has_push_today(telegram_id: int, today: str) -> bool:
     the *next* server date — so the check said "already pushed today" and
     silently dropped every other day's push. `COALESCE` covers rows written
     before the column existed.
+
+    `exclude_categories` — categories that must not count toward "already
+    pushed today", because they aren't a player-facing daily push someone
+    could get twice: a one-off admin report (e.g. a weekly funnel digest)
+    reuses the `pushes` table purely for its own dedup bookkeeping, and its
+    row shouldn't let it silently eat the admin's own streak/skip push that
+    day. A one-time *release announcement* is deliberately not something
+    this function is asked to exclude by default — capping at one message a
+    day for someone who just got an announcement is the same antispam
+    guarantee the daily-rotation push already relies on elsewhere; only
+    reports that exist purely for bookkeeping belong in this list.
     """
-    cur = await conn().execute(
-        "SELECT 1 FROM pushes WHERE telegram_id = ? AND COALESCE(sent_on, date(sent_at)) = ? LIMIT 1",
-        (telegram_id, today),
-    )
+    if exclude_categories:
+        placeholders = ",".join("?" for _ in exclude_categories)
+        cur = await conn().execute(
+            "SELECT 1 FROM pushes WHERE telegram_id = ? AND COALESCE(sent_on, date(sent_at)) = ? "
+            f"AND category NOT IN ({placeholders}) LIMIT 1",
+            (telegram_id, today, *exclude_categories),
+        )
+    else:
+        cur = await conn().execute(
+            "SELECT 1 FROM pushes WHERE telegram_id = ? AND COALESCE(sent_on, date(sent_at)) = ? LIMIT 1",
+            (telegram_id, today),
+        )
     return await cur.fetchone() is not None
 
 
@@ -6330,6 +6589,33 @@ async def has_push_on(telegram_id: int, category: str, dedup_key: str) -> bool:
         (telegram_id, category, dedup_key),
     )
     return await cur.fetchone() is not None
+
+
+async def prune_old_pushes(retention_days: int, *, keep_categories: tuple[str, ...] = ()) -> int:
+    """Drop `pushes` rows older than retention_days, except `keep_categories`.
+
+    A daily-rotation push (streak, skip, digest…) is pure history once sent —
+    nothing ever re-checks whether a specific one went out weeks ago, only
+    has_push_today's same-day lookup, which idx_pushes_telegram_id already
+    serves fine. A one-time release announcement is the opposite:
+    list_announcement_recipients/has_announcement_push depend on its row
+    surviving *forever* — that's the only memory of "already got this
+    release", and a rollout can take months to reach everyone. Pruning those
+    would make the announcement go out to people twice. `keep_categories`
+    (see admin_tasks.py) is how callers protect them from this prune.
+    """
+    cutoff = (dt.datetime.now() - dt.timedelta(days=retention_days)).isoformat(timespec="seconds")
+    if keep_categories:
+        placeholders = ",".join("?" for _ in keep_categories)
+        query = f"DELETE FROM pushes WHERE sent_at < ? AND category NOT IN ({placeholders})"
+        params = (cutoff, *keep_categories)
+    else:
+        query = "DELETE FROM pushes WHERE sent_at < ?"
+        params = (cutoff,)
+    async with _write_lock:
+        cur = await conn().execute(query, params)
+        await conn().commit()
+        return cur.rowcount
 
 
 async def count_pushes() -> int:
@@ -6368,3 +6654,33 @@ async def get_game_best_distance(telegram_id: int) -> int:
     )
     (best,) = await cur.fetchone()
     return best or 0
+
+
+# ---------- донат «Поддержать проект» ----------
+
+
+async def record_donation(user_id: int, charge_id: str, stars: int) -> bool:
+    """Записать донат. False — такой charge_id уже есть: Telegram доставил
+    successful_payment повторно, и повторную благодарность/уведомление админу
+    слать не надо (см. handlers/donate.py)."""
+    async with _write_lock:
+        cur = await conn().execute(
+            "INSERT OR IGNORE INTO donations (user_id, charge_id, stars, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (user_id, charge_id, stars, now_iso()),
+        )
+        await conn().commit()
+        return cur.rowcount > 0
+
+
+async def donation_totals(days: int = 30) -> tuple[int, int]:
+    """(звёзд, человек) за последние `days` дней — для /growth. Идемпотентность
+    по charge_id (record_donation) уже гарантирует, что повторно доставленный
+    платёж не задвоит сумму."""
+    since = (dt.datetime.now() - dt.timedelta(days=days)).isoformat(timespec="seconds")
+    cur = await conn().execute(
+        "SELECT COALESCE(SUM(stars), 0), COUNT(DISTINCT user_id) FROM donations WHERE created_at >= ?",
+        (since,),
+    )
+    stars, people = await cur.fetchone()
+    return stars, people

@@ -133,6 +133,10 @@ async def test_one_off_badges_survive_a_resync_triggered_elsewhere(fresh_db, use
     aggregates — a resync must re-derive them per workout instead of dropping
     every badge that isn't a lifetime total."""
     db = fresh_db
+    # Часы ачивок теперь местные, а новичок по умолчанию UTC+3 (см.
+    # config.DEFAULT_TZ_OFFSET) — обнуляем пояс, чтобы метки ниже читались
+    # буквально: 05:30 — это 05:30 и по часам атлета.
+    await db.update_user(user_id, tz_offset=0)
     _, block_id, set_ids = await _logged_workout(
         db, user_id, [(60.0, 10)] * 3,
         started="2026-01-01T05:30:00", finished="2026-01-01T08:00:00",
@@ -177,6 +181,67 @@ async def test_moving_a_workout_off_january_first_drops_the_new_year_badge(fresh
     await edit_workout._apply_edit_workout_date(workout_id, dt.date(2026, 1, 3))
 
     assert "new_year" not in await db.list_achievement_codes(user_id)
+
+
+async def test_night_owl_and_new_year_follow_the_users_local_clock_not_utc(fresh_db, user_id):
+    """started_at is stored server time (UTC). A user on UTC-5 who logged a
+    workout at 03:00 UTC on Jan 1 was actually training at 22:00 local on Dec
+    31 — night_owl (not early_bird) and dec31 (not new_year) is what they
+    should see, matching what list_finished_workout_dates already shows on the
+    dashboard for the very same workout."""
+    db = fresh_db
+    await db.update_user(user_id, tz_offset=-5)
+    await _logged_workout(
+        db, user_id, [(60.0, 10)],
+        started="2026-01-01T03:00:00", finished="2026-01-01T03:30:00",
+    )
+
+    await achievement_sync.resync(user_id)
+
+    codes = await db.list_achievement_codes(user_id)
+    assert "night_owl" in codes
+    assert "early_bird" not in codes
+    assert "dec31" in codes
+    assert "new_year" not in codes
+
+
+async def test_early_bird_follows_local_hour_for_a_positive_offset(fresh_db, user_id):
+    """A UTC+3 user training at 05:30 UTC is at 08:30 local — past 7am, so no
+    early_bird — even though the raw server hour (5) would have qualified."""
+    db = fresh_db
+    await db.update_user(user_id, tz_offset=3)
+    await _logged_workout(
+        db, user_id, [(60.0, 10)],
+        started="2026-02-10T05:30:00", finished="2026-02-10T06:00:00",
+    )
+
+    await achievement_sync.resync(user_id)
+
+    assert "early_bird" not in await db.list_achievement_codes(user_id)
+
+
+async def test_early10_counts_by_local_hour_like_early_bird(fresh_db, user_id):
+    """early10 (achievement_extremes.early_workouts, db.py) and early_bird
+    (achievement_sync's per-workout hour) must agree on the same ten
+    workouts — before the fix, early10 counted the UTC hour while early_bird
+    already used the local one."""
+    db = fresh_db
+    await db.update_user(user_id, tz_offset=3)
+    # 05:30 UTC = 08:30 local: not "before 7am" locally, so neither badge
+    # should fire, even ten times over.
+    for i in range(10):
+        await _logged_workout(
+            db, user_id, [(60.0, 10)],
+            started=f"2026-02-{10 + i:02d}T05:30:00",
+            finished=f"2026-02-{10 + i:02d}T06:00:00",
+            name=f"Тяга {i}",
+        )
+
+    await achievement_sync.resync(user_id)
+
+    codes = await db.list_achievement_codes(user_id)
+    assert "early10" not in codes
+    assert "early_bird" not in codes
 
 
 async def test_weight_clubs_use_kilograms_not_the_users_unit(fresh_db, user_id):

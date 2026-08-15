@@ -11,6 +11,8 @@ from aiogram.types import (
     BotCommandScopeDefault,
     CallbackQuery,
     ErrorEvent,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
     Message,
 )
 
@@ -31,6 +33,7 @@ from handlers import (
     bodyweight,
     community,
     csv_import,
+    donate,
     edit_workout,
     exercise_resolve,
     exercises,
@@ -87,7 +90,14 @@ class IgnoreStaleCallbackMiddleware(BaseMiddleware):
             raise
 
 
-_GENERIC_ERROR_TEXT = "⚠️ Что-то пошло не так — бывает даже у чемпионов. Жми /start, вернёмся в меню."
+_GENERIC_ERROR_TEXT = "⚠️ Что-то пошло не так — бывает даже у чемпионов. Жми «Меню» внизу — и погнали дальше."
+
+# Реюзаем готовый колбэк «🏠 Меню» с карточки тренировки (handlers/workout.py,
+# live_back_to_menu) — он и так открывает главное меню независимо от того, что
+# сейчас на экране, так что годится и здесь без своего обработчика.
+_BACK_TO_MENU_MARKUP = InlineKeyboardMarkup(
+    inline_keyboard=[[InlineKeyboardButton(text="🏠 Меню", callback_data="live:back_to_menu")]]
+)
 
 
 def _error_chat_id(update) -> int | None:
@@ -134,7 +144,7 @@ async def on_unhandled_error(event: ErrorEvent, bot: Bot | None = None) -> bool:
         bot = getattr(update, "bot", None)
     if chat_id is not None and bot is not None:
         with suppress(Exception):
-            await bot.send_message(chat_id, _GENERIC_ERROR_TEXT)
+            await bot.send_message(chat_id, _GENERIC_ERROR_TEXT, reply_markup=_BACK_TO_MENU_MARKUP)
     return True
 
 
@@ -142,7 +152,19 @@ class RefreshPersistentMenuMiddleware(BaseMiddleware):
     """Catches every user up to the latest persistent-keyboard button set on
     their very next interaction with the bot — any text message or button
     tap — rather than only resyncing when they happen to hit /start or the
-    Меню button. Runs after the handler so the normal reply goes out first.
+    Меню button.
+
+    Runs BEFORE the handler, not after. chat_bottom (see that module) tracks
+    every message the bot sends and treats the most recently sent one as the
+    bottom of the chat; the live workout tracker relies on staying "at
+    bottom" to edit in place instead of flickering through delete+resend. If
+    this middleware sent its "⌨️ Обновил меню" notice after the handler's own
+    reply, that notice would land below the tracker and silently steal its
+    bottom spot — invisible on this tap, but on the user's very next tap the
+    tracker would find itself no longer at the bottom and pay for a delete
+    +resend that had nothing to do with anything the user just did. Sending
+    the notice first keeps the handler's own reply as the last word, exactly
+    like on every other tap.
 
     Once a user is confirmed current, their id is cached in memory so later
     taps skip the db.get_user round-trip entirely — the same instance is
@@ -155,19 +177,20 @@ class RefreshPersistentMenuMiddleware(BaseMiddleware):
         self._up_to_date_ids: set[int] = set()
 
     async def __call__(self, handler, event, data):
-        result = await handler(event, data)
         target = event.message if isinstance(event, CallbackQuery) else event
-        if not isinstance(target, Message):
-            return result
-        user_id = event.from_user.id
+        if isinstance(target, Message):
+            await self._catch_up(event.from_user.id, target)
+        return await handler(event, data)
+
+    async def _catch_up(self, user_id: int, target: Message) -> None:
         if user_id in self._up_to_date_ids:
-            return result
+            return
         user = await db.get_user(user_id)
         if user is None:
-            return result
+            return
         if user["reply_keyboard_version"] >= keyboards.PERSISTENT_MENU_VERSION:
             self._up_to_date_ids.add(user_id)
-            return result
+            return
         with suppress(TelegramBadRequest):
             await target.answer(
                 "⌨️ Обновил меню под полем ввода.",
@@ -175,7 +198,6 @@ class RefreshPersistentMenuMiddleware(BaseMiddleware):
             )
         await db.update_user(user_id, reply_keyboard_version=keyboards.PERSISTENT_MENU_VERSION)
         self._up_to_date_ids.add(user_id)
-        return result
 
 
 def setup_routers(dp: Dispatcher) -> None:
@@ -202,6 +224,11 @@ def setup_routers(dp: Dispatcher) -> None:
     # Та же причина: /community — одна команда без состояний, и она нужна из
     # любого сценария, хоть посреди тренировки.
     dp.include_router(community.router)
+    # Та же причина, и вдвойне: pre_checkout_query обязан ответить за 10
+    # секунд, а successful_payment — реальные деньги, которым нельзя застрять
+    # в чужом catch-all'е, если платёж пришёл посреди тренировки или чата с
+    # тренером.
+    dp.include_router(donate.router)
     # Форвард — самостоятельное действие, а не ответ на вопрос текущего экрана
     # (см. handlers/factcheck.py): должен перехватываться раньше состояний
     # FSM, иначе посреди тренировки или чата с тренером его съел бы их
@@ -314,7 +341,11 @@ async def main() -> None:
     admin_job = asyncio.create_task(admin_tasks.run_daily_admin_jobs(bot))
     backup_watch_job = asyncio.create_task(admin_tasks.run_backup_staleness_check(bot))
     engagement_job = asyncio.create_task(engagement.run_daily_engagement_job(bot))
-    background = [admin_job, backup_watch_job, engagement_job]
+    # Ретенш-чистка не зависит ни от ADMIN_ID, ни от того, дошёл ли отчёт (см.
+    # admin_tasks.run_retention_cleanup_job) — та же причина, по которой
+    # прополка OAuth ниже уже вынесена отдельно.
+    retention_job = asyncio.create_task(admin_tasks.run_retention_cleanup_job())
+    background = [admin_job, backup_watch_job, engagement_job, retention_job]
     # Разовые релизные рассылки: уходят сами после разворота, один раз на
     # человека (отметка о доставке — в базе, см. announcements.py).
     background.append(asyncio.create_task(announcements.run_pending_announcements(bot)))

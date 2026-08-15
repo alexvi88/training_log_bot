@@ -103,7 +103,7 @@ def test_fit_to_limit_leaves_short_text_alone():
 def test_fit_to_limit_marks_the_cut():
     fitted = ui.fit_to_limit(_long_plain(), ui.TEXT_LIMIT)
     assert _tg_length(fitted, None) <= ui.TEXT_LIMIT
-    assert fitted.endswith("обрезано")
+    assert fitted.endswith("обрезал")
 
 
 def test_fit_to_limit_cuts_on_a_line_boundary():
@@ -184,7 +184,7 @@ async def test_safe_edit_survives_a_screen_longer_than_the_limit():
     callback.message.answer.assert_awaited_once()
     text = callback.message.answer.await_args.args[0]
     assert _tg_length(text, None) <= ui.TEXT_LIMIT
-    assert text.endswith("обрезано")
+    assert text.endswith("обрезал")
 
 
 async def test_safe_edit_truncates_before_touching_the_old_screen():
@@ -248,7 +248,7 @@ async def test_safe_edit_leaves_a_way_back_when_nothing_sends():
     await ui.safe_edit(callback, "экран", parse_mode="HTML")
 
     assert callback.bot.send_message.await_count == 2
-    assert "/start" in callback.bot.send_message.await_args.args[1]
+    assert "Меню" in callback.bot.send_message.await_args.args[1]
 
 
 # ---------- safe_edit_photo ----------
@@ -263,7 +263,7 @@ async def test_safe_edit_photo_survives_a_caption_longer_than_the_limit():
     assert sent is not None
     caption = callback.message.answer_photo.await_args.kwargs["caption"]
     assert _tg_length(caption, "HTML") <= ui.CAPTION_LIMIT
-    assert caption.endswith("обрезано")
+    assert caption.endswith("обрезал")
     assert _tags_balanced(caption)
 
 
@@ -279,4 +279,4 @@ async def test_safe_edit_photo_leaves_a_way_back_when_nothing_sends():
     await ui.safe_edit_photo(callback, b"png", "chart.png", "подпись")
 
     callback.bot.send_message.assert_awaited_once()
-    assert "/start" in callback.bot.send_message.await_args.args[1]
+    assert "Меню" in callback.bot.send_message.await_args.args[1]

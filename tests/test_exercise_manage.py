@@ -9,6 +9,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 
 import config
 import exercise_descriptions
+import ui
 from fsm import ExerciseManage
 from handlers import exercises
 
@@ -296,7 +297,7 @@ async def test_unarchive_rejects_someone_elses_exercise(fresh_db, user_id):
 
     await exercises.exm_unarchive_exercise(callback, state)
 
-    callback.answer.assert_awaited_once_with("Упражнение не найдено", show_alert=True)
+    callback.answer.assert_awaited_once_with(ui.EXERCISE_NOT_FOUND_TEXT, show_alert=True)
     ex = await db.get_exercise(other_ex)
     assert ex["is_archived"] == 1
 
@@ -402,7 +403,7 @@ async def test_picking_a_group_moves_the_exercise_and_returns_to_its_card(fresh_
     ex = await db.get_exercise(ex_id)
     assert ex["primary_group_id"] == other_group_id
     assert await state.get_state() == ExerciseManage.picking_exercise
-    callback.answer.assert_awaited_once_with("Группа изменена")
+    callback.answer.assert_awaited_once_with("Перенёс в другую группу")
     text = callback.message.answer.await_args.args[0]
     assert "Группа: СПИНА" in text
 
@@ -417,7 +418,7 @@ async def test_edit_group_rejects_someone_elses_exercise(fresh_db, user_id):
 
     await exercises.exm_edit_group(callback, state)
 
-    callback.answer.assert_awaited_once_with("Упражнение не найдено", show_alert=True)
+    callback.answer.assert_awaited_once_with(ui.EXERCISE_NOT_FOUND_TEXT, show_alert=True)
 
 
 # ---------- exercise photo upload ----------

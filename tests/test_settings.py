@@ -51,14 +51,14 @@ async def test_show_settings_reflects_pushes_state_in_keyboard_labels(fresh_db, 
     await settings.show_settings(callback, state)
     sent_text = callback.message.answer.call_args.kwargs["reply_markup"]
     labels_on = [b.text for row in sent_text.inline_keyboard for b in row]
-    assert any("включены" in label for label in labels_on)
+    assert any(label == "🔔 Пуши: шлю" for label in labels_on)
 
     await db.update_user(user_id, pushes_enabled=0)
     callback = _make_callback(user_id, "menu:settings")
     await settings.show_settings(callback, state)
     sent_text = callback.message.answer.call_args.kwargs["reply_markup"]
     labels_off = [b.text for row in sent_text.inline_keyboard for b in row]
-    assert any("выключены" in label for label in labels_off)
+    assert any(label == "🔕 Пуши: молчу" for label in labels_off)
 
 
 async def test_settings_food_macros_toggles_off_then_on(fresh_db, user_id):
@@ -114,6 +114,21 @@ async def test_confirming_the_formula_switch_applies_it(fresh_db, user_id):
 
     user = await fresh_db.get_user(user_id)
     assert user["e1rm_formula"] == "brzycki"
+
+
+async def test_confirming_the_formula_switch_is_a_toast_not_a_modal(fresh_db, user_id):
+    """«Формула e1RM: brzycki» за модалкой с ОК — лишний тап на итог, который и
+    так виден на экране настроек; после подтверждающего yes/no это уже не
+    предупреждение, а короткая реплика тренера («Перевёл на Бжицки»)."""
+    state = await _make_state(user_id)
+    callback = _make_callback(user_id, "settings:formulayes")
+
+    await settings.settings_formula(callback, state)
+
+    callback.answer.assert_awaited_once()
+    args, kwargs = callback.answer.call_args
+    assert "Бжицки" in args[0]
+    assert kwargs.get("show_alert") is False
 
 
 async def test_cancelling_the_formula_switch_changes_nothing(fresh_db, user_id):
@@ -217,6 +232,73 @@ async def test_profile_button_is_on_the_settings_screen():
     callbacks = [b.callback_data for row in kb.inline_keyboard for b in row]
 
     assert "settings:profile" in callbacks
+
+
+async def test_toggle_labels_share_one_first_person_verb_construction():
+    """Раньше у четырёх тумблеров были разные формы («вкл»/«выкл»,
+    «включены»/«выключены», «считаю»/«не считаю», «подробно»/«компактно») —
+    теперь у всех глагол от первого лица, а не канцелярское «вкл»/причастие."""
+    import keyboards
+
+    on_kb = keyboards.settings_keyboard(
+        "kg", "epley", True, True, True, food_macros_enabled=True, show_extra_stats=True
+    )
+    off_kb = keyboards.settings_keyboard(
+        "kg", "epley", False, False, False, food_macros_enabled=False, show_extra_stats=False
+    )
+    on_texts = [b.text for row in on_kb.inline_keyboard for b in row]
+    off_texts = [b.text for row in off_kb.inline_keyboard for b in row]
+
+    assert "🎯 Подсказки прогрессии: подсказываю" in on_texts
+    assert "🎯 Подсказки прогрессии: молчу" in off_texts
+    assert "🔔 Пуши: шлю" in on_texts
+    assert "🔕 Пуши: молчу" in off_texts
+    assert "🤖 Комментарии AI-тренера: комментирую" in on_texts
+    assert "🤖 Комментарии AI-тренера: молчу" in off_texts
+    assert "🔢 КБЖУ в дневнике питания: считаю" in on_texts
+    assert "📝 КБЖУ в дневнике питания: не считаю" in off_texts
+    # Раньше «Карточка тренировки: подробно/компактно» не говорило, что именно
+    # переключается — это строка e1RM на итоговой карточке.
+    assert "📊 e1RM на карточке: показываю" in on_texts
+    assert "📊 e1RM на карточке: прячу" in off_texts
+    for text in on_texts + off_texts:
+        assert len(text) <= 40, f"кнопка слишком длинная для Telegram: {text!r}"
+
+
+# ---------- экран настроек говорит по-русски, а не телеметрией ----------
+
+
+async def test_settings_keyboard_shows_russian_unit_and_formula_names():
+    """«Единицы: kg» и «Формула e1RM: brzycki» — телеметрия, а не реплики
+    тренера (TONE_OF_VOICE.md). Внутренние значения ("kg"/"lb",
+    "epley"/"brzycki") не меняются — русифицируется только то, что видит
+    человек."""
+    import keyboards
+
+    kb = keyboards.settings_keyboard("lb", "brzycki", True, True, True)
+    labels = [b.text for row in kb.inline_keyboard for b in row]
+
+    assert any("фунты" in label for label in labels)
+    assert any("Бжицки" in label for label in labels)
+    assert not any("lb" in label for label in labels)
+    assert not any("brzycki" in label for label in labels)
+
+    kb_kg = keyboards.settings_keyboard("kg", "epley", True, True, True)
+    labels_kg = [b.text for row in kb_kg.inline_keyboard for b in row]
+    assert any("кг" in label for label in labels_kg)
+    assert any("Эпли" in label for label in labels_kg)
+
+
+async def test_settings_header_is_a_coach_line_not_a_label(fresh_db, user_id):
+    """Заголовок экрана — короткая реплика тренера, а не «🔧 Настройки:»."""
+    state = await _make_state(user_id)
+    callback = _make_callback(user_id, "menu:settings")
+
+    await settings.show_settings(callback, state)
+
+    text = callback.message.answer.call_args.args[0]
+    assert text != "🔧 Настройки:"
+    assert not text.rstrip().endswith(":")
 
 
 async def test_profile_screen_speaks_in_the_first_person(fresh_db, user_id):

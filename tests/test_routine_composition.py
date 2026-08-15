@@ -1,7 +1,8 @@
-"""Editing a saved routine's exercise list: remove a single exercise (asks for
-confirmation first — the DB write happens only on the "yes" tap) and add one
-via the groups→exercises picker, including a catalog template forked on the
-fly or browsed from the group's whole template list."""
+"""Editing a saved routine's exercise list: remove a single exercise (the
+first tap only arms the same 🗑 button as "❗ Точно?" — the DB write happens
+only on the second tap, rt:rmexyes) and add one via the groups→exercises
+picker, including a catalog template forked on the fly or browsed from the
+group's whole template list."""
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -22,14 +23,19 @@ pytestmark = pytest.mark.asyncio
 
 def _make_callback(user_id: int, data: str = ""):
     message = MagicMock()
+    message.chat = SimpleNamespace(id=user_id)
+    message.message_id = 1
     message.delete = AsyncMock()
     message.edit_text = AsyncMock()
+    message.edit_reply_markup = AsyncMock()
     message.answer = AsyncMock(return_value=SimpleNamespace(message_id=1))
     callback = MagicMock(spec=CallbackQuery)
     callback.from_user = SimpleNamespace(id=user_id, username="tester")
     callback.message = message
     callback.data = data
     callback.answer = AsyncMock()
+    callback.bot = MagicMock()
+    callback.bot.edit_message_reply_markup = AsyncMock()
     return callback
 
 
@@ -59,8 +65,9 @@ async def _make_routine(db, user_id: int, exercise_names: list[str]) -> tuple[in
 # ---------- remove ----------
 
 
-async def test_remove_confirm_prompts_and_writes_nothing_yet(fresh_db, user_id):
-    """Tapping the exercise only asks — the DB write waits for rt:rmexyes."""
+async def test_remove_first_tap_arms_the_button_without_deleting(fresh_db, user_id):
+    """First tap on 🗑 only arms that row's button as "❗ Точно?" — the DB
+    write waits for a second tap on rt:rmexyes."""
     db = fresh_db
     routine_id, _ = await _make_routine(db, user_id, ["Жим лёжа", "Разведения"])
     entries = await db.list_routine_exercises(routine_id)
@@ -73,12 +80,44 @@ async def test_remove_confirm_prompts_and_writes_nothing_yet(fresh_db, user_id):
     assert [r["display_name"] for r in await db.list_routine_exercises(routine_id)] == [
         "Жим лёжа", "Разведения",
     ]
-    text = callback.message.answer.await_args.args[0]
-    assert "Жим лёжа" in text
-    kb = callback.message.answer.await_args.kwargs["reply_markup"]
-    cbs = [b.callback_data for row in kb.inline_keyboard for b in row]
-    assert f"rt:rmexyes:{routine_id}:{target['id']}" in cbs
-    assert f"rt:edit:{routine_id}" in cbs  # "нет" goes back to the same editor
+    kb = callback.message.edit_reply_markup.await_args.kwargs["reply_markup"]
+    buttons = {b.callback_data: b.text for row in kb.inline_keyboard for b in row}
+    assert buttons[f"rt:rmexyes:{routine_id}:{target['id']}"] == "❗ Точно?"
+    # соседнюю строку не тронули — там всё ещё обычный 🗑
+    other = next(e for e in entries if e["display_name"] == "Разведения")
+    assert buttons[f"rt:rmex:{routine_id}:{other['id']}"] == "🗑"
+
+
+async def test_arm_reverts_to_bin_after_timeout_without_confirmation(fresh_db, user_id):
+    """No second tap in time — the button reverts to a plain 🗑 by itself."""
+    db = fresh_db
+    routine_id, _ = await _make_routine(db, user_id, ["Жим лёжа", "Разведения"])
+    entries = await db.list_routine_exercises(routine_id)
+    target = next(e for e in entries if e["display_name"] == "Жим лёжа")
+    bot = MagicMock()
+    bot.edit_message_reply_markup = AsyncMock()
+
+    await routines._revert_rmex_arm(bot, user_id, 1, routine_id, target["id"], delay=0)
+
+    kb = bot.edit_message_reply_markup.await_args.kwargs["reply_markup"]
+    buttons = {b.callback_data: b.text for row in kb.inline_keyboard for b in row}
+    assert buttons[f"rt:rmex:{routine_id}:{target['id']}"] == "🗑"
+
+
+async def test_arm_revert_is_a_no_op_once_already_removed(fresh_db, user_id):
+    """The exercise got deleted (second tap) before the revert timer fired —
+    it must not resurrect a stale keyboard for a row that's already gone."""
+    db = fresh_db
+    routine_id, _ = await _make_routine(db, user_id, ["Жим лёжа", "Разведения"])
+    entries = await db.list_routine_exercises(routine_id)
+    target = next(e for e in entries if e["display_name"] == "Жим лёжа")
+    await db.remove_routine_exercise(target["id"])
+    bot = MagicMock()
+    bot.edit_message_reply_markup = AsyncMock()
+
+    await routines._revert_rmex_arm(bot, user_id, 1, routine_id, target["id"], delay=0)
+
+    bot.edit_message_reply_markup.assert_not_awaited()
 
 
 async def test_confirming_removal_drops_only_that_exercise(fresh_db, user_id):

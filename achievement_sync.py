@@ -19,6 +19,7 @@ import achievements
 import analytics
 import db
 import formatting
+import timeutil
 import view_builder
 
 logger = logging.getLogger(__name__)
@@ -38,8 +39,9 @@ async def _aggregate_context(user_id: int) -> achievements.AchievementContext:
     """
     user = await db.get_user(user_id)
     unit = user["unit"] if user else "kg"
+    tz_offset = int(user["tz_offset"]) if user else 0
     dates = [dt.date.fromisoformat(d) for d in await db.list_finished_workout_dates(user_id)]
-    extremes = await db.achievement_extremes(user_id)
+    extremes = await db.achievement_extremes(user_id, tz_offset=tz_offset)
     food_days = [dt.date.fromisoformat(d) for d in await db.list_food_entry_dates(user_id)]
     return achievements.AchievementContext(
         total_workouts=await db.count_workouts(user_id),
@@ -55,8 +57,9 @@ async def _aggregate_context(user_id: int) -> achievements.AchievementContext:
         max_session_exercises=extremes["max_exercises"],
         has_superset=bool(extremes["has_superset"]),
         max_bodyweight_reps=extremes["max_bw_reps"],
-        # Час, как и у «Ранней пташки», пока серверный — единый корень B3
-        # (хранение в UTC) чинится миграцией, и обе ачивки поедут вместе с ней.
+        # Местный час пользователя (см. db._local_hour) — раньше сверялся с
+        # часом сервера (UTC), и мог разойтись с «Ранней пташкой» ниже, которая
+        # для только что закрытой тренировки уже смещает час в местный.
         early_workouts=extremes["early_workouts"],
         has_weekend_pair=achievements.weekend_pair_exists(dates),
         all_weekdays_covered=len({d.weekday() for d in dates}) == 7,
@@ -78,8 +81,15 @@ async def evaluate_after_finish(
     """
     try:
         ctx = await _aggregate_context(user_id)
-        ctx.workout_start_hour = started_at.hour
-        ctx.workout_date = started_at.date()
+        user = await db.get_user(user_id)
+        # started_at is the server clock (UTC) — shifted to the user's local
+        # wall clock before reading hour/date, the same shift list_finished_
+        # workout_dates already applies for has_dec31 above. Left as UTC, a
+        # workout at 23:30 local (say, UTC-5) read as day-of-UTC could tag
+        # "new_year" a day off from what "dec31"/the dashboard already agree on.
+        local = timeutil.to_user_local(started_at, user)
+        ctx.workout_start_hour = local.hour
+        ctx.workout_date = local.date()
         ctx.workout_duration_seconds = duration_seconds
         return await db.award_achievements(user_id, achievements.earned_codes(ctx))
     except Exception:
@@ -92,11 +102,13 @@ async def _earned_now(user_id: int) -> set[str]:
     scratch: lifetime aggregates plus the one-off codes any single workout can
     unlock (early bird / night owl / marathon / 1 января)."""
     ctx = await _aggregate_context(user_id)
+    user = await db.get_user(user_id)
     codes = achievements.earned_codes(ctx)
     for workout in await db.list_finished_workouts_meta(user_id):
         started = dt.datetime.fromisoformat(workout["started_at"])
-        ctx.workout_start_hour = started.hour
-        ctx.workout_date = started.date()
+        local = timeutil.to_user_local(started, user)
+        ctx.workout_start_hour = local.hour
+        ctx.workout_date = local.date()
         # The duration lookup is a query per workout, so it is skipped once the
         # only badge it can add is already accounted for.
         ctx.workout_duration_seconds = (

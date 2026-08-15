@@ -174,6 +174,49 @@ async def test_the_sql_tonnage_path_counts_bodyweight_too(fresh_db, user_id):
     assert (await db.hall_of_fame_aggregates(user_id))["tonnage"] == 800.0
 
 
+async def _assisted_gravitron(db, user_id):
+    """A gravitron-style exercise with no catalog counterpart to fork from —
+    made directly, then flipped to `assisted` the same way the migration
+    would after an admin edits an exercise's load mode."""
+    group_id = await db.create_muscle_group(user_id, "Спина")
+    ex_id = await db.create_exercise(user_id, "Гравитрон", group_id)
+    await db.conn().execute(
+        "UPDATE exercises SET bodyweight_load = 'assisted' WHERE id = ?", (ex_id,)
+    )
+    await db.conn().commit()
+    return ex_id
+
+
+async def test_max_weight_ever_excludes_the_assist_not_the_lift(fresh_db, user_id):
+    """Клуб 100–220 сравнивает по факту поднятого. На гравитроне записанный
+    вес — это вес ПОМОЩИ (чем он больше, тем легче подход), а реально
+    поднято bodyweight - assist. Раньше max_weight_ever брал сырой s.weight
+    и мог засчитать в клуб именно вес помощи — тяжёлое железо на скамье
+    (100 кг) не должно проигрывать гравитрону с настройкой помощи в 150 кг,
+    у которого реально поднято лишь bodyweight-150."""
+    db = fresh_db
+    await db.add_bodyweight_log(user_id, 80.0)
+    gravitron_id = await _assisted_gravitron(db, user_id)
+    # 150 кг помощи на весе тела 80 кг — реально поднято 0 (не уходим в минус).
+    await _log(db, user_id, gravitron_id, 150.0, 12)
+
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    bench = await db.create_exercise(user_id, "Жим штанги лёжа (доп)", group_id)
+    await _log(db, user_id, bench, 100.0, 5)
+
+    assert await db.max_weight_ever(user_id) == 100.0
+
+
+async def test_max_weight_ever_counts_a_light_assist_as_a_real_lift(fresh_db, user_id):
+    db = fresh_db
+    await db.add_bodyweight_log(user_id, 80.0)
+    gravitron_id = await _assisted_gravitron(db, user_id)
+    # Лёгкая помощь (20 кг) — реально поднято 60, и это должно попасть в клуб.
+    await _log(db, user_id, gravitron_id, 20.0, 8)
+
+    assert await db.max_weight_ever(user_id) == 60.0
+
+
 # ---------- экран тренировки считает по той же нагрузке, что и рекорды ----------
 
 

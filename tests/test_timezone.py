@@ -71,6 +71,22 @@ async def test_setting_timezone_persists(fresh_db, user_id):
 
 
 @pytest.mark.asyncio
+async def test_setting_timezone_is_a_toast_not_a_modal(fresh_db, user_id):
+    """«Часовой пояс: +3» за модалкой с ОК — лишний тап ради одной цифры;
+    show_alert=False убирает кнопку, а не сам текст."""
+    storage = MemoryStorage()
+    state = FSMContext(storage=storage, key=StorageKey(bot_id=1, chat_id=user_id, user_id=user_id))
+    cb = _callback(user_id, "settings:tzset:5")
+
+    await settings.settings_timezone_set(cb, state)
+
+    cb.answer.assert_awaited_once()
+    args, kwargs = cb.answer.call_args
+    assert "UTC+5" in args[0]
+    assert kwargs.get("show_alert") is False
+
+
+@pytest.mark.asyncio
 async def test_setting_timezone_marks_it_as_chosen_by_the_user(fresh_db, user_id):
     """Отдельный флаг от значения tz_offset: у новичка оно и так не ноль (см.
     config.DEFAULT_TZ_OFFSET), так что подсказка под пушем (engagement.

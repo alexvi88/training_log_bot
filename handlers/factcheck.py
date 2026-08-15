@@ -26,6 +26,7 @@ from aiogram.types import Message
 
 import ai_limits
 import ai_trainer
+import config
 import db
 import formatting
 import running_texts
@@ -43,6 +44,30 @@ logger = logging.getLogger(__name__)
 # предохранитель от форварда не по теме (переслали статью на разворот).
 _MIN_LEN = 30
 _MAX_LEN = 4000
+
+# Свой busy-замок, не общий с handlers.ai_trainer._busy: тот держит «идёт
+# основной вопрос», этот — «идёт разбор форварда»; смешивать их означало бы,
+# что чат с тренером блокирует пересланный пост и наоборот, хотя по продукту
+# это два разных действия, которые человек вполне может начать одно за
+# другим (переслал пост, пока ждёт ответ на прошлый вопрос).
+_busy: set[int] = set()
+
+
+def _try_claim_busy(user_id: int) -> bool:
+    """Atomically check-and-reserve `_busy` for this user.
+
+    Тот же приём, что и `handlers.ai_trainer._try_claim_busy` (см. её
+    докстринг про то, почему проверка и `.add()` обязаны идти без единого
+    `await` между ними). Без замка гонка была именно той, что описана в
+    контракте квоты (handlers/ai_trainer.py, ~2082): «прочитал счётчик →
+    дождался ответа модели → увеличил» — а пачка пересланных постов подряд
+    (человек форвардит несколько сообщений из канала одно за другим) успевала
+    пройти проверку квоты хором, до того как первый из форвардов её увеличил.
+    """
+    if user_id in _busy:
+        return False
+    _busy.add(user_id)
+    return True
 
 
 def _post_text(message: Message) -> Optional[str]:
@@ -70,37 +95,53 @@ def _looks_like_a_forwarded_post(message: Message) -> bool:
 async def factcheck_forward(message: Message) -> None:
     user_id = message.from_user.id
     post_text = _post_text(message)
-    # Та же квота, что у обычных вопросов тренеру: это тоже вопрос, просто с
-    # чужим текстом вместо своего.
-    block = await ai_limits.check(user_id, ai_limits.KIND_QUESTION)
-    if block is not None:
-        logger.info("fact-check blocked for user %s: %s", user_id, block.log)
-        await ai_limits.reply(message, block)
-        if not block.preview:
+    if not _try_claim_busy(user_id):
+        # Разбор прошлого форварда этого же человека ещё не закончился —
+        # именно тот промежуток, где раньше и пряталась гонка за квоту
+        # (проверка лимита ниже читает счётчик, а списывается он только после
+        # ответа модели, секундами позже). Не открываем вторую параллельную
+        # дорожку к модели, а сообщаем и ждём, пока освободится первая.
+        with suppress(TelegramBadRequest):
+            await message.reply("Секунду, ещё разбираю прошлый пост 😅")
+        return
+    try:
+        # Та же квота, что у обычных вопросов тренеру: это тоже вопрос, просто с
+        # чужим текстом вместо своего.
+        block = await ai_limits.check(user_id, ai_limits.KIND_QUESTION)
+        if block is not None:
+            logger.info("fact-check blocked for user %s: %s", user_id, block.log)
+            await ai_limits.reply(message, block)
+            if not block.preview:
+                return
+
+        placeholder = await message.reply(running_texts.pick(running_texts.FACT_CHECK_POOL))
+        image_data_url = None
+        if message.photo:
+            # Не роняем разбор из-за картинки: слишком большое фото или сбой
+            # скачивания — разбираем подпись, а промпт велит сказать, что картинку
+            # прочитать не удалось, вместо того чтобы делать вид, что её не было.
+            try:
+                image_data_url = await _download_photo_as_data_url(message)
+            except Exception:
+                logger.exception("fact-check photo download failed for user %s", user_id)
+
+        try:
+            verdict = await ai_trainer.fact_check_post(user_id, post_text, image_data_url)
+        except Exception:
+            logger.exception("fact-check failed for user %s", user_id)
+            with suppress(TelegramBadRequest):
+                await placeholder.edit_text("Не разобрал — что-то сломалось. Пришли ещё раз?")
             return
 
-    placeholder = await message.reply(running_texts.pick(running_texts.FACT_CHECK_POOL))
-    image_data_url = None
-    if message.photo:
-        # Не роняем разбор из-за картинки: слишком большое фото или сбой
-        # скачивания — разбираем подпись, а промпт велит сказать, что картинку
-        # прочитать не удалось, вместо того чтобы делать вид, что её не было.
-        try:
-            image_data_url = await _download_photo_as_data_url(message)
-        except Exception:
-            logger.exception("fact-check photo download failed for user %s", user_id)
-
-    try:
-        verdict = await ai_trainer.fact_check_post(user_id, post_text, image_data_url)
-    except Exception:
-        logger.exception("fact-check failed for user %s", user_id)
+        # Атомарно — тот же приём, что и у обычного чата (см.
+        # handlers/ai_trainer.py и db.try_increment_ai_question_count):
+        # списание по-прежнему ПОСЛЕ ответа модели, но само увеличение
+        # счётчика не может перескочить дневной потолок.
+        await db.try_increment_ai_question_count(user_id, config.AI_QUESTION_DAILY_LIMIT)
         with suppress(TelegramBadRequest):
-            await placeholder.edit_text("Не разобрал — что-то сломалось. Пришли ещё раз?")
-        return
-
-    await db.increment_ai_question_count(user_id)
-    with suppress(TelegramBadRequest):
-        await placeholder.edit_text(
-            formatting.ai_markdown_to_html(verdict), parse_mode="HTML"
-        )
+            await placeholder.edit_text(
+                formatting.ai_markdown_to_html(verdict), parse_mode="HTML"
+            )
+    finally:
+        _busy.discard(user_id)
 

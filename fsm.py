@@ -82,6 +82,7 @@ class AITrainerFlow(StatesGroup):
 
 class BodyweightFlow(StatesGroup):
     viewing = State()
+    browsing = State()  # экран «✏️ Записи» — список с удалением любой записи
 
 
 class RoutineFlow(StatesGroup):

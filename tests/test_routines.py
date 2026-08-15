@@ -420,6 +420,55 @@ async def test_editing_a_target_without_a_rule_says_nothing_about_rules(user_id)
 
 
 @pytest.mark.asyncio
+async def test_empty_target_gets_an_error_instead_of_silence(user_id):
+    """Раньше пустой ввод («   ») просто пропадал — normalize_routine_target
+    отдаёт "" на голых пробелах, `if not target: return` тихо обрывал хендлер,
+    и человек не понимал, услышали ли его вообще. Теперь тренер отвечает
+    голосом ошибки: что не так и что написать вместо этого."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from handlers import routines
+
+    _pid, rid, re_id = await _program_day_with_rule(user_id)
+    state = await _state(user_id)
+    await state.update_data(rtedit_routine_id=rid, rtedit_re_id=re_id)
+    message = _make_message(user_id, "   ")
+    message.bot = MagicMock()
+    message.bot.delete_message = AsyncMock()
+
+    await routines.rt_exercise_target_entered(message, state)
+
+    message.reply.assert_awaited_once()
+    assert "3x8-12" in message.reply.await_args.args[0]
+    # Схема не тронута — не разобранный ввод не должен молча стереть старую.
+    assert (await dbmod.get_routine_exercise(re_id))["target"] == "3×8-10"
+
+
+@pytest.mark.asyncio
+async def test_empty_target_when_adding_an_exercise_gets_an_error_too(user_id):
+    """Тот же провал молчания на соседнем экране — добавление упражнения в
+    программу (RoutineFlow.adding_exercise_target), а не правка уже добавленного."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from handlers import routines
+
+    rid = await dbmod.create_routine(user_id, "День груди")
+    gid = await _group_id("Грудь")
+    ex_id = await dbmod.create_exercise(user_id, "Жим", gid)
+    state = await _state(user_id)
+    await state.update_data(rtadd_routine_id=rid, rtadd_exercise_id=ex_id)
+    message = _make_message(user_id, "   ")
+    message.bot = MagicMock()
+    message.bot.delete_message = AsyncMock()
+
+    await routines.rtadd_target_entered(message, state)
+
+    message.reply.assert_awaited_once()
+    assert "3x8-12" in message.reply.await_args.args[0]
+    assert await dbmod.list_routine_exercises(rid) == []
+
+
+@pytest.mark.asyncio
 async def test_the_ai_write_path_does_not_touch_the_rule(user_id):
     """AI-путь пишет target при вставке строки и правит правило отдельным
     вызовом — ни то, ни другое не должно сбрасывать прогрессию, сброс только

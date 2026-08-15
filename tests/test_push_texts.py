@@ -81,7 +81,7 @@ async def test_variant_needing_missing_data_is_not_drawn(fresh_db, user_id):
         seen.add(
             await push_texts.pick_text(
                 user_id, push_texts.WEEKLY_DIGEST,
-                tonnage="4.2 т", week_count="2 тренировки", best_day=None,
+                tonnage="4.2 т", week_count="2 тренировки", best_day=None, whale=None,
             )
         )
 
@@ -95,11 +95,76 @@ async def test_variant_is_available_once_the_data_exists(fresh_db, user_id):
         seen.add(
             await push_texts.pick_text(
                 user_id, push_texts.WEEKLY_DIGEST,
-                tonnage="4.2 т", week_count="2 тренировки", best_day="среда",
+                tonnage="4.2 т", week_count="2 тренировки", best_day="среда", whale=None,
             )
         )
 
     assert any("среда — твой самый продуктивный день" in text for text in seen)
+
+
+async def test_whale_line_dropped_below_the_honest_threshold(fresh_db, user_id):
+    """A few tons in a month is a normal training volume, not a blue whale —
+    the comparison must not be drawn when `whale` is None (see
+    push_texts.WHALE_MIN_TONNAGE_KG and engagement.py's gate)."""
+    seen = set()
+    for _ in range(len(push_texts.TEXTS[push_texts.WEEKLY_DIGEST]) * 3):
+        seen.add(
+            await push_texts.pick_text(
+                user_id, push_texts.WEEKLY_DIGEST,
+                tonnage="4.2 т", week_count="2 тренировки", best_day="среда", whale=None,
+            )
+        )
+    assert not any("синий кит" in text for text in seen)
+
+
+async def test_whale_line_available_past_the_threshold(fresh_db, user_id):
+    seen = set()
+    for _ in range(len(push_texts.TEXTS[push_texts.WEEKLY_DIGEST]) * 3):
+        seen.add(
+            await push_texts.pick_text(
+                user_id, push_texts.WEEKLY_DIGEST,
+                tonnage="120.0 т", week_count="2 тренировки", best_day="среда",
+                whale="один синий кит",
+            )
+        )
+    assert any("это примерно один синий кит" in text for text in seen)
+
+
+async def test_rotation_bag_keys_on_full_pool_index_not_filtered_position(
+    fresh_db, user_id, monkeypatch
+):
+    """Regression test for the bag-vs-shifting-pool bug: the bag has to store
+    stable identifiers (here, the index into the full TEXTS[category] list),
+    filtered at draw time — not positions within whichever subset happened to
+    be eligible on a given call.
+
+    With the old code the bag stored positions in the *filtered* list. Two
+    calls whose missing-kwarg sets differ renumber that filtered list
+    differently, so the same stored position ends up pointing at a different
+    template the next time — in this exact scenario the old code would have
+    handed back the best_day variant (index 2) on the second call; the fix
+    keeps returning what the still-pending full-pool index actually is.
+    """
+    monkeypatch.setattr(push_texts.random, "shuffle", lambda seq: None)  # keep draw order deterministic
+    pool = push_texts.TEXTS[push_texts.WEEKLY_DIGEST]
+
+    # First call: neither `whale` nor `best_day` has data (both None), so the
+    # eligible set skips indices 0 (whale) and 2 (best_day).
+    first = await push_texts.pick_text(
+        user_id, push_texts.WEEKLY_DIGEST,
+        tonnage="4.2 т", week_count="2 тренировки", best_day=None, whale=None,
+    )
+    assert first == pool[1].format(week_count="2 тренировки")
+
+    # Second call: `best_day` now has data, so the eligible set grows to skip
+    # only index 0. The bag saved after the first call must still mean
+    # "these full-pool indices remain", not "these filtered-list positions".
+    second = await push_texts.pick_text(
+        user_id, push_texts.WEEKLY_DIGEST,
+        tonnage="4.2 т", week_count="2 тренировки", best_day="среда", whale=None,
+    )
+    assert second == pool[3].format(tonnage="4.2 т", week_count="2 тренировки")
+    assert "синий кит" not in second
 
 
 async def test_most_frequent_weekday_needs_a_clear_winner():

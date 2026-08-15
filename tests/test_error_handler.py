@@ -59,6 +59,19 @@ async def test_writes_to_the_chat_of_a_message_update():
     assert "пошло не так" in bot.send_message.await_args.args[1]
 
 
+async def test_offers_a_way_back_to_the_menu():
+    """Реюзаем готовый колбэк live:back_to_menu — человеку не обязательно знать
+    про /start, если под сообщением есть кнопка."""
+    message = _make_message()
+    bot = _make_bot()
+    event = _make_event(message=message)
+
+    await main.on_unhandled_error(event, bot)
+
+    markup = bot.send_message.await_args.kwargs["reply_markup"]
+    assert markup.inline_keyboard[0][0].callback_data == "live:back_to_menu"
+
+
 async def test_writes_to_the_chat_even_when_the_screen_is_already_deleted():
     """ui.safe_edit удаляет старый экран прямо перед отправкой нового, так что
     «сообщения уже нет» — обычный расклад: reply в нём падает сам, и человек не

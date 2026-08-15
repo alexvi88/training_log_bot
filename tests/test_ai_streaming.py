@@ -334,6 +334,41 @@ async def test_streamed_tool_calls_are_reassembled_from_deltas(monkeypatch):
     assert tool_calls[0].function.arguments == '{"days": 7}'
 
 
+async def test_aborted_stream_still_logs_a_cost_event(monkeypatch):
+    """xAI sends `usage` only on the final chunk — a timeout/cancellation/drop
+    partway through used to skip `_log_llm_cost` entirely, losing a call the
+    provider had already billed. On abort we log a best-effort estimate from
+    whatever prompt/text we actually had, instead of nothing."""
+    import ai_trainer
+
+    class _BoomStream:
+        def __aiter__(self):
+            async def gen():
+                yield _delta_event("Начал печатать")
+                raise RuntimeError("connection dropped")
+            return gen()
+
+        # _completion_round only ever iterates the object it awaited into
+        # `stream`, so no further protocol surface is needed here.
+
+    client = MagicMock()
+    client.chat.completions.create = AsyncMock(return_value=_BoomStream())
+    log_cost = AsyncMock()
+    monkeypatch.setattr(ai_trainer, "_log_llm_cost", log_cost)
+    monkeypatch.setattr(ai_trainer, "STREAM_FLUSH_SECONDS", 0)
+    monkeypatch.setattr(ai_trainer, "MIN_FIRST_FLUSH_CHARS", 0)
+
+    with pytest.raises(RuntimeError):
+        await ai_trainer._completion_round(
+            client, [{"role": "user", "content": "?"}], user_id=1, on_chunk=_collector([]),
+        )
+
+    log_cost.assert_awaited_once()
+    usage = log_cost.await_args.args[2]
+    assert usage.prompt_tokens > 0  # оценка по сообщениям, не ноль
+    assert usage.completion_tokens > 0  # успевший приехать текст тоже посчитан
+
+
 async def test_without_a_chunk_callback_the_call_is_not_streamed(monkeypatch):
     """Стриминг — опция: без колбэка запрос идёт обычным, не-стримовым путём."""
     import ai_trainer

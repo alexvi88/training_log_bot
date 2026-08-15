@@ -178,6 +178,17 @@ def test_routine_edit_keyboard_carries_the_removals():
     assert "rt:view:7" in cbs  # "готово" back to the program screen
 
 
+def test_routine_edit_keyboard_arms_only_the_targeted_row():
+    """`armed_re_id` swaps just that row's 🗑 for a "❗ Точно?" bound to
+    rt:rmexyes — the second tap of the two-tap confirm — leaving every other
+    row's plain 🗑 (rt:rmex) untouched."""
+    kb = keyboards.routine_edit_keyboard(7, [(11, "Жим"), (12, "Тяга")], armed_re_id=11)
+    buttons = {b.callback_data: b.text for row in kb.inline_keyboard for b in row}
+    assert buttons["rt:rmexyes:7:11"] == "❗ Точно?"
+    assert "rt:rmex:7:11" not in buttons
+    assert buttons["rt:rmex:7:12"] == "🗑"
+
+
 def test_routine_edit_keyboard_has_one_cyclic_arrow_per_row():
     """Стрелка только «наверх» и работает по кругу: у первого она отправляет в
     конец. Вторая колонка отбирала место у названия (оно сжималось до
@@ -218,3 +229,32 @@ def test_bodyweight_keyboard_marks_the_active_period():
     texts = _button_texts(kb)
     assert "• 20 нед •" in texts
     assert "10 нед" in texts and "Всё" in texts
+
+
+def test_bodyweight_keyboard_offers_the_records_list_when_there_are_logs():
+    kb = keyboards.bodyweight_keyboard(has_logs=True)
+    cbs = [b.callback_data for row in kb.inline_keyboard for b in row]
+    assert "bw:list:0" in cbs
+
+
+def test_bodyweight_keyboard_hides_the_records_list_without_logs():
+    kb = keyboards.bodyweight_keyboard(has_logs=False)
+    cbs = [b.callback_data for row in kb.inline_keyboard for b in row]
+    assert "bw:list:0" not in cbs
+
+
+def test_bodyweight_list_keyboard_numbers_delete_buttons_and_pages():
+    kb = keyboards.bodyweight_list_keyboard([101, 102, 103], page=1, has_next=True)
+    texts = _button_texts(kb)
+    cbs = [b.callback_data for row in kb.inline_keyboard for b in row]
+    assert "🗑 1" in texts and "🗑 2" in texts and "🗑 3" in texts
+    assert "bw:delrec:101:1" in cbs
+    assert "bw:list:0" in cbs  # предыдущая страница
+    assert "bw:list:2" in cbs  # следующая страница
+    assert "menu:bodyweight" in cbs
+
+
+def test_bodyweight_list_keyboard_no_delete_row_when_empty():
+    kb = keyboards.bodyweight_list_keyboard([], page=0, has_next=False)
+    texts = _button_texts(kb)
+    assert not any(t.startswith("🗑") for t in texts)

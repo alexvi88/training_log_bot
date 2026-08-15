@@ -389,4 +389,4 @@ async def test_tapping_a_deleted_exercise_card_says_so_instead_of_crashing(fresh
     await history.prog_show_exercise(callback, await _make_state(user_id))
 
     callback.answer.assert_awaited()
-    assert "не найдено" in callback.answer.await_args.args[0]
+    assert "Не нашёл это упражнение" in callback.answer.await_args.args[0]

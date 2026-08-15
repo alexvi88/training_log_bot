@@ -105,3 +105,40 @@ def test_stray_word_after_decimal_marker_does_not_crash():
     """"и" followed by something that isn't a plausible fraction digit (an
     exercise name, filler) must fall back gracefully rather than raise."""
     assert transcript_to_sets_line("сто и жим на восемь") == "100 8"
+
+
+# ---------- "и" as a bare weight-and-reps connector, not a decimal ----------
+#
+# Regression: "сто и восемь" (spoken instead of "сто на восемь", "на" simply
+# dropped) used to be parsed like "сто и шесть на восемь" — glued into a
+# decimal, 100.8 — because nothing ever disambiguated "и" from the fraction
+# marker when no reps number followed it. That's the more common shape in
+# practice (a complete logged set, weight and reps, nothing else), so an
+# "и"-decimal with nothing after it splits back into two numbers instead.
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("сто и восемь", "100 8"),
+        ("сто и пять", "100 5"),  # ambiguous on its own — resolves to weight×reps
+        ("восемьдесят и пять", "80 5"),
+        ("девяносто семь и шесть", "97 6"),  # no reps clause -> also splits
+    ],
+)
+def test_bare_и_with_no_trailing_reps_splits_into_weight_and_reps(text, expected):
+    assert transcript_to_sets_line(text) == expected
+
+
+def test_и_decimal_still_merges_when_a_real_reps_number_follows():
+    """The same "и" stays a decimal glue once an explicit reps count shows up
+    afterwards — "...и шесть на восемь" can only be finishing the weight,
+    the "8" is unambiguously reps via "на"."""
+    assert transcript_to_sets_line("девяносто семь и шесть на восемь") == "97.6 8"
+    assert transcript_to_sets_line("сто и пять на восемь") == "100.5 8"
+
+
+def test_и_split_output_is_parseable():
+    line = transcript_to_sets_line("сто и восемь")
+    parsed = parse_sets_line(line)
+    assert [(s.weight, s.reps) for s in parsed] == [(100.0, 8)]

@@ -273,7 +273,7 @@ async def test_confirmation_paginates_past_the_page_size(fresh_db, user_id):
 
 async def test_a_file_of_blank_rows_never_offers_to_load_zero_workouts(fresh_db, user_id):
     """Раньше это был экран «0 тренировки» с кнопкой «✅ Загрузить», после
-    которой бот рапортовал «Импортировано 0 тренировок»."""
+    которой бот рапортовал «Загрузил 0 тренировок»."""
     text, state = await _render(
         user_id,
         csv_import._finish_mapping,

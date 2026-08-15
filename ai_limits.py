@@ -148,7 +148,7 @@ _HARD_STOP_TEXT = (
 )
 
 QUESTION_LIMIT_TEXT = (
-    "На сегодня лимит вопросов исчерпан 😮‍💨 Дай тренеру передохнуть — возвращайся завтра."
+    "На сегодня лимит вопросов исчерпан 😮‍💨 Дай мне передохнуть — возвращайся завтра."
 )
 
 
@@ -294,6 +294,26 @@ async def check(user_id: int, kind: str) -> Optional[Block]:
             return None
         block.preview = True
     return block
+
+
+async def hard_stop_block() -> Optional[Block]:
+    """HARD-стоп по деньгам сам по себе — для платных входов без своей личной квоты.
+
+    `check()` умеет накрывать HARD-стопом только `kind == KIND_QUESTION` (см. её
+    докстринг): у остальных дорогих шагов есть личная квота, через которую HARD
+    неявно протекает (см. `_EXTRAS`). Кнопка «комментарий тренера» под карточкой
+    тренировки — не то и не другое: отдельной квоты у неё нет и заводить новую
+    ради одной кнопки не стоит, а деньги эта кнопка тратит настоящие. Отсюда
+    отдельная функция: тот же HARD-стоп, что видит вопрос, без личной квоты и без
+    режима предупреждений для своих (SOFT и preview этот вход не трогают —
+    экономия дешёвых шагов не про кнопку, у которой и так есть замок на два тапа).
+    """
+    level = await spend_level()
+    if level != KIND_SPEND_HARD:
+        return None
+    spend = await daily_spend_usd()
+    logger.warning("AI hard stop: за сутки ~$%.2f, платный шаг без личной квоты пропущен", spend)
+    return Block(kind=KIND_SPEND_HARD, log=f"spend_hard: ~${spend:.2f}", user_text=_HARD_STOP_TEXT)
 
 
 async def record_ack(user_id: int, kind: str) -> None:

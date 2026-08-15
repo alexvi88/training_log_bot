@@ -137,6 +137,24 @@ RELEASE_AI_TRAINER_ACTIONS = Announcement(
 # и без этого списка.
 ANNOUNCEMENTS: list[Announcement] = [RELEASE_AI_PROGRAMS_AND_VIDEO, RELEASE_AI_TRAINER_ACTIONS]
 
+# Ключи рассылок, которые прямо сейчас разносятся этим процессом. Раньше этот
+# же по смыслу набор жил только в handlers/admin.py и охранял лишь путь через
+# кнопку «Разослать всем»; стартовая фоновая задача (run_pending_announcements,
+# запускается из main.py сразу после старта) о нём не знала — если админ
+# успевал одобрить рассылку и она уже шла своим циклом, а следующий деплой
+# поднимал контейнер заново с тем же approved-статусом в базе, оба цикла читали
+# список получателей до того, как другой успевал записать свои record_push, и
+# часть людей получала анонс дважды. Набор общий для обоих путей, а проверка —
+# внутри самой отправки (deliver_and_report), а не в вызывающем коде: между
+# проверкой и добавлением в набор нет ни одного await, так что гонки не
+# остаётся.
+_sending: set[str] = set()
+
+
+def is_sending(key: str) -> bool:
+    """Идёт ли прямо сейчас рассылка `key` — любым из путей (ручной или стартовый)."""
+    return key in _sending
+
 
 def by_key(key: str) -> Announcement | None:
     return next((a for a in ANNOUNCEMENTS if a.key == key), None)
@@ -270,11 +288,26 @@ async def send_announcement(bot: Bot, ann: Announcement) -> tuple[int, int, int]
 
 
 async def deliver_and_report(bot: Bot, ann: Announcement) -> tuple[int, int, int]:
-    """Разослать одобренный анонс и отчитаться админу."""
-    sent, blocked, failed = await send_announcement(bot, ann)
-    if sent or failed:
-        await _report_to_admin(bot, ann, sent, blocked, failed)
-    return sent, blocked, failed
+    """Разослать одобренный анонс и отчитаться админу.
+
+    Гвардит себя сама через `_sending`, а не полагается на вызывающий код: и
+    стартовая задача (run_pending_announcements), и ручное «Разослать всем»
+    (handlers/admin.py) идут через эту функцию, и без общего гварда здесь
+    каждый путь видел бы только свой собственный набор в процессе — гонка
+    между ними и была причиной двойной рассылки. Второй одновременный вызов
+    тихо возвращает (0, 0, 0): рассылка уже идёт первым вызовом, докладывать
+    об этом отдельно нечего.
+    """
+    if ann.key in _sending:
+        return 0, 0, 0
+    _sending.add(ann.key)
+    try:
+        sent, blocked, failed = await send_announcement(bot, ann)
+        if sent or failed:
+            await _report_to_admin(bot, ann, sent, blocked, failed)
+        return sent, blocked, failed
+    finally:
+        _sending.discard(ann.key)
 
 
 async def _report_to_admin(bot: Bot, ann: Announcement, sent: int, blocked: int, failed: int) -> None:
