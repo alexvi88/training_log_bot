@@ -664,6 +664,24 @@ async def test_every_edit_action_survived_the_move(fresh_db, user_id):
     assert [cb for cb in callbacks if cb.startswith("rt:edit:")]
 
 
+async def test_edit_screen_pairs_the_program_actions_two_per_row(fresh_db, user_id):
+    """Четыре дня раскладывались как «два дня в строке, а дальше по одной кнопке
+    в ряд» — экран уезжал вниз на девять строк. Дни идут по одному (подписи
+    длинные), действия над программой — парами, «Назад» отдельно."""
+    db = fresh_db
+    program_id = await _program(db, user_id, days=("Верх А", "Низ А", "Верх Б", "Низ Б"))
+
+    callback = _make_callback(user_id, f"rt:pgmedit:{program_id}")
+    await routines.rt_program_edit(callback, await _state(user_id))
+
+    kb = _rendered(callback).kwargs["reply_markup"]
+    rows = [[btn.callback_data for btn in row] for row in kb.inline_keyboard]
+    assert [len(row) for row in rows] == [1, 1, 1, 1, 2, 2, 2, 1]
+    assert rows[-3] == [f"rt:pgmcopy:{program_id}", f"rt:pgmrename:{program_id}"]
+    assert rows[-2] == [f"share:prg:{program_id}", f"rt:pgmdelask:{program_id}"]
+    assert rows[-1] == [f"rt:prg:{program_id}"]
+
+
 async def test_back_from_the_edit_screen_returns_to_the_program(fresh_db, user_id):
     """А не к списку программ: человек пришёл сюда с экрана программы и туда же
     ждёт вернуться."""

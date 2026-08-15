@@ -2302,6 +2302,27 @@ async def _handle_question(
 # дефолтах» (см. _deliver_setup).
 SETUP_MAX_ROUNDS = 2
 
+# Вопрос про цель бот задаёт сам, а не полагается на модель. Цель была одним
+# пунктом промпта среди пяти, а слотов в опроснике меньше, чем тем, — и она
+# регулярно проигрывала дням, времени, травмам и сплиту: человек отвечал на
+# четыре вопроса и получал программу, ни разу не сказав, ЗАЧЕМ он тренируется.
+# Это единственная вводная, без которой программа собирается наугад, поэтому
+# она идёт первой и не зависит от того, вспомнит ли о ней модель.
+#
+# Варианты — четыре ходовые цели (потолок SETUP_MAX_CHOICES тоже четыре).
+# Кнопками ответ не запирается: под вопросом с вариантами стоит
+# SETUP_HINT_WITH_CHOICES — «жми вариант или напиши свой», и текстовый ответ
+# обрабатывается ровно так же (см. _record_setup_answer).
+SETUP_GOAL_QUESTION = {
+    "question": "Чего хочешь от тренировок?",
+    "choices": ["Набрать массу", "Стать сильнее", "Похудеть", "Вернуться в форму"],
+}
+
+# По этим кускам узнаём вопрос про цель, который модель всё-таки задала сама
+# (промпт запрещает, но запрет — не гарантия). Совпало — свой не подставляем:
+# два вопроса про одно подряд читаются как поломка.
+SETUP_GOAL_MARKERS = ("цел", "чего хочешь", "чего ждёшь", "зачем тренир", "какой результат")
+
 # Подсказка под вопросом. Про «не знаю» сказано прямо и намеренно: без этого
 # человек, который не может ответить, либо выдумывает число, либо застревает —
 # а разобраться с «хз» и встречным вопросом умеет финальная сборка, ей эти
@@ -2442,6 +2463,39 @@ def _setup_answers_text(setup: dict) -> str:
     return "\n".join(lines)
 
 
+async def _questions_with_goal(
+    user_id: int, questions: list[dict], previous: dict
+) -> tuple[list[dict], bool]:
+    """Поставить вопрос про цель первым — если её ещё никто не спросил.
+
+    Возвращает (вопросы, «цель закрыта»). Второе переживает круги уточнений в
+    `ai_setup`: профиль между кругами не меняется (модель сохранит цель только
+    в финальной сборке), так что без флага второй круг задал бы тот же вопрос
+    ещё раз.
+    """
+    if previous.get("goal_asked"):
+        return questions, True
+    asked_by_model = any(
+        marker in (question.get("question") or "").lower()
+        for question in questions
+        for marker in SETUP_GOAL_MARKERS
+    )
+    if asked_by_model:
+        return questions, True
+    user = await db.get_user(user_id)
+    if user is not None and (user["goal"] or "").strip():
+        # Цель уже записана с его слов — переспрашивать то, что бот показывает
+        # на экране «Обо мне», значит признаваться, что он этого не помнит.
+        return questions, True
+    goal_question = {
+        "question": SETUP_GOAL_QUESTION["question"],
+        "choices": list(SETUP_GOAL_QUESTION["choices"]),
+    }
+    # Срезаем с хвоста: свой вопрос идёт первым, а лишним оказывается последний
+    # вопрос модели — он же и наименее важный, вопросы она ставит по убыванию.
+    return ([goal_question] + questions)[: ai_trainer.SETUP_MAX_QUESTIONS], True
+
+
 async def _deliver_setup(
     message: Message,
     state: FSMContext,
@@ -2480,7 +2534,13 @@ async def _deliver_setup(
         # Круги кончились. Счётчик уводим ЗА потолок до вызова модели — это и
         # есть тормоз рекурсии: опросник, который тренер соберёт в ответ на это
         # сообщение, попадёт в ветку выше и никого не спросит.
-        await state.update_data(ai_setup={"rounds": rounds + 1, "goal": previous_goal})
+        await state.update_data(
+            ai_setup={
+                "rounds": rounds + 1,
+                "goal": previous_goal,
+                "goal_asked": bool(previous.get("goal_asked")),
+            }
+        )
         text = SETUP_ENOUGH_FRAME
         if previous_goal:
             text = f"{text}\nИсходная задача: {previous_goal}"
@@ -2497,9 +2557,11 @@ async def _deliver_setup(
         await _close_setup_question(
             message.bot, message.chat.id, previous, "⏹ Опросник отменён — начали заново"
         )
+    questions, goal_asked = await _questions_with_goal(user_id, questions, previous)
     await state.update_data(
         ai_setup={
             "questions": questions,
+            "goal_asked": goal_asked,
             "answers": [],
             "idx": 0,
             # Исходная цель переживает круги: на втором заходе history_question
@@ -2521,7 +2583,13 @@ async def _finish_setup(target: Message, state: FSMContext, user_id: int, setup:
     # есть потолок (см. SETUP_MAX_ROUNDS), а вопросов в нём не остаётся, так что
     # перехватывать сообщения он не будет (см. _active_setup).
     await state.update_data(
-        ai_setup={"rounds": int(setup.get("rounds") or 1), "goal": setup.get("goal")}
+        ai_setup={
+            "rounds": int(setup.get("rounds") or 1),
+            "goal": setup.get("goal"),
+            # Профиль обновится только после сборки, поэтому «цель уже спросили»
+            # хранится флагом — иначе второй круг задал бы тот же вопрос снова.
+            "goal_asked": bool(setup.get("goal_asked")),
+        }
     )
     # В ai_history и в дневник переписки это уезжает как есть — человеческими
     # строчками «вопрос — ответ», а не служебным JSON: get_full_chat_history
