@@ -83,17 +83,35 @@ async def test_bodyweight_limit_returns_recent_ascending(user_id):
 
 
 @pytest.mark.asyncio
-async def test_delete_last_bodyweight(user_id):
-    await dbmod.add_bodyweight_log(user_id, 80.0, logged_at="2026-01-01T10:00:00")
+async def test_delete_bodyweight_log_removes_the_one_asked_for(user_id):
+    """Удалить можно любую запись, не только последнюю — ту, что была неделю
+    назад, а не только последнюю в дневнике."""
+    id1 = await dbmod.add_bodyweight_log(user_id, 80.0, logged_at="2026-01-01T10:00:00")
     await dbmod.add_bodyweight_log(user_id, 79.0, logged_at="2026-02-01T10:00:00")
-    removed = await dbmod.delete_last_bodyweight(user_id)
-    assert removed["weight"] == 79.0
+    removed = await dbmod.delete_bodyweight_log(id1, user_id)
+    assert removed is True
+    assert [r["weight"] for r in await dbmod.list_bodyweight_logs(user_id)] == [79.0]
+
+
+@pytest.mark.asyncio
+async def test_delete_bodyweight_log_refuses_someone_elses_row(user_id):
+    log_id = await dbmod.add_bodyweight_log(user_id, 80.0, logged_at="2026-01-01T10:00:00")
+    removed = await dbmod.delete_bodyweight_log(log_id, telegram_id=user_id + 1)
+    assert removed is False
     assert [r["weight"] for r in await dbmod.list_bodyweight_logs(user_id)] == [80.0]
 
 
 @pytest.mark.asyncio
-async def test_delete_last_bodyweight_empty(user_id):
-    assert await dbmod.delete_last_bodyweight(user_id) is None
+async def test_count_and_list_bodyweight_logs_page_newest_first(user_id):
+    for i, w in enumerate([80, 79, 78, 77]):
+        await dbmod.add_bodyweight_log(user_id, w, logged_at=f"2026-0{i + 1}-01T10:00:00")
+    assert await dbmod.count_bodyweight_logs(user_id) == 4
+
+    page0 = await dbmod.list_bodyweight_logs_page(user_id, limit=2, offset=0)
+    assert [r["weight"] for r in page0] == [77.0, 78.0]
+
+    page1 = await dbmod.list_bodyweight_logs_page(user_id, limit=2, offset=2)
+    assert [r["weight"] for r in page1] == [79.0, 80.0]
 
 
 @pytest.mark.asyncio
@@ -146,6 +164,31 @@ def test_bodyweight_screen_lists_only_period_logs_when_given():
     assert "01.01.2026" not in text
     # latest/count still reflect the full history, not just the period
     assert "Всего 2 взвешивания." in text
+
+
+# ---------- «✏️ Записи»: список с удалением любой записи ----------
+
+
+def test_bodyweight_list_screen_empty():
+    text = formatting.build_bodyweight_list_screen([], "kg", page=0, page_size=10, total=0)
+    assert "Записей нет" in text
+
+
+def test_bodyweight_list_screen_numbers_rows_and_shows_time():
+    rows = [
+        {"id": 2, "weight": 80.0, "logged_at": "2026-02-01T08:30:00"},
+        {"id": 1, "weight": 82.0, "logged_at": "2026-01-01T07:00:00"},
+    ]
+    text = formatting.build_bodyweight_list_screen(rows, "kg", page=0, page_size=10, total=2)
+    assert "1. 01.02.2026 08:30 — 80кг" in text
+    assert "2. 01.01.2026 07:00 — 82кг" in text
+    assert "Показано" not in text  # everything fits on one page
+
+
+def test_bodyweight_list_screen_shows_page_range_when_paginated():
+    rows = [{"id": 1, "weight": 80.0, "logged_at": "2026-02-01T08:00:00"}]
+    text = formatting.build_bodyweight_list_screen(rows, "kg", page=1, page_size=1, total=3)
+    assert "Показано 2–2 из 3" in text
 
 
 # ---------- unit conversion: set weights ----------
@@ -324,6 +367,76 @@ async def test_confirming_a_suspicious_bodyweight_logs_it(fresh_db, user_id):
 
     logs = await dbmod.list_bodyweight_logs(user_id)
     assert [r["weight"] for r in logs] == [300.0]
+
+
+@pytest.mark.asyncio
+async def test_bw_list_shows_entries_newest_first(fresh_db, user_id):
+    import handlers.bodyweight as bw
+
+    await dbmod.add_bodyweight_log(user_id, 80.0, logged_at="2026-01-01T10:00:00")
+    await dbmod.add_bodyweight_log(user_id, 79.0, logged_at="2026-02-01T10:00:00")
+    state = await _make_state(user_id)
+
+    callback = _make_bw_confirm_callback(user_id, "bw:list:0")
+    await bw.bw_list(callback, state)
+
+    from fsm import BodyweightFlow
+    assert await state.get_state() == BodyweightFlow.browsing.state
+    text = callback.message.answer.await_args.args[0]
+    assert "1. 01.02.2026" in text
+    assert "2. 01.01.2026" in text
+
+
+@pytest.mark.asyncio
+async def test_bw_delete_record_removes_the_chosen_entry_and_reports_it(fresh_db, user_id):
+    import handlers.bodyweight as bw
+
+    id1 = await dbmod.add_bodyweight_log(user_id, 80.0, logged_at="2026-01-01T10:00:00")
+    await dbmod.add_bodyweight_log(user_id, 79.0, logged_at="2026-02-01T10:00:00")
+    state = await _make_state(user_id)
+
+    callback = _make_bw_confirm_callback(user_id, f"bw:delrec:{id1}:0")
+    await bw.bw_delete_record(callback, state)
+
+    callback.answer.assert_awaited_once_with("Удалил запись")
+    logs = await dbmod.list_bodyweight_logs(user_id)
+    assert [r["weight"] for r in logs] == [79.0]
+
+
+@pytest.mark.asyncio
+async def test_bw_delete_record_someone_elses_entry_reports_not_found(fresh_db, user_id):
+    import handlers.bodyweight as bw
+
+    log_id = await dbmod.add_bodyweight_log(user_id, 80.0, logged_at="2026-01-01T10:00:00")
+    await dbmod.get_or_create_user(user_id + 1, "other")
+    state = await _make_state(user_id + 1)
+
+    callback = _make_bw_confirm_callback(user_id + 1, f"bw:delrec:{log_id}:0")
+    await bw.bw_delete_record(callback, state)
+
+    callback.answer.assert_awaited_once_with("Запись не найдена")
+    assert len(await dbmod.list_bodyweight_logs(user_id)) == 1
+
+
+@pytest.mark.asyncio
+async def test_bw_delete_record_steps_back_a_page_when_it_empties_the_last_one(fresh_db, user_id, monkeypatch):
+    """Удалить единственную запись на второй странице — и не остаться на
+    пустом экране без единой кнопки назад."""
+    import handlers.bodyweight as bw
+    import keyboards
+
+    ids = []
+    for i, w in enumerate([80, 79]):
+        ids.append(await dbmod.add_bodyweight_log(user_id, w, logged_at=f"2026-0{i + 1}-01T10:00:00"))
+    state = await _make_state(user_id)
+
+    monkeypatch.setattr(keyboards, "BODYWEIGHT_LIST_PAGE_SIZE", 1)
+    # page 1 holds the oldest entry (newest-first order) — delete it.
+    callback = _make_bw_confirm_callback(user_id, f"bw:delrec:{ids[0]}:1")
+    await bw.bw_delete_record(callback, state)
+
+    text = callback.message.answer.await_args.args[0]
+    assert "1. 01.02.2026" in text  # back on page 0, the remaining entry
 
 
 @pytest.mark.asyncio

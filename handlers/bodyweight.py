@@ -182,11 +182,47 @@ async def bw_period(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(F.data == "bw:undo")
-async def bw_undo(callback: CallbackQuery, state: FSMContext):
-    removed = await db.delete_last_bodyweight(callback.from_user.id)
-    await callback.answer("Удалил последнюю запись" if removed else "Нет записей")
-    await _render(callback, state)
+async def _render_list(callback: CallbackQuery, state: FSMContext, page: int) -> None:
+    """Отрисовать (или перерисовать) страницу «✏️ Записи»."""
+    user_id = callback.from_user.id
+    user = await db.get_user(user_id)
+    size = keyboards.BODYWEIGHT_LIST_PAGE_SIZE
+    total = await db.count_bodyweight_logs(user_id)
+    rows = await db.list_bodyweight_logs_page(user_id, limit=size, offset=page * size)
+    text = formatting.build_bodyweight_list_screen(rows, user["unit"], page, size, total)
+    kb = keyboards.bodyweight_list_keyboard(
+        [r["id"] for r in rows], page, has_next=(page + 1) * size < total
+    )
+    await state.set_state(BodyweightFlow.browsing)
+    await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML")
+
+
+@router.callback_query(F.data.startswith("bw:list:"))
+async def bw_list(callback: CallbackQuery, state: FSMContext):
+    page = int(callback.data.split(":")[2])
+    await _render_list(callback, state, page)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("bw:delrec:"))
+async def bw_delete_record(callback: CallbackQuery, state: FSMContext):
+    """Удалить любую запись из списка — не только последнюю (см. модуль).
+
+    Без StateFilter нарочно: экран «✏️ Записи» может пролежать в чате сколько
+    угодно, пока человек заглянет ещё куда-то и вернётся — тот же довод, что у
+    fd:delask в handlers/food_diary.py.
+    """
+    _, _, log_id_s, page_s = callback.data.split(":")
+    log_id, page = int(log_id_s), int(page_s)
+    removed = await db.delete_bodyweight_log(log_id, callback.from_user.id)
+    await callback.answer("Удалил запись" if removed else "Запись не найдена")
+    # Если это была последняя запись на странице — а страница не первая,
+    # съезжаем на предыдущую, чтобы не остаться на пустом экране.
+    size = keyboards.BODYWEIGHT_LIST_PAGE_SIZE
+    total = await db.count_bodyweight_logs(callback.from_user.id)
+    if page > 0 and page * size >= total:
+        page -= 1
+    await _render_list(callback, state, page)
 
 
 def _logged_at_for(date: dt.date | None) -> str | None:

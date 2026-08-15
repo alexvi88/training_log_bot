@@ -2299,6 +2299,32 @@ def build_bodyweight_screen(logs: list, unit: str = "kg", period_logs: list | No
     return text
 
 
+def build_bodyweight_list_screen(
+    rows: list, unit: str, page: int, page_size: int, total: int
+) -> str:
+    """Text for the "✏️ Записи" screen: every raw entry (not collapsed by day,
+    unlike build_bodyweight_screen) so a duplicate same-day weigh-in can be
+    told apart and deleted individually. rows: one page, newest-first (as
+    db.list_bodyweight_logs_page returns).
+    """
+    u = UNIT_LABELS.get(unit, "кг")
+    head = ["✏️ <b>Записи веса</b>", ""]
+    if not rows:
+        head.append("Записей нет.")
+        return "\n".join(head)
+    lines = [
+        f"{i}. {dt.datetime.fromisoformat(r['logged_at']).strftime('%d.%m.%Y %H:%M')} "
+        f"— {format_weight(r['weight'])}{u}"
+        for i, r in enumerate(rows, start=1)
+    ]
+    text = "\n".join(head + lines)
+    if total > page_size:
+        start = page * page_size + 1
+        text += f"\n\n<i>Показано {start}–{start + len(rows) - 1} из {total}</i>"
+    text += "\n\nУдалить — жми номер записи."
+    return text
+
+
 def format_progression_hint(suggestion, achieved: bool = False) -> str:
     """"Цель: …" nudge from analytics.suggest_progression, on its own line under
     the "В прошлый раз" line (no bold — the surrounding line is already italicized).

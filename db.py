@@ -6120,6 +6120,22 @@ async def get_bodyweight_log(log_id: int) -> Optional[aiosqlite.Row]:
     return await cur.fetchone()
 
 
+async def list_bodyweight_logs_page(
+    telegram_id: int, limit: int, offset: int = 0
+) -> list[aiosqlite.Row]:
+    """A page of bodyweight entries, newest-first, for the "✏️ Записи" screen
+    where any entry (not just the last one) can be deleted — see
+    handlers/bodyweight.py:bw_list. Unlike list_bodyweight_logs (oldest-first,
+    for charting), the newest-first order here matches how the screen numbers
+    its delete buttons page by page."""
+    cur = await conn().execute(
+        "SELECT * FROM bodyweight_logs WHERE telegram_id = ? "
+        "ORDER BY logged_at DESC, id DESC LIMIT ? OFFSET ?",
+        (telegram_id, limit, offset),
+    )
+    return await cur.fetchall()
+
+
 async def get_latest_bodyweight(telegram_id: int) -> Optional[aiosqlite.Row]:
     cur = await conn().execute(
         "SELECT * FROM bodyweight_logs WHERE telegram_id = ? ORDER BY logged_at DESC, id DESC LIMIT 1",
@@ -6128,24 +6144,14 @@ async def get_latest_bodyweight(telegram_id: int) -> Optional[aiosqlite.Row]:
     return await cur.fetchone()
 
 
-async def delete_last_bodyweight(telegram_id: int) -> Optional[aiosqlite.Row]:
-    row = await get_latest_bodyweight(telegram_id)
-    if row is None:
-        return None
-    async with _write_lock:
-        await conn().execute("DELETE FROM bodyweight_logs WHERE id = ?", (row["id"],))
-        await conn().commit()
-    return row
-
-
 async def delete_bodyweight_log(log_id: int, telegram_id: int) -> bool:
-    """Убрать одну конкретную запись веса — ту, а не последнюю.
+    """Убрать одну конкретную запись веса — по id, а не только последнюю.
 
-    delete_last_bodyweight хватает экрану 🏋️ Вес, где отменяют только что
-    набранное. Откату записи, сделанной AI-тренером, — нет: между записью и
-    тапом по «↩️ Отменить» человек мог взвеситься ещё раз руками, и снос
-    последней утащил бы не то. Отсюда id — и проверка владельца при нём: id
-    приезжает из callback_data, то есть от клиента.
+    Экран 🏋️ Вес (handlers/bodyweight.py:bw_delete_record) и AI-тренер (откат
+    записи, сделанной им самим) оба удаляют так: между записью и удалением
+    человек мог взвеситься ещё раз руками, и снос последней утащил бы не то.
+    Отсюда id — и проверка владельца при нём: id приезжает из callback_data,
+    то есть от клиента.
     """
     async with _write_lock:
         cur = await conn().execute(

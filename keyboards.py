@@ -1595,7 +1595,7 @@ DEFAULT_BODYWEIGHT_WEEKS = 20
 def bodyweight_keyboard(has_logs: bool, weeks: int = 0, show_periods: bool = False) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     if has_logs:
-        b.row(InlineKeyboardButton(text="↩️ Удалить последнюю", callback_data="bw:undo"))
+        b.row(InlineKeyboardButton(text="✏️ Записи", callback_data="bw:list:0"))
     if show_periods:
         period_buttons = [
             InlineKeyboardButton(
@@ -1605,6 +1605,36 @@ def bodyweight_keyboard(has_logs: bool, weeks: int = 0, show_periods: bool = Fal
         ]
         b.row(*period_buttons)
     b.row(InlineKeyboardButton(text="🏠 Меню", callback_data="bw:menu"))
+    return b.as_markup()
+
+
+# Сколько записей веса на страницу списка «✏️ Записи» — как история питания.
+BODYWEIGHT_LIST_PAGE_SIZE = 10
+
+
+def bodyweight_list_keyboard(entry_ids: Sequence[int], page: int, has_next: bool) -> InlineKeyboardMarkup:
+    """Экран «✏️ Записи»: удаление любой записи (не только последней), страницами.
+
+    Кнопка удаления — по номеру строки («🗑 3»), как в food_day_keyboard: сам
+    вес и дата уже расписаны в тексте экрана, а в кнопку не влезают.
+    """
+    b = InlineKeyboardBuilder()
+    if entry_ids:
+        b.row(
+            *[
+                InlineKeyboardButton(text=f"🗑 {i}", callback_data=f"bw:delrec:{entry_id}:{page}")
+                for i, entry_id in enumerate(entry_ids, start=1)
+            ],
+            width=5,
+        )
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text=PAGE_PREV_TEXT, callback_data=f"bw:list:{page - 1}"))
+    if has_next:
+        nav.append(InlineKeyboardButton(text=PAGE_NEXT_TEXT, callback_data=f"bw:list:{page + 1}"))
+    if nav:
+        b.row(*nav)
+    b.row(InlineKeyboardButton(text="⬅️ К дневнику веса", callback_data="menu:bodyweight"))
     return b.as_markup()
 
 
