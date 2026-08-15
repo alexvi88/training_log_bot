@@ -637,6 +637,13 @@ def _local_day(column: str, tz_offset: int) -> str:
     return f"date({column}, '{int(tz_offset):+d} hours')"
 
 
+def _local_hour(column: str, tz_offset: int) -> str:
+    """SQL-выражение «час по часам пользователя» для UTC-столбца — тот же
+    сдвиг, что и _local_day, только для ачивок «Ранняя пташка»/«Ночная смена»,
+    которые до этого сверялись с часом сервера (UTC) напрямую."""
+    return f"CAST(strftime('%H', {column}, '{int(tz_offset):+d} hours') AS INTEGER)"
+
+
 async def user_tz_offset(user_id: int) -> int:
     """Смещение пользователя в целых часах; 0, если пользователя или значения нет."""
     cur = await conn().execute(
@@ -2929,12 +2936,19 @@ async def max_e1rm_before_workout(
     return (await cur.fetchone())["mx"]
 
 
-async def achievement_extremes(user_id: int) -> dict[str, Any]:
+async def achievement_extremes(
+    user_id: int, *, tz_offset: Optional[int] = None
+) -> dict[str, Any]:
     """Пер-сессионные экстремумы и счётчики для новых семей ачивок — одним
     проходом по finished-тренировкам, чтобы resync не ходил по ним по одной.
 
     Тоннаж и повторы — сырые, в единицах пользователя: нормализация в кг
     остаётся на achievement_sync, как и у остальных полей контекста.
+
+    early_workouts режется местным часом пользователя (см. _local_hour) — до
+    этого «до 7 утра» сверялось с часом сервера (UTC) и «Клуб пяти утра»
+    (early10) мог не совпасть с тем, что человек видел на «Ранней пташке»,
+    которая для только что закрытой тренировки уже использует местный час.
     """
     cur = await conn().execute(
         "SELECT COALESCE(MAX(sets_count), 0) AS max_sets, "
@@ -2967,12 +2981,18 @@ async def achievement_extremes(user_id: int) -> dict[str, Any]:
         "SELECT EXISTS("
         "  SELECT 1 FROM workout_blocks b JOIN workouts w ON w.id = b.workout_id "
         "  WHERE w.user_id = ? AND w.status = 'finished' AND b.type != 'single'"
-        ") AS has_superset, "
-        "(SELECT COUNT(*) FROM workouts w2 WHERE w2.user_id = ? AND w2.status = 'finished' "
-        " AND CAST(strftime('%H', w2.started_at) AS INTEGER) < 7) AS early_workouts",
-        (user_id, user_id),
+        ") AS has_superset",
+        (user_id,),
     )
     extra = dict(await cur.fetchone())
+    hour = _local_hour("w2.started_at", await _tz_offset_of(user_id, tz_offset))
+    cur = await conn().execute(
+        f"SELECT COUNT(*) AS early_workouts FROM workouts w2 "
+        "WHERE w2.user_id = ? AND w2.status = 'finished' "
+        f"AND {hour} < 7",
+        (user_id,),
+    )
+    extra["early_workouts"] = (await cur.fetchone())["early_workouts"]
     return {**per_session, **per_set, **extra}
 
 
