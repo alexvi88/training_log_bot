@@ -239,6 +239,69 @@ async def test_funnel_window_cuts_by_signup_date(fresh_db):
     assert [r["source"] for r in await db.acquisition_funnel(days=90)] == ["src_old"]
 
 
+async def _started_workout(db, user_id: int) -> int:
+    """Тренировка открыта, но подхода в ней ещё нет — «начал», но не «записал»."""
+    return await db.create_workout(user_id)
+
+
+async def _workout_with_one_set(db, user_id: int) -> int:
+    """Подход есть, но тренировка не закрыта — «записал», но не «завершил»."""
+    group_id = await db.create_muscle_group(user_id, "Спина")
+    ex_id = await db.create_exercise(user_id, "Тяга", group_id)
+    workout_id = await db.create_workout(user_id)
+    block_id = await db.create_block(workout_id, "single")
+    await db.add_block_exercise(block_id, ex_id, 0)
+    await db.add_set(block_id, ex_id, 1, 0, 60.0, 8)
+    return workout_id
+
+
+async def test_onboarding_funnel_separates_every_step(fresh_db):
+    db = fresh_db
+    for telegram_id in (1, 2, 3, 4):
+        await db.get_or_create_user(telegram_id, f"u{telegram_id}")
+        await db.set_user_source(telegram_id, "src_a")
+    # 1 — ничего не сделал; 2 — открыл тренировку и бросил; 3 — записал подход,
+    # не закрыл; 4 — закрыл первую тренировку целиком.
+    await _started_workout(db, 2)
+    await _workout_with_one_set(db, 3)
+    await _finished_workout(db, 4)
+
+    row = (await db.onboarding_funnel(days=30))[0]
+
+    assert row["users"] == 4
+    assert row["started"] == 3  # 2, 3 и 4 все открывали тренировку
+    assert row["logged_set"] == 2  # только 3 и 4 дошли до подхода
+    assert row["finished"] == 1  # только 4 закрыл
+
+
+async def test_onboarding_funnel_skips_pre_attribution_and_out_of_window_users(fresh_db):
+    db = fresh_db
+    await db.get_or_create_user(1, "legacy")
+    await db.set_user_source(1, acquisition.SOURCE_LEGACY)
+    await db.get_or_create_user(2, "old")
+    await db.set_user_source(2, "src_a")
+    long_ago = (dt.datetime.now() - dt.timedelta(days=60)).isoformat(timespec="seconds")
+    await db.conn().execute("UPDATE users SET created_at = ? WHERE telegram_id = 2", (long_ago,))
+    await db.conn().commit()
+
+    assert await db.onboarding_funnel(days=30) == []
+
+
+async def test_format_onboarding_funnel_shows_every_step_percent():
+    text = acquisition.format_onboarding_funnel(
+        [_row(source="src_kachalka", users=4, started=3, logged_set=2, finished=1)], days=30
+    )
+    assert "kachalka" in text
+    assert "75%" in text  # started
+    assert "50%" in text  # logged_set
+    assert "25%" in text  # finished
+
+
+def test_format_onboarding_funnel_empty_tells_no_newcomers():
+    text = acquisition.format_onboarding_funnel([], days=30)
+    assert "не было" in text
+
+
 async def test_top_referrers(fresh_db):
     db = fresh_db
     await db.get_or_create_user(10, "inviter")

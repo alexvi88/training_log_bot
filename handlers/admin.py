@@ -416,10 +416,12 @@ async def cmd_growth(message: Message, state: FSMContext):
     if len(parts) > 1 and parts[1].isdigit() and int(parts[1]) > 0:
         days = int(parts[1])
     funnel = await db.acquisition_funnel(days, alive_days=acquisition.ALIVE_WINDOW_DAYS)
+    onboarding = await db.onboarding_funnel(days)
     referrers = await db.top_referrers(GROWTH_REFERRERS)
     bot_username = await sharing.get_bot_username(message.bot)
     text = (
         f"{acquisition.format_funnel(funnel, days)}\n\n"
+        f"{acquisition.format_onboarding_funnel(onboarding, days)}\n\n"
         f"{acquisition.format_referrers(referrers)}\n\n"
         f"Ссылка под новый канал: <code>{acquisition.channel_link(bot_username, 'имя')}</code> — "
         f"вместо «имя» латиница, цифры и «_»."
