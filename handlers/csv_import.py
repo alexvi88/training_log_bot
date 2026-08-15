@@ -60,8 +60,14 @@ async def _attach_import_overview(bot, chat_id: int, user_id: int) -> None:
     if not overview:
         return
     with suppress(TelegramBadRequest):
+        # Кнопка под разбором — иначе это монолог тренера, а не начало
+        # разговора: человек только что перенёс историю, и логичный
+        # следующий шаг — спросить про неё же, а не печатать вопрос заново
+        # (см. handlers.ai_trainer.ai_import_cta и keyboards.
+        # import_overview_cta_keyboard).
         await bot.send_message(
-            chat_id, formatting.ai_markdown_to_html(overview), parse_mode="HTML"
+            chat_id, formatting.ai_markdown_to_html(overview), parse_mode="HTML",
+            reply_markup=keyboards.import_overview_cta_keyboard(),
         )
 
 # Кто прямо сейчас пишет импортированные тренировки в базу — двойной тап по

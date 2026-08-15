@@ -164,3 +164,27 @@ async def test_overview_returns_none_on_model_failure(fresh_db, user_id, monkeyp
     )
 
     assert await ai_trainer.import_history_overview(user_id) is None
+
+
+# ---------- доставка: под сообщением с разбором есть кнопка-CTA ----------
+
+
+async def test_attached_overview_carries_the_cta_button(fresh_db, user_id, monkeypatch):
+    """Разбор истории — не тупиковый монолог: под ним живёт кнопка, которая
+    сразу задаёт тренеру готовый вопрос про эту же историю."""
+    import handlers.csv_import as csv_import
+    import keyboards
+
+    async def fake_overview(uid):
+        return "Вижу два года жима."
+
+    monkeypatch.setattr(csv_import.ai_trainer, "import_history_overview", fake_overview)
+
+    bot = SimpleNamespace(send_message=AsyncMock())
+
+    await csv_import._attach_import_overview(bot, user_id, user_id)
+
+    kwargs = bot.send_message.await_args.kwargs
+    expected_kb = keyboards.import_overview_cta_keyboard()
+    assert kwargs["reply_markup"].inline_keyboard[0][0].callback_data == \
+        expected_kb.inline_keyboard[0][0].callback_data
