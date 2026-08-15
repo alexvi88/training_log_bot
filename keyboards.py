@@ -71,7 +71,7 @@ def main_menu(
     # Тот же callback, что и «📥 Импорт CSV» в настройках (settings:import,
     # см. handlers/csv_import.py) — второй вход в один и тот же флоу, не новый.
     if show_import_button:
-        b.button(text="📥 Перенести историю из Hevy", callback_data="settings:import")
+        b.button(text="📥 Перенести историю из Hevy/Strong", callback_data="settings:import")
     b.button(text="📈 Прогресс", callback_data="menu:progress")
     b.button(text="📚 История", callback_data="menu:history")
     b.button(text="⚙️ Упражнения", callback_data="menu:exercises")
