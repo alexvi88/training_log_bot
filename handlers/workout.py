@@ -596,7 +596,7 @@ async def _render_logging_screen(bot, state: FSMContext, user):
         dt.date.fromisoformat(d) for d in await db.list_finished_workout_dates(user["telegram_id"])
     ]
     show_instruction = not analytics.is_seasoned(recent_dates, timeutil.user_today(user))
-    show_format_hint = not await db.has_any_set(user["telegram_id"])
+    show_format_hint = not await db.has_manual_set(user["telegram_id"])
     # Ряд «тот же вес, другие повторы» (см. keyboards.reps_window) — от
     # сегодняшнего последнего подхода, а до первого от прошлой тренировки. Нужен
     # и подсказке (назвать вес под цифрами), и клавиатуре (какие цифры рисовать).
