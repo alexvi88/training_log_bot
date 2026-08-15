@@ -123,9 +123,10 @@ async def import_start(callback: CallbackQuery, state: FSMContext):
     await ui.safe_edit(
         callback,
         "📥 Пришли CSV-файл с колонками «дата, упражнение, вес, повторы».\n\n"
-        "Переезжаешь из Hevy — Settings → Export & Import Data, экспорт придёт "
-        "на почту файлом CSV.\n"
-        "Из Strong — Settings → Export Strong Data, файл сохранится на телефон.\n"
+        "Где взять экспорт:\n"
+        "• Hevy — Settings → Export & Import Data, файл CSV придёт на почту.\n"
+        "• Strong — Profile → Settings → Export Workouts, файл сохранится "
+        "на телефон.\n\n"
         "И тот и другой присылай мне как есть, руками подгонять ничего не надо.",
         reply_markup=keyboards.cancel_keyboard("imp:cancel"),
     )
