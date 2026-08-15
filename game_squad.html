@@ -1,0 +1,1134 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Кач-Отряд</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    background: linear-gradient(135deg, #14110f 0%, #221812 50%, #0d1a2e 100%);
+    font-family: 'Courier New', monospace;
+    color: #fff;
+    overflow: hidden;
+  }
+  #game-canvas {
+    position: fixed; inset: 0; width: 100vw; height: 100vh; height: 100svh;
+    touch-action: none; display: none;
+  }
+  #game-canvas.active { display: block; }
+
+  .screen {
+    position: fixed; inset: 0; display: none;
+    align-items: center; justify-content: center;
+    padding: 16px; padding-top: max(16px, env(safe-area-inset-top));
+    padding-bottom: max(16px, env(safe-area-inset-bottom));
+    overflow-y: auto;
+  }
+  .screen.active { display: flex; }
+  .screen-inner {
+    width: 100%; max-width: 480px;
+    display: flex; flex-direction: column; align-items: center; gap: 16px;
+  }
+
+  h1 {
+    font-size: 24px; text-align: center; text-transform: uppercase;
+    letter-spacing: 3px; color: #ffd700; text-shadow: 0 0 20px #ffd700aa;
+  }
+  .subtitle { font-size: 13px; color: #aaa; text-align: center; line-height: 1.5; }
+  .subtitle b { color: #ffd700; }
+
+  /* ── ВЫБОР КАЧКА ── */
+  .fighters-row {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 14px;
+    width: 100%; max-width: 360px;
+  }
+  .fighter-card {
+    background: rgba(255,255,255,0.05);
+    border: 2px solid rgba(255,215,0,0.3);
+    border-radius: 12px; padding: 12px; cursor: pointer; text-align: center;
+    transition: border-color 0.2s, transform 0.1s, box-shadow 0.2s;
+  }
+  .fighter-card:hover, .fighter-card:active {
+    border-color: #ffd700; transform: scale(1.04); box-shadow: 0 0 20px #ffd70055;
+  }
+  .fighter-card canvas { width: 100%; aspect-ratio: 1; }
+  .fighter-card img {
+    width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 8px; display: block;
+  }
+  .fighter-name {
+    margin-top: 8px; font-size: 13px; text-transform: uppercase;
+    letter-spacing: 1px; color: #ffd700;
+  }
+  .fighter-tag { font-size: 10px; color: #aaa; margin-top: 2px; }
+
+  .controls-hint { font-size: 12px; color: #888; text-align: center; line-height: 1.7; }
+  .controls-hint b { color: #ddd; }
+
+  /* ── РЕЗУЛЬТАТ ── */
+  #screen-result .screen-inner { text-align: center; }
+  .result-title {
+    font-size: 30px; font-weight: bold; text-transform: uppercase;
+    letter-spacing: 3px; color: #ff4444; text-shadow: 0 0 20px #ff4444;
+  }
+  .result-score { font-size: 20px; color: #ffd700; }
+  #result-art {
+    width: 104px; height: 104px; object-fit: cover; border-radius: 12px;
+    border: 2px solid rgba(255,215,0,0.4); display: none; margin: 0 auto;
+  }
+  .result-stats { font-size: 12px; color: #aaa; }
+  .result-quip { font-size: 13px; color: #ccc; line-height: 1.6; max-width: 340px; }
+  .result-best { font-size: 12px; color: #888; }
+  .result-btn {
+    background: rgba(255,215,0,0.15); border: 2px solid #ffd700; border-radius: 12px;
+    color: #ffd700; font-family: inherit; font-size: 15px; font-weight: bold;
+    text-transform: uppercase; letter-spacing: 2px; padding: 14px 32px; cursor: pointer;
+    transition: background 0.2s, transform 0.1s; min-width: 220px;
+  }
+  .result-btn:hover { background: rgba(255,215,0,0.3); }
+  .result-btn:active { transform: scale(0.97); }
+  .result-btn.retry { border-color: #00c850; color: #00c850; background: rgba(0,200,80,0.1); }
+  .result-btn.retry:hover { background: rgba(0,200,80,0.25); }
+  #result-status { color: #aaa; font-size: 13px; min-height: 16px; }
+
+  #flash { position: fixed; inset: 0; pointer-events: none; opacity: 0; transition: opacity 0.15s; }
+  #flash.red { background: rgba(255,40,40,0.4); }
+  #flash.orange { background: rgba(255,140,20,0.32); }
+  #flash.green { background: rgba(60,220,110,0.3); }
+  #flash.gold { background: rgba(255,215,0,0.4); }
+</style>
+</head>
+<body>
+
+<canvas id="game-canvas"></canvas>
+<div id="flash"></div>
+
+<!-- ЭКРАН 1: выбор качка -->
+<div id="screen-select" class="screen active">
+  <div class="screen-inner">
+    <h1>Кач-Отряд</h1>
+    <div class="subtitle">Веди отряд по залу, дроби блины на подходе, лови ворота с плюсом —
+      <b>я с трибуны считаю, сколько народу дойдёт до финиша.</b> Кем поведёшь?</div>
+    <div class="fighters-row" id="fighters-row"></div>
+    <div class="controls-hint">
+      <b>тяни пальцем влево-вправо</b> — ведёшь весь отряд<br>
+      <b>← → / A D</b> — то же самое, если играешь с клавиатуры
+    </div>
+  </div>
+</div>
+
+<!-- ЭКРАН 2: результат -->
+<div id="screen-result" class="screen">
+  <div class="screen-inner">
+    <div class="result-title">Отказ</div>
+    <img id="result-art" src="" alt="">
+    <div class="result-score" id="result-score">0 м · 🥤 0</div>
+    <div class="result-stats" id="result-stats"></div>
+    <div class="result-quip" id="result-quip"></div>
+    <div class="result-best" id="result-best"></div>
+    <button class="result-btn retry" onclick="restartGame()">🔄 Ещё разок</button>
+    <button class="result-btn" onclick="submitAndClose()">❌ Закрыть</button>
+    <div id="result-status"></div>
+  </div>
+</div>
+
+<script>
+'use strict';
+// Expand to full screen immediately (как в game.html)
+if (window.Telegram?.WebApp) Telegram.WebApp.expand();
+
+// ── КАЧКИ (набор и рисовалка — как в game.html, страница самостоятельная) ───
+const FIGHTERS = {
+  power:  { name: 'Пауэрлифтер', tag: 'сила',         top: '#8f2a20', bottom: '#2b2d34', skin: '#e0b08a', head: 'bandana',  hair: '#31241c', acc: '#b8860b', belt: true, bulk: 1.18 },
+  cross:  { name: 'Кроссфитер',  tag: 'функционалка', top: '#276f66', bottom: '#31343d', skin: '#caa27e', head: 'headband', hair: '#20180f', acc: '#f2ede3', bulk: 1.0 },
+  wrestle:{ name: 'Борец',       tag: 'захват',       top: '#7a2b3f', bottom: '#7a2b3f', skin: '#dba184', head: 'short',    hair: '#2a1f16', acc: '#7a2b3f', singlet: true, ears: true, bulk: 1.12 },
+  build:  { name: 'Бодибилдер',  tag: 'мышцы',        top: '#cf9455', bottom: '#23252c', skin: '#cf9455', head: 'short',    hair: '#241a12', acc: '#d9a013', shirtless: true, bulk: 1.22 },
+};
+let selectedFighter = 'power';
+
+// ── CANVAS ───────────────────────────────────────────────────────────────────
+const cv = document.getElementById('game-canvas');
+const ctx = cv.getContext('2d');
+let W = 0, H = 0, DPR = 1;
+function resize() {
+  DPR = Math.min(2, window.devicePixelRatio || 1);
+  W = window.innerWidth; H = window.innerHeight;
+  cv.width = W * DPR; cv.height = H * DPR;
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+}
+window.addEventListener('resize', resize); resize();
+
+const CHALK = '#f2ede3', C_RAGE = '#ff5a36', C_GOLD = '#ffd700', C_GREEN = '#3cdc6e';
+
+// ── ЗВУК: короткие бипы через WebAudio + фоновый гул ─────────────────────────
+let AC = null, muted = false;
+function ensureAC() { if (!AC) AC = new (window.AudioContext || window.webkitAudioContext)(); return AC; }
+function beep(freq, dur, type = 'square', vol = 0.05, slide = 0) {
+  if (muted) return;
+  try {
+    const ac = ensureAC();
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.type = type; o.frequency.value = freq;
+    if (slide) o.frequency.linearRampToValueAtTime(freq + slide, ac.currentTime + dur);
+    g.gain.value = vol; g.gain.exponentialRampToValueAtTime(0.0001, ac.currentTime + dur);
+    o.connect(g); g.connect(ac.destination);
+    o.start(); o.stop(ac.currentTime + dur);
+  } catch (e) {}
+}
+const sShot = () => beep(rnd(680, 820), .05, 'square', .025, -60);
+const sTick = () => beep(340, .05, 'square', .03, -40);
+const sPop = () => { beep(180, .12, 'sawtooth', .07, -100); burstSpark(); };
+function burstSpark() {}
+const sGateUp = () => { beep(520, .1, 'triangle', .06, 260); setTimeout(() => beep(760, .14, 'triangle', .05, 320), 60); };
+const sGateDown = () => { beep(420, .14, 'sawtooth', .06, -220); };
+const sPower = () => { beep(500, .15, 'sawtooth', .05, 400); setTimeout(() => beep(900, .2, 'sawtooth', .04, 300), 90); };
+const sShield = () => beep(700, .12, 'triangle', .06, 160);
+const sHit = () => { beep(160, .18, 'sawtooth', .08, -90); setTimeout(() => beep(90, .28, 'square', .06, -40), 90); };
+const sBossHit = () => beep(120, .08, 'square', .05, -30);
+const sBossWin = () => { beep(300, .2, 'sawtooth', .07, 260); setTimeout(() => beep(500, .25, 'sawtooth', .07, 360), 130); setTimeout(() => beep(760, .3, 'triangle', .06, 200), 260); };
+const sBossLose = () => { beep(200, .3, 'sawtooth', .08, -160); setTimeout(() => beep(100, .4, 'square', .07, -60), 160); };
+const sDie = () => { beep(220, .25, 'sawtooth', .06, -160); setTimeout(() => beep(120, .4, 'square', .05, -60), 140); };
+
+// Фоновый гул: заводится по первому клику (жест пользователя), громкость и
+// высота растут вместе со скоростью — ощущение разгона, не только цифры.
+let hum = null;
+function startHum() {
+  if (hum || muted) return;
+  try {
+    const ac = ensureAC();
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.type = 'sawtooth'; o.frequency.value = 46;
+    g.gain.value = 0.0001;
+    o.connect(g); g.connect(ac.destination); o.start();
+    hum = { o, g };
+  } catch (e) {}
+}
+function updateHum(speedFrac) {
+  if (!hum) return;
+  try {
+    const ac = ensureAC();
+    hum.o.frequency.linearRampToValueAtTime(40 + speedFrac * 55, ac.currentTime + 0.15);
+    hum.g.gain.linearRampToValueAtTime(muted ? 0 : (0.012 + speedFrac * 0.02), ac.currentTime + 0.15);
+  } catch (e) {}
+}
+
+// ── УТИЛИТЫ ──────────────────────────────────────────────────────────────────
+const rnd = (a, b) => a + Math.random() * (b - a);
+const pick = a => a[Math.floor(Math.random() * a.length)];
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+// ── ПЕРСПЕКТИВА: дорожка уходит вверх экрана, дальнее — мельче ──────────────
+const ZFAR = 3.4;
+const HORIZON_F = 0.15, GROUND_F = 0.83, FAR_SCALE = 0.15, TRACK_HALF_F = 0.46;
+function projectZ(z) {
+  const t = clamp(z / ZFAR, 0, 1);
+  const p = Math.pow(t, 0.58);
+  const gy = GROUND_F * H, hy = HORIZON_F * H;
+  return {
+    y: hy + (gy - hy) * (1 - p),
+    scale: FAR_SCALE + (1 - FAR_SCALE) * (1 - p),
+  };
+}
+function projectPoint(worldX, z) {
+  const pr = projectZ(z);
+  const halfW = TRACK_HALF_F * W * pr.scale;
+  return { x: W / 2 + worldX * halfW, y: pr.y, scale: pr.scale, halfW };
+}
+
+// ── СОСТОЯНИЕ ЗАБЕГА ─────────────────────────────────────────────────────────
+let state = 'select'; // select | game | dying | result
+let t = 0, dist = 0, score = 0, best = Math.max(0, +(localStorage.getItem('squad_best') || 0));
+let squad = 0, maxSquad = 0, shield = 0, rageT = 0;
+let squadWorldX = 0;
+let trackScroll = 0;
+let meterSpeed = 0, depthSpeed = 0;
+let lastMile = 0, nextPlateAt = 0, nextGateAt = 0, nextBonusAt = 0, nextBossMile = 1000;
+let fireTimer = 0;
+let lastResult = null;
+
+const SQUAD_START = 10, SQUAD_CAP = 999;
+const SPEED_START = 5.5, SPEED_RAMP = 0.045, SPEED_CAP = 15;
+
+// Тряска — одна общая функция с амплитудой и экспоненциальным затуханием.
+let shakeAmp = 0;
+function shake(amp) { shakeAmp = Math.max(shakeAmp, amp); }
+
+// Хит-стоп: короткая пауза кадра на сильных ударах — вес события ощущается
+// телом, а не только цифрой.
+let hitStopT = 0;
+function hitStop(sec) { hitStopT = Math.max(hitStopT, sec); }
+
+// Замедление на смерти отряда: не мгновенный переход на результат.
+let timeScale = 1, dying = false;
+
+const obstacles = []; // plate | gate | boss
+const bonuses = [];   // preworkout | belt | dumbbell
+const bullets = [];
+const parts = [];
+const toasts = [];
+const sparks = []; // короткие искры на попаданиях по блину — отдельно от парсов для перфа
+
+function resetGame() {
+  state = 'game'; dying = false; timeScale = 1;
+  t = 0; dist = 0; score = 0; squad = SQUAD_START; maxSquad = squad; shield = 0; rageT = 0;
+  squadWorldX = 0; trackScroll = 0; shakeAmp = 0; hitStopT = 0;
+  meterSpeed = SPEED_START; depthSpeed = SPEED_START / 12;
+  lastMile = 0; nextPlateAt = 150; nextGateAt = 260; nextBonusAt = 70; nextBossMile = 1000;
+  fireTimer = 0;
+  obstacles.length = 0; bonuses.length = 0; bullets.length = 0; parts.length = 0; toasts.length = 0; sparks.length = 0;
+  followers.length = 0;
+}
+
+// Тексты — TONE_OF_VOICE.md: тренер от первого лица, на «ты», без подколок
+// (проигрыш в игре — не пропуск тренировки, значит только поддержка).
+// Формула «ПРИВЕТ АТЛЕТ!» — строго, без имени и без запятой.
+const QUIPS = [
+  ' качков дошло с тобой до финиша — плотный был огонь.',
+  ' человек держались в отряде — я с трибуны считал каждого.',
+  ' — темп плотный, заходи на следующий подход.',
+  ' — отряд редел у блинов, но строй ты держал.',
+  ' — записал забег, заходи ещё разок.',
+  ' в отряде под конец — уже неплохая толпа.',
+];
+
+// ── ТОЛПА: лидер + отряд с инерцией, дешёвая отрисовка дальних рядов ────────
+// followers — персистентный массив «тел»: у каждого своя целевая ячейка
+// строя и текущая позиция, которая догоняет цель пружиной — так толпа не
+// прилипает к сетке, а живо подтягивается за лидером.
+const followers = [];
+const FULL_DETAIL_CAP = 22;   // ближайшие — полноценный атлет
+const RENDER_CAP = 220;       // дальше — дешёвые силуэты, совсем далеко — не рисуем
+const SPRING_K = 7.5;
+
+function slotFor(i) {
+  // Клин из рядов позади лидера: ряд r вмещает (2r+1) мест, но не шире 9.
+  let idx = i, row = 1, rowLen = 3;
+  while (idx >= rowLen) { idx -= rowLen; row++; rowLen = Math.min(9, 2 * row + 1); }
+  const col = idx - (rowLen - 1) / 2;
+  return { dz: 0.10 * row + 0.02 * Math.sin(row * 1.7), dx: col * 0.085 };
+}
+function syncFollowers() {
+  const want = clamp(squad - 1, 0, SQUAD_CAP);
+  while (followers.length < Math.min(want, RENDER_CAP + 400)) {
+    followers.push({
+      x: squadWorldX, z: 0.02, phase: rnd(0, 6.28), jx: rnd(-0.012, 0.012), jz: rnd(-0.01, 0.02),
+      bob: rnd(0.85, 1.15),
+    });
+  }
+  // Потери снимаем с ближних рядов — визуально «выкосило передних».
+  while (followers.length > Math.min(want, RENDER_CAP + 400)) followers.shift();
+}
+function updateFollowers(dt) {
+  for (let i = 0; i < followers.length; i++) {
+    const f = followers[i], s = slotFor(i);
+    const tx = squadWorldX + s.dx + f.jx, tz = s.dz + f.jz;
+    f.x += (tx - f.x) * Math.min(1, SPRING_K * dt);
+    f.z += (tz - f.z) * Math.min(1, (SPRING_K * 0.8) * dt);
+    f.phase += dt * (3.2 + meterSpeed * 0.25) * f.bob;
+  }
+}
+
+// ── ЧАСТИЦЫ И ЦИФРЫ ──────────────────────────────────────────────────────────
+function burst(x, y, color, n = 10, sp = 180) {
+  for (let i = 0; i < n; i++) {
+    const a = rnd(0, Math.PI * 2), v = rnd(sp * 0.3, sp);
+    parts.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v - 60, life: rnd(0.3, 0.7), color, r: rnd(2, 4) });
+  }
+}
+// Крупные читаемые цифры с обводкой — «+2», «×2», «−15» — у места события.
+function popNumber(text, color, x, y, big) {
+  toasts.push({ text, color, t: 0, x, y, big: !!big });
+}
+
+// ── ФОН ЗАЛА (перспективный коридор) ────────────────────────────────────────
+function drawHall() {
+  const hy = HORIZON_F * H, gy = GROUND_F * H;
+  const skyG = ctx.createLinearGradient(0, 0, 0, hy);
+  skyG.addColorStop(0, '#100c0a'); skyG.addColorStop(1, '#241812');
+  ctx.fillStyle = skyG; ctx.fillRect(0, 0, W, hy);
+
+  // Пол-трапеция
+  const near = projectPoint(-1, 0), nearR = projectPoint(1, 0);
+  const far = projectPoint(-1, ZFAR), farR = projectPoint(1, ZFAR);
+  const floorG = ctx.createLinearGradient(0, hy, 0, gy);
+  floorG.addColorStop(0, '#1c140f'); floorG.addColorStop(1, '#2c2119');
+  ctx.fillStyle = floorG;
+  ctx.beginPath();
+  ctx.moveTo(far.x, far.y); ctx.lineTo(farR.x, farR.y);
+  ctx.lineTo(nearR.x, nearR.y); ctx.lineTo(near.x, near.y);
+  ctx.closePath(); ctx.fill();
+
+  // Продольные полосы дорожки (радиальные — не скроллятся)
+  ctx.strokeStyle = 'rgba(242,237,227,0.10)'; ctx.lineWidth = 1;
+  [-0.55, 0, 0.55].forEach(lx => {
+    const a = projectPoint(lx, 0), b = projectPoint(lx, ZFAR);
+    ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+  });
+  // Поперечные рейки — скроллятся навстречу игроку, дают чувство разгона
+  ctx.strokeStyle = 'rgba(242,237,227,0.14)'; ctx.lineWidth = 2;
+  const frac = trackScroll % 1;
+  for (let k = 0; k <= Math.ceil(ZFAR) + 1; k++) {
+    const z = k - frac;
+    if (z < 0 || z > ZFAR) continue;
+    const a = projectPoint(-1, z), b = projectPoint(1, z);
+    ctx.globalAlpha = 0.5 + 0.5 * (1 - z / ZFAR);
+    ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+
+  // Кирпичные стены и лампы по бокам, сходящиеся к горизонту
+  ctx.fillStyle = 'rgba(60,42,30,0.55)';
+  ctx.beginPath(); ctx.moveTo(0, hy); ctx.lineTo(far.x, far.y); ctx.lineTo(far.x, hy - 40); ctx.lineTo(0, hy - 60); ctx.closePath(); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(W, hy); ctx.lineTo(farR.x, farR.y); ctx.lineTo(farR.x, hy - 40); ctx.lineTo(W, hy - 60); ctx.closePath(); ctx.fill();
+  for (let k = 0; k <= 3; k++) {
+    const z = ((k - frac % 1) + 4) % 4 * (ZFAR / 4) + 0.3;
+    if (z > ZFAR) continue;
+    [-1.02, 1.02].forEach(side => {
+      const p = projectPoint(side, z);
+      const g = ctx.createRadialGradient(p.x, p.y, 1, p.x, p.y, 60 * p.scale);
+      g.addColorStop(0, 'rgba(255,190,120,' + (0.35 * p.scale) + ')'); g.addColorStop(1, 'rgba(255,190,120,0)');
+      ctx.fillStyle = g; ctx.fillRect(p.x - 60 * p.scale, p.y - 60 * p.scale, 120 * p.scale, 120 * p.scale);
+    });
+  }
+}
+
+// ── БЛИНЫ (weight plates) ───────────────────────────────────────────────────
+function spawnPlate() {
+  const hpMax = Math.round(clamp(7 + dist / 70 + rnd(-2, 3), 5, 80));
+  obstacles.push({ kind: 'plate', worldX: rnd(-0.72, 0.72), z: ZFAR, hp: hpMax, hpMax, spin: 0, wob: rnd(0, 6) });
+  nextPlateAt = dist + rnd(40, 62);
+}
+function drawPlate(o) {
+  const p = projectPoint(o.worldX, o.z);
+  const r = 46 * p.scale;
+  ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(o.spin);
+  ctx.fillStyle = '#8f2a20'; ctx.beginPath(); ctx.arc(0, 0, r, 0, 7); ctx.fill();
+  ctx.fillStyle = '#c0392b'; ctx.beginPath(); ctx.arc(0, 0, r * 0.82, 0, 7); ctx.fill();
+  ctx.fillStyle = '#5a1912'; ctx.beginPath(); ctx.arc(0, 0, r * 0.22, 0, 7); ctx.fill();
+  ctx.restore();
+  // число HP — крупно, с обводкой, читаемо в движении
+  ctx.save(); ctx.translate(p.x, p.y);
+  const fs = Math.max(11, 22 * p.scale);
+  ctx.font = "900 " + fs + "px 'Courier New', monospace";
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.lineWidth = Math.max(2, fs * 0.22); ctx.strokeStyle = '#14110f';
+  ctx.strokeText(o.hp, 0, 1);
+  ctx.fillStyle = CHALK; ctx.fillText(o.hp, 0, 1);
+  ctx.restore();
+}
+
+// ── ВОРОТА (пары зелёное/красное на всю дорожку) ────────────────────────────
+const GATE_BUFFS = [
+  { type: 'mul', val: 2, label: '×2' },
+  { type: 'mul', val: 3, label: '×3' },
+  { type: 'add', val: 15, label: '+15' },
+];
+const GATE_DEBUFFS = [
+  { type: 'div', val: 2, label: '÷2' },
+  { type: 'sub', val: 18, label: '−18' },
+];
+function spawnGate() {
+  const buff = pick(GATE_BUFFS), debuff = pick(GATE_DEBUFFS);
+  const buffLeft = Math.random() < 0.5;
+  obstacles.push({ kind: 'gate', z: ZFAR, buff, debuff, buffLeft, glow: 0 });
+  nextGateAt = dist + rnd(210, 300);
+}
+function drawGate(o) {
+  const near = projectPoint(-1, o.z), farEdge = projectPoint(1, o.z);
+  const mid = projectPoint(0, o.z);
+  const barY = near.y, h = Math.max(6, 26 * projectZ(o.z).scale);
+  const approach = clamp(1 - o.z / 1.3, 0, 1);
+  const pulse = 0.5 + 0.5 * Math.sin(t * 8);
+  const leftIsBuff = o.buffLeft;
+  const leftColor = leftIsBuff ? C_GREEN : '#ff4444';
+  const rightColor = leftIsBuff ? '#ff4444' : C_GREEN;
+  ctx.save();
+  ctx.globalAlpha = 0.55 + 0.35 * approach * pulse;
+  ctx.fillStyle = leftColor; ctx.fillRect(near.x, barY - h / 2, mid.x - near.x, h);
+  ctx.fillStyle = rightColor; ctx.fillRect(mid.x, barY - h / 2, farEdge.x - mid.x, h);
+  ctx.globalAlpha = 1;
+  const label = (leftIsBuff ? o.buff : o.debuff).label;
+  const label2 = (leftIsBuff ? o.debuff : o.buff).label;
+  const fs = Math.max(11, 20 * projectZ(o.z).scale);
+  ctx.font = "900 " + fs + "px 'Courier New', monospace"; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.lineWidth = 3; ctx.strokeStyle = '#14110f';
+  ctx.strokeText(label, (near.x + mid.x) / 2, barY); ctx.fillStyle = '#0e0e0e';
+  ctx.fillText(label, (near.x + mid.x) / 2, barY);
+  ctx.strokeText(label2, (mid.x + farEdge.x) / 2, barY);
+  ctx.fillText(label2, (mid.x + farEdge.x) / 2, barY);
+  ctx.restore();
+}
+
+// ── БОСС-ШТАНГА ──────────────────────────────────────────────────────────────
+const BOSS_LOCK_Z = 0.55, BOSS_PRESS_TIME = 7.5;
+function spawnBoss() {
+  const hpMax = Math.round(70 + dist / 20);
+  obstacles.push({ kind: 'boss', z: ZFAR, worldX: 0, hp: hpMax, hpMax, phase: 'approach', timer: BOSS_PRESS_TIME, shakeAcc: 0 });
+}
+function drawBoss(o) {
+  const p = projectPoint(0, o.z);
+  const jitter = o.phase === 'press' ? rnd(-1, 1) * (1 - o.timer / BOSS_PRESS_TIME) * 4 * p.scale : 0;
+  const barW = TRACK_HALF_F * 2 * W * p.scale;
+  ctx.save(); ctx.translate(p.x + jitter, p.y);
+  // стойки
+  ctx.fillStyle = '#4c4f58';
+  ctx.fillRect(-barW / 2 - 8 * p.scale, -70 * p.scale, 10 * p.scale, 70 * p.scale);
+  ctx.fillRect(barW / 2 - 2 * p.scale, -70 * p.scale, 10 * p.scale, 70 * p.scale);
+  // гриф с блинами
+  ctx.fillStyle = '#9aa0ab'; ctx.fillRect(-barW / 2, -14 * p.scale, barW, 10 * p.scale);
+  [-barW / 2 - 4 * p.scale, barW / 2 - 6 * p.scale].forEach(bx => {
+    ctx.fillStyle = '#c0392b'; ctx.beginPath(); ctx.arc(bx, -9 * p.scale, 24 * p.scale, 0, 7); ctx.fill();
+    ctx.fillStyle = '#8f2a20'; ctx.beginPath(); ctx.arc(bx, -9 * p.scale, 15 * p.scale, 0, 7); ctx.fill();
+  });
+  ctx.restore();
+  if (o.phase === 'press') {
+    // шкала веса сверху — тускнеет по мере убывания, таймер рядом
+    const bw = W * 0.7, bx0 = W / 2 - bw / 2, by = H * 0.10;
+    const frac = clamp(o.hp / o.hpMax, 0, 1);
+    ctx.fillStyle = 'rgba(0,0,0,0.45)'; ctx.fillRect(bx0 - 4, by - 4, bw + 8, 22);
+    ctx.fillStyle = 'rgba(255,255,255,0.12)'; ctx.fillRect(bx0, by, bw, 14);
+    ctx.fillStyle = 'rgba(255,80,60,' + (0.55 + 0.45 * frac) + ')'; ctx.fillRect(bx0, by, bw * frac, 14);
+    ctx.font = "800 12px 'Courier New', monospace"; ctx.fillStyle = CHALK; ctx.textAlign = 'center';
+    ctx.fillText('ШТАНГА · ' + Math.ceil(o.hp), W / 2, by + 11);
+    const tfrac = o.timer / BOSS_PRESS_TIME;
+    ctx.fillStyle = tfrac < 0.25 ? '#ff4444' : C_GOLD;
+    ctx.font = "900 15px 'Courier New', monospace";
+    ctx.fillText(Math.ceil(o.timer) + ' с', W / 2, by + 34);
+  }
+}
+
+// ── БОНУСЫ ───────────────────────────────────────────────────────────────────
+const BONUS_TYPES = {
+  preworkout: { color: C_RAGE, label: 'ПРЕДТРЕН' },
+  belt:       { color: '#7ea8ff', label: 'ПОЯС' },
+  dumbbell:   { color: '#67c26a', label: '+5' },
+};
+function spawnBonus() {
+  const type = pick(['preworkout', 'belt', 'dumbbell', 'dumbbell']);
+  bonuses.push({ type, worldX: rnd(-0.65, 0.65), z: ZFAR, t: rnd(0, 6) });
+  nextBonusAt = dist + rnd(65, 115);
+}
+function drawBonus(b) {
+  const p = projectPoint(b.worldX, b.z);
+  const d = BONUS_TYPES[b.type];
+  const r = 26 * p.scale, bob = Math.sin(b.t * 5) * 4 * p.scale;
+  ctx.save(); ctx.translate(p.x, p.y + bob);
+  ctx.fillStyle = 'rgba(255,255,255,0.10)'; ctx.beginPath(); ctx.arc(0, 0, r * 1.3, 0, 7); ctx.fill();
+  ctx.strokeStyle = d.color; ctx.globalAlpha = 0.6 + 0.4 * Math.sin(b.t * 6); ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(0, 0, r * 1.15, 0, 7); ctx.stroke(); ctx.globalAlpha = 1;
+  ctx.fillStyle = d.color; ctx.fillRect(-r * 0.55, -r * 0.7, r * 1.1, r * 1.4);
+  ctx.fillStyle = '#14110f'; ctx.font = "900 " + Math.max(8, r * 0.42) + "px 'Courier New', monospace";
+  ctx.textAlign = 'center'; ctx.fillText(d.label, 0, r * 0.15);
+  ctx.restore();
+}
+
+// ── ПУЛИ ОТРЯДА ──────────────────────────────────────────────────────────────
+const BULLET_SPEED = 3.1;
+function fireAt(target) {
+  bullets.push({ z: 0.05, worldX: squadWorldX + rnd(-0.05, 0.05), targetZ: target.z, targetX: target.worldX ?? 0, target, life: 3 });
+  sShot();
+}
+function tryFire(dt, dmg) {
+  const targets = obstacles.filter(o => (o.kind === 'plate' && o.hp > 0) || (o.kind === 'boss' && o.phase === 'press' && o.hp > 0));
+  if (!targets.length) return;
+  targets.sort((a, b) => a.z - b.z);
+  for (const target of targets) {
+    const activeOnTarget = bullets.filter(bl => bl.target === target).length;
+    if (activeOnTarget < 3) { fireAt(target); target.__dmg = dmg; return; }
+  }
+}
+
+// ── ИГРОК-ЛИДЕР (рисуем существующим кодом атлета) ──────────────────────────
+if (!CanvasRenderingContext2D.prototype.roundRect) {
+  CanvasRenderingContext2D.prototype.roundRect = function (x, y, w, h, r) {
+    r = Math.min(r, w / 2, h / 2);
+    this.moveTo(x + r, y);
+    this.arcTo(x + w, y, x + w, y + h, r); this.arcTo(x + w, y + h, x, y + h, r);
+    this.arcTo(x, y + h, x, y, r); this.arcTo(x, y, x + w, y, r);
+    this.closePath();
+  };
+}
+function shade(hex, k) {
+  const n = parseInt(hex.slice(1), 16);
+  return 'rgb(' + Math.round(((n >> 16) & 255) * k) + ',' + Math.round(((n >> 8) & 255) * k) + ',' + Math.round((n & 255) * k) + ')';
+}
+function limb(c, pts, w, color) {
+  c.strokeStyle = color; c.lineWidth = w; c.lineCap = 'round'; c.lineJoin = 'round';
+  c.beginPath(); c.moveTo(pts[0], pts[1]);
+  for (let i = 2; i < pts.length; i += 2) c.lineTo(pts[i], pts[i + 1]);
+  c.stroke();
+}
+function drawShoe(c, x, y, dark) {
+  c.save(); c.translate(x, y);
+  c.fillStyle = dark ? '#3f434c' : '#565b66';
+  c.beginPath(); c.roundRect(-5, -4, 14, 7, 3); c.fill();
+  c.fillStyle = dark ? 'rgba(230,230,235,0.45)' : 'rgba(230,230,235,0.85)';
+  c.fillRect(-5, 1, 14, 2);
+  c.restore();
+}
+function drawHead(c, f, hx, hy) {
+  const skinD = shade(f.skin, 0.78);
+  c.fillStyle = f.skin;
+  c.beginPath(); c.arc(hx, hy, 7.5, 0, 7); c.fill();
+  c.beginPath(); c.moveTo(hx + 6.5, hy - 2); c.lineTo(hx + 9.5, hy + 1.5); c.lineTo(hx + 5, hy + 5.5); c.lineTo(hx - 1, hy + 5.5); c.closePath(); c.fill();
+  c.fillStyle = f.ears ? '#c98a7a' : skinD;
+  c.beginPath(); c.arc(hx - 1, hy + 1, f.ears ? 2.7 : 2, 0, 7); c.fill();
+  c.fillStyle = '#1d1d22'; c.fillRect(hx + 4.5, hy - 1.5, 1.8, 1.8);
+  c.fillRect(hx + 3.5, hy - 4, 4.2, 1.4);
+  if (f.head === 'bandana') {
+    c.fillStyle = f.acc;
+    c.beginPath(); c.arc(hx, hy - 0.5, 7.8, Math.PI * 0.97, Math.PI * 2.03); c.fill();
+    c.fillRect(hx - 8, hy - 3.5, 16.2, 3);
+    c.beginPath(); c.moveTo(hx - 7, hy - 2); c.lineTo(hx - 13, hy + 3); c.lineTo(hx - 8, hy + 3.5); c.closePath(); c.fill();
+    c.fillStyle = shade(f.acc, 0.7); c.fillRect(hx - 8, hy - 1.2, 16.2, 0.9);
+    c.fillStyle = 'rgba(40,30,22,0.35)';
+    c.beginPath(); c.arc(hx + 3.5, hy + 4, 4.4, 0.2, Math.PI * 0.95); c.fill();
+  } else if (f.head === 'headband') {
+    c.fillStyle = f.hair;
+    c.beginPath(); c.arc(hx, hy - 1, 7.7, Math.PI * 0.95, Math.PI * 2.05); c.fill();
+    c.fillStyle = f.acc; c.fillRect(hx - 8, hy - 4.5, 16, 2.6);
+  } else if (f.head === 'beanie') {
+    c.fillStyle = f.acc;
+    c.beginPath(); c.arc(hx, hy - 1.5, 7.9, Math.PI * 0.93, Math.PI * 2.07); c.fill();
+    c.fillRect(hx - 8.2, hy - 4, 16.4, 3.2);
+    c.fillStyle = shade(f.acc, 0.75); c.fillRect(hx - 8.2, hy - 1.4, 16.4, 0.8);
+    c.fillStyle = f.hair;
+    c.beginPath(); c.moveTo(hx + 8.5, hy); c.quadraticCurveTo(hx + 9, hy + 8, hx + 3, hy + 9);
+    c.quadraticCurveTo(hx - 1, hy + 8, hx - 1, hy + 4); c.lineTo(hx + 4, hy + 3); c.closePath(); c.fill();
+  } else if (f.head === 'short') {
+    c.fillStyle = f.hair;
+    c.beginPath(); c.arc(hx, hy - 1, 7.8, Math.PI * 0.93, Math.PI * 1.97); c.fill();
+    c.fillRect(hx - 7.8, hy - 2.5, 5, 3.5);
+  }
+}
+// Рисует атлета в контекст c: используется и в игре (лидер, крупный план
+// толпы), и на карточках выбора. Ориентация — лицом вперёд/вправо по бегу.
+function drawAthlete(c, fighter, opts) {
+  const { run = 0, rage = false, shield: sh = false, scale = 1, idle = false } = opts || {};
+  const f = FIGHTERS[fighter];
+  const B = f.bulk || 1;
+  const torsoCol = (f.shirtless || f.singlet) ? f.skin : f.top;
+  const torsoD = shade(torsoCol, 0.78);
+  const skinD = shade(f.skin, 0.78);
+  c.save(); c.scale(scale, scale);
+  if (rage) {
+    c.fillStyle = 'rgba(255,90,54,0.22)';
+    for (let i = 1; i <= 3; i++) c.fillRect(-17 - i * 14, -58 + i * 5, 34, 52 - i * 8);
+  }
+  const s = idle ? 0 : run;
+  const stance = idle ? 1 : 0;
+  const leg = (side, col, dark) => {
+    const sw = side * s;
+    const hipX = side * 2 * (1 + stance), hipY = -33;
+    const kneeX = hipX + sw * 10 + stance * side * 2, kneeY = -17;
+    const footX = kneeX + sw * 9 + 1 + stance * side * 2, footY = -4 - Math.max(0, -sw) * 7;
+    limb(c, [hipX, hipY, kneeX, kneeY, footX, footY], 10 * B, col);
+    c.fillStyle = col; c.beginPath(); c.arc(kneeX - 2, kneeY + 3.5, 3.6 * B, 0, 7); c.fill();
+    drawShoe(c, footX + 2, footY + 2, dark);
+  };
+  const arm = (side, col) => {
+    const aw = idle ? side * 0.30 : -side * s;
+    const shX = side > 0 ? 9 : -7, shY = -52;
+    const elX = shX + aw * 9, elY = shY + 13;
+    const haX = elX + aw * 10 + 2, haY = elY + 9 - Math.abs(aw) * 3;
+    limb(c, [shX, shY, elX, elY, haX, haY], 8.5 * B, col);
+    limb(c, [elX, elY, haX, haY], 6 * B, col);
+    c.fillStyle = col;
+    c.beginPath(); c.arc((shX + elX) / 2 + aw * 1.5, (shY + elY) / 2, 4.2 * B, 0, 7); c.fill();
+    c.beginPath(); c.arc(shX, shY - 1.5, 5.4 * B, 0, 7); c.fill();
+  };
+  leg(-1, skinD, true);
+  arm(-1, skinD);
+  c.fillStyle = f.bottom;
+  c.beginPath(); c.roundRect(-9 * B, -37, 18 * B, 14, 5); c.fill();
+  c.fillStyle = shade(f.bottom, 0.72); c.fillRect(-9 * B, -37, 6 * B, 14);
+  c.fillStyle = torsoCol;
+  c.beginPath();
+  c.moveTo(-8 * B, -33);
+  c.quadraticCurveTo(-13 * B, -44, -14 * B, -54);
+  c.quadraticCurveTo(-6, -61, 3, -61);
+  c.quadraticCurveTo(14 * B, -58, 15 * B, -53);
+  c.quadraticCurveTo(12 * B, -44, 9 * B, -33);
+  c.closePath(); c.fill();
+  c.fillStyle = torsoD;
+  c.beginPath();
+  c.moveTo(-8 * B, -33);
+  c.quadraticCurveTo(-13 * B, -44, -14 * B, -54);
+  c.quadraticCurveTo(-10 * B, -57, -6 * B, -57.5);
+  c.quadraticCurveTo(-8 * B, -44, -4 * B, -33);
+  c.closePath(); c.fill();
+  c.strokeStyle = shade(torsoCol, 0.7); c.lineWidth = 1.2;
+  c.beginPath(); c.moveTo(2, -53); c.quadraticCurveTo(9 * B, -52, 12 * B, -48); c.stroke();
+  if (f.singlet) {
+    c.fillStyle = f.top;
+    c.beginPath();
+    c.moveTo(-8.6 * B, -33);
+    c.quadraticCurveTo(-12 * B, -42, -12.3 * B, -47);
+    c.lineTo(12.8 * B, -47);
+    c.quadraticCurveTo(11.5 * B, -42, 9.6 * B, -33);
+    c.closePath(); c.fill();
+    c.strokeStyle = f.top; c.lineWidth = 4.2 * B; c.lineCap = 'butt';
+    c.beginPath(); c.moveTo(9 * B, -47); c.lineTo(12.5 * B, -55); c.stroke();
+    c.beginPath(); c.moveTo(-7 * B, -47); c.lineTo(-11 * B, -55); c.stroke();
+    c.lineCap = 'round';
+  } else if (f.shirtless) {
+    c.strokeStyle = shade(f.skin, 0.72); c.lineWidth = 1.1;
+    c.beginPath(); c.moveTo(3, -46); c.lineTo(3, -35); c.stroke();
+    c.beginPath(); c.moveTo(-1, -43); c.lineTo(7, -43); c.stroke();
+    c.beginPath(); c.moveTo(-1, -39); c.lineTo(7, -39); c.stroke();
+  } else {
+    c.fillStyle = f.skin;
+    c.beginPath(); c.moveTo(0, -61); c.lineTo(9 * B, -56); c.quadraticCurveTo(6, -50, 2, -53); c.closePath(); c.fill();
+  }
+  if (f.belt) {
+    c.fillStyle = f.acc; c.fillRect(-9 * B, -39, 18 * B, 5.5);
+    c.fillStyle = shade(f.acc, 0.65); c.fillRect(0, -39, 4.5, 5.5);
+  }
+  leg(1, f.skin, false);
+  limb(c, [2, -58, 2, -64], 7 * B, f.skin);
+  drawHead(c, f, 3, -67);
+  arm(1, f.skin);
+  if (sh) {
+    c.strokeStyle = '#7ea8ff'; c.lineWidth = 2.5; c.globalAlpha = 0.6 + 0.3 * Math.sin(t * 8);
+    c.beginPath(); c.arc(0, -34, 44, 0, 7); c.stroke(); c.globalAlpha = 1;
+  }
+  c.restore();
+}
+// Дешёвая отрисовка дальних рядов толпы — силуэт без деталей, для 60 fps
+// при большом отряде.
+function drawFollowerSimple(x, y, scale, f, phase) {
+  const bob = Math.sin(phase) * 3 * scale;
+  ctx.save(); ctx.translate(x, y + bob);
+  ctx.fillStyle = f.top; ctx.fillRect(-9 * scale, -34 * scale, 18 * scale, 22 * scale);
+  ctx.fillStyle = f.skin; ctx.beginPath(); ctx.arc(0, -40 * scale, 7 * scale, 0, 7); ctx.fill();
+  ctx.fillStyle = f.bottom; ctx.fillRect(-7 * scale, -14 * scale, 14 * scale, 14 * scale);
+  ctx.restore();
+}
+
+// ── УПРАВЛЕНИЕ ──────────────────────────────────────────────────────────────
+let dragActive = false, dragStartX = 0, dragStartWorldX = 0;
+let heldLeft = false, heldRight = false;
+cv.addEventListener('pointerdown', e => { dragActive = true; dragStartX = e.clientX; dragStartWorldX = squadWorldX; });
+cv.addEventListener('pointermove', e => {
+  if (!dragActive) return;
+  const halfWpx = TRACK_HALF_F * W;
+  squadWorldX = clamp(dragStartWorldX + (e.clientX - dragStartX) / halfWpx, -0.95, 0.95);
+});
+window.addEventListener('pointerup', () => { dragActive = false; });
+document.addEventListener('keydown', e => {
+  if (e.code === 'ArrowLeft' || e.code === 'KeyA') { heldLeft = true; e.preventDefault(); }
+  if (e.code === 'ArrowRight' || e.code === 'KeyD') { heldRight = true; e.preventDefault(); }
+  if (e.code === 'KeyM') muted = !muted;
+});
+document.addEventListener('keyup', e => {
+  if (e.code === 'ArrowLeft' || e.code === 'KeyA') heldLeft = false;
+  if (e.code === 'ArrowRight' || e.code === 'KeyD') heldRight = false;
+});
+
+// ── ЭКРАНЫ ───────────────────────────────────────────────────────────────────
+function showScreen(id) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  cv.classList.remove('active');
+  if (id === 'game') cv.classList.add('active');
+  else document.getElementById(id).classList.add('active');
+}
+function flash(color, ms) {
+  const el = document.getElementById('flash');
+  el.className = color; el.style.opacity = 1;
+  setTimeout(() => { el.style.opacity = 0; }, ms || 200);
+}
+
+(function buildFighterCards() {
+  const row = document.getElementById('fighters-row');
+  Object.entries(FIGHTERS).forEach(([key, f]) => {
+    const card = document.createElement('div');
+    card.className = 'fighter-card';
+    const c = document.createElement('canvas');
+    c.width = 160; c.height = 160;
+    const cc = c.getContext('2d');
+    cc.translate(74, 152);
+    drawAthlete(cc, key, { idle: true, scale: 1.85 });
+    const img = new Image();
+    img.src = 'assets/game/' + key + '.jpg';
+    img.onload = () => { card.replaceChild(img, c); };
+    card.appendChild(c);
+    const nm = document.createElement('div');
+    nm.className = 'fighter-name'; nm.textContent = f.name;
+    card.appendChild(nm);
+    const tag = document.createElement('div');
+    tag.className = 'fighter-tag'; tag.textContent = f.tag;
+    card.appendChild(tag);
+    card.onclick = () => selectFighter(key);
+    row.appendChild(card);
+  });
+})();
+
+function selectFighter(key) {
+  selectedFighter = key;
+  startHum();
+  resetGame();
+  showScreen('game');
+}
+
+// ── КОНЕЦ ЗАБЕГА (замедление → вспышка → пауза → результат) ─────────────────
+function die() {
+  if (dying) return;
+  dying = true; state = 'dying';
+  sDie(); shake(22); hitStop(0.05); flash('red', 500);
+  burst(W / 2, GROUND_F * H - 40, C_RAGE, 30, 300);
+  const d = Math.floor(clamp(dist, 0, 50000));
+  const sc = Math.floor(clamp(score, 0, 100000));
+  const sq = Math.floor(clamp(maxSquad, 0, 5000));
+  if (d > best) { best = d; localStorage.setItem('squad_best', best); }
+  lastResult = { distance: d, score: sc, squad: sq, fighter: selectedFighter, gameTimestamp: Date.now() };
+  let elapsed = 0;
+  const slowDown = setInterval(() => {
+    elapsed += 60;
+    timeScale = Math.max(0.08, 1 - elapsed / 900);
+  }, 60);
+  setTimeout(() => {
+    clearInterval(slowDown);
+    finishToResult(d, sc, sq);
+  }, 1000);
+}
+function finishToResult(d, sc, sq) {
+  const art = document.getElementById('result-art');
+  art.style.display = 'none';
+  art.onload = () => { art.style.display = 'block'; };
+  art.onerror = () => { art.style.display = 'none'; };
+  art.src = 'assets/game/' + selectedFighter + '.jpg';
+  document.getElementById('result-score').textContent = d + ' м · 🥤 ' + sc;
+  document.getElementById('result-stats').textContent = 'макс. отряд: ' + sq;
+  document.getElementById('result-quip').textContent = 'ПРИВЕТ АТЛЕТ! ' + sq + pick(QUIPS);
+  document.getElementById('result-best').textContent = 'рекорд: ' + best + ' м';
+  document.getElementById('result-status').textContent = '';
+  state = 'result';
+  showScreen('screen-result');
+}
+function restartGame() {
+  if (lastResult) submitResult(lastResult);
+  lastResult = null;
+  resetGame();
+  showScreen('game');
+}
+async function submitResult(result) {
+  if (!window.Telegram?.WebApp) return { ok: false, local: true };
+  const initData = Telegram.WebApp.initData || '';
+  try {
+    const resp = await fetch('/game-result', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ initData, game: 'squad', result }),
+    });
+    return { ok: resp.ok, status: resp.status, body: await resp.text() };
+  } catch (e) {
+    console.error('[game] submit error:', e);
+    return { ok: false, error: e.message };
+  }
+}
+async function submitAndClose() {
+  const statusEl = document.getElementById('result-status');
+  if (!window.Telegram?.WebApp) {
+    statusEl.textContent = 'это локальный прототип — результат никуда не отправляю';
+    return;
+  }
+  if (lastResult) {
+    statusEl.textContent = 'Записываю...';
+    const r = await submitResult(lastResult);
+    if (!r.ok) { statusEl.textContent = '❌ Не записал — жми ещё раз'; return; }
+    statusEl.textContent = '✅ Записал';
+    lastResult = null;
+  }
+  try { Telegram.WebApp.close(); } catch (e) {}
+}
+
+// ── АПДЕЙТ ───────────────────────────────────────────────────────────────────
+function squadRadius() { return 0.10 + Math.min(60, squad) / 60 * 0.16; }
+let squadPulse = 0; // визуальный «раздув» толпы на воротах/бонусах — тело, не только счётчик
+
+function update(dt) {
+  t += dt;
+  shakeAmp *= Math.exp(-6 * dt); if (shakeAmp < 0.05) shakeAmp = 0;
+  squadPulse *= Math.exp(-5 * dt);
+  parts.forEach(p => { p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 600 * dt; p.life -= dt; });
+  for (let i = parts.length - 1; i >= 0; i--) if (parts[i].life <= 0) parts.splice(i, 1);
+  toasts.forEach(ts => { ts.t += dt; ts.y -= (ts.big ? 42 : 30) * dt; });
+  for (let i = toasts.length - 1; i >= 0; i--) if (toasts[i].t > 1.3) toasts.splice(i, 1);
+
+  if (state !== 'game' && state !== 'dying') return;
+
+  if (heldLeft) squadWorldX = clamp(squadWorldX - 1.1 * dt, -0.95, 0.95);
+  if (heldRight) squadWorldX = clamp(squadWorldX + 1.1 * dt, -0.95, 0.95);
+  syncFollowers();
+  updateFollowers(dt);
+
+  if (rageT > 0) rageT -= dt;
+  const rage = rageT > 0;
+  meterSpeed = Math.min(SPEED_CAP, meterSpeed + SPEED_RAMP * dt);
+  depthSpeed = meterSpeed / 12 * (rage ? 1.4 : 1);
+  dist += meterSpeed * dt * (rage ? 1.3 : 1);
+  trackScroll += depthSpeed * dt * 3.1;
+  updateHum(clamp((meterSpeed - SPEED_START) / (SPEED_CAP - SPEED_START), 0, 1));
+
+  if (Math.floor(dist / 500) > lastMile) {
+    lastMile = Math.floor(dist / 500);
+    popNumber(lastMile * 500 + ' м!', C_GOLD, W / 2, H * 0.32, true);
+  }
+
+  // Стрельба отряда: скорострельность и урон растут вместе с толпой.
+  const fireRate = clamp(1.5 + squad * 0.06, 1.5, 10) * (rage ? 2.6 : 1);
+  const dmg = clamp(1.4 + squad * 0.04, 1.4, 24);
+  fireTimer -= dt;
+  if (fireTimer <= 0) { tryFire(dt, dmg); fireTimer = 1 / fireRate; }
+
+  // Босс: если ещё не запущен и прошли рубеж — спавним.
+  if (dist >= nextBossMile && !obstacles.some(o => o.kind === 'boss')) {
+    spawnBoss(); nextBossMile += 1000;
+  }
+  if (state === 'game') {
+    if (dist >= nextPlateAt) spawnPlate();
+    if (dist >= nextGateAt) spawnGate();
+    if (dist >= nextBonusAt) spawnBonus();
+  }
+
+  // Пули
+  for (let i = bullets.length - 1; i >= 0; i--) {
+    const bl = bullets[i];
+    bl.z += BULLET_SPEED * dt;
+    bl.life -= dt;
+    const alive = obstacles.includes(bl.target) && (bl.target.hp === undefined || bl.target.hp > 0);
+    if (!alive || bl.life <= 0) { bullets.splice(i, 1); continue; }
+    if (bl.z >= bl.target.z - 0.05) {
+      const target = bl.target;
+      const before = target.hp;
+      target.hp = Math.max(0, target.hp - (target.__dmg || dmg));
+      const p = projectPoint(target.worldX ?? 0, target.z);
+      if (target.kind === 'boss') sBossHit(); else sTick();
+      shake(target.kind === 'boss' ? 1.2 : 1.5);
+      burst(p.x, p.y, '#f2ede3', 4, 90);
+      if (target.hp <= 0 && before > 0) {
+        if (target.kind === 'plate') {
+          score += target.hpMax * 3;
+          shake(5); sPop(); hitStop(0.02);
+          burst(p.x, p.y, '#ffb347', 20, 260);
+          popNumber('+' + (target.hpMax * 3), C_GOLD, p.x, p.y - 10, true);
+          obstacles.splice(obstacles.indexOf(target), 1);
+        }
+      }
+      bullets.splice(i, 1);
+    }
+  }
+
+  // Препятствия: движение к игроку + столкновения
+  for (let i = obstacles.length - 1; i >= 0; i--) {
+    const o = obstacles[i];
+    if (o.kind === 'plate') {
+      o.z -= depthSpeed * dt; o.spin += dt * 1.4;
+      if (o.z <= 0.05) {
+        if (o.hp > 0) {
+          if (shield > 0) {
+            shield -= 1; sShield();
+            popNumber('ПОЯС СПАС', '#7ea8ff', W / 2, GROUND_F * H - 90);
+            burst(W / 2, GROUND_F * H - 60, '#7ea8ff', 14, 240);
+            shake(4);
+          } else {
+            const loss = Math.min(squad, Math.round(o.hp));
+            squad = Math.max(0, squad - loss);
+            sHit(); shake(6 + Math.min(20, loss * 0.7)); hitStop(loss > 8 ? 0.05 : 0);
+            flash('red', 220);
+            popNumber('−' + loss, '#ff4444', W / 2, GROUND_F * H - 90, loss > 15);
+            burst(W / 2, GROUND_F * H - 60, C_RAGE, Math.min(30, 10 + loss), 260);
+          }
+        }
+        obstacles.splice(i, 1);
+        if (squad <= 0) { die(); return; }
+      }
+      continue;
+    }
+    if (o.kind === 'gate') {
+      o.z -= depthSpeed * dt;
+      if (o.z <= 0.05) {
+        const onLeft = squadWorldX < 0;
+        const eff = onLeft === o.buffLeft ? o.buff : o.debuff;
+        const p = projectPoint(squadWorldX, 0.05);
+        if (eff.type === 'mul') { squad = Math.min(SQUAD_CAP, Math.round(squad * eff.val)); score += 40; }
+        else if (eff.type === 'add') { squad = Math.min(SQUAD_CAP, squad + eff.val); score += 20; }
+        else if (eff.type === 'div') { squad = Math.max(1, Math.round(squad / eff.val)); }
+        else if (eff.type === 'sub') { squad = Math.max(0, squad - eff.val); }
+        const good = eff.type === 'mul' || eff.type === 'add';
+        if (good) {
+          sGateUp(); shake(4); squadPulse = 1; flash('green', 200);
+          burst(p.x, p.y - 30, C_GREEN, 22, 240);
+          for (let k = 0; k < 3; k++) popNumber(eff.label, C_GREEN, p.x + rnd(-30, 30), p.y - 40 - k * 22, true);
+        } else {
+          sGateDown(); shake(7); hitStop(0.03); flash('red', 220);
+          burst(p.x, p.y - 20, '#ff4444', 16, 220);
+          popNumber(eff.label, '#ff4444', p.x, p.y - 40, true);
+        }
+        maxSquad = Math.max(maxSquad, squad);
+        obstacles.splice(i, 1);
+        if (squad <= 0) { die(); return; }
+      }
+      continue;
+    }
+    if (o.kind === 'boss') {
+      if (o.phase === 'approach') {
+        o.z -= depthSpeed * dt;
+        if (o.z <= BOSS_LOCK_Z) { o.z = BOSS_LOCK_Z; o.phase = 'press'; shake(6); popNumber('ЖМИ ШТАНГУ!', C_GOLD, W / 2, H * 0.28, true); }
+      } else if (o.phase === 'press') {
+        o.timer -= dt;
+        o.hp -= squad * 1.15 * dt;
+        // дрожь стойки растёт по мере убывания времени — нарастающее напряжение
+        if (o.timer < BOSS_PRESS_TIME * 0.3) shake(1.2);
+        if (o.hp <= 0) {
+          hitStop(0.09); shake(22); sBossWin(); flash('gold', 380);
+          const p = projectPoint(0, o.z);
+          burst(p.x, p.y, C_GOLD, 40, 320);
+          score += 400; squad = Math.min(SQUAD_CAP, squad + 40); maxSquad = Math.max(maxSquad, squad);
+          popNumber('ШТАНГА ВЗЯТА! +40', C_GOLD, W / 2, H * 0.3, true);
+          obstacles.splice(i, 1);
+        } else if (o.timer <= 0) {
+          const loss = Math.round(squad * 0.5);
+          squad = Math.max(0, squad - loss);
+          hitStop(0.06); shake(24); sBossLose(); flash('red', 420);
+          const p = projectPoint(0, o.z);
+          burst(p.x, p.y, C_RAGE, 34, 300);
+          popNumber('−' + loss, '#ff4444', W / 2, H * 0.3, true);
+          obstacles.splice(i, 1);
+          if (squad <= 0) { die(); return; }
+        }
+      }
+      continue;
+    }
+  }
+
+  // Бонусы
+  for (let i = bonuses.length - 1; i >= 0; i--) {
+    const b = bonuses[i]; b.t += dt;
+    b.z -= depthSpeed * dt;
+    if (b.z <= 0.16 && Math.abs(b.worldX - squadWorldX) < 0.22) {
+      const p = projectPoint(squadWorldX, 0.1);
+      if (b.type === 'preworkout') { rageT = 5; popNumber('ПРЕДТРЕН! ЯРОСТЬ', C_RAGE, p.x, p.y - 40, true); flash('orange', 260); }
+      else if (b.type === 'belt') { shield = Math.min(3, shield + 1); popNumber('ЩИТ: ПОЯС', '#7ea8ff', p.x, p.y - 40, true); }
+      else { squad = Math.min(SQUAD_CAP, squad + 5); maxSquad = Math.max(maxSquad, squad); squadPulse = 1; popNumber('+5', '#67c26a', p.x, p.y - 40, true); }
+      sPower(); shake(3); burst(p.x, p.y - 20, BONUS_TYPES[b.type].color, 16, 220);
+      bonuses.splice(i, 1); continue;
+    }
+    if (b.z <= 0) bonuses.splice(i, 1);
+  }
+
+  maxSquad = Math.max(maxSquad, squad);
+}
+
+// ── РЕНДЕР ───────────────────────────────────────────────────────────────────
+function render() {
+  if (state === 'select') return;
+  ctx.save();
+  if (shakeAmp > 0) ctx.translate(rnd(-1, 1) * shakeAmp, rnd(-1, 1) * shakeAmp);
+
+  drawHall();
+
+  if (rageT > 0) {
+    ctx.fillStyle = 'rgba(255,90,54,' + (0.12 + 0.06 * Math.sin(t * 22)) + ')';
+    ctx.fillRect(0, 0, W, H);
+    if (rageT < 1) ctx.fillStyle = 'rgba(255,90,54,' + (Math.sin(t * 26) > 0 ? 0.22 : 0) + ')', ctx.fillRect(0, 0, W, H);
+  }
+
+  const drawables = [...obstacles, ...bonuses].sort((a, b) => b.z - a.z);
+  drawables.forEach(o => {
+    if (o.kind === 'plate') drawPlate(o);
+    else if (o.kind === 'gate') drawGate(o);
+    else if (o.kind === 'boss') drawBoss(o);
+    else drawBonus(o);
+  });
+
+  // Пули
+  ctx.fillStyle = '#ffd700';
+  bullets.forEach(bl => {
+    const p = projectPoint(bl.worldX, bl.z);
+    const r = Math.max(2, 6 * p.scale);
+    ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, 7); ctx.fill();
+  });
+
+  // Толпа: дальние ряды — дёшево, ближние — полный атлет, лидер — крупнее всех
+  const f = FIGHTERS[selectedFighter];
+  const drawList = [];
+  for (let i = 0; i < followers.length && i < RENDER_CAP; i++) {
+    const fo = followers[i];
+    const p = projectPoint(fo.x, fo.z);
+    drawList.push({ z: fo.z, p, phase: fo.phase, full: i < FULL_DETAIL_CAP });
+  }
+  const leaderP = projectPoint(squadWorldX, 0.01);
+  drawList.push({ z: -1, p: leaderP, leader: true });
+  drawList.sort((a, b) => b.z - a.z);
+  drawList.forEach(d => {
+    const sc = (d.leader ? 2.3 : 1.5) * d.p.scale * (1 + squadPulse * 0.18);
+    if (d.leader) {
+      ctx.save(); ctx.translate(d.p.x, d.p.y);
+      drawAthlete(ctx, selectedFighter, { scale: sc, run: Math.sin(t * 14), rage: rageT > 0, shield: shield > 0 });
+      ctx.restore();
+    } else if (d.full) {
+      ctx.save(); ctx.translate(d.p.x, d.p.y + Math.sin(d.phase) * 2);
+      drawAthlete(ctx, selectedFighter, { scale: sc, run: Math.sin(d.phase * 3.4) });
+      ctx.restore();
+    } else {
+      drawFollowerSimple(d.p.x, d.p.y, sc * 0.62, f, d.phase);
+    }
+  });
+
+  parts.forEach(p => { ctx.globalAlpha = Math.max(0, p.life * 1.6); ctx.fillStyle = p.color; ctx.fillRect(p.x, p.y, p.r, p.r); });
+  ctx.globalAlpha = 1;
+
+  toasts.forEach(ts => {
+    ctx.globalAlpha = Math.max(0, 1 - ts.t / 1.3);
+    const fs = ts.big ? 24 : 17;
+    ctx.font = "900 " + fs + "px 'Courier New', monospace"; ctx.textAlign = 'center';
+    ctx.lineWidth = ts.big ? 5 : 3.5; ctx.strokeStyle = 'rgba(10,8,6,0.9)';
+    const half = ctx.measureText(ts.text).width / 2;
+    const tx = Math.max(half + 8, Math.min(W - half - 8, ts.x));
+    ctx.strokeText(ts.text, tx, ts.y);
+    ctx.fillStyle = ts.color; ctx.fillText(ts.text, tx, ts.y);
+  });
+  ctx.globalAlpha = 1;
+
+  // HUD
+  ctx.textAlign = 'left'; ctx.fillStyle = C_GOLD;
+  ctx.font = "900 15px 'Courier New', monospace";
+  ctx.fillText('ОТРЯД', 20, 32);
+  ctx.font = "900 30px 'Courier New', monospace";
+  ctx.fillText(String(squad), 20, 62);
+  ctx.textAlign = 'right'; ctx.fillStyle = '#e94f64'; ctx.font = "900 20px 'Courier New', monospace";
+  ctx.fillText('🥤 ' + score, W - 20, 32);
+  ctx.fillStyle = 'rgba(242,237,227,0.7)'; ctx.font = "700 14px 'Courier New', monospace";
+  ctx.fillText(Math.floor(dist) + ' м', W - 20, 54);
+  let ix = W - 20, iy = 78;
+  const pw = (label, color, frac) => {
+    ctx.textAlign = 'right'; ctx.font = "800 12px 'Courier New', monospace"; ctx.fillStyle = color;
+    ctx.fillText(label, ix, iy);
+    ctx.fillStyle = 'rgba(255,255,255,0.15)'; ctx.fillRect(ix - 90, iy + 6, 90, 4);
+    ctx.fillStyle = color; ctx.fillRect(ix - 90, iy + 6, 90 * frac, 4);
+    iy += 24;
+  };
+  if (rageT > 0) pw('ЯРОСТЬ', C_RAGE, rageT / 5);
+  if (shield > 0) { ctx.textAlign = 'right'; ctx.font = "800 12px 'Courier New', monospace"; ctx.fillStyle = '#7ea8ff'; ctx.fillText('ПОЯС ×' + shield, ix, iy); }
+
+  ctx.restore();
+}
+
+// ── ЦИКЛ ─────────────────────────────────────────────────────────────────────
+let last = performance.now();
+function frame(now) {
+  const raw = Math.min(0.033, (now - last) / 1000); last = now;
+  let dt = raw * timeScale;
+  if (hitStopT > 0) { hitStopT -= raw; dt *= 0.06; }
+  update(dt); render();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+document.addEventListener('visibilitychange', () => { last = performance.now(); });
+</script>
+
+</body>
+</html>
