@@ -81,6 +81,7 @@ def wired(monkeypatch):
     monkeypatch.setattr(config, "NOVITA_API_KEY", "test-key")
     monkeypatch.setattr(db, "get_ai_video_count_today", AsyncMock(return_value=0))
     monkeypatch.setattr(db, "increment_ai_video_count", AsyncMock())
+    monkeypatch.setattr(db, "get_ai_question_count_today", AsyncMock(return_value=0))
     analyze = AsyncMock(return_value={
         "exercise": "присед", "reps_seen": 3,
         "view": {"angle": "сбоку", "usable": True, "problem": ""},
@@ -160,6 +161,26 @@ async def test_preview_block_still_analyzes_video(monkeypatch, wired):
     wired.handle.assert_awaited_once()
     db.increment_ai_video_count.assert_awaited_once()
     message.reply.assert_awaited()
+
+
+async def test_daily_question_limit_blocks_before_download(monkeypatch, wired):
+    """Квота ВОПРОСОВ, не только видео, тоже держит до скачивания.
+
+    Разбор ролика платит сам по себе, а ответ на него уходит через
+    _handle_question — списывающую квоту вопросов. Раньше эта квота
+    проверялась только там, то есть уже после скачивания и оплаченного
+    разбора: исчерпавший вопросы получал честный отказ, но по счёту это уже
+    не спасало."""
+    monkeypatch.setattr(
+        db, "get_ai_question_count_today", AsyncMock(return_value=config.AI_QUESTION_DAILY_LIMIT)
+    )
+    monkeypatch.setattr(handler, "ai_keyboard", AsyncMock(return_value=None))
+    message = _message()
+    await handler.ai_video_question(message, MagicMock())
+
+    message.bot.download.assert_not_awaited()
+    wired.analyze.assert_not_awaited()
+    wired.handle.assert_not_awaited()
 
 
 async def test_daily_cost_cap_turns_video_off_before_download(monkeypatch, wired):
