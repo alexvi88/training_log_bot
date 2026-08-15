@@ -74,7 +74,12 @@ CREATE TABLE IF NOT EXISTS users (
     -- подсказка под первым пушем (engagement._deliver) не должна лезть к тем,
     -- кто пояс уже выбрал.
     tz_set_by_user INTEGER NOT NULL DEFAULT 0,
-    tz_push_hint_shown INTEGER NOT NULL DEFAULT 0
+    tz_push_hint_shown INTEGER NOT NULL DEFAULT 0,
+    -- Одноразовая подсказка под первым ответом AI-тренера: он не только
+    -- отвечает, но и умеет сам записать вес, завести упражнение, посчитать еду
+    -- (см. handlers.ai_trainer.ACTIONS_HINT_TEXT). Один раз за жизнь аккаунта —
+    -- дальше молчим: занос данных через модель платный, промоутить его нельзя.
+    ai_actions_hint_shown INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS muscle_groups (
@@ -916,6 +921,13 @@ async def _migrate_schema() -> None:
         # «часы сбились — скажи пояс» живёт под первым пушем и не должна
         # повторяться под вторым.
         await _conn.execute("ALTER TABLE users ADD COLUMN tz_push_hint_shown INTEGER NOT NULL DEFAULT 0")
+    if "ai_actions_hint_shown" not in user_cols:
+        # Одноразовая отметка — та же идея, что voice_hint_shown выше: подсказка
+        # «могу и сам записать» живёт под первым ответом AI-тренера и не должна
+        # повторяться под вторым (см. handlers.ai_trainer.ACTIONS_HINT_TEXT).
+        await _conn.execute(
+            "ALTER TABLE users ADD COLUMN ai_actions_hint_shown INTEGER NOT NULL DEFAULT 0"
+        )
 
     set_cols = await _column_names("sets")
     if "is_warmup" in set_cols:
@@ -2767,6 +2779,22 @@ async def mark_tz_push_hint_shown(user_id: int) -> None:
             "UPDATE users SET tz_push_hint_shown = 1 WHERE telegram_id = ?", (user_id,)
         )
         await conn().commit()
+
+
+async def claim_ai_actions_hint(user_id: int) -> bool:
+    """True ровно один раз за жизнь аккаунта — пора показать подсказку «могу и
+    сам записать» под первым ответом AI-тренера (см. handlers.ai_trainer.
+    ACTIONS_HINT_TEXT). Проверка и отметка одним UPDATE под общим замком — тот
+    же приём, что у register_manual_sets_and_check_hint: два ответа, пришедших
+    подряд, не смогут оба решить, что подсказку ещё не показывали."""
+    async with _write_lock:
+        cur = await conn().execute(
+            "UPDATE users SET ai_actions_hint_shown = 1 "
+            "WHERE telegram_id = ? AND ai_actions_hint_shown = 0",
+            (user_id,),
+        )
+        await conn().commit()
+        return cur.rowcount > 0
 
 
 async def has_manual_set(user_id: int) -> bool:
