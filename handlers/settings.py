@@ -40,7 +40,9 @@ def _try_claim_converting(user_id: int) -> bool:
     return True
 
 
-async def show_settings(callback: CallbackQuery, state: FSMContext, alert: str | None = None):
+async def show_settings(
+    callback: CallbackQuery, state: FSMContext, alert: str | None = None, show_alert: bool = True
+):
     await state.set_state(SettingsFlow.menu)
     user = await db.get_user(callback.from_user.id)
     kb = keyboards.settings_keyboard(
@@ -51,9 +53,9 @@ async def show_settings(callback: CallbackQuery, state: FSMContext, alert: str |
         show_extra_stats=bool(user["show_extra_stats"]),
         show_mcp=config.mcp_available(),
     )
-    await ui.safe_edit(callback, "🔧 Настройки:", reply_markup=kb)
+    await ui.safe_edit(callback, "🔧 Подстрою бота под тебя.", reply_markup=kb)
     if alert:
-        await callback.answer(alert, show_alert=True)
+        await callback.answer(alert, show_alert=show_alert)
     else:
         await callback.answer()
 
@@ -279,7 +281,7 @@ async def settings_unit(callback: CallbackQuery, state: FSMContext):
         await achievement_sync.resync(user_id)
         await show_settings(
             callback, state,
-            alert=f"Перевёл всё на {new_unit} — историю и рекорды пересчитал сам.",
+            alert=f"Перевёл всё на {keyboards.UNIT_NAMES[new_unit]} — историю и рекорды пересчитал сам.",
         )
     finally:
         _converting.discard(user_id)
@@ -321,7 +323,11 @@ async def settings_timezone_set(callback: CallbackQuery, state: FSMContext):
         # он оставался прежним навсегда: путь при завершении тренировки умеет
         # только выдавать, но не отбирать.
         await achievement_sync.resync(callback.from_user.id)
-    await show_settings(callback, state, alert=f"Часовой пояс: {keyboards.format_utc_offset(offset)}")
+    await show_settings(
+        callback, state,
+        alert=f"Поставил тебе {keyboards.format_utc_offset(offset)}",
+        show_alert=False,
+    )
 
 
 @router.callback_query(F.data == "settings:tzback")
@@ -357,7 +363,11 @@ async def settings_formula(callback: CallbackQuery, state: FSMContext):
     user = await db.get_user(callback.from_user.id)
     new_formula = "brzycki" if user["e1rm_formula"] == "epley" else "epley"
     await db.update_user(callback.from_user.id, e1rm_formula=new_formula)
-    await show_settings(callback, state, alert=f"Формула e1RM: {new_formula}")
+    await show_settings(
+        callback, state,
+        alert=f"Перевёл на {keyboards.FORMULA_NAMES[new_formula]}",
+        show_alert=False,
+    )
 
 
 @router.callback_query(F.data == "settings:formulano")

@@ -116,6 +116,21 @@ async def test_confirming_the_formula_switch_applies_it(fresh_db, user_id):
     assert user["e1rm_formula"] == "brzycki"
 
 
+async def test_confirming_the_formula_switch_is_a_toast_not_a_modal(fresh_db, user_id):
+    """«Формула e1RM: brzycki» за модалкой с ОК — лишний тап на итог, который и
+    так виден на экране настроек; после подтверждающего yes/no это уже не
+    предупреждение, а короткая реплика тренера («Перевёл на Бжицки»)."""
+    state = await _make_state(user_id)
+    callback = _make_callback(user_id, "settings:formulayes")
+
+    await settings.settings_formula(callback, state)
+
+    callback.answer.assert_awaited_once()
+    args, kwargs = callback.answer.call_args
+    assert "Бжицки" in args[0]
+    assert kwargs.get("show_alert") is False
+
+
 async def test_cancelling_the_formula_switch_changes_nothing(fresh_db, user_id):
     state = await _make_state(user_id)
     callback = _make_callback(user_id, "settings:formulano")
@@ -248,6 +263,42 @@ async def test_toggle_labels_share_one_first_person_verb_construction():
     assert "📊 e1RM на карточке: прячу" in off_texts
     for text in on_texts + off_texts:
         assert len(text) <= 40, f"кнопка слишком длинная для Telegram: {text!r}"
+
+
+# ---------- экран настроек говорит по-русски, а не телеметрией ----------
+
+
+async def test_settings_keyboard_shows_russian_unit_and_formula_names():
+    """«Единицы: kg» и «Формула e1RM: brzycki» — телеметрия, а не реплики
+    тренера (TONE_OF_VOICE.md). Внутренние значения ("kg"/"lb",
+    "epley"/"brzycki") не меняются — русифицируется только то, что видит
+    человек."""
+    import keyboards
+
+    kb = keyboards.settings_keyboard("lb", "brzycki", True, True, True)
+    labels = [b.text for row in kb.inline_keyboard for b in row]
+
+    assert any("фунты" in label for label in labels)
+    assert any("Бжицки" in label for label in labels)
+    assert not any("lb" in label for label in labels)
+    assert not any("brzycki" in label for label in labels)
+
+    kb_kg = keyboards.settings_keyboard("kg", "epley", True, True, True)
+    labels_kg = [b.text for row in kb_kg.inline_keyboard for b in row]
+    assert any("кг" in label for label in labels_kg)
+    assert any("Эпли" in label for label in labels_kg)
+
+
+async def test_settings_header_is_a_coach_line_not_a_label(fresh_db, user_id):
+    """Заголовок экрана — короткая реплика тренера, а не «🔧 Настройки:»."""
+    state = await _make_state(user_id)
+    callback = _make_callback(user_id, "menu:settings")
+
+    await settings.show_settings(callback, state)
+
+    text = callback.message.answer.call_args.args[0]
+    assert text != "🔧 Настройки:"
+    assert not text.rstrip().endswith(":")
 
 
 async def test_profile_screen_speaks_in_the_first_person(fresh_db, user_id):

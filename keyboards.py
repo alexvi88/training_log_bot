@@ -1364,6 +1364,14 @@ def format_utc_offset(tz_offset: int) -> str:
     return "UTC" if tz_offset == 0 else f"UTC{tz_offset:+d}"
 
 
+# Полные русские названия для экрана настроек — не путать с formatting.UNIT_LABELS
+# (это суффикс к числу, "100кг"/"100lb"): тут нужно название единицы целиком, а не
+# сокращение рядом с цифрой. Внутренние значения ("kg"/"lb", "epley"/"brzycki")
+# остаются как есть везде, где их сравнивают и парсят (db, formatting, handlers.settings).
+UNIT_NAMES = {"kg": "кг", "lb": "фунты"}
+FORMULA_NAMES = {"epley": "Эпли", "brzycki": "Бжицки"}
+
+
 def timezone_picker_keyboard(current: int) -> InlineKeyboardMarkup:
     """Сетка целочасовых смещений от UTC — весь обитаемый диапазон.
 
@@ -1394,11 +1402,14 @@ def settings_keyboard(
     show_mcp: bool = False,
 ) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.button(text=f"Единицы: {unit}", callback_data="settings:unit")
+    b.button(text=f"⚖️ Единицы: {UNIT_NAMES.get(unit, unit)}", callback_data="settings:unit")
     # "e1RM", not "1ПМ": every card, chart and record in the bot is labelled
     # e1RM, and a setting that names the metric differently reads as a setting
     # for something else entirely.
-    b.button(text=f"Формула e1RM: {formula}", callback_data="settings:formula")
+    b.button(
+        text=f"📐 Формула e1RM: {FORMULA_NAMES.get(formula, formula)}",
+        callback_data="settings:formula",
+    )
     b.button(text=f"🕒 Часовой пояс: {format_utc_offset(tz_offset)}", callback_data="settings:tz")
     # Все тумблеры ниже — одна конструкция: «<label>: <глагол от первого
     # лица>» / «<label>: <его отрицание>» — раньше формы расходились

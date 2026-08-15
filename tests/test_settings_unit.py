@@ -74,6 +74,21 @@ async def test_unit_yes_converts_history(fresh_db, user_id):
     assert sets[0]["weight"] > 200  # 100kg converted to lb
 
 
+async def test_unit_switch_alert_stays_a_modal(fresh_db, user_id):
+    """Конвертация всей истории — настоящее предупреждение (в отличие от
+    пояса и формулы, которые стали тостами): модалка с ОК тут оправдана, а
+    русское название единицы важнее сырого кода "lb"."""
+    state = await _make_state(user_id)
+    callback = _make_callback(user_id, "settings:unityes")
+
+    await settings.settings_unit(callback, state)
+
+    callback.answer.assert_awaited_once()
+    args, kwargs = callback.answer.call_args
+    assert "фунты" in args[0]
+    assert kwargs.get("show_alert") is True
+
+
 async def test_unit_no_cancels_without_converting(fresh_db, user_id):
     db = fresh_db
     state = await _make_state(user_id)
