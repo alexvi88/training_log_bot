@@ -52,6 +52,15 @@ SKIP_CATEGORY_BY_DAY: dict[int, str] = {
     14: SKIP_14,
 }
 
+# A blue whale weighs roughly 100–150 metric tons. The WEEKLY_DIGEST "это
+# примерно один синий кит" line is only honest once a user's monthly tonnage
+# is actually in that neighborhood — at the low end of a normal training
+# month (a few tons) the comparison is just false. Engagement passes `whale`
+# as None below this bound (in kg, converted to the user's own unit already),
+# which drops the variant from the draw the same way a missing `best_day`
+# does — see pick_text.
+WHALE_MIN_TONNAGE_KG = 100_000
+
 TEXTS: dict[str, list[str]] = {
     # {weeks} приходит уже со словом («6 недель», «4 недели») — см. engagement,
     # там plural_ru. Шаблоны построены так, чтобы фраза стояла в именительном
@@ -168,7 +177,7 @@ TEXTS: dict[str, list[str]] = {
         "ПРИВЕТ АТЛЕТ! {exercise} ты перерос: 12+ повторов три сессии подряд на одном весе. Блины в стойке заждались.",
     ],
     WEEKLY_DIGEST: [
-        "ПРИВЕТ АТЛЕТ! За месяц ты поднял суммарно {tonnage} — это примерно один синий кит. Зайди, покажу разбивку.",
+        "ПРИВЕТ АТЛЕТ! За месяц ты поднял суммарно {tonnage} — это примерно {whale}. Зайди, покажу разбивку.",
         "ПРИВЕТ АТЛЕТ! На этой неделе — {week_count}. Заходи, гляну, что подросло.",
         "ПРИВЕТ АТЛЕТ! {best_day} — твой самый продуктивный день по истории. Держим планку?",
         "ПРИВЕТ АТЛЕТ! За 30 дней суммарный тоннаж — {tonnage}. На этой неделе — {week_count}. Разбор — в приложении.",
@@ -220,22 +229,33 @@ async def pick_text(telegram_id: int, category: str, **format_kwargs: object) ->
     are dropped from the draw rather than filled with a guess. That's how a
     claim about the user's own history ("{best_day} — твой самый продуктивный
     день") stays true: without the data behind it, the line simply isn't sent.
-    """
-    missing = {k for k, v in format_kwargs.items() if v is None}
-    pool = [t for t in TEXTS[category] if not any("{" + k + "}" in t for k in missing)]
-    if not pool:
-        pool = [t for t in TEXTS[category] if not _placeholders(t)] or TEXTS[category]
-    if len(pool) == 1:
-        return pool[0].format(**format_kwargs)
 
+    The bag stores indices into the *full* pool (TEXTS[category]), not into
+    the filtered one, and filters it at draw time instead. Two calls for the
+    same category can see different eligible subsets (a WEEKLY_DIGEST draw
+    with `best_day` known has one variant more than a draw without it) — if
+    the bag were keyed by position in that shifting subset, "index 3" would
+    point at a different template each time, and the "no repeat before the
+    pool is exhausted" promise would quietly break. Full-pool indices stay
+    meaningful no matter which subset is eligible on a given call.
+    """
+    full_pool = TEXTS[category]
+    missing = {k for k, v in format_kwargs.items() if v is None}
+    eligible = [i for i, t in enumerate(full_pool) if not any("{" + k + "}" in t for k in missing)]
+    if not eligible:
+        eligible = [i for i, t in enumerate(full_pool) if not _placeholders(t)] or list(range(len(full_pool)))
+    if len(eligible) == 1:
+        return full_pool[eligible[0]].format(**format_kwargs)
+
+    eligible_set = set(eligible)
     bag = await db.get_rotation_bag(telegram_id, category)
-    bag = [i for i in bag if i < len(pool)]
+    bag = [i for i in bag if i in eligible_set]
     if not bag:
-        bag = list(range(len(pool)))
+        bag = list(eligible)
         random.shuffle(bag)
     index = bag.pop(0)
     await db.save_rotation_bag(telegram_id, category, bag)
-    return pool[index].format(**format_kwargs)
+    return full_pool[index].format(**format_kwargs)
 
 
 def _placeholders(template: str) -> set[str]:

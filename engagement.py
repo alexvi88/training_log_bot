@@ -78,6 +78,15 @@ NEWBIE_START_DAY = 1
 NEWBIE_REPEAT_DAYS = 5
 NEWBIE_STOP_DAY = 30
 
+# Categories that must not consume someone's has_push_today slot: bookkeeping
+# rows in `pushes`, not a player-facing daily push. Empty for now — this
+# deploy has no admin-only report wired into the shared push/dedup table yet
+# — but a one-time release announcement is deliberately kept OUT of this
+# list: capping at one message a day for someone who just got a release
+# announcement is the antispam guarantee has_push_today already provides
+# everywhere else, and it's worth keeping. See db.has_push_today.
+ADMIN_REPORT_CATEGORIES: tuple[str, ...] = ()
+
 
 @dataclass
 class PushDecision:
@@ -232,7 +241,9 @@ async def _find_plateau_exercise(telegram_id: int) -> Optional[str]:
 
 
 async def build_daily_push(telegram_id: int, today: dt.date) -> Optional[PushDecision]:
-    if await db.has_push_today(telegram_id, today.isoformat()):
+    if await db.has_push_today(
+        telegram_id, today.isoformat(), exclude_categories=ADMIN_REPORT_CATEGORIES
+    ):
         return None
 
     date_strings = await db.list_finished_workout_dates(telegram_id)
@@ -300,12 +311,19 @@ async def build_daily_push(telegram_id: int, today: dt.date) -> Optional[PushDec
             # variant that would have claimed one, instead of asserting a habit
             # the history doesn't show.
             best_weekday = analytics.most_frequent_weekday(dates)
+            # The "это примерно один синий кит" line is only true near a whale's
+            # actual weight (~100-150 t) — see push_texts.WHALE_MIN_TONNAGE_KG.
+            # tonnage_since() returns the user's own unit (kg or lb), same as
+            # _find_rank_near converts before comparing against a kg threshold.
+            user = await db.get_user(telegram_id)
+            tonnage_kg = formatting.to_kg(tonnage, user["unit"] if user else "kg")
             text = await push_texts.pick_text(
                 telegram_id, push_texts.WEEKLY_DIGEST,
                 tonnage=format_tonnage(tonnage), week_count=f"{dashboard.this_week} {week_word}",
                 best_day=(
                     formatting.WEEKDAY_NAMES_RU[best_weekday] if best_weekday is not None else None
                 ),
+                whale="один синий кит" if tonnage_kg >= push_texts.WHALE_MIN_TONNAGE_KG else None,
             )
             return PushDecision(push_texts.WEEKLY_DIGEST, text, with_cta=False)
 
@@ -324,7 +342,9 @@ async def _ai_weekly_digest_text(telegram_id: int) -> Optional[str]:
 
 
 async def build_newbie_push(telegram_id: int, created_at: str, today: dt.date) -> Optional[PushDecision]:
-    if await db.has_push_today(telegram_id, today.isoformat()):
+    if await db.has_push_today(
+        telegram_id, today.isoformat(), exclude_categories=ADMIN_REPORT_CATEGORIES
+    ):
         return None
     signup_date = dt.date.fromisoformat(created_at[:10])
     days_since_signup = (today - signup_date).days
