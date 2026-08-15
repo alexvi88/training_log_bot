@@ -386,7 +386,7 @@ async def test_deleting_a_day_returns_to_its_program(fresh_db, user_id):
     callback = _make_callback(user_id, f"rt:delyes:{day['id']}")
     await routines.rt_delete(callback, await _state(user_id))
 
-    assert callback.answer.await_args.args[0] == "День удалён"
+    assert callback.answer.await_args.args[0] == "Удалил день"
     assert "PPL" in _last_text(callback)
 
 

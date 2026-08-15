@@ -207,7 +207,7 @@ async def editw_delset(callback: CallbackQuery, state: FSMContext):
     # than getting bounced up to the list. The block still gets reaped once
     # they leave (editw_to_top / editw_done), same as before.
     await _on_workout_edited(workout_id, keep_block_id=data.get("edit_block_id"))
-    await callback.answer("Подход удалён")
+    await callback.answer("Удалил подход")
     await _back_to_current_screen(callback, state, workout_id)
 
 
@@ -407,7 +407,7 @@ async def editw_remove_exercise(callback: CallbackQuery, state: FSMContext):
     # значки должны сниматься так же. Раньше «Клуб 140» за единственный сет на
     # 150 кг оставался в профиле навсегда, хотя самого сета в истории уже нет.
     await _on_workout_edited(workout_id)
-    await callback.answer("Упражнение убрано из тренировки")
+    await callback.answer("Убрал упражнение из тренировки")
     await state.update_data(edit_block_id=None, edit_exercise_id=None)
     await show_edit_screen(callback, state, workout_id)
 
@@ -621,7 +621,7 @@ async def editw_date_calendar_pick(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     await _apply_edit_workout_date(data["edit_workout_id"], new_date)
     await show_edit_screen(callback, state, data["edit_workout_id"])
-    await callback.answer("Дата обновлена")
+    await callback.answer("Перенёс тренировку")
 
 
 @router.message(StateFilter(EditWorkoutFlow.awaiting_date), F.text)
@@ -636,7 +636,7 @@ async def editw_date_entered(message: Message, state: FSMContext):
     data = await state.get_data()
     workout_id = data["edit_workout_id"]
     await _apply_edit_workout_date(workout_id, new_date)
-    await message.reply("Дата обновлена.")
+    await message.reply("Перенёс тренировку.")
     await show_edit_screen(message, state, workout_id)
 
 

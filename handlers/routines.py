@@ -473,7 +473,7 @@ async def rt_program_add(callback: CallbackQuery, state: FSMContext):
         return
 
     program_id = await _instantiate_catalog_program(user_id, key, program["name"])
-    await callback.answer(f"Программа добавлена: {len(program['days'])} дн.")
+    await callback.answer(f"Добавил программу: {len(program['days'])} дн.")
     await _show_program(callback, state, program_id)
 
 
@@ -1024,7 +1024,7 @@ async def rt_program_delete(callback: CallbackQuery, state: FSMContext):
     if await _owned_program(callback, program_id) is None:
         return
     await db.delete_program_by_id(program_id)
-    await callback.answer("Программа удалена")
+    await callback.answer("Удалил программу")
     await show_manage(callback, state)
 
 
@@ -1064,7 +1064,7 @@ async def rt_delete(callback: CallbackQuery, state: FSMContext):
         return
     program_id = routine["program_id"]
     await db.delete_routine(routine_id)
-    await callback.answer("День удалён" if program_id else "Программа удалена")
+    await callback.answer("Удалил день" if program_id else "Удалил программу")
     # Назад туда, откуда пришли: удалив один день, ожидаешь увидеть программу без
     # него, а не весь список программ. Последний день уносит программу с собой
     # (см. db.delete_routine) — тогда возвращаться уже некуда.
@@ -1158,7 +1158,7 @@ async def rt_finish_previous_and_start(callback: CallbackQuery, state: FSMContex
         await db.delete_empty_blocks(active["id"])
         await db.finish_workout(active["id"])
     await _begin_routine_workout(callback, state, routine)
-    await callback.answer("Прошлая тренировка завершена")
+    await callback.answer("Закрыл прошлую тренировку")
 
 
 @router.callback_query(F.data.startswith("rt:resumeprev:"))
@@ -1354,7 +1354,7 @@ async def rt_remove_exercise_confirm(callback: CallbackQuery, state: FSMContext)
         return
     entry = await db.get_routine_exercise(re_id)
     if entry is None or entry["routine_id"] != routine_id:
-        await callback.answer("Упражнение уже убрано", show_alert=True)
+        await callback.answer("Уже убрал это упражнение", show_alert=True)
         await _show_routine_editor(callback, state, routine_id)
         return
     exercises = await db.list_routine_exercises(routine_id)
@@ -1379,7 +1379,7 @@ async def rt_remove_exercise(callback: CallbackQuery, state: FSMContext):
         return
     entry = await db.get_routine_exercise(re_id)
     if entry is None or entry["routine_id"] != routine_id:
-        await callback.answer("Упражнение уже убрано", show_alert=True)
+        await callback.answer("Уже убрал это упражнение", show_alert=True)
         await _show_routine_editor(callback, state, routine_id)
         return
     await db.remove_routine_exercise(re_id)
@@ -1400,7 +1400,7 @@ async def rt_edit_exercise_target(callback: CallbackQuery, state: FSMContext):
         return
     entry = await db.get_routine_exercise(re_id)
     if entry is None or entry["routine_id"] != routine_id:
-        await callback.answer("Упражнение уже убрано", show_alert=True)
+        await callback.answer("Уже убрал это упражнение", show_alert=True)
         await _show_routine_editor(callback, state, routine_id)
         return
     exercise = await db.get_exercise(entry["exercise_id"])
@@ -1428,7 +1428,7 @@ async def rt_clear_exercise_target(callback: CallbackQuery, state: FSMContext):
     await state.set_state(None)
     await _show_routine_editor(callback, state, data["rtedit_routine_id"])
     await callback.answer(
-        "Убрал схему. Правило прогрессии из программы тоже сброшено" if had_rule else "Убрал схему"
+        "Убрал схему и заодно снял правило прогрессии из программы" if had_rule else "Убрал схему"
     )
 
 
@@ -1444,7 +1444,7 @@ async def rt_exercise_target_entered(message: Message, state: FSMContext):
     await db.set_routine_exercise_target(data["rtedit_re_id"], target)
     if entry is not None and entry["progression"]:
         await message.reply(
-            "Схема теперь ручная — правило прогрессии из программы сброшено."
+            "Схема теперь ручная — заодно снял правило прогрессии из программы."
         )
     await state.set_state(None)
     await _show_routine_editor(message, state, data["rtedit_routine_id"])

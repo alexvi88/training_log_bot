@@ -403,7 +403,7 @@ async def test_picking_a_group_moves_the_exercise_and_returns_to_its_card(fresh_
     ex = await db.get_exercise(ex_id)
     assert ex["primary_group_id"] == other_group_id
     assert await state.get_state() == ExerciseManage.picking_exercise
-    callback.answer.assert_awaited_once_with("Группа изменена")
+    callback.answer.assert_awaited_once_with("Перенёс в другую группу")
     text = callback.message.answer.await_args.args[0]
     assert "Группа: СПИНА" in text
 

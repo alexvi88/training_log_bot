@@ -387,7 +387,7 @@ async def exm_archive_group(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Эту группу нельзя архивировать", show_alert=True)
         return
     await db.archive_muscle_group(group_id)
-    await callback.answer("Группа архивирована")
+    await callback.answer("Архивировал группу")
     await show_exercise_groups(callback, state)
 
 
@@ -675,7 +675,7 @@ async def exm_delete_photo(callback: CallbackQuery, state: FSMContext):
         await ui.alert_exercise_not_found(callback)
         return
     await db.delete_exercise_photo(ex_id)
-    await callback.answer("Фото удалено")
+    await callback.answer("Убрал фото")
     ex = await db.get_exercise(ex_id)
     has_images = await _send_exercise_images(callback.message, ex, state)
     text, kb = await _exercise_detail_payload(ex, state, with_info=not has_images)
@@ -780,7 +780,7 @@ async def exm_merge_confirm(callback: CallbackQuery, state: FSMContext):
         return
     await state.update_data(exm_merge_source_id=None)
     await state.set_state(ExerciseManage.picking_exercise)
-    await callback.answer("Упражнения объединены")
+    await callback.answer("Объединил упражнения")
     await _render_exercise_card(callback, state, target_id)
 
 
@@ -948,7 +948,7 @@ async def exm_edit_group_picked(callback: CallbackQuery, state: FSMContext):
     await db.update_exercise_group(ex_id, group_id)
     await state.set_state(ExerciseManage.picking_exercise)
     ex = await db.get_exercise(ex_id)
-    await callback.answer("Группа изменена")
+    await callback.answer("Перенёс в другую группу")
     text, kb = await _exercise_detail_payload(ex, state)
     await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML")
 
@@ -1038,7 +1038,7 @@ async def exm_archive_exercise(callback: CallbackQuery, state: FSMContext):
         await ui.alert_exercise_not_found(callback)
         return
     await db.archive_exercise(ex_id)
-    await callback.answer("Упражнение архивировано")
+    await callback.answer("Архивировал упражнение")
     await _show_exercise_list(callback, state)
 
 
@@ -1068,7 +1068,7 @@ async def exm_unarchive_exercise(callback: CallbackQuery, state: FSMContext):
         await ui.alert_exercise_not_found(callback)
         return
     await db.unarchive_exercise(ex_id)
-    await callback.answer("Упражнение возвращено из архива")
+    await callback.answer("Вернул упражнение из архива")
     await exm_archive_list(callback, state)
 
 
@@ -1087,7 +1087,7 @@ async def exm_new_group(callback: CallbackQuery, state: FSMContext):
 async def exm_new_group_entered(message: Message, state: FSMContext):
     name = message.text.strip()
     if not name:
-        await message.reply("Название не может быть пустым")
+        await message.reply("Не вижу названия — напиши хоть слово")
         return
     await db.create_muscle_group(message.from_user.id, name)
     # One screen, not three: the group list itself shows the new group, so the

@@ -146,4 +146,4 @@ async def bf_cancel(callback: CallbackQuery, state: FSMContext):
     await clear_state_keep_ai(state)
     from handlers.workout import _show_main_menu
     await _show_main_menu(callback, state)
-    await callback.answer("Отменено")
+    await callback.answer("Отменил")

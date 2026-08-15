@@ -492,7 +492,7 @@ async def hist_delete(callback: CallbackQuery, state: FSMContext):
     await achievement_sync.resync(callback.from_user.id)
     data = await state.get_data()
     await show_history_list(callback, state, data.get("history_page", 0))
-    await callback.answer("Тренировка удалена.")
+    await callback.answer("Удалил тренировку.")
 
 
 # ---------- progress ----------
