@@ -67,7 +67,14 @@ CREATE TABLE IF NOT EXISTS users (
     -- один раз (voice_hint_shown, см. handlers.workout._maybe_show_voice_hint).
     -- Голосом залогированные подходы сюда не идут: они уже нашли эту кнопку.
     manual_sets_typed INTEGER NOT NULL DEFAULT 0,
-    voice_hint_shown INTEGER NOT NULL DEFAULT 0
+    voice_hint_shown INTEGER NOT NULL DEFAULT 0,
+    -- Ставил ли человек пояс сам, в настройках (см. handlers.settings.
+    -- settings_timezone_set) — независимо от значения tz_offset, которое у
+    -- нового атлета и так не ноль (см. config.DEFAULT_TZ_OFFSET). Одноразовая
+    -- подсказка под первым пушем (engagement._deliver) не должна лезть к тем,
+    -- кто пояс уже выбрал.
+    tz_set_by_user INTEGER NOT NULL DEFAULT 0,
+    tz_push_hint_shown INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS muscle_groups (
@@ -880,6 +887,18 @@ async def _migrate_schema() -> None:
             await _conn.execute(
                 "ALTER TABLE users ADD COLUMN reply_keyboard_version INTEGER NOT NULL DEFAULT 0"
             )
+    if "tz_set_by_user" not in user_cols:
+        # Ставил ли человек часовой пояс сам (см. handlers.settings.settings_timezone_set)
+        # — в отличие от tz_offset, который у новичка теперь и так не ноль
+        # (см. config.DEFAULT_TZ_OFFSET), это поле про источник значения, а не
+        # про само значение. Нужно, чтобы подсказка под первым пушем (см.
+        # engagement._deliver) не лезла к тем, кто пояс уже выбрал осознанно.
+        await _conn.execute("ALTER TABLE users ADD COLUMN tz_set_by_user INTEGER NOT NULL DEFAULT 0")
+    if "tz_push_hint_shown" not in user_cols:
+        # Одноразовая отметка — та же идея, что у voice_hint_shown выше: подсказка
+        # «часы сбились — скажи пояс» живёт под первым пушем и не должна
+        # повторяться под вторым.
+        await _conn.execute("ALTER TABLE users ADD COLUMN tz_push_hint_shown INTEGER NOT NULL DEFAULT 0")
 
     set_cols = await _column_names("sets")
     if "is_warmup" in set_cols:
@@ -1363,14 +1382,20 @@ async def get_or_create_user(telegram_id: int, username: Optional[str]) -> aiosq
         return row
     async with _write_lock:
         await db.execute(
-            "INSERT INTO users (telegram_id, username, created_at, unit, e1rm_formula) "
-            "VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO users (telegram_id, username, created_at, unit, e1rm_formula, tz_offset) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
             (
                 telegram_id,
                 username,
                 now_iso(),
                 config.DEFAULT_UNIT,
                 config.DEFAULT_E1RM_FORMULA,
+                # Явно, а не через DEFAULT колонки: та осталась 0 (см. схему —
+                # 0 у СУЩЕСТВУЮЩЕГО пользователя значит «пояс неизвестен», см.
+                # engagement.tz_is_known), а дефолт для НОВОЙ записи — другое
+                # число (config.DEFAULT_TZ_OFFSET). Хранить оба смысла в одной
+                # колонке с одним DEFAULT нельзя.
+                config.DEFAULT_TZ_OFFSET,
             ),
         )
         await db.commit()
@@ -2702,6 +2727,27 @@ async def mark_voice_hint_shown(user_id: int) -> None:
     async with _write_lock:
         await conn().execute(
             "UPDATE users SET voice_hint_shown = 1 WHERE telegram_id = ?", (user_id,)
+        )
+        await conn().commit()
+
+
+async def mark_tz_set_by_user(user_id: int) -> None:
+    """Человек сам выбрал пояс в настройках (см. handlers.settings.
+    settings_timezone_set) — подсказка под пушем «пуш пришёл не вовремя?»
+    (engagement._deliver) ему больше не нужна."""
+    async with _write_lock:
+        await conn().execute(
+            "UPDATE users SET tz_set_by_user = 1 WHERE telegram_id = ?", (user_id,)
+        )
+        await conn().commit()
+
+
+async def mark_tz_push_hint_shown(user_id: int) -> None:
+    """Подсказку про пояс под пушем уже показывали этому человеку — один раз,
+    под первым пушем, который он получил (см. engagement._deliver)."""
+    async with _write_lock:
+        await conn().execute(
+            "UPDATE users SET tz_push_hint_shown = 1 WHERE telegram_id = ?", (user_id,)
         )
         await conn().commit()
 
@@ -6267,6 +6313,21 @@ async def has_push_today(telegram_id: int, today: str) -> bool:
     cur = await conn().execute(
         "SELECT 1 FROM pushes WHERE telegram_id = ? AND COALESCE(sent_on, date(sent_at)) = ? LIMIT 1",
         (telegram_id, today),
+    )
+    return await cur.fetchone() is not None
+
+
+async def has_push_on(telegram_id: int, category: str, dedup_key: str) -> bool:
+    """Уже отправляли этому человеку `category` с этим ключом дедупа.
+
+    В отличие от has_push_today (любая категория за календарный день), тут
+    категория фиксирована, а `dedup_key` — не обязательно дата: у еженедельной
+    сводки админу (см. engagement._maybe_send_admin_funnel_digest) это дата
+    понедельника, чтобы дедуп был «раз в неделю», а не «раз в день».
+    """
+    cur = await conn().execute(
+        "SELECT 1 FROM pushes WHERE telegram_id = ? AND category = ? AND sent_on = ? LIMIT 1",
+        (telegram_id, category, dedup_key),
     )
     return await cur.fetchone() is not None
 

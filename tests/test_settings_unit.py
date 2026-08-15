@@ -95,6 +95,9 @@ async def test_changing_the_timezone_takes_back_a_badge_the_new_days_do_not_earn
     import achievement_sync
 
     db = fresh_db
+    # Явно с нуля: дефолт нового атлета теперь UTC+3 (config.DEFAULT_TZ_OFFSET),
+    # а тест — про сам ПЕРЕКЛЮЧЕНИЕ пояса, а не про то, с какого стартовали.
+    await db.update_user(user_id, tz_offset=0)
     group_id = await db.create_muscle_group(user_id, "Грудь")
     ex_id = await db.create_exercise(user_id, "Жим", group_id)
     workout_id = await db.create_finished_workout(

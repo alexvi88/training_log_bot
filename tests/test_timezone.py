@@ -70,6 +70,94 @@ async def test_setting_timezone_persists(fresh_db, user_id):
     assert user["tz_offset"] == 5
 
 
+@pytest.mark.asyncio
+async def test_setting_timezone_marks_it_as_chosen_by_the_user(fresh_db, user_id):
+    """Отдельный флаг от значения tz_offset: у новичка оно и так не ноль (см.
+    config.DEFAULT_TZ_OFFSET), так что подсказка под пушем (engagement.
+    _should_show_tz_hint) должна опираться на факт выбора, а не на цифру."""
+    db = fresh_db
+    storage = MemoryStorage()
+    state = FSMContext(storage=storage, key=StorageKey(bot_id=1, chat_id=user_id, user_id=user_id))
+    assert (await db.get_user(user_id))["tz_set_by_user"] == 0
+
+    await settings.settings_timezone_set(_callback(user_id, "settings:tzset:5"), state)
+
+    assert (await db.get_user(user_id))["tz_set_by_user"] == 1
+
+
+# ---------- дефолтный пояс нового атлета ----------
+
+
+@pytest.mark.asyncio
+async def test_new_user_defaults_to_utc_plus_3(fresh_db):
+    """Владелец подтвердил смену дефолта: аудитория русскоязычная, и Москва
+    (UTC+3) — куда более частая точка старта, чем UTC. Существующих
+    пользователей это не трогает (см. test_push_job_leaves_users_without_a_
+    timezone_alone_at_night) — меняется только значение для НОВОЙ записи."""
+    import config
+
+    row = await fresh_db.get_or_create_user(telegram_id=777, username="newbie")
+
+    assert row["tz_offset"] == config.DEFAULT_TZ_OFFSET == 3
+    assert row["tz_set_by_user"] == 0  # значение по умолчанию, не осознанный выбор
+
+
+# ---------- подсказка про пояс под первым пушем ----------
+
+
+@pytest.mark.asyncio
+async def test_first_push_offers_the_timezone_hint(fresh_db, user_id):
+    """Под первым же пушем — строка «пуш пришёл не вовремя? скажи пояс», с
+    кнопкой в существующий пикер настроек."""
+    import engagement
+    import push_texts
+    from tests.test_push_delivery import _bot
+
+    bot = _bot()
+    decision = engagement.PushDecision(push_texts.SKIP_3, "текст")
+
+    await engagement._deliver(bot, user_id, decision, dt.date(2026, 5, 4))
+
+    kb = bot.send_photo.await_args.kwargs["reply_markup"]
+    rows = kb.inline_keyboard
+    assert any(b.callback_data == "settings:tz" for row in rows for b in row)
+    assert (await fresh_db.get_user(user_id))["tz_push_hint_shown"] == 1
+
+
+@pytest.mark.asyncio
+async def test_second_push_does_not_repeat_the_timezone_hint(fresh_db, user_id):
+    import engagement
+    import push_texts
+    from tests.test_push_delivery import _bot
+
+    bot = _bot()
+    decision = engagement.PushDecision(push_texts.SKIP_3, "текст")
+
+    await engagement._deliver(bot, user_id, decision, dt.date(2026, 5, 4))
+    await engagement._deliver(bot, user_id, decision, dt.date(2026, 5, 5))
+
+    kb = bot.send_photo.await_args.kwargs["reply_markup"]
+    rows = kb.inline_keyboard
+    assert not any(b.callback_data == "settings:tz" for row in rows for b in row)
+
+
+@pytest.mark.asyncio
+async def test_timezone_hint_is_not_shown_to_a_user_who_already_set_it(fresh_db, user_id):
+    import engagement
+    import push_texts
+    from tests.test_push_delivery import _bot
+
+    await fresh_db.mark_tz_set_by_user(user_id)
+    bot = _bot()
+    decision = engagement.PushDecision(push_texts.SKIP_3, "текст")
+
+    await engagement._deliver(bot, user_id, decision, dt.date(2026, 5, 4))
+
+    kb = bot.send_photo.await_args.kwargs["reply_markup"]
+    rows = kb.inline_keyboard
+    assert not any(b.callback_data == "settings:tz" for row in rows for b in row)
+
+
 # ---------- the daily push job sends at each user's own hour ----------
 
 
@@ -148,17 +236,22 @@ async def test_push_job_passes_the_users_local_date(fresh_db, user_id, monkeypat
 
 
 async def test_push_job_leaves_users_without_a_timezone_alone_at_night(fresh_db, user_id, monkeypatch):
-    """Пояс нигде не спрашивается, поэтому tz_offset = 0 — это «не знаем», а не
-    «UTC». На сервере 19:00 → у такого пользователя может быть и два ночи, так
-    что тик его не трогает: ни отправки, ни даже сборки пуша (а по воскресеньям
-    сборка — это ещё и вызов модели)."""
+    """tz_offset = 0 — это «не знаем», а не «UTC» (см. engagement.tz_is_known).
+    Новый атлет с этим больше не сталкивается — get_or_create_user пишет ему
+    config.DEFAULT_TZ_OFFSET (см. test_new_user_defaults_to_utc_plus_3), но у
+    пользователя, заведённого до этой миграции, ноль остаётся, и на сервере
+    19:00 у него может быть и два ночи — тик его не трогает: ни отправки, ни
+    даже сборки пуша (а по воскресеньям сборка — это ещё и вызов модели)."""
     import engagement
 
     db = fresh_db
     await db.create_finished_workout(
         user_id, started_at="2026-07-01T10:00:00", finished_at="2026-07-01T11:00:00"
     )
-    assert (await db.get_user(user_id))["tz_offset"] == 0  # никто пояс не выставлял
+    # Симулируем пользователя времён прежнего дефолта: пояс не трогал, и он
+    # остался нулём — в отличие от новых аккаунтов, которые дефолт больше не
+    # затрагивает.
+    await db.update_user(user_id, tz_offset=0)
 
     built = []
 

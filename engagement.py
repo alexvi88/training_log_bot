@@ -39,6 +39,7 @@ from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError, TelegramForbiddenError, TelegramRetryAfter
 from aiogram.types import FSInputFile
 
+import acquisition
 import ai_trainer
 import analytics
 import config
@@ -350,6 +351,21 @@ def _as_caption(text: str) -> str:
     return text[: CAPTION_LIMIT - 1].rstrip() + "…"
 
 
+def _should_show_tz_hint(user) -> bool:
+    """Строка «пуш пришёл не вовремя?» — один раз, под первым пушем, который
+    вообще получает человек, и только если он сам пояс не выставлял.
+
+    Дефолт нового атлета — не ноль (config.DEFAULT_TZ_OFFSET), так что «пояс
+    осознанно выбран» проверяется отдельным флагом (tz_set_by_user), а не по
+    значению tz_offset: у не тронувшего настройку новичка оно и так «похоже на
+    правду» в большинстве случаев, но часы бота всё равно свои, и это стоит
+    сказать прямым текстом хотя бы раз.
+    """
+    if user is None:
+        return False
+    return not user["tz_set_by_user"] and not user["tz_push_hint_shown"]
+
+
 async def _deliver(
     bot: Bot, telegram_id: int, decision: PushDecision, local_date: dt.date
 ) -> None:
@@ -363,9 +379,12 @@ async def _deliver(
     hour had passed. /broadcast learned this already — same treatment here.
     """
     global _push_image_file_id
+    user = await db.get_user(telegram_id)
+    show_tz_hint = _should_show_tz_hint(user)
+    cta_text = PUSH_CTA_BY_CATEGORY.get(decision.category, DEFAULT_PUSH_CTA) if decision.with_cta else None
     kb = (
-        keyboards.push_cta_keyboard(PUSH_CTA_BY_CATEGORY.get(decision.category, DEFAULT_PUSH_CTA))
-        if decision.with_cta
+        keyboards.push_cta_keyboard(cta_text, with_tz_hint=show_tz_hint)
+        if (decision.with_cta or show_tz_hint)
         else None
     )
     try:
@@ -385,6 +404,8 @@ async def _deliver(
     if _push_image_file_id is None:
         _push_image_file_id = message.photo[-1].file_id
     await db.record_push(telegram_id, decision.category, decision.text, local_date.isoformat())
+    if show_tz_hint:
+        await db.mark_tz_push_hint_shown(telegram_id)
 
 
 async def _send_push_photo(bot: Bot, telegram_id: int, decision: PushDecision, kb):
@@ -556,6 +577,54 @@ async def _send_daily_pushes(bot: Bot) -> None:
         if decision is not None:
             await _deliver(bot, telegram_id, decision, local_date)
             await asyncio.sleep(SEND_DELAY)
+
+    try:
+        await _maybe_send_admin_funnel_digest(bot)
+    except Exception:
+        logger.exception("Failed to build/send the weekly admin funnel digest")
+
+
+# ---------- еженедельная сводка воронки, владельцу ----------
+
+# Отдельная категория пуша (см. db.pushes) — переиспользует ту же таблицу и
+# тот же приём дедупа, что и обычные пуши, только ключ дедупа — не
+# календарный день, а дата понедельника: одна сводка в неделю, а не в день.
+ADMIN_FUNNEL_DIGEST_CATEGORY = "admin_funnel_digest"
+ADMIN_DIGEST_WEEKDAY = 0  # понедельник
+# Утро, а не вечер (в отличие от ENGAGEMENT_HOUR): это отчёт о прошедшей
+# неделе, а не напоминание тренироваться, и его логичнее увидеть с самого утра
+# в понедельник, а не вперемешку с пушами атлетам вечером.
+ADMIN_DIGEST_HOUR = 9
+ADMIN_DIGEST_LOOKBACK_DAYS = 7
+
+
+async def _maybe_send_admin_funnel_digest(bot: Bot) -> None:
+    """Раз в неделю — по понедельникам, утром по часовому поясу самого
+    админа — сводка воронки новичка за последние 7 дней (см.
+    db.onboarding_funnel и acquisition.build_weekly_funnel_digest).
+
+    Встроено в тот же часовой тик, что и обычные пуши (run_daily_engagement_job),
+    а не заведено отдельным циклом: планировщик один, и ещё один пункт
+    еженедельной проверки — не повод плодить второй asyncio-луп.
+    """
+    if not config.ADMIN_ID:
+        return
+    admin = await db.get_user(config.ADMIN_ID)
+    tz_offset = admin["tz_offset"] if admin else 0
+    local_now = _local_now(tz_offset)
+    if local_now.weekday() != ADMIN_DIGEST_WEEKDAY or local_now.hour != ADMIN_DIGEST_HOUR:
+        return
+    monday = local_now.date().isoformat()
+    if await db.has_push_on(config.ADMIN_ID, ADMIN_FUNNEL_DIGEST_CATEGORY, monday):
+        return
+    rows = await db.onboarding_funnel(ADMIN_DIGEST_LOOKBACK_DAYS)
+    text = acquisition.build_weekly_funnel_digest(rows, ADMIN_DIGEST_LOOKBACK_DAYS)
+    try:
+        await bot.send_message(config.ADMIN_ID, text, parse_mode="HTML")
+    except TelegramAPIError:
+        logger.exception("Failed to deliver the weekly funnel digest to the admin")
+        return
+    await db.record_push(config.ADMIN_ID, ADMIN_FUNNEL_DIGEST_CATEGORY, text, monday)
 
 
 def _seconds_until_next_hour() -> float:
