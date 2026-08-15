@@ -133,6 +133,10 @@ async def test_one_off_badges_survive_a_resync_triggered_elsewhere(fresh_db, use
     aggregates — a resync must re-derive them per workout instead of dropping
     every badge that isn't a lifetime total."""
     db = fresh_db
+    # Часы ачивок теперь местные, а новичок по умолчанию UTC+3 (см.
+    # config.DEFAULT_TZ_OFFSET) — обнуляем пояс, чтобы метки ниже читались
+    # буквально: 05:30 — это 05:30 и по часам атлета.
+    await db.update_user(user_id, tz_offset=0)
     _, block_id, set_ids = await _logged_workout(
         db, user_id, [(60.0, 10)] * 3,
         started="2026-01-01T05:30:00", finished="2026-01-01T08:00:00",

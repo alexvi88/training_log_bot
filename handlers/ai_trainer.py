@@ -2987,7 +2987,11 @@ async def ai_video_question(message: Message, state: FSMContext):
         # честный отказ приходил только на последнем шаге. Проверяем обе квоты
         # здесь, до единого байта трафика.
         block = await ai_limits.check(user_id, ai_limits.KIND_QUESTION)
-        if block is not None:
+        if block is not None and not block.preview:
+            # preview (свой аккаунт) не роняет разбор — предупреждение о квоте
+            # вопросов покажет _handle_question, который этой квотой и владеет;
+            # здесь держим только настоящий блок, чтобы не платить за разбор
+            # ролика, ответ на который всё равно не уйдёт.
             logger.info("AI video blocked (question quota) for user %s: %s", user_id, block.log)
             await ai_limits.reply(message, block, reply_markup=await ai_keyboard(user_id))
             return
