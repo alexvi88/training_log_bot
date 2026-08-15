@@ -85,7 +85,7 @@ async def _render_search_page(user_id: int, query: str, page: int):
         entries,
         header=f"🔎 <b>Тренировки с «{escape(query)}»: {count_label}</b>",
         footer="",
-        empty=f"🔎 Ничего не нашёл по «{escape(query)}».",
+        empty=f"🔎 Ничего не нашёл по «{escape(query)}». Проверь название или напиши другое упражнение.",
     )
     return text, kb
 

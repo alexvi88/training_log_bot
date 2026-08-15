@@ -432,8 +432,11 @@ def _history_bullets(names: list[str]) -> list[str]:
 
 def build_history_list(
     entries: list[tuple[dt.datetime, list[str], int]],
-    header: str = "📚 <b>История тренировок</b>",
-    footer: str = "<i>Напиши название упражнения, чтобы найти тренировку с ним.</i>",
+    header: str = (
+        "📚 <b>История тренировок</b>\n"
+        "<i>Ищешь конкретное упражнение? Просто напиши его название.</i>"
+    ),
+    footer: str = "",
     empty: str = "Пока нет завершённых тренировок.",
 ) -> str:
     """The history list's body: date, then what was in that session.
