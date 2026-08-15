@@ -46,6 +46,7 @@ def main_menu(
     has_active_workout: bool,
     show_import_button: bool = False,
     community_url: str | None = None,
+    show_donate: bool = False,
 ) -> InlineKeyboardMarkup:
     """show_import_button: offered while the diary is still empty (same condition
     that used to gate the now-removed "✍️ Записать прошлую тренировку" quick-log
@@ -56,7 +57,12 @@ def main_menu(
 
     community_url: адрес общей группы (config.COMMUNITY_CHAT_URL). Кнопка —
     url, а не callback: чат живёт снаружи бота, и промежуточный экран между
-    нажатием и группой ничего бы не добавил."""
+    нажатием и группой ничего бы не добавил.
+
+    show_donate: config.DONATIONS_ENABLED — «❤️ Поддержать проект» самой
+    последней строкой (см. handlers/donate.py). Ниже AI-тренера и чата
+    сообщества нарочно: это не функция дневника, а отдельная, необязательная
+    просьба, и ей не место среди рабочих экранов."""
     b = InlineKeyboardBuilder()
     if has_active_workout:
         b.button(text="▶️ ПРОДОЛЖИТЬ ТРЕНИРОВКУ", callback_data="menu:resume_workout")
@@ -77,11 +83,16 @@ def main_menu(
     b.button(text="🤖 AI-тренер", callback_data="menu:ai")
     if community_url:
         b.button(text="💬 Чат атлетов", url=community_url)
+    if show_donate:
+        b.button(text="❤️ Поддержать проект", callback_data="menu:donate")
     # start/resume and the import button (if shown) full width, then pairs:
     # Прогресс·История, Упражнения·Программы, Дневник веса·Дневник еды,
     # Достижения·Настройки, then AI-тренер full width at the very bottom,
-    # и под ним — чат сообщества, если он заведён.
-    b.adjust(*([1, 1] if show_import_button else [1]), 2, 2, 2, 2, 1, *([1] if community_url else []))
+    # под ним — чат сообщества (если заведён), и под всем — донат (если включён).
+    b.adjust(
+        *([1, 1] if show_import_button else [1]), 2, 2, 2, 2, 1,
+        *([1] if community_url else []), *([1] if show_donate else []),
+    )
     return b.as_markup()
 
 
@@ -1731,6 +1742,17 @@ def import_overview_cta_keyboard() -> InlineKeyboardMarkup:
     готовые вопросы интро (см. handlers.ai_trainer.ai_import_cta)."""
     b = InlineKeyboardBuilder()
     b.button(text="🤖 Я стал сильнее за этот год?", callback_data="ai:import_cta")
+    return b.as_markup()
+
+
+def donate_keyboard(presets: Sequence[int]) -> InlineKeyboardMarkup:
+    """Экран доната (см. handlers/donate.py): пресеты звёзд в ряд, «Назад»
+    отдельной строкой под ними."""
+    b = InlineKeyboardBuilder()
+    for stars in presets:
+        b.button(text=f"{stars} ⭐", callback_data=f"donate:pay:{stars}")
+    b.button(text="⬅️ Назад", callback_data="donate:back")
+    b.adjust(len(presets), 1)
     return b.as_markup()
 
 
