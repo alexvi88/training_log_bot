@@ -77,16 +77,17 @@ async def test_import_awards_achievements_for_the_imported_history(fresh_db, use
     message.answer = AsyncMock(
         return_value=SimpleNamespace(message_id=999, chat=SimpleNamespace(id=user_id))
     )
+    # import_save после успеха рисует главное меню (_show_main_menu), которое
+    # умеет прислать дашборд картинкой — этому мок-сообщению нужен awaitable
+    # answer_photo, иначе реальный _show_main_menu упадёт на await.
+    message.answer_photo = AsyncMock(
+        return_value=SimpleNamespace(chat=SimpleNamespace(id=user_id), message_id=1000)
+    )
     message.delete = AsyncMock()
     callback = MagicMock()
     callback.from_user = SimpleNamespace(id=user_id, username="tester")
     callback.answer = AsyncMock()
     callback.message = message
-
-    async def fake_show_settings(event, state, alert=None):
-        return None
-
-    monkeypatch.setattr("handlers.settings.show_settings", fake_show_settings)
 
     await csv_import.import_save(callback, state)
 
