@@ -17,6 +17,7 @@ from aiogram.types import (
 import activity_log
 import admin_tasks
 import announcements
+import bot_profile
 import chat_bottom
 import config
 import db
@@ -285,6 +286,7 @@ async def main() -> None:
     # the bottom of the chat, instead of always being deleted and resent.
     bot.session.middleware(chat_bottom.TrackOutgoingMessages())
     await _setup_commands(bot)
+    await bot_profile.sync_bot_profile(bot)
     dp = Dispatcher(storage=JSONFileStorage(config.FSM_STORAGE_PATH))
     dp.errors.register(on_unhandled_error)
     dp.message.outer_middleware(chat_bottom.TrackIncomingMessages())
