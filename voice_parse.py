@@ -43,7 +43,21 @@ _RANK_NONE = 4  # sentinel above hundreds so the first component is always accep
 # the *reps* entirely: "97 и 6 на 8" flushed into two top-level numbers (97, 6)
 # before "8" was even reached, and transcript_to_sets_line only keeps the
 # first two numbers of a chunk.
+#
+# "и" specifically is ambiguous, unlike the explicit "запятая"/"точка": "сто и
+# восемь" reads exactly like "сто восемь" — a bare weight-and-reps pair with
+# the "на" dropped — every bit as much as "девяносто семь и шесть" reads like
+# a decimal. The two only tell apart by what follows: when a real reps number
+# shows up afterwards ("...и шесть на восемь" — "на" already carries the
+# reps), the "и"-glued number can only be finishing the weight, so it stays a
+# decimal. When nothing follows ("сто и восемь" is the whole utterance), there
+# is no way to tell "100.8" from "100 reps-of-8" apart from world knowledge —
+# so resolve toward the more common gym-log shape, weight × reps, and split
+# it back into two numbers ("100 8"). See `_chunk_to_numbers` for where that
+# split happens. "запятая"/"точка" are unambiguous on their own (nobody says
+# "сто точка восемь" to mean "100 reps of 8"), so they always stay a decimal.
 _DECIMAL_MARKERS = {"и", "запятая", "точка"}
+_AMBIGUOUS_DECIMAL_MARKER = "и"
 # "два с половиной" — "с" is the bare preposition and mustn't flush the number
 # in progress; "половиной"/etc. supplies the ".5".
 _IGNORED_TOKENS = {"с", "со"}
@@ -65,13 +79,20 @@ def _chunk_to_numbers(chunk: str) -> list[float]:
     (two units in a row — never one number in Russian) splits into 8 and 3.
     """
     numbers: list[float] = []
+    # Indices into `numbers` that came from an ambiguous "и"-decimal (as
+    # opposed to an explicit "запятая"/"точка", or a plain non-decimal
+    # number) — see the split-back-apart step at the end of this function.
+    ambiguous_indices: set[int] = set()
     current: float = 0
     last_rank = _RANK_NONE
     awaiting_decimal = False
+    decimal_marker_is_ambiguous = False
 
-    def flush() -> None:
+    def flush(ambiguous: bool = False) -> None:
         nonlocal current, last_rank
         if last_rank != _RANK_NONE:
+            if ambiguous:
+                ambiguous_indices.add(len(numbers))
             numbers.append(current)
         current = 0
         last_rank = _RANK_NONE
@@ -96,6 +117,7 @@ def _chunk_to_numbers(chunk: str) -> list[float]:
             # otherwise (stray "и" with nothing before it) fall back to the
             # old boundary behaviour.
             awaiting_decimal = last_rank != _RANK_NONE
+            decimal_marker_is_ambiguous = tok == _AMBIGUOUS_DECIMAL_MARKER
             if not awaiting_decimal:
                 flush()
             continue
@@ -104,7 +126,12 @@ def _chunk_to_numbers(chunk: str) -> list[float]:
             frac_value = int(tok) if tok.isdigit() else _WORD_UNITS.get(tok)
             if frac_value is not None:
                 current += _decimal_fraction(frac_value)
-                flush()
+                # Single-digit fractions ("...и восемь" → .8) are exactly the
+                # range a reps count would also fall in, so only those are
+                # eligible for the trailing split below; two-digit fractions
+                # ("...и шестьдесят пять" → .65) don't read as a plausible
+                # reps count and stay an unambiguous decimal either way.
+                flush(ambiguous=decimal_marker_is_ambiguous and frac_value < 10)
                 continue
             # Whatever followed the marker wasn't a plausible fraction digit —
             # treat the marker as if it had just been an ordinary boundary and
@@ -125,6 +152,22 @@ def _chunk_to_numbers(chunk: str) -> list[float]:
             # act as a boundary that flushes any number in progress.
             flush()
     flush()
+
+    # An ambiguous "и"-decimal that turned out to be the *last* number in the
+    # chunk means nothing disambiguated it as a fraction (no further reps
+    # number showed up afterwards) — resolve toward weight × reps, the more
+    # common shape for a complete gym-log utterance, by splitting it back into
+    # a whole part and a small integer: "сто и восемь" → [100, 8], not [100.8].
+    # When something *does* follow ("...и шесть на восемь"), the decimal
+    # merge already happened above and is left alone — see the ambiguous_indices
+    # check only ever looking at the trailing slot.
+    if numbers and (len(numbers) - 1) in ambiguous_indices:
+        value = numbers[-1]
+        whole = int(value)
+        frac_digit = round((value - whole) * 10)
+        if frac_digit:
+            numbers[-1:] = [float(whole), float(frac_digit)]
+
     return numbers
 
 
