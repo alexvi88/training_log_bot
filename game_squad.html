@@ -234,6 +234,11 @@ const sBossWin = () => { beep(520, .12, 'triangle', .06, 200); setTimeout(() => 
 // «Рёв трибуны» — толпа коротких пищалок вразнобой, имитация одобрительного гула.
 const sRoar = () => { for (let i = 0; i < 8; i++) setTimeout(() => beep(rnd(500, 900), .07, 'triangle', .028, rnd(-30, 60)), i * 26); };
 const sBossLose = () => { beep(320, .13, 'square', .055, -120); setTimeout(() => beep(240, .16, 'triangle', .045, -80), 90); };
+const sWeaponUp = () => { beep(620, .07, 'triangle', .05, 180); setTimeout(() => beep(880, .09, 'triangle', .05, 240), 60); setTimeout(() => beep(1180, .11, 'sine', .045, 200), 130); };
+const sWeaponDown = () => beep(300, .1, 'square', .04, -100);
+const sEnemyHit = () => beep(rnd(640, 760), .028, 'triangle', .02, -20, 'enehit');
+const sEnemyShot = () => beep(rnd(300, 380), .05, 'square', .028, -30, 'enshot');
+const sMelee = () => { beep(240, .1, 'square', .05, -60); noiseBurst(0.1, 0.045); };
 const sDie = () => { beep(340, .13, 'square', .055, -110); setTimeout(() => beep(250, .18, 'triangle', .045, -90), 110); };
 
 // Фоновый гул: заводится по первому клику (жест пользователя), громкость и
@@ -294,8 +299,10 @@ let squadWorldX = 0;
 let trackScroll = 0;
 let meterSpeed = 0, depthSpeed = 0;
 let lastMile = 0, nextPlateAt = 0, nextGateAt = 0, nextBonusAt = 0, nextBossMile = 1000;
+let nextWaveAt = 0, nextCrateAt = 0;
 let fireTimer = 0;
 let lastResult = null;
+const enemies = []; // рендер-представление вражеских толп (силуэты), не логика
 
 const SQUAD_START = 1, SQUAD_CAP = 999;
 const SPEED_START = 5.5, SPEED_RAMP = 0.045, SPEED_CAP = 15;
@@ -330,22 +337,48 @@ function hitStop(sec) { hitStopT = Math.max(hitStopT, sec); }
 // Замедление на смерти отряда: не мгновенный переход на результат.
 let timeScale = 1, dying = false;
 
-const obstacles = []; // plate | gate | boss
+const obstacles = []; // plate | gate | boss | wave
 const bonuses = [];   // preworkout | belt | dumbbell
+const crates = [];    // ящики с оружием
 const bullets = [];
+const enemyShots = []; // короткие трассеры ответного огня врагов — визуал, не отдельные снаряды
 const parts = [];
 const toasts = [];
-const sparks = []; // короткие искры на попаданиях по блину — отдельно от парсов для перфа
+
+// ── ОРУЖИЕ ОТРЯДА ────────────────────────────────────────────────────────────
+// Линейка от слабого к сильному, всё из зала. Оружие временное (кроме
+// стартового шейкера) — сгорает по таймеру или ступенью вниз от сильного
+// удара, поэтому за ящиками нужно охотиться постоянно.
+const WEAPONS = [
+  { key: 'shaker',     name: 'ШЕЙКЕР',              fireMult: 1.0,  dmgMult: 1.0,  pellets: 1, spread: 0,    pierce: 1, dur: 0,  color: '#e94f64' },
+  { key: 'expander',   name: 'ЭСПАНДЕР',            fireMult: 1.1,  dmgMult: 0.62, pellets: 3, spread: 0.09, pierce: 1, dur: 16, color: '#7ea8ff' },
+  { key: 'shotgun',    name: 'ГАНТЕЛЬНЫЙ ДРОБОВИК', fireMult: 0.5,  dmgMult: 1.5,  pellets: 5, spread: 0.20, pierce: 1, dur: 14, color: '#67c26a' },
+  { key: 'plategun',   name: 'БЛИНОСТРЕЛ',          fireMult: 0.62, dmgMult: 2.1,  pellets: 1, spread: 0,    pierce: 3, dur: 13, color: '#ffb347' },
+  { key: 'bargun',     name: 'ГРИФ-ПУЛЕМЁТ',        fireMult: 3.4,  dmgMult: 0.42, pellets: 1, spread: 0.05, pierce: 1, dur: 11, color: C_GOLD },
+];
+let weaponLevel = 0, weaponTimer = 0;
+// Сильный удар «сжигает» ступень оружия сразу, а не только по таймеру —
+// иначе один раз поднял топ и до конца скучаешь.
+function weaponBurn(loss) {
+  if (loss >= 12 && weaponLevel > 0) {
+    weaponLevel = Math.max(0, weaponLevel - 1);
+    weaponTimer = weaponLevel > 0 ? WEAPONS[weaponLevel].dur : 0;
+    sWeaponDown();
+    popNumber('ОРУЖИЕ СГОРЕЛО', '#ff8a4a', W / 2, H * 0.24);
+  }
+}
 
 function resetGame() {
   state = 'game'; dying = false; timeScale = 1;
   t = 0; dist = 0; score = 0; squad = SQUAD_START; maxSquad = squad; shield = 0; rageT = 0;
   squadWorldX = 0; trackScroll = 0; shakeAmp = 0; hitStopT = 0;
   meterSpeed = SPEED_START; depthSpeed = SPEED_START / 12;
-  lastMile = 0; nextPlateAt = 26; nextGateAt = 18; nextBonusAt = 55; nextBossMile = 1000;
-  fireTimer = 0; combo = 0;
-  obstacles.length = 0; bonuses.length = 0; bullets.length = 0; parts.length = 0; toasts.length = 0; sparks.length = 0;
-  followers.length = 0;
+  lastMile = 0; nextPlateAt = 26; nextGateAt = 18; nextBonusAt = 55; nextBossMile = 1200;
+  nextWaveAt = 210; nextCrateAt = 95;
+  fireTimer = 0; combo = 0; weaponLevel = 0; weaponTimer = 0;
+  obstacles.length = 0; bonuses.length = 0; crates.length = 0; bullets.length = 0;
+  enemyShots.length = 0; parts.length = 0; toasts.length = 0;
+  followers.length = 0; enemies.length = 0;
 }
 
 // Тексты — TONE_OF_VOICE.md: тренер от первого лица, на «ты», без подколок
@@ -623,19 +656,112 @@ function drawBonus(b) {
   ctx.restore();
 }
 
+// ── ВСТРЕЧНЫЕ ВОЛНЫ (чужой отряд) ────────────────────────────────────────────
+// Мясо игры: навстречу бежит вражеская толпа в едином враждебном цвете —
+// перестрелка толпа-на-толпу, а не только блины и ворота. Больше народу у
+// тебя — волна тает мгновенно; меньше — она докатывается и рубится врукопашную.
+const ENEMY_COL = { body: '#6e1616', dark: '#440d0d', head: '#3a0c0c' };
+function spawnWave() {
+  // Первая волна приходит уже после того, как игрок успел подрасти воротами
+  // и блинами — первые 20 секунд остаются лёгкой победой. Дальше кривая
+  // экспоненциальная: отряд насыщается скорострельностью и уроном (у обоих
+  // есть потолок), а волны — нет, поэтому рано или поздно волна оказывается
+  // крупнее, чем отряд успевает выкосить за один заход — забег кончается
+  // реальным поражением, а не потому что наскучило.
+  const count = Math.round(clamp(3 + Math.pow(Math.max(0, dist) / 140, 1.6) * 10 + rnd(-2, 5), 2, 3000));
+  obstacles.push({
+    kind: 'wave', worldX: rnd(-0.6, 0.6), z: ZFAR, count, countMax: count,
+    fireTimer: rnd(0.9, 1.4), phase: 'run',
+  });
+  nextWaveAt = dist + rnd(150, 230);
+}
+function drawEnemyBlob(x, y, scale, phase) {
+  const bob = Math.sin(phase) * 2 * scale;
+  ctx.save(); ctx.translate(x, y + bob);
+  ctx.fillStyle = ENEMY_COL.body;
+  ctx.beginPath();
+  ctx.moveTo(-8 * scale, -32 * scale); ctx.lineTo(8 * scale, -32 * scale);
+  ctx.lineTo(6 * scale, -13 * scale); ctx.lineTo(-6 * scale, -13 * scale);
+  ctx.closePath(); ctx.fill();
+  ctx.fillStyle = ENEMY_COL.head; ctx.beginPath(); ctx.arc(0, -37 * scale, 5.2 * scale, 0, 7); ctx.fill();
+  ctx.fillStyle = ENEMY_COL.dark; ctx.fillRect(-6 * scale, -13 * scale, 12 * scale, 11 * scale);
+  ctx.restore();
+}
+function drawWave(o) {
+  const p = projectPoint(o.worldX, o.z);
+  const shown = Math.min(30, o.count);
+  const cols = Math.max(1, Math.min(8, Math.ceil(Math.sqrt(shown * 1.6))));
+  for (let i = 0; i < shown; i++) {
+    const row = Math.floor(i / cols), col = i % cols;
+    const rowLen = Math.min(cols, shown - row * cols);
+    const dx = (col - (rowLen - 1) / 2) * 0.075;
+    const dz = row * 0.05;
+    const ep = projectPoint(o.worldX + dx, o.z + dz);
+    drawEnemyBlob(ep.x, ep.y, 1.35 * ep.scale, i * 1.7 + t * 3);
+  }
+  // число волны — крупно, с обводкой и подложкой, как у блина
+  const fs = Math.max(15, 24 * p.scale);
+  ctx.save(); ctx.translate(p.x, p.y - 46 * p.scale);
+  ctx.font = "900 " + fs + "px 'Courier New', monospace";
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  const label = fmt(o.count);
+  const tw = ctx.measureText(label).width;
+  ctx.fillStyle = 'rgba(10,8,6,0.6)';
+  ctx.beginPath(); ctx.roundRect(-tw / 2 - 6, -fs / 2 - 3, tw + 12, fs + 6, 6); ctx.fill();
+  ctx.lineWidth = Math.max(2.5, fs * 0.2); ctx.strokeStyle = '#14110f';
+  ctx.strokeText(label, 0, 1);
+  ctx.fillStyle = '#ff8a8a'; ctx.fillText(label, 0, 1);
+  ctx.restore();
+}
+
+// ── ЯЩИКИ С ОРУЖИЕМ ──────────────────────────────────────────────────────────
+function spawnCrate() {
+  const idx = 1 + Math.floor(Math.random() * (WEAPONS.length - 1));
+  crates.push({ idx, worldX: rnd(-0.6, 0.6), z: ZFAR, t: rnd(0, 6) });
+  nextCrateAt = dist + rnd(150, 240);
+}
+function drawCrate(cr) {
+  const p = projectPoint(cr.worldX, cr.z);
+  const w = WEAPONS[cr.idx];
+  const r = 27 * p.scale, bob = Math.sin(cr.t * 4) * 4 * p.scale;
+  ctx.save(); ctx.translate(p.x, p.y + bob);
+  ctx.strokeStyle = w.color; ctx.globalAlpha = 0.6 + 0.4 * Math.sin(cr.t * 6); ctx.lineWidth = 2.5;
+  ctx.beginPath(); ctx.arc(0, 0, r * 1.25, 0, 7); ctx.stroke(); ctx.globalAlpha = 1;
+  ctx.fillStyle = '#3a2c1e'; ctx.beginPath(); ctx.roundRect(-r * 0.8, -r * 0.65, r * 1.6, r * 1.3, 5); ctx.fill();
+  ctx.strokeStyle = w.color; ctx.lineWidth = 2; ctx.strokeRect(-r * 0.8, -r * 0.65, r * 1.6, r * 1.3);
+  ctx.fillStyle = w.color; ctx.beginPath(); ctx.arc(0, 0, r * 0.32, 0, 7); ctx.fill();
+  ctx.restore();
+}
+
 // ── ПУЛИ ОТРЯДА ──────────────────────────────────────────────────────────────
 const BULLET_SPEED = 3.1;
-function fireAt(target) {
-  bullets.push({ z: 0.05, worldX: squadWorldX + rnd(-0.05, 0.05), targetZ: target.z, targetX: target.worldX ?? 0, target, life: 3 });
+function targetHpLeft(o) { return o.kind === 'wave' ? o.count : o.hp; }
+function fireAt(target, dmg, offset, pierce, color) {
+  bullets.push({
+    z: 0.05, worldX: squadWorldX + offset, targetZ: target.z, targetX: target.worldX ?? 0,
+    target, life: 3, dmg, pierce, color,
+  });
   sShot();
 }
 function tryFire(dt, dmg) {
-  const targets = obstacles.filter(o => (o.kind === 'plate' && o.hp > 0) || (o.kind === 'boss' && o.phase === 'press' && o.hp > 0));
+  const targets = obstacles.filter(o =>
+    (o.kind === 'plate' && o.hp > 0) ||
+    (o.kind === 'boss' && o.phase === 'press' && o.hp > 0) ||
+    (o.kind === 'wave' && o.count > 0));
   if (!targets.length) return;
   targets.sort((a, b) => a.z - b.z);
+  const w = WEAPONS[weaponLevel];
   for (const target of targets) {
     const activeOnTarget = bullets.filter(bl => bl.target === target).length;
-    if (activeOnTarget < 3) { fireAt(target); target.__dmg = dmg; return; }
+    if (activeOnTarget < 4) {
+      const perPellet = Math.max(1, dmg * w.dmgMult);
+      const spread = w.spread;
+      for (let i = 0; i < w.pellets; i++) {
+        const off = w.pellets === 1 ? rnd(-0.03, 0.03) : (i - (w.pellets - 1) / 2) * spread;
+        fireAt(target, perPellet, off, w.pierce, w.color);
+      }
+      return;
+    }
   }
 }
 
@@ -1077,50 +1203,85 @@ function update(dt) {
     popNumber(lastMile * 500 + ' м!', C_GOLD, W / 2, H * 0.32, true);
   }
 
-  // Стрельба отряда: скорострельность и урон растут вместе с толпой.
-  const fireRate = clamp(1.5 + squad * 0.06, 1.5, 10) * (rage ? 2.6 : 1);
-  const dmg = clamp(1.4 + squad * 0.04, 1.4, 24);
+  // Оружие сгорает по таймеру — прогресс не навсегда, за ящиками нужно идти
+  // постоянно. Стартовый шейкер (level 0) бессрочный.
+  if (weaponLevel > 0) {
+    weaponTimer -= dt;
+    if (weaponTimer <= 0) {
+      weaponLevel = Math.max(0, weaponLevel - 1);
+      weaponTimer = weaponLevel > 0 ? WEAPONS[weaponLevel].dur : 0;
+      sWeaponDown();
+      popNumber('ОРУЖИЕ ОСЛАБЛО: ' + WEAPONS[weaponLevel].name, '#ff8a4a', W / 2, H * 0.26);
+    }
+  }
+
+  // Стрельба отряда: скорострельность и урон растут вместе с толпой, множитель
+  // оружия — сверху.
+  const w = WEAPONS[weaponLevel];
+  const fireRate = clamp(1.6 + squad * 0.06, 1.6, 10) * (rage ? 2.6 : 1) * w.fireMult;
+  const dmg = clamp(1.9 + squad * 0.04, 1.9, 24);
   fireTimer -= dt;
   if (fireTimer <= 0) { tryFire(dt, dmg); fireTimer = 1 / fireRate; }
 
   // Босс: если ещё не запущен и прошли рубеж — спавним.
   if (dist >= nextBossMile && !obstacles.some(o => o.kind === 'boss')) {
-    spawnBoss(); nextBossMile += 1000;
+    spawnBoss(); nextBossMile += 1200;
   }
   if (state === 'game') {
     if (dist >= nextPlateAt) spawnPlate();
     if (dist >= nextGateAt) spawnGate();
     if (dist >= nextBonusAt) spawnBonus();
+    if (dist >= nextWaveAt) spawnWave();
+    if (dist >= nextCrateAt) spawnCrate();
   }
 
-  // Пули
+  // Пули: урон целочисленный сразу — HP/численность целые, никаких дробных
+  // хвостов на экране и честный обратный отсчёт.
   for (let i = bullets.length - 1; i >= 0; i--) {
     const bl = bullets[i];
     bl.z += BULLET_SPEED * dt;
     bl.life -= dt;
-    const alive = obstacles.includes(bl.target) && (bl.target.hp === undefined || bl.target.hp > 0);
+    const alive = obstacles.includes(bl.target) && targetHpLeft(bl.target) > 0;
     if (!alive || bl.life <= 0) { bullets.splice(i, 1); continue; }
     if (bl.z >= bl.target.z - 0.05) {
-      const target = bl.target;
-      const before = target.hp;
-      // Урон целочисленный — HP блина/босса всегда целое, чтобы на экране
-      // не появлялись дробные хвосты («6.3») и обратный отсчёт был честным.
-      const dmgInt = Math.max(1, Math.round(target.__dmg || dmg));
-      target.hp = Math.max(0, target.hp - dmgInt);
-      const p = projectPoint(target.worldX ?? 0, target.z);
-      if (target.kind === 'boss') sBossHit(); else sTick();
-      shake(target.kind === 'boss' ? 1.2 : 1.5);
-      burst(p.x, p.y, '#f2ede3', 4, 90);
-      if (target.hp <= 0 && before > 0) {
-        if (target.kind === 'plate') {
-          comboHit();
-          const gain = target.hpMax * 3 * comboMult();
-          score += gain;
-          shake(5); sPop(); hitStop(0.02);
-          burst(p.x, p.y, '#ffb347', 20, 260);
-          popNumber('+' + fmt(gain), C_GOLD, p.x, p.y - 10, true);
-          obstacles.splice(obstacles.indexOf(target), 1);
+      let target = bl.target;
+      let pierceLeft = bl.pierce || 1;
+      while (target && pierceLeft > 0) {
+        const before = targetHpLeft(target);
+        const dmgInt = Math.max(1, Math.round(bl.dmg));
+        if (target.kind === 'wave') target.count = Math.max(0, target.count - dmgInt);
+        else target.hp = Math.max(0, target.hp - dmgInt);
+        const p = projectPoint(target.worldX ?? 0, target.z);
+        if (target.kind === 'boss') sBossHit(); else if (target.kind === 'wave') sEnemyHit(); else sTick();
+        shake(target.kind === 'boss' ? 1.2 : 1);
+        burst(p.x, p.y, target.kind === 'wave' ? '#ff8a8a' : '#f2ede3', 4, 90);
+        const after = targetHpLeft(target);
+        if (after <= 0 && before > 0) {
+          if (target.kind === 'plate') {
+            comboHit();
+            const gain = target.hpMax * 3 * comboMult();
+            score += gain;
+            shake(5); sPop(); hitStop(0.02);
+            burst(p.x, p.y, '#ffb347', 20, 260);
+            popNumber('+' + fmt(gain), C_GOLD, p.x, p.y - 10, true);
+            obstacles.splice(obstacles.indexOf(target), 1);
+          } else if (target.kind === 'wave') {
+            const gain = target.countMax * 2;
+            score += gain;
+            shake(4); sPop();
+            burst(p.x, p.y, '#ff8a8a', 18, 240);
+            popNumber('ВОЛНА СМЕТЕНА +' + fmt(gain), C_GREEN, p.x, p.y - 10, true);
+            obstacles.splice(obstacles.indexOf(target), 1);
+          }
         }
+        pierceLeft -= 1;
+        if (pierceLeft > 0) {
+          // Блинострел летит насквозь — ищем следующую цель чуть дальше по глубине.
+          const rest = obstacles.filter(o => o !== target && o.z > target.z &&
+            ((o.kind === 'plate' && o.hp > 0) || (o.kind === 'wave' && o.count > 0)));
+          rest.sort((a, b) => a.z - b.z);
+          target = rest[0];
+        } else target = null;
       }
       bullets.splice(i, 1);
     }
@@ -1141,7 +1302,7 @@ function update(dt) {
           } else {
             const loss = Math.min(squad, Math.round(o.hp));
             squad = Math.max(0, squad - loss);
-            comboBreak();
+            comboBreak(); weaponBurn(loss);
             sHit(); shake(6 + Math.min(20, loss * 0.7)); hitStop(loss > 8 ? 0.05 : 0);
             flash('red', 220);
             popNumber('−' + fmt(loss), '#ff4444', W / 2, GROUND_F * H - 90, loss > 15);
@@ -1200,7 +1361,7 @@ function update(dt) {
         } else if (o.timer <= 0) {
           const loss = Math.round(squad * 0.5);
           squad = Math.max(0, squad - loss);
-          comboBreak();
+          comboBreak(); weaponBurn(loss);
           hitStop(0.06); shake(24); sBossLose(); flash('red', 420);
           const p = projectPoint(0, o.z);
           burst(p.x, p.y, C_RAGE, 34, 300);
@@ -1208,6 +1369,50 @@ function update(dt) {
           obstacles.splice(i, 1);
           if (squad <= 0) { die(); return; }
         }
+      }
+      continue;
+    }
+    if (o.kind === 'wave') {
+      o.z -= depthSpeed * dt;
+      // Ответный огонь: пока волна в радиусе, она периодически бьёт по
+      // отряду — постоянное давление, а не только финальная свалка.
+      if (o.z < 2.1 && o.count > 0) {
+        o.fireTimer -= dt;
+        if (o.fireTimer <= 0) {
+          const chip = Math.max(1, Math.round(clamp(o.count * 0.045, 1, 9)));
+          const actualChip = Math.min(squad, chip);
+          if (actualChip > 0) {
+            squad = Math.max(0, squad - actualChip);
+            comboBreak(); weaponBurn(actualChip);
+            sEnemyShot(); shake(2 + Math.min(6, actualChip * 0.5));
+            flash('red', 120);
+            popNumber('−' + fmt(actualChip), '#ff8a4a', W / 2, GROUND_F * H - 70);
+            if (squad <= 0) { die(); return; }
+          }
+          o.fireTimer = clamp(1.5 - o.count * 0.01, 0.35, 1.5);
+        }
+      }
+      if (o.z <= 0.05) {
+        // Ближний бой: если отряд больше — продавил и потерял вполовину
+        // меньше, чем в лобовом размене (иначе победа стоила бы столько же,
+        // сколько поражение). Если волна больше — размен полный, отряд тает.
+        const clash = Math.min(squad, o.count);
+        const enemyLeft = o.count - clash;
+        const loss = enemyLeft <= 0 ? Math.min(squad - 1, Math.round(clash * 0.5)) : clash;
+        squad = Math.max(0, squad - loss);
+        comboBreak(); weaponBurn(loss);
+        sMelee(); shake(10 + Math.min(16, loss * 0.4)); hitStop(loss > 10 ? 0.06 : 0.02);
+        flash('red', 260);
+        const p = projectPoint(squadWorldX, 0.05);
+        burst(p.x, p.y - 20, '#ff4444', Math.min(40, 14 + loss), 280);
+        if (enemyLeft <= 0) {
+          score += o.countMax;
+          popNumber('ОТРЯД ПРОДАВИЛ −' + fmt(loss), C_GREEN, W / 2, GROUND_F * H - 90, true);
+        } else {
+          popNumber('−' + fmt(loss), '#ff4444', W / 2, GROUND_F * H - 90, true);
+        }
+        obstacles.splice(i, 1);
+        if (squad <= 0) { die(); return; }
       }
       continue;
     }
@@ -1228,6 +1433,21 @@ function update(dt) {
     if (b.z <= 0) bonuses.splice(i, 1);
   }
 
+  // Ящики с оружием
+  for (let i = crates.length - 1; i >= 0; i--) {
+    const cr = crates[i]; cr.t += dt;
+    cr.z -= depthSpeed * dt;
+    if (cr.z <= 0.16 && Math.abs(cr.worldX - squadWorldX) < 0.24) {
+      weaponLevel = cr.idx; weaponTimer = WEAPONS[cr.idx].dur;
+      const p = projectPoint(squadWorldX, 0.1);
+      sWeaponUp(); shake(5); flash('gold', 220);
+      burst(p.x, p.y - 20, WEAPONS[cr.idx].color, 20, 240);
+      popNumber(WEAPONS[cr.idx].name + '!', WEAPONS[cr.idx].color, p.x, p.y - 46, true);
+      crates.splice(i, 1); continue;
+    }
+    if (cr.z <= 0) crates.splice(i, 1);
+  }
+
   maxSquad = Math.max(maxSquad, squad);
 }
 
@@ -1245,19 +1465,21 @@ function render() {
     if (rageT < 1) ctx.fillStyle = 'rgba(255,90,54,' + (Math.sin(t * 26) > 0 ? 0.22 : 0) + ')', ctx.fillRect(0, 0, W, H);
   }
 
-  const drawables = [...obstacles, ...bonuses].sort((a, b) => b.z - a.z);
+  const drawables = [...obstacles, ...bonuses, ...crates].sort((a, b) => b.z - a.z);
   drawables.forEach(o => {
     if (o.kind === 'plate') drawPlate(o);
     else if (o.kind === 'gate') drawGate(o);
     else if (o.kind === 'boss') drawBoss(o);
+    else if (o.kind === 'wave') drawWave(o);
+    else if (o.idx !== undefined) drawCrate(o);
     else drawBonus(o);
   });
 
   // Пули
-  ctx.fillStyle = '#ffd700';
   bullets.forEach(bl => {
     const p = projectPoint(bl.worldX, bl.z);
     const r = Math.max(2, 6 * p.scale);
+    ctx.fillStyle = bl.color || '#ffd700';
     ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, 7); ctx.fill();
   });
 
@@ -1315,6 +1537,21 @@ function render() {
   if (combo >= 3) {
     ctx.textAlign = 'left'; ctx.fillStyle = C_GOLD; ctx.font = "800 13px 'Courier New', monospace";
     ctx.fillText('серия ' + fmt(combo) + (comboMult() > 1 ? ' ×' + fmt(comboMult()) : ''), 20, 82);
+  }
+  // Оружие — постоянно на виду: иконка-квадрат + название, чтобы игрок видел,
+  // что держит и что потеряет.
+  {
+    const wc = WEAPONS[weaponLevel];
+    ctx.textAlign = 'left';
+    ctx.fillStyle = wc.color; ctx.fillRect(20, combo >= 3 ? 92 : 78, 12, 12);
+    ctx.font = "800 12px 'Courier New', monospace"; ctx.fillStyle = 'rgba(242,237,227,0.85)';
+    ctx.fillText(wc.name, 38, (combo >= 3 ? 92 : 78) + 10);
+    if (weaponLevel > 0) {
+      const frac = clamp(weaponTimer / WEAPONS[weaponLevel].dur, 0, 1);
+      const by2 = (combo >= 3 ? 92 : 78) + 16;
+      ctx.fillStyle = 'rgba(255,255,255,0.15)'; ctx.fillRect(20, by2, 110, 3);
+      ctx.fillStyle = wc.color; ctx.fillRect(20, by2, 110 * frac, 3);
+    }
   }
   let ix = W - 20, iy = 78;
   const pw = (label, color, frac) => {
