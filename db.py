@@ -5504,6 +5504,23 @@ async def log_cost_event(
         await conn().commit()
 
 
+def _day_bounds(date_str: str) -> tuple[str, str]:
+    """[start, end) для календарного дня `date_str` (YYYY-MM-DD), в тех же
+    ISO-строках, что и created_at.
+
+    Замена `date(created_at) = ?`: та форма считает верно, но не сарганивает
+    idx_cost_events_created (индекс по сырому created_at, а не по значению
+    функции над ним) — на выборке за один день это full table scan там, где
+    таблица растёт вечно. Диапазон `created_at >= start AND created_at < end`
+    читает тот же индекс по range scan. Строковое сравнение ISO-меток даёт то
+    же самое множество строк: created_at всегда длиннее date_str-префикса
+    (есть время), так что лексикографическое `>=`/`<` совпадает с датным.
+    """
+    start = dt.date.fromisoformat(date_str)
+    end = start + dt.timedelta(days=1)
+    return start.isoformat(), end.isoformat()
+
+
 async def get_llm_cost_breakdown(date_str: str) -> dict[str, dict[str, int]]:
     """Per-model токены за календарный день по событиям llm_call.
 
@@ -5511,12 +5528,13 @@ async def get_llm_cost_breakdown(date_str: str) -> dict[str, dict[str, int]]:
     кэш дешевле входа, размышления считаются как выход. Без них отчёт считал бы
     не то же, что строка в логе.
     """
+    start, end = _day_bounds(date_str)
     cur = await conn().execute(
         "SELECT model, COUNT(*), COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(completion_tokens), 0), "
         "COALESCE(SUM(cached_tokens), 0), COALESCE(SUM(reasoning_tokens), 0) "
-        "FROM cost_events WHERE event_type = 'llm_call' AND date(created_at) = ? "
+        "FROM cost_events WHERE event_type = 'llm_call' AND created_at >= ? AND created_at < ? "
         "GROUP BY model",
-        (date_str,),
+        (start, end),
     )
     rows = await cur.fetchall()
     return {
@@ -5533,9 +5551,11 @@ async def get_llm_cost_breakdown(date_str: str) -> dict[str, dict[str, int]]:
 
 async def get_transcription_count(date_str: str) -> int:
     """Voice-message transcription calls (config.OPENAI_TRANSCRIBE_MODEL) on a given calendar day."""
+    start, end = _day_bounds(date_str)
     cur = await conn().execute(
-        "SELECT COUNT(*) FROM cost_events WHERE event_type = 'transcription' AND date(created_at) = ?",
-        (date_str,),
+        "SELECT COUNT(*) FROM cost_events WHERE event_type = 'transcription' "
+        "AND created_at >= ? AND created_at < ?",
+        (start, end),
     )
     row = await cur.fetchone()
     return row[0] if row else 0
@@ -5548,10 +5568,11 @@ async def get_server_tool_count(date_str: str) -> dict[str, int]:
     1000 вызовов СВЕРХ токенов, и в usage по токенам их нет вовсе — без этой
     выборки дневной отчёт занижал расход на всю эту статью.
     """
+    start, end = _day_bounds(date_str)
     cur = await conn().execute(
         "SELECT model, COUNT(*) FROM cost_events "
-        "WHERE event_type = 'server_tool' AND date(created_at) = ? GROUP BY model",
-        (date_str,),
+        "WHERE event_type = 'server_tool' AND created_at >= ? AND created_at < ? GROUP BY model",
+        (start, end),
     )
     return {(model or "unknown"): calls for model, calls in await cur.fetchall()}
 
@@ -5571,12 +5592,13 @@ async def get_cost_total_usd(date_str: Optional[str] = None) -> float:
     модели, равна сумме цен по строкам — группировать нужно по модели И типу
     события, потому что у расшифровок и вызовов инструментов ставка плоская.
     """
+    start, end = _day_bounds(date_str or _utc_day())
     cur = await conn().execute(
         "SELECT event_type, model, COUNT(*), "
         "COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(completion_tokens), 0), "
         "COALESCE(SUM(cached_tokens), 0), COALESCE(SUM(reasoning_tokens), 0) "
-        "FROM cost_events WHERE date(created_at) = ? GROUP BY event_type, model",
-        (date_str or _utc_day(),),
+        "FROM cost_events WHERE created_at >= ? AND created_at < ? GROUP BY event_type, model",
+        (start, end),
     )
     total = 0.0
     for event_type, model, calls, prompt, completion, cached, reasoning in await cur.fetchall():
