@@ -1400,16 +1400,23 @@ def settings_keyboard(
     # for something else entirely.
     b.button(text=f"Формула e1RM: {formula}", callback_data="settings:formula")
     b.button(text=f"🕒 Часовой пояс: {format_utc_offset(tz_offset)}", callback_data="settings:tz")
+    # Все тумблеры ниже — одна конструкция: «<label>: <глагол от первого
+    # лица>» / «<label>: <его отрицание>» — раньше формы расходились
+    # («вкл»/«выкл», «включены»/«выключены», «считаю»/«не считаю»,
+    # «подробно»/«компактно») и один и тот же переключатель на экране читался
+    # то канцелярией, то голосом тренера.
     progression_label = (
-        "🎯 Подсказки прогрессии: вкл" if progression_enabled else "🎯 Подсказки прогрессии: выкл"
+        "🎯 Подсказки прогрессии: подсказываю"
+        if progression_enabled
+        else "🎯 Подсказки прогрессии: молчу"
     )
     b.button(text=progression_label, callback_data="settings:progression")
-    pushes_label = "🔔 Пуши: включены" if pushes_enabled else "🔕 Пуши: выключены"
+    pushes_label = "🔔 Пуши: шлю" if pushes_enabled else "🔕 Пуши: молчу"
     b.button(text=pushes_label, callback_data="settings:pushes")
     ai_label = (
-        "🤖 Комментарии AI-тренера: включены"
+        "🤖 Комментарии AI-тренера: комментирую"
         if ai_comments_enabled
-        else "🤖 Комментарии AI-тренера: выключены"
+        else "🤖 Комментарии AI-тренера: молчу"
     )
     b.button(text=ai_label, callback_data="settings:ai_comments")
     macros_label = (
@@ -1419,11 +1426,11 @@ def settings_keyboard(
     )
     b.button(text=macros_label, callback_data="settings:food_macros")
     # users.show_extra_stats has always gated the e1RM line on the finish card;
-    # it just had no switch, so nobody could ever turn it off.
+    # it just had no switch, so nobody could ever turn it off. «Подробно /
+    # компактно» не говорило, что именно меняется — переименовано в то, что
+    # реально переключается.
     card_label = (
-        "📊 Карточка тренировки: подробно"
-        if show_extra_stats
-        else "📋 Карточка тренировки: компактно"
+        "📊 e1RM на карточке: показываю" if show_extra_stats else "📊 e1RM на карточке: прячу"
     )
     b.button(text=card_label, callback_data="settings:card_detail")
     # Профиль тренирующегося пишет AI-тренер (ai_trainer.save_athlete_profile),

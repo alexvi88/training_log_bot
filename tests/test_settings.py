@@ -51,14 +51,14 @@ async def test_show_settings_reflects_pushes_state_in_keyboard_labels(fresh_db, 
     await settings.show_settings(callback, state)
     sent_text = callback.message.answer.call_args.kwargs["reply_markup"]
     labels_on = [b.text for row in sent_text.inline_keyboard for b in row]
-    assert any("включены" in label for label in labels_on)
+    assert any(label == "🔔 Пуши: шлю" for label in labels_on)
 
     await db.update_user(user_id, pushes_enabled=0)
     callback = _make_callback(user_id, "menu:settings")
     await settings.show_settings(callback, state)
     sent_text = callback.message.answer.call_args.kwargs["reply_markup"]
     labels_off = [b.text for row in sent_text.inline_keyboard for b in row]
-    assert any("выключены" in label for label in labels_off)
+    assert any(label == "🔕 Пуши: молчу" for label in labels_off)
 
 
 async def test_settings_food_macros_toggles_off_then_on(fresh_db, user_id):
@@ -217,6 +217,37 @@ async def test_profile_button_is_on_the_settings_screen():
     callbacks = [b.callback_data for row in kb.inline_keyboard for b in row]
 
     assert "settings:profile" in callbacks
+
+
+async def test_toggle_labels_share_one_first_person_verb_construction():
+    """Раньше у четырёх тумблеров были разные формы («вкл»/«выкл»,
+    «включены»/«выключены», «считаю»/«не считаю», «подробно»/«компактно») —
+    теперь у всех глагол от первого лица, а не канцелярское «вкл»/причастие."""
+    import keyboards
+
+    on_kb = keyboards.settings_keyboard(
+        "kg", "epley", True, True, True, food_macros_enabled=True, show_extra_stats=True
+    )
+    off_kb = keyboards.settings_keyboard(
+        "kg", "epley", False, False, False, food_macros_enabled=False, show_extra_stats=False
+    )
+    on_texts = [b.text for row in on_kb.inline_keyboard for b in row]
+    off_texts = [b.text for row in off_kb.inline_keyboard for b in row]
+
+    assert "🎯 Подсказки прогрессии: подсказываю" in on_texts
+    assert "🎯 Подсказки прогрессии: молчу" in off_texts
+    assert "🔔 Пуши: шлю" in on_texts
+    assert "🔕 Пуши: молчу" in off_texts
+    assert "🤖 Комментарии AI-тренера: комментирую" in on_texts
+    assert "🤖 Комментарии AI-тренера: молчу" in off_texts
+    assert "🔢 КБЖУ в дневнике питания: считаю" in on_texts
+    assert "📝 КБЖУ в дневнике питания: не считаю" in off_texts
+    # Раньше «Карточка тренировки: подробно/компактно» не говорило, что именно
+    # переключается — это строка e1RM на итоговой карточке.
+    assert "📊 e1RM на карточке: показываю" in on_texts
+    assert "📊 e1RM на карточке: прячу" in off_texts
+    for text in on_texts + off_texts:
+        assert len(text) <= 40, f"кнопка слишком длинная для Telegram: {text!r}"
 
 
 async def test_profile_screen_speaks_in_the_first_person(fresh_db, user_id):
