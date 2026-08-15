@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>Кач-Раннер</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script src="/assets/game/three.min.js"
+        onerror="this.onerror=null;var s=document.createElement('script');s.src='assets/game/three.min.js';document.head.appendChild(s)"></script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { height: 100%; }
@@ -91,13 +93,73 @@
   .result-btn.retry:hover { background: rgba(0,200,80,0.25); }
   #result-status { color: #aaa; font-size: 13px; min-height: 16px; }
 
-  #flash { position: fixed; inset: 0; pointer-events: none; opacity: 0; transition: opacity 0.15s; }
+  #flash { position: fixed; inset: 0; pointer-events: none; opacity: 0; transition: opacity 0.15s; z-index: 30; }
   #flash.red { background: rgba(255,40,40,0.35); }
+
+  /* ── HUD (DOM поверх 3D-сцены) ── */
+  #hud {
+    position: fixed; inset: 0; pointer-events: none; display: none;
+    font-family: 'Courier New', monospace; z-index: 10;
+  }
+  #hud.active { display: block; }
+  .hud-dist {
+    position: absolute; left: 20px; top: 14px;
+    font-size: 26px; font-weight: 900; color: #ffd700; letter-spacing: 1px;
+    text-shadow: 0 2px 6px rgba(0,0,0,0.6);
+  }
+  .hud-best {
+    position: absolute; left: 20px; top: 46px;
+    font-size: 13px; font-weight: 700; color: rgba(242,237,227,0.7);
+    text-shadow: 0 2px 6px rgba(0,0,0,0.6);
+  }
+  .hud-zone {
+    position: absolute; left: 50%; top: 12px; transform: translateX(-50%);
+    font-size: 11px; font-weight: 800; color: rgba(242,237,227,0.45); letter-spacing: 2px;
+    text-shadow: 0 2px 6px rgba(0,0,0,0.6);
+  }
+  .hud-score {
+    position: absolute; right: 20px; top: 14px;
+    font-size: 22px; font-weight: 900; color: #e94f64; text-align: right;
+    text-shadow: 0 2px 6px rgba(0,0,0,0.6);
+  }
+  .hud-powers {
+    position: absolute; right: 20px; top: 50px;
+    display: flex; flex-direction: column; align-items: flex-end; gap: 5px;
+  }
+  .hud-power { font-size: 11px; font-weight: 800; text-align: right; text-shadow: 0 2px 6px rgba(0,0,0,0.6); }
+  .hud-power-bar { width: 90px; height: 4px; background: rgba(255,255,255,0.15); margin-top: 2px; }
+  .hud-power-bar > i { display: block; height: 100%; }
+
+  #toast-layer { position: fixed; inset: 0; pointer-events: none; z-index: 11; }
+  .toast {
+    position: absolute; transform: translate(-50%, -50%);
+    font-size: 16px; font-weight: 900; white-space: nowrap;
+    text-shadow: 0 2px 6px rgba(0,0,0,0.7);
+  }
+
+  #rage-overlay {
+    position: fixed; inset: 0; pointer-events: none; z-index: 9;
+    background: rgba(255,90,54,0); display: none;
+  }
+  #rage-overlay.active { display: block; }
+
+  /* ── ЭКРАН ОШИБКИ ЗАПУСКА ── */
+  #screen-error .screen-inner { text-align: center; gap: 12px; }
+  #screen-error .subtitle { color: #ddd; }
 </style>
 </head>
 <body>
 
 <canvas id="game-canvas"></canvas>
+<div id="hud">
+  <div class="hud-dist" id="hud-dist">0 м</div>
+  <div class="hud-best" id="hud-best">рекорд 0 м</div>
+  <div class="hud-zone" id="hud-zone">ПОДВАЛ</div>
+  <div class="hud-score" id="hud-score">🥤 0</div>
+  <div class="hud-powers" id="hud-powers"></div>
+</div>
+<div id="toast-layer"></div>
+<div id="rage-overlay"></div>
 <div id="flash"></div>
 
 <!-- ЭКРАН 1: выбор качка -->
@@ -110,6 +172,14 @@
       <b>тап / пробел</b> — прыжок (двойной — в воздухе)<br>
       <b>свайп вниз / ↓</b> — подкат под штангу
     </div>
+  </div>
+</div>
+
+<!-- ЭКРАН: не поднялся зал -->
+<div id="screen-error" class="screen">
+  <div class="screen-inner">
+    <h1>Кач-Раннер</h1>
+    <div class="subtitle" id="error-text">Не смог поднять зал. Проверь связь и открой игру заново.</div>
   </div>
 </div>
 
@@ -148,6 +218,9 @@ let serverBest = 0;
   }
 })();
 
+// ── ФОРМАТИРОВАНИЕ ЧИСЕЛ: единая точка, всё на экране — только целые ───────
+function fmt(n) { return String(Math.round(n)); }
+
 // ── КАЧКИ ────────────────────────────────────────────────────────────────────
 const FIGHTERS = {
   power:  { name: 'Пауэрлифтер', tag: 'сила',         top: '#8f2a20', bottom: '#2b2d34', skin: '#e0b08a', head: 'bandana',  hair: '#31241c', acc: '#b8860b', belt: true, bulk: 1.18 },
@@ -157,327 +230,14 @@ const FIGHTERS = {
 };
 let selectedFighter = 'power';
 
-// ── CANVAS ───────────────────────────────────────────────────────────────────
-const cv = document.getElementById('game-canvas');
-const ctx = cv.getContext('2d');
-let W = 0, H = 0, DPR = 1;
-function resize() {
-  DPR = Math.min(2, window.devicePixelRatio || 1);
-  W = window.innerWidth; H = window.innerHeight;
-  cv.width = W * DPR; cv.height = H * DPR;
-  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-}
-window.addEventListener('resize', resize); resize();
-
+// ── CANVAS-ФОЛБЭК ДЛЯ КАРТОЧЕК ВЫБОРА (2D, как было) ────────────────────────
+// Экран выбора персонажа не переделываем — векторный фолбэк рисуем тем же
+// 2D-путём, что и раньше, на отдельных маленьких canvas-ах карточек.
 const CHALK = '#f2ede3', C_RAGE = '#ff5a36', C_GOLD = '#ffd700';
 
-// ── ЗВУК: короткие бипы через WebAudio ──────────────────────────────────────
-let AC = null, muted = false;
-function beep(freq, dur, type = 'square', vol = 0.05, slide = 0) {
-  if (muted) return;
-  try {
-    if (!AC) AC = new (window.AudioContext || window.webkitAudioContext)();
-    const o = AC.createOscillator(), g = AC.createGain();
-    o.type = type; o.frequency.value = freq;
-    if (slide) o.frequency.linearRampToValueAtTime(freq + slide, AC.currentTime + dur);
-    g.gain.value = vol; g.gain.exponentialRampToValueAtTime(0.0001, AC.currentTime + dur);
-    o.connect(g); g.connect(AC.destination);
-    o.start(); o.stop(AC.currentTime + dur);
-  } catch (e) {}
-}
-const sJump = () => beep(300, .12, 'square', .04, 220);
-const sDouble = () => beep(420, .12, 'square', .04, 260);
-const sPick = () => beep(760, .08, 'triangle', .05, 140);
-const sPower = () => { beep(500, .15, 'sawtooth', .05, 400); setTimeout(() => beep(900, .2, 'sawtooth', .04, 300), 90); };
-const sDie = () => { beep(220, .25, 'sawtooth', .06, -160); setTimeout(() => beep(120, .4, 'square', .05, -60), 140); };
-
-// ── СОСТОЯНИЕ ────────────────────────────────────────────────────────────────
-const GROUND = () => H * 0.80;
-let running = false;
-let t = 0, dist = 0, speed = 0, score = 0, best = Math.max(serverBest, +(localStorage.getItem('gymrun_best') || 0));
-let shakeT = 0, lastResult = null;
-// Комбо: серия подборов без столкновений растит множитель очков (×1…×5).
-// Скорость: старт 330, +4.5/с, потолок 760 — на капе от края экрана до игрока
-// остаётся ~0.5 с реакции; выше (как было: 920) честно успевает только бот.
-const SPEED_START = 330, SPEED_RAMP = 4.5, SPEED_CAP = 760;
-let combo = 0, maxCombo = 0, pickups = 0, lastMile = 0;
-const mult = () => 1 + Math.min(4, Math.floor(combo / 8));
-const rnd = (a, b) => a + Math.random() * (b - a);
-const pick = a => a[Math.floor(Math.random() * a.length)];
-
-const P = {
-  x: 0, y: 0, vy: 0, w: 34, h: 58,
-  onGround: true, jumps: 0, slideT: 0,
-  shield: false, rageT: 0, magnetT: 0, runPhase: 0,
-};
-function resetGame() {
-  t = 0; dist = 0; speed = SPEED_START; score = 0; shakeT = 0;
-  combo = 0; maxCombo = 0; pickups = 0; lastMile = 0;
-  P.x = W * 0.22; P.y = GROUND(); P.vy = 0; P.onGround = true; P.jumps = 0; P.slideT = 0;
-  P.shield = false; P.rageT = 0; P.magnetT = 0; P.runPhase = 0;
-  obstacles.length = 0; items.length = 0; parts.length = 0; toasts.length = 0;
-  nextObsAt = 260; nextItemAt = 140;
-}
-
-// Тексты — по TONE_OF_VOICE.md: тренер от первого лица, на «ты», без капса в
-// теле фразы. Смерть в игре — не пропуск тренировки, поэтому без подколок,
-// только поддержка. Формула «ПРИВЕТ АТЛЕТ! » — строго, без подстановки имени.
-const QUIPS = [
-  ' м — это разминка. Отдышись и беги ещё.',
-  ' м. Гантеля догнала — бывает, следующий заход твой.',
-  ' м — неплохо. Под штангу подкатывайся, а не в неё.',
-  ' м. Протеин сам себя не соберёт — ещё подход.',
-  ' м записал. Дальше — больше.',
-  ' м. Видел, как ты за предтреником тянулся, — в следующий раз возьмёшь.',
-];
-
-// ── ЛОКАЦИИ ──────────────────────────────────────────────────────────────────
-const ZONES = [
-  { name: 'ПОДВАЛ',   sky: ['#181210', '#231a14'], ground: '#2a211a', groundLine: '#4a3a2b', draw: drawBasement },
-  { name: 'НЕОН-ЗАЛ', sky: ['#0b0f1e', '#141b33'], ground: '#151b2e', groundLine: '#2c3a63', draw: drawNeon },
-  { name: 'УЛИЦА',    sky: ['#0a0d18', '#1c2033'], ground: '#191c26', groundLine: '#333849', draw: drawStreet },
-];
-const ZONE_LEN = 600;
-function zoneIndex() { return Math.floor(dist / ZONE_LEN) % ZONES.length; }
-function zoneBlend() {
-  const p = (dist % ZONE_LEN) / ZONE_LEN;
-  return p > 0.88 ? (p - 0.88) / 0.12 : 0;
-}
-
-function drawBasement(a) {
-  ctx.globalAlpha = a;
-  const bw = 52, bh = 22, off = (dist * 2.2) % bw;
-  ctx.fillStyle = 'rgba(255,180,120,0.05)';
-  for (let r = 0; r < Math.ceil(GROUND() / bh); r++)
-    for (let x = -bw; x < W + bw; x += bw)
-      ctx.fillRect(x - off + (r % 2 ? bw / 2 : 0), r * bh, bw - 3, bh - 3);
-  ctx.fillStyle = 'rgba(120,90,60,0.35)';
-  ctx.fillRect(0, 26, W, 10); ctx.fillRect(0, 54, W, 6);
-  const lw = 340, loff = (dist * 3.4) % lw;
-  for (let x = -lw; x < W + lw; x += lw) {
-    const lx = x - loff + lw / 2;
-    ctx.strokeStyle = 'rgba(0,0,0,0.5)'; ctx.beginPath();
-    ctx.moveTo(lx, 36); ctx.lineTo(lx, 92); ctx.stroke();
-    const g = ctx.createRadialGradient(lx, 100, 2, lx, 100, 70);
-    g.addColorStop(0, 'rgba(255,200,110,0.5)'); g.addColorStop(1, 'rgba(255,200,110,0)');
-    ctx.fillStyle = g; ctx.fillRect(lx - 70, 30, 140, 140);
-    ctx.fillStyle = '#ffd9a0'; ctx.beginPath(); ctx.arc(lx, 98, 6, 0, 7); ctx.fill();
-  }
-  silhouettes('rgba(0,0,0,0.35)', 2.9);
-  ctx.globalAlpha = 1;
-}
-function drawNeon(a) {
-  ctx.globalAlpha = a;
-  ctx.fillStyle = 'rgba(57,210,196,0.8)'; ctx.fillRect(0, 30, W, 3);
-  ctx.fillStyle = 'rgba(255,90,150,0.6)'; ctx.fillRect(0, 44, W, 2);
-  const sw = 560, soff = (dist * 3.0) % sw;
-  ctx.font = "900 34px 'Courier New', monospace"; ctx.textAlign = 'center';
-  for (let x = -sw; x < W + sw; x += sw) {
-    const sx = x - soff + sw / 2;
-    ctx.fillStyle = 'rgba(57,210,196,0.14)'; ctx.fillText('QACHALKA 24/7', sx, 120);
-    ctx.fillStyle = 'rgba(57,210,196,0.8)'; ctx.fillText('QACHALKA 24/7', sx, 118);
-  }
-  ctx.strokeStyle = 'rgba(57,210,196,0.10)';
-  for (let y = 160; y < GROUND(); y += 34) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
-  silhouettes('rgba(10,16,36,0.85)', 2.6);
-  ctx.globalAlpha = 1;
-}
-function drawStreet(a) {
-  ctx.globalAlpha = a;
-  ctx.fillStyle = 'rgba(242,237,227,0.9)'; ctx.beginPath(); ctx.arc(W * 0.78, 84, 26, 0, 7); ctx.fill();
-  ctx.fillStyle = '#1c2033'; ctx.beginPath(); ctx.arc(W * 0.78 + 10, 78, 22, 0, 7); ctx.fill();
-  ctx.fillStyle = 'rgba(255,255,255,0.5)';
-  for (let i = 0; i < 40; i++) { const sx = (i * 97) % W, sy = (i * 61) % (GROUND() * 0.5); ctx.fillRect(sx, sy, 2, 2); }
-  const cw = 180, coff = (dist * 1.6) % cw;
-  ctx.fillStyle = 'rgba(8,10,20,0.9)';
-  for (let x = -cw; x < W + cw; x += cw) {
-    const hgt = 120 + ((x / cw | 0) % 3) * 46;
-    ctx.fillRect(x - coff, GROUND() - hgt, cw - 24, hgt);
-  }
-  ctx.fillStyle = 'rgba(255,201,60,0.35)';
-  for (let x = -cw; x < W + cw; x += cw)
-    for (let wy = 0; wy < 4; wy++) for (let wx = 0; wx < 3; wx++)
-      if (((x / cw | 0) + wx + wy) % 3 === 0) ctx.fillRect(x - coff + 22 + wx * 44, GROUND() - 96 + wy * 22, 12, 9);
-  const lw = 420, loff = (dist * 3.2) % lw;
-  for (let x = -lw; x < W + lw; x += lw) {
-    const lx = x - loff + lw * 0.3;
-    ctx.fillStyle = 'rgba(150,160,190,0.6)'; ctx.fillRect(lx - 2, GROUND() - 170, 4, 170);
-    ctx.fillRect(lx - 2, GROUND() - 172, 34, 5);
-    const g = ctx.createRadialGradient(lx + 30, GROUND() - 164, 2, lx + 30, GROUND() - 164, 90);
-    g.addColorStop(0, 'rgba(255,220,150,0.35)'); g.addColorStop(1, 'rgba(255,220,150,0)');
-    ctx.fillStyle = g; ctx.fillRect(lx - 60, GROUND() - 260, 180, 260);
-  }
-  ctx.globalAlpha = 1;
-}
-function silhouettes(color, parallax) {
-  const sw = 260, soff = (dist * parallax) % sw;
-  ctx.fillStyle = color;
-  for (let x = -sw; x < W + sw; x += sw) {
-    const bx = x - soff, by = GROUND();
-    ctx.fillRect(bx + 20, by - 70, 8, 70); ctx.fillRect(bx + 92, by - 70, 8, 70);
-    ctx.fillRect(bx + 6, by - 64, 108, 6);
-    ctx.beginPath(); ctx.arc(bx + 14, by - 61, 13, 0, 7); ctx.arc(bx + 106, by - 61, 13, 0, 7); ctx.fill();
-    ctx.fillRect(bx + 160, by - 34, 70, 10); ctx.fillRect(bx + 170, by - 24, 10, 24); ctx.fillRect(bx + 200, by - 24, 10, 24);
-  }
-}
-
-// ── ПРЕПЯТСТВИЯ ──────────────────────────────────────────────────────────────
-const obstacles = [];
-let nextObsAt = 260;
-function spawnObstacle() {
-  const kind = pick(['dumb', 'kettle', 'bench', 'rack', 'plate', 'dumb', 'rack']);
-  const o = { kind, x: W + 80 };
-  if (kind === 'dumb') { o.w = 52; o.h = 30; }
-  if (kind === 'kettle') { o.w = 36; o.h = 40; }
-  if (kind === 'bench') { o.w = 110; o.h = 34; }
-  if (kind === 'rack') { o.w = 26; o.h = 0; o.gap = 64; }
-  if (kind === 'plate') { o.w = 44; o.h = 44; o.vx = 120 + speed * 0.12; o.rot = 0; }
-  obstacles.push(o);
-  // Награда, ведущая через препятствие: дуга — по траектории прыжка, дорожка
-  // на полу — сквозь стойку на высоте подката. Собирание учит уклоняться.
-  if (Math.random() < 0.45) spawnGuideItems(o);
-  const gapPx = rnd(0.85, 1.5) * (speed * 0.72) + 180;
-  nextObsAt = dist + (gapPx / 7);
-}
-
-function spawnGuideItems(o) {
-  if (o.kind === 'plate') return; // блин едет навстречу — «след» из наград разъедется с ним
-  if (o.kind === 'rack') {
-    for (let i = 0; i < 4; i++) items.push(mkItem('shaker', o.x - 40 + i * 46, GROUND() - 26));
-    return;
-  }
-  const cx = o.x + o.w / 2, n = 5;
-  const barAt = Math.random() < 0.35 ? Math.floor(n / 2) : -1;
-  for (let i = 0; i < n; i++) {
-    const p = i / (n - 1);
-    const y = GROUND() - 60 - Math.sin(p * Math.PI) * 95;
-    items.push(mkItem(i === barAt ? 'bar' : 'shaker', cx - 110 + p * 220, y));
-  }
-}
-function drawObstacle(o) {
-  const gy = GROUND();
-  ctx.save(); ctx.translate(o.x, 0);
-  if (o.kind === 'dumb') {
-    ctx.fillStyle = '#767c88'; ctx.fillRect(6, gy - 16, o.w - 12, 8);
-    ctx.fillStyle = '#5a606c';
-    ctx.fillRect(0, gy - 30, 12, 30); ctx.fillRect(o.w - 12, gy - 30, 12, 30);
-    ctx.fillRect(3, gy - 26, 6, 22); ctx.fillRect(o.w - 9, gy - 26, 6, 22);
-  }
-  if (o.kind === 'kettle') {
-    ctx.fillStyle = '#3b3f49';
-    ctx.beginPath(); ctx.arc(o.w / 2, gy - 16, 16, 0, 7); ctx.fill();
-    ctx.lineWidth = 7; ctx.strokeStyle = '#3b3f49';
-    ctx.beginPath(); ctx.arc(o.w / 2, gy - 32, 10, Math.PI, 0); ctx.stroke();
-  }
-  if (o.kind === 'bench') {
-    ctx.fillStyle = '#8a4436'; ctx.fillRect(0, gy - o.h, o.w, 12);
-    ctx.fillStyle = '#4c4f58';
-    ctx.fillRect(10, gy - o.h + 12, 10, o.h - 12); ctx.fillRect(o.w - 20, gy - o.h + 12, 10, o.h - 12);
-  }
-  if (o.kind === 'rack') {
-    ctx.fillStyle = '#4c4f58';
-    ctx.fillRect(0, gy - 150, 10, 150); ctx.fillRect(o.w + 66, gy - 150, 10, 150);
-    ctx.fillStyle = '#9aa0ab'; ctx.fillRect(-14, gy - o.gap - 8, o.w + 104, 8);
-    ctx.fillStyle = '#c0392b';
-    ctx.fillRect(-8, gy - o.gap - 26, 14, 44); ctx.fillRect(o.w + 70, gy - o.gap - 26, 14, 44);
-  }
-  if (o.kind === 'plate') {
-    ctx.translate(o.w / 2, gy - o.h / 2); ctx.rotate(o.rot);
-    ctx.fillStyle = '#c0392b'; ctx.beginPath(); ctx.arc(0, 0, o.h / 2, 0, 7); ctx.fill();
-    ctx.fillStyle = '#8f2a20'; ctx.beginPath(); ctx.arc(0, 0, o.h / 2 - 7, 0, 7); ctx.fill();
-    ctx.fillStyle = '#c0392b'; ctx.beginPath(); ctx.arc(0, 0, 8, 0, 7); ctx.fill();
-    ctx.fillStyle = CHALK; ctx.beginPath(); ctx.arc(0, 0, 3.4, 0, 7); ctx.fill();
-    ctx.fillStyle = 'rgba(242,237,227,0.5)'; ctx.fillRect(-o.h / 2 + 4, -1.5, 10, 3);
-  }
-  ctx.restore();
-}
-function obstacleBox(o) {
-  const gy = GROUND(), m = 5;
-  if (o.kind === 'rack') return { x: o.x - 14 + m, y: gy - o.gap - 26, w: o.w + 104 - 2 * m, h: 44 };
-  return { x: o.x + m, y: gy - o.h + m, w: o.w - 2 * m, h: o.h - m };
-}
-
-// ── СПОРТПИТ ─────────────────────────────────────────────────────────────────
-const ITEM_TYPES = {
-  shaker:     { pts: 10, color: '#e94f64', label: 'ПРОТ' },
-  bar:        { pts: 25, color: C_GOLD,   label: 'БАТОН' },
-  creatine:   { pts: 0,  color: '#7ea8ff', label: 'КРЕАТИН', power: 'shield' },
-  preworkout: { pts: 0,  color: C_RAGE,   label: 'ПРЕДТРЕН', power: 'rage' },
-  gainer:     { pts: 0,  color: '#67c26a', label: 'ГЕЙНЕР', power: 'magnet' },
-};
-const items = [];
-let nextItemAt = 140;
-function spawnItems() {
-  // Свободные награды не пересекаются с препятствиями: если у правого края
-  // уже спавнится преграда, дорожка вела бы прямо в неё — переносим попытку.
-  if (obstacles.some(o => o.x > W - 180)) { nextItemAt = dist + 12; return; }
-  const r = Math.random();
-  if (r < 0.14) items.push(mkItem('creatine', W + 60, GROUND() - 120));
-  else if (r < 0.25) items.push(mkItem('preworkout', W + 60, GROUND() - 150));
-  else if (r < 0.34) items.push(mkItem('gainer', W + 60, GROUND() - 100));
-  else if (r < 0.48) {
-    // Верхний ярус: достаётся только двойным прыжком, поэтому и награда
-    // жирнее — батончики вместо шейкеров.
-    for (let i = 0; i < 3; i++) items.push(mkItem('bar', W + 60 + i * 58, GROUND() - 240));
-  } else {
-    const n = 4 + Math.floor(rnd(0, 3)), arc = Math.random() < 0.5;
-    const barMix = Math.random() < 0.3;
-    for (let i = 0; i < n; i++) {
-      const y = arc ? GROUND() - 80 - Math.sin(i / (n - 1) * Math.PI) * 80 : GROUND() - 64;
-      const type = (barMix && i === Math.floor(n / 2)) ? 'bar' : 'shaker';
-      items.push(mkItem(type, W + 60 + i * 54, y));
-    }
-  }
-  nextItemAt = dist + rnd(28, 60);
-}
-function mkItem(type, x, y) { return { type, x, y, t: rnd(0, 6) }; }
-function drawItem(it) {
-  const d = ITEM_TYPES[it.type];
-  const bob = Math.sin(it.t * 4) * 4;
-  ctx.save(); ctx.translate(it.x, it.y + bob);
-  // Мягкий ореол: в тёмных локациях (неон, улица) предметы сливались с фоном.
-  ctx.fillStyle = 'rgba(255,255,255,0.09)';
-  ctx.beginPath(); ctx.arc(0, 0, 21, 0, 7); ctx.fill();
-  if (it.type === 'shaker') {
-    ctx.fillStyle = d.color; ctx.fillRect(-9, -12, 18, 26);
-    ctx.fillStyle = '#b93b4e'; ctx.fillRect(-9, -2, 18, 4);
-    ctx.fillStyle = '#2b2b33'; ctx.fillRect(-10, -18, 20, 7); ctx.fillRect(-4, -23, 8, 6);
-  } else if (it.type === 'bar') {
-    ctx.rotate(-0.2);
-    ctx.fillStyle = d.color; ctx.fillRect(-16, -8, 32, 16);
-    ctx.fillStyle = '#c79a20'; ctx.fillRect(-16, -8, 8, 16); ctx.fillRect(8, -8, 8, 16);
-    ctx.fillStyle = '#14110f'; ctx.font = "900 8px 'Courier New', monospace"; ctx.textAlign = 'center'; ctx.fillText('PRO', 0, 3);
-  } else {
-    ctx.fillStyle = d.color; ctx.fillRect(-13, -16, 26, 32);
-    ctx.fillStyle = 'rgba(0,0,0,0.3)'; ctx.fillRect(-13, -16, 26, 7);
-    ctx.fillStyle = CHALK; ctx.font = "900 7px 'Courier New', monospace"; ctx.textAlign = 'center';
-    ctx.fillText(d.label, 0, 5);
-  }
-  if (d.power) {
-    ctx.strokeStyle = d.color; ctx.globalAlpha = 0.5 + 0.4 * Math.sin(it.t * 6);
-    ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(0, 0, 24, 0, 7); ctx.stroke();
-  }
-  ctx.restore();
-}
-
-// ── ЧАСТИЦЫ И ТОСТЫ ─────────────────────────────────────────────────────────
-const parts = [];
-function burst(x, y, color, n = 10, sp = 180) {
-  for (let i = 0; i < n; i++) {
-    const a = rnd(0, Math.PI * 2), v = rnd(sp * 0.3, sp);
-    parts.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v - 60, life: rnd(0.3, 0.7), color, r: rnd(2, 4) });
-  }
-}
-const toasts = [];
-function toast(text, color, x, y) {
-  toasts.push({ text, color, t: 0, x: x ?? P.x, y: y ?? P.y - P.h - 30 });
-}
-
-// ── ИГРОК ────────────────────────────────────────────────────────────────────
-function playerBox() {
-  const sliding = P.slideT > 0;
-  const h = sliding ? 30 : P.h, w = P.w;
-  return { x: P.x - w / 2 + 4, y: P.y - h, w: w - 8, h: h - 4 };
+function shade(hex, k) {
+  const n = parseInt(hex.slice(1), 16);
+  return 'rgb(' + Math.round(((n >> 16) & 255) * k) + ',' + Math.round(((n >> 8) & 255) * k) + ',' + Math.round((n & 255) * k) + ')';
 }
 // roundRect есть не во всех вебвью — мягкий полифилл
 if (!CanvasRenderingContext2D.prototype.roundRect) {
@@ -488,10 +248,6 @@ if (!CanvasRenderingContext2D.prototype.roundRect) {
     this.arcTo(x, y + h, x, y, r); this.arcTo(x, y, x + w, y, r);
     this.closePath();
   };
-}
-function shade(hex, k) {
-  const n = parseInt(hex.slice(1), 16);
-  return 'rgb(' + Math.round(((n >> 16) & 255) * k) + ',' + Math.round(((n >> 8) & 255) * k) + ',' + Math.round((n & 255) * k) + ')';
 }
 function limb(c, pts, w, color) {
   c.strokeStyle = color; c.lineWidth = w; c.lineCap = 'round'; c.lineJoin = 'round';
@@ -509,23 +265,19 @@ function drawShoe(c, x, y, dark) {
 }
 function drawHead(c, f, hx, hy) {
   const skinD = shade(f.skin, 0.78);
-  // череп + челюсть
   c.fillStyle = f.skin;
   c.beginPath(); c.arc(hx, hy, 7.5, 0, 7); c.fill();
   c.beginPath(); c.moveTo(hx + 6.5, hy - 2); c.lineTo(hx + 9.5, hy + 1.5); c.lineTo(hx + 5, hy + 5.5); c.lineTo(hx - 1, hy + 5.5); c.closePath(); c.fill();
-  // ухо (у борца — сломанное, крупнее и краснее), глаз, бровь
   c.fillStyle = f.ears ? '#c98a7a' : skinD;
   c.beginPath(); c.arc(hx - 1, hy + 1, f.ears ? 2.7 : 2, 0, 7); c.fill();
   c.fillStyle = '#1d1d22'; c.fillRect(hx + 4.5, hy - 1.5, 1.8, 1.8);
   c.fillRect(hx + 3.5, hy - 4, 4.2, 1.4);
-  // причёска / убор
   if (f.head === 'bandana') {
     c.fillStyle = f.acc;
     c.beginPath(); c.arc(hx, hy - 0.5, 7.8, Math.PI * 0.97, Math.PI * 2.03); c.fill();
     c.fillRect(hx - 8, hy - 3.5, 16.2, 3);
     c.beginPath(); c.moveTo(hx - 7, hy - 2); c.lineTo(hx - 13, hy + 3); c.lineTo(hx - 8, hy + 3.5); c.closePath(); c.fill();
     c.fillStyle = shade(f.acc, 0.7); c.fillRect(hx - 8, hy - 1.2, 16.2, 0.9);
-    // щетина
     c.fillStyle = 'rgba(40,30,22,0.35)';
     c.beginPath(); c.arc(hx + 3.5, hy + 4, 4.4, 0.2, Math.PI * 0.95); c.fill();
   } else if (f.head === 'headband') {
@@ -537,20 +289,17 @@ function drawHead(c, f, hx, hy) {
     c.beginPath(); c.arc(hx, hy - 1.5, 7.9, Math.PI * 0.93, Math.PI * 2.07); c.fill();
     c.fillRect(hx - 8.2, hy - 4, 16.4, 3.2);
     c.fillStyle = shade(f.acc, 0.75); c.fillRect(hx - 8.2, hy - 1.4, 16.4, 0.8);
-    // борода
     c.fillStyle = f.hair;
     c.beginPath(); c.moveTo(hx + 8.5, hy); c.quadraticCurveTo(hx + 9, hy + 8, hx + 3, hy + 9);
     c.quadraticCurveTo(hx - 1, hy + 8, hx - 1, hy + 4); c.lineTo(hx + 4, hy + 3); c.closePath(); c.fill();
   } else if (f.head === 'short') {
-    // короткая стрижка с чётким контуром
     c.fillStyle = f.hair;
     c.beginPath(); c.arc(hx, hy - 1, 7.8, Math.PI * 0.93, Math.PI * 1.97); c.fill();
     c.fillRect(hx - 7.8, hy - 2.5, 5, 3.5);
   }
 }
-// Рисует атлета в контекст c: используется и в игре, и на карточках выбора.
-// Ориентация — бежит вправо, начало координат в точке опоры. Осанка прямая,
-// мышечные объёмы отдельными формами: дельта, бицепс, икра, V-образный торс.
+// Рисует атлета в контекст c: используется только на карточках выбора (2D
+// фолбэк, если арт assets/game/*.jpg ещё не подгрузился/недоступен).
 function drawAthlete(c, fighter, opts) {
   const { sliding = false, run = 0, rage = false, shield = false, scale = 1, idle = false } = opts || {};
   const f = FIGHTERS[fighter];
@@ -564,7 +313,6 @@ function drawAthlete(c, fighter, opts) {
     for (let i = 1; i <= 3; i++) c.fillRect(-17 - i * 14, -58 + i * 5, 34, 52 - i * 8);
   }
   if (sliding) {
-    // подкат: корпус откинут назад, ноги вперёд
     limb(c, [-4, -16, 10, -13, 24, -8], 8.5 * B, skinD);
     drawShoe(c, 27, -7, true);
     c.fillStyle = f.bottom; c.beginPath(); c.roundRect(-13, -23, 15, 12, 5); c.fill();
@@ -574,15 +322,14 @@ function drawAthlete(c, fighter, opts) {
     drawShoe(c, 31, -5, false);
     drawHead(c, f, -21, -38);
   } else {
-    const s = idle ? 0 : run; // -1..1
-    const stance = idle ? 1 : 0; // стоя на карточке — ноги на ширине, руки чуть от корпуса
+    const s = idle ? 0 : run;
+    const stance = idle ? 1 : 0;
     const leg = (side, col, dark) => {
       const sw = side * s;
       const hipX = side * 2 * (1 + stance), hipY = -33;
       const kneeX = hipX + sw * 10 + stance * side * 2, kneeY = -17;
       const footX = kneeX + sw * 9 + 1 + stance * side * 2, footY = -4 - Math.max(0, -sw) * 7;
       limb(c, [hipX, hipY, kneeX, kneeY, footX, footY], 10 * B, col);
-      // икра
       c.fillStyle = col; c.beginPath(); c.arc(kneeX - 2, kneeY + 3.5, 3.6 * B, 0, 7); c.fill();
       drawShoe(c, footX + 2, footY + 2, dark);
     };
@@ -591,20 +338,17 @@ function drawAthlete(c, fighter, opts) {
       const shX = side > 0 ? 9 : -7, shY = -52;
       const elX = shX + aw * 9, elY = shY + 13;
       const haX = elX + aw * 10 + 2, haY = elY + 9 - Math.abs(aw) * 3;
-      limb(c, [shX, shY, elX, elY, haX, haY], 8.5 * B, col);      // плечо
-      limb(c, [elX, elY, haX, haY], 6 * B, col);                  // предплечье тоньше
-      // бицепс и дельта отдельными объёмами
+      limb(c, [shX, shY, elX, elY, haX, haY], 8.5 * B, col);
+      limb(c, [elX, elY, haX, haY], 6 * B, col);
       c.fillStyle = col;
       c.beginPath(); c.arc((shX + elX) / 2 + aw * 1.5, (shY + elY) / 2, 4.2 * B, 0, 7); c.fill();
       c.beginPath(); c.arc(shX, shY - 1.5, 5.4 * B, 0, 7); c.fill();
     };
     leg(-1, skinD, true);
     arm(-1, skinD);
-    // шорты
     c.fillStyle = f.bottom;
     c.beginPath(); c.roundRect(-9 * B, -37, 18 * B, 14, 5); c.fill();
     c.fillStyle = shade(f.bottom, 0.72); c.fillRect(-9 * B, -37, 6 * B, 14);
-    // торс: V-образный, плечи заметно шире талии, осанка прямая
     c.fillStyle = torsoCol;
     c.beginPath();
     c.moveTo(-8 * B, -33);
@@ -613,7 +357,6 @@ function drawAthlete(c, fighter, opts) {
     c.quadraticCurveTo(14 * B, -58, 15 * B, -53);
     c.quadraticCurveTo(12 * B, -44, 9 * B, -33);
     c.closePath(); c.fill();
-    // тень по спине
     c.fillStyle = torsoD;
     c.beginPath();
     c.moveTo(-8 * B, -33);
@@ -621,11 +364,9 @@ function drawAthlete(c, fighter, opts) {
     c.quadraticCurveTo(-10 * B, -57, -6 * B, -57.5);
     c.quadraticCurveTo(-8 * B, -44, -4 * B, -33);
     c.closePath(); c.fill();
-    // грудная линия
     c.strokeStyle = shade(torsoCol, 0.7); c.lineWidth = 1.2;
     c.beginPath(); c.moveTo(2, -53); c.quadraticCurveTo(9 * B, -52, 12 * B, -48); c.stroke();
     if (f.singlet) {
-      // борцовское трико: сплошная нижняя часть + лямки через плечи
       c.fillStyle = f.top;
       c.beginPath();
       c.moveTo(-8.6 * B, -33);
@@ -638,83 +379,28 @@ function drawAthlete(c, fighter, opts) {
       c.beginPath(); c.moveTo(-7 * B, -47); c.lineTo(-11 * B, -55); c.stroke();
       c.lineCap = 'round';
     } else if (f.shirtless) {
-      // пресс
       c.strokeStyle = shade(f.skin, 0.72); c.lineWidth = 1.1;
       c.beginPath(); c.moveTo(3, -46); c.lineTo(3, -35); c.stroke();
       c.beginPath(); c.moveTo(-1, -43); c.lineTo(7, -43); c.stroke();
       c.beginPath(); c.moveTo(-1, -39); c.lineTo(7, -39); c.stroke();
     } else {
-      // вырез майки
       c.fillStyle = f.skin;
       c.beginPath(); c.moveTo(0, -61); c.lineTo(9 * B, -56); c.quadraticCurveTo(6, -50, 2, -53); c.closePath(); c.fill();
     }
-    // пояс пауэрлифтера
     if (f.belt) {
       c.fillStyle = f.acc; c.fillRect(-9 * B, -39, 18 * B, 5.5);
       c.fillStyle = shade(f.acc, 0.65); c.fillRect(0, -39, 4.5, 5.5);
     }
     leg(1, f.skin, false);
-    // шея — толстая, голова прямо над корпусом
     limb(c, [2, -58, 2, -64], 7 * B, f.skin);
     drawHead(c, f, 3, -67);
     arm(1, f.skin);
   }
   if (shield) {
-    c.strokeStyle = '#7ea8ff'; c.lineWidth = 2.5; c.globalAlpha = 0.6 + 0.3 * Math.sin(t * 8);
+    c.strokeStyle = '#7ea8ff'; c.lineWidth = 2.5; c.globalAlpha = 0.6 + 0.3 * Math.sin(performance.now() / 130);
     c.beginPath(); c.arc(0, -34, 44, 0, 7); c.stroke(); c.globalAlpha = 1;
   }
   c.restore();
-}
-function drawPlayer() {
-  ctx.save(); ctx.translate(P.x, P.y);
-  drawAthlete(ctx, selectedFighter, {
-    sliding: P.slideT > 0,
-    run: P.onGround ? Math.sin(P.runPhase * 14) : 0.4,
-    rage: P.rageT > 0,
-    shield: P.shield,
-  });
-  ctx.restore();
-}
-
-// ── УПРАВЛЕНИЕ ──────────────────────────────────────────────────────────────
-function jump() {
-  if (!running) return;
-  if (P.slideT > 0) P.slideT = 0;
-  if (P.onGround) { P.vy = -870; P.onGround = false; P.jumps = 1; sJump(); }
-  else if (P.jumps < 2) { P.vy = -760; P.jumps = 2; sDouble(); burst(P.x, P.y - 10, 'rgba(242,237,227,0.8)', 6, 120); }
-}
-function slide() {
-  if (!running) return;
-  // Длительность от скорости, а не константа: подкат должен покрывать длину
-  // стойки (~290 px) на любой скорости. С фиксированными 0.62 с на стартовой
-  // скорости игрок вставал ровно под перекладиной — гарантированная смерть.
-  if (P.onGround) P.slideT = Math.min(1.05, Math.max(0.5, 330 / Math.max(120, speed)));
-  else { P.vy = Math.max(P.vy, 900); P.slideT = 0.5; }
-}
-let touchY = null, touchT = 0;
-cv.addEventListener('pointerdown', e => { touchY = e.clientY; touchT = performance.now(); jump(); });
-cv.addEventListener('pointermove', e => {
-  if (touchY !== null && e.clientY - touchY > 46 && performance.now() - touchT < 350) { slide(); touchY = null; }
-});
-cv.addEventListener('pointerup', () => { touchY = null; });
-document.addEventListener('keydown', e => {
-  if (e.repeat) return;
-  if (e.code === 'Space' || e.code === 'ArrowUp') { e.preventDefault(); jump(); }
-  if (e.code === 'ArrowDown' || e.code === 'KeyS') { e.preventDefault(); slide(); }
-  if (e.code === 'KeyM') muted = !muted;
-});
-
-// ── ЭКРАНЫ (как у совы) ─────────────────────────────────────────────────────
-function showScreen(id) {
-  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
-  cv.classList.remove('active');
-  if (id === 'game') cv.classList.add('active');
-  else document.getElementById(id).classList.add('active');
-}
-function flash(color) {
-  const el = document.getElementById('flash');
-  el.className = color; el.style.opacity = 1;
-  setTimeout(() => { el.style.opacity = 0; }, 200);
 }
 
 // Карточки выбора: если в assets/game лежит арт персонажа — показываем его
@@ -744,9 +430,228 @@ function flash(color) {
   });
 })();
 
+// ── ЗВУК: короткие бипы через WebAudio ──────────────────────────────────────
+let AC = null, muted = false;
+function beep(freq, dur, type = 'square', vol = 0.05, slide = 0) {
+  if (muted) return;
+  try {
+    if (!AC) AC = new (window.AudioContext || window.webkitAudioContext)();
+    const o = AC.createOscillator(), g = AC.createGain();
+    o.type = type; o.frequency.value = freq;
+    if (slide) o.frequency.linearRampToValueAtTime(freq + slide, AC.currentTime + dur);
+    g.gain.value = vol; g.gain.exponentialRampToValueAtTime(0.0001, AC.currentTime + dur);
+    o.connect(g); g.connect(AC.destination);
+    o.start(); o.stop(AC.currentTime + dur);
+  } catch (e) {}
+}
+const sJump = () => beep(300, .12, 'square', .04, 220);
+const sDouble = () => beep(420, .12, 'square', .04, 260);
+const sPick = () => beep(760, .08, 'triangle', .05, 140);
+const sPower = () => { beep(500, .15, 'sawtooth', .05, 400); setTimeout(() => beep(900, .2, 'sawtooth', .04, 300), 90); };
+const sDie = () => { beep(220, .25, 'sawtooth', .06, -160); setTimeout(() => beep(120, .4, 'square', .05, -60), 140); };
+
+// ── СОСТОЯНИЕ ИГРЫ (правила и баланс — как были, без изменений) ─────────────
+const GROUND = () => H * 0.80;
+let running = false;
+let t = 0, dist = 0, speed = 0, score = 0, best = Math.max(serverBest, +(localStorage.getItem('gymrun_best') || 0));
+let shakeT = 0, lastResult = null;
+const SPEED_START = 330, SPEED_RAMP = 4.5, SPEED_CAP = 760;
+let combo = 0, maxCombo = 0, pickups = 0, lastMile = 0;
+const mult = () => 1 + Math.min(4, Math.floor(combo / 8));
+const rnd = (a, b) => a + Math.random() * (b - a);
+const pick = a => a[Math.floor(Math.random() * a.length)];
+
+let W = 0, H = 0, DPR = 1;
+
+const P = {
+  x: 0, y: 0, vy: 0, w: 34, h: 58,
+  onGround: true, jumps: 0, slideT: 0,
+  shield: false, rageT: 0, magnetT: 0, runPhase: 0,
+};
+function resetGame() {
+  t = 0; dist = 0; speed = SPEED_START; score = 0; shakeT = 0;
+  combo = 0; maxCombo = 0; pickups = 0; lastMile = 0;
+  P.x = W * 0.22; P.y = GROUND(); P.vy = 0; P.onGround = true; P.jumps = 0; P.slideT = 0;
+  P.shield = false; P.rageT = 0; P.magnetT = 0; P.runPhase = 0;
+  clearObstacleMeshes();
+  obstacles.length = 0; items.length = 0; parts.length = 0; toasts.length = 0;
+  nextObsAt = 260; nextItemAt = 140;
+}
+
+// Тексты — по TONE_OF_VOICE.md: тренер от первого лица, на «ты», без капса в
+// теле фразы. Смерть в игре — не пропуск тренировки, поэтому без подколок,
+// только поддержка. Формула «ПРИВЕТ АТЛЕТ! » — строго, без подстановки имени.
+const QUIPS = [
+  ' м — это разминка. Отдышись и беги ещё.',
+  ' м. Гантеля догнала — бывает, следующий заход твой.',
+  ' м — неплохо. Под штангу подкатывайся, а не в неё.',
+  ' м. Протеин сам себя не соберёт — ещё подход.',
+  ' м записал. Дальше — больше.',
+  ' м. Видел, как ты за предтреником тянулся, — в следующий раз возьмёшь.',
+];
+
+// ── ЛОКАЦИИ (смысл сохранён: три биома по мере забега, теперь — 3D-палитра) ──
+const ZONES = [
+  { name: 'ПОДВАЛ',   fog: 0x241a13, floor: 0x2a211a, wall: 0x3a2c20, prop: 0x4a3a2b, lamp: 0xffb060, kind: 'gym' },
+  { name: 'НЕОН-ЗАЛ', fog: 0x141b33, floor: 0x151b2e, wall: 0x1c2440, prop: 0x2c3a63, lamp: 0x39d2c4, lamp2: 0xff5a96, kind: 'neon' },
+  { name: 'УЛИЦА',    fog: 0x1c2033, floor: 0x191c26, wall: 0x232840, prop: 0x333849, lamp: 0xffc93c, kind: 'street' },
+];
+const ZONE_LEN = 600;
+function zoneIndex() { return Math.floor(dist / ZONE_LEN) % ZONES.length; }
+function zoneBlend() {
+  const p = (dist % ZONE_LEN) / ZONE_LEN;
+  return p > 0.88 ? (p - 0.88) / 0.12 : 0;
+}
+
+// ── ПРЕПЯТСТВИЯ (спавн/баланс/хитбоксы — без изменений) ─────────────────────
+const obstacles = [];
+let nextObsAt = 260;
+function spawnObstacle() {
+  const kind = pick(['dumb', 'kettle', 'bench', 'rack', 'plate', 'dumb', 'rack']);
+  const o = { kind, x: W + 80 };
+  if (kind === 'dumb') { o.w = 52; o.h = 30; }
+  if (kind === 'kettle') { o.w = 36; o.h = 40; }
+  if (kind === 'bench') { o.w = 110; o.h = 34; }
+  if (kind === 'rack') { o.w = 26; o.h = 0; o.gap = 64; }
+  if (kind === 'plate') { o.w = 44; o.h = 44; o.vx = 120 + speed * 0.12; o.rot = 0; }
+  obstacles.push(o);
+  o.mesh = buildObstacleMesh(o);
+  if (o.mesh) sceneObstacles.add(o.mesh);
+  // Награда, ведущая через препятствие: дуга — по траектории прыжка, дорожка
+  // на полу — сквозь стойку на высоте подката. Собирание учит уклоняться.
+  if (Math.random() < 0.45) spawnGuideItems(o);
+  const gapPx = rnd(0.85, 1.5) * (speed * 0.72) + 180;
+  nextObsAt = dist + (gapPx / 7);
+}
+function removeObstacle(i) {
+  const o = obstacles[i];
+  if (o.mesh) { sceneObstacles.remove(o.mesh); disposeObject(o.mesh); }
+  obstacles.splice(i, 1);
+}
+function clearObstacleMeshes() {
+  for (const o of obstacles) if (o.mesh) { sceneObstacles.remove(o.mesh); disposeObject(o.mesh); }
+}
+
+function spawnGuideItems(o) {
+  if (o.kind === 'plate') return; // блин едет навстречу — «след» из наград разъедется с ним
+  if (o.kind === 'rack') {
+    for (let i = 0; i < 4; i++) items.push(mkItem('shaker', o.x - 40 + i * 46, GROUND() - 26));
+    return;
+  }
+  const cx = o.x + o.w / 2, n = 5;
+  const barAt = Math.random() < 0.35 ? Math.floor(n / 2) : -1;
+  for (let i = 0; i < n; i++) {
+    const p = i / (n - 1);
+    const y = GROUND() - 60 - Math.sin(p * Math.PI) * 95;
+    items.push(mkItem(i === barAt ? 'bar' : 'shaker', cx - 110 + p * 220, y));
+  }
+}
+function obstacleBox(o) {
+  const gy = GROUND(), m = 5;
+  if (o.kind === 'rack') return { x: o.x - 14 + m, y: gy - o.gap - 26, w: o.w + 104 - 2 * m, h: 44 };
+  return { x: o.x + m, y: gy - o.h + m, w: o.w - 2 * m, h: o.h - m };
+}
+
+// ── СПОРТПИТ (баланс — без изменений) ───────────────────────────────────────
+const ITEM_TYPES = {
+  shaker:     { pts: 10, color: '#e94f64', label: 'ПРОТ' },
+  bar:        { pts: 25, color: C_GOLD,   label: 'БАТОН' },
+  creatine:   { pts: 0,  color: '#7ea8ff', label: 'КРЕАТИН', power: 'shield' },
+  preworkout: { pts: 0,  color: C_RAGE,   label: 'ПРЕДТРЕН', power: 'rage' },
+  gainer:     { pts: 0,  color: '#67c26a', label: 'ГЕЙНЕР', power: 'magnet' },
+};
+const items = [];
+let nextItemAt = 140;
+function spawnItems() {
+  // Свободные награды не пересекаются с препятствиями: если у правого края
+  // уже спавнится преграда, дорожка вела бы прямо в неё — переносим попытку.
+  if (obstacles.some(o => o.x > W - 180)) { nextItemAt = dist + 12; return; }
+  const r = Math.random();
+  if (r < 0.14) items.push(mkItem('creatine', W + 60, GROUND() - 120));
+  else if (r < 0.25) items.push(mkItem('preworkout', W + 60, GROUND() - 150));
+  else if (r < 0.34) items.push(mkItem('gainer', W + 60, GROUND() - 100));
+  else if (r < 0.48) {
+    for (let i = 0; i < 3; i++) items.push(mkItem('bar', W + 60 + i * 58, GROUND() - 240));
+  } else {
+    const n = 4 + Math.floor(rnd(0, 3)), arc = Math.random() < 0.5;
+    const barMix = Math.random() < 0.3;
+    for (let i = 0; i < n; i++) {
+      const y = arc ? GROUND() - 80 - Math.sin(i / (n - 1) * Math.PI) * 80 : GROUND() - 64;
+      const type = (barMix && i === Math.floor(n / 2)) ? 'bar' : 'shaker';
+      items.push(mkItem(type, W + 60 + i * 54, y));
+    }
+  }
+  nextItemAt = dist + rnd(28, 60);
+}
+function mkItem(type, x, y) { return { type, x, y, t: rnd(0, 6) }; }
+
+// ── ЧАСТИЦЫ И ТОСТЫ ─────────────────────────────────────────────────────────
+const parts = [];
+function burst(x, y, color, n = 10, sp = 180) {
+  for (let i = 0; i < n; i++) {
+    const a = rnd(0, Math.PI * 2), v = rnd(sp * 0.3, sp);
+    parts.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v - 60, life: rnd(0.3, 0.7), maxLife: 0, color, r: rnd(2, 4) });
+  }
+}
+const toasts = [];
+function toast(text, color, x, y) {
+  toasts.push({ text, color, t: 0, x: x ?? P.x, y: y ?? P.y - P.h - 30, el: null });
+}
+
+// ── ИГРОК: коробка столкновений — как в 2D-версии, координаты не менялись ──
+function playerBox() {
+  const sliding = P.slideT > 0;
+  const h = sliding ? 30 : P.h, w = P.w;
+  return { x: P.x - w / 2 + 4, y: P.y - h, w: w - 8, h: h - 4 };
+}
+
+// ── УПРАВЛЕНИЕ (как было) ────────────────────────────────────────────────────
+function jump() {
+  if (!running) return;
+  if (P.slideT > 0) P.slideT = 0;
+  if (P.onGround) { P.vy = -870; P.onGround = false; P.jumps = 1; sJump(); }
+  else if (P.jumps < 2) { P.vy = -760; P.jumps = 2; sDouble(); burst(P.x, P.y - 10, 'rgba(242,237,227,0.8)', 6, 120); }
+}
+function slide() {
+  if (!running) return;
+  // Длительность от скорости, а не константа: подкат должен покрывать длину
+  // стойки (~290 px) на любой скорости. С фиксированными 0.62 с на стартовой
+  // скорости игрок вставал ровно под перекладиной — гарантированная смерть.
+  if (P.onGround) P.slideT = Math.min(1.05, Math.max(0.5, 330 / Math.max(120, speed)));
+  else { P.vy = Math.max(P.vy, 900); P.slideT = 0.5; }
+}
+let touchY = null, touchT = 0;
+const cv = document.getElementById('game-canvas');
+cv.addEventListener('pointerdown', e => { touchY = e.clientY; touchT = performance.now(); jump(); });
+cv.addEventListener('pointermove', e => {
+  if (touchY !== null && e.clientY - touchY > 46 && performance.now() - touchT < 350) { slide(); touchY = null; }
+});
+cv.addEventListener('pointerup', () => { touchY = null; });
+document.addEventListener('keydown', e => {
+  if (e.repeat) return;
+  if (e.code === 'Space' || e.code === 'ArrowUp') { e.preventDefault(); jump(); }
+  if (e.code === 'ArrowDown' || e.code === 'KeyS') { e.preventDefault(); slide(); }
+  if (e.code === 'KeyM') muted = !muted;
+});
+
+// ── ЭКРАНЫ ───────────────────────────────────────────────────────────────────
+function showScreen(id) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  cv.classList.remove('active');
+  document.getElementById('hud').classList.remove('active');
+  if (id === 'game') { cv.classList.add('active'); document.getElementById('hud').classList.add('active'); }
+  else document.getElementById(id).classList.add('active');
+}
+function flash(color) {
+  const el = document.getElementById('flash');
+  el.className = color; el.style.opacity = 1;
+  setTimeout(() => { el.style.opacity = 0; }, 200);
+}
+
 function selectFighter(key) {
   selectedFighter = key;
   resetGame();
+  if (playerModel) buildPlayerModel(key);
   running = true;
   showScreen('game');
 }
@@ -767,12 +672,12 @@ function die() {
   art.onload = () => { art.style.display = 'block'; };
   art.onerror = () => { art.style.display = 'none'; };
   art.src = 'assets/game/' + selectedFighter + '.jpg';
-  document.getElementById('result-score').textContent = d + ' м · 🥤 ' + score;
+  document.getElementById('result-score').textContent = fmt(d) + ' м · 🥤 ' + fmt(score);
   document.getElementById('result-stats').textContent =
-    'лучшая серия: ' + maxCombo + ' · пауэрапов: ' + pickups;
+    'лучшая серия: ' + fmt(maxCombo) + ' · пауэрапов: ' + fmt(pickups);
   // «ПРИВЕТ АТЛЕТ! » — брендовая формула, имя не подставляем (см. TONE_OF_VOICE.md)
-  document.getElementById('result-quip').textContent = 'ПРИВЕТ АТЛЕТ! ' + d + pick(QUIPS);
-  document.getElementById('result-best').textContent = 'рекорд: ' + best + ' м';
+  document.getElementById('result-quip').textContent = 'ПРИВЕТ АТЛЕТ! ' + fmt(d) + pick(QUIPS);
+  document.getElementById('result-best').textContent = 'рекорд: ' + fmt(best) + ' м';
   document.getElementById('result-status').textContent = '';
   setTimeout(() => showScreen('screen-result'), 900);
 }
@@ -818,7 +723,7 @@ async function submitAndClose() {
   try { Telegram.WebApp.close(); } catch (e) {}
 }
 
-// ── АПДЕЙТ ──────────────────────────────────────────────────────────────────
+// ── АПДЕЙТ (физика/спавн/очки — байт в байт как в 2D-версии) ────────────────
 function update(dt) {
   t += dt;
   parts.forEach(p => { p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 600 * dt; p.life -= dt; });
@@ -833,7 +738,7 @@ function update(dt) {
   // Милстоны: каждые 500 м — отметка, чтобы у бесконечного забега были этапы.
   if (Math.floor(dist / 500) > lastMile) {
     lastMile = Math.floor(dist / 500);
-    toast(lastMile * 500 + ' м!', C_GOLD, W / 2, H * 0.3);
+    toast(fmt(lastMile * 500) + ' м!', C_GOLD, W / 2, H * 0.3);
   }
   if (P.rageT > 0) P.rageT -= dt;
   if (P.magnetT > 0) P.magnetT -= dt;
@@ -853,7 +758,7 @@ function update(dt) {
     const o = obstacles[i];
     o.x -= spd * dt + (o.vx ? o.vx * dt : 0);
     if (o.kind === 'plate') o.rot -= dt * 7;
-    if (o.x < -160) { obstacles.splice(i, 1); continue; }
+    if (o.x < -160) { removeObstacle(i); continue; }
     const b = obstacleBox(o);
     if (pb.x < b.x + b.w && pb.x + pb.w > b.x && pb.y < b.y + b.h && pb.y + pb.h > b.y) {
       if (rage) {
@@ -861,13 +766,13 @@ function update(dt) {
         const bonus = 25 * mult();
         score += bonus;
         burst(o.x + (o.w || 30) / 2, GROUND() - 24, '#9aa0ab', 14, 300);
-        obstacles.splice(i, 1);
-        toast('+' + bonus, C_RAGE, o.x, GROUND() - 80);
+        removeObstacle(i);
+        toast('+' + fmt(bonus), C_RAGE, o.x, GROUND() - 80);
         continue;
       }
       if (P.shield) {
         P.shield = false; combo = 0;
-        obstacles.splice(i, 1); burst(P.x, P.y - 30, '#7ea8ff', 16, 260);
+        removeObstacle(i); burst(P.x, P.y - 30, '#7ea8ff', 16, 260);
         toast('КРЕАТИН СПАС', '#7ea8ff'); shakeT = 0.25; continue;
       }
       die(); return;
@@ -893,7 +798,7 @@ function update(dt) {
       else if (d.power === 'rage') { P.rageT = 4.2; pickups += 1; toast('ПРЕДТРЕНИК: ЯРОСТЬ!', C_RAGE); sPower(); shakeT = 0.3; }
       else if (d.power === 'magnet') { P.magnetT = 6; pickups += 1; toast('ГЕЙНЕР-МАГНИТ', '#67c26a'); sPower(); }
       else { score += d.pts * mult(); sPick(); }
-      if (mult() > before) toast('СЕРИЯ ×' + mult(), C_GOLD);
+      if (mult() > before) toast('СЕРИЯ ×' + fmt(mult()), C_GOLD);
     }
   }
 
@@ -901,84 +806,632 @@ function update(dt) {
   for (let i = toasts.length - 1; i >= 0; i--) if (toasts[i].t > 1.2) toasts.splice(i, 1);
 }
 
-// ── РЕНДЕР ──────────────────────────────────────────────────────────────────
-function render() {
-  if (!cv.classList.contains('active')) return;
-  ctx.save();
-  if (shakeT > 0) ctx.translate(rnd(-6, 6) * shakeT, rnd(-6, 6) * shakeT);
-  const zi = zoneIndex(), zb = zoneBlend();
-  const z = ZONES[zi], zn = ZONES[(zi + 1) % ZONES.length];
+// ═════════════════════════════════════════════════════════════════════════
+// ── 3D-СЦЕНА (Three.js): весь слой отрисовки, правила игры не трогает ──────
+// ═════════════════════════════════════════════════════════════════════════
+const UNIT = 1 / 30; // px игрового мира → мировые единицы three.js
+function toWY(y2d) { return (GROUND() - y2d) * UNIT; }
+function toWZ(x2d) { return -(x2d - P.x) * UNIT; }
 
-  const g = ctx.createLinearGradient(0, 0, 0, GROUND());
-  g.addColorStop(0, z.sky[0]); g.addColorStop(1, z.sky[1]);
-  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
-  z.draw(1 - zb * 0.6);
-  if (zb > 0) zn.draw(zb);
+let renderer = null, scene = null, camera = null;
+let sceneObstacles = null, decorGroup = null, particleGroup = null;
+let floorMesh = null, wallL = null, wallR = null;
+let propMesh = null, lampMesh = null, buildingMesh = null;
+let itemMeshes = {}; // type -> InstancedMesh
+const ITEM_CAP = 48;
+let playerModel = null; // { group, parts }
+let dummy = null;
+const shadowBlob = { mesh: null };
+let curZoneCol = null; // текущие интерполированные цвета зоны (для плавной смены)
 
-  ctx.fillStyle = z.ground; ctx.fillRect(0, GROUND(), W, H - GROUND());
-  if (zb > 0) { ctx.globalAlpha = zb; ctx.fillStyle = zn.ground; ctx.fillRect(0, GROUND(), W, H - GROUND()); ctx.globalAlpha = 1; }
-  ctx.fillStyle = z.groundLine; ctx.fillRect(0, GROUND(), W, 3);
-  const dashW = 60, doff = (dist * 7) % (dashW * 2);
-  ctx.fillStyle = 'rgba(242,237,227,0.12)';
-  for (let x = -dashW * 2; x < W + dashW; x += dashW * 2) ctx.fillRect(x - doff + dashW, GROUND() + 22, dashW, 4);
+function hexShade(hex, k) {
+  const n = (typeof hex === 'number') ? hex : parseInt(String(hex).replace('#', ''), 16);
+  const r = Math.round(((n >> 16) & 255) * k), g = Math.round(((n >> 8) & 255) * k), b = Math.round((n & 255) * k);
+  return (r << 16) | (g << 8) | b;
+}
+function colorNum(hex) { return (typeof hex === 'number') ? hex : parseInt(String(hex).replace('#', ''), 16); }
+function stripAlpha(c) {
+  const m = /rgba\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/.exec(c);
+  return m ? 'rgb(' + m[1] + ',' + m[2] + ',' + m[3] + ')' : c;
+}
+function lerpColorNum(a, b, p) {
+  const ca = new THREE.Color(a), cb = new THREE.Color(b);
+  return ca.lerp(cb, p);
+}
 
-  if (P.rageT > 0) {
-    ctx.fillStyle = 'rgba(255,90,54,' + (0.10 + 0.06 * Math.sin(t * 20)) + ')';
-    ctx.fillRect(0, 0, W, H);
+function disposeObject(obj) {
+  obj.traverse(n => {
+    if (n.geometry) n.geometry.dispose();
+    if (n.material) { (Array.isArray(n.material) ? n.material : [n.material]).forEach(m => m.dispose()); }
+  });
+}
+
+function initThree() {
+  dummy = new THREE.Object3D();
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(ZONES[0].fog);
+  scene.fog = new THREE.Fog(ZONES[0].fog, 8, 34);
+
+  camera = new THREE.PerspectiveCamera(58, 1, 0.1, 100);
+
+  renderer = new THREE.WebGLRenderer({ canvas: cv, antialias: true, alpha: false });
+  renderer.setClearColor(ZONES[0].fog);
+
+  const ambient = new THREE.AmbientLight(0xfff2df, 0.55);
+  scene.add(ambient);
+  const sun = new THREE.DirectionalLight(0xffdcae, 0.95);
+  sun.position.set(-4, 8, 4);
+  scene.add(sun);
+  const fill = new THREE.DirectionalLight(0x8fb0ff, 0.25);
+  fill.position.set(3, 4, -6);
+  scene.add(fill);
+
+  // Пол
+  floorMesh = new THREE.Mesh(
+    new THREE.PlaneGeometry(24, 200),
+    new THREE.MeshLambertMaterial({ color: ZONES[0].floor })
+  );
+  floorMesh.rotation.x = -Math.PI / 2;
+  floorMesh.position.set(0, 0, -60);
+  scene.add(floorMesh);
+
+  // Дорожка-разметка на полу
+  const laneMat = new THREE.MeshBasicMaterial({ color: 0xf2ede3, transparent: true, opacity: 0.12 });
+  const laneGeo = new THREE.PlaneGeometry(0.12, 200);
+  const lane = new THREE.Mesh(laneGeo, laneMat);
+  lane.rotation.x = -Math.PI / 2;
+  lane.position.set(0, 0.01, -60);
+  scene.add(lane);
+
+  // Стены по бокам
+  const wallGeo = new THREE.BoxGeometry(0.6, 6, 200);
+  wallL = new THREE.Mesh(wallGeo, new THREE.MeshLambertMaterial({ color: ZONES[0].wall }));
+  wallL.position.set(-6.3, 3, -60);
+  wallR = wallL.clone(); wallR.material = wallL.material.clone(); wallR.position.x = 6.3;
+  scene.add(wallL, wallR);
+
+  // Ряды тренажёров/стоек по бокам — InstancedMesh
+  propMesh = new THREE.InstancedMesh(
+    new THREE.BoxGeometry(0.9, 1.6, 0.5),
+    new THREE.MeshLambertMaterial({ color: ZONES[0].prop }),
+    24
+  );
+  scene.add(propMesh);
+
+  // Здания уличной зоны — InstancedMesh (та же геометрия сцены, другой масштаб)
+  buildingMesh = new THREE.InstancedMesh(
+    new THREE.BoxGeometry(1.4, 1, 1.4),
+    new THREE.MeshLambertMaterial({ color: 0x0c0f1c }),
+    16
+  );
+  scene.add(buildingMesh);
+
+  // Тёплые лампы — светящиеся сферы на столбах, InstancedMesh с индивидуальным цветом
+  const lampMat = new THREE.MeshBasicMaterial({ color: 0xffffff, vertexColors: true });
+  lampMesh = new THREE.InstancedMesh(new THREE.SphereGeometry(0.22, 8, 6), lampMat, 12);
+  lampMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(12 * 3), 3);
+  scene.add(lampMesh);
+
+  sceneObstacles = new THREE.Group(); scene.add(sceneObstacles);
+  decorGroup = new THREE.Group(); scene.add(decorGroup);
+  particleGroup = new THREE.Group(); scene.add(particleGroup);
+
+  // Собираемые предметы — по одному InstancedMesh на тип
+  itemMeshes.shaker = new THREE.InstancedMesh(new THREE.BoxGeometry(0.34, 0.5, 0.24), new THREE.MeshLambertMaterial({ color: ITEM_TYPES.shaker.color }), ITEM_CAP);
+  itemMeshes.bar = new THREE.InstancedMesh(new THREE.BoxGeometry(0.5, 0.22, 0.16), new THREE.MeshLambertMaterial({ color: 0xffd700 }), ITEM_CAP);
+  itemMeshes.creatine = new THREE.InstancedMesh(new THREE.SphereGeometry(0.24, 10, 8), new THREE.MeshLambertMaterial({ color: ITEM_TYPES.creatine.color }), ITEM_CAP);
+  itemMeshes.preworkout = new THREE.InstancedMesh(new THREE.SphereGeometry(0.24, 10, 8), new THREE.MeshLambertMaterial({ color: ITEM_TYPES.preworkout.color }), ITEM_CAP);
+  itemMeshes.gainer = new THREE.InstancedMesh(new THREE.SphereGeometry(0.24, 10, 8), new THREE.MeshLambertMaterial({ color: ITEM_TYPES.gainer.color }), ITEM_CAP);
+  Object.values(itemMeshes).forEach(m => { m.count = ITEM_CAP; scene.add(m); });
+
+  // Тень под ногами игрока — тёмный круг-плоскость (без карт теней, дёшево)
+  shadowBlob.mesh = new THREE.Mesh(
+    new THREE.CircleGeometry(0.5, 16),
+    new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.35 })
+  );
+  shadowBlob.mesh.rotation.x = -Math.PI / 2;
+  shadowBlob.mesh.position.y = 0.02;
+  scene.add(shadowBlob.mesh);
+
+  resize3D();
+  buildPlayerModel(selectedFighter);
+}
+
+function resize3D() {
+  if (!renderer) return;
+  DPR = Math.min(2, window.devicePixelRatio || 1);
+  W = window.innerWidth; H = window.innerHeight;
+  renderer.setPixelRatio(DPR);
+  renderer.setSize(W, H, false);
+  camera.aspect = W / H;
+  camera.updateProjectionMatrix();
+}
+window.addEventListener('resize', resize3D);
+
+// ── Игрок: группа из примитивов, собирается один раз на выбор персонажа ────
+function buildPlayerModel(key) {
+  if (playerModel) { scene.remove(playerModel.group); disposeObject(playerModel.group); }
+  const f = FIGHTERS[key];
+  const B = f.bulk || 1;
+  const torsoColor = colorNum((f.shirtless || f.singlet) ? f.skin : f.top);
+  const skinColor = colorNum(f.skin);
+  const bottomColor = colorNum(f.bottom);
+  const accColor = colorNum(f.acc || f.top);
+  const hairColor = colorNum(f.hair || '#241a12');
+
+  const group = new THREE.Group();
+
+  const torsoMat = new THREE.MeshLambertMaterial({ color: torsoColor });
+  const skinMat = new THREE.MeshLambertMaterial({ color: skinColor });
+  const bottomMat = new THREE.MeshLambertMaterial({ color: bottomColor });
+
+  const hipY = 0.62;
+  const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.24 * B, 0.42, 3, 8), torsoMat);
+  torso.position.set(0, hipY + 0.42, 0);
+  group.add(torso);
+
+  const pelvis = new THREE.Mesh(new THREE.BoxGeometry(0.42 * B, 0.24, 0.26), bottomMat);
+  pelvis.position.set(0, hipY + 0.1, 0);
+  group.add(pelvis);
+
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.185, 12, 10), skinMat);
+  head.position.set(0, hipY + 0.98, 0.02);
+  group.add(head);
+
+  // Причёска/убор — по f.head, цвет f.hair либо f.acc (бандана/повязка)
+  let hairMesh = null;
+  if (f.head === 'bandana') {
+    hairMesh = new THREE.Mesh(new THREE.SphereGeometry(0.195, 10, 8, 0, Math.PI * 2, 0, Math.PI * 0.6), new THREE.MeshLambertMaterial({ color: accColor }));
+  } else if (f.head === 'headband') {
+    hairMesh = new THREE.Mesh(new THREE.TorusGeometry(0.185, 0.03, 6, 12), new THREE.MeshLambertMaterial({ color: accColor }));
+    hairMesh.rotation.x = Math.PI / 2;
+  } else {
+    hairMesh = new THREE.Mesh(new THREE.SphereGeometry(0.195, 10, 8, 0, Math.PI * 2, 0, Math.PI * 0.5), new THREE.MeshLambertMaterial({ color: hairColor }));
+  }
+  hairMesh.position.copy(head.position);
+  group.add(hairMesh);
+
+  // Уши борца — крупнее и краснее
+  if (f.ears) {
+    const earMat = new THREE.MeshLambertMaterial({ color: 0xc98a7a });
+    const earGeo = new THREE.SphereGeometry(0.05, 6, 6);
+    const earL = new THREE.Mesh(earGeo, earMat); earL.position.set(-0.18, head.position.y, 0);
+    const earR = earL.clone(); earR.position.x = 0.18;
+    group.add(earL, earR);
   }
 
-  items.forEach(drawItem);
-  obstacles.forEach(drawObstacle);
-  drawPlayer();
+  // Пояс пауэрлифтера
+  if (f.belt) {
+    const belt = new THREE.Mesh(new THREE.BoxGeometry(0.46 * B, 0.09, 0.28), new THREE.MeshLambertMaterial({ color: accColor }));
+    belt.position.set(0, hipY + 0.18, 0);
+    group.add(belt);
+  }
 
-  parts.forEach(p => { ctx.globalAlpha = Math.max(0, p.life * 1.6); ctx.fillStyle = p.color; ctx.fillRect(p.x, p.y, p.r, p.r); });
-  ctx.globalAlpha = 1;
-  toasts.forEach(ts => {
-    ctx.globalAlpha = Math.max(0, 1 - ts.t / 1.2);
-    ctx.font = "900 16px 'Courier New', monospace"; ctx.textAlign = 'center';
-    // Игрок стоит у левого края — тост, отцентрованный на нём, обрезался бы
-    // экраном; прижимаем к видимой области.
-    const half = ctx.measureText(ts.text).width / 2;
-    const tx = Math.max(half + 8, Math.min(W - half - 8, ts.x));
-    ctx.fillStyle = ts.color; ctx.fillText(ts.text, tx, ts.y);
-  });
-  ctx.globalAlpha = 1;
+  function makeLimb(isArm, side) {
+    const pivot = new THREE.Group();
+    const upperLen = isArm ? 0.30 : 0.40;
+    const lowerLen = isArm ? 0.28 : 0.40;
+    const thickness = (isArm ? 0.09 : 0.12) * B;
+    const col = isArm ? skinMat : (side < 0 ? new THREE.MeshLambertMaterial({ color: hexShade(f.skin, 0.78) }) : skinMat);
+    const jointGeo = new THREE.SphereGeometry(thickness * 1.02, 8, 6);
+    const topJoint = new THREE.Mesh(jointGeo, col);
+    pivot.add(topJoint);
 
-  // HUD — золото как у совы
-  ctx.textAlign = 'left'; ctx.fillStyle = C_GOLD;
-  ctx.font = "900 26px 'Courier New', monospace";
-  ctx.fillText(Math.floor(dist) + ' м', 20, 40);
-  ctx.font = "700 14px 'Courier New', monospace"; ctx.fillStyle = 'rgba(242,237,227,0.6)';
-  ctx.fillText('рекорд ' + Math.max(best, Math.floor(dist)) + ' м', 20, 62);
-  ctx.textAlign = 'right'; ctx.fillStyle = '#e94f64'; ctx.font = "900 22px 'Courier New', monospace";
+    const upper = new THREE.Mesh(new THREE.CapsuleGeometry(thickness, upperLen, 2, 6), col);
+    upper.position.y = -upperLen / 2 - thickness * 0.35;
+    pivot.add(upper);
+
+    const kneePivot = new THREE.Group();
+    kneePivot.position.y = -upperLen - thickness * 0.7;
+    pivot.add(kneePivot);
+
+    const kneeJoint = new THREE.Mesh(new THREE.SphereGeometry(thickness * 0.86, 8, 6), col);
+    kneePivot.add(kneeJoint);
+
+    const lower = new THREE.Mesh(new THREE.CapsuleGeometry(thickness * 0.82, lowerLen, 2, 6), col);
+    lower.position.y = -lowerLen / 2 - thickness * 0.3;
+    kneePivot.add(lower);
+
+    let extra = null;
+    if (!isArm) {
+      extra = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.08, 0.22), new THREE.MeshLambertMaterial({ color: side < 0 ? 0x3f434c : 0x565b66 }));
+      extra.position.y = -lowerLen - thickness * 0.3;
+      kneePivot.add(extra);
+    }
+    return { pivot, kneePivot, upper, lower, shoe: extra };
+  }
+
+  const legL = makeLimb(false, -1); legL.pivot.position.set(-0.13 * B, hipY, 0);
+  const legR = makeLimb(false, 1); legR.pivot.position.set(0.13 * B, hipY, 0);
+  const armL = makeLimb(true, -1); armL.pivot.position.set(-0.30 * B, hipY + 0.78, 0);
+  const armR = makeLimb(true, 1); armR.pivot.position.set(0.30 * B, hipY + 0.78, 0);
+  group.add(legL.pivot, legR.pivot, armL.pivot, armR.pivot);
+
+  group.scale.setScalar(1);
+  group.position.set(0, 0, 0);
+  scene.add(group);
+
+  playerModel = { group, torso, head, legL, legR, armL, armR, key, B };
+}
+
+// ── Препятствия: примитивы вместо ctx-фигур, коллизии не изменились ────────
+function buildObstacleMesh(o) {
+  const g = new THREE.Group();
+  const s = UNIT;
+  if (o.kind === 'dumb') {
+    const bar = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, o.w * s * 0.7, 8), new THREE.MeshLambertMaterial({ color: 0x767c88 }));
+    bar.rotation.z = Math.PI / 2;
+    bar.position.y = (o.h * s) * 0.55;
+    g.add(bar);
+    const plateGeo = new THREE.CylinderGeometry(o.h * s * 0.5, o.h * s * 0.5, 0.12, 12);
+    const plateMat = new THREE.MeshLambertMaterial({ color: 0x5a606c });
+    const pL = new THREE.Mesh(plateGeo, plateMat); pL.rotation.z = Math.PI / 2; pL.position.set(-o.w * s * 0.32, o.h * s * 0.5, 0);
+    const pR = pL.clone(); pR.position.x = o.w * s * 0.32;
+    g.add(pL, pR);
+  } else if (o.kind === 'kettle') {
+    const body = new THREE.Mesh(new THREE.SphereGeometry(o.w * s * 0.5, 10, 8), new THREE.MeshLambertMaterial({ color: 0x3b3f49 }));
+    body.position.y = o.w * s * 0.5;
+    g.add(body);
+    const handle = new THREE.Mesh(new THREE.TorusGeometry(o.w * s * 0.32, 0.035, 6, 10, Math.PI), new THREE.MeshLambertMaterial({ color: 0x3b3f49 }));
+    handle.position.y = o.w * s * 0.95;
+    handle.rotation.z = Math.PI;
+    g.add(handle);
+  } else if (o.kind === 'bench') {
+    const top = new THREE.Mesh(new THREE.BoxGeometry(o.w * s, 0.1, 0.4), new THREE.MeshLambertMaterial({ color: 0x8a4436 }));
+    top.position.y = o.h * s - 0.05;
+    g.add(top);
+    const legMat = new THREE.MeshLambertMaterial({ color: 0x4c4f58 });
+    const legGeo = new THREE.BoxGeometry(0.08, o.h * s - 0.1, 0.08);
+    const lg1 = new THREE.Mesh(legGeo, legMat); lg1.position.set(-o.w * s * 0.35, (o.h * s - 0.1) / 2, 0);
+    const lg2 = lg1.clone(); lg2.position.x = o.w * s * 0.35;
+    g.add(lg1, lg2);
+  } else if (o.kind === 'rack') {
+    const postMat = new THREE.MeshLambertMaterial({ color: 0x4c4f58 });
+    const postH = 1.6;
+    const postGeo = new THREE.BoxGeometry(0.08, postH, 0.08);
+    const p1 = new THREE.Mesh(postGeo, postMat); p1.position.set(-(o.w * s * 0.5 + 0.35), postH / 2, 0);
+    const p2 = p1.clone(); p2.position.x = o.w * s * 0.5 + 0.35;
+    g.add(p1, p2);
+    const barY = o.gap * s;
+    const bar = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, (o.w + 104) * s, 8), new THREE.MeshLambertMaterial({ color: 0x9aa0ab }));
+    bar.rotation.z = Math.PI / 2; bar.position.y = barY;
+    g.add(bar);
+    const capMat = new THREE.MeshLambertMaterial({ color: 0xc0392b });
+    const capGeo = new THREE.CylinderGeometry(0.16, 0.16, 0.1, 10);
+    const cL = new THREE.Mesh(capGeo, capMat); cL.rotation.z = Math.PI / 2; cL.position.set(-(o.w * s * 0.5 + 0.3), barY, 0);
+    const cR = cL.clone(); cR.position.x = o.w * s * 0.5 + 0.3;
+    g.add(cL, cR);
+    g.userData.barY = barY;
+  } else if (o.kind === 'plate') {
+    const outer = new THREE.Mesh(new THREE.CylinderGeometry(o.h * s * 0.5, o.h * s * 0.5, 0.14, 16), new THREE.MeshLambertMaterial({ color: 0xc0392b }));
+    outer.rotation.x = Math.PI / 2;
+    g.add(outer);
+    const inner = new THREE.Mesh(new THREE.CylinderGeometry(o.h * s * 0.36, o.h * s * 0.36, 0.16, 16), new THREE.MeshLambertMaterial({ color: 0x8f2a20 }));
+    inner.rotation.x = Math.PI / 2;
+    g.add(inner);
+    const hole = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.18, 10), new THREE.MeshLambertMaterial({ color: 0xf2ede3 }));
+    hole.rotation.x = Math.PI / 2;
+    g.add(hole);
+    g.position.y = o.h * s * 0.5;
+  }
+  return g;
+}
+
+// ── Частицы: маленькие кубики-искры, короткоживущие меши ────────────────────
+const particlePool = [];
+function updateParticleMeshes() {
+  while (particlePool.length < parts.length) {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 0.08), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true }));
+    particleGroup.add(m);
+    particlePool.push(m);
+  }
+  for (let i = 0; i < particlePool.length; i++) {
+    const m = particlePool[i];
+    const p = parts[i];
+    if (!p) { m.visible = false; continue; }
+    m.visible = true;
+    m.position.set(0, Math.max(0.02, toWY(p.y)), toWZ(p.x));
+    m.material.color.set(stripAlpha(p.color));
+    m.material.opacity = Math.max(0, Math.min(1, p.life * 1.6));
+  }
+}
+
+// ── Тосты: DOM-текст, координаты как в 2D-версии (экранные пиксели) ─────────
+const toastLayer = document.getElementById('toast-layer');
+function renderToasts() {
+  for (const ts of toasts) {
+    if (!ts.el) {
+      ts.el = document.createElement('div');
+      ts.el.className = 'toast';
+      ts.el.style.color = ts.color;
+      ts.el.textContent = ts.text;
+      toastLayer.appendChild(ts.el);
+    }
+    ts.el.style.left = Math.max(30, Math.min(W - 30, ts.x)) + 'px';
+    ts.el.style.top = ts.y + 'px';
+    ts.el.style.opacity = String(Math.max(0, 1 - ts.t / 1.2));
+  }
+  // убрать DOM-узлы тостов, которых уже нет в массиве
+  const alive = new Set(toasts.map(ts => ts.el));
+  [...toastLayer.children].forEach(el => { if (!alive.has(el)) el.remove(); });
+}
+
+// ── HUD (DOM) ────────────────────────────────────────────────────────────────
+const hudDist = document.getElementById('hud-dist');
+const hudBest = document.getElementById('hud-best');
+const hudZone = document.getElementById('hud-zone');
+const hudScore = document.getElementById('hud-score');
+const hudPowers = document.getElementById('hud-powers');
+function renderHud() {
+  hudDist.textContent = fmt(dist) + ' м';
+  hudBest.textContent = 'рекорд ' + fmt(Math.max(best, dist)) + ' м';
+  hudZone.textContent = ZONES[zoneIndex()].name;
   const multNow = mult();
-  ctx.fillText('🥤 ' + score + (multNow > 1 ? '  ×' + multNow : ''), W - 20, 40);
-  let ix = W - 20;
-  const pw = (label, color, frac) => {
-    ctx.textAlign = 'right'; ctx.font = "800 12px 'Courier New', monospace"; ctx.fillStyle = color;
-    ctx.fillText(label, ix, 64);
-    ctx.fillStyle = 'rgba(255,255,255,0.15)'; ctx.fillRect(ix - 90, 70, 90, 4);
-    ctx.fillStyle = color; ctx.fillRect(ix - 90, 70, 90 * frac, 4);
-    ix -= 110;
-  };
-  if (P.rageT > 0) pw('ЯРОСТЬ', C_RAGE, P.rageT / 4.2);
-  if (P.magnetT > 0) pw('МАГНИТ', '#67c26a', P.magnetT / 6);
-  if (P.shield) { ctx.textAlign = 'right'; ctx.font = "800 12px 'Courier New', monospace"; ctx.fillStyle = '#7ea8ff'; ctx.fillText('ЩИТ', ix, 64); }
-  ctx.textAlign = 'center'; ctx.font = "800 11px 'Courier New', monospace"; ctx.fillStyle = 'rgba(242,237,227,0.4)';
-  ctx.fillText(z.name, W / 2, 30);
-  ctx.restore();
+  hudScore.textContent = '🥤 ' + fmt(score) + (multNow > 1 ? '  ×' + fmt(multNow) : '');
+  let html = '';
+  if (P.rageT > 0) html += powerBarHtml('ЯРОСТЬ', '#ff5a36', P.rageT / 4.2);
+  if (P.magnetT > 0) html += powerBarHtml('МАГНИТ', '#67c26a', P.magnetT / 6);
+  if (P.shield) html += '<div class="hud-power" style="color:#7ea8ff">ЩИТ</div>';
+  hudPowers.innerHTML = html;
+}
+function powerBarHtml(label, color, frac) {
+  const pct = Math.max(0, Math.min(1, frac)) * 100;
+  return '<div class="hud-power" style="color:' + color + '">' + label +
+    '</div><div class="hud-power-bar"><i style="width:' + pct + '%;background:' + color + '"></i></div>';
+}
+
+// ── Смена биома: цвета пола/стен/декора/тумана плавно интерполируются ──────
+function applyZoneColors() {
+  const zi = zoneIndex(), zb = zoneBlend();
+  const z = ZONES[zi], zn = ZONES[(zi + 1) % ZONES.length];
+  const fog = lerpColorNum(z.fog, zn.fog, zb);
+  const floor = lerpColorNum(z.floor, zn.floor, zb);
+  const wall = lerpColorNum(z.wall, zn.wall, zb);
+  const prop = lerpColorNum(z.prop, zn.prop, zb);
+  scene.fog.color.copy(fog);
+  scene.background.copy(fog);
+  renderer.setClearColor(fog);
+  floorMesh.material.color.copy(floor);
+  wallL.material.color.copy(wall);
+  wallR.material.color.copy(wall);
+  propMesh.material.color.copy(prop);
+  buildingMesh.visible = (z.kind === 'street' || zn.kind === 'street');
+  propMesh.visible = !(z.kind === 'street' && zb > 0.5);
+
+  // Лампы: тёплые в подвале/улице, двухцветный неон в неон-зале
+  const N = lampMesh.count;
+  for (let i = 0; i < N; i++) {
+    const useAlt = z.kind === 'neon' && (i % 2 === 1);
+    const c = new THREE.Color(useAlt ? (z.lamp2 || z.lamp) : z.lamp);
+    lampMesh.setColorAt(i, c);
+  }
+  lampMesh.instanceColor.needsUpdate = true;
+}
+
+// ── Декор по бокам (стойки/лампы/здания) — позиции считаются из dist ───────
+function updateDecor() {
+  const SPACING = 3.2, N = propMesh.count;
+  for (let i = 0; i < N; i++) {
+    const side = (i % 2 === 0) ? -1 : 1;
+    const row = Math.floor(i / 2);
+    const raw = row * SPACING - (dist * UNIT * 0.9) % (SPACING * (N / 2));
+    const z = -((raw % (SPACING * (N / 2)) + SPACING * (N / 2)) % (SPACING * (N / 2)));
+    dummy.position.set(side * 4.6, 0.8, z);
+    dummy.rotation.set(0, 0, 0);
+    dummy.scale.set(1, 1, 1);
+    dummy.updateMatrix();
+    propMesh.setMatrixAt(i, dummy.matrix);
+  }
+  propMesh.instanceMatrix.needsUpdate = true;
+
+  const BSPACING = 3.6, BN = buildingMesh.count;
+  for (let i = 0; i < BN; i++) {
+    const side = (i % 2 === 0) ? -1 : 1;
+    const row = Math.floor(i / 2);
+    const h = 1.4 + ((row * 7) % 5) * 0.7;
+    const raw = row * BSPACING - (dist * UNIT * 0.6) % (BSPACING * (BN / 2));
+    const z = -((raw % (BSPACING * (BN / 2)) + BSPACING * (BN / 2)) % (BSPACING * (BN / 2)));
+    dummy.position.set(side * 5.4, h / 2, z);
+    dummy.rotation.set(0, 0, 0);
+    dummy.scale.set(1, h, 1);
+    dummy.updateMatrix();
+    buildingMesh.setMatrixAt(i, dummy.matrix);
+  }
+  buildingMesh.instanceMatrix.needsUpdate = true;
+
+  const LSPACING = 5.6, LN = lampMesh.count;
+  for (let i = 0; i < LN; i++) {
+    const side = (i % 2 === 0) ? -1 : 1;
+    const row = Math.floor(i / 2);
+    const raw = row * LSPACING - (dist * UNIT * 0.9) % (LSPACING * (LN / 2));
+    const z = -((raw % (LSPACING * (LN / 2)) + LSPACING * (LN / 2)) % (LSPACING * (LN / 2)));
+    dummy.position.set(side * 5.6, 2.6, z);
+    dummy.rotation.set(0, 0, 0);
+    dummy.scale.set(1, 1, 1);
+    dummy.updateMatrix();
+    lampMesh.setMatrixAt(i, dummy.matrix);
+  }
+  lampMesh.instanceMatrix.needsUpdate = true;
+}
+
+// ── Собираемые предметы — InstancedMesh на тип, скрываем лишние ────────────
+function updateItemMeshes() {
+  const buckets = { shaker: [], bar: [], creatine: [], preworkout: [], gainer: [] };
+  for (const it of items) buckets[it.type].push(it);
+  for (const type in itemMeshes) {
+    const mesh = itemMeshes[type];
+    const list = buckets[type];
+    for (let i = 0; i < mesh.count; i++) {
+      const it = list[i];
+      if (!it) { dummy.position.set(0, -50, 0); dummy.scale.setScalar(0.0001); }
+      else {
+        const bob = Math.sin(it.t * 4) * 0.04;
+        const pulse = ITEM_TYPES[type].power ? 1 + 0.15 * Math.sin(it.t * 6) : 1;
+        dummy.position.set(0, Math.max(0.05, toWY(it.y) + bob), toWZ(it.x));
+        dummy.rotation.set(0, it.t * 1.4, type === 'bar' ? -0.2 : 0);
+        dummy.scale.setScalar(pulse);
+      }
+      dummy.updateMatrix();
+      mesh.setMatrixAt(i, dummy.matrix);
+    }
+    mesh.instanceMatrix.needsUpdate = true;
+  }
+}
+
+// ── Препятствия: позиционирование существующих 3D-групп по игровым x/y ─────
+function updateObstacleMeshes() {
+  for (const o of obstacles) {
+    if (!o.mesh) continue;
+    o.mesh.position.set(0, 0, toWZ(o.x + (o.w || 0) / 2));
+    if (o.kind !== 'rack' && o.kind !== 'plate') o.mesh.position.z = toWZ(o.x);
+    if (o.kind === 'plate') o.mesh.rotation.z = o.rot;
+  }
+}
+
+// ── Игрок: процедурная анимация — фаза бега, прыжок, подкат, приземление ────
+let prevOnGround = true, squash = 0;
+function updatePlayerPose(dt) {
+  if (!playerModel) return;
+  const { group, torso, head, legL, legR, armL, armR, B } = playerModel;
+  const sliding = P.slideT > 0;
+  const airborne = !P.onGround;
+
+  group.position.set(0, Math.max(0, toWY(P.y) - toWY(GROUND())), 0);
+  // приземление: squash-stretch
+  if (P.onGround && !prevOnGround) squash = 1;
+  prevOnGround = P.onGround;
+  if (squash > 0) squash = Math.max(0, squash - dt * 4);
+  const sq = 1 - squash * 0.16;
+  group.scale.set(1 + squash * 0.12, sq, 1 + squash * 0.12);
+
+  if (sliding) {
+    torso.rotation.x = -1.15;
+    torso.position.y = 0.62 + 0.42 * Math.cos(1.15) - 0.18;
+    head.rotation.x = 0.5;
+    legL.pivot.rotation.x = -0.9; legR.pivot.rotation.x = -1.3;
+    legL.kneePivot.rotation.x = 0.2; legR.kneePivot.rotation.x = 0.1;
+    armL.pivot.rotation.x = -1.6; armR.pivot.rotation.x = 1.0;
+    armL.kneePivot.rotation.x = 0.3; armR.kneePivot.rotation.x = 0.3;
+  } else if (airborne) {
+    torso.rotation.x = -0.12;
+    torso.position.y = 0.62 + 0.42 - 0.02;
+    head.rotation.x = 0;
+    const tuck = P.vy < 0 ? 0.9 : 0.5;
+    legL.pivot.rotation.x = tuck; legR.pivot.rotation.x = tuck * 0.7;
+    legL.kneePivot.rotation.x = -1.5; legR.kneePivot.rotation.x = -1.3;
+    armL.pivot.rotation.x = -0.7; armR.pivot.rotation.x = -1.0;
+    armL.kneePivot.rotation.x = -0.4; armR.kneePivot.rotation.x = -0.4;
+  } else {
+    const s = Math.sin(P.runPhase * 14);
+    const s2 = Math.sin(P.runPhase * 14 + 1.4);
+    torso.rotation.x = 0.06 + Math.abs(s) * 0.02;
+    torso.position.y = 0.62 + 0.42 - 0.02;
+    head.rotation.x = 0.02;
+    legL.pivot.rotation.x = s * 0.9; legR.pivot.rotation.x = -s * 0.9;
+    legL.kneePivot.rotation.x = Math.max(0, -s) * 1.3; legR.kneePivot.rotation.x = Math.max(0, s) * 1.3;
+    armL.pivot.rotation.x = -s * 0.7; armR.pivot.rotation.x = s * 0.7;
+    armL.kneePivot.rotation.x = Math.max(0, s) * 0.6; armR.kneePivot.rotation.x = Math.max(0, -s) * 0.6;
+  }
+
+  if (P.rageT > 0) {
+    const wob = Math.sin(t * 24) * 0.03;
+    group.rotation.z = wob;
+  } else {
+    group.rotation.z *= 0.8;
+  }
+
+  shadowBlob.mesh.position.z = toWZ(P.x); // всегда 0, но держим на всякий случай
+  shadowBlob.mesh.position.set(0, 0.02, 0);
+  const airHeight = Math.max(0, toWY(P.y) - toWY(GROUND()));
+  const shrink = Math.max(0.35, 1 - airHeight * 0.6);
+  shadowBlob.mesh.scale.set(shrink, shrink, shrink);
+  shadowBlob.mesh.material.opacity = 0.35 * shrink;
+}
+
+// ── Камера: следует за игроком, лёгкий тряс при столкновении/ударе ──────────
+function updateCamera(dt) {
+  const baseY = 2.15, baseZ = 4.6;
+  let shakeX = 0, shakeY = 0;
+  if (shakeT > 0) { shakeX = rnd(-0.12, 0.12) * shakeT; shakeY = rnd(-0.08, 0.08) * shakeT; }
+  const jumpLift = playerModel ? Math.max(0, toWY(P.y) - toWY(GROUND())) * 0.25 : 0;
+  camera.position.set(shakeX, baseY + jumpLift + shakeY, baseZ);
+  camera.lookAt(0, 1.1 + jumpLift * 0.5, -4);
+}
+
+function renderRageOverlay() {
+  const el = document.getElementById('rage-overlay');
+  if (P.rageT > 0) {
+    el.classList.add('active');
+    el.style.background = 'rgba(255,90,54,' + (0.10 + 0.06 * Math.sin(t * 20)) + ')';
+  } else {
+    el.classList.remove('active');
+  }
+}
+
+function render3D(dt) {
+  if (!cv.classList.contains('active') || !renderer) return;
+  applyZoneColors();
+  updateDecor();
+  updateObstacleMeshes();
+  updateItemMeshes();
+  updateParticleMeshes();
+  updatePlayerPose(dt);
+  updateCamera(dt);
+  renderToasts();
+  renderHud();
+  renderRageOverlay();
+  renderer.render(scene, camera);
+}
+
+// ── ИНИЦИАЛИЗАЦИЯ: ждём THREE (основной путь или запасной путь) и WebGL ─────
+function webglAvailable() {
+  try {
+    const c = document.createElement('canvas');
+    return !!(window.WebGLRenderingContext && (c.getContext('webgl') || c.getContext('experimental-webgl')));
+  } catch (e) { return false; }
+}
+function showFatalError() {
+  document.getElementById('error-text').textContent =
+    'Не смог поднять зал. Проверь связь и открой игру заново.';
+  showScreen('screen-error');
+}
+function boot() {
+  if (!window.THREE) { showFatalError(); return; }
+  if (!webglAvailable()) { showFatalError(); return; }
+  try {
+    resize3D0();
+    initThree();
+  } catch (e) {
+    console.error('[game] init error:', e);
+    showFatalError();
+    return;
+  }
+  resetGame();
+  showScreen('screen-select');
+  last = performance.now();
+  requestAnimationFrame(frame);
+}
+function resize3D0() { W = window.innerWidth; H = window.innerHeight; }
+
+let bootTries = 0;
+function waitForThree() {
+  if (window.THREE) { boot(); return; }
+  bootTries += 1;
+  if (bootTries > 100) { showFatalError(); return; } // ~10с — библиотека не подтянулась
+  setTimeout(waitForThree, 100);
 }
 
 // ── ЦИКЛ ────────────────────────────────────────────────────────────────────
 let last = performance.now();
 function frame(now) {
   const dt = Math.min(0.033, (now - last) / 1000); last = now;
-  update(dt); render();
+  update(dt);
+  render3D(dt);
   requestAnimationFrame(frame);
 }
-resetGame();
-requestAnimationFrame(frame);
 document.addEventListener('visibilitychange', () => { last = performance.now(); });
+
+waitForThree();
 </script>
 
 </body>
