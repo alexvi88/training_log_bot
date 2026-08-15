@@ -305,9 +305,15 @@ _MONTHS_RU_GEN = [
 ]
 
 
-def format_day_month_ru(d: dt.date) -> str:
-    """"20 июля" — for prose and button labels, where dd.mm.yyyy reads as a form field."""
-    return f"{d.day} {_MONTHS_RU_GEN[d.month - 1]}"
+def format_day_month_ru(d: dt.date, today: dt.date | None = None) -> str:
+    """"20 июля" — for prose and button labels, where dd.mm.yyyy reads as a form
+    field. Год добавляется только когда он не текущий ("20 июля 2025") — иначе
+    он не несёт новой информации, а на кнопке отъедает место у самой даты."""
+    base = f"{d.day} {_MONTHS_RU_GEN[d.month - 1]}"
+    today = today or dt.date.today()
+    if d.year != today.year:
+        return f"{base} {d.year}"
+    return base
 
 
 def format_duration(seconds: float) -> str:
@@ -432,8 +438,11 @@ def _history_bullets(names: list[str]) -> list[str]:
 
 def build_history_list(
     entries: list[tuple[dt.datetime, list[str], int]],
-    header: str = "📚 <b>История тренировок</b>",
-    footer: str = "<i>Напиши название упражнения, чтобы найти тренировку с ним.</i>",
+    header: str = (
+        "📚 <b>История тренировок</b>\n"
+        "<i>Ищешь конкретное упражнение? Просто напиши его название.</i>"
+    ),
+    footer: str = "",
     empty: str = "Пока нет завершённых тренировок.",
 ) -> str:
     """The history list's body: date, then what was in that session.
@@ -2287,6 +2296,32 @@ def build_bodyweight_screen(logs: list, unit: str = "kg", period_logs: list | No
     while len(kept) > 1 and telegram_length(text) > CAPTION_LIMIT:
         kept = kept[:-1]  # oldest first — the recent entries are the interesting ones
         text = assemble(kept)
+    return text
+
+
+def build_bodyweight_list_screen(
+    rows: list, unit: str, page: int, page_size: int, total: int
+) -> str:
+    """Text for the "✏️ Записи" screen: every raw entry (not collapsed by day,
+    unlike build_bodyweight_screen) so a duplicate same-day weigh-in can be
+    told apart and deleted individually. rows: one page, newest-first (as
+    db.list_bodyweight_logs_page returns).
+    """
+    u = UNIT_LABELS.get(unit, "кг")
+    head = ["✏️ <b>Записи веса</b>", ""]
+    if not rows:
+        head.append("Записей нет.")
+        return "\n".join(head)
+    lines = [
+        f"{i}. {dt.datetime.fromisoformat(r['logged_at']).strftime('%d.%m.%Y %H:%M')} "
+        f"— {format_weight(r['weight'])}{u}"
+        for i, r in enumerate(rows, start=1)
+    ]
+    text = "\n".join(head + lines)
+    if total > page_size:
+        start = page * page_size + 1
+        text += f"\n\n<i>Показано {start}–{start + len(rows) - 1} из {total}</i>"
+    text += "\n\nУдалить — жми номер записи."
     return text
 
 

@@ -21,7 +21,28 @@ from fsm import AITrainerFlow, SettingsFlow
 router = Router(name="settings")
 
 
-async def show_settings(callback: CallbackQuery, state: FSMContext, alert: str | None = None):
+# Guards "settings:unityes" against a double tap: two callbacks from the same
+# user can run concurrently, and the whole rescale (db.get_user →
+# scale_user_set_weights → scale_bodyweight_logs → scale_progression_steps →
+# db.update_user → achievement_sync.resync) takes seconds — long enough for a
+# second tap to still see the old unit and convert the whole history a second
+# time. Same shape as handlers.workout._confirming / _try_claim_weight_confirm.
+_converting: set[int] = set()
+
+
+def _try_claim_converting(user_id: int) -> bool:
+    """Atomically check-and-reserve `_converting` for this user — no `await`
+    between the membership check and the `.add()`, same reasoning as
+    ai_trainer._try_claim_busy."""
+    if user_id in _converting:
+        return False
+    _converting.add(user_id)
+    return True
+
+
+async def show_settings(
+    callback: CallbackQuery, state: FSMContext, alert: str | None = None, show_alert: bool = True
+):
     await state.set_state(SettingsFlow.menu)
     user = await db.get_user(callback.from_user.id)
     kb = keyboards.settings_keyboard(
@@ -32,9 +53,9 @@ async def show_settings(callback: CallbackQuery, state: FSMContext, alert: str |
         show_extra_stats=bool(user["show_extra_stats"]),
         show_mcp=config.mcp_available(),
     )
-    await ui.safe_edit(callback, "🔧 Настройки:", reply_markup=kb)
+    await ui.safe_edit(callback, "🔧 Подстрою бота под тебя.", reply_markup=kb)
     if alert:
-        await callback.answer(alert, show_alert=True)
+        await callback.answer(alert, show_alert=show_alert)
     else:
         await callback.answer()
 
@@ -233,26 +254,37 @@ async def _rescale_active_workout_weight_cache(state: FSMContext, factor: float)
 
 @router.callback_query(F.data == "settings:unityes")
 async def settings_unit(callback: CallbackQuery, state: FSMContext):
+    """Claims `_converting` before the first `await`: two fast taps on
+    "Переключить на lb" both read `db.get_user` while the unit is still "kg"
+    (each holds its own snapshot), so without this guard both would rescale
+    the whole history — the second tap doubling every weight instead of
+    finding nothing left to convert."""
     user_id = callback.from_user.id
-    user = await db.get_user(user_id)
-    old_unit = user["unit"]
-    new_unit = "lb" if old_unit == "kg" else "kg"
-    factor = config.LB_PER_KG if new_unit == "lb" else 1 / config.LB_PER_KG
-    await db.scale_user_set_weights(user_id, factor)
-    await db.scale_bodyweight_logs(user_id, factor)
-    # Шаг прогрессии в программах хранится в единицах пользователя, как и веса
-    # подходов, — без пересчёта «+2.5 кг» после переключения читалось бы как «+2.5 lb».
-    await db.scale_progression_steps(user_id, factor)
-    await db.update_user(user_id, unit=new_unit)
-    await _rescale_active_workout_weight_cache(state, factor)
-    # Badge thresholds are in kilograms and the stored weights just changed unit,
-    # so what the user qualifies for has to be recomputed both ways — resync
-    # revokes as well as awards, unlike the award-only path used at finish time.
-    await achievement_sync.resync(user_id)
-    await show_settings(
-        callback, state,
-        alert=f"Перевёл всё на {new_unit} — историю и рекорды пересчитал сам.",
-    )
+    if not _try_claim_converting(user_id):
+        await callback.answer("Уже пересчитываю — секунду")
+        return
+    try:
+        user = await db.get_user(user_id)
+        old_unit = user["unit"]
+        new_unit = "lb" if old_unit == "kg" else "kg"
+        factor = config.LB_PER_KG if new_unit == "lb" else 1 / config.LB_PER_KG
+        await db.scale_user_set_weights(user_id, factor)
+        await db.scale_bodyweight_logs(user_id, factor)
+        # Шаг прогрессии в программах хранится в единицах пользователя, как и веса
+        # подходов, — без пересчёта «+2.5 кг» после переключения читалось бы как «+2.5 lb».
+        await db.scale_progression_steps(user_id, factor)
+        await db.update_user(user_id, unit=new_unit)
+        await _rescale_active_workout_weight_cache(state, factor)
+        # Badge thresholds are in kilograms and the stored weights just changed unit,
+        # so what the user qualifies for has to be recomputed both ways — resync
+        # revokes as well as awards, unlike the award-only path used at finish time.
+        await achievement_sync.resync(user_id)
+        await show_settings(
+            callback, state,
+            alert=f"Перевёл всё на {keyboards.UNIT_NAMES[new_unit]} — историю и рекорды пересчитал сам.",
+        )
+    finally:
+        _converting.discard(user_id)
 
 
 @router.callback_query(F.data == "settings:unitno")
@@ -291,7 +323,11 @@ async def settings_timezone_set(callback: CallbackQuery, state: FSMContext):
         # он оставался прежним навсегда: путь при завершении тренировки умеет
         # только выдавать, но не отбирать.
         await achievement_sync.resync(callback.from_user.id)
-    await show_settings(callback, state, alert=f"Часовой пояс: {keyboards.format_utc_offset(offset)}")
+    await show_settings(
+        callback, state,
+        alert=f"Поставил тебе {keyboards.format_utc_offset(offset)}",
+        show_alert=False,
+    )
 
 
 @router.callback_query(F.data == "settings:tzback")
@@ -327,7 +363,11 @@ async def settings_formula(callback: CallbackQuery, state: FSMContext):
     user = await db.get_user(callback.from_user.id)
     new_formula = "brzycki" if user["e1rm_formula"] == "epley" else "epley"
     await db.update_user(callback.from_user.id, e1rm_formula=new_formula)
-    await show_settings(callback, state, alert=f"Формула e1RM: {new_formula}")
+    await show_settings(
+        callback, state,
+        alert=f"Перевёл на {keyboards.FORMULA_NAMES[new_formula]}",
+        show_alert=False,
+    )
 
 
 @router.callback_query(F.data == "settings:formulano")

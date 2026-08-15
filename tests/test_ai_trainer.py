@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+import ai_limits
 import ai_trainer
 import config
 import timeutil
@@ -64,6 +65,109 @@ async def _seed_bench_history(db, user_id: int, n_sessions: int = 3, exercise: s
         await db.add_block_exercise(block_id, ex_id, 0)
         await db.add_set(block_id, ex_id, round_index=1, order_in_round=0, weight=100.0 + i, reps=8)
     return ex_id
+
+
+# ---------- paid_call ----------
+#
+# Единая обёртка «проверить лимит → вызвать → залогировать цену» для
+# нестримящих платных вызовов (см. её докстринг). ask()/_completion_round
+# сюда не входят — у них своя, стримящая, история.
+
+
+def _usage_response(content="ответ", prompt_tokens=10, completion_tokens=5):
+    return SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content=content))],
+        usage=SimpleNamespace(prompt_tokens=prompt_tokens, completion_tokens=completion_tokens),
+    )
+
+
+async def test_paid_call_with_no_kind_skips_the_limit_check(user_id, monkeypatch):
+    """kind=None — у шага нет своей квоты (comment_on_workout, weekly_digest,
+    import_history_overview): ai_limits.check не должен звать ся вовсе."""
+    check = AsyncMock()
+    monkeypatch.setattr(ai_trainer.ai_limits, "check", check)
+    coro_factory = AsyncMock(return_value=_usage_response())
+
+    result = await ai_trainer.paid_call(user_id, None, coro_factory)
+
+    check.assert_not_called()
+    coro_factory.assert_awaited_once()
+    assert result.choices[0].message.content == "ответ"
+
+
+async def test_paid_call_logs_cost_after_a_successful_response(fresh_db, user_id, monkeypatch):
+    """Cost-событие не должно теряться — это и есть весь смысл обёртки."""
+    log_cost = AsyncMock()
+    monkeypatch.setattr(ai_trainer.db, "log_cost_event", log_cost)
+    coro_factory = AsyncMock(return_value=_usage_response(prompt_tokens=100, completion_tokens=7))
+
+    await ai_trainer.paid_call(user_id, None, coro_factory, model="grok-test")
+
+    log_cost.assert_awaited_once()
+    assert log_cost.await_args.kwargs["model"] == "grok-test"
+    assert log_cost.await_args.kwargs["prompt_tokens"] == 100
+    assert log_cost.await_args.kwargs["completion_tokens"] == 7
+
+
+async def test_paid_call_still_logs_cost_when_caller_fails_after_the_response(fresh_db, user_id, monkeypatch):
+    """Ответ получен (деньги потрачены), а разбор ответа после paid_call упал —
+    cost-событие всё равно обязано уйти (см. analyze_food и битый JSON)."""
+    log_cost = AsyncMock()
+    monkeypatch.setattr(ai_trainer.db, "log_cost_event", log_cost)
+    coro_factory = AsyncMock(return_value=_usage_response())
+
+    await ai_trainer.paid_call(user_id, None, coro_factory)
+    # Дальше по коду вызывающая сторона (analyze_food) разбирает
+    # response.choices[0].message.content как JSON и может упасть на битом
+    # ответе — но к этому моменту paid_call уже вернулась, а значит cost-
+    # событие из finally уже ушло, независимо от того, что случится дальше.
+    with pytest.raises(ValueError):
+        raise ValueError("битый JSON")
+
+    log_cost.assert_awaited_once()
+
+
+async def test_paid_call_does_not_log_cost_when_the_call_itself_fails(user_id, monkeypatch):
+    """Сетевая ошибка до ответа — платить не за что, cost-событие не пишем."""
+    log_cost = AsyncMock()
+    monkeypatch.setattr(ai_trainer.db, "log_cost_event", log_cost)
+    coro_factory = AsyncMock(side_effect=RuntimeError("сеть легла"))
+
+    with pytest.raises(RuntimeError):
+        await ai_trainer.paid_call(user_id, None, coro_factory)
+
+    log_cost.assert_not_called()
+
+
+async def test_paid_call_blocks_before_calling_when_limit_is_exhausted(user_id, monkeypatch):
+    """Настоящий (не preview) отказ — coro_factory не должен вызываться вовсе:
+    иначе деньги улетают на шаг, который и так решено не показывать."""
+    block = ai_limits.Block(kind=ai_limits.KIND_QUESTION, log="exhausted", user_text="Лимит исчерпан")
+    monkeypatch.setattr(ai_trainer.ai_limits, "check", AsyncMock(return_value=block))
+    coro_factory = AsyncMock(return_value=_usage_response())
+
+    with pytest.raises(ai_trainer.LimitBlocked) as exc_info:
+        await ai_trainer.paid_call(user_id, ai_limits.KIND_QUESTION, coro_factory)
+
+    assert exc_info.value.block is block
+    coro_factory.assert_not_called()
+
+
+async def test_paid_call_preview_still_calls_and_notifies(user_id, monkeypatch):
+    """preview (свой аккаунт, ещё не нажавший «Понятно») не отменяет шаг нигде
+    в проекте — тут так же: вызов идёт, а on_block получает Block."""
+    block = ai_limits.Block(kind=ai_limits.KIND_QUESTION, log="preview", user_text="увидел бы", preview=True)
+    monkeypatch.setattr(ai_trainer.ai_limits, "check", AsyncMock(return_value=block))
+    coro_factory = AsyncMock(return_value=_usage_response())
+    on_block = AsyncMock()
+
+    result = await ai_trainer.paid_call(
+        user_id, ai_limits.KIND_QUESTION, coro_factory, on_block=on_block,
+    )
+
+    coro_factory.assert_awaited_once()
+    on_block.assert_awaited_once_with(block)
+    assert result.choices[0].message.content == "ответ"
 
 
 # ---------- tool executors ----------
@@ -508,7 +612,50 @@ async def test_ask_passes_user_question_and_history(fresh_db, user_id, monkeypat
 
     messages = client.chat.completions.create.await_args.kwargs["messages"]
     assert messages[0]["role"] == "system"
-    assert messages[1:] == [*history, {"role": "user", "content": "новый вопрос"}]
+    today = await ai_trainer._user_today(user_id)
+    assert messages[1:] == [
+        *history,
+        {"role": "user", "content": f"новый вопрос\n\nСегодня {today.isoformat()}."},
+    ]
+
+
+# ---------- _search_block: атомарная бронь общего потолка ----------
+#
+# Личная квота и деньги решаются обычным (read) ai_limits.check — гонка там
+# не критична (см. db.py, увеличение личного и общего счётчиков разведено).
+# Общий потолок поисков делят ВСЕ пользователи сразу, и между read-проверкой
+# и стартом _web_search_findings — секунды, за которые параллельный всплеск
+# от разных людей мог бы пройти ту же самую read-проверку хором. Поэтому
+# _search_block резервирует место в общем счётчике атомарно, прямо тут, ДО
+# возврата "можно" наружу.
+
+
+async def test_search_block_allows_search_and_reserves_the_global_slot(fresh_db, user_id):
+    assert await ai_trainer._search_block(user_id, on_limit=None) is None
+    assert await fresh_db.get_ai_search_count_global() == 1
+
+
+async def test_search_block_blocks_when_the_atomic_reserve_loses_the_race(fresh_db, user_id, monkeypatch):
+    """Read-проверка выше пропустила (потолок ещё не выбран по её данным), но
+    атомарная бронь проиграла гонку — значит место кто-то забрал первым, и
+    поиск обязан не состояться, а не молча перескочить потолок."""
+    monkeypatch.setattr(ai_trainer.db, "try_increment_ai_search_count_global", AsyncMock(return_value=False))
+
+    block = await ai_trainer._search_block(user_id, on_limit=None)
+
+    assert block is not None
+    assert block.kind == ai_limits.KIND_SEARCH_GLOBAL
+
+
+async def test_search_block_reserves_only_once_per_call(fresh_db, user_id, monkeypatch):
+    """Не должно резервировать место дважды за один вызов — иначе один вопрос
+    тратит два слота общего потолка вместо одного."""
+    reserve = AsyncMock(return_value=True)
+    monkeypatch.setattr(ai_trainer.db, "try_increment_ai_search_count_global", reserve)
+
+    await ai_trainer._search_block(user_id, on_limit=None)
+
+    reserve.assert_awaited_once()
 
 
 # ---------- search step (_web_search_findings, server-side-only web/X search) ----------
@@ -560,21 +707,23 @@ async def test_ask_never_performs_live_search_while_the_gate_is_disabled(
 async def test_global_search_cap_still_allows_search_below_it(fresh_db, user_id, monkeypatch):
     """Обратная сторона того же теста: потолок не должен глушить поиск заранее."""
     monkeypatch.setattr(config, "AI_SEARCH_GLOBAL_DAILY_LIMIT", 3)
-    await fresh_db.increment_ai_search_count(555)
+    await fresh_db.try_increment_ai_search_count_global(config.AI_SEARCH_GLOBAL_DAILY_LIMIT)
 
     assert await fresh_db.get_ai_search_count_global() == 1
     assert await fresh_db.get_ai_search_count_global() < config.AI_SEARCH_GLOBAL_DAILY_LIMIT
 
 
-async def test_search_increment_moves_both_the_personal_and_the_global_counter(fresh_db, user_id):
-    """Разъедься счётчики — и один из двух потолков начнёт врать молча."""
+async def test_search_increment_moves_only_the_personal_counter(fresh_db, user_id):
+    """Общий потолок теперь резервируется отдельно и ДО сетевого похода (см.
+    db.try_increment_ai_search_count_global и ai_trainer._search_block) —
+    личный `increment_ai_search_count` двигает только личный счётчик."""
     await fresh_db.increment_ai_search_count(user_id)
     await fresh_db.increment_ai_search_count(user_id)
     await fresh_db.increment_ai_search_count(999)
 
     assert await fresh_db.get_ai_search_count_today(user_id) == 2
     assert await fresh_db.get_ai_search_count_today(999) == 1
-    assert await fresh_db.get_ai_search_count_global() == 3
+    assert await fresh_db.get_ai_search_count_global() == 0
 
 
 async def test_ask_logs_question_without_search_usage(fresh_db, user_id, monkeypatch, caplog):
@@ -622,6 +771,33 @@ async def test_calls_carry_the_cache_routing_header(fresh_db, user_id, monkeypat
 
 async def test_the_cache_header_is_omitted_when_there_is_no_user():
     assert ai_trainer._cache_headers(None) == {}
+
+
+async def test_workout_comment_uses_its_own_cache_slot(fresh_db, user_id, monkeypatch):
+    """WORKOUT_COMMENT_SYSTEM_PROMPT не похож на шапку основного чата — под
+    общим conv-id вытеснял бы её слот на каждый комментарий к тренировке."""
+    workout_id = await fresh_db.create_workout(user_id)
+    await fresh_db.finish_workout(workout_id)
+    client = _fake_client([_response(content="Хорошая тренировка.")])
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+
+    await ai_trainer.comment_on_workout(user_id, workout_id)
+
+    headers = client.chat.completions.create.await_args.kwargs["extra_headers"]
+    assert headers["x-grok-conv-id"] == f"workout_comment-{user_id}"
+
+
+async def test_weekly_digest_uses_its_own_cache_slot(fresh_db, user_id, monkeypatch):
+    """WEEKLY_DIGEST_SYSTEM_PROMPT — тоже свой промпт, и раз в неделю он не
+    должен занимать слот основного разговора."""
+    monkeypatch.setattr(config, "XAI_API_KEY", "test-key")
+    client = _fake_client([_response(content="Итоги недели.")])
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+
+    await ai_trainer.weekly_digest(user_id)
+
+    headers = client.chat.completions.create.await_args.kwargs["extra_headers"]
+    assert headers["x-grok-conv-id"] == f"weekly_digest-{user_id}"
 
 
 async def test_gate_parses_both_verdicts(fresh_db, user_id, monkeypatch):
@@ -731,8 +907,9 @@ async def test_ask_plain_sends_multimodal_content_when_image_present(fresh_db, u
     assert answer == "вижу фото"
     messages = client.chat.completions.create.await_args.kwargs["messages"]
     user_content = messages[-1]["content"]
+    today = await ai_trainer._user_today(user_id)
     assert user_content == [
-        {"type": "text", "text": "что на фото?"},
+        {"type": "text", "text": f"что на фото?\n\nСегодня {today.isoformat()}."},
         {"type": "image_url", "image_url": {"url": _FAKE_IMAGE_DATA_URL}},
     ]
 
@@ -744,7 +921,8 @@ async def test_ask_plain_sends_plain_text_content_without_image(fresh_db, user_i
     await ai_trainer._ask_plain(user_id, "просто текст", history=[])
 
     messages = client.chat.completions.create.await_args.kwargs["messages"]
-    assert messages[-1]["content"] == "просто текст"
+    today = await ai_trainer._user_today(user_id)
+    assert messages[-1]["content"] == f"просто текст\n\nСегодня {today.isoformat()}."
 
 
 async def test_to_xai_messages_includes_image_content():
@@ -821,6 +999,26 @@ async def test_model_clients_are_built_with_a_timeout(monkeypatch):
 
     assert captured["timeout"] == config.AI_REQUEST_TIMEOUT_SECONDS
     assert captured["timeout"] < 600
+    # The SDK's own default is 2 retries — a hung/5xx completion would then get
+    # silently re-fired, up to three billed generations for one user tap.
+    assert captured["max_retries"] == 0
+
+
+async def test_audio_client_disables_sdk_retries(monkeypatch):
+    import ai_trainer as module
+
+    captured = {}
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(module, "AsyncOpenAI", FakeClient)
+    monkeypatch.setattr(module, "_audio_client", None)
+
+    module._get_audio_client()
+
+    assert captured["max_retries"] == 0
 
 
 async def test_food_diary_tool_groups_entries_by_day_with_totals(fresh_db, user_id):
@@ -971,6 +1169,46 @@ async def test_save_athlete_profile_with_nothing_useful_reports_not_saved(fresh_
     assert payload["saved"] is False
 
 
+async def test_weekly_digest_stays_silent_on_the_hard_stop(fresh_db, user_id, monkeypatch):
+    """Фоновая рассылка — не отвечает на чей-то вопрос, поэтому в день HARD-стопа
+    просто молчит, не тратя ни цента, и не шлёт пользователю никакого текста."""
+    import ai_limits
+
+    monkeypatch.setattr(config, "XAI_API_KEY", "test-key")
+    monkeypatch.setattr(ai_limits, "daily_spend_usd", AsyncMock(return_value=10**9))
+    client = _fake_client([_response(content="Итоги недели.")])
+    create = client.chat.completions.create
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+
+    result = await ai_trainer.weekly_digest(user_id)
+
+    assert result is None
+    create.assert_not_awaited()
+
+
+async def test_ensure_workout_comment_stays_silent_on_the_hard_stop(fresh_db, user_id, monkeypatch):
+    """Автокомментарий после тренировки — тоже фоновый шаг: карточка рендерится
+    и без него, так что HARD-стоп по деньгам просто гасит его молча."""
+    import ai_limits
+    import db as dbmod
+
+    monkeypatch.setattr(config, "XAI_API_KEY", "test-key")
+    await dbmod.update_user(user_id, ai_comments_enabled=1)
+    workout_id = await dbmod.create_workout(user_id)
+    await dbmod.finish_workout(workout_id)
+    user = await dbmod.get_user(user_id)
+
+    monkeypatch.setattr(ai_limits, "daily_spend_usd", AsyncMock(return_value=10**9))
+    client = _fake_client([_response(content="Хорошая тренировка.")])
+    create = client.chat.completions.create
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+
+    result = await ai_trainer.ensure_workout_comment(user, workout_id)
+
+    assert result is None
+    create.assert_not_awaited()
+
+
 async def test_weekly_digest_summary_includes_food_when_the_diary_has_any(fresh_db, user_id):
     """The connection between the plate and the barbell is the one thing no
     tracker on the market does — it only works if the Sunday digest can see
@@ -1046,12 +1284,53 @@ async def test_the_trainer_uses_the_athletes_day_not_the_servers(fresh_db, user_
     assert trainer_today == timeutil.user_today(await fresh_db.get_user(user_id))
 
 
-async def test_the_date_in_the_prompt_is_the_athletes_date():
-    import datetime as dt
+async def test_the_system_prompt_carries_no_date():
+    """Дата раньше вклеивалась прямо в системный промпт — самое первое
+    сообщение запроса, общее для ВСЕХ пользователей и КАЖДОГО хода. Смена даты
+    раз в сутки рвала кэшированный префикс целиком (шапка + вся история)
+    сразу у всех. Промпт теперь принимает ноль аргументов и байт-в-байт
+    одинаков в любой день — дата уезжает отдельно, см. _ask_plain."""
+    assert ai_trainer._system_prompt() == ai_trainer.SYSTEM_PROMPT
+    assert "Сегодня" not in ai_trainer._system_prompt()
 
-    prompt = ai_trainer._system_prompt(dt.date(2026, 8, 4))
 
-    assert "Сегодня 2026-08-04." in prompt
+async def test_ask_plain_appends_the_date_to_the_last_user_message(fresh_db, user_id, monkeypatch):
+    """Дата теперь едет в хвосте последнего user-сообщения, а не в системном
+    промпте — так меняется только этот, самый последний ход запроса, а общая
+    шапка (система + схемы инструментов) остаётся стабильной изо дня в день."""
+    await fresh_db.update_user(user_id, tz_offset=0)
+    client = _fake_client([_response(content="ок")])
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+
+    await ai_trainer._ask_plain(user_id, "Что сегодня делать?", history=[])
+
+    messages = client.chat.completions.create.await_args_list[-1].kwargs["messages"]
+    assert messages[0]["role"] == "system"
+    assert "Сегодня" not in messages[0]["content"]
+    last_user = messages[-1]
+    assert last_user["role"] == "user"
+    today = await ai_trainer._user_today(user_id)
+    assert last_user["content"] == f"Что сегодня делать?\n\nСегодня {today.isoformat()}."
+
+
+async def test_wire_history_keeps_the_dated_question_for_the_next_turn(fresh_db, user_id, monkeypatch):
+    """on_wire сохраняет именно то, что уехало модели — включая дату, вшитую в
+    хвост user-сообщения. Следующий вопрос допишет уже свежую дату, а этот ход
+    честно остаётся с той датой, которой был задан."""
+    client = _fake_client([_response(content="ок")])
+    monkeypatch.setattr(ai_trainer, "_get_client", lambda: client)
+    wires = []
+
+    async def capture(wire):
+        wires.append(wire)
+
+    await ai_trainer._ask_plain(user_id, "Вопрос", history=[], on_wire=capture)
+
+    wire = wires[0]
+    assert wire[0]["role"] == "user"
+    today = await ai_trainer._user_today(user_id)
+    assert wire[0]["content"] == f"Вопрос\n\nСегодня {today.isoformat()}."
+    assert wire[1] == {"role": "assistant", "content": "ок"}
 
 
 async def test_the_search_prompts_carry_a_date_too():

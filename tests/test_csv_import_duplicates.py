@@ -137,8 +137,8 @@ async def test_overlapping_file_imports_only_the_new_dates(fresh_db, user_id, sq
     assert await _totals(db, user_id) == (2, 3)
     dates = await db.list_finished_workout_dates(user_id)
     assert dates == ["2026-05-04", "2026-05-06"]
-    assert "Импортировано 1 тренировка" in alerts[-1]
-    assert "пропущено 1" in alerts[-1]
+    assert "Загрузил 1 тренировка" in alerts[-1]
+    assert "пропустил 1" in alerts[-1]
 
 
 async def test_double_tap_on_save_does_not_import_the_file_twice(

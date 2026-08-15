@@ -123,9 +123,10 @@ async def import_start(callback: CallbackQuery, state: FSMContext):
     await ui.safe_edit(
         callback,
         "📥 Пришли CSV-файл с колонками «дата, упражнение, вес, повторы».\n\n"
-        "Переезжаешь из Hevy — Settings → Export & Import Data, экспорт придёт "
-        "на почту файлом CSV.\n"
-        "Из Strong — Settings → Export Strong Data, файл сохранится на телефон.\n"
+        "Где взять экспорт:\n"
+        "• Hevy — Settings → Export & Import Data, файл CSV придёт на почту.\n"
+        "• Strong — Profile → Settings → Export Workouts, файл сохранится "
+        "на телефон.\n\n"
         "И тот и другой присылай мне как есть, руками подгонять ничего не надо.",
         reply_markup=keyboards.cancel_keyboard("imp:cancel"),
     )
@@ -236,7 +237,7 @@ async def _ask_next_mapping(event, state: FSMContext) -> bool:
 async def import_file_received(message: Message, state: FSMContext):
     document = message.document
     if not document.file_name.lower().endswith(".csv"):
-        await message.reply("Нужен файл с расширением .csv")
+        await message.reply("Пришли файл с расширением .csv")
         return
     buf = await message.bot.download(document)
     raw = buf.read()
@@ -804,11 +805,11 @@ async def _do_import_save(callback: CallbackQuery, state: FSMContext) -> None:
     # экрана, полный счёт остаётся в alert'е, как и раньше.
     n = imported
     word = formatting.plural_ru(n, ("тренировка", "тренировки", "тренировок"))
-    alert = f"✅ Импортировано {n} {word}"
+    alert = f"✅ Загрузил {n} {word}"
     if skip:
-        # Пропуск озвучиваем в том же алерте: иначе «импортировано 5» вместо
+        # Пропуск озвучиваем в том же алерте: иначе «загрузил 5» вместо
         # ожидаемых 25 выглядит как потеря данных.
-        alert += f", пропущено {len(skip)} (уже были в истории)"
+        alert += f", пропустил {len(skip)} (уже были в истории)"
     if failed:
         alert += f", не получилось {failed} — попробуй прислать файл ещё раз"
     from handlers.workout import _show_main_menu
@@ -823,4 +824,4 @@ async def import_cancel(callback: CallbackQuery, state: FSMContext):
     await clear_state_keep_workout(state)
     from handlers.settings import show_settings
     await show_settings(callback, state)
-    await callback.answer("Отменено")
+    await callback.answer("Отменил")

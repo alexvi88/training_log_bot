@@ -160,7 +160,7 @@ async def resolve_cancel_all(callback: CallbackQuery, state: FSMContext):
     await clear_state_keep_ai(state)
     from handlers.settings import show_settings
     await show_settings(callback, state)
-    await callback.answer("Отменено")
+    await callback.answer("Отменил")
 
 
 @router.message(StateFilter(ResolveFlow.picking), F.text)

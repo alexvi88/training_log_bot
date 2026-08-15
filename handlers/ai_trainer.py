@@ -24,6 +24,7 @@ import exercise_mentions
 import formatting
 import keyboards
 import program_mentions
+import progress_ui
 import running_texts
 import timeutil
 import ui
@@ -485,7 +486,7 @@ async def ai_keyboard(
 async def menu_ai(callback: CallbackQuery, state: FSMContext):
     if not ai_trainer.is_configured():
         await callback.answer(
-            "AI-тренер пока не подключён — это к админу бота.",
+            "AI-тренер пока не подключён — загляни позже.",
             show_alert=True,
         )
         return
@@ -543,6 +544,20 @@ BUILD_PROGRAM_SEED = (
     "чтобы они пришли по одному, — и только после моих ответов собирай программу."
 )
 
+# Чек-лист для progress_ui.run_progress на самом долгом вызове сценария
+# «Составить программу» — том, что уходит СРАЗУ после ответов на опросник (см.
+# _finish_setup) и реально дёргает propose_program: опросник сам по себе не
+# трогает модель и идёт мгновенно (see test_ai_setup_questions.py), а вот этот
+# ход может пройти по истории тренировок, каталогу упражнений и прогрессии —
+# десятки секунд. Тексты без канцелярита и от первого лица — как и весь
+# TONE_OF_VOICE.md; многоточие на активном этапе дорисовывает сам render().
+PROGRAM_PROGRESS_STAGES = [
+    "Посмотрел твою историю",
+    "Подобрал упражнения под цель",
+    "Расставляю веса и повторы",
+    "Проверяю всё в последний раз",
+]
+
 BUILD_WORKOUT_INTRO = (
     "🤖 <b>СОБИРАЕМ ТРЕНИРОВКУ НА СЕГОДНЯ.</b>\n\n"
     "Гляну, что у тебя отдохнуло, и спрошу пару вещей — а дальше по ней и пойдём."
@@ -566,7 +581,12 @@ BUILD_WORKOUT_SEED = (
 
 
 async def _start_ai_scenario(
-    callback: CallbackQuery, state: FSMContext, intro: str, seed: str, keep_message: bool = False
+    callback: CallbackQuery,
+    state: FSMContext,
+    intro: str,
+    seed: str,
+    keep_message: bool = False,
+    scenario: Optional[str] = None,
 ) -> None:
     """Кнопка, которая сама начинает разговор с тренером за пользователя.
 
@@ -584,10 +604,16 @@ async def _start_ai_scenario(
     Дневной лимит проверяется ДО подмены экрана: раньше бодрое «ОКЕЙ, СОБИРАЕМ»
     успевало встать на место меню, и уже под ним приезжал отказ — человек терял
     экран, с которого пришёл, ради обещания, которое бот тут же забирал назад.
+
+    `scenario` едет в FSM вместе с опросником (см. _deliver_setup) и доживает
+    до _finish_setup — там по нему решают, показывать ли анимированный
+    progress_ui вместо голого «тренер думает» на самом долгом вызове сценария.
+    None — как у «Тренировка на сегодня»: тот вызов сам по себе короче, а
+    отдельный чек-лист под него ещё не расписан.
     """
     if not ai_trainer.is_configured():
         await callback.answer(
-            "AI-тренер пока не подключён — это к админу бота.",
+            "AI-тренер пока не подключён — загляни позже.",
             show_alert=True,
         )
         return
@@ -605,8 +631,7 @@ async def _start_ai_scenario(
             await callback.answer()
         else:
             await callback.answer(
-                "На сегодня лимит вопросов исчерпан 😮\u200d💨 Дай мне передохнуть, "
-                "возвращайся завтра — а пока забери готовую в «✨ Готовые программы».",
+                f"{ai_limits.QUESTION_LIMIT_TEXT} А пока забери готовую в «✨ Готовые программы».",
                 show_alert=True,
             )
             return
@@ -633,7 +658,7 @@ async def _start_ai_scenario(
             delete=not keep_message,
         )
         await _handle_question(
-            screen, state, seed, history_question=seed, user_id=user_id,
+            screen, state, seed, history_question=seed, user_id=user_id, scenario=scenario,
         )
     finally:
         _busy.discard(user_id)
@@ -642,7 +667,7 @@ async def _start_ai_scenario(
 @router.callback_query(F.data == "ai:buildprog")
 async def ai_build_program(callback: CallbackQuery, state: FSMContext):
     """«Составить с AI-тренером» в 🗂 Программы — многодневка на будущее."""
-    await _start_ai_scenario(callback, state, BUILD_PROGRAM_INTRO, BUILD_PROGRAM_SEED)
+    await _start_ai_scenario(callback, state, BUILD_PROGRAM_INTRO, BUILD_PROGRAM_SEED, scenario="program")
 
 
 @router.callback_query(F.data == "ann:buildprog")
@@ -654,7 +679,7 @@ async def announcement_build_program(callback: CallbackQuery, state: FSMContext)
     и решает это не пользователь, а то, откуда кнопка приехала.
     """
     await _start_ai_scenario(
-        callback, state, BUILD_PROGRAM_INTRO, BUILD_PROGRAM_SEED, keep_message=True
+        callback, state, BUILD_PROGRAM_INTRO, BUILD_PROGRAM_SEED, keep_message=True, scenario="program"
     )
 
 
@@ -732,7 +757,7 @@ async def ai_video_hint(callback: CallbackQuery, state: FSMContext):
     разборе «сними сбоку» человек читает уже потратив попытку.
     """
     if not config.video_analysis_available():
-        await callback.answer("Разбор видео пока не подключён — это к админу бота.", show_alert=True)
+        await callback.answer("Разбор видео пока не подключён — загляни позже.", show_alert=True)
         return
     await state.set_state(AITrainerFlow.chatting)
     await callback.message.answer(
@@ -1720,11 +1745,11 @@ async def _finalize_program_save(
 # Тексты честного отказа при упавшем сохранении: кнопка «ещё раз» рядом, потому
 # что черновик к этому моменту уже возвращён в FSM и она снова живая.
 _SAVE_FAILED_NEW = (
-    "⚠️ Не получилось сохранить программу — ничего не записал.\n"
+    "⚠️ Не смог сохранить программу — ничего не записал.\n"
     "Предложение тренера живо: нажми кнопку ещё раз."
 )
 _SAVE_FAILED_REPLACE = (
-    "⚠️ Не получилось обновить программу: часть новых дней могла успеть добавиться "
+    "⚠️ Не смог обновить программу: часть новых дней могла успеть добавиться "
     "рядом со старыми — загляни в «🗂 Программы» и проверь.\n"
     "Предложение тренера живо: нажми кнопку ещё раз."
 )
@@ -1867,6 +1892,14 @@ async def ai_comment_workout(callback: CallbackQuery, state: FSMContext):
 
     Работает и на свежезавершённой карточке, и на карточке из истории: правит то же
     сообщение на месте, убирая из клавиатуры только саму эту кнопку.
+
+    Когда комментарий ещё не сгенерирован, тап — платный вызов
+    (ai_trainer.comment_on_workout), и его накрывают те же замки, что и у любого
+    другого AI-входа: `_try_claim_busy` от двойного тапа (без него два быстрых
+    тапа уходят в модель оба) и `ai_limits.hard_stop_block` от HARD-стопа по
+    деньгам (личной квоты под эту кнопку нет и заводить новую ради одной кнопки
+    не стоит — см. её докстринг). Уже сохранённый комментарий ничего не стоит и
+    оба замка не трогает.
     """
     workout_id = int(callback.data.split(":")[2])
     workout = await db.get_workout(workout_id)
@@ -1876,17 +1909,32 @@ async def ai_comment_workout(callback: CallbackQuery, state: FSMContext):
     if not ai_trainer.is_configured():
         await callback.answer("AI-тренер не настроен.", show_alert=True)
         return
-    await callback.answer()
 
+    user_id = callback.from_user.id
     comment = workout["ai_comment"]
     if not comment:
-        try:
-            comment = await ai_trainer.comment_on_workout(callback.from_user.id, workout_id)
-        except Exception:
-            logger.exception("AI trainer workout comment failed for workout %s", workout_id)
-            await callback.message.answer("⚠️ Не получилось получить комментарий, попробуй ещё раз позже.")
+        if not _try_claim_busy(user_id):
+            await callback.answer("Секунду, ещё думаю над прошлым вопросом 😅", show_alert=True)
             return
-        await db.set_workout_ai_comment(workout_id, comment)
+        try:
+            block = await ai_limits.hard_stop_block()
+            if block is not None:
+                logger.info("AI workout comment blocked for user %s: %s", user_id, block.log)
+                await callback.answer()
+                await ai_limits.reply(callback.message, block, reply_markup=await ai_keyboard(user_id))
+                return
+            await callback.answer()
+            try:
+                comment = await ai_trainer.comment_on_workout(user_id, workout_id)
+            except Exception:
+                logger.exception("AI trainer workout comment failed for workout %s", workout_id)
+                await callback.message.answer("⚠️ Не смог получить комментарий — попробуй ещё раз позже.")
+                return
+            await db.set_workout_ai_comment(workout_id, comment)
+        finally:
+            _busy.discard(user_id)
+    else:
+        await callback.answer()
 
     comment_block = formatting.build_ai_comment_block(comment)
     new_text = (callback.message.html_text or "") + "\n" + comment_block
@@ -2063,6 +2111,8 @@ async def _handle_question(
     image_data_url: Optional[str] = None,
     user_id: Optional[int] = None,
     video_context: Optional[str] = None,
+    scenario: Optional[str] = None,
+    progress_stages: Optional[Sequence[str]] = None,
 ) -> None:
     """Общая логика для текстовых и фото-вопросов: запрос к модели, история, отправка ответа.
 
@@ -2073,6 +2123,17 @@ async def _handle_question(
     user_id — по умолчанию берётся из message.from_user.id (обычное сообщение
     от пользователя); передаётся явно там, где message — это экран бота, а не
     реплика пользователя (см. ai_build_program: message.from_user там был бы ботом).
+
+    scenario — метка сценария («program» и т.п.), которая едет дальше в
+    _deliver_setup и живёт в FSM опросника до _finish_setup: только там она и
+    нужна, чтобы решить, показывать ли progress_ui на самом долгом вызове. Этот
+    конкретный ход её не использует вовсе.
+
+    progress_stages — если задан, вместо ротации фраз из running_texts.py
+    placeholder крутит анимированный чек-лист progress_ui (см. модуль): растущий
+    фейковый процент и галочки по этапам. Задаёт его только _finish_setup —
+    тот самый ход, что реально уходит за составом программы; на всех остальных
+    (включая опросник и обычный чат) placeholder остаётся прежним.
 
     Caller owns the `_busy` reservation end-to-end (claimed atomically before
     any await, released in the caller's `finally`) — this function assumes the
@@ -2099,14 +2160,21 @@ async def _handle_question(
 
     # The daily counter is charged only once there's an answer to show for it —
     # a provider outage shouldn't cost the user one of their questions.
-    # Пул фраз подбирается по теме вопроса (питание, программа, конкретное
-    # упражнение и т.д. — см. running_texts.py), чтобы даже самый первый
-    # placeholder до единого tool-call звучал в тему, а не наугад.
-    running_pool = running_texts.pool_for(question)
-    running_text = running_texts.pick(running_pool)
-    placeholder = await message.answer(running_text)
-    display = _RunningDisplay(placeholder, running_text, running_pool)
-    running_task = asyncio.create_task(display.cycle_idle())
+    if progress_stages:
+        # Сборка программы (см. _finish_setup): вместо ротации фраз — фейковый
+        # процент и чек-лист этапов, см. progress_ui. Реальные статусы ask()
+        # (веб-поиск и т.п.) тут не показываем нарочно — на этом ходу они
+        # спорили бы с чек-листом за один и тот же placeholder.
+        placeholder = await message.answer(progress_ui.initial_text(progress_stages))
+        display = None
+    else:
+        # Пул фраз подбирается по теме вопроса (питание, программа, конкретное
+        # упражнение и т.д. — см. running_texts.py), чтобы даже самый первый
+        # placeholder до единого tool-call звучал в тему, а не наугад.
+        running_pool = running_texts.pool_for(question)
+        running_text = running_texts.pick(running_pool)
+        placeholder = await message.answer(running_text)
+        display = _RunningDisplay(placeholder, running_text, running_pool)
 
     async def on_draft_start() -> None:
         # The native draft is now live and telling the same story ("тренер
@@ -2180,18 +2248,27 @@ async def _handle_question(
         with suppress(TelegramAPIError):
             await ai_limits.reply(message, block)
 
+    # Определена заранее — на случай, если создание задачи ниже упадёт ДО
+    # присвоения (не должно, но тогда finally не свалился бы с NameError).
+    running_task: Optional[asyncio.Task] = None
     try:
-        answer = await ai_trainer.ask(
-            user_id, question, history, image_data_url=image_data_url,
-            on_status=display.set_status, on_program=collect_program,
-            on_action=collect_action, on_questions=collect_questions,
-            on_chunk=streamer.push,
-            video_context=video_context, on_reasoning=collect_reasoning,
-            on_wire=collect_wire, on_limit=warn_about_limit,
+        ask_task = asyncio.create_task(
+            ai_trainer.ask(
+                user_id, question, history, image_data_url=image_data_url,
+                on_status=(display.set_status if display else None), on_program=collect_program,
+                on_action=collect_action, on_questions=collect_questions,
+                on_chunk=streamer.push,
+                video_context=video_context, on_reasoning=collect_reasoning,
+                on_wire=collect_wire, on_limit=warn_about_limit,
+            )
         )
+        running_task = asyncio.create_task(
+            display.cycle_idle() if display else progress_ui.run_progress(placeholder, ask_task, progress_stages)
+        )
+        answer = await ask_task
     except Exception:
         logger.exception("AI trainer request failed for user %s", user_id)
-        error_text = "⚠️ Не получилось получить ответ, попробуй ещё раз чуть позже."
+        error_text = "⚠️ Не смог получить ответ — попробуй ещё раз чуть позже."
         error_kb = await ai_keyboard(user_id)
         try:
             await placeholder.edit_text(error_text, reply_markup=error_kb)
@@ -2203,12 +2280,19 @@ async def _handle_question(
             await message.answer(error_text, reply_markup=error_kb)
         return
     finally:
-        running_task.cancel()
-        with suppress(asyncio.CancelledError):
-            await running_task
+        if running_task is not None:
+            running_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await running_task
         await streamer.close()
 
-    await db.increment_ai_question_count(user_id)
+    # Атомарно: UPDATE ... WHERE count < limit одним выражением, а не
+    # «прочитал (asked_today выше) → посчитал → увеличил» — тот же счётчик,
+    # который раньше двигался обычным инкрементом, теперь не может перескочить
+    # свой потолок (см. db.try_increment_ai_question_count). Списание
+    # по-прежнему ПОСЛЕ ответа: сорвавшийся у провайдера запрос не должен
+    # стоить человеку вопроса.
+    await db.try_increment_ai_question_count(user_id, config.AI_QUESTION_DAILY_LIMIT)
     # Warn before the wall, not at it — the old behaviour only ever mentioned the
     # limit by refusing.
     left = config.AI_QUESTION_DAILY_LIMIT - (asked_today + 1)
@@ -2318,6 +2402,7 @@ async def _handle_question(
         message, state, user_id,
         [] if program_draft else setup_questions,
         goal=history_question,
+        scenario=scenario,
     )
 
 
@@ -2477,17 +2562,25 @@ async def _deliver_setup(
     user_id: int,
     questions: list[dict],
     goal: str,
+    scenario: Optional[str] = None,
 ) -> None:
     """Разложить собранный моделью опросник в FSM и показать первый вопрос.
 
     Сюда же стекаются все три исхода хода: опросника нет (круг закрыт), опросник
     есть (показываем), опросник есть, но круги кончились (уходим в сборку).
+
+    `scenario` переживает круги ровно как `goal` — тот же приём (see ниже
+    `previous_scenario or scenario`): он взят с самого первого хода
+    (_start_ai_scenario), а на втором-третьем круге history_question — уже не
+    исходная просьба, и передавать сюда None значило бы потерять метку сценария
+    посередине опросника.
     """
     data = await state.get_data()
     stored = data.get("ai_setup")
     previous: dict = stored if isinstance(stored, dict) else {}
     rounds = int(previous.get("rounds") or 0)
     previous_goal = previous.get("goal")
+    resolved_scenario = scenario or previous.get("scenario")
 
     if not questions:
         # Тренер ответил без нового опросника — цикл уточнений закрыт, и
@@ -2509,11 +2602,20 @@ async def _deliver_setup(
         # Круги кончились. Счётчик уводим ЗА потолок до вызова модели — это и
         # есть тормоз рекурсии: опросник, который тренер соберёт в ответ на это
         # сообщение, попадёт в ветку выше и никого не спросит.
-        await state.update_data(ai_setup={"rounds": rounds + 1, "goal": previous_goal})
+        await state.update_data(
+            ai_setup={"rounds": rounds + 1, "goal": previous_goal, "scenario": resolved_scenario}
+        )
         text = SETUP_ENOUGH_FRAME
         if previous_goal:
             text = f"{text}\nИсходная задача: {previous_goal}"
-        await _handle_question(message, state, text, history_question=text, user_id=user_id)
+        # Этот ход тоже реально уходит собирать программу (SETUP_ENOUGH_FRAME
+        # прямо требует вызвать propose_program) — поэтому тот же чек-лист, что
+        # и у обычного _finish_setup, а не голое «тренер думает».
+        await _handle_question(
+            message, state, text, history_question=text, user_id=user_id,
+            scenario=resolved_scenario,
+            progress_stages=PROGRAM_PROGRESS_STAGES if resolved_scenario == "program" else None,
+        )
         return
 
     # Прошлый опросник мог остаться брошенным на середине — его вопрос висит в
@@ -2536,26 +2638,40 @@ async def _deliver_setup(
             # значило бы вкладывать её саму в себя.
             "goal": previous_goal or goal,
             "rounds": rounds + 1,
+            "scenario": resolved_scenario,
         }
     )
     await _show_setup_question(message, state)
 
 
 async def _finish_setup(target: Message, state: FSMContext, user_id: int, setup: dict) -> None:
-    """Опросник закончился — уходим за программой одним обычным вызовом модели."""
+    """Опросник закончился — уходим за программой одним обычным вызовом модели.
+
+    Это и есть самый долгий вызов всего сценария «Составить программу» — тот,
+    что реально дёргает propose_program (опросник до этого момента модель ни
+    разу не трогал, см. модульный докстринг файла с тестами опросника). Если
+    сценарий помечен как «program» (см. _start_ai_scenario), placeholder крутит
+    progress_ui вместо голого «тренер думает»; для остальных (в т.ч. «Тренировка
+    на сегодня») поведение не меняется.
+    """
     text = _setup_answers_text(setup)
+    scenario = setup.get("scenario")
     # Гасим опросник ДО вызова модели: тренер думает десятки секунд, и всё это
     # время человек может дописать ещё реплику — она обязана уехать вопросом, а
     # не ответом в опросник, которого уже нет. Счётчик кругов переживает: он и
     # есть потолок (см. SETUP_MAX_ROUNDS), а вопросов в нём не остаётся, так что
     # перехватывать сообщения он не будет (см. _active_setup).
     await state.update_data(
-        ai_setup={"rounds": int(setup.get("rounds") or 1), "goal": setup.get("goal")}
+        ai_setup={"rounds": int(setup.get("rounds") or 1), "goal": setup.get("goal"), "scenario": scenario}
     )
     # В ai_history и в дневник переписки это уезжает как есть — человеческими
     # строчками «вопрос — ответ», а не служебным JSON: get_full_chat_history
     # читают и модель, и мы.
-    await _handle_question(target, state, text, history_question=text, user_id=user_id)
+    await _handle_question(
+        target, state, text, history_question=text, user_id=user_id,
+        scenario=scenario,
+        progress_stages=PROGRAM_PROGRESS_STAGES if scenario == "program" else None,
+    )
 
 
 async def _record_setup_answer(
@@ -2758,7 +2874,9 @@ async def ai_photo_question(message: Message, state: FSMContext):
 
         image_data_url = await _download_photo_as_data_url(message)
         if image_data_url is None:
-            await message.reply("Фото слишком большое, пришли поменьше.")
+            await message.reply(
+                f"Фото слишком большое — уложись в {MAX_IMAGE_BYTES // (1024 * 1024)} МБ."
+            )
             return
 
         history_question = f"[фото] {caption}" if caption else "[прислал фото]"
@@ -2954,8 +3072,28 @@ async def ai_video_question(message: Message, state: FSMContext):
             if not block.preview:
                 return
 
+        # Разбор ролика сам по себе платный (video_analysis.analyze), а ответ на
+        # него дальше идёт через _handle_question — которая накрыта своей же
+        # квотой вопросов и списывает её ТОЛЬКО при готовом ответе. Раньше эта
+        # квота проверялась именно там, то есть уже ПОСЛЕ скачивания и разбора:
+        # видео с исчерпанной квотой вопросов всё равно оплачивалось целиком, а
+        # честный отказ приходил только на последнем шаге. Проверяем обе квоты
+        # здесь, до единого байта трафика.
+        block = await ai_limits.check(user_id, ai_limits.KIND_QUESTION)
+        if block is not None and not block.preview:
+            # preview (свой аккаунт) не роняет разбор — предупреждение о квоте
+            # вопросов покажет _handle_question, который этой квотой и владеет;
+            # здесь держим только настоящий блок, чтобы не платить за разбор
+            # ролика, ответ на который всё равно не уйдёт.
+            logger.info("AI video blocked (question quota) for user %s: %s", user_id, block.log)
+            await ai_limits.reply(message, block, reply_markup=await ai_keyboard(user_id))
+            return
+
         if video.file_size and video.file_size > config.MAX_VIDEO_BYTES:
-            await message.reply("Файл тяжёлый, я такой не вытяну. Сними покороче или полегче.")
+            await message.reply(
+                f"Файл тяжёлый, я такой не вытяну — уложись в "
+                f"{config.MAX_VIDEO_BYTES // (1024 * 1024)} МБ. Сними покороче или полегче."
+            )
             return
 
         caption = (message.caption or "").strip()
@@ -3089,7 +3227,10 @@ async def ai_voice_question(message: Message, state: FSMContext):
 
         voice_file = await _download_voice_as_file(message)
         if voice_file is None:
-            await message.reply("Голосовое слишком большое, запиши покороче.")
+            await message.reply(
+                f"Голосовое слишком большое — уложись в "
+                f"{MAX_VOICE_BYTES // (1024 * 1024)} МБ, запиши покороче."
+            )
             return
 
         try:

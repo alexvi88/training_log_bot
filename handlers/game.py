@@ -33,7 +33,7 @@ async def cmd_game(message: Message):
     if not config.mcp_available():
         # Без публичного адреса страницу игры никто не отдаёт (см. main.py:
         # HTTP-сервер поднимается только вместе с MCP).
-        await message.answer("Игра пока не подключена — это к админу бота.")
+        await message.answer("Игра пока не подключена — загляни позже.")
         return
     best = await db.get_game_best_distance(message.from_user.id)
     text = INTRO + (f"\n\nТвой рекорд — {best} м. Перебьёшь?" if best else "")

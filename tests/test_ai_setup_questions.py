@@ -94,6 +94,7 @@ async def _state_with_setup(
     answers=(),
     rounds: int = 1,
     goal: str = "Хочу собрать программу тренировок",
+    scenario: str | None = None,
 ) -> FSMContext:
     state = await _make_state(user_id)
     await state.update_data(
@@ -104,6 +105,7 @@ async def _state_with_setup(
             "goal": goal,
             "rounds": rounds,
             "msg_id": 777,
+            "scenario": scenario,
         }
     )
     return state
@@ -309,6 +311,77 @@ async def test_last_answer_calls_model_once_with_every_answer(fresh_db, user_id,
     assert "Хочу собрать программу тренировок" in asked
     # Опросник погашен — следующая реплика человека уедет вопросом тренеру.
     assert ai_trainer._active_setup(await state.get_data()) is None
+
+
+# ---------- анимированный progress_ui на сценарии «Составить программу» ----------
+
+
+async def test_finish_setup_shows_progress_checklist_for_program_scenario(fresh_db, user_id, monkeypatch):
+    """Финальный вызов _finish_setup — самый долгий во всём сценарии (см. его
+    докстринг): помеченный scenario="program" опросник крутит progress_ui
+    вместо голого "тренер думает", а по завершении заменяет экран ответом."""
+    monkeypatch.setattr(ai_trainer.ai_trainer, "ask", _ask_recording([]))
+    state = await _state_with_setup(
+        user_id, idx=2, answers=["3 дня", "час-полтора"], scenario="program"
+    )
+    chat = _Chat(user_id)
+
+    await ai_trainer.ai_question(chat.user_message("болит правое колено"), state)
+
+    # Единственное отправленное сообщение — placeholder progress_ui, дальше
+    # готовый ответ приходит через edit_text того же сообщения.
+    assert len(chat.sent) == 1
+    placeholder = chat.sent[0]
+    assert placeholder.text == ai_trainer.progress_ui.initial_text(ai_trainer.PROGRAM_PROGRESS_STAGES)
+    assert "0%" in placeholder.text
+    assert "Посмотрел твою историю" in placeholder.text
+
+    placeholder.message.edit_text.assert_awaited()
+    edit_texts = [call.args[0] for call in placeholder.message.edit_text.await_args_list]
+    # Ответ подошёл быстрее анимации (fake_ask ничего не ждёт) — прыжок сразу
+    # на 100% со всеми галочками, а последним всегда идёт настоящий ответ.
+    assert any("100%" in text for text in edit_texts)
+    assert "Понял, что уже знаю из истории" in edit_texts[-1]
+
+
+async def test_finish_setup_keeps_plain_placeholder_without_program_scenario(
+    fresh_db, user_id, monkeypatch
+):
+    """Опросник без метки сценария (например, начатый вручную словами, а не
+    кнопкой «Составить программу») не должен внезапно обрасти чек-листом —
+    остаётся прежнее поведение (running_texts)."""
+    monkeypatch.setattr(ai_trainer.ai_trainer, "ask", _ask_recording([]))
+    state = await _state_with_setup(user_id, idx=2, answers=["3 дня", "час-полтора"], scenario=None)
+    chat = _Chat(user_id)
+
+    await ai_trainer.ai_question(chat.user_message("болит правое колено"), state)
+
+    assert len(chat.sent) == 1
+    placeholder = chat.sent[0]
+    assert "%" not in placeholder.text
+    assert placeholder.text != ai_trainer.progress_ui.initial_text(ai_trainer.PROGRAM_PROGRESS_STAGES)
+
+
+async def test_finish_setup_progress_screen_survives_provider_failure(fresh_db, user_id, monkeypatch):
+    """Если сам вызов модели упал, анимация не должна зависнуть на моменте
+    последнего тика — placeholder обязан смениться на честную ошибку."""
+
+    async def boom(*args, **kwargs):
+        raise RuntimeError("xai exploded")
+
+    monkeypatch.setattr(ai_trainer.ai_trainer, "ask", boom)
+    state = await _state_with_setup(
+        user_id, idx=2, answers=["3 дня", "час-полтора"], scenario="program"
+    )
+    chat = _Chat(user_id)
+
+    await ai_trainer.ai_question(chat.user_message("болит правое колено"), state)
+
+    placeholder = chat.sent[0]
+    placeholder.message.edit_text.assert_awaited_once()
+    error_text = placeholder.message.edit_text.await_args.args[0]
+    assert "не смог" in error_text.lower()
+    assert "%" not in error_text
 
 
 async def test_answers_reach_history_in_human_readable_form(fresh_db, user_id, monkeypatch):

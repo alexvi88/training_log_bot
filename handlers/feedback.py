@@ -118,4 +118,4 @@ async def feedback_cancel(callback: CallbackQuery, state: FSMContext):
     from handlers.workout import _show_main_menu
 
     await _show_main_menu(callback, state)
-    await callback.answer("Вышли из отзыва")
+    await callback.answer("Вышел из отзыва")

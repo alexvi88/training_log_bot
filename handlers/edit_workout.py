@@ -207,7 +207,7 @@ async def editw_delset(callback: CallbackQuery, state: FSMContext):
     # than getting bounced up to the list. The block still gets reaped once
     # they leave (editw_to_top / editw_done), same as before.
     await _on_workout_edited(workout_id, keep_block_id=data.get("edit_block_id"))
-    await callback.answer("Подход удалён")
+    await callback.answer("Удалил подход")
     await _back_to_current_screen(callback, state, workout_id)
 
 
@@ -223,7 +223,7 @@ async def editw_editset_prompt(callback: CallbackQuery, state: FSMContext):
     await ui.safe_edit(
         callback,
         f"Текущее значение: {formatting.format_set(row['weight'], row['reps'], row['rpe'])}\n"
-        "Напиши новый вес и повторы (например «100 8»):",
+        "Напиши вес и повторы («100 8») или только повторы («8») — вес оставлю:",
         reply_markup=keyboards.cancel_keyboard("editw:back"),
     )
     await callback.answer()
@@ -236,8 +236,23 @@ async def editw_editset_entered(message: Message, state: FSMContext):
     except ParseError as e:
         await ui.reply_transient(message, e.message)
         return
+    if len(parsed) != 1:
+        await ui.reply_transient(
+            message, "Тут правится один подход. Напиши один вес и повторы — например «100 8»"
+        )
+        return
     data = await state.get_data()
-    await db.update_set(data["edit_set_id"], parsed[0].weight, parsed[0].reps, parsed[0].rpe)
+    new_set = parsed[0]
+    # A bare "8" parses as weight_omitted (weight=0.0) — same as everywhere
+    # else bare reps are accepted (see workout._apply_set_edit). Without this,
+    # editing a set to just its reps silently zeroed the weight instead of
+    # keeping what was already there.
+    if new_set.weight_omitted:
+        row = await db.get_set(data["edit_set_id"])
+        weight = row["weight"]
+    else:
+        weight = new_set.weight
+    await db.update_set(data["edit_set_id"], weight, new_set.reps, new_set.rpe)
     await _on_workout_edited(data["edit_workout_id"])
     # No "Готово." reply: the redrawn screen below already shows the new value,
     # and a confirmation reply would stay in the chat forever (the user's own
@@ -256,9 +271,14 @@ async def editw_addset_prompt(callback: CallbackQuery, state: FSMContext):
     await state.update_data(add_block_id=block_id, add_exercise_id=int(ex_id_str))
     await state.set_state(EditWorkoutFlow.adding_set)
     ex = await db.get_exercise(int(ex_id_str))
+    # This screen is only reached from an exercise that already has sets in
+    # this block ("➕ Добавить подход"), unlike _editwex_finish's "первый
+    # подход" prompt — so, same as the live tracker, bare reps ("8") are
+    # allowed and carry the previous set's weight forward.
     await ui.safe_edit(
         callback,
-        f"Новый подход для «{ex['display_name']}» — напиши вес и повторы (например «100 8», можно «100x8x3»):",
+        f"Новый подход для «{ex['display_name']}» — напиши вес и повторы («100 8») "
+        "или только повторы («8») — вес возьму с прошлого подхода:",
         reply_markup=keyboards.cancel_keyboard("editw:back"),
     )
     await callback.answer()
@@ -274,10 +294,13 @@ async def editw_addset_entered(message: Message, state: FSMContext):
     data = await state.get_data()
     ex_id = data["add_exercise_id"]
     block_id = data.get("add_block_id")
+    prev_weight = None
     if block_id is None:
         # A brand-new exercise for this workout (via "➕ Новое упражнение") — the
         # block is only created now, on the first real set, so cancelling the
-        # weight/reps prompt never leaves an empty exercise behind.
+        # weight/reps prompt never leaves an empty exercise behind. Nothing to
+        # carry a bare-reps weight forward from either — see _editwex_finish's
+        # prompt, which asks for the first set and doesn't offer that shortcut.
         block_id = await db.create_block(data["edit_workout_id"], "single")
         await db.add_block_exercise(block_id, ex_id, 0)
         await db.touch_exercise_last_used(ex_id)
@@ -285,8 +308,13 @@ async def editw_addset_entered(message: Message, state: FSMContext):
     else:
         block_exs = await db.get_block_exercises(block_id)
         order_in_round = next((be["order_in_block"] for be in block_exs if be["exercise_id"] == ex_id), 0)
+        existing_sets = [s for s in await db.list_sets_for_block(block_id) if s["exercise_id"] == ex_id]
+        if existing_sets:
+            prev_weight = existing_sets[-1]["weight"]
     for ps in parsed:
-        await db.append_set(block_id, ex_id, order_in_round, ps.weight, ps.reps, ps.rpe)
+        weight = prev_weight if (ps.weight_omitted and prev_weight) else ps.weight
+        await db.append_set(block_id, ex_id, order_in_round, weight, ps.reps, ps.rpe)
+        prev_weight = weight
     await _on_workout_edited(data["edit_workout_id"])
     await _delete_message(message)
     # Land on the exercise the set belongs to, so several sets can be typed in a
@@ -379,7 +407,7 @@ async def editw_remove_exercise(callback: CallbackQuery, state: FSMContext):
     # значки должны сниматься так же. Раньше «Клуб 140» за единственный сет на
     # 150 кг оставался в профиле навсегда, хотя самого сета в истории уже нет.
     await _on_workout_edited(workout_id)
-    await callback.answer("Упражнение убрано из тренировки")
+    await callback.answer("Убрал упражнение из тренировки")
     await state.update_data(edit_block_id=None, edit_exercise_id=None)
     await show_edit_screen(callback, state, workout_id)
 
@@ -593,7 +621,7 @@ async def editw_date_calendar_pick(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     await _apply_edit_workout_date(data["edit_workout_id"], new_date)
     await show_edit_screen(callback, state, data["edit_workout_id"])
-    await callback.answer("Дата обновлена")
+    await callback.answer("Перенёс тренировку")
 
 
 @router.message(StateFilter(EditWorkoutFlow.awaiting_date), F.text)
@@ -608,7 +636,7 @@ async def editw_date_entered(message: Message, state: FSMContext):
     data = await state.get_data()
     workout_id = data["edit_workout_id"]
     await _apply_edit_workout_date(workout_id, new_date)
-    await message.reply("Дата обновлена.")
+    await message.reply("Перенёс тренировку.")
     await show_edit_screen(message, state, workout_id)
 
 

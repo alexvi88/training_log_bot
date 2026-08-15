@@ -52,6 +52,34 @@ async def test_middleware_refreshes_keyboard_on_any_message_for_stale_users(fres
     assert user["reply_keyboard_version"] == keyboards.PERSISTENT_MENU_VERSION
 
 
+async def test_middleware_sends_the_notice_before_the_handler_runs(fresh_db, user_id):
+    """The notice has to go out before the handler's own reply, not after.
+
+    chat_bottom treats the most recently sent message as the bottom of the
+    chat, and the live workout tracker only edits in place while it stays
+    there. Sending "⌨️ Обновил меню" after the handler's reply would bump the
+    tracker off the bottom invisibly on this tap, and the next unrelated tap
+    would pay for a delete+resend flicker that had nothing to do with it.
+    Sending it first keeps the handler's own reply as the true last message.
+    """
+    await fresh_db.update_user(user_id, reply_keyboard_version=0)
+    message = _make_message(user_id)
+    order = []
+    message.answer.side_effect = lambda *a, **k: order.append("notice") or SimpleNamespace(
+        message_id=999, chat=SimpleNamespace(id=user_id)
+    )
+
+    async def handler(event, data):
+        order.append("handler")
+        return "handled"
+
+    middleware = RefreshPersistentMenuMiddleware()
+
+    await middleware(handler, message, {})
+
+    assert order == ["notice", "handler"]
+
+
 async def test_middleware_is_a_noop_once_up_to_date(fresh_db, user_id):
     await fresh_db.update_user(user_id, reply_keyboard_version=keyboards.PERSISTENT_MENU_VERSION)
     message = _make_message(user_id)
@@ -106,8 +134,8 @@ async def test_first_start_attaches_keyboard_without_the_update_notice(fresh_db)
     user = await fresh_db.get_user(222222)
     assert user["reply_keyboard_version"] == keyboards.PERSISTENT_MENU_VERSION
 
-    # Мидлварь идёт после хендлера и перечитывает строку — увидит актуальную
-    # версию и промолчит.
+    # Мидлварь читает строку перед хендлером — увидит уже актуальную версию
+    # и промолчит.
     message.answer.reset_mock()
     await RefreshPersistentMenuMiddleware()(AsyncMock(), message, {})
     message.answer.assert_not_awaited()

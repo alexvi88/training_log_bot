@@ -1000,7 +1000,9 @@ def routine_edit_menu_keyboard(routine_id: int, is_day: bool = False) -> InlineK
     return b.as_markup()
 
 
-def routine_edit_keyboard(routine_id: int, exercises=()) -> InlineKeyboardMarkup:
+def routine_edit_keyboard(
+    routine_id: int, exercises=(), armed_re_id: Optional[int] = None
+) -> InlineKeyboardMarkup:
     """Редактор состава дня: номер с именем первым, за ним ⬆️ и 🗑.
 
     Стрелка одна и работает по кругу: поднять второе — то же самое, что опустить
@@ -1016,17 +1018,29 @@ def routine_edit_keyboard(routine_id: int, exercises=()) -> InlineKeyboardMarkup
     наклоне» и «Тяга гантелей лёжа на наклонной скамье» обрезаются в одно и то
     же, и без номера по кнопке не понять, какую из них удаляешь. Полный состав с
     номерами и схемами стоит в тексте сообщения — там и читают.
+
+    `armed_re_id` — вторая ступень удаления: первый тап по 🗑 не сносит строку
+    сразу, а превращает именно эту кнопку в «❗ Точно?» (см. handlers.routines);
+    полноэкранное «Убрать «Жим»?» под самое частое действие в редакторе было
+    лишним скачком экрана. Второй тап по тому же месту делает саму работу, а
+    не подтвердивший таймаут возвращает 🗑 обратно.
     """
     b = InlineKeyboardBuilder()
     for position, entry in enumerate(exercises, start=1):
         re_id, name = entry[0], entry[1]
+        if re_id == armed_re_id:
+            remove_button = InlineKeyboardButton(
+                text="❗ Точно?", callback_data=f"rt:rmexyes:{routine_id}:{re_id}"
+            )
+        else:
+            remove_button = InlineKeyboardButton(text="🗑", callback_data=f"rt:rmex:{routine_id}:{re_id}")
         b.row(
             InlineKeyboardButton(
                 text=f"{position}. {_shorten_label(name, 22)}",
                 callback_data=f"rt:extarget:{routine_id}:{re_id}",
             ),
             InlineKeyboardButton(text="⬆️", callback_data=f"rt:mvex:{routine_id}:{re_id}:up"),
-            InlineKeyboardButton(text="🗑", callback_data=f"rt:rmex:{routine_id}:{re_id}"),
+            remove_button,
         )
     b.row(InlineKeyboardButton(text="➕ Добавить упражнение", callback_data=f"rt:addex:{routine_id}"))
     b.row(InlineKeyboardButton(text="⬅️ Готово", callback_data=f"rt:view:{routine_id}"))
@@ -1350,6 +1364,14 @@ def format_utc_offset(tz_offset: int) -> str:
     return "UTC" if tz_offset == 0 else f"UTC{tz_offset:+d}"
 
 
+# Полные русские названия для экрана настроек — не путать с formatting.UNIT_LABELS
+# (это суффикс к числу, "100кг"/"100lb"): тут нужно название единицы целиком, а не
+# сокращение рядом с цифрой. Внутренние значения ("kg"/"lb", "epley"/"brzycki")
+# остаются как есть везде, где их сравнивают и парсят (db, formatting, handlers.settings).
+UNIT_NAMES = {"kg": "кг", "lb": "фунты"}
+FORMULA_NAMES = {"epley": "Эпли", "brzycki": "Бжицки"}
+
+
 def timezone_picker_keyboard(current: int) -> InlineKeyboardMarkup:
     """Сетка целочасовых смещений от UTC — весь обитаемый диапазон.
 
@@ -1380,22 +1402,32 @@ def settings_keyboard(
     show_mcp: bool = False,
 ) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.button(text=f"Единицы: {unit}", callback_data="settings:unit")
+    b.button(text=f"⚖️ Единицы: {UNIT_NAMES.get(unit, unit)}", callback_data="settings:unit")
     # "e1RM", not "1ПМ": every card, chart and record in the bot is labelled
     # e1RM, and a setting that names the metric differently reads as a setting
     # for something else entirely.
-    b.button(text=f"Формула e1RM: {formula}", callback_data="settings:formula")
+    b.button(
+        text=f"📐 Формула e1RM: {FORMULA_NAMES.get(formula, formula)}",
+        callback_data="settings:formula",
+    )
     b.button(text=f"🕒 Часовой пояс: {format_utc_offset(tz_offset)}", callback_data="settings:tz")
+    # Все тумблеры ниже — одна конструкция: «<label>: <глагол от первого
+    # лица>» / «<label>: <его отрицание>» — раньше формы расходились
+    # («вкл»/«выкл», «включены»/«выключены», «считаю»/«не считаю»,
+    # «подробно»/«компактно») и один и тот же переключатель на экране читался
+    # то канцелярией, то голосом тренера.
     progression_label = (
-        "🎯 Подсказки прогрессии: вкл" if progression_enabled else "🎯 Подсказки прогрессии: выкл"
+        "🎯 Подсказки прогрессии: подсказываю"
+        if progression_enabled
+        else "🎯 Подсказки прогрессии: молчу"
     )
     b.button(text=progression_label, callback_data="settings:progression")
-    pushes_label = "🔔 Пуши: включены" if pushes_enabled else "🔕 Пуши: выключены"
+    pushes_label = "🔔 Пуши: шлю" if pushes_enabled else "🔕 Пуши: молчу"
     b.button(text=pushes_label, callback_data="settings:pushes")
     ai_label = (
-        "🤖 Комментарии AI-тренера: включены"
+        "🤖 Комментарии AI-тренера: комментирую"
         if ai_comments_enabled
-        else "🤖 Комментарии AI-тренера: выключены"
+        else "🤖 Комментарии AI-тренера: молчу"
     )
     b.button(text=ai_label, callback_data="settings:ai_comments")
     macros_label = (
@@ -1405,11 +1437,11 @@ def settings_keyboard(
     )
     b.button(text=macros_label, callback_data="settings:food_macros")
     # users.show_extra_stats has always gated the e1RM line on the finish card;
-    # it just had no switch, so nobody could ever turn it off.
+    # it just had no switch, so nobody could ever turn it off. «Подробно /
+    # компактно» не говорило, что именно меняется — переименовано в то, что
+    # реально переключается.
     card_label = (
-        "📊 Карточка тренировки: подробно"
-        if show_extra_stats
-        else "📋 Карточка тренировки: компактно"
+        "📊 e1RM на карточке: показываю" if show_extra_stats else "📊 e1RM на карточке: прячу"
     )
     b.button(text=card_label, callback_data="settings:card_detail")
     # Профиль тренирующегося пишет AI-тренер (ai_trainer.save_athlete_profile),
@@ -1574,7 +1606,7 @@ DEFAULT_BODYWEIGHT_WEEKS = 20
 def bodyweight_keyboard(has_logs: bool, weeks: int = 0, show_periods: bool = False) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     if has_logs:
-        b.row(InlineKeyboardButton(text="↩️ Удалить последнюю", callback_data="bw:undo"))
+        b.row(InlineKeyboardButton(text="✏️ Записи", callback_data="bw:list:0"))
     if show_periods:
         period_buttons = [
             InlineKeyboardButton(
@@ -1584,6 +1616,36 @@ def bodyweight_keyboard(has_logs: bool, weeks: int = 0, show_periods: bool = Fal
         ]
         b.row(*period_buttons)
     b.row(InlineKeyboardButton(text="🏠 Меню", callback_data="bw:menu"))
+    return b.as_markup()
+
+
+# Сколько записей веса на страницу списка «✏️ Записи» — как история питания.
+BODYWEIGHT_LIST_PAGE_SIZE = 10
+
+
+def bodyweight_list_keyboard(entry_ids: Sequence[int], page: int, has_next: bool) -> InlineKeyboardMarkup:
+    """Экран «✏️ Записи»: удаление любой записи (не только последней), страницами.
+
+    Кнопка удаления — по номеру строки («🗑 3»), как в food_day_keyboard: сам
+    вес и дата уже расписаны в тексте экрана, а в кнопку не влезают.
+    """
+    b = InlineKeyboardBuilder()
+    if entry_ids:
+        b.row(
+            *[
+                InlineKeyboardButton(text=f"🗑 {i}", callback_data=f"bw:delrec:{entry_id}:{page}")
+                for i, entry_id in enumerate(entry_ids, start=1)
+            ],
+            width=5,
+        )
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text=PAGE_PREV_TEXT, callback_data=f"bw:list:{page - 1}"))
+    if has_next:
+        nav.append(InlineKeyboardButton(text=PAGE_NEXT_TEXT, callback_data=f"bw:list:{page + 1}"))
+    if nav:
+        b.row(*nav)
+    b.row(InlineKeyboardButton(text="⬅️ К дневнику веса", callback_data="menu:bodyweight"))
     return b.as_markup()
 
 
@@ -1608,13 +1670,13 @@ def food_day_keyboard(date: dt.date, entry_ids: Sequence[int], today: dt.date) -
             width=4,
         )
     prev_day = date - dt.timedelta(days=1)
-    nav = [InlineKeyboardButton(text=f"⬅️ {formatting.format_day_month_ru(prev_day)}",
+    nav = [InlineKeyboardButton(text=f"⬅️ {formatting.format_day_month_ru(prev_day, today=today)}",
                                 callback_data=f"fd:day:{prev_day.isoformat()}")]
     if date < today:
         next_day = date + dt.timedelta(days=1)
         nav.append(
             InlineKeyboardButton(
-                text=f"{formatting.format_day_month_ru(next_day)} ➡️",
+                text=f"{formatting.format_day_month_ru(next_day, today=today)} ➡️",
                 callback_data=f"fd:day:{next_day.isoformat()}",
             )
         )
@@ -1658,11 +1720,21 @@ def limit_ack_keyboard(kind: str) -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
-def food_history_keyboard(days: Sequence[dt.date], page: int, has_next: bool) -> InlineKeyboardMarkup:
-    """Дни с записями, по два в ряд — что в них было, расписано в тексте экрана."""
+def food_history_keyboard(
+    days: Sequence[dt.date], page: int, has_next: bool, today: dt.date | None = None
+) -> InlineKeyboardMarkup:
+    """Дни с записями, по два в ряд — что в них было, расписано в тексте экрана.
+
+    Формат подписи — тот же, что у навигации по дням (`food_day_keyboard`):
+    «14 августа», год дописывается только если он не текущий. Раньше тут стоял
+    отдельный `%d.%m.%Y`, и в одном дневнике день читался то словом, то цифрами.
+    """
+    today = today or dt.date.today()
     b = InlineKeyboardBuilder()
     for d in days:
-        b.button(text=d.strftime("%d.%m.%Y"), callback_data=f"fd:day:{d.isoformat()}")
+        b.button(
+            text=formatting.format_day_month_ru(d, today=today), callback_data=f"fd:day:{d.isoformat()}"
+        )
     b.adjust(2)
     nav = []
     if page > 0:
