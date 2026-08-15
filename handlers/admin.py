@@ -6,6 +6,7 @@ import asyncio
 import datetime as dt
 from contextlib import suppress
 from html import escape
+from typing import Optional
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramAPIError, TelegramForbiddenError
@@ -653,40 +654,40 @@ async def announcement_decline(callback: CallbackQuery):
     await callback.answer()
 
 
-# ---------- /admin_wipe: снести аккаунт для проверки онбординга ----------
+# ---------- /admin_wipe: снести TEST_USER_ID для проверки онбординга ----------
 #
-# Нарочно не принимает id аргументом — только выбор из ADMIN_ID/TEST_USER_ID
-# кнопкой. Это единственная защита от того, чтобы случайно снести живого
-# пользователя опечаткой в id: выбирать можно только из двух заранее известных
-# своих же аккаунтов (config.limit_preview_ids), настоящих атлетов в списке нет.
+# Нарочно не принимает id аргументом и нарочно не предлагает ADMIN_ID — это
+# личный аккаунт админа с реальными данными, а не тестовый стенд. Выбирать
+# можно только один-единственный заранее известный TEST_USER_ID, чтобы
+# опечаткой или невнимательным тапом не задеть ни его, ни тем более живого
+# постороннего пользователя.
 
 
-async def _wipe_candidates() -> list[tuple[int, str]]:
-    out = []
-    for uid in (config.ADMIN_ID, config.TEST_USER_ID):
-        if uid is None:
-            continue
-        user = await db.get_user(uid)
-        label = f"@{user['username']}" if user and user["username"] else str(uid)
-        out.append((uid, label))
-    return out
+async def _wipe_candidate() -> Optional[tuple[int, str]]:
+    uid = config.TEST_USER_ID
+    if uid is None:
+        return None
+    user = await db.get_user(uid)
+    label = f"@{user['username']}" if user and user["username"] else str(uid)
+    return uid, label
 
 
 @router.message(Command("admin_wipe"))
 async def cmd_admin_wipe(message: Message):
     if not _is_admin(message.from_user.id):
         return
-    candidates = await _wipe_candidates()
-    if not candidates:
-        await message.answer("ADMIN_ID и TEST_USER_ID не настроены — сносить некого.")
+    candidate = await _wipe_candidate()
+    if candidate is None:
+        await message.answer("TEST_USER_ID не настроен — сносить некого.")
         return
+    uid, label = candidate
     b = InlineKeyboardBuilder()
-    for uid, label in candidates:
-        b.button(text=f"🧨 {label} ({uid})", callback_data=f"admin:wipe:ask:{uid}")
+    b.button(text=f"🧨 {label} ({uid})", callback_data=f"admin:wipe:ask:{uid}")
     b.adjust(1)
     await message.answer(
-        "Кого сносим? Удалится ВСЁ — тренировки, вес, еда, программы, диалог с "
-        "тренером, сам аккаунт. Следующий /start пройдёт как у нового.",
+        "Снести тестовый аккаунт? Удалится ВСЁ — тренировки, вес, еда, программы, "
+        "диалог с тренером, сам аккаунт. Следующий /start пройдёт как у нового.\n\n"
+        "ADMIN_ID в списке нет и не будет — это личный аккаунт, не трогаем.",
         reply_markup=b.as_markup(),
     )
 
@@ -697,8 +698,11 @@ async def admin_wipe_ask(callback: CallbackQuery):
         await callback.answer()
         return
     uid = int(callback.data.split(":")[3])
-    candidates = dict(await _wipe_candidates())
-    label = candidates.get(uid, str(uid))
+    if uid != config.TEST_USER_ID:
+        await callback.answer("Сносить можно только TEST_USER_ID", show_alert=True)
+        return
+    candidate = await _wipe_candidate()
+    label = candidate[1] if candidate else str(uid)
     await ui.safe_edit(
         callback,
         f"Точно снести {label} ({uid}) целиком? Это необратимо.",
@@ -725,6 +729,9 @@ async def admin_wipe_go(callback: CallbackQuery):
         await callback.answer()
         return
     uid = int(callback.data.split(":")[3])
+    if uid != config.TEST_USER_ID:
+        await callback.answer("Сносить можно только TEST_USER_ID", show_alert=True)
+        return
     await db.wipe_user_account(uid)
     await ui.safe_edit(callback, f"Снёс {uid}. /start там теперь пройдёт как у новичка.")
     await callback.answer("Готово")
