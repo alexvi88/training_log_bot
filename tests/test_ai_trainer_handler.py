@@ -775,6 +775,39 @@ async def test_saving_a_program_creates_one_routine_per_day(fresh_db, user_id):
     assert (await state.get_data()).get("ai_program_draft") is None
 
 
+async def test_saving_a_program_keeps_the_trainers_description(fresh_db, user_id):
+    """То, что тренер рассказывал о программе, жило до следующего сообщения в
+    чате, а экран программы человек открывает перед каждой тренировкой."""
+    about = "Три дня по функции. Держи 5–10 повторов и добавляй вес, когда взял верх диапазона."
+    state = await _make_state(user_id)
+    await state.update_data(ai_program_draft={**_draft(days=1), "description": about})
+
+    await ai_trainer.ai_program_save(_make_callback(user_id, "ai:prog:save:1"), state)
+
+    program_id = (await fresh_db.list_programs(user_id))[0]["id"]
+    assert (await fresh_db.get_program(program_id))["description"] == about
+
+
+async def test_editing_a_program_without_a_new_description_keeps_the_old_one(fresh_db, user_id):
+    """Пустое поле в новом предложении значит «тренер не сказал», а не «сотри»."""
+    about = "Тяжёлый низ в понедельник, лёгкий в четверг."
+    state = await _make_state(user_id)
+    await state.update_data(ai_program_draft={**_draft(days=1), "description": about})
+    await ai_trainer.ai_program_save(_make_callback(user_id, "ai:prog:save:1"), state)
+    program_id = (await fresh_db.list_programs(user_id))[0]["id"]
+    days = await fresh_db.list_program_days_by_id(program_id)
+
+    edit = _draft(days=1)
+    edit["replaces"] = {
+        "kind": "program", "id": program_id, "name": "Верх/низ",
+        "routine_ids": [d["id"] for d in days],
+    }
+    await state.update_data(ai_program_draft=edit)
+    await ai_trainer.ai_program_save(_make_callback(user_id, "ai:prog:save:1"), state)
+
+    assert (await fresh_db.get_program(program_id))["description"] == about
+
+
 async def test_saving_twice_does_not_duplicate_the_program(fresh_db, user_id):
     state = await _make_state(user_id)
     await state.update_data(ai_program_draft=_draft(days=1))

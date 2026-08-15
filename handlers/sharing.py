@@ -73,7 +73,10 @@ MAX_DESCRIPTION_LEN = config.MAX_EXERCISE_DESCRIPTION_LENGTH
 # лимит». Программа из шести рабочих дней и двух пустых уезжала со всем
 # содержимым, но получала «уехало 6 из 8 — больше не влезает»: потери не было,
 # а бот утверждал обратное. Теперь причины считаются, а не угадываются.
-PAYLOAD_VERSION = 3
+#
+# v4 добавила в снапшот программы описание (programs.description) — старые
+# визитки его просто не несут, поэтому на импорте оно читается через .get.
+PAYLOAD_VERSION = 4
 
 # Превью должно гарантированно влезать в лимит Telegram при ЛЮБОМ снапшоте —
 # в том числе созданном до появления MAX_SHARED_DAYS. Резервируем место под
@@ -300,9 +303,14 @@ async def _send_program_card(callback: CallbackQuery, program_id: int, program_n
         await callback.answer("В программе нет упражнений — нечем делиться", show_alert=True)
         return
 
+    # Описание уезжает вместе с составом: получателю оно нужнее, чем автору —
+    # он-то видит чужую программу впервые. Старые снапшоты (v3) его не несут,
+    # поэтому на импорте читается через .get.
+    program = await db.get_program(program_id)
     payload = {
         "v": PAYLOAD_VERSION,
         "name": program_name[:MAX_PROGRAM_NAME_LEN],
+        "description": program["description"] if program else None,
         "days": day_payloads,
         # Сколько дней было в программе — единственное, из чего обе стороны
         # потом узнают, что уехало не всё (см. _omitted_days_note).
@@ -612,6 +620,7 @@ async def share_add(callback: CallbackQuery, state: FSMContext):
         program_id = await db.create_program(
             user_id, program_name, source="import",
             source_ref=f"@{owner_name}" if owner_name else None,
+            description=payload.get("description"),
         )
         for day in payload["days"]:
             routine_id = await db.create_routine(user_id, day["name"], program_id=program_id)

@@ -158,6 +158,21 @@ async def rt_manage(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+def _catalog_source(program):
+    """Каталожная карточка, из которой выросла эта программа, или None.
+
+    Ключ каталога лежит в programs.source_ref (_instantiate_catalog_program),
+    и по нему берутся две вещи: строка meta («кому это и как часто»), которой в
+    базе нет вовсе, и описание для программ, добавленных до появления колонки
+    programs.description. Программа могла прийти и из чужого экспорта
+    (source='import'), где source_ref — это @username, а не ключ: промах по
+    словарю тут нормальный случай, а не ошибка.
+    """
+    if program["source"] != "catalog":
+        return None
+    return PROGRAM_BY_KEY.get(program["source_ref"] or "")
+
+
 async def _owned_program(event, program_id: int):
     program = await db.get_program(program_id)
     if program is None or program["user_id"] != event.from_user.id:
@@ -234,9 +249,25 @@ async def _show_program(event, state: FSMContext, program_id: int) -> None:
     # можно удалить, а тренировки по ним честно остаются в истории, и счётчик
     # не должен проседать следом (находка 22).
     total = await db.program_total_workouts(program_id)
+    catalog = _catalog_source(program)
+    # Счётчик и meta — одной строкой через «·», как в самой meta: две подряд
+    # курсивные строки под заголовком читаются как сбитая вёрстка.
+    subtitle = []
     if total:
         word = formatting.plural_ru(total, ("тренировка", "тренировки", "тренировок"))
-        header.append(f"<i>{total} {word} по ней</i>")
+        subtitle.append(f"{total} {word} по ней")
+    if catalog is not None:
+        subtitle.append(escape(catalog["meta"]))
+    if subtitle:
+        header.append(f"<i>{' · '.join(subtitle)}</i>")
+    # Экран программы состоял из одних списков упражнений: зачем эта программа
+    # такая — не помнил никто, включая того, кто заказал её у тренера. Описание
+    # пишется при создании (programs.description) всеми дверьми сразу; у
+    # каталожных программ, добавленных до этой колонки, оно берётся из
+    # seed_data по ключу — там оно и так было.
+    description = program["description"] or (catalog["description"] if catalog else None)
+    if description:
+        header.append(f"\n{escape(description)}")
     tail = (
         f"Дальше по кругу — <b>{escape(next_day['name'])}</b>."
         if next_day is not None and history
@@ -332,10 +363,19 @@ async def rt_menu(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "rt:programs")
 async def rt_programs(callback: CallbackQuery, state: FSMContext):
+    # Кнопка вмещает только название, и до этого весь выбор человек делал по
+    # нему одному: чем «Верх / Низ» отличается от «Толкай / Тяни / Ноги» и
+    # какая из них про два вечера в неделю, выяснялось только заходом внутрь
+    # каждой. Строка meta у каждой программы уже написана — показываем её
+    # списком над кнопками, в том же порядке.
+    catalog = "\n".join(
+        f"<b>{escape(p['name'])}</b> — {escape(p['meta'])}" for p in WORKOUT_PROGRAMS
+    )
     text = (
         "✨ <b>ГОТОВЫЕ ПРОГРАММЫ</b>\n\n"
         "Выбери готовую программу — её дни добавятся тебе в «Программы», и ты "
-        "начнёшь тренировку в один тап. Все нужные упражнения появятся в твоём списке."
+        "начнёшь тренировку в один тап. Все нужные упражнения появятся в твоём "
+        f"списке.\n\n{catalog}"
     )
     kb = keyboards.programs_catalog_keyboard(WORKOUT_PROGRAMS)
     await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML")
@@ -372,7 +412,8 @@ async def rt_program_detail(callback: CallbackQuery, state: FSMContext):
 
 async def _instantiate_catalog_program(user_id: int, key: str, name: str) -> int:
     program_id = await db.create_program(
-        user_id, name, source="catalog", source_ref=key
+        user_id, name, source="catalog", source_ref=key,
+        description=PROGRAM_BY_KEY[key]["description"],
     )
     for day_name, exercises in PROGRAM_BY_KEY[key]["days"]:
         await db.create_routine_from_program(user_id, day_name, exercises, program_id=program_id)

@@ -1576,6 +1576,10 @@ async def _save_into_existing_program(
     # текущее: это правка состава, а не переименования, отказывать из-за него незачем.
     if renamed_by_trainer and await db.rename_program_by_id(program["id"], draft["name"]):
         target_name = draft["name"]
+    # Правка меняет и описание — но только если тренер его прислал: пустое поле
+    # в новом предложении значит «не сказал», а не «сотри то, что было».
+    if draft.get("description"):
+        await db.set_program_description(program["id"], draft["description"])
 
     # Дальше начинается запись в ЧУЖУЮ для черновика программу — при падении
     # её нельзя удалять как обрубок (см. _run_program_save), там старые дни
@@ -1620,7 +1624,9 @@ async def _save_as_new_program(
         await callback.answer(budget_msg, show_alert=True)
         return
 
-    program_id = await db.create_program(user_id, draft["name"], source="ai")
+    program_id = await db.create_program(
+        user_id, draft["name"], source="ai", description=draft.get("description")
+    )
     if program_id is None:
         await state.update_data(ai_program_draft=draft)
         with suppress(TelegramBadRequest):
