@@ -6,6 +6,39 @@ import pytest
 pytestmark = pytest.mark.asyncio
 
 
+async def test_merge_rolls_back_on_mid_transaction_failure(fresh_db, user_id, monkeypatch):
+    """A DML failing partway through must not leave sets repointed to keep_id
+    while exercises/drop_id is still around — half-merged is worse than
+    not-merged, and the caller (a retried merge) would see a stale MERGE_OK
+    picture if the first attempt's partial UPDATE survived."""
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Ноги")
+    keep_id = await db.create_exercise(user_id, "glute bridge", group_id)
+    drop_id = await db.create_exercise(user_id, "ягодичный мостик", group_id)
+    workout_id = await db.create_workout(user_id)
+    block_id = await db.create_block(workout_id, "single")
+    await db.add_block_exercise(block_id, drop_id, 0)
+    await db.append_set(block_id, drop_id, 0, 60.0, 10)
+    await db.finish_workout(workout_id)
+
+    real_execute = db.conn().execute
+
+    async def _boom(sql, *args, **kwargs):
+        if sql.startswith("DELETE FROM exercises"):
+            raise RuntimeError("boom")
+        return await real_execute(sql, *args, **kwargs)
+
+    monkeypatch.setattr(db.conn(), "execute", _boom)
+
+    with pytest.raises(RuntimeError):
+        await db.merge_exercises(user_id, keep_id=keep_id, drop_id=drop_id)
+
+    # Rolled back: the set is still on drop_id, and drop_id is still there.
+    sets = await db.list_sets_for_block(block_id)
+    assert sets[0]["exercise_id"] == drop_id
+    assert await db.get_exercise(drop_id) is not None
+
+
 async def _log_set(db, user_id, ex_id, weight=50.0, reps=8):
     """Логируем и ЗАКРЫВАЕМ тренировку: объединяют исторические дубли, а
     упражнение, открытое в текущей сессии, merge_exercises теперь отклоняет —

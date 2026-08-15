@@ -2370,74 +2370,83 @@ async def merge_exercises(user_id: int, keep_id: int, drop_id: int) -> str:
     ):
         return MERGE_IN_ACTIVE_WORKOUT
 
+    # Каждый DML ниже под одной транзакцией: частичный перенос, брошенный на
+    # середине (см. discard_workout про то же рассуждение), оставил бы историю
+    # переехавшей только наполовину — часть подходов уже на keep_id, часть ещё
+    # на drop_id, который следующая строка вот-вот удалит совсем.
     async with _write_lock:
-        await conn().execute(
-            "UPDATE sets SET exercise_id = ? WHERE exercise_id = ?", (keep_id, drop_id)
-        )
-        # block_exercises: у одного блока (суперсета) могли быть оба упражнения.
-        # UNIQUE на (block_id, exercise_id) нет, так что БД пропустила бы дубль
-        # молча — блок с одной и той же строкой дважды ломает и экран живой
-        # сессии, и редактирование прошлой тренировки.
-        await conn().execute(
-            "DELETE FROM block_exercises WHERE exercise_id = ? AND block_id IN "
-            "(SELECT block_id FROM block_exercises WHERE exercise_id = ?)",
-            (drop_id, keep_id),
-        )
-        await conn().execute(
-            "UPDATE block_exercises SET exercise_id = ? WHERE exercise_id = ?", (keep_id, drop_id)
-        )
-        # routine_exercises: то же самое днём программы. Схему и правило
-        # прогрессии подбираем со стороны, которую убираем, если у оставшейся
-        # их нет, — иначе объединение молча обнуляло бы «4×8».
-        await conn().execute(
-            "UPDATE routine_exercises SET "
-            "  target = COALESCE(target, (SELECT d.target FROM routine_exercises d "
-            "    WHERE d.exercise_id = ? AND d.routine_id = routine_exercises.routine_id)), "
-            "  progression = COALESCE(progression, (SELECT d.progression FROM routine_exercises d "
-            "    WHERE d.exercise_id = ? AND d.routine_id = routine_exercises.routine_id)) "
-            "WHERE exercise_id = ? AND routine_id IN "
-            "  (SELECT routine_id FROM routine_exercises WHERE exercise_id = ?)",
-            (drop_id, drop_id, keep_id, drop_id),
-        )
-        await conn().execute(
-            "DELETE FROM routine_exercises WHERE exercise_id = ? AND routine_id IN "
-            "(SELECT routine_id FROM routine_exercises WHERE exercise_id = ?)",
-            (drop_id, keep_id),
-        )
-        await conn().execute(
-            "UPDATE routine_exercises SET exercise_id = ? WHERE exercise_id = ?", (keep_id, drop_id)
-        )
-        # exercise_notes is keyed on (workout_id, exercise_id) — if a workout
-        # already has a note under keep_id, drop_id's note for that same
-        # workout would collide with the row it's about to become, so it's
-        # dropped in favor of keep's.
-        await conn().execute(
-            "DELETE FROM exercise_notes WHERE exercise_id = ? AND workout_id IN "
-            "(SELECT workout_id FROM exercise_notes WHERE exercise_id = ?)",
-            (drop_id, keep_id),
-        )
-        await conn().execute(
-            "UPDATE exercise_notes SET exercise_id = ? WHERE exercise_id = ?", (keep_id, drop_id)
-        )
-        if drop["last_used_at"] and (not keep["last_used_at"] or drop["last_used_at"] > keep["last_used_at"]):
-            await conn().execute(
-                "UPDATE exercises SET last_used_at = ? WHERE id = ?", (drop["last_used_at"], keep_id)
+        db = conn()
+        try:
+            await db.execute(
+                "UPDATE sets SET exercise_id = ? WHERE exercise_id = ?", (keep_id, drop_id)
             )
-        if not keep["description"] and drop["description"]:
-            await conn().execute(
-                "UPDATE exercises SET description = ? WHERE id = ?", (drop["description"], keep_id)
+            # block_exercises: у одного блока (суперсета) могли быть оба упражнения.
+            # UNIQUE на (block_id, exercise_id) нет, так что БД пропустила бы дубль
+            # молча — блок с одной и той же строкой дважды ломает и экран живой
+            # сессии, и редактирование прошлой тренировки.
+            await db.execute(
+                "DELETE FROM block_exercises WHERE exercise_id = ? AND block_id IN "
+                "(SELECT block_id FROM block_exercises WHERE exercise_id = ?)",
+                (drop_id, keep_id),
             )
-        if not keep["custom_photo_file_id"] and drop["custom_photo_file_id"]:
-            await conn().execute(
-                "UPDATE exercises SET custom_photo_file_id = ? WHERE id = ?",
-                (drop["custom_photo_file_id"], keep_id),
+            await db.execute(
+                "UPDATE block_exercises SET exercise_id = ? WHERE exercise_id = ?", (keep_id, drop_id)
             )
-        if not keep["notes"] and drop["notes"]:
-            await conn().execute(
-                "UPDATE exercises SET notes = ? WHERE id = ?", (drop["notes"], keep_id)
+            # routine_exercises: то же самое днём программы. Схему и правило
+            # прогрессии подбираем со стороны, которую убираем, если у оставшейся
+            # их нет, — иначе объединение молча обнуляло бы «4×8».
+            await db.execute(
+                "UPDATE routine_exercises SET "
+                "  target = COALESCE(target, (SELECT d.target FROM routine_exercises d "
+                "    WHERE d.exercise_id = ? AND d.routine_id = routine_exercises.routine_id)), "
+                "  progression = COALESCE(progression, (SELECT d.progression FROM routine_exercises d "
+                "    WHERE d.exercise_id = ? AND d.routine_id = routine_exercises.routine_id)) "
+                "WHERE exercise_id = ? AND routine_id IN "
+                "  (SELECT routine_id FROM routine_exercises WHERE exercise_id = ?)",
+                (drop_id, drop_id, keep_id, drop_id),
             )
-        await conn().execute("DELETE FROM exercises WHERE id = ?", (drop_id,))
-        await conn().commit()
+            await db.execute(
+                "DELETE FROM routine_exercises WHERE exercise_id = ? AND routine_id IN "
+                "(SELECT routine_id FROM routine_exercises WHERE exercise_id = ?)",
+                (drop_id, keep_id),
+            )
+            await db.execute(
+                "UPDATE routine_exercises SET exercise_id = ? WHERE exercise_id = ?", (keep_id, drop_id)
+            )
+            # exercise_notes is keyed on (workout_id, exercise_id) — if a workout
+            # already has a note under keep_id, drop_id's note for that same
+            # workout would collide with the row it's about to become, so it's
+            # dropped in favor of keep's.
+            await db.execute(
+                "DELETE FROM exercise_notes WHERE exercise_id = ? AND workout_id IN "
+                "(SELECT workout_id FROM exercise_notes WHERE exercise_id = ?)",
+                (drop_id, keep_id),
+            )
+            await db.execute(
+                "UPDATE exercise_notes SET exercise_id = ? WHERE exercise_id = ?", (keep_id, drop_id)
+            )
+            if drop["last_used_at"] and (not keep["last_used_at"] or drop["last_used_at"] > keep["last_used_at"]):
+                await db.execute(
+                    "UPDATE exercises SET last_used_at = ? WHERE id = ?", (drop["last_used_at"], keep_id)
+                )
+            if not keep["description"] and drop["description"]:
+                await db.execute(
+                    "UPDATE exercises SET description = ? WHERE id = ?", (drop["description"], keep_id)
+                )
+            if not keep["custom_photo_file_id"] and drop["custom_photo_file_id"]:
+                await db.execute(
+                    "UPDATE exercises SET custom_photo_file_id = ? WHERE id = ?",
+                    (drop["custom_photo_file_id"], keep_id),
+                )
+            if not keep["notes"] and drop["notes"]:
+                await db.execute(
+                    "UPDATE exercises SET notes = ? WHERE id = ?", (drop["notes"], keep_id)
+                )
+            await db.execute("DELETE FROM exercises WHERE id = ?", (drop_id,))
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
     return MERGE_OK
 
 
@@ -3591,12 +3600,22 @@ async def delete_block_and_sets(block_id: int) -> None:
     """Drop a block along with every set it holds — "remove this exercise from
     a past workout entirely". delete_block on its own assumes the block is
     already empty (every existing caller empties it first); this is for the
-    one case where it isn't."""
+    one case where it isn't.
+
+    Same rollback rule as discard_workout: a partial delete left uncommitted
+    would ride in on the next unrelated commit on this connection and leave
+    the block gutted without actually being gone.
+    """
     async with _write_lock:
-        await conn().execute("DELETE FROM sets WHERE block_id = ?", (block_id,))
-        await conn().execute("DELETE FROM block_exercises WHERE block_id = ?", (block_id,))
-        await conn().execute("DELETE FROM workout_blocks WHERE id = ?", (block_id,))
-        await conn().commit()
+        db = conn()
+        try:
+            await db.execute("DELETE FROM sets WHERE block_id = ?", (block_id,))
+            await db.execute("DELETE FROM block_exercises WHERE block_id = ?", (block_id,))
+            await db.execute("DELETE FROM workout_blocks WHERE id = ?", (block_id,))
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
 
 
 async def list_sets_for_block(block_id: int) -> list[aiosqlite.Row]:
