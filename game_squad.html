@@ -311,7 +311,7 @@ const fmt = n => String(Math.round(n));
 const ZFAR = 3.4;                 // глубина спавна препятствий (игровые unit)
 const TRACK_HALF3 = 4.3;          // половина ширины дорожки в мире Three.js
 const Z_SCALE = 6.4;              // игровой z (подход препятствий) → мир
-const FOLLOWER_Z_SCALE = 3.0;     // «за лидером» — своя, более плотная шкала
+const FOLLOWER_Z_SCALE = 4.4;     // «за лидером» — своя, более плотная шкала (колонна вглубь)
 function worldX3(x) { return x * TRACK_HALF3; }
 function obstacleZ3(z) { return -z * Z_SCALE; }
 // Текстовый размер лейблов на HUD — эвристика по «дальности», не завязана на
@@ -348,15 +348,26 @@ let lastResult = null;
 // волны и злые ворота дальше), а не жёсткое расписание. Один и тот же тип не
 // выпадает больше двух раз подряд — сыгранная история подряд идущих типов
 // понижает его вес почти до нуля на следующий бросок.
+// Волна — главное блюдо (толпа на толпу), блины и ворота — гарнир вокруг
+// неё: с самого начала у волны самый большой вес в потоке.
 function weightsFor(d) {
   const p = clamp(d / 900, 0, 1);
   return {
-    gate: 0.27 - p * 0.06, plate: 0.30 - p * 0.08,
-    wave: d < 150 ? 0 : 0.06 + p * 0.28,
-    bonus: 0.22 - p * 0.10, crate: 0.15 - p * 0.02,
+    gate: 0.20 - p * 0.04, plate: 0.20 - p * 0.05,
+    wave: d < 40 ? 0 : 0.34 + p * 0.20,
+    bonus: 0.16 - p * 0.06, crate: 0.10 - p * 0.01,
   };
 }
+let firstGateDone = false, firstWaveDone = false;
 function pickEventType() {
+  // Первое событие — гарантированные ворота метров через 45-50 (~7-8с):
+  // на этой дистанции они всегда «обе стороны в плюс» (см. spawnGate), так
+  // что соло-боец успевает подрасти ДО того, как встретит первую волну —
+  // иначе забег с вероятностью почти 100% обрывается первым же боем.
+  // Волна дальше гарантирована в первые 15-20 секунд, но уже не с голым
+  // соло, а с подросшим отрядом.
+  if (!firstGateDone && dist >= 45) { firstGateDone = true; return commitEvent('gate'); }
+  if (!firstWaveDone && dist >= 100) { firstWaveDone = true; return commitEvent('wave'); }
   const w = weightsFor(dist);
   const weighted = Object.keys(w).map(k => {
     let v = Math.max(0.01, w[k]);
@@ -454,6 +465,7 @@ function resetGame() {
   // Честный рандом и на старте: первое событие тоже тянем из пула, просто
   // близко и из его лёгкой части (weightsFor(0) без волн — см. ниже).
   nextEventAt = rnd(14, 22); eventHistory.length = 0; lastEventWorldX = 0;
+  firstGateDone = false; firstWaveDone = false;
   fireTimer = 0; combo = 0; weaponLevel = 0; weaponTimer = 0;
   obstacles.length = 0; bonuses.length = 0; crates.length = 0; bullets.length = 0;
   parts.length = 0; toasts.length = 0;
@@ -481,12 +493,14 @@ const FULL_DETAIL_CAP = 22;   // ближайшие — полноценный �
 const RENDER_CAP = 220;       // дальше — дешёвые силуэты, совсем далеко — не рисуем
 const SPRING_K = 7.5;
 
+// Узкая колонна/клин, уходящая ОТ камеры вглубь: рост отряда читается длиной
+// строя за лидером, а не шеренгой поперёк дорожки. Ряд расширяется медленно
+// (максимум 4 в ряд), а шаг в глубину заметно больше шага вбок.
 function slotFor(i) {
-  // Клин из рядов позади лидера: ряд r вмещает (2r+1) мест, но не шире 9.
-  let idx = i, row = 1, rowLen = 3;
-  while (idx >= rowLen) { idx -= rowLen; row++; rowLen = Math.min(9, 2 * row + 1); }
+  let idx = i, row = 1, rowLen = 2;
+  while (idx >= rowLen) { idx -= rowLen; row++; rowLen = Math.min(4, 1 + Math.ceil(row / 3)); }
   const col = idx - (rowLen - 1) / 2;
-  return { dz: 0.10 * row + 0.02 * Math.sin(row * 1.7), dx: col * 0.085 };
+  return { dz: 0.34 * row + 0.015 * Math.sin(row * 1.7), dx: col * 0.10 };
 }
 function syncFollowers() {
   const want = clamp(squad - 1, 0, SQUAD_CAP);
@@ -561,12 +575,54 @@ function buildHall() {
     lamp.position.set(0, 3.6, -i * 5.5);
     scene.add(lamp);
   }
-  scene.add(new THREE.HemisphereLight(0xffd9a8, 0x241a15, 1.3));
-  const sun = new THREE.DirectionalLight(0xffe6bf, 1.6);
-  sun.position.set(3, 8, 6);
-  scene.add(sun);
-  scene.add(new THREE.DirectionalLight(0xfff2dd, 0.7).translateZ(-4));
+  // Ключевой свет — тёплый, сверху-спереди, лепит объём фигур.
+  scene.add(new THREE.HemisphereLight(0xffd9a8, 0x241a15, 0.9));
+  const key = new THREE.DirectionalLight(0xffe6bf, 1.7);
+  key.position.set(3, 9, 7);
+  scene.add(key);
+  // Контровой свет — холодный, светит навстречу (из глубины дорожки), чтобы
+  // край силуэта отделялся от тёплого фона, а не сливался с ним.
+  const rim = new THREE.DirectionalLight(0x8fd0ff, 1.35);
+  rim.position.set(-2.5, 4.5, -18);
+  scene.add(rim);
   scene.fog = new THREE.Fog(0x18110c, 12, floorLen * 0.85);
+  buildHallProps(floorLen);
+}
+// Стойки, штанги и зеркала по стенам — редко и инстансингом, чтобы читалось
+// «это качалка», а не голый коридор, и мелькание давало ощущение скорости.
+function buildHallProps(floorLen) {
+  const grad = toonGradient();
+  const spacing = 8.5;
+  const n = Math.max(6, Math.floor(floorLen / spacing));
+  const rackMat = new THREE.MeshToonMaterial({ color: 0x53585f, gradientMap: grad });
+  const posts = new THREE.InstancedMesh(new THREE.BoxGeometry(0.16, 2.1, 0.16), rackMat, n * 4);
+  const bars = new THREE.InstancedMesh(new THREE.BoxGeometry(0.85, 0.1, 0.1), rackMat, n * 2);
+  const plateGeo = new THREE.CylinderGeometry(0.34, 0.34, 0.1, 12); plateGeo.rotateZ(Math.PI / 2);
+  const plateMat = new THREE.MeshToonMaterial({ color: 0x8f2a20, gradientMap: grad });
+  const plates = new THREE.InstancedMesh(plateGeo, plateMat, n * 4);
+  const mirrorMat = new THREE.MeshBasicMaterial({ color: 0x9fd0e6, transparent: true, opacity: 0.16 });
+  const mirrors = new THREE.InstancedMesh(new THREE.PlaneGeometry(1.5, 2.1), mirrorMat, Math.ceil(n / 3) * 2);
+  let pi = 0, bi = 0, gi = 0, mi = 0;
+  const m4 = new THREE.Matrix4();
+  for (let i = 0; i < n; i++) {
+    const z = 2 - i * spacing;
+    [-1, 1].forEach(side => {
+      const baseX = side * (TRACK_HALF3 + 0.85);
+      [-0.34, 0.34].forEach(off => { posts.setMatrixAt(pi++, m4.makeTranslation(baseX + off, 1.05, z)); });
+      bars.setMatrixAt(bi++, m4.makeTranslation(baseX, 1.9, z));
+      [-0.34, 0.34].forEach(off => { plates.setMatrixAt(gi++, m4.makeTranslation(baseX + off, 1.55, z)); });
+    });
+    if (i % 3 === 0) {
+      [-1, 1].forEach(side => {
+        m4.identity();
+        m4.makeRotationY(side < 0 ? Math.PI / 2 : -Math.PI / 2);
+        m4.setPosition(side * (TRACK_HALF3 + 0.04), 1.5, z);
+        mirrors.setMatrixAt(mi++, m4);
+      });
+    }
+  }
+  posts.count = pi; bars.count = bi; plates.count = gi; mirrors.count = mi;
+  scene.add(posts, bars, plates, mirrors);
 }
 
 // ── БЛИНЫ (weight plates) ───────────────────────────────────────────────────
@@ -790,12 +846,14 @@ function drawObstacleLabels() {
       const p = projectPoint(o.worldX, o.z, 1.35);
       textChip(fmt(o.hp), p.x, p.y, Math.max(15, 26 * fakeScale(o.z)), CHALK);
     } else if (o.kind === 'gate') {
+      // Главное решение в игре — цифры обязаны читаться издалека: белым,
+      // огромным, с толстой тёмной обводкой, во всю створку.
       const near = projectPoint(-1, o.z, 0.95), mid = projectPoint(0, o.z, 0.95), farE = projectPoint(1, o.z, 0.95);
       const label = (o.buffLeft ? o.buff : o.debuff).label;
       const label2 = (o.buffLeft ? o.debuff : o.buff).label;
-      const fs = Math.max(13, 22 * fakeScale(o.z));
-      textChip(label, (near.x + mid.x) / 2, near.y, fs, '#111');
-      textChip(label2, (mid.x + farE.x) / 2, mid.y, fs, '#111');
+      const fs = Math.max(30, 92 * fakeScale(o.z));
+      textChip(label, (near.x + mid.x) / 2, near.y, fs, '#ffffff');
+      textChip(label2, (mid.x + farE.x) / 2, mid.y, fs, '#ffffff');
     } else if (o.kind === 'wave') {
       const p = projectPoint(o.worldX, o.z, 1.7);
       textChip(fmt(o.count), p.x, p.y, Math.max(15, 26 * fakeScale(o.z)), '#ff8a8a');
@@ -1004,54 +1062,81 @@ function drawAthlete(c, fighter, opts) {
   c.restore();
 }
 // ── ТОЛПА В 3D: InstancedMesh на каждую часть тела, отдельно свои/чужие ─────
-// Двести качков должны стоить единицы вызовов отрисовки: один инстансед-меш
-// на торс, голову, руки (оба слота на бойца), ноги (оба слота) и тень —
-// пять мешей на команду, а не меш на каждого бойца.
+// Двести качков должны стоить единицы вызовов отрисовки: инстансед-меш на
+// торс, голову, руки (оба слота на бойца), ноги (оба слота) — плюс у каждой
+// части свой инстансед-двойник той же геометрии чуть крупнее, чёрный,
+// side:BackSide — рисуется первым и даёт жёсткий тёмный контур силуэта.
 const PLAYER_CAP = 240, ENEMY_CAP = 220;
+const CHAR_SCALE = 0.46; // боец ≈ десятая часть высоты экрана, не половина
+const OUTLINE_K = 1.16;
+// Ступенчатая (тон-в-тон) градация света — как в мультяшных раннерах, не
+// плоский Lambert: 4 шага яркости через crisp-текстуру без интерполяции.
+let _toonGrad = null;
+function toonGradient() {
+  if (_toonGrad) return _toonGrad;
+  const c = document.createElement('canvas'); c.width = 4; c.height = 1;
+  const cx = c.getContext('2d');
+  [66, 128, 190, 255].forEach((v, i) => { cx.fillStyle = 'rgb(' + v + ',' + v + ',' + v + ')'; cx.fillRect(i, 0, 1, 1); });
+  _toonGrad = new THREE.CanvasTexture(c);
+  _toonGrad.minFilter = THREE.NearestFilter; _toonGrad.magFilter = THREE.NearestFilter;
+  return _toonGrad;
+}
 function buildCrowdRig(cap, colors) {
+  const grad = toonGradient();
   const torsoGeo = new THREE.BoxGeometry(0.46, 0.62, 0.28);
   const headGeo = new THREE.SphereGeometry(0.2, 8, 6);
   const armGeo = new THREE.BoxGeometry(0.13, 0.5, 0.13); armGeo.translate(0, -0.25, 0);
   const legGeo = new THREE.BoxGeometry(0.16, 0.58, 0.16); legGeo.translate(0, -0.29, 0);
   const shadowGeo = new THREE.CircleGeometry(0.34, 12);
-  const mk = (geo, color, count) => {
-    const mesh = new THREE.InstancedMesh(geo, new THREE.MeshLambertMaterial({ color }), count);
-    mesh.count = 0;
-    scene.add(mesh);
-    return mesh;
+  const mkMain = (geo, color, count) => {
+    const mesh = new THREE.InstancedMesh(geo, new THREE.MeshToonMaterial({ color, gradientMap: grad }), count);
+    mesh.count = 0; scene.add(mesh); return mesh;
+  };
+  const mkOutline = (geo, count) => {
+    const mesh = new THREE.InstancedMesh(geo, new THREE.MeshBasicMaterial({ color: 0x0a0705, side: THREE.BackSide }), count);
+    mesh.count = 0; scene.add(mesh); return mesh;
   };
   return {
-    torso: mk(torsoGeo, colors.top, cap),
-    head: mk(headGeo, colors.skin, cap),
-    arm: mk(armGeo, colors.skin, cap * 2),
-    leg: mk(legGeo, colors.bottom, cap * 2),
-    shadow: mk(shadowGeo, 0x000000, cap),
+    torso: mkMain(torsoGeo, colors.top, cap), torsoOut: mkOutline(torsoGeo, cap),
+    head: mkMain(headGeo, colors.skin, cap), headOut: mkOutline(headGeo, cap),
+    arm: mkMain(armGeo, colors.skin, cap * 2), armOut: mkOutline(armGeo, cap * 2),
+    leg: mkMain(legGeo, colors.bottom, cap * 2), legOut: mkOutline(legGeo, cap * 2),
+    shadow: mkMain(shadowGeo, 0x000000, cap),
   };
 }
 let playerRig = null, enemyRig = null;
-function setPart(mesh, idx, x, y, z, rotX, scale) {
+function setPart(mesh, outlineMesh, idx, x, y, z, rotX, scale) {
   const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(rotX, 0, 0));
-  const m = new THREE.Matrix4().compose(new THREE.Vector3(x, y, z), q, new THREE.Vector3(scale, scale, scale));
-  mesh.setMatrixAt(idx, m);
+  const pos = new THREE.Vector3(x, y, z);
+  mesh.setMatrixAt(idx, new THREE.Matrix4().compose(pos, q, new THREE.Vector3(scale, scale, scale)));
+  if (outlineMesh) {
+    const s = scale * OUTLINE_K;
+    outlineMesh.setMatrixAt(idx, new THREE.Matrix4().compose(pos, q, new THREE.Vector3(s, s, s)));
+  }
 }
 // Ставит одного бойца (торс+голова+руки+ноги+тень) в мировые координаты сцены.
 function placeCharacter(rig, idx, x3, z3, phase, bob) {
+  const S = CHAR_SCALE;
   const legL = Math.sin(phase) * 0.55, legR = -legL;
   const armL = -legL * 0.7, armR = -legR * 0.7;
-  const bobY = Math.abs(Math.sin(phase)) * 0.045 * bob;
-  setPart(rig.torso, idx, x3, 0.85 + bobY, z3, 0, 1);
-  setPart(rig.head, idx, x3, 1.32 + bobY, z3, 0, 1);
-  setPart(rig.arm, idx * 2, x3 - 0.27, 1.12 + bobY, z3, armL, 1);
-  setPart(rig.arm, idx * 2 + 1, x3 + 0.27, 1.12 + bobY, z3, armR, 1);
-  setPart(rig.leg, idx * 2, x3 - 0.12, 0.56, z3, legL, 1);
-  setPart(rig.leg, idx * 2 + 1, x3 + 0.12, 0.56, z3, legR, 1);
+  const bobY = Math.abs(Math.sin(phase)) * 0.045 * bob * S;
+  setPart(rig.torso, rig.torsoOut, idx, x3, 0.85 * S + bobY, z3, 0, S);
+  setPart(rig.head, rig.headOut, idx, x3, 1.32 * S + bobY, z3, 0, S);
+  setPart(rig.arm, rig.armOut, idx * 2, x3 - 0.27 * S, 1.12 * S + bobY, z3, armL, S);
+  setPart(rig.arm, rig.armOut, idx * 2 + 1, x3 + 0.27 * S, 1.12 * S + bobY, z3, armR, S);
+  setPart(rig.leg, rig.legOut, idx * 2, x3 - 0.12 * S, 0.56 * S, z3, legL, S);
+  setPart(rig.leg, rig.legOut, idx * 2 + 1, x3 + 0.12 * S, 0.56 * S, z3, legR, S);
   const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0));
-  rig.shadow.setMatrixAt(idx, new THREE.Matrix4().compose(new THREE.Vector3(x3, 0.015, z3), q, new THREE.Vector3(1, 1, 1)));
+  rig.shadow.setMatrixAt(idx, new THREE.Matrix4().compose(new THREE.Vector3(x3, 0.012, z3), q, new THREE.Vector3(S, S, S)));
 }
 function finishRig(rig, count) {
-  rig.torso.count = count; rig.head.count = count; rig.shadow.count = count;
-  rig.arm.count = count * 2; rig.leg.count = count * 2;
-  [rig.torso, rig.head, rig.arm, rig.leg, rig.shadow].forEach(m => { m.instanceMatrix.needsUpdate = true; });
+  rig.torso.count = count; rig.torsoOut.count = count;
+  rig.head.count = count; rig.headOut.count = count;
+  rig.shadow.count = count;
+  rig.arm.count = count * 2; rig.armOut.count = count * 2;
+  rig.leg.count = count * 2; rig.legOut.count = count * 2;
+  [rig.torso, rig.torsoOut, rig.head, rig.headOut, rig.arm, rig.armOut, rig.leg, rig.legOut, rig.shadow]
+    .forEach(m => { m.instanceMatrix.needsUpdate = true; });
 }
 function applyFighterColors() {
   if (!playerRig) return;
@@ -1551,8 +1636,10 @@ function updateCamera(dt) {
   const shakeX = shakeAmp > 0 ? rnd(-1, 1) * shakeAmp * 0.03 : 0;
   const shakeY = shakeAmp > 0 ? rnd(-1, 1) * shakeAmp * 0.02 : 0;
   const punch = clamp(shakeAmp * 0.01, 0, 0.5); // толчок назад на сильных ударах
-  camera.position.set(leadX * 0.4 + shakeX, 3.5 + shakeY, 6.4 + punch);
-  camera.lookAt(leadX * 0.6, 1.0, -3.2);
+  // Камера выше и дальше, чем раньше: сотня бойцов должна помещаться в
+  // кадр колонной, уходящей вглубь, а не лезть в объектив передними рядами.
+  camera.position.set(leadX * 0.35 + shakeX, 6.8 + shakeY, 10.5 + punch);
+  camera.lookAt(leadX * 0.55, 1.1, -6.5);
   camera.rotation.z = camYaw * 0.5;
 }
 

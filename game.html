@@ -816,7 +816,7 @@ function toWZ(x2d) { return -(x2d - P.x) * UNIT; }
 let renderer = null, scene = null, camera = null;
 let sceneObstacles = null, decorGroup = null, particleGroup = null;
 let floorMesh = null, trackMesh = null, stripeMesh = null, wallL = null, wallR = null;
-let propMesh = null, propBarMesh = null, lampMesh = null, lampPostMesh = null, buildingMesh = null;
+let propMesh = null, propBarMesh = null, lampMeshA = null, lampMeshB = null, lampPostMesh = null, buildingMesh = null;
 let itemMeshes = {}; // type -> InstancedMesh
 const ITEM_CAP = 48;
 let playerModel = null; // { group, parts }
@@ -945,11 +945,14 @@ function initThree() {
   buildingMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(1.6, 1, 1.6), toonMat(0x11162a), 18);
   scene.add(buildingMesh);
 
-  // Тёплые лампы на столбах — светящаяся сфера (individual instanceColor) + сам столб
-  const lampMat = new THREE.MeshBasicMaterial({ color: 0xffffff, vertexColors: true });
-  lampMesh = new THREE.InstancedMesh(new THREE.SphereGeometry(0.24, 8, 6), lampMat, 16);
-  lampMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(16 * 3), 3);
-  scene.add(lampMesh);
+  // Тёплые лампы на столбах — светящаяся сфера + сам столб. Два инстанс-меша
+  // (чёт/нечет) с обычным material.color — InstancedMesh.instanceColor в этой
+  // сборке three не подмешивается во фрагментный шейдер без doorknob-атрибута
+  // 'color' на геометрии, поэтому красим целыми материалами, а не по инстансу.
+  const lampGeo = new THREE.SphereGeometry(0.24, 8, 6);
+  lampMeshA = new THREE.InstancedMesh(lampGeo, new THREE.MeshBasicMaterial({ color: 0xffb060 }), 8);
+  lampMeshB = new THREE.InstancedMesh(lampGeo, new THREE.MeshBasicMaterial({ color: 0xffb060 }), 8);
+  scene.add(lampMeshA, lampMeshB);
   lampPostMesh = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.045, 0.045, 2.6, 6), toonMat(0x2a2118), 16);
   scene.add(lampPostMesh);
 
@@ -1275,13 +1278,8 @@ function applyZoneColors() {
   propBarMesh.visible = propMesh.visible;
 
   // Лампы: тёплые в подвале/улице, двухцветный неон в неон-зале
-  const N = lampMesh.count;
-  for (let i = 0; i < N; i++) {
-    const useAlt = z.kind === 'neon' && (i % 2 === 1);
-    const c = new THREE.Color(useAlt ? (z.lamp2 || z.lamp) : z.lamp);
-    lampMesh.setColorAt(i, c);
-  }
-  lampMesh.instanceColor.needsUpdate = true;
+  lampMeshA.material.color.set(z.lamp);
+  lampMeshB.material.color.set(z.kind === 'neon' ? (z.lamp2 || z.lamp) : z.lamp);
 }
 
 // Обёртка над модулем: даёт «бегущую дорожку» позиций от -range до 0,
@@ -1325,21 +1323,24 @@ function updateDecor() {
   }
   buildingMesh.instanceMatrix.needsUpdate = true;
 
-  const LSPACING = 4.2, LN = lampMesh.count, LHALF = LN / 2;
+  const LSPACING = 4.2, LN = lampMeshA.count + lampMeshB.count, LHALF = LN / 2;
   for (let i = 0; i < LN; i++) {
     const side = (i % 2 === 0) ? -1 : 1;
     const row = Math.floor(i / 2);
     const z = scrollZ(row, LSPACING, LHALF, 0.95);
+    const mesh = (i % 2 === 0) ? lampMeshA : lampMeshB;
+    const idx = Math.floor(i / 2);
     dummy.position.set(side * 4.6, 2.9, z);
     dummy.rotation.set(0, 0, 0);
     dummy.scale.set(1, 1, 1);
     dummy.updateMatrix();
-    lampMesh.setMatrixAt(i, dummy.matrix);
+    mesh.setMatrixAt(idx, dummy.matrix);
     dummy.position.set(side * 4.6, 1.55, z);
     dummy.updateMatrix();
     lampPostMesh.setMatrixAt(i, dummy.matrix);
   }
-  lampMesh.instanceMatrix.needsUpdate = true;
+  lampMeshA.instanceMatrix.needsUpdate = true;
+  lampMeshB.instanceMatrix.needsUpdate = true;
   lampPostMesh.instanceMatrix.needsUpdate = true;
 }
 
