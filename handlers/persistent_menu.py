@@ -86,7 +86,7 @@ async def _open_ai_trainer(message: Message, state: FSMContext) -> None:
     from handlers.workout import _clear_state_keep_workout
 
     if not ai_trainer.is_configured():
-        await message.answer("AI-тренер пока не подключён — это к админу бота.")
+        await message.answer("AI-тренер пока не подключён — загляни позже.")
         return
     await db.get_or_create_user(message.from_user.id, message.from_user.username)
     # _clear_state_keep_workout preserves ai_history, so tapping "AI-тренер"
