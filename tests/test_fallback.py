@@ -38,11 +38,11 @@ def _callback(user_id: int = 1, data: str = "pick:grp:7", *, inaccessible: bool 
     return callback
 
 
-async def test_unhandled_text_points_to_ai_trainer_and_start():
+async def test_unhandled_text_points_to_ai_trainer_and_start(fresh_db, user_id):
     """Самый частый непонятый текст — вопрос тренеру, напечатанный из главного
     меню («составь мне программу»): ответ обязан вести и к AI-тренеру, и в меню."""
     message = MagicMock()
-    message.from_user = SimpleNamespace(id=1)
+    message.from_user = SimpleNamespace(id=user_id)
     message.text = "составь мне программу"
     message.content_type = ContentType.TEXT
     message.reply = AsyncMock()
@@ -53,6 +53,93 @@ async def test_unhandled_text_points_to_ai_trainer_and_start():
     reply = message.reply.await_args.args[0]
     assert "AI-тренер" in reply
     assert "/start" in reply
+
+
+# ---------- находка: главное меню без активной тренировки маршрутизирует ----------
+#
+# «жим» с главного меню раньше падал в общий фолбэк («Не понял») — детерминиро-
+# ванная (без единого платного вызова) развилка перехватывает два частых случая
+# до этого: похоже на подход, или совпадает с уже заведённым упражнением.
+
+
+async def test_a_set_typed_with_no_active_workout_points_at_starting_one(fresh_db, user_id):
+    message = MagicMock()
+    message.from_user = SimpleNamespace(id=user_id)
+    message.text = "100 8"
+    message.content_type = ContentType.TEXT
+    message.reply = AsyncMock()
+
+    await fallback.unhandled_text(message)
+
+    message.reply.assert_awaited_once()
+    reply, kwargs = message.reply.await_args.args, message.reply.await_args.kwargs
+    text = reply[0]
+    assert "подход" in text.lower()
+    kb = kwargs["reply_markup"]
+    assert kb.inline_keyboard[0][0].callback_data == "menu:start_workout"
+
+
+async def test_pure_weight_x_reps_form_also_points_at_starting_one(fresh_db, user_id):
+    """"100x8x3" — тоже подход, только через другой сепаратор в parse_sets_line."""
+    message = MagicMock()
+    message.from_user = SimpleNamespace(id=user_id)
+    message.text = "100x8x3"
+    message.content_type = ContentType.TEXT
+    message.reply = AsyncMock()
+
+    await fallback.unhandled_text(message)
+
+    message.reply.assert_awaited_once()
+    kb = message.reply.await_args.kwargs["reply_markup"]
+    assert kb.inline_keyboard[0][0].callback_data == "menu:start_workout"
+
+
+async def test_typing_a_known_exercise_name_offers_its_card(fresh_db, user_id):
+    group_id = await fresh_db.create_muscle_group(user_id, "Грудь")
+    ex_id = await fresh_db.create_exercise(user_id, "Жим штанги лёжа", group_id)
+    message = MagicMock()
+    message.from_user = SimpleNamespace(id=user_id)
+    message.text = "жим"
+    message.content_type = ContentType.TEXT
+    message.reply = AsyncMock()
+
+    await fallback.unhandled_text(message)
+
+    message.reply.assert_awaited_once()
+    text = message.reply.await_args.args[0]
+    kb = message.reply.await_args.kwargs["reply_markup"]
+    assert "Жим штанги лёжа" in text
+    assert kb.inline_keyboard[0][0].callback_data == f"prog:card:{ex_id}"
+
+
+async def test_unknown_exercise_name_still_falls_back_to_the_generic_reply(fresh_db, user_id):
+    message = MagicMock()
+    message.from_user = SimpleNamespace(id=user_id)
+    message.text = "совсем незнакомое упражнение зюзюка"
+    message.content_type = ContentType.TEXT
+    message.reply = AsyncMock()
+
+    await fallback.unhandled_text(message)
+
+    message.reply.assert_awaited_once()
+    text = message.reply.await_args.args[0]
+    assert "Не понял" in text
+
+
+async def test_a_command_never_goes_through_the_new_routes(fresh_db, user_id):
+    """Незнакомая команда должна получать тот же общий ответ, что и раньше — не
+    пытаемся распарсить "/xyz" как подход или найти его в упражнениях."""
+    message = MagicMock()
+    message.from_user = SimpleNamespace(id=user_id)
+    message.text = "/xyz"
+    message.content_type = ContentType.TEXT
+    message.reply = AsyncMock()
+
+    await fallback.unhandled_text(message)
+
+    message.reply.assert_awaited_once()
+    text = message.reply.await_args.args[0]
+    assert "Не понял" in text
 
 
 async def test_an_unhandled_button_answers_and_opens_the_menu(fresh_db, user_id):

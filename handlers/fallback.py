@@ -18,9 +18,10 @@ import logging
 from aiogram import Router
 from aiogram.enums import ContentType
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 import activity_log
+import db
 
 router = Router(name="fallback")
 
@@ -63,10 +64,49 @@ _HUMAN_CONTENT = frozenset({
 })
 
 
+# Дешёвый (без единого платного вызова) детерминированный маршрут для текста
+# из главного меню — до того, как всё уйдёт в общее «Не понял». Два случая,
+# которые различимы без всякого AI:
+#
+#  а) текст похож на подход («жим 100 8», «100 8») — писать его сюда просто
+#     ещё некуда, тренировка не начата;
+#  б) текст — название (или обрывок названия) уже заведённого упражнения —
+#     находим его тем же поиском, что и «⚙️ Упражнения», и даём кнопку сразу
+#     на карточку, а не заставляем идти туда руками.
+#
+# Команды ("/xyz") через оба пути не пропускаются: тот же генеральный ответ,
+# что и раньше — если команда не опознана нигде выше, разбираться в ней тут
+# не наше дело.
+
+
 @router.message()
 async def unhandled_text(message: Message) -> None:
     if message.content_type not in _HUMAN_CONTENT:
         return
+    text = (message.text or "").strip() if message.content_type == ContentType.TEXT else ""
+    if text and not text.startswith("/"):
+        from handlers.workout import _looks_like_a_set
+
+        if _looks_like_a_set(text):
+            kb = InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="🏋️ НАЧАТЬ ТРЕНИРОВКУ", callback_data="menu:start_workout")
+            ]])
+            await message.reply(
+                "Похоже на подход. Сначала начни тренировку — жми «🏋️ НАЧАТЬ ТРЕНИРОВКУ» ниже.",
+                reply_markup=kb,
+            )
+            return
+        found = await db.search_exercises(message.from_user.id, text, limit=1)
+        if found:
+            ex = found[0]
+            kb = InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text=f"📋 {ex['display_name']}", callback_data=f"prog:card:{ex['id']}")
+            ]])
+            await message.reply(
+                f"Нашёл в твоих упражнениях «{ex['display_name']}» — открой карточку:",
+                reply_markup=kb,
+            )
+            return
     # Сюда чаще всего прилетает вопрос тренеру, напечатанный из главного меню
     # («составь мне программу»), — подсказываем дорогу к AI-тренеру, а не только
     # /start. Без детекции по словам: любой непонятый текст получает один ответ.
