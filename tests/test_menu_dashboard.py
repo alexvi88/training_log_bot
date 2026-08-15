@@ -326,6 +326,14 @@ def test_names_are_never_truncated():
     assert tiles[0][0] == name.upper()
 
 
+def test_menu_lifts_title_names_the_actual_window():
+    """Заголовок обязан говорить правду про окно, которым реально считали —
+    не константу «8 недель», а число, с которым позвали формулу роста."""
+    assert formatting.menu_lifts_title(8) == "РОСТ e1RM ЗА 8 НЕДЕЛЬ"
+    assert formatting.menu_lifts_title(4) == "РОСТ e1RM ЗА 4 НЕДЕЛИ"
+    assert formatting.menu_lifts_title(1) == "РОСТ e1RM ЗА 1 НЕДЕЛЮ"
+
+
 # ---------- отрисовка ----------
 
 
@@ -425,6 +433,22 @@ def test_a_long_headline_stops_before_the_rank_badge():
     )
 
 
+def test_the_last_band_is_a_bottom_pad_not_a_widget_edge():
+    """Последняя полоса — всегда безусловная нижняя распорка (DASH_PAD), а не
+    край последнего виджета: без неё панель, оказавшаяся последней (плитки
+    роста, а без них — объём), прилипала к нижнему краю картинки."""
+    with_lifts = _png_size(_render())[1]  # головы, плитки, объём (3 строки), плитки роста
+    expected_widgets_only = (
+        charts._DASH_HEAD_H + charts.DASH_PAD + charts._DASH_TILES_H
+        + charts.DASH_GAP + (0.34 + charts._DASH_VOL_STEP * 3)
+        + charts.DASH_GAP + charts._DASH_LIFTS_H
+    )
+    expected_with_pad = round((expected_widgets_only + charts.DASH_PAD) * 150)
+
+    assert with_lifts == expected_with_pad
+    assert with_lifts != round(expected_widgets_only * 150)
+
+
 def test_the_growth_tiles_share_row_pitch_with_the_volume_panel():
     """Плитки роста размечены тем же шагом, что и коридор объёма — так же, как
     раньше карточки движений: сравниваем шаг, а не пиксели, которые поедут от
@@ -505,3 +529,78 @@ async def test_menu_view_only_draws_growth_that_actually_happened(fresh_db, user
     _, png = await workout_handlers._menu_view(user_id)
 
     assert png is not None
+
+
+# ---------- фолбэк окна плиток роста для молодой истории ----------
+
+
+def _capture_lifts_title(monkeypatch):
+    """Подменяет charts.render_menu_dashboard, чтобы поймать заголовок секции
+    плиток роста (lifts_title, седьмой позиционный аргумент), не рендеря
+    настоящую картинку matplotlib'ом."""
+    captured = {}
+
+    def fake_render(headline, badge="", tiles=None, volume_rows=None, volume_title="",
+                     lift_tiles=None, lifts_title="", lifts_note=""):
+        captured["lift_tiles"] = lift_tiles
+        captured["lifts_title"] = lifts_title
+        return b"fake-png"
+
+    monkeypatch.setattr(workout_handlers.charts, "render_menu_dashboard", fake_render)
+    return captured
+
+
+async def test_young_history_falls_back_to_a_four_week_lift_window(fresh_db, user_id, monkeypatch):
+    """Аккаунт пяти недель от роду: полное окно (8 недель) целиком лежит внутри
+    истории, и базы ДО него нет — а вот рост за последние 4 недели найдётся."""
+    db = fresh_db
+    captured = _capture_lifts_title(monkeypatch)
+    workout_handlers._heatmap_cache.pop(user_id, None)
+    today = dt.date.today()
+    bench = await _own(db, user_id, BENCH)
+    # История стартует 5 недель назад: старше фолбэк-окна (4 недели), но моложе
+    # полного (8 недель) — ровно тот случай, когда нужен фолбэк.
+    await _session(db, user_id, today - dt.timedelta(weeks=5), [(bench, 100, 5, 3)])
+    # Рост случился внутри последних 4 недель — а до этого база 100 кг.
+    for offset in (25, 15, 5):
+        await _session(db, user_id, today - dt.timedelta(days=offset), [(bench, 120, 5, 3)])
+
+    await workout_handlers._menu_view(user_id)
+
+    assert captured["lift_tiles"] != []
+    assert captured["lifts_title"] == formatting.menu_lifts_title(4)
+    assert "4 НЕДЕЛИ" in captured["lifts_title"]
+
+
+async def test_history_older_than_8_weeks_keeps_the_full_window(fresh_db, user_id, monkeypatch):
+    db = fresh_db
+    captured = _capture_lifts_title(monkeypatch)
+    workout_handlers._heatmap_cache.pop(user_id, None)
+    today = dt.date.today()
+    bench = await _own(db, user_id, BENCH)
+    await _session(db, user_id, today - dt.timedelta(weeks=10), [(bench, 100, 5, 3)])
+    for offset in (25, 15, 5):
+        await _session(db, user_id, today - dt.timedelta(days=offset), [(bench, 120, 5, 3)])
+
+    await workout_handlers._menu_view(user_id)
+
+    assert captured["lift_tiles"] != []
+    assert captured["lifts_title"] == formatting.menu_lifts_title(8)
+    assert "8 НЕДЕЛЬ" in captured["lifts_title"]
+
+
+async def test_history_younger_than_the_fallback_window_gets_no_lift_tiles(fresh_db, user_id, monkeypatch):
+    """Моложе даже фолбэк-окна (4 недели) — сравнивать всё ещё не с чем, и
+    выдумывать базу для плитки не нужно (осознанное решение по ТЗ)."""
+    db = fresh_db
+    captured = _capture_lifts_title(monkeypatch)
+    workout_handlers._heatmap_cache.pop(user_id, None)
+    today = dt.date.today()
+    bench = await _own(db, user_id, BENCH)
+    await _session(db, user_id, today - dt.timedelta(weeks=2), [(bench, 100, 5, 3)])
+    await _session(db, user_id, today - dt.timedelta(days=1), [(bench, 120, 5, 3)])
+
+    await workout_handlers._menu_view(user_id)
+
+    assert captured["lift_tiles"] == []
+    assert captured["lifts_title"] == ""

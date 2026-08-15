@@ -744,6 +744,13 @@ def _try_claim_weight_confirm(user_id: int) -> bool:
 # недель — то же окно, по которому считается звание (analytics.RANK_FREQUENCY_WEEKS):
 # «что я сейчас делаю», а не «что делал когда-то».
 _LIFT_WINDOW_WEEKS = 8
+# У истории моложе восьми недель «рост за 8 недель» врёт: вся история и так
+# лежит внутри окна, базы ДО него нет (exercise_e1rm_growth), и плиток не
+# бывает вовсе — не потому что роста не было, а потому что не с чем сравнивать.
+# Короткое окно даёт этим свежим аккаунтам шанс увидеть плитку до восьмой
+# недели. Моложе самого фолбэка (_LIFT_FALLBACK_WINDOW_WEEKS) плиток по-прежнему
+# не будет — это честно: сравнивать нечего, и выдумывать базу не стоит.
+_LIFT_FALLBACK_WINDOW_WEEKS = 4
 # Кандидатов на плитки роста берётся больше, чем плиток в сводке: рост считается
 # честно (максимум ДО окна против максимума ВНУТРИ), и у многих частых движений
 # он окажется нулевым или отрицательным — их форматтер потом отбросит. Без
@@ -781,7 +788,15 @@ async def _menu_view(user_id: int) -> tuple[str, bytes | None]:
     # Кандидатов берётся с запасом (_LIFT_CANDIDATES) — формула роста ниже
     # отбросит те, что не выросли, и без запаса плиток часто не осталось бы
     # вовсе.
-    lift_start = today - dt.timedelta(weeks=_LIFT_WINDOW_WEEKS)
+    #
+    # У истории моложе восьми недель окно короче (см. _LIFT_FALLBACK_WINDOW_WEEKS):
+    # иначе вся история лежит внутри окна, базы ДО него нет, и секция плиток
+    # пропадает целиком на первые два месяца в боте — самое время видеть прогресс.
+    history_age_weeks = (today - min(dates)).days / 7
+    lift_window_weeks = (
+        _LIFT_FALLBACK_WINDOW_WEEKS if history_age_weeks < _LIFT_WINDOW_WEEKS else _LIFT_WINDOW_WEEKS
+    )
+    lift_start = today - dt.timedelta(weeks=lift_window_weeks)
     growth: list[tuple[str, float, float]] = []
     for row in await db.top_exercises_by_frequency(
         user_id, lift_start.isoformat(), today.isoformat(), limit=_LIFT_CANDIDATES
@@ -804,7 +819,10 @@ async def _menu_view(user_id: int) -> tuple[str, bytes | None]:
     # Ключ кэша собран из того, что реально нарисуется, а не из «даты и числа
     # тренировок»: объём, тоннаж и e1RM меняются от подходов, поэтому по прежнему
     # ключу картинка застывала — дописал четыре подхода в уже закрытую
-    # тренировку, а на экране всё прежнее.
+    # тренировку, а на экране всё прежнее. Окно роста (lift_window_weeks) в ключ
+    # отдельно не идёт: смена окна (4→8 недель по мере взросления истории) меняет
+    # состав growth, а он уже целиком в tuple(lift_tiles) — второго слепка того
+    # же самого не нужно.
     cache_key = (
         today, len(dates), max(dates), headline, rank.level, tuple(tiles),
         tuple(volume_rows), volume_title, tuple(lift_tiles),
@@ -816,7 +834,7 @@ async def _menu_view(user_id: int) -> tuple[str, bytes | None]:
     png = await asyncio.to_thread(
         charts.render_menu_dashboard,
         headline, rank.name.upper(), tiles, volume_rows, volume_title, lift_tiles,
-        formatting.MENU_LIFTS_TITLE if lift_tiles else "", formatting.MENU_LIFTS_NOTE,
+        formatting.menu_lifts_title(lift_window_weeks) if lift_tiles else "", formatting.MENU_LIFTS_NOTE,
     )
     _heatmap_cache[user_id] = (cache_key, png)
     return _GREETING, png
