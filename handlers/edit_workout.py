@@ -223,7 +223,7 @@ async def editw_editset_prompt(callback: CallbackQuery, state: FSMContext):
     await ui.safe_edit(
         callback,
         f"Текущее значение: {formatting.format_set(row['weight'], row['reps'], row['rpe'])}\n"
-        "Напиши новый вес и повторы (например «100 8»):",
+        "Напиши вес и повторы («100 8») или только повторы («8») — вес оставлю:",
         reply_markup=keyboards.cancel_keyboard("editw:back"),
     )
     await callback.answer()
@@ -243,10 +243,15 @@ async def editw_editset_entered(message: Message, state: FSMContext):
         return
     data = await state.get_data()
     new_set = parsed[0]
-    weight = new_set.weight
+    # A bare "8" parses as weight_omitted (weight=0.0) — same as everywhere
+    # else bare reps are accepted (see workout._apply_set_edit). Without this,
+    # editing a set to just its reps silently zeroed the weight instead of
+    # keeping what was already there.
     if new_set.weight_omitted:
         row = await db.get_set(data["edit_set_id"])
         weight = row["weight"]
+    else:
+        weight = new_set.weight
     await db.update_set(data["edit_set_id"], weight, new_set.reps, new_set.rpe)
     await _on_workout_edited(data["edit_workout_id"])
     # No "Готово." reply: the redrawn screen below already shows the new value,
@@ -266,9 +271,14 @@ async def editw_addset_prompt(callback: CallbackQuery, state: FSMContext):
     await state.update_data(add_block_id=block_id, add_exercise_id=int(ex_id_str))
     await state.set_state(EditWorkoutFlow.adding_set)
     ex = await db.get_exercise(int(ex_id_str))
+    # This screen is only reached from an exercise that already has sets in
+    # this block ("➕ Добавить подход"), unlike _editwex_finish's "первый
+    # подход" prompt — so, same as the live tracker, bare reps ("8") are
+    # allowed and carry the previous set's weight forward.
     await ui.safe_edit(
         callback,
-        f"Новый подход для «{ex['display_name']}» — напиши вес и повторы (например «100 8», можно «100x8x3»):",
+        f"Новый подход для «{ex['display_name']}» — напиши вес и повторы («100 8») "
+        "или только повторы («8») — вес возьму с прошлого подхода:",
         reply_markup=keyboards.cancel_keyboard("editw:back"),
     )
     await callback.answer()
@@ -284,10 +294,13 @@ async def editw_addset_entered(message: Message, state: FSMContext):
     data = await state.get_data()
     ex_id = data["add_exercise_id"]
     block_id = data.get("add_block_id")
+    prev_weight = None
     if block_id is None:
         # A brand-new exercise for this workout (via "➕ Новое упражнение") — the
         # block is only created now, on the first real set, so cancelling the
-        # weight/reps prompt never leaves an empty exercise behind.
+        # weight/reps prompt never leaves an empty exercise behind. Nothing to
+        # carry a bare-reps weight forward from either — see _editwex_finish's
+        # prompt, which asks for the first set and doesn't offer that shortcut.
         block_id = await db.create_block(data["edit_workout_id"], "single")
         await db.add_block_exercise(block_id, ex_id, 0)
         await db.touch_exercise_last_used(ex_id)
@@ -295,8 +308,13 @@ async def editw_addset_entered(message: Message, state: FSMContext):
     else:
         block_exs = await db.get_block_exercises(block_id)
         order_in_round = next((be["order_in_block"] for be in block_exs if be["exercise_id"] == ex_id), 0)
+        existing_sets = [s for s in await db.list_sets_for_block(block_id) if s["exercise_id"] == ex_id]
+        if existing_sets:
+            prev_weight = existing_sets[-1]["weight"]
     for ps in parsed:
-        await db.append_set(block_id, ex_id, order_in_round, ps.weight, ps.reps, ps.rpe)
+        weight = prev_weight if (ps.weight_omitted and prev_weight) else ps.weight
+        await db.append_set(block_id, ex_id, order_in_round, weight, ps.reps, ps.rpe)
+        prev_weight = weight
     await _on_workout_edited(data["edit_workout_id"])
     await _delete_message(message)
     # Land on the exercise the set belongs to, so several sets can be typed in a
