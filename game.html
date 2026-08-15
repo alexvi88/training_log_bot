@@ -7,7 +7,7 @@
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body { height: 100%; }
+  html, body { height: 100%; overscroll-behavior: none; }
   body {
     background: linear-gradient(135deg, #14110f 0%, #221812 50%, #0d1a2e 100%);
     font-family: 'Courier New', monospace;
@@ -131,7 +131,15 @@
 <script>
 'use strict';
 // Expand to full screen immediately (как у совы)
-if (window.Telegram?.WebApp) Telegram.WebApp.expand();
+// disableVerticalSwipes — иначе свайп вниз для подката закрывает мини-приложение:
+// Telegram перехватывает вертикальный жест раньше, чем до канваса доходит
+// pointermove. Метод с Bot API 7.7, на старых клиентах его просто нет.
+if (window.Telegram?.WebApp) {
+  const tg = Telegram.WebApp;
+  try { tg.ready(); } catch (e) {}
+  tg.expand();
+  try { tg.disableVerticalSwipes(); } catch (e) {}
+}
 
 // ── DATA: payload от бота через ?data= (base64), как в beat the owl ─────────
 let athleteName = 'АТЛЕТ';
@@ -691,12 +699,26 @@ function slide() {
   if (P.onGround) P.slideT = Math.min(1.05, Math.max(0.5, 330 / Math.max(120, speed)));
   else { P.vy = Math.max(P.vy, 900); P.slideT = 0.5; }
 }
-let touchY = null, touchT = 0;
-cv.addEventListener('pointerdown', e => { touchY = e.clientY; touchT = performance.now(); jump(); });
-cv.addEventListener('pointermove', e => {
-  if (touchY !== null && e.clientY - touchY > 46 && performance.now() - touchT < 350) { slide(); touchY = null; }
+let touchY = null, touchT = 0, touchJumped = false;
+cv.addEventListener('pointerdown', e => {
+  touchY = e.clientY; touchT = performance.now();
+  // Прыжок сразу по касанию — иначе он ощущается вязким. Свайп вниз этот
+  // прыжок отменяет: см. ниже.
+  touchJumped = running && P.onGround;
+  jump();
 });
-cv.addEventListener('pointerup', () => { touchY = null; });
+cv.addEventListener('pointermove', e => {
+  if (touchY === null || e.clientY - touchY <= 46 || performance.now() - touchT >= 350) return;
+  // Тот же тап уже поднял атлета в воздух, и подкат превратился бы в быстрое
+  // падение — под перекладину он так не проедет. Возвращаем на землю и
+  // делаем честный подкат.
+  if (touchJumped && !P.onGround && P.jumps <= 1) {
+    P.y = GROUND(); P.vy = 0; P.onGround = true; P.jumps = 0;
+  }
+  slide();
+  touchY = null; touchJumped = false;
+});
+cv.addEventListener('pointerup', () => { touchY = null; touchJumped = false; });
 document.addEventListener('keydown', e => {
   if (e.repeat) return;
   if (e.code === 'Space' || e.code === 'ArrowUp') { e.preventDefault(); jump(); }
