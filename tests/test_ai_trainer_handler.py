@@ -330,6 +330,9 @@ async def test_answer_goes_out_as_a_rich_message_when_the_server_supports_it(
     itself — a plain message has no table markup at all, and the pipes used to
     reach the user verbatim."""
     monkeypatch.setattr(ai_trainer.ai_trainer, "ask", AsyncMock(return_value=_TABLE_ANSWER))
+    # Одноразовая подсказка про действия уже показана — тест про точное
+    # содержимое rich-сообщения, а не про её хвост (см. test_ai_actions_hint).
+    await fresh_db.claim_ai_actions_hint(user_id)
 
     state = await _make_state(user_id)
     await state.set_state("AITrainerFlow:chatting")
@@ -400,6 +403,9 @@ async def test_a_deleted_placeholder_still_gets_a_rich_answer(fresh_db, user_id,
     from aiogram.exceptions import TelegramBadRequest
 
     monkeypatch.setattr(ai_trainer.ai_trainer, "ask", AsyncMock(return_value=_TABLE_ANSWER))
+    # Одноразовая подсказка про действия уже показана — тест про точное
+    # содержимое rich-сообщения, а не про её хвост (см. test_ai_actions_hint).
+    await fresh_db.claim_ai_actions_hint(user_id)
 
     state = await _make_state(user_id)
     await state.set_state("AITrainerFlow:chatting")

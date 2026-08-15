@@ -418,11 +418,16 @@ async def cmd_growth(message: Message, state: FSMContext):
     funnel = await db.acquisition_funnel(days, alive_days=acquisition.ALIVE_WINDOW_DAYS)
     onboarding = await db.onboarding_funnel(days)
     referrers = await db.top_referrers(GROWTH_REFERRERS)
+    donation_stars, donation_people = await db.donation_totals(days)
     bot_username = await sharing.get_bot_username(message.bot)
     text = (
         f"{acquisition.format_funnel(funnel, days)}\n\n"
         f"{acquisition.format_onboarding_funnel(onboarding, days)}\n\n"
         f"{acquisition.format_referrers(referrers)}\n\n"
+        # Донат («Поддержать проект», handlers/donate.py) — не часть воронки
+        # источников: это разовый жест, не шаг в онбординге, и число просто
+        # рядом, а не в теле format_funnel/format_onboarding_funnel.
+        f"❤️ Донаты за {days} дн.: {donation_stars} ⭐ от {donation_people} человек.\n\n"
         f"Ссылка под новый канал: <code>{acquisition.channel_link(bot_username, 'имя')}</code> — "
         f"вместо «имя» латиница, цифры и «_»."
     )

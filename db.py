@@ -74,7 +74,12 @@ CREATE TABLE IF NOT EXISTS users (
     -- подсказка под первым пушем (engagement._deliver) не должна лезть к тем,
     -- кто пояс уже выбрал.
     tz_set_by_user INTEGER NOT NULL DEFAULT 0,
-    tz_push_hint_shown INTEGER NOT NULL DEFAULT 0
+    tz_push_hint_shown INTEGER NOT NULL DEFAULT 0,
+    -- Одноразовая подсказка под первым ответом AI-тренера: он не только
+    -- отвечает, но и умеет сам записать вес, завести упражнение, посчитать еду
+    -- (см. handlers.ai_trainer.ACTIONS_HINT_TEXT). Один раз за жизнь аккаунта —
+    -- дальше молчим: занос данных через модель платный, промоутить его нельзя.
+    ai_actions_hint_shown INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS muscle_groups (
@@ -416,6 +421,23 @@ CREATE TABLE IF NOT EXISTS game_results (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_game_results_user ON game_results (telegram_id, distance);
+
+-- Донат «Поддержать проект» (handlers/donate.py) — обычный invoice в XTR,
+-- без выдачи чего-либо взамен. Ничего общего с будущим billing из PR #386:
+-- отдельная маленькая таблица, а не переиспользование их star_payments.
+--
+-- charge_id — telegram_payment_charge_id, ключ идемпотентности: Telegram
+-- умеет доставить successful_payment повторно (ретрай апдейта после
+-- обрыва), и без UNIQUE один донат превратился бы в два ряда и две
+-- благодарности.
+CREATE TABLE IF NOT EXISTS donations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    charge_id TEXT NOT NULL UNIQUE,
+    stars INTEGER NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_donations_created ON donations (created_at);
 
 CREATE TABLE IF NOT EXISTS cost_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -899,6 +921,13 @@ async def _migrate_schema() -> None:
         # «часы сбились — скажи пояс» живёт под первым пушем и не должна
         # повторяться под вторым.
         await _conn.execute("ALTER TABLE users ADD COLUMN tz_push_hint_shown INTEGER NOT NULL DEFAULT 0")
+    if "ai_actions_hint_shown" not in user_cols:
+        # Одноразовая отметка — та же идея, что voice_hint_shown выше: подсказка
+        # «могу и сам записать» живёт под первым ответом AI-тренера и не должна
+        # повторяться под вторым (см. handlers.ai_trainer.ACTIONS_HINT_TEXT).
+        await _conn.execute(
+            "ALTER TABLE users ADD COLUMN ai_actions_hint_shown INTEGER NOT NULL DEFAULT 0"
+        )
 
     set_cols = await _column_names("sets")
     if "is_warmup" in set_cols:
@@ -2750,6 +2779,22 @@ async def mark_tz_push_hint_shown(user_id: int) -> None:
             "UPDATE users SET tz_push_hint_shown = 1 WHERE telegram_id = ?", (user_id,)
         )
         await conn().commit()
+
+
+async def claim_ai_actions_hint(user_id: int) -> bool:
+    """True ровно один раз за жизнь аккаунта — пора показать подсказку «могу и
+    сам записать» под первым ответом AI-тренера (см. handlers.ai_trainer.
+    ACTIONS_HINT_TEXT). Проверка и отметка одним UPDATE под общим замком — тот
+    же приём, что у register_manual_sets_and_check_hint: два ответа, пришедших
+    подряд, не смогут оба решить, что подсказку ещё не показывали."""
+    async with _write_lock:
+        cur = await conn().execute(
+            "UPDATE users SET ai_actions_hint_shown = 1 "
+            "WHERE telegram_id = ? AND ai_actions_hint_shown = 0",
+            (user_id,),
+        )
+        await conn().commit()
+        return cur.rowcount > 0
 
 
 async def has_manual_set(user_id: int) -> bool:
@@ -6368,3 +6413,33 @@ async def get_game_best_distance(telegram_id: int) -> int:
     )
     (best,) = await cur.fetchone()
     return best or 0
+
+
+# ---------- донат «Поддержать проект» ----------
+
+
+async def record_donation(user_id: int, charge_id: str, stars: int) -> bool:
+    """Записать донат. False — такой charge_id уже есть: Telegram доставил
+    successful_payment повторно, и повторную благодарность/уведомление админу
+    слать не надо (см. handlers/donate.py)."""
+    async with _write_lock:
+        cur = await conn().execute(
+            "INSERT OR IGNORE INTO donations (user_id, charge_id, stars, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (user_id, charge_id, stars, now_iso()),
+        )
+        await conn().commit()
+        return cur.rowcount > 0
+
+
+async def donation_totals(days: int = 30) -> tuple[int, int]:
+    """(звёзд, человек) за последние `days` дней — для /growth. Идемпотентность
+    по charge_id (record_donation) уже гарантирует, что повторно доставленный
+    платёж не задвоит сумму."""
+    since = (dt.datetime.now() - dt.timedelta(days=days)).isoformat(timespec="seconds")
+    cur = await conn().execute(
+        "SELECT COALESCE(SUM(stars), 0), COUNT(DISTINCT user_id) FROM donations WHERE created_at >= ?",
+        (since,),
+    )
+    stars, people = await cur.fetchone()
+    return stars, people

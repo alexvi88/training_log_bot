@@ -31,6 +31,7 @@ from handlers import (
     bodyweight,
     community,
     csv_import,
+    donate,
     edit_workout,
     exercise_resolve,
     exercises,
@@ -202,6 +203,11 @@ def setup_routers(dp: Dispatcher) -> None:
     # Та же причина: /community — одна команда без состояний, и она нужна из
     # любого сценария, хоть посреди тренировки.
     dp.include_router(community.router)
+    # Та же причина, и вдвойне: pre_checkout_query обязан ответить за 10
+    # секунд, а successful_payment — реальные деньги, которым нельзя застрять
+    # в чужом catch-all'е, если платёж пришёл посреди тренировки или чата с
+    # тренером.
+    dp.include_router(donate.router)
     # Форвард — самостоятельное действие, а не ответ на вопрос текущего экрана
     # (см. handlers/factcheck.py): должен перехватываться раньше состояний
     # FSM, иначе посреди тренировки или чата с тренером его съел бы их
