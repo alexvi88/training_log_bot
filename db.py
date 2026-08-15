@@ -1479,6 +1479,77 @@ async def update_user(telegram_id: int, **fields: Any) -> None:
         await conn().commit()
 
 
+async def wipe_user_account(telegram_id: int) -> None:
+    """Снести аккаунт целиком — включая саму строку `users`, чтобы следующий
+    /start увидел человека новичком (см. handlers/workout.cmd_start: «первый ли
+    это /start» смотрит ровно на отсутствие этой строки).
+
+    Только для админских проверок онбординга на TEST_USER_ID/ADMIN_ID — вызов
+    ничем не сдерживается сам по себе, единственная защита сейчас на стороне
+    хендлера (админ и явный выбор из двух аккаунтов). Порядок — дети раньше
+    родителей, тем же способом, что discard_workout/delete_routine.
+    """
+    async with _write_lock:
+        db = conn()
+        try:
+            await db.execute(
+                "DELETE FROM sets WHERE block_id IN "
+                "(SELECT wb.id FROM workout_blocks wb JOIN workouts w ON w.id = wb.workout_id "
+                "WHERE w.user_id = ?)",
+                (telegram_id,),
+            )
+            await db.execute(
+                "DELETE FROM block_exercises WHERE block_id IN "
+                "(SELECT wb.id FROM workout_blocks wb JOIN workouts w ON w.id = wb.workout_id "
+                "WHERE w.user_id = ?)",
+                (telegram_id,),
+            )
+            await db.execute(
+                "DELETE FROM workout_blocks WHERE workout_id IN "
+                "(SELECT id FROM workouts WHERE user_id = ?)",
+                (telegram_id,),
+            )
+            await db.execute(
+                "DELETE FROM exercise_notes WHERE workout_id IN "
+                "(SELECT id FROM workouts WHERE user_id = ?)",
+                (telegram_id,),
+            )
+            await db.execute("DELETE FROM workouts WHERE user_id = ?", (telegram_id,))
+            await db.execute(
+                "DELETE FROM routine_exercises WHERE routine_id IN "
+                "(SELECT id FROM routines WHERE user_id = ?)",
+                (telegram_id,),
+            )
+            await db.execute("DELETE FROM routines WHERE user_id = ?", (telegram_id,))
+            await db.execute("DELETE FROM programs WHERE user_id = ?", (telegram_id,))
+            await db.execute("DELETE FROM exercises WHERE user_id = ?", (telegram_id,))
+            await db.execute("DELETE FROM muscle_groups WHERE user_id = ?", (telegram_id,))
+            await db.execute("DELETE FROM bodyweight_logs WHERE telegram_id = ?", (telegram_id,))
+            await db.execute("DELETE FROM food_entries WHERE telegram_id = ?", (telegram_id,))
+            await db.execute("DELETE FROM ai_chat_messages WHERE telegram_id = ?", (telegram_id,))
+            await db.execute("DELETE FROM ai_search_usage WHERE telegram_id = ?", (telegram_id,))
+            await db.execute("DELETE FROM ai_question_usage WHERE telegram_id = ?", (telegram_id,))
+            await db.execute("DELETE FROM ai_video_usage WHERE telegram_id = ?", (telegram_id,))
+            await db.execute("DELETE FROM ai_food_usage WHERE telegram_id = ?", (telegram_id,))
+            await db.execute("DELETE FROM ai_limit_ack WHERE telegram_id = ?", (telegram_id,))
+            await db.execute("DELETE FROM pushes WHERE telegram_id = ?", (telegram_id,))
+            await db.execute("DELETE FROM push_rotation WHERE telegram_id = ?", (telegram_id,))
+            await db.execute("DELETE FROM game_results WHERE telegram_id = ?", (telegram_id,))
+            await db.execute("DELETE FROM user_events WHERE telegram_id = ?", (telegram_id,))
+            await db.execute("DELETE FROM shared_items WHERE owner_id = ?", (telegram_id,))
+            await db.execute("DELETE FROM achievements WHERE user_id = ?", (telegram_id,))
+            await db.execute("DELETE FROM cost_events WHERE user_id = ?", (telegram_id,))
+            await db.execute("DELETE FROM mcp_tokens WHERE user_id = ?", (telegram_id,))
+            await db.execute("DELETE FROM oauth_auth_codes WHERE user_id = ?", (telegram_id,))
+            await db.execute("DELETE FROM oauth_tokens WHERE user_id = ?", (telegram_id,))
+            await db.execute("DELETE FROM oauth_link_codes WHERE user_id = ?", (telegram_id,))
+            await db.execute("DELETE FROM users WHERE telegram_id = ?", (telegram_id,))
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
+
+
 # ---------- muscle groups ----------
 
 async def list_muscle_groups(
