@@ -43,7 +43,7 @@ class FakeBot:
 def _announcement() -> announcements.Announcement:
     return announcements.Announcement(
         key="test_release",
-        text="ПРИВЕТ АТЛЕТ, новая штука.",
+        text="ПРИВЕТ АТЛЕТ! Новая штука.",
         buttons=[("🤖 Собрать программу", "ai:buildprog")],
         image=None,
     )
@@ -232,7 +232,7 @@ async def test_rewritten_text_comes_back_for_a_second_look(fresh_db, monkeypatch
     monkeypatch.setattr(announcements, "ANNOUNCEMENTS", [ann])
     await announcements.run_pending_announcements(FakeBot())
 
-    ann.text = "ПРИВЕТ АТЛЕТ, а вот теперь по-другому."
+    ann.text = "ПРИВЕТ АТЛЕТ! А вот теперь по-другому."
     bot = FakeBot()
     await announcements.run_pending_announcements(bot)
 
@@ -303,7 +303,7 @@ async def test_approved_release_ignores_a_later_text_edit(fresh_db, monkeypatch)
     await announcements.send_preview(FakeBot(), ann)
     await db_module.set_announcement_status(ann.key, announcements.STATUS_APPROVED)
 
-    ann.text = "ПРИВЕТ АТЛЕТ, правка на ходу."
+    ann.text = "ПРИВЕТ АТЛЕТ! Правка на ходу."
     bot = FakeBot()
     await announcements.run_pending_announcements(bot)
 
@@ -455,7 +455,7 @@ async def test_announce_command_ignores_non_admin(fresh_db, monkeypatch):
 
 async def test_release_text_speaks_in_the_coach_voice():
     ann = announcements.RELEASE_AI_PROGRAMS_AND_VIDEO
-    assert ann.text.startswith("ПРИВЕТ АТЛЕТ, ")
+    assert ann.text.startswith("ПРИВЕТ АТЛЕТ! ")
     assert len(ann.text) <= announcements.CAPTION_LIMIT
 
 
@@ -476,7 +476,7 @@ async def test_release_buttons_lead_into_the_two_features():
 
 async def test_ai_actions_release_text_speaks_in_the_coach_voice():
     ann = announcements.RELEASE_AI_TRAINER_ACTIONS
-    assert ann.text.startswith("ПРИВЕТ АТЛЕТ, ")
+    assert ann.text.startswith("ПРИВЕТ АТЛЕТ! ")
     assert len(ann.text) <= announcements.CAPTION_LIMIT
 
 

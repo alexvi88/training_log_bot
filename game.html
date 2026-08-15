@@ -221,7 +221,7 @@ function resetGame() {
 
 // Тексты — по TONE_OF_VOICE.md: тренер от первого лица, на «ты», без капса в
 // теле фразы. Смерть в игре — не пропуск тренировки, поэтому без подколок,
-// только поддержка. Формула «ПРИВЕТ АТЛЕТ, » — строго, без подстановки имени.
+// только поддержка. Формула «ПРИВЕТ АТЛЕТ! » — строго, без подстановки имени.
 const QUIPS = [
   ' м — это разминка. Отдышись и беги ещё.',
   ' м. Гантеля догнала — бывает, следующий заход твой.',
@@ -770,8 +770,8 @@ function die() {
   document.getElementById('result-score').textContent = d + ' м · 🥤 ' + score;
   document.getElementById('result-stats').textContent =
     'лучшая серия: ' + maxCombo + ' · пауэрапов: ' + pickups;
-  // «ПРИВЕТ АТЛЕТ, » — брендовая формула, имя не подставляем (см. TONE_OF_VOICE.md)
-  document.getElementById('result-quip').textContent = 'ПРИВЕТ АТЛЕТ, ' + d + pick(QUIPS);
+  // «ПРИВЕТ АТЛЕТ! » — брендовая формула, имя не подставляем (см. TONE_OF_VOICE.md)
+  document.getElementById('result-quip').textContent = 'ПРИВЕТ АТЛЕТ! ' + d + pick(QUIPS);
   document.getElementById('result-best').textContent = 'рекорд: ' + best + ' м';
   document.getElementById('result-status').textContent = '';
   setTimeout(() => showScreen('screen-result'), 900);

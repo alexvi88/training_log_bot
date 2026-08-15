@@ -32,7 +32,7 @@ def reset_cached_file_id(monkeypatch):
 
 async def test_push_is_sent_as_a_photo_with_the_text_as_caption(fresh_db, user_id):
     bot = _bot()
-    decision = engagement.PushDecision(push_texts.SKIP_3, "ПРИВЕТ АТЛЕТ, третий день без зала.")
+    decision = engagement.PushDecision(push_texts.SKIP_3, "ПРИВЕТ АТЛЕТ! Третий день без зала.")
 
     await engagement._deliver(bot, user_id, decision, _TODAY)
 
@@ -46,7 +46,7 @@ async def test_push_is_sent_as_a_photo_with_the_text_as_caption(fresh_db, user_i
 
 async def test_push_upload_is_cached_and_reused_by_file_id(fresh_db, user_id):
     bot = _bot(file_id="AgAD_cached")
-    decision = engagement.PushDecision(push_texts.SKIP_3, "ПРИВЕТ АТЛЕТ, третий день без зала.")
+    decision = engagement.PushDecision(push_texts.SKIP_3, "ПРИВЕТ АТЛЕТ! Третий день без зала.")
 
     await engagement._deliver(bot, user_id, decision, _TODAY)
     first_photo = bot.send_photo.await_args.kwargs["photo"]
@@ -88,7 +88,7 @@ async def test_push_without_cta_omits_the_keyboard(fresh_db, user_id):
 async def test_a_caption_over_telegrams_limit_is_truncated(fresh_db, user_id):
     """The AI weekly digest is free-form model output and can run long."""
     bot = _bot()
-    long_text = "ПРИВЕТ АТЛЕТ, " + "а" * 2000
+    long_text = "ПРИВЕТ АТЛЕТ! " + "а" * 2000
     decision = engagement.PushDecision(push_texts.AI_WEEKLY, long_text)
 
     await engagement._deliver(bot, user_id, decision, _TODAY)

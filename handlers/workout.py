@@ -661,7 +661,7 @@ async def _back_after_cancel(callback: CallbackQuery, state: FSMContext, user):
 
 # ---------- main menu ----------
 
-_GREETING = "<b>ПРИВЕТ АТЛЕТ, НАЧНЁМ ТРЕНИРОВКУ?</b>"
+_GREETING = "<b>ПРИВЕТ АТЛЕТ. НАЧНЁМ ТРЕНИРОВКУ?</b>"
 
 # Shown on the main menu until the first workout is logged — a quick "here's how
 # it works" so a brand-new user isn't dropped onto the same screen as a veteran.
@@ -673,7 +673,7 @@ _GREETING = "<b>ПРИВЕТ АТЛЕТ, НАЧНЁМ ТРЕНИРОВКУ?</b>"
 # формату строки. Голосовой ввод не упомянут намеренно: подсказка про него
 # живёт в _HELP_SHORT, на экране записи подхода, где он и применим.
 _ONBOARDING = (
-    "<b>ПРИВЕТ АТЛЕТ, 💪</b>\n\n"
+    "<b>ПРИВЕТ АТЛЕТ! 💪</b>\n\n"
     "Правило тут одно: подход пишешь строкой — <b><code>100 8</code></b>. "
     "Вес и повторы. Записал.\n"
     "Рекорды, объём и прогресс — за мной. Железо — за тобой.\n\n"

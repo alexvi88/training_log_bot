@@ -140,7 +140,7 @@ async def test_sunday_digest_uses_ai_when_available(fresh_db, user_id, monkeypat
     monkeypatch.setattr(engagement.ai_trainer, "is_configured", lambda: True)
 
     async def fake_digest(uid):
-        return "ПРИВЕТ АТЛЕТ, неделя выдалась крепкой."
+        return "ПРИВЕТ АТЛЕТ! Неделя выдалась крепкой."
 
     monkeypatch.setattr(engagement.ai_trainer, "weekly_digest", fake_digest)
 
