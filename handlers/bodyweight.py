@@ -28,11 +28,34 @@ from parser import ParseError, bodyweight_warning, parse_bodyweight_entry
 router = Router(name="bodyweight")
 
 
-def _window(logs: list, weeks: int) -> list:
-    """Logs within the last `weeks` weeks (0 = all), for the chart window."""
+# Guards "bw:wconf:yes" against a double tap: bw_pending_weight is only cleared
+# after db.add_bodyweight_log, and two callbacks from the same user can run
+# concurrently, each reading its own snapshot of state with the pending weight
+# still set — so the second tap would log the same weight a second time. Same
+# shape as handlers.workout._confirming / _try_claim_weight_confirm.
+_confirming: set[int] = set()
+
+
+def _try_claim_confirming(user_id: int) -> bool:
+    """Atomically check-and-reserve `_confirming` for this user — no `await`
+    between the membership check and the `.add()`, same reasoning as
+    ai_trainer._try_claim_busy."""
+    if user_id in _confirming:
+        return False
+    _confirming.add(user_id)
+    return True
+
+
+def _window(logs: list, weeks: int, today: dt.date) -> list:
+    """Logs within the last `weeks` weeks (0 = all), for the chart window.
+
+    `today` is the caller's user-local "today" (timeutil.user_today) — the
+    server's own UTC date would cut the window at the wrong hour for anyone
+    with a non-zero tz_offset, same as backfill/calendars.
+    """
     if weeks <= 0:
         return logs
-    cutoff = (dt.date.today() - dt.timedelta(weeks=weeks)).isoformat()
+    cutoff = (today - dt.timedelta(weeks=weeks)).isoformat()
     return [r for r in logs if r["logged_at"][:10] >= cutoff]
 
 
@@ -103,7 +126,7 @@ async def _render(event, state: FSMContext, user_id: int | None = None) -> None:
     weeks = data.get("bw_weeks", keyboards.DEFAULT_BODYWEIGHT_WEEKS)
     await state.set_state(BodyweightFlow.viewing)
     await state.update_data(bw_weeks=weeks)
-    chart_logs = _window(logs, weeks)
+    chart_logs = _window(logs, weeks, timeutil.user_today(user))
     text = formatting.build_bodyweight_screen(logs, user["unit"], period_logs=chart_logs)
     show_periods = len(logs) >= 2
     kb = keyboards.bodyweight_keyboard(has_logs=bool(logs), weeks=weeks, show_periods=show_periods)
@@ -208,25 +231,39 @@ async def bw_weight_entered(message: Message, state: FSMContext):
 @router.callback_query(StateFilter(BodyweightFlow.viewing), F.data == "bw:wconf:yes")
 async def bw_weight_confirm_yes(callback: CallbackQuery, state: FSMContext):
     """Confirms a bodyweight entry flagged by bodyweight_warning — logs it as
-    typed, no second-guessing beyond the one nudge already given."""
-    data = await state.get_data()
-    weight = data.get("bw_pending_weight")
-    if weight is None:
+    typed, no second-guessing beyond the one nudge already given.
+
+    Claims `_confirming` before the first `await`: two fast taps on "Да" both
+    read `bw_pending_weight` while it's still set (each holds its own
+    snapshot), so without this guard both would call db.add_bodyweight_log —
+    clearing the pending value only stops a *later* tap, not a second one
+    racing the first.
+    """
+    user_id = callback.from_user.id
+    if not _try_claim_confirming(user_id):
         await callback.answer()
         return
-    raw_date = data.get("bw_pending_date")
-    date = dt.date.fromisoformat(raw_date) if raw_date else None
-    await db.add_bodyweight_log(callback.from_user.id, weight, _logged_at_for(date))
-    await state.update_data(bw_pending_weight=None, bw_pending_date=None)
-    confirm_message = callback.message
-    with suppress(TelegramBadRequest):
-        await confirm_message.delete()
-    # confirm_message is a separate reply, not the tracked bw_screen_id — pass
-    # it as a plain Message so _render takes the edit-in-place path for the
-    # actual bodyweight screen instead of trying to reuse this one; user_id is
-    # explicit because confirm_message.from_user would be the bot, not the user.
-    await _render(confirm_message, state, user_id=callback.from_user.id)
-    await callback.answer("Записал")
+    try:
+        data = await state.get_data()
+        weight = data.get("bw_pending_weight")
+        if weight is None:
+            await callback.answer()
+            return
+        raw_date = data.get("bw_pending_date")
+        date = dt.date.fromisoformat(raw_date) if raw_date else None
+        await db.add_bodyweight_log(user_id, weight, _logged_at_for(date))
+        await state.update_data(bw_pending_weight=None, bw_pending_date=None)
+        confirm_message = callback.message
+        with suppress(TelegramBadRequest):
+            await confirm_message.delete()
+        # confirm_message is a separate reply, not the tracked bw_screen_id — pass
+        # it as a plain Message so _render takes the edit-in-place path for the
+        # actual bodyweight screen instead of trying to reuse this one; user_id is
+        # explicit because confirm_message.from_user would be the bot, not the user.
+        await _render(confirm_message, state, user_id=user_id)
+        await callback.answer("Записал")
+    finally:
+        _confirming.discard(user_id)
 
 
 @router.callback_query(StateFilter(BodyweightFlow.viewing), F.data == "bw:wconf:no")

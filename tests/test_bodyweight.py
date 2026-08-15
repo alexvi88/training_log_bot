@@ -1,5 +1,6 @@
 """Bodyweight log: db round-trip, ordering, undo, rescale, and the screen text."""
 
+import datetime as dt
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -173,7 +174,7 @@ async def test_scale_user_set_weights_converts_nonzero_only(user_id):
 def test_window_all_returns_everything():
     from handlers.bodyweight import _window
     logs = [{"logged_at": "2026-01-01T10:00:00", "weight": 80.0}]
-    assert _window(logs, 0) == logs
+    assert _window(logs, 0, dt.date(2026, 1, 1)) == logs
 
 
 def test_daily_average_points_collapses_same_day_entries():
@@ -190,23 +191,33 @@ def test_daily_average_points_collapses_same_day_entries():
     assert points[1][1] == pytest.approx(79.0)
 
 
-def test_window_filters_by_weeks(monkeypatch):
-    import datetime as dt
-
+def test_window_filters_by_weeks():
     import handlers.bodyweight as bw
 
-    class _FixedDate(dt.date):
-        @classmethod
-        def today(cls):
-            return cls(2026, 3, 1)
-
-    monkeypatch.setattr(bw.dt, "date", _FixedDate)
     logs = [
         {"logged_at": "2026-01-01T10:00:00", "weight": 82.0},  # ~8.5 weeks ago
         {"logged_at": "2026-02-20T10:00:00", "weight": 80.0},  # within 8 weeks
     ]
-    windowed = bw._window(logs, 8)
+    windowed = bw._window(logs, 8, dt.date(2026, 3, 1))
     assert [r["weight"] for r in windowed] == [80.0]
+
+
+def test_window_uses_user_local_today_not_server_date(monkeypatch):
+    """Находка 6: _window used to call dt.date.today() (server/UTC date)
+    directly instead of the user's own "сегодня" — same class of bug as the
+    backfill calendar, fixed the same way (timeutil.user_today)."""
+    import handlers.bodyweight as bw
+
+    class _ExplodingDate(dt.date):
+        @classmethod
+        def today(cls):
+            raise AssertionError("_window must not call dt.date.today() itself")
+
+    monkeypatch.setattr(bw.dt, "date", _ExplodingDate)
+    logs = [{"logged_at": "2026-01-01T10:00:00", "weight": 80.0}]
+    # Passing `today` explicitly must never touch dt.date.today() — the
+    # ExplodingDate patch above would fail the test if it did.
+    assert bw._window(logs, 8, dt.date(2026, 1, 1)) == logs
 
 
 # ---------- typing a weight directly on the viewing screen ----------
