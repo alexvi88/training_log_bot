@@ -24,6 +24,7 @@ import exercise_mentions
 import formatting
 import keyboards
 import program_mentions
+import progress_ui
 import running_texts
 import timeutil
 import ui
@@ -543,6 +544,20 @@ BUILD_PROGRAM_SEED = (
     "чтобы они пришли по одному, — и только после моих ответов собирай программу."
 )
 
+# Чек-лист для progress_ui.run_progress на самом долгом вызове сценария
+# «Составить программу» — том, что уходит СРАЗУ после ответов на опросник (см.
+# _finish_setup) и реально дёргает propose_program: опросник сам по себе не
+# трогает модель и идёт мгновенно (see test_ai_setup_questions.py), а вот этот
+# ход может пройти по истории тренировок, каталогу упражнений и прогрессии —
+# десятки секунд. Тексты без канцелярита и от первого лица — как и весь
+# TONE_OF_VOICE.md; многоточие на активном этапе дорисовывает сам render().
+PROGRAM_PROGRESS_STAGES = [
+    "Посмотрел твою историю",
+    "Подобрал упражнения под цель",
+    "Расставляю веса и повторы",
+    "Проверяю всё в последний раз",
+]
+
 BUILD_WORKOUT_INTRO = (
     "🤖 <b>СОБИРАЕМ ТРЕНИРОВКУ НА СЕГОДНЯ.</b>\n\n"
     "Гляну, что у тебя отдохнуло, и спрошу пару вещей — а дальше по ней и пойдём."
@@ -566,7 +581,12 @@ BUILD_WORKOUT_SEED = (
 
 
 async def _start_ai_scenario(
-    callback: CallbackQuery, state: FSMContext, intro: str, seed: str, keep_message: bool = False
+    callback: CallbackQuery,
+    state: FSMContext,
+    intro: str,
+    seed: str,
+    keep_message: bool = False,
+    scenario: Optional[str] = None,
 ) -> None:
     """Кнопка, которая сама начинает разговор с тренером за пользователя.
 
@@ -584,6 +604,12 @@ async def _start_ai_scenario(
     Дневной лимит проверяется ДО подмены экрана: раньше бодрое «ОКЕЙ, СОБИРАЕМ»
     успевало встать на место меню, и уже под ним приезжал отказ — человек терял
     экран, с которого пришёл, ради обещания, которое бот тут же забирал назад.
+
+    `scenario` едет в FSM вместе с опросником (см. _deliver_setup) и доживает
+    до _finish_setup — там по нему решают, показывать ли анимированный
+    progress_ui вместо голого «тренер думает» на самом долгом вызове сценария.
+    None — как у «Тренировка на сегодня»: тот вызов сам по себе короче, а
+    отдельный чек-лист под него ещё не расписан.
     """
     if not ai_trainer.is_configured():
         await callback.answer(
@@ -632,7 +658,7 @@ async def _start_ai_scenario(
             delete=not keep_message,
         )
         await _handle_question(
-            screen, state, seed, history_question=seed, user_id=user_id,
+            screen, state, seed, history_question=seed, user_id=user_id, scenario=scenario,
         )
     finally:
         _busy.discard(user_id)
@@ -641,7 +667,7 @@ async def _start_ai_scenario(
 @router.callback_query(F.data == "ai:buildprog")
 async def ai_build_program(callback: CallbackQuery, state: FSMContext):
     """«Составить с AI-тренером» в 🗂 Программы — многодневка на будущее."""
-    await _start_ai_scenario(callback, state, BUILD_PROGRAM_INTRO, BUILD_PROGRAM_SEED)
+    await _start_ai_scenario(callback, state, BUILD_PROGRAM_INTRO, BUILD_PROGRAM_SEED, scenario="program")
 
 
 @router.callback_query(F.data == "ann:buildprog")
@@ -653,7 +679,7 @@ async def announcement_build_program(callback: CallbackQuery, state: FSMContext)
     и решает это не пользователь, а то, откуда кнопка приехала.
     """
     await _start_ai_scenario(
-        callback, state, BUILD_PROGRAM_INTRO, BUILD_PROGRAM_SEED, keep_message=True
+        callback, state, BUILD_PROGRAM_INTRO, BUILD_PROGRAM_SEED, keep_message=True, scenario="program"
     )
 
 
@@ -2085,6 +2111,8 @@ async def _handle_question(
     image_data_url: Optional[str] = None,
     user_id: Optional[int] = None,
     video_context: Optional[str] = None,
+    scenario: Optional[str] = None,
+    progress_stages: Optional[Sequence[str]] = None,
 ) -> None:
     """Общая логика для текстовых и фото-вопросов: запрос к модели, история, отправка ответа.
 
@@ -2095,6 +2123,17 @@ async def _handle_question(
     user_id — по умолчанию берётся из message.from_user.id (обычное сообщение
     от пользователя); передаётся явно там, где message — это экран бота, а не
     реплика пользователя (см. ai_build_program: message.from_user там был бы ботом).
+
+    scenario — метка сценария («program» и т.п.), которая едет дальше в
+    _deliver_setup и живёт в FSM опросника до _finish_setup: только там она и
+    нужна, чтобы решить, показывать ли progress_ui на самом долгом вызове. Этот
+    конкретный ход её не использует вовсе.
+
+    progress_stages — если задан, вместо ротации фраз из running_texts.py
+    placeholder крутит анимированный чек-лист progress_ui (см. модуль): растущий
+    фейковый процент и галочки по этапам. Задаёт его только _finish_setup —
+    тот самый ход, что реально уходит за составом программы; на всех остальных
+    (включая опросник и обычный чат) placeholder остаётся прежним.
 
     Caller owns the `_busy` reservation end-to-end (claimed atomically before
     any await, released in the caller's `finally`) — this function assumes the
@@ -2121,14 +2160,21 @@ async def _handle_question(
 
     # The daily counter is charged only once there's an answer to show for it —
     # a provider outage shouldn't cost the user one of their questions.
-    # Пул фраз подбирается по теме вопроса (питание, программа, конкретное
-    # упражнение и т.д. — см. running_texts.py), чтобы даже самый первый
-    # placeholder до единого tool-call звучал в тему, а не наугад.
-    running_pool = running_texts.pool_for(question)
-    running_text = running_texts.pick(running_pool)
-    placeholder = await message.answer(running_text)
-    display = _RunningDisplay(placeholder, running_text, running_pool)
-    running_task = asyncio.create_task(display.cycle_idle())
+    if progress_stages:
+        # Сборка программы (см. _finish_setup): вместо ротации фраз — фейковый
+        # процент и чек-лист этапов, см. progress_ui. Реальные статусы ask()
+        # (веб-поиск и т.п.) тут не показываем нарочно — на этом ходу они
+        # спорили бы с чек-листом за один и тот же placeholder.
+        placeholder = await message.answer(progress_ui.initial_text(progress_stages))
+        display = None
+    else:
+        # Пул фраз подбирается по теме вопроса (питание, программа, конкретное
+        # упражнение и т.д. — см. running_texts.py), чтобы даже самый первый
+        # placeholder до единого tool-call звучал в тему, а не наугад.
+        running_pool = running_texts.pool_for(question)
+        running_text = running_texts.pick(running_pool)
+        placeholder = await message.answer(running_text)
+        display = _RunningDisplay(placeholder, running_text, running_pool)
 
     async def on_draft_start() -> None:
         # The native draft is now live and telling the same story ("тренер
@@ -2202,15 +2248,24 @@ async def _handle_question(
         with suppress(TelegramAPIError):
             await ai_limits.reply(message, block)
 
+    # Определена заранее — на случай, если создание задачи ниже упадёт ДО
+    # присвоения (не должно, но тогда finally не свалился бы с NameError).
+    running_task: Optional[asyncio.Task] = None
     try:
-        answer = await ai_trainer.ask(
-            user_id, question, history, image_data_url=image_data_url,
-            on_status=display.set_status, on_program=collect_program,
-            on_action=collect_action, on_questions=collect_questions,
-            on_chunk=streamer.push,
-            video_context=video_context, on_reasoning=collect_reasoning,
-            on_wire=collect_wire, on_limit=warn_about_limit,
+        ask_task = asyncio.create_task(
+            ai_trainer.ask(
+                user_id, question, history, image_data_url=image_data_url,
+                on_status=(display.set_status if display else None), on_program=collect_program,
+                on_action=collect_action, on_questions=collect_questions,
+                on_chunk=streamer.push,
+                video_context=video_context, on_reasoning=collect_reasoning,
+                on_wire=collect_wire, on_limit=warn_about_limit,
+            )
         )
+        running_task = asyncio.create_task(
+            display.cycle_idle() if display else progress_ui.run_progress(placeholder, ask_task, progress_stages)
+        )
+        answer = await ask_task
     except Exception:
         logger.exception("AI trainer request failed for user %s", user_id)
         error_text = "⚠️ Не смог получить ответ — попробуй ещё раз чуть позже."
@@ -2225,9 +2280,10 @@ async def _handle_question(
             await message.answer(error_text, reply_markup=error_kb)
         return
     finally:
-        running_task.cancel()
-        with suppress(asyncio.CancelledError):
-            await running_task
+        if running_task is not None:
+            running_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await running_task
         await streamer.close()
 
     await db.increment_ai_question_count(user_id)
@@ -2340,6 +2396,7 @@ async def _handle_question(
         message, state, user_id,
         [] if program_draft else setup_questions,
         goal=history_question,
+        scenario=scenario,
     )
 
 
@@ -2499,17 +2556,25 @@ async def _deliver_setup(
     user_id: int,
     questions: list[dict],
     goal: str,
+    scenario: Optional[str] = None,
 ) -> None:
     """Разложить собранный моделью опросник в FSM и показать первый вопрос.
 
     Сюда же стекаются все три исхода хода: опросника нет (круг закрыт), опросник
     есть (показываем), опросник есть, но круги кончились (уходим в сборку).
+
+    `scenario` переживает круги ровно как `goal` — тот же приём (see ниже
+    `previous_scenario or scenario`): он взят с самого первого хода
+    (_start_ai_scenario), а на втором-третьем круге history_question — уже не
+    исходная просьба, и передавать сюда None значило бы потерять метку сценария
+    посередине опросника.
     """
     data = await state.get_data()
     stored = data.get("ai_setup")
     previous: dict = stored if isinstance(stored, dict) else {}
     rounds = int(previous.get("rounds") or 0)
     previous_goal = previous.get("goal")
+    resolved_scenario = scenario or previous.get("scenario")
 
     if not questions:
         # Тренер ответил без нового опросника — цикл уточнений закрыт, и
@@ -2531,11 +2596,20 @@ async def _deliver_setup(
         # Круги кончились. Счётчик уводим ЗА потолок до вызова модели — это и
         # есть тормоз рекурсии: опросник, который тренер соберёт в ответ на это
         # сообщение, попадёт в ветку выше и никого не спросит.
-        await state.update_data(ai_setup={"rounds": rounds + 1, "goal": previous_goal})
+        await state.update_data(
+            ai_setup={"rounds": rounds + 1, "goal": previous_goal, "scenario": resolved_scenario}
+        )
         text = SETUP_ENOUGH_FRAME
         if previous_goal:
             text = f"{text}\nИсходная задача: {previous_goal}"
-        await _handle_question(message, state, text, history_question=text, user_id=user_id)
+        # Этот ход тоже реально уходит собирать программу (SETUP_ENOUGH_FRAME
+        # прямо требует вызвать propose_program) — поэтому тот же чек-лист, что
+        # и у обычного _finish_setup, а не голое «тренер думает».
+        await _handle_question(
+            message, state, text, history_question=text, user_id=user_id,
+            scenario=resolved_scenario,
+            progress_stages=PROGRAM_PROGRESS_STAGES if resolved_scenario == "program" else None,
+        )
         return
 
     # Прошлый опросник мог остаться брошенным на середине — его вопрос висит в
@@ -2558,26 +2632,40 @@ async def _deliver_setup(
             # значило бы вкладывать её саму в себя.
             "goal": previous_goal or goal,
             "rounds": rounds + 1,
+            "scenario": resolved_scenario,
         }
     )
     await _show_setup_question(message, state)
 
 
 async def _finish_setup(target: Message, state: FSMContext, user_id: int, setup: dict) -> None:
-    """Опросник закончился — уходим за программой одним обычным вызовом модели."""
+    """Опросник закончился — уходим за программой одним обычным вызовом модели.
+
+    Это и есть самый долгий вызов всего сценария «Составить программу» — тот,
+    что реально дёргает propose_program (опросник до этого момента модель ни
+    разу не трогал, см. модульный докстринг файла с тестами опросника). Если
+    сценарий помечен как «program» (см. _start_ai_scenario), placeholder крутит
+    progress_ui вместо голого «тренер думает»; для остальных (в т.ч. «Тренировка
+    на сегодня») поведение не меняется.
+    """
     text = _setup_answers_text(setup)
+    scenario = setup.get("scenario")
     # Гасим опросник ДО вызова модели: тренер думает десятки секунд, и всё это
     # время человек может дописать ещё реплику — она обязана уехать вопросом, а
     # не ответом в опросник, которого уже нет. Счётчик кругов переживает: он и
     # есть потолок (см. SETUP_MAX_ROUNDS), а вопросов в нём не остаётся, так что
     # перехватывать сообщения он не будет (см. _active_setup).
     await state.update_data(
-        ai_setup={"rounds": int(setup.get("rounds") or 1), "goal": setup.get("goal")}
+        ai_setup={"rounds": int(setup.get("rounds") or 1), "goal": setup.get("goal"), "scenario": scenario}
     )
     # В ai_history и в дневник переписки это уезжает как есть — человеческими
     # строчками «вопрос — ответ», а не служебным JSON: get_full_chat_history
     # читают и модель, и мы.
-    await _handle_question(target, state, text, history_question=text, user_id=user_id)
+    await _handle_question(
+        target, state, text, history_question=text, user_id=user_id,
+        scenario=scenario,
+        progress_stages=PROGRAM_PROGRESS_STAGES if scenario == "program" else None,
+    )
 
 
 async def _record_setup_answer(
