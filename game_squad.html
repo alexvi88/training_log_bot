@@ -98,6 +98,7 @@
   #flash.orange { background: rgba(255,140,20,0.32); }
   #flash.green { background: rgba(60,220,110,0.3); }
   #flash.gold { background: rgba(255,215,0,0.4); }
+  #flash.white { background: rgba(255,255,255,0.85); }
 </style>
 </head>
 <body>
@@ -163,33 +164,77 @@ window.addEventListener('resize', resize); resize();
 const CHALK = '#f2ede3', C_RAGE = '#ff5a36', C_GOLD = '#ffd700', C_GREEN = '#3cdc6e';
 
 // ── ЗВУК: короткие бипы через WebAudio + фоновый гул ─────────────────────────
-let AC = null, muted = false;
-function ensureAC() { if (!AC) AC = new (window.AudioContext || window.webkitAudioContext)(); return AC; }
-function beep(freq, dur, type = 'square', vol = 0.05, slide = 0) {
+// AudioContext создаётся только по первому клику (selectFighter → startHum) —
+// ни один звук не проигрывается до жеста пользователя, поэтому нет хлопка
+// на старте. Всё идёт через один masterGain: частые события (выстрелы,
+// тики урона) — тихие и высокие щелчки, редкие (взрыв блина, ворота, босс) —
+// звучат телом, с коротким аккордом и «шшш» на разлёте. Общий лимит голосов
+// и троттлинг по ключу не дают каше пищалок слипнуться в шум.
+let AC = null, masterGain = null, muted = false;
+function ensureAC() {
+  if (!AC) {
+    AC = new (window.AudioContext || window.webkitAudioContext)();
+    masterGain = AC.createGain(); masterGain.gain.value = 0.9;
+    masterGain.connect(AC.destination);
+  }
+  return AC;
+}
+let activeVoices = 0;
+const MAX_VOICES = 9;
+const lastPlayed = {};
+function beep(freq, dur, type = 'triangle', vol = 0.05, slide = 0, key) {
   if (muted) return;
+  const now = performance.now();
+  if (key) {
+    if (lastPlayed[key] && now - lastPlayed[key] < 35) return;
+    lastPlayed[key] = now;
+  }
+  if (activeVoices >= MAX_VOICES) return;
   try {
     const ac = ensureAC();
     const o = ac.createOscillator(), g = ac.createGain();
     o.type = type; o.frequency.value = freq;
     if (slide) o.frequency.linearRampToValueAtTime(freq + slide, ac.currentTime + dur);
     g.gain.value = vol; g.gain.exponentialRampToValueAtTime(0.0001, ac.currentTime + dur);
-    o.connect(g); g.connect(ac.destination);
+    o.connect(g); g.connect(masterGain);
     o.start(); o.stop(ac.currentTime + dur);
+    activeVoices++;
+    o.onended = () => { activeVoices = Math.max(0, activeVoices - 1); };
   } catch (e) {}
 }
-const sShot = () => beep(rnd(680, 820), .05, 'square', .025, -60);
-const sTick = () => beep(340, .05, 'square', .03, -40);
-const sPop = () => { beep(180, .12, 'sawtooth', .07, -100); burstSpark(); };
-function burstSpark() {}
-const sGateUp = () => { beep(520, .1, 'triangle', .06, 260); setTimeout(() => beep(760, .14, 'triangle', .05, 320), 60); };
-const sGateDown = () => { beep(420, .14, 'sawtooth', .06, -220); };
-const sPower = () => { beep(500, .15, 'sawtooth', .05, 400); setTimeout(() => beep(900, .2, 'sawtooth', .04, 300), 90); };
-const sShield = () => beep(700, .12, 'triangle', .06, 160);
-const sHit = () => { beep(160, .18, 'sawtooth', .08, -90); setTimeout(() => beep(90, .28, 'square', .06, -40), 90); };
-const sBossHit = () => beep(120, .08, 'square', .05, -30);
-const sBossWin = () => { beep(300, .2, 'sawtooth', .07, 260); setTimeout(() => beep(500, .25, 'sawtooth', .07, 360), 130); setTimeout(() => beep(760, .3, 'triangle', .06, 200), 260); };
-const sBossLose = () => { beep(200, .3, 'sawtooth', .08, -160); setTimeout(() => beep(100, .4, 'square', .07, -60), 160); };
-const sDie = () => { beep(220, .25, 'sawtooth', .06, -160); setTimeout(() => beep(120, .4, 'square', .05, -60), 140); };
+// Короткий шумовой «шшш» — разлёт блина, добивание босса. Отдельно от beep,
+// не считается в лимите голосов (визуально редкое событие, не спамится).
+function noiseBurst(dur = 0.14, vol = 0.045) {
+  if (muted) return;
+  try {
+    const ac = ensureAC();
+    const n = Math.max(1, Math.floor(ac.sampleRate * dur));
+    const buf = ac.createBuffer(1, n, ac.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < n; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / n);
+    const src = ac.createBufferSource(); src.buffer = buf;
+    const filt = ac.createBiquadFilter(); filt.type = 'highpass'; filt.frequency.value = 1500;
+    const g = ac.createGain(); g.gain.value = vol;
+    src.connect(filt); filt.connect(g); g.connect(masterGain);
+    src.start();
+  } catch (e) {}
+}
+// Частые события — почти неслышные высокие щелчки, треугольная волна, 20-40 мс.
+const sShot = () => beep(rnd(1150, 1320), .03, 'triangle', .022, 40, 'shot');
+const sTick = () => beep(rnd(900, 1040), .025, 'triangle', .02, 30, 'tick');
+const sBossHit = () => beep(rnd(760, 860), .03, 'triangle', .022, 20, 'bosshit');
+// Редкие награды — короткий аккорд вверх + «шшш» на разлёте.
+const sPop = () => { beep(700, .05, 'triangle', .05, 160); setTimeout(() => beep(980, .06, 'triangle', .045, 220), 40); noiseBurst(0.11, 0.035); };
+const sGateUp = () => { beep(560, .08, 'triangle', .06, 200); setTimeout(() => beep(840, .09, 'triangle', .055, 260), 70); setTimeout(() => beep(1120, .1, 'sine', .05, 180), 140); };
+const sGateDown = () => { beep(520, .09, 'square', .05, -140); setTimeout(() => beep(360, .12, 'triangle', .045, -60), 70); };
+const sPower = () => { beep(650, .09, 'triangle', .055, 220); setTimeout(() => beep(950, .12, 'triangle', .05, 260), 80); };
+const sShield = () => beep(880, .09, 'triangle', .05, 140);
+const sHit = () => { beep(280, .09, 'square', .055, -60); noiseBurst(0.08, 0.045); };
+const sBossWin = () => { beep(520, .12, 'triangle', .06, 200); setTimeout(() => beep(720, .14, 'triangle', .06, 240), 90); setTimeout(() => beep(960, .18, 'sine', .06, 200), 190); noiseBurst(0.2, 0.05); };
+// «Рёв трибуны» — толпа коротких пищалок вразнобой, имитация одобрительного гула.
+const sRoar = () => { for (let i = 0; i < 8; i++) setTimeout(() => beep(rnd(500, 900), .07, 'triangle', .028, rnd(-30, 60)), i * 26); };
+const sBossLose = () => { beep(320, .13, 'square', .055, -120); setTimeout(() => beep(240, .16, 'triangle', .045, -80), 90); };
+const sDie = () => { beep(340, .13, 'square', .055, -110); setTimeout(() => beep(250, .18, 'triangle', .045, -90), 110); };
 
 // Фоновый гул: заводится по первому клику (жест пользователя), громкость и
 // высота растут вместе со скоростью — ощущение разгона, не только цифры.
@@ -201,7 +246,7 @@ function startHum() {
     const o = ac.createOscillator(), g = ac.createGain();
     o.type = 'sawtooth'; o.frequency.value = 46;
     g.gain.value = 0.0001;
-    o.connect(g); g.connect(ac.destination); o.start();
+    o.connect(g); g.connect(masterGain); o.start();
     hum = { o, g };
   } catch (e) {}
 }
@@ -210,7 +255,7 @@ function updateHum(speedFrac) {
   try {
     const ac = ensureAC();
     hum.o.frequency.linearRampToValueAtTime(40 + speedFrac * 55, ac.currentTime + 0.15);
-    hum.g.gain.linearRampToValueAtTime(muted ? 0 : (0.012 + speedFrac * 0.02), ac.currentTime + 0.15);
+    hum.g.gain.linearRampToValueAtTime(muted ? 0 : (0.010 + speedFrac * 0.016), ac.currentTime + 0.15);
   } catch (e) {}
 }
 
@@ -218,6 +263,10 @@ function updateHum(speedFrac) {
 const rnd = (a, b) => a + Math.random() * (b - a);
 const pick = a => a[Math.floor(Math.random() * a.length)];
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+// Единая точка форматирования чисел для экрана: любое число, которое рисуем
+// в canvas или ставим в textContent, идёт только через неё — округление
+// живёт в одном месте и не разъезжается по местам отрисовки.
+const fmt = n => String(Math.round(n));
 
 // ── ПЕРСПЕКТИВА: дорожка уходит вверх экрана, дальнее — мельче ──────────────
 const ZFAR = 3.4;
@@ -248,8 +297,26 @@ let lastMile = 0, nextPlateAt = 0, nextGateAt = 0, nextBonusAt = 0, nextBossMile
 let fireTimer = 0;
 let lastResult = null;
 
-const SQUAD_START = 10, SQUAD_CAP = 999;
+const SQUAD_START = 1, SQUAD_CAP = 999;
 const SPEED_START = 5.5, SPEED_RAMP = 0.045, SPEED_CAP = 15;
+// Комбо: серия сбитых блинов без пропущенного удара — растущий множитель
+// очков и звук с повышающимся тоном на каждый шаг. Промах — заметный слом.
+let combo = 0, comboBestTone = 0;
+function comboHit() {
+  combo += 1;
+  // Классика жанра: одна и та же короткая пищалка, шаг вверх по полутонам —
+  // именно она даёт ощущение разгона серии.
+  const step = Math.min(12, combo);
+  beep(480 * Math.pow(2, step / 12), .045, 'triangle', .03, 0, 'combo');
+  if (combo === 5 || combo === 10 || combo === 20 || (combo > 20 && combo % 15 === 0)) {
+    popNumber('СЕРИЯ ×' + comboMult(), C_GOLD, W / 2, H * 0.24, true);
+  }
+}
+function comboMult() { return 1 + Math.min(4, Math.floor(combo / 5)); }
+function comboBreak() {
+  if (combo >= 5) { beep(320, .16, 'sawtooth', .06, -220); popNumber('СЕРИЯ СБИТА', '#ff8a4a', W / 2, H * 0.24); }
+  combo = 0;
+}
 
 // Тряска — одна общая функция с амплитудой и экспоненциальным затуханием.
 let shakeAmp = 0;
@@ -275,8 +342,8 @@ function resetGame() {
   t = 0; dist = 0; score = 0; squad = SQUAD_START; maxSquad = squad; shield = 0; rageT = 0;
   squadWorldX = 0; trackScroll = 0; shakeAmp = 0; hitStopT = 0;
   meterSpeed = SPEED_START; depthSpeed = SPEED_START / 12;
-  lastMile = 0; nextPlateAt = 150; nextGateAt = 260; nextBonusAt = 70; nextBossMile = 1000;
-  fireTimer = 0;
+  lastMile = 0; nextPlateAt = 26; nextGateAt = 18; nextBonusAt = 55; nextBossMile = 1000;
+  fireTimer = 0; combo = 0;
   obstacles.length = 0; bonuses.length = 0; bullets.length = 0; parts.length = 0; toasts.length = 0; sparks.length = 0;
   followers.length = 0;
 }
@@ -396,26 +463,33 @@ function drawHall() {
 
 // ── БЛИНЫ (weight plates) ───────────────────────────────────────────────────
 function spawnPlate() {
-  const hpMax = Math.round(clamp(7 + dist / 70 + rnd(-2, 3), 5, 80));
+  // Старт — один боец: первые блины совсем лёгкие, чтобы он их щёлкал сам.
+  // Дальше HP растёт быстрее толпы — соло к сотому метру уже не тянет,
+  // и это толкает игрока собирать отряд воротами и бонусами.
+  const hpMax = Math.round(clamp(2 + dist / 55 + rnd(-1, 2), 2, 90));
   obstacles.push({ kind: 'plate', worldX: rnd(-0.72, 0.72), z: ZFAR, hp: hpMax, hpMax, spin: 0, wob: rnd(0, 6) });
-  nextPlateAt = dist + rnd(40, 62);
+  nextPlateAt = dist + rnd(16, 26);
 }
 function drawPlate(o) {
   const p = projectPoint(o.worldX, o.z);
-  const r = 46 * p.scale;
+  const r = Math.max(16, 46 * p.scale);
   ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(o.spin);
   ctx.fillStyle = '#8f2a20'; ctx.beginPath(); ctx.arc(0, 0, r, 0, 7); ctx.fill();
   ctx.fillStyle = '#c0392b'; ctx.beginPath(); ctx.arc(0, 0, r * 0.82, 0, 7); ctx.fill();
   ctx.fillStyle = '#5a1912'; ctx.beginPath(); ctx.arc(0, 0, r * 0.22, 0, 7); ctx.fill();
   ctx.restore();
-  // число HP — крупно, с обводкой, читаемо в движении
+  // число HP — крупно, с обводкой и тёмной плашкой-подложкой, читаемо в движении
   ctx.save(); ctx.translate(p.x, p.y);
-  const fs = Math.max(11, 22 * p.scale);
+  const fs = Math.max(15, 24 * p.scale);
   ctx.font = "900 " + fs + "px 'Courier New', monospace";
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.lineWidth = Math.max(2, fs * 0.22); ctx.strokeStyle = '#14110f';
-  ctx.strokeText(o.hp, 0, 1);
-  ctx.fillStyle = CHALK; ctx.fillText(o.hp, 0, 1);
+  const label = fmt(o.hp);
+  const tw = ctx.measureText(label).width;
+  ctx.fillStyle = 'rgba(10,8,6,0.55)';
+  ctx.beginPath(); ctx.roundRect(-tw / 2 - 6, -fs / 2 - 3, tw + 12, fs + 6, 6); ctx.fill();
+  ctx.lineWidth = Math.max(2.5, fs * 0.2); ctx.strokeStyle = '#14110f';
+  ctx.strokeText(label, 0, 1);
+  ctx.fillStyle = CHALK; ctx.fillText(label, 0, 1);
   ctx.restore();
 }
 
@@ -430,10 +504,17 @@ const GATE_DEBUFFS = [
   { type: 'sub', val: 18, label: '−18' },
 ];
 function spawnGate() {
-  const buff = pick(GATE_BUFFS), debuff = pick(GATE_DEBUFFS);
+  // Первые ворота — быстро и щедро: оба прохода с плюсом, чтобы новичок с
+  // одним бойцом сразу почувствовал рост. Дальше подмешиваем штраф, и чем
+  // дальше забег — тем он злее. Если отряд почти выкошен — «милосердные»
+  // ворота: обе стороны снова плюс, чтобы дать шанс отыграться.
+  const early = dist < 90;
+  const mercy = squad <= 4 && !early;
+  let buff = pick(GATE_BUFFS), debuff = pick(GATE_DEBUFFS);
+  if (early || mercy) debuff = pick(GATE_BUFFS);
   const buffLeft = Math.random() < 0.5;
-  obstacles.push({ kind: 'gate', z: ZFAR, buff, debuff, buffLeft, glow: 0 });
-  nextGateAt = dist + rnd(210, 300);
+  obstacles.push({ kind: 'gate', z: ZFAR, buff, debuff, buffLeft, bothGood: early || mercy, glow: 0 });
+  nextGateAt = dist + rnd(95, 150);
 }
 function drawGate(o) {
   const near = projectPoint(-1, o.z), farEdge = projectPoint(1, o.z);
@@ -442,8 +523,8 @@ function drawGate(o) {
   const approach = clamp(1 - o.z / 1.3, 0, 1);
   const pulse = 0.5 + 0.5 * Math.sin(t * 8);
   const leftIsBuff = o.buffLeft;
-  const leftColor = leftIsBuff ? C_GREEN : '#ff4444';
-  const rightColor = leftIsBuff ? '#ff4444' : C_GREEN;
+  const leftColor = (o.bothGood || leftIsBuff) ? C_GREEN : '#ff4444';
+  const rightColor = (o.bothGood || !leftIsBuff) ? C_GREEN : '#ff4444';
   ctx.save();
   ctx.globalAlpha = 0.55 + 0.35 * approach * pulse;
   ctx.fillStyle = leftColor; ctx.fillRect(near.x, barY - h / 2, mid.x - near.x, h);
@@ -491,11 +572,11 @@ function drawBoss(o) {
     ctx.fillStyle = 'rgba(255,255,255,0.12)'; ctx.fillRect(bx0, by, bw, 14);
     ctx.fillStyle = 'rgba(255,80,60,' + (0.55 + 0.45 * frac) + ')'; ctx.fillRect(bx0, by, bw * frac, 14);
     ctx.font = "800 12px 'Courier New', monospace"; ctx.fillStyle = CHALK; ctx.textAlign = 'center';
-    ctx.fillText('ШТАНГА · ' + Math.ceil(o.hp), W / 2, by + 11);
+    ctx.fillText('ШТАНГА · ' + fmt(Math.ceil(o.hp)), W / 2, by + 11);
     const tfrac = o.timer / BOSS_PRESS_TIME;
     ctx.fillStyle = tfrac < 0.25 ? '#ff4444' : C_GOLD;
     ctx.font = "900 15px 'Courier New', monospace";
-    ctx.fillText(Math.ceil(o.timer) + ' с', W / 2, by + 34);
+    ctx.fillText(fmt(Math.ceil(o.timer)) + ' с', W / 2, by + 34);
   }
 }
 
@@ -508,7 +589,7 @@ const BONUS_TYPES = {
 function spawnBonus() {
   const type = pick(['preworkout', 'belt', 'dumbbell', 'dumbbell']);
   bonuses.push({ type, worldX: rnd(-0.65, 0.65), z: ZFAR, t: rnd(0, 6) });
-  nextBonusAt = dist + rnd(65, 115);
+  nextBonusAt = dist + rnd(38, 68);
 }
 function drawBonus(b) {
   const p = projectPoint(b.worldX, b.z);
@@ -903,17 +984,22 @@ function update(dt) {
     if (bl.z >= bl.target.z - 0.05) {
       const target = bl.target;
       const before = target.hp;
-      target.hp = Math.max(0, target.hp - (target.__dmg || dmg));
+      // Урон целочисленный — HP блина/босса всегда целое, чтобы на экране
+      // не появлялись дробные хвосты («6.3») и обратный отсчёт был честным.
+      const dmgInt = Math.max(1, Math.round(target.__dmg || dmg));
+      target.hp = Math.max(0, target.hp - dmgInt);
       const p = projectPoint(target.worldX ?? 0, target.z);
       if (target.kind === 'boss') sBossHit(); else sTick();
       shake(target.kind === 'boss' ? 1.2 : 1.5);
       burst(p.x, p.y, '#f2ede3', 4, 90);
       if (target.hp <= 0 && before > 0) {
         if (target.kind === 'plate') {
-          score += target.hpMax * 3;
+          comboHit();
+          const gain = target.hpMax * 3 * comboMult();
+          score += gain;
           shake(5); sPop(); hitStop(0.02);
           burst(p.x, p.y, '#ffb347', 20, 260);
-          popNumber('+' + (target.hpMax * 3), C_GOLD, p.x, p.y - 10, true);
+          popNumber('+' + fmt(gain), C_GOLD, p.x, p.y - 10, true);
           obstacles.splice(obstacles.indexOf(target), 1);
         }
       }
@@ -936,9 +1022,10 @@ function update(dt) {
           } else {
             const loss = Math.min(squad, Math.round(o.hp));
             squad = Math.max(0, squad - loss);
+            comboBreak();
             sHit(); shake(6 + Math.min(20, loss * 0.7)); hitStop(loss > 8 ? 0.05 : 0);
             flash('red', 220);
-            popNumber('−' + loss, '#ff4444', W / 2, GROUND_F * H - 90, loss > 15);
+            popNumber('−' + fmt(loss), '#ff4444', W / 2, GROUND_F * H - 90, loss > 15);
             burst(W / 2, GROUND_F * H - 60, C_RAGE, Math.min(30, 10 + loss), 260);
           }
         }
@@ -963,6 +1050,7 @@ function update(dt) {
           burst(p.x, p.y - 30, C_GREEN, 22, 240);
           for (let k = 0; k < 3; k++) popNumber(eff.label, C_GREEN, p.x + rnd(-30, 30), p.y - 40 - k * 22, true);
         } else {
+          comboBreak();
           sGateDown(); shake(7); hitStop(0.03); flash('red', 220);
           burst(p.x, p.y - 20, '#ff4444', 16, 220);
           popNumber(eff.label, '#ff4444', p.x, p.y - 40, true);
@@ -983,19 +1071,21 @@ function update(dt) {
         // дрожь стойки растёт по мере убывания времени — нарастающее напряжение
         if (o.timer < BOSS_PRESS_TIME * 0.3) shake(1.2);
         if (o.hp <= 0) {
-          hitStop(0.09); shake(22); sBossWin(); flash('gold', 380);
+          hitStop(0.1); shake(24); sBossWin(); sRoar();
+          flash('white', 90); setTimeout(() => flash('gold', 380), 90);
           const p = projectPoint(0, o.z);
-          burst(p.x, p.y, C_GOLD, 40, 320);
+          burst(p.x, p.y, C_GOLD, 46, 340);
           score += 400; squad = Math.min(SQUAD_CAP, squad + 40); maxSquad = Math.max(maxSquad, squad);
           popNumber('ШТАНГА ВЗЯТА! +40', C_GOLD, W / 2, H * 0.3, true);
           obstacles.splice(i, 1);
         } else if (o.timer <= 0) {
           const loss = Math.round(squad * 0.5);
           squad = Math.max(0, squad - loss);
+          comboBreak();
           hitStop(0.06); shake(24); sBossLose(); flash('red', 420);
           const p = projectPoint(0, o.z);
           burst(p.x, p.y, C_RAGE, 34, 300);
-          popNumber('−' + loss, '#ff4444', W / 2, H * 0.3, true);
+          popNumber('−' + fmt(loss), '#ff4444', W / 2, H * 0.3, true);
           obstacles.splice(i, 1);
           if (squad <= 0) { die(); return; }
         }
@@ -1098,11 +1188,15 @@ function render() {
   ctx.font = "900 15px 'Courier New', monospace";
   ctx.fillText('ОТРЯД', 20, 32);
   ctx.font = "900 30px 'Courier New', monospace";
-  ctx.fillText(String(squad), 20, 62);
+  ctx.fillText(fmt(squad), 20, 62);
   ctx.textAlign = 'right'; ctx.fillStyle = '#e94f64'; ctx.font = "900 20px 'Courier New', monospace";
-  ctx.fillText('🥤 ' + score, W - 20, 32);
+  ctx.fillText('🥤 ' + fmt(score), W - 20, 32);
   ctx.fillStyle = 'rgba(242,237,227,0.7)'; ctx.font = "700 14px 'Courier New', monospace";
-  ctx.fillText(Math.floor(dist) + ' м', W - 20, 54);
+  ctx.fillText(fmt(Math.floor(dist)) + ' м', W - 20, 54);
+  if (combo >= 3) {
+    ctx.textAlign = 'left'; ctx.fillStyle = C_GOLD; ctx.font = "800 13px 'Courier New', monospace";
+    ctx.fillText('серия ' + fmt(combo) + (comboMult() > 1 ? ' ×' + fmt(comboMult()) : ''), 20, 82);
+  }
   let ix = W - 20, iy = 78;
   const pw = (label, color, frac) => {
     ctx.textAlign = 'right'; ctx.font = "800 12px 'Courier New', monospace"; ctx.fillStyle = color;
@@ -1112,7 +1206,7 @@ function render() {
     iy += 24;
   };
   if (rageT > 0) pw('ЯРОСТЬ', C_RAGE, rageT / 5);
-  if (shield > 0) { ctx.textAlign = 'right'; ctx.font = "800 12px 'Courier New', monospace"; ctx.fillStyle = '#7ea8ff'; ctx.fillText('ПОЯС ×' + shield, ix, iy); }
+  if (shield > 0) { ctx.textAlign = 'right'; ctx.font = "800 12px 'Courier New', monospace"; ctx.fillStyle = '#7ea8ff'; ctx.fillText('ПОЯС ×' + fmt(shield), ix, iy); }
 
   ctx.restore();
 }
