@@ -298,11 +298,52 @@ let squad = 0, maxSquad = 0, shield = 0, rageT = 0;
 let squadWorldX = 0;
 let trackScroll = 0;
 let meterSpeed = 0, depthSpeed = 0;
-let lastMile = 0, nextPlateAt = 0, nextGateAt = 0, nextBonusAt = 0, nextBossMile = 1000;
-let nextWaveAt = 0, nextCrateAt = 0;
+let lastMile = 0, nextBossMile = 1000;
+let nextEventAt = 0, lastEventWorldX = 0;
+const eventHistory = []; // последние 1-2 типа событий — против серий подряд
 let fireTimer = 0;
 let lastResult = null;
 const enemies = []; // рендер-представление вражеских толп (силуэты), не логика
+
+// ── СЛУЧАЙНЫЙ ПОТОК СОБЫТИЙ ──────────────────────────────────────────────────
+// Каждый забег собирается заново: тип следующего события — взвешенный выбор,
+// веса плывут по дистанции (щедрые ворота и мелкие волны в начале, тяжёлые
+// волны и злые ворота дальше), а не жёсткое расписание. Один и тот же тип не
+// выпадает больше двух раз подряд — сыгранная история подряд идущих типов
+// понижает его вес почти до нуля на следующий бросок.
+function weightsFor(d) {
+  const p = clamp(d / 900, 0, 1);
+  return {
+    gate: 0.27 - p * 0.06, plate: 0.30 - p * 0.08,
+    wave: d < 150 ? 0 : 0.06 + p * 0.28,
+    bonus: 0.22 - p * 0.10, crate: 0.15 - p * 0.02,
+  };
+}
+function pickEventType() {
+  const w = weightsFor(dist);
+  const weighted = Object.keys(w).map(k => {
+    let v = Math.max(0.01, w[k]);
+    if (eventHistory.length >= 2 && eventHistory[0] === k && eventHistory[1] === k) v *= 0.1;
+    return [k, v];
+  });
+  const total = weighted.reduce((s, [, v]) => s + v, 0);
+  let r = Math.random() * total;
+  for (const [k, v] of weighted) { r -= v; if (r <= 0) return commitEvent(k); }
+  return commitEvent(weighted[weighted.length - 1][0]);
+}
+function commitEvent(k) {
+  eventHistory.unshift(k);
+  if (eventHistory.length > 2) eventHistory.length = 2;
+  return k;
+}
+// Не даём событиям залипать по центру дорожки — новая позиция подальше от
+// прошлой, чтобы реально приходилось рулить.
+function spreadX(range) {
+  let x = rnd(-range, range);
+  if (Math.abs(x - lastEventWorldX) < 0.32) x = clamp(-lastEventWorldX + rnd(-0.15, 0.15), -range, range);
+  lastEventWorldX = x;
+  return x;
+}
 
 const SQUAD_START = 1, SQUAD_CAP = 999;
 const SPEED_START = 5.5, SPEED_RAMP = 0.045, SPEED_CAP = 15;
@@ -373,8 +414,10 @@ function resetGame() {
   t = 0; dist = 0; score = 0; squad = SQUAD_START; maxSquad = squad; shield = 0; rageT = 0;
   squadWorldX = 0; trackScroll = 0; shakeAmp = 0; hitStopT = 0;
   meterSpeed = SPEED_START; depthSpeed = SPEED_START / 12;
-  lastMile = 0; nextPlateAt = 26; nextGateAt = 18; nextBonusAt = 55; nextBossMile = 1200;
-  nextWaveAt = 210; nextCrateAt = 95;
+  lastMile = 0; nextBossMile = 1200;
+  // Честный рандом и на старте: первое событие тоже тянем из пула, просто
+  // близко и из его лёгкой части (weightsFor(0) без волн — см. ниже).
+  nextEventAt = rnd(14, 22); eventHistory.length = 0; lastEventWorldX = 0;
   fireTimer = 0; combo = 0; weaponLevel = 0; weaponTimer = 0;
   obstacles.length = 0; bonuses.length = 0; crates.length = 0; bullets.length = 0;
   enemyShots.length = 0; parts.length = 0; toasts.length = 0;
@@ -513,13 +556,23 @@ function drawHall() {
 }
 
 // ── БЛИНЫ (weight plates) ───────────────────────────────────────────────────
-function spawnPlate() {
+function mkPlate(worldX) {
   // Старт — один боец: первые блины совсем лёгкие, чтобы он их щёлкал сам.
   // Дальше HP растёт быстрее толпы — соло к сотому метру уже не тянет,
   // и это толкает игрока собирать отряд воротами и бонусами.
   const hpMax = Math.round(clamp(2 + dist / 55 + rnd(-1, 2), 2, 90));
-  obstacles.push({ kind: 'plate', worldX: rnd(-0.72, 0.72), z: ZFAR, hp: hpMax, hpMax, spin: 0, wob: rnd(0, 6) });
-  nextPlateAt = dist + rnd(16, 26);
+  return { kind: 'plate', worldX, z: ZFAR, hp: hpMax, hpMax, spin: 0, wob: rnd(0, 6) };
+}
+function spawnPlate() {
+  // Разнообразие: поодиночке или стенкой из 2-3 по ширине — не всегда одно
+  // и то же место и не всегда одна и та же форма подачи.
+  if (Math.random() < 0.3) {
+    const n = 2 + (Math.random() < 0.35 ? 1 : 0);
+    const base = spreadX(0.5);
+    for (let i = 0; i < n; i++) obstacles.push(mkPlate(clamp(base + (i - (n - 1) / 2) * 0.4, -0.75, 0.75)));
+  } else {
+    obstacles.push(mkPlate(spreadX(0.72)));
+  }
 }
 function drawPlate(o) {
   const p = projectPoint(o.worldX, o.z);
@@ -549,23 +602,31 @@ const GATE_BUFFS = [
   { type: 'mul', val: 2, label: '×2' },
   { type: 'mul', val: 3, label: '×3' },
   { type: 'add', val: 15, label: '+15' },
+  { type: 'add', val: 25, label: '+25' },
 ];
 const GATE_DEBUFFS = [
   { type: 'div', val: 2, label: '÷2' },
   { type: 'sub', val: 18, label: '−18' },
 ];
+const GATE_DEBUFFS_HARD = [
+  { type: 'div', val: 3, label: '÷3' },
+  { type: 'sub', val: 32, label: '−32' },
+];
 function spawnGate() {
   // Первые ворота — быстро и щедро: оба прохода с плюсом, чтобы новичок с
   // одним бойцом сразу почувствовал рост. Дальше подмешиваем штраф, и чем
-  // дальше забег — тем он злее. Если отряд почти выкошен — «милосердные»
-  // ворота: обе стороны снова плюс, чтобы дать шанс отыграться.
+  // дальше забег — тем он злее (в пул добавляются жёсткие варианты). Если
+  // отряд почти выкошен — «милосердные» ворота: обе стороны снова плюс.
   const early = dist < 90;
   const mercy = squad <= 4 && !early;
-  let buff = pick(GATE_BUFFS), debuff = pick(GATE_DEBUFFS);
-  if (early || mercy) debuff = pick(GATE_BUFFS);
+  const debuffPool = dist > 500 ? GATE_DEBUFFS.concat(GATE_DEBUFFS_HARD) : GATE_DEBUFFS;
+  let buff = pick(GATE_BUFFS), debuff = pick(debuffPool);
+  let bothGood = early || mercy;
+  let bothBad = false;
+  if (bothGood) debuff = pick(GATE_BUFFS);
+  else if (dist > 250 && Math.random() < 0.14) { buff = pick(debuffPool); bothBad = true; } // меньшее зло
   const buffLeft = Math.random() < 0.5;
-  obstacles.push({ kind: 'gate', z: ZFAR, buff, debuff, buffLeft, bothGood: early || mercy, glow: 0 });
-  nextGateAt = dist + rnd(95, 150);
+  obstacles.push({ kind: 'gate', z: ZFAR, buff, debuff, buffLeft, bothGood, bothBad, glow: 0 });
 }
 function drawGate(o) {
   const near = projectPoint(-1, o.z), farEdge = projectPoint(1, o.z);
@@ -574,8 +635,8 @@ function drawGate(o) {
   const approach = clamp(1 - o.z / 1.3, 0, 1);
   const pulse = 0.5 + 0.5 * Math.sin(t * 8);
   const leftIsBuff = o.buffLeft;
-  const leftColor = (o.bothGood || leftIsBuff) ? C_GREEN : '#ff4444';
-  const rightColor = (o.bothGood || !leftIsBuff) ? C_GREEN : '#ff4444';
+  const leftColor = o.bothBad ? '#ff4444' : (o.bothGood || leftIsBuff) ? C_GREEN : '#ff4444';
+  const rightColor = o.bothBad ? '#ff4444' : (o.bothGood || !leftIsBuff) ? C_GREEN : '#ff4444';
   ctx.save();
   ctx.globalAlpha = 0.55 + 0.35 * approach * pulse;
   ctx.fillStyle = leftColor; ctx.fillRect(near.x, barY - h / 2, mid.x - near.x, h);
@@ -639,8 +700,7 @@ const BONUS_TYPES = {
 };
 function spawnBonus() {
   const type = pick(['preworkout', 'belt', 'dumbbell', 'dumbbell']);
-  bonuses.push({ type, worldX: rnd(-0.65, 0.65), z: ZFAR, t: rnd(0, 6) });
-  nextBonusAt = dist + rnd(38, 68);
+  bonuses.push({ type, worldX: spreadX(0.65), z: ZFAR, t: rnd(0, 6) });
 }
 function drawBonus(b) {
   const p = projectPoint(b.worldX, b.z);
@@ -669,11 +729,13 @@ function spawnWave() {
   // крупнее, чем отряд успевает выкосить за один заход — забег кончается
   // реальным поражением, а не потому что наскучило.
   const count = Math.round(clamp(3 + Math.pow(Math.max(0, dist) / 140, 1.6) * 10 + rnd(-2, 5), 2, 3000));
+  const formation = pick(['wedge', 'wedge', 'wall', 'flanks', 'scatter']);
+  const jitter = formation === 'scatter' ? Array.from({ length: 12 }, () => rnd(-0.7, 0.7)) : null;
   obstacles.push({
-    kind: 'wave', worldX: rnd(-0.6, 0.6), z: ZFAR, count, countMax: count,
-    fireTimer: rnd(0.9, 1.4), phase: 'run',
+    kind: 'wave', worldX: spreadX(0.55), z: ZFAR, count, countMax: count,
+    fireTimer: rnd(0.9, 1.4), phase: 'run', formation, jitter,
+    speedMult: rnd(0.85, 1.2),
   });
-  nextWaveAt = dist + rnd(150, 230);
 }
 function drawEnemyBlob(x, y, scale, phase) {
   const bob = Math.sin(phase) * 2 * scale;
@@ -687,16 +749,34 @@ function drawEnemyBlob(x, y, scale, phase) {
   ctx.fillStyle = ENEMY_COL.dark; ctx.fillRect(-6 * scale, -13 * scale, 12 * scale, 11 * scale);
   ctx.restore();
 }
+// Строй волны — не всегда один и тот же клин: стена во всю ширину, два
+// фланга по краям с разрывом посредине или рассыпуха вразнобой.
+function waveSlot(o, i, shown) {
+  if (o.formation === 'wall') {
+    const cols = shown, col = i;
+    return { dx: (col - (cols - 1) / 2) * 0.09, dz: (i % 2) * 0.02 };
+  }
+  if (o.formation === 'flanks') {
+    const half = Math.ceil(shown / 2);
+    const side = i < half ? -1 : 1;
+    const j = i < half ? i : i - half;
+    return { dx: side * (0.32 + (j % 4) * 0.09), dz: Math.floor(j / 4) * 0.06 };
+  }
+  if (o.formation === 'scatter') {
+    return { dx: o.jitter[i % o.jitter.length], dz: (o.jitter[(i * 7) % o.jitter.length] + 1) * 0.045 };
+  }
+  // wedge (клин) — по умолчанию
+  const cols = Math.max(1, Math.min(8, Math.ceil(Math.sqrt(shown * 1.6))));
+  const row = Math.floor(i / cols), col = i % cols;
+  const rowLen = Math.min(cols, shown - row * cols);
+  return { dx: (col - (rowLen - 1) / 2) * 0.075, dz: row * 0.05 };
+}
 function drawWave(o) {
   const p = projectPoint(o.worldX, o.z);
   const shown = Math.min(30, o.count);
-  const cols = Math.max(1, Math.min(8, Math.ceil(Math.sqrt(shown * 1.6))));
   for (let i = 0; i < shown; i++) {
-    const row = Math.floor(i / cols), col = i % cols;
-    const rowLen = Math.min(cols, shown - row * cols);
-    const dx = (col - (rowLen - 1) / 2) * 0.075;
-    const dz = row * 0.05;
-    const ep = projectPoint(o.worldX + dx, o.z + dz);
+    const s = waveSlot(o, i, shown);
+    const ep = projectPoint(o.worldX + s.dx, o.z + s.dz);
     drawEnemyBlob(ep.x, ep.y, 1.35 * ep.scale, i * 1.7 + t * 3);
   }
   // число волны — крупно, с обводкой и подложкой, как у блина
@@ -717,8 +797,7 @@ function drawWave(o) {
 // ── ЯЩИКИ С ОРУЖИЕМ ──────────────────────────────────────────────────────────
 function spawnCrate() {
   const idx = 1 + Math.floor(Math.random() * (WEAPONS.length - 1));
-  crates.push({ idx, worldX: rnd(-0.6, 0.6), z: ZFAR, t: rnd(0, 6) });
-  nextCrateAt = dist + rnd(150, 240);
+  crates.push({ idx, worldX: spreadX(0.6), z: ZFAR, t: rnd(0, 6) });
 }
 function drawCrate(cr) {
   const p = projectPoint(cr.worldX, cr.z);
@@ -1223,16 +1302,21 @@ function update(dt) {
   fireTimer -= dt;
   if (fireTimer <= 0) { tryFire(dt, dmg); fireTimer = 1 / fireRate; }
 
-  // Босс: если ещё не запущен и прошли рубеж — спавним.
+  // Босс: если ещё не запущен и прошли рубеж — спавним (отдельный ритм от
+  // потока, это рубеж, а не рядовое событие).
   if (dist >= nextBossMile && !obstacles.some(o => o.kind === 'boss')) {
     spawnBoss(); nextBossMile += 1200;
   }
-  if (state === 'game') {
-    if (dist >= nextPlateAt) spawnPlate();
-    if (dist >= nextGateAt) spawnGate();
-    if (dist >= nextBonusAt) spawnBonus();
-    if (dist >= nextWaveAt) spawnWave();
-    if (dist >= nextCrateAt) spawnCrate();
+  // Поток рядовых событий — честный рандом каждый забег: взвешенный выбор
+  // типа, без дыр в плотности, без серий одного типа подряд.
+  if (state === 'game' && dist >= nextEventAt) {
+    const kind = pickEventType();
+    if (kind === 'plate') spawnPlate();
+    else if (kind === 'gate') spawnGate();
+    else if (kind === 'bonus') spawnBonus();
+    else if (kind === 'wave') spawnWave();
+    else if (kind === 'crate') spawnCrate();
+    nextEventAt = dist + rnd(15, 26);
   }
 
   // Пули: урон целочисленный сразу — HP/численность целые, никаких дробных
@@ -1373,7 +1457,7 @@ function update(dt) {
       continue;
     }
     if (o.kind === 'wave') {
-      o.z -= depthSpeed * dt;
+      o.z -= depthSpeed * dt * (o.speedMult || 1);
       // Ответный огонь: пока волна в радиусе, она периодически бьёт по
       // отряду — постоянное давление, а не только финальная свалка.
       if (o.z < 2.1 && o.count > 0) {
