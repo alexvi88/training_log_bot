@@ -385,8 +385,8 @@ let lastResult = null;
 function weightsFor(d) {
   const p = clamp(d / 900, 0, 1);
   return {
-    gate: 0.20 - p * 0.04, plate: 0.20 - p * 0.05,
-    wave: d < 40 ? 0 : 0.34 + p * 0.20,
+    gate: 0.27 - p * 0.05, plate: 0.17 - p * 0.04,
+    wave: d < 40 ? 0 : 0.30 + p * 0.18,
     bonus: 0.16 - p * 0.06, crate: 0.10 - p * 0.01,
   };
 }
@@ -711,7 +711,7 @@ function spawnGate() {
   // одним бойцом сразу почувствовал рост. Дальше подмешиваем штраф, и чем
   // дальше забег — тем он злее (в пул добавляются жёсткие варианты). Если
   // отряд почти выкошен — «милосердные» ворота: обе стороны снова плюс.
-  const early = dist < 90;
+  const early = dist < 220;
   const mercy = squad <= 4 && !early;
   const debuffPool = dist > 500 ? GATE_DEBUFFS.concat(GATE_DEBUFFS_HARD) : GATE_DEBUFFS;
   let buff = pick(GATE_BUFFS), debuff = pick(debuffPool);
@@ -752,7 +752,13 @@ function spawnWave() {
   // есть потолок), а волны — нет, поэтому рано или поздно волна оказывается
   // крупнее, чем отряд успевает выкосить за один заход — забег кончается
   // реальным поражением, а не потому что наскучило.
-  const count = Math.round(clamp(3 + Math.pow(Math.max(0, dist) / 140, 1.6) * 10 + rnd(-2, 5), 2, 3000));
+  // Волна растёт от дистанции, но подпирается мягким потолком от размера
+  // отряда: игрок, который честно собирал народ, всегда имеет шанс перемолоть
+  // встречных, а тот, кто просел, тонет. Без потолка кривая обгоняла отряд уже
+  // к третьей минуте — забег обрывался на шестерых бойцах.
+  const raw = 2 + Math.pow(Math.max(0, dist) / 240, 1.5) * 9 + rnd(-1, 4);
+  const softCap = dist < 500 ? Math.max(6, squad * 1.7) : Math.max(12, squad * 2.4);
+  const count = Math.round(clamp(Math.min(raw, softCap), 2, 3000));
   const formation = pick(['wedge', 'wedge', 'wall', 'flanks', 'scatter']);
   const jitter = formation === 'scatter' ? Array.from({ length: 12 }, () => rnd(-0.7, 0.7)) : null;
   obstacles.push({
