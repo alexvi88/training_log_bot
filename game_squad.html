@@ -341,7 +341,6 @@ let nextEventAt = 0, lastEventWorldX = 0;
 const eventHistory = []; // последние 1-2 типа событий — против серий подряд
 let fireTimer = 0;
 let lastResult = null;
-const enemies = []; // рендер-представление вражеских толп (силуэты), не логика
 
 // ── СЛУЧАЙНЫЙ ПОТОК СОБЫТИЙ ──────────────────────────────────────────────────
 // Каждый забег собирается заново: тип следующего события — взвешенный выбор,
@@ -420,7 +419,6 @@ const obstacles = []; // plate | gate | boss | wave
 const bonuses = [];   // preworkout | belt | dumbbell
 const crates = [];    // ящики с оружием
 const bullets = [];
-const enemyShots = []; // короткие трассеры ответного огня врагов — визуал, не отдельные снаряды
 const parts = [];
 const toasts = [];
 
@@ -458,8 +456,8 @@ function resetGame() {
   nextEventAt = rnd(14, 22); eventHistory.length = 0; lastEventWorldX = 0;
   fireTimer = 0; combo = 0; weaponLevel = 0; weaponTimer = 0;
   obstacles.length = 0; bonuses.length = 0; crates.length = 0; bullets.length = 0;
-  enemyShots.length = 0; parts.length = 0; toasts.length = 0;
-  followers.length = 0; enemies.length = 0;
+  parts.length = 0; toasts.length = 0;
+  followers.length = 0;
 }
 
 // Тексты — TONE_OF_VOICE.md: тренер от первого лица, на «ты», без подколок

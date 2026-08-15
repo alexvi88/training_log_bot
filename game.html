@@ -492,9 +492,9 @@ const QUIPS = [
 
 // ── ЛОКАЦИИ (смысл сохранён: три биома по мере забега, теперь — 3D-палитра) ──
 const ZONES = [
-  { name: 'ПОДВАЛ',   fog: 0x241a13, floor: 0x2a211a, wall: 0x3a2c20, prop: 0x4a3a2b, lamp: 0xffb060, kind: 'gym' },
-  { name: 'НЕОН-ЗАЛ', fog: 0x141b33, floor: 0x151b2e, wall: 0x1c2440, prop: 0x2c3a63, lamp: 0x39d2c4, lamp2: 0xff5a96, kind: 'neon' },
-  { name: 'УЛИЦА',    fog: 0x1c2033, floor: 0x191c26, wall: 0x232840, prop: 0x333849, lamp: 0xffc93c, kind: 'street' },
+  { name: 'ПОДВАЛ',   fog: 0x241a13, floor: 0x2a211a, track: 0x6b5636, wall: 0x3a2c20, prop: 0x4a3a2b, lamp: 0xffb060, kind: 'gym' },
+  { name: 'НЕОН-ЗАЛ', fog: 0x141b33, floor: 0x151b2e, track: 0x35406e, wall: 0x1c2440, prop: 0x2c3a63, lamp: 0x39d2c4, lamp2: 0xff5a96, kind: 'neon' },
+  { name: 'УЛИЦА',    fog: 0x1c2033, floor: 0x191c26, track: 0x454b63, wall: 0x232840, prop: 0x333849, lamp: 0xffc93c, kind: 'street' },
 ];
 const ZONE_LEN = 600;
 function zoneIndex() { return Math.floor(dist / ZONE_LEN) % ZONES.length; }
@@ -815,8 +815,8 @@ function toWZ(x2d) { return -(x2d - P.x) * UNIT; }
 
 let renderer = null, scene = null, camera = null;
 let sceneObstacles = null, decorGroup = null, particleGroup = null;
-let floorMesh = null, wallL = null, wallR = null;
-let propMesh = null, lampMesh = null, buildingMesh = null;
+let floorMesh = null, trackMesh = null, stripeMesh = null, wallL = null, wallR = null;
+let propMesh = null, propBarMesh = null, lampMesh = null, lampPostMesh = null, buildingMesh = null;
 let itemMeshes = {}; // type -> InstancedMesh
 const ITEM_CAP = 48;
 let playerModel = null; // { group, parts }
@@ -826,7 +826,8 @@ let curZoneCol = null; // текущие интерполированные цв
 
 function hexShade(hex, k) {
   const n = (typeof hex === 'number') ? hex : parseInt(String(hex).replace('#', ''), 16);
-  const r = Math.round(((n >> 16) & 255) * k), g = Math.round(((n >> 8) & 255) * k), b = Math.round((n & 255) * k);
+  const clamp = v => Math.max(0, Math.min(255, Math.round(v)));
+  const r = clamp(((n >> 16) & 255) * k), g = clamp(((n >> 8) & 255) * k), b = clamp((n & 255) * k);
   return (r << 16) | (g << 8) | b;
 }
 function colorNum(hex) { return (typeof hex === 'number') ? hex : parseInt(String(hex).replace('#', ''), 16); }
@@ -846,88 +847,128 @@ function disposeObject(obj) {
   });
 }
 
+// ── Тоновая (cel-shaded) градация: ступенчатый градиент вместо мыльного Ламберта
+let toonGradient = null;
+function makeToonGradient() {
+  const c = document.createElement('canvas'); c.width = 4; c.height = 1;
+  const cx = c.getContext('2d');
+  const shades = [80, 150, 205, 255];
+  for (let i = 0; i < 4; i++) { cx.fillStyle = 'rgb(' + shades[i] + ',' + shades[i] + ',' + shades[i] + ')'; cx.fillRect(i, 0, 1, 1); }
+  const tex = new THREE.CanvasTexture(c);
+  tex.minFilter = THREE.NearestFilter; tex.magFilter = THREE.NearestFilter; tex.generateMipmaps = false;
+  return tex;
+}
+function toonMat(color) { return new THREE.MeshToonMaterial({ color, gradientMap: toonGradient }); }
+
+// ── Жёсткий контур: увеличенный BackSide-двойник каждого меша ──────────────
+let outlineMat = null;
+function addOutline(mesh, factor) {
+  const ol = new THREE.Mesh(mesh.geometry, outlineMat);
+  ol.scale.setScalar(factor || 1.12);
+  ol.raycast = () => {};
+  mesh.add(ol);
+  return ol;
+}
+function addOutlines(root, factor) {
+  const meshes = [];
+  root.traverse(n => { if (n.isMesh) meshes.push(n); });
+  meshes.forEach(m => addOutline(m, factor));
+}
+
 function initThree() {
   dummy = new THREE.Object3D();
+  toonGradient = makeToonGradient();
+  outlineMat = new THREE.MeshBasicMaterial({ color: 0x120c09, side: THREE.BackSide });
+
   scene = new THREE.Scene();
   scene.background = new THREE.Color(ZONES[0].fog);
-  scene.fog = new THREE.Fog(ZONES[0].fog, 8, 34);
+  scene.fog = new THREE.Fog(ZONES[0].fog, 16, 60);
 
-  camera = new THREE.PerspectiveCamera(58, 1, 0.1, 100);
+  camera = new THREE.PerspectiveCamera(50, 1, 0.1, 120);
 
   renderer = new THREE.WebGLRenderer({ canvas: cv, antialias: true, alpha: false });
   renderer.setClearColor(ZONES[0].fog);
 
-  const ambient = new THREE.AmbientLight(0xfff2df, 0.55);
+  // Свет: сильный ключевой сверху-сбоку + слабая заливка + контровой,
+  // отделяющий силуэт атлета от тёмного фона.
+  const ambient = new THREE.AmbientLight(0xaebbe6, 0.42);
   scene.add(ambient);
-  const sun = new THREE.DirectionalLight(0xffdcae, 0.95);
-  sun.position.set(-4, 8, 4);
-  scene.add(sun);
-  const fill = new THREE.DirectionalLight(0x8fb0ff, 0.25);
-  fill.position.set(3, 4, -6);
-  scene.add(fill);
+  const key = new THREE.DirectionalLight(0xfff0cf, 1.5);
+  key.position.set(-5, 10, 6);
+  scene.add(key);
+  const fillL = new THREE.DirectionalLight(0x8fb0ff, 0.32);
+  fillL.position.set(5, 3, 4);
+  scene.add(fillL);
+  const rim = new THREE.DirectionalLight(0xffffff, 1.05);
+  rim.position.set(0, 6, -10); // впереди и выше — светит игроку в спину, навстречу камере
+  scene.add(rim);
 
-  // Пол
+  // Пол: контрастная дорожка на тёмном фоне зала
   floorMesh = new THREE.Mesh(
-    new THREE.PlaneGeometry(24, 200),
-    new THREE.MeshLambertMaterial({ color: ZONES[0].floor })
+    new THREE.PlaneGeometry(30, 260),
+    toonMat(ZONES[0].floor)
   );
   floorMesh.rotation.x = -Math.PI / 2;
-  floorMesh.position.set(0, 0, -60);
+  floorMesh.position.set(0, 0, -80);
   scene.add(floorMesh);
 
-  // Дорожка-разметка на полу
-  const laneMat = new THREE.MeshBasicMaterial({ color: 0xf2ede3, transparent: true, opacity: 0.12 });
-  const laneGeo = new THREE.PlaneGeometry(0.12, 200);
-  const lane = new THREE.Mesh(laneGeo, laneMat);
-  lane.rotation.x = -Math.PI / 2;
-  lane.position.set(0, 0.01, -60);
-  scene.add(lane);
+  trackMesh = new THREE.Mesh(
+    new THREE.PlaneGeometry(2.6, 260),
+    toonMat(ZONES[0].track)
+  );
+  trackMesh.rotation.x = -Math.PI / 2;
+  trackMesh.position.set(0, 0.006, -80);
+  scene.add(trackMesh);
 
-  // Стены по бокам
-  const wallGeo = new THREE.BoxGeometry(0.6, 6, 200);
-  wallL = new THREE.Mesh(wallGeo, new THREE.MeshLambertMaterial({ color: ZONES[0].wall }));
-  wallL.position.set(-6.3, 3, -60);
-  wallR = wallL.clone(); wallR.material = wallL.material.clone(); wallR.position.x = 6.3;
+  // Полосы разметки, летящие на игрока — главный маркер скорости
+  stripeMesh = new THREE.InstancedMesh(
+    new THREE.PlaneGeometry(2.1, 0.22),
+    new THREE.MeshBasicMaterial({ color: 0xf2ede3, transparent: true, opacity: 0.55 }),
+    18
+  );
+  scene.add(stripeMesh);
+
+  // Стены по бокам зала
+  const wallGeo = new THREE.BoxGeometry(0.6, 7, 260);
+  wallL = new THREE.Mesh(wallGeo, toonMat(ZONES[0].wall));
+  wallL.position.set(-7.4, 3.4, -80);
+  wallR = wallL.clone(); wallR.material = wallL.material.clone(); wallR.position.x = 7.4;
   scene.add(wallL, wallR);
 
-  // Ряды тренажёров/стоек по бокам — InstancedMesh
-  propMesh = new THREE.InstancedMesh(
-    new THREE.BoxGeometry(0.9, 1.6, 0.5),
-    new THREE.MeshLambertMaterial({ color: ZONES[0].prop }),
-    24
-  );
+  // Ряды тренажёров/стоек по бокам — плотные, InstancedMesh (тело + верхняя перекладина)
+  propMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(0.8, 1.9, 0.6), toonMat(ZONES[0].prop), 36);
   scene.add(propMesh);
+  propBarMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(0.95, 0.14, 0.7), toonMat(0x8a8f9a), 36);
+  scene.add(propBarMesh);
 
-  // Здания уличной зоны — InstancedMesh (та же геометрия сцены, другой масштаб)
-  buildingMesh = new THREE.InstancedMesh(
-    new THREE.BoxGeometry(1.4, 1, 1.4),
-    new THREE.MeshLambertMaterial({ color: 0x0c0f1c }),
-    16
-  );
+  // Здания уличной зоны — InstancedMesh
+  buildingMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(1.6, 1, 1.6), toonMat(0x11162a), 18);
   scene.add(buildingMesh);
 
-  // Тёплые лампы — светящиеся сферы на столбах, InstancedMesh с индивидуальным цветом
+  // Тёплые лампы на столбах — светящаяся сфера (individual instanceColor) + сам столб
   const lampMat = new THREE.MeshBasicMaterial({ color: 0xffffff, vertexColors: true });
-  lampMesh = new THREE.InstancedMesh(new THREE.SphereGeometry(0.22, 8, 6), lampMat, 12);
-  lampMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(12 * 3), 3);
+  lampMesh = new THREE.InstancedMesh(new THREE.SphereGeometry(0.24, 8, 6), lampMat, 16);
+  lampMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(16 * 3), 3);
   scene.add(lampMesh);
+  lampPostMesh = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.045, 0.045, 2.6, 6), toonMat(0x2a2118), 16);
+  scene.add(lampPostMesh);
 
   sceneObstacles = new THREE.Group(); scene.add(sceneObstacles);
   decorGroup = new THREE.Group(); scene.add(decorGroup);
   particleGroup = new THREE.Group(); scene.add(particleGroup);
 
   // Собираемые предметы — по одному InstancedMesh на тип
-  itemMeshes.shaker = new THREE.InstancedMesh(new THREE.BoxGeometry(0.34, 0.5, 0.24), new THREE.MeshLambertMaterial({ color: ITEM_TYPES.shaker.color }), ITEM_CAP);
-  itemMeshes.bar = new THREE.InstancedMesh(new THREE.BoxGeometry(0.5, 0.22, 0.16), new THREE.MeshLambertMaterial({ color: 0xffd700 }), ITEM_CAP);
-  itemMeshes.creatine = new THREE.InstancedMesh(new THREE.SphereGeometry(0.24, 10, 8), new THREE.MeshLambertMaterial({ color: ITEM_TYPES.creatine.color }), ITEM_CAP);
-  itemMeshes.preworkout = new THREE.InstancedMesh(new THREE.SphereGeometry(0.24, 10, 8), new THREE.MeshLambertMaterial({ color: ITEM_TYPES.preworkout.color }), ITEM_CAP);
-  itemMeshes.gainer = new THREE.InstancedMesh(new THREE.SphereGeometry(0.24, 10, 8), new THREE.MeshLambertMaterial({ color: ITEM_TYPES.gainer.color }), ITEM_CAP);
+  itemMeshes.shaker = new THREE.InstancedMesh(new THREE.BoxGeometry(0.34, 0.5, 0.24), toonMat(ITEM_TYPES.shaker.color), ITEM_CAP);
+  itemMeshes.bar = new THREE.InstancedMesh(new THREE.BoxGeometry(0.5, 0.22, 0.16), toonMat(0xffd700), ITEM_CAP);
+  itemMeshes.creatine = new THREE.InstancedMesh(new THREE.SphereGeometry(0.24, 10, 8), new THREE.MeshBasicMaterial({ color: ITEM_TYPES.creatine.color }), ITEM_CAP);
+  itemMeshes.preworkout = new THREE.InstancedMesh(new THREE.SphereGeometry(0.24, 10, 8), new THREE.MeshBasicMaterial({ color: ITEM_TYPES.preworkout.color }), ITEM_CAP);
+  itemMeshes.gainer = new THREE.InstancedMesh(new THREE.SphereGeometry(0.24, 10, 8), new THREE.MeshBasicMaterial({ color: ITEM_TYPES.gainer.color }), ITEM_CAP);
   Object.values(itemMeshes).forEach(m => { m.count = ITEM_CAP; scene.add(m); });
 
   // Тень под ногами игрока — тёмный круг-плоскость (без карт теней, дёшево)
   shadowBlob.mesh = new THREE.Mesh(
     new THREE.CircleGeometry(0.5, 16),
-    new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.35 })
+    new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.4 })
   );
   shadowBlob.mesh.rotation.x = -Math.PI / 2;
   shadowBlob.mesh.position.y = 0.02;
@@ -949,6 +990,9 @@ function resize3D() {
 window.addEventListener('resize', resize3D);
 
 // ── Игрок: группа из примитивов, собирается один раз на выбор персонажа ────
+// Читаемый силуэт: плечи заметно шире таза, торс сужается к поясу (конус, а
+// не ровная капсула), отдельная шея, кисти и стопы своим объёмом, конечности
+// тоньше корпуса. Контур — увеличенный BackSide-двойник на каждом меше.
 function buildPlayerModel(key) {
   if (playerModel) { scene.remove(playerModel.group); disposeObject(playerModel.group); }
   const f = FIGHTERS[key];
@@ -961,58 +1005,75 @@ function buildPlayerModel(key) {
 
   const group = new THREE.Group();
 
-  const torsoMat = new THREE.MeshLambertMaterial({ color: torsoColor });
-  const skinMat = new THREE.MeshLambertMaterial({ color: skinColor });
-  const bottomMat = new THREE.MeshLambertMaterial({ color: bottomColor });
+  const torsoMat = toonMat(torsoColor);
+  const skinMat = toonMat(skinColor);
+  const skinMatD = toonMat(hexShade(f.skin, 0.8));
+  const bottomMat = toonMat(bottomColor);
 
   const hipY = 0.62;
-  const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.24 * B, 0.42, 3, 8), torsoMat);
-  torso.position.set(0, hipY + 0.42, 0);
-  group.add(torso);
+  // Верхняя часть тела — отдельная группа с осью вращения на уровне бёдер:
+  // так торс+шея+голова наклоняются вместе (подкат/бег), а не расходятся.
+  const upperBody = new THREE.Group();
+  upperBody.position.set(0, hipY, 0);
+  group.add(upperBody);
 
-  const pelvis = new THREE.Mesh(new THREE.BoxGeometry(0.42 * B, 0.24, 0.26), bottomMat);
-  pelvis.position.set(0, hipY + 0.1, 0);
+  // Торс: конус (шире у плеч, уже у пояса) вместо ровной капсулы — даёт V-силуэт.
+  const torso = new THREE.Mesh(new THREE.CylinderGeometry(0.30 * B, 0.20 * B, 0.62, 8), torsoMat);
+  torso.position.set(0, 0.33, 0);
+  upperBody.add(torso);
+  const chestCap = new THREE.Mesh(new THREE.SphereGeometry(0.30 * B, 8, 6, 0, Math.PI * 2, 0, Math.PI * 0.5), torsoMat);
+  chestCap.position.set(0, 0.64, 0);
+  upperBody.add(chestCap);
+
+  const pelvis = new THREE.Mesh(new THREE.BoxGeometry(0.36 * B, 0.22, 0.26), bottomMat);
+  pelvis.position.set(0, hipY + 0.02, 0);
   group.add(pelvis);
 
+  // Шея — отдельный объём между плечами и головой, иначе голова «сидит» на торсе
+  const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.10, 0.16, 8), skinMat);
+  neck.position.set(0, 0.75, 0);
+  upperBody.add(neck);
+
+  const headLocalY = 0.92;
   const head = new THREE.Mesh(new THREE.SphereGeometry(0.185, 12, 10), skinMat);
-  head.position.set(0, hipY + 0.98, 0.02);
-  group.add(head);
+  head.position.set(0, headLocalY, 0.02);
+  upperBody.add(head);
 
   // Причёска/убор — по f.head, цвет f.hair либо f.acc (бандана/повязка)
   let hairMesh = null;
   if (f.head === 'bandana') {
-    hairMesh = new THREE.Mesh(new THREE.SphereGeometry(0.195, 10, 8, 0, Math.PI * 2, 0, Math.PI * 0.6), new THREE.MeshLambertMaterial({ color: accColor }));
+    hairMesh = new THREE.Mesh(new THREE.SphereGeometry(0.195, 10, 8, 0, Math.PI * 2, 0, Math.PI * 0.6), toonMat(accColor));
   } else if (f.head === 'headband') {
-    hairMesh = new THREE.Mesh(new THREE.TorusGeometry(0.185, 0.03, 6, 12), new THREE.MeshLambertMaterial({ color: accColor }));
+    hairMesh = new THREE.Mesh(new THREE.TorusGeometry(0.185, 0.03, 6, 12), toonMat(accColor));
     hairMesh.rotation.x = Math.PI / 2;
   } else {
-    hairMesh = new THREE.Mesh(new THREE.SphereGeometry(0.195, 10, 8, 0, Math.PI * 2, 0, Math.PI * 0.5), new THREE.MeshLambertMaterial({ color: hairColor }));
+    hairMesh = new THREE.Mesh(new THREE.SphereGeometry(0.195, 10, 8, 0, Math.PI * 2, 0, Math.PI * 0.5), toonMat(hairColor));
   }
   hairMesh.position.copy(head.position);
-  group.add(hairMesh);
+  upperBody.add(hairMesh);
 
   // Уши борца — крупнее и краснее
   if (f.ears) {
-    const earMat = new THREE.MeshLambertMaterial({ color: 0xc98a7a });
+    const earMat = toonMat(0xc98a7a);
     const earGeo = new THREE.SphereGeometry(0.05, 6, 6);
-    const earL = new THREE.Mesh(earGeo, earMat); earL.position.set(-0.18, head.position.y, 0);
+    const earL = new THREE.Mesh(earGeo, earMat); earL.position.set(-0.18, headLocalY, 0);
     const earR = earL.clone(); earR.position.x = 0.18;
-    group.add(earL, earR);
+    upperBody.add(earL, earR);
   }
 
   // Пояс пауэрлифтера
   if (f.belt) {
-    const belt = new THREE.Mesh(new THREE.BoxGeometry(0.46 * B, 0.09, 0.28), new THREE.MeshLambertMaterial({ color: accColor }));
-    belt.position.set(0, hipY + 0.18, 0);
+    const belt = new THREE.Mesh(new THREE.BoxGeometry(0.40 * B, 0.09, 0.28), toonMat(accColor));
+    belt.position.set(0, hipY + 0.14, 0);
     group.add(belt);
   }
 
   function makeLimb(isArm, side) {
     const pivot = new THREE.Group();
     const upperLen = isArm ? 0.30 : 0.40;
-    const lowerLen = isArm ? 0.28 : 0.40;
-    const thickness = (isArm ? 0.09 : 0.12) * B;
-    const col = isArm ? skinMat : (side < 0 ? new THREE.MeshLambertMaterial({ color: hexShade(f.skin, 0.78) }) : skinMat);
+    const lowerLen = isArm ? 0.26 : 0.38;
+    const thickness = (isArm ? 0.075 : 0.10) * B;
+    const col = isArm ? skinMat : (side < 0 ? skinMatD : skinMat);
     const jointGeo = new THREE.SphereGeometry(thickness * 1.02, 8, 6);
     const topJoint = new THREE.Mesh(jointGeo, col);
     pivot.add(topJoint);
@@ -1028,30 +1089,41 @@ function buildPlayerModel(key) {
     const kneeJoint = new THREE.Mesh(new THREE.SphereGeometry(thickness * 0.86, 8, 6), col);
     kneePivot.add(kneeJoint);
 
-    const lower = new THREE.Mesh(new THREE.CapsuleGeometry(thickness * 0.82, lowerLen, 2, 6), col);
+    const lower = new THREE.Mesh(new THREE.CapsuleGeometry(thickness * 0.8, lowerLen, 2, 6), col);
     lower.position.y = -lowerLen / 2 - thickness * 0.3;
     kneePivot.add(lower);
 
     let extra = null;
     if (!isArm) {
-      extra = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.08, 0.22), new THREE.MeshLambertMaterial({ color: side < 0 ? 0x3f434c : 0x565b66 }));
-      extra.position.y = -lowerLen - thickness * 0.3;
+      // Стопа/ботинок — отдельный объём, темнее ноги, с плоской подошвой
+      extra = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.09, 0.24), toonMat(side < 0 ? 0x33373f : 0x454a55));
+      extra.position.y = -lowerLen - thickness * 0.42;
       kneePivot.add(extra);
+      const sole = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.03, 0.26), toonMat(0x1c1e22));
+      sole.position.y = -lowerLen - thickness * 0.42 - 0.06;
+      kneePivot.add(sole);
+    } else {
+      // Кисть — отдельная сфера на конце предплечья
+      const hand = new THREE.Mesh(new THREE.SphereGeometry(thickness * 1.15, 8, 6), col);
+      hand.position.y = -lowerLen - thickness * 0.5;
+      kneePivot.add(hand);
+      extra = hand;
     }
     return { pivot, kneePivot, upper, lower, shoe: extra };
   }
 
-  const legL = makeLimb(false, -1); legL.pivot.position.set(-0.13 * B, hipY, 0);
-  const legR = makeLimb(false, 1); legR.pivot.position.set(0.13 * B, hipY, 0);
-  const armL = makeLimb(true, -1); armL.pivot.position.set(-0.30 * B, hipY + 0.78, 0);
-  const armR = makeLimb(true, 1); armR.pivot.position.set(0.30 * B, hipY + 0.78, 0);
+  const legL = makeLimb(false, -1); legL.pivot.position.set(-0.14 * B, hipY, 0);
+  const legR = makeLimb(false, 1); legR.pivot.position.set(0.14 * B, hipY, 0);
+  const armL = makeLimb(true, -1); armL.pivot.position.set(-0.34 * B, hipY + 0.68, 0);
+  const armR = makeLimb(true, 1); armR.pivot.position.set(0.34 * B, hipY + 0.68, 0);
   group.add(legL.pivot, legR.pivot, armL.pivot, armR.pivot);
 
   group.scale.setScalar(1);
   group.position.set(0, 0, 0);
   scene.add(group);
+  addOutlines(group, 1.1);
 
-  playerModel = { group, torso, head, legL, legR, armL, armR, key, B };
+  playerModel = { group, upperBody, torso, head, legL, legR, armL, armR, key, B };
 }
 
 // ── Препятствия: примитивы вместо ctx-фигур, коллизии не изменились ────────
@@ -1059,61 +1131,62 @@ function buildObstacleMesh(o) {
   const g = new THREE.Group();
   const s = UNIT;
   if (o.kind === 'dumb') {
-    const bar = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, o.w * s * 0.7, 8), new THREE.MeshLambertMaterial({ color: 0x767c88 }));
+    const bar = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, o.w * s * 0.7, 8), toonMat(0x8a92a0));
     bar.rotation.z = Math.PI / 2;
     bar.position.y = (o.h * s) * 0.55;
     g.add(bar);
     const plateGeo = new THREE.CylinderGeometry(o.h * s * 0.5, o.h * s * 0.5, 0.12, 12);
-    const plateMat = new THREE.MeshLambertMaterial({ color: 0x5a606c });
+    const plateMat = toonMat(0x6b7280);
     const pL = new THREE.Mesh(plateGeo, plateMat); pL.rotation.z = Math.PI / 2; pL.position.set(-o.w * s * 0.32, o.h * s * 0.5, 0);
     const pR = pL.clone(); pR.position.x = o.w * s * 0.32;
     g.add(pL, pR);
   } else if (o.kind === 'kettle') {
-    const body = new THREE.Mesh(new THREE.SphereGeometry(o.w * s * 0.5, 10, 8), new THREE.MeshLambertMaterial({ color: 0x3b3f49 }));
+    const body = new THREE.Mesh(new THREE.SphereGeometry(o.w * s * 0.5, 10, 8), toonMat(0x4c515e));
     body.position.y = o.w * s * 0.5;
     g.add(body);
-    const handle = new THREE.Mesh(new THREE.TorusGeometry(o.w * s * 0.32, 0.035, 6, 10, Math.PI), new THREE.MeshLambertMaterial({ color: 0x3b3f49 }));
+    const handle = new THREE.Mesh(new THREE.TorusGeometry(o.w * s * 0.32, 0.035, 6, 10, Math.PI), toonMat(0x4c515e));
     handle.position.y = o.w * s * 0.95;
     handle.rotation.z = Math.PI;
     g.add(handle);
   } else if (o.kind === 'bench') {
-    const top = new THREE.Mesh(new THREE.BoxGeometry(o.w * s, 0.1, 0.4), new THREE.MeshLambertMaterial({ color: 0x8a4436 }));
+    const top = new THREE.Mesh(new THREE.BoxGeometry(o.w * s, 0.1, 0.4), toonMat(0xa6573f));
     top.position.y = o.h * s - 0.05;
     g.add(top);
-    const legMat = new THREE.MeshLambertMaterial({ color: 0x4c4f58 });
+    const legMat = toonMat(0x5c606c);
     const legGeo = new THREE.BoxGeometry(0.08, o.h * s - 0.1, 0.08);
     const lg1 = new THREE.Mesh(legGeo, legMat); lg1.position.set(-o.w * s * 0.35, (o.h * s - 0.1) / 2, 0);
     const lg2 = lg1.clone(); lg2.position.x = o.w * s * 0.35;
     g.add(lg1, lg2);
   } else if (o.kind === 'rack') {
-    const postMat = new THREE.MeshLambertMaterial({ color: 0x4c4f58 });
+    const postMat = toonMat(0x5c606c);
     const postH = 1.6;
     const postGeo = new THREE.BoxGeometry(0.08, postH, 0.08);
     const p1 = new THREE.Mesh(postGeo, postMat); p1.position.set(-(o.w * s * 0.5 + 0.35), postH / 2, 0);
     const p2 = p1.clone(); p2.position.x = o.w * s * 0.5 + 0.35;
     g.add(p1, p2);
     const barY = o.gap * s;
-    const bar = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, (o.w + 104) * s, 8), new THREE.MeshLambertMaterial({ color: 0x9aa0ab }));
+    const bar = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, (o.w + 104) * s, 8), toonMat(0xb7bcc6));
     bar.rotation.z = Math.PI / 2; bar.position.y = barY;
     g.add(bar);
-    const capMat = new THREE.MeshLambertMaterial({ color: 0xc0392b });
+    const capMat = toonMat(0xd4453a);
     const capGeo = new THREE.CylinderGeometry(0.16, 0.16, 0.1, 10);
     const cL = new THREE.Mesh(capGeo, capMat); cL.rotation.z = Math.PI / 2; cL.position.set(-(o.w * s * 0.5 + 0.3), barY, 0);
     const cR = cL.clone(); cR.position.x = o.w * s * 0.5 + 0.3;
     g.add(cL, cR);
     g.userData.barY = barY;
   } else if (o.kind === 'plate') {
-    const outer = new THREE.Mesh(new THREE.CylinderGeometry(o.h * s * 0.5, o.h * s * 0.5, 0.14, 16), new THREE.MeshLambertMaterial({ color: 0xc0392b }));
+    const outer = new THREE.Mesh(new THREE.CylinderGeometry(o.h * s * 0.5, o.h * s * 0.5, 0.14, 16), toonMat(0xd4453a));
     outer.rotation.x = Math.PI / 2;
     g.add(outer);
-    const inner = new THREE.Mesh(new THREE.CylinderGeometry(o.h * s * 0.36, o.h * s * 0.36, 0.16, 16), new THREE.MeshLambertMaterial({ color: 0x8f2a20 }));
+    const inner = new THREE.Mesh(new THREE.CylinderGeometry(o.h * s * 0.36, o.h * s * 0.36, 0.16, 16), toonMat(0x8f2a20));
     inner.rotation.x = Math.PI / 2;
     g.add(inner);
-    const hole = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.18, 10), new THREE.MeshLambertMaterial({ color: 0xf2ede3 }));
+    const hole = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.18, 10), toonMat(0xf2ede3));
     hole.rotation.x = Math.PI / 2;
     g.add(hole);
     g.position.y = o.h * s * 0.5;
   }
+  addOutlines(g, 1.14);
   return g;
 }
 
@@ -1186,17 +1259,20 @@ function applyZoneColors() {
   const z = ZONES[zi], zn = ZONES[(zi + 1) % ZONES.length];
   const fog = lerpColorNum(z.fog, zn.fog, zb);
   const floor = lerpColorNum(z.floor, zn.floor, zb);
+  const track = lerpColorNum(z.track, zn.track, zb);
   const wall = lerpColorNum(z.wall, zn.wall, zb);
   const prop = lerpColorNum(z.prop, zn.prop, zb);
   scene.fog.color.copy(fog);
   scene.background.copy(fog);
   renderer.setClearColor(fog);
   floorMesh.material.color.copy(floor);
+  trackMesh.material.color.copy(track);
   wallL.material.color.copy(wall);
   wallR.material.color.copy(wall);
   propMesh.material.color.copy(prop);
   buildingMesh.visible = (z.kind === 'street' || zn.kind === 'street');
   propMesh.visible = !(z.kind === 'street' && zb > 0.5);
+  propBarMesh.visible = propMesh.visible;
 
   // Лампы: тёплые в подвале/улице, двухцветный неон в неон-зале
   const N = lampMesh.count;
@@ -1208,30 +1284,40 @@ function applyZoneColors() {
   lampMesh.instanceColor.needsUpdate = true;
 }
 
+// Обёртка над модулем: даёт «бегущую дорожку» позиций от -range до 0,
+// зациклено по dist — общая логика для декора и полос разметки.
+function scrollZ(row, spacing, halfCount, speed) {
+  const range = spacing * halfCount;
+  const raw = row * spacing - (dist * UNIT * speed) % range;
+  return -(((raw % range) + range) % range);
+}
+
 // ── Декор по бокам (стойки/лампы/здания) — позиции считаются из dist ───────
 function updateDecor() {
-  const SPACING = 3.2, N = propMesh.count;
-  for (let i = 0; i < N; i++) {
+  const PSPACING = 2.0, PN = propMesh.count, PHALF = PN / 2;
+  for (let i = 0; i < PN; i++) {
     const side = (i % 2 === 0) ? -1 : 1;
     const row = Math.floor(i / 2);
-    const raw = row * SPACING - (dist * UNIT * 0.9) % (SPACING * (N / 2));
-    const z = -((raw % (SPACING * (N / 2)) + SPACING * (N / 2)) % (SPACING * (N / 2)));
-    dummy.position.set(side * 4.6, 0.8, z);
+    const z = scrollZ(row, PSPACING, PHALF, 0.95);
+    dummy.position.set(side * 3.6, 0.95, z);
     dummy.rotation.set(0, 0, 0);
     dummy.scale.set(1, 1, 1);
     dummy.updateMatrix();
     propMesh.setMatrixAt(i, dummy.matrix);
+    dummy.position.set(side * 3.6, 1.95, z);
+    dummy.updateMatrix();
+    propBarMesh.setMatrixAt(i, dummy.matrix);
   }
   propMesh.instanceMatrix.needsUpdate = true;
+  propBarMesh.instanceMatrix.needsUpdate = true;
 
-  const BSPACING = 3.6, BN = buildingMesh.count;
+  const BSPACING = 3.4, BN = buildingMesh.count, BHALF = BN / 2;
   for (let i = 0; i < BN; i++) {
     const side = (i % 2 === 0) ? -1 : 1;
     const row = Math.floor(i / 2);
-    const h = 1.4 + ((row * 7) % 5) * 0.7;
-    const raw = row * BSPACING - (dist * UNIT * 0.6) % (BSPACING * (BN / 2));
-    const z = -((raw % (BSPACING * (BN / 2)) + BSPACING * (BN / 2)) % (BSPACING * (BN / 2)));
-    dummy.position.set(side * 5.4, h / 2, z);
+    const h = 1.6 + ((row * 7) % 5) * 0.85;
+    const z = scrollZ(row, BSPACING, BHALF, 0.6);
+    dummy.position.set(side * 5.2, h / 2, z);
     dummy.rotation.set(0, 0, 0);
     dummy.scale.set(1, h, 1);
     dummy.updateMatrix();
@@ -1239,19 +1325,36 @@ function updateDecor() {
   }
   buildingMesh.instanceMatrix.needsUpdate = true;
 
-  const LSPACING = 5.6, LN = lampMesh.count;
+  const LSPACING = 4.2, LN = lampMesh.count, LHALF = LN / 2;
   for (let i = 0; i < LN; i++) {
     const side = (i % 2 === 0) ? -1 : 1;
     const row = Math.floor(i / 2);
-    const raw = row * LSPACING - (dist * UNIT * 0.9) % (LSPACING * (LN / 2));
-    const z = -((raw % (LSPACING * (LN / 2)) + LSPACING * (LN / 2)) % (LSPACING * (LN / 2)));
-    dummy.position.set(side * 5.6, 2.6, z);
+    const z = scrollZ(row, LSPACING, LHALF, 0.95);
+    dummy.position.set(side * 4.6, 2.9, z);
     dummy.rotation.set(0, 0, 0);
     dummy.scale.set(1, 1, 1);
     dummy.updateMatrix();
     lampMesh.setMatrixAt(i, dummy.matrix);
+    dummy.position.set(side * 4.6, 1.55, z);
+    dummy.updateMatrix();
+    lampPostMesh.setMatrixAt(i, dummy.matrix);
   }
   lampMesh.instanceMatrix.needsUpdate = true;
+  lampPostMesh.instanceMatrix.needsUpdate = true;
+}
+
+// ── Полосы разметки на дорожке — летят на игрока, дают ощущение скорости ───
+function updateFloorStripes() {
+  const SPACING = 3.0, N = stripeMesh.count, HALF = N;
+  for (let i = 0; i < N; i++) {
+    const z = scrollZ(i, SPACING, HALF, 1.6);
+    dummy.position.set(0, 0.012, z);
+    dummy.rotation.set(-Math.PI / 2, 0, 0);
+    dummy.scale.set(1, 1, 1);
+    dummy.updateMatrix();
+    stripeMesh.setMatrixAt(i, dummy.matrix);
+  }
+  stripeMesh.instanceMatrix.needsUpdate = true;
 }
 
 // ── Собираемые предметы — InstancedMesh на тип, скрываем лишние ────────────
@@ -1292,7 +1395,7 @@ function updateObstacleMeshes() {
 let prevOnGround = true, squash = 0;
 function updatePlayerPose(dt) {
   if (!playerModel) return;
-  const { group, torso, head, legL, legR, armL, armR, B } = playerModel;
+  const { group, upperBody, head, legL, legR, armL, armR, B } = playerModel;
   const sliding = P.slideT > 0;
   const airborne = !P.onGround;
 
@@ -1305,16 +1408,14 @@ function updatePlayerPose(dt) {
   group.scale.set(1 + squash * 0.12, sq, 1 + squash * 0.12);
 
   if (sliding) {
-    torso.rotation.x = -1.15;
-    torso.position.y = 0.62 + 0.42 * Math.cos(1.15) - 0.18;
+    upperBody.rotation.x = -1.15;
     head.rotation.x = 0.5;
     legL.pivot.rotation.x = -0.9; legR.pivot.rotation.x = -1.3;
     legL.kneePivot.rotation.x = 0.2; legR.kneePivot.rotation.x = 0.1;
     armL.pivot.rotation.x = -1.6; armR.pivot.rotation.x = 1.0;
     armL.kneePivot.rotation.x = 0.3; armR.kneePivot.rotation.x = 0.3;
   } else if (airborne) {
-    torso.rotation.x = -0.12;
-    torso.position.y = 0.62 + 0.42 - 0.02;
+    upperBody.rotation.x = -0.12;
     head.rotation.x = 0;
     const tuck = P.vy < 0 ? 0.9 : 0.5;
     legL.pivot.rotation.x = tuck; legR.pivot.rotation.x = tuck * 0.7;
@@ -1323,9 +1424,7 @@ function updatePlayerPose(dt) {
     armL.kneePivot.rotation.x = -0.4; armR.kneePivot.rotation.x = -0.4;
   } else {
     const s = Math.sin(P.runPhase * 14);
-    const s2 = Math.sin(P.runPhase * 14 + 1.4);
-    torso.rotation.x = 0.06 + Math.abs(s) * 0.02;
-    torso.position.y = 0.62 + 0.42 - 0.02;
+    upperBody.rotation.x = 0.06 + Math.abs(s) * 0.02;
     head.rotation.x = 0.02;
     legL.pivot.rotation.x = s * 0.9; legR.pivot.rotation.x = -s * 0.9;
     legL.kneePivot.rotation.x = Math.max(0, -s) * 1.3; legR.kneePivot.rotation.x = Math.max(0, s) * 1.3;
@@ -1348,14 +1447,16 @@ function updatePlayerPose(dt) {
   shadowBlob.mesh.material.opacity = 0.35 * shrink;
 }
 
-// ── Камера: следует за игроком, лёгкий тряс при столкновении/ударе ──────────
+// ── Камера: далеко и высоко позади игрока, наклонена вниз по ходу движения —
+// фигура держит ~1/6 высоты экрана, вперёд видно достаточно, чтобы читать
+// препятствия заранее, а не встречать их под ногами.
 function updateCamera(dt) {
-  const baseY = 2.15, baseZ = 4.6;
+  const baseY = 4.3, baseZ = 13.5;
   let shakeX = 0, shakeY = 0;
   if (shakeT > 0) { shakeX = rnd(-0.12, 0.12) * shakeT; shakeY = rnd(-0.08, 0.08) * shakeT; }
-  const jumpLift = playerModel ? Math.max(0, toWY(P.y) - toWY(GROUND())) * 0.25 : 0;
+  const jumpLift = playerModel ? Math.max(0, toWY(P.y) - toWY(GROUND())) * 0.18 : 0;
   camera.position.set(shakeX, baseY + jumpLift + shakeY, baseZ);
-  camera.lookAt(0, 1.1 + jumpLift * 0.5, -4);
+  camera.lookAt(0, 0.85 + jumpLift * 0.4, -10);
 }
 
 function renderRageOverlay() {
@@ -1372,6 +1473,7 @@ function render3D(dt) {
   if (!cv.classList.contains('active') || !renderer) return;
   applyZoneColors();
   updateDecor();
+  updateFloorStripes();
   updateObstacleMeshes();
   updateItemMeshes();
   updateParticleMeshes();
