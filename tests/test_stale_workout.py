@@ -180,6 +180,20 @@ async def test_start_workout_creates_and_enters_picker_immediately(fresh_db, use
     assert "pick:cancel" in callback_datas
 
 
+async def test_start_workout_from_push_keeps_the_push_message(fresh_db, user_id):
+    """Regression: the CTA on a push notification used to share menu:start_workout's
+    callback_data, so tapping it deleted callback.message — the push itself, not a
+    disposable menu screen. push:start_workout must leave it alone."""
+    state = await _make_state(user_id)
+    callback = _make_callback(user_id, "push:start_workout")
+
+    await workout.start_workout_from_push(callback, state)
+
+    callback.message.delete.assert_not_awaited()
+    active = await fresh_db.get_active_workout(user_id)
+    assert active is not None
+
+
 async def test_start_workout_resets_stale_fsm_scaffold(fresh_db, user_id):
     """Regression for a bug where finishing a stale workout retroactively and
     then starting a new one left the previous workout's open-exercise

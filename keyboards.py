@@ -1696,9 +1696,14 @@ def push_cta_keyboard(text: str = "▶ Начать тренировку") -> In
     `text` меняется по категории пуша (см. engagement.PUSH_CTA_BY_CATEGORY):
     кнопка — последняя строка пуша, и «▶ Начать тренировку» под «серия на кону»
     звучит как реклама, а «▶ Спасти серию» — как продолжение реплики тренера.
+
+    Отдельный callback_data от главного меню (`push:start_workout`, не
+    `menu:start_workout`) — не однофамилец: тот хендлер удаляет
+    callback.message, что для меню правильно (это его собственный одноразовый
+    экран), а тут callback.message — сам пуш, и его нужно оставить в чате.
     """
     b = InlineKeyboardBuilder()
-    b.button(text=text, callback_data="menu:start_workout")
+    b.button(text=text, callback_data="push:start_workout")
     return b.as_markup()
 
 
