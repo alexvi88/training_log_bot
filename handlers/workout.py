@@ -2308,13 +2308,25 @@ async def _finalize_voice_sets(bot, state: FSMContext, user, data: dict, active:
                                message: Message | None = None) -> None:
     """Same tail as `_finalize_logged_sets`, for voice input: the voice message
     stays in the chat (there is nothing to re-read in it) and gets a spoken-back
-    "записал" so a misheard number is still catchable after the fact."""
+    "записал" so a misheard number is still catchable after the fact.
+
+    The sets are already written by the time this runs, so a reply that can't
+    land (the voice message was deleted mid-transcription, or is otherwise
+    unreachable) must not raise — it falls back to a plain send_message rather
+    than surfacing "что-то пошло не так" for a save that actually succeeded.
+    """
     sets_str = ", ".join(formatting.format_set(w, r) for w, r in logged)
     text = f"🎙 Записал: {sets_str}"
     if message is not None:
-        await message.reply(text)
+        try:
+            await message.reply(text)
+        except TelegramBadRequest:
+            await bot.send_message(chat_id=chat_id, text=text)
     else:
-        await bot.send_message(chat_id=chat_id, text=text, reply_to_message_id=message_id)
+        try:
+            await bot.send_message(chat_id=chat_id, text=text, reply_to_message_id=message_id)
+        except TelegramBadRequest:
+            await bot.send_message(chat_id=chat_id, text=text)
     if await _sets_beat_record(active, data["workout_id"], logged, user["e1rm_formula"]):
         with suppress(TelegramBadRequest):
             await bot.set_message_reaction(

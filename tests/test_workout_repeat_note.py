@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -233,6 +234,45 @@ async def test_voice_logs_a_set(fresh_db, user_id, monkeypatch):
     sets = await db.list_sets_for_block(block_id)
     assert (sets[-1]["weight"], sets[-1]["reps"]) == (100.0, 8)
     assert "Записал" in message.reply.await_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_voice_reply_target_gone_still_confirms_the_saved_set(fresh_db, user_id, monkeypatch):
+    """Находка 5: if the voice message was deleted mid-transcription, `reply`
+    (and a reply_to send_message) raise TelegramBadRequest — but the sets are
+    already written by then, so the user must still get "Записал", via a
+    plain send_message, instead of an unhandled crash reading as "что-то
+    пошло не так" for a save that actually worked."""
+    db = fresh_db
+    state, ex_id, block_id, _ = await _setup_logging(db, user_id)
+
+    monkeypatch.setattr(ai_trainer, "is_voice_configured", lambda: True)
+
+    async def _fake_transcribe(buf, uid):
+        return "сто на восемь"
+
+    monkeypatch.setattr(ai_trainer, "transcribe_voice", _fake_transcribe)
+
+    message = _make_message(user_id, text=None)
+    message.voice = SimpleNamespace(file_id="v1", duration=2, file_size=1000)
+    message.bot.download = AsyncMock(return_value=SimpleNamespace(name=""))
+    message.reply = AsyncMock(
+        side_effect=TelegramBadRequest(method=MagicMock(), message="message to reply not found")
+    )
+
+    await workout.log_set_voice(message, state)
+
+    sets = await db.list_sets_for_block(block_id)
+    assert (sets[-1]["weight"], sets[-1]["reps"]) == (100.0, 8)  # the set was saved
+    message.reply.assert_awaited()
+    # Fell back to a plain send_message instead of raising (the tracker
+    # re-render sends its own message too, so scan every call rather than
+    # assuming this is the last one).
+    texts = [
+        call.kwargs.get("text") or (call.args[1] if len(call.args) > 1 else None)
+        for call in message.bot.send_message.await_args_list
+    ]
+    assert any(t and "Записал" in t for t in texts)
 
 
 @pytest.mark.asyncio
