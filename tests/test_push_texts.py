@@ -10,7 +10,7 @@ pytestmark = pytest.mark.asyncio
 async def test_every_variant_opens_with_privet_atlet():
     for pool in push_texts.TEXTS.values():
         for text in pool:
-            assert text.startswith("ПРИВЕТ АТЛЕТ, "), text
+            assert text.startswith("ПРИВЕТ АТЛЕТ! "), text
             assert "боец" not in text.lower()
 
 

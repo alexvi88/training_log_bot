@@ -116,7 +116,7 @@ async def test_first_run_gets_a_trainer_message(fresh_db, user_id, monkeypatch):
     assert ok
     ((uid, text),) = sent
     assert uid == user_id
-    assert text.startswith("ПРИВЕТ АТЛЕТ, ")
+    assert text.startswith("ПРИВЕТ АТЛЕТ! ")
     assert "150" in text
 
 
