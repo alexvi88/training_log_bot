@@ -1436,6 +1436,9 @@ async def rt_clear_exercise_target(callback: CallbackQuery, state: FSMContext):
 async def rt_exercise_target_entered(message: Message, state: FSMContext):
     target = formatting.normalize_routine_target(message.text)
     if not target:
+        await ui.reply_transient(
+            message, 'Не понял схему. Напиши как «3x8-12» — подходы и диапазон повторов'
+        )
         return
     data = await state.get_data()
     # Правило читаем до записи — set_routine_exercise_target сбрасывает его
@@ -1646,6 +1649,9 @@ async def rtadd_skip_target(callback: CallbackQuery, state: FSMContext):
 async def rtadd_target_entered(message: Message, state: FSMContext):
     target = formatting.normalize_routine_target(message.text)
     if not target:
+        await ui.reply_transient(
+            message, 'Не понял схему. Напиши как «3x8-12» — подходы и диапазон повторов'
+        )
         return
     data = await state.get_data()
     await _rtadd_finish(message, state, data["rtadd_exercise_id"], target)
