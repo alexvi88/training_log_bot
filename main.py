@@ -151,7 +151,19 @@ class RefreshPersistentMenuMiddleware(BaseMiddleware):
     """Catches every user up to the latest persistent-keyboard button set on
     their very next interaction with the bot — any text message or button
     tap — rather than only resyncing when they happen to hit /start or the
-    Меню button. Runs after the handler so the normal reply goes out first.
+    Меню button.
+
+    Runs BEFORE the handler, not after. chat_bottom (see that module) tracks
+    every message the bot sends and treats the most recently sent one as the
+    bottom of the chat; the live workout tracker relies on staying "at
+    bottom" to edit in place instead of flickering through delete+resend. If
+    this middleware sent its "⌨️ Обновил меню" notice after the handler's own
+    reply, that notice would land below the tracker and silently steal its
+    bottom spot — invisible on this tap, but on the user's very next tap the
+    tracker would find itself no longer at the bottom and pay for a delete
+    +resend that had nothing to do with anything the user just did. Sending
+    the notice first keeps the handler's own reply as the last word, exactly
+    like on every other tap.
 
     Once a user is confirmed current, their id is cached in memory so later
     taps skip the db.get_user round-trip entirely — the same instance is
@@ -164,19 +176,20 @@ class RefreshPersistentMenuMiddleware(BaseMiddleware):
         self._up_to_date_ids: set[int] = set()
 
     async def __call__(self, handler, event, data):
-        result = await handler(event, data)
         target = event.message if isinstance(event, CallbackQuery) else event
-        if not isinstance(target, Message):
-            return result
-        user_id = event.from_user.id
+        if isinstance(target, Message):
+            await self._catch_up(event.from_user.id, target)
+        return await handler(event, data)
+
+    async def _catch_up(self, user_id: int, target: Message) -> None:
         if user_id in self._up_to_date_ids:
-            return result
+            return
         user = await db.get_user(user_id)
         if user is None:
-            return result
+            return
         if user["reply_keyboard_version"] >= keyboards.PERSISTENT_MENU_VERSION:
             self._up_to_date_ids.add(user_id)
-            return result
+            return
         with suppress(TelegramBadRequest):
             await target.answer(
                 "⌨️ Обновил меню под полем ввода.",
@@ -184,7 +197,6 @@ class RefreshPersistentMenuMiddleware(BaseMiddleware):
             )
         await db.update_user(user_id, reply_keyboard_version=keyboards.PERSISTENT_MENU_VERSION)
         self._up_to_date_ids.add(user_id)
-        return result
 
 
 def setup_routers(dp: Dispatcher) -> None:
