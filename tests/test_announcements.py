@@ -155,7 +155,7 @@ async def test_approve_button_sends_to_everyone(fresh_db, monkeypatch):
 
     callback = _callback(ADMIN_ID, f"admin:ann:go:{ann.key}", bot)
     await admin.announcement_approve(callback)
-    await admin._run_announcement(bot, ann)
+    await announcements.deliver_and_report(bot, ann)
 
     assert {chat_id for chat_id, _ in bot.sent if chat_id != ADMIN_ID} == {1, 2}
     assert await db_module.get_announcement_status(ann.key) == announcements.STATUS_APPROVED
@@ -195,15 +195,41 @@ async def test_second_tap_does_not_start_a_second_broadcast(fresh_db, monkeypatc
     ann = _announcement()
     monkeypatch.setattr(announcements, "ANNOUNCEMENTS", [ann])
     bot = FakeBot()
-    admin._sending.add(ann.key)
+    announcements._sending.add(ann.key)
     try:
         callback = _callback(ADMIN_ID, f"admin:ann:go:{ann.key}", bot)
         await admin.announcement_approve(callback)
     finally:
-        admin._sending.discard(ann.key)
+        announcements._sending.discard(ann.key)
 
     assert bot.sent == []
     callback.answer.assert_awaited_with("Уже рассылаю.")
+
+
+async def test_concurrent_deliveries_do_not_double_send(fresh_db, monkeypatch):
+    """Regression test: the startup task (run_pending_announcements) and the
+    admin's own «Разослать всем» button both eventually call
+    deliver_and_report. Racing them used to send every recipient the release
+    twice — both reads of list_announcement_recipients happened before either
+    write of record_push. The guard now lives inside deliver_and_report
+    itself, shared by both callers, so a second concurrent call is a no-op."""
+    await _users(fresh_db, ADMIN_ID, 1, 2)
+    ann = _announcement()
+    monkeypatch.setattr(announcements, "ANNOUNCEMENTS", [ann])
+    await announcements.send_preview(FakeBot(), ann)
+    await db_module.set_announcement_status(ann.key, announcements.STATUS_APPROVED)
+
+    import asyncio
+
+    bot = FakeBot()
+    results = await asyncio.gather(
+        announcements.deliver_and_report(bot, ann),
+        announcements.deliver_and_report(bot, ann),
+    )
+
+    delivered = [chat_id for chat_id, _ in bot.sent if chat_id != ADMIN_ID]
+    assert sorted(delivered) == [1, 2]
+    assert (0, 0, 0) in results
 
 
 async def test_restart_mid_broadcast_finishes_the_rest(fresh_db, monkeypatch):

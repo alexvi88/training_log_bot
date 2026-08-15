@@ -574,12 +574,6 @@ async def broadcast_send(callback: CallbackQuery, state: FSMContext):
 # Механизм сам присылает админу анонс после разворота и ждёт добра — здесь
 # живут кнопки под этим превью и ручной вход в тот же экран.
 
-# Ключи рассылок, которые прямо сейчас разносятся этим процессом. Статус в базе
-# на это не годится: «approved» стоит и во время рассылки, и после
-# перезапуска посреди неё, а различать надо именно «уже жму, не жми второй раз».
-_sending: set[str] = set()
-
-
 @router.message(Command("announce"))
 async def cmd_announce(message: Message):
     """Показать анонсы, ждущие решения, и что с ними.
@@ -594,7 +588,7 @@ async def cmd_announce(message: Message):
         await message.answer("Нерассланных релизов нет.")
         return
     for ann in announcements.ANNOUNCEMENTS:
-        if ann.key in _sending:
+        if announcements.is_sending(ann.key):
             await message.answer(f"Релиз «{ann.key}» рассылаю прямо сейчас.")
             continue
         status = await db.get_announcement_status(ann.key)
@@ -628,23 +622,17 @@ async def announcement_approve(callback: CallbackQuery):
     if ann is None:
         await callback.answer("Такого релиза больше нет в коде.", show_alert=True)
         return
-    if key in _sending:
+    if announcements.is_sending(key):
         await callback.answer("Уже рассылаю.")
         return
-    _sending.add(key)
     await db.set_announcement_status(key, announcements.STATUS_APPROVED)
     await callback.answer("Рассылка запущена…")
     await ui.safe_edit(callback, f"📢 Релиз «{key}» пошёл по базе, отчитаюсь по завершении…")
     # Отдельной задачей: рассылка на всю базу идёт минутами, а хендлер
     # callback'а столько держать нельзя — Telegram ждёт ответа секунды.
-    asyncio.create_task(_run_announcement(callback.bot, ann))
-
-
-async def _run_announcement(bot, ann) -> None:
-    try:
-        await announcements.deliver_and_report(bot, ann)
-    finally:
-        _sending.discard(ann.key)
+    # Гвард от повторного запуска (в том числе стартовой задачей) живёт внутри
+    # deliver_and_report — см. announcements._sending.
+    asyncio.create_task(announcements.deliver_and_report(callback.bot, ann))
 
 
 @router.callback_query(F.data.startswith("admin:ann:no:"))
