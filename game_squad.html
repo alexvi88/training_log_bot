@@ -370,6 +370,7 @@ let trackScroll = 0;
 let meterSpeed = 0, depthSpeed = 0;
 let lastMile = 0, nextBossMile = 1000;
 let nextEventAt = 0, lastEventWorldX = 0;
+let nextWaveAt = 0; // отдельный таймер волн — дорожка не бывает пустой
 const eventHistory = []; // последние 1-2 типа событий — против серий подряд
 let fireTimer = 0;
 let lastResult = null;
@@ -380,26 +381,22 @@ let lastResult = null;
 // волны и злые ворота дальше), а не жёсткое расписание. Один и тот же тип не
 // выпадает больше двух раз подряд — сыгранная история подряд идущих типов
 // понижает его вес почти до нуля на следующий бросок.
-// Волна — главное блюдо (толпа на толпу), блины и ворота — гарнир вокруг
-// неё: с самого начала у волны самый большой вес в потоке.
+// Волны врагов идут своим отдельным, более частым таймером (nextWaveAt) —
+// этот поток теперь только про блины/ворота/бонусы/ящики между волнами.
 function weightsFor(d) {
   const p = clamp(d / 900, 0, 1);
   return {
-    gate: 0.27 - p * 0.05, plate: 0.17 - p * 0.04,
-    wave: d < 40 ? 0 : 0.30 + p * 0.18,
-    bonus: 0.16 - p * 0.06, crate: 0.10 - p * 0.01,
+    gate: 0.36 - p * 0.06, plate: 0.24 - p * 0.05,
+    bonus: 0.24 - p * 0.08, crate: 0.16 - p * 0.01,
   };
 }
-let firstGateDone = false, firstWaveDone = false;
+let firstGateDone = false;
 function pickEventType() {
   // Первое событие — гарантированные ворота метров через 45-50 (~7-8с):
   // на этой дистанции они всегда «обе стороны в плюс» (см. spawnGate), так
-  // что соло-боец успевает подрасти ДО того, как встретит первую волну —
-  // иначе забег с вероятностью почти 100% обрывается первым же боем.
-  // Волна дальше гарантирована в первые 15-20 секунд, но уже не с голым
-  // соло, а с подросшим отрядом.
+  // что соло-боец успевает подрасти до первой боевой волны — она стартует
+  // отдельным таймером в те же первые секунды (см. nextWaveAt в resetGame).
   if (!firstGateDone && dist >= 45) { firstGateDone = true; return commitEvent('gate'); }
-  if (!firstWaveDone && dist >= 100) { firstWaveDone = true; return commitEvent('wave'); }
   const w = weightsFor(dist);
   const weighted = Object.keys(w).map(k => {
     let v = Math.max(0.01, w[k]);
@@ -495,9 +492,13 @@ function resetGame() {
   meterSpeed = SPEED_START; depthSpeed = SPEED_START / 12;
   lastMile = 0; nextBossMile = 1200;
   // Честный рандом и на старте: первое событие тоже тянем из пула, просто
-  // близко и из его лёгкой части (weightsFor(0) без волн — см. ниже).
+  // близко и из его лёгкой части.
   nextEventAt = rnd(14, 22); eventHistory.length = 0; lastEventWorldX = 0;
-  firstGateDone = false; firstWaveDone = false;
+  firstGateDone = false;
+  // Первая волна — в первые 5-8 секунд (при старт-скорости это дистанция
+  // 30-45м), дальше волны идут регулярно и учащаются к концу забега — см.
+  // формулу gap в update().
+  nextWaveAt = rnd(30, 45);
   fireTimer = 0; combo = 0; weaponLevel = 0; weaponTimer = 0;
   obstacles.length = 0; bonuses.length = 0; crates.length = 0; bullets.length = 0;
   parts.length = 0; toasts.length = 0;
@@ -586,28 +587,57 @@ function popNumber(text, color, x, y, big) {
 // Дорожка широкая почти на всю ширину кадра, с узкими стенами по бокам —
 // строится один раз при инициализации сцены, не перерисовывается каждый кадр.
 let floorMat, wallMatL, wallMatR;
+// Поперечные метки на полу, летящие на камеру, — главный указатель скорости
+// (как stripeMesh/updateFloorStripes в game.html): чем быстрее забег, тем
+// быстрее они проносятся мимо, и это чувствуется телом, а не только по HUD.
+let stripeMesh = null;
+const STRIPE_N = 20, STRIPE_SPACING = 3.1;
+function buildFloorStripes() {
+  const geo = new THREE.PlaneGeometry(TRACK_HALF3 * 1.94, 0.16);
+  const mat = new THREE.MeshBasicMaterial({ color: 0xf2ede3, transparent: true, opacity: 0.5 });
+  stripeMesh = new THREE.InstancedMesh(geo, mat, STRIPE_N);
+  scene.add(stripeMesh);
+}
+function updateFloorStripes() {
+  if (!stripeMesh) return;
+  const range = STRIPE_SPACING * STRIPE_N;
+  const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0));
+  const m4 = new THREE.Matrix4();
+  for (let i = 0; i < STRIPE_N; i++) {
+    const raw = i * STRIPE_SPACING - (trackScroll % range);
+    const z = -(((raw % range) + range) % range) + 5;
+    m4.compose(new THREE.Vector3(0, 0.013, z), q, new THREE.Vector3(1, 1, 1));
+    stripeMesh.setMatrixAt(i, m4);
+  }
+  stripeMesh.instanceMatrix.needsUpdate = true;
+}
 function buildHall() {
   const floorLen = ZFAR * Z_SCALE + 30;
   const floorGeo = new THREE.PlaneGeometry(TRACK_HALF3 * 2, floorLen, 1, 40);
-  floorMat = new THREE.MeshLambertMaterial({ color: 0x2c2115 });
+  // Три плана по светлоте: дальний фон/туман — самый тёмный и холодный, пол —
+  // средний нейтральный (не тонет в один и тот же тёплый коричневый со стенами
+  // и лампами), фигуры и награды — светлые пятна поверх обоих.
+  floorMat = new THREE.MeshLambertMaterial({ color: 0x3c3630 });
   const floor = new THREE.Mesh(floorGeo, floorMat);
   floor.rotation.x = -Math.PI / 2;
   floor.position.set(0, 0, -floorLen / 2 + 6);
   floor.userData.baseY = 0;
   scene.add(floor);
   // Продольные полосы дорожки — тонкие светлые рейки по полу
-  const stripeMat = new THREE.MeshBasicMaterial({ color: 0xf2ede3, transparent: true, opacity: 0.10 });
+  const stripeMat = new THREE.MeshBasicMaterial({ color: 0xf2ede3, transparent: true, opacity: 0.12 });
   [-0.55, 0, 0.55].forEach(sx => {
     const g = new THREE.PlaneGeometry(0.05, floorLen);
     const m = new THREE.Mesh(g, stripeMat);
     m.rotation.x = -Math.PI / 2;
-    m.position.set(worldX3(sx), 0.01, -floorLen / 2 + 6);
+    m.position.set(worldX3(sx), 0.011, -floorLen / 2 + 6);
     scene.add(m);
   });
-  // Стены зала — узкие тёмные полосы по бокам дорожки
+  buildFloorStripes();
+  // Стены зала — узкие холодно-тёмные полосы по бокам дорожки (темнее пола,
+  // но не сливаются с самым дальним туманом).
   const wallGeo = new THREE.PlaneGeometry(6, floorLen);
-  wallMatL = new THREE.MeshLambertMaterial({ color: 0x241a15, side: THREE.DoubleSide });
-  wallMatR = new THREE.MeshLambertMaterial({ color: 0x241a15, side: THREE.DoubleSide });
+  wallMatL = new THREE.MeshLambertMaterial({ color: 0x241f28, side: THREE.DoubleSide });
+  wallMatR = new THREE.MeshLambertMaterial({ color: 0x241f28, side: THREE.DoubleSide });
   const wallL = new THREE.Mesh(wallGeo, wallMatL);
   wallL.rotation.y = Math.PI / 2;
   wallL.position.set(-TRACK_HALF3 - 0.2, 3, -floorLen / 2 + 6);
@@ -616,40 +646,82 @@ function buildHall() {
   wallR.rotation.y = -Math.PI / 2;
   wallR.position.set(TRACK_HALF3 + 0.2, 3, -floorLen / 2 + 6);
   scene.add(wallR);
-  // Тёплые лампы вдоль стен — компактные точечные источники, не заливают всё
+  // Тёплые лампы вдоль стен — компактные точечные источники плюс мягкий
+  // светящийся ореол (билборд с радиальным градиентом, без хлопотного
+  // постпроцесса) — не заливают всё, но читаются как настоящий свет лампы.
+  const haloTex = lampHaloTexture();
+  const haloMat = new THREE.SpriteMaterial({ map: haloTex, color: 0xffb060, transparent: true, opacity: 0.55, depthWrite: false });
   for (let i = 0; i < 8; i++) {
+    const lz = -i * 5.5;
     const lamp = new THREE.PointLight(0xffb060, 2.6, 12, 2);
-    lamp.position.set(0, 3.6, -i * 5.5);
+    lamp.position.set(0, 3.6, lz);
     scene.add(lamp);
+    const halo = new THREE.Sprite(haloMat.clone());
+    halo.position.set(0, 3.6, lz);
+    halo.scale.set(3.2, 3.2, 1);
+    scene.add(halo);
   }
-  // Ключевой свет — тёплый, сверху-спереди, лепит объём фигур.
-  scene.add(new THREE.HemisphereLight(0xffd9a8, 0x241a15, 0.9));
-  const key = new THREE.DirectionalLight(0xffe6bf, 1.7);
-  key.position.set(3, 9, 7);
+  // Ключевой свет — тёплый, сверху-сбоку, лепит объём фигур не в лоб.
+  scene.add(new THREE.HemisphereLight(0xffd9a8, 0x201828, 0.55));
+  const key = new THREE.DirectionalLight(0xffe6bf, 1.8);
+  key.position.set(7, 9, 3);
   scene.add(key);
+  // Слабая заливка с другой стороны — не даёт теневой половине фигур
+  // проваливаться в черноту.
+  const fill = new THREE.DirectionalLight(0x8fb0ff, 0.35);
+  fill.position.set(-6, 4, 4);
+  scene.add(fill);
   // Контровой свет — холодный, светит навстречу (из глубины дорожки), чтобы
   // край силуэта отделялся от тёплого фона, а не сливался с ним.
-  const rim = new THREE.DirectionalLight(0x8fd0ff, 1.35);
+  const rim = new THREE.DirectionalLight(0x8fd0ff, 1.4);
   rim.position.set(-2.5, 4.5, -18);
   scene.add(rim);
-  scene.fog = new THREE.Fog(0x18110c, 12, floorLen * 0.85);
+  // Туман — холоднее и темнее пола/стен, даёт дальнему плану глубину.
+  scene.fog = new THREE.Fog(0x100d16, 11, floorLen * 0.78);
+  scene.background = new THREE.Color(0x100d16);
   buildHallProps(floorLen);
 }
-// Стойки, штанги и зеркала по стенам — редко и инстансингом, чтобы читалось
-// «это качалка», а не голый коридор, и мелькание давало ощущение скорости.
+// Радиальная текстура для ореола лампы — рисуется один раз на маленьком
+// канвасе, переиспользуется на все восемь ламп.
+let _haloTex = null;
+function lampHaloTexture() {
+  if (_haloTex) return _haloTex;
+  const c = document.createElement('canvas'); c.width = 64; c.height = 64;
+  const cx = c.getContext('2d');
+  const g = cx.createRadialGradient(32, 32, 0, 32, 32, 32);
+  g.addColorStop(0, 'rgba(255,255,255,0.9)');
+  g.addColorStop(0.4, 'rgba(255,200,140,0.35)');
+  g.addColorStop(1, 'rgba(255,200,140,0)');
+  cx.fillStyle = g; cx.fillRect(0, 0, 64, 64);
+  _haloTex = new THREE.CanvasTexture(c);
+  return _haloTex;
+}
+// Стойки, штанги, зеркала, вентиляторы и трубы по стенам — часто и
+// инстансингом, чтобы читалось «живой зал», а не голый коридор, а мелькание
+// давало ощущение скорости.
 function buildHallProps(floorLen) {
   const grad = toonGradient();
-  const spacing = 8.5;
-  const n = Math.max(6, Math.floor(floorLen / spacing));
-  const rackMat = new THREE.MeshToonMaterial({ color: 0x53585f, gradientMap: grad });
+  const spacing = 5.4; // плотнее прежнего — обстановка мелькает заметно чаще
+  const n = Math.max(8, Math.floor(floorLen / spacing));
+  const rackMat = new THREE.MeshToonMaterial({ color: 0x5a6068, gradientMap: grad });
   const posts = new THREE.InstancedMesh(new THREE.BoxGeometry(0.16, 2.1, 0.16), rackMat, n * 4);
   const bars = new THREE.InstancedMesh(new THREE.BoxGeometry(0.85, 0.1, 0.1), rackMat, n * 2);
   const plateGeo = new THREE.CylinderGeometry(0.34, 0.34, 0.1, 12); plateGeo.rotateZ(Math.PI / 2);
   const plateMat = new THREE.MeshToonMaterial({ color: 0x8f2a20, gradientMap: grad });
   const plates = new THREE.InstancedMesh(plateGeo, plateMat, n * 4);
-  const mirrorMat = new THREE.MeshBasicMaterial({ color: 0x9fd0e6, transparent: true, opacity: 0.16 });
-  const mirrors = new THREE.InstancedMesh(new THREE.PlaneGeometry(1.5, 2.1), mirrorMat, Math.ceil(n / 3) * 2);
-  let pi = 0, bi = 0, gi = 0, mi = 0;
+  const mirrorMat = new THREE.MeshBasicMaterial({ color: 0xbfe6ff, transparent: true, opacity: 0.22 });
+  const mirrors = new THREE.InstancedMesh(new THREE.PlaneGeometry(1.5, 2.1), mirrorMat, Math.ceil(n / 2) * 2);
+  // Блик на зеркале — узкая яркая полоса поверх, чтобы «стекло» читалось, а
+  // не просто голубая плашка.
+  const glintMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.28 });
+  const glints = new THREE.InstancedMesh(new THREE.PlaneGeometry(0.22, 1.9), glintMat, Math.ceil(n / 2) * 2);
+  // Трубы под потолком — вдоль всего зала, две штуки на сторону.
+  const pipeMat = new THREE.MeshToonMaterial({ color: 0x454a52, gradientMap: grad });
+  const pipes = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.09, 0.09, floorLen, 8), pipeMat, 4);
+  // Вентиляторы под потолком — диск с ободом, изредка вдоль дорожки.
+  const fanMat = new THREE.MeshToonMaterial({ color: 0x30343a, gradientMap: grad });
+  const fans = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.55, 0.55, 0.08, 16), fanMat, Math.ceil(n / 4) * 2);
+  let pi = 0, bi = 0, gi = 0, mi = 0, fi = 0;
   const m4 = new THREE.Matrix4();
   for (let i = 0; i < n; i++) {
     const z = 2 - i * spacing;
@@ -659,17 +731,37 @@ function buildHallProps(floorLen) {
       bars.setMatrixAt(bi++, m4.makeTranslation(baseX, 1.9, z));
       [-0.34, 0.34].forEach(off => { plates.setMatrixAt(gi++, m4.makeTranslation(baseX + off, 1.55, z)); });
     });
-    if (i % 3 === 0) {
+    if (i % 2 === 0) {
       [-1, 1].forEach(side => {
         m4.identity();
         m4.makeRotationY(side < 0 ? Math.PI / 2 : -Math.PI / 2);
         m4.setPosition(side * (TRACK_HALF3 + 0.04), 1.5, z);
-        mirrors.setMatrixAt(mi++, m4);
+        mirrors.setMatrixAt(mi, m4.clone());
+        m4.setPosition(side * (TRACK_HALF3 + 0.035), 1.5, z + 0.5);
+        glints.setMatrixAt(mi, m4);
+        mi++;
+      });
+    }
+    if (i % 4 === 0) {
+      [-1, 1].forEach(side => {
+        m4.identity();
+        m4.makeRotationX(Math.PI / 2);
+        m4.setPosition(side * (TRACK_HALF3 * 0.6), 6.6, z);
+        fans.setMatrixAt(fi++, m4);
       });
     }
   }
-  posts.count = pi; bars.count = bi; plates.count = gi; mirrors.count = mi;
-  scene.add(posts, bars, plates, mirrors);
+  // Две длинные трубы под потолком вдоль всего зала — по одной на сторону.
+  let ppi = 0;
+  [-1, 1].forEach(side => {
+    m4.identity();
+    m4.makeRotationX(Math.PI / 2);
+    m4.setPosition(side * (TRACK_HALF3 + 0.5), 6.9, -floorLen / 2 + 6);
+    pipes.setMatrixAt(ppi++, m4);
+  });
+  posts.count = pi; bars.count = bi; plates.count = gi; mirrors.count = mi; glints.count = mi;
+  fans.count = fi; pipes.count = ppi;
+  scene.add(posts, bars, plates, mirrors, glints, fans, pipes);
 }
 
 // ── БЛИНЫ (weight plates) ───────────────────────────────────────────────────
@@ -744,29 +836,79 @@ function spawnBonus() {
 // Мясо игры: навстречу бежит вражеская толпа в едином враждебном цвете —
 // перестрелка толпа-на-толпу, а не только блины и ворота. Больше народу у
 // тебя — волна тает мгновенно; меньше — она докатывается и рубится врукопашную.
-const ENEMY_COL = { body: '#6e1616', dark: '#440d0d', head: '#3a0c0c' };
+// Пять силуэтов из чужого зала — цвет холодный/ядовитый (свои у нас всегда
+// тёплые, см. FIGHTERS), чтобы две толпы читались мгновенно даже боковым
+// зрением, а рост/ширина/снаряжение в руках говорили за тип без подписей.
+const ENEMY_TYPES = {
+  runner:  { name: 'БЕГУН',     top: '#8fd14f', skin: '#5a9a3a', bottom: '#3a6a24', scale: 0.80, hpUnit: 1,  dmgUnit: 1.0, speedMult: 1.65, gearProp: null },
+  bruiser: { name: 'ТЯЖЕЛОВЕС', top: '#3a5a78', skin: '#28405a', bottom: '#1c2c3e', scale: 1.55, hpUnit: 7,  dmgUnit: 3.4, speedMult: 0.58, gearProp: null },
+  shield:  { name: 'ЩИТОВИК',   top: '#2f6f6a', skin: '#1f4d48', bottom: '#173a36', scale: 1.18, hpUnit: 3,  dmgUnit: 1.8, speedMult: 0.80, gearProp: 'plate', blockDmg: 4.2 },
+  shooter: { name: 'СТРЕЛОК',   top: '#6a3a8a', skin: '#48276a', bottom: '#301c4a', scale: 0.95, hpUnit: 2,  dmgUnit: 0,   speedMult: 0.42, gearProp: null, ranged: true, stopZ: 0.85 },
+  leader:  { name: 'ВОЖАК',     top: '#2fb0c0', skin: '#1c7d8a', bottom: '#134f58', scale: 2.05, hpUnit: 20, dmgUnit: 6.0, speedMult: 0.55, gearProp: 'crown', isLeader: true },
+};
+const ENEMY_TYPE_KEYS = Object.keys(ENEMY_TYPES);
+// Какие типы уже "в ходу" на этой дистанции — состав волны меняется по мере
+// забега: сперва только мелочь, дальше подмешиваются тяжёлые и стрелки, ещё
+// дальше — вожаки.
+function waveTypeUnlocks(d) {
+  const list = ['runner'];
+  if (d >= 110) list.push('bruiser');
+  if (d >= 200) list.push('shield');
+  if (d >= 300) list.push('shooter');
+  return list;
+}
+function mkGroup(type, count) {
+  count = Math.max(1, Math.round(count));
+  return { type, count, countMax: count, z: ZFAR + rnd(-0.05, 0.05), fireTimer: rnd(0.7, 1.3) };
+}
 function spawnWave() {
-  // Первая волна приходит уже после того, как игрок успел подрасти воротами
-  // и блинами — первые 20 секунд остаются лёгкой победой. Дальше кривая
-  // экспоненциальная: отряд насыщается скорострельностью и уроном (у обоих
-  // есть потолок), а волны — нет, поэтому рано или поздно волна оказывается
-  // крупнее, чем отряд успевает выкосить за один заход — забег кончается
-  // реальным поражением, а не потому что наскучило.
   // Волна растёт от дистанции, но подпирается мягким потолком от размера
   // отряда: игрок, который честно собирал народ, всегда имеет шанс перемолоть
   // встречных, а тот, кто просел, тонет. Без потолка кривая обгоняла отряд уже
-  // к третьей минуте — забег обрывался на шестерых бойцах.
+  // к третьей минуте — забег обрывался на шестерых бойцах. Сама волна теперь
+  // спавнится своим отдельным таймером (см. nextWaveAt) — дорожка пустой не
+  // бывает независимо от рядового потока ворот/блинов/бонусов.
   const raw = 2 + Math.pow(Math.max(0, dist) / 240, 1.5) * 9 + rnd(-1, 4);
   const softCap = dist < 500 ? Math.max(6, squad * 1.7) : Math.max(12, squad * 2.4);
-  const count = Math.round(clamp(Math.min(raw, softCap), 2, 3000));
+  const total = Math.round(clamp(Math.min(raw, softCap), 2, 3000));
   const formation = pick(['wedge', 'wedge', 'wall', 'flanks', 'scatter']);
   const jitter = formation === 'scatter' ? Array.from({ length: 12 }, () => rnd(-0.7, 0.7)) : null;
+
+  const unlocked = waveTypeUnlocks(dist);
+  const p = clamp(dist / 900, 0, 1);
+  const baseW = { runner: 0.60 - p * 0.32, bruiser: 0.16 + p * 0.14, shield: 0.12 + p * 0.10, shooter: 0.10 + p * 0.14 };
+  const groups = [];
+  let remaining = total;
+  // Вожак — редкий рубежный гость: тянет за собой мелочь (даёт вес мелким
+  // типам расти рядом), а не выходит один в пустом поле.
+  const wantLeader = dist >= 460 && remaining > unlocked.length && Math.random() < clamp((dist - 460) / 520, 0, 0.55);
+  if (wantLeader) {
+    const lc = Math.min(1 + (dist > 950 && Math.random() < 0.3 ? 1 : 0), remaining - unlocked.length);
+    if (lc >= 1) { groups.push(mkGroup('leader', lc)); remaining -= lc; }
+  }
+  const weighted = unlocked.map(k => [k, Math.max(0.02, baseW[k])]);
+  const wtotal = weighted.reduce((s, [, v]) => s + v, 0);
+  let given = 0;
+  weighted.forEach(([k, v], idx) => {
+    const isLast = idx === weighted.length - 1;
+    const n = isLast ? Math.max(1, remaining - given) : Math.max(1, Math.round(remaining * v / wtotal));
+    given += n;
+    groups.push(mkGroup(k, n));
+  });
   obstacles.push({
-    kind: 'wave', worldX: spreadX(0.55), z: ZFAR, count, countMax: count,
-    fireTimer: rnd(0.9, 1.4), phase: 'run', formation, jitter,
-    speedMult: rnd(0.85, 1.2),
+    kind: 'wave', worldX: spreadX(0.55), groups, formation, jitter,
+    speedMult: rnd(0.9, 1.15),
   });
 }
+// Суммарная численность и "передний край" волны (по нему целится отряд и
+// проверяется столкновение) — минимум по z среди ещё живых групп.
+function waveTotalCount(o) { return o.groups.reduce((s, g) => s + Math.max(0, g.count), 0); }
+function waveFrontGroup(o) {
+  let best = null;
+  for (const g of o.groups) if (g.count > 0 && (!best || g.z < best.z)) best = g;
+  return best;
+}
+function waveFrontZ(o) { const g = waveFrontGroup(o); return g ? g.z : 0; }
 // Строй волны — не всегда один и тот же клин: стена во всю ширину, два
 // фланга по краям с разрывом посредине или рассыпуха вразнобой.
 function waveSlot(o, i, shown) {
@@ -813,16 +955,31 @@ function createMeshFor(o) {
     return mesh;
   }
   if (o.kind === 'gate') {
+    // Ворота — главный акцент кадра: яркая створка плюс светящийся контур,
+    // который наливается по мере приближения (см. updateMeshFor) и вспыхивает
+    // на проезде (существующие flash()/burst() в апдейте столкновений).
     const g = new THREE.Group();
     const leftIsBuff = o.buffLeft;
     const leftGood = o.bothBad ? false : (o.bothGood || leftIsBuff);
     const rightGood = o.bothBad ? false : (o.bothGood || !leftIsBuff);
     const doorGeo = new THREE.BoxGeometry(TRACK_HALF3 * 0.94, 1.7, 0.18);
-    const left = new THREE.Mesh(doorGeo, new THREE.MeshLambertMaterial({ color: leftGood ? 0x3cdc6e : 0xff4444, transparent: true, opacity: 0.72 }));
-    left.position.set(-TRACK_HALF3 * 0.5, 0.95, 0);
-    const right = new THREE.Mesh(doorGeo, new THREE.MeshLambertMaterial({ color: rightGood ? 0x3cdc6e : 0xff4444, transparent: true, opacity: 0.72 }));
-    right.position.set(TRACK_HALF3 * 0.5, 0.95, 0);
+    const edgesGeo = new THREE.EdgesGeometry(doorGeo);
+    const mkDoor = (good, x) => {
+      const door = new THREE.Mesh(doorGeo, new THREE.MeshLambertMaterial({
+        color: good ? 0x3cdc6e : 0xff4444, emissive: good ? 0x0e3a1e : 0x3a0e0e, transparent: true, opacity: 0.6,
+      }));
+      door.position.set(x, 0.95, 0);
+      const rim = new THREE.LineSegments(edgesGeo, new THREE.LineBasicMaterial({
+        color: good ? 0xd6ffe0 : 0xffd6d6, transparent: true, opacity: 0,
+      }));
+      door.add(rim);
+      door.userData.rim = rim;
+      return door;
+    };
+    const left = mkDoor(leftGood, -TRACK_HALF3 * 0.5);
+    const right = mkDoor(rightGood, TRACK_HALF3 * 0.5);
     g.add(left, right);
+    g.userData.doors = [left, right];
     return g;
   }
   if (o.kind === 'boss') {
@@ -858,7 +1015,14 @@ function updateMeshFor(o, m) {
   m.position.x = worldX3(o.worldX ?? 0);
   m.position.z = obstacleZ3(o.z);
   if (o.kind === 'plate') { m.position.y = 0.95; m.rotation.z = o.spin; }
-  else if (o.kind === 'gate') { m.position.y = 0; }
+  else if (o.kind === 'gate') {
+    m.position.y = 0;
+    o.glow = clamp(1 - o.z / (ZFAR * 0.6), 0, 1);
+    if (m.userData.doors) m.userData.doors.forEach(d => {
+      d.material.opacity = 0.55 + 0.32 * o.glow;
+      if (d.userData.rim) d.userData.rim.material.opacity = o.glow;
+    });
+  }
   else if (o.kind === 'boss') {
     m.position.y = 0;
     m.position.x += o.phase === 'press' ? rnd(-1, 1) * (1 - o.timer / BOSS_PRESS_TIME) * 0.06 : 0;
@@ -908,8 +1072,16 @@ function drawObstacleLabels() {
       textChip(label, (near.x + mid.x) / 2, near.y, fs, '#ffffff');
       textChip(label2, (mid.x + farE.x) / 2, mid.y, fs, '#ffffff');
     } else if (o.kind === 'wave') {
-      const p = projectPoint(o.worldX, o.z, 1.7);
-      textChip(fmt(o.count), p.x, p.y, Math.max(15, 26 * fakeScale(o.z)), '#ff8a8a');
+      // Каждый живой тип в волне — свой цвет и своя цифра над головой, чтобы
+      // отличать их в бою на глаз, не только по силуэту.
+      o.groups.forEach(g => {
+        if (g.count <= 0) return;
+        const def = ENEMY_TYPES[g.type];
+        const p = projectPoint(o.worldX, g.z, 1.55 * def.scale);
+        const fs = Math.max(13, (def.isLeader ? 30 : 23) * fakeScale(g.z));
+        const col = def.isLeader ? C_GOLD : (def.ranged ? '#e6a6ff' : (def.hpUnit >= 6 ? '#bfe0ff' : '#bfe89a'));
+        textChip(fmt(g.count), p.x, p.y, fs, col);
+      });
     } else if (o.kind === 'boss' && o.phase === 'press') {
       const bw = W * 0.7, bx0 = W / 2 - bw / 2, by = H * 0.10;
       const frac = clamp(o.hp / o.hpMax, 0, 1);
@@ -928,10 +1100,11 @@ function drawObstacleLabels() {
 
 // ── ПУЛИ ОТРЯДА ──────────────────────────────────────────────────────────────
 const BULLET_SPEED = 3.1;
-function targetHpLeft(o) { return o.kind === 'wave' ? o.count : o.hp; }
+function targetHpLeft(o) { return o.kind === 'wave' ? waveTotalCount(o) : o.hp; }
+function targetZ(o) { return o.kind === 'wave' ? waveFrontZ(o) : o.z; }
 function fireAt(target, dmg, offset, pierce, color) {
   bullets.push({
-    z: 0.05, worldX: squadWorldX + offset, targetZ: target.z, targetX: target.worldX ?? 0,
+    z: 0.05, worldX: squadWorldX + offset, targetZ: targetZ(target), targetX: target.worldX ?? 0,
     target, life: 3, dmg, pierce, color,
   });
   sShot();
@@ -940,9 +1113,9 @@ function tryFire(dt, dmg) {
   const targets = obstacles.filter(o =>
     (o.kind === 'plate' && o.hp > 0) ||
     (o.kind === 'boss' && o.phase === 'press' && o.hp > 0) ||
-    (o.kind === 'wave' && o.count > 0));
+    (o.kind === 'wave' && waveTotalCount(o) > 0));
   if (!targets.length) return;
-  targets.sort((a, b) => a.z - b.z);
+  targets.sort((a, b) => targetZ(a) - targetZ(b));
   const w = WEAPONS[weaponLevel];
   for (const target of targets) {
     const activeOnTarget = bullets.filter(bl => bl.target === target).length;
@@ -1119,7 +1292,11 @@ function drawAthlete(c, fighter, opts) {
 // торс, голову, руки (оба слота на бойца), ноги (оба слота) — плюс у каждой
 // части свой инстансед-двойник той же геометрии чуть крупнее, чёрный,
 // side:BackSide — рисуется первым и даёт жёсткий тёмный контур силуэта.
-const PLAYER_CAP = 240, ENEMY_CAP = 220;
+const PLAYER_CAP = 240;
+// Бюджет отрисовки врагов бьётся по типам — так у каждого свой цвет рига
+// (InstancedMesh не красится поинстансно на MeshToonMaterial, поэтому пять
+// типов — это пять отдельных ригов, не один общий).
+const ENEMY_CAP_BY_TYPE = { runner: 90, bruiser: 34, shield: 26, shooter: 26, leader: 10 };
 const CHAR_SCALE = 0.7; // боец ≈ десятая часть высоты экрана, не половина
 const OUTLINE_K = 1.16;
 // Ступенчатая (тон-в-тон) градация света — как в мультяшных раннерах, не
@@ -1157,7 +1334,20 @@ function buildCrowdRig(cap, colors) {
     shadow: mkMain(shadowGeo, 0x000000, cap),
   };
 }
-let playerRig = null, enemyRig = null;
+let playerRig = null, enemyRigs = null;
+let shieldGearMesh = null, leaderGearMesh = null;
+const SHIELD_GEAR_CAP = ENEMY_CAP_BY_TYPE.shield, LEADER_GEAR_CAP = ENEMY_CAP_BY_TYPE.leader;
+// Снаряжение в руках/на голове — то, что отличает силуэт типа сильнее
+// цвета: блин-щит у щитовика, обруч-корона у вожака. Дешёвый инстансинг,
+// позиции считаются вместе с телом в syncEnemyCrowd().
+function buildEnemyGearMeshes() {
+  const plateGeo = new THREE.CylinderGeometry(0.3, 0.3, 0.09, 14); plateGeo.rotateX(Math.PI / 2);
+  shieldGearMesh = new THREE.InstancedMesh(plateGeo, new THREE.MeshLambertMaterial({ color: 0xc0392b }), SHIELD_GEAR_CAP);
+  shieldGearMesh.count = 0; scene.add(shieldGearMesh);
+  const crownGeo = new THREE.TorusGeometry(0.24, 0.045, 6, 14);
+  leaderGearMesh = new THREE.InstancedMesh(crownGeo, new THREE.MeshBasicMaterial({ color: 0xffd700 }), LEADER_GEAR_CAP);
+  leaderGearMesh.count = 0; scene.add(leaderGearMesh);
+}
 function setPart(mesh, outlineMesh, idx, x, y, z, rotX, scale) {
   const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(rotX, 0, 0));
   const pos = new THREE.Vector3(x, y, z);
@@ -1211,21 +1401,52 @@ function syncPlayerCrowd() {
   }
   finishRig(playerRig, n + 1);
 }
-// Обновляет позиции всех видимых врагов из активных волн (несколько волн
-// одновременно — редкость, но на всякий случай режем по общему бюджету).
+function buildEnemyRigs() {
+  enemyRigs = {};
+  ENEMY_TYPE_KEYS.forEach(key => {
+    const d = ENEMY_TYPES[key];
+    enemyRigs[key] = buildCrowdRig(ENEMY_CAP_BY_TYPE[key], { top: d.top, skin: d.skin, bottom: d.bottom });
+  });
+}
+// Обновляет позиции всех видимых врагов из активных волн — по одному ригу на
+// тип (свой цвет), плюс снаряжение щитовика/вожака поверх тела.
+let _m4 = null, _q0 = null;
 function syncEnemyCrowd() {
-  if (!enemyRig) return;
-  let idx = 0;
+  if (!enemyRigs) return;
+  if (!_m4) { _m4 = new THREE.Matrix4(); _q0 = new THREE.Quaternion(); }
+  const idxByType = {}; ENEMY_TYPE_KEYS.forEach(k => idxByType[k] = 0);
+  let shieldN = 0, leaderN = 0;
   for (const o of obstacles) {
-    if (o.kind !== 'wave' || idx >= ENEMY_CAP) continue;
-    const shown = Math.min(ENEMY_CAP - idx, o.count, 60);
-    for (let i = 0; i < shown; i++) {
-      const s = waveSlot(o, i, shown);
-      placeCharacter(enemyRig, idx, worldX3(o.worldX + s.dx), obstacleZ3(o.z + s.dz), i * 1.7 + t * 3, 1);
-      idx++;
+    if (o.kind !== 'wave') continue;
+    for (const g of o.groups) {
+      if (g.count <= 0) continue;
+      const def = ENEMY_TYPES[g.type];
+      const rig = enemyRigs[g.type];
+      const cap = ENEMY_CAP_BY_TYPE[g.type];
+      let idx = idxByType[g.type];
+      if (idx >= cap) continue;
+      const shown = Math.min(cap - idx, g.count, 40);
+      for (let i = 0; i < shown; i++) {
+        const s = waveSlot(o, i, shown);
+        const x3 = worldX3(o.worldX + s.dx);
+        const z3 = obstacleZ3(g.z + s.dz);
+        placeCharacter(rig, idx, x3, z3, i * 1.7 + t * 3, 1, def.scale);
+        if (def.gearProp === 'plate' && shieldGearMesh && shieldN < SHIELD_GEAR_CAP) {
+          _m4.compose(new THREE.Vector3(x3, 0.95 * CHAR_SCALE * def.scale, z3 + 0.22 * def.scale), _q0, new THREE.Vector3(def.scale, def.scale, def.scale));
+          shieldGearMesh.setMatrixAt(shieldN++, _m4);
+        }
+        if (def.gearProp === 'crown' && leaderGearMesh && leaderN < LEADER_GEAR_CAP) {
+          _m4.compose(new THREE.Vector3(x3, 1.55 * CHAR_SCALE * def.scale, z3), _q0, new THREE.Vector3(def.scale, def.scale, def.scale));
+          leaderGearMesh.setMatrixAt(leaderN++, _m4);
+        }
+        idx++;
+      }
+      idxByType[g.type] = idx;
     }
   }
-  finishRig(enemyRig, idx);
+  ENEMY_TYPE_KEYS.forEach(k => finishRig(enemyRigs[k], idxByType[k]));
+  if (shieldGearMesh) { shieldGearMesh.count = shieldN; shieldGearMesh.instanceMatrix.needsUpdate = true; }
+  if (leaderGearMesh) { leaderGearMesh.count = leaderN; leaderGearMesh.instanceMatrix.needsUpdate = true; }
 }
 
 // ── УПРАВЛЕНИЕ ──────────────────────────────────────────────────────────────
@@ -1433,9 +1654,15 @@ function update(dt) {
     if (kind === 'plate') spawnPlate();
     else if (kind === 'gate') spawnGate();
     else if (kind === 'bonus') spawnBonus();
-    else if (kind === 'wave') spawnWave();
     else if (kind === 'crate') spawnCrate();
     nextEventAt = dist + rnd(15, 26);
+  }
+  // Волны — свой, более частый и не пересыхающий поток: дорожка никогда не
+  // бывает пустой, и к концу забега враги идут гуще.
+  if (state === 'game' && dist >= nextWaveAt) {
+    spawnWave();
+    const gap = clamp(110 - dist / 9, 42, 110);
+    nextWaveAt = dist + rnd(gap * 0.7, gap);
   }
 
   // Пули: урон целочисленный сразу — HP/численность целые, никаких дробных
@@ -1446,18 +1673,30 @@ function update(dt) {
     bl.life -= dt;
     const alive = obstacles.includes(bl.target) && targetHpLeft(bl.target) > 0;
     if (!alive || bl.life <= 0) { bullets.splice(i, 1); continue; }
-    if (bl.z >= bl.target.z - 0.05) {
+    if (bl.z >= targetZ(bl.target) - 0.05) {
       let target = bl.target;
       let pierceLeft = bl.pierce || 1;
       while (target && pierceLeft > 0) {
         const before = targetHpLeft(target);
-        const dmgInt = Math.max(1, Math.round(bl.dmg));
-        if (target.kind === 'wave') target.count = Math.max(0, target.count - dmgInt);
-        else target.hp = Math.max(0, target.hp - dmgInt);
-        const p = projectPoint(target.worldX ?? 0, target.z);
-        if (target.kind === 'boss') sBossHit(); else if (target.kind === 'wave') sEnemyHit(); else sTick();
-        shake(target.kind === 'boss' ? 1.2 : 1);
-        burst(p.x, p.y, target.kind === 'wave' ? '#ff8a8a' : '#f2ede3', 4, 90);
+        let dmgInt = Math.max(1, Math.round(bl.dmg));
+        let blocked = false, hitFg = null;
+        if (target.kind === 'wave') {
+          hitFg = waveFrontGroup(target);
+          if (!hitFg) break;
+          const def = ENEMY_TYPES[hitFg.type];
+          // Щитовик с блином в руках — слабые снаряды в лоб почти не берут.
+          if (def.blockDmg && bl.dmg < def.blockDmg) { blocked = true; dmgInt = 0; }
+          hitFg.count = Math.max(0, hitFg.count - dmgInt);
+        } else {
+          target.hp = Math.max(0, target.hp - dmgInt);
+        }
+        const p = projectPoint(target.worldX ?? 0, targetZ(target));
+        if (blocked) { sShield(); burst(p.x, p.y, '#9fd0e6', 3, 70); }
+        else if (target.kind === 'boss') sBossHit(); else if (target.kind === 'wave') sEnemyHit(); else sTick();
+        if (!blocked) {
+          shake(target.kind === 'boss' ? 1.2 : 1);
+          burst(p.x, p.y, target.kind === 'wave' ? '#bfe89a' : '#f2ede3', 4, 90);
+        }
         const after = targetHpLeft(target);
         if (after <= 0 && before > 0) {
           if (target.kind === 'plate') {
@@ -1469,10 +1708,10 @@ function update(dt) {
             popNumber('+' + fmt(gain), C_GOLD, p.x, p.y - 10, true);
             obstacles.splice(obstacles.indexOf(target), 1);
           } else if (target.kind === 'wave') {
-            const gain = target.countMax * 2;
+            const gain = target.groups.reduce((s, g) => s + g.countMax, 0) * 2;
             score += gain;
             shake(4); sPop();
-            burst(p.x, p.y, '#ff8a8a', 18, 240);
+            burst(p.x, p.y, '#bfe89a', 18, 240);
             popNumber('ВОЛНА СМЕТЕНА +' + fmt(gain), C_GREEN, p.x, p.y - 10, true);
             obstacles.splice(obstacles.indexOf(target), 1);
           }
@@ -1480,9 +1719,9 @@ function update(dt) {
         pierceLeft -= 1;
         if (pierceLeft > 0) {
           // Блинострел летит насквозь — ищем следующую цель чуть дальше по глубине.
-          const rest = obstacles.filter(o => o !== target && o.z > target.z &&
-            ((o.kind === 'plate' && o.hp > 0) || (o.kind === 'wave' && o.count > 0)));
-          rest.sort((a, b) => a.z - b.z);
+          const rest = obstacles.filter(o => o !== target && targetZ(o) > targetZ(target) &&
+            ((o.kind === 'plate' && o.hp > 0) || (o.kind === 'wave' && waveTotalCount(o) > 0)));
+          rest.sort((a, b) => targetZ(a) - targetZ(b));
           target = rest[0];
         } else target = null;
       }
@@ -1576,47 +1815,61 @@ function update(dt) {
       continue;
     }
     if (o.kind === 'wave') {
-      o.z -= depthSpeed * dt * (o.speedMult || 1);
-      // Ответный огонь: пока волна в радиусе, она периодически бьёт по
-      // отряду — постоянное давление, а не только финальная свалка.
-      if (o.z < 2.1 && o.count > 0) {
-        o.fireTimer -= dt;
-        if (o.fireTimer <= 0) {
-          const chip = Math.max(1, Math.round(clamp(o.count * 0.045, 1, 9)));
-          const actualChip = Math.min(squad, chip);
-          if (actualChip > 0) {
-            squad = Math.max(0, squad - actualChip);
-            comboBreak(); weaponBurn(actualChip);
-            sEnemyShot(); shake(2 + Math.min(6, actualChip * 0.5));
-            flash('red', 120);
-            popNumber('−' + fmt(actualChip), '#ff8a4a', W / 2, GROUND_F * H - 70);
-            if (squad <= 0) { die(); return; }
+      // Каждый тип в волне идёт своим шагом: стрелок держит дистанцию и
+      // жалит издалека, бегун долетает первым, тяжёлый/щитовик/вожак —
+      // медленнее, но выносят при сшибке ощутимо больше.
+      let anyLeft = false;
+      for (const g of o.groups) {
+        if (g.count <= 0) continue;
+        anyLeft = true;
+        const def = ENEMY_TYPES[g.type];
+        if (def.ranged) {
+          if (g.z > def.stopZ) g.z -= depthSpeed * dt * (o.speedMult || 1) * def.speedMult;
+          if (g.z < 2.1) {
+            g.fireTimer -= dt;
+            if (g.fireTimer <= 0) {
+              const chip = Math.max(1, Math.round(clamp(g.count * 0.05, 1, 6)));
+              const actualChip = Math.min(squad, chip);
+              if (actualChip > 0) {
+                squad = Math.max(0, squad - actualChip);
+                comboBreak(); weaponBurn(actualChip);
+                sEnemyShot(); shake(2 + Math.min(5, actualChip * 0.5)); flash('red', 110);
+                popNumber('−' + fmt(actualChip), '#e6a6ff', W / 2, GROUND_F * H - 70);
+                if (squad <= 0) { die(); return; }
+              }
+              g.fireTimer = clamp(1.3 - g.count * 0.012, 0.4, 1.3);
+            }
           }
-          o.fireTimer = clamp(1.5 - o.count * 0.01, 0.35, 1.5);
+          continue;
+        }
+        g.z -= depthSpeed * dt * (o.speedMult || 1) * def.speedMult;
+        if (g.z <= 0.05) {
+          // Ближний бой: если отряд больше — продавил и потерял вполовину
+          // меньше, чем в лобовом размене (иначе победа стоила бы столько же,
+          // сколько поражение). Если группа больше — размен полный, урон
+          // ещё умножается на "вес" типа: тяжеловес и вожак выносят сильно
+          // больнее бегуна за ту же голову.
+          const clash = Math.min(squad, g.count);
+          const enemyLeft = g.count - clash;
+          const rawLoss = enemyLeft <= 0 ? clash * 0.5 : clash;
+          const loss = Math.max(0, Math.min(enemyLeft <= 0 ? squad - 1 : squad, Math.round(rawLoss * def.dmgUnit)));
+          squad = Math.max(0, squad - loss);
+          comboBreak(); weaponBurn(loss);
+          sMelee(); shake(10 + Math.min(16, loss * 0.4)); hitStop(loss > 10 ? 0.06 : 0.02);
+          flash('red', 260);
+          const p = projectPoint(squadWorldX, 0.05);
+          burst(p.x, p.y - 20, '#bfe89a', Math.min(40, 14 + loss), 280);
+          if (enemyLeft <= 0) {
+            score += g.countMax * (def.isLeader ? 4 : 1);
+            popNumber((def.isLeader ? 'ВОЖАК СЛОМЛЕН −' : 'ОТРЯД ПРОДАВИЛ −') + fmt(loss), C_GREEN, W / 2, GROUND_F * H - 90, true);
+          } else {
+            popNumber('−' + fmt(loss), '#ff4444', W / 2, GROUND_F * H - 90, true);
+          }
+          g.count = 0;
+          if (squad <= 0) { die(); return; }
         }
       }
-      if (o.z <= 0.05) {
-        // Ближний бой: если отряд больше — продавил и потерял вполовину
-        // меньше, чем в лобовом размене (иначе победа стоила бы столько же,
-        // сколько поражение). Если волна больше — размен полный, отряд тает.
-        const clash = Math.min(squad, o.count);
-        const enemyLeft = o.count - clash;
-        const loss = enemyLeft <= 0 ? Math.min(squad - 1, Math.round(clash * 0.5)) : clash;
-        squad = Math.max(0, squad - loss);
-        comboBreak(); weaponBurn(loss);
-        sMelee(); shake(10 + Math.min(16, loss * 0.4)); hitStop(loss > 10 ? 0.06 : 0.02);
-        flash('red', 260);
-        const p = projectPoint(squadWorldX, 0.05);
-        burst(p.x, p.y - 20, '#ff4444', Math.min(40, 14 + loss), 280);
-        if (enemyLeft <= 0) {
-          score += o.countMax;
-          popNumber('ОТРЯД ПРОДАВИЛ −' + fmt(loss), C_GREEN, W / 2, GROUND_F * H - 90, true);
-        } else {
-          popNumber('−' + fmt(loss), '#ff4444', W / 2, GROUND_F * H - 90, true);
-        }
-        obstacles.splice(i, 1);
-        if (squad <= 0) { die(); return; }
-      }
+      if (!anyLeft) obstacles.splice(i, 1);
       continue;
     }
   }
@@ -1681,7 +1934,8 @@ function syncBullets() {
 }
 
 // ── КАМЕРА (сзади-сверху над лидером, лёгкий доворот и толчок на ударах) ────
-let camYaw = 0;
+let camYaw = 0, camFov = 58;
+const FOV_BASE = 58, FOV_GAIN = 5; // "пара градусов" на разгоне — дёшево и заметно
 function updateCamera(dt) {
   const leadX = worldX3(squadWorldX);
   const targetYaw = clamp(-squadWorldX * 0.18, -0.22, 0.22);
@@ -1695,6 +1949,15 @@ function updateCamera(dt) {
   camera.position.set(leadX * 0.35 + shakeX, 6.0 + depth * 0.34 + shakeY, 9.0 + depth * 0.62 + punch);
   camera.lookAt(leadX * 0.55, 1.05, -6.0 + depth * 0.25);
   camera.rotation.z = camYaw * 0.5;
+  // Угол обзора слегка растёт со скоростью — дешёвый и очень заметный приём
+  // разгона: чем быстрее забег, тем шире и "летящее" кадр.
+  const speedFrac = clamp((meterSpeed - SPEED_START) / (SPEED_CAP - SPEED_START), 0, 1);
+  const targetFov = FOV_BASE + speedFrac * FOV_GAIN;
+  if (Math.abs(camera.fov - targetFov) > 0.02) {
+    camFov += (targetFov - camFov) * Math.min(1, 3 * dt);
+    camera.fov = camFov;
+    camera.updateProjectionMatrix();
+  }
 }
 
 // ── РЕНДЕР ───────────────────────────────────────────────────────────────────
@@ -1706,6 +1969,7 @@ function render() {
   syncPlayerCrowd();
   syncEnemyCrowd();
   syncBullets();
+  updateFloorStripes();
   updateCamera(1 / 60);
   renderer.render(scene, camera);
 
@@ -1778,15 +2042,19 @@ function render() {
 // ── ИНИЦИАЛИЗАЦИЯ THREE.JS И ЗАПУСК ─────────────────────────────────────────
 function initThree() {
   scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x18110c);
-  camera = new THREE.PerspectiveCamera(58, W / H, 0.1, 200);
+  scene.background = new THREE.Color(0x100d16);
+  camera = new THREE.PerspectiveCamera(FOV_BASE, W / H, 0.1, 200);
+  camFov = FOV_BASE;
   renderer = new THREE.WebGLRenderer({ canvas: cv, antialias: true, alpha: false });
   window.renderer = renderer;
   renderer.setPixelRatio(DPR);
   renderer.setSize(W, H, false);
   buildHall();
+  // Свои — всегда тёплый цвет выбранного бойца (applyFighterColors красит
+  // после выбора), враги — холодные/ядовитые ригов пять, по типу.
   playerRig = buildCrowdRig(PLAYER_CAP, { top: '#8f2a20', skin: '#e0b08a', bottom: '#2b2d34' });
-  enemyRig = buildCrowdRig(ENEMY_CAP, { top: '#6e1616', skin: '#440d0d', bottom: '#3a0c0c' });
+  buildEnemyRigs();
+  buildEnemyGearMeshes();
   buildBulletMesh();
 }
 
