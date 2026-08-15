@@ -380,7 +380,7 @@ async def test_finish_setup_progress_screen_survives_provider_failure(fresh_db, 
     placeholder = chat.sent[0]
     placeholder.message.edit_text.assert_awaited_once()
     error_text = placeholder.message.edit_text.await_args.args[0]
-    assert "не получилось" in error_text.lower()
+    assert "не смог" in error_text.lower()
     assert "%" not in error_text
 
 
