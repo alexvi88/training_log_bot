@@ -12,8 +12,6 @@ class WorkoutFlow(StatesGroup):
     confirming_finish_date = State()
     awaiting_finish_date = State()
     editing_finished_note = State()
-    # "жим 80x8x3, присед 100x5" — a whole past session typed in one message.
-    quick_log = State()
 
 
 class ExerciseManage(StatesGroup):

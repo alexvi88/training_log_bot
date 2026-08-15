@@ -133,19 +133,6 @@ async def test_finish_empty_workout_keeps_ai_draft(fresh_db, user_id):
     await _assert_ai_survived(state)
 
 
-# ---------- quick-log ----------
-
-
-async def test_quick_log_keeps_ai_draft(fresh_db, user_id):
-    state = await _state(user_id)
-    await state.set_state(WorkoutFlow.quick_log)
-
-    await workout.quick_log_entered(_message(user_id, "жим 80x8"), state)
-
-    assert await state.get_state() is None
-    await _assert_ai_survived(state)
-
-
 # ---------- тренировка задним числом ----------
 
 

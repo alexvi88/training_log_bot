@@ -61,7 +61,13 @@ CREATE TABLE IF NOT EXISTS users (
     -- (см. handlers.ai_trainer._memory_reminder). В FSM этой отметке не место:
     -- /start чистит состояние целиком, кроме трёх AI-ключей, и напоминание
     -- вылезало бы на каждый заход в диалог вместо раза в неделю.
-    profile_shown_on TEXT
+    profile_shown_on TEXT,
+    -- Сколько подходов человек набрал ТЕКСТОМ за всю жизнь — считаем, только
+    -- чтобы поймать момент «третий подход», и подсказать про голосовой ввод
+    -- один раз (voice_hint_shown, см. handlers.workout._maybe_show_voice_hint).
+    -- Голосом залогированные подходы сюда не идут: они уже нашли эту кнопку.
+    manual_sets_typed INTEGER NOT NULL DEFAULT 0,
+    voice_hint_shown INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS muscle_groups (
@@ -854,6 +860,11 @@ async def _migrate_schema() -> None:
         # Counted showings of the e1RM footnote, back when it faded out after a
         # few — it lives permanently on the progress screen now.
         await _conn.execute("ALTER TABLE users DROP COLUMN e1rm_hint_seen")
+    if "manual_sets_typed" not in user_cols:
+        # Одноразовая подсказка про голосовой ввод (см. схему выше и
+        # handlers.workout._maybe_show_voice_hint) — оба поля появляются вместе.
+        await _conn.execute("ALTER TABLE users ADD COLUMN manual_sets_typed INTEGER NOT NULL DEFAULT 0")
+        await _conn.execute("ALTER TABLE users ADD COLUMN voice_hint_shown INTEGER NOT NULL DEFAULT 0")
     if "reply_keyboard_version" not in user_cols:
         if "reply_keyboard_shown" in user_cols:
             # Superseded by a version counter so future button-set changes can
@@ -1419,6 +1430,48 @@ async def acquisition_funnel(days: int = 30, alive_days: int = 7) -> list[aiosql
         "WHERE u.created_at >= ? AND COALESCE(u.source, 'unknown') <> 'legacy' "
         "GROUP BY source ORDER BY users DESC, source",
         (alive_since, since),
+    )
+    return await cur.fetchall()
+
+
+# Подзапросы «кто когда-либо начал тренировку» / «кто когда-либо записал хоть
+# подход» — DISTINCT, потому что тут важен сам факт, а не число тренировок или
+# подходов (то уже считает _FINISHED_BY_USER). Любой статус тренировки в
+# обоих: и «начал», и «записал подход» может произойти в ещё не закрытой
+# тренировке, и ждать её финиша, чтобы засчитать шаг воронки, было бы неверно —
+# «начал» и «записал подход» идут РАНЬШЕ «завершил», а не только внутри него.
+_STARTED_BY_USER = "SELECT DISTINCT user_id FROM workouts"
+_LOGGED_SET_BY_USER = (
+    "SELECT DISTINCT w.user_id AS user_id FROM workouts w "
+    "JOIN workout_blocks b ON b.workout_id = w.id "
+    "JOIN sets s ON s.block_id = b.id"
+)
+
+
+async def onboarding_funnel(days: int = 30) -> list[aiosqlite.Row]:
+    """Воронка новичка по источникам: всего пришло → начали тренировку →
+    записали хоть один подход → завершили первую.
+
+    Три первых шага не про закрытые тренировки — это ровно то отличие от
+    acquisition_funnel (та считает «активацией» именно ЗАВЕРШЁННУЮ первую
+    тренировку): здесь важно увидеть, где именно новичок остывает — не дошёл
+    до тренировки вовсе, открыл её и не тронул снаряд, или начал подход и
+    бросил, не закрыв сессию.
+    """
+    since = (dt.datetime.now() - dt.timedelta(days=days)).isoformat(timespec="seconds")
+    cur = await conn().execute(
+        "SELECT COALESCE(u.source, 'unknown') AS source, "
+        "COUNT(*) AS users, "
+        "COUNT(*) FILTER (WHERE st.user_id IS NOT NULL) AS started, "
+        "COUNT(*) FILTER (WHERE ls.user_id IS NOT NULL) AS logged_set, "
+        "COUNT(*) FILTER (WHERE f.finished >= 1) AS finished "
+        "FROM users u "
+        f"LEFT JOIN ({_STARTED_BY_USER}) st ON st.user_id = u.telegram_id "
+        f"LEFT JOIN ({_LOGGED_SET_BY_USER}) ls ON ls.user_id = u.telegram_id "
+        f"LEFT JOIN ({_FINISHED_BY_USER}) f ON f.user_id = u.telegram_id "
+        "WHERE u.created_at >= ? AND COALESCE(u.source, 'unknown') <> 'legacy' "
+        "GROUP BY source ORDER BY users DESC, source",
+        (since,),
     )
     return await cur.fetchall()
 
@@ -2606,6 +2659,67 @@ async def count_workouts(user_id: int, status: str = "finished") -> int:
     )
     (count,) = await cur.fetchone()
     return count
+
+
+# Одноразовая подсказка про голосовой ввод (см. handlers.workout._maybe_show_
+# voice_hint) показывается ровно на этом суммарном числе подходов, набранных
+# текстом за всю жизнь пользователя.
+VOICE_HINT_THRESHOLD = 3
+
+
+async def register_manual_sets_and_check_hint(user_id: int, count: int) -> bool:
+    """Прибавляет `count` к счётчику подходов, набранных текстом, и говорит,
+    настал ли момент показать подсказку про голос: счётчик только что дошёл до
+    VOICE_HINT_THRESHOLD (или перепрыгнул его — строка сразу с несколькими
+    подходами тоже считается), а подсказка ещё ни разу не показывалась.
+
+    Отмечает подсказку показанной тем же UPDATE — без отдельного awaited шага
+    между чтением и записью, два подхода подряд не смогут оба увидеть счётчик
+    «ещё не дошёл» и оба решить, что сейчас самое время.
+    """
+    async with _write_lock:
+        cur = await conn().execute(
+            "SELECT manual_sets_typed, voice_hint_shown FROM users WHERE telegram_id = ?",
+            (user_id,),
+        )
+        row = await cur.fetchone()
+        if row is None:
+            return False
+        before, already_shown = row["manual_sets_typed"], row["voice_hint_shown"]
+        after = before + count
+        should_show = not already_shown and before < VOICE_HINT_THRESHOLD <= after
+        await conn().execute(
+            "UPDATE users SET manual_sets_typed = ?, voice_hint_shown = ? WHERE telegram_id = ?",
+            (after, 1 if should_show else already_shown, user_id),
+        )
+        await conn().commit()
+        return should_show
+
+
+async def mark_voice_hint_shown(user_id: int) -> None:
+    """Человек уже нашёл голосовой ввод сам (см. handlers.workout._finalize_
+    voice_sets) — подсказывать про него больше незачем."""
+    async with _write_lock:
+        await conn().execute(
+            "UPDATE users SET voice_hint_shown = 1 WHERE telegram_id = ?", (user_id,)
+        )
+        await conn().commit()
+
+
+async def has_any_set(user_id: int) -> bool:
+    """Дешёвая проверка «есть ли у человека хоть один подход когда-либо» — любой
+    статус тренировки (и активной тоже), потому что подсказку про формат ввода
+    надо погасить сразу после первого же удачного подхода, не дожидаясь, пока
+    та тренировка закроется. LIMIT 1 — считать все подходы незачем, хватает факта.
+    """
+    cur = await conn().execute(
+        "SELECT 1 FROM sets s "
+        "JOIN workout_blocks b ON b.id = s.block_id "
+        "JOIN workouts w ON w.id = b.workout_id "
+        "WHERE w.user_id = ? LIMIT 1",
+        (user_id,),
+    )
+    return await cur.fetchone() is not None
 
 
 async def list_finished_workout_dates(

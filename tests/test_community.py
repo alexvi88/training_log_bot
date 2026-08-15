@@ -61,14 +61,14 @@ def test_main_menu_community_button_opens_the_group():
     assert button.callback_data is None
 
 
-@pytest.mark.parametrize("show_quick_log", [False, True])
-def test_community_button_sits_alone_on_the_last_row(show_quick_log):
+@pytest.mark.parametrize("show_import_button", [False, True])
+def test_community_button_sits_alone_on_the_last_row(show_import_button):
     """Раскладка меню задаётся adjust(...) руками: лишняя кнопка без своей
     цифры съезжает в чужую пару и ломает соседний ряд."""
     markup = keyboards.main_menu(
-        has_active_workout=False, show_quick_log=show_quick_log, community_url=CHAT_URL
+        has_active_workout=False, show_import_button=show_import_button, community_url=CHAT_URL
     )
-    without = keyboards.main_menu(has_active_workout=False, show_quick_log=show_quick_log)
+    without = keyboards.main_menu(has_active_workout=False, show_import_button=show_import_button)
     assert [b.text for b in markup.inline_keyboard[-1]] == ["💬 Чат атлетов"]
     assert markup.inline_keyboard[:-1] == without.inline_keyboard
 

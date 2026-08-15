@@ -151,6 +151,42 @@ def format_funnel(rows: Iterable[Any], days: int) -> str:
     return "\n".join(lines)
 
 
+def _onboarding_line(row: Any) -> str:
+    users = row["users"]
+    started, logged_set, finished = row["started"], row["logged_set"], row["finished"]
+    return (
+        f"{_source_title(row['source'])} — <b>{users}</b>\n"
+        f"   начали тренировку: {started} ({_percent(started, users)}%) · "
+        f"записали подход: {logged_set} ({_percent(logged_set, users)}%) · "
+        f"завершили первую: {finished} ({_percent(finished, users)}%)"
+    )
+
+
+def format_onboarding_funnel(rows: Iterable[Any], days: int) -> str:
+    """Воронка новичка по шагам: пришёл → начал тренировку → записал подход →
+    закрыл первую. Разрез по источникам — тот же, что и у format_funnel: видно
+    не только «сколько дошло до первой», но и НА КАКОМ шаге теряются —
+    открыли тренировку и не тронули снаряд, или дожали подход и не закрыли.
+    """
+    rows = list(rows)
+    head = f"🧭 <b>ВОРОНКА НОВИЧКА · {days} дн.</b>"
+    if not rows:
+        return f"{head}\n\nЗа этот срок новых не было."
+    total = sum(r["users"] for r in rows)
+    total_started = sum(r["started"] for r in rows)
+    total_logged_set = sum(r["logged_set"] for r in rows)
+    total_finished = sum(r["finished"] for r in rows)
+    lines = [
+        head,
+        f"Всего {total}: начали тренировку {total_started} ({_percent(total_started, total)}%), "
+        f"записали подход {total_logged_set} ({_percent(total_logged_set, total)}%), "
+        f"завершили первую {total_finished} ({_percent(total_finished, total)}%).",
+        "",
+    ]
+    lines += [_onboarding_line(r) for r in rows]
+    return "\n".join(lines)
+
+
 def format_referrers(rows: Iterable[Any]) -> str:
     """Кто приводит людей — тех, кто дошёл до первой тренировки, а не просто открыл бота."""
     rows = list(rows)

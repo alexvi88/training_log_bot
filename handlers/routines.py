@@ -1424,7 +1424,9 @@ async def _rtadd_groups_screen(callback: CallbackQuery, state: FSMContext) -> No
         groups, prefix="rtadd", extra_buttons=[("❌ Отмена", "rtadd:cancel")], show_all=True
     )
     await ui.safe_edit(
-        callback, "Выбери группу мышц или найди упражнение по названию:", reply_markup=kb
+        callback,
+        "Выбери группу мышц — или просто напиши название, например «жим»:",
+        reply_markup=kb,
     )
 
 

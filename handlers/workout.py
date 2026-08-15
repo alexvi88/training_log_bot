@@ -42,7 +42,6 @@ from fsm import BackfillFlow, WorkoutFlow
 from parser import (
     ParsedSet,
     ParseError,
-    parse_quick_workout,
     parse_ru_date,
     parse_set_edit,
     parse_sets_line,
@@ -404,6 +403,7 @@ def _logging_hint(
     target: str | None = None,
     progression_rule: dict | None = None,
     reps_row: tuple[float, int] | None = None,
+    show_format_hint: bool = False,
 ) -> str:
     base = None
     if show_instruction:
@@ -441,6 +441,13 @@ def _logging_hint(
         # спорило с ней: 180 — вес последнего подхода, а не «прошлого раза».
         # Творительный падеж («цифрами», не «цифры») — решение владельца продукта.
         reps_row_line = f"🔢 Цифрами — повторы на {weight_str}\n"
+    # Показывается только пока в дневнике вообще нет ни одного подхода — гаснет
+    # сразу после первого же удачного, не дожидаясь конца тренировки или того,
+    # пока человек «наберёт стаж» (это уже show_instruction — тот держится
+    # дольше, по недавним закрытым тренировкам).
+    format_hint_line = (
+        "💡 Вес и повторы одной строкой: <code>100 8</code>\n" if show_format_hint else ""
+    )
     target_line = f"📋 План: {target}\n" if target else ""
     warning = _suspicious_weight_warning(last_session, today_sets, unit)
     if warning and confirmed_weight is not None and today_sets and today_sets[-1][0] == confirmed_weight:
@@ -449,7 +456,7 @@ def _logging_hint(
         # that arrive by other routes ("N: 100 8" edits) still get the nudge.
         warning = None
     warning_line = f"{warning}\n" if warning else ""
-    lead = f"{target_line}{warning_line}"
+    lead = f"{format_hint_line}{target_line}{warning_line}"
     if last_session:
         sets_str = ", ".join(formatting.format_set(w, r, rpe) for w, r, rpe in last_session)
         line = f"💡 В прошлый раз: {sets_str}"
@@ -589,6 +596,7 @@ async def _render_logging_screen(bot, state: FSMContext, user):
         dt.date.fromisoformat(d) for d in await db.list_finished_workout_dates(user["telegram_id"])
     ]
     show_instruction = not analytics.is_seasoned(recent_dates, timeutil.user_today(user))
+    show_format_hint = not await db.has_any_set(user["telegram_id"])
     # Ряд «тот же вес, другие повторы» (см. keyboards.reps_window) — от
     # сегодняшнего последнего подхода, а до первого от прошлой тренировки. Нужен
     # и подсказке (назвать вес под цифрами), и клавиатуре (какие цифры рисовать).
@@ -600,6 +608,7 @@ async def _render_logging_screen(bot, state: FSMContext, user):
         bool(user["progression_hint_enabled"]),
         today_sets,
         show_instruction=show_instruction,
+        show_format_hint=show_format_hint,
         reps_row=reps_basis,
         inferred_step=weight_steps.get(active),
         confirmed_weight=(data.get("confirmed_weights") or {}).get(active),
@@ -819,13 +828,14 @@ async def _send_menu(message: Message, text: str, png: bytes | None, keyboard) -
 
 
 async def _main_menu_kb(user_id: int, active) -> InlineKeyboardMarkup:
-    # The quick-log entry is offered only while the diary is empty: it exists to
-    # get a first record in, and once there is history the normal flows are
-    # better (they know the exercises, the targets and the progression).
+    # The import button is offered only while the diary is empty: once there's
+    # real history, the normal logging flows are better (they know the
+    # exercises, the targets and the progression) — importing on top of that
+    # would just risk duplicate entries.
     has_history = await db.count_workouts(user_id) > 0
     return keyboards.main_menu(
         bool(active),
-        show_quick_log=not has_history,
+        show_import_button=not has_history,
         # Кнопка "💬 Чат атлетов" временно снята с главного меню (не с
         # /community — та команда работает как раньше), пока чат не готов
         # показывать всем.
@@ -1179,95 +1189,6 @@ async def _start_workout(callback: CallbackQuery, state: FSMContext, delete_mess
     )
     await state.set_state(WorkoutFlow.picking_group)
     await _picker_screen_groups(callback, state, show_program_button=True)
-
-
-QUICK_LOG_PROMPT = (
-    "✍️ <b>Запиши тренировку одной строкой</b>\n\n"
-    "Упражнение, вес и повторы — через запятую:\n"
-    "<code>жим 80x8x3, присед 100x5, подтягивания 12</code>\n\n"
-    "Сохраню как сегодняшнюю тренировку. Упражнений, которых у тебя ещё нет, "
-    "заведу сам."
-)
-
-# Unknown names go here rather than stopping to ask for a muscle group each —
-# the same trade-off the CSV import's "создать все" makes, and the group is
-# editable later in ⚙️ Упражнения.
-_QUICK_LOG_GROUP = "Другое"
-
-
-@router.callback_query(F.data == "menu:quicklog")
-async def menu_quick_log(callback: CallbackQuery, state: FSMContext):
-    await _clear_state_keep_workout(state)
-    await state.set_state(WorkoutFlow.quick_log)
-    await ui.safe_edit(
-        callback, QUICK_LOG_PROMPT,
-        reply_markup=keyboards.cancel_keyboard("quick:cancel"), parse_mode="HTML",
-    )
-    await callback.answer()
-
-
-@router.callback_query(StateFilter(WorkoutFlow.quick_log), F.data == "quick:cancel")
-async def quick_log_cancel(callback: CallbackQuery, state: FSMContext):
-    await _show_main_menu(callback, state)
-    await callback.answer()
-
-
-async def _resolve_quick_exercise(user_id: int, name: str) -> int:
-    """The user's exercise of that name, forking a catalog template or creating
-    one if there isn't one yet."""
-    existing = await db.find_exercise_by_name(user_id, name)
-    if existing:
-        return existing["id"]
-    from_template = await db.get_or_create_user_exercise_by_name(user_id, name)
-    if from_template is not None:
-        return from_template
-    groups = await db.list_muscle_groups(user_id)
-    group_id = next(
-        (g["id"] for g in groups if g["name"] == _QUICK_LOG_GROUP),
-        groups[0]["id"] if groups else None,
-    )
-    return await db.create_exercise(user_id, name, group_id)
-
-
-@router.message(StateFilter(WorkoutFlow.quick_log), F.text)
-async def quick_log_entered(message: Message, state: FSMContext):
-    """Save a whole past session typed as one line, as a finished workout today.
-
-    Nothing about it is live: there is no tracker, no picker and no finish step,
-    because the session already happened — the user is transcribing, not
-    training. That's the point of the flow (see keyboards.main_menu's
-    show_quick_log).
-    """
-    user_id = message.from_user.id
-    try:
-        entries = parse_quick_workout(message.text)
-    except ParseError as e:
-        await _reply_transient(message, e.message)
-        return
-
-    user = await db.get_user(user_id)
-    today = timeutil.user_today(user)
-    started_at = f"{today.isoformat()}T12:00:00"
-    workout_id = await db.create_finished_workout(user_id, started_at, started_at)
-    for entry in entries:
-        ex_id = await _resolve_quick_exercise(user_id, entry.name)
-        block_id = await db.create_block(workout_id, "single")
-        await db.add_block_exercise(block_id, ex_id, 0)
-        await db.touch_exercise_last_used(ex_id)
-        for parsed in entry.sets:
-            await db.append_set(block_id, ex_id, 0, parsed.weight, parsed.reps, parsed.rpe)
-
-    await achievement_sync.resync(user_id)
-    # Быстрая запись закончена — но переписка с AI-тренером и черновик его
-    # программы не про неё: они переживают тренировки, сохраняем.
-    await clear_state_keep_ai(state)
-
-    workout = await db.get_workout(workout_id)
-    card = await _finished_workout_card_text(workout, await db.get_user(user_id), None)
-    await message.answer(
-        card, parse_mode="HTML",
-        reply_markup=keyboards.workout_card_keyboard(workout_id),
-    )
 
 
 REPEAT_PAGE_SIZE = 6
@@ -1738,9 +1659,10 @@ async def _picker_screen_groups(callback: CallbackQuery, state: FSMContext, show
     # без упоминания их в тексте подсказка говорила только про группы мышц и
     # поиск по названию, будто кнопки сверху экрана вообще не про тренировку.
     hint = (
-        "<i>Продолжи по программе сверху или выбери группу мышц / найди упражнение по названию:</i>"
+        "<i>Продолжи по программе сверху, выбери группу мышц — или просто напиши "
+        "название, например «жим»:</i>"
         if top_buttons else
-        "<i>Выбери группу мышц или найди упражнение по названию:</i>"
+        "<i>Выбери группу мышц — или просто напиши название, например «жим»:</i>"
     )
     if not data.get("is_backfill"):
         # Занесение задним числом — не «что тренировать сегодня»: отдых
@@ -2310,6 +2232,23 @@ def _weight_confirm_prompt(
     return None
 
 
+# Голос спрятан в _HELP_SHORT, куда новичок не заходит сам — так что учим по
+# месту: на третьем подходе, набранном текстом за всю жизнь, тренер сам
+# упоминает кнопку, которой человек ещё не нашёл. Ровно один раз — дальше это
+# уже не открытие, а надоедливое напоминание (см. db.register_manual_sets_and_check_hint).
+_VOICE_HINT_TEXT = "🎙 Кстати, можно голосом: скажи «сто на восемь» — запишу."
+
+
+async def _maybe_show_voice_hint(bot, data: dict, user_id: int, chat_id: int, sets_count: int) -> None:
+    # Бэкфилл и импорт — не живая тренировка: там подход не первый в жизни, а
+    # прошлый, задним числом, и учить голосу здесь не к месту (задание №9).
+    if data.get("is_backfill"):
+        return
+    if await db.register_manual_sets_and_check_hint(user_id, sets_count):
+        with suppress(TelegramBadRequest):
+            await bot.send_message(chat_id, _VOICE_HINT_TEXT)
+
+
 async def _finalize_logged_sets(bot, state: FSMContext, user, data: dict, active: int,
                                 logged: list[tuple[float, int]], chat_id: int, message_id: int,
                                 message: Message | None = None) -> None:
@@ -2333,6 +2272,10 @@ async def _finalize_logged_sets(bot, state: FSMContext, user, data: dict, active
     else:
         with suppress(TelegramBadRequest):
             await bot.delete_message(chat_id=chat_id, message_id=message_id)
+    # До перерисовки трекера: иначе подсказка легла бы НИЖЕ него и стала новым
+    # «дном» чата, а следующий рендер живого экрана потерял бы дешёвое
+    # редактирование на месте (см. chat_bottom.is_at_bottom в _refresh_live).
+    await _maybe_show_voice_hint(bot, data, user["telegram_id"], chat_id, len(logged))
     await _render_logging_screen(bot, state, user)
 
 
@@ -2353,6 +2296,8 @@ async def _finalize_voice_sets(bot, state: FSMContext, user, data: dict, active:
             await bot.set_message_reaction(
                 chat_id=chat_id, message_id=message_id, reaction=[ReactionTypeEmoji(emoji="🔥")],
             )
+    # Уже нашёл голос сам — подсказку про него больше показывать незачем.
+    await db.mark_voice_hint_shown(user["telegram_id"])
     await _render_logging_screen(bot, state, user)
 
 
