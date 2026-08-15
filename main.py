@@ -265,6 +265,7 @@ async def _setup_commands(bot: Bot) -> None:
                 BotCommand(command="activity", description="Что делают пользователи (админ)"),
                 BotCommand(command="broadcast", description="Рассылка всем пользователям (админ)"),
                 BotCommand(command="announce", description="Релизный анонс: проверить и разослать (админ)"),
+                BotCommand(command="admin_wipe", description="Снести TEST_USER_ID для проверки онбординга (админ)"),
             ],
             scope=BotCommandScopeChat(chat_id=config.ADMIN_ID),
         )
