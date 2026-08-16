@@ -279,3 +279,32 @@ async def test_a_normal_high_rep_set_is_not_questioned(fresh_db, user_id):
     await workout.log_set_text(_make_message(user_id, "40 20"), state)
 
     assert len(await db.list_sets_for_block(block_id)) == 1
+
+
+def test_weight_confirm_prompt_compares_with_todays_sets_too():
+    """Живой репорт: восемь подходов по 200, потом «500 5» — вопроса не было,
+    потому что сверялись только с прошлой тренировкой (210), а 500 в старый
+    порог укладывалось. 500 кг молча стали вечным рекордом упражнения."""
+    from parser import ParsedSet
+
+    data = {"last_session_sets": {7: [(210.0, 4, None)]}}
+    today = [(200.0, 4)] * 8
+    resolved = [ParsedSet(weight=500.0, reps=5)]
+
+    assert workout._weight_confirm_prompt(data, 7, resolved, "kg", today) is not None
+    # Обычный рабочий подход тем же весом вопросов не вызывает.
+    assert workout._weight_confirm_prompt(
+        data, 7, [ParsedSet(weight=200.0, reps=4)], "kg", today
+    ) is None
+
+
+def test_backfill_still_checks_the_sets_of_the_same_backfilled_workout():
+    """У бэкфилла нет «прошлого раза» — но свои же подходы, занесённые минуту
+    назад в ту же тренировку, сверять можно и там."""
+    from parser import ParsedSet
+
+    data = {"is_backfill": True, "last_session_sets": {7: [(210.0, 4, None)]}}
+    resolved = [ParsedSet(weight=500.0, reps=5)]
+
+    assert workout._weight_confirm_prompt(data, 7, resolved, "kg", []) is None
+    assert workout._weight_confirm_prompt(data, 7, resolved, "kg", [(200.0, 4)]) is not None

@@ -350,12 +350,19 @@ async def _log_one(block_id: int, exercise_id: int, weight: float, reps: int, rp
     await db.append_set(block_id, exercise_id, 0, weight, reps, rpe)
 
 
-# Below this fraction (or above this multiple) of last session's heaviest set,
-# a just-logged weight is flagged as a likely typo rather than a deliberate
-# change — a real backoff set rarely goes below the fraction, and nobody
-# doubles their working weight between sessions.
+# Below this fraction (or above this multiple) of the heaviest set this exercise
+# has seen — last session или уже сегодня, — a just-logged weight is flagged as a
+# likely typo rather than a deliberate change: a real backoff set rarely goes
+# below the fraction, and nobody doubles their working weight in one set.
+#
+# Верхний порог был 3.0 и пропускал ровно тот случай, ради которого всё и
+# делалось: восемь подходов по 200, потом «500 5» — это 2.5×, вопроса не
+# последовало, и 500 кг молча стали вечным рекордом упражнения. Прибавка вдвое
+# за один подход не бывает настоящей тренировкой ни у кого; цена ложного
+# срабатывания — один тап «Да», цена пропуска — рекорд, тоннаж и ачивки, которых
+# уже не отобрать (см. _weight_confirm_prompt).
 _SUSPICIOUS_WEIGHT_LOW_FRACTION = 0.4
-_SUSPICIOUS_WEIGHT_HIGH_MULTIPLE = 3.0
+_SUSPICIOUS_WEIGHT_HIGH_MULTIPLE = 2.0
 
 
 def _suspicious_weight_warning(
@@ -365,28 +372,39 @@ def _suspicious_weight_warning(
 ) -> str | None:
     """A soft nudge — never blocks logging, unlike parser.MAX_WEIGHT's hard
     ceiling — when the just-logged set's weight looks like a typo next to what
-    this exercise was loaded with last time, in *either* direction: a dropped
-    digit ("1 1" meant "140 6") reads the same as an extra one ("1400" meant
-    "140") relative to history, even though only the low end used to be
-    checked here. Bodyweight exercises (0 kg either time) are exempt: a light
-    set there is normal, not a typo.
+    this exercise was loaded with, in *either* direction: a dropped digit
+    ("1 1" meant "140 6") reads the same as an extra one ("1400" meant "140"),
+    even though only the low end used to be checked here. Bodyweight exercises
+    (0 kg either time) are exempt: a light set there is normal, not a typo.
+
+    Сравнение идёт с самым тяжёлым подходом этого упражнения И в прошлый раз, И
+    уже сегодня. Сегодняшние раньше не учитывались вовсе, и на упражнении без
+    истории проверки не было никакой — при том что восемь подходов по 200,
+    набранные полчаса назад, говорят о правдоподобном весе больше, чем любая
+    прошлая тренировка.
     """
-    if not last_session or not today_sets:
+    if not today_sets:
         return None
     last_weight, _last_reps = today_sets[-1]
     if last_weight <= 0:
         return None
-    prev_max_weight = max((w for w, _r, _rpe in last_session), default=0)
-    if prev_max_weight <= 0:
+    prev_max_weight = max((w for w, _r, _rpe in last_session or []), default=0.0)
+    today_max_weight = max((w for w, _r in today_sets[:-1]), default=0.0)
+    baseline = max(prev_max_weight, today_max_weight)
+    if baseline <= 0:
         return None
-    too_low = last_weight < _SUSPICIOUS_WEIGHT_LOW_FRACTION * prev_max_weight
-    too_high = last_weight > _SUSPICIOUS_WEIGHT_HIGH_MULTIPLE * prev_max_weight
+    too_low = last_weight < _SUSPICIOUS_WEIGHT_LOW_FRACTION * baseline
+    too_high = last_weight > _SUSPICIOUS_WEIGHT_HIGH_MULTIPLE * baseline
     if not (too_low or too_high):
         return None
     u = formatting.UNIT_LABELS.get(unit, "кг")
+    # «сегодня», когда планка взялась из этой же тренировки: «в прошлый раз
+    # 200кг» под списком, где 200 стоит восемь раз подряд сегодня, читалось бы
+    # как ошибка самого бота.
+    since = "в прошлый раз" if baseline == prev_max_weight else "сегодня"
     return (
         f"⚠️ {formatting.format_weight(last_weight)}{u}? "
-        f"в прошлый раз {formatting.format_weight(prev_max_weight)}{u}"
+        f"{since} {formatting.format_weight(baseline)}{u}"
     )
 
 
@@ -513,7 +531,14 @@ def _logging_hint(
         # тремя подходами именно он решал, влезет строка целиком или последний
         # подход уедет вниз. В живой фразе предлог остаётся («в прошлый раз
         # 100кг» в вопросе о подозрительном весе) — там это речь, а не ярлык.
-        line = f"💡 Прошлый раз: {sets_str}"
+        #
+        # И без 💡 по той же причине, что и без предлога: эмодзи с пробелом —
+        # это ещё два знака в самой длинной строке экрана, из-за которых
+        # четвёртый подход уезжал на вторую строку. Смысла лампочка не несла:
+        # строка и так подписана словами, а курсивом отделена от списка
+        # подходов. Соседние строки (🎯 Цель, ⚠️ вес, 🔢 повторы) значки
+        # сохраняют — там они различают РАЗНЫЕ строки между собой.
+        line = f"Прошлый раз: {sets_str}"
         if show_progression:
             wr_only = [(w, r) for w, r, _ in last_session]
             suggestion = analytics.suggest_progression(
@@ -944,6 +969,11 @@ _WORKOUT_SCAFFOLD_KEYS = (
     # menu mid-workout must not throw away the plan the user is partway
     # through (see _clear_state_keep_workout below).
     "planned_blocks", "exercise_targets", "confirmed_weights", "plan_completes_on_close",
+    # Первый ли это экран выбора в тренировке (программы/повтор/«собрать на
+    # сегодня» над группами мышц) — от него зависит, каким экран вернётся по
+    # «⬅️ Назад» из списка упражнений. Живёт ровно столько же, сколько сама
+    # тренировка: переживает поход в меню, стирается с началом новой.
+    "picker_with_programs",
     # Not workout scaffolding, but the same reasoning: stepping out to the menu
     # and back shouldn't make the AI-тренер forget the conversation in progress
     # (`ai_history`), and the program the trainer just proposed
@@ -1712,8 +1742,23 @@ async def _recovery_line(user_id: int, groups, as_of: dt.date | None = None) -> 
     return f"💤 <b>Ещё не отдохнули:</b>\n{lines}"
 
 
-async def _picker_screen_groups(callback: CallbackQuery, state: FSMContext, show_program_button: bool = False):
+async def _picker_screen_groups(
+    callback: CallbackQuery, state: FSMContext, show_program_button: bool | None = None
+):
+    """Экран выбора группы мышц. `show_program_button` — это первый экран
+    тренировки (программы, «🔁 Повторить», «🤖 Собрать на сегодня») или обычное
+    «➕ Упражнение» посреди тренировки.
+
+    None — «как в прошлый раз на этом экране». Нужно ради «⬅️ Назад» из списка
+    упражнений: он возвращает сюда же, и пока флаг не помнился, экран
+    возвращался обедневшим — человек уходил в СПИНУ с экрана, где были
+    программы и повтор тренировки, а приходил назад к голым группам мышц, будто
+    половину кнопок стёрли у него за спиной. Точки входа задают флаг явно, так
+    что «➕ Упражнение» посреди тренировки программ не показывает.
+    """
     data = await state.get_data()
+    if show_program_button is None:
+        show_program_button = bool(data.get("picker_with_programs"))
     user = await db.get_user(callback.from_user.id)
     # Mid-workout, adding an exercise is time pressure — the groups the user
     # actually trains most should be first, not alphabetical/catalog order.
@@ -1805,14 +1850,16 @@ async def _picker_screen_groups(callback: CallbackQuery, state: FSMContext, show
         groups, prefix="pick", extra_buttons=extra, show_all=True,
         partner_buttons=partner_buttons, top_buttons=top_buttons,
     )
-    await state.update_data(picker_stage="groups")
+    await state.update_data(picker_stage="groups", picker_with_programs=show_program_button)
     await _refresh_live(callback.bot, state, user, data["workout_id"], hint, kb)
 
 
 @router.callback_query(StateFilter(WorkoutFlow.idle, WorkoutFlow.logging_set), F.data == "live:add_exercise")
 async def live_add_exercise(callback: CallbackQuery, state: FSMContext):
     await state.set_state(WorkoutFlow.picking_group)
-    await _picker_screen_groups(callback, state)
+    # Явный False: тренировка уже идёт, и «выбрать программу» / «повторить
+    # тренировку» тут не про добавление упражнения к тому, что уже начато.
+    await _picker_screen_groups(callback, state, show_program_button=False)
     await callback.answer()
 
 
@@ -2325,8 +2372,20 @@ def _suspicious_reps_warning(weight: float, reps: int) -> str | None:
     )
 
 
+async def _today_sets_of(data: dict, active: int | None) -> list[tuple[float, int]]:
+    """Подходы этого упражнения, уже записанные в этой тренировке."""
+    block_id = (data.get("open_blocks") or {}).get(active)
+    if not block_id:
+        return []
+    return [(r["weight"], r["reps"]) for r in await db.list_sets_for_block(block_id)]
+
+
 def _weight_confirm_prompt(
-    data: dict, active: int, resolved: list[ParsedSet], unit: str = "kg"
+    data: dict,
+    active: int,
+    resolved: list[ParsedSet],
+    unit: str = "kg",
+    today_sets: list[tuple[float, int]] | None = None,
 ) -> str | None:
     """"555кг? В прошлый раз 66кг" — the question asked *before* a suspicious set
     is written, or None when nothing looks off.
@@ -2343,12 +2402,19 @@ def _weight_confirm_prompt(
 
     У бэкфилла «прошлого раза» нет: последняя тренировка в базе случилась позже
     заносимой даты, и сверять с ней вес — то же самое, что спрашивать «а почему
-    не как через три дня». Остаётся только проверка повторов, ей история не
-    нужна.
+    не как через три дня». Зато свои же подходы, занесённые минуту назад в ту же
+    тренировку, сверять можно и там.
+
+    `today_sets` — что уже записано по этому упражнению сегодня. Живой случай, с
+    которого это началось: восемь подходов по 200, потом «500 5» — и ни одного
+    вопроса, потому что сравнивали только с прошлой тренировкой (210), а 500 в
+    неё укладывалось по старому порогу. Сегодняшние подходы — самое надёжное
+    свидетельство о правдоподобном весе, какое вообще есть.
     """
     last_session = None if data.get("is_backfill") else (data.get("last_session_sets") or {}).get(active)
+    done_today = list(today_sets or [])
     for ps in resolved:
-        warning = _suspicious_weight_warning(last_session, [(ps.weight, ps.reps)], unit)
+        warning = _suspicious_weight_warning(last_session, [*done_today, (ps.weight, ps.reps)], unit)
         if warning:
             return warning
         warning = _suspicious_reps_warning(ps.weight, ps.reps)
@@ -2633,7 +2699,9 @@ async def log_set_text(message: Message, state: FSMContext):
 
     user = await db.get_user(message.from_user.id)
     resolved = _resolve_parsed_weights(data, active, parsed)
-    prompt = _weight_confirm_prompt(data, active, resolved, user["unit"])
+    prompt = _weight_confirm_prompt(
+        data, active, resolved, user["unit"], await _today_sets_of(data, active)
+    )
     if prompt is not None:
         await _ask_weight_confirmation(message, state, active, resolved, prompt)
         return
@@ -2683,7 +2751,9 @@ async def log_set_voice(message: Message, state: FSMContext):
     resolved = _resolve_parsed_weights(data, active, parsed)
     # Mishearing a number is at least as likely as mistyping one, so voice gets
     # the same "точно?" gate as text.
-    prompt = _weight_confirm_prompt(data, active, resolved, user["unit"])
+    prompt = _weight_confirm_prompt(
+        data, active, resolved, user["unit"], await _today_sets_of(data, active)
+    )
     if prompt is not None:
         await _ask_weight_confirmation(message, state, active, resolved, prompt, source="voice")
         return
@@ -3032,7 +3102,12 @@ _PLAN_START_HINT = "📋 <b>План на сегодня</b>\nС чего нач
 
 
 async def _plan_screen(
-    callback: CallbackQuery, state: FSMContext, *, removing: bool = False, hint: str | None = None
+    callback: CallbackQuery,
+    state: FSMContext,
+    *,
+    removing: bool = False,
+    hint: str | None = None,
+    allow_removing: bool = True,
 ):
     """Список оставшегося по программе — или он же в режиме «убрать»."""
     data = await state.get_data()
@@ -3045,7 +3120,7 @@ async def _plan_screen(
     await _refresh_live(
         callback.bot, state, user, data["workout_id"],
         hint or (_PLAN_REMOVE_HINT if removing else _PLAN_HINT),
-        keyboards.planned_plan_keyboard(items, removing=removing),
+        keyboards.planned_plan_keyboard(items, removing=removing, allow_removing=allow_removing),
     )
 
 
@@ -3057,13 +3132,17 @@ async def start_planned_workout(callback: CallbackQuery, state: FSMContext) -> N
     там, где решения нет, это не свобода, а препятствие. Со второго и дальше
     экран тот же самый, что человек увидит между упражнениями, так что порядок
     работает одинаково с первой минуты и учиться отдельно нечему.
+
+    Без «✕ Убрать из плана»: до начала тренировки человек ещё не знает, чего
+    сегодня не будет, — это выясняется у занятого тренажёра. Между упражнениями
+    кнопка на месте.
     """
     planned = list((await state.get_data()).get("planned_blocks") or [])
     if len(planned) < 2:
         await _load_next_planned_block(callback, state)
         return
     await state.set_state(WorkoutFlow.idle)
-    await _plan_screen(callback, state, hint=_PLAN_START_HINT)
+    await _plan_screen(callback, state, hint=_PLAN_START_HINT, allow_removing=False)
 
 
 @router.callback_query(StateFilter(WorkoutFlow.idle), F.data == "live:plan")

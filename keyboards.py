@@ -704,7 +704,9 @@ def exercise_picker_entry_keyboard(
 _PLAN_LABEL_MAX = 44
 
 
-def planned_plan_keyboard(items: list[tuple[int, str]], *, removing: bool = False) -> InlineKeyboardMarkup:
+def planned_plan_keyboard(
+    items: list[tuple[int, str]], *, removing: bool = False, allow_removing: bool = True
+) -> InlineKeyboardMarkup:
     """What's left of the program, any of it startable right now.
 
     `items` — (position in planned_blocks, label) in program order. The program's
@@ -731,7 +733,13 @@ def planned_plan_keyboard(items: list[tuple[int, str]], *, removing: bool = Fals
     if removing:
         b.row(InlineKeyboardButton(text="✅ Готово", callback_data="live:plan"))
     else:
-        b.row(InlineKeyboardButton(text="✕ Убрать из плана", callback_data="live:plan:rm"))
+        # allow_removing=False — самый первый экран тренировки («С чего
+        # начнёшь?»). Выкидывание из плана там преждевременно: человек ещё не
+        # дошёл до занятого тренажёра и не знает, чего сегодня не будет, а
+        # уборка никуда не денется — тот же экран между упражнениями её и
+        # предложит, когда это станет решением, а не гаданием.
+        if allow_removing:
+            b.row(InlineKeyboardButton(text="✕ Убрать из плана", callback_data="live:plan:rm"))
         b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="live:plan:back"))
     return b.as_markup()
 

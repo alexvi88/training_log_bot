@@ -261,13 +261,16 @@ async def test_indexed_edit_updates_last_by_exercise_when_editing_the_newest_set
 async def test_decimal_weight_is_not_mistaken_for_an_edit_command(fresh_db, user_id):
     """"2.5 8" is an ordinary 2.5kg set, not "edit set 2" — see parser.parse_set_edit."""
     db = fresh_db
-    state, ex_id, block_id = await _setup_logging(db, user_id, [(100.0, 8), (100.0, 7)])
+    # Веса рядом с 2.5 намеренно: подход втрое легче сегодняшних сначала
+    # спросит «2.5кг? сегодня 100кг» (workout._suspicious_weight_warning), а
+    # здесь проверяется разбор строки, а не подтверждение.
+    state, ex_id, block_id = await _setup_logging(db, user_id, [(5.0, 8), (5.0, 7)])
     message = _make_message(user_id, "2.5 8")
 
     await workout.log_set_text(message, state)
 
     sets = await db.list_sets_for_block(block_id)
-    assert [(s["weight"], s["reps"]) for s in sets] == [(100.0, 8), (100.0, 7), (2.5, 8)]
+    assert [(s["weight"], s["reps"]) for s in sets] == [(5.0, 8), (5.0, 7), (2.5, 8)]
 
 
 # ---------- "/help" and "?" ----------
