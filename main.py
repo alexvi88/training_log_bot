@@ -270,7 +270,7 @@ def _public_commands() -> list[BotCommand]:
     # условие общее.
     if config.mcp_available():
         commands.append(BotCommand(command="mcp", description="Подключить данные к Claude и ChatGPT"))
-        commands.append(BotCommand(command="game", description="Мини-игра «Кач-Раннер»"))
+        commands.append(BotCommand(command="game", description="Мини-игры"))
     # Та же логика: команда обещает работающий вход, а без адреса группы вести
     # некуда (см. handlers/community.py).
     if config.community_available():

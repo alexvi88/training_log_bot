@@ -1,4 +1,4 @@
-"""Мини-игра «Кач-Раннер»: страница Telegram Mini App и приём результатов.
+"""Мини-игры Telegram Mini App: страницы и приём результатов.
 
 Схема повторяет beat the owl из english-audio-bot: страница отдаётся тем же
 HTTP-сервером, что и MCP (наружу из контейнера торчит один порт, см.
@@ -6,8 +6,16 @@ mcp_server.serve), результат приходит POST'ом с initData Tel
 которое проверяется подписью бота. Роуты вешаются через custom_route — без
 требования MCP-токена: у страницы игры токена нет и быть не может, подлинность
 пользователя доказывает initData.
+
+Игр несколько (slug -> GameSpec в GAMES): «Кач-Раннер» (runner, оригинальная
+игра) и «Кач-Отряд» (squad, добавлена вторым слотом). /game и /game-result —
+общие для всех игр URL'ы, чтобы старые ссылки и кнопки в чатах не умирали;
+какая именно игра имеется в виду, решает путь для страницы и поле "game" в
+теле запроса для результата (отсутствие поля = "runner" — так шлёт старый
+клиент, который про это поле не знает).
 """
 
+import dataclasses
 import hashlib
 import hmac
 import json
@@ -27,13 +35,19 @@ logger = logging.getLogger(__name__)
 
 GAME_PATH = "/game"
 RESULT_PATH = "/game-result"
+# /game/squad, а не вложенный под /game путь-параметр: два независимых
+# статических роута, starlette матчит их по точному совпадению, конфликтов с
+# /game нет (в отличие от него страница отряда ничего не параметризует).
+SQUAD_PATH = "/game/squad"
 # Арты карточек персонажей (см. assets/game/README.md); страница переживает их
 # отсутствие — рисует векторных атлетов сама.
 ASSETS_ROUTE = "/assets/game/{filename}"
 
 BASE_DIR = Path(__file__).resolve().parent
-PAGE_FILE = BASE_DIR / "game.html"
 ASSETS_DIR = BASE_DIR / "assets" / "game"
+
+GAME_RUNNER = "runner"
+GAME_SQUAD = "squad"
 
 # initData старше 4 часов не принимаем — защита от реплея. Не короче: человек
 # мог открыть игру и отойти, а легитимный результат с 403 терять обидно
@@ -45,6 +59,20 @@ CLOCK_SKEW = 300
 # означает подделанный запрос, а не игру.
 MAX_DISTANCE = 50_000
 MAX_SCORE = 100_000
+MAX_SQUAD = 5_000
+
+
+@dataclasses.dataclass(frozen=True)
+class GameSpec:
+    slug: str
+    page_file: Path
+    page_path: str
+
+
+GAMES: dict[str, GameSpec] = {
+    GAME_RUNNER: GameSpec(GAME_RUNNER, BASE_DIR / "game.html", GAME_PATH),
+    GAME_SQUAD: GameSpec(GAME_SQUAD, BASE_DIR / "game_squad.html", SQUAD_PATH),
+}
 
 
 def validate_init_data(init_data_str: str) -> Optional[int]:
@@ -80,33 +108,48 @@ def validate_init_data(init_data_str: str) -> Optional[int]:
         return None
 
 
-def parse_result(raw: Any) -> Optional[dict]:
-    """Результат забега из тела запроса, проверенный по типам и границам."""
+def parse_result(raw: Any, game: str = GAME_RUNNER) -> Optional[dict]:
+    """Результат забега из тела запроса, проверенный по типам и границам.
+
+    Формат общий для обеих игр (раннер просто не заполняет squad — 0 по
+    умолчанию), различаются только границы: у отряда есть свой потолок на
+    размер отряда, которого у раннера нет.
+    """
+    if game not in GAMES:
+        return None
     if not isinstance(raw, dict):
         return None
     try:
         distance = int(raw.get("distance", -1))
         score = int(raw.get("score", -1))
+        squad = int(raw.get("squad", 0))
     except (TypeError, ValueError):
         return None
     if not (0 <= distance <= MAX_DISTANCE and 0 <= score <= MAX_SCORE):
         return None
-    return {"distance": distance, "score": score, "fighter": str(raw.get("fighter", ""))[:16]}
+    if not (0 <= squad <= MAX_SQUAD):
+        return None
+    return {
+        "distance": distance,
+        "score": score,
+        "squad": squad,
+        "fighter": str(raw.get("fighter", ""))[:16],
+    }
 
 
 # Дедуп повторной отправки (ретрай сети, двойной тап по «Закрыть»): ключ —
-# пользователь + клиентский timestamp забега, окно минутное. Потерять один
-# честный результат из-за совпадения ключей невозможно: timestamp у клиента
-# ставится на каждый забег заново.
+# пользователь + игра + клиентский timestamp забега, окно минутное. Потерять
+# один честный результат из-за совпадения ключей невозможно: timestamp у
+# клиента ставится на каждый забег заново.
 _processed: dict[str, float] = {}
 _DEDUP_TTL = 60.0
 
 
-def _is_duplicate(user_id: int, raw: Any) -> bool:
+def _is_duplicate(user_id: int, game: str, raw: Any) -> bool:
     stamp = ""
     if isinstance(raw, dict):
         stamp = str(raw.get("gameTimestamp", ""))
-    key = f"{user_id}:{stamp}"
+    key = f"{user_id}:{game}:{stamp}"
     now = time.time()
     for k in [k for k, ts in list(_processed.items()) if now - ts > _DEDUP_TTL]:
         _processed.pop(k, None)
@@ -117,7 +160,11 @@ def _is_duplicate(user_id: int, raw: Any) -> bool:
 
 
 async def game_page(request: Request):
-    return FileResponse(PAGE_FILE, media_type="text/html")
+    return FileResponse(GAMES[GAME_RUNNER].page_file, media_type="text/html")
+
+
+async def game_squad_page(request: Request):
+    return FileResponse(GAMES[GAME_SQUAD].page_file, media_type="text/html")
 
 
 async def game_asset(request: Request):
@@ -130,10 +177,14 @@ async def game_asset(request: Request):
 
 
 # Реакция тренера в чате. Не на каждый забег (это спам), а на события:
-# первый забег вообще и новый рекорд — заметный (от 300 м и +20% к прошлому),
-# иначе ранние забеги, каждый из которых чуть лучше, зафлудили бы чат.
+# первый забег вообще и новый рекорд — заметный, иначе ранние забеги, каждый
+# из которых чуть лучше предыдущего, зафлудили бы чат. У раннера рекорд — это
+# метры, у отряда — очки (метры отряд тоже копит, но геймплей вокруг очков:
+# блины с числами и ворота ×2 значат больше пройденной дистанции).
 RECORD_MIN_DISTANCE = 300
 RECORD_MIN_GAIN = 1.2
+RECORD_MIN_SCORE = 300
+RECORD_MIN_SCORE_GAIN = 1.2
 
 FIRST_RUN_TEXT = (
     "ПРИВЕТ АТЛЕТ! Видел твой первый забег — {distance} м. Записал. "
@@ -143,14 +194,31 @@ RECORD_TEXT = (
     "ПРИВЕТ АТЛЕТ! {distance} м — новый рекорд забега, прошлый был {best}. "
     "Так и записал."
 )
+FIRST_SQUAD_RUN_TEXT = (
+    "ПРИВЕТ АТЛЕТ! Видел твой первый забег в Кач-Отряде — {score} очков, "
+    "довёл отряд до {squad} бойцов. Записал. Ещё заход: /game"
+)
+SQUAD_RECORD_TEXT = (
+    "ПРИВЕТ АТЛЕТ! {score} очков в Кач-Отряде — новый рекорд, прошлый был "
+    "{best}. Так и записал."
+)
 
 
 def _trainer_reaction(distance: int, best_before: int) -> Optional[str]:
-    """Текст тренера про забег или None, когда событие не заслуживает сообщения."""
+    """Текст тренера про забег раннера или None, когда событие того не стоит."""
     if best_before == 0:
         return FIRST_RUN_TEXT.format(distance=distance)
     if distance >= RECORD_MIN_DISTANCE and distance >= best_before * RECORD_MIN_GAIN:
         return RECORD_TEXT.format(distance=distance, best=best_before)
+    return None
+
+
+def _squad_trainer_reaction(score: int, squad: int, best_before: int) -> Optional[str]:
+    """Текст тренера про забег отряда или None, когда событие того не стоит."""
+    if best_before == 0:
+        return FIRST_SQUAD_RUN_TEXT.format(score=score, squad=squad)
+    if score >= RECORD_MIN_SCORE and score >= best_before * RECORD_MIN_SCORE_GAIN:
+        return SQUAD_RECORD_TEXT.format(score=score, best=best_before)
     return None
 
 
@@ -170,21 +238,33 @@ async def _send_trainer_message(user_id: int, text: str) -> None:
         await bot.session.close()
 
 
-async def process_game_result(user_id: int, raw: Any) -> bool:
+async def process_game_result(user_id: int, raw: Any, game: str = GAME_RUNNER) -> bool:
     """Сохранить результат забега и, если событие того стоит, ответить тренером.
 
-    False — результат не прошёл проверку границ; дубликат считается успехом
-    (клиент ретраит сеть, второй раз записывать нечего).
+    False — результат не прошёл проверку границ или игра неизвестна; дубликат
+    считается успехом (клиент ретраит сеть, второй раз записывать нечего).
     """
-    result = parse_result(raw)
+    result = parse_result(raw, game=game)
     if result is None:
         return False
-    if _is_duplicate(user_id, raw):
+    if _is_duplicate(user_id, game, raw):
         return True
-    best_before = await db.get_game_best_distance(user_id)
-    await db.save_game_result(user_id, result["distance"], result["score"], result["fighter"])
-    logger.info("game result: user=%s distance=%s score=%s", user_id, result["distance"], result["score"])
-    text = _trainer_reaction(result["distance"], best_before)
+    if game == GAME_SQUAD:
+        best_before = await db.get_squad_best_score(user_id)
+    else:
+        best_before = await db.get_game_best_distance(user_id)
+    await db.save_game_result(
+        user_id, result["distance"], result["score"], result["fighter"],
+        game=game, squad=result["squad"],
+    )
+    logger.info(
+        "game result: user=%s game=%s distance=%s score=%s squad=%s",
+        user_id, game, result["distance"], result["score"], result["squad"],
+    )
+    if game == GAME_SQUAD:
+        text = _squad_trainer_reaction(result["score"], result["squad"], best_before)
+    else:
+        text = _trainer_reaction(result["distance"], best_before)
     if text:
         try:
             await _send_trainer_message(user_id, text)
@@ -203,13 +283,17 @@ async def game_result(request: Request):
     user_id = validate_init_data(str(body.get("initData", "")))
     if not user_id:
         return PlainTextResponse("unauthorized", status_code=403)
-    if not await process_game_result(user_id, body.get("result")):
+    game = str(body.get("game") or GAME_RUNNER)
+    if game not in GAMES:
+        return PlainTextResponse("unknown game", status_code=400)
+    if not await process_game_result(user_id, body.get("result"), game=game):
         return PlainTextResponse("invalid result", status_code=400)
     return PlainTextResponse("ok")
 
 
 def register_routes(server: Any) -> None:
-    """Повесить роуты игры на приложение MCP-сервера (см. mcp_server.build_server)."""
+    """Повесить роуты игр на приложение MCP-сервера (см. mcp_server.build_server)."""
     server.custom_route(GAME_PATH, methods=["GET"])(game_page)
+    server.custom_route(SQUAD_PATH, methods=["GET"])(game_squad_page)
     server.custom_route(RESULT_PATH, methods=["POST"])(game_result)
     server.custom_route(ASSETS_ROUTE, methods=["GET"])(game_asset)

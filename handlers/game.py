@@ -1,7 +1,7 @@
-"""/game — мини-игра «Кач-Раннер» (Telegram Mini App).
+"""/game — выбор мини-игры (Telegram Mini App): «Кач-Раннер» и «Кач-Отряд».
 
-Доступ пока сознательно только слеш-командой, без кнопок в меню: игра —
-эксперимент, и главное меню не должно её обещать каждому. Кнопка в самом
+Доступ пока сознательно только слеш-командой, без кнопок в меню: игры —
+эксперимент, и главное меню не должно их обещать каждому. Кнопки в самом
 ответе на команду — не навигация, а единственный способ открыть Mini App
 без настройки прямой ссылки в BotFather.
 """
@@ -17,14 +17,18 @@ import game_server
 router = Router(name="game")
 
 INTRO = (
-    "🏃 <b>КАЧ-РАННЕР</b>\n\n"
-    "Беги по залу, собирай спортпит и не влетай в гантели — я засеку, докуда добежишь."
+    "🏃 <b>МИНИ-ИГРЫ</b>\n\n"
+    "Беги по залу или веди отряд качков через полосу препятствий — выбирай, где размяться."
 )
 
 
 def game_url() -> str:
     # Страницу отдаёт тот же сервер, что и MCP, — адрес у них общий.
     return config.MCP_PUBLIC_URL + game_server.GAME_PATH
+
+
+def squad_url() -> str:
+    return config.MCP_PUBLIC_URL + game_server.SQUAD_PATH
 
 
 @router.message(Command("game"))
@@ -35,11 +39,18 @@ async def cmd_game(message: Message):
         # HTTP-сервер поднимается только вместе с MCP).
         await message.answer("Игра пока не подключена — загляни позже.")
         return
-    best = await db.get_game_best_distance(message.from_user.id)
-    text = INTRO + (f"\n\nТвой рекорд — {best} м. Перебьёшь?" if best else "")
+    best_runner = await db.get_game_best_distance(message.from_user.id)
+    best_squad = await db.get_squad_best_score(message.from_user.id)
+    records = []
+    if best_runner:
+        records.append(f"Кач-Раннер — рекорд {best_runner} м")
+    if best_squad:
+        records.append(f"Кач-Отряд — рекорд {best_squad} очков")
+    text = INTRO + ("\n\n" + ", ".join(records) + "." if records else "")
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="▶️ Побежали", web_app=WebAppInfo(url=game_url()))]
+            [InlineKeyboardButton(text="🏃 Кач-Раннер", web_app=WebAppInfo(url=game_url()))],
+            [InlineKeyboardButton(text="💪 Кач-Отряд", web_app=WebAppInfo(url=squad_url()))],
         ]
     )
     await message.answer(text, reply_markup=kb, parse_mode="HTML")

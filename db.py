@@ -412,17 +412,26 @@ CREATE INDEX IF NOT EXISTS idx_routine_exercises_routine ON routine_exercises (r
 -- Not created here for the same reason idx_block_exercises_unique isn't (see
 -- above): _migrate_schema creates it after _dedupe_exercise_links runs.
 
--- Результаты забегов мини-игры «Кач-Раннер» (см. game_server.py): каждая
--- завершённая попытка одной строкой, рекорд — MAX(distance) по пользователю.
+-- Результаты забегов мини-игр (см. game_server.py): каждая завершённая
+-- попытка одной строкой. game различает «Кач-Раннер» (рекорд — MAX(distance))
+-- и «Кач-Отряд» (рекорд — MAX(score)); squad — только у отряда, максимальный
+-- размер отряда за забег. game/squad добавлены миграцией в _migrate_schema —
+-- новый CREATE TABLE тут только для БД с нуля, старые поднимает ALTER.
 CREATE TABLE IF NOT EXISTS game_results (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     telegram_id INTEGER NOT NULL,
+    game TEXT NOT NULL DEFAULT 'runner',
     distance INTEGER NOT NULL,
     score INTEGER NOT NULL,
+    squad INTEGER NOT NULL DEFAULT 0,
     fighter TEXT,
     created_at TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_game_results_user ON game_results (telegram_id, distance);
+-- Не здесь: на старой БД (уже прошедшей это CREATE TABLE IF NOT EXISTS без
+-- колонки game) индекс по ней упал бы раньше, чем ALTER TABLE в
+-- _migrate_schema успеет её добавить — тот же порядок проблем, что и у
+-- idx_programs_user_name/idx_routines_program выше. _migrate_schema создаёт
+-- индекс сам, уже после ALTER, и для новой БД тоже (это не only-upgrade код).
 
 -- Донат «Поддержать проект» (handlers/donate.py) — обычный invoice в XTR,
 -- без выдачи чего-либо взамен. Ничего общего с будущим billing из PR #386:
@@ -999,6 +1008,22 @@ async def _migrate_schema() -> None:
     # the executescript SCHEMA so an existing on-disk DB (already past the
     # CREATE TABLE IF NOT EXISTS) picks it up too.
     await _conn.execute("CREATE INDEX IF NOT EXISTS idx_pushes_category ON pushes (category)")
+
+    game_cols = await _column_names("game_results")
+    if "game" not in game_cols:
+        # Старые строки писала только «Кач-Раннер» — им и остаться раннером.
+        await _conn.execute("ALTER TABLE game_results ADD COLUMN game TEXT NOT NULL DEFAULT 'runner'")
+    if "squad" not in game_cols:
+        await _conn.execute("ALTER TABLE game_results ADD COLUMN squad INTEGER NOT NULL DEFAULT 0")
+    # Старый idx_game_results_user (telegram_id, distance) не покрывает выборку
+    # рекорда по конкретной игре — раннер и отряд ищут максимум в разных
+    # колонках (distance / score), и без game первой колонкой SQLite сканит
+    # все строки пользователя целиком, включая чужую игру.
+    await _conn.execute("DROP INDEX IF EXISTS idx_game_results_user")
+    await _conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_game_results_user_game "
+        "ON game_results (telegram_id, game)"
+    )
 
     await _conn.commit()
 
@@ -6635,22 +6660,41 @@ async def list_recent_pushes(limit: int = 20, offset: int = 0) -> list[aiosqlite
     return await cur.fetchall()
 
 
-# ---------- мини-игра «Кач-Раннер» ----------
+# ---------- мини-игры («Кач-Раннер», «Кач-Отряд») ----------
 
 
-async def save_game_result(telegram_id: int, distance: int, score: int, fighter: str) -> None:
+async def save_game_result(
+    telegram_id: int,
+    distance: int,
+    score: int,
+    fighter: str,
+    game: str = "runner",
+    squad: int = 0,
+) -> None:
     async with _write_lock:
         await conn().execute(
-            "INSERT INTO game_results (telegram_id, distance, score, fighter, created_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (telegram_id, distance, score, fighter, now_iso()),
+            "INSERT INTO game_results (telegram_id, game, distance, score, squad, fighter, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (telegram_id, game, distance, score, squad, fighter, now_iso()),
         )
         await conn().commit()
 
 
 async def get_game_best_distance(telegram_id: int) -> int:
+    """Рекорд «Кач-Раннера» — максимум метров среди забегов этой игры."""
     cur = await conn().execute(
-        "SELECT MAX(distance) FROM game_results WHERE telegram_id = ?", (telegram_id,)
+        "SELECT MAX(distance) FROM game_results WHERE telegram_id = ? AND game = 'runner'",
+        (telegram_id,),
+    )
+    (best,) = await cur.fetchone()
+    return best or 0
+
+
+async def get_squad_best_score(telegram_id: int) -> int:
+    """Рекорд «Кач-Отряда» — максимум очков (не метров: отряд считает иначе)."""
+    cur = await conn().execute(
+        "SELECT MAX(score) FROM game_results WHERE telegram_id = ? AND game = 'squad'",
+        (telegram_id,),
     )
     (best,) = await cur.fetchone()
     return best or 0
