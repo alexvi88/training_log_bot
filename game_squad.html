@@ -821,18 +821,33 @@ const GATE_DEBUFFS_HARD = [
   { type: 'div', val: 3, label: '÷3' },
   { type: 'sub', val: 32, label: '−32' },
 ];
+// ×3 — самый «взрывной» бафф: два-три подряд без единого штрафа между ними
+// раздували отряд до сотен за первую минуту («миллион инкрементов» в отзыве).
+// Взвешенный, а не равновероятный выбор — ×3 всё ещё случается, но реже.
+function pickGateBuff() {
+  const weighted = [['mul2', 0.32], ['mul3', 0.13], ['add15', 0.32], ['add25', 0.23]];
+  const total = weighted.reduce((s, [, v]) => s + v, 0);
+  let r = Math.random() * total;
+  for (const [k, v] of weighted) {
+    r -= v;
+    if (r <= 0) return GATE_BUFFS.find(b => (b.type === 'mul' ? 'mul' + b.val : 'add' + b.val) === k);
+  }
+  return GATE_BUFFS[0];
+}
 function spawnGate() {
   // Первые ворота — быстро и щедро: оба прохода с плюсом, чтобы новичок с
-  // одним бойцом сразу почувствовал рост. Дальше подмешиваем штраф, и чем
-  // дальше забег — тем он злее (в пул добавляются жёсткие варианты). Если
-  // отряд почти выкошен — «милосердные» ворота: обе стороны снова плюс.
-  const early = dist < 220;
+  // одним бойцом сразу почувствовал рост. Окно сокращено с 220 до 90 м —
+  // на всю первую минуту гарантированный плюс раздувал отряд до сотен ещё
+  // до первой настоящей волны. Дальше подмешиваем штраф, и чем дальше забег
+  // — тем он злее (в пул добавляются жёсткие варианты). Если отряд почти
+  // выкошен — «милосердные» ворота: обе стороны снова плюс.
+  const early = dist < 90;
   const mercy = squad <= 4 && !early;
   const debuffPool = dist > 500 ? GATE_DEBUFFS.concat(GATE_DEBUFFS_HARD) : GATE_DEBUFFS;
-  let buff = pick(GATE_BUFFS), debuff = pick(debuffPool);
+  let buff = pickGateBuff(), debuff = pick(debuffPool);
   let bothGood = early || mercy;
   let bothBad = false;
-  if (bothGood) debuff = pick(GATE_BUFFS);
+  if (bothGood) debuff = pickGateBuff();
   else if (dist > 250 && Math.random() < 0.14) { buff = pick(debuffPool); bothBad = true; } // меньшее зло
   const buffLeft = Math.random() < 0.5;
   obstacles.push({ kind: 'gate', z: ZFAR, buff, debuff, buffLeft, bothGood, bothBad, glow: 0 });
@@ -1850,10 +1865,18 @@ function update(dt) {
   }
   // Волны — свой, более частый и не пересыхающий поток: дорожка никогда не
   // бывает пустой ни в начале, ни посреди забега, и к концу враги идут гуще.
+  // Но без потолка на одновременные волны они копятся друг на друге — не
+  // успел добить одну, сверху встаёт вторая, и это читается как сплошная
+  // бесконечная стена врагов, а не как волны с передышкой между ними.
   if (state === 'game' && dist >= nextWaveAt) {
-    spawnWave();
-    const gap = clamp(72 - dist / 12, 26, 72);
-    nextWaveAt = dist + rnd(gap * 0.7, gap);
+    const activeWaves = obstacles.filter(o => o.kind === 'wave' && waveTotalCount(o) > 0).length;
+    if (activeWaves < 2) {
+      spawnWave();
+      const gap = clamp(72 - dist / 12, 26, 72);
+      nextWaveAt = dist + rnd(gap * 0.7, gap);
+    } else {
+      nextWaveAt = dist + 6; // прошлые волны ещё живы — коротко отложим и проверим снова
+    }
   }
 
   // Пули: урон целочисленный сразу — HP/численность целые, никаких дробных
@@ -1968,7 +1991,10 @@ function update(dt) {
           sGateUp(); shake(4); squadPulse = 1; flash('green', 200);
           burst(p.x, p.y - 30, C_GREEN, 22, 240);
           shockwave(p.x, p.y - 30, C_GREEN, 140, 0.36);
-          for (let k = 0; k < 3; k++) popNumber(eff.label, C_GREEN, p.x + rnd(-30, 30), p.y - 40 - k * 22, true);
+          // Один читаемый всплеск, а не тройной дубль — три копии одной и той
+          // же цифры подряд читались как «миллион инкрементов», а не как одно
+          // честное срабатывание ворот.
+          popNumber(eff.label, C_GREEN, p.x, p.y - 40, true);
         } else {
           comboBreak();
           sGateDown(); shake(7); hitStop(0.03); flash('red', 220);
