@@ -378,6 +378,10 @@ const fmt = n => String(Math.round(n));
 // враги видны заметно раньше и по ним реально успеваешь стрелять, а не
 // просто встречаешь их вплотную.
 const ZFAR = 6.2;                  // глубина спавна препятствий (игровые unit)
+// Радиус, в котором недобитый блин ещё достаёт отряд по боковой позиции —
+// шире, чем у бонусов/ящиков (0.22-0.24), блин крупнее и бьёт по площади,
+// но всё равно уже полной ширины дорожки: отойти в сторону реально можно.
+const PLATE_HIT_RADIUS = 0.30;
 const TRACK_HALF3 = 4.3;          // половина ширины дорожки в мире Three.js
 const Z_SCALE = 6.4;              // игровой z (подход препятствий) → мир
 const FOLLOWER_Z_SCALE = 4.4;     // «за лидером» — своя, более плотная шкала (колонна вглубь)
@@ -848,37 +852,59 @@ function spawnPlate() {
   }
 }
 // ── ВОРОТА (пары зелёное/красное на всю дорожку) ────────────────────────────
-const GATE_BUFFS = [
-  { type: 'mul', val: 2, label: '×2' },
-  { type: 'mul', val: 3, label: '×3' },
-  { type: 'add', val: 15, label: '+15' },
-  { type: 'add', val: 25, label: '+25' },
+// «Аддитивные» ворота были ФИКСИРОВАННЫМ числом (+15/+25) — не про
+// арифметику самих ворот, а про то, что фиксированное число ведёт себя
+// СОВСЕМ по-разному в зависимости от текущего отряда. Для отряда в 1 бойца
+// «+15» — это разгон в 16 раз за одни ворота, взрывной рост с самого старта
+// («слишком большая толпа изи набирается сразу» в отзыве). Для отряда в 500
+// то же самое «−18» — это на глаз не потеря вообще. Крутить веса ×2/×3 не
+// помогало, потому что не они были причиной. Теперь и «add», и «sub» —
+// доля от ТЕКУЩЕГО отряда (считается в момент спавна ворот и запекается в
+// текст на табличке вместе со значением), а не фиксированное число: ранний
+// маленький отряд получает соразмерно маленькую прибавку/потерю, поздний
+// большой — соразмерно большую. ×2/÷2 и ×3/÷3 уже были относительными по
+// смыслу — их не трогаю.
+const ADD_TIERS = [{ ratio: 0.5, min: 2, weight: 0.42 }, { ratio: 0.85, min: 3, weight: 0.29 }];
+// type:'sub' обязателен — pickGateDebuff() маршрутизирует по нему в mkSub();
+// без него объект уходил в игру как есть, без val/label: ворота с этим
+// исходом молча не делали ничего и рисовали «undefined» вместо числа.
+const SUB_TIERS = [{ type: 'sub', ratio: 0.28, min: 2, weight: 1 }];
+const SUB_TIERS_HARD = [{ type: 'sub', ratio: 0.45, min: 3, weight: 1 }];
+function mkAdd(tier) {
+  const val = Math.max(tier.min, Math.round(squad * tier.ratio));
+  return { type: 'add', val, label: '+' + fmt(val) };
+}
+function mkSub(tier) {
+  const val = Math.max(tier.min, Math.round(squad * tier.ratio));
+  return { type: 'sub', val, label: '−' + fmt(val) };
+}
+const GATE_MULS = [
+  { type: 'mul', val: 2, label: '×2', weight: 0.24 },
+  { type: 'mul', val: 3, label: '×3', weight: 0.05 },
 ];
-const GATE_DEBUFFS = [
-  { type: 'div', val: 2, label: '÷2' },
-  { type: 'sub', val: 18, label: '−18' },
-];
-const GATE_DEBUFFS_HARD = [
-  { type: 'div', val: 3, label: '÷3' },
-  { type: 'sub', val: 32, label: '−32' },
-];
-// ×3 — самый «взрывной» бафф: два-три подряд без единого штрафа между ними
-// раздували отряд до сотен за первую минуту («очень много инкрементов» и
-// «баланс хуета» в отзыве — жалоба не про арифметику одних ворот, а про то,
-// что кривая роста дёргается скачками ×2/×3 без предупреждения). Доля чисто
-// мультипликативных исходов срезана ещё раз (мул3 почти убран), в пользу
-// предсказуемых аддитивных — рост виднее и прогнозируется на глаз, не только
-// по числу, а «средняя порция» ворот при этом почти не изменилась (см.
-// комментарий у резюме прогонов ниже).
+const GATE_DIVS = [{ type: 'div', val: 2, label: '÷2' }];
+const GATE_DIVS_HARD = [{ type: 'div', val: 3, label: '÷3' }];
+// ×3 — самый «взрывной» из мультипликаторов: два-три подряд без штрафа между
+// ними раздували отряд до сотен за первую минуту. Доля чисто
+// мультипликативных исходов срезана в пользу предсказуемых аддитивных — рост
+// виднее и прогнозируется на глаз (аддитивные теперь относительны и сами по
+// себе, см. mkAdd, так что эта доля больше не единственная защита от взрыва).
 function pickGateBuff() {
-  const weighted = [['mul2', 0.24], ['mul3', 0.05], ['add15', 0.42], ['add25', 0.29]];
+  const weighted = [...GATE_MULS.map(m => [m, m.weight]), [ADD_TIERS[0], ADD_TIERS[0].weight], [ADD_TIERS[1], ADD_TIERS[1].weight]];
   const total = weighted.reduce((s, [, v]) => s + v, 0);
   let r = Math.random() * total;
-  for (const [k, v] of weighted) {
+  for (const [item, v] of weighted) {
     r -= v;
-    if (r <= 0) return GATE_BUFFS.find(b => (b.type === 'mul' ? 'mul' + b.val : 'add' + b.val) === k);
+    if (r <= 0) return item.type === 'mul' ? item : mkAdd(item);
   }
-  return GATE_BUFFS[0];
+  return GATE_MULS[0];
+}
+function pickGateDebuff(hard) {
+  const divs = hard ? GATE_DIVS_HARD : GATE_DIVS;
+  const subs = hard ? SUB_TIERS_HARD : SUB_TIERS;
+  const pool = [...divs, ...subs];
+  const item = pick(pool);
+  return item.type === 'sub' ? mkSub(item) : item;
 }
 function spawnGate() {
   // Первые ворота — быстро и щедро: оба прохода с плюсом, чтобы новичок с
@@ -889,12 +915,12 @@ function spawnGate() {
   // выкошен — «милосердные» ворота: обе стороны снова плюс.
   const early = dist < 90;
   const mercy = squad <= 4 && !early;
-  const debuffPool = dist > 500 ? GATE_DEBUFFS.concat(GATE_DEBUFFS_HARD) : GATE_DEBUFFS;
-  let buff = pickGateBuff(), debuff = pick(debuffPool);
+  const hard = dist > 500;
+  let buff = pickGateBuff(), debuff = pickGateDebuff(hard);
   let bothGood = early || mercy;
   let bothBad = false;
   if (bothGood) debuff = pickGateBuff();
-  else if (dist > 250 && Math.random() < 0.14) { buff = pick(debuffPool); bothBad = true; } // меньшее зло
+  else if (dist > 250 && Math.random() < 0.14) { buff = pickGateDebuff(hard); bothBad = true; } // меньшее зло
   const buffLeft = Math.random() < 0.5;
   obstacles.push({ kind: 'gate', z: ZFAR, buff, debuff, buffLeft, bothGood, bothBad, glow: 0 });
 }
@@ -2176,7 +2202,14 @@ function update(dt) {
     if (o.kind === 'plate') {
       o.z -= depthSpeed * dt; o.spin += dt * 1.4;
       if (o.z <= 0.05) {
-        if (o.hp > 0) {
+        // Блин стоял на боковой позиции (worldX), но урон раньше срабатывал
+        // независимо от того, где отряд — увернуться движением было
+        // невозможно даже от блина, вкатившегося в стороне от тебя, из-за
+        // чего руление на исход не влияло вообще (жалоба «от моих действий
+        // ничего не зависит»). Теперь недобитый блин достаёт только если
+        // отряд реально стоит рядом с ним — отошёл в сторону, проехал мимо.
+        const dodged = Math.abs(o.worldX - squadWorldX) > PLATE_HIT_RADIUS;
+        if (o.hp > 0 && !dodged) {
           if (shield > 0) {
             shield -= 1; sShield();
             popNumber('ПОЯС СПАС', '#7ea8ff', W / 2, GROUND_F * H - 90);
@@ -2191,6 +2224,11 @@ function update(dt) {
             popNumber('−' + fmt(loss), '#ff4444', W / 2, GROUND_F * H - 90, loss > 15);
             burst(W / 2, GROUND_F * H - 60, C_RAGE, Math.min(30, 10 + loss), 260);
           }
+        } else if (o.hp > 0 && dodged) {
+          // Подтверждение увёртке — иначе игрок не поймёт, что руление вообще
+          // что-то решило, а не просто прошло незамеченным.
+          const p = projectPoint(o.worldX, 0.05);
+          popNumber('МИМО', '#8fd0ff', p.x, p.y - 30);
         }
         obstacles.splice(i, 1);
         if (squad <= 0) { die(); return; }
@@ -2603,6 +2641,15 @@ if (window.THREE && window.THREE.GLTFLoader) {
   setTimeout(() => { if (!window.THREE || !window.THREE.GLTFLoader) showLibError(); }, 12000);
 }
 document.addEventListener('visibilitychange', () => { last = performance.now(); });
+
+// Хук для QA-прогонов (playwright) — только чтение состояния, на геймплей не
+// влияет, по образцу такого же хука в game.html.
+window.__qa = {
+  get squad() { return squad; }, get dist() { return dist; }, get score() { return score; },
+  get weaponLevel() { return weaponLevel; }, get toasts() { return toasts; },
+  get obstacles() { return obstacles; }, get squadWorldX() { return squadWorldX; },
+  get state() { return state; },
+};
 </script>
 
 </body>
