@@ -509,7 +509,13 @@ function resetGame() {
   // ниже подобраны так, чтобы на дорожке почти всегда что-то было).
   nextEventAt = rnd(2, 4); eventHistory.length = 0; lastEventWorldX = 0;
   firstGateDone = false;
-  nextWaveAt = rnd(4, 8);
+  // Первая волна раньше приходила через 4-8 метров — на стартовой скорости
+  // это меньше секунды, то есть бой начинался почти сразу после первых ворот,
+  // а не после честных 15-20 секунд разгона. Сдвинуто дальше — дорожка эти
+  // секунды не пустая (первые ворота и рядовые блины/бонусы уже идут по
+  // своему потоку), но настоящая встречная толпа не набегает, пока отряд не
+  // успел подрасти хотя бы на одних воротах.
+  nextWaveAt = rnd(60, 80);
   fireTimer = 0; combo = 0; weaponLevel = 0; weaponTimer = 0;
   obstacles.length = 0; bonuses.length = 0; crates.length = 0; bullets.length = 0;
   parts.length = 0; toasts.length = 0;
@@ -827,10 +833,15 @@ const GATE_DEBUFFS_HARD = [
   { type: 'sub', val: 32, label: '−32' },
 ];
 // ×3 — самый «взрывной» бафф: два-три подряд без единого штрафа между ними
-// раздували отряд до сотен за первую минуту («миллион инкрементов» в отзыве).
-// Взвешенный, а не равновероятный выбор — ×3 всё ещё случается, но реже.
+// раздували отряд до сотен за первую минуту («очень много инкрементов» и
+// «баланс хуета» в отзыве — жалоба не про арифметику одних ворот, а про то,
+// что кривая роста дёргается скачками ×2/×3 без предупреждения). Доля чисто
+// мультипликативных исходов срезана ещё раз (мул3 почти убран), в пользу
+// предсказуемых аддитивных — рост виднее и прогнозируется на глаз, не только
+// по числу, а «средняя порция» ворот при этом почти не изменилась (см.
+// комментарий у резюме прогонов ниже).
 function pickGateBuff() {
-  const weighted = [['mul2', 0.32], ['mul3', 0.13], ['add15', 0.32], ['add25', 0.23]];
+  const weighted = [['mul2', 0.24], ['mul3', 0.05], ['add15', 0.42], ['add25', 0.29]];
   const total = weighted.reduce((s, [, v]) => s + v, 0);
   let r = Math.random() * total;
   for (const [k, v] of weighted) {
@@ -889,16 +900,25 @@ function spawnBonus() {
 // лейбла — иначе тяжеловес умирал от одного щелчка ровно как бегун.
 // Живучесть и урон подняты по живому отзыву («сами отряды посильнее») —
 // прежние цифры прожигались отрядом почти без сопротивления в рядовой стычке.
+// outline — неоновая окантовка силуэта (вместо обычной тёмной у своих, см.
+// buildCrowdRig/mkOutline): у каждого типа свой контрастный цвет, который не
+// повторяет ни одну из тёплых окантовок FIGHTERS — «чужой» читается ободом
+// силуэта ещё до того, как разглядели снаряжение в руках.
+// gearProp — что враг держит/носит такого, чего нет ни у одного из четырёх
+// видов игрока: тяжеловес — шипастый кастет (fist), щитовик — блин-щит перед
+// собой (plate, укрупнён), стрелок — дротик на замахе (javelin), вожак —
+// корона и массивные наручи (crown, наручи всегда рисуются вместе с ним),
+// гигант — гриф-дубина (barbell).
 const ENEMY_TYPES = {
-  runner:  { name: 'БЕГУН',     top: '#4ade80', skin: '#16803c', bottom: '#0f5c2c', scale: 0.80, hpUnit: 1,   dmgUnit: 1.3, speedMult: 1.65, gearProp: null },
-  bruiser: { name: 'ТЯЖЕЛОВЕС', top: '#3b82f6', skin: '#1e40af', bottom: '#16297a', scale: 1.55, hpUnit: 13,  dmgUnit: 3.7, speedMult: 0.58, gearProp: null },
-  shield:  { name: 'ЩИТОВИК',   top: '#22d3ee', skin: '#0e7490', bottom: '#0a5866', scale: 1.18, hpUnit: 17,  dmgUnit: 2.1, speedMult: 0.80, gearProp: 'plate', blockDmg: 4.2 },
-  shooter: { name: 'СТРЕЛОК',   top: '#c026d3', skin: '#701a75', bottom: '#4c1259', scale: 0.95, hpUnit: 4,   dmgUnit: 0,   speedMult: 0.42, gearProp: null, ranged: true, stopZ: 0.85 },
-  leader:  { name: 'ВОЖАК',     top: '#14b8a6', skin: '#0f766e', bottom: '#0b5852', scale: 2.05, hpUnit: 62,  dmgUnit: 6.6, speedMult: 0.55, gearProp: 'crown', isLeader: true },
+  runner:  { name: 'БЕГУН',     top: '#4ade80', skin: '#16803c', bottom: '#0f5c2c', scale: 0.80, hpUnit: 1,   dmgUnit: 1.3, speedMult: 1.65, gearProp: null,      outline: 0x00e5ff },
+  bruiser: { name: 'ТЯЖЕЛОВЕС', top: '#3b82f6', skin: '#1e40af', bottom: '#16297a', scale: 1.55, hpUnit: 13,  dmgUnit: 3.7, speedMult: 0.58, gearProp: 'fist',    outline: 0xff2fd1 },
+  shield:  { name: 'ЩИТОВИК',   top: '#22d3ee', skin: '#0e7490', bottom: '#0a5866', scale: 1.18, hpUnit: 17,  dmgUnit: 2.1, speedMult: 0.80, gearProp: 'plate',   outline: 0xffb347, blockDmg: 4.2 },
+  shooter: { name: 'СТРЕЛОК',   top: '#c026d3', skin: '#701a75', bottom: '#4c1259', scale: 0.95, hpUnit: 4,   dmgUnit: 0,   speedMult: 0.42, gearProp: 'javelin', outline: 0xfff23c, ranged: true, stopZ: 0.85 },
+  leader:  { name: 'ВОЖАК',     top: '#14b8a6', skin: '#0f766e', bottom: '#0b5852', scale: 2.05, hpUnit: 62,  dmgUnit: 6.6, speedMult: 0.55, gearProp: 'crown',   outline: 0xffd700, isLeader: true },
   // Гигант — редкое рубежное событие внутри волны, не рядовой тип: гриф со
   // штангой как дубина, огромный запас хода и здоровья, идёт медленно и
   // виден издалека — заставляет копить оружие и маневрировать, а не отстреливаться на бегу.
-  giant:   { name: 'ГИГАНТ',    top: '#475569', skin: '#1e293b', bottom: '#0f172a', scale: 3.3,  hpUnit: 480, dmgUnit: 22,  speedMult: 0.30, gearProp: 'barbell', isGiant: true },
+  giant:   { name: 'ГИГАНТ',    top: '#475569', skin: '#1e293b', bottom: '#0f172a', scale: 3.3,  hpUnit: 480, dmgUnit: 22,  speedMult: 0.30, gearProp: 'barbell', outline: 0xff3b30, isGiant: true },
 };
 const ENEMY_TYPE_KEYS = Object.keys(ENEMY_TYPES);
 // Какие типы уже "в ходу" на этой дистанции — состав волны меняется по мере
@@ -922,10 +942,16 @@ function waveTypeUnlocks(d) {
 // выше ожидаемого множитель полный, у сильно отставшего — срезан почти
 // вдвое, но не в ноль.
 function hpScale(d) {
-  const base = clamp(1 + Math.max(0, d) / 220, 1, 2.8);
-  const expected = 6 + d / 3.2;
-  const behind = clamp(squad / Math.max(1, expected), 0.35, 1);
-  return base * (0.6 + 0.4 * behind);
+  // Порог поднят (220 → 260) и потолок чуть срезан (2.8 → 2.6) — прежняя
+  // кривая догоняла средний отряд ещё до полутора минут и вместе с гэпом волн
+  // давала обрыв заметно раньше 90 секунд на живых прогонах. Пол для
+  // отставших поднят (0.35 → 0.45): «squad=16 умер за 3 секунды» — это как
+  // раз нижняя клипса behind=0.35, отставание не должно быть приговором, а
+  // только смягчением, не отменой давления.
+  const base = clamp(1 + Math.max(0, d) / 260, 1, 2.6);
+  const expected = 6 + d / 3.4;
+  const behind = clamp(squad / Math.max(1, expected), 0.45, 1);
+  return base * (0.62 + 0.38 * behind);
 }
 function mkGroup(type, count) {
   count = Math.max(1, Math.round(count));
@@ -956,8 +982,17 @@ function spawnWave() {
   // и волна, и её пол одинаково зависели от squad и гасили друг друга. Раз
   // должна давить именно ДИСТАНЦИЯ, а рост отряда — компенсируется отдельно
   // на стороне живучести (см. hpScale ниже), не на стороне числа голов.
-  const raw = 4 + Math.pow(Math.max(0, dist) / 150, 1.85) * 18 + rnd(-2, 5);
-  const softCap = dist < 500 ? Math.max(9, squad * 2.2) : Math.max(16, squad * 3.2);
+  // Показатель степени срезан (1.85 → 1.65) — прежняя кривая после третьей
+  // минуты почти вертикальная, волна взрывалась резким обрывом вместо
+  // плавного нарастания давления. Отдельная (более тесная) ступень софткапа
+  // на первые ~130 м (примерно первые 15-20 секунд забега на стартовой
+  // скорости) — тот самый «лёгкий предсказуемый старт»: первая настоящая
+  // волна физически не может быть больше горстки бойцов, даже если игроку
+  // не повезло с воротами.
+  const raw = 4 + Math.pow(Math.max(0, dist) / 150, 1.65) * 18 + rnd(-2, 5);
+  const softCap = dist < 130 ? Math.max(5, squad * 1.5)
+                : dist < 500 ? Math.max(9, squad * 2.2)
+                : Math.max(16, squad * 3.2);
   const total = Math.round(clamp(raw, 3, softCap));
   const formation = pick(['wedge', 'wedge', 'wall', 'flanks', 'scatter']);
   const jitter = formation === 'scatter' ? Array.from({ length: 12 }, () => rnd(-0.7, 0.7)) : null;
@@ -1453,22 +1488,35 @@ function toonGradient() {
 // нога+контур, стопа, тень. Руки и ноги — сужающиеся цилиндры (не бруски),
 // плечи-дельты и кисти сидят на одной геометрии шара (4 инстанса на бойца) —
 // дешёвый способ дать телу суставы без лишних мешей.
-function buildCrowdRig(cap, colors) {
+function buildCrowdRig(cap, colors, isEnemy) {
   const grad = toonGradient();
   const torsoGeo = new THREE.BoxGeometry(0.5, 0.64, 0.30);
   const headGeo = new THREE.SphereGeometry(0.22, 8, 6);
-  const capGeo = new THREE.CylinderGeometry(0.17, 0.22, 0.13, 8);
+  // Свои — аккуратная гладкая кепка (см. FIGHTERS/drawHead); чужие — рваная
+  // угловатая бандана-шлем (низкополигональный конус, 5 граней): силуэт
+  // головы должен читаться иначе ещё до того, как разглядели цвет и снаряжение.
+  const capGeo = isEnemy
+    ? new THREE.ConeGeometry(0.25, 0.24, 5)
+    : new THREE.CylinderGeometry(0.17, 0.22, 0.13, 8);
   const armGeo = new THREE.CylinderGeometry(0.055, 0.085, 0.52, 6); armGeo.translate(0, -0.26, 0);
   const jointGeo = new THREE.SphereGeometry(0.10, 6, 6);
   const legGeo = new THREE.CylinderGeometry(0.075, 0.105, 0.6, 6); legGeo.translate(0, -0.3, 0);
   const footGeo = new THREE.BoxGeometry(0.23, 0.09, 0.33);
   const shadowGeo = new THREE.CircleGeometry(0.34, 12);
+  // Шипы на плечах — грубое рваное снаряжение, которого нет ни у одного из
+  // четырёх видов игрока (см. FIGHTERS): заводятся слотом рига по образцу
+  // cap/joint, не отдельным несвязанным мешем — тот же setPart/finishRig.
+  const spikeGeo = isEnemy ? new THREE.ConeGeometry(0.055, 0.22, 4) : null;
   const mkMain = (geo, color, count) => {
     const mesh = new THREE.InstancedMesh(geo, new THREE.MeshToonMaterial({ color, gradientMap: grad }), count);
     mesh.count = 0; scene.add(mesh); return mesh;
   };
+  // Свои — обычный тёмный контур силуэта; чужие — контрастная неоновая
+  // окантовка (см. ENEMY_TYPES.outline), которой нет ни у одного из своих —
+  // рампа чужого читается сразу боковым зрением, ещё до формы и снаряжения.
+  const outlineColor = isEnemy && colors.outline != null ? colors.outline : 0x0a0705;
   const mkOutline = (geo, count) => {
-    const mesh = new THREE.InstancedMesh(geo, new THREE.MeshBasicMaterial({ color: 0x0a0705, side: THREE.BackSide }), count);
+    const mesh = new THREE.InstancedMesh(geo, new THREE.MeshBasicMaterial({ color: outlineColor, side: THREE.BackSide }), count);
     mesh.count = 0; scene.add(mesh); return mesh;
   };
   // Тень шла сплошным непрозрачным чёрным диском — на скриншоте читалась как
@@ -1478,33 +1526,57 @@ function buildCrowdRig(cap, colors) {
     const mesh = new THREE.InstancedMesh(geo, new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.28, depthWrite: false }), count);
     mesh.count = 0; scene.add(mesh); return mesh;
   };
-  return {
+  const rig = {
     torso: mkMain(torsoGeo, colors.top, cap), torsoOut: mkOutline(torsoGeo, cap),
     head: mkMain(headGeo, colors.skin, cap), headOut: mkOutline(headGeo, cap),
-    cap: mkMain(capGeo, shade(colors.top, 0.62), cap),
+    cap: mkMain(capGeo, isEnemy ? shade(colors.top, 0.42) : shade(colors.top, 0.62), cap),
     arm: mkMain(armGeo, colors.skin, cap * 2), armOut: mkOutline(armGeo, cap * 2),
     joint: mkMain(jointGeo, colors.skin, cap * 4),
     leg: mkMain(legGeo, colors.bottom, cap * 2), legOut: mkOutline(legGeo, cap * 2),
     foot: mkMain(footGeo, 0x1c1c22, cap * 2),
     shadow: mkShadow(shadowGeo, cap),
   };
+  if (isEnemy) rig.spike = mkMain(spikeGeo, outlineColor, cap * 2);
+  return rig;
 }
 let playerRig = null, enemyRigs = null;
-let shieldGearMesh = null, leaderGearMesh = null, giantBarMesh = null, giantPlateMesh = null;
+let shieldGearMesh = null, leaderGearMesh = null, leaderGauntletMesh = null;
+let bruiserFistMesh = null, shooterJavelinMesh = null, giantBarMesh = null, giantPlateMesh = null;
 const SHIELD_GEAR_CAP = ENEMY_CAP_BY_TYPE.shield, LEADER_GEAR_CAP = ENEMY_CAP_BY_TYPE.leader, GIANT_GEAR_CAP = ENEMY_CAP_BY_TYPE.giant;
+const BRUISER_GEAR_CAP = ENEMY_CAP_BY_TYPE.bruiser, SHOOTER_GEAR_CAP = ENEMY_CAP_BY_TYPE.shooter;
+// Хвост от плеча до кисти в согнутой враждебной стойке (см. placeCharacter/
+// hostile) — доля от S (CHAR_SCALE * scaleMul), чтобы снаряжение в руке точно
+// совпадало с положением самой руки, а не подвешивалось рядом угадыванием.
+const HAND_DX = 0.27, HAND_DY = 0.829, HAND_DZ = 0.407;
 // Снаряжение в руках/на голове — то, что отличает силуэт типа сильнее
-// цвета: блин-щит у щитовика, обруч-корона у вожака, гриф со штангой (как
-// дубина, а не меч — так оружие остаётся в теме подвальной качалки) у
-// гиганта. Дешёвый инстансинг, позиции считаются вместе с телом в
+// цвета: шипастый кастет у тяжеловеса, укрупнённый блин-щит у щитовика,
+// дротик на замахе у стрелка, корона и массивные наручи у вожака, гриф со
+// штангой (как дубина, а не меч — так оружие остаётся в теме подвальной
+// качалки) у гиганта. Дешёвый инстансинг, позиции считаются вместе с телом в
 // syncEnemyCrowd().
 function buildEnemyGearMeshes() {
   const grad = toonGradient();
-  const plateGeo = new THREE.CylinderGeometry(0.3, 0.3, 0.09, 14); plateGeo.rotateX(Math.PI / 2);
+  // Блин-щит укрупнён и держится прямо перед грудью — раньше диск терялся
+  // сбоку и читался как случайная деталь, не как "уже поднятый щит".
+  const plateGeo = new THREE.CylinderGeometry(0.42, 0.42, 0.11, 16); plateGeo.rotateX(Math.PI / 2);
   shieldGearMesh = new THREE.InstancedMesh(plateGeo, new THREE.MeshLambertMaterial({ color: 0xc0392b }), SHIELD_GEAR_CAP);
   shieldGearMesh.count = 0; scene.add(shieldGearMesh);
   const crownGeo = new THREE.TorusGeometry(0.24, 0.045, 6, 14);
   leaderGearMesh = new THREE.InstancedMesh(crownGeo, new THREE.MeshBasicMaterial({ color: 0xffd700 }), LEADER_GEAR_CAP);
   leaderGearMesh.count = 0; scene.add(leaderGearMesh);
+  // Массивные наручи вожака — на обоих запястьях, вместе с короной на
+  // голове: два акцента снаряжения сразу, не один.
+  const gauntletGeo = new THREE.TorusGeometry(0.11, 0.05, 6, 10);
+  leaderGauntletMesh = new THREE.InstancedMesh(gauntletGeo, new THREE.MeshLambertMaterial({ color: 0xb8a23a }), LEADER_GEAR_CAP * 2);
+  leaderGauntletMesh.count = 0; scene.add(leaderGauntletMesh);
+  // Шипастый кастет тяжеловеса — гроздь острых граней на кулаке правой руки.
+  const fistGeo = new THREE.IcosahedronGeometry(0.17, 0);
+  bruiserFistMesh = new THREE.InstancedMesh(fistGeo, new THREE.MeshToonMaterial({ color: 0x2b2f36, gradientMap: grad }), BRUISER_GEAR_CAP);
+  bruiserFistMesh.count = 0; scene.add(bruiserFistMesh);
+  // Дротик стрелка — занесён у кисти правой руки, будто вот-вот полетит.
+  const javelinGeo = new THREE.CylinderGeometry(0.02, 0.05, 0.62, 6);
+  shooterJavelinMesh = new THREE.InstancedMesh(javelinGeo, new THREE.MeshToonMaterial({ color: 0x8a8f99, gradientMap: grad }), SHOOTER_GEAR_CAP);
+  shooterJavelinMesh.count = 0; scene.add(shooterJavelinMesh);
   // Дубина гиганта — гриф-цилиндр (сужается к рукояти) плюс два блина на
   // рабочем конце, вместе читаются как тяжёлая палица из зала.
   const barGeo = new THREE.CylinderGeometry(0.045, 0.075, 1.5, 8);
@@ -1543,17 +1615,23 @@ function setPart(mesh, outlineMesh, idx, x, y, z, rotX, scale) {
 // Ставит одного бойца (торс+голова+кепка+руки+плечи/кисти+ноги+стопы+тень) в
 // мировые координаты сцены. Плечи-дельты и кисти — одна геометрия шара на
 // четыре точки бойца (idx*4..idx*4+3), стопы — по одной на ногу (idx*2/+1).
-function placeCharacter(rig, idx, x3, z3, phase, bob, scaleMul) {
+function placeCharacter(rig, idx, x3, z3, phase, bob, scaleMul, hostile) {
   const S = CHAR_SCALE * (scaleMul || 1);
-  const legL = Math.sin(phase) * 0.55, legR = -legL;
-  const armL = -legL * 0.7, armR = -legR * 0.7;
+  // Враждебная стойка (hostile=true, только у ENEMY_TYPES): корпус и голова
+  // наклонены вперёд, будто идут на сшибку — не вертикальный бег игрока.
+  // Руки не машут в такт бегу, а согнуты вперёд, как перед ударом/захватом —
+  // с лёгким колебанием фазой, чтобы толпа не выглядела замершим роботом.
+  const legL = Math.sin(phase) * (hostile ? 0.42 : 0.55), legR = -legL;
+  const armL = hostile ? -0.95 + Math.sin(phase) * 0.12 : -legL * 0.7;
+  const armR = hostile ? 0.95 - Math.sin(phase) * 0.12 : -legR * 0.7;
+  const lean = hostile ? 0.32 : 0;
   const bobY = Math.abs(Math.sin(phase)) * 0.045 * bob * S;
   const hx = 0.27 * S, hipx = 0.12 * S;
   const shY = 1.12 * S + bobY, hipY = 0.56 * S;
   const headY = 1.34 * S + bobY;
-  setPart(rig.torso, rig.torsoOut, idx, x3, 0.85 * S + bobY, z3, 0, S);
-  setPart(rig.head, rig.headOut, idx, x3, headY, z3, 0, S);
-  setPart(rig.cap, null, idx, x3, headY + 0.24 * S, z3, 0, S);
+  setPart(rig.torso, rig.torsoOut, idx, x3, 0.85 * S + bobY, z3, lean, S);
+  setPart(rig.head, rig.headOut, idx, x3, headY, z3, lean * 0.7, S);
+  setPart(rig.cap, null, idx, x3, headY + 0.24 * S, z3, lean * 0.7, S);
   setPart(rig.arm, rig.armOut, idx * 2, x3 - hx, shY, z3, armL, S);
   setPart(rig.arm, rig.armOut, idx * 2 + 1, x3 + hx, shY, z3, armR, S);
   const armLen = 0.5 * S;
@@ -1566,6 +1644,10 @@ function placeCharacter(rig, idx, x3, z3, phase, bob, scaleMul) {
   const legLen = 0.58 * S;
   setPart(rig.foot, null, idx * 2, x3 - hipx, hipY - legLen * Math.cos(legL), z3 + legLen * Math.sin(legL), 0, S);
   setPart(rig.foot, null, idx * 2 + 1, x3 + hipx, hipY - legLen * Math.cos(legR), z3 + legLen * Math.sin(legR), 0, S);
+  if (rig.spike) {
+    setPart(rig.spike, null, idx * 2, x3 - hx * 1.15, shY + 0.16 * S, z3, -0.55, S);
+    setPart(rig.spike, null, idx * 2 + 1, x3 + hx * 1.15, shY + 0.16 * S, z3, -0.55, S);
+  }
   _sPos.set(x3, 0.012, z3); _sScale.set(S, S, S);
   rig.shadow.setMatrixAt(idx, _sM4.compose(_sPos, _SHADOW_Q, _sScale));
 }
@@ -1578,8 +1660,9 @@ function finishRig(rig, count) {
   rig.joint.count = count * 4;
   rig.leg.count = count * 2; rig.legOut.count = count * 2;
   rig.foot.count = count * 2;
-  [rig.torso, rig.torsoOut, rig.head, rig.headOut, rig.cap, rig.arm, rig.armOut, rig.joint, rig.leg, rig.legOut, rig.foot, rig.shadow]
-    .forEach(m => { m.instanceMatrix.needsUpdate = true; });
+  const meshes = [rig.torso, rig.torsoOut, rig.head, rig.headOut, rig.cap, rig.arm, rig.armOut, rig.joint, rig.leg, rig.legOut, rig.foot, rig.shadow];
+  if (rig.spike) { rig.spike.count = count * 2; meshes.push(rig.spike); }
+  meshes.forEach(m => { m.instanceMatrix.needsUpdate = true; });
 }
 function applyFighterColors() {
   if (!playerRig) return;
@@ -1607,7 +1690,7 @@ function buildEnemyRigs() {
   enemyRigs = {};
   ENEMY_TYPE_KEYS.forEach(key => {
     const d = ENEMY_TYPES[key];
-    enemyRigs[key] = buildCrowdRig(ENEMY_CAP_BY_TYPE[key], { top: d.top, skin: d.skin, bottom: d.bottom });
+    enemyRigs[key] = buildCrowdRig(ENEMY_CAP_BY_TYPE[key], { top: d.top, skin: d.skin, bottom: d.bottom, outline: d.outline }, true);
   });
 }
 // Обновляет позиции всех видимых врагов из активных волн — по одному ригу на
@@ -1617,7 +1700,7 @@ function syncEnemyCrowd() {
   if (!enemyRigs) return;
   if (!_m4) { _m4 = new THREE.Matrix4(); _q0 = new THREE.Quaternion(); }
   const idxByType = {}; ENEMY_TYPE_KEYS.forEach(k => idxByType[k] = 0);
-  let shieldN = 0, leaderN = 0, giantBarN = 0, giantPlateN = 0;
+  let shieldN = 0, leaderN = 0, gauntletN = 0, fistN = 0, javelinN = 0, giantBarN = 0, giantPlateN = 0;
   for (const o of obstacles) {
     if (o.kind !== 'wave') continue;
     for (const g of o.groups) {
@@ -1636,20 +1719,43 @@ function syncEnemyCrowd() {
         // индекс), не мигает по кадрам: толпа не выглядит клонами одного роста.
         const variance = def.isGiant ? 1 : (0.82 + 0.36 * (0.5 + 0.5 * Math.sin(g.seed + i * 12.9898)));
         const iScale = def.scale * variance;
-        placeCharacter(rig, idx, x3, z3, i * 1.7 + t * 3, 1, iScale);
+        // hostile=true — враждебная стойка (наклон корпуса, руки согнуты для
+        // удара/захвата, не бег), см. placeCharacter.
+        placeCharacter(rig, idx, x3, z3, i * 1.7 + t * 3, 1, iScale, true);
+        const S = CHAR_SCALE * iScale;
+        // Кисть правой/левой руки в этой стойке — см. HAND_DX/DY/DZ, тот же
+        // расчёт, что и в placeCharacter (armR/armL при hostile), чтобы
+        // снаряжение точно сидело в руке, а не подвешивалось рядом на глаз.
+        const rHandX = x3 + HAND_DX * S, rHandY = HAND_DY * S, rHandZ = z3 + HAND_DZ * S;
+        const lHandX = x3 - HAND_DX * S, lHandZ = z3 - HAND_DZ * S;
         if (def.gearProp === 'plate' && shieldGearMesh && shieldN < SHIELD_GEAR_CAP) {
-          _m4.compose(new THREE.Vector3(x3, 0.95 * CHAR_SCALE * iScale, z3 + 0.22 * iScale), _q0, new THREE.Vector3(iScale, iScale, iScale));
+          _m4.compose(new THREE.Vector3(x3, 1.05 * S, z3 + 0.30 * S), _q0, new THREE.Vector3(S, S, S));
           shieldGearMesh.setMatrixAt(shieldN++, _m4);
         }
         if (def.gearProp === 'crown' && leaderGearMesh && leaderN < LEADER_GEAR_CAP) {
-          _m4.compose(new THREE.Vector3(x3, 1.55 * CHAR_SCALE * iScale, z3), _q0, new THREE.Vector3(iScale, iScale, iScale));
+          _m4.compose(new THREE.Vector3(x3, 1.55 * S, z3), _q0, new THREE.Vector3(S, S, S));
           leaderGearMesh.setMatrixAt(leaderN++, _m4);
+          if (leaderGauntletMesh && gauntletN + 1 < LEADER_GEAR_CAP * 2) {
+            const gq = new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.PI / 2, 0, 0));
+            _m4.compose(new THREE.Vector3(rHandX, HAND_DY * S, rHandZ), gq, new THREE.Vector3(S, S, S));
+            leaderGauntletMesh.setMatrixAt(gauntletN++, _m4);
+            _m4.compose(new THREE.Vector3(lHandX, HAND_DY * S, lHandZ), gq, new THREE.Vector3(S, S, S));
+            leaderGauntletMesh.setMatrixAt(gauntletN++, _m4);
+          }
+        }
+        if (def.gearProp === 'fist' && bruiserFistMesh && fistN < BRUISER_GEAR_CAP) {
+          _m4.compose(new THREE.Vector3(rHandX, rHandY, rHandZ), _q0, new THREE.Vector3(S, S, S));
+          bruiserFistMesh.setMatrixAt(fistN++, _m4);
+        }
+        if (def.gearProp === 'javelin' && shooterJavelinMesh && javelinN < SHOOTER_GEAR_CAP) {
+          const jq = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.35, 0, -0.55));
+          _m4.compose(new THREE.Vector3(rHandX, rHandY + 0.1 * S, rHandZ), jq, new THREE.Vector3(S, S, S));
+          shooterJavelinMesh.setMatrixAt(javelinN++, _m4);
         }
         if (def.gearProp === 'barbell' && giantBarMesh && giantBarN < GIANT_GEAR_CAP) {
           // Дубина держится наперевес у правой руки: гриф под наклоном,
           // рабочий (тяжёлый) конец с блинами внизу-впереди — читается как
           // занесённое оружие, а не декорация.
-          const S = CHAR_SCALE * iScale;
           const gripX = x3 + 0.42 * S, gripY = 1.15 * S, gripZ = z3 + 0.05 * S;
           const tilt = 0.55;
           const barQ = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, -tilt));
@@ -1671,6 +1777,9 @@ function syncEnemyCrowd() {
   ENEMY_TYPE_KEYS.forEach(k => finishRig(enemyRigs[k], idxByType[k]));
   if (shieldGearMesh) { shieldGearMesh.count = shieldN; shieldGearMesh.instanceMatrix.needsUpdate = true; }
   if (leaderGearMesh) { leaderGearMesh.count = leaderN; leaderGearMesh.instanceMatrix.needsUpdate = true; }
+  if (leaderGauntletMesh) { leaderGauntletMesh.count = gauntletN; leaderGauntletMesh.instanceMatrix.needsUpdate = true; }
+  if (bruiserFistMesh) { bruiserFistMesh.count = fistN; bruiserFistMesh.instanceMatrix.needsUpdate = true; }
+  if (shooterJavelinMesh) { shooterJavelinMesh.count = javelinN; shooterJavelinMesh.instanceMatrix.needsUpdate = true; }
   if (giantBarMesh) { giantBarMesh.count = giantBarN; giantBarMesh.instanceMatrix.needsUpdate = true; }
   if (giantPlateMesh) { giantPlateMesh.count = giantPlateN; giantPlateMesh.instanceMatrix.needsUpdate = true; }
 }
