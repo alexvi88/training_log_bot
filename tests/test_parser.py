@@ -50,7 +50,7 @@ def test_bodyweight_reps_at_ceiling_is_accepted():
 # ---------- parse_single_token: "x"-style separators ----------
 
 
-@pytest.mark.parametrize("sep", ["x", "X", "х", "Х", "*", "/"])
+@pytest.mark.parametrize("sep", ["x", "X", "х", "Х", "*", "/", "-"])
 def test_x_separator_variants(sep):
     result = parse_single_token(f"100{sep}8")
     assert result == [ParsedSet(weight=100.0, reps=8)]

@@ -2327,7 +2327,7 @@ def build_bodyweight_list_screen(
 
 def format_progression_hint(suggestion, achieved: bool = False) -> str:
     """"Цель: …" nudge from analytics.suggest_progression, on its own line under
-    the "В прошлый раз" line (no bold — the surrounding line is already italicized).
+    the "Прошлый раз" line (no bold — the surrounding line is already italicized).
     """
     if suggestion.is_bodyweight:
         goal = f"{suggestion.target_reps} повторов"
@@ -2345,7 +2345,7 @@ def _progression_reason(suggestion) -> str:
     complaint about apps that hand out numbers. But this line is redrawn on
     every logged set, so it earns its width only when the target jumps: the
     weight went up because the rep range topped out. The "+1 повтор at the same
-    weight" case explains itself against the "В прошлый раз" line right above,
+    weight" case explains itself against the "Прошлый раз" line right above,
     and a clause there would be noise on every single render.
     """
     if suggestion.action != "add_weight" or not suggestion.from_reps:
