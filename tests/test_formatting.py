@@ -766,7 +766,7 @@ def test_logging_hint_omits_progression_when_disabled():
     without = _logging_hint(last, has_sets=True, unit="kg", show_progression=False)
     assert "🎯" in with_hint
     assert "🎯" not in without
-    assert "В прошлый раз" in without
+    assert "Прошлый раз" in without
 
 
 def test_logging_hint_puts_goal_on_its_own_line():
@@ -774,7 +774,7 @@ def test_logging_hint_puts_goal_on_its_own_line():
     last = [(100.0, 10, None)]
     hint = _logging_hint(last, has_sets=True, unit="kg", show_progression=True)
     lines = hint.splitlines()
-    assert "В прошлый раз" in lines[0] and "Цель" not in lines[0]
+    assert "Прошлый раз" in lines[0] and "Цель" not in lines[0]
     assert lines[0].endswith("100×10")  # no trailing period
     assert "Цель" in lines[1]
 
@@ -788,7 +788,7 @@ def test_progression_hint_says_why_the_weight_went_up():
 
 def test_progression_hint_stays_terse_when_only_a_rep_is_added():
     """This line is redrawn on every logged set, so it earns extra width only
-    when the number jumps; "+1 повтор" reads off the "В прошлый раз" line above."""
+    when the number jumps; "+1 повтор" reads off the "Прошлый раз" line above."""
     s = analytics.suggest_progression([(100.0, 7)])
     assert formatting.format_progression_hint(s) == "🎯 Цель: 100×8"
 
@@ -892,7 +892,7 @@ def test_logging_hint_hides_instruction_but_keeps_last_session():
     last = [(100.0, 10, None)]
     hint = _logging_hint(last, has_sets=True, show_progression=False, show_instruction=False)
     assert "Вес и повторы" not in hint
-    assert "В прошлый раз" in hint
+    assert "Прошлый раз" in hint
 
 
 def test_live_session_text_places_note_under_active_exercise():

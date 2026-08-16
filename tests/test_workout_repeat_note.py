@@ -482,11 +482,24 @@ def test_reps_row_is_captioned_with_the_weight():
         None, True, "kg", False, [(25.0, 10)],
         show_instruction=False, reps_row=(25.0, 10),
     )
-    assert "Жми повторы — запишу подход на 25кг" in hint
+    assert "Жми повторы на 25кг" in hint
+
+
+def test_caption_fits_one_line_on_a_phone():
+    """Полный вариант («Жми повторы — запишу подход на 200кг») переносился ровно
+    перед весом, и вес — единственное, ради чего подпись стоит, — оставался на
+    второй строке один. В строку телефона влезает около 32 знаков; держим бюджет
+    даже на трёхзначном весе с дробью."""
+    hint = workout._logging_hint(
+        None, True, "kg", False, [(207.5, 5)],
+        show_instruction=False, reps_row=(207.5, 5),
+    )
+    caption = hint.splitlines()[-1]
+    assert len(caption) <= 32, caption
 
 
 def test_caption_does_not_re_explain_where_the_weight_came_from():
-    """«(как в прошлый раз)» повторяло строку «💡 В прошлый раз» дословно, а когда
+    """«(как в прошлый раз)» повторяло строку «💡 Прошлый раз» дословно, а когда
     весов в прошлый раз было несколько — ещё и спорило с ней: вес взят с
     ПОСЛЕДНЕГО подхода, а не с «прошлого раза» целиком. И «сверху» тоже нет:
     подпись стоит в самом низу сообщения, а цифры под ней — слово гнало глаз
@@ -500,8 +513,8 @@ def test_caption_does_not_re_explain_where_the_weight_came_from():
     )
     assert "как в прошлый раз" not in from_last
     assert "сверху" not in from_last
-    assert from_last.endswith("🔢 Жми повторы — запишу подход на 25кг")
-    assert from_today.endswith("🔢 Жми повторы — запишу подход на 25кг")
+    assert from_last.endswith("🔢 Жми повторы на 25кг")
+    assert from_today.endswith("🔢 Жми повторы на 25кг")
 
 
 def test_caption_shows_even_for_seasoned_users():

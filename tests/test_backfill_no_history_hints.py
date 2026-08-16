@@ -72,7 +72,7 @@ async def test_live_workout_still_shows_history_and_target(fresh_db, user_id):
 
     await workout._render_logging_screen(bot, state, await db.get_user(user_id))
 
-    assert "В прошлый раз" in _make_bot.sent_text
+    assert "Прошлый раз" in _make_bot.sent_text
     assert "📋 План" in _make_bot.sent_text
     assert "🎯 Цель" in _make_bot.sent_text
 
@@ -85,7 +85,7 @@ async def test_backfill_hides_history_and_target(fresh_db, user_id):
 
     await workout._render_logging_screen(bot, state, await db.get_user(user_id))
 
-    assert "В прошлый раз" not in _make_bot.sent_text
+    assert "Прошлый раз" not in _make_bot.sent_text
     assert "📋 План" not in _make_bot.sent_text
     assert "Цель" not in _make_bot.sent_text
 
