@@ -882,12 +882,14 @@ function spawnBonus() {
 // hpUnit — реальный запас прочности одной головы типа: бой теперь считает
 // его честно (см. mkGroup/попадание пули в update()), а не только раскраску
 // лейбла — иначе тяжеловес умирал от одного щелчка ровно как бегун.
+// Живучесть и урон подняты по живому отзыву («сами отряды посильнее») —
+// прежние цифры прожигались отрядом почти без сопротивления в рядовой стычке.
 const ENEMY_TYPES = {
-  runner:  { name: 'БЕГУН',     top: '#4ade80', skin: '#16803c', bottom: '#0f5c2c', scale: 0.80, hpUnit: 1,   dmgUnit: 1.0, speedMult: 1.65, gearProp: null },
-  bruiser: { name: 'ТЯЖЕЛОВЕС', top: '#3b82f6', skin: '#1e40af', bottom: '#16297a', scale: 1.55, hpUnit: 11,  dmgUnit: 3.4, speedMult: 0.58, gearProp: null },
-  shield:  { name: 'ЩИТОВИК',   top: '#22d3ee', skin: '#0e7490', bottom: '#0a5866', scale: 1.18, hpUnit: 15,  dmgUnit: 1.8, speedMult: 0.80, gearProp: 'plate', blockDmg: 4.2 },
+  runner:  { name: 'БЕГУН',     top: '#4ade80', skin: '#16803c', bottom: '#0f5c2c', scale: 0.80, hpUnit: 1,   dmgUnit: 1.3, speedMult: 1.65, gearProp: null },
+  bruiser: { name: 'ТЯЖЕЛОВЕС', top: '#3b82f6', skin: '#1e40af', bottom: '#16297a', scale: 1.55, hpUnit: 13,  dmgUnit: 3.7, speedMult: 0.58, gearProp: null },
+  shield:  { name: 'ЩИТОВИК',   top: '#22d3ee', skin: '#0e7490', bottom: '#0a5866', scale: 1.18, hpUnit: 17,  dmgUnit: 2.1, speedMult: 0.80, gearProp: 'plate', blockDmg: 4.2 },
   shooter: { name: 'СТРЕЛОК',   top: '#c026d3', skin: '#701a75', bottom: '#4c1259', scale: 0.95, hpUnit: 4,   dmgUnit: 0,   speedMult: 0.42, gearProp: null, ranged: true, stopZ: 0.85 },
-  leader:  { name: 'ВОЖАК',     top: '#14b8a6', skin: '#0f766e', bottom: '#0b5852', scale: 2.05, hpUnit: 55,  dmgUnit: 6.0, speedMult: 0.55, gearProp: 'crown', isLeader: true },
+  leader:  { name: 'ВОЖАК',     top: '#14b8a6', skin: '#0f766e', bottom: '#0b5852', scale: 2.05, hpUnit: 62,  dmgUnit: 6.6, speedMult: 0.55, gearProp: 'crown', isLeader: true },
   // Гигант — редкое рубежное событие внутри волны, не рядовой тип: гриф со
   // штангой как дубина, огромный запас хода и здоровья, идёт медленно и
   // виден издалека — заставляет копить оружие и маневрировать, а не отстреливаться на бегу.
@@ -1416,7 +1418,13 @@ function drawAthlete(c, fighter, opts) {
 // торс, голову, руки (оба слота на бойца), ноги (оба слота) — плюс у каждой
 // части свой инстансед-двойник той же геометрии чуть крупнее, чёрный,
 // side:BackSide — рисуется первым и даёт жёсткий тёмный контур силуэта.
-const PLAYER_CAP = 240;
+// Потолок отрисовки был ниже потолка отряда (999) почти в четыре раза — на
+// экране счётчик показывал сотни, а толпа визуально упиралась в 240 и дальше
+// не росла: рост переставал быть виден. Поднят почти до предела отряда —
+// инстансинг тянет и это без просадки fps, формация (formScale/slotFor) и
+// так уже сжимает фигуры при росте, лишних вызовов отрисовки не прибавляется
+// сверх количества реальных бойцов.
+const PLAYER_CAP = 620;
 // Бюджет отрисовки врагов бьётся по типам — так у каждого свой цвет рига
 // (InstancedMesh не красится поинстансно на MeshToonMaterial, поэтому пять
 // типов — это пять отдельных ригов, не один общий).
@@ -1458,6 +1466,13 @@ function buildCrowdRig(cap, colors) {
     const mesh = new THREE.InstancedMesh(geo, new THREE.MeshBasicMaterial({ color: 0x0a0705, side: THREE.BackSide }), count);
     mesh.count = 0; scene.add(mesh); return mesh;
   };
+  // Тень шла сплошным непрозрачным чёрным диском — на скриншоте читалась как
+  // «чёрная клякса» под ногами, а не как мягкая тень. Отдельный прозрачный
+  // материал без тонового освещения (тень не должна зависеть от света сцены).
+  const mkShadow = (geo, count) => {
+    const mesh = new THREE.InstancedMesh(geo, new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.28, depthWrite: false }), count);
+    mesh.count = 0; scene.add(mesh); return mesh;
+  };
   return {
     torso: mkMain(torsoGeo, colors.top, cap), torsoOut: mkOutline(torsoGeo, cap),
     head: mkMain(headGeo, colors.skin, cap), headOut: mkOutline(headGeo, cap),
@@ -1466,7 +1481,7 @@ function buildCrowdRig(cap, colors) {
     joint: mkMain(jointGeo, colors.skin, cap * 4),
     leg: mkMain(legGeo, colors.bottom, cap * 2), legOut: mkOutline(legGeo, cap * 2),
     foot: mkMain(footGeo, 0x1c1c22, cap * 2),
-    shadow: mkMain(shadowGeo, 0x000000, cap),
+    shadow: mkShadow(shadowGeo, cap),
   };
 }
 let playerRig = null, enemyRigs = null;
@@ -1863,19 +1878,21 @@ function update(dt) {
     else if (kind === 'crate') spawnCrate();
     nextEventAt = dist + rnd(11, 19);
   }
-  // Волны — свой, более частый и не пересыхающий поток: дорожка никогда не
-  // бывает пустой ни в начале, ни посреди забега, и к концу враги идут гуще.
-  // Но без потолка на одновременные волны они копятся друг на друге — не
-  // успел добить одну, сверху встаёт вторая, и это читается как сплошная
-  // бесконечная стена врагов, а не как волны с передышкой между ними.
+  // Волны — свой, не пересыхающий поток: дорожка не бывает пустой подолгу,
+  // и к концу враги идут гуще. Но «не пересыхающий» — не значит «без передышки
+  // между волнами»: раньше здесь допускались две волны одновременно, и по
+  // живому отзыву это читалось как «отряды идут подряд стеной», хотя в
+  // референсе волны — это отдельные набеги с паузой между ними. Строго одна
+  // волна за раз, и минимальный интервал поднят, чтобы пауза реально была
+  // заметна, а не размывалась в шесть метров отсрочки.
   if (state === 'game' && dist >= nextWaveAt) {
     const activeWaves = obstacles.filter(o => o.kind === 'wave' && waveTotalCount(o) > 0).length;
-    if (activeWaves < 2) {
+    if (activeWaves < 1) {
       spawnWave();
-      const gap = clamp(72 - dist / 12, 26, 72);
-      nextWaveAt = dist + rnd(gap * 0.7, gap);
+      const gap = clamp(78 - dist / 12, 34, 78);
+      nextWaveAt = dist + rnd(gap * 0.75, gap);
     } else {
-      nextWaveAt = dist + 6; // прошлые волны ещё живы — коротко отложим и проверим снова
+      nextWaveAt = dist + 8; // прошлая волна ещё жива — коротко отложим и проверим снова
     }
   }
 
@@ -2055,7 +2072,7 @@ function update(dt) {
           if (g.z < 2.1) {
             g.fireTimer -= dt;
             if (g.fireTimer <= 0) {
-              const chip = Math.max(1, Math.round(clamp(g.count * 0.05, 1, 6)));
+              const chip = Math.max(1, Math.round(clamp(g.count * 0.065, 1, 10)));
               const actualChip = Math.min(squad, chip);
               if (actualChip > 0) {
                 squad = Math.max(0, squad - actualChip);
