@@ -1573,10 +1573,18 @@ function mergeGltfGeometry(gltf) {
   // minY у всех проверенных моделей и так ~0 (стопы на полу исходной сцены) —
   // сдвигаем на всякий случай, чтобы после масштабирования нога точно стояла
   // на y=0 в системе координат инстанса (placeCharacter кладёт корень на пол).
+  //
+  // Модели Kenney развёрнуты лицом к +Z — в нашей сцене это прямо на камеру,
+  // которая стоит за отрядом и смотрит вперёд по ходу движения (в -Z). Итог
+  // без поворота: бойцы бегут вперёд, а лицом стоят к игроку — как будто
+  // идут задом наперёд. Разворот на 180° вокруг Y (знак у X и Z меняется,
+  // Y не трогаем) — теперь затылок к камере, лицо по ходу движения.
   for (let i = 0; i < positions.length; i += 3) {
-    positions[i] *= norm;
+    positions[i] *= -norm;
     positions[i + 1] = (positions[i + 1] - minY) * norm;
-    positions[i + 2] *= norm;
+    positions[i + 2] *= -norm;
+    normals[i] *= -1;
+    normals[i + 2] *= -1;
   }
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
@@ -1601,8 +1609,13 @@ function mergeGltfGeometry(gltf) {
   return { geometry, outlineGeometry, texture };
 }
 function loadCharGeo(path) {
+  // Абсолютный путь — прод; при ошибке (локальное открытие файла с диска,
+  // без сервера с роутом /game/squad) — тот же файл относительным путём.
   return new Promise((resolve, reject) => {
-    gltfLoader().load(path, gltf => resolve(mergeGltfGeometry(gltf)), undefined, reject);
+    gltfLoader().load(path, gltf => resolve(mergeGltfGeometry(gltf)), undefined, () => {
+      const rel = path.replace(/^\//, '');
+      gltfLoader().load(rel, gltf => resolve(mergeGltfGeometry(gltf)), undefined, reject);
+    });
   });
 }
 // Один InstancedMesh на скин (слитая геометрия модели) + такая же геометрия,
@@ -2502,14 +2515,22 @@ function render() {
 // вожак — advanced_robot (совсем другой силуэт — техно-босс), гигант —
 // basic_robot, самый массивный по масштабу (ENEMY_TYPES.giant.scale) и
 // заметно другой формой корпуса, чем вожак-робот.
+// Плоско в assets/game/, не в подпапке: серверный роут (/assets/game/{filename}
+// в game_server.py) нарочно отклоняет имя с "/" внутри — защита от обхода
+// каталога. Модели лежали в assets/game/chars/… — каждая загрузка молча
+// давала 404, и в проде игра падала в «ЗАЛ ЗАКРЫТ» (движок не отозвался),
+// хотя у меня в тестах через обычный python -m http.server, который такой
+// проверки не делает, всё грузилось. Абсолютный путь — та же причина, что и
+// у картинок персонажей: страница живёт на /game/squad, относительный путь
+// резолвился бы мимо роута.
 const CHAR_MODEL_PATHS = {
-  player:  'assets/game/chars/advanced_man.glb',
-  runner:  'assets/game/chars/basic_soldier.glb',
-  bruiser: 'assets/game/chars/advanced_orc.glb',
-  shield:  'assets/game/chars/basic_orc.glb',
-  shooter: 'assets/game/chars/advanced_soldier.glb',
-  leader:  'assets/game/chars/advanced_robot.glb',
-  giant:   'assets/game/chars/basic_robot.glb',
+  player:  '/assets/game/advanced_man.glb',
+  runner:  '/assets/game/basic_soldier.glb',
+  bruiser: '/assets/game/advanced_orc.glb',
+  shield:  '/assets/game/basic_orc.glb',
+  shooter: '/assets/game/advanced_soldier.glb',
+  leader:  '/assets/game/advanced_robot.glb',
+  giant:   '/assets/game/basic_robot.glb',
 };
 async function loadAllCrowdModels() {
   const keys = Object.keys(CHAR_MODEL_PATHS);
