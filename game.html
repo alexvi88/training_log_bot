@@ -156,6 +156,10 @@ const FIGHTERS = {
   build:  { name: 'Бодибилдер',  tag: 'мышцы',        top: '#cf9455', bottom: '#23252c', skin: '#cf9455', head: 'short',    hair: '#241a12', acc: '#d9a013', shirtless: true, bulk: 1.22 },
 };
 let selectedFighter = 'power';
+// Вышибала — бегущий навстречу противник (не выбираемый персонаж, поэтому вне
+// FIGHTERS: не должен попасть в карточки выбора). Тёмная форма и красный акцент —
+// контраст с любым качком игрока, чтобы на бегу читался как угроза, а не снаряд.
+const RIVAL_SKIN = { top: '#1c1c1f', bottom: '#101012', skin: '#8a5a3c', head: 'short', hair: '#050505', acc: '#ff2d2d', bulk: 1.28 };
 
 // ── CANVAS ───────────────────────────────────────────────────────────────────
 const cv = document.getElementById('game-canvas');
@@ -233,7 +237,15 @@ let shakeT = 0, lastResult = null;
 // на глаз; потолок 820 — предел, на котором ещё честно тянет человек, а не
 // только бот (прогонялось playwright-ботом, см. отчёт).
 const SPEED_START = 400, SPEED_RAMP = 6.5, SPEED_CAP = 820;
+// Доля разгона 0..1 — тянем на неё альфу/контраст мелких фоновых паттернов,
+// чтобы на высокой скорости они не рябили стробоскопом (см. drawBasement/
+// drawNeon/drawStreet/drawLocker).
+function speedFrac() { return Math.max(0, Math.min(1, (speed - SPEED_START) / (SPEED_CAP - SPEED_START))); }
 let combo = 0, maxCombo = 0, pickups = 0, lastMile = 0;
+let rivalWarned = false;
+// С какой дистанции в пул препятствий подмешивается вышибала (см. spawnObstacle) —
+// не с первой секунды, а когда игрок уже разогнался и освоился.
+const RIVAL_MIN_DIST = 480;
 const mult = () => 1 + Math.min(4, Math.floor(combo / 8));
 const rnd = (a, b) => a + Math.random() * (b - a);
 const pick = a => a[Math.floor(Math.random() * a.length)];
@@ -245,7 +257,7 @@ const P = {
 };
 function resetGame() {
   t = 0; dist = 0; speed = SPEED_START; score = 0; shakeT = 0;
-  combo = 0; maxCombo = 0; pickups = 0; lastMile = 0;
+  combo = 0; maxCombo = 0; pickups = 0; lastMile = 0; rivalWarned = false;
   P.x = W * 0.22; P.y = GROUND(); P.vy = 0; P.onGround = true; P.jumps = 0; P.slideT = 0;
   P.shield = false; P.rageT = 0; P.magnetT = 0; P.runPhase = 0;
   obstacles.length = 0; items.length = 0; parts.length = 0; toasts.length = 0;
@@ -266,9 +278,11 @@ const QUIPS = [
 
 // ── ЛОКАЦИИ ──────────────────────────────────────────────────────────────────
 const ZONES = [
-  { name: 'ПОДВАЛ',   sky: ['#181210', '#231a14'], ground: '#2a211a', groundLine: '#4a3a2b', draw: drawBasement },
-  { name: 'НЕОН-ЗАЛ', sky: ['#0b0f1e', '#141b33'], ground: '#151b2e', groundLine: '#2c3a63', draw: drawNeon },
-  { name: 'УЛИЦА',    sky: ['#0a0d18', '#1c2033'], ground: '#191c26', groundLine: '#333849', draw: drawStreet },
+  { name: 'ПОДВАЛ',      sky: ['#181210', '#231a14'], ground: '#2a211a', groundLine: '#4a3a2b', draw: drawBasement },
+  { name: 'НЕОН-ЗАЛ',    sky: ['#0b0f1e', '#141b33'], ground: '#151b2e', groundLine: '#2c3a63', draw: drawNeon },
+  { name: 'УЛИЦА',       sky: ['#0a0d18', '#1c2033'], ground: '#191c26', groundLine: '#333849', draw: drawStreet },
+  { name: 'КРЫША',       sky: ['#2a1830', '#ff8a4d'], ground: '#232830', groundLine: '#4a5568', draw: drawRoof },
+  { name: 'РАЗДЕВАЛКА',  sky: ['#132226', '#1f3a40'], ground: '#16232a', groundLine: '#3f5a63', draw: drawLocker },
 ];
 const ZONE_LEN = 600;
 function zoneIndex() { return Math.floor(dist / ZONE_LEN) % ZONES.length; }
@@ -279,11 +293,14 @@ function zoneBlend() {
 
 function drawBasement(a) {
   ctx.globalAlpha = a;
-  const bw = 52, bh = 22, off = (dist * 2.2) % bw;
-  ctx.fillStyle = 'rgba(255,180,120,0.05)';
+  const sf = speedFrac();
+  // Кладка крупнее и медленнее, чем раньше (было 52×22, сдвиг ×2.2) — при частом
+  // мелком паттерне на разгоне получался стробоскоп. Плюс альфа тает на скорости.
+  const bw = 84, bh = 34, off = (dist * 1.5) % bw;
+  ctx.fillStyle = 'rgba(255,180,120,' + (0.05 - 0.03 * sf).toFixed(3) + ')';
   for (let r = 0; r < Math.ceil(GROUND() / bh); r++)
     for (let x = -bw; x < W + bw; x += bw)
-      ctx.fillRect(x - off + (r % 2 ? bw / 2 : 0), r * bh, bw - 3, bh - 3);
+      ctx.fillRect(x - off + (r % 2 ? bw / 2 : 0), r * bh, bw - 4, bh - 4);
   ctx.fillStyle = 'rgba(120,90,60,0.35)';
   ctx.fillRect(0, 26, W, 10); ctx.fillRect(0, 54, W, 6);
   const lw = 340, loff = (dist * 3.4) % lw;
@@ -301,6 +318,7 @@ function drawBasement(a) {
 }
 function drawNeon(a) {
   ctx.globalAlpha = a;
+  const sf = speedFrac();
   ctx.fillStyle = 'rgba(57,210,196,0.8)'; ctx.fillRect(0, 30, W, 3);
   ctx.fillStyle = 'rgba(255,90,150,0.6)'; ctx.fillRect(0, 44, W, 2);
   const sw = 560, soff = (dist * 3.0) % sw;
@@ -310,24 +328,30 @@ function drawNeon(a) {
     ctx.fillStyle = 'rgba(57,210,196,0.14)'; ctx.fillText('QACHALKA 24/7', sx, 120);
     ctx.fillStyle = 'rgba(57,210,196,0.8)'; ctx.fillText('QACHALKA 24/7', sx, 118);
   }
-  ctx.strokeStyle = 'rgba(57,210,196,0.10)';
-  for (let y = 160; y < GROUND(); y += 34) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
+  // Линии сетки реже (было каждые 34px) и гаснут на разгоне — частая горизонтальная
+  // штриховка, бегущая быстро, давала муар.
+  ctx.strokeStyle = 'rgba(57,210,196,' + (0.10 - 0.07 * sf).toFixed(3) + ')';
+  for (let y = 160; y < GROUND(); y += 68) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
   silhouettes('rgba(10,16,36,0.85)', 2.6);
   ctx.globalAlpha = 1;
 }
 function drawStreet(a) {
   ctx.globalAlpha = a;
+  const sf = speedFrac();
   ctx.fillStyle = 'rgba(242,237,227,0.9)'; ctx.beginPath(); ctx.arc(W * 0.78, 84, 26, 0, 7); ctx.fill();
   ctx.fillStyle = '#1c2033'; ctx.beginPath(); ctx.arc(W * 0.78 + 10, 78, 22, 0, 7); ctx.fill();
-  ctx.fillStyle = 'rgba(255,255,255,0.5)';
-  for (let i = 0; i < 40; i++) { const sx = (i * 97) % W, sy = (i * 61) % (GROUND() * 0.5); ctx.fillRect(sx, sy, 2, 2); }
+  // Звёзд меньше, каждая крупнее, и они тают на разгоне — было 40 точек по 2px,
+  // на скорости рябило шумом.
+  ctx.fillStyle = 'rgba(255,255,255,' + (0.5 - 0.35 * sf).toFixed(3) + ')';
+  for (let i = 0; i < 22; i++) { const sx = (i * 97) % W, sy = (i * 61) % (GROUND() * 0.5); ctx.fillRect(sx, sy, 3, 3); }
   const cw = 180, coff = (dist * 1.6) % cw;
   ctx.fillStyle = 'rgba(8,10,20,0.9)';
   for (let x = -cw; x < W + cw; x += cw) {
     const hgt = 120 + ((x / cw | 0) % 3) * 46;
     ctx.fillRect(x - coff, GROUND() - hgt, cw - 24, hgt);
   }
-  ctx.fillStyle = 'rgba(255,201,60,0.35)';
+  // Окна — тоже мелкий частый паттерн на скролле, гасим контраст на разгоне.
+  ctx.fillStyle = 'rgba(255,201,60,' + (0.35 - 0.20 * sf).toFixed(3) + ')';
   for (let x = -cw; x < W + cw; x += cw)
     for (let wy = 0; wy < 4; wy++) for (let wx = 0; wx < 3; wx++)
       if (((x / cw | 0) + wx + wy) % 3 === 0) ctx.fillRect(x - coff + 22 + wx * 44, GROUND() - 96 + wy * 22, 12, 9);
@@ -353,18 +377,82 @@ function silhouettes(color, parallax) {
     ctx.fillRect(bx + 160, by - 34, 70, 10); ctx.fillRect(bx + 170, by - 24, 10, 24); ctx.fillRect(bx + 200, by - 24, 10, 24);
   }
 }
+// КРЫША: открытая площадка над залом, закатный город внизу, турники и антенны
+// на переднем плане. Элементы крупные и редкие — так же, как договорились для
+// подвала/неона, чтобы на разгоне фон не рябил.
+function drawRoof(a) {
+  ctx.globalAlpha = a;
+  ctx.fillStyle = 'rgba(255,150,80,0.16)';
+  ctx.fillRect(0, GROUND() * 0.32, W, GROUND() * 0.3);
+  const cw = 260, coff = (dist * 1.1) % cw;
+  ctx.fillStyle = 'rgba(40,24,44,0.55)';
+  for (let x = -cw; x < W + cw; x += cw) {
+    const hgt = 90 + ((x / cw | 0) % 3) * 40;
+    ctx.fillRect(x - coff, GROUND() - hgt - 70, cw - 60, hgt);
+  }
+  const pw = 420, poff = (dist * 3.0) % pw;
+  for (let x = -pw; x < W + pw; x += pw) {
+    const px = x - poff + pw * 0.25;
+    ctx.fillStyle = 'rgba(60,66,76,0.9)';
+    ctx.fillRect(px - 3, GROUND() - 92, 5, 92); ctx.fillRect(px + 73, GROUND() - 92, 5, 92);
+    ctx.fillRect(px - 5, GROUND() - 94, 86, 6);
+    ctx.fillStyle = 'rgba(150,160,175,0.8)';
+    ctx.fillRect(px + 130, GROUND() - 160, 3, 160);
+    ctx.beginPath(); ctx.arc(px + 131, GROUND() - 160, 4, 0, 7); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+// РАЗДЕВАЛКА: кафель крупными плитами, шкафчики рядами, пар от душевых.
+// Плитка и пар — большие редкие блоки, а не частая решётка, чтобы не мельтешить.
+function drawLocker(a) {
+  ctx.globalAlpha = a;
+  const sf = speedFrac();
+  const tw = 150, toff = (dist * 1.1) % tw;
+  ctx.strokeStyle = 'rgba(150,190,200,' + (0.10 - 0.05 * sf).toFixed(3) + ')'; ctx.lineWidth = 2;
+  for (let x = -tw; x < W + tw; x += tw) {
+    const lx = x - toff; ctx.beginPath(); ctx.moveTo(lx, 0); ctx.lineTo(lx, GROUND()); ctx.stroke();
+  }
+  const cw = 300, coff = (dist * 1.8) % cw;
+  for (let x = -cw; x < W + cw; x += cw) {
+    const lx = x - coff;
+    ctx.fillStyle = 'rgba(60,80,90,0.55)'; ctx.fillRect(lx, GROUND() - 130, cw - 40, 130);
+    ctx.fillStyle = 'rgba(20,30,36,0.5)';
+    for (let i = 0; i < 4; i++) ctx.fillRect(lx + 10 + i * 62, GROUND() - 120, 50, 110);
+    ctx.fillStyle = 'rgba(200,170,60,0.4)';
+    for (let i = 0; i < 4; i++) ctx.fillRect(lx + 10 + i * 62 + 22, GROUND() - 70, 6, 6);
+  }
+  ctx.fillStyle = 'rgba(220,235,240,' + (0.10 - 0.07 * sf).toFixed(3) + ')';
+  const sw = 480, soff = (dist * 2.0) % sw;
+  for (let x = -sw; x < W + sw; x += sw) {
+    const sx = x - soff;
+    ctx.beginPath(); ctx.ellipse(sx + 120, GROUND() * 0.4, 140, 60, 0, 0, 7); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
 
 // ── ПРЕПЯТСТВИЯ ──────────────────────────────────────────────────────────────
 const obstacles = [];
 let nextObsAt = 70;
 function spawnObstacle() {
-  const kind = pick(['dumb', 'kettle', 'bench', 'rack', 'plate', 'dumb', 'rack']);
+  const pool = ['dumb', 'kettle', 'bench', 'rack', 'plate', 'dumb', 'rack'];
+  // Вышибала подмешивается в общий пул только после того, как забег разогнался
+  // и игрок освоился — не с первой секунды (см. RIVAL_MIN_DIST).
+  if (dist >= RIVAL_MIN_DIST) pool.push('rival');
+  const kind = pick(pool);
   const o = { kind, x: W + 80 };
   if (kind === 'dumb') { o.w = 52; o.h = 30; }
   if (kind === 'kettle') { o.w = 36; o.h = 40; }
   if (kind === 'bench') { o.w = 110; o.h = 34; }
   if (kind === 'rack') { o.w = 26; o.h = 0; o.gap = 64; }
   if (kind === 'plate') { o.w = 44; o.h = 44; o.vx = 120 + speed * 0.12; o.rot = 0; }
+  if (kind === 'rival') {
+    // Живой противник в полный рост: перепрыгнуть можно (как через тумбу),
+    // подкатиться под него нельзя — коробка достаёт до пола (см. obstacleBox).
+    // Сближение быстрее обычного препятствия — к скорости бега прибавляется
+    // собственный бег вышибалы навстречу (o.vx), как у катящегося блина, но заметнее.
+    o.w = 34; o.h = 64; o.vx = 90 + speed * 0.18; o.runPhase = 0;
+    if (!rivalWarned) { rivalWarned = true; toast('ВЫШИБАЛА!', C_RAGE); }
+  }
   obstacles.push(o);
   // Награда, ведущая через препятствие: дуга — по траектории прыжка, дорожка
   // на полу — сквозь стойку на высоте подката. Собирание учит уклоняться.
@@ -428,6 +516,12 @@ function drawObstacle(o) {
     ctx.fillStyle = CHALK; ctx.beginPath(); ctx.arc(0, 0, 3.4, 0, 7); ctx.fill();
     ctx.fillStyle = 'rgba(242,237,227,0.5)'; ctx.fillRect(-o.h / 2 + 4, -1.5, 10, 3);
   }
+  if (o.kind === 'rival') {
+    // Тот же drawAthlete, что и для игрока — просто чужая палитра (RIVAL_SKIN) и
+    // зеркальный разворот, чтобы бежал НАВСТРЕЧУ (лицом влево, к игроку).
+    ctx.translate(o.w / 2, gy); ctx.scale(-1, 1);
+    drawAthlete(ctx, RIVAL_SKIN, { run: Math.sin(o.runPhase * 14), rage: true, scale: 1.08 });
+  }
   ctx.restore();
 }
 function obstacleBox(o) {
@@ -451,10 +545,13 @@ function spawnItems() {
   // уже спавнится преграда, дорожка вела бы прямо в неё — переносим попытку.
   if (obstacles.some(o => o.x > W - 180)) { nextItemAt = dist + 12; return; }
   const r = Math.random();
-  if (r < 0.14) items.push(mkItem('creatine', W + 60, GROUND() - 120));
-  else if (r < 0.25) items.push(mkItem('preworkout', W + 60, GROUND() - 150));
-  else if (r < 0.34) items.push(mkItem('gainer', W + 60, GROUND() - 100));
-  else if (r < 0.48) {
+  // Щит — редкая подстраховка, не рутинная: было 14% на каждый спавн награды,
+  // теперь втрое реже (~5%). Остальные веса (предтрен/гейнер/батончики/обычные)
+  // сохраняют прежнюю ширину диапазона, просто сдвинуты.
+  if (r < 0.05) items.push(mkItem('creatine', W + 60, GROUND() - 120));
+  else if (r < 0.16) items.push(mkItem('preworkout', W + 60, GROUND() - 150));
+  else if (r < 0.25) items.push(mkItem('gainer', W + 60, GROUND() - 100));
+  else if (r < 0.39) {
     // Верхний ярус: достаётся только двойным прыжком, поэтому и награда
     // жирнее — батончики вместо шейкеров.
     for (let i = 0; i < 3; i++) items.push(mkItem('bar', W + 60 + i * 58, GROUND() - 240));
@@ -592,7 +689,9 @@ function drawHead(c, f, hx, hy) {
 // мышечные объёмы отдельными формами: дельта, бицепс, икра, V-образный торс.
 function drawAthlete(c, fighter, opts) {
   const { sliding = false, run = 0, rage = false, shield = false, scale = 1, idle = false } = opts || {};
-  const f = FIGHTERS[fighter];
+  // Принимает и ключ из FIGHTERS (игрок), и готовый объект палитры напрямую
+  // (вышибала — RIVAL_SKIN, не входит в выбираемых персонажей).
+  const f = typeof fighter === 'string' ? FIGHTERS[fighter] : fighter;
   const B = f.bulk || 1;
   const torsoCol = (f.shirtless || f.singlet) ? f.skin : f.top;
   const torsoD = shade(torsoCol, 0.78);
@@ -892,6 +991,7 @@ function update(dt) {
     const o = obstacles[i];
     o.x -= spd * dt + (o.vx ? o.vx * dt : 0);
     if (o.kind === 'plate') o.rot -= dt * 7;
+    if (o.kind === 'rival') o.runPhase += dt * ((spd + o.vx) / 300);
     if (o.x < -160) { obstacles.splice(i, 1); continue; }
     const b = obstacleBox(o);
     if (pb.x < b.x + b.w && pb.x + pb.w > b.x && pb.y < b.y + b.h && pb.y + pb.h > b.y) {
