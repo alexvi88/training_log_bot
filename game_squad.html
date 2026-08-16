@@ -8,6 +8,36 @@
 <script src="/assets/game/three.min.js"
         onload="window.dispatchEvent(new Event('three-ready'))"
         onerror="this.onerror=null;var s=document.createElement('script');s.src='assets/game/three.min.js';s.onload=function(){window.dispatchEvent(new Event('three-ready'))};s.onerror=function(){window.dispatchEvent(new Event('three-failed'))};document.head.appendChild(s)"></script>
+<script>
+// GLTFLoader должен читать window.THREE, поэтому подключается только ПОСЛЕ
+// реального 'three-ready' — тот же приём абсолютный→относительный путь, что
+// и у three.min.js выше. Успех/провал шлём отдельными событиями, чтобы не
+// путать их с three-ready/three-failed (сцена ещё не готова к загрузке моделей).
+// 'load' у синхронного <script src> может успеть сработать ДО того, как
+// парсер дойдёт до этого инлайн-блока (наблюдалось на практике: слушатель,
+// навешанный только через addEventListener, событие пропускал) — поэтому,
+// как и в проверке "if (window.THREE) boot()" внизу файла, сперва смотрим на
+// window.THREE напрямую и лишь при его отсутствии ждём событие.
+function loadGltfLoaderScript() {
+  var s = document.createElement('script');
+  s.src = '/assets/game/gltfloader.js';
+  s.onload = function () { window.dispatchEvent(new Event('gltfloader-ready')); };
+  s.onerror = function () {
+    s.onerror = null;
+    var s2 = document.createElement('script');
+    s2.src = 'assets/game/gltfloader.js';
+    s2.onload = function () { window.dispatchEvent(new Event('gltfloader-ready')); };
+    s2.onerror = function () { window.dispatchEvent(new Event('gltfloader-failed')); };
+    document.head.appendChild(s2);
+  };
+  document.head.appendChild(s);
+}
+if (window.THREE) {
+  loadGltfLoaderScript();
+} else {
+  window.addEventListener('three-ready', loadGltfLoaderScript, { once: true });
+}
+</script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { height: 100%; }
@@ -1483,71 +1513,132 @@ function toonGradient() {
   _toonGrad.minFilter = THREE.NearestFilter; _toonGrad.magFilter = THREE.NearestFilter;
   return _toonGrad;
 }
-// Риг тела — 12 инстансед-мешей на команду (в пределах ориентира 10-12):
-// торс+контур, голова+контур, кепка, рука+контур, плечи/кисти одним шаром,
-// нога+контур, стопа, тень. Руки и ноги — сужающиеся цилиндры (не бруски),
-// плечи-дельты и кисти сидят на одной геометрии шара (4 инстанса на бойца) —
-// дешёвый способ дать телу суставы без лишних мешей.
-function buildCrowdRig(cap, colors, isEnemy) {
+// Загрузка низкополигональных .glb-моделей Kenney (Blocky Characters) и
+// слияние их мешей в одну BufferGeometry на скин. Каждая модель — шесть
+// мешей (Body1/Head1/ArmLeft1/ArmRight1/LegLeft1/LegRight1), все используют
+// ОДИН общий материал/текстуру-атлас (проверено), поэтому их можно слить в
+// одну геометрию и рендерить одним InstancedMesh на скин — вместо рига из
+// боксов/цилиндров по частям тела, как раньше (см. старый buildCrowdRig).
+// BufferGeometryUtils в бандле нет (собран только сам GLTFLoader поверх
+// глобального window.THREE, см. начало файла) — слияние написано руками:
+// по каждому мешу применяем его матрицу МИРА ОТНОСИТЕЛЬНО КОРНЯ gltf.scene
+// (сцена не добавлена в наш scene.add, поэтому matrixWorld после
+// updateMatrixWorld(true) — это как раз локальная трансформация внутри
+// самого файла, не абсолютная сцена) и копируем вершины в общие массивы.
+// THREE.GLTFLoader ещё не гарантированно загружен на момент парсинга этого
+// <script> (gltfloader.js подтягивается асинхронно по событию three-ready,
+// см. начало файла) — конструируем лениво при первом реальном вызове, не на
+// верхнем уровне модуля, тем же приёмом, что и scratch-объекты ниже.
+let _gltfLoaderInst = null;
+function gltfLoader() {
+  if (!_gltfLoaderInst) _gltfLoaderInst = new THREE.GLTFLoader();
+  return _gltfLoaderInst;
+}
+// Модели Kenney экспортированы в своих единицах (проверено: ~16 юнитов в
+// высоту, ~8×4 в плане) — на порядок крупнее старого рига (~1.5-1.7 юнита на
+// CHAR_SCALE=1). Нормализуем ПРЯМО В ГЕОМЕТРИИ при слиянии (масштаб и есть
+// множитель S = CHAR_SCALE * scaleMul в placeCharacter, менять его отдельно
+// от геометрии смысла нет): считаем bounding box по ходу сборки вершин,
+// в конце масштабируем координаты так, чтобы рост модели стал
+// GLTF_TARGET_HEIGHT — тем же числом, на которое был рассчитан camera/HUD/
+// формация толпы у старого рига из примитивов.
+const GLTF_TARGET_HEIGHT = 1.7;
+// Толщина обводки в тех же юнитах, что и GLTF_TARGET_HEIGHT (уже после
+// нормализации роста) — тонкая, но заметная, как у старого рига из примитивов.
+const GLTF_OUTLINE_WIDTH = 0.03;
+function mergeGltfGeometry(gltf) {
+  gltf.scene.updateMatrixWorld(true);
+  const positions = [], normals = [], uvs = [];
+  let texture = null;
+  let minY = Infinity, maxY = -Infinity;
+  const v = new THREE.Vector3(), n = new THREE.Vector3(), nMat = new THREE.Matrix3();
+  gltf.scene.traverse(obj => {
+    if (!obj.isMesh || !obj.geometry) return;
+    if (!texture && obj.material && obj.material.map) texture = obj.material.map;
+    let geo = obj.geometry;
+    if (geo.index) geo = geo.toNonIndexed();
+    const pos = geo.attributes.position, nor = geo.attributes.normal, uv = geo.attributes.uv;
+    nMat.getNormalMatrix(obj.matrixWorld);
+    for (let i = 0; i < pos.count; i++) {
+      v.fromBufferAttribute(pos, i).applyMatrix4(obj.matrixWorld);
+      positions.push(v.x, v.y, v.z);
+      if (v.y < minY) minY = v.y; if (v.y > maxY) maxY = v.y;
+      if (nor) { n.fromBufferAttribute(nor, i).applyMatrix3(nMat).normalize(); normals.push(n.x, n.y, n.z); }
+      else normals.push(0, 1, 0);
+      if (uv) uvs.push(uv.getX(i), uv.getY(i)); else uvs.push(0, 0);
+    }
+  });
+  const rawHeight = Math.max(1e-6, maxY - minY);
+  const norm = GLTF_TARGET_HEIGHT / rawHeight;
+  // minY у всех проверенных моделей и так ~0 (стопы на полу исходной сцены) —
+  // сдвигаем на всякий случай, чтобы после масштабирования нога точно стояла
+  // на y=0 в системе координат инстанса (placeCharacter кладёт корень на пол).
+  for (let i = 0; i < positions.length; i += 3) {
+    positions[i] *= norm;
+    positions[i + 1] = (positions[i + 1] - minY) * norm;
+    positions[i + 2] *= norm;
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  if (texture) texture.colorSpace = THREE.SRGBColorSpace;
+  // Контур для цельной модели: раздутая по нормалям оболочка (стандартный
+  // приём toon-обводки), а не старый "чуть крупнее целиком" (OUTLINE_K) — тот
+  // масштабировал всё тело от опорной точки в стопах, и голова/руки уезжали
+  // от контура на десятки сантиметров (проверено скриншотом — контур висел
+  // отдельным пятном над головой). Здесь же каждая вершина просто выдвинута
+  // вдоль своей нормали на фиксированную толщину — одинаковая тонкая обводка
+  // по всему силуэту, как у старого рига на месте, а не только у пивота.
+  const outlinePositions = new Float32Array(positions.length);
+  for (let i = 0; i < positions.length; i += 3) {
+    outlinePositions[i] = positions[i] + normals[i] * GLTF_OUTLINE_WIDTH;
+    outlinePositions[i + 1] = positions[i + 1] + normals[i + 1] * GLTF_OUTLINE_WIDTH;
+    outlinePositions[i + 2] = positions[i + 2] + normals[i + 2] * GLTF_OUTLINE_WIDTH;
+  }
+  const outlineGeometry = new THREE.BufferGeometry();
+  outlineGeometry.setAttribute('position', new THREE.Float32BufferAttribute(outlinePositions, 3));
+  return { geometry, outlineGeometry, texture };
+}
+function loadCharGeo(path) {
+  return new Promise((resolve, reject) => {
+    gltfLoader().load(path, gltf => resolve(mergeGltfGeometry(gltf)), undefined, reject);
+  });
+}
+// Один InstancedMesh на скин (слитая геометрия модели) + такая же геометрия,
+// раздутая по нормалям (см. mergeGltfGeometry/GLTF_OUTLINE_WIDTH), как
+// контурный BackSide-клон — тот же приём, что раньше был на отдельных частях
+// тела (там — простое увеличение масштаба на примитив), теперь на цельной
+// модели. Плюс дешёвая тень-диск, как и была.
+function buildCrowdRigFromGeo(cap, geoData, isEnemy, outlineColor) {
   const grad = toonGradient();
-  const torsoGeo = new THREE.BoxGeometry(0.5, 0.64, 0.30);
-  const headGeo = new THREE.SphereGeometry(0.22, 8, 6);
-  // Свои — аккуратная гладкая кепка (см. FIGHTERS/drawHead); чужие — рваная
-  // угловатая бандана-шлем (низкополигональный конус, 5 граней): силуэт
-  // головы должен читаться иначе ещё до того, как разглядели цвет и снаряжение.
-  const capGeo = isEnemy
-    ? new THREE.ConeGeometry(0.25, 0.24, 5)
-    : new THREE.CylinderGeometry(0.17, 0.22, 0.13, 8);
-  const armGeo = new THREE.CylinderGeometry(0.055, 0.085, 0.52, 6); armGeo.translate(0, -0.26, 0);
-  const jointGeo = new THREE.SphereGeometry(0.10, 6, 6);
-  const legGeo = new THREE.CylinderGeometry(0.075, 0.105, 0.6, 6); legGeo.translate(0, -0.3, 0);
-  const footGeo = new THREE.BoxGeometry(0.23, 0.09, 0.33);
-  const shadowGeo = new THREE.CircleGeometry(0.34, 12);
-  // Шипы на плечах — грубое рваное снаряжение, которого нет ни у одного из
-  // четырёх видов игрока (см. FIGHTERS): заводятся слотом рига по образцу
-  // cap/joint, не отдельным несвязанным мешем — тот же setPart/finishRig.
-  const spikeGeo = isEnemy ? new THREE.ConeGeometry(0.055, 0.22, 4) : null;
-  const mkMain = (geo, color, count) => {
-    const mesh = new THREE.InstancedMesh(geo, new THREE.MeshToonMaterial({ color, gradientMap: grad }), count);
-    mesh.count = 0; scene.add(mesh); return mesh;
-  };
-  // Свои — обычный тёмный контур силуэта; чужие — контрастная неоновая
-  // окантовка (см. ENEMY_TYPES.outline), которой нет ни у одного из своих —
-  // рампа чужого читается сразу боковым зрением, ещё до формы и снаряжения.
-  const outlineColor = isEnemy && colors.outline != null ? colors.outline : 0x0a0705;
-  const mkOutline = (geo, count) => {
-    const mesh = new THREE.InstancedMesh(geo, new THREE.MeshBasicMaterial({ color: outlineColor, side: THREE.BackSide }), count);
-    mesh.count = 0; scene.add(mesh); return mesh;
-  };
-  // Тень шла сплошным непрозрачным чёрным диском — на скриншоте читалась как
-  // «чёрная клякса» под ногами, а не как мягкая тень. Отдельный прозрачный
-  // материал без тонового освещения (тень не должна зависеть от света сцены).
-  const mkShadow = (geo, count) => {
-    const mesh = new THREE.InstancedMesh(geo, new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.28, depthWrite: false }), count);
-    mesh.count = 0; scene.add(mesh); return mesh;
-  };
-  const rig = {
-    torso: mkMain(torsoGeo, colors.top, cap), torsoOut: mkOutline(torsoGeo, cap),
-    head: mkMain(headGeo, colors.skin, cap), headOut: mkOutline(headGeo, cap),
-    cap: mkMain(capGeo, isEnemy ? shade(colors.top, 0.42) : shade(colors.top, 0.62), cap),
-    arm: mkMain(armGeo, colors.skin, cap * 2), armOut: mkOutline(armGeo, cap * 2),
-    joint: mkMain(jointGeo, colors.skin, cap * 4),
-    leg: mkMain(legGeo, colors.bottom, cap * 2), legOut: mkOutline(legGeo, cap * 2),
-    foot: mkMain(footGeo, 0x1c1c22, cap * 2),
-    shadow: mkShadow(shadowGeo, cap),
-  };
-  if (isEnemy) rig.spike = mkMain(spikeGeo, outlineColor, cap * 2);
-  return rig;
+  const mat = new THREE.MeshToonMaterial({ map: geoData.texture || null, color: 0xffffff, gradientMap: grad });
+  const mesh = new THREE.InstancedMesh(geoData.geometry, mat, cap);
+  mesh.count = 0; scene.add(mesh);
+  let outline = null;
+  if (isEnemy) {
+    const outMat = new THREE.MeshBasicMaterial({ color: outlineColor != null ? outlineColor : 0x0a0705, side: THREE.BackSide });
+    outline = new THREE.InstancedMesh(geoData.outlineGeometry, outMat, cap);
+    outline.count = 0; scene.add(outline);
+  }
+  const shadow = new THREE.InstancedMesh(
+    new THREE.CircleGeometry(0.34, 12),
+    new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.28, depthWrite: false }),
+    cap
+  );
+  shadow.count = 0; scene.add(shadow);
+  return { mesh, outline, shadow };
 }
 let playerRig = null, enemyRigs = null;
 let shieldGearMesh = null, leaderGearMesh = null, leaderGauntletMesh = null;
 let bruiserFistMesh = null, shooterJavelinMesh = null, giantBarMesh = null, giantPlateMesh = null;
 const SHIELD_GEAR_CAP = ENEMY_CAP_BY_TYPE.shield, LEADER_GEAR_CAP = ENEMY_CAP_BY_TYPE.leader, GIANT_GEAR_CAP = ENEMY_CAP_BY_TYPE.giant;
 const BRUISER_GEAR_CAP = ENEMY_CAP_BY_TYPE.bruiser, SHOOTER_GEAR_CAP = ENEMY_CAP_BY_TYPE.shooter;
-// Хвост от плеча до кисти в согнутой враждебной стойке (см. placeCharacter/
-// hostile) — доля от S (CHAR_SCALE * scaleMul), чтобы снаряжение в руке точно
-// совпадало с положением самой руки, а не подвешивалось рядом угадыванием.
-const HAND_DX = 0.27, HAND_DY = 0.829, HAND_DZ = 0.407;
+// Модель статичная (нет рига), рука не сгибается по кадрам — кисть теперь
+// фиксированная точка у бока модели в её локальном пространстве, доля от S
+// (CHAR_SCALE * scaleMul), подобранная по скриншоту под позу .glb-моделей
+// Kenney (руки прижаты к телу, чуть вперёд).
+const HAND_DX = 0.24, HAND_DY = 0.62, HAND_DZ = 0.22;
 // Снаряжение в руках/на голове — то, что отличает силуэт типа сильнее
 // цвета: шипастый кастет у тяжеловеса, укрупнённый блин-щит у щитовика,
 // дротик на замахе у стрелка, корона и массивные наручи у вожака, гриф со
@@ -1595,84 +1686,57 @@ function buildEnemyGearMeshes() {
 // boot() ниже — three.min.js подтягивается асинхронно), поэтому scratch-
 // объекты создаются лениво при первом вызове, а не на верхнем уровне модуля.
 let _sPos = null, _sQuat = null, _sEuler = null, _sScale = null, _sM4 = null, _SHADOW_Q = null;
-function setPart(mesh, outlineMesh, idx, x, y, z, rotX, scale) {
-  if (!_sPos) {
-    _sPos = new THREE.Vector3(); _sQuat = new THREE.Quaternion(); _sEuler = new THREE.Euler();
-    _sScale = new THREE.Vector3(); _sM4 = new THREE.Matrix4();
-    _SHADOW_Q = new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0));
-  }
-  _sEuler.set(rotX, 0, 0);
-  _sQuat.setFromEuler(_sEuler);
-  _sPos.set(x, y, z);
-  _sScale.set(scale, scale, scale);
-  mesh.setMatrixAt(idx, _sM4.compose(_sPos, _sQuat, _sScale));
-  if (outlineMesh) {
-    const s = scale * OUTLINE_K;
-    _sScale.set(s, s, s);
-    outlineMesh.setMatrixAt(idx, _sM4.compose(_sPos, _sQuat, _sScale));
-  }
+function ensureScratch() {
+  if (_sPos) return;
+  _sPos = new THREE.Vector3(); _sQuat = new THREE.Quaternion(); _sEuler = new THREE.Euler();
+  _sScale = new THREE.Vector3(); _sM4 = new THREE.Matrix4();
+  _SHADOW_Q = new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0));
 }
-// Ставит одного бойца (торс+голова+кепка+руки+плечи/кисти+ноги+стопы+тень) в
-// мировые координаты сцены. Плечи-дельты и кисти — одна геометрия шара на
-// четыре точки бойца (idx*4..idx*4+3), стопы — по одной на ногу (idx*2/+1).
+// Модель без рига/скелета — статичная поза целиком. Раньше «бег» сгибал
+// ноги/махал руками по частям тела (см. старый placeCharacter выше по git
+// истории); теперь та же фазовая функция (phase/bob — сохранены как есть,
+// см. вызовы ниже) двигает ОДНУ матрицу всего инстанса: лёгкий bounce по Y
+// в такт шагам плюс небольшой наклон корпуса вперёд-назад той же фазой —
+// стандартный приём «оживления» статичных мешей в толпе, когда идеальной
+// походки нет и не обязано быть.
 function placeCharacter(rig, idx, x3, z3, phase, bob, scaleMul, hostile) {
+  ensureScratch();
   const S = CHAR_SCALE * (scaleMul || 1);
-  // Враждебная стойка (hostile=true, только у ENEMY_TYPES): корпус и голова
-  // наклонены вперёд, будто идут на сшибку — не вертикальный бег игрока.
-  // Руки не машут в такт бегу, а согнуты вперёд, как перед ударом/захватом —
-  // с лёгким колебанием фазой, чтобы толпа не выглядела замершим роботом.
-  const legL = Math.sin(phase) * (hostile ? 0.42 : 0.55), legR = -legL;
-  const armL = hostile ? -0.95 + Math.sin(phase) * 0.12 : -legL * 0.7;
-  const armR = hostile ? 0.95 - Math.sin(phase) * 0.12 : -legR * 0.7;
-  const lean = hostile ? 0.32 : 0;
-  const bobY = Math.abs(Math.sin(phase)) * 0.045 * bob * S;
-  const hx = 0.27 * S, hipx = 0.12 * S;
-  const shY = 1.12 * S + bobY, hipY = 0.56 * S;
-  const headY = 1.34 * S + bobY;
-  setPart(rig.torso, rig.torsoOut, idx, x3, 0.85 * S + bobY, z3, lean, S);
-  setPart(rig.head, rig.headOut, idx, x3, headY, z3, lean * 0.7, S);
-  setPart(rig.cap, null, idx, x3, headY + 0.24 * S, z3, lean * 0.7, S);
-  setPart(rig.arm, rig.armOut, idx * 2, x3 - hx, shY, z3, armL, S);
-  setPart(rig.arm, rig.armOut, idx * 2 + 1, x3 + hx, shY, z3, armR, S);
-  const armLen = 0.5 * S;
-  setPart(rig.joint, null, idx * 4, x3 - hx, shY, z3, 0, S * 0.72);
-  setPart(rig.joint, null, idx * 4 + 1, x3 + hx, shY, z3, 0, S * 0.72);
-  setPart(rig.joint, null, idx * 4 + 2, x3 - hx, shY - armLen * Math.cos(armL), z3 + armLen * Math.sin(armL), 0, S * 0.62);
-  setPart(rig.joint, null, idx * 4 + 3, x3 + hx, shY - armLen * Math.cos(armR), z3 + armLen * Math.sin(armR), 0, S * 0.62);
-  setPart(rig.leg, rig.legOut, idx * 2, x3 - hipx, hipY, z3, legL, S);
-  setPart(rig.leg, rig.legOut, idx * 2 + 1, x3 + hipx, hipY, z3, legR, S);
-  const legLen = 0.58 * S;
-  setPart(rig.foot, null, idx * 2, x3 - hipx, hipY - legLen * Math.cos(legL), z3 + legLen * Math.sin(legL), 0, S);
-  setPart(rig.foot, null, idx * 2 + 1, x3 + hipx, hipY - legLen * Math.cos(legR), z3 + legLen * Math.sin(legR), 0, S);
-  if (rig.spike) {
-    setPart(rig.spike, null, idx * 2, x3 - hx * 1.15, shY + 0.16 * S, z3, -0.55, S);
-    setPart(rig.spike, null, idx * 2 + 1, x3 + hx * 1.15, shY + 0.16 * S, z3, -0.55, S);
+  const bounce = Math.abs(Math.sin(phase)) * 0.05 * bob * S;
+  const sway = Math.sin(phase) * (hostile ? 0.05 : 0.09);
+  // Враждебная стойка (hostile=true, только у ENEMY_TYPES): статичный наклон
+  // корпуса вперёд, будто идут на сшибку, плюс лёгкое покачивание той же
+  // фазой — не вертикальный размеренный бег игрока.
+  const lean = (hostile ? 0.30 : 0) + sway;
+  _sEuler.set(lean, 0, 0);
+  _sQuat.setFromEuler(_sEuler);
+  _sPos.set(x3, bounce, z3);
+  _sScale.set(S, S, S);
+  rig.mesh.setMatrixAt(idx, _sM4.compose(_sPos, _sQuat, _sScale));
+  if (rig.outline) {
+    // Толщина обводки уже запечена в геометрию (см. GLTF_OUTLINE_WIDTH) —
+    // тот же S, что и у основного меша, без дополнительного масштабирования.
+    rig.outline.setMatrixAt(idx, _sM4.compose(_sPos, _sQuat, _sScale));
   }
   _sPos.set(x3, 0.012, z3); _sScale.set(S, S, S);
   rig.shadow.setMatrixAt(idx, _sM4.compose(_sPos, _SHADOW_Q, _sScale));
 }
 function finishRig(rig, count) {
-  rig.torso.count = count; rig.torsoOut.count = count;
-  rig.head.count = count; rig.headOut.count = count;
-  rig.cap.count = count;
-  rig.shadow.count = count;
-  rig.arm.count = count * 2; rig.armOut.count = count * 2;
-  rig.joint.count = count * 4;
-  rig.leg.count = count * 2; rig.legOut.count = count * 2;
-  rig.foot.count = count * 2;
-  const meshes = [rig.torso, rig.torsoOut, rig.head, rig.headOut, rig.cap, rig.arm, rig.armOut, rig.joint, rig.leg, rig.legOut, rig.foot, rig.shadow];
-  if (rig.spike) { rig.spike.count = count * 2; meshes.push(rig.spike); }
-  meshes.forEach(m => { m.instanceMatrix.needsUpdate = true; });
+  rig.mesh.count = count; rig.mesh.instanceMatrix.needsUpdate = true;
+  if (rig.outline) { rig.outline.count = count; rig.outline.instanceMatrix.needsUpdate = true; }
+  rig.shadow.count = count; rig.shadow.instanceMatrix.needsUpdate = true;
 }
+// Одна раскраска на весь свой отряд (нет разбивки по FIGHTERS на разные
+// модели) — лёгкий тон-твин материала слитой .glb-модели цветом выбранного
+// бойца, текстура остаётся читаемой (не заливается плоским цветом).
 function applyFighterColors() {
   if (!playerRig) return;
   const f = FIGHTERS[selectedFighter];
-  playerRig.torso.material.color.set(f.top);
-  playerRig.head.material.color.set(f.skin);
-  playerRig.cap.material.color.set(shade(f.top, 0.62));
-  playerRig.arm.material.color.set(f.skin);
-  playerRig.joint.material.color.set(f.skin);
-  playerRig.leg.material.color.set(f.bottom);
+  // Смешиваем с белым, а не заливаем чистым цветом — иначе тон-твин
+  // (color multiply на текстуру) съедает детали атласа модели.
+  const n = parseInt(f.top.slice(1), 16), mixAmt = 0.4;
+  const ch = (shift) => Math.round(255 * (1 - mixAmt) + ((n >> shift) & 255) * mixAmt) / 255;
+  playerRig.mesh.material.color.setRGB(ch(16), ch(8), ch(0));
 }
 // Обновляет позиции всей толпы (лидер + отряд) — followers уже посчитаны
 // в updateFollowers, тут только перевод в мировые координаты сцены.
@@ -1686,11 +1750,13 @@ function syncPlayerCrowd() {
   }
   finishRig(playerRig, n + 1);
 }
-function buildEnemyRigs() {
+// geoByKey — уже загруженные и слитые геометрии .glb-моделей (см.
+// loadAllCrowdModels/CHAR_MODEL_PATHS), по одной на тип врага.
+function buildEnemyRigs(geoByKey) {
   enemyRigs = {};
   ENEMY_TYPE_KEYS.forEach(key => {
     const d = ENEMY_TYPES[key];
-    enemyRigs[key] = buildCrowdRig(ENEMY_CAP_BY_TYPE[key], { top: d.top, skin: d.skin, bottom: d.bottom, outline: d.outline }, true);
+    enemyRigs[key] = buildCrowdRigFromGeo(ENEMY_CAP_BY_TYPE[key], geoByKey[key], true, d.outline);
   });
 }
 // Обновляет позиции всех видимых врагов из активных волн — по одному ригу на
@@ -2425,8 +2491,37 @@ function render() {
   if (shield > 0) { hctx.textAlign = 'right'; hctx.font = "800 12px 'Courier New', monospace"; hctx.fillStyle = '#7ea8ff'; hctx.fillText('ПОЯС ×' + fmt(shield), ix, iy); }
 }
 
+// ── МОДЕЛИ ТОЛПЫ: какой .glb на какой скин ──────────────────────────────────
+// Игрок — один общий скин на весь отряд (advanced_man, самый читаемый силуэт
+// из проверенных). Враги — soldier/orc/robot раскиданы по типам так, чтобы
+// силуэт совпадал с характером типа, а не только с цветом: бегун — низкий и
+// плотный basic_soldier (быстрый, юркий), тяжеловес — рослый advanced_orc
+// (масса, дальше ещё крупнее масштабом), щитовик — другой корпус той же расы
+// (basic_orc) — не путается силуэтом с тяжеловесом вблизи, стрелок —
+// advanced_soldier (высокий, стройный — контраст с приземистым бегуном),
+// вожак — advanced_robot (совсем другой силуэт — техно-босс), гигант —
+// basic_robot, самый массивный по масштабу (ENEMY_TYPES.giant.scale) и
+// заметно другой формой корпуса, чем вожак-робот.
+const CHAR_MODEL_PATHS = {
+  player:  'assets/game/chars/advanced_man.glb',
+  runner:  'assets/game/chars/basic_soldier.glb',
+  bruiser: 'assets/game/chars/advanced_orc.glb',
+  shield:  'assets/game/chars/basic_orc.glb',
+  shooter: 'assets/game/chars/advanced_soldier.glb',
+  leader:  'assets/game/chars/advanced_robot.glb',
+  giant:   'assets/game/chars/basic_robot.glb',
+};
+async function loadAllCrowdModels() {
+  const keys = Object.keys(CHAR_MODEL_PATHS);
+  const geos = await Promise.all(keys.map(k => loadCharGeo(CHAR_MODEL_PATHS[k])));
+  const geoByKey = {};
+  keys.forEach((k, i) => { geoByKey[k] = geos[i]; });
+  playerRig = buildCrowdRigFromGeo(PLAYER_CAP, geoByKey.player, false, null);
+  buildEnemyRigs(geoByKey);
+}
+
 // ── ИНИЦИАЛИЗАЦИЯ THREE.JS И ЗАПУСК ─────────────────────────────────────────
-function initThree() {
+async function initThree() {
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0x2e3450);
   camera = new THREE.PerspectiveCamera(FOV_BASE, W / H, 0.1, 200);
@@ -2436,10 +2531,11 @@ function initThree() {
   renderer.setPixelRatio(DPR);
   renderer.setSize(W, H, false);
   buildHall();
-  // Свои — всегда тёплый цвет выбранного бойца (applyFighterColors красит
-  // после выбора), враги — холодные/ядовитые ригов пять, по типу.
-  playerRig = buildCrowdRig(PLAYER_CAP, { top: '#8f2a20', skin: '#e0b08a', bottom: '#2b2d34' });
-  buildEnemyRigs();
+  // Своя и вражеские толпы — реальные .glb-модели Kenney, слитые в одну
+  // геометрию на скин и заведённые как InstancedMesh (см.
+  // loadAllCrowdModels/buildCrowdRigFromGeo выше). Асинхронно — sizeof одна
+  // сеть-загрузка на скин, дожидаемся все перед стартом цикла кадров.
+  await loadAllCrowdModels();
   buildEnemyGearMeshes();
   buildBulletMesh();
 }
@@ -2457,10 +2553,13 @@ function frame(now) {
 // Игра стартует, только когда движок реально подтянулся — Telegram и локальный
 // файл грузят three.min.js по-разному (абсолютный путь в проде, относительный
 // рядом на диске при открытии файла), поэтому ждём событие, а не считаем,
-// что синхронная загрузка обязательно успела.
-function boot() {
+// что синхронная загрузка обязательно успела. Между three-ready и стартом
+// сцены встроен ещё один асинхронный шаг: gltfloader.js (см. начало файла),
+// а initThree() теперь сама асинхронная — грузит и сливает .glb-модели толпы
+// прежде, чем стартовать цикл кадров.
+async function boot() {
   try {
-    initThree();
+    await initThree();
   } catch (e) {
     console.error('[game] three.js init failed:', e);
     showScreen('screen-libfail');
@@ -2470,12 +2569,17 @@ function boot() {
   requestAnimationFrame(frame);
 }
 function showLibError() { showScreen('screen-libfail'); }
-if (window.THREE) {
+function startAfterGltfLoader() {
+  window.removeEventListener('gltfloader-ready', startAfterGltfLoader);
   boot();
+}
+if (window.THREE && window.THREE.GLTFLoader) {
+  startAfterGltfLoader();
 } else {
-  window.addEventListener('three-ready', boot, { once: true });
+  window.addEventListener('gltfloader-ready', startAfterGltfLoader);
+  window.addEventListener('gltfloader-failed', showLibError, { once: true });
   window.addEventListener('three-failed', showLibError, { once: true });
-  setTimeout(() => { if (!window.THREE) showLibError(); }, 6000);
+  setTimeout(() => { if (!window.THREE || !window.THREE.GLTFLoader) showLibError(); }, 12000);
 }
 document.addEventListener('visibilitychange', () => { last = performance.now(); });
 </script>
