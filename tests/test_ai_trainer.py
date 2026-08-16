@@ -315,6 +315,47 @@ async def test_weekly_volume_tool_counts_and_classifies(fresh_db, user_id, monke
     assert by_group[target_group]["status"] == "in_range"
 
 
+async def test_weekly_volume_counts_the_same_window_as_the_chart(fresh_db, user_id, monkeypatch):
+    """Тренер считал объём с понедельника, а диаграмма в меню — за скользящие 7
+    дней. В среду это два разных ответа на один вопрос: на картинке по группе
+    перебор, а тренер под ней зовёт «добрать объём». Окно должно быть одно.
+    """
+    import datetime as dt
+
+    monkeypatch.setattr(
+        ai_trainer.timeutil, "user_today", lambda user: dt.date(2026, 7, 15)  # среда
+    )
+
+    group_id = (await fresh_db.list_muscle_groups(None, global_only=True))[0]["id"]
+    group_name = (await fresh_db.get_muscle_group(group_id))["name"]
+    ex_id = await fresh_db.create_exercise(user_id, "Тяга", group_id)
+    # Суббота и воскресенье ПРОШЛОЙ календарной недели — в скользящее окно
+    # попадают, в «пн-вс» не попадали.
+    for day, sets in (("2026-07-11", 8), ("2026-07-14", 6)):
+        wid = await fresh_db.create_finished_workout(user_id, f"{day}T10:00:00", f"{day}T11:00:00")
+        block_id = await fresh_db.create_block(wid, "single")
+        await fresh_db.add_block_exercise(block_id, ex_id, 0)
+        for i in range(sets):
+            await fresh_db.add_set(block_id, ex_id, i + 1, 0, 100.0, 8)
+
+    payload = await ai_trainer._weekly_volume(user_id)
+    row = {g["group"]: g for g in payload["groups"]}[group_name]
+    assert row["sets"] == 14
+    assert row["status"] == "high"
+
+    # То же число уезжает и в карточку тренировки — иначе комментарий под
+    # диаграммой судит об объёме по одной сегодняшней тренировке.
+    line = await ai_trainer._weekly_volume_lines(user_id)
+    assert f"{group_name}: 14 (выше диапазона)" in line
+    assert "6-12" in line
+
+
+async def test_no_volume_line_when_there_is_nothing_to_count(fresh_db, user_id):
+    """Пустой недели не бывает «в диапазоне»: строки просто нет, и промпт велит
+    про недельный объём тогда молчать, а не сочинять."""
+    assert await ai_trainer._weekly_volume_lines(user_id) == ""
+
+
 async def test_recent_workouts_clamps_limit(fresh_db, user_id):
     await _seed_bench_history(fresh_db, user_id, 2)
 

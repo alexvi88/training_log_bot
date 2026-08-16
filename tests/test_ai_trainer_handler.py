@@ -2033,11 +2033,12 @@ async def test_training_by_a_draft_creates_no_program(fresh_db, user_id, monkeyp
     «🗂 Программы» рядом с настоящими программами."""
     loaded = {}
 
-    async def fake_load(callback, state, index=0):
+    async def fake_start(callback, state):
         loaded["called"] = True
-        return True
 
-    monkeypatch.setattr("handlers.workout._load_next_planned_block", fake_load)
+    # Тренировка по плану открывается экраном «С чего начнёшь?» — здесь важно
+    # только то, что план в неё попал, сам экран проверяется в test_planned_order.
+    monkeypatch.setattr("handlers.workout.start_planned_workout", fake_start)
 
     state = await _make_state(user_id)
     ex_ids = await _draft_in_state(fresh_db, user_id, state, [("Присед", "4×8"), ("Выпады", "3×12")])
@@ -2057,7 +2058,7 @@ async def test_training_by_a_draft_creates_no_program(fresh_db, user_id, monkeyp
 async def test_training_by_a_draft_uses_the_workout_already_open(fresh_db, user_id, monkeypatch):
     """На превью приходят с экрана выбора, который активную тренировку уже
     создал — заводить вторую значило бы бросить первую."""
-    monkeypatch.setattr("handlers.workout._load_next_planned_block", AsyncMock(return_value=True))
+    monkeypatch.setattr("handlers.workout.start_planned_workout", AsyncMock())
 
     workout_id, _ = await fresh_db.get_or_create_active_workout(user_id)
     state = await _make_state(user_id)
@@ -2071,7 +2072,7 @@ async def test_training_by_a_draft_uses_the_workout_already_open(fresh_db, user_
 async def test_the_draft_is_spent_once_you_train_by_it(fresh_db, user_id, monkeypatch):
     """Кнопка «Добавить себе» под тем же превью после старта должна отвечать,
     что предложение неактуально: по нему уже занимаются."""
-    monkeypatch.setattr("handlers.workout._load_next_planned_block", AsyncMock(return_value=True))
+    monkeypatch.setattr("handlers.workout.start_planned_workout", AsyncMock())
 
     state = await _make_state(user_id)
     await _draft_in_state(fresh_db, user_id, state, [("Присед", "4×8")])
@@ -2084,7 +2085,7 @@ async def test_the_draft_is_spent_once_you_train_by_it(fresh_db, user_id, monkey
 async def test_a_draft_already_done_this_session_says_so(fresh_db, user_id, monkeypatch):
     """Упражнения, уже отработанные в этой тренировке, из плана вычитаются —
     а если не осталось ничего, надо сказать, а не открыть пустой план."""
-    monkeypatch.setattr("handlers.workout._load_next_planned_block", AsyncMock(return_value=True))
+    monkeypatch.setattr("handlers.workout.start_planned_workout", AsyncMock())
 
     state = await _make_state(user_id)
     ex_ids = await _draft_in_state(fresh_db, user_id, state, [("Присед", "4×8")])

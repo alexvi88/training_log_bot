@@ -1462,8 +1462,8 @@ async def ai_program_train(callback: CallbackQuery, state: FSMContext):
     """
     from handlers.workout import (
         _delete_message,
-        _load_next_planned_block,
         _reset_new_workout_scaffold,
+        start_planned_workout,
     )
 
     draft_id = _draft_id_from(callback.data)
@@ -1505,7 +1505,7 @@ async def ai_program_train(callback: CallbackQuery, state: FSMContext):
         workout_id=workout_id, live_chat_id=sent.chat.id, live_message_id=sent.message_id,
         last_by_exercise={}, planned_blocks=planned,
     )
-    await _load_next_planned_block(callback, state)
+    await start_planned_workout(callback, state)
     await callback.answer("Погнали 💪")
 
 

@@ -61,6 +61,10 @@ async def _start_program(db, user_id, state, names_with_targets):
         ex_ids.append(ex_id)
     routine = await db.get_routine(routine_id)
     await routines._begin_routine_workout(_make_callback(user_id), state, routine)
+    # Тренировка по программе открывается экраном 📋 «С чего начнёшь?»; берём
+    # первое по порядку — эти тесты про сохранность плана, а не про то, каким
+    # тапом открыто первое упражнение.
+    await workout.live_plan_pick(_make_callback(user_id, "live:plan:pick:0"), state)
     return ex_ids, routine_id
 
 

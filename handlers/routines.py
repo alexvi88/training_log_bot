@@ -1119,7 +1119,7 @@ async def _begin_routine_workout(callback: CallbackQuery, state: FSMContext, rou
     """Create the workout and load the routine's first block. Assumes any
     previously active workout has already been dealt with."""
     from handlers.workout import _delete_message as wk_delete
-    from handlers.workout import _load_next_planned_block, _picker_screen_groups, _reset_new_workout_scaffold
+    from handlers.workout import _picker_screen_groups, _reset_new_workout_scaffold, start_planned_workout
 
     exercises = await db.list_routine_exercises(routine["id"])
     planned = [
@@ -1139,7 +1139,7 @@ async def _begin_routine_workout(callback: CallbackQuery, state: FSMContext, rou
         last_by_exercise={}, planned_blocks=planned,
     )
     if planned:
-        await _load_next_planned_block(callback, state)
+        await start_planned_workout(callback, state)
     else:
         await state.set_state(WorkoutFlow.picking_group)
         await _picker_screen_groups(callback, state)

@@ -612,16 +612,24 @@ def _reps_row_basis(
 ) -> tuple[float, int] | None:
     """От чего отталкивается ряд «тот же вес, другие повторы»: (вес, повторы).
 
-    Сегодняшний последний подход, а если его ещё нет — последний подход этого же
+    Сегодняшний последний подход, а если его ещё нет — ПЕРВЫЙ подход этого же
     упражнения в прошлый раз. Иначе первый подход остаётся без кнопок ровно там,
     где они полезнее всего: человек подошёл к снаряду и почти всегда начинает с
     того же веса, что и в прошлый раз, — он и так уже показан строкой
     «💡 Прошлый раз».
+
+    Первый, а не последний: внутри упражнения вес чаще падает, чем растёт —
+    последний подход прошлой тренировки это скидка от усталости (34.3, 32, 32),
+    и предлагать её как стартовый вес значит звать начать слабее, чем человек
+    начал в прошлый раз. К снаряду подходят с рабочего веса, а не с откатного,
+    и цель прогрессии (analytics.suggest_progression) считается от того же
+    верха, а не от последнего подхода, — ряд с ней теперь не спорит. Как только
+    сегодняшний подход записан, правило снова прежнее: вес берётся с него.
     """
     if today_sets:
         return today_sets[-1]
     if last_session:
-        weight, reps, _rpe = last_session[-1]
+        weight, reps, _rpe = last_session[0]
         return weight, reps
     return None
 
@@ -3015,9 +3023,17 @@ async def live_next_planned(callback: CallbackQuery, state: FSMContext):
 
 _PLAN_HINT = "📋 <b>Осталось по программе</b>\nВыбери, что делать сейчас — порядок не обязателен."
 _PLAN_REMOVE_HINT = "📋 <b>Убрать из плана</b>\nТапни то, чего сегодня не будет."
+# Первый экран тренировки по программе. До него первое упражнение открывалось
+# само, и порядок был свободным начиная со ВТОРОГО: с первым человек оказывался
+# заперт в том, что стояло в программе номером один, — а занята в зале бывает
+# ровно та стойка, с которой он собирался начать. Выход был («Закончить
+# упражнение» без единого подхода, потом 📋), но его надо было угадать.
+_PLAN_START_HINT = "📋 <b>План на сегодня</b>\nС чего начнёшь? Порядок не обязателен."
 
 
-async def _plan_screen(callback: CallbackQuery, state: FSMContext, *, removing: bool = False):
+async def _plan_screen(
+    callback: CallbackQuery, state: FSMContext, *, removing: bool = False, hint: str | None = None
+):
     """Список оставшегося по программе — или он же в режиме «убрать»."""
     data = await state.get_data()
     planned = list(data.get("planned_blocks") or [])
@@ -3028,9 +3044,26 @@ async def _plan_screen(callback: CallbackQuery, state: FSMContext, *, removing: 
     items = [(i, await _planned_block_label(b)) for i, b in enumerate(planned)]
     await _refresh_live(
         callback.bot, state, user, data["workout_id"],
-        _PLAN_REMOVE_HINT if removing else _PLAN_HINT,
+        hint or (_PLAN_REMOVE_HINT if removing else _PLAN_HINT),
         keyboards.planned_plan_keyboard(items, removing=removing),
     )
+
+
+async def start_planned_workout(callback: CallbackQuery, state: FSMContext) -> None:
+    """С чего начать тренировку по программе — тем же экраном 📋, что и дальше
+    по ходу тренировки.
+
+    Одно упражнение в плане — выбирать не из чего, открываем сразу: лишний тап
+    там, где решения нет, это не свобода, а препятствие. Со второго и дальше
+    экран тот же самый, что человек увидит между упражнениями, так что порядок
+    работает одинаково с первой минуты и учиться отдельно нечему.
+    """
+    planned = list((await state.get_data()).get("planned_blocks") or [])
+    if len(planned) < 2:
+        await _load_next_planned_block(callback, state)
+        return
+    await state.set_state(WorkoutFlow.idle)
+    await _plan_screen(callback, state, hint=_PLAN_START_HINT)
 
 
 @router.callback_query(StateFilter(WorkoutFlow.idle), F.data == "live:plan")
