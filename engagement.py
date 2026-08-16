@@ -402,11 +402,9 @@ async def _deliver(
     user = await db.get_user(telegram_id)
     show_tz_hint = _should_show_tz_hint(user)
     cta_text = PUSH_CTA_BY_CATEGORY.get(decision.category, DEFAULT_PUSH_CTA) if decision.with_cta else None
-    kb = (
-        keyboards.push_cta_keyboard(cta_text, with_tz_hint=show_tz_hint)
-        if (decision.with_cta or show_tz_hint)
-        else None
-    )
+    # Клавиатура теперь есть у любого пуша: у дайджеста своей CTA нет, но и
+    # тупиком он быть не должен — там встаёт «🏠 Меню» (см. push_cta_keyboard).
+    kb = keyboards.push_cta_keyboard(cta_text, with_tz_hint=show_tz_hint)
     try:
         message = await _send_push_photo(bot, telegram_id, decision, kb)
     except TelegramForbiddenError:
