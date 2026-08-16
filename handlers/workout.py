@@ -3,6 +3,7 @@
 import asyncio
 import datetime as dt
 import logging
+from collections import Counter
 from contextlib import suppress
 from dataclasses import dataclass
 from html import escape
@@ -352,17 +353,37 @@ async def _log_one(block_id: int, exercise_id: int, weight: float, reps: int, rp
 
 # Below this fraction (or above this multiple) of the heaviest set this exercise
 # has seen — last session или уже сегодня, — a just-logged weight is flagged as a
-# likely typo rather than a deliberate change: a real backoff set rarely goes
-# below the fraction, and nobody doubles their working weight in one set.
+# likely typo rather than a deliberate change.
 #
 # Верхний порог был 3.0 и пропускал ровно тот случай, ради которого всё и
-# делалось: восемь подходов по 200, потом «500 5» — это 2.5×, вопроса не
-# последовало, и 500 кг молча стали вечным рекордом упражнения. Прибавка вдвое
-# за один подход не бывает настоящей тренировкой ни у кого; цена ложного
-# срабатывания — один тап «Да», цена пропуска — рекорд, тоннаж и ачивки, которых
-# уже не отобрать (см. _weight_confirm_prompt).
-_SUSPICIOUS_WEIGHT_LOW_FRACTION = 0.4
-_SUSPICIOUS_WEIGHT_HIGH_MULTIPLE = 2.0
+# делалось: восемь подходов по 200, потом «500 5» — вопроса не последовало, и
+# 500 кг молча стали вечным рекордом упражнения. Прибавка в полтора раза за один
+# подход настоящей тренировкой почти не бывает; цена ложного срабатывания — один
+# тап «Да», цена пропуска — рекорд, тоннаж и ачивки, которых уже не отобрать
+# (см. _weight_confirm_prompt).
+#
+# Нижний порог, наоборот, ослаблен с 0.4 до 0.15 — из-за разминки. Кто пишет
+# разминочные подходы в тот же список (а таких много), на 60кг перед рабочими
+# 200 получал «60кг? в прошлый раз 210кг» — вопрос на ровном месте, каждую
+# тренировку. Настоящая опечатка в эту сторону — потерянный разряд («14» вместо
+# «140», «1 1» вместо «140 6»), то есть десятая часть веса и меньше; 0.15 ловит
+# весь этот класс и молчит на разминке, откате и лёгком добивочном подходе.
+_SUSPICIOUS_WEIGHT_LOW_FRACTION = 0.15
+_SUSPICIOUS_WEIGHT_HIGH_MULTIPLE = 1.5
+
+
+def _working_weight_today(today_sets: list[tuple[float, int]]) -> float:
+    """Самый тяжёлый вес, который сегодня в этом упражнении встретился минимум
+    дважды, — то есть рабочий, а не ступенька разминки.
+
+    Одного подхода мало: разминка на новом упражнении выглядит как 60, потом
+    200, и если считать планкой первую же цифру, рабочий подход сам окажется
+    «подозрительно тяжёлым» — бот спросит про нормальный вес ровно там, где
+    сравнивать ещё не с чем. Повторённый вес — это уже заявление о том, с чем
+    человек сегодня работает.
+    """
+    counts = Counter(w for w, _r in today_sets if w > 0)
+    return max((w for w, times in counts.items() if times >= 2), default=0.0)
 
 
 def _suspicious_weight_warning(
@@ -378,10 +399,11 @@ def _suspicious_weight_warning(
     (0 kg either time) are exempt: a light set there is normal, not a typo.
 
     Сравнение идёт с самым тяжёлым подходом этого упражнения И в прошлый раз, И
-    уже сегодня. Сегодняшние раньше не учитывались вовсе, и на упражнении без
-    истории проверки не было никакой — при том что восемь подходов по 200,
-    набранные полчаса назад, говорят о правдоподобном весе больше, чем любая
-    прошлая тренировка.
+    уже сегодня (сегодняшний — только рабочий, см. _working_weight_today).
+    Сегодняшние раньше не учитывались вовсе, и на упражнении без истории
+    проверки не было никакой — при том что восемь подходов по 200, набранные
+    полчаса назад, говорят о правдоподобном весе больше, чем любая прошлая
+    тренировка.
     """
     if not today_sets:
         return None
@@ -389,7 +411,7 @@ def _suspicious_weight_warning(
     if last_weight <= 0:
         return None
     prev_max_weight = max((w for w, _r, _rpe in last_session or []), default=0.0)
-    today_max_weight = max((w for w, _r in today_sets[:-1]), default=0.0)
+    today_max_weight = _working_weight_today(today_sets[:-1])
     baseline = max(prev_max_weight, today_max_weight)
     if baseline <= 0:
         return None
