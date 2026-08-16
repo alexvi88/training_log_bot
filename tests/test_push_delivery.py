@@ -76,17 +76,36 @@ async def test_push_cta_continues_the_coach_line_per_category(fresh_db, user_id)
     assert kb.inline_keyboard[0][0].text == engagement.DEFAULT_PUSH_CTA
 
 
-async def test_push_without_cta_omits_the_keyboard(fresh_db, user_id):
-    """С with_cta=False клавиатуры нет вовсе — но только если некому показать
-    и одноразовую подсказку про пояс: она сама по себе строка с кнопкой, и
-    её проверяет отдельный тест (test_timezone.py)."""
+async def test_a_digest_without_cta_still_offers_the_menu(fresh_db, user_id):
+    """С with_cta=False своей кнопки у пуша нет — но и тупиком он быть не
+    должен: тренер подводит итоги недели и советует, что добрать, а вся сводка
+    с объёмом и рекордами лежит ровно в одном экране отсюда.
+
+    Колбэк — тот же, что у карточки законченной тренировки: он открывает меню,
+    НЕ удаляя сообщение, с которого пришли. Дайджест перечитывают."""
     await fresh_db.mark_tz_set_by_user(user_id)
     bot = _bot()
     decision = engagement.PushDecision(push_texts.WEEKLY_DIGEST, "текст", with_cta=False)
 
     await engagement._deliver(bot, user_id, decision, _TODAY)
 
-    assert bot.send_photo.await_args.kwargs["reply_markup"] is None
+    kb = bot.send_photo.await_args.kwargs["reply_markup"]
+    assert [b.text for row in kb.inline_keyboard for b in row] == ["🏠 Меню"]
+    assert kb.inline_keyboard[0][0].callback_data == "live:back_to_menu"
+
+
+async def test_a_push_with_its_own_cta_does_not_add_the_menu(fresh_db, user_id):
+    """«▶ Начать тренировку» — и есть то действие, ради которого пуш послан;
+    вторая строка под ним только растащила бы внимание."""
+    await fresh_db.mark_tz_set_by_user(user_id)
+    bot = _bot()
+
+    await engagement._deliver(
+        bot, user_id, engagement.PushDecision(push_texts.SKIP_3, "текст"), _TODAY
+    )
+
+    kb = bot.send_photo.await_args.kwargs["reply_markup"]
+    assert "🏠 Меню" not in [b.text for row in kb.inline_keyboard for b in row]
 
 
 async def test_a_caption_over_telegrams_limit_is_truncated(fresh_db, user_id):
