@@ -485,6 +485,19 @@ def test_reps_row_is_captioned_with_the_weight():
     assert "Жми повторы на 25кг" in hint
 
 
+def test_caption_fits_one_line_on_a_phone():
+    """Полный вариант («Жми повторы — запишу подход на 200кг») переносился ровно
+    перед весом, и вес — единственное, ради чего подпись стоит, — оставался на
+    второй строке один. В строку телефона влезает около 32 знаков; держим бюджет
+    даже на трёхзначном весе с дробью."""
+    hint = workout._logging_hint(
+        None, True, "kg", False, [(207.5, 5)],
+        show_instruction=False, reps_row=(207.5, 5),
+    )
+    caption = hint.splitlines()[-1]
+    assert len(caption) <= 32, caption
+
+
 def test_caption_does_not_re_explain_where_the_weight_came_from():
     """«(как в прошлый раз)» повторяло строку «💡 Прошлый раз» дословно, а когда
     весов в прошлый раз было несколько — ещё и спорило с ней: вес взят с
