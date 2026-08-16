@@ -342,7 +342,12 @@ const fmt = n => String(Math.round(n));
 // ── 3D-МИР: игровые координаты (worldX -1..1, z 0..ZFAR) → сцена Three.js ────
 // Игровая логика вся в этих условных единицах (как и была), а в сцену её
 // переводят только при размещении мешей и при проекции точек на HUD-канвас.
-const ZFAR = 4.3;                  // глубина спавна препятствий (игровые unit) — увеличена вместе со скоростью, чтобы препятствия успевали читаться
+// Была 4.3 — по живому отзыву («короткий плейграунд», враги появляются и
+// сразу в ближнем бою) время от появления волны до столкновения выходило
+// около 3-4 секунд у самого быстрого типа. Поднята почти в полтора раза —
+// враги видны заметно раньше и по ним реально успеваешь стрелять, а не
+// просто встречаешь их вплотную.
+const ZFAR = 6.2;                  // глубина спавна препятствий (игровые unit)
 const TRACK_HALF3 = 4.3;          // половина ширины дорожки в мире Three.js
 const Z_SCALE = 6.4;              // игровой z (подход препятствий) → мир
 const FOLLOWER_Z_SCALE = 4.4;     // «за лидером» — своя, более плотная шкала (колонна вглубь)
@@ -1716,7 +1721,13 @@ function flash(color, ms) {
     cc.translate(74, 152);
     drawAthlete(cc, key, { idle: true, scale: 1.85 });
     const img = new Image();
-    img.src = 'assets/game/' + key + '.jpg';
+    // Абсолютный путь — страница отдаётся с /game/squad, и относительный
+    // 'assets/game/…' резолвился бы в /game/assets/game/… (мимо реального
+    // роута /assets/game/…) — картинки молча падали в 404 и в векторный
+    // фолбэк. Относительный путь оставлен запасным для локального открытия
+    // файла с диска, где своего сервера с роутом /game/squad нет.
+    img.onerror = () => { img.onerror = null; img.src = 'assets/game/' + key + '.jpg'; };
+    img.src = '/assets/game/' + key + '.jpg';
     img.onload = () => { card.replaceChild(img, c); };
     card.appendChild(c);
     const nm = document.createElement('div');
@@ -1763,8 +1774,13 @@ function finishToResult(d, sc, sq) {
   const art = document.getElementById('result-art');
   art.style.display = 'none';
   art.onload = () => { art.style.display = 'block'; };
-  art.onerror = () => { art.style.display = 'none'; };
-  art.src = 'assets/game/' + selectedFighter + '.jpg';
+  // Тот же абсолютный путь, что и на карточках выбора (см. buildFighterCards) —
+  // страница живёт на /game/squad, относительный путь резолвился мимо роута.
+  art.onerror = () => {
+    if (art.src.startsWith(location.origin + '/assets/game/')) art.src = 'assets/game/' + selectedFighter + '.jpg';
+    else art.style.display = 'none';
+  };
+  art.src = '/assets/game/' + selectedFighter + '.jpg';
   document.getElementById('result-score').textContent = d + ' м · 🥤 ' + sc;
   document.getElementById('result-stats').textContent = 'макс. отряд: ' + sq;
   document.getElementById('result-quip').textContent = 'ПРИВЕТ АТЛЕТ! ' + sq + pick(QUIPS);
@@ -2106,7 +2122,10 @@ function update(dt) {
           if (enemyLeft <= 0) {
             score += g.countMax * (def.isLeader ? 4 : 1);
             shockwave(p.x, p.y - 20, def.isGiant ? '#ffdf70' : '#bfe89a', def.isGiant ? 170 : 110, 0.36);
-            popNumber((def.isLeader ? 'ВОЖАК СЛОМЛЕН −' : (def.isGiant ? 'ГИГАНТ ПОВЕРЖЕН −' : 'ОТРЯД ПРОДАВИЛ −')) + fmt(loss), C_GREEN, W / 2, GROUND_F * H - 90, true);
+            // «ОТРЯД ПРОДАВИЛ −40» читалось двусмысленно: победа это или потеря?
+            // Явный глагол с объектом («…ВРАГА») плюс разделитель перед ценой
+            // победы убирают путаницу — сначала итог схватки, потом цена.
+            popNumber((def.isLeader ? 'ВОЖАК СЛОМЛЕН · −' : (def.isGiant ? 'ГИГАНТ ПОВЕРЖЕН · −' : 'ПРОДАВИЛИ ВРАГА · −')) + fmt(loss), C_GREEN, W / 2, GROUND_F * H - 90, true);
           } else {
             popNumber('−' + fmt(loss), '#ff4444', W / 2, GROUND_F * H - 90, true);
           }
