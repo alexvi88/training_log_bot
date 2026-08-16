@@ -121,9 +121,27 @@ async def test_the_first_exercise_is_chosen_too_not_forced(fresh_db, user_id):
 
     await routines._begin_routine_workout(cb, await _state(user_id), routine)
 
-    assert _button_texts(_last_keyboard(cb))[:2] == ["Жим лёжа", "Разводка"]
+    assert _button_texts(_last_keyboard(cb)) == ["Жим лёжа", "Разводка", "⬅️ Назад"]
     assert _callback_datas(_last_keyboard(cb))[:2] == ["live:plan:pick:0", "live:plan:pick:1"]
     assert "С чего начнёшь" in _last_text(cb)
+
+
+async def test_the_start_screen_does_not_offer_removing_anything_yet(fresh_db, user_id):
+    """Чего сегодня не будет, выясняется у занятого тренажёра, а не до начала
+    тренировки. Между упражнениями кнопка на месте — там это уже решение."""
+    db = fresh_db
+    routine, _ = await _routine_for(db, user_id, [("Жим лёжа", "4x8"), ("Разводка", "3x12")])
+    state = await _state(user_id)
+    cb = _make_callback(user_id)
+    await routines._begin_routine_workout(cb, state, routine)
+
+    assert "live:plan:rm" not in _callback_datas(_last_keyboard(cb))
+
+    await workout.live_plan_pick(_make_callback(user_id, "live:plan:pick:0"), state)
+    await _go_idle(user_id, state)
+    mid = _make_callback(user_id, "live:plan")
+    await workout.live_plan(mid, state)
+    assert "live:plan:rm" in _callback_datas(_last_keyboard(mid))
 
 
 async def test_starting_out_of_order_opens_the_second_and_keeps_the_first(fresh_db, user_id):

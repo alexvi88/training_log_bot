@@ -394,6 +394,44 @@ def test_suspicious_weight_warning_none_without_history():
     assert workout._suspicious_weight_warning([(140.0, 6, None)], today_sets=None) is None
 
 
+def test_suspicious_weight_warning_counts_todays_own_sets():
+    """Живой репорт: восемь подходов по 200, потом «500 5» — и ни одного
+    вопроса. Сегодняшние подходы не участвовали в сверке вовсе, хотя они и есть
+    самое свежее свидетельство о правдоподобном весе."""
+    today = [(200.0, 4)] * 8 + [(500.0, 5)]
+
+    warning = workout._suspicious_weight_warning([(210.0, 4, None)], today_sets=today)
+
+    assert warning is not None
+    assert "500кг?" in warning
+
+
+def test_suspicious_weight_warning_says_today_when_the_baseline_is_todays():
+    """«в прошлый раз 200кг» под списком, где 200 стоит восемь раз сегодня,
+    читалось бы как ошибка самого бота."""
+    today = [(200.0, 4)] * 8 + [(500.0, 5)]
+
+    warning = workout._suspicious_weight_warning([(90.0, 4, None)], today_sets=today)
+
+    assert warning is not None
+    assert "сегодня 200кг" in warning
+
+
+def test_suspicious_weight_warning_works_on_an_exercise_without_history():
+    """Первая тренировка нового упражнения: прошлого раза нет, но свои же
+    подходы получасовой давности есть — и сверять есть с чем."""
+    assert workout._suspicious_weight_warning(None, today_sets=[(60.0, 8), (500.0, 5)]) is not None
+    assert workout._suspicious_weight_warning(None, today_sets=[(60.0, 8), (65.0, 8)]) is None
+
+
+def test_suspicious_weight_warning_asks_at_double_the_working_weight():
+    """Порог был 3× и пропускал 200 → 500. Прибавка вдвое за один подход не
+    бывает настоящей тренировкой, а цена вопроса — один тап «Да»."""
+    last_session = [(100.0, 6, None)]
+    assert workout._suspicious_weight_warning(last_session, today_sets=[(201.0, 5)]) is not None
+    assert workout._suspicious_weight_warning(last_session, today_sets=[(200.0, 5)]) is None
+
+
 def test_suspicious_weight_warning_flags_an_extra_digit_too():
     """The check used to be one-directional — only a suspiciously *low* weight
     was flagged, so "1400" typed for "140" (parser.MAX_WEIGHT's 1500 ceiling

@@ -912,3 +912,64 @@ async def test_long_name_warning_declines_symbol_count_correctly():
     assert workout._suspicious_exercise_name_reason("я" * 85) == (
         "длинновато для упражнения (85 символов)"
     )
+
+
+async def test_stepping_into_a_group_and_back_keeps_the_start_screen_whole(
+    fresh_db, user_id, monkeypatch
+):
+    """Живой репорт: с первого экрана тренировки зайти в группу мышц и вернуться
+    «⬅️ Назад» — программы, «🔁 Повторить тренировку» и «🤖 Собрать тренировку на
+    сегодня» пропадали, оставались голые группы. Человек уходил с одного экрана,
+    а приходил на другой, будто половину кнопок стёрли у него за спиной."""
+    monkeypatch.setattr(workout.ai_trainer, "is_configured", lambda: True)
+    await fresh_db.finish_workout(await fresh_db.create_workout(user_id))
+    group_id = await fresh_db.create_muscle_group(user_id, "Спина")
+    await fresh_db.create_exercise(user_id, "Тяга", group_id)
+
+    captured = {}
+
+    async def fake_refresh_live(bot, state, user, wid, hint, kb):
+        captured["kb"] = kb
+
+    monkeypatch.setattr(workout, "_refresh_live", fake_refresh_live)
+
+    workout_id = await fresh_db.create_workout(user_id)
+    state = await _make_state(user_id, open_exercises=[], active_exercise_id=None)
+    await state.update_data(workout_id=workout_id)
+    await state.set_state(WorkoutFlow.picking_group)
+    await workout._picker_screen_groups(_make_callback(user_id, ""), state, show_program_button=True)
+    before = [b.callback_data for row in captured["kb"].inline_keyboard for b in row]
+    assert {"rt:manage", "pick:repeat", "ai:buildworkout"} <= set(before)
+
+    await workout.pick_group(_make_callback(user_id, f"pick:group:{group_id}"), state)
+    await workout.pick_back_to_groups(_make_callback(user_id, "pick:back"), state)
+
+    after = [b.callback_data for row in captured["kb"].inline_keyboard for b in row]
+    assert after == before
+
+
+async def test_adding_an_exercise_mid_workout_stays_a_plain_group_picker(
+    fresh_db, user_id, monkeypatch
+):
+    """Обратная сторона той же памяти: «➕ Упражнение» посреди тренировки — это
+    не начало тренировки, и программам с повтором там не место."""
+    monkeypatch.setattr(workout.ai_trainer, "is_configured", lambda: True)
+    await fresh_db.finish_workout(await fresh_db.create_workout(user_id))
+
+    captured = {}
+
+    async def fake_refresh_live(bot, state, user, wid, hint, kb):
+        captured["kb"] = kb
+
+    monkeypatch.setattr(workout, "_refresh_live", fake_refresh_live)
+
+    workout_id = await fresh_db.create_workout(user_id)
+    state = await _make_state(user_id, open_exercises=[], active_exercise_id=None)
+    await state.update_data(workout_id=workout_id)
+    await state.set_state(WorkoutFlow.picking_group)
+    await workout._picker_screen_groups(_make_callback(user_id, ""), state, show_program_button=True)
+
+    await workout.live_add_exercise(_make_callback(user_id, "live:add_exercise"), state)
+
+    callbacks = [b.callback_data for row in captured["kb"].inline_keyboard for b in row]
+    assert not {"rt:manage", "pick:repeat", "ai:buildworkout"} & set(callbacks)

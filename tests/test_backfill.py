@@ -49,7 +49,7 @@ async def test_double_tap_on_same_date_creates_only_one_workout(fresh_db, user_i
 
     calls = {"n": 0}
 
-    async def _fake_picker_screen_groups(event, state_):
+    async def _fake_picker_screen_groups(event, state_, show_program_button=None):
         calls["n"] += 1
         if calls["n"] == 1:
             # Simulate a second tap landing while the first is still in flight —
@@ -81,7 +81,7 @@ async def test_no_orphan_workout_when_picker_screen_fails(fresh_db, user_id, mon
     # linking the workout into state; simulate that message being long gone.
     callback.message.delete = AsyncMock(side_effect=TelegramBadRequest(method=MagicMock(), message="message to delete not found"))
 
-    async def _boom(event, state_):
+    async def _boom(event, state_, show_program_button=None):
         raise TelegramBadRequest(method=MagicMock(), message="MESSAGE_ID_INVALID")
 
     monkeypatch.setattr("handlers.workout._picker_screen_groups", _boom)
@@ -115,7 +115,7 @@ async def test_typed_date_double_tap_is_guarded(fresh_db, user_id, monkeypatch):
 
     calls = {"n": 0}
 
-    async def _fake_picker_screen_groups(event, state_):
+    async def _fake_picker_screen_groups(event, state_, show_program_button=None):
         calls["n"] += 1
 
     monkeypatch.setattr("handlers.workout._picker_screen_groups", _fake_picker_screen_groups)

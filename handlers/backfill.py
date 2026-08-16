@@ -100,7 +100,9 @@ async def _date_chosen(event, state: FSMContext, date: dt.date):
         last_by_exercise={}, is_backfill=True, bf_date=date.isoformat(),
     )
     await state.set_state(WorkoutFlow.picking_group)
-    await _picker_screen_groups(event, state)
+    # Занесение задним числом — не «что тренировать сегодня»: ни программ, ни
+    # повтора тренировки тут не предлагаем.
+    await _picker_screen_groups(event, state, show_program_button=False)
 
 
 @router.callback_query(StateFilter(BackfillFlow.awaiting_date), F.data.startswith("bf:date:"))
