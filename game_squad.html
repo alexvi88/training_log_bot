@@ -1573,10 +1573,18 @@ function mergeGltfGeometry(gltf) {
   // minY у всех проверенных моделей и так ~0 (стопы на полу исходной сцены) —
   // сдвигаем на всякий случай, чтобы после масштабирования нога точно стояла
   // на y=0 в системе координат инстанса (placeCharacter кладёт корень на пол).
+  //
+  // Модели Kenney развёрнуты лицом к +Z — в нашей сцене это прямо на камеру,
+  // которая стоит за отрядом и смотрит вперёд по ходу движения (в -Z). Итог
+  // без поворота: бойцы бегут вперёд, а лицом стоят к игроку — как будто
+  // идут задом наперёд. Разворот на 180° вокруг Y (знак у X и Z меняется,
+  // Y не трогаем) — теперь затылок к камере, лицо по ходу движения.
   for (let i = 0; i < positions.length; i += 3) {
-    positions[i] *= norm;
+    positions[i] *= -norm;
     positions[i + 1] = (positions[i + 1] - minY) * norm;
-    positions[i + 2] *= norm;
+    positions[i + 2] *= -norm;
+    normals[i] *= -1;
+    normals[i + 2] *= -1;
   }
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
