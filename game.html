@@ -434,7 +434,10 @@ function drawLocker(a) {
 const obstacles = [];
 let nextObsAt = 70;
 function spawnObstacle() {
-  const pool = ['dumb', 'kettle', 'bench', 'rack', 'plate', 'dumb', 'rack'];
+  // Пять «прыжковых» (dumb×2, kettle, bench, plate) на пять «подкатных»
+  // (rack×2, bag, cable, crossover) — заказчик просил разнообразия сверху, а
+  // не перекоса в подкат: доля осталась той же, что и раньше у прыжковых.
+  const pool = ['dumb', 'kettle', 'bench', 'rack', 'plate', 'dumb', 'rack', 'bag', 'cable', 'flyplate'];
   // Вышибала подмешивается в общий пул только после того, как забег разогнался
   // и игрок освоился — не с первой секунды (см. RIVAL_MIN_DIST).
   if (dist >= RIVAL_MIN_DIST) pool.push('rival');
@@ -445,6 +448,21 @@ function spawnObstacle() {
   if (kind === 'bench') { o.w = 110; o.h = 34; }
   if (kind === 'rack') { o.w = 26; o.h = 0; o.gap = 64; }
   if (kind === 'plate') { o.w = 44; o.h = 44; o.vx = 120 + speed * 0.12; o.rot = 0; }
+  // Груша — свисает с потолка на цепи, покачивается из стороны в сторону
+  // (чисто визуально, на просвет не влияет). Просвет фиксированный, как у rack,
+  // но силуэт совсем другой — цилиндр на цепи, а не перекладина на стойках.
+  if (kind === 'bag') { o.w = 46; o.h = 0; o.gap = 62; o.swingPhase = rnd(0, Math.PI * 2); }
+  // Канат — тонкий трос между двумя короткими стойками, чуть вибрирует/провисает.
+  if (kind === 'cable') { o.w = 120; o.h = 0; o.gap = 56; o.wavePhase = rnd(0, Math.PI * 2); }
+  // Летящий блин — прилетает по дуге сверху-справа (не катится по полу, как
+  // обычный plate), проходит на высоте подката и улетает налево, вращаясь.
+  // Главный запрос заказчика: «слишком легко всё перепрыгивается» — этот тип
+  // не прощает прыжок в принципе (см. obstacleBox — коробка тянется вверх
+  // выше пика прыжка, прыжок буквально сбивает игрока в полёте).
+  if (kind === 'flyplate') {
+    o.w = 44; o.h = 44; o.gap = 58; o.rot = 0; o.vx = 60 + speed * 0.1;
+    o.age = 0; o.floatPhase = rnd(0, Math.PI * 2);
+  }
   if (kind === 'rival') {
     // Живой противник в полный рост: перепрыгнуть можно (как через тумбу),
     // подкатиться под него нельзя — коробка достаёт до пола (см. obstacleBox).
@@ -468,9 +486,15 @@ function spawnObstacle() {
 }
 
 function spawnGuideItems(o) {
-  if (o.kind === 'plate') return; // блин едет навстречу — «след» из наград разъедется с ним
+  if (o.kind === 'plate' || o.kind === 'flyplate') return; // летит/едет навстречу — «след» разъедется с ним
   if (o.kind === 'rack') {
     for (let i = 0; i < 4; i++) items.push(mkItem('shaker', o.x - 40 + i * 46, GROUND() - 26));
+    return;
+  }
+  // Груша, канат — те же подкатные хазарды, что и стойка: след из наград
+  // прямо в коридоре подката, на ту же высоту, что и у rack.
+  if (o.kind === 'bag' || o.kind === 'cable') {
+    for (let i = 0; i < 4; i++) items.push(mkItem('shaker', o.x + 6 + i * (o.w - 12) / 3, GROUND() - 26));
     return;
   }
   const cx = o.x + o.w / 2, n = 5;
@@ -522,11 +546,75 @@ function drawObstacle(o) {
     ctx.translate(o.w / 2, gy); ctx.scale(-1, 1);
     drawAthlete(ctx, RIVAL_SKIN, { run: Math.sin(o.runPhase * 14), rage: true, scale: 1.08 });
   }
+  if (o.kind === 'bag') {
+    // Боксёрская груша на цепи с потолка — свисает и слегка качается из
+    // стороны в сторону. Нижний край на высоте подката (o.gap), верх цепи
+    // уходит за кадр — читается как «висит», а не «стоит», в отличие от
+    // rack (перекладина на стойках) и cable (натянутый трос).
+    const swing = Math.sin(o.swingPhase) * 9;
+    const botY = gy - o.gap, topY = gy - o.gap - 130;
+    ctx.strokeStyle = '#6b6f78'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(o.w / 2, -20); ctx.lineTo(o.w / 2 + swing * 0.3, topY); ctx.stroke();
+    ctx.fillStyle = '#54585f';
+    for (let i = 0; i < 4; i++) { const ly = topY + i * 18; ctx.beginPath(); ctx.arc(o.w / 2 + swing * (0.3 + i * 0.05), ly, 2.6, 0, 7); ctx.fill(); }
+    ctx.save();
+    ctx.translate(o.w / 2 + swing, (topY + botY) / 2);
+    ctx.rotate(swing * 0.018);
+    ctx.fillStyle = '#5a3a2a';
+    ctx.beginPath(); ctx.roundRect(-o.w / 2, -(botY - topY) / 2, o.w, botY - topY, o.w * 0.32); ctx.fill();
+    ctx.fillStyle = '#432c20';
+    ctx.fillRect(-o.w / 2, -6, o.w, 5); ctx.fillRect(-o.w / 2, 10, o.w, 5);
+    ctx.fillStyle = 'rgba(255,255,255,0.12)'; ctx.fillRect(-o.w / 2 + 5, -(botY - topY) / 2 + 6, 6, botY - topY - 12);
+    ctx.restore();
+  }
+  if (o.kind === 'cable') {
+    // Натянутый трос между двумя короткими стойками, на высоте подката —
+    // тонкий профиль, лёгкое провисание/вибрация синусом. Контраст с rack:
+    // никаких силовых стоек в полный рост, просто линия поперёк коридора.
+    const ropeY = gy - o.gap, wob = Math.sin(o.wavePhase) * 4;
+    ctx.fillStyle = '#3f434c';
+    ctx.fillRect(-6, ropeY - 32, 9, 32); ctx.fillRect(o.w - 3, ropeY - 32, 9, 32);
+    ctx.fillStyle = '#5a606c'; ctx.fillRect(-8, ropeY - 34, 13, 5); ctx.fillRect(o.w - 5, ropeY - 34, 13, 5);
+    ctx.strokeStyle = '#d8d2bf'; ctx.lineWidth = 4; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(-1, ropeY); ctx.quadraticCurveTo(o.w / 2, ropeY + 7 + wob, o.w + 1, ropeY); ctx.stroke();
+    ctx.strokeStyle = 'rgba(0,0,0,0.35)'; ctx.lineWidth = 1.4;
+    ctx.beginPath(); ctx.moveTo(-1, ropeY + 1.5); ctx.quadraticCurveTo(o.w / 2, ropeY + 8.5 + wob, o.w + 1, ropeY + 1.5); ctx.stroke();
+  }
+  if (o.kind === 'flyplate') {
+    // Летящий блин: прилетает по дуге сверху-справа, идёт горизонтально на
+    // высоте подката с лёгким синусом по высоте для читаемости, вращаясь —
+    // не катится по полу, как обычный plate, поэтому и прыжок не спасает
+    // (см. obstacleBox — коробка накрывает всю высоту прыжка).
+    const bob = Math.sin(o.floatPhase) * 8;
+    const dropIn = Math.max(0, 1 - o.age / 0.4); // первые ~0.4с — ещё «долетает» сверху
+    const cy = gy - o.gap - o.h / 2 + bob - dropIn * dropIn * 150;
+    ctx.save();
+    ctx.globalAlpha = 1 - dropIn * 0.15;
+    ctx.translate(o.w / 2, cy); ctx.rotate(o.rot);
+    ctx.fillStyle = '#c0392b'; ctx.beginPath(); ctx.arc(0, 0, o.h / 2, 0, 7); ctx.fill();
+    ctx.fillStyle = '#8f2a20'; ctx.beginPath(); ctx.arc(0, 0, o.h / 2 - 7, 0, 7); ctx.fill();
+    ctx.fillStyle = '#c0392b'; ctx.beginPath(); ctx.arc(0, 0, 8, 0, 7); ctx.fill();
+    ctx.fillStyle = CHALK; ctx.beginPath(); ctx.arc(0, 0, 3.4, 0, 7); ctx.fill();
+    ctx.fillStyle = 'rgba(242,237,227,0.5)'; ctx.fillRect(-o.h / 2 + 4, -1.5, 10, 3);
+    ctx.restore();
+    // Лёгкий росчерк-траектория позади блина — читается, что летит, а не катится.
+    if (dropIn > 0) {
+      ctx.strokeStyle = 'rgba(192,57,43,' + (0.35 * dropIn).toFixed(2) + ')'; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.moveTo(o.w / 2, cy); ctx.lineTo(o.w / 2 + 30, cy - 150 * dropIn * dropIn * 0.6); ctx.stroke();
+    }
+  }
   ctx.restore();
 }
 function obstacleBox(o) {
   const gy = GROUND(), m = 5;
   if (o.kind === 'rack') return { x: o.x - 14 + m, y: gy - o.gap - 10, w: o.w + 104 - 2 * m, h: 20 };
+  if (o.kind === 'bag' || o.kind === 'cable' || o.kind === 'flyplate') {
+    // Хазарды «сверху»: коробка стоит на том же нижнем крае, что и просвет
+    // подката (o.gap — совместимо с rack), но тянется далеко вверх — выше
+    // пика прыжка (~190px), поэтому прыжок ЧЕРЕЗ них не спасает никогда,
+    // только подкат, который проходит ниже нижнего края коробки.
+    return { x: o.x + m, y: gy - o.gap - 210, w: o.w - 2 * m, h: 220 };
+  }
   return { x: o.x + m, y: gy - o.h + m, w: o.w - 2 * m, h: o.h - m };
 }
 
@@ -992,6 +1080,9 @@ function update(dt) {
     o.x -= spd * dt + (o.vx ? o.vx * dt : 0);
     if (o.kind === 'plate') o.rot -= dt * 7;
     if (o.kind === 'rival') o.runPhase += dt * ((spd + o.vx) / 300);
+    if (o.kind === 'bag') o.swingPhase += dt * 2.4;
+    if (o.kind === 'cable') o.wavePhase += dt * 7;
+    if (o.kind === 'flyplate') { o.rot -= dt * 12; o.floatPhase += dt * 3.5; o.age += dt; }
     if (o.x < -160) { obstacles.splice(i, 1); continue; }
     const b = obstacleBox(o);
     if (pb.x < b.x + b.w && pb.x + pb.w > b.x && pb.y < b.y + b.h && pb.y + pb.h > b.y) {
