@@ -482,7 +482,7 @@ def test_reps_row_is_captioned_with_the_weight():
         None, True, "kg", False, [(25.0, 10)],
         show_instruction=False, reps_row=(25.0, 10),
     )
-    assert "Жми повторы — запишу подход на 25кг" in hint
+    assert "Жми повторы — запишу на 25кг" in hint
 
 
 def test_caption_does_not_re_explain_where_the_weight_came_from():
@@ -500,8 +500,8 @@ def test_caption_does_not_re_explain_where_the_weight_came_from():
     )
     assert "как в прошлый раз" not in from_last
     assert "сверху" not in from_last
-    assert from_last.endswith("🔢 Жми повторы — запишу подход на 25кг")
-    assert from_today.endswith("🔢 Жми повторы — запишу подход на 25кг")
+    assert from_last.endswith("🔢 Жми повторы — запишу на 25кг")
+    assert from_today.endswith("🔢 Жми повторы — запишу на 25кг")
 
 
 def test_caption_shows_even_for_seasoned_users():
