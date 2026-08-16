@@ -28,7 +28,7 @@ class ParsedSet:
     rpe: float | None = None  # optional "@9" suffix; applies to every set produced by the token
 
 
-_SEP = r"[xXхХ*/]"
+_SEP = r"[xXхХ*/-]"
 _WEIGHT = r"\+?(?P<weight>\d+(?:[.,]\d+)?)"
 # Optional trailing "@RPE", e.g. "@9" or "@8.5" — subjective effort 1-10.
 _RPE = r"(?:\s*@\s*(?P<rpe>\d+(?:[.,]\d+)?))?"
