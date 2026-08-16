@@ -421,7 +421,7 @@ async def test_finish_setup_shows_progress_checklist_for_program_scenario(fresh_
     placeholder = chat.sent[0]
     assert placeholder.text == ai_trainer.progress_ui.initial_text(ai_trainer.PROGRAM_PROGRESS_STAGES)
     assert "0%" in placeholder.text
-    assert "Посмотрел твою историю" in placeholder.text
+    assert ai_trainer.PROGRAM_PROGRESS_STAGES[0] in placeholder.text
 
     placeholder.message.edit_text.assert_awaited()
     edit_texts = [call.args[0] for call in placeholder.message.edit_text.await_args_list]
