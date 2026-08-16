@@ -58,6 +58,10 @@ async def _start_program(db, user_id, state, names_with_targets):
         ex_ids.append(ex_id)
     routine = await db.get_routine(routine_id)
     await routines._begin_routine_workout(_make_callback(user_id), state, routine)
+    # Тренировка по программе начинается с экрана 📋 «С чего начнёшь?» — то, что
+    # раньше открывалось само. Здесь берём первое по порядку: эти тесты про
+    # порядок ПОСЛЕ старта, а он от способа открыть первое упражнение не зависит.
+    await workout.live_plan_pick(_make_callback(user_id, "live:plan:pick:0"), state)
     return ex_ids
 
 
@@ -91,6 +95,63 @@ async def _go_idle(user_id, state):
     cb = _make_callback(user_id, "live:finish_exercise")
     await workout.live_finish_exercise(cb, state)
     return cb
+
+
+async def _routine_for(db, user_id, names_with_targets):
+    """Программа, но БЕЗ старта тренировки — здесь проверяется как раз то, чем
+    тренировка по программе начинается."""
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    routine_id = await db.create_routine(user_id, "Push day")
+    ex_ids = []
+    for i, (name, target) in enumerate(names_with_targets):
+        ex_id = await db.create_exercise(user_id, name, group_id)
+        await db.add_routine_exercise(routine_id, ex_id, i, target)
+        ex_ids.append(ex_id)
+    return await db.get_routine(routine_id), ex_ids
+
+
+async def test_the_first_exercise_is_chosen_too_not_forced(fresh_db, user_id):
+    """Порядок был свободным начиная со второго упражнения: первое открывалось
+    само, и человек оказывался заперт в том, что стоит в программе номером один,
+    — при том что занята в зале бывает ровно та стойка, с которой он собирался
+    начать. Тренировка открывается тем же экраном 📋, что и дальше по ходу."""
+    db = fresh_db
+    routine, (bench, fly) = await _routine_for(db, user_id, [("Жим лёжа", "4x8"), ("Разводка", "3x12")])
+    cb = _make_callback(user_id)
+
+    await routines._begin_routine_workout(cb, await _state(user_id), routine)
+
+    assert _button_texts(_last_keyboard(cb))[:2] == ["Жим лёжа", "Разводка"]
+    assert _callback_datas(_last_keyboard(cb))[:2] == ["live:plan:pick:0", "live:plan:pick:1"]
+    assert "С чего начнёшь" in _last_text(cb)
+
+
+async def test_starting_out_of_order_opens_the_second_and_keeps_the_first(fresh_db, user_id):
+    """Тот самый случай, ради которого экран и появился: стойка для жима занята,
+    начинаем с разводки, жим никуда не девается."""
+    db = fresh_db
+    routine, (bench, fly) = await _routine_for(db, user_id, [("Жим лёжа", "4x8"), ("Разводка", "3x12")])
+    state = await _state(user_id)
+    await routines._begin_routine_workout(_make_callback(user_id), state, routine)
+
+    await workout.live_plan_pick(_make_callback(user_id, "live:plan:pick:1"), state)
+
+    data = await state.get_data()
+    assert await state.get_state() == WorkoutFlow.logging_set
+    assert data["open_exercises"] == [fly]
+    assert data["planned_blocks"] == [{"exercise_ids": [bench], "targets": {bench: "4x8"}}]
+
+
+async def test_a_one_exercise_program_opens_straight_away(fresh_db, user_id):
+    """Выбирать не из чего — лишний тап там, где решения нет, это не свобода."""
+    db = fresh_db
+    routine, _ = await _routine_for(db, user_id, [("Жим лёжа", "4x8")])
+    state = await _state(user_id)
+
+    await routines._begin_routine_workout(_make_callback(user_id), state, routine)
+
+    assert await state.get_state() == WorkoutFlow.logging_set
+    assert len((await state.get_data())["open_exercises"]) == 1
 
 
 async def test_idle_screen_names_the_next_program_exercise_and_offers_the_rest(fresh_db, user_id):

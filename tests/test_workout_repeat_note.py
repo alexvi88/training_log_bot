@@ -531,7 +531,19 @@ def test_caption_shows_even_for_seasoned_users():
 def test_reps_row_falls_back_to_last_session_before_the_first_set():
     """Первый подход — там кнопки полезнее всего: человек подошёл к снаряду и
     почти всегда начинает с того же веса, что и в прошлый раз."""
-    assert workout._reps_row_basis([], [(25.0, 12, None), (25.0, 10, None)]) == (25.0, 10)
+    assert workout._reps_row_basis([], [(25.0, 12, None), (25.0, 10, None)]) == (25.0, 12)
     assert workout._reps_row_basis([(30.0, 8)], [(25.0, 10, None)]) == (30.0, 8)
     # Ни сегодня, ни в прошлый раз — брать вес неоткуда, ряда нет.
     assert workout._reps_row_basis([], None) is None
+
+
+def test_the_first_set_starts_from_the_first_set_of_last_time_not_the_last():
+    """Внутри упражнения вес чаще падает, чем растёт: 34.3, 32, 32 — это не
+    «рабочий вес 32», это скидка от усталости в конце. Предлагать её как
+    стартовый вес значит звать начать слабее, чем человек начал в прошлый раз,
+    да ещё и спорить с целью прогрессии, которая считается от верха."""
+    last = [(34.3, 4, None), (32.0, 8, None), (32.0, 11, None)]
+
+    assert workout._reps_row_basis([], last) == (34.3, 4)
+    # А как только сегодняшний подход записан — правило прежнее, вес с него.
+    assert workout._reps_row_basis([(32.0, 5)], last) == (32.0, 5)
