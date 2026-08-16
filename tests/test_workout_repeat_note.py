@@ -420,16 +420,39 @@ def test_suspicious_weight_warning_says_today_when_the_baseline_is_todays():
 def test_suspicious_weight_warning_works_on_an_exercise_without_history():
     """Первая тренировка нового упражнения: прошлого раза нет, но свои же
     подходы получасовой давности есть — и сверять есть с чем."""
-    assert workout._suspicious_weight_warning(None, today_sets=[(60.0, 8), (500.0, 5)]) is not None
+    today = [(60.0, 8), (60.0, 8), (500.0, 5)]
+    assert workout._suspicious_weight_warning(None, today_sets=today) is not None
     assert workout._suspicious_weight_warning(None, today_sets=[(60.0, 8), (65.0, 8)]) is None
 
 
-def test_suspicious_weight_warning_asks_at_double_the_working_weight():
-    """Порог был 3× и пропускал 200 → 500. Прибавка вдвое за один подход не
-    бывает настоящей тренировкой, а цена вопроса — один тап «Да»."""
+def test_a_single_light_set_is_a_warmup_step_not_a_baseline():
+    """Разминка на новом упражнении выглядит как 60, потом 200. Считать планкой
+    первую же цифру — значит спросить про нормальный рабочий подход там, где
+    сравнивать ещё не с чем. Планкой становится вес, повторённый хотя бы дважды."""
+    assert workout._suspicious_weight_warning(None, today_sets=[(60.0, 8), (200.0, 5)]) is None
+    assert workout._suspicious_weight_warning(
+        None, today_sets=[(60.0, 8), (60.0, 8), (200.0, 5)]
+    ) is not None
+
+
+def test_a_warmup_set_written_into_the_same_list_asks_nothing():
+    """Кто пишет разминку в тот же список, на 60кг перед рабочими 200 получал
+    «60кг? в прошлый раз 210кг» — вопрос на ровном месте каждую тренировку.
+    Настоящая опечатка вниз — это потерянный разряд, а не половина веса."""
+    last_session = [(210.0, 4, None), (200.0, 4, None)]
+
+    assert workout._suspicious_weight_warning(last_session, today_sets=[(60.0, 10)]) is None
+    assert workout._suspicious_weight_warning(last_session, today_sets=[(50.0, 5)]) is None
+    # Потерянный разряд ловится по-прежнему: 21 вместо 210 — это десятая часть.
+    assert workout._suspicious_weight_warning(last_session, today_sets=[(21.0, 4)]) is not None
+
+
+def test_suspicious_weight_warning_asks_at_one_and_a_half_working_weights():
+    """Порог был 3× и пропускал 200 → 500. Прибавка в полтора раза за один
+    подход почти не бывает настоящей тренировкой, а цена вопроса — один тап «Да»."""
     last_session = [(100.0, 6, None)]
-    assert workout._suspicious_weight_warning(last_session, today_sets=[(201.0, 5)]) is not None
-    assert workout._suspicious_weight_warning(last_session, today_sets=[(200.0, 5)]) is None
+    assert workout._suspicious_weight_warning(last_session, today_sets=[(151.0, 5)]) is not None
+    assert workout._suspicious_weight_warning(last_session, today_sets=[(150.0, 5)]) is None
 
 
 def test_suspicious_weight_warning_flags_an_extra_digit_too():

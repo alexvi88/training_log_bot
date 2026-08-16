@@ -307,4 +307,6 @@ def test_backfill_still_checks_the_sets_of_the_same_backfilled_workout():
     resolved = [ParsedSet(weight=500.0, reps=5)]
 
     assert workout._weight_confirm_prompt(data, 7, resolved, "kg", []) is None
-    assert workout._weight_confirm_prompt(data, 7, resolved, "kg", [(200.0, 4)]) is not None
+    assert workout._weight_confirm_prompt(
+        data, 7, resolved, "kg", [(200.0, 4), (200.0, 4)]
+    ) is not None
