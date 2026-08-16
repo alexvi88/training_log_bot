@@ -155,3 +155,46 @@ async def test_run_progress_does_nothing_without_stages():
     task = asyncio.create_task(asyncio.sleep(0))
     await progress_ui.run_progress(message, task, [], edit_interval=0.01)
     message.edit_text.assert_not_awaited()
+
+
+# ---------- темп: галочки не должны кончаться раньше ожидания ----------
+
+
+def _percent_at(seconds: float) -> int:
+    import math
+
+    return min(
+        progress_ui.CAP_PERCENT,
+        int(progress_ui.CAP_PERCENT * (1 - math.exp(-seconds / progress_ui.GROWTH_TAU))),
+    )
+
+
+def _stages_done_at(seconds: float, stages) -> int:
+    return progress_ui._stage_done_count(_percent_at(seconds), len(stages), progress_ui.CAP_PERCENT)
+
+
+def test_the_checklist_keeps_moving_through_the_whole_wait():
+    """Живой репорт: экран замирал на «93%» с последним пунктом в работе, а
+    ждать оставалось ещё полминуты. Четыре галочки при tau=5 проставлялись за
+    первые шесть секунд — движение кончалось ровно тогда, когда оно нужнее
+    всего. Сборка программы идёт десятки секунд (потолок запроса — 90), значит
+    и галочки должны идти всё это время."""
+    from handlers.ai_trainer import PROGRAM_PROGRESS_STAGES as stages
+
+    # За первые пять секунд — не больше трети чек-листа.
+    assert _stages_done_at(5, stages) <= len(stages) // 3
+    # К десятой и к тридцатой секунде экран всё ещё двигается.
+    assert _stages_done_at(10, stages) < _stages_done_at(30, stages)
+    # И даже на тридцатой секунде остаётся что показать.
+    assert _stages_done_at(30, stages) < len(stages)
+
+
+def test_the_last_stage_never_ticks_itself():
+    """Последняя галочка — это и есть настоящее «готово»: её ставит только
+    run_progress по факту завершения задачи, а не таймер. Проверяем по всей
+    длине ожидания, какая вообще возможна: дольше потолка запроса вызов не
+    живёт (config.AI_REQUEST_TIMEOUT_SECONDS)."""
+    import config
+    from handlers.ai_trainer import PROGRAM_PROGRESS_STAGES as stages
+
+    assert _stages_done_at(config.AI_REQUEST_TIMEOUT_SECONDS, stages) == len(stages) - 1
