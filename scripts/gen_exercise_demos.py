@@ -124,18 +124,28 @@ USER_AGENT = "training-log-bot-exercise-demos/1.0"
 
 # Персонаж — дословно по TONE_OF_VOICE.md, раздел «Стиль картинок». Меняется
 # только вместе с ним: разъедутся — в карточках заведётся второй тренер.
-CHARACTER = (
+# Разбит на три части не для красоты: режим `photo` берёт зал с исходного фото,
+# и описание НАШЕГО зала там нельзя подмешивать — иначе модель снова получает
+# два взаимоисключающих требования и начинает выдумывать третий зал.
+CHARACTER_WHO = (
     "huge middle-aged bodybuilder, deep tan, heavy square jaw, short dark-blond "
     "hair combed back, gold aviator sunglasses, thick gold chain, black tank top; "
     "calm confident face, not shouting, not grinning, not winking. "
+)
+CHARACTER_DRAWING = (
     "Bold black outline, flat fills with soft muscle shading (cel shading), "
     "no photorealism, no 3D render — western comic and arcade-cover look. "
+)
+CHARACTER_SCENE = (
     "Warm amber lamp light and sunset in the window against cold dark-grey iron, "
     "red brick wall; tan and gold are the only bright spots. Night basement gym: "
     "brick, dumbbell rack, mirror, lamp on a wire. He is alone in the gym. "
+)
+CHARACTER_NEVER = (
     "No text, no letters, no logos, no watermarks, no other people, "
     "no glossy fitness models, no blood, no grimaces."
 )
+CHARACTER = CHARACTER_WHO + CHARACTER_DRAWING + CHARACTER_SCENE + CHARACTER_NEVER
 POSE_INSTRUCTION = (
     "Redraw this exact photo as the character described, keeping the body pose, "
     "camera angle, limb positions and equipment exactly as in the source image. "
@@ -178,6 +188,23 @@ FRAME_INSTRUCTION = (
     "Show the whole body from head to feet. The pose to draw is: "
 )
 
+# Второй режим кадров: не пересобирать сцену, а перерисовать исходное фото,
+# заменив ровно две вещи — человека и рисовку. Зал, камера, свет и композиция
+# остаются с фото. Обе фотографии упражнения сняты одной камерой в одном зале,
+# так что копирование композиции само по себе даёт паре кадров общий фон —
+# то, чего в режиме `character` приходится добиваться уговорами.
+# Цена: зал будет стоковый, светлый, а не наш подвал.
+PHOTO_INSTRUCTION = (
+    "Redraw the SECOND image as a whole. Reproduce it exactly: the pose, the "
+    "camera position and distance, the framing, the barbell and plates, the rack, "
+    "the walls, the floor and the light — the picture must line up with the "
+    "photograph. Change exactly two things and nothing else. First, the man "
+    "becomes the character from the FIRST image: his face, build, sunglasses, "
+    "chain and clothes. Second, the whole picture is redrawn in the style below. "
+    "Do not move the camera, do not restage the gym, do not change the pose. "
+    "The photographed position is: "
+)
+
 OPENAI_FRAME_MODEL = os.getenv("OPENAI_FRAME_MODEL", "gpt-image-1")
 OPENAI_IMAGE_EDIT_URL = os.getenv(
     "OPENAI_IMAGE_EDIT_URL", "https://api.openai.com/v1/images/edits"
@@ -201,6 +228,10 @@ POSE_QUESTION = (
 # У Novita img2img вход одна картинка, то есть эталон тренера туда не влезает
 # и персонаж задаётся только словами — это запасной путь, а не равный.
 FRAMES_VIA = "openai"
+
+# Режим кадров: `character` собирает сцену вокруг тренера, `photo` перерисовывает
+# исходное фото целиком. Ставится флагом --frame-mode.
+FRAME_MODE = "character"
 
 
 class GenError(RuntimeError):
@@ -438,6 +469,11 @@ def _multipart(fields: dict[str, str], files: list[tuple[str, pathlib.Path]]) ->
 
 
 def _frame_prompt(pose: str) -> str:
+    """Что именно просим нарисовать. В режиме `photo` описание НАШЕГО зала не
+    подмешивается: зал приезжает с фотографии, и вторая версия зала в промпте
+    заставила бы модель выдумывать третий."""
+    if FRAME_MODE == "photo":
+        return f"{PHOTO_INSTRUCTION}{pose} {CHARACTER_WHO}{CHARACTER_DRAWING}{CHARACTER_NEVER}"
     return f"{FRAME_INSTRUCTION}{pose} {CHARACTER}"
 
 
@@ -500,7 +536,7 @@ def _print_frame_request(reference: pathlib.Path, source: pathlib.Path, pose: st
         print(f"    POST {OPENAI_IMAGE_EDIT_URL}, model={OPENAI_FRAME_MODEL}")
         print(f"    image=[{reference.name} (эталон), {source.name} (поза)]")
         print(f"    поза словами: {pose}")
-        print(f"    prompt={FRAME_INSTRUCTION[:60]}{prompt_note}")
+        print(f"    режим {FRAME_MODE}; prompt={_frame_prompt(pose)[:60]}{prompt_note}")
         return
     payload = _frame_payload(source)
     payload["request"] = dict(
@@ -522,7 +558,11 @@ def cmd_frames(exercise: str, dry_run: bool, force: bool) -> None:
         # Второй кадр наследует персонажа от первого, а не от аватарки: так
         # одежда, обувь, зал и крупность гарантированно те же, и между кадрами
         # меняется только тело.
-        reference = COACH_REFERENCE if index == 1 else work / "start.jpg"
+        # В режиме `photo` композицию держит само фото, поэтому эталоном
+        # персонажа всегда остаётся аватарка: сцеплять кадры между собой там
+        # незачем, а лишняя ступень копирования только размывает лицо.
+        chained = FRAME_MODE != "photo" and index == 2
+        reference = work / "start.jpg" if chained else COACH_REFERENCE
         pose = poses.get(f"{slug}_{index}", "")
         if dest.exists() and not force:
             print(f"  {name}: уже есть, пропускаю (--force чтобы перегенерить)")
@@ -659,6 +699,12 @@ def main() -> None:
     )
     parser.add_argument("--force", action="store_true", help="перезаписать готовое")
     parser.add_argument(
+        "--frame-mode",
+        choices=["character", "photo"],
+        default="character",
+        help="character: собрать сцену вокруг тренера; photo: перерисовать фото целиком",
+    )
+    parser.add_argument(
         "--frames-via",
         choices=["openai", "novita"],
         default="openai",
@@ -666,8 +712,9 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    global FRAMES_VIA
+    global FRAMES_VIA, FRAME_MODE
     FRAMES_VIA = args.frames_via
+    FRAME_MODE = args.frame_mode
 
     if args.stage == "status":
         cmd_status()
