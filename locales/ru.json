@@ -2,5 +2,8 @@
   "test.hello": "Привет, {name}!",
   "test.sets": "{n, plural, one{# подход} few{# подхода} many{# подходов} other{# подхода}}",
   "test.greeting_gendered": "{g, select, male{Он сделал} female{Она сделала} other{Атлет сделал}} тренировку",
-  "test.ru_only": "Только в русском каталоге"
+  "test.ru_only": "Только в русском каталоге",
+  "screen.language.button": "Язык",
+  "screen.language.title": "🌐 На каком языке тебе удобнее?",
+  "screen.language.set_alert": "Переключил на русский."
 }

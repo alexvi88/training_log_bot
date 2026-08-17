@@ -7,6 +7,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardBu
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import formatting
+import i18n
 
 # Сколько символов названия влезает в кнопку под ответом AI-тренера, не
 # растягивая клавиатуру и не обрезаясь самим Telegram.
@@ -1405,6 +1406,24 @@ def timezone_picker_keyboard(current: int) -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
+# Автонимы языков — не переводятся: человек, попавший не на тот язык, ищет
+# глазами родное слово, а не перевод (см. TONE_OF_VOICE.md, English voice).
+LANG_NAMES = {"ru": "Русский", "en": "English"}
+
+
+def language_keyboard(current: str) -> InlineKeyboardMarkup:
+    """Экран выбора языка интерфейса — по образцу timezone_picker_keyboard:
+    текущий язык помечается той же разметкой `• label •`, чтобы приём в
+    продукте был один."""
+    b = InlineKeyboardBuilder()
+    for code in ("ru", "en"):
+        label = LANG_NAMES[code]
+        b.button(text=f"• {label} •" if code == current else label, callback_data=f"settings:langset:{code}")
+    b.button(text="⬅️ Назад", callback_data="settings:menu")
+    b.adjust(1)
+    return b.as_markup()
+
+
 def settings_keyboard(
     unit: str,
     formula: str,
@@ -1415,6 +1434,7 @@ def settings_keyboard(
     food_macros_enabled: bool = True,
     show_extra_stats: bool = True,
     show_mcp: bool = False,
+    lang: str = "ru",
 ) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(text=f"⚖️ Единицы: {UNIT_NAMES.get(unit, unit)}", callback_data="settings:unit")
@@ -1426,6 +1446,14 @@ def settings_keyboard(
         callback_data="settings:formula",
     )
     b.button(text=f"🕒 Часовой пояс: {format_utc_offset(tz_offset)}", callback_data="settings:tz")
+    # Единственная подпись на этом экране, которая уже переведена: остальные
+    # настройки локализуются отдельной фазой, но дорога к смене языка обязана
+    # читаться на языке того, кто попал сюда не на свой, — иначе выйти отсюда
+    # он не сможет. Значение — автоним, он не переводится никогда.
+    b.button(
+        text=f"🌐 {i18n.t_in(lang, 'screen.language.button')}: {LANG_NAMES.get(lang, lang)}",
+        callback_data="settings:lang",
+    )
     # Все тумблеры ниже — одна конструкция: «<label>: <глагол от первого
     # лица>» / «<label>: <его отрицание>» — раньше формы расходились
     # («вкл»/«выкл», «включены»/«выключены», «считаю»/«не считаю»,

@@ -14,6 +14,7 @@ import achievement_sync
 import config
 import db
 import formatting
+import i18n
 import keyboards
 import ui
 from fsm import AITrainerFlow, SettingsFlow
@@ -52,6 +53,7 @@ async def show_settings(
         food_macros_enabled=bool(user["food_macros_enabled"]),
         show_extra_stats=bool(user["show_extra_stats"]),
         show_mcp=config.mcp_available(),
+        lang=user["lang"],
     )
     await ui.safe_edit(callback, "🔧 Подстрою бота под тебя.", reply_markup=kb)
     if alert:
@@ -333,6 +335,36 @@ async def settings_timezone_set(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "settings:tzback")
 async def settings_timezone_back(callback: CallbackQuery, state: FSMContext):
     await show_settings(callback, state)
+
+
+@router.callback_query(F.data == "settings:lang")
+async def settings_language(callback: CallbackQuery, state: FSMContext):
+    user = await db.get_user(callback.from_user.id)
+    await ui.safe_edit(
+        callback,
+        i18n.t_in(user["lang"], "screen.language.title"),
+        reply_markup=keyboards.language_keyboard(user["lang"]),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("settings:langset:"))
+async def settings_language_set(callback: CallbackQuery, state: FSMContext):
+    lang = callback.data.split(":")[2]
+    if lang not in i18n.SUPPORTED:
+        # Незнакомый код в callback (старая клавиатура, чужой клиент) — не
+        # роняем хендлер и не трогаем базу, просто перерисовываем экран как есть.
+        await settings_language(callback, state)
+        return
+    await db.set_user_lang(callback.from_user.id, lang)
+    # Порядок важен: контекст переставляем ДО перерисовки экрана настроек —
+    # иначе человек нажмёт English и увидит русский экран (см. задачу).
+    i18n.set_lang(lang)
+    await show_settings(
+        callback, state,
+        alert=i18n.t_in(lang, "screen.language.set_alert"),
+        show_alert=False,
+    )
 
 
 @router.callback_query(F.data == "settings:formula")
