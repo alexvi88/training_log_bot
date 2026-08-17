@@ -131,8 +131,18 @@ async def intro_presets(user_id: int) -> list[tuple[str, str]]:
 
     Скрыта она только когда разбор не подключён: обещать кнопкой то, что
     ответит «пока не подключил», — худший вид рекламы.
+
+    «Как мой прогресс?» и «Найди мои слабые места» отвечают на историю
+    тренировок — без единой тренировки тренеру разбирать нечего, а кнопка
+    без данных за спиной обещает то, что тут же обернётся отговоркой вместо
+    ответа.
     """
-    rows = [(label, f"ai:preset:{key}") for key, (label, _) in PRESET_QUESTIONS.items()]
+    has_workouts = await db.count_workouts(user_id) > 0
+    rows = [
+        (label, f"ai:preset:{key}")
+        for key, (label, _) in PRESET_QUESTIONS.items()
+        if has_workouts or key not in ("progress", "weak")
+    ]
     rows.append(("🗂 Составь мне программу", "ai:buildprog"))
     if config.video_analysis_available():
         rows.append(("🎥 Разбери видео подхода", "ai:videohint"))
