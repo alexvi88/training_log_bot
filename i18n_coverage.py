@@ -68,6 +68,18 @@ LOCALIZED: list[str] = [
     "keyboards.py",
 ]
 
+# Литералы, которым храповик НАМЕРЕННО разрешает кириллицу внутри уже
+# LOCALIZED-модуля, — не долг и не забытый перевод, у каждого своя причина.
+# Без этого списка единственным способом внести настоящее исключение было бы
+# городить его прямо в cyrillic_literals() для всего реестра сразу.
+ALLOWED_CYRILLIC: dict[str, set[str]] = {
+    # Автоним языка в переключателе (keyboards.LANG_NAMES) — человек, попавший
+    # не на тот язык, ищет глазами родное слово, а не перевод (см.
+    # TONE_OF_VOICE.md, English voice). Тот же автоним разрешён в en.json
+    # тестом test_en_catalog_has_no_cyrillic (_AUTONYM_WHITELIST).
+    "keyboards.py": {"Русский"},
+}
+
 
 # --- NEVER_LOCALIZED ---------------------------------------------------------
 #
@@ -199,7 +211,12 @@ def _docstring_ids(tree: ast.AST) -> set[int]:
 def cyrillic_literals(module_rel_path: str) -> list[tuple[int, str]]:
     """(номер строки, литерал) для кириллических строковых констант модуля,
     докстринги пропущены. f-строки берутся целиком по своим Constant-кускам
-    (совпадает с тем, что реально попадёт в скомпилированный вывод)."""
+    (совпадает с тем, что реально попадёт в скомпилированный вывод).
+
+    Литералы из ALLOWED_CYRILLIC[module_rel_path] (см. выше — автоним «Русский»
+    и подобные намеренные исключения) в выдачу не попадают: это не долг перед
+    переводом, а решение навсегда."""
+    allowed = ALLOWED_CYRILLIC.get(module_rel_path, set())
     source = (_ROOT / module_rel_path).read_text(encoding="utf-8")
     tree = ast.parse(source, filename=module_rel_path)
     doc_ids = _docstring_ids(tree)
@@ -211,6 +228,7 @@ def cyrillic_literals(module_rel_path: str) -> list[tuple[int, str]]:
                     isinstance(part, ast.Constant)
                     and isinstance(part.value, str)
                     and has_cyrillic(part.value)
+                    and part.value not in allowed
                 ):
                     found.append((node.lineno, part.value))
             continue
@@ -219,6 +237,7 @@ def cyrillic_literals(module_rel_path: str) -> list[tuple[int, str]]:
             and isinstance(node.value, str)
             and id(node) not in doc_ids
             and has_cyrillic(node.value)
+            and node.value not in allowed
         ):
             found.append((node.lineno, node.value))
     return found
