@@ -430,6 +430,12 @@ def _lang_from_accept_language(header: str) -> str:
     продукта он относится (СНГ-сфера — в русский, всё остальное — в
     английский).
     """
+    # Заголовка может не быть вовсе: его не шлют curl без флагов, часть
+    # OAuth-клиентов и наши же тесты. Это не край, а обычный случай — молча
+    # уходим на дефолтный язык, а не роняем регистрацию из-за отсутствия
+    # необязательного заголовка.
+    if not header:
+        return i18n.DEFAULT_LANG
     best_tag, best_q = "", -1.0
     for part in header.split(","):
         part = part.strip()
@@ -669,7 +675,17 @@ class RegisterRateLimitMiddleware:
             await self._app(scope, receive, send)
             return
         response = Response(
-            json.dumps({"error": "too_many_requests", "error_description": "Слишком много регистраций, попробуй позже."}),
+            json.dumps(
+                {
+                    "error": "too_many_requests",
+                    # Язык берём из Accept-Language, как и вся consent-страница:
+                    # регистрация идёт до того, как известен пользователь.
+                    "error_description": i18n.t_in(
+                        _lang_from_accept_language(request.headers.get("accept-language")),
+                        "oauth.too_many_registrations",
+                    ),
+                }
+            ),
             status_code=429,
             media_type="application/json",
         )

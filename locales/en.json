@@ -1611,5 +1611,11 @@
   "factcheck.busy": "One sec, still working through the last post 😅",
   "factcheck.failed": "Couldn't work through that — something broke. Send it again?",
   "progress.default_title": "Building your program",
-  "mcp.write_note": "Recorded. You can fix or remove it in the bot itself."
+  "mcp.write_note": "Recorded. You can fix or remove it in the bot itself.",
+  "ui.truncated_note": "\n…the rest didn't fit, cut it here",
+  "ui.rescue_text": "⚠️ That screen didn't open. Hit \"Menu\" below the chat.",
+  "ui.exercise_not_found": "Can't find that exercise — the screen is stale. Open ⚙️ Exercises again",
+  "ui.workout_not_found": "Can't find that workout — the screen is stale. Open 📚 History again",
+  "view.no_group": "no group",
+  "oauth.too_many_registrations": "Too many sign-ups. Try again later."
 }

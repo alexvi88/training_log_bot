@@ -16,6 +16,7 @@ from aiogram.types import (
 
 import chat_bottom
 import formatting
+import i18n
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +31,14 @@ CAPTION_LIMIT = formatting.CAPTION_LIMIT
 
 # Пометка вместо молчаливой обрезки: экран, у которого просто нет конца, читается
 # как потерянные данные, а не как «не поместилось».
-_TRUNCATED_NOTE = "\n…дальше не влезло, обрезал"
+#
+# Функция, а не константа: длина пометки участвует в расчёте бюджета обрезки, а у
+# языков она разная. Посчитать бюджет по русской пометке и приписать английскую
+# значило бы вылезти за лимит Telegram ровно на разницу — и получить отказ
+# отправки вместо аккуратно обрезанного экрана.
+def _truncated_note() -> str:
+    return i18n.t("ui.truncated_note")
+
 
 # Последний рубеж, когда экран не удалось отправить ни в каком виде: сообщение
 # уже удалено, поэтому без этого человек остаётся с пустым чатом без кнопок.
@@ -38,7 +46,8 @@ _TRUNCATED_NOTE = "\n…дальше не влезло, обрезал"
 # с reply_markup уже провалилась, так что вместо новой инлайн-кнопки отправляем
 # к уже нарисованной снизу постоянной кнопке «Меню» (keyboards.persistent_menu) —
 # она никуда не девается, даже если этот текст не долетит с разметкой.
-_RESCUE_TEXT = "⚠️ Экран не открылся. Жми «Меню» внизу под чатом."
+def _rescue_text() -> str:
+    return i18n.t("ui.rescue_text")
 
 _TAG_RE = re.compile(r"<\s*(/?)\s*([a-zA-Z][\w-]*)[^>]*>")
 _ENTITY_RE = re.compile(r"&(?:[a-zA-Z]+|#\d+|#[xX][0-9a-fA-F]+);")
@@ -133,7 +142,8 @@ def fit_to_limit(text: str, limit: int, parse_mode=None) -> str:
     is_html = isinstance(parse_mode, str) and parse_mode.lower() == "html"
     if text is None or _length(text, is_html) <= limit:
         return text
-    budget = limit - _length(_TRUNCATED_NOTE, is_html)
+    note = _truncated_note()
+    budget = limit - _length(note, is_html)
     kept: list[str] = []
     used = 0
     for line in text.split("\n"):
@@ -148,7 +158,7 @@ def fit_to_limit(text: str, limit: int, parse_mode=None) -> str:
         # Строку с "\n" внутри тега мы бы порвали по этому "\n" — подстраховка.
         head = _drop_dangling(head)
         head += "".join(f"</{tag}>" for tag in reversed(_unclosed_tags(head)))
-    return head + _TRUNCATED_NOTE
+    return head + note
 
 
 async def _edit_text(message: Message, text: str, reply_markup, parse_mode) -> Message | None:
@@ -196,7 +206,7 @@ async def _send_screen(callback: CallbackQuery, message: Message, text: str, rep
     chat_id = message.chat.id
     with suppress(TelegramBadRequest):
         return await callback.bot.send_message(chat_id, text, reply_markup=reply_markup)
-    return await callback.bot.send_message(chat_id, _RESCUE_TEXT)
+    return await callback.bot.send_message(chat_id, _rescue_text())
 
 
 async def safe_edit(
@@ -298,7 +308,7 @@ async def safe_edit_photo(
             caption=caption,
             reply_markup=reply_markup,
         )
-    return await callback.bot.send_message(chat_id, _RESCUE_TEXT)
+    return await callback.bot.send_message(chat_id, _rescue_text())
 
 # ---------- недолговечные ответы на неудачный ввод ----------
 
@@ -350,15 +360,27 @@ async def reply_transient(message, text: str) -> None:
 # Безличное «не найдено» не говорит, что делать дальше (TONE_OF_VOICE:
 # «Ошибки: что случилось + как исправить»), поэтому оба текста называют экран,
 # который надо открыть заново, вместо того чтобы просто констатировать факт.
-EXERCISE_NOT_FOUND_TEXT = "Не нашёл это упражнение — экран устарел. Открой ⚙️ Упражнения заново"
-WORKOUT_NOT_FOUND_TEXT = "Не нашёл эту тренировку — экран устарел. Открой 📚 Историю заново"
+# Читаются снаружи как атрибуты модуля (тесты, хендлеры), поэтому язык
+# подставляется через __getattr__ модуля (PEP 562) — тот же приём, что в
+# formatting.py: превратить их в функции значило бы править всех читателей.
+_MODULE_ATTRS = {
+    "EXERCISE_NOT_FOUND_TEXT": "ui.exercise_not_found",
+    "WORKOUT_NOT_FOUND_TEXT": "ui.workout_not_found",
+}
+
+
+def __getattr__(name: str) -> str:
+    key = _MODULE_ATTRS.get(name)
+    if key is None:
+        raise AttributeError(name)
+    return i18n.t(key)
 
 
 async def alert_exercise_not_found(callback) -> None:
     """Кнопка карточки упражнения ссылается на id, которого больше нет."""
-    await callback.answer(EXERCISE_NOT_FOUND_TEXT, show_alert=True)
+    await callback.answer(i18n.t("ui.exercise_not_found"), show_alert=True)
 
 
 async def alert_workout_not_found(callback) -> None:
     """Кнопка карточки тренировки ссылается на id, которого больше нет."""
-    await callback.answer(WORKOUT_NOT_FOUND_TEXT, show_alert=True)
+    await callback.answer(i18n.t("ui.workout_not_found"), show_alert=True)
