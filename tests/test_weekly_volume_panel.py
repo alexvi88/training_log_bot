@@ -13,6 +13,7 @@ import datetime as dt
 import analytics
 import charts
 import formatting
+import timeutil
 from handlers import workout as workout_handlers
 
 PANEL_GROUPS = [
@@ -174,7 +175,12 @@ async def test_only_the_last_seven_days_count(fresh_db, user_id):
     db = fresh_db
     group_id = (await db.list_muscle_groups(None, global_only=True))[0]["id"]
     ex_id = await db.create_exercise(user_id, "Жим", group_id)
-    today = dt.date.today()
+    # «Сегодня» по часам пользователя, как его считает сам экран
+    # (handlers.workout: timeutil.user_today), а не по часам сервера. У нового
+    # атлета смещение +3, и после 21:00 UTC серверное «сегодня» уже вчерашнее
+    # для него: тренировка, залогированная только что, выпадала из окна, и тест
+    # краснел каждый вечер — на любой ветке, три часа в сутки.
+    today = timeutil.user_today(await db.get_user(user_id))
     long_ago = (today - dt.timedelta(days=20)).isoformat() + "T10:00:00"
 
     await _log_sets(db, user_id, ex_id, 4, started_at=long_ago)
@@ -243,7 +249,7 @@ async def test_the_real_groups_reach_the_panel(fresh_db, user_id):
     ex_id = await db.create_exercise(user_id, "Жим", group_id)
     await _log_sets(db, user_id, ex_id, 7)
 
-    today = dt.date.today()
+    today = timeutil.user_today(await db.get_user(user_id))
     window_start = today - dt.timedelta(days=analytics.VOLUME_WINDOW_DAYS - 1)
     counts = await db.weekly_volume_by_group(user_id, window_start.isoformat(), today.isoformat())
     _, rows = formatting.weekly_volume_panel(counts, groups)

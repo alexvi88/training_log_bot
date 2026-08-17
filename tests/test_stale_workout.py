@@ -13,6 +13,7 @@ from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
 
 import config
+import timeutil
 from handlers import workout
 
 pytestmark = pytest.mark.asyncio
@@ -278,7 +279,9 @@ async def test_stale_warning_repeats_the_next_local_day(fresh_db, user_id):
     db = fresh_db
     stale_started = dt.datetime.now() - dt.timedelta(hours=config.STALE_WORKOUT_HOURS + 1)
     await db.create_workout(user_id, started_at=stale_started.isoformat())
-    yesterday = (dt.date.today() - dt.timedelta(days=1)).isoformat()
+    # Расписка сверяется с местным «сегодня» пользователя (см. соседний тест),
+    # поэтому и вчерашнюю дату берём от него же.
+    yesterday = (timeutil.user_today(await db.get_user(user_id)) - dt.timedelta(days=1)).isoformat()
     await db.record_limit_ack(user_id, workout.STALE_WORKOUT_WARNING_KIND, yesterday)
 
     message = _make_message(user_id)
@@ -297,7 +300,10 @@ async def test_resume_workout_button_reaches_stale_workout_even_when_warning_is_
     db = fresh_db
     stale_started = dt.datetime.now() - dt.timedelta(hours=config.STALE_WORKOUT_HOURS + 1)
     workout_id = await db.create_workout(user_id, started_at=stale_started.isoformat())
-    today = dt.date.today().isoformat()
+    # Троттлинг предупреждения ключуется местным днём пользователя, а у нового
+    # атлета смещение +3: после 21:00 UTC серверная дата отстаёт на день, расписка
+    # ложилась во вчера и предупреждение показывалось снова.
+    today = timeutil.user_today(await db.get_user(user_id)).isoformat()
     await db.record_limit_ack(user_id, workout.STALE_WORKOUT_WARNING_KIND, today)
 
     kb = await workout._main_menu_kb(user_id, await db.get_active_workout(user_id))
