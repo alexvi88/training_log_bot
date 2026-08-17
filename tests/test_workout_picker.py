@@ -659,14 +659,25 @@ async def _picker_extra_buttons(db, user_id, monkeypatch) -> list[tuple[str, str
     return [(b.text, b.callback_data) for row in kb.inline_keyboard for b in row]
 
 
-async def test_picker_offers_building_a_program_when_the_user_has_none(
-    fresh_db, user_id, monkeypatch
-):
+async def test_picker_does_not_offer_building_a_program(fresh_db, user_id, monkeypatch):
+    """Сбор программы с этого экрана убран — он живёт на «🗂 Программы».
+
+    Раньше он показывался тем, у кого программ ещё нет, и стоял рядом со
+    «Собрать тренировку на сегодня». На живом боте это прочиталось как две
+    кнопки про одно и то же: обе с 🤖, обе про помощь тренера, а разница между
+    «что делать сегодня» и «план на месяц» из подписей не читается.
+
+    Убрана именно программа: сюда приходят заниматься, и планирование на недели
+    вперёд — не тот вопрос, который задают себе, стоя в зале.
+    """
     monkeypatch.setattr(workout.ai_trainer, "is_configured", lambda: True)
 
     callbacks = await _picker_extra_callbacks(fresh_db, user_id, monkeypatch)
 
-    assert "ai:buildprog" in callbacks
+    assert "ai:buildprog" not in callbacks
+    # Дорога к сбору программы с экрана не пропала — она через «Выбрать программу».
+    assert "rt:manage" in callbacks
+    assert "ai:buildworkout" in callbacks
 
 
 async def test_picker_orders_program_before_repeat_before_ai_buildworkout(
@@ -806,28 +817,6 @@ async def test_picker_does_not_top_up_with_programs_that_have_no_history(
     recent = [t for t in labels if t.startswith("🗂 ") and t != "🗂 Выбрать программу"]
 
     assert recent == ["🗂 Активная · Верх"]
-
-
-async def test_both_doors_into_the_ai_program_builder_are_labelled_the_same(
-    fresh_db, user_id, monkeypatch
-):
-    """Кнопка одна и та же (ai:buildprog) и ведёт в один и тот же сценарий —
-    на экране тренировки она называлась «Составить программу с AI», а в «🗂
-    Программы» «Составить с AI-тренером», и это читалось как две разные
-    возможности."""
-    import keyboards
-
-    monkeypatch.setattr(workout.ai_trainer, "is_configured", lambda: True)
-
-    picker = await _picker_extra_buttons(fresh_db, user_id, monkeypatch)
-    from_picker = next(text for text, cb in picker if cb == "ai:buildprog")
-
-    manage = keyboards.routines_manage_keyboard([], [], has_workouts=False)
-    from_manage = next(
-        b.text for row in manage.inline_keyboard for b in row if b.callback_data == "ai:buildprog"
-    )
-
-    assert from_picker == from_manage
 
 
 def _full_callback(user_id: int, data: str):
