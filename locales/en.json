@@ -1,0 +1,5 @@
+{
+  "test.hello": "Hello, {name}!",
+  "test.sets": "{n, plural, one{# set} other{# sets}}",
+  "test.greeting_gendered": "{g, select, male{He did} female{She did} other{The athlete did}} a workout"
+}
