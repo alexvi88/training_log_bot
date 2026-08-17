@@ -29,6 +29,7 @@ import ai_trainer
 import config
 import db
 import formatting
+import i18n
 import running_texts
 
 # Тот же загрузчик, что у фото-вопросов в чате тренера: один лимит размера и
@@ -102,7 +103,7 @@ async def factcheck_forward(message: Message) -> None:
         # ответа модели, секундами позже). Не открываем вторую параллельную
         # дорожку к модели, а сообщаем и ждём, пока освободится первая.
         with suppress(TelegramBadRequest):
-            await message.reply("Секунду, ещё разбираю прошлый пост 😅")
+            await message.reply(i18n.t("factcheck.busy"))
         return
     try:
         # Та же квота, что у обычных вопросов тренеру: это тоже вопрос, просто с
@@ -114,7 +115,7 @@ async def factcheck_forward(message: Message) -> None:
             if not block.preview:
                 return
 
-        placeholder = await message.reply(running_texts.pick(running_texts.FACT_CHECK_POOL))
+        placeholder = await message.reply(running_texts.pick(running_texts.fact_check_pool()))
         image_data_url = None
         if message.photo:
             # Не роняем разбор из-за картинки: слишком большое фото или сбой
@@ -130,7 +131,7 @@ async def factcheck_forward(message: Message) -> None:
         except Exception:
             logger.exception("fact-check failed for user %s", user_id)
             with suppress(TelegramBadRequest):
-                await placeholder.edit_text("Не разобрал — что-то сломалось. Пришли ещё раз?")
+                await placeholder.edit_text(i18n.t("factcheck.failed"))
             return
 
         # Атомарно — тот же приём, что и у обычного чата (см.

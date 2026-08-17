@@ -474,9 +474,9 @@ async def test_pager_arrows_appear_only_where_there_is_somewhere_to_go(monkeypat
         b.text for row in message.reply.await_args.kwargs["reply_markup"].inline_keyboard
         for b in row
     ]
-    assert any("ещё" in label for label in labels)
+    assert any("ещё" in label.lower() for label in labels)
     # С первой страницы назад некуда.
-    assert not any("назад" in label for label in labels)
+    assert not any("назад" in label.lower() for label in labels)
 
 
 async def test_long_exercise_name_survives_the_64_byte_callback_limit(monkeypatch, wired):

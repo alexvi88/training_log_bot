@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Кач-Раннер</title>
+<title data-i18n="title">Кач-Раннер</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -103,10 +103,10 @@
 <!-- ЭКРАН 1: выбор качка -->
 <div id="screen-select" class="screen active">
   <div class="screen-inner">
-    <h1>Кач-Раннер</h1>
-    <div class="subtitle">Беги по залу, собирай спортпит, не влетай в гантели —<br>я засеку, докуда добежишь. <b>Кем побежишь?</b></div>
+    <h1 data-i18n="title">Кач-Раннер</h1>
+    <div class="subtitle" data-i18n-html="subtitle">Беги по залу, собирай спортпит, не влетай в гантели —<br>я засеку, докуда добежишь. <b>Кем побежишь?</b></div>
     <div class="fighters-row" id="fighters-row"></div>
-    <div class="controls-hint">
+    <div class="controls-hint" data-i18n-html="controls">
       <b>тап / пробел</b> — прыжок (двойной — в воздухе)<br>
       <b>свайп вниз / ↓</b> — подкат под штангу
     </div>
@@ -116,14 +116,14 @@
 <!-- ЭКРАН 3: результат -->
 <div id="screen-result" class="screen">
   <div class="screen-inner">
-    <div class="result-title">Отказ</div>
+    <div class="result-title" data-i18n="resultTitle">Отказ</div>
     <img id="result-art" src="" alt="">
     <div class="result-score" id="result-score">0 м · 🥤 0</div>
     <div class="result-stats" id="result-stats"></div>
     <div class="result-quip" id="result-quip"></div>
     <div class="result-best" id="result-best"></div>
-    <button class="result-btn retry" onclick="restartGame()">🔄 Ещё подход</button>
-    <button class="result-btn" onclick="submitAndClose()">❌ Закрыть</button>
+    <button class="result-btn retry" onclick="restartGame()" data-i18n="retryBtn">🔄 Ещё подход</button>
+    <button class="result-btn" onclick="submitAndClose()" data-i18n="closeBtn">❌ Закрыть</button>
     <div id="result-status"></div>
   </div>
 </div>
@@ -140,6 +140,81 @@ if (window.Telegram?.WebApp) {
   tg.expand();
   try { tg.disableVerticalSwipes(); } catch (e) {}
 }
+
+// ── ЯЗЫК ─────────────────────────────────────────────────────────────────────
+// Страницу отдаёт FileResponse — шаблонизатора нет, и telegram_id (а с ним язык
+// из БД) на этот момент ещё не подтверждён подписью initData: signature-проверка
+// нужна только для отправки результата (см. game_server.validate_init_data), а
+// прочитать language_code можно и без неё. Тот же список СНГ-языков, что и в
+// i18n.normalize (см. i18n.py:_CYRILLIC_SPHERE) — держать два места в согласии
+// руками рискованно, но модуль на Python, а страница — статический файл без
+// сборки, импортировать оттуда нечего.
+const LANG = (function () {
+  try {
+    const raw = window.Telegram?.WebApp?.initDataUnsafe?.user?.language_code || navigator.language || 'ru';
+    const base = String(raw).toLowerCase().replace('_', '-').split('-')[0];
+    const cyrillicSphere = new Set(['ru', 'uk', 'be', 'kk', 'ky', 'hy', 'az', 'uz']);
+    return cyrillicSphere.has(base) ? 'ru' : 'en';
+  } catch (e) { return 'ru'; }
+})();
+document.documentElement.lang = LANG;
+
+// Ключи — по русскому значению, как в остальном проекте (locales/ru.json).
+// Каждая запись — пара [ru, en]; недостающий английский тут не бывает, в
+// отличие от каталога i18n.py, — весь список статичен и виден целиком.
+const STR = {
+  title: ['Кач-Раннер', 'Gym Runner'],
+  subtitle: [
+    'Беги по залу, собирай спортпит, не влетай в гантели —<br>я засеку, докуда добежишь. <b>Кем побежишь?</b>',
+    "Run through the gym, grab supplements, dodge the dumbbells —<br>I'll clock how far you get. <b>Who are you running as?</b>",
+  ],
+  controls: [
+    '<b>тап / пробел</b> — прыжок (двойной — в воздухе)<br><b>свайп вниз / ↓</b> — подкат под штангу',
+    '<b>tap / space</b> — jump (double — mid-air)<br><b>swipe down / ↓</b> — slide under the bar',
+  ],
+  resultTitle: ['Отказ', 'Failure'],
+  retryBtn: ['🔄 Ещё подход', '🔄 Another set'],
+  closeBtn: ['❌ Закрыть', '❌ Close'],
+  greeting: ['ПРИВЕТ АТЛЕТ! ', 'YO ATHLETE! '],
+  unit: ['м', 'm'],
+  hudRecord: ['рекорд ', 'record '],
+  resultBest: ['рекорд: ', 'record: '],
+  resultStats: ['лучшая серия: ', 'best streak: '],
+  resultStatsPickups: [' · пауэрапов: ', ' · power-ups: '],
+  localPrototype: [
+    'это локальный прототип — результат никуда не отправляю',
+    "local prototype — I'm not sending this anywhere",
+  ],
+  logging: ['Записываю...', 'Logging...'],
+  notLogged: ['❌ Не записал — жми ещё раз', "❌ Didn't log it — hit it again"],
+  logged: ['✅ Записал', '✅ Logged it'],
+  rivalWarn: ['ВЫШИБАЛА!', 'ENFORCER!'],
+  streakPrefix: ['СЕРИЯ ×', 'STREAK ×'],
+  shieldSaved: ['КРЕАТИН СПАС', 'CREATINE SAVED YOU'],
+  shieldPickup: ['ЩИТ: КРЕАТИН', 'SHIELD: CREATINE'],
+  rageToast: ['ПРЕДТРЕНИК: ЯРОСТЬ!', 'PRE-WORKOUT: RAGE!'],
+  magnetToast: ['ГЕЙНЕР-МАГНИТ', 'GAINER MAGNET'],
+  hudRage: ['ЯРОСТЬ', 'RAGE'],
+  hudMagnet: ['МАГНИТ', 'MAGNET'],
+  hudShield: ['ЩИТ', 'SHIELD'],
+  itemShaker: ['ПРОТ', 'PRO'],
+  itemBar: ['БАТОН', 'BAR'],
+  itemCreatine: ['КРЕАТИН', 'CREATINE'],
+  itemPreworkout: ['ПРЕДТРЕН', 'PRE'],
+  itemGainer: ['ГЕЙНЕР', 'GAINER'],
+  zoneBasement: ['ПОДВАЛ', 'BASEMENT'],
+  zoneNeon: ['НЕОН-ЗАЛ', 'NEON GYM'],
+  zoneStreet: ['УЛИЦА', 'STREET'],
+  zoneRoof: ['КРЫША', 'ROOFTOP'],
+  zoneLocker: ['РАЗДЕВАЛКА', 'LOCKER ROOM'],
+};
+function tr(key) {
+  const pair = STR[key];
+  return pair ? pair[LANG === 'en' ? 1 : 0] : key;
+}
+document.title = tr('title');
+document.querySelectorAll('[data-i18n]').forEach(el => { el.textContent = tr(el.dataset.i18n); });
+document.querySelectorAll('[data-i18n-html]').forEach(el => { el.innerHTML = tr(el.dataset.i18nHtml); });
 
 // ── DATA: payload от бота через ?data= (base64), как в beat the owl ─────────
 let athleteName = 'АТЛЕТ';
@@ -158,10 +233,10 @@ let serverBest = 0;
 
 // ── КАЧКИ ────────────────────────────────────────────────────────────────────
 const FIGHTERS = {
-  power:  { name: 'Пауэрлифтер', tag: 'сила',         top: '#8f2a20', bottom: '#2b2d34', skin: '#e0b08a', head: 'bandana',  hair: '#31241c', acc: '#b8860b', belt: true, bulk: 1.18 },
-  cross:  { name: 'Кроссфитер',  tag: 'функционалка', top: '#276f66', bottom: '#31343d', skin: '#caa27e', head: 'headband', hair: '#20180f', acc: '#f2ede3', bulk: 1.0 },
-  wrestle:{ name: 'Борец',       tag: 'захват',       top: '#7a2b3f', bottom: '#7a2b3f', skin: '#dba184', head: 'short',    hair: '#2a1f16', acc: '#7a2b3f', singlet: true, ears: true, bulk: 1.12 },
-  build:  { name: 'Бодибилдер',  tag: 'мышцы',        top: '#cf9455', bottom: '#23252c', skin: '#cf9455', head: 'short',    hair: '#241a12', acc: '#d9a013', shirtless: true, bulk: 1.22 },
+  power:  { name: LANG === 'en' ? 'Powerlifter' : 'Пауэрлифтер', tag: LANG === 'en' ? 'strength' : 'сила',         top: '#8f2a20', bottom: '#2b2d34', skin: '#e0b08a', head: 'bandana',  hair: '#31241c', acc: '#b8860b', belt: true, bulk: 1.18 },
+  cross:  { name: LANG === 'en' ? 'Crossfitter' : 'Кроссфитер',  tag: LANG === 'en' ? 'conditioning' : 'функционалка', top: '#276f66', bottom: '#31343d', skin: '#caa27e', head: 'headband', hair: '#20180f', acc: '#f2ede3', bulk: 1.0 },
+  wrestle:{ name: LANG === 'en' ? 'Wrestler' : 'Борец',       tag: LANG === 'en' ? 'grip' : 'захват',       top: '#7a2b3f', bottom: '#7a2b3f', skin: '#dba184', head: 'short',    hair: '#2a1f16', acc: '#7a2b3f', singlet: true, ears: true, bulk: 1.12 },
+  build:  { name: LANG === 'en' ? 'Bodybuilder' : 'Бодибилдер',  tag: LANG === 'en' ? 'mass' : 'мышцы',        top: '#cf9455', bottom: '#23252c', skin: '#cf9455', head: 'short',    hair: '#241a12', acc: '#d9a013', shirtless: true, bulk: 1.22 },
 };
 let selectedFighter = 'power';
 // Вышибала — бегущий навстречу противник (не выбираемый персонаж, поэтому вне
@@ -275,7 +350,14 @@ function resetGame() {
 // Тексты — по TONE_OF_VOICE.md: тренер от первого лица, на «ты», без капса в
 // теле фразы. Смерть в игре — не пропуск тренировки, поэтому без подколок,
 // только поддержка. Формула «ПРИВЕТ АТЛЕТ! » — строго, без подстановки имени.
-const QUIPS = [
+const QUIPS = LANG === 'en' ? [
+  " m — that's just a warm-up. Catch your breath and run it again.",
+  ' m. The dumbbell got you — happens. Next run is yours.',
+  ' m — not bad. Slide under the bar, not into it.',
+  " m. That protein won't grab itself — one more set.",
+  ' m logged. Onward and upward.',
+  " m. Saw you reach for that pre-workout — you'll grab it next time.",
+] : [
   ' м — это разминка. Отдышись и беги ещё.',
   ' м. Гантеля догнала — бывает, следующий заход твой.',
   ' м — неплохо. Под штангу подкатывайся, а не в неё.',
@@ -286,11 +368,11 @@ const QUIPS = [
 
 // ── ЛОКАЦИИ ──────────────────────────────────────────────────────────────────
 const ZONES = [
-  { name: 'ПОДВАЛ',      sky: ['#181210', '#231a14'], ground: '#2a211a', groundLine: '#4a3a2b', draw: drawBasement },
-  { name: 'НЕОН-ЗАЛ',    sky: ['#0b0f1e', '#141b33'], ground: '#151b2e', groundLine: '#2c3a63', draw: drawNeon },
-  { name: 'УЛИЦА',       sky: ['#0a0d18', '#1c2033'], ground: '#191c26', groundLine: '#333849', draw: drawStreet },
-  { name: 'КРЫША',       sky: ['#2a1830', '#ff8a4d'], ground: '#232830', groundLine: '#4a5568', draw: drawRoof },
-  { name: 'РАЗДЕВАЛКА',  sky: ['#132226', '#1f3a40'], ground: '#16232a', groundLine: '#3f5a63', draw: drawLocker },
+  { name: tr('zoneBasement'), sky: ['#181210', '#231a14'], ground: '#2a211a', groundLine: '#4a3a2b', draw: drawBasement },
+  { name: tr('zoneNeon'),     sky: ['#0b0f1e', '#141b33'], ground: '#151b2e', groundLine: '#2c3a63', draw: drawNeon },
+  { name: tr('zoneStreet'),   sky: ['#0a0d18', '#1c2033'], ground: '#191c26', groundLine: '#333849', draw: drawStreet },
+  { name: tr('zoneRoof'),     sky: ['#2a1830', '#ff8a4d'], ground: '#232830', groundLine: '#4a5568', draw: drawRoof },
+  { name: tr('zoneLocker'),   sky: ['#132226', '#1f3a40'], ground: '#16232a', groundLine: '#3f5a63', draw: drawLocker },
 ];
 const ZONE_LEN = 600;
 function zoneIndex() { return Math.floor(dist / ZONE_LEN) % ZONES.length; }
@@ -477,7 +559,7 @@ function spawnObstacle() {
     // Сближение быстрее обычного препятствия — к скорости бега прибавляется
     // собственный бег вышибалы навстречу (o.vx), как у катящегося блина, но заметнее.
     o.w = 34; o.h = 64; o.vx = 90 + speed * 0.18; o.runPhase = 0;
-    if (!rivalWarned) { rivalWarned = true; toast('ВЫШИБАЛА!', C_RAGE); }
+    if (!rivalWarned) { rivalWarned = true; toast(tr('rivalWarn'), C_RAGE); }
   }
   obstacles.push(o);
   // Награда, ведущая через препятствие: дуга — по траектории прыжка, дорожка
@@ -628,11 +710,11 @@ function obstacleBox(o) {
 
 // ── СПОРТПИТ ─────────────────────────────────────────────────────────────────
 const ITEM_TYPES = {
-  shaker:     { pts: 10, color: '#e94f64', label: 'ПРОТ' },
-  bar:        { pts: 25, color: C_GOLD,   label: 'БАТОН' },
-  creatine:   { pts: 0,  color: '#7ea8ff', label: 'КРЕАТИН', power: 'shield' },
-  preworkout: { pts: 0,  color: C_RAGE,   label: 'ПРЕДТРЕН', power: 'rage' },
-  gainer:     { pts: 0,  color: '#67c26a', label: 'ГЕЙНЕР', power: 'magnet' },
+  shaker:     { pts: 10, color: '#e94f64', label: tr('itemShaker') },
+  bar:        { pts: 25, color: C_GOLD,   label: tr('itemBar') },
+  creatine:   { pts: 0,  color: '#7ea8ff', label: tr('itemCreatine'), power: 'shield' },
+  preworkout: { pts: 0,  color: C_RAGE,   label: tr('itemPreworkout'), power: 'rage' },
+  gainer:     { pts: 0,  color: '#67c26a', label: tr('itemGainer'), power: 'magnet' },
 };
 const items = [];
 let nextItemAt = 140;
@@ -1015,12 +1097,12 @@ function die() {
   art.onload = () => { art.style.display = 'block'; };
   art.onerror = () => { art.style.display = 'none'; };
   art.src = 'assets/game/' + selectedFighter + '.jpg';
-  document.getElementById('result-score').textContent = d + ' м · 🥤 ' + score;
+  document.getElementById('result-score').textContent = d + ' ' + tr('unit') + ' · 🥤 ' + score;
   document.getElementById('result-stats').textContent =
-    'лучшая серия: ' + maxCombo + ' · пауэрапов: ' + pickups;
-  // «ПРИВЕТ АТЛЕТ! » — брендовая формула, имя не подставляем (см. TONE_OF_VOICE.md)
-  document.getElementById('result-quip').textContent = 'ПРИВЕТ АТЛЕТ! ' + d + pick(QUIPS);
-  document.getElementById('result-best').textContent = 'рекорд: ' + best + ' м';
+    tr('resultStats') + maxCombo + tr('resultStatsPickups') + pickups;
+  // «ПРИВЕТ АТЛЕТ! »/«YO ATHLETE! » — брендовая формула, имя не подставляем (см. TONE_OF_VOICE.md)
+  document.getElementById('result-quip').textContent = tr('greeting') + d + pick(QUIPS);
+  document.getElementById('result-best').textContent = tr('resultBest') + best + ' ' + tr('unit');
   document.getElementById('result-status').textContent = '';
   setTimeout(() => showScreen('screen-result'), 900);
 }
@@ -1053,14 +1135,14 @@ async function submitResult(result) {
 async function submitAndClose() {
   const statusEl = document.getElementById('result-status');
   if (!window.Telegram?.WebApp) {
-    statusEl.textContent = 'это локальный прототип — результат никуда не отправляю';
+    statusEl.textContent = tr('localPrototype');
     return;
   }
   if (lastResult) {
-    statusEl.textContent = 'Записываю...';
+    statusEl.textContent = tr('logging');
     const r = await submitResult(lastResult);
-    if (!r.ok) { statusEl.textContent = '❌ Не записал — жми ещё раз'; return; }
-    statusEl.textContent = '✅ Записал';
+    if (!r.ok) { statusEl.textContent = tr('notLogged'); return; }
+    statusEl.textContent = tr('logged');
     lastResult = null;
   }
   try { Telegram.WebApp.close(); } catch (e) {}
@@ -1081,7 +1163,7 @@ function update(dt) {
   // Милстоны: каждые 500 м — отметка, чтобы у бесконечного забега были этапы.
   if (Math.floor(dist / 500) > lastMile) {
     lastMile = Math.floor(dist / 500);
-    toast(lastMile * 500 + ' м!', C_GOLD, W / 2, H * 0.3);
+    toast(lastMile * 500 + ' ' + tr('unit') + '!', C_GOLD, W / 2, H * 0.3);
   }
   if (P.rageT > 0) P.rageT -= dt;
   if (P.magnetT > 0) P.magnetT -= dt;
@@ -1120,7 +1202,7 @@ function update(dt) {
       if (P.shield) {
         P.shield = false; combo = 0;
         obstacles.splice(i, 1); burst(P.x, P.y - 30, '#7ea8ff', 16, 260);
-        toast('КРЕАТИН СПАС', '#7ea8ff'); shakeT = 0.25; continue;
+        toast(tr('shieldSaved'), '#7ea8ff'); shakeT = 0.25; continue;
       }
       die(); return;
     }
@@ -1141,11 +1223,11 @@ function update(dt) {
       burst(it.x, it.y, d.color, 8, 160);
       const before = mult();
       combo += 1; maxCombo = Math.max(maxCombo, combo);
-      if (d.power === 'shield') { P.shield = true; pickups += 1; toast('ЩИТ: КРЕАТИН', '#7ea8ff'); sPower(); }
-      else if (d.power === 'rage') { P.rageT = 4.2; pickups += 1; toast('ПРЕДТРЕНИК: ЯРОСТЬ!', C_RAGE); sPower(); shakeT = 0.3; }
-      else if (d.power === 'magnet') { P.magnetT = 6; pickups += 1; toast('ГЕЙНЕР-МАГНИТ', '#67c26a'); sPower(); }
+      if (d.power === 'shield') { P.shield = true; pickups += 1; toast(tr('shieldPickup'), '#7ea8ff'); sPower(); }
+      else if (d.power === 'rage') { P.rageT = 4.2; pickups += 1; toast(tr('rageToast'), C_RAGE); sPower(); shakeT = 0.3; }
+      else if (d.power === 'magnet') { P.magnetT = 6; pickups += 1; toast(tr('magnetToast'), '#67c26a'); sPower(); }
       else { score += d.pts * mult(); sPick(); }
-      if (mult() > before) toast('СЕРИЯ ×' + mult(), C_GOLD);
+      if (mult() > before) toast(tr('streakPrefix') + mult(), C_GOLD);
     }
   }
 
@@ -1199,9 +1281,9 @@ function render() {
   // HUD — золото как у совы
   ctx.textAlign = 'left'; ctx.fillStyle = C_GOLD;
   ctx.font = "900 26px 'Courier New', monospace";
-  ctx.fillText(Math.floor(dist) + ' м', 20, 40);
+  ctx.fillText(Math.floor(dist) + ' ' + tr('unit'), 20, 40);
   ctx.font = "700 14px 'Courier New', monospace"; ctx.fillStyle = 'rgba(242,237,227,0.6)';
-  ctx.fillText('рекорд ' + Math.max(best, Math.floor(dist)) + ' м', 20, 62);
+  ctx.fillText(tr('hudRecord') + Math.max(best, Math.floor(dist)) + ' ' + tr('unit'), 20, 62);
   ctx.textAlign = 'right'; ctx.fillStyle = '#e94f64'; ctx.font = "900 22px 'Courier New', monospace";
   const multNow = mult();
   ctx.fillText('🥤 ' + score + (multNow > 1 ? '  ×' + multNow : ''), W - 20, 40);
@@ -1213,9 +1295,9 @@ function render() {
     ctx.fillStyle = color; ctx.fillRect(ix - 90, 70, 90 * frac, 4);
     ix -= 110;
   };
-  if (P.rageT > 0) pw('ЯРОСТЬ', C_RAGE, P.rageT / 4.2);
-  if (P.magnetT > 0) pw('МАГНИТ', '#67c26a', P.magnetT / 6);
-  if (P.shield) { ctx.textAlign = 'right'; ctx.font = "800 12px 'Courier New', monospace"; ctx.fillStyle = '#7ea8ff'; ctx.fillText('ЩИТ', ix, 64); }
+  if (P.rageT > 0) pw(tr('hudRage'), C_RAGE, P.rageT / 4.2);
+  if (P.magnetT > 0) pw(tr('hudMagnet'), '#67c26a', P.magnetT / 6);
+  if (P.shield) { ctx.textAlign = 'right'; ctx.font = "800 12px 'Courier New', monospace"; ctx.fillStyle = '#7ea8ff'; ctx.fillText(tr('hudShield'), ix, 64); }
   ctx.textAlign = 'center'; ctx.font = "800 11px 'Courier New', monospace"; ctx.fillStyle = 'rgba(242,237,227,0.4)';
   ctx.fillText(z.name, W / 2, 30);
   ctx.restore();

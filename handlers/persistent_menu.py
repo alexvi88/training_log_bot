@@ -15,9 +15,18 @@ from aiogram.types import Message
 
 import ai_trainer
 import db
+import i18n
 import keyboards
 from fsm import AITrainerFlow
-from handlers.ai_trainer import INTRO_TEXT, RESUME_TEXT, ai_keyboard, intro_presets
+
+# `INTRO_TEXT`/`RESUME_TEXT` НЕ импортируются по имени на верхнем уровне
+# нарочно (см. комментарий над `_MODULE_ATTR_FUNCS` в handlers/ai_trainer.py):
+# такой импорт выполняется ровно один раз при первом импорте процесса и
+# замораживает язык навсегда на дефолте. Модуль ai_trainer_handlers читается
+# целиком и атрибуты берутся в момент использования — тогда PEP 562
+# `__getattr__` того модуля пересчитывает текст в языке ТЕКУЩЕГО запроса.
+from handlers import ai_trainer as ai_trainer_handlers
+from handlers.ai_trainer import ai_keyboard, intro_presets
 
 router = Router(name="persistent_menu")
 
@@ -49,8 +58,17 @@ async def attach_silently(message: Message, user_id: int) -> None:
     ровно там, где его быть не должно.
     """
     with suppress(TelegramBadRequest):
+        # Подставляем те же три подписи, что и на самой клавиатуре
+        # (keyboards.BTN_WORKOUT/BTN_MENU/BTN_AI), а не переписываем их здесь
+        # текстом — иначе подсказка и кнопки разойдутся при следующей правке
+        # словаря кнопок.
         await message.answer(
-            "⌨️ Снизу — быстрые кнопки: Тренировка, Меню, AI-тренер.",
+            i18n.t(
+                "persistent_menu.attach_hint",
+                workout=i18n.t("btn.persistent.workout"),
+                menu=i18n.t("btn.persistent.menu"),
+                ai=i18n.t("btn.persistent.ai"),
+            ),
             reply_markup=keyboards.persistent_menu(),
         )
     await db.update_user(user_id, reply_keyboard_version=keyboards.PERSISTENT_MENU_VERSION)
@@ -90,7 +108,7 @@ async def _open_ai_trainer(message: Message, state: FSMContext) -> None:
     from handlers.workout import _clear_state_keep_workout
 
     if not ai_trainer.is_configured():
-        await message.answer("AI-тренер пока не подключён — загляни позже.")
+        await message.answer(i18n.t("persistent_menu.ai_not_configured"))
         return
     await db.get_or_create_user(message.from_user.id, message.from_user.username)
     # _clear_state_keep_workout preserves ai_history, so tapping "AI-тренер"
@@ -99,7 +117,7 @@ async def _open_ai_trainer(message: Message, state: FSMContext) -> None:
     await state.set_state(AITrainerFlow.chatting)
     data = await state.get_data()
     fresh = not data.get("ai_history")
-    text = INTRO_TEXT if fresh else RESUME_TEXT
+    text = ai_trainer_handlers.INTRO_TEXT if fresh else ai_trainer_handlers.RESUME_TEXT
     # Готовые вопросы — те же, что на инлайн-входе (menu:ai), и на любом
     # заходе, свежем или нет: это отдельный экран входа, а не вклинивание в
     # ответ. Без них нижняя кнопка показывала интро, которое обещает «начни с

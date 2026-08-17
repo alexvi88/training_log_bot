@@ -513,6 +513,152 @@ async def _screen_routine_source_empty(db, user_id: int) -> str:
     return callback.message.answer.await_args.args[0]
 
 
+async def _screen_settings_profile(db, user_id: int) -> str:
+    """«🧬 Обо мне» (handlers.settings.settings_profile) — пустой профиль, то
+    есть ветка "tail_unknown": ни одно поле ещё не записано с твоих слов."""
+    from handlers import settings
+
+    callback = _make_fake_callback(user_id, "settings:profile")
+    state = FSMContext(storage=MemoryStorage(), key=StorageKey(bot_id=1, chat_id=user_id, user_id=user_id))
+    await settings.settings_profile(callback, state)
+    return callback.message.answer.await_args.args[0]
+
+
+async def _screen_mcp_access_disabled(db, user_id: int) -> str:
+    """Экран /mcp без публичного адреса (handlers.mcp_access._show,
+    config.mcp_available() == False в тестовом окружении) — тот самый экран,
+    что раньше был английским независимо от языка бота (см. TONE_OF_VOICE.md,
+    «Известные долги»)."""
+    from handlers import mcp_access
+
+    callback = _make_fake_callback(user_id, "mcp:open")
+    state = FSMContext(storage=MemoryStorage(), key=StorageKey(bot_id=1, chat_id=user_id, user_id=user_id))
+    await mcp_access.mcp_open(callback, state)
+    return callback.message.answer.await_args.args[0]
+
+
+async def _screen_community_intro(db, user_id: int) -> str:
+    """/community с настроенным адресом группы (handlers.community.cmd_community)."""
+    import config
+    from handlers import community
+
+    message = MagicMock()
+    message.from_user = SimpleNamespace(id=user_id, username="tester")
+    message.answer = AsyncMock(return_value=SimpleNamespace(message_id=2))
+    community_url = config.COMMUNITY_CHAT_URL
+    config.COMMUNITY_CHAT_URL = "https://t.me/example_community"
+    try:
+        await community.cmd_community(message)
+    finally:
+        config.COMMUNITY_CHAT_URL = community_url
+    return message.answer.await_args.args[0]
+
+
+async def _screen_donate(db, user_id: int) -> str:
+    """Экран доната (handlers.donate.open_donate) при включённых донатах."""
+    import config
+    from handlers import donate
+
+    donations_enabled = config.DONATIONS_ENABLED
+    config.DONATIONS_ENABLED = True
+    try:
+        callback = _make_fake_callback(user_id, "menu:donate")
+        await donate.open_donate(callback)
+        return callback.message.answer.await_args.args[0]
+    finally:
+        config.DONATIONS_ENABLED = donations_enabled
+
+
+async def _screen_game_intro(db, user_id: int) -> str:
+    """/game без подключённого MCP (handlers.game.cmd_game) — единственное
+    состояние экрана, которое не зависит от публичного адреса."""
+    from handlers import game
+
+    message = MagicMock()
+    message.from_user = SimpleNamespace(id=user_id, username="tester")
+    message.answer = AsyncMock(return_value=SimpleNamespace(message_id=2))
+    await game.cmd_game(message)
+    return message.answer.await_args.args[0]
+
+
+async def _screen_backfill_prompt(db, user_id: int) -> str:
+    """«📅 На какую дату занести тренировку?» (handlers.backfill.backfill_start)."""
+    from handlers import backfill
+
+    callback = _make_fake_callback(user_id, "menu:backfill_workout")
+    state = FSMContext(storage=MemoryStorage(), key=StorageKey(bot_id=1, chat_id=user_id, user_id=user_id))
+    await backfill.backfill_start(callback, state)
+    return callback.message.answer.await_args.args[0]
+
+
+async def _screen_fallback_generic(db, user_id: int) -> str:
+    """Единый ответ на непонятый текст (handlers.fallback.unhandled_text)."""
+    from aiogram.enums import ContentType
+
+    from handlers import fallback
+
+    message = MagicMock()
+    message.from_user = SimpleNamespace(id=user_id, username="tester")
+    message.content_type = ContentType.TEXT
+    message.text = "непонятная бессвязная фраза без числа и без названия"
+    message.reply = AsyncMock(return_value=SimpleNamespace(message_id=2))
+    await fallback.unhandled_text(message)
+    return message.reply.await_args.args[0]
+
+
+async def _screen_main_error_fallback(db, user_id: int) -> str:
+    """Последний рубеж (main._generic_error_text) — текст, который увидит
+    человек, если у него сломалось решительно всё."""
+    import main
+
+    return main._generic_error_text()
+
+
+async def _screen_ai_trainer_intro(db, user_id: int) -> str:
+    """Интро/резюме AI-тренера и готовые вопросы (handlers/ai_trainer.py),
+    прочитанные и как модульные атрибуты (module __getattr__), и через
+    intro_presets — тот же путь, что и menu:ai."""
+    from handlers import ai_trainer as at
+
+    presets = await at.intro_presets(user_id)
+    preset_labels = "\n".join(label for label, _ in presets)
+    return f"{at.INTRO_TEXT}\n{at.RESUME_TEXT}\n{at.ACTIONS_HINT_TEXT}\n{preset_labels}"
+
+
+async def _screen_ai_trainer_setup_question(db, user_id: int) -> str:
+    """Вопрос опросника перед сборкой программы: заголовок «ВОПРОС N ИЗ M»,
+    сам вопрос про цель (первый и обязательный, см. handlers.ai_trainer.
+    _setup_goal_question), подсказка и кнопки вариантов."""
+    from handlers import ai_trainer as at
+
+    goal = at.SETUP_GOAL_QUESTION
+    html = at._setup_question_html(0, 4, goal["question"], has_choices=True)
+    kb = keyboards.ai_setup_question_keyboard(0, goal["choices"])
+    buttons = "\n".join(b.text for row in kb.inline_keyboard for b in row)
+    return f"{html}\n{buttons}"
+
+
+async def _screen_ai_trainer_thinking_pools(db, user_id: int) -> str:
+    """Все английские пулы placeholder-фраз «тренер думает» разом
+    (running_texts.POOLS_EN) — по одному ключу на вариант в каталоге, но
+    один живой рендер сразу ловит утечку в любом из них."""
+    import running_texts
+
+    lines = [line for pool in running_texts.POOLS_EN.values() for line in pool]
+    return "\n".join(lines)
+
+
+async def _screen_factcheck(db, user_id: int) -> str:
+    """Разбор пересланного поста: занятость, отказ и пул placeholder-фраз
+    (handlers/factcheck.py, running_texts.fact_check_pool)."""
+    import running_texts
+
+    busy = i18n.t("factcheck.busy")
+    failed = i18n.t("factcheck.failed")
+    pool = "\n".join(running_texts.fact_check_pool())
+    return f"{busy}\n{failed}\n{pool}"
+
+
 def _strip_autonyms(text: str) -> str:
     """Тот же вырез, что и в test_en_catalog_has_no_cyrillic: автоним «Русский»
     в подписи кнопки языка — законная кириллица даже на английском экране."""
@@ -560,6 +706,18 @@ SCREENS: list[tuple[str, object]] = [
     ("exercises_templates", _screen_exercises_templates),
     ("routines_manage_empty", _screen_routines_manage_empty),
     ("routine_source_empty", _screen_routine_source_empty),
+    ("settings_profile", _screen_settings_profile),
+    ("mcp_access_disabled", _screen_mcp_access_disabled),
+    ("community_intro", _screen_community_intro),
+    ("donate_screen", _screen_donate),
+    ("game_intro", _screen_game_intro),
+    ("backfill_prompt", _screen_backfill_prompt),
+    ("fallback_generic", _screen_fallback_generic),
+    ("main_error_fallback", _screen_main_error_fallback),
+    ("ai_trainer_intro", _screen_ai_trainer_intro),
+    ("ai_trainer_setup_question", _screen_ai_trainer_setup_question),
+    ("ai_trainer_thinking_pools", _screen_ai_trainer_thinking_pools),
+    ("factcheck_screen", _screen_factcheck),
 ]
 
 # Экраны, которые всё ещё протекают кириллицей мимо каталога. Список

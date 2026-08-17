@@ -74,7 +74,7 @@ def test_today_pool_never_claims_a_workout_or_program_exists():
     вызова инструмента. Фраза вроде «проверяю активную тренировку» была бы
     утверждением о данных, которых нет (TONE_OF_VOICE.md)."""
     forbidden = ("активную тренировку", "текущую тренировку", "по программе", "расписание")
-    for phrase in running_texts.TODAY_POOL:
+    for phrase in running_texts.POOLS[running_texts.TODAY]:
         assert not any(claim in phrase for claim in forbidden), phrase
 
 
@@ -82,7 +82,7 @@ def test_fact_check_pool_talks_about_the_post_not_about_user_data():
     """Разбор пересланного поста читает чужой текст, а не дневники — обещать
     заглянуть в них тут нельзя тем более."""
     forbidden = ("дневник", "твои веса", "историю тренировок", "взвешивани")
-    for phrase in running_texts.FACT_CHECK_POOL:
+    for phrase in running_texts.fact_check_pool():
         assert not any(claim in phrase for claim in forbidden), phrase
 
 
@@ -133,7 +133,7 @@ def test_pool_count_grew_well_past_the_original_flat_list():
 def test_fact_check_pool_is_big_enough_for_honest_rotation():
     """У разбора поста свой пул, не тема по ключевым словам, — но ротация ему
     нужна такая же честная, как остальным."""
-    pool = running_texts.FACT_CHECK_POOL
+    pool = running_texts.fact_check_pool()
     assert len(pool) > 1
     assert len(set(pool)) == len(pool)
 
@@ -142,7 +142,7 @@ def test_fact_check_pool_is_big_enough_for_honest_rotation():
 
 
 def test_rotation_never_repeats_the_same_phrase_twice_in_a_row():
-    pool = running_texts.PROGRAM_POOL
+    pool = running_texts.POOLS[running_texts.PROGRAM]
     previous = running_texts.pick(pool)
     for _ in range(200):
         current = running_texts.pick_different(pool, previous)
@@ -192,4 +192,4 @@ async def test_handle_question_shows_a_topic_relevant_placeholder_first(fresh_db
     await ai_trainer.ai_question(message, state)
 
     first_call_text = message.answer.await_args_list[0].args[0]
-    assert first_call_text in running_texts.NUTRITION_POOL
+    assert first_call_text in running_texts.POOLS[running_texts.NUTRITION]

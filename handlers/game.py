@@ -13,13 +13,9 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message, W
 import config
 import db
 import game_server
+import i18n
 
 router = Router(name="game")
-
-INTRO = (
-    "🏃 <b>МИНИ-ИГРЫ</b>\n\n"
-    "Беги по залу или веди отряд качков через полосу препятствий — выбирай, где размяться."
-)
 
 
 def game_url() -> str:
@@ -37,20 +33,20 @@ async def cmd_game(message: Message):
     if not config.mcp_available():
         # Без публичного адреса страницу игры никто не отдаёт (см. main.py:
         # HTTP-сервер поднимается только вместе с MCP).
-        await message.answer("Игра пока не подключена — загляни позже.")
+        await message.answer(i18n.t("game.not_configured"))
         return
     best_runner = await db.get_game_best_distance(message.from_user.id)
     best_squad = await db.get_squad_best_score(message.from_user.id)
     records = []
     if best_runner:
-        records.append(f"Кач-Раннер — рекорд {best_runner} м")
+        records.append(i18n.t("game.record.runner", n=best_runner))
     if best_squad:
-        records.append(f"Кач-Отряд — рекорд {best_squad} очков")
-    text = INTRO + ("\n\n" + ", ".join(records) + "." if records else "")
+        records.append(i18n.t("game.record.squad", n=best_squad))
+    text = i18n.t("game.intro") + ("\n\n" + ", ".join(records) + "." if records else "")
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="🏃 Кач-Раннер", web_app=WebAppInfo(url=game_url()))],
-            [InlineKeyboardButton(text="💪 Кач-Отряд", web_app=WebAppInfo(url=squad_url()))],
+            [InlineKeyboardButton(text=i18n.t("game.btn.runner"), web_app=WebAppInfo(url=game_url()))],
+            [InlineKeyboardButton(text=i18n.t("game.btn.squad"), web_app=WebAppInfo(url=squad_url()))],
         ]
     )
     await message.answer(text, reply_markup=kb, parse_mode="HTML")

@@ -137,7 +137,7 @@ async def test_forward_shows_placeholder_then_edits_to_verdict(monkeypatch):
     await factcheck.factcheck_forward(message)
 
     message.reply.assert_awaited_once()
-    assert message.reply.await_args.args[0] in running_texts.FACT_CHECK_POOL
+    assert message.reply.await_args.args[0] in running_texts.fact_check_pool()
     sent = message.reply.return_value
     sent.edit_text.assert_awaited_once()
     assert "Дело" in sent.edit_text.await_args.args[0]
@@ -179,7 +179,7 @@ async def test_preview_account_gets_warning_but_still_receives_verdict(monkeypat
     await factcheck.factcheck_forward(message)
 
     ai_limits.reply.assert_awaited_once()
-    assert message.reply.await_args.args[0] in running_texts.FACT_CHECK_POOL
+    assert message.reply.await_args.args[0] in running_texts.fact_check_pool()
 
 
 # ---------- busy-замок ----------

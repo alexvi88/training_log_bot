@@ -15,26 +15,15 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 import config
 import db
+import i18n
 
 router = Router(name="community")
-
-INTRO = (
-    "💬 <b>ЧАТ АТЛЕТОВ</b>\n\n"
-    "Общая группа тех, кто ведёт дневник здесь же. Спрашивай про технику, "
-    "показывай подходы, обсуждай программы — говорят там атлеты между собой, "
-    "я в разговор не лезу.\n\n"
-    "Жми кнопку и заходи."
-)
-
-NOT_READY = "Общего чата пока нет. Заведу — кнопка появится в меню, скажу отдельно."
-
-BUTTON_TEXT = "💬 Зайти в чат"
 
 
 def community_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text=BUTTON_TEXT, url=config.COMMUNITY_CHAT_URL)]
+            [InlineKeyboardButton(text=i18n.t("community.btn.enter"), url=config.COMMUNITY_CHAT_URL)]
         ]
     )
 
@@ -43,6 +32,6 @@ def community_keyboard() -> InlineKeyboardMarkup:
 async def cmd_community(message: Message):
     await db.get_or_create_user(message.from_user.id, message.from_user.username)
     if not config.community_available():
-        await message.answer(NOT_READY)
+        await message.answer(i18n.t("community.not_ready"))
         return
-    await message.answer(INTRO, reply_markup=community_keyboard(), parse_mode="HTML")
+    await message.answer(i18n.t("community.intro"), reply_markup=community_keyboard(), parse_mode="HTML")

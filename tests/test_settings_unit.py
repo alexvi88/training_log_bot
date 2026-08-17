@@ -47,7 +47,9 @@ async def test_unit_tap_asks_before_converting(fresh_db, user_id):
     user = await db.get_user(user_id)
     assert user["unit"] == "kg"  # nothing converted yet
     text = callback.message.answer.await_args.args[0]
-    assert "lb" in text
+    # Русское название единицы, а не сырой код "lb" — та же логика, что и у
+    # тоста после подтверждения (test_unit_switch_alert_stays_a_modal ниже).
+    assert "фунты" in text
     kb = callback.message.answer.await_args.kwargs["reply_markup"]
     callback_datas = [b.callback_data for row in kb.inline_keyboard for b in row]
     assert "settings:unityes" in callback_datas

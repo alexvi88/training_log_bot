@@ -53,6 +53,7 @@ from starlette.responses import HTMLResponse, RedirectResponse, Response
 
 import config
 import db
+import i18n
 
 logger = logging.getLogger(__name__)
 
@@ -138,12 +139,17 @@ def auth_settings(resource_path: str) -> AuthSettings:
 CLIENT_NAME_LIMIT = 40
 
 
-def client_display_name(metadata: Optional[str], client_id: str) -> str:
+def client_display_name(metadata: Optional[str], client_id: str, lang: Optional[str] = None) -> str:
     """Имя приложения для человека.
 
     Из метаданных регистрации, если там есть непустое имя; иначе — хост, куда
     клиент просит вернуть код (он говорит человеку больше, чем что-либо ещё);
     в последнюю очередь — начало client_id, чтобы две строки в списке различались.
+
+    `lang` по умолчанию не передаём — вызовы из хендлеров бота (handlers/
+    mcp_access.py) идут внутри контекста апдейта, где i18n.get_lang() уже
+    выставлен правильно; страница согласия (см. _named_client) передаёт язык
+    явно, потому что у неё такого контекста нет (см. _lang_from_accept_language).
     """
     parsed: dict = {}
     if metadata:
@@ -158,7 +164,7 @@ def client_display_name(metadata: Optional[str], client_id: str) -> str:
     host = redirect_host(parsed.get("redirect_uris") or [])
     if host:
         return host
-    return f"приложение {client_id[:8]}"
+    return i18n.t_in(lang or i18n.get_lang(), "oauth.client_fallback_name", client_id=client_id[:8])
 
 
 def redirect_host(redirect_uris: Any) -> str:
@@ -410,11 +416,49 @@ class TrainingLogOAuthProvider:
         await db.revoke_oauth_token(getattr(token, "token", ""))
 
 
+def _lang_from_accept_language(header: str) -> str:
+    """Язык страницы согласия из заголовка `Accept-Language`.
+
+    Единственный доступный сигнал: telegram_id на этом шаге ещё не известен
+    (человек вводит код из бота прямо на этой странице), поэтому взять язык
+    из БД, как во всём остальном продукте, нельзя (см. модульный докстринг).
+
+    Разбираем по RFC 7231 — теги через запятую, у каждого необязательный
+    `;q=0.x` (веса не обязаны идти по убыванию, сортировать нельзя — нужно
+    честно сравнивать), сам тег вида `en-US`/`ru-RU`: регион отрезаем —
+    `i18n.normalize` ждёт голый код языка и сам решает, к какому языку
+    продукта он относится (СНГ-сфера — в русский, всё остальное — в
+    английский).
+    """
+    best_tag, best_q = "", -1.0
+    for part in header.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        tag, _, param = part.partition(";")
+        tag = tag.strip()
+        if not tag or tag == "*":
+            continue
+        q = 1.0
+        param = param.strip()
+        if param.startswith("q="):
+            try:
+                q = float(param[2:])
+            except ValueError:
+                q = 1.0
+        if q > best_q:
+            best_q, best_tag = q, tag
+    return i18n.normalize(best_tag)
+
+
 # ---------- страница согласия ----------
 #
 # Две страницы на весь проект — шаблонизатор ради них не нужен. Вся разметка
 # самодостаточная: ни одного внешнего файла, потому что отдаёт её тот же
-# процесс, что и MCP, и статику ему раздавать нечем.
+# процесс, что и MCP, и статику ему раздавать нечем. Текст — через i18n.t_in
+# с явным lang (см. _lang_from_accept_language), а не через t()/set_lang: на
+# этой странице нет контекста апдейта, который выставлял бы язык, — только
+# заголовок конкретного HTTP-запроса.
 
 _STYLE = """
 :root { color-scheme: light dark; }
@@ -466,18 +510,20 @@ button {
 }
 """
 
-_SHARED_DATA = (
-    "<li>тренировки и подходы, включая заметки</li>"
-    "<li>прогресс по упражнениям и рекорды</li>"
-    "<li>объём по группам мышц</li>"
-    "<li>вес тела и дневник питания</li>"
-    "<li>сохранённые программы</li>"
-)
+def _shared_data(lang: str) -> str:
+    keys = (
+        "oauth.shared_workouts",
+        "oauth.shared_progress",
+        "oauth.shared_volume",
+        "oauth.shared_bodyweight",
+        "oauth.shared_programs",
+    )
+    return "".join(f"<li>{i18n.t_in(lang, key)}</li>" for key in keys)
 
 
-def _page(title: str, body: str, status_code: int = 200) -> HTMLResponse:
+def _page(lang: str, title: str, body: str, status_code: int = 200) -> HTMLResponse:
     html = (
-        "<!doctype html><html lang=ru><head><meta charset=utf-8>"
+        f"<!doctype html><html lang={escape(lang)}><head><meta charset=utf-8>"
         '<meta name=viewport content="width=device-width, initial-scale=1">'
         f"<title>{escape(title)}</title><style>{_STYLE}</style></head>"
         f"<body><div class=card>{body}</div></body></html>"
@@ -498,7 +544,7 @@ def _page(title: str, body: str, status_code: int = 200) -> HTMLResponse:
 
 
 def _consent_page(
-    request_id: str, app_name: str, destination: str = "", error: str = ""
+    lang: str, request_id: str, app_name: str, destination: str = "", error: str = ""
 ) -> HTMLResponse:
     error_block = (
         f'<div class="error" role="alert" id="err">{escape(error)}</div>' if error else ""
@@ -507,21 +553,20 @@ def _consent_page(
     # именем: назваться «Claude» может кто угодно, а код уедет туда, куда просил
     # клиент при регистрации. Человеку это и надо сверить.
     destination_block = (
-        f'<p>Код и доступ уйдут на <span class="dest">{escape(destination)}</span>. '
-        "Если это не то приложение, которое ты подключаешь, — нажми «Отмена».</p>"
+        "<p>"
+        + i18n.t_in(lang, "oauth.destination_line", destination=f'<span class="dest">{escape(destination)}</span>')
+        + "</p>"
         if destination
         else ""
     )
     return _page(
-        "Дневник тренировок — подтверждение",
-        "<h1>Дневник тренировок</h1>"
-        f'<p><span class="app">{escape(app_name)}</span> просит доступ к твоим данным:</p>'
-        f"<ul>{_SHARED_DATA}</ul>"
+        lang,
+        i18n.t_in(lang, "oauth.consent_title"),
+        f"<h1>{i18n.t_in(lang, 'oauth.heading')}</h1>"
+        f'<p><span class="app">{escape(app_name)}</span> {i18n.t_in(lang, "oauth.wants_access")}</p>'
+        f"<ul>{_shared_data(lang)}</ul>"
         f"{destination_block}"
-        '<p class="muted">Читать может всё это. Писать — вес, еду, убрать неверную '
-        "запись из дневника, новое упражнение, копию программы. Переименовать "
-        "что-то снаружи нельзя — это, как и переписку с AI-тренером, можно только "
-        "в самом боте.</p>"
+        f'<p class="muted">{i18n.t_in(lang, "oauth.read_write_note")}</p>'
         f"{error_block}"
         # action="" — на текущий адрес: так форма не ломается, если бот когда-нибудь
         # окажется за префиксом пути.
@@ -531,8 +576,7 @@ def _consent_page(
         # человек сюда пришёл, — инструкция самодостаточна (см. handlers/mcp_access).
         # Отправлять его «открыть бота и нажать кнопку» значит противоречить экрану,
         # который у него открыт на соседнем устройстве.
-        '<p><label for="code">Введи код из бота — он в том же сообщении, '
-        "где инструкция:</label></p>"
+        f'<p><label for="code">{i18n.t_in(lang, "oauth.code_label")}</label></p>'
         # maxlength с запасом и без pattern: сервер сам выбрасывает из кода всё,
         # кроме цифр, а браузер, обрезающий вставленное «123 456» до шести
         # символов, ломает ровно то, что сервер терпит.
@@ -540,47 +584,43 @@ def _consent_page(
         'maxlength="16" placeholder="000000" required autofocus'
         f'{" aria-describedby=err" if error else ""}>'
         '<div class="row">'
-        '<button class="allow" type="submit" name="action" value="allow">Разрешить</button>'
+        f'<button class="allow" type="submit" name="action" value="allow">{i18n.t_in(lang, "oauth.allow_btn")}</button>'
         '<button class="deny" type="submit" name="action" value="deny" '
-        'formnovalidate>Отмена</button>'
+        f'formnovalidate>{i18n.t_in(lang, "oauth.deny_btn")}</button>'
         "</div></form>"
         # Для того, кто начал с приложения, а бота ещё не открывал: сказать, где
         # код берётся, надо — но мелким шрифтом и после поля, чтобы не посылать
         # туда того, у кого код уже есть.
-        '<p class="muted">Кода нет под рукой? В боте: <b>/mcp</b> → выбери своё '
-        "приложение, код будет в том же сообщении.</p>",
+        f'<p class="muted">{i18n.t_in(lang, "oauth.no_code_hint")}</p>',
         status_code=200 if not error else 400,
     )
 
 
-def _dead_end_page(message: str) -> HTMLResponse:
+def _dead_end_page(lang: str, message: str) -> HTMLResponse:
     return _page(
-        "Дневник тренировок",
-        f"<h1>Дневник тренировок</h1><p>{escape(message)}</p>"
-        '<p class="muted">Вернись в приложение и начни подключение заново.</p>',
+        lang,
+        i18n.t_in(lang, "oauth.dead_end_title"),
+        f"<h1>{i18n.t_in(lang, 'oauth.heading')}</h1><p>{escape(message)}</p>"
+        f'<p class="muted">{i18n.t_in(lang, "oauth.dead_end_hint")}</p>',
         status_code=400,
     )
 
 
+# Значения — ключи каталога i18n, а не готовый текст: страница согласия рендерит
+# их через i18n.t_in(lang, ...) с языком из Accept-Language (см. _consent_page).
 _ERRORS = {
     # Куда идти за новым — самое полезное, что тут можно сказать: чаще всего код
     # не подошёл именно потому, что устарел, пока человек искал раздел коннекторов.
-    "bad_code": (
-        "Код не подошёл — скорее всего устарел. В боте нажми «🔄 Новый код» "
-        "на том же экране и введи ещё раз."
-    ),
-    "empty_code": "Введи шесть цифр из бота.",
+    "bad_code": "oauth.error_bad_code",
+    "empty_code": "oauth.error_empty_code",
 }
 
 # Тупики: заявку уже не оживить, и форма на ней только водит по кругу.
 _DEAD_ENDS = {
-    "unknown_request": "Запрос на подключение устарел или не найден.",
-    "expired_request": "Запрос на подключение устарел или не найден.",
-    "too_many_attempts": "Слишком много неверных попыток по этому запросу.",
-    "rate_limited": (
-        "Слишком много попыток ввода за последние минуты. Подожди немного и "
-        "начни подключение заново из приложения."
-    ),
+    "unknown_request": "oauth.dead_end_unknown_request",
+    "expired_request": "oauth.dead_end_unknown_request",
+    "too_many_attempts": "oauth.dead_end_too_many_attempts",
+    "rate_limited": "oauth.dead_end_rate_limited",
 }
 
 
@@ -636,11 +676,11 @@ class RegisterRateLimitMiddleware:
         await response(scope, receive, send)
 
 
-async def _named_client(consent) -> tuple[str, str]:
+async def _named_client(consent, lang: str) -> tuple[str, str]:
     """(имя приложения, хост назначения) для страницы согласия."""
     client = await db.get_oauth_client(consent["client_id"])
     metadata = client["metadata"] if client else None
-    name = client_display_name(metadata, consent["client_id"])
+    name = client_display_name(metadata, consent["client_id"], lang=lang)
     host = ""
     if metadata:
         try:
@@ -654,25 +694,25 @@ async def consent_route(request: Request) -> Response:
     """GET рисует страницу согласия, POST — проверяет код и уводит обратно.
 
     Роут публичный по определению: сюда приходит человек из браузера, у которого
-    ещё нет никакого токена, — это и есть тот шаг, где он его получает.
+    ещё нет никакого токена, — это и есть тот шаг, где он его получает. Язык —
+    из `Accept-Language` (см. _lang_from_accept_language): telegram_id, а с ним
+    и язык из БД, на этом экране ещё не известны.
     """
+    lang = _lang_from_accept_language(request.headers.get("accept-language", ""))
     if request.method == "GET":
         request_id = request.query_params.get("request", "")
         consent = await db.get_oauth_consent_request(request_id)
         if consent is None or consent["expires_at"] < time.time():
-            return _dead_end_page(_DEAD_ENDS["unknown_request"])
-        name, destination = await _named_client(consent)
-        return _consent_page(request_id, name, destination)
+            return _dead_end_page(lang, i18n.t_in(lang, _DEAD_ENDS["unknown_request"]))
+        name, destination = await _named_client(consent, lang)
+        return _consent_page(lang, request_id, name, destination)
 
     form = await request.form()
     request_id = str(form.get("request", ""))
     consent = await db.get_oauth_consent_request(request_id)
     if consent is None or consent["expires_at"] < time.time():
         # Сюда же приходит второй клик по «Разрешить»: заявка уже погашена первым.
-        return _dead_end_page(
-            "Запрос на подключение устарел, не найден — или доступ уже выдан. "
-            "Проверь приложение: возможно, всё уже подключено."
-        )
+        return _dead_end_page(lang, i18n.t_in(lang, "oauth.dead_end_already_granted"))
 
     # Согласие — только по явной кнопке. Любая другая отправка (потерялось
     # значение кнопки, самодельный запрос) — отказ: fail-closed на том шаге, где
@@ -695,8 +735,8 @@ async def consent_route(request: Request) -> Response:
     if not entered:
         # Пустая отправка — промах пальцем, а не попытка угадать: считать её
         # попыткой значит запирать заявку тому, кто ещё ничего не вводил.
-        name, destination = await _named_client(consent)
-        return _consent_page(request_id, name, destination, error=_ERRORS["empty_code"])
+        name, destination = await _named_client(consent, lang)
+        return _consent_page(lang, request_id, name, destination, error=i18n.t_in(lang, _ERRORS["empty_code"]))
     verdict, user_id = await db.verify_oauth_link_code(
         request_id,
         entered,
@@ -711,9 +751,9 @@ async def consent_route(request: Request) -> Response:
             "MCP OAuth: consent rejected (%s) for client %s", verdict, consent["client_id"]
         )
         if verdict in _DEAD_ENDS:
-            return _dead_end_page(_DEAD_ENDS[verdict])
-        name, destination = await _named_client(consent)
-        return _consent_page(request_id, name, destination, error=_ERRORS[verdict])
+            return _dead_end_page(lang, i18n.t_in(lang, _DEAD_ENDS[verdict]))
+        name, destination = await _named_client(consent, lang)
+        return _consent_page(lang, request_id, name, destination, error=i18n.t_in(lang, _ERRORS[verdict]))
 
     code = secrets.token_urlsafe(32)
     await db.create_oauth_auth_code(

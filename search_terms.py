@@ -1,19 +1,33 @@
-"""Приведение слов к основе, чтобы поиск упражнений находил словоформы.
+"""Приведение слов к основе, чтобы поиск упражнений находил словоформы —
+кириллица и латиница сразу, независимо от языка интерфейса.
 
 «Приседания со штангой» должно находить «Присед со штангой», «жимы» — «Жим»,
-«тяги» — «Тяга». Раньше поиск был одной подстрокой целиком (`LIKE '%запрос%'`),
-и любая другая форма слова — или лишнее слово посередине названия — давала
-«ничего не нашлось» при полном каталоге.
+«тяги» — «Тяга», а «squats»/«curls» — «Squat»/«Curl». Раньше поиск был одной
+подстрокой целиком (`LIKE '%запрос%'`), и любая другая форма слова — или
+лишнее слово посередине названия — давала «ничего не нашлось» при полном
+каталоге.
 
 Полноценный стеммер тут избыточен: названия упражнений — короткие именные
 группы из десятка знакомых слов. Хватает отсечения самых частых окончаний, но с
 одним важным свойством: **основа только укорачивает слово и никогда не меняет
 его начало**. Поэтому основа запроса всегда остаётся префиксом искомого слова, и
 поиск подстрокой по основе работает в обе стороны — «присед» и «приседания» оба
-дают `присед`, который лежит внутри и «Приседа», и «Приседаний».
+дают `присед`, который лежит внутри и «Приседа», и «Приседаний». То же для
+английского: «squat» и «squats» оба дают `squat`.
 
 Второе: запрос режется на слова, и каждое слово ищется отдельно. «жим лёжа»
 находит «Жим штанги лёжа», хотя целиком такой подстроки в названии нет.
+
+Оба языка распознаются БЕЗ привязки к языку интерфейса (см. i18n.get_lang()) —
+как и в voice_parse.py (см. его шапку): англоязычный атлет может напечатать
+русское название упражнения и наоборот, а кириллица с латиницей не пересекаются
+ни в одном слове, так что пробовать обе морфологии сразу можно безопасно —
+кириллический разбор не может случайно сработать на латинском слове и наоборот.
+
+Английские окончания не похожи на русские (`squats`→`squat`, `curls`→`curl`,
+`pressing`→`press`) — это не морфология, а плоский список суффиксов, ровно тот
+же по духу набор допущений, что и русский `_SUFFIXES`, но написанный заново
+(см. `_stem_en`), а не встроенный в общий цикл.
 """
 
 from __future__ import annotations
@@ -21,7 +35,7 @@ from __future__ import annotations
 import re
 
 # Ниже этой длины основу не режем: «тяг» ещё осмысленно, «т» уже совпадёт с
-# доброй половиной каталога.
+# доброй половиной каталога. Общая граница для обоих языков.
 _MIN_STEM = 3
 
 # Отглагольное существительное — самый частый источник расхождения с каталогом:
@@ -56,11 +70,7 @@ def fold(text: str) -> str:
     return text.lower().replace("ё", "е")
 
 
-def stem(word: str) -> str:
-    """Основа одного слова. Латиница, цифры и аббревиатуры остаются как есть."""
-    folded = fold(word)
-    if not _CYRILLIC_RE.search(folded):
-        return folded
+def _stem_ru(folded: str) -> str:
     for suffix in _SUFFIXES:
         if folded.endswith(suffix):
             candidate = folded[: -len(suffix)]
@@ -68,6 +78,35 @@ def stem(word: str) -> str:
             # «лёжа» оставила бы «л»), и слово берём целиком.
             return candidate if len(candidate) >= _MIN_STEM else folded
     return folded
+
+
+def _stem_en(folded: str) -> str:
+    """Основа одного латинского слова. Порядок проверок — от длинного
+    суффикса к короткому, как и у _stem_ru: "-ing" и "-es" проверяются раньше
+    голого "-s", иначе "crunches" срезалось бы всего на одну букву и
+    оставляло "crunche" вместо "crunch"."""
+    if folded.endswith("ing"):
+        candidate = folded[: -len("ing")]
+        return candidate if len(candidate) >= _MIN_STEM else folded
+    if folded.endswith("es"):
+        candidate = folded[: -len("es")]
+        return candidate if len(candidate) >= _MIN_STEM else folded
+    # "ss" в конце — часть корня, а не окончание мн. числа («press» — не форма
+    # множественного числа от «pres»): без этой защиты обычный «press» в
+    # запросе срезался бы до «pres» и терял точность без всякой пользы (сам
+    # «press» и так подстрока себя самого).
+    if folded.endswith("s") and not folded.endswith("ss"):
+        candidate = folded[: -len("s")]
+        return candidate if len(candidate) >= _MIN_STEM else folded
+    return folded
+
+
+def stem(word: str) -> str:
+    """Основа одного слова. Цифры и аббревиатуры остаются как есть."""
+    folded = fold(word)
+    if _CYRILLIC_RE.search(folded):
+        return _stem_ru(folded)
+    return _stem_en(folded)
 
 
 def query_stems(query: str) -> list[str]:
@@ -127,11 +166,42 @@ _SYNONYMS: dict[str, tuple[str, ...]] = {
     "смит": ("смит",),
 }
 
+# Тот же приём для английского каталога (см. seed_data.localized_exercise_name
+# — англоязычные имена шаблонов живут в locales/en.json, а не сочиняются тут):
+# ключ — основа английского слова запроса, значения — то, что реально стоит в
+# английских названиях (Barbell Bench Press, Dumbbell Curl, Barbell Squat...).
+# Тот же принцип «только там, где иначе НЕ НАХОДИТСЯ НИЧЕГО» и та же
+# несимметричность — не копия русской таблицы, а отдельный набор пробелов
+# именно английского каталога.
+_SYNONYMS_EN: dict[str, tuple[str, ...]] = {
+    # Muscle name instead of the movement — English catalog names never say
+    # "abs"/"core"/"traps"/"quads"/"hamstrings"/"forearms" outright.
+    "ab": ("crunch", "plank", "twist", "rollout", "leg raise"),
+    "abs": ("crunch", "plank", "twist", "rollout", "leg raise"),
+    "core": ("crunch", "plank"),
+    "trap": ("shrug",),
+    # Bare "press"/"curl"/"extension"/"raise" are too broad on their own
+    # (they'd pull in every bench/overhead press, biceps/wrist curl, or
+    # triceps/hyperextension in the catalog) — the same trap the Russian
+    # "квадрицепс"/"бедр" entries avoid by keying off the full two-word
+    # catalog phrase ("leg press", "leg curl", "leg extension", "leg raise")
+    # instead of the bare movement word.
+    "quad": ("squat", "leg extension", "leg press"),
+    "hamstring": ("leg curl", "romanian", "stiff"),
+    "forearm": ("wrist",),
+    # Colloquial equipment/name that isn't the catalog's own word.
+    "pulley": ("cable",),                 # "low pulley curl" → Cable ...
+    "bar": ("bar", "dip"),                 # "dip bars" → Dips (no "bar" in the name)
+    "military": ("overhead",),            # "military press" → Standing Barbell Overhead Press
+}
+
 
 def expand(stem_value: str) -> tuple[str, ...]:
     """Во что может превратиться основа запроса. Сама основа всегда в списке —
-    синонимы ДОБАВЛЯЮТ варианты, а не подменяют исходное слово."""
-    alts = _SYNONYMS.get(stem_value)
+    синонимы ДОБАВЛЯЮТ варианты, а не подменяют исходное слово. Обе таблицы
+    (ru/en) проверяются разом — основы не пересекаются между алфавитами, так
+    что нет риска подставить не тот язык."""
+    alts = _SYNONYMS.get(stem_value) or _SYNONYMS_EN.get(stem_value)
     if not alts:
         return (stem_value,)
     return tuple(dict.fromkeys((stem_value, *alts)))
@@ -151,12 +221,23 @@ _PHRASES: dict[str, tuple[str, ...]] = {
 # синонима: во втором случае человек переформулирует, в первом — добавит не то
 # упражнение и заметит это через месяц в статистике.
 
+# Тот же приём для английского: словосочетание, которое по отдельным словам
+# не ловится ни стеммингом, ни _SYNONYMS_EN.
+_PHRASES_EN: dict[str, tuple[str, ...]] = {
+    "hip thrust": ("glute", "bridge"),     # common gym term for Barbell Glute Bridge
+    "low back": ("hyperextension",),
+}
+
+# Объединены один раз на модуль, а не на каждый вызов query_groups: словари
+# маленькие и неизменные после импорта.
+_ALL_PHRASES: dict[str, tuple[str, ...]] = {**_PHRASES, **_PHRASES_EN}
+
 
 def query_groups(query: str) -> list[tuple[str, ...]]:
     """Запрос → группы вариантов. Внутри группы достаточно любого совпадения,
     но выполниться должны ВСЕ группы: «жим лёжа» это и «жим», и «лёжа»."""
     folded = " ".join(_WORD_RE.findall(fold(query)))
-    for phrase, alts in _PHRASES.items():
+    for phrase, alts in _ALL_PHRASES.items():
         if phrase in folded:
             rest = folded.replace(phrase, " ")
             return [alts, *(expand(s) for s in query_stems(rest))]

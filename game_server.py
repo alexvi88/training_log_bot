@@ -30,6 +30,7 @@ from starlette.responses import FileResponse, PlainTextResponse
 
 import config
 import db
+import i18n
 
 logger = logging.getLogger(__name__)
 
@@ -186,39 +187,27 @@ RECORD_MIN_GAIN = 1.2
 RECORD_MIN_SCORE = 300
 RECORD_MIN_SCORE_GAIN = 1.2
 
-FIRST_RUN_TEXT = (
-    "ПРИВЕТ АТЛЕТ! Видел твой первый забег — {distance} м. Записал. "
-    "Дыхалка — тоже мышца, забегай ещё: /game"
-)
-RECORD_TEXT = (
-    "ПРИВЕТ АТЛЕТ! {distance} м — новый рекорд забега, прошлый был {best}. "
-    "Так и записал."
-)
-FIRST_SQUAD_RUN_TEXT = (
-    "ПРИВЕТ АТЛЕТ! Видел твой первый забег в Кач-Отряде — {score} очков, "
-    "довёл отряд до {squad} бойцов. Записал. Ещё заход: /game"
-)
-SQUAD_RECORD_TEXT = (
-    "ПРИВЕТ АТЛЕТ! {score} очков в Кач-Отряде — новый рекорд, прошлый был "
-    "{best}. Так и записал."
-)
-
-
 def _trainer_reaction(distance: int, best_before: int) -> Optional[str]:
-    """Текст тренера про забег раннера или None, когда событие того не стоит."""
+    """Текст тренера про забег раннера или None, когда событие того не стоит.
+
+    Вызывается из process_game_result уже внутри `i18n.use_lang(...)` — сам
+    текст берётся из каталога через `i18n.t()`, а не строкой в этом модуле:
+    языка на месте вызова нет ни в контексте апдейта, ни где-либо ещё, кроме
+    БД (см. комментарий у process_game_result).
+    """
     if best_before == 0:
-        return FIRST_RUN_TEXT.format(distance=distance)
+        return i18n.t("game.first_run", distance=distance)
     if distance >= RECORD_MIN_DISTANCE and distance >= best_before * RECORD_MIN_GAIN:
-        return RECORD_TEXT.format(distance=distance, best=best_before)
+        return i18n.t("game.record", distance=distance, best=best_before)
     return None
 
 
 def _squad_trainer_reaction(score: int, squad: int, best_before: int) -> Optional[str]:
     """Текст тренера про забег отряда или None, когда событие того не стоит."""
     if best_before == 0:
-        return FIRST_SQUAD_RUN_TEXT.format(score=score, squad=squad)
+        return i18n.t("game.squad_first_run", score=score, squad=squad)
     if score >= RECORD_MIN_SCORE and score >= best_before * RECORD_MIN_SCORE_GAIN:
-        return SQUAD_RECORD_TEXT.format(score=score, best=best_before)
+        return i18n.t("game.squad_record", score=score, best=best_before)
     return None
 
 
@@ -243,6 +232,14 @@ async def process_game_result(user_id: int, raw: Any, game: str = GAME_RUNNER) -
 
     False — результат не прошёл проверку границ или игра неизвестна; дубликат
     считается успехом (клиент ретраит сеть, второй раз записывать нечего).
+
+    Реплика тренера уходит из своего короткоживущего `Bot` (см.
+    _send_trainer_message) вне обработчика апдейта — там, где `i18n.set_lang`
+    вообще не вызывается, а значит без явной подстраховки язык был бы
+    случайным (тем, что остался в contextvar с прошлого запроса в этом же
+    треде). Тот же приём, что и в ai_trainer.weekly_digest и в рассылке
+    пушей: язык берём из БД по telegram_id и оборачиваем рендер в
+    `i18n.use_lang(...)`.
     """
     result = parse_result(raw, game=game)
     if result is None:
@@ -261,10 +258,13 @@ async def process_game_result(user_id: int, raw: Any, game: str = GAME_RUNNER) -
         "game result: user=%s game=%s distance=%s score=%s squad=%s",
         user_id, game, result["distance"], result["score"], result["squad"],
     )
-    if game == GAME_SQUAD:
-        text = _squad_trainer_reaction(result["score"], result["squad"], best_before)
-    else:
-        text = _trainer_reaction(result["distance"], best_before)
+    user = await db.get_user(user_id)
+    lang = user["lang"] if user is not None else i18n.DEFAULT_LANG
+    with i18n.use_lang(lang):
+        if game == GAME_SQUAD:
+            text = _squad_trainer_reaction(result["score"], result["squad"], best_before)
+        else:
+            text = _trainer_reaction(result["distance"], best_before)
     if text:
         try:
             await _send_trainer_message(user_id, text)

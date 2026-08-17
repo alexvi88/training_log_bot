@@ -126,14 +126,55 @@ class IgnoreStaleCallbackMiddleware(BaseMiddleware):
             raise
 
 
-_GENERIC_ERROR_TEXT = "⚠️ Что-то пошло не так — бывает даже у чемпионов. Жми «Меню» внизу — и погнали дальше."
+# Захардкоженный русский текст — то, что человек увидит, если ДАЖЕ i18n.t()
+# внутри обработчика ошибок сам бросит исключение (битый каталог, регресс ICU-
+# парсера, что угодно). Это последний рубеж продукта: обработчик, который сам
+# падает на попытке показать текст о падении, оставляет человека с крутящимся
+# спиннером и вообще без единой подсказки — см. _generic_error_text ниже.
+_FALLBACK_ERROR_TEXT = "⚠️ Что-то пошло не так — бывает даже у чемпионов. Жми «Меню» внизу — и погнали дальше."
+_FALLBACK_MENU_BUTTON_TEXT = "🏠 Меню"
 
-# Реюзаем готовый колбэк «🏠 Меню» с карточки тренировки (handlers/workout.py,
-# live_back_to_menu) — он и так открывает главное меню независимо от того, что
-# сейчас на экране, так что годится и здесь без своего обработчика.
-_BACK_TO_MENU_MARKUP = InlineKeyboardMarkup(
-    inline_keyboard=[[InlineKeyboardButton(text="🏠 Меню", callback_data="live:back_to_menu")]]
-)
+
+def _generic_error_text() -> str:
+    """Текст последнего рубежа, локализованный — но локализация здесь не может
+    быть точкой отказа сама по себе.
+
+    Язык на момент вызова обычно уже верный: `SetUserLanguageMiddleware`
+    выставляет его в контекст первой из всех outer_middleware, ДО хендлера,
+    который и уронил апдейт, — а обработчик ошибок aiogram вызывается в том
+    же asyncio-таске, так что contextvar `i18n.current_lang` из него виден. Но
+    полагаться на то, что `i18n.t()` НИКОГДА не бросит исключение, здесь
+    нельзя: это и есть код, которому подчищать за любой чужой поломкой,
+    включая гипотетическую поломку в самом i18n.py. Если он всё же упадёт —
+    человек обязан увидеть хоть что-то, а не второе необработанное исключение
+    поверх первого, поэтому здесь свой try/except, а не общий на весь
+    обработчик (общий на весь `on_unhandled_error` уже стоит ниже вокруг
+    каждого шага отдельно — но он гасит ошибку ПОСЛЕ вызова, когда текст для
+    отправки уже нужен).
+    """
+    try:
+        return i18n.t("error.generic")
+    except Exception:
+        logger.exception("i18n.t упал внутри обработчика ошибок — показываю запасной текст без него")
+        return _FALLBACK_ERROR_TEXT
+
+
+def _back_to_menu_markup() -> InlineKeyboardMarkup:
+    """Та же защита, что и у `_generic_error_text`, для подписи кнопки.
+
+    Колбэк — `live:back_to_menu`, тот же, что и у готового «🏠 Меню» на карточке
+    законченной тренировки (handlers/workout.py) — он открывает меню, не
+    трогая сообщение, с которого пришли, так что подходит и здесь без своего
+    отдельного обработчика.
+    """
+    try:
+        label = i18n.t("btn.home_menu")
+    except Exception:
+        logger.exception("i18n.t упал при подписи кнопки последнего рубежа — беру запасную подпись")
+        label = _FALLBACK_MENU_BUTTON_TEXT
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text=label, callback_data="live:back_to_menu")]]
+    )
 
 
 def _error_chat_id(update) -> int | None:
@@ -172,7 +213,7 @@ async def on_unhandled_error(event: ErrorEvent, bot: Bot | None = None) -> bool:
     # ничего — ни экрана, ни подсказки.
     if update.callback_query is not None:
         with suppress(Exception):
-            await update.callback_query.answer(_GENERIC_ERROR_TEXT, show_alert=True)
+            await update.callback_query.answer(_generic_error_text(), show_alert=True)
     # Алерт — всплывашка, она гаснет; сообщение в чате остаётся, и если экран уже
     # удалён, это единственное, от чего человек может оттолкнуться.
     chat_id = _error_chat_id(update)
@@ -180,7 +221,7 @@ async def on_unhandled_error(event: ErrorEvent, bot: Bot | None = None) -> bool:
         bot = getattr(update, "bot", None)
     if chat_id is not None and bot is not None:
         with suppress(Exception):
-            await bot.send_message(chat_id, _GENERIC_ERROR_TEXT, reply_markup=_BACK_TO_MENU_MARKUP)
+            await bot.send_message(chat_id, _generic_error_text(), reply_markup=_back_to_menu_markup())
     return True
 
 
@@ -229,7 +270,7 @@ class RefreshPersistentMenuMiddleware(BaseMiddleware):
             return
         with suppress(TelegramBadRequest):
             await target.answer(
-                "⌨️ Обновил меню под полем ввода.",
+                i18n.t("main.persistent_menu_refreshed"),
                 reply_markup=keyboards.persistent_menu(),
             )
         await db.update_user(user_id, reply_keyboard_version=keyboards.PERSISTENT_MENU_VERSION)
