@@ -1372,6 +1372,9 @@ async def test_fresh_intro_offers_preset_question_buttons(fresh_db, user_id, mon
     """Примеры вопросов из интро стали кнопками: тап задаёт вопрос сразу,
     вместо перепечатывания примера руками."""
     monkeypatch.setattr(ai_trainer.ai_trainer, "is_configured", lambda: True)
+    await fresh_db.create_finished_workout(
+        user_id, started_at="2026-07-13T10:00:00", finished_at="2026-07-13T11:00:00"
+    )
     state = await _make_state(user_id)
     callback = _make_menu_ai_callback(user_id)
 

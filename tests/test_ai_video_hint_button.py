@@ -35,6 +35,9 @@ async def test_button_still_shown_after_videos_today(monkeypatch, fresh_db, user
     вернувшийся во второй раз за день, терял единственную подсказку про фичу,
     хотя сам разбор всё ещё ограничен только дневной квотой, а не кнопкой."""
     monkeypatch.setattr(db, "get_ai_video_count_today", AsyncMock(return_value=1))
+    await db.create_finished_workout(
+        user_id, started_at="2026-07-13T10:00:00", finished_at="2026-07-13T11:00:00"
+    )
     labels = [label for label, _cb in await handler.intro_presets(user_id)]
     assert VIDEO_LABEL in labels
     # Остальные готовые вопросы никуда не делись.
