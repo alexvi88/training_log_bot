@@ -221,8 +221,11 @@ async def test_cmd_game_replies_with_both_webapp_buttons(fresh_db, user_id, monk
 
     kwargs = message.answer.await_args.kwargs
     (runner_row,), (squad_row,) = kwargs["reply_markup"].inline_keyboard
-    assert runner_row.web_app.url == "https://bot.example/game"
-    assert squad_row.web_app.url == "https://bot.example/game/squad"
+    # ?lang= несёт ВЫБОР пользователя (users.lang): страница статическая и сама
+    # знает только язык клиента Telegram, а это разные вещи у того, кто выбрал
+    # English на русском телефоне.
+    assert runner_row.web_app.url == "https://bot.example/game?lang=ru"
+    assert squad_row.web_app.url == "https://bot.example/game/squad?lang=ru"
     text = message.answer.await_args.args[0]
     assert "МИНИ-ИГРЫ" in text
 

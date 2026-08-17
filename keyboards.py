@@ -517,8 +517,21 @@ def exercises_keyboard(
     again.
     """
     b = InlineKeyboardBuilder()
+    # Своё упражнение показываем как есть: display_name — данные пользователя,
+    # он его так назвал или так назвался форк на его языке.
     items = [(f"{prefix}:ex:{ex['id']}", ex["display_name"]) for ex in exercises]
-    items += [(f"{prefix}:tpladd:{t['id']}", f"📋 {t['display_name']}") for t in (templates or [])]
+    # А шаблон каталога — общая строка на всех, и в базе она навсегда русская:
+    # шаблоны не форкают, персональной копии с переведённым именем у них нет.
+    # Язык выбирается на рендере — здесь, в единственной точке, через которую
+    # шаблоны попадают на эту клавиатуру. Раньше это делали вызывающие, и
+    # каталожный браузер по группе научили, а три экрана поиска (живая
+    # тренировка, правка прошлой, добавление в программу) — нет: они ходят сюда
+    # же, и англоязычный получал «📋 Жим штанги лёжа» в ответ на «bench».
+    lang = i18n.get_lang()
+    items += [
+        (f"{prefix}:tpladd:{t['id']}", f"📋 {seed_data.localized_exercise_name(t['display_name'], lang)}")
+        for t in (templates or [])
+    ]
     for row in named_buttons(items):
         b.row(*row)
     nav = []

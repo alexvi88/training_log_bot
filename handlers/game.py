@@ -18,13 +18,26 @@ import i18n
 router = Router(name="game")
 
 
+def _lang_query() -> str:
+    """`?lang=` для страницы игры.
+
+    Страница статическая и своего языка ниоткуда взять не может, кроме как из
+    Telegram WebApp — а там лежит язык КЛИЕНТА, а не наш users.lang. Для
+    человека с русским телефоном, выбравшего в настройках English, это разные
+    вещи, и без явной передачи он получал бы игру целиком по-русски. Ссылку
+    строит хендлер, где язык пользователя уже выставлен middleware, — значит
+    передать его сюда ничего не стоит.
+    """
+    return f"?lang={i18n.get_lang()}"
+
+
 def game_url() -> str:
     # Страницу отдаёт тот же сервер, что и MCP, — адрес у них общий.
-    return config.MCP_PUBLIC_URL + game_server.GAME_PATH
+    return config.MCP_PUBLIC_URL + game_server.GAME_PATH + _lang_query()
 
 
 def squad_url() -> str:
-    return config.MCP_PUBLIC_URL + game_server.SQUAD_PATH
+    return config.MCP_PUBLIC_URL + game_server.SQUAD_PATH + _lang_query()
 
 
 @router.message(Command("game"))

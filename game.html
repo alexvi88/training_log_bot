@@ -151,6 +151,10 @@ if (window.Telegram?.WebApp) {
 // сборки, импортировать оттуда нечего.
 const LANG = (function () {
   try {
+    // ?lang= из ссылки — это выбор пользователя (users.lang), он главнее
+    // языка клиента: человек с русским телефоном мог выбрать English.
+    const fromUrl = new URLSearchParams(window.location.search).get('lang');
+    if (fromUrl === 'ru' || fromUrl === 'en') return fromUrl;
     const raw = window.Telegram?.WebApp?.initDataUnsafe?.user?.language_code || navigator.language || 'ru';
     const base = String(raw).toLowerCase().replace('_', '-').split('-')[0];
     const cyrillicSphere = new Set(['ru', 'uk', 'be', 'kk', 'ky', 'hy', 'az', 'uz']);

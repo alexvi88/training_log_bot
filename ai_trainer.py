@@ -3602,7 +3602,11 @@ async def _delete_program(
             ),
         },
         {
-            "label": f"🗑 Удалить: {target['name']}",
+            # Кнопку под ответом видит человек — переводим через каталог
+            # (ai.action.*), имя программы подставляем как есть (данные
+            # пользователя, не текст интерфейса). Note чуть ниже нарочно не
+            # трогаем: это подсказка модели, а не то, что рисуется кнопкой.
+            "label": i18n.t("ai.action.delete_program", name=target["name"]),
             # Тот же экран подтверждения, что и удаление руками, — с проверкой
             # владельца и «точно?». Тренер сам ничего не сносит.
             "callback": (
@@ -3673,7 +3677,7 @@ async def _rename_program(
             "note": _UNDO_NOTE,
         },
         {
-            "label": f"↩️ Вернуть имя «{target['name']}»",
+            "label": i18n.t("ai.action.revert_name", name=target["name"]),
             "undo": {
                 "kind": "program_name" if target["kind"] == "program" else "routine_name",
                 "id": target["id"],
@@ -3725,7 +3729,7 @@ async def _copy_program(
             "note": f"Копия «{copy_name}» создана. {_UNDO_NOTE}",
         },
         {
-            "label": f"↩️ Убрать копию «{copy_name}»",
+            "label": i18n.t("ai.action.remove_copy", name=copy_name),
             "undo": {"kind": "program_new", "id": copy_id, "name": copy_name},
         },
     )
@@ -3767,7 +3771,7 @@ async def _merge_programs(
             ),
         },
         {
-            "label": f"🔗 Объединить: {source['name']} → {target['name']}",
+            "label": i18n.t("ai.action.merge_programs", source=source["name"], target=target["name"]),
             "callback": f"ai:pgmmergeask:{source['id']}:{target['id']}",
         },
     )
@@ -3796,7 +3800,7 @@ async def _share_program(
                 "пользователь не нажал, ничего не отправлено."
             ),
         },
-        {"label": f"📤 Поделиться: {target['name']}", "callback": callback},
+        {"label": i18n.t("ai.action.share", name=target["name"]), "callback": callback},
     )
 
 
@@ -3858,7 +3862,13 @@ async def _send_feedback(
             ),
         },
         {
-            "label": "📬 Передать разработчику",
+            # Кнопка — атлету, переводим. А вот "label" внутри "feedback" ниже
+            # (FEEDBACK_KIND_LABELS) — это шапка письма АДМИНУ (см.
+            # handlers/ai_trainer.py.ai_send_feedback → ai.screen.feedback_header),
+            # не кнопка на экране: админ читает по-русски независимо от языка
+            # атлета, как и весь остальной админский текст (см. CLAUDE.md/
+            # i18n_coverage.NEVER_LOCALIZED).
+            "label": i18n.t("ai.action.send_feedback"),
             "feedback": {"text": text, "label": label},
         },
     )
@@ -3946,7 +3956,7 @@ async def _create_exercise(
             "note": _UNDO_NOTE,
         },
         {
-            "label": f"↩️ Убрать «{created['display_name']}»",
+            "label": i18n.t("ai.action.remove_created", name=created["display_name"]),
             "undo": {
                 "kind": "exercise_new",
                 "id": exercise_id,
@@ -3984,7 +3994,7 @@ async def _rename_exercise(
             "note": f"История и рекорды остались на нём. {_UNDO_NOTE}",
         },
         {
-            "label": f"↩️ Вернуть имя «{exercise['display_name']}»",
+            "label": i18n.t("ai.action.revert_name", name=exercise["display_name"]),
             "undo": {
                 "kind": "exercise_name",
                 "id": exercise["id"],
@@ -4022,7 +4032,10 @@ async def _move_exercise(
     undo = None
     if was_group_id is not None:
         undo = {
-            "label": f"↩️ Вернуть в «{was_group}»" if was_group else "↩️ Вернуть группу",
+            "label": (
+                i18n.t("ai.action.revert_group_named", group=was_group) if was_group
+                else i18n.t("ai.action.revert_group")
+            ),
             "undo": {
                 "kind": "exercise_group",
                 "id": exercise["id"],
@@ -4066,7 +4079,7 @@ async def _archive_exercise(
             ),
         },
         {
-            "label": f"🗄 В архив: {exercise['display_name']}",
+            "label": i18n.t("ai.action.archive_one", name=exercise["display_name"]),
             "callback": f"ai:exarchask:{exercise['id']}",
         },
     )
@@ -4105,7 +4118,7 @@ async def _archive_exercises(
             "note": note,
         },
         {
-            "label": f"🗄 В архив всё ({len(resolved)})",
+            "label": i18n.t("ai.action.archive_all", n=len(resolved)),
             "archive_ids": [ex["id"] for ex in resolved],
         },
     )
@@ -4140,7 +4153,7 @@ async def _log_bodyweight(
             "note": _UNDO_NOTE,
         },
         {
-            "label": "↩️ Отменить",
+            "label": i18n.t("ai.action.undo"),
             "undo": {"kind": "bodyweight", "id": log_id},
         },
     )
@@ -4241,7 +4254,7 @@ async def _log_food(
             "note": _UNDO_NOTE,
         },
         {
-            "label": f"↩️ Убрать из дневника: {formatting.shorten(description, 24)}",
+            "label": i18n.t("ai.action.remove_food", description=formatting.shorten(description, 24)),
             "undo": {"kind": "food", "id": entry_id},
         },
     )
@@ -4273,7 +4286,9 @@ async def _delete_food_entry(
             "note": _UNDO_NOTE,
         },
         {
-            "label": f"↩️ Вернуть «{formatting.shorten(entry['description'], 24)}»",
+            "label": i18n.t(
+                "ai.action.restore_food", description=formatting.shorten(entry["description"], 24)
+            ),
             "undo": {
                 "kind": "food_restore",
                 "eaten_on": entry["eaten_on"],
@@ -4316,7 +4331,7 @@ async def _delete_bodyweight_log(
             "note": _UNDO_NOTE,
         },
         {
-            "label": f"↩️ Вернуть {log['weight']:g}",
+            "label": i18n.t("ai.action.restore_weight", weight=f"{log['weight']:g}"),
             "undo": {
                 "kind": "bodyweight_restore",
                 "weight": log["weight"],
@@ -5027,7 +5042,9 @@ async def execute_tool(
             # а не только откат — человек мог захотеть глянуть график, а не
             # передумать про саму запись.
             if name == "log_bodyweight":
-                await on_action({"label": "⚖️ Дневник веса", "callback": "menu:bodyweight"})
+                await on_action(
+                    {"label": i18n.t("ai.action.bodyweight_diary"), "callback": "menu:bodyweight"}
+                )
     else:
         payload = {"error": f"unknown tool: {name}"}
     return json.dumps(payload, ensure_ascii=False)

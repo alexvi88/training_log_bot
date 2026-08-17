@@ -150,7 +150,8 @@ async def test_cmd_game_squad_button_opens_squad_url(fresh_db, user_id, monkeypa
 
     kwargs = message.answer.await_args.kwargs
     (_runner_row, squad_row) = kwargs["reply_markup"].inline_keyboard
-    assert squad_row[0].web_app.url == "https://bot.example/game/squad"
+    # ?lang= — выбор пользователя, см. handlers/game._lang_query.
+    assert squad_row[0].web_app.url == "https://bot.example/game/squad?lang=ru"
 
 
 # ---------- отдача страницы отряда и приём результата по HTTP ----------
