@@ -2493,7 +2493,12 @@ def _setup_goal_question() -> dict:
 # сравнение с текстом модели (см. i18n_coverage.ALLOWED_CYRILLIC).
 SETUP_GOAL_MARKERS = (
     "цел", "чего хочешь", "чего ждёшь", "зачем тренир", "какой результат",
-    "goal", "what do you want", "what are you after", "why train", "what result",
+    # Голое "goal" ловило обычные тренерские вопросы не про цель тренировок
+    # вовсе ("What's your rep goal for this exercise?", "any weight goal for
+    # this month?") — и защёлкивало "цель уже спросили" раньше, чем реальный
+    # вопрос вообще звучал. Фразы ниже — так же специфичны, как русские выше.
+    "your goal", "training goal", "what do you want", "what are you after",
+    "why train", "why do you train", "what result",
 )
 
 # Подсказка под вопросом. Про «не знаю» сказано прямо и намеренно: без этого

@@ -160,7 +160,9 @@ async def _show_day(event, state: FSMContext, date: dt.date) -> None:
 
 @router.message(Command("food_diary"))
 async def cmd_food_diary(message: Message, state: FSMContext):
-    await db.get_or_create_user(message.from_user.id, message.from_user.username)
+    await db.get_or_create_user(
+        message.from_user.id, message.from_user.username, message.from_user.language_code
+    )
     # Записать еду можно и в перерыве между подходами: сбрасываем поток, но не
     # каркас незакрытой тренировки — иначе возврат в трекер покажет пустой экран.
     await state_scaffold.clear_state_keep_workout(state)

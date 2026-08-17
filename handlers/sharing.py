@@ -457,8 +457,19 @@ async def open_shared(message: Message, command: CommandObject, state: FSMContex
     # Визитка — второй вход для новичка: сюда попадают по ссылке, не нажав
     # «Start». Клавиатура нужна так же, а «обновил меню» — так же не нужно.
     is_new = await db.get_user(message.from_user.id) is None
-    await db.get_or_create_user(message.from_user.id, message.from_user.username)
+    await db.get_or_create_user(
+        message.from_user.id, message.from_user.username, message.from_user.language_code
+    )
     if is_new:
+        # Та же догадка, что и в cmd_start (handlers/workout.py): визитка —
+        # второй возможный первый вход, и если не закрепить язык здесь, юзер
+        # готовым get_or_create_user навсегда перестаёт быть is_new — а значит
+        # cmd_start больше никогда не увидит его «новичком» и не покажет ни
+        # догадку, ни экран выбора языка. Без этой строки колонка lang так и
+        # осталась бы на DEFAULT 'ru' из схемы независимо от реального языка.
+        guessed_lang = i18n.normalize(getattr(message.from_user, "language_code", None))
+        await db.set_user_lang(message.from_user.id, guessed_lang)
+        i18n.set_lang(guessed_lang)
         await attach_silently(message, message.from_user.id)
     # /start по чужой ссылке сбрасывает поток, но переписка с AI-тренером и
     # черновик его программы переживают такие переходы — сохраняем их.

@@ -136,7 +136,7 @@ async def test_squad_record_notifies_only_on_a_big_enough_gain(fresh_db, user_id
 
 def _make_message(user_id: int):
     message = MagicMock()
-    message.from_user = SimpleNamespace(id=user_id, username="tester")
+    message.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     message.answer = AsyncMock()
     return message
 

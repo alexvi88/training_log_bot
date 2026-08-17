@@ -234,7 +234,9 @@ async def _show(target, state: FSMContext, alert: str | None = None) -> None:
 
 @router.message(Command("mcp"))
 async def cmd_mcp(message: Message, state: FSMContext):
-    await db.get_or_create_user(message.from_user.id, message.from_user.username)
+    await db.get_or_create_user(
+        message.from_user.id, message.from_user.username, message.from_user.language_code
+    )
     await _show(message, state)
 
 

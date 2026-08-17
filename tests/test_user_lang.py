@@ -72,3 +72,50 @@ def test_whitelist_matches_i18n_supported():
     source = inspect.getsource(db_module.set_user_lang)
     for lang in i18n.SUPPORTED:
         assert f'"{lang}"' in source, f"язык {lang!r} есть в i18n.SUPPORTED, но не в db.set_user_lang"
+
+
+async def test_new_user_language_is_guessed_from_the_client(fresh_db):
+    """Догадка живёт в get_or_create_user, а не у вызывающих.
+
+    Аккаунт заводится из восьми разных мест — не только /start, но и
+    ссылка-приглашение, дневник еды, вес, сообщество, игра, MCP, нижняя
+    клавиатура. Правило «угадай язык новичку», повторённое восемь раз, забудется
+    в девятом: ровно так и вышло — язык выставлял только /start, а пришедший по
+    ссылке навсегда оставался на русском, потому что запись уже есть и экран
+    выбора языка ему больше не покажут.
+    """
+    row = await fresh_db.get_or_create_user(910001, "en_user", "en-US")
+    assert row["lang"] == "en"
+    row = await fresh_db.get_or_create_user(910002, "ru_user", "ru")
+    assert row["lang"] == "ru"
+    # Незнакомый язык клиента — английский, как решает i18n.normalize.
+    row = await fresh_db.get_or_create_user(910003, "de_user", "de")
+    assert row["lang"] == "en"
+    # Клиент языка не прислал — остаёмся на дефолте, а не гадаем.
+    row = await fresh_db.get_or_create_user(910004, "silent", None)
+    assert row["lang"] == "ru"
+
+
+async def test_guess_never_overwrites_an_existing_choice(fresh_db):
+    """Догадка применяется ТОЛЬКО при вставке. Иначе человек, выбравший русский
+    на английском телефоне, получал бы английский обратно при каждом заходе в
+    дневник еды."""
+    await fresh_db.get_or_create_user(910005, "user", "en")
+    await fresh_db.set_user_lang(910005, "ru")
+    again = await fresh_db.get_or_create_user(910005, "user", "en")
+    assert again["lang"] == "ru"
+
+
+async def test_every_account_creation_site_passes_the_client_language():
+    """Сторож против девятого места: если новый хендлер заведёт пользователя
+    без языка клиента, догадка для него молча не сработает."""
+    import pathlib
+    import re
+
+    offenders = []
+    for path in sorted(pathlib.Path("handlers").glob("*.py")):
+        source = path.read_text(encoding="utf-8")
+        for call in re.finditer(r"get_or_create_user\(([^)]*)\)", source, re.S):
+            if "language_code" not in call.group(1):
+                offenders.append(f"{path}: {' '.join(call.group(1).split())[:70]}")
+    assert not offenders, "заводят пользователя без языка клиента:\n" + "\n".join(offenders)

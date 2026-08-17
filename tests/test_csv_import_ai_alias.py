@@ -103,7 +103,7 @@ async def test_returns_empty_for_unparsable_response(monkeypatch):
 def _message(user_id: int, filename: str, raw: bytes):
     message = MagicMock()
     message.document = SimpleNamespace(file_name=filename)
-    message.from_user = SimpleNamespace(id=user_id, username="tester")
+    message.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     message.reply = AsyncMock()
     message.answer = AsyncMock()
     message.bot = MagicMock()

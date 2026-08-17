@@ -481,3 +481,143 @@ async def test_concurrent_append_routine_exercise_gets_distinct_order_indexes(fr
 
     rows = await db.list_routine_exercises(routine_id)
     assert sorted(r["order_index"] for r in rows) == [0, 1, 2]
+
+
+# ---------- English-locale search/fork/identity regressions ----------
+#
+# Шаблоны каталога в базе навсегда по-русски (`t.display_name` == `t.name`),
+# а с приходом английской локализации то, что видит пользователь на другом
+# языке, разошлось с этим — и сверка "по имени" там, где имелась в виду
+# сверка "по идентичности" (`original_name`), стала ломаться сразу в
+# нескольких местах. См. CLAUDE.md/PR-ревью: search_exercise_templates,
+# fork_exercise_from_template, get_or_create_user_exercise_by_name,
+# resolve_exercise_name.
+
+
+async def test_search_exercise_templates_finds_an_english_query(fresh_db, user_id):
+    """До фикса SQL-фильтр сравнивал английский запрос с t.display_name, а тот
+    в базе всегда русский ("Жим штанги лёжа") — «bench», «squat», «curl»
+    возвращали пустой список для любого пользователя, независимо от его
+    языка интерфейса."""
+    db = fresh_db
+    for query in ("bench", "bench press", "squat", "curl", "deadlift"):
+        matches = await db.search_exercise_templates(user_id, query)
+        assert matches, f"{query!r} found nothing"
+
+
+async def test_search_exercise_templates_english_match_excludes_owned_fork(fresh_db, user_id):
+    """NOT EXISTS раньше сравнивал o.display_name с t.display_name — а форк на
+    английском языке носит английское display_name, которое с русским
+    t.display_name никогда не совпадёт, так что уже добавленный шаблон
+    предлагался повторно."""
+    db = fresh_db
+    await db.set_user_lang(user_id, "en")
+    template = next(
+        t for t in await db.list_all_exercise_templates() if t["name"] == "Жим штанги лёжа"
+    )
+    await db.fork_exercise_from_template(user_id, template["id"])
+
+    for query in ("bench press", "жим штанги лёжа"):
+        matches = await db.search_exercise_templates(user_id, query)
+        assert "Жим штанги лёжа" not in [m["name"] for m in matches], query
+
+
+async def test_forking_the_same_template_in_two_languages_is_one_row(fresh_db, user_id):
+    """fork_exercise_from_template пишет локализованное имя, а старый дедуп
+    (create_exercise, по display_name) не видит, что «Жим штанги лёжа» и
+    «Bench Press» — один и тот же шаблон: без identity-проверки форк на
+    другом языке создавал ВТОРУЮ строку с тем же original_name, и история,
+    рекорды и графики расходились по ним."""
+    db = fresh_db
+    template = next(
+        t for t in await db.list_all_exercise_templates() if t["name"] == "Жим штанги лёжа"
+    )
+
+    await db.set_user_lang(user_id, "ru")
+    first_id = await db.fork_exercise_from_template(user_id, template["id"])
+
+    await db.set_user_lang(user_id, "en")
+    second_id = await db.fork_exercise_from_template(user_id, template["id"])
+
+    assert first_id == second_id
+    rows = [
+        e for e in await db.list_user_exercises(user_id)
+        if e["original_name"] == "Жим штанги лёжа"
+    ]
+    assert len(rows) == 1
+
+
+async def test_forking_onto_a_hand_typed_same_name_exercise_still_reuses_it(fresh_db, user_id):
+    """Своё упражнение, названное пользователем руками так же, как локализация
+    шаблона, должно по-прежнему работать как раньше — форк садится на ТУ же
+    строку, а не плодит вторую."""
+    db = fresh_db
+    await db.set_user_lang(user_id, "en")
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    hand_id = await db.create_exercise(user_id, "Barbell Bench Press", group_id)
+
+    template = next(
+        t for t in await db.list_all_exercise_templates() if t["name"] == "Жим штанги лёжа"
+    )
+    forked_id = await db.fork_exercise_from_template(user_id, template["id"])
+
+    assert forked_id == hand_id
+    assert await db.count_user_exercises(user_id) == 1
+
+
+async def test_program_install_does_not_mark_existing_fork_as_seeded(fresh_db, user_id):
+    """Ошибка 3: поиск по русскому имени не находил форк англоязычного
+    пользователя, поэтому установка программы на уже добавленное (форкнутое)
+    упражнение помечала его seeded_from_program = 1 — и последующее удаление
+    программы могло спрятать это упражнение, хотя оно реально используется."""
+    db = fresh_db
+    await db.set_user_lang(user_id, "en")
+    template = next(
+        t for t in await db.list_all_exercise_templates() if t["name"] == "Жим штанги лёжа"
+    )
+    existing_id = await db.fork_exercise_from_template(user_id, template["id"])
+    # Пользователь реально потренировал упражнение — не «просиротевший» форк.
+    workout_id = await db.create_workout(user_id)
+    block_id = await db.create_block(workout_id, "single")
+    await db.add_block_exercise(block_id, existing_id, 0)
+    await db.finish_workout(workout_id)
+
+    resolved_id = await db.get_or_create_user_exercise_by_name(user_id, "Жим штанги лёжа")
+
+    assert resolved_id == existing_id
+    ex = await db.get_exercise(existing_id)
+    assert ex["seeded_from_program"] == 0
+
+
+async def test_resolve_exercise_name_preview_matches_what_gets_saved(fresh_db, user_id):
+    """Ошибка 4: resolve_exercise_name отдавал сырое русское имя шаблона в
+    превью, а экран готовых программ локализует то же самое имя — то есть два
+    экрана про одно упражнение говорили по-разному. Превью должно совпадать с
+    тем именем, которое реально ляжет в БД при установке программы."""
+    db = fresh_db
+    await db.set_user_lang(user_id, "en")
+
+    kind, preview_name = await db.resolve_exercise_name(user_id, "Жим штанги лёжа")
+    assert kind == "template"
+
+    saved_id = await db.get_or_create_user_exercise_by_name(user_id, "Жим штанги лёжа")
+    saved = await db.get_exercise(saved_id)
+
+    assert preview_name == saved["display_name"]
+
+
+async def test_resolve_exercise_name_recognizes_an_existing_fork_as_own(fresh_db, user_id):
+    """Тот же порядок identity-проверки, что и в get_or_create...: превью не
+    должно говорить "template" (то есть "будет создано новое"), если шаблон
+    пользователь уже когда-то форкнул — пусть даже на другом языке."""
+    db = fresh_db
+    await db.set_user_lang(user_id, "en")
+    template = next(
+        t for t in await db.list_all_exercise_templates() if t["name"] == "Жим штанги лёжа"
+    )
+    existing_id = await db.fork_exercise_from_template(user_id, template["id"])
+
+    kind, name = await db.resolve_exercise_name(user_id, "Жим штанги лёжа")
+
+    assert kind == "own"
+    assert name == (await db.get_exercise(existing_id))["display_name"]

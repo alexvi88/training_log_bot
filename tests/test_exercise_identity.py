@@ -185,7 +185,7 @@ async def test_the_import_resolver_offers_a_matching_catalog_template(fresh_db, 
     приезжало голым — без техники, фото и группы."""
     state = FSMContext(storage=MemoryStorage(), key=StorageKey(bot_id=1, chat_id=user_id, user_id=user_id))
     event = MagicMock()
-    event.from_user = SimpleNamespace(id=user_id, username="tester")
+    event.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     event.answer = AsyncMock()
 
     await exercise_resolve.start(event, state, ["Жим штанги лёжа"])
@@ -209,7 +209,7 @@ async def test_taking_the_template_forks_it_with_its_assets(fresh_db, user_id):
         resolve_current_name="Жим штанги лёжа",
     )
     callback = MagicMock()
-    callback.from_user = SimpleNamespace(id=user_id, username="tester")
+    callback.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     callback.data = f"resolve:tpl:{template['id']}"
     callback.answer = AsyncMock()
     callback.message = MagicMock()

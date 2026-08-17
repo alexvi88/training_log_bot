@@ -103,8 +103,8 @@ async def _attach_ai_comment(
         )
 
 
-async def _ensure_user(telegram_id: int, username: str | None):
-    return await db.get_or_create_user(telegram_id, username)
+async def _ensure_user(telegram_id: int, username: str | None, language_code: str | None = None):
+    return await db.get_or_create_user(telegram_id, username, language_code)
 
 
 def _move_open_exercises_last(
@@ -1067,7 +1067,9 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject 
     # Спрашиваем до _ensure_user: «первый ли это /start» видно только по тому,
     # была ли запись до него.
     is_new = await db.get_user(message.from_user.id) is None
-    await _ensure_user(message.from_user.id, message.from_user.username)
+    await _ensure_user(
+        message.from_user.id, message.from_user.username, message.from_user.language_code
+    )
     if is_new:
         # Только новичку: у старожила переход по чужой ссылке — не привлечение,
         # и записывать ему источник значило бы приписать каналу человека,
@@ -1372,7 +1374,9 @@ async def _start_workout(callback: CallbackQuery, state: FSMContext, delete_mess
     # the active-workout branch used to leave the button spinning until Telegram
     # gave up on its own, ~10s later.
     await callback.answer()
-    await _ensure_user(callback.from_user.id, callback.from_user.username)
+    await _ensure_user(
+        callback.from_user.id, callback.from_user.username, callback.from_user.language_code
+    )
     # Claiming the workout in one atomic step, rather than checking and then
     # creating, is what stops a double tap from opening two of them.
     workout_id, created = await db.get_or_create_active_workout(callback.from_user.id)
@@ -1680,7 +1684,9 @@ async def _enter_live(
     # delete_message=False when entering from the AI-trainer chat (its "К тренировке"
     # button) — that message is part of the user's chat history with the AI-тренер,
     # not a disposable menu screen, so it should stay instead of being deleted.
-    user = await _ensure_user(callback.from_user.id, callback.from_user.username)
+    user = await _ensure_user(
+        callback.from_user.id, callback.from_user.username, callback.from_user.language_code
+    )
     data = await state.get_data()
     if data.get("workout_id") == workout_id and data.get("open_exercises"):
         # The FSM already knows exactly which exercises/tabs were open (e.g. the

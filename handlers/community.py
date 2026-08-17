@@ -30,7 +30,9 @@ def community_keyboard() -> InlineKeyboardMarkup:
 
 @router.message(Command("community"))
 async def cmd_community(message: Message):
-    await db.get_or_create_user(message.from_user.id, message.from_user.username)
+    await db.get_or_create_user(
+        message.from_user.id, message.from_user.username, message.from_user.language_code
+    )
     if not config.community_available():
         await message.answer(i18n.t("community.not_ready"))
         return

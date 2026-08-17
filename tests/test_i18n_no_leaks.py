@@ -228,7 +228,7 @@ def _make_fake_callback(user_id: int, data: str) -> CallbackQuery:
     message.answer = AsyncMock(return_value=SimpleNamespace(message_id=2))
     message.delete = AsyncMock()
     callback = MagicMock(spec=CallbackQuery)
-    callback.from_user = SimpleNamespace(id=user_id, username="tester")
+    callback.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     callback.message = message
     callback.data = data
     callback.answer = AsyncMock()
@@ -543,7 +543,7 @@ async def _screen_community_intro(db, user_id: int) -> str:
     from handlers import community
 
     message = MagicMock()
-    message.from_user = SimpleNamespace(id=user_id, username="tester")
+    message.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     message.answer = AsyncMock(return_value=SimpleNamespace(message_id=2))
     community_url = config.COMMUNITY_CHAT_URL
     config.COMMUNITY_CHAT_URL = "https://t.me/example_community"
@@ -575,7 +575,7 @@ async def _screen_game_intro(db, user_id: int) -> str:
     from handlers import game
 
     message = MagicMock()
-    message.from_user = SimpleNamespace(id=user_id, username="tester")
+    message.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     message.answer = AsyncMock(return_value=SimpleNamespace(message_id=2))
     await game.cmd_game(message)
     return message.answer.await_args.args[0]
@@ -598,7 +598,7 @@ async def _screen_fallback_generic(db, user_id: int) -> str:
     from handlers import fallback
 
     message = MagicMock()
-    message.from_user = SimpleNamespace(id=user_id, username="tester")
+    message.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     message.content_type = ContentType.TEXT
     message.text = "непонятная бессвязная фраза без числа и без названия"
     message.reply = AsyncMock(return_value=SimpleNamespace(message_id=2))

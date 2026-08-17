@@ -30,7 +30,7 @@ def _make_callback(user_id: int, data: str):
         return_value=SimpleNamespace(chat=SimpleNamespace(id=user_id), message_id=1)
     )
     callback = MagicMock()
-    callback.from_user = SimpleNamespace(id=user_id, username="tester")
+    callback.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     callback.bot = bot
     callback.message = message
     callback.data = data
@@ -44,7 +44,7 @@ def _make_message(user_id: int, text: str):
     bot.send_message = AsyncMock(return_value=SimpleNamespace(message_id=999))
     bot.set_message_reaction = AsyncMock()
     message = MagicMock()
-    message.from_user = SimpleNamespace(id=user_id, username="tester")
+    message.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     message.bot = bot
     message.text = text
     message.delete = AsyncMock()

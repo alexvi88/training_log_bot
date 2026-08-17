@@ -207,7 +207,7 @@ async def test_duplicate_submission_is_saved_once(fresh_db, user_id, monkeypatch
 
 def _make_message(user_id: int):
     message = MagicMock()
-    message.from_user = SimpleNamespace(id=user_id, username="tester")
+    message.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     message.answer = AsyncMock()
     return message
 

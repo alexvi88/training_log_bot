@@ -20,7 +20,7 @@ pytestmark = pytest.mark.asyncio
 
 def _message(duration=10, file_size=1024, caption=None, user_id=777):
     message = MagicMock()
-    message.from_user = SimpleNamespace(id=user_id)
+    message.from_user = SimpleNamespace(id=user_id, language_code=None)
     message.caption = caption
     message.video = SimpleNamespace(
         duration=duration, file_size=file_size, mime_type="video/mp4", file_id="vid-1"
@@ -397,7 +397,7 @@ async def test_skip_analyses_without_a_name(wired):
 async def test_stale_button_after_restart_does_not_crash(wired):
     """FSM переживает рестарт, а нажатие может прийти когда ролика уже нет."""
     callback = MagicMock()
-    callback.from_user = SimpleNamespace(id=777)
+    callback.from_user = SimpleNamespace(id=777, language_code=None)
     callback.data = "aivid:skip"
     callback.answer = AsyncMock()
     callback.message = _message()

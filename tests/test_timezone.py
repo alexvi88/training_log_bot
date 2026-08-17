@@ -50,7 +50,7 @@ def _callback(user_id, data):
     message.delete = AsyncMock()
     message.answer = AsyncMock(return_value=SimpleNamespace(message_id=1))
     cb = MagicMock()
-    cb.from_user = SimpleNamespace(id=user_id, username="t")
+    cb.from_user = SimpleNamespace(id=user_id, username="t", language_code=None)
     cb.message = message
     cb.data = data
     cb.answer = AsyncMock()

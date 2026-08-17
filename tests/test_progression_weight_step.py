@@ -172,7 +172,7 @@ async def test_switching_units_rescales_the_programs_step_too(fresh_db, user_id)
     message.delete = AsyncMock()
     message.answer = AsyncMock(return_value=SimpleNamespace(message_id=2))
     callback = MagicMock()
-    callback.from_user = SimpleNamespace(id=user_id, username="tester")
+    callback.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     callback.message = message
     callback.data = "settings:unityes"
     callback.answer = AsyncMock()

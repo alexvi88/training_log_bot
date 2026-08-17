@@ -8,6 +8,7 @@ import pytest
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
 
 import engagement
+import i18n
 import push_texts
 
 pytestmark = pytest.mark.asyncio
@@ -76,6 +77,25 @@ async def test_push_cta_continues_the_coach_line_per_category(fresh_db, user_id)
     # DEFAULT_PUSH_CTA — ключ каталога (push.cta.default), не готовый текст:
     # кнопка рендерит его через keyboards.push_cta_keyboard -> i18n.t(...), а
     # тут сверяем результат этого рендера, а не сам ключ.
+    assert kb.inline_keyboard[0][0].text == "▶ Начать тренировку"
+
+
+async def test_cta_is_translated_only_once(fresh_db, user_id, caplog):
+    """_deliver уже резолвит ключ в готовый текст CTA — если keyboards.push_cta_keyboard
+    зовёт i18n.t() на этом готовом тексте ещё раз (её параметр по докстрингу — КЛЮЧ,
+    не готовая строка), она ищет в каталоге строку вроде «▶ Начать тренировку» как
+    ключ, не находит и логирует ложный WARNING «ключ не найден» — который к тому же
+    засоряет i18n._warned_missing_keys и может заглушить настоящую будущую пропажу."""
+    i18n.reload()  # чистый _warned_missing_keys — иначе прошлый тест мог уже «предупредить»
+    bot = _bot()
+
+    with caplog.at_level("WARNING", logger="i18n"):
+        await engagement._deliver(
+            bot, user_id, engagement.PushDecision(push_texts.SKIP_3, "текст"), _TODAY
+        )
+
+    assert "не найден" not in caplog.text
+    kb = bot.send_photo.await_args.kwargs["reply_markup"]
     assert kb.inline_keyboard[0][0].text == "▶ Начать тренировку"
 
 

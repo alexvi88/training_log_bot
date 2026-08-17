@@ -39,7 +39,7 @@ def _make_callback(user_id: int, data: str, bot):
     message.answer = AsyncMock(return_value=SimpleNamespace(message_id=1, chat=SimpleNamespace(id=user_id)))
     message.bot = bot
     callback = MagicMock()
-    callback.from_user = SimpleNamespace(id=user_id, username="tester")
+    callback.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     callback.message = message
     callback.bot = bot
     callback.data = data
@@ -208,7 +208,7 @@ async def test_changedate_custom_text_finalizes(fresh_db, user_id):
 
     bot = _make_bot()
     message = MagicMock()
-    message.from_user = SimpleNamespace(id=user_id, username="tester")
+    message.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     message.text = (dt.date.today() - dt.timedelta(days=1)).strftime("%d.%m.%Y")
     message.bot = bot
     message.reply = AsyncMock()

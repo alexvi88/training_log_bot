@@ -23,7 +23,7 @@ def _make_callback(user_id: int, data: str):
     bot.edit_message_text = AsyncMock()
     message.bot = bot
     callback = MagicMock()
-    callback.from_user = SimpleNamespace(id=user_id, username="tester")
+    callback.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     callback.message = message
     callback.bot = bot
     callback.data = data
@@ -98,7 +98,7 @@ async def test_addnote_entered_saves_and_edits_card_in_place(fresh_db, user_id):
     await state.update_data(note_workout_id=workout_id, note_chat_id=user_id, note_message_id=42)
 
     message = MagicMock()
-    message.from_user = SimpleNamespace(id=user_id, username="tester")
+    message.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     message.text = "болело плечо"
     message.reply = AsyncMock()
     bot = MagicMock()
@@ -127,7 +127,7 @@ async def test_addnote_dash_clears_an_existing_note(fresh_db, user_id):
     await state.update_data(note_workout_id=workout_id, note_chat_id=user_id, note_message_id=42)
 
     message = MagicMock()
-    message.from_user = SimpleNamespace(id=user_id, username="tester")
+    message.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     message.text = "-"
     message.reply = AsyncMock()
     bot = MagicMock()
@@ -199,7 +199,7 @@ async def test_note_on_an_old_card_returns_to_the_live_session(fresh_db, user_id
     assert await state.get_state() == WorkoutFlow.editing_finished_note
 
     message = MagicMock()
-    message.from_user = SimpleNamespace(id=user_id, username="tester")
+    message.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     message.text = "спина была уставшая"
     message.reply = AsyncMock()
     message.bot = MagicMock()

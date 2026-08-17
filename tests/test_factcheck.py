@@ -25,7 +25,7 @@ def _message(text="х" * 50, forwarded=True, user_id=777, *, caption=None, photo
     неупомянутый атрибут — правдивый мок, так что без этого фильтр видел бы в
     каждом сообщении и видео, и документ разом (и отсеивал бы всё)."""
     message = MagicMock()
-    message.from_user = SimpleNamespace(id=user_id)
+    message.from_user = SimpleNamespace(id=user_id, language_code=None)
     message.text = text
     message.caption = caption
     message.photo = photo

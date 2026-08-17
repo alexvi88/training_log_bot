@@ -16,7 +16,7 @@ CHAT_URL = "https://t.me/+abcdef"
 
 def _make_message(user_id: int):
     message = MagicMock()
-    message.from_user = SimpleNamespace(id=user_id, username="tester")
+    message.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     message.answer = AsyncMock()
     return message
 

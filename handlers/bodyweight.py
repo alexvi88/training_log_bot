@@ -165,7 +165,9 @@ async def _render(event, state: FSMContext, user_id: int | None = None) -> None:
 
 
 async def show_bodyweight(callback: CallbackQuery, state: FSMContext) -> None:
-    await db.get_or_create_user(callback.from_user.id, callback.from_user.username)
+    await db.get_or_create_user(
+        callback.from_user.id, callback.from_user.username, callback.from_user.language_code
+    )
     await _render(callback, state)
     await callback.answer()
 

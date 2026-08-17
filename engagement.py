@@ -413,18 +413,23 @@ async def _deliver(
     hour had passed. /broadcast learned this already — same treatment here.
 
     The caller (`_send_daily_pushes`) already wraps this call in
-    `i18n.use_lang(user['lang'])` for the same recipient, so `i18n.t()` below
-    resolves the CTA in the push's own language without a second user fetch
-    just for that.
+    `i18n.use_lang(user['lang'])` for the same recipient, so the CTA key
+    handed to `keyboards.push_cta_keyboard` below (which does the actual
+    `i18n.t()`) resolves in the push's own language without a second user
+    fetch just for that.
     """
     global _push_image_file_id
     user = await db.get_user(telegram_id)
     show_tz_hint = _should_show_tz_hint(user)
     cta_key = PUSH_CTA_BY_CATEGORY.get(decision.category, DEFAULT_PUSH_CTA) if decision.with_cta else None
-    cta_text = i18n.t(cta_key) if cta_key else None
+    # push_cta_keyboard сама зовёт i18n.t() на этом ключе (см. её докстринг) —
+    # резолвить его здесь ещё раз значило бы переводить уже готовый текст,
+    # который отсутствующий ключ вернул бы сам собой, тихо съедая настоящую
+    # пропажу ключа под чужой WARNING в i18n._warned_missing_keys.
+    #
     # Клавиатура теперь есть у любого пуша: у дайджеста своей CTA нет, но и
     # тупиком он быть не должен — там встаёт «🏠 Меню» (см. push_cta_keyboard).
-    kb = keyboards.push_cta_keyboard(cta_text, with_tz_hint=show_tz_hint)
+    kb = keyboards.push_cta_keyboard(cta_key, with_tz_hint=show_tz_hint)
     try:
         message = await _send_push_photo(bot, telegram_id, decision, kb)
     except TelegramForbiddenError:

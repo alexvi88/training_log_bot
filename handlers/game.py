@@ -42,7 +42,9 @@ def squad_url() -> str:
 
 @router.message(Command("game"))
 async def cmd_game(message: Message):
-    await db.get_or_create_user(message.from_user.id, message.from_user.username)
+    await db.get_or_create_user(
+        message.from_user.id, message.from_user.username, message.from_user.language_code
+    )
     if not config.mcp_available():
         # Без публичного адреса страницу игры никто не отдаёт (см. main.py:
         # HTTP-сервер поднимается только вместе с MCP).

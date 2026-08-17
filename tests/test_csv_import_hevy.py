@@ -80,7 +80,7 @@ async def test_hevy_file_goes_from_upload_straight_to_confirmation(fresh_db, use
 
     message = MagicMock()
     message.document = SimpleNamespace(file_name="workout_data.csv")
-    message.from_user = SimpleNamespace(id=user_id, username="tester")
+    message.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     message.reply = AsyncMock()
     message.answer = AsyncMock()
     message.bot = MagicMock()

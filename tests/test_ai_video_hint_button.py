@@ -64,7 +64,7 @@ async def test_hint_costs_nothing(monkeypatch, fresh_db, user_id):
     monkeypatch.setattr(db, "increment_ai_question_count", spend_question)
 
     callback = MagicMock()
-    callback.from_user = SimpleNamespace(id=user_id)
+    callback.from_user = SimpleNamespace(id=user_id, language_code=None)
     callback.data = "ai:videohint"
     callback.answer = AsyncMock()
     callback.message = MagicMock()
@@ -84,7 +84,7 @@ async def test_hint_costs_nothing(monkeypatch, fresh_db, user_id):
 async def test_hint_keeps_user_in_the_chat_state(fresh_db, user_id):
     """После подсказки ролик должен попасть в хендлер видео — значит состояние чата."""
     callback = MagicMock()
-    callback.from_user = SimpleNamespace(id=user_id)
+    callback.from_user = SimpleNamespace(id=user_id, language_code=None)
     callback.data = "ai:videohint"
     callback.answer = AsyncMock()
     callback.message = MagicMock()
@@ -101,7 +101,7 @@ async def test_hint_keeps_user_in_the_chat_state(fresh_db, user_id):
 async def test_hint_refuses_when_not_configured(monkeypatch, fresh_db, user_id):
     monkeypatch.setattr(config, "NOVITA_API_KEY", "")
     callback = MagicMock()
-    callback.from_user = SimpleNamespace(id=user_id)
+    callback.from_user = SimpleNamespace(id=user_id, language_code=None)
     callback.data = "ai:videohint"
     callback.answer = AsyncMock()
     callback.message = MagicMock()

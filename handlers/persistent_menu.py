@@ -110,7 +110,9 @@ async def _open_ai_trainer(message: Message, state: FSMContext) -> None:
     if not ai_trainer.is_configured():
         await message.answer(i18n.t("persistent_menu.ai_not_configured"))
         return
-    await db.get_or_create_user(message.from_user.id, message.from_user.username)
+    await db.get_or_create_user(
+        message.from_user.id, message.from_user.username, message.from_user.language_code
+    )
     # _clear_state_keep_workout preserves ai_history, so tapping "AI-тренер"
     # after a detour resumes the conversation rather than starting over.
     await _clear_state_keep_workout(state)

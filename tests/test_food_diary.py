@@ -590,7 +590,7 @@ async def _make_state(user_id: int) -> FSMContext:
 
 def _make_message(user_id: int, text: str | None = None) -> Message:
     message = MagicMock(spec=Message)
-    message.from_user = SimpleNamespace(id=user_id, username="tester")
+    message.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     message.text = text
     message.caption = None
     message.chat = SimpleNamespace(id=user_id)
@@ -607,7 +607,7 @@ def _make_message(user_id: int, text: str | None = None) -> Message:
 def _make_callback(user_id: int, data: str) -> CallbackQuery:
     callback = MagicMock(spec=CallbackQuery)
     callback.data = data
-    callback.from_user = SimpleNamespace(id=user_id, username="tester")
+    callback.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     callback.answer = AsyncMock()
     message = MagicMock(spec=Message)
     message.message_id = 501

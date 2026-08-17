@@ -168,7 +168,7 @@ async def _make_state(user_id: int) -> FSMContext:
 def _make_chat_message(user_id: int, text: str):
     message = MagicMock()
     message.text = text
-    message.from_user = SimpleNamespace(id=user_id, username="tester")
+    message.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     message.reply = AsyncMock()
     placeholder = MagicMock()
     placeholder.edit_text = AsyncMock()

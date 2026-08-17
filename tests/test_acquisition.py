@@ -82,7 +82,7 @@ def test_channel_link_round_trip():
 
 def _make_message(user_id: int, text: str = "/start"):
     message = MagicMock(spec=Message)
-    message.from_user = SimpleNamespace(id=user_id, username="tester")
+    message.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     message.text = text
     message.answer = AsyncMock()
     message.answer_photo = AsyncMock()

@@ -85,7 +85,7 @@ async def test_import_awards_achievements_for_the_imported_history(fresh_db, use
     )
     message.delete = AsyncMock()
     callback = MagicMock()
-    callback.from_user = SimpleNamespace(id=user_id, username="tester")
+    callback.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     callback.answer = AsyncMock()
     callback.message = message
 

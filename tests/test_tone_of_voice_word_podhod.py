@@ -74,7 +74,7 @@ async def test_remove_exercise_confirm_uses_instrumental_podhodom(fresh_db, user
     monkeypatch.setattr(edit_workout.ui, "safe_edit", fake_safe_edit)
 
     callback = MagicMock()
-    callback.from_user = SimpleNamespace(id=user_id, username="tester")
+    callback.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     callback.data = f"editw:rmexask:{block_id}"
     callback.answer = AsyncMock()
 

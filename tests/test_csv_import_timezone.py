@@ -49,7 +49,7 @@ def _callback(user_id: int, data: str = "imp:save"):
     )
     message.delete = AsyncMock()
     callback = MagicMock()
-    callback.from_user = SimpleNamespace(id=user_id, username="tester")
+    callback.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     callback.data = data
     callback.answer = AsyncMock()
     callback.message = message

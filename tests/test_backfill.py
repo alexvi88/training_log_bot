@@ -25,7 +25,7 @@ def _make_callback(user_id: int, data: str):
     message.answer = AsyncMock(return_value=SimpleNamespace(chat=SimpleNamespace(id=user_id), message_id=2))
     message.delete = AsyncMock()
     callback = MagicMock()
-    callback.from_user = SimpleNamespace(id=user_id, username="tester")
+    callback.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     callback.message = message
     callback.data = data
     callback.answer = AsyncMock()
@@ -107,7 +107,7 @@ async def test_typed_date_double_tap_is_guarded(fresh_db, user_id, monkeypatch):
     state = await _make_state(user_id)
 
     message = MagicMock()
-    message.from_user = SimpleNamespace(id=user_id, username="tester")
+    message.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     message.text = "05.01.2026"
     message.chat = SimpleNamespace(id=user_id)
     message.message_id = 1

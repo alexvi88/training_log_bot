@@ -21,7 +21,7 @@ pytestmark = pytest.mark.asyncio
 
 def _make_message(user_id: int):
     message = MagicMock(spec=Message)
-    message.from_user = SimpleNamespace(id=user_id, username="tester")
+    message.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     message.bot = AsyncMock()
     message.bot.send_message = AsyncMock(return_value=SimpleNamespace(message_id=1000))
     message.answer = AsyncMock(return_value=SimpleNamespace(message_id=999, chat=SimpleNamespace(id=user_id)))
@@ -150,7 +150,7 @@ async def test_first_start_attaches_keyboard_without_the_update_notice(fresh_db)
     )
     cb_message.delete = AsyncMock()
     callback = MagicMock()
-    callback.from_user = SimpleNamespace(id=222222, username="tester")
+    callback.from_user = SimpleNamespace(id=222222, username="tester", language_code=None)
     callback.message = cb_message
     callback.data = "onboarding:lang:ru"
     callback.answer = AsyncMock()

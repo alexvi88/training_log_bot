@@ -18,7 +18,7 @@ def _make_callback(user_id: int, data: str):
     message.delete = AsyncMock()
     message.answer = AsyncMock(return_value=SimpleNamespace(message_id=1))
     callback = MagicMock()
-    callback.from_user = SimpleNamespace(id=user_id, username="tester")
+    callback.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     callback.message = message
     callback.data = data
     callback.answer = AsyncMock()
@@ -370,7 +370,7 @@ async def test_profile_screen_listens_to_what_you_type(fresh_db, user_id):
     try:
         message = MagicMock()
         message.text = "убери ограничения"
-        message.from_user = SimpleNamespace(id=user_id, username="tester")
+        message.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
         message.reply = AsyncMock()
         await settings.profile_correction(message, state)
     finally:

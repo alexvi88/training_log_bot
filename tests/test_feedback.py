@@ -17,7 +17,7 @@ pytestmark = pytest.mark.asyncio
 
 def _make_message(user_id: int, username: str | None = "tester"):
     message = MagicMock(spec=Message)
-    message.from_user = SimpleNamespace(id=user_id, username=username)
+    message.from_user = SimpleNamespace(id=user_id, username=username, language_code=None)
     message.bot = AsyncMock()
     message.answer = AsyncMock()
     message.reply = AsyncMock()
@@ -41,7 +41,7 @@ def _make_callback(user_id: int, data: str = ""):
         return_value=SimpleNamespace(chat=SimpleNamespace(id=user_id), message_id=2)
     )
     callback = MagicMock(spec=CallbackQuery)
-    callback.from_user = SimpleNamespace(id=user_id, username="tester")
+    callback.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     callback.bot = AsyncMock()
     callback.message = message
     callback.data = data
