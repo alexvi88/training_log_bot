@@ -8,6 +8,8 @@ import datetime as dt
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional
 
+import i18n
+
 
 def epley_e1rm(weight: float, reps: int) -> float:
     if reps <= 1:
@@ -135,13 +137,24 @@ def linear_trend(points: list[tuple[dt.datetime, float]]) -> Optional[Trend]:
 
 @dataclass(frozen=True)
 class Rank:
-    """One rung of the rank ladder."""
+    """One rung of the rank ladder.
+
+    `level` — идентификатор ступени, лежит в БД (`users.rank_level_seen`,
+    db.py) и не должен меняться никогда. `name` — то, что читает человек,
+    поэтому это НЕ поле, а свойство: RANKS собирается один раз на импорт
+    модуля, а язык пользователя известен только в момент рендера (см.
+    i18n.current_lang) — обычное строковое поле застыло бы на языке того, кто
+    первым дёрнул модуль после старта процесса, для всех пользователей сразу.
+    """
     level: int
     emoji: str
-    name: str
     min_workouts: int
     min_tonnage_kg: float
     min_per_week: float
+
+    @property
+    def name(self) -> str:
+        return i18n.t(f"rank.{self.level}.name")
 
 
 # Линейная лестница: звание растёт и от накопленного (тренировки, тоннаж), и от
@@ -161,14 +174,15 @@ class Rank:
 # на честном темпе 3/нед лестница проходилась за ~2 года, а не за пять: месяц,
 # три месяца, полгода, год, два. Тоннаж не трогаем — он и так почти никогда не
 # самая слабая ось, ограничивают тренировки и частота.
+# Названия — в locales/*.json по ключам rank.<level>.name.
 RANKS: list[Rank] = [
-    Rank(0, "🚪", "Новичок", 0, 0, 0.0),
-    Rank(1, "🧱", "Втянулся", 5, 5_000, 0.5),
-    Rank(2, "🔩", "Работяга", 15, 25_000, 1.0),
-    Rank(3, "⚙️", "Станок", 40, 75_000, 1.5),
-    Rank(4, "🪨", "Тяжеловес", 80, 200_000, 2.0),
-    Rank(5, "🦾", "Ветеран подвала", 160, 500_000, 2.5),
-    Rank(6, "👑", "Дед зала", 300, 1_000_000, 3.0),
+    Rank(0, "🚪", 0, 0, 0.0),
+    Rank(1, "🧱", 5, 5_000, 0.5),
+    Rank(2, "🔩", 15, 25_000, 1.0),
+    Rank(3, "⚙️", 40, 75_000, 1.5),
+    Rank(4, "🪨", 80, 200_000, 2.0),
+    Rank(5, "🦾", 160, 500_000, 2.5),
+    Rank(6, "👑", 300, 1_000_000, 3.0),
 ]
 
 # Окно, по которому считается «ходишь ли сейчас». Восемь недель — достаточно,

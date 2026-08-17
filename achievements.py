@@ -10,55 +10,74 @@ import datetime as dt
 from dataclasses import dataclass
 from typing import Optional
 
+import i18n
+
 
 @dataclass(frozen=True)
 class Achievement:
+    """`code` — идентификатор, лежит в БД (таблица `achievements`) и не должен
+    меняться никогда; `title`/`description` — то, что видит человек, поэтому
+    они НЕ поля, а свойства, читающие каталог i18n по ключу, производному от
+    кода, в момент обращения. Это принципиально: CATALOG собирается один раз
+    на импорт модуля, один процесс обслуживает всех пользователей сразу, а
+    язык каждого известен только в момент рендера (см. i18n.current_lang) —
+    если бы title/description были обычными строковыми полями, весь каталог
+    навсегда застыл бы на языке того, кто первым дёрнул этот модуль после
+    старта процесса.
+    """
     code: str
     emoji: str
-    title: str
-    description: str
+
+    @property
+    def title(self) -> str:
+        return i18n.t(f"achievement.{self.code}.title")
+
+    @property
+    def description(self) -> str:
+        return i18n.t(f"achievement.{self.code}.description")
 
 
-# Ordered for display (easiest → rarest within each theme).
+# Ordered for display (easiest → rarest within each theme). Текст — в
+# locales/*.json по ключам achievement.<code>.title/description.
 CATALOG: list[Achievement] = [
-    Achievement("first", "🌱", "Первый шаг", "Первая тренировка в дневнике"),
-    Achievement("w10", "🔟", "Разминка окончена", "10 тренировок"),
-    Achievement("w25", "💪", "Втянулся", "25 тренировок"),
-    Achievement("w50", "🏋️", "Полтинник", "50 тренировок"),
-    Achievement("w100", "💯", "Сотка", "100 тренировок"),
-    Achievement("streak4", "📅", "Месяц в строю", "4 недели подряд"),
-    Achievement("streak12", "🔥", "Квартал без пропусков", "12 недель подряд"),
-    Achievement("streak26", "❄️", "Полгода дисциплины", "26 недель подряд"),
-    Achievement("streak52", "🎖", "Год под грифом", "52 недели подряд"),
-    Achievement("club100", "🥉", "Клуб 100", "Поднял 100кг в одном подходе"),
-    Achievement("club140", "🥈", "Клуб 140", "Поднял 140кг в одном подходе"),
-    Achievement("club180", "🥇", "Клуб 180", "Поднял 180кг в одном подходе"),
-    Achievement("club220", "🏅", "Клуб 220", "Поднял 220кг в одном подходе"),
-    Achievement("ton10", "🪨", "10 тонн", "10т суммарно за всё время"),
-    Achievement("ton50", "🚚", "50 тонн", "50т суммарно за всё время"),
-    Achievement("ton100", "🐘", "100 тонн", "100т суммарно за всё время"),
-    Achievement("ton500", "🚂", "Товарный состав", "500 т суммарно за всё время"),
-    Achievement("ton1000", "🐋", "Кашалот", "1000 т суммарно за всё время"),
-    Achievement("w200", "🗿", "Двести", "200 тренировок"),
-    Achievement("w500", "🏛", "Пятьсот", "500 тренировок — это уже биография"),
-    Achievement("variety20", "🎨", "Коллекционер", "20 разных упражнений"),
-    Achievement("variety50", "🧰", "Мастер на все руки", "50 разных упражнений"),
-    Achievement("groups6", "🕸", "Без слабых мест", "Тренировал 6 разных групп мышц"),
-    Achievement("vol25", "🧨", "Объёмный день", "25+ подходов за одну тренировку"),
-    Achievement("session5t", "🏗", "Пятитонник", "5 тонн за одну тренировку"),
-    Achievement("combine8", "🚜", "Комбайн", "8+ упражнений за одну тренировку"),
-    Achievement("superset1", "🔀", "Двустаночник", "Первый суперсет"),
-    Achievement("bw25", "🤸", "Многоповторщик", "25+ повторов своим весом в одном подходе"),
-    Achievement("weekend_double", "⚔️", "Выходной воин", "Тренировки в субботу и воскресенье одной недели"),
-    Achievement("all_weekdays", "🗓", "Все семь", "Тренировался в каждый день недели (за всё время)"),
-    Achievement("early_bird", "🌅", "Ранняя пташка", "Тренировка до 7 утра"),
-    Achievement("early10", "🌄", "Клуб пяти утра", "10 тренировок до 7 утра"),
-    Achievement("night_owl", "🦉", "Ночная смена", "Тренировка после 22:00"),
-    Achievement("marathon", "⏳", "Марафонец", "Тренировка длиннее 2 часов"),
-    Achievement("bwlog30", "📏", "Под контролем", "30 записей в дневнике веса"),
-    Achievement("food7", "🍱", "Неделя учёта", "7 дней подряд с записями в дневнике еды"),
-    Achievement("new_year", "🎄", "С Новым годом!", "Тренировка 1 января"),
-    Achievement("dec31", "🎇", "Закрыл год", "Тренировка 31 декабря"),
+    Achievement("first", "🌱"),
+    Achievement("w10", "🔟"),
+    Achievement("w25", "💪"),
+    Achievement("w50", "🏋️"),
+    Achievement("w100", "💯"),
+    Achievement("streak4", "📅"),
+    Achievement("streak12", "🔥"),
+    Achievement("streak26", "❄️"),
+    Achievement("streak52", "🎖"),
+    Achievement("club100", "🥉"),
+    Achievement("club140", "🥈"),
+    Achievement("club180", "🥇"),
+    Achievement("club220", "🏅"),
+    Achievement("ton10", "🪨"),
+    Achievement("ton50", "🚚"),
+    Achievement("ton100", "🐘"),
+    Achievement("ton500", "🚂"),
+    Achievement("ton1000", "🐋"),
+    Achievement("w200", "🗿"),
+    Achievement("w500", "🏛"),
+    Achievement("variety20", "🎨"),
+    Achievement("variety50", "🧰"),
+    Achievement("groups6", "🕸"),
+    Achievement("vol25", "🧨"),
+    Achievement("session5t", "🏗"),
+    Achievement("combine8", "🚜"),
+    Achievement("superset1", "🔀"),
+    Achievement("bw25", "🤸"),
+    Achievement("weekend_double", "⚔️"),
+    Achievement("all_weekdays", "🗓"),
+    Achievement("early_bird", "🌅"),
+    Achievement("early10", "🌄"),
+    Achievement("night_owl", "🦉"),
+    Achievement("marathon", "⏳"),
+    Achievement("bwlog30", "📏"),
+    Achievement("food7", "🍱"),
+    Achievement("new_year", "🎄"),
+    Achievement("dec31", "🎇"),
 ]
 
 BY_CODE: dict[str, Achievement] = {a.code: a for a in CATALOG}
