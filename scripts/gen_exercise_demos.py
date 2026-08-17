@@ -148,6 +148,12 @@ POSE_INSTRUCTION = (
 # на входе. Файл — эталон из TONE_OF_VOICE.md, тот же, что под пушами.
 COACH_REFERENCE = ROOT / "media" / "push" / "coach_incoming_call.jpg"
 
+# Фото позы отвечает ТОЛЬКО за тело. Ракурс, крупность, свет и зал — всегда с
+# эталона: у исходной пары кадры сняты по-разному (присед: первый спереди и
+# близко, второй сбоку и далеко), и требование «копируй ракурс с фото позы»
+# спорило с требованием «держи камеру как на эталоне». Модель металась между
+# ними — фон и крупность разъезжались между двумя кадрами одного упражнения.
+#
 # Поза уходит и картинкой, и СЛОВАМИ. Первый живой прогон показал, зачем:
 # на приседе исходником был мужик, стоящий в полный рост, а нарисовался присед
 # в нижней точке — фото модель посмотрела, но нарисовала «ну, присед вообще».
@@ -160,9 +166,11 @@ FRAME_INSTRUCTION = (
     "man — his face, build, sunglasses, chain, tank top, shorts, shoes — the "
     "drawing style, the gym behind him, the light, the camera distance and angle "
     "must all stay identical, down to where the rack and the lamp are. Only his "
-    "body position changes. The SECOND image is the pose reference. Copy its body "
-    "pose, camera angle, limb positions and equipment exactly; the pose is the "
-    "source of truth, do not correct or improve it. "
+    "body position changes. The SECOND image is the pose reference: take ONLY the "
+    "body from it — how the joints are bent, where the limbs and the equipment "
+    "are, how far through the movement he is. Ignore its camera angle, its "
+    "distance, its lighting and its gym completely; those come from the first "
+    "image. The pose is the source of truth, do not correct or improve it. "
     "Draw the described position LITERALLY, even when it is not how this exercise "
     "is usually pictured: if the pose says he stands upright with straight legs, "
     "his knees must be locked straight and his hips fully extended — a half-squat "
