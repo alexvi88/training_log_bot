@@ -13,6 +13,7 @@ from matplotlib.backends.backend_agg import FigureCanvasAgg  # noqa: E402
 from matplotlib.figure import Figure  # noqa: E402
 from matplotlib.patches import FancyBboxPatch, Rectangle  # noqa: E402
 
+import i18n  # noqa: E402
 from analytics import WEEKLY_VOLUME_MAX, WEEKLY_VOLUME_MIN, linear_trend  # noqa: E402
 from formatting import format_weight  # noqa: E402
 
@@ -31,7 +32,8 @@ def _trend_title(title: str, trend, values: list[float], show_weekly_rate: bool)
     """
     if show_weekly_rate:
         direction = 1 if trend.direction == "up" else (-1 if trend.direction == "down" else 0)
-        return f"{title}  {_arrow(direction)} {abs(trend.slope_per_week):.2f}/нед"
+        suffix = i18n.t("chart.trend.per_week_suffix")
+        return f"{title}  {_arrow(direction)} {abs(trend.slope_per_week):.2f}{suffix}"
     delta = values[-1] - values[0]
     return f"{title}  {_arrow(delta)} {format_weight(abs(delta))}"
 
@@ -138,6 +140,13 @@ _VOL_NUMBER_RIGHT = 0.99
 _VOL_BAR_WIDTH = 7.5
 
 
+def _volume_norm_label(lo: int, hi: int) -> str:
+    """Подпись целевого коридора объёма. Вынесена в функцию (а не строка внутри
+    _draw_volume_panel), чтобы её можно было проверить в тесте на язык, не
+    рендеря саму картинку — ax.text() не отдаёт обратно то, что в него положили."""
+    return i18n.t("chart.volume.norm", min=lo, max=hi)
+
+
 def _volume_scale_max(rows: list[tuple[str, int, str]]) -> int:
     """Правый край шкалы. Коридор всегда виден целиком с запасом, но одна
     ударная неделя (30 подходов на спину) не должна сплющить остальные полосы
@@ -183,7 +192,7 @@ def _draw_volume_panel(
     # висела в пустоте между панелью и календарём и читалась как подпись к нему.
     ax.text(
         (lo + hi) / 2, -0.95,
-        f"НОРМА {WEEKLY_VOLUME_MIN}–{WEEKLY_VOLUME_MAX}",
+        _volume_norm_label(WEEKLY_VOLUME_MIN, WEEKLY_VOLUME_MAX),
         color=HEATMAP_FILLED, fontsize=DASH_FS_CAPTION, ha="center", va="center",
     )
 
@@ -476,6 +485,22 @@ def _wrap_card_line(line: str) -> list[str]:
     ) or [line]
 
 
+def _workout_card_header() -> str:
+    """Заголовок карточки-шаринга. Функция, а не строка на месте использования —
+    тестируемость: карточка не своя строка, а растр, и без функции язык
+    заголовка нельзя было бы проверить иначе как чтением пикселей."""
+    return i18n.t("chart.workout_card.header")
+
+
+def _quote_marks() -> tuple[str, str]:
+    """Открывающая/закрывающая кавычка для цитаты рекорда в карточке.
+
+    Ёлочки «» — только для русского: в английском тексте, по TONE_OF_VOICE
+    (## English voice), кавычки прямые. Символ зависит от языка, а не текста,
+    поэтому это пара из каталога, а не литерал."""
+    return i18n.t("chart.quote_open"), i18n.t("chart.quote_close")
+
+
 def render_workout_card(
     title: str,
     body_lines: list[str],
@@ -494,11 +519,12 @@ def render_workout_card(
     NOTE = "#d9c98a"
 
     # (text, style) rows, top to bottom.
-    rows: list[tuple[str, str]] = [("ТРЕНИРОВКА", "header"), (title, "muted"), ("", "normal")]
+    rows: list[tuple[str, str]] = [(_workout_card_header(), "header"), (title, "muted"), ("", "normal")]
     if note:
+        quote_open, quote_close = _quote_marks()
         chunks = textwrap.wrap(note, width=46) or [note]
-        chunks[0] = "«" + chunks[0]
-        chunks[-1] = chunks[-1] + "»"
+        chunks[0] = quote_open + chunks[0]
+        chunks[-1] = chunks[-1] + quote_close
         for chunk in chunks:
             rows.append((chunk, "note"))
         rows.append(("", "normal"))

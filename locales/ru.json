@@ -109,5 +109,10 @@
   "rank.3.name": "Станок",
   "rank.4.name": "Тяжеловес",
   "rank.5.name": "Ветеран подвала",
-  "rank.6.name": "Дед зала"
+  "rank.6.name": "Дед зала",
+  "chart.trend.per_week_suffix": "/нед",
+  "chart.volume.norm": "НОРМА {min}–{max}",
+  "chart.workout_card.header": "ТРЕНИРОВКА",
+  "chart.quote_open": "«",
+  "chart.quote_close": "»"
 }

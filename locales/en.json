@@ -108,5 +108,10 @@
   "rank.3.name": "Machine",
   "rank.4.name": "Heavyweight",
   "rank.5.name": "Basement Veteran",
-  "rank.6.name": "Iron Grandpa"
+  "rank.6.name": "Iron Grandpa",
+  "chart.trend.per_week_suffix": "/wk",
+  "chart.volume.norm": "TARGET {min}–{max}",
+  "chart.workout_card.header": "WORKOUT",
+  "chart.quote_open": "\"",
+  "chart.quote_close": "\""
 }
