@@ -1633,5 +1633,6 @@
   "ui.exercise_not_found": "Can't find that exercise — the screen is stale. Open ⚙️ Exercises again",
   "ui.workout_not_found": "Can't find that workout — the screen is stale. Open 📚 History again",
   "view.no_group": "no group",
-  "oauth.too_many_registrations": "Too many sign-ups. Try again later."
+  "oauth.too_many_registrations": "Too many sign-ups. Try again later.",
+  "bot.name": "ATHLETE'S LOG"
 }
