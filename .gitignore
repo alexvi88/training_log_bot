@@ -15,3 +15,8 @@ coverage.xml
 # внутрь неё, чтобы применить исключение для skills/.)
 .claude/*
 !.claude/skills/
+
+# Черновики видео-демонстраций (scripts/gen_exercise_demos.py): на принятый
+# клип приходится несколько отбракованных дублей плюс сырое видео до сборки
+# петли. В репозиторий едет только готовый media/exercises/<slug>_demo.mp4.
+media/exercises/_demo_work/
