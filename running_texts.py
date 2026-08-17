@@ -32,11 +32,29 @@ placeholder-сообщении одну из фраз ниже. Раньше п�
 смотрел ни в один дневник. Проверенные фразы про конкретный инструмент живут
 отдельно, в ai_trainer._TOOL_RUNNING_TEXTS: они показываются, когда инструмент
 реально вызван, и утверждать там можно.
+
+Третий регистр персонажа (TONE_OF_VOICE.md: строчные с эмодзи) — единственный
+регистр этого модуля, английская версия тоже строчная и с эмодзи, не капс и не
+проза. `pool_for` берёт язык из `i18n.get_lang()` — того же контекста, который
+handlers/ai_trainer.py уже выставляет к моменту вызова (middleware ставит язык
+на весь апдейт), а не из текста вопроса: вопрос может быть на любом языке
+(«how much protein do I need»), а показывать плейсхолдер всё равно нужно на
+языке интерфейса пользователя. `classify` при этом смотрит и русские, и
+английские стемы сразу — англоязычный вопрос обязан попадать в свою тему, а не
+скатываться в DEFAULT_TOPIC только потому, что показывать фразу будем
+по-английски.
+
+FACT_CHECK_POOL — исключение: handlers/factcheck.py берёт его напрямую
+(`running_texts.pick(running_texts.FACT_CHECK_POOL)`), без i18n вообще, так что
+FACT_CHECK_POOL_EN пока не подключён — это точечный экран вне области этой
+правки (handlers/*), останется мимо каталога до его собственной локализации.
 """
 
 import random
 import re
 from typing import Optional
+
+import i18n
 
 _WORD_RE = re.compile(r"[а-яa-z0-9]+")
 
@@ -62,7 +80,10 @@ SLEEP = "sleep"
 WARMUP = "warmup"
 DEFAULT_TOPIC = "default"
 
-# Порядок — приоритет при пересечении тем (см. модульный докстринг).
+# Порядок — приоритет при пересечении тем (см. модульный докстринг). Стемы
+# смешивают русский и английский в одном кортеже — _tokens уже фолдит любой
+# текст в нижний регистр, а вопрос на английском должен попадать в свою тему
+# ровно так же, как вопрос на русском (см. докстринг про i18n.get_lang()).
 _TOPIC_STEMS: list[tuple[str, tuple[str, ...]]] = [
     # Фарма — раньше веса и питания намеренно: «сколько скинул на оземпике» это
     # вопрос про препарат, а не про дневник взвешиваний, хотя стем «масс» там
@@ -72,52 +93,70 @@ _TOPIC_STEMS: list[tuple[str, tuple[str, ...]]] = [
         "оземпик", "семаглутид", "тирзепатид", "мунджаро", "лираглутид",
         "стероид", "тестостерон", "анабол", "аас", "сарм", "гормон",
         "тренболон", "станозолол", "нандролон", "фарм", "инсулин",
+        "ozempic", "semaglutide", "tirzepatide", "mounjaro", "liraglutide",
+        "steroid", "testosterone", "anabolic", "sarm", "hormone",
+        "trenbolone", "stanozolol", "nandrolone", "insulin",
     )),
     (RECOVERY, (
         "боли", "больно", "болит", "болел", "болев", "травм", "растяжен",
         "потян", "восстановлен", "перетрен", "устал", "надорв",
+        "pain", "hurt", "sore", "injur", "strain", "sprain", "recover",
+        "overtrain", "exhaust",
     )),
     (SLEEP, (
         "сон", "сна", "спать", "спл", "выспа", "недосып", "бессонниц", "циркадн",
+        "sleep", "insomnia", "circadian",
     )),
     (SUPPLEMENTS, (
         "креатин", "протеин", "гейнер", "бцаа", "bcaa", "добавк", "витамин",
         "омега", "предтрен", "изолят", "казеин", "цитруллин", "бета-алан",
+        "creatine", "whey", "preworkout", "casein", "citrulline",
     )),
     (NUTRITION, (
         "питан", "калори", "белк", "углевод", "рацион", "диет", "бжу",
+        "nutrition", "calorie", "protein", "carb", "macro",
     )),
     (WARMUP, (
         "разминк", "разминат", "разогрев", "растяжк", "растягив", "заминк",
         "мобильн", "миофасц",
+        "warmup", "warm", "stretch", "mobility",
     )),
     (EQUIPMENT, (
         "заменит", "замена", "заменять", "вместо", "дома", "домашн",
         "инвентар", "оборудован", "гантел", "резинк", "турник", "тренажер",
+        "replac", "substitut", "instead", "equipment", "dumbbell", "band",
     )),
     (BODYWEIGHT, (
         "сушк", "похуд", "взвеш", "набира", "масс", "вешу",
+        "cutting", "bulking", "weigh",
     )),
     (PROGRAM, (
         "программ", "сплит", "мезоцикл", "макроцикл", "периодизац",
+        "program", "split", "mesocycle", "macrocycle", "periodiz",
     )),
     (WEEKLY_VOLUME, (
         "объем", "перегруж", "недел", "баланс", "равномер",
+        "volume", "overload", "weekly", "balanc",
     )),
     (EXERCISE_PROGRESS, (
         "прогресс", "рекорд", "плато", "максимум", "вырос", "увелич", "1пм", "e1rm",
+        "progress", "record", "plateau", "increase",
     )),
     (TECHNIQUE, (
         "техник", "правильн", "ошибк", "выполня",
+        "technique", "form", "mistake", "perform",
     )),
     (HISTORY, (
         "истори", "статистик", "раньше", "прошл",
+        "histor", "stat", "before", "past",
     )),
     (TODAY, (
         "сегодня", "сейчас", "щас",
+        "today", "now",
     )),
     (MOTIVATION, (
         "мотивац", "лень", "вдохнов", "смысл", "надоел",
+        "motivat", "lazy", "inspir",
     )),
 ]
 
@@ -396,6 +435,155 @@ DEFAULT_POOL = [
     "🛠️ докручиваю ответ, почти готово...",
 ]
 
+# ---------- английские пулы ----------
+#
+# Третий регистр персонажа (строчные + эмодзи) переносится как есть — не капс
+# и не проза, см. модульный докстринг. FACT_CHECK_POOL_EN сюда не входит:
+# handlers/factcheck.py берёт русский пул напрямую, без i18n (см. докстринг).
+
+PROGRAM_POOL_EN = [
+    "📋 building the program, working out the periodization...",
+    "🗂️ laying the training days out by week...",
+    "🧮 balancing the split so muscle groups don't fight over rest...",
+    "🏗️ building the program from scratch, almost there...",
+    "📐 fitting the plan to your specifics, one sec...",
+    "🔄 balancing load and recovery phases...",
+    "📅 slotting training days into the calendar...",
+    "🧩 piecing the program together from your exercises...",
+]
+
+EXERCISE_PROGRESS_POOL_EN = [
+    "📈 pulling up the progress charts for this lift...",
+    "🏋️ checking your weights and reps over the last few weeks...",
+    "🔍 looking for where you're gaining and where you're stuck...",
+    "📊 running the e1RM so we're not guessing...",
+    "🥇 checking if a new record's close...",
+    "🧮 comparing current working weight to past sessions...",
+    "📏 measuring progress by numbers, not by feel...",
+    "🔁 scrolling through the set history on this one...",
+]
+
+WEEKLY_VOLUME_POOL_EN = [
+    "📆 counting weekly sets for this muscle group...",
+    "⚖️ checking the balance across muscle groups...",
+    "🧮 adding up the weekly volume, one sec...",
+    "🔍 looking for which group's overloaded and which is light...",
+    "📊 laying the week out to see the whole picture...",
+    "🗓️ checking how the load's spread across the week...",
+    "🧭 hunting for a volume imbalance between groups...",
+]
+
+NUTRITION_POOL_EN = [
+    "🍽 checking your food log...",
+    "🥩 counting protein — growth needs more than lifting...",
+    "🥗 breaking the diet down by macros, one sec...",
+    "🍚 estimating calories for your goal...",
+    "🧮 crunching the calorie numbers...",
+    "🍳 checking if you're getting enough protein to grow...",
+    "🥦 checking the balance between food and training...",
+]
+
+BODYWEIGHT_POOL_EN = [
+    "⚖️ checking the weight log, one sec...",
+    "📉 tracking the trend — cutting or bulking...",
+    "🧮 running the numbers on where body weight's headed...",
+    "📊 checking weigh-ins week over week, no wild swings...",
+    "🧭 looking for the trend in your weigh-ins...",
+    "📈 checking if it's mass going up or fat coming off...",
+]
+
+TECHNIQUE_POOL_EN = [
+    "🎥 running the movement through my head...",
+    "🩻 breaking the lift down phase by phase...",
+    "🧠 pulling up coaching notes on this one...",
+    "🛠️ looking for where the technique breaks down...",
+    "📐 checking the bar path, one sec...",
+    "🎯 zeroing in on a precise breakdown...",
+]
+
+RECOVERY_POOL_EN = [
+    "🩹 figuring out what's going on with that pain...",
+    "🛌 working out how much rest you actually need...",
+    "🧘 taking this slow, sorting out recovery step by step...",
+    "🔍 checking if this is just overtraining...",
+    "🩺 carefully working through what might've hurt...",
+    "🧭 finding the balance between load and rest...",
+]
+
+HISTORY_POOL_EN = [
+    "📚 scrolling back through your whole training history...",
+    "🗂️ pulling up the training archive, one sec...",
+    "📖 rereading what happened in past sessions...",
+    "🔍 digging through history for what you need...",
+    "🧾 checking the old entries...",
+    "📅 flipping through workouts by date...",
+]
+
+TODAY_POOL_EN = [
+    "📋 figuring out what to put you through today...",
+    "🏋️ thinking up what to hit today...",
+    "🎯 aiming this straight at today...",
+    "🔍 working out what fits today...",
+    "⏱️ figuring out what to do right now...",
+]
+
+MOTIVATION_POOL_EN = [
+    "🔥 stoking the motivation, one sec...",
+    "🧠 switching on coach mode for a proper kick...",
+    "💬 picking the right words, hang on...",
+    "🥊 building an answer that'll shake something loose...",
+    "💪 hold up, this one's coming with purpose...",
+]
+
+PHARMA_POOL_EN = [
+    "🧪 taking this one carefully...",
+    "📖 pulling up what's actually known about this...",
+    "⚖️ weighing the upside against the side effects...",
+    "🩺 thinking like a coach who's read more than forums...",
+    "🔬 separating the proven from the promised...",
+]
+
+SUPPLEMENTS_POOL_EN = [
+    "🥤 checking if this one actually works or if it's just marketing...",
+    "🧪 recalling what the studies actually showed...",
+    "💊 figuring out if you even need this...",
+    "📖 checking the dosages...",
+    "🔬 sorting the useful from the trendy...",
+]
+
+EQUIPMENT_POOL_EN = [
+    "🔧 figuring out what to swap it for...",
+    "🏠 working out a no-gym version, one sec...",
+    "🧰 checking what you can do with what you've got...",
+    "🏋️ looking for a move that hits the same muscles...",
+    "🔁 finding a real substitute, not just a similar name...",
+]
+
+SLEEP_POOL_EN = [
+    "😴 thinking about sleep — it's not a minor detail in training...",
+    "🌙 figuring out how much sleep you actually need...",
+    "🛌 checking how the lack of sleep is hitting your strength...",
+    "🧠 recalling what sleep does for recovery...",
+]
+
+WARMUP_POOL_EN = [
+    "🤸 putting together a warm-up for this movement...",
+    "🔥 warming up right along with you, one sec...",
+    "📐 figuring out which joints to prep first...",
+    "🦵 recalling what usually gets skipped...",
+]
+
+DEFAULT_POOL_EN = [
+    "💪 hold on, this one's coming...",
+    "🧠 switching on coach mode, one sec...",
+    "🔥 warming up before the answer...",
+    "🎯 aiming for a precise answer, don't spook it...",
+    "🧘 gathering my thoughts, hang on...",
+    "🏋️ loading up the knowledge bit by bit...",
+    "📖 checking the method, one sec...",
+    "⏱️ resting between sets of thought, hang on...",
+]
+
 POOLS: dict[str, list[str]] = {
     PROGRAM: PROGRAM_POOL,
     EXERCISE_PROGRESS: EXERCISE_PROGRESS_POOL,
@@ -415,6 +603,31 @@ POOLS: dict[str, list[str]] = {
     DEFAULT_TOPIC: DEFAULT_POOL,
 }
 
+POOLS_EN: dict[str, list[str]] = {
+    PROGRAM: PROGRAM_POOL_EN,
+    EXERCISE_PROGRESS: EXERCISE_PROGRESS_POOL_EN,
+    WEEKLY_VOLUME: WEEKLY_VOLUME_POOL_EN,
+    NUTRITION: NUTRITION_POOL_EN,
+    BODYWEIGHT: BODYWEIGHT_POOL_EN,
+    TECHNIQUE: TECHNIQUE_POOL_EN,
+    RECOVERY: RECOVERY_POOL_EN,
+    HISTORY: HISTORY_POOL_EN,
+    TODAY: TODAY_POOL_EN,
+    MOTIVATION: MOTIVATION_POOL_EN,
+    PHARMA: PHARMA_POOL_EN,
+    SUPPLEMENTS: SUPPLEMENTS_POOL_EN,
+    EQUIPMENT: EQUIPMENT_POOL_EN,
+    SLEEP: SLEEP_POOL_EN,
+    WARMUP: WARMUP_POOL_EN,
+    DEFAULT_TOPIC: DEFAULT_POOL_EN,
+}
+
+# lang -> POOLS: держим отдельно от TEXTS_BY_LANG-приёма push_texts.py, потому
+# что здесь нет каталога (locales/*.json) — эти фразы не проходят через ICU и
+# не участвуют в тестах полноты каталога, так что задача проще: два обычных
+# python-словаря без парсинга JSON.
+_POOLS_BY_LANG: dict[str, dict[str, list[str]]] = {"ru": POOLS, "en": POOLS_EN}
+
 
 def classify(text: str) -> str:
     """Тема вопроса по ключевым словам-стемам, либо DEFAULT_TOPIC, если ни
@@ -429,8 +642,16 @@ def classify(text: str) -> str:
 
 
 def pool_for(text: str) -> list[str]:
-    """Пул фраз под тему вопроса — то, что реально нужно вызывающему коду."""
-    return POOLS[classify(text)]
+    """Пул фраз под тему вопроса, на языке текущего пользователя.
+
+    Язык берём из ambient i18n.get_lang() (тот же приём, что analytics.Rank.name
+    и push_texts.pick_text), а не угадываем по тексту вопроса: вопрос может быть
+    на любом языке, а плейсхолдер должен звучать на языке интерфейса. По
+    умолчанию (язык не поддерживается или контекст не выставлен) отдаём
+    русский пул — так же, как i18n делает ru fallback для отсутствующего ключа.
+    """
+    topic = classify(text)
+    return _POOLS_BY_LANG.get(i18n.get_lang(), POOLS)[topic]
 
 
 def pick(pool: list[str]) -> str:

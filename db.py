@@ -30,7 +30,12 @@ import aiosqlite
 import config
 import formatting
 import search_terms
-from seed_data import BODYWEIGHT_TEMPLATES, EXERCISE_TEMPLATES, MUSCLE_GROUP_PRESETS
+from seed_data import (
+    BODYWEIGHT_TEMPLATES,
+    EXERCISE_TEMPLATES,
+    MUSCLE_GROUP_PRESETS,
+    localized_exercise_name,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1076,6 +1081,15 @@ async def _sync_exercise_templates() -> None:
     Reconciliation is declarative: anything in the list but not in the DB is added,
     any global template no longer in the list is removed, and accidental duplicates
     (same group + name) left by older seeds are pruned down to a single row.
+
+    Deliberately NOT localized: this is the one global row per template
+    (`user_id IS NULL`), shared by every account regardless of language, and
+    it's also the identity `exercise_media`/`exercise_descriptions` and
+    `exercises.original_name` are keyed on (see the seed_data module
+    docstring) — giving it any language but Russian here would break that key
+    for everyone. Localization happens per-user, at the moment a template is
+    actually shown or forked (`fork_exercise_from_template`,
+    `seed_data.localized_exercise_name`), never on this shared row.
     """
     db = conn()
     groups = await list_muscle_groups(user_id=None, global_only=True)
@@ -2207,15 +2221,28 @@ async def fork_exercise_from_template(
     unilateral: Optional[bool] = None,
     attachment: Optional[str] = None,
 ) -> int:
+    """Fork a global template into a user-owned exercise.
+
+    The name a user SEES is localized to their language (`users.lang`), but
+    `original_name` — the identity key `exercise_media.catalog_key` reads for
+    photos/technique, and the thing that must never change once a user has an
+    exercise — is always the template's Russian canonical name, regardless of
+    that language. `create_exercise` sets `original_name` equal to whatever
+    `name` it's given, so a localized name would otherwise become the fork's
+    (wrong) identity; the UPDATE right after puts the Russian name back.
+    """
     template = await get_exercise(template_id)
     if template is None:
         raise ValueError("template not found")
     final_equipment = equipment if equipment is not None else template["equipment"]
     final_unilateral = unilateral if unilateral is not None else bool(template["unilateral"])
     final_attachment = attachment if attachment is not None else template["attachment"]
+    user = await get_user(user_id)
+    lang = user["lang"] if user is not None else "ru"
+    display_name = localized_exercise_name(template["name"], lang)
     ex_id = await create_exercise(
         user_id,
-        template["name"],
+        display_name,
         template["primary_group_id"],
         final_equipment,
         final_unilateral,
@@ -2225,8 +2252,9 @@ async def fork_exercise_from_template(
     # подтягиваний считался бы с нулевым весом, как и до всего этого.
     async with _write_lock:
         await conn().execute(
-            "UPDATE exercises SET bodyweight_load = ?, bodyweight_factor = ? WHERE id = ?",
-            (template["bodyweight_load"], template["bodyweight_factor"], ex_id),
+            "UPDATE exercises SET original_name = ?, bodyweight_load = ?, bodyweight_factor = ? "
+            "WHERE id = ?",
+            (template["name"], template["bodyweight_load"], template["bodyweight_factor"], ex_id),
         )
         await conn().commit()
     return ex_id

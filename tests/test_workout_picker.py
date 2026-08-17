@@ -202,7 +202,7 @@ async def test_search_results_are_paginated_instead_of_being_cut_off(fresh_db, u
 
     kb = message.bot.send_message.await_args.kwargs["reply_markup"]
     texts = [b.text for row in kb.inline_keyboard for b in row]
-    assert keyboards.PAGE_NEXT_TEXT in texts, "нет кнопки следующей страницы"
+    assert keyboards.PAGE_NEXT_TEXT() in texts, "нет кнопки следующей страницы"
     # Тринадцать совпадений при странице в восемь — вторая страница обязана быть,
     # и «Жим штанги лёжа» должен быть достижим, а не срезан.
     assert sum(1 for t in texts if t.startswith("Жим")) <= 8

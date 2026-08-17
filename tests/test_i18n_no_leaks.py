@@ -233,9 +233,11 @@ def _make_fake_callback(user_id: int, data: str) -> CallbackQuery:
 
 
 async def _screen_settings_keyboard(db, user_id: int) -> str:
-    """Экран настроек: подписи кнопок. Единственная уже переведённая строка на
-    этом экране — подпись перехода на язык (см. keyboards.settings_keyboard);
-    всё остальное (единицы, формула, часовой пояс, тумблеры) — пока хардкод."""
+    """Экран настроек: подписи кнопок — единицы, формула, часовой пояс, язык,
+    все тумблеры (см. keyboards.settings_keyboard). Целиком переведён
+    keyboards.py'ем: единственная кириллица, которая тут в принципе может
+    всплыть, — автоним «Русский» в подписи кнопки языка, а его вырезает
+    _strip_autonyms ниже, как и в test_en_catalog_has_no_cyrillic."""
     kb = keyboards.settings_keyboard(
         unit="kg",
         formula="epley",
@@ -252,13 +254,67 @@ async def _screen_settings_keyboard(db, user_id: int) -> str:
 
 
 async def _screen_language_picker(db, user_id: int) -> str:
-    """Экран выбора языка: заголовок из каталога + подписи кнопок. "⬅️ Назад"
-    в keyboards.language_keyboard пока не переведена — экран целиком ещё
-    протекает, несмотря на то что заголовок/алерт уже в en.json."""
+    """Экран выбора языка: заголовок из каталога + подписи кнопок. Автоним
+    «Русский» — законная кириллица даже на английском экране (см.
+    keyboards.LANG_NAMES, _strip_autonyms ниже вырезает его перед проверкой)."""
     title = i18n.t_in("en", "screen.language.title")
     kb = keyboards.language_keyboard("en")
     buttons = "\n".join(button.text for row in kb.inline_keyboard for button in row)
     return f"{title}\n{buttons}"
+
+
+async def _screen_main_menu(db, user_id: int) -> str:
+    """Главное меню (keyboards.main_menu) — первый экран после /start, со всеми
+    необязательными строками включёнными разом (импорт, донат, чат сообщества)."""
+    kb = keyboards.main_menu(
+        has_active_workout=False,
+        show_import_button=True,
+        community_url="https://t.me/example",
+        show_donate=True,
+    )
+    return "\n".join(button.text for row in kb.inline_keyboard for button in row)
+
+
+async def _screen_exercise_picker(db, user_id: int) -> str:
+    """Экран «⚙️ Упражнения»: список групп мышц + список упражнений одной
+    группы (keyboards.groups_keyboard/exercises_keyboard)."""
+    kb_groups = keyboards.groups_keyboard(
+        groups=[{"id": 1, "name": "legs"}], prefix="exm", show_all=True
+    )
+    kb_list = keyboards.exercises_keyboard(
+        exercises=[{"id": 1, "display_name": "Squat"}], prefix="exm", show_catalog_button=True
+    )
+    buttons = [b.text for row in kb_groups.inline_keyboard for b in row]
+    buttons += [b.text for row in kb_list.inline_keyboard for b in row]
+    return "\n".join(buttons)
+
+
+async def _screen_programs(db, user_id: int) -> str:
+    """Экран «🗂 Программы» (keyboards.routines_manage_keyboard): многодневки,
+    одиночные программы, каталог готового и сборка с AI-тренером разом."""
+    kb = keyboards.routines_manage_keyboard(
+        programs=[{"id": 1, "name": "Split", "day_count": 3}],
+        routines=[{"id": 2, "name": "Full body"}],
+        has_workouts=True,
+    )
+    return "\n".join(button.text for row in kb.inline_keyboard for button in row)
+
+
+async def _screen_food_diary(db, user_id: int) -> str:
+    """Экран одного дня дневника питания (keyboards.food_day_keyboard) — с
+    записями, чтобы кнопки удаления и переход в историю тоже попали в проверку."""
+    today = dt.date(2026, 8, 17)
+    kb = keyboards.food_day_keyboard(today, entry_ids=[1, 2], today=today)
+    return "\n".join(button.text for row in kb.inline_keyboard for button in row)
+
+
+async def _screen_history_list(db, user_id: int) -> str:
+    """Список тренировок в истории (keyboards.history_list_keyboard), со
+    страницей вперёд, чтобы захватить и подпись листалки."""
+    kb = keyboards.history_list_keyboard(
+        workouts=[{"id": 1, "label": "Aug 10"}], page=0, has_next=True
+    )
+    return "\n".join(button.text for row in kb.inline_keyboard for button in row)
 
 
 async def _screen_workout_summary(db, user_id: int) -> str:
@@ -308,30 +364,74 @@ async def _screen_history_item_card(db, user_id: int) -> str:
     return callback.message.answer.await_args.args[0]
 
 
+def _strip_autonyms(text: str) -> str:
+    """Тот же вырез, что и в test_en_catalog_has_no_cyrillic: автоним «Русский»
+    в подписи кнопки языка — законная кириллица даже на английском экране."""
+    for autonym in _AUTONYM_WHITELIST:
+        text = text.replace(autonym, "")
+    return text
+
+
+def _leaks(text: str) -> list[str]:
+    return [word for word in _strip_autonyms(text).split() if i18n_coverage.has_cyrillic(word)]
+
+
 # (имя экрана, сборщик) — списком, чтобы новый экран не требовал новой копии
 # теста, только новую строку здесь.
+#
+# Разделены на два списка, а не xfail-декоратор с strict=True на одном общем:
+# как только очередной экран из "ещё протекает" реально очищается (весь его
+# модуль переведён), xfail(strict=True) на НЕМ превращается в XPASS — и это
+# падение теста, а не успех, потому что strict=True требует, чтобы xfail
+# сбылся. Экран в этот момент обязан физически переехать сюда, в SCREENS —
+# только так тест снова зелёный и продолжает защищать именно то, что уже
+# сделано.
 SCREENS: list[tuple[str, object]] = [
     ("settings_keyboard", _screen_settings_keyboard),
     ("language_picker", _screen_language_picker),
+    ("main_menu", _screen_main_menu),
+    ("exercise_picker", _screen_exercise_picker),
+    ("programs", _screen_programs),
+    ("food_diary", _screen_food_diary),
+    ("history_list", _screen_history_list),
     ("workout_summary_card", _screen_workout_summary),
     ("dashboard_menu", _screen_dashboard_menu),
+]
+
+# Экраны, которые всё ещё протекают кириллицей мимо каталога (зависят от
+# ещё не переведённых модулей — сейчас это handlers/history.py). Список
+# существует, чтобы падение здесь было ожидаемым сигналом "этот конкретный
+# экран ещё не готов", а не молчаливым исключением из проверки целиком.
+SCREENS_STILL_LEAKING: list[tuple[str, object]] = [
     ("history_item_card", _screen_history_item_card),
 ]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "экраны ещё не переведены (см. i18n_coverage.TODO: formatting.py, keyboards.py, "
-        "handlers/history.py); xfail снимется само, когда очередной экран очистят от "
-        "кириллицы — strict=True не даст забыть снять пометку"
-    ),
-)
 @pytest.mark.parametrize("screen_name, builder", SCREENS, ids=[name for name, _ in SCREENS])
 async def test_screen_has_no_cyrillic_in_english(fresh_db, user_id, screen_name, builder):
     db = fresh_db
     await db.set_user_lang(user_id, "en")
     with i18n.use_lang("en"):
         text = await builder(db, user_id)
-    leaks = [word for word in text.split() if i18n_coverage.has_cyrillic(word)]
+    leaks = _leaks(text)
+    assert not leaks, f"{screen_name}: русские слова на английском экране: {leaks}"
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "экраны ещё не переведены (см. i18n_coverage.TODO: handlers/history.py); xfail "
+        "снимется само, когда очередной экран очистят от кириллицы — strict=True не даст "
+        "забыть переставить его в SCREENS, а не просто удалить строку отсюда"
+    ),
+)
+@pytest.mark.parametrize(
+    "screen_name, builder", SCREENS_STILL_LEAKING, ids=[name for name, _ in SCREENS_STILL_LEAKING]
+)
+async def test_screen_still_leaks_cyrillic_in_english(fresh_db, user_id, screen_name, builder):
+    db = fresh_db
+    await db.set_user_lang(user_id, "en")
+    with i18n.use_lang("en"):
+        text = await builder(db, user_id)
+    leaks = _leaks(text)
     assert not leaks, f"{screen_name}: русские слова на английском экране: {leaks}"

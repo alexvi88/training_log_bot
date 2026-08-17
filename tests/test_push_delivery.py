@@ -73,7 +73,10 @@ async def test_push_cta_continues_the_coach_line_per_category(fresh_db, user_id)
         bot, user_id, engagement.PushDecision(push_texts.SKIP_3, "текст"), _TODAY
     )
     kb = bot.send_photo.await_args.kwargs["reply_markup"]
-    assert kb.inline_keyboard[0][0].text == engagement.DEFAULT_PUSH_CTA
+    # DEFAULT_PUSH_CTA — ключ каталога (push.cta.default), не готовый текст:
+    # кнопка рендерит его через keyboards.push_cta_keyboard -> i18n.t(...), а
+    # тут сверяем результат этого рендера, а не сам ключ.
+    assert kb.inline_keyboard[0][0].text == "▶ Начать тренировку"
 
 
 async def test_a_digest_without_cta_still_offers_the_menu(fresh_db, user_id):
