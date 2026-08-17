@@ -190,14 +190,14 @@ def _user_text(kind: str, reason: str) -> Optional[str]:
     return None
 
 
-_KIND_TITLES = {
-    KIND_QUESTION: "вопросы тренеру",
-    KIND_SEARCH: "живой поиск, личная квота",
-    KIND_SEARCH_GLOBAL: "живой поиск, общий потолок",
-    KIND_VIDEO: "разбор видео",
-    KIND_FOOD: "разбор еды",
-    KIND_SPEND_SOFT: "расход за сутки",
-    KIND_SPEND_HARD: "расход за сутки, стоп",
+_KIND_TITLE_KEYS = {
+    KIND_QUESTION: "limit.preview.kind.question",
+    KIND_SEARCH: "limit.preview.kind.search",
+    KIND_SEARCH_GLOBAL: "limit.preview.kind.search_global",
+    KIND_VIDEO: "limit.preview.kind.video",
+    KIND_FOOD: "limit.preview.kind.food",
+    KIND_SPEND_SOFT: "limit.preview.kind.spend_soft",
+    KIND_SPEND_HARD: "limit.preview.kind.spend_hard",
 }
 
 
@@ -207,18 +207,22 @@ def preview_text(block: Block, spend: float) -> str:
     Капс — заголовком, как и положено (TONE_OF_VOICE.md): дальше идёт проза.
     Показываем ровно ту фразу, которую в эту секунду прочитал бы обычный
     атлет, — ради этого всё и затевалось: понять, КОГДА и КАКИМ текстом лимит
-    встречает человека из поста.
+    встречает человека из поста. Свой аккаунт видит эту симуляцию на своём
+    языке (i18n.t по языку ТЕКУЩЕГО запроса), а не жёстко по-русски — иначе
+    английский атлет-разработчик проверял бы английскую ветку русским текстом.
     """
+    kind_key = _KIND_TITLE_KEYS.get(block.kind)
+    kind_title = i18n.t(kind_key) if kind_key else block.kind
     lines = [
-        f"⚠️ СРАБОТАЛ ЛИМИТ: {_KIND_TITLES.get(block.kind, block.kind)}",
+        i18n.t("limit.preview.title", kind=kind_title),
         "",
-        f"За сутки набежало ~${spend:.2f}.",
+        i18n.t("limit.preview.spend", spend=f"{spend:.2f}"),
     ]
     if block.user_text:
-        lines += ["", "Обычный атлет сейчас увидел бы:", f"«{block.user_text}»"]
+        lines += ["", i18n.t("limit.preview.shown"), i18n.t("limit.preview.quoted", text=block.user_text)]
     else:
-        lines += ["", "Обычный атлет ничего не увидел бы — ответ просто идёт без свежести."]
-    lines += ["", "Жми «Понятно» — до конца суток этот лимит тебя пропускает."]
+        lines += ["", i18n.t("limit.preview.silent")]
+    lines += ["", i18n.t("limit.preview.tail")]
     return "\n".join(lines)
 
 

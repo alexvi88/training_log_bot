@@ -14,6 +14,8 @@ import pytest
 import ai_limits
 import config
 import db as dbmod
+import i18n
+import i18n_coverage as i18n_coverage_module
 
 pytestmark = pytest.mark.asyncio
 
@@ -234,6 +236,37 @@ async def test_own_account_sees_a_warning_instead_of_a_wall(user_id, monkeypatch
     assert "$1.23" in ai_limits.preview_text(block, 1.23)
 
 
+async def test_own_account_preview_follows_the_acting_users_language(user_id, monkeypatch):
+    """QA-баг: предупреждение своим аккаунтам рендерилось жёстко по-русски,
+    даже когда язык атлета (в т.ч. TEST_USER_ID/ADMIN_ID) — английский, хотя
+    оно и задумано как симуляция того, что увидел бы обычный атлет (CLAUDE.md,
+    «Сколько это стоит»)."""
+    monkeypatch.setattr(config, "ADMIN_ID", user_id)
+    monkeypatch.setattr(config, "AI_FOOD_DAILY_LIMIT", 1)
+    _spend(monkeypatch, 1.23)
+    await dbmod.increment_ai_food_count(user_id)
+
+    # check() и последующий показ предупреждения всегда идут в рамках ОДНОГО
+    # запроса, на языке которого и застывает block.user_text (см. ai_limits.py:
+    # `_user_text` через i18n.t) — как в проде, где язык уже выставлен
+    # мидлварью до хендлера. Поэтому блок пересоздаётся под каждый язык
+    # отдельно, а не переиспользуется между `use_lang`.
+    with i18n.use_lang("ru"):
+        ru_block = await ai_limits.check(user_id, ai_limits.KIND_FOOD)
+        assert ru_block is not None and ru_block.preview
+        ru_text = ai_limits.preview_text(ru_block, 1.23)
+    with i18n.use_lang("en"):
+        en_block = await ai_limits.check(user_id, ai_limits.KIND_FOOD)
+        assert en_block is not None and en_block.preview
+        en_text = ai_limits.preview_text(en_block, 1.23)
+
+    assert ru_text != en_text
+    assert "СРАБОТАЛ ЛИМИТ" in ru_text and "Обычный атлет" in ru_text
+    assert "LIMIT HIT" in en_text and "average athlete" in en_text
+    # Никакой кириллицы не протекает в английскую версию экрана.
+    assert not i18n_coverage_module.has_cyrillic(en_text)
+
+
 async def test_ack_lets_the_day_continue(user_id, monkeypatch):
     monkeypatch.setattr(config, "TEST_USER_ID", user_id)
     monkeypatch.setattr(config, "ADMIN_ID", None)
@@ -266,6 +299,36 @@ async def test_strangers_never_get_the_warning(user_id, monkeypatch, free):
 
     block = await ai_limits.check(user_id, ai_limits.KIND_FOOD)
     assert block is not None and not block.preview
+
+
+async def test_ack_confirmation_follows_the_acting_users_language(user_id, monkeypatch):
+    """QA-баг, вторая половина: строка, которой хендлер дописывает сообщение
+    после тапа «Понятно» (handlers/admin.limit_ack), тоже была жёстко
+    по-русски — тот же класс бага, что и в preview_text."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock
+
+    from handlers import admin as admin_handlers
+
+    monkeypatch.setattr(config, "ADMIN_ID", user_id)
+
+    message = MagicMock()
+    message.text = "some limit warning"
+    message.edit_text = AsyncMock()
+    callback = MagicMock()
+    callback.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
+    callback.message = message
+    callback.data = f"ail:ack:{ai_limits.KIND_FOOD}"
+    callback.answer = AsyncMock()
+
+    with i18n.use_lang("en"):
+        await admin_handlers.limit_ack(callback)
+
+    appended = message.edit_text.await_args.args[0]
+    assert "Got it" in appended
+    assert not i18n_coverage_module.has_cyrillic(appended)
+    toast = callback.answer.await_args.args[0]
+    assert not i18n_coverage_module.has_cyrillic(toast)
 
 
 # ---------- атомарный check-and-increment (гонка «прочитал → подождал → списал») ----------
