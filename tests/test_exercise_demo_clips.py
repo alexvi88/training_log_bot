@@ -210,6 +210,24 @@ def test_pilot_names_are_real_templates():
         assert exercise in exercise_media.EXERCISE_IMAGE_SLUGS, exercise
 
 
+def test_frame_request_carries_both_images_reference_first():
+    """Промпт ссылается на «первую» и «вторую» картинку, поэтому порядок в теле
+    запроса — часть смысла, а не деталь сборки. Перепутать их значит получить
+    позу тренера с авки вместо позы упражнения."""
+    from scripts import gen_exercise_demos
+
+    body, boundary = gen_exercise_demos._multipart(
+        {"model": "gpt-image-1"},
+        [
+            ("image[]", gen_exercise_demos.COACH_REFERENCE),
+            ("image[]", gen_exercise_demos.MEDIA_DIR / "barbell_squat_1.jpg"),
+        ],
+    )
+    assert body.count(b'name="image[]"') == 2
+    assert body.index(b"coach_incoming_call.jpg") < body.index(b"barbell_squat_1.jpg")
+    assert body.endswith(f"--{boundary}--\r\n".encode())
+
+
 def test_coach_reference_image_is_where_the_pipeline_looks_for_it():
     """Эталон тренера уходит в генерацию картинкой. Переименуют файл — персонаж
     молча начнёт задаваться одними словами, и в карточках поедет второй тренер;

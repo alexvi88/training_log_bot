@@ -138,6 +138,9 @@ TWO_IMAGE_INSTRUCTION = (
 )
 
 OPENAI_FRAME_MODEL = os.getenv("OPENAI_FRAME_MODEL", "gpt-image-1")
+OPENAI_IMAGE_EDIT_URL = os.getenv(
+    "OPENAI_IMAGE_EDIT_URL", "https://api.openai.com/v1/images/edits"
+)
 
 # Кем рисуются кадры; ставится флагом --frames-via, по умолчанию OpenAI.
 # У Novita img2img вход одна картинка, то есть эталон тренера туда не влезает
@@ -278,15 +281,37 @@ def _work(slug: str, create: bool = True) -> pathlib.Path:
     return path
 
 
+def _multipart(fields: dict[str, str], files: list[tuple[str, pathlib.Path]]) -> tuple[bytes, str]:
+    """Тело multipart/form-data. Граница фиксированная: случайность тут ничего
+    не даёт, а воспроизводимый запрос удобнее отлаживать."""
+    boundary = "----trainingLogBotExerciseDemos"
+    body = bytearray()
+    for name, value in fields.items():
+        body += f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n'.encode()
+        body += f"{value}\r\n".encode()
+    for name, path in files:
+        body += (
+            f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"; '
+            f'filename="{path.name}"\r\nContent-Type: image/jpeg\r\n\r\n'
+        ).encode()
+        body += path.read_bytes() + b"\r\n"
+    body += f"--{boundary}--\r\n".encode()
+    return bytes(body), boundary
+
+
 def _frame_via_openai(source: pathlib.Path, dest: pathlib.Path) -> None:
     """Кадр через gpt-image-1: эталон тренера и поза уходят двумя картинками.
 
-    Модель, в отличие от обычного img2img, принимает набор изображений и умеет
-    держать инструкцию «этот человек в этой позе» — а весь замысел держится
-    ровно на ней. Пакет openai уже в зависимостях бота, третий SDK не заводим.
-    """
-    from openai import OpenAI
+    Модель, в отличие от обычного img2img, принимает НАБОР изображений и умеет
+    держать инструкцию «этот человек в этой позе» — весь замысел держится ровно
+    на ней.
 
+    Запрос собирается руками, мимо пакета openai: в проекте он пришпилен к
+    1.57.0, а тот отвергает список в `image` ещё на своей стороне
+    («Expected entry at `image` to be bytes… received list»). Дёргать версию
+    ради офлайн-скрипта — менять зависимость работающего бота; HTTP-вызов же
+    ничего в боте не трогает, а поля у эндпоинта те же самые.
+    """
     key = os.getenv("OPENAI_API_KEY", "")
     if not key:
         sys.exit(
@@ -295,18 +320,35 @@ def _frame_via_openai(source: pathlib.Path, dest: pathlib.Path) -> None:
         )
     if not COACH_REFERENCE.exists():
         sys.exit(f"Нет эталона тренера: {COACH_REFERENCE}")
-    client = OpenAI(api_key=key)
+    body, boundary = _multipart(
+        {
+            "model": OPENAI_FRAME_MODEL,
+            "prompt": f"{TWO_IMAGE_INSTRUCTION} {CHARACTER}",
+            "size": "1024x1024",
+            "n": "1",
+        },
+        # Порядок значим: промпт ссылается на «первую» и «вторую» картинку.
+        [("image[]", COACH_REFERENCE), ("image[]", source)],
+    )
+    req = urllib.request.Request(
+        OPENAI_IMAGE_EDIT_URL,
+        data=body,
+        headers={
+            "Authorization": f"Bearer {key}",
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+        },
+        method="POST",
+    )
     try:
-        with open(COACH_REFERENCE, "rb") as reference, open(source, "rb") as pose:
-            result = client.images.edit(
-                model=OPENAI_FRAME_MODEL,
-                image=[reference, pose],
-                prompt=f"{TWO_IMAGE_INSTRUCTION} {CHARACTER}",
-                size="1024x1024",
-            )
-    except Exception as e:  # SDK кидает своё дерево исключений; нам нужен текст
-        raise GenError(f"OpenAI: {e}") from e
-    dest.write_bytes(base64.b64decode(result.data[0].b64_json))
+        with urllib.request.urlopen(req, timeout=300) as resp:
+            payload = json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        raise GenError(f"OpenAI HTTP {e.code}\n{e.read().decode(errors='replace')}") from e
+    try:
+        image_b64 = payload["data"][0]["b64_json"]
+    except (KeyError, IndexError) as e:
+        raise GenError(f"OpenAI: ответ без картинки: {json.dumps(payload)[:400]}") from e
+    dest.write_bytes(base64.b64decode(image_b64))
 
 
 def _print_frame_request(source: pathlib.Path) -> None:
