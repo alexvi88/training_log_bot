@@ -4,5 +4,15 @@
   "test.greeting_gendered": "{g, select, male{He did} female{She did} other{The athlete did}} a workout",
   "screen.language.button": "Language",
   "screen.language.title": "🌐 Pick your language.",
-  "screen.language.set_alert": "Switched to English."
+  "screen.language.set_alert": "Switched to English.",
+  "bot.description": "YO ATHLETE! READY TO TRAIN?\n\nWorkout log, records, a program, a breakdown of your history — all on me.\nThe iron's on you.",
+  "bot.short_description": "Workout log with an AI coach: sets, records, programs. I keep the log — you lift.",
+  "bot.commands.start": "Open the main menu",
+  "bot.commands.help": "How to log a set",
+  "bot.commands.ai_trainer": "AI coach",
+  "bot.commands.food_diary": "Food log",
+  "bot.commands.feedback": "Feedback / bug / idea",
+  "bot.commands.mcp": "Connect your data to Claude and ChatGPT",
+  "bot.commands.game": "Mini-games",
+  "bot.commands.community": "Athletes' chat"
 }

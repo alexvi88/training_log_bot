@@ -99,6 +99,6 @@ async def test_cmd_community_without_url_says_so(fresh_db, user_id, monkeypatch)
 
 def test_slash_menu_lists_community_only_when_it_leads_somewhere(monkeypatch):
     monkeypatch.setattr(config, "COMMUNITY_CHAT_URL", "")
-    assert "community" not in [c.command for c in main._public_commands()]
+    assert "community" not in [c.command for c in main._public_commands("ru")]
     monkeypatch.setattr(config, "COMMUNITY_CHAT_URL", CHAT_URL)
-    assert "community" in [c.command for c in main._public_commands()]
+    assert "community" in [c.command for c in main._public_commands("ru")]

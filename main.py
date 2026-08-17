@@ -292,37 +292,50 @@ def setup_routers(dp: Dispatcher) -> None:
     dp.include_router(fallback.router)
 
 
-def _public_commands() -> list[BotCommand]:
+def _public_commands(lang: str) -> list[BotCommand]:
+    # Тексты — из каталога (locales/*.json, ключи bot.commands.*), а не
+    # литералами: их вычитывают вместе с остальными пользовательскими
+    # текстами, и расхождение между ru/en видно глазом прямо в JSON.
     commands = [
-        BotCommand(command="start", description="Открыть главное меню"),
-        BotCommand(command="help", description="Как вводить подходы"),
-        BotCommand(command="ai_trainer", description="AI-тренер"),
-        BotCommand(command="food_diary", description="Дневник еды"),
-        BotCommand(command="feedback", description="Отзыв / баг / идея"),
+        BotCommand(command="start", description=i18n.t_in(lang, "bot.commands.start")),
+        BotCommand(command="help", description=i18n.t_in(lang, "bot.commands.help")),
+        BotCommand(command="ai_trainer", description=i18n.t_in(lang, "bot.commands.ai_trainer")),
+        BotCommand(command="food_diary", description=i18n.t_in(lang, "bot.commands.food_diary")),
+        BotCommand(command="feedback", description=i18n.t_in(lang, "bot.commands.feedback")),
     ]
     # Только когда MCP реально куда-то ведёт: команда в «/»-меню обещает
     # работающую функцию, а без публичного адреса обещать нечего. /game
     # раздаёт страница того же сервера (см. handlers/game.game_url), так что
     # условие общее.
     if config.mcp_available():
-        commands.append(BotCommand(command="mcp", description="Подключить данные к Claude и ChatGPT"))
-        commands.append(BotCommand(command="game", description="Мини-игры"))
+        commands.append(BotCommand(command="mcp", description=i18n.t_in(lang, "bot.commands.mcp")))
+        commands.append(BotCommand(command="game", description=i18n.t_in(lang, "bot.commands.game")))
     # Та же логика: команда обещает работающий вход, а без адреса группы вести
     # некуда (см. handlers/community.py).
     if config.community_available():
-        commands.append(BotCommand(command="community", description="Чат атлетов"))
+        commands.append(BotCommand(command="community", description=i18n.t_in(lang, "bot.commands.community")))
     return commands
 
 
 async def _setup_commands(bot: Bot) -> None:
     """Whose "/" menu lists what — the default list doubles as the bot's
     advertised feature set, so anything reachable from the main menu belongs
-    in it."""
-    await bot.set_my_commands(_public_commands(), scope=BotCommandScopeDefault())
+    in it.
+
+    Как и bot_profile.sync_bot_profile: Telegram выбирает «/»-меню по
+    системному языку клиента, а не по нашей колонке users.lang, и заливается
+    это один раз при старте, отдельно на каждый language_code. Вызов БЕЗ
+    language_code — дефолт (русский, видят все языки без своего варианта), а
+    с language_code="en" — отдельный вариант для англоязычных.
+    """
+    await bot.set_my_commands(_public_commands("ru"), scope=BotCommandScopeDefault())
+    await bot.set_my_commands(_public_commands("en"), scope=BotCommandScopeDefault(), language_code="en")
     if config.ADMIN_ID is not None:
+        # Админский список — навсегда по-русски (аудитория: один человек,
+        # разработчик), поэтому language_code тут не нужен.
         await bot.set_my_commands(
             [
-                *_public_commands(),
+                *_public_commands("ru"),
                 BotCommand(command="check_users", description="Список пользователей (админ)"),
                 BotCommand(command="ai_dialogs", description="Диалоги с AI-тренером (админ)"),
                 BotCommand(command="pushes", description="Лог отправленных пушей (админ)"),

@@ -5,5 +5,15 @@
   "test.ru_only": "Только в русском каталоге",
   "screen.language.button": "Язык",
   "screen.language.title": "🌐 На каком языке тебе удобнее?",
-  "screen.language.set_alert": "Переключил на русский."
+  "screen.language.set_alert": "Переключил на русский.",
+  "bot.description": "ПРИВЕТ АТЛЕТ! НАЧНЁМ ТРЕНИРОВКУ?\n\nДневник тренировок, рекорды, программа, разбор твоей истории — всё на мне.\nЖелезо — на тебе.",
+  "bot.short_description": "Дневник тренировок с AI-тренером: подходы, рекорды, программы. Веду сам — тренируешься ты.",
+  "bot.commands.start": "Открыть главное меню",
+  "bot.commands.help": "Как вводить подходы",
+  "bot.commands.ai_trainer": "AI-тренер",
+  "bot.commands.food_diary": "Дневник еды",
+  "bot.commands.feedback": "Отзыв / баг / идея",
+  "bot.commands.mcp": "Подключить данные к Claude и ChatGPT",
+  "bot.commands.game": "Мини-игры",
+  "bot.commands.community": "Чат атлетов"
 }
