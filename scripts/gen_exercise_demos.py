@@ -12,6 +12,7 @@
 Как устроено — четыре стадии, каждая запускается отдельно:
 
     frames   эталон тренера + готовые фото старт/конец → те же позы, но им
+             (позу с фото сперва читает vision-модель, кэш — exercise_poses.json)
     video    два кадра → клип движения между ними
     loop     клип → бесшовный повтор вниз-вверх, 480p, без звука (ffmpeg)
     install  принятый клип → media/exercises/<slug>_demo.mp4
@@ -21,10 +22,20 @@
 платить за заведомый брак. Поэтому кадры проверяются глазами до `video`, а
 клип — до `install`.
 
-Позы берутся с существующих фото (image-to-image), а не выдумываются по
-тексту: биомеханику генератор врёт уверенно и красиво, а демонстрация с
-неправильной техникой хуже честного стокового фото. С фото приходит поза,
-из промпта — только персонаж и рисовка.
+Позы берутся с существующих фото, а не выдумываются по тексту: биомеханику
+генератор врёт уверенно и красиво, а демонстрация с неправильной техникой хуже
+честного стокового фото.
+
+Но одной картинки мало — первый живой прогон это показал. Исходником стартового
+кадра приседа был мужик, стоящий в полный рост, а нарисовался присед в нижней
+точке: фото модель посмотрела, а нарисовала «присед вообще». Оба кадра вышли
+одной и той же нижней точкой, движения между ними ноль, и клипу браться неоткуда.
+Поэтому позу с фото сначала читает vision-модель, и в рисование она едет ещё и
+фразой — текст модель слушается, картинку по настроению.
+
+Второй кадр рисуется от ПЕРВОГО, а не от аватарки: иначе одежда, обувь и
+крупность выводятся заново и меняются прямо посреди повтора (в первом прогоне
+золотые авиаторы стали чёрными, а белые кроссовки — чёрными).
 
 Примеры:
 
@@ -129,17 +140,41 @@ POSE_INSTRUCTION = (
 # в сотню похожих мужиков; тот самый тренер получается только с его же кадром
 # на входе. Файл — эталон из TONE_OF_VOICE.md, тот же, что под пушами.
 COACH_REFERENCE = ROOT / "media" / "push" / "coach_incoming_call.jpg"
-TWO_IMAGE_INSTRUCTION = (
-    "The FIRST image is the character reference: this exact man, his face, "
-    "build, sunglasses, chain, clothes and the drawing style are what the "
-    "result must look like. The SECOND image is the pose reference: copy its "
-    "body pose, camera angle, limb positions and equipment exactly. "
-    "Draw the man from the first image performing the pose from the second."
+
+# Поза уходит и картинкой, и СЛОВАМИ. Первый живой прогон показал, зачем:
+# на приседе исходником был мужик, стоящий в полный рост, а нарисовался присед
+# в нижней точке — фото модель посмотрела, но нарисовала «ну, присед вообще».
+# Оба кадра вышли одинаковой нижней точкой, то есть движения между ними ноль
+# и клипу браться неоткуда. Текст модель слушается, картинку — по настроению,
+# поэтому позу с фото сперва читает vision-модель (стадия poses), а в рисование
+# она едет уже фразой.
+FRAME_INSTRUCTION = (
+    "The FIRST image is the character, style and framing reference: this exact "
+    "man — his face, build, sunglasses, chain, tank top, shorts, shoes — the "
+    "drawing style, the gym around him and the camera distance must all stay "
+    "identical. Only his body position changes. The SECOND image is the pose "
+    "reference. Copy its body pose, camera angle, limb positions and equipment "
+    "exactly; the pose is the source of truth, do not correct or improve it. "
+    "Show the whole body from head to feet. The pose to draw is: "
 )
 
 OPENAI_FRAME_MODEL = os.getenv("OPENAI_FRAME_MODEL", "gpt-image-1")
 OPENAI_IMAGE_EDIT_URL = os.getenv(
     "OPENAI_IMAGE_EDIT_URL", "https://api.openai.com/v1/images/edits"
+)
+OPENAI_CHAT_URL = os.getenv("OPENAI_CHAT_URL", "https://api.openai.com/v1/chat/completions")
+OPENAI_VISION_MODEL = os.getenv("OPENAI_VISION_MODEL", "gpt-4o-mini")
+
+# Прочитанные позы лежат файлом и коммитятся: читаются один раз, а
+# перегенерировать кадры приходится многократно, и платить за одно и то же
+# чтение каждый раз незачем.
+POSES_PATH = pathlib.Path(__file__).resolve().parent / "exercise_poses.json"
+POSE_QUESTION = (
+    "Describe ONLY the body position of the person in this exercise photo, in "
+    "one English sentence, for an artist who will redraw it. Say whether he is "
+    "standing, sitting or lying, how the legs and arms are bent, where the "
+    "weight is, and how far through the movement he is (start / top / bottom). "
+    "Do not describe the gym, his clothes or his appearance."
 )
 
 # Кем рисуются кадры; ставится флагом --frames-via, по умолчанию OpenAI.
@@ -281,6 +316,78 @@ def _work(slug: str, create: bool = True) -> pathlib.Path:
     return path
 
 
+def _openai_key() -> str:
+    key = os.getenv("OPENAI_API_KEY", "")
+    if not key:
+        sys.exit(
+            "Нет OPENAI_API_KEY в окружении. Это тот же ключ, которым бот "
+            "расшифровывает голосовые. Либо переключись: --frames-via novita."
+        )
+    return key
+
+
+def _read_pose(photo: pathlib.Path) -> str:
+    """Что за поза на фото — одной фразой, глазами vision-модели.
+
+    Читается по самому фото, а не сочиняется по названию упражнения: фото и
+    есть источник правды про технику, а словами оно становится только чтобы
+    рисующая модель его наконец услышала.
+    """
+    payload = {
+        "model": OPENAI_VISION_MODEL,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": POSE_QUESTION},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{_b64(photo)}"},
+                    },
+                ],
+            }
+        ],
+    }
+    body = json.dumps(payload).encode()
+    req = urllib.request.Request(
+        OPENAI_CHAT_URL,
+        data=body,
+        headers={
+            "Authorization": f"Bearer {_openai_key()}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            answer = json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        raise GenError(f"OpenAI HTTP {e.code}\n{e.read().decode(errors='replace')}") from e
+    return answer["choices"][0]["message"]["content"].strip()
+
+
+def _load_poses() -> dict[str, str]:
+    if POSES_PATH.exists():
+        return json.loads(POSES_PATH.read_text())
+    return {}
+
+
+def _ensure_poses(slug: str, dry_run: bool, force: bool) -> dict[str, str]:
+    """Позы обоих кадров упражнения, читая недостающие и складывая в файл."""
+    poses = _load_poses()
+    for index in (1, 2):
+        key = f"{slug}_{index}"
+        if key in poses and not force:
+            continue
+        if dry_run:
+            poses[key] = f"<описание позы с {slug}_{index}.jpg>"
+            continue
+        print(f"    читаю позу с {slug}_{index}.jpg")
+        poses[key] = _read_pose(MEDIA_DIR / f"{slug}_{index}.jpg")
+        POSES_PATH.write_text(json.dumps(poses, indent=2, ensure_ascii=False, sort_keys=True))
+    return poses
+
+
 def _multipart(fields: dict[str, str], files: list[tuple[str, pathlib.Path]]) -> tuple[bytes, str]:
     """Тело multipart/form-data. Граница фиксированная: случайность тут ничего
     не даёт, а воспроизводимый запрос удобнее отлаживать."""
@@ -299,12 +406,19 @@ def _multipart(fields: dict[str, str], files: list[tuple[str, pathlib.Path]]) ->
     return bytes(body), boundary
 
 
-def _frame_via_openai(source: pathlib.Path, dest: pathlib.Path) -> None:
-    """Кадр через gpt-image-1: эталон тренера и поза уходят двумя картинками.
+def _frame_prompt(pose: str) -> str:
+    return f"{FRAME_INSTRUCTION}{pose} {CHARACTER}"
 
-    Модель, в отличие от обычного img2img, принимает НАБОР изображений и умеет
-    держать инструкцию «этот человек в этой позе» — весь замысел держится ровно
-    на ней.
+
+def _frame_via_openai(
+    reference: pathlib.Path, source: pathlib.Path, pose: str, dest: pathlib.Path
+) -> None:
+    """Кадр через gpt-image-1: эталон и поза уходят двумя картинками плюс фразой.
+
+    `reference` — не всегда аватарка. Второй кадр упражнения рисуется от ПЕРВОГО,
+    уже принятого: иначе от аватарки заново выводятся очки, кроссовки и крупность,
+    и посреди повтора они менялись бы прямо в кадре (в первом прогоне менялись:
+    золотые авиаторы становились чёрными, белые кроссовки — чёрными).
 
     Запрос собирается руками, мимо пакета openai: в проекте он пришпилен к
     1.57.0, а тот отвергает список в `image` ещё на своей стороне
@@ -312,23 +426,18 @@ def _frame_via_openai(source: pathlib.Path, dest: pathlib.Path) -> None:
     ради офлайн-скрипта — менять зависимость работающего бота; HTTP-вызов же
     ничего в боте не трогает, а поля у эндпоинта те же самые.
     """
-    key = os.getenv("OPENAI_API_KEY", "")
-    if not key:
-        sys.exit(
-            "Нет OPENAI_API_KEY в окружении. Это тот же ключ, которым бот "
-            "расшифровывает голосовые. Либо переключись: --frames-via novita."
-        )
-    if not COACH_REFERENCE.exists():
-        sys.exit(f"Нет эталона тренера: {COACH_REFERENCE}")
+    key = _openai_key()
+    if not reference.exists():
+        sys.exit(f"Нет эталона для кадра: {reference}")
     body, boundary = _multipart(
         {
             "model": OPENAI_FRAME_MODEL,
-            "prompt": f"{TWO_IMAGE_INSTRUCTION} {CHARACTER}",
+            "prompt": _frame_prompt(pose),
             "size": "1024x1024",
             "n": "1",
         },
         # Порядок значим: промпт ссылается на «первую» и «вторую» картинку.
-        [("image[]", COACH_REFERENCE), ("image[]", source)],
+        [("image[]", reference), ("image[]", source)],
     )
     req = urllib.request.Request(
         OPENAI_IMAGE_EDIT_URL,
@@ -351,14 +460,15 @@ def _frame_via_openai(source: pathlib.Path, dest: pathlib.Path) -> None:
     dest.write_bytes(base64.b64decode(image_b64))
 
 
-def _print_frame_request(source: pathlib.Path) -> None:
+def _print_frame_request(reference: pathlib.Path, source: pathlib.Path, pose: str) -> None:
     """Сухой прогон. Промпт персонажа один на все упражнения и длинный — целиком
     он занял бы весь экран по два раза на упражнение."""
     prompt_note = f"…инструкция + CHARACTER ({len(CHARACTER)} симв.)"
     if FRAMES_VIA == "openai":
-        print(f"    images.edit, model={OPENAI_FRAME_MODEL}")
-        print(f"    image=[{COACH_REFERENCE.name} (эталон), {source.name} (поза)]")
-        print(f"    prompt={TWO_IMAGE_INSTRUCTION[:60]}{prompt_note}")
+        print(f"    POST {OPENAI_IMAGE_EDIT_URL}, model={OPENAI_FRAME_MODEL}")
+        print(f"    image=[{reference.name} (эталон), {source.name} (поза)]")
+        print(f"    поза словами: {pose}")
+        print(f"    prompt={FRAME_INSTRUCTION[:60]}{prompt_note}")
         return
     payload = _frame_payload(source)
     payload["request"] = dict(
@@ -373,25 +483,32 @@ def _print_frame_request(source: pathlib.Path) -> None:
 def cmd_frames(exercise: str, dry_run: bool, force: bool) -> None:
     slug = _slug(exercise)
     work = _work(slug, create=not dry_run)
+    poses = _ensure_poses(slug, dry_run, force=False)
     sources = [MEDIA_DIR / f"{slug}_1.jpg", MEDIA_DIR / f"{slug}_2.jpg"]
-    for source, name in zip(sources, ("start.jpg", "end.jpg"), strict=True):
+    for index, (source, name) in enumerate(zip(sources, ("start.jpg", "end.jpg"), strict=True), 1):
         dest = work / name
+        # Второй кадр наследует персонажа от первого, а не от аватарки: так
+        # одежда, обувь, зал и крупность гарантированно те же, и между кадрами
+        # меняется только тело.
+        reference = COACH_REFERENCE if index == 1 else work / "start.jpg"
+        pose = poses.get(f"{slug}_{index}", "")
         if dest.exists() and not force:
             print(f"  {name}: уже есть, пропускаю (--force чтобы перегенерить)")
             continue
-        print(f"  {name}: {source.name} + эталон тренера → кадр")
+        print(f"  {name}: {source.name} + {reference.name} → кадр")
         if dry_run:
-            _print_frame_request(source)
+            _print_frame_request(reference, source, pose)
             continue
         if FRAMES_VIA == "openai":
-            _frame_via_openai(source, dest)
+            _frame_via_openai(reference, source, pose, dest)
         else:
             task_id = _start_task(NOVITA_FRAME_PATH, _frame_payload(source))
             _download(_wait_for_task(task_id)[0], dest)
         print(f"    готово: {dest}")
     if not dry_run:
         print(f"  Посмотри оба кадра глазами: {work}")
-        print("  Поза кривая — перегенери: frames --force. Всё честно — гони video.")
+        print("  Позы должны ОТЛИЧАТЬСЯ — это начало и конец движения.")
+        print("  Кривой кадр — перегенери: frames --force. Оба честные — гони video.")
 
 
 def cmd_video(exercise: str, dry_run: bool, force: bool) -> None:
