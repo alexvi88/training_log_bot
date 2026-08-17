@@ -190,16 +190,16 @@ async def _send_sticky_photo(bot, chat_id: int, ex) -> list[int]:
             chat_id=chat_id, photo=ex["custom_photo_file_id"], caption=caption, parse_mode="HTML"
         )
         return [sent.message_id]
-    clip = exercise_media.get_animation_for(ex)
-    if clip:
-        sent = await bot.send_animation(
+    collage = exercise_media.get_collage_for(ex)
+    if collage:
+        sent = await bot.send_photo(
             chat_id=chat_id,
-            animation=exercise_media.cached_file_id(clip) or FSInputFile(clip),
+            photo=exercise_media.cached_file_id(collage) or FSInputFile(collage),
             caption=caption,
             parse_mode="HTML",
         )
-        animation = getattr(sent, "animation", None)
-        exercise_media.remember_file_id(clip, getattr(animation, "file_id", None))
+        photos = getattr(sent, "photo", None)
+        exercise_media.remember_file_id(collage, photos[-1].file_id if photos else None)
         return [sent.message_id]
     images = exercise_media.get_images_for(ex)
     if not images:
