@@ -283,7 +283,9 @@ async def test_describe_only_uses_the_no_macros_prompt(monkeypatch, user_id):
         with_macros=False,
     )
 
-    assert captured["messages"][0]["content"] == ai_trainer.FOOD_DESCRIBE_SYSTEM_PROMPT
+    assert captured["messages"][0]["content"] == ai_trainer._with_language_tail(
+        ai_trainer.FOOD_DESCRIBE_SYSTEM_PROMPT
+    )
     assert result == {
         "is_food": True, "description": "Протеин Whey — 30 г", "items": [],
         "calories": None, "protein": None, "fat": None, "carbs": None, "comment": "",

@@ -1330,8 +1330,12 @@ async def test_the_system_prompt_carries_no_date():
     сообщение запроса, общее для ВСЕХ пользователей и КАЖДОГО хода. Смена даты
     раз в сутки рвала кэшированный префикс целиком (шапка + вся история)
     сразу у всех. Промпт теперь принимает ноль аргументов и байт-в-байт
-    одинаков в любой день — дата уезжает отдельно, см. _ask_plain."""
-    assert ai_trainer._system_prompt() == ai_trainer.SYSTEM_PROMPT
+    одинаков в любой день — дата уезжает отдельно, см. _ask_plain.
+
+    Языковой хвост (см. ai_trainer._with_language_tail) на этот инвариант не
+    влияет: он тоже не зависит от даты, только от i18n.get_lang().
+    """
+    assert ai_trainer._system_prompt() == ai_trainer._with_language_tail(ai_trainer.SYSTEM_PROMPT)
     assert "Сегодня" not in ai_trainer._system_prompt()
 
 

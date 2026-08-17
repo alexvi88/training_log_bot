@@ -15,5 +15,15 @@
   "bot.commands.feedback": "Отзыв / баг / идея",
   "bot.commands.mcp": "Подключить данные к Claude и ChatGPT",
   "bot.commands.game": "Мини-игры",
-  "bot.commands.community": "Чат атлетов"
+  "bot.commands.community": "Чат атлетов",
+  "ai.language_tail": "Отвечай ТОЛЬКО по-русски — никогда не переключайся на украинский или любой другой язык, даже одним словом внутри русской фразы. Английские термины (названия упражнений, единицы, имена приёмов) — нормальная лексика зала, это не нарушение.",
+  "ai.video.verdict_ok": "чисто",
+  "ai.video.verdict_issue": "ОТКЛОНЕНИЕ",
+  "ai.video.verdict_skipped": "не смотрели",
+  "ai.video.confidence_high": "высокая",
+  "ai.video.confidence_medium": "средняя",
+  "ai.video.confidence_low": "низкая",
+  "ai.video.severity_blocking": "мешает",
+  "ai.video.severity_worth_fixing": "стоит поправить",
+  "ai.video.severity_minor": "мелочь"
 }

@@ -47,6 +47,7 @@ import analytics
 import config
 import db
 import formatting
+import i18n
 import timeutil
 import view_builder
 from seed_data import EXERCISE_TEMPLATES
@@ -795,11 +796,7 @@ archive_exercises). Если из фразы не ясно — спроси, а 
 нужен, не вызывай его на всякий случай.
 
 Правила ответа:
-- Отвечай ТОЛЬКО по-русски — никогда не переключайся на украинский или любой
-  другой язык, даже одним словом внутри русской фразы. Английские термины
-  (названия упражнений, единицы, имена приёмов) — нормальная лексика зала, это
-  не нарушение.
-- Отвечай по-русски, на «ты» — суровый, но поддерживающий тренер из подвального зала:
+- Обращайся неформально, на «ты» — суровый, но поддерживающий тренер из подвального зала:
   прямо, тепло и с юмором, свой в доску, топишь за пользователя. БЕЗ токсичности,
   сарказма и шейминга (не давишь виной за пропуски, малый объём, лёгкий вес и т.п.) —
   подкалываешь по-доброму, а не унижаешь. Примеры тона (не копируй дословно,
@@ -891,8 +888,36 @@ async def _user_today(user_id: int) -> dt.date:
     return timeutil.user_today(await db.get_user(user_id))
 
 
+def _with_language_tail(prompt: str) -> str:
+    """Приклеивает к любому системному промпту языковую директиву — строго В
+    КОНЕЦ, не в начало и не в середину. Единственная точка, откуда язык попадает
+    в промпт: остальной код зовёт эту функцию, а не пишет "по-русски"/"in English"
+    сам по месту, — так этот приём невозможно случайно обойти.
+
+    ПОЧЕМУ ИМЕННО В ХВОСТЕ. Кэшированный вход у xAI в 6.7 раза дешевле обычного,
+    но кэш живёт только на НЕИЗМЕННОМ префиксе (см. CLAUDE.md, «Сколько это
+    стоит»). Языковая директива в начале или середине промпта расщепила бы кэш
+    на ru/en с самого первого токена — и переплачивали бы ВСЕ пользователи,
+    включая русскоязычное большинство, у которого язык и так дефолтный. В
+    хвосте общий префикс (сам текст промпта, схемы инструментов, история
+    разговора) остаётся одним и тем же набором токенов независимо от языка, и
+    лишний десяток токенов на маленький хвост платит только тот, у кого язык не
+    дефолтный (en) — это и есть то самое "и платят только те, у кого язык не
+    дефолтный" из CLAUDE.md.
+
+    Язык берётся из i18n.get_lang() — контекст ДОЛЖЕН быть выставлен до вызова.
+    В хендлерах это уже сделал aiogram-middleware (см. main.py). В фоновых
+    джобах без апдейта (недельный дайджест, комментарий к тренировке) полагаться
+    на контекст молча нельзя — там язык явно берётся из базы для конкретного
+    user_id и оборачивается в i18n.use_lang(...) (см. comment_on_workout,
+    weekly_digest).
+    """
+    return f"{prompt}\n\n{i18n.t('ai.language_tail')}"
+
+
 def _system_prompt() -> str:
-    """Системный промпт основного чата — байт-в-байт одинаковый у всех вопросов.
+    """Системный промпт основного чата — байт-в-байт одинаковый у ВСЕХ вопросов
+    одного языка (см. _with_language_tail, почему не байт-в-байт между языками).
 
     Раньше сюда вклеивалась дата («Сегодня …»), а это самое первое сообщение
     запроса — общее для ВСЕХ пользователей и для КАЖДОГО хода разговора.
@@ -902,7 +927,7 @@ def _system_prompt() -> str:
     конце последнего user-сообщения (см. _ask_plain), а не в системном
     промпте: там она разъезжается по одному ходу за раз, а не по всем сразу.
     """
-    return SYSTEM_PROMPT
+    return _with_language_tail(SYSTEM_PROMPT)
 
 
 SEARCH_SYSTEM_PROMPT = """\
@@ -928,7 +953,10 @@ NO_SEARCH_NEEDED
 
 
 def _search_system_prompt(today: dt.date) -> str:
-    return SEARCH_SYSTEM_PROMPT + f"\nСегодня {today.isoformat()}."
+    # Языковая директива тоже в хвосте (см. _with_language_tail) — находки этого
+    # шага едут контекстом основному тренеру, и на языке пользователя их проще
+    # использовать дословно, не переводя на лету.
+    return _with_language_tail(SEARCH_SYSTEM_PROMPT) + f"\nСегодня {today.isoformat()}."
 
 
 SEARCH_DECISION_SYSTEM_PROMPT = """\
@@ -967,6 +995,9 @@ DATA=NO — только для вопросов об общих знаниях,
 
 
 def _search_decision_system_prompt(today: dt.date) -> str:
+    # Без языкового хвоста намеренно: гейт — чистый классификатор, ответ строго
+    # {"search": ..., "data": ...} по json_schema, живого текста для человека
+    # тут не рождается вообще, переключать язык нечему.
     return SEARCH_DECISION_SYSTEM_PROMPT + f"\nСегодня {today.isoformat()}."
 
 
@@ -1014,7 +1045,7 @@ WORKOUT_COMMENT_SYSTEM_PROMPT = """\
 этой строки — про недельный объём молчи вовсе.
 
 Правила:
-- По-русски, на «ты», тепло и с юмором, свой в доску — без токсичности, сарказма
+- Неформально, на «ты», тепло и с юмором, свой в доску — без токсичности, сарказма
   и шейминга (не давишь виной за пропуски, малый объём, лёгкий вес и т.п.).
 - Называй упражнения ТОЧНО так, как они написаны в карточке (то название, что до
   «[ГРУППА]») — не переводи, не переименовывай, не заменяй своим словом или
@@ -1060,7 +1091,7 @@ FACT_CHECK_SYSTEM_PROMPT = """\
 - Пост про чужой результат — это чужой результат: не переноси его на человека,
   который тебе его переслал, и не смешивай со своими данными о нём (у тебя их
   тут и нет).
-- По-русски, на «ты», уверенно и с юмором, свой в доску — без токсичности и
+- Неформально, на «ты», уверенно и с юмором, свой в доску — без токсичности и
   шейминга (смеёшься над постом, не над человеком, который его переслал).
 - Компактно: 2-5 коротких абзацев или пунктов. Без markdown, без таблиц.
 """
@@ -1097,7 +1128,10 @@ async def fact_check_post(
         # (см. _cache_headers).
         extra_headers=_cache_headers(user_id, scope="fact_check"),
         messages=[
-            {"role": "system", "content": FACT_CHECK_SYSTEM_PROMPT},
+            # Хендлер уже выставил язык через middleware (см. _with_language_tail) —
+            # разбор поста происходит синхронно внутри обработки апдейта, отдельного
+            # похода в базу за lang тут не нужно.
+            {"role": "system", "content": _with_language_tail(FACT_CHECK_SYSTEM_PROMPT)},
             {"role": "user", "content": content},
         ],
     )
@@ -1112,50 +1146,58 @@ async def comment_on_workout(user_id: int, workout_id: int) -> str:
     Данные тренировки уже отрендерены в текст (та же карточка, что видит
     пользователь) и переданы модели напрямую — агентский цикл с инструментами
     тут не нужен, вопрос строго про один известный workout_id.
+
+    Вызывается и из хендлера (history.show_history_item — там аpdate есть, и
+    middleware уже выставил язык), и из фонового таска сразу после завершения
+    тренировки (handlers/workout._attach_ai_comment — по документации это explicit
+    "in the background"). Полагаться на контекст в фоновом пути молча нельзя (см.
+    _with_language_tail), поэтому язык всегда берём явно из user["lang"] и
+    оборачиваем весь запрос в i18n.use_lang(...) — независимо от того, кто позвал.
     """
     workout = await db.get_workout(workout_id)
     if workout is None or workout["user_id"] != user_id:
         return "Тренировка не найдена."
     user = await db.get_user(user_id)
-    started_at = dt.datetime.fromisoformat(workout["started_at"])
-    # mark_records: та же карточка, что видит человек, — включая строки рекордов.
-    # Без них модель хвалила «хороший вес» там, где стоял личный рекорд.
-    blocks = await view_builder.build_block_views(
-        workout_id, user["e1rm_formula"], previous_before=workout["started_at"],
-        mark_records=True,
-    )
-    duration_seconds = await view_builder.workout_duration_seconds(workout)
-    card_text = formatting.build_workout_summary(
-        started_at, blocks, workout["note"], show_extra_stats=bool(user["show_extra_stats"]),
-        duration_seconds=duration_seconds, unit=user["unit"],
-    )
-    # Недельный объём приезжает вместе с карточкой: без него модель судила о нём
-    # по одной тренировке и звала «добрать спину» ровно под диаграммой, где по
-    # спине уже перебор (см. _weekly_volume_lines).
-    card_text += await _weekly_volume_lines(user_id)
+    with i18n.use_lang(user["lang"]):
+        started_at = dt.datetime.fromisoformat(workout["started_at"])
+        # mark_records: та же карточка, что видит человек, — включая строки рекордов.
+        # Без них модель хвалила «хороший вес» там, где стоял личный рекорд.
+        blocks = await view_builder.build_block_views(
+            workout_id, user["e1rm_formula"], previous_before=workout["started_at"],
+            mark_records=True,
+        )
+        duration_seconds = await view_builder.workout_duration_seconds(workout)
+        card_text = formatting.build_workout_summary(
+            started_at, blocks, workout["note"], show_extra_stats=bool(user["show_extra_stats"]),
+            duration_seconds=duration_seconds, unit=user["unit"],
+        )
+        # Недельный объём приезжает вместе с карточкой: без него модель судила о нём
+        # по одной тренировке и звала «добрать спину» ровно под диаграммой, где по
+        # спине уже перебор (см. _weekly_volume_lines).
+        card_text += await _weekly_volume_lines(user_id)
 
-    client = _get_client()
-    response = await paid_call(
-        user_id, None,
-        lambda: client.chat.completions.create(
-            model=config.GROK_MODEL,
-            max_tokens=700,
-            extra_body={"reasoning_effort": config.GROK_QUICK_REASONING_EFFORT},
-            # Свой scope: system-промпт (WORKOUT_COMMENT_SYSTEM_PROMPT) не имеет
-            # ничего общего с шапкой основного чата (ask/_ask_plain) — под тем же
-            # conv-id, что и main, это гарантированный промах по нему на СЛЕДУЮЩИЙ
-            # вопрос тренеру (см. docstring _cache_headers).
-            extra_headers=_cache_headers(user_id, scope="workout_comment"),
-            messages=[
-                {
-                    "role": "system",
-                    "content": WORKOUT_COMMENT_SYSTEM_PROMPT
-                    + f"\nСегодня {timeutil.user_today(user).isoformat()}.",
-                },
-                {"role": "user", "content": card_text},
-            ],
-        ),
-    )
+        client = _get_client()
+        response = await paid_call(
+            user_id, None,
+            lambda: client.chat.completions.create(
+                model=config.GROK_MODEL,
+                max_tokens=700,
+                extra_body={"reasoning_effort": config.GROK_QUICK_REASONING_EFFORT},
+                # Свой scope: system-промпт (WORKOUT_COMMENT_SYSTEM_PROMPT) не имеет
+                # ничего общего с шапкой основного чата (ask/_ask_plain) — под тем же
+                # conv-id, что и main, это гарантированный промах по нему на СЛЕДУЮЩИЙ
+                # вопрос тренеру (см. docstring _cache_headers).
+                extra_headers=_cache_headers(user_id, scope="workout_comment"),
+                messages=[
+                    {
+                        "role": "system",
+                        "content": _with_language_tail(WORKOUT_COMMENT_SYSTEM_PROMPT)
+                        + f"\nСегодня {timeutil.user_today(user).isoformat()}.",
+                    },
+                    {"role": "user", "content": card_text},
+                ],
+            ),
+        )
     text = (response.choices[0].message.content or "").strip()
     return text or "Не получилось сформулировать комментарий, попробуй ещё раз позже."
 
@@ -1203,8 +1245,9 @@ WEEKLY_DIGEST_SYSTEM_PROMPT = """\
 и не выпрашивай.
 
 Напиши короткий еженедельный дайджест-подведение итогов недели. Правила:
-- Начни ровно с «ПРИВЕТ АТЛЕТ! » (с восклицательным знаком, без запятой).
-- По-русски, на «ты», тепло и с юмором, свой в доску — без токсичности и шейминга.
+- Начни ровно с фирменного приветствия НА ЯЗЫКЕ ОТВЕТА, с восклицательным знаком,
+  без запятой внутри: «ПРИВЕТ АТЛЕТ!» по-русски или «YO ATHLETE!» по-английски.
+- Неформально, на «ты», тепло и с юмором, свой в доску — без токсичности и шейминга.
 - Отметь, что зашло (группы в диапазоне, объём), и мягко ткни в 1-2 группы, где мало
   (low) — предложи добрать на следующей неделе. Не ругай за пропуски.
 - Если среди low или high группа "Ноги" — не подавай 12 подходов как жёсткий потолок:
@@ -1223,7 +1266,10 @@ async def weekly_digest(user_id: int) -> Optional[str]:
     tonnage, and workout count. Used by the engagement job's Sunday digest slot.
 
     Фоновая рассылка — молча выходит на HARD-стопе по деньгам, без сообщения:
-    это не ответ на чей-то вопрос, отказывать некому.
+    это не ответ на чей-то вопрос, отказывать некому. Вызывающий (engagement.py)
+    крутит цикл по многим telegram_id БЕЗ единого апдейта — контекста, который
+    выставил бы язык, тут физически нет, поэтому язык берём явно из user["lang"]
+    и оборачиваем в i18n.use_lang(...) (см. _with_language_tail).
     """
     if not is_configured():
         return None
@@ -1233,47 +1279,48 @@ async def weekly_digest(user_id: int) -> Optional[str]:
     if user is None:
         return None
 
-    today = timeutil.user_today(user)
-    dates = [dt.date.fromisoformat(d) for d in await db.list_finished_workout_dates(user_id)]
-    dash = analytics.compute_dashboard(dates, today)
-    vol = await _weekly_volume(user_id)
-    since = (today - dt.timedelta(days=7)).isoformat()
-    tonnage = await db.tonnage_since(user_id, since)
+    with i18n.use_lang(user["lang"]):
+        today = timeutil.user_today(user)
+        dates = [dt.date.fromisoformat(d) for d in await db.list_finished_workout_dates(user_id)]
+        dash = analytics.compute_dashboard(dates, today)
+        vol = await _weekly_volume(user_id)
+        since = (today - dt.timedelta(days=7)).isoformat()
+        tonnage = await db.tonnage_since(user_id, since)
 
-    groups_line = "; ".join(
-        f"{g['group']}: {g['sets']} подходов ({g['status']})" for g in vol["groups"]
-    )
-    summary = (
-        f"Тренировок на этой неделе: {dash.this_week}.\n"
-        f"Суммарный тоннаж за 7 дней: {tonnage:.0f} {user['unit']}.\n"
-        f"Целевой объём на группу: {vol['target_sets_per_group']} подходов/нед.\n"
-        f"Объём по группам: {groups_line}."
-    )
-    food_line = await _weekly_food_summary(user_id)
-    if food_line:
-        summary += "\n" + food_line
-
-    client = _get_client()
-    try:
-        response = await paid_call(
-            user_id, None,
-            lambda: client.chat.completions.create(
-                model=config.GROK_MODEL,
-                max_tokens=500,
-                extra_body={"reasoning_effort": config.GROK_QUICK_REASONING_EFFORT},
-                # Свой scope — WEEKLY_DIGEST_SYSTEM_PROMPT не похож на шапку
-                # основного чата, под общим conv-id вытеснял бы её слот раз в
-                # неделю (см. docstring _cache_headers).
-                extra_headers=_cache_headers(user_id, scope="weekly_digest"),
-                messages=[
-                    {"role": "system", "content": WEEKLY_DIGEST_SYSTEM_PROMPT},
-                    {"role": "user", "content": summary},
-                ],
-            ),
+        groups_line = "; ".join(
+            f"{g['group']}: {g['sets']} подходов ({g['status']})" for g in vol["groups"]
         )
-    except Exception:
-        logger.exception("AI weekly digest generation failed for user %s", user_id)
-        return None
+        summary = (
+            f"Тренировок на этой неделе: {dash.this_week}.\n"
+            f"Суммарный тоннаж за 7 дней: {tonnage:.0f} {user['unit']}.\n"
+            f"Целевой объём на группу: {vol['target_sets_per_group']} подходов/нед.\n"
+            f"Объём по группам: {groups_line}."
+        )
+        food_line = await _weekly_food_summary(user_id)
+        if food_line:
+            summary += "\n" + food_line
+
+        client = _get_client()
+        try:
+            response = await paid_call(
+                user_id, None,
+                lambda: client.chat.completions.create(
+                    model=config.GROK_MODEL,
+                    max_tokens=500,
+                    extra_body={"reasoning_effort": config.GROK_QUICK_REASONING_EFFORT},
+                    # Свой scope — WEEKLY_DIGEST_SYSTEM_PROMPT не похож на шапку
+                    # основного чата, под общим conv-id вытеснял бы её слот раз в
+                    # неделю (см. docstring _cache_headers).
+                    extra_headers=_cache_headers(user_id, scope="weekly_digest"),
+                    messages=[
+                        {"role": "system", "content": _with_language_tail(WEEKLY_DIGEST_SYSTEM_PROMPT)},
+                        {"role": "user", "content": summary},
+                    ],
+                ),
+            )
+        except Exception:
+            logger.exception("AI weekly digest generation failed for user %s", user_id)
+            return None
     text = (response.choices[0].message.content or "").strip()
     return text or None
 
@@ -1300,7 +1347,7 @@ IMPORT_OVERVIEW_SYSTEM_PROMPT = """\
   давно забытое, если оно и правда важное для баланса).
 
 Правила:
-- По-русски, на «ты», тепло и с любопытством — это первое впечатление о новом
+- Неформально, на «ты», тепло и с любопытством — это первое впечатление о новом
   человеке, а не разбор его ошибок.
 - Не выдумывай ничего, чего нет в сводке: ни причин пропусков, ни травм, ни
   планов, которые он не называл. Только то, что видно по датам и числам.
@@ -1419,7 +1466,9 @@ async def import_history_overview(user_id: int) -> Optional[str]:
                 extra_body={"reasoning_effort": config.GROK_QUICK_REASONING_EFFORT},
                 extra_headers=_cache_headers(user_id, scope="import_overview"),
                 messages=[
-                    {"role": "system", "content": IMPORT_OVERVIEW_SYSTEM_PROMPT},
+                    # Вызывается синхронно из хендлера импорта (handlers/csv_import.py) —
+                    # middleware уже выставил язык, отдельный поход в базу не нужен.
+                    {"role": "system", "content": _with_language_tail(IMPORT_OVERVIEW_SYSTEM_PROMPT)},
                     {"role": "user", "content": "\n".join(lines)},
                 ],
             ),
@@ -1461,7 +1510,7 @@ FOOD_ANALYSIS_SYSTEM_PROMPT = """\
 Отвечай ТОЛЬКО одним JSON-объектом, без markdown-обёртки и любого текста вокруг:
 {
   "is_food": true или false,
-  "description": "короткое название приёма пищи, 1 строка, по-русски",
+  "description": "короткое название приёма пищи, 1 строка",
   "items": [
     {"name": "продукт", "portion": "примерная порция, напр. \"150 г\"",
      "calories": число или null, "protein": число (граммы) или null,
@@ -1495,7 +1544,10 @@ FOOD_ANALYSIS_SYSTEM_PROMPT = """\
 - Если человек уже указал вес/калории — используй его цифры, не переоценивай.
 - comment — только если есть что важное сказать (например «порция на глаз, если
   знаешь вес — поправь»). Иначе пустая строка. Без markdown.
-- Всё по-русски.
+- description и comment — единственные текстовые поля здесь, и это то, что
+  ложится в дневник питания НАВСЕГДА: язык для них — тот же, что указан ниже
+  для языка ответа, а не русский по умолчанию. JSON-структура (ключи, true/
+  false, числа) от языка не зависит.
 """
 
 
@@ -1511,7 +1563,7 @@ FOOD_DESCRIBE_SYSTEM_PROMPT = """\
 Отвечай ТОЛЬКО одним JSON-объектом, без markdown-обёртки и текста вокруг:
 {
   "is_food": true или false,
-  "description": "короткое название приёма пищи, 1 строка, по-русски",
+  "description": "короткое название приёма пищи, 1 строка",
   "comment": "одно короткое уточнение или пустая строка"
 }
 
@@ -1529,7 +1581,9 @@ FOOD_DESCRIBE_SYSTEM_PROMPT = """\
   в description, для записи как будто не существовало.
 - comment — только для чего-то ещё, что не влезло в description (не для
   порции/веса — тем место в самом название). Иначе пустая строка.
-- Всё по-русски.
+- description и comment — единственные текстовые поля здесь, и это то, что
+  ложится в дневник питания НАВСЕГДА: язык для них — тот же, что указан ниже
+  для языка ответа, а не русский по умолчанию.
 """
 
 
@@ -1676,8 +1730,13 @@ async def analyze_food(
             extra_headers=_cache_headers(user_id, scope="food"),
             messages=[
                 {
+                    # Оба вызывающих пути (handlers/food_diary.py и tool log_food
+                    # внутри ask()) синхронны относительно апдейта — middleware уже
+                    # выставил язык, отдельный поход в базу не нужен.
                     "role": "system",
-                    "content": FOOD_ANALYSIS_SYSTEM_PROMPT if with_macros else FOOD_DESCRIBE_SYSTEM_PROMPT,
+                    "content": _with_language_tail(
+                        FOOD_ANALYSIS_SYSTEM_PROMPT if with_macros else FOOD_DESCRIBE_SYSTEM_PROMPT
+                    ),
                 },
                 {"role": "user", "content": _plain_user_content("\n\n".join(parts), image_data_url)},
             ],
@@ -2711,6 +2770,11 @@ for _group, _name in EXERCISE_TEMPLATES:
     _CATALOG_BY_GROUP.setdefault(_group, []).append(_name)
 
 _EXERCISE_ALIAS_SYSTEM_PROMPT = (
+    # Без _with_language_tail нарочно: это классификатор, а не разговор с
+    # человеком — ответ строго JSON-пара import_name/catalog_name (см.
+    # _EXERCISE_ALIAS_SCHEMA), catalog_name обязан быть символ-в-символ строкой
+    # ИЗ нашего (русского) каталога упражнений независимо от языка пользователя —
+    # это внутренний протокол сопоставления, а не текст, который кто-то читает.
     "Тебе присылают названия упражнений, которые человек принёс с миграцией из "
     "другого приложения (Hevy, Strong и т.п.) — обычно по-английски, с названием "
     "снаряда в скобках, — и каталог упражнений бота по-русски. Для каждого "

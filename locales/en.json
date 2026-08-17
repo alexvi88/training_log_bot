@@ -14,5 +14,15 @@
   "bot.commands.feedback": "Feedback / bug / idea",
   "bot.commands.mcp": "Connect your data to Claude and ChatGPT",
   "bot.commands.game": "Mini-games",
-  "bot.commands.community": "Athletes' chat"
+  "bot.commands.community": "Athletes' chat",
+  "ai.language_tail": "Reply ONLY in English — never switch to Russian, Ukrainian, or any other language, not even one word inside an English sentence. Terms the user themselves used in another language (an exercise name from the catalog, a unit, a technique term) are normal gym vocabulary, not a violation — keep them as given.",
+  "ai.video.verdict_ok": "clean",
+  "ai.video.verdict_issue": "ISSUE",
+  "ai.video.verdict_skipped": "not checked",
+  "ai.video.confidence_high": "high",
+  "ai.video.confidence_medium": "medium",
+  "ai.video.confidence_low": "low",
+  "ai.video.severity_blocking": "blocking",
+  "ai.video.severity_worth_fixing": "worth fixing",
+  "ai.video.severity_minor": "minor"
 }
