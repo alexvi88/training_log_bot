@@ -1994,7 +1994,7 @@ async def test_feedback_button_with_no_admin_configured_says_what_to_do(
     assert "/feedback" in callback.answer.await_args.args[0]
 
 
-# ---------- «▶️ Начать по ней»: план в работу, программа не заводится ----------
+# ---------- «▶️ Начать тренировку»: план в работу, программа не заводится ----------
 
 
 def _make_train_callback(user_id: int, draft_id: str):

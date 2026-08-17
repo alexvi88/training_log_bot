@@ -1721,71 +1721,124 @@ async def update_user(telegram_id: int, **fields: Any) -> None:
         await conn().commit()
 
 
+# Колонки, по которым строка «принадлежит» атлету. Одно и то же понятие
+# записано в схеме тремя именами (исторически), поэтому перечислены все три —
+# см. _user_scoped_tables.
+_WIPE_USER_COLUMNS = ("user_id", "telegram_id", "owner_id")
+
+# Дети, у которых своей колонки с владельцем нет: они привязаны к тренировке или
+# к шаблону и вычищаются подзапросом — до того, как исчезнет родитель, иначе
+# «чей это подход» уже не спросить. Порядок внутри списка — сверху вниз, от
+# самого дальнего потомка к ближнему, как в discard_workout/delete_routine.
+_WIPE_ORPHAN_DELETES = (
+    "DELETE FROM sets WHERE block_id IN "
+    "(SELECT wb.id FROM workout_blocks wb JOIN workouts w ON w.id = wb.workout_id "
+    "WHERE w.user_id = ?)",
+    "DELETE FROM block_exercises WHERE block_id IN "
+    "(SELECT wb.id FROM workout_blocks wb JOIN workouts w ON w.id = wb.workout_id "
+    "WHERE w.user_id = ?)",
+    "DELETE FROM workout_blocks WHERE workout_id IN "
+    "(SELECT id FROM workouts WHERE user_id = ?)",
+    "DELETE FROM exercise_notes WHERE workout_id IN "
+    "(SELECT id FROM workouts WHERE user_id = ?)",
+    "DELETE FROM routine_exercises WHERE routine_id IN "
+    "(SELECT id FROM routines WHERE user_id = ?)",
+)
+
+
+async def _user_scoped_tables() -> list[tuple[str, str]]:
+    """Все таблицы, где у строки есть хозяин, — прямо из схемы базы, в порядке,
+    в котором их можно удалять.
+
+    Список таблиц раньше был выписан в wipe_user_account руками, и это ровно тот
+    список, который устаревает молча: таблица заводится в схеме, про снос никто
+    не вспоминает, а узнаётся это через месяц по данным, пережившим «снёс
+    целиком». Схема — единственный источник, который не забывает.
+
+    Порядок тоже из схемы, а не из алфавита: `PRAGMA foreign_keys` включён (см.
+    init_db), и удалить программу раньше её дней — это IntegrityError, откат
+    всей транзакции и аккаунт, оставшийся на месте. Поэтому таблица уходит
+    только после всех, кто на неё ссылается. `users` — последней: на неё смотрит
+    «первый ли это /start».
+    """
+    db = conn()
+    cur = await db.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+    )
+    names = sorted(row[0] for row in await cur.fetchall())
+    scoped: dict[str, str] = {}
+    references: dict[str, set[str]] = {}
+    for name in names:
+        cur = await db.execute(f"PRAGMA table_info({name})")
+        columns = {row[1] for row in await cur.fetchall()}
+        for column in _WIPE_USER_COLUMNS:
+            if column in columns:
+                scoped[name] = column
+                break
+        cur = await db.execute(f"PRAGMA foreign_key_list({name})")
+        references[name] = {row[2] for row in await cur.fetchall()}
+
+    ordered: list[tuple[str, str]] = []
+    left = dict(scoped)
+    while left:
+        free = [
+            name for name in left
+            if not any(name in references[other] for other in left if other != name)
+        ]
+        if not free:  # взаимных ссылок в схеме нет, но зациклиться тут нельзя
+            free = sorted(left)
+        # users берём последней из свободных, остальное — алфавитом, чтобы
+        # порядок был один и тот же от запуска к запуску.
+        name = sorted(free, key=lambda n: (n == "users", n))[0]
+        ordered.append((name, left.pop(name)))
+    return ordered
+
+
+async def user_data_left(telegram_id: int) -> dict[str, int]:
+    """Что от атлета осталось в базе — таблица → сколько строк.
+
+    Пустой словарь и есть «снесли целиком». Нужен ровно затем, чтобы после
+    /admin_wipe отвечать по данным, а не по факту «запрос выполнился»: жалоба
+    «снёс историю, а программа осталась» проверяется одним взглядом.
+    """
+    db = conn()
+    left: dict[str, int] = {}
+    for table, column in await _user_scoped_tables():
+        cur = await db.execute(
+            f"SELECT COUNT(*) FROM {table} WHERE {column} = ?", (telegram_id,)
+        )
+        (count,) = await cur.fetchone()
+        if count:
+            left[table] = count
+    return left
+
+
 async def wipe_user_account(telegram_id: int) -> None:
     """Снести аккаунт целиком — включая саму строку `users`, чтобы следующий
     /start увидел человека новичком (см. handlers/workout.cmd_start: «первый ли
     это /start» смотрит ровно на отсутствие этой строки).
 
+    Целиком — это буквально: сначала дети без хозяина (_WIPE_ORPHAN_DELETES),
+    потом каждая таблица схемы, где хозяин есть (_user_scoped_tables). Ничего
+    выписывать руками не нужно — новая таблица с user_id/telegram_id/owner_id
+    попадает под снос сама, тем же вызовом.
+
+    Состояние диалога (черновики, незакрытая тренировка) живёт не в базе, а в
+    файле FSM, и сносится отдельно — fsm_storage.JSONFileStorage.drop_user,
+    вызов рядом в handlers/admin.admin_wipe_go.
+
     Только для админских проверок онбординга на TEST_USER_ID/ADMIN_ID — вызов
     ничем не сдерживается сам по себе, единственная защита сейчас на стороне
-    хендлера (админ и явный выбор из двух аккаунтов). Порядок — дети раньше
-    родителей, тем же способом, что discard_workout/delete_routine.
+    хендлера (админ и явный выбор из двух аккаунтов).
     """
+    scoped = await _user_scoped_tables()
     async with _write_lock:
         db = conn()
         try:
-            await db.execute(
-                "DELETE FROM sets WHERE block_id IN "
-                "(SELECT wb.id FROM workout_blocks wb JOIN workouts w ON w.id = wb.workout_id "
-                "WHERE w.user_id = ?)",
-                (telegram_id,),
-            )
-            await db.execute(
-                "DELETE FROM block_exercises WHERE block_id IN "
-                "(SELECT wb.id FROM workout_blocks wb JOIN workouts w ON w.id = wb.workout_id "
-                "WHERE w.user_id = ?)",
-                (telegram_id,),
-            )
-            await db.execute(
-                "DELETE FROM workout_blocks WHERE workout_id IN "
-                "(SELECT id FROM workouts WHERE user_id = ?)",
-                (telegram_id,),
-            )
-            await db.execute(
-                "DELETE FROM exercise_notes WHERE workout_id IN "
-                "(SELECT id FROM workouts WHERE user_id = ?)",
-                (telegram_id,),
-            )
-            await db.execute("DELETE FROM workouts WHERE user_id = ?", (telegram_id,))
-            await db.execute(
-                "DELETE FROM routine_exercises WHERE routine_id IN "
-                "(SELECT id FROM routines WHERE user_id = ?)",
-                (telegram_id,),
-            )
-            await db.execute("DELETE FROM routines WHERE user_id = ?", (telegram_id,))
-            await db.execute("DELETE FROM programs WHERE user_id = ?", (telegram_id,))
-            await db.execute("DELETE FROM exercises WHERE user_id = ?", (telegram_id,))
-            await db.execute("DELETE FROM muscle_groups WHERE user_id = ?", (telegram_id,))
-            await db.execute("DELETE FROM bodyweight_logs WHERE telegram_id = ?", (telegram_id,))
-            await db.execute("DELETE FROM food_entries WHERE telegram_id = ?", (telegram_id,))
-            await db.execute("DELETE FROM ai_chat_messages WHERE telegram_id = ?", (telegram_id,))
-            await db.execute("DELETE FROM ai_search_usage WHERE telegram_id = ?", (telegram_id,))
-            await db.execute("DELETE FROM ai_question_usage WHERE telegram_id = ?", (telegram_id,))
-            await db.execute("DELETE FROM ai_video_usage WHERE telegram_id = ?", (telegram_id,))
-            await db.execute("DELETE FROM ai_food_usage WHERE telegram_id = ?", (telegram_id,))
-            await db.execute("DELETE FROM ai_limit_ack WHERE telegram_id = ?", (telegram_id,))
-            await db.execute("DELETE FROM pushes WHERE telegram_id = ?", (telegram_id,))
-            await db.execute("DELETE FROM push_rotation WHERE telegram_id = ?", (telegram_id,))
-            await db.execute("DELETE FROM game_results WHERE telegram_id = ?", (telegram_id,))
-            await db.execute("DELETE FROM user_events WHERE telegram_id = ?", (telegram_id,))
-            await db.execute("DELETE FROM shared_items WHERE owner_id = ?", (telegram_id,))
-            await db.execute("DELETE FROM achievements WHERE user_id = ?", (telegram_id,))
-            await db.execute("DELETE FROM cost_events WHERE user_id = ?", (telegram_id,))
-            await db.execute("DELETE FROM mcp_tokens WHERE user_id = ?", (telegram_id,))
-            await db.execute("DELETE FROM oauth_auth_codes WHERE user_id = ?", (telegram_id,))
-            await db.execute("DELETE FROM oauth_tokens WHERE user_id = ?", (telegram_id,))
-            await db.execute("DELETE FROM oauth_link_codes WHERE user_id = ?", (telegram_id,))
-            await db.execute("DELETE FROM users WHERE telegram_id = ?", (telegram_id,))
+            for sql in _WIPE_ORPHAN_DELETES:
+                await db.execute(sql, (telegram_id,))
+            for table, column in scoped:
+                await db.execute(f"DELETE FROM {table} WHERE {column} = ?", (telegram_id,))
             await db.commit()
         except Exception:
             await db.rollback()
