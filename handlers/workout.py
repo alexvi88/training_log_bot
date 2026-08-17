@@ -34,6 +34,7 @@ import db
 import exercise_descriptions
 import exercise_media
 import formatting
+import i18n
 import keyboards
 import timeutil
 import ui
@@ -1077,6 +1078,19 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject 
         await db.set_user_source(
             message.from_user.id, attribution.source, attribution.referrer_id
         )
+        # Тоже только новичку, той же логикой, что и источник выше: у
+        # старожила язык уже осознанно выбран (см. settings.py) или закреплён
+        # прошлой догадкой, и переписывать его новой догадкой из клиента
+        # Telegram нельзя — а вот выставить его новичку самый первый раз
+        # нужно именно здесь, где мы уже точно знаем, что это первый /start.
+        guessed_lang = i18n.normalize(getattr(message.from_user, "language_code", None))
+        await db.set_user_lang(message.from_user.id, guessed_lang)
+        # SetUserLanguageMiddleware (main.py) уже поставил ту же догадку до
+        # хендлера, но по данным, которых тогда ещё не было в базе — здесь
+        # переустанавливаем явно тем же значением, что записали, чтобы контекст
+        # и БД гарантированно совпадали, даже если логика догадки когда-нибудь
+        # разъедется между мидлварью и этим хендлером.
+        i18n.set_lang(guessed_lang)
         # Молча, до приветствия: клавиатура нужна сразу, но новичку нечего
         # рассказывать про «обновил меню» (см. attach_silently), а приветствие
         # должно остаться последним сообщением на экране.

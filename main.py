@@ -24,6 +24,7 @@ import chat_bottom
 import config
 import db
 import engagement
+import i18n
 import keyboards
 from fsm_storage import JSONFileStorage
 from handlers import (
@@ -64,6 +65,41 @@ _BENIGN_BAD_REQUEST_SUBSTRINGS = (
     "message can't be deleted",
     "message can't be edited",
 )
+
+
+class SetUserLanguageMiddleware(BaseMiddleware):
+    """Ставит язык рендера (i18n.set_lang) до того, как апдейт дойдёт до
+    любого хендлера или другой middleware, которая может отправить пользователю
+    текст.
+
+    Источник — колонка users.lang, которую пишет только осознанный выбор в
+    экране языка (settings.py) или догадка на первом /start (см.
+    handlers/workout.py, cmd_start). Если пользователя в базе ещё нет — это
+    самый первый /start, запись появится только внутри хендлера — берём
+    telegram-овский language_code как временную догадку через i18n.normalize,
+    но НИЧЕГО не пишем в БД: закреплять язык в базе — забота хендлера
+    /start (или явного выбора в settings), не этой мидлвари.
+
+    Да, это лишний db.get_user на каждый апдейт — и это осознанный размен:
+    локальный SQLite и один поиск по первичному ключу стоят дешевле, чем
+    прокидывание языка через сигнатуры всех хендлеров, коллбэков и сборщиков
+    экранов. Альтернатива меряется не этим запросом, а тысячами строк диффа.
+    """
+
+    async def __call__(self, handler, event, data):
+        lang = i18n.DEFAULT_LANG
+        user = getattr(event, "from_user", None)
+        if user is not None:
+            try:
+                row = await db.get_user(user.id)
+            except Exception:
+                # Чтение языка не должно ронять апдейт — молча остаёмся на
+                # дефолте и логируем, чтобы проблему было видно, но не в чате.
+                logger.exception("SetUserLanguageMiddleware: не удалось прочитать пользователя %s", user.id)
+                row = None
+            lang = row["lang"] if row is not None else i18n.normalize(user.language_code)
+        i18n.set_lang(lang)
+        return await handler(event, data)
 
 
 class IgnoreStaleCallbackMiddleware(BaseMiddleware):
@@ -316,6 +352,13 @@ async def main() -> None:
     await bot_profile.sync_bot_profile(bot)
     dp = Dispatcher(storage=JSONFileStorage(config.FSM_STORAGE_PATH))
     dp.errors.register(on_unhandled_error)
+    # Первой из всех outer_middleware: она только выставляет i18n.set_lang и
+    # никогда не шлёт текст сама, а все следующие middleware (RefreshPersistent
+    # MenuMiddleware шлёт «⌨️ Обновил меню», IgnoreStaleCallbackMiddleware может
+    # ответить на колбэк) и все хендлеры должны увидеть уже правильный язык.
+    set_lang_middleware = SetUserLanguageMiddleware()
+    dp.message.outer_middleware(set_lang_middleware)
+    dp.callback_query.outer_middleware(set_lang_middleware)
     dp.message.outer_middleware(chat_bottom.TrackIncomingMessages())
     dp.callback_query.outer_middleware(IgnoreStaleCallbackMiddleware())
     # Лог действий — тоже outer: в него должно попадать и то, чего не поймал ни
