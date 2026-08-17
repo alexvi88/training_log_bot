@@ -8,6 +8,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import formatting
 import i18n
+import seed_data
 
 # Сколько символов названия влезает в кнопку под ответом AI-тренера, не
 # растягивая клавиатуру и не обрезаясь самим Telegram.
@@ -1025,7 +1026,14 @@ def programs_catalog_keyboard(programs) -> InlineKeyboardMarkup:
     """List of ready-made programs; picking one opens its detail screen."""
     b = InlineKeyboardBuilder()
     for p in programs:
-        b.button(text=p["name"], callback_data=f"rt:prog:{p['key']}")
+        # Имя каталожной программы — не текст этой клавиатуры, а данные каталога,
+        # и в WORKOUT_PROGRAMS оно навсегда русское (ключ там же служит
+        # идентификатором). Язык выбирается на рендере, ровно как у групп мышц в
+        # formatting.format_group.
+        b.button(
+            text=seed_data.localized_program_name(p["key"], i18n.get_lang()),
+            callback_data=f"rt:prog:{p['key']}",
+        )
     b.button(text=i18n.t("btn.to_programs"), callback_data="rt:manage")
     b.adjust(1)
     return b.as_markup()

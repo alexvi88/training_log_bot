@@ -556,3 +556,25 @@ def localized_program_day_name(key: str, day_index: int, lang: str) -> str:
     if lang == i18n.DEFAULT_LANG:
         return program["days"][day_index][0]
     return i18n.t_in(lang, f"program.{key}.day.{day_index}.name")
+
+
+# Схема подходов («3×8–12») почти везде language-neutral: цифры, «×» и тире
+# читаются одинаково. Исключение — планка и прочее «на время», где к схеме
+# приписана единица: «3×30–60 сек».
+_TARGET_SECONDS_SUFFIX = " сек"
+
+
+def localized_target(target: str | None, lang: str) -> str | None:
+    """Схема подходов на языке пользователя.
+
+    Возвращает строку как есть во всех случаях, кроме единственного, где в схеме
+    есть слово: секунды. Подменять цифры и «×» нечем и незачем, а «сек» рядом с
+    английским названием упражнения — та же протечка, что и русская группа мышц
+    в теге, только незаметнее: глаз пропускает три буквы в конце строки.
+    """
+    if not target or lang == i18n.DEFAULT_LANG:
+        return target
+    if target.endswith(_TARGET_SECONDS_SUFFIX):
+        base = target[: -len(_TARGET_SECONDS_SUFFIX)]
+        return f"{base} {i18n.t_in(lang, 'program.target.seconds')}"
+    return target

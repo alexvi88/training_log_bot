@@ -386,8 +386,13 @@ async def rt_programs(callback: CallbackQuery, state: FSMContext):
     # какая из них про два вечера в неделю, выяснялось только заходом внутрь
     # каждой. Строка meta у каждой программы уже написана — показываем её
     # списком над кнопками, в том же порядке.
+    lang = i18n.get_lang()
     catalog = "\n".join(
-        f"<b>{escape(p['name'])}</b> — {escape(p['meta'])}" for p in WORKOUT_PROGRAMS
+        "<b>{}</b> — {}".format(
+            escape(seed_data.localized_program_name(p["key"], lang)),
+            escape(seed_data.localized_program_meta(p["key"], lang)),
+        )
+        for p in WORKOUT_PROGRAMS
     )
     text = i18n.t("routine.catalog.intro") + f"\n\n{catalog}"
     kb = keyboards.programs_catalog_keyboard(WORKOUT_PROGRAMS)
@@ -403,19 +408,35 @@ async def rt_program_detail(callback: CallbackQuery, state: FSMContext):
         await callback.answer(i18n.t("routine.alert.catalog_program_not_found"), show_alert=True)
         return
     days = program["days"]
+    lang = i18n.get_lang()
     # Разбор по дням — плоским текстом, без сворачивающегося блока: состав как
     # раз то, по чему решают, брать программу или нет, а тоггл прячет его за
     # лишним тапом (то же самое сделано на экране дней своей программы).
+    #
+    # Всё, что тут показано, — данные каталога, а не текст хендлера: в
+    # WORKOUT_PROGRAMS названия навсегда русские (ключ программы служит там
+    # идентификатором), и язык выбирается на рендере. Упражнения внутри дня
+    # названы каноническими именами шаблонов, поэтому им нужен тот же
+    # localized_exercise_name, что и в пикере каталога.
     day_blocks = [
         "\n".join([
-            f"<b>{escape(day_name)}</b>",
-            *(f"• {escape(ex)} — {escape(target)}" for ex, target in exercises),
+            f"<b>{escape(seed_data.localized_program_day_name(key, i, lang))}</b>",
+            *(
+                "• {} — {}".format(
+                    escape(seed_data.localized_exercise_name(ex, lang)),
+                    escape(seed_data.localized_target(target, lang)),
+                )
+                for ex, target in exercises
+            ),
         ])
-        for day_name, exercises in days
+        for i, (_day_name, exercises) in enumerate(days)
     ]
     text = "\n\n".join([
-        f"✨ <b>{escape(program['name'])}</b>\n<i>{escape(program['meta'])}</i>",
-        escape(program["description"]),
+        "✨ <b>{}</b>\n<i>{}</i>".format(
+            escape(seed_data.localized_program_name(key, lang)),
+            escape(seed_data.localized_program_meta(key, lang)),
+        ),
+        escape(seed_data.localized_program_description(key, lang)),
         f"<b>{i18n.t('btn.program_days', n=len(days))}:</b>\n" + "\n\n".join(day_blocks),
     ])
     kb = keyboards.program_detail_keyboard(key)
@@ -424,12 +445,30 @@ async def rt_program_detail(callback: CallbackQuery, state: FSMContext):
 
 
 async def _instantiate_catalog_program(user_id: int, key: str, name: str) -> int:
+    """Каталожная программа → своя копия в аккаунте пользователя.
+
+    Имена дней и описание пишутся В БАЗУ на языке, который активен сейчас, —
+    это снимок, как и у названия сфорканного упражнения, и потом он не
+    перепереводится: дальше это данные пользователя, он их сам переименовывает.
+    Состав дней передаётся КАНОНИЧЕСКИМИ именами шаблонов, а не переведёнными:
+    db.create_routine_from_program по ним ищет упражнение и форкает шаблон, и
+    английское имя он бы не нашёл.
+    """
+    lang = i18n.get_lang()
     program_id = await db.create_program(
         user_id, name, source="catalog", source_ref=key,
-        description=PROGRAM_BY_KEY[key]["description"],
+        description=seed_data.localized_program_description(key, lang),
     )
-    for day_name, exercises in PROGRAM_BY_KEY[key]["days"]:
-        await db.create_routine_from_program(user_id, day_name, exercises, program_id=program_id)
+    for i, (_day_name, exercises) in enumerate(PROGRAM_BY_KEY[key]["days"]):
+        localized_exercises = [
+            (ex, seed_data.localized_target(target, lang)) for ex, target in exercises
+        ]
+        await db.create_routine_from_program(
+            user_id,
+            seed_data.localized_program_day_name(key, i, lang),
+            localized_exercises,
+            program_id=program_id,
+        )
     return program_id
 
 
@@ -453,11 +492,15 @@ async def rt_program_add(callback: CallbackQuery, state: FSMContext):
         await callback.answer(over_budget, show_alert=True)
         return
 
-    existing = await db.find_program_by_name(user_id, program["name"])
+    # Имя ищем и показываем локализованное: в базу при добавлении легло именно
+    # оно (см. _instantiate_catalog_program), и проверка занятости по русскому
+    # имени у англоязычного не нашла бы его собственную программу.
+    program_name = seed_data.localized_program_name(key, i18n.get_lang())
+    existing = await db.find_program_by_name(user_id, program_name)
     if existing is not None:
         await ui.safe_edit(
             callback,
-            i18n.t("routine.program.already_have", name=escape(program["name"])),
+            i18n.t("routine.program.already_have", name=escape(program_name)),
             reply_markup=keyboards.program_name_taken_keyboard(
                 existing["id"], back_cb=f"rt:prog:{key}", add_cb=f"rt:progadd2:{key}"
             ),
@@ -466,7 +509,7 @@ async def rt_program_add(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
         return
 
-    program_id = await _instantiate_catalog_program(user_id, key, program["name"])
+    program_id = await _instantiate_catalog_program(user_id, key, program_name)
     await callback.answer(i18n.t("routine.program.added", days=i18n.t("btn.program_days", n=len(program["days"]))))
     await _show_program(callback, state, program_id)
 
@@ -485,7 +528,11 @@ async def rt_program_add_copy(callback: CallbackQuery, state: FSMContext):
     if over_budget:
         await callback.answer(over_budget, show_alert=True)
         return
-    name = await db.unique_program_name(user_id, program["name"])
+    # То же локализованное имя, что и при обычном добавлении: вторая копия
+    # каталожной программы обязана называться на языке владельца.
+    name = await db.unique_program_name(
+        user_id, seed_data.localized_program_name(key, i18n.get_lang())
+    )
     program_id = await _instantiate_catalog_program(user_id, key, name)
     await callback.answer(i18n.t("routine.program.added_as", name=name))
     await _show_program(callback, state, program_id)

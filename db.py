@@ -28,7 +28,7 @@ from typing import Any, Optional
 import aiosqlite
 
 import config
-import formatting
+import i18n
 import search_terms
 from seed_data import (
     BODYWEIGHT_TEMPLATES,
@@ -1392,10 +1392,17 @@ def _within_batch(previous, row) -> bool:
 
 
 def _batch_program_name(created_at: str) -> str:
+    """Имя, которым подписывается пачка дней, сохранённых без своего названия.
+
+    Ложится в `programs.name`, то есть становится данными пользователя — берётся
+    на языке, активном в момент создания, и потом не перепереводится: дальше он
+    сам её переименовывает, как и любую свою программу.
+    """
     try:
-        return f"Программа от {dt.datetime.fromisoformat(created_at):%d.%m}"
+        stamp = f"{dt.datetime.fromisoformat(created_at):%d.%m}"
     except ValueError:
-        return "Программа"
+        return i18n.t("program.batch_name_no_date")
+    return i18n.t("program.batch_name", date=stamp)
 
 
 async def _backfill_seeded_from_program() -> None:
@@ -5316,12 +5323,10 @@ async def routine_budget(user_id: int, adding: int, freeing: int = 0) -> Optiona
     existing = await count_routines(user_id)
     if existing - freeing + adding <= config.MAX_ROUTINES_PER_USER:
         return None
-    day_word = formatting.plural_ru(existing, ("день", "дня", "дней"))
-    return (
-        f"У тебя уже {existing} {day_word} в программах — больше "
-        f"{config.MAX_ROUTINES_PER_USER} не влезет. Удали лишние в «🗂 Программы» "
-        "и попробуй ещё раз."
-    )
+    # Текст показывается алертом (callback.answer(..., show_alert=True) у всех
+    # четырёх вызывающих), то есть это экран, а не служебная строка, — язык
+    # берётся из контекста запроса.
+    return i18n.t("limit.routines", existing=existing, cap=config.MAX_ROUTINES_PER_USER)
 
 
 async def set_routine_exercise_target(routine_exercise_id: int, target: Optional[str]) -> None:
