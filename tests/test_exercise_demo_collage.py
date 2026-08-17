@@ -209,21 +209,30 @@ def test_pilot_names_are_real_templates():
         assert exercise in exercise_media.EXERCISE_IMAGE_SLUGS, exercise
 
 
-def test_sheet_request_carries_coach_first_then_the_exercise_photo():
-    """Промпт ссылается на «первую» и «вторую» картинку, поэтому порядок в теле
-    запроса — часть смысла, а не деталь сборки. Перепутать их значит попросить
-    нарисовать зал вокруг фотографии вместо тренера в зале."""
+def test_sheet_request_carries_coach_then_start_then_end():
+    """Промпт адресуется к картинкам по номерам: первая — тренер, вторая —
+    старт движения, третья — конец. Порядок тут часть смысла, а не деталь
+    сборки: перепутать старт с концом значит нарисовать повтор задом наперёд.
+
+    И их именно три. Когда фото было одно, модель рисовала его во всех четырёх
+    клетках — амплитуда выходила нулевой.
+    """
     from scripts import gen_exercise_demos
 
     body, boundary = gen_exercise_demos._multipart(
         {"model": "gpt-image-1"},
         [
             ("image[]", gen_exercise_demos.COACH_REFERENCE),
+            ("image[]", gen_exercise_demos.MEDIA_DIR / "barbell_squat_1.jpg"),
             ("image[]", gen_exercise_demos.MEDIA_DIR / "barbell_squat_2.jpg"),
         ],
     )
-    assert body.count(b'name="image[]"') == 2
-    assert body.index(b"coach_incoming_call.jpg") < body.index(b"barbell_squat_2.jpg")
+    assert body.count(b'name="image[]"') == 3
+    assert (
+        body.index(b"coach_incoming_call.jpg")
+        < body.index(b"barbell_squat_1.jpg")
+        < body.index(b"barbell_squat_2.jpg")
+    )
     assert body.endswith(f"--{boundary}--\r\n".encode())
 
 

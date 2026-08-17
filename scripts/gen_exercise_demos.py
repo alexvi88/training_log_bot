@@ -12,7 +12,7 @@
 
 Стадии две:
 
-    sheet    эталон тренера + фото упражнения → одна картинка, сетка 2×2
+    sheet    эталон тренера + оба фото упражнения → одна картинка, сетка 2×2
     install  принятая картинка → media/exercises/<slug>_demo.jpg
 
 Почему все четыре фазы одним рендером, а не четырьмя запросами: внутри ОДНОЙ
@@ -21,10 +21,15 @@
 между ними менялись очки (золотые авиаторы на чёрные), кроссовки (белые на
 чёрные), стойка и крупность. В сетке это сходится само.
 
-Позу модель берёт с фотографии, но фотографии мало: первый прогон дал присед
-в нижней точке там, где на фото мужик стоит в полный рост. Картинку модель
-смотрит, а рисует по тексту, поэтому позу с фото сперва читает vision-модель,
-и в рисование движение едет ещё и фразой.
+В рисование уходят ОБЕ фотографии упражнения — старт и конец, — и крайние
+клетки сетки привязаны к ним поимённо. С одной только фотографией конца модель
+рисовала её четыре раза подряд: стартовому положению не на что было опереться,
+и амплитуда выходила нулевой.
+
+Плюс движение едет ещё и словами: картинку модель смотрит, а рисует по тексту.
+Первый прогон дал присед в нижней точке там, где на фото мужик стоит в полный
+рост, — поэтому пару фото сперва читает vision-модель, и в промпт попадает
+фраза о том, что и куда сгибается.
 
 Примеры:
 
@@ -101,27 +106,30 @@ COACH_REFERENCE = ROOT / "media" / "push" / "coach_incoming_call.jpg"
 
 SHEET_SIZE = os.getenv("OPENAI_SHEET_SIZE", "1024x1024")
 # Качество прямо влияет на цену: low примерно вчетверо дешевле medium, high —
-# вчетверо дороже medium. По умолчанию low: подбирать промпт и отбраковывать
-# дубли приходится многократно, и платить за это вчетверо незачем. Когда
-# картинка устроит — тот же прогон с --force и OPENAI_SHEET_QUALITY=high.
-SHEET_QUALITY = os.getenv("OPENAI_SHEET_QUALITY", "low")
+# вчетверо дороже medium. Экономить на low не вышло: на нём у тренера пропала
+# золотая цепь, авиаторы стали чёрными очками, а жирный контур поплыл в мазню —
+# то есть по такой картинке нельзя судить даже о том, наш ли это персонаж.
+# Меньше medium не берём; финальный прогон — тем же вызовом с high.
+SHEET_QUALITY = os.getenv("OPENAI_SHEET_QUALITY", "medium")
 SHEET_INSTRUCTION = (
+    "You are given three images. The FIRST is the character: the man to draw. "
+    "The SECOND is a photograph of the START of the movement. The THIRD is a "
+    "photograph of the END of the same movement. "
     "Draw ONE image divided into a grid of 2 columns and 2 rows — four equal "
     "panels, edge to edge, with no borders, no gaps, no numbers and no captions. "
-    "The four panels are four moments of a single repetition of this exercise, in "
-    "order: panel 1 top-left is the very start, panel 2 top-right and panel 3 "
-    "bottom-left are the way there, panel 4 bottom-right is the far end. "
+    "Panel 1, top-left: the man in EXACTLY the body position of the SECOND image. "
+    "Panel 4, bottom-right: the man in EXACTLY the body position of the THIRD "
+    "image. Panels 2 and 3 are two evenly spaced positions on the way from the "
+    "first to the fourth — one a third of the way, one two thirds. "
+    "The four positions must be clearly DIFFERENT from each other: put panel 1 "
+    "and panel 4 side by side and the body must be in obviously different places. "
+    "Four drawings of the same position are wrong, and copying the photographs' "
+    "position into all four panels is wrong. "
     "Between the panels ONLY the body moves: the man, his face, his clothes, his "
     "shoes, the equipment, the gym, the light and the camera position must be "
     "identical in all four, as if a fixed camera shot four frames in a row. "
-    "The man is the character from the FIRST image. The equipment, the gym and "
-    "the camera framing come from the SECOND image, a photograph of this "
-    "exercise; keep its viewpoint, do not restage it. "
-    "Move through the FULL range: panel 1 fully at one end, panel 4 fully at the "
-    "other, evenly spaced in between — not four nearly identical drawings. "
-    "Draw the positions LITERALLY, even when they are not how this exercise is "
-    "usually pictured: if the movement starts standing upright, the knees in "
-    "panel 1 are locked straight and the hips fully extended. "
+    "The gym and the camera framing come from the photographs; keep their "
+    "viewpoint, do not restage them. "
     "The movement, from start to end, is: "
 )
 
@@ -283,17 +291,19 @@ def cmd_sheet(exercise: str, dry_run: bool, force: bool) -> None:
         return
     movement = _movement_for(slug, dry_run, force=False)
     prompt = f"{SHEET_INSTRUCTION}{movement} {CHARACTER}"
-    # Фото конечного положения, а не стартового: у него в кадре видна вся
-    # амплитуда — на стартовом мужик часто просто стоит, и по нему одному не
-    # понять, куда он поедет.
-    pose_photo = MEDIA_DIR / f"{slug}_2.jpg"
+    # ОБЕ фотографии, а не одна. С одним только конечным кадром модель рисовала
+    # его четыре раза подряд: стартовому положению не на что было опереться, и
+    # амплитуда выходила нулевой. Теперь у крайних клеток по своему эталону,
+    # а промежуточные строятся между ними.
+    pose_photos = [MEDIA_DIR / f"{slug}_1.jpg", MEDIA_DIR / f"{slug}_2.jpg"]
     print(f"  {slug}: четыре фазы одной картинкой")
     if dry_run:
         print(
             f"    POST {OPENAI_IMAGE_EDIT_URL}, model={OPENAI_IMAGE_MODEL}, "
             f"size={SHEET_SIZE}, quality={SHEET_QUALITY}"
         )
-        print(f"    image=[{COACH_REFERENCE.name} (тренер), {pose_photo.name} (упражнение)]")
+        shown = ", ".join(p.name for p in pose_photos)
+        print(f"    image=[{COACH_REFERENCE.name} (тренер), {shown} (старт и конец)]")
         print(f"    движение: {movement}")
         return
     if not COACH_REFERENCE.exists():
@@ -306,8 +316,8 @@ def cmd_sheet(exercise: str, dry_run: bool, force: bool) -> None:
             "quality": SHEET_QUALITY,
             "n": "1",
         },
-        # Порядок значим: промпт ссылается на «первую» и «вторую» картинку.
-        [("image[]", COACH_REFERENCE), ("image[]", pose_photo)],
+        # Порядок значим: промпт ссылается на первую, вторую и третью картинку.
+        [("image[]", COACH_REFERENCE), *[("image[]", p) for p in pose_photos]],
     )
     payload = _post(
         OPENAI_IMAGE_EDIT_URL, body, f"multipart/form-data; boundary={boundary}"
