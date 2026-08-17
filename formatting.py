@@ -14,6 +14,7 @@ from aiogram.types import MessageEntity
 
 import config
 import i18n
+import seed_data
 from analytics import (
     RANK_FREQUENCY_WEEKS,
     VOLUME_WINDOW_DAYS,
@@ -134,8 +135,20 @@ def format_group(name: str) -> str:
     heading), never the thing itself — caps read as a tag at a glance and stop
     the group competing with the name next to it. Applied at render time only:
     the stored name keeps whatever case the user typed.
+
+    Язык выбирается здесь же, а не у вызывающих. Группы мышц — глобальные строки
+    (`muscle_groups.user_id IS NULL`), их никогда не форкают в аккаунт, поэтому
+    в базе имя навсегда остаётся русским пресетом, и перевести его можно только
+    на рендере. Единственная точка рендера — вот эта функция, через неё идут и
+    клавиатура выбора группы, и панель объёма, и теги рядом с названием
+    упражнения (format_group_tag). Локализуй у вызывающих — и каждый новый
+    вызов будет молча показывать англоязычному русское слово, что и произошло
+    в трёх местах сразу, пока это жило снаружи.
+
+    Своя группа пользователя слага не имеет и возвращается как есть: это его
+    данные, а не наш пресет.
     """
-    return name.upper()
+    return seed_data.localized_muscle_group_name(name, i18n.get_lang()).upper()
 
 
 def format_group_tag(name: str) -> str:

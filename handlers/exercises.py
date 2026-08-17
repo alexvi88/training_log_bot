@@ -33,12 +33,9 @@ router = Router(name="exercises")
 
 
 def _group_display_name(name: str) -> str:
-    """Group name for display: preset groups (`muscle_groups.user_id IS NULL`)
-    localize through `seed_data.localized_muscle_group_name` the same way a
-    template exercise's name does (see `_template_display_name` below) —
-    the row itself stays Russian forever, only the render picks a language.
-    A user's own custom group has no slug and comes back unchanged."""
-    return formatting.format_group(seed_data.localized_muscle_group_name(name, i18n.get_lang()))
+    """Group name for display. Локализацию делает сам formatting.format_group —
+    там же, где и капс, чтобы ни один вызывающий не мог её забыть."""
+    return formatting.format_group(name)
 
 
 async def _groups_payload(user_id: int):
