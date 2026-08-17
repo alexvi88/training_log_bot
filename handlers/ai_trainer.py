@@ -1503,7 +1503,7 @@ async def ai_program_view(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("ai:prog:train:"))
 async def ai_program_train(callback: CallbackQuery, state: FSMContext):
-    """«▶️ Начать по ней» — тренировка по собранному плану, без сохранения.
+    """«▶️ Начать тренировку» — тренировка по собранному плану, без сохранения.
 
     Единственной дорогой от плана к штанге было «Добавить себе»: чтобы пойти по
     сгенерённому, приходилось сначала завести себе программу навсегда, и разовая

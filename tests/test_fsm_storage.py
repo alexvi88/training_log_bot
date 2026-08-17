@@ -258,3 +258,26 @@ async def test_many_concurrent_writers_do_not_crash_or_lose_updates(tmp_path):
     for uid in range(30):
         assert await storage.get_data(_key(uid)) == {"n": 19}
     assert len(json.loads(path.read_text())) == 30
+
+
+async def test_drop_user_forgets_state_and_data_but_spares_others(tmp_path):
+    """Пара к db.wipe_user_account: после сноса аккаунта от диалога не остаётся
+    ни состояния, ни черновиков — и только у снесённого."""
+    path = tmp_path / "fsm.json"
+    storage = JSONFileStorage(str(path))
+    await storage.set_state(_key(1), _Flow.waiting)
+    await storage.set_data(_key(1), {"ai_program_draft": {"name": "Масса 4× верх/низ"}})
+    await storage.set_data(_key(2), {"ai_program_draft": {"name": "Чужое"}})
+
+    dropped = await storage.drop_user(1)
+
+    assert dropped == 1
+    assert await storage.get_state(_key(1)) is None
+    assert await storage.get_data(_key(1)) == {}
+    assert await storage.get_data(_key(2)) == {"ai_program_draft": {"name": "Чужое"}}
+    # И на диске тоже: файл переживает перезапуск, значит и снос должен.
+    assert json.loads(path.read_text()) == {
+        json.dumps({"bot_id": 1, "business_connection_id": None, "chat_id": 2,
+                    "destiny": "default", "thread_id": None, "user_id": 2}, sort_keys=True):
+        {"data": {"ai_program_draft": {"name": "Чужое"}}},
+    }

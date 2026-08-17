@@ -172,5 +172,28 @@ class JSONFileStorage(BaseStorage):
     async def get_data(self, key: StorageKey) -> dict:
         return dict(self._data.get(_key_to_str(key), {}).get("data", {}))
 
+    async def drop_user(self, user_id: int) -> int:
+        """Забыть про атлета всё, что помнит диалог, — сколько записей снесли.
+
+        Пара к db.wipe_user_account: база чистится, а состояние лежит здесь, в
+        файле, и переживает и снос аккаунта, и перезапуск. Пережившее — это
+        незакрытая тренировка, черновик программы от тренера, отметка «этот день
+        добавляем в такую-то программу»; после «снёс целиком» первый же тап по
+        висящей в чате кнопке возвращал их к жизни, и новичок оказывался с
+        чужими черновиками.
+
+        Ключ — JSON от StorageKey, у него всегда есть user_id; чат и бот в ключе
+        тоже есть, но нам нужен именно человек во всех его чатах.
+        """
+        doomed = [
+            key_str for key_str in self._data
+            if json.loads(key_str).get("user_id") == user_id
+        ]
+        for key_str in doomed:
+            del self._data[key_str]
+        if doomed:
+            await self._save()
+        return len(doomed)
+
     async def close(self) -> None:
         await self._save()

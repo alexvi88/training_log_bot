@@ -1888,7 +1888,7 @@ async def test_prompt_does_not_promise_the_start_button_under_the_message():
     ней» лежат за ней. Человек искал кнопку, которой на экране нет."""
     prompt = ai_trainer.SYSTEM_PROMPT
     assert "Забрать" in prompt, "промпт должен называть кнопку, которая реально есть"
-    assert "не обещай «Начать по ней» прямо под сообщением" in prompt
+    assert "не обещай «Начать тренировку» прямо под сообщением" in prompt
 
 
 async def test_prompt_forbids_promising_an_edit_without_doing_it():

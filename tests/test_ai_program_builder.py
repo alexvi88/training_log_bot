@@ -1105,7 +1105,7 @@ def test_notes_that_do_not_fit_are_counted_not_dropped_silently():
     assert "Жим лёжа" in text
 
 
-# ---------- «▶️ Начать по ней»: тренировка без сохранения ----------
+# ---------- «▶️ Начать тренировку»: тренировка без сохранения ----------
 
 async def test_recovery_tool_gives_the_trainer_what_the_screen_shows(fresh_db, user_id):
     """Тренер про восстановление не знал вообще — при том что «что сегодня
