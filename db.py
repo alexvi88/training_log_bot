@@ -47,6 +47,9 @@ CREATE TABLE IF NOT EXISTS users (
     ai_comments_enabled INTEGER NOT NULL DEFAULT 0,
     progression_hint_enabled INTEGER NOT NULL DEFAULT 1,
     tz_offset INTEGER NOT NULL DEFAULT 0,
+    -- Язык интерфейса. Дефолт 'ru' — вся живая база русскоязычная, угадывать
+    -- язык молча нельзя (см. set_user_lang).
+    lang TEXT NOT NULL DEFAULT 'ru',
     -- Тренировочный профиль. Ровно те пять вводных, которые AI-тренер и так
     -- спрашивает перед сборкой программы (см. ai_trainer._system_prompt) — но
     -- раньше они жили только в переписке, и на следующий раз он спрашивал их
@@ -946,6 +949,11 @@ async def _migrate_schema() -> None:
         await _conn.execute(
             "ALTER TABLE users ADD COLUMN ai_actions_hint_shown INTEGER NOT NULL DEFAULT 0"
         )
+    if "lang" not in user_cols:
+        # Язык интерфейса — для всех, кто зарегистрировался до этой миграции,
+        # дефолт 'ru': вся живая база русскоязычная, молча переключать на
+        # угаданный язык нельзя.
+        await _conn.execute("ALTER TABLE users ADD COLUMN lang TEXT NOT NULL DEFAULT 'ru'")
 
     set_cols = await _column_names("sets")
     if "is_warmup" in set_cols:
@@ -1512,6 +1520,28 @@ async def set_user_source(
         )
         await conn().commit()
     return cur.rowcount > 0
+
+
+async def set_user_lang(telegram_id: int, lang: str) -> None:
+    """Записать язык интерфейса.
+
+    Канонический список языков живёт в `i18n.SUPPORTED`, но сюда не
+    импортируется: db — слой хранения, и тянуть в него слой представления
+    ради кортежа из двух строк значило бы связать их навсегда. Дубль
+    удерживает от расхождения тест (tests/test_user_lang.py), а не надежда.
+
+    Неизвестное значение молча не пишем, а приводим к 'ru': лучше тихо
+    остаться на дефолте, чем положить в базу мусор, который потом всплывёт
+    в рантайме.
+    """
+    if lang not in ("ru", "en"):
+        lang = "ru"
+    async with _write_lock:
+        await conn().execute(
+            "UPDATE users SET lang = ? WHERE telegram_id = ?",
+            (lang, telegram_id),
+        )
+        await conn().commit()
 
 
 # Подзапрос «сколько тренировок человек закрыл и когда последнюю» — общий для
