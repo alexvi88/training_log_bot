@@ -137,3 +137,29 @@ async def test_language_catalog_keys_present_in_both_locales():
     for key in added_keys:
         assert key in ru_catalog, f"{key} отсутствует в locales/ru.json"
         assert key in en_catalog, f"{key} отсутствует в locales/en.json"
+
+
+async def test_switching_language_resends_the_bottom_keyboard(fresh_db, user_id):
+    """Нижняя клавиатура прикрепляется один раз и живёт в чате с теми
+    подписями, что были при отправке. Экраны перерисовываются, а она — нет, и
+    человек оставался с «Workout / Menu / AI Coach» под русским ботом.
+
+    Нажатия при этом работали (BTN_* сравнивают себя со всеми языками сразу),
+    поэтому баг был чисто визуальным — и оттого невидимым для тестов, которые
+    проверяли только то, что кнопка срабатывает.
+    """
+    from aiogram.types import ReplyKeyboardMarkup
+
+    state = await _make_state(user_id)
+    callback = _make_callback(user_id, "settings:langset:en")
+
+    await settings.settings_language_set(callback, state)
+
+    keyboard_calls = [
+        call for call in callback.message.answer.await_args_list
+        if isinstance(call.kwargs.get("reply_markup"), ReplyKeyboardMarkup)
+    ]
+    assert keyboard_calls, "клавиатура не перевыслана — подписи внизу останутся на прежнем языке"
+    labels = [b.text for row in keyboard_calls[-1].kwargs["reply_markup"].keyboard for b in row]
+    assert "Workout" in labels, labels
+    assert not any(re.search("[А-Яа-яЁё]", label) for label in labels), labels

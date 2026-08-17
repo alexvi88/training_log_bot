@@ -359,10 +359,21 @@ async def settings_language_set(callback: CallbackQuery, state: FSMContext):
         # роняем хендлер и не трогаем базу, просто перерисовываем экран как есть.
         await settings_language(callback, state)
         return
+    from handlers.persistent_menu import attach_silently
+
     await db.set_user_lang(callback.from_user.id, lang)
     # Порядок важен: контекст переставляем ДО перерисовки экрана настроек —
     # иначе человек нажмёт English и увидит русский экран (см. задачу).
     i18n.set_lang(lang)
+    # Нижнюю клавиатуру НАДО перевыслать: она прикрепляется один раз и живёт в
+    # чате с теми подписями, что были при отправке. Экраны перерисовываются, а
+    # она — нет, и человек оставался с «Workout / Menu / AI Coach» под русским
+    # ботом. Нажатия при этом работали (BTN_* сравнивают себя со всеми языками
+    # сразу), поэтому баг был чисто визуальным и оттого незаметным в тестах.
+    #
+    # Молча, а не через уведомление мидлвари: человек только что сам сменил
+    # язык и не нуждается в объяснении, почему кнопки стали другими.
+    await attach_silently(callback.message, callback.from_user.id)
     await show_settings(
         callback, state,
         alert=i18n.t_in(lang, "screen.language.set_alert"),

@@ -1190,10 +1190,18 @@ async def onboarding_language_set(callback: CallbackQuery, state: FSMContext):
         # только два рабочих варианта.
         await callback.answer()
         return
+    from handlers.persistent_menu import attach_silently
+
     await db.set_user_lang(callback.from_user.id, lang)
     i18n.set_lang(lang)
     # Клавиатура прикреплена ещё в cmd_start, до экрана выбора языка — см.
-    # комментарий там о том, почему её нельзя откладывать до этого тапа.
+    # комментарий там о том, почему её нельзя откладывать до этого тапа. Но
+    # прикреплена она была по ДОГАДКЕ, а человек только что мог выбрать другое:
+    # с русским телефоном взять English. Подписи внизу живут в чате с теми
+    # словами, что были при отправке, и экраны их не перерисовывают — поэтому
+    # клавиатуру надо переслать, если выбор разошёлся с догадкой.
+    if lang != i18n.normalize(callback.from_user.language_code):
+        await attach_silently(callback.message, callback.from_user.id)
     # Новичок только что заведён — активной тренировки у него быть не может,
     # так что здесь нет ветки stale-workout предупреждения из cmd_start: она
     # для этого пользователя всегда пуста.
