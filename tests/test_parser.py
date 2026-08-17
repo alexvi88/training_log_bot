@@ -6,19 +6,19 @@ import re
 import pytest
 
 from parser import (
-    EXAMPLES_HINT,
     MAX_REPS,
     MAX_SETS_PER_LINE,
     MAX_WEIGHT,
     ParsedSet,
     ParseError,
+    examples_hint,
     parse_ru_date,
     parse_set_edit,
     parse_sets_line,
     parse_single_token,
 )
 
-_HINT_RE = re.escape(EXAMPLES_HINT)
+_HINT_RE = re.escape(examples_hint())
 
 
 # ---------- parse_single_token: bodyweight (bare reps) ----------

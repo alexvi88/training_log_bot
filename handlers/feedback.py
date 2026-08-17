@@ -6,17 +6,12 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 import config
+import i18n
 import keyboards
 import state_scaffold
 from fsm import FeedbackFlow
 
 router = Router(name="feedback")
-
-_PROMPT = (
-    "Напиши что угодно — отзыв, баг, идею. Можно с фото или скриншотом, можно "
-    "несколькими сообщениями подряд. Передам всё админу как есть.\n\n"
-    "Передумал — «❌ Отмена» или любая команда, хоть /start."
-)
 
 # Роутер фидбека подключён вторым (см. main.setup_routers), чтобы /feedback
 # долетал из любого состояния. Обратная сторона: пока человек ждёт-набирает
@@ -74,12 +69,12 @@ async def cmd_feedback(message: Message, state: FSMContext):
     await state_scaffold.clear_state_keep_workout(state)
     await state.set_state(FeedbackFlow.awaiting_message)
     await message.answer(
-        _PROMPT,
+        i18n.t("feedback.prompt"),
         # «❌ Отмена» рядом с «✅ Готово» — как в остальных экранах ввода: выход
         # без отправки должен быть виден, а не угадываться.
         reply_markup=keyboards.yes_no_keyboard(
             yes_cb="feedback:done", no_cb="feedback:cancel",
-            yes_text="✅ Готово", no_text="❌ Отмена",
+            yes_text=i18n.t("btn.done_check"), no_text=i18n.t("btn.cancel"),
         ),
     )
 
@@ -87,13 +82,16 @@ async def cmd_feedback(message: Message, state: FSMContext):
 @router.message(StateFilter(FeedbackFlow.awaiting_message), _NOT_A_COMMAND)
 async def feedback_message(message: Message, state: FSMContext):
     if config.ADMIN_ID is None:
-        await message.reply("Не настроен получатель отзывов — попробуй позже.")
+        await message.reply(i18n.t("feedback.no_recipient"))
         return
     who = f"@{message.from_user.username}" if message.from_user.username else str(message.from_user.id)
+    # Уведомление админу — служебное, аудитория один человек (ADMIN_ID), поэтому
+    # остаётся по-русски независимо от языка отправителя (тот же принцип, что и
+    # у остальных админских текстов, см. i18n_coverage.NEVER_LOCALIZED).
     await message.bot.send_message(config.ADMIN_ID, f"📬 Фидбек от {who} (id {message.from_user.id}):")
     await message.copy_to(config.ADMIN_ID)
     await message.reply(
-        "Спасибо, передал 🙌 Можешь написать ещё или нажать «Готово».",
+        i18n.t("feedback.thanks"),
         # Кнопка на самом ответе: экран с приглашением уже уехал вверх, а
         # закончить хочется там, где только что писал.
         reply_markup=keyboards.feedback_keyboard(),
@@ -108,7 +106,7 @@ async def feedback_done(callback: CallbackQuery, state: FSMContext):
     # тренировки остаётся). Стоявший здесь state.clear() успевал снести каркас до
     # него — и «Продолжить» в меню открывало тренировку без упражнений.
     await _show_main_menu(callback, state)
-    await callback.answer("Спасибо за отзыв!")
+    await callback.answer(i18n.t("feedback.done_alert"))
 
 
 @router.callback_query(StateFilter(FeedbackFlow.awaiting_message), F.data == "feedback:cancel")
@@ -118,4 +116,4 @@ async def feedback_cancel(callback: CallbackQuery, state: FSMContext):
     from handlers.workout import _show_main_menu
 
     await _show_main_menu(callback, state)
-    await callback.answer("Вышел из отзыва")
+    await callback.answer(i18n.t("feedback.cancel_alert"))

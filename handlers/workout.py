@@ -34,6 +34,7 @@ import db
 import exercise_descriptions
 import exercise_media
 import formatting
+import i18n
 import keyboards
 import timeutil
 import ui
@@ -102,8 +103,8 @@ async def _attach_ai_comment(
         )
 
 
-async def _ensure_user(telegram_id: int, username: str | None):
-    return await db.get_or_create_user(telegram_id, username)
+async def _ensure_user(telegram_id: int, username: str | None, language_code: str | None = None):
+    return await db.get_or_create_user(telegram_id, username, language_code)
 
 
 def _move_open_exercises_last(
@@ -152,7 +153,7 @@ async def _refresh_live(bot, state: FSMContext, user, workout_id: int, hint, key
         # упражнение — тот же слот-сообщение используется и до этого, для
         # экранов-пикеров («выбери группу», «повторить тренировку» и т.п.),
         # и там заголовок был бы не про эту тренировку, а про сам выбор.
-        text = f"🏋️ <b>ТЕКУЩАЯ ТРЕНИРОВКА</b>\n\n{text}"
+        text = f"{i18n.t('workout.current_workout_header')}\n\n{text}"
     if chat_bottom.is_at_bottom(chat_id, message_id):
         try:
             await bot.edit_message_text(
@@ -274,7 +275,7 @@ async def _idle_view(
     # repeat it — keep it only when the button had to shorten the name.
     hint = None
     if suggested and keyboards.suggest_button_label(suggested[1]) != suggested[1]:
-        hint = f"💡 В прошлый раз дальше было: <b>{escape(suggested[1])}</b>"
+        hint = i18n.t("workout.suggested_next_hint", name=escape(suggested[1]))
     recent: list[tuple[int, str]] = []
     if not has_planned:
         # Skip the already-offered "suggested" exercise and anything already
@@ -419,14 +420,17 @@ def _suspicious_weight_warning(
     too_high = last_weight > _SUSPICIOUS_WEIGHT_HIGH_MULTIPLE * baseline
     if not (too_low or too_high):
         return None
-    u = formatting.UNIT_LABELS.get(unit, "кг")
+    u = formatting.unit_label(unit)
     # «сегодня», когда планка взялась из этой же тренировки: «в прошлый раз
     # 200кг» под списком, где 200 стоит восемь раз подряд сегодня, читалось бы
     # как ошибка самого бота.
-    since = "в прошлый раз" if baseline == prev_max_weight else "сегодня"
-    return (
-        f"⚠️ {formatting.format_weight(last_weight)}{u}? "
-        f"{since} {formatting.format_weight(baseline)}{u}"
+    since_key = "workout.since_last_time" if baseline == prev_max_weight else "workout.since_today"
+    return i18n.t(
+        "workout.suspicious_weight_warning",
+        weight=formatting.format_weight(last_weight),
+        u=u,
+        since=i18n.t(since_key),
+        baseline=formatting.format_weight(baseline),
     )
 
 
@@ -439,7 +443,7 @@ def _suspicious_weight_warning(
 # подпись, и закрывает один раз, а не постоянно: три показа достаточно, чтобы
 # заметить (первый мог потеряться на бегу в зал), а вешать её над рядом
 # навсегда — плодить текст там, где уже есть постоянная подпись.
-_REPS_ROW_HINT_TEXT = "Цифры внизу — тот же вес, выбери повторы"
+
 _REPS_ROW_HINT_KIND_PREFIX = "reps_row_hint_"
 _REPS_ROW_HINT_SHOWS = 3
 # «Дата» для has_limit_ack/record_limit_ack — не календарная: счётчику нужно
@@ -462,7 +466,7 @@ async def _maybe_reps_row_hint(user_id: int) -> str:
         if await db.has_limit_ack(user_id, kind, _REPS_ROW_HINT_SENTINEL_DATE):
             continue
         await db.record_limit_ack(user_id, kind, _REPS_ROW_HINT_SENTINEL_DATE)
-        return _REPS_ROW_HINT_TEXT
+        return i18n.t("workout.reps_row_hint_text")
     return ""
 
 
@@ -484,15 +488,15 @@ def _logging_hint(
 ) -> str:
     base = None
     if show_instruction:
-        base = "Вес и повторы через пробел, например «100 8»"
+        base = i18n.t("workout.instruction_base")
         if has_sets:
-            base += " (можно только повторы — вес возьмётся с последнего подхода)"
+            base += i18n.t("workout.instruction_reps_only")
         # Голосовой ввод разбирает «сто на восемь» и дробные веса, но узнать о нём
         # было неоткуда — а между подходами, с мелом на руках, это лучший способ
         # записать. Строка только там, где инструкция и так показывается: мозолить
         # ею глаза на каждом подходе незачем.
         if ai_trainer.is_voice_configured():
-            base += "\n🎤 Руки заняты — надиктуй голосом: «сто на восемь»"
+            base += i18n.t("workout.instruction_voice_hint")
     # The program's recommended sets×reps, if this exercise was opened from a
     # routine that carries one — shown above the history/warning lines since
     # it's the plan for today, not a look back at a previous session.
@@ -507,7 +511,7 @@ def _logging_hint(
     reps_row_line = ""
     if reps_row:
         row_weight, _row_reps = reps_row
-        u = formatting.UNIT_LABELS.get(unit, "кг")
+        u = formatting.unit_label(unit)
         weight_str = f"{formatting.format_weight(row_weight)}{u}"
         # Ни «сверху», ни «(как в прошлый раз)». Первое было указателем на ряд
         # кнопок, но подпись стоит в самом низу сообщения, а цифры — под ней:
@@ -529,15 +533,15 @@ def _logging_hint(
         # не вместо неё: первые несколько раз человеку нужно и «это вообще про
         # повторы», и «на каком весе» — дальше остаётся только вес, его хватает.
         hint_prefix = f"{reps_row_hint}\n" if reps_row_hint else ""
-        reps_row_line = f"{hint_prefix}🔢 Жми повторы на {weight_str}\n"
+        reps_row_line = f"{hint_prefix}{i18n.t('workout.reps_row_line', weight=weight_str)}\n"
     # Показывается только пока в дневнике вообще нет ни одного подхода — гаснет
     # сразу после первого же удачного, не дожидаясь конца тренировки или того,
     # пока человек «наберёт стаж» (это уже show_instruction — тот держится
     # дольше, по недавним закрытым тренировкам).
     format_hint_line = (
-        "💡 Вес и повторы одной строкой: <code>100 8</code>\n" if show_format_hint else ""
+        f"{i18n.t('workout.format_hint')}\n" if show_format_hint else ""
     )
-    target_line = f"📋 План: {target}\n" if target else ""
+    target_line = f"{i18n.t('workout.target_line', target=target)}\n" if target else ""
     warning = _suspicious_weight_warning(last_session, today_sets, unit)
     if warning and confirmed_weight is not None and today_sets and today_sets[-1][0] == confirmed_weight:
         # Already answered "да, записать" for exactly this weight — repeating the
@@ -560,7 +564,7 @@ def _logging_hint(
         # строка и так подписана словами, а курсивом отделена от списка
         # подходов. Соседние строки (🎯 Цель, ⚠️ вес, 🔢 повторы) значки
         # сохраняют — там они различают РАЗНЫЕ строки между собой.
-        line = f"Прошлый раз: {sets_str}"
+        line = i18n.t("workout.last_time_line", sets=sets_str)
         if show_progression:
             wr_only = [(w, r) for w, r, _ in last_session]
             suggestion = analytics.suggest_progression(
@@ -790,8 +794,6 @@ async def _back_after_cancel(callback: CallbackQuery, state: FSMContext, user):
 
 # ---------- main menu ----------
 
-_GREETING = "<b>ПРИВЕТ АТЛЕТ. НАЧНЁМ ТРЕНИРОВКУ?</b>"
-
 # Shown on the main menu until the first workout is logged — a quick "here's how
 # it works" so a brand-new user isn't dropped onto the same screen as a veteran.
 #
@@ -801,17 +803,16 @@ _GREETING = "<b>ПРИВЕТ АТЛЕТ. НАЧНЁМ ТРЕНИРОВКУ?</b>"
 # причине: это навигация, которую он увидит, нажав кнопку. Учить надо одному —
 # формату строки. Голосовой ввод не упомянут намеренно: подсказка про него
 # живёт в _HELP_SHORT, на экране записи подхода, где он и применим.
-_ONBOARDING = (
-    "<b>ПРИВЕТ АТЛЕТ! 💪</b>\n\n"
-    "Правило тут одно: подход пишешь строкой — <b><code>100 8</code></b>. "
-    "Вес и повторы. Записал.\n"
-    "Рекорды, объём и прогресс — за мной. Железо — за тобой.\n\n"
-    "Не знаешь, что делать сегодня? Скажи 🤖 <b>AI-тренеру</b>, чего хочешь — "
-    "соберёт программу и разложит по дням. Он же видит всю твою историю: "
-    "спроси «я стал сильнее за три месяца?» — ответит по цифрам, а не по "
-    "ощущениям.\n\n"
-    "Жми 🏋️ и погнали 👇"
-)
+#
+# Оба текста читаются из каталога при каждом вызове (см. _greeting()/
+# _onboarding() ниже), а не застывают константой при импорте: иначе один и тот
+# же процесс, обслуживая и ru, и en, показал бы всем язык первого импорта.
+def _greeting() -> str:
+    return i18n.t("onboarding.greeting")
+
+
+def _onboarding() -> str:
+    return i18n.t("onboarding.text")
 
 
 # The heatmap picture only depends on `today` plus the set of finished-workout
@@ -884,7 +885,7 @@ async def _menu_view(user_id: int) -> tuple[str, bytes | None]:
     today = timeutil.user_today(user)
     dates = [dt.date.fromisoformat(d) for d in await db.list_finished_workout_dates(user_id)]
     if not dates:
-        return _ONBOARDING, None
+        return _onboarding(), None
 
     window_start = today - dt.timedelta(days=analytics.VOLUME_WINDOW_DAYS - 1)
     volume_title, volume_rows = formatting.weekly_volume_panel(
@@ -945,7 +946,7 @@ async def _menu_view(user_id: int) -> tuple[str, bytes | None]:
     )
     cached = _heatmap_cache.get(user_id)
     if cached is not None and cached[0] == cache_key:
-        return _GREETING, cached[1]
+        return _greeting(), cached[1]
 
     png = await asyncio.to_thread(
         charts.render_menu_dashboard,
@@ -953,7 +954,7 @@ async def _menu_view(user_id: int) -> tuple[str, bytes | None]:
         formatting.menu_lifts_title(lift_window_weeks) if lift_tiles else "", formatting.MENU_LIFTS_NOTE,
     )
     _heatmap_cache[user_id] = (cache_key, png)
-    return _GREETING, png
+    return _greeting(), png
 
 
 async def _send_menu(message: Message, text: str, png: bytes | None, keyboard) -> Message:
@@ -1066,7 +1067,9 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject 
     # Спрашиваем до _ensure_user: «первый ли это /start» видно только по тому,
     # была ли запись до него.
     is_new = await db.get_user(message.from_user.id) is None
-    await _ensure_user(message.from_user.id, message.from_user.username)
+    await _ensure_user(
+        message.from_user.id, message.from_user.username, message.from_user.language_code
+    )
     if is_new:
         # Только новичку: у старожила переход по чужой ссылке — не привлечение,
         # и записывать ему источник значило бы приписать каналу человека,
@@ -1077,10 +1080,40 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject 
         await db.set_user_source(
             message.from_user.id, attribution.source, attribution.referrer_id
         )
-        # Молча, до приветствия: клавиатура нужна сразу, но новичку нечего
-        # рассказывать про «обновил меню» (см. attach_silently), а приветствие
-        # должно остаться последним сообщением на экране.
+        # Тоже только новичку, той же логикой, что и источник выше: у
+        # старожила язык уже осознанно выбран (см. settings.py) или закреплён
+        # прошлой догадкой, и переписывать его новой догадкой из клиента
+        # Telegram нельзя — а вот выставить его новичку самый первый раз
+        # нужно именно здесь, где мы уже точно знаем, что это первый /start.
+        guessed_lang = i18n.normalize(getattr(message.from_user, "language_code", None))
+        await db.set_user_lang(message.from_user.id, guessed_lang)
+        # SetUserLanguageMiddleware (main.py) уже поставил ту же догадку до
+        # хендлера, но по данным, которых тогда ещё не было в базе — здесь
+        # переустанавливаем явно тем же значением, что записали, чтобы контекст
+        # и БД гарантированно совпадали, даже если логика догадки когда-нибудь
+        # разъедется между мидлварью и этим хендлером.
+        i18n.set_lang(guessed_lang)
+        # Молча, до экрана выбора языка: клавиатура нужна сразу, но новичку
+        # нечего рассказывать про «обновил меню» (см. attach_silently), а
+        # последним сообщением на экране должен остаться выбор языка.
+        #
+        # Именно здесь, а не после выбора языка: attach_silently гасит
+        # уведомление middleware тем, что поднимает reply_keyboard_version, а
+        # RefreshPersistentMenuMiddleware работает ДО хендлера. Отложи это до
+        # нажатия кнопки — и на тапе по языку middleware увидит уже
+        # существующего пользователя с нулевой версией и пришлёт «⌨️ Обновил
+        # меню» ровно перед приветствием, то есть на том единственном экране,
+        # который продаёт бота.
         await attach_silently(message, message.from_user.id)
+        # Догадка — не выбор: следующим экраном новичок подтверждает или
+        # поправляет её (см. onboarding_language_set), и только за нажатием
+        # кнопки идёт приветствие _ONBOARDING — так на экране никогда не висит
+        # два разных «первых сообщения» разом.
+        await message.answer(
+            i18n.t_in(guessed_lang, "screen.onboarding_language.title"),
+            reply_markup=keyboards.onboarding_language_keyboard(guessed_lang),
+        )
+        return
     active = await db.get_active_workout(message.from_user.id)
     text, png = await _menu_view(message.from_user.id)
     await _send_menu(message, text, png, await _main_menu_kb(message.from_user.id, active))
@@ -1110,7 +1143,7 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject 
                 stamp, entity = formatting.local_time_entity(
                     started, f"{formatting.format_date_ru(local)}, {local:%H:%M}"
                 )
-                warning = f"⚠️ У тебя висит тренировка с {stamp} — забыл закрыть?"
+                warning = i18n.t("workout.stale_workout_warning", stamp=stamp)
                 # Состав тренировки под предупреждением: раньше «завершить задним
                 # числом» или «удалить» приходилось решать вслепую, не помня уже,
                 # что вообще успел записать несколько дней назад. Без рекордов и
@@ -1130,61 +1163,60 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject 
                 )
 
 
+@router.callback_query(F.data.startswith("onboarding:lang:"))
+async def onboarding_language_set(callback: CallbackQuery, state: FSMContext):
+    """Явный выбор языка новичком — единственный путь с экрана выбора языка
+    (см. cmd_start) на обычное приветствие _ONBOARDING.
+
+    Хендлер существует только для этого экрана: старожил его никогда не видит
+    (см. докстринг cmd_start), так что переписывать язык уже заведённого
+    пользователя тут не риск — сюда просто некому прийти второй раз.
+    """
+    lang = callback.data.split(":")[2]
+    if lang not in i18n.SUPPORTED:
+        # Незнакомый код (старая клавиатура, чужой клиент) — не роняем хендлер,
+        # просто ничего не делаем: перерисовывать тут нечего, у экрана выбора
+        # только два рабочих варианта.
+        await callback.answer()
+        return
+    await db.set_user_lang(callback.from_user.id, lang)
+    i18n.set_lang(lang)
+    # Клавиатура прикреплена ещё в cmd_start, до экрана выбора языка — см.
+    # комментарий там о том, почему её нельзя откладывать до этого тапа.
+    # Новичок только что заведён — активной тренировки у него быть не может,
+    # так что здесь нет ветки stale-workout предупреждения из cmd_start: она
+    # для этого пользователя всегда пуста.
+    text, png = await _menu_view(callback.from_user.id)
+    kb = await _main_menu_kb(callback.from_user.id, None)
+    # safe_edit сам решит, править ли экран выбора языка на месте или прислать
+    # приветствие новым сообщением — attach_silently выше уже мог увести
+    # экран выбора языка со дна чата (chat_bottom это отследит), так что
+    # выбор безопасного пути тут ровно тот же, что и у остальных двухшаговых
+    # экранов в проекте.
+    await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML")
+    await callback.answer()
+
+
 # Справка живёт в двух экранах: первый закрывает то, что нужно 95% времени
 # (записать подход, поправить последний), остальное — RPE, заметки, правки
 # задним числом — прячется за кнопкой. Полотно из полутора десятков строк
 # читать посреди подхода никто не станет, а пять строк — прочитают.
 # Пример слева от тирe — жирным моноширинным: капсом цифры не выделишь, а
 # глазу нужно за что-то зацепиться, чтобы читать справку по левой колонке.
-_HELP_SHORT = (
-    "🆘 <b>КАК ЗАПИСАТЬ ПОДХОД</b>\n\n"
-    "<b><code>100 8</code></b> — 100 кг × 8 повторов\n"
-    "<b><code>100 8 3</code></b> — сразу 3 таких подхода\n"
-    "<b><code>8</code></b> — только повторы, вес — как в прошлом подходе\n"
-    "<b><code>100 8, 100 7, 95 8</code></b> — несколько подходов сразу\n\n"
-    "<b><code>-</code></b> удалить последний · <b><code>=</code></b> повторить последний\n\n"
-    "🎙 Или голосом: «сто на восемь»."
-)
+# Оба текста читаются из каталога при каждом вызове, а не застывают константой
+# при импорте (см. _greeting()/_onboarding() выше — та же причина).
+def _help_short() -> str:
+    return i18n.t("workout.help_short")
 
-_HELP_FULL = (
-    "🆘 <b>ВСЁ ПРО ВВОД</b>\n\n"
-    "<b>ПОДХОД:</b>\n"
-    # «100-8» стоит третьим не для красоты: на цифровой клавиатуре iPhone после
-    # пробела раскладка сама уезжает на буквы, а «-» на ней же, рядом с
-    # цифрами — вводишь подход одной раскладкой, без переключений.
-    "• <b><code>100 8</code></b> = <b><code>100x8</code></b> = <b><code>100-8</code></b> — 100 кг × 8 повторов\n"
-    "• <b><code>100 8 3</code></b> = <b><code>100x8x3</code></b> — сразу 3 подхода\n"
-    "• <b><code>8</code></b> — только повторы, вес возьмётся с прошлого подхода\n"
-    "• <b><code>+20 8</code></b> — то же, что <code>20 8</code>; «+» для себя, "
-    "если считаешь это довеском к своему весу\n"
-    "• <b><code>100x8@9</code></b> — RPE, сложность подхода 1–10\n"
-    "• несколько подходов сразу — через запятую, «;» или с новой строки\n\n"
-    "<b>ПОКА ОТКРЫТО УПРАЖНЕНИЕ:</b>\n"
-    "• <b><code>-</code></b> — удалить последний подход\n"
-    "• <b><code>=</code></b> — повторить последний подход\n"
-    "• <b><code>!болит плечо</code></b> — заметка к упражнению\n"
-    "• <b><code>2: 100 8</code></b> — исправить 2-й залогированный подход\n"
-    "• <b><code>?</code></b> или /help — эта справка\n\n"
-    "🎙 Или голосом: «сто на восемь».\n\n"
-    # Только на развёрнутом экране: это не про ввод, а про то, что бот потом
-    # показывает — на коротком оно бы стояло между «как записать подход» и
-    # ответом на вопрос, с которым сюда пришли.
-    "<b>e1RM</b> — расчётный максимум в упражнении: какой вес ты смог бы поднять на один раз. "
-    "Бот считает его по весу и повторам каждого подхода, проверять на практике не нужно. "
-    "Нужен он для сравнения: 100×8 и 110×5 — это примерно один уровень, "
-    "а по одному только весу этого не видно. Формула — в ⚙️ Настройках.\n\n"
-    # Переезд с Hevy/Strong — отдельная когорта, которой первым делом нужна не
-    # эта справка про ввод, а способ не начинать историю с нуля; онбординг её
-    # намеренно не упоминает (см. _ONBOARDING) — там место дороже.
-    "Есть история из Hevy, Strong или другого приложения? Загрузи CSV-файлом — "
-    "⚙️ Настройки → 📥 Импорт CSV."
-)
+
+def _help_full() -> str:
+    return i18n.t("workout.help_full")
 
 
 @router.message(Command("help"))
 async def cmd_help(message: Message, state: FSMContext):
     await message.answer(
-        _HELP_SHORT, parse_mode="HTML", reply_markup=keyboards.help_keyboard(expanded=False)
+        _help_short(), parse_mode="HTML", reply_markup=keyboards.help_keyboard(expanded=False)
     )
 
 
@@ -1195,7 +1227,7 @@ async def help_toggle(callback: CallbackQuery, state: FSMContext):
     expanded = callback.data == "help:more"
     with suppress(TelegramBadRequest):
         await callback.message.edit_text(
-            _HELP_FULL if expanded else _HELP_SHORT,
+            _help_full() if expanded else _help_short(),
             parse_mode="HTML",
             reply_markup=keyboards.help_keyboard(expanded=expanded),
         )
@@ -1207,12 +1239,12 @@ async def stale_finish_workout(callback: CallbackQuery, state: FSMContext):
     workout_id = int(callback.data.split(":")[2])
     workout = await db.get_workout(workout_id)
     if workout is None or workout["user_id"] != callback.from_user.id or workout["status"] != "active":
-        await callback.answer("Тренировка не найдена", show_alert=True)
+        await callback.answer(i18n.t("workout.not_found"), show_alert=True)
         return
     exercise_ids = await db.list_exercise_ids_for_workout(workout_id)
     if not exercise_ids:
         await db.discard_workout(workout_id)
-        await ui.safe_edit(callback, "Тренировка была пустая — удалил её.")
+        await ui.safe_edit(callback, i18n.t("workout.empty_deleted"))
         await callback.answer()
         return
     await db.finish_workout(workout_id, finished_at=workout["started_at"])
@@ -1222,7 +1254,7 @@ async def stale_finish_workout(callback: CallbackQuery, state: FSMContext):
     # workout happened to trigger an evaluation.
     started_at = dt.datetime.fromisoformat(workout["started_at"])
     await _evaluate_achievements(callback.from_user.id, workout_id, started_at, None)
-    await ui.safe_edit(callback, "✅ Закрыл тренировку задним числом — всё посчитал.")
+    await ui.safe_edit(callback, i18n.t("workout.stale_finished"))
     await callback.answer()
 
 
@@ -1231,15 +1263,15 @@ async def stale_delete_confirm(callback: CallbackQuery, state: FSMContext):
     workout_id = int(callback.data.split(":")[2])
     workout = await db.get_workout(workout_id)
     if workout is None or workout["user_id"] != callback.from_user.id or workout["status"] != "active":
-        await callback.answer("Тренировка не найдена", show_alert=True)
+        await callback.answer(i18n.t("workout.not_found"), show_alert=True)
         return
     kb = keyboards.yes_no_keyboard(
         yes_cb=f"stale:delyes:{workout_id}",
         no_cb="stale:delno",
-        yes_text="🗑 Удалить",
-        no_text="❌ Отмена",
+        yes_text=i18n.t("btn.delete"),
+        no_text=i18n.t("btn.cancel"),
     )
-    await ui.safe_edit(callback, "Удалить эту тренировку? Это действие нельзя отменить.", reply_markup=kb)
+    await ui.safe_edit(callback, i18n.t("workout.delete_confirm"), reply_markup=kb)
     await callback.answer()
 
 
@@ -1248,16 +1280,16 @@ async def stale_delete(callback: CallbackQuery, state: FSMContext):
     workout_id = int(callback.data.split(":")[2])
     workout = await db.get_workout(workout_id)
     if workout is None or workout["user_id"] != callback.from_user.id:
-        await callback.answer("Тренировка не найдена", show_alert=True)
+        await callback.answer(i18n.t("workout.not_found"), show_alert=True)
         return
     await db.discard_workout(workout_id)
-    await ui.safe_edit(callback, "Удалил тренировку.")
+    await ui.safe_edit(callback, i18n.t("workout.deleted"))
     await callback.answer()
 
 
 @router.callback_query(F.data == "stale:delno")
 async def stale_delete_cancel(callback: CallbackQuery, state: FSMContext):
-    await ui.safe_edit(callback, "Хорошо, оставил как есть.")
+    await ui.safe_edit(callback, i18n.t("workout.delete_cancelled"))
     await callback.answer()
 
 
@@ -1342,7 +1374,9 @@ async def _start_workout(callback: CallbackQuery, state: FSMContext, delete_mess
     # the active-workout branch used to leave the button spinning until Telegram
     # gave up on its own, ~10s later.
     await callback.answer()
-    await _ensure_user(callback.from_user.id, callback.from_user.username)
+    await _ensure_user(
+        callback.from_user.id, callback.from_user.username, callback.from_user.language_code
+    )
     # Claiming the workout in one atomic step, rather than checking and then
     # creating, is what stops a double tap from opening two of them.
     workout_id, created = await db.get_or_create_active_workout(callback.from_user.id)
@@ -1352,7 +1386,7 @@ async def _start_workout(callback: CallbackQuery, state: FSMContext, delete_mess
     await _reset_new_workout_scaffold(state)
     if delete_message:
         await _delete_message(callback.message)
-    sent = await callback.message.answer("🏋️ Тренировка начата — погнали")
+    sent = await callback.message.answer(i18n.t("workout.started"))
     await state.update_data(
         workout_id=workout_id, live_chat_id=sent.chat.id, live_message_id=sent.message_id,
         last_by_exercise={},
@@ -1394,7 +1428,7 @@ async def _repeat_list_screen(callback: CallbackQuery, state: FSMContext, page: 
         blocks.append(formatting.workout_pick_block(i, date, exercises))
     has_next = (page + 1) * REPEAT_PAGE_SIZE < total
     kb = keyboards.repeat_list_keyboard(items, page, has_next)
-    hint = "🔁 Выбери тренировку, чтобы повторить её план:\n\n" + "\n\n".join(blocks)
+    hint = i18n.t("workout.repeat_pick_hint") + "\n\n" + "\n\n".join(blocks)
     await state.update_data(repeat_page=page)
     await _refresh_live(callback.bot, state, user, data["workout_id"], hint, kb)
 
@@ -1404,7 +1438,7 @@ async def pick_repeat_last(callback: CallbackQuery, state: FSMContext):
     """Open the list of past workouts to repeat one of them. Reached from the first
     picker screen of a fresh (already-started) workout."""
     if await db.count_workouts(callback.from_user.id) == 0:
-        await callback.answer("Нет прошлой тренировки для повтора", show_alert=True)
+        await callback.answer(i18n.t("workout.no_past_workout"), show_alert=True)
         return
     await _repeat_list_screen(callback, state, page=0)
     await callback.answer()
@@ -1437,7 +1471,7 @@ async def pick_repeat_show(callback: CallbackQuery, state: FSMContext):
     workout_id = int(callback.data.split(":")[3])
     workout = await db.get_workout(workout_id)
     if workout is None or workout["user_id"] != callback.from_user.id:
-        await callback.answer("Тренировка не найдена", show_alert=True)
+        await callback.answer(i18n.t("workout.not_found"), show_alert=True)
         return
     user = await db.get_user(callback.from_user.id)
     data = await state.get_data()
@@ -1447,7 +1481,7 @@ async def pick_repeat_show(callback: CallbackQuery, state: FSMContext):
     summary = formatting.build_workout_preview(
         started, blocks, workout["note"], duration_seconds=duration_seconds,
     )
-    hint = "🔁 <b>Повторить эту тренировку?</b>\n\n" + summary
+    hint = i18n.t("workout.repeat_confirm_header") + "\n\n" + summary
     kb = keyboards.repeat_preview_keyboard(workout_id)
     await _refresh_live(callback.bot, state, user, data["workout_id"], hint, kb)
     await callback.answer()
@@ -1461,11 +1495,11 @@ async def pick_repeat_use(callback: CallbackQuery, state: FSMContext):
     workout_id = int(callback.data.split(":")[3])
     workout = await db.get_workout(workout_id)
     if workout is None or workout["user_id"] != callback.from_user.id:
-        await callback.answer("Тренировка не найдена", show_alert=True)
+        await callback.answer(i18n.t("workout.not_found"), show_alert=True)
         return
     plan = await db.workout_plan(workout_id)
     if not plan:
-        await callback.answer("В этой тренировке нет упражнений", show_alert=True)
+        await callback.answer(i18n.t("workout.no_exercises_in_workout"), show_alert=True)
         return
     await state.update_data(planned_blocks=plan)
     await _load_next_planned_block(callback, state)
@@ -1476,7 +1510,7 @@ async def pick_repeat_use(callback: CallbackQuery, state: FSMContext):
 async def resume_workout(callback: CallbackQuery, state: FSMContext):
     active = await db.get_active_workout(callback.from_user.id)
     if not active:
-        await callback.answer("Нет активной тренировки")
+        await callback.answer(i18n.t("workout.no_active_workout"))
         await _show_main_menu(callback, state)
         return
     await callback.answer()  # _enter_live doesn't answer internally
@@ -1633,15 +1667,15 @@ async def resync_plan_with_routine(state: FSMContext, routine_id: int) -> str | 
 
     parts = []
     if added_ids:
-        parts.append(f"добавил {await names(added_ids)}")
+        parts.append(i18n.t("workout.plan_sync_added", names=await names(added_ids)))
     if removed_ids:
-        parts.append(f"убрал {await names(removed_ids)}")
+        parts.append(i18n.t("workout.plan_sync_removed", names=await names(removed_ids)))
     if not parts:
         # Состав программы не менялся — правили схему подходов или чистили
         # сделанное. Молчим: сообщение без причины читается как «что-то
         # произошло», и человек идёт искать что.
         return None
-    return "План текущей тренировки обновил: " + " и ".join(parts) + "."
+    return i18n.t("workout.plan_sync_header") + f" {i18n.t('workout.plan_sync_and').join(parts)}."
 
 
 async def _enter_live(
@@ -1650,7 +1684,9 @@ async def _enter_live(
     # delete_message=False when entering from the AI-trainer chat (its "К тренировке"
     # button) — that message is part of the user's chat history with the AI-тренер,
     # not a disposable menu screen, so it should stay instead of being deleted.
-    user = await _ensure_user(callback.from_user.id, callback.from_user.username)
+    user = await _ensure_user(
+        callback.from_user.id, callback.from_user.username, callback.from_user.language_code
+    )
     data = await state.get_data()
     if data.get("workout_id") == workout_id and data.get("open_exercises"):
         # The FSM already knows exactly which exercises/tabs were open (e.g. the
@@ -1690,7 +1726,7 @@ async def _enter_live(
             extra["planned_blocks"] = None
     if delete_message:
         await _delete_message(callback.message)
-    sent = await callback.message.answer("🏋️ Тренировка")
+    sent = await callback.message.answer(i18n.t("workout.slot_placeholder"))
     await state.set_state(WorkoutFlow.logging_set if open_exercises else WorkoutFlow.idle)
     await state.update_data(
         workout_id=workout_id, live_chat_id=sent.chat.id, live_message_id=sent.message_id,
@@ -1760,8 +1796,11 @@ async def _recovery_line(user_id: int, groups, as_of: dt.date | None = None) -> 
         return ""
     spent.sort()
     shown = spent[:_RECOVERY_MAX_MENTIONS]
-    lines = "\n".join(f"• {escape(name.lower())} — {percent}% восстановления" for percent, name in shown)
-    return f"💤 <b>Ещё не отдохнули:</b>\n{lines}"
+    lines = "\n".join(
+        i18n.t("workout.recovery_line_item", name=escape(name.lower()), percent=percent)
+        for percent, name in shown
+    )
+    return f"{i18n.t('workout.recovery_header')}\n{lines}"
 
 
 async def _picker_screen_groups(
@@ -1815,9 +1854,9 @@ async def _picker_screen_groups(
         # Offered only on the very first picker screen of a fresh workout: the
         # shortcut into saved programs, plus picking any past session to
         # re-run for people who train A/B without a saved program.
-        extra.append(("🗂 Выбрать программу", "rt:manage"))
+        extra.append((i18n.t("workout.btn_pick_program"), "rt:manage"))
         if await db.count_workouts(callback.from_user.id) > 0:
-            extra.append(("🔁 Повторить тренировку", "pick:repeat"))
+            extra.append((i18n.t("workout.btn_repeat_workout"), "pick:repeat"))
         if ai_trainer.is_configured():
             # Тренировка на сегодня, а не программа: сюда приходят тренироваться,
             # и полезен тот вопрос, который человек себе прямо сейчас и задаёт —
@@ -1829,25 +1868,24 @@ async def _picker_screen_groups(
             # про план на недели вперёд, и человеку с программами это был бы
             # третий пункт про программы подряд на экране, куда пришли
             # заниматься. А «что сегодня» одинаково нужно и тем, и другим.
-            extra.append(("🤖 Собрать тренировку на сегодня", "ai:buildworkout"))
+            extra.append((i18n.t("workout.btn_build_workout_today"), "ai:buildworkout"))
             if not await db.count_routines(callback.from_user.id):
                 # Та же подпись, что и на экране «🗂 Программы» (см.
                 # keyboards.routines_manage_keyboard): это одна и та же кнопка,
                 # ведущая в один и тот же сценарий, и разные названия у неё
                 # читались как две разные возможности.
-                extra.append(("🤖 Составить с AI-тренером", "ai:buildprog"))
+                extra.append((i18n.t("btn.build_with_coach"), "ai:buildprog"))
     # Not a "cancel the workout" — pick:cancel just returns to whatever screen was
     # open before (see _back_after_cancel), so it reads as "⬅️ Назад", not "❌ Отмена".
-    extra.append(("⬅️ Назад", "pick:cancel"))
+    extra.append((i18n.t("btn.back"), "pick:cancel"))
 
     # top_buttons — конкретные дни программ, которыми человек сейчас ходит:
     # без упоминания их в тексте подсказка говорила только про группы мышц и
     # поиск по названию, будто кнопки сверху экрана вообще не про тренировку.
     hint = (
-        "<i>Продолжи по программе сверху, выбери группу мышц — или просто напиши "
-        "название, например «жим»:</i>"
+        i18n.t("workout.pick_group_hint_with_program")
         if top_buttons else
-        "<i>Выбери группу мышц — или просто напиши название, например «жим»:</i>"
+        i18n.t("workout.pick_group_hint")
     )
     if not data.get("is_backfill"):
         # Занесение задним числом — не «что тренировать сегодня»: отдых
@@ -1860,7 +1898,7 @@ async def _picker_screen_groups(
     partner_buttons: list[tuple[int, str]] = []
     if open_ids:
         names = [escape((await db.get_exercise(eid))["display_name"]) for eid in open_ids]
-        hint = "Открыто сейчас: " + ", ".join(names) + "\n" + hint
+        hint = i18n.t("workout.currently_open", names=", ".join(names)) + "\n" + hint
         active = data.get("active_exercise_id")
         if active is not None:
             partners = await db.list_superset_partners(
@@ -1951,17 +1989,16 @@ async def _picker_screen_search(callback_or_message, state: FSMContext, user):
         [row for kind, row in chunk if kind == "ex"],
         prefix="pick", back_cb="back",
         show_new_button=True,
-        new_text=None if combined else f"➕ Создать «{formatting.shorten(query, 28)}»",
+        new_text=None if combined else i18n.t("workout.btn_create_named", name=formatting.shorten(query, 28)),
         new_cb="new" if combined else "newquery",
         page=page, has_next=(page + 1) * size < len(combined),
         templates=[row for kind, row in chunk if kind == "tpl"],
     )
     if combined:
         total = len(combined)
-        word = formatting.plural_ru(total, ("совпадение", "совпадения", "совпадений"))
-        hint = f"Результаты поиска «{escape(query)}» — {total} {word}:"
+        hint = i18n.t("workout.search_results", query=escape(query), n=total)
     else:
-        hint = f"Ничего не нашлось по «{escape(query)}». Заведи своё или напиши иначе:"
+        hint = i18n.t("workout.search_empty", query=escape(query))
     await state.update_data(picker_stage="exercises")
     await _refresh_live(callback_or_message.bot, state, user, data["workout_id"], hint, kb)
 
@@ -2005,11 +2042,11 @@ async def _picker_screen_exercises(callback: CallbackQuery, state: FSMContext):
     if exercises:
         # Тот же приём, что у экрана групп чуть выше (pick:back) — «или просто
         # напиши название, например «жим»» вместо суховатого «для поиска».
-        hint = "Выбери упражнение — или просто напиши название, например «жим»:"
+        hint = i18n.t("workout.pick_exercise_hint")
     elif templates:
-        hint = "Выбери из каталога или напиши название для поиска:"
+        hint = i18n.t("workout.pick_from_catalog_hint")
     else:
-        hint = "У тебя пока нет своих упражнений здесь — добавь новое или напиши название для поиска:"
+        hint = i18n.t("workout.no_own_exercises_hint")
     await state.update_data(picker_stage="exercises")
     await _refresh_live(callback.bot, state, user, data["workout_id"], hint, kb)
 
@@ -2047,7 +2084,7 @@ async def pick_exercise_search(message: Message, state: FSMContext):
         # уходило в поиск и возвращалось «ничего не нашлось» — инструкция
         # выглядела враньём. Отвечаем тем, чего не хватает; подсказка и сам ввод
         # растворятся сами.
-        await _reply_transient(message, "Сначала выбери упражнение — подход запишу сразу после.")
+        await _reply_transient(message, i18n.t("workout.pick_exercise_first"))
         return
     await _delete_message(message)
     if not query:
@@ -2069,8 +2106,8 @@ async def _new_exercise_entry_screen(callback: CallbackQuery, state: FSMContext)
     # шаблоны одной группы. Сюда можно прийти поиском с экрана групп.
     has_group = data.get("pending_group_id") is not None
     hint = (
-        "Напиши название нового упражнения или выбери из шаблонов:"
-        if has_group else "Напиши название нового упражнения:"
+        i18n.t("workout.new_exercise_name_with_templates")
+        if has_group else i18n.t("workout.new_exercise_name")
     )
     await _refresh_live(
         callback.bot, state, user, data["workout_id"], hint,
@@ -2091,7 +2128,7 @@ async def pick_templates(callback: CallbackQuery, state: FSMContext):
     user = await db.get_user(callback.from_user.id)
     templates = await db.list_templates_in_group(data["pending_group_id"])
     kb = keyboards.templates_keyboard(templates, prefix="pick", back_cb="newback")
-    hint = "Шаблоны — выбери подходящий:"
+    hint = i18n.t("workout.templates_hint")
     await _refresh_live(callback.bot, state, user, data["workout_id"], hint, kb)
     await callback.answer()
 
@@ -2111,7 +2148,7 @@ async def pick_template_preview(callback: CallbackQuery, state: FSMContext):
     template_id = int(callback.data.split(":")[2])
     template = await db.get_exercise(template_id)
     if template is None:
-        await callback.answer("Шаблон не найден", show_alert=True)
+        await callback.answer(i18n.t("workout.template_not_found"), show_alert=True)
         return
     text = _exercise_info_text(template, with_created=False)
     kb = keyboards.template_preview_keyboard(template_id, prefix="pick")
@@ -2148,15 +2185,13 @@ async def pick_template_add(callback: CallbackQuery, state: FSMContext):
 
 def _suspicious_exercise_name_reason(name: str) -> str | None:
     """None if `name` looks like a plausible exercise name; otherwise a short
-    Russian phrase for the "are you sure?" prompt explaining why it doesn't —
-    either a stray message (too long) or something with no letters at all
-    ("50 12", a logged set typed while the bot was waiting for a name instead)."""
+    phrase (from the catalog) for the "are you sure?" prompt explaining why it
+    doesn't — either a stray message (too long) or something with no letters at
+    all ("50 12", a logged set typed while the bot was waiting for a name instead)."""
     if len(name) > config.MAX_EXERCISE_NAME_LENGTH:
-        n = len(name)
-        word = formatting.plural_ru(n, ("символ", "символа", "символов"))
-        return f"длинновато для упражнения ({n} {word})"
+        return i18n.t("workout.name_too_long", n=len(name))
     if not any(ch.isalpha() for ch in name):
-        return "в названии нет ни одной буквы — не похоже на упражнение"
+        return i18n.t("workout.name_no_letters")
     return None
 
 
@@ -2173,9 +2208,9 @@ async def _create_exercise_named(event, state: FSMContext, name: str) -> None:
         user = await db.get_user(event.from_user.id)
         kb = keyboards.yes_no_keyboard(
             yes_cb="pick:longname:yes", no_cb="pick:longname:no",
-            yes_text="✅ Да, создать", no_text="✏️ Написать заново",
+            yes_text=i18n.t("workout.btn_confirm_create"), no_text=i18n.t("workout.btn_retype"),
         )
-        hint = f"«{escape(name)}» — {reason}. Всё верно, создать такое?"
+        hint = i18n.t("workout.confirm_name_hint", name=escape(name), reason=reason)
         await _refresh_live(event.bot, state, user, data["workout_id"], hint, kb)
         return
     data = await state.get_data()
@@ -2190,7 +2225,7 @@ async def pick_new_from_query(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     name = (data.get("pick_query") or "").strip()
     if not name:
-        await callback.answer("Запрос потерялся — напиши название заново", show_alert=True)
+        await callback.answer(i18n.t("workout.query_lost"), show_alert=True)
         return
     await state.set_state(WorkoutFlow.creating_exercise_name)
     await _create_exercise_named(callback, state, name)
@@ -2201,7 +2236,7 @@ async def pick_new_from_query(callback: CallbackQuery, state: FSMContext):
 async def new_exercise_name_entered(message: Message, state: FSMContext):
     name = message.text.strip()
     if not name:
-        await message.reply("Название не может быть пустым")
+        await message.reply(i18n.t("workout.name_empty"))
         return
     await _delete_message(message)
     await _create_exercise_named(message, state, name)
@@ -2212,7 +2247,7 @@ async def pick_longname_confirmed(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     name = data.get("pending_long_exercise_name")
     if not name:
-        await callback.answer("Название потерялось, напиши заново", show_alert=True)
+        await callback.answer(i18n.t("workout.name_lost"), show_alert=True)
         return
     await state.update_data(pending_long_exercise_name=None)
     ex_id = await db.create_exercise(callback.from_user.id, name, data.get("pending_group_id"))
@@ -2301,18 +2336,17 @@ async def live_note_prompt(callback: CallbackQuery, state: FSMContext):
     ex_id = int(callback.data.split(":")[2])
     ex = await db.get_exercise(ex_id)
     if ex is None or ex["user_id"] != callback.from_user.id:
-        await callback.answer("Упражнение не найдено", show_alert=True)
+        await callback.answer(i18n.t("workout.exercise_not_found"), show_alert=True)
         return
     await state.set_state(WorkoutFlow.logging_exercise_note)
     workout_id = (await state.get_data())["workout_id"]
     existing = await db.get_workout_exercise_note(workout_id, ex_id)
-    current = f"\n\nСейчас: <i>{escape(existing)}</i>" if existing else ""
-    hint = "\n\nПришли «-», чтобы убрать заметку." if existing else ""
+    current = i18n.t("workout.note_current", note=escape(existing)) if existing else ""
+    hint = i18n.t("workout.note_clear_hint") if existing else ""
     user = await db.get_user(callback.from_user.id)
     await _refresh_live(
         callback.bot, state, user, workout_id,
-        f"📝 Заметка к «{escape(ex['display_name'])}» — напиши текст (например «побаливает правое плечо»)."
-        f"{current}{hint}",
+        i18n.t("workout.note_prompt", name=escape(ex["display_name"])) + current + hint,
         keyboards.cancel_keyboard("live:note_cancel"),
     )
     await callback.answer()
@@ -2388,10 +2422,7 @@ def _suspicious_reps_warning(weight: float, reps: int) -> str | None:
     """
     if weight <= 0 or reps <= _REPS_CONFIRM_ABOVE:
         return None
-    return (
-        f"⚠️ {formatting.format_set(weight, reps)}? Столько повторов под весом "
-        "похоже на промах — проверь, не перепутаны ли вес и повторы."
-    )
+    return i18n.t("workout.suspicious_reps_warning", set=formatting.format_set(weight, reps))
 
 
 async def _today_sets_of(data: dict, active: int | None) -> list[tuple[float, int]]:
@@ -2449,9 +2480,6 @@ def _weight_confirm_prompt(
 # месту: на третьем подходе, набранном текстом за всю жизнь, тренер сам
 # упоминает кнопку, которой человек ещё не нашёл. Ровно один раз — дальше это
 # уже не открытие, а надоедливое напоминание (см. db.register_manual_sets_and_check_hint).
-_VOICE_HINT_TEXT = "🎙 Кстати, можно голосом: скажи «сто на восемь» — запишу."
-
-
 async def _maybe_show_voice_hint(bot, data: dict, user_id: int, chat_id: int, sets_count: int) -> None:
     # Бэкфилл и импорт — не живая тренировка: там подход не первый в жизни, а
     # прошлый, задним числом, и учить голосу здесь не к месту (задание №9).
@@ -2459,7 +2487,7 @@ async def _maybe_show_voice_hint(bot, data: dict, user_id: int, chat_id: int, se
         return
     if await db.register_manual_sets_and_check_hint(user_id, sets_count):
         with suppress(TelegramBadRequest):
-            await bot.send_message(chat_id, _VOICE_HINT_TEXT)
+            await bot.send_message(chat_id, i18n.t("workout.voice_hint"))
 
 
 async def _finalize_logged_sets(bot, state: FSMContext, user, data: dict, active: int,
@@ -2505,7 +2533,7 @@ async def _finalize_voice_sets(bot, state: FSMContext, user, data: dict, active:
     than surfacing "что-то пошло не так" for a save that actually succeeded.
     """
     sets_str = ", ".join(formatting.format_set(w, r) for w, r in logged)
-    text = f"🎙 Записал: {sets_str}"
+    text = i18n.t("workout.voice_logged", sets=sets_str)
     if message is not None:
         try:
             await message.reply(text)
@@ -2534,7 +2562,7 @@ async def _ask_weight_confirmation(
     until the answer comes back, and the user's own message is left in place so
     the numbers they typed are still on screen next to the question."""
     sent = await message.reply(
-        f"{prompt}\nЗаписываем?", reply_markup=keyboards.weight_confirm_keyboard()
+        f"{prompt}\n{i18n.t('workout.log_confirm_question')}", reply_markup=keyboards.weight_confirm_keyboard()
     )
     await state.update_data(
         pending_weight_confirm={
@@ -2588,8 +2616,8 @@ async def _apply_set_edit(state: FSMContext, data: dict, active: int, index: int
     sets = await db.list_sets_for_workout_exercise(data["workout_id"], active)
     if not (1 <= index <= len(sets)):
         if not sets:
-            raise ParseError("Пока нет ни одного подхода — нечего править.")
-        raise ParseError(f"Нет подхода №{index} — в дневнике их пока {len(sets)}.")
+            raise ParseError(i18n.t("workout.no_sets_to_edit"))
+        raise ParseError(i18n.t("workout.set_index_not_found", index=index, total=len(sets)))
     row = sets[index - 1]
     weight = row["weight"] if new_set.weight_omitted else new_set.weight
     await db.update_set(row["id"], weight, new_set.reps, new_set.rpe)
@@ -2663,7 +2691,7 @@ async def log_set_text(message: Message, state: FSMContext):
 
     if text == "?":
         await message.reply(
-            _HELP_SHORT, parse_mode="HTML", reply_markup=keyboards.help_keyboard(expanded=False)
+            _help_short(), parse_mode="HTML", reply_markup=keyboards.help_keyboard(expanded=False)
         )
         return
 
@@ -2671,7 +2699,7 @@ async def log_set_text(message: Message, state: FSMContext):
         user = await db.get_user(message.from_user.id)
         result = await _undo_last_set(message.bot, state, user, data)
         if result.removed is None:
-            await message.reply("Нет подходов для удаления")
+            await message.reply(i18n.t("workout.nothing_to_undo"))
         else:
             await _delete_message(message)
         return
@@ -2680,7 +2708,7 @@ async def log_set_text(message: Message, state: FSMContext):
         user = await db.get_user(message.from_user.id)
         result = await _repeat_last_set(message.bot, state, user, data)
         if result is None:
-            await message.reply("Нет подхода для повтора")
+            await message.reply(i18n.t("workout.nothing_to_repeat"))
         else:
             await _delete_message(message)
         return
@@ -2688,7 +2716,7 @@ async def log_set_text(message: Message, state: FSMContext):
     if text.startswith("!"):
         note = text[1:].strip()
         if not note:
-            await message.reply("Напиши текст после «!», например «!болит плечо — следи за локтями»")
+            await message.reply(i18n.t("workout.note_command_empty"))
             return
         await db.set_workout_exercise_note(data["workout_id"], active, note)
         await _delete_message(message)
@@ -2740,7 +2768,7 @@ async def log_set_voice(message: Message, state: FSMContext):
     """Log a set by voice ("сто на восемь") — hands are chalky, typing is slow.
     Reuses the AI-trainer's transcription, then the same number parser as text."""
     if not ai_trainer.is_voice_configured():
-        await message.reply("Голосовой ввод пока не настроен, напиши подход текстом.")
+        await message.reply(i18n.t("workout.voice_not_configured"))
         return
     try:
         buf = await message.bot.download(message.voice)
@@ -2748,7 +2776,7 @@ async def log_set_voice(message: Message, state: FSMContext):
         transcript = await ai_trainer.transcribe_voice(buf, message.from_user.id)
     except Exception:
         logger.exception("Voice set transcription failed for user %s", message.from_user.id)
-        await message.reply("⚠️ Не разобрал голосовое, попробуй ещё раз или напиши текстом.")
+        await message.reply(i18n.t("workout.voice_transcription_failed"))
         return
 
     line, dropped_sets = voice_parse.transcript_to_sets_line_with_hint(transcript or "")
@@ -2757,14 +2785,14 @@ async def log_set_voice(message: Message, state: FSMContext):
     except ParseError:
         parsed = None
     if not parsed:
-        heard = f" (услышал: «{escape(transcript)}»)" if transcript else ""
-        await message.reply(f"Не понял вес и повторы из голосового{heard}. Скажи, например, «сто на восемь».")
+        heard = i18n.t("workout.voice_heard", transcript=escape(transcript)) if transcript else ""
+        await message.reply(i18n.t("workout.voice_parse_failed", heard=heard))
         return
     if dropped_sets:
         # "100 8 три подхода" пишет один подход, а число подходов из речи молча
         # выбрасывается (см. voice_parse) — без этой строки человек решит, что
         # записались все три.
-        await message.reply("Записал один подход. Если их несколько — продиктуй каждый отдельно.")
+        await message.reply(i18n.t("workout.voice_single_set_only"))
 
     data = await state.get_data()
     data = await _discard_superseded_confirmation(message.bot, state, data)
@@ -2816,7 +2844,7 @@ async def live_weight_confirm(callback: CallbackQuery, state: FSMContext):
                 await callback.bot.delete_message(
                     chat_id=pending["chat_id"], message_id=pending["message_id"]
                 )
-            await callback.answer("Не записал — набери подход заново")
+            await callback.answer(i18n.t("workout.confirm_declined"))
             return
 
         active = pending["exercise_id"]
@@ -2842,10 +2870,10 @@ async def live_undo(callback: CallbackQuery, state: FSMContext):
     user = await db.get_user(callback.from_user.id)
     result = await _undo_last_set(callback.bot, state, user, data)
     if result.removed is None:
-        await callback.answer("Нет подходов для удаления")
+        await callback.answer(i18n.t("workout.nothing_to_undo"))
     else:
         w, r = result.removed
-        await callback.answer(f"Удалил {formatting.format_set(w, r)}")
+        await callback.answer(i18n.t("workout.undo_done", set=formatting.format_set(w, r)))
 
 
 @router.callback_query(StateFilter(WorkoutFlow.logging_set), F.data == "live:repeat")
@@ -2861,10 +2889,10 @@ async def live_repeat_set(callback: CallbackQuery, state: FSMContext):
     user = await db.get_user(callback.from_user.id)
     result = await _repeat_last_set(callback.bot, state, user, data)
     if result is None:
-        await callback.answer("Нет подхода для повтора")
+        await callback.answer(i18n.t("workout.nothing_to_repeat"))
     else:
         w, r, rpe = result
-        await callback.answer(f"➕ {formatting.format_set(w, r, rpe)}")
+        await callback.answer(i18n.t("workout.set_added", set=formatting.format_set(w, r, rpe)))
 
 
 @router.callback_query(StateFilter(WorkoutFlow.logging_set), F.data.startswith("live:reps:"))
@@ -2892,7 +2920,7 @@ async def live_reps_button(callback: CallbackQuery, state: FSMContext):
         (data.get("last_session_sets") or {}).get(active),
     )
     if basis is None or block_id is None:
-        await callback.answer("Сначала запиши подход — с него возьму вес")
+        await callback.answer(i18n.t("workout.log_first_set_hint"))
         return
     weight = basis[0]
     try:
@@ -2910,7 +2938,7 @@ async def live_reps_button(callback: CallbackQuery, state: FSMContext):
     last_by[active] = (weight, reps)
     await state.update_data(last_by_exercise=last_by)
     await _render_logging_screen(callback.bot, state, user)
-    await callback.answer(f"➕ {formatting.format_set(weight, reps)}")
+    await callback.answer(i18n.t("workout.set_added", set=formatting.format_set(weight, reps)))
 
 
 
@@ -2972,8 +3000,8 @@ async def _planned_block_label(block_plan: dict) -> str:
     names = []
     for ex_id in list(block_plan.get("exercise_ids") or []):
         ex = await db.get_exercise(ex_id)
-        names.append(ex["display_name"] if ex else "упражнение")
-    return " + ".join(names) or "упражнение"
+        names.append(ex["display_name"] if ex else i18n.t("workout.exercise_fallback_name"))
+    return " + ".join(names) or i18n.t("workout.exercise_fallback_name")
 
 
 def _drop_planned_exercise(planned: list[dict], ex_id: int) -> list[dict]:
@@ -3089,11 +3117,9 @@ async def _enter_program_complete_screen(bot, state: FSMContext, user, workout_i
     data = await state.get_data()
     done_ids = tuple(await db.list_exercise_ids_for_workout(workout_id))
     ex_count, set_count, tonnage = await _program_complete_stats(workout_id)
-    lines = ["🎉 <b>Программа пройдена</b>"]
+    lines = [i18n.t("workout.program_complete_header")]
     if ex_count:
-        ex_word = formatting.plural_ru(ex_count, ("упражнение", "упражнения", "упражнений"))
-        set_word = formatting.plural_ru(set_count, ("подход", "подхода", "подходов"))
-        stats = f"{ex_count} {ex_word}, {set_count} {set_word}"
+        stats = i18n.t("workout.program_complete_stats", ex=ex_count, sets=set_count)
         if tonnage:
             stats += f", {formatting.format_tonnage(tonnage, user['unit'])}"
         lines.append(stats)
@@ -3113,14 +3139,23 @@ async def live_next_planned(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-_PLAN_HINT = "📋 <b>Осталось по программе</b>\nВыбери, что делать сейчас — порядок не обязателен."
-_PLAN_REMOVE_HINT = "📋 <b>Убрать из плана</b>\nТапни то, чего сегодня не будет."
+# Три текста читаются из каталога при каждом вызове, а не застывают константой
+# при импорте (та же причина, что у _greeting()/_onboarding()).
+def _plan_hint() -> str:
+    return i18n.t("workout.plan_hint")
+
+
+def _plan_remove_hint() -> str:
+    return i18n.t("workout.plan_remove_hint")
+
+
 # Первый экран тренировки по программе. До него первое упражнение открывалось
 # само, и порядок был свободным начиная со ВТОРОГО: с первым человек оказывался
 # заперт в том, что стояло в программе номером один, — а занята в зале бывает
 # ровно та стойка, с которой он собирался начать. Выход был («Закончить
 # упражнение» без единого подхода, потом 📋), но его надо было угадать.
-_PLAN_START_HINT = "📋 <b>План на сегодня</b>\nС чего начнёшь? Порядок не обязателен."
+def _plan_start_hint() -> str:
+    return i18n.t("workout.plan_start_hint")
 
 
 async def _plan_screen(
@@ -3141,7 +3176,7 @@ async def _plan_screen(
     items = [(i, await _planned_block_label(b)) for i, b in enumerate(planned)]
     await _refresh_live(
         callback.bot, state, user, data["workout_id"],
-        hint or (_PLAN_REMOVE_HINT if removing else _PLAN_HINT),
+        hint or (_plan_remove_hint() if removing else _plan_hint()),
         keyboards.planned_plan_keyboard(items, removing=removing, allow_removing=allow_removing),
     )
 
@@ -3164,7 +3199,7 @@ async def start_planned_workout(callback: CallbackQuery, state: FSMContext) -> N
         await _load_next_planned_block(callback, state)
         return
     await state.set_state(WorkoutFlow.idle)
-    await _plan_screen(callback, state, hint=_PLAN_START_HINT, allow_removing=False)
+    await _plan_screen(callback, state, hint=_plan_start_hint(), allow_removing=False)
 
 
 @router.callback_query(StateFilter(WorkoutFlow.idle), F.data == "live:plan")
@@ -3189,7 +3224,7 @@ async def live_plan_remove_mode(callback: CallbackQuery, state: FSMContext):
 async def live_plan_pick(callback: CallbackQuery, state: FSMContext):
     index = int(callback.data.split(":")[3])
     if not await _load_next_planned_block(callback, state, index=index):
-        await callback.answer("Это упражнение уже не в плане")
+        await callback.answer(i18n.t("workout.exercise_no_longer_planned"))
         return
     await callback.answer()
 
@@ -3209,7 +3244,7 @@ async def live_plan_skip(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     planned = list(data.get("planned_blocks") or [])
     if not 0 <= index < len(planned):
-        await callback.answer("Это упражнение уже не в плане")
+        await callback.answer(i18n.t("workout.exercise_no_longer_planned"))
         return
     dropped = planned.pop(index)
     # Помним, что именно выкинули: правка программы по ходу тренировки
@@ -3218,7 +3253,7 @@ async def live_plan_skip(callback: CallbackQuery, state: FSMContext):
     skipped = set(data.get("plan_skipped_ids") or []) | set(dropped.get("exercise_ids") or [])
     await state.update_data(planned_blocks=planned, plan_skipped_ids=sorted(skipped))
     await _plan_screen(callback, state, removing=True)
-    await callback.answer("Убрал")
+    await callback.answer(i18n.t("workout.removed_from_plan"))
 
 
 @router.callback_query(StateFilter(WorkoutFlow.idle), F.data == "live:plan:back")
@@ -3244,12 +3279,12 @@ async def live_finish_workout(callback: CallbackQuery, state: FSMContext):
         # программы переживают тренировки, их не трогаем.
         await clear_state_keep_ai(state)
         await _show_main_menu(callback, state)
-        await callback.answer("Тренировка была пустая — удалил её.")
+        await callback.answer(i18n.t("workout.empty_deleted"))
         return
     await state.set_state(WorkoutFlow.confirming_finish)
     await ui.safe_edit(
         callback,
-        "🏁 Завершить тренировку?",
+        i18n.t("workout.finish_confirm"),
         reply_markup=keyboards.confirm_finish_workout_keyboard(),
     )
     await callback.answer()
@@ -3268,8 +3303,11 @@ async def live_finish_workout_confirmed(callback: CallbackQuery, state: FSMConte
         await state.set_state(WorkoutFlow.confirming_finish_date)
         await ui.safe_edit(
             callback,
-            f"⚠️ Тренировка начата {formatting.format_date_ru(started_local)}, а сегодня "
-            f"{formatting.format_date_ru(today_local)}.\n\nВсё верно?",
+            i18n.t(
+                "workout.finish_date_mismatch",
+                started=formatting.format_date_ru(started_local),
+                today=formatting.format_date_ru(today_local),
+            ),
             reply_markup=keyboards.finish_date_mismatch_keyboard(),
         )
         await callback.answer()
@@ -3291,7 +3329,7 @@ async def finish_confirm_changedate(callback: CallbackQuery, state: FSMContext):
     today = timeutil.user_today(await db.get_user(callback.from_user.id))
     await ui.safe_edit(
         callback,
-        "На какую дату перенести тренировку?\nВыбери в календаре или напиши дату в формате дд.мм.гггг:",
+        i18n.t("workout.pick_finish_date"),
         reply_markup=keyboards.calendar_keyboard("findate", today.year, today.month, today=today),
     )
     await callback.answer()
@@ -3448,7 +3486,7 @@ async def _finished_workout_card_text(workout, user, note: str | None, comment=_
     )
     if equivalent:
         tonnage = formatting.format_tonnage(session_tonnage, user["unit"])
-        suffix += f"\n\n🏋️ Суммарно за тренировку — {tonnage}. {equivalent}"
+        suffix += "\n\n" + i18n.t("workout.session_tonnage_total", tonnage=tonnage, equivalent=equivalent)
     effective_comment = workout["ai_comment"] if comment is _UNSET else comment
     if effective_comment:
         suffix += "\n" + formatting.build_ai_comment_block(effective_comment)
@@ -3509,7 +3547,7 @@ async def workout_card_note_prompt(callback: CallbackQuery, state: FSMContext):
     workout_id = int(callback.data.split(":")[2])
     workout = await db.get_workout(workout_id)
     if workout is None or workout["user_id"] != callback.from_user.id:
-        await callback.answer("Тренировка не найдена", show_alert=True)
+        await callback.answer(i18n.t("workout.not_found"), show_alert=True)
         return
     await state.update_data(
         note_workout_id=workout_id,
@@ -3518,10 +3556,10 @@ async def workout_card_note_prompt(callback: CallbackQuery, state: FSMContext):
         note_return_state=await state.get_state(),
     )
     await state.set_state(WorkoutFlow.editing_finished_note)
-    current = f"\n\nСейчас: <i>{escape(workout['note'])}</i>" if workout["note"] else ""
-    hint = "\n\nПришли «-», чтобы убрать заметку." if workout["note"] else ""
+    current = i18n.t("workout.note_current", note=escape(workout["note"])) if workout["note"] else ""
+    hint = i18n.t("workout.note_clear_hint") if workout["note"] else ""
     await callback.message.answer(
-        f"Заметка к тренировке — напиши текст (сон, самочувствие, что угодно).{current}{hint}",
+        i18n.t("workout.workout_note_prompt") + current + hint,
         reply_markup=keyboards.cancel_keyboard("live:addnote_cancel"),
     )
     await callback.answer()
@@ -3553,7 +3591,7 @@ async def workout_card_note_entered(message: Message, state: FSMContext):
             chat_id=data["note_chat_id"], message_id=data["note_message_id"], text=full_text,
             parse_mode="HTML", reply_markup=card_kb,
         )
-    await message.reply("📝 Записал заметку.")
+    await message.reply(i18n.t("workout.note_saved"))
 
 
 async def _finalize_workout(event, state: FSMContext, note: str | None):
@@ -3597,7 +3635,7 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
     )
     if equivalent:
         tonnage = formatting.format_tonnage(session_tonnage, user["unit"])
-        suffix += f"\n\n🏋️ Суммарно за тренировку — {tonnage}. {equivalent}"
+        suffix += "\n\n" + i18n.t("workout.session_tonnage_total", tonnage=tonnage, equivalent=equivalent)
     # Backfilled/imported past workouts shouldn't fire the "Nth workout" milestone —
     # they're entered out of order, so the running count isn't meaningful for them.
     if not is_backfill:
@@ -3615,7 +3653,7 @@ async def _finalize_workout(event, state: FSMContext, note: str | None):
         suffix += "\n\n" + achievement_line
 
 
-    prefix = "✅ Записал как прошлую тренировку\n\n" if is_backfill else ""
+    prefix = i18n.t("workout.backfill_logged_prefix") if is_backfill else ""
 
     # Existing comment (already generated, e.g. from a backfilled workout) shows right
     # away; a fresh one is generated in the background so finishing a workout doesn't

@@ -10,6 +10,7 @@ import pytest
 import ai_limits
 import ai_trainer
 import config
+import i18n
 import timeutil
 
 pytestmark = pytest.mark.asyncio
@@ -1009,6 +1010,27 @@ async def test_transcribe_voice_returns_stripped_text(monkeypatch):
     assert kwargs["model"] == config.OPENAI_TRANSCRIBE_MODEL
 
 
+async def test_transcribe_voice_passes_the_users_language_to_the_model(monkeypatch):
+    """Язык распознавания передаётся явно, а не оставляется на автодетект.
+
+    Без него английская фраза про железо стабильно расшифровывается кириллицей:
+    модель слышит короткие числа на фоне зала и уходит в язык большинства своих
+    данных. Парсеру такая расшифровка уже не по зубам, и голосовой ввод у
+    англоязычного молча не работает — ошибки нет, просто ничего не происходит.
+    """
+    for lang in ("ru", "en"):
+        response = SimpleNamespace(text="two twenty five for five")
+        client = SimpleNamespace(
+            audio=SimpleNamespace(transcriptions=SimpleNamespace(create=AsyncMock(return_value=response)))
+        )
+        monkeypatch.setattr(ai_trainer, "_get_audio_client", lambda client=client: client)
+
+        with i18n.use_lang(lang):
+            await ai_trainer.transcribe_voice(SimpleNamespace(name="voice.ogg"))
+
+        assert client.audio.transcriptions.create.await_args.kwargs["language"] == lang
+
+
 async def test_transcribe_voice_returns_empty_string_when_blank(monkeypatch):
     response = SimpleNamespace(text=None)
     client = SimpleNamespace(
@@ -1330,8 +1352,12 @@ async def test_the_system_prompt_carries_no_date():
     сообщение запроса, общее для ВСЕХ пользователей и КАЖДОГО хода. Смена даты
     раз в сутки рвала кэшированный префикс целиком (шапка + вся история)
     сразу у всех. Промпт теперь принимает ноль аргументов и байт-в-байт
-    одинаков в любой день — дата уезжает отдельно, см. _ask_plain."""
-    assert ai_trainer._system_prompt() == ai_trainer.SYSTEM_PROMPT
+    одинаков в любой день — дата уезжает отдельно, см. _ask_plain.
+
+    Языковой хвост (см. ai_trainer._with_language_tail) на этот инвариант не
+    влияет: он тоже не зависит от даты, только от i18n.get_lang().
+    """
+    assert ai_trainer._system_prompt() == ai_trainer._with_language_tail(ai_trainer.SYSTEM_PROMPT)
     assert "Сегодня" not in ai_trainer._system_prompt()
 
 

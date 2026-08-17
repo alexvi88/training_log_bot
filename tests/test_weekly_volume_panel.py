@@ -231,7 +231,7 @@ async def test_a_user_without_workouts_gets_no_panel_and_no_image(fresh_db, user
     text, png = await workout_handlers._menu_view(user_id)
 
     assert png is None
-    assert text == workout_handlers._ONBOARDING
+    assert text == workout_handlers._onboarding()
 
 
 async def test_the_real_groups_reach_the_panel(fresh_db, user_id):

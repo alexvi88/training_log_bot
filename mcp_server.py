@@ -48,7 +48,9 @@ from mcp.server.transport_security import TransportSecuritySettings
 
 import ai_trainer
 import config
+import db
 import game_server
+import i18n
 import mcp_oauth
 
 logger = logging.getLogger(__name__)
@@ -120,7 +122,20 @@ EXPOSED_TOOLS = READ_ONLY_TOOLS | WRITE_TOOLS
 # log_food и подставлявшийся ВСЕМ шести WRITE_TOOLS. create_exercise ответил
 # им же — «поправить упражнение можно в Дневнике веса» неправда, у него
 # вообще нет отдельного экрана. Общая формулировка верна для всех шести.
-_MCP_WRITE_NOTE = "Записано. Поправить или убрать это можно в самом боте."
+async def _mcp_write_note(user_id: int) -> str:
+    """Приписка к успешной записи — уходит в клиент ДАННЫМИ (поле `note` в JSON),
+    а не описанием инструмента, поэтому язык у неё пользовательский.
+
+    Описания инструментов в этом файле одноязычно английские осознанно: схема
+    забирается один раз на процесс, и сигнала языка там нет. Здесь сигнал есть —
+    user_id к этому моменту уже разрешён, — так что общее правило файла на эту
+    строку не распространяется. Язык берём из базы явно: MCP-вызов приходит не
+    апдейтом Telegram, никакая middleware контекст не выставляла, и полагаться
+    на i18n.get_lang() тут значило бы отдать язык предыдущего вызова.
+    """
+    user = await db.get_user(user_id)
+    lang = user["lang"] if user is not None else i18n.DEFAULT_LANG
+    return i18n.t_in(lang, "mcp.write_note")
 
 
 class Unauthorized(Exception):
@@ -128,16 +143,24 @@ class Unauthorized(Exception):
 
 
 def _user_id() -> int:
-    """Чьи данные отдавать — из личности, которую установил middleware SDK.
+    """Whose data to return — from the identity the SDK middleware set.
 
-    `subject` кладут туда оба пути авторизации (см. mcp_oauth), поэтому здесь
-    нет ни разбора заголовка, ни знания о том, каким из них пришёл клиент.
+    Both auth paths (see mcp_oauth) put `subject` there, so there's no header
+    parsing here, nor any need to know which path the client came through.
     """
     token = get_access_token()
     if token is None or not token.subject:
         # Текст уходит в клиент как есть: это единственная подсказка, которую
         # увидит человек, подключившийся не тем токеном.
+        #
+        # Двуязычный одной строкой, а не по языку пользователя: эта ветка
+        # срабатывает именно тогда, когда мы НЕ знаем, кто пришёл, — токен
+        # негодный, user_id нет, и спросить язык не у кого. Тот же приём, что на
+        # экране выбора языка в онбординге (screen.onboarding_language.title):
+        # когда сигнала нет, честнее показать оба языка, чем угадать один.
         raise Unauthorized(
+            "Access expired. Open the bot, send /mcp and connect it again — "
+            "via connector or token.\n"
             "Нужен действующий доступ. Открой бота, набери /mcp и подключи его "
             "заново — коннектором или токеном."
         )
@@ -145,29 +168,30 @@ def _user_id() -> int:
 
 
 async def _call(tool_name: str, **arguments: Any) -> str:
-    """Общий путь всех инструментов: личность → ридер/писатель AI-тренера.
+    """Common path for every tool: identity → the AI trainer's reader/writer.
 
-    Параметр называется `tool_name`, а не `name` — у create_exercise и
-    copy_program среди своих же аргументов есть `name` (название упражнения
-    / программы), и с `_call(name: str, **arguments)` вызов `_call("create_
-    exercise", name=name, group=group)` падал с «got multiple values for
-    argument 'name'»: kwarg `name` от инструмента сталкивался с позиционным
-    именем самого инструмента. Ловится только вызовом по проводу — с прямым
-    вызовом `execute_tool` в тестах коллизии нет, эту ошибку словил только
-    сквозной JSON-RPC тест.
+    The parameter is named `tool_name`, not `name` — create_exercise and
+    copy_program both have their own `name` argument (exercise/program title),
+    and with `_call(name: str, **arguments)` a call like `_call("create_
+    exercise", name=name, group=group)` failed with "got multiple values for
+    argument 'name'": the tool's own `name` kwarg collided with the tool's own
+    positional name. Only a call over the wire catches this — calling
+    `execute_tool` directly in tests has no collision, so only the end-to-end
+    JSON-RPC test caught this bug.
 
-    Возвращает JSON-строку — то, что видит модель внутри бота, с одной
-    поправкой: у WRITE_TOOLS `note` рассчитан на модель тренера в Telegram
-    («под ответом кнопка отката») — здесь такой кнопки нет, и тот же текст
-    внешнему клиенту был бы неправдой.
+    Returns a JSON string — what the model sees inside the bot, with one
+    adjustment: for WRITE_TOOLS, `note` is written for the trainer model in
+    Telegram ("there's an undo button below this reply") — there's no such
+    button here, and the same text would be a lie to an external client.
 
-    Заменяем подстрокой, а не блокирующей перезаписью всего поля: у части
-    инструментов `note` — это `_UNDO_NOTE` целиком (log_bodyweight,
-    log_food, create_exercise на успехе), а у copy_program — префикс плюс
-    он же («Копия «X» создана. {_UNDO_NOTE}»). У тех же create_exercise
-    бывают и совсем другие note («такое упражнение уже есть», «выбери
-    группу из списка») — их подмена исказила бы смысл, поэтому трогаем
-    только когда в тексте реально встретился `_UNDO_NOTE`.
+    We replace a substring rather than overwriting the whole field: for some
+    tools `note` IS `_UNDO_NOTE` verbatim (log_bodyweight, log_food,
+    create_exercise on success), while copy_program's is a prefix plus the
+    same note ("Copy of "X" created. {_UNDO_NOTE}"). Those same create_exercise
+    calls can also return entirely different notes ("this exercise already
+    exists", "pick a group from the list") — overwriting those would distort
+    their meaning, so we only touch the text when `_UNDO_NOTE` actually
+    appears in it.
     """
     if tool_name not in EXPOSED_TOOLS:
         # Недостижимо через объявленные ниже инструменты; страховка от того,
@@ -181,31 +205,31 @@ async def _call(tool_name: str, **arguments: Any) -> str:
     payload = json.loads(raw)
     note = payload.get("note")
     if isinstance(note, str) and ai_trainer._UNDO_NOTE in note:
-        payload["note"] = note.replace(ai_trainer._UNDO_NOTE, _MCP_WRITE_NOTE)
+        payload["note"] = note.replace(ai_trainer._UNDO_NOTE, await _mcp_write_note(user_id))
     return json.dumps(payload, ensure_ascii=False)
 
 
 def build_server() -> MCPServer:
-    """Собрать MCP-сервер. Отдельной функцией, чтобы тесты поднимали свой
-    экземпляр, а не тянули глобальный.
+    """Build the MCP server. A separate function so tests spin up their own
+    instance instead of pulling in the global one.
 
-    `auth_server_provider` без отдельного `token_verifier` — не упущение:
-    MCPServer запрещает передавать оба, а из провайдера он сам делает
-    верификатор поверх `load_access_token`. Нам это и нужно, потому что там же
-    принимается статический токен — один путь проверки на оба вида.
+    `auth_server_provider` with no separate `token_verifier` is not an
+    oversight: MCPServer refuses to accept both, and it builds a verifier out
+    of the provider itself, on top of `load_access_token`. That's exactly what
+    we need, because that same method also accepts the static token — one
+    verification path for both kinds.
     """
     mcp = MCPServer(
         name="training-log",
-        title="Дневник тренировок",
+        title="Training Log",
         instructions=(
-            "Данные тренировок одного пользователя Telegram-бота: история тренировок и подходов, "
-            "прогресс по упражнениям, недельный объём по группам мышц, вес тела, дневник питания "
-            "и сохранённые программы. Почти всё только на чтение — кроме log_bodyweight, "
-            "log_food, create_exercise, copy_program, delete_food_entry и "
-            "delete_bodyweight_log: они пишут сразу и без подтверждения (переименование "
-            "и другая правка — только в самом боте). Начинай с get_training_overview — "
-            "оттуда видны единицы измерения (кг/фунты) и точные названия упражнений, "
-            "которые нужны остальным инструментам."
+            "Training data for one Telegram bot user: workout and set history, exercise "
+            "progress, weekly volume by muscle group, body weight, food diary, and saved "
+            "programs. Almost everything is read-only — except log_bodyweight, log_food, "
+            "create_exercise, copy_program, delete_food_entry, and delete_bodyweight_log: "
+            "these write immediately, without confirmation (renaming and other edits are "
+            "bot-only). Start with get_training_overview — it shows the units (kg/lb) and "
+            "the exact exercise names the other tools need."
         ),
         version="1.0.0",
         auth_server_provider=mcp_oauth.TrainingLogOAuthProvider(),
@@ -218,92 +242,91 @@ def build_server() -> MCPServer:
 
     @mcp.tool()
     async def get_training_overview() -> str:
-        """Сводка по пользователю: единицы измерения, формула e1RM, статистика (всего
-        тренировок, за неделю, за 30 дней, дней с последней, стрик) и список его
-        упражнений с группой мышц и числом использований. Вызывай первым."""
+        """User summary: units, e1RM formula, stats (total workouts, this week, last 30
+        days, days since last one, streak) and their exercise list with muscle group and
+        use count. Call this first."""
         return await _call("get_training_overview")
 
     @mcp.tool()
     async def get_active_workout() -> str:
-        """Текущая незавершённая тренировка: когда начата, что уже залогировано,
-        заметки к упражнениям. Пустой результат — сейчас пользователь не тренируется."""
+        """The current unfinished workout: when it started, what's logged so far, and
+        exercise notes. An empty result means the user isn't training right now."""
         return await _call("get_active_workout")
 
     @mcp.tool()
     async def list_recent_workouts(limit: int = 5) -> str:
-        """Последние завершённые тренировки (1-10, по умолчанию 5): дата, заметки и
-        все подходы (вес x повторы) по каждому упражнению. Для вопросов про долгий
-        период бери get_full_workout_history."""
+        """The most recent completed workouts (1-10, default 5): date, notes, and every
+        set (weight x reps) for each exercise. For questions about a long time span, use
+        get_full_workout_history instead."""
         return await _call("list_recent_workouts", limit=max(1, min(int(limit), 10)))
 
     @mcp.tool()
     async def get_full_workout_history() -> str:
-        """Вся история тренировок (до 200 последних) — для вопросов про длинный
-        период: динамика за полгода, объём по месяцам, поиск давних тренировок."""
+        """The full workout history (up to the last 200) — for questions about a long
+        time span: trends over six months, monthly volume, finding old workouts."""
         return await _call("get_full_workout_history")
 
     @mcp.tool()
     async def get_muscle_recovery() -> str:
-        """Насколько отдохнула каждая группа мышц: процент восстановления, когда
-        тренировали последний раз и сколько дней назад. 100% значит готова к тяжёлой
-        работе, ниже 85% — ещё не отдохнула. Для вопросов «что сегодня качать»."""
+        """How recovered each muscle group is: recovery percentage, when it was last
+        trained, and how many days ago. 100% means ready for heavy work, below 85% means
+        it hasn't recovered yet. Use this for "what should I train today" questions."""
         return await _call("get_muscle_recovery")
 
     @mcp.tool()
     async def get_weekly_volume_by_group() -> str:
-        """Объём (рабочие подходы) по группам мышц за текущую и прошлую неделю —
-        чем нагрузка перекошена и что недобирает."""
+        """Volume (working sets) by muscle group for the current and previous week —
+        where the load is lopsided and what's falling short."""
         return await _call("get_weekly_volume_by_group")
 
     @mcp.tool()
     async def get_exercise_progress(exercise_name: str) -> str:
-        """Динамика по одному упражнению: подходы по датам, рабочие веса, e1RM,
-        рекорды. exercise_name — точное название из get_training_overview. Если
-        total_sessions: 0 (sessions — пустой список) — у упражнения нет ни одной
-        записи; не придумывай дату, подходы или e1RM для него — скажи прямо, что
-        данных пока нет."""
+        """Progress on a single exercise: sets by date, working weights, e1RM, records.
+        exercise_name is the exact name from get_training_overview. If total_sessions is
+        0 (sessions is an empty list), the exercise has no logged entries at all — don't
+        make up a date, sets, or e1RM for it; say plainly that there's no data yet."""
         return await _call("get_exercise_progress", exercise_name=exercise_name)
 
     @mcp.tool()
     async def list_exercise_catalog() -> str:
-        """Каталог упражнений бота по группам мышц — что можно предложить сверх того,
-        что пользователь уже делает."""
+        """The bot's exercise catalog by muscle group — what could be suggested beyond
+        what the user already does."""
         return await _call("list_exercise_catalog")
 
     @mcp.tool()
     async def get_bodyweight_history() -> str:
-        """История взвешиваний: дата и вес тела."""
+        """Weigh-in history: date and body weight."""
         return await _call("get_bodyweight_history")
 
     @mcp.tool()
     async def get_food_diary(days: int = 14) -> str:
-        """Дневник питания за последние N дней (по умолчанию 14): записи о еде с КБЖУ
-        и суточными итогами."""
+        """Food diary for the last N days (default 14): food entries with calories/
+        protein/fat/carbs and daily totals."""
         return await _call("get_food_diary", days=max(1, min(int(days), 90)))
 
     @mcp.tool()
     async def get_saved_programs() -> str:
-        """Сохранённые программы пользователя: дни, упражнения и схемы подходов."""
+        """The user's saved programs: days, exercises, and set schemes."""
         return await _call("get_saved_programs")
 
     @mcp.tool()
     async def compare_periods(days: int = 90) -> str:
-        """Что изменилось по всем упражнениям: последние N дней против предыдущих N
-        (по умолчанию 90) — тренировки, подходы, лучший e1RM и тоннаж в каждом окне
-        плюс разница, отдельно упражнения, которые бросил или начал делать."""
+        """What changed across all exercises: the last N days against the previous N
+        (default 90) — workouts, sets, best e1RM, and tonnage in each window plus the
+        difference, and separately, exercises that were dropped or newly started."""
         return await _call("compare_periods", days=max(7, min(int(days), 365)))
 
     @mcp.tool()
     async def get_program_adherence() -> str:
-        """Насколько реальные тренировки совпадают с сохранённой программой: что
-        делается по плану, что пропускается, что добавлено сверху."""
+        """How closely actual workouts match the saved program: what's being done on
+        plan, what's being skipped, what's been added on top."""
         return await _call("get_program_adherence")
 
     @mcp.tool()
     async def log_bodyweight(weight: float) -> str:
-        """Записать вес тела в дневник — пишет сразу, без подтверждения. Число в
-        единицах пользователя (unit из get_training_overview), без конвертации.
-        Поправить или убрать запись — в самом боте, 🏋️ Дневник веса."""
+        """Log a body weight entry — writes immediately, no confirmation. The number is
+        in the user's unit (see `unit` in get_training_overview), no conversion is done.
+        Fixing or removing the entry is bot-only, in the Weight Log screen."""
         return await _call("log_bodyweight", weight=weight)
 
     @mcp.tool()
@@ -314,10 +337,11 @@ def build_server() -> MCPServer:
         fat: float | None = None,
         carbs: float | None = None,
     ) -> str:
-        """Записать съеденное в дневник питания за сегодня — пишет сразу, без
-        подтверждения. КБЖУ передавай, только если их назвал сам человек; не
-        знаешь — оставь пустыми, оценит тот же разборщик, что и на экране
-        дневника. Поправить или убрать запись — в самом боте, 🍽 Дневник еды."""
+        """Log something eaten today into the food diary — writes immediately, no
+        confirmation. Only pass calories/protein/fat/carbs if the person actually stated
+        them; leave them blank if you don't know — the same estimator used on the diary
+        screen will fill them in. Fixing or removing the entry is bot-only, in the Food
+        Diary screen."""
         return await _call(
             "log_food", description=description,
             calories=calories, protein=protein, fat=fat, carbs=carbs,
@@ -325,58 +349,60 @@ def build_server() -> MCPServer:
 
     @mcp.tool()
     async def create_exercise(name: str, group: str) -> str:
-        """Завести своё упражнение, которого нет ни в списке пользователя, ни в
-        каталоге — пишет сразу, добавление ничего не портит. Сначала проверь
-        get_training_overview и list_exercise_catalog: если движение уже есть,
-        бери его, а не заводи второе с чуть другим названием. group — точное
-        имя группы мышц из get_training_overview или list_exercise_catalog."""
+        """Add a custom exercise that's in neither the user's list nor the catalog —
+        writes immediately, adding never breaks anything. Check get_training_overview
+        and list_exercise_catalog first: if the movement already exists, use that one
+        instead of creating a second one under a slightly different name. group is the
+        exact muscle group name from get_training_overview or list_exercise_catalog."""
         return await _call("create_exercise", name=name, group=group)
 
     @mcp.tool()
     async def copy_program(name: str, new_name: str | None = None) -> str:
-        """Дубликат сохранённой программы со всеми днями, упражнениями и схемами —
-        пишет сразу, копия ничего не портит. name — точное имя источника из
-        get_saved_programs. Без new_name имя возьмётся свободное рядом с
-        исходным («PPL (2)»)."""
+        """Duplicate a saved program with all its days, exercises, and set schemes —
+        writes immediately, a copy never breaks anything. name is the exact source name
+        from get_saved_programs. Without new_name, a free name near the original is
+        picked automatically ("PPL (2)")."""
         return await _call("copy_program", name=name, new_name=new_name)
 
     @mcp.tool()
     async def delete_food_entry(entry_id: int) -> str:
-        """Убрать одну запись из дневника питания — пишет сразу. entry_id — точный
-        id из get_food_diary, не выдумывай; если человек не назвал, какую запись,
-        посмотри дневник и уточни, если записей за день несколько."""
+        """Remove one food diary entry — writes immediately. entry_id is the exact id
+        from get_food_diary, don't guess it; if the person didn't say which entry, check
+        the diary and ask if there's more than one entry for that day."""
         return await _call("delete_food_entry", entry_id=entry_id)
 
     @mcp.tool()
     async def delete_bodyweight_log(log_id: int) -> str:
-        """Убрать одну запись веса — пишет сразу. log_id — точный id из
-        get_bodyweight_history, не выдумывай."""
+        """Remove one body weight entry — writes immediately. log_id is the exact id
+        from get_bodyweight_history, don't guess it."""
         return await _call("delete_bodyweight_log", log_id=log_id)
 
     return mcp
 
 
 def build_app():
-    """ASGI-приложение целиком: MCP на MCP_PATH, рядом — роуты OAuth.
+    """The whole ASGI app: MCP on MCP_PATH, with the OAuth routes alongside it.
 
-    Своей обёртки с проверкой токена здесь больше нет, и это не упрощение:
-    обёртка требовала токен на *любом* запросе, а теперь на том же порту живут
-    `/authorize`, `/token`, `/register`, `.well-known` и страница согласия — то
-    есть ровно те адреса, куда клиент приходит ещё без токена. Требование токена
-    висит на одном `MCP_PATH` (`RequireAuthMiddleware` от SDK), и 401 там такой
-    же честный: с `WWW-Authenticate`, по которому клиент находит, где
-    авторизоваться.
+    There's no custom token-checking wrapper anymore, and that's not a
+    simplification for its own sake: the old wrapper required a token on
+    *every* request, and now the same port also serves `/authorize`, `/token`,
+    `/register`, `.well-known`, and the consent page — exactly the addresses a
+    client hits before it has a token at all. The token requirement now lives
+    on `MCP_PATH` alone (the SDK's `RequireAuthMiddleware`), and its 401 is just
+    as honest: it carries `WWW-Authenticate`, which tells the client where to
+    authorize.
 
-    stateless_http/json_response: сессию между запросами держать негде — процесс
-    один, но перезапускается по воле хостинга, — а SSE-стрим здесь не нужен,
-    ответы короткие и приходят целиком.
+    stateless_http/json_response: there's nowhere to hold a session between
+    requests — it's one process, but the host can restart it at will — and an
+    SSE stream isn't needed here; responses are short and arrive whole.
 
-    DNS-rebinding-защиту (Host/Origin) выключаем явно, и это важно указать
-    именно явно: без параметра SDK включает её сам и разрешает только localhost
-    — за прокси хостинга приходит Host публичного домена, и каждый запрос
-    получает 421. Сама защита здесь и не нужна: она про localhost-серверы, к
-    которым браузер жертвы может постучаться от её имени, а тут за каждым
-    запросом всё равно должен лежать секрет, которого у чужой страницы нет.
+    DNS-rebinding protection (Host/Origin) is disabled explicitly, and that's
+    worth stating explicitly: without the parameter the SDK turns it on itself
+    and allows only localhost — behind the host's proxy every request arrives
+    with the public domain's Host header, and each one would get a 421. The
+    protection itself isn't needed here anyway: it guards against localhost
+    servers a victim's browser could reach on their behalf, and here every
+    request still needs a secret that a random page doesn't have.
     """
     mcp = build_server()
     app = mcp.streamable_http_app(
@@ -393,18 +419,20 @@ def build_app():
 
 
 async def serve() -> None:
-    """Поднять MCP-сервер в текущем event loop (рядом с поллингом, см. main.py).
+    """Bring up the MCP server on the current event loop (alongside polling, see
+    main.py).
 
-    Падение сервера не должно ронять бота: Telegram-часть — основная, а MCP
-    отвалившийся с ошибкой порта заметят лишь те, кто им пользуется.
+    A server crash must not take the bot down with it: the Telegram side is
+    the main product, and only people who actually use MCP would notice it
+    falling over with a port error.
 
-    Неустранимую ошибку конфигурации (сборка приложения) ретраить незачем —
-    MCP_PUBLIC_URL сам себя не починит между попытками, и мгновенный цикл
-    исключений только зальёт лог. А вот падение уже поднятого server.serve()
-    (например, временная проблема с портом) раньше молча оставляло /mcp
-    мёртвым до следующего редеплоя — бот при этом продолжал отвечать в
-    Telegram, и заметить пропажу было нечем. Здесь та же схема retry-loop,
-    что и в admin_tasks.run_oauth_purge_job.
+    An unrecoverable configuration error (building the app) isn't worth
+    retrying — MCP_PUBLIC_URL won't fix itself between attempts, and an
+    instant exception loop would only flood the log. But a crash of an
+    already-running server.serve() (say, a transient port issue) used to
+    silently leave /mcp dead until the next redeploy — the bot kept answering
+    on Telegram the whole time, so there was nothing to notice the outage by.
+    This uses the same retry-loop shape as admin_tasks.run_oauth_purge_job.
     """
     try:
         # Сборка приложения — тоже под перехватом, и это не перестраховка: OAuth

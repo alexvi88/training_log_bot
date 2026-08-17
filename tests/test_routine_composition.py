@@ -13,6 +13,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import CallbackQuery
 
 import formatting
+import i18n
 import keyboards
 from fsm import RoutineFlow
 from handlers import routines
@@ -30,7 +31,7 @@ def _make_callback(user_id: int, data: str = ""):
     message.edit_reply_markup = AsyncMock()
     message.answer = AsyncMock(return_value=SimpleNamespace(message_id=1))
     callback = MagicMock(spec=CallbackQuery)
-    callback.from_user = SimpleNamespace(id=user_id, username="tester")
+    callback.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     callback.message = message
     callback.data = data
     callback.answer = AsyncMock()
@@ -41,7 +42,7 @@ def _make_callback(user_id: int, data: str = ""):
 
 def _make_message(user_id: int, text: str):
     msg = MagicMock()
-    msg.from_user = SimpleNamespace(id=user_id, username="tester")
+    msg.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     msg.text = text
     msg.answer = AsyncMock()
     msg.reply = AsyncMock()
@@ -147,7 +148,7 @@ async def test_remove_confirm_rejects_someone_elses_routine(fresh_db, user_id):
     callback = _make_callback(user_id, f"rt:rmex:{other_routine}:{entries[0]['id']}")
     await routines.rt_remove_exercise_confirm(callback, state)
 
-    callback.answer.assert_awaited_once_with("Программа не найдена", show_alert=True)
+    callback.answer.assert_awaited_once_with(i18n.t("routine.alert.program_not_found"), show_alert=True)
     assert await db.list_routine_exercises(other_routine) == entries  # untouched
 
 
@@ -163,7 +164,7 @@ async def test_confirming_removal_rejects_someone_elses_routine(fresh_db, user_i
     callback = _make_callback(user_id, f"rt:rmexyes:{other_routine}:{entries[0]['id']}")
     await routines.rt_remove_exercise(callback, state)
 
-    callback.answer.assert_awaited_once_with("Программа не найдена", show_alert=True)
+    callback.answer.assert_awaited_once_with(i18n.t("routine.alert.program_not_found"), show_alert=True)
     assert await db.list_routine_exercises(other_routine) == entries  # untouched
 
 
@@ -318,7 +319,7 @@ async def test_move_rejects_someone_elses_routine(fresh_db, user_id):
     callback = _make_callback(user_id, f"rt:mvex:{other_routine}:{entries[0]['id']}:up")
     await routines.rt_move_exercise(callback, state)
 
-    callback.answer.assert_awaited_once_with("Программа не найдена", show_alert=True)
+    callback.answer.assert_awaited_once_with(i18n.t("routine.alert.program_not_found"), show_alert=True)
 
 
 async def test_group_screen_offers_a_catalog_button(fresh_db, user_id):
@@ -618,7 +619,7 @@ async def test_renaming_rejects_something_that_is_not_a_program(fresh_db, user_i
 
     await routines.rt_program_rename(callback, await _make_state(user_id))
 
-    callback.answer.assert_awaited_once_with("Программа не найдена", show_alert=True)
+    callback.answer.assert_awaited_once_with(i18n.t("routine.alert.program_not_found"), show_alert=True)
 
 
 async def test_target_normalization_keeps_what_it_cannot_parse():

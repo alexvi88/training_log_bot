@@ -29,7 +29,7 @@ def _make_callback(user_id: int, data: str):
     bot = MagicMock()
     bot.get_me = AsyncMock(return_value=SimpleNamespace(username="TrainLogBot"))
     callback = MagicMock()
-    callback.from_user = SimpleNamespace(id=user_id, username="tester")
+    callback.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     callback.message = message
     callback.bot = bot
     callback.data = data
@@ -37,10 +37,10 @@ def _make_callback(user_id: int, data: str):
     return callback
 
 
-def _make_message(user_id: int):
+def _make_message(user_id: int, language_code: str | None = None):
     msg = MagicMock()
     msg.chat = SimpleNamespace(id=user_id)
-    msg.from_user = SimpleNamespace(id=user_id, username="recipient")
+    msg.from_user = SimpleNamespace(id=user_id, username="recipient", language_code=language_code)
     msg.answer = AsyncMock(return_value=SimpleNamespace(message_id=701))
     return msg
 
@@ -264,6 +264,30 @@ async def test_recipient_sees_preview_and_is_asked_not_forced(fresh_db, user_id)
     callbacks = [b.callback_data for row in kb.inline_keyboard for b in row]
     assert f"share:add:{token}" in callbacks  # добавить — только явным тапом
     assert await db.list_routines(recipient) == []  # ничего не импортировано само
+
+
+async def test_new_recipient_via_share_link_gets_language_guessed(fresh_db, user_id):
+    """Визитка — второй возможный первый вход (см. cmd_start): без явной
+    догадки в open_shared новичок навсегда остаётся на lang='ru' по DEFAULT
+    схемы, и cmd_start (который один умеет показать экран выбора языка)
+    больше никогда не увидит его is_new — get_or_create_user тут уже завёл
+    строку раньше него."""
+    db = fresh_db
+    routine_id = await _routine_with_exercises(db, user_id)
+    await sharing.share_routine(_make_callback(user_id, f"share:rt:{routine_id}"), await _state(user_id))
+    token = await _last_share_token(db)
+
+    new_recipient_id = 4242
+    assert await db.get_user(new_recipient_id) is None  # именно новичок, без строки в базе
+
+    msg = _make_message(new_recipient_id, language_code="en")
+    await sharing.open_shared(
+        msg, CommandObject(command="start", args=f"sh_{token}"), await _state(new_recipient_id)
+    )
+
+    row = await db.get_user(new_recipient_id)
+    assert row is not None
+    assert row["lang"] == "en"
 
 
 async def test_dead_token_does_not_break_start(fresh_db, user_id):

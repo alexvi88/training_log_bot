@@ -31,10 +31,25 @@ from typing import Optional, Sequence
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import Message
 
+import i18n
+
 # Заголовок и иконка по умолчанию — сборка программы. Другой сценарий
 # (видео/импорт) передаёт свои через параметры run_progress.
-DEFAULT_TITLE = "Собираю программу под тебя"
+#
+# Заголовок НЕ константа и не значение по умолчанию у параметра, хотя выглядел
+# бы естественнее и тем и другим. Дефолты аргументов Python вычисляет ОДИН РАЗ,
+# когда определяет функцию, то есть на импорте модуля — а язык пользователя в
+# этот момент неизвестен и процесс один на всех. Русская строка застыла бы там
+# навсегда, и от этого не спасает даже отложенное разрешение через __getattr__
+# модуля (как сделано в formatting.py): к моменту, когда __getattr__ мог бы
+# сработать, значение уже вписано в подпись функции. Поэтому дефолт — None, а
+# язык выбирается при вызове.
 DEFAULT_ICON = "🏗"
+
+
+def default_title() -> str:
+    """Заголовок экрана прогресса на языке текущего пользователя."""
+    return i18n.t("progress.default_title")
 
 # Потолок фейкового процента — дальше цифра не растёт, пока задача реально не
 # закончится. 93, а не 99 — так виднее, что до конца ещё есть шаг (финальная
@@ -79,7 +94,7 @@ def render(
     stages: Sequence[str],
     done_count: int,
     *,
-    title: str = DEFAULT_TITLE,
+    title: str | None = None,
     icon: str = DEFAULT_ICON,
 ) -> str:
     """Собрать текст экрана: заголовок с процентом и чеклист этапов.
@@ -88,7 +103,7 @@ def render(
     в тексте его ещё нет, — так же, как готовые фразы running_texts.py дают
     понять, что тренер не закончил и не завис.
     """
-    lines = [f"{icon} {title} — {percent}%", ""]
+    lines = [f"{icon} {title or default_title()} — {percent}%", ""]
     for i, stage in enumerate(stages):
         if i < done_count:
             lines.append(f"✅ {stage}")
@@ -100,7 +115,7 @@ def render(
     return "\n".join(lines)
 
 
-def initial_text(stages: Sequence[str], *, title: str = DEFAULT_TITLE, icon: str = DEFAULT_ICON) -> str:
+def initial_text(stages: Sequence[str], *, title: str | None = None, icon: str = DEFAULT_ICON) -> str:
     """Текст самого первого сообщения — 0%, первый этап уже «в работе»."""
     return render(0, stages, 0, title=title, icon=icon)
 
@@ -110,7 +125,7 @@ async def run_progress(
     task: "asyncio.Task",
     stages: Sequence[str],
     *,
-    title: str = DEFAULT_TITLE,
+    title: str | None = None,
     icon: str = DEFAULT_ICON,
     cap_percent: int = CAP_PERCENT,
     growth_tau: float = GROWTH_TAU,

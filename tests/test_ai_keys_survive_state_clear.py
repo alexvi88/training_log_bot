@@ -46,7 +46,7 @@ def _message(user_id: int, text: str | None = None):
     msg = MagicMock(spec=Message)
     msg.chat = SimpleNamespace(id=user_id)
     msg.message_id = 5
-    msg.from_user = SimpleNamespace(id=user_id, username="tester")
+    msg.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     msg.text = text
     msg.reply = AsyncMock()
     msg.answer = AsyncMock(return_value=SimpleNamespace(chat=SimpleNamespace(id=user_id), message_id=6))
@@ -67,7 +67,7 @@ def _callback(user_id: int, data: str = "x"):
         return_value=SimpleNamespace(chat=SimpleNamespace(id=user_id), message_id=2)
     )
     callback = MagicMock(spec=CallbackQuery)
-    callback.from_user = SimpleNamespace(id=user_id, username="tester")
+    callback.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     callback.bot = AsyncMock()
     callback.message = message
     callback.data = data
@@ -91,7 +91,7 @@ async def test_finalize_workout_keeps_ai_draft(fresh_db, user_id):
     await state.set_state(WorkoutFlow.idle)
     bot = AsyncMock()
     callback = MagicMock(spec=CallbackQuery)
-    callback.from_user = SimpleNamespace(id=user_id, username="tester")
+    callback.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     callback.bot = bot
     callback.answer = AsyncMock()
 

@@ -27,7 +27,7 @@ ADMIN_ID = 999
 
 def _message(user_id: int = 111, text: str | None = "жим 100х5", **kwargs) -> Message:
     message = MagicMock(spec=Message)
-    message.from_user = SimpleNamespace(id=user_id, username="tester")
+    message.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     message.chat = SimpleNamespace(id=user_id)
     message.message_id = 7
     message.text = text
@@ -48,7 +48,7 @@ def _callback(user_id: int = 111, data: str = "wo:finish", buttons=(("Завер
     inner.delete = AsyncMock()
     inner.answer = AsyncMock(return_value=SimpleNamespace(message_id=2))
     callback = MagicMock(spec=CallbackQuery)
-    callback.from_user = SimpleNamespace(id=user_id, username="tester")
+    callback.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     callback.message = inner
     callback.data = data
     callback.answer = AsyncMock()

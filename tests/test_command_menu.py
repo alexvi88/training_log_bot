@@ -133,6 +133,8 @@ async def test_no_admin_scope_registered_when_admin_id_unset(monkeypatch):
 
     await _setup_commands(bot)
 
-    assert bot.set_my_commands.call_count == 1
-    scope = bot.set_my_commands.call_args.kwargs["scope"]
-    assert isinstance(scope, BotCommandScopeDefault)
+    # Без ADMIN_ID остаётся только дефолтный scope, но заливается он дважды —
+    # русский набор (без language_code) и английский (language_code="en").
+    assert bot.set_my_commands.call_count == 2
+    for call in bot.set_my_commands.call_args_list:
+        assert isinstance(call.kwargs["scope"], BotCommandScopeDefault)

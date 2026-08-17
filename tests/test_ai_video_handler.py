@@ -20,7 +20,7 @@ pytestmark = pytest.mark.asyncio
 
 def _message(duration=10, file_size=1024, caption=None, user_id=777):
     message = MagicMock()
-    message.from_user = SimpleNamespace(id=user_id)
+    message.from_user = SimpleNamespace(id=user_id, language_code=None)
     message.caption = caption
     message.video = SimpleNamespace(
         duration=duration, file_size=file_size, mime_type="video/mp4", file_id="vid-1"
@@ -397,7 +397,7 @@ async def test_skip_analyses_without_a_name(wired):
 async def test_stale_button_after_restart_does_not_crash(wired):
     """FSM переживает рестарт, а нажатие может прийти когда ролика уже нет."""
     callback = MagicMock()
-    callback.from_user = SimpleNamespace(id=777)
+    callback.from_user = SimpleNamespace(id=777, language_code=None)
     callback.data = "aivid:skip"
     callback.answer = AsyncMock()
     callback.message = _message()
@@ -474,9 +474,9 @@ async def test_pager_arrows_appear_only_where_there_is_somewhere_to_go(monkeypat
         b.text for row in message.reply.await_args.kwargs["reply_markup"].inline_keyboard
         for b in row
     ]
-    assert any("ещё" in label for label in labels)
+    assert any("ещё" in label.lower() for label in labels)
     # С первой страницы назад некуда.
-    assert not any("назад" in label for label in labels)
+    assert not any("назад" in label.lower() for label in labels)
 
 
 async def test_long_exercise_name_survives_the_64_byte_callback_limit(monkeypatch, wired):

@@ -32,7 +32,7 @@ def _make_callback(user_id: int, data: str):
     bot.send_message = AsyncMock(return_value=SimpleNamespace(message_id=999))
     _stub_photo_sends(bot)
     callback = MagicMock()
-    callback.from_user = SimpleNamespace(id=user_id)
+    callback.from_user = SimpleNamespace(id=user_id, language_code=None)
     callback.bot = bot
     callback.data = data
     callback.answer = AsyncMock()
@@ -56,7 +56,7 @@ def _make_message(user_id: int, text: str):
     bot.delete_message = AsyncMock()
     bot.send_message = AsyncMock(return_value=SimpleNamespace(message_id=999))
     message = MagicMock()
-    message.from_user = SimpleNamespace(id=user_id)
+    message.from_user = SimpleNamespace(id=user_id, language_code=None)
     message.bot = bot
     message.text = text
     message.delete = AsyncMock()
@@ -202,7 +202,7 @@ async def test_search_results_are_paginated_instead_of_being_cut_off(fresh_db, u
 
     kb = message.bot.send_message.await_args.kwargs["reply_markup"]
     texts = [b.text for row in kb.inline_keyboard for b in row]
-    assert keyboards.PAGE_NEXT_TEXT in texts, "нет кнопки следующей страницы"
+    assert keyboards.PAGE_NEXT_TEXT() in texts, "нет кнопки следующей страницы"
     # Тринадцать совпадений при странице в восемь — вторая страница обязана быть,
     # и «Жим штанги лёжа» должен быть достижим, а не срезан.
     assert sum(1 for t in texts if t.startswith("Жим")) <= 8
@@ -257,7 +257,11 @@ async def test_typing_no_match_in_exercise_picker_offers_to_create(fresh_db, use
 
     state = await _make_state(user_id)
     await state.update_data(pending_group_id=group_id)
-    message = _make_message(user_id, "squat")
+    # Не "squat": с тех пор, как search_exercise_templates научили сверяться
+    # ещё и с английской локализацией каталога, «squat» находит шаблон
+    # «Присед» (см. tests/test_db_exercises.py) — тут нужен запрос, который не
+    # найдёт ничего вообще ни у пользователя, ни в каталоге.
+    message = _make_message(user_id, "zxqvnonexistent")
 
     await workout.pick_exercise_search(message, state)
 
@@ -267,7 +271,7 @@ async def test_typing_no_match_in_exercise_picker_offers_to_create(fresh_db, use
     buttons = [b for row in kb.inline_keyboard for b in row]
     create = next(b for b in buttons if b.callback_data == "pick:newquery")
     # Имя уже набрано — кнопка предлагает именно его, а не «новое упражнение».
-    assert "squat" in create.text
+    assert "zxqvnonexistent" in create.text
 
 
 async def test_no_match_without_group_still_offers_to_create(fresh_db, user_id):
@@ -559,7 +563,7 @@ def _make_template_callback(user_id: int, data: str):
     _stub_photo_sends(bot)
     message.bot = bot
     callback = MagicMock()
-    callback.from_user = SimpleNamespace(id=user_id)
+    callback.from_user = SimpleNamespace(id=user_id, language_code=None)
     callback.message = message
     callback.bot = bot
     callback.data = data
@@ -843,7 +847,7 @@ def _full_callback(user_id: int, data: str):
     )
     message.delete = AsyncMock()
     callback = MagicMock(spec=CallbackQuery)
-    callback.from_user = SimpleNamespace(id=user_id, username="tester")
+    callback.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     callback.bot = _make_callback(user_id, data).bot
     callback.data = data
     callback.answer = AsyncMock()

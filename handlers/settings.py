@@ -14,6 +14,7 @@ import achievement_sync
 import config
 import db
 import formatting
+import i18n
 import keyboards
 import ui
 from fsm import AITrainerFlow, SettingsFlow
@@ -52,8 +53,9 @@ async def show_settings(
         food_macros_enabled=bool(user["food_macros_enabled"]),
         show_extra_stats=bool(user["show_extra_stats"]),
         show_mcp=config.mcp_available(),
+        lang=user["lang"],
     )
-    await ui.safe_edit(callback, "🔧 Подстрою бота под тебя.", reply_markup=kb)
+    await ui.safe_edit(callback, i18n.t("settings.screen.title"), reply_markup=kb)
     if alert:
         await callback.answer(alert, show_alert=show_alert)
     else:
@@ -97,10 +99,10 @@ def profile_rows(user) -> list[tuple[str, Optional[str]]]:
     # ai_trainer._save_athlete_profile). Колонка в базе осталась, но её никто
     # не читает, так что и на экране ей делать нечего.
     return [
-        ("Опыт", user["experience"]),
-        ("Цель", user["goal"]),
-        ("Оборудование", equipment),
-        ("Ограничения", user["limitations"]),
+        (i18n.t("settings.profile.field.experience"), user["experience"]),
+        (i18n.t("settings.profile.field.goal"), user["goal"]),
+        (i18n.t("settings.profile.field.equipment"), equipment),
+        (i18n.t("settings.profile.field.limitations"), user["limitations"]),
     ]
 
 
@@ -133,15 +135,10 @@ async def settings_profile(callback: CallbackQuery, state: FSMContext):
     await state.set_state(SettingsFlow.profile)
     lines = _profile_lines(user)
     known = any(not line.endswith("</b> —") for line in lines)
-    tail = (
-        "Что-то не так — напиши сюда, как правильно, и я поправлю."
-        if known
-        else "Пока я про тебя ничего не знаю. Загляни в 🤖 AI-тренер и расскажи, "
-             "чего хочешь от зала, — запомню и буду собирать программы под это."
-    )
+    tail = i18n.t("settings.profile.tail_known" if known else "settings.profile.tail_unknown")
     text = (
-        "🤖 <b>ЧТО Я ПРО ТЕБЯ ЗНАЮ</b>\n\n"
-        "Записал с твоих слов — по этому и подбираю программы.\n\n"
+        f"🤖 <b>{i18n.t('settings.profile.title')}</b>\n\n"
+        f"{i18n.t('settings.profile.intro')}\n\n"
         + "\n".join(lines)
         + f"\n\n{tail}"
     )
@@ -151,6 +148,12 @@ async def settings_profile(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+# Инструкция самой модели, не экран: человек её никогда не видит — она
+# оборачивает его реплику перед отправкой в ai_trainer._handle_question, и в
+# истории чата остаётся только его исходный текст (см. history_question=text
+# ниже). Поэтому она остаётся по-русски независимо от языка интерфейса — то же
+# решение, что и у SETUP_ANSWERS_FRAME/SETUP_ENOUGH_FRAME в handlers/ai_trainer.py
+# (см. i18n_coverage.ALLOWED_CYRILLIC["handlers/settings.py"] для этого модуля).
 PROFILE_EDIT_FRAME = (
     "Человек пишет это, глядя на экран «Что я про тебя знаю» — то есть правит "
     "твою память о себе, а не спрашивает про тренировки. Что просит убрать — "
@@ -177,7 +180,10 @@ async def profile_correction(message: Message, state: FSMContext):
     # что следующая реплика тоже уедет ему, а не упрётся в «Не понял».
     await state.set_state(AITrainerFlow.chatting)
     if not ai_handler._try_claim_busy(message.from_user.id):
-        await message.reply("Секунду, ещё думаю над прошлым вопросом 😅")
+        # Та же фраза, что и у остальных «занят прошлым вопросом» в
+        # handlers/ai_trainer.py (пока не в этом проходе локализации, см. ответ
+        # задачи) — здесь переведена отдельным ключом, без правки того модуля.
+        await message.reply(i18n.t("settings.profile.ai_busy"))
         return
     try:
         await ai_handler._handle_question(
@@ -193,7 +199,7 @@ async def settings_profile_clear(callback: CallbackQuery, state: FSMContext):
         callback.from_user.id,
         days_per_week=None, experience=None, goal=None, equipment=None, limitations=None,
     )
-    await callback.answer("Очистил")
+    await callback.answer(i18n.t("settings.profile.clear_alert"))
     await settings_profile(callback, state)
 
 
@@ -201,14 +207,14 @@ async def settings_profile_clear(callback: CallbackQuery, state: FSMContext):
 async def settings_unit_confirm(callback: CallbackQuery, state: FSMContext):
     user = await db.get_user(callback.from_user.id)
     new_unit = "lb" if user["unit"] == "kg" else "kg"
+    unit_name = keyboards.UNIT_NAMES[new_unit]
     kb = keyboards.yes_no_keyboard(
         yes_cb="settings:unityes", no_cb="settings:unitno",
-        yes_text=f"Переключить на {new_unit}", no_text="❌ Отмена",
+        yes_text=i18n.t("settings.unit.switch_to", unit=unit_name), no_text=i18n.t("btn.cancel"),
     )
     await ui.safe_edit(
         callback,
-        f"Переключить единицы на {new_unit}? Все веса в истории будут пересчитаны — "
-        "конвертация туда-обратно теряет точность на округлении.",
+        i18n.t("settings.unit.confirm", unit=unit_name),
         reply_markup=kb,
     )
     await callback.answer()
@@ -261,7 +267,7 @@ async def settings_unit(callback: CallbackQuery, state: FSMContext):
     finding nothing left to convert."""
     user_id = callback.from_user.id
     if not _try_claim_converting(user_id):
-        await callback.answer("Уже пересчитываю — секунду")
+        await callback.answer(i18n.t("settings.unit.busy"))
         return
     try:
         user = await db.get_user(user_id)
@@ -281,7 +287,7 @@ async def settings_unit(callback: CallbackQuery, state: FSMContext):
         await achievement_sync.resync(user_id)
         await show_settings(
             callback, state,
-            alert=f"Перевёл всё на {keyboards.UNIT_NAMES[new_unit]} — историю и рекорды пересчитал сам.",
+            alert=i18n.t("settings.unit.done", unit=keyboards.UNIT_NAMES[new_unit]),
         )
     finally:
         _converting.discard(user_id)
@@ -297,8 +303,7 @@ async def settings_timezone(callback: CallbackQuery, state: FSMContext):
     user = await db.get_user(callback.from_user.id)
     await ui.safe_edit(
         callback,
-        "🕒 Выбери свой часовой пояс (сдвиг от UTC).\n"
-        "Это влияет на «сегодня»/«вчера» и на время, к которому бот считает твой день.",
+        i18n.t("settings.tz.prompt"),
         reply_markup=keyboards.timezone_picker_keyboard(user["tz_offset"]),
     )
     await callback.answer()
@@ -325,7 +330,7 @@ async def settings_timezone_set(callback: CallbackQuery, state: FSMContext):
         await achievement_sync.resync(callback.from_user.id)
     await show_settings(
         callback, state,
-        alert=f"Поставил тебе {keyboards.format_utc_offset(offset)}",
+        alert=i18n.t("settings.tz.set_alert", offset=keyboards.format_utc_offset(offset)),
         show_alert=False,
     )
 
@@ -335,6 +340,36 @@ async def settings_timezone_back(callback: CallbackQuery, state: FSMContext):
     await show_settings(callback, state)
 
 
+@router.callback_query(F.data == "settings:lang")
+async def settings_language(callback: CallbackQuery, state: FSMContext):
+    user = await db.get_user(callback.from_user.id)
+    await ui.safe_edit(
+        callback,
+        i18n.t_in(user["lang"], "screen.language.title"),
+        reply_markup=keyboards.language_keyboard(user["lang"]),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("settings:langset:"))
+async def settings_language_set(callback: CallbackQuery, state: FSMContext):
+    lang = callback.data.split(":")[2]
+    if lang not in i18n.SUPPORTED:
+        # Незнакомый код в callback (старая клавиатура, чужой клиент) — не
+        # роняем хендлер и не трогаем базу, просто перерисовываем экран как есть.
+        await settings_language(callback, state)
+        return
+    await db.set_user_lang(callback.from_user.id, lang)
+    # Порядок важен: контекст переставляем ДО перерисовки экрана настроек —
+    # иначе человек нажмёт English и увидит русский экран (см. задачу).
+    i18n.set_lang(lang)
+    await show_settings(
+        callback, state,
+        alert=i18n.t_in(lang, "screen.language.set_alert"),
+        show_alert=False,
+    )
+
+
 @router.callback_query(F.data == "settings:formula")
 async def settings_formula_confirm(callback: CallbackQuery, state: FSMContext):
     """Switching the formula recomputes every e1RM, record and chart in the app's
@@ -342,17 +377,14 @@ async def settings_formula_confirm(callback: CallbackQuery, state: FSMContext):
     numbers meaning the same thing), so it asks the same way."""
     user = await db.get_user(callback.from_user.id)
     new_formula = "brzycki" if user["e1rm_formula"] == "epley" else "epley"
+    formula_name = keyboards.FORMULA_NAMES[new_formula]
     kb = keyboards.yes_no_keyboard(
         yes_cb="settings:formulayes", no_cb="settings:formulano",
-        yes_text=f"Переключить на {new_formula}", no_text="❌ Отмена",
+        yes_text=i18n.t("settings.formula.switch_to", formula=formula_name), no_text=i18n.t("btn.cancel"),
     )
     await ui.safe_edit(
         callback,
-        f"e1RM — расчётный максимум в упражнении: какой вес ты смог бы поднять на один раз. "
-        f"Считается по весу и повторам, а {new_formula} — просто другая формула "
-        f"этого расчёта.\n\n"
-        f"Переключить на {new_formula}? Все расчётные максимумы, "
-        "рекорды и графики пересчитаются — сами подходы не изменятся.",
+        i18n.t("settings.formula.confirm", formula=formula_name),
         reply_markup=kb,
     )
     await callback.answer()
@@ -365,7 +397,7 @@ async def settings_formula(callback: CallbackQuery, state: FSMContext):
     await db.update_user(callback.from_user.id, e1rm_formula=new_formula)
     await show_settings(
         callback, state,
-        alert=f"Перевёл на {keyboards.FORMULA_NAMES[new_formula]}",
+        alert=i18n.t("settings.formula.done", formula=keyboards.FORMULA_NAMES[new_formula]),
         show_alert=False,
     )
 
@@ -431,6 +463,6 @@ async def settings_export(callback: CallbackQuery, state: FSMContext):
         ])
     data = buf.getvalue().encode("utf-8-sig")
     await callback.message.answer_document(
-        BufferedInputFile(data, filename="training_log.csv"), caption="Экспорт истории тренировок"
+        BufferedInputFile(data, filename="training_log.csv"), caption=i18n.t("settings.export.caption")
     )
     await callback.answer()

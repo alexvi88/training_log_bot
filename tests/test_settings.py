@@ -18,7 +18,7 @@ def _make_callback(user_id: int, data: str):
     message.delete = AsyncMock()
     message.answer = AsyncMock(return_value=SimpleNamespace(message_id=1))
     callback = MagicMock()
-    callback.from_user = SimpleNamespace(id=user_id, username="tester")
+    callback.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     callback.message = message
     callback.data = data
     callback.answer = AsyncMock()
@@ -102,7 +102,9 @@ async def test_formula_switch_asks_before_rewriting_every_e1rm(fresh_db, user_id
     assert user["e1rm_formula"] == "epley"  # unchanged — it only asked
     sent = callback.message.answer.await_args
     text = sent.args[0] if sent.args else sent.kwargs["text"]
-    assert "brzycki" in text
+    # Русское название формулы, а не сырой код "brzycki" — та же логика, что и
+    # у тоста после подтверждения (test_confirming_the_formula_switch_is_a_toast_not_a_modal).
+    assert "Бжицки" in text
     assert "пересчитаются" in text
 
 
@@ -368,7 +370,7 @@ async def test_profile_screen_listens_to_what_you_type(fresh_db, user_id):
     try:
         message = MagicMock()
         message.text = "убери ограничения"
-        message.from_user = SimpleNamespace(id=user_id, username="tester")
+        message.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
         message.reply = AsyncMock()
         await settings.profile_correction(message, state)
     finally:

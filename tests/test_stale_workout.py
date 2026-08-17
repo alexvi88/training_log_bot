@@ -20,7 +20,7 @@ pytestmark = pytest.mark.asyncio
 
 def _make_message(user_id: int):
     message = MagicMock()
-    message.from_user = SimpleNamespace(id=user_id, username="tester")
+    message.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     message.answer = AsyncMock(return_value=SimpleNamespace(message_id=999))
     return message
 
@@ -33,7 +33,7 @@ def _make_callback(user_id: int, data: str):
     bot.delete_message = AsyncMock()
     bot.send_message = AsyncMock(return_value=SimpleNamespace(message_id=1))
     callback = MagicMock()
-    callback.from_user = SimpleNamespace(id=user_id, username="tester")
+    callback.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     callback.message = message
     callback.bot = bot
     callback.data = data

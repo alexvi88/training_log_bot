@@ -24,7 +24,7 @@ def _state(user_id: int) -> FSMContext:
 
 def _make_message(user_id: int, text: str):
     msg = MagicMock()
-    msg.from_user = SimpleNamespace(id=user_id, username="tester")
+    msg.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     msg.text = text
     msg.delete = AsyncMock()
     msg.answer = AsyncMock()
@@ -69,7 +69,7 @@ async def test_header_shows_plain_count_when_everything_fits(fresh_db, user_id):
 
 def _make_callback(user_id: int, data: str):
     callback = MagicMock()
-    callback.from_user = SimpleNamespace(id=user_id, username="tester")
+    callback.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     callback.data = data
     callback.answer = AsyncMock()
     callback.message = MagicMock()

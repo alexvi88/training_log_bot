@@ -29,7 +29,7 @@ def _callback(user_id: int = 1, data: str = "pick:grp:7", *, inaccessible: bool 
         message.answer = AsyncMock(return_value=SimpleNamespace(message_id=11))
     callback = MagicMock(spec=CallbackQuery)
     callback.answer = AsyncMock()
-    callback.from_user = SimpleNamespace(id=user_id, username="tester")
+    callback.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     callback.message = message
     callback.data = data
     callback.bot = MagicMock()
@@ -42,7 +42,7 @@ async def test_unhandled_text_points_to_ai_trainer_and_start(fresh_db, user_id):
     """Самый частый непонятый текст — вопрос тренеру, напечатанный из главного
     меню («составь мне программу»): ответ обязан вести и к AI-тренеру, и в меню."""
     message = MagicMock()
-    message.from_user = SimpleNamespace(id=user_id)
+    message.from_user = SimpleNamespace(id=user_id, language_code=None)
     message.text = "составь мне программу"
     message.content_type = ContentType.TEXT
     message.reply = AsyncMock()
@@ -64,7 +64,7 @@ async def test_unhandled_text_points_to_ai_trainer_and_start(fresh_db, user_id):
 
 async def test_a_set_typed_with_no_active_workout_points_at_starting_one(fresh_db, user_id):
     message = MagicMock()
-    message.from_user = SimpleNamespace(id=user_id)
+    message.from_user = SimpleNamespace(id=user_id, language_code=None)
     message.text = "100 8"
     message.content_type = ContentType.TEXT
     message.reply = AsyncMock()
@@ -82,7 +82,7 @@ async def test_a_set_typed_with_no_active_workout_points_at_starting_one(fresh_d
 async def test_pure_weight_x_reps_form_also_points_at_starting_one(fresh_db, user_id):
     """"100x8x3" — тоже подход, только через другой сепаратор в parse_sets_line."""
     message = MagicMock()
-    message.from_user = SimpleNamespace(id=user_id)
+    message.from_user = SimpleNamespace(id=user_id, language_code=None)
     message.text = "100x8x3"
     message.content_type = ContentType.TEXT
     message.reply = AsyncMock()
@@ -98,7 +98,7 @@ async def test_typing_a_known_exercise_name_offers_its_card(fresh_db, user_id):
     group_id = await fresh_db.create_muscle_group(user_id, "Грудь")
     ex_id = await fresh_db.create_exercise(user_id, "Жим штанги лёжа", group_id)
     message = MagicMock()
-    message.from_user = SimpleNamespace(id=user_id)
+    message.from_user = SimpleNamespace(id=user_id, language_code=None)
     message.text = "жим"
     message.content_type = ContentType.TEXT
     message.reply = AsyncMock()
@@ -114,7 +114,7 @@ async def test_typing_a_known_exercise_name_offers_its_card(fresh_db, user_id):
 
 async def test_unknown_exercise_name_still_falls_back_to_the_generic_reply(fresh_db, user_id):
     message = MagicMock()
-    message.from_user = SimpleNamespace(id=user_id)
+    message.from_user = SimpleNamespace(id=user_id, language_code=None)
     message.text = "совсем незнакомое упражнение зюзюка"
     message.content_type = ContentType.TEXT
     message.reply = AsyncMock()
@@ -130,7 +130,7 @@ async def test_a_command_never_goes_through_the_new_routes(fresh_db, user_id):
     """Незнакомая команда должна получать тот же общий ответ, что и раньше — не
     пытаемся распарсить "/xyz" как подход или найти его в упражнениях."""
     message = MagicMock()
-    message.from_user = SimpleNamespace(id=user_id)
+    message.from_user = SimpleNamespace(id=user_id, language_code=None)
     message.text = "/xyz"
     message.content_type = ContentType.TEXT
     message.reply = AsyncMock()
@@ -195,7 +195,7 @@ async def test_service_messages_get_no_answer_at_all():
     отвечал на него «Не понял 🤔». То есть выговор за действие, которого никто
     не совершал: человек ничего боту не писал."""
     message = MagicMock()
-    message.from_user = SimpleNamespace(id=1)
+    message.from_user = SimpleNamespace(id=1, language_code=None)
     message.text = None
     message.content_type = ContentType.PINNED_MESSAGE
     message.reply = AsyncMock()

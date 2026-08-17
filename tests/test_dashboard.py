@@ -135,10 +135,10 @@ async def test_menu_view_plain_text_for_new_user(user_id, fresh_db):
 
 @pytest.mark.asyncio
 async def test_menu_view_shows_onboarding_for_new_user(user_id, fresh_db):
-    from handlers.workout import _ONBOARDING, _menu_view
+    from handlers.workout import _menu_view, _onboarding
 
     text, _ = await _menu_view(user_id)
-    assert text == _ONBOARDING
+    assert text == _onboarding()
 
 
 @pytest.mark.asyncio

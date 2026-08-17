@@ -29,7 +29,7 @@ def _make_bot():
 
 def _make_callback(user_id: int, bot):
     callback = MagicMock(spec=CallbackQuery)
-    callback.from_user = SimpleNamespace(id=user_id, username="tester")
+    callback.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     callback.bot = bot
     callback.answer = AsyncMock()
     return callback
@@ -274,7 +274,7 @@ async def test_menu_from_the_finished_card_keeps_the_card(monkeypatch):
 
     monkeypatch.setattr(workout, "_show_main_menu", fake_menu)
     callback = MagicMock()
-    callback.from_user = SimpleNamespace(id=1)
+    callback.from_user = SimpleNamespace(id=1, language_code=None)
     callback.answer = AsyncMock()
 
     await workout.live_back_to_menu(callback, MagicMock())

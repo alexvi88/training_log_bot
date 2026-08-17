@@ -18,7 +18,7 @@ from handlers import donate as handler
 
 def _message(user_id=777, username="tester"):
     message = MagicMock()
-    message.from_user = SimpleNamespace(id=user_id, username=username)
+    message.from_user = SimpleNamespace(id=user_id, username=username, language_code=None)
     message.answer = AsyncMock()
     message.answer_invoice = AsyncMock()
     message.delete = AsyncMock()
@@ -34,7 +34,7 @@ def _callback(data, user_id=777):
     # not its message).
     callback = MagicMock(spec=CallbackQuery)
     callback.data = data
-    callback.from_user = SimpleNamespace(id=user_id, username="tester")
+    callback.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     callback.answer = AsyncMock()
     callback.message = _message(user_id)
     return callback
@@ -143,7 +143,7 @@ async def test_pre_checkout_lets_a_good_payment_through(monkeypatch):
     query = MagicMock()
     query.invoice_payload = "donate:150:777"
     query.total_amount = 150
-    query.from_user = SimpleNamespace(id=777)
+    query.from_user = SimpleNamespace(id=777, language_code=None)
     query.answer = AsyncMock()
 
     await handler.donate_pre_checkout(query)
@@ -158,7 +158,7 @@ async def test_pre_checkout_refuses_someone_elses_invoice(monkeypatch):
     query = MagicMock()
     query.invoice_payload = "donate:150:777"
     query.total_amount = 150
-    query.from_user = SimpleNamespace(id=999)
+    query.from_user = SimpleNamespace(id=999, language_code=None)
     query.answer = AsyncMock()
 
     await handler.donate_pre_checkout(query)
@@ -172,7 +172,7 @@ async def test_pre_checkout_refuses_a_mismatched_amount():
     query = MagicMock()
     query.invoice_payload = "donate:150:777"
     query.total_amount = 500
-    query.from_user = SimpleNamespace(id=777)
+    query.from_user = SimpleNamespace(id=777, language_code=None)
     query.answer = AsyncMock()
 
     await handler.donate_pre_checkout(query)
@@ -185,7 +185,7 @@ async def test_pre_checkout_refuses_when_donations_got_disabled_mid_flight(monke
     query = MagicMock()
     query.invoice_payload = "donate:150:777"
     query.total_amount = 150
-    query.from_user = SimpleNamespace(id=777)
+    query.from_user = SimpleNamespace(id=777, language_code=None)
     query.answer = AsyncMock()
 
     await handler.donate_pre_checkout(query)

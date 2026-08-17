@@ -19,7 +19,7 @@ ADMIN_ID = 999
 
 def _make_message(user_id: int, chat_id: int | None = None, message_id: int = 42):
     message = MagicMock()
-    message.from_user = SimpleNamespace(id=user_id, username="admin")
+    message.from_user = SimpleNamespace(id=user_id, username="admin", language_code=None)
     message.chat = SimpleNamespace(id=chat_id if chat_id is not None else user_id)
     message.message_id = message_id
     message.answer = AsyncMock()
@@ -35,7 +35,7 @@ def _make_callback(user_id: int, data: str):
     message.delete = AsyncMock()
     message.answer = AsyncMock(return_value=SimpleNamespace(message_id=2))
     callback = MagicMock()
-    callback.from_user = SimpleNamespace(id=user_id, username="admin")
+    callback.from_user = SimpleNamespace(id=user_id, username="admin", language_code=None)
     callback.message = message
     callback.data = data
     callback.answer = AsyncMock()

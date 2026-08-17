@@ -45,7 +45,7 @@ class _Chat:
         msg.text = text
         msg.message_id = 1000 + len(self.sent)
         msg.chat = SimpleNamespace(id=self.user_id)
-        msg.from_user = SimpleNamespace(id=self.user_id, username="tester")
+        msg.from_user = SimpleNamespace(id=self.user_id, username="tester", language_code=None)
         msg.bot = self.bot
         msg.reply = AsyncMock()
         msg.edit_text = AsyncMock()
@@ -66,7 +66,7 @@ class _Chat:
         прилетает от того самого сообщения с вопросом, и обработчик это сверяет."""
         cb = MagicMock()
         cb.data = data
-        cb.from_user = SimpleNamespace(id=self.user_id, username="tester")
+        cb.from_user = SimpleNamespace(id=self.user_id, username="tester", language_code=None)
         cb.message = self._blank()
         cb.message.message_id = msg_id
         cb.bot = self.bot
@@ -277,6 +277,23 @@ async def test_goal_question_is_skipped_when_the_model_asked_it_itself(
     asked = await _questions_after(user_id, state, _Chat(user_id))
 
     assert asked == [own[0]["question"]]
+
+
+async def test_goal_question_still_asked_when_model_only_mentions_the_word_goal(
+    fresh_db, user_id, monkeypatch
+):
+    """Раньше SETUP_GOAL_MARKERS содержал голое "goal" — оно ловило обычные
+    тренерские вопросы про количество повторений/вес, а не только реальный
+    вопрос про цель тренировок, и наш обязательный вопрос про цель после
+    этого никогда не подставлялся."""
+    own = [{"question": "What's your rep goal for this exercise?", "choices": []}]
+    monkeypatch.setattr(ai_trainer.ai_trainer, "ask", _ask_recording([], questions=own))
+    state = await _make_state(user_id)
+
+    asked = await _questions_after(user_id, state, _Chat(user_id))
+
+    assert asked[0] == ai_trainer.SETUP_GOAL_QUESTION["question"]
+    assert asked[1:] == [own[0]["question"]]
 
 
 async def test_goal_question_is_not_repeated_on_the_second_round(fresh_db, user_id, monkeypatch):

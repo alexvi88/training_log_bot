@@ -131,7 +131,7 @@ async def test_strong_file_goes_from_upload_straight_to_confirmation(fresh_db, u
 
     message = MagicMock()
     message.document = SimpleNamespace(file_name="strong.csv")
-    message.from_user = SimpleNamespace(id=user_id, username="tester")
+    message.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     message.reply = AsyncMock()
     message.answer = AsyncMock()
     message.bot = MagicMock()

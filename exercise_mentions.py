@@ -3,9 +3,17 @@ AI-trainer text.
 
 The trainer writes prose, so an exercise it names comes out inflected and in
 whatever case the sentence needs ("убери pull down", "замени на тягу
-горизонтального блока"). A plain substring match against `exercises.name`
-misses all of that, so names are compared word by word on their stems: two
-words match when one is the other with a different Russian ending.
+горизонтального блока", "add some squats"). A plain substring match against
+`exercises.name` misses all of that, so names are compared word by word on
+their stems: two words match when one is a prefix of the other, within a
+short trailing distance (see `_same_word`). This is deliberately not
+Russian-specific morphology — it is a plain fuzzy-prefix comparison, which is
+exactly why it already handles English endings too ("squat"/"squats",
+"curl"/"curls") without any extra code: no language check is needed here for
+the same reason search_terms.py tries both alphabets unconditionally (see its
+module docstring and voice_parse.py) — a Russian-speaking lifter's exercise
+names are routinely in English ("жим лежа" next to "bench press") and vice
+versa, independent of the interface language.
 
 Catalog templates the user hasn't added yet are matched too ("Из каталога на
 плечи бери эти: ...") — see find_in_text, which excludes any template the
@@ -58,7 +66,9 @@ def _tokens(text: str) -> list[str]:
 
 
 def _same_word(a: str, b: str) -> bool:
-    """Одно и то же слово с точностью до русского окончания."""
+    """Одно и то же слово с точностью до окончания — русского или английского:
+    сравнение по общему префиксу не привязано к алфавиту, поэтому «squat»/
+    «squats» проходят тем же путём, что и «тяга»/«тяги»."""
     if a == b:
         return True
     shorter = min(len(a), len(b))

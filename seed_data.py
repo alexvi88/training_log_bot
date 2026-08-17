@@ -9,7 +9,38 @@ so editing this list updates existing deployments, not just fresh databases.
 
 Each group is ordered roughly by popularity — the staple compound lifts first,
 then their dumbbell/cable/machine variants, then isolation/accessory work.
+
+## Language
+
+The Russian strings below (group names, exercise names, program text) are not
+just text — they're the canonical IDENTITY that keys three other catalogs:
+`exercise_media.EXERCISE_IMAGE_SLUGS`, `exercise_descriptions.EXERCISE_DESCRIPTIONS`,
+and `exercises.original_name` in the DB (see `exercise_media.catalog_key`'s
+docstring for why `original_name`, not the mutable `name`/`display_name`, is
+the lookup key). That identity is Russian on every user's account regardless
+of their language — translating it would silently break the link to photos
+and technique descriptions for anyone who isn't on `ru`.
+
+What a user actually SEES is a different, localized string, resolved through
+`localized_*` below at the moment something is shown or forked. English text
+lives in `locales/en.json` (100 exercises is 100 keys — completeness is
+enforced by `tests/test_catalog_language.py`), keyed off the same
+free-exercise-db slug already used for demo photos
+(`exercise_media.EXERCISE_IMAGE_SLUGS`) so there's exactly one slug table to
+keep in sync, not two. `locales/ru.json` carries the same keys too, mirroring
+the Russian strings verbatim — not because `ru` needs a catalog round-trip
+(`localized_*` short-circuits to the literal right here for
+`lang == i18n.DEFAULT_LANG`, so this file stays the single source of truth
+for what a `ru` user sees), but because the repo-wide invariant
+(`tests/test_i18n_no_leaks.py::test_catalogs_have_matching_keys`) requires
+every product key to exist in both catalogs, so a key can never end up
+English-only by accident.
 """
+
+from __future__ import annotations
+
+import exercise_media
+import i18n
 
 # (name, emoji, sort_order)
 MUSCLE_GROUP_PRESETS = [
@@ -21,6 +52,37 @@ MUSCLE_GROUP_PRESETS = [
     ("Ноги", "🦵", 6),
     ("Другое", "🔥", 7),
 ]
+
+# Locale-catalog slug for each preset group's English name — English's own
+# small, hand-written table (only 7 entries, no risk of drifting the way 100
+# exercise names would) rather than a locale key derived from the Russian
+# name itself, which isn't ASCII-safe.
+_MUSCLE_GROUP_SLUGS: dict[str, str] = {
+    "Грудь": "chest",
+    "Трицепс": "triceps",
+    "Бицепс": "biceps",
+    "Плечи": "shoulders",
+    "Спина": "back",
+    "Ноги": "legs",
+    "Другое": "other",
+}
+
+
+def localized_muscle_group_name(canonical_name: str, lang: str) -> str:
+    """Display name for a muscle group in `lang`.
+
+    Muscle groups are global rows (`muscle_groups.user_id IS NULL`, see
+    `db._seed_globals`) shared by every account — unlike exercises, they are
+    never forked into a per-user copy, so there is no row to localize at
+    creation time. `name` in the DB stays the Russian preset forever; this is
+    the only place the English label exists, resolved fresh on every render.
+    """
+    if lang == i18n.DEFAULT_LANG:
+        return canonical_name
+    slug = _MUSCLE_GROUP_SLUGS.get(canonical_name)
+    if slug is None:
+        return canonical_name
+    return i18n.t_in(lang, f"muscle_group.{slug}.name")
 
 # Движения, в которых нагрузка — это ты сам (exercises.bodyweight_load).
 # {имя шаблона: (режим, доля веса тела)}.
@@ -156,6 +218,31 @@ EXERCISE_TEMPLATES = [
     ("Другое", "Сгибание запястий со штангой"),
     ("Другое", "Разгибание запястий со штангой"),
 ]
+
+
+def localized_exercise_name(canonical_name: str, lang: str) -> str:
+    """Display name for an exercise template in `lang`.
+
+    `canonical_name` is always the Russian name from EXERCISE_TEMPLATES — the
+    identity `db.fork_exercise_from_template` writes into
+    `exercises.original_name` forever, regardless of the forking user's
+    language (see the module docstring). For `ru` that string already IS the
+    display text; other languages resolve it through the locale catalog,
+    keyed by the same free-exercise-db slug already used for demo photos
+    (`exercise_media.EXERCISE_IMAGE_SLUGS`) so the two catalogs can't drift
+    apart into separate spellings of the same lift.
+
+    Falls back to `canonical_name` for a name with no slug (shouldn't happen
+    for anything in EXERCISE_TEMPLATES — tests/test_catalog_language.py
+    checks the full 100 — but a user's own hand-typed exercise can reach here
+    too via `original_name`, and it has no English translation to offer).
+    """
+    if lang == i18n.DEFAULT_LANG:
+        return canonical_name
+    slug = exercise_media.EXERCISE_IMAGE_SLUGS.get(canonical_name)
+    if slug is None:
+        return canonical_name
+    return i18n.t_in(lang, f"exercise.{slug}.name")
 
 
 # ---------- ready-made workout programs ----------
@@ -415,3 +502,79 @@ WORKOUT_PROGRAMS = [
 
 # Fast lookup by key for the handlers (callback data carries the key).
 PROGRAM_BY_KEY = {p["key"]: p for p in WORKOUT_PROGRAMS}
+
+
+# ---------- program text localization ----------
+#
+# Unlike exercises/groups, a program's "key" is already a stable ASCII id
+# (it's the same string callback data carries — "fullbody2", "ppl", ...), so
+# it doubles as the locale-catalog key with no separate slug table needed.
+# `name`/`meta`/`description` are trainer-voice prose (see TONE_OF_VOICE.md
+# "## English voice"), not terminology, so — same as exercises/groups — `ru`
+# returns the string right here and only other languages go through the
+# catalog.
+
+
+def localized_program_name(key: str, lang: str) -> str:
+    program = PROGRAM_BY_KEY.get(key)
+    if program is None:
+        return key
+    if lang == i18n.DEFAULT_LANG:
+        return program["name"]
+    return i18n.t_in(lang, f"program.{key}.name")
+
+
+def localized_program_meta(key: str, lang: str) -> str:
+    program = PROGRAM_BY_KEY.get(key)
+    if program is None:
+        return ""
+    if lang == i18n.DEFAULT_LANG:
+        return program["meta"]
+    return i18n.t_in(lang, f"program.{key}.meta")
+
+
+def localized_program_description(key: str, lang: str) -> str:
+    program = PROGRAM_BY_KEY.get(key)
+    if program is None:
+        return ""
+    if lang == i18n.DEFAULT_LANG:
+        return program["description"]
+    return i18n.t_in(lang, f"program.{key}.description")
+
+
+def localized_program_day_name(key: str, day_index: int, lang: str) -> str:
+    """The routine name for `days[day_index]` — e.g. "Push" for `ppl` day 0.
+
+    Written onto the user's own `routines.name` row the moment the program is
+    instantiated (`db.create_routine_from_program`), same as an exercise's
+    display name: a snapshot in whatever language was active at creation
+    time, never retranslated afterwards.
+    """
+    program = PROGRAM_BY_KEY.get(key)
+    if program is None or not (0 <= day_index < len(program["days"])):
+        return ""
+    if lang == i18n.DEFAULT_LANG:
+        return program["days"][day_index][0]
+    return i18n.t_in(lang, f"program.{key}.day.{day_index}.name")
+
+
+# Схема подходов («3×8–12») почти везде language-neutral: цифры, «×» и тире
+# читаются одинаково. Исключение — планка и прочее «на время», где к схеме
+# приписана единица: «3×30–60 сек».
+_TARGET_SECONDS_SUFFIX = " сек"
+
+
+def localized_target(target: str | None, lang: str) -> str | None:
+    """Схема подходов на языке пользователя.
+
+    Возвращает строку как есть во всех случаях, кроме единственного, где в схеме
+    есть слово: секунды. Подменять цифры и «×» нечем и незачем, а «сек» рядом с
+    английским названием упражнения — та же протечка, что и русская группа мышц
+    в теге, только незаметнее: глаз пропускает три буквы в конце строки.
+    """
+    if not target or lang == i18n.DEFAULT_LANG:
+        return target
+    if target.endswith(_TARGET_SECONDS_SUFFIX):
+        base = target[: -len(_TARGET_SECONDS_SUFFIX)]
+        return f"{base} {i18n.t_in(lang, 'program.target.seconds')}"
+    return target

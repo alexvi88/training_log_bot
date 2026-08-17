@@ -21,7 +21,7 @@ pytestmark = pytest.mark.asyncio
 
 def _make_message(user_id: int):
     message = MagicMock(spec=Message)
-    message.from_user = SimpleNamespace(id=user_id, username="tester")
+    message.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     message.bot = AsyncMock()
     message.bot.send_message = AsyncMock(return_value=SimpleNamespace(message_id=1000))
     message.answer = AsyncMock(return_value=SimpleNamespace(message_id=999, chat=SimpleNamespace(id=user_id)))
@@ -102,9 +102,16 @@ async def test_middleware_skips_users_never_seen_before(fresh_db):
 
 
 async def test_first_start_attaches_keyboard_without_the_update_notice(fresh_db):
-    """Новичок на первом /start получает клавиатуру, но не сообщение «⌨️ Обновил
-    меню под полем ввода»: обновлять ему нечего, а первый экран — единственный,
-    который продаёт бота.
+    """Новичок на первом /start получает клавиатуру молча — не сообщением
+    «⌨️ Обновил меню под полем ввода»: обновлять ему нечего, а первый экран
+    единственный, который продаёт бота.
+
+    Порядок на первом /start: носитель клавиатуры, затем экран выбора языка
+    (см. tests/test_onboarding_language.py), и только за нажатием кнопки —
+    приветствие. Клавиатуру нельзя отложить до этого нажатия: attach_silently
+    гасит уведомление middleware поднятой версией, а middleware работает до
+    хендлера, так что на тапе по языку он увидел бы существующего пользователя
+    с нулевой версией и прислал уведомление ровно перед приветствием.
 
     Носитель клавиатуры больше не удаляется сразу же: живые репорты с Android
     показали, что удаление сообщения, которым прикреплена reply-клавиатура,
@@ -113,23 +120,51 @@ async def test_first_start_attaches_keyboard_without_the_update_notice(fresh_db)
     from handlers import workout
 
     message = _make_message(222222)
-    carrier = AsyncMock()
-    message.answer = AsyncMock(
-        return_value=SimpleNamespace(
-            message_id=999, chat=SimpleNamespace(id=222222), delete=carrier
-        )
-    )
     state = await _make_state(222222)
 
     await workout.cmd_start(message, state)
 
-    texts = [call.args[0] for call in message.answer.await_args_list if call.args]
-    assert not any("Обновил меню" in text for text in texts)
-    keyboard_calls = [
+    # Клавиатура прикрепляется уже на первом /start, ДО экрана выбора языка, и
+    # ровно один раз. Откладывать её до тапа по языку нельзя: attach_silently
+    # гасит уведомление middleware поднятой версией, а middleware работает до
+    # хендлера — на тапе он увидел бы существующего пользователя с нулевой
+    # версией и прислал «⌨️ Обновил меню» перед самым приветствием.
+    first_start_keyboards = [
         call for call in message.answer.await_args_list
         if isinstance(call.kwargs.get("reply_markup"), ReplyKeyboardMarkup)
     ]
-    assert len(keyboard_calls) == 1
+    assert len(first_start_keyboards) == 1
+    first_start_texts = [call.args[0] for call in message.answer.await_args_list if call.args]
+    assert not any("Обновил меню" in text for text in first_start_texts)
+
+    carrier = AsyncMock()
+    cb_message = MagicMock()
+    cb_message.text = "language picker"
+    cb_message.chat = SimpleNamespace(id=222222)
+    cb_message.message_id = 1
+    cb_message.edit_text = AsyncMock(return_value=cb_message)
+    cb_message.answer = AsyncMock(
+        return_value=SimpleNamespace(
+            message_id=999, chat=SimpleNamespace(id=222222), delete=carrier
+        )
+    )
+    cb_message.delete = AsyncMock()
+    callback = MagicMock()
+    callback.from_user = SimpleNamespace(id=222222, username="tester", language_code=None)
+    callback.message = cb_message
+    callback.data = "onboarding:lang:ru"
+    callback.answer = AsyncMock()
+
+    await workout.onboarding_language_set(callback, state)
+
+    texts = [call.args[0] for call in cb_message.answer.await_args_list if call.args]
+    assert not any("Обновил меню" in text for text in texts)
+    # На выборе языка клавиатуру НЕ прикрепляем повторно: она уже пришла на
+    # первом /start выше, а второй носитель был бы лишней строкой в чате.
+    assert not [
+        call for call in cb_message.answer.await_args_list
+        if isinstance(call.kwargs.get("reply_markup"), ReplyKeyboardMarkup)
+    ]
     carrier.assert_not_awaited()  # носитель больше не удаляется — держит клавиатуру на Android
     user = await fresh_db.get_user(222222)
     assert user["reply_keyboard_version"] == keyboards.PERSISTENT_MENU_VERSION

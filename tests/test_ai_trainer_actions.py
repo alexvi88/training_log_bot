@@ -19,6 +19,8 @@ import pytest
 
 import ai_trainer
 import db as dbmod
+import i18n
+import i18n_coverage
 
 pytestmark = pytest.mark.asyncio
 
@@ -898,3 +900,101 @@ async def test_folded_undo_reports_failure_when_nothing_came_back(fresh_db, user
     )
 
     assert done is None
+
+
+# ---------- локализация подписей кнопок действия ----------
+
+
+async def test_action_button_labels_are_english_under_lang_en(fresh_db, user_id, monkeypatch):
+    """action['label'] рисуется кнопкой буквально (см. handlers/ai_trainer.py:
+    ai_keyboard → keyboards.ai_trainer_keyboard) — это экранный текст, а не
+    промпт модели, и англоязычный не должен видеть в нём кириллицу.
+
+    Имена программ/упражнений нарочно английские: они подставляются как есть
+    (данные пользователя, не переводим), и если бы фикстура была русской,
+    кириллица от неё маскировала бы утечку из самого шаблона подписи.
+    """
+    db = fresh_db
+    monkeypatch.setattr(config, "ADMIN_ID", 999)
+    with i18n.use_lang("en"):
+        program_id = await _program(db, user_id, "Push Pull Legs", ["Leg day"])
+        await _program(db, user_id, "Push Pull Legs (2)", ["Upper day"])
+        legs_group = await db.create_muscle_group(user_id, "Legs")
+        await db.create_muscle_group(user_id, "Arms")
+        exercise_id = await db.create_exercise(user_id, "Bulgarian split squat", legs_group)
+
+        labels: list[str] = []
+
+        _, action = await ai_trainer._delete_program(user_id, {"name": "Push Pull Legs"})
+        labels.append(action["label"])
+
+        _, action = await ai_trainer._rename_program(
+            user_id, {"name": "Push Pull Legs", "new_name": "PPL"}
+        )
+        labels.append(action["label"])
+
+        _, action = await ai_trainer._copy_program(user_id, {"name": "PPL"})
+        labels.append(action["label"])
+
+        _, action = await ai_trainer._merge_programs(
+            user_id, {"name": "PPL", "into": "Push Pull Legs (2)"}
+        )
+        labels.append(action["label"])
+
+        _, action = await ai_trainer._share_program(user_id, {"name": "PPL"})
+        labels.append(action["label"])
+
+        _, action = await ai_trainer._send_feedback(user_id, {"message": "Rest timer would help"})
+        labels.append(action["label"])
+
+        _, action = await ai_trainer._create_exercise(
+            user_id, {"name": "Nordic curl", "group": "Legs"}
+        )
+        labels.append(action["label"])
+
+        _, action = await ai_trainer._rename_exercise(
+            user_id, {"name": "Bulgarian split squat", "new_name": "BSS"}
+        )
+        labels.append(action["label"])
+
+        # У упражнения уже была группа Legs (см. create_exercise выше) —
+        # смена группы даёт именованный откат Revert to "Legs".
+        _, action = await ai_trainer._move_exercise(
+            user_id, {"name": "BSS", "group": "Arms"}
+        )
+        labels.append(action["label"])
+
+        _, action = await ai_trainer._archive_exercise(user_id, {"name": "BSS"})
+        labels.append(action["label"])
+
+        _, action = await ai_trainer._archive_exercises(user_id, {"names": ["BSS"]})
+        labels.append(action["label"])
+
+        _, action = await ai_trainer._log_bodyweight(user_id, {"weight": 82.5})
+        labels.append(action["label"])
+
+        _, action = await ai_trainer._log_food(user_id, {"description": "Oatmeal", "calories": 300})
+        labels.append(action["label"])
+        food_undo = action["undo"]
+
+        _, action = await ai_trainer._delete_food_entry(user_id, {"entry_id": food_undo["id"]})
+        labels.append(action["label"])
+
+        weight_log = await dbmod.get_latest_bodyweight(user_id)
+        _, action = await ai_trainer._delete_bodyweight_log(user_id, {"log_id": weight_log["id"]})
+        labels.append(action["label"])
+
+        # log_bodyweight через execute_tool кладёт ВТОРУЮ кнопку — прямую
+        # ссылку на 🏋️ Дневник веса (см. ai_trainer.execute_tool, конец ветки
+        # log_bodyweight) — она рисуется мимо _log_bodyweight() напрямую и
+        # больше нигде выше не проверена.
+        async def on_action(action: dict) -> None:
+            labels.append(action["label"])
+
+        await ai_trainer.execute_tool(user_id, "log_bodyweight", {"weight": 70}, on_action=on_action)
+
+    assert program_id and exercise_id  # использованы выше, для читаемости
+    for label in labels:
+        assert not i18n_coverage.has_cyrillic(label), label
+    # Прямые кавычки, не ёлочки — см. TONE_OF_VOICE.md, English voice.
+    assert not any("«" in label or "»" in label for label in labels)

@@ -40,6 +40,7 @@ from typing import Optional
 
 import config
 import db
+import i18n
 import keyboards
 
 logger = logging.getLogger(__name__)
@@ -142,43 +143,45 @@ async def spend_level() -> Optional[str]:
 # Голосом тренера (TONE_OF_VOICE.md): что случилось и что делать дальше. Про
 # доллары, потолки и модели атлет не читает — это наша кухня, а не его дело.
 
-_HARD_STOP_TEXT = (
-    "Сегодня я уже отговорил своё — вернусь завтра. "
-    "Дневник, программы и история работают как обычно."
-)
+def _hard_stop_text() -> str:
+    return i18n.t("limit.spend_hard")
 
-QUESTION_LIMIT_TEXT = (
-    "На сегодня лимит вопросов исчерпан 😮‍💨 Дай мне передохнуть — возвращайся завтра."
-)
+
+def _question_limit_text() -> str:
+    return i18n.t("limit.question")
+
+
+def __getattr__(name: str):
+    """PEP 562: handlers/ai_trainer.py (в этом проходе локализации не наш файл,
+    см. ответ задачи) читает `ai_limits.QUESTION_LIMIT_TEXT` как готовую строку.
+    Плоская модульная константа посчитала бы её ровно один раз, на языке,
+    который был текущим в момент импорта процесса, — и дальше не менялась бы
+    ни для одного пользователя (тот же капкан, что в keyboards._Lazy). Здесь
+    каждое обращение пересчитывает строку в языке ТЕКУЩЕГО запроса.
+    """
+    if name == "QUESTION_LIMIT_TEXT":
+        return _question_limit_text()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def _video_text(reason: str) -> str:
     if reason == KIND_VIDEO:
-        return (
-            f"На сегодня разобрал {config.AI_VIDEO_DAILY_LIMIT} видео — это лимит. "
-            "Приходи завтра, а пока спрашивай текстом."
-        )
-    return "Видео сегодня больше не разбираю — вернусь к этому завтра. Спрашивай текстом, отвечу как обычно."
+        return i18n.t("limit.video.exact", n=config.AI_VIDEO_DAILY_LIMIT)
+    return i18n.t("limit.video.generic")
 
 
 def _food_text(reason: str) -> str:
     if reason == KIND_FOOD:
-        return (
-            f"На сегодня разобрал {config.AI_FOOD_DAILY_LIMIT} приёмов пищи — это лимит. "
-            "Напиши словами, что съел, — запишу как есть, а считать буду завтра."
-        )
-    return (
-        "Фото сегодня больше не разбираю — вернусь к этому завтра. "
-        "Напиши словами, что съел, — запишу как есть."
-    )
+        return i18n.t("limit.food.exact", n=config.AI_FOOD_DAILY_LIMIT)
+    return i18n.t("limit.food.generic")
 
 
 def _user_text(kind: str, reason: str) -> Optional[str]:
     """reason — из-за чего блок: сам вид лимита или ступень по деньгам."""
     if reason == KIND_SPEND_HARD:
-        return _HARD_STOP_TEXT
+        return _hard_stop_text()
     if kind == KIND_QUESTION:
-        return QUESTION_LIMIT_TEXT
+        return _question_limit_text()
     if kind == KIND_VIDEO:
         return _video_text(reason)
     if kind == KIND_FOOD:
@@ -273,7 +276,7 @@ async def check(user_id: int, kind: str) -> Optional[Block]:
         # аккаунты: стоп-кран, который можно проехать, стоп-краном не является.
         spend = await daily_spend_usd()
         logger.warning("AI hard stop: за сутки ~$%.2f, тренер молчит до полуночи UTC", spend)
-        return Block(kind=KIND_SPEND_HARD, log=f"spend_hard: ~${spend:.2f}", user_text=_HARD_STOP_TEXT)
+        return Block(kind=KIND_SPEND_HARD, log=f"spend_hard: ~${spend:.2f}", user_text=_hard_stop_text())
     if level is not None and kind in _EXTRAS:
         # HARD включает в себя SOFT: до вопросов дело дошло, значит и дорогие
         # шаги давно выключены.
@@ -313,7 +316,7 @@ async def hard_stop_block() -> Optional[Block]:
         return None
     spend = await daily_spend_usd()
     logger.warning("AI hard stop: за сутки ~$%.2f, платный шаг без личной квоты пропущен", spend)
-    return Block(kind=KIND_SPEND_HARD, log=f"spend_hard: ~${spend:.2f}", user_text=_HARD_STOP_TEXT)
+    return Block(kind=KIND_SPEND_HARD, log=f"spend_hard: ~${spend:.2f}", user_text=_hard_stop_text())
 
 
 async def record_ack(user_id: int, kind: str) -> None:

@@ -11,6 +11,7 @@ from aiogram.types import CallbackQuery, Message
 
 import db
 import formatting
+import i18n
 import keyboards
 import timeutil
 import ui
@@ -39,7 +40,18 @@ def _try_claim_picking(user_id: int) -> bool:
     return True
 
 
-_BACKFILL_PROMPT = "📅 На какую дату занести тренировку?\nВыбери в календаре или напиши дату в формате дд.мм.гггг:"
+def __getattr__(name: str):
+    """PEP 562: `handlers.workout._show_main_menu`'s sibling flow still does
+    `from handlers.backfill import _BACKFILL_PROMPT` (see handlers/workout.py,
+    the "Назад" из первого экрана бэкфилла) — a module we can't touch in this
+    pass. A plain module-level constant would freeze the string in whatever
+    language was current at import time (see keyboards._Lazy's docstring for
+    the same trap); this keeps the same import working while re-resolving the
+    catalog key against the CURRENT request's language on every access.
+    """
+    if name == "_BACKFILL_PROMPT":
+        return i18n.t("backfill.prompt")
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 @router.callback_query(F.data == "menu:backfill_workout")
@@ -51,7 +63,7 @@ async def backfill_start(callback: CallbackQuery, state: FSMContext):
     today = timeutil.user_today(await db.get_user(callback.from_user.id))
     await ui.safe_edit(
         callback,
-        _BACKFILL_PROMPT,
+        i18n.t("backfill.prompt"),
         reply_markup=keyboards.calendar_keyboard("bf", today.year, today.month, today=today),
     )
     await callback.answer()
@@ -87,7 +99,7 @@ async def _date_chosen(event, state: FSMContext, date: dt.date):
     """
     from handlers.workout import _picker_screen_groups
 
-    greeting = f"🏋️ Тренировка — {formatting.format_date_ru(date)}"
+    greeting = i18n.t("backfill.greeting", date=formatting.format_date_ru(date))
     if isinstance(event, CallbackQuery):
         sent = await event.message.answer(greeting)
     else:
@@ -148,4 +160,4 @@ async def bf_cancel(callback: CallbackQuery, state: FSMContext):
     await clear_state_keep_ai(state)
     from handlers.workout import _show_main_menu
     await _show_main_menu(callback, state)
-    await callback.answer("Отменил")
+    await callback.answer(i18n.t("backfill.cancelled"))

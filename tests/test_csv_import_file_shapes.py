@@ -86,7 +86,7 @@ async def test_russian_excel_file_goes_from_upload_straight_to_confirmation(fres
 
     message = MagicMock()
     message.document = SimpleNamespace(file_name="log.csv")
-    message.from_user = SimpleNamespace(id=user_id, username="tester")
+    message.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     message.reply = AsyncMock()
     message.answer = AsyncMock()
     message.bot = MagicMock()
@@ -195,7 +195,7 @@ def test_build_workout_groups_checks_the_future_against_the_passed_in_today():
 
 def _message_event(user_id: int = 111):
     event = MagicMock()
-    event.from_user = SimpleNamespace(id=user_id, username="tester")
+    event.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     event.answer = AsyncMock()
     return event
 

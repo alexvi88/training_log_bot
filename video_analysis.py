@@ -24,6 +24,7 @@ from openai import AsyncOpenAI
 
 import config
 import db
+import i18n
 
 logger = logging.getLogger(__name__)
 
@@ -261,6 +262,53 @@ _UNOBSERVABLE_MARKERS = (
 _SEVERITY_ORDER = {"мешает": 0, "стоит поправить": 1, "мелочь": 2}
 
 _VERDICTS = ("норма", "отклонение", "не видно")
+
+# Значения verdict/confidence/severity — протокол между Qwen (эта модель) и
+# Grok (основной тренер, см. ai_trainer.ask, video_context): _sanitize,
+# _clean_checklist и словари выше (_SEVERITY_ORDER, _VERDICTS) сверяются с
+# этими русскими строками и трогать их НЕ надо — Qwen обучен отвечать именно
+# на них, и это внутренний контракт, до пользователя не доходящий.
+#
+# А вот to_context_block ниже — другое дело: он вклеивает те же строки уже
+# ГОТОВЫМ ТЕКСТОМ в контекст, который читает Grok и пересказывает атлету
+# («уверенность высокая», «[ОТКЛОНЕНИЕ]»). Без перевода эти слова рискуют
+# долететь до англоязычного атлета кириллицей, если Grok их процитирует, а не
+# перескажет своими словами. Три словаря ниже переводят их на язык ответа
+# (см. i18n.get_lang) в момент, когда они покидают протокол и становятся
+# текстом для модели-рассказчика — сам протокол (ключи словарей) не меняется.
+_VERDICT_MARK_KEYS = {
+    "норма": "ai.video.verdict_ok",
+    "отклонение": "ai.video.verdict_issue",
+}
+
+_CONFIDENCE_KEYS = {
+    "высокая": "ai.video.confidence_high",
+    "средняя": "ai.video.confidence_medium",
+    "низкая": "ai.video.confidence_low",
+}
+
+_SEVERITY_KEYS = {
+    "мешает": "ai.video.severity_blocking",
+    "стоит поправить": "ai.video.severity_worth_fixing",
+    "мелочь": "ai.video.severity_minor",
+}
+
+
+def _localized_verdict_mark(verdict: Optional[str]) -> str:
+    """«норма»/«отклонение»/что угодно ещё → «чисто»/«ОТКЛОНЕНИЕ»/«не смотрели»
+    на языке ответа. Незнакомое значение (модель нарушила протокол) тоже
+    получает «не смотрели» — то же поведение, что было раньше без i18n."""
+    key = _VERDICT_MARK_KEYS.get(verdict, "ai.video.verdict_skipped")
+    return i18n.t(key)
+
+
+def _localized_enum(value: Optional[str], keys: dict[str, str]) -> Optional[str]:
+    """confidence/severity → перевод на язык ответа, если значение из протокола
+    известно; неизвестное или пустое значение возвращаем как есть — лучше
+    показать сырую строку модели, чем молча её проглотить."""
+    if not value:
+        return value
+    return i18n.t(keys[value]) if value in keys else value
 
 # Thinking-модель печатает цепочку рассуждений в тот же content, что и ответ, и
 # заворачивает её в <think>…</think>. json.loads на таком тексте падает, и весь
@@ -577,7 +625,7 @@ def to_context_block(analysis: dict[str, Any]) -> str:
         "подавай предположением.",
         f"Упражнение на видео: {analysis.get('exercise')}"
         + (
-            f" (уверенность {analysis['exercise_confidence']})."
+            f" (уверенность {_localized_enum(analysis['exercise_confidence'], _CONFIDENCE_KEYS)})."
             if analysis.get("exercise_confidence") else "."
         ),
     ]
@@ -598,7 +646,7 @@ def to_context_block(analysis: dict[str, Any]) -> str:
             verdict = item.get("verdict")
             seen = item.get("what_i_see") or "модель не описала, что видит"
             when = item.get("when")
-            mark = {"норма": "чисто", "отклонение": "ОТКЛОНЕНИЕ"}.get(verdict, "не смотрели")
+            mark = _localized_verdict_mark(verdict)
             lines.append(
                 f"- {item.get('point')} [{mark}]: {seen}"
                 + (f" ({when})" if when else "")
@@ -611,8 +659,10 @@ def to_context_block(analysis: dict[str, Any]) -> str:
         lines.append("\nОтклонения:")
         for obs in analysis["observations"]:
             reps = obs.get("reps")
+            severity = _localized_enum(obs.get("severity"), _SEVERITY_KEYS)
+            confidence = _localized_enum(obs.get("confidence"), _CONFIDENCE_KEYS)
             lines.append(
-                f"- [{obs.get('severity')}, уверенность {obs.get('confidence')}] "
+                f"- [{severity}, уверенность {confidence}] "
                 f"{obs.get('what')} — фаза: {obs.get('phase')}, {obs.get('when')}"
                 + (f", повторы {reps}" if reps else "")
                 + f". Из чего следует: {obs.get('evidence')}"

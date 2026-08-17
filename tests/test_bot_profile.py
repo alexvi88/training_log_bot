@@ -31,11 +31,20 @@ def test_description_never_drops_the_yo():
 
 
 async def test_sync_skips_api_calls_when_already_up_to_date():
+    """Синк дёргает get_my_description/get_my_short_description отдельно на
+    языке — раз для дефолта (без language_code), раз для "en"."""
     bot = AsyncMock()
-    bot.get_my_description.return_value = BotDescription(description=bot_profile.DESCRIPTION)
-    bot.get_my_short_description.return_value = BotShortDescription(
-        short_description=bot_profile.SHORT_DESCRIPTION
-    )
+
+    async def get_description(*, language_code=None):
+        text = bot_profile.DESCRIPTION_EN if language_code == "en" else bot_profile.DESCRIPTION
+        return BotDescription(description=text)
+
+    async def get_short_description(*, language_code=None):
+        text = bot_profile.SHORT_DESCRIPTION_EN if language_code == "en" else bot_profile.SHORT_DESCRIPTION
+        return BotShortDescription(short_description=text)
+
+    bot.get_my_description.side_effect = get_description
+    bot.get_my_short_description.side_effect = get_short_description
 
     await bot_profile.sync_bot_profile(bot)
 
@@ -43,12 +52,16 @@ async def test_sync_skips_api_calls_when_already_up_to_date():
     bot.set_my_short_description.assert_not_called()
 
 
-async def test_sync_sets_both_when_stale():
+async def test_sync_sets_both_languages_when_stale():
     bot = AsyncMock()
     bot.get_my_description.return_value = BotDescription(description="устарело")
     bot.get_my_short_description.return_value = BotShortDescription(short_description="устарело")
 
     await bot_profile.sync_bot_profile(bot)
 
-    bot.set_my_description.assert_awaited_once_with(bot_profile.DESCRIPTION)
-    bot.set_my_short_description.assert_awaited_once_with(bot_profile.SHORT_DESCRIPTION)
+    bot.set_my_description.assert_any_await(bot_profile.DESCRIPTION, language_code=None)
+    bot.set_my_description.assert_any_await(bot_profile.DESCRIPTION_EN, language_code="en")
+    bot.set_my_short_description.assert_any_await(bot_profile.SHORT_DESCRIPTION, language_code=None)
+    bot.set_my_short_description.assert_any_await(bot_profile.SHORT_DESCRIPTION_EN, language_code="en")
+    assert bot.set_my_description.await_count == 2
+    assert bot.set_my_short_description.await_count == 2
