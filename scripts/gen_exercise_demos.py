@@ -113,6 +113,7 @@ NOVITA_BASE = os.getenv("NOVITA_GEN_BASE_URL", "https://api.novita.ai/v3/async")
 NOVITA_FRAME_PATH = os.getenv("NOVITA_FRAME_PATH", "img2img")
 NOVITA_VIDEO_PATH = os.getenv("NOVITA_VIDEO_PATH", "vidu-q1-startend2video")
 NOVITA_FRAME_MODEL = os.getenv("NOVITA_FRAME_MODEL", "")
+NOVITA_VIDEO_DURATION = int(os.getenv("NOVITA_VIDEO_DURATION", "5"))
 POLL_TIMEOUT_S = int(os.getenv("NOVITA_POLL_TIMEOUT", "600"))
 
 # Перед Novita стоит Cloudflare, и на запрос без внятного User-Agent он отвечает
@@ -157,10 +158,15 @@ COACH_REFERENCE = ROOT / "media" / "push" / "coach_incoming_call.jpg"
 FRAME_INSTRUCTION = (
     "The FIRST image is the character, style and framing reference: this exact "
     "man — his face, build, sunglasses, chain, tank top, shorts, shoes — the "
-    "drawing style, the gym around him and the camera distance must all stay "
-    "identical. Only his body position changes. The SECOND image is the pose "
-    "reference. Copy its body pose, camera angle, limb positions and equipment "
-    "exactly; the pose is the source of truth, do not correct or improve it. "
+    "drawing style, the gym behind him, the light, the camera distance and angle "
+    "must all stay identical, down to where the rack and the lamp are. Only his "
+    "body position changes. The SECOND image is the pose reference. Copy its body "
+    "pose, camera angle, limb positions and equipment exactly; the pose is the "
+    "source of truth, do not correct or improve it. "
+    "Draw the described position LITERALLY, even when it is not how this exercise "
+    "is usually pictured: if the pose says he stands upright with straight legs, "
+    "his knees must be locked straight and his hips fully extended — a half-squat "
+    "is wrong. If it says he is at the bottom, he must be all the way down. "
     "Show the whole body from head to feet. The pose to draw is: "
 )
 
@@ -303,7 +309,9 @@ def _video_payload_body() -> dict:
             "frame to the second. Static camera, no cuts, no zoom. "
             "The equipment, the weight plates and the gym stay identical."
         ),
-        "duration": 4,
+        # Длительности у модели фиксированные, произвольное число она отвергает
+        # («FieldInvalid: duration»). 4 секунды не берёт — 5 её штатное значение.
+        "duration": NOVITA_VIDEO_DURATION,
     }
 
 
