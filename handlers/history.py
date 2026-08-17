@@ -20,6 +20,7 @@ import charts
 import config
 import db
 import formatting
+import i18n
 import keyboards
 import state_scaffold
 import timeutil
@@ -79,13 +80,13 @@ async def _render_search_page(user_id: int, query: str, page: int):
     total = await db.count_workouts_by_exercise(user_id, query)
     shown_so_far = offset + len(entries)
     has_next = shown_so_far < total
-    count_label = str(total) if shown_so_far >= total else f"{shown_so_far} из {total}"
+    count_label = str(total) if shown_so_far >= total else i18n.t("history.shown_of_total", shown=shown_so_far, total=total)
     kb = keyboards.history_search_keyboard(items, page, has_next)
     text = formatting.build_history_list(
         entries,
-        header=f"🔎 <b>Тренировки с «{escape(query)}»: {count_label}</b>",
+        header=i18n.t("history.search_header", query=escape(query), count=count_label),
         footer="",
-        empty=f"🔎 Ничего не нашёл по «{escape(query)}». Проверь название или напиши другое упражнение.",
+        empty=i18n.t("history.search_empty", query=escape(query)),
     )
     return text, kb
 
@@ -300,11 +301,11 @@ async def menu_achievements(callback: CallbackQuery, state: FSMContext):
     # экран по-прежнему заменяет собой предыдущий.
     from_card = callback.data.endswith(":card")
     kb = InlineKeyboardBuilder()
-    kb.button(text="🎖 Звания", callback_data="rank:ladder" + (":prog" if from_progress else ""))
+    kb.button(text=i18n.t("history.ranks_button"), callback_data="rank:ladder" + (":prog" if from_progress else ""))
     # hist:menu — существующая ручка «в главное меню» (hist_to_menu ниже зовёт
     # _show_main_menu); отдельной заводить незачем, а свежая строка вроде
     # «menu:back» была бы кнопкой, которую никто не слушает.
-    kb.button(text="⬅️ Назад", callback_data="prog:groups" if from_progress else "hist:menu")
+    kb.button(text=i18n.t("btn.back"), callback_data="prog:groups" if from_progress else "hist:menu")
     kb.adjust(1)
     await ui.safe_edit(
         callback, text, reply_markup=kb.as_markup(), parse_mode="HTML", delete=not from_card
@@ -336,7 +337,7 @@ async def rank_ladder(callback: CallbackQuery, state: FSMContext):
     )
     kb = InlineKeyboardBuilder()
     kb.button(
-        text="⬅️ Назад",
+        text=i18n.t("btn.back"),
         callback_data="menu:achievements" + (":prog" if callback.data.endswith(":prog") else ""),
     )
     kb.adjust(1)
@@ -398,12 +399,12 @@ async def hist_card(callback: CallbackQuery, state: FSMContext):
     # чат с друзьями, и там она перестаёт быть просто картинкой: по ссылке в ней
     # видно, кто привёл человека (acquisition.SOURCE_REFERRAL).
     kb.button(
-        text="🏋️ Тоже вести дневник",
+        text=i18n.t("history.share_card_cta"),
         url=acquisition.referral_link(
             await sharing.get_bot_username(callback.bot), callback.from_user.id
         ),
     )
-    kb.button(text="⬅️ Назад к тренировке", callback_data=f"hist:item:{workout_id}")
+    kb.button(text=i18n.t("history.back_to_workout_button"), callback_data=f"hist:item:{workout_id}")
     kb.adjust(1)
     await callback.message.answer_photo(
         BufferedInputFile(png, filename="workout.png"),
@@ -449,12 +450,12 @@ async def _delete_confirm_text(workout) -> str:
     if len(summary) > _DELETE_CONFIRM_SUMMARY_MAX:
         summary = summary[:_DELETE_CONFIRM_SUMMARY_MAX].rstrip(" ,") + "…"
 
-    lines = [f"Удалить тренировку\n<b>{escape(header)}</b>"]
+    lines = [f"{i18n.t('history.delete_confirm_title')}\n<b>{escape(header)}</b>"]
     if summary:
-        # TONE_OF_VOICE.md: «подход», не «сет» — запрещённое слово словаря.
-        set_word = formatting.plural_ru(set_count, ("подход", "подхода", "подходов"))
-        lines.append(f"<i>{escape(summary)} — {set_count} {set_word}</i>")
-    lines.append("\nЭто действие нельзя отменить.")
+        # TONE_OF_VOICE.md: «подход», не «сет» — запрещённое слово словаря
+        # (в английском наоборот — "set" законное слово, см. English voice).
+        lines.append(f"<i>{escape(summary)} — {i18n.t('history.sets_count', n=set_count)}</i>")
+    lines.append(f"\n{i18n.t('history.delete_confirm_warning')}")
     return "\n".join(lines)
 
 
@@ -468,8 +469,8 @@ async def hist_delete_confirm(callback: CallbackQuery, state: FSMContext):
     kb = keyboards.yes_no_keyboard(
         yes_cb=f"hist:delyes:{workout_id}",
         no_cb=f"hist:item:{workout_id}",
-        yes_text="🗑 Удалить",
-        no_text="❌ Отмена",
+        yes_text=i18n.t("btn.delete"),
+        no_text=i18n.t("btn.cancel"),
     )
     # safe_edit replaces the card being deleted, so the question has to carry the
     # date and contents itself — otherwise the one screen that identifies the
@@ -492,7 +493,7 @@ async def hist_delete(callback: CallbackQuery, state: FSMContext):
     await achievement_sync.resync(callback.from_user.id)
     data = await state.get_data()
     await show_history_list(callback, state, data.get("history_page", 0))
-    await callback.answer("Удалил тренировку.")
+    await callback.answer(i18n.t("history.deleted_toast"))
 
 
 # ---------- progress ----------
@@ -503,12 +504,12 @@ async def show_progress_entry(callback: CallbackQuery, state: FSMContext):
         # Without this, a new user picks a group, sees "пусто", and backs out —
         # the picker itself can't tell them that until they've already drilled in.
         kb = InlineKeyboardBuilder()
-        kb.button(text="🏋️ Начать тренировку", callback_data="menu:start_workout")
-        kb.button(text="⬅️ Назад", callback_data="prog:back")
+        kb.button(text=i18n.t("history.start_workout_button"), callback_data="menu:start_workout")
+        kb.button(text=i18n.t("btn.back"), callback_data="prog:back")
         kb.adjust(1)
         await ui.safe_edit(
             callback,
-            "📈 Прогресс появится после первой завершённой тренировки.",
+            i18n.t("history.progress_empty"),
             reply_markup=kb.as_markup(),
         )
         await callback.answer()
@@ -517,13 +518,13 @@ async def show_progress_entry(callback: CallbackQuery, state: FSMContext):
     kb = keyboards.groups_keyboard(
         groups, prefix="prog",
         extra_buttons=[
-            ("📊 Неделя", "prog:week"),
-            ("🏆 Достижения", "menu:achievements:prog"),
-            ("⬅️ Назад", "prog:back"),
+            (i18n.t("history.week_button"), "prog:week"),
+            (i18n.t("btn.achievements"), "menu:achievements:prog"),
+            (i18n.t("btn.back"), "prog:back"),
         ],
         show_all=True,
     )
-    text = "📈 Прогресс — выбери группу мышц или найди упражнение по названию:"
+    text = i18n.t("history.progress_intro")
     await ui.safe_edit(callback, text, reply_markup=kb)
     await callback.answer()
 
@@ -565,14 +566,15 @@ async def _render_progress_exercise_list(callback: CallbackQuery, state: FSMCont
         nav.append(InlineKeyboardButton(text="➡️", callback_data=f"prog:gpage:{raw}:{page + 1}"))
     if nav:
         b.row(*nav)
-    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="prog:groups"))
-    if exercises:
-        # Тот же приём, что у экранов групп и списков упражнений в других
-        # разделах — «или просто напиши название, например «жим»» вместо
-        # суховатого «для поиска».
-        text = "📈 Прогресс: выбери упражнение — или просто напиши название, например «жим»:"
-    else:
-        text = "Пока нет своих упражнений с историей в этой группе. Можно написать название для поиска."
+    b.row(InlineKeyboardButton(text=i18n.t("btn.back"), callback_data="prog:groups"))
+    # Тот же приём, что у экранов групп и списков упражнений в других
+    # разделах — «или просто напиши название, например «жим»» вместо
+    # суховатого «для поиска».
+    text = (
+        i18n.t("history.progress_pick_exercise")
+        if exercises
+        else i18n.t("history.progress_no_history_in_group")
+    )
     await ui.safe_edit(callback, text, reply_markup=b.as_markup())
 
 
@@ -604,8 +606,12 @@ async def prog_search_text(message: Message, state: FSMContext):
     b = InlineKeyboardBuilder()
     for ex in results:
         b.row(InlineKeyboardButton(text=ex["display_name"], callback_data=f"prog:ex:{ex['id']}:all"))
-    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="prog:groups"))
-    text = f"Результаты поиска «{escape(query)}»:" if results else f"Ничего не нашлось по «{escape(query)}»."
+    b.row(InlineKeyboardButton(text=i18n.t("btn.back"), callback_data="prog:groups"))
+    text = (
+        i18n.t("history.search_results_for", query=escape(query))
+        if results
+        else i18n.t("history.search_no_results_for", query=escape(query))
+    )
     await state.set_state(ProgressFlow.picking_exercise)
     await message.answer(text, reply_markup=b.as_markup(), parse_mode="HTML")
 
@@ -687,7 +693,10 @@ async def _render_progress_view(ex_id: int, user, limit: int, origin: str = "all
 
         png = None
         if points:
-            metric = "повторы" if chart_is_bw else "e1RM"
+            # Уезжает в пиксели графика (charts.render_metric_over_sessions рисует
+            # заголовок/ось matplotlib'ом, никакой текстовый тест кириллицу там не
+            # увидит) — переводим явно, а не полагаемся на formatting.plural_ru.
+            metric = i18n.t("history.chart_metric_reps") if chart_is_bw else "e1RM"
             png = await asyncio.to_thread(
                 charts.render_metric_over_sessions,
                 points[-limit:],

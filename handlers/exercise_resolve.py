@@ -12,6 +12,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 import db
+import i18n
 import keyboards
 import ui
 from fsm import ResolveFlow
@@ -56,11 +57,7 @@ async def _next(event, state: FSMContext) -> None:
     templates = await db.search_exercise_templates(event.from_user.id, name)
     total = data.get("resolve_total") or len(pending)
     position = total - len(pending) + 1
-    text = (
-        f"Упражнение {position} из {total}.\n"
-        f"Не нашёл «{name}» в твоём списке.\n"
-        "Выбери похожее, создай новое, или напиши другое название для поиска:"
-    )
+    text = i18n.t("resolve.progress", position=position, total=total, name=name)
     kb = keyboards.exercise_resolve_keyboard(
         candidates, name, "resolve", remaining=len(pending) - 1, templates=templates
     )
@@ -103,9 +100,11 @@ async def resolve_create(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     name = data["resolve_current_name"]
     groups = await db.list_muscle_groups(callback.from_user.id)
-    kb = keyboards.groups_keyboard(groups, prefix="resolvegrp", extra_buttons=[("⬅️ Назад", "resolve:back")])
+    kb = keyboards.groups_keyboard(
+        groups, prefix="resolvegrp", extra_buttons=[(i18n.t("btn.back"), "resolve:back")]
+    )
     await state.set_state(ResolveFlow.picking_new_group)
-    await ui.safe_edit(callback, f"«{name}» — выбери группу мышц:", reply_markup=kb)
+    await ui.safe_edit(callback, i18n.t("resolve.pick_group", name=name), reply_markup=kb)
     await callback.answer()
 
 
@@ -149,7 +148,7 @@ async def resolve_create_all(callback: CallbackQuery, state: FSMContext):
         await db.touch_exercise_last_used(ex_id)
         resolved[name] = ex_id
     await state.update_data(resolve_resolved=resolved, resolve_pending=[])
-    await callback.answer(f"Создал {len(pending)} — группа «{fallback['name']}»")
+    await callback.answer(i18n.t("resolve.created_bulk", n=len(pending), group=fallback["name"]))
     await _next(callback, state)
 
 
@@ -160,7 +159,7 @@ async def resolve_cancel_all(callback: CallbackQuery, state: FSMContext):
     await clear_state_keep_ai(state)
     from handlers.settings import show_settings
     await show_settings(callback, state)
-    await callback.answer("Отменил")
+    await callback.answer(i18n.t("resolve.cancelled"))
 
 
 @router.message(StateFilter(ResolveFlow.picking), F.text)
@@ -174,7 +173,7 @@ async def resolve_search_text(message: Message, state: FSMContext):
     remaining = max(len(data.get("resolve_pending") or []) - 1, 0)
     kb = keyboards.exercise_resolve_keyboard(candidates, name, "resolve", remaining=remaining)
     if candidates:
-        text = f"Результаты поиска «{query}» для «{name}»:"
+        text = i18n.t("resolve.search_results", query=query, name=name)
     else:
-        text = f"Ничего не нашлось по «{query}». Можно создать новое для «{name}»."
+        text = i18n.t("resolve.search_empty", query=query, name=name)
     await message.answer(text, reply_markup=kb)

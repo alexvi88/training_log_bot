@@ -64,8 +64,54 @@ def discover_modules() -> list[str]:
 # keyboards.settings_keyboard, переведён целиком, но handlers/settings.py —
 # это ещё и алерты после смены единиц/формулы («Перевёл всё на …») и другие
 # сообщения хендлера, которых этот проход не касался.
+#
+# handlers/workout.py, handlers/edit_workout.py, handlers/bodyweight.py —
+# запись тренировки целиком: живой трекер, справка (/help), онбординг
+# новичка (_ONBOARDING/_GREETING), правка прошлой тренировки, дневник веса.
+# Заодно закрыта протечка formatting.UNIT_LABELS (см. formatting.unit_label) —
+# англоязычный с килограммами раньше видел «кг» в тексте и на графике веса
+# тела (charts.render_metric_over_sessions).
+#
+# handlers/history.py, handlers/food_diary.py, handlers/csv_import.py,
+# handlers/sharing.py — история и прогресс, дневник питания, импорт CSV и
+# шаринг программ/упражнений. Заодно найден и закрыт настоящий баг с языком:
+# handlers/csv_import.py._parse_row_date узнавал "дата ещё в будущем" по
+# русской подстроке в тексте исключения — на английском каталоге parser.py
+# отдаёт этот же текст по-английски, и проверка молча ломалась (см.
+# _parse_row_date). Заголовок графика прогресса
+# (handlers/history.py._render_progress_view, метрика "повторы"/"reps") —
+# текст, уезжающий в пиксели matplotlib'а, а не в каталог сообщений, поэтому
+# его легко было пропустить при поиске по строкам чата.
+#
+# handlers/exercises.py, handlers/routines.py, handlers/exercise_resolve.py —
+# карточка/CRUD упражнений и групп мышц, экран программ (готовые/AI/из
+# тренировки), резолв незнакомых имён при импорте CSV. Заодно закрыты две
+# протечки каталожных (is_template=1) названий: шаблон показывал канонический
+# русский `name`/`display_name` вместо локализованного (см.
+# handlers.exercises._template_display_name и то же в
+# handlers.routines._rtadd_catalog_screen через
+# `seed_data.localized_exercise_name`) — этот инвариант («original_name/каталог
+# всегда по-русски, экран — на языке пользователя») держит связь с
+# free-exercise-db и раньше был нарушен именно на шаблонах, ещё не форкнутых
+# пользователю. Восемь безличных «Программа не найдена»/«Тренировка не
+# найдена» в handlers/routines.py и одно «Шаблон не найден» в
+# handlers/exercises.py приведены к правилу «что случилось + что делать
+# дальше» (см. ui.alert_exercise_not_found — тот же приём, уже был в ui.py).
+# Готовые каталожные программы (seed_data.WORKOUT_PROGRAMS/PROGRAM_BY_KEY:
+# названия дней, meta, описания, схемы подходов) остаются русскими — это
+# данные каталога, а не текст хендлера, и их перевод не входит в этот проход.
 LOCALIZED: list[str] = [
     "keyboards.py",
+    "handlers/workout.py",
+    "handlers/edit_workout.py",
+    "handlers/bodyweight.py",
+    "handlers/history.py",
+    "handlers/food_diary.py",
+    "handlers/csv_import.py",
+    "handlers/sharing.py",
+    "handlers/exercises.py",
+    "handlers/routines.py",
+    "handlers/exercise_resolve.py",
 ]
 
 # Литералы, которым храповик НАМЕРЕННО разрешает кириллицу внутри уже
@@ -78,6 +124,37 @@ ALLOWED_CYRILLIC: dict[str, set[str]] = {
     # TONE_OF_VOICE.md, English voice). Тот же автоним разрешён в en.json
     # тестом test_en_catalog_has_no_cyrillic (_AUTONYM_WHITELIST).
     "keyboards.py": {"Русский"},
+    # Канонический ключ группы мышц «Другое» (см. seed_data.py: {"Другое": "other"})
+    # — то же самое сравнение с хранимым в БД именем, что formatting.py уже
+    # делает в VOLUME_HIDDEN_GROUPS. Группы хранятся канонической русской
+    # строкой независимо от языка пользователя и на экране резолвятся через
+    # каталог отдельно — это сравнение с данными, а не текст, который видит
+    # атлет.
+    "handlers/workout.py": {"другое"},
+    # Разбор входных дат (Hevy пишет месяц-аббревиатуру на языке телефона
+    # пользователя, не только по-английски) — понимать оба языка сразу это и
+    # должно, см. комментарий у _MONTH_ABBR_RU/_MONTH_ABBR_EN и _HEVY_DATE_RE
+    # в handlers/csv_import.py. Тот же случай, что «сама кириллица в разборе
+    # ввода» из шапки этого файла.
+    "handlers/csv_import.py": {
+        "янв", "фев", "мар", "апр", "май", "июн",
+        "июл", "авг", "сен", "окт", "ноя", "дек",
+        r"^(?P<d>\d{1,2}) (?P<mon>[A-Za-zА-Яа-яЁё]{3})\.? (?P<y>\d{4})(?:,\s*\d{1,2}:\d{2})?$",
+        # SYNONYMS — заголовки колонок своего же экспорта ("дата", "упражнение",
+        # "вес", "повторы", "подход", "раунд", "рпе"), по которым автоопределяется
+        # маппинг файла. Разбор чужого файла обязан узнавать оба языка сразу,
+        # это не текст, который бот показывает атлету.
+        "дата", "упражнение", "вес", "повторы", "подход", "раунд", "рпе",
+    },
+    # FALLBACK_GROUP_NAME в handlers/sharing.py — тот же канонический ключ
+    # группы мышц «Другое», что и "другое" у handlers/workout.py выше:
+    # сравнение/подстановка данных БД (группы хранятся канонической русской
+    # строкой для всех языков), а не текст, который видит атлет.
+    "handlers/sharing.py": {"Другое"},
+    # _BULK_GROUP_NAME в handlers/exercise_resolve.py — тот же канонический
+    # ключ группы «Другое», куда «➕ Создать всё» валит нераспознанные имена
+    # оптом: сравнение с именем группы в БД, а не текст на экране.
+    "handlers/exercise_resolve.py": {"Другое"},
 }
 
 
@@ -157,25 +234,15 @@ TODO: list[str] = [
     "voice_parse.py",
     "handlers/ai_trainer.py",
     "handlers/backfill.py",
-    "handlers/bodyweight.py",
     "handlers/community.py",
-    "handlers/csv_import.py",
     "handlers/donate.py",
-    "handlers/edit_workout.py",
-    "handlers/exercise_resolve.py",
-    "handlers/exercises.py",
     "handlers/factcheck.py",
     "handlers/fallback.py",
     "handlers/feedback.py",
-    "handlers/food_diary.py",
     "handlers/game.py",
-    "handlers/history.py",
     "handlers/mcp_access.py",
     "handlers/persistent_menu.py",
-    "handlers/routines.py",
     "handlers/settings.py",
-    "handlers/sharing.py",
-    "handlers/workout.py",
 ]
 
 

@@ -14,6 +14,7 @@ import ai_trainer
 import config
 import db as dbmod
 import formatting
+import i18n
 import keyboards
 from fsm import FoodDiaryFlow
 from handlers import food_diary
@@ -810,7 +811,7 @@ async def test_fix_button_keeps_the_estimate_visible(user_id, monkeypatch):
     assert "Гранола с протеином" in shown_text
     assert "Протеин — 30 г — 120 ккал" in shown_text
     assert "750 ккал" in shown_text
-    assert food_diary._CORRECT_HINT in shown_text
+    assert i18n.t("food.correct_hint") in shown_text
     # HTML-разметку карточки обязаны отрисовать, а не показать тегами как есть
     assert callback.message.answer.call_args.kwargs["parse_mode"] == "HTML"
 

@@ -22,6 +22,9 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.storage.base import StorageKey
+from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import CallbackQuery
 
 import formatting
@@ -29,7 +32,7 @@ import i18n
 import i18n_coverage
 import keyboards
 import view_builder
-from handlers import history
+from handlers import edit_workout, exercises, history, routines, workout
 
 # asyncio_mode = auto (pyproject.toml) детектит async def сам — pytestmark тут
 # не нужен, а на синхронных тестах этого файла (слои 1 и 2) он бы только
@@ -419,6 +422,97 @@ async def _screen_food_history(db, user_id: int) -> str:
     return formatting.build_food_history_list([day])
 
 
+async def _screen_workout_onboarding(db, user_id: int) -> str:
+    """Приветствие новичка на главном меню (handlers.workout._onboarding) —
+    самый важный текст продукта, формула «YO ATHLETE!»."""
+    return workout._onboarding()
+
+
+async def _screen_workout_help(db, user_id: int) -> str:
+    """Оба экрана справки (/help): короткий и развёрнутый по кнопке «Ещё»."""
+    return workout._help_short() + "\n" + workout._help_full()
+
+
+async def _screen_workout_logging_hint(db, user_id: int) -> str:
+    """Подсказка над клавиатурой записи подхода (handlers.workout._logging_hint)
+    со всеми необязательными строками включёнными разом: план на сегодня,
+    предупреждение о подозрительном весе, ряд «тот же вес, другие повторы» с
+    подсказкой для новичка и «Прошлый раз» с прогрессией."""
+    return workout._logging_hint(
+        last_session=[(100.0, 8, None)],
+        has_sets=True,
+        unit="kg",
+        show_progression=True,
+        today_sets=[(500.0, 5)],
+        show_instruction=True,
+        show_format_hint=True,
+        reps_row=(100.0, 8),
+        reps_row_hint=i18n.t("workout.reps_row_hint_text"),
+        target="3×8-12",
+    )
+
+
+async def _screen_edit_workout(db, user_id: int) -> str:
+    """Экран правки прошлой тренировки: список упражнений и один подход внутри
+    (handlers.edit_workout._edit_screen_payload/_exercise_screen_payload)."""
+    group_id = await db.create_muscle_group(user_id, "Legs")
+    squat = await db.create_exercise(user_id, "Squat", group_id)
+    workout_id = await db.create_workout(user_id)
+    block_id = await db.create_block(workout_id, "single")
+    await db.add_block_exercise(block_id, squat, 0)
+    await db.add_set(block_id, squat, 1, 0, 100.0, 8)
+    top_text, _ = await edit_workout._edit_screen_payload(workout_id)
+    ex_text, _ = await edit_workout._exercise_screen_payload(workout_id, block_id, squat)
+    return f"{top_text}\n{ex_text}"
+
+
+async def _screen_exercises_groups(db, user_id: int) -> str:
+    """«⚙️ Упражнения»: список групп мышц (handlers.exercises._groups_payload).
+    Стандартные группы («Грудь», «Ноги» и т.д.) хранятся в БД канонической
+    русской строкой навсегда (seed_data._seed_globals) — экран обязан
+    показывать их через seed_data.localized_muscle_group_name
+    (handlers.exercises._group_display_name), а не голый formatting.format_group,
+    иначе английский атлет видел бы русские названия групп."""
+    text, kb = await exercises._groups_payload(user_id)
+    buttons = "\n".join(b.text for row in kb.inline_keyboard for b in row)
+    return f"{text}\n{buttons}"
+
+
+async def _screen_exercises_templates(db, user_id: int) -> str:
+    """Список каталожных шаблонов одной группы мышц
+    (handlers.exercises._localized_templates + keyboards.templates_keyboard).
+    Шаблоны — общая на всех строка (`is_template=1`), её `name`/`display_name`
+    остаются русскими навсегда (см. handlers.exercises._template_display_name);
+    экран обязан локализовать их сам, при рендере."""
+    groups = await db.list_muscle_groups(user_id)
+    group_id = next(g["id"] for g in groups if g["user_id"] is None)
+    templates = await db.list_templates_in_group(group_id)
+    kb = keyboards.templates_keyboard(
+        exercises._localized_templates(templates), prefix="exm", back_cb="newback"
+    )
+    return "\n".join(b.text for row in kb.inline_keyboard for b in row)
+
+
+async def _screen_routines_manage_empty(db, user_id: int) -> str:
+    """«🗂 Программы» с пустым состоянием (handlers.routines.show_manage) —
+    экран-эталон гайда: три выхода (готовая программа/AI-тренер/из тренировки),
+    отранжированные по усилию."""
+    callback = _make_fake_callback(user_id, "rt:manage")
+    state = FSMContext(storage=MemoryStorage(), key=StorageKey(bot_id=1, chat_id=user_id, user_id=user_id))
+    await routines.show_manage(callback, state)
+    return callback.message.answer.await_args.args[0]
+
+
+async def _screen_routine_source_empty(db, user_id: int) -> str:
+    """Экран «Из какой тренировки создать программу?» без единой завершённой
+    тренировки (handlers.routines._show_routine_source_picker) — своё пустое
+    состояние, отдельное от программ."""
+    callback = _make_fake_callback(user_id, "rt:pickw:page:0")
+    state = FSMContext(storage=MemoryStorage(), key=StorageKey(bot_id=1, chat_id=user_id, user_id=user_id))
+    await routines._show_routine_source_picker(callback, state, 0)
+    return callback.message.answer.await_args.args[0]
+
+
 def _strip_autonyms(text: str) -> str:
     """Тот же вырез, что и в test_en_catalog_has_no_cyrillic: автоним «Русский»
     в подписи кнопки языка — законная кириллица даже на английском экране."""
@@ -457,15 +551,26 @@ SCREENS: list[tuple[str, object]] = [
     ("progress_screen", _screen_progress_screen),
     ("bodyweight_screen", _screen_bodyweight),
     ("food_history", _screen_food_history),
+    ("history_item_card", _screen_history_item_card),
+    ("workout_onboarding", _screen_workout_onboarding),
+    ("workout_help", _screen_workout_help),
+    ("workout_logging_hint", _screen_workout_logging_hint),
+    ("edit_workout_screen", _screen_edit_workout),
+    ("exercises_groups", _screen_exercises_groups),
+    ("exercises_templates", _screen_exercises_templates),
+    ("routines_manage_empty", _screen_routines_manage_empty),
+    ("routine_source_empty", _screen_routine_source_empty),
 ]
 
-# Экраны, которые всё ещё протекают кириллицей мимо каталога (зависят от
-# ещё не переведённых модулей — сейчас это handlers/history.py). Список
+# Экраны, которые всё ещё протекают кириллицей мимо каталога. Список
 # существует, чтобы падение здесь было ожидаемым сигналом "этот конкретный
 # экран ещё не готов", а не молчаливым исключением из проверки целиком.
-SCREENS_STILL_LEAKING: list[tuple[str, object]] = [
-    ("history_item_card", _screen_history_item_card),
-]
+#
+# Сейчас список пуст: handlers/history.py (последний оставшийся) переехал в
+# SCREENS выше — см. i18n_coverage.LOCALIZED. Пустой список, а не удалённый —
+# следующий модуль, который потянет за собой протекающий экран, заводит
+# запись здесь же, не изобретая инфраструктуру заново.
+SCREENS_STILL_LEAKING: list[tuple[str, object]] = []
 
 
 @pytest.mark.parametrize("screen_name, builder", SCREENS, ids=[name for name, _ in SCREENS])
@@ -478,14 +583,6 @@ async def test_screen_has_no_cyrillic_in_english(fresh_db, user_id, screen_name,
     assert not leaks, f"{screen_name}: русские слова на английском экране: {leaks}"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "экраны ещё не переведены (см. i18n_coverage.TODO: handlers/history.py); xfail "
-        "снимется само, когда очередной экран очистят от кириллицы — strict=True не даст "
-        "забыть переставить его в SCREENS, а не просто удалить строку отсюда"
-    ),
-)
 @pytest.mark.parametrize(
     "screen_name, builder", SCREENS_STILL_LEAKING, ids=[name for name, _ in SCREENS_STILL_LEAKING]
 )

@@ -23,7 +23,9 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 import config
 import db
 import formatting
+import i18n
 import keyboards
+import seed_data
 import timeutil
 import ui
 import view_builder
@@ -126,19 +128,13 @@ async def show_manage(event, state: FSMContext) -> None:
     routines = await db.list_standalone_routines(user_id)
     has_workouts = await db.count_workouts(user_id) > 0
     if programs or routines:
-        text = "🗂 <b>ПРОГРАММЫ</b>\n\nВыбери программу или создай новую."
+        text = i18n.t("routine.manage.header") + i18n.t("routine.manage.intro")
     else:
         # Порядок предложений не случаен: готовая программа появляется в один
         # тап и ничего не стоит, а сборка с тренером — это переписка. Раньше все
         # три способа были равнозначны, и выбирать между ними приходилось до
         # того, как человек понял, что вообще выбирает.
-        text = (
-            "🗂 <b>ПРОГРАММЫ</b>\n\nУ тебя пока нет сохранённых программ.\n\n"
-            "Быстрее всего — взять <b>готовую</b>: её дни появятся здесь сразу, и "
-            "тренировка начнётся в один тап.\n"
-            "Хочешь под себя — <b>AI-тренер</b> спросит пару вещей и соберёт.\n"
-            "А если уже потренировался — можно сохранить эту тренировку как программу."
-        )
+        text = i18n.t("routine.manage.header") + i18n.t("routine.manage.empty")
     # «⬅️ Назад» вместо «🏠 Меню», когда сюда попали с экрана выбора группы
     # мышц/упражнения свежей тренировки (см. rt_manage) — иначе единственный
     # путь обратно был через главное меню, хотя тренировка уже начата и ждёт
@@ -195,7 +191,7 @@ async def _owned_program(event, program_id: int):
     program = await db.get_program(program_id)
     if program is None or program["user_id"] != event.from_user.id:
         if isinstance(event, CallbackQuery):
-            await event.answer("Программа не найдена", show_alert=True)
+            await event.answer(i18n.t("routine.alert.program_not_found"), show_alert=True)
         return None
     return program
 
@@ -205,20 +201,23 @@ async def _owned_program(event, program_id: int):
 # бот объяснял пустоту событием, которого не было. Говорим, что делать дальше:
 # кнопка «✏️ Редактировать → Изменить состав» — ровно то, зачем такой день и
 # заводят.
-_EMPTY_DAY_LINE = "Пока пусто — добавь упражнения через «✏️ Редактировать»."
+def _empty_day_line() -> str:
+    return i18n.t("routine.day.empty")
+
 
 # Стрелка одна и ходит по кругу, поэтому объясняем — иначе «⬆️» у первого дня
 # выглядит сломанной кнопкой, хотя она отправляет его в конец.
-_DAY_ORDER_TEXT = "Порядок дней: ⬆️ — поднять выше (с первого — в конец)."
+def _day_order_text() -> str:
+    return i18n.t("routine.day.order_hint")
 
 
 def _days_ago_label(iso: str, today: dt.date) -> str:
     days = (today - dt.datetime.fromisoformat(iso).date()).days
     if days <= 0:
-        return "сегодня"
+        return i18n.t("routine.today")
     if days == 1:
-        return "вчера"
-    return f"{days} {formatting.plural_ru(days, ('день', 'дня', 'дней'))} назад"
+        return i18n.t("routine.yesterday")
+    return i18n.t("routine.days_ago", n=days)
 
 
 async def _day_composition_blocks(days, *, history=None, today=None) -> list[str]:
@@ -234,11 +233,14 @@ async def _day_composition_blocks(days, *, history=None, today=None) -> list[str
         ex_lines = [
             f"• {escape(ex['display_name'])}" + (f" — {escape(ex['target'])}" if ex["target"] else "")
             for ex in exercises
-        ] or [_EMPTY_DAY_LINE]
+        ] or [_empty_day_line()]
         when = ""
         if history is not None:
             entry = history.get(day["id"])
-            when = f" <i>· {_days_ago_label(entry[0], today)}</i>" if entry else " <i>· ещё не делал</i>"
+            when = (
+                f" <i>· {_days_ago_label(entry[0], today)}</i>" if entry
+                else f" <i>· {i18n.t('routine.day.never_done')}</i>"
+            )
         blocks.append("\n".join([f"<b>{escape(day['name'])}</b>{when}", *ex_lines]))
     return blocks
 
@@ -272,8 +274,7 @@ async def _show_program(event, state: FSMContext, program_id: int) -> None:
     # курсивные строки под заголовком читаются как сбитая вёрстка.
     subtitle = []
     if total:
-        word = formatting.plural_ru(total, ("тренировка", "тренировки", "тренировок"))
-        subtitle.append(f"{total} {word} по ней")
+        subtitle.append(i18n.t("routine.program.workouts_count", n=total))
     if catalog is not None:
         subtitle.append(escape(catalog["meta"]))
     if subtitle:
@@ -287,11 +288,11 @@ async def _show_program(event, state: FSMContext, program_id: int) -> None:
     if description:
         header.append(f"\n{escape(description)}")
     tail = (
-        f"Дальше по кругу — <b>{escape(next_day['name'])}</b>."
+        i18n.t("routine.program.next_day", name=escape(next_day["name"]))
         if next_day is not None and history
-        else "Выбери день — посмотреть состав или начать тренировку."
+        else i18n.t("routine.program.pick_day")
     )
-    text = "\n\n".join(["\n".join(header), "\n\n".join(day_blocks) or "В программе нет дней.", tail])
+    text = "\n\n".join(["\n".join(header), "\n\n".join(day_blocks) or i18n.t("routine.program.no_days"), tail])
     kb = keyboards.program_days_keyboard(
         days, program_id, next_day_id=next_day["id"] if next_day else None,
         # По истории, а не по факту наличия дня: очередь есть только у той
@@ -326,13 +327,12 @@ async def rt_program_edit(callback: CallbackQuery, state: FSMContext):
     if program is None:
         return
     days = await db.list_program_days_by_id(program_id)
-    word = formatting.plural_ru(len(days), ("день", "дня", "дней"))
     blocks = await _day_composition_blocks(days)
     text = "\n\n".join(
         [
-            f"⚙️ <b>{escape(program['name'])}</b>\n<i>{len(days)} {word}</i>",
+            f"⚙️ <b>{escape(program['name'])}</b>\n<i>{i18n.t('btn.program_days', n=len(days))}</i>",
             *blocks,
-            "Что меняем?",
+            i18n.t("routine.program.what_to_change"),
         ]
     )
     await ui.safe_edit(
@@ -389,12 +389,7 @@ async def rt_programs(callback: CallbackQuery, state: FSMContext):
     catalog = "\n".join(
         f"<b>{escape(p['name'])}</b> — {escape(p['meta'])}" for p in WORKOUT_PROGRAMS
     )
-    text = (
-        "✨ <b>ГОТОВЫЕ ПРОГРАММЫ</b>\n\n"
-        "Выбери готовую программу — её дни добавятся тебе в «Программы», и ты "
-        "начнёшь тренировку в один тап. Все нужные упражнения появятся в твоём "
-        f"списке.\n\n{catalog}"
-    )
+    text = i18n.t("routine.catalog.intro") + f"\n\n{catalog}"
     kb = keyboards.programs_catalog_keyboard(WORKOUT_PROGRAMS)
     await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML")
     await callback.answer()
@@ -405,7 +400,7 @@ async def rt_program_detail(callback: CallbackQuery, state: FSMContext):
     key = callback.data.split(":", 2)[2]
     program = PROGRAM_BY_KEY.get(key)
     if program is None:
-        await callback.answer("Программа не найдена", show_alert=True)
+        await callback.answer(i18n.t("routine.alert.catalog_program_not_found"), show_alert=True)
         return
     days = program["days"]
     # Разбор по дням — плоским текстом, без сворачивающегося блока: состав как
@@ -421,7 +416,7 @@ async def rt_program_detail(callback: CallbackQuery, state: FSMContext):
     text = "\n\n".join([
         f"✨ <b>{escape(program['name'])}</b>\n<i>{escape(program['meta'])}</i>",
         escape(program["description"]),
-        f"<b>{len(days)} {_days_word(len(days))}:</b>\n" + "\n\n".join(day_blocks),
+        f"<b>{i18n.t('btn.program_days', n=len(days))}:</b>\n" + "\n\n".join(day_blocks),
     ])
     kb = keyboards.program_detail_keyboard(key)
     await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML")
@@ -450,7 +445,7 @@ async def rt_program_add(callback: CallbackQuery, state: FSMContext):
     key = callback.data.split(":", 2)[2]
     program = PROGRAM_BY_KEY.get(key)
     if program is None:
-        await callback.answer("Программа не найдена", show_alert=True)
+        await callback.answer(i18n.t("routine.alert.catalog_program_not_found"), show_alert=True)
         return
     user_id = callback.from_user.id
     over_budget = await db.routine_budget(user_id, len(program["days"]))
@@ -462,8 +457,7 @@ async def rt_program_add(callback: CallbackQuery, state: FSMContext):
     if existing is not None:
         await ui.safe_edit(
             callback,
-            f"У тебя уже есть программа «{escape(program['name'])}».\n"
-            "Открыть её или добавить вторую копию?",
+            i18n.t("routine.program.already_have", name=escape(program["name"])),
             reply_markup=keyboards.program_name_taken_keyboard(
                 existing["id"], back_cb=f"rt:prog:{key}", add_cb=f"rt:progadd2:{key}"
             ),
@@ -473,7 +467,7 @@ async def rt_program_add(callback: CallbackQuery, state: FSMContext):
         return
 
     program_id = await _instantiate_catalog_program(user_id, key, program["name"])
-    await callback.answer(f"Добавил программу: {len(program['days'])} дн.")
+    await callback.answer(i18n.t("routine.program.added", days=i18n.t("btn.program_days", n=len(program["days"]))))
     await _show_program(callback, state, program_id)
 
 
@@ -484,7 +478,7 @@ async def rt_program_add_copy(callback: CallbackQuery, state: FSMContext):
     key = callback.data.split(":", 2)[2]
     program = PROGRAM_BY_KEY.get(key)
     if program is None:
-        await callback.answer("Программа не найдена", show_alert=True)
+        await callback.answer(i18n.t("routine.alert.catalog_program_not_found"), show_alert=True)
         return
     user_id = callback.from_user.id
     over_budget = await db.routine_budget(user_id, len(program["days"]))
@@ -493,27 +487,15 @@ async def rt_program_add_copy(callback: CallbackQuery, state: FSMContext):
         return
     name = await db.unique_program_name(user_id, program["name"])
     program_id = await _instantiate_catalog_program(user_id, key, name)
-    await callback.answer(f"Добавил как «{name}»")
+    await callback.answer(i18n.t("routine.program.added_as", name=name))
     await _show_program(callback, state, program_id)
-
-
-def _days_word(n: int) -> str:
-    """Russian plural for «день» (1 день, 2 дня, 5 дней)."""
-    if 11 <= n % 100 <= 14:
-        return "дней"
-    last = n % 10
-    if last == 1:
-        return "день"
-    if 2 <= last <= 4:
-        return "дня"
-    return "дней"
 
 
 async def _owned_routine(event, routine_id: int):
     routine = await db.get_routine(routine_id)
     if routine is None or routine["user_id"] != event.from_user.id:
         if isinstance(event, CallbackQuery):
-            await event.answer("Программа не найдена", show_alert=True)
+            await event.answer(i18n.t("routine.alert.program_not_found"), show_alert=True)
         return None
     return routine
 
@@ -537,7 +519,7 @@ async def _show_routine_detail(event, state: FSMContext, routine_id: int) -> Non
             suffix = f" — {escape(ex['target'])}" if ex["target"] else ""
             lines.append(f"{i}. {escape(ex['display_name'])}{suffix}")
     else:
-        lines.append(_EMPTY_DAY_LINE)
+        lines.append(_empty_day_line())
     kb = keyboards.routine_detail_keyboard(routine_id, program_id=routine["program_id"])
     text = "\n".join(lines)
     if isinstance(event, CallbackQuery):
@@ -574,13 +556,13 @@ async def _show_routine_editor(event, state: FSMContext, routine_id: int) -> Non
         # именно поменяется.
         lines += [
             "",
-            "Что можно сделать:",
-            "• <b>тап по названию</b> — поменять подходы и повторы",
-            "• ⬆️ — поднять выше (с первого — в конец)",
-            "• 🗑 — убрать из дня",
+            i18n.t("routine.edit.what_you_can_do"),
+            i18n.t("routine.edit.hint_tap"),
+            i18n.t("routine.edit.hint_up"),
+            i18n.t("routine.edit.hint_remove"),
         ]
     else:
-        lines.append("Здесь пока нет упражнений.")
+        lines.append(i18n.t("routine.edit.no_exercises"))
     if note:
         lines += ["", f"🔄 {escape(note)}"]
     kb = keyboards.routine_edit_keyboard(
@@ -647,8 +629,8 @@ async def _show_routine_source_picker(callback: CallbackQuery, state: FSMContext
     has_next = (page + 1) * ROUTINE_SOURCE_PAGE_SIZE < total
     kb = keyboards.routine_source_picker_keyboard(items, page, has_next)
     text = (
-        "🗂 Из какой тренировки создать программу?\n\n" + "\n\n".join(blocks)
-        if items else "Нет завершённых тренировок."
+        i18n.t("routine.source.pick_workout") + "\n\n" + "\n\n".join(blocks)
+        if items else i18n.t("routine.source.no_workouts")
     )
     await state.update_data(routine_source_page=page)
     await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML")
@@ -667,7 +649,7 @@ async def _show_routine_source_preview(callback: CallbackQuery, workout_id: int)
     what they're about to base a program on."""
     workout = await db.get_workout(workout_id)
     if workout is None or workout["user_id"] != callback.from_user.id:
-        await callback.answer("Тренировка не найдена", show_alert=True)
+        await callback.answer(i18n.t("routine.alert.workout_gone"), show_alert=True)
         return
     date_label = formatting.format_date_ru(dt.datetime.fromisoformat(workout["started_at"]))
     blocks = await view_builder.build_block_views(workout_id)
@@ -682,9 +664,9 @@ async def _show_routine_source_preview(callback: CallbackQuery, workout_id: int)
             if sets_str:
                 lines.append(f"   {sets_str}")
     else:
-        lines.append("В тренировке нет упражнений.")
+        lines.append(i18n.t("routine.source.no_exercises"))
     lines.append("")
-    lines.append("Создать программу из этой тренировки?")
+    lines.append(i18n.t("routine.source.confirm"))
     kb = keyboards.routine_source_preview_keyboard(workout_id)
     await ui.safe_edit(callback, "\n".join(lines), reply_markup=kb, parse_mode="HTML")
 
@@ -708,7 +690,7 @@ async def rt_pickw_use(callback: CallbackQuery, state: FSMContext):
     workout_id = int(callback.data.split(":")[3])
     workout = await db.get_workout(workout_id)
     if workout is None or workout["user_id"] != callback.from_user.id:
-        await callback.answer("Тренировка не найдена", show_alert=True)
+        await callback.answer(i18n.t("routine.alert.workout_gone"), show_alert=True)
         return
     over_budget = await db.routine_budget(callback.from_user.id, 1)
     if over_budget:
@@ -718,10 +700,10 @@ async def rt_pickw_use(callback: CallbackQuery, state: FSMContext):
     program_id = data.get("day_program_id") if data.get("day_from_workout") else None
     await state.set_state(RoutineFlow.naming)
     await state.update_data(routine_source_workout_id=workout_id)
-    what = "день" if program_id else "программу"
+    kind = "day" if program_id else "program"
     await ui.safe_edit(
         callback,
-        f"Как назвать {what}? (например «День груди» или «Тяни»)",
+        i18n.t("routine.naming.prompt", kind=kind),
         reply_markup=keyboards.cancel_keyboard(f"rt:prg:{program_id}" if program_id else "rt:manage"),
     )
     await callback.answer()
@@ -769,11 +751,10 @@ async def rt_name_entered(message: Message, state: FSMContext):
         # по своему А/Б, раньше получал две несвязанные строки в списке и никакого
         # способа их поженить. Предлагаем сделать из этого многодневку сразу.
         await message.answer(
-            "Ходишь по нескольким разным тренировкам? Можно собрать из них одну "
-            "программу с днями.",
+            i18n.t("routine.suggest_multiday"),
             reply_markup=keyboards.yes_no_keyboard(
                 yes_cb=f"rt:tomulti:{routine_id}", no_cb="rt:manage",
-                yes_text="🗂 Собрать программу", no_text="Не надо",
+                yes_text=i18n.t("routine.btn.build_program"), no_text=i18n.t("routine.btn.no_thanks"),
             ),
         )
 
@@ -792,7 +773,7 @@ async def rt_to_multiday(callback: CallbackQuery, state: FSMContext):
     await state.update_data(multiday_seed_routine_id=routine["id"])
     await ui.safe_edit(
         callback,
-        "Как назвать программу целиком? (например «Мой А/Б» или «Верх-низ»)",
+        i18n.t("routine.naming.program_prompt"),
         reply_markup=keyboards.cancel_keyboard(f"rt:view:{routine['id']}"),
     )
     await callback.answer()
@@ -812,7 +793,7 @@ async def rt_multiday_named(message: Message, state: FSMContext):
         return
     program_id = await db.create_program(message.from_user.id, name, source="workout")
     if program_id is None:
-        await message.reply("Программа с таким именем у тебя уже есть — придумай другое")
+        await message.reply(i18n.t("routine.name.program_taken_pick_other"))
         return
     await db.move_routine_to_program(routine["id"], program_id)
     await state.set_state(None)
@@ -826,9 +807,9 @@ def _valid_name(raw: str) -> tuple[str | None, str | None]:
     режет собственные названия."""
     name = raw.strip()
     if not name:
-        return None, "Название не может быть пустым"
+        return None, i18n.t("routine.name.empty")
     if len(name) > config.MAX_PROGRAM_NAME_LENGTH:
-        return None, f"Слишком длинное — до {config.MAX_PROGRAM_NAME_LENGTH} символов"
+        return None, i18n.t("routine.name.too_long", max=config.MAX_PROGRAM_NAME_LENGTH)
     return name, None
 
 
@@ -842,9 +823,9 @@ async def rt_rename(callback: CallbackQuery, state: FSMContext):
     await state.update_data(routine_rename_id=routine_id)
     # «Название программы» на дне многодневки — то же слово для другого объекта:
     # переименуется день, а программа останется как была.
-    what = "дня" if routine["program_id"] is not None else "программы"
+    kind = "day" if routine["program_id"] is not None else "program"
     await ui.safe_edit(
-        callback, f"Напиши новое название {what}:",
+        callback, i18n.t("routine.rename.prompt", kind=kind),
         reply_markup=keyboards.cancel_keyboard(f"rt:view:{routine_id}"),
     )
     await callback.answer()
@@ -887,13 +868,13 @@ async def _name_taken(user_id: int, routine, name: str) -> Optional[str]:
     if routine["program_id"] is not None:
         siblings = await db.list_program_days_by_id(routine["program_id"])
         if any(d["id"] != routine["id"] and d["name"].strip().lower() == key for d in siblings):
-            return f"День «{name}» в этой программе уже есть. Назови по-другому."
+            return i18n.t("routine.name.day_taken", name=name)
         return None
     others = await db.list_standalone_routines(user_id)
     if any(r["id"] != routine["id"] and r["name"].strip().lower() == key for r in others):
-        return f"Программа «{name}» у тебя уже есть. Назови по-другому."
+        return i18n.t("routine.name.program_taken", name=name)
     if await db.find_program_by_name(user_id, name) is not None:
-        return f"Программа «{name}» у тебя уже есть. Назови по-другому."
+        return i18n.t("routine.name.program_taken", name=name)
     return None
 
 
@@ -909,7 +890,7 @@ async def rt_program_rename(callback: CallbackQuery, state: FSMContext):
     await state.update_data(program_rename_id=program_id)
     await ui.safe_edit(
         callback,
-        f"Как назвать программу «{escape(program['name'])}»?",
+        i18n.t("routine.rename.program_prompt", name=escape(program["name"])),
         reply_markup=keyboards.cancel_keyboard(f"rt:prg:{program_id}"),
         parse_mode="HTML",
     )
@@ -935,12 +916,11 @@ async def rt_program_rename_entered(message: Message, state: FSMContext):
         clash = await db.find_program_by_name(message.from_user.id, name)
         await state.update_data(program_merge_source=program_id, program_merge_target=clash["id"])
         await message.answer(
-            f"Программа «{escape(name)}» у тебя уже есть. Объединить с ней "
-            f"«{escape(program['name'])}» или выбрать другое имя?",
+            i18n.t("routine.program.merge_offer", name=escape(name), other=escape(program["name"])),
             reply_markup=keyboards.yes_no_keyboard(
                 yes_cb=f"rt:pgmmerge:{program_id}:{clash['id']}",
                 no_cb=f"rt:pgmrename:{program_id}",
-                yes_text="🔗 Объединить", no_text="✏️ Другое имя",
+                yes_text=i18n.t("routine.btn.merge"), no_text=i18n.t("routine.btn.other_name"),
             ),
             parse_mode="HTML",
         )
@@ -959,7 +939,7 @@ async def rt_program_merge(callback: CallbackQuery, state: FSMContext):
         return
     await db.merge_programs(callback.from_user.id, source_id, target_id)
     await state.set_state(None)
-    await callback.answer("Объединил")
+    await callback.answer(i18n.t("routine.program.merged"))
     await _show_program(callback, state, target_id)
 
 
@@ -993,7 +973,7 @@ async def rt_program_copy(callback: CallbackQuery, state: FSMContext):
             if ex["progression"]:
                 entry = (await db.list_routine_exercises(day_id))[-1]
                 await db.set_routine_exercise_progression(entry["id"], ex["progression"])
-    await callback.answer(f"Скопировал как «{name}»")
+    await callback.answer(i18n.t("routine.program.copied_as", name=name))
     await _show_program(callback, state, copy_id)
 
 
@@ -1006,13 +986,14 @@ async def rt_program_delete_confirm(callback: CallbackQuery, state: FSMContext):
     days = await db.list_program_days_by_id(program_id)
     kb = keyboards.yes_no_keyboard(
         yes_cb=f"rt:pgmdelyes:{program_id}", no_cb=f"rt:prg:{program_id}",
-        yes_text="🗑 Удалить", no_text="❌ Отмена",
+        yes_text=i18n.t("btn.delete"), no_text=i18n.t("btn.cancel"),
     )
-    word = formatting.plural_ru(len(days), ("день", "дня", "дней"))
     await ui.safe_edit(
         callback,
-        f"Удалить программу «{escape(program['name'])}» целиком — все {len(days)} {word}? "
-        "История тренировок не пострадает.",
+        i18n.t(
+            "routine.program.delete_confirm",
+            name=escape(program["name"]), days=i18n.t("btn.program_days", n=len(days)),
+        ),
         reply_markup=kb, parse_mode="HTML",
     )
     await callback.answer()
@@ -1024,7 +1005,7 @@ async def rt_program_delete(callback: CallbackQuery, state: FSMContext):
     if await _owned_program(callback, program_id) is None:
         return
     await db.delete_program_by_id(program_id)
-    await callback.answer("Удалил программу")
+    await callback.answer(i18n.t("routine.program.deleted"))
     await show_manage(callback, state)
 
 
@@ -1042,16 +1023,15 @@ async def rt_delete_confirm(callback: CallbackQuery, state: FSMContext):
         return
     kb = keyboards.yes_no_keyboard(
         yes_cb=f"rt:delyes:{routine_id}", no_cb=f"rt:view:{routine_id}",
-        yes_text="🗑 Удалить", no_text="❌ Отмена",
+        yes_text=i18n.t("btn.delete"), no_text=i18n.t("btn.cancel"),
     )
     if routine["program_id"] is not None:
-        text = (
-            f"Удалить день «{escape(routine['name'])}» из программы "
-            f"«{escape(routine['program_name'])}»? Остальные дни останутся, "
-            "история тренировок не пострадает."
+        text = i18n.t(
+            "routine.delete.day_confirm",
+            name=escape(routine["name"]), program=escape(routine["program_name"]),
         )
     else:
-        text = f"Удалить программу «{escape(routine['name'])}»? История тренировок не пострадает."
+        text = i18n.t("routine.delete.program_confirm", name=escape(routine["name"]))
     await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML")
     await callback.answer()
 
@@ -1064,7 +1044,7 @@ async def rt_delete(callback: CallbackQuery, state: FSMContext):
         return
     program_id = routine["program_id"]
     await db.delete_routine(routine_id)
-    await callback.answer("Удалил день" if program_id else "Удалил программу")
+    await callback.answer(i18n.t("routine.delete.day_done" if program_id else "routine.delete.program_done"))
     # Назад туда, откуда пришли: удалив один день, ожидаешь увидеть программу без
     # него, а не весь список программ. Последний день уносит программу с собой
     # (см. db.delete_routine) — тогда возвращаться уже некуда.
@@ -1091,19 +1071,22 @@ async def rt_start(callback: CallbackQuery, state: FSMContext):
             kb = keyboards.yes_no_keyboard(
                 yes_cb=f"rt:finishprev:{routine_id}",
                 no_cb=f"rt:resumeprev:{routine_id}",
-                yes_text="🏁 Завершить и начать",
-                no_text="↩️ Вернуться к ней",
+                yes_text=i18n.t("routine.btn.finish_and_start"),
+                no_text=i18n.t("routine.btn.return_to_it"),
             )
             if routine["program_name"]:
-                program_phrase = (
-                    f"«{escape(routine['program_name'])}» (день «{escape(routine['name'])}»)"
+                program_phrase = i18n.t(
+                    "routine.program_phrase.with_day",
+                    program=escape(routine["program_name"]), day=escape(routine["name"]),
                 )
             else:
-                program_phrase = f"«{escape(routine['name'])}»"
+                program_phrase = i18n.t("routine.program_phrase.plain", name=escape(routine["name"]))
             await ui.safe_edit(
                 callback,
-                f"У тебя не закрыта тренировка от <b>{formatting.format_date_ru(started)}</b>.\n"
-                f"Завершить её и начать по программе {program_phrase}?",
+                i18n.t(
+                    "routine.start.stale_workout",
+                    date=formatting.format_date_ru(started), program=program_phrase,
+                ),
                 reply_markup=kb,
                 parse_mode="HTML",
             )
@@ -1133,7 +1116,7 @@ async def _begin_routine_workout(callback: CallbackQuery, state: FSMContext, rou
     # программы, по которым человек ходит в последнее время.
     workout_id = await db.create_workout(callback.from_user.id, routine_id=routine["id"])
     await wk_delete(callback.message)
-    sent = await callback.message.answer(f"🏋️ Тренировка по программе «{routine['name']}»")
+    sent = await callback.message.answer(i18n.t("routine.start.workout_by_program", name=routine["name"]))
     await state.update_data(
         workout_id=workout_id, live_chat_id=sent.chat.id, live_message_id=sent.message_id,
         last_by_exercise={}, planned_blocks=planned,
@@ -1158,7 +1141,7 @@ async def rt_finish_previous_and_start(callback: CallbackQuery, state: FSMContex
         await db.delete_empty_blocks(active["id"])
         await db.finish_workout(active["id"])
     await _begin_routine_workout(callback, state, routine)
-    await callback.answer("Закрыл прошлую тренировку")
+    await callback.answer(i18n.t("routine.start.closed_previous"))
 
 
 @router.callback_query(F.data.startswith("rt:resumeprev:"))
@@ -1168,7 +1151,7 @@ async def rt_resume_previous(callback: CallbackQuery, state: FSMContext):
 
     active = await db.get_active_workout(callback.from_user.id)
     if active is None:
-        await callback.answer("Активной тренировки уже нет")
+        await callback.answer(i18n.t("routine.start.no_active"))
         await _show_routine_detail(callback, state, int(callback.data.split(":")[2]))
         return
     await _enter_live(callback, state, active["id"])
@@ -1194,7 +1177,7 @@ async def rt_day_add(callback: CallbackQuery, state: FSMContext):
         return
     days = await db.list_program_days_by_id(program_id)
     await ui.safe_edit(
-        callback, "Какой день добавить?",
+        callback, i18n.t("routine.day.which_to_add"),
         reply_markup=keyboards.program_day_source_keyboard(program_id, days),
     )
     await callback.answer()
@@ -1208,7 +1191,7 @@ async def rt_day_blank(callback: CallbackQuery, state: FSMContext):
     await state.set_state(RoutineFlow.naming_day)
     await state.update_data(day_program_id=program_id, day_copy_from=None)
     await ui.safe_edit(
-        callback, "Как назвать день? (например «Руки» или «День 4»)",
+        callback, i18n.t("routine.naming.day_prompt"),
         reply_markup=keyboards.cancel_keyboard(f"rt:prg:{program_id}"),
     )
     await callback.answer()
@@ -1224,7 +1207,7 @@ async def rt_day_copy(callback: CallbackQuery, state: FSMContext):
     await state.set_state(RoutineFlow.naming_day)
     await state.update_data(day_program_id=source["program_id"], day_copy_from=source_id)
     await ui.safe_edit(
-        callback, f"Как назвать копию дня «{escape(source['name'])}»?",
+        callback, i18n.t("routine.naming.day_copy_prompt", name=escape(source["name"])),
         reply_markup=keyboards.cancel_keyboard(f"rt:prg:{source['program_id']}"),
         parse_mode="HTML",
     )
@@ -1249,7 +1232,7 @@ async def rt_day_named(message: Message, state: FSMContext):
     # из которых не выбрать, а «Копия «X»» предлагает имя тёзкой по умолчанию.
     key = name.strip().lower()
     if any(d["name"].strip().lower() == key for d in await db.list_program_days_by_id(program_id)):
-        await message.reply(f"День «{name}» в этой программе уже есть. Назови по-другому.")
+        await message.reply(i18n.t("routine.name.day_taken", name=name))
         return
     routine_id = await db.create_routine(message.from_user.id, name, program_id=program_id)
     source_id = data.get("day_copy_from")
@@ -1273,7 +1256,7 @@ async def rt_day_order(callback: CallbackQuery, state: FSMContext):
         return
     days = await db.list_program_days_by_id(program_id)
     await ui.safe_edit(
-        callback, _DAY_ORDER_TEXT,
+        callback, _day_order_text(),
         reply_markup=keyboards.program_day_order_keyboard(days, program_id),
     )
     await callback.answer()
@@ -1288,7 +1271,7 @@ async def rt_day_move(callback: CallbackQuery, state: FSMContext):
     await db.reorder_program_day(routine["id"], direction)
     days = await db.list_program_days_by_id(routine["program_id"])
     await ui.safe_edit(
-        callback, _DAY_ORDER_TEXT,
+        callback, _day_order_text(),
         reply_markup=keyboards.program_day_order_keyboard(days, routine["program_id"]),
     )
     await callback.answer()
@@ -1301,10 +1284,10 @@ async def rt_day_out(callback: CallbackQuery, state: FSMContext):
     if routine is None:
         return
     if routine["program_id"] is None:
-        await callback.answer("Он и так сам по себе")
+        await callback.answer(i18n.t("routine.day.already_standalone"))
         return
     await db.move_routine_to_program(routine["id"], None)
-    await callback.answer("Вынес из программы")
+    await callback.answer(i18n.t("routine.day.taken_out"))
     await _show_routine_detail(callback, state, routine["id"])
 
 
@@ -1354,7 +1337,7 @@ async def rt_remove_exercise_confirm(callback: CallbackQuery, state: FSMContext)
         return
     entry = await db.get_routine_exercise(re_id)
     if entry is None or entry["routine_id"] != routine_id:
-        await callback.answer("Уже убрал это упражнение", show_alert=True)
+        await callback.answer(i18n.t("routine.exercise.already_removed"), show_alert=True)
         await _show_routine_editor(callback, state, routine_id)
         return
     exercises = await db.list_routine_exercises(routine_id)
@@ -1366,7 +1349,7 @@ async def rt_remove_exercise_confirm(callback: CallbackQuery, state: FSMContext)
     message = callback.message
     with suppress(TelegramBadRequest):
         await message.edit_reply_markup(reply_markup=kb)
-    await callback.answer("Ещё раз — и уберу")
+    await callback.answer(i18n.t("routine.exercise.tap_again_to_remove"))
     _spawn(_revert_rmex_arm(callback.bot, message.chat.id, message.message_id, routine_id, re_id))
 
 
@@ -1379,11 +1362,11 @@ async def rt_remove_exercise(callback: CallbackQuery, state: FSMContext):
         return
     entry = await db.get_routine_exercise(re_id)
     if entry is None or entry["routine_id"] != routine_id:
-        await callback.answer("Уже убрал это упражнение", show_alert=True)
+        await callback.answer(i18n.t("routine.exercise.already_removed"), show_alert=True)
         await _show_routine_editor(callback, state, routine_id)
         return
     await db.remove_routine_exercise(re_id)
-    await callback.answer("Убрал из программы")
+    await callback.answer(i18n.t("routine.exercise.removed"))
     await _show_routine_editor(callback, state, routine_id)
 
 
@@ -1400,17 +1383,17 @@ async def rt_edit_exercise_target(callback: CallbackQuery, state: FSMContext):
         return
     entry = await db.get_routine_exercise(re_id)
     if entry is None or entry["routine_id"] != routine_id:
-        await callback.answer("Уже убрал это упражнение", show_alert=True)
+        await callback.answer(i18n.t("routine.exercise.already_removed"), show_alert=True)
         await _show_routine_editor(callback, state, routine_id)
         return
     exercise = await db.get_exercise(entry["exercise_id"])
-    name = exercise["display_name"] if exercise else "упражнение"
+    name = exercise["display_name"] if exercise else i18n.t("routine.exercise.generic_name")
     await state.set_state(RoutineFlow.editing_exercise_target)
     await state.update_data(rtedit_routine_id=routine_id, rtedit_re_id=re_id)
-    current = f"\nСейчас: {escape(entry['target'])}" if entry["target"] else ""
+    current = i18n.t("routine.target.current", target=escape(entry["target"])) if entry["target"] else ""
     await ui.safe_edit(
         callback,
-        f"Схема подходов для «{escape(name)}»? Например «3x8-12».{current}",
+        i18n.t("routine.target.prompt", name=escape(name), current=current),
         reply_markup=keyboards.routine_exercise_target_keyboard("rt:extclear"),
         parse_mode="HTML",
     )
@@ -1428,7 +1411,7 @@ async def rt_clear_exercise_target(callback: CallbackQuery, state: FSMContext):
     await state.set_state(None)
     await _show_routine_editor(callback, state, data["rtedit_routine_id"])
     await callback.answer(
-        "Убрал схему и заодно снял правило прогрессии из программы" if had_rule else "Убрал схему"
+        i18n.t("routine.target.cleared_with_progression" if had_rule else "routine.target.cleared")
     )
 
 
@@ -1436,9 +1419,7 @@ async def rt_clear_exercise_target(callback: CallbackQuery, state: FSMContext):
 async def rt_exercise_target_entered(message: Message, state: FSMContext):
     target = formatting.normalize_routine_target(message.text)
     if not target:
-        await ui.reply_transient(
-            message, 'Не понял схему. Напиши как «3x8-12» — подходы и диапазон повторов'
-        )
+        await ui.reply_transient(message, i18n.t("routine.target.parse_error"))
         return
     data = await state.get_data()
     # Правило читаем до записи — set_routine_exercise_target сбрасывает его
@@ -1446,9 +1427,7 @@ async def rt_exercise_target_entered(message: Message, state: FSMContext):
     entry = await db.get_routine_exercise(data["rtedit_re_id"])
     await db.set_routine_exercise_target(data["rtedit_re_id"], target)
     if entry is not None and entry["progression"]:
-        await message.reply(
-            "Схема теперь ручная — заодно снял правило прогрессии из программы."
-        )
+        await message.reply(i18n.t("routine.target.now_manual"))
     await state.set_state(None)
     await _show_routine_editor(message, state, data["rtedit_routine_id"])
 
@@ -1469,11 +1448,11 @@ async def _rtadd_groups_screen(callback: CallbackQuery, state: FSMContext) -> No
     await state.set_state(RoutineFlow.adding_exercise_group)
     groups = await db.list_muscle_groups(callback.from_user.id)
     kb = keyboards.groups_keyboard(
-        groups, prefix="rtadd", extra_buttons=[("❌ Отмена", "rtadd:cancel")], show_all=True
+        groups, prefix="rtadd", extra_buttons=[(i18n.t("btn.cancel"), "rtadd:cancel")], show_all=True
     )
     await ui.safe_edit(
         callback,
-        "Выбери группу мышц — или просто напиши название, например «жим»:",
+        i18n.t("routine.add.pick_group"),
         reply_markup=kb,
     )
 
@@ -1528,10 +1507,7 @@ async def _rtadd_exercise_list_screen(callback: CallbackQuery, state: FSMContext
     )
     # Тот же приём, что у экрана групп (routines: pick group) — «или просто
     # напиши название, например «жим»» вместо суховатого «для поиска».
-    text = (
-        "Выбери упражнение — или просто напиши название, например «жим»:"
-        if exercises else "Пусто здесь — напиши название для поиска."
-    )
+    text = i18n.t("routine.add.pick_exercise" if exercises else "routine.add.empty_search")
     await ui.safe_edit(callback, text, reply_markup=kb)
 
 
@@ -1566,9 +1542,14 @@ async def _rtadd_catalog_screen(callback: CallbackQuery, state: FSMContext) -> N
     templates = await db.list_templates_in_group(group_id) if group_id is not None else []
     b = InlineKeyboardBuilder()
     for t in templates:
-        b.row(InlineKeyboardButton(text=t["display_name"], callback_data=f"rtadd:tpladd:{t['id']}"))
-    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="rtadd:catalogback"))
-    text = "📋 Шаблоны — выбери подходящий:" if templates else "В этой группе шаблонов нет."
+        # Templates are one shared, never-forked row per exercise — their
+        # `display_name` stays the Russian catalog text forever (see
+        # handlers.exercises._template_display_name), so it's localized here
+        # at render time rather than shown as-is.
+        label = seed_data.localized_exercise_name(t["name"], i18n.get_lang())
+        b.row(InlineKeyboardButton(text=label, callback_data=f"rtadd:tpladd:{t['id']}"))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.back"), callback_data="rtadd:catalogback"))
+    text = i18n.t("routine.add.templates_pick" if templates else "routine.add.templates_empty")
     await ui.safe_edit(callback, text, reply_markup=b.as_markup())
 
 
@@ -1597,7 +1578,7 @@ async def _rtadd_finish(event, state: FSMContext, exercise_id: int, target: str 
         await state.set_state(None)
         await _show_routine_editor(event, state, routine_id)
         if isinstance(event, CallbackQuery):
-            await event.answer("Оно уже здесь — схему можно поменять ✏️", show_alert=True)
+            await event.answer(i18n.t("routine.add.already_here"), show_alert=True)
         return
     await db.append_routine_exercise(routine_id, exercise_id, target)
     await db.touch_exercise_last_used(exercise_id)
@@ -1606,7 +1587,7 @@ async def _rtadd_finish(event, state: FSMContext, exercise_id: int, target: str 
     # exercises can be added in a row.
     await _show_routine_editor(event, state, routine_id)
     if isinstance(event, CallbackQuery):
-        await event.answer("Добавил в программу")
+        await event.answer(i18n.t("routine.add.done"))
 
 
 async def _rtadd_ask_target(callback: CallbackQuery, state: FSMContext, exercise_id: int) -> None:
@@ -1616,8 +1597,7 @@ async def _rtadd_ask_target(callback: CallbackQuery, state: FSMContext, exercise
     await state.set_state(RoutineFlow.adding_exercise_target)
     await ui.safe_edit(
         callback,
-        "Схема подходов/повторов для этого упражнения? Например «3x8-12». "
-        "Или нажми «Пропустить».",
+        i18n.t("routine.target.ask"),
         reply_markup=keyboards.routine_exercise_target_keyboard("rtadd:notarget"),
     )
     await callback.answer()
@@ -1649,9 +1629,7 @@ async def rtadd_skip_target(callback: CallbackQuery, state: FSMContext):
 async def rtadd_target_entered(message: Message, state: FSMContext):
     target = formatting.normalize_routine_target(message.text)
     if not target:
-        await ui.reply_transient(
-            message, 'Не понял схему. Напиши как «3x8-12» — подходы и диапазон повторов'
-        )
+        await ui.reply_transient(message, i18n.t("routine.target.parse_error"))
         return
     data = await state.get_data()
     await _rtadd_finish(message, state, data["rtadd_exercise_id"], target)
@@ -1668,8 +1646,8 @@ async def rtadd_search_text(message: Message, state: FSMContext):
     templates = await db.search_exercise_templates(message.from_user.id, query)
     kb = keyboards.exercises_keyboard(results, prefix="rtadd", show_new_button=False, templates=templates)
     if results or templates:
-        text = f"Результаты поиска «{escape(query)}»:"
+        text = i18n.t("routine.search.results", query=escape(query))
     else:
-        text = f"Ничего не нашлось по «{escape(query)}»."
+        text = i18n.t("routine.search.empty", query=escape(query))
     await state.set_state(RoutineFlow.adding_exercise_pick)
     await message.answer(text, reply_markup=kb, parse_mode="HTML")

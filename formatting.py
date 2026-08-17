@@ -25,18 +25,16 @@ from analytics import (
 # datetime.weekday() (0 = понедельник).
 _WEEKDAY_KEYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 
-UNIT_LABELS = {"kg": "кг", "lb": "lb"}
+def unit_label(unit: str) -> str:
+    """Единица веса с учётом языка: «кг»/«kg» по каталогу, lb — как есть (то
+    же сокращение в обоих языках).
 
-
-def _unit_label(unit: str) -> str:
-    """Единица веса для собственных нужд этого модуля, с учётом языка.
-
-    UNIT_LABELS выше — не трогаем: это публичный словарь, к которому напрямую
-    обращаются handlers/workout.py и handlers/bodyweight.py (правятся сейчас
-    параллельно, не в этой задаче) через `.get(unit, "кг")` с русским
-    фолбэком в самом вызове — перекраивать его форму значило бы менять их
-    поведение чужими руками. lb — то же сокращение в обоих языках, менять
-    нечего.
+    Раньше здесь был приватный `_unit_label` рядом с публичным словарём
+    `UNIT_LABELS = {"kg": "кг", "lb": "lb"}` — тот словарь читали напрямую
+    handlers/workout.py и handlers/bodyweight.py через `.get(unit, "кг")` с
+    русским фолбэком в вызове, и англоязычный с килограммами видел «кг» (в
+    bodyweight.py это ещё и уезжало в подпись графика). Словарь убран, все
+    вызовы переведены на эту функцию.
     """
     return "lb" if unit == "lb" else i18n.t("unit.kg")
 
@@ -548,7 +546,7 @@ def format_delta(delta: float, unit: str = "kg") -> str:
     Заодно вес идёт через format_weight: «66кг» вместо «66.0кг» — в остальной
     карточке веса давно так и печатаются.
     """
-    u = _unit_label(unit)
+    u = unit_label(unit)
     return f"{_delta_arrow(delta)}{format_weight(abs(delta))}{u}"
 
 
@@ -575,7 +573,7 @@ def format_tonnage(total: float, unit: str = "kg") -> str:
     2-4 form regardless of the leading digit, so only a whole number of tons
     goes through the normal plural_ru rules.
     """
-    u = _unit_label(unit)
+    u = unit_label(unit)
     total_kg = to_kg(total, unit)
     if total_kg >= 1000:
         tons = round(total_kg / 1000, 1)
@@ -622,13 +620,13 @@ def _block_record_text(
         reps = block.record_reps
         return i18n.t("card.record_reps", reps=reps, n=reps)
     if block.record_e1rm_delta is not None and show_extra:
-        u = _unit_label(unit)
+        u = unit_label(unit)
         return i18n.t("card.record_e1rm", delta=format_weight(block.record_e1rm_delta), u=u)
     return None
 
 
 def _render_single_block(block: ExerciseBlockView, show_extra: bool, unit: str = "kg") -> list[str]:
-    u = _unit_label(unit)
+    u = unit_label(unit)
     label = f"{escape(block.exercise_name)} [{escape(format_group_tag(block.group_name))}]"
     lines = [f"<b>{label}</b>"]
     if block.note:
@@ -1110,7 +1108,7 @@ def format_progression_rule(progression: Optional[dict], unit: Optional[str] = N
     if step:
         # Вплотную к числу, как везде в проекте («20кг», не «20 кг»).
         step_text = (
-            f"{step:g}{_unit_label(unit)}" if unit else i18n.t("program.step_neutral", step=f"{step:g}")
+            f"{step:g}{unit_label(unit)}" if unit else i18n.t("program.step_neutral", step=f"{step:g}")
         )
     if rule == "double_progression":
         top = progression.get("reps_top")
@@ -1605,7 +1603,7 @@ def menu_tiles(dashboard, tonnage: float, records: int, unit: str = "kg") -> lis
     У тоннажа и рекордов окно названо в подписи. Без него «11» рядом с «35.1 т»
     выглядит как счётчик за всё время, и цифра врёт в разы.
     """
-    u = _unit_label(unit)
+    u = unit_label(unit)
     # Тонны — когда их есть чем мерить: «0.4 т» читается хуже, чем «400 кг».
     #
     # Тонна — тонна, поэтому и порог, и сама цифра считаются в килограммах, ровно
@@ -1651,7 +1649,7 @@ def menu_lift_tiles(
     Имя не обрезается: это выбор, а не карточки со спарклайном, где ширина
     буквально занята линией. Полное название важнее аккуратной колонки.
     """
-    u = _unit_label(unit)
+    u = unit_label(unit)
     rows = [
         (name, before, window)
         for name, before, window in growth
@@ -1676,7 +1674,7 @@ def build_workout_card(
 
     Returns (title, body_lines, footer, note) — charts.render_workout_card draws them.
     """
-    u = _unit_label(unit)
+    u = unit_label(unit)
     title = format_date_ru(started_at)
     body: list[str] = []
     exercise_count = 0
@@ -1818,7 +1816,7 @@ def build_gold_book_lines(golds, unit: str = "kg", is_bodyweight: bool = False) 
     # e1RM тождественно нулю, и проверка по нему прятала книгу целиком.
     if golds is None or golds.max_reps <= 0:
         return []
-    u = _unit_label(unit)
+    u = unit_label(unit)
     header = i18n.t("gold.header")
 
     def dated(label: str, value: str, day: str) -> str:
@@ -1943,7 +1941,7 @@ def build_weekly_summary(
     `rows` — все упражнения недели; до читаемого числа строк список режется
     здесь, а `total_tonnage` считается вызывающей стороной по всем подходам.
     """
-    u = _unit_label(unit)
+    u = unit_label(unit)
     lines = [
         i18n.t("weekly.header", period=escape(period)),
         i18n.t("weekly.summary_line", n=workouts, tonnage=format_tonnage(total_tonnage, unit)),
@@ -1980,7 +1978,7 @@ def build_weekly_table(rows: list[WeeklyRow], unit: str = "kg"):
 
     if not rows:
         return None
-    u = _unit_label(unit)
+    u = unit_label(unit)
     def cell(text: str, align: str = "left", is_header: bool = False) -> RichBlockTableCell:
         # align/valign у ячейки обязательны — без них pydantic-модель aiogram
         # не собирается вовсе.
@@ -2107,7 +2105,7 @@ def build_hall_of_fame(
 ) -> str:
     """Lifetime totals plus the user's best lifts, shown above the badge grid
     on the '🏅 Достижения' screen — no heading of its own."""
-    u = _unit_label(unit)
+    u = unit_label(unit)
     if total_workouts == 0:
         return i18n.t("hall.empty")
 
@@ -2188,7 +2186,7 @@ def format_progress_screen(
     session_notes: dict[int, str] | None = None,  # {workout_id: note}
     golds=None,  # analytics.GoldBook | None
 ) -> str:
-    u = _unit_label(unit)
+    u = unit_label(unit)
     lines = [f"📈 <b>{escape(exercise_name)}</b>", ""]
     if not sessions:
         lines.append(i18n.t("progress.no_history"))
@@ -2306,7 +2304,7 @@ def build_bodyweight_screen(logs: list, unit: str = "kg", period_logs: list | No
     would vanish from the chat. Same guard, and same reason, as
     format_progress_screen.
     """
-    u = _unit_label(unit)
+    u = unit_label(unit)
     if not logs:
         return i18n.t("bodyweight.empty")
     days = _bodyweight_days(logs)
@@ -2348,7 +2346,7 @@ def build_bodyweight_list_screen(
     told apart and deleted individually. rows: one page, newest-first (as
     db.list_bodyweight_logs_page returns).
     """
-    u = _unit_label(unit)
+    u = unit_label(unit)
     head = [i18n.t("bodyweight_list.header"), ""]
     if not rows:
         head.append(i18n.t("bodyweight_list.empty"))

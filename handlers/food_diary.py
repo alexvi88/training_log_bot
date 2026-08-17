@@ -35,6 +35,7 @@ import ai_limits
 import ai_trainer
 import db
 import formatting
+import i18n
 import keyboards
 import state_scaffold
 import timeutil
@@ -65,21 +66,6 @@ def _try_claim_confirming(user_id: int) -> bool:
 # Телеграмовское фото и так пережато, но подпирать base64-раздутым мегабайтником
 # запрос к модели незачем — тот же порог, что у фото-вопросов AI-тренеру.
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
-
-_ADD_HINT = (
-    "🍽 Напиши, что съел, или пришли фото еды (можно с подписью) — "
-    "прикину калории и БЖУ, а ты подтвердишь."
-)
-
-_CORRECT_HINT = (
-    "✏️ Напиши, что не так — например «это была груша, и порция граммов 300» "
-    "или «добавь ещё кофе с молоком»."
-)
-
-_NOT_FOOD_HINT = "Пришли фото самой еды или напиши текстом, что съел."
-
-# Пока модель считает — чтобы экран не выглядел зависшим.
-_THINKING_TEXT = "🤔 Разбираю, что тут..."
 
 
 # ---------- вспомогательное ----------
@@ -282,9 +268,7 @@ async def _analyze_and_show(
     correction: str = "",
 ) -> None:
     if not ai_trainer.is_configured():
-        await message.reply(
-            "🤖 Распознавание еды пока не настроено на сервере — попробуй позже."
-        )
+        await message.reply(i18n.t("food.not_configured"))
         return
 
     # Единственная платная поверхность бота, которая раньше не считалась вовсе:
@@ -318,7 +302,7 @@ async def _analyze_and_show(
     # Экран дня (с подсказкой «напиши, что съел») намеренно не удаляется —
     # разбор идёт отдельным сообщением ниже, а не заменяет собой то, на что
     # человек только что ответил.
-    placeholder = await message.answer(_THINKING_TEXT)
+    placeholder = await message.answer(i18n.t("food.thinking"))
     try:
         estimate = await asyncio.wait_for(
             ai_trainer.analyze_food(
@@ -334,10 +318,7 @@ async def _analyze_and_show(
     except Exception:
         logger.exception("food analysis failed for user %s", message.from_user.id)
         with suppress(TelegramBadRequest):
-            await placeholder.edit_text(
-                "⚠️ Не получилось разобрать, что это за еда. Попробуй ещё раз "
-                "или напиши текстом, что съел."
-            )
+            await placeholder.edit_text(i18n.t("food.analysis_failed"))
         # Возвращаемся в режим просмотра дня, не трогая сам экран дня — он не
         # удалялся и не менялся, перерисовывать (и тем более удалять) нечего.
         await state.set_state(FoodDiaryFlow.viewing)
@@ -356,8 +337,8 @@ async def _analyze_and_show(
         # пользователя про «нахуя мне заносить»). Просто объясняем и возвращаем
         # экран дня, ничего не сохраняя.
         comment = estimate.get("comment", "").strip()
-        not_food_text = "🤔 Не нашёл тут еды" + (f": {escape(comment)}" if comment else ".")
-        not_food_text += f"\n{_NOT_FOOD_HINT}"
+        not_food_text = i18n.t("food.not_food_detected") + (f": {escape(comment)}" if comment else ".")
+        not_food_text += f"\n{i18n.t('food.not_food_hint')}"
         with suppress(TelegramBadRequest):
             await placeholder.edit_text(not_food_text)
         await state.set_state(FoodDiaryFlow.viewing)
@@ -367,7 +348,7 @@ async def _analyze_and_show(
     if not estimate.get("description"):
         # Модель не поняла, что на фото/в тексте — подставляем то, что написал
         # человек, чтобы запись всё равно можно было сохранить своими словами.
-        estimate["description"] = text.strip() or "Приём пищи"
+        estimate["description"] = text.strip() or i18n.t("food.default_meal_name")
 
     # Фото не уходит в БД целиком: file_id хватает, чтобы показать 📷 в дневнике
     # и (позже) переслать снимок, а картинки Telegram хранит у себя.
@@ -383,9 +364,7 @@ async def _analyze_and_show(
 async def fd_photo_entry(message: Message, state: FSMContext):
     image_data_url = await _download_photo_as_data_url(message)
     if image_data_url is None:
-        await message.reply(
-            f"Фото слишком большое — уложись в {MAX_IMAGE_BYTES // (1024 * 1024)} МБ."
-        )
+        await message.reply(i18n.t("food.photo_too_large", mb=MAX_IMAGE_BYTES // (1024 * 1024)))
         return
     await _analyze_and_show(
         message,
@@ -441,7 +420,7 @@ async def fd_text_entry(message: Message, state: FSMContext):
             # равно идёт — предупреждение не отменяет то, что его вызвало.
             await ai_limits.reply(message, block)
         else:
-            await message.reply("Записал как есть — калории сегодня уже не считаю, вернусь к ним завтра.")
+            await message.reply(i18n.t("food.saved_plain"))
             await _save_now(message, state, _plain_text_pending(text))
             return
 
@@ -458,7 +437,7 @@ async def fd_fix(callback: CallbackQuery, state: FSMContext):
     await state.set_state(FoodDiaryFlow.correcting)
     data = await state.get_data()
     pending = data.get("fd_pending") or {}
-    text = _estimate_text(pending) + "\n\n" + _CORRECT_HINT
+    text = _estimate_text(pending) + "\n\n" + i18n.t("food.correct_hint")
     await ui.safe_edit(
         callback, text, reply_markup=keyboards.cancel_keyboard("fd:cancel"), parse_mode="HTML"
     )
@@ -498,7 +477,7 @@ async def fd_cancel(callback: CallbackQuery, state: FSMContext):
     date = await _state_date(state, callback.from_user.id)
     await state.update_data(fd_pending=None)
     await _show_day(callback, state, date)
-    await callback.answer("Отменил")
+    await callback.answer(i18n.t("food.cancelled_toast"))
 
 
 async def _save_now(event, state: FSMContext, pending: dict[str, Any]) -> None:
@@ -512,7 +491,7 @@ async def _save_now(event, state: FSMContext, pending: dict[str, Any]) -> None:
     # сюда попадает текст пользователя целиком (до 4096 символов), и он потом
     # ходит и в экран дня, и в промпт модели.
     description = formatting.shorten(
-        pending.get("description") or "Приём пищи", formatting.FOOD_DESC_LIMIT
+        pending.get("description") or i18n.t("food.default_meal_name"), formatting.FOOD_DESC_LIMIT
     )
     await db.add_food_entry(
         user_id,
@@ -544,10 +523,10 @@ async def fd_confirm(callback: CallbackQuery, state: FSMContext):
         data = await state.get_data()
         pending = data.get("fd_pending")
         if not pending:
-            await callback.answer("Нечего сохранять", show_alert=True)
+            await callback.answer(i18n.t("food.nothing_to_save"), show_alert=True)
             return
         await _save_now(callback, state, pending)
-        await callback.answer("Записал 👌")
+        await callback.answer(i18n.t("food.logged_toast"))
     finally:
         _confirming.discard(user_id)
 
@@ -566,12 +545,12 @@ async def fd_delete_ask(callback: CallbackQuery, state: FSMContext):
     entry_id = int(callback.data.split(":")[2])
     entry = await db.get_food_entry(entry_id)
     if entry is None or entry["telegram_id"] != callback.from_user.id:
-        await callback.answer("Запись не найдена", show_alert=True)
+        await callback.answer(i18n.t("food.entry_not_found"), show_alert=True)
         return
     date = dt.date.fromisoformat(entry["eaten_on"])
     await ui.safe_edit(
         callback,
-        f"Удалить «{escape(entry['description'])}»?",
+        i18n.t("food.delete_confirm", name=escape(entry["description"])),
         reply_markup=keyboards.food_delete_confirm_keyboard(entry_id, date),
         parse_mode="HTML",
     )
@@ -583,11 +562,11 @@ async def fd_delete(callback: CallbackQuery, state: FSMContext):
     entry_id = int(callback.data.split(":")[2])
     entry = await db.get_food_entry(entry_id)
     if entry is None or entry["telegram_id"] != callback.from_user.id:
-        await callback.answer("Запись не найдена", show_alert=True)
+        await callback.answer(i18n.t("food.entry_not_found"), show_alert=True)
         return
     await db.delete_food_entry(entry_id)
     await _show_day(callback, state, dt.date.fromisoformat(entry["eaten_on"]))
-    await callback.answer("Удалил")
+    await callback.answer(i18n.t("food.deleted_toast"))
 
 
 @router.callback_query(F.data.startswith("fd:history:"))

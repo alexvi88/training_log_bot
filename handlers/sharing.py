@@ -29,6 +29,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 import acquisition
 import config
 import db
+import i18n
 from formatting import MESSAGE_LIMIT, telegram_length
 from state_scaffold import clear_state_keep_ai
 
@@ -108,16 +109,10 @@ def _deep_link(username: str, token: str) -> str:
 # ---------- создание визитки ----------
 
 
-def _days_word(n: int) -> str:
-    """Russian plural for «день» (1 день, 2 дня, 5 дней)."""
-    if 11 <= n % 100 <= 14:
-        return "дней"
-    last = n % 10
-    if last == 1:
-        return "день"
-    if 2 <= last <= 4:
-        return "дня"
-    return "дней"
+def _days_phrase(n: int) -> str:
+    """«{n} день/дня/дней» — тот же ICU-плюрал каталога, что и у количества
+    дней программы везде в боте (btn.program_days), а не свой счётчик формы."""
+    return i18n.t("btn.program_days", n=n)
 
 
 def _program_days_totals(payload: dict[str, Any]) -> tuple[int, int]:
@@ -143,7 +138,9 @@ def _omitted_days_note(payload: dict[str, Any]) -> Optional[str]:
     in_card, total = _program_days_totals(payload)
     if in_card >= total:
         return None
-    return f"⚠️ Уехало {in_card} {_days_word(in_card)} из {total} — {_omitted_reason(payload)}."
+    return i18n.t(
+        "share.omitted_note", days=_days_phrase(in_card), total=total, reason=_omitted_reason(payload)
+    )
 
 
 def _omitted_reason(payload: dict[str, Any]) -> str:
@@ -156,13 +153,13 @@ def _omitted_reason(payload: dict[str, Any]) -> str:
     # v0–v2 счётчика пустых дней не несут, и восстановить его нечем — там
     # называем факт без причины, а не выдумываем её.
     if int(payload.get("v", 0)) < 3:
-        return "визитка вместила не всё"
+        return i18n.t("share.reason_legacy")
     over_limit = total - in_card - empty
     if empty and over_limit > 0:
-        return "пустые дни не передаются, а остальное не влезло в одну визитку"
+        return i18n.t("share.reason_empty_and_overflow")
     if empty:
-        return "пустые дни не передаются"
-    return "больше в одну визитку не влезает"
+        return i18n.t("share.reason_empty_days")
+    return i18n.t("share.reason_overflow")
 
 
 def _routine_preview_lines(payload: dict[str, Any], budget: int = PREVIEW_BUDGET) -> list[str]:
@@ -181,7 +178,7 @@ def _routine_preview_lines(payload: dict[str, Any], budget: int = PREVIEW_BUDGET
         shown += 1
     remaining = len(exercises) - shown
     if remaining > 0:
-        lines.append(f"…и ещё {remaining} упражн.")
+        lines.append(i18n.t("share.more_exercises_count", n=remaining))
     return lines
 
 
@@ -211,7 +208,7 @@ def _program_preview_lines(payload: dict[str, Any], budget: int = PREVIEW_BUDGET
             shown_ex += 1
         remaining_ex = len(exercises) - shown_ex
         if remaining_ex > 0:
-            day_lines.append(f"…и ещё {remaining_ex} упражн.")
+            day_lines.append(i18n.t("share.more_exercises_count", n=remaining_ex))
 
         trial_total = lines + day_lines
         if shown_days > 0 and telegram_length("\n".join(trial_total)) > budget:
@@ -221,7 +218,7 @@ def _program_preview_lines(payload: dict[str, Any], budget: int = PREVIEW_BUDGET
 
     remaining_days = len(days) - shown_days
     if remaining_days > 0:
-        lines.append(f"\n…и ещё {remaining_days} {_days_word(remaining_days)}")
+        lines.append(i18n.t("share.and_n_more_days", n=remaining_days))
     return lines
 
 
@@ -232,7 +229,7 @@ def _share_card_keyboard(url: str, label: str, token: str) -> InlineKeyboardMark
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text=label, url=url)],
-            [InlineKeyboardButton(text="🚫 Отозвать ссылку", callback_data=f"share:revoke:{token}")],
+            [InlineKeyboardButton(text=i18n.t("share.revoke_link_button"), callback_data=f"share:revoke:{token}")],
         ]
     )
 
@@ -244,11 +241,11 @@ async def share_routine(callback: CallbackQuery, state: FSMContext):
     routine_id = int(callback.data.split(":")[2])
     routine = await db.get_routine(routine_id)
     if routine is None or routine["user_id"] != callback.from_user.id:
-        await callback.answer("Программа не найдена", show_alert=True)
+        await callback.answer(i18n.t("share.program_not_found"), show_alert=True)
         return
     exercises = await db.list_routine_exercises(routine_id)
     if not exercises:
-        await callback.answer("В программе нет упражнений — нечем делиться", show_alert=True)
+        await callback.answer(i18n.t("share.program_empty"), show_alert=True)
         return
 
     payload = {
@@ -263,13 +260,13 @@ async def share_routine(callback: CallbackQuery, state: FSMContext):
     url = _deep_link(await get_bot_username(callback.bot), token)
 
     text = "\n".join(
-        _routine_preview_lines(payload)
-        + ["", "<i>Перешли это сообщение — по кнопке программу можно забрать себе.</i>"]
+        _routine_preview_lines(payload) + ["", i18n.t("share.forward_hint_program")]
     )
     await callback.message.answer(
-        text, parse_mode="HTML", reply_markup=_share_card_keyboard(url, "➕ Забрать программу себе", token)
+        text, parse_mode="HTML",
+        reply_markup=_share_card_keyboard(url, i18n.t("share.claim_program_button"), token),
     )
-    await callback.answer("Визитка готова — пересылай 📤")
+    await callback.answer(i18n.t("share.card_ready"))
 
 
 async def _send_program_card(callback: CallbackQuery, program_id: int, program_name: str) -> None:
@@ -300,7 +297,7 @@ async def _send_program_card(callback: CallbackQuery, program_id: int, program_n
             }
         )
     if not day_payloads:
-        await callback.answer("В программе нет упражнений — нечем делиться", show_alert=True)
+        await callback.answer(i18n.t("share.program_empty"), show_alert=True)
         return
 
     # Описание уезжает вместе с составом: получателю оно нужнее, чем автору —
@@ -326,19 +323,20 @@ async def _send_program_card(callback: CallbackQuery, program_id: int, program_n
     text = "\n".join(
         _program_preview_lines(payload)
         + ([f"\n{note}"] if note else [])
-        + ["", "<i>Перешли это сообщение — по кнопке программу можно забрать себе.</i>"]
+        + ["", i18n.t("share.forward_hint_program")]
     )
     await callback.message.answer(
-        text, parse_mode="HTML", reply_markup=_share_card_keyboard(url, "➕ Забрать программу себе", token)
+        text, parse_mode="HTML",
+        reply_markup=_share_card_keyboard(url, i18n.t("share.claim_program_button"), token),
     )
     if note is None:
-        await callback.answer("Визитка готова — пересылай 📤")
+        await callback.answer(i18n.t("share.card_ready"))
         return
     # Тост — чтобы человек заметил потерю сразу, а не отправив визитку другу;
     # то же самое написано в самой визитке, тост её только не даёт проскочить.
     in_card, total = _program_days_totals(payload)
     await callback.answer(
-        f"Визитка готова, но уехало {in_card} {_days_word(in_card)} из {total}", show_alert=True
+        i18n.t("share.card_ready_partial", days=_days_phrase(in_card), total=total), show_alert=True
     )
 
 
@@ -355,7 +353,7 @@ async def share_program(callback: CallbackQuery, state: FSMContext):
     """
     program = await db.get_program(int(callback.data.split(":")[2]))
     if program is None or program["user_id"] != callback.from_user.id:
-        await callback.answer("Программа не найдена", show_alert=True)
+        await callback.answer(i18n.t("share.program_not_found"), show_alert=True)
         return
     await _send_program_card(callback, program["id"], program["name"])
 
@@ -372,7 +370,7 @@ async def share_program_legacy(callback: CallbackQuery, state: FSMContext):
     """
     anchor = await db.get_routine(int(callback.data.split(":")[2]))
     if anchor is None or anchor["user_id"] != callback.from_user.id or anchor["program_id"] is None:
-        await callback.answer("Программа не найдена", show_alert=True)
+        await callback.answer(i18n.t("share.program_not_found"), show_alert=True)
         return
     await _send_program_card(callback, anchor["program_id"], anchor["program_name"])
 
@@ -382,7 +380,7 @@ async def share_exercise(callback: CallbackQuery, state: FSMContext):
     ex_id = int(callback.data.split(":")[2])
     ex = await db.get_exercise(ex_id)
     if ex is None or ex["user_id"] != callback.from_user.id:
-        await callback.answer("Упражнение не найдено", show_alert=True)
+        await callback.answer(i18n.t("share.exercise_not_found"), show_alert=True)
         return
     group = await db.get_muscle_group(ex["primary_group_id"]) if ex["primary_group_id"] else None
     description = (ex["description"] or "")[:MAX_DESCRIPTION_LEN] or None
@@ -400,16 +398,16 @@ async def share_exercise(callback: CallbackQuery, state: FSMContext):
 
     lines = [f"🏋️ <b>{escape(payload['name'])}</b>"]
     if payload["group"]:
-        lines.append(f"Группа: {escape(payload['group'])}")
+        lines.append(i18n.t("share.group_label", group=escape(payload["group"])))
     if description:
         lines.append("")
         lines.append(escape(description))
-    lines += ["", "<i>Перешли это сообщение — по кнопке упражнение можно добавить себе.</i>"]
+    lines += ["", i18n.t("share.forward_hint_exercise")]
     await callback.message.answer(
         "\n".join(lines), parse_mode="HTML",
-        reply_markup=_share_card_keyboard(url, "➕ Добавить упражнение себе", token),
+        reply_markup=_share_card_keyboard(url, i18n.t("share.add_exercise_button"), token),
     )
-    await callback.answer("Визитка готова — пересылай 📤")
+    await callback.answer(i18n.t("share.card_ready"))
 
 
 @router.callback_query(F.data.startswith("share:revoke:"))
@@ -421,16 +419,16 @@ async def share_revoke(callback: CallbackQuery, state: FSMContext):
     token = callback.data.split(":", 2)[2]
     row = await db.get_shared_item(token)
     if row is None:
-        await callback.answer("Ссылка уже недействительна", show_alert=True)
+        await callback.answer(i18n.t("share.link_invalid"), show_alert=True)
         return
     if not await db.delete_shared_item(token, callback.from_user.id):
-        await callback.answer("Это не твоя визитка", show_alert=True)
+        await callback.answer(i18n.t("share.not_your_card"), show_alert=True)
         return
     taken = row["taken_count"]
     await callback.message.edit_reply_markup(reply_markup=None)
     await callback.answer(
-        "Ссылка отозвана 🚫" if not taken
-        else f"Ссылка отозвана 🚫 До этого её забрали: {taken}",
+        i18n.t("share.link_revoked") if not taken
+        else i18n.t("share.link_revoked_with_taken", n=taken),
         show_alert=True,
     )
 
@@ -439,10 +437,10 @@ async def share_revoke(callback: CallbackQuery, state: FSMContext):
 
 
 def _accept_keyboard(token: str, kind: str) -> InlineKeyboardMarkup:
-    label = "➕ Добавить упражнение себе" if kind == "exercise" else "➕ Добавить программу себе"
+    label = i18n.t("share.add_exercise_button") if kind == "exercise" else i18n.t("share.add_program_button")
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=label, callback_data=f"share:add:{token}")],
-        [InlineKeyboardButton(text="🏠 В меню", callback_data="share:skip")],
+        [InlineKeyboardButton(text=i18n.t("share.to_menu_button"), callback_data="share:skip")],
     ])
 
 
@@ -477,7 +475,7 @@ async def open_shared(message: Message, command: CommandObject, state: FSMContex
             row["owner_id"] if row is not None else None,
         )
     if row is None:
-        await message.answer("🤷 Эта ссылка устарела или битая. Открой меню: /start")
+        await message.answer(i18n.t("share.link_broken"))
         return
     payload = json.loads(row["payload"])
     owner = await db.get_user(row["owner_id"])
@@ -486,30 +484,41 @@ async def open_shared(message: Message, command: CommandObject, state: FSMContex
     # payload можно без разбора версий; поле только фиксирует точку отсчёта на
     # будущее (см. PAYLOAD_VERSION).
     payload.setdefault("v", 0)
-    from_whom = f"от @{owner['username']}" if owner and owner["username"] else "от кого-то"
+    from_whom = (
+        i18n.t("share.from_named", username=owner["username"])
+        if owner and owner["username"]
+        else i18n.t("share.from_someone")
+    )
 
+    # Языка получателя мы на момент создания визитки не знаем — карточка,
+    # которую владелец пересылает, рендерится и застывает на ЕГО языке (см.
+    # share_routine/_send_program_card/share_exercise). А вот это превью
+    # строится заново на КАЖДОЕ открытие ссылки — i18n.t() здесь уже смотрит
+    # на язык открывшего (SetUserLanguageMiddleware выставляет его по
+    # users.lang, а для человека, которого в базе ещё нет вовсе, — по
+    # telegram-овскому language_code, см. main.SetUserLanguageMiddleware).
     if row["kind"] == "program":
         # «N дней» — про то, что реально лежит в визитке, и «из M», если у
         # отправителя было больше: получатель должен видеть, что забирает часть,
         # до того как решит забрать (раньше про урезку не говорили вообще).
         n, total = _program_days_totals(payload)
-        out_of = "" if n >= total else f" из {total}"
-        head = f"Тебе прислали программу {from_whom} — {n} {_days_word(n)}{out_of}.\n\n"
+        out_of = "" if n >= total else i18n.t("share.out_of", total=total)
+        head = i18n.t("share.received_program_head", from_=from_whom, days=_days_phrase(n), out_of=out_of)
         note = _omitted_days_note(payload)
         text = head + "\n".join(_program_preview_lines(payload) + ([f"\n{note}"] if note else []))
     elif row["kind"] == "routine":
         n = len(payload["exercises"])
-        head = f"Тебе прислали программу {from_whom} — {n} упр.\n\n"
+        head = i18n.t("share.received_routine_head", from_=from_whom, n=n)
         text = head + "\n".join(_routine_preview_lines(payload))
     else:
-        text = f"Тебе прислали упражнение {from_whom}:\n\n🏋️ <b>{escape(payload['name'])}</b>"
+        text = i18n.t("share.received_exercise_head", from_=from_whom) + f"🏋️ <b>{escape(payload['name'])}</b>"
         if payload.get("group"):
-            text += f"\nГруппа: {escape(payload['group'])}"
+            text += f"\n{i18n.t('share.group_label', group=escape(payload['group']))}"
         if payload.get("description"):
             text += f"\n\n{escape(payload['description'])}"
 
     if row["owner_id"] == message.from_user.id:
-        text += "\n\n<i>Это твоя собственная визитка — добавлять не нужно.</i>"
+        text += f"\n\n{i18n.t('share.own_card_notice')}"
         await message.answer(text, parse_mode="HTML")
         return
     await message.answer(text, parse_mode="HTML", reply_markup=_accept_keyboard(token, row["kind"]))
@@ -555,7 +564,7 @@ async def _dedupe_program_name(user_id: int, name: str, owner_username: Optional
     так же.
     """
     unique = await db.unique_program_name(
-        user_id, name, suffix=f"от @{owner_username}" if owner_username else None
+        user_id, name, suffix=i18n.t("share.from_named", username=owner_username) if owner_username else None
     )
     standalone = {r["name"].strip().lower() for r in await db.list_standalone_routines(user_id)}
     n = 2
@@ -590,7 +599,7 @@ async def share_add(callback: CallbackQuery, state: FSMContext):
     token = callback.data.split(":", 2)[2]
     row = await db.get_shared_item(token)
     if row is None:
-        await callback.answer("Ссылка устарела", show_alert=True)
+        await callback.answer(i18n.t("share.link_expired"), show_alert=True)
         return
     user_id = callback.from_user.id
     if row["owner_id"] == user_id:
@@ -599,7 +608,7 @@ async def share_add(callback: CallbackQuery, state: FSMContext):
         # чужими руками (переслали ему обратно). Проверка нужна здесь же, а не
         # только там: callback приходит напрямую по callback_data, экран
         # open_shared в этот момент никто не открывал.
-        await callback.answer("Это твоя собственная визитка — добавлять не нужно", show_alert=True)
+        await callback.answer(i18n.t("share.own_card_toast"), show_alert=True)
         return
     payload = json.loads(row["payload"])
 
@@ -636,13 +645,14 @@ async def share_add(callback: CallbackQuery, state: FSMContext):
         # Кнопку убираем: второй тап по «Добавить» иначе плодит дубликаты.
         await callback.message.edit_reply_markup(reply_markup=None)
         await callback.message.answer(
-            f"✅ Программа «{escape(program_name)}» у тебя — {len(payload['days'])} "
-            f"{_days_word(len(payload['days']))} в 🗂 Программы.\n"
-            "Новые упражнения легли в «Другое», группу можно поменять в ⚙️ Упражнения.",
+            i18n.t(
+                "share.program_added_full", name=escape(program_name),
+                days=_days_phrase(len(payload["days"])), fallback_group=FALLBACK_GROUP_NAME,
+            ),
             parse_mode="HTML",
         )
         await db.mark_shared_item_taken(token)
-        await callback.answer("Добавил 👌")
+        await callback.answer(i18n.t("share.added"))
         return
 
     if row["kind"] == "routine":
@@ -659,12 +669,14 @@ async def share_add(callback: CallbackQuery, state: FSMContext):
         # Кнопку убираем: второй тап по «Добавить» иначе плодит дубликаты.
         await callback.message.edit_reply_markup(reply_markup=None)
         await callback.message.answer(
-            f"✅ Программа «{escape(payload['name'])}» у тебя — 🗂 Программы.\n"
-            "Новые упражнения легли в «Другое», группу можно поменять в ⚙️ Упражнения.",
+            i18n.t(
+                "share.routine_added_full", name=escape(payload["name"]),
+                fallback_group=FALLBACK_GROUP_NAME,
+            ),
             parse_mode="HTML",
         )
         await db.mark_shared_item_taken(token)
-        await callback.answer("Добавил 👌")
+        await callback.answer(i18n.t("share.added"))
         return
 
     # kind == "exercise"
@@ -675,7 +687,7 @@ async def share_add(callback: CallbackQuery, state: FSMContext):
     existing = await db.find_exercise_by_name(user_id, name)
     if existing:
         await callback.message.edit_reply_markup(reply_markup=None)
-        await callback.answer(f"«{name}» у тебя уже есть", show_alert=True)
+        await callback.answer(i18n.t("share.exercise_exists", name=name), show_alert=True)
         return
     group_id = await _resolve_group_id(user_id, payload.get("group"))
     ex_id = await db.create_exercise(user_id, name, group_id)
@@ -686,8 +698,6 @@ async def share_add(callback: CallbackQuery, state: FSMContext):
     if payload.get("photo_file_id"):
         await db.set_exercise_photo(ex_id, payload["photo_file_id"])
     await callback.message.edit_reply_markup(reply_markup=None)
-    await callback.message.answer(
-        f"✅ «{escape(name)}» добавлено — ⚙️ Упражнения.", parse_mode="HTML"
-    )
+    await callback.message.answer(i18n.t("share.exercise_added", name=escape(name)), parse_mode="HTML")
     await db.mark_shared_item_taken(token)
-    await callback.answer("Добавил 👌")
+    await callback.answer(i18n.t("share.added"))

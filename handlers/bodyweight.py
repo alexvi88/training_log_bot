@@ -19,6 +19,7 @@ from aiogram.types import BufferedInputFile, CallbackQuery, InputMediaPhoto, Mes
 import charts
 import db
 import formatting
+import i18n
 import keyboards
 import timeutil
 import ui
@@ -134,9 +135,16 @@ async def _render(event, state: FSMContext, user_id: int | None = None) -> None:
     png = None
     points = _daily_average_points(chart_logs)
     if len(points) >= 2:
-        unit_label = formatting.UNIT_LABELS.get(user["unit"], "кг")
+        unit_label = formatting.unit_label(user["unit"])
+        # Заголовок и подпись оси уходят в картинку (charts.render_metric_over_sessions
+        # рисует их matplotlib'ом), а не текстом на экране — поэтому оба берутся
+        # из каталога, а не собираются f-строкой с русским текстом внутри: иначе
+        # англоязычный с любой единицей всё равно видел бы кириллицу на графике.
         png = await asyncio.to_thread(
-            charts.render_metric_over_sessions, points, f"Вес тела, {unit_label}", unit_label
+            charts.render_metric_over_sessions,
+            points,
+            i18n.t("bodyweight.chart_title", u=unit_label),
+            unit_label,
         )
 
     if not isinstance(event, CallbackQuery):
@@ -215,7 +223,7 @@ async def bw_delete_record(callback: CallbackQuery, state: FSMContext):
     _, _, log_id_s, page_s = callback.data.split(":")
     log_id, page = int(log_id_s), int(page_s)
     removed = await db.delete_bodyweight_log(log_id, callback.from_user.id)
-    await callback.answer("Удалил запись" if removed else "Запись не найдена")
+    await callback.answer(i18n.t("bodyweight.entry_deleted") if removed else i18n.t("bodyweight.entry_not_found"))
     # Если это была последняя запись на странице — а страница не первая,
     # съезжаем на предыдущую, чтобы не остаться на пустом экране.
     size = keyboards.BODYWEIGHT_LIST_PAGE_SIZE
@@ -250,9 +258,14 @@ async def bw_weight_entered(message: Message, state: FSMContext):
         await state.update_data(
             bw_pending_weight=weight, bw_pending_date=date.isoformat() if date else None
         )
-        u = formatting.UNIT_LABELS.get(user["unit"], "кг")
+        u = formatting.unit_label(user["unit"])
         await message.reply(
-            f"⚠️ {formatting.format_weight(weight)}{u}? {warning}\nЗаписываем?",
+            i18n.t(
+                "bodyweight.confirm_prompt",
+                weight=formatting.format_weight(weight),
+                u=u,
+                warning=warning,
+            ),
             reply_markup=keyboards.bodyweight_confirm_keyboard(),
         )
         return
@@ -297,7 +310,7 @@ async def bw_weight_confirm_yes(callback: CallbackQuery, state: FSMContext):
         # actual bodyweight screen instead of trying to reuse this one; user_id is
         # explicit because confirm_message.from_user would be the bot, not the user.
         await _render(confirm_message, state, user_id=user_id)
-        await callback.answer("Записал")
+        await callback.answer(i18n.t("bodyweight.confirmed_logged"))
     finally:
         _confirming.discard(user_id)
 
@@ -308,4 +321,4 @@ async def bw_weight_confirm_no(callback: CallbackQuery, state: FSMContext):
     await state.update_data(bw_pending_weight=None, bw_pending_date=None)
     with suppress(TelegramBadRequest):
         await callback.message.delete()
-    await callback.answer("Не записал — пришли число ещё раз")
+    await callback.answer(i18n.t("bodyweight.confirm_declined"))
