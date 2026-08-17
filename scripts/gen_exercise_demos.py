@@ -115,6 +115,12 @@ NOVITA_VIDEO_PATH = os.getenv("NOVITA_VIDEO_PATH", "vidu-q1-startend2video")
 NOVITA_FRAME_MODEL = os.getenv("NOVITA_FRAME_MODEL", "")
 POLL_TIMEOUT_S = int(os.getenv("NOVITA_POLL_TIMEOUT", "600"))
 
+# Перед Novita стоит Cloudflare, и на запрос без внятного User-Agent он отвечает
+# «HTTP 403, error code: 1010» — со стороны выглядит как отказ в доступе по
+# ключу, хотя ключ ни при чём: urllib по умолчанию представляется
+# «Python-urllib/3.11», и это ровно тот случай, который Cloudflare режет.
+USER_AGENT = "training-log-bot-exercise-demos/1.0"
+
 # Персонаж — дословно по TONE_OF_VOICE.md, раздел «Стиль картинок». Меняется
 # только вместе с ним: разъедутся — в карточках заведётся второй тренер.
 CHARACTER = (
@@ -205,6 +211,7 @@ def _request(url: str, payload: dict | None = None) -> dict:
         headers={
             "Authorization": f"Bearer {_api_key()}",
             "Content-Type": "application/json",
+            "User-Agent": USER_AGENT,
         },
         method="POST" if data else "GET",
     )
@@ -215,7 +222,14 @@ def _request(url: str, payload: dict | None = None) -> dict:
         # Тело ответа дословно: при расхождении с доками там лежит имя поля,
         # которое не сошлось, и это разница между «правка на минуту» и
         # «непонятная 400».
-        raise GenError(f"HTTP {e.code} от {url}\n{e.read().decode(errors='replace')}") from e
+        body = e.read().decode(errors="replace")
+        if "1010" in body:
+            body += (
+                "\n  Это Cloudflare перед Novita, а не отказ по ключу. Если "
+                "User-Agent уже свой, значит не сошёлся путь эндпоинта — "
+                "сверься с каталогом и поправь NOVITA_VIDEO_PATH."
+            )
+        raise GenError(f"HTTP {e.code} от {url}\n{body}") from e
 
 
 def _start_task(path: str, payload: dict) -> str:
@@ -355,6 +369,7 @@ def _read_pose(photo: pathlib.Path) -> str:
         headers={
             "Authorization": f"Bearer {_openai_key()}",
             "Content-Type": "application/json",
+            "User-Agent": USER_AGENT,
         },
         method="POST",
     )
@@ -445,6 +460,7 @@ def _frame_via_openai(
         headers={
             "Authorization": f"Bearer {key}",
             "Content-Type": f"multipart/form-data; boundary={boundary}",
+            "User-Agent": USER_AGENT,
         },
         method="POST",
     )
