@@ -134,3 +134,43 @@ def test_ru_and_en_bot_texts_are_actually_different():
         if key.startswith("bot.") and key in en:
             assert ru[key] != en[key], f"{key}: одинаковый текст в ru и en"
 
+
+
+@pytest.mark.asyncio
+async def test_sync_bot_profile_sets_the_name_on_both_languages():
+    """Имя бота — то, что человек видит в списке чатов ещё до первого
+    сообщения. Оно жило только в BotFather и было одно на всех, так что
+    англоязычный находил кириллицу среди английских названий."""
+    bot = AsyncMock()
+    bot.get_my_name.return_value = type("N", (), {"name": "старое"})()
+
+    await bot_profile.sync_bot_profile(bot)
+
+    langs = {c.kwargs.get("language_code") for c in bot.set_my_name.call_args_list}
+    assert langs == {None, "en"}, langs
+    by_lang = {c.kwargs.get("language_code"): c.args[0] for c in bot.set_my_name.call_args_list}
+    assert by_lang[None] == "ДНЕВНИК АТЛЕТА"
+    assert not _CYRILLIC_RE.search(by_lang["en"])
+
+
+@pytest.mark.asyncio
+async def test_name_is_not_rewritten_when_it_already_matches():
+    """setMyName ограничен по частоте жёстче остальных методов профиля, а бот
+    перезапускается на каждом деплое — переписывать неизменившееся имя значит
+    тратить лимит впустую."""
+    bot = AsyncMock()
+
+    def _current(language_code=None):
+        name = bot_profile.NAME_EN if language_code == "en" else bot_profile.NAME
+        return type("N", (), {"name": name})()
+
+    bot.get_my_name.side_effect = _current
+
+    await bot_profile.sync_bot_profile(bot)
+
+    bot.set_my_name.assert_not_called()
+
+
+def test_bot_name_fits_the_telegram_limit():
+    for text in (bot_profile.NAME, bot_profile.NAME_EN):
+        assert len(text) <= bot_profile._NAME_LIMIT, text
