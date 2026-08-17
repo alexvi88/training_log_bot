@@ -169,6 +169,35 @@ async def test_exercise_card_sends_the_clip(monkeypatch):
     assert (await state.get_data())["exm_media_msg_ids"] == [905]
 
 
+@pytest.mark.asyncio
+async def test_template_preview_finds_the_clip_for_an_english_reader(tmp_path, monkeypatch):
+    """Предпросмотр шаблона получает строку с ЛОКАЛИЗОВАННЫМ именем
+    (_localized_template_row), а клип ключуется идентичностью — русским
+    original_name. Разъедется это молча и только у английских читателей,
+    поэтому проверяем именно локализованную строку, а не каноническую.
+    """
+    from handlers import exercises
+
+    monkeypatch.setattr(exercise_media, "MEDIA_DIR", str(tmp_path))
+    slug = exercise_media.EXERCISE_IMAGE_SLUGS[EX_WITH_PHOTO]
+    (tmp_path / f"{slug}_demo.mp4").write_bytes(b"mp4")
+    localized = dict(
+        _exercise_row(), name="Lat pulldown", display_name="Lat pulldown", original_name=EX_WITH_PHOTO
+    )
+    message = MagicMock()
+    message.answer_animation = AsyncMock(
+        return_value=SimpleNamespace(
+            message_id=906, animation=SimpleNamespace(file_id="anim_file_id")
+        )
+    )
+    message.answer_media_group = AsyncMock()
+    message.answer = AsyncMock()
+
+    await exercises._send_template_preview(message, localized, "Lat pulldown", None, [])
+    message.answer_animation.assert_awaited_once()
+    message.answer.assert_not_awaited()
+
+
 # --- пайплайн генерации -----------------------------------------------------
 
 
