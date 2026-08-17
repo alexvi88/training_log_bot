@@ -14,6 +14,7 @@ import achievement_sync
 import config
 import db
 import formatting
+import i18n
 import keyboards
 import timeutil
 import ui
@@ -58,11 +59,11 @@ async def _edit_screen_payload(workout_id: int) -> tuple[str, InlineKeyboardMark
         for be in await db.get_block_exercises(block["id"]):
             exercises.append((block["id"], be["exercise_id"], be["display_name"]))
 
-    text = f"✏️ Редактирование · {formatting.format_date_ru(started)}"
+    text = i18n.t("workout.edit_header", date=formatting.format_date_ru(started))
     if exercises:
-        text += "\nВыбери упражнение."
+        text += "\n" + i18n.t("workout.edit_pick_exercise")
     else:
-        text += "\n\nВ тренировке пока нет упражнений."
+        text += "\n\n" + i18n.t("workout.edit_no_exercises")
     kb = keyboards.edit_workout_keyboard(exercises)
     return text, kb
 
@@ -82,9 +83,9 @@ async def _exercise_screen_payload(
     ]
     text = f"✏️ <b>{escape(name)}</b>"
     if items:
-        text += "\nНажми на подход, чтобы изменить или удалить.\n<i>Или напиши новый подход: «100 8».</i>"
+        text += "\n" + i18n.t("workout.edit_sets_hint")
     else:
-        text += "\n<i>Подходов нет. Напиши подход, например «100 8».</i>"
+        text += "\n" + i18n.t("workout.edit_no_sets_hint")
     return text, keyboards.edit_exercise_keyboard(block_id, exercise_id, items)
 
 
@@ -92,9 +93,9 @@ async def show_edit_screen(event, state: FSMContext, workout_id: int) -> bool:
     workout = await db.get_workout(workout_id)
     if workout is None or workout["user_id"] != event.from_user.id:
         if isinstance(event, CallbackQuery):
-            await event.answer("Тренировка не найдена", show_alert=True)
+            await event.answer(i18n.t("workout.not_found"), show_alert=True)
         else:
-            await event.reply("Тренировка не найдена")
+            await event.reply(i18n.t("workout.not_found"))
         return False
     # Landing on the top-level list means leaving whichever exercise screen (if
     # any) was open — reap blocks that were emptied there and abandoned, same
@@ -165,7 +166,7 @@ async def editw_to_top(callback: CallbackQuery, state: FSMContext):
 async def editw_pick_set(callback: CallbackQuery, state: FSMContext):
     set_id = int(callback.data.split(":")[2])
     if await db.get_set_owner(set_id) != callback.from_user.id:
-        await callback.answer("Подход не найден", show_alert=True)
+        await callback.answer(i18n.t("workout.set_not_found"), show_alert=True)
         return
     row = await db.get_set(set_id)
     ex = await db.get_exercise(row["exercise_id"])
@@ -178,7 +179,7 @@ async def _require_edit_workout_id(callback: CallbackQuery, state: FSMContext) -
     data = await state.get_data()
     workout_id = data.get("edit_workout_id")
     if workout_id is None:
-        await callback.answer("Сессия истекла, открой тренировку из истории заново", show_alert=True)
+        await callback.answer(i18n.t("workout.edit_session_expired"), show_alert=True)
     return workout_id
 
 
@@ -195,7 +196,7 @@ async def editw_back(callback: CallbackQuery, state: FSMContext):
 async def editw_delset(callback: CallbackQuery, state: FSMContext):
     set_id = int(callback.data.split(":")[2])
     if await db.get_set_owner(set_id) != callback.from_user.id:
-        await callback.answer("Подход не найден", show_alert=True)
+        await callback.answer(i18n.t("workout.set_not_found"), show_alert=True)
         return
     workout_id = await _require_edit_workout_id(callback, state)
     if workout_id is None:
@@ -207,7 +208,7 @@ async def editw_delset(callback: CallbackQuery, state: FSMContext):
     # than getting bounced up to the list. The block still gets reaped once
     # they leave (editw_to_top / editw_done), same as before.
     await _on_workout_edited(workout_id, keep_block_id=data.get("edit_block_id"))
-    await callback.answer("Удалил подход")
+    await callback.answer(i18n.t("workout.set_deleted"))
     await _back_to_current_screen(callback, state, workout_id)
 
 
@@ -215,15 +216,14 @@ async def editw_delset(callback: CallbackQuery, state: FSMContext):
 async def editw_editset_prompt(callback: CallbackQuery, state: FSMContext):
     set_id = int(callback.data.split(":")[2])
     if await db.get_set_owner(set_id) != callback.from_user.id:
-        await callback.answer("Подход не найден", show_alert=True)
+        await callback.answer(i18n.t("workout.set_not_found"), show_alert=True)
         return
     await state.update_data(edit_set_id=set_id)
     await state.set_state(EditWorkoutFlow.editing_set)
     row = await db.get_set(set_id)
     await ui.safe_edit(
         callback,
-        f"Текущее значение: {formatting.format_set(row['weight'], row['reps'], row['rpe'])}\n"
-        "Напиши вес и повторы («100 8») или только повторы («8») — вес оставлю:",
+        i18n.t("workout.edit_set_prompt", set=formatting.format_set(row["weight"], row["reps"], row["rpe"])),
         reply_markup=keyboards.cancel_keyboard("editw:back"),
     )
     await callback.answer()
@@ -237,9 +237,7 @@ async def editw_editset_entered(message: Message, state: FSMContext):
         await ui.reply_transient(message, e.message)
         return
     if len(parsed) != 1:
-        await ui.reply_transient(
-            message, "Тут правится один подход. Напиши один вес и повторы — например «100 8»"
-        )
+        await ui.reply_transient(message, i18n.t("workout.edit_set_single_only"))
         return
     data = await state.get_data()
     new_set = parsed[0]
@@ -266,7 +264,7 @@ async def editw_addset_prompt(callback: CallbackQuery, state: FSMContext):
     _, _, block_id_str, ex_id_str = callback.data.split(":")
     block_id = int(block_id_str)
     if await db.get_block_owner(block_id) != callback.from_user.id:
-        await callback.answer("Блок не найден", show_alert=True)
+        await callback.answer(i18n.t("workout.block_not_found"), show_alert=True)
         return
     await state.update_data(add_block_id=block_id, add_exercise_id=int(ex_id_str))
     await state.set_state(EditWorkoutFlow.adding_set)
@@ -277,8 +275,7 @@ async def editw_addset_prompt(callback: CallbackQuery, state: FSMContext):
     # allowed and carry the previous set's weight forward.
     await ui.safe_edit(
         callback,
-        f"Новый подход для «{ex['display_name']}» — напиши вес и повторы («100 8») "
-        "или только повторы («8») — вес возьму с прошлого подхода:",
+        i18n.t("workout.add_set_prompt", name=ex["display_name"]),
         reply_markup=keyboards.cancel_keyboard("editw:back"),
     )
     await callback.answer()
@@ -352,7 +349,7 @@ async def editw_typed_set(message: Message, state: FSMContext):
 async def editw_typed_at_top(message: Message, state: FSMContext):
     """At the exercise list there's no active exercise to attach a set to, so
     this points at the next step instead of falling through to "Не понял"."""
-    await message.reply("Открой упражнение и напиши подход там — или добавь новое кнопкой ниже.")
+    await message.reply(i18n.t("workout.edit_top_typed_hint"))
 
 
 @router.callback_query(F.data.startswith("editw:rmexask:"))
@@ -362,28 +359,24 @@ async def editw_remove_exercise_confirm(callback: CallbackQuery, state: FSMConte
     how much is going."""
     block_id = int(callback.data.split(":")[2])
     if await db.get_block_owner(block_id) != callback.from_user.id:
-        await callback.answer("Упражнение не найдено", show_alert=True)
+        await callback.answer(i18n.t("workout.exercise_not_found"), show_alert=True)
         return
     data = await state.get_data()
     ex_id = data.get("edit_exercise_id")
     block_exs = await db.get_block_exercises(block_id)
     name = next((be["display_name"] for be in block_exs if be["exercise_id"] == ex_id), None)
     if name is None:
-        name = block_exs[0]["display_name"] if block_exs else "упражнение"
+        name = block_exs[0]["display_name"] if block_exs else i18n.t("workout.exercise_fallback_name")
     count = sum(1 for s in await db.list_sets_for_block(block_id) if s["exercise_id"] == ex_id)
-    # Творительный падеж — фраза ниже ставит слово после «вместе с» («с 1
-    # подходом», «с 2 подходами»), а не «N подходов сделано», где верны
-    # именительные формы. «Сет» запрещён словарём TONE_OF_VOICE — «подход».
-    word = formatting.plural_ru(count, ("подходом", "подходами", "подходами"))
     kb = keyboards.yes_no_keyboard(
         yes_cb=f"editw:rmex:{block_id}",
         no_cb="editw:back",
-        yes_text="🗑 Убрать",
-        no_text="❌ Отмена",
+        yes_text=i18n.t("workout.btn_remove"),
+        no_text=i18n.t("btn.cancel"),
     )
     await ui.safe_edit(
         callback,
-        f"Убрать <b>{escape(name)}</b> из тренировки вместе с {count} {word}?",
+        i18n.t("workout.remove_exercise_confirm", name=escape(name), n=count),
         reply_markup=kb,
         parse_mode="HTML",
     )
@@ -396,7 +389,7 @@ async def editw_remove_exercise(callback: CallbackQuery, state: FSMContext):
     Reached only through editw:rmexask, which asks first."""
     block_id = int(callback.data.split(":")[2])
     if await db.get_block_owner(block_id) != callback.from_user.id:
-        await callback.answer("Упражнение не найдено", show_alert=True)
+        await callback.answer(i18n.t("workout.exercise_not_found"), show_alert=True)
         return
     workout_id = await _require_edit_workout_id(callback, state)
     if workout_id is None:
@@ -407,7 +400,7 @@ async def editw_remove_exercise(callback: CallbackQuery, state: FSMContext):
     # значки должны сниматься так же. Раньше «Клуб 140» за единственный сет на
     # 150 кг оставался в профиле навсегда, хотя самого сета в истории уже нет.
     await _on_workout_edited(workout_id)
-    await callback.answer("Убрал упражнение из тренировки")
+    await callback.answer(i18n.t("workout.exercise_removed"))
     await state.update_data(edit_block_id=None, edit_exercise_id=None)
     await show_edit_screen(callback, state, workout_id)
 
@@ -424,11 +417,11 @@ async def _editwex_groups_screen(callback: CallbackQuery, state: FSMContext) -> 
     await state.set_state(EditWorkoutFlow.adding_exercise_group)
     groups = await db.list_muscle_groups(callback.from_user.id)
     kb = keyboards.groups_keyboard(
-        groups, prefix="editwex", extra_buttons=[("❌ Отмена", "editwex:cancel")], show_all=True
+        groups, prefix="editwex", extra_buttons=[(i18n.t("btn.cancel"), "editwex:cancel")], show_all=True
     )
     await ui.safe_edit(
         callback,
-        "Выбери группу мышц — или просто напиши название, например «жим»:",
+        i18n.t("workout.pick_group_hint"),
         reply_markup=kb,
     )
 
@@ -478,8 +471,8 @@ async def _editwex_exercise_list_screen(callback: CallbackQuery, state: FSMConte
     # Тот же приём, что у экрана групп (editwex: pick group) — «или просто
     # напиши название, например «жим»» вместо суховатого «для поиска».
     text = (
-        "Выбери упражнение — или просто напиши название, например «жим»:"
-        if exercises else "Пусто здесь — напиши название для поиска."
+        i18n.t("workout.pick_exercise_hint")
+        if exercises else i18n.t("workout.edit_group_empty_hint")
     )
     await ui.safe_edit(callback, text, reply_markup=kb)
 
@@ -511,10 +504,7 @@ async def _editwex_finish(event, state: FSMContext, ex_id: int) -> None:
     await state.update_data(add_block_id=None, add_exercise_id=ex_id)
     await state.set_state(EditWorkoutFlow.adding_set)
     ex = await db.get_exercise(ex_id)
-    text = (
-        f"«{ex['display_name']}» — напиши вес и повторы для первого подхода "
-        "(например «100 8», можно «100x8x3»):"
-    )
+    text = i18n.t("workout.first_set_prompt", name=ex["display_name"])
     kb = keyboards.cancel_keyboard("editw:back")
     if isinstance(event, CallbackQuery):
         await ui.safe_edit(event, text, reply_markup=kb)
@@ -548,9 +538,9 @@ async def editwex_search_text(message: Message, state: FSMContext):
     templates = await db.search_exercise_templates(message.from_user.id, query)
     kb = keyboards.exercises_keyboard(results, prefix="editwex", show_new_button=False, templates=templates)
     if results or templates:
-        text = f"Результаты поиска «{escape(query)}»:"
+        text = i18n.t("workout.edit_search_results", query=escape(query))
     else:
-        text = f"Ничего не нашлось по «{escape(query)}»."
+        text = i18n.t("workout.edit_search_empty", query=escape(query))
     await state.set_state(EditWorkoutFlow.adding_exercise_pick)
     await message.answer(text, reply_markup=kb, parse_mode="HTML")
 
@@ -561,7 +551,7 @@ async def editw_date_prompt(callback: CallbackQuery, state: FSMContext):
     today = timeutil.user_today(await db.get_user(callback.from_user.id))
     await ui.safe_edit(
         callback,
-        "Выбери новую дату в календаре или напиши в формате дд.мм.гггг:",
+        i18n.t("workout.edit_pick_date"),
         reply_markup=keyboards.calendar_keyboard("editwd", today.year, today.month, today=today),
     )
     await callback.answer()
@@ -621,7 +611,7 @@ async def editw_date_calendar_pick(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     await _apply_edit_workout_date(data["edit_workout_id"], new_date)
     await show_edit_screen(callback, state, data["edit_workout_id"])
-    await callback.answer("Перенёс тренировку")
+    await callback.answer(i18n.t("workout.date_moved"))
 
 
 @router.message(StateFilter(EditWorkoutFlow.awaiting_date), F.text)
@@ -636,7 +626,7 @@ async def editw_date_entered(message: Message, state: FSMContext):
     data = await state.get_data()
     workout_id = data["edit_workout_id"]
     await _apply_edit_workout_date(workout_id, new_date)
-    await message.reply("Перенёс тренировку.")
+    await message.reply(i18n.t("workout.date_moved_full"))
     await show_edit_screen(message, state, workout_id)
 
 

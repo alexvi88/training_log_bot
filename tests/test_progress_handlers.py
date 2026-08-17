@@ -42,7 +42,7 @@ def _make_callback(user_id: int, data: str, *, chart_on_screen: bool = False):
     if chart_on_screen:
         chat_bottom.note_message(user_id, message.message_id)
     callback = MagicMock()
-    callback.from_user = SimpleNamespace(id=user_id, username="tester")
+    callback.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     callback.message = message
     callback.data = data
     callback.answer = AsyncMock()

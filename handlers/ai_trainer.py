@@ -22,6 +22,7 @@ import config
 import db
 import exercise_mentions
 import formatting
+import i18n
 import keyboards
 import program_mentions
 import progress_ui
@@ -34,6 +35,63 @@ from fsm import AITrainerFlow
 router = Router(name="ai_trainer")
 
 logger = logging.getLogger(__name__)
+
+# PEP 562 (см. formatting.py — тот же приём): экранные тексты этого файла
+# читаются извне и как простые атрибуты модуля (тесты, handlers/persistent_menu.py
+# — `from handlers.ai_trainer import INTRO_TEXT, RESUME_TEXT, ...`), а само
+# значение зависит от текущего языка (i18n.get_lang()), который на момент
+# импорта процесса ещё не выставлен ни для кого конкретно. Обычная модульная
+# константа посчитала бы текст один раз при импорте и дальше не меняла бы —
+# ровно то же самое соображение, что у formatting.E1RM_HINT.
+#
+# Оговорка (см. отчёт по задаче): модуль __getattr__ помогает ровно там, где
+# читатель обращается к АТРИБУТУ модуля в момент использования (`ai_trainer.X`,
+# либо `from ... import X` внутри функции, исполняющейся заново на каждый
+# вызов). handlers/persistent_menu.py делает `from handlers.ai_trainer import
+# INTRO_TEXT, RESUME_TEXT` на ВЕРХНЕМ уровне файла — это выполняется ровно один
+# раз, при первом импорте модуля (старт процесса, до того как язык
+# какого-либо конкретного пользователя вообще известен), и связывает имя с
+# результатом __getattr__ НАВСЕГДА по значению. Починить это можно только
+# правкой самого persistent_menu.py (заменить на обращение `ai_trainer.INTRO_TEXT`
+# в момент использования) — а её нам делать нельзя. Поэтому единственный вход
+# в AI-тренера через нижнюю клавиатуру («AI-тренер»/persistent_ai_button)
+# продолжает показывать текст на языке по умолчанию (ru); интро и резюме через
+# инлайн-кнопку (menu:ai) — на языке пользователя, как и полагается.
+# Значения — ИМЕНА функций (строки), а не сами функции: эти функции определены
+# ниже по файлу, и словарь с прямыми ссылками на них не собрался бы здесь (на
+# момент выполнения этой строки их ещё не существует). Строка же разрешается
+# в globals() только В МОМЕНТ вызова __getattr__ — когда модуль уже полностью
+# загружен и все функции точно на месте.
+_MODULE_ATTR_NAMES: dict[str, str] = {
+    "INTRO_TEXT": "_intro_text",
+    "RESUME_TEXT": "_resume_text",
+    "ACTIONS_HINT_TEXT": "_actions_hint_text",
+    "PRESET_QUESTIONS": "_preset_questions",
+    "DEFAULT_PHOTO_QUESTION": "_default_photo_question",
+    "DEFAULT_VIDEO_QUESTION": "_default_video_question",
+    "BUILD_PROGRAM_INTRO": "_build_program_intro",
+    "BUILD_PROGRAM_SEED": "_build_program_seed",
+    "BUILD_WORKOUT_INTRO": "_build_workout_intro",
+    "BUILD_WORKOUT_SEED": "_build_workout_seed",
+    "PROGRAM_PROGRESS_STAGES": "_program_progress_stages",
+    "IMPORT_CTA_QUESTION": "_import_cta_question",
+    "VIDEO_HINT_TEXT": "_video_hint_text",
+    "_PROGRAM_GONE": "_program_gone_text",
+    "_SAVE_FAILED_NEW": "_save_failed_new_text",
+    "_SAVE_FAILED_REPLACE": "_save_failed_replace_text",
+    "SETUP_GOAL_QUESTION": "_setup_goal_question",
+    "SETUP_HINT_WITH_CHOICES": "_setup_hint_with_choices",
+    "SETUP_HINT_TEXT_ONLY": "_setup_hint_text_only",
+    "SETUP_ANSWERS_FRAME": "_setup_answers_frame",
+    "SETUP_ENOUGH_FRAME": "_setup_enough_frame",
+}
+
+
+def __getattr__(name: str):
+    func_name = _MODULE_ATTR_NAMES.get(name)
+    if func_name is not None:
+        return globals()[func_name]()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 # Сколько последних реплик (вопрос+ответ = 2) держим в контексте диалога.
 # Чётное число, чтобы история всегда начиналась с реплики пользователя.
@@ -48,8 +106,9 @@ _QUOTA_WARN_AT = 3
 # Лимит xAI на размер одного изображения (см. xai_sdk.chat.image).
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 
-# Вопрос по умолчанию, если пользователь прислал фото без подписи.
-DEFAULT_PHOTO_QUESTION = "Посмотри на фото и прокомментируй."
+def _default_photo_question() -> str:
+    """Вопрос по умолчанию, если пользователь прислал фото без подписи."""
+    return i18n.t("ai.screen.default_photo_question")
 
 # Черновик — превью, а не сообщение: показываем хвост генерации, чтобы длинный
 # ответ не упирался в лимиты, а живая «печать» была видна.
@@ -87,12 +146,9 @@ MAX_VOICE_BYTES = 20 * 1024 * 1024
 # Длиннее — явно не короткий вопрос, дороже распознавать и дольше ждать ответ.
 MAX_VOICE_SECONDS = 300
 
-INTRO_TEXT = (
-    "🤖 <b>ПРИВЕТ АТЛЕТ! ТРЕНЕР НА СВЯЗИ.</b>\n\n"
-    "У меня есть доступ к истории твоих тренировок и многолетний тренерский опыт. "
-    "Спрашивай что угодно — или начни с готового вопроса на кнопках ниже.\n\n"
-    "Пиши вопрос 👇 (можно голосом — жми на 🎤)"
-)
+def _intro_text() -> str:
+    return i18n.t("ai.screen.intro")
+
 
 # Готовые вопросы на стартовом экране: раньше интро перечисляло примеры текстом,
 # и их приходилось перепечатывать руками — тап по кнопке задаёт вопрос сразу.
@@ -100,20 +156,26 @@ INTRO_TEXT = (
 # кнопка из старого интро, повисшего в чате, должна находить вопрос и после
 # рестарта/релиза. Показываются только на свежем интро (см. menu_ai): в идущем
 # разговоре стартовые вопросы читались бы как потеря контекста.
-PRESET_QUESTIONS: dict[str, tuple[str, str]] = {
-    "progress": (
-        "📈 Как мой прогресс?",
-        "Как мой прогресс за последнее время? Что растёт, а что застряло — и почему?",
-    ),
-    "weak": (
-        "🔍 Найди мои слабые места",
-        "Посмотри мою историю тренировок: что я недорабатываю и что стоит добавить?",
-    ),
-    "protein": (
-        "🍗 Сколько мне есть белка?",
-        "Сколько белка мне есть в день, чтобы расти?",
-    ),
-}
+#
+# Функция, а не модульный словарь: тексты зависят от языка (см. i18n.get_lang()),
+# а модульная константа посчитала бы их один раз при импорте процесса и дальше
+# не меняла бы — тот же приём, что и у остальных экранных текстов файла (см.
+# module __getattr__ выше).
+def _preset_questions() -> dict[str, tuple[str, str]]:
+    return {
+        "progress": (
+            i18n.t("ai.screen.preset.progress.label"),
+            i18n.t("ai.screen.preset.progress.question"),
+        ),
+        "weak": (
+            i18n.t("ai.screen.preset.weak.label"),
+            i18n.t("ai.screen.preset.weak.question"),
+        ),
+        "protein": (
+            i18n.t("ai.screen.preset.protein.label"),
+            i18n.t("ai.screen.preset.protein.question"),
+        ),
+    }
 
 
 async def intro_presets(user_id: int) -> list[tuple[str, str]]:
@@ -131,11 +193,21 @@ async def intro_presets(user_id: int) -> list[tuple[str, str]]:
 
     Скрыта она только когда разбор не подключён: обещать кнопкой то, что
     ответит «пока не подключил», — худший вид рекламы.
+
+    «Как мой прогресс?» и «Найди мои слабые места» отвечают на историю
+    тренировок — без единой тренировки тренеру разбирать нечего, а кнопка
+    без данных за спиной обещает то, что тут же обернётся отговоркой вместо
+    ответа.
     """
-    rows = [(label, f"ai:preset:{key}") for key, (label, _) in PRESET_QUESTIONS.items()]
-    rows.append(("🗂 Составь мне программу", "ai:buildprog"))
+    has_workouts = await db.count_workouts(user_id) > 0
+    rows = [
+        (label, f"ai:preset:{key}")
+        for key, (label, _) in _preset_questions().items()
+        if has_workouts or key not in ("progress", "weak")
+    ]
+    rows.append((i18n.t("ai.screen.preset.build_program.label"), "ai:buildprog"))
     if config.video_analysis_available():
-        rows.append(("🎥 Разбери видео подхода", "ai:videohint"))
+        rows.append((i18n.t("ai.screen.preset.video_hint.label"), "ai:videohint"))
     return rows
 
 # Как часто интро показывает, что тренер про человека помнит.
@@ -181,11 +253,7 @@ async def _memory_reminder(user_id: int) -> str:
         except ValueError:
             pass
     await db.update_user(user_id, profile_shown_on=today.isoformat())
-    return (
-        "\n\n🧠 <b>Что я про тебя помню:</b> "
-        + "; ".join(known)
-        + ".\nЧто-то не так — скажи, поправлю."
-    )
+    return i18n.t("ai.screen.memory_reminder", known="; ".join(known))
 
 
 # Одноразовый хвост к ПЕРВОМУ завершённому ответу тренера: кроме вопросов он
@@ -200,16 +268,15 @@ async def _memory_reminder(user_id: int) -> str:
 # готовых вопросов, а «просто скажи» читается лучше, когда человек уже увидел,
 # что тренер отвечает по его данным, — и не показывается тем, кто до первого
 # вопроса так и не дошёл.
-ACTIONS_HINT_TEXT = (
-    "💡 Кстати, я не только отвечаю: могу сам занести твой вес в дневник веса, "
-    "завести упражнение или посчитать еду. Просто скажи."
-)
+def _actions_hint_text() -> str:
+    return i18n.t("ai.screen.actions_hint")
 
 
 # Shown instead of the full intro when returning to a conversation that's already
 # going — repeating the whole "привет, вот что я умею" would read as if the
 # trainer had forgotten the last few messages.
-RESUME_TEXT = "🤖 <b>ТРЕНЕР НА СВЯЗИ.</b> Продолжаем — пиши вопрос 👇"
+def _resume_text() -> str:
+    return i18n.t("ai.screen.resume")
 
 # Пользователи, чей вопрос сейчас обрабатывается — защита от параллельных запросов.
 _busy: set[int] = set()
@@ -486,7 +553,7 @@ async def ai_keyboard(
 async def menu_ai(callback: CallbackQuery, state: FSMContext):
     if not ai_trainer.is_configured():
         await callback.answer(
-            "AI-тренер пока не подключён — загляни позже.",
+            i18n.t("ai.screen.not_configured"),
             show_alert=True,
         )
         return
@@ -496,7 +563,7 @@ async def menu_ai(callback: CallbackQuery, state: FSMContext):
     # memory of what was just discussed.
     data = await state.get_data()
     fresh = not data.get("ai_history")
-    text = INTRO_TEXT if fresh else RESUME_TEXT
+    text = _intro_text() if fresh else _resume_text()
     # И на интро, и на возврате в разговор. Только на свежем нельзя: ai_history
     # переживает и выход в меню, и перезапуск бота, так что свежее интро человек
     # видит ровно один раз в жизни — а напоминание нужно как раз тем, кто
@@ -524,25 +591,21 @@ async def ai_to_menu(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-BUILD_PROGRAM_INTRO = (
-    "🤖 <b>ОКЕЙ, СОБИРАЕМ ПРОГРАММУ.</b>\n\n"
-    # Про «вопросы бесплатные, дневной лимит они не едят» тут было сказано зря:
-    # человек, который просто хочет программу, до этой фразы про лимит не думал
-    # вовсе — а прочитав, начинал. Опросник и правда не тратит лимит (между
-    # шагами модель не вызывается), но говорить об этом на входе значит
-    # напоминать о счётчике там, где его никто не считал.
-    "Сейчас задам пару вопросов — отвечай, и заберёшь готовый план."
-)
+# Про «вопросы бесплатные, дневной лимит они не едят» тут было сказано зря:
+# человек, который просто хочет программу, до этой фразы про лимит не думал
+# вовсе — а прочитав, начинал. Опросник и правда не тратит лимит (между
+# шагами модель не вызывается), но говорить об этом на входе значит
+# напоминать о счётчике там, где его никто не считал.
+def _build_program_intro() -> str:
+    return i18n.t("ai.screen.build_program_intro")
+
 
 # Уходит тренеру от лица пользователя, чтобы не заставлять его печатать этот же
 # запрос вручную (см. ai_build_program). Про вопросы сказано явно: системный
 # промпт разрешает тренеру собрать программу сразу на дефолтах, если человек
 # отмахивается, а вся суть этой кнопки — наоборот, провести через уточнения.
-BUILD_PROGRAM_SEED = (
-    "Хочу собрать программу тренировок. Сначала задай мне уточняющие вопросы "
-    "по вводным, которых не видно из моей истории, — через ask_setup_questions, "
-    "чтобы они пришли по одному, — и только после моих ответов собирай программу."
-)
+def _build_program_seed() -> str:
+    return i18n.t("ai.screen.build_program_seed")
 
 # Чек-лист для progress_ui.run_progress на самом долгом вызове сценария
 # «Составить программу» — том, что уходит СРАЗУ после ответов на опросник (см.
@@ -558,36 +621,31 @@ BUILD_PROGRAM_SEED = (
 # кончалось ровно тогда, когда ждать оставалось дольше всего. Чем мельче шаг,
 # тем ровнее идёт чек-лист — а темп задаёт progress_ui.GROWTH_TAU, там же
 # посчитано, на какой секунде встаёт каждая галочка.
-PROGRAM_PROGRESS_STAGES = [
-    "Читаю твою историю тренировок",
-    "Смотрю недельный объём по группам",
-    "Прикидываю сплит по дням",
-    "Подбираю упражнения под задачу",
-    "Раскидываю их по дням",
-    "Расставляю подходы и повторы",
-    "Проверяю всё в последний раз",
-]
+def _program_progress_stages() -> list[str]:
+    return [
+        i18n.t("ai.screen.program_stage.history"),
+        i18n.t("ai.screen.program_stage.volume"),
+        i18n.t("ai.screen.program_stage.split"),
+        i18n.t("ai.screen.program_stage.exercises"),
+        i18n.t("ai.screen.program_stage.days"),
+        i18n.t("ai.screen.program_stage.sets_reps"),
+        i18n.t("ai.screen.program_stage.final_check"),
+    ]
 
-BUILD_WORKOUT_INTRO = (
-    "🤖 <b>СОБИРАЕМ ТРЕНИРОВКУ НА СЕГОДНЯ.</b>\n\n"
-    "Гляну, что у тебя отдохнуло, и спрошу пару вещей — а дальше по ней и пойдём."
-)
+
+def _build_workout_intro() -> str:
+    return i18n.t("ai.screen.build_workout_intro")
+
 
 # Отдельный сценарий, а не «программа из одного дня»: человек стоит в зале и
 # хочет знать, что делать сегодня, а не заводить себе ещё одну программу
-# навсегда. Отсюда три отличия от BUILD_PROGRAM_SEED — прямое указание сходить
+# навсегда. Отсюда три отличия от _build_program_seed() — прямое указание сходить
 # за восстановлением (тренер про него не знал вовсе, пока не появился
 # get_muscle_recovery), просьба ограничиться одним днём и явное «коротко»:
 # уточнять инвентарь и цели на полразговора, когда человек уже разминается,
 # — худшее, что тут можно сделать.
-BUILD_WORKOUT_SEED = (
-    "Собери мне тренировку на сегодня — одну, прямо сейчас пойду по ней "
-    "заниматься. Сначала посмотри get_muscle_recovery и реши, что сегодня "
-    "логичнее грузить, а что ещё не отдохнуло. Потом задай мне через "
-    "ask_setup_questions не больше двух коротких вопросов (сколько есть времени "
-    "и как самочувствие) и только после ответов вызывай propose_program ровно "
-    "с одним днём."
-)
+def _build_workout_seed() -> str:
+    return i18n.t("ai.screen.build_workout_seed")
 
 
 async def _start_ai_scenario(
@@ -623,7 +681,7 @@ async def _start_ai_scenario(
     """
     if not ai_trainer.is_configured():
         await callback.answer(
-            "AI-тренер пока не подключён — загляни позже.",
+            i18n.t("ai.screen.not_configured"),
             show_alert=True,
         )
         return
@@ -641,12 +699,12 @@ async def _start_ai_scenario(
             await callback.answer()
         else:
             await callback.answer(
-                f"{ai_limits.QUESTION_LIMIT_TEXT} А пока забери готовую в «✨ Готовые программы».",
+                f"{ai_limits.QUESTION_LIMIT_TEXT} {i18n.t('ai.screen.limit_grab_ready_program')}",
                 show_alert=True,
             )
             return
     if not _try_claim_busy(user_id):
-        await callback.answer("Секунду, ещё думаю над прошлым вопросом 😅", show_alert=True)
+        await callback.answer(i18n.t("ai.screen.busy"), show_alert=True)
         return
     try:
         # Внутри try: тап по устаревшей кнопке Telegram отвергает с «query is
@@ -677,7 +735,7 @@ async def _start_ai_scenario(
 @router.callback_query(F.data == "ai:buildprog")
 async def ai_build_program(callback: CallbackQuery, state: FSMContext):
     """«Составить с AI-тренером» в 🗂 Программы — многодневка на будущее."""
-    await _start_ai_scenario(callback, state, BUILD_PROGRAM_INTRO, BUILD_PROGRAM_SEED, scenario="program")
+    await _start_ai_scenario(callback, state, _build_program_intro(), _build_program_seed(), scenario="program")
 
 
 @router.callback_query(F.data == "ann:buildprog")
@@ -689,7 +747,7 @@ async def announcement_build_program(callback: CallbackQuery, state: FSMContext)
     и решает это не пользователь, а то, откуда кнопка приехала.
     """
     await _start_ai_scenario(
-        callback, state, BUILD_PROGRAM_INTRO, BUILD_PROGRAM_SEED, keep_message=True, scenario="program"
+        callback, state, _build_program_intro(), _build_program_seed(), keep_message=True, scenario="program"
     )
 
 
@@ -704,7 +762,7 @@ async def ai_build_workout(callback: CallbackQuery, state: FSMContext):
     однодневного черновика можно уйти сразу в тренировку, не сохраняя его
     себе программой — см. keyboards.ai_program_preview_keyboard.
     """
-    await _start_ai_scenario(callback, state, BUILD_WORKOUT_INTRO, BUILD_WORKOUT_SEED)
+    await _start_ai_scenario(callback, state, _build_workout_intro(), _build_workout_seed())
 
 
 @router.callback_query(F.data.startswith("ai:preset:"))
@@ -715,13 +773,13 @@ async def ai_preset_question(callback: CallbackQuery, state: FSMContext):
     чате осталось, о чём вообще спрашивали, — сам вопрос от лица пользователя
     в чат не попадает, и без цитаты ответ висел бы без контекста.
     """
-    preset = PRESET_QUESTIONS.get(callback.data.split(":", 2)[2])
+    preset = _preset_questions().get(callback.data.split(":", 2)[2])
     if preset is None:
         # Кнопка из интро прошлой версии, где этот вопрос ещё существовал.
-        await callback.answer("Такого вопроса больше нет — напиши его словами 👇", show_alert=True)
+        await callback.answer(i18n.t("ai.screen.preset_gone"), show_alert=True)
         return
     _, question = preset
-    intro = f"🤖 <b>ПРИНЯЛ ВОПРОС.</b>\n\n«{question}»"
+    intro = i18n.t("ai.screen.accepted_question", question=question)
     await _start_ai_scenario(callback, state, intro, question)
 
 
@@ -729,7 +787,8 @@ async def ai_preset_question(callback: CallbackQuery, state: FSMContext):
 # _attach_import_overview) — не в PRESET_QUESTIONS: та живёт только на интро,
 # а эта — под конкретным сообщением с разбором, и на обычном интро дублировать
 # её незачем.
-IMPORT_CTA_QUESTION = "Я стал сильнее за этот год, судя по моей истории?"
+def _import_cta_question() -> str:
+    return i18n.t("ai.screen.import_cta_question")
 
 
 @router.callback_query(F.data == "ai:import_cta")
@@ -738,23 +797,17 @@ async def ai_import_cta(callback: CallbackQuery, state: FSMContext):
     разбор истории после импорта из монолога в начало разговора: тап сразу
     входит в чат с тренером и задаёт вопрос про эту же историю, той же
     механикой (лимиты, busy-бронь, история диалога — всё как у обычного вопроса)."""
-    intro = f"🤖 <b>ПРИНЯЛ ВОПРОС.</b>\n\n«{IMPORT_CTA_QUESTION}»"
-    await _start_ai_scenario(callback, state, intro, IMPORT_CTA_QUESTION)
+    question = _import_cta_question()
+    intro = i18n.t("ai.screen.accepted_question", question=question)
+    await _start_ai_scenario(callback, state, intro, question)
 
 
-VIDEO_HINT_TEXT = (
-    "🎥 <b>ДАВАЙ ПОСМОТРЮ.</b>\n\n"
-    "Пришли видео подхода прямо сюда — гляну технику и скажу, что править первым.\n\n"
-    "Как снять, чтобы я реально что-то увидел:\n"
-    # Про гриф и колени тут было зря: половина роликов — это тяга блока, махи
-    # или подтягивания, и человек читал инструкцию, написанную будто только под
-    # становую. Ракурс важен всегда, а вот что именно на нём видно — зависит от
-    # упражнения, поэтому и говорим общими словами.
-    "• сбоку, а не сзади — так видно траекторию и спину\n"
-    "• подход целиком: от первого повтора до последнего\n"
-    f"• до {config.MAX_VIDEO_SECONDS} секунд, один подход\n\n"
-    "Звук не нужен, я смотрю только картинку."
-)
+# Про гриф и колени тут было зря: половина роликов — это тяга блока, махи
+# или подтягивания, и человек читал инструкцию, написанную будто только под
+# становую. Ракурс важен всегда, а вот что именно на нём видно — зависит от
+# упражнения, поэтому и говорим общими словами.
+def _video_hint_text() -> str:
+    return i18n.t("ai.screen.video_hint", seconds=config.MAX_VIDEO_SECONDS)
 
 
 @router.callback_query(F.data == "ai:videohint")
@@ -767,11 +820,11 @@ async def ai_video_hint(callback: CallbackQuery, state: FSMContext):
     разборе «сними сбоку» человек читает уже потратив попытку.
     """
     if not config.video_analysis_available():
-        await callback.answer("Разбор видео пока не подключён — загляни позже.", show_alert=True)
+        await callback.answer(i18n.t("ai.screen.video_not_configured"), show_alert=True)
         return
     await state.set_state(AITrainerFlow.chatting)
     await callback.message.answer(
-        VIDEO_HINT_TEXT,
+        _video_hint_text(),
         reply_markup=await ai_keyboard(callback.from_user.id),
         parse_mode="HTML",
     )
@@ -787,7 +840,7 @@ async def ai_resume_workout(callback: CallbackQuery, state: FSMContext):
 
     active = await db.get_active_workout(callback.from_user.id)
     if not active:
-        await callback.answer("Нет активной тренировки", show_alert=True)
+        await callback.answer(i18n.t("workout.no_active_workout"), show_alert=True)
         return
     await callback.answer()
     await _enter_live(callback, state, active["id"], delete_message=False)
@@ -808,7 +861,7 @@ async def ai_exercise_card(callback: CallbackQuery, state: FSMContext):
     # clears this once the user actually enters that menu on its own.
     await state.update_data(exm_from_ai=True)
     if not await send_exercise_card(callback.message, state, callback.from_user.id, ex_id):
-        await callback.answer("Упражнение не найдено", show_alert=True)
+        await callback.answer(i18n.t("workout.exercise_not_found"), show_alert=True)
         return
     await callback.answer()
 
@@ -829,18 +882,20 @@ async def ai_program_merge_confirm(callback: CallbackQuery, state: FSMContext):
         source is None or target is None
         or source["user_id"] != user_id or target["user_id"] != user_id
     ):
-        await callback.answer("Программа не найдена", show_alert=True)
+        await callback.answer(i18n.t("share.program_not_found"), show_alert=True)
         return
     days = await db.list_program_days_by_id(source["id"])
-    word = formatting.plural_ru(len(days), ("день", "дня", "дней"))
     await callback.message.answer(
-        f"Перенести все {len(days)} {word} из «{escape(source['name'])}» в "
-        f"«{escape(target['name'])}»? «{escape(source['name'])}» после этого исчезнет, "
-        "а разобрать их обратно уже не получится. История тренировок не пострадает.",
+        i18n.t(
+            "ai.screen.merge_confirm",
+            days=len(days),
+            source=escape(source["name"]),
+            target=escape(target["name"]),
+        ),
         reply_markup=keyboards.yes_no_keyboard(
             yes_cb=f"rt:pgmmerge:{source['id']}:{target['id']}",
             no_cb="ai:menu",
-            yes_text="🔗 Объединить", no_text="❌ Отмена",
+            yes_text=i18n.t("ai.screen.merge_yes"), no_text=i18n.t("btn.cancel"),
         ),
         parse_mode="HTML",
     )
@@ -857,14 +912,13 @@ async def ai_exercise_archive_confirm(callback: CallbackQuery, state: FSMContext
     ex_id = int(callback.data.split(":")[2])
     ex = await db.get_exercise(ex_id)
     if ex is None or ex["user_id"] != callback.from_user.id or ex["is_template"]:
-        await callback.answer("Упражнение не найдено", show_alert=True)
+        await callback.answer(i18n.t("workout.exercise_not_found"), show_alert=True)
         return
     await callback.message.answer(
-        f"Убрать «{escape(ex['display_name'])}» из списка упражнений? История и "
-        "рекорды останутся, вернуть можно в ⚙️ Упражнения → 🗄 Архив.",
+        i18n.t("ai.screen.archive_confirm", name=escape(ex["display_name"])),
         reply_markup=keyboards.yes_no_keyboard(
             yes_cb=f"ai:exarchyes:{ex_id}", no_cb="ai:menu",
-            yes_text="🗄 В архив", no_text="❌ Отмена",
+            yes_text=i18n.t("ai.screen.archive_yes"), no_text=i18n.t("btn.cancel"),
         ),
         parse_mode="HTML",
     )
@@ -876,13 +930,13 @@ async def ai_exercise_archive(callback: CallbackQuery, state: FSMContext):
     ex_id = int(callback.data.split(":")[2])
     ex = await db.get_exercise(ex_id)
     if ex is None or ex["user_id"] != callback.from_user.id or ex["is_template"]:
-        await callback.answer("Упражнение не найдено", show_alert=True)
+        await callback.answer(i18n.t("workout.exercise_not_found"), show_alert=True)
         return
     await db.archive_exercise(ex_id)
-    await callback.answer("В архиве")
+    await callback.answer(i18n.t("ai.screen.archived_short"))
     with suppress(TelegramBadRequest):
         await callback.message.edit_text(
-            f"🗄 «{escape(ex['display_name'])}» в архиве.",
+            i18n.t("ai.screen.archived_single", name=escape(ex["display_name"])),
             reply_markup=await ai_keyboard(callback.from_user.id),
             parse_mode="HTML",
         )
@@ -898,22 +952,21 @@ async def ai_exercise_archive_confirm_multi(callback: CallbackQuery, state: FSMC
     key = callback.data.split(":", 2)[2]
     ids = (await state.get_data()).get("ai_archive", {}).get(key)
     if not ids:
-        await callback.answer("Список устарел, спроси тренера ещё раз", show_alert=True)
+        await callback.answer(i18n.t("ai.screen.list_stale"), show_alert=True)
         return
     exercises = [
         ex for ex in [await db.get_exercise(ex_id) for ex_id in ids]
         if ex is not None and ex["user_id"] == callback.from_user.id and not ex["is_template"]
     ]
     if not exercises:
-        await callback.answer("Упражнения не найдены", show_alert=True)
+        await callback.answer(i18n.t("ai.screen.exercises_not_found"), show_alert=True)
         return
     names = "\n".join(f"• {escape(ex['display_name'])}" for ex in exercises)
     await callback.message.answer(
-        f"Убрать из списка упражнений ({len(exercises)}) — история и рекорды останутся, "
-        f"вернуть можно в ⚙️ Упражнения → 🗄 Архив:\n\n{names}",
+        i18n.t("ai.screen.archive_confirm_multi", n=len(exercises), names=names),
         reply_markup=keyboards.yes_no_keyboard(
             yes_cb=f"ai:exarchyesmulti:{key}", no_cb="ai:menu",
-            yes_text=f"🗄 В архив всё ({len(exercises)})", no_text="❌ Отмена",
+            yes_text=i18n.t("ai.screen.archive_all_yes", n=len(exercises)), no_text=i18n.t("btn.cancel"),
         ),
         parse_mode="HTML",
     )
@@ -933,10 +986,13 @@ async def ai_exercise_archive_multi(callback: CallbackQuery, state: FSMContext):
             continue
         await db.archive_exercise(ex_id)
         archived.append(ex["display_name"])
-    await callback.answer(f"В архиве: {len(archived)}" if archived else "Уже в архиве")
+    await callback.answer(
+        i18n.t("ai.screen.archived_count", n=len(archived)) if archived
+        else i18n.t("ai.screen.already_archived")
+    )
     text = (
-        "🗄 В архиве:\n" + "\n".join(f"• {escape(n)}" for n in archived)
-        if archived else "Это всё уже было в архиве."
+        i18n.t("ai.screen.archived_list_header") + "\n".join(f"• {escape(n)}" for n in archived)
+        if archived else i18n.t("ai.screen.archived_list_all_already")
     )
     with suppress(TelegramBadRequest):
         await callback.message.edit_text(
@@ -958,7 +1014,7 @@ async def ai_add_template(callback: CallbackQuery, state: FSMContext):
     ex_id = await db.fork_exercise_from_template(callback.from_user.id, template_id)
     await state.update_data(exm_from_ai=True)
     if not await send_exercise_card(callback.message, state, callback.from_user.id, ex_id):
-        await callback.answer("Упражнение не найдено", show_alert=True)
+        await callback.answer(i18n.t("workout.exercise_not_found"), show_alert=True)
         return
     await callback.answer()
 
@@ -1040,10 +1096,8 @@ async def ai_mentions_page(callback: CallbackQuery, state: FSMContext):
 # Совет «собрать заново» здесь раньше приводил к дубликатам: алерт показывается
 # и после УСПЕШНОГО сохранения (черновик израсходован — кнопка под старым
 # превью и должна отвечать так), и человек, следуя совету, просил вторую копию.
-_PROGRAM_GONE = (
-    "Это предложение уже неактуально. Если ты его сохранял — программа уже в "
-    "«🗂 Программы»; если нет — попроси тренера собрать заново."
-)
+def _program_gone_text() -> str:
+    return i18n.t("ai.screen.program_gone")
 
 
 # ---------- откат того, что тренер сделал сам ----------
@@ -1080,9 +1134,8 @@ def _fold_undo_actions(
     seq += 1
     key = f"u{seq}"
     store[key] = {"kind": "batch", "items": items}
-    word = formatting.plural_ru(len(items), ("изменение", "изменения", "изменений"))
     folded = {
-        "label": f"↩️ Отменить всё — {len(items)} {word}",
+        "label": i18n.t("ai.screen.actions_folded_label", n=len(items)),
         "callback": f"ai:undo:{key}",
         "is_undo": True,
     }
@@ -1184,16 +1237,15 @@ async def _apply_undo(user_id: int, undo: dict) -> Optional[str]:
                 done += 1
         if done == 0:
             return None
-        word = formatting.plural_ru(done, ("изменение", "изменения", "изменений"))
         if done < len(items):
             # Часть уже не откатывалась — молчать об этом нельзя: человек
             # решит, что вернулось всё.
-            return f"Вернул {done} {word} из {len(items)} — остальное уже правили руками"
-        return f"Вернул {done} {word}"
+            return i18n.t("ai.screen.undo.batch_partial", done=done, total=len(items))
+        return i18n.t("ai.screen.undo.batch_all", done=done)
 
     if kind == "bodyweight":
         if await db.delete_bodyweight_log(int(undo["id"]), user_id):
-            return "Убрал запись веса"
+            return i18n.t("ai.screen.undo.bodyweight")
         return None
 
     if kind == "food":
@@ -1201,7 +1253,7 @@ async def _apply_undo(user_id: int, undo: dict) -> Optional[str]:
         if entry is None or entry["telegram_id"] != user_id:
             return None
         await db.delete_food_entry(entry["id"])
-        return "Убрал из дневника еды"
+        return i18n.t("ai.screen.undo.food")
 
     if kind == "food_restore":
         # Откат delete_food_entry: не «отменить запись», а «отменить удаление» —
@@ -1212,15 +1264,16 @@ async def _apply_undo(user_id: int, undo: dict) -> Optional[str]:
             protein=undo.get("protein"), fat=undo.get("fat"), carbs=undo.get("carbs"),
             photo_file_id=undo.get("photo_file_id"), source=undo.get("source") or "text",
         )
-        return f"Вернул «{undo['description']}» в дневник"
+        return i18n.t("ai.screen.undo.food_restore", description=undo["description"])
 
     if kind == "bodyweight_restore":
         await db.add_bodyweight_log(user_id, undo["weight"], logged_at=undo.get("logged_at"))
-        return f"Вернул запись веса {undo['weight']:g}"
+        return i18n.t("ai.screen.undo.bodyweight_restore", weight=f"{undo['weight']:g}")
 
     if kind == "exercise_new":
         if await db.delete_exercise_if_unused(int(undo["id"]), user_id):
-            return f"Убрал «{undo.get('name', '')}»".replace("«»", "упражнение")
+            name = undo.get("name") or i18n.t("ai.screen.undo.generic_exercise")
+            return i18n.t("ai.screen.undo.exercise_removed", name=name)
         # По нему уже успели что-то записать — сносить нельзя, чужие данные
         # уедут вместе с ним. Честнее сказать, чем сделать вид, что откатили.
         return None
@@ -1231,14 +1284,16 @@ async def _apply_undo(user_id: int, undo: dict) -> Optional[str]:
             return None
         if not await db.update_exercise_name(exercise["id"], undo["name"]):
             return None
-        return f"Вернул имя «{undo['name']}»"
+        return i18n.t("ai.screen.undo.name_restored", name=undo["name"])
 
     if kind == "exercise_group":
         exercise = await db.get_exercise(int(undo["id"]))
         if exercise is None or exercise["user_id"] != user_id:
             return None
         await db.update_exercise_group(exercise["id"], int(undo["group_id"]))
-        return f"Вернул в «{undo['name']}»" if undo.get("name") else "Вернул группу"
+        if undo.get("name"):
+            return i18n.t("ai.screen.undo.group_named", name=undo["name"])
+        return i18n.t("ai.screen.undo.group_generic")
 
     if kind == "program_name":
         program = await db.get_program(int(undo["id"]))
@@ -1246,21 +1301,21 @@ async def _apply_undo(user_id: int, undo: dict) -> Optional[str]:
             return None
         if not await db.rename_program_by_id(program["id"], undo["name"]):
             return None
-        return f"Вернул имя «{undo['name']}»"
+        return i18n.t("ai.screen.undo.name_restored", name=undo["name"])
 
     if kind == "routine_name":
         routine = await db.get_routine(int(undo["id"]))
         if routine is None or routine["user_id"] != user_id:
             return None
         await db.rename_routine(routine["id"], undo["name"])
-        return f"Вернул имя «{undo['name']}»"
+        return i18n.t("ai.screen.undo.name_restored", name=undo["name"])
 
     if kind == "program_new":
         program = await db.get_program(int(undo["id"]))
         if program is None or program["user_id"] != user_id:
             return None
         await db.delete_program_by_id(program["id"])
-        return f"Убрал копию «{undo.get('name') or program['name']}»"
+        return i18n.t("ai.screen.undo.program_copy_removed", name=(undo.get("name") or program["name"]))
 
     if kind == "profile":
         before = undo.get("before") or {}
@@ -1269,7 +1324,7 @@ async def _apply_undo(user_id: int, undo: dict) -> Optional[str]:
             return None
         await db.update_user(user_id, **fields)
         names = ", ".join(ai_trainer.PROFILE_LABELS.get(k, k) for k in fields)
-        return f"Вернул как было: {names}"
+        return i18n.t("ai.screen.undo.profile_restored", names=names)
 
     return None
 
@@ -1289,7 +1344,7 @@ async def ai_undo(callback: CallbackQuery, state: FSMContext):
     undo = store.pop(key, None)
     if undo is None:
         await callback.answer(
-            "Это уже отменено — или кнопка от слишком старого ответа.", show_alert=True
+            i18n.t("ai.screen.undo.already_gone"), show_alert=True
         )
         return
     await state.update_data(ai_undo=store)
@@ -1297,7 +1352,7 @@ async def ai_undo(callback: CallbackQuery, state: FSMContext):
     done = await _apply_undo(callback.from_user.id, undo)
     if done is None:
         await callback.answer(
-            "Откатить не вышло: с тех пор это успели поменять или удалить вручную.",
+            i18n.t("ai.screen.undo.failed"),
             show_alert=True,
         )
         return
@@ -1342,20 +1397,22 @@ async def ai_send_feedback(callback: CallbackQuery, state: FSMContext):
     letter = store.get(key)
     if letter is None:
         await callback.answer(
-            "Это уже передал — или кнопка от слишком старого ответа.", show_alert=True
+            i18n.t("ai.screen.feedback.already_sent"), show_alert=True
         )
         return
     if config.ADMIN_ID is None:
         await callback.answer(
-            "Сейчас передать не выйдет. Попробуй ещё раз через /feedback.",
+            i18n.t("ai.screen.feedback.no_admin"),
             show_alert=True,
         )
         return
 
     who = f"@{callback.from_user.username}" if callback.from_user.username else str(callback.from_user.id)
-    header = (
-        f"📬 {letter.get('label', 'Фидбек')} от {who} (id {callback.from_user.id}), "
-        "через AI-тренера:"
+    header = i18n.t(
+        "ai.screen.feedback_header",
+        label=letter.get("label", i18n.t("ai.screen.feedback.default_label")),
+        who=who,
+        id=callback.from_user.id,
     )
     try:
         await callback.bot.send_message(
@@ -1364,13 +1421,13 @@ async def ai_send_feedback(callback: CallbackQuery, state: FSMContext):
     except TelegramAPIError:
         logger.exception("feedback relay failed for user %s", callback.from_user.id)
         await callback.answer(
-            "Не дошло. Нажми ещё раз или напиши /feedback.", show_alert=True
+            i18n.t("ai.screen.feedback.send_failed"), show_alert=True
         )
         return
 
     del store[key]
     await state.update_data(ai_feedback=store)
-    await callback.answer("Передал 🙌 Спасибо!")
+    await callback.answer(i18n.t("ai.screen.feedback.sent"))
     await _drop_used_button(callback, state, data)
 
 
@@ -1406,7 +1463,7 @@ async def _program_draft(
         or draft.get("id") is None
         or str(draft.get("id")) != draft_id
     ):
-        await callback.answer(_PROGRAM_GONE, show_alert=True)
+        await callback.answer(_program_gone_text(), show_alert=True)
         return None
     return draft
 
@@ -1496,8 +1553,7 @@ async def ai_program_train(callback: CallbackQuery, state: FSMContext):
 
     if not planned:
         await callback.answer(
-            "Всё из этого плана ты уже сделал 💪 Добери что-нибудь сам или "
-            "попроси меня собрать ещё.",
+            i18n.t("ai.screen.program_train.all_done"),
             show_alert=True,
         )
         return
@@ -1510,13 +1566,15 @@ async def ai_program_train(callback: CallbackQuery, state: FSMContext):
     if created:
         await _reset_new_workout_scaffold(state)
     await _delete_message(callback.message)
-    sent = await callback.message.answer(f"🏋️ Тренировка: {escape(day['name'])}")
+    sent = await callback.message.answer(
+        i18n.t("ai.screen.program_train.workout_title", name=escape(day["name"]))
+    )
     await state.update_data(
         workout_id=workout_id, live_chat_id=sent.chat.id, live_message_id=sent.message_id,
         last_by_exercise={}, planned_blocks=planned,
     )
     await start_planned_workout(callback, state)
-    await callback.answer("Погнали 💪")
+    await callback.answer(i18n.t("ai.screen.program_train.go"))
 
 
 def _name_conflict_keyboard(draft_id: str, program_name: str) -> InlineKeyboardMarkup:
@@ -1532,9 +1590,9 @@ def _name_conflict_keyboard(draft_id: str, program_name: str) -> InlineKeyboardM
     обнаруженного конфликта.
     """
     b = InlineKeyboardBuilder()
-    b.button(text="🔄 Заменить существующую", callback_data=f"ai:prog:replace:{draft_id}")
-    b.button(text="➕ Добавить второй копией", callback_data=f"ai:prog:copy:{draft_id}")
-    b.button(text="❌ Не надо", callback_data=f"ai:prog:drop:{draft_id}")
+    b.button(text=i18n.t("ai.screen.conflict.replace"), callback_data=f"ai:prog:replace:{draft_id}")
+    b.button(text=i18n.t("ai.screen.conflict.add_copy"), callback_data=f"ai:prog:copy:{draft_id}")
+    b.button(text=i18n.t("ai.screen.conflict.decline"), callback_data=f"ai:prog:drop:{draft_id}")
     b.adjust(1)
     return b.as_markup()
 
@@ -1573,33 +1631,23 @@ async def _announce_saved(
     """`program_id` — только что сохранённая программа: кнопка «Открыть
     программу» ведёт прямо в неё (rt:prg: без StateFilter, так что работает и
     из состояния чата с тренером)."""
-    day_word = formatting.plural_ru(day_count, ("день", "дня", "дней"))
     if replacing:
-        text = (
-            f"✅ <b>Обновил программу «{escape(name)}».</b>\n\n"
-            f"Теперь в ней {day_count} {day_word} — ищи в «🗂 Программы»."
-        )
+        text = i18n.t("ai.screen.saved.updated", name=escape(name), days=day_count)
     elif day_count == 1:
         # «Тренировка по любому из дней» на программе из одного дня читалась
         # как нелепость — дня-то одного и хватает.
-        text = (
-            f"✅ <b>Добавил программу «{escape(name)}».</b>\n\n"
-            "Ищи её в «🗂 Программы» — оттуда и начинается тренировка."
-        )
+        text = i18n.t("ai.screen.saved.added_single", name=escape(name))
     else:
         # Одна программа с общим именем на все дни, а не «N программ» — «🗂
         # Программы» покажет её одной строкой с числом дней внутри, а не N
         # отдельных (см. A8: старый текст обещал поведение, которого никогда
         # не было).
-        text = (
-            f"✅ <b>Добавил программу «{escape(name)}» — {day_count} {day_word}.</b>\n\n"
-            "Ищи её в «🗂 Программы» — оттуда начинается тренировка по любому из дней."
-        )
+        text = i18n.t("ai.screen.saved.added_multi", name=escape(name), days=day_count)
     with suppress(TelegramBadRequest):
         await callback.message.edit_text(
             text, parse_mode="HTML", reply_markup=keyboards.ai_program_saved_keyboard(program_id)
         )
-    await callback.answer("Готово 💪")
+    await callback.answer(i18n.t("ai.screen.saved.done"))
 
 
 async def _save_into_existing_program(
@@ -1701,8 +1749,7 @@ async def _save_as_new_program(
         await state.update_data(ai_program_draft=draft)
         with suppress(TelegramBadRequest):
             await callback.message.edit_text(
-                f"У тебя уже есть программа «{escape(draft['name'])}». Заменить её этой "
-                "или добавить как отдельную?",
+                i18n.t("ai.screen.name_conflict", name=escape(draft["name"])),
                 parse_mode="HTML",
                 reply_markup=_name_conflict_keyboard(draft["id"], draft["name"]),
             )
@@ -1754,15 +1801,12 @@ async def _finalize_program_save(
 
 # Тексты честного отказа при упавшем сохранении: кнопка «ещё раз» рядом, потому
 # что черновик к этому моменту уже возвращён в FSM и она снова живая.
-_SAVE_FAILED_NEW = (
-    "⚠️ Не смог сохранить программу — ничего не записал.\n"
-    "Предложение тренера живо: нажми кнопку ещё раз."
-)
-_SAVE_FAILED_REPLACE = (
-    "⚠️ Не смог обновить программу: часть новых дней могла успеть добавиться "
-    "рядом со старыми — загляни в «🗂 Программы» и проверь.\n"
-    "Предложение тренера живо: нажми кнопку ещё раз."
-)
+def _save_failed_new_text() -> str:
+    return i18n.t("ai.screen.save_failed_new")
+
+
+def _save_failed_replace_text() -> str:
+    return i18n.t("ai.screen.save_failed_replace")
 
 
 async def _run_program_save(
@@ -1795,7 +1839,7 @@ async def _run_program_save(
             # должно дойти.
             with suppress(Exception):
                 await db.delete_program_by_id(outcome["created_program_id"])
-        text = _SAVE_FAILED_REPLACE if outcome["into_existing"] else _SAVE_FAILED_NEW
+        text = _save_failed_replace_text() if outcome["into_existing"] else _save_failed_new_text()
         with suppress(TelegramBadRequest, TelegramAPIError):
             await callback.message.answer(
                 text,
@@ -1893,7 +1937,7 @@ async def ai_program_drop(callback: CallbackQuery, state: FSMContext):
     закрыл экран."""
     with suppress(TelegramBadRequest):
         await callback.message.delete()
-    await callback.answer("Закрыл")
+    await callback.answer(i18n.t("ai.screen.closed"))
 
 
 @router.callback_query(F.data.startswith("ai:comment:"))
@@ -1914,17 +1958,17 @@ async def ai_comment_workout(callback: CallbackQuery, state: FSMContext):
     workout_id = int(callback.data.split(":")[2])
     workout = await db.get_workout(workout_id)
     if workout is None or workout["user_id"] != callback.from_user.id:
-        await callback.answer("Тренировка не найдена", show_alert=True)
+        await callback.answer(i18n.t("workout.not_found"), show_alert=True)
         return
     if not ai_trainer.is_configured():
-        await callback.answer("AI-тренер не настроен.", show_alert=True)
+        await callback.answer(i18n.t("ai.screen.not_configured_short"), show_alert=True)
         return
 
     user_id = callback.from_user.id
     comment = workout["ai_comment"]
     if not comment:
         if not _try_claim_busy(user_id):
-            await callback.answer("Секунду, ещё думаю над прошлым вопросом 😅", show_alert=True)
+            await callback.answer(i18n.t("ai.screen.busy"), show_alert=True)
             return
         try:
             block = await ai_limits.hard_stop_block()
@@ -1938,7 +1982,7 @@ async def ai_comment_workout(callback: CallbackQuery, state: FSMContext):
                 comment = await ai_trainer.comment_on_workout(user_id, workout_id)
             except Exception:
                 logger.exception("AI trainer workout comment failed for workout %s", workout_id)
-                await callback.message.answer("⚠️ Не смог получить комментарий — попробуй ещё раз позже.")
+                await callback.message.answer(i18n.t("ai.screen.comment_failed"))
                 return
             await db.set_workout_ai_comment(workout_id, comment)
         finally:
@@ -2278,7 +2322,7 @@ async def _handle_question(
         answer = await ask_task
     except Exception:
         logger.exception("AI trainer request failed for user %s", user_id)
-        error_text = "⚠️ Не смог получить ответ — попробуй ещё раз чуть позже."
+        error_text = i18n.t("ai.screen.answer_failed")
         error_kb = await ai_keyboard(user_id)
         try:
             await placeholder.edit_text(error_text, reply_markup=error_kb)
@@ -2307,10 +2351,11 @@ async def _handle_question(
     # limit by refusing.
     left = config.AI_QUESTION_DAILY_LIMIT - (asked_today + 1)
     show_quota = 0 < left <= _QUOTA_WARN_AT
-    quota_html = f"\n\n<i>Осталось вопросов сегодня: {left}</i>" if show_quota else ""
-    quota_md = f"\n\n_Осталось вопросов сегодня: {left}_" if show_quota else ""
+    quota_text = i18n.t("ai.screen.quota_left", left=left) if show_quota else ""
+    quota_html = f"\n\n<i>{quota_text}</i>" if show_quota else ""
+    quota_md = f"\n\n_{quota_text}_" if show_quota else ""
 
-    # Одноразовая подсказка про действия (см. ACTIONS_HINT_TEXT) — хвостом к
+    # Одноразовая подсказка про действия (см. _actions_hint_text) — хвостом к
     # этому же ответу, тем же курсивом, что и счётчик квоты: отдельное
     # сообщение ради статической строчки читалось бы как пуш. Отметка ставится
     # до отправки (как profile_shown_on у _memory_reminder): в худшем случае
@@ -2318,8 +2363,8 @@ async def _handle_question(
     # доходят только состоявшиеся ответы — сбой провайдера выше вернул return,
     # и подсказка дождётся первого настоящего.
     if await db.claim_ai_actions_hint(user_id):
-        quota_html += f"\n\n<i>{ACTIONS_HINT_TEXT}</i>"
-        quota_md += f"\n\n_{ACTIONS_HINT_TEXT}_"
+        quota_html += f"\n\n<i>{_actions_hint_text()}</i>"
+        quota_md += f"\n\n_{_actions_hint_text()}_"
 
     # reasoning_content едет в истории рядом с ответом — иначе следующий вопрос
     # отдаёт Гроку не тот префикс, что был закэширован, и платим по полной за все
@@ -2435,52 +2480,66 @@ SETUP_MAX_ROUNDS = 2
 #
 # Варианты — четыре ходовые цели (потолок SETUP_MAX_CHOICES тоже четыре).
 # Кнопками ответ не запирается: под вопросом с вариантами стоит
-# SETUP_HINT_WITH_CHOICES — «жми вариант или напиши свой», и текстовый ответ
+# _setup_hint_with_choices() — «жми вариант или напиши свой», и текстовый ответ
 # обрабатывается ровно так же (см. _record_setup_answer).
-SETUP_GOAL_QUESTION = {
-    "question": "Чего хочешь от тренировок?",
-    "choices": ["Набрать массу", "Стать сильнее", "Похудеть", "Вернуться в форму"],
-}
+def _setup_goal_question() -> dict:
+    return {
+        "question": i18n.t("ai.screen.setup_goal.question"),
+        "choices": [
+            i18n.t("ai.screen.setup_goal.choice_mass"),
+            i18n.t("ai.screen.setup_goal.choice_strength"),
+            i18n.t("ai.screen.setup_goal.choice_lose"),
+            i18n.t("ai.screen.setup_goal.choice_comeback"),
+        ],
+    }
+
 
 # По этим кускам узнаём вопрос про цель, который модель всё-таки задала сама
 # (промпт запрещает, но запрет — не гарантия). Совпало — свой не подставляем:
-# два вопроса про одно подряд читаются как поломка.
-SETUP_GOAL_MARKERS = ("цел", "чего хочешь", "чего ждёшь", "зачем тренир", "какой результат")
+# два вопроса про одно подряд читаются как поломка. Смешивает оба языка сразу
+# (см. running_texts._TOPIC_STEMS — тот же приём): язык ответа модели зависит
+# от языка пользователя, а не от языка этого файла, так что маркер обязан
+# ловить обе версии вопроса о цели. Кириллица тут — не текст экрана, а
+# сравнение с текстом модели (см. i18n_coverage.ALLOWED_CYRILLIC).
+SETUP_GOAL_MARKERS = (
+    "цел", "чего хочешь", "чего ждёшь", "зачем тренир", "какой результат",
+    # Голое "goal" ловило обычные тренерские вопросы не про цель тренировок
+    # вовсе ("What's your rep goal for this exercise?", "any weight goal for
+    # this month?") — и защёлкивало "цель уже спросили" раньше, чем реальный
+    # вопрос вообще звучал. Фразы ниже — так же специфичны, как русские выше.
+    "your goal", "training goal", "what do you want", "what are you after",
+    "why train", "why do you train", "what result",
+)
 
 # Подсказка под вопросом. Про «не знаю» сказано прямо и намеренно: без этого
 # человек, который не может ответить, либо выдумывает число, либо застревает —
 # а разобраться с «хз» и встречным вопросом умеет финальная сборка, ей эти
 # ответы уедут как есть.
-SETUP_HINT_WITH_CHOICES = "Жми вариант или напиши свой. Не знаешь — так и скажи, разберёмся."
-SETUP_HINT_TEXT_ONLY = "Ответь словами. Не знаешь — так и скажи, разберёмся."
+def _setup_hint_with_choices() -> str:
+    return i18n.t("ai.screen.setup_hint_with_choices")
+
+
+def _setup_hint_text_only() -> str:
+    return i18n.t("ai.screen.setup_hint_text_only")
+
 
 # Рамка, в которой ответы уезжают модели. Она же — единственное место, где
 # решается «это ответ или встречный вопрос»: локально таких детекторов нет и не
 # будет (в переписке люди не ставят вопросительных знаков, а «как получится» в
 # ответ на «сколько времени» — нормальный ответ), а модель в финальном вызове
 # видит и вопрос, и ответ, и всю историю разом.
-SETUP_ANSWERS_FRAME = (
-    "Это ответы человека на твои уточняющие вопросы. Если вместо ответа он задал "
-    "встречный вопрос или написал, что не знает, — ответь ему на это в тексте и, "
-    "если без этих данных программу собирать нельзя, вызови ask_setup_questions "
-    "заново ТОЛЬКО с теми вопросами, что остались открытыми. Если данных хватает — "
-    "не переспрашивай: возьми разумный дефолт и назови его вслух. "
-    # Без этой строки шаг закрывался пересказом: модель послушно называла дефолты
-    # («ставлю 60 мин на сессию, травм нет…») и на этом останавливалась. Человек
-    # отвечал на четыре вопроса и не получал ни состава, ни кнопки сохранения —
-    # весь опросник оказывался впустую.
-    "И в любом случае, кроме переспрашивания, на этом же шаге СОБЕРИ программу "
-    "вызовом propose_program: без вызова инструмента человек не увидит ни состава, "
-    "ни кнопки сохранения — один твой текст программой не является."
-)
+#
+# Без финальной строки про propose_program шаг закрывался пересказом: модель
+# послушно называла дефолты («ставлю 60 мин на сессию, травм нет…») и на этом
+# останавливалась. Человек отвечал на четыре вопроса и не получал ни состава,
+# ни кнопки сохранения — весь опросник оказывался впустую.
+def _setup_answers_frame() -> str:
+    return i18n.t("ai.screen.setup_answers_frame")
+
 
 # Уходит модели вместо третьего круга уточнений подряд.
-SETUP_ENOUGH_FRAME = (
-    "Уточнения закончились — больше вопросов человеку я не задам. Собирай программу "
-    "на разумных дефолтах и назови их вслух: из чего исходил по дням, времени, "
-    "опыту и оборудованию. «Собирай» здесь буквально: вызови propose_program, "
-    "иначе человек останется с текстом вместо программы."
-)
+def _setup_enough_frame() -> str:
+    return i18n.t("ai.screen.setup_enough_frame")
 
 
 def _active_setup(data: dict) -> Optional[dict]:
@@ -2508,10 +2567,10 @@ def _setup_question_html(
     Номер и «из скольки» — не украшение: человек должен видеть, что это не
     бесконечный допрос, а три-четыре тапа до программы.
     """
-    head = f"🤖 <b>ВОПРОС {idx + 1} ИЗ {total}</b>"
+    head = i18n.t("ai.screen.question_header", idx=idx + 1, total=total)
     if answer is not None:
         return f"{head}\n\n{escape(question)}\n\n{escape(answer)}"
-    hint = SETUP_HINT_WITH_CHOICES if has_choices else SETUP_HINT_TEXT_ONLY
+    hint = _setup_hint_with_choices() if has_choices else _setup_hint_text_only()
     return f"{head}\n\n{escape(question)}\n\n<i>{hint}</i>"
 
 
@@ -2567,23 +2626,20 @@ def _setup_answers_text(setup: dict) -> str:
     """
     questions = setup.get("questions") or []
     answers = setup.get("answers") or []
-    lines = ["Вот ответы:"]
+    lines = [i18n.t("ai.screen.setup_answers_header")]
     skipped = False
     for idx, question in enumerate(questions):
         if idx < len(answers) and answers[idx] is not None:
-            lines.append(f"— {question['question']} — {answers[idx]}")
+            lines.append(i18n.t("ai.screen.setup_line_answered", question=question["question"], answer=answers[idx]))
         else:
             skipped = True
-            lines.append(f"— {question['question']} — пропустил, не ответил")
+            lines.append(i18n.t("ai.screen.setup_line_skipped", question=question["question"]))
     goal = setup.get("goal")
     if goal:
-        lines.append(f"\nИсходная задача: {goal}")
+        lines.append(i18n.t("ai.screen.setup_original_goal", goal=goal))
     if skipped:
-        lines.append(
-            "На пропущенные отвечать не стал — возьми по ним разумные дефолты и "
-            "назови их вслух."
-        )
-    lines.append(SETUP_ANSWERS_FRAME)
+        lines.append(i18n.t("ai.screen.setup_skipped_note"))
+    lines.append(_setup_answers_frame())
     return "\n".join(lines)
 
 
@@ -2612,8 +2668,8 @@ async def _questions_with_goal(
         # на экране «Обо мне», значит признаваться, что он этого не помнит.
         return questions, True
     goal_question = {
-        "question": SETUP_GOAL_QUESTION["question"],
-        "choices": list(SETUP_GOAL_QUESTION["choices"]),
+        "question": _setup_goal_question()["question"],
+        "choices": list(_setup_goal_question()["choices"]),
     }
     # Срезаем с хвоста: свой вопрос идёт первым, а лишним оказывается последний
     # вопрос модели — он же и наименее важный, вопросы она ставит по убыванию.
@@ -2674,16 +2730,16 @@ async def _deliver_setup(
                 "scenario": resolved_scenario,
             }
         )
-        text = SETUP_ENOUGH_FRAME
+        text = _setup_enough_frame()
         if previous_goal:
-            text = f"{text}\nИсходная задача: {previous_goal}"
-        # Этот ход тоже реально уходит собирать программу (SETUP_ENOUGH_FRAME
+            text = text + i18n.t("ai.screen.setup_original_goal", goal=previous_goal)
+        # Этот ход тоже реально уходит собирать программу (_setup_enough_frame()
         # прямо требует вызвать propose_program) — поэтому тот же чек-лист, что
         # и у обычного _finish_setup, а не голое «тренер думает».
         await _handle_question(
             message, state, text, history_question=text, user_id=user_id,
             scenario=resolved_scenario,
-            progress_stages=PROGRAM_PROGRESS_STAGES if resolved_scenario == "program" else None,
+            progress_stages=_program_progress_stages() if resolved_scenario == "program" else None,
         )
         return
 
@@ -2695,7 +2751,7 @@ async def _deliver_setup(
     stale_questions = previous.get("questions") or []
     if stale_questions and int(previous.get("idx") or 0) < len(stale_questions):
         await _close_setup_question(
-            message.bot, message.chat.id, previous, "⏹ Опросник отменён — начали заново"
+            message.bot, message.chat.id, previous, i18n.t("ai.screen.setup_cancelled")
         )
     questions, goal_asked = await _questions_with_goal(user_id, questions, previous)
     await state.update_data(
@@ -2748,7 +2804,7 @@ async def _finish_setup(target: Message, state: FSMContext, user_id: int, setup:
     await _handle_question(
         target, state, text, history_question=text, user_id=user_id,
         scenario=scenario,
-        progress_stages=PROGRAM_PROGRESS_STAGES if scenario == "program" else None,
+        progress_stages=_program_progress_stages() if scenario == "program" else None,
     )
 
 
@@ -2784,7 +2840,7 @@ async def ai_setup_choice(callback: CallbackQuery, state: FSMContext):
     setup = _active_setup(data)
     if setup is None:
         await callback.answer(
-            "Этот вопрос уже позади — спрашивай что хочешь словами 👇", show_alert=True
+            i18n.t("ai.screen.setup_question_stale"), show_alert=True
         )
         return
     # Индекса мало: он совпадает и у вопроса из ПРОШЛОГО, брошенного опросника,
@@ -2797,12 +2853,12 @@ async def ai_setup_choice(callback: CallbackQuery, state: FSMContext):
         or parts[2] != str(setup["idx"])
         or getattr(callback.message, "message_id", None) != setup.get("msg_id")
     ):
-        await callback.answer("Этот вопрос уже позади — отвечай на нижний 👇", show_alert=True)
+        await callback.answer(i18n.t("ai.screen.setup_answer_wrong_question"), show_alert=True)
         return
     choices = setup["questions"][setup["idx"]].get("choices") or []
     choice_index = int(parts[3]) if parts[3].isdigit() else -1
     if not 0 <= choice_index < len(choices):
-        await callback.answer("Не нашёл такой вариант — напиши ответ словами 👇", show_alert=True)
+        await callback.answer(i18n.t("ai.screen.setup_choice_not_found"), show_alert=True)
         return
     answer = choices[choice_index]
 
@@ -2811,7 +2867,7 @@ async def ai_setup_choice(callback: CallbackQuery, state: FSMContext):
     # Бронь берём ДО записи ответа и только на последнем вопросе: за ним сразу
     # идёт настоящий вызов модели, а промежуточные шаги её не трогают вовсе.
     if last and not _try_claim_busy(user_id):
-        await callback.answer("Секунду, ещё думаю над прошлым вопросом 😅", show_alert=True)
+        await callback.answer(i18n.t("ai.screen.busy"), show_alert=True)
         return
     try:
         with suppress(TelegramBadRequest):
@@ -2839,7 +2895,7 @@ async def ai_setup_skip(callback: CallbackQuery, state: FSMContext):
     setup = _active_setup(data)
     if setup is None:
         await callback.answer(
-            "Уточнения уже позади — что поправить, пиши словами 👇", show_alert=True
+            i18n.t("ai.screen.setup_skip_stale"), show_alert=True
         )
         return
     user_id = callback.from_user.id
@@ -2847,13 +2903,13 @@ async def ai_setup_skip(callback: CallbackQuery, state: FSMContext):
     # Бронь — только на последнем шаге: за ним сразу идёт вызов модели, а
     # промежуточные пропуски её не трогают (как и промежуточные ответы).
     if last and not _try_claim_busy(user_id):
-        await callback.answer("Секунду, ещё думаю над прошлым вопросом 😅", show_alert=True)
+        await callback.answer(i18n.t("ai.screen.busy"), show_alert=True)
         return
     try:
         with suppress(TelegramBadRequest):
-            await callback.answer("Пропустил" if not last else "Понял, собираю")
+            await callback.answer(i18n.t("ai.screen.setup_skip_ack") if not last else i18n.t("ai.screen.setup_skip_ack_last"))
         await _close_setup_question(
-            callback.bot, callback.message.chat.id, setup, "⏭ Пропустил"
+            callback.bot, callback.message.chat.id, setup, i18n.t("ai.screen.setup_skipped_tail")
         )
         await _record_setup_answer(callback.message, state, user_id, setup, None)
     finally:
@@ -2875,8 +2931,8 @@ async def ai_question(message: Message, state: FSMContext):
     # руками. Одна строка в WARNING отвечает на это в следующий же раз.
     if message.forward_origin is not None:
         logger.warning(
-            "Пересланное сообщение дошло до чата тренера мимо фактчека "
-            "(origin=%s, длина %s) — проверь handlers.factcheck фильтр",
+            "Forwarded message reached the trainer chat past fact-check "
+            "(origin=%s, length %s) — check handlers.factcheck filter",
             type(message.forward_origin).__name__, len(question),
         )
 
@@ -2884,7 +2940,7 @@ async def ai_question(message: Message, state: FSMContext):
     # человека это ответ на текущий вопрос, а не вопрос тренеру. Даже встречное
     # «а сколько вообще надо?» — гадать об этом локально мы не беремся, оно
     # уедет модели вместе с самим вопросом, и разберётся с ним финальная сборка
-    # (см. SETUP_ANSWERS_FRAME).
+    # (см. _setup_answers_frame()).
     data = await state.get_data()
 
     # Ждём название упражнения к присланному ролику — значит этот текст ответ на
@@ -2893,7 +2949,7 @@ async def ai_question(message: Message, state: FSMContext):
     pending = data.get("aivid_pending")
     if pending:
         if not _try_claim_busy(user_id):
-            await message.reply("Секунду, ещё думаю над прошлым вопросом 😅")
+            await message.reply(i18n.t("ai.screen.busy"))
             return
         try:
             await state.update_data(aivid_pending=None)
@@ -2913,7 +2969,7 @@ async def ai_question(message: Message, state: FSMContext):
     if setup is not None:
         last = setup["idx"] + 1 >= len(setup["questions"])
         if last and not _try_claim_busy(user_id):
-            await message.reply("Секунду, ещё думаю над прошлым вопросом 😅")
+            await message.reply(i18n.t("ai.screen.busy"))
             return
         try:
             await _close_setup_question(message.bot, message.chat.id, setup, f"✅ {question}")
@@ -2929,7 +2985,7 @@ async def ai_question(message: Message, state: FSMContext):
         return
 
     if not _try_claim_busy(user_id):
-        await message.reply("Секунду, ещё думаю над прошлым вопросом 😅")
+        await message.reply(i18n.t("ai.screen.busy"))
         return
     try:
         await _handle_question(message, state, question, history_question=question)
@@ -2944,20 +3000,23 @@ async def ai_photo_question(message: Message, state: FSMContext):
     # shape checked `_busy` here but only reserved it deep inside
     # _handle_question, leaving the whole download+dispatch window unguarded.
     if not _try_claim_busy(user_id):
-        await message.reply("Секунду, ещё думаю над прошлым вопросом 😅")
+        await message.reply(i18n.t("ai.screen.busy"))
         return
     try:
         caption = (message.caption or "").strip()
-        question = caption or DEFAULT_PHOTO_QUESTION
+        question = caption or _default_photo_question()
 
         image_data_url = await _download_photo_as_data_url(message)
         if image_data_url is None:
             await message.reply(
-                f"Фото слишком большое — уложись в {MAX_IMAGE_BYTES // (1024 * 1024)} МБ."
+                i18n.t("ai.screen.photo_too_big", mb=MAX_IMAGE_BYTES // (1024 * 1024))
             )
             return
 
-        history_question = f"[фото] {caption}" if caption else "[прислал фото]"
+        history_question = (
+            i18n.t("ai.screen.history_photo", caption=caption) if caption
+            else i18n.t("ai.screen.history_photo_plain")
+        )
         await _handle_question(
             message, state, question, history_question=history_question, image_data_url=image_data_url
         )
@@ -2965,9 +3024,8 @@ async def ai_photo_question(message: Message, state: FSMContext):
         _busy.discard(user_id)
 
 
-DEFAULT_VIDEO_QUESTION = (
-    "Разбери мою технику по этому видео: что там видно и что мне поправить первым делом."
-)
+def _default_video_question() -> str:
+    return i18n.t("ai.screen.default_video_question")
 
 
 # Сколько своих упражнений показать кнопками, когда спрашиваем «что это было».
@@ -2990,15 +3048,15 @@ def _video_exercise_keyboard(names: list[str], page: int, total: int) -> InlineK
 
     nav = InlineKeyboardBuilder()
     if page > 0:
-        nav.button(text="← назад", callback_data=f"aivid:page:{page - 1}")
+        nav.button(text=keyboards.PAGE_PREV_TEXT(), callback_data=f"aivid:page:{page - 1}")
     if (page + 1) * VIDEO_EXERCISE_CHOICES < total:
-        nav.button(text="ещё →", callback_data=f"aivid:page:{page + 1}")
+        nav.button(text=keyboards.PAGE_NEXT_TEXT(), callback_data=f"aivid:page:{page + 1}")
     if nav.buttons:
         kb.attach(nav)
         nav.adjust(2)
 
     tail = InlineKeyboardBuilder()
-    tail.button(text="Разбери так, без названия", callback_data="aivid:skip")
+    tail.button(text=i18n.t("ai.screen.video_no_name_button"), callback_data="aivid:skip")
     tail.adjust(1)
     kb.attach(tail)
     return kb.as_markup()
@@ -3058,7 +3116,7 @@ async def _analyze_video_and_answer(
     кнопкой. Скачиваем по file_id, а не по объекту из апдейта: между вопросом и
     ответом проходит время, и держать всё это в памяти незачем.
     """
-    status = await message.answer("🎥 Смотрю видео...")
+    status = await message.answer(i18n.t("ai.screen.watching_video"))
     try:
         buf = await message.bot.download(file_id)
         # Упражнение из подписи или из кнопки — источник надёжнее глаз модели.
@@ -3077,19 +3135,19 @@ async def _analyze_video_and_answer(
             await status.delete()
 
     if analysis is None:
-        await message.reply(
-            "Не смог разобрать это видео. Попробуй ещё раз или сними сбоку, "
-            "чтобы попал весь подход."
-        )
+        await message.reply(i18n.t("ai.screen.video_analysis_failed"))
         return
 
     # Квота тратится только за разбор, который получился, — как и дневной
     # счётчик вопросов, который списывается лишь при готовом ответе.
     await db.increment_ai_video_count(user_id)
 
-    asked = caption or (f"Разбери технику: {exercise_hint}." if exercise_hint else "")
-    question = asked or DEFAULT_VIDEO_QUESTION
-    history_question = f"[видео] {asked}" if asked else "[прислал видео подхода]"
+    asked = caption or (i18n.t("ai.screen.analyze_technique", hint=exercise_hint) if exercise_hint else "")
+    question = asked or _default_video_question()
+    history_question = (
+        i18n.t("ai.screen.history_video", asked=asked) if asked
+        else i18n.t("ai.screen.history_video_plain")
+    )
     await _handle_question(
         message, state, question,
         history_question=history_question,
@@ -3122,18 +3180,17 @@ async def ai_video_question(message: Message, state: FSMContext):
     # Как и в фото-хендлере: занимаем до первого await, иначе два быстрых ролика
     # проедут вдвоём через окно скачивания и оба уйдут в модель.
     if not _try_claim_busy(user_id):
-        await message.reply("Секунду, ещё думаю над прошлым вопросом 😅")
+        await message.reply(i18n.t("ai.screen.busy"))
         return
     try:
         if not config.video_analysis_available():
-            await message.reply("Разбор видео пока не подключил. Напиши вопрос текстом.")
+            await message.reply(i18n.t("ai.screen.video_not_available_text"))
             return
 
         video = message.video or message.video_note or message.animation
         if video.duration and video.duration > config.MAX_VIDEO_SECONDS:
             await message.reply(
-                f"Ролик длинный. Пришли до {config.MAX_VIDEO_SECONDS} секунд — "
-                "мне хватит одного подхода."
+                i18n.t("ai.screen.video_too_long", seconds=config.MAX_VIDEO_SECONDS)
             )
             return
 
@@ -3169,8 +3226,7 @@ async def ai_video_question(message: Message, state: FSMContext):
 
         if video.file_size and video.file_size > config.MAX_VIDEO_BYTES:
             await message.reply(
-                f"Файл тяжёлый, я такой не вытяну — уложись в "
-                f"{config.MAX_VIDEO_BYTES // (1024 * 1024)} МБ. Сними покороче или полегче."
+                i18n.t("ai.screen.video_too_heavy", mb=config.MAX_VIDEO_BYTES // (1024 * 1024))
             )
             return
 
@@ -3203,10 +3259,7 @@ async def ai_video_question(message: Message, state: FSMContext):
             }
         )
         await message.reply(
-            "Принял ролик. Что за упражнение?\n\n"
-            "Напиши название ответом или выбери из своих ниже. Спрашиваю до того, "
-            "как смотреть: угадаю неверно — разберу по чужим меркам, а это хуже, "
-            "чем не разобрать вовсе.",
+            i18n.t("ai.screen.video_ask_exercise"),
             reply_markup=_video_exercise_keyboard(names, 0, total),
         )
     finally:
@@ -3220,7 +3273,7 @@ async def ai_video_exercise_chosen(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     pending = data.get("aivid_pending")
     if not pending:
-        await callback.answer("Ролик потерялся, пришли заново", show_alert=True)
+        await callback.answer(i18n.t("ai.screen.video_lost"), show_alert=True)
         return
     choice = callback.data.split(":", 2)[-1]
 
@@ -3240,7 +3293,7 @@ async def ai_video_exercise_chosen(callback: CallbackQuery, state: FSMContext):
         return
 
     if not _try_claim_busy(user_id):
-        await callback.answer("Секунду, ещё думаю над прошлым вопросом")
+        await callback.answer(i18n.t("ai.screen.busy"))
         return
     try:
         await callback.answer()
@@ -3279,14 +3332,14 @@ async def _download_voice_as_file(message: Message):
 async def ai_voice_question(message: Message, state: FSMContext):
     user_id = message.from_user.id
     if not _try_claim_busy(user_id):
-        await message.reply("Секунду, ещё думаю над прошлым вопросом 😅")
+        await message.reply(i18n.t("ai.screen.busy"))
         return
     try:
         if not ai_trainer.is_voice_configured():
-            await message.reply("Голосовой ввод пока не настроен, напиши вопрос текстом.")
+            await message.reply(i18n.t("ai.screen.voice_not_configured"))
             return
         if message.voice.duration and message.voice.duration > MAX_VOICE_SECONDS:
-            await message.reply("Голосовое слишком длинное, запиши покороче.")
+            await message.reply(i18n.t("ai.screen.voice_too_long"))
             return
 
         # Квота — ДО расшифровки, а не после. Раньше проверка стояла глубже, уже
@@ -3306,8 +3359,7 @@ async def ai_voice_question(message: Message, state: FSMContext):
         voice_file = await _download_voice_as_file(message)
         if voice_file is None:
             await message.reply(
-                f"Голосовое слишком большое — уложись в "
-                f"{MAX_VOICE_BYTES // (1024 * 1024)} МБ, запиши покороче."
+                i18n.t("ai.screen.voice_too_big", mb=MAX_VOICE_BYTES // (1024 * 1024))
             )
             return
 
@@ -3315,11 +3367,11 @@ async def ai_voice_question(message: Message, state: FSMContext):
             question = await ai_trainer.transcribe_voice(voice_file, user_id)
         except Exception:
             logger.exception("AI trainer voice transcription failed for user %s", user_id)
-            await message.reply("⚠️ Не получилось распознать голосовое, попробуй ещё раз или напиши текстом.")
+            await message.reply(i18n.t("ai.screen.voice_transcribe_failed"))
             return
 
         if not question:
-            await message.reply("🤐 Не удалось разобрать речь, попробуй ещё раз.")
+            await message.reply(i18n.t("ai.screen.voice_empty"))
             return
 
         # Echo what was heard: on a misheard question the answer otherwise looks

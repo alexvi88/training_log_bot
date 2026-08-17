@@ -24,6 +24,7 @@ import chat_bottom
 import config
 import db
 import engagement
+import i18n
 import keyboards
 from fsm_storage import JSONFileStorage
 from handlers import (
@@ -66,6 +67,41 @@ _BENIGN_BAD_REQUEST_SUBSTRINGS = (
 )
 
 
+class SetUserLanguageMiddleware(BaseMiddleware):
+    """Ставит язык рендера (i18n.set_lang) до того, как апдейт дойдёт до
+    любого хендлера или другой middleware, которая может отправить пользователю
+    текст.
+
+    Источник — колонка users.lang, которую пишет только осознанный выбор в
+    экране языка (settings.py) или догадка на первом /start (см.
+    handlers/workout.py, cmd_start). Если пользователя в базе ещё нет — это
+    самый первый /start, запись появится только внутри хендлера — берём
+    telegram-овский language_code как временную догадку через i18n.normalize,
+    но НИЧЕГО не пишем в БД: закреплять язык в базе — забота хендлера
+    /start (или явного выбора в settings), не этой мидлвари.
+
+    Да, это лишний db.get_user на каждый апдейт — и это осознанный размен:
+    локальный SQLite и один поиск по первичному ключу стоят дешевле, чем
+    прокидывание языка через сигнатуры всех хендлеров, коллбэков и сборщиков
+    экранов. Альтернатива меряется не этим запросом, а тысячами строк диффа.
+    """
+
+    async def __call__(self, handler, event, data):
+        lang = i18n.DEFAULT_LANG
+        user = getattr(event, "from_user", None)
+        if user is not None:
+            try:
+                row = await db.get_user(user.id)
+            except Exception:
+                # Чтение языка не должно ронять апдейт — молча остаёмся на
+                # дефолте и логируем, чтобы проблему было видно, но не в чате.
+                logger.exception("SetUserLanguageMiddleware: не удалось прочитать пользователя %s", user.id)
+                row = None
+            lang = row["lang"] if row is not None else i18n.normalize(user.language_code)
+        i18n.set_lang(lang)
+        return await handler(event, data)
+
+
 class IgnoreStaleCallbackMiddleware(BaseMiddleware):
     """Swallow Telegram errors for callback queries that expired before we could answer them.
 
@@ -90,14 +126,55 @@ class IgnoreStaleCallbackMiddleware(BaseMiddleware):
             raise
 
 
-_GENERIC_ERROR_TEXT = "⚠️ Что-то пошло не так — бывает даже у чемпионов. Жми «Меню» внизу — и погнали дальше."
+# Захардкоженный русский текст — то, что человек увидит, если ДАЖЕ i18n.t()
+# внутри обработчика ошибок сам бросит исключение (битый каталог, регресс ICU-
+# парсера, что угодно). Это последний рубеж продукта: обработчик, который сам
+# падает на попытке показать текст о падении, оставляет человека с крутящимся
+# спиннером и вообще без единой подсказки — см. _generic_error_text ниже.
+_FALLBACK_ERROR_TEXT = "⚠️ Что-то пошло не так — бывает даже у чемпионов. Жми «Меню» внизу — и погнали дальше."
+_FALLBACK_MENU_BUTTON_TEXT = "🏠 Меню"
 
-# Реюзаем готовый колбэк «🏠 Меню» с карточки тренировки (handlers/workout.py,
-# live_back_to_menu) — он и так открывает главное меню независимо от того, что
-# сейчас на экране, так что годится и здесь без своего обработчика.
-_BACK_TO_MENU_MARKUP = InlineKeyboardMarkup(
-    inline_keyboard=[[InlineKeyboardButton(text="🏠 Меню", callback_data="live:back_to_menu")]]
-)
+
+def _generic_error_text() -> str:
+    """Текст последнего рубежа, локализованный — но локализация здесь не может
+    быть точкой отказа сама по себе.
+
+    Язык на момент вызова обычно уже верный: `SetUserLanguageMiddleware`
+    выставляет его в контекст первой из всех outer_middleware, ДО хендлера,
+    который и уронил апдейт, — а обработчик ошибок aiogram вызывается в том
+    же asyncio-таске, так что contextvar `i18n.current_lang` из него виден. Но
+    полагаться на то, что `i18n.t()` НИКОГДА не бросит исключение, здесь
+    нельзя: это и есть код, которому подчищать за любой чужой поломкой,
+    включая гипотетическую поломку в самом i18n.py. Если он всё же упадёт —
+    человек обязан увидеть хоть что-то, а не второе необработанное исключение
+    поверх первого, поэтому здесь свой try/except, а не общий на весь
+    обработчик (общий на весь `on_unhandled_error` уже стоит ниже вокруг
+    каждого шага отдельно — но он гасит ошибку ПОСЛЕ вызова, когда текст для
+    отправки уже нужен).
+    """
+    try:
+        return i18n.t("error.generic")
+    except Exception:
+        logger.exception("i18n.t упал внутри обработчика ошибок — показываю запасной текст без него")
+        return _FALLBACK_ERROR_TEXT
+
+
+def _back_to_menu_markup() -> InlineKeyboardMarkup:
+    """Та же защита, что и у `_generic_error_text`, для подписи кнопки.
+
+    Колбэк — `live:back_to_menu`, тот же, что и у готового «🏠 Меню» на карточке
+    законченной тренировки (handlers/workout.py) — он открывает меню, не
+    трогая сообщение, с которого пришли, так что подходит и здесь без своего
+    отдельного обработчика.
+    """
+    try:
+        label = i18n.t("btn.home_menu")
+    except Exception:
+        logger.exception("i18n.t упал при подписи кнопки последнего рубежа — беру запасную подпись")
+        label = _FALLBACK_MENU_BUTTON_TEXT
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text=label, callback_data="live:back_to_menu")]]
+    )
 
 
 def _error_chat_id(update) -> int | None:
@@ -136,7 +213,7 @@ async def on_unhandled_error(event: ErrorEvent, bot: Bot | None = None) -> bool:
     # ничего — ни экрана, ни подсказки.
     if update.callback_query is not None:
         with suppress(Exception):
-            await update.callback_query.answer(_GENERIC_ERROR_TEXT, show_alert=True)
+            await update.callback_query.answer(_generic_error_text(), show_alert=True)
     # Алерт — всплывашка, она гаснет; сообщение в чате остаётся, и если экран уже
     # удалён, это единственное, от чего человек может оттолкнуться.
     chat_id = _error_chat_id(update)
@@ -144,7 +221,7 @@ async def on_unhandled_error(event: ErrorEvent, bot: Bot | None = None) -> bool:
         bot = getattr(update, "bot", None)
     if chat_id is not None and bot is not None:
         with suppress(Exception):
-            await bot.send_message(chat_id, _GENERIC_ERROR_TEXT, reply_markup=_BACK_TO_MENU_MARKUP)
+            await bot.send_message(chat_id, _generic_error_text(), reply_markup=_back_to_menu_markup())
     return True
 
 
@@ -193,7 +270,7 @@ class RefreshPersistentMenuMiddleware(BaseMiddleware):
             return
         with suppress(TelegramBadRequest):
             await target.answer(
-                "⌨️ Обновил меню под полем ввода.",
+                i18n.t("main.persistent_menu_refreshed"),
                 reply_markup=keyboards.persistent_menu(),
             )
         await db.update_user(user_id, reply_keyboard_version=keyboards.PERSISTENT_MENU_VERSION)
@@ -256,37 +333,50 @@ def setup_routers(dp: Dispatcher) -> None:
     dp.include_router(fallback.router)
 
 
-def _public_commands() -> list[BotCommand]:
+def _public_commands(lang: str) -> list[BotCommand]:
+    # Тексты — из каталога (locales/*.json, ключи bot.commands.*), а не
+    # литералами: их вычитывают вместе с остальными пользовательскими
+    # текстами, и расхождение между ru/en видно глазом прямо в JSON.
     commands = [
-        BotCommand(command="start", description="Открыть главное меню"),
-        BotCommand(command="help", description="Как вводить подходы"),
-        BotCommand(command="ai_trainer", description="AI-тренер"),
-        BotCommand(command="food_diary", description="Дневник еды"),
-        BotCommand(command="feedback", description="Отзыв / баг / идея"),
+        BotCommand(command="start", description=i18n.t_in(lang, "bot.commands.start")),
+        BotCommand(command="help", description=i18n.t_in(lang, "bot.commands.help")),
+        BotCommand(command="ai_trainer", description=i18n.t_in(lang, "bot.commands.ai_trainer")),
+        BotCommand(command="food_diary", description=i18n.t_in(lang, "bot.commands.food_diary")),
+        BotCommand(command="feedback", description=i18n.t_in(lang, "bot.commands.feedback")),
     ]
     # Только когда MCP реально куда-то ведёт: команда в «/»-меню обещает
     # работающую функцию, а без публичного адреса обещать нечего. /game
     # раздаёт страница того же сервера (см. handlers/game.game_url), так что
     # условие общее.
     if config.mcp_available():
-        commands.append(BotCommand(command="mcp", description="Подключить данные к Claude и ChatGPT"))
-        commands.append(BotCommand(command="game", description="Мини-игры"))
+        commands.append(BotCommand(command="mcp", description=i18n.t_in(lang, "bot.commands.mcp")))
+        commands.append(BotCommand(command="game", description=i18n.t_in(lang, "bot.commands.game")))
     # Та же логика: команда обещает работающий вход, а без адреса группы вести
     # некуда (см. handlers/community.py).
     if config.community_available():
-        commands.append(BotCommand(command="community", description="Чат атлетов"))
+        commands.append(BotCommand(command="community", description=i18n.t_in(lang, "bot.commands.community")))
     return commands
 
 
 async def _setup_commands(bot: Bot) -> None:
     """Whose "/" menu lists what — the default list doubles as the bot's
     advertised feature set, so anything reachable from the main menu belongs
-    in it."""
-    await bot.set_my_commands(_public_commands(), scope=BotCommandScopeDefault())
+    in it.
+
+    Как и bot_profile.sync_bot_profile: Telegram выбирает «/»-меню по
+    системному языку клиента, а не по нашей колонке users.lang, и заливается
+    это один раз при старте, отдельно на каждый language_code. Вызов БЕЗ
+    language_code — дефолт (русский, видят все языки без своего варианта), а
+    с language_code="en" — отдельный вариант для англоязычных.
+    """
+    await bot.set_my_commands(_public_commands("ru"), scope=BotCommandScopeDefault())
+    await bot.set_my_commands(_public_commands("en"), scope=BotCommandScopeDefault(), language_code="en")
     if config.ADMIN_ID is not None:
+        # Админский список — навсегда по-русски (аудитория: один человек,
+        # разработчик), поэтому language_code тут не нужен.
         await bot.set_my_commands(
             [
-                *_public_commands(),
+                *_public_commands("ru"),
                 BotCommand(command="check_users", description="Список пользователей (админ)"),
                 BotCommand(command="ai_dialogs", description="Диалоги с AI-тренером (админ)"),
                 BotCommand(command="pushes", description="Лог отправленных пушей (админ)"),
@@ -316,6 +406,13 @@ async def main() -> None:
     await bot_profile.sync_bot_profile(bot)
     dp = Dispatcher(storage=JSONFileStorage(config.FSM_STORAGE_PATH))
     dp.errors.register(on_unhandled_error)
+    # Первой из всех outer_middleware: она только выставляет i18n.set_lang и
+    # никогда не шлёт текст сама, а все следующие middleware (RefreshPersistent
+    # MenuMiddleware шлёт «⌨️ Обновил меню», IgnoreStaleCallbackMiddleware может
+    # ответить на колбэк) и все хендлеры должны увидеть уже правильный язык.
+    set_lang_middleware = SetUserLanguageMiddleware()
+    dp.message.outer_middleware(set_lang_middleware)
+    dp.callback_query.outer_middleware(set_lang_middleware)
     dp.message.outer_middleware(chat_bottom.TrackIncomingMessages())
     dp.callback_query.outer_middleware(IgnoreStaleCallbackMiddleware())
     # Лог действий — тоже outer: в него должно попадать и то, чего не поймал ни

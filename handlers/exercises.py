@@ -23,27 +23,31 @@ import db
 import exercise_descriptions
 import exercise_media
 import formatting
+import i18n
 import keyboards
+import seed_data
 import ui
 from fsm import ExerciseManage
 
 router = Router(name="exercises")
 
 
+def _group_display_name(name: str) -> str:
+    """Group name for display. Локализацию делает сам formatting.format_group —
+    там же, где и капс, чтобы ни один вызывающий не мог её забыть."""
+    return formatting.format_group(name)
+
+
 async def _groups_payload(user_id: int):
     groups = await db.list_muscle_groups(user_id)
     b = InlineKeyboardBuilder()
     for g in groups:
-        b.button(text=formatting.format_group(g["name"]), callback_data=f"exm:grp:{g['id']}")
-    b.button(text="📋 Все", callback_data="exm:grp:all")
+        b.button(text=_group_display_name(g["name"]), callback_data=f"exm:grp:{g['id']}")
+    b.button(text=i18n.t("btn.all_templates"), callback_data="exm:grp:all")
     b.adjust(2)
-    b.row(InlineKeyboardButton(text="➕ Новая группа", callback_data="exm:newgroup"))
-    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="exm:back"))
-    text = (
-        "⚙️ <b>МОИ УПРАЖНЕНИЯ</b>\n\n"
-        "Твоя картотека: переименовать, объединить дубли, завести своё. "
-        "Выбери группу мышц:"
-    )
+    b.row(InlineKeyboardButton(text=i18n.t("exercises.btn.new_group"), callback_data="exm:newgroup"))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.back"), callback_data="exm:back"))
+    text = i18n.t("exercises.groups.intro")
     return text, b.as_markup()
 
 
@@ -90,6 +94,30 @@ async def _clear_exercise_media(bot, chat_id: int, state: FSMContext) -> None:
     await state.update_data(exm_media_msg_ids=None)
 
 
+def _template_display_name(template) -> str:
+    """A catalog template (`is_template=1`) is one shared row per exercise,
+    never forked per user — so unlike an owned exercise, its `name`/
+    `display_name` columns stay the Russian canonical text forever (see
+    `seed_data.localized_muscle_group_name` docstring for the same pattern on
+    groups). Showing `template['name']`/`template['display_name']` verbatim
+    to an English reader would leak that Russian catalog key onto the
+    screen — `db.fork_exercise_from_template` avoids exactly this by writing
+    a localized `display_name` into the fork; here there is no fork yet, so
+    we localize at render time instead."""
+    return seed_data.localized_exercise_name(template["name"], i18n.get_lang())
+
+
+def _localized_template_row(template) -> dict:
+    """`template` with `name`/`display_name` swapped for the localized label,
+    for reuse through `_exercise_info_text`/`_send_template_preview`, which
+    otherwise read the Russian canonical text straight off the row."""
+    data = dict(template)
+    localized = _template_display_name(template)
+    data["name"] = localized
+    data["display_name"] = localized
+    return data
+
+
 def _exercise_list_label(ex) -> str:
     """Marks each exercise button with what its card actually has to show:
     📝 for a text description."""
@@ -131,19 +159,23 @@ async def _show_exercise_list(callback: CallbackQuery, state: FSMContext):
     # Offered under "📋 Все" too: not having it there made that screen a dead end
     # for anyone who browsed all exercises, didn't find theirs, and had no way to
     # add it without backing out and guessing a group.
-    b.row(InlineKeyboardButton(text="➕ Новое упражнение", callback_data="exm:newex"))
+    b.row(InlineKeyboardButton(text=i18n.t("exercises.btn.new_exercise"), callback_data="exm:newex"))
     if group is not None and group["user_id"] is not None:
-        b.row(InlineKeyboardButton(text="🗑 Архивировать группу", callback_data=f"exm:archivegrpask:{group_id}"))
+        b.row(
+            InlineKeyboardButton(
+                text=i18n.t("exercises.btn.archive_group"), callback_data=f"exm:archivegrpask:{group_id}"
+            )
+        )
     b.row(
-        InlineKeyboardButton(text="🗄 Архив", callback_data="exm:archivelist"),
-        InlineKeyboardButton(text="⬅️ Назад", callback_data="exm:backgroups"),
+        InlineKeyboardButton(text=i18n.t("exercises.btn.archive"), callback_data="exm:archivelist"),
+        InlineKeyboardButton(text=i18n.t("btn.back"), callback_data="exm:backgroups"),
     )
-    title = formatting.format_group(group["name"]) if group is not None else "ВСЕ УПРАЖНЕНИЯ"
+    title = _group_display_name(group["name"]) if group is not None else i18n.t("exercises.all_title")
     title_html = f"<b>{escape(title)}</b>"
     if exercises:
-        text = f"{title_html}\n\nТвои упражнения:"
+        text = f"{title_html}\n\n{i18n.t('exercises.list.intro')}"
     else:
-        text = f"{title_html}\n\nПока нет своих упражнений в этой группе."
+        text = f"{title_html}\n\n{i18n.t('exercises.list.empty')}"
     await ui.safe_edit(callback, text, reply_markup=b.as_markup(), parse_mode="HTML")
     await callback.answer()
 
@@ -158,23 +190,25 @@ async def exm_new_exercise(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     has_group = data.get("exm_group_id") is not None
     await state.set_state(ExerciseManage.creating_exercise_name)
-    text = (
-        "Напиши название нового упражнения или выбери из шаблонов:"
-        if has_group
-        else "Напиши название нового упражнения — группу мышц выберешь следом:"
-    )
+    text = i18n.t("exercises.new.prompt_with_templates" if has_group else "exercises.new.prompt_no_group")
     await ui.safe_edit(
         callback, text, reply_markup=keyboards.new_exercise_entry_keyboard("exm", show_templates=has_group)
     )
     await callback.answer()
 
 
+def _localized_templates(templates) -> list[dict]:
+    """Template rows for a keyboard, with `display_name` swapped for the
+    render-time localized label — see `_template_display_name`."""
+    return [{"id": t["id"], "display_name": _template_display_name(t)} for t in templates]
+
+
 @router.callback_query(StateFilter(ExerciseManage.creating_exercise_name), F.data == "exm:templates")
 async def exm_templates(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     templates = await db.list_templates_in_group(data["exm_group_id"])
-    kb = keyboards.templates_keyboard(templates, prefix="exm", back_cb="newback")
-    text = "Шаблоны — выбери подходящий:" if templates else "Для этой группы пока нет шаблонов."
+    kb = keyboards.templates_keyboard(_localized_templates(templates), prefix="exm", back_cb="newback")
+    text = i18n.t("exercises.templates.pick" if templates else "exercises.templates.empty")
     await ui.safe_edit(callback, text, reply_markup=kb)
     await callback.answer()
 
@@ -183,7 +217,7 @@ async def exm_templates(callback: CallbackQuery, state: FSMContext):
 async def exm_new_back(callback: CallbackQuery, state: FSMContext):
     await ui.safe_edit(
         callback,
-        "Напиши название нового упражнения или выбери из шаблонов:",
+        i18n.t("exercises.new.prompt_with_templates"),
         reply_markup=keyboards.new_exercise_entry_keyboard("exm"),
     )
     await callback.answer()
@@ -207,10 +241,12 @@ async def exm_preview_template(callback: CallbackQuery, state: FSMContext):
     template_id = int(callback.data.split(":")[2])
     template = await db.get_exercise(template_id)
     if template is None:
-        await callback.answer("Шаблон не найден", show_alert=True)
+        await callback.answer(i18n.t("exercises.template_not_found"), show_alert=True)
         return
-    text = _exercise_info_text(template, with_created=False)
+    text = _exercise_info_text(_localized_template_row(template), with_created=False)
     kb = keyboards.template_preview_keyboard(template_id)
+    # Media lookup stays on the raw (Russian) template name — that's the
+    # catalog key `exercise_media` is built on, not what gets shown.
     images = exercise_media.get_images(template["name"])
     with suppress(TelegramBadRequest):
         await callback.message.delete()
@@ -219,7 +255,7 @@ async def exm_preview_template(callback: CallbackQuery, state: FSMContext):
     # прогон: Telegram Web принимает отправку без ошибки, но фото молча
     # не показывает — хуже старого поведения, а не деградирует к нему,
     # и это никаким try/except на стороне бота не поймать. Откатили.
-    await _send_template_preview(callback.message, template, text, kb, images)
+    await _send_template_preview(callback.message, _localized_template_row(template), text, kb, images)
     await callback.answer()
 
 
@@ -251,10 +287,10 @@ async def _exm_finish_new_exercise_name(answerer, state: FSMContext, user_id: in
         await state.set_state(ExerciseManage.new_exercise_group)
         groups = await db.list_muscle_groups(user_id)
         kb = keyboards.groups_keyboard(
-            groups, prefix="exmnewgrp", extra_buttons=[("❌ Отмена", "exm:cancel")]
+            groups, prefix="exmnewgrp", extra_buttons=[(i18n.t("btn.cancel"), "exm:cancel")]
         )
         await answerer.answer(
-            f"«{escape(name)}» — выбери группу мышц:", reply_markup=kb, parse_mode="HTML"
+            i18n.t("exercises.name.pick_group", name=escape(name)), reply_markup=kb, parse_mode="HTML"
         )
         return
     # create_exercise переиспользует строку с таким же именем, в том числе
@@ -269,24 +305,19 @@ async def _exm_finish_new_exercise_name(answerer, state: FSMContext, user_id: in
     ex = await db.get_exercise(ex_id)
     text, kb = await _exercise_detail_payload(ex, state)
     if was_archived:
-        text = (
-            "🗄 Такое упражнение у тебя уже было — вернул из архива вместе с "
-            "историей и рекордами.\n\n" + text
-        )
+        text = i18n.t("exercises.name.revived") + "\n\n" + text
     await answerer.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
 def _suspicious_name_reason(name: str) -> str | None:
     """None if `name` looks like a plausible exercise name; otherwise a short
-    Russian phrase for the "are you sure?" prompt explaining why it doesn't —
-    either a stray message (too long) or something with no letters at all
-    ("50 12", a logged set typed while the bot was waiting for a name instead)."""
+    phrase for the "are you sure?" prompt explaining why it doesn't — either a
+    stray message (too long) or something with no letters at all ("50 12", a
+    logged set typed while the bot was waiting for a name instead)."""
     if len(name) > config.MAX_EXERCISE_NAME_LENGTH:
-        n = len(name)
-        word = formatting.plural_ru(n, ("символ", "символа", "символов"))
-        return f"длинновато для упражнения ({n} {word})"
+        return i18n.t("exercises.name_reason.too_long", n=len(name))
     if not any(ch.isalpha() for ch in name):
-        return "в названии нет ни одной буквы — не похоже на упражнение"
+        return i18n.t("exercises.name_reason.no_letters")
     return None
 
 
@@ -294,17 +325,17 @@ def _suspicious_name_reason(name: str) -> str | None:
 async def exm_new_exercise_name_entered(message: Message, state: FSMContext):
     name = message.text.strip()
     if not name:
-        await message.reply("Название не может быть пустым")
+        await message.reply(i18n.t("exercises.name.empty"))
         return
     reason = _suspicious_name_reason(name)
     if reason:
         await state.update_data(exm_pending_long_name=name)
         kb = keyboards.yes_no_keyboard(
             yes_cb="exm:longname:yes", no_cb="exm:longname:no",
-            yes_text="✅ Да, создать", no_text="✏️ Написать заново",
+            yes_text=i18n.t("exercises.btn.confirm_create"), no_text=i18n.t("exercises.btn.retype"),
         )
         await message.reply(
-            f"«{escape(name)}» — {reason}. Всё верно, создать такое?",
+            i18n.t("exercises.name.confirm_create", name=escape(name), reason=reason),
             reply_markup=kb, parse_mode="HTML",
         )
         return
@@ -316,7 +347,7 @@ async def exm_new_exercise_longname_confirmed(callback: CallbackQuery, state: FS
     data = await state.get_data()
     name = data.get("exm_pending_long_name")
     if not name:
-        await callback.answer("Название потерялось, напиши заново", show_alert=True)
+        await callback.answer(i18n.t("exercises.name.lost_retype"), show_alert=True)
         return
     await state.update_data(exm_pending_long_name=None)
     with suppress(TelegramBadRequest):
@@ -331,7 +362,7 @@ async def exm_new_exercise_longname_declined(callback: CallbackQuery, state: FSM
     with suppress(TelegramBadRequest):
         await callback.message.delete()
     await callback.message.answer(
-        "Напиши название нового упражнения или выбери из шаблонов:",
+        i18n.t("exercises.new.prompt_with_templates"),
         reply_markup=keyboards.new_exercise_entry_keyboard("exm"),
     )
     await callback.answer()
@@ -345,7 +376,7 @@ async def exm_new_exercise_group_picked(callback: CallbackQuery, state: FSMConte
     data = await state.get_data()
     name = data.get("exm_new_name")
     if not name:
-        await callback.answer("Название потерялось, начни заново", show_alert=True)
+        await callback.answer(i18n.t("exercises.name.lost_restart"), show_alert=True)
         await show_exercise_groups(callback, state)
         return
     ex_id = await db.create_exercise(callback.from_user.id, name, group_id)
@@ -362,18 +393,17 @@ async def exm_archive_group_confirm(callback: CallbackQuery, state: FSMContext):
     group_id = int(callback.data.split(":")[2])
     group = await db.get_muscle_group(group_id)
     if group is None or group["user_id"] != callback.from_user.id:
-        await callback.answer("Эту группу нельзя архивировать", show_alert=True)
+        await callback.answer(i18n.t("exercises.group.cant_archive"), show_alert=True)
         return
     kb = keyboards.yes_no_keyboard(
         yes_cb=f"exm:archivegrpyes:{group_id}",
         no_cb="exm:backlist",
-        yes_text="🗑 Архивировать",
-        no_text="❌ Отмена",
+        yes_text=i18n.t("exercises.btn.archive_yes"),
+        no_text=i18n.t("btn.cancel"),
     )
     await ui.safe_edit(
         callback,
-        f"Архивировать группу «{escape(formatting.format_group(group['name']))}»? "
-        "Просто уберём все её упражнения из списка выбора — история тренировок с ними останется.",
+        i18n.t("exercises.group.archive_confirm", group=escape(_group_display_name(group["name"]))),
         reply_markup=kb,
     )
     await callback.answer()
@@ -384,29 +414,30 @@ async def exm_archive_group(callback: CallbackQuery, state: FSMContext):
     group_id = int(callback.data.split(":")[2])
     group = await db.get_muscle_group(group_id)
     if group is None or group["user_id"] != callback.from_user.id:
-        await callback.answer("Эту группу нельзя архивировать", show_alert=True)
+        await callback.answer(i18n.t("exercises.group.cant_archive"), show_alert=True)
         return
     await db.archive_muscle_group(group_id)
-    await callback.answer("Архивировал группу")
+    await callback.answer(i18n.t("exercises.group.archived"))
     await show_exercise_groups(callback, state)
 
 
 def _exercise_info_text(ex, with_created: bool = True, group_name: str | None = None) -> str:
-    # The name is the card's heading, not a labelled field — "Название:" in front
+    # The name is the card's heading, not a labelled field — a "Name:" in front
     # of it only says what is already obvious from it being first and bold.
     info = [f"<b>{escape(ex['name'])}</b>"]
     if group_name:
-        info.append(f"Группа: {escape(formatting.format_group(group_name))}")
+        info.append(i18n.t("exercises.info.group", group=escape(_group_display_name(group_name))))
     if ex["equipment"]:
-        info.append(f"Оснастка: {ex['equipment']}")
+        info.append(i18n.t("exercises.info.equipment", equipment=ex["equipment"]))
     if ex["unilateral"]:
-        info.append("Одной рукой/ногой: да")
+        info.append(i18n.t("exercises.info.unilateral"))
     if ex["attachment"]:
-        info.append(f"Хват/насадка: {ex['attachment']}")
+        info.append(i18n.t("exercises.info.attachment", attachment=ex["attachment"]))
     if with_created:
-        # Везде в боте дата по-русски («06.08.2026 (чт)»), а не ISO-обрубок.
+        # format_date_ru — уже локализованный формат (i18n.t внутри), несмотря
+        # на имя: «06.08.2026 (чт)» по-русски, «06.08.2026 (Thu)» по-английски.
         created = dt.datetime.fromisoformat(ex["created_at"])
-        info.append(f"Создано: {formatting.format_date_ru(created)}")
+        info.append(i18n.t("exercises.info.created", date=formatting.format_date_ru(created)))
     description = exercise_descriptions.effective_description(ex)
     if description:
         info.append(f"\n{escape(description)}")
@@ -487,49 +518,49 @@ def _exercise_detail_view(
     ex, with_info: bool = True, group_name: str | None = None, back_cb: str = "exm:backlist"
 ):
     b = InlineKeyboardBuilder()
-    b.button(text="📈 Прогресс", callback_data=f"prog:ex:{ex['id']}:m")
-    b.button(text="✏️ Редактировать", callback_data=f"exm:editmenu:{ex['id']}")
-    b.button(text="📤 Поделиться", callback_data=f"share:ex:{ex['id']}")
-    b.button(text="🗑 Архивировать", callback_data=f"exm:archiveask:{ex['id']}")
-    b.button(text="⬅️ Назад", callback_data=back_cb)
+    b.button(text=i18n.t("exercises.btn.progress"), callback_data=f"prog:ex:{ex['id']}:m")
+    b.button(text=i18n.t("exercises.btn.edit"), callback_data=f"exm:editmenu:{ex['id']}")
+    b.button(text=i18n.t("exercises.btn.share"), callback_data=f"share:ex:{ex['id']}")
+    b.button(text=i18n.t("exercises.btn.archive_ex"), callback_data=f"exm:archiveask:{ex['id']}")
+    b.button(text=i18n.t("btn.back"), callback_data=back_cb)
     b.adjust(2, 2, 1)
     # Even when the details went out as a photo caption, the button screen keeps
-    # the name: the photo can scroll out of view, and a bare "Управление
-    # упражнением:" doesn't say which exercise the buttons act on.
+    # the name: the photo can scroll out of view, and a bare "Manage:" doesn't
+    # say which exercise the buttons act on.
     text = (
         _exercise_info_text(ex, group_name=group_name)
         if with_info
-        else f"<b>{escape(ex['display_name'])}</b>\nУправление упражнением:"
+        else f"<b>{escape(ex['display_name'])}</b>\n{i18n.t('exercises.manage_hint')}"
     )
     return text, b.as_markup()
 
 
 def _exercise_edit_menu_keyboard(ex) -> InlineKeyboardMarkup:
-    """The "✏️ Редактировать" drill-down: renaming, changing group, description
-    and photo are all edits — grouping them behind one button keeps the card
-    itself down to Прогресс/Редактировать/Архивировать/Назад. Same ✏️ on all
-    four (they're all "edit this field"), two per row; "Удалить фото" keeps
-    its own 🗑, same as elsewhere in the app, since it's a delete, not an edit."""
+    """The "✏️ Edit" drill-down: renaming, changing group, description and
+    photo are all edits — grouping them behind one button keeps the card
+    itself down to Progress/Edit/Archive/Back. Same ✏️ on all four (they're
+    all "edit this field"), two per row; "Delete photo" keeps its own 🗑,
+    same as elsewhere in the app, since it's a delete, not an edit."""
     if ex["description"]:
-        description_label = "✏️ Изменить описание"
+        description_label = i18n.t("exercises.btn.edit_description")
     elif exercise_descriptions.catalog_description(ex):
         # A template default is already shown above — this writes a personal
-        # override, so "Добавить" (as if nothing were there) would be misleading.
-        description_label = "✏️ Своё описание"
+        # override, so "Add" (as if nothing were there) would be misleading.
+        description_label = i18n.t("exercises.btn.own_description")
     else:
-        description_label = "✏️ Описание"
+        description_label = i18n.t("exercises.btn.description")
     b = InlineKeyboardBuilder()
-    b.button(text="✏️ Название", callback_data=f"exm:editname:{ex['id']}")
-    b.button(text="✏️ Группа", callback_data=f"exm:editgroup:{ex['id']}")
+    b.button(text=i18n.t("exercises.btn.name"), callback_data=f"exm:editname:{ex['id']}")
+    b.button(text=i18n.t("exercises.btn.group"), callback_data=f"exm:editgroup:{ex['id']}")
     b.button(text=description_label, callback_data=f"exm:editdesc:{ex['id']}")
-    b.button(text="✏️ Фото", callback_data=f"exm:addphoto:{ex['id']}")
-    b.button(text="🔀 Объединить с другим", callback_data=f"exm:mergestart:{ex['id']}")
+    b.button(text=i18n.t("exercises.btn.photo"), callback_data=f"exm:addphoto:{ex['id']}")
+    b.button(text=i18n.t("exercises.btn.merge"), callback_data=f"exm:mergestart:{ex['id']}")
     if ex["custom_photo_file_id"]:
-        b.button(text="🗑 Удалить фото", callback_data=f"exm:delphotoask:{ex['id']}")
-        b.button(text="⬅️ Назад", callback_data=f"exm:ex:{ex['id']}")
+        b.button(text=i18n.t("exercises.btn.delete_photo"), callback_data=f"exm:delphotoask:{ex['id']}")
+        b.button(text=i18n.t("btn.back"), callback_data=f"exm:ex:{ex['id']}")
         b.adjust(2, 2, 1, 1, 1)
     else:
-        b.button(text="⬅️ Назад", callback_data=f"exm:ex:{ex['id']}")
+        b.button(text=i18n.t("btn.back"), callback_data=f"exm:ex:{ex['id']}")
         b.adjust(2, 2, 1, 1)
     return b.as_markup()
 
@@ -654,7 +685,7 @@ async def exm_add_photo(callback: CallbackQuery, state: FSMContext):
     await state.set_state(ExerciseManage.awaiting_photo)
     await ui.safe_edit(
         callback,
-        "Пришли фото упражнения:",
+        i18n.t("exercises.photo.prompt"),
         reply_markup=keyboards.cancel_keyboard(f"exm:editmenu:{ex_id}"),
     )
     await callback.answer()
@@ -663,7 +694,7 @@ async def exm_add_photo(callback: CallbackQuery, state: FSMContext):
 @router.message(StateFilter(ExerciseManage.awaiting_photo))
 async def exm_photo_entered(message: Message, state: FSMContext):
     if not message.photo:
-        await message.reply("Пришли именно фото")
+        await message.reply(i18n.t("exercises.photo.need_photo"))
         return
     data = await state.get_data()
     ex_id = data["exm_exercise_id"]
@@ -685,10 +716,10 @@ async def exm_delete_photo_confirm(callback: CallbackQuery, state: FSMContext):
     kb = keyboards.yes_no_keyboard(
         yes_cb=f"exm:delphotoyes:{ex_id}",
         no_cb=f"exm:editmenu:{ex_id}",
-        yes_text="🗑 Удалить",
-        no_text="❌ Отмена",
+        yes_text=i18n.t("btn.delete"),
+        no_text=i18n.t("btn.cancel"),
     )
-    await ui.safe_edit(callback, f"Удалить фото «{escape(ex['name'])}»?", reply_markup=kb)
+    await ui.safe_edit(callback, i18n.t("exercises.photo.delete_confirm", name=escape(ex["name"])), reply_markup=kb)
     await callback.answer()
 
 
@@ -700,7 +731,7 @@ async def exm_delete_photo(callback: CallbackQuery, state: FSMContext):
         await ui.alert_exercise_not_found(callback)
         return
     await db.delete_exercise_photo(ex_id)
-    await callback.answer("Убрал фото")
+    await callback.answer(i18n.t("exercises.photo.removed"))
     ex = await db.get_exercise(ex_id)
     has_images = await _send_exercise_images(callback.message, ex, state)
     text, kb = await _exercise_detail_payload(ex, state, with_info=not has_images)
@@ -712,7 +743,7 @@ def _merge_target_keyboard(source_id: int, candidates) -> InlineKeyboardMarkup:
     items = [(f"exm:mergepick:{ex['id']}", ex["display_name"]) for ex in candidates if ex["id"] != source_id]
     for row in keyboards.named_buttons(items):
         b.row(*row)
-    b.row(InlineKeyboardButton(text="❌ Отмена", callback_data=f"exm:editmenu:{source_id}"))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.cancel"), callback_data=f"exm:editmenu:{source_id}"))
     return b.as_markup()
 
 
@@ -726,11 +757,7 @@ async def exm_merge_start(callback: CallbackQuery, state: FSMContext):
     await state.update_data(exm_merge_source_id=ex_id)
     await state.set_state(ExerciseManage.picking_merge_target)
     candidates = await db.search_exercises(callback.from_user.id, "")
-    text = (
-        f"С каким упражнением объединить «{escape(ex['display_name'])}»?\n"
-        "Вся история (подходы, тренировки, программы) перейдёт в выбранное, "
-        f"а «{escape(ex['display_name'])}» удалится. Выбери из списка или напиши название для поиска:"
-    )
+    text = i18n.t("exercises.merge.pick_target", name=escape(ex["display_name"]))
     await ui.safe_edit(callback, text, reply_markup=_merge_target_keyboard(ex_id, candidates), parse_mode="HTML")
     await callback.answer()
 
@@ -745,8 +772,8 @@ async def exm_merge_search_text(message: Message, state: FSMContext):
     candidates = await db.search_exercises(message.from_user.id, query)
     candidates = [ex for ex in candidates if ex["id"] != source_id]
     text = (
-        f"Результаты поиска «{escape(query)}»:" if candidates
-        else f"Ничего не нашлось по «{escape(query)}»."
+        i18n.t("exercises.search.results", query=escape(query)) if candidates
+        else i18n.t("exercises.search.empty", query=escape(query))
     )
     await message.answer(text, reply_markup=_merge_target_keyboard(source_id, candidates))
 
@@ -764,14 +791,15 @@ async def exm_merge_pick(callback: CallbackQuery, state: FSMContext):
     kb = keyboards.yes_no_keyboard(
         yes_cb=f"exm:mergeyes:{target_id}",
         no_cb=f"exm:mergestart:{source_id}",
-        yes_text="🔀 Объединить",
-        no_text="❌ Отмена",
+        yes_text=i18n.t("exercises.btn.merge_confirm"),
+        no_text=i18n.t("btn.cancel"),
     )
     await ui.safe_edit(
         callback,
-        f"Объединить «{escape(source['display_name'])}» с «{escape(target['display_name'])}»?\n"
-        f"Вся история «{escape(source['display_name'])}» перейдёт в «{escape(target['display_name'])}», "
-        f"а «{escape(source['display_name'])}» будет удалено. Отменить это действие нельзя.",
+        i18n.t(
+            "exercises.merge.confirm",
+            source=escape(source["display_name"]), target=escape(target["display_name"]),
+        ),
         reply_markup=kb,
     )
     await callback.answer()
@@ -791,21 +819,15 @@ async def exm_merge_confirm(callback: CallbackQuery, state: FSMContext):
         # человек жмёт ту же кнопку ещё раз.
         await callback.answer(
             {
-                db.MERGE_TARGET_ARCHIVED: (
-                    "Это упражнение в архиве — вся история уехала бы туда же. "
-                    "Верни его из «🗄 Архив» и попробуй снова."
-                ),
-                db.MERGE_IN_ACTIVE_WORKOUT: (
-                    "Одно из этих упражнений сейчас в открытой тренировке. "
-                    "Заверши её и объединяй."
-                ),
-            }.get(outcome, "Не получилось объединить"),
+                db.MERGE_TARGET_ARCHIVED: i18n.t("exercises.merge.error_archived"),
+                db.MERGE_IN_ACTIVE_WORKOUT: i18n.t("exercises.merge.error_active_workout"),
+            }.get(outcome, i18n.t("exercises.merge.error_generic")),
             show_alert=True,
         )
         return
     await state.update_data(exm_merge_source_id=None)
     await state.set_state(ExerciseManage.picking_exercise)
-    await callback.answer("Объединил упражнения")
+    await callback.answer(i18n.t("exercises.merge.done"))
     await _render_exercise_card(callback, state, target_id)
 
 
@@ -836,14 +858,14 @@ async def exm_search_text(message: Message, state: FSMContext):
     templates = await db.search_exercise_templates(message.from_user.id, query)
     b = InlineKeyboardBuilder()
     items = [(f"exm:ex:{ex['id']}", ex["display_name"]) for ex in results]
-    items += [(f"exm:tpladd:{t['id']}", f"📋 {t['display_name']}") for t in templates]
+    items += [(f"exm:tpladd:{t['id']}", f"📋 {_template_display_name(t)}") for t in templates]
     for row in keyboards.named_buttons(items):
         b.row(*row)
-    b.row(InlineKeyboardButton(text="➕ Новое упражнение", callback_data="exm:newex"))
-    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="exm:backlist"))
+    b.row(InlineKeyboardButton(text=i18n.t("exercises.btn.new_exercise"), callback_data="exm:newex"))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.back"), callback_data="exm:backlist"))
     text = (
-        f"Результаты поиска «{escape(query)}»:" if (results or templates)
-        else f"Ничего не нашлось по «{escape(query)}»."
+        i18n.t("exercises.search.results", query=escape(query)) if (results or templates)
+        else i18n.t("exercises.search.empty", query=escape(query))
     )
     await message.answer(text, reply_markup=b.as_markup(), parse_mode="HTML")
 
@@ -859,7 +881,7 @@ async def exm_edit_name(callback: CallbackQuery, state: FSMContext):
     await state.set_state(ExerciseManage.editing_name)
     await ui.safe_edit(
         callback,
-        f"Текущее название: <b>{escape(ex['name'])}</b>\n\nНапиши новое название упражнения:",
+        i18n.t("exercises.rename.prompt", name=escape(ex["name"])),
         reply_markup=keyboards.cancel_keyboard(f"exm:editmenu:{ex_id}"),
         parse_mode="HTML",
     )
@@ -869,7 +891,7 @@ async def exm_edit_name(callback: CallbackQuery, state: FSMContext):
 async def _exm_finish_rename(answerer, state: FSMContext, ex_id: int, name: str):
     ok = await db.update_exercise_name(ex_id, name)
     if not ok:
-        await answerer.answer("У тебя уже есть упражнение с таким названием.")
+        await answerer.answer(i18n.t("exercises.rename.taken"))
         return
     await state.set_state(ExerciseManage.picking_exercise)
     ex = await db.get_exercise(ex_id)
@@ -881,17 +903,17 @@ async def _exm_finish_rename(answerer, state: FSMContext, ex_id: int, name: str)
 async def exm_name_entered(message: Message, state: FSMContext):
     name = message.text.strip()
     if not name:
-        await message.reply("Название не может быть пустым")
+        await message.reply(i18n.t("exercises.name.empty"))
         return
     reason = _suspicious_name_reason(name)
     if reason:
         await state.update_data(exm_pending_long_rename=name)
         kb = keyboards.yes_no_keyboard(
             yes_cb="exm:longrename:yes", no_cb="exm:longrename:no",
-            yes_text="✅ Да, переименовать", no_text="✏️ Написать заново",
+            yes_text=i18n.t("exercises.btn.confirm_rename"), no_text=i18n.t("exercises.btn.retype"),
         )
         await message.reply(
-            f"«{escape(name)}» — {reason}. Всё верно, переименовать?",
+            i18n.t("exercises.name.confirm_rename", name=escape(name), reason=reason),
             reply_markup=kb, parse_mode="HTML",
         )
         return
@@ -904,7 +926,7 @@ async def exm_rename_longname_confirmed(callback: CallbackQuery, state: FSMConte
     data = await state.get_data()
     name = data.get("exm_pending_long_rename")
     if not name:
-        await callback.answer("Название потерялось, напиши заново", show_alert=True)
+        await callback.answer(i18n.t("exercises.name.lost_retype"), show_alert=True)
         return
     await state.update_data(exm_pending_long_rename=None)
     with suppress(TelegramBadRequest):
@@ -922,7 +944,7 @@ async def exm_rename_longname_declined(callback: CallbackQuery, state: FSMContex
     with suppress(TelegramBadRequest):
         await callback.message.delete()
     await callback.message.answer(
-        f"Текущее название: <b>{escape(ex['name'])}</b>\n\nНапиши новое название упражнения:",
+        i18n.t("exercises.rename.prompt", name=escape(ex["name"])),
         reply_markup=keyboards.cancel_keyboard(f"exm:editmenu:{ex_id}"),
         parse_mode="HTML",
     )
@@ -940,15 +962,16 @@ async def exm_edit_group(callback: CallbackQuery, state: FSMContext):
     await state.set_state(ExerciseManage.editing_group)
     groups = await db.list_muscle_groups(callback.from_user.id)
     kb = keyboards.groups_keyboard(
-        groups, prefix="exmeditgrp", extra_buttons=[("❌ Отмена", f"exm:editmenu:{ex_id}")]
+        groups, prefix="exmeditgrp", extra_buttons=[(i18n.t("btn.cancel"), f"exm:editmenu:{ex_id}")]
     )
     current = await _exercise_group_name(ex)
     current_line = (
-        f"Текущая группа: <b>{escape(formatting.format_group(current))}</b>\n\n" if current else ""
+        i18n.t("exercises.group.current", group=escape(_group_display_name(current))) + "\n\n"
+        if current else ""
     )
     await ui.safe_edit(
         callback,
-        f"{current_line}Выбери новую группу мышц для «{escape(ex['display_name'])}»:",
+        f"{current_line}{i18n.t('exercises.group.pick_new', name=escape(ex['display_name']))}",
         reply_markup=kb,
         parse_mode="HTML",
     )
@@ -961,7 +984,7 @@ async def exm_edit_group(callback: CallbackQuery, state: FSMContext):
 async def exm_edit_group_picked(callback: CallbackQuery, state: FSMContext):
     raw = callback.data.split(":")[2]
     if raw == "all":
-        await callback.answer("Выбери конкретную группу", show_alert=True)
+        await callback.answer(i18n.t("exercises.group.pick_specific"), show_alert=True)
         return
     group_id = int(raw)
     data = await state.get_data()
@@ -973,7 +996,7 @@ async def exm_edit_group_picked(callback: CallbackQuery, state: FSMContext):
     await db.update_exercise_group(ex_id, group_id)
     await state.set_state(ExerciseManage.picking_exercise)
     ex = await db.get_exercise(ex_id)
-    await callback.answer("Перенёс в другую группу")
+    await callback.answer(i18n.t("exercises.group.moved"))
     text, kb = await _exercise_detail_payload(ex, state)
     await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML")
 
@@ -990,11 +1013,12 @@ async def exm_edit_description(callback: CallbackQuery, state: FSMContext):
         return
     await state.update_data(exm_exercise_id=ex_id)
     await state.set_state(ExerciseManage.editing_description)
-    current = f"\n\nТекущее описание:\n<i>{escape(ex['description'])}</i>" if ex["description"] else ""
+    current = (
+        i18n.t("exercises.description.current", text=escape(ex["description"])) if ex["description"] else ""
+    )
     await ui.safe_edit(
         callback,
-        f"Напиши описание/технику выполнения для «{escape(ex['display_name'])}».{current}\n\n"
-        "Пришли «-», чтобы убрать своё описание.",
+        i18n.t("exercises.description.prompt", name=escape(ex["display_name"]), current=current),
         reply_markup=keyboards.cancel_keyboard(f"exm:editmenu:{ex_id}"),
         parse_mode="HTML",
     )
@@ -1009,9 +1033,10 @@ async def exm_description_entered(message: Message, state: FSMContext):
         # хуже, чем сказать, сколько лишнего. Состояние остаётся — можно
         # переписать, не открывая карточку заново.
         await message.answer(
-            f"Описание длиннее {config.MAX_EXERCISE_DESCRIPTION_LENGTH} символов "
-            f"({len(description)}) — столько не влезает в подпись к фото. "
-            "Сократи и пришли снова."
+            i18n.t(
+                "exercises.description.too_long",
+                max=config.MAX_EXERCISE_DESCRIPTION_LENGTH, n=len(description),
+            )
         )
         return
     data = await state.get_data()
@@ -1043,13 +1068,12 @@ async def exm_archive_exercise_confirm(callback: CallbackQuery, state: FSMContex
     kb = keyboards.yes_no_keyboard(
         yes_cb=f"exm:archiveyes:{ex_id}",
         no_cb=f"exm:ex:{ex_id}",
-        yes_text="🗑 Архивировать",
-        no_text="❌ Отмена",
+        yes_text=i18n.t("exercises.btn.archive_yes"),
+        no_text=i18n.t("btn.cancel"),
     )
     await ui.safe_edit(
         callback,
-        f"Архивировать упражнение «{escape(ex['name'])}»? "
-        "Просто уберём его из списка выбора — история тренировок с ним останется.",
+        i18n.t("exercises.archive.confirm", name=escape(ex["name"])),
         reply_markup=kb,
     )
     await callback.answer()
@@ -1063,7 +1087,7 @@ async def exm_archive_exercise(callback: CallbackQuery, state: FSMContext):
         await ui.alert_exercise_not_found(callback)
         return
     await db.archive_exercise(ex_id)
-    await callback.answer("Архивировал упражнение")
+    await callback.answer(i18n.t("exercises.archive.done"))
     await _show_exercise_list(callback, state)
 
 
@@ -1075,12 +1099,8 @@ async def exm_archive_list(callback: CallbackQuery, state: FSMContext):
     items = [(f"exm:unarchive:{ex['id']}", ex["display_name"]) for ex in exercises]
     for row in keyboards.named_buttons(items):
         b.row(*row)
-    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="exm:backgroups"))
-    text = (
-        "🗄 <b>Архив</b>\n\nНажми на упражнение, чтобы вернуть его в список."
-        if exercises
-        else "🗄 <b>Архив</b>\n\nЗдесь пока пусто — архивированные упражнения появятся тут."
-    )
+    b.row(InlineKeyboardButton(text=i18n.t("btn.back"), callback_data="exm:backgroups"))
+    text = i18n.t("exercises.archive.list" if exercises else "exercises.archive.empty")
     await ui.safe_edit(callback, text, reply_markup=b.as_markup(), parse_mode="HTML")
     await callback.answer()
 
@@ -1093,7 +1113,7 @@ async def exm_unarchive_exercise(callback: CallbackQuery, state: FSMContext):
         await ui.alert_exercise_not_found(callback)
         return
     await db.unarchive_exercise(ex_id)
-    await callback.answer("Вернул упражнение из архива")
+    await callback.answer(i18n.t("exercises.archive.restored"))
     await exm_archive_list(callback, state)
 
 
@@ -1102,7 +1122,7 @@ async def exm_new_group(callback: CallbackQuery, state: FSMContext):
     await state.set_state(ExerciseManage.new_group_name)
     await ui.safe_edit(
         callback,
-        "Напиши название новой группы мышц:",
+        i18n.t("exercises.new_group.prompt"),
         reply_markup=keyboards.cancel_keyboard("exm:backgroups"),
     )
     await callback.answer()
@@ -1112,7 +1132,7 @@ async def exm_new_group(callback: CallbackQuery, state: FSMContext):
 async def exm_new_group_entered(message: Message, state: FSMContext):
     name = message.text.strip()
     if not name:
-        await message.reply("Не вижу названия — напиши хоть слово")
+        await message.reply(i18n.t("exercises.new_group.empty"))
         return
     await db.create_muscle_group(message.from_user.id, name)
     # One screen, not three: the group list itself shows the new group, so the

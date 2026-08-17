@@ -45,6 +45,7 @@ import analytics
 import config
 import db
 import formatting
+import i18n
 import keyboards
 import push_texts
 
@@ -97,13 +98,16 @@ class PushDecision:
 
 # Кнопка — последняя строка пуша, и она должна договаривать реплику тренера,
 # а не переключаться на голос интерфейса. Категории без своей строки получают
-# нейтральный DEFAULT_PUSH_CTA.
-DEFAULT_PUSH_CTA = "▶ Начать тренировку"
+# нейтральный DEFAULT_PUSH_CTA. Значения — ключи каталога (locales/*.json), не
+# готовый текст: кнопка рендерится в языке пуша (см. _deliver), и английская
+# CTA обязана договаривать английскую реплику, а не переводиться отдельно от
+# неё (TONE_OF_VOICE.md, раздел про CTA).
+DEFAULT_PUSH_CTA = "push.cta.default"
 PUSH_CTA_BY_CATEGORY: dict[str, str] = {
-    push_texts.STREAK_MILESTONE: "▶ Продолжаем серию",
-    push_texts.STREAK_AT_RISK: "▶ Спасти серию",
-    push_texts.RANK_NEAR: "▶ Добить до звания",
-    push_texts.NEWBIE_NUDGE: "▶ Первая тренировка",
+    push_texts.STREAK_MILESTONE: "push.cta.streak_milestone",
+    push_texts.STREAK_AT_RISK: "push.cta.streak_at_risk",
+    push_texts.RANK_NEAR: "push.cta.rank_near",
+    push_texts.NEWBIE_NUDGE: "push.cta.newbie_nudge",
 }
 
 
@@ -197,19 +201,29 @@ def is_plateau(sessions: list[analytics.SessionStats]) -> bool:
 
 
 def _weeks_phrase(weeks: int) -> str:
-    """"6 недель"/"4 недели" — templates take the phrase whole so the copy never
-    glues a bare number to a hardcoded (and for 2-4 wrong) "недель"."""
-    return f"{weeks} {formatting.plural_ru(weeks, ('неделя', 'недели', 'недель'))}"
+    """"6 недель"/"6 weeks" — templates take the phrase whole so the copy never
+    glues a bare number to a hardcoded (and for ru's 2-4 wrong) plural word.
+
+    `push.phrase.weeks` is an ICU plural template (locales/*.json) with no
+    surrounding text, so rendering it just yields the branch for `n` with `#`
+    substituted — i18n.t() picks the branch for the caller's ambient language
+    (i18n.use_lang(...), set per user by _send_daily_pushes) the same way
+    analytics.Rank.name does.
+    """
+    return i18n.t("push.phrase.weeks", n=weeks)
 
 
 def _workouts_phrase(count: int) -> str:
-    return f"{count} {formatting.plural_ru(count, ('тренировка', 'тренировки', 'тренировок'))}"
+    return i18n.t("push.phrase.workouts", n=count)
 
 
 def format_tonnage(kg: float) -> str:
+    # Суффикс — из каталога (push.tonnage.*), а не хардкод: "т"/"кг" на
+    # русском, "t"/"kg" на английском, тот же ambient-язык, что и остальной
+    # текст пуша.
     if kg >= 1000:
-        return f"{kg / 1000:.1f}т"
-    return f"{kg:.0f}кг"
+        return f"{kg / 1000:.1f}{i18n.t('push.tonnage.ton_suffix')}"
+    return f"{kg:.0f}{i18n.t('push.tonnage.kg_suffix')}"
 
 
 # ---------- orchestration (I/O) ----------
@@ -264,7 +278,7 @@ async def build_daily_push(telegram_id: int, today: dt.date) -> Optional[PushDec
             telegram_id,
             push_texts.STREAK_AT_RISK,
             weeks=_weeks_phrase(dashboard.week_streak),
-            days_left="сегодня и завтра" if today.weekday() == 5 else "последний день",
+            days_left=i18n.t("push.days_left.weekend" if today.weekday() == 5 else "push.days_left.default"),
         )
         return PushDecision(push_texts.STREAK_AT_RISK, text)
 
@@ -306,24 +320,24 @@ async def build_daily_push(telegram_id: int, today: dt.date) -> Optional[PushDec
                 # аналитикой то появлялась, то нет — в зависимости от того,
                 # ответила ли модель.
                 return PushDecision(push_texts.AI_WEEKLY, ai_text, with_cta=False)
-            week_word = formatting.plural_ru(dashboard.this_week, ("тренировка", "тренировки", "тренировок"))
             # None when no weekday clearly stands out — pick_text then drops the
             # variant that would have claimed one, instead of asserting a habit
             # the history doesn't show.
             best_weekday = analytics.most_frequent_weekday(dates)
-            # The "это примерно один синий кит" line is only true near a whale's
-            # actual weight (~100-150 t) — see push_texts.WHALE_MIN_TONNAGE_KG.
-            # tonnage_since() returns the user's own unit (kg or lb), same as
-            # _find_rank_near converts before comparing against a kg threshold.
+            # The "это примерно один синий кит"/"about one blue whale" line is
+            # only true near a whale's actual weight (~100-150 t) — see
+            # push_texts.WHALE_MIN_TONNAGE_KG. tonnage_since() returns the
+            # user's own unit (kg or lb), same as _find_rank_near converts
+            # before comparing against a kg threshold.
             user = await db.get_user(telegram_id)
             tonnage_kg = formatting.to_kg(tonnage, user["unit"] if user else "kg")
             text = await push_texts.pick_text(
                 telegram_id, push_texts.WEEKLY_DIGEST,
-                tonnage=format_tonnage(tonnage), week_count=f"{dashboard.this_week} {week_word}",
+                tonnage=format_tonnage(tonnage), week_count=_workouts_phrase(dashboard.this_week),
                 best_day=(
-                    formatting.WEEKDAY_NAMES_RU[best_weekday] if best_weekday is not None else None
+                    i18n.t(f"push.weekday.{best_weekday}") if best_weekday is not None else None
                 ),
-                whale="один синий кит" if tonnage_kg >= push_texts.WHALE_MIN_TONNAGE_KG else None,
+                whale=i18n.t("push.phrase.whale") if tonnage_kg >= push_texts.WHALE_MIN_TONNAGE_KG else None,
             )
             return PushDecision(push_texts.WEEKLY_DIGEST, text, with_cta=False)
 
@@ -397,14 +411,25 @@ async def _deliver(
     blip, a 429 from sending without pause) aborted the whole tick: everyone
     after the failing recipient got nothing, and by the next tick their send
     hour had passed. /broadcast learned this already — same treatment here.
+
+    The caller (`_send_daily_pushes`) already wraps this call in
+    `i18n.use_lang(user['lang'])` for the same recipient, so the CTA key
+    handed to `keyboards.push_cta_keyboard` below (which does the actual
+    `i18n.t()`) resolves in the push's own language without a second user
+    fetch just for that.
     """
     global _push_image_file_id
     user = await db.get_user(telegram_id)
     show_tz_hint = _should_show_tz_hint(user)
-    cta_text = PUSH_CTA_BY_CATEGORY.get(decision.category, DEFAULT_PUSH_CTA) if decision.with_cta else None
+    cta_key = PUSH_CTA_BY_CATEGORY.get(decision.category, DEFAULT_PUSH_CTA) if decision.with_cta else None
+    # push_cta_keyboard сама зовёт i18n.t() на этом ключе (см. её докстринг) —
+    # резолвить его здесь ещё раз значило бы переводить уже готовый текст,
+    # который отсутствующий ключ вернул бы сам собой, тихо съедая настоящую
+    # пропажу ключа под чужой WARNING в i18n._warned_missing_keys.
+    #
     # Клавиатура теперь есть у любого пуша: у дайджеста своей CTA нет, но и
     # тупиком он быть не должен — там встаёт «🏠 Меню» (см. push_cta_keyboard).
-    kb = keyboards.push_cta_keyboard(cta_text, with_tz_hint=show_tz_hint)
+    kb = keyboards.push_cta_keyboard(cta_key, with_tz_hint=show_tz_hint)
     try:
         message = await _send_push_photo(bot, telegram_id, decision, kb)
     except TelegramForbiddenError:
@@ -556,6 +581,16 @@ async def _send_daily_pushes(bot: Bot) -> None:
     идёт в 09:00 UTC, а в этот момент календарная дата одна и та же на всём
     диапазоне поясов аудитории (09:00 + 12 < 24). Так что «один пуш в день»
     остаётся честным и для него.
+
+    Один тик проходит по МНОГИМ пользователям подряд в одной задаче — точно
+    так же, как ai_trainer.weekly_digest предупреждает в своём докстринге про
+    контекст, которого тут физически нет. Без явной установки языка на
+    каждого текст пуша (заголовок «ПРИВЕТ АТЛЕТ!»/«YO ATHLETE!», сами варианты
+    из push_texts, CTA-кнопка) достался бы всем на языке того пользователя,
+    который в цикле оказался первым — contextvar `i18n.current_lang` держит
+    одно значение на весь async-таск, а не per-await. Поэтому здесь, а не
+    внутри build_daily_push/_deliver, ставим язык явно на каждую итерацию —
+    `i18n.use_lang(...)` тем же приёмом, что и weekly_digest.
     """
     hour = config.ENGAGEMENT_HOUR
 
@@ -577,24 +612,28 @@ async def _send_daily_pushes(bot: Bot) -> None:
     ]
 
     for telegram_id, local_date in due:
-        try:
-            decision = await build_daily_push(telegram_id, local_date)
-        except Exception:
-            logger.exception("Failed to build push for user %s", telegram_id)
-            continue
-        if decision is not None:
-            await _deliver(bot, telegram_id, decision, local_date)
-            await asyncio.sleep(SEND_DELAY)
+        user = await db.get_user(telegram_id)
+        with i18n.use_lang(user["lang"] if user else i18n.DEFAULT_LANG):
+            try:
+                decision = await build_daily_push(telegram_id, local_date)
+            except Exception:
+                logger.exception("Failed to build push for user %s", telegram_id)
+                continue
+            if decision is not None:
+                await _deliver(bot, telegram_id, decision, local_date)
+                await asyncio.sleep(SEND_DELAY)
 
     for telegram_id, created_at, local_date in due_newbies:
-        try:
-            decision = await build_newbie_push(telegram_id, created_at, local_date)
-        except Exception:
-            logger.exception("Failed to build newbie push for user %s", telegram_id)
-            continue
-        if decision is not None:
-            await _deliver(bot, telegram_id, decision, local_date)
-            await asyncio.sleep(SEND_DELAY)
+        user = await db.get_user(telegram_id)
+        with i18n.use_lang(user["lang"] if user else i18n.DEFAULT_LANG):
+            try:
+                decision = await build_newbie_push(telegram_id, created_at, local_date)
+            except Exception:
+                logger.exception("Failed to build newbie push for user %s", telegram_id)
+                continue
+            if decision is not None:
+                await _deliver(bot, telegram_id, decision, local_date)
+                await asyncio.sleep(SEND_DELAY)
 
     try:
         await _maybe_send_admin_funnel_digest(bot)

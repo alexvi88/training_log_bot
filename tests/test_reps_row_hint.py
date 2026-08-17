@@ -10,6 +10,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
 
+import i18n
 from fsm import WorkoutFlow
 from handlers import workout
 
@@ -113,7 +114,7 @@ async def test_hint_absent_when_the_row_itself_is_absent(fresh_db, user_id):
 
 
 async def test_claim_fires_exactly_three_times_per_account(fresh_db, user_id):
-    text = workout._REPS_ROW_HINT_TEXT
+    text = i18n.t("workout.reps_row_hint_text")
     seen = [await workout._maybe_reps_row_hint(user_id) for _ in range(5)]
     assert seen == [text, text, text, "", ""]
 
@@ -122,7 +123,7 @@ async def test_hint_ack_survives_the_nightly_prune(fresh_db, user_id):
     """prune_old_limit_acks (admin_tasks.py) чистит ai_limit_ack по date < cutoff
     раз в сутки — счётчик показов живёт там же (has_limit_ack/record_limit_ack),
     но с фиктивной «датой»-сентинелом, которую настоящий cutoff не достаёт."""
-    text = workout._REPS_ROW_HINT_TEXT
+    text = i18n.t("workout.reps_row_hint_text")
     await workout._maybe_reps_row_hint(user_id)
 
     deleted = await fresh_db.prune_old_limit_acks(keep_days=7)

@@ -4,6 +4,7 @@ import datetime as dt
 
 import analytics
 import db
+import i18n
 from formatting import BlockView, ExerciseBlockView
 
 
@@ -39,7 +40,7 @@ async def build_block_views(
 
     async def group_info(group_id: int | None) -> str:
         if group_id is None:
-            return "без группы"
+            return i18n.t("view.no_group")
         if group_id not in group_cache:
             g = await db.get_muscle_group(group_id)
             group_cache[group_id] = g["name"] if g else "?"

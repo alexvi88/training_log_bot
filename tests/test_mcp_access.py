@@ -38,7 +38,7 @@ def _callback(user_id: int, data: str):
     message.answer = AsyncMock(return_value=SimpleNamespace(message_id=11))
     callback = MagicMock(spec=CallbackQuery)
     callback.answer = AsyncMock()
-    callback.from_user = SimpleNamespace(id=user_id, username="tester")
+    callback.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     callback.message = message
     callback.data = data
     callback.answer = AsyncMock()
@@ -48,7 +48,7 @@ def _callback(user_id: int, data: str):
 def _message(user_id: int):
     msg = MagicMock()
     msg.chat = SimpleNamespace(id=user_id)
-    msg.from_user = SimpleNamespace(id=user_id, username="tester")
+    msg.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     msg.answer = AsyncMock(return_value=SimpleNamespace(message_id=12))
     return msg
 

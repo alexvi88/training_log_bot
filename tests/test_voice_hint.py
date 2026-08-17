@@ -19,7 +19,7 @@ def _make_message(user_id: int, text: str, message_id: int):
     msg = MagicMock()
     msg.chat = SimpleNamespace(id=user_id)
     msg.message_id = message_id
-    msg.from_user = SimpleNamespace(id=user_id, username="tester")
+    msg.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     msg.text = text
     msg.delete = AsyncMock()
     msg.reply = AsyncMock()

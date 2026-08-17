@@ -491,7 +491,7 @@ async def test_a_user_without_workouts_gets_the_onboarding_text(fresh_db, user_i
     text, png = await workout_handlers._menu_view(user_id)
 
     assert png is None
-    assert text == workout_handlers._ONBOARDING
+    assert text == workout_handlers._onboarding()
 
 
 async def test_new_sets_in_a_closed_workout_refresh_the_summary(fresh_db, user_id):

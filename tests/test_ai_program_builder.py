@@ -457,7 +457,7 @@ async def test_saving_a_draft_persists_the_progression_rule(fresh_db, user_id, m
     message = MagicMock()
     message.edit_text = AsyncMock()
     callback = MagicMock()
-    callback.from_user = SimpleNamespace(id=user_id, username="tester")
+    callback.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     callback.message = message
     callback.data = "ai:prog:save:1"
     callback.answer = AsyncMock()

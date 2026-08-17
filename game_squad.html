@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Кач-Отряд</title>
+<title data-i18n="title">Кач-Отряд</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <script src="/assets/game/three.min.js"
         onload="window.dispatchEvent(new Event('three-ready'))"
@@ -149,8 +149,8 @@ if (window.THREE) {
 <!-- ЭКРАН 0: графика не завелась -->
 <div id="screen-libfail" class="screen">
   <div class="screen-inner">
-    <h1>Зал закрыт</h1>
-    <div class="subtitle">Не смог поднять картинку в зале — движок не отозвался.<br>
+    <h1 data-i18n="libfailTitle">Зал закрыт</h1>
+    <div class="subtitle" data-i18n-html="libfailSubtitle">Не смог поднять картинку в зале — движок не отозвался.<br>
       Обнови страницу, обычно помогает. Если нет — загляни чуть позже.</div>
   </div>
 </div>
@@ -158,11 +158,11 @@ if (window.THREE) {
 <!-- ЭКРАН 1: выбор качка -->
 <div id="screen-select" class="screen active">
   <div class="screen-inner">
-    <h1>Кач-Отряд</h1>
-    <div class="subtitle">Веди отряд по залу, дроби блины на подходе, лови ворота с плюсом —
+    <h1 data-i18n="title">Кач-Отряд</h1>
+    <div class="subtitle" data-i18n-html="subtitle">Веди отряд по залу, дроби блины на подходе, лови ворота с плюсом —
       <b>я с трибуны считаю, сколько народу дойдёт до финиша.</b> Кем поведёшь?</div>
     <div class="fighters-row" id="fighters-row"></div>
-    <div class="controls-hint">
+    <div class="controls-hint" data-i18n-html="controls">
       <b>тяни пальцем влево-вправо</b> — ведёшь весь отряд<br>
       <b>← → / A D</b> — то же самое, если играешь с клавиатуры
     </div>
@@ -172,14 +172,14 @@ if (window.THREE) {
 <!-- ЭКРАН 2: результат -->
 <div id="screen-result" class="screen">
   <div class="screen-inner">
-    <div class="result-title">Отказ</div>
+    <div class="result-title" data-i18n="resultTitle">Отказ</div>
     <img id="result-art" src="" alt="">
     <div class="result-score" id="result-score">0 м · 🥤 0</div>
     <div class="result-stats" id="result-stats"></div>
     <div class="result-quip" id="result-quip"></div>
     <div class="result-best" id="result-best"></div>
-    <button class="result-btn retry" onclick="restartGame()">🔄 Ещё разок</button>
-    <button class="result-btn" onclick="submitAndClose()">❌ Закрыть</button>
+    <button class="result-btn retry" onclick="restartGame()" data-i18n="retryBtn">🔄 Ещё разок</button>
+    <button class="result-btn" onclick="submitAndClose()" data-i18n="closeBtn">❌ Закрыть</button>
     <div id="result-status"></div>
   </div>
 </div>
@@ -189,14 +189,101 @@ if (window.THREE) {
 // Expand to full screen immediately (как в game.html)
 if (window.Telegram?.WebApp) Telegram.WebApp.expand();
 
+// ── ЯЗЫК (тот же приём, что в game.html — см. комментарий там) ──────────────
+const LANG = (function () {
+  try {
+    // ?lang= из ссылки — это выбор пользователя (users.lang), он главнее
+    // языка клиента: человек с русским телефоном мог выбрать English.
+    const fromUrl = new URLSearchParams(window.location.search).get('lang');
+    if (fromUrl === 'ru' || fromUrl === 'en') return fromUrl;
+    const raw = window.Telegram?.WebApp?.initDataUnsafe?.user?.language_code || navigator.language || 'ru';
+    const base = String(raw).toLowerCase().replace('_', '-').split('-')[0];
+    const cyrillicSphere = new Set(['ru', 'uk', 'be', 'kk', 'ky', 'hy', 'az', 'uz']);
+    return cyrillicSphere.has(base) ? 'ru' : 'en';
+  } catch (e) { return 'ru'; }
+})();
+document.documentElement.lang = LANG;
+
+const STR = {
+  title: ['Кач-Отряд', 'Gym Squad'],
+  libfailTitle: ['Зал закрыт', 'Gym is closed'],
+  libfailSubtitle: [
+    'Не смог поднять картинку в зале — движок не отозвался.<br>Обнови страницу, обычно помогает. Если нет — загляни чуть позже.',
+    "Couldn't load the gym visuals — the engine didn't respond.<br>Refresh the page, that usually helps. If not, check back a bit later.",
+  ],
+  subtitle: [
+    'Веди отряд по залу, дроби блины на подходе, лови ворота с плюсом —\n      <b>я с трибуны считаю, сколько народу дойдёт до финиша.</b> Кем поведёшь?',
+    "Lead the squad through the gym, split plates on approach, grab the plus gates —\n      <b>I'm counting from the stands how many make it to the finish.</b> Who's leading?",
+  ],
+  controls: [
+    '<b>тяни пальцем влево-вправо</b> — ведёшь весь отряд<br>\n      <b>← → / A D</b> — то же самое, если играешь с клавиатуры',
+    "<b>drag left-right</b> — steers the whole squad<br>\n      <b>← → / A D</b> — same thing on a keyboard",
+  ],
+  resultTitle: ['Отказ', 'Failure'],
+  retryBtn: ['🔄 Ещё разок', '🔄 One more run'],
+  closeBtn: ['❌ Закрыть', '❌ Close'],
+  greeting: ['ПРИВЕТ АТЛЕТ! ', 'YO ATHLETE! '],
+  unit: ['м', 'm'],
+  hudRecord: ['рекорд ', 'record '],
+  resultBest: ['рекорд: ', 'record: '],
+  resultStats: ['макс. отряд: ', 'max squad: '],
+  localPrototype: [
+    'это локальный прототип — результат никуда не отправляю',
+    "local prototype — I'm not sending this anywhere",
+  ],
+  logging: ['Записываю...', 'Logging...'],
+  notLogged: ['❌ Не записал — жми ещё раз', "❌ Didn't log it — hit it again"],
+  logged: ['✅ Записал', '✅ Logged it'],
+  streakGained: ['СЕРИЯ ×', 'STREAK ×'],
+  streakBroken: ['СЕРИЯ СБИТА', 'STREAK BROKEN'],
+  weaponBroke: ['ОРУЖИЕ СГОРЕЛО', 'WEAPON BURNED OUT'],
+  weaponDowngraded: ['ОРУЖИЕ ОСЛАБЛО: ', 'WEAPON DOWNGRADED: '],
+  waveCleared: ['ВОЛНА СМЕТЕНА +', 'WAVE CLEARED +'],
+  beltSaved: ['ПОЯС СПАС', 'BELT SAVED YOU'],
+  missed: ['МИМО', 'MISSED'],
+  pressBar: ['ЖМИ ШТАНГУ!', 'PRESS THE BAR!'],
+  barTaken: ['ШТАНГА ВЗЯТА! +40', 'BAR TAKEN! +40'],
+  leaderBroken: ['ВОЖАК СЛОМЛЕН · −', 'LEADER BROKEN · −'],
+  giantDown: ['ГИГАНТ ПОВЕРЖЕН · −', 'GIANT DOWNED · −'],
+  enemyPushed: ['ПРОДАВИЛИ ВРАГА · −', 'PUSHED THE ENEMY BACK · −'],
+  preworkoutRage: ['ПРЕДТРЕН! ЯРОСТЬ', 'PRE-WORKOUT! RAGE'],
+  shieldBelt: ['ЩИТ: ПОЯС', 'SHIELD: BELT'],
+  hudSquad: ['ОТРЯД', 'SQUAD'],
+  hudStreak: ['серия ', 'streak '],
+  hudRage: ['ЯРОСТЬ', 'RAGE'],
+  hudGiant: ['ГИГАНТ · ', 'GIANT · '],
+  hudBar: ['ШТАНГА · ', 'BAR · '],
+  seconds: [' с', ' s'],
+  weaponShaker: ['ШЕЙКЕР', 'SHAKER'],
+  weaponExpander: ['ЭСПАНДЕР', 'EXPANDER'],
+  weaponShotgun: ['ГАНТЕЛЬНЫЙ ДРОБОВИК', 'DUMBBELL SHOTGUN'],
+  weaponPlategun: ['БЛИНОСТРЕЛ', 'PLATE CANNON'],
+  weaponBargun: ['ГРИФ-ПУЛЕМЁТ', 'BAR MACHINE GUN'],
+  itemPreworkout: ['ПРЕДТРЕН', 'PRE'],
+  itemBelt: ['ПОЯС', 'BELT'],
+  enemyRunner: ['БЕГУН', 'RUNNER'],
+  enemyBruiser: ['ТЯЖЕЛОВЕС', 'BRUISER'],
+  enemyShield: ['ЩИТОВИК', 'SHIELDER'],
+  enemyShooter: ['СТРЕЛОК', 'SHOOTER'],
+  enemyLeader: ['ВОЖАК', 'LEADER'],
+  enemyGiant: ['ГИГАНТ', 'GIANT'],
+};
+function tr(key) {
+  const pair = STR[key];
+  return pair ? pair[LANG === 'en' ? 1 : 0] : key;
+}
+document.title = tr('title');
+document.querySelectorAll('[data-i18n]').forEach(el => { el.textContent = tr(el.dataset.i18n); });
+document.querySelectorAll('[data-i18n-html]').forEach(el => { el.innerHTML = tr(el.dataset.i18nHtml); });
+
 // ── КАЧКИ (набор и рисовалка — как в game.html, страница самостоятельная) ───
 // Насыщенные тёплые цвета — своя команда должна читаться боковым зрением как
 // один тёплый лагерь против холодной вражеской толпы (см. ENEMY_TYPES ниже).
 const FIGHTERS = {
-  power:  { name: 'Пауэрлифтер', tag: 'сила',         top: '#e8432a', bottom: '#2b2d34', skin: '#e0b08a', head: 'bandana',  hair: '#31241c', acc: '#ffb83d', belt: true, bulk: 1.18 },
-  cross:  { name: 'Кроссфитер',  tag: 'функционалка', top: '#ff8c3c', bottom: '#31343d', skin: '#caa27e', head: 'headband', hair: '#20180f', acc: '#fff3df', bulk: 1.0 },
-  wrestle:{ name: 'Борец',       tag: 'захват',       top: '#e0245e', bottom: '#e0245e', skin: '#dba184', head: 'short',    hair: '#2a1f16', acc: '#e0245e', singlet: true, ears: true, bulk: 1.12 },
-  build:  { name: 'Бодибилдер',  tag: 'мышцы',        top: '#e8a34d', bottom: '#23252c', skin: '#e8a34d', head: 'short',    hair: '#241a12', acc: '#ffcc33', shirtless: true, bulk: 1.22 },
+  power:  { name: LANG === 'en' ? 'Powerlifter' : 'Пауэрлифтер', tag: LANG === 'en' ? 'strength' : 'сила',         top: '#e8432a', bottom: '#2b2d34', skin: '#e0b08a', head: 'bandana',  hair: '#31241c', acc: '#ffb83d', belt: true, bulk: 1.18 },
+  cross:  { name: LANG === 'en' ? 'Crossfitter' : 'Кроссфитер',  tag: LANG === 'en' ? 'conditioning' : 'функционалка', top: '#ff8c3c', bottom: '#31343d', skin: '#caa27e', head: 'headband', hair: '#20180f', acc: '#fff3df', bulk: 1.0 },
+  wrestle:{ name: LANG === 'en' ? 'Wrestler' : 'Борец',       tag: LANG === 'en' ? 'grip' : 'захват',       top: '#e0245e', bottom: '#e0245e', skin: '#dba184', head: 'short',    hair: '#2a1f16', acc: '#e0245e', singlet: true, ears: true, bulk: 1.12 },
+  build:  { name: LANG === 'en' ? 'Bodybuilder' : 'Бодибилдер',  tag: LANG === 'en' ? 'mass' : 'мышцы',        top: '#e8a34d', bottom: '#23252c', skin: '#e8a34d', head: 'short',    hair: '#241a12', acc: '#ffcc33', shirtless: true, bulk: 1.22 },
 };
 let selectedFighter = 'power';
 
@@ -479,12 +566,12 @@ function comboHit() {
   const step = Math.min(12, combo);
   beep(480 * Math.pow(2, step / 12), .045, 'triangle', .03, 0, 'combo');
   if (combo === 5 || combo === 10 || combo === 20 || (combo > 20 && combo % 15 === 0)) {
-    popNumber('СЕРИЯ ×' + comboMult(), C_GOLD, W / 2, H * 0.24, true);
+    popNumber(tr('streakGained') + comboMult(), C_GOLD, W / 2, H * 0.24, true);
   }
 }
 function comboMult() { return 1 + Math.min(4, Math.floor(combo / 5)); }
 function comboBreak() {
-  if (combo >= 5) { thud(260, 70, .2, .07); popNumber('СЕРИЯ СБИТА', '#ff8a4a', W / 2, H * 0.24); }
+  if (combo >= 5) { thud(260, 70, .2, .07); popNumber(tr('streakBroken'), '#ff8a4a', W / 2, H * 0.24); }
   combo = 0;
 }
 
@@ -512,11 +599,11 @@ const toasts = [];
 // стартового шейкера) — сгорает по таймеру или ступенью вниз от сильного
 // удара, поэтому за ящиками нужно охотиться постоянно.
 const WEAPONS = [
-  { key: 'shaker',     name: 'ШЕЙКЕР',              fireMult: 1.0,  dmgMult: 1.0,  pellets: 1, spread: 0,    pierce: 1, dur: 0,  color: '#e94f64' },
-  { key: 'expander',   name: 'ЭСПАНДЕР',            fireMult: 1.1,  dmgMult: 0.62, pellets: 3, spread: 0.09, pierce: 1, dur: 16, color: '#7ea8ff' },
-  { key: 'shotgun',    name: 'ГАНТЕЛЬНЫЙ ДРОБОВИК', fireMult: 0.5,  dmgMult: 1.5,  pellets: 5, spread: 0.20, pierce: 1, dur: 14, color: '#67c26a' },
-  { key: 'plategun',   name: 'БЛИНОСТРЕЛ',          fireMult: 0.62, dmgMult: 2.1,  pellets: 1, spread: 0,    pierce: 3, dur: 13, color: '#ffb347' },
-  { key: 'bargun',     name: 'ГРИФ-ПУЛЕМЁТ',        fireMult: 3.4,  dmgMult: 0.42, pellets: 1, spread: 0.05, pierce: 1, dur: 11, color: C_GOLD },
+  { key: 'shaker',     name: tr('weaponShaker'),    fireMult: 1.0,  dmgMult: 1.0,  pellets: 1, spread: 0,    pierce: 1, dur: 0,  color: '#e94f64' },
+  { key: 'expander',   name: tr('weaponExpander'),  fireMult: 1.1,  dmgMult: 0.62, pellets: 3, spread: 0.09, pierce: 1, dur: 16, color: '#7ea8ff' },
+  { key: 'shotgun',    name: tr('weaponShotgun'),   fireMult: 0.5,  dmgMult: 1.5,  pellets: 5, spread: 0.20, pierce: 1, dur: 14, color: '#67c26a' },
+  { key: 'plategun',   name: tr('weaponPlategun'),  fireMult: 0.62, dmgMult: 2.1,  pellets: 1, spread: 0,    pierce: 3, dur: 13, color: '#ffb347' },
+  { key: 'bargun',     name: tr('weaponBargun'),    fireMult: 3.4,  dmgMult: 0.42, pellets: 1, spread: 0.05, pierce: 1, dur: 11, color: C_GOLD },
 ];
 let weaponLevel = 0, weaponTimer = 0;
 // Сильный удар «сжигает» ступень оружия сразу, а не только по таймеру —
@@ -526,7 +613,7 @@ function weaponBurn(loss) {
     weaponLevel = Math.max(0, weaponLevel - 1);
     weaponTimer = weaponLevel > 0 ? WEAPONS[weaponLevel].dur : 0;
     sWeaponDown();
-    popNumber('ОРУЖИЕ СГОРЕЛО', '#ff8a4a', W / 2, H * 0.24);
+    popNumber(tr('weaponBroke'), '#ff8a4a', W / 2, H * 0.24);
   }
 }
 
@@ -559,7 +646,14 @@ function resetGame() {
 // Тексты — TONE_OF_VOICE.md: тренер от первого лица, на «ты», без подколок
 // (проигрыш в игре — не пропуск тренировки, значит только поддержка).
 // Формула «ПРИВЕТ АТЛЕТ!» — строго, без имени и без запятой.
-const QUIPS = [
+const QUIPS = LANG === 'en' ? [
+  ' of your squad made it to the finish with you — heavy fire out there.',
+  ' held the line in the squad — I counted every one from the stands.',
+  ' — solid pace, line up for the next run.',
+  ' — the squad thinned out at the plates, but you held formation.',
+  ' — logged the run, one more go.',
+  ' left in the squad at the end — that\'s a solid crowd.',
+] : [
   ' качков дошло с тобой до финиша — плотный был огонь.',
   ' человек держались в отряде — я с трибуны считал каждого.',
   ' — темп плотный, заходи на следующий подход.',
@@ -933,8 +1027,8 @@ function spawnBoss() {
 
 // ── БОНУСЫ ───────────────────────────────────────────────────────────────────
 const BONUS_TYPES = {
-  preworkout: { color: C_RAGE, label: 'ПРЕДТРЕН' },
-  belt:       { color: '#7ea8ff', label: 'ПОЯС' },
+  preworkout: { color: C_RAGE, label: tr('itemPreworkout') },
+  belt:       { color: '#7ea8ff', label: tr('itemBelt') },
   dumbbell:   { color: '#67c26a', label: '+5' },
 };
 function spawnBonus() {
@@ -966,15 +1060,15 @@ function spawnBonus() {
 // корона и массивные наручи (crown, наручи всегда рисуются вместе с ним),
 // гигант — гриф-дубина (barbell).
 const ENEMY_TYPES = {
-  runner:  { name: 'БЕГУН',     top: '#4ade80', skin: '#16803c', bottom: '#0f5c2c', scale: 0.80, hpUnit: 1,   dmgUnit: 1.3, speedMult: 1.65, gearProp: null,      outline: 0x00e5ff },
-  bruiser: { name: 'ТЯЖЕЛОВЕС', top: '#3b82f6', skin: '#1e40af', bottom: '#16297a', scale: 1.55, hpUnit: 13,  dmgUnit: 3.7, speedMult: 0.58, gearProp: 'fist',    outline: 0xff2fd1 },
-  shield:  { name: 'ЩИТОВИК',   top: '#22d3ee', skin: '#0e7490', bottom: '#0a5866', scale: 1.18, hpUnit: 17,  dmgUnit: 2.1, speedMult: 0.80, gearProp: 'plate',   outline: 0xffb347, blockDmg: 4.2 },
-  shooter: { name: 'СТРЕЛОК',   top: '#c026d3', skin: '#701a75', bottom: '#4c1259', scale: 0.95, hpUnit: 4,   dmgUnit: 0,   speedMult: 0.42, gearProp: 'javelin', outline: 0xfff23c, ranged: true, stopZ: 0.85 },
-  leader:  { name: 'ВОЖАК',     top: '#14b8a6', skin: '#0f766e', bottom: '#0b5852', scale: 2.05, hpUnit: 62,  dmgUnit: 6.6, speedMult: 0.55, gearProp: 'crown',   outline: 0xffd700, isLeader: true },
+  runner:  { name: tr('enemyRunner'),  top: '#4ade80', skin: '#16803c', bottom: '#0f5c2c', scale: 0.80, hpUnit: 1,   dmgUnit: 1.3, speedMult: 1.65, gearProp: null,      outline: 0x00e5ff },
+  bruiser: { name: tr('enemyBruiser'), top: '#3b82f6', skin: '#1e40af', bottom: '#16297a', scale: 1.55, hpUnit: 13,  dmgUnit: 3.7, speedMult: 0.58, gearProp: 'fist',    outline: 0xff2fd1 },
+  shield:  { name: tr('enemyShield'),  top: '#22d3ee', skin: '#0e7490', bottom: '#0a5866', scale: 1.18, hpUnit: 17,  dmgUnit: 2.1, speedMult: 0.80, gearProp: 'plate',   outline: 0xffb347, blockDmg: 4.2 },
+  shooter: { name: tr('enemyShooter'), top: '#c026d3', skin: '#701a75', bottom: '#4c1259', scale: 0.95, hpUnit: 4,   dmgUnit: 0,   speedMult: 0.42, gearProp: 'javelin', outline: 0xfff23c, ranged: true, stopZ: 0.85 },
+  leader:  { name: tr('enemyLeader'),  top: '#14b8a6', skin: '#0f766e', bottom: '#0b5852', scale: 2.05, hpUnit: 62,  dmgUnit: 6.6, speedMult: 0.55, gearProp: 'crown',   outline: 0xffd700, isLeader: true },
   // Гигант — редкое рубежное событие внутри волны, не рядовой тип: гриф со
   // штангой как дубина, огромный запас хода и здоровья, идёт медленно и
   // виден издалека — заставляет копить оружие и маневрировать, а не отстреливаться на бегу.
-  giant:   { name: 'ГИГАНТ',    top: '#475569', skin: '#1e293b', bottom: '#0f172a', scale: 3.3,  hpUnit: 480, dmgUnit: 22,  speedMult: 0.30, gearProp: 'barbell', outline: 0xff3b30, isGiant: true },
+  giant:   { name: tr('enemyGiant'),   top: '#475569', skin: '#1e293b', bottom: '#0f172a', scale: 3.3,  hpUnit: 480, dmgUnit: 22,  speedMult: 0.30, gearProp: 'barbell', outline: 0xff3b30, isGiant: true },
 };
 const ENEMY_TYPE_KEYS = Object.keys(ENEMY_TYPES);
 // Какие типы уже "в ходу" на этой дистанции — состав волны меняется по мере
@@ -1297,7 +1391,7 @@ function drawObstacleLabels() {
           hctx.fillStyle = 'rgba(255,255,255,0.12)'; hctx.fillRect(bx0, by, bw, 14);
           hctx.fillStyle = 'rgba(255,140,40,' + (0.55 + 0.45 * frac) + ')'; hctx.fillRect(bx0, by, bw * frac, 14);
           hctx.font = "800 12px 'Courier New', monospace"; hctx.fillStyle = CHALK; hctx.textAlign = 'center';
-          hctx.fillText('ГИГАНТ · ' + fmt(Math.ceil(g.hp)), W / 2, by + 11);
+          hctx.fillText(tr('hudGiant') + fmt(Math.ceil(g.hp)), W / 2, by + 11);
           return;
         }
         const fs = Math.max(13, (def.isLeader ? 30 : 23) * fakeScale(g.z));
@@ -1311,11 +1405,11 @@ function drawObstacleLabels() {
       hctx.fillStyle = 'rgba(255,255,255,0.12)'; hctx.fillRect(bx0, by, bw, 14);
       hctx.fillStyle = 'rgba(255,80,60,' + (0.55 + 0.45 * frac) + ')'; hctx.fillRect(bx0, by, bw * frac, 14);
       hctx.font = "800 12px 'Courier New', monospace"; hctx.fillStyle = CHALK; hctx.textAlign = 'center';
-      hctx.fillText('ШТАНГА · ' + fmt(Math.ceil(o.hp)), W / 2, by + 11);
+      hctx.fillText(tr('hudBar') + fmt(Math.ceil(o.hp)), W / 2, by + 11);
       const tfrac = o.timer / BOSS_PRESS_TIME;
       hctx.fillStyle = tfrac < 0.25 ? '#ff4444' : C_GOLD;
       hctx.font = "900 15px 'Courier New', monospace";
-      hctx.fillText(fmt(Math.ceil(o.timer)) + ' с', W / 2, by + 34);
+      hctx.fillText(fmt(Math.ceil(o.timer)) + tr('seconds'), W / 2, by + 34);
     }
   });
 }
@@ -1995,10 +2089,10 @@ function finishToResult(d, sc, sq) {
     else art.style.display = 'none';
   };
   art.src = '/assets/game/' + selectedFighter + '.jpg';
-  document.getElementById('result-score').textContent = d + ' м · 🥤 ' + sc;
-  document.getElementById('result-stats').textContent = 'макс. отряд: ' + sq;
-  document.getElementById('result-quip').textContent = 'ПРИВЕТ АТЛЕТ! ' + sq + pick(QUIPS);
-  document.getElementById('result-best').textContent = 'рекорд: ' + best + ' м';
+  document.getElementById('result-score').textContent = d + ' ' + tr('unit') + ' · 🥤 ' + sc;
+  document.getElementById('result-stats').textContent = tr('resultStats') + sq;
+  document.getElementById('result-quip').textContent = tr('greeting') + sq + pick(QUIPS);
+  document.getElementById('result-best').textContent = tr('resultBest') + best + ' ' + tr('unit');
   document.getElementById('result-status').textContent = '';
   state = 'result';
   showScreen('screen-result');
@@ -2027,14 +2121,14 @@ async function submitResult(result) {
 async function submitAndClose() {
   const statusEl = document.getElementById('result-status');
   if (!window.Telegram?.WebApp) {
-    statusEl.textContent = 'это локальный прототип — результат никуда не отправляю';
+    statusEl.textContent = tr('localPrototype');
     return;
   }
   if (lastResult) {
-    statusEl.textContent = 'Записываю...';
+    statusEl.textContent = tr('logging');
     const r = await submitResult(lastResult);
-    if (!r.ok) { statusEl.textContent = '❌ Не записал — жми ещё раз'; return; }
-    statusEl.textContent = '✅ Записал';
+    if (!r.ok) { statusEl.textContent = tr('notLogged'); return; }
+    statusEl.textContent = tr('logged');
     lastResult = null;
   }
   try { Telegram.WebApp.close(); } catch (e) {}
@@ -2070,7 +2164,7 @@ function update(dt) {
 
   if (Math.floor(dist / 500) > lastMile) {
     lastMile = Math.floor(dist / 500);
-    popNumber(lastMile * 500 + ' м!', C_GOLD, W / 2, H * 0.32, true);
+    popNumber(lastMile * 500 + ' ' + tr('unit') + '!', C_GOLD, W / 2, H * 0.32, true);
   }
 
   // Оружие сгорает по таймеру — прогресс не навсегда, за ящиками нужно идти
@@ -2081,7 +2175,7 @@ function update(dt) {
       weaponLevel = Math.max(0, weaponLevel - 1);
       weaponTimer = weaponLevel > 0 ? WEAPONS[weaponLevel].dur : 0;
       sWeaponDown();
-      popNumber('ОРУЖИЕ ОСЛАБЛО: ' + WEAPONS[weaponLevel].name, '#ff8a4a', W / 2, H * 0.26);
+      popNumber(tr('weaponDowngraded') + WEAPONS[weaponLevel].name, '#ff8a4a', W / 2, H * 0.26);
     }
   }
 
@@ -2179,7 +2273,7 @@ function update(dt) {
             shake(4); sPop();
             burst(p.x, p.y, '#bfe89a', 18, 240);
             shockwave(p.x, p.y, '#bfe89a', 130, 0.4);
-            popNumber('ВОЛНА СМЕТЕНА +' + fmt(gain), C_GREEN, p.x, p.y - 10, true);
+            popNumber(tr('waveCleared') + fmt(gain), C_GREEN, p.x, p.y - 10, true);
             obstacles.splice(obstacles.indexOf(target), 1);
           }
         }
@@ -2212,7 +2306,7 @@ function update(dt) {
         if (o.hp > 0 && !dodged) {
           if (shield > 0) {
             shield -= 1; sShield();
-            popNumber('ПОЯС СПАС', '#7ea8ff', W / 2, GROUND_F * H - 90);
+            popNumber(tr('beltSaved'), '#7ea8ff', W / 2, GROUND_F * H - 90);
             burst(W / 2, GROUND_F * H - 60, '#7ea8ff', 14, 240);
             shake(4);
           } else {
@@ -2228,7 +2322,7 @@ function update(dt) {
           // Подтверждение увёртке — иначе игрок не поймёт, что руление вообще
           // что-то решило, а не просто прошло незамеченным.
           const p = projectPoint(o.worldX, 0.05);
-          popNumber('МИМО', '#8fd0ff', p.x, p.y - 30);
+          popNumber(tr('missed'), '#8fd0ff', p.x, p.y - 30);
         }
         obstacles.splice(i, 1);
         if (squad <= 0) { die(); return; }
@@ -2270,7 +2364,7 @@ function update(dt) {
     if (o.kind === 'boss') {
       if (o.phase === 'approach') {
         o.z -= depthSpeed * dt;
-        if (o.z <= BOSS_LOCK_Z) { o.z = BOSS_LOCK_Z; o.phase = 'press'; shake(6); popNumber('ЖМИ ШТАНГУ!', C_GOLD, W / 2, H * 0.28, true); }
+        if (o.z <= BOSS_LOCK_Z) { o.z = BOSS_LOCK_Z; o.phase = 'press'; shake(6); popNumber(tr('pressBar'), C_GOLD, W / 2, H * 0.28, true); }
       } else if (o.phase === 'press') {
         o.timer -= dt;
         o.hp -= squad * 1.15 * dt;
@@ -2283,7 +2377,7 @@ function update(dt) {
           burst(p.x, p.y, C_GOLD, 46, 340);
           shockwave(p.x, p.y, C_GOLD, 200, 0.5);
           score += 400; squad = Math.min(SQUAD_CAP, squad + 40); maxSquad = Math.max(maxSquad, squad);
-          popNumber('ШТАНГА ВЗЯТА! +40', C_GOLD, W / 2, H * 0.3, true);
+          popNumber(tr('barTaken'), C_GOLD, W / 2, H * 0.3, true);
           obstacles.splice(i, 1);
         } else if (o.timer <= 0) {
           const loss = Math.round(squad * 0.5);
@@ -2351,7 +2445,7 @@ function update(dt) {
             // «ОТРЯД ПРОДАВИЛ −40» читалось двусмысленно: победа это или потеря?
             // Явный глагол с объектом («…ВРАГА») плюс разделитель перед ценой
             // победы убирают путаницу — сначала итог схватки, потом цена.
-            popNumber((def.isLeader ? 'ВОЖАК СЛОМЛЕН · −' : (def.isGiant ? 'ГИГАНТ ПОВЕРЖЕН · −' : 'ПРОДАВИЛИ ВРАГА · −')) + fmt(loss), C_GREEN, W / 2, GROUND_F * H - 90, true);
+            popNumber((def.isLeader ? tr('leaderBroken') : (def.isGiant ? tr('giantDown') : tr('enemyPushed'))) + fmt(loss), C_GREEN, W / 2, GROUND_F * H - 90, true);
           } else {
             popNumber('−' + fmt(loss), '#ff4444', W / 2, GROUND_F * H - 90, true);
           }
@@ -2370,8 +2464,8 @@ function update(dt) {
     b.z -= depthSpeed * dt;
     if (b.z <= 0.16 && Math.abs(b.worldX - squadWorldX) < 0.22) {
       const p = projectPoint(squadWorldX, 0.1);
-      if (b.type === 'preworkout') { rageT = 5; popNumber('ПРЕДТРЕН! ЯРОСТЬ', C_RAGE, p.x, p.y - 40, true); flash('orange', 260); }
-      else if (b.type === 'belt') { shield = Math.min(3, shield + 1); popNumber('ЩИТ: ПОЯС', '#7ea8ff', p.x, p.y - 40, true); }
+      if (b.type === 'preworkout') { rageT = 5; popNumber(tr('preworkoutRage'), C_RAGE, p.x, p.y - 40, true); flash('orange', 260); }
+      else if (b.type === 'belt') { shield = Math.min(3, shield + 1); popNumber(tr('shieldBelt'), '#7ea8ff', p.x, p.y - 40, true); }
       else { squad = Math.min(SQUAD_CAP, squad + 5); maxSquad = Math.max(maxSquad, squad); squadPulse = 1; popNumber('+5', '#67c26a', p.x, p.y - 40, true); }
       sPower(); shake(3); burst(p.x, p.y - 20, BONUS_TYPES[b.type].color, 16, 220);
       bonuses.splice(i, 1); continue;
@@ -2504,16 +2598,16 @@ function render() {
   // HUD
   hctx.textAlign = 'left'; hctx.fillStyle = C_GOLD;
   hctx.font = "900 15px 'Courier New', monospace";
-  hctx.fillText('ОТРЯД', 20, 32);
+  hctx.fillText(tr('hudSquad'), 20, 32);
   hctx.font = "900 30px 'Courier New', monospace";
   hctx.fillText(fmt(squad), 20, 62);
   hctx.textAlign = 'right'; hctx.fillStyle = '#e94f64'; hctx.font = "900 20px 'Courier New', monospace";
   hctx.fillText('🥤 ' + fmt(score), W - 20, 32);
   hctx.fillStyle = 'rgba(242,237,227,0.7)'; hctx.font = "700 14px 'Courier New', monospace";
-  hctx.fillText(fmt(Math.floor(dist)) + ' м', W - 20, 54);
+  hctx.fillText(fmt(Math.floor(dist)) + ' ' + tr('unit'), W - 20, 54);
   if (combo >= 3) {
     hctx.textAlign = 'left'; hctx.fillStyle = C_GOLD; hctx.font = "800 13px 'Courier New', monospace";
-    hctx.fillText('серия ' + fmt(combo) + (comboMult() > 1 ? ' ×' + fmt(comboMult()) : ''), 20, 82);
+    hctx.fillText(tr('hudStreak') + fmt(combo) + (comboMult() > 1 ? ' ×' + fmt(comboMult()) : ''), 20, 82);
   }
   // Оружие — постоянно на виду: иконка-квадрат + название, чтобы игрок видел,
   // что держит и что потеряет.
@@ -2538,8 +2632,8 @@ function render() {
     hctx.fillStyle = color; hctx.fillRect(ix - 90, iy + 6, 90 * frac, 4);
     iy += 24;
   };
-  if (rageT > 0) pw('ЯРОСТЬ', C_RAGE, rageT / 5);
-  if (shield > 0) { hctx.textAlign = 'right'; hctx.font = "800 12px 'Courier New', monospace"; hctx.fillStyle = '#7ea8ff'; hctx.fillText('ПОЯС ×' + fmt(shield), ix, iy); }
+  if (rageT > 0) pw(tr('hudRage'), C_RAGE, rageT / 5);
+  if (shield > 0) { hctx.textAlign = 'right'; hctx.font = "800 12px 'Courier New', monospace"; hctx.fillStyle = '#7ea8ff'; hctx.fillText(tr('itemBelt') + ' ×' + fmt(shield), ix, iy); }
 }
 
 // ── МОДЕЛИ ТОЛПЫ: какой .glb на какой скин ──────────────────────────────────

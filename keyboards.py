@@ -7,6 +7,8 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardBu
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import formatting
+import i18n
+import seed_data
 
 # Сколько символов названия влезает в кнопку под ответом AI-тренера, не
 # растягивая клавиатуру и не обрезаясь самим Telegram.
@@ -16,10 +18,78 @@ AI_MENTION_LABEL_LIMIT = 32
 def _shorten_label(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
+
+class _Lazy:
+    """Отложенный рендер строки каталога — вычисляется в момент str()/подстановки
+    в f-строку, а не при импорте модуля.
+
+    Нужен там, где перевод раньше жил в МОДУЛЬНОЙ константе (UNIT_NAMES,
+    PROGRESS_PERIODS и т.п.): `NAME = i18n.t(...)` посчитал бы значение ровно
+    один раз, на языке, который был текущим в момент импорта процесса — и
+    дальше не менялся бы никогда, что бы ни выбрал конкретный пользователь.
+    """
+
+    __slots__ = ("_key", "_params")
+
+    def __init__(self, key: str, **params: Any):
+        self._key = key
+        self._params = params
+
+    def __str__(self) -> str:
+        return i18n.t(self._key, **self._params)
+
+    def __eq__(self, other: object) -> bool:
+        return str(self) == other
+
+    def __hash__(self) -> int:
+        return hash(str(self))
+
+
+def _lazy(key: str, **params: Any) -> _Lazy:
+    return _Lazy(key, **params)
+
+
+class _ReplyButtonMatch:
+    """Сравнение подписи reply-кнопки сразу на всех языках.
+
+    Нижняя клавиатура шлёт нажатие обычным текстом сообщения, и
+    handlers/persistent_menu.py ловит его через `F.text == keyboards.BTN_MENU`
+    (этот файл нам трогать нельзя — задача явно это запрещает). Раз сравнение
+    живёт снаружи, единственное место, где можно научить его понимать оба
+    языка сразу, — сам объект BTN_*.
+
+    `a == b` в Python сначала пробует `a.__eq__(b)`; `str.__eq__` с объектом
+    чужого типа возвращает NotImplemented, и тогда пробуется `b.__eq__(a)` —
+    вот этот метод. Поэтому `F.text == BTN_MENU` матчит и «Меню», и «Menu»,
+    какая бы клавиатура физически ни лежала у пользователя на экране: у
+    того, кто только что переключил язык в настройках, старая клавиатура
+    внизу ещё показывает подписи на прежнем языке (см. PERSISTENT_MENU_VERSION
+    — та же самая история с отставанием клавиатуры от кода, только сменился
+    триггер: не новый набор кнопок, а новый язык)."""
+
+    __slots__ = ("_key", "_variants")
+
+    def __init__(self, key: str):
+        self._key = key
+        self._variants = frozenset(i18n.t_in(lang, key) for lang in i18n.SUPPORTED)
+
+    def __eq__(self, other: object) -> bool:
+        return other in self._variants
+
+    def __hash__(self) -> int:
+        return hash(self._variants)
+
+    def current(self) -> str:
+        """Подпись на ТЕКУЩЕМ языке — для рисования самой клавиатуры
+        (persistent_menu), в отличие от __eq__, который обязан понимать оба
+        сразу."""
+        return i18n.t_in(i18n.get_lang(), self._key)
+
+
 # Persistent reply-keyboard buttons, always visible under the input field.
-BTN_WORKOUT = "Тренировка"
-BTN_MENU = "Меню"
-BTN_AI = "AI-тренер"
+BTN_WORKOUT = _ReplyButtonMatch("btn.persistent.workout")
+BTN_MENU = _ReplyButtonMatch("btn.persistent.menu")
+BTN_AI = _ReplyButtonMatch("btn.persistent.ai")
 
 # Bump whenever persistent_menu()'s button set changes so every user gets the
 # new layout next time cmd_start runs (see users.reply_keyboard_version). Also
@@ -35,7 +105,11 @@ PERSISTENT_MENU_VERSION = 3
 def persistent_menu() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text=BTN_WORKOUT), KeyboardButton(text=BTN_MENU), KeyboardButton(text=BTN_AI)],
+            [
+                KeyboardButton(text=BTN_WORKOUT.current()),
+                KeyboardButton(text=BTN_MENU.current()),
+                KeyboardButton(text=BTN_AI.current()),
+            ],
         ],
         resize_keyboard=True,
         is_persistent=True,
@@ -65,26 +139,26 @@ def main_menu(
     просьба, и ей не место среди рабочих экранов."""
     b = InlineKeyboardBuilder()
     if has_active_workout:
-        b.button(text="▶️ ПРОДОЛЖИТЬ ТРЕНИРОВКУ", callback_data="menu:resume_workout")
+        b.button(text=i18n.t("btn.resume_workout_caps"), callback_data="menu:resume_workout")
     else:
-        b.button(text="🏋️ НАЧАТЬ ТРЕНИРОВКУ", callback_data="menu:start_workout")
+        b.button(text=i18n.t("btn.start_workout_caps"), callback_data="menu:start_workout")
     # Тот же callback, что и «📥 Импорт CSV» в настройках (settings:import,
     # см. handlers/csv_import.py) — второй вход в один и тот же флоу, не новый.
     if show_import_button:
-        b.button(text="📥 Перенести историю из Hevy/Strong", callback_data="settings:import")
-    b.button(text="📈 Прогресс", callback_data="menu:progress")
-    b.button(text="📚 История", callback_data="menu:history")
-    b.button(text="⚙️ Упражнения", callback_data="menu:exercises")
-    b.button(text="🗂 Программы", callback_data="rt:manage")
-    b.button(text="⚖️ Дневник веса", callback_data="menu:bodyweight")
-    b.button(text="🍽 Дневник еды", callback_data="menu:food")
-    b.button(text="🏆 Достижения", callback_data="menu:achievements")
-    b.button(text="🔧 Настройки", callback_data="menu:settings")
-    b.button(text="🤖 AI-тренер", callback_data="menu:ai")
+        b.button(text=i18n.t("btn.import_history"), callback_data="settings:import")
+    b.button(text=i18n.t("btn.progress"), callback_data="menu:progress")
+    b.button(text=i18n.t("btn.history"), callback_data="menu:history")
+    b.button(text=i18n.t("btn.exercises"), callback_data="menu:exercises")
+    b.button(text=i18n.t("btn.programs"), callback_data="rt:manage")
+    b.button(text=i18n.t("btn.weight_diary"), callback_data="menu:bodyweight")
+    b.button(text=i18n.t("btn.food_diary"), callback_data="menu:food")
+    b.button(text=i18n.t("btn.achievements"), callback_data="menu:achievements")
+    b.button(text=i18n.t("btn.settings"), callback_data="menu:settings")
+    b.button(text=i18n.t("btn.ai_coach"), callback_data="menu:ai")
     if community_url:
-        b.button(text="💬 Чат атлетов", url=community_url)
+        b.button(text=i18n.t("btn.community_chat"), url=community_url)
     if show_donate:
-        b.button(text="❤️ Поддержать проект", callback_data="menu:donate")
+        b.button(text=i18n.t("btn.donate"), callback_data="menu:donate")
     # start/resume and the import button (if shown) full width, then pairs:
     # Прогресс·История, Упражнения·Программы, Дневник веса·Дневник еды,
     # Достижения·Настройки, then AI-тренер full width at the very bottom,
@@ -167,9 +241,9 @@ def ai_trainer_keyboard(
     exercises = list(exercises)
     programs = list(programs)
     b = InlineKeyboardBuilder()
-    b.button(text="🏠 Меню", callback_data="ai:menu")
+    b.button(text=i18n.t("btn.home_menu"), callback_data="ai:menu")
     if has_active_workout:
-        b.button(text="🏋️ К тренировке", callback_data="ai:resume_workout")
+        b.button(text=i18n.t("btn.to_workout"), callback_data="ai:resume_workout")
         b.adjust(2)
     else:
         b.adjust(1)
@@ -190,7 +264,7 @@ def ai_trainer_keyboard(
         if item is _DRAFT:
             emoji = "🗂"
             callback_data = f"ai:prog:view:{draft_id}"
-            label = f"Забрать: {program_name}"
+            label = i18n.t("btn.claim_program", program_name=program_name)
         elif isinstance(item, tuple):
             emoji, callback_data, label = "🗂", ai_program_open_cb(item[1]), item[1]["name"]
         elif item["is_template"]:
@@ -224,11 +298,11 @@ def ai_trainer_keyboard(
         joined = ",".join(refs)
         if page > 0:
             page_nav.append(InlineKeyboardButton(
-                text=PAGE_PREV_TEXT, callback_data=f"ai:mpage:{page - 1}:{joined}"
+                text=PAGE_PREV_TEXT(), callback_data=f"ai:mpage:{page - 1}:{joined}"
             ))
         if start + AI_MENTION_PAGE_SIZE < len(items):
             page_nav.append(InlineKeyboardButton(
-                text=PAGE_NEXT_TEXT, callback_data=f"ai:mpage:{page + 1}:{joined}"
+                text=PAGE_NEXT_TEXT(), callback_data=f"ai:mpage:{page + 1}:{joined}"
             ))
     page_nav_rows = [page_nav] if page_nav else []
 
@@ -295,9 +369,9 @@ def ai_program_preview_keyboard(
     """
     b = InlineKeyboardBuilder()
     if can_train_now and not replacing:
-        b.button(text="▶️ Начать по ней", callback_data=f"ai:prog:train:{draft_id}")
+        b.button(text=i18n.t("btn.start_with_it"), callback_data=f"ai:prog:train:{draft_id}")
     b.button(
-        text="✅ Обновить программу" if replacing else "✅ Добавить себе",
+        text=i18n.t("btn.update_program") if replacing else i18n.t("btn.add_for_myself_check"),
         callback_data=f"ai:prog:save:{draft_id}",
     )
     # «❌ Не надо» тут больше нет. Она стирала черновик — и кнопка «🗂 Забрать:
@@ -305,7 +379,7 @@ def ai_program_preview_keyboard(
     # отвечал «это предложение уже неактуально», хотя человек всего лишь
     # посмотрел превью и передумал сохранять ПРЯМО СЕЙЧАС. Отказ и не нужен
     # отдельной кнопкой: не сохранил — значит не сохранил, а уйти есть куда.
-    b.button(text="⬅️ К тренеру", callback_data="menu:ai")
+    b.button(text=i18n.t("btn.to_coach"), callback_data="menu:ai")
     b.adjust(1)
     return b.as_markup()
 
@@ -334,7 +408,7 @@ def ai_setup_question_keyboard(
             text=_shorten_label(choice, AI_MENTION_LABEL_LIMIT),
             callback_data=f"ai:qa:{question_index}:{choice_index}",
         )
-    b.button(text="⏭ Пропустить вопрос", callback_data="ai:qskip")
+    b.button(text=i18n.t("btn.skip_question"), callback_data="ai:qskip")
     b.adjust(1)
     return b.as_markup()
 
@@ -348,8 +422,8 @@ def ai_program_saved_keyboard(program_id: int) -> InlineKeyboardMarkup:
     состояния чата с тренером.
     """
     b = InlineKeyboardBuilder()
-    b.button(text="🗂 Открыть программу", callback_data=f"rt:prg:{program_id}")
-    b.button(text="🗂 К программам", callback_data="rt:manage")
+    b.button(text=i18n.t("btn.open_program"), callback_data=f"rt:prg:{program_id}")
+    b.button(text=i18n.t("btn.to_programs"), callback_data="rt:manage")
     b.adjust(1)
     return b.as_markup()
 
@@ -374,7 +448,7 @@ def groups_keyboard(
     for g in groups:
         b.button(text=formatting.format_group(g["name"]), callback_data=f"{prefix}:grp:{g['id']}")
     if show_all:
-        b.button(text="📋 Все", callback_data=f"{prefix}:grp:all")
+        b.button(text=i18n.t("btn.all_templates"), callback_data=f"{prefix}:grp:all")
     b.adjust(2)
     # The partner shortcuts go on top, one full-width row each — a group name is
     # one short word and pairs up two to a row, but an exercise name squeezed
@@ -395,8 +469,18 @@ def groups_keyboard(
 # «дальше»: непонятно, листает она список или уводит с экрана. Подписываем — и
 # одинаково везде, где есть страницы: пикер, упоминания тренера, история,
 # дневник еды, выбор тренировки для программы, повтор, админские списки.
-PAGE_PREV_TEXT = "⬅️ Предыдущие"
-PAGE_NEXT_TEXT = "Ещё ➡️"
+# Функции, а не строковые константы: значение зависит от текущего языка
+# (i18n.get_lang()), а он известен только в момент рендера конкретного
+# экрана, не в момент импорта модуля. Будь это обычные `NAME = i18n.t(...)`,
+# они бы застыли на языке процесса на старте и никогда не поменялись бы —
+# то же самое, из-за чего PROGRESS_PERIODS/BODYWEIGHT_PERIODS/UNIT_NAMES ниже
+# используют _Lazy вместо голых строк.
+def PAGE_PREV_TEXT() -> str:
+    return i18n.t("btn.page_prev")
+
+
+def PAGE_NEXT_TEXT() -> str:
+    return i18n.t("btn.page_next")
 
 
 def named_buttons(items: list[tuple[str, str]]) -> list[list[InlineKeyboardButton]]:
@@ -433,24 +517,44 @@ def exercises_keyboard(
     again.
     """
     b = InlineKeyboardBuilder()
+    # Своё упражнение показываем как есть: display_name — данные пользователя,
+    # он его так назвал или так назвался форк на его языке.
     items = [(f"{prefix}:ex:{ex['id']}", ex["display_name"]) for ex in exercises]
-    items += [(f"{prefix}:tpladd:{t['id']}", f"📋 {t['display_name']}") for t in (templates or [])]
+    # А шаблон каталога — общая строка на всех, и в базе она навсегда русская:
+    # шаблоны не форкают, персональной копии с переведённым именем у них нет.
+    # Язык выбирается на рендере — здесь, в единственной точке, через которую
+    # шаблоны попадают на эту клавиатуру. Раньше это делали вызывающие, и
+    # каталожный браузер по группе научили, а три экрана поиска (живая
+    # тренировка, правка прошлой, добавление в программу) — нет: они ходят сюда
+    # же, и англоязычный получал «📋 Жим штанги лёжа» в ответ на «bench».
+    #
+    # Важно: это чинит только ОТОБРАЖЕНИЕ — что «templates» показывает
+    # русским текстом, а не английским. Само нахождение шаблонов по
+    # английскому запросу — отдельная задача db.search_exercise_templates
+    # (она сравнивала запрос с t.display_name, а тот в базе тоже русский, так
+    # что «bench» до её собственного фикса возвращал пустой список ещё ДО
+    # того, как эта клавиатура вообще получала шаблоны на вход).
+    lang = i18n.get_lang()
+    items += [
+        (f"{prefix}:tpladd:{t['id']}", f"📋 {seed_data.localized_exercise_name(t['display_name'], lang)}")
+        for t in (templates or [])
+    ]
     for row in named_buttons(items):
         b.row(*row)
     nav = []
     if page > 0:
-        nav.append(InlineKeyboardButton(text=PAGE_PREV_TEXT, callback_data=f"{prefix}:page:{page - 1}"))
+        nav.append(InlineKeyboardButton(text=PAGE_PREV_TEXT(), callback_data=f"{prefix}:page:{page - 1}"))
     if has_next:
-        nav.append(InlineKeyboardButton(text=PAGE_NEXT_TEXT, callback_data=f"{prefix}:page:{page + 1}"))
+        nav.append(InlineKeyboardButton(text=PAGE_NEXT_TEXT(), callback_data=f"{prefix}:page:{page + 1}"))
     if nav:
         b.row(*nav)
     if show_new_button:
         b.row(InlineKeyboardButton(
-            text=new_text or "➕ Новое упражнение", callback_data=f"{prefix}:{new_cb}"
+            text=new_text or i18n.t("btn.new_exercise"), callback_data=f"{prefix}:{new_cb}"
         ))
     if show_catalog_button:
-        b.row(InlineKeyboardButton(text="📋 Каталог упражнений", callback_data=f"{prefix}:catalog"))
-    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"{prefix}:{back_cb}"))
+        b.row(InlineKeyboardButton(text=i18n.t("btn.exercise_catalog"), callback_data=f"{prefix}:catalog"))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.back"), callback_data=f"{prefix}:{back_cb}"))
     return b.as_markup()
 
 
@@ -459,8 +563,8 @@ def new_exercise_entry_keyboard(prefix: str, show_templates: bool = True) -> Inl
     browser lists one group's templates, so there'd be nothing to show."""
     b = InlineKeyboardBuilder()
     if show_templates:
-        b.button(text="📋 Выбрать из шаблонов", callback_data=f"{prefix}:templates")
-    b.button(text="❌ Отмена", callback_data=f"{prefix}:cancel")
+        b.button(text=i18n.t("btn.pick_from_templates"), callback_data=f"{prefix}:templates")
+    b.button(text=i18n.t("btn.cancel"), callback_data=f"{prefix}:cancel")
     b.adjust(1)
     return b.as_markup()
 
@@ -470,21 +574,23 @@ def templates_keyboard(templates, prefix: str, back_cb: str = "back") -> InlineK
     items = [(f"{prefix}:tpl:{t['id']}", t["display_name"]) for t in templates]
     for row in named_buttons(items):
         b.row(*row)
-    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"{prefix}:{back_cb}"))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.back"), callback_data=f"{prefix}:{back_cb}"))
     return b.as_markup()
 
 
 def template_preview_keyboard(template_id: int, prefix: str = "exm", back_cb: str | None = None) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="➕ Добавить", callback_data=f"{prefix}:tpladd:{template_id}"))
-    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=back_cb or f"{prefix}:templates"))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.add"), callback_data=f"{prefix}:tpladd:{template_id}"))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.back"), callback_data=back_cb or f"{prefix}:templates"))
     return b.as_markup()
 
 
-def yes_no_keyboard(yes_cb: str, no_cb: str, yes_text: str = "Да", no_text: str = "Нет") -> InlineKeyboardMarkup:
+def yes_no_keyboard(
+    yes_cb: str, no_cb: str, yes_text: str | None = None, no_text: str | None = None
+) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.button(text=yes_text, callback_data=yes_cb)
-    b.button(text=no_text, callback_data=no_cb)
+    b.button(text=yes_text if yes_text is not None else i18n.t("btn.yes"), callback_data=yes_cb)
+    b.button(text=no_text if no_text is not None else i18n.t("btn.no"), callback_data=no_cb)
     b.adjust(2)
     return b.as_markup()
 
@@ -494,7 +600,7 @@ def weight_confirm_keyboard() -> InlineKeyboardMarkup:
     written (see handlers.workout._weight_confirm_prompt). "Нет" throws the
     input away so the set can simply be retyped."""
     return yes_no_keyboard(
-        "live:wconf:yes", "live:wconf:no", yes_text="✅ Да, записать", no_text="✏️ Исправить",
+        "live:wconf:yes", "live:wconf:no", yes_text=i18n.t("btn.yes_record"), no_text=i18n.t("btn.fix"),
     )
 
 
@@ -503,7 +609,7 @@ def bodyweight_confirm_keyboard() -> InlineKeyboardMarkup:
     for a bodyweight entry outside the plausible range (see
     parser.bodyweight_warning, handlers.bodyweight.bw_weight_entered)."""
     return yes_no_keyboard(
-        "bw:wconf:yes", "bw:wconf:no", yes_text="✅ Да, записать", no_text="✏️ Исправить",
+        "bw:wconf:yes", "bw:wconf:no", yes_text=i18n.t("btn.yes_record"), no_text=i18n.t("btn.fix"),
     )
 
 
@@ -512,9 +618,9 @@ def help_keyboard(expanded: bool) -> InlineKeyboardMarkup:
     (handlers.workout.help_toggle)."""
     b = InlineKeyboardBuilder()
     if expanded:
-        b.button(text="⬆️ Свернуть", callback_data="help:less")
+        b.button(text=i18n.t("btn.collapse"), callback_data="help:less")
     else:
-        b.button(text="⬇️ Ещё: RPE, заметки, правки", callback_data="help:more")
+        b.button(text=i18n.t("btn.more_help"), callback_data="help:more")
     return b.as_markup()
 
 
@@ -612,13 +718,13 @@ def logging_keyboard(
                 else _tab_label(name, _TAB_NAME_MAX_WIDE)
             )
             b.row(InlineKeyboardButton(text=text, callback_data=f"live:switch:{ex_id}"))
-    top_row = [InlineKeyboardButton(text="➕ Суперсет", callback_data="live:add_exercise")]
+    top_row = [InlineKeyboardButton(text=i18n.t("btn.superset"), callback_data="live:add_exercise")]
     if active_id is not None:
-        top_row.append(InlineKeyboardButton(text="📝 Заметка", callback_data=f"live:note:{active_id}"))
+        top_row.append(InlineKeyboardButton(text=i18n.t("btn.note"), callback_data=f"live:note:{active_id}"))
     b.row(*top_row)
     if has_sets:
-        b.row(InlineKeyboardButton(text="↩️ Удалить последний", callback_data="live:undo"))
-    b.row(InlineKeyboardButton(text="✅ Закончить упражнение", callback_data="live:finish_exercise"))
+        b.row(InlineKeyboardButton(text=i18n.t("btn.undo_last"), callback_data="live:undo"))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.finish_exercise"), callback_data="live:finish_exercise"))
     return b.as_markup()
 
 
@@ -671,7 +777,7 @@ def exercise_picker_entry_keyboard(
         label = (
             f"▶️ {suggest_button_label(planned_next_name)}"
             if planned_next_name
-            else "▶️ Следующее по программе"
+            else i18n.t("btn.next_planned")
         )
         b.button(text=label, callback_data="live:next_planned")
         if planned_left > 1:
@@ -679,8 +785,8 @@ def exercise_picker_entry_keyboard(
             # рельсы (внутри экрана так и написано), но снаружи первая кнопка
             # выглядела единственным путём, и про свободу выбора человек узнавал,
             # только заглянув сюда.
-            b.button(text=f"📋 Другое из плана · ещё {planned_left}", callback_data="live:plan")
-    b.button(text="➕ Упражнение", callback_data="live:add_exercise")
+            b.button(text=i18n.t("btn.other_from_plan", n=planned_left), callback_data="live:plan")
+    b.button(text=i18n.t("btn.exercise_add"), callback_data="live:add_exercise")
     if suggested is not None:
         ex_id, name = suggested
         # Naming the exercise on the button itself is what makes it a one-tap
@@ -693,9 +799,9 @@ def exercise_picker_entry_keyboard(
     for ex_id, name in recent or []:
         b.row(InlineKeyboardButton(text=name, callback_data=f"live:suggest:{ex_id}"))
     if is_empty:
-        b.row(InlineKeyboardButton(text="🏠 Меню", callback_data="live:finish_workout"))
+        b.row(InlineKeyboardButton(text=i18n.t("btn.home_menu"), callback_data="live:finish_workout"))
     else:
-        b.row(InlineKeyboardButton(text="🏁 Завершить тренировку", callback_data="live:finish_workout"))
+        b.row(InlineKeyboardButton(text=i18n.t("btn.finish_workout"), callback_data="live:finish_workout"))
     return b.as_markup()
 
 
@@ -731,7 +837,7 @@ def planned_plan_keyboard(
             ),
         )
     if removing:
-        b.row(InlineKeyboardButton(text="✅ Готово", callback_data="live:plan"))
+        b.row(InlineKeyboardButton(text=i18n.t("btn.done_check"), callback_data="live:plan"))
     else:
         # allow_removing=False — самый первый экран тренировки («С чего
         # начнёшь?»). Выкидывание из плана там преждевременно: человек ещё не
@@ -739,8 +845,8 @@ def planned_plan_keyboard(
         # уборка никуда не денется — тот же экран между упражнениями её и
         # предложит, когда это станет решением, а не гаданием.
         if allow_removing:
-            b.row(InlineKeyboardButton(text="✕ Убрать из плана", callback_data="live:plan:rm"))
-        b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="live:plan:back"))
+            b.row(InlineKeyboardButton(text=i18n.t("btn.remove_from_plan"), callback_data="live:plan:rm"))
+        b.row(InlineKeyboardButton(text=i18n.t("btn.back"), callback_data="live:plan:back"))
     return b.as_markup()
 
 
@@ -757,9 +863,8 @@ def routines_manage_keyboard(
     а не в главное меню мимо тренировки, которая всё это время ждёт."""
     b = InlineKeyboardBuilder()
     for p in programs:
-        word = formatting.plural_ru(p["day_count"], ("день", "дня", "дней"))
         b.button(
-            text=f"🗂 {p['name']} · {p['day_count']} {word}",
+            text=f"🗂 {p['name']} · {i18n.t('btn.program_days', n=p['day_count'])}",
             callback_data=f"rt:prg:{p['id']}",
         )
     for r in routines:
@@ -768,11 +873,11 @@ def routines_manage_keyboard(
     # верный ответ почти всегда «возьми готовую» — это мгновенно и бесплатно,
     # тогда как AI-путь требует переписки. Три равнозначные кнопки заставляли
     # выбирать способ раньше, чем он понял, что вообще выбирает.
-    b.button(text="✨ Готовые программы", callback_data="rt:programs")
-    b.button(text="🤖 Составить с AI-тренером", callback_data="ai:buildprog")
+    b.button(text=i18n.t("btn.ready_programs"), callback_data="rt:programs")
+    b.button(text=i18n.t("btn.build_with_coach"), callback_data="ai:buildprog")
     if has_workouts:
-        b.button(text="➕ Из тренировки", callback_data="rt:pickw:page:0")
-    b.button(text="⬅️ Назад" if back_to_picker else "🏠 Меню", callback_data="rt:menu")
+        b.button(text=i18n.t("btn.from_workout"), callback_data="rt:pickw:page:0")
+    b.button(text=i18n.t("btn.back") if back_to_picker else i18n.t("btn.home_menu"), callback_data="rt:menu")
     b.adjust(1)
     return b.as_markup()
 
@@ -807,13 +912,13 @@ def program_days_keyboard(
     if trained_before and next_day_id is not None:
         hoisted = next((d for d in days if d["id"] == next_day_id), None)
     if hoisted is not None:
-        b.button(text=f"▶️ Дальше: {hoisted['name']}", callback_data=f"rt:view:{hoisted['id']}")
+        b.button(text=i18n.t("btn.next_day", name=hoisted['name']), callback_data=f"rt:view:{hoisted['id']}")
     for d in days:
         if hoisted is not None and d["id"] == hoisted["id"]:
             continue
         b.button(text=d["name"], callback_data=f"rt:view:{d['id']}")
-    b.button(text="⚙️ Изменить программу", callback_data=f"rt:pgmedit:{program_id}")
-    b.button(text="⬅️ Назад", callback_data="rt:manage")
+    b.button(text=i18n.t("btn.edit_program"), callback_data=f"rt:pgmedit:{program_id}")
+    b.button(text=i18n.t("btn.back"), callback_data="rt:manage")
     b.adjust(1)
     return b.as_markup()
 
@@ -832,13 +937,13 @@ def program_edit_keyboard(days, program_id: int) -> InlineKeyboardMarkup:
     # догадаться неоткуда, экран правок про день не говорил ни слова.
     for d in days:
         b.button(text=f"✏️ {d['name']}", callback_data=f"rt:edit:{d['id']}")
-    b.button(text="➕ Добавить день", callback_data=f"rt:dayadd:{program_id}")
+    b.button(text=i18n.t("btn.add_day"), callback_data=f"rt:dayadd:{program_id}")
     if len(days) > 1:
-        b.button(text="🔀 Порядок дней", callback_data=f"rt:dayorder:{program_id}")
+        b.button(text=i18n.t("btn.day_order"), callback_data=f"rt:dayorder:{program_id}")
     # Копия целиком — база для «хочу вторую версию с правками»: без неё
     # единственный способ получить вариант программы был собрать её заново.
-    b.button(text="📄 Дублировать", callback_data=f"rt:pgmcopy:{program_id}")
-    b.button(text="✏️ Переименовать", callback_data=f"rt:pgmrename:{program_id}")
+    b.button(text=i18n.t("btn.duplicate"), callback_data=f"rt:pgmcopy:{program_id}")
+    b.button(text=i18n.t("btn.rename"), callback_data=f"rt:pgmrename:{program_id}")
     # Программа целиком, а не день — тот же токен-визитка, но со всеми днями
     # разом: делиться по одному дню значило собирать программу получателю
     # вручную из нескольких пересланных сообщений.
@@ -846,9 +951,9 @@ def program_edit_keyboard(days, program_id: int) -> InlineKeyboardMarkup:
     # Префикс share:prg: (а не share:pgm:) — id здесь программы, а старый
     # префикс остался за кнопками, которые адресовались днём-якорем; см.
     # handlers.sharing.share_program_legacy и ту же пару rt:prg:/rt:pgm:.
-    b.button(text="📤 Поделиться", callback_data=f"share:prg:{program_id}")
-    b.button(text="🗑 Удалить", callback_data=f"rt:pgmdelask:{program_id}")
-    b.button(text="⬅️ Назад", callback_data=f"rt:prg:{program_id}")
+    b.button(text=i18n.t("btn.share"), callback_data=f"share:prg:{program_id}")
+    b.button(text=i18n.t("btn.delete"), callback_data=f"rt:pgmdelask:{program_id}")
+    b.button(text=i18n.t("btn.back"), callback_data=f"rt:prg:{program_id}")
     # Раскладку считаем по числу дней, а не фиксированным кортежем: с четырьмя
     # днями прежний (1, 1, 2, 2, 1) уводил третий и четвёртый день в одну
     # строку, а всё, что ниже «Порядка дней», рассыпал по одной кнопке в ряд —
@@ -889,7 +994,7 @@ def program_day_order_keyboard(days, program_id: int) -> InlineKeyboardMarkup:
     # экран программы: порядок дней меняют в связке с остальными правками, и
     # выбрасывать человека из редактора после каждой значит заставлять его
     # заходить туда заново.
-    b.row(InlineKeyboardButton(text="⬅️ Готово", callback_data=f"rt:pgmedit:{program_id}"))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.done_back"), callback_data=f"rt:pgmedit:{program_id}"))
     return b.as_markup()
 
 
@@ -898,15 +1003,15 @@ def program_day_source_keyboard(program_id: int, days) -> InlineKeyboardMarkup:
     тренировки. Программа была неизменяемого размера навсегда — взял из каталога
     трёхдневку, захотел четвёртый день на руки, и пересобирать надо было всё."""
     b = InlineKeyboardBuilder()
-    b.button(text="📄 Пустой день", callback_data=f"rt:dayblank:{program_id}")
+    b.button(text=i18n.t("btn.blank_day"), callback_data=f"rt:dayblank:{program_id}")
     # «Из тренировки», а не «из прошлой»: за кнопкой список всех проведённых
     # тренировок с листалкой, а «прошлая» читается как «последняя» — будто выбора
     # нет. Тем же словом эта кнопка названа и в списке программ («➕ Из
     # тренировки»), и ведут они в один и тот же экран.
-    b.button(text="🏋️ Из тренировки", callback_data=f"rt:daypickw:{program_id}:0")
+    b.button(text=i18n.t("btn.from_workout_dumbbell"), callback_data=f"rt:daypickw:{program_id}:0")
     for d in days:
-        b.button(text=f"⧉ Копия «{d['name']}»", callback_data=f"rt:daycopy:{d['id']}")
-    b.button(text="⬅️ Назад", callback_data=f"rt:prg:{program_id}")
+        b.button(text=i18n.t("btn.day_copy", name=d['name']), callback_data=f"rt:daycopy:{d['id']}")
+    b.button(text=i18n.t("btn.back"), callback_data=f"rt:prg:{program_id}")
     b.adjust(1)
     return b.as_markup()
 
@@ -918,21 +1023,21 @@ def routine_source_picker_keyboard(workouts, page: int, has_next: bool) -> Inlin
         b.button(text=w["label"], callback_data=f"rt:pickw:item:{w['id']}")
     nav = []
     if page > 0:
-        nav.append(InlineKeyboardButton(text=PAGE_PREV_TEXT, callback_data=f"rt:pickw:page:{page - 1}"))
+        nav.append(InlineKeyboardButton(text=PAGE_PREV_TEXT(), callback_data=f"rt:pickw:page:{page - 1}"))
     if has_next:
-        nav.append(InlineKeyboardButton(text=PAGE_NEXT_TEXT, callback_data=f"rt:pickw:page:{page + 1}"))
+        nav.append(InlineKeyboardButton(text=PAGE_NEXT_TEXT(), callback_data=f"rt:pickw:page:{page + 1}"))
     b.adjust(1)
     if nav:
         b.row(*nav)
-    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="rt:manage"))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.back"), callback_data="rt:manage"))
     return b.as_markup()
 
 
 def routine_source_preview_keyboard(workout_id: int) -> InlineKeyboardMarkup:
     """Confirm using this past workout as the routine source, or go back to the list."""
     b = InlineKeyboardBuilder()
-    b.button(text="✅ Создать из этой", callback_data=f"rt:pickw:use:{workout_id}")
-    b.button(text="⬅️ К списку", callback_data="rt:pickw:back")
+    b.button(text=i18n.t("btn.create_from_this"), callback_data=f"rt:pickw:use:{workout_id}")
+    b.button(text=i18n.t("btn.to_list"), callback_data="rt:pickw:back")
     b.adjust(1)
     return b.as_markup()
 
@@ -941,16 +1046,23 @@ def programs_catalog_keyboard(programs) -> InlineKeyboardMarkup:
     """List of ready-made programs; picking one opens its detail screen."""
     b = InlineKeyboardBuilder()
     for p in programs:
-        b.button(text=p["name"], callback_data=f"rt:prog:{p['key']}")
-    b.button(text="⬅️ К программам", callback_data="rt:manage")
+        # Имя каталожной программы — не текст этой клавиатуры, а данные каталога,
+        # и в WORKOUT_PROGRAMS оно навсегда русское (ключ там же служит
+        # идентификатором). Язык выбирается на рендере, ровно как у групп мышц в
+        # formatting.format_group.
+        b.button(
+            text=seed_data.localized_program_name(p["key"], i18n.get_lang()),
+            callback_data=f"rt:prog:{p['key']}",
+        )
+    b.button(text=i18n.t("btn.to_programs"), callback_data="rt:manage")
     b.adjust(1)
     return b.as_markup()
 
 
 def program_detail_keyboard(program_key: str) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.button(text="➕ Добавить себе", callback_data=f"rt:progadd:{program_key}")
-    b.button(text="⬅️ К каталогу", callback_data="rt:programs")
+    b.button(text=i18n.t("btn.add_for_myself_plus"), callback_data=f"rt:progadd:{program_key}")
+    b.button(text=i18n.t("btn.to_catalog"), callback_data="rt:programs")
     b.adjust(1)
     return b.as_markup()
 
@@ -978,17 +1090,17 @@ def routine_detail_keyboard(routine_id: int, program_id: int | None = None) -> I
     is_day = program_id is not None
     back = f"rt:prg:{program_id}" if is_day else "rt:manage"
     b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="▶️ Начать тренировку", callback_data=f"rt:start:{routine_id}"))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.start_workout"), callback_data=f"rt:start:{routine_id}"))
     b.row(
-        InlineKeyboardButton(text="✏️ Редактировать", callback_data=f"rt:editmenu:{routine_id}"),
+        InlineKeyboardButton(text=i18n.t("btn.edit"), callback_data=f"rt:editmenu:{routine_id}"),
         InlineKeyboardButton(
-            text="🗑 Удалить день" if is_day else "🗑 Удалить",
+            text=i18n.t("btn.delete_day") if is_day else i18n.t("btn.delete"),
             callback_data=f"rt:delask:{routine_id}",
         ),
     )
     b.row(
-        InlineKeyboardButton(text="📤 Поделиться", callback_data=f"share:rt:{routine_id}"),
-        InlineKeyboardButton(text="⬅️ К списку", callback_data=back),
+        InlineKeyboardButton(text=i18n.t("btn.share"), callback_data=f"share:rt:{routine_id}"),
+        InlineKeyboardButton(text=i18n.t("btn.to_list"), callback_data=back),
     )
     return b.as_markup()
 
@@ -997,10 +1109,10 @@ def routine_edit_menu_keyboard(routine_id: int, is_day: bool = False) -> InlineK
     """Sub-menu behind "✏️ Редактировать": состав и название редко трогают
     вместе, но обе — правки, а не отдельные действия верхнего уровня."""
     b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="✏️ Изменить состав", callback_data=f"rt:edit:{routine_id}"))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.edit_composition"), callback_data=f"rt:edit:{routine_id}"))
     b.row(
         InlineKeyboardButton(
-            text="✏️ Переименовать день" if is_day else "✏️ Переименовать",
+            text=i18n.t("btn.rename_day") if is_day else i18n.t("btn.rename"),
             callback_data=f"rt:rename:{routine_id}",
         )
     )
@@ -1009,9 +1121,9 @@ def routine_edit_menu_keyboard(routine_id: int, is_day: bool = False) -> InlineK
         # «➕ Добавить день»; без неё день, попавший в программу, оставался в
         # ней навсегда.
         b.row(
-            InlineKeyboardButton(text="📤 Вынести из программы", callback_data=f"rt:dayout:{routine_id}")
+            InlineKeyboardButton(text=i18n.t("btn.take_out_of_program"), callback_data=f"rt:dayout:{routine_id}")
         )
-    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"rt:view:{routine_id}"))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.back"), callback_data=f"rt:view:{routine_id}"))
     return b.as_markup()
 
 
@@ -1045,7 +1157,7 @@ def routine_edit_keyboard(
         re_id, name = entry[0], entry[1]
         if re_id == armed_re_id:
             remove_button = InlineKeyboardButton(
-                text="❗ Точно?", callback_data=f"rt:rmexyes:{routine_id}:{re_id}"
+                text=i18n.t("btn.confirm_q"), callback_data=f"rt:rmexyes:{routine_id}:{re_id}"
             )
         else:
             remove_button = InlineKeyboardButton(text="🗑", callback_data=f"rt:rmex:{routine_id}:{re_id}")
@@ -1057,8 +1169,8 @@ def routine_edit_keyboard(
             InlineKeyboardButton(text="⬆️", callback_data=f"rt:mvex:{routine_id}:{re_id}:up"),
             remove_button,
         )
-    b.row(InlineKeyboardButton(text="➕ Добавить упражнение", callback_data=f"rt:addex:{routine_id}"))
-    b.row(InlineKeyboardButton(text="⬅️ Готово", callback_data=f"rt:view:{routine_id}"))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.add_exercise"), callback_data=f"rt:addex:{routine_id}"))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.done_back"), callback_data=f"rt:view:{routine_id}"))
     return b.as_markup()
 
 
@@ -1066,34 +1178,34 @@ def program_name_taken_keyboard(existing_id: int, back_cb: str, add_cb: str) -> 
     """Имя занято — три честных выхода вместо молчаливого слияния, которое
     происходило раньше."""
     b = InlineKeyboardBuilder()
-    b.button(text="🗂 Открыть существующую", callback_data=f"rt:prg:{existing_id}")
-    b.button(text="➕ Добавить второй копией", callback_data=add_cb)
-    b.button(text="❌ Отмена", callback_data=back_cb)
+    b.button(text=i18n.t("btn.open_existing"), callback_data=f"rt:prg:{existing_id}")
+    b.button(text=i18n.t("btn.add_as_copy"), callback_data=add_cb)
+    b.button(text=i18n.t("btn.cancel"), callback_data=back_cb)
     b.adjust(1)
     return b.as_markup()
 
 
 def stale_workout_keyboard(workout_id: int) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.button(text="✅ Завершить задним числом", callback_data=f"stale:finish:{workout_id}")
-    b.button(text="🗑 Удалить", callback_data=f"stale:delete:{workout_id}")
+    b.button(text=i18n.t("btn.finish_backdated"), callback_data=f"stale:finish:{workout_id}")
+    b.button(text=i18n.t("btn.delete"), callback_data=f"stale:delete:{workout_id}")
     b.adjust(1)
     return b.as_markup()
 
 
 def confirm_finish_workout_keyboard() -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.button(text="✅ Да, завершить", callback_data="live:finish_confirmed")
-    b.button(text="❌ Отмена", callback_data="live:cancel_finish")
+    b.button(text=i18n.t("btn.yes_finish"), callback_data="live:finish_confirmed")
+    b.button(text=i18n.t("btn.cancel"), callback_data="live:cancel_finish")
     b.adjust(1)
     return b.as_markup()
 
 
 def finish_date_mismatch_keyboard() -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.button(text="✅ Да, всё верно", callback_data="finconfirm:keep")
-    b.button(text="📅 Изменить дату", callback_data="finconfirm:changedate")
-    b.button(text="❌ Отмена", callback_data="live:cancel_finish")
+    b.button(text=i18n.t("btn.yes_correct"), callback_data="finconfirm:keep")
+    b.button(text=i18n.t("btn.change_date"), callback_data="finconfirm:changedate")
+    b.button(text=i18n.t("btn.cancel"), callback_data="live:cancel_finish")
     b.adjust(1)
     return b.as_markup()
 
@@ -1114,23 +1226,23 @@ def _progress_back_cb(exercise_id: int, origin: str) -> str:
 
 def progress_back_keyboard(exercise_id: int = 0, origin: str = "all") -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="🗂 Карточка упражнения", callback_data=f"prog:card:{exercise_id}"))
-    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=_progress_back_cb(exercise_id, origin)))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.exercise_card"), callback_data=f"prog:card:{exercise_id}"))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.back"), callback_data=_progress_back_cb(exercise_id, origin)))
     return b.as_markup()
 
 
-PROGRESS_PERIODS = [(10, "10"), (20, "20"), (9999, "Все")]
+PROGRESS_PERIODS = [(10, "10"), (20, "20"), (9999, _lazy("btn.all_periods"))]
 DEFAULT_PROGRESS_LIMIT = 20
 
 
 def progress_chart_keyboard(exercise_id: int, limit: int, origin: str = "all") -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     for value, label in PROGRESS_PERIODS:
-        text = f"• {label} •" if value == limit else label
+        text = f"• {label} •" if value == limit else str(label)
         b.button(text=text, callback_data=f"prog:per:{exercise_id}:{value}:{origin}")
     b.adjust(len(PROGRESS_PERIODS))
-    b.row(InlineKeyboardButton(text="🗂 Карточка упражнения", callback_data=f"prog:card:{exercise_id}"))
-    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=_progress_back_cb(exercise_id, origin)))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.exercise_card"), callback_data=f"prog:card:{exercise_id}"))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.back"), callback_data=_progress_back_cb(exercise_id, origin)))
     return b.as_markup()
 
 
@@ -1143,14 +1255,14 @@ def history_list_keyboard(workouts, page: int, has_next: bool) -> InlineKeyboard
         b.button(text=w["label"], callback_data=f"hist:item:{w['id']}")
     nav = []
     if page > 0:
-        nav.append(InlineKeyboardButton(text=PAGE_PREV_TEXT, callback_data=f"hist:page:{page - 1}"))
+        nav.append(InlineKeyboardButton(text=PAGE_PREV_TEXT(), callback_data=f"hist:page:{page - 1}"))
     if has_next:
-        nav.append(InlineKeyboardButton(text=PAGE_NEXT_TEXT, callback_data=f"hist:page:{page + 1}"))
+        nav.append(InlineKeyboardButton(text=PAGE_NEXT_TEXT(), callback_data=f"hist:page:{page + 1}"))
     b.adjust(2)
     if nav:
         b.row(*nav)
-    b.row(InlineKeyboardButton(text="🗓 Добавить прошлые тренировки", callback_data="menu:backfill_workout"))
-    b.row(InlineKeyboardButton(text="🏠 Меню", callback_data="hist:menu"))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.add_past_workouts"), callback_data="menu:backfill_workout"))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.home_menu"), callback_data="hist:menu"))
     return b.as_markup()
 
 
@@ -1163,13 +1275,13 @@ def history_search_keyboard(workouts, page: int, has_next: bool) -> InlineKeyboa
         b.button(text=w["label"], callback_data=f"hist:item:{w['id']}")
     nav = []
     if page > 0:
-        nav.append(InlineKeyboardButton(text=PAGE_PREV_TEXT, callback_data=f"hist:spage:{page - 1}"))
+        nav.append(InlineKeyboardButton(text=PAGE_PREV_TEXT(), callback_data=f"hist:spage:{page - 1}"))
     if has_next:
-        nav.append(InlineKeyboardButton(text=PAGE_NEXT_TEXT, callback_data=f"hist:spage:{page + 1}"))
+        nav.append(InlineKeyboardButton(text=PAGE_NEXT_TEXT(), callback_data=f"hist:spage:{page + 1}"))
     b.adjust(2)
     if nav:
         b.row(*nav)
-    b.row(InlineKeyboardButton(text="🏠 Меню", callback_data="hist:menu"))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.home_menu"), callback_data="hist:menu"))
     return b.as_markup()
 
 
@@ -1182,20 +1294,20 @@ def repeat_list_keyboard(workouts, page: int, has_next: bool) -> InlineKeyboardM
     b.adjust(1)
     nav = []
     if page > 0:
-        nav.append(InlineKeyboardButton(text=PAGE_PREV_TEXT, callback_data=f"pick:rep:page:{page - 1}"))
+        nav.append(InlineKeyboardButton(text=PAGE_PREV_TEXT(), callback_data=f"pick:rep:page:{page - 1}"))
     if has_next:
-        nav.append(InlineKeyboardButton(text=PAGE_NEXT_TEXT, callback_data=f"pick:rep:page:{page + 1}"))
+        nav.append(InlineKeyboardButton(text=PAGE_NEXT_TEXT(), callback_data=f"pick:rep:page:{page + 1}"))
     if nav:
         b.row(*nav)
-    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="pick:rep:cancel"))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.back"), callback_data="pick:rep:cancel"))
     return b.as_markup()
 
 
 def repeat_preview_keyboard(workout_id: int) -> InlineKeyboardMarkup:
     """On the preview of a past workout: repeat it, or go back to the list."""
     b = InlineKeyboardBuilder()
-    b.button(text="✅ Повторить эту", callback_data=f"pick:rep:use:{workout_id}")
-    b.button(text="⬅️ К списку", callback_data="pick:rep:list")
+    b.button(text=i18n.t("btn.repeat_this"), callback_data=f"pick:rep:use:{workout_id}")
+    b.button(text=i18n.t("btn.to_list"), callback_data="pick:rep:list")
     b.adjust(1)
     return b.as_markup()
 
@@ -1203,14 +1315,14 @@ def repeat_preview_keyboard(workout_id: int) -> InlineKeyboardMarkup:
 def history_item_keyboard(workout_id: int, show_ai_button: bool = False) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     if show_ai_button:
-        b.row(InlineKeyboardButton(text="🤖 Комментарий AI-тренера", callback_data=f"ai:comment:{workout_id}"))
+        b.row(InlineKeyboardButton(text=i18n.t("btn.ai_comment"), callback_data=f"ai:comment:{workout_id}"))
     b.row(
-        InlineKeyboardButton(text="🖼 Картинка", callback_data=f"hist:card:{workout_id}"),
-        InlineKeyboardButton(text="✏️ Редактировать", callback_data=f"hist:edit:{workout_id}"),
+        InlineKeyboardButton(text=i18n.t("btn.picture"), callback_data=f"hist:card:{workout_id}"),
+        InlineKeyboardButton(text=i18n.t("btn.edit"), callback_data=f"hist:edit:{workout_id}"),
     )
     b.row(
-        InlineKeyboardButton(text="🗑 Удалить", callback_data=f"hist:del:{workout_id}"),
-        InlineKeyboardButton(text="⬅️ К списку", callback_data="hist:back"),
+        InlineKeyboardButton(text=i18n.t("btn.delete"), callback_data=f"hist:del:{workout_id}"),
+        InlineKeyboardButton(text=i18n.t("btn.to_list"), callback_data="hist:back"),
     )
     return b.as_markup()
 
@@ -1223,25 +1335,25 @@ def workout_card_keyboard(
     go and look at it — the grid lives behind Прогресс → выбор группы."""
     b = InlineKeyboardBuilder()
     if show_ai_button:
-        b.row(InlineKeyboardButton(text="🤖 Комментарий AI-тренера", callback_data=f"ai:comment:{workout_id}"))
+        b.row(InlineKeyboardButton(text=i18n.t("btn.ai_comment"), callback_data=f"ai:comment:{workout_id}"))
     if show_achievements:
         # Суффикс :card — «пришли с карточки законченной тренировки», по образцу
         # существующего :prog. Нужен, чтобы экран достижений НЕ съел карточку:
         # из главного меню и из прогресса удалять экран под собой правильно, а
         # карточка это запись в ленте, и второй раз её взять неоткуда.
         b.row(InlineKeyboardButton(
-            text="🏆 Достижения", callback_data="menu:achievements:card"
+            text=i18n.t("btn.achievements"), callback_data="menu:achievements:card"
         ))
     b.row(
-        InlineKeyboardButton(text="🖼 Картинка", callback_data=f"hist:card:{workout_id}"),
-        InlineKeyboardButton(text="📝 Заметка", callback_data=f"live:addnote:{workout_id}"),
+        InlineKeyboardButton(text=i18n.t("btn.picture"), callback_data=f"hist:card:{workout_id}"),
+        InlineKeyboardButton(text=i18n.t("btn.note"), callback_data=f"live:addnote:{workout_id}"),
     )
     # A typo caught right here (still fresh in memory) would otherwise mean
     # Меню → История → find this workout → редактировать — same hist:edit
     # callback the history screen's card already uses.
     b.row(
-        InlineKeyboardButton(text="✏️ Редактировать", callback_data=f"hist:edit:{workout_id}"),
-        InlineKeyboardButton(text="🏠 Меню", callback_data="live:back_to_menu"),
+        InlineKeyboardButton(text=i18n.t("btn.edit"), callback_data=f"hist:edit:{workout_id}"),
+        InlineKeyboardButton(text=i18n.t("btn.home_menu"), callback_data="live:back_to_menu"),
     )
     return b.as_markup()
 
@@ -1253,13 +1365,13 @@ def admin_users_keyboard(users, page: int, has_next: bool) -> InlineKeyboardMark
         b.button(text=f"{name} ({u['workout_count']})", callback_data=f"admin:u:{u['telegram_id']}")
     nav = []
     if page > 0:
-        nav.append(InlineKeyboardButton(text=PAGE_PREV_TEXT, callback_data=f"admin:up:{page - 1}"))
+        nav.append(InlineKeyboardButton(text=PAGE_PREV_TEXT(), callback_data=f"admin:up:{page - 1}"))
     if has_next:
-        nav.append(InlineKeyboardButton(text=PAGE_NEXT_TEXT, callback_data=f"admin:up:{page + 1}"))
+        nav.append(InlineKeyboardButton(text=PAGE_NEXT_TEXT(), callback_data=f"admin:up:{page + 1}"))
     b.adjust(1)
     if nav:
         b.row(*nav)
-    b.row(InlineKeyboardButton(text="🏠 Меню", callback_data="admin:menu"))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.home_menu"), callback_data="admin:menu"))
     return b.as_markup()
 
 
@@ -1271,19 +1383,19 @@ def admin_history_list_keyboard(
         b.button(text=w["label"], callback_data=f"admin:hi:{target_user_id}:{w['id']}")
     nav = []
     if page > 0:
-        nav.append(InlineKeyboardButton(text=PAGE_PREV_TEXT, callback_data=f"admin:hp:{target_user_id}:{page - 1}"))
+        nav.append(InlineKeyboardButton(text=PAGE_PREV_TEXT(), callback_data=f"admin:hp:{target_user_id}:{page - 1}"))
     if has_next:
-        nav.append(InlineKeyboardButton(text=PAGE_NEXT_TEXT, callback_data=f"admin:hp:{target_user_id}:{page + 1}"))
+        nav.append(InlineKeyboardButton(text=PAGE_NEXT_TEXT(), callback_data=f"admin:hp:{target_user_id}:{page + 1}"))
     b.adjust(1)
     if nav:
         b.row(*nav)
-    b.row(InlineKeyboardButton(text="⬅️ К пользователям", callback_data="admin:back"))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.to_users"), callback_data="admin:back"))
     return b.as_markup()
 
 
 def admin_history_item_keyboard(target_user_id: int) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.button(text="⬅️ К списку", callback_data=f"admin:hb:{target_user_id}")
+    b.button(text=i18n.t("btn.to_list"), callback_data=f"admin:hb:{target_user_id}")
     b.adjust(1)
     return b.as_markup()
 
@@ -1295,19 +1407,19 @@ def admin_ai_users_keyboard(users, page: int, has_next: bool) -> InlineKeyboardM
         b.button(text=f"{name} ({u['ai_message_count']})", callback_data=f"admin:aiu:{u['telegram_id']}")
     nav = []
     if page > 0:
-        nav.append(InlineKeyboardButton(text=PAGE_PREV_TEXT, callback_data=f"admin:aip:{page - 1}"))
+        nav.append(InlineKeyboardButton(text=PAGE_PREV_TEXT(), callback_data=f"admin:aip:{page - 1}"))
     if has_next:
-        nav.append(InlineKeyboardButton(text=PAGE_NEXT_TEXT, callback_data=f"admin:aip:{page + 1}"))
+        nav.append(InlineKeyboardButton(text=PAGE_NEXT_TEXT(), callback_data=f"admin:aip:{page + 1}"))
     b.adjust(1)
     if nav:
         b.row(*nav)
-    b.row(InlineKeyboardButton(text="🏠 Меню", callback_data="admin:menu"))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.home_menu"), callback_data="admin:menu"))
     return b.as_markup()
 
 
 def admin_ai_dialogs_back_keyboard(page: int) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.button(text="⬅️ К списку", callback_data=f"admin:aib:{page}")
+    b.button(text=i18n.t("btn.to_list"), callback_data=f"admin:aib:{page}")
     b.adjust(1)
     return b.as_markup()
 
@@ -1319,14 +1431,14 @@ def admin_activity_users_keyboard(users, page: int, has_next: bool) -> InlineKey
         b.button(text=f"{name} ({u['event_count']})", callback_data=f"admin:acu:{u['telegram_id']}")
     nav = []
     if page > 0:
-        nav.append(InlineKeyboardButton(text=PAGE_PREV_TEXT, callback_data=f"admin:acp:{page - 1}"))
+        nav.append(InlineKeyboardButton(text=PAGE_PREV_TEXT(), callback_data=f"admin:acp:{page - 1}"))
     if has_next:
-        nav.append(InlineKeyboardButton(text=PAGE_NEXT_TEXT, callback_data=f"admin:acp:{page + 1}"))
+        nav.append(InlineKeyboardButton(text=PAGE_NEXT_TEXT(), callback_data=f"admin:acp:{page + 1}"))
     b.adjust(1)
     if nav:
         b.row(*nav)
-    b.row(InlineKeyboardButton(text="🌐 Все пользователи", callback_data="admin:aca:0"))
-    b.row(InlineKeyboardButton(text="🏠 Меню", callback_data="admin:menu"))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.all_users"), callback_data="admin:aca:0"))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.home_menu"), callback_data="admin:menu"))
     return b.as_markup()
 
 
@@ -1335,12 +1447,12 @@ def admin_activity_all_keyboard(page: int, has_next: bool) -> InlineKeyboardMark
     b = InlineKeyboardBuilder()
     nav = []
     if has_next:
-        nav.append(InlineKeyboardButton(text="⬅️ раньше", callback_data=f"admin:aca:{page + 1}"))
+        nav.append(InlineKeyboardButton(text=i18n.t("btn.earlier"), callback_data=f"admin:aca:{page + 1}"))
     if page > 0:
-        nav.append(InlineKeyboardButton(text="позже ➡️", callback_data=f"admin:aca:{page - 1}"))
+        nav.append(InlineKeyboardButton(text=i18n.t("btn.later"), callback_data=f"admin:aca:{page - 1}"))
     if nav:
         b.row(*nav)
-    b.row(InlineKeyboardButton(text="⬅️ К пользователям", callback_data="admin:acb"))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.to_users"), callback_data="admin:acb"))
     return b.as_markup()
 
 
@@ -1353,12 +1465,12 @@ def admin_activity_feed_keyboard(target_user_id: int, page: int, has_next: bool)
     b = InlineKeyboardBuilder()
     nav = []
     if has_next:
-        nav.append(InlineKeyboardButton(text="⬅️ раньше", callback_data=f"admin:acf:{target_user_id}:{page + 1}"))
+        nav.append(InlineKeyboardButton(text=i18n.t("btn.earlier"), callback_data=f"admin:acf:{target_user_id}:{page + 1}"))
     if page > 0:
-        nav.append(InlineKeyboardButton(text="позже ➡️", callback_data=f"admin:acf:{target_user_id}:{page - 1}"))
+        nav.append(InlineKeyboardButton(text=i18n.t("btn.later"), callback_data=f"admin:acf:{target_user_id}:{page - 1}"))
     if nav:
         b.row(*nav)
-    b.row(InlineKeyboardButton(text="⬅️ К пользователям", callback_data="admin:acb"))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.to_users"), callback_data="admin:acb"))
     return b.as_markup()
 
 
@@ -1366,12 +1478,12 @@ def admin_pushes_keyboard(page: int, has_next: bool) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     nav = []
     if page > 0:
-        nav.append(InlineKeyboardButton(text=PAGE_PREV_TEXT, callback_data=f"admin:pp:{page - 1}"))
+        nav.append(InlineKeyboardButton(text=PAGE_PREV_TEXT(), callback_data=f"admin:pp:{page - 1}"))
     if has_next:
-        nav.append(InlineKeyboardButton(text=PAGE_NEXT_TEXT, callback_data=f"admin:pp:{page + 1}"))
+        nav.append(InlineKeyboardButton(text=PAGE_NEXT_TEXT(), callback_data=f"admin:pp:{page + 1}"))
     if nav:
         b.row(*nav)
-    b.row(InlineKeyboardButton(text="🏠 Меню", callback_data="admin:menu"))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.home_menu"), callback_data="admin:menu"))
     return b.as_markup()
 
 
@@ -1383,8 +1495,8 @@ def format_utc_offset(tz_offset: int) -> str:
 # (это суффикс к числу, "100кг"/"100lb"): тут нужно название единицы целиком, а не
 # сокращение рядом с цифрой. Внутренние значения ("kg"/"lb", "epley"/"brzycki")
 # остаются как есть везде, где их сравнивают и парсят (db, formatting, handlers.settings).
-UNIT_NAMES = {"kg": "кг", "lb": "фунты"}
-FORMULA_NAMES = {"epley": "Эпли", "brzycki": "Бжицки"}
+UNIT_NAMES = {"kg": _lazy("btn.unit_kg"), "lb": _lazy("btn.unit_lb")}
+FORMULA_NAMES = {"epley": _lazy("btn.formula_epley"), "brzycki": _lazy("btn.formula_brzycki")}
 
 
 def timezone_picker_keyboard(current: int) -> InlineKeyboardMarkup:
@@ -1399,9 +1511,44 @@ def timezone_picker_keyboard(current: int) -> InlineKeyboardMarkup:
     for off in range(-11, 15):  # UTC-11 … UTC+14
         label = format_utc_offset(off)
         b.button(text=f"• {label} •" if off == current else label, callback_data=f"settings:tzset:{off}")
-    b.button(text="⬅️ Назад", callback_data="settings:tzback")
+    b.button(text=i18n.t("btn.back"), callback_data="settings:tzback")
     # 26 смещений по четыре в ряд, остаток и «назад» — своими рядами.
     b.adjust(4, 4, 4, 4, 4, 4, 2, 1)
+    return b.as_markup()
+
+
+# Автонимы языков — не переводятся: человек, попавший не на тот язык, ищет
+# глазами родное слово, а не перевод (см. TONE_OF_VOICE.md, English voice).
+LANG_NAMES = {"ru": "Русский", "en": "English"}
+
+
+def language_keyboard(current: str) -> InlineKeyboardMarkup:
+    """Экран выбора языка интерфейса — по образцу timezone_picker_keyboard:
+    текущий язык помечается той же разметкой `• label •`, чтобы приём в
+    продукте был один."""
+    b = InlineKeyboardBuilder()
+    for code in ("ru", "en"):
+        label = LANG_NAMES[code]
+        b.button(text=f"• {label} •" if code == current else label, callback_data=f"settings:langset:{code}")
+    b.button(text=i18n.t("btn.back"), callback_data="settings:menu")
+    b.adjust(1)
+    return b.as_markup()
+
+
+def onboarding_language_keyboard(current: str) -> InlineKeyboardMarkup:
+    """Первый экран новичка, ДО приветствия _ONBOARDING (handlers/workout.py,
+    cmd_start) — та же разметка `• label •`, что и у language_keyboard в
+    настройках, чтобы приём «текущий выбор» был один на весь продукт.
+    Помеченный вариант — это угадка по language_code, а не решение за
+    человека: он всё ещё может её поправить, нажав другую кнопку.
+
+    Без «⬅️ Назад»: до выбора языка идти ещё некуда, это первый экран из
+    всех."""
+    b = InlineKeyboardBuilder()
+    for code in ("ru", "en"):
+        label = LANG_NAMES[code]
+        b.button(text=f"• {label} •" if code == current else label, callback_data=f"onboarding:lang:{code}")
+    b.adjust(1)
     return b.as_markup()
 
 
@@ -1415,40 +1562,43 @@ def settings_keyboard(
     food_macros_enabled: bool = True,
     show_extra_stats: bool = True,
     show_mcp: bool = False,
+    lang: str = "ru",
 ) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.button(text=f"⚖️ Единицы: {UNIT_NAMES.get(unit, unit)}", callback_data="settings:unit")
+    b.button(text=f"⚖️ {i18n.t('btn.units')}: {UNIT_NAMES.get(unit, unit)}", callback_data="settings:unit")
     # "e1RM", not "1ПМ": every card, chart and record in the bot is labelled
     # e1RM, and a setting that names the metric differently reads as a setting
     # for something else entirely.
     b.button(
-        text=f"📐 Формула e1RM: {FORMULA_NAMES.get(formula, formula)}",
+        text=f"📐 {i18n.t('btn.formula_label')}: {FORMULA_NAMES.get(formula, formula)}",
         callback_data="settings:formula",
     )
-    b.button(text=f"🕒 Часовой пояс: {format_utc_offset(tz_offset)}", callback_data="settings:tz")
+    b.button(text=f"🕒 {i18n.t('btn.timezone_label')}: {format_utc_offset(tz_offset)}", callback_data="settings:tz")
+    # Единственная подпись на этом экране, которая уже переведена: остальные
+    # настройки локализуются отдельной фазой, но дорога к смене языка обязана
+    # читаться на языке того, кто попал сюда не на свой, — иначе выйти отсюда
+    # он не сможет. Значение — автоним, он не переводится никогда.
+    b.button(
+        text=f"🌐 {i18n.t_in(lang, 'screen.language.button')}: {LANG_NAMES.get(lang, lang)}",
+        callback_data="settings:lang",
+    )
     # Все тумблеры ниже — одна конструкция: «<label>: <глагол от первого
     # лица>» / «<label>: <его отрицание>» — раньше формы расходились
     # («вкл»/«выкл», «включены»/«выключены», «считаю»/«не считаю»,
     # «подробно»/«компактно») и один и тот же переключатель на экране читался
     # то канцелярией, то голосом тренера.
     progression_label = (
-        "🎯 Подсказки прогрессии: подсказываю"
-        if progression_enabled
-        else "🎯 Подсказки прогрессии: молчу"
+        i18n.t("btn.progression_on") if progression_enabled else i18n.t("btn.progression_off")
     )
     b.button(text=progression_label, callback_data="settings:progression")
-    pushes_label = "🔔 Пуши: шлю" if pushes_enabled else "🔕 Пуши: молчу"
+    pushes_label = i18n.t("btn.pushes_on") if pushes_enabled else i18n.t("btn.pushes_off")
     b.button(text=pushes_label, callback_data="settings:pushes")
     ai_label = (
-        "🤖 Комментарии AI-тренера: комментирую"
-        if ai_comments_enabled
-        else "🤖 Комментарии AI-тренера: молчу"
+        i18n.t("btn.ai_comments_on") if ai_comments_enabled else i18n.t("btn.ai_comments_off")
     )
     b.button(text=ai_label, callback_data="settings:ai_comments")
     macros_label = (
-        "🔢 КБЖУ в дневнике питания: считаю"
-        if food_macros_enabled
-        else "📝 КБЖУ в дневнике питания: не считаю"
+        i18n.t("btn.macros_on") if food_macros_enabled else i18n.t("btn.macros_off")
     )
     b.button(text=macros_label, callback_data="settings:food_macros")
     # users.show_extra_stats has always gated the e1RM line on the finish card;
@@ -1456,21 +1606,21 @@ def settings_keyboard(
     # компактно» не говорило, что именно меняется — переименовано в то, что
     # реально переключается.
     card_label = (
-        "📊 e1RM на карточке: показываю" if show_extra_stats else "📊 e1RM на карточке: прячу"
+        i18n.t("btn.card_detail_on") if show_extra_stats else i18n.t("btn.card_detail_off")
     )
     b.button(text=card_label, callback_data="settings:card_detail")
     # Профиль тренирующегося пишет AI-тренер (ai_trainer.save_athlete_profile),
     # и до появления этого экрана посмотреть, что он там про тебя записал, было
     # нельзя нигде — при том что от этих полей зависит, какую программу он
     # соберёт.
-    b.button(text="🤖 Что тренер про тебя знает", callback_data="settings:profile")
-    b.button(text="📤 Экспорт CSV", callback_data="settings:export")
-    b.button(text="📥 Импорт CSV", callback_data="settings:import")
+    b.button(text=i18n.t("btn.trainer_knows"), callback_data="settings:profile")
+    b.button(text=i18n.t("btn.export_csv"), callback_data="settings:export")
+    b.button(text=i18n.t("btn.import_csv"), callback_data="settings:import")
     # Скрыт, когда бот развёрнут без публичного адреса для MCP: подключать
     # тогда физически не к чему (см. config.mcp_available).
     if show_mcp:
-        b.button(text="🔌 Подключить к Claude и ChatGPT", callback_data="settings:mcp")
-    b.button(text="🏠 Меню", callback_data="settings:back")
+        b.button(text=i18n.t("btn.connect_mcp"), callback_data="settings:mcp")
+    b.button(text=i18n.t("btn.home_menu"), callback_data="settings:back")
     b.adjust(1)
     return b.as_markup()
 
@@ -1484,8 +1634,8 @@ def profile_keyboard() -> InlineKeyboardMarkup:
     save_athlete_profile пустые поля игнорирует, — поэтому кнопка одна.
     """
     b = InlineKeyboardBuilder()
-    b.button(text="🗑 Очистить", callback_data="settings:profileclear")
-    b.button(text="⬅️ Назад", callback_data="settings:menu")
+    b.button(text=i18n.t("btn.clear"), callback_data="settings:profileclear")
+    b.button(text=i18n.t("btn.back"), callback_data="settings:menu")
     b.adjust(1)
     return b.as_markup()
 
@@ -1546,25 +1696,25 @@ def mcp_keyboard(has_token: bool, has_connections: bool = False) -> InlineKeyboa
     # пути, когда приложение уже открыло страницу подтверждения. Взятый заранее
     # успевает истечь, пока человек ищет в приложении раздел коннекторов, — та же
     # кнопка есть на каждом экране инструкции, где она и к месту.
-    b.row(InlineKeyboardButton(text="🔗 Код для подключения", callback_data="mcp:code"))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.connection_code"), callback_data="mcp:code"))
     if has_connections:
         b.row(
             InlineKeyboardButton(
-                text="🔌 Подключённые приложения", callback_data="mcp:apps"
+                text=i18n.t("btn.connected_apps"), callback_data="mcp:apps"
             )
         )
     if has_token:
         b.row(
-            InlineKeyboardButton(text="♻️ Перевыпустить", callback_data="mcp:issue"),
-            InlineKeyboardButton(text="🗑 Отозвать", callback_data="mcp:revoke"),
+            InlineKeyboardButton(text=i18n.t("btn.reissue"), callback_data="mcp:issue"),
+            InlineKeyboardButton(text=i18n.t("btn.revoke"), callback_data="mcp:revoke"),
         )
     else:
         b.row(
             InlineKeyboardButton(
-                text="🔑 Выдать токен для терминала", callback_data="mcp:issue"
+                text=i18n.t("btn.issue_token"), callback_data="mcp:issue"
             )
         )
-    b.row(InlineKeyboardButton(text="🔧 Настройки", callback_data="menu:settings"))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.settings"), callback_data="menu:settings"))
     return b.as_markup()
 
 
@@ -1579,8 +1729,8 @@ def mcp_guide_keyboard(code_kind: str | None = None) -> InlineKeyboardMarkup:
     if code_kind:
         # Суффикс :new — чтобы просто вернуться на этот экран можно было, не
         # трогая код: человек мог его уже скопировать и зайти перечитать шаг.
-        b.button(text="🔄 Новый код", callback_data=f"mcp:how:{code_kind}:new")
-    b.button(text="⬅️ К подключению", callback_data="mcp:open")
+        b.button(text=i18n.t("btn.new_code"), callback_data=f"mcp:how:{code_kind}:new")
+    b.button(text=i18n.t("btn.to_connection"), callback_data="mcp:open")
     b.adjust(1)
     return b.as_markup()
 
@@ -1589,8 +1739,8 @@ def mcp_code_keyboard() -> InlineKeyboardMarkup:
     """Экран кода без инструкции — для тех, у кого страница подтверждения уже
     открыта. «Новый код» тут же: код живёт минуты."""
     b = InlineKeyboardBuilder()
-    b.button(text="🔄 Новый код", callback_data="mcp:code")
-    b.button(text="⬅️ К подключению", callback_data="mcp:open")
+    b.button(text=i18n.t("btn.new_code"), callback_data="mcp:code")
+    b.button(text=i18n.t("btn.to_connection"), callback_data="mcp:open")
     b.adjust(1)
     return b.as_markup()
 
@@ -1604,15 +1754,15 @@ def mcp_apps_keyboard(connections: list[tuple[str, str]]) -> InlineKeyboardMarku
     """
     b = InlineKeyboardBuilder()
     for client_id, name in connections:
-        b.button(text=f"🚫 Отключить {name}", callback_data=f"mcp:off:{client_id}")
-    b.button(text="⬅️ К подключению", callback_data="mcp:open")
+        b.button(text=i18n.t("btn.disconnect", name=name), callback_data=f"mcp:off:{client_id}")
+    b.button(text=i18n.t("btn.to_connection"), callback_data="mcp:open")
     b.adjust(1)
     return b.as_markup()
 
 
 # Chart window options for the weight diary (weeks; 0 = all history). The 10/20
 # split mirrors the progress chart's periods so both screens offer the same shape.
-BODYWEIGHT_PERIODS = [(10, "10 нед"), (20, "20 нед"), (0, "Всё")]
+BODYWEIGHT_PERIODS = [(10, _lazy("btn.weeks_n", n=10)), (20, _lazy("btn.weeks_n", n=20)), (0, _lazy("btn.all_weeks"))]
 # A bounded window, not all history: the screen lists every entry in it, and on a
 # daily weigh-in "Всё" grows without bound. "Всё" stays one tap away.
 DEFAULT_BODYWEIGHT_WEEKS = 20
@@ -1621,16 +1771,16 @@ DEFAULT_BODYWEIGHT_WEEKS = 20
 def bodyweight_keyboard(has_logs: bool, weeks: int = 0, show_periods: bool = False) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     if has_logs:
-        b.row(InlineKeyboardButton(text="✏️ Записи", callback_data="bw:list:0"))
+        b.row(InlineKeyboardButton(text=i18n.t("btn.entries"), callback_data="bw:list:0"))
     if show_periods:
         period_buttons = [
             InlineKeyboardButton(
-                text=f"• {label} •" if value == weeks else label, callback_data=f"bw:period:{value}"
+                text=f"• {label} •" if value == weeks else str(label), callback_data=f"bw:period:{value}"
             )
             for value, label in BODYWEIGHT_PERIODS
         ]
         b.row(*period_buttons)
-    b.row(InlineKeyboardButton(text="🏠 Меню", callback_data="bw:menu"))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.home_menu"), callback_data="bw:menu"))
     return b.as_markup()
 
 
@@ -1655,12 +1805,12 @@ def bodyweight_list_keyboard(entry_ids: Sequence[int], page: int, has_next: bool
         )
     nav = []
     if page > 0:
-        nav.append(InlineKeyboardButton(text=PAGE_PREV_TEXT, callback_data=f"bw:list:{page - 1}"))
+        nav.append(InlineKeyboardButton(text=PAGE_PREV_TEXT(), callback_data=f"bw:list:{page - 1}"))
     if has_next:
-        nav.append(InlineKeyboardButton(text=PAGE_NEXT_TEXT, callback_data=f"bw:list:{page + 1}"))
+        nav.append(InlineKeyboardButton(text=PAGE_NEXT_TEXT(), callback_data=f"bw:list:{page + 1}"))
     if nav:
         b.row(*nav)
-    b.row(InlineKeyboardButton(text="⬅️ К дневнику веса", callback_data="menu:bodyweight"))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.to_weight_diary"), callback_data="menu:bodyweight"))
     return b.as_markup()
 
 
@@ -1697,10 +1847,10 @@ def food_day_keyboard(date: dt.date, entry_ids: Sequence[int], today: dt.date) -
         )
     b.row(*nav)
     if date != today:
-        b.row(InlineKeyboardButton(text="📅 Сегодня", callback_data=f"fd:day:{today.isoformat()}"))
+        b.row(InlineKeyboardButton(text=i18n.t("btn.today"), callback_data=f"fd:day:{today.isoformat()}"))
     b.row(
-        InlineKeyboardButton(text="📚 История", callback_data="fd:history:0"),
-        InlineKeyboardButton(text="🏠 Меню", callback_data="fd:menu"),
+        InlineKeyboardButton(text=i18n.t("btn.history"), callback_data="fd:history:0"),
+        InlineKeyboardButton(text=i18n.t("btn.home_menu"), callback_data="fd:menu"),
     )
     return b.as_markup()
 
@@ -1710,17 +1860,17 @@ def food_delete_confirm_keyboard(entry_id: int, back_date: dt.date) -> InlineKey
     (reuses fd:day:, the same callback the day-nav buttons already use)."""
     return yes_no_keyboard(
         yes_cb=f"fd:del:{entry_id}", no_cb=f"fd:day:{back_date.isoformat()}",
-        yes_text="🗑 Удалить", no_text="❌ Отмена",
+        yes_text=i18n.t("btn.delete"), no_text=i18n.t("btn.cancel"),
     )
 
 
 def food_confirm_keyboard() -> InlineKeyboardMarkup:
     """Под догадкой модели: подтвердить, поправить словами или выкинуть."""
     b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="✅ Всё верно", callback_data="fd:ok"))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.confirm_correct"), callback_data="fd:ok"))
     b.row(
-        InlineKeyboardButton(text="✏️ Поправить", callback_data="fd:fix"),
-        InlineKeyboardButton(text="❌ Отменить", callback_data="fd:cancel"),
+        InlineKeyboardButton(text=i18n.t("btn.correct_it"), callback_data="fd:fix"),
+        InlineKeyboardButton(text=i18n.t("btn.cancel_verb"), callback_data="fd:cancel"),
     )
     return b.as_markup()
 
@@ -1731,7 +1881,7 @@ def limit_ack_keyboard(kind: str) -> InlineKeyboardMarkup:
     Одна кнопка: нажал — и до конца суток этот вид лимита тебя пропускает.
     """
     b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="👌 Понятно, пропускай", callback_data=f"ail:ack:{kind}"))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.limit_ack"), callback_data=f"ail:ack:{kind}"))
     return b.as_markup()
 
 
@@ -1753,26 +1903,26 @@ def food_history_keyboard(
     b.adjust(2)
     nav = []
     if page > 0:
-        nav.append(InlineKeyboardButton(text=PAGE_PREV_TEXT, callback_data=f"fd:history:{page - 1}"))
+        nav.append(InlineKeyboardButton(text=PAGE_PREV_TEXT(), callback_data=f"fd:history:{page - 1}"))
     if has_next:
-        nav.append(InlineKeyboardButton(text=PAGE_NEXT_TEXT, callback_data=f"fd:history:{page + 1}"))
+        nav.append(InlineKeyboardButton(text=PAGE_NEXT_TEXT(), callback_data=f"fd:history:{page + 1}"))
     if nav:
         b.row(*nav)
-    b.row(InlineKeyboardButton(text="⬅️ К сегодняшнему дню", callback_data="fd:day:today"))
-    b.row(InlineKeyboardButton(text="🏠 Меню", callback_data="fd:menu"))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.to_today"), callback_data="fd:day:today"))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.home_menu"), callback_data="fd:menu"))
     return b.as_markup()
 
 
 def back_keyboard(cb: str) -> InlineKeyboardMarkup:
     """Одна кнопка «⬅️ Назад» — для экранов, где больше делать нечего."""
     b = InlineKeyboardBuilder()
-    b.button(text="⬅️ Назад", callback_data=cb)
+    b.button(text=i18n.t("btn.back"), callback_data=cb)
     return b.as_markup()
 
 
 def cancel_keyboard(cb: str = "cancel") -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.button(text="❌ Отмена", callback_data=cb)
+    b.button(text=i18n.t("btn.cancel"), callback_data=cb)
     return b.as_markup()
 
 
@@ -1780,24 +1930,26 @@ def routine_exercise_target_keyboard(cb: str) -> InlineKeyboardMarkup:
     """Prompt after picking an exercise to add to a routine: type a target
     ("3x8-12") or skip and leave it blank."""
     b = InlineKeyboardBuilder()
-    b.button(text="➡️ Пропустить", callback_data=cb)
+    b.button(text=i18n.t("btn.skip_arrow"), callback_data=cb)
     b.adjust(1)
     return b.as_markup()
 
 
 def feedback_keyboard() -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.button(text="✅ Готово", callback_data="feedback:done")
+    b.button(text=i18n.t("btn.done_check"), callback_data="feedback:done")
     return b.as_markup()
 
 
 def push_cta_keyboard(
-    text: Optional[str] = "▶ Начать тренировку", *, with_tz_hint: bool = False
+    text: Optional[str] = "push.cta.default", *, with_tz_hint: bool = False
 ) -> InlineKeyboardMarkup:
     """Attached to daily-rotation push notifications: routes straight into starting a workout.
 
-    `text` меняется по категории пуша (см. engagement.PUSH_CTA_BY_CATEGORY):
-    кнопка — последняя строка пуша, и «▶ Начать тренировку» под «серия на кону»
+    `text` — КЛЮЧ каталога (см. engagement.PUSH_CTA_BY_CATEGORY/DEFAULT_PUSH_CTA),
+    не готовый текст: рендерится здесь через i18n.t(text), в языке того, кому
+    уходит пуш (engagement._deliver оборачивает доставку в i18n.use_lang).
+    Кнопка — последняя строка пуша, и «▶ Начать тренировку» под «серия на кону»
     звучит как реклама, а «▶ Спасти серию» — как продолжение реплики тренера.
     `text=None` — только строка про пояс, без основной кнопки (у дайджестов
     своей CTA нет, см. PushDecision.with_cta).
@@ -1827,11 +1979,11 @@ def push_cta_keyboard(
     """
     b = InlineKeyboardBuilder()
     if text:
-        b.button(text=text, callback_data="push:start_workout")
+        b.button(text=i18n.t(text), callback_data="push:start_workout")
     else:
-        b.button(text="🏠 Меню", callback_data="live:back_to_menu")
+        b.button(text=i18n.t("btn.home_menu"), callback_data="live:back_to_menu")
     if with_tz_hint:
-        b.button(text="🕐 Пуш пришёл не вовремя? Скажи пояс", callback_data="settings:tz")
+        b.button(text=i18n.t("btn.tz_hint"), callback_data="settings:tz")
     b.adjust(1)
     return b.as_markup()
 
@@ -1842,7 +1994,7 @@ def import_overview_cta_keyboard() -> InlineKeyboardMarkup:
     задаёт тренеру готовый вопрос про эту же историю, тем же путём, что и
     готовые вопросы интро (см. handlers.ai_trainer.ai_import_cta)."""
     b = InlineKeyboardBuilder()
-    b.button(text="🤖 Я стал сильнее за этот год?", callback_data="ai:import_cta")
+    b.button(text=i18n.t("btn.ai_import_cta"), callback_data="ai:import_cta")
     return b.as_markup()
 
 
@@ -1852,7 +2004,7 @@ def donate_keyboard(presets: Sequence[int]) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     for stars in presets:
         b.button(text=f"{stars} ⭐", callback_data=f"donate:pay:{stars}")
-    b.button(text="⬅️ Назад", callback_data="donate:back")
+    b.button(text=i18n.t("btn.back"), callback_data="donate:back")
     b.adjust(len(presets), 1)
     return b.as_markup()
 
@@ -1871,11 +2023,18 @@ def announcement_keyboard(buttons: Sequence[tuple[str, str]]) -> InlineKeyboardM
     return b.as_markup()
 
 
-_CAL_WEEKDAYS = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
-_MONTHS_RU = [
-    "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
-    "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь",
-]
+# Функции, не константы, по той же причине, что PAGE_PREV_TEXT/PAGE_NEXT_TEXT
+# выше: значение зависит от текущего языка в момент рендера календаря, а не
+# от языка процесса на момент импорта модуля.
+_CAL_WEEKDAY_KEYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+
+
+def _cal_weekdays() -> list[str]:
+    return [i18n.t(f"btn.cal.{code}") for code in _CAL_WEEKDAY_KEYS]
+
+
+def _cal_month_name(month: int) -> str:
+    return i18n.t(f"btn.cal.month_{month}")
 
 
 def calendar_keyboard(prefix: str, year: int, month: int, today: dt.date | None = None) -> InlineKeyboardMarkup:
@@ -1896,13 +2055,13 @@ def calendar_keyboard(prefix: str, year: int, month: int, today: dt.date | None 
     can_next = next_first <= dt.date(today.year, today.month, 1)
     b.row(
         InlineKeyboardButton(text="‹", callback_data=f"{prefix}:cal:{prev_last.year}-{prev_last.month}"),
-        InlineKeyboardButton(text=f"{_MONTHS_RU[month - 1]} {year}", callback_data=f"{prefix}:noop"),
+        InlineKeyboardButton(text=f"{_cal_month_name(month)} {year}", callback_data=f"{prefix}:noop"),
         InlineKeyboardButton(
             text="›" if can_next else " ",
             callback_data=f"{prefix}:cal:{next_first.year}-{next_first.month}" if can_next else f"{prefix}:noop",
         ),
     )
-    b.row(*[InlineKeyboardButton(text=w, callback_data=f"{prefix}:noop") for w in _CAL_WEEKDAYS])
+    b.row(*[InlineKeyboardButton(text=w, callback_data=f"{prefix}:noop") for w in _cal_weekdays()])
 
     cells = [InlineKeyboardButton(text=" ", callback_data=f"{prefix}:noop") for _ in range(first.weekday())]
     days_in_month = (next_first - first).days
@@ -1920,10 +2079,10 @@ def calendar_keyboard(prefix: str, year: int, month: int, today: dt.date | None 
 
     yesterday = today - dt.timedelta(days=1)
     b.row(
-        InlineKeyboardButton(text="Сегодня", callback_data=f"{prefix}:date:{today.isoformat()}"),
-        InlineKeyboardButton(text="Вчера", callback_data=f"{prefix}:date:{yesterday.isoformat()}"),
+        InlineKeyboardButton(text=i18n.t("btn.today_plain"), callback_data=f"{prefix}:date:{today.isoformat()}"),
+        InlineKeyboardButton(text=i18n.t("btn.yesterday"), callback_data=f"{prefix}:date:{yesterday.isoformat()}"),
     )
-    b.row(InlineKeyboardButton(text="❌ Отмена", callback_data=f"{prefix}:cancel"))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.cancel"), callback_data=f"{prefix}:cancel"))
     return b.as_markup()
 
 
@@ -1948,15 +2107,15 @@ def exercise_resolve_keyboard(
                 text=f"📋 {tpl['display_name']}", callback_data=f"{prefix}:tpl:{tpl['id']}"
             )
         )
-    b.row(InlineKeyboardButton(text=f"➕ Создать «{name}»", callback_data=f"{prefix}:create"))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.create_named", name=name), callback_data=f"{prefix}:create"))
     if remaining > 0:
         b.row(
             InlineKeyboardButton(
-                text=f"➕ Создать все остальные ({remaining + 1})",
+                text=i18n.t("btn.create_all_remaining", n=remaining + 1),
                 callback_data=f"{prefix}:createall",
             )
         )
-    b.row(InlineKeyboardButton(text="❌ Отменить весь ввод", callback_data=f"{prefix}:cancelall"))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.cancel_all_input"), callback_data=f"{prefix}:cancelall"))
     return b.as_markup()
 
 
@@ -1972,9 +2131,9 @@ def edit_workout_keyboard(exercises) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     for block_id, exercise_id, label in exercises:
         b.button(text=label, callback_data=f"editw:ex:{block_id}:{exercise_id}")
-    b.button(text="➕ Новое упражнение", callback_data="editw:newex")
-    b.button(text="📅 Изменить дату", callback_data="editw:date")
-    b.button(text="✅ Готово", callback_data="editw:done")
+    b.button(text=i18n.t("btn.new_exercise"), callback_data="editw:newex")
+    b.button(text=i18n.t("btn.change_date"), callback_data="editw:date")
+    b.button(text=i18n.t("btn.done_check"), callback_data="editw:done")
     b.adjust(1)
     return b.as_markup()
 
@@ -1985,18 +2144,18 @@ def edit_exercise_keyboard(block_id: int, exercise_id: int, sets) -> InlineKeybo
     b = InlineKeyboardBuilder()
     for set_id, label in sets:
         b.button(text=label, callback_data=f"editw:set:{set_id}")
-    b.button(text="➕ Добавить подход", callback_data=f"editw:addset:{block_id}:{exercise_id}")
-    b.button(text="🗑 Убрать упражнение целиком", callback_data=f"editw:rmexask:{block_id}")
-    b.button(text="⬅️ К упражнениям", callback_data="editw:top")
+    b.button(text=i18n.t("btn.add_set"), callback_data=f"editw:addset:{block_id}:{exercise_id}")
+    b.button(text=i18n.t("btn.remove_exercise_whole"), callback_data=f"editw:rmexask:{block_id}")
+    b.button(text=i18n.t("btn.to_exercises"), callback_data="editw:top")
     b.adjust(1)
     return b.as_markup()
 
 
 def set_actions_keyboard(set_id: int) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.button(text="✏️ Изменить вес/повторы", callback_data=f"editw:editset:{set_id}")
-    b.button(text="🗑 Удалить подход", callback_data=f"editw:delset:{set_id}")
-    b.button(text="⬅️ Назад", callback_data="editw:back")
+    b.button(text=i18n.t("btn.edit_weight_reps"), callback_data=f"editw:editset:{set_id}")
+    b.button(text=i18n.t("btn.delete_set"), callback_data=f"editw:delset:{set_id}")
+    b.button(text=i18n.t("btn.back"), callback_data="editw:back")
     b.adjust(1)
     return b.as_markup()
 
@@ -2012,22 +2171,22 @@ def csv_import_page_keyboard(
     b = InlineKeyboardBuilder()
     nav = []
     if page > 0:
-        nav.append(InlineKeyboardButton(text=PAGE_PREV_TEXT, callback_data=f"imp:page:{page - 1}"))
+        nav.append(InlineKeyboardButton(text=PAGE_PREV_TEXT(), callback_data=f"imp:page:{page - 1}"))
     if page + 1 < total_pages:
-        nav.append(InlineKeyboardButton(text=PAGE_NEXT_TEXT, callback_data=f"imp:page:{page + 1}"))
+        nav.append(InlineKeyboardButton(text=PAGE_NEXT_TEXT(), callback_data=f"imp:page:{page + 1}"))
     if nav:
         b.row(*nav)
     if new_count:
         # Без дублей это и есть весь файл — «Загрузить N» тогда просто
         # повторяет число из заголовка, а «всё» короче и не требует сверки.
-        text = "✅ Загрузить всё" if not dup_count else f"✅ Загрузить новые ({new_count})"
+        text = i18n.t("btn.upload_all") if not dup_count else i18n.t("btn.upload_new", n=new_count)
         b.row(InlineKeyboardButton(text=text, callback_data="imp:save"))
     if dup_count:
         total = new_count + dup_count
         b.row(InlineKeyboardButton(
-            text=f"⚠️ Загрузить всё ({total}), включая дубли", callback_data="imp:saveall"
+            text=i18n.t("btn.upload_all_with_dupes", n=total), callback_data="imp:saveall"
         ))
-    b.row(InlineKeyboardButton(text="❌ Отмена", callback_data="imp:cancel"))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.cancel"), callback_data="imp:cancel"))
     return b.as_markup()
 
 
@@ -2036,12 +2195,12 @@ def csv_column_options_keyboard(headers: list[str], prefix: str, allow_skip: boo
     for idx, header in enumerate(headers):
         b.button(text=header, callback_data=f"{prefix}:{idx}")
     if allow_skip:
-        b.button(text="— нет такой колонки —", callback_data=f"{prefix}:skip")
+        b.button(text=i18n.t("btn.no_such_column"), callback_data=f"{prefix}:skip")
     b.adjust(1)
     # Without these, a mistapped column can't be undone and the only way out of
     # the import is /start.
     b.row(
-        InlineKeyboardButton(text="⬅️ Назад", callback_data="imp:mapback"),
-        InlineKeyboardButton(text="❌ Отмена", callback_data="imp:cancel"),
+        InlineKeyboardButton(text=i18n.t("btn.back"), callback_data="imp:mapback"),
+        InlineKeyboardButton(text=i18n.t("btn.cancel"), callback_data="imp:cancel"),
     )
     return b.as_markup()

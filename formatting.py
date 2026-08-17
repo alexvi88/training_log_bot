@@ -13,6 +13,8 @@ from typing import Callable, Literal, Optional
 from aiogram.types import MessageEntity
 
 import config
+import i18n
+import seed_data
 from analytics import (
     RANK_FREQUENCY_WEEKS,
     VOLUME_WINDOW_DAYS,
@@ -20,13 +22,23 @@ from analytics import (
     e1rm,
 )
 
-_WEEKDAYS_RU = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"]
-# Full names for prose ("понедельник — твой самый продуктивный день").
-WEEKDAY_NAMES_RU = [
-    "понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье",
-]
+# Ключи ICU-select date.weekday_short (locales/*.json) — порядок как у
+# datetime.weekday() (0 = понедельник).
+_WEEKDAY_KEYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 
-UNIT_LABELS = {"kg": "кг", "lb": "lb"}
+def unit_label(unit: str) -> str:
+    """Единица веса с учётом языка: «кг»/«kg» по каталогу, lb — как есть (то
+    же сокращение в обоих языках).
+
+    Раньше здесь был приватный `_unit_label` рядом с публичным словарём
+    `UNIT_LABELS = {"kg": "кг", "lb": "lb"}` — тот словарь читали напрямую
+    handlers/workout.py и handlers/bodyweight.py через `.get(unit, "кг")` с
+    русским фолбэком в вызове, и англоязычный с килограммами видел «кг» (в
+    bodyweight.py это ещё и уезжало в подпись графика). Словарь убран, все
+    вызовы переведены на эту функцию.
+    """
+    return "lb" if unit == "lb" else i18n.t("unit.kg")
+
 
 DIVIDER = "─" * 10
 
@@ -60,10 +72,27 @@ FOLD_MIN_CHARS = 300
 # (handlers.workout._should_explain_e1rm) — that card is where a newcomer meets
 # the term, but it's also read after every session, and a permanent line there
 # would be something to scroll past instead of read.
-E1RM_HINT = (
-    "ℹ️ <i>e1RM — расчётный максимум в упражнении: какой вес ты смог бы поднять "
-    "на один раз (посчитано на основе весов и повторов).</i>"
-)
+def _e1rm_hint() -> str:
+    return i18n.t("progress.e1rm_hint")
+
+
+_MODULE_ATTR_KEYS = {
+    "UNGROUPED_LABEL": "dashboard.ungrouped_label",
+    "MENU_LIFTS_NOTE": "dashboard.lifts_note",
+}
+
+
+def __getattr__(name: str) -> str:
+    """PEP 562: `formatting.E1RM_HINT`/`UNGROUPED_LABEL`/`MENU_LIFTS_NOTE`
+    остаются рабочими module-level атрибутами для handlers/workout.py и
+    тестов, но значение теперь читается из каталога по текущему языку при
+    каждом обращении, а не застывает один раз при импорте модуля (что
+    случилось бы с обычной константой)."""
+    if name == "E1RM_HINT":
+        return _e1rm_hint()
+    if name in _MODULE_ATTR_KEYS:
+        return i18n.t(_MODULE_ATTR_KEYS[name])
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def local_time_entity(moment: dt.datetime, fallback: str) -> tuple[str, MessageEntity]:
@@ -106,8 +135,20 @@ def format_group(name: str) -> str:
     heading), never the thing itself — caps read as a tag at a glance and stop
     the group competing with the name next to it. Applied at render time only:
     the stored name keeps whatever case the user typed.
+
+    Язык выбирается здесь же, а не у вызывающих. Группы мышц — глобальные строки
+    (`muscle_groups.user_id IS NULL`), их никогда не форкают в аккаунт, поэтому
+    в базе имя навсегда остаётся русским пресетом, и перевести его можно только
+    на рендере. Единственная точка рендера — вот эта функция, через неё идут и
+    клавиатура выбора группы, и панель объёма, и теги рядом с названием
+    упражнения (format_group_tag). Локализуй у вызывающих — и каждый новый
+    вызов будет молча показывать англоязычному русское слово, что и произошло
+    в трёх местах сразу, пока это жило снаружи.
+
+    Своя группа пользователя слага не имеет и возвращается как есть: это его
+    данные, а не наш пресет.
     """
-    return name.upper()
+    return seed_data.localized_muscle_group_name(name, i18n.get_lang()).upper()
 
 
 def format_group_tag(name: str) -> str:
@@ -291,39 +332,49 @@ def build_routine_target(
     if sets and reps:
         return f"{sets}×{reps}"
     if sets:
-        return f"{sets} подх."
+        return i18n.t("routine.target_sets_only", sets=sets)
     return reps
 
 
 def format_date_ru(d: dt.datetime) -> str:
-    return f"{d.strftime('%d.%m.%Y')} ({_WEEKDAYS_RU[d.weekday()]})"
+    """«07.08.2026 (чт)» / «08.07.2026 (Thu)» — число всегда цифрами (форма
+    даты не зависит от языка), день недели — по каталогу (date.weekday_short)."""
+    wd = i18n.t("date.weekday_short", wd=_WEEKDAY_KEYS[d.weekday()])
+    return i18n.t("date.full", date=d.strftime("%d.%m.%Y"), wd=wd)
 
 
-_MONTHS_RU_GEN = [
-    "января", "февраля", "марта", "апреля", "мая", "июня",
-    "июля", "августа", "сентября", "октября", "ноября", "декабря",
-]
+# Ключи ICU-select date.month_gen (locales/*.json) — по номеру месяца
+# datetime.month (1 = январь). Родительный падеж — только у русского значения
+# ключа («12 января»), у английского там обычное название месяца («January»).
+_MONTH_KEYS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
 
 
 def format_day_month_ru(d: dt.date, today: dt.date | None = None) -> str:
-    """"20 июля" — for prose and button labels, where dd.mm.yyyy reads as a form
-    field. Год добавляется только когда он не текущий ("20 июля 2025") — иначе
-    он не несёт новой информации, а на кнопке отъедает место у самой даты."""
-    base = f"{d.day} {_MONTHS_RU_GEN[d.month - 1]}"
+    """"20 июля" / "July 20" — for prose and button labels, where dd.mm.yyyy
+    reads as a form field. Год добавляется только когда он не текущий
+    ("20 июля 2025") — иначе он не несёт новой информации, а на кнопке
+    отъедает место у самой даты.
+
+    Порядок «число месяц» намеренно не зеркалится под английский («20 July»
+    вместо «July 20»): это не про месяцы как такие, а про естественный
+    порядок слов в каждом языке (см. TONE_OF_VOICE.md — «Даты»), и каталог
+    хранит оба порядка отдельными ключами (date.day_month/date.day_month_year).
+    """
+    month = i18n.t("date.month_gen", m=_MONTH_KEYS[d.month - 1])
     today = today or dt.date.today()
     if d.year != today.year:
-        return f"{base} {d.year}"
-    return base
+        return i18n.t("date.day_month_year", day=d.day, month=month, year=d.year)
+    return i18n.t("date.day_month", day=d.day, month=month)
 
 
 def format_duration(seconds: float) -> str:
     total_minutes = round(seconds / 60)
     hours, minutes = divmod(total_minutes, 60)
     if hours and minutes:
-        return f"{hours} ч {minutes} мин"
+        return i18n.t("date.duration_h_m", h=hours, m=minutes)
     if hours:
-        return f"{hours} ч"
-    return f"{minutes} мин"
+        return i18n.t("date.duration_h", h=hours)
+    return i18n.t("date.duration_m", m=minutes)
 
 
 @dataclass
@@ -432,18 +483,15 @@ def _history_bullets(names: list[str]) -> list[str]:
     lines = [f"• {escape(name)}" for name in kept]
     rest = len(names) - len(kept)
     if rest:
-        lines.append(f"• +{rest} {plural_ru(rest, ('другое', 'других', 'других'))}")
+        lines.append(f"• {i18n.t('history.more_exercises', n=rest)}")
     return lines
 
 
 def build_history_list(
     entries: list[tuple[dt.datetime, list[str], int]],
-    header: str = (
-        "📚 <b>История тренировок</b>\n"
-        "<i>Ищешь конкретное упражнение? Просто напиши его название.</i>"
-    ),
+    header: str | None = None,
     footer: str = "",
-    empty: str = "Пока нет завершённых тренировок.",
+    empty: str | None = None,
 ) -> str:
     """The history list's body: date, then what was in that session.
 
@@ -451,10 +499,15 @@ def build_history_list(
     ("conventional deadlift", "abs - pull down block") run 20-30 characters —
     two of them already overflow a button label, while the message body has
     thousands of characters going spare.
+
+    `header`/`empty` default to None, а не готовой русской строке: обычной
+    константой в сигнатуре значение застыло бы на языке, который был активен
+    в момент импорта модуля, а не вызова функции (handlers.history зовёт эту
+    функцию без этих аргументов в самом частом случае — просмотре истории).
     """
     if not entries:
-        return empty
-    lines = [header]
+        return empty if empty is not None else i18n.t("history.empty")
+    lines = [header if header is not None else i18n.t("history.header")]
     for started, names, _set_count in entries:
         head = format_date_ru(started)
         lines.append("")
@@ -462,7 +515,7 @@ def build_history_list(
         if names:
             lines.extend(f"<i>{b}</i>" for b in _history_bullets(names))
         else:
-            lines.append("<i>пусто</i>")
+            lines.append(f"<i>{i18n.t('history.day_empty')}</i>")
     if footer:
         lines.append("")
         lines.append(footer)
@@ -484,13 +537,13 @@ def build_import_confirmation_list(
     for date, names in entries:
         head = f"<b>{format_date_ru(date)}</b>"
         if date.isoformat() in dup_dates:
-            head += " ⚠️ уже есть в истории"
+            head += i18n.t("history.import_duplicate")
         lines.append("")
         lines.append(head)
         if names:
             lines.extend(f"<i>{b}</i>" for b in _history_bullets(names))
         else:
-            lines.append("<i>пусто</i>")
+            lines.append(f"<i>{i18n.t('history.day_empty')}</i>")
     return "\n".join(lines)
 
 
@@ -506,7 +559,7 @@ def format_delta(delta: float, unit: str = "kg") -> str:
     Заодно вес идёт через format_weight: «66кг» вместо «66.0кг» — в остальной
     карточке веса давно так и печатаются.
     """
-    u = UNIT_LABELS.get(unit, "кг")
+    u = unit_label(unit)
     return f"{_delta_arrow(delta)}{format_weight(abs(delta))}{u}"
 
 
@@ -533,14 +586,17 @@ def format_tonnage(total: float, unit: str = "kg") -> str:
     2-4 form regardless of the leading digit, so only a whole number of tons
     goes through the normal plural_ru rules.
     """
-    u = UNIT_LABELS.get(unit, "кг")
+    u = unit_label(unit)
     total_kg = to_kg(total, unit)
     if total_kg >= 1000:
         tons = round(total_kg / 1000, 1)
         tons_str = format_weight(tons)
-        forms = ("тонна", "тонны", "тонн")
-        word = plural_ru(int(tons), forms) if tons == int(tons) else forms[1]
-        return f"{tons_str} {word}"
+        # Дробное количество тонн всегда берёт форму «тонны» независимо от
+        # ведущей цифры — форсируем это, подставляя в plural число 2 (форма
+        # few по-русски), а не само дробное значение: ICU-плюрализация здесь
+        # выбирает только слово, число на экране печатает {tons} отдельно.
+        plural_n = int(tons) if tons == int(tons) else 2
+        return i18n.t("tonnage.total", tons=tons_str, n=plural_n)
     return f"{total:.0f}{u}"
 
 
@@ -575,16 +631,15 @@ def _block_record_text(
     """
     if block.record_reps is not None:
         reps = block.record_reps
-        word = plural_ru(reps, ("повтор", "повтора", "повторов"))
-        return f"Рекорд — {reps} {word} в подходе"
+        return i18n.t("card.record_reps", reps=reps, n=reps)
     if block.record_e1rm_delta is not None and show_extra:
-        u = UNIT_LABELS.get(unit, "кг")
-        return f"+{format_weight(block.record_e1rm_delta)}{u} к рекорду"
+        u = unit_label(unit)
+        return i18n.t("card.record_e1rm", delta=format_weight(block.record_e1rm_delta), u=u)
     return None
 
 
 def _render_single_block(block: ExerciseBlockView, show_extra: bool, unit: str = "kg") -> list[str]:
-    u = UNIT_LABELS.get(unit, "кг")
+    u = unit_label(unit)
     label = f"{escape(block.exercise_name)} [{escape(format_group_tag(block.group_name))}]"
     lines = [f"<b>{label}</b>"]
     if block.note:
@@ -603,7 +658,7 @@ def _render_single_block(block: ExerciseBlockView, show_extra: bool, unit: str =
         formatted = [format_set(w, r, block.rpe_for(i)) for i, (w, r) in enumerate(block.sets)]
         lines.append(f"  {', '.join(formatted)}")
     else:
-        lines.append("  <i>подходов нет</i>")
+        lines.append(f"  <i>{i18n.t('card.no_sets')}</i>")
     # Прошлый рекорд стоял с прошлой же тренировки — тогда «↑+5.7 vs 03.08» и
     # «на 5.7 выше прошлого» это одно и то же число дважды. Строка e1RM в этом
     # случае остаётся голой — сравнение уже сказано строкой рекорда.
@@ -629,7 +684,7 @@ def _render_single_block(block: ExerciseBlockView, show_extra: bool, unit: str =
     if block.prev_sets:
         formatted_prev = [format_set(w, r, block.prev_rpe_for(i)) for i, (w, r) in enumerate(block.prev_sets)]
         prev_str = ", ".join(formatted_prev)
-        lines.append(f"<i>  [прошлая: {prev_str}]</i>")
+        lines.append(f"<i>{i18n.t('card.previous_sets', sets=prev_str)}</i>")
     return lines
 
 
@@ -662,7 +717,7 @@ def build_workout_summary(
             lines.extend(_render_single_block(block, show_extra_stats, unit))
         text = "\n".join(lines)
         if len(keep) < len(blocks):
-            text += f"\n\n<i>Показано {len(keep)} из {len(blocks)} упражнений — карточка слишком большая.</i>"
+            text += i18n.t("card.truncated", kept=len(keep), total=len(blocks))
         return text
 
     kept = blocks
@@ -1014,9 +1069,8 @@ def split_for_telegram(text: str, limit: int) -> list[str]:
 def format_milestone_line(total_finished: int) -> str:
     """Celebratory one-liner for a round finished-workout count (see analytics.is_workout_milestone)."""
     if total_finished == 1:
-        return "🎉 <b>Первая тренировка в дневнике — поехали!</b>"
-    word = plural_ru(total_finished, ("тренировка", "тренировки", "тренировок"))
-    return f"🎉 <b>Юбилей: {total_finished} {word}!</b> Так держать."
+        return i18n.t("card.milestone_first")
+    return i18n.t("card.milestone_n", n=total_finished)
 
 
 def build_ai_comment_block(comment: str) -> str:
@@ -1027,7 +1081,7 @@ def build_ai_comment_block(comment: str) -> str:
     costs three lines and still reads as an opening sentence, and unfolding is
     a tap on the client (see collapsible).
     """
-    return f"{DIVIDER}\n🤖 <b>Комментарий AI-тренера</b>\n{collapsible_if_long(ai_markdown_to_html(comment))}"
+    return f"{DIVIDER}\n{i18n.t('card.ai_comment_header')}\n{collapsible_if_long(ai_markdown_to_html(comment))}"
 
 
 def build_ai_comment_placeholder() -> str:
@@ -1035,7 +1089,7 @@ def build_ai_comment_placeholder() -> str:
     карточка уходит без него и правится позже, и без этой строки человек видит
     ровно те же цифры, что и без AI-комментариев вовсе, и не понимает, ждать ли
     ответ или функция просто выключена."""
-    return f"{DIVIDER}\n🤖 <i>Разбираю тренировку...</i>"
+    return f"{DIVIDER}\n{i18n.t('card.ai_comment_placeholder')}"
 
 
 
@@ -1066,14 +1120,18 @@ def format_progression_rule(progression: Optional[dict], unit: Optional[str] = N
     step_text = None
     if step:
         # Вплотную к числу, как везде в проекте («20кг», не «20 кг»).
-        step_text = f"{step:g}{UNIT_LABELS.get(unit, 'кг')}" if unit else f"{step:g} к весу"
+        step_text = (
+            f"{step:g}{unit_label(unit)}" if unit else i18n.t("program.step_neutral", step=f"{step:g}")
+        )
     if rule == "double_progression":
         top = progression.get("reps_top")
         if top and step_text:
-            return f"дошёл до {top} повторов — прибавь {step_text}"
-        return "двойная прогрессия"
+            return i18n.t("program.progression_double_at_top", top=top, step=step_text)
+        return i18n.t("program.progression_double_generic")
     if rule == "linear_load":
-        return f"+{step_text} каждую тренировку" if step_text else "линейная прогрессия"
+        if step_text:
+            return i18n.t("program.progression_linear_step", step=step_text)
+        return i18n.t("program.progression_linear_generic")
     return ""
 
 
@@ -1081,9 +1139,9 @@ def format_progression_rule(progression: Optional[dict], unit: Optional[str] = N
 # (2.5 на тяге, 5 на жиме ногами, 1 на разведениях), и печатать его построчно
 # значило семнадцать почти одинаковых строк подряд — состав программы в них
 # тонул. Сам шаг человек всё равно увидит в тренировке, когда бот предложит вес.
-_PROGRESSION_KIND_TEXT = {
-    "double_progression": "двойная прогрессия: дошёл до верха диапазона повторов — прибавь вес",
-    "linear_load": "линейная прогрессия: прибавляй вес каждую тренировку",
+_PROGRESSION_KIND_KEYS = {
+    "double_progression": "program.kind_double",
+    "linear_load": "program.kind_linear",
 }
 
 
@@ -1097,7 +1155,8 @@ def progression_kind_line(days: list[dict]) -> str:
     rules = [(item.get("progression") or {}).get("rule") for day in days for item in day["items"]]
     if len(rules) < 2 or len(set(rules)) != 1:
         return ""
-    return _PROGRESSION_KIND_TEXT.get(rules[0], "")
+    key = _PROGRESSION_KIND_KEYS.get(rules[0])
+    return i18n.t(key) if key else ""
 
 
 def build_program_changes(
@@ -1120,10 +1179,10 @@ def build_program_changes(
     lines: list[str] = []
     for day in new_days:
         if _day_key(day["name"]) not in old_by:
-            lines.append(f"➕ новый день <b>{escape(day['name'])}</b>")
+            lines.append(i18n.t("program.new_day", name=escape(day["name"])))
     for day in old_days:
         if _day_key(day["name"]) not in new_by:
-            lines.append(f"➖ убираю день <b>{escape(day['name'])}</b>")
+            lines.append(i18n.t("program.removed_day", name=escape(day["name"])))
 
     for day in new_days:
         old_day = old_by.get(_day_key(day["name"]))
@@ -1140,9 +1199,10 @@ def build_program_changes(
                 changes.append(f"  ➕ {escape(item['name'])}{suffix}")
                 continue
             if (was.get("target") or "") != (target or ""):
+                no_scheme = i18n.t("program.no_scheme")
                 changes.append(
                     f"  ✏️ {escape(item['name'])}: "
-                    f"{escape(was.get('target') or 'без схемы')} → {escape(target or 'без схемы')}"
+                    f"{escape(was.get('target') or no_scheme)} → {escape(target or no_scheme)}"
                 )
             # Правило прогрессии — такая же часть упражнения, как схема, и
             # переписанное молча оно тем неприятнее, что именно по нему потом
@@ -1150,9 +1210,10 @@ def build_program_changes(
             was_rule = format_progression_rule(was.get("progression"), unit)
             now_rule = format_progression_rule(item.get("progression"), unit)
             if was_rule != now_rule:
+                no_progression = i18n.t("program.no_progression")
                 changes.append(
                     f"  ⤴️ {escape(item['name'])}: "
-                    f"{escape(was_rule or 'без прогрессии')} → {escape(now_rule or 'без прогрессии')}"
+                    f"{escape(was_rule or no_progression)} → {escape(now_rule or no_progression)}"
                 )
         for item in old_day["items"]:
             if item["name"].strip().lower() not in new_items:
@@ -1238,11 +1299,16 @@ def _truncate_block(
     return kept + note_lines
 
 
-# Программа не приговор: состав, порядок и схемы правятся руками в любой момент.
-# Без этой строчки человек считал предложение тренера единственным вариантом и
-# либо соглашался целиком, либо отказывался — хотя поменять одно упражнение
-# дешевле, чем пересобирать всё заново.
-_EDITABLE_LATER = "Потом всё правится: 🗂 Программы → ⚙️ Изменить программу — состав, порядок, схемы."
+def _editable_later() -> str:
+    """Программа не приговор: состав, порядок и схемы правятся руками в любой
+    момент. Без этой строчки человек считал предложение тренера единственным
+    вариантом и либо соглашался целиком, либо отказывался — хотя поменять
+    одно упражнение дешевле, чем пересобирать всё заново.
+
+    Функция, а не модульная константа: значение обязано читать текущий язык
+    при каждом вызове, а не застывать один раз при импорте.
+    """
+    return i18n.t("program.editable_later")
 
 
 def build_ai_program_preview(
@@ -1276,22 +1342,19 @@ def build_ai_program_preview(
     new_names = sorted(
         {item["name"] for day in days for item in day["items"] if item.get("source") == "template"}
     )
-    day_word = plural_ru(len(days), ("день", "дня", "дней"))
-    day_word_gen = plural_ru(len(days), ("дня", "дней", "дней"))
-    ex_word = plural_ru(total, ("упражнение", "упражнения", "упражнений"))
 
     lines = [
-        "📋 <b>ПРАВКА ПРОГРАММЫ</b>" if replaces else "📋 <b>ПРОГРАММА ОТ ТРЕНЕРА</b>",
+        i18n.t("program.header_edit") if replaces else i18n.t("program.header_new"),
         "",
         f"<b>{escape(name)}</b>",
-        f"{len(days)} {day_word} · {total} {ex_word}",
+        i18n.t("program.days_exercises", days=len(days), d=len(days), total=total, e=total),
     ]
 
     # Прогрессия — общий принцип программы, а не свойство каждой строки: одна
     # фраза сверху вместо семнадцати почти одинаковых под упражнениями.
     shared_kind = progression_kind_line(days)
     if shared_kind:
-        lines.append(f"⤴️ Везде {escape(shared_kind)}")
+        lines.append(i18n.t("program.shared_kind_everywhere", kind=escape(shared_kind)))
 
     composition: list[str] = []
     for day in days:
@@ -1308,27 +1371,17 @@ def build_ai_program_preview(
 
     tail = ["", DIVIDER]
     if replaces:
-        tail.append(
-            f"Заменю этим твою программу «{escape(replaces['name'])}» — "
-            "старая версия её дней удалится."
-        )
+        tail.append(i18n.t("program.replaces_tail", name=escape(replaces["name"])))
     elif len(days) == 1:
-        tail.append("Добавлю как программу — начать по ней тренировку можно в один тап.")
-        tail.append(_EDITABLE_LATER)
+        tail.append(i18n.t("program.add_single_tail"))
+        tail.append(_editable_later())
     else:
-        tail.append(
-            f"Добавлю программу «{escape(name)}» из {len(days)} {day_word_gen} — "
-            "начать тренировку по любому можно в один тап."
-        )
-        tail.append(_EDITABLE_LATER)
+        tail.append(i18n.t("program.add_multi_tail", name=escape(name), days=len(days), d=len(days)))
+        tail.append(_editable_later())
     if new_names:
-        # Родительный падеж множественного числа тут фиксированный, а не по
-        # plural_ru(len(new_names), ...): «Новых для тебя» требует именно его
-        # при любом количестве («упражнение: 1» читалось бы как согласование с
-        # числом, а не с «для тебя», см. A13) — ср. «Новых упражнений: 1/2/5».
-        tail.append(
-            f"Новых для тебя упражнений: {len(new_names)} — добавлю их в твой список автоматически."
-        )
+        # Числительное здесь фиксированное «Новых для тебя» — ключ каталога
+        # сам решает согласование формы по числу (см. program.new_exercises_for_you).
+        tail.append(i18n.t("program.new_exercises_for_you", n=len(new_names)))
 
     # 5.3: клампы и потери, которые раньше уходили только модели JSON-полями
     # (truncated_days/truncated_exercises/unresolved/name_truncated в
@@ -1344,16 +1397,13 @@ def build_ai_program_preview(
     # по кнопке «📋 Программа» не показывал вообще ничего (сообщение не
     # отправлялось, а ai_program_view его отправку не страхует).
     if notes:
-        notes_header = ["", "⚠️ <b>На заметку:</b>"]
+        notes_header = ["", i18n.t("program.notes_header")]
         lines += notes_header + _truncate_block(
             [f"• {escape(shorten(n, _NOTE_LIMIT))}" for n in notes],
             already=lines + notes_header,
             tail=tail,
             is_item=lambda line: line.startswith("•"),
-            note=lambda n: (
-                f"<i>…и ещё {n} {plural_ru(n, ('замечание', 'замечания', 'замечаний'))} — "
-                "спроси тренера, что ещё не вошло.</i>"
-            ),
+            note=lambda n: i18n.t("program.notes_hidden", n=n),
             # Заметки режутся первыми из трёх блоков, поэтому оставляют место
             # под «…и ещё N» обоих следующих: состава и, если это правка,
             # блока изменений. Иначе на предложении, где обрезаны все три,
@@ -1369,19 +1419,16 @@ def build_ai_program_preview(
     # тому же принципу, что и состав ниже.
     changes_block: list[str] = []
     if replaces:
-        changes_header = ["", "🔄 <b>Что меняется:</b>"]
+        changes_header = ["", i18n.t("program.changes_header")]
         changes_body = build_program_changes(replaces.get("days") or [], days, unit) or [
-            "Состав тот же — меняется только порядок или название."
+            i18n.t("program.changes_same")
         ]
         kept_changes = _truncate_block(
             changes_body,
             already=lines + changes_header,
             tail=tail,
             is_item=lambda line: any(sym in line for sym in ("➕", "➖", "✏️")),
-            note=lambda n: (
-                f"<i>…и ещё {n} {plural_ru(n, ('изменение', 'изменения', 'изменений'))} — "
-                "не поместились, полный состав смотри ниже и в «🗂 Программы» после сохранения.</i>"
-            ),
+            note=lambda n: i18n.t("program.changes_hidden", n=n),
             # Оставляем составу ниже гарантированное место хотя бы на
             # собственную «…и ещё N упражнений» (см. _COMPOSITION_NOTE_RESERVE) —
             # иначе на программе, где обрезаны оба блока разом, их note()
@@ -1401,28 +1448,28 @@ def build_ai_program_preview(
         already=lines,
         tail=tail,
         is_item=lambda line: bool(line) and line[0].isdigit(),
-        note=lambda n: (
-            f"<i>…и ещё {n} {plural_ru(n, ('упражнение', 'упражнения', 'упражнений'))} — "
-            "покажу целиком в «🗂 Программы».</i>"
-        ),
+        note=lambda n: i18n.t("program.composition_hidden", n=n),
     )
     return "\n".join(lines + kept_composition + tail)
 
 
-# Fun, shareable size comparisons for a tonnage total — (emoji, kg each, declensions),
-# light→heavy. Declensions are (1 единица, 2-4 единицы, 5+ единиц), see plural_ru.
+# Fun, shareable size comparisons for a tonnage total — (emoji, kg each, catalog
+# object id), light→heavy. Каждый id — суффикс ключа tonnage.object.<id>
+# (locales/*.json), где живёт ICU-плюрализация названия на обоих языках —
+# английское слово тут не калька русского ("гружёная «Газель»" стала общим
+# "loaded delivery van", ровно как задумано TONE_OF_VOICE.md).
 _TONNAGE_OBJECTS = [
-    ("🐺", 80, ("сенбернар", "сенбернара", "сенбернаров")),
-    ("🏍", 200, ("мотоцикл", "мотоцикла", "мотоциклов")),
-    ("🐻", 350, ("бурый медведь", "бурых медведя", "бурых медведей")),
-    ("🎹", 480, ("рояль", "рояля", "роялей")),
-    ("🐴", 550, ("конь", "коня", "коней")),
-    ("🐮", 750, ("корова", "коровы", "коров")),
-    ("🚗", 1400, ("легковушка", "легковушки", "легковушек")),
-    ("🚚", 3500, ("гружёная «Газель»", "гружёные «Газели»", "гружёных «Газелей»")),
-    ("🐘", 5000, ("слон", "слона", "слонов")),
-    ("🦈", 5500, ("касатка", "касатки", "касаток")),
-    ("🚌", 12000, ("автобус", "автобуса", "автобусов")),
+    ("🐺", 80, "saint_bernard"),
+    ("🏍", 200, "motorcycle"),
+    ("🐻", 350, "bear"),
+    ("🎹", 480, "piano"),
+    ("🐴", 550, "horse"),
+    ("🐮", 750, "cow"),
+    ("🚗", 1400, "car"),
+    ("🚚", 3500, "van"),
+    ("🐘", 5000, "elephant"),
+    ("🦈", 5500, "orca"),
+    ("🚌", 12000, "bus"),
 ]
 
 
@@ -1442,29 +1489,29 @@ def format_tonnage_equivalent(total: float, seed: int = 0, unit: str = "kg") -> 
     if total_kg < 150:
         return None
     candidates = [
-        (emoji, forms, round(total_kg / w))
-        for emoji, w, forms in _TONNAGE_OBJECTS
+        (emoji, obj_id, round(total_kg / w))
+        for emoji, w, obj_id in _TONNAGE_OBJECTS
         if 2 <= round(total_kg / w) <= 40
     ]
     if not candidates:
         # Above the heaviest bracket (or in a gap): fall back to the biggest object that fits.
         fitting = [
-            (emoji, forms, max(1, round(total_kg / w)))
-            for emoji, w, forms in _TONNAGE_OBJECTS
+            (emoji, obj_id, max(1, round(total_kg / w)))
+            for emoji, w, obj_id in _TONNAGE_OBJECTS
             if w <= total_kg
         ]
         if not fitting:
             return None
         candidates = [fitting[-1]]
-    emoji, forms, count = candidates[seed % len(candidates)]
-    noun = plural_ru(count, forms)
-    return f"Это как {count} {noun} {emoji}"
+    emoji, obj_id, count = candidates[seed % len(candidates)]
+    noun = i18n.t(f"tonnage.object.{obj_id}", n=count)
+    return i18n.t("tonnage.equivalent", count=count, noun=noun, emoji=emoji)
 
 
-# Подпись группы, под которую бот не смог определить мышцу. Своя строка, а не
-# пропуск: подходы сделаны, и прятать их из суммы значило бы показывать неверный
-# итог.
-UNGROUPED_LABEL = "БЕЗ ГРУППЫ"
+# Подпись группы, под которую бот не смог определить мышцу — читается через
+# module __getattr__ выше (formatting.UNGROUPED_LABEL), чтобы отражать
+# текущий язык при каждом обращении. Своя строка, а не пропуск: подходы
+# сделаны, и прятать их из суммы значило бы показывать неверный итог.
 
 # «Другое» — сборная группа каталога, куда попадает всё, что не легло в шесть
 # основных. На сводке она не нужна: у коридора 6–12 нет смысла для мешка, в
@@ -1503,15 +1550,15 @@ def weekly_volume_panel(
 
     ungrouped = counts.get(None, 0)
     if ungrouped:
-        rows.append((UNGROUPED_LABEL, ungrouped, classify_weekly_volume(ungrouped)))
+        rows.append((i18n.t("dashboard.ungrouped_label"), ungrouped, classify_weekly_volume(ungrouped)))
 
     total = sum(sets for _, sets, _ in rows)
     if total == 0:
         return "", []
 
     rows.sort(key=lambda row: (-row[1], row[0]))
-    word = plural_ru(total, ("ПОДХОД", "ПОДХОДА", "ПОДХОДОВ"))
-    return f"ОБЪЁМ {days_window_label(VOLUME_WINDOW_DAYS)} · {total} {word}", rows
+    title = i18n.t("volume.title", window=days_window_label(VOLUME_WINDOW_DAYS), total=total, n=total)
+    return title, rows
 
 
 # Подпись блока плиток роста — у него нет своего числа в заголовке, и без
@@ -1523,10 +1570,12 @@ def weekly_volume_panel(
 # обязан называть то самое окно, которым реально считали, а не соврать
 # «8 недель» там, где смотрели только 4.
 def menu_lifts_title(weeks: int) -> str:
-    return f"РОСТ e1RM ЗА {weeks} {plural_ru(weeks, ('НЕДЕЛЮ', 'НЕДЕЛИ', 'НЕДЕЛЬ'))}"
+    return i18n.t("dashboard.lifts_title", weeks=weeks, n=weeks)
 
 
-MENU_LIFTS_NOTE = "e1RM — РАСЧЁТНЫЙ МАКСИМУМ"
+# MENU_LIFTS_NOTE — читается через module __getattr__ выше
+# (formatting.MENU_LIFTS_NOTE), чтобы отражать текущий язык при каждом
+# обращении, а не застывать один раз при импорте модуля.
 
 # Сколько плиток роста рисуется независимо от того, сколько упражнений выросло:
 # 2×3 в раскладке _dash_growth_tiles. Больше шести на узкой картинке уже не
@@ -1541,7 +1590,7 @@ def days_window_label(days: int) -> str:
     ДНЕЙ». Одна и та же мысль, записанная тремя способами, заставляет читателя
     каждый раз заново решать, что перед ним, — а решать тут нечего.
     """
-    return f"ЗА {days} {plural_ru(days, ('ДЕНЬ', 'ДНЯ', 'ДНЕЙ'))}"
+    return i18n.t("dashboard.days_window", days=days, n=days)
 
 
 def menu_headline(dashboard) -> str:
@@ -1553,10 +1602,8 @@ def menu_headline(dashboard) -> str:
     достижением незачем.
     """
     if dashboard.week_streak >= 2:
-        weeks = plural_ru(dashboard.week_streak, ("неделя", "недели", "недель"))
-        return f"{dashboard.week_streak} {weeks} подряд"
-    word = plural_ru(dashboard.last_30_days, ("тренировка", "тренировки", "тренировок"))
-    return f"{dashboard.last_30_days} {word} за 30 дней"
+        return i18n.t("dashboard.headline_streak", weeks=dashboard.week_streak, n=dashboard.week_streak)
+    return i18n.t("dashboard.headline_month", n=dashboard.last_30_days)
 
 
 def menu_tiles(dashboard, tonnage: float, records: int, unit: str = "kg") -> list[tuple[str, str]]:
@@ -1569,7 +1616,7 @@ def menu_tiles(dashboard, tonnage: float, records: int, unit: str = "kg") -> lis
     У тоннажа и рекордов окно названо в подписи. Без него «11» рядом с «35.1 т»
     выглядит как счётчик за всё время, и цифра врёт в разы.
     """
-    u = UNIT_LABELS.get(unit, "кг")
+    u = unit_label(unit)
     # Тонны — когда их есть чем мерить: «0.4 т» читается хуже, чем «400 кг».
     #
     # Тонна — тонна, поэтому и порог, и сама цифра считаются в килограммах, ровно
@@ -1579,15 +1626,18 @@ def menu_tiles(dashboard, tonnage: float, records: int, unit: str = "kg") -> lis
     # конвертировать нечего — там его собственное число в его же единицах.
     total_kg = to_kg(tonnage, unit)
     tonnes = f"{total_kg / 1000:.1f}"
-    weight = f"{tonnes} т" if total_kg >= 1000 else f"{tonnage:.0f} {u}"
+    weight = f"{tonnes} {i18n.t('unit.ton_short')}" if total_kg >= 1000 else f"{tonnage:.0f} {u}"
     tiles = [
-        (f"ТРЕНИРОВОК {days_window_label(30)}", str(dashboard.last_30_days)),
-        (f"ТОННАЖ {days_window_label(VOLUME_WINDOW_DAYS)}", weight),
+        (i18n.t("dashboard.tile_workouts", window=days_window_label(30)), str(dashboard.last_30_days)),
+        (i18n.t("dashboard.tile_tonnage", window=days_window_label(VOLUME_WINDOW_DAYS)), weight),
     ]
     if records > 0:
-        tiles.append((f"РЕКОРДОВ {days_window_label(VOLUME_WINDOW_DAYS)}", str(records)))
+        tiles.append((
+            i18n.t("dashboard.tile_records", window=days_window_label(VOLUME_WINDOW_DAYS)),
+            str(records),
+        ))
     elif dashboard.this_week != dashboard.last_30_days:
-        tiles.append(("ТРЕНИРОВОК ЗА НЕДЕЛЮ", str(dashboard.this_week)))
+        tiles.append((i18n.t("dashboard.tile_workouts_week"), str(dashboard.this_week)))
     # Иначе плитки нет вовсе: у человека, который только начал, вся история
     # лежит внутри этой недели, и «ЗА НЕДЕЛЮ 1» рядом с «ЗА 30 ДНЕЙ 1» — это
     # одно и то же число, поставленное дважды. Две плитки на полосе честнее трёх,
@@ -1612,7 +1662,7 @@ def menu_lift_tiles(
     Имя не обрезается: это выбор, а не карточки со спарклайном, где ширина
     буквально занята линией. Полное название важнее аккуратной колонки.
     """
-    u = UNIT_LABELS.get(unit, "кг")
+    u = unit_label(unit)
     rows = [
         (name, before, window)
         for name, before, window in growth
@@ -1637,7 +1687,7 @@ def build_workout_card(
 
     Returns (title, body_lines, footer, note) — charts.render_workout_card draws them.
     """
-    u = UNIT_LABELS.get(unit, "кг")
+    u = unit_label(unit)
     title = format_date_ru(started_at)
     body: list[str] = []
     exercise_count = 0
@@ -1653,7 +1703,7 @@ def build_workout_card(
             formatted = [format_set(w, r, block.rpe_for(i)) for i, (w, r) in enumerate(block.sets)]
             body.append("  " + ", ".join(formatted))
         else:
-            body.append("  — без подходов")
+            body.append(f"  {i18n.t('card.no_sets_dash')}")
         # Рекорд едет и на картинку: её уносят в чат с друзьями, и «на 5.7кг
         # выше прошлого» — ровно то, ради чего её уносят. ★ вместо 🔥
         # — картинку рисует matplotlib, эмодзи там выходят пустыми квадратами
@@ -1665,15 +1715,17 @@ def build_workout_card(
         set_count += len(block.sets)
         tonnage += block.tonnage
 
-    ex_word = plural_ru(exercise_count, ("упражнение", "упражнения", "упражнений"))
     # TONE_OF_VOICE.md запрещает «сет» в прозе («суперсет» — ок) — словарь
-    # хочет «подход». Эта строка уходит и в текстовую карточку, и в
-    # PNG-картинку шеринга (charts.render_workout_card), так что видит её
-    # каждый пользователь на каждой законченной тренировке.
-    set_word = plural_ru(set_count, ("подход", "подхода", "подходов"))
-    footer = (
-        f"{exercise_count} {ex_word} · {set_count} {set_word} · "
-        f"{format_weight(tonnage)}{u}"
+    # хочет «подход» (по-английски же естественное слово для этого — именно
+    # «set», запрет на кальку не переносится, см. TONE_OF_VOICE.md English
+    # voice). Эта строка уходит и в текстовую карточку, и в PNG-картинку
+    # шеринга (charts.render_workout_card), так что видит её каждый
+    # пользователь на каждой законченной тренировке.
+    footer = i18n.t(
+        "card.image_footer",
+        ex=exercise_count, e=exercise_count,
+        sets=set_count, s=set_count,
+        tonnage=format_weight(tonnage), u=u,
     )
     return title, body, footer, note
 
@@ -1695,7 +1747,7 @@ def workout_pick_block(index: int, date: str, exercises: list[tuple[str, str]]) 
     """
     header = f"<b>{index} · {date}</b>"
     if not exercises:
-        return f"{header}\nнет упражнений"
+        return f"{header}\n{i18n.t('history.no_exercises')}"
     bullets = "\n".join(
         f"• {escape(name)} [{escape(format_group_tag(group))}]" if group else f"• {escape(name)}"
         for name, group in exercises
@@ -1723,7 +1775,7 @@ def build_workout_preview(
         if block.sets:
             lines.append(", ".join(format_set(w, r, block.rpe_for(i)) for i, (w, r) in enumerate(block.sets)))
         else:
-            lines.append("<i>подходов нет</i>")
+            lines.append(f"<i>{i18n.t('card.no_sets')}</i>")
     return "\n".join(lines)
 
 
@@ -1756,7 +1808,7 @@ def build_live_session_text(
             body_lines.append(", ".join(set_str(i, w, r) for i, (w, r) in enumerate(block.sets)))
     lines = list(body_lines)
     if not lines and not hint:
-        lines = ["Добавь упражнение, чтобы начать."]
+        lines = [i18n.t("card.add_exercise_to_start")]
     if hint:
         if lines:
             lines.append(DIVIDER if body_lines else "")
@@ -1777,7 +1829,8 @@ def build_gold_book_lines(golds, unit: str = "kg", is_bodyweight: bool = False) 
     # e1RM тождественно нулю, и проверка по нему прятала книгу целиком.
     if golds is None or golds.max_reps <= 0:
         return []
-    u = UNIT_LABELS.get(unit, "кг")
+    u = unit_label(unit)
+    header = i18n.t("gold.header")
 
     def dated(label: str, value: str, day: str) -> str:
         when = f" · {_iso_to_ru(day)}" if day else ""
@@ -1785,15 +1838,15 @@ def build_gold_book_lines(golds, unit: str = "kg", is_bodyweight: bool = False) 
 
     if is_bodyweight:
         # Вес всегда 0 — «самый тяжёлый» и e1RM смысла не имеют, остаются повторы.
-        return ["🥇 <b>Золотая книга</b>",
-                dated("Повторы", str(golds.max_reps), golds.max_reps_date)]
+        return [header,
+                dated(i18n.t("gold.reps_label"), str(golds.max_reps), golds.max_reps_date)]
 
     rows = [("e1RM", f"{format_weight(golds.best_e1rm)}{u} ({format_set(golds.best_e1rm_weight, golds.best_e1rm_reps)})",
              golds.best_e1rm_date)]
     weight_set = (golds.max_weight, golds.max_weight_reps)
     if weight_set != (golds.best_e1rm_weight, golds.best_e1rm_reps):
-        rows.append(("Вес", format_set(*weight_set), golds.max_weight_date))
-    return ["🥇 <b>Золотая книга</b>"] + [dated(label, value, day) for label, value, day in rows]
+        rows.append((i18n.t("gold.weight_label"), format_set(*weight_set), golds.max_weight_date))
+    return [header] + [dated(label, value, day) for label, value, day in rows]
 
 
 def _iso_to_ru(day: str) -> str:
@@ -1811,7 +1864,7 @@ def format_new_achievements(new_codes: list[str]) -> str | None:
     earned = [achievements.BY_CODE[c] for c in new_codes if c in achievements.BY_CODE]
     if not earned:
         return None
-    header = "🏅 <b>Новое достижение!</b>" if len(earned) == 1 else "🏅 <b>Новые достижения!</b>"
+    header = i18n.t("card.new_achievement_one") if len(earned) == 1 else i18n.t("card.new_achievements_many")
     lines = [header] + [f"{a.emoji} <b>{escape(a.title)}</b> — {escape(a.description)}" for a in earned]
     return "\n".join(lines)
 
@@ -1828,7 +1881,7 @@ def build_achievements_screen(earned: set[str]) -> str:
 
     got = [a for a in achievements.CATALOG if a.code in earned]
     locked = [a for a in achievements.CATALOG if a.code not in earned]
-    lines = [f"🏅 <b>ДОСТИЖЕНИЯ</b> — {len(got)}/{len(achievements.CATALOG)}"]
+    lines = [i18n.t("achievements.screen_header", got=len(got), total=len(achievements.CATALOG))]
     if got:
         lines.append(
             collapsible(
@@ -1837,7 +1890,7 @@ def build_achievements_screen(earned: set[str]) -> str:
         )
     if locked:
         lines.append("")
-        lines.append(f"<b>Ещё не открыты — {len(locked)}:</b>")
+        lines.append(i18n.t("achievements.locked_header", n=len(locked)))
         lines.append(
             collapsible(
                 "\n".join(f"🔒 {escape(a.title)} — {escape(a.description)}" for a in locked)
@@ -1851,8 +1904,8 @@ def format_duration_hm(seconds: float) -> str:
     minutes = int(seconds // 60)
     h, m = divmod(minutes, 60)
     if h:
-        return f"{h} ч {m} мин" if m else f"{h} ч"
-    return f"{m} мин"
+        return i18n.t("date.duration_h_m", h=h, m=m) if m else i18n.t("date.duration_h", h=h)
+    return i18n.t("date.duration_m", m=m)
 
 
 def _hall_of_fame_lift(name: str, weight: float, reps: int, e1rm_value: float, unit_label: str) -> str:
@@ -1860,8 +1913,7 @@ def _hall_of_fame_lift(name: str, weight: float, reps: int, e1rm_value: float, u
     record is the best set of reps instead of a weight and an e1RM."""
     if weight > 0:
         return f"• {escape(name)} — {format_set(weight, reps)} · e1RM {e1rm_value:.0f}{unit_label}"
-    word = plural_ru(reps, ("повтор", "повтора", "повторов"))
-    return f"• {escape(name)} — {reps} {word}"
+    return i18n.t("hall.reps_line", name=escape(name), reps=reps, n=reps)
 
 
 @dataclass
@@ -1902,20 +1954,26 @@ def build_weekly_summary(
     `rows` — все упражнения недели; до читаемого числа строк список режется
     здесь, а `total_tonnage` считается вызывающей стороной по всем подходам.
     """
-    u = UNIT_LABELS.get(unit, "кг")
-    w = plural_ru(workouts, ("тренировка", "тренировки", "тренировок"))
+    u = unit_label(unit)
     lines = [
-        f"📊 <b>НЕДЕЛЯ {escape(period)}</b>",
-        f"{workouts} {w} · {format_tonnage(total_tonnage, unit)}",
+        i18n.t("weekly.header", period=escape(period)),
+        i18n.t("weekly.summary_line", n=workouts, tonnage=format_tonnage(total_tonnage, unit)),
         "",
     ]
     if not rows:
-        lines.append("На этой неделе тренировок не было.")
+        lines.append(i18n.t("weekly.empty"))
         return "\n".join(lines)
     for row in _weekly_shown(rows):
         lines.append(
-            f"<b>{escape(row.name)}</b> — {format_weight(row.top_weight)}{u} · "
-            f"{row.sets_count} подх. · {format_tonnage(row.tonnage, unit)}"
+            i18n.t(
+                "weekly.row",
+                name=escape(row.name),
+                weight=format_weight(row.top_weight),
+                u=u,
+                sets=row.sets_count,
+                n=row.sets_count,
+                tonnage=format_tonnage(row.tonnage, unit),
+            )
         )
     if food_line:
         lines += ["", food_line]
@@ -1933,17 +1991,17 @@ def build_weekly_table(rows: list[WeeklyRow], unit: str = "kg"):
 
     if not rows:
         return None
-    u = UNIT_LABELS.get(unit, "кг")
+    u = unit_label(unit)
     def cell(text: str, align: str = "left", is_header: bool = False) -> RichBlockTableCell:
         # align/valign у ячейки обязательны — без них pydantic-модель aiogram
         # не собирается вовсе.
         return RichBlockTableCell(text=text, align=align, valign="middle", is_header=is_header)
 
     header = [
-        cell("Упражнение", is_header=True),
-        cell("Лучший", "right", is_header=True),
-        cell("Подх.", "right", is_header=True),
-        cell("Тоннаж", "right", is_header=True),
+        cell(i18n.t("weekly.table_header_exercise"), is_header=True),
+        cell(i18n.t("weekly.table_header_best"), "right", is_header=True),
+        cell(i18n.t("weekly.table_header_sets"), "right", is_header=True),
+        cell(i18n.t("weekly.table_header_tonnage"), "right", is_header=True),
     ]
     body = [
         [
@@ -1966,26 +2024,28 @@ def format_rank_gap(gap) -> str:  # analytics.RankGap
     """
     if gap.axis == "workouts":
         n = int(gap.value)
-        return f"ещё {n} {plural_ru(n, ('тренировка', 'тренировки', 'тренировок'))}"
+        return i18n.t("rank.gap_workouts", n=n)
     if gap.axis == "tonnage":
         tons = gap.value / 1000
         # Меньше сотни килограммов — «0.0 т» выглядело бы как «уже всё»,
         # поэтому остаток ниже центнера договариваем килограммами.
         # Округление как у порогов рядом («200 т», не «200.0 т»): лишний ноль в
         # строке-подсказке выглядит другой единицей измерения, а не той же осью.
-        return f"ещё {round(tons, 1):g} т" if gap.value >= 100 else f"ещё {gap.value:.0f} кг"
-    return f"держать {gap.value:g} трен. в неделю"
+        if gap.value >= 100:
+            return i18n.t("rank.gap_tonnage_tons", tons=f"{round(tons, 1):g}")
+        return i18n.t("rank.gap_tonnage_kg", kg=f"{gap.value:.0f}")
+    return i18n.t("rank.gap_frequency", per_week=f"{gap.value:g}")
 
 
 def format_rank_line(rank, gap=None) -> str:  # gap: analytics.RankGap | None
     """«⚙️ Станок» плюс, если есть куда расти, чего не хватает до следующего."""
-    line = f"{rank.emoji} Звание: <b>{escape(rank.name)}</b>"
-    return f"{line}  (до следующего: {format_rank_gap(gap)})" if gap else line
+    line = i18n.t("rank.line", emoji=rank.emoji, name=escape(rank.name))
+    return i18n.t("rank.line_with_gap", line=line, gap=format_rank_gap(gap)) if gap else line
 
 
 def format_rank_promotion(rank) -> str:
     """Строка повышения на карточке завершения — объявляется один раз."""
-    return f"🎖 <b>Новое звание: {rank.emoji} {escape(rank.name)}</b>"
+    return i18n.t("rank.promotion", emoji=rank.emoji, name=escape(rank.name))
 
 
 def build_rank_ladder(
@@ -2014,36 +2074,30 @@ def build_rank_ladder(
     хочет знать, какая из трёх его держит.
     """
     lines = [
-        "🎖 <b>ЗВАНИЯ</b>",
+        i18n.t("rank.ladder_header"),
         "",
-        "Звание считается по трём осям: сколько тренировок за всё время, сколько "
-        "поднято суммарно и как часто ходишь <i>сейчас</i> — за последние "
-        f"{RANK_FREQUENCY_WEEKS} недель. Берётся самая слабая, так что одна ось "
-        "не вытянет остальные.",
+        i18n.t("rank.ladder_explainer", weeks=RANK_FREQUENCY_WEEKS),
         "",
-        "Перерыв стоит одной ступени, не больше: вернёшься к темпу — вернётся и звание.",
+        i18n.t("rank.ladder_break_rule"),
         "",
     ]
     if None not in (total_workouts, tonnage_kg, per_week):
-        lines.append(
-            "📊 Сейчас у тебя: <b>"
-            + " · ".join((
-                f"{total_workouts} трен.",
-                f"{tonnage_kg / 1000:.1f} т",
-                f"{per_week:.1f} трен./нед",
-            ))
-            + "</b>"
-        )
+        stats = " · ".join((
+            i18n.t("rank.stat_workouts", n=total_workouts),
+            i18n.t("rank.stat_tonnage", tons=f"{tonnage_kg / 1000:.1f}"),
+            i18n.t("rank.stat_frequency", per_week=f"{per_week:.1f}"),
+        ))
+        lines.append(i18n.t("rank.current_stats", stats=stats))
         lines.append("")
     for rank in ranks:
-        thresholds = "с самого начала" if rank.level == 0 else " · ".join((
-            f"{rank.min_workouts} трен.",
-            f"{rank.min_tonnage_kg / 1000:g} т",
-            f"{rank.min_per_week:g} трен./нед",
+        thresholds = i18n.t("rank.threshold_from_start") if rank.level == 0 else " · ".join((
+            i18n.t("rank.stat_workouts", n=rank.min_workouts),
+            i18n.t("rank.stat_tonnage", tons=f"{rank.min_tonnage_kg / 1000:g}"),
+            i18n.t("rank.stat_frequency", per_week=f"{rank.min_per_week:g}"),
         ))
         row = f"{rank.emoji} <b>{escape(rank.name)}</b> — {thresholds}"
         if rank.level == current.level:
-            row += "  ← <b>ты здесь</b>"
+            row += i18n.t("rank.you_are_here")
         elif rank.level == current.level + 1 and gap:
             row += f"  ← {format_rank_gap(gap)}"
         lines.append(row)
@@ -2064,26 +2118,26 @@ def build_hall_of_fame(
 ) -> str:
     """Lifetime totals plus the user's best lifts, shown above the badge grid
     on the '🏅 Достижения' screen — no heading of its own."""
-    u = UNIT_LABELS.get(unit, "кг")
+    u = unit_label(unit)
     if total_workouts == 0:
-        return "Пока пусто — заверши первую тренировку, и здесь появятся твои рекорды."
+        return i18n.t("hall.empty")
 
     lines = []
     if rank is not None:
         lines.append(format_rank_line(rank, rank_gap))
     # Без слова после числа: подпись «Всего тренировок» его уже произнесла, и
     # строка читалась как «Всего тренировок: 20 тренировок».
-    lines.append(f"🗓 Всего тренировок: <b>{total_workouts}</b>")
+    lines.append(i18n.t("hall.total_workouts", n=total_workouts))
 
     # `tonnage_kg` arrives in the user's own unit despite the name — a ton is a
     # ton, so convert before comparing against one (see format_tonnage).
     lifetime_kg = to_kg(tonnage_kg, unit)
     if lifetime_kg >= 1000:
         tons = round(lifetime_kg / 1000)
-        tonnage_str = f"{tons} {plural_ru(tons, ('тонна', 'тонны', 'тонн'))}"
+        tonnage_str = i18n.t("tonnage.total", tons=str(tons), n=tons)
     else:
         tonnage_str = f"{tonnage_kg:.0f}{u}"
-    tonnage_line = f"🏋️ Поднято за всё время: <b>{tonnage_str}</b>"
+    tonnage_line = i18n.t("hall.total_tonnage", tonnage=tonnage_str)
     if tonnage_equivalent:
         clause = tonnage_equivalent.rstrip(".")
         clause = clause[:1].lower() + clause[1:]
@@ -2091,17 +2145,16 @@ def build_hall_of_fame(
     lines.append(tonnage_line)
 
     if best_week_streak >= 2:
-        wk = plural_ru(best_week_streak, ("неделя", "недели", "недель"))
-        lines.append(f"🔥 Лучшая серия: <b>{best_week_streak}</b> {wk} подряд")
+        lines.append(i18n.t("hall.best_streak", n=best_week_streak))
     if longest_workout_seconds > 0:
-        lines.append(f"⏱ Самая длинная тренировка: <b>{format_duration_hm(longest_workout_seconds)}</b>")
+        lines.append(i18n.t("hall.longest_workout", duration=format_duration_hm(longest_workout_seconds)))
 
     if not top_lifts:
         return "\n".join(lines)
 
     entries = [_hall_of_fame_lift(name, weight, reps, e1, u) for name, weight, reps, e1 in top_lifts]
     lines.append("")
-    lines.append("<b>Личные рекорды:</b>")
+    lines.append(i18n.t("hall.personal_records"))
     head = "\n".join(lines)
 
     # The whole list goes into one fold rather than being split into a visible
@@ -2110,7 +2163,7 @@ def build_hall_of_fame(
     def assemble(keep: list[str]) -> str:
         text = f"{head}\n{collapsible_if_long(chr(10).join(keep))}"
         if len(keep) < len(entries):
-            text += f"\n<i>показано {len(keep)} из {len(entries)}</i>"
+            text += f"\n{i18n.t('hall.shown_of', kept=len(keep), total=len(entries))}"
         return text
 
     kept = entries
@@ -2128,7 +2181,7 @@ def _progress_session_block(session, is_bodyweight: bool, note: str | None = Non
     d = dt.datetime.fromisoformat(session.started_at)
     sets_str = ", ".join(format_set(st.weight, st.reps, st.rpe) for st in session.sets)
     tail = (
-        f"всего повторов {session.total_reps}"
+        i18n.t("progress.total_reps", n=session.total_reps)
         if is_bodyweight
         else f"e1RM {format_weight(session.top_e1rm)}"
     )
@@ -2146,10 +2199,10 @@ def format_progress_screen(
     session_notes: dict[int, str] | None = None,  # {workout_id: note}
     golds=None,  # analytics.GoldBook | None
 ) -> str:
-    u = UNIT_LABELS.get(unit, "кг")
+    u = unit_label(unit)
     lines = [f"📈 <b>{escape(exercise_name)}</b>", ""]
     if not sessions:
-        lines.append("Пока нет завершённых тренировок с этим упражнением.")
+        lines.append(i18n.t("progress.no_history"))
         return "\n".join(lines)
 
     is_bw = sessions[-1].is_bodyweight_mode
@@ -2162,13 +2215,13 @@ def format_progress_screen(
         # (which is computed from that same limited window) disagree whenever a
         # shorter period is selected, and "с первой тренировки" would be a lie.
         first, last = candidates[0], candidates[-1]
-        since = "с первой тренировки" if len(candidates) == len(window) else "за период"
+        since = i18n.t("progress.since_first") if len(candidates) == len(window) else i18n.t("progress.since_period")
         if is_bw:
             delta = last.max_reps_in_set - first.max_reps_in_set
-            lines.append(f"Повторы: {format_delta_reps(delta)} {since}")
+            lines.append(i18n.t("progress.reps_delta", delta=format_delta_reps(delta), since=since))
         else:
             delta = last.top_e1rm - first.top_e1rm
-            lines.append(f"e1RM: {format_delta(delta, unit)} {since}")
+            lines.append(i18n.t("progress.e1rm_delta", delta=format_delta(delta, unit), since=since))
 
     # compute_personal_records honestly tracks both metrics independently of
     # session mode (max_e1rm from weighted sets, max_reps_at_weight from every
@@ -2182,10 +2235,15 @@ def format_progress_screen(
     have_weighted = any(not s.is_bodyweight_mode for s in sessions if s.sets)
     have_bw = any(s.is_bodyweight_mode for s in sessions if s.sets)
     if have_weighted:
-        lines.append(f"Рекорд: {format_set(records.best_e1rm_weight, records.best_e1rm_reps)} · e1RM {format_weight(records.max_e1rm)}{u}")
+        lines.append(i18n.t(
+            "progress.record_e1rm",
+            set=format_set(records.best_e1rm_weight, records.best_e1rm_reps),
+            value=format_weight(records.max_e1rm),
+            u=u,
+        ))
     if have_bw:
         best_reps = max(records.max_reps_at_weight.values()) if records.max_reps_at_weight else 0
-        lines.append(f"Рекорд повторов в подходе: {best_reps}")
+        lines.append(i18n.t("progress.record_reps", n=best_reps))
 
     gold_lines = build_gold_book_lines(golds, unit=unit, is_bodyweight=is_bw)
     if gold_lines:
@@ -2206,7 +2264,7 @@ def format_progress_screen(
     # A bodyweight exercise's screen is measured in reps and never prints an
     # e1RM, so there's nothing for the footnote to explain there — but if the
     # history also has weighted sessions, the hint is still relevant.
-    footer = E1RM_HINT if have_weighted else None
+    footer = _e1rm_hint() if have_weighted else None
 
     sep = "\n\n"
 
@@ -2215,8 +2273,7 @@ def format_progress_screen(
         # список тренировок — разные блоки, слипшиеся они читались как один.
         parts = [f"{header}\n\n{collapsible_if_long(sep.join(keep))}"]
         if len(window) > len(keep):
-            n = plural_ru(len(window), ("тренировка", "тренировки", "тренировок"))
-            parts.append(f"Показано {len(keep)} из {len(window)} {n}")
+            parts.append(i18n.t("progress.shown_of", kept=len(keep), total=len(window), n=len(window)))
         if footer:
             parts.append(footer)
         return "\n\n".join(parts).rstrip()
@@ -2260,23 +2317,18 @@ def build_bodyweight_screen(logs: list, unit: str = "kg", period_logs: list | No
     would vanish from the chat. Same guard, and same reason, as
     format_progress_screen.
     """
-    u = UNIT_LABELS.get(unit, "кг")
+    u = unit_label(unit)
     if not logs:
-        return (
-            "⚖️ <b>Дневник веса</b>\n\nПока нет ни одной записи.\n"
-            "Напиши вес — дальше буду показывать динамику.\n"
-            "Взвешивался раньше? Пиши с датой: «82.5 01.08.2026»."
-        )
+        return i18n.t("bodyweight.empty")
     days = _bodyweight_days(logs)
     latest = logs[-1]
     latest_weight = latest["weight"]
     d = dt.datetime.fromisoformat(latest["logged_at"])
-    n = plural_ru(len(days), ("взвешивание", "взвешивания", "взвешиваний"))
     head = [
-        "⚖️ <b>Дневник веса</b>",
+        i18n.t("bodyweight.header"),
         "",
-        f"Сейчас: <b>{format_weight(latest_weight)}{u}</b> {format_date_ru(d)}",
-        f"Всего {len(days)} {n}.",
+        i18n.t("bodyweight.now_line", weight=format_weight(latest_weight), u=u, date=format_date_ru(d)),
+        i18n.t("bodyweight.total_entries", n=len(days)),
         "",
     ]
 
@@ -2286,9 +2338,9 @@ def build_bodyweight_screen(logs: list, unit: str = "kg", period_logs: list | No
     def assemble(keep: list[str]) -> str:
         lines = list(head) + keep
         if len(keep) < len(rendered):
-            lines.append(f"<i>Показано {len(keep)} из {len(rendered)}</i>")
+            lines.append(i18n.t("bodyweight.shown_of", kept=len(keep), total=len(rendered)))
         lines.append("")
-        lines.append("Напиши вес — или вес и день, если взвешивался раньше: «82.5 01.08.2026».")
+        lines.append(i18n.t("bodyweight.prompt"))
         return "\n".join(lines)
 
     kept = rendered
@@ -2307,10 +2359,10 @@ def build_bodyweight_list_screen(
     told apart and deleted individually. rows: one page, newest-first (as
     db.list_bodyweight_logs_page returns).
     """
-    u = UNIT_LABELS.get(unit, "кг")
-    head = ["✏️ <b>Записи веса</b>", ""]
+    u = unit_label(unit)
+    head = [i18n.t("bodyweight_list.header"), ""]
     if not rows:
-        head.append("Записей нет.")
+        head.append(i18n.t("bodyweight_list.empty"))
         return "\n".join(head)
     lines = [
         f"{i}. {dt.datetime.fromisoformat(r['logged_at']).strftime('%d.%m.%Y %H:%M')} "
@@ -2320,8 +2372,8 @@ def build_bodyweight_list_screen(
     text = "\n".join(head + lines)
     if total > page_size:
         start = page * page_size + 1
-        text += f"\n\n<i>Показано {start}–{start + len(rows) - 1} из {total}</i>"
-    text += "\n\nУдалить — жми номер записи."
+        text += f"\n\n{i18n.t('bodyweight_list.shown_of', start=start, end=start + len(rows) - 1, total=total)}"
+    text += i18n.t("bodyweight_list.delete_hint")
     return text
 
 
@@ -2330,12 +2382,12 @@ def format_progression_hint(suggestion, achieved: bool = False) -> str:
     the "Прошлый раз" line (no bold — the surrounding line is already italicized).
     """
     if suggestion.is_bodyweight:
-        goal = f"{suggestion.target_reps} повторов"
+        goal = i18n.t("progression.goal_reps", n=suggestion.target_reps)
     else:
         goal = format_set(suggestion.target_weight, suggestion.target_reps)
     if achieved:
-        return f"✅ Цель выполнена: {goal}"
-    return f"🎯 Цель: {goal}{_progression_reason(suggestion)}"
+        return i18n.t("progression.goal_achieved", goal=goal)
+    return i18n.t("progression.goal", goal=goal, reason=_progression_reason(suggestion))
 
 
 def _progression_reason(suggestion) -> str:
@@ -2353,8 +2405,8 @@ def _progression_reason(suggestion) -> str:
     # Цель из правила программы объясняется правилом, а не общим наблюдением:
     # человек это правило видел в превью и должен узнать его здесь.
     if getattr(suggestion, "from_rule", False):
-        return f" — по программе: взял {suggestion.from_reps} повторов, прибавляем"
-    return f" — взял {suggestion.from_reps} повторов, добавляем вес"
+        return i18n.t("progression.reason_from_rule", n=suggestion.from_reps)
+    return i18n.t("progression.reason_add_weight", n=suggestion.from_reps)
 
 
 # ---------- дневник питания ----------
@@ -2385,18 +2437,23 @@ class FoodEntryView:
 
 
 def format_kcal(value: float | None) -> str:
-    return "—" if value is None else f"{round(value):g} ккал"
+    return "—" if value is None else i18n.t("food.kcal", n=f"{round(value):g}")
 
 
 def _macros_line(protein: float | None, fat: float | None, carbs: float | None) -> str:
-    """"Б30 · Ж12 · У60" — skipped entirely when the model gave no macros. No
-    space between the label and the number (same compact style as "80×5" for a
-    set or "@9" for RPE elsewhere), and no trailing "г": the labels (Б/Ж/У)
-    already say these are grams, unlike a bare number that needs a unit.
+    """"Б30 · Ж12 · У60" / "P30 · F12 · C60" — skipped entirely when the model
+    gave no macros. No space between the label and the number (same compact
+    style as "80×5" for a set or "@9" for RPE elsewhere), and no trailing
+    "г"/"g": the labels already say these are grams, unlike a bare number
+    that needs a unit.
     """
     parts = [
         (label, v)
-        for label, v in (("Б", protein), ("Ж", fat), ("У", carbs))
+        for label, v in (
+            (i18n.t("food.macro_protein_label"), protein),
+            (i18n.t("food.macro_fat_label"), fat),
+            (i18n.t("food.macro_carbs_label"), carbs),
+        )
         if v is not None
     ]
     if not parts:
@@ -2423,11 +2480,18 @@ def build_food_estimate_text(
     fat: float | None = None,
     carbs: float | None = None,
     comment: str = "",
-    header: str = "🍽 Вот что я вижу:",
+    header: str | None = None,
 ) -> str:
     """The confirmation card shown after the model reads a meal, and (with a
-    different header) the preview of a correction."""
-    lines = [header, "", f"<b>{escape(description or 'Приём пищи')}</b>"]
+    different header) the preview of a correction.
+
+    `header` default — None, а не готовая русская строка: как и в
+    build_history_list, обычная константа в сигнатуре застыла бы на языке,
+    который был активен при импорте модуля.
+    """
+    if header is None:
+        header = i18n.t("food.estimate_header")
+    lines = [header, "", f"<b>{escape(description or i18n.t('food.default_meal_name'))}</b>"]
     # Один компонент ничего не добавляет к названию приёма — не дублируем
     # (та же логика, что в build_food_day_screen).
     if items and len(items) > 1:
@@ -2439,7 +2503,7 @@ def build_food_estimate_text(
         macros = _macros_line(protein, fat, carbs)
         totals = f"{format_kcal(calories)} · {macros}" if macros else format_kcal(calories)
         lines.append("")
-        lines.append(f"Итого: <b>{totals}</b>")
+        lines.append(i18n.t("food.totals_line", totals=totals))
     if comment:
         lines.append("")
         lines.append(f"<i>{escape(comment)}</i>")
@@ -2448,13 +2512,9 @@ def build_food_estimate_text(
 
 def build_food_day_screen(date: dt.date, entries: list[FoodEntryView]) -> str:
     """One day of the diary: every meal with its per-item КБЖУ, then the day's total."""
-    head = f"🍽 <b>Дневник питания — {format_date_ru(dt.datetime.combine(date, dt.time()))}</b>"
+    head = i18n.t("food.day_header", date=format_date_ru(dt.datetime.combine(date, dt.time())))
     if not entries:
-        return (
-            f"{head}\n\nЗа этот день пока пусто.\n\n"
-            "Напиши, что съел, или пришли фото еды (можно с подписью) — "
-            "я прикину калории и БЖУ, а ты подтвердишь."
-        )
+        return i18n.t("food.day_empty", head=head)
 
     def render_entry(i: int, e: FoodEntryView) -> list[str]:
         out = []
@@ -2483,7 +2543,7 @@ def build_food_day_screen(date: dt.date, entries: list[FoodEntryView]) -> str:
     def assemble(keep: list[list[str]]) -> str:
         lines = [head, ""]
         if len(keep) < len(rendered):
-            lines.append(f"<i>Показаны последние {len(keep)} из {len(rendered)} записей дня</i>")
+            lines.append(i18n.t("food.shown_last_of_day", kept=len(keep), total=len(rendered)))
             lines.append("")
         for j, block in enumerate(keep):
             if j > 0:
@@ -2509,7 +2569,7 @@ def _food_day_footer(entries: list[FoodEntryView]) -> str:
     """Итоговая строка дня плюс подсказка — то, что идёт под списком приёмов."""
     lines: list[str] = []
     known = [e.calories for e in entries if e.calories is not None]
-    n = plural_ru(len(entries), ("приём", "приёма", "приёмов"))
+    meals = i18n.t("food.meals_count", n=len(entries))
     day_macros = _macros_line(
         _sum_or_none(e.protein for e in entries),
         _sum_or_none(e.fat for e in entries),
@@ -2517,16 +2577,16 @@ def _food_day_footer(entries: list[FoodEntryView]) -> str:
     )
     day_totals = [p for p in (format_kcal(sum(known)) if known else "", day_macros) if p]
     if day_totals:
-        total_line = (
-            f"{DIVIDER}\nИтого за день: <b>{' · '.join(day_totals)}</b> ({len(entries)} {n} пищи)"
+        total_line = i18n.t(
+            "food.day_total_line", divider=DIVIDER, totals=" · ".join(day_totals), meals=meals
         )
     else:
-        total_line = f"{DIVIDER}\nЗа день: {len(entries)} {n} пищи"
+        total_line = i18n.t("food.day_total_line_no_cal", divider=DIVIDER, meals=meals)
     if known and len(known) < len(entries):
-        total_line += f"\n<i>(без калорий: {len(entries) - len(known)})</i>"
+        total_line += i18n.t("food.without_calories", n=len(entries) - len(known))
     lines.append(total_line)
     lines.append("")
-    lines.append("<i>Ещё что-то съел? Напиши текстом или пришли фото — добавлю новой записью</i>")
+    lines.append(i18n.t("food.add_more_hint"))
     return "\n".join(lines)
 
 
@@ -2551,21 +2611,18 @@ def build_food_history_list(days: list[FoodDayView]) -> str:
     """The history tab: one block per logged day, newest first — date, totals,
     entry count, then the food itself folded behind a collapsible quote."""
     if not days:
-        return (
-            "📚 <b>История питания</b>\n\nПока ничего не записано.\n"
-            "Открой день и напиши, что съел."
-        )
+        return i18n.t("food.history_empty")
     day_blocks = []
     for d in days:
-        n = plural_ru(d.entries, ("приём", "приёма", "приёмов"))
+        meals = i18n.t("food.meals_count", n=d.entries)
         macros = _macros_line(d.protein, d.fat, d.carbs)
         totals = [p for p in (format_kcal(d.calories) if d.calories is not None else "", macros) if p]
         block = [f"<b>{format_date_ru(dt.datetime.combine(d.date, dt.time()))}</b>"]
         if totals:
             block.append(" · ".join(totals))
-        block.append(f"{d.entries} {n} пищи")
+        block.append(meals)
         if d.descriptions:
             food_list = "\n".join(f"{i}. {escape(name)}" for i, name in enumerate(d.descriptions, start=1))
             block.append(collapsible(food_list))
         day_blocks.append("\n".join(block))
-    return "📚 <b>История питания</b>\n\n" + "\n\n".join(day_blocks)
+    return i18n.t("food.history_header") + "\n\n" + "\n\n".join(day_blocks)

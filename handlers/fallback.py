@@ -22,6 +22,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 import activity_log
 import db
+import i18n
 
 router = Router(name="fallback")
 
@@ -89,10 +90,12 @@ async def unhandled_text(message: Message) -> None:
 
         if _looks_like_a_set(text):
             kb = InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text="🏋️ НАЧАТЬ ТРЕНИРОВКУ", callback_data="menu:start_workout")
+                InlineKeyboardButton(
+                    text=i18n.t("btn.start_workout_caps"), callback_data="menu:start_workout"
+                )
             ]])
             await message.reply(
-                "Похоже на подход. Сначала начни тренировку — жми «🏋️ НАЧАТЬ ТРЕНИРОВКУ» ниже.",
+                i18n.t("fallback.looks_like_set", btn=i18n.t("btn.start_workout_caps")),
                 reply_markup=kb,
             )
             return
@@ -103,16 +106,14 @@ async def unhandled_text(message: Message) -> None:
                 InlineKeyboardButton(text=f"📋 {ex['display_name']}", callback_data=f"prog:card:{ex['id']}")
             ]])
             await message.reply(
-                f"Нашёл в твоих упражнениях «{ex['display_name']}» — открой карточку:",
+                i18n.t("fallback.found_exercise", name=ex["display_name"]),
                 reply_markup=kb,
             )
             return
     # Сюда чаще всего прилетает вопрос тренеру, напечатанный из главного меню
     # («составь мне программу»), — подсказываем дорогу к AI-тренеру, а не только
     # /start. Без детекции по словам: любой непонятый текст получает один ответ.
-    await message.reply(
-        "Не понял 🤔 Вопрос тренеру — жми «AI-тренер» на клавиатуре снизу. Меню — /start"
-    )
+    await message.reply(i18n.t("fallback.generic", ai_btn=i18n.t("btn.persistent.ai")))
 
 
 @router.callback_query()
@@ -136,7 +137,7 @@ async def unhandled_callback(callback: CallbackQuery, state: FSMContext) -> None
         await activity_log.record_unhandled_callback(callback)
     except Exception:
         logger.exception("Failed to log unhandled callback")
-    await callback.answer("Эта кнопка уже отработала своё — открыл меню.")
+    await callback.answer(i18n.t("fallback.stale_button"))
     if callback.message is None:  # pragma: no cover — Telegram всегда даёт message
         return
     await cmd_start(_CallbackAsMessage(callback), state)

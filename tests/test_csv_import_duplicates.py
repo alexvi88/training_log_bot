@@ -45,7 +45,7 @@ def _callback(user_id: int, data: str = "imp:save"):
     )
     message.delete = AsyncMock()
     callback = MagicMock()
-    callback.from_user = SimpleNamespace(id=user_id, username="tester")
+    callback.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     callback.data = data
     callback.answer = AsyncMock()
     callback.message = message
@@ -204,7 +204,7 @@ async def test_load_everything_button_still_allows_a_deliberate_duplicate(
 
 def _message_event(user_id: int):
     event = MagicMock()
-    event.from_user = SimpleNamespace(id=user_id, username="tester")
+    event.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     event.answer = AsyncMock()
     return event
 

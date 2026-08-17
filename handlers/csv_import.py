@@ -19,6 +19,7 @@ import achievement_sync
 import ai_trainer
 import db
 import formatting
+import i18n
 import keyboards
 import timeutil
 import ui
@@ -87,7 +88,23 @@ def _try_claim_saving(user_id: int) -> bool:
     return True
 
 REQUIRED_FIELDS = ["date", "exercise", "weight", "reps"]
-FIELD_LABELS = {"date": "дата", "exercise": "упражнение", "weight": "вес", "reps": "повторы", "round": "номер подхода"}
+# Ключи каталога, не готовые строки: словарь модульного уровня со значением
+# i18n.t() застыл бы на языке процесса на момент импорта модуля (обычно ru,
+# задолго до первого апдейта) — вызывать i18n.t() нужно на месте, в момент
+# показа/ошибки, см. _field_label ниже.
+_FIELD_LABEL_KEYS = {
+    "date": "import.field_date",
+    "exercise": "import.field_exercise",
+    "weight": "import.field_weight",
+    "reps": "import.field_reps",
+    "round": "import.field_round",
+}
+
+
+def _field_label(field: str) -> str:
+    return i18n.t(_FIELD_LABEL_KEYS[field])
+
+
 # Кандидаты в разделители: свой экспорт пишет запятую, но «Сохранить как CSV»
 # в русском Excel даёт «;» (и запятую внутри дробей), а Google Sheets — табы.
 DELIMITERS = ",;\t|"
@@ -122,12 +139,7 @@ async def import_start(callback: CallbackQuery, state: FSMContext):
     await state.set_state(ImportFlow.awaiting_file)
     await ui.safe_edit(
         callback,
-        "📥 Пришли CSV-файл с колонками «дата, упражнение, вес, повторы».\n\n"
-        "Где взять экспорт:\n"
-        "• Hevy — Settings → Export & Import Data, файл CSV придёт на почту.\n"
-        "• Strong — Profile → Settings → Export Workouts, файл сохранится "
-        "на телефон.\n\n"
-        "И тот и другой присылай мне как есть, руками подгонять ничего не надо.",
+        i18n.t("import.intro"),
         reply_markup=keyboards.cancel_keyboard("imp:cancel"),
     )
     await callback.answer()
@@ -196,7 +208,7 @@ def _read_table(text: str) -> tuple[list[str], list[list[str]], bool]:
     if not _looks_like_data(rows[0]):
         return rows[0], rows[1:], True
     width = max(len(r) for r in rows)
-    return [f"Колонка {i + 1}" for i in range(width)], rows, False
+    return [i18n.t("import.column_n", n=i + 1) for i in range(width)], rows, False
 
 
 async def _ask_next_mapping(event, state: FSMContext) -> bool:
@@ -213,18 +225,18 @@ async def _ask_next_mapping(event, state: FSMContext) -> bool:
     # auto-detected from the header row.
     total = len(data.get("imp_mapping_total") or pending)
     step = total - len(pending) + 1
-    text = (
-        f"Шаг {step} из {total}. Какая колонка соответствует полю «{FIELD_LABELS[field]}»?\n"
-        f"Колонки файла: {', '.join(headers)}"
+    text = i18n.t(
+        "import.mapping_step", step=step, total=total, label=_field_label(field),
+        headers=", ".join(headers),
     )
     # Без строки заголовков «Колонка 2» ни о чём не говорит — показываем первую
     # строку данных, по ней видно, где что.
     if not data.get("imp_has_header", True):
         sample = data.get("imp_sample_row") or []
         text = (
-            "В файле нет строки заголовков — спрошу про колонки по номерам.\n\n"
+            i18n.t("import.no_header_notice")
             + text
-            + (f"\nПервая строка: {' | '.join(sample)}" if sample else "")
+            + (i18n.t("import.first_row_sample", sample=" | ".join(sample)) if sample else "")
         )
     if isinstance(event, CallbackQuery):
         await ui.safe_edit(event, text, reply_markup=kb)
@@ -237,7 +249,7 @@ async def _ask_next_mapping(event, state: FSMContext) -> bool:
 async def import_file_received(message: Message, state: FSMContext):
     document = message.document
     if not document.file_name.lower().endswith(".csv"):
-        await message.reply("Пришли файл с расширением .csv")
+        await message.reply(i18n.t("import.wrong_extension"))
         return
     buf = await message.bot.download(document)
     raw = buf.read()
@@ -248,19 +260,15 @@ async def import_file_received(message: Message, state: FSMContext):
 
     headers, data_rows, has_header = _read_table(text)
     if not headers:
-        await message.reply("Файл пустой.")
+        await message.reply(i18n.t("import.file_empty"))
         return
     if not data_rows:
-        await message.reply("В файле нет строк с данными.")
+        await message.reply(i18n.t("import.no_data_rows"))
         return
     if len(headers) < len(REQUIRED_FIELDS):
         # Обычно это не «файл из одной колонки», а неугаданный разделитель —
         # лучше сказать это сразу, чем после четырёх шагов маппинга.
-        await message.reply(
-            f"Нашёл всего {len(headers)} {formatting.plural_ru(len(headers), ('колонку', 'колонки', 'колонок'))}, "
-            "а нужны хотя бы дата, упражнение, вес и повторы.\n"
-            "Проверь разделитель: запятая, «;» или табуляция."
-        )
+        await message.reply(i18n.t("import.too_few_columns", n=len(headers)))
         return
 
     mapping = _auto_detect(headers)
@@ -276,7 +284,7 @@ async def import_file_received(message: Message, state: FSMContext):
 
 @router.message(StateFilter(ImportFlow.awaiting_file))
 async def import_file_missing(message: Message, state: FSMContext):
-    await message.reply("Пришли CSV-файл документом (не текстом).")
+    await message.reply(i18n.t("import.file_missing"))
 
 
 @router.callback_query(StateFilter(ImportFlow.mapping_columns), F.data.startswith("impcol:"))
@@ -302,7 +310,7 @@ async def import_mapping_back(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     answered = list(data.get("imp_answered_fields") or [])
     if not answered:
-        await callback.answer("Это первый вопрос — выйти можно кнопкой «Отмена»")
+        await callback.answer(i18n.t("import.first_question_no_back"))
         return
     field = answered.pop()
     mapping = {k: v for k, v in dict(data["imp_mapping"]).items() if k != field}
@@ -341,23 +349,26 @@ def _parse_row_date(text: str, today: Optional[dt.date] = None) -> dt.date:
     try:
         return parse_ru_date(text, today)
     except ParseError as e:
-        # "будущем" — dd.mm.yyyy разобрался, но дата не прошла проверку на
-        # будущее: это не "формат не тот", а настоящая ошибка данных, и топить
-        # её в общем "не понял дату" ниже, пробуя чужие форматы, не стоит.
-        if "будущем" in e.message:
+        # dd.mm.yyyy разобрался, но дата не прошла проверку на будущее: это не
+        # "формат не тот", а настоящая ошибка данных, и топить её в общем
+        # "не понял дату" ниже, пробуя чужие форматы, не стоит. Сравниваем с
+        # готовым переводом ключа (i18n.t уже отрендерил parser.ParseError на
+        # языке текущего пользователя), а не ищем русскую подстроку — иначе
+        # проверка молча ломалась бы на английском (см. TONE_OF_VOICE.md).
+        if e.message == i18n.t("input.date_in_future"):
             raise
     match = _HEVY_DATE_RE.match(text)
     if match and match["mon"].lower() in _MONTH_ABBR:
         try:
             return dt.date(int(match["y"]), _MONTH_ABBR[match["mon"].lower()], int(match["d"]))
         except ValueError:
-            raise ParseError(f"не понял дату «{text}»") from None
+            raise ParseError(i18n.t("import.err_date", text=text)) from None
     try:
         if "t" in text.lower():
             return dt.datetime.fromisoformat(text).date()
         return dt.date.fromisoformat(text[:10])
     except ValueError:
-        raise ParseError(f"не понял дату «{text}»") from None
+        raise ParseError(i18n.t("import.err_date", text=text)) from None
 
 
 # Запятая-разделитель тысяч: ровно три цифры в каждой группе после первой
@@ -406,9 +417,9 @@ def _parse_count(text: str, label: str) -> int:
     try:
         value = _parse_number(text)
     except ValueError:
-        raise ParseError(f"не понял {label} «{text}»") from None
+        raise ParseError(i18n.t("import.err_count", label=label, text=text)) from None
     if value != int(value):
-        raise ParseError(f"{label}: «{text}» — не целое число")
+        raise ParseError(i18n.t("import.err_not_integer", label=label, text=text))
     return int(value)
 
 
@@ -461,12 +472,12 @@ def _build_workout_groups(
                 if weight_factor != 1.0:
                     weight = round(weight, 1)
             except ValueError:
-                raise ParseError(f"не понял вес «{weight_text}»") from None
-            reps = _parse_count(row[mapping["reps"]].strip(), "повторы")
+                raise ParseError(i18n.t("import.err_weight", text=weight_text)) from None
+            reps = _parse_count(row[mapping["reps"]].strip(), _field_label("reps"))
             round_val = None
             if "round" in mapping and mapping["round"] < len(row):
                 round_text = row[mapping["round"]].strip()
-                round_val = _parse_count(round_text, "номер подхода") if round_text else None
+                round_val = _parse_count(round_text, _field_label("round")) if round_text else None
             rpe_val = None
             if "rpe" in mapping and mapping["rpe"] < len(row):
                 rpe_text = row[mapping["rpe"]].strip()
@@ -474,33 +485,49 @@ def _build_workout_groups(
                     try:
                         rpe_val = _parse_number(rpe_text)
                     except ValueError:
-                        raise ParseError(f"не понял RPE «{rpe_text}»") from None
+                        raise ParseError(i18n.t("import.err_rpe", text=rpe_text)) from None
                     if not (0 < rpe_val <= 10):
-                        raise ParseError(f"RPE вне диапазона 1-10: «{rpe_text}»")
+                        raise ParseError(i18n.t("import.err_rpe_range", text=rpe_text))
         except ParseError as e:
-            raise ParseError(f"Строка {line_no}: {e.message}") from None
+            raise ParseError(i18n.t("import.err_line", n=line_no, message=e.message)) from None
         except IndexError:
             # Обрезанная строка: раньше это тоже было «не разобрал вес/повторы»,
             # хотя искать нужно не число, а недостающую колонку.
-            raise ParseError(f"Строка {line_no}: колонок меньше, чем нужно (в строке {len(row)})") from None
+            raise ParseError(
+                i18n.t("import.err_line", n=line_no, message=i18n.t("import.err_too_few_cells", len=len(row)))
+            ) from None
         except ValueError:
-            raise ParseError(f"Строка {line_no}: не разобрал вес/повторы") from None
+            raise ParseError(
+                i18n.t("import.err_line", n=line_no, message=i18n.t("import.err_generic_parse"))
+            ) from None
 
         if not name:
-            raise ParseError(f"Строка {line_no}: пустое название упражнения")
+            raise ParseError(i18n.t("import.err_line", n=line_no, message=i18n.t("import.err_empty_name")))
         if reps <= 0:
-            raise ParseError(f"Строка {line_no}: повторы должны быть больше 0")
+            raise ParseError(i18n.t("import.err_line", n=line_no, message=i18n.t("import.err_reps_nonpositive")))
         # Same ceilings the typed-set parser enforces, and for the same reason:
         # an impossible set imported here is silently permanent — it becomes the
         # exercise's all-time record, joins lifetime tonnage, and unlocks weight
         # clubs that are never revoked. A stray column or a units mix-up in
         # someone else's export is exactly how that gets in.
         if reps > MAX_REPS:
-            raise ParseError(f"Строка {line_no}: слишком много повторов ({reps})")
+            raise ParseError(
+                i18n.t("import.err_line", n=line_no, message=i18n.t("import.err_too_many_reps", reps=reps))
+            )
         if weight < 0:
-            raise ParseError(f"Строка {line_no}: отрицательный вес ({weight_text})")
+            raise ParseError(
+                i18n.t(
+                    "import.err_line", n=line_no,
+                    message=i18n.t("import.err_negative_weight", weight=weight_text),
+                )
+            )
         if weight > MAX_WEIGHT:
-            raise ParseError(f"Строка {line_no}: слишком большой вес ({weight_text})")
+            raise ParseError(
+                i18n.t(
+                    "import.err_line", n=line_no,
+                    message=i18n.t("import.err_too_heavy", weight=weight_text),
+                )
+            )
 
         date_iso = date_val.isoformat()
         if date_iso not in groups:
@@ -547,12 +574,12 @@ async def _finish_mapping(event, state: FSMContext) -> None:
             weight_factor=_weight_factor(data.get("imp_headers") or [], data["imp_mapping"]),
         )
     except ParseError as e:
-        await _back_to_file(f"Ошибка в файле: {e.message}\nИсправь файл и пришли заново.")
+        await _back_to_file(i18n.t("import.file_error", message=e.message))
         return
     if not workouts:
         # Раньше пустой результат доезжал до подтверждения «0 тренировки» с
         # кнопкой «✅ Загрузить», которая рапортовала «Импортировано 0 тренировок».
-        await _back_to_file("Не нашёл ни одной строки с подходами.\nПроверь файл и пришли заново.")
+        await _back_to_file(i18n.t("import.no_sets_found"))
         return
 
     await state.update_data(imp_workouts=workouts, imp_resolved={})
@@ -579,7 +606,7 @@ async def _finish_mapping(event, state: FSMContext) -> None:
         # почти всегда приносит нулевой процент точных совпадений (имена
         # английские против русского каталога) и молчит всё это время — без
         # знака, что файл вообще читается, выглядит как зависший бот.
-        progress_text = "⏳ Сверяю названия упражнений с каталогом, момент..."
+        progress_text = i18n.t("import.matching_progress")
         if isinstance(event, CallbackQuery):
             await event.message.answer(progress_text)
         else:
@@ -666,10 +693,9 @@ async def _render_confirmation_page(event, state: FSMContext, page: int) -> None
         (dt.date.fromisoformat(w["date"]), [e["name"] for e in w["entries"]])
         for w in page_workouts
     ]
-    word = formatting.plural_ru(len(workouts), ("тренировка", "тренировки", "тренировок"))
-    header = f"📥 <b>Импорт: {len(workouts)} {word}</b>"
+    header = i18n.t("import.confirm_header", n=len(workouts))
     if total_pages > 1:
-        header += f" · стр. {page + 1}/{total_pages}"
+        header += i18n.t("import.page_suffix", page=page + 1, total=total_pages)
     text = formatting.build_import_confirmation_list(entries, dup, header)
 
     new_count = len(workouts) - len(dup)
@@ -705,7 +731,7 @@ async def import_save(callback: CallbackQuery, state: FSMContext):
         # первый уже посреди записи — без этой брони оба видят один и тот же
         # ImportFlow.confirming, оба независимо считают дубли до того, как
         # первый успел что-то закоммитить, и файл записывается дважды.
-        await callback.answer("Уже гружу, подожди немного")
+        await callback.answer(i18n.t("import.already_uploading"))
         return
     try:
         await _do_import_save(callback, state)
@@ -738,13 +764,13 @@ async def _do_import_save(callback: CallbackQuery, state: FSMContext) -> None:
         # экран, откуда он в импорт мог и не заходить.
         from handlers.workout import _show_main_menu
         await _show_main_menu(callback, state)
-        await callback.answer("Эти тренировки уже есть в истории — ничего не добавил", show_alert=True)
+        await callback.answer(i18n.t("import.all_duplicate_alert"), show_alert=True)
         return
 
     # Запись подходов по одному плюс пересчёт ачивок (ниже) — для файла на
     # десятки тренировок заметно не мгновенно, а кнопка до этого места ничем
     # не показывала, что вообще что-то происходит.
-    await ui.safe_edit(callback, "⏳ Загружаю тренировки, момент...", reply_markup=None)
+    await ui.safe_edit(callback, i18n.t("import.uploading"), reply_markup=None)
 
     # Дата тренировки в файле — календарная, местная для пользователя, а
     # started_at хранится в UTC и местный день восстанавливается прибавлением
@@ -804,14 +830,13 @@ async def _do_import_save(callback: CallbackQuery, state: FSMContext) -> None:
     # что наполнил. Само перерисованное сообщение уходит в короткую подпись
     # экрана, полный счёт остаётся в alert'е, как и раньше.
     n = imported
-    word = formatting.plural_ru(n, ("тренировка", "тренировки", "тренировок"))
-    alert = f"✅ Загрузил {n} {word}"
+    alert = i18n.t("import.uploaded_alert", n=n)
     if skip:
         # Пропуск озвучиваем в том же алерте: иначе «загрузил 5» вместо
         # ожидаемых 25 выглядит как потеря данных.
-        alert += f", пропустил {len(skip)} (уже были в истории)"
+        alert += i18n.t("import.skipped_suffix", n=len(skip))
     if failed:
-        alert += f", не получилось {failed} — попробуй прислать файл ещё раз"
+        alert += i18n.t("import.failed_suffix", n=failed)
     from handlers.workout import _show_main_menu
     await _show_main_menu(callback, state)
     await callback.answer(alert, show_alert=True)
@@ -824,4 +849,4 @@ async def import_cancel(callback: CallbackQuery, state: FSMContext):
     await clear_state_keep_workout(state)
     from handlers.settings import show_settings
     await show_settings(callback, state)
-    await callback.answer("Отменил")
+    await callback.answer(i18n.t("import.cancelled_toast"))

@@ -959,7 +959,7 @@ async def test_a_code_pasted_with_spaces_still_works(fresh_db, user_id):
         )
 
     assert status == 302
-    page = mcp_oauth._consent_page("r", "Claude").body.decode()
+    page = mcp_oauth._consent_page("ru", "r", "Claude").body.decode()
     assert 'maxlength="16"' in page
 
 
@@ -1070,7 +1070,7 @@ async def test_registration_is_rate_limited_per_ip(fresh_db, user_id, monkeypatc
 def test_a_hostile_name_stays_text_and_stays_short():
     """Имя приложения приходит от того, кто регистрируется. В HTML оно должно
     остаться текстом, а по длине — влезать в вёрстку и в подпись кнопки."""
-    page = mcp_oauth._consent_page("r", "<img src=x onerror=alert(1)>").body.decode()
+    page = mcp_oauth._consent_page("ru", "r", "<img src=x onerror=alert(1)>").body.decode()
     assert "<img src=x" not in page
     assert "&lt;img src=x" in page
 

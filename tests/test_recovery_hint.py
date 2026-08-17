@@ -178,7 +178,7 @@ async def test_backfill_picker_screen_has_no_recovery_hint_at_all(fresh_db, user
         update_data=AsyncMock(),
     )
     callback = MagicMock()
-    callback.from_user = SimpleNamespace(id=user_id)
+    callback.from_user = SimpleNamespace(id=user_id, language_code=None)
     callback.bot = MagicMock()
 
     await workout._picker_screen_groups(callback, state)

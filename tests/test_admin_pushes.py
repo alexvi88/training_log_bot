@@ -29,7 +29,7 @@ async def _state(user_id: int) -> FSMContext:
 
 def _make_message(user_id: int):
     message = MagicMock(spec=Message)
-    message.from_user = SimpleNamespace(id=user_id, username="admin")
+    message.from_user = SimpleNamespace(id=user_id, username="admin", language_code=None)
     message.answer = AsyncMock()
     return message
 

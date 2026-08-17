@@ -18,7 +18,7 @@ pytestmark = pytest.mark.asyncio
 
 def _make_message(user_id: int, text: str):
     message = MagicMock()
-    message.from_user = SimpleNamespace(id=user_id)
+    message.from_user = SimpleNamespace(id=user_id, language_code=None)
     message.text = text
     message.answer = AsyncMock()
     message.reply = AsyncMock()
@@ -29,7 +29,7 @@ def _make_upload_message(user_id: int, photo_file_id: str | None):
     """A Message mock for the awaiting_photo handler: either carries a photo
     (largest size last, matching Telegram's ordering) or none at all."""
     message = MagicMock()
-    message.from_user = SimpleNamespace(id=user_id)
+    message.from_user = SimpleNamespace(id=user_id, language_code=None)
     message.chat = SimpleNamespace(id=user_id)
     message.photo = [SimpleNamespace(file_id=photo_file_id)] if photo_file_id else None
     message.reply = AsyncMock()
@@ -83,7 +83,11 @@ async def test_typing_no_match_in_exercise_list_shows_empty_state(fresh_db, user
     await db.create_exercise(user_id, "Bench press", group_id)
 
     state = await _make_state(user_id, exm_group_id=group_id)
-    message = _make_message(user_id, "squat")
+    # Не "squat": с тех пор, как search_exercise_templates научили сверяться
+    # ещё и с английской локализацией каталога, «squat» находит шаблон
+    # «Присед» (см. tests/test_db_exercises.py) — тут нужен запрос, который не
+    # найдёт ничего вообще ни у пользователя, ни в каталоге.
+    message = _make_message(user_id, "zxqvnonexistent")
 
     await exercises.exm_search_text(message, state)
 
@@ -107,7 +111,7 @@ def _make_exercise_callback(user_id: int, data: str):
     bot.delete_message = AsyncMock()
     message.bot = bot
     callback = MagicMock()
-    callback.from_user = SimpleNamespace(id=user_id)
+    callback.from_user = SimpleNamespace(id=user_id, language_code=None)
     callback.message = message
     callback.bot = bot
     callback.data = data
@@ -804,7 +808,7 @@ async def test_picking_the_group_creates_the_exercise(fresh_db, user_id):
     await state.update_data(exm_new_name="Barbell Row")
 
     callback = MagicMock()
-    callback.from_user = SimpleNamespace(id=user_id, username="tester")
+    callback.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     callback.data = f"exmnewgrp:grp:{group_id}"
     callback.answer = AsyncMock()
     msg = MagicMock()

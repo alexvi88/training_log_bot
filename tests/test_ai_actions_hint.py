@@ -22,7 +22,7 @@ def _make_chat_message(user_id: int, text: str):
     финальный ответ тренера приезжает правкой этого placeholder'а."""
     message = MagicMock()
     message.text = text
-    message.from_user = SimpleNamespace(id=user_id, username="tester")
+    message.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     message.reply = AsyncMock()
     placeholder = MagicMock()
     placeholder.edit_text = AsyncMock()

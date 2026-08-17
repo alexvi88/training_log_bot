@@ -59,7 +59,7 @@ def _message(user_id: int):
     # spec=Message — по нему middleware отличает сообщение от прочих апдейтов.
     msg = MagicMock(spec=Message)
     msg.chat = SimpleNamespace(id=user_id)
-    msg.from_user = SimpleNamespace(id=user_id, username="tester")
+    msg.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     msg.bot = AsyncMock()
     msg.answer = AsyncMock(return_value=SimpleNamespace(message_id=12))
     msg.reply = AsyncMock()
@@ -81,7 +81,7 @@ def _callback(user_id: int, data: str):
     # spec=CallbackQuery — обработчики различают «пришли командой» и «нажали
     # кнопку» через isinstance, голый MagicMock прошёл бы как сообщение.
     callback = MagicMock(spec=CallbackQuery)
-    callback.from_user = SimpleNamespace(id=user_id, username="tester")
+    callback.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     callback.bot = AsyncMock()
     callback.message = message
     callback.data = data

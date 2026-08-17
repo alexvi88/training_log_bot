@@ -120,6 +120,27 @@ async def test_first_run_gets_a_trainer_message(fresh_db, user_id, monkeypatch):
     assert "150" in text
 
 
+async def test_trainer_message_follows_the_users_language_from_the_db(fresh_db, user_id, monkeypatch):
+    """Регрессия: реакция тренера уходит из своего короткоживущего `Bot` вне
+    обработчика апдейта (см. game_server._send_trainer_message) — там, где
+    `i18n.set_lang` никогда не вызывается. Без явного `i18n.use_lang(...)` по
+    языку из БД (см. process_game_result) текст рендерился бы на случайном
+    языке, оставшемся в contextvar с прошлого запроса в этом же треде."""
+    await fresh_db.set_user_lang(user_id, "en")
+    sent = []
+    monkeypatch.setattr(game_server, "_send_trainer_message",
+                        AsyncMock(side_effect=lambda uid, text: sent.append((uid, text))))
+
+    ok = await game_server.process_game_result(
+        user_id, {"distance": 150, "score": 40, "fighter": "power", "gameTimestamp": 9001}
+    )
+
+    assert ok
+    ((_, text),) = sent
+    assert text.startswith("YO ATHLETE! ")
+    assert "ПРИВЕТ" not in text
+
+
 async def test_ordinary_run_stays_silent(fresh_db, user_id, monkeypatch):
     """Не рекорд и не первый забег — тренер молчит, иначе каждый заход = спам."""
     sent = AsyncMock()
@@ -186,7 +207,7 @@ async def test_duplicate_submission_is_saved_once(fresh_db, user_id, monkeypatch
 
 def _make_message(user_id: int):
     message = MagicMock()
-    message.from_user = SimpleNamespace(id=user_id, username="tester")
+    message.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     message.answer = AsyncMock()
     return message
 
@@ -200,8 +221,11 @@ async def test_cmd_game_replies_with_both_webapp_buttons(fresh_db, user_id, monk
 
     kwargs = message.answer.await_args.kwargs
     (runner_row,), (squad_row,) = kwargs["reply_markup"].inline_keyboard
-    assert runner_row.web_app.url == "https://bot.example/game"
-    assert squad_row.web_app.url == "https://bot.example/game/squad"
+    # ?lang= несёт ВЫБОР пользователя (users.lang): страница статическая и сама
+    # знает только язык клиента Telegram, а это разные вещи у того, кто выбрал
+    # English на русском телефоне.
+    assert runner_row.web_app.url == "https://bot.example/game?lang=ru"
+    assert squad_row.web_app.url == "https://bot.example/game/squad?lang=ru"
     text = message.answer.await_args.args[0]
     assert "МИНИ-ИГРЫ" in text
 

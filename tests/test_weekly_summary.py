@@ -90,7 +90,7 @@ def _callback(user_id: int):
     message.answer_rich = AsyncMock()
     message.delete = AsyncMock()
     callback = MagicMock()
-    callback.from_user = SimpleNamespace(id=user_id, username="t")
+    callback.from_user = SimpleNamespace(id=user_id, username="t", language_code=None)
     callback.message = message
     callback.answer = AsyncMock()
     return callback

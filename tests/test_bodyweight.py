@@ -273,7 +273,7 @@ async def _make_state(user_id: int) -> FSMContext:
 
 def _make_message(user_id: int, text: str):
     message = MagicMock()
-    message.from_user = SimpleNamespace(id=user_id, username="tester")
+    message.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     message.chat = SimpleNamespace(id=user_id)
     message.message_id = 42
     message.text = text
@@ -319,7 +319,7 @@ async def test_typing_invalid_text_while_viewing_replies_with_error(fresh_db, us
 
 def _make_bw_confirm_callback(user_id: int, data: str):
     callback = MagicMock()
-    callback.from_user = SimpleNamespace(id=user_id, username="tester")
+    callback.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     callback.data = data
     callback.answer = AsyncMock()
     callback.message = MagicMock()

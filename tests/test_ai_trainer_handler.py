@@ -31,7 +31,7 @@ def _make_callback(user_id: int, data: str):
     bot.send_message = AsyncMock(return_value=SimpleNamespace(message_id=2))
     bot.send_chat_action = AsyncMock()
     callback = MagicMock()
-    callback.from_user = SimpleNamespace(id=user_id, username="tester")
+    callback.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     callback.message = message
     callback.bot = bot
     callback.data = data
@@ -84,7 +84,7 @@ async def test_ai_resume_workout_alerts_when_no_active_workout(fresh_db, user_id
 
 def _make_voice_message(user_id: int, duration: int = 5, file_size: int = 1000, download_result=None):
     message = MagicMock()
-    message.from_user = SimpleNamespace(id=user_id)
+    message.from_user = SimpleNamespace(id=user_id, language_code=None)
     message.voice = SimpleNamespace(file_id="voice_1", duration=duration, file_size=file_size)
     message.reply = AsyncMock()
     bot = MagicMock()
@@ -212,7 +212,7 @@ async def test_ai_voice_question_checks_quota_before_transcribing(fresh_db, user
 def _make_message(user_id: int, text: str):
     message = MagicMock()
     message.text = text
-    message.from_user = SimpleNamespace(id=user_id, username="tester")
+    message.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     message.reply = AsyncMock()
     message.answer = AsyncMock(return_value=SimpleNamespace(chat=SimpleNamespace(id=user_id), message_id=9))
     message.bot = MagicMock()
@@ -469,7 +469,7 @@ async def test_reentering_the_trainer_keeps_the_conversation(fresh_db, user_id, 
     message.edit_text = AsyncMock(return_value=True)
     message.answer = AsyncMock(return_value=SimpleNamespace(message_id=4))
     callback = MagicMock(spec=CallbackQuery)
-    callback.from_user = SimpleNamespace(id=user_id, username="tester")
+    callback.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     callback.message = message
     callback.data = "menu:ai"
     callback.answer = AsyncMock()
@@ -497,7 +497,7 @@ async def test_first_entry_still_shows_the_intro(fresh_db, user_id, monkeypatch)
     message.edit_text = AsyncMock(return_value=True)
     message.answer = AsyncMock(return_value=SimpleNamespace(message_id=4))
     callback = MagicMock(spec=CallbackQuery)
-    callback.from_user = SimpleNamespace(id=user_id, username="tester")
+    callback.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     callback.message = message
     callback.data = "menu:ai"
     callback.answer = AsyncMock()
@@ -1243,7 +1243,7 @@ def _make_buildprog_callback(user_id: int):
     screen.answer = AsyncMock(return_value=intro_screen)
 
     callback = MagicMock(spec=CallbackQuery)
-    callback.from_user = SimpleNamespace(id=user_id, username="tester")
+    callback.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     callback.message = screen
     callback.data = "ai:buildprog"
     callback.answer = AsyncMock()
@@ -1361,7 +1361,7 @@ def _make_menu_ai_callback(user_id: int):
     message.edit_text = AsyncMock(return_value=True)
     message.answer = AsyncMock(return_value=SimpleNamespace(message_id=4))
     callback = MagicMock(spec=CallbackQuery)
-    callback.from_user = SimpleNamespace(id=user_id, username="tester")
+    callback.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     callback.message = message
     callback.data = "menu:ai"
     callback.answer = AsyncMock()
@@ -1372,6 +1372,9 @@ async def test_fresh_intro_offers_preset_question_buttons(fresh_db, user_id, mon
     """Примеры вопросов из интро стали кнопками: тап задаёт вопрос сразу,
     вместо перепечатывания примера руками."""
     monkeypatch.setattr(ai_trainer.ai_trainer, "is_configured", lambda: True)
+    await fresh_db.create_finished_workout(
+        user_id, started_at="2026-07-13T10:00:00", finished_at="2026-07-13T11:00:00"
+    )
     state = await _make_state(user_id)
     callback = _make_menu_ai_callback(user_id)
 
@@ -1841,7 +1844,7 @@ def _make_undo_callback(user_id: int, data: str, buttons: list[str]):
     )
     message.edit_reply_markup = AsyncMock()
     callback = MagicMock(spec=CallbackQuery)
-    callback.from_user = SimpleNamespace(id=user_id, username="tester")
+    callback.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     callback.message = message
     callback.data = data
     callback.answer = AsyncMock()
@@ -2008,7 +2011,7 @@ def _make_train_callback(user_id: int, draft_id: str):
     preview.answer = AsyncMock(return_value=live)
 
     callback = MagicMock(spec=CallbackQuery)
-    callback.from_user = SimpleNamespace(id=user_id, username="tester")
+    callback.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     callback.message = preview
     callback.data = f"ai:prog:train:{draft_id}"
     callback.answer = AsyncMock()

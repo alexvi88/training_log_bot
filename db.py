@@ -28,9 +28,14 @@ from typing import Any, Optional
 import aiosqlite
 
 import config
-import formatting
+import i18n
 import search_terms
-from seed_data import BODYWEIGHT_TEMPLATES, EXERCISE_TEMPLATES, MUSCLE_GROUP_PRESETS
+from seed_data import (
+    BODYWEIGHT_TEMPLATES,
+    EXERCISE_TEMPLATES,
+    MUSCLE_GROUP_PRESETS,
+    localized_exercise_name,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +52,9 @@ CREATE TABLE IF NOT EXISTS users (
     ai_comments_enabled INTEGER NOT NULL DEFAULT 0,
     progression_hint_enabled INTEGER NOT NULL DEFAULT 1,
     tz_offset INTEGER NOT NULL DEFAULT 0,
+    -- Язык интерфейса. Дефолт 'ru' — вся живая база русскоязычная, угадывать
+    -- язык молча нельзя (см. set_user_lang).
+    lang TEXT NOT NULL DEFAULT 'ru',
     -- Тренировочный профиль. Ровно те пять вводных, которые AI-тренер и так
     -- спрашивает перед сборкой программы (см. ai_trainer._system_prompt) — но
     -- раньше они жили только в переписке, и на следующий раз он спрашивал их
@@ -946,6 +954,11 @@ async def _migrate_schema() -> None:
         await _conn.execute(
             "ALTER TABLE users ADD COLUMN ai_actions_hint_shown INTEGER NOT NULL DEFAULT 0"
         )
+    if "lang" not in user_cols:
+        # Язык интерфейса — для всех, кто зарегистрировался до этой миграции,
+        # дефолт 'ru': вся живая база русскоязычная, молча переключать на
+        # угаданный язык нельзя.
+        await _conn.execute("ALTER TABLE users ADD COLUMN lang TEXT NOT NULL DEFAULT 'ru'")
 
     set_cols = await _column_names("sets")
     if "is_warmup" in set_cols:
@@ -1068,6 +1081,15 @@ async def _sync_exercise_templates() -> None:
     Reconciliation is declarative: anything in the list but not in the DB is added,
     any global template no longer in the list is removed, and accidental duplicates
     (same group + name) left by older seeds are pruned down to a single row.
+
+    Deliberately NOT localized: this is the one global row per template
+    (`user_id IS NULL`), shared by every account regardless of language, and
+    it's also the identity `exercise_media`/`exercise_descriptions` and
+    `exercises.original_name` are keyed on (see the seed_data module
+    docstring) — giving it any language but Russian here would break that key
+    for everyone. Localization happens per-user, at the moment a template is
+    actually shown or forked (`fork_exercise_from_template`,
+    `seed_data.localized_exercise_name`), never on this shared row.
     """
     db = conn()
     groups = await list_muscle_groups(user_id=None, global_only=True)
@@ -1370,10 +1392,17 @@ def _within_batch(previous, row) -> bool:
 
 
 def _batch_program_name(created_at: str) -> str:
+    """Имя, которым подписывается пачка дней, сохранённых без своего названия.
+
+    Ложится в `programs.name`, то есть становится данными пользователя — берётся
+    на языке, активном в момент создания, и потом не перепереводится: дальше он
+    сам её переименовывает, как и любую свою программу.
+    """
     try:
-        return f"Программа от {dt.datetime.fromisoformat(created_at):%d.%m}"
+        stamp = f"{dt.datetime.fromisoformat(created_at):%d.%m}"
     except ValueError:
-        return "Программа"
+        return i18n.t("program.batch_name_no_date")
+    return i18n.t("program.batch_name", date=stamp)
 
 
 async def _backfill_seeded_from_program() -> None:
@@ -1452,7 +1481,9 @@ async def _migrate_muscle_groups() -> None:
 
 # ---------- users ----------
 
-async def get_or_create_user(telegram_id: int, username: Optional[str]) -> aiosqlite.Row:
+async def get_or_create_user(
+    telegram_id: int, username: Optional[str], language_code: Optional[str] = None
+) -> aiosqlite.Row:
     """The user's row, creating it if this is their first /start.
 
     Check and insert happen under the same lock — same reasoning as
@@ -1460,6 +1491,15 @@ async def get_or_create_user(telegram_id: int, username: Optional[str]) -> aiosq
     processes updates concurrently) had both see no row and both try to
     INSERT, and the loser died with an IntegrityError on the telegram_id
     unique constraint instead of just returning the row the winner made.
+
+    `language_code` — телеграмный язык клиента, из которого угадывается язык
+    интерфейса НОВОЙ записи. Догадка живёт здесь, а не у вызывающих, по той же
+    причине, что и часовой пояс ниже: аккаунт заводится из восьми разных мест
+    (не только /start — ещё ссылка-приглашение, дневник еды, вес, сообщество,
+    игра, MCP, нижняя клавиатура), и правило «угадай язык новичку» повторённое
+    восемь раз забудется в девятом. Так и вышло: язык выставлял только /start,
+    а пришедший по ссылке навсегда оставался на русском, потому что запись уже
+    есть и экран выбора языка ему больше не покажут.
     """
     db = conn()
     async with _write_lock:
@@ -1468,8 +1508,8 @@ async def get_or_create_user(telegram_id: int, username: Optional[str]) -> aiosq
         if row:
             return row
         await db.execute(
-            "INSERT INTO users (telegram_id, username, created_at, unit, e1rm_formula, tz_offset) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO users (telegram_id, username, created_at, unit, e1rm_formula, tz_offset, lang) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
                 telegram_id,
                 username,
@@ -1482,6 +1522,12 @@ async def get_or_create_user(telegram_id: int, username: Optional[str]) -> aiosq
                 # число (config.DEFAULT_TZ_OFFSET). Хранить оба смысла в одной
                 # колонке с одним DEFAULT нельзя.
                 config.DEFAULT_TZ_OFFSET,
+                # Ровно тот же случай, что и с поясом выше: DEFAULT 'ru' у
+                # колонки — правильный ответ для СУЩЕСТВУЮЩЕЙ записи (миграция
+                # живой базы не имеет права молча переключать язык), но для
+                # НОВОЙ дефолт другой — догадка по клиенту. Два смысла в одном
+                # DEFAULT не помещаются.
+                i18n.normalize(language_code),
             ),
         )
         await db.commit()
@@ -1512,6 +1558,28 @@ async def set_user_source(
         )
         await conn().commit()
     return cur.rowcount > 0
+
+
+async def set_user_lang(telegram_id: int, lang: str) -> None:
+    """Записать язык интерфейса.
+
+    Канонический список языков живёт в `i18n.SUPPORTED`, но сюда не
+    импортируется: db — слой хранения, и тянуть в него слой представления
+    ради кортежа из двух строк значило бы связать их навсегда. Дубль
+    удерживает от расхождения тест (tests/test_user_lang.py), а не надежда.
+
+    Неизвестное значение молча не пишем, а приводим к 'ru': лучше тихо
+    остаться на дефолте, чем положить в базу мусор, который потом всплывёт
+    в рантайме.
+    """
+    if lang not in ("ru", "en"):
+        lang = "ru"
+    async with _write_lock:
+        await conn().execute(
+            "UPDATE users SET lang = ? WHERE telegram_id = ?",
+            (lang, telegram_id),
+        )
+        await conn().commit()
 
 
 # Подзапрос «сколько тренировок человек закрыл и когда последнюю» — общий для
@@ -2035,33 +2103,86 @@ async def search_exercises(user_id: int, query: str, limit: int = 20) -> list[ai
     return await cur.fetchall()
 
 
+def _matches_query_groups(text: str, groups: list[tuple[str, ...]]) -> bool:
+    """Python-эквивалент SQL-фильтра `_stem_filter`: все группы обязаны найти
+    хоть один свой вариант подстрокой в `text` (сложенном через py_fold)."""
+    folded = search_terms.fold(text)
+    return all(any(variant in folded for variant in variants) for variants in groups)
+
+
+def _template_relevance_rank(text: str, folded_query: str) -> int:
+    """Питоновский двойник `_RELEVANCE_RANK` для одной строки-кандидата."""
+    folded = search_terms.fold(text)
+    if folded == folded_query:
+        return 0
+    if folded.startswith(folded_query):
+        return 1
+    return 2
+
+
 async def search_exercise_templates(user_id: int, query: str, limit: int = 8) -> list[aiosqlite.Row]:
     """Catalog templates matching `query` that the user hasn't already got under
-    the same name — the other half of exercise search.
+    the same identity — the other half of exercise search.
 
     search_exercises only looks at exercises the user has already added, so a
     brand-new user typing "жим лёжа" gets "ничего не нашлось" even though a
     template with that exact name (photo, technique notes) exists — the picker
     routers fork a matching template on tap (see keyboards.exercises_keyboard's
     `templates` param) instead of leaving them to build one from scratch.
+
+    Шаблоны в базе всегда по-русски (`t.display_name` == `t.name` ==
+    `t.original_name`, см. `_sync_exercise_templates`) — они не форкаются, у
+    них нет личной локализованной копии. Значит SQL-фильтр по `t.display_name`
+    сравнивает английский запрос с русской строкой и не находит НИЧЕГО: набрав
+    «bench», «squat» или «curl», англоязычный получал пустой список. Каталог
+    маленький (100 строк), так что фильтрация и ранжирование сделаны в Python:
+    для каждого шаблона берётся и русское имя, и его английская локализация
+    (`seed_data.localized_exercise_name`), и групповой стемминг-поиск
+    (`search_terms.query_groups`, тот же, что и в SQL-варианте) проверяется по
+    обеим — независимо от языка интерфейса пользователя, той же логикой, что и
+    `exercise_mentions`: и «жим лёжа», и «bench press» должны находить шаблон.
+
+    Отбор «уже есть под этим именем» тоже был по `display_name` — а у форка на
+    другом языке `display_name` локализован и никогда не совпадёт с русским
+    `t.display_name`. Сравниваем по `original_name`: это идентичность форка,
+    она всегда равна русскому имени шаблона независимо от языка, на котором
+    форк был создан.
     """
-    escaped = _escape_like(query)
-    rank = _RELEVANCE_RANK.format(col="t.display_name")
-    match, match_params = _stem_filter("t.display_name", query)
+    groups = search_terms.query_groups(query)
+    if not groups:
+        # Пустой запрос — не повод показать весь каталог.
+        return []
+
+    cur = await conn().execute("SELECT * FROM exercises WHERE is_template = 1")
+    templates = await cur.fetchall()
+    if not templates:
+        return []
+
     cur = await conn().execute(
-        "SELECT * FROM exercises t WHERE t.is_template = 1 "
-        f"AND {match} "
-        "AND NOT EXISTS ("
-        "   SELECT 1 FROM exercises o WHERE o.user_id = ? AND o.is_template = 0 "
-        "   AND o.is_archived = 0 AND py_lower(o.display_name) = py_lower(t.display_name)"
-        ") "
+        "SELECT original_name FROM exercises "
+        "WHERE user_id = ? AND is_template = 0 AND is_archived = 0",
+        (user_id,),
+    )
+    owned = {
+        search_terms.fold(r["original_name"]) for r in await cur.fetchall() if r["original_name"]
+    }
+
+    folded_query = search_terms.fold(query)
+    scored: list[tuple[int, str, aiosqlite.Row]] = []
+    for t in templates:
+        identity = t["original_name"] or t["name"]
+        if search_terms.fold(identity) in owned:
+            continue
+        candidates = [t["display_name"], localized_exercise_name(t["display_name"], "en")]
+        if not any(_matches_query_groups(name, groups) for name in candidates):
+            continue
+        rank = min(_template_relevance_rank(name, folded_query) for name in candidates)
         # py_fold и здесь: бинарная коллация ставила «Жим в тренажёре Хаммер»
         # раньше «Жим в тренажёре на плечи» — заглавная Х меньше строчной н.
-        f"ORDER BY {rank}, py_fold(t.display_name) "
-        "LIMIT ?",
-        (*match_params, user_id, escaped, escaped, limit),
-    )
-    return await cur.fetchall()
+        scored.append((rank, search_terms.fold(t["display_name"]), t))
+
+    scored.sort(key=lambda item: (item[0], item[1]))
+    return [t for _, _, t in scored[:limit]]
 
 
 async def get_exercise(exercise_id: int) -> Optional[aiosqlite.Row]:
@@ -2080,7 +2201,17 @@ def _fold_exercise_name(value: str) -> str:
 
 
 async def find_exercise_by_name(user_id: int, name: str) -> Optional[aiosqlite.Row]:
-    """Exact case-insensitive match on the bare name or full display name (Cyrillic-safe, ё=е)."""
+    """Exact case-insensitive match on the bare name or full display name (Cyrillic-safe, ё=е).
+
+    Deliberately does NOT also compare `original_name`: an imported exercise
+    can be linked to a template for its photo/technique
+    (`create_exercise_matching_catalog_name`) while keeping its own, different
+    display name on purpose (see `tests/test_csv_import_ai_alias.py`) — a
+    lookup by the template's catalog name must NOT resolve to it. Callers that
+    need to recognize "already forked this exact template, maybe under
+    another language's name" (programs, `resolve_exercise_name`) use
+    `find_exercise_by_original_name` explicitly instead.
+    """
     cur = await conn().execute(
         "SELECT * FROM exercises WHERE user_id = ? AND is_archived = 0 AND is_template = 0", (user_id,)
     )
@@ -2088,6 +2219,31 @@ async def find_exercise_by_name(user_id: int, name: str) -> Optional[aiosqlite.R
     needle = _fold_exercise_name(name)
     for r in rows:
         if _fold_exercise_name(r["name"]) == needle or _fold_exercise_name(r["display_name"]) == needle:
+            return r
+    return None
+
+
+async def find_exercise_by_original_name(user_id: int, original_name: str) -> Optional[aiosqlite.Row]:
+    """Find a user's fork of the template identified by `original_name`.
+
+    `original_name` is the identity `exercise_media.catalog_key` reads, and
+    it's always the template's Russian canonical name regardless of the
+    language the fork was created (and displayed) in — see
+    `fork_exercise_from_template`. Comparing on it, not `display_name`, is
+    what lets forking the same template again under a different language
+    resolve to the SAME row instead of creating a second one.
+
+    Case-insensitive, ё=е-safe (`_fold_exercise_name`), same as
+    `find_exercise_by_name` — `original_name` for a template fork is always
+    Cyrillic, so the ASCII-only SQL `LOWER()`/`py_lower` wouldn't fold it.
+    """
+    cur = await conn().execute(
+        "SELECT * FROM exercises WHERE user_id = ? AND is_template = 0", (user_id,)
+    )
+    rows = await cur.fetchall()
+    needle = _fold_exercise_name(original_name)
+    for r in rows:
+        if r["original_name"] and _fold_exercise_name(r["original_name"]) == needle:
             return r
     return None
 
@@ -2177,15 +2333,47 @@ async def fork_exercise_from_template(
     unilateral: Optional[bool] = None,
     attachment: Optional[str] = None,
 ) -> int:
+    """Fork a global template into a user-owned exercise.
+
+    The name a user SEES is localized to their language (`users.lang`), but
+    `original_name` — the identity key `exercise_media.catalog_key` reads for
+    photos/technique, and the thing that must never change once a user has an
+    exercise — is always the template's Russian canonical name, regardless of
+    that language. `create_exercise` sets `original_name` equal to whatever
+    `name` it's given, so a localized name would otherwise become the fork's
+    (wrong) identity; the UPDATE right after puts the Russian name back.
+
+    The identity check runs BEFORE `create_exercise`, and on `original_name`,
+    not `display_name`: `create_exercise` only dedups on `display_name`, which
+    is fine for a plain re-fork in the same language (same localized name both
+    times) but blind once languages diverge. Forking the same template first
+    at `lang=ru` then at `lang=en` produces two different `display_name`s
+    ("Жим штанги лёжа" vs "Bench Press") for the identical template — without
+    this check, `create_exercise` would see no collision and insert a second
+    row with the same `original_name`, splitting the exercise's history,
+    records and charts across two ids.
+    """
     template = await get_exercise(template_id)
     if template is None:
         raise ValueError("template not found")
+    existing = await find_exercise_by_original_name(user_id, template["name"])
+    if existing is not None:
+        if existing["is_archived"]:
+            async with _write_lock:
+                await conn().execute(
+                    "UPDATE exercises SET is_archived = 0 WHERE id = ?", (existing["id"],)
+                )
+                await conn().commit()
+        return existing["id"]
     final_equipment = equipment if equipment is not None else template["equipment"]
     final_unilateral = unilateral if unilateral is not None else bool(template["unilateral"])
     final_attachment = attachment if attachment is not None else template["attachment"]
+    user = await get_user(user_id)
+    lang = user["lang"] if user is not None else "ru"
+    display_name = localized_exercise_name(template["name"], lang)
     ex_id = await create_exercise(
         user_id,
-        template["name"],
+        display_name,
         template["primary_group_id"],
         final_equipment,
         final_unilateral,
@@ -2195,8 +2383,9 @@ async def fork_exercise_from_template(
     # подтягиваний считался бы с нулевым весом, как и до всего этого.
     async with _write_lock:
         await conn().execute(
-            "UPDATE exercises SET bodyweight_load = ?, bodyweight_factor = ? WHERE id = ?",
-            (template["bodyweight_load"], template["bodyweight_factor"], ex_id),
+            "UPDATE exercises SET original_name = ?, bodyweight_load = ?, bodyweight_factor = ? "
+            "WHERE id = ?",
+            (template["name"], template["bodyweight_load"], template["bodyweight_factor"], ex_id),
         )
         await conn().commit()
     return ex_id
@@ -5150,6 +5339,21 @@ async def get_or_create_user_exercise_by_name(user_id: int, name: str) -> Option
         return existing["id"]
     template = await _find_global_template_by_name(name)
     if template is not None:
+        # `name` here is always the template's Russian catalog name (programs
+        # store that, never a localized display name — see the seed_data
+        # module docstring), so `find_exercise_by_name` above only catches a
+        # user whose OWN name/display_name happens to equal it. It misses an
+        # earlier fork of this same template on another language: that fork's
+        # display_name is localized, not Russian. Checking `original_name` —
+        # the fork's identity, always the template's Russian name regardless
+        # of language — catches it. Skipping this check would still avoid a
+        # duplicate row (fork_exercise_from_template dedups on original_name
+        # too), but this wrapper would then stamp seeded_from_program = 1 on
+        # the user's real, already-used exercise — corrupting a flag whose
+        # whole point is telling a leftover apart from one actually trained.
+        existing = await find_exercise_by_original_name(user_id, template["name"])
+        if existing is not None:
+            return existing["id"]
         ex_id = await fork_exercise_from_template(user_id, template["id"])
         async with _write_lock:
             await conn().execute(
@@ -5226,13 +5430,30 @@ async def resolve_exercise_name(user_id: int, name: str) -> tuple[Optional[str],
     (None, None). Нужен AI-тренеру, чтобы показать состав предлагаемой
     программы до того, как пользователь согласился её сохранить, — предложение
     не должно форкать пользователю упражнения (см. ai_trainer.propose_program).
+
+    Для ветки "template" имя локализуется (`seed_data.localized_exercise_name`)
+    так же, как его покажет реальный форк (`fork_exercise_from_template`) — а
+    отдавать `template["display_name"]` сырым (он в базе навсегда русский, см.
+    `_sync_exercise_templates`) значило бы, что превью программы у
+    англоязычного показывает русское имя, а сохранённая программа — английское.
+
+    Тот же порядок identity-проверки, что и в get_or_create_user_exercise_by_name:
+    если шаблон нашёлся, но пользователь уже когда-то его форкнул (на любом
+    языке — `original_name` форка от языка не зависит), это "own", а не
+    "template" — иначе превью врало бы «добавлю новое», хотя реально ничего
+    новое не создастся.
     """
     existing = await find_exercise_by_name(user_id, name)
     if existing is not None:
         return "own", existing["display_name"]
     template = await _find_global_template_by_name(name)
     if template is not None:
-        return "template", template["display_name"]
+        existing = await find_exercise_by_original_name(user_id, template["name"])
+        if existing is not None:
+            return "own", existing["display_name"]
+        user = await get_user(user_id)
+        lang = user["lang"] if user is not None else "ru"
+        return "template", localized_exercise_name(template["display_name"], lang)
     return None, None
 
 
@@ -5258,12 +5479,10 @@ async def routine_budget(user_id: int, adding: int, freeing: int = 0) -> Optiona
     existing = await count_routines(user_id)
     if existing - freeing + adding <= config.MAX_ROUTINES_PER_USER:
         return None
-    day_word = formatting.plural_ru(existing, ("день", "дня", "дней"))
-    return (
-        f"У тебя уже {existing} {day_word} в программах — больше "
-        f"{config.MAX_ROUTINES_PER_USER} не влезет. Удали лишние в «🗂 Программы» "
-        "и попробуй ещё раз."
-    )
+    # Текст показывается алертом (callback.answer(..., show_alert=True) у всех
+    # четырёх вызывающих), то есть это экран, а не служебная строка, — язык
+    # берётся из контекста запроса.
+    return i18n.t("limit.routines", existing=existing, cap=config.MAX_ROUTINES_PER_USER)
 
 
 async def set_routine_exercise_target(routine_exercise_id: int, target: Optional[str]) -> None:

@@ -14,6 +14,7 @@ import ai_trainer
 import config
 import db as dbmod
 import formatting
+import i18n
 import keyboards
 from fsm import FoodDiaryFlow
 from handlers import food_diary
@@ -283,7 +284,9 @@ async def test_describe_only_uses_the_no_macros_prompt(monkeypatch, user_id):
         with_macros=False,
     )
 
-    assert captured["messages"][0]["content"] == ai_trainer.FOOD_DESCRIBE_SYSTEM_PROMPT
+    assert captured["messages"][0]["content"] == ai_trainer._with_language_tail(
+        ai_trainer.FOOD_DESCRIBE_SYSTEM_PROMPT
+    )
     assert result == {
         "is_food": True, "description": "Протеин Whey — 30 г", "items": [],
         "calories": None, "protein": None, "fat": None, "carbs": None, "comment": "",
@@ -587,7 +590,7 @@ async def _make_state(user_id: int) -> FSMContext:
 
 def _make_message(user_id: int, text: str | None = None) -> Message:
     message = MagicMock(spec=Message)
-    message.from_user = SimpleNamespace(id=user_id, username="tester")
+    message.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     message.text = text
     message.caption = None
     message.chat = SimpleNamespace(id=user_id)
@@ -604,7 +607,7 @@ def _make_message(user_id: int, text: str | None = None) -> Message:
 def _make_callback(user_id: int, data: str) -> CallbackQuery:
     callback = MagicMock(spec=CallbackQuery)
     callback.data = data
-    callback.from_user = SimpleNamespace(id=user_id, username="tester")
+    callback.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     callback.answer = AsyncMock()
     message = MagicMock(spec=Message)
     message.message_id = 501
@@ -808,7 +811,7 @@ async def test_fix_button_keeps_the_estimate_visible(user_id, monkeypatch):
     assert "Гранола с протеином" in shown_text
     assert "Протеин — 30 г — 120 ккал" in shown_text
     assert "750 ккал" in shown_text
-    assert food_diary._CORRECT_HINT in shown_text
+    assert i18n.t("food.correct_hint") in shown_text
     # HTML-разметку карточки обязаны отрисовать, а не показать тегами как есть
     assert callback.message.answer.call_args.kwargs["parse_mode"] == "HTML"
 

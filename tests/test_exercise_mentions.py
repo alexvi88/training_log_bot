@@ -107,6 +107,39 @@ def test_empty_text_is_safe():
     assert exercise_mentions.find_mentions("", [BENCH]) == []
 
 
+# ---------- English exercise names (independent of interface language) ----
+
+
+def test_finds_english_inflected_name():
+    """Same fuzzy-prefix mechanism as the Russian cases — no separate code
+    path is needed for English (see exercise_mentions module docstring)."""
+    barbell_squat = _ex(50, "Barbell Squat")
+    found = exercise_mentions.find_mentions("Add some barbell squats today", [barbell_squat])
+    assert _names(found) == ["Barbell Squat"]
+
+
+def test_finds_english_name_regardless_of_case():
+    bench = _ex(51, "Bench Press")
+    found = exercise_mentions.find_mentions("BENCH PRESS is stalling", [bench])
+    assert _names(found) == ["Bench Press"]
+
+
+def test_short_english_words_do_not_match_by_stem():
+    """«row»/«raw» share a two-letter prefix — same guard as the Russian
+    «жим»/«жир» case, just in the other alphabet."""
+    row = _ex(52, "Barbell Row")
+    assert exercise_mentions.find_mentions("Meat is best eaten raw", [row]) == []
+
+
+def test_russian_and_english_names_are_found_in_the_same_call():
+    """A Russian-speaking lifter can still name an exercise in English (and
+    vice versa) — see voice_parse.py's module docstring for the same
+    reasoning applied to spoken numbers."""
+    bench = _ex(53, "Bench Press")
+    found = exercise_mentions.find_mentions("Сегодня добавь bench press в конец", [bench, SQUAT])
+    assert _names(found) == ["Bench Press"]
+
+
 @pytest.mark.asyncio
 async def test_find_in_text_uses_the_users_own_exercises(fresh_db, user_id):
     ex_id = await fresh_db.create_exercise(user_id, "Жим лёжа", None)
@@ -169,7 +202,7 @@ def test_keyboard_shows_only_a_page_of_mentions_with_a_next_arrow():
         "ai:excard:1", "ai:excard:2", "ai:excard:3",
     ]
     nav_row = rows[3]
-    assert [b.text for b in nav_row] == [keyboards.PAGE_NEXT_TEXT]
+    assert [b.text for b in nav_row] == [keyboards.PAGE_NEXT_TEXT()]
     assert nav_row[0].callback_data == "ai:mpage:1:1,2,3,4,5"
 
 
@@ -179,7 +212,7 @@ def test_keyboard_second_page_shows_remaining_mentions_and_a_prev_arrow():
     rows = kb.inline_keyboard
     assert [b.callback_data for row in rows[:2] for b in row] == ["ai:excard:4", "ai:excard:5"]
     nav_row = rows[2]
-    assert [b.text for b in nav_row] == [keyboards.PAGE_PREV_TEXT]
+    assert [b.text for b in nav_row] == [keyboards.PAGE_PREV_TEXT()]
     assert nav_row[0].callback_data == "ai:mpage:0:1,2,3,4,5"
 
 
