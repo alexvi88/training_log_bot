@@ -1114,10 +1114,14 @@ async def test_recovery_tool_gives_the_trainer_what_the_screen_shows(fresh_db, u
     import datetime as dt
 
     import analytics
+    import timeutil
 
     group_id = await fresh_db.create_muscle_group(user_id, "Ноги")
     ex_id = await fresh_db.create_exercise(user_id, "Присед", group_id)
-    day = dt.date.today() - dt.timedelta(days=1)
+    # Местный день пользователя, а не UTC: свежий атлет заводится на
+    # config.DEFAULT_TZ_OFFSET (+3), и recovery считает "days_ago" по нему же —
+    # иначе тест плавает возле полуночи UTC.
+    day = timeutil.user_today(await fresh_db.get_user(user_id)) - dt.timedelta(days=1)
     workout_id = await fresh_db.create_workout(user_id, started_at=f"{day.isoformat()}T10:00:00")
     block_id = await fresh_db.create_block(workout_id, "single")
     await fresh_db.add_block_exercise(block_id, ex_id, 0)
@@ -1130,7 +1134,9 @@ async def test_recovery_tool_gives_the_trainer_what_the_screen_shows(fresh_db, u
     legs = next(row for row in payload["groups"] if row["group"] == "Ноги")
     assert legs["days_ago"] == 1
     assert legs["sets_that_session"] == 6
-    assert legs["recovery_percent"] == analytics.recovery_percent(day, 6, dt.date.today())
+    assert legs["recovery_percent"] == analytics.recovery_percent(
+        day, 6, timeutil.user_today(await fresh_db.get_user(user_id))
+    )
 
 
 async def test_never_trained_groups_are_not_passed_off_as_fully_rested(fresh_db, user_id):
