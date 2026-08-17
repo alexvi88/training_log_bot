@@ -11,7 +11,7 @@
 
 Как устроено — четыре стадии, каждая запускается отдельно:
 
-    frames   готовые фото старт/конец → те же позы, но нашим тренером
+    frames   эталон тренера + готовые фото старт/конец → те же позы, но им
     video    два кадра → клип движения между ними
     loop     клип → бесшовный повтор вниз-вверх, 480p, без звука (ffmpeg)
     install  принятый клип → media/exercises/<slug>_demo.mp4
@@ -37,11 +37,21 @@
     python scripts/gen_exercise_demos.py pilot --dry-run   # пять упражнений, без трат
     python scripts/gen_exercise_demos.py pilot
 
+Персонаж не только описывается словами, но и уходит в запрос картинкой —
+media/push/coach_incoming_call.jpg, эталон из TONE_OF_VOICE.md. Без неё
+получается «примерно такой же» качок, а на сотне упражнений это сотня похожих
+мужиков вместо одного тренера.
+
 Нужно из окружения:
 
-    NOVITA_API_KEY   тот же ключ, что уже разбирает технику по видео
-                     (config.NOVITA_API_KEY, video_analysis.py)
+    OPENAI_API_KEY   кадры (gpt-image-1): принимает эталон и позу двумя
+                     картинками сразу. Тот же ключ, что расшифровывает голосовые
+    NOVITA_API_KEY   видео (Vidu Q1): принимает ОБА кадра и рисует движение
+                     между ними. Тот же ключ, что разбирает технику по видео
     ffmpeg           только для стадии loop
+
+Кадры можно увести на Novita (--frames-via novita), но там вход одна картинка,
+эталон тренера туда не влезает — это запасной путь, а не равный.
 
 Имена моделей и пути эндпоинтов вынесены в NOVITA_* ниже и переопределяются
 переменными окружения: каталог у провайдера меняется быстрее, чем этот файл,
@@ -113,6 +123,26 @@ POSE_INSTRUCTION = (
     "camera angle, limb positions and equipment exactly as in the source image. "
     "The pose is the source of truth — do not correct, improve or restyle it."
 )
+
+# Эталон персонажа уходит в запрос картинкой, а не только словами. Описание
+# задаёт «примерно такого же» качка, и на сотне упражнений это разъехалось бы
+# в сотню похожих мужиков; тот самый тренер получается только с его же кадром
+# на входе. Файл — эталон из TONE_OF_VOICE.md, тот же, что под пушами.
+COACH_REFERENCE = ROOT / "media" / "push" / "coach_incoming_call.jpg"
+TWO_IMAGE_INSTRUCTION = (
+    "The FIRST image is the character reference: this exact man, his face, "
+    "build, sunglasses, chain, clothes and the drawing style are what the "
+    "result must look like. The SECOND image is the pose reference: copy its "
+    "body pose, camera angle, limb positions and equipment exactly. "
+    "Draw the man from the first image performing the pose from the second."
+)
+
+OPENAI_FRAME_MODEL = os.getenv("OPENAI_FRAME_MODEL", "gpt-image-1")
+
+# Кем рисуются кадры; ставится флагом --frames-via, по умолчанию OpenAI.
+# У Novita img2img вход одна картинка, то есть эталон тренера туда не влезает
+# и персонаж задаётся только словами — это запасной путь, а не равный.
+FRAMES_VIA = "openai"
 
 
 class GenError(RuntimeError):
@@ -248,6 +278,56 @@ def _work(slug: str, create: bool = True) -> pathlib.Path:
     return path
 
 
+def _frame_via_openai(source: pathlib.Path, dest: pathlib.Path) -> None:
+    """Кадр через gpt-image-1: эталон тренера и поза уходят двумя картинками.
+
+    Модель, в отличие от обычного img2img, принимает набор изображений и умеет
+    держать инструкцию «этот человек в этой позе» — а весь замысел держится
+    ровно на ней. Пакет openai уже в зависимостях бота, третий SDK не заводим.
+    """
+    from openai import OpenAI
+
+    key = os.getenv("OPENAI_API_KEY", "")
+    if not key:
+        sys.exit(
+            "Нет OPENAI_API_KEY в окружении. Это тот же ключ, которым бот "
+            "расшифровывает голосовые. Либо переключись: --frames-via novita."
+        )
+    if not COACH_REFERENCE.exists():
+        sys.exit(f"Нет эталона тренера: {COACH_REFERENCE}")
+    client = OpenAI(api_key=key)
+    try:
+        with open(COACH_REFERENCE, "rb") as reference, open(source, "rb") as pose:
+            result = client.images.edit(
+                model=OPENAI_FRAME_MODEL,
+                image=[reference, pose],
+                prompt=f"{TWO_IMAGE_INSTRUCTION} {CHARACTER}",
+                size="1024x1024",
+            )
+    except Exception as e:  # SDK кидает своё дерево исключений; нам нужен текст
+        raise GenError(f"OpenAI: {e}") from e
+    dest.write_bytes(base64.b64decode(result.data[0].b64_json))
+
+
+def _print_frame_request(source: pathlib.Path) -> None:
+    """Сухой прогон. Промпт персонажа один на все упражнения и длинный — целиком
+    он занял бы весь экран по два раза на упражнение."""
+    prompt_note = f"…инструкция + CHARACTER ({len(CHARACTER)} симв.)"
+    if FRAMES_VIA == "openai":
+        print(f"    images.edit, model={OPENAI_FRAME_MODEL}")
+        print(f"    image=[{COACH_REFERENCE.name} (эталон), {source.name} (поза)]")
+        print(f"    prompt={TWO_IMAGE_INSTRUCTION[:60]}{prompt_note}")
+        return
+    payload = _frame_payload(source)
+    payload["request"] = dict(
+        payload["request"],
+        image_base64=f"<{source.name} base64>",
+        prompt=f"{POSE_INSTRUCTION[:60]}{prompt_note}",
+    )
+    print(f"    POST {NOVITA_BASE}/{NOVITA_FRAME_PATH}")
+    print(f"    {json.dumps(payload, ensure_ascii=False)}")
+
+
 def cmd_frames(exercise: str, dry_run: bool, force: bool) -> None:
     slug = _slug(exercise)
     work = _work(slug, create=not dry_run)
@@ -257,21 +337,15 @@ def cmd_frames(exercise: str, dry_run: bool, force: bool) -> None:
         if dest.exists() and not force:
             print(f"  {name}: уже есть, пропускаю (--force чтобы перегенерить)")
             continue
-        print(f"  {name}: {source.name} → тренер")
+        print(f"  {name}: {source.name} + эталон тренера → кадр")
         if dry_run:
-            payload = _frame_payload(source)
-            # Промпт персонажа один на все упражнения и длинный — в сухом
-            # прогоне на пять упражнений он занял бы весь экран десять раз.
-            payload["request"] = dict(
-                payload["request"],
-                image_base64=f"<{source.name} base64>",
-                prompt=f"{POSE_INSTRUCTION[:60]}… + CHARACTER ({len(CHARACTER)} симв.)",
-            )
-            print(f"    POST {NOVITA_BASE}/{NOVITA_FRAME_PATH}")
-            print(f"    {json.dumps(payload, ensure_ascii=False)}")
+            _print_frame_request(source)
             continue
-        task_id = _start_task(NOVITA_FRAME_PATH, _frame_payload(source))
-        _download(_wait_for_task(task_id)[0], dest)
+        if FRAMES_VIA == "openai":
+            _frame_via_openai(source, dest)
+        else:
+            task_id = _start_task(NOVITA_FRAME_PATH, _frame_payload(source))
+            _download(_wait_for_task(task_id)[0], dest)
         print(f"    готово: {dest}")
     if not dry_run:
         print(f"  Посмотри оба кадра глазами: {work}")
@@ -393,7 +467,16 @@ def main() -> None:
         "--dry-run", action="store_true", help="показать запросы, ничего не тратить"
     )
     parser.add_argument("--force", action="store_true", help="перезаписать готовое")
+    parser.add_argument(
+        "--frames-via",
+        choices=["openai", "novita"],
+        default="openai",
+        help="кто рисует кадры: openai (эталон тренера картинкой) или novita (только словами)",
+    )
     args = parser.parse_args()
+
+    global FRAMES_VIA
+    FRAMES_VIA = args.frames_via
 
     if args.stage == "status":
         cmd_status()

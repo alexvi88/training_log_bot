@@ -208,3 +208,12 @@ def test_pilot_names_are_real_templates():
 
     for exercise in gen_exercise_demos.PILOT:
         assert exercise in exercise_media.EXERCISE_IMAGE_SLUGS, exercise
+
+
+def test_coach_reference_image_is_where_the_pipeline_looks_for_it():
+    """Эталон тренера уходит в генерацию картинкой. Переименуют файл — персонаж
+    молча начнёт задаваться одними словами, и в карточках поедет второй тренер;
+    словами это не ловится, файлом ловится."""
+    from scripts import gen_exercise_demos
+
+    assert gen_exercise_demos.COACH_REFERENCE.is_file(), gen_exercise_demos.COACH_REFERENCE
