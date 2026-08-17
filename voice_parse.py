@@ -1,35 +1,176 @@
-"""Turn a transcribed spoken set ("сто на восемь", "100 8 три подхода") into a
-line the text parser already understands ("100 8").
+"""Turn a transcribed spoken set ("сто на восемь"/"one hundred eight for eight")
+into a line the text parser already understands ("100 8").
 
 Kept deliberately small and forgiving: transcription models usually emit digits
-already, so the main job is (a) reading Russian number words when they don't, and
-(b) treating gym connector words ("на", "по", "раз", "подхода") as the boundary
-between weight and reps. Anything it can't make sense of returns None, and the
-caller falls back to asking the user to type.
+already, so the main job is (a) reading number words in either language when
+they don't, and (b) treating gym connector words ("на"/"for", "по"/"by",
+"раз"/"times", "подхода"/"sets") as the boundary between weight and reps.
+Anything it can't make sense of returns None, and the caller falls back to
+asking the user to type.
+
+Both languages are recognised unconditionally, not switched on i18n.get_lang():
+Russian and English number words use disjoint alphabets (Cyrillic vs Latin), so
+there's no ambiguity to resolve by picking one — trying both only ever adds
+coverage, never a false positive. This also matters because a Russian-speaking
+lifter's speech routinely has English exercise-name fragments in it ("жим лежа"
+next to "bench press"), while the reverse essentially never happens — so even a
+lang-keyed design would have had to special-case RU→include-EN-numbers anyway.
+Trying both everywhere is simpler and also more robust to a wrong STT language
+hint (see ai_trainer.transcribe_voice).
 """
 
 import re
 
 _WORD_UNITS = {
+    # Русские.
     "ноль": 0, "один": 1, "одна": 1, "одно": 1, "два": 2, "две": 2, "три": 3,
     "четыре": 4, "пять": 5, "шесть": 6, "семь": 7, "восемь": 8, "девять": 9,
     "десять": 10, "одиннадцать": 11, "двенадцать": 12, "тринадцать": 13,
     "четырнадцать": 14, "пятнадцать": 15, "шестнадцать": 16, "семнадцать": 17,
     "восемнадцать": 18, "девятнадцать": 19,
+    # English. "oh"/"o" — spoken zero, only meaningful as a digit inside a
+    # digit-group number ("one oh five"), handled in _normalize_english_numbers.
+    # Note "twenty" is NOT here even though it's a bare number word too — it
+    # goes in _WORD_TENS below, because unlike "one".."nineteen" it also has
+    # to combine with a following unit ("twenty-five" = 20 + 5) via the same
+    # decreasing-rank merge Russian "двадцать" uses. Duplicating it into both
+    # dicts would make the tens+unit merge below skip it as already "used up"
+    # at rank 1.
+    "zero": 0, "oh": 0, "o": 0, "one": 1, "two": 2, "three": 3, "four": 4,
+    "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+    "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15,
+    "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19,
 }
 _WORD_TENS = {
+    # Русские.
     "двадцать": 20, "тридцать": 30, "сорок": 40, "пятьдесят": 50, "шестьдесят": 60,
     "семьдесят": 70, "восемьдесят": 80, "девяносто": 90,
+    # English.
+    "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50, "sixty": 60,
+    "seventy": 70, "eighty": 80, "ninety": 90,
 }
 _WORD_HUNDREDS = {
+    # Russian hundreds are fixed-value words ("двести" IS 200) and slot
+    # straight into the rank/accumulate machine below. English has no
+    # equivalent here on purpose: "two hundred" is unit(2) * multiplier
+    # ("hundred"), not a word meaning 200 outright — that grammar is handled
+    # separately by _normalize_english_numbers before this dict is consulted.
     "сто": 100, "двести": 200, "триста": 300, "четыреста": 400, "пятьсот": 500,
     "шестьсот": 600, "семьсот": 700, "восемьсот": 800, "девятьсот": 900,
 }
 
 # Chunk boundaries between separate sets in one utterance.
-_CHUNK_SPLIT_RE = re.compile(r"[,\n]|потом|затем|далее|дальше|ещё|еще", re.IGNORECASE)
+_CHUNK_SPLIT_RE = re.compile(
+    r"[,\n]|потом|затем|далее|дальше|ещё|еще|\bthen\b", re.IGNORECASE
+)
 
 _TOKEN_RE = re.compile(r"[а-яёa-z]+|\d+", re.IGNORECASE)
+
+# English-only views of the merged dicts above, needed by the hundred/
+# digit-group grammar in _normalize_english_numbers (it has to tell "this
+# English unit word is about to combine with a following tens/hundred word"
+# apart from the Russian entries, which never participate in that grammar).
+_EN_UNIT_VALUES = {k: v for k, v in _WORD_UNITS.items() if k.isascii()}
+_EN_TENS_VALUES = {k: v for k, v in _WORD_TENS.items() if k.isascii()}
+
+
+def _consume_plain_english(tokens: list[str], j: int) -> tuple[int, int]:
+    """Read an optional tens[+unit] or a bare unit/teen starting at tokens[j] —
+    the part that can follow "hundred" ("...hundred and twenty five",
+    "...hundred eight"). Returns (value, next index); value is 0 and index
+    unchanged if nothing plausible is there."""
+    if j < len(tokens):
+        tok = tokens[j]
+        if tok in _EN_TENS_VALUES:
+            val = _EN_TENS_VALUES[tok]
+            k = j + 1
+            if k < len(tokens) and _EN_UNIT_VALUES.get(tokens[k], 99) < 10:
+                val += _EN_UNIT_VALUES[tokens[k]]
+                k += 1
+            return val, k
+        if tok in _EN_UNIT_VALUES:
+            return _EN_UNIT_VALUES[tok], j + 1
+    return 0, j
+
+
+def _normalize_english_numbers(tokens: list[str]) -> list[str]:
+    """Collapse English number-word phrases the generic rank/accumulate loop
+    below can't read on its own into single digit-string tokens, in place.
+
+    Two constructs need this, both because English number grammar isn't "one
+    fixed word per magnitude" the way Russian is:
+
+    1. "hundred" is a *multiplier* word ("two hundred" = 2 × 100), not a fixed
+       value like Russian "двести" — so it can't just sit in a rank-3 lookup
+       table. "a hundred and five", "one hundred eight", "two hundred and
+       twenty-five" are all handled here.
+    2. Gym-speak digit-groups said like a room number: "two twenty-five" (225),
+       "one thirty" (130), "one oh five" (105) — a lone 1-9 word immediately
+       followed by a tens/teen word (or "oh"+digit) means "hundreds digit,
+       then the rest", not two separate numbers. The generic decreasing-rank
+       merge below would otherwise flush "two" as its own number the moment
+       "twenty" (higher rank) arrived.
+
+    Plain compounds without this ambiguity ("twenty-five", "eighty") are left
+    alone — the generic loop already merges tens+units by decreasing rank,
+    same mechanism as Russian "сто двадцать пять".
+    """
+    out: list[str] = []
+    i = 0
+    n = len(tokens)
+    while i < n:
+        tok = tokens[i]
+        # "a hundred" / "an hundred and five" — implicit unit of one, same
+        # shape as the bare-"hundred" branch below.
+        if tok in ("a", "an") and i + 1 < n and tokens[i + 1] == "hundred":
+            j = i + 2
+            if j < n and tokens[j] == "and":
+                j += 1
+            rest, j = _consume_plain_english(tokens, j)
+            out.append(str(100 + rest))
+            i = j
+            continue
+        unit = _EN_UNIT_VALUES.get(tok)
+        if unit is not None and unit < 10 and i + 1 < n and tokens[i + 1] == "hundred":
+            j = i + 2
+            if j < n and tokens[j] == "and":
+                j += 1
+            rest, j = _consume_plain_english(tokens, j)
+            out.append(str(unit * 100 + rest))
+            i = j
+            continue
+        if tok == "hundred":  # bare "hundred" — implicit unit of one.
+            j = i + 1
+            if j < n and tokens[j] == "and":
+                j += 1
+            rest, j = _consume_plain_english(tokens, j)
+            out.append(str(100 + rest))
+            i = j
+            continue
+        if unit is not None and unit < 10 and i + 1 < n and tokens[i + 1] in _EN_TENS_VALUES:
+            # Digit-group: "two twenty(-five)" -> 220 or 225.
+            tens_val = _EN_TENS_VALUES[tokens[i + 1]]
+            j = i + 2
+            extra = 0
+            if j < n and _EN_UNIT_VALUES.get(tokens[j], 99) < 10:
+                extra = _EN_UNIT_VALUES[tokens[j]]
+                j += 1
+            out.append(str(unit * 100 + tens_val + extra))
+            i = j
+            continue
+        if unit is not None and unit < 10 and i + 1 < n and tokens[i + 1] in ("oh", "o"):
+            # Digit-group: "one oh five" -> 105 (single trailing digit only).
+            j = i + 2
+            digit = _EN_UNIT_VALUES.get(tokens[j]) if j < n else None
+            if digit is not None and digit < 10:
+                out.append(str(unit * 100 + digit))
+                i = j + 1
+                continue
+            # "oh" not followed by a plausible digit — not this pattern,
+            # leave both tokens for the generic loop to deal with.
+        out.append(tok)
+        i += 1
+    return out
 
 
 _RANK_NONE = 4  # sentinel above hundreds so the first component is always accepted
@@ -56,7 +197,12 @@ _RANK_NONE = 4  # sentinel above hundreds so the first component is always accep
 # it back into two numbers ("100 8"). See `_chunk_to_numbers` for where that
 # split happens. "запятая"/"точка" are unambiguous on their own (nobody says
 # "сто точка восемь" to mean "100 reps of 8"), so they always stay a decimal.
-_DECIMAL_MARKERS = {"и", "запятая", "точка"}
+#
+# "point" is English's unambiguous decimal marker — same role as "точка", never
+# a weight×reps connector, unlike Russian's ambiguous "и" (English has no
+# equivalent ambiguity here: "and" is already fully consumed by
+# _normalize_english_numbers wherever it could mean anything number-related).
+_DECIMAL_MARKERS = {"и", "запятая", "точка", "point"}
 _AMBIGUOUS_DECIMAL_MARKER = "и"
 # "два с половиной" — "с" is the bare preposition and mustn't flush the number
 # in progress; "половиной"/etc. supplies the ".5".
@@ -104,7 +250,8 @@ def _chunk_to_numbers(chunk: str) -> list[float]:
         current += value
         last_rank = rank
 
-    for tok in _TOKEN_RE.findall(chunk.lower()):
+    tokens = _normalize_english_numbers(_TOKEN_RE.findall(chunk.lower()))
+    for tok in tokens:
         if tok in _IGNORED_TOKENS:
             continue
         if tok in _HALF_WORDS:

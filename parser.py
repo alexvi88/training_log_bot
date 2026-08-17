@@ -4,14 +4,17 @@ import datetime as dt
 import re
 from dataclasses import dataclass
 
-EXAMPLES_HINT = (
-    "Не понял ввод. Примеры:\n"
-    "100 8\n"
-    "100x8\n"
-    "100x8x3\n"
-    "+20 8\n"
-    "8 (свой вес)"
-)
+import i18n
+
+# Тексты ошибок берутся из каталога (input.*) через i18n.t(), а не хардкодятся
+# по-русски — они рендерятся на языке текущего пользователя (i18n.get_lang(),
+# выставляется мидлварью до хендлера). examples_hint() — функция, а не
+# константа: строка должна читаться заново на каждый вызов, а не застыть на
+# языке импорта модуля.
+
+
+def examples_hint() -> str:
+    return i18n.t("input.examples_hint")
 
 
 class ParseError(Exception):
@@ -78,7 +81,7 @@ def _parse_rpe(raw: str | None) -> float | None:
         return None
     rpe = float(raw.replace(",", "."))
     if not (0 < rpe <= 10):
-        raise ParseError("RPE — от 1 до 10, например «100x8@9»")
+        raise ParseError(i18n.t("input.rpe_range"))
     return rpe
 
 
@@ -86,21 +89,21 @@ def parse_single_token(token: str) -> list[ParsedSet]:
     """Parse one weight/reps[/count][@rpe] token, e.g. '100x8x3', '100 8', '8', '+20 8', '100x8@9'."""
     text = token.strip()
     if not text:
-        raise ParseError(EXAMPLES_HINT)
+        raise ParseError(examples_hint())
 
     bw_match = _BODYWEIGHT_RE.match(text)
     if bw_match:
         reps = int(bw_match.group("reps"))
         if reps <= 0:
-            raise ParseError("Повторы — от 1, ноль в дневник не идёт")
+            raise ParseError(i18n.t("input.reps_zero"))
         if reps > MAX_REPS:
-            raise ParseError(f"Подозрительно много повторов (максимум {MAX_REPS}) — опечатка?")
+            raise ParseError(i18n.t("input.reps_too_many", max=MAX_REPS))
         rpe = _parse_rpe(bw_match.group("rpe"))
         return [ParsedSet(weight=0.0, reps=reps, weight_omitted=True, rpe=rpe)]
 
     match = _X_SEP_RE.match(text) or _SPACE_SEP_RE.match(text)
     if not match:
-        raise ParseError(EXAMPLES_HINT)
+        raise ParseError(examples_hint())
 
     weight = float(match.group("weight").replace(",", "."))
     reps = int(match.group("reps"))
@@ -108,15 +111,13 @@ def parse_single_token(token: str) -> list[ParsedSet]:
     rpe = _parse_rpe(match.group("rpe"))
 
     if reps <= 0:
-        raise ParseError("Повторы — от 1, ноль в дневник не идёт")
+        raise ParseError(i18n.t("input.reps_zero"))
     if reps > MAX_REPS:
-        raise ParseError(f"Подозрительно много повторов (максимум {MAX_REPS}) — опечатка?")
+        raise ParseError(i18n.t("input.reps_too_many", max=MAX_REPS))
     if weight > MAX_WEIGHT:
-        raise ParseError(f"Подозрительно большой вес (максимум {MAX_WEIGHT:.0f}) — лишний ноль?")
+        raise ParseError(i18n.t("input.weight_too_big", max=f"{MAX_WEIGHT:.0f}"))
     if not (0 < count <= MAX_SETS_PER_TOKEN):
-        raise ParseError(
-            f"Странное количество подходов — за одну строку принимаю от 1 до {MAX_SETS_PER_TOKEN}, например «100x8x3»"
-        )
+        raise ParseError(i18n.t("input.set_count_range", max=MAX_SETS_PER_TOKEN))
 
     return [ParsedSet(weight=weight, reps=reps, rpe=rpe) for _ in range(count)]
 
@@ -145,10 +146,10 @@ def parse_set_edit(text: str) -> tuple[int, ParsedSet] | None:
         return None
     index = int(match["index"])
     if index <= 0:
-        raise ParseError("Номер подхода должен быть больше 0")
+        raise ParseError(i18n.t("input.set_index_positive"))
     sets = parse_single_token(match["rest"])
     if len(sets) != 1:
-        raise ParseError("Для правки укажи ровно один подход, без счётчика (например «2: 100 8»)")
+        raise ParseError(i18n.t("input.set_edit_single_only"))
     return index, sets[0]
 
 
@@ -163,12 +164,12 @@ def parse_sets_line(text: str) -> list[ParsedSet]:
     text = _DECIMAL_COMMA_RE.sub(".", text)
     chunks = [c.strip() for c in _LINE_SPLIT_RE.split(text) if c.strip()]
     if not chunks:
-        raise ParseError(EXAMPLES_HINT)
+        raise ParseError(examples_hint())
     sets: list[ParsedSet] = []
     for chunk in chunks:
         sets.extend(parse_single_token(chunk))
     if len(sets) > MAX_SETS_PER_LINE:
-        raise ParseError(f"Слишком много подходов в одной строке (максимум {MAX_SETS_PER_LINE})")
+        raise ParseError(i18n.t("input.too_many_sets_in_line", max=MAX_SETS_PER_LINE))
     return sets
 
 
@@ -189,10 +190,10 @@ def parse_bodyweight(text: str) -> float:
     """A single positive body weight, e.g. '80', '80.5', '80,5'."""
     raw = text.strip()
     if not _BODYWEIGHT_VALUE_RE.match(raw):
-        raise ParseError("Не понял вес. Напиши число, например 80 или 80.5")
+        raise ParseError(i18n.t("input.bodyweight_invalid"))
     weight = float(raw.replace(",", "."))
     if not (0 < weight < _BODYWEIGHT_HARD_MAX):
-        raise ParseError("Странный вес — напиши реальное число в кг/lb")
+        raise ParseError(i18n.t("input.bodyweight_out_of_range"))
     return weight
 
 
@@ -221,8 +222,8 @@ def bodyweight_warning(weight: float, unit: str = "kg") -> str | None:
     lo, hi = _BODYWEIGHT_PLAUSIBLE.get(unit, _BODYWEIGHT_PLAUSIBLE["kg"])
     if lo < weight < hi:
         return None
-    kind = "большой" if weight > hi else "маленький"
-    return f"Подозрительно {kind} вес — лишний ноль?"
+    key = "input.bodyweight_warning_big" if weight > hi else "input.bodyweight_warning_small"
+    return i18n.t(key)
 
 
 # ---------- date input: дд.мм.гггг ----------
@@ -231,21 +232,29 @@ _DATE_RE = re.compile(r"^(?P<d>\d{1,2})[.\-/](?P<m>\d{1,2})[.\-/](?P<y>\d{2,4})$
 
 
 def parse_ru_date(text: str, today: dt.date | None = None) -> dt.date:
+    """Формат всегда день.месяц.год — для обоих языков, без исключений.
+
+    Ловушка: "03.04.2026" в дд.мм и в мм.дд — это два разных дня, а не один и
+    тот же по-другому записанный. Молча угадывать формат по языку пользователя
+    нельзя: часть дат (день <= 12) окажется валидной в обоих прочтениях и
+    тихо превратится не в ту дату. Поэтому формат один и тот же везде, а
+    англоязычному про это явно говорит текст ошибки (input.date_invalid_format
+    — «DD.MM.YYYY», а не молчаливое «дд.мм.гггг» из русской версии).
+    """
     raw = text.strip()
     match = _DATE_RE.match(raw)
     if not match:
-        raise ParseError("Не понял дату. Напиши как дд.мм.гггг, например 14.03.2025")
+        raise ParseError(i18n.t("input.date_invalid_format"))
     day, month, year = int(match["d"]), int(match["m"]), int(match["y"])
     if year < 100:
         year += 2000
     try:
         date = dt.date(year, month, day)
     except ValueError:
-        raise ParseError("Такой даты в календаре нет — проверь день и месяц") from None
+        raise ParseError(i18n.t("input.date_not_on_calendar")) from None
     # today is passed in by callers that know the user's timezone — at the far
     # ends of the world the server's date is a day off, and typing your own
     # today's date shouldn't be rejected as "в будущем".
     if date > (today or dt.date.today()):
-        raise ParseError("Эта дата ещё в будущем — прошлая тренировка живёт не позже сегодняшнего дня")
+        raise ParseError(i18n.t("input.date_in_future"))
     return date
-

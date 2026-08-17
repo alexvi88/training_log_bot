@@ -394,11 +394,20 @@ async def transcribe_voice(file_obj: Any, user_id: Optional[int] = None) -> str:
 
     file_obj — объект с методом .read() и атрибутом .name (например BytesIO с
     выставленным именем), как того требует OpenAI SDK для audio.transcriptions.
+
+    Язык распознавания передаётся явно, а не оставляется на автодетект: без него
+    английская речь про железо («two twenty five for five») стабильно
+    расшифровывается кириллицей — модель слышит короткую фразу с числами на фоне
+    зала и уходит в язык большинства своих данных. Разбирать такую расшифровку
+    парсеру уже нечем (voice_parse ждёт слова, а не транслит), и голосовой ввод
+    у англоязычного молча не работает — самый неприятный вид поломки, потому что
+    ошибки нет, просто ничего не происходит.
     """
     client = _get_audio_client()
     response = await client.audio.transcriptions.create(
         model=config.OPENAI_TRANSCRIBE_MODEL,
         file=file_obj,
+        language=i18n.get_lang(),
     )
     # У аудио API не возвращает токенов, поэтому цена берётся плоской ставкой за
     # вызов (config.TRANSCRIPTION_PRICE_USD_PER_CALL) — и в отчёте, и в логе.
