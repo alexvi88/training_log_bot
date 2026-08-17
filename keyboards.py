@@ -1424,6 +1424,23 @@ def language_keyboard(current: str) -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
+def onboarding_language_keyboard(current: str) -> InlineKeyboardMarkup:
+    """Первый экран новичка, ДО приветствия _ONBOARDING (handlers/workout.py,
+    cmd_start) — та же разметка `• label •`, что и у language_keyboard в
+    настройках, чтобы приём «текущий выбор» был один на весь продукт.
+    Помеченный вариант — это угадка по language_code, а не решение за
+    человека: он всё ещё может её поправить, нажав другую кнопку.
+
+    Без «⬅️ Назад»: до выбора языка идти ещё некуда, это первый экран из
+    всех."""
+    b = InlineKeyboardBuilder()
+    for code in ("ru", "en"):
+        label = LANG_NAMES[code]
+        b.button(text=f"• {label} •" if code == current else label, callback_data=f"onboarding:lang:{code}")
+    b.adjust(1)
+    return b.as_markup()
+
+
 def settings_keyboard(
     unit: str,
     formula: str,

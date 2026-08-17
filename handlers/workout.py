@@ -1091,10 +1091,27 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject 
         # и БД гарантированно совпадали, даже если логика догадки когда-нибудь
         # разъедется между мидлварью и этим хендлером.
         i18n.set_lang(guessed_lang)
-        # Молча, до приветствия: клавиатура нужна сразу, но новичку нечего
-        # рассказывать про «обновил меню» (см. attach_silently), а приветствие
-        # должно остаться последним сообщением на экране.
+        # Молча, до экрана выбора языка: клавиатура нужна сразу, но новичку
+        # нечего рассказывать про «обновил меню» (см. attach_silently), а
+        # последним сообщением на экране должен остаться выбор языка.
+        #
+        # Именно здесь, а не после выбора языка: attach_silently гасит
+        # уведомление middleware тем, что поднимает reply_keyboard_version, а
+        # RefreshPersistentMenuMiddleware работает ДО хендлера. Отложи это до
+        # нажатия кнопки — и на тапе по языку middleware увидит уже
+        # существующего пользователя с нулевой версией и пришлёт «⌨️ Обновил
+        # меню» ровно перед приветствием, то есть на том единственном экране,
+        # который продаёт бота.
         await attach_silently(message, message.from_user.id)
+        # Догадка — не выбор: следующим экраном новичок подтверждает или
+        # поправляет её (см. onboarding_language_set), и только за нажатием
+        # кнопки идёт приветствие _ONBOARDING — так на экране никогда не висит
+        # два разных «первых сообщения» разом.
+        await message.answer(
+            i18n.t_in(guessed_lang, "screen.onboarding_language.title"),
+            reply_markup=keyboards.onboarding_language_keyboard(guessed_lang),
+        )
+        return
     active = await db.get_active_workout(message.from_user.id)
     text, png = await _menu_view(message.from_user.id)
     await _send_menu(message, text, png, await _main_menu_kb(message.from_user.id, active))
@@ -1142,6 +1159,40 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject 
                     entities=formatting.entities_at(warning, stamp, entity),
                     reply_markup=keyboards.stale_workout_keyboard(active["id"]),
                 )
+
+
+@router.callback_query(F.data.startswith("onboarding:lang:"))
+async def onboarding_language_set(callback: CallbackQuery, state: FSMContext):
+    """Явный выбор языка новичком — единственный путь с экрана выбора языка
+    (см. cmd_start) на обычное приветствие _ONBOARDING.
+
+    Хендлер существует только для этого экрана: старожил его никогда не видит
+    (см. докстринг cmd_start), так что переписывать язык уже заведённого
+    пользователя тут не риск — сюда просто некому прийти второй раз.
+    """
+    lang = callback.data.split(":")[2]
+    if lang not in i18n.SUPPORTED:
+        # Незнакомый код (старая клавиатура, чужой клиент) — не роняем хендлер,
+        # просто ничего не делаем: перерисовывать тут нечего, у экрана выбора
+        # только два рабочих варианта.
+        await callback.answer()
+        return
+    await db.set_user_lang(callback.from_user.id, lang)
+    i18n.set_lang(lang)
+    # Клавиатура прикреплена ещё в cmd_start, до экрана выбора языка — см.
+    # комментарий там о том, почему её нельзя откладывать до этого тапа.
+    # Новичок только что заведён — активной тренировки у него быть не может,
+    # так что здесь нет ветки stale-workout предупреждения из cmd_start: она
+    # для этого пользователя всегда пуста.
+    text, png = await _menu_view(callback.from_user.id)
+    kb = await _main_menu_kb(callback.from_user.id, None)
+    # safe_edit сам решит, править ли экран выбора языка на месте или прислать
+    # приветствие новым сообщением — attach_silently выше уже мог увести
+    # экран выбора языка со дна чата (chat_bottom это отследит), так что
+    # выбор безопасного пути тут ровно тот же, что и у остальных двухшаговых
+    # экранов в проекте.
+    await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML")
+    await callback.answer()
 
 
 # Справка живёт в двух экранах: первый закрывает то, что нужно 95% времени

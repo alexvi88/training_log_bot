@@ -41,8 +41,12 @@ async def attach_silently(message: Message, user_id: int) -> None:
     permanent, it earns its place by naming what the row underneath actually
     does, instead of sitting there as a bare "⌨️".
 
-    Bumps reply_keyboard_version so the middleware, which runs after the
-    handler and re-reads the row, sees an up-to-date user and stays quiet.
+    Bumps reply_keyboard_version so the middleware sees an up-to-date user and
+    stays quiet. Важно, КОГДА это вызывать: RefreshPersistentMenuMiddleware
+    работает ДО хендлера, поэтому гасит уведомление только та версия, которая
+    поднята к моменту СЛЕДУЮЩЕГО апдейта. Отложить вызов на один тап (например,
+    за кнопку в онбординге) — значит получить «⌨️ Обновил меню» на этом тапе,
+    ровно там, где его быть не должно.
     """
     with suppress(TelegramBadRequest):
         await message.answer(
