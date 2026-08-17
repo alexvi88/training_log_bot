@@ -146,3 +146,39 @@ def test_metric_over_sessions_render_has_no_cyrillic_in_english():
     assert drawn
     offenders = [s for s in drawn if CYRILLIC.search(s)]
     assert not offenders, offenders
+
+
+# ---------- HTML-сущности: класс риска, которого в русском не было ----------
+
+_HTML_ENTITY = re.compile(r"&#\d+;|&#x[0-9a-fA-F]+;|&amp;|&lt;|&gt;|&quot;")
+
+
+def test_drawn_text_never_carries_html_entities():
+    """В картинке HTML не разбирается — сущность попадёт в пиксели буквами.
+
+    Риск новый и специфически английский: тон-оф-войс требует сокращений, и 347
+    английских строк каталога содержат апостроф. Стоит такой строке пройти через
+    escape() по дороге в PNG — и человек увидит «Warm-up&#x27;s Over» нарисованным.
+    В русском тексте апострофов нет вовсе, поэтому раньше этот класс не
+    существовал и поймать его на русских тестах было нечем.
+    """
+    with i18n.use_lang("en"), _capture_drawn_text() as drawn:
+        charts.render_workout_card(
+            "Push day", ["Bench press", "  100x8, 105x8"], "3 exercises done", note="★ new record"
+        )
+    assert drawn
+    offenders = [s for s in drawn if _HTML_ENTITY.search(s)]
+    assert not offenders, f"HTML-сущности уехали в картинку: {offenders}"
+
+
+def test_english_catalog_stores_raw_text_not_escaped():
+    """Каталог хранит строки сырыми: экранирование — дело того, кто собирает
+    HTML-экран, и предэкранированное значение сломалось бы везде, где HTML нет
+    (картинки, алерты callback.answer — там parse_mode не поддерживается вовсе).
+    """
+    import json
+    import pathlib
+
+    en = json.loads(pathlib.Path("locales/en.json").read_text(encoding="utf-8"))
+    offenders = {k: v for k, v in en.items() if _HTML_ENTITY.search(str(v))}
+    assert not offenders, f"в каталоге лежат экранированные значения: {offenders}"
