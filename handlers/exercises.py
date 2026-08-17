@@ -467,6 +467,20 @@ async def _send_template_preview(message, template, text: str, kb, images: list[
     остаётся только название. Название там не для красоты: фото уезжает вверх
     при прокрутке, и голое «Управление» не говорит, к чему кнопки.
     """
+    # Клип, когда он снят, ещё и снимает саму развилку: у анимации, в отличие
+    # от медиагруппы, клавиатура своя, поэтому предпросмотр снова умещается
+    # в одно сообщение — как было до пары кадров.
+    clip = exercise_media.get_animation(exercise_media.catalog_key(template))
+    if clip:
+        sent = await message.answer_animation(
+            exercise_media.cached_file_id(clip) or FSInputFile(clip),
+            caption=formatting.clamp_caption(text),
+            reply_markup=kb,
+            parse_mode="HTML",
+        )
+        animation = getattr(sent, "animation", None)
+        exercise_media.remember_file_id(clip, getattr(animation, "file_id", None))
+        return
     if not images:
         await message.answer(text, reply_markup=kb, parse_mode="HTML")
         return
@@ -587,6 +601,17 @@ async def _send_exercise_images(message: Message, ex, state: FSMContext) -> bool
             caption=formatting.clamp_caption(_exercise_info_text(ex, group_name=group_name)),
             parse_mode="HTML",
         )
+        await state.update_data(exm_media_msg_ids=[sent.message_id])
+        return True
+    clip = exercise_media.get_animation_for(ex)
+    if clip:
+        sent = await message.answer_animation(
+            exercise_media.cached_file_id(clip) or FSInputFile(clip),
+            caption=formatting.clamp_caption(_exercise_info_text(ex, group_name=group_name)),
+            parse_mode="HTML",
+        )
+        animation = getattr(sent, "animation", None)
+        exercise_media.remember_file_id(clip, getattr(animation, "file_id", None))
         await state.update_data(exm_media_msg_ids=[sent.message_id])
         return True
     images = exercise_media.get_images_for(ex)

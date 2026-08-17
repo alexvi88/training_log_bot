@@ -148,6 +148,26 @@ def get_images_for(ex) -> list[str]:
     return get_images(catalog_key(ex))
 
 
+# Зацикленная демонстрация повтора: тот же тренер, что в пушах, вместо
+# случайного человека из открытой базы (TONE_OF_VOICE.md, «Стиль картинок» —
+# персонаж один на весь продукт). Собирается офлайн, scripts/gen_exercise_demos.py;
+# бот только отдаёт готовый файл. Клипы появляются по одному, поэтому это не
+# замена фото, а верхняя ступень: есть клип — идёт клип, нет — прежняя пара
+# кадров, и покрытие не проседает ни на одном шаге раскатки.
+def get_animation(exercise_name: str) -> str | None:
+    """Путь к зацикленному клипу упражнения, или None если его ещё не сняли."""
+    slug = EXERCISE_IMAGE_SLUGS.get(exercise_name)
+    if slug is None:
+        return None
+    path = os.path.join(MEDIA_DIR, f"{slug}_demo.mp4")
+    return path if os.path.exists(path) else None
+
+
+def get_animation_for(ex) -> str | None:
+    """get_animation for an exercise row, keyed the rename-proof way."""
+    return get_animation(catalog_key(ex))
+
+
 # Telegram hands back a file_id for every uploaded photo, and re-sending that id
 # costs no upload at all. The live tracker shows the same photos over and over
 # (every exercise, every workout, every user), so remembering the ids for the
