@@ -364,6 +364,61 @@ async def _screen_history_item_card(db, user_id: int) -> str:
     return callback.message.answer.await_args.args[0]
 
 
+async def _screen_weekly_summary(db, user_id: int) -> str:
+    """Недельная сводка (formatting.build_weekly_summary) — текстовый фолбэк
+    для клиентов без rich-таблиц, тот же экран, что и build_weekly_table."""
+    rows = [formatting.WeeklyRow(name="Squat", top_weight=100.0, tonnage=1500.0, sets_count=5)]
+    return formatting.build_weekly_summary(rows, workouts=3, total_tonnage=4200.0, period="Aug 11-17")
+
+
+async def _screen_achievements(db, user_id: int) -> str:
+    """Экран «🏅 Достижения» (formatting.build_achievements_screen) — сетка
+    открытых и запертых бейджей."""
+    import achievements
+
+    earned = {achievements.CATALOG[0].code} if achievements.CATALOG else set()
+    return formatting.build_achievements_screen(earned)
+
+
+async def _screen_hall_of_fame(db, user_id: int) -> str:
+    """Личные рекорды и лайфтайм-цифры над сеткой достижений
+    (formatting.build_hall_of_fame)."""
+    return formatting.build_hall_of_fame(
+        total_workouts=42,
+        tonnage_kg=15000.0,
+        tonnage_equivalent=formatting.format_tonnage_equivalent(15000.0),
+        best_week_streak=6,
+        longest_workout_seconds=5400,
+        top_lifts=[("Squat", 140.0, 5, 160.0)],
+    )
+
+
+async def _screen_progress_screen(db, user_id: int) -> str:
+    """Экран «📈 Прогресс» по одному упражнению (formatting.format_progress_screen)."""
+    import analytics
+
+    session = analytics.SessionStats(
+        workout_id=1,
+        started_at="2026-08-10T12:00:00",
+        sets=[analytics.SetRow(weight=100.0, reps=5)],
+    )
+    records = analytics.compute_personal_records([session])
+    return formatting.format_progress_screen("Squat", [session], None, records)
+
+
+async def _screen_bodyweight(db, user_id: int) -> str:
+    """Экран «⚖️ Вес тела» (formatting.build_bodyweight_screen), с историей —
+    пустое состояние переведено отдельным ключом и тоже стоит проверить."""
+    logs = [{"weight": 82.5, "logged_at": "2026-08-10T08:00:00"}]
+    return formatting.build_bodyweight_screen(logs)
+
+
+async def _screen_food_history(db, user_id: int) -> str:
+    """Вкладка истории питания (formatting.build_food_history_list)."""
+    day = formatting.FoodDayView(date=dt.date(2026, 8, 10), entries=2, calories=1800.0)
+    return formatting.build_food_history_list([day])
+
+
 def _strip_autonyms(text: str) -> str:
     """Тот же вырез, что и в test_en_catalog_has_no_cyrillic: автоним «Русский»
     в подписи кнопки языка — законная кириллица даже на английском экране."""
@@ -396,6 +451,12 @@ SCREENS: list[tuple[str, object]] = [
     ("history_list", _screen_history_list),
     ("workout_summary_card", _screen_workout_summary),
     ("dashboard_menu", _screen_dashboard_menu),
+    ("weekly_summary", _screen_weekly_summary),
+    ("achievements", _screen_achievements),
+    ("hall_of_fame", _screen_hall_of_fame),
+    ("progress_screen", _screen_progress_screen),
+    ("bodyweight_screen", _screen_bodyweight),
+    ("food_history", _screen_food_history),
 ]
 
 # Экраны, которые всё ещё протекают кириллицей мимо каталога (зависят от
