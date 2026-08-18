@@ -186,6 +186,14 @@ if (window.THREE) {
 
 <script>
 'use strict';
+// ── ПЕРЕКЛЮЧАТЕЛЬ ИСТОЧНИКА ТОЛПЫ ────────────────────────────────────────────
+// 'proc' — мускулистая фигура собрана в коде лофтом по сечениям (см.
+// buildProcBodyGeometry ниже, вызывается из loadAllCrowdModels); 'glb' —
+// прежние кубические модели Kenney (loadCharGeo/mergeGltfGeometry). Один
+// словом переключаем всю толпу для сравнения, оба пути рабочие и оба
+// проходят через один и тот же buildCrowdRigFromGeo/placeCharacter/
+// syncEnemyCrowd — переключатель не трогает остальной рендер и бой.
+const CROWD_SOURCE = 'proc'; // 'proc' | 'glb'
 // Expand to full screen immediately (как в game.html)
 if (window.Telegram?.WebApp) Telegram.WebApp.expand();
 
@@ -675,18 +683,57 @@ const SPRING_K = 7.5;
 // корень из численности. Узкая колонна тут не годится — сорок бойцов в ней
 // уезжали на два десятка единиц назад, то есть за камеру, и в кадре оставались
 // первые ряды: счётчик показывал сорок, на дорожке стояло семь.
-// Шаги подобраны в мире: 0.63 вбок и 0.60 вглубь при бойце шириной ~0.48 —
-// оба масштабированы вместе с CHAR_SCALE (было 0.42/0.40 при бойце ~0.32),
-// иначе увеличенные фигуры начинают перекрывать друг друга в строю.
-const STEP_X = 0.63 / TRACK_HALF3;
-const STEP_Z = 0.60 / FOLLOWER_Z_SCALE;
+// Шаги строя — НЕ захардкожены под конкретное тело: значения ниже (0.63/0.60,
+// подобранные под узкую ~0.48 кубическую модель Kenney) остаются дефолтом для
+// CROWD_SOURCE==='glb' (её габариты не трогаем), а для 'proc' их полностью
+// перезаписывает setFormationStepsFromGeometries() — она меряет фактический
+// bounding box собранной геометрии мускулистой фигуры (buildProcBodyGeometry)
+// и считает шаг от РЕАЛЬНОЙ ширины/глубины тела, а не от числа на глаз.
+// Иначе любая следующая правка пропорций тела молча рассинхронизирует строй.
+let STEP_X = 0.63 / TRACK_HALF3;
+let STEP_Z = 0.60 / FOLLOWER_Z_SCALE;
+// Зазор между телами в строю — доля от габарита самого тела (не абсолютное
+// число): 0.4 значит «между соседями пустое место в 40% от их размера»,
+// зазор виден при любом масштабе фигуры и любом formScale.
+const FORM_GAP_RATIO = 0.4;
+function footprintOf(geometry) {
+  geometry.computeBoundingBox();
+  const bb = geometry.boundingBox;
+  return { width: bb.max.x - bb.min.x, depth: bb.max.z - bb.min.z };
+}
+// Берём максимум по всем профилям бойца (FIGHTERS) — шаг строя общий для всех
+// скинов, поэтому должен вмещать самый широкий из них (бодибилдер/пауэрлифтер
+// шире кроссфитера), иначе при выборе широкого бойца строй снова слипнется.
+function setFormationStepsFromGeometries(geoMap) {
+  let w = 0, d = 0;
+  Object.values(geoMap).forEach(g => {
+    const fp = footprintOf(g.geometry);
+    w = Math.max(w, fp.width);
+    d = Math.max(d, fp.depth);
+  });
+  if (w <= 0 || d <= 0) return; // защита от пустой геометрии — оставляем дефолт
+  STEP_X = (w * CHAR_SCALE * (1 + FORM_GAP_RATIO)) / TRACK_HALF3;
+  STEP_Z = (d * CHAR_SCALE * (1 + FORM_GAP_RATIO)) / FOLLOWER_Z_SCALE;
+}
 let formCols = 2, formRows = 1, formScale = 1;
+// Насколько широко (в долях TRACK_HALF3, при formScale=1) строю разрешено
+// расползтись вбок, прежде чем фигуры начинают агрессивно мельчать — иначе
+// с широким телом и до 16 колонок толпа выезжает за стены дорожки и на
+// воротах закрывает створки. Нижний потолок формScale опущен с 0.55 до 0.14 —
+// при сотнях бойцов тело мельче старого предела быть ОБЯЗАНО, иначе оно не
+// влезает в кадр целиком (см. camera).
+const FORM_TARGET_HALF_WIDTH = 0.60;
+const FORM_SCALE_MIN = 0.14;
 function updateFormation() {
   const n = followers.length + 1;
   formCols = clamp(Math.round(Math.sqrt(n * 1.7)), 2, 16);
   formRows = Math.ceil(n / formCols);
-  // Чем больше орда, тем мельче боец — иначе строй перестаёт влезать в дорожку.
-  formScale = clamp(1 - (n - 40) / 520, 0.55, 1);
+  // При n=1 формула колонок всё равно даёт 2 (сетка считается «на будущее»),
+  // но реально занята только одна ячейка — не даём это ложно сжимать одиночного
+  // лидера, поэтому берём фактически занятые колонки, а не формCols целиком.
+  const colsUsed = Math.min(formCols, n);
+  const rawHalfWidth = STEP_X * (colsUsed - 1) / 2;
+  formScale = clamp(rawHalfWidth > 0 ? FORM_TARGET_HALF_WIDTH / rawHalfWidth : 1, FORM_SCALE_MIN, 1);
 }
 function slotFor(i) {
   const row = Math.floor(i / formCols) + 1;
@@ -1643,6 +1690,291 @@ function toonGradient() {
   _toonGrad.minFilter = THREE.NearestFilter; _toonGrad.magFilter = THREE.NearestFilter;
   return _toonGrad;
 }
+
+// ── ТЕЛО КАЧКА: процедурная мускулистая фигура (лофт по сечениям) ──────────
+// Заказчик забраковал кубических Kenney («без рельефа и мышц» — и он прав,
+// у кубов мышц взяться не может). Мышцы — это плавные выпуклости, то есть
+// геометрия, у которой радиус меняется вдоль оси: набор горизонтальных
+// эллиптических колец от стоп до головы, соединённых полосой треугольников
+// (лофт). Ширина колец сама рисует анатомию — узкие бёдра → шире к груди →
+// максимум на плечах, с сужением на талии между ними (V-силуэт), а локальные
+// утолщения в середине руки/ноги (бицепс, квадрицепс, икра) читаются как
+// мышцы. Сверху добросаны акцентные объёмы (дельты, грудные, трапеции) и
+// сферы на суставах, чтобы не было щелей на сгибах — см. buildProcBodyGeometry.
+// Всё собирается ОДИН раз при загрузке (loadAllCrowdModels), не в кадре, и
+// сливается в одну BufferGeometry на скин — тот же контракт, что у
+// buildCrowdRigFromGeo/mergeGltfGeometry ниже (geometry+outlineGeometry),
+// поэтому дальше по файлу (placeCharacter, syncEnemyCrowd, InstancedMesh)
+// ничего не знает, откуда взялась геометрия.
+const PROC_OUTLINE_WIDTH = 0.028;    // толщина контура — та же роль, что GLTF_OUTLINE_WIDTH ниже
+const PROC_HEIGHT_REF = 1.7;         // ориентир роста — тот же порядок, что GLTF_TARGET_HEIGHT
+
+// Пропорции четырёх типов бойцов — рост и полуразмеры (радиусы) торса и
+// конечностей в мировых юнитах. Разведены так, чтобы силуэт читался с
+// первого взгляда: пауэрлифтер — массивный и плотный, кроссфитер — поджарый,
+// борец — низкий и широкий, бодибилдер — предельный V-силуэт (огромные
+// плечи, узкая талия).
+const BODY_PROFILES = {
+  power: {
+    height: 1.55, shoulder: 0.50, chest: 0.44, waist: 0.40, hip: 0.43, neck: 0.15,
+    upperArm: 0.155, bicep: 0.205, forearm: 0.115, wrist: 0.075,
+    thigh: 0.205, quad: 0.255, calf: 0.16, ankle: 0.09,
+  },
+  cross: {
+    height: 1.74, shoulder: 0.395, chest: 0.325, waist: 0.265, hip: 0.30, neck: 0.105,
+    upperArm: 0.098, bicep: 0.13, forearm: 0.08, wrist: 0.055,
+    thigh: 0.15, quad: 0.175, calf: 0.115, ankle: 0.07,
+  },
+  wrestle: {
+    height: 1.42, shoulder: 0.475, chest: 0.415, waist: 0.375, hip: 0.40, neck: 0.145,
+    upperArm: 0.145, bicep: 0.185, forearm: 0.105, wrist: 0.07,
+    thigh: 0.19, quad: 0.235, calf: 0.145, ankle: 0.085,
+  },
+  build: {
+    height: 1.70, shoulder: 0.565, chest: 0.465, waist: 0.255, hip: 0.30, neck: 0.135,
+    upperArm: 0.135, bicep: 0.225, forearm: 0.095, wrist: 0.065,
+    thigh: 0.165, quad: 0.225, calf: 0.135, ankle: 0.075,
+  },
+};
+// Враги переиспользуют те же четыре силуэта, не изобретая пятый набор:
+// bruiser/giant — тяжеловесы (power), shield — низкий и широкий (wrestle),
+// runner/shooter — поджарые (cross), leader — предельный V-силуэт (build).
+const ENEMY_BODY_PROFILE = {
+  runner: 'cross', bruiser: 'power', shield: 'wrestle',
+  shooter: 'cross', leader: 'build', giant: 'power',
+};
+
+// Низкоуровневый лофт: список колец {y, rx, rz, cx, cz} (низ→верх) → одна
+// indexed-геометрия с посчитанными нормалями (computeVertexNormals даёт
+// гладкое затенение по кольцам — именно оно и лепит мышечный объём при
+// тоновом свете, без него выпуклости не читаются).
+function loftGeometry(rings, sides, capBottom, capTop) {
+  const pos = [];
+  for (const r of rings) {
+    for (let s = 0; s < sides; s++) {
+      const a = (s / sides) * Math.PI * 2;
+      pos.push((r.cx || 0) + Math.cos(a) * r.rx, r.y, (r.cz || 0) + Math.sin(a) * r.rz);
+    }
+  }
+  const idx = [];
+  for (let i = 0; i < rings.length - 1; i++) {
+    for (let s = 0; s < sides; s++) {
+      const a = i * sides + s, bIdx = i * sides + (s + 1) % sides;
+      const c = (i + 1) * sides + s, d = (i + 1) * sides + (s + 1) % sides;
+      idx.push(a, c, bIdx, bIdx, c, d);
+    }
+  }
+  if (capBottom) {
+    const base = pos.length / 3, r0 = rings[0];
+    pos.push(r0.cx || 0, r0.y, r0.cz || 0);
+    for (let s = 0; s < sides; s++) idx.push(base, s, (s + 1) % sides);
+  }
+  if (capTop) {
+    const base = pos.length / 3, last = rings.length - 1, r1 = rings[last], off = last * sides;
+    pos.push(r1.cx || 0, r1.y, r1.cz || 0);
+    for (let s = 0; s < sides; s++) idx.push(base, off + (s + 1) % sides, off + s);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setIndex(idx);
+  geo.computeVertexNormals();
+  return geo;
+}
+// Копилка одной фигуры целиком: позиции/нормали/цвета/индексы всех
+// собранных частей (торс, руки, ноги, суставы, экипировка) в общих массивах,
+// тем же приёмом, что mergeGltfGeometry ниже использует для мешей .glb —
+// трансформируем вершины частью матрицей и копируем в общие буферы.
+function newBodyBuilder() { return { pos: [], nor: [], col: [], idx: [] }; }
+function appendPart(b, geo, matrix, color) {
+  const vOff = b.pos.length / 3;
+  const nMat = new THREE.Matrix3().getNormalMatrix(matrix);
+  const p = geo.attributes.position, n = geo.attributes.normal;
+  const v = new THREE.Vector3(), nv = new THREE.Vector3();
+  for (let i = 0; i < p.count; i++) {
+    v.fromBufferAttribute(p, i).applyMatrix4(matrix);
+    b.pos.push(v.x, v.y, v.z);
+    nv.fromBufferAttribute(n, i).applyMatrix3(nMat).normalize();
+    b.nor.push(nv.x, nv.y, nv.z);
+    b.col.push(color.r, color.g, color.b);
+  }
+  // PolyhedronGeometry (IcosahedronGeometry ниже, см. sphereAt) собирается
+  // БЕЗ индекса — каждая грань уже своими тремя вершинами; свой лофт (см.
+  // loftGeometry) индекс всегда даёт. Без индекса — считаем тройками подряд.
+  if (geo.index) {
+    const ix = geo.index.array;
+    for (let i = 0; i < ix.length; i++) b.idx.push(ix[i] + vOff);
+  } else {
+    for (let i = 0; i < p.count; i++) b.idx.push(vOff + i);
+  }
+}
+// Сфера (иконосфера, дешёвая) для суставов и акцентов — дельты, грудные,
+// трапеции, бёдра, локти, голова: та же appendPart, поэтому и лофт-мышцы, и
+// акцентные объёмы попадают в один merge-конвейер и в одну BufferGeometry.
+function sphereAt(b, x, y, z, r, color, sx, sy, sz, detail) {
+  const geo = new THREE.IcosahedronGeometry(1, detail || 0);
+  const m = new THREE.Matrix4().compose(
+    new THREE.Vector3(x, y, z), new THREE.Quaternion(),
+    new THREE.Vector3((sx == null ? 1 : sx) * r, (sy == null ? 1 : sy) * r, (sz == null ? 1 : sz) * r)
+  );
+  appendPart(b, geo, m, color);
+}
+// Кольцо (тор) для экипировки — пояс, бандана/повязка, бинты на запястьях.
+function ringAt(b, x, y, z, r, tube, color, rotX) {
+  const geo = new THREE.TorusGeometry(r, tube, 5, 12);
+  const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(rotX || 0, 0, 0));
+  const m = new THREE.Matrix4().compose(new THREE.Vector3(x, y, z), q, new THREE.Vector3(1, 1, 1));
+  appendPart(b, geo, m, color);
+}
+
+// Сечения торса (низ→верх): таз → подрез талии → талия (минимум) → расширение
+// к груди → грудь (максимум глубины) → плечи (максимум ширины) → резкое
+// сужение в основании шеи (трапеции лепятся сферами отдельно) → верх шеи.
+function buildTorsoRings(p, h) {
+  return [
+    { y: h * 0.500, rx: p.hip * 0.92, rz: p.hip * 0.72 },
+    { y: h * 0.565, rx: p.waist * 1.05, rz: p.waist * 0.80 },
+    { y: h * 0.615, rx: p.waist, rz: p.waist * 0.78 },
+    { y: h * 0.665, rx: p.waist * 1.12, rz: p.waist * 0.85 },
+    { y: h * 0.700, rx: p.chest * 0.90, rz: p.chest * 0.72 },
+    { y: h * 0.755, rx: p.chest, rz: p.chest * 0.86 },
+    { y: h * 0.800, rx: p.shoulder * 0.86, rz: p.chest * 0.74 },
+    { y: h * 0.845, rx: p.shoulder, rz: p.chest * 0.62 },
+    { y: h * 0.875, rx: p.neck * 1.60, rz: p.neck * 1.50 },
+    { y: h * 0.915, rx: p.neck, rz: p.neck },
+  ];
+}
+// Одна нога (side = -1 левая, +1 правая): стопа → щиколотка → икра (выпуклость)
+// → колено (сужение) → бедро → квадрицепс (максимум) → верх бедра под таз.
+function buildLegRings(p, h, side) {
+  const cx = side * p.hip * 0.46;
+  return [
+    { y: 0, rx: p.ankle * 0.9, rz: p.ankle * 0.9, cx },
+    { y: h * 0.045, rx: p.ankle, rz: p.ankle * 0.95, cx },
+    { y: h * 0.200, rx: p.calf * 1.05, rz: p.calf, cx },
+    { y: h * 0.315, rx: p.calf * 0.75, rz: p.calf * 0.72, cx },
+    { y: h * 0.400, rx: p.thigh * 0.90, rz: p.thigh * 0.85, cx },
+    { y: h * 0.460, rx: p.quad, rz: p.quad * 0.92, cx },
+    { y: h * 0.500, rx: p.quad * 0.86, rz: p.quad * 0.80, cx },
+  ];
+}
+// Одна рука, висящая у бока (side = -1 левая, +1 правая): плечевой сустав →
+// бицепс (выпуклость на верхнем сегменте) → локоть (сужение) → предплечье →
+// запястье → кисть. Небольшой наклон вперёд по Z — расслабленная поза.
+function buildArmRings(p, h, side) {
+  const armX = side * (p.shoulder * 0.95);
+  const fz = -h * 0.055; // "вперёд" — фронт фигуры смотрит в -Z (по ходу движения)
+  return [
+    { y: h * 0.845, rx: p.upperArm * 0.95, rz: p.upperArm * 0.90, cx: armX, cz: fz * 0.25 },
+    { y: h * 0.790, rx: p.bicep * 0.85, rz: p.bicep * 0.80, cx: armX * 1.02, cz: fz * 0.45 },
+    { y: h * 0.735, rx: p.bicep, rz: p.bicep * 0.92, cx: armX * 1.04, cz: fz * 0.60 },
+    { y: h * 0.665, rx: p.forearm * 0.85, rz: p.forearm * 0.80, cx: armX * 1.06, cz: fz * 0.75 },
+    { y: h * 0.560, rx: p.forearm, rz: p.forearm * 0.92, cx: armX * 1.08, cz: fz * 0.95 },
+    { y: h * 0.470, rx: p.wrist * 1.10, rz: p.wrist, cx: armX * 1.10, cz: fz },
+    { y: h * 0.435, rx: p.wrist * 0.95, rz: p.wrist * 0.90, cx: armX * 1.10, cz: fz * 1.05 },
+  ];
+}
+// Собирает одну готовую фигуру: профиль пропорций + палитра (skin/top/
+// bottom/acc, как в FIGHTERS/ENEMY_TYPES) + экипировка по флагам с тем же
+// смыслом, что поля FIGHTERS (shirtless/belt/head/ears). Возвращает
+// {geometry, outlineGeometry, texture} — контракт buildCrowdRigFromGeo.
+function buildProcBodyGeometry(profileKey, colors, equip) {
+  const p = BODY_PROFILES[profileKey];
+  const h = p.height;
+  const b = newBodyBuilder();
+  const I4 = new THREE.Matrix4();
+  const skin = new THREE.Color(colors.skin);
+  const top = new THREE.Color(colors.top);
+  const bottom = new THREE.Color(colors.bottom);
+  const acc = new THREE.Color(colors.acc || colors.top);
+
+  const torso = buildTorsoRings(p, h);
+  appendPart(b, loftGeometry(torso.slice(0, 4), 10, true, false), I4, bottom);       // таз/талия — низ (шорты)
+  appendPart(b, loftGeometry(torso.slice(3), 10, false, true), I4, equip.shirtless ? skin : top); // грудь/плечи/шея
+
+  [-1, 1].forEach(side => {
+    const leg = buildLegRings(p, h, side);
+    appendPart(b, loftGeometry(leg.slice(0, 4), 8, true, false), I4, skin);          // стопа/икра/колено — голая кожа
+    appendPart(b, loftGeometry(leg.slice(3), 8, false, true), I4, bottom);           // бедро — шорты
+    sphereAt(b, side * p.hip * 0.46, h * 0.495, 0, p.quad * 0.85, bottom, 1, 0.85, 1, 0); // тазобедренный сустав — без щели
+
+    appendPart(b, loftGeometry(buildArmRings(p, h, side), 8, false, true), I4, skin); // рука целиком — голая (борцовка/майка)
+    sphereAt(b, side * p.shoulder * 0.92, h * 0.835, -h * 0.02, p.bicep * 0.95, skin, 1, 0.85, 0.95, 0); // дельта
+    sphereAt(b, side * p.shoulder * 1.00, h * 0.665, fzAt(h), p.forearm * 0.85, skin, 1, 1, 1, 0);        // локоть
+  });
+
+  // Грудные — две сплюснутые сферы на груди, заметно выступают вперёд (-Z)
+  // от и без того глубокого грудного кольца лофта — иначе объём груди не
+  // читается на фоне уже широкой грудной клетки самого торса.
+  [-1, 1].forEach(side => {
+    sphereAt(b, side * p.chest * 0.44, h * 0.75, -p.chest * 0.78, p.chest * 0.48, equip.shirtless ? skin : top, 1, 0.72, 1, 0);
+  });
+  // Трапеции — утолщение между шеей и плечами.
+  [-1, 1].forEach(side => {
+    sphereAt(b, side * p.neck * 1.3, h * 0.865, 0, p.neck * 0.9, equip.shirtless ? skin : top, 1, 0.6, 0.9, 0);
+  });
+  // Голова + уши (борец).
+  sphereAt(b, 0, h * 0.965 + p.neck * 0.02, 0, h * 0.062, skin, 1, 1.05, 0.95, 1);
+  if (equip.ears) {
+    [-1, 1].forEach(side => sphereAt(b, side * h * 0.062, h * 0.965, 0, h * 0.016, skin, 1, 1, 1, 0));
+  }
+  // Экипировка: пояс пауэрлифтера, бандана/повязка, бинты на запястьях —
+  // те же плоские кольца, слитые в общую геометрию.
+  if (equip.belt) ringAt(b, 0, h * 0.59, 0, p.waist * 1.02, h * 0.028, acc, Math.PI / 2);
+  if (equip.head === 'bandana' || equip.head === 'headband') {
+    // На экваторе головы (центр сферы головы — см. ниже), радиус чуть меньше
+    // радиуса головы, чтобы кольцо село на поверхность, а не висело отдельно.
+    ringAt(b, 0, h * 0.968, 0, h * 0.058, h * 0.012, acc, Math.PI / 2);
+  }
+  if (equip.wraps) {
+    [-1, 1].forEach(side => {
+      const armX = side * (p.shoulder * 0.95) * 1.10;
+      ringAt(b, armX, h * 0.46, fzAt(h), p.wrist * 1.15, h * 0.02, acc, Math.PI / 2);
+    });
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(b.pos, 3));
+  geometry.setAttribute('normal', new THREE.Float32BufferAttribute(b.nor, 3));
+  geometry.setAttribute('color', new THREE.Float32BufferAttribute(b.col, 3));
+  geometry.setIndex(b.idx);
+
+  // Контур — та же вершинная оболочка, раздутая вдоль нормалей (как у
+  // GLB-пути, см. GLTF_OUTLINE_WIDTH), общие индексы не пересчитываем.
+  const outPos = new Float32Array(b.pos.length);
+  for (let i = 0; i < b.pos.length; i += 3) {
+    outPos[i] = b.pos[i] + b.nor[i] * PROC_OUTLINE_WIDTH;
+    outPos[i + 1] = b.pos[i + 1] + b.nor[i + 1] * PROC_OUTLINE_WIDTH;
+    outPos[i + 2] = b.pos[i + 2] + b.nor[i + 2] * PROC_OUTLINE_WIDTH;
+  }
+  const outlineGeometry = new THREE.BufferGeometry();
+  outlineGeometry.setAttribute('position', new THREE.Float32BufferAttribute(outPos, 3));
+  outlineGeometry.setIndex(b.idx);
+  return { geometry, outlineGeometry, texture: null };
+}
+// "Вперёд" по Z у локтя/бинтов — тот же множитель, что в buildArmRings.
+function fzAt(h) { return -h * 0.055 * 0.75; }
+// Строит все геометрии толпы разом: по одной на каждый из четырёх типов
+// бойца (FIGHTERS) и по одной на каждый тип врага (ENEMY_TYPES, профиль —
+// см. ENEMY_BODY_PROFILE). Вызывается один раз при инициализации.
+function buildAllProcGeometries() {
+  const player = {};
+  Object.keys(FIGHTERS).forEach(key => {
+    const f = FIGHTERS[key];
+    player[key] = buildProcBodyGeometry(key, { skin: f.skin, top: f.top, bottom: f.bottom, acc: f.acc }, {
+      shirtless: !!f.shirtless, ears: !!f.ears, belt: !!f.belt, head: f.head,
+      wraps: !!f.belt || !!f.shirtless,
+    });
+  });
+  const enemy = {};
+  ENEMY_TYPE_KEYS.forEach(key => {
+    const d = ENEMY_TYPES[key];
+    enemy[key] = buildProcBodyGeometry(ENEMY_BODY_PROFILE[key], { skin: d.skin, top: d.top, bottom: d.bottom, acc: d.top }, {
+      shirtless: false, ears: false, belt: false, head: null, wraps: false,
+    });
+  });
+  return { player, enemy };
+}
+
 // Загрузка низкополигональных .glb-моделей Kenney (Blocky Characters) и
 // слияние их мешей в одну BufferGeometry на скин. Каждая модель — шесть
 // мешей (Body1/Head1/ArmLeft1/ArmRight1/LegLeft1/LegRight1), все используют
@@ -1753,9 +2085,11 @@ function loadCharGeo(path) {
 // контурный BackSide-клон — тот же приём, что раньше был на отдельных частях
 // тела (там — простое увеличение масштаба на примитив), теперь на цельной
 // модели. Плюс дешёвая тень-диск, как и была.
-function buildCrowdRigFromGeo(cap, geoData, isEnemy, outlineColor) {
+function buildCrowdRigFromGeo(cap, geoData, isEnemy, outlineColor, vertexColors) {
   const grad = toonGradient();
-  const mat = new THREE.MeshToonMaterial({ map: geoData.texture || null, color: 0xffffff, gradientMap: grad });
+  // vertexColors=true — путь CROWD_SOURCE==='proc': палитра запечена по
+  // вершинам (см. buildProcBodyGeometry), у .glb-моделей вместо этого текстура.
+  const mat = new THREE.MeshToonMaterial({ map: geoData.texture || null, color: 0xffffff, gradientMap: grad, vertexColors: !!vertexColors });
   const mesh = new THREE.InstancedMesh(geoData.geometry, mat, cap);
   mesh.count = 0; scene.add(mesh);
   let outline = null;
@@ -1773,6 +2107,11 @@ function buildCrowdRigFromGeo(cap, geoData, isEnemy, outlineColor) {
   return { mesh, outline, shadow };
 }
 let playerRig = null, enemyRigs = null;
+// playerRigs — заполняется только при CROWD_SOURCE==='proc': у каждого из
+// четырёх FIGHTERS своя геометрия (силуэты отличаются), поэтому нужен свой
+// InstancedMesh-риг на тип, не один общий с цветовым тонированием (как было
+// у единой .glb-модели, см. applyFighterColors ниже).
+let playerRigs = null;
 let shieldGearMesh = null, leaderGearMesh = null, leaderGauntletMesh = null;
 let bruiserFistMesh = null, shooterJavelinMesh = null, giantBarMesh = null, giantPlateMesh = null;
 const SHIELD_GEAR_CAP = ENEMY_CAP_BY_TYPE.shield, LEADER_GEAR_CAP = ENEMY_CAP_BY_TYPE.leader, GIANT_GEAR_CAP = ENEMY_CAP_BY_TYPE.giant;
@@ -1781,7 +2120,12 @@ const BRUISER_GEAR_CAP = ENEMY_CAP_BY_TYPE.bruiser, SHOOTER_GEAR_CAP = ENEMY_CAP
 // фиксированная точка у бока модели в её локальном пространстве, доля от S
 // (CHAR_SCALE * scaleMul), подобранная по скриншоту под позу .glb-моделей
 // Kenney (руки прижаты к телу, чуть вперёд).
-const HAND_DX = 0.24, HAND_DY = 0.62, HAND_DZ = 0.22;
+// Точки крепления снаряжения к кисти отдельные под каждый источник толпы —
+// у процедурной фигуры руки висят у бока со сгибом вперёд по -Z (см.
+// buildArmRings), у .glb-моделей Kenney была своя, отдельно подобранная поза.
+const HAND_DX = CROWD_SOURCE === 'proc' ? 0.36 : 0.24;
+const HAND_DY = CROWD_SOURCE === 'proc' ? 0.30 : 0.62;
+const HAND_DZ = CROWD_SOURCE === 'proc' ? -0.16 : 0.22;
 // Снаряжение в руках/на голове — то, что отличает силуэт типа сильнее
 // цвета: шипастый кастет у тяжеловеса, укрупнённый блин-щит у щитовика,
 // дротик на замахе у стрелка, корона и массивные наручи у вожака, гриф со
@@ -1873,6 +2217,10 @@ function finishRig(rig, count) {
 // модели) — лёгкий тон-твин материала слитой .glb-модели цветом выбранного
 // бойца, текстура остаётся читаемой (не заливается плоским цветом).
 function applyFighterColors() {
+  // Процедурный путь: у каждого типа своя геометрия с палитрой, запечённой
+  // по вершинам (см. buildProcBodyGeometry) — тонировать материал не нужно,
+  // выбор скина делает syncPlayerCrowd (playerRigs[selectedFighter]).
+  if (CROWD_SOURCE === 'proc') return;
   if (!playerRig) return;
   const f = FIGHTERS[selectedFighter];
   // Смешиваем с белым, а не заливаем чистым цветом — иначе тон-твин
@@ -1884,6 +2232,13 @@ function applyFighterColors() {
 // Обновляет позиции всей толпы (лидер + отряд) — followers уже посчитаны
 // в updateFollowers, тут только перевод в мировые координаты сцены.
 function syncPlayerCrowd() {
+  // Процедурный путь держит четыре готовых рига (по одному на FIGHTERS) —
+  // рисуем только выбранный, остальные три гасим (count=0), чтобы старый
+  // скин не завис на сцене при переключении бойца между забегами.
+  if (CROWD_SOURCE === 'proc' && playerRigs) {
+    playerRig = playerRigs[selectedFighter];
+    Object.keys(playerRigs).forEach(k => { if (k !== selectedFighter) finishRig(playerRigs[k], 0); });
+  }
   if (!playerRig) return;
   placeCharacter(playerRig, 0, worldX3(squadWorldX), 0, t * 9, 1, formScale);
   const n = Math.min(followers.length, PLAYER_CAP - 1);
@@ -1899,7 +2254,7 @@ function buildEnemyRigs(geoByKey) {
   enemyRigs = {};
   ENEMY_TYPE_KEYS.forEach(key => {
     const d = ENEMY_TYPES[key];
-    enemyRigs[key] = buildCrowdRigFromGeo(ENEMY_CAP_BY_TYPE[key], geoByKey[key], true, d.outline);
+    enemyRigs[key] = buildCrowdRigFromGeo(ENEMY_CAP_BY_TYPE[key], geoByKey[key], true, d.outline, CROWD_SOURCE === 'proc');
   });
 }
 // Обновляет позиции всех видимых врагов из активных волн — по одному ригу на
@@ -2540,12 +2895,25 @@ function updateCamera(dt) {
   const punch = clamp(shakeAmp * 0.01, 0, 0.5); // толчок назад на сильных ударах
   // Камера отъезжает по мере роста орды: строй всегда виден целиком, и это же
   // даёт ощущение масштаба — было двое, камера близко; стало двести, видно поле.
+  // Раньше отъезд считался только от глубины (числа рядов) — с широким
+  // мускулистым телом и до 16 колонок в ряд строй начал раздаваться ВШИРЬ
+  // быстрее, чем вглубь, и упирался в боковые края кадра раньше, чем в нижний.
+  // spread — берёт худший из двух размеров (глубина рядов или полуширина
+  // строя, с запасом ×1.7, потому что горизонтальный охват кадра у типичной
+  // перспективы уже вертикального при широком экране) и от него считает отъезд.
   const depth = formRows * STEP_Z * FOLLOWER_Z_SCALE * formScale;
+  const halfWidth = (formCols - 1) / 2 * STEP_X * TRACK_HALF3 * formScale;
+  const spread = Math.max(depth, halfWidth * 1.7);
   // Точка взгляда поднята и толпа держится ближе к центру кадра (фигуры
   // выросли ~в полтора раза, см. CHAR_SCALE/STEP_X/STEP_Z) — раньше отряд
   // жался к нижнему краю экрана.
-  camera.position.set(leadX * 0.35 + shakeX, 6.4 + depth * 0.34 + shakeY, 9.6 + depth * 0.62 + punch);
-  camera.lookAt(leadX * 0.55, 1.45, -6.0 + depth * 0.25);
+  // Коэффициенты бокового сдвига камеры/точки взгляда (leadX*...) уменьшены
+  // относительно прежних 0.35/0.55 — при крайнем положении отряда у стены
+  // (squadWorldX≈±0.95) и большом spread этого хватало, чтобы дальняя створка
+  // ворот (они занимают почти всю ширину дорожки) вылезала за левый/правый
+  // край экрана; меньший сдвиг держит обе створки в кадре при любом X отряда.
+  camera.position.set(leadX * 0.22 + shakeX, 6.4 + spread * 0.34 + shakeY, 9.6 + spread * 0.62 + punch);
+  camera.lookAt(leadX * 0.32, 1.45, -6.0 + spread * 0.25);
   camera.rotation.z = camYaw * 0.5;
   // Угол обзора слегка растёт со скоростью — дешёвый и очень заметный приём
   // разгона: чем быстрее забег, тем шире и "летящее" кадр.
@@ -2675,6 +3043,20 @@ const CHAR_MODEL_PATHS = {
   giant:   '/assets/game/basic_robot.glb',
 };
 async function loadAllCrowdModels() {
+  if (CROWD_SOURCE === 'proc') {
+    // Ничего не грузим по сети — вся геометрия собирается в коде синхронно
+    // (см. buildAllProcGeometries), async остаётся только по форме сигнатуры
+    // (initThree делает await на неё независимо от источника).
+    const built = buildAllProcGeometries();
+    setFormationStepsFromGeometries(built.player);
+    playerRigs = {};
+    Object.keys(built.player).forEach(key => {
+      playerRigs[key] = buildCrowdRigFromGeo(PLAYER_CAP, built.player[key], false, null, true);
+    });
+    playerRig = playerRigs[selectedFighter];
+    buildEnemyRigs(built.enemy);
+    return;
+  }
   const keys = Object.keys(CHAR_MODEL_PATHS);
   const geos = await Promise.all(keys.map(k => loadCharGeo(CHAR_MODEL_PATHS[k])));
   const geoByKey = {};
