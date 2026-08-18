@@ -279,7 +279,10 @@ async def test_stale_warning_repeats_the_next_local_day(fresh_db, user_id):
     db = fresh_db
     stale_started = dt.datetime.now() - dt.timedelta(hours=config.STALE_WORKOUT_HOURS + 1)
     await db.create_workout(user_id, started_at=stale_started.isoformat())
-    yesterday = (dt.date.today() - dt.timedelta(days=1)).isoformat()
+    # Расписка сверяется с местным днём пользователя — тем же, что и в тесте
+    # ниже: у свежего атлета это config.DEFAULT_TZ_OFFSET (+3), и UTC-дата возле
+    # полуночи UTC уехала бы мимо ключа.
+    yesterday = (timeutil.user_today(await db.get_user(user_id)) - dt.timedelta(days=1)).isoformat()
     await db.record_limit_ack(user_id, workout.STALE_WORKOUT_WARNING_KIND, yesterday)
 
     message = _make_message(user_id)
