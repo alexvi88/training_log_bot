@@ -567,7 +567,7 @@ function updateSegment() {
 // частоту/густоту встречных волн — единственные точки, где сегмент вообще
 // на что-то влияет.
 const SEGMENT_EVENT_MUL = {
-  gates:    { gate: 1.9, plate: 0.8, bonus: 0.9, crate: 1.0 },
+  gates:    { gate: 1.35, plate: 0.9, bonus: 0.95, crate: 1.0 },
   swarm:    { gate: 0.55, plate: 1.1, bonus: 0.85, crate: 0.9 },
   breather: { gate: 0.8, plate: 0.7, bonus: 1.8, crate: 1.6 },
 };
@@ -586,14 +586,21 @@ let lastResult = null;
 function weightsFor(d) {
   const p = clamp(d / 900, 0, 1);
   const base = {
-    gate: 0.36 - p * 0.06, plate: 0.24 - p * 0.05,
-    bonus: 0.24 - p * 0.08, crate: 0.16 - p * 0.01,
+    gate: 0.22 - p * 0.04, plate: 0.26 - p * 0.05,
+    bonus: 0.26 - p * 0.08, crate: 0.18 - p * 0.01,
   };
   const mul = SEGMENT_EVENT_MUL[segment] || SEGMENT_EVENT_MUL.gates;
   Object.keys(base).forEach(k => { base[k] *= mul[k] ?? 1; });
   return base;
 }
 let firstGateDone = false;
+// Ворота — главное решение забега, и оно должно быть ОДНО за раз. Одних
+// весов мало: случай легко ставит две пары подряд, а глубина убывает в 12
+// раз медленнее дистанции (см. depthSpeed), поэтому разрыв в 15 «метров» —
+// это чуть больше единицы глубины, и в коридор набивалось до пяти ворот
+// сразу. Держим дистанцию явно.
+const MIN_GATE_GAP = 46;
+let lastGateDist = -999;
 function pickEventType() {
   // Первое событие — гарантированные ворота метров через 10-12 (около
   // секунды на стартовой скорости): пустого разбега быть не должно, игрок
@@ -601,7 +608,7 @@ function pickEventType() {
   // всегда «обе стороны в плюс» (см. spawnGate), так что соло-боец успевает
   // подрасти до первой боевой волны — она стартует отдельным таймером в те
   // же первые секунды (см. nextWaveAt в resetGame).
-  if (!firstGateDone && dist >= 10) { firstGateDone = true; return commitEvent('gate'); }
+  if (!firstGateDone && dist >= 10) { firstGateDone = true; lastGateDist = dist; return commitEvent('gate'); }
   const w = weightsFor(dist);
   const weighted = Object.keys(w).map(k => {
     let v = Math.max(0.01, w[k]);
@@ -610,8 +617,19 @@ function pickEventType() {
   });
   const total = weighted.reduce((s, [, v]) => s + v, 0);
   let r = Math.random() * total;
-  for (const [k, v] of weighted) { r -= v; if (r <= 0) return commitEvent(k); }
-  return commitEvent(weighted[weighted.length - 1][0]);
+  let pickKind = weighted[weighted.length - 1][0];
+  for (const [k, v] of weighted) { r -= v; if (r <= 0) { pickKind = k; break; } }
+  // Ворота слишком близко к прошлым — отдаём слот другому событию, а не
+  // ставим вторую пару впритык.
+  if (pickKind === 'gate' && dist - lastGateDist < MIN_GATE_GAP) {
+    const alt = weighted.filter(([k]) => k !== 'gate');
+    const altTotal = alt.reduce((s, [, v]) => s + v, 0);
+    let ar = Math.random() * altTotal;
+    pickKind = alt[alt.length - 1][0];
+    for (const [k, v] of alt) { ar -= v; if (ar <= 0) { pickKind = k; break; } }
+  }
+  if (pickKind === 'gate') lastGateDist = dist;
+  return commitEvent(pickKind);
 }
 function commitEvent(k) {
   eventHistory.unshift(k);
@@ -707,6 +725,7 @@ function resetGame() {
   t = 0; dist = 0; score = 0; squad = SQUAD_START; maxSquad = squad; shield = 0; rageT = 0;
   squadWorldX = 0; trackScroll = 0; shakeAmp = 0; hitStopT = 0;
   meterSpeed = SPEED_START; depthSpeed = SPEED_START / 12;
+  lastGateDist = -999;
   lastMile = 0; nextBossMile = 1200;
   // Честный рандом и на старте: первое событие тоже тянем из пула, просто
   // близко и из его лёгкой части.
