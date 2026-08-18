@@ -801,6 +801,44 @@ function setFormationStepsFromGeometries(geoMap) {
   STEP_X = (w * CHAR_SCALE * (1 + FORM_GAP_RATIO_X)) / TRACK_HALF3;
   STEP_Z = (d * CHAR_SCALE * (1 + FORM_GAP_RATIO_Z)) / FOLLOWER_Z_SCALE;
 }
+
+// ── ШАГ СТРОЯ ВРАГОВ ВНУТРИ ВОЛНЫ — ТА ЖЕ ЛОГИКА, ЧТО У ОТРЯДА ────────────────
+// Диагностика (заказчик пожаловался на «пузыри» вместо фигур): waveSlot()
+// раньше клал врагов по literal-константам (0.075/0.09/0.32 и т.п.),
+// одинаковым для ЛЮБОГО типа и НЕ завязанным ни на реальный footprint тела,
+// ни на ENEMY_TYPES[key].scale. Материал (MeshToonMaterial, transparent:false,
+// opacity:1, depthWrite/depthTest:true) и геометрия (тот же buildProcBodyGeometry,
+// 1198 вершин — полное тело с руками/ногами, как у отряда, не голые сферы) —
+// проверены и ни при чём. Замер факта:
+//   footprint (до CHAR_SCALE/scale) → эффективная ширина/глубина на сцене:
+//     runner  scale 0.92: width 1.04 → eff 1.01 / depth 0.65 → eff 0.63
+//     bruiser scale 1.55: width 1.40 → eff 2.28 / depth 0.88 → eff 1.44
+//     shield  scale 1.18: width 1.31 → eff 1.62 / depth 0.83 → eff 1.03
+//     shooter scale 0.95: width 1.04 → eff 1.04 / depth 0.65 → eff 0.65
+//     leader  scale 2.05: width 1.57 → eff 3.37 / depth 0.93 → eff 2.01
+//     giant   scale 3.30: width 1.40 → eff 4.84 / depth 0.88 → eff 3.06
+//   а реальный шаг между соседями по прежней формуле (мировые unit):
+//     wall dx ≈ 0.39, wedge dx ≈ 0.32, wedge dz ≈ 0.32 — для ЛЮБОГО типа.
+// Т.е. даже у runner (самый мелкий) шаг вдвое уже собственной ширины тела,
+// а у giant/leader/bruiser шаг в 4-15 раз уже их реального габарита — тела
+// физически проваливались друг в друга, отсюда монолитный ком вместо толпы.
+// Считаем шаг персонально по типу, тем же приёмом footprintOf()+CHAR_SCALE,
+// что и у отряда, но ещё домножаем на ENEMY_TYPES[key].scale (у отряда все
+// бойцы одного роста, у врагов — нет). Зазор чуть шире отрядного: вражеская
+// толпа не строевая колонна, читаемость важнее плотности.
+const ENEMY_GAP_RATIO_X = 0.10, ENEMY_GAP_RATIO_Z = 0.30;
+const ENEMY_STEP_X = {}, ENEMY_STEP_Z = {};
+function setEnemyStepsFromGeometries(geoMap) {
+  ENEMY_TYPE_KEYS.forEach(key => {
+    const g = geoMap[key];
+    if (!g) return;
+    const fp = footprintOf(g.geometry);
+    if (fp.width <= 0 || fp.depth <= 0) return;
+    const scaleMul = CHAR_SCALE * ENEMY_TYPES[key].scale;
+    ENEMY_STEP_X[key] = (fp.width * scaleMul * (1 + ENEMY_GAP_RATIO_X)) / TRACK_HALF3;
+    ENEMY_STEP_Z[key] = (fp.depth * scaleMul * (1 + ENEMY_GAP_RATIO_Z)) / Z_SCALE;
+  });
+}
 let formCols = 2, formRows = 1, formScale = 1;
 // Насколько широко (в долях TRACK_HALF3, при formScale=1) строю разрешено
 // расползтись вбок, прежде чем фигуры начинают агрессивно мельчать — иначе
@@ -1343,7 +1381,15 @@ function spawnWave() {
     ? ['wedge', 'wall', 'wall', 'flanks', 'scatter', 'scatter']
     : ['wedge', 'wedge', 'wall', 'flanks', 'scatter'];
   const formation = pick(formationPool);
-  const jitter = formation === 'scatter' ? Array.from({ length: 12 }, () => rnd(-0.7, 0.7)) : null;
+  // Длина пула раньше была 12, а на экран одной группой рендерится до 40
+  // особей (см. shown = Math.min(cap-idx, g.count, 40) в syncEnemyCrowd) —
+  // i % 12 гонял один и тот же короткий цикл смещений, и при заходе на
+  // второй/третий круг разные особи получали БУКВАЛЬНО одинаковые dx/dz и
+  // рисовались друг в друге пиксель-в-пиксель. Отсюда плотный ком именно в
+  // 'scatter' на скриншотах, даже после починки шага по типу ниже — шаг тут
+  // ни при чём, совпадали сами координаты. Пул увеличен так, чтобы i < длины
+  // всегда (без модуло, без повторов) для любой реально рендерящейся группы.
+  const jitter = formation === 'scatter' ? Array.from({ length: 41 }, () => rnd(-0.7, 0.7)) : null;
 
   const unlocked = waveTypeUnlocks(dist);
   const p = clamp(dist / 900, 0, 1);
@@ -1388,26 +1434,35 @@ function waveFrontGroup(o) {
 }
 function waveFrontZ(o) { const g = waveFrontGroup(o); return g ? g.z : 0; }
 // Строй волны — не всегда один и тот же клин: стена во всю ширину, два
-// фланга по краям с разрывом посредине или рассыпуха вразнобой.
-function waveSlot(o, i, shown) {
+// фланга по краям с разрывом посредине или рассыпуха вразнобой. Шаг (sx/sz)
+// — персонально по типу, от его реального footprint (см. ENEMY_STEP_X/Z и
+// диагностику там же), а не одна константа на все типы сразу — раньше
+// giant/leader/bruiser получали тот же шаг, что мелкий runner, и тела
+// физически проваливались друг в друга.
+function waveSlot(o, i, shown, type) {
+  const sx = ENEMY_STEP_X[type] || 0.20, sz = ENEMY_STEP_Z[type] || 0.14;
   if (o.formation === 'wall') {
     const cols = shown, col = i;
-    return { dx: (col - (cols - 1) / 2) * 0.09, dz: (i % 2) * 0.02 };
+    return { dx: (col - (cols - 1) / 2) * sx, dz: (i % 2) * sz * 0.4 };
   }
   if (o.formation === 'flanks') {
     const half = Math.ceil(shown / 2);
     const side = i < half ? -1 : 1;
     const j = i < half ? i : i - half;
-    return { dx: side * (0.32 + (j % 4) * 0.09), dz: Math.floor(j / 4) * 0.06 };
+    return { dx: side * (sx * 3.6 + (j % 4) * sx), dz: Math.floor(j / 4) * sz };
   }
   if (o.formation === 'scatter') {
-    return { dx: o.jitter[i % o.jitter.length], dz: (o.jitter[(i * 7) % o.jitter.length] + 1) * 0.045 };
+    // Рассыпуха разводит вразнобой по всей ширине дорожки независимо от типа
+    // (так и было задумано — хаотичный вид, не строй), но глубину (dz) всё
+    // же держим пропорциональной реальному телу типа, иначе крупные типы в
+    // scatter всё равно ложатся друг на друга по Z.
+    return { dx: o.jitter[i % o.jitter.length], dz: (o.jitter[(i * 7) % o.jitter.length] + 1) * sz * 0.9 };
   }
   // wedge (клин) — по умолчанию
   const cols = Math.max(1, Math.min(8, Math.ceil(Math.sqrt(shown * 1.6))));
   const row = Math.floor(i / cols), col = i % cols;
   const rowLen = Math.min(cols, shown - row * cols);
-  return { dx: (col - (rowLen - 1) / 2) * 0.075, dz: row * 0.05 };
+  return { dx: (col - (rowLen - 1) / 2) * sx, dz: row * sz };
 }
 // ── ЯЩИКИ С ОРУЖИЕМ ──────────────────────────────────────────────────────────
 function spawnCrate() {
@@ -2500,7 +2555,7 @@ function syncEnemyCrowd() {
       if (idx >= cap) continue;
       const shown = Math.min(cap - idx, g.count, 40);
       for (let i = 0; i < shown; i++) {
-        const s = waveSlot(o, i, shown);
+        const s = waveSlot(o, i, shown, g.type);
         const x3 = worldX3(o.worldX + s.dx);
         const z3 = obstacleZ3(g.z + s.dz);
         // Разброс размера внутри типа — стабильный на особь (seed группы +
@@ -3279,6 +3334,7 @@ async function loadAllCrowdModels() {
     // (initThree делает await на неё независимо от источника).
     const built = buildAllProcGeometries();
     setFormationStepsFromGeometries(built.player);
+    setEnemyStepsFromGeometries(built.enemy);
     playerRigs = {};
     Object.keys(built.player).forEach(key => {
       playerRigs[key] = buildCrowdRigFromGeo(PLAYER_CAP, built.player[key], false, null, true);
