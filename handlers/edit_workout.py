@@ -273,9 +273,24 @@ async def editw_addset_prompt(callback: CallbackQuery, state: FSMContext):
     # this block ("➕ Добавить подход"), unlike _editwex_finish's "первый
     # подход" prompt — so, same as the live tracker, bare reps ("8") are
     # allowed and carry the previous set's weight forward.
+    #
+    # И раз подходы уже есть — они тут же, над строкой ввода. Экран обещает
+    # взять вес «с прошлого подхода», но самого подхода не показывал: чтобы
+    # вспомнить, с чего продолжаешь, приходилось отменять ввод, смотреть список
+    # и заходить заново. В живом трекере цифры перед глазами всегда, а правка
+    # оставляла человека без них.
+    logged = [
+        s for s in await db.list_sets_for_block(block_id) if s["exercise_id"] == int(ex_id_str)
+    ]
+    logged_line = ""
+    if logged:
+        sets_str = ", ".join(
+            formatting.format_set(s["weight"], s["reps"], s["rpe"]) for s in logged
+        )
+        logged_line = i18n.t("workout.add_set_logged", sets=sets_str) + "\n"
     await ui.safe_edit(
         callback,
-        i18n.t("workout.add_set_prompt", name=ex["display_name"]),
+        logged_line + i18n.t("workout.add_set_prompt", name=ex["display_name"]),
         reply_markup=keyboards.cancel_keyboard("editw:back"),
     )
     await callback.answer()

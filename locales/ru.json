@@ -1163,6 +1163,7 @@
   "weekly.table_header_exercise": "Упражнение",
   "weekly.table_header_sets": "Подх.",
   "weekly.table_header_tonnage": "Тоннаж",
+  "workout.add_set_logged": "Уже записал: {sets}",
   "workout.add_set_prompt": "Новый подход для «{name}» — напиши вес и повторы («100 8») или только повторы («8») — вес возьму с прошлого подхода:",
   "workout.backfill_logged_prefix": "✅ Записал как прошлую тренировку\n\n",
   "workout.block_not_found": "Блок не найден",

@@ -298,6 +298,21 @@ def parse_routine_target(text: str) -> tuple[int, int, int | None] | None:
     return sets, lo, hi
 
 
+def planned_rep_range(text: str | None) -> tuple[int, int] | None:
+    """Диапазон повторов из схемы («3×6–12» → (6, 12)), если он там есть.
+
+    Нужен подсказке прогрессии: «🎯 Цель» стоит на экране прямо под «📋 План», и
+    цель выше плановой верхушки — это спор бота с самим собой. Одиночное число
+    повторов («3×8») диапазоном не считаем: расти там некуда, и догадка про
+    диапазон осталась бы догадкой.
+    """
+    parsed = parse_routine_target(text or "")
+    if parsed is None:
+        return None
+    _sets, lo, hi = parsed
+    return (lo, hi) if hi else None
+
+
 def normalize_routine_target(text: str) -> str:
     """Привести схему к тому же виду, в котором её пишем мы сами.
 

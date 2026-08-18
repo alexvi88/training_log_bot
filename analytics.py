@@ -513,7 +513,11 @@ E1RM_HOLD_TOLERANCE = 0.99
 
 
 def _reps_holding_e1rm(
-    target_weight: float, last_weight: float, last_reps: int, formula: str
+    target_weight: float,
+    last_weight: float,
+    last_reps: int,
+    formula: str,
+    rep_range: Optional[tuple[int, int]] = None,
 ) -> int:
     """Fewest reps at target_weight whose e1RM still matches the last top set.
 
@@ -526,11 +530,12 @@ def _reps_holding_e1rm(
     can't (the last session ran well past the range — the weight bump is still
     the right call, just not a reason to hand back reps).
     """
+    low, high = rep_range or (REP_RANGE_MIN, REP_RANGE_MAX)
     reference = e1rm(last_weight, last_reps, formula) * E1RM_HOLD_TOLERANCE
-    for reps in range(REP_RANGE_MIN, REP_RANGE_MAX):
+    for reps in range(low, high):
         if e1rm(target_weight, reps, formula) >= reference:
             return reps
-    return REP_RANGE_MAX
+    return high
 
 
 def suggest_progression(
@@ -540,6 +545,7 @@ def suggest_progression(
     inferred_step: Optional[float] = None,
     formula: str = "epley",
     rule: Optional[dict] = None,
+    planned_reps: Optional[tuple[int, int]] = None,
 ) -> Optional[ProgressionSuggestion]:
     """Next-session target from last session's sets, by double progression.
 
@@ -548,6 +554,15 @@ def suggest_progression(
     the weight by one step (see weight_step_for) and restart at the lowest rep
     count that doesn't give back the e1RM already earned (_reps_holding_e1rm).
     Bodyweight sets (weight 0) simply chase one more rep.
+
+    `planned_reps` — диапазон повторов из схемы на карточке («3×6–12» → (6, 12),
+    разбирает formatting.parse_routine_target на стороне вызывающего). Цель
+    обязана держаться внутри него: на экране эти две строки стоят рядом, и
+    «План: 3×5–8» над «Цель: 52.5×10» — это не подсказка, а спор бота с самим
+    собой. Диапазон по умолчанию (REP_RANGE_MIN..REP_RANGE_MAX) — догадка на
+    случай, когда схемы нет вовсе, и написанному в программе она обязана
+    уступать. Явное правило прогрессии (`rule`) всё равно старше: оно
+    структурное и пишется под конкретное упражнение, а схема — свободный текст.
 
     `rule` — the progression the program itself prescribes for this exercise
     (routine_exercises.progression, written by the AI trainer — see
@@ -584,7 +599,13 @@ def suggest_progression(
 
     # double_progression: тот же алгоритм, что и по умолчанию, но верх
     # диапазона и шаг берём из программы, а не угадываем.
-    top_of_range = reps_top if (rule_name == "double_progression" and reps_top) else REP_RANGE_MAX
+    planned_range = planned_reps
+    if rule_name == "double_progression" and reps_top:
+        top_of_range = reps_top
+    elif planned_range:
+        top_of_range = planned_range[1]
+    else:
+        top_of_range = REP_RANGE_MAX
     from_rule = rule_name == "double_progression" and bool(reps_top or rule_step)
 
     if reps_at_top >= top_of_range:
@@ -593,7 +614,10 @@ def suggest_progression(
         return ProgressionSuggestion(
             "add_weight",
             target_weight,
-            _reps_holding_e1rm(target_weight, top_weight, reps_at_top, formula),
+            _reps_holding_e1rm(
+                target_weight, top_weight, reps_at_top, formula,
+                rep_range=(planned_range[0], top_of_range) if planned_range else None,
+            ),
             from_weight=top_weight,
             from_reps=reps_at_top,
             from_rule=from_rule,
