@@ -1,0 +1,48 @@
+{
+  "sourceFile": "Soldier.glb",
+  "generatedAt": "2026-08-18T23:24:40.899Z",
+  "numVerts": 7434,
+  "numIndices": 34128,
+  "indexType": "uint16",
+  "geom": {
+    "positionsBytes": 89208,
+    "normalsBytes": 89208,
+    "indicesBytes": 68256,
+    "layout": [
+      "positions f32 xyz",
+      "normals f32 xyz",
+      "indices u16"
+    ]
+  },
+  "vat": {
+    "textureWidth": 7434,
+    "textureHeight": 40,
+    "format": "RGBA8",
+    "encoding": "delta-from-rest-pose, quantized per-axis to 0..255",
+    "quantMin": [
+      -0.8047218918800354,
+      -0.7224270105361938,
+      -0.5959159135818481
+    ],
+    "quantMax": [
+      0.6979933381080627,
+      0.6015926003456116,
+      0.4819299578666687
+    ],
+    "clips": [
+      {
+        "clip": "Run",
+        "frameStart": 0,
+        "frameCount": 24,
+        "duration": 0.699999988079071
+      },
+      {
+        "clip": "Idle",
+        "frameStart": 24,
+        "frameCount": 16,
+        "duration": 1.9666666984558105
+      }
+    ]
+  },
+  "rootTransformBakedIn": true
+}

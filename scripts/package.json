@@ -1,0 +1,12 @@
+{
+  "name": "game-vat-baker",
+  "private": true,
+  "description": "Dev-only tooling: bakes Mixamo/Adobe .glb skeletal clips into static geometry + quantized Vertex Animation Texture (VAT) files for the crowd-runner mini-games. Not shipped to the bot itself — only its .bin/.json output under assets/game/ ships.",
+  "type": "module",
+  "scripts": {
+    "bake:soldier": "node bake_vat.mjs Soldier.glb soldier --clip Run:24 --clip Idle:16"
+  },
+  "dependencies": {
+    "three": "^0.160.0"
+  }
+}
