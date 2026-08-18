@@ -525,6 +525,52 @@ let lastMile = 0, nextBossMile = 1000;
 let nextEventAt = 0, lastEventWorldX = 0;
 let nextWaveAt = 0; // отдельный таймер волн — дорожка не бывает пустой
 const eventHistory = []; // последние 1-2 типа событий — против серий подряд
+
+// ── РИТМ ЗАБЕГА: макро-сегменты поверх честного рандома ─────────────────────
+// Раньше оба потока (ворота/блины/бонусы и встречные волны) крутились по
+// одним и тем же весам всю дистанцию — на дальней перемотке разные забеги
+// отличались только числами, не ощущением. Сегмент — не своя система
+// спавна, а МНОЖИТЕЛЬ поверх существующих весов/гэпов: числа и формулы
+// баланса (ADD_TIERS/SUB_TIERS/tierVal, softCap волны, FORM_GAP_RATIO_*) не
+// трогаем, меняем только то, что из пула чаще выпадает и с каким интервалом.
+// 'gates' — полоса ворот: чаще решения на воротах, волны реже. 'swarm' —
+// плотный встречный поток: волны идут гуще и чаще, ворота реже. 'breather' —
+// передышка: волн почти нет, зато бонусы/ящики сыплются щедрее. Босс —
+// отдельный рубеж по миле (nextBossMile), сегменты его не касаются.
+const SEGMENT_TYPES = ['gates', 'swarm', 'breather'];
+let segment = 'gates', segmentEndAt = 0;
+const segmentHistory = [];
+function segmentDuration(kind) {
+  if (kind === 'breather') return rnd(90, 140);
+  if (kind === 'swarm') return rnd(140, 220);
+  return rnd(160, 240); // gates
+}
+function pickSegment() {
+  const weighted = SEGMENT_TYPES.map(k => {
+    let v = 1;
+    if (segmentHistory[0] === k) v *= 0.25; // подряд один и тот же сегмент — редкость, не правило
+    return [k, v];
+  });
+  const total = weighted.reduce((s, [, v]) => s + v, 0);
+  let r = Math.random() * total;
+  for (const [k, v] of weighted) { r -= v; if (r <= 0) { segmentHistory.unshift(k); segmentHistory.length = Math.min(2, segmentHistory.length); return k; } }
+  return SEGMENT_TYPES[0];
+}
+function updateSegment() {
+  if (dist >= segmentEndAt) {
+    segment = pickSegment();
+    segmentEndAt = dist + segmentDuration(segment);
+  }
+}
+// Множители сегмента на веса рядового потока (gate/plate/bonus/crate) и на
+// частоту/густоту встречных волн — единственные точки, где сегмент вообще
+// на что-то влияет.
+const SEGMENT_EVENT_MUL = {
+  gates:    { gate: 1.9, plate: 0.8, bonus: 0.9, crate: 1.0 },
+  swarm:    { gate: 0.55, plate: 1.1, bonus: 0.85, crate: 0.9 },
+  breather: { gate: 0.8, plate: 0.7, bonus: 1.8, crate: 1.6 },
+};
+const SEGMENT_WAVE_GAP_MUL = { gates: 1.45, swarm: 0.55, breather: 2.6 };
 let fireTimer = 0;
 let lastResult = null;
 
@@ -538,10 +584,13 @@ let lastResult = null;
 // этот поток теперь только про блины/ворота/бонусы/ящики между волнами.
 function weightsFor(d) {
   const p = clamp(d / 900, 0, 1);
-  return {
+  const base = {
     gate: 0.36 - p * 0.06, plate: 0.24 - p * 0.05,
     bonus: 0.24 - p * 0.08, crate: 0.16 - p * 0.01,
   };
+  const mul = SEGMENT_EVENT_MUL[segment] || SEGMENT_EVENT_MUL.gates;
+  Object.keys(base).forEach(k => { base[k] *= mul[k] ?? 1; });
+  return base;
 }
 let firstGateDone = false;
 function pickEventType() {
@@ -662,6 +711,7 @@ function resetGame() {
   // своему потоку), но настоящая встречная толпа не набегает, пока отряд не
   // успел подрасти хотя бы на одних воротах.
   nextWaveAt = rnd(60, 80);
+  segment = 'gates'; segmentEndAt = rnd(160, 240); segmentHistory.length = 0;
   fireTimer = 0; combo = 0; weaponLevel = 0; weaponTimer = 0;
   obstacles.length = 0; bonuses.length = 0; crates.length = 0; bullets.length = 0;
   parts.length = 0; toasts.length = 0;
@@ -1366,8 +1416,13 @@ function createMeshFor(o) {
     const doorGeo = new THREE.BoxGeometry(TRACK_HALF3 * 0.94, 1.7, 0.18);
     const edgesGeo = new THREE.EdgesGeometry(doorGeo);
     const mkDoor = (good, x) => {
+      // Заливка — сплошная и однозначная (как в референсе): игрок должен
+      // решать по цвету за долю секунды, не читая число. Насыщенный emissive
+      // тянет за собой bloom (см. buildComposer), поэтому створка ещё и
+      // светится, а не просто закрашена.
       const door = new THREE.Mesh(doorGeo, new THREE.MeshLambertMaterial({
-        color: good ? 0x3cdc6e : 0xff4444, emissive: good ? 0x0e3a1e : 0x3a0e0e, transparent: true, opacity: 0.6,
+        color: good ? 0x2fe86e : 0xff3838, emissive: good ? 0x1c7a3e : 0x8a1414, emissiveIntensity: 1.1,
+        transparent: true, opacity: 0.88,
       }));
       door.position.set(x, 0.95, 0);
       const rim = new THREE.LineSegments(edgesGeo, new THREE.LineBasicMaterial({
@@ -1429,7 +1484,7 @@ function updateMeshFor(o, m) {
     m.position.y = 0;
     o.glow = clamp(1 - o.z / (ZFAR * 0.6), 0, 1);
     if (m.userData.doors) m.userData.doors.forEach(d => {
-      d.material.opacity = 0.55 + 0.32 * o.glow;
+      d.material.opacity = 0.62 + 0.26 * o.glow;
       if (d.userData.rim) d.userData.rim.material.opacity = o.glow;
     });
   }
@@ -1457,13 +1512,13 @@ function syncObstacleMeshes() {
 }
 
 // ── HUD-ЛЕЙБЛЫ НАД ОБЪЕКТАМИ (числа рисуем на 2D-слое, не в 3D) ─────────────
-function textChip(label, x, y, fs, fillColor) {
+function textChip(label, x, y, fs, fillColor, strokeK, bgColor) {
   hctx.font = "900 " + fs + "px 'Courier New', monospace";
   hctx.textAlign = 'center'; hctx.textBaseline = 'middle';
   const tw = hctx.measureText(label).width;
-  hctx.fillStyle = 'rgba(10,8,6,0.55)';
+  hctx.fillStyle = bgColor || 'rgba(10,8,6,0.55)';
   hctx.beginPath(); hctx.roundRect(x - tw / 2 - 6, y - fs / 2 - 3, tw + 12, fs + 6, 6); hctx.fill();
-  hctx.lineWidth = Math.max(2.5, fs * 0.2); hctx.strokeStyle = '#14110f';
+  hctx.lineWidth = Math.max(2.5, fs * (strokeK ?? 0.2)); hctx.strokeStyle = '#14110f';
   hctx.strokeText(label, x, y + 1);
   hctx.fillStyle = fillColor; hctx.fillText(label, x, y + 1);
 }
@@ -1473,14 +1528,19 @@ function drawObstacleLabels() {
       const p = projectPoint(o.worldX, o.z, 1.35);
       textChip(fmt(o.hp), p.x, p.y, Math.max(15, 26 * fakeScale(o.z)), CHALK);
     } else if (o.kind === 'gate') {
-      // Главное решение в игре — цифры обязаны читаться издалека: белым,
-      // огромным, с толстой тёмной обводкой, во всю створку.
+      // Главное решение в игре — цифры обязаны читаться издалека и мгновенно,
+      // как в рекламных роликах жанра: огромные, с толстой тёмной обводкой,
+      // на плашке в цвет самой створки — решение по цвету, число лишь
+      // подтверждает его, а не единственный источник информации.
       const near = projectPoint(-1, o.z, 0.95), mid = projectPoint(0, o.z, 0.95), farE = projectPoint(1, o.z, 0.95);
+      const leftGood = o.bothBad ? false : (o.bothGood || o.buffLeft);
+      const rightGood = o.bothBad ? false : (o.bothGood || !o.buffLeft);
       const label = (o.buffLeft ? o.buff : o.debuff).label;
       const label2 = (o.buffLeft ? o.debuff : o.buff).label;
-      const fs = Math.max(30, 92 * fakeScale(o.z));
-      textChip(label, (near.x + mid.x) / 2, near.y, fs, '#ffffff');
-      textChip(label2, (mid.x + farE.x) / 2, mid.y, fs, '#ffffff');
+      const fs = Math.max(38, 128 * fakeScale(o.z));
+      const bgGood = 'rgba(20,110,58,0.72)', bgBad = 'rgba(120,20,20,0.72)';
+      textChip(label, (near.x + mid.x) / 2, near.y, fs, '#ffffff', 0.28, leftGood ? bgGood : bgBad);
+      textChip(label2, (mid.x + farE.x) / 2, mid.y, fs, '#ffffff', 0.28, rightGood ? bgGood : bgBad);
     } else if (o.kind === 'wave') {
       // Каждый живой тип в волне — свой цвет и своя цифра над головой, чтобы
       // отличать их в бою на глаз, не только по силуэту. Цифра всегда — живой
@@ -2619,6 +2679,7 @@ function update(dt) {
   fireTimer -= dt;
   if (fireTimer <= 0) { tryFire(dt, dmg); fireTimer = 1 / fireRate; }
 
+  updateSegment();
   // Босс: если ещё не запущен и прошли рубеж — спавним (отдельный ритм от
   // потока, это рубеж, а не рядовое событие).
   if (dist >= nextBossMile && !obstacles.some(o => o.kind === 'boss')) {
@@ -2645,7 +2706,8 @@ function update(dt) {
     const activeWaves = obstacles.filter(o => o.kind === 'wave' && waveTotalCount(o) > 0).length;
     if (activeWaves < 1) {
       spawnWave();
-      const gap = clamp(78 - dist / 12, 34, 78);
+      const gapMul = SEGMENT_WAVE_GAP_MUL[segment] || 1;
+      const gap = clamp(78 - dist / 12, 34, 78) * gapMul;
       nextWaveAt = dist + rnd(gap * 0.75, gap);
     } else {
       nextWaveAt = dist + 8; // прошлая волна ещё жива — коротко отложим и проверим снова
@@ -2773,7 +2835,11 @@ function update(dt) {
         else if (eff.type === 'sub') { squad = Math.max(0, squad - eff.val); }
         const good = eff.type === 'mul' || eff.type === 'add';
         if (good) {
-          sGateUp(); shake(4); squadPulse = 1; flash('green', 200);
+          // Проход через хорошую створку — тоже удар, а не тихая прибавка:
+          // ×2/×3 (взрывной рост) получает более длинный хит-стоп, чем
+          // рядовой «+N», тем же принципом «крупнее событие — дольше пауза».
+          sGateUp(); shake(eff.type === 'mul' ? 9 : 5); squadPulse = 1; flash('green', 200);
+          hitStop(eff.type === 'mul' ? 0.045 : 0.02);
           burst(p.x, p.y - 30, C_GREEN, 22, 240);
           shockwave(p.x, p.y - 30, C_GREEN, 140, 0.36);
           // Один читаемый всплеск, а не тройной дубль — три копии одной и той
@@ -3143,7 +3209,11 @@ async function loadAllCrowdModels() {
 // Всё необязательно: если assets/game/post.js не загрузился (событие
 // 'post-failed'), composer остаётся null и render() рисует напрямую.
 let composer = null;
-const BLOOM_STRENGTH = 0.45, BLOOM_RADIUS = 0.45, BLOOM_THRESHOLD = 0.92;
+// Чуть подняли силу и снизили порог относительно прежних 0.45/0.92 — «сочнее»
+// по свету на воротах/вспышках/трассерах, но порог остаётся выше яркости
+// самого качка (см. заметку выше про 0.62 и оранжевый комок), так что тело
+// бойца в bloom не проваливается.
+const BLOOM_STRENGTH = 0.6, BLOOM_RADIUS = 0.5, BLOOM_THRESHOLD = 0.86;
 function buildComposer() {
   if (composer || !window.THREE || !THREE.EffectComposer || !THREE.UnrealBloomPass) return;
   try {
@@ -3267,6 +3337,7 @@ window.__qa = {
   get obstacles() { return obstacles; }, get squadWorldX() { return squadWorldX; },
   get state() { return state; },
   get bloomOn() { return !!composer; },
+  get segment() { return segment; },
   // Только для QA-прогонов: headless-браузер рисует программно и всегда
   // «медленный», из-за чего страховка по fps гасит свечение через пару секунд
   // и проверить его нечем. На геймплей не влияет.
