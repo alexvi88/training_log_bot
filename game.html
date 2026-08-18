@@ -432,15 +432,18 @@ function drawBasement(a) {
     ctx.strokeStyle = 'rgba(0,0,0,0.5)'; ctx.beginPath();
     ctx.moveTo(lx, 36); ctx.lineTo(lx, 92); ctx.stroke();
     // Пятна света от ламп — заметно сильнее прежнего (было 0.5 альфы у соска
-    // градиента), чтобы стена перестала быть одним ровным тоном.
+    // градиента), чтобы стена перестала быть одним ровным тоном. Но заметно
+    // тише нового красно-оранжевого «знака опасности» у препятствий
+    // (см. obstacleHalo) — фон не должен спорить по яркости с хазардом того же
+    // тёплого спектра, иначе стена сама начинает читаться как «что-то опасное».
     const g = ctx.createRadialGradient(lx, 100, 2, lx, 100, 90);
-    g.addColorStop(0, 'rgba(255,205,120,0.75)'); g.addColorStop(0.5, 'rgba(255,190,100,0.28)'); g.addColorStop(1, 'rgba(255,190,100,0)');
+    g.addColorStop(0, 'rgba(255,205,120,0.5)'); g.addColorStop(0.5, 'rgba(255,190,100,0.18)'); g.addColorStop(1, 'rgba(255,190,100,0)');
     ctx.fillStyle = g; ctx.fillRect(lx - 90, 24, 180, 180);
     ctx.fillStyle = '#ffe6b0'; ctx.beginPath(); ctx.arc(lx, 98, 7, 0, 7); ctx.fill();
     // Тот же тёплый свет доходит и до пола — светлое пятно на помосте прямо
     // под лампой, а не ровный плоский цвет от края до края.
     const fg = ctx.createRadialGradient(lx, GROUND(), 4, lx, GROUND(), 120);
-    fg.addColorStop(0, 'rgba(255,180,110,0.5)'); fg.addColorStop(1, 'rgba(255,180,110,0)');
+    fg.addColorStop(0, 'rgba(255,180,110,0.32)'); fg.addColorStop(1, 'rgba(255,180,110,0)');
     ctx.fillStyle = fg; ctx.fillRect(lx - 120, GROUND() - 60, 240, 60);
   }
   silhouettes('rgba(0,0,0,0.45)', 2.9);
@@ -758,24 +761,60 @@ function fillStroke(fill) {
 // зрителя, а не «набор плоских блоков». Форма и размер — под силуэт каждого
 // вида препятствия, а не общий прямоугольник на всю (нередко завышенную под
 // прыжок) коробку столкновения — см. obstacleBox().
+// Единый опознавательный признак ЛЮБОГО препятствия — тёплый красно-оранжевый
+// ореол, «знак опасности». Раньше ореол был светлым нейтральным пятном (тот же
+// приём, что спасает читаемость спортпита в drawItem) — и поэтому препятствие и
+// подбираемый предмет на глаз были почти одинаковым «светлым пятном в темноте».
+// Теперь у препятствий цвет ореола ТЁПЛЫЙ ОПАСНЫЙ (красно-оранжевый), у предметов
+// (см. itemHalo в drawItem) — ХОЛОДНЫЙ БЕЗОПАСНЫЙ (зелёно-мятный). Форма и размер
+// по-прежнему под силуэт каждого вида, не общий прямоугольник на всю (нередко
+// завышенную под прыжок) коробку столкновения — см. obstacleBox().
 function obstacleHalo(cx, cy, rx, ry) {
   const g = ctx.createRadialGradient(cx, cy, 1, cx, cy, Math.max(rx, ry));
-  g.addColorStop(0, 'rgba(255,244,225,0.34)');
-  g.addColorStop(0.7, 'rgba(255,244,225,0.14)');
-  g.addColorStop(1, 'rgba(255,244,225,0)');
+  g.addColorStop(0, 'rgba(255,88,36,0.44)');
+  g.addColorStop(0.6, 'rgba(255,130,40,0.20)');
+  g.addColorStop(1, 'rgba(255,130,40,0)');
   ctx.save(); ctx.fillStyle = g;
   ctx.beginPath(); ctx.ellipse(cx, cy, rx, ry, 0, 0, 7); ctx.fill();
   ctx.restore();
 }
+// Слайд (подкат) — рюмкой отличаются только rack/bag/cable/flyplate (та же
+// группа, что в obstacleBox отвечает за «коробка тянется вверх, прыжок не
+// спасает»); всё остальное — прыжковые. Цена ошибки — смерть, поэтому
+// направление действия помечено маркером-стрелкой (см. drawHazardArrow), а не
+// только цветом.
+function isSlideKind(kind) {
+  return kind === 'rack' || kind === 'bag' || kind === 'cable' || kind === 'flyplate';
+}
+// Маркер-стрелка над препятствием: вершина смотрит в сторону нужного действия —
+// вниз-остриём «подкатись» под хазард, вверх-остриём «прыгай» через него. Форма
+// и направление читаются мгновенно и не нуждаются в переводе — намеренно без
+// текста (см. правило «лучше обойтись без текста» в задаче на этот патч).
+function drawHazardArrow(cx, cy, slide) {
+  const s = 10 * SK;
+  ctx.save(); ctx.translate(cx, cy);
+  ctx.beginPath();
+  if (slide) { ctx.moveTo(-s, -s * 0.55); ctx.lineTo(s, -s * 0.55); ctx.lineTo(0, s * 0.85); }
+  else { ctx.moveTo(-s, s * 0.55); ctx.lineTo(s, s * 0.55); ctx.lineTo(0, -s * 0.85); }
+  ctx.closePath();
+  ctx.fillStyle = '#ff5a28'; ctx.fill();
+  ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(20,10,5,0.9)'; ctx.stroke();
+  ctx.restore();
+}
 function drawObstacleHalo(o, gy) {
-  if (o.kind === 'dumb') obstacleHalo(o.w / 2, gy - o.h / 2, o.w / 2 + 12 * SKW, o.h / 2 + 12 * SKW);
-  else if (o.kind === 'kettle') obstacleHalo(o.w / 2, gy - o.h * 0.55, o.h * 0.62, o.h * 0.72);
-  else if (o.kind === 'bench') obstacleHalo(o.w / 2, gy - o.h / 2, o.w / 2 + 10 * SKW, o.h / 2 + 14 * SKW);
-  else if (o.kind === 'rack') obstacleHalo(o.w / 2 + 38 * SK, gy - o.gap - 4 * SK, o.w / 2 + 60 * SK, 26 * SK);
-  else if (o.kind === 'plate' || o.kind === 'flyplate') obstacleHalo(o.w / 2, gy - (o.kind === 'plate' ? o.h / 2 : o.gap + o.h / 2), o.h / 2 + 14 * SKW, o.h / 2 + 14 * SKW);
-  else if (o.kind === 'rival') obstacleHalo(o.w / 2, gy - o.h * 0.55, o.w * 0.9, o.h * 0.62);
-  else if (o.kind === 'bag') obstacleHalo(o.w / 2, gy - o.gap - 65 * SK, o.w * 0.7, 75 * SK);
-  else if (o.kind === 'cable') obstacleHalo(o.w / 2, gy - o.gap, o.w / 2 + 12 * SK, 22 * SK);
+  const slide = isSlideKind(o.kind);
+  let cx, cy, rx, ry;
+  if (o.kind === 'dumb') { cx = o.w / 2; cy = gy - o.h / 2; rx = o.w / 2 + 12 * SKW; ry = o.h / 2 + 12 * SKW; }
+  else if (o.kind === 'kettle') { cx = o.w / 2; cy = gy - o.h * 0.55; rx = o.h * 0.62; ry = o.h * 0.72; }
+  else if (o.kind === 'bench') { cx = o.w / 2; cy = gy - o.h / 2; rx = o.w / 2 + 10 * SKW; ry = o.h / 2 + 14 * SKW; }
+  else if (o.kind === 'rack') { cx = o.w / 2 + 38 * SK; cy = gy - o.gap - 4 * SK; rx = o.w / 2 + 60 * SK; ry = 26 * SK; }
+  else if (o.kind === 'plate' || o.kind === 'flyplate') { cx = o.w / 2; cy = gy - (o.kind === 'plate' ? o.h / 2 : o.gap + o.h / 2); rx = o.h / 2 + 14 * SKW; ry = o.h / 2 + 14 * SKW; }
+  else if (o.kind === 'rival') { cx = o.w / 2; cy = gy - o.h * 0.55; rx = o.w * 0.9; ry = o.h * 0.62; }
+  else if (o.kind === 'bag') { cx = o.w / 2; cy = gy - o.gap - 65 * SK; rx = o.w * 0.7; ry = 75 * SK; }
+  else if (o.kind === 'cable') { cx = o.w / 2; cy = gy - o.gap; rx = o.w / 2 + 12 * SK; ry = 22 * SK; }
+  else return;
+  obstacleHalo(cx, cy, rx, ry);
+  drawHazardArrow(cx, cy - ry - 14 * SK, slide);
 }
 function drawObstacle(o) {
   const gy = GROUND();
@@ -952,9 +991,17 @@ function drawItem(it) {
   const d = ITEM_TYPES[it.type];
   const bob = Math.sin(it.t * 4) * 4 * SI;
   ctx.save(); ctx.translate(it.x, it.y + bob); ctx.scale(SI, SI);
-  // Мягкий ореол: в тёмных локациях (неон, улица) предметы сливались с фоном.
-  ctx.fillStyle = 'rgba(255,255,255,0.10)';
-  ctx.beginPath(); ctx.arc(0, 0, 24, 0, 7); ctx.fill();
+  // Холодный зелёно-мятный ореол — «безопасно, подбери» — общий признак ЛЮБОГО
+  // подбираемого предмета, зеркальный по смыслу тёплому красно-оранжевому
+  // ореолу препятствий (см. obstacleHalo): один и тот же приём рассеянного
+  // светового пятна, но противоположный по температуре, чтобы препятствие и
+  // награда не читались одним и тем же «светлым пятном в темноте», как раньше.
+  const ihg = ctx.createRadialGradient(0, 0, 1, 0, 0, 26);
+  ihg.addColorStop(0, 'rgba(120,255,196,0.40)');
+  ihg.addColorStop(0.6, 'rgba(120,255,196,0.16)');
+  ihg.addColorStop(1, 'rgba(120,255,196,0)');
+  ctx.fillStyle = ihg;
+  ctx.beginPath(); ctx.arc(0, 0, 26, 0, 7); ctx.fill();
   if (it.type === 'shaker') {
     ctx.beginPath(); ctx.roundRect(-9, -12, 18, 26, 3); fillStroke(d.color);
     ctx.fillStyle = '#b93b4e'; ctx.fillRect(-9, -2, 18, 4);
