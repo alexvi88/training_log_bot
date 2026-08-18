@@ -18,19 +18,30 @@
 // навешанный только через addEventListener, событие пропускал) — поэтому,
 // как и в проверке "if (window.THREE) boot()" внизу файла, сперва смотрим на
 // window.THREE напрямую и лишь при его отсутствии ждём событие.
-function loadGltfLoaderScript() {
+// Общая загрузка скрипта-дополнения к THREE: абсолютный путь (прод, страница
+// живёт на /game/squad) с откатом на относительный (локальное открытие файла
+// с диска). Событие успеха/провала своё у каждого дополнения.
+function loadThreeAddon(file, okEvent, failEvent) {
   var s = document.createElement('script');
-  s.src = '/assets/game/gltfloader.js';
-  s.onload = function () { window.dispatchEvent(new Event('gltfloader-ready')); };
+  s.src = '/assets/game/' + file;
+  s.onload = function () { window.dispatchEvent(new Event(okEvent)); };
   s.onerror = function () {
     s.onerror = null;
     var s2 = document.createElement('script');
-    s2.src = 'assets/game/gltfloader.js';
-    s2.onload = function () { window.dispatchEvent(new Event('gltfloader-ready')); };
-    s2.onerror = function () { window.dispatchEvent(new Event('gltfloader-failed')); };
+    s2.src = 'assets/game/' + file;
+    s2.onload = function () { window.dispatchEvent(new Event(okEvent)); };
+    s2.onerror = function () { window.dispatchEvent(new Event(failEvent)); };
     document.head.appendChild(s2);
   };
   document.head.appendChild(s);
+}
+function loadGltfLoaderScript() {
+  loadThreeAddon('gltfloader.js', 'gltfloader-ready', 'gltfloader-failed');
+  // Постобработка (EffectComposer + bloom) — не обязательна для игры: если не
+  // загрузится, сцена рисуется напрямую рендерером без свечения (см.
+  // render()). Поэтому провал не показывает экран ошибки, а просто выключает
+  // эффект, и грузим её параллельно загрузчику моделей, не задерживая старт.
+  loadThreeAddon('post.js', 'post-ready', 'post-failed');
 }
 if (window.THREE) {
   loadGltfLoaderScript();
@@ -312,6 +323,12 @@ function resize() {
     renderer.setSize(W, H, false);
     camera.aspect = W / H;
     camera.updateProjectionMatrix();
+    // Цепочку постобработки надо переразмерять вместе с рендерером — иначе
+    // после поворота экрана кадр рисуется в буфер старого размера.
+    if (typeof composer !== 'undefined' && composer) {
+      composer.setPixelRatio(DPR);
+      composer.setSize(W, H);
+    }
   }
 }
 window.addEventListener('resize', resize); resize();
@@ -2937,7 +2954,7 @@ function render() {
   syncBullets();
   updateFloorStripes();
   updateCamera(1 / 60);
-  renderer.render(scene, camera);
+  if (composer) composer.render(); else renderer.render(scene, camera);
 
   // Оранжевая вспышка предтрена — поверх сцены, на HUD-слое (дёшево, без
   // лишнего 3D-прохода).
@@ -3065,6 +3082,39 @@ async function loadAllCrowdModels() {
   buildEnemyRigs(geoByKey);
 }
 
+// ── ПОСТОБРАБОТКА: свечение ярких мест ──────────────────────────────────────
+// Bloom по яркому — лампы, световые пятна, ворота, трассеры, вспышки. Это
+// главное, что отличает «дорогую» картинку от плоской при тех же материалах.
+// Порог высокий намеренно: bloom считается по линейной яркости ДО
+// тонирования, поэтому просто хорошо освещённая поверхность легко проходит
+// низкий порог. На пороге 0.62 светился сам качок и терял детали, превращаясь
+// в оранжевый комок — светиться должны только источники: лампы, вспышки,
+// трассеры.
+// Всё необязательно: если assets/game/post.js не загрузился (событие
+// 'post-failed'), composer остаётся null и render() рисует напрямую.
+let composer = null;
+const BLOOM_STRENGTH = 0.45, BLOOM_RADIUS = 0.45, BLOOM_THRESHOLD = 0.92;
+function buildComposer() {
+  if (composer || !window.THREE || !THREE.EffectComposer || !THREE.UnrealBloomPass) return;
+  try {
+    composer = new THREE.EffectComposer(renderer);
+    composer.setPixelRatio(DPR);
+    composer.setSize(W, H);
+    composer.addPass(new THREE.RenderPass(scene, camera));
+    composer.addPass(new THREE.UnrealBloomPass(
+      new THREE.Vector2(W, H), BLOOM_STRENGTH, BLOOM_RADIUS, BLOOM_THRESHOLD));
+    // OutputPass переносит тонирование и перевод в sRGB в конец цепочки —
+    // без него кадр после composer выглядит иначе, чем прямой рендер.
+    composer.addPass(new THREE.OutputPass());
+  } catch (e) {
+    console.warn('[game] postprocessing off:', e);
+    composer = null;
+  }
+}
+// Скрипт постобработки грузится параллельно моделям и может успеть позже, чем
+// собралась сцена — тогда собираем цепочку по событию.
+window.addEventListener('post-ready', () => { if (renderer && scene && camera) buildComposer(); });
+
 // ── ИНИЦИАЛИЗАЦИЯ THREE.JS И ЗАПУСК ─────────────────────────────────────────
 async function initThree() {
   scene = new THREE.Scene();
@@ -3075,6 +3125,12 @@ async function initThree() {
   window.renderer = renderer;
   renderer.setPixelRatio(DPR);
   renderer.setSize(W, H, false);
+  // Плёночное тонирование вместо линейного вывода: тёплые пятна ламп и
+  // вспышки перестают «выжигаться» в плоский белый, а тени не проваливаются в
+  // чёрный — картинка сразу читается дороже при тех же материалах.
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.0;
+  buildComposer();
   buildHall();
   // Своя и вражеские толпы — реальные .glb-модели Kenney, слитые в одну
   // геометрию на скин и заведённые как InstancedMesh (см.
@@ -3087,11 +3143,36 @@ async function initThree() {
 
 // ── ЦИКЛ ─────────────────────────────────────────────────────────────────────
 let last = performance.now();
+// Страховка по производительности: свечение на слабом телефоне может стоить
+// дорого, а проверить это на реальном железе отсюда нельзя (headless рисует
+// программно, его замеры о GPU ничего не говорят). Поэтому игра смотрит на
+// собственный кадр: если он стабильно тяжёлый — постобработка отключается
+// сама, и дальше сцена рисуется напрямую. Обратно не включаем: скачущее
+// свечение раздражало бы сильнее, чем его отсутствие.
+let frameCost = 0, heavyFor = 0;
+// perfGuardOn выключается только из QA-прогонов (см. window.__qa): headless
+// Chromium рисует программно и всегда «медленный», так что страховка гасила бы
+// свечение на каждом тестовом кадре и проверить его было бы нечем.
+let perfGuardOn = true;
+const HEAVY_FRAME_S = 1 / 34;   // ниже ~34 fps считаем кадр тяжёлым
+const HEAVY_LIMIT_S = 3;        // столько подряд — выключаем свечение
+function watchPerf(rawDt) {
+  if (!composer || !perfGuardOn) return;
+  // Экспоненциальное сглаживание, чтобы одиночные просадки (загрузка, сборка
+  // мусора) не выключали эффект.
+  frameCost = frameCost ? frameCost * 0.9 + rawDt * 0.1 : rawDt;
+  heavyFor = frameCost > HEAVY_FRAME_S ? heavyFor + rawDt : 0;
+  if (heavyFor > HEAVY_LIMIT_S) {
+    composer = null;
+    console.info('[game] postprocessing off: slow frames');
+  }
+}
 function frame(now) {
   const raw = Math.min(0.033, (now - last) / 1000); last = now;
   let dt = raw * timeScale;
   if (hitStopT > 0) { hitStopT -= raw; dt *= 0.06; }
   update(dt); render();
+  watchPerf(raw);
   requestAnimationFrame(frame);
 }
 
@@ -3135,6 +3216,11 @@ window.__qa = {
   get weaponLevel() { return weaponLevel; }, get toasts() { return toasts; },
   get obstacles() { return obstacles; }, get squadWorldX() { return squadWorldX; },
   get state() { return state; },
+  get bloomOn() { return !!composer; },
+  // Только для QA-прогонов: headless-браузер рисует программно и всегда
+  // «медленный», из-за чего страховка по fps гасит свечение через пару секунд
+  // и проверить его нечем. На геймплей не влияет.
+  disablePerfGuard() { perfGuardOn = false; },
 };
 </script>
 
