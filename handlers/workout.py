@@ -552,7 +552,11 @@ def _logging_hint(
     format_hint_line = (
         f"{i18n.t('workout.format_hint')}\n" if show_format_hint else ""
     )
-    target_line = f"{i18n.t('workout.target_line', target=target)}\n" if target else ""
+    # План стоит НЕ здесь, а ниже, под «Прошлый раз» (см. сборку info-блока):
+    # читается это одним движением сверху вниз — что было, что делаем, куда
+    # целимся, — а планом первой строкой человек упирался в цифры программы
+    # раньше, чем видел свои собственные.
+    target_line = i18n.t("workout.target_line", target=target) if target else ""
     warning = _suspicious_weight_warning(last_session, today_sets, unit)
     if warning and confirmed_weight is not None and today_sets and today_sets[-1][0] == confirmed_weight:
         # Already answered "да, записать" for exactly this weight — repeating the
@@ -560,7 +564,7 @@ def _logging_hint(
         # that arrive by other routes ("N: 100 8" edits) still get the nudge.
         warning = None
     warning_line = f"{warning}\n" if warning else ""
-    lead = f"{format_hint_line}{target_line}{warning_line}"
+    lead = f"{format_hint_line}{warning_line}"
     if last_session:
         sets_str = ", ".join(formatting.format_set(w, r, rpe) for w, r, rpe in last_session)
         # «Прошлый раз», а не «В прошлый раз»: это ярлык к списку подходов, как
@@ -575,20 +579,28 @@ def _logging_hint(
         # строка и так подписана словами, а курсивом отделена от списка
         # подходов. Соседние строки (🎯 Цель, ⚠️ вес, 🔢 повторы) значки
         # сохраняют — там они различают РАЗНЫЕ строки между собой.
-        line = i18n.t("workout.last_time_line", sets=sets_str)
+        lines = [i18n.t("workout.last_time_line", sets=sets_str)]
+        if target_line:
+            lines.append(target_line)
         if show_progression:
             wr_only = [(w, r) for w, r, _ in last_session]
             suggestion = analytics.suggest_progression(
                 wr_only, unit=unit, inferred_step=inferred_step, formula=formula,
-                rule=progression_rule,
+                rule=progression_rule, planned_reps=formatting.planned_rep_range(target),
             )
             if suggestion is not None:
                 achieved = any(
                     w >= suggestion.target_weight and r >= suggestion.target_reps
                     for w, r in (today_sets or [])
                 )
-                line += f"\n{formatting.format_progression_hint(suggestion, achieved)}"
-        body = f"{lead}<i>{line}</i>\n\n{base}" if base else f"{lead}<i>{line}</i>"
+                lines.append(formatting.format_progression_hint(suggestion, achieved))
+        info = "\n".join(lines)
+        body = f"{lead}<i>{info}</i>\n\n{base}" if base else f"{lead}<i>{info}</i>"
+    elif target_line:
+        # Истории нет — план всё равно показываем: он и есть всё, что известно
+        # про сегодняшнее упражнение.
+        info = f"{lead}<i>{target_line}</i>"
+        body = f"{info}\n\n{base}" if base else info
     elif lead:
         body = f"{lead}\n{base}" if base else lead.rstrip("\n")
     else:

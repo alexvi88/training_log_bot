@@ -11,9 +11,12 @@ from typing import Optional
 from aiogram import Bot
 from aiogram.types import FSInputFile
 
+import activity_log
+import ai_trainer
 import announcements
 import config
 import db
+import formatting
 
 logger = logging.getLogger(__name__)
 
@@ -260,6 +263,114 @@ async def _send_daily_report(bot: Bot, backup_path: Optional[str]) -> None:
                 os.remove(tmp_path)
 
 
+# ---------- утренний разбор поведения за вчера ------------------------------
+#
+# Сырой лог действий (/activity) отвечает на «что делал вот этот человек», но
+# не на «как вчера пользовались ботом»: чтобы увидеть путь, надо прочитать
+# сотни строк глазами. Разбор делает это раз в сутки и приходит одним
+# сообщением вместе с утренним отчётом.
+
+# Потолки — чтобы суточный лог гарантированно влезал в один запрос и не стоил
+# как неделя работы тренера. Строк на человека хватает на полный сеанс, а
+# людей — на всех активных за сутки при нынешних объёмах.
+BEHAVIOUR_MAX_EVENTS = 4000
+BEHAVIOUR_MAX_PER_USER = 80
+BEHAVIOUR_LINE_LIMIT = 90
+
+_BEHAVIOUR_MARKERS = {
+    activity_log.KIND_CALLBACK: "👉",
+    activity_log.KIND_CALLBACK_UNHANDLED: "💀",
+    activity_log.KIND_AI_REPLY: "🤖",
+}
+
+
+def _behaviour_day_bounds(day: dt.date) -> tuple[str, str]:
+    """Границы суток админа (МСК) в том виде, в каком время лежит в базе (UTC).
+
+    Сутки именно админские: он спрашивает «что было вчера», имея в виду своё
+    вчера, а UTC-шные сутки отрезали бы вечер — самое живое время бота.
+    """
+    start = dt.datetime.combine(day, dt.time.min) - dt.timedelta(hours=config.ADMIN_TZ_OFFSET)
+    return (
+        start.isoformat(timespec="seconds"),
+        (start + dt.timedelta(days=1)).isoformat(timespec="seconds"),
+    )
+
+
+def _behaviour_line(row) -> str:
+    at = dt.datetime.fromisoformat(row["created_at"]) + dt.timedelta(hours=config.ADMIN_TZ_OFFSET)
+    content = (row["content"] or "").replace("\n", " ⏎ ")
+    if len(content) > BEHAVIOUR_LINE_LIMIT:
+        content = content[: BEHAVIOUR_LINE_LIMIT - 1] + "…"
+    marker = _BEHAVIOUR_MARKERS.get(row["kind"], "💬")
+    return f"{at.strftime('%H:%M')} {marker} {content}"
+
+
+async def build_behaviour_summary(day: dt.date) -> Optional[str]:
+    """Материал для разбора: числа за сутки плюс лог, сгруппированный по людям.
+
+    Группировка по людям, а не сплошная лента: разбирается путь одного человека,
+    и вперемешку он не читается. Внутри человека — хронология, как он и шёл.
+
+    None — суток без единого действия: разбирать нечего, и тратить на это вызов
+    модели незачем.
+    """
+    since, until = _behaviour_day_bounds(day)
+    total_events, total_people = await db.count_events_between(since, until)
+    if not total_events:
+        return None
+    rows = await db.list_events_between(since, until, limit=BEHAVIOUR_MAX_EVENTS)
+
+    by_user: dict[int, list] = {}
+    names: dict[int, str] = {}
+    for row in rows:
+        by_user.setdefault(row["telegram_id"], []).append(row)
+        names[row["telegram_id"]] = (
+            f"@{row['username']}" if row["username"] else str(row["telegram_id"])
+        )
+    newcomers = await db.count_new_users_between(since, until)
+    workouts, trained = await db.count_finished_workouts_between(since, until)
+
+    head = [
+        f"Сутки: {day.strftime('%d.%m.%Y')} (время московское).",
+        f"Действий: {total_events}, людей: {total_people}, из них новых: {newcomers}.",
+        f"Завершено тренировок: {workouts} у {trained} человек.",
+    ]
+    if total_events > len(rows):
+        head.append(
+            f"В лог ниже влезли первые {len(rows)} действий из {total_events} — "
+            "остальное срезано, учитывай это в выводах."
+        )
+
+    parts = ["\n".join(head), ""]
+    # Самые активные сверху: у них путь длиннее и разбирать там есть что.
+    for telegram_id, events in sorted(by_user.items(), key=lambda kv: -len(kv[1])):
+        shown = events[:BEHAVIOUR_MAX_PER_USER]
+        tail = "" if len(events) == len(shown) else f" (показаны первые {len(shown)} из {len(events)})"
+        parts.append(f"— {names[telegram_id]}, действий {len(events)}{tail}:")
+        parts.extend(_behaviour_line(row) for row in shown)
+        parts.append("")
+    return "\n".join(parts).strip()
+
+
+async def _send_behaviour_digest(bot: Bot, day: dt.date) -> None:
+    """Разбор поведения за сутки — отдельным сообщением после отчёта.
+
+    Отдельным, а не абзацем в отчёте: у отчёта есть документ-бэкап, а тут текст
+    на несколько абзацев, и склеенные они не читаются. Молчим, когда разбирать
+    нечего или модель не ответила: пустое «данных нет» каждое утро — шум.
+    """
+    summary = await build_behaviour_summary(day)
+    if summary is None:
+        return
+    text = await ai_trainer.behaviour_digest(summary)
+    if not text:
+        return
+    header = f"🧠 Как вчера пользовались — {day.strftime('%d.%m.%Y')}\n\n"
+    for chunk in formatting.split_for_telegram(header + text, 4000):
+        await bot.send_message(chat_id=config.ADMIN_ID, text=chunk)
+
+
 async def _run_retention_cleanup() -> None:
     """Стереть то, что дольше положенного лежит в базе — стоимость AI-вызовов,
     сырой лог действий, отметки о показанных предупреждениях лимита, отданные
@@ -372,3 +483,9 @@ async def run_daily_admin_jobs(bot: Bot) -> None:
             await _send_daily_report(bot, backup_path)
         except Exception:
             logger.exception("Daily admin report failed")
+        try:
+            await _send_behaviour_digest(bot, dt.date.today() - dt.timedelta(days=1))
+        except Exception:
+            # Разбор — приятное дополнение к отчёту, а не сам отчёт: упавшая
+            # модель (или её отсутствие) не должна выглядеть как сбой джобы.
+            logger.exception("Daily behaviour digest failed")

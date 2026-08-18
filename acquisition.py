@@ -10,6 +10,7 @@
 Запросы к базе — db.acquisition_funnel / db.top_referrers, вызовы — в хендлерах.
 """
 
+import datetime as dt
 import re
 from dataclasses import dataclass
 from typing import Any, Iterable, Optional
@@ -123,7 +124,23 @@ def _funnel_line(row: Any) -> str:
     )
 
 
-def format_funnel(rows: Iterable[Any], days: int) -> str:
+# Подпись окна в шапке отчёта: «30 дн.» или конкретный день («сегодня, 18.08»).
+# Одна на оба отчёта — они всегда показываются вместе, и разъехавшиеся шапки
+# читались бы как разные периоды.
+def period_label(days: int, day: Optional[str] = None) -> str:
+    if not day:
+        return f"{days} дн."
+    date = dt.date.fromisoformat(day)
+    stamp = date.strftime("%d.%m")
+    today = dt.date.today()
+    if date == today:
+        return f"сегодня, {stamp}"
+    if date == today - dt.timedelta(days=1):
+        return f"вчера, {stamp}"
+    return stamp
+
+
+def format_funnel(rows: Iterable[Any], days: int, day: Optional[str] = None) -> str:
     """Кто пришёл и дошёл ли до первой тренировки, по источникам.
 
     Ключевая цифра — не «пришли», а «записали первую»: канал с дешёвыми
@@ -131,7 +148,7 @@ def format_funnel(rows: Iterable[Any], days: int) -> str:
     видно это только здесь.
     """
     rows = list(rows)
-    head = f"📈 <b>ОТКУДА ЛЮДИ · {days} дн.</b>"
+    head = f"📈 <b>ОТКУДА ЛЮДИ · {period_label(days, day)}</b>"
     if not rows:
         return (
             f"{head}\n\nЗа этот срок новых не было. Ссылка под канал — "
@@ -162,14 +179,14 @@ def _onboarding_line(row: Any) -> str:
     )
 
 
-def format_onboarding_funnel(rows: Iterable[Any], days: int) -> str:
+def format_onboarding_funnel(rows: Iterable[Any], days: int, day: Optional[str] = None) -> str:
     """Воронка новичка по шагам: пришёл → начал тренировку → записал подход →
     закрыл первую. Разрез по источникам — тот же, что и у format_funnel: видно
     не только «сколько дошло до первой», но и НА КАКОМ шаге теряются —
     открыли тренировку и не тронули снаряд, или дожали подход и не закрыли.
     """
     rows = list(rows)
-    head = f"🧭 <b>ВОРОНКА НОВИЧКА · {days} дн.</b>"
+    head = f"🧭 <b>ВОРОНКА НОВИЧКА · {period_label(days, day)}</b>"
     if not rows:
         return f"{head}\n\nЗа этот срок новых не было."
     total = sum(r["users"] for r in rows)

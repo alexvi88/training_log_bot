@@ -375,3 +375,75 @@ def test_weekly_funnel_digest_names_the_worst_converting_source():
 def test_weekly_funnel_digest_is_honest_about_zero_newcomers():
     text = acquisition.build_weekly_funnel_digest([], days=7)
     assert "не пришло" in text
+
+
+# ---------- воронка за конкретный день ----------
+
+async def _user_registered_at(db, telegram_id: int, source: str, created_at: str) -> None:
+    await db.get_or_create_user(telegram_id, f"u{telegram_id}")
+    await db.set_user_source(telegram_id, source)
+    await db.conn().execute(
+        "UPDATE users SET created_at = ? WHERE telegram_id = ?", (created_at, telegram_id)
+    )
+    await db.conn().commit()
+
+
+async def test_funnel_for_one_day_ignores_yesterday_evening(fresh_db):
+    """«Сколько пришло сегодня» — это от полуночи, а не последние 24 часа.
+
+    Ровно на этом «/growth 1» и врал: вчерашний вечер попадал в ответ про
+    сегодня.
+    """
+    db = fresh_db
+    today = dt.date.today()
+    await _user_registered_at(
+        db, 1, "src_a", dt.datetime.combine(today, dt.time(9, 30)).isoformat(timespec="seconds")
+    )
+    await _user_registered_at(
+        db, 2, "src_a",
+        dt.datetime.combine(today - dt.timedelta(days=1), dt.time(23, 40)).isoformat(timespec="seconds"),
+    )
+
+    rows = {r["source"]: r for r in await db.acquisition_funnel(day=today.isoformat())}
+    assert rows["src_a"]["users"] == 1
+
+    yesterday = (today - dt.timedelta(days=1)).isoformat()
+    rows = {r["source"]: r for r in await db.acquisition_funnel(day=yesterday)}
+    assert rows["src_a"]["users"] == 1
+
+    # Скользящее окно по-прежнему считает обоих — его поведение не менялось.
+    rows = {r["source"]: r for r in await db.acquisition_funnel(days=30)}
+    assert rows["src_a"]["users"] == 2
+
+
+async def test_onboarding_funnel_and_donations_honour_the_same_day(fresh_db):
+    db = fresh_db
+    today = dt.date.today()
+    await _user_registered_at(
+        db, 1, "src_a", dt.datetime.combine(today, dt.time(10)).isoformat(timespec="seconds")
+    )
+    await _user_registered_at(
+        db, 2, "src_a",
+        dt.datetime.combine(today - dt.timedelta(days=2), dt.time(10)).isoformat(timespec="seconds"),
+    )
+    await db.record_donation(1, "charge-today", 50)
+
+    (row,) = await db.onboarding_funnel(day=today.isoformat())
+    assert row["users"] == 1
+
+    assert await db.donation_totals(day=today.isoformat()) == (50, 1)
+    assert await db.donation_totals(day=(today - dt.timedelta(days=1)).isoformat()) == (0, 0)
+
+
+def test_period_label_names_the_day_in_words():
+    today = dt.date.today()
+    assert acquisition.period_label(30) == "30 дн."
+    assert acquisition.period_label(30, today.isoformat()).startswith("сегодня, ")
+    assert acquisition.period_label(30, (today - dt.timedelta(days=1)).isoformat()).startswith("вчера, ")
+    assert acquisition.period_label(30, "2026-02-03") == "03.02"
+
+
+def test_funnel_heading_carries_the_day_not_the_window():
+    text = acquisition.format_funnel([], 30, "2026-02-03")
+    assert "03.02" in text.splitlines()[0]
+    assert "30 дн." not in text

@@ -1590,14 +1590,33 @@ _FINISHED_BY_USER = (
 )
 
 
-async def acquisition_funnel(days: int = 30, alive_days: int = 7) -> list[aiosqlite.Row]:
+# Окно отчётов о росте: либо «последние N дней», либо один конкретный день.
+#
+# День отдельным случаем, а не «/growth 1»: скользящие сутки от «сейчас» — это
+# вчерашний вечер плюс сегодняшнее утро, и на вопрос «сколько пришло сегодня»
+# они отвечают чужим числом. Границы наивно-локальные, как и сам created_at
+# (now_iso — это dt.datetime.now(), часы сервера).
+def _growth_window(days: int, day: Optional[str] = None) -> tuple[str, Optional[str]]:
+    """(с какого момента, по какой) — верхняя граница есть только у дня."""
+    if day:
+        start = dt.date.fromisoformat(day)
+        return (
+            dt.datetime.combine(start, dt.time.min).isoformat(timespec="seconds"),
+            dt.datetime.combine(start + dt.timedelta(days=1), dt.time.min).isoformat(timespec="seconds"),
+        )
+    return (dt.datetime.now() - dt.timedelta(days=days)).isoformat(timespec="seconds"), None
+
+
+async def acquisition_funnel(
+    days: int = 30, alive_days: int = 7, *, day: Optional[str] = None
+) -> list[aiosqlite.Row]:
     """По источникам: сколько пришло, сколько записало первую тренировку, сколько живо.
 
     Окно считается по дате регистрации, а не по дате тренировок: канал отвечает
     за тех, кого привёл, даже если тренируются они месяцем позже. `legacy`
     (пришедшие до появления атрибуции) в отчёт не попадает — см. _migrate_schema.
     """
-    since = (dt.datetime.now() - dt.timedelta(days=days)).isoformat(timespec="seconds")
+    since, until = _growth_window(days, day)
     alive_since = (dt.datetime.now() - dt.timedelta(days=alive_days)).isoformat(timespec="seconds")
     cur = await conn().execute(
         "SELECT COALESCE(u.source, 'unknown') AS source, "
@@ -1606,9 +1625,10 @@ async def acquisition_funnel(days: int = 30, alive_days: int = 7) -> list[aiosql
         "COUNT(*) FILTER (WHERE f.finished >= 3) AS engaged, "
         "COUNT(*) FILTER (WHERE f.last_finished_at >= ?) AS alive "
         f"FROM users u LEFT JOIN ({_FINISHED_BY_USER}) f ON f.user_id = u.telegram_id "
-        "WHERE u.created_at >= ? AND COALESCE(u.source, 'unknown') <> 'legacy' "
+        "WHERE u.created_at >= ? AND (? IS NULL OR u.created_at < ?) "
+        "AND COALESCE(u.source, 'unknown') <> 'legacy' "
         "GROUP BY source ORDER BY users DESC, source",
-        (alive_since, since),
+        (alive_since, since, until, until),
     )
     return await cur.fetchall()
 
@@ -1627,7 +1647,7 @@ _LOGGED_SET_BY_USER = (
 )
 
 
-async def onboarding_funnel(days: int = 30) -> list[aiosqlite.Row]:
+async def onboarding_funnel(days: int = 30, *, day: Optional[str] = None) -> list[aiosqlite.Row]:
     """Воронка новичка по источникам: всего пришло → начали тренировку →
     записали хоть один подход → завершили первую.
 
@@ -1637,7 +1657,7 @@ async def onboarding_funnel(days: int = 30) -> list[aiosqlite.Row]:
     до тренировки вовсе, открыл её и не тронул снаряд, или начал подход и
     бросил, не закрыв сессию.
     """
-    since = (dt.datetime.now() - dt.timedelta(days=days)).isoformat(timespec="seconds")
+    since, until = _growth_window(days, day)
     cur = await conn().execute(
         "SELECT COALESCE(u.source, 'unknown') AS source, "
         "COUNT(*) AS users, "
@@ -1648,9 +1668,10 @@ async def onboarding_funnel(days: int = 30) -> list[aiosqlite.Row]:
         f"LEFT JOIN ({_STARTED_BY_USER}) st ON st.user_id = u.telegram_id "
         f"LEFT JOIN ({_LOGGED_SET_BY_USER}) ls ON ls.user_id = u.telegram_id "
         f"LEFT JOIN ({_FINISHED_BY_USER}) f ON f.user_id = u.telegram_id "
-        "WHERE u.created_at >= ? AND COALESCE(u.source, 'unknown') <> 'legacy' "
+        "WHERE u.created_at >= ? AND (? IS NULL OR u.created_at < ?) "
+        "AND COALESCE(u.source, 'unknown') <> 'legacy' "
         "GROUP BY source ORDER BY users DESC, source",
-        (since,),
+        (since, until, until),
     )
     return await cur.fetchall()
 
@@ -5774,6 +5795,32 @@ async def daily_workout_stats(date_str: str) -> dict[str, int]:
     return {"users": users, "workouts": workouts}
 
 
+async def count_finished_workouts_between(since: str, until: str) -> tuple[int, int]:
+    """(тренировок, людей) — сколько закрыли за отрезок и сколько человек их закрыло.
+
+    Отрезком, а не календарной датой (в отличие от daily_workout_stats): сутки
+    админского разбора — московские, а finished_at лежит по UTC.
+    """
+    cur = await conn().execute(
+        "SELECT COUNT(*), COUNT(DISTINCT user_id) FROM workouts "
+        "WHERE status = 'finished' AND finished_at >= ? AND finished_at < ?",
+        (since, until),
+    )
+    workouts, users = await cur.fetchone()
+    return workouts, users
+
+
+async def count_new_users_between(since: str, until: str) -> int:
+    """Сколько человек зарегистрировалось за отрезок — для суточного разбора
+    поведения: путь новичка и путь вернувшегося читаются по-разному."""
+    cur = await conn().execute(
+        "SELECT COUNT(*) FROM users WHERE created_at >= ? AND created_at < ?",
+        (since, until),
+    )
+    (count,) = await cur.fetchone()
+    return count
+
+
 # ---------- admin: AI-trainer cost log (see ai_trainer.py / admin_tasks.py) ----------
 #
 # One row per real LLM call (chat completion or voice transcription), so the
@@ -6037,6 +6084,38 @@ async def list_all_events(limit: int = 30, offset: int = 0) -> list[aiosqlite.Ro
         (limit, offset),
     )
     return await cur.fetchall()
+
+
+async def list_events_between(
+    since: str, until: str, limit: int = 4000
+) -> list[aiosqlite.Row]:
+    """Действия всех пользователей за отрезок времени, в хронологическом порядке.
+
+    Хронология здесь важнее свежести (в отличие от list_all_events): читатель —
+    разбор поведения за сутки, а путь человека читается только вперёд. Потолок
+    строк есть, потому что за сутки их могут быть десятки тысяч, а разбор берёт
+    ровно столько, сколько влезает в один запрос к модели.
+    """
+    cur = await conn().execute(
+        "SELECT e.telegram_id, u.username, e.kind, e.content, e.payload, e.created_at "
+        "FROM user_events e LEFT JOIN users u ON u.telegram_id = e.telegram_id "
+        "WHERE e.created_at >= ? AND e.created_at < ? "
+        "ORDER BY e.created_at, e.id LIMIT ?",
+        (since, until, limit),
+    )
+    return await cur.fetchall()
+
+
+async def count_events_between(since: str, until: str) -> tuple[int, int]:
+    """(событий, людей) за отрезок — чтобы честно сказать, что в разбор влезло
+    не всё, когда list_events_between упёрся в потолок."""
+    cur = await conn().execute(
+        "SELECT COUNT(*), COUNT(DISTINCT telegram_id) FROM user_events "
+        "WHERE created_at >= ? AND created_at < ?",
+        (since, until),
+    )
+    events, people = await cur.fetchone()
+    return events, people
 
 
 async def prune_old_user_events(retention_days: int) -> int:
@@ -6989,14 +7068,15 @@ async def record_donation(user_id: int, charge_id: str, stars: int) -> bool:
         return cur.rowcount > 0
 
 
-async def donation_totals(days: int = 30) -> tuple[int, int]:
-    """(звёзд, человек) за последние `days` дней — для /growth. Идемпотентность
-    по charge_id (record_donation) уже гарантирует, что повторно доставленный
-    платёж не задвоит сумму."""
-    since = (dt.datetime.now() - dt.timedelta(days=days)).isoformat(timespec="seconds")
+async def donation_totals(days: int = 30, *, day: Optional[str] = None) -> tuple[int, int]:
+    """(звёзд, человек) за последние `days` дней или за один день — для /growth.
+    Идемпотентность по charge_id (record_donation) уже гарантирует, что повторно
+    доставленный платёж не задвоит сумму."""
+    since, until = _growth_window(days, day)
     cur = await conn().execute(
-        "SELECT COALESCE(SUM(stars), 0), COUNT(DISTINCT user_id) FROM donations WHERE created_at >= ?",
-        (since,),
+        "SELECT COALESCE(SUM(stars), 0), COUNT(DISTINCT user_id) FROM donations "
+        "WHERE created_at >= ? AND (? IS NULL OR created_at < ?)",
+        (since, until, until),
     )
     stars, people = await cur.fetchone()
     return stars, people

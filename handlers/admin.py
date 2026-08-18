@@ -45,6 +45,17 @@ def _is_admin(telegram_id: int) -> bool:
     return config.ADMIN_ID is not None and telegram_id == config.ADMIN_ID
 
 
+def admin_time(raw: str) -> dt.datetime:
+    """Время события на часах админа (по умолчанию Москва, config.ADMIN_TZ_OFFSET).
+
+    В базе всё лежит по часам сервера, а сервер живёт по UTC (см. timeutil) —
+    и админские экраны показывали именно UTC. Разница с Москвой в три часа
+    незаметна ровно до того момента, когда по логу надо понять, что было
+    «утром» или «вчера вечером»: в UTC вечерний всплеск съезжает на день назад.
+    """
+    return dt.datetime.fromisoformat(raw) + dt.timedelta(hours=config.ADMIN_TZ_OFFSET)
+
+
 @router.callback_query(F.data.startswith("ail:ack:"))
 async def limit_ack(callback: CallbackQuery):
     """«Понятно» на предупреждении о лимите — до конца суток он пропускает.
@@ -203,7 +214,7 @@ async def _show_pushes_list(target: Message | CallbackQuery, state: FSMContext, 
     if pushes:
         entries = []
         for p in pushes:
-            sent = dt.datetime.fromisoformat(p["sent_at"])
+            sent = admin_time(p["sent_at"])
             who = f"@{p['username']}" if p["username"] else str(p["telegram_id"])
             category = push_texts.CATEGORY_LABELS.get(p["category"], p["category"])
             # Пуши с AI-комментарием бывают на несколько абзацев — 10 таких
@@ -302,7 +313,7 @@ async def admin_ai_dialogs_show(callback: CallbackQuery, state: FSMContext):
     who = f"@{user['username']}" if user["username"] else str(target_user_id)
     lines = [f"🤖 Диалоги с AI-тренером — {who} ({len(rows)} сообщ.):", ""]
     for row in rows:
-        sent = dt.datetime.fromisoformat(row["created_at"])
+        sent = admin_time(row["created_at"])
         speaker = "👤 Юзер" if row["role"] == "user" else "🤖 AI"
         lines.append(f"{sent.strftime('%d.%m %H:%M')} · {speaker}:\n{row['content']}")
     text = "\n\n".join(lines)
@@ -327,27 +338,39 @@ ACTIVITY_ALL_PAGE_SIZE = 80
 ACTIVITY_LINE_LIMIT = 120
 
 
-def _activity_line(row) -> str:
-    at = dt.datetime.fromisoformat(row["created_at"])
+# Кто написал строку: человек, его тап или тренер в ответ.
+_ACTIVITY_MARKERS = {
+    activity_log.KIND_CALLBACK: "👉",
+    activity_log.KIND_CALLBACK_UNHANDLED: "👉",
+    activity_log.KIND_AI_REPLY: "🤖",
+}
+
+
+def _activity_marker(kind: str) -> str:
+    return _ACTIVITY_MARKERS.get(kind, "💬")
+
+
+def _activity_content(row) -> str:
     content = row["content"]
     if len(content) > ACTIVITY_LINE_LIMIT:
         content = content[: ACTIVITY_LINE_LIMIT - 1] + "…"
-    content = content.replace("\n", " ⏎ ")
-    marker = "👉" if row["kind"] == activity_log.KIND_CALLBACK else "💬"
-    return f"{at.strftime('%d.%m %H:%M')} {marker} {content}"
+    return content.replace("\n", " ⏎ ")
+
+
+def _activity_line(row) -> str:
+    at = admin_time(row["created_at"])
+    return f"{at.strftime('%d.%m %H:%M')} {_activity_marker(row['kind'])} {_activity_content(row)}"
 
 
 def _activity_line_all(row) -> str:
     """Та же строка, что и в ленте одного пользователя, но с автором — общая
     лента иначе нечитаема — и в HTML, чтобы автора можно было выделить жирным."""
-    at = dt.datetime.fromisoformat(row["created_at"])
-    content = row["content"]
-    if len(content) > ACTIVITY_LINE_LIMIT:
-        content = content[: ACTIVITY_LINE_LIMIT - 1] + "…"
-    content = content.replace("\n", " ⏎ ")
-    marker = "👉" if row["kind"] == activity_log.KIND_CALLBACK else "💬"
+    at = admin_time(row["created_at"])
     who = f"@{row['username']}" if row["username"] else str(row["telegram_id"])
-    return f"{at.strftime('%d.%m %H:%M')} {marker} {escape(content)} — <b>{escape(who)}</b>"
+    return (
+        f"{at.strftime('%d.%m %H:%M')} {_activity_marker(row['kind'])} "
+        f"{escape(_activity_content(row))} — <b>{escape(who)}</b>"
+    )
 
 
 async def _show_activity_users(target: Message | CallbackQuery, state: FSMContext, page: int):
@@ -406,32 +429,77 @@ GROWTH_WINDOW_DAYS = 30
 GROWTH_REFERRERS = 10
 
 
+def _growth_day(raw: str) -> Optional[str]:
+    """Аргумент `/growth` как конкретный день — ISO-дата или None, если это не день.
+
+    Понимает «сегодня»/«today», «вчера»/«yesterday», «18.08», «18.08.2026» и
+    «2026-08-18». День отдельно от «/growth 1» нарочно: скользящие сутки от
+    «сейчас» — это вчерашний вечер плюс сегодняшнее утро, а на вопрос «сколько
+    пришло сегодня» так отвечать нельзя.
+    """
+    word = raw.strip().lower()
+    today = dt.date.today()
+    if word in ("сегодня", "today"):
+        return today.isoformat()
+    if word in ("вчера", "yesterday"):
+        return (today - dt.timedelta(days=1)).isoformat()
+    for fmt, needs_year in (("%Y-%m-%d", True), ("%d.%m.%Y", True), ("%d.%m", False)):
+        try:
+            parsed = dt.datetime.strptime(word, fmt).date()
+        except ValueError:
+            continue
+        # «18.08» без года — это год текущий, а если такой день ещё не наступил,
+        # то прошлый: в августе «31.12» спрашивают про прошлый декабрь.
+        if not needs_year:
+            parsed = parsed.replace(year=today.year)
+            if parsed > today:
+                parsed = parsed.replace(year=today.year - 1)
+        return parsed.isoformat()
+    return None
+
+
 @router.message(Command("growth"))
 async def cmd_growth(message: Message, state: FSMContext):
     """Воронка по источникам: за что заплатили и что с этого пришло.
 
     Без аргументов — окно GROWTH_WINDOW_DAYS дней; `/growth 7` сужает его, чтобы
-    смотреть свежий закуп, не утопая в накопленной истории.
+    смотреть свежий закуп, не утопая в накопленной истории. `/growth сегодня`
+    (а также «вчера» и любая дата вида 18.08 / 2026-08-18) — ровно один день, от
+    полуночи до полуночи.
     """
     if not _is_admin(message.from_user.id):
         return
     days = GROWTH_WINDOW_DAYS
-    parts = (message.text or "").split()
-    if len(parts) > 1 and parts[1].isdigit() and int(parts[1]) > 0:
-        days = int(parts[1])
-    funnel = await db.acquisition_funnel(days, alive_days=acquisition.ALIVE_WINDOW_DAYS)
-    onboarding = await db.onboarding_funnel(days)
+    day: Optional[str] = None
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) > 1:
+        arg = parts[1].strip()
+        if arg.isdigit() and int(arg) > 0:
+            days = int(arg)
+        else:
+            day = _growth_day(arg)
+            if day is None:
+                await message.answer(
+                    "Не понял период. Пиши «/growth 7» — за столько дней, "
+                    "«/growth сегодня» или «/growth 18.08» — за один день."
+                )
+                return
+    funnel = await db.acquisition_funnel(
+        days, alive_days=acquisition.ALIVE_WINDOW_DAYS, day=day
+    )
+    onboarding = await db.onboarding_funnel(days, day=day)
     referrers = await db.top_referrers(GROWTH_REFERRERS)
-    donation_stars, donation_people = await db.donation_totals(days)
+    donation_stars, donation_people = await db.donation_totals(days, day=day)
+    period = acquisition.period_label(days, day)
     bot_username = await sharing.get_bot_username(message.bot)
     text = (
-        f"{acquisition.format_funnel(funnel, days)}\n\n"
-        f"{acquisition.format_onboarding_funnel(onboarding, days)}\n\n"
+        f"{acquisition.format_funnel(funnel, days, day)}\n\n"
+        f"{acquisition.format_onboarding_funnel(onboarding, days, day)}\n\n"
         f"{acquisition.format_referrers(referrers)}\n\n"
         # Донат («Поддержать проект», handlers/donate.py) — не часть воронки
         # источников: это разовый жест, не шаг в онбординге, и число просто
         # рядом, а не в теле format_funnel/format_onboarding_funnel.
-        f"❤️ Донаты за {days} дн.: {donation_stars} ⭐ от {donation_people} человек.\n\n"
+        f"❤️ Донаты за {period}: {donation_stars} ⭐ от {donation_people} человек.\n\n"
         f"Ссылка под новый канал: <code>{acquisition.channel_link(bot_username, 'имя')}</code> — "
         f"вместо «имя» латиница, цифры и «_»."
     )

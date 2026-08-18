@@ -1162,6 +1162,7 @@
   "weekly.table_header_exercise": "Exercise",
   "weekly.table_header_sets": "Sets",
   "weekly.table_header_tonnage": "Tonnage",
+  "workout.add_set_logged": "Already logged: {sets}",
   "workout.add_set_prompt": "New set for \"{name}\" — send weight and reps (\"100 8\") or just reps (\"8\") — I'll carry the weight from the last set:",
   "workout.backfill_logged_prefix": "✅ Logged as a past workout\n\n",
   "workout.block_not_found": "Block not found",

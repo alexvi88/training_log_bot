@@ -36,6 +36,11 @@ MAX_CONTENT_LEN = 1000
 
 KIND_MESSAGE = "message"
 KIND_CALLBACK = "callback"
+# Ответ AI-тренера. Лента задумана как «что человек делает», и своей стороны
+# разговора в ней не было вовсе: видно вопрос и видно следующий тап, а что бот
+# ответил между ними — только в /ai_dialogs, отдельным экраном и без окружающих
+# действий. Понять по такой ленте, ПОЧЕМУ человек нажал то, что нажал, нельзя.
+KIND_AI_REPLY = "ai_reply"
 # Отдельный вид — для нажатий, до которых не дотянулся ни один обработчик
 # (handlers/fallback.py). Обычная запись KIND_CALLBACK пишется для любого
 # нажатия одинаково, живого или протухшего, поэтому по ней не отличить
@@ -129,6 +134,16 @@ async def record_unhandled_callback(callback: CallbackQuery) -> None:
     await db.log_user_event(
         callback.from_user.id, KIND_CALLBACK_UNHANDLED, callback_prefix(data), data or None
     )
+
+
+async def record_ai_reply(user_id: int, text: str) -> None:
+    """Ответ тренера — в ту же ленту, рядом с вопросом, на который он отвечает.
+
+    Пишется там же, где ответ ложится в постоянный лог диалога
+    (handlers/ai_trainer), а не из middleware: middleware видит входящие
+    события, а это исходящее.
+    """
+    await db.log_user_event(user_id, KIND_AI_REPLY, _truncate(text))
 
 
 class LogIncomingMessages(BaseMiddleware):
