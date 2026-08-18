@@ -71,7 +71,7 @@
 
 ### Развёрнутое описание
 
-> ПРИВЕТ АТЛЕТ, я твой дневник тренировок.
+> ПРИВЕТ АТЛЕТ. Я твой дневник тренировок.
 >
 > Пишешь `100 8` — записал 100 кг на 8 повторов. Можно голосом: «сто на
 > восемь». Никаких форм и выпадающих списков посреди подхода.
@@ -87,6 +87,65 @@
 >
 > Дневник еды, вес тела, история за всё время, экспорт — на месте.
 > Бесплатно.
+
+### Английские версии — для англоязычных каталогов
+
+Бот двуязычный (см. `CLAUDE.md`, «Два языка»), и в англоязычных каталогах
+описание нужно своё, а не переведённое машиной. Голос тот же — тренер от
+первого лица, по главе `## English voice` в `TONE_OF_VOICE.md`.
+
+**Чего тут НЕ делаем: брендовой формулы.** «HEY ATHLETE!» — приветствие внутри
+продукта, где человек уже нажал «Старт». В каталоге он листает фид из двадцати
+ботов подряд, и единственная работа строки описания — сказать, что бот делает.
+Формула на этом месте занимает первую строку и не говорит ничего.
+
+#### Короткое описание (до 80 символов)
+
+> Workout diary with an AI coach. Type "100 8" — I count the rest myself.
+
+#### Описание в одну строку для списков
+
+> I log your sets, count tonnage and records, build a program for your gym, and
+> nudge you when you start skipping.
+
+#### Развёрнутое описание
+
+> I'm your workout diary.
+>
+> Type `100 8` — logged, 100 kg for 8 reps. Or say it out loud: "a hundred for
+> eight". No forms, no dropdowns in the middle of a set.
+>
+> What I do:
+> • count tonnage, records and estimated 1RM for every exercise;
+> • show progress on a chart — so you can see whether you're growing or stuck;
+> • build a program around your gym, experience and goal, then run the workout by it;
+> • answer questions on form and load like a coach, not like a search engine;
+> • check your form on video — send a clip of a set and I'll name what to fix first;
+> • remind you about training when you start skipping;
+> • hand you the workout card as an image — for stories or for the group chat.
+>
+> Food diary, bodyweight, full history, export — all there. Free.
+
+#### Пост для каталогов-архивов (@bots_archive и похожие)
+
+Их формат — один абзац после `ℹ️Description:`, плотный и без переносов, плюс
+языки и теги. Абзац отдельный от «развёрнутого» выше: тот сверстан списком под
+страницу каталога, а этот обязан читаться одной строкой в ленте.
+
+> ℹ️Description: Athlete Diary logs your training, with an AI coach built in.
+> Type "100 8" and the set is down — no forms, no dropdowns. It counts your tonnage,
+> records and estimated 1RM, charts your progress, builds a program around your
+> gym and goal, reviews your form from a video clip, and nudges you when you
+> start skipping. Food diary, bodyweight and full history included. Free.
+>
+> 🌐 Languages: English Russian
+>
+> #️⃣ Tags: #gym #workout #fitness #workouttracker #workoutlog #strength
+> #powerlifting #bodybuilding #aicoach #ai #progress #diary #health #free
+
+Теги подобраны под то, как ищут в таких каналах: сначала общие (#gym, #workout,
+#fitness), потом узкие (#powerlifting, #bodybuilding) — общие приводят объём,
+узкие приводят тех, кто останется.
 
 ## 3. Статья на vc.ru — главный источник первой тысячи
 
