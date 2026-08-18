@@ -71,8 +71,20 @@
     font-size: 30px; font-weight: bold; text-transform: uppercase;
     letter-spacing: 3px; color: #ff4444; text-shadow: 0 0 20px #ff4444;
   }
+  .result-title.win {
+    color: #ffd700; text-shadow: 0 0 24px #ffd700cc, 0 0 46px #ffd70066;
+    font-size: 36px; animation: winPulse 1.7s ease-in-out infinite;
+  }
+  @keyframes winPulse {
+    0%, 100% { transform: scale(1); text-shadow: 0 0 24px #ffd700cc, 0 0 46px #ffd70066; }
+    50% { transform: scale(1.06); text-shadow: 0 0 34px #ffd700ee, 0 0 64px #ffd70099; }
+  }
+  /* Победный экран — самый сочный в игре: тёплое сияние вокруг, а не просто
+     тёмная подложка, как у экрана провала. */
+  #screen-win { background: radial-gradient(circle at 50% 30%, rgba(255,215,0,0.22), rgba(20,17,15,0) 62%); }
+  #win-art { box-shadow: 0 0 44px rgba(255,215,0,0.55), 0 0 0 2px rgba(255,215,0,0.4); }
   .result-score { font-size: 20px; color: #ffd700; }
-  #result-art {
+  #result-art, #win-art {
     width: 104px; height: 104px; object-fit: cover; border-radius: 12px;
     border: 2px solid rgba(255,215,0,0.4); display: none; margin: 0 auto;
   }
@@ -89,10 +101,13 @@
   .result-btn:active { transform: scale(0.97); }
   .result-btn.retry { border-color: #00c850; color: #00c850; background: rgba(0,200,80,0.1); }
   .result-btn.retry:hover { background: rgba(0,200,80,0.25); }
-  #result-status { color: #aaa; font-size: 13px; min-height: 16px; }
+  .result-btn.continue { border-color: #ffd700; color: #ffd700; background: rgba(255,215,0,0.15); }
+  .result-btn.continue:hover { background: rgba(255,215,0,0.3); }
+  #result-status, #win-status { color: #aaa; font-size: 13px; min-height: 16px; }
 
   #flash { position: fixed; inset: 0; pointer-events: none; opacity: 0; transition: opacity 0.15s; }
   #flash.red { background: rgba(255,40,40,0.35); }
+  #flash.gold { background: rgba(255,215,0,0.45); }
 </style>
 </head>
 <body>
@@ -113,7 +128,7 @@
   </div>
 </div>
 
-<!-- ЭКРАН 3: результат -->
+<!-- ЭКРАН 3: результат (провал) -->
 <div id="screen-result" class="screen">
   <div class="screen-inner">
     <div class="result-title" data-i18n="resultTitle">Отказ</div>
@@ -125,6 +140,22 @@
     <button class="result-btn retry" onclick="restartGame()" data-i18n="retryBtn">🔄 Ещё подход</button>
     <button class="result-btn" onclick="submitAndClose()" data-i18n="closeBtn">❌ Закрыть</button>
     <div id="result-status"></div>
+  </div>
+</div>
+
+<!-- ЭКРАН 4: результат (финиш забега) -->
+<div id="screen-win" class="screen">
+  <div class="screen-inner">
+    <div class="result-title win" data-i18n="winTitle">Финиш!</div>
+    <img id="win-art" src="" alt="">
+    <div class="result-score" id="win-score">0 м · 🥤 0</div>
+    <div class="result-stats" id="win-stats"></div>
+    <div class="result-quip" id="win-quip"></div>
+    <div class="result-best" id="win-best"></div>
+    <button class="result-btn continue" onclick="continueRun()" data-i18n="continueBtn">🏃 Бежать дальше</button>
+    <button class="result-btn retry" onclick="restartGame()" data-i18n="newRunBtn">🔄 Новый забег</button>
+    <button class="result-btn" onclick="submitAndClose('win-status')" data-i18n="closeBtn">❌ Закрыть</button>
+    <div id="win-status"></div>
   </div>
 </div>
 
@@ -211,6 +242,12 @@ const STR = {
   zoneStreet: ['УЛИЦА', 'STREET'],
   zoneRoof: ['КРЫША', 'ROOFTOP'],
   zoneLocker: ['РАЗДЕВАЛКА', 'LOCKER ROOM'],
+  zoneFinal: ['ФИНИШНАЯ ПРЯМАЯ', 'FINAL STRETCH'],
+  bossWarn: ['ГЛАВНЫЙ ВЫШИБАЛА!', 'BOSS ENFORCER!'],
+  bossDown: ['ВЫШИБАЛА ПОВЕРЖЕН!', 'ENFORCER DOWN!'],
+  winTitle: ['Финиш!', 'Finish!'],
+  continueBtn: ['🏃 Бежать дальше', '🏃 Keep running'],
+  newRunBtn: ['🔄 Новый забег', '🔄 New run'],
 };
 function tr(key) {
   const pair = STR[key];
@@ -343,6 +380,19 @@ const GROUND = () => H * 0.82;
 let running = false;
 let t = 0, dist = 0, speed = 0, score = 0, best = Math.max(serverBest, +(localStorage.getItem('gymrun_best') || 0));
 let shakeT = 0, lastResult = null;
+// Тряска камеры: только через addShake — держит верхнюю границу (иначе
+// несколько попаданий подряд складываются в неконтролируемый трясущийся
+// экран) и всегда затухает через shakeT -= dt в update() ниже, никогда не
+// зависает на месте.
+const SHAKE_MAX = 0.6;
+function addShake(v) { shakeT = Math.min(SHAKE_MAX, Math.max(shakeT, v)); }
+// Хит-стоп: короткая заморозка игрового времени на решающий момент (смерть,
+// начало финального отрезка, финиш) — dt на это время режется почти в ноль,
+// экран как будто «зависает» на кадр-два, прежде чем действие продолжится.
+// Дёшево (просто масштаб dt в frame()), коротко и с чётким концом — не путать
+// с паузой: рендер и партиклы продолжают тикать, просто очень медленно.
+let hitStopT = 0;
+function addHitStop(v) { hitStopT = Math.max(hitStopT, v); }
 // Комбо: серия подборов без столкновений растит множитель очков (×1…×5).
 // Скорость: старт 400 — уже бодрый бег, а не разминка; разгон +6.5/с заметен
 // на глаз; потолок 820 — предел, на котором ещё честно тянет человек, а не
@@ -357,6 +407,47 @@ let rivalWarned = false;
 // С какой дистанции в пул препятствий подмешивается вышибала (см. spawnObstacle) —
 // не с первой секунды, а когда игрок уже разогнался и освоился.
 const RIVAL_MIN_DIST = 480;
+
+// ── ФИНИШ ЗАБЕГА ─────────────────────────────────────────────────────────────
+// Раньше забег был чисто бесконечным — заказчик много раз жаловался на «бегу
+// просто без конца». Теперь у забега есть цель: FINISH_DIST метров, и
+// заметный ФИНАЛЬНЫЙ ОТРЕЗОК перед ней (свой свет, свой ярлык в HUD вместо
+// имени зоны) с кульминацией — усиленным вышибалой (см. RIVAL_MIN_DIST/pool
+// в spawnObstacle: это тот же персонаж и тот же принцип «перепрыгнуть можно,
+// подкатиться нельзя», просто крупнее, шире и быстрее — не отдельный второй
+// механизм). Дистанцию подобрали так, чтобы обычный забег на средней скорости
+// (разгон SPEED_START→SPEED_CAP) укладывался примерно в 60-90 секунд активной
+// игры — не заявка на рекорд, а один полный подход.
+const FINISH_DIST = 5000;
+const FINAL_STRETCH_LEN = 550;
+const FINAL_STRETCH_START = FINISH_DIST - FINAL_STRETCH_LEN;
+// Босс выходит не в начале отрезка, а незадолго до линии — так забег не
+// становится легче (сложность продолжает расти как обычно всю дистанцию),
+// а получает ОДИН явный решающий момент прямо перед финишем.
+const BOSS_TRIGGER_DIST = FINISH_DIST - 300;
+let finished = false, bossSpawned = false, finalStretchAnnounced = false;
+// Два варианта светового грейда финального отрезка — выбор на весь забег
+// (см. resetGame), чтобы соседние подходы не выглядели одним клипом.
+const FINALE_PALETTES = [
+  { tint: '255,90,54', accent: '#ffb347' },
+  { tint: '255,45,140', accent: '#ff7ad1' },
+];
+let finalePalette = FINALE_PALETTES[0];
+
+// ── РИТМ ЗАБЕГА ──────────────────────────────────────────────────────────────
+// Раньше плотность препятствий/наград зависела только от разгона — забег на
+// любой дистанции ощущался одним и тем же ровным потоком. Ритм задаёт волну
+// «плотный участок препятствий → передышка с бонусами → снова плотный»:
+// период и фаза свои на каждый забег (см. resetGame), поэтому два подряд
+// заезда даже с одинаковым выбором качка чувствуются по-разному.
+let paceLen = 800, paceSeed = 0;
+// 1 — плотный участок (препятствия чаще, награды реже), 0 — передышка
+// (наоборот). Гладкая волна, а не переключатель — плотность нарастает и
+// спадает постепенно, без рывка на границе.
+function paceFactor() {
+  const p = ((dist + paceSeed) % paceLen) / paceLen;
+  return (Math.cos(p * Math.PI * 2) + 1) / 2;
+}
 const mult = () => 1 + Math.min(4, Math.floor(combo / 8));
 const rnd = (a, b) => a + Math.random() * (b - a);
 const pick = a => a[Math.floor(Math.random() * a.length)];
@@ -367,12 +458,23 @@ const P = {
   shield: false, rageT: 0, magnetT: 0, runPhase: 0,
 };
 function resetGame() {
-  t = 0; dist = 0; speed = SPEED_START; score = 0; shakeT = 0;
+  t = 0; dist = 0; speed = SPEED_START; score = 0; shakeT = 0; hitStopT = 0;
   combo = 0; maxCombo = 0; pickups = 0; lastMile = 0; rivalWarned = false;
+  finished = false; bossSpawned = false; finalStretchAnnounced = false;
   P.x = W * 0.26; P.y = GROUND(); P.vy = 0; P.onGround = true; P.jumps = 0; P.slideT = 0;
   P.shield = false; P.rageT = 0; P.magnetT = 0; P.runPhase = 0;
   obstacles.length = 0; items.length = 0; parts.length = 0; toasts.length = 0;
   nextObsAt = 70; nextItemAt = 45;
+  // Разнообразие каток (см. комментарии у ZONES/ритма/FINALE_PALETTES): новый
+  // порядок зон, новая фаза плотности препятствий, новый цветовой грейд
+  // финала — каждый забег своя дистанция ощущений, не заново тот же клип.
+  zoneOrder = [0, 1, 2, 3, 4];
+  for (let i = zoneOrder.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [zoneOrder[i], zoneOrder[j]] = [zoneOrder[j], zoneOrder[i]];
+  }
+  paceLen = rnd(650, 950); paceSeed = rnd(0, paceLen);
+  finalePalette = pick(FINALE_PALETTES);
 }
 
 // Тексты — по TONE_OF_VOICE.md: тренер от первого лица, на «ты», без капса в
@@ -394,6 +496,20 @@ const QUIPS = LANG === 'en' ? [
   ' м. Видел, как ты за предтреником тянулся, — в следующий раз возьмёшь.',
 ];
 
+// Победные реплики — забег закрыт целиком, вышибалу на финише прошёл. Это
+// успех, поэтому без подколок, только поддержка (см. TONE_OF_VOICE.md).
+const WIN_QUIPS = LANG === 'en' ? [
+  " m — the run's yours. Clean finish.",
+  ' m — you made it to the end, no question.',
+  " m. Finish's closed — keep running for the record, or start a fresh run.",
+  ' m — full distance, done. Respect.',
+] : [
+  ' м — забег твой. Взял финиш чисто.',
+  ' м — дошёл до конца, никаких вопросов.',
+  ' м. Финиш закрыл — беги дальше на рекорд или начинай новый заход.',
+  ' м — сделал всю дистанцию. Уважаю.',
+];
+
 // ── ЛОКАЦИИ ──────────────────────────────────────────────────────────────────
 // Пол каждой зоны — заметно другого тона, чем стена/небо (не тот же коричневый
 // на коричневом): так препятствия читаются силуэтом против пола, а не тонут в
@@ -408,7 +524,13 @@ const ZONES = [
   { name: tr('zoneLocker'),   sky: ['#132226', '#1f3a40'], ground: '#3a4d50', groundLine: '#d8f0ef', draw: drawLocker },
 ];
 const ZONE_LEN = 600;
-function zoneIndex() { return Math.floor(dist / ZONE_LEN) % ZONES.length; }
+// Порядок зон тасуется на весь забег (см. resetGame) — тот же набор из пяти
+// локаций, но два подряд забега проходят их в разном порядке, а не одним и
+// тем же заученным маршрутом.
+let zoneOrder = [0, 1, 2, 3, 4];
+function zoneSeqPos() { return Math.floor(dist / ZONE_LEN) % zoneOrder.length; }
+function zoneIndex() { return zoneOrder[zoneSeqPos()]; }
+function nextZoneIndex() { return zoneOrder[(zoneSeqPos() + 1) % zoneOrder.length]; }
 function zoneBlend() {
   const p = (dist % ZONE_LEN) / ZONE_LEN;
   return p > 0.88 ? (p - 0.88) / 0.12 : 0;
@@ -720,8 +842,25 @@ function spawnObstacle() {
   // (плюс запас на возросшую скорость): препятствия появляются РАНЬШЕ, а не
   // ЧАЩЕ, и время на реакцию у края экрана не сжимается.
   const speedFrac = (speed - SPEED_START) / (SPEED_CAP - SPEED_START);
-  const gapSeconds = rnd(1.3, 2.0) + speedFrac * 0.9;
+  // Ритм забега (см. paceFactor): плотный участок сжимает интервал, передышка
+  // растягивает его — база (скорость/разгон) и так же честна, как раньше.
+  const gapSeconds = (rnd(1.3, 2.0) + speedFrac * 0.9) * (1.32 - 0.62 * paceFactor());
   nextObsAt = dist + gapSeconds * (speed / 7);
+}
+
+// Кульминация забега: усиленный вышибала перед самой линией финиша — тот же
+// персонаж и тот же принцип («перепрыгнуть можно, подкатиться нельзя»), что и
+// у обычного 'rival', но крупнее, шире и быстрее сближается — решающий момент
+// должен быть заметно опаснее рядового столкновения, а не легче него.
+function spawnBoss() {
+  const o = { kind: 'boss', x: W + 90 * SK, w: 44 * SKW, h: 92 * SKW, vx: 140 + speed * 0.22, runPhase: 0 };
+  obstacles.push(o);
+  bigPop(tr('bossWarn'), C_RAGE, W / 2, H * 0.32);
+  addShake(0.3); addHitStop(0.05);
+  // Пока решается исход с боссом, обычный спавн ставим на паузу — иначе рядом
+  // может прилететь ещё одно препятствие и решающий момент превратится в
+  // нечестную кашу вместо одной явной схватки.
+  nextObsAt = Math.max(nextObsAt, dist + 260);
 }
 
 function spawnGuideItems(o) {
@@ -801,6 +940,20 @@ function drawHazardArrow(cx, cy, slide) {
   ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(20,10,5,0.9)'; ctx.stroke();
   ctx.restore();
 }
+// Ореол босса — отдельный от общего obstacleHalo: тот же смысл («опасно,
+// действуй»), но пульсирующее золото вместо тёплого красно-оранжевого —
+// решающий момент забега должен читаться иначе, чем рядовая гантеля, ещё до
+// того, как разберёшь силуэт.
+function bossHalo(cx, cy, rx, ry) {
+  const pulse = 0.5 + 0.5 * Math.sin(t * 9);
+  const g = ctx.createRadialGradient(cx, cy, 1, cx, cy, Math.max(rx, ry));
+  g.addColorStop(0, 'rgba(255,215,0,' + (0.5 + 0.14 * pulse).toFixed(2) + ')');
+  g.addColorStop(0.6, 'rgba(255,150,40,0.22)');
+  g.addColorStop(1, 'rgba(255,150,40,0)');
+  ctx.save(); ctx.fillStyle = g;
+  ctx.beginPath(); ctx.ellipse(cx, cy, rx * (1 + 0.05 * pulse), ry * (1 + 0.05 * pulse), 0, 0, 7); ctx.fill();
+  ctx.restore();
+}
 function drawObstacleHalo(o, gy) {
   const slide = isSlideKind(o.kind);
   let cx, cy, rx, ry;
@@ -810,6 +963,10 @@ function drawObstacleHalo(o, gy) {
   else if (o.kind === 'rack') { cx = o.w / 2 + 38 * SK; cy = gy - o.gap - 4 * SK; rx = o.w / 2 + 60 * SK; ry = 26 * SK; }
   else if (o.kind === 'plate' || o.kind === 'flyplate') { cx = o.w / 2; cy = gy - (o.kind === 'plate' ? o.h / 2 : o.gap + o.h / 2); rx = o.h / 2 + 14 * SKW; ry = o.h / 2 + 14 * SKW; }
   else if (o.kind === 'rival') { cx = o.w / 2; cy = gy - o.h * 0.55; rx = o.w * 0.9; ry = o.h * 0.62; }
+  else if (o.kind === 'boss') {
+    cx = o.w / 2; cy = gy - o.h * 0.55; rx = o.w * 1.15; ry = o.h * 0.7;
+    bossHalo(cx, cy, rx, ry); drawHazardArrow(cx, cy - ry - 16 * SK, false); return;
+  }
   else if (o.kind === 'bag') { cx = o.w / 2; cy = gy - o.gap - 65 * SK; rx = o.w * 0.7; ry = 75 * SK; }
   else if (o.kind === 'cable') { cx = o.w / 2; cy = gy - o.gap; rx = o.w / 2 + 12 * SK; ry = 22 * SK; }
   else return;
@@ -872,6 +1029,17 @@ function drawObstacle(o) {
     // зеркальный разворот, чтобы бежал НАВСТРЕЧУ (лицом влево, к игроку).
     ctx.translate(o.w / 2, gy); ctx.scale(-1, 1);
     drawAthlete(ctx, RIVAL_SKIN, { run: Math.sin(o.runPhase * 14), rage: true, scale: 1.08 * SK, outline: true });
+  }
+  if (o.kind === 'boss') {
+    // Решающая встреча забега: тот же вышибала, что и рядовой 'rival' (см.
+    // drawAthlete/RIVAL_SKIN) — не второй персонаж, а его усиленная версия —
+    // просто крупнее и с золотой обводкой-контуром вместо обычной тёмной, под
+    // цвет собственного ореола (см. bossHalo).
+    ctx.translate(o.w / 2, gy); ctx.scale(-1, 1);
+    ctx.save();
+    ctx.shadowColor = 'rgba(255,190,40,0.9)'; ctx.shadowBlur = 10;
+    drawAthlete(ctx, RIVAL_SKIN, { run: Math.sin(o.runPhase * 14), rage: true, scale: 1.42 * SK, outline: true });
+    ctx.restore();
   }
   if (o.kind === 'bag') {
     // Боксёрская груша на цепи с потолка — свисает и слегка качается из
@@ -980,7 +1148,10 @@ function spawnItems() {
       items.push(mkItem(type, W + 60 * SK + i * 54 * SK, y));
     }
   }
-  nextItemAt = dist + rnd(28, 60);
+  // Та же волна ритма, что и у препятствий (см. paceFactor), но зеркально:
+  // на передышке награды идут гуще, на плотном участке — реже, чтобы
+  // «передышка с бонусами» была не только про пустоту, а про добычу.
+  nextItemAt = dist + rnd(28, 60) * (0.7 + 0.5 * paceFactor());
 }
 function mkItem(type, x, y) { return { type, x, y, t: rnd(0, 6) }; }
 // Пять типов спортпита — каждый со своим силуэтом и цветом, а не одинаковый
@@ -1056,7 +1227,14 @@ function burst(x, y, color, n = 10, sp = 180) {
 }
 const toasts = [];
 function toast(text, color, x, y) {
-  toasts.push({ text, color, t: 0, x: x ?? P.x, y: y ?? P.y - P.h - 30 });
+  toasts.push({ text, color, t: 0, x: x ?? P.x, y: y ?? P.y - P.h - 30, life: 1.2 });
+}
+// Крупный «удар» текста — контрольные точки, победа над боссом, финиш: то же,
+// что toast(), но заметно крупнее, с толстой тёмной обводкой (читается на
+// любом фоне без подложки) и коротким пружинным попаданием на старте, а не
+// плоским появлением — момент должен ЧУВСТВОВАТЬСЯ, а не проскакивать мимо.
+function bigPop(text, color, x, y) {
+  toasts.push({ text, color, t: 0, x: x ?? W / 2, y: y ?? H * 0.32, life: 1.5, big: true });
 }
 
 // ── ИГРОК ────────────────────────────────────────────────────────────────────
@@ -1392,7 +1570,7 @@ function selectFighter(key) {
 
 // ── КОНЕЦ ЗАБЕГА ────────────────────────────────────────────────────────────
 function die() {
-  running = false; sDie(); shakeT = 0.6; flash('red');
+  running = false; sDie(); addShake(SHAKE_MAX); addHitStop(0.09); flash('red');
   burst(P.x, P.y - 30 * SK, C_RAGE, 28, 320);
   const d = Math.floor(dist);
   if (d > best) { best = d; localStorage.setItem('gymrun_best', best); }
@@ -1416,7 +1594,49 @@ function die() {
   setTimeout(() => showScreen('screen-result'), 900);
 }
 
-// «Ещё раз»: рестарт локальный — вопросы качать не надо, результат шлём фоном
+// Забег выигран: дистанция дошла до FINISH_DIST живым — не рядовая смерть,
+// самый сочный момент в игре, поэтому отдача заметно крупнее обычного
+// столкновения (см. die()): золотой залп партиклов, полновесный хит-стоп,
+// вспышка и большой попап прямо на канвасе, ДО перехода на победный экран.
+function winRun() {
+  if (finished) return;
+  finished = true; running = false;
+  sPower(); addShake(SHAKE_MAX); addHitStop(0.16); flash('gold');
+  bigPop(tr('winTitle'), C_GOLD, W / 2, H * 0.36);
+  for (let k = 0; k < 3; k++) burst(P.x + k * 10, P.y - 30 * SK - k * 20, C_GOLD, 34, 420);
+  burst(P.x, P.y - 60 * SK, '#fff6d8', 20, 300);
+  const d = Math.floor(dist);
+  if (d > best) { best = d; localStorage.setItem('gymrun_best', best); }
+  lastResult = {
+    distance: d, score, fighter: selectedFighter,
+    best, maxCombo, pickups, gameTimestamp: Date.now(), won: true,
+  };
+  const art = document.getElementById('win-art');
+  art.style.display = 'none';
+  art.onload = () => { art.style.display = 'block'; };
+  art.onerror = () => { art.style.display = 'none'; };
+  art.src = 'assets/game/' + selectedFighter + '.jpg';
+  document.getElementById('win-score').textContent = d + ' ' + tr('unit') + ' · 🥤 ' + score;
+  document.getElementById('win-stats').textContent =
+    tr('resultStats') + maxCombo + tr('resultStatsPickups') + pickups;
+  // «ПРИВЕТ АТЛЕТ! »/«HEY ATHLETE! » — брендовая формула, имя не подставляем (см. TONE_OF_VOICE.md)
+  document.getElementById('win-quip').textContent = tr('greeting') + d + pick(WIN_QUIPS);
+  document.getElementById('win-best').textContent = tr('resultBest') + best + ' ' + tr('unit');
+  document.getElementById('win-status').textContent = '';
+  setTimeout(() => showScreen('screen-win'), 850);
+}
+
+// «Бежать дальше»: рекордсмену не обязательно начинать заново — забег
+// продолжается тем же подходом на ещё бо́льшую дистанцию, за FINISH_DIST
+// (эндлесс-хвост). finished остаётся true, поэтому winRun() второй раз не
+// сработает и не откроет тот же экран заново.
+function continueRun() {
+  showScreen('game');
+  running = true;
+  last = performance.now();
+}
+
+// «Ещё раз»/«Новый забег»: рестарт локальный — вопросы качать не надо, результат шлём фоном
 function restartGame() {
   if (lastResult) submitResult(lastResult); // fire-and-forget, как submit в restartGame совы
   lastResult = null;
@@ -1441,8 +1661,10 @@ async function submitResult(result) {
   }
 }
 
-async function submitAndClose() {
-  const statusEl = document.getElementById('result-status');
+// statusElId — «Отказ» и «Финиш» экраны показывают статус отправки в разных
+// плашках (#result-status / #win-status), логика отправки одна и та же.
+async function submitAndClose(statusElId) {
+  const statusEl = document.getElementById(statusElId || 'result-status');
   if (!window.Telegram?.WebApp) {
     statusEl.textContent = tr('localPrototype');
     return;
@@ -1469,10 +1691,26 @@ function update(dt) {
   const spd = speed * (rage ? 1.55 : 1);
   dist += spd * dt / 7;
   speed = Math.min(SPEED_CAP, speed + SPEED_RAMP * dt);
-  // Милстоны: каждые 500 м — отметка, чтобы у бесконечного забега были этапы.
-  if (Math.floor(dist / 500) > lastMile) {
+  // Милстоны: каждые 500 м — отметка, чтобы у забега были заметные этапы.
+  // На финальном отрезке этот же счётчик подряд задел бы FINISH_DIST — не
+  // дублируем событие, у финиша своя, более крупная реплика (см. winRun).
+  if (!finished && Math.floor(dist / 500) > lastMile && dist < FINAL_STRETCH_START) {
     lastMile = Math.floor(dist / 500);
-    toast(lastMile * 500 + ' ' + tr('unit') + '!', C_GOLD, W / 2, H * 0.3);
+    bigPop(lastMile * 500 + ' ' + tr('unit') + '!', C_GOLD, W / 2, H * 0.3);
+    burst(W / 2, H * 0.3, C_GOLD, 10, 160);
+  }
+  // Финальный отрезок: заметно другой свет вместо очередной зоны (см. render —
+  // finaleGlow) и решающая встреча с усиленным вышибалой прямо перед линией
+  // (см. spawnBoss) — не смягчаем сложность, а даём забегу видимую цель и
+  // кульминацию, как договаривались с заказчиком.
+  if (!finished && !finalStretchAnnounced && dist >= FINAL_STRETCH_START) {
+    finalStretchAnnounced = true;
+    bigPop(tr('zoneFinal'), C_GOLD, W / 2, H * 0.3);
+    addShake(0.22); addHitStop(0.1);
+  }
+  if (!finished && !bossSpawned && dist >= BOSS_TRIGGER_DIST) {
+    bossSpawned = true;
+    spawnBoss();
   }
   if (P.rageT > 0) P.rageT -= dt;
   if (P.magnetT > 0) P.magnetT -= dt;
@@ -1496,19 +1734,35 @@ function update(dt) {
     const o = obstacles[i];
     o.x -= spd * dt + (o.vx ? o.vx * dt : 0);
     if (o.kind === 'plate') o.rot -= dt * 7;
-    if (o.kind === 'rival') o.runPhase += dt * ((spd + o.vx) / 300);
+    if (o.kind === 'rival' || o.kind === 'boss') o.runPhase += dt * ((spd + o.vx) / 300);
     if (o.kind === 'bag') o.swingPhase += dt * 2.4;
     if (o.kind === 'cable') o.wavePhase += dt * 7;
     if (o.kind === 'flyplate') { o.rot -= dt * 12; o.floatPhase += dt * 3.5; o.age += dt; }
-    if (o.x < -400 * SK) { obstacles.splice(i, 1); continue; }
+    if (o.x < -400 * SK) {
+      // Босс, пройденный живым (перепрыгнут, не срублен яростью) — решающий
+      // момент забега состоялся и выигран: не рядовой уход препятствия за
+      // край экрана, а маленькая победа со своей отдачей.
+      if (o.kind === 'boss' && !o.cleared) {
+        o.cleared = true;
+        score += 60 * mult();
+        bigPop(tr('bossDown'), C_GOLD, W / 2, H * 0.34);
+        burst(P.x, P.y - 30 * SK, C_GOLD, 30, 360);
+        addShake(0.28); addHitStop(0.06); sPower();
+      }
+      obstacles.splice(i, 1); continue;
+    }
     const b = obstacleBox(o);
     if (pb.x < b.x + b.w && pb.x + pb.w > b.x && pb.y < b.y + b.h && pb.y + pb.h > b.y) {
       if (rage) {
         // Ярость награждает за агрессию: снос — это очки, а не только спецэффект.
-        const bonus = 25 * mult();
+        // Босс сносом — тоже победа над ним, поэтому получает свою фанфару,
+        // а не тот же тихий подсчёт очков, что рядовая гантеля.
+        const isBoss = o.kind === 'boss';
+        const bonus = (isBoss ? 120 : 25) * mult();
         score += bonus;
-        burst(o.x + (o.w || 30) / 2, GROUND() - 24 * SK, '#9aa0ab', 18, 340);
-        shakeT = Math.max(shakeT, 0.18);
+        burst(o.x + (o.w || 30) / 2, GROUND() - 24 * SK, isBoss ? C_GOLD : '#9aa0ab', isBoss ? 42 : 18, isBoss ? 420 : 340);
+        addShake(isBoss ? SHAKE_MAX : 0.18);
+        if (isBoss) { addHitStop(0.08); o.cleared = true; bigPop(tr('bossDown'), C_GOLD, W / 2, H * 0.34); }
         obstacles.splice(i, 1);
         toast('+' + bonus, C_RAGE, o.x, GROUND() - 80 * SK);
         continue;
@@ -1516,7 +1770,7 @@ function update(dt) {
       if (P.shield) {
         P.shield = false; combo = 0;
         obstacles.splice(i, 1); burst(P.x, P.y - 30 * SK, '#7ea8ff', 20, 300);
-        toast(tr('shieldSaved'), '#7ea8ff'); shakeT = 0.3; continue;
+        bigPop(tr('shieldSaved'), '#7ea8ff', P.x, P.y - P.h - 20); addShake(0.3); continue;
       }
       die(); return;
     }
@@ -1537,16 +1791,29 @@ function update(dt) {
       burst(it.x, it.y, d.color, 12, 220);
       const before = mult();
       combo += 1; maxCombo = Math.max(maxCombo, combo);
-      if (d.power === 'shield') { P.shield = true; pickups += 1; toast(tr('shieldPickup'), '#7ea8ff'); sPower(); burst(P.x, P.y - 40 * SK, '#7ea8ff', 16, 260); }
-      else if (d.power === 'rage') { P.rageT = 4.2; pickups += 1; toast(tr('rageToast'), C_RAGE); sPower(); shakeT = 0.3; burst(P.x, P.y - 40 * SK, C_RAGE, 18, 300); }
-      else if (d.power === 'magnet') { P.magnetT = 6; pickups += 1; toast(tr('magnetToast'), '#67c26a'); sPower(); burst(P.x, P.y - 40 * SK, '#67c26a', 16, 260); }
-      else { score += d.pts * mult(); sPick(); }
-      if (mult() > before) toast(tr('streakPrefix') + mult(), C_GOLD);
+      // Пауэрапы и жирные награды — не рутинный подбор, а маленькое событие:
+      // крупный текст, а не рядовой тост, плюс лёгкий толчок камеры.
+      if (d.power === 'shield') { P.shield = true; pickups += 1; bigPop(tr('shieldPickup'), '#7ea8ff', it.x, it.y - 30); sPower(); burst(P.x, P.y - 40 * SK, '#7ea8ff', 16, 260); }
+      else if (d.power === 'rage') { P.rageT = 4.2; pickups += 1; bigPop(tr('rageToast'), C_RAGE, it.x, it.y - 30); sPower(); addShake(0.3); burst(P.x, P.y - 40 * SK, C_RAGE, 18, 300); }
+      else if (d.power === 'magnet') { P.magnetT = 6; pickups += 1; bigPop(tr('magnetToast'), '#67c26a', it.x, it.y - 30); sPower(); burst(P.x, P.y - 40 * SK, '#67c26a', 16, 260); }
+      else {
+        const gain = d.pts * mult();
+        score += gain; sPick();
+        // Обычный шейкер — не событие, мелькает слишком часто, чтобы каждый раз
+        // выскакивал текст. Батончик (жирная награда с верхнего яруса) — уже да.
+        if (it.type === 'bar') toast('+' + gain, d.color, it.x, it.y - 26);
+      }
+      if (mult() > before) bigPop(tr('streakPrefix') + mult(), C_GOLD, it.x, it.y - 34);
     }
   }
 
   toasts.forEach(ts => { ts.t += dt; ts.y -= 30 * dt; });
-  for (let i = toasts.length - 1; i >= 0; i--) if (toasts[i].t > 1.2) toasts.splice(i, 1);
+  for (let i = toasts.length - 1; i >= 0; i--) if (toasts[i].t > (toasts[i].life || 1.2)) toasts.splice(i, 1);
+
+  // Линия финиша — проверяем последней: столкновение с боссом в этом же кадре
+  // (die(), выше) уже вышло бы из update() раньше и до победы дело не дошло
+  // бы — забег до конца нужно ДОБЕЖАТЬ живым, а не просто отмотать дистанцию.
+  if (!finished && dist >= FINISH_DIST) { winRun(); return; }
 }
 
 // ── РЕНДЕР ──────────────────────────────────────────────────────────────────
@@ -1650,8 +1917,15 @@ function render() {
   if (!cv.classList.contains('active')) return;
   ctx.save();
   if (shakeT > 0) ctx.translate(rnd(-9, 9) * shakeT, rnd(-9, 9) * shakeT);
+  // Финальный отрезок обязан ЧИТАТЬСЯ финалом, а не ещё одной зоной: свой
+  // цветовой грейд поверх обычной зоны (не подменяет её рисунок, а красит
+  // сверху — работает при любой из пяти локаций) и нарастание к линии финиша.
+  // finalePalette — один из двух вариантов на забег (см. resetGame), чтобы
+  // соседние подходы не выглядели одним и тем же клипом.
+  const inFinale = !finished && dist >= FINAL_STRETCH_START;
+  const finaleP = inFinale ? Math.min(1, (dist - FINAL_STRETCH_START) / FINAL_STRETCH_LEN) : 0;
   const zi = zoneIndex(), zb = zoneBlend();
-  const z = ZONES[zi], zn = ZONES[(zi + 1) % ZONES.length];
+  const z = ZONES[zi], zn = ZONES[nextZoneIndex()];
 
   const g = ctx.createLinearGradient(0, 0, 0, GROUND());
   g.addColorStop(0, z.sky[0]); g.addColorStop(1, z.sky[1]);
@@ -1665,6 +1939,26 @@ function render() {
   ctx.fillStyle = z.groundLine; ctx.fillRect(0, GROUND(), W, 3);
   drawTrack(z);
 
+  if (inFinale) {
+    // Тёплый (или, во втором варианте палитры, электро-розовый) грейд поверх
+    // всей сцены — усиливается по мере приближения к линии, плюс медленный
+    // пульс, чтобы отрезок ощущался «живым», а не просто перекрашенным фоном.
+    const pulse = 0.5 + 0.5 * Math.sin(t * 5.5);
+    ctx.fillStyle = 'rgba(' + finalePalette.tint + ',' + (0.07 + 0.11 * finaleP + 0.05 * pulse).toFixed(3) + ')';
+    ctx.fillRect(0, 0, W, H);
+    // Энергетические лучи по краям кадра, сходящиеся к центру — тот же приём,
+    // что в «рекламных» раннерах: рамка кадра сама подсказывает «сейчас
+    // что-то решится», без единого слова текста.
+    const rayN = 5, rw = 3 + 5 * finaleP;
+    ctx.strokeStyle = finalePalette.accent + Math.round((0.16 + 0.14 * pulse) * 255).toString(16).padStart(2, '0');
+    ctx.lineWidth = rw;
+    for (let i = 0; i < rayN; i++) {
+      const ry = H * (0.12 + i * 0.19) + Math.sin(t * 3 + i) * 6;
+      ctx.beginPath(); ctx.moveTo(0, ry); ctx.lineTo(W * 0.14, ry); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(W, ry); ctx.lineTo(W * 0.86, ry); ctx.stroke();
+    }
+  }
+
   if (P.rageT > 0) {
     ctx.fillStyle = 'rgba(255,90,54,' + (0.10 + 0.06 * Math.sin(t * 20)) + ')';
     ctx.fillRect(0, 0, W, H);
@@ -1676,15 +1970,31 @@ function render() {
 
   parts.forEach(p => { ctx.globalAlpha = Math.max(0, p.life * 1.6); ctx.fillStyle = p.color; ctx.fillRect(p.x, p.y, p.r, p.r); });
   ctx.globalAlpha = 1;
+  // bigPop() — крупный текст контрольных точек/победы над боссом/финиша:
+  // толстая тёмная обводка вместо тени (читается на любом фоне без подложки)
+  // и короткий пружинный «щелчок» масштаба на появлении — момент должен
+  // чувствоваться, а не проскакивать плоской надписью.
   toasts.forEach(ts => {
-    ctx.globalAlpha = Math.max(0, 1 - ts.t / 1.2);
-    ctx.font = "900 16px 'Courier New', monospace"; ctx.textAlign = 'center';
-    // Игрок стоит у левого края — тост, отцентрованный на нём, обрезался бы
+    const life = ts.life || 1.2;
+    ctx.globalAlpha = Math.max(0, 1 - ts.t / life);
+    const big = !!ts.big;
+    ctx.font = (big ? "900 34px" : "900 16px") + " 'Courier New', monospace";
+    ctx.textAlign = 'center';
+    const pop = big ? 1 + Math.max(0, 0.22 - ts.t) * 2.6 : 1;
+    const half = (ctx.measureText(ts.text).width / 2) * pop;
+    // Игрок стоит у левого края — текст, отцентрованный на нём, обрезался бы
     // экраном; прижимаем к видимой области.
-    const half = ctx.measureText(ts.text).width / 2;
     const tx = Math.max(half + 8, Math.min(W - half - 8, ts.x));
-    ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fillText(ts.text, tx + 1.5, ts.y + 1.5);
-    ctx.fillStyle = ts.color; ctx.fillText(ts.text, tx, ts.y);
+    ctx.save();
+    ctx.translate(tx, ts.y); ctx.scale(pop, pop);
+    if (big) {
+      ctx.lineJoin = 'round'; ctx.lineWidth = 6; ctx.strokeStyle = 'rgba(10,7,5,0.92)';
+      ctx.strokeText(ts.text, 0, 0);
+    } else {
+      ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fillText(ts.text, 1.5, 1.5);
+    }
+    ctx.fillStyle = ts.color; ctx.fillText(ts.text, 0, 0);
+    ctx.restore();
   });
   ctx.globalAlpha = 1;
 
@@ -1695,15 +2005,27 @@ function render() {
   // своей строке, а не в ряд), зона — в отдельной плашке по центру над всем
   // остальным. Так при любой длине чисел и любом наборе активных бонусов
   // элементы не наезжают друг на друга.
-  ctx.textAlign = 'left'; ctx.fillStyle = C_GOLD;
-  ctx.font = "900 26px 'Courier New', monospace";
-  ctx.fillText(Math.floor(dist) + ' ' + tr('unit'), 20, 40);
+  // Дистанция и очки — самые читаемые цифры на экране (референс — рекламные
+  // раннеры вроде Last War): крупный шрифт и толстая тёмная обводка вместо
+  // тонкой заливки, чтобы цифра прочитывалась мгновенно на любом фоне зоны.
+  ctx.textAlign = 'left';
+  ctx.font = "900 32px 'Courier New', monospace";
+  ctx.lineJoin = 'round'; ctx.lineWidth = 5; ctx.strokeStyle = 'rgba(10,7,5,0.85)';
+  ctx.strokeText(Math.floor(dist) + ' ' + tr('unit'), 20, 42);
+  ctx.fillStyle = C_GOLD; ctx.fillText(Math.floor(dist) + ' ' + tr('unit'), 20, 42);
   ctx.font = "700 13px 'Courier New', monospace"; ctx.fillStyle = 'rgba(242,237,227,0.65)';
-  ctx.fillText(tr('hudRecord') + Math.max(best, Math.floor(dist)) + ' ' + tr('unit'), 20, 60);
+  ctx.fillText(tr('hudRecord') + Math.max(best, Math.floor(dist)) + ' ' + tr('unit'), 20, 64);
 
-  ctx.textAlign = 'right'; ctx.fillStyle = '#e94f64'; ctx.font = "900 22px 'Courier New', monospace";
+  // Обводка на эмодзи-глифе часто рисуется криво в разных рендерерах — стро́чим
+  // только цифры, значок ставим отдельным fillText без обводки рядом с ними.
+  ctx.textAlign = 'right'; ctx.font = "900 28px 'Courier New', monospace";
   const multNow = mult();
-  ctx.fillText('🥤 ' + score + (multNow > 1 ? '  ×' + multNow : ''), W - 20, 40);
+  const numText = score + (multNow > 1 ? '  ×' + multNow : '');
+  ctx.lineWidth = 5; ctx.strokeStyle = 'rgba(10,7,5,0.85)';
+  ctx.strokeText(numText, W - 20, 42);
+  ctx.fillStyle = '#e94f64'; ctx.fillText(numText, W - 20, 42);
+  const numW = ctx.measureText(numText).width;
+  ctx.font = "900 24px 'Courier New', monospace"; ctx.fillText('🥤', W - 26 - numW, 42);
 
   // Бонусы — вертикальный столбик под очками, начинается ниже левого блока
   // (y=76), чтобы никогда не залезать на зональную плашку по центру.
@@ -1720,20 +2042,29 @@ function render() {
   if (P.shield) { ctx.textAlign = 'right'; ctx.font = "800 12px 'Courier New', monospace"; ctx.fillStyle = '#7ea8ff'; ctx.fillText(tr('hudShield'), W - 20, iy); iy += 22; }
 
   // Плашка с названием зоны — своя тёмная подложка, поэтому что бы ни было под
-  // ней, надпись остаётся читаемой.
+  // ней, надпись остаётся читаемой. На финальном отрезке она заметно другая:
+  // золотая, пульсирующая, с меткой «ФИНИШНАЯ ПРЯМАЯ» вместо имени зоны — сам
+  // HUD подтверждает, что это уже не рядовая локация.
+  const labelText = inFinale ? tr('zoneFinal') : z.name;
   ctx.font = "800 11px 'Courier New', monospace";
-  const zoneW = ctx.measureText(z.name).width + 24;
-  ctx.fillStyle = 'rgba(10,10,14,0.45)';
+  const zoneW = ctx.measureText(labelText).width + 24;
+  ctx.fillStyle = inFinale ? 'rgba(60,26,8,0.55)' : 'rgba(10,10,14,0.45)';
   ctx.beginPath(); ctx.roundRect(W / 2 - zoneW / 2, 14, zoneW, 20, 10); ctx.fill();
-  ctx.textAlign = 'center'; ctx.fillStyle = 'rgba(242,237,227,0.75)';
-  ctx.fillText(z.name, W / 2, 28);
+  if (inFinale) {
+    ctx.strokeStyle = finalePalette.accent + 'aa'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.roundRect(W / 2 - zoneW / 2, 14, zoneW, 20, 10); ctx.stroke();
+  }
+  ctx.textAlign = 'center';
+  ctx.fillStyle = inFinale ? ('rgba(255,215,0,' + (0.75 + 0.2 * Math.sin(t * 6)).toFixed(2) + ')') : 'rgba(242,237,227,0.75)';
+  ctx.fillText(labelText, W / 2, 28);
   ctx.restore();
 }
 
 // ── ЦИКЛ ────────────────────────────────────────────────────────────────────
 let last = performance.now();
 function frame(now) {
-  const dt = Math.min(0.033, (now - last) / 1000); last = now;
+  let dt = Math.min(0.033, (now - last) / 1000); last = now;
+  if (hitStopT > 0) { hitStopT = Math.max(0, hitStopT - dt); dt *= 0.08; }
   update(dt); render();
   requestAnimationFrame(frame);
 }
