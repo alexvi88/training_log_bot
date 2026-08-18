@@ -1590,14 +1590,33 @@ _FINISHED_BY_USER = (
 )
 
 
-async def acquisition_funnel(days: int = 30, alive_days: int = 7) -> list[aiosqlite.Row]:
+# Окно отчётов о росте: либо «последние N дней», либо один конкретный день.
+#
+# День отдельным случаем, а не «/growth 1»: скользящие сутки от «сейчас» — это
+# вчерашний вечер плюс сегодняшнее утро, и на вопрос «сколько пришло сегодня»
+# они отвечают чужим числом. Границы наивно-локальные, как и сам created_at
+# (now_iso — это dt.datetime.now(), часы сервера).
+def _growth_window(days: int, day: Optional[str] = None) -> tuple[str, Optional[str]]:
+    """(с какого момента, по какой) — верхняя граница есть только у дня."""
+    if day:
+        start = dt.date.fromisoformat(day)
+        return (
+            dt.datetime.combine(start, dt.time.min).isoformat(timespec="seconds"),
+            dt.datetime.combine(start + dt.timedelta(days=1), dt.time.min).isoformat(timespec="seconds"),
+        )
+    return (dt.datetime.now() - dt.timedelta(days=days)).isoformat(timespec="seconds"), None
+
+
+async def acquisition_funnel(
+    days: int = 30, alive_days: int = 7, *, day: Optional[str] = None
+) -> list[aiosqlite.Row]:
     """По источникам: сколько пришло, сколько записало первую тренировку, сколько живо.
 
     Окно считается по дате регистрации, а не по дате тренировок: канал отвечает
     за тех, кого привёл, даже если тренируются они месяцем позже. `legacy`
     (пришедшие до появления атрибуции) в отчёт не попадает — см. _migrate_schema.
     """
-    since = (dt.datetime.now() - dt.timedelta(days=days)).isoformat(timespec="seconds")
+    since, until = _growth_window(days, day)
     alive_since = (dt.datetime.now() - dt.timedelta(days=alive_days)).isoformat(timespec="seconds")
     cur = await conn().execute(
         "SELECT COALESCE(u.source, 'unknown') AS source, "
@@ -1606,9 +1625,10 @@ async def acquisition_funnel(days: int = 30, alive_days: int = 7) -> list[aiosql
         "COUNT(*) FILTER (WHERE f.finished >= 3) AS engaged, "
         "COUNT(*) FILTER (WHERE f.last_finished_at >= ?) AS alive "
         f"FROM users u LEFT JOIN ({_FINISHED_BY_USER}) f ON f.user_id = u.telegram_id "
-        "WHERE u.created_at >= ? AND COALESCE(u.source, 'unknown') <> 'legacy' "
+        "WHERE u.created_at >= ? AND (? IS NULL OR u.created_at < ?) "
+        "AND COALESCE(u.source, 'unknown') <> 'legacy' "
         "GROUP BY source ORDER BY users DESC, source",
-        (alive_since, since),
+        (alive_since, since, until, until),
     )
     return await cur.fetchall()
 
@@ -1627,7 +1647,7 @@ _LOGGED_SET_BY_USER = (
 )
 
 
-async def onboarding_funnel(days: int = 30) -> list[aiosqlite.Row]:
+async def onboarding_funnel(days: int = 30, *, day: Optional[str] = None) -> list[aiosqlite.Row]:
     """Воронка новичка по источникам: всего пришло → начали тренировку →
     записали хоть один подход → завершили первую.
 
@@ -1637,7 +1657,7 @@ async def onboarding_funnel(days: int = 30) -> list[aiosqlite.Row]:
     до тренировки вовсе, открыл её и не тронул снаряд, или начал подход и
     бросил, не закрыв сессию.
     """
-    since = (dt.datetime.now() - dt.timedelta(days=days)).isoformat(timespec="seconds")
+    since, until = _growth_window(days, day)
     cur = await conn().execute(
         "SELECT COALESCE(u.source, 'unknown') AS source, "
         "COUNT(*) AS users, "
@@ -1648,9 +1668,10 @@ async def onboarding_funnel(days: int = 30) -> list[aiosqlite.Row]:
         f"LEFT JOIN ({_STARTED_BY_USER}) st ON st.user_id = u.telegram_id "
         f"LEFT JOIN ({_LOGGED_SET_BY_USER}) ls ON ls.user_id = u.telegram_id "
         f"LEFT JOIN ({_FINISHED_BY_USER}) f ON f.user_id = u.telegram_id "
-        "WHERE u.created_at >= ? AND COALESCE(u.source, 'unknown') <> 'legacy' "
+        "WHERE u.created_at >= ? AND (? IS NULL OR u.created_at < ?) "
+        "AND COALESCE(u.source, 'unknown') <> 'legacy' "
         "GROUP BY source ORDER BY users DESC, source",
-        (since,),
+        (since, until, until),
     )
     return await cur.fetchall()
 
@@ -6989,14 +7010,15 @@ async def record_donation(user_id: int, charge_id: str, stars: int) -> bool:
         return cur.rowcount > 0
 
 
-async def donation_totals(days: int = 30) -> tuple[int, int]:
-    """(звёзд, человек) за последние `days` дней — для /growth. Идемпотентность
-    по charge_id (record_donation) уже гарантирует, что повторно доставленный
-    платёж не задвоит сумму."""
-    since = (dt.datetime.now() - dt.timedelta(days=days)).isoformat(timespec="seconds")
+async def donation_totals(days: int = 30, *, day: Optional[str] = None) -> tuple[int, int]:
+    """(звёзд, человек) за последние `days` дней или за один день — для /growth.
+    Идемпотентность по charge_id (record_donation) уже гарантирует, что повторно
+    доставленный платёж не задвоит сумму."""
+    since, until = _growth_window(days, day)
     cur = await conn().execute(
-        "SELECT COALESCE(SUM(stars), 0), COUNT(DISTINCT user_id) FROM donations WHERE created_at >= ?",
-        (since,),
+        "SELECT COALESCE(SUM(stars), 0), COUNT(DISTINCT user_id) FROM donations "
+        "WHERE created_at >= ? AND (? IS NULL OR created_at < ?)",
+        (since, until, until),
     )
     stars, people = await cur.fetchone()
     return stars, people

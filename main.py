@@ -381,6 +381,7 @@ async def _setup_commands(bot: Bot) -> None:
                 BotCommand(command="ai_dialogs", description="Диалоги с AI-тренером (админ)"),
                 BotCommand(command="pushes", description="Лог отправленных пушей (админ)"),
                 BotCommand(command="activity", description="Что делают пользователи (админ)"),
+                BotCommand(command="growth", description="Воронка по источникам (админ)"),
                 BotCommand(command="broadcast", description="Рассылка всем пользователям (админ)"),
                 BotCommand(command="announce", description="Релизный анонс: проверить и разослать (админ)"),
                 BotCommand(command="admin_wipe", description="Снести TEST_USER_ID для проверки онбординга (админ)"),

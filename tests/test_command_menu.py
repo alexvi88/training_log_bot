@@ -121,6 +121,7 @@ async def test_admin_scope_targets_only_admin_chat_and_includes_admin_command(mo
         "ai_dialogs",
         "pushes",
         "activity",
+        "growth",
         "broadcast",
         "announce",
         "admin_wipe",
@@ -138,3 +139,49 @@ async def test_no_admin_scope_registered_when_admin_id_unset(monkeypatch):
     assert bot.set_my_commands.call_count == 2
     for call in bot.set_my_commands.call_args_list:
         assert isinstance(call.kwargs["scope"], BotCommandScopeDefault)
+
+
+def _slash_commands_in_handlers() -> set[str]:
+    """Каждая команда, на которую в коде есть хендлер, — прямо из исходников.
+
+    Разбор AST, а не импорт роутеров: роутеры — модульные синглтоны, их уже
+    собирает tests/test_routing.py, а список команд нужен независимо от того,
+    в каком порядке кто импортировался.
+    """
+    found: set[str] = set()
+    for path in [*Path("handlers").glob("*.py"), Path("main.py")]:
+        for node in ast.walk(ast.parse(path.read_text())):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "Command"
+            ):
+                for arg in node.args:
+                    if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                        found.add(arg.value)
+    return found
+
+
+@pytest.mark.asyncio
+async def test_every_slash_command_is_in_the_quick_menu(monkeypatch):
+    """Ни одной команды мимо «/»-меню: чего там нет, того для человека нет.
+
+    /growth так и выпал — хендлер есть, в меню его не было, и вспомнить о нём
+    можно было только по памяти. Тест держит список сам, поэтому следующая
+    забытая команда краснеет здесь, а не обнаруживается через полгода.
+    """
+    monkeypatch.setattr(config, "ADMIN_ID", 12345)
+    # Условные команды (/mcp, /game, /community) висят на адресах, которых в
+    # тестовом окружении нет, — включаем, иначе проверять было бы нечего.
+    monkeypatch.setattr(config, "mcp_available", lambda: True)
+    monkeypatch.setattr(config, "community_available", lambda: True)
+    bot = AsyncMock()
+
+    await _setup_commands(bot)
+
+    listed = {
+        command.command
+        for call in bot.set_my_commands.call_args_list
+        for command in call.args[0]
+    }
+    assert _slash_commands_in_handlers() - listed == set()

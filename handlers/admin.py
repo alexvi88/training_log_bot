@@ -406,32 +406,77 @@ GROWTH_WINDOW_DAYS = 30
 GROWTH_REFERRERS = 10
 
 
+def _growth_day(raw: str) -> Optional[str]:
+    """Аргумент `/growth` как конкретный день — ISO-дата или None, если это не день.
+
+    Понимает «сегодня»/«today», «вчера»/«yesterday», «18.08», «18.08.2026» и
+    «2026-08-18». День отдельно от «/growth 1» нарочно: скользящие сутки от
+    «сейчас» — это вчерашний вечер плюс сегодняшнее утро, а на вопрос «сколько
+    пришло сегодня» так отвечать нельзя.
+    """
+    word = raw.strip().lower()
+    today = dt.date.today()
+    if word in ("сегодня", "today"):
+        return today.isoformat()
+    if word in ("вчера", "yesterday"):
+        return (today - dt.timedelta(days=1)).isoformat()
+    for fmt, needs_year in (("%Y-%m-%d", True), ("%d.%m.%Y", True), ("%d.%m", False)):
+        try:
+            parsed = dt.datetime.strptime(word, fmt).date()
+        except ValueError:
+            continue
+        # «18.08» без года — это год текущий, а если такой день ещё не наступил,
+        # то прошлый: в августе «31.12» спрашивают про прошлый декабрь.
+        if not needs_year:
+            parsed = parsed.replace(year=today.year)
+            if parsed > today:
+                parsed = parsed.replace(year=today.year - 1)
+        return parsed.isoformat()
+    return None
+
+
 @router.message(Command("growth"))
 async def cmd_growth(message: Message, state: FSMContext):
     """Воронка по источникам: за что заплатили и что с этого пришло.
 
     Без аргументов — окно GROWTH_WINDOW_DAYS дней; `/growth 7` сужает его, чтобы
-    смотреть свежий закуп, не утопая в накопленной истории.
+    смотреть свежий закуп, не утопая в накопленной истории. `/growth сегодня`
+    (а также «вчера» и любая дата вида 18.08 / 2026-08-18) — ровно один день, от
+    полуночи до полуночи.
     """
     if not _is_admin(message.from_user.id):
         return
     days = GROWTH_WINDOW_DAYS
-    parts = (message.text or "").split()
-    if len(parts) > 1 and parts[1].isdigit() and int(parts[1]) > 0:
-        days = int(parts[1])
-    funnel = await db.acquisition_funnel(days, alive_days=acquisition.ALIVE_WINDOW_DAYS)
-    onboarding = await db.onboarding_funnel(days)
+    day: Optional[str] = None
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) > 1:
+        arg = parts[1].strip()
+        if arg.isdigit() and int(arg) > 0:
+            days = int(arg)
+        else:
+            day = _growth_day(arg)
+            if day is None:
+                await message.answer(
+                    "Не понял период. Пиши «/growth 7» — за столько дней, "
+                    "«/growth сегодня» или «/growth 18.08» — за один день."
+                )
+                return
+    funnel = await db.acquisition_funnel(
+        days, alive_days=acquisition.ALIVE_WINDOW_DAYS, day=day
+    )
+    onboarding = await db.onboarding_funnel(days, day=day)
     referrers = await db.top_referrers(GROWTH_REFERRERS)
-    donation_stars, donation_people = await db.donation_totals(days)
+    donation_stars, donation_people = await db.donation_totals(days, day=day)
+    period = acquisition.period_label(days, day)
     bot_username = await sharing.get_bot_username(message.bot)
     text = (
-        f"{acquisition.format_funnel(funnel, days)}\n\n"
-        f"{acquisition.format_onboarding_funnel(onboarding, days)}\n\n"
+        f"{acquisition.format_funnel(funnel, days, day)}\n\n"
+        f"{acquisition.format_onboarding_funnel(onboarding, days, day)}\n\n"
         f"{acquisition.format_referrers(referrers)}\n\n"
         # Донат («Поддержать проект», handlers/donate.py) — не часть воронки
         # источников: это разовый жест, не шаг в онбординге, и число просто
         # рядом, а не в теле format_funnel/format_onboarding_funnel.
-        f"❤️ Донаты за {days} дн.: {donation_stars} ⭐ от {donation_people} человек.\n\n"
+        f"❤️ Донаты за {period}: {donation_stars} ⭐ от {donation_people} человек.\n\n"
         f"Ссылка под новый канал: <code>{acquisition.channel_link(bot_username, 'имя')}</code> — "
         f"вместо «имя» латиница, цифры и «_»."
     )
