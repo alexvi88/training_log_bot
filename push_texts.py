@@ -7,7 +7,7 @@ same category on two different days doesn't see the same line twice in a row.
 
 Voice rules (see PUSH_IDEAS.md and TONE_OF_VOICE.md's "English voice" for the
 full writeup):
-  - Every push opens with "ПРИВЕТ АТЛЕТ! " (ru) / "YO ATHLETE! " (en) —
+  - Every push opens with "ПРИВЕТ АТЛЕТ! " (ru) / "HEY ATHLETE! " (en) —
     capitalized, никогда "боец"/"пользователь" ("fighter"/"user"/"buddy").
   - Jabs are reserved for the skip-milestone categories only, in both languages.
   - Every other category stays supportive. The two positive categories

@@ -424,7 +424,7 @@ async def _screen_food_history(db, user_id: int) -> str:
 
 async def _screen_workout_onboarding(db, user_id: int) -> str:
     """Приветствие новичка на главном меню (handlers.workout._onboarding) —
-    самый важный текст продукта, формула «YO ATHLETE!»."""
+    самый важный текст продукта, формула «HEY ATHLETE!»."""
     return workout._onboarding()
 
 

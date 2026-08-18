@@ -129,8 +129,8 @@ async def test_choosing_language_writes_db_and_shows_onboarding(fresh_db):
     answered = callback.message.answer.await_args_list
     onboarding_text = edited.args[0] if edited is not None else answered[-1].args[0]
     # Выбрал английский — приветствие тоже приходит по-английски (формула
-    # "YO ATHLETE!", см. TONE_OF_VOICE.md).
-    assert "YO ATHLETE" in onboarding_text
+    # "HEY ATHLETE!", см. TONE_OF_VOICE.md).
+    assert "HEY ATHLETE" in onboarding_text
 
 
 async def test_unknown_language_code_in_callback_is_ignored(fresh_db):

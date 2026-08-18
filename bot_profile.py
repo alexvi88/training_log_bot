@@ -43,7 +43,7 @@ SHORT_DESCRIPTION_EN = i18n.t_in("en", "bot.short_description")
 #
 # Английское имя — не перевод «ДНЕВНИК АТЛЕТА», а его смысл словами из глоссария
 # гайда: `log`, а не `diary`, и `athlete` — то же слово, что в брендовой формуле
-# YO ATHLETE!.
+# HEY ATHLETE!.
 NAME = i18n.t_in("ru", "bot.name")
 NAME_EN = i18n.t_in("en", "bot.name")
 

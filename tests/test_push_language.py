@@ -39,8 +39,8 @@ def test_no_cyrillic_in_any_english_push_variant():
 def test_yo_athlete_formula_in_every_english_push():
     for category in push_texts._CATEGORIES:
         for text in push_texts.TEXTS_BY_LANG["en"][category]:
-            assert text.startswith("YO ATHLETE!") or text.startswith("YO ATHLETE."), text
-            assert "YO ATHLETE," not in text, text
+            assert text.startswith("HEY ATHLETE!") or text.startswith("HEY ATHLETE."), text
+            assert "HEY ATHLETE," not in text, text
             for banned in ("fighter", "buddy", " user "):
                 assert banned not in text.lower(), text
 
@@ -99,5 +99,5 @@ async def test_background_loop_sets_language_per_user(fresh_db, monkeypatch):
 
     assert set(captured) == {ru_user, en_user}
     assert captured[ru_user].startswith("ПРИВЕТ АТЛЕТ!")
-    assert captured[en_user].startswith("YO ATHLETE!")
+    assert captured[en_user].startswith("HEY ATHLETE!")
     assert not i18n_coverage.has_cyrillic(captured[en_user])
