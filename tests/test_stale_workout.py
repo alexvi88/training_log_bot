@@ -13,6 +13,7 @@ from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
 
 import config
+import timeutil
 from handlers import workout
 
 pytestmark = pytest.mark.asyncio
@@ -297,7 +298,10 @@ async def test_resume_workout_button_reaches_stale_workout_even_when_warning_is_
     db = fresh_db
     stale_started = dt.datetime.now() - dt.timedelta(hours=config.STALE_WORKOUT_HOURS + 1)
     workout_id = await db.create_workout(user_id, started_at=stale_started.isoformat())
-    today = dt.date.today().isoformat()
+    # Местный день пользователя — cmd_start ищет ack по нему же (timeutil.user_today),
+    # а свежий атлет заводится на config.DEFAULT_TZ_OFFSET (+3); UTC-дата тут
+    # мимо ключа возле полуночи UTC.
+    today = timeutil.user_today(await db.get_user(user_id)).isoformat()
     await db.record_limit_ack(user_id, workout.STALE_WORKOUT_WARNING_KIND, today)
 
     kb = await workout._main_menu_kb(user_id, await db.get_active_workout(user_id))

@@ -23,6 +23,7 @@ import announcements
 import config
 import db
 import formatting
+import i18n
 import keyboards
 import push_texts
 import ui
@@ -61,9 +62,9 @@ async def limit_ack(callback: CallbackQuery):
     await ai_limits.record_ack(user_id, kind)
     with suppress(TelegramAPIError):
         await callback.message.edit_text(
-            f"{callback.message.text}\n\n👌 Понял, до конца суток пропускаю."
+            f"{callback.message.text}\n\n{i18n.t('limit.preview.ack_suffix')}"
         )
-    await callback.answer("Пропускаю до конца суток")
+    await callback.answer(i18n.t("limit.preview.ack_toast"))
 
 
 async def _show_users_list(target: Message | CallbackQuery, state: FSMContext, page: int):
