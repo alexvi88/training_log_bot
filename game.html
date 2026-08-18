@@ -339,7 +339,7 @@ const SKW = 1.6;
 // крупный предмет (gainer, 34px в высоту) на экране был заметно меньше
 // головы игрока (диаметр головы ≈ 37px при масштабе игрока SK).
 const SI = 0.8;
-const GROUND = () => H * 0.66;
+const GROUND = () => H * 0.82;
 let running = false;
 let t = 0, dist = 0, speed = 0, score = 0, best = Math.max(serverBest, +(localStorage.getItem('gymrun_best') || 0));
 let shakeT = 0, lastResult = null;
@@ -538,29 +538,93 @@ function silhouettes(color, parallax) {
     ctx.fillRect(bx + 160, by - 34, 70, 10); ctx.fillRect(bx + 170, by - 24, 10, 24); ctx.fillRect(bx + 200, by - 24, 10, 24);
   }
 }
-// КРЫША: открытая площадка над залом, закатный город внизу, турники и антенны
-// на переднем плане. Элементы крупные и редкие — так же, как договорились для
-// подвала/неона, чтобы на разгоне фон не рябил.
+// КРЫША: открытая площадка над залом с видом на закатный город — четыре
+// слоя (марево горизонта → дальний город → средний город с окнами → ближние
+// антенны/тросы) плюс парапет и вентиляционные короба на переднем плане,
+// тем же приёмом «слоёв с разным параллаксом», что и в неон-зале/на улице
+// (см. drawNeon/drawStreet). Элементы крупные и редкие, чтобы на разгоне
+// не рябило (см. комментарий в drawBasement).
 function drawRoof(a) {
   ctx.globalAlpha = a;
-  ctx.fillStyle = 'rgba(255,150,80,0.16)';
-  ctx.fillRect(0, GROUND() * 0.32, W, GROUND() * 0.3);
-  const cw = 260, coff = (dist * 1.1) % cw;
-  ctx.fillStyle = 'rgba(40,24,44,0.55)';
+  const gy = GROUND();
+
+  // Закатное марево у горизонта — тёплый градиент над дальними крышами.
+  const hazeTop = gy * 0.26, hazeBot = gy * 0.66;
+  const hg = ctx.createLinearGradient(0, hazeTop, 0, hazeBot);
+  hg.addColorStop(0, 'rgba(255,150,80,0.24)'); hg.addColorStop(1, 'rgba(255,150,80,0)');
+  ctx.fillStyle = hg; ctx.fillRect(0, hazeTop, W, hazeBot - hazeTop);
+  // Низкое солнце над крышами.
+  const sg = ctx.createRadialGradient(W * 0.72, gy * 0.34, 4, W * 0.72, gy * 0.34, 120);
+  sg.addColorStop(0, 'rgba(255,210,150,0.5)'); sg.addColorStop(1, 'rgba(255,210,150,0)');
+  ctx.fillStyle = sg; ctx.fillRect(W * 0.72 - 120, gy * 0.34 - 120, 240, 240);
+
+  // Дальний город: мелкие тёмные силуэты, самый медленный параллакс — держит
+  // глубину горизонта, не отвлекая деталями.
+  const fw = 150, foff = (dist * 0.6) % fw;
+  ctx.fillStyle = 'rgba(35,22,40,0.5)';
+  for (let x = -fw; x < W + fw; x += fw) {
+    const i = Math.floor(x / fw + 800);
+    const hgt = 40 + (i % 4) * 22;
+    ctx.fillRect(x - foff, gy - hgt - 46, fw - 18, hgt);
+  }
+
+  // Средний город: силуэты крупнее, с сеткой окон разной яркости — часть
+  // тёмные (никого нет), часть светятся тёплым (кто-то ещё качается) —
+  // здание читается домом, а не плоским прямоугольником.
+  const cw = 200, coff = (dist * 1.15) % cw;
   for (let x = -cw; x < W + cw; x += cw) {
-    const hgt = 90 + ((x / cw | 0) % 3) * 40;
-    ctx.fillRect(x - coff, GROUND() - hgt - 70, cw - 60, hgt);
+    const i = Math.floor(x / cw + 900);
+    const hgt = 100 + (i % 3) * 46, bx = x - coff, bw = cw - 46, by = gy - hgt - 36;
+    ctx.fillStyle = 'rgba(38,24,42,0.78)';
+    ctx.fillRect(bx, by, bw, hgt);
+    ctx.fillStyle = 'rgba(20,12,22,0.5)'; ctx.fillRect(bx, by, bw, 5); // край крыши темнее
+    const cols = Math.max(1, Math.floor(bw / 24)), rows = Math.max(1, Math.floor(hgt / 22));
+    for (let wy = 0; wy < rows; wy++) for (let wx = 0; wx < cols; wx++) {
+      const lit = (wx + wy * 2 + i) % 3 === 0;
+      ctx.fillStyle = lit ? 'rgba(255,196,120,0.55)' : 'rgba(10,6,14,0.4)';
+      ctx.fillRect(bx + 7 + wx * 24, by + 9 + wy * 22, 12, 13);
+    }
   }
-  const pw = 420, poff = (dist * 3.0) % pw;
-  for (let x = -pw; x < W + pw; x += pw) {
-    const px = x - poff + pw * 0.25;
-    ctx.fillStyle = 'rgba(60,66,76,0.9)';
-    ctx.fillRect(px - 3, GROUND() - 92, 5, 92); ctx.fillRect(px + 73, GROUND() - 92, 5, 92);
-    ctx.fillRect(px - 5, GROUND() - 94, 86, 6);
-    ctx.fillStyle = 'rgba(150,160,175,0.8)';
-    ctx.fillRect(px + 130, GROUND() - 160, 3, 160);
-    ctx.beginPath(); ctx.arc(px + 131, GROUND() - 160, 4, 0, 7); ctx.fill();
+
+  // Антенны на крышах: две мачты с мигающим сигнальным огоньком и провисшим
+  // тросом между ними — фирменный силуэт «мы на крыше», а не абстрактный блок.
+  const pw2 = 400, poff2 = (dist * 1.9) % pw2;
+  for (let x = -pw2; x < W + pw2; x += pw2) {
+    const ax = x - poff2 + pw2 * 0.22, ax2 = ax + 150, ah = 74, ah2 = 46;
+    ctx.strokeStyle = 'rgba(150,160,175,0.85)'; ctx.lineWidth = 3; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(ax, gy - 96); ctx.lineTo(ax, gy - 96 - ah); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(ax2, gy - 74); ctx.lineTo(ax2, gy - 74 - ah2); ctx.stroke();
+    // короткие траверсы антенны
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(ax - 9, gy - 96 - ah * 0.6); ctx.lineTo(ax + 9, gy - 96 - ah * 0.6); ctx.stroke();
+    // провисший трос между мачтами
+    ctx.strokeStyle = 'rgba(120,128,140,0.55)'; ctx.lineWidth = 1.6;
+    ctx.beginPath(); ctx.moveTo(ax, gy - 96 - ah); ctx.quadraticCurveTo((ax + ax2) / 2, gy - 96 - ah + 30, ax2, gy - 74 - ah2); ctx.stroke();
+    // мигающий сигнальный огонёк
+    ctx.fillStyle = 'rgba(255,60,60,' + (0.5 + 0.4 * Math.sin(t * 4 + ax * 0.05)).toFixed(2) + ')';
+    ctx.beginPath(); ctx.arc(ax, gy - 96 - ah, 4, 0, 7); ctx.fill();
   }
+
+  // Ближний план: вентиляционные короба на крыше, самый быстрый параллакс —
+  // читаются крупно и явно, как объекты «рядом», а не часть заднего фона.
+  const sf = speedFrac();
+  const vw = 260, voff = (dist * 2.6) % vw;
+  ctx.fillStyle = 'rgba(120,100,110,' + (0.6 - 0.2 * sf).toFixed(2) + ')';
+  for (let x = -vw; x < W + vw; x += vw) {
+    const vx = x - voff + vw * 0.5;
+    ctx.beginPath(); ctx.roundRect(vx, gy - 46, 48, 46, 5); ctx.fill();
+    ctx.fillStyle = 'rgba(30,20,26,0.55)';
+    ctx.fillRect(vx + 6, gy - 38, 36, 6); ctx.fillRect(vx + 6, gy - 25, 36, 6);
+    ctx.strokeStyle = 'rgba(150,160,175,0.5)'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(vx + 24, gy - 46); ctx.lineTo(vx + 24, gy - 64); ctx.stroke();
+    ctx.fillStyle = 'rgba(120,100,110,' + (0.6 - 0.2 * sf).toFixed(2) + ')';
+  }
+
+  // Парапет — невысокая стена по кромке крыши вдоль всей дорожки, отделяет
+  // город от площадки, на которой бежит атлет.
+  ctx.fillStyle = 'rgba(58,32,54,0.92)'; ctx.fillRect(0, gy - 16, W, 16);
+  ctx.fillStyle = 'rgba(255,190,140,0.3)'; ctx.fillRect(0, gy - 16, W, 3);
+
   ctx.globalAlpha = 1;
 }
 // РАЗДЕВАЛКА: кафель крупными плитами, шкафчики рядами, пар от душевых.
@@ -686,9 +750,37 @@ function fillStroke(fill) {
   ctx.fillStyle = fill; ctx.fill();
   ctx.lineWidth = LW; ctx.strokeStyle = 'rgba(16,11,8,0.85)'; ctx.stroke();
 }
+// Светлый ореол позади препятствия — тот же приём, что уже спасает читаемость
+// спортпита в тёмных зонах (см. drawItem). Тёмная обводка (fillStroke) сама по
+// себе не помогает, когда фон ЗА препятствием и так тёмный — контура тогда не
+// видно ни с одной стороны. Мягкое светлое пятно даёт светлоту, отличную от
+// фона, при ЛЮБОМ цвете стены/пола — работает как рассеянный свет со стороны
+// зрителя, а не «набор плоских блоков». Форма и размер — под силуэт каждого
+// вида препятствия, а не общий прямоугольник на всю (нередко завышенную под
+// прыжок) коробку столкновения — см. obstacleBox().
+function obstacleHalo(cx, cy, rx, ry) {
+  const g = ctx.createRadialGradient(cx, cy, 1, cx, cy, Math.max(rx, ry));
+  g.addColorStop(0, 'rgba(255,244,225,0.34)');
+  g.addColorStop(0.7, 'rgba(255,244,225,0.14)');
+  g.addColorStop(1, 'rgba(255,244,225,0)');
+  ctx.save(); ctx.fillStyle = g;
+  ctx.beginPath(); ctx.ellipse(cx, cy, rx, ry, 0, 0, 7); ctx.fill();
+  ctx.restore();
+}
+function drawObstacleHalo(o, gy) {
+  if (o.kind === 'dumb') obstacleHalo(o.w / 2, gy - o.h / 2, o.w / 2 + 12 * SKW, o.h / 2 + 12 * SKW);
+  else if (o.kind === 'kettle') obstacleHalo(o.w / 2, gy - o.h * 0.55, o.h * 0.62, o.h * 0.72);
+  else if (o.kind === 'bench') obstacleHalo(o.w / 2, gy - o.h / 2, o.w / 2 + 10 * SKW, o.h / 2 + 14 * SKW);
+  else if (o.kind === 'rack') obstacleHalo(o.w / 2 + 38 * SK, gy - o.gap - 4 * SK, o.w / 2 + 60 * SK, 26 * SK);
+  else if (o.kind === 'plate' || o.kind === 'flyplate') obstacleHalo(o.w / 2, gy - (o.kind === 'plate' ? o.h / 2 : o.gap + o.h / 2), o.h / 2 + 14 * SKW, o.h / 2 + 14 * SKW);
+  else if (o.kind === 'rival') obstacleHalo(o.w / 2, gy - o.h * 0.55, o.w * 0.9, o.h * 0.62);
+  else if (o.kind === 'bag') obstacleHalo(o.w / 2, gy - o.gap - 65 * SK, o.w * 0.7, 75 * SK);
+  else if (o.kind === 'cable') obstacleHalo(o.w / 2, gy - o.gap, o.w / 2 + 12 * SK, 22 * SK);
+}
 function drawObstacle(o) {
   const gy = GROUND();
   ctx.save(); ctx.translate(o.x, 0);
+  drawObstacleHalo(o, gy);
   if (o.kind === 'dumb') {
     // Гантель: два круглых блина на концах грифа + рифлёная рукоять —
     // силуэт читается с одного взгляда, в отличие от прежних квадратных блоков.
@@ -1118,11 +1210,25 @@ function drawAthlete(c, fighter, opts) {
   }
   c.restore();
 }
+// Верхушка двойного прыжка (особенно если он взят почти у пика первого) может
+// в игровых координатах уйти заметно выше того, что помещается в кадр над
+// HUD — сама механика (vy/гравитация) от этого не меняется ни на пиксель,
+// коллизии считаются по настоящему P.y как и раньше (см. update/obstacleBox).
+// Здесь ограничиваем только ОТРИСОВКУ: выше этой линии экрана фигура рисуется
+// «зависшей» — визуальная точка опоры перестаёт подниматься дальше, хотя
+// P.y продолжает расти как обычно, и как только реальный P.y возвращается
+// ниже отметки, отрисовка плавно (без скачка) продолжает следовать за ним.
+// Обычный одиночный и типичный двойной прыжок до этой отметки не долетают —
+// подрезка касается только редкого «прыжка на пике прыжка».
+const PLAYER_VISUAL_MIN_Y = 275;
+function playerRenderY() { return Math.max(P.y, PLAYER_VISUAL_MIN_Y); }
 function drawPlayer() {
-  ctx.save(); ctx.translate(P.x, P.y);
+  const ry = playerRenderY();
+  ctx.save(); ctx.translate(P.x, ry);
   // Тень под ногами — крупнее и темнее нового масштаба, сжимается в прыжке
-  // пропорционально высоте отрыва от земли (см. ниже drawShadow).
-  drawShadow(GROUND() - P.y, SK);
+  // пропорционально высоте отрыва от земли (см. ниже drawShadow). Считаем от
+  // той же отрисовочной высоты ry, чтобы тень не «отставала» от подрезанной фигуры.
+  drawShadow(GROUND() - ry, SK);
   drawAthlete(ctx, selectedFighter, {
     sliding: P.slideT > 0,
     run: P.onGround ? Math.sin(P.runPhase * 14) : 0.4,
