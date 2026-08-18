@@ -1986,12 +1986,21 @@ function render() {
     ctx.font = (big ? "900 34px" : "900 16px") + " 'Courier New', monospace";
     ctx.textAlign = 'center';
     const pop = big ? 1 + Math.max(0, 0.22 - ts.t) * 2.6 : 1;
-    const half = (ctx.measureText(ts.text).width / 2) * pop;
+    // Длинная реплика на узком экране («КРЕАТИН СПАС» на 390px) шире вьюпорта.
+    // Одним прижатием к краю это НЕ лечится: при 2*half+16 > W клэмп ниже
+    // вырождается (нижняя граница становится больше верхней) и текст уезжает
+    // за оба края разом — так и было видно на живом прогоне. Поэтому сначала
+    // ужимаем масштаб до ширины экрана, и только потом прижимаем.
+    const baseHalf = ctx.measureText(ts.text).width / 2;
+    const maxHalf = (W - 16) / 2;
+    const fit = baseHalf * pop > maxHalf ? maxHalf / (baseHalf * pop) : 1;
+    const scale = pop * fit;
+    const half = baseHalf * scale;
     // Игрок стоит у левого края — текст, отцентрованный на нём, обрезался бы
     // экраном; прижимаем к видимой области.
     const tx = Math.max(half + 8, Math.min(W - half - 8, ts.x));
     ctx.save();
-    ctx.translate(tx, ts.y); ctx.scale(pop, pop);
+    ctx.translate(tx, ts.y); ctx.scale(scale, scale);
     if (big) {
       ctx.lineJoin = 'round'; ctx.lineWidth = 6; ctx.strokeStyle = 'rgba(10,7,5,0.92)';
       ctx.strokeText(ts.text, 0, 0);
