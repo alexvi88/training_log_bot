@@ -71,8 +71,20 @@
     font-size: 30px; font-weight: bold; text-transform: uppercase;
     letter-spacing: 3px; color: #ff4444; text-shadow: 0 0 20px #ff4444;
   }
+  .result-title.win {
+    color: #ffd700; text-shadow: 0 0 24px #ffd700cc, 0 0 46px #ffd70066;
+    font-size: 36px; animation: winPulse 1.7s ease-in-out infinite;
+  }
+  @keyframes winPulse {
+    0%, 100% { transform: scale(1); text-shadow: 0 0 24px #ffd700cc, 0 0 46px #ffd70066; }
+    50% { transform: scale(1.06); text-shadow: 0 0 34px #ffd700ee, 0 0 64px #ffd70099; }
+  }
+  /* Победный экран — самый сочный в игре: тёплое сияние вокруг, а не просто
+     тёмная подложка, как у экрана провала. */
+  #screen-win { background: radial-gradient(circle at 50% 30%, rgba(255,215,0,0.22), rgba(20,17,15,0) 62%); }
+  #win-art { box-shadow: 0 0 44px rgba(255,215,0,0.55), 0 0 0 2px rgba(255,215,0,0.4); }
   .result-score { font-size: 20px; color: #ffd700; }
-  #result-art {
+  #result-art, #win-art {
     width: 104px; height: 104px; object-fit: cover; border-radius: 12px;
     border: 2px solid rgba(255,215,0,0.4); display: none; margin: 0 auto;
   }
@@ -89,10 +101,13 @@
   .result-btn:active { transform: scale(0.97); }
   .result-btn.retry { border-color: #00c850; color: #00c850; background: rgba(0,200,80,0.1); }
   .result-btn.retry:hover { background: rgba(0,200,80,0.25); }
-  #result-status { color: #aaa; font-size: 13px; min-height: 16px; }
+  .result-btn.continue { border-color: #ffd700; color: #ffd700; background: rgba(255,215,0,0.15); }
+  .result-btn.continue:hover { background: rgba(255,215,0,0.3); }
+  #result-status, #win-status { color: #aaa; font-size: 13px; min-height: 16px; }
 
   #flash { position: fixed; inset: 0; pointer-events: none; opacity: 0; transition: opacity 0.15s; }
   #flash.red { background: rgba(255,40,40,0.35); }
+  #flash.gold { background: rgba(255,215,0,0.45); }
 </style>
 </head>
 <body>
@@ -113,7 +128,7 @@
   </div>
 </div>
 
-<!-- ЭКРАН 3: результат -->
+<!-- ЭКРАН 3: результат (провал) -->
 <div id="screen-result" class="screen">
   <div class="screen-inner">
     <div class="result-title" data-i18n="resultTitle">Отказ</div>
@@ -125,6 +140,22 @@
     <button class="result-btn retry" onclick="restartGame()" data-i18n="retryBtn">🔄 Ещё подход</button>
     <button class="result-btn" onclick="submitAndClose()" data-i18n="closeBtn">❌ Закрыть</button>
     <div id="result-status"></div>
+  </div>
+</div>
+
+<!-- ЭКРАН 4: результат (финиш забега) -->
+<div id="screen-win" class="screen">
+  <div class="screen-inner">
+    <div class="result-title win" data-i18n="winTitle">Финиш!</div>
+    <img id="win-art" src="" alt="">
+    <div class="result-score" id="win-score">0 м · 🥤 0</div>
+    <div class="result-stats" id="win-stats"></div>
+    <div class="result-quip" id="win-quip"></div>
+    <div class="result-best" id="win-best"></div>
+    <button class="result-btn continue" onclick="continueRun()" data-i18n="continueBtn">🏃 Бежать дальше</button>
+    <button class="result-btn retry" onclick="restartGame()" data-i18n="newRunBtn">🔄 Новый забег</button>
+    <button class="result-btn" onclick="submitAndClose('win-status')" data-i18n="closeBtn">❌ Закрыть</button>
+    <div id="win-status"></div>
   </div>
 </div>
 
@@ -211,6 +242,12 @@ const STR = {
   zoneStreet: ['УЛИЦА', 'STREET'],
   zoneRoof: ['КРЫША', 'ROOFTOP'],
   zoneLocker: ['РАЗДЕВАЛКА', 'LOCKER ROOM'],
+  zoneFinal: ['ФИНИШНАЯ ПРЯМАЯ', 'FINAL STRETCH'],
+  bossWarn: ['ГЛАВНЫЙ ВЫШИБАЛА!', 'BOSS ENFORCER!'],
+  bossDown: ['ВЫШИБАЛА ПОВЕРЖЕН!', 'ENFORCER DOWN!'],
+  winTitle: ['Финиш!', 'Finish!'],
+  continueBtn: ['🏃 Бежать дальше', '🏃 Keep running'],
+  newRunBtn: ['🔄 Новый забег', '🔄 New run'],
 };
 function tr(key) {
   const pair = STR[key];
@@ -315,10 +352,47 @@ const sPower = () => { beep(620, .08, 'triangle', .05, 200); setTimeout(() => be
 const sDie = () => { thud(200, 44, .38, .085); setTimeout(() => thud(150, 36, .5, .07), 150); };
 
 // ── СОСТОЯНИЕ ────────────────────────────────────────────────────────────────
-const GROUND = () => H * 0.80;
+// Масштаб мира: раньше бегун был 58px (7% высоты экрана) и стоял на линии
+// H*0.80 — 70%+ кадра над головой оставалось пустым небом. SK поднимает все
+// пиксельные размеры мира (игрок, препятствия, просветы, прыжок) в 2.5 раза
+// СОГЛАСОВАННО: скорость скролла (SPEED_*, px/с) не трогаем — это она отвечает
+// за баланс/сложность, — а высоту прыжка и гравитацию масштабируем ОБЕ на SK,
+// поэтому апекс прыжка растёт в SK раз, а время полёта (и вся синхронизация с
+// препятствиями) остаётся тем же, что и до масштабирования.
+const SK = 2.5;
+// Прыжок — величина ФИКСИРОВАННОЙ длительности (v0/g не меняются от скорости
+// бега), поэтому его горизонтальный охват = speed*flightTime не растёт с SK.
+// Если прыжковые препятствия (гантель/гиря/скамья/блин/вышибала) масштабировать
+// по ширине на весь SK, на минимальной скорости они перестают влезать целиком
+// в охват прыжка — реально проверено автопилотом, игра стала непроходимой.
+// SKW — отдельный, более скромный масштаб для ширины (и, для сохранения
+// силуэта, высоты) именно этих «прыжковых» препятствий и ширины игрока.
+// Подкатные препятствия (стойка/груша/канат/блин-на-подкате) от этой проблемы
+// не страдают: длительность подката пересчитывается от текущей скорости живьём
+// (см. slide()), поэтому их можно спокойно оставить на полном SK.
+const SKW = 1.6;
+// Спортпит рисуется своим, куда более скромным масштабом: на SK/SKW банка
+// предтреника получалась почти с торс героя. SI подобран так, чтобы самый
+// крупный предмет (gainer, 34px в высоту) на экране был заметно меньше
+// головы игрока (диаметр головы ≈ 37px при масштабе игрока SK).
+const SI = 0.8;
+const GROUND = () => H * 0.82;
 let running = false;
 let t = 0, dist = 0, speed = 0, score = 0, best = Math.max(serverBest, +(localStorage.getItem('gymrun_best') || 0));
 let shakeT = 0, lastResult = null;
+// Тряска камеры: только через addShake — держит верхнюю границу (иначе
+// несколько попаданий подряд складываются в неконтролируемый трясущийся
+// экран) и всегда затухает через shakeT -= dt в update() ниже, никогда не
+// зависает на месте.
+const SHAKE_MAX = 0.6;
+function addShake(v) { shakeT = Math.min(SHAKE_MAX, Math.max(shakeT, v)); }
+// Хит-стоп: короткая заморозка игрового времени на решающий момент (смерть,
+// начало финального отрезка, финиш) — dt на это время режется почти в ноль,
+// экран как будто «зависает» на кадр-два, прежде чем действие продолжится.
+// Дёшево (просто масштаб dt в frame()), коротко и с чётким концом — не путать
+// с паузой: рендер и партиклы продолжают тикать, просто очень медленно.
+let hitStopT = 0;
+function addHitStop(v) { hitStopT = Math.max(hitStopT, v); }
 // Комбо: серия подборов без столкновений растит множитель очков (×1…×5).
 // Скорость: старт 400 — уже бодрый бег, а не разминка; разгон +6.5/с заметен
 // на глаз; потолок 820 — предел, на котором ещё честно тянет человек, а не
@@ -333,22 +407,74 @@ let rivalWarned = false;
 // С какой дистанции в пул препятствий подмешивается вышибала (см. spawnObstacle) —
 // не с первой секунды, а когда игрок уже разогнался и освоился.
 const RIVAL_MIN_DIST = 480;
+
+// ── ФИНИШ ЗАБЕГА ─────────────────────────────────────────────────────────────
+// Раньше забег был чисто бесконечным — заказчик много раз жаловался на «бегу
+// просто без конца». Теперь у забега есть цель: FINISH_DIST метров, и
+// заметный ФИНАЛЬНЫЙ ОТРЕЗОК перед ней (свой свет, свой ярлык в HUD вместо
+// имени зоны) с кульминацией — усиленным вышибалой (см. RIVAL_MIN_DIST/pool
+// в spawnObstacle: это тот же персонаж и тот же принцип «перепрыгнуть можно,
+// подкатиться нельзя», просто крупнее, шире и быстрее — не отдельный второй
+// механизм). Дистанцию подобрали так, чтобы обычный забег на средней скорости
+// (разгон SPEED_START→SPEED_CAP) укладывался примерно в 60-90 секунд активной
+// игры — не заявка на рекорд, а один полный подход.
+const FINISH_DIST = 5000;
+const FINAL_STRETCH_LEN = 550;
+const FINAL_STRETCH_START = FINISH_DIST - FINAL_STRETCH_LEN;
+// Босс выходит не в начале отрезка, а незадолго до линии — так забег не
+// становится легче (сложность продолжает расти как обычно всю дистанцию),
+// а получает ОДИН явный решающий момент прямо перед финишем.
+const BOSS_TRIGGER_DIST = FINISH_DIST - 300;
+let finished = false, bossSpawned = false, finalStretchAnnounced = false;
+// Два варианта светового грейда финального отрезка — выбор на весь забег
+// (см. resetGame), чтобы соседние подходы не выглядели одним клипом.
+const FINALE_PALETTES = [
+  { tint: '255,90,54', accent: '#ffb347' },
+  { tint: '255,45,140', accent: '#ff7ad1' },
+];
+let finalePalette = FINALE_PALETTES[0];
+
+// ── РИТМ ЗАБЕГА ──────────────────────────────────────────────────────────────
+// Раньше плотность препятствий/наград зависела только от разгона — забег на
+// любой дистанции ощущался одним и тем же ровным потоком. Ритм задаёт волну
+// «плотный участок препятствий → передышка с бонусами → снова плотный»:
+// период и фаза свои на каждый забег (см. resetGame), поэтому два подряд
+// заезда даже с одинаковым выбором качка чувствуются по-разному.
+let paceLen = 800, paceSeed = 0;
+// 1 — плотный участок (препятствия чаще, награды реже), 0 — передышка
+// (наоборот). Гладкая волна, а не переключатель — плотность нарастает и
+// спадает постепенно, без рывка на границе.
+function paceFactor() {
+  const p = ((dist + paceSeed) % paceLen) / paceLen;
+  return (Math.cos(p * Math.PI * 2) + 1) / 2;
+}
 const mult = () => 1 + Math.min(4, Math.floor(combo / 8));
 const rnd = (a, b) => a + Math.random() * (b - a);
 const pick = a => a[Math.floor(Math.random() * a.length)];
 
 const P = {
-  x: 0, y: 0, vy: 0, w: 34, h: 58,
+  x: 0, y: 0, vy: 0, w: 34 * SKW, h: 58 * SK,
   onGround: true, jumps: 0, slideT: 0,
   shield: false, rageT: 0, magnetT: 0, runPhase: 0,
 };
 function resetGame() {
-  t = 0; dist = 0; speed = SPEED_START; score = 0; shakeT = 0;
+  t = 0; dist = 0; speed = SPEED_START; score = 0; shakeT = 0; hitStopT = 0;
   combo = 0; maxCombo = 0; pickups = 0; lastMile = 0; rivalWarned = false;
-  P.x = W * 0.22; P.y = GROUND(); P.vy = 0; P.onGround = true; P.jumps = 0; P.slideT = 0;
+  finished = false; bossSpawned = false; finalStretchAnnounced = false;
+  P.x = W * 0.26; P.y = GROUND(); P.vy = 0; P.onGround = true; P.jumps = 0; P.slideT = 0;
   P.shield = false; P.rageT = 0; P.magnetT = 0; P.runPhase = 0;
   obstacles.length = 0; items.length = 0; parts.length = 0; toasts.length = 0;
   nextObsAt = 70; nextItemAt = 45;
+  // Разнообразие каток (см. комментарии у ZONES/ритма/FINALE_PALETTES): новый
+  // порядок зон, новая фаза плотности препятствий, новый цветовой грейд
+  // финала — каждый забег своя дистанция ощущений, не заново тот же клип.
+  zoneOrder = [0, 1, 2, 3, 4];
+  for (let i = zoneOrder.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [zoneOrder[i], zoneOrder[j]] = [zoneOrder[j], zoneOrder[i]];
+  }
+  paceLen = rnd(650, 950); paceSeed = rnd(0, paceLen);
+  finalePalette = pick(FINALE_PALETTES);
 }
 
 // Тексты — по TONE_OF_VOICE.md: тренер от первого лица, на «ты», без капса в
@@ -370,16 +496,41 @@ const QUIPS = LANG === 'en' ? [
   ' м. Видел, как ты за предтреником тянулся, — в следующий раз возьмёшь.',
 ];
 
+// Победные реплики — забег закрыт целиком, вышибалу на финише прошёл. Это
+// успех, поэтому без подколок, только поддержка (см. TONE_OF_VOICE.md).
+const WIN_QUIPS = LANG === 'en' ? [
+  " m — the run's yours. Clean finish.",
+  ' m — you made it to the end, no question.',
+  " m. Finish's closed — keep running for the record, or start a fresh run.",
+  ' m — full distance, done. Respect.',
+] : [
+  ' м — забег твой. Взял финиш чисто.',
+  ' м — дошёл до конца, никаких вопросов.',
+  ' м. Финиш закрыл — беги дальше на рекорд или начинай новый заход.',
+  ' м — сделал всю дистанцию. Уважаю.',
+];
+
 // ── ЛОКАЦИИ ──────────────────────────────────────────────────────────────────
+// Пол каждой зоны — заметно другого тона, чем стена/небо (не тот же коричневый
+// на коричневом): так препятствия читаются силуэтом против пола, а не тонут в
+// одномтонном месиве. groundLine — яркий акцент кромки помоста, тоже подальше
+// по тону/светлоте от sky[1], чтобы даже без объектов на кадре чувствовалась
+// граница «пол/стена».
 const ZONES = [
-  { name: tr('zoneBasement'), sky: ['#181210', '#231a14'], ground: '#2a211a', groundLine: '#4a3a2b', draw: drawBasement },
-  { name: tr('zoneNeon'),     sky: ['#0b0f1e', '#141b33'], ground: '#151b2e', groundLine: '#2c3a63', draw: drawNeon },
-  { name: tr('zoneStreet'),   sky: ['#0a0d18', '#1c2033'], ground: '#191c26', groundLine: '#333849', draw: drawStreet },
-  { name: tr('zoneRoof'),     sky: ['#2a1830', '#ff8a4d'], ground: '#232830', groundLine: '#4a5568', draw: drawRoof },
-  { name: tr('zoneLocker'),   sky: ['#132226', '#1f3a40'], ground: '#16232a', groundLine: '#3f5a63', draw: drawLocker },
+  { name: tr('zoneBasement'), sky: ['#181210', '#231a14'], ground: '#4a2a1e', groundLine: '#e8873f', draw: drawBasement },
+  { name: tr('zoneNeon'),     sky: ['#0b0f1e', '#141b33'], ground: '#1c1430', groundLine: '#ff5a96', draw: drawNeon },
+  { name: tr('zoneStreet'),   sky: ['#0a0d18', '#1c2033'], ground: '#2b2f3d', groundLine: '#8fa0c0', draw: drawStreet },
+  { name: tr('zoneRoof'),     sky: ['#2a1830', '#ff8a4d'], ground: '#3a2036', groundLine: '#ffb877', draw: drawRoof },
+  { name: tr('zoneLocker'),   sky: ['#132226', '#1f3a40'], ground: '#3a4d50', groundLine: '#d8f0ef', draw: drawLocker },
 ];
 const ZONE_LEN = 600;
-function zoneIndex() { return Math.floor(dist / ZONE_LEN) % ZONES.length; }
+// Порядок зон тасуется на весь забег (см. resetGame) — тот же набор из пяти
+// локаций, но два подряд забега проходят их в разном порядке, а не одним и
+// тем же заученным маршрутом.
+let zoneOrder = [0, 1, 2, 3, 4];
+function zoneSeqPos() { return Math.floor(dist / ZONE_LEN) % zoneOrder.length; }
+function zoneIndex() { return zoneOrder[zoneSeqPos()]; }
+function nextZoneIndex() { return zoneOrder[(zoneSeqPos() + 1) % zoneOrder.length]; }
 function zoneBlend() {
   const p = (dist % ZONE_LEN) / ZONE_LEN;
   return p > 0.88 ? (p - 0.88) / 0.12 : 0;
@@ -402,12 +553,22 @@ function drawBasement(a) {
     const lx = x - loff + lw / 2;
     ctx.strokeStyle = 'rgba(0,0,0,0.5)'; ctx.beginPath();
     ctx.moveTo(lx, 36); ctx.lineTo(lx, 92); ctx.stroke();
-    const g = ctx.createRadialGradient(lx, 100, 2, lx, 100, 70);
-    g.addColorStop(0, 'rgba(255,200,110,0.5)'); g.addColorStop(1, 'rgba(255,200,110,0)');
-    ctx.fillStyle = g; ctx.fillRect(lx - 70, 30, 140, 140);
-    ctx.fillStyle = '#ffd9a0'; ctx.beginPath(); ctx.arc(lx, 98, 6, 0, 7); ctx.fill();
+    // Пятна света от ламп — заметно сильнее прежнего (было 0.5 альфы у соска
+    // градиента), чтобы стена перестала быть одним ровным тоном. Но заметно
+    // тише нового красно-оранжевого «знака опасности» у препятствий
+    // (см. obstacleHalo) — фон не должен спорить по яркости с хазардом того же
+    // тёплого спектра, иначе стена сама начинает читаться как «что-то опасное».
+    const g = ctx.createRadialGradient(lx, 100, 2, lx, 100, 90);
+    g.addColorStop(0, 'rgba(255,205,120,0.5)'); g.addColorStop(0.5, 'rgba(255,190,100,0.18)'); g.addColorStop(1, 'rgba(255,190,100,0)');
+    ctx.fillStyle = g; ctx.fillRect(lx - 90, 24, 180, 180);
+    ctx.fillStyle = '#ffe6b0'; ctx.beginPath(); ctx.arc(lx, 98, 7, 0, 7); ctx.fill();
+    // Тот же тёплый свет доходит и до пола — светлое пятно на помосте прямо
+    // под лампой, а не ровный плоский цвет от края до края.
+    const fg = ctx.createRadialGradient(lx, GROUND(), 4, lx, GROUND(), 120);
+    fg.addColorStop(0, 'rgba(255,180,110,0.32)'); fg.addColorStop(1, 'rgba(255,180,110,0)');
+    ctx.fillStyle = fg; ctx.fillRect(lx - 120, GROUND() - 60, 240, 60);
   }
-  silhouettes('rgba(0,0,0,0.35)', 2.9);
+  silhouettes('rgba(0,0,0,0.45)', 2.9);
   ctx.globalAlpha = 1;
 }
 function drawNeon(a) {
@@ -415,12 +576,25 @@ function drawNeon(a) {
   const sf = speedFrac();
   ctx.fillStyle = 'rgba(57,210,196,0.8)'; ctx.fillRect(0, 30, W, 3);
   ctx.fillStyle = 'rgba(255,90,150,0.6)'; ctx.fillRect(0, 44, W, 2);
-  const sw = 560, soff = (dist * 3.0) % sw;
-  ctx.font = "900 34px 'Courier New', monospace"; ctx.textAlign = 'center';
-  for (let x = -sw; x < W + sw; x += sw) {
-    const sx = x - soff + sw / 2;
-    ctx.fillStyle = 'rgba(57,210,196,0.14)'; ctx.fillText('QACHALKA 24/7', sx, 120);
-    ctx.fillStyle = 'rgba(57,210,196,0.8)'; ctx.fillText('QACHALKA 24/7', sx, 118);
+  // Неоновая табличка «QACHALKA 24/7» — цельная панель с рамкой на своей
+  // подложке, а не голый текст поперёк экрана: раньше при узком экране
+  // надпись обрезалась краем кадра и «24/7» висело без опоры и без рамки.
+  // Знак — самостоятельный объект фиксированного размера: может целиком
+  // уехать за кадр между повторами, но никогда не обрежется на полуслове.
+  const signW = 172, signH = 66, period = 430, soff = (dist * 3.0) % period;
+  for (let x = -period; x < W + period; x += period) {
+    const sx = x - soff + period * 0.42, sy = GROUND() * 0.24;
+    ctx.save(); ctx.translate(sx, sy);
+    ctx.fillStyle = 'rgba(8,14,26,0.6)';
+    ctx.beginPath(); ctx.roundRect(-signW / 2, -signH / 2, signW, signH, 10); ctx.fill();
+    ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(57,210,196,0.75)';
+    ctx.beginPath(); ctx.roundRect(-signW / 2, -signH / 2, signW, signH, 10); ctx.stroke();
+    ctx.textAlign = 'center';
+    ctx.font = "900 19px 'Courier New', monospace";
+    ctx.fillStyle = 'rgba(57,210,196,0.9)'; ctx.fillText('QACHALKA', 0, -6);
+    ctx.font = "900 24px 'Courier New', monospace";
+    ctx.fillStyle = 'rgba(255,90,150,0.95)'; ctx.fillText('24/7', 0, 20);
+    ctx.restore();
   }
   // Линии сетки реже (было каждые 34px) и гаснут на разгоне — частая горизонтальная
   // штриховка, бегущая быстро, давала муар.
@@ -460,6 +634,24 @@ function drawStreet(a) {
   }
   ctx.globalAlpha = 1;
 }
+// Дальний параллакс-слой: мягкие светящиеся пятна на разной высоте, ползут
+// заметно медленнее ближних силуэтов. Работает во всех зонах одинаково (цвет
+// приходит из палитры зоны) — заполняет верхнюю часть неба содержанием, а не
+// голой пустотой, независимо от того, что рисует конкретная drawZone.
+function drawFarBokeh(tint) {
+  const pw = 260, poff = (dist * 0.35) % pw;
+  ctx.save(); ctx.globalAlpha = 0.22;
+  for (let x = -pw; x < W + pw; x += pw) {
+    const i = Math.floor(x / pw + 1000);
+    const bx = x - poff + pw * 0.5;
+    const by = GROUND() * (0.14 + 0.34 * (i % 3) / 2);
+    const r = 46 + (i % 4) * 20;
+    const g = ctx.createRadialGradient(bx, by, 2, bx, by, r);
+    g.addColorStop(0, tint); g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g; ctx.fillRect(bx - r, by - r, r * 2, r * 2);
+  }
+  ctx.restore();
+}
 function silhouettes(color, parallax) {
   const sw = 260, soff = (dist * parallax) % sw;
   ctx.fillStyle = color;
@@ -471,29 +663,93 @@ function silhouettes(color, parallax) {
     ctx.fillRect(bx + 160, by - 34, 70, 10); ctx.fillRect(bx + 170, by - 24, 10, 24); ctx.fillRect(bx + 200, by - 24, 10, 24);
   }
 }
-// КРЫША: открытая площадка над залом, закатный город внизу, турники и антенны
-// на переднем плане. Элементы крупные и редкие — так же, как договорились для
-// подвала/неона, чтобы на разгоне фон не рябил.
+// КРЫША: открытая площадка над залом с видом на закатный город — четыре
+// слоя (марево горизонта → дальний город → средний город с окнами → ближние
+// антенны/тросы) плюс парапет и вентиляционные короба на переднем плане,
+// тем же приёмом «слоёв с разным параллаксом», что и в неон-зале/на улице
+// (см. drawNeon/drawStreet). Элементы крупные и редкие, чтобы на разгоне
+// не рябило (см. комментарий в drawBasement).
 function drawRoof(a) {
   ctx.globalAlpha = a;
-  ctx.fillStyle = 'rgba(255,150,80,0.16)';
-  ctx.fillRect(0, GROUND() * 0.32, W, GROUND() * 0.3);
-  const cw = 260, coff = (dist * 1.1) % cw;
-  ctx.fillStyle = 'rgba(40,24,44,0.55)';
+  const gy = GROUND();
+
+  // Закатное марево у горизонта — тёплый градиент над дальними крышами.
+  const hazeTop = gy * 0.26, hazeBot = gy * 0.66;
+  const hg = ctx.createLinearGradient(0, hazeTop, 0, hazeBot);
+  hg.addColorStop(0, 'rgba(255,150,80,0.24)'); hg.addColorStop(1, 'rgba(255,150,80,0)');
+  ctx.fillStyle = hg; ctx.fillRect(0, hazeTop, W, hazeBot - hazeTop);
+  // Низкое солнце над крышами.
+  const sg = ctx.createRadialGradient(W * 0.72, gy * 0.34, 4, W * 0.72, gy * 0.34, 120);
+  sg.addColorStop(0, 'rgba(255,210,150,0.5)'); sg.addColorStop(1, 'rgba(255,210,150,0)');
+  ctx.fillStyle = sg; ctx.fillRect(W * 0.72 - 120, gy * 0.34 - 120, 240, 240);
+
+  // Дальний город: мелкие тёмные силуэты, самый медленный параллакс — держит
+  // глубину горизонта, не отвлекая деталями.
+  const fw = 150, foff = (dist * 0.6) % fw;
+  ctx.fillStyle = 'rgba(35,22,40,0.5)';
+  for (let x = -fw; x < W + fw; x += fw) {
+    const i = Math.floor(x / fw + 800);
+    const hgt = 40 + (i % 4) * 22;
+    ctx.fillRect(x - foff, gy - hgt - 46, fw - 18, hgt);
+  }
+
+  // Средний город: силуэты крупнее, с сеткой окон разной яркости — часть
+  // тёмные (никого нет), часть светятся тёплым (кто-то ещё качается) —
+  // здание читается домом, а не плоским прямоугольником.
+  const cw = 200, coff = (dist * 1.15) % cw;
   for (let x = -cw; x < W + cw; x += cw) {
-    const hgt = 90 + ((x / cw | 0) % 3) * 40;
-    ctx.fillRect(x - coff, GROUND() - hgt - 70, cw - 60, hgt);
+    const i = Math.floor(x / cw + 900);
+    const hgt = 100 + (i % 3) * 46, bx = x - coff, bw = cw - 46, by = gy - hgt - 36;
+    ctx.fillStyle = 'rgba(38,24,42,0.78)';
+    ctx.fillRect(bx, by, bw, hgt);
+    ctx.fillStyle = 'rgba(20,12,22,0.5)'; ctx.fillRect(bx, by, bw, 5); // край крыши темнее
+    const cols = Math.max(1, Math.floor(bw / 24)), rows = Math.max(1, Math.floor(hgt / 22));
+    for (let wy = 0; wy < rows; wy++) for (let wx = 0; wx < cols; wx++) {
+      const lit = (wx + wy * 2 + i) % 3 === 0;
+      ctx.fillStyle = lit ? 'rgba(255,196,120,0.55)' : 'rgba(10,6,14,0.4)';
+      ctx.fillRect(bx + 7 + wx * 24, by + 9 + wy * 22, 12, 13);
+    }
   }
-  const pw = 420, poff = (dist * 3.0) % pw;
-  for (let x = -pw; x < W + pw; x += pw) {
-    const px = x - poff + pw * 0.25;
-    ctx.fillStyle = 'rgba(60,66,76,0.9)';
-    ctx.fillRect(px - 3, GROUND() - 92, 5, 92); ctx.fillRect(px + 73, GROUND() - 92, 5, 92);
-    ctx.fillRect(px - 5, GROUND() - 94, 86, 6);
-    ctx.fillStyle = 'rgba(150,160,175,0.8)';
-    ctx.fillRect(px + 130, GROUND() - 160, 3, 160);
-    ctx.beginPath(); ctx.arc(px + 131, GROUND() - 160, 4, 0, 7); ctx.fill();
+
+  // Антенны на крышах: две мачты с мигающим сигнальным огоньком и провисшим
+  // тросом между ними — фирменный силуэт «мы на крыше», а не абстрактный блок.
+  const pw2 = 400, poff2 = (dist * 1.9) % pw2;
+  for (let x = -pw2; x < W + pw2; x += pw2) {
+    const ax = x - poff2 + pw2 * 0.22, ax2 = ax + 150, ah = 74, ah2 = 46;
+    ctx.strokeStyle = 'rgba(150,160,175,0.85)'; ctx.lineWidth = 3; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(ax, gy - 96); ctx.lineTo(ax, gy - 96 - ah); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(ax2, gy - 74); ctx.lineTo(ax2, gy - 74 - ah2); ctx.stroke();
+    // короткие траверсы антенны
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(ax - 9, gy - 96 - ah * 0.6); ctx.lineTo(ax + 9, gy - 96 - ah * 0.6); ctx.stroke();
+    // провисший трос между мачтами
+    ctx.strokeStyle = 'rgba(120,128,140,0.55)'; ctx.lineWidth = 1.6;
+    ctx.beginPath(); ctx.moveTo(ax, gy - 96 - ah); ctx.quadraticCurveTo((ax + ax2) / 2, gy - 96 - ah + 30, ax2, gy - 74 - ah2); ctx.stroke();
+    // мигающий сигнальный огонёк
+    ctx.fillStyle = 'rgba(255,60,60,' + (0.5 + 0.4 * Math.sin(t * 4 + ax * 0.05)).toFixed(2) + ')';
+    ctx.beginPath(); ctx.arc(ax, gy - 96 - ah, 4, 0, 7); ctx.fill();
   }
+
+  // Ближний план: вентиляционные короба на крыше, самый быстрый параллакс —
+  // читаются крупно и явно, как объекты «рядом», а не часть заднего фона.
+  const sf = speedFrac();
+  const vw = 260, voff = (dist * 2.6) % vw;
+  ctx.fillStyle = 'rgba(120,100,110,' + (0.6 - 0.2 * sf).toFixed(2) + ')';
+  for (let x = -vw; x < W + vw; x += vw) {
+    const vx = x - voff + vw * 0.5;
+    ctx.beginPath(); ctx.roundRect(vx, gy - 46, 48, 46, 5); ctx.fill();
+    ctx.fillStyle = 'rgba(30,20,26,0.55)';
+    ctx.fillRect(vx + 6, gy - 38, 36, 6); ctx.fillRect(vx + 6, gy - 25, 36, 6);
+    ctx.strokeStyle = 'rgba(150,160,175,0.5)'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(vx + 24, gy - 46); ctx.lineTo(vx + 24, gy - 64); ctx.stroke();
+    ctx.fillStyle = 'rgba(120,100,110,' + (0.6 - 0.2 * sf).toFixed(2) + ')';
+  }
+
+  // Парапет — невысокая стена по кромке крыши вдоль всей дорожки, отделяет
+  // город от площадки, на которой бежит атлет.
+  ctx.fillStyle = 'rgba(58,32,54,0.92)'; ctx.fillRect(0, gy - 16, W, 16);
+  ctx.fillStyle = 'rgba(255,190,140,0.3)'; ctx.fillRect(0, gy - 16, W, 3);
+
   ctx.globalAlpha = 1;
 }
 // РАЗДЕВАЛКА: кафель крупными плитами, шкафчики рядами, пар от душевых.
@@ -536,25 +792,36 @@ function spawnObstacle() {
   // и игрок освоился — не с первой секунды (см. RIVAL_MIN_DIST).
   if (dist >= RIVAL_MIN_DIST) pool.push('rival');
   const kind = pick(pool);
-  const o = { kind, x: W + 80 };
-  if (kind === 'dumb') { o.w = 52; o.h = 30; }
-  if (kind === 'kettle') { o.w = 36; o.h = 40; }
-  if (kind === 'bench') { o.w = 110; o.h = 34; }
-  if (kind === 'rack') { o.w = 26; o.h = 0; o.gap = 64; }
-  if (kind === 'plate') { o.w = 44; o.h = 44; o.vx = 120 + speed * 0.12; o.rot = 0; }
+  // Все геометрические размеры (w/h/gap) и точка появления за краем экрана —
+  // в масштабе мира SK (см. объявление константы выше). Скорости сближения
+  // (o.vx) — это баланс/сложность, а не размер объекта, поэтому НЕ умножаем
+  // их на SK: только на текущую speed, как и раньше.
+  const o = { kind, x: W + 80 * SK };
+  // Прыжковые (dumb/kettle/bench/plate/rival) — по SKW, см. комментарий у
+  // объявления SKW: их ширина ограничена фиксированным охватом прыжка.
+  // Подкатные (rack/bag/cable/flyplate) — по полному SK: длительность подката
+  // подстраивается под текущую скорость живьём, узкого места здесь нет.
+  if (kind === 'dumb') { o.w = 52 * SKW; o.h = 30 * SKW; }
+  if (kind === 'kettle') { o.w = 36 * SKW; o.h = 40 * SKW; }
+  if (kind === 'bench') { o.w = 110 * SKW; o.h = 34 * SKW; }
+  if (kind === 'rack') { o.w = 26 * SK; o.h = 0; o.gap = 64 * SK; }
+  if (kind === 'plate') { o.w = 44 * SKW; o.h = 44 * SKW; o.vx = 120 + speed * 0.12; o.rot = 0; }
   // Груша — свисает с потолка на цепи, покачивается из стороны в сторону
   // (чисто визуально, на просвет не влияет). Просвет фиксированный, как у rack,
   // но силуэт совсем другой — цилиндр на цепи, а не перекладина на стойках.
-  if (kind === 'bag') { o.w = 46; o.h = 0; o.gap = 62; o.swingPhase = rnd(0, Math.PI * 2); }
+  if (kind === 'bag') { o.w = 46 * SK; o.h = 0; o.gap = 62 * SK; o.swingPhase = rnd(0, Math.PI * 2); }
   // Канат — тонкий трос между двумя короткими стойками, чуть вибрирует/провисает.
-  if (kind === 'cable') { o.w = 120; o.h = 0; o.gap = 56; o.wavePhase = rnd(0, Math.PI * 2); }
+  if (kind === 'cable') { o.w = 120 * SK; o.h = 0; o.gap = 56 * SK; o.wavePhase = rnd(0, Math.PI * 2); }
   // Летящий блин — прилетает по дуге сверху-справа (не катится по полу, как
   // обычный plate), проходит на высоте подката и улетает налево, вращаясь.
   // Главный запрос заказчика: «слишком легко всё перепрыгивается» — этот тип
   // не прощает прыжок в принципе (см. obstacleBox — коробка тянется вверх
   // выше пика прыжка, прыжок буквально сбивает игрока в полёте).
   if (kind === 'flyplate') {
-    o.w = 44; o.h = 44; o.gap = 58; o.rot = 0; o.vx = 60 + speed * 0.1;
+    // o.w/o.h тут чисто визуальные (коробка столкновения — от o.gap и фиксированных
+    // отступов, см. obstacleBox), поэтому масштаб как у обычного plate — SKW,
+    // без всякого ограничения по охвату прыжка (эти хазарды не перепрыгиваются).
+    o.w = 44 * SKW; o.h = 44 * SKW; o.gap = 58 * SK; o.rot = 0; o.vx = 60 + speed * 0.1;
     o.age = 0; o.floatPhase = rnd(0, Math.PI * 2);
   }
   if (kind === 'rival') {
@@ -562,7 +829,7 @@ function spawnObstacle() {
     // подкатиться под него нельзя — коробка достаёт до пола (см. obstacleBox).
     // Сближение быстрее обычного препятствия — к скорости бега прибавляется
     // собственный бег вышибалы навстречу (o.vx), как у катящегося блина, но заметнее.
-    o.w = 34; o.h = 64; o.vx = 90 + speed * 0.18; o.runPhase = 0;
+    o.w = 34 * SKW; o.h = 64 * SKW; o.vx = 90 + speed * 0.18; o.runPhase = 0;
     if (!rivalWarned) { rivalWarned = true; toast(tr('rivalWarn'), C_RAGE); }
   }
   obstacles.push(o);
@@ -575,141 +842,281 @@ function spawnObstacle() {
   // (плюс запас на возросшую скорость): препятствия появляются РАНЬШЕ, а не
   // ЧАЩЕ, и время на реакцию у края экрана не сжимается.
   const speedFrac = (speed - SPEED_START) / (SPEED_CAP - SPEED_START);
-  const gapSeconds = rnd(1.3, 2.0) + speedFrac * 0.9;
+  // Ритм забега (см. paceFactor): передышка ЗАМЕТНО растягивает интервал
+  // (добавка, а не множитель на всё) — плотный участок почти не режет
+  // нижнюю границу. Раньше пробовали множитель на весь gapSeconds и это
+  // ломало проверенный запас на реакцию (см. комментарий выше): подряд
+  // идущие подкатное+прыжковое препятствия могли слиться теснее, чем
+  // рассчитан подкат, и убивали честно сыгранный забег. Плюс/минус здесь
+  // маленький и односторонне безопасный.
+  const gapSeconds = rnd(1.3, 2.0) + speedFrac * 0.9 + (1 - paceFactor()) * 0.7 - paceFactor() * 0.15;
   nextObsAt = dist + gapSeconds * (speed / 7);
+}
+
+// Кульминация забега: усиленный вышибала перед самой линией финиша — тот же
+// персонаж и тот же принцип («перепрыгнуть можно, подкатиться нельзя»), что и
+// у обычного 'rival', но крупнее, шире и быстрее сближается — решающий момент
+// должен быть заметно опаснее рядового столкновения, а не легче него.
+function spawnBoss() {
+  const o = { kind: 'boss', x: W + 90 * SK, w: 44 * SKW, h: 92 * SKW, vx: 140 + speed * 0.22, runPhase: 0 };
+  obstacles.push(o);
+  bigPop(tr('bossWarn'), C_RAGE, W / 2, H * 0.32);
+  addShake(0.3); addHitStop(0.05);
+  // Пока решается исход с боссом, обычный спавн ставим на паузу — иначе рядом
+  // может прилететь ещё одно препятствие и решающий момент превратится в
+  // нечестную кашу вместо одной явной схватки.
+  nextObsAt = Math.max(nextObsAt, dist + 260);
 }
 
 function spawnGuideItems(o) {
   if (o.kind === 'plate' || o.kind === 'flyplate') return; // летит/едет навстречу — «след» разъедется с ним
   if (o.kind === 'rack') {
-    for (let i = 0; i < 4; i++) items.push(mkItem('shaker', o.x - 40 + i * 46, GROUND() - 26));
+    for (let i = 0; i < 4; i++) items.push(mkItem('shaker', o.x - 40 * SK + i * 46 * SK, GROUND() - 26 * SK));
     return;
   }
   // Груша, канат — те же подкатные хазарды, что и стойка: след из наград
   // прямо в коридоре подката, на ту же высоту, что и у rack.
   if (o.kind === 'bag' || o.kind === 'cable') {
-    for (let i = 0; i < 4; i++) items.push(mkItem('shaker', o.x + 6 + i * (o.w - 12) / 3, GROUND() - 26));
+    for (let i = 0; i < 4; i++) items.push(mkItem('shaker', o.x + 6 * SK + i * (o.w - 12 * SK) / 3, GROUND() - 26 * SK));
     return;
   }
   const cx = o.x + o.w / 2, n = 5;
   const barAt = Math.random() < 0.35 ? Math.floor(n / 2) : -1;
   for (let i = 0; i < n; i++) {
     const p = i / (n - 1);
-    const y = GROUND() - 60 - Math.sin(p * Math.PI) * 95;
-    items.push(mkItem(i === barAt ? 'bar' : 'shaker', cx - 110 + p * 220, y));
+    const y = GROUND() - 60 * SK - Math.sin(p * Math.PI) * 95 * SK;
+    items.push(mkItem(i === barAt ? 'bar' : 'shaker', cx - 110 * SK + p * 220 * SK, y));
   }
+}
+// Жирный тёмный контур по силуэту — стрит-фигуру заливаем стандартным
+// fill/stroke: сначала непрозрачная заливка, потом обводка тем же путём.
+// LW — толщина обводки в мировом масштабе (не растёт строго на SK, чтобы
+// линия не стала бесформенным пятном на крупных объектах).
+const LW = 5;
+function fillStroke(fill) {
+  ctx.fillStyle = fill; ctx.fill();
+  ctx.lineWidth = LW; ctx.strokeStyle = 'rgba(16,11,8,0.85)'; ctx.stroke();
+}
+// Светлый ореол позади препятствия — тот же приём, что уже спасает читаемость
+// спортпита в тёмных зонах (см. drawItem). Тёмная обводка (fillStroke) сама по
+// себе не помогает, когда фон ЗА препятствием и так тёмный — контура тогда не
+// видно ни с одной стороны. Мягкое светлое пятно даёт светлоту, отличную от
+// фона, при ЛЮБОМ цвете стены/пола — работает как рассеянный свет со стороны
+// зрителя, а не «набор плоских блоков». Форма и размер — под силуэт каждого
+// вида препятствия, а не общий прямоугольник на всю (нередко завышенную под
+// прыжок) коробку столкновения — см. obstacleBox().
+// Единый опознавательный признак ЛЮБОГО препятствия — тёплый красно-оранжевый
+// ореол, «знак опасности». Раньше ореол был светлым нейтральным пятном (тот же
+// приём, что спасает читаемость спортпита в drawItem) — и поэтому препятствие и
+// подбираемый предмет на глаз были почти одинаковым «светлым пятном в темноте».
+// Теперь у препятствий цвет ореола ТЁПЛЫЙ ОПАСНЫЙ (красно-оранжевый), у предметов
+// (см. itemHalo в drawItem) — ХОЛОДНЫЙ БЕЗОПАСНЫЙ (зелёно-мятный). Форма и размер
+// по-прежнему под силуэт каждого вида, не общий прямоугольник на всю (нередко
+// завышенную под прыжок) коробку столкновения — см. obstacleBox().
+function obstacleHalo(cx, cy, rx, ry) {
+  const g = ctx.createRadialGradient(cx, cy, 1, cx, cy, Math.max(rx, ry));
+  g.addColorStop(0, 'rgba(255,88,36,0.44)');
+  g.addColorStop(0.6, 'rgba(255,130,40,0.20)');
+  g.addColorStop(1, 'rgba(255,130,40,0)');
+  ctx.save(); ctx.fillStyle = g;
+  ctx.beginPath(); ctx.ellipse(cx, cy, rx, ry, 0, 0, 7); ctx.fill();
+  ctx.restore();
+}
+// Слайд (подкат) — рюмкой отличаются только rack/bag/cable/flyplate (та же
+// группа, что в obstacleBox отвечает за «коробка тянется вверх, прыжок не
+// спасает»); всё остальное — прыжковые. Цена ошибки — смерть, поэтому
+// направление действия помечено маркером-стрелкой (см. drawHazardArrow), а не
+// только цветом.
+function isSlideKind(kind) {
+  return kind === 'rack' || kind === 'bag' || kind === 'cable' || kind === 'flyplate';
+}
+// Маркер-стрелка над препятствием: вершина смотрит в сторону нужного действия —
+// вниз-остриём «подкатись» под хазард, вверх-остриём «прыгай» через него. Форма
+// и направление читаются мгновенно и не нуждаются в переводе — намеренно без
+// текста (см. правило «лучше обойтись без текста» в задаче на этот патч).
+function drawHazardArrow(cx, cy, slide) {
+  const s = 10 * SK;
+  ctx.save(); ctx.translate(cx, cy);
+  ctx.beginPath();
+  if (slide) { ctx.moveTo(-s, -s * 0.55); ctx.lineTo(s, -s * 0.55); ctx.lineTo(0, s * 0.85); }
+  else { ctx.moveTo(-s, s * 0.55); ctx.lineTo(s, s * 0.55); ctx.lineTo(0, -s * 0.85); }
+  ctx.closePath();
+  ctx.fillStyle = '#ff5a28'; ctx.fill();
+  ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(20,10,5,0.9)'; ctx.stroke();
+  ctx.restore();
+}
+// Ореол босса — отдельный от общего obstacleHalo: тот же смысл («опасно,
+// действуй»), но пульсирующее золото вместо тёплого красно-оранжевого —
+// решающий момент забега должен читаться иначе, чем рядовая гантеля, ещё до
+// того, как разберёшь силуэт.
+function bossHalo(cx, cy, rx, ry) {
+  const pulse = 0.5 + 0.5 * Math.sin(t * 9);
+  const g = ctx.createRadialGradient(cx, cy, 1, cx, cy, Math.max(rx, ry));
+  g.addColorStop(0, 'rgba(255,215,0,' + (0.5 + 0.14 * pulse).toFixed(2) + ')');
+  g.addColorStop(0.6, 'rgba(255,150,40,0.22)');
+  g.addColorStop(1, 'rgba(255,150,40,0)');
+  ctx.save(); ctx.fillStyle = g;
+  ctx.beginPath(); ctx.ellipse(cx, cy, rx * (1 + 0.05 * pulse), ry * (1 + 0.05 * pulse), 0, 0, 7); ctx.fill();
+  ctx.restore();
+}
+function drawObstacleHalo(o, gy) {
+  const slide = isSlideKind(o.kind);
+  let cx, cy, rx, ry;
+  if (o.kind === 'dumb') { cx = o.w / 2; cy = gy - o.h / 2; rx = o.w / 2 + 12 * SKW; ry = o.h / 2 + 12 * SKW; }
+  else if (o.kind === 'kettle') { cx = o.w / 2; cy = gy - o.h * 0.55; rx = o.h * 0.62; ry = o.h * 0.72; }
+  else if (o.kind === 'bench') { cx = o.w / 2; cy = gy - o.h / 2; rx = o.w / 2 + 10 * SKW; ry = o.h / 2 + 14 * SKW; }
+  else if (o.kind === 'rack') { cx = o.w / 2 + 38 * SK; cy = gy - o.gap - 4 * SK; rx = o.w / 2 + 60 * SK; ry = 26 * SK; }
+  else if (o.kind === 'plate' || o.kind === 'flyplate') { cx = o.w / 2; cy = gy - (o.kind === 'plate' ? o.h / 2 : o.gap + o.h / 2); rx = o.h / 2 + 14 * SKW; ry = o.h / 2 + 14 * SKW; }
+  else if (o.kind === 'rival') { cx = o.w / 2; cy = gy - o.h * 0.55; rx = o.w * 0.9; ry = o.h * 0.62; }
+  else if (o.kind === 'boss') {
+    cx = o.w / 2; cy = gy - o.h * 0.55; rx = o.w * 1.15; ry = o.h * 0.7;
+    bossHalo(cx, cy, rx, ry); drawHazardArrow(cx, cy - ry - 16 * SK, false); return;
+  }
+  else if (o.kind === 'bag') { cx = o.w / 2; cy = gy - o.gap - 65 * SK; rx = o.w * 0.7; ry = 75 * SK; }
+  else if (o.kind === 'cable') { cx = o.w / 2; cy = gy - o.gap; rx = o.w / 2 + 12 * SK; ry = 22 * SK; }
+  else return;
+  obstacleHalo(cx, cy, rx, ry);
+  drawHazardArrow(cx, cy - ry - 14 * SK, slide);
 }
 function drawObstacle(o) {
   const gy = GROUND();
   ctx.save(); ctx.translate(o.x, 0);
+  drawObstacleHalo(o, gy);
   if (o.kind === 'dumb') {
-    ctx.fillStyle = '#767c88'; ctx.fillRect(6, gy - 16, o.w - 12, 8);
-    ctx.fillStyle = '#5a606c';
-    ctx.fillRect(0, gy - 30, 12, 30); ctx.fillRect(o.w - 12, gy - 30, 12, 30);
-    ctx.fillRect(3, gy - 26, 6, 22); ctx.fillRect(o.w - 9, gy - 26, 6, 22);
+    // Гантель: два круглых блина на концах грифа + рифлёная рукоять —
+    // силуэт читается с одного взгляда, в отличие от прежних квадратных блоков.
+    const r = o.h / 2;
+    ctx.beginPath(); ctx.roundRect(r * 0.55, gy - r - 5 * SKW, o.w - r * 1.1, 10 * SKW, 5 * SKW); fillStroke('#8a919c');
+    ctx.fillStyle = 'rgba(255,255,255,0.35)'; ctx.fillRect(r * 0.7, gy - r - 4 * SKW, o.w - r * 1.4, 2.5 * SKW);
+    for (const cx of [r * 0.62, o.w - r * 0.62]) {
+      ctx.beginPath(); ctx.arc(cx, gy - r, r, 0, 7); fillStroke('#4c505b');
+      ctx.beginPath(); ctx.arc(cx, gy - r, r * 0.42, 0, 7); ctx.fillStyle = '#2f323a'; ctx.fill();
+    }
   }
   if (o.kind === 'kettle') {
-    ctx.fillStyle = '#3b3f49';
-    ctx.beginPath(); ctx.arc(o.w / 2, gy - 16, 16, 0, 7); ctx.fill();
-    ctx.lineWidth = 7; ctx.strokeStyle = '#3b3f49';
-    ctx.beginPath(); ctx.arc(o.w / 2, gy - 32, 10, Math.PI, 0); ctx.stroke();
+    // Гиря: шар + прямая скоба-ручка — тёмное чугунное литьё, тёплый хайлайт сверху.
+    const cx = o.w / 2, cy = gy - o.h * 0.42, r = o.h * 0.42;
+    ctx.beginPath(); ctx.arc(cx, cy, r, 0, 7); fillStroke('#33363f');
+    ctx.fillStyle = 'rgba(255,255,255,0.16)'; ctx.beginPath(); ctx.arc(cx - r * 0.35, cy - r * 0.4, r * 0.35, 0, 7); ctx.fill();
+    ctx.lineWidth = LW * 1.6; ctx.strokeStyle = '#33363f'; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.arc(cx, gy - o.h - 2, o.h * 0.24, Math.PI * 1.05, Math.PI * 1.95); ctx.stroke();
+    ctx.lineWidth = LW; ctx.strokeStyle = 'rgba(16,11,8,0.85)'; ctx.stroke();
   }
   if (o.kind === 'bench') {
-    ctx.fillStyle = '#8a4436'; ctx.fillRect(0, gy - o.h, o.w, 12);
+    // Скамья: мягкое ложе тёплого цвета на двух стальных опорах.
+    ctx.beginPath(); ctx.roundRect(0, gy - o.h, o.w, o.h * 0.36, o.h * 0.14); fillStroke('#a8543f');
+    ctx.fillStyle = 'rgba(255,255,255,0.18)'; ctx.fillRect(o.w * 0.06, gy - o.h + o.h * 0.06, o.w * 0.88, o.h * 0.07);
     ctx.fillStyle = '#4c4f58';
-    ctx.fillRect(10, gy - o.h + 12, 10, o.h - 12); ctx.fillRect(o.w - 20, gy - o.h + 12, 10, o.h - 12);
+    ctx.fillRect(o.w * 0.09, gy - o.h * 0.7, o.w * 0.09, o.h * 0.7);
+    ctx.fillRect(o.w * 0.82, gy - o.h * 0.7, o.w * 0.09, o.h * 0.7);
   }
   if (o.kind === 'rack') {
+    // Силовая стойка: две вертикальные стойки, гриф-перекладина, круглые блины
+    // по краям грифа — читается как «штанга на стойках», а не абстрактная линия.
     ctx.fillStyle = '#4c4f58';
-    ctx.fillRect(0, gy - 150, 10, 150); ctx.fillRect(o.w + 66, gy - 150, 10, 150);
-    ctx.fillStyle = '#9aa0ab'; ctx.fillRect(-14, gy - o.gap - 8, o.w + 104, 8);
-    ctx.fillStyle = '#c0392b';
-    ctx.fillRect(-8, gy - o.gap - 26, 14, 44); ctx.fillRect(o.w + 70, gy - o.gap - 26, 14, 44);
+    ctx.fillRect(0, gy - 150 * SK, 10 * SK, 150 * SK); ctx.fillRect(o.w + 66 * SK, gy - 150 * SK, 10 * SK, 150 * SK);
+    ctx.beginPath(); ctx.roundRect(-14 * SK, gy - o.gap - 9 * SK, o.w + 104 * SK, 9 * SK, 3 * SK); fillStroke('#a7adba');
+    for (const cx of [-1 * SK, o.w + 77 * SK]) {
+      ctx.beginPath(); ctx.arc(cx, gy - o.gap - 4 * SK, 20 * SK, 0, 7); fillStroke('#b8332a');
+      ctx.beginPath(); ctx.arc(cx, gy - o.gap - 4 * SK, 7 * SK, 0, 7); ctx.fillStyle = '#7c1f18'; ctx.fill();
+    }
   }
   if (o.kind === 'plate') {
     ctx.translate(o.w / 2, gy - o.h / 2); ctx.rotate(o.rot);
-    ctx.fillStyle = '#c0392b'; ctx.beginPath(); ctx.arc(0, 0, o.h / 2, 0, 7); ctx.fill();
-    ctx.fillStyle = '#8f2a20'; ctx.beginPath(); ctx.arc(0, 0, o.h / 2 - 7, 0, 7); ctx.fill();
-    ctx.fillStyle = '#c0392b'; ctx.beginPath(); ctx.arc(0, 0, 8, 0, 7); ctx.fill();
-    ctx.fillStyle = CHALK; ctx.beginPath(); ctx.arc(0, 0, 3.4, 0, 7); ctx.fill();
-    ctx.fillStyle = 'rgba(242,237,227,0.5)'; ctx.fillRect(-o.h / 2 + 4, -1.5, 10, 3);
+    ctx.beginPath(); ctx.arc(0, 0, o.h / 2, 0, 7); fillStroke('#c0392b');
+    ctx.fillStyle = '#8f2a20'; ctx.beginPath(); ctx.arc(0, 0, o.h / 2 - 7 * SKW, 0, 7); ctx.fill();
+    ctx.fillStyle = '#c0392b'; ctx.beginPath(); ctx.arc(0, 0, 8 * SKW, 0, 7); ctx.fill();
+    ctx.fillStyle = CHALK; ctx.beginPath(); ctx.arc(0, 0, 3.4 * SKW, 0, 7); ctx.fill();
+    ctx.fillStyle = 'rgba(242,237,227,0.5)'; ctx.fillRect(-o.h / 2 + 4 * SKW, -1.5 * SKW, 10 * SKW, 3 * SKW);
   }
   if (o.kind === 'rival') {
     // Тот же drawAthlete, что и для игрока — просто чужая палитра (RIVAL_SKIN) и
     // зеркальный разворот, чтобы бежал НАВСТРЕЧУ (лицом влево, к игроку).
     ctx.translate(o.w / 2, gy); ctx.scale(-1, 1);
-    drawAthlete(ctx, RIVAL_SKIN, { run: Math.sin(o.runPhase * 14), rage: true, scale: 1.08 });
+    drawAthlete(ctx, RIVAL_SKIN, { run: Math.sin(o.runPhase * 14), rage: true, scale: 1.08 * SK, outline: true });
+  }
+  if (o.kind === 'boss') {
+    // Решающая встреча забега: тот же вышибала, что и рядовой 'rival' (см.
+    // drawAthlete/RIVAL_SKIN) — не второй персонаж, а его усиленная версия —
+    // просто крупнее и с золотой обводкой-контуром вместо обычной тёмной, под
+    // цвет собственного ореола (см. bossHalo).
+    ctx.translate(o.w / 2, gy); ctx.scale(-1, 1);
+    ctx.save();
+    ctx.shadowColor = 'rgba(255,190,40,0.9)'; ctx.shadowBlur = 10;
+    drawAthlete(ctx, RIVAL_SKIN, { run: Math.sin(o.runPhase * 14), rage: true, scale: 1.42 * SK, outline: true });
+    ctx.restore();
   }
   if (o.kind === 'bag') {
     // Боксёрская груша на цепи с потолка — свисает и слегка качается из
     // стороны в сторону. Нижний край на высоте подката (o.gap), верх цепи
     // уходит за кадр — читается как «висит», а не «стоит», в отличие от
     // rack (перекладина на стойках) и cable (натянутый трос).
-    const swing = Math.sin(o.swingPhase) * 9;
-    const botY = gy - o.gap, topY = gy - o.gap - 130;
-    ctx.strokeStyle = '#6b6f78'; ctx.lineWidth = 3;
-    ctx.beginPath(); ctx.moveTo(o.w / 2, -20); ctx.lineTo(o.w / 2 + swing * 0.3, topY); ctx.stroke();
+    const swing = Math.sin(o.swingPhase) * 9 * SK;
+    const botY = gy - o.gap, topY = gy - o.gap - 130 * SK;
+    ctx.strokeStyle = '#6b6f78'; ctx.lineWidth = 3 * Math.sqrt(SK);
+    ctx.beginPath(); ctx.moveTo(o.w / 2, -20 * SK); ctx.lineTo(o.w / 2 + swing * 0.3, topY); ctx.stroke();
     ctx.fillStyle = '#54585f';
-    for (let i = 0; i < 4; i++) { const ly = topY + i * 18; ctx.beginPath(); ctx.arc(o.w / 2 + swing * (0.3 + i * 0.05), ly, 2.6, 0, 7); ctx.fill(); }
+    for (let i = 0; i < 4; i++) { const ly = topY + i * 18 * SK; ctx.beginPath(); ctx.arc(o.w / 2 + swing * (0.3 + i * 0.05), ly, 2.6 * Math.sqrt(SK), 0, 7); ctx.fill(); }
     ctx.save();
     ctx.translate(o.w / 2 + swing, (topY + botY) / 2);
     ctx.rotate(swing * 0.018);
-    ctx.fillStyle = '#5a3a2a';
-    ctx.beginPath(); ctx.roundRect(-o.w / 2, -(botY - topY) / 2, o.w, botY - topY, o.w * 0.32); ctx.fill();
+    ctx.beginPath(); ctx.roundRect(-o.w / 2, -(botY - topY) / 2, o.w, botY - topY, o.w * 0.32); fillStroke('#6a4632');
     ctx.fillStyle = '#432c20';
-    ctx.fillRect(-o.w / 2, -6, o.w, 5); ctx.fillRect(-o.w / 2, 10, o.w, 5);
-    ctx.fillStyle = 'rgba(255,255,255,0.12)'; ctx.fillRect(-o.w / 2 + 5, -(botY - topY) / 2 + 6, 6, botY - topY - 12);
+    ctx.fillRect(-o.w / 2, -6 * SK, o.w, 5 * SK); ctx.fillRect(-o.w / 2, 10 * SK, o.w, 5 * SK);
+    ctx.fillStyle = 'rgba(255,255,255,0.14)'; ctx.fillRect(-o.w / 2 + 5 * SK, -(botY - topY) / 2 + 6 * SK, 6 * SK, botY - topY - 12 * SK);
     ctx.restore();
   }
   if (o.kind === 'cable') {
     // Натянутый трос между двумя короткими стойками, на высоте подката —
     // тонкий профиль, лёгкое провисание/вибрация синусом. Контраст с rack:
     // никаких силовых стоек в полный рост, просто линия поперёк коридора.
-    const ropeY = gy - o.gap, wob = Math.sin(o.wavePhase) * 4;
+    const ropeY = gy - o.gap, wob = Math.sin(o.wavePhase) * 4 * SK;
     ctx.fillStyle = '#3f434c';
-    ctx.fillRect(-6, ropeY - 32, 9, 32); ctx.fillRect(o.w - 3, ropeY - 32, 9, 32);
-    ctx.fillStyle = '#5a606c'; ctx.fillRect(-8, ropeY - 34, 13, 5); ctx.fillRect(o.w - 5, ropeY - 34, 13, 5);
-    ctx.strokeStyle = '#d8d2bf'; ctx.lineWidth = 4; ctx.lineCap = 'round';
-    ctx.beginPath(); ctx.moveTo(-1, ropeY); ctx.quadraticCurveTo(o.w / 2, ropeY + 7 + wob, o.w + 1, ropeY); ctx.stroke();
-    ctx.strokeStyle = 'rgba(0,0,0,0.35)'; ctx.lineWidth = 1.4;
-    ctx.beginPath(); ctx.moveTo(-1, ropeY + 1.5); ctx.quadraticCurveTo(o.w / 2, ropeY + 8.5 + wob, o.w + 1, ropeY + 1.5); ctx.stroke();
+    ctx.fillRect(-6 * SK, ropeY - 32 * SK, 9 * SK, 32 * SK); ctx.fillRect(o.w - 3 * SK, ropeY - 32 * SK, 9 * SK, 32 * SK);
+    ctx.fillStyle = '#5a606c'; ctx.fillRect(-8 * SK, ropeY - 34 * SK, 13 * SK, 5 * SK); ctx.fillRect(o.w - 5 * SK, ropeY - 34 * SK, 13 * SK, 5 * SK);
+    ctx.strokeStyle = '#d8d2bf'; ctx.lineWidth = 4 * Math.sqrt(SK); ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(-1, ropeY); ctx.quadraticCurveTo(o.w / 2, ropeY + 7 * SK + wob, o.w + 1, ropeY); ctx.stroke();
+    ctx.strokeStyle = 'rgba(0,0,0,0.4)'; ctx.lineWidth = 1.6 * Math.sqrt(SK);
+    ctx.beginPath(); ctx.moveTo(-1, ropeY + 1.5); ctx.quadraticCurveTo(o.w / 2, ropeY + 8.5 * SK + wob, o.w + 1, ropeY + 1.5); ctx.stroke();
   }
   if (o.kind === 'flyplate') {
     // Летящий блин: прилетает по дуге сверху-справа, идёт горизонтально на
     // высоте подката с лёгким синусом по высоте для читаемости, вращаясь —
     // не катится по полу, как обычный plate, поэтому и прыжок не спасает
     // (см. obstacleBox — коробка накрывает всю высоту прыжка).
-    const bob = Math.sin(o.floatPhase) * 8;
+    const bob = Math.sin(o.floatPhase) * 8 * SK;
     const dropIn = Math.max(0, 1 - o.age / 0.4); // первые ~0.4с — ещё «долетает» сверху
-    const cy = gy - o.gap - o.h / 2 + bob - dropIn * dropIn * 150;
+    const cy = gy - o.gap - o.h / 2 + bob - dropIn * dropIn * 150 * SK;
     ctx.save();
     ctx.globalAlpha = 1 - dropIn * 0.15;
     ctx.translate(o.w / 2, cy); ctx.rotate(o.rot);
-    ctx.fillStyle = '#c0392b'; ctx.beginPath(); ctx.arc(0, 0, o.h / 2, 0, 7); ctx.fill();
-    ctx.fillStyle = '#8f2a20'; ctx.beginPath(); ctx.arc(0, 0, o.h / 2 - 7, 0, 7); ctx.fill();
-    ctx.fillStyle = '#c0392b'; ctx.beginPath(); ctx.arc(0, 0, 8, 0, 7); ctx.fill();
-    ctx.fillStyle = CHALK; ctx.beginPath(); ctx.arc(0, 0, 3.4, 0, 7); ctx.fill();
-    ctx.fillStyle = 'rgba(242,237,227,0.5)'; ctx.fillRect(-o.h / 2 + 4, -1.5, 10, 3);
+    ctx.beginPath(); ctx.arc(0, 0, o.h / 2, 0, 7); fillStroke('#c0392b');
+    ctx.fillStyle = '#8f2a20'; ctx.beginPath(); ctx.arc(0, 0, o.h / 2 - 7 * SKW, 0, 7); ctx.fill();
+    ctx.fillStyle = '#c0392b'; ctx.beginPath(); ctx.arc(0, 0, 8 * SKW, 0, 7); ctx.fill();
+    ctx.fillStyle = CHALK; ctx.beginPath(); ctx.arc(0, 0, 3.4 * SKW, 0, 7); ctx.fill();
+    ctx.fillStyle = 'rgba(242,237,227,0.5)'; ctx.fillRect(-o.h / 2 + 4 * SKW, -1.5 * SKW, 10 * SKW, 3 * SKW);
     ctx.restore();
     // Лёгкий росчерк-траектория позади блина — читается, что летит, а не катится.
     if (dropIn > 0) {
-      ctx.strokeStyle = 'rgba(192,57,43,' + (0.35 * dropIn).toFixed(2) + ')'; ctx.lineWidth = 3;
-      ctx.beginPath(); ctx.moveTo(o.w / 2, cy); ctx.lineTo(o.w / 2 + 30, cy - 150 * dropIn * dropIn * 0.6); ctx.stroke();
+      ctx.strokeStyle = 'rgba(192,57,43,' + (0.35 * dropIn).toFixed(2) + ')'; ctx.lineWidth = 3 * Math.sqrt(SK);
+      ctx.beginPath(); ctx.moveTo(o.w / 2, cy); ctx.lineTo(o.w / 2 + 30 * SK, cy - 150 * SK * dropIn * dropIn * 0.6); ctx.stroke();
     }
   }
   ctx.restore();
 }
 function obstacleBox(o) {
-  const gy = GROUND(), m = 5;
-  if (o.kind === 'rack') return { x: o.x - 14 + m, y: gy - o.gap - 10, w: o.w + 104 - 2 * m, h: 20 };
+  const gy = GROUND(), m = 5 * SK, mw = 5 * SKW;
+  if (o.kind === 'rack') return { x: o.x - 14 * SK + m, y: gy - o.gap - 10 * SK, w: o.w + 104 * SK - 2 * m, h: 20 * SK };
   if (o.kind === 'bag' || o.kind === 'cable' || o.kind === 'flyplate') {
     // Хазарды «сверху»: коробка стоит на том же нижнем крае, что и просвет
     // подката (o.gap — совместимо с rack), но тянется далеко вверх — выше
-    // пика прыжка (~190px), поэтому прыжок ЧЕРЕЗ них не спасает никогда,
-    // только подкат, который проходит ниже нижнего края коробки.
-    return { x: o.x + m, y: gy - o.gap - 210, w: o.w - 2 * m, h: 220 };
+    // пика прыжка (даже с учётом SK), поэтому прыжок ЧЕРЕЗ них не спасает
+    // никогда, только подкат, который проходит ниже нижнего края коробки.
+    return { x: o.x + m, y: gy - o.gap - 210 * SK, w: o.w - 2 * m, h: 220 * SK };
   }
-  return { x: o.x + m, y: gy - o.h + m, w: o.w - 2 * m, h: o.h - m };
+  // Прыжковые (dumb/kettle/bench/plate/rival) — их o.w/o.h в масштабе SKW
+  // (см. spawnObstacle), поэтому и отступ по ширине свой, поменьше.
+  return { x: o.x + mw, y: gy - o.h + m, w: o.w - 2 * mw, h: o.h - m };
 }
 
 // ── СПОРТПИТ ─────────────────────────────────────────────────────────────────
@@ -725,51 +1132,88 @@ let nextItemAt = 140;
 function spawnItems() {
   // Свободные награды не пересекаются с препятствиями: если у правого края
   // уже спавнится преграда, дорожка вела бы прямо в неё — переносим попытку.
-  if (obstacles.some(o => o.x > W - 180)) { nextItemAt = dist + 12; return; }
+  if (obstacles.some(o => o.x > W - 180 * SK)) { nextItemAt = dist + 12; return; }
   const r = Math.random();
   // Щит — редкая подстраховка, не рутинная: было 14% на каждый спавн награды,
   // теперь втрое реже (~5%). Остальные веса (предтрен/гейнер/батончики/обычные)
   // сохраняют прежнюю ширину диапазона, просто сдвинуты.
-  if (r < 0.05) items.push(mkItem('creatine', W + 60, GROUND() - 120));
-  else if (r < 0.16) items.push(mkItem('preworkout', W + 60, GROUND() - 150));
-  else if (r < 0.25) items.push(mkItem('gainer', W + 60, GROUND() - 100));
+  if (r < 0.05) items.push(mkItem('creatine', W + 60 * SK, GROUND() - 120 * SK));
+  else if (r < 0.16) items.push(mkItem('preworkout', W + 60 * SK, GROUND() - 150 * SK));
+  else if (r < 0.25) items.push(mkItem('gainer', W + 60 * SK, GROUND() - 100 * SK));
   else if (r < 0.39) {
     // Верхний ярус: достаётся только двойным прыжком, поэтому и награда
     // жирнее — батончики вместо шейкеров.
-    for (let i = 0; i < 3; i++) items.push(mkItem('bar', W + 60 + i * 58, GROUND() - 240));
+    for (let i = 0; i < 3; i++) items.push(mkItem('bar', W + 60 * SK + i * 58 * SK, GROUND() - 240 * SK));
   } else {
     const n = 4 + Math.floor(rnd(0, 3)), arc = Math.random() < 0.5;
     const barMix = Math.random() < 0.3;
     for (let i = 0; i < n; i++) {
-      const y = arc ? GROUND() - 80 - Math.sin(i / (n - 1) * Math.PI) * 80 : GROUND() - 64;
+      const y = arc ? GROUND() - 80 * SK - Math.sin(i / (n - 1) * Math.PI) * 80 * SK : GROUND() - 64 * SK;
       const type = (barMix && i === Math.floor(n / 2)) ? 'bar' : 'shaker';
-      items.push(mkItem(type, W + 60 + i * 54, y));
+      items.push(mkItem(type, W + 60 * SK + i * 54 * SK, y));
     }
   }
-  nextItemAt = dist + rnd(28, 60);
+  // Та же волна ритма, что и у препятствий (см. paceFactor), но зеркально:
+  // на передышке награды идут гуще, на плотном участке — реже, чтобы
+  // «передышка с бонусами» была не только про пустоту, а про добычу.
+  nextItemAt = dist + rnd(28, 60) * (0.7 + 0.5 * paceFactor());
 }
 function mkItem(type, x, y) { return { type, x, y, t: rnd(0, 6) }; }
+// Пять типов спортпита — каждый со своим силуэтом и цветом, а не одинаковый
+// квадратик: шейкер (цилиндр+крышка), батончик (обёртка с крутками), креатин
+// (пакет-саше на молнии), предтреник (банка с зигзагом-«разрядом»), гейнер
+// (широкая банка со скотчем). Жирный тёмный контур — как у препятствий.
 function drawItem(it) {
   const d = ITEM_TYPES[it.type];
-  const bob = Math.sin(it.t * 4) * 4;
-  ctx.save(); ctx.translate(it.x, it.y + bob);
-  // Мягкий ореол: в тёмных локациях (неон, улица) предметы сливались с фоном.
-  ctx.fillStyle = 'rgba(255,255,255,0.09)';
-  ctx.beginPath(); ctx.arc(0, 0, 21, 0, 7); ctx.fill();
+  const bob = Math.sin(it.t * 4) * 4 * SI;
+  ctx.save(); ctx.translate(it.x, it.y + bob); ctx.scale(SI, SI);
+  // Холодный зелёно-мятный ореол — «безопасно, подбери» — общий признак ЛЮБОГО
+  // подбираемого предмета, зеркальный по смыслу тёплому красно-оранжевому
+  // ореолу препятствий (см. obstacleHalo): один и тот же приём рассеянного
+  // светового пятна, но противоположный по температуре, чтобы препятствие и
+  // награда не читались одним и тем же «светлым пятном в темноте», как раньше.
+  const ihg = ctx.createRadialGradient(0, 0, 1, 0, 0, 26);
+  ihg.addColorStop(0, 'rgba(120,255,196,0.40)');
+  ihg.addColorStop(0.6, 'rgba(120,255,196,0.16)');
+  ihg.addColorStop(1, 'rgba(120,255,196,0)');
+  ctx.fillStyle = ihg;
+  ctx.beginPath(); ctx.arc(0, 0, 26, 0, 7); ctx.fill();
   if (it.type === 'shaker') {
-    ctx.fillStyle = d.color; ctx.fillRect(-9, -12, 18, 26);
+    ctx.beginPath(); ctx.roundRect(-9, -12, 18, 26, 3); fillStroke(d.color);
     ctx.fillStyle = '#b93b4e'; ctx.fillRect(-9, -2, 18, 4);
-    ctx.fillStyle = '#2b2b33'; ctx.fillRect(-10, -18, 20, 7); ctx.fillRect(-4, -23, 8, 6);
+    ctx.beginPath(); ctx.roundRect(-10, -19, 20, 8, 2); fillStroke('#2b2b33');
+    ctx.fillStyle = '#2b2b33'; ctx.fillRect(-4, -24, 8, 6);
   } else if (it.type === 'bar') {
     ctx.rotate(-0.2);
-    ctx.fillStyle = d.color; ctx.fillRect(-16, -8, 32, 16);
+    ctx.beginPath(); ctx.roundRect(-16, -8, 32, 16, 3); fillStroke(d.color);
     ctx.fillStyle = '#c79a20'; ctx.fillRect(-16, -8, 8, 16); ctx.fillRect(8, -8, 8, 16);
+    // крутки обёртки по бокам
+    ctx.strokeStyle = 'rgba(20,17,15,0.7)'; ctx.lineWidth = 1.4;
+    ctx.beginPath(); ctx.moveTo(-16, -8); ctx.lineTo(-20, 0); ctx.lineTo(-16, 8); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(16, -8); ctx.lineTo(20, 0); ctx.lineTo(16, 8); ctx.stroke();
     ctx.fillStyle = '#14110f'; ctx.font = "900 8px 'Courier New', monospace"; ctx.textAlign = 'center'; ctx.fillText('PRO', 0, 3);
+  } else if (it.type === 'creatine') {
+    // Саше-пакет с молнией сверху — приплюснутая трапеция, а не прямоугольник.
+    ctx.beginPath();
+    ctx.moveTo(-12, 14); ctx.lineTo(-10, -14); ctx.lineTo(10, -14); ctx.lineTo(12, 14); ctx.closePath();
+    fillStroke(d.color);
+    ctx.fillStyle = 'rgba(255,255,255,0.28)'; ctx.fillRect(-8, -10, 4, 20);
+    ctx.fillStyle = '#3a5fb0'; ctx.fillRect(-10, -16, 20, 5);
+    ctx.fillStyle = CHALK; ctx.font = "900 6.5px 'Courier New', monospace"; ctx.textAlign = 'center';
+    ctx.fillText(d.label, 0, 6);
+  } else if (it.type === 'preworkout') {
+    // Банка предтреника с молнией-разрядом на этикетке — «энергия».
+    ctx.beginPath(); ctx.roundRect(-10, -15, 20, 30, 4); fillStroke(d.color);
+    ctx.fillStyle = '#14110f'; ctx.fillRect(-10, -15, 20, 6);
+    ctx.fillStyle = CHALK;
+    ctx.beginPath(); ctx.moveTo(-1, -6); ctx.lineTo(3, -6); ctx.lineTo(-2, 2); ctx.lineTo(2, 2); ctx.lineTo(-4, 12); ctx.lineTo(-2, 3); ctx.lineTo(-6, 3); ctx.closePath(); ctx.fill();
   } else {
-    ctx.fillStyle = d.color; ctx.fillRect(-13, -16, 26, 32);
-    ctx.fillStyle = 'rgba(0,0,0,0.3)'; ctx.fillRect(-13, -16, 26, 7);
-    ctx.fillStyle = CHALK; ctx.font = "900 7px 'Courier New', monospace"; ctx.textAlign = 'center';
-    ctx.fillText(d.label, 0, 5);
+    // Гейнер: широкая банка с ободком-крышкой сверху — самый крупный сосуд из пяти.
+    ctx.beginPath(); ctx.roundRect(-14, -17, 28, 34, 5); fillStroke(d.color);
+    ctx.fillStyle = '#2f3d30'; ctx.fillRect(-14, -17, 28, 7);
+    ctx.fillStyle = 'rgba(255,255,255,0.22)'; ctx.fillRect(-14, -8, 28, 5);
+    ctx.fillStyle = CHALK; ctx.font = "900 6.5px 'Courier New', monospace"; ctx.textAlign = 'center';
+    ctx.fillText(d.label, 0, 11);
   }
   if (d.power) {
     ctx.strokeStyle = d.color; ctx.globalAlpha = 0.5 + 0.4 * Math.sin(it.t * 6);
@@ -788,14 +1232,21 @@ function burst(x, y, color, n = 10, sp = 180) {
 }
 const toasts = [];
 function toast(text, color, x, y) {
-  toasts.push({ text, color, t: 0, x: x ?? P.x, y: y ?? P.y - P.h - 30 });
+  toasts.push({ text, color, t: 0, x: x ?? P.x, y: y ?? P.y - P.h - 30, life: 1.2 });
+}
+// Крупный «удар» текста — контрольные точки, победа над боссом, финиш: то же,
+// что toast(), но заметно крупнее, с толстой тёмной обводкой (читается на
+// любом фоне без подложки) и коротким пружинным попаданием на старте, а не
+// плоским появлением — момент должен ЧУВСТВОВАТЬСЯ, а не проскакивать мимо.
+function bigPop(text, color, x, y) {
+  toasts.push({ text, color, t: 0, x: x ?? W / 2, y: y ?? H * 0.32, life: 1.5, big: true });
 }
 
 // ── ИГРОК ────────────────────────────────────────────────────────────────────
 function playerBox() {
   const sliding = P.slideT > 0;
-  const h = sliding ? 30 : P.h, w = P.w;
-  return { x: P.x - w / 2 + 4, y: P.y - h, w: w - 8, h: h - 4 };
+  const h = sliding ? 30 * SK : P.h, w = P.w;
+  return { x: P.x - w / 2 + 4 * SKW, y: P.y - h, w: w - 8 * SKW, h: h - 4 * SK };
 }
 // roundRect есть не во всех вебвью — мягкий полифилл
 if (!CanvasRenderingContext2D.prototype.roundRect) {
@@ -870,7 +1321,7 @@ function drawHead(c, f, hx, hy) {
 // Ориентация — бежит вправо, начало координат в точке опоры. Осанка прямая,
 // мышечные объёмы отдельными формами: дельта, бицепс, икра, V-образный торс.
 function drawAthlete(c, fighter, opts) {
-  const { sliding = false, run = 0, rage = false, shield = false, scale = 1, idle = false } = opts || {};
+  const { sliding = false, run = 0, rage = false, shield = false, scale = 1, idle = false, outline = false } = opts || {};
   // Принимает и ключ из FIGHTERS (игрок), и готовый объект палитры напрямую
   // (вышибала — RIVAL_SKIN, не входит в выбираемых персонажей).
   const f = typeof fighter === 'string' ? FIGHTERS[fighter] : fighter;
@@ -879,6 +1330,10 @@ function drawAthlete(c, fighter, opts) {
   const torsoD = shade(torsoCol, 0.78);
   const skinD = shade(f.skin, 0.78);
   c.save(); c.scale(scale, scale);
+  // Жирный тёмный контур по силуэту — самый заметный объект кадра должен
+  // читаться на любом фоне (неон/подвал/улица). Тень от всех залитых форм
+  // при таком смещении и цвете складывается в контур вокруг фигуры целиком.
+  if (outline) { c.shadowColor = 'rgba(10,7,5,0.9)'; c.shadowBlur = 5; c.shadowOffsetX = 0; c.shadowOffsetY = 0; }
   if (rage) {
     c.fillStyle = 'rgba(255,90,54,0.22)';
     for (let i = 1; i <= 3; i++) c.fillRect(-17 - i * 14, -58 + i * 5, 34, 52 - i * 8);
@@ -985,14 +1440,44 @@ function drawAthlete(c, fighter, opts) {
   }
   c.restore();
 }
+// Верхушка двойного прыжка (особенно если он взят почти у пика первого) может
+// в игровых координатах уйти заметно выше того, что помещается в кадр над
+// HUD — сама механика (vy/гравитация) от этого не меняется ни на пиксель,
+// коллизии считаются по настоящему P.y как и раньше (см. update/obstacleBox).
+// Здесь ограничиваем только ОТРИСОВКУ: выше этой линии экрана фигура рисуется
+// «зависшей» — визуальная точка опоры перестаёт подниматься дальше, хотя
+// P.y продолжает расти как обычно, и как только реальный P.y возвращается
+// ниже отметки, отрисовка плавно (без скачка) продолжает следовать за ним.
+// Обычный одиночный и типичный двойной прыжок до этой отметки не долетают —
+// подрезка касается только редкого «прыжка на пике прыжка».
+const PLAYER_VISUAL_MIN_Y = 275;
+function playerRenderY() { return Math.max(P.y, PLAYER_VISUAL_MIN_Y); }
 function drawPlayer() {
-  ctx.save(); ctx.translate(P.x, P.y);
+  const ry = playerRenderY();
+  ctx.save(); ctx.translate(P.x, ry);
+  // Тень под ногами — крупнее и темнее нового масштаба, сжимается в прыжке
+  // пропорционально высоте отрыва от земли (см. ниже drawShadow). Считаем от
+  // той же отрисовочной высоты ry, чтобы тень не «отставала» от подрезанной фигуры.
+  drawShadow(GROUND() - ry, SK);
   drawAthlete(ctx, selectedFighter, {
     sliding: P.slideT > 0,
     run: P.onGround ? Math.sin(P.runPhase * 14) : 0.4,
     rage: P.rageT > 0,
     shield: P.shield,
+    scale: SK,
+    outline: true,
   });
+  ctx.restore();
+}
+// Тень: эллипс, который сжимается и бледнеет с высотой отрыва airH (px).
+function drawShadow(airH, scale) {
+  const k = Math.max(0.28, 1 - airH / (260 * scale));
+  ctx.save();
+  ctx.globalAlpha = 0.4 * k;
+  ctx.fillStyle = '#000';
+  ctx.beginPath();
+  ctx.ellipse(0, 3, 20 * scale * k, 6 * scale * k, 0, 0, 7);
+  ctx.fill();
   ctx.restore();
 }
 
@@ -1000,16 +1485,19 @@ function drawPlayer() {
 function jump() {
   if (!running) return;
   if (P.slideT > 0) P.slideT = 0;
-  if (P.onGround) { P.vy = -870; P.onGround = false; P.jumps = 1; sJump(); }
-  else if (P.jumps < 2) { P.vy = -760; P.jumps = 2; sDouble(); burst(P.x, P.y - 10, 'rgba(242,237,227,0.8)', 6, 120); }
+  // vy и гравитация (см. update()) масштабированы одним и тем же SK — апекс
+  // прыжка растёт в SK раз, а время полёта не меняется (v/g тот же), поэтому
+  // горизонтальный охват прыжка и синхронизация с препятствиями не сбились.
+  if (P.onGround) { P.vy = -870 * SK; P.onGround = false; P.jumps = 1; sJump(); }
+  else if (P.jumps < 2) { P.vy = -760 * SK; P.jumps = 2; sDouble(); burst(P.x, P.y - 10, 'rgba(242,237,227,0.8)', 6, 120); }
 }
 function slide() {
   if (!running) return;
   // Длительность от скорости, а не константа: подкат должен покрывать длину
-  // стойки (~290 px) на любой скорости. С фиксированными 0.62 с на стартовой
-  // скорости игрок вставал ровно под перекладиной — гарантированная смерть.
-  if (P.onGround) P.slideT = Math.min(1.05, Math.max(0.5, 330 / Math.max(120, speed)));
-  else { P.vy = Math.max(P.vy, 900); P.slideT = 0.5; }
+  // стойки (масштабированной на SK) на любой скорости. С фиксированными 0.62 с на
+  // стартовой скорости игрок вставал ровно под перекладиной — гарантированная смерть.
+  if (P.onGround) P.slideT = Math.min(1.05, Math.max(0.5, 330 * SK / Math.max(120, speed)));
+  else { P.vy = Math.max(P.vy, 900 * SK); P.slideT = 0.5; }
 }
 let touchY = null, touchT = 0, touchJumped = false;
 cv.addEventListener('pointerdown', e => {
@@ -1087,8 +1575,8 @@ function selectFighter(key) {
 
 // ── КОНЕЦ ЗАБЕГА ────────────────────────────────────────────────────────────
 function die() {
-  running = false; sDie(); shakeT = 0.5; flash('red');
-  burst(P.x, P.y - 30, C_RAGE, 22, 260);
+  running = false; sDie(); addShake(SHAKE_MAX); addHitStop(0.09); flash('red');
+  burst(P.x, P.y - 30 * SK, C_RAGE, 28, 320);
   const d = Math.floor(dist);
   if (d > best) { best = d; localStorage.setItem('gymrun_best', best); }
   lastResult = {
@@ -1111,7 +1599,49 @@ function die() {
   setTimeout(() => showScreen('screen-result'), 900);
 }
 
-// «Ещё раз»: рестарт локальный — вопросы качать не надо, результат шлём фоном
+// Забег выигран: дистанция дошла до FINISH_DIST живым — не рядовая смерть,
+// самый сочный момент в игре, поэтому отдача заметно крупнее обычного
+// столкновения (см. die()): золотой залп партиклов, полновесный хит-стоп,
+// вспышка и большой попап прямо на канвасе, ДО перехода на победный экран.
+function winRun() {
+  if (finished) return;
+  finished = true; running = false;
+  sPower(); addShake(SHAKE_MAX); addHitStop(0.16); flash('gold');
+  bigPop(tr('winTitle'), C_GOLD, W / 2, H * 0.36);
+  for (let k = 0; k < 3; k++) burst(P.x + k * 10, P.y - 30 * SK - k * 20, C_GOLD, 34, 420);
+  burst(P.x, P.y - 60 * SK, '#fff6d8', 20, 300);
+  const d = Math.floor(dist);
+  if (d > best) { best = d; localStorage.setItem('gymrun_best', best); }
+  lastResult = {
+    distance: d, score, fighter: selectedFighter,
+    best, maxCombo, pickups, gameTimestamp: Date.now(), won: true,
+  };
+  const art = document.getElementById('win-art');
+  art.style.display = 'none';
+  art.onload = () => { art.style.display = 'block'; };
+  art.onerror = () => { art.style.display = 'none'; };
+  art.src = 'assets/game/' + selectedFighter + '.jpg';
+  document.getElementById('win-score').textContent = d + ' ' + tr('unit') + ' · 🥤 ' + score;
+  document.getElementById('win-stats').textContent =
+    tr('resultStats') + maxCombo + tr('resultStatsPickups') + pickups;
+  // «ПРИВЕТ АТЛЕТ! »/«HEY ATHLETE! » — брендовая формула, имя не подставляем (см. TONE_OF_VOICE.md)
+  document.getElementById('win-quip').textContent = tr('greeting') + d + pick(WIN_QUIPS);
+  document.getElementById('win-best').textContent = tr('resultBest') + best + ' ' + tr('unit');
+  document.getElementById('win-status').textContent = '';
+  setTimeout(() => showScreen('screen-win'), 850);
+}
+
+// «Бежать дальше»: рекордсмену не обязательно начинать заново — забег
+// продолжается тем же подходом на ещё бо́льшую дистанцию, за FINISH_DIST
+// (эндлесс-хвост). finished остаётся true, поэтому winRun() второй раз не
+// сработает и не откроет тот же экран заново.
+function continueRun() {
+  showScreen('game');
+  running = true;
+  last = performance.now();
+}
+
+// «Ещё раз»/«Новый забег»: рестарт локальный — вопросы качать не надо, результат шлём фоном
 function restartGame() {
   if (lastResult) submitResult(lastResult); // fire-and-forget, как submit в restartGame совы
   lastResult = null;
@@ -1136,8 +1666,10 @@ async function submitResult(result) {
   }
 }
 
-async function submitAndClose() {
-  const statusEl = document.getElementById('result-status');
+// statusElId — «Отказ» и «Финиш» экраны показывают статус отправки в разных
+// плашках (#result-status / #win-status), логика отправки одна и та же.
+async function submitAndClose(statusElId) {
+  const statusEl = document.getElementById(statusElId || 'result-status');
   if (!window.Telegram?.WebApp) {
     statusEl.textContent = tr('localPrototype');
     return;
@@ -1164,10 +1696,26 @@ function update(dt) {
   const spd = speed * (rage ? 1.55 : 1);
   dist += spd * dt / 7;
   speed = Math.min(SPEED_CAP, speed + SPEED_RAMP * dt);
-  // Милстоны: каждые 500 м — отметка, чтобы у бесконечного забега были этапы.
-  if (Math.floor(dist / 500) > lastMile) {
+  // Милстоны: каждые 500 м — отметка, чтобы у забега были заметные этапы.
+  // На финальном отрезке этот же счётчик подряд задел бы FINISH_DIST — не
+  // дублируем событие, у финиша своя, более крупная реплика (см. winRun).
+  if (!finished && Math.floor(dist / 500) > lastMile && dist < FINAL_STRETCH_START) {
     lastMile = Math.floor(dist / 500);
-    toast(lastMile * 500 + ' ' + tr('unit') + '!', C_GOLD, W / 2, H * 0.3);
+    bigPop(lastMile * 500 + ' ' + tr('unit') + '!', C_GOLD, W / 2, H * 0.3);
+    burst(W / 2, H * 0.3, C_GOLD, 10, 160);
+  }
+  // Финальный отрезок: заметно другой свет вместо очередной зоны (см. render —
+  // finaleGlow) и решающая встреча с усиленным вышибалой прямо перед линией
+  // (см. spawnBoss) — не смягчаем сложность, а даём забегу видимую цель и
+  // кульминацию, как договаривались с заказчиком.
+  if (!finished && !finalStretchAnnounced && dist >= FINAL_STRETCH_START) {
+    finalStretchAnnounced = true;
+    bigPop(tr('zoneFinal'), C_GOLD, W / 2, H * 0.3);
+    addShake(0.22); addHitStop(0.1);
+  }
+  if (!finished && !bossSpawned && dist >= BOSS_TRIGGER_DIST) {
+    bossSpawned = true;
+    spawnBoss();
   }
   if (P.rageT > 0) P.rageT -= dt;
   if (P.magnetT > 0) P.magnetT -= dt;
@@ -1175,8 +1723,12 @@ function update(dt) {
   P.runPhase += dt * (spd / 340);
 
   if (!P.onGround) {
-    P.vy += 2350 * dt; P.y += P.vy * dt;
-    if (P.y >= GROUND()) { P.y = GROUND(); P.vy = 0; P.onGround = true; P.jumps = 0; }
+    P.vy += 2350 * SK * dt; P.y += P.vy * dt;
+    if (P.y >= GROUND()) {
+      P.y = GROUND(); P.vy = 0; P.onGround = true; P.jumps = 0;
+      // Пыль на приземлении — заметный, но короткий всплеск у ног.
+      burst(P.x, GROUND() - 4, 'rgba(210,200,180,0.7)', 7, 130);
+    }
   }
 
   if (dist >= nextObsAt) spawnObstacle();
@@ -1187,26 +1739,43 @@ function update(dt) {
     const o = obstacles[i];
     o.x -= spd * dt + (o.vx ? o.vx * dt : 0);
     if (o.kind === 'plate') o.rot -= dt * 7;
-    if (o.kind === 'rival') o.runPhase += dt * ((spd + o.vx) / 300);
+    if (o.kind === 'rival' || o.kind === 'boss') o.runPhase += dt * ((spd + o.vx) / 300);
     if (o.kind === 'bag') o.swingPhase += dt * 2.4;
     if (o.kind === 'cable') o.wavePhase += dt * 7;
     if (o.kind === 'flyplate') { o.rot -= dt * 12; o.floatPhase += dt * 3.5; o.age += dt; }
-    if (o.x < -160) { obstacles.splice(i, 1); continue; }
+    if (o.x < -400 * SK) {
+      // Босс, пройденный живым (перепрыгнут, не срублен яростью) — решающий
+      // момент забега состоялся и выигран: не рядовой уход препятствия за
+      // край экрана, а маленькая победа со своей отдачей.
+      if (o.kind === 'boss' && !o.cleared) {
+        o.cleared = true;
+        score += 60 * mult();
+        bigPop(tr('bossDown'), C_GOLD, W / 2, H * 0.34);
+        burst(P.x, P.y - 30 * SK, C_GOLD, 30, 360);
+        addShake(0.28); addHitStop(0.06); sPower();
+      }
+      obstacles.splice(i, 1); continue;
+    }
     const b = obstacleBox(o);
     if (pb.x < b.x + b.w && pb.x + pb.w > b.x && pb.y < b.y + b.h && pb.y + pb.h > b.y) {
       if (rage) {
         // Ярость награждает за агрессию: снос — это очки, а не только спецэффект.
-        const bonus = 25 * mult();
+        // Босс сносом — тоже победа над ним, поэтому получает свою фанфару,
+        // а не тот же тихий подсчёт очков, что рядовая гантеля.
+        const isBoss = o.kind === 'boss';
+        const bonus = (isBoss ? 120 : 25) * mult();
         score += bonus;
-        burst(o.x + (o.w || 30) / 2, GROUND() - 24, '#9aa0ab', 14, 300);
+        burst(o.x + (o.w || 30) / 2, GROUND() - 24 * SK, isBoss ? C_GOLD : '#9aa0ab', isBoss ? 42 : 18, isBoss ? 420 : 340);
+        addShake(isBoss ? SHAKE_MAX : 0.18);
+        if (isBoss) { addHitStop(0.08); o.cleared = true; bigPop(tr('bossDown'), C_GOLD, W / 2, H * 0.34); }
         obstacles.splice(i, 1);
-        toast('+' + bonus, C_RAGE, o.x, GROUND() - 80);
+        toast('+' + bonus, C_RAGE, o.x, GROUND() - 80 * SK);
         continue;
       }
       if (P.shield) {
         P.shield = false; combo = 0;
-        obstacles.splice(i, 1); burst(P.x, P.y - 30, '#7ea8ff', 16, 260);
-        toast(tr('shieldSaved'), '#7ea8ff'); shakeT = 0.25; continue;
+        obstacles.splice(i, 1); burst(P.x, P.y - 30 * SK, '#7ea8ff', 20, 300);
+        bigPop(tr('shieldSaved'), '#7ea8ff', P.x, P.y - P.h - 20); addShake(0.3); continue;
       }
       die(); return;
     }
@@ -1216,49 +1785,184 @@ function update(dt) {
     const it = items[i]; it.t += dt;
     it.x -= spd * dt;
     if (P.magnetT > 0) {
-      const dx = P.x - it.x, dy = (P.y - 40) - it.y, d = Math.hypot(dx, dy);
-      if (d < 240) { it.x += dx / d * 520 * dt; it.y += dy / d * 520 * dt; }
+      const dx = P.x - it.x, dy = (P.y - 40 * SK) - it.y, d = Math.hypot(dx, dy);
+      if (d < 240 * SK) { it.x += dx / d * 520 * dt; it.y += dy / d * 520 * dt; }
     }
-    if (it.x < -60) { items.splice(i, 1); continue; }
-    const dx = Math.abs(it.x - P.x), dy = Math.abs(it.y - (P.y - 34));
-    if (dx < 34 && dy < 44) {
+    if (it.x < -60 * SK) { items.splice(i, 1); continue; }
+    const dx = Math.abs(it.x - P.x), dy = Math.abs(it.y - (P.y - 34 * SK));
+    if (dx < 34 * SKW && dy < 44 * SKW) {
       const d = ITEM_TYPES[it.type];
       items.splice(i, 1);
-      burst(it.x, it.y, d.color, 8, 160);
+      burst(it.x, it.y, d.color, 12, 220);
       const before = mult();
       combo += 1; maxCombo = Math.max(maxCombo, combo);
-      if (d.power === 'shield') { P.shield = true; pickups += 1; toast(tr('shieldPickup'), '#7ea8ff'); sPower(); }
-      else if (d.power === 'rage') { P.rageT = 4.2; pickups += 1; toast(tr('rageToast'), C_RAGE); sPower(); shakeT = 0.3; }
-      else if (d.power === 'magnet') { P.magnetT = 6; pickups += 1; toast(tr('magnetToast'), '#67c26a'); sPower(); }
-      else { score += d.pts * mult(); sPick(); }
-      if (mult() > before) toast(tr('streakPrefix') + mult(), C_GOLD);
+      // Пауэрапы и жирные награды — не рутинный подбор, а маленькое событие:
+      // крупный текст, а не рядовой тост, плюс лёгкий толчок камеры.
+      if (d.power === 'shield') { P.shield = true; pickups += 1; bigPop(tr('shieldPickup'), '#7ea8ff', it.x, it.y - 30); sPower(); burst(P.x, P.y - 40 * SK, '#7ea8ff', 16, 260); }
+      else if (d.power === 'rage') { P.rageT = 4.2; pickups += 1; bigPop(tr('rageToast'), C_RAGE, it.x, it.y - 30); sPower(); addShake(0.3); burst(P.x, P.y - 40 * SK, C_RAGE, 18, 300); }
+      else if (d.power === 'magnet') { P.magnetT = 6; pickups += 1; bigPop(tr('magnetToast'), '#67c26a', it.x, it.y - 30); sPower(); burst(P.x, P.y - 40 * SK, '#67c26a', 16, 260); }
+      else {
+        const gain = d.pts * mult();
+        score += gain; sPick();
+        // Обычный шейкер — не событие, мелькает слишком часто, чтобы каждый раз
+        // выскакивал текст. Батончик (жирная награда с верхнего яруса) — уже да.
+        if (it.type === 'bar') toast('+' + gain, d.color, it.x, it.y - 26);
+      }
+      if (mult() > before) bigPop(tr('streakPrefix') + mult(), C_GOLD, it.x, it.y - 34);
     }
   }
 
   toasts.forEach(ts => { ts.t += dt; ts.y -= 30 * dt; });
-  for (let i = toasts.length - 1; i >= 0; i--) if (toasts[i].t > 1.2) toasts.splice(i, 1);
+  for (let i = toasts.length - 1; i >= 0; i--) if (toasts[i].t > (toasts[i].life || 1.2)) toasts.splice(i, 1);
+
+  // Линия финиша — проверяем последней: столкновение с боссом в этом же кадре
+  // (die(), выше) уже вышло бы из update() раньше и до победы дело не дошло
+  // бы — забег до конца нужно ДОБЕЖАТЬ живым, а не просто отмотать дистанцию.
+  if (!finished && dist >= FINISH_DIST) { winRun(); return; }
 }
 
 // ── РЕНДЕР ──────────────────────────────────────────────────────────────────
+// Дорожка под ногами: раньше это была почти плоская тёмная полоса — теперь
+// текстура помоста (плитка со швами), тёплое пятно света под каждой лампой
+// (в тон акцента зоны — работает и там, где стена сама по себе однотонная),
+// разметка, три слоя ближних штрихов с разным параллаксом (чем ближе к
+// нижнему краю, тем быстрее и крупнее — это и есть маркер скорости) и
+// раскиданный у края инвентарь (блины/бутылки), который тоже едет мимо.
+function drawTrack(z) {
+  const gy = GROUND(), sf = speedFrac(), trackH = H - gy;
+
+  // Плитка помоста: швы плюс лёгкое чередование тона, чтобы пол не был
+  // ровной заливкой.
+  const tileW = 52, toff = (dist * 4) % tileW;
+  ctx.fillStyle = 'rgba(0,0,0,0.10)';
+  for (let x = -tileW; x < W + tileW; x += tileW) ctx.fillRect(x - toff, gy + 3, tileW - 4, trackH - 3);
+  ctx.fillStyle = 'rgba(255,255,255,0.05)';
+  for (let x = -tileW; x < W + tileW; x += tileW) ctx.fillRect(x - toff, gy + 3, 2, trackH - 3);
+
+  // Тёплое пятно света на полу под каждой «лампой» — тот же период/сдвиг,
+  // что у ламп подвала (см. drawBasement), но рисуется зонально-нейтрально
+  // через акцентный цвет зоны (z.groundLine), поэтому работает во всех пяти
+  // локациях, а не только там, где явно нарисованы лампы.
+  const glowP = 340, glowOff = (dist * 3.4) % glowP;
+  ctx.globalAlpha = 0.5;
+  for (let x = -glowP; x < W + glowP; x += glowP) {
+    const gx = x - glowOff + glowP / 2;
+    const g = ctx.createRadialGradient(gx, gy, 4, gx, gy, 130);
+    g.addColorStop(0, z.groundLine + 'aa'); g.addColorStop(1, z.groundLine + '00');
+    ctx.fillStyle = g; ctx.fillRect(gx - 130, gy - 10, 260, trackH * 0.8 + 10);
+  }
+  ctx.globalAlpha = 1;
+
+  // Разметка — как раньше, два ряда штрихов на разной высоте/скорости.
+  const dashW = 60, doff = (dist * 7) % (dashW * 2);
+  ctx.fillStyle = 'rgba(242,237,227,0.16)';
+  for (let x = -dashW * 2; x < W + dashW; x += dashW * 2) ctx.fillRect(x - doff + dashW, gy + 22, dashW, 5);
+  const dashW2 = 34, doff2 = (dist * 10.5) % (dashW2 * 2);
+  ctx.fillStyle = 'rgba(242,237,227,0.1)';
+  for (let x = -dashW2 * 2; x < W + dashW2; x += dashW2 * 2) ctx.fillRect(x - doff2 + dashW2, gy + 46, dashW2 * 0.6, 3);
+
+  // Раскиданный у нижнего края инвентарь — гантельный блин плоской стороной
+  // вверх и бутылка воды, едут на самом быстром (ближнем) параллаксе.
+  const dw = 150, doff3 = (dist * 8.4) % dw;
+  for (let x = -dw; x < W + dw; x += dw) {
+    const i = Math.floor(x / dw + 4000);
+    const dx = x - doff3 + (i % 3) * 34;
+    const dy = H - 16 - (i % 2) * 8;
+    ctx.save(); ctx.translate(dx, dy);
+    if (i % 3 === 0) {
+      ctx.fillStyle = 'rgba(0,0,0,0.3)'; ctx.beginPath(); ctx.ellipse(0, 5, 15, 4.5, 0, 0, 7); ctx.fill();
+      ctx.fillStyle = '#7c2a20'; ctx.beginPath(); ctx.ellipse(0, 0, 13, 5.5, 0, 0, 7); ctx.fill();
+      ctx.fillStyle = '#4a1712'; ctx.beginPath(); ctx.ellipse(0, 0, 4.5, 2.4, 0, 0, 7); ctx.fill();
+    } else if (i % 3 === 1) {
+      ctx.fillStyle = 'rgba(0,0,0,0.25)'; ctx.beginPath(); ctx.ellipse(0, 4, 6, 2.2, 0, 0, 7); ctx.fill();
+      ctx.fillStyle = 'rgba(120,190,210,0.6)'; ctx.beginPath(); ctx.roundRect(-4, -13, 8, 15, 2); ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,0.3)'; ctx.fillRect(-4, -13, 2, 15);
+      ctx.fillStyle = '#2b3138'; ctx.fillRect(-2.5, -16, 5, 3);
+    }
+    ctx.restore();
+  }
+
+  // Ближняя кромка дорожки темнее — читается глубина, не одна плоская линия.
+  ctx.fillStyle = 'rgba(0,0,0,0.28)'; ctx.fillRect(0, H - 16, W, 16);
+
+  // Три слоя ближних штрихов с разным параллаксом: чем ближе к нижнему краю,
+  // тем крупнее и быстрее — это главный «на глаз» маркер скорости бега,
+  // работающий даже когда сверху всё спокойно.
+  if (sf > 0.04) {
+    for (let layer = 0; layer < 3; layer++) {
+      const ly = gy + trackH * (0.18 + layer * 0.32);
+      const segW = 60 + layer * 42, per = segW * 2, lof = (dist * (8 + layer * 7)) % per;
+      ctx.strokeStyle = 'rgba(255,255,255,' + (0.06 + 0.05 * layer + 0.12 * sf).toFixed(3) + ')';
+      ctx.lineWidth = 2 + layer * 1.6;
+      for (let x = -per; x < W + segW; x += per) {
+        const lx = x - lof;
+        ctx.beginPath(); ctx.moveTo(lx, ly); ctx.lineTo(lx + segW * 0.6, ly); ctx.stroke();
+      }
+    }
+  }
+  // Штрихи скорости в приземном слое неба — усиливают ощущение бега на разгоне.
+  if (sf > 0.15) {
+    const n = 5, lw = 46 * sf, loff = (dist * 9) % 140;
+    ctx.strokeStyle = 'rgba(255,255,255,' + (0.05 + 0.10 * sf).toFixed(3) + ')'; ctx.lineWidth = 2;
+    for (let i = 0; i < n; i++) {
+      const ly = gy - 30 - i * 30;
+      const lx = W - ((loff + i * 53) % (W + lw)) ;
+      ctx.beginPath(); ctx.moveTo(lx, ly); ctx.lineTo(lx + lw, ly); ctx.stroke();
+    }
+  }
+}
+// Виньетка — тёмные углы кадра, дёшево и сразу «дороже» выглядит картинка.
+function drawVignette() {
+  const r = Math.max(W, H) * 0.78;
+  const g = ctx.createRadialGradient(W / 2, H * 0.46, r * 0.32, W / 2, H * 0.46, r);
+  g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, 'rgba(0,0,0,0.46)');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+}
 function render() {
   if (!cv.classList.contains('active')) return;
   ctx.save();
-  if (shakeT > 0) ctx.translate(rnd(-6, 6) * shakeT, rnd(-6, 6) * shakeT);
+  if (shakeT > 0) ctx.translate(rnd(-9, 9) * shakeT, rnd(-9, 9) * shakeT);
+  // Финальный отрезок обязан ЧИТАТЬСЯ финалом, а не ещё одной зоной: свой
+  // цветовой грейд поверх обычной зоны (не подменяет её рисунок, а красит
+  // сверху — работает при любой из пяти локаций) и нарастание к линии финиша.
+  // finalePalette — один из двух вариантов на забег (см. resetGame), чтобы
+  // соседние подходы не выглядели одним и тем же клипом.
+  const inFinale = !finished && dist >= FINAL_STRETCH_START;
+  const finaleP = inFinale ? Math.min(1, (dist - FINAL_STRETCH_START) / FINAL_STRETCH_LEN) : 0;
   const zi = zoneIndex(), zb = zoneBlend();
-  const z = ZONES[zi], zn = ZONES[(zi + 1) % ZONES.length];
+  const z = ZONES[zi], zn = ZONES[nextZoneIndex()];
 
   const g = ctx.createLinearGradient(0, 0, 0, GROUND());
   g.addColorStop(0, z.sky[0]); g.addColorStop(1, z.sky[1]);
   ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  drawFarBokeh(z.groundLine);
   z.draw(1 - zb * 0.6);
   if (zb > 0) zn.draw(zb);
 
   ctx.fillStyle = z.ground; ctx.fillRect(0, GROUND(), W, H - GROUND());
   if (zb > 0) { ctx.globalAlpha = zb; ctx.fillStyle = zn.ground; ctx.fillRect(0, GROUND(), W, H - GROUND()); ctx.globalAlpha = 1; }
   ctx.fillStyle = z.groundLine; ctx.fillRect(0, GROUND(), W, 3);
-  const dashW = 60, doff = (dist * 7) % (dashW * 2);
-  ctx.fillStyle = 'rgba(242,237,227,0.12)';
-  for (let x = -dashW * 2; x < W + dashW; x += dashW * 2) ctx.fillRect(x - doff + dashW, GROUND() + 22, dashW, 4);
+  drawTrack(z);
+
+  if (inFinale) {
+    // Тёплый (или, во втором варианте палитры, электро-розовый) грейд поверх
+    // всей сцены — усиливается по мере приближения к линии, плюс медленный
+    // пульс, чтобы отрезок ощущался «живым», а не просто перекрашенным фоном.
+    const pulse = 0.5 + 0.5 * Math.sin(t * 5.5);
+    ctx.fillStyle = 'rgba(' + finalePalette.tint + ',' + (0.07 + 0.11 * finaleP + 0.05 * pulse).toFixed(3) + ')';
+    ctx.fillRect(0, 0, W, H);
+    // Энергетические лучи по краям кадра, сходящиеся к центру — тот же приём,
+    // что в «рекламных» раннерах: рамка кадра сама подсказывает «сейчас
+    // что-то решится», без единого слова текста.
+    const rayN = 5, rw = 3 + 5 * finaleP;
+    ctx.strokeStyle = finalePalette.accent + Math.round((0.16 + 0.14 * pulse) * 255).toString(16).padStart(2, '0');
+    ctx.lineWidth = rw;
+    for (let i = 0; i < rayN; i++) {
+      const ry = H * (0.12 + i * 0.19) + Math.sin(t * 3 + i) * 6;
+      ctx.beginPath(); ctx.moveTo(0, ry); ctx.lineTo(W * 0.14, ry); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(W, ry); ctx.lineTo(W * 0.86, ry); ctx.stroke();
+    }
+  }
 
   if (P.rageT > 0) {
     ctx.fillStyle = 'rgba(255,90,54,' + (0.10 + 0.06 * Math.sin(t * 20)) + ')';
@@ -1271,46 +1975,110 @@ function render() {
 
   parts.forEach(p => { ctx.globalAlpha = Math.max(0, p.life * 1.6); ctx.fillStyle = p.color; ctx.fillRect(p.x, p.y, p.r, p.r); });
   ctx.globalAlpha = 1;
+  // bigPop() — крупный текст контрольных точек/победы над боссом/финиша:
+  // толстая тёмная обводка вместо тени (читается на любом фоне без подложки)
+  // и короткий пружинный «щелчок» масштаба на появлении — момент должен
+  // чувствоваться, а не проскакивать плоской надписью.
   toasts.forEach(ts => {
-    ctx.globalAlpha = Math.max(0, 1 - ts.t / 1.2);
-    ctx.font = "900 16px 'Courier New', monospace"; ctx.textAlign = 'center';
-    // Игрок стоит у левого края — тост, отцентрованный на нём, обрезался бы
+    const life = ts.life || 1.2;
+    ctx.globalAlpha = Math.max(0, 1 - ts.t / life);
+    const big = !!ts.big;
+    ctx.font = (big ? "900 34px" : "900 16px") + " 'Courier New', monospace";
+    ctx.textAlign = 'center';
+    const pop = big ? 1 + Math.max(0, 0.22 - ts.t) * 2.6 : 1;
+    // Длинная реплика на узком экране («КРЕАТИН СПАС» на 390px) шире вьюпорта.
+    // Одним прижатием к краю это НЕ лечится: при 2*half+16 > W клэмп ниже
+    // вырождается (нижняя граница становится больше верхней) и текст уезжает
+    // за оба края разом — так и было видно на живом прогоне. Поэтому сначала
+    // ужимаем масштаб до ширины экрана, и только потом прижимаем.
+    const baseHalf = ctx.measureText(ts.text).width / 2;
+    const maxHalf = (W - 16) / 2;
+    const fit = baseHalf * pop > maxHalf ? maxHalf / (baseHalf * pop) : 1;
+    const scale = pop * fit;
+    const half = baseHalf * scale;
+    // Игрок стоит у левого края — текст, отцентрованный на нём, обрезался бы
     // экраном; прижимаем к видимой области.
-    const half = ctx.measureText(ts.text).width / 2;
     const tx = Math.max(half + 8, Math.min(W - half - 8, ts.x));
-    ctx.fillStyle = ts.color; ctx.fillText(ts.text, tx, ts.y);
+    ctx.save();
+    ctx.translate(tx, ts.y); ctx.scale(scale, scale);
+    if (big) {
+      ctx.lineJoin = 'round'; ctx.lineWidth = 6; ctx.strokeStyle = 'rgba(10,7,5,0.92)';
+      ctx.strokeText(ts.text, 0, 0);
+    } else {
+      ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fillText(ts.text, 1.5, 1.5);
+    }
+    ctx.fillStyle = ts.color; ctx.fillText(ts.text, 0, 0);
+    ctx.restore();
   });
   ctx.globalAlpha = 1;
 
-  // HUD — золото как у совы
-  ctx.textAlign = 'left'; ctx.fillStyle = C_GOLD;
-  ctx.font = "900 26px 'Courier New', monospace";
-  ctx.fillText(Math.floor(dist) + ' ' + tr('unit'), 20, 40);
-  ctx.font = "700 14px 'Courier New', monospace"; ctx.fillStyle = 'rgba(242,237,227,0.6)';
-  ctx.fillText(tr('hudRecord') + Math.max(best, Math.floor(dist)) + ' ' + tr('unit'), 20, 62);
-  ctx.textAlign = 'right'; ctx.fillStyle = '#e94f64'; ctx.font = "900 22px 'Courier New', monospace";
+  drawVignette();
+
+  // ── HUD ── разложен по трём непересекающимся полосам: слева дистанция+рекорд,
+  // справа очки, ниже справа — отдельным столбиком активные бонусы (каждый на
+  // своей строке, а не в ряд), зона — в отдельной плашке по центру над всем
+  // остальным. Так при любой длине чисел и любом наборе активных бонусов
+  // элементы не наезжают друг на друга.
+  // Дистанция и очки — самые читаемые цифры на экране (референс — рекламные
+  // раннеры вроде Last War): крупный шрифт и толстая тёмная обводка вместо
+  // тонкой заливки, чтобы цифра прочитывалась мгновенно на любом фоне зоны.
+  ctx.textAlign = 'left';
+  ctx.font = "900 32px 'Courier New', monospace";
+  ctx.lineJoin = 'round'; ctx.lineWidth = 5; ctx.strokeStyle = 'rgba(10,7,5,0.85)';
+  ctx.strokeText(Math.floor(dist) + ' ' + tr('unit'), 20, 42);
+  ctx.fillStyle = C_GOLD; ctx.fillText(Math.floor(dist) + ' ' + tr('unit'), 20, 42);
+  ctx.font = "700 13px 'Courier New', monospace"; ctx.fillStyle = 'rgba(242,237,227,0.65)';
+  ctx.fillText(tr('hudRecord') + Math.max(best, Math.floor(dist)) + ' ' + tr('unit'), 20, 64);
+
+  // Обводка на эмодзи-глифе часто рисуется криво в разных рендерерах — стро́чим
+  // только цифры, значок ставим отдельным fillText без обводки рядом с ними.
+  ctx.textAlign = 'right'; ctx.font = "900 28px 'Courier New', monospace";
   const multNow = mult();
-  ctx.fillText('🥤 ' + score + (multNow > 1 ? '  ×' + multNow : ''), W - 20, 40);
-  let ix = W - 20;
+  const numText = score + (multNow > 1 ? '  ×' + multNow : '');
+  ctx.lineWidth = 5; ctx.strokeStyle = 'rgba(10,7,5,0.85)';
+  ctx.strokeText(numText, W - 20, 42);
+  ctx.fillStyle = '#e94f64'; ctx.fillText(numText, W - 20, 42);
+  const numW = ctx.measureText(numText).width;
+  ctx.font = "900 24px 'Courier New', monospace"; ctx.fillText('🥤', W - 26 - numW, 42);
+
+  // Бонусы — вертикальный столбик под очками, начинается ниже левого блока
+  // (y=76), чтобы никогда не залезать на зональную плашку по центру.
+  let iy = 74;
   const pw = (label, color, frac) => {
     ctx.textAlign = 'right'; ctx.font = "800 12px 'Courier New', monospace"; ctx.fillStyle = color;
-    ctx.fillText(label, ix, 64);
-    ctx.fillStyle = 'rgba(255,255,255,0.15)'; ctx.fillRect(ix - 90, 70, 90, 4);
-    ctx.fillStyle = color; ctx.fillRect(ix - 90, 70, 90 * frac, 4);
-    ix -= 110;
+    ctx.fillText(label, W - 20, iy);
+    ctx.fillStyle = 'rgba(255,255,255,0.18)'; ctx.fillRect(W - 110, iy + 5, 90, 4);
+    ctx.fillStyle = color; ctx.fillRect(W - 110, iy + 5, 90 * frac, 4);
+    iy += 22;
   };
   if (P.rageT > 0) pw(tr('hudRage'), C_RAGE, P.rageT / 4.2);
   if (P.magnetT > 0) pw(tr('hudMagnet'), '#67c26a', P.magnetT / 6);
-  if (P.shield) { ctx.textAlign = 'right'; ctx.font = "800 12px 'Courier New', monospace"; ctx.fillStyle = '#7ea8ff'; ctx.fillText(tr('hudShield'), ix, 64); }
-  ctx.textAlign = 'center'; ctx.font = "800 11px 'Courier New', monospace"; ctx.fillStyle = 'rgba(242,237,227,0.4)';
-  ctx.fillText(z.name, W / 2, 30);
+  if (P.shield) { ctx.textAlign = 'right'; ctx.font = "800 12px 'Courier New', monospace"; ctx.fillStyle = '#7ea8ff'; ctx.fillText(tr('hudShield'), W - 20, iy); iy += 22; }
+
+  // Плашка с названием зоны — своя тёмная подложка, поэтому что бы ни было под
+  // ней, надпись остаётся читаемой. На финальном отрезке она заметно другая:
+  // золотая, пульсирующая, с меткой «ФИНИШНАЯ ПРЯМАЯ» вместо имени зоны — сам
+  // HUD подтверждает, что это уже не рядовая локация.
+  const labelText = inFinale ? tr('zoneFinal') : z.name;
+  ctx.font = "800 11px 'Courier New', monospace";
+  const zoneW = ctx.measureText(labelText).width + 24;
+  ctx.fillStyle = inFinale ? 'rgba(60,26,8,0.55)' : 'rgba(10,10,14,0.45)';
+  ctx.beginPath(); ctx.roundRect(W / 2 - zoneW / 2, 14, zoneW, 20, 10); ctx.fill();
+  if (inFinale) {
+    ctx.strokeStyle = finalePalette.accent + 'aa'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.roundRect(W / 2 - zoneW / 2, 14, zoneW, 20, 10); ctx.stroke();
+  }
+  ctx.textAlign = 'center';
+  ctx.fillStyle = inFinale ? ('rgba(255,215,0,' + (0.75 + 0.2 * Math.sin(t * 6)).toFixed(2) + ')') : 'rgba(242,237,227,0.75)';
+  ctx.fillText(labelText, W / 2, 28);
   ctx.restore();
 }
 
 // ── ЦИКЛ ────────────────────────────────────────────────────────────────────
 let last = performance.now();
 function frame(now) {
-  const dt = Math.min(0.033, (now - last) / 1000); last = now;
+  let dt = Math.min(0.033, (now - last) / 1000); last = now;
+  if (hitStopT > 0) { hitStopT = Math.max(0, hitStopT - dt); dt *= 0.08; }
   update(dt); render();
   requestAnimationFrame(frame);
 }

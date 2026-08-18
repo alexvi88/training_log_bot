@@ -18,19 +18,30 @@
 // навешанный только через addEventListener, событие пропускал) — поэтому,
 // как и в проверке "if (window.THREE) boot()" внизу файла, сперва смотрим на
 // window.THREE напрямую и лишь при его отсутствии ждём событие.
-function loadGltfLoaderScript() {
+// Общая загрузка скрипта-дополнения к THREE: абсолютный путь (прод, страница
+// живёт на /game/squad) с откатом на относительный (локальное открытие файла
+// с диска). Событие успеха/провала своё у каждого дополнения.
+function loadThreeAddon(file, okEvent, failEvent) {
   var s = document.createElement('script');
-  s.src = '/assets/game/gltfloader.js';
-  s.onload = function () { window.dispatchEvent(new Event('gltfloader-ready')); };
+  s.src = '/assets/game/' + file;
+  s.onload = function () { window.dispatchEvent(new Event(okEvent)); };
   s.onerror = function () {
     s.onerror = null;
     var s2 = document.createElement('script');
-    s2.src = 'assets/game/gltfloader.js';
-    s2.onload = function () { window.dispatchEvent(new Event('gltfloader-ready')); };
-    s2.onerror = function () { window.dispatchEvent(new Event('gltfloader-failed')); };
+    s2.src = 'assets/game/' + file;
+    s2.onload = function () { window.dispatchEvent(new Event(okEvent)); };
+    s2.onerror = function () { window.dispatchEvent(new Event(failEvent)); };
     document.head.appendChild(s2);
   };
   document.head.appendChild(s);
+}
+function loadGltfLoaderScript() {
+  loadThreeAddon('gltfloader.js', 'gltfloader-ready', 'gltfloader-failed');
+  // Постобработка (EffectComposer + bloom) — не обязательна для игры: если не
+  // загрузится, сцена рисуется напрямую рендерером без свечения (см.
+  // render()). Поэтому провал не показывает экран ошибки, а просто выключает
+  // эффект, и грузим её параллельно загрузчику моделей, не задерживая старт.
+  loadThreeAddon('post.js', 'post-ready', 'post-failed');
 }
 if (window.THREE) {
   loadGltfLoaderScript();
@@ -186,6 +197,14 @@ if (window.THREE) {
 
 <script>
 'use strict';
+// ── ПЕРЕКЛЮЧАТЕЛЬ ИСТОЧНИКА ТОЛПЫ ────────────────────────────────────────────
+// 'proc' — мускулистая фигура собрана в коде лофтом по сечениям (см.
+// buildProcBodyGeometry ниже, вызывается из loadAllCrowdModels); 'glb' —
+// прежние кубические модели Kenney (loadCharGeo/mergeGltfGeometry). Один
+// словом переключаем всю толпу для сравнения, оба пути рабочие и оба
+// проходят через один и тот же buildCrowdRigFromGeo/placeCharacter/
+// syncEnemyCrowd — переключатель не трогает остальной рендер и бой.
+const CROWD_SOURCE = 'proc'; // 'proc' | 'glb'
 // Expand to full screen immediately (как в game.html)
 if (window.Telegram?.WebApp) Telegram.WebApp.expand();
 
@@ -304,6 +323,12 @@ function resize() {
     renderer.setSize(W, H, false);
     camera.aspect = W / H;
     camera.updateProjectionMatrix();
+    // Цепочку постобработки надо переразмерять вместе с рендерером — иначе
+    // после поворота экрана кадр рисуется в буфер старого размера.
+    if (typeof composer !== 'undefined' && composer) {
+      composer.setPixelRatio(DPR);
+      composer.setSize(W, H);
+    }
   }
 }
 window.addEventListener('resize', resize); resize();
@@ -500,6 +525,52 @@ let lastMile = 0, nextBossMile = 1000;
 let nextEventAt = 0, lastEventWorldX = 0;
 let nextWaveAt = 0; // отдельный таймер волн — дорожка не бывает пустой
 const eventHistory = []; // последние 1-2 типа событий — против серий подряд
+
+// ── РИТМ ЗАБЕГА: макро-сегменты поверх честного рандома ─────────────────────
+// Раньше оба потока (ворота/блины/бонусы и встречные волны) крутились по
+// одним и тем же весам всю дистанцию — на дальней перемотке разные забеги
+// отличались только числами, не ощущением. Сегмент — не своя система
+// спавна, а МНОЖИТЕЛЬ поверх существующих весов/гэпов: числа и формулы
+// баланса (ADD_TIERS/SUB_TIERS/tierVal, softCap волны, FORM_GAP_RATIO_*) не
+// трогаем, меняем только то, что из пула чаще выпадает и с каким интервалом.
+// 'gates' — полоса ворот: чаще решения на воротах, волны реже. 'swarm' —
+// плотный встречный поток: волны идут гуще и чаще, ворота реже. 'breather' —
+// передышка: волн почти нет, зато бонусы/ящики сыплются щедрее. Босс —
+// отдельный рубеж по миле (nextBossMile), сегменты его не касаются.
+const SEGMENT_TYPES = ['gates', 'swarm', 'breather'];
+let segment = 'gates', segmentEndAt = 0;
+const segmentHistory = [];
+function segmentDuration(kind) {
+  if (kind === 'breather') return rnd(90, 140);
+  if (kind === 'swarm') return rnd(140, 220);
+  return rnd(160, 240); // gates
+}
+function pickSegment() {
+  const weighted = SEGMENT_TYPES.map(k => {
+    let v = 1;
+    if (segmentHistory[0] === k) v *= 0.25; // подряд один и тот же сегмент — редкость, не правило
+    return [k, v];
+  });
+  const total = weighted.reduce((s, [, v]) => s + v, 0);
+  let r = Math.random() * total;
+  for (const [k, v] of weighted) { r -= v; if (r <= 0) { segmentHistory.unshift(k); segmentHistory.length = Math.min(2, segmentHistory.length); return k; } }
+  return SEGMENT_TYPES[0];
+}
+function updateSegment() {
+  if (dist >= segmentEndAt) {
+    segment = pickSegment();
+    segmentEndAt = dist + segmentDuration(segment);
+  }
+}
+// Множители сегмента на веса рядового потока (gate/plate/bonus/crate) и на
+// частоту/густоту встречных волн — единственные точки, где сегмент вообще
+// на что-то влияет.
+const SEGMENT_EVENT_MUL = {
+  gates:    { gate: 1.9, plate: 0.8, bonus: 0.9, crate: 1.0 },
+  swarm:    { gate: 0.55, plate: 1.1, bonus: 0.85, crate: 0.9 },
+  breather: { gate: 0.8, plate: 0.7, bonus: 1.8, crate: 1.6 },
+};
+const SEGMENT_WAVE_GAP_MUL = { gates: 1.45, swarm: 0.55, breather: 2.6 };
 let fireTimer = 0;
 let lastResult = null;
 
@@ -513,10 +584,13 @@ let lastResult = null;
 // этот поток теперь только про блины/ворота/бонусы/ящики между волнами.
 function weightsFor(d) {
   const p = clamp(d / 900, 0, 1);
-  return {
+  const base = {
     gate: 0.36 - p * 0.06, plate: 0.24 - p * 0.05,
     bonus: 0.24 - p * 0.08, crate: 0.16 - p * 0.01,
   };
+  const mul = SEGMENT_EVENT_MUL[segment] || SEGMENT_EVENT_MUL.gates;
+  Object.keys(base).forEach(k => { base[k] *= mul[k] ?? 1; });
+  return base;
 }
 let firstGateDone = false;
 function pickEventType() {
@@ -637,6 +711,7 @@ function resetGame() {
   // своему потоку), но настоящая встречная толпа не набегает, пока отряд не
   // успел подрасти хотя бы на одних воротах.
   nextWaveAt = rnd(60, 80);
+  segment = 'gates'; segmentEndAt = rnd(160, 240); segmentHistory.length = 0;
   fireTimer = 0; combo = 0; weaponLevel = 0; weaponTimer = 0;
   obstacles.length = 0; bonuses.length = 0; crates.length = 0; bullets.length = 0;
   parts.length = 0; toasts.length = 0;
@@ -675,18 +750,65 @@ const SPRING_K = 7.5;
 // корень из численности. Узкая колонна тут не годится — сорок бойцов в ней
 // уезжали на два десятка единиц назад, то есть за камеру, и в кадре оставались
 // первые ряды: счётчик показывал сорок, на дорожке стояло семь.
-// Шаги подобраны в мире: 0.63 вбок и 0.60 вглубь при бойце шириной ~0.48 —
-// оба масштабированы вместе с CHAR_SCALE (было 0.42/0.40 при бойце ~0.32),
-// иначе увеличенные фигуры начинают перекрывать друг друга в строю.
-const STEP_X = 0.63 / TRACK_HALF3;
-const STEP_Z = 0.60 / FOLLOWER_Z_SCALE;
+// Шаги строя — НЕ захардкожены под конкретное тело: значения ниже (0.63/0.60,
+// подобранные под узкую ~0.48 кубическую модель Kenney) остаются дефолтом для
+// CROWD_SOURCE==='glb' (её габариты не трогаем), а для 'proc' их полностью
+// перезаписывает setFormationStepsFromGeometries() — она меряет фактический
+// bounding box собранной геометрии мускулистой фигуры (buildProcBodyGeometry)
+// и считает шаг от РЕАЛЬНОЙ ширины/глубины тела, а не от числа на глаз.
+// Иначе любая следующая правка пропорций тела молча рассинхронизирует строй.
+let STEP_X = 0.63 / TRACK_HALF3;
+let STEP_Z = 0.60 / FOLLOWER_Z_SCALE;
+// Зазор между телами в строю — доля от габарита самого тела (не абсолютное
+// число): 0.4 значит «между соседями пустое место в 40% от их размера»,
+// зазор виден при любом масштабе фигуры и любом formScale.
+// Было 0.4 на обе оси — строй выглядел россыпью отдельных фигур, а не толпой.
+// Причина в том, что bounding box СИЛЬНО больше видимого тела: по X в него
+// входит размах рук с дельтами (у пауэрлифтера ~1.32 против 1.0 по плечам),
+// по Z — выступ грудных и стопы. То есть «нулевой» зазор по коробке — это уже
+// заметная щель между торсами. Отсюда разные и маленькие доли по осям.
+// По Z доля чуть больше, чем по X: камера смотрит вдоль дорожки, и ряды при
+// нулевом зазоре просто съедают друг друга — задних не видно вообще.
+const FORM_GAP_RATIO_X = 0.04;
+const FORM_GAP_RATIO_Z = 0.16;
+function footprintOf(geometry) {
+  geometry.computeBoundingBox();
+  const bb = geometry.boundingBox;
+  return { width: bb.max.x - bb.min.x, depth: bb.max.z - bb.min.z };
+}
+// Берём максимум по всем профилям бойца (FIGHTERS) — шаг строя общий для всех
+// скинов, поэтому должен вмещать самый широкий из них (бодибилдер/пауэрлифтер
+// шире кроссфитера), иначе при выборе широкого бойца строй снова слипнется.
+function setFormationStepsFromGeometries(geoMap) {
+  let w = 0, d = 0;
+  Object.values(geoMap).forEach(g => {
+    const fp = footprintOf(g.geometry);
+    w = Math.max(w, fp.width);
+    d = Math.max(d, fp.depth);
+  });
+  if (w <= 0 || d <= 0) return; // защита от пустой геометрии — оставляем дефолт
+  STEP_X = (w * CHAR_SCALE * (1 + FORM_GAP_RATIO_X)) / TRACK_HALF3;
+  STEP_Z = (d * CHAR_SCALE * (1 + FORM_GAP_RATIO_Z)) / FOLLOWER_Z_SCALE;
+}
 let formCols = 2, formRows = 1, formScale = 1;
+// Насколько широко (в долях TRACK_HALF3, при formScale=1) строю разрешено
+// расползтись вбок, прежде чем фигуры начинают агрессивно мельчать — иначе
+// с широким телом и до 16 колонок толпа выезжает за стены дорожки и на
+// воротах закрывает створки. Нижний потолок формScale опущен с 0.55 до 0.14 —
+// при сотнях бойцов тело мельче старого предела быть ОБЯЗАНО, иначе оно не
+// влезает в кадр целиком (см. camera).
+const FORM_TARGET_HALF_WIDTH = 0.60;
+const FORM_SCALE_MIN = 0.14;
 function updateFormation() {
   const n = followers.length + 1;
   formCols = clamp(Math.round(Math.sqrt(n * 1.7)), 2, 16);
   formRows = Math.ceil(n / formCols);
-  // Чем больше орда, тем мельче боец — иначе строй перестаёт влезать в дорожку.
-  formScale = clamp(1 - (n - 40) / 520, 0.55, 1);
+  // При n=1 формула колонок всё равно даёт 2 (сетка считается «на будущее»),
+  // но реально занята только одна ячейка — не даём это ложно сжимать одиночного
+  // лидера, поэтому берём фактически занятые колонки, а не формCols целиком.
+  const colsUsed = Math.min(formCols, n);
+  const rawHalfWidth = STEP_X * (colsUsed - 1) / 2;
+  formScale = clamp(rawHalfWidth > 0 ? FORM_TARGET_HALF_WIDTH / rawHalfWidth : 1, FORM_SCALE_MIN, 1);
 }
 function slotFor(i) {
   const row = Math.floor(i / formCols) + 1;
@@ -958,18 +1080,43 @@ function spawnPlate() {
 // маленький отряд получает соразмерно маленькую прибавку/потерю, поздний
 // большой — соразмерно большую. ×2/÷2 и ×3/÷3 уже были относительными по
 // смыслу — их не трогаю.
-const ADD_TIERS = [{ ratio: 0.5, min: 2, weight: 0.42 }, { ratio: 0.85, min: 3, weight: 0.29 }];
+// Чистая доля от отряда (ratio * squad) была второй крайностью: при отряде в
+// 4 бойца оба прохода показывали «+2», рост стоял на месте и толпы не
+// возникало вообще («+2/+2» на живом прогоне, отряд 6 к 256 метрам). Фикс —
+// не доля и не фикс-число, а СУБЛИНЕЙНАЯ кривая: base + squad^0.75 * k.
+// Малый отряд получает заметную абсолютную прибавку (squad 1 → +4), большой
+// — крупную по числу, но малую по доле (squad 100 → +28, то есть +28%, а не
+// ×16 как было у фиксированного «+15» на старте).
+const ADD_TIERS = [{ base: 3, k: 0.8, min: 3, weight: 0.42 }, { base: 4, k: 1.5, min: 5, weight: 0.29 }];
 // type:'sub' обязателен — pickGateDebuff() маршрутизирует по нему в mkSub();
 // без него объект уходил в игру как есть, без val/label: ворота с этим
 // исходом молча не делали ничего и рисовали «undefined» вместо числа.
-const SUB_TIERS = [{ type: 'sub', ratio: 0.28, min: 2, weight: 1 }];
-const SUB_TIERS_HARD = [{ type: 'sub', ratio: 0.45, min: 3, weight: 1 }];
+// По две ступени на каждый пул (было по одной) — с одной ступенью функция
+// числа отряда ДЕТЕРМИНИРОВАНА, и когда обе створки берут штраф (bothBad),
+// на воротах гарантированно вставало одинаковое «−199/−199»: выбора нет,
+// решение игрока ни на что не влияет.
+const SUB_TIERS = [
+  { type: 'sub', base: 1, k: 0.35, pow: 0.85, min: 2, weight: 1 },
+  { type: 'sub', base: 2, k: 0.60, pow: 0.72, min: 3, weight: 1 },
+];
+const SUB_TIERS_HARD = [
+  { type: 'sub', base: 2, k: 0.60, pow: 0.85, min: 3, weight: 1 },
+  { type: 'sub', base: 3, k: 1.00, pow: 0.72, min: 5, weight: 1 },
+];
+// Разброс ±18% поверх кривой — вторая половина лечения детерминированности:
+// две ступени дают два разных «класса» числа, а джиттер разводит и одинаковые
+// ступени, так что два забега с тем же отрядом не показывают те же цифры.
+const TIER_JITTER = 0.18;
+function tierVal(tier) {
+  const curve = tier.base + Math.pow(Math.max(0, squad), tier.pow || 0.75) * tier.k;
+  return Math.max(tier.min, Math.round(curve * rnd(1 - TIER_JITTER, 1 + TIER_JITTER)));
+}
 function mkAdd(tier) {
-  const val = Math.max(tier.min, Math.round(squad * tier.ratio));
+  const val = tierVal(tier);
   return { type: 'add', val, label: '+' + fmt(val) };
 }
 function mkSub(tier) {
-  const val = Math.max(tier.min, Math.round(squad * tier.ratio));
+  const val = tierVal(tier);
   return { type: 'sub', val, label: '−' + fmt(val) };
 }
 const GATE_MULS = [
@@ -1015,6 +1162,20 @@ function spawnGate() {
   let bothBad = false;
   if (bothGood) debuff = pickGateBuff();
   else if (dist > 250 && Math.random() < 0.14) { buff = pickGateDebuff(hard); bothBad = true; } // меньшее зло
+  // Створки ОБЯЗАНЫ отличаться. Когда обе берутся из одного пула (bothGood /
+  // bothBad), совпадение таблички превращает ворота в пустую формальность:
+  // выбирать нечего, а игрок читает это как «игра детерминирована». Пул
+  // маленький, поэтому не крутим бесконечно — после нескольких попыток
+  // расходим числа принудительно.
+  const reroll = bothGood ? pickGateBuff : () => pickGateDebuff(hard);
+  for (let i = 0; i < 8 && debuff.label === buff.label; i++) debuff = reroll();
+  // Принудительное расхождение — только для аддитивных исходов: у ×2/÷2 знак
+  // и смысл в другом, менять им число нельзя (получится несуществующий «×3»
+  // с весом ×2). Мультипликаторов в пуле мало, и до сюда они не доходят.
+  if (debuff.label === buff.label && (debuff.type === 'add' || debuff.type === 'sub')) {
+    const val = debuff.val + 1;
+    debuff = { ...debuff, val, label: (debuff.type === 'sub' ? '−' : '+') + fmt(val) };
+  }
   const buffLeft = Math.random() < 0.5;
   obstacles.push({ kind: 'gate', z: ZFAR, buff, debuff, buffLeft, bothGood, bothBad, glow: 0 });
 }
@@ -1144,7 +1305,13 @@ function spawnWave() {
                 : dist < 500 ? Math.max(9, squad * 2.2)
                 : Math.max(16, squad * 3.2);
   const total = Math.round(clamp(raw, 3, softCap));
-  const formation = pick(['wedge', 'wedge', 'wall', 'flanks', 'scatter']);
+  // Пул форм тот же, только вес смещается сегментом — 'swarm' чаще берёт
+  // «стену»/«рассыпуху» (гуще и хаотичнее на глаз), 'gates'/'breather' не
+  // меняют вкус по умолчанию. Численность и softCap сегмент не трогает.
+  const formationPool = segment === 'swarm'
+    ? ['wedge', 'wall', 'wall', 'flanks', 'scatter', 'scatter']
+    : ['wedge', 'wedge', 'wall', 'flanks', 'scatter'];
+  const formation = pick(formationPool);
   const jitter = formation === 'scatter' ? Array.from({ length: 12 }, () => rnd(-0.7, 0.7)) : null;
 
   const unlocked = waveTypeUnlocks(dist);
@@ -1255,8 +1422,13 @@ function createMeshFor(o) {
     const doorGeo = new THREE.BoxGeometry(TRACK_HALF3 * 0.94, 1.7, 0.18);
     const edgesGeo = new THREE.EdgesGeometry(doorGeo);
     const mkDoor = (good, x) => {
+      // Заливка — сплошная и однозначная (как в референсе): игрок должен
+      // решать по цвету за долю секунды, не читая число. Насыщенный emissive
+      // тянет за собой bloom (см. buildComposer), поэтому створка ещё и
+      // светится, а не просто закрашена.
       const door = new THREE.Mesh(doorGeo, new THREE.MeshLambertMaterial({
-        color: good ? 0x3cdc6e : 0xff4444, emissive: good ? 0x0e3a1e : 0x3a0e0e, transparent: true, opacity: 0.6,
+        color: good ? 0x2fe86e : 0xff3838, emissive: good ? 0x1c7a3e : 0x8a1414, emissiveIntensity: 1.1,
+        transparent: true, opacity: 0.88,
       }));
       door.position.set(x, 0.95, 0);
       const rim = new THREE.LineSegments(edgesGeo, new THREE.LineBasicMaterial({
@@ -1318,7 +1490,7 @@ function updateMeshFor(o, m) {
     m.position.y = 0;
     o.glow = clamp(1 - o.z / (ZFAR * 0.6), 0, 1);
     if (m.userData.doors) m.userData.doors.forEach(d => {
-      d.material.opacity = 0.55 + 0.32 * o.glow;
+      d.material.opacity = 0.62 + 0.26 * o.glow;
       if (d.userData.rim) d.userData.rim.material.opacity = o.glow;
     });
   }
@@ -1346,13 +1518,13 @@ function syncObstacleMeshes() {
 }
 
 // ── HUD-ЛЕЙБЛЫ НАД ОБЪЕКТАМИ (числа рисуем на 2D-слое, не в 3D) ─────────────
-function textChip(label, x, y, fs, fillColor) {
+function textChip(label, x, y, fs, fillColor, strokeK, bgColor) {
   hctx.font = "900 " + fs + "px 'Courier New', monospace";
   hctx.textAlign = 'center'; hctx.textBaseline = 'middle';
   const tw = hctx.measureText(label).width;
-  hctx.fillStyle = 'rgba(10,8,6,0.55)';
+  hctx.fillStyle = bgColor || 'rgba(10,8,6,0.55)';
   hctx.beginPath(); hctx.roundRect(x - tw / 2 - 6, y - fs / 2 - 3, tw + 12, fs + 6, 6); hctx.fill();
-  hctx.lineWidth = Math.max(2.5, fs * 0.2); hctx.strokeStyle = '#14110f';
+  hctx.lineWidth = Math.max(2.5, fs * (strokeK ?? 0.2)); hctx.strokeStyle = '#14110f';
   hctx.strokeText(label, x, y + 1);
   hctx.fillStyle = fillColor; hctx.fillText(label, x, y + 1);
 }
@@ -1362,14 +1534,23 @@ function drawObstacleLabels() {
       const p = projectPoint(o.worldX, o.z, 1.35);
       textChip(fmt(o.hp), p.x, p.y, Math.max(15, 26 * fakeScale(o.z)), CHALK);
     } else if (o.kind === 'gate') {
-      // Главное решение в игре — цифры обязаны читаться издалека: белым,
-      // огромным, с толстой тёмной обводкой, во всю створку.
+      // Главное решение в игре — цифры обязаны читаться издалека и мгновенно,
+      // как в рекламных роликах жанра: огромные, с толстой тёмной обводкой,
+      // на плашке в цвет самой створки — решение по цвету, число лишь
+      // подтверждает его, а не единственный источник информации.
       const near = projectPoint(-1, o.z, 0.95), mid = projectPoint(0, o.z, 0.95), farE = projectPoint(1, o.z, 0.95);
+      const leftGood = o.bothBad ? false : (o.bothGood || o.buffLeft);
+      const rightGood = o.bothBad ? false : (o.bothGood || !o.buffLeft);
       const label = (o.buffLeft ? o.buff : o.debuff).label;
       const label2 = (o.buffLeft ? o.debuff : o.buff).label;
-      const fs = Math.max(30, 92 * fakeScale(o.z));
-      textChip(label, (near.x + mid.x) / 2, near.y, fs, '#ffffff');
-      textChip(label2, (mid.x + farE.x) / 2, mid.y, fs, '#ffffff');
+      // Потолок обязателен: без него у ближних ворот число разрасталось до
+      // полэкрана и закрывало саму дорожку — на живом прогоне три ряда ворот
+      // подряд не давали разглядеть ни отряд, ни врагов за ними. Крупно ≠
+      // во весь экран: цифра должна доминировать, но не подменять собой игру.
+      const fs = clamp(128 * fakeScale(o.z), 38, 72);
+      const bgGood = 'rgba(20,110,58,0.72)', bgBad = 'rgba(120,20,20,0.72)';
+      textChip(label, (near.x + mid.x) / 2, near.y, fs, '#ffffff', 0.28, leftGood ? bgGood : bgBad);
+      textChip(label2, (mid.x + farE.x) / 2, mid.y, fs, '#ffffff', 0.28, rightGood ? bgGood : bgBad);
     } else if (o.kind === 'wave') {
       // Каждый живой тип в волне — свой цвет и своя цифра над головой, чтобы
       // отличать их в бою на глаз, не только по силуэту. Цифра всегда — живой
@@ -1633,6 +1814,304 @@ function toonGradient() {
   _toonGrad.minFilter = THREE.NearestFilter; _toonGrad.magFilter = THREE.NearestFilter;
   return _toonGrad;
 }
+
+// ── ТЕЛО КАЧКА: процедурная мускулистая фигура (лофт по сечениям) ──────────
+// Заказчик забраковал кубических Kenney («без рельефа и мышц» — и он прав,
+// у кубов мышц взяться не может). Мышцы — это плавные выпуклости, то есть
+// геометрия, у которой радиус меняется вдоль оси: набор горизонтальных
+// эллиптических колец от стоп до головы, соединённых полосой треугольников
+// (лофт). Ширина колец сама рисует анатомию — узкие бёдра → шире к груди →
+// максимум на плечах, с сужением на талии между ними (V-силуэт), а локальные
+// утолщения в середине руки/ноги (бицепс, квадрицепс, икра) читаются как
+// мышцы. Сверху добросаны акцентные объёмы (дельты, грудные, трапеции) и
+// сферы на суставах, чтобы не было щелей на сгибах — см. buildProcBodyGeometry.
+// Всё собирается ОДИН раз при загрузке (loadAllCrowdModels), не в кадре, и
+// сливается в одну BufferGeometry на скин — тот же контракт, что у
+// buildCrowdRigFromGeo/mergeGltfGeometry ниже (geometry+outlineGeometry),
+// поэтому дальше по файлу (placeCharacter, syncEnemyCrowd, InstancedMesh)
+// ничего не знает, откуда взялась геометрия.
+const PROC_OUTLINE_WIDTH = 0.028;    // толщина контура — та же роль, что GLTF_OUTLINE_WIDTH ниже
+const PROC_HEIGHT_REF = 1.7;         // ориентир роста — тот же порядок, что GLTF_TARGET_HEIGHT
+
+// Пропорции четырёх типов бойцов — рост и полуразмеры (радиусы) торса и
+// конечностей в мировых юнитах. Разведены так, чтобы силуэт читался с
+// первого взгляда: пауэрлифтер — массивный и плотный, кроссфитер — поджарый,
+// борец — низкий и широкий, бодибилдер — предельный V-силуэт (огромные
+// плечи, узкая талия).
+// Радиус головы в долях роста фигуры. Один на всех профилей: голова — самая
+// сильная опознавательная деталь на дистанции толпы, и разъезжаться по
+// профилям ей нельзя. Рост/5 — героическая мультяшная пропорция (у реального
+// человека ближе к рост/7.5, но такая голова в толпе из сотни не читается).
+const HEAD_R_RATIO = 0.105;
+const BODY_PROFILES = {
+  power: {
+    height: 1.55, shoulder: 0.50, chest: 0.44, waist: 0.40, hip: 0.43, neck: 0.15,
+    upperArm: 0.155, bicep: 0.205, forearm: 0.115, wrist: 0.075,
+    thigh: 0.205, quad: 0.255, calf: 0.16, ankle: 0.09,
+  },
+  cross: {
+    height: 1.74, shoulder: 0.395, chest: 0.325, waist: 0.265, hip: 0.30, neck: 0.105,
+    upperArm: 0.098, bicep: 0.13, forearm: 0.08, wrist: 0.055,
+    thigh: 0.15, quad: 0.175, calf: 0.115, ankle: 0.07,
+  },
+  wrestle: {
+    height: 1.42, shoulder: 0.475, chest: 0.415, waist: 0.375, hip: 0.40, neck: 0.145,
+    upperArm: 0.145, bicep: 0.185, forearm: 0.105, wrist: 0.07,
+    thigh: 0.19, quad: 0.235, calf: 0.145, ankle: 0.085,
+  },
+  build: {
+    height: 1.70, shoulder: 0.565, chest: 0.465, waist: 0.255, hip: 0.30, neck: 0.135,
+    upperArm: 0.135, bicep: 0.225, forearm: 0.095, wrist: 0.065,
+    thigh: 0.165, quad: 0.225, calf: 0.135, ankle: 0.075,
+  },
+};
+// Враги переиспользуют те же четыре силуэта, не изобретая пятый набор:
+// bruiser/giant — тяжеловесы (power), shield — низкий и широкий (wrestle),
+// runner/shooter — поджарые (cross), leader — предельный V-силуэт (build).
+const ENEMY_BODY_PROFILE = {
+  runner: 'cross', bruiser: 'power', shield: 'wrestle',
+  shooter: 'cross', leader: 'build', giant: 'power',
+};
+
+// Низкоуровневый лофт: список колец {y, rx, rz, cx, cz} (низ→верх) → одна
+// indexed-геометрия с посчитанными нормалями (computeVertexNormals даёт
+// гладкое затенение по кольцам — именно оно и лепит мышечный объём при
+// тоновом свете, без него выпуклости не читаются).
+function loftGeometry(rings, sides, capBottom, capTop) {
+  const pos = [];
+  for (const r of rings) {
+    for (let s = 0; s < sides; s++) {
+      const a = (s / sides) * Math.PI * 2;
+      pos.push((r.cx || 0) + Math.cos(a) * r.rx, r.y, (r.cz || 0) + Math.sin(a) * r.rz);
+    }
+  }
+  const idx = [];
+  for (let i = 0; i < rings.length - 1; i++) {
+    for (let s = 0; s < sides; s++) {
+      const a = i * sides + s, bIdx = i * sides + (s + 1) % sides;
+      const c = (i + 1) * sides + s, d = (i + 1) * sides + (s + 1) % sides;
+      idx.push(a, c, bIdx, bIdx, c, d);
+    }
+  }
+  if (capBottom) {
+    const base = pos.length / 3, r0 = rings[0];
+    pos.push(r0.cx || 0, r0.y, r0.cz || 0);
+    for (let s = 0; s < sides; s++) idx.push(base, s, (s + 1) % sides);
+  }
+  if (capTop) {
+    const base = pos.length / 3, last = rings.length - 1, r1 = rings[last], off = last * sides;
+    pos.push(r1.cx || 0, r1.y, r1.cz || 0);
+    for (let s = 0; s < sides; s++) idx.push(base, off + (s + 1) % sides, off + s);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setIndex(idx);
+  geo.computeVertexNormals();
+  return geo;
+}
+// Копилка одной фигуры целиком: позиции/нормали/цвета/индексы всех
+// собранных частей (торс, руки, ноги, суставы, экипировка) в общих массивах,
+// тем же приёмом, что mergeGltfGeometry ниже использует для мешей .glb —
+// трансформируем вершины частью матрицей и копируем в общие буферы.
+function newBodyBuilder() { return { pos: [], nor: [], col: [], idx: [] }; }
+function appendPart(b, geo, matrix, color) {
+  const vOff = b.pos.length / 3;
+  const nMat = new THREE.Matrix3().getNormalMatrix(matrix);
+  const p = geo.attributes.position, n = geo.attributes.normal;
+  const v = new THREE.Vector3(), nv = new THREE.Vector3();
+  for (let i = 0; i < p.count; i++) {
+    v.fromBufferAttribute(p, i).applyMatrix4(matrix);
+    b.pos.push(v.x, v.y, v.z);
+    nv.fromBufferAttribute(n, i).applyMatrix3(nMat).normalize();
+    b.nor.push(nv.x, nv.y, nv.z);
+    b.col.push(color.r, color.g, color.b);
+  }
+  // PolyhedronGeometry (IcosahedronGeometry ниже, см. sphereAt) собирается
+  // БЕЗ индекса — каждая грань уже своими тремя вершинами; свой лофт (см.
+  // loftGeometry) индекс всегда даёт. Без индекса — считаем тройками подряд.
+  if (geo.index) {
+    const ix = geo.index.array;
+    for (let i = 0; i < ix.length; i++) b.idx.push(ix[i] + vOff);
+  } else {
+    for (let i = 0; i < p.count; i++) b.idx.push(vOff + i);
+  }
+}
+// Сфера (иконосфера, дешёвая) для суставов и акцентов — дельты, грудные,
+// трапеции, бёдра, локти, голова: та же appendPart, поэтому и лофт-мышцы, и
+// акцентные объёмы попадают в один merge-конвейер и в одну BufferGeometry.
+function sphereAt(b, x, y, z, r, color, sx, sy, sz, detail) {
+  const geo = new THREE.IcosahedronGeometry(1, detail || 0);
+  const m = new THREE.Matrix4().compose(
+    new THREE.Vector3(x, y, z), new THREE.Quaternion(),
+    new THREE.Vector3((sx == null ? 1 : sx) * r, (sy == null ? 1 : sy) * r, (sz == null ? 1 : sz) * r)
+  );
+  appendPart(b, geo, m, color);
+}
+// Кольцо (тор) для экипировки — пояс, бандана/повязка, бинты на запястьях.
+function ringAt(b, x, y, z, r, tube, color, rotX) {
+  const geo = new THREE.TorusGeometry(r, tube, 5, 12);
+  const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(rotX || 0, 0, 0));
+  const m = new THREE.Matrix4().compose(new THREE.Vector3(x, y, z), q, new THREE.Vector3(1, 1, 1));
+  appendPart(b, geo, m, color);
+}
+
+// Сечения торса (низ→верх): таз → подрез талии → талия (минимум) → расширение
+// к груди → грудь (максимум глубины) → плечи (максимум ширины) → резкое
+// сужение в основании шеи (трапеции лепятся сферами отдельно) → верх шеи.
+function buildTorsoRings(p, h) {
+  return [
+    { y: h * 0.500, rx: p.hip * 0.92, rz: p.hip * 0.72 },
+    { y: h * 0.565, rx: p.waist * 1.05, rz: p.waist * 0.80 },
+    { y: h * 0.615, rx: p.waist, rz: p.waist * 0.78 },
+    { y: h * 0.665, rx: p.waist * 1.12, rz: p.waist * 0.85 },
+    { y: h * 0.700, rx: p.chest * 0.90, rz: p.chest * 0.72 },
+    { y: h * 0.755, rx: p.chest, rz: p.chest * 0.86 },
+    { y: h * 0.800, rx: p.shoulder * 0.86, rz: p.chest * 0.74 },
+    { y: h * 0.845, rx: p.shoulder, rz: p.chest * 0.62 },
+    { y: h * 0.875, rx: p.neck * 1.60, rz: p.neck * 1.50 },
+    { y: h * 0.915, rx: p.neck, rz: p.neck },
+  ];
+}
+// Одна нога (side = -1 левая, +1 правая): стопа → щиколотка → икра (выпуклость)
+// → колено (сужение) → бедро → квадрицепс (максимум) → верх бедра под таз.
+function buildLegRings(p, h, side) {
+  const cx = side * p.hip * 0.46;
+  return [
+    { y: 0, rx: p.ankle * 0.9, rz: p.ankle * 0.9, cx },
+    { y: h * 0.045, rx: p.ankle, rz: p.ankle * 0.95, cx },
+    { y: h * 0.200, rx: p.calf * 1.05, rz: p.calf, cx },
+    { y: h * 0.315, rx: p.calf * 0.75, rz: p.calf * 0.72, cx },
+    { y: h * 0.400, rx: p.thigh * 0.90, rz: p.thigh * 0.85, cx },
+    { y: h * 0.460, rx: p.quad, rz: p.quad * 0.92, cx },
+    { y: h * 0.500, rx: p.quad * 0.86, rz: p.quad * 0.80, cx },
+  ];
+}
+// Одна рука, висящая у бока (side = -1 левая, +1 правая): плечевой сустав →
+// бицепс (выпуклость на верхнем сегменте) → локоть (сужение) → предплечье →
+// запястье → кисть. Небольшой наклон вперёд по Z — расслабленная поза.
+function buildArmRings(p, h, side) {
+  const armX = side * (p.shoulder * 0.95);
+  const fz = -h * 0.055; // "вперёд" — фронт фигуры смотрит в -Z (по ходу движения)
+  return [
+    { y: h * 0.845, rx: p.upperArm * 0.95, rz: p.upperArm * 0.90, cx: armX, cz: fz * 0.25 },
+    { y: h * 0.790, rx: p.bicep * 0.85, rz: p.bicep * 0.80, cx: armX * 1.02, cz: fz * 0.45 },
+    { y: h * 0.735, rx: p.bicep, rz: p.bicep * 0.92, cx: armX * 1.04, cz: fz * 0.60 },
+    { y: h * 0.665, rx: p.forearm * 0.85, rz: p.forearm * 0.80, cx: armX * 1.06, cz: fz * 0.75 },
+    { y: h * 0.560, rx: p.forearm, rz: p.forearm * 0.92, cx: armX * 1.08, cz: fz * 0.95 },
+    { y: h * 0.470, rx: p.wrist * 1.10, rz: p.wrist, cx: armX * 1.10, cz: fz },
+    { y: h * 0.435, rx: p.wrist * 0.95, rz: p.wrist * 0.90, cx: armX * 1.10, cz: fz * 1.05 },
+  ];
+}
+// Собирает одну готовую фигуру: профиль пропорций + палитра (skin/top/
+// bottom/acc, как в FIGHTERS/ENEMY_TYPES) + экипировка по флагам с тем же
+// смыслом, что поля FIGHTERS (shirtless/belt/head/ears). Возвращает
+// {geometry, outlineGeometry, texture} — контракт buildCrowdRigFromGeo.
+function buildProcBodyGeometry(profileKey, colors, equip) {
+  const p = BODY_PROFILES[profileKey];
+  const h = p.height;
+  const b = newBodyBuilder();
+  const I4 = new THREE.Matrix4();
+  const skin = new THREE.Color(colors.skin);
+  const top = new THREE.Color(colors.top);
+  const bottom = new THREE.Color(colors.bottom);
+  const acc = new THREE.Color(colors.acc || colors.top);
+
+  const torso = buildTorsoRings(p, h);
+  appendPart(b, loftGeometry(torso.slice(0, 4), 10, true, false), I4, bottom);       // таз/талия — низ (шорты)
+  appendPart(b, loftGeometry(torso.slice(3), 10, false, true), I4, equip.shirtless ? skin : top); // грудь/плечи/шея
+
+  [-1, 1].forEach(side => {
+    const leg = buildLegRings(p, h, side);
+    appendPart(b, loftGeometry(leg.slice(0, 4), 8, true, false), I4, skin);          // стопа/икра/колено — голая кожа
+    appendPart(b, loftGeometry(leg.slice(3), 8, false, true), I4, bottom);           // бедро — шорты
+    sphereAt(b, side * p.hip * 0.46, h * 0.495, 0, p.quad * 0.85, bottom, 1, 0.85, 1, 0); // тазобедренный сустав — без щели
+
+    appendPart(b, loftGeometry(buildArmRings(p, h, side), 8, false, true), I4, skin); // рука целиком — голая (борцовка/майка)
+    sphereAt(b, side * p.shoulder * 0.92, h * 0.835, -h * 0.02, p.bicep * 0.95, skin, 1, 0.85, 0.95, 0); // дельта
+    sphereAt(b, side * p.shoulder * 1.00, h * 0.665, fzAt(h), p.forearm * 0.85, skin, 1, 1, 1, 0);        // локоть
+  });
+
+  // Грудные — две сплюснутые сферы на груди, заметно выступают вперёд (-Z)
+  // от и без того глубокого грудного кольца лофта — иначе объём груди не
+  // читается на фоне уже широкой грудной клетки самого торса.
+  [-1, 1].forEach(side => {
+    sphereAt(b, side * p.chest * 0.44, h * 0.75, -p.chest * 0.78, p.chest * 0.48, equip.shirtless ? skin : top, 1, 0.72, 1, 0);
+  });
+  // Трапеции — утолщение между шеей и плечами.
+  [-1, 1].forEach(side => {
+    sphereAt(b, side * p.neck * 1.3, h * 0.865, 0, p.neck * 0.9, equip.shirtless ? skin : top, 1, 0.6, 0.9, 0);
+  });
+  // Голова + уши (борец). Радиус был h*0.062 — голова получалась УЖЕ шеи
+  // (у пауэрлифтера шея p.neck=0.15, то есть 0.30 в поперечнике против 0.19
+  // головы) и на дистанции толпы пропадала совсем. Героическая пропорция —
+  // примерно рост/5, отсюда h*0.105; центр считаем от верха шеи (последнее
+  // кольцо торса, h*0.915), а не от абсолютного числа, иначе следующая
+  // правка пропорций снова оторвёт голову от шеи.
+  const headR = h * HEAD_R_RATIO;
+  const headY = h * 0.915 + headR * 0.52;
+  sphereAt(b, 0, headY, 0, headR, skin, 1, 1.05, 0.95, 1);
+  if (equip.ears) {
+    [-1, 1].forEach(side => sphereAt(b, side * headR * 0.95, headY, 0, headR * 0.26, skin, 1, 1, 1, 0));
+  }
+  // Экипировка: пояс пауэрлифтера, бандана/повязка, бинты на запястьях —
+  // те же плоские кольца, слитые в общую геометрию.
+  if (equip.belt) ringAt(b, 0, h * 0.59, 0, p.waist * 1.02, h * 0.028, acc, Math.PI / 2);
+  if (equip.head === 'bandana' || equip.head === 'headband') {
+    // Чуть выше экватора головы, радиус чуть меньше радиуса головы — кольцо
+    // садится на поверхность, а не висит отдельно. Считаем от headR/headY, а
+    // не от своих чисел: иначе повязка отвяжется от головы при правке размера.
+    ringAt(b, 0, headY + headR * 0.14, 0, headR * 0.95, headR * 0.19, acc, Math.PI / 2);
+  }
+  if (equip.wraps) {
+    [-1, 1].forEach(side => {
+      const armX = side * (p.shoulder * 0.95) * 1.10;
+      ringAt(b, armX, h * 0.46, fzAt(h), p.wrist * 1.15, h * 0.02, acc, Math.PI / 2);
+    });
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(b.pos, 3));
+  geometry.setAttribute('normal', new THREE.Float32BufferAttribute(b.nor, 3));
+  geometry.setAttribute('color', new THREE.Float32BufferAttribute(b.col, 3));
+  geometry.setIndex(b.idx);
+
+  // Контур — та же вершинная оболочка, раздутая вдоль нормалей (как у
+  // GLB-пути, см. GLTF_OUTLINE_WIDTH), общие индексы не пересчитываем.
+  const outPos = new Float32Array(b.pos.length);
+  for (let i = 0; i < b.pos.length; i += 3) {
+    outPos[i] = b.pos[i] + b.nor[i] * PROC_OUTLINE_WIDTH;
+    outPos[i + 1] = b.pos[i + 1] + b.nor[i + 1] * PROC_OUTLINE_WIDTH;
+    outPos[i + 2] = b.pos[i + 2] + b.nor[i + 2] * PROC_OUTLINE_WIDTH;
+  }
+  const outlineGeometry = new THREE.BufferGeometry();
+  outlineGeometry.setAttribute('position', new THREE.Float32BufferAttribute(outPos, 3));
+  outlineGeometry.setIndex(b.idx);
+  return { geometry, outlineGeometry, texture: null };
+}
+// "Вперёд" по Z у локтя/бинтов — тот же множитель, что в buildArmRings.
+function fzAt(h) { return -h * 0.055 * 0.75; }
+// Строит все геометрии толпы разом: по одной на каждый из четырёх типов
+// бойца (FIGHTERS) и по одной на каждый тип врага (ENEMY_TYPES, профиль —
+// см. ENEMY_BODY_PROFILE). Вызывается один раз при инициализации.
+function buildAllProcGeometries() {
+  const player = {};
+  Object.keys(FIGHTERS).forEach(key => {
+    const f = FIGHTERS[key];
+    player[key] = buildProcBodyGeometry(key, { skin: f.skin, top: f.top, bottom: f.bottom, acc: f.acc }, {
+      shirtless: !!f.shirtless, ears: !!f.ears, belt: !!f.belt, head: f.head,
+      wraps: !!f.belt || !!f.shirtless,
+    });
+  });
+  const enemy = {};
+  ENEMY_TYPE_KEYS.forEach(key => {
+    const d = ENEMY_TYPES[key];
+    enemy[key] = buildProcBodyGeometry(ENEMY_BODY_PROFILE[key], { skin: d.skin, top: d.top, bottom: d.bottom, acc: d.top }, {
+      shirtless: false, ears: false, belt: false, head: null, wraps: false,
+    });
+  });
+  return { player, enemy };
+}
+
 // Загрузка низкополигональных .glb-моделей Kenney (Blocky Characters) и
 // слияние их мешей в одну BufferGeometry на скин. Каждая модель — шесть
 // мешей (Body1/Head1/ArmLeft1/ArmRight1/LegLeft1/LegRight1), все используют
@@ -1743,9 +2222,11 @@ function loadCharGeo(path) {
 // контурный BackSide-клон — тот же приём, что раньше был на отдельных частях
 // тела (там — простое увеличение масштаба на примитив), теперь на цельной
 // модели. Плюс дешёвая тень-диск, как и была.
-function buildCrowdRigFromGeo(cap, geoData, isEnemy, outlineColor) {
+function buildCrowdRigFromGeo(cap, geoData, isEnemy, outlineColor, vertexColors) {
   const grad = toonGradient();
-  const mat = new THREE.MeshToonMaterial({ map: geoData.texture || null, color: 0xffffff, gradientMap: grad });
+  // vertexColors=true — путь CROWD_SOURCE==='proc': палитра запечена по
+  // вершинам (см. buildProcBodyGeometry), у .glb-моделей вместо этого текстура.
+  const mat = new THREE.MeshToonMaterial({ map: geoData.texture || null, color: 0xffffff, gradientMap: grad, vertexColors: !!vertexColors });
   const mesh = new THREE.InstancedMesh(geoData.geometry, mat, cap);
   mesh.count = 0; scene.add(mesh);
   let outline = null;
@@ -1763,6 +2244,11 @@ function buildCrowdRigFromGeo(cap, geoData, isEnemy, outlineColor) {
   return { mesh, outline, shadow };
 }
 let playerRig = null, enemyRigs = null;
+// playerRigs — заполняется только при CROWD_SOURCE==='proc': у каждого из
+// четырёх FIGHTERS своя геометрия (силуэты отличаются), поэтому нужен свой
+// InstancedMesh-риг на тип, не один общий с цветовым тонированием (как было
+// у единой .glb-модели, см. applyFighterColors ниже).
+let playerRigs = null;
 let shieldGearMesh = null, leaderGearMesh = null, leaderGauntletMesh = null;
 let bruiserFistMesh = null, shooterJavelinMesh = null, giantBarMesh = null, giantPlateMesh = null;
 const SHIELD_GEAR_CAP = ENEMY_CAP_BY_TYPE.shield, LEADER_GEAR_CAP = ENEMY_CAP_BY_TYPE.leader, GIANT_GEAR_CAP = ENEMY_CAP_BY_TYPE.giant;
@@ -1771,7 +2257,12 @@ const BRUISER_GEAR_CAP = ENEMY_CAP_BY_TYPE.bruiser, SHOOTER_GEAR_CAP = ENEMY_CAP
 // фиксированная точка у бока модели в её локальном пространстве, доля от S
 // (CHAR_SCALE * scaleMul), подобранная по скриншоту под позу .glb-моделей
 // Kenney (руки прижаты к телу, чуть вперёд).
-const HAND_DX = 0.24, HAND_DY = 0.62, HAND_DZ = 0.22;
+// Точки крепления снаряжения к кисти отдельные под каждый источник толпы —
+// у процедурной фигуры руки висят у бока со сгибом вперёд по -Z (см.
+// buildArmRings), у .glb-моделей Kenney была своя, отдельно подобранная поза.
+const HAND_DX = CROWD_SOURCE === 'proc' ? 0.36 : 0.24;
+const HAND_DY = CROWD_SOURCE === 'proc' ? 0.30 : 0.62;
+const HAND_DZ = CROWD_SOURCE === 'proc' ? -0.16 : 0.22;
 // Снаряжение в руках/на голове — то, что отличает силуэт типа сильнее
 // цвета: шипастый кастет у тяжеловеса, укрупнённый блин-щит у щитовика,
 // дротик на замахе у стрелка, корона и массивные наручи у вожака, гриф со
@@ -1863,6 +2354,10 @@ function finishRig(rig, count) {
 // модели) — лёгкий тон-твин материала слитой .glb-модели цветом выбранного
 // бойца, текстура остаётся читаемой (не заливается плоским цветом).
 function applyFighterColors() {
+  // Процедурный путь: у каждого типа своя геометрия с палитрой, запечённой
+  // по вершинам (см. buildProcBodyGeometry) — тонировать материал не нужно,
+  // выбор скина делает syncPlayerCrowd (playerRigs[selectedFighter]).
+  if (CROWD_SOURCE === 'proc') return;
   if (!playerRig) return;
   const f = FIGHTERS[selectedFighter];
   // Смешиваем с белым, а не заливаем чистым цветом — иначе тон-твин
@@ -1874,6 +2369,13 @@ function applyFighterColors() {
 // Обновляет позиции всей толпы (лидер + отряд) — followers уже посчитаны
 // в updateFollowers, тут только перевод в мировые координаты сцены.
 function syncPlayerCrowd() {
+  // Процедурный путь держит четыре готовых рига (по одному на FIGHTERS) —
+  // рисуем только выбранный, остальные три гасим (count=0), чтобы старый
+  // скин не завис на сцене при переключении бойца между забегами.
+  if (CROWD_SOURCE === 'proc' && playerRigs) {
+    playerRig = playerRigs[selectedFighter];
+    Object.keys(playerRigs).forEach(k => { if (k !== selectedFighter) finishRig(playerRigs[k], 0); });
+  }
   if (!playerRig) return;
   placeCharacter(playerRig, 0, worldX3(squadWorldX), 0, t * 9, 1, formScale);
   const n = Math.min(followers.length, PLAYER_CAP - 1);
@@ -1889,7 +2391,7 @@ function buildEnemyRigs(geoByKey) {
   enemyRigs = {};
   ENEMY_TYPE_KEYS.forEach(key => {
     const d = ENEMY_TYPES[key];
-    enemyRigs[key] = buildCrowdRigFromGeo(ENEMY_CAP_BY_TYPE[key], geoByKey[key], true, d.outline);
+    enemyRigs[key] = buildCrowdRigFromGeo(ENEMY_CAP_BY_TYPE[key], geoByKey[key], true, d.outline, CROWD_SOURCE === 'proc');
   });
 }
 // Обновляет позиции всех видимых врагов из активных волн — по одному ригу на
@@ -2187,6 +2689,7 @@ function update(dt) {
   fireTimer -= dt;
   if (fireTimer <= 0) { tryFire(dt, dmg); fireTimer = 1 / fireRate; }
 
+  updateSegment();
   // Босс: если ещё не запущен и прошли рубеж — спавним (отдельный ритм от
   // потока, это рубеж, а не рядовое событие).
   if (dist >= nextBossMile && !obstacles.some(o => o.kind === 'boss')) {
@@ -2213,7 +2716,8 @@ function update(dt) {
     const activeWaves = obstacles.filter(o => o.kind === 'wave' && waveTotalCount(o) > 0).length;
     if (activeWaves < 1) {
       spawnWave();
-      const gap = clamp(78 - dist / 12, 34, 78);
+      const gapMul = SEGMENT_WAVE_GAP_MUL[segment] || 1;
+      const gap = clamp(78 - dist / 12, 34, 78) * gapMul;
       nextWaveAt = dist + rnd(gap * 0.75, gap);
     } else {
       nextWaveAt = dist + 8; // прошлая волна ещё жива — коротко отложим и проверим снова
@@ -2341,7 +2845,11 @@ function update(dt) {
         else if (eff.type === 'sub') { squad = Math.max(0, squad - eff.val); }
         const good = eff.type === 'mul' || eff.type === 'add';
         if (good) {
-          sGateUp(); shake(4); squadPulse = 1; flash('green', 200);
+          // Проход через хорошую створку — тоже удар, а не тихая прибавка:
+          // ×2/×3 (взрывной рост) получает более длинный хит-стоп, чем
+          // рядовой «+N», тем же принципом «крупнее событие — дольше пауза».
+          sGateUp(); shake(eff.type === 'mul' ? 9 : 5); squadPulse = 1; flash('green', 200);
+          hitStop(eff.type === 'mul' ? 0.045 : 0.02);
           burst(p.x, p.y - 30, C_GREEN, 22, 240);
           shockwave(p.x, p.y - 30, C_GREEN, 140, 0.36);
           // Один читаемый всплеск, а не тройной дубль — три копии одной и той
@@ -2530,12 +3038,25 @@ function updateCamera(dt) {
   const punch = clamp(shakeAmp * 0.01, 0, 0.5); // толчок назад на сильных ударах
   // Камера отъезжает по мере роста орды: строй всегда виден целиком, и это же
   // даёт ощущение масштаба — было двое, камера близко; стало двести, видно поле.
+  // Раньше отъезд считался только от глубины (числа рядов) — с широким
+  // мускулистым телом и до 16 колонок в ряд строй начал раздаваться ВШИРЬ
+  // быстрее, чем вглубь, и упирался в боковые края кадра раньше, чем в нижний.
+  // spread — берёт худший из двух размеров (глубина рядов или полуширина
+  // строя, с запасом ×1.7, потому что горизонтальный охват кадра у типичной
+  // перспективы уже вертикального при широком экране) и от него считает отъезд.
   const depth = formRows * STEP_Z * FOLLOWER_Z_SCALE * formScale;
+  const halfWidth = (formCols - 1) / 2 * STEP_X * TRACK_HALF3 * formScale;
+  const spread = Math.max(depth, halfWidth * 1.7);
   // Точка взгляда поднята и толпа держится ближе к центру кадра (фигуры
   // выросли ~в полтора раза, см. CHAR_SCALE/STEP_X/STEP_Z) — раньше отряд
   // жался к нижнему краю экрана.
-  camera.position.set(leadX * 0.35 + shakeX, 6.4 + depth * 0.34 + shakeY, 9.6 + depth * 0.62 + punch);
-  camera.lookAt(leadX * 0.55, 1.45, -6.0 + depth * 0.25);
+  // Коэффициенты бокового сдвига камеры/точки взгляда (leadX*...) уменьшены
+  // относительно прежних 0.35/0.55 — при крайнем положении отряда у стены
+  // (squadWorldX≈±0.95) и большом spread этого хватало, чтобы дальняя створка
+  // ворот (они занимают почти всю ширину дорожки) вылезала за левый/правый
+  // край экрана; меньший сдвиг держит обе створки в кадре при любом X отряда.
+  camera.position.set(leadX * 0.22 + shakeX, 6.4 + spread * 0.34 + shakeY, 9.6 + spread * 0.62 + punch);
+  camera.lookAt(leadX * 0.32, 1.45, -6.0 + spread * 0.25);
   camera.rotation.z = camYaw * 0.5;
   // Угол обзора слегка растёт со скоростью — дешёвый и очень заметный приём
   // разгона: чем быстрее забег, тем шире и "летящее" кадр.
@@ -2559,7 +3080,7 @@ function render() {
   syncBullets();
   updateFloorStripes();
   updateCamera(1 / 60);
-  renderer.render(scene, camera);
+  if (composer) composer.render(); else renderer.render(scene, camera);
 
   // Оранжевая вспышка предтрена — поверх сцены, на HUD-слое (дёшево, без
   // лишнего 3D-прохода).
@@ -2585,9 +3106,9 @@ function render() {
 
   toasts.forEach(ts => {
     hctx.globalAlpha = Math.max(0, 1 - ts.t / 1.3);
-    const fs = ts.big ? 24 : 17;
+    const fs = ts.big ? 30 : 18;
     hctx.font = "900 " + fs + "px 'Courier New', monospace"; hctx.textAlign = 'center';
-    hctx.lineWidth = ts.big ? 5 : 3.5; hctx.strokeStyle = 'rgba(10,8,6,0.9)';
+    hctx.lineWidth = ts.big ? 6.5 : 3.5; hctx.strokeStyle = 'rgba(10,8,6,0.9)';
     const half = hctx.measureText(ts.text).width / 2;
     const tx = Math.max(half + 8, Math.min(W - half - 8, ts.x));
     hctx.strokeText(ts.text, tx, ts.y);
@@ -2665,6 +3186,20 @@ const CHAR_MODEL_PATHS = {
   giant:   '/assets/game/basic_robot.glb',
 };
 async function loadAllCrowdModels() {
+  if (CROWD_SOURCE === 'proc') {
+    // Ничего не грузим по сети — вся геометрия собирается в коде синхронно
+    // (см. buildAllProcGeometries), async остаётся только по форме сигнатуры
+    // (initThree делает await на неё независимо от источника).
+    const built = buildAllProcGeometries();
+    setFormationStepsFromGeometries(built.player);
+    playerRigs = {};
+    Object.keys(built.player).forEach(key => {
+      playerRigs[key] = buildCrowdRigFromGeo(PLAYER_CAP, built.player[key], false, null, true);
+    });
+    playerRig = playerRigs[selectedFighter];
+    buildEnemyRigs(built.enemy);
+    return;
+  }
   const keys = Object.keys(CHAR_MODEL_PATHS);
   const geos = await Promise.all(keys.map(k => loadCharGeo(CHAR_MODEL_PATHS[k])));
   const geoByKey = {};
@@ -2672,6 +3207,43 @@ async function loadAllCrowdModels() {
   playerRig = buildCrowdRigFromGeo(PLAYER_CAP, geoByKey.player, false, null);
   buildEnemyRigs(geoByKey);
 }
+
+// ── ПОСТОБРАБОТКА: свечение ярких мест ──────────────────────────────────────
+// Bloom по яркому — лампы, световые пятна, ворота, трассеры, вспышки. Это
+// главное, что отличает «дорогую» картинку от плоской при тех же материалах.
+// Порог высокий намеренно: bloom считается по линейной яркости ДО
+// тонирования, поэтому просто хорошо освещённая поверхность легко проходит
+// низкий порог. На пороге 0.62 светился сам качок и терял детали, превращаясь
+// в оранжевый комок — светиться должны только источники: лампы, вспышки,
+// трассеры.
+// Всё необязательно: если assets/game/post.js не загрузился (событие
+// 'post-failed'), composer остаётся null и render() рисует напрямую.
+let composer = null;
+// Чуть подняли силу и снизили порог относительно прежних 0.45/0.92 — «сочнее»
+// по свету на воротах/вспышках/трассерах, но порог остаётся выше яркости
+// самого качка (см. заметку выше про 0.62 и оранжевый комок), так что тело
+// бойца в bloom не проваливается.
+const BLOOM_STRENGTH = 0.6, BLOOM_RADIUS = 0.5, BLOOM_THRESHOLD = 0.86;
+function buildComposer() {
+  if (composer || !window.THREE || !THREE.EffectComposer || !THREE.UnrealBloomPass) return;
+  try {
+    composer = new THREE.EffectComposer(renderer);
+    composer.setPixelRatio(DPR);
+    composer.setSize(W, H);
+    composer.addPass(new THREE.RenderPass(scene, camera));
+    composer.addPass(new THREE.UnrealBloomPass(
+      new THREE.Vector2(W, H), BLOOM_STRENGTH, BLOOM_RADIUS, BLOOM_THRESHOLD));
+    // OutputPass переносит тонирование и перевод в sRGB в конец цепочки —
+    // без него кадр после composer выглядит иначе, чем прямой рендер.
+    composer.addPass(new THREE.OutputPass());
+  } catch (e) {
+    console.warn('[game] postprocessing off:', e);
+    composer = null;
+  }
+}
+// Скрипт постобработки грузится параллельно моделям и может успеть позже, чем
+// собралась сцена — тогда собираем цепочку по событию.
+window.addEventListener('post-ready', () => { if (renderer && scene && camera) buildComposer(); });
 
 // ── ИНИЦИАЛИЗАЦИЯ THREE.JS И ЗАПУСК ─────────────────────────────────────────
 async function initThree() {
@@ -2683,6 +3255,12 @@ async function initThree() {
   window.renderer = renderer;
   renderer.setPixelRatio(DPR);
   renderer.setSize(W, H, false);
+  // Плёночное тонирование вместо линейного вывода: тёплые пятна ламп и
+  // вспышки перестают «выжигаться» в плоский белый, а тени не проваливаются в
+  // чёрный — картинка сразу читается дороже при тех же материалах.
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.0;
+  buildComposer();
   buildHall();
   // Своя и вражеские толпы — реальные .glb-модели Kenney, слитые в одну
   // геометрию на скин и заведённые как InstancedMesh (см.
@@ -2695,11 +3273,36 @@ async function initThree() {
 
 // ── ЦИКЛ ─────────────────────────────────────────────────────────────────────
 let last = performance.now();
+// Страховка по производительности: свечение на слабом телефоне может стоить
+// дорого, а проверить это на реальном железе отсюда нельзя (headless рисует
+// программно, его замеры о GPU ничего не говорят). Поэтому игра смотрит на
+// собственный кадр: если он стабильно тяжёлый — постобработка отключается
+// сама, и дальше сцена рисуется напрямую. Обратно не включаем: скачущее
+// свечение раздражало бы сильнее, чем его отсутствие.
+let frameCost = 0, heavyFor = 0;
+// perfGuardOn выключается только из QA-прогонов (см. window.__qa): headless
+// Chromium рисует программно и всегда «медленный», так что страховка гасила бы
+// свечение на каждом тестовом кадре и проверить его было бы нечем.
+let perfGuardOn = true;
+const HEAVY_FRAME_S = 1 / 34;   // ниже ~34 fps считаем кадр тяжёлым
+const HEAVY_LIMIT_S = 3;        // столько подряд — выключаем свечение
+function watchPerf(rawDt) {
+  if (!composer || !perfGuardOn) return;
+  // Экспоненциальное сглаживание, чтобы одиночные просадки (загрузка, сборка
+  // мусора) не выключали эффект.
+  frameCost = frameCost ? frameCost * 0.9 + rawDt * 0.1 : rawDt;
+  heavyFor = frameCost > HEAVY_FRAME_S ? heavyFor + rawDt : 0;
+  if (heavyFor > HEAVY_LIMIT_S) {
+    composer = null;
+    console.info('[game] postprocessing off: slow frames');
+  }
+}
 function frame(now) {
   const raw = Math.min(0.033, (now - last) / 1000); last = now;
   let dt = raw * timeScale;
   if (hitStopT > 0) { hitStopT -= raw; dt *= 0.06; }
   update(dt); render();
+  watchPerf(raw);
   requestAnimationFrame(frame);
 }
 
@@ -2743,6 +3346,12 @@ window.__qa = {
   get weaponLevel() { return weaponLevel; }, get toasts() { return toasts; },
   get obstacles() { return obstacles; }, get squadWorldX() { return squadWorldX; },
   get state() { return state; },
+  get bloomOn() { return !!composer; },
+  get segment() { return segment; },
+  // Только для QA-прогонов: headless-браузер рисует программно и всегда
+  // «медленный», из-за чего страховка по fps гасит свечение через пару секунд
+  // и проверить его нечем. На геймплей не влияет.
+  disablePerfGuard() { perfGuardOn = false; },
 };
 </script>
 
