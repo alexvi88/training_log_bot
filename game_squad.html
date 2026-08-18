@@ -958,18 +958,28 @@ function spawnPlate() {
 // маленький отряд получает соразмерно маленькую прибавку/потерю, поздний
 // большой — соразмерно большую. ×2/÷2 и ×3/÷3 уже были относительными по
 // смыслу — их не трогаю.
-const ADD_TIERS = [{ ratio: 0.5, min: 2, weight: 0.42 }, { ratio: 0.85, min: 3, weight: 0.29 }];
+// Чистая доля от отряда (ratio * squad) была второй крайностью: при отряде в
+// 4 бойца оба прохода показывали «+2», рост стоял на месте и толпы не
+// возникало вообще («+2/+2» на живом прогоне, отряд 6 к 256 метрам). Фикс —
+// не доля и не фикс-число, а СУБЛИНЕЙНАЯ кривая: base + squad^0.75 * k.
+// Малый отряд получает заметную абсолютную прибавку (squad 1 → +4), большой
+// — крупную по числу, но малую по доле (squad 100 → +28, то есть +28%, а не
+// ×16 как было у фиксированного «+15» на старте).
+const ADD_TIERS = [{ base: 3, k: 0.8, min: 3, weight: 0.42 }, { base: 4, k: 1.5, min: 5, weight: 0.29 }];
 // type:'sub' обязателен — pickGateDebuff() маршрутизирует по нему в mkSub();
 // без него объект уходил в игру как есть, без val/label: ворота с этим
 // исходом молча не делали ничего и рисовали «undefined» вместо числа.
-const SUB_TIERS = [{ type: 'sub', ratio: 0.28, min: 2, weight: 1 }];
-const SUB_TIERS_HARD = [{ type: 'sub', ratio: 0.45, min: 3, weight: 1 }];
+const SUB_TIERS = [{ type: 'sub', base: 1, k: 0.35, pow: 0.85, min: 2, weight: 1 }];
+const SUB_TIERS_HARD = [{ type: 'sub', base: 2, k: 0.6, pow: 0.85, min: 3, weight: 1 }];
+function tierVal(tier) {
+  return Math.max(tier.min, Math.round(tier.base + Math.pow(Math.max(0, squad), tier.pow || 0.75) * tier.k));
+}
 function mkAdd(tier) {
-  const val = Math.max(tier.min, Math.round(squad * tier.ratio));
+  const val = tierVal(tier);
   return { type: 'add', val, label: '+' + fmt(val) };
 }
 function mkSub(tier) {
-  const val = Math.max(tier.min, Math.round(squad * tier.ratio));
+  const val = tierVal(tier);
   return { type: 'sub', val, label: '−' + fmt(val) };
 }
 const GATE_MULS = [
