@@ -137,7 +137,7 @@ async def test_trainer_message_follows_the_users_language_from_the_db(fresh_db, 
 
     assert ok
     ((_, text),) = sent
-    assert text.startswith("YO ATHLETE! ")
+    assert text.startswith("HEY ATHLETE! ")
     assert "ПРИВЕТ" not in text
 
 

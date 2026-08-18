@@ -179,7 +179,7 @@ const STR = {
   resultTitle: ['Отказ', 'Failure'],
   retryBtn: ['🔄 Ещё подход', '🔄 Another set'],
   closeBtn: ['❌ Закрыть', '❌ Close'],
-  greeting: ['ПРИВЕТ АТЛЕТ! ', 'YO ATHLETE! '],
+  greeting: ['ПРИВЕТ АТЛЕТ! ', 'HEY ATHLETE! '],
   unit: ['м', 'm'],
   hudRecord: ['рекорд ', 'record '],
   resultBest: ['рекорд: ', 'record: '],
@@ -1104,7 +1104,7 @@ function die() {
   document.getElementById('result-score').textContent = d + ' ' + tr('unit') + ' · 🥤 ' + score;
   document.getElementById('result-stats').textContent =
     tr('resultStats') + maxCombo + tr('resultStatsPickups') + pickups;
-  // «ПРИВЕТ АТЛЕТ! »/«YO ATHLETE! » — брендовая формула, имя не подставляем (см. TONE_OF_VOICE.md)
+  // «ПРИВЕТ АТЛЕТ! »/«HEY ATHLETE! » — брендовая формула, имя не подставляем (см. TONE_OF_VOICE.md)
   document.getElementById('result-quip').textContent = tr('greeting') + d + pick(QUIPS);
   document.getElementById('result-best').textContent = tr('resultBest') + best + ' ' + tr('unit');
   document.getElementById('result-status').textContent = '';
