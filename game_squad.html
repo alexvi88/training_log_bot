@@ -484,12 +484,13 @@ const fmt = n => String(Math.round(n));
 // ── 3D-МИР: игровые координаты (worldX -1..1, z 0..ZFAR) → сцена Three.js ────
 // Игровая логика вся в этих условных единицах (как и была), а в сцену её
 // переводят только при размещении мешей и при проекции точек на HUD-канвас.
-// Была 4.3 — по живому отзыву («короткий плейграунд», враги появляются и
-// сразу в ближнем бою) время от появления волны до столкновения выходило
-// около 3-4 секунд у самого быстрого типа. Поднята почти в полтора раза —
-// враги видны заметно раньше и по ним реально успеваешь стрелять, а не
-// просто встречаешь их вплотную.
-const ZFAR = 6.2;                  // глубина спавна препятствий (игровые unit)
+// Была 4.3, потом 6.2 — по живому отзыву в проде («плейграунд короткий,
+// отряд быстрый») даже 6.2 не хватало: время от появления волны/ворот до
+// столкновения на разгоне всё ещё выходило около 3-4 секунд, игрок не успевал
+// среагировать и прочитать номер. Поднята ещё раз, вместе со снижением
+// скорости отряда ниже (SPEED_START/SPEED_CAP) — см. эти же константы: врагов
+// теперь видно заметно издалека, и по ним реально успевает отработать огонь.
+const ZFAR = 8.4;                  // глубина спавна препятствий (игровые unit)
 // Радиус, в котором недобитый блин ещё достаёт отряд по боковой позиции —
 // шире, чем у бонусов/ящиков (0.22-0.24), блин крупнее и бьёт по площади,
 // но всё равно уже полной ширины дорожки: отойти в сторону реально можно.
@@ -628,8 +629,18 @@ function spreadX(range) {
 
 const SQUAD_START = 1, SQUAD_CAP = 999;
 // Забег стартует уже на бодрой скорости и разгоняется заметно быстрее —
-// раньше десять секунд раскачки читались как «вялая прогулка».
-const SPEED_START = 8.5, SPEED_RAMP = 0.09, SPEED_CAP = 22;
+// раньше десять секунд раскачки читались как «вялая прогулка». Было 8.5/22 —
+// вместе с поднятым ZFAR (см. выше) это давало на разгоне всего 3-4 секунды
+// между появлением препятствия и столкновением, реагировать не успевали.
+// Снижены оба потолка (старт и максимум), ramp почти не трогали (то же время
+// разгона до кап-скорости, ~150с) — время «увидел → выстрелил/увернулся»
+// теперь растёт с 3.4с до ~6с даже на максимальной скорости отряда.
+const SPEED_START = 7.0, SPEED_RAMP = 0.065, SPEED_CAP = 17;
+// Проход волн/ворот считается по dist (метрам), а dist растёт с меньшей
+// скоростью — тот же дистанционный интервал между событиями теперь занимает
+// больше реальных секунд. Компенсируем это ниже (см. nextEventAt/nextWaveAt) —
+// без этого множителя после замедления отряда дорожка становится пустой.
+const SPAWN_GAP_TUNE = SPEED_START / 8.5; // ~0.82: старое SPEED_START было 8.5
 // Комбо: серия сбитых блинов без пропущенного удара — растущий множитель
 // очков и звук с повышающимся тоном на каждый шаг. Промах — заметный слом.
 let combo = 0, comboBestTone = 0;
@@ -856,7 +867,16 @@ function shockwave(x, y, color, maxR = 90, life = 0.34) {
 }
 // Крупные читаемые цифры с обводкой — «+2», «×2», «−15» — у места события.
 function popNumber(text, color, x, y, big) {
-  toasts.push({ text, color, t: 0, x, y, big: !!big });
+  // Несколько всплывающих чисел почти в одной точке в один момент (залп по
+  // нескольким целям разом, серия попаданий) стартовали в одном пикселе и
+  // слипались в кашу, пока дрейф вверх их не разводил — ровно «+68» поверх
+  // «+68» со скриншотов заказчика. Свежий (только что созданный) тост рядом
+  // по месту — сразу лесенкой выше, а не поверх.
+  let stack = 0;
+  for (const t of toasts) {
+    if (t.t < 0.12 && Math.abs(t.x - x) < 46 && Math.abs(t.y - y) < 26) stack++;
+  }
+  toasts.push({ text, color, t: 0, x, y: y - stack * 22, big: !!big });
 }
 
 // ── ЗАЛ В 3D: пол, стены, лампы, свет ───────────────────────────────────────
@@ -1220,16 +1240,27 @@ function spawnBonus() {
 // собой (plate, укрупнён), стрелок — дротик на замахе (javelin), вожак —
 // корона и массивные наручи (crown, наручи всегда рисуются вместе с ним),
 // гигант — гриф-дубина (barbell).
+// outline — раньше был ярким неоном, контрастным телу (у bruiser пурпур на
+// синем, у shooter жёлтый на пурпуре и т.д.). Задумывалось как акцент, а на
+// живом прогоне при плотной толпе эти светящиеся обводки сливались друг с
+// другом в радужную кашу — контур убивал силуэт вместо того, чтобы его
+// подчёркивать. По гайду (TONE_OF_VOICE.md, «Стиль картинок») контур обязан
+// быть тёмным и единым, а тип различают по цвету ТЕЛА — так и оставлено:
+// один и тот же тёмный тон у всех (тот же, что addOutline берёт по
+// умолчанию), никакой неоновой обводки.
+const ENEMY_OUTLINE = 0x0a0705;
 const ENEMY_TYPES = {
-  runner:  { name: tr('enemyRunner'),  top: '#4ade80', skin: '#16803c', bottom: '#0f5c2c', scale: 0.80, hpUnit: 1,   dmgUnit: 1.3, speedMult: 1.65, gearProp: null,      outline: 0x00e5ff },
-  bruiser: { name: tr('enemyBruiser'), top: '#3b82f6', skin: '#1e40af', bottom: '#16297a', scale: 1.55, hpUnit: 13,  dmgUnit: 3.7, speedMult: 0.58, gearProp: 'fist',    outline: 0xff2fd1 },
-  shield:  { name: tr('enemyShield'),  top: '#22d3ee', skin: '#0e7490', bottom: '#0a5866', scale: 1.18, hpUnit: 17,  dmgUnit: 2.1, speedMult: 0.80, gearProp: 'plate',   outline: 0xffb347, blockDmg: 4.2 },
-  shooter: { name: tr('enemyShooter'), top: '#c026d3', skin: '#701a75', bottom: '#4c1259', scale: 0.95, hpUnit: 4,   dmgUnit: 0,   speedMult: 0.42, gearProp: 'javelin', outline: 0xfff23c, ranged: true, stopZ: 0.85 },
-  leader:  { name: tr('enemyLeader'),  top: '#14b8a6', skin: '#0f766e', bottom: '#0b5852', scale: 2.05, hpUnit: 62,  dmgUnit: 6.6, speedMult: 0.55, gearProp: 'crown',   outline: 0xffd700, isLeader: true },
+  // runner — самый мелкий и частый тип; 0.80 давал нечитаемый силуэт в толпе
+  // (жалоба «бесформенные» была и про это) — поднят до 0.92.
+  runner:  { name: tr('enemyRunner'),  top: '#4ade80', skin: '#16803c', bottom: '#0f5c2c', scale: 0.92, hpUnit: 1,   dmgUnit: 1.3, speedMult: 1.65, gearProp: null,      outline: ENEMY_OUTLINE },
+  bruiser: { name: tr('enemyBruiser'), top: '#3b82f6', skin: '#1e40af', bottom: '#16297a', scale: 1.55, hpUnit: 13,  dmgUnit: 3.7, speedMult: 0.58, gearProp: 'fist',    outline: ENEMY_OUTLINE },
+  shield:  { name: tr('enemyShield'),  top: '#22d3ee', skin: '#0e7490', bottom: '#0a5866', scale: 1.18, hpUnit: 17,  dmgUnit: 2.1, speedMult: 0.80, gearProp: 'plate',   outline: ENEMY_OUTLINE, blockDmg: 4.2 },
+  shooter: { name: tr('enemyShooter'), top: '#c026d3', skin: '#701a75', bottom: '#4c1259', scale: 0.95, hpUnit: 4,   dmgUnit: 0,   speedMult: 0.42, gearProp: 'javelin', outline: ENEMY_OUTLINE, ranged: true, stopZ: 0.85 },
+  leader:  { name: tr('enemyLeader'),  top: '#14b8a6', skin: '#0f766e', bottom: '#0b5852', scale: 2.05, hpUnit: 62,  dmgUnit: 6.6, speedMult: 0.55, gearProp: 'crown',   outline: ENEMY_OUTLINE, isLeader: true },
   // Гигант — редкое рубежное событие внутри волны, не рядовой тип: гриф со
   // штангой как дубина, огромный запас хода и здоровья, идёт медленно и
   // виден издалека — заставляет копить оружие и маневрировать, а не отстреливаться на бегу.
-  giant:   { name: tr('enemyGiant'),   top: '#475569', skin: '#1e293b', bottom: '#0f172a', scale: 3.3,  hpUnit: 480, dmgUnit: 22,  speedMult: 0.30, gearProp: 'barbell', outline: 0xff3b30, isGiant: true },
+  giant:   { name: tr('enemyGiant'),   top: '#475569', skin: '#1e293b', bottom: '#0f172a', scale: 3.3,  hpUnit: 480, dmgUnit: 22,  speedMult: 0.30, gearProp: 'barbell', outline: ENEMY_OUTLINE, isGiant: true },
 };
 const ENEMY_TYPE_KEYS = Object.keys(ENEMY_TYPES);
 // Какие типы уже "в ходу" на этой дистанции — состав волны меняется по мере
@@ -1528,11 +1559,35 @@ function textChip(label, x, y, fs, fillColor, strokeK, bgColor) {
   hctx.strokeText(label, x, y + 1);
   hctx.fillStyle = fillColor; hctx.fillText(label, x, y + 1);
 }
+// Размер шрифта, при котором label ГАРАНТИРОВАННО влезает в доступную
+// ширину (availPx) с запасом — измеряем реальную ширину текста на канвасе
+// при опорном fs=100 и пересчитываем пропорцией (моноширинный шрифт, ширина
+// линейна по fs). Раньше размер ворот брался только от fakeScale(z) — на
+// дальних воротах створка на экране УЖЕ узкая, а шрифт всё ещё крупный, и
+// «+52÷3» слипались в кашу; теперь потолок — сама доступная ширина.
+function fitFontSize(label, availPx, maxFs, minFs) {
+  hctx.font = "900 100px 'Courier New', monospace";
+  const w100 = Math.max(1, hctx.measureText(label).width);
+  const fit = (Math.max(0, availPx) * 0.82) / w100 * 100;
+  return clamp(fit, minFs, maxFs);
+}
+// Наложение по глубине (кадр видит сразу несколько ворот/волн на разных Z —
+// их подписи попадают в близкие экранные Y и накладываются друг на друга).
+// Решение: собираем все подписи кадра в список с их Z, рисуем от БЛИЖНИХ к
+// ДАЛЬНИМ (ближним — приоритет, они и есть то, что игрок вот-вот выбирает),
+// и если экранный прямоугольник дальней подписи пересекается с уже
+// нарисованной (более близкой) — дальнюю не рисуем вовсе, а не наваливаем
+// текст на текст. Дальние, что не пересеклись, всё равно рисуем мельче
+// (fakeScale уже в fs) и полупрозрачнее.
 function drawObstacleLabels() {
+  const jobs = [];
+  const addJob = (label, x, y, fs, fillColor, strokeK, bgColor, z) => {
+    jobs.push({ label, x, y, fs, fillColor, strokeK, bgColor, z });
+  };
   obstacles.forEach(o => {
     if (o.kind === 'plate') {
       const p = projectPoint(o.worldX, o.z, 1.35);
-      textChip(fmt(o.hp), p.x, p.y, Math.max(15, 26 * fakeScale(o.z)), CHALK);
+      addJob(fmt(o.hp), p.x, p.y, Math.max(15, 26 * fakeScale(o.z)), CHALK, undefined, undefined, o.z);
     } else if (o.kind === 'gate') {
       // Главное решение в игре — цифры обязаны читаться издалека и мгновенно,
       // как в рекламных роликах жанра: огромные, с толстой тёмной обводкой,
@@ -1543,29 +1598,42 @@ function drawObstacleLabels() {
       const rightGood = o.bothBad ? false : (o.bothGood || !o.buffLeft);
       const label = (o.buffLeft ? o.buff : o.debuff).label;
       const label2 = (o.buffLeft ? o.debuff : o.buff).label;
-      // Потолок обязателен: без него у ближних ворот число разрасталось до
-      // полэкрана и закрывало саму дорожку — на живом прогоне три ряда ворот
-      // подряд не давали разглядеть ни отряд, ни врагов за ними. Крупно ≠
-      // во весь экран: цифра должна доминировать, но не подменять собой игру.
-      const fs = clamp(128 * fakeScale(o.z), 38, 72);
+      // Потолок от «дальности» обязателен: без него у ближних ворот число
+      // разрасталось до полэкрана и закрывало саму дорожку. Но дальность —
+      // не единственный потолок: берём ЕЩЁ и потолок по факту доступной
+      // ширины своей створки (fitFontSize), иначе на дальних узких створках
+      // текст всё ещё вылезает за свою половину и слипается с соседней.
+      const distFs = clamp(128 * fakeScale(o.z), 38, 72);
+      const fsL = Math.min(distFs, fitFontSize(label, Math.abs(mid.x - near.x), distFs, 16));
+      const fsR = Math.min(distFs, fitFontSize(label2, Math.abs(farE.x - mid.x), distFs, 16));
       const bgGood = 'rgba(20,110,58,0.72)', bgBad = 'rgba(120,20,20,0.72)';
-      textChip(label, (near.x + mid.x) / 2, near.y, fs, '#ffffff', 0.28, leftGood ? bgGood : bgBad);
-      textChip(label2, (mid.x + farE.x) / 2, mid.y, fs, '#ffffff', 0.28, rightGood ? bgGood : bgBad);
+      addJob(label, (near.x + mid.x) / 2, near.y, fsL, '#ffffff', 0.28, leftGood ? bgGood : bgBad, o.z);
+      addJob(label2, (mid.x + farE.x) / 2, mid.y, fsR, '#ffffff', 0.28, rightGood ? bgGood : bgBad, o.z);
     } else if (o.kind === 'wave') {
       // Каждый живой тип в волне — свой цвет и своя цифра над головой, чтобы
       // отличать их в бою на глаз, не только по силуэту. Цифра всегда — живой
       // остаток hp-пула группы (см. mkGroup/попадание пули), поэтому она
       // реально тикает вниз по мере обстрела, а не стоит на месте.
-      o.groups.forEach(g => {
+      // Все группы одной волны стоят на одном o.worldX — их подписи всегда
+      // ложились в одну и ту же экранную X-колонку и различались только
+      // высотой (рост типа), у похожих по росту типов (щитовик/стрелок)
+      // высоты почти совпадали и подписи наезжали друг на друга даже без
+      // разницы по глубине. Небольшой горизонтальный веер по индексу группы —
+      // "26 26 26" со скриншота заказчика была именно эта коллизия.
+      const groupSpread = (idx, n) => (idx - (n - 1) / 2) * 32;
+      o.groups.forEach((g, gi) => {
         if (g.count <= 0) return;
         const def = ENEMY_TYPES[g.type];
         const p = projectPoint(o.worldX, g.z, 1.55 * def.scale);
+        p.x += groupSpread(gi, o.groups.length);
         if (def.isGiant) {
           // Гигант — редкое событие: число жизней крупное и заметное прямо
           // над ним, плюс полоса здоровья на весь верх экрана, пока он жив —
-          // игрок обязан видеть, что реально его дожимает.
+          // игрок обязан видеть, что реально его дожимает. Полоса — фиксированный
+          // HUD-элемент сверху экрана, к наложению по глубине не относится,
+          // рисуем её сразу же, а не через общий список подписей.
           const fs = Math.max(22, 36 * fakeScale(g.z));
-          textChip(fmt(Math.ceil(g.hp)), p.x, p.y, fs, '#ffdf70');
+          addJob(fmt(Math.ceil(g.hp)), p.x, p.y, fs, '#ffdf70', undefined, undefined, g.z);
           const bw = W * 0.62, bx0 = W / 2 - bw / 2, by = H * 0.10;
           const frac = clamp(g.hp / g.hpMax, 0, 1);
           hctx.fillStyle = 'rgba(0,0,0,0.45)'; hctx.fillRect(bx0 - 4, by - 4, bw + 8, 22);
@@ -1577,9 +1645,10 @@ function drawObstacleLabels() {
         }
         const fs = Math.max(13, (def.isLeader ? 30 : 23) * fakeScale(g.z));
         const col = def.isLeader ? C_GOLD : (def.ranged ? '#e6a6ff' : (def.hpUnit >= 6 ? '#bfe0ff' : '#bfe89a'));
-        textChip(fmt(g.count), p.x, p.y, fs, col);
+        addJob(fmt(g.count), p.x, p.y, fs, col, undefined, undefined, g.z);
       });
     } else if (o.kind === 'boss' && o.phase === 'press') {
+      // Тоже фиксированный HUD-бар сверху, не проекция в мир — рисуем сразу.
       const bw = W * 0.7, bx0 = W / 2 - bw / 2, by = H * 0.10;
       const frac = clamp(o.hp / o.hpMax, 0, 1);
       hctx.fillStyle = 'rgba(0,0,0,0.45)'; hctx.fillRect(bx0 - 4, by - 4, bw + 8, 22);
@@ -1592,6 +1661,24 @@ function drawObstacleLabels() {
       hctx.font = "900 15px 'Courier New', monospace";
       hctx.fillText(fmt(Math.ceil(o.timer)) + tr('seconds'), W / 2, by + 34);
     }
+  });
+
+  // Ближе — раньше в очереди на отрисовку и раньше застолбит своё место.
+  jobs.sort((a, b) => a.z - b.z);
+  const drawnRects = [];
+  jobs.forEach(job => {
+    hctx.font = "900 " + job.fs + "px 'Courier New', monospace";
+    const tw = hctx.measureText(job.label).width;
+    const rx1 = job.x - tw / 2 - 6, ry1 = job.y - job.fs / 2 - 3;
+    const rx2 = rx1 + tw + 12, ry2 = ry1 + job.fs + 6;
+    const overlapsNearer = drawnRects.some(r => rx1 < r.x2 && rx2 > r.x1 && ry1 < r.y2 && ry2 > r.y1);
+    if (overlapsNearer) return; // дальнюю подпись поверх ближней — не рисуем совсем
+    drawnRects.push({ x1: rx1, y1: ry1, x2: rx2, y2: ry2 });
+    // Полупрозрачнее с глубиной — даже без пересечения дальняя подпись явно
+    // читается как «контекст», а не как равноценная ближней.
+    hctx.globalAlpha = clamp(1 - (job.z / ZFAR) * 0.55, 0.45, 1);
+    textChip(job.label, job.x, job.y, job.fs, job.fillColor, job.strokeK, job.bgColor);
+    hctx.globalAlpha = 1;
   });
 }
 
@@ -2703,7 +2790,7 @@ function update(dt) {
     else if (kind === 'gate') spawnGate();
     else if (kind === 'bonus') spawnBonus();
     else if (kind === 'crate') spawnCrate();
-    nextEventAt = dist + rnd(11, 19);
+    nextEventAt = dist + rnd(11, 19) * SPAWN_GAP_TUNE;
   }
   // Волны — свой, не пересыхающий поток: дорожка не бывает пустой подолгу,
   // и к концу враги идут гуще. Но «не пересыхающий» — не значит «без передышки
@@ -2717,7 +2804,7 @@ function update(dt) {
     if (activeWaves < 1) {
       spawnWave();
       const gapMul = SEGMENT_WAVE_GAP_MUL[segment] || 1;
-      const gap = clamp(78 - dist / 12, 34, 78) * gapMul;
+      const gap = clamp(78 - dist / 12, 34, 78) * gapMul * SPAWN_GAP_TUNE;
       nextWaveAt = dist + rnd(gap * 0.75, gap);
     } else {
       nextWaveAt = dist + 8; // прошлая волна ещё жива — коротко отложим и проверим снова
