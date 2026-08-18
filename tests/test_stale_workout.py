@@ -279,8 +279,9 @@ async def test_stale_warning_repeats_the_next_local_day(fresh_db, user_id):
     db = fresh_db
     stale_started = dt.datetime.now() - dt.timedelta(hours=config.STALE_WORKOUT_HOURS + 1)
     await db.create_workout(user_id, started_at=stale_started.isoformat())
-    # Расписка сверяется с местным «сегодня» пользователя (см. соседний тест),
-    # поэтому и вчерашнюю дату берём от него же.
+    # Расписка сверяется с местным днём пользователя — тем же, что и в тесте
+    # ниже: у свежего атлета это config.DEFAULT_TZ_OFFSET (+3), и UTC-дата возле
+    # полуночи UTC уехала бы мимо ключа.
     yesterday = (timeutil.user_today(await db.get_user(user_id)) - dt.timedelta(days=1)).isoformat()
     await db.record_limit_ack(user_id, workout.STALE_WORKOUT_WARNING_KIND, yesterday)
 
@@ -300,9 +301,9 @@ async def test_resume_workout_button_reaches_stale_workout_even_when_warning_is_
     db = fresh_db
     stale_started = dt.datetime.now() - dt.timedelta(hours=config.STALE_WORKOUT_HOURS + 1)
     workout_id = await db.create_workout(user_id, started_at=stale_started.isoformat())
-    # Троттлинг предупреждения ключуется местным днём пользователя, а у нового
-    # атлета смещение +3: после 21:00 UTC серверная дата отстаёт на день, расписка
-    # ложилась во вчера и предупреждение показывалось снова.
+    # Местный день пользователя — cmd_start ищет ack по нему же (timeutil.user_today),
+    # а свежий атлет заводится на config.DEFAULT_TZ_OFFSET (+3); UTC-дата тут
+    # мимо ключа возле полуночи UTC.
     today = timeutil.user_today(await db.get_user(user_id)).isoformat()
     await db.record_limit_ack(user_id, workout.STALE_WORKOUT_WARNING_KIND, today)
 
