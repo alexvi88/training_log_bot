@@ -315,7 +315,26 @@ const sPower = () => { beep(620, .08, 'triangle', .05, 200); setTimeout(() => be
 const sDie = () => { thud(200, 44, .38, .085); setTimeout(() => thud(150, 36, .5, .07), 150); };
 
 // ── СОСТОЯНИЕ ────────────────────────────────────────────────────────────────
-const GROUND = () => H * 0.80;
+// Масштаб мира: раньше бегун был 58px (7% высоты экрана) и стоял на линии
+// H*0.80 — 70%+ кадра над головой оставалось пустым небом. SK поднимает все
+// пиксельные размеры мира (игрок, препятствия, просветы, прыжок) в 2.5 раза
+// СОГЛАСОВАННО: скорость скролла (SPEED_*, px/с) не трогаем — это она отвечает
+// за баланс/сложность, — а высоту прыжка и гравитацию масштабируем ОБЕ на SK,
+// поэтому апекс прыжка растёт в SK раз, а время полёта (и вся синхронизация с
+// препятствиями) остаётся тем же, что и до масштабирования.
+const SK = 2.5;
+// Прыжок — величина ФИКСИРОВАННОЙ длительности (v0/g не меняются от скорости
+// бега), поэтому его горизонтальный охват = speed*flightTime не растёт с SK.
+// Если прыжковые препятствия (гантель/гиря/скамья/блин/вышибала) масштабировать
+// по ширине на весь SK, на минимальной скорости они перестают влезать целиком
+// в охват прыжка — реально проверено автопилотом, игра стала непроходимой.
+// SKW — отдельный, более скромный масштаб для ширины (и, для сохранения
+// силуэта, высоты) именно этих «прыжковых» препятствий и ширины игрока.
+// Подкатные препятствия (стойка/груша/канат/блин-на-подкате) от этой проблемы
+// не страдают: длительность подката пересчитывается от текущей скорости живьём
+// (см. slide()), поэтому их можно спокойно оставить на полном SK.
+const SKW = 1.6;
+const GROUND = () => H * 0.66;
 let running = false;
 let t = 0, dist = 0, speed = 0, score = 0, best = Math.max(serverBest, +(localStorage.getItem('gymrun_best') || 0));
 let shakeT = 0, lastResult = null;
@@ -338,14 +357,14 @@ const rnd = (a, b) => a + Math.random() * (b - a);
 const pick = a => a[Math.floor(Math.random() * a.length)];
 
 const P = {
-  x: 0, y: 0, vy: 0, w: 34, h: 58,
+  x: 0, y: 0, vy: 0, w: 34 * SKW, h: 58 * SK,
   onGround: true, jumps: 0, slideT: 0,
   shield: false, rageT: 0, magnetT: 0, runPhase: 0,
 };
 function resetGame() {
   t = 0; dist = 0; speed = SPEED_START; score = 0; shakeT = 0;
   combo = 0; maxCombo = 0; pickups = 0; lastMile = 0; rivalWarned = false;
-  P.x = W * 0.22; P.y = GROUND(); P.vy = 0; P.onGround = true; P.jumps = 0; P.slideT = 0;
+  P.x = W * 0.26; P.y = GROUND(); P.vy = 0; P.onGround = true; P.jumps = 0; P.slideT = 0;
   P.shield = false; P.rageT = 0; P.magnetT = 0; P.runPhase = 0;
   obstacles.length = 0; items.length = 0; parts.length = 0; toasts.length = 0;
   nextObsAt = 70; nextItemAt = 45;
@@ -415,12 +434,25 @@ function drawNeon(a) {
   const sf = speedFrac();
   ctx.fillStyle = 'rgba(57,210,196,0.8)'; ctx.fillRect(0, 30, W, 3);
   ctx.fillStyle = 'rgba(255,90,150,0.6)'; ctx.fillRect(0, 44, W, 2);
-  const sw = 560, soff = (dist * 3.0) % sw;
-  ctx.font = "900 34px 'Courier New', monospace"; ctx.textAlign = 'center';
-  for (let x = -sw; x < W + sw; x += sw) {
-    const sx = x - soff + sw / 2;
-    ctx.fillStyle = 'rgba(57,210,196,0.14)'; ctx.fillText('QACHALKA 24/7', sx, 120);
-    ctx.fillStyle = 'rgba(57,210,196,0.8)'; ctx.fillText('QACHALKA 24/7', sx, 118);
+  // Неоновая табличка «QACHALKA 24/7» — цельная панель с рамкой на своей
+  // подложке, а не голый текст поперёк экрана: раньше при узком экране
+  // надпись обрезалась краем кадра и «24/7» висело без опоры и без рамки.
+  // Знак — самостоятельный объект фиксированного размера: может целиком
+  // уехать за кадр между повторами, но никогда не обрежется на полуслове.
+  const signW = 172, signH = 66, period = 430, soff = (dist * 3.0) % period;
+  for (let x = -period; x < W + period; x += period) {
+    const sx = x - soff + period * 0.42, sy = GROUND() * 0.24;
+    ctx.save(); ctx.translate(sx, sy);
+    ctx.fillStyle = 'rgba(8,14,26,0.6)';
+    ctx.beginPath(); ctx.roundRect(-signW / 2, -signH / 2, signW, signH, 10); ctx.fill();
+    ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(57,210,196,0.75)';
+    ctx.beginPath(); ctx.roundRect(-signW / 2, -signH / 2, signW, signH, 10); ctx.stroke();
+    ctx.textAlign = 'center';
+    ctx.font = "900 19px 'Courier New', monospace";
+    ctx.fillStyle = 'rgba(57,210,196,0.9)'; ctx.fillText('QACHALKA', 0, -6);
+    ctx.font = "900 24px 'Courier New', monospace";
+    ctx.fillStyle = 'rgba(255,90,150,0.95)'; ctx.fillText('24/7', 0, 20);
+    ctx.restore();
   }
   // Линии сетки реже (было каждые 34px) и гаснут на разгоне — частая горизонтальная
   // штриховка, бегущая быстро, давала муар.
@@ -459,6 +491,24 @@ function drawStreet(a) {
     ctx.fillStyle = g; ctx.fillRect(lx - 60, GROUND() - 260, 180, 260);
   }
   ctx.globalAlpha = 1;
+}
+// Дальний параллакс-слой: мягкие светящиеся пятна на разной высоте, ползут
+// заметно медленнее ближних силуэтов. Работает во всех зонах одинаково (цвет
+// приходит из палитры зоны) — заполняет верхнюю часть неба содержанием, а не
+// голой пустотой, независимо от того, что рисует конкретная drawZone.
+function drawFarBokeh(tint) {
+  const pw = 260, poff = (dist * 0.35) % pw;
+  ctx.save(); ctx.globalAlpha = 0.22;
+  for (let x = -pw; x < W + pw; x += pw) {
+    const i = Math.floor(x / pw + 1000);
+    const bx = x - poff + pw * 0.5;
+    const by = GROUND() * (0.14 + 0.34 * (i % 3) / 2);
+    const r = 46 + (i % 4) * 20;
+    const g = ctx.createRadialGradient(bx, by, 2, bx, by, r);
+    g.addColorStop(0, tint); g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g; ctx.fillRect(bx - r, by - r, r * 2, r * 2);
+  }
+  ctx.restore();
 }
 function silhouettes(color, parallax) {
   const sw = 260, soff = (dist * parallax) % sw;
@@ -536,25 +586,36 @@ function spawnObstacle() {
   // и игрок освоился — не с первой секунды (см. RIVAL_MIN_DIST).
   if (dist >= RIVAL_MIN_DIST) pool.push('rival');
   const kind = pick(pool);
-  const o = { kind, x: W + 80 };
-  if (kind === 'dumb') { o.w = 52; o.h = 30; }
-  if (kind === 'kettle') { o.w = 36; o.h = 40; }
-  if (kind === 'bench') { o.w = 110; o.h = 34; }
-  if (kind === 'rack') { o.w = 26; o.h = 0; o.gap = 64; }
-  if (kind === 'plate') { o.w = 44; o.h = 44; o.vx = 120 + speed * 0.12; o.rot = 0; }
+  // Все геометрические размеры (w/h/gap) и точка появления за краем экрана —
+  // в масштабе мира SK (см. объявление константы выше). Скорости сближения
+  // (o.vx) — это баланс/сложность, а не размер объекта, поэтому НЕ умножаем
+  // их на SK: только на текущую speed, как и раньше.
+  const o = { kind, x: W + 80 * SK };
+  // Прыжковые (dumb/kettle/bench/plate/rival) — по SKW, см. комментарий у
+  // объявления SKW: их ширина ограничена фиксированным охватом прыжка.
+  // Подкатные (rack/bag/cable/flyplate) — по полному SK: длительность подката
+  // подстраивается под текущую скорость живьём, узкого места здесь нет.
+  if (kind === 'dumb') { o.w = 52 * SKW; o.h = 30 * SKW; }
+  if (kind === 'kettle') { o.w = 36 * SKW; o.h = 40 * SKW; }
+  if (kind === 'bench') { o.w = 110 * SKW; o.h = 34 * SKW; }
+  if (kind === 'rack') { o.w = 26 * SK; o.h = 0; o.gap = 64 * SK; }
+  if (kind === 'plate') { o.w = 44 * SKW; o.h = 44 * SKW; o.vx = 120 + speed * 0.12; o.rot = 0; }
   // Груша — свисает с потолка на цепи, покачивается из стороны в сторону
   // (чисто визуально, на просвет не влияет). Просвет фиксированный, как у rack,
   // но силуэт совсем другой — цилиндр на цепи, а не перекладина на стойках.
-  if (kind === 'bag') { o.w = 46; o.h = 0; o.gap = 62; o.swingPhase = rnd(0, Math.PI * 2); }
+  if (kind === 'bag') { o.w = 46 * SK; o.h = 0; o.gap = 62 * SK; o.swingPhase = rnd(0, Math.PI * 2); }
   // Канат — тонкий трос между двумя короткими стойками, чуть вибрирует/провисает.
-  if (kind === 'cable') { o.w = 120; o.h = 0; o.gap = 56; o.wavePhase = rnd(0, Math.PI * 2); }
+  if (kind === 'cable') { o.w = 120 * SK; o.h = 0; o.gap = 56 * SK; o.wavePhase = rnd(0, Math.PI * 2); }
   // Летящий блин — прилетает по дуге сверху-справа (не катится по полу, как
   // обычный plate), проходит на высоте подката и улетает налево, вращаясь.
   // Главный запрос заказчика: «слишком легко всё перепрыгивается» — этот тип
   // не прощает прыжок в принципе (см. obstacleBox — коробка тянется вверх
   // выше пика прыжка, прыжок буквально сбивает игрока в полёте).
   if (kind === 'flyplate') {
-    o.w = 44; o.h = 44; o.gap = 58; o.rot = 0; o.vx = 60 + speed * 0.1;
+    // o.w/o.h тут чисто визуальные (коробка столкновения — от o.gap и фиксированных
+    // отступов, см. obstacleBox), поэтому масштаб как у обычного plate — SKW,
+    // без всякого ограничения по охвату прыжка (эти хазарды не перепрыгиваются).
+    o.w = 44 * SKW; o.h = 44 * SKW; o.gap = 58 * SK; o.rot = 0; o.vx = 60 + speed * 0.1;
     o.age = 0; o.floatPhase = rnd(0, Math.PI * 2);
   }
   if (kind === 'rival') {
@@ -562,7 +623,7 @@ function spawnObstacle() {
     // подкатиться под него нельзя — коробка достаёт до пола (см. obstacleBox).
     // Сближение быстрее обычного препятствия — к скорости бега прибавляется
     // собственный бег вышибалы навстречу (o.vx), как у катящегося блина, но заметнее.
-    o.w = 34; o.h = 64; o.vx = 90 + speed * 0.18; o.runPhase = 0;
+    o.w = 34 * SKW; o.h = 64 * SKW; o.vx = 90 + speed * 0.18; o.runPhase = 0;
     if (!rivalWarned) { rivalWarned = true; toast(tr('rivalWarn'), C_RAGE); }
   }
   obstacles.push(o);
@@ -582,134 +643,159 @@ function spawnObstacle() {
 function spawnGuideItems(o) {
   if (o.kind === 'plate' || o.kind === 'flyplate') return; // летит/едет навстречу — «след» разъедется с ним
   if (o.kind === 'rack') {
-    for (let i = 0; i < 4; i++) items.push(mkItem('shaker', o.x - 40 + i * 46, GROUND() - 26));
+    for (let i = 0; i < 4; i++) items.push(mkItem('shaker', o.x - 40 * SK + i * 46 * SK, GROUND() - 26 * SK));
     return;
   }
   // Груша, канат — те же подкатные хазарды, что и стойка: след из наград
   // прямо в коридоре подката, на ту же высоту, что и у rack.
   if (o.kind === 'bag' || o.kind === 'cable') {
-    for (let i = 0; i < 4; i++) items.push(mkItem('shaker', o.x + 6 + i * (o.w - 12) / 3, GROUND() - 26));
+    for (let i = 0; i < 4; i++) items.push(mkItem('shaker', o.x + 6 * SK + i * (o.w - 12 * SK) / 3, GROUND() - 26 * SK));
     return;
   }
   const cx = o.x + o.w / 2, n = 5;
   const barAt = Math.random() < 0.35 ? Math.floor(n / 2) : -1;
   for (let i = 0; i < n; i++) {
     const p = i / (n - 1);
-    const y = GROUND() - 60 - Math.sin(p * Math.PI) * 95;
-    items.push(mkItem(i === barAt ? 'bar' : 'shaker', cx - 110 + p * 220, y));
+    const y = GROUND() - 60 * SK - Math.sin(p * Math.PI) * 95 * SK;
+    items.push(mkItem(i === barAt ? 'bar' : 'shaker', cx - 110 * SK + p * 220 * SK, y));
   }
+}
+// Жирный тёмный контур по силуэту — стрит-фигуру заливаем стандартным
+// fill/stroke: сначала непрозрачная заливка, потом обводка тем же путём.
+// LW — толщина обводки в мировом масштабе (не растёт строго на SK, чтобы
+// линия не стала бесформенным пятном на крупных объектах).
+const LW = 5;
+function fillStroke(fill) {
+  ctx.fillStyle = fill; ctx.fill();
+  ctx.lineWidth = LW; ctx.strokeStyle = 'rgba(16,11,8,0.85)'; ctx.stroke();
 }
 function drawObstacle(o) {
   const gy = GROUND();
   ctx.save(); ctx.translate(o.x, 0);
   if (o.kind === 'dumb') {
-    ctx.fillStyle = '#767c88'; ctx.fillRect(6, gy - 16, o.w - 12, 8);
-    ctx.fillStyle = '#5a606c';
-    ctx.fillRect(0, gy - 30, 12, 30); ctx.fillRect(o.w - 12, gy - 30, 12, 30);
-    ctx.fillRect(3, gy - 26, 6, 22); ctx.fillRect(o.w - 9, gy - 26, 6, 22);
+    // Гантель: два круглых блина на концах грифа + рифлёная рукоять —
+    // силуэт читается с одного взгляда, в отличие от прежних квадратных блоков.
+    const r = o.h / 2;
+    ctx.beginPath(); ctx.roundRect(r * 0.55, gy - r - 5 * SKW, o.w - r * 1.1, 10 * SKW, 5 * SKW); fillStroke('#8a919c');
+    ctx.fillStyle = 'rgba(255,255,255,0.35)'; ctx.fillRect(r * 0.7, gy - r - 4 * SKW, o.w - r * 1.4, 2.5 * SKW);
+    for (const cx of [r * 0.62, o.w - r * 0.62]) {
+      ctx.beginPath(); ctx.arc(cx, gy - r, r, 0, 7); fillStroke('#4c505b');
+      ctx.beginPath(); ctx.arc(cx, gy - r, r * 0.42, 0, 7); ctx.fillStyle = '#2f323a'; ctx.fill();
+    }
   }
   if (o.kind === 'kettle') {
-    ctx.fillStyle = '#3b3f49';
-    ctx.beginPath(); ctx.arc(o.w / 2, gy - 16, 16, 0, 7); ctx.fill();
-    ctx.lineWidth = 7; ctx.strokeStyle = '#3b3f49';
-    ctx.beginPath(); ctx.arc(o.w / 2, gy - 32, 10, Math.PI, 0); ctx.stroke();
+    // Гиря: шар + прямая скоба-ручка — тёмное чугунное литьё, тёплый хайлайт сверху.
+    const cx = o.w / 2, cy = gy - o.h * 0.42, r = o.h * 0.42;
+    ctx.beginPath(); ctx.arc(cx, cy, r, 0, 7); fillStroke('#33363f');
+    ctx.fillStyle = 'rgba(255,255,255,0.16)'; ctx.beginPath(); ctx.arc(cx - r * 0.35, cy - r * 0.4, r * 0.35, 0, 7); ctx.fill();
+    ctx.lineWidth = LW * 1.6; ctx.strokeStyle = '#33363f'; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.arc(cx, gy - o.h - 2, o.h * 0.24, Math.PI * 1.05, Math.PI * 1.95); ctx.stroke();
+    ctx.lineWidth = LW; ctx.strokeStyle = 'rgba(16,11,8,0.85)'; ctx.stroke();
   }
   if (o.kind === 'bench') {
-    ctx.fillStyle = '#8a4436'; ctx.fillRect(0, gy - o.h, o.w, 12);
+    // Скамья: мягкое ложе тёплого цвета на двух стальных опорах.
+    ctx.beginPath(); ctx.roundRect(0, gy - o.h, o.w, o.h * 0.36, o.h * 0.14); fillStroke('#a8543f');
+    ctx.fillStyle = 'rgba(255,255,255,0.18)'; ctx.fillRect(o.w * 0.06, gy - o.h + o.h * 0.06, o.w * 0.88, o.h * 0.07);
     ctx.fillStyle = '#4c4f58';
-    ctx.fillRect(10, gy - o.h + 12, 10, o.h - 12); ctx.fillRect(o.w - 20, gy - o.h + 12, 10, o.h - 12);
+    ctx.fillRect(o.w * 0.09, gy - o.h * 0.7, o.w * 0.09, o.h * 0.7);
+    ctx.fillRect(o.w * 0.82, gy - o.h * 0.7, o.w * 0.09, o.h * 0.7);
   }
   if (o.kind === 'rack') {
+    // Силовая стойка: две вертикальные стойки, гриф-перекладина, круглые блины
+    // по краям грифа — читается как «штанга на стойках», а не абстрактная линия.
     ctx.fillStyle = '#4c4f58';
-    ctx.fillRect(0, gy - 150, 10, 150); ctx.fillRect(o.w + 66, gy - 150, 10, 150);
-    ctx.fillStyle = '#9aa0ab'; ctx.fillRect(-14, gy - o.gap - 8, o.w + 104, 8);
-    ctx.fillStyle = '#c0392b';
-    ctx.fillRect(-8, gy - o.gap - 26, 14, 44); ctx.fillRect(o.w + 70, gy - o.gap - 26, 14, 44);
+    ctx.fillRect(0, gy - 150 * SK, 10 * SK, 150 * SK); ctx.fillRect(o.w + 66 * SK, gy - 150 * SK, 10 * SK, 150 * SK);
+    ctx.beginPath(); ctx.roundRect(-14 * SK, gy - o.gap - 9 * SK, o.w + 104 * SK, 9 * SK, 3 * SK); fillStroke('#a7adba');
+    for (const cx of [-1 * SK, o.w + 77 * SK]) {
+      ctx.beginPath(); ctx.arc(cx, gy - o.gap - 4 * SK, 20 * SK, 0, 7); fillStroke('#b8332a');
+      ctx.beginPath(); ctx.arc(cx, gy - o.gap - 4 * SK, 7 * SK, 0, 7); ctx.fillStyle = '#7c1f18'; ctx.fill();
+    }
   }
   if (o.kind === 'plate') {
     ctx.translate(o.w / 2, gy - o.h / 2); ctx.rotate(o.rot);
-    ctx.fillStyle = '#c0392b'; ctx.beginPath(); ctx.arc(0, 0, o.h / 2, 0, 7); ctx.fill();
-    ctx.fillStyle = '#8f2a20'; ctx.beginPath(); ctx.arc(0, 0, o.h / 2 - 7, 0, 7); ctx.fill();
-    ctx.fillStyle = '#c0392b'; ctx.beginPath(); ctx.arc(0, 0, 8, 0, 7); ctx.fill();
-    ctx.fillStyle = CHALK; ctx.beginPath(); ctx.arc(0, 0, 3.4, 0, 7); ctx.fill();
-    ctx.fillStyle = 'rgba(242,237,227,0.5)'; ctx.fillRect(-o.h / 2 + 4, -1.5, 10, 3);
+    ctx.beginPath(); ctx.arc(0, 0, o.h / 2, 0, 7); fillStroke('#c0392b');
+    ctx.fillStyle = '#8f2a20'; ctx.beginPath(); ctx.arc(0, 0, o.h / 2 - 7 * SKW, 0, 7); ctx.fill();
+    ctx.fillStyle = '#c0392b'; ctx.beginPath(); ctx.arc(0, 0, 8 * SKW, 0, 7); ctx.fill();
+    ctx.fillStyle = CHALK; ctx.beginPath(); ctx.arc(0, 0, 3.4 * SKW, 0, 7); ctx.fill();
+    ctx.fillStyle = 'rgba(242,237,227,0.5)'; ctx.fillRect(-o.h / 2 + 4 * SKW, -1.5 * SKW, 10 * SKW, 3 * SKW);
   }
   if (o.kind === 'rival') {
     // Тот же drawAthlete, что и для игрока — просто чужая палитра (RIVAL_SKIN) и
     // зеркальный разворот, чтобы бежал НАВСТРЕЧУ (лицом влево, к игроку).
     ctx.translate(o.w / 2, gy); ctx.scale(-1, 1);
-    drawAthlete(ctx, RIVAL_SKIN, { run: Math.sin(o.runPhase * 14), rage: true, scale: 1.08 });
+    drawAthlete(ctx, RIVAL_SKIN, { run: Math.sin(o.runPhase * 14), rage: true, scale: 1.08 * SK, outline: true });
   }
   if (o.kind === 'bag') {
     // Боксёрская груша на цепи с потолка — свисает и слегка качается из
     // стороны в сторону. Нижний край на высоте подката (o.gap), верх цепи
     // уходит за кадр — читается как «висит», а не «стоит», в отличие от
     // rack (перекладина на стойках) и cable (натянутый трос).
-    const swing = Math.sin(o.swingPhase) * 9;
-    const botY = gy - o.gap, topY = gy - o.gap - 130;
-    ctx.strokeStyle = '#6b6f78'; ctx.lineWidth = 3;
-    ctx.beginPath(); ctx.moveTo(o.w / 2, -20); ctx.lineTo(o.w / 2 + swing * 0.3, topY); ctx.stroke();
+    const swing = Math.sin(o.swingPhase) * 9 * SK;
+    const botY = gy - o.gap, topY = gy - o.gap - 130 * SK;
+    ctx.strokeStyle = '#6b6f78'; ctx.lineWidth = 3 * Math.sqrt(SK);
+    ctx.beginPath(); ctx.moveTo(o.w / 2, -20 * SK); ctx.lineTo(o.w / 2 + swing * 0.3, topY); ctx.stroke();
     ctx.fillStyle = '#54585f';
-    for (let i = 0; i < 4; i++) { const ly = topY + i * 18; ctx.beginPath(); ctx.arc(o.w / 2 + swing * (0.3 + i * 0.05), ly, 2.6, 0, 7); ctx.fill(); }
+    for (let i = 0; i < 4; i++) { const ly = topY + i * 18 * SK; ctx.beginPath(); ctx.arc(o.w / 2 + swing * (0.3 + i * 0.05), ly, 2.6 * Math.sqrt(SK), 0, 7); ctx.fill(); }
     ctx.save();
     ctx.translate(o.w / 2 + swing, (topY + botY) / 2);
     ctx.rotate(swing * 0.018);
-    ctx.fillStyle = '#5a3a2a';
-    ctx.beginPath(); ctx.roundRect(-o.w / 2, -(botY - topY) / 2, o.w, botY - topY, o.w * 0.32); ctx.fill();
+    ctx.beginPath(); ctx.roundRect(-o.w / 2, -(botY - topY) / 2, o.w, botY - topY, o.w * 0.32); fillStroke('#6a4632');
     ctx.fillStyle = '#432c20';
-    ctx.fillRect(-o.w / 2, -6, o.w, 5); ctx.fillRect(-o.w / 2, 10, o.w, 5);
-    ctx.fillStyle = 'rgba(255,255,255,0.12)'; ctx.fillRect(-o.w / 2 + 5, -(botY - topY) / 2 + 6, 6, botY - topY - 12);
+    ctx.fillRect(-o.w / 2, -6 * SK, o.w, 5 * SK); ctx.fillRect(-o.w / 2, 10 * SK, o.w, 5 * SK);
+    ctx.fillStyle = 'rgba(255,255,255,0.14)'; ctx.fillRect(-o.w / 2 + 5 * SK, -(botY - topY) / 2 + 6 * SK, 6 * SK, botY - topY - 12 * SK);
     ctx.restore();
   }
   if (o.kind === 'cable') {
     // Натянутый трос между двумя короткими стойками, на высоте подката —
     // тонкий профиль, лёгкое провисание/вибрация синусом. Контраст с rack:
     // никаких силовых стоек в полный рост, просто линия поперёк коридора.
-    const ropeY = gy - o.gap, wob = Math.sin(o.wavePhase) * 4;
+    const ropeY = gy - o.gap, wob = Math.sin(o.wavePhase) * 4 * SK;
     ctx.fillStyle = '#3f434c';
-    ctx.fillRect(-6, ropeY - 32, 9, 32); ctx.fillRect(o.w - 3, ropeY - 32, 9, 32);
-    ctx.fillStyle = '#5a606c'; ctx.fillRect(-8, ropeY - 34, 13, 5); ctx.fillRect(o.w - 5, ropeY - 34, 13, 5);
-    ctx.strokeStyle = '#d8d2bf'; ctx.lineWidth = 4; ctx.lineCap = 'round';
-    ctx.beginPath(); ctx.moveTo(-1, ropeY); ctx.quadraticCurveTo(o.w / 2, ropeY + 7 + wob, o.w + 1, ropeY); ctx.stroke();
-    ctx.strokeStyle = 'rgba(0,0,0,0.35)'; ctx.lineWidth = 1.4;
-    ctx.beginPath(); ctx.moveTo(-1, ropeY + 1.5); ctx.quadraticCurveTo(o.w / 2, ropeY + 8.5 + wob, o.w + 1, ropeY + 1.5); ctx.stroke();
+    ctx.fillRect(-6 * SK, ropeY - 32 * SK, 9 * SK, 32 * SK); ctx.fillRect(o.w - 3 * SK, ropeY - 32 * SK, 9 * SK, 32 * SK);
+    ctx.fillStyle = '#5a606c'; ctx.fillRect(-8 * SK, ropeY - 34 * SK, 13 * SK, 5 * SK); ctx.fillRect(o.w - 5 * SK, ropeY - 34 * SK, 13 * SK, 5 * SK);
+    ctx.strokeStyle = '#d8d2bf'; ctx.lineWidth = 4 * Math.sqrt(SK); ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(-1, ropeY); ctx.quadraticCurveTo(o.w / 2, ropeY + 7 * SK + wob, o.w + 1, ropeY); ctx.stroke();
+    ctx.strokeStyle = 'rgba(0,0,0,0.4)'; ctx.lineWidth = 1.6 * Math.sqrt(SK);
+    ctx.beginPath(); ctx.moveTo(-1, ropeY + 1.5); ctx.quadraticCurveTo(o.w / 2, ropeY + 8.5 * SK + wob, o.w + 1, ropeY + 1.5); ctx.stroke();
   }
   if (o.kind === 'flyplate') {
     // Летящий блин: прилетает по дуге сверху-справа, идёт горизонтально на
     // высоте подката с лёгким синусом по высоте для читаемости, вращаясь —
     // не катится по полу, как обычный plate, поэтому и прыжок не спасает
     // (см. obstacleBox — коробка накрывает всю высоту прыжка).
-    const bob = Math.sin(o.floatPhase) * 8;
+    const bob = Math.sin(o.floatPhase) * 8 * SK;
     const dropIn = Math.max(0, 1 - o.age / 0.4); // первые ~0.4с — ещё «долетает» сверху
-    const cy = gy - o.gap - o.h / 2 + bob - dropIn * dropIn * 150;
+    const cy = gy - o.gap - o.h / 2 + bob - dropIn * dropIn * 150 * SK;
     ctx.save();
     ctx.globalAlpha = 1 - dropIn * 0.15;
     ctx.translate(o.w / 2, cy); ctx.rotate(o.rot);
-    ctx.fillStyle = '#c0392b'; ctx.beginPath(); ctx.arc(0, 0, o.h / 2, 0, 7); ctx.fill();
-    ctx.fillStyle = '#8f2a20'; ctx.beginPath(); ctx.arc(0, 0, o.h / 2 - 7, 0, 7); ctx.fill();
-    ctx.fillStyle = '#c0392b'; ctx.beginPath(); ctx.arc(0, 0, 8, 0, 7); ctx.fill();
-    ctx.fillStyle = CHALK; ctx.beginPath(); ctx.arc(0, 0, 3.4, 0, 7); ctx.fill();
-    ctx.fillStyle = 'rgba(242,237,227,0.5)'; ctx.fillRect(-o.h / 2 + 4, -1.5, 10, 3);
+    ctx.beginPath(); ctx.arc(0, 0, o.h / 2, 0, 7); fillStroke('#c0392b');
+    ctx.fillStyle = '#8f2a20'; ctx.beginPath(); ctx.arc(0, 0, o.h / 2 - 7 * SKW, 0, 7); ctx.fill();
+    ctx.fillStyle = '#c0392b'; ctx.beginPath(); ctx.arc(0, 0, 8 * SKW, 0, 7); ctx.fill();
+    ctx.fillStyle = CHALK; ctx.beginPath(); ctx.arc(0, 0, 3.4 * SKW, 0, 7); ctx.fill();
+    ctx.fillStyle = 'rgba(242,237,227,0.5)'; ctx.fillRect(-o.h / 2 + 4 * SKW, -1.5 * SKW, 10 * SKW, 3 * SKW);
     ctx.restore();
     // Лёгкий росчерк-траектория позади блина — читается, что летит, а не катится.
     if (dropIn > 0) {
-      ctx.strokeStyle = 'rgba(192,57,43,' + (0.35 * dropIn).toFixed(2) + ')'; ctx.lineWidth = 3;
-      ctx.beginPath(); ctx.moveTo(o.w / 2, cy); ctx.lineTo(o.w / 2 + 30, cy - 150 * dropIn * dropIn * 0.6); ctx.stroke();
+      ctx.strokeStyle = 'rgba(192,57,43,' + (0.35 * dropIn).toFixed(2) + ')'; ctx.lineWidth = 3 * Math.sqrt(SK);
+      ctx.beginPath(); ctx.moveTo(o.w / 2, cy); ctx.lineTo(o.w / 2 + 30 * SK, cy - 150 * SK * dropIn * dropIn * 0.6); ctx.stroke();
     }
   }
   ctx.restore();
 }
 function obstacleBox(o) {
-  const gy = GROUND(), m = 5;
-  if (o.kind === 'rack') return { x: o.x - 14 + m, y: gy - o.gap - 10, w: o.w + 104 - 2 * m, h: 20 };
+  const gy = GROUND(), m = 5 * SK, mw = 5 * SKW;
+  if (o.kind === 'rack') return { x: o.x - 14 * SK + m, y: gy - o.gap - 10 * SK, w: o.w + 104 * SK - 2 * m, h: 20 * SK };
   if (o.kind === 'bag' || o.kind === 'cable' || o.kind === 'flyplate') {
     // Хазарды «сверху»: коробка стоит на том же нижнем крае, что и просвет
     // подката (o.gap — совместимо с rack), но тянется далеко вверх — выше
-    // пика прыжка (~190px), поэтому прыжок ЧЕРЕЗ них не спасает никогда,
-    // только подкат, который проходит ниже нижнего края коробки.
-    return { x: o.x + m, y: gy - o.gap - 210, w: o.w - 2 * m, h: 220 };
+    // пика прыжка (даже с учётом SK), поэтому прыжок ЧЕРЕЗ них не спасает
+    // никогда, только подкат, который проходит ниже нижнего края коробки.
+    return { x: o.x + m, y: gy - o.gap - 210 * SK, w: o.w - 2 * m, h: 220 * SK };
   }
-  return { x: o.x + m, y: gy - o.h + m, w: o.w - 2 * m, h: o.h - m };
+  // Прыжковые (dumb/kettle/bench/plate/rival) — их o.w/o.h в масштабе SKW
+  // (см. spawnObstacle), поэтому и отступ по ширине свой, поменьше.
+  return { x: o.x + mw, y: gy - o.h + m, w: o.w - 2 * mw, h: o.h - m };
 }
 
 // ── СПОРТПИТ ─────────────────────────────────────────────────────────────────
@@ -725,51 +811,77 @@ let nextItemAt = 140;
 function spawnItems() {
   // Свободные награды не пересекаются с препятствиями: если у правого края
   // уже спавнится преграда, дорожка вела бы прямо в неё — переносим попытку.
-  if (obstacles.some(o => o.x > W - 180)) { nextItemAt = dist + 12; return; }
+  if (obstacles.some(o => o.x > W - 180 * SK)) { nextItemAt = dist + 12; return; }
   const r = Math.random();
   // Щит — редкая подстраховка, не рутинная: было 14% на каждый спавн награды,
   // теперь втрое реже (~5%). Остальные веса (предтрен/гейнер/батончики/обычные)
   // сохраняют прежнюю ширину диапазона, просто сдвинуты.
-  if (r < 0.05) items.push(mkItem('creatine', W + 60, GROUND() - 120));
-  else if (r < 0.16) items.push(mkItem('preworkout', W + 60, GROUND() - 150));
-  else if (r < 0.25) items.push(mkItem('gainer', W + 60, GROUND() - 100));
+  if (r < 0.05) items.push(mkItem('creatine', W + 60 * SK, GROUND() - 120 * SK));
+  else if (r < 0.16) items.push(mkItem('preworkout', W + 60 * SK, GROUND() - 150 * SK));
+  else if (r < 0.25) items.push(mkItem('gainer', W + 60 * SK, GROUND() - 100 * SK));
   else if (r < 0.39) {
     // Верхний ярус: достаётся только двойным прыжком, поэтому и награда
     // жирнее — батончики вместо шейкеров.
-    for (let i = 0; i < 3; i++) items.push(mkItem('bar', W + 60 + i * 58, GROUND() - 240));
+    for (let i = 0; i < 3; i++) items.push(mkItem('bar', W + 60 * SK + i * 58 * SK, GROUND() - 240 * SK));
   } else {
     const n = 4 + Math.floor(rnd(0, 3)), arc = Math.random() < 0.5;
     const barMix = Math.random() < 0.3;
     for (let i = 0; i < n; i++) {
-      const y = arc ? GROUND() - 80 - Math.sin(i / (n - 1) * Math.PI) * 80 : GROUND() - 64;
+      const y = arc ? GROUND() - 80 * SK - Math.sin(i / (n - 1) * Math.PI) * 80 * SK : GROUND() - 64 * SK;
       const type = (barMix && i === Math.floor(n / 2)) ? 'bar' : 'shaker';
-      items.push(mkItem(type, W + 60 + i * 54, y));
+      items.push(mkItem(type, W + 60 * SK + i * 54 * SK, y));
     }
   }
   nextItemAt = dist + rnd(28, 60);
 }
 function mkItem(type, x, y) { return { type, x, y, t: rnd(0, 6) }; }
+// Пять типов спортпита — каждый со своим силуэтом и цветом, а не одинаковый
+// квадратик: шейкер (цилиндр+крышка), батончик (обёртка с крутками), креатин
+// (пакет-саше на молнии), предтреник (банка с зигзагом-«разрядом»), гейнер
+// (широкая банка со скотчем). Жирный тёмный контур — как у препятствий.
 function drawItem(it) {
   const d = ITEM_TYPES[it.type];
-  const bob = Math.sin(it.t * 4) * 4;
-  ctx.save(); ctx.translate(it.x, it.y + bob);
+  const bob = Math.sin(it.t * 4) * 4 * SK;
+  ctx.save(); ctx.translate(it.x, it.y + bob); ctx.scale(SK, SK);
   // Мягкий ореол: в тёмных локациях (неон, улица) предметы сливались с фоном.
-  ctx.fillStyle = 'rgba(255,255,255,0.09)';
-  ctx.beginPath(); ctx.arc(0, 0, 21, 0, 7); ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,0.10)';
+  ctx.beginPath(); ctx.arc(0, 0, 24, 0, 7); ctx.fill();
   if (it.type === 'shaker') {
-    ctx.fillStyle = d.color; ctx.fillRect(-9, -12, 18, 26);
+    ctx.beginPath(); ctx.roundRect(-9, -12, 18, 26, 3); fillStroke(d.color);
     ctx.fillStyle = '#b93b4e'; ctx.fillRect(-9, -2, 18, 4);
-    ctx.fillStyle = '#2b2b33'; ctx.fillRect(-10, -18, 20, 7); ctx.fillRect(-4, -23, 8, 6);
+    ctx.beginPath(); ctx.roundRect(-10, -19, 20, 8, 2); fillStroke('#2b2b33');
+    ctx.fillStyle = '#2b2b33'; ctx.fillRect(-4, -24, 8, 6);
   } else if (it.type === 'bar') {
     ctx.rotate(-0.2);
-    ctx.fillStyle = d.color; ctx.fillRect(-16, -8, 32, 16);
+    ctx.beginPath(); ctx.roundRect(-16, -8, 32, 16, 3); fillStroke(d.color);
     ctx.fillStyle = '#c79a20'; ctx.fillRect(-16, -8, 8, 16); ctx.fillRect(8, -8, 8, 16);
+    // крутки обёртки по бокам
+    ctx.strokeStyle = 'rgba(20,17,15,0.7)'; ctx.lineWidth = 1.4;
+    ctx.beginPath(); ctx.moveTo(-16, -8); ctx.lineTo(-20, 0); ctx.lineTo(-16, 8); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(16, -8); ctx.lineTo(20, 0); ctx.lineTo(16, 8); ctx.stroke();
     ctx.fillStyle = '#14110f'; ctx.font = "900 8px 'Courier New', monospace"; ctx.textAlign = 'center'; ctx.fillText('PRO', 0, 3);
+  } else if (it.type === 'creatine') {
+    // Саше-пакет с молнией сверху — приплюснутая трапеция, а не прямоугольник.
+    ctx.beginPath();
+    ctx.moveTo(-12, 14); ctx.lineTo(-10, -14); ctx.lineTo(10, -14); ctx.lineTo(12, 14); ctx.closePath();
+    fillStroke(d.color);
+    ctx.fillStyle = 'rgba(255,255,255,0.28)'; ctx.fillRect(-8, -10, 4, 20);
+    ctx.fillStyle = '#3a5fb0'; ctx.fillRect(-10, -16, 20, 5);
+    ctx.fillStyle = CHALK; ctx.font = "900 6.5px 'Courier New', monospace"; ctx.textAlign = 'center';
+    ctx.fillText(d.label, 0, 6);
+  } else if (it.type === 'preworkout') {
+    // Банка предтреника с молнией-разрядом на этикетке — «энергия».
+    ctx.beginPath(); ctx.roundRect(-10, -15, 20, 30, 4); fillStroke(d.color);
+    ctx.fillStyle = '#14110f'; ctx.fillRect(-10, -15, 20, 6);
+    ctx.fillStyle = CHALK;
+    ctx.beginPath(); ctx.moveTo(-1, -6); ctx.lineTo(3, -6); ctx.lineTo(-2, 2); ctx.lineTo(2, 2); ctx.lineTo(-4, 12); ctx.lineTo(-2, 3); ctx.lineTo(-6, 3); ctx.closePath(); ctx.fill();
   } else {
-    ctx.fillStyle = d.color; ctx.fillRect(-13, -16, 26, 32);
-    ctx.fillStyle = 'rgba(0,0,0,0.3)'; ctx.fillRect(-13, -16, 26, 7);
-    ctx.fillStyle = CHALK; ctx.font = "900 7px 'Courier New', monospace"; ctx.textAlign = 'center';
-    ctx.fillText(d.label, 0, 5);
+    // Гейнер: широкая банка с ободком-крышкой сверху — самый крупный сосуд из пяти.
+    ctx.beginPath(); ctx.roundRect(-14, -17, 28, 34, 5); fillStroke(d.color);
+    ctx.fillStyle = '#2f3d30'; ctx.fillRect(-14, -17, 28, 7);
+    ctx.fillStyle = 'rgba(255,255,255,0.22)'; ctx.fillRect(-14, -8, 28, 5);
+    ctx.fillStyle = CHALK; ctx.font = "900 6.5px 'Courier New', monospace"; ctx.textAlign = 'center';
+    ctx.fillText(d.label, 0, 11);
   }
   if (d.power) {
     ctx.strokeStyle = d.color; ctx.globalAlpha = 0.5 + 0.4 * Math.sin(it.t * 6);
@@ -794,8 +906,8 @@ function toast(text, color, x, y) {
 // ── ИГРОК ────────────────────────────────────────────────────────────────────
 function playerBox() {
   const sliding = P.slideT > 0;
-  const h = sliding ? 30 : P.h, w = P.w;
-  return { x: P.x - w / 2 + 4, y: P.y - h, w: w - 8, h: h - 4 };
+  const h = sliding ? 30 * SK : P.h, w = P.w;
+  return { x: P.x - w / 2 + 4 * SKW, y: P.y - h, w: w - 8 * SKW, h: h - 4 * SK };
 }
 // roundRect есть не во всех вебвью — мягкий полифилл
 if (!CanvasRenderingContext2D.prototype.roundRect) {
@@ -870,7 +982,7 @@ function drawHead(c, f, hx, hy) {
 // Ориентация — бежит вправо, начало координат в точке опоры. Осанка прямая,
 // мышечные объёмы отдельными формами: дельта, бицепс, икра, V-образный торс.
 function drawAthlete(c, fighter, opts) {
-  const { sliding = false, run = 0, rage = false, shield = false, scale = 1, idle = false } = opts || {};
+  const { sliding = false, run = 0, rage = false, shield = false, scale = 1, idle = false, outline = false } = opts || {};
   // Принимает и ключ из FIGHTERS (игрок), и готовый объект палитры напрямую
   // (вышибала — RIVAL_SKIN, не входит в выбираемых персонажей).
   const f = typeof fighter === 'string' ? FIGHTERS[fighter] : fighter;
@@ -879,6 +991,10 @@ function drawAthlete(c, fighter, opts) {
   const torsoD = shade(torsoCol, 0.78);
   const skinD = shade(f.skin, 0.78);
   c.save(); c.scale(scale, scale);
+  // Жирный тёмный контур по силуэту — самый заметный объект кадра должен
+  // читаться на любом фоне (неон/подвал/улица). Тень от всех залитых форм
+  // при таком смещении и цвете складывается в контур вокруг фигуры целиком.
+  if (outline) { c.shadowColor = 'rgba(10,7,5,0.9)'; c.shadowBlur = 5; c.shadowOffsetX = 0; c.shadowOffsetY = 0; }
   if (rage) {
     c.fillStyle = 'rgba(255,90,54,0.22)';
     for (let i = 1; i <= 3; i++) c.fillRect(-17 - i * 14, -58 + i * 5, 34, 52 - i * 8);
@@ -987,12 +1103,28 @@ function drawAthlete(c, fighter, opts) {
 }
 function drawPlayer() {
   ctx.save(); ctx.translate(P.x, P.y);
+  // Тень под ногами — крупнее и темнее нового масштаба, сжимается в прыжке
+  // пропорционально высоте отрыва от земли (см. ниже drawShadow).
+  drawShadow(GROUND() - P.y, SK);
   drawAthlete(ctx, selectedFighter, {
     sliding: P.slideT > 0,
     run: P.onGround ? Math.sin(P.runPhase * 14) : 0.4,
     rage: P.rageT > 0,
     shield: P.shield,
+    scale: SK,
+    outline: true,
   });
+  ctx.restore();
+}
+// Тень: эллипс, который сжимается и бледнеет с высотой отрыва airH (px).
+function drawShadow(airH, scale) {
+  const k = Math.max(0.28, 1 - airH / (260 * scale));
+  ctx.save();
+  ctx.globalAlpha = 0.4 * k;
+  ctx.fillStyle = '#000';
+  ctx.beginPath();
+  ctx.ellipse(0, 3, 20 * scale * k, 6 * scale * k, 0, 0, 7);
+  ctx.fill();
   ctx.restore();
 }
 
@@ -1000,16 +1132,19 @@ function drawPlayer() {
 function jump() {
   if (!running) return;
   if (P.slideT > 0) P.slideT = 0;
-  if (P.onGround) { P.vy = -870; P.onGround = false; P.jumps = 1; sJump(); }
-  else if (P.jumps < 2) { P.vy = -760; P.jumps = 2; sDouble(); burst(P.x, P.y - 10, 'rgba(242,237,227,0.8)', 6, 120); }
+  // vy и гравитация (см. update()) масштабированы одним и тем же SK — апекс
+  // прыжка растёт в SK раз, а время полёта не меняется (v/g тот же), поэтому
+  // горизонтальный охват прыжка и синхронизация с препятствиями не сбились.
+  if (P.onGround) { P.vy = -870 * SK; P.onGround = false; P.jumps = 1; sJump(); }
+  else if (P.jumps < 2) { P.vy = -760 * SK; P.jumps = 2; sDouble(); burst(P.x, P.y - 10, 'rgba(242,237,227,0.8)', 6, 120); }
 }
 function slide() {
   if (!running) return;
   // Длительность от скорости, а не константа: подкат должен покрывать длину
-  // стойки (~290 px) на любой скорости. С фиксированными 0.62 с на стартовой
-  // скорости игрок вставал ровно под перекладиной — гарантированная смерть.
-  if (P.onGround) P.slideT = Math.min(1.05, Math.max(0.5, 330 / Math.max(120, speed)));
-  else { P.vy = Math.max(P.vy, 900); P.slideT = 0.5; }
+  // стойки (масштабированной на SK) на любой скорости. С фиксированными 0.62 с на
+  // стартовой скорости игрок вставал ровно под перекладиной — гарантированная смерть.
+  if (P.onGround) P.slideT = Math.min(1.05, Math.max(0.5, 330 * SK / Math.max(120, speed)));
+  else { P.vy = Math.max(P.vy, 900 * SK); P.slideT = 0.5; }
 }
 let touchY = null, touchT = 0, touchJumped = false;
 cv.addEventListener('pointerdown', e => {
@@ -1087,8 +1222,8 @@ function selectFighter(key) {
 
 // ── КОНЕЦ ЗАБЕГА ────────────────────────────────────────────────────────────
 function die() {
-  running = false; sDie(); shakeT = 0.5; flash('red');
-  burst(P.x, P.y - 30, C_RAGE, 22, 260);
+  running = false; sDie(); shakeT = 0.6; flash('red');
+  burst(P.x, P.y - 30 * SK, C_RAGE, 28, 320);
   const d = Math.floor(dist);
   if (d > best) { best = d; localStorage.setItem('gymrun_best', best); }
   lastResult = {
@@ -1175,8 +1310,12 @@ function update(dt) {
   P.runPhase += dt * (spd / 340);
 
   if (!P.onGround) {
-    P.vy += 2350 * dt; P.y += P.vy * dt;
-    if (P.y >= GROUND()) { P.y = GROUND(); P.vy = 0; P.onGround = true; P.jumps = 0; }
+    P.vy += 2350 * SK * dt; P.y += P.vy * dt;
+    if (P.y >= GROUND()) {
+      P.y = GROUND(); P.vy = 0; P.onGround = true; P.jumps = 0;
+      // Пыль на приземлении — заметный, но короткий всплеск у ног.
+      burst(P.x, GROUND() - 4, 'rgba(210,200,180,0.7)', 7, 130);
+    }
   }
 
   if (dist >= nextObsAt) spawnObstacle();
@@ -1191,22 +1330,23 @@ function update(dt) {
     if (o.kind === 'bag') o.swingPhase += dt * 2.4;
     if (o.kind === 'cable') o.wavePhase += dt * 7;
     if (o.kind === 'flyplate') { o.rot -= dt * 12; o.floatPhase += dt * 3.5; o.age += dt; }
-    if (o.x < -160) { obstacles.splice(i, 1); continue; }
+    if (o.x < -400 * SK) { obstacles.splice(i, 1); continue; }
     const b = obstacleBox(o);
     if (pb.x < b.x + b.w && pb.x + pb.w > b.x && pb.y < b.y + b.h && pb.y + pb.h > b.y) {
       if (rage) {
         // Ярость награждает за агрессию: снос — это очки, а не только спецэффект.
         const bonus = 25 * mult();
         score += bonus;
-        burst(o.x + (o.w || 30) / 2, GROUND() - 24, '#9aa0ab', 14, 300);
+        burst(o.x + (o.w || 30) / 2, GROUND() - 24 * SK, '#9aa0ab', 18, 340);
+        shakeT = Math.max(shakeT, 0.18);
         obstacles.splice(i, 1);
-        toast('+' + bonus, C_RAGE, o.x, GROUND() - 80);
+        toast('+' + bonus, C_RAGE, o.x, GROUND() - 80 * SK);
         continue;
       }
       if (P.shield) {
         P.shield = false; combo = 0;
-        obstacles.splice(i, 1); burst(P.x, P.y - 30, '#7ea8ff', 16, 260);
-        toast(tr('shieldSaved'), '#7ea8ff'); shakeT = 0.25; continue;
+        obstacles.splice(i, 1); burst(P.x, P.y - 30 * SK, '#7ea8ff', 20, 300);
+        toast(tr('shieldSaved'), '#7ea8ff'); shakeT = 0.3; continue;
       }
       die(); return;
     }
@@ -1216,20 +1356,20 @@ function update(dt) {
     const it = items[i]; it.t += dt;
     it.x -= spd * dt;
     if (P.magnetT > 0) {
-      const dx = P.x - it.x, dy = (P.y - 40) - it.y, d = Math.hypot(dx, dy);
-      if (d < 240) { it.x += dx / d * 520 * dt; it.y += dy / d * 520 * dt; }
+      const dx = P.x - it.x, dy = (P.y - 40 * SK) - it.y, d = Math.hypot(dx, dy);
+      if (d < 240 * SK) { it.x += dx / d * 520 * dt; it.y += dy / d * 520 * dt; }
     }
-    if (it.x < -60) { items.splice(i, 1); continue; }
-    const dx = Math.abs(it.x - P.x), dy = Math.abs(it.y - (P.y - 34));
-    if (dx < 34 && dy < 44) {
+    if (it.x < -60 * SK) { items.splice(i, 1); continue; }
+    const dx = Math.abs(it.x - P.x), dy = Math.abs(it.y - (P.y - 34 * SK));
+    if (dx < 34 * SK && dy < 44 * SK) {
       const d = ITEM_TYPES[it.type];
       items.splice(i, 1);
-      burst(it.x, it.y, d.color, 8, 160);
+      burst(it.x, it.y, d.color, 12, 220);
       const before = mult();
       combo += 1; maxCombo = Math.max(maxCombo, combo);
-      if (d.power === 'shield') { P.shield = true; pickups += 1; toast(tr('shieldPickup'), '#7ea8ff'); sPower(); }
-      else if (d.power === 'rage') { P.rageT = 4.2; pickups += 1; toast(tr('rageToast'), C_RAGE); sPower(); shakeT = 0.3; }
-      else if (d.power === 'magnet') { P.magnetT = 6; pickups += 1; toast(tr('magnetToast'), '#67c26a'); sPower(); }
+      if (d.power === 'shield') { P.shield = true; pickups += 1; toast(tr('shieldPickup'), '#7ea8ff'); sPower(); burst(P.x, P.y - 40 * SK, '#7ea8ff', 16, 260); }
+      else if (d.power === 'rage') { P.rageT = 4.2; pickups += 1; toast(tr('rageToast'), C_RAGE); sPower(); shakeT = 0.3; burst(P.x, P.y - 40 * SK, C_RAGE, 18, 300); }
+      else if (d.power === 'magnet') { P.magnetT = 6; pickups += 1; toast(tr('magnetToast'), '#67c26a'); sPower(); burst(P.x, P.y - 40 * SK, '#67c26a', 16, 260); }
       else { score += d.pts * mult(); sPick(); }
       if (mult() > before) toast(tr('streakPrefix') + mult(), C_GOLD);
     }
@@ -1240,25 +1380,55 @@ function update(dt) {
 }
 
 // ── РЕНДЕР ──────────────────────────────────────────────────────────────────
+// Дорожка под ногами: не плоская полоса, а размеченная поверхность с
+// разметкой, летящей на игрока (маркер скорости) — два ряда штрихов на разной
+// высоте/скорости параллакса плюс ближняя тёмная кромка для глубины.
+function drawTrack() {
+  const gy = GROUND(), sf = speedFrac();
+  const dashW = 60, doff = (dist * 7) % (dashW * 2);
+  ctx.fillStyle = 'rgba(242,237,227,0.14)';
+  for (let x = -dashW * 2; x < W + dashW; x += dashW * 2) ctx.fillRect(x - doff + dashW, gy + 22, dashW, 5);
+  const dashW2 = 34, doff2 = (dist * 10.5) % (dashW2 * 2);
+  ctx.fillStyle = 'rgba(242,237,227,0.09)';
+  for (let x = -dashW2 * 2; x < W + dashW2; x += dashW2 * 2) ctx.fillRect(x - doff2 + dashW2, gy + 46, dashW2 * 0.6, 3);
+  // Ближняя кромка дорожки темнее — читается глубина, не одна плоская линия.
+  ctx.fillStyle = 'rgba(0,0,0,0.22)'; ctx.fillRect(0, H - 14, W, 14);
+  // Штрихи скорости в приземном слое неба — усиливают ощущение бега на разгоне.
+  if (sf > 0.15) {
+    const n = 5, lw = 46 * sf, loff = (dist * 9) % 140;
+    ctx.strokeStyle = 'rgba(255,255,255,' + (0.05 + 0.10 * sf).toFixed(3) + ')'; ctx.lineWidth = 2;
+    for (let i = 0; i < n; i++) {
+      const ly = gy - 30 - i * 30;
+      const lx = W - ((loff + i * 53) % (W + lw)) ;
+      ctx.beginPath(); ctx.moveTo(lx, ly); ctx.lineTo(lx + lw, ly); ctx.stroke();
+    }
+  }
+}
+// Виньетка — тёмные углы кадра, дёшево и сразу «дороже» выглядит картинка.
+function drawVignette() {
+  const r = Math.max(W, H) * 0.78;
+  const g = ctx.createRadialGradient(W / 2, H * 0.46, r * 0.32, W / 2, H * 0.46, r);
+  g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, 'rgba(0,0,0,0.46)');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+}
 function render() {
   if (!cv.classList.contains('active')) return;
   ctx.save();
-  if (shakeT > 0) ctx.translate(rnd(-6, 6) * shakeT, rnd(-6, 6) * shakeT);
+  if (shakeT > 0) ctx.translate(rnd(-9, 9) * shakeT, rnd(-9, 9) * shakeT);
   const zi = zoneIndex(), zb = zoneBlend();
   const z = ZONES[zi], zn = ZONES[(zi + 1) % ZONES.length];
 
   const g = ctx.createLinearGradient(0, 0, 0, GROUND());
   g.addColorStop(0, z.sky[0]); g.addColorStop(1, z.sky[1]);
   ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  drawFarBokeh(z.groundLine);
   z.draw(1 - zb * 0.6);
   if (zb > 0) zn.draw(zb);
 
   ctx.fillStyle = z.ground; ctx.fillRect(0, GROUND(), W, H - GROUND());
   if (zb > 0) { ctx.globalAlpha = zb; ctx.fillStyle = zn.ground; ctx.fillRect(0, GROUND(), W, H - GROUND()); ctx.globalAlpha = 1; }
   ctx.fillStyle = z.groundLine; ctx.fillRect(0, GROUND(), W, 3);
-  const dashW = 60, doff = (dist * 7) % (dashW * 2);
-  ctx.fillStyle = 'rgba(242,237,227,0.12)';
-  for (let x = -dashW * 2; x < W + dashW; x += dashW * 2) ctx.fillRect(x - doff + dashW, GROUND() + 22, dashW, 4);
+  drawTrack();
 
   if (P.rageT > 0) {
     ctx.fillStyle = 'rgba(255,90,54,' + (0.10 + 0.06 * Math.sin(t * 20)) + ')';
@@ -1278,32 +1448,50 @@ function render() {
     // экраном; прижимаем к видимой области.
     const half = ctx.measureText(ts.text).width / 2;
     const tx = Math.max(half + 8, Math.min(W - half - 8, ts.x));
+    ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fillText(ts.text, tx + 1.5, ts.y + 1.5);
     ctx.fillStyle = ts.color; ctx.fillText(ts.text, tx, ts.y);
   });
   ctx.globalAlpha = 1;
 
-  // HUD — золото как у совы
+  drawVignette();
+
+  // ── HUD ── разложен по трём непересекающимся полосам: слева дистанция+рекорд,
+  // справа очки, ниже справа — отдельным столбиком активные бонусы (каждый на
+  // своей строке, а не в ряд), зона — в отдельной плашке по центру над всем
+  // остальным. Так при любой длине чисел и любом наборе активных бонусов
+  // элементы не наезжают друг на друга.
   ctx.textAlign = 'left'; ctx.fillStyle = C_GOLD;
   ctx.font = "900 26px 'Courier New', monospace";
   ctx.fillText(Math.floor(dist) + ' ' + tr('unit'), 20, 40);
-  ctx.font = "700 14px 'Courier New', monospace"; ctx.fillStyle = 'rgba(242,237,227,0.6)';
-  ctx.fillText(tr('hudRecord') + Math.max(best, Math.floor(dist)) + ' ' + tr('unit'), 20, 62);
+  ctx.font = "700 13px 'Courier New', monospace"; ctx.fillStyle = 'rgba(242,237,227,0.65)';
+  ctx.fillText(tr('hudRecord') + Math.max(best, Math.floor(dist)) + ' ' + tr('unit'), 20, 60);
+
   ctx.textAlign = 'right'; ctx.fillStyle = '#e94f64'; ctx.font = "900 22px 'Courier New', monospace";
   const multNow = mult();
   ctx.fillText('🥤 ' + score + (multNow > 1 ? '  ×' + multNow : ''), W - 20, 40);
-  let ix = W - 20;
+
+  // Бонусы — вертикальный столбик под очками, начинается ниже левого блока
+  // (y=76), чтобы никогда не залезать на зональную плашку по центру.
+  let iy = 74;
   const pw = (label, color, frac) => {
     ctx.textAlign = 'right'; ctx.font = "800 12px 'Courier New', monospace"; ctx.fillStyle = color;
-    ctx.fillText(label, ix, 64);
-    ctx.fillStyle = 'rgba(255,255,255,0.15)'; ctx.fillRect(ix - 90, 70, 90, 4);
-    ctx.fillStyle = color; ctx.fillRect(ix - 90, 70, 90 * frac, 4);
-    ix -= 110;
+    ctx.fillText(label, W - 20, iy);
+    ctx.fillStyle = 'rgba(255,255,255,0.18)'; ctx.fillRect(W - 110, iy + 5, 90, 4);
+    ctx.fillStyle = color; ctx.fillRect(W - 110, iy + 5, 90 * frac, 4);
+    iy += 22;
   };
   if (P.rageT > 0) pw(tr('hudRage'), C_RAGE, P.rageT / 4.2);
   if (P.magnetT > 0) pw(tr('hudMagnet'), '#67c26a', P.magnetT / 6);
-  if (P.shield) { ctx.textAlign = 'right'; ctx.font = "800 12px 'Courier New', monospace"; ctx.fillStyle = '#7ea8ff'; ctx.fillText(tr('hudShield'), ix, 64); }
-  ctx.textAlign = 'center'; ctx.font = "800 11px 'Courier New', monospace"; ctx.fillStyle = 'rgba(242,237,227,0.4)';
-  ctx.fillText(z.name, W / 2, 30);
+  if (P.shield) { ctx.textAlign = 'right'; ctx.font = "800 12px 'Courier New', monospace"; ctx.fillStyle = '#7ea8ff'; ctx.fillText(tr('hudShield'), W - 20, iy); iy += 22; }
+
+  // Плашка с названием зоны — своя тёмная подложка, поэтому что бы ни было под
+  // ней, надпись остаётся читаемой.
+  ctx.font = "800 11px 'Courier New', monospace";
+  const zoneW = ctx.measureText(z.name).width + 24;
+  ctx.fillStyle = 'rgba(10,10,14,0.45)';
+  ctx.beginPath(); ctx.roundRect(W / 2 - zoneW / 2, 14, zoneW, 20, 10); ctx.fill();
+  ctx.textAlign = 'center'; ctx.fillStyle = 'rgba(242,237,227,0.75)';
+  ctx.fillText(z.name, W / 2, 28);
   ctx.restore();
 }
 
