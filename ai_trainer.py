@@ -5200,6 +5200,12 @@ async def ask(
         # выяснить, кто это, — поднимая multi-agent с четырьмя агентами и платой
         # $5 за 1000 вызовов инструментов за информацию, которая ответу не нужна.
         search_outcome = "skipped: видео разбирается по кадрам, сеть не нужна"
+    elif gate.ok and not gate.search:
+        # Гейт честно решил, что поиск не нужен — до резерва слота в общем
+        # потолке дело даже не доходит: незачем списывать общую квоту за вопрос,
+        # который никогда не пойдёт в сеть (см. gate = GateVerdict(search=False, ...)
+        # выше — сейчас это вообще каждый вопрос).
+        search_outcome = "skipped: gate says not needed"
     elif (search_block := await _search_block(user_id, on_limit)) is not None:
         # Личная квота, общий потолок поисков и суточный потолок по деньгам —
         # все три через ai_limits, чтобы решение о дорогом шаге принималось в
@@ -5221,8 +5227,6 @@ async def ask(
         # писались одной фразой, и на вопросе «что нового в мире бодибилдинга»
         # лог уверял, что поиск не нужен, хотя гейт просто вернул пустоту.
         search_outcome = "skipped: ГЕЙТ СЛОМАЛСЯ, сработал дефолт (см. WARNING выше)"
-    elif not gate.search:
-        search_outcome = "skipped: gate says not needed"
     else:
         search_context = await _web_search_findings(user_id, question, light, on_status)
         # «Нашёл» и «упал» — разные исходы, и путать их дорого: на неподдерживаемом
