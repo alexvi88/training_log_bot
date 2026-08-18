@@ -712,7 +712,15 @@ let STEP_Z = 0.60 / FOLLOWER_Z_SCALE;
 // Зазор между телами в строю — доля от габарита самого тела (не абсолютное
 // число): 0.4 значит «между соседями пустое место в 40% от их размера»,
 // зазор виден при любом масштабе фигуры и любом formScale.
-const FORM_GAP_RATIO = 0.4;
+// Было 0.4 на обе оси — строй выглядел россыпью отдельных фигур, а не толпой.
+// Причина в том, что bounding box СИЛЬНО больше видимого тела: по X в него
+// входит размах рук с дельтами (у пауэрлифтера ~1.32 против 1.0 по плечам),
+// по Z — выступ грудных и стопы. То есть «нулевой» зазор по коробке — это уже
+// заметная щель между торсами. Отсюда разные и маленькие доли по осям.
+// По Z доля чуть больше, чем по X: камера смотрит вдоль дорожки, и ряды при
+// нулевом зазоре просто съедают друг друга — задних не видно вообще.
+const FORM_GAP_RATIO_X = 0.04;
+const FORM_GAP_RATIO_Z = 0.16;
 function footprintOf(geometry) {
   geometry.computeBoundingBox();
   const bb = geometry.boundingBox;
@@ -729,8 +737,8 @@ function setFormationStepsFromGeometries(geoMap) {
     d = Math.max(d, fp.depth);
   });
   if (w <= 0 || d <= 0) return; // защита от пустой геометрии — оставляем дефолт
-  STEP_X = (w * CHAR_SCALE * (1 + FORM_GAP_RATIO)) / TRACK_HALF3;
-  STEP_Z = (d * CHAR_SCALE * (1 + FORM_GAP_RATIO)) / FOLLOWER_Z_SCALE;
+  STEP_X = (w * CHAR_SCALE * (1 + FORM_GAP_RATIO_X)) / TRACK_HALF3;
+  STEP_Z = (d * CHAR_SCALE * (1 + FORM_GAP_RATIO_Z)) / FOLLOWER_Z_SCALE;
 }
 let formCols = 2, formRows = 1, formScale = 1;
 // Насколько широко (в долях TRACK_HALF3, при formScale=1) строю разрешено
@@ -1033,10 +1041,25 @@ const ADD_TIERS = [{ base: 3, k: 0.8, min: 3, weight: 0.42 }, { base: 4, k: 1.5,
 // type:'sub' обязателен — pickGateDebuff() маршрутизирует по нему в mkSub();
 // без него объект уходил в игру как есть, без val/label: ворота с этим
 // исходом молча не делали ничего и рисовали «undefined» вместо числа.
-const SUB_TIERS = [{ type: 'sub', base: 1, k: 0.35, pow: 0.85, min: 2, weight: 1 }];
-const SUB_TIERS_HARD = [{ type: 'sub', base: 2, k: 0.6, pow: 0.85, min: 3, weight: 1 }];
+// По две ступени на каждый пул (было по одной) — с одной ступенью функция
+// числа отряда ДЕТЕРМИНИРОВАНА, и когда обе створки берут штраф (bothBad),
+// на воротах гарантированно вставало одинаковое «−199/−199»: выбора нет,
+// решение игрока ни на что не влияет.
+const SUB_TIERS = [
+  { type: 'sub', base: 1, k: 0.35, pow: 0.85, min: 2, weight: 1 },
+  { type: 'sub', base: 2, k: 0.60, pow: 0.72, min: 3, weight: 1 },
+];
+const SUB_TIERS_HARD = [
+  { type: 'sub', base: 2, k: 0.60, pow: 0.85, min: 3, weight: 1 },
+  { type: 'sub', base: 3, k: 1.00, pow: 0.72, min: 5, weight: 1 },
+];
+// Разброс ±18% поверх кривой — вторая половина лечения детерминированности:
+// две ступени дают два разных «класса» числа, а джиттер разводит и одинаковые
+// ступени, так что два забега с тем же отрядом не показывают те же цифры.
+const TIER_JITTER = 0.18;
 function tierVal(tier) {
-  return Math.max(tier.min, Math.round(tier.base + Math.pow(Math.max(0, squad), tier.pow || 0.75) * tier.k));
+  const curve = tier.base + Math.pow(Math.max(0, squad), tier.pow || 0.75) * tier.k;
+  return Math.max(tier.min, Math.round(curve * rnd(1 - TIER_JITTER, 1 + TIER_JITTER)));
 }
 function mkAdd(tier) {
   const val = tierVal(tier);
@@ -1089,6 +1112,20 @@ function spawnGate() {
   let bothBad = false;
   if (bothGood) debuff = pickGateBuff();
   else if (dist > 250 && Math.random() < 0.14) { buff = pickGateDebuff(hard); bothBad = true; } // меньшее зло
+  // Створки ОБЯЗАНЫ отличаться. Когда обе берутся из одного пула (bothGood /
+  // bothBad), совпадение таблички превращает ворота в пустую формальность:
+  // выбирать нечего, а игрок читает это как «игра детерминирована». Пул
+  // маленький, поэтому не крутим бесконечно — после нескольких попыток
+  // расходим числа принудительно.
+  const reroll = bothGood ? pickGateBuff : () => pickGateDebuff(hard);
+  for (let i = 0; i < 8 && debuff.label === buff.label; i++) debuff = reroll();
+  // Принудительное расхождение — только для аддитивных исходов: у ×2/÷2 знак
+  // и смысл в другом, менять им число нельзя (получится несуществующий «×3»
+  // с весом ×2). Мультипликаторов в пуле мало, и до сюда они не доходят.
+  if (debuff.label === buff.label && (debuff.type === 'add' || debuff.type === 'sub')) {
+    const val = debuff.val + 1;
+    debuff = { ...debuff, val, label: (debuff.type === 'sub' ? '−' : '+') + fmt(val) };
+  }
   const buffLeft = Math.random() < 0.5;
   obstacles.push({ kind: 'gate', z: ZFAR, buff, debuff, buffLeft, bothGood, bothBad, glow: 0 });
 }
@@ -1731,6 +1768,11 @@ const PROC_HEIGHT_REF = 1.7;         // ориентир роста — тот �
 // первого взгляда: пауэрлифтер — массивный и плотный, кроссфитер — поджарый,
 // борец — низкий и широкий, бодибилдер — предельный V-силуэт (огромные
 // плечи, узкая талия).
+// Радиус головы в долях роста фигуры. Один на всех профилей: голова — самая
+// сильная опознавательная деталь на дистанции толпы, и разъезжаться по
+// профилям ей нельзя. Рост/5 — героическая мультяшная пропорция (у реального
+// человека ближе к рост/7.5, но такая голова в толпе из сотни не читается).
+const HEAD_R_RATIO = 0.105;
 const BODY_PROFILES = {
   power: {
     height: 1.55, shoulder: 0.50, chest: 0.44, waist: 0.40, hip: 0.43, neck: 0.15,
@@ -1929,18 +1971,26 @@ function buildProcBodyGeometry(profileKey, colors, equip) {
   [-1, 1].forEach(side => {
     sphereAt(b, side * p.neck * 1.3, h * 0.865, 0, p.neck * 0.9, equip.shirtless ? skin : top, 1, 0.6, 0.9, 0);
   });
-  // Голова + уши (борец).
-  sphereAt(b, 0, h * 0.965 + p.neck * 0.02, 0, h * 0.062, skin, 1, 1.05, 0.95, 1);
+  // Голова + уши (борец). Радиус был h*0.062 — голова получалась УЖЕ шеи
+  // (у пауэрлифтера шея p.neck=0.15, то есть 0.30 в поперечнике против 0.19
+  // головы) и на дистанции толпы пропадала совсем. Героическая пропорция —
+  // примерно рост/5, отсюда h*0.105; центр считаем от верха шеи (последнее
+  // кольцо торса, h*0.915), а не от абсолютного числа, иначе следующая
+  // правка пропорций снова оторвёт голову от шеи.
+  const headR = h * HEAD_R_RATIO;
+  const headY = h * 0.915 + headR * 0.52;
+  sphereAt(b, 0, headY, 0, headR, skin, 1, 1.05, 0.95, 1);
   if (equip.ears) {
-    [-1, 1].forEach(side => sphereAt(b, side * h * 0.062, h * 0.965, 0, h * 0.016, skin, 1, 1, 1, 0));
+    [-1, 1].forEach(side => sphereAt(b, side * headR * 0.95, headY, 0, headR * 0.26, skin, 1, 1, 1, 0));
   }
   // Экипировка: пояс пауэрлифтера, бандана/повязка, бинты на запястьях —
   // те же плоские кольца, слитые в общую геометрию.
   if (equip.belt) ringAt(b, 0, h * 0.59, 0, p.waist * 1.02, h * 0.028, acc, Math.PI / 2);
   if (equip.head === 'bandana' || equip.head === 'headband') {
-    // На экваторе головы (центр сферы головы — см. ниже), радиус чуть меньше
-    // радиуса головы, чтобы кольцо село на поверхность, а не висело отдельно.
-    ringAt(b, 0, h * 0.968, 0, h * 0.058, h * 0.012, acc, Math.PI / 2);
+    // Чуть выше экватора головы, радиус чуть меньше радиуса головы — кольцо
+    // садится на поверхность, а не висит отдельно. Считаем от headR/headY, а
+    // не от своих чисел: иначе повязка отвяжется от головы при правке размера.
+    ringAt(b, 0, headY + headR * 0.14, 0, headR * 0.95, headR * 0.19, acc, Math.PI / 2);
   }
   if (equip.wraps) {
     [-1, 1].forEach(side => {
