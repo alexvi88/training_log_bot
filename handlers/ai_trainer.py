@@ -16,6 +16,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+import activity_log
 import ai_limits
 import ai_trainer
 import config
@@ -2427,6 +2428,10 @@ async def _handle_question(
     # get_full_chat_history tool if a later question references it.
     await db.add_ai_chat_message(user_id, "user", history_question)
     await db.add_ai_chat_message(user_id, "assistant", answer)
+    # И в ленту действий (/activity): вопрос там был всегда, ответ — нет, и
+    # цепочка «спросил → нажал» читалась без середины.
+    with suppress(Exception):
+        await activity_log.record_ai_reply(user_id, answer)
 
     reply_markup = await ai_keyboard(
         user_id,

@@ -15,6 +15,11 @@ ADMIN_ID = int(os.getenv("ADMIN_ID")) if os.getenv("ADMIN_ID") else None
 # Deployment clock is UTC (see timeutil.py); 7 UTC == 10:00 MSK (UTC+3).
 ADMIN_REPORT_HOUR = int(os.getenv("ADMIN_REPORT_HOUR", "7"))
 
+# Часовой пояс админских экранов и отчётов. База пишет время по часам сервера,
+# а сервер живёт по UTC — админ живёт по Москве, и «вчера вечером» в отчёте
+# должно означать его вчера, а не UTC-шное.
+ADMIN_TZ_OFFSET = int(os.getenv("ADMIN_TZ_OFFSET", "3"))
+
 # Второй экземпляр бэкапа — на диске рядом с рабочей базой, а не только
 # документом в личке ADMIN_ID (см. admin_tasks._rotate_disk_backup). Если
 # админ удалит сообщение, заблокирует бота или ADMIN_ID сменится при

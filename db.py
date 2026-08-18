@@ -5795,6 +5795,32 @@ async def daily_workout_stats(date_str: str) -> dict[str, int]:
     return {"users": users, "workouts": workouts}
 
 
+async def count_finished_workouts_between(since: str, until: str) -> tuple[int, int]:
+    """(тренировок, людей) — сколько закрыли за отрезок и сколько человек их закрыло.
+
+    Отрезком, а не календарной датой (в отличие от daily_workout_stats): сутки
+    админского разбора — московские, а finished_at лежит по UTC.
+    """
+    cur = await conn().execute(
+        "SELECT COUNT(*), COUNT(DISTINCT user_id) FROM workouts "
+        "WHERE status = 'finished' AND finished_at >= ? AND finished_at < ?",
+        (since, until),
+    )
+    workouts, users = await cur.fetchone()
+    return workouts, users
+
+
+async def count_new_users_between(since: str, until: str) -> int:
+    """Сколько человек зарегистрировалось за отрезок — для суточного разбора
+    поведения: путь новичка и путь вернувшегося читаются по-разному."""
+    cur = await conn().execute(
+        "SELECT COUNT(*) FROM users WHERE created_at >= ? AND created_at < ?",
+        (since, until),
+    )
+    (count,) = await cur.fetchone()
+    return count
+
+
 # ---------- admin: AI-trainer cost log (see ai_trainer.py / admin_tasks.py) ----------
 #
 # One row per real LLM call (chat completion or voice transcription), so the
@@ -6058,6 +6084,38 @@ async def list_all_events(limit: int = 30, offset: int = 0) -> list[aiosqlite.Ro
         (limit, offset),
     )
     return await cur.fetchall()
+
+
+async def list_events_between(
+    since: str, until: str, limit: int = 4000
+) -> list[aiosqlite.Row]:
+    """Действия всех пользователей за отрезок времени, в хронологическом порядке.
+
+    Хронология здесь важнее свежести (в отличие от list_all_events): читатель —
+    разбор поведения за сутки, а путь человека читается только вперёд. Потолок
+    строк есть, потому что за сутки их могут быть десятки тысяч, а разбор берёт
+    ровно столько, сколько влезает в один запрос к модели.
+    """
+    cur = await conn().execute(
+        "SELECT e.telegram_id, u.username, e.kind, e.content, e.payload, e.created_at "
+        "FROM user_events e LEFT JOIN users u ON u.telegram_id = e.telegram_id "
+        "WHERE e.created_at >= ? AND e.created_at < ? "
+        "ORDER BY e.created_at, e.id LIMIT ?",
+        (since, until, limit),
+    )
+    return await cur.fetchall()
+
+
+async def count_events_between(since: str, until: str) -> tuple[int, int]:
+    """(событий, людей) за отрезок — чтобы честно сказать, что в разбор влезло
+    не всё, когда list_events_between упёрся в потолок."""
+    cur = await conn().execute(
+        "SELECT COUNT(*), COUNT(DISTINCT telegram_id) FROM user_events "
+        "WHERE created_at >= ? AND created_at < ?",
+        (since, until),
+    )
+    events, people = await cur.fetchone()
+    return events, people
 
 
 async def prune_old_user_events(retention_days: int) -> int:
