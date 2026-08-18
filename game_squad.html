@@ -1305,7 +1305,13 @@ function spawnWave() {
                 : dist < 500 ? Math.max(9, squad * 2.2)
                 : Math.max(16, squad * 3.2);
   const total = Math.round(clamp(raw, 3, softCap));
-  const formation = pick(['wedge', 'wedge', 'wall', 'flanks', 'scatter']);
+  // Пул форм тот же, только вес смещается сегментом — 'swarm' чаще берёт
+  // «стену»/«рассыпуху» (гуще и хаотичнее на глаз), 'gates'/'breather' не
+  // меняют вкус по умолчанию. Численность и softCap сегмент не трогает.
+  const formationPool = segment === 'swarm'
+    ? ['wedge', 'wall', 'wall', 'flanks', 'scatter', 'scatter']
+    : ['wedge', 'wedge', 'wall', 'flanks', 'scatter'];
+  const formation = pick(formationPool);
   const jitter = formation === 'scatter' ? Array.from({ length: 12 }, () => rnd(-0.7, 0.7)) : null;
 
   const unlocked = waveTypeUnlocks(dist);
@@ -1537,7 +1543,11 @@ function drawObstacleLabels() {
       const rightGood = o.bothBad ? false : (o.bothGood || !o.buffLeft);
       const label = (o.buffLeft ? o.buff : o.debuff).label;
       const label2 = (o.buffLeft ? o.debuff : o.buff).label;
-      const fs = Math.max(38, 128 * fakeScale(o.z));
+      // Потолок обязателен: без него у ближних ворот число разрасталось до
+      // полэкрана и закрывало саму дорожку — на живом прогоне три ряда ворот
+      // подряд не давали разглядеть ни отряд, ни врагов за ними. Крупно ≠
+      // во весь экран: цифра должна доминировать, но не подменять собой игру.
+      const fs = clamp(128 * fakeScale(o.z), 38, 72);
       const bgGood = 'rgba(20,110,58,0.72)', bgBad = 'rgba(120,20,20,0.72)';
       textChip(label, (near.x + mid.x) / 2, near.y, fs, '#ffffff', 0.28, leftGood ? bgGood : bgBad);
       textChip(label2, (mid.x + farE.x) / 2, mid.y, fs, '#ffffff', 0.28, rightGood ? bgGood : bgBad);
@@ -3096,9 +3106,9 @@ function render() {
 
   toasts.forEach(ts => {
     hctx.globalAlpha = Math.max(0, 1 - ts.t / 1.3);
-    const fs = ts.big ? 24 : 17;
+    const fs = ts.big ? 30 : 18;
     hctx.font = "900 " + fs + "px 'Courier New', monospace"; hctx.textAlign = 'center';
-    hctx.lineWidth = ts.big ? 5 : 3.5; hctx.strokeStyle = 'rgba(10,8,6,0.9)';
+    hctx.lineWidth = ts.big ? 6.5 : 3.5; hctx.strokeStyle = 'rgba(10,8,6,0.9)';
     const half = hctx.measureText(ts.text).width / 2;
     const tx = Math.max(half + 8, Math.min(W - half - 8, ts.x));
     hctx.strokeText(ts.text, tx, ts.y);
