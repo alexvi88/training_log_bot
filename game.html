@@ -334,6 +334,11 @@ const SK = 2.5;
 // не страдают: длительность подката пересчитывается от текущей скорости живьём
 // (см. slide()), поэтому их можно спокойно оставить на полном SK.
 const SKW = 1.6;
+// Спортпит рисуется своим, куда более скромным масштабом: на SK/SKW банка
+// предтреника получалась почти с торс героя. SI подобран так, чтобы самый
+// крупный предмет (gainer, 34px в высоту) на экране был заметно меньше
+// головы игрока (диаметр головы ≈ 37px при масштабе игрока SK).
+const SI = 0.8;
 const GROUND = () => H * 0.66;
 let running = false;
 let t = 0, dist = 0, speed = 0, score = 0, best = Math.max(serverBest, +(localStorage.getItem('gymrun_best') || 0));
@@ -390,12 +395,17 @@ const QUIPS = LANG === 'en' ? [
 ];
 
 // ── ЛОКАЦИИ ──────────────────────────────────────────────────────────────────
+// Пол каждой зоны — заметно другого тона, чем стена/небо (не тот же коричневый
+// на коричневом): так препятствия читаются силуэтом против пола, а не тонут в
+// одномтонном месиве. groundLine — яркий акцент кромки помоста, тоже подальше
+// по тону/светлоте от sky[1], чтобы даже без объектов на кадре чувствовалась
+// граница «пол/стена».
 const ZONES = [
-  { name: tr('zoneBasement'), sky: ['#181210', '#231a14'], ground: '#2a211a', groundLine: '#4a3a2b', draw: drawBasement },
-  { name: tr('zoneNeon'),     sky: ['#0b0f1e', '#141b33'], ground: '#151b2e', groundLine: '#2c3a63', draw: drawNeon },
-  { name: tr('zoneStreet'),   sky: ['#0a0d18', '#1c2033'], ground: '#191c26', groundLine: '#333849', draw: drawStreet },
-  { name: tr('zoneRoof'),     sky: ['#2a1830', '#ff8a4d'], ground: '#232830', groundLine: '#4a5568', draw: drawRoof },
-  { name: tr('zoneLocker'),   sky: ['#132226', '#1f3a40'], ground: '#16232a', groundLine: '#3f5a63', draw: drawLocker },
+  { name: tr('zoneBasement'), sky: ['#181210', '#231a14'], ground: '#4a2a1e', groundLine: '#e8873f', draw: drawBasement },
+  { name: tr('zoneNeon'),     sky: ['#0b0f1e', '#141b33'], ground: '#1c1430', groundLine: '#ff5a96', draw: drawNeon },
+  { name: tr('zoneStreet'),   sky: ['#0a0d18', '#1c2033'], ground: '#2b2f3d', groundLine: '#8fa0c0', draw: drawStreet },
+  { name: tr('zoneRoof'),     sky: ['#2a1830', '#ff8a4d'], ground: '#3a2036', groundLine: '#ffb877', draw: drawRoof },
+  { name: tr('zoneLocker'),   sky: ['#132226', '#1f3a40'], ground: '#3a4d50', groundLine: '#d8f0ef', draw: drawLocker },
 ];
 const ZONE_LEN = 600;
 function zoneIndex() { return Math.floor(dist / ZONE_LEN) % ZONES.length; }
@@ -421,12 +431,19 @@ function drawBasement(a) {
     const lx = x - loff + lw / 2;
     ctx.strokeStyle = 'rgba(0,0,0,0.5)'; ctx.beginPath();
     ctx.moveTo(lx, 36); ctx.lineTo(lx, 92); ctx.stroke();
-    const g = ctx.createRadialGradient(lx, 100, 2, lx, 100, 70);
-    g.addColorStop(0, 'rgba(255,200,110,0.5)'); g.addColorStop(1, 'rgba(255,200,110,0)');
-    ctx.fillStyle = g; ctx.fillRect(lx - 70, 30, 140, 140);
-    ctx.fillStyle = '#ffd9a0'; ctx.beginPath(); ctx.arc(lx, 98, 6, 0, 7); ctx.fill();
+    // Пятна света от ламп — заметно сильнее прежнего (было 0.5 альфы у соска
+    // градиента), чтобы стена перестала быть одним ровным тоном.
+    const g = ctx.createRadialGradient(lx, 100, 2, lx, 100, 90);
+    g.addColorStop(0, 'rgba(255,205,120,0.75)'); g.addColorStop(0.5, 'rgba(255,190,100,0.28)'); g.addColorStop(1, 'rgba(255,190,100,0)');
+    ctx.fillStyle = g; ctx.fillRect(lx - 90, 24, 180, 180);
+    ctx.fillStyle = '#ffe6b0'; ctx.beginPath(); ctx.arc(lx, 98, 7, 0, 7); ctx.fill();
+    // Тот же тёплый свет доходит и до пола — светлое пятно на помосте прямо
+    // под лампой, а не ровный плоский цвет от края до края.
+    const fg = ctx.createRadialGradient(lx, GROUND(), 4, lx, GROUND(), 120);
+    fg.addColorStop(0, 'rgba(255,180,110,0.5)'); fg.addColorStop(1, 'rgba(255,180,110,0)');
+    ctx.fillStyle = fg; ctx.fillRect(lx - 120, GROUND() - 60, 240, 60);
   }
-  silhouettes('rgba(0,0,0,0.35)', 2.9);
+  silhouettes('rgba(0,0,0,0.45)', 2.9);
   ctx.globalAlpha = 1;
 }
 function drawNeon(a) {
@@ -841,8 +858,8 @@ function mkItem(type, x, y) { return { type, x, y, t: rnd(0, 6) }; }
 // (широкая банка со скотчем). Жирный тёмный контур — как у препятствий.
 function drawItem(it) {
   const d = ITEM_TYPES[it.type];
-  const bob = Math.sin(it.t * 4) * 4 * SK;
-  ctx.save(); ctx.translate(it.x, it.y + bob); ctx.scale(SK, SK);
+  const bob = Math.sin(it.t * 4) * 4 * SI;
+  ctx.save(); ctx.translate(it.x, it.y + bob); ctx.scale(SI, SI);
   // Мягкий ореол: в тёмных локациях (неон, улица) предметы сливались с фоном.
   ctx.fillStyle = 'rgba(255,255,255,0.10)';
   ctx.beginPath(); ctx.arc(0, 0, 24, 0, 7); ctx.fill();
@@ -1361,7 +1378,7 @@ function update(dt) {
     }
     if (it.x < -60 * SK) { items.splice(i, 1); continue; }
     const dx = Math.abs(it.x - P.x), dy = Math.abs(it.y - (P.y - 34 * SK));
-    if (dx < 34 * SK && dy < 44 * SK) {
+    if (dx < 34 * SKW && dy < 44 * SKW) {
       const d = ITEM_TYPES[it.type];
       items.splice(i, 1);
       burst(it.x, it.y, d.color, 12, 220);
@@ -1380,19 +1397,84 @@ function update(dt) {
 }
 
 // ── РЕНДЕР ──────────────────────────────────────────────────────────────────
-// Дорожка под ногами: не плоская полоса, а размеченная поверхность с
-// разметкой, летящей на игрока (маркер скорости) — два ряда штрихов на разной
-// высоте/скорости параллакса плюс ближняя тёмная кромка для глубины.
-function drawTrack() {
-  const gy = GROUND(), sf = speedFrac();
+// Дорожка под ногами: раньше это была почти плоская тёмная полоса — теперь
+// текстура помоста (плитка со швами), тёплое пятно света под каждой лампой
+// (в тон акцента зоны — работает и там, где стена сама по себе однотонная),
+// разметка, три слоя ближних штрихов с разным параллаксом (чем ближе к
+// нижнему краю, тем быстрее и крупнее — это и есть маркер скорости) и
+// раскиданный у края инвентарь (блины/бутылки), который тоже едет мимо.
+function drawTrack(z) {
+  const gy = GROUND(), sf = speedFrac(), trackH = H - gy;
+
+  // Плитка помоста: швы плюс лёгкое чередование тона, чтобы пол не был
+  // ровной заливкой.
+  const tileW = 52, toff = (dist * 4) % tileW;
+  ctx.fillStyle = 'rgba(0,0,0,0.10)';
+  for (let x = -tileW; x < W + tileW; x += tileW) ctx.fillRect(x - toff, gy + 3, tileW - 4, trackH - 3);
+  ctx.fillStyle = 'rgba(255,255,255,0.05)';
+  for (let x = -tileW; x < W + tileW; x += tileW) ctx.fillRect(x - toff, gy + 3, 2, trackH - 3);
+
+  // Тёплое пятно света на полу под каждой «лампой» — тот же период/сдвиг,
+  // что у ламп подвала (см. drawBasement), но рисуется зонально-нейтрально
+  // через акцентный цвет зоны (z.groundLine), поэтому работает во всех пяти
+  // локациях, а не только там, где явно нарисованы лампы.
+  const glowP = 340, glowOff = (dist * 3.4) % glowP;
+  ctx.globalAlpha = 0.5;
+  for (let x = -glowP; x < W + glowP; x += glowP) {
+    const gx = x - glowOff + glowP / 2;
+    const g = ctx.createRadialGradient(gx, gy, 4, gx, gy, 130);
+    g.addColorStop(0, z.groundLine + 'aa'); g.addColorStop(1, z.groundLine + '00');
+    ctx.fillStyle = g; ctx.fillRect(gx - 130, gy - 10, 260, trackH * 0.8 + 10);
+  }
+  ctx.globalAlpha = 1;
+
+  // Разметка — как раньше, два ряда штрихов на разной высоте/скорости.
   const dashW = 60, doff = (dist * 7) % (dashW * 2);
-  ctx.fillStyle = 'rgba(242,237,227,0.14)';
+  ctx.fillStyle = 'rgba(242,237,227,0.16)';
   for (let x = -dashW * 2; x < W + dashW; x += dashW * 2) ctx.fillRect(x - doff + dashW, gy + 22, dashW, 5);
   const dashW2 = 34, doff2 = (dist * 10.5) % (dashW2 * 2);
-  ctx.fillStyle = 'rgba(242,237,227,0.09)';
+  ctx.fillStyle = 'rgba(242,237,227,0.1)';
   for (let x = -dashW2 * 2; x < W + dashW2; x += dashW2 * 2) ctx.fillRect(x - doff2 + dashW2, gy + 46, dashW2 * 0.6, 3);
+
+  // Раскиданный у нижнего края инвентарь — гантельный блин плоской стороной
+  // вверх и бутылка воды, едут на самом быстром (ближнем) параллаксе.
+  const dw = 150, doff3 = (dist * 8.4) % dw;
+  for (let x = -dw; x < W + dw; x += dw) {
+    const i = Math.floor(x / dw + 4000);
+    const dx = x - doff3 + (i % 3) * 34;
+    const dy = H - 16 - (i % 2) * 8;
+    ctx.save(); ctx.translate(dx, dy);
+    if (i % 3 === 0) {
+      ctx.fillStyle = 'rgba(0,0,0,0.3)'; ctx.beginPath(); ctx.ellipse(0, 5, 15, 4.5, 0, 0, 7); ctx.fill();
+      ctx.fillStyle = '#7c2a20'; ctx.beginPath(); ctx.ellipse(0, 0, 13, 5.5, 0, 0, 7); ctx.fill();
+      ctx.fillStyle = '#4a1712'; ctx.beginPath(); ctx.ellipse(0, 0, 4.5, 2.4, 0, 0, 7); ctx.fill();
+    } else if (i % 3 === 1) {
+      ctx.fillStyle = 'rgba(0,0,0,0.25)'; ctx.beginPath(); ctx.ellipse(0, 4, 6, 2.2, 0, 0, 7); ctx.fill();
+      ctx.fillStyle = 'rgba(120,190,210,0.6)'; ctx.beginPath(); ctx.roundRect(-4, -13, 8, 15, 2); ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,0.3)'; ctx.fillRect(-4, -13, 2, 15);
+      ctx.fillStyle = '#2b3138'; ctx.fillRect(-2.5, -16, 5, 3);
+    }
+    ctx.restore();
+  }
+
   // Ближняя кромка дорожки темнее — читается глубина, не одна плоская линия.
-  ctx.fillStyle = 'rgba(0,0,0,0.22)'; ctx.fillRect(0, H - 14, W, 14);
+  ctx.fillStyle = 'rgba(0,0,0,0.28)'; ctx.fillRect(0, H - 16, W, 16);
+
+  // Три слоя ближних штрихов с разным параллаксом: чем ближе к нижнему краю,
+  // тем крупнее и быстрее — это главный «на глаз» маркер скорости бега,
+  // работающий даже когда сверху всё спокойно.
+  if (sf > 0.04) {
+    for (let layer = 0; layer < 3; layer++) {
+      const ly = gy + trackH * (0.18 + layer * 0.32);
+      const segW = 60 + layer * 42, per = segW * 2, lof = (dist * (8 + layer * 7)) % per;
+      ctx.strokeStyle = 'rgba(255,255,255,' + (0.06 + 0.05 * layer + 0.12 * sf).toFixed(3) + ')';
+      ctx.lineWidth = 2 + layer * 1.6;
+      for (let x = -per; x < W + segW; x += per) {
+        const lx = x - lof;
+        ctx.beginPath(); ctx.moveTo(lx, ly); ctx.lineTo(lx + segW * 0.6, ly); ctx.stroke();
+      }
+    }
+  }
   // Штрихи скорости в приземном слое неба — усиливают ощущение бега на разгоне.
   if (sf > 0.15) {
     const n = 5, lw = 46 * sf, loff = (dist * 9) % 140;
@@ -1428,7 +1510,7 @@ function render() {
   ctx.fillStyle = z.ground; ctx.fillRect(0, GROUND(), W, H - GROUND());
   if (zb > 0) { ctx.globalAlpha = zb; ctx.fillStyle = zn.ground; ctx.fillRect(0, GROUND(), W, H - GROUND()); ctx.globalAlpha = 1; }
   ctx.fillStyle = z.groundLine; ctx.fillRect(0, GROUND(), W, 3);
-  drawTrack();
+  drawTrack(z);
 
   if (P.rageT > 0) {
     ctx.fillStyle = 'rgba(255,90,54,' + (0.10 + 0.06 * Math.sin(t * 20)) + ')';
