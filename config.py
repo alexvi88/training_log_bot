@@ -683,6 +683,12 @@ SHARED_ITEMS_RETENTION_DAYS = int(os.getenv("SHARED_ITEMS_RETENTION_DAYS", "180"
 # про недавнее: «что человек делал на этой неделе». Месяца на это хватает.
 ACTIVITY_RETENTION_DAYS = int(os.getenv("ACTIVITY_RETENTION_DAYS", "30"))
 
+# Сколько живёт память утреннего разбора поведения (db.behaviour_digests): по
+# строке на сутки, читается ради «что изменилось с прошлого раза». Дольше
+# месяца держать нечего — сам лог действий к тому времени уже вычищен, и
+# проверить старую гипотезу всё равно не по чему.
+BEHAVIOUR_DIGEST_RETENTION_DAYS = int(os.getenv("BEHAVIOUR_DIGEST_RETENTION_DAYS", "30"))
+
 
 # --- MCP: доступ к своим данным из внешних AI-клиентов (Claude и т.п.) ------
 #

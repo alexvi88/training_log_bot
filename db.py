@@ -34,6 +34,7 @@ from seed_data import (
     BODYWEIGHT_TEMPLATES,
     EXERCISE_TEMPLATES,
     MUSCLE_GROUP_PRESETS,
+    canonical_exercise_name,
     localized_exercise_name,
 )
 
@@ -502,6 +503,16 @@ CREATE TABLE IF NOT EXISTS user_events (
 );
 CREATE INDEX IF NOT EXISTS idx_user_events_user ON user_events (telegram_id, id);
 CREATE INDEX IF NOT EXISTS idx_user_events_created ON user_events (created_at);
+
+-- Разборы поведения за сутки (admin_tasks._send_behaviour_digest) — память
+-- анализатора. Без неё каждое утро разбирается с чистого листа: одни и те же
+-- гипотезы предлагаются заново, а «стало лучше или хуже, чем вчера» сказать
+-- нечему. Строка на сутки, текст — тот, который админ и прочитал.
+CREATE TABLE IF NOT EXISTS behaviour_digests (
+    day TEXT PRIMARY KEY,
+    text TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS achievements (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -5383,16 +5394,37 @@ async def delete_program(user_id: int, program_name: str) -> None:
 
 
 async def _find_global_template_by_name(name: str) -> Optional[aiosqlite.Row]:
-    """Case-insensitive (Cyrillic-safe, ё=е) match of a global template by its bare name."""
+    """Case-insensitive (Cyrillic-safe, ё=е) match of a global template by its bare name.
+
+    Имя шаблона в базе — русская идентичность навсегда (`_sync_exercise_templates`),
+    а англоязычному атлету бот показывает перевод. Поэтому сначала пробуем как
+    есть, а потом — как ПОКАЗАННОЕ имя, переведя его обратно в идентичность
+    (`seed_data.canonical_exercise_name`). Без второго шага английское имя из
+    нашего же каталога не резолвилось никуда: в состав программы оно не
+    попадало, а недельный объём по группам считался только по своим
+    упражнениям, и тренер называл атлету заниженное число.
+    """
     cur = await conn().execute(
         "SELECT * FROM exercises WHERE is_template = 1 AND user_id IS NULL"
     )
     rows = await cur.fetchall()
-    needle = _fold_exercise_name(name)
-    for r in rows:
-        if _fold_exercise_name(r["name"] or "") == needle:
-            return r
+    for needle in _exercise_name_candidates(name):
+        for r in rows:
+            if _fold_exercise_name(r["name"] or "") == needle:
+                return r
     return None
+
+
+def _exercise_name_candidates(name: str) -> list[str]:
+    """Свёрнутые имена, под которыми стоит искать шаблон: как дали и как
+    идентичность, если дали показанное (переведённое) имя."""
+    candidates = [_fold_exercise_name(name)]
+    canonical = canonical_exercise_name(name)
+    if canonical is not None:
+        folded = _fold_exercise_name(canonical)
+        if folded not in candidates:
+            candidates.append(folded)
+    return candidates
 
 
 async def get_or_create_user_exercise_by_name(user_id: int, name: str) -> Optional[int]:
@@ -6116,6 +6148,45 @@ async def count_events_between(since: str, until: str) -> tuple[int, int]:
     )
     events, people = await cur.fetchone()
     return events, people
+
+
+async def save_behaviour_digest(day: str, text: str) -> None:
+    """Запомнить разбор за сутки — материал для памяти следующего разбора.
+
+    Перезапись по дню, а не вторая строка: разбор за одни сутки бывает
+    перегенерирован руками, и в памяти должен остаться последний, иначе
+    следующее утро прочитает две версии одного дня и посчитает их за два.
+    """
+    async with _write_lock:
+        await conn().execute(
+            "INSERT INTO behaviour_digests (day, text, created_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(day) DO UPDATE SET text = excluded.text, created_at = excluded.created_at",
+            (day, text, dt.datetime.now().isoformat(timespec="seconds")),
+        )
+        await conn().commit()
+
+
+async def list_behaviour_digests_before(day: str, limit: int) -> list[aiosqlite.Row]:
+    """Разборы за дни ДО указанного, свежие первыми — память анализатора.
+
+    Строго «до»: разбор за сами эти сутки, если он уже лежит (перегенерация
+    руками), в свою же память попадать не должен.
+    """
+    cur = await conn().execute(
+        "SELECT day, text FROM behaviour_digests WHERE day < ? ORDER BY day DESC LIMIT ?",
+        (day, limit),
+    )
+    return await cur.fetchall()
+
+
+async def prune_old_behaviour_digests(retention_days: int) -> int:
+    """Выкинуть разборы старше retention_days: память нужна на недели, а не
+    навсегда — в старом разборе речь про людей, которых уже нет в логе."""
+    cutoff = (dt.date.today() - dt.timedelta(days=retention_days)).isoformat()
+    async with _write_lock:
+        cur = await conn().execute("DELETE FROM behaviour_digests WHERE day < ?", (cutoff,))
+        await conn().commit()
+    return cur.rowcount
 
 
 async def prune_old_user_events(retention_days: int) -> int:

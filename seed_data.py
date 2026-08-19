@@ -39,6 +39,8 @@ English-only by accident.
 
 from __future__ import annotations
 
+from typing import Optional
+
 import exercise_media
 import i18n
 
@@ -218,6 +220,47 @@ EXERCISE_TEMPLATES = [
     ("Другое", "Сгибание запястий со штангой"),
     ("Другое", "Разгибание запястий со штангой"),
 ]
+
+
+def canonical_muscle_group_name(shown_name: str) -> Optional[str]:
+    """Обратный ход к localized_muscle_group_name: «Chest» → «Грудь».
+
+    Идентичность группы в базе — русская строка навсегда (группы глобальные и
+    не форкаются), а человек и модель видят её на языке аккаунта. Без обратного
+    хода имя, которое бот сам же показал, обратно не принимается: тренер зовёт
+    create_exercise с group="Chest", получает «такой группы нет» и списком
+    русских имён — после чего называет по-русски и упражнение тоже. Так и
+    появлялись «Приседания с собственным весом» в английском списке.
+    """
+    needle = (shown_name or "").strip().casefold()
+    if not needle:
+        return None
+    for canonical in _MUSCLE_GROUP_SLUGS:
+        for lang in i18n.SUPPORTED:
+            if localized_muscle_group_name(canonical, lang).casefold() == needle:
+                return canonical
+    return None
+
+
+def canonical_exercise_name(shown_name: str) -> Optional[str]:
+    """Обратный ход к localized_exercise_name: «Push-Ups» → «Отжимания от пола».
+
+    То же, что и у групп, только шаблонов сотня: имя шаблона в базе русское
+    навсегда (см. модульную докстрингу), и англоязычному атлету бот показывает
+    перевод. Пока обратного хода не было, английское имя из каталога не
+    резолвилось никуда — ни в состав программы, ни в подсчёт объёма по группам,
+    и недельный объём у англоязычного считался по одним лишь своим упражнениям.
+    """
+    needle = (shown_name or "").strip().casefold()
+    if not needle:
+        return None
+    for _group, canonical in EXERCISE_TEMPLATES:
+        for lang in i18n.SUPPORTED:
+            if lang == i18n.DEFAULT_LANG:
+                continue
+            if localized_exercise_name(canonical, lang).casefold() == needle:
+                return canonical
+    return None
 
 
 def localized_exercise_name(canonical_name: str, lang: str) -> str:
