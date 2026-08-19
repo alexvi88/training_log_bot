@@ -503,6 +503,16 @@ CREATE TABLE IF NOT EXISTS user_events (
 CREATE INDEX IF NOT EXISTS idx_user_events_user ON user_events (telegram_id, id);
 CREATE INDEX IF NOT EXISTS idx_user_events_created ON user_events (created_at);
 
+-- Разборы поведения за сутки (admin_tasks._send_behaviour_digest) — память
+-- анализатора. Без неё каждое утро разбирается с чистого листа: одни и те же
+-- гипотезы предлагаются заново, а «стало лучше или хуже, чем вчера» сказать
+-- нечему. Строка на сутки, текст — тот, который админ и прочитал.
+CREATE TABLE IF NOT EXISTS behaviour_digests (
+    day TEXT PRIMARY KEY,
+    text TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS achievements (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL,
@@ -6116,6 +6126,45 @@ async def count_events_between(since: str, until: str) -> tuple[int, int]:
     )
     events, people = await cur.fetchone()
     return events, people
+
+
+async def save_behaviour_digest(day: str, text: str) -> None:
+    """Запомнить разбор за сутки — материал для памяти следующего разбора.
+
+    Перезапись по дню, а не вторая строка: разбор за одни сутки бывает
+    перегенерирован руками, и в памяти должен остаться последний, иначе
+    следующее утро прочитает две версии одного дня и посчитает их за два.
+    """
+    async with _write_lock:
+        await conn().execute(
+            "INSERT INTO behaviour_digests (day, text, created_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(day) DO UPDATE SET text = excluded.text, created_at = excluded.created_at",
+            (day, text, dt.datetime.now().isoformat(timespec="seconds")),
+        )
+        await conn().commit()
+
+
+async def list_behaviour_digests_before(day: str, limit: int) -> list[aiosqlite.Row]:
+    """Разборы за дни ДО указанного, свежие первыми — память анализатора.
+
+    Строго «до»: разбор за сами эти сутки, если он уже лежит (перегенерация
+    руками), в свою же память попадать не должен.
+    """
+    cur = await conn().execute(
+        "SELECT day, text FROM behaviour_digests WHERE day < ? ORDER BY day DESC LIMIT ?",
+        (day, limit),
+    )
+    return await cur.fetchall()
+
+
+async def prune_old_behaviour_digests(retention_days: int) -> int:
+    """Выкинуть разборы старше retention_days: память нужна на недели, а не
+    навсегда — в старом разборе речь про людей, которых уже нет в логе."""
+    cutoff = (dt.date.today() - dt.timedelta(days=retention_days)).isoformat()
+    async with _write_lock:
+        cur = await conn().execute("DELETE FROM behaviour_digests WHERE day < ?", (cutoff,))
+        await conn().commit()
+    return cur.rowcount
 
 
 async def prune_old_user_events(retention_days: int) -> int:

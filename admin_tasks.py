@@ -277,6 +277,13 @@ BEHAVIOUR_MAX_EVENTS = 4000
 BEHAVIOUR_MAX_PER_USER = 80
 BEHAVIOUR_LINE_LIMIT = 90
 
+# Память разбора: сколько прошлых утр он видит и сколько от каждого читает.
+# Три дня — чтобы «третий день подряд обрываются на Grab» было видно, а
+# недельная простыня не съедала вход. Обрезка по символам — потому что память
+# нужна выводами, а они у разбора всегда сверху.
+BEHAVIOUR_MEMORY_DAYS = 3
+BEHAVIOUR_MEMORY_CHARS = 1200
+
 _BEHAVIOUR_MARKERS = {
     activity_log.KIND_CALLBACK: "👉",
     activity_log.KIND_CALLBACK_UNHANDLED: "💀",
@@ -353,6 +360,28 @@ async def build_behaviour_summary(day: dt.date) -> Optional[str]:
     return "\n".join(parts).strip()
 
 
+async def build_behaviour_memory(day: dt.date) -> Optional[str]:
+    """Чем разбор помнит прошлые утра — или None, если помнить пока нечего.
+
+    Без памяти каждое утро разбирается с чистого листа: одни и те же гипотезы
+    предлагаются заново («сделать один CTA после языка»), а сказать
+    «обрывов на Grab стало меньше» не по чему — сравнивать не с чем. Здесь —
+    прошлые разборы целиком (подрезанные), а не выжимка: выжимка из выжимки
+    теряет ровно то конкретное место в логе, ради которого гипотеза и писалась.
+    """
+    rows = await db.list_behaviour_digests_before(day.isoformat(), BEHAVIOUR_MEMORY_DAYS)
+    if not rows:
+        return None
+    parts = ["Твои разборы за предыдущие сутки (свежий первым):"]
+    for row in rows:
+        past = dt.date.fromisoformat(row["day"]).strftime("%d.%m.%Y")
+        text = row["text"].strip()
+        if len(text) > BEHAVIOUR_MEMORY_CHARS:
+            text = text[: BEHAVIOUR_MEMORY_CHARS - 1] + "…"
+        parts.append(f"=== {past} ===\n{text}")
+    return "\n\n".join(parts)
+
+
 async def _send_behaviour_digest(bot: Bot, day: dt.date) -> None:
     """Разбор поведения за сутки — отдельным сообщением после отчёта.
 
@@ -363,12 +392,23 @@ async def _send_behaviour_digest(bot: Bot, day: dt.date) -> None:
     summary = await build_behaviour_summary(day)
     if summary is None:
         return
-    text = await ai_trainer.behaviour_digest(summary)
+    memory = await build_behaviour_memory(day)
+    text = await ai_trainer.behaviour_digest(summary, memory)
     if not text:
         return
-    header = f"🧠 Как вчера пользовались — {day.strftime('%d.%m.%Y')}\n\n"
-    for chunk in formatting.split_for_telegram(header + text, 4000):
-        await bot.send_message(chat_id=config.ADMIN_ID, text=chunk)
+    # Сохраняем до отправки: память следующего утра не должна зависеть от того,
+    # дошло ли сообщение (админ мог заблокировать бота — разбор всё равно был).
+    await db.save_behaviour_digest(day.isoformat(), text)
+    header = f"🧠 <b>Как вчера пользовались — {day.strftime('%d.%m.%Y')}</b>\n\n"
+    # Модель отвечает markdown'ом, и без разбора он доезжал звёздочками и
+    # решётками прямо в текст (см. formatting.ai_markdown_to_html). Режем до
+    # разбора, а не после: разрыв посреди <b> ломает и сообщение, и остаток.
+    for index, chunk in enumerate(formatting.split_for_telegram(text, 3500)):
+        await bot.send_message(
+            chat_id=config.ADMIN_ID,
+            text=(header if index == 0 else "") + formatting.ai_markdown_to_html(chunk),
+            parse_mode="HTML",
+        )
 
 
 async def _run_retention_cleanup() -> None:
@@ -377,6 +417,7 @@ async def _run_retention_cleanup() -> None:
     ссылки на общие тренировки."""
     await db.prune_old_cost_events(config.COST_EVENTS_RETENTION_DAYS)
     await db.prune_old_user_events(config.ACTIVITY_RETENTION_DAYS)
+    await db.prune_old_behaviour_digests(config.BEHAVIOUR_DIGEST_RETENTION_DAYS)
     await db.prune_old_limit_acks()
     await db.prune_old_pushes(
         PUSH_RETENTION_DAYS,
