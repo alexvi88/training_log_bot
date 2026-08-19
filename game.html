@@ -85,7 +85,8 @@
   #win-art { box-shadow: 0 0 44px rgba(255,215,0,0.55), 0 0 0 2px rgba(255,215,0,0.4); }
   .result-score { font-size: 20px; color: #ffd700; }
   #result-art, #win-art {
-    width: 104px; height: 104px; object-fit: cover; border-radius: 12px;
+    width: 104px; height: 104px; object-fit: contain; border-radius: 12px;
+    background: rgba(255,255,255,0.05);
     border: 2px solid rgba(255,215,0,0.4); display: none; margin: 0 auto;
   }
   .result-stats { font-size: 12px; color: #aaa; }
@@ -352,14 +353,21 @@ const sPower = () => { beep(620, .08, 'triangle', .05, 200); setTimeout(() => be
 const sDie = () => { thud(200, 44, .38, .085); setTimeout(() => thud(150, 36, .5, .07), 150); };
 
 // ── СОСТОЯНИЕ ────────────────────────────────────────────────────────────────
-// Масштаб мира: раньше бегун был 58px (7% высоты экрана) и стоял на линии
-// H*0.80 — 70%+ кадра над головой оставалось пустым небом. SK поднимает все
-// пиксельные размеры мира (игрок, препятствия, просветы, прыжок) в 2.5 раза
-// СОГЛАСОВАННО: скорость скролла (SPEED_*, px/с) не трогаем — это она отвечает
-// за баланс/сложность, — а высоту прыжка и гравитацию масштабируем ОБЕ на SK,
-// поэтому апекс прыжка растёт в SK раз, а время полёта (и вся синхронизация с
-// препятствиями) остаётся тем же, что и до масштабирования.
-const SK = 2.5;
+// Масштаб мира: SK поднимает все пиксельные размеры мира (игрок, препятствия,
+// просветы, прыжок) СОГЛАСОВАННО: скорость скролла (SPEED_*, px/с) не трогаем —
+// это она отвечает за баланс/сложность, — а высоту прыжка и гравитацию
+// масштабируем ОБЕ на SK, поэтому апекс прыжка растёт в SK раз, а время полёта
+// (и вся синхронизация с препятствиями) остаётся тем же, что и до
+// масштабирования.
+//
+// Фиксированные 2.5 оказались перебором: бегун занимал пятую часть высоты
+// экрана, а стойка (o.w + 104*SK ≈ 325px) — почти всю ширину кадра на телефоне,
+// то есть препятствие приходило уже наполовину за краем экрана. Теперь SK
+// считается ОТ ВЫСОТЫ КАДРА: рост фигуры (58*SK) держим около 12% высоты — она
+// крупная и читаемая, но над головой остаётся воздух, а препятствие целиком
+// влезает в кадр. Клипсы — чтобы на очень низком (ландшафт) и очень высоком
+// экране мир не выходил за пределы, под которые подобран баланс.
+const SK = Math.max(1.15, Math.min(1.75, H * 0.12 / 58));
 // Прыжок — величина ФИКСИРОВАННОЙ длительности (v0/g не меняются от скорости
 // бега), поэтому его горизонтальный охват = speed*flightTime не растёт с SK.
 // Если прыжковые препятствия (гантель/гиря/скамья/блин/вышибала) масштабировать
@@ -370,12 +378,16 @@ const SK = 2.5;
 // Подкатные препятствия (стойка/груша/канат/блин-на-подкате) от этой проблемы
 // не страдают: длительность подката пересчитывается от текущей скорости живьём
 // (см. slide()), поэтому их можно спокойно оставить на полном SK.
-const SKW = 1.6;
+// Доля SKW/SK та же, на которой отлаживался баланс (1.6 при SK=2.5), поэтому
+// проходимость прыжковых препятствий не поехала: они просто пропорционально
+// мельче вместе со всем миром.
+const SKW = SK * 0.64;
 // Спортпит рисуется своим, куда более скромным масштабом: на SK/SKW банка
 // предтреника получалась почти с торс героя. SI подобран так, чтобы самый
 // крупный предмет (gainer, 34px в высоту) на экране был заметно меньше
-// головы игрока (диаметр головы ≈ 37px при масштабе игрока SK).
-const SI = 0.8;
+// головы игрока — поэтому считается ОТ SK (0.8 при SK=2.5), а не константой:
+// иначе на меньшем масштабе мира банка снова станет размером с торс.
+const SI = SK * 0.32;
 const GROUND = () => H * 0.82;
 let running = false;
 let t = 0, dist = 0, speed = 0, score = 0, best = Math.max(serverBest, +(localStorage.getItem('gymrun_best') || 0));
@@ -1450,7 +1462,10 @@ function drawAthlete(c, fighter, opts) {
 // ниже отметки, отрисовка плавно (без скачка) продолжает следовать за ним.
 // Обычный одиночный и типичный двойной прыжок до этой отметки не долетают —
 // подрезка касается только редкого «прыжка на пике прыжка».
-const PLAYER_VISUAL_MIN_Y = 275;
+// Считаем от высоты кадра, а не абсолютным числом: 275px были подобраны под
+// один конкретный экран и под прежний (более крупный) SK, на низком экране эта
+// линия оказывалась ниже верхушки обычного прыжка.
+const PLAYER_VISUAL_MIN_Y = Math.max(120, H * 0.34);
 function playerRenderY() { return Math.max(P.y, PLAYER_VISUAL_MIN_Y); }
 function drawPlayer() {
   const ry = playerRenderY();
@@ -1539,22 +1554,28 @@ function flash(color) {
   setTimeout(() => { el.style.opacity = 0; }, 200);
 }
 
-// Карточки выбора: если в assets/game лежит арт персонажа — показываем его
-// (как карточки бойцов в beat the owl); нет файла — рисуем векторного из игры.
+// Портрет качка — тот же векторный атлет, что бежит в забеге. Раньше поверх
+// него подгружалась фотореалистичная картинка из assets/game/<key>.jpg, и в
+// игре жили ДВА разных персонажа: на карточке выбора и на экране итога —
+// нарисованный «под фото» мужик, на дорожке — минималистичный вектор. Теперь
+// один и тот же силуэт везде: выбор, провал, финиш.
+function fighterPortrait(key, px) {
+  const c = document.createElement('canvas');
+  c.width = px; c.height = px;
+  const cc = c.getContext('2d');
+  // Кадрирование: фигура по центру, стопы чуть выше нижнего края, над головой
+  // остаётся воздух — иначе на маленькой карточке подошвы и макушка режутся
+  // рамкой (высота отрисовки атлета ≈ 75px * scale вверх от точки опоры).
+  cc.translate(px * 0.47, px * 0.9);
+  drawAthlete(cc, key, { idle: true, scale: 1.6 * px / 160, outline: true });
+  return c;
+}
 (function buildFighterCards() {
   const row = document.getElementById('fighters-row');
   Object.entries(FIGHTERS).forEach(([key, f]) => {
     const card = document.createElement('div');
     card.className = 'fighter-card';
-    const c = document.createElement('canvas');
-    c.width = 160; c.height = 160;
-    const cc = c.getContext('2d');
-    cc.translate(74, 152);
-    drawAthlete(cc, key, { idle: true, scale: 1.85 });
-    const img = new Image();
-    img.src = 'assets/game/' + key + '.jpg';
-    img.onload = () => { card.replaceChild(img, c); };
-    card.appendChild(c);
+    card.appendChild(fighterPortrait(key, 200));
     const nm = document.createElement('div');
     nm.className = 'fighter-name'; nm.textContent = f.name;
     card.appendChild(nm);
@@ -1583,12 +1604,10 @@ function die() {
     distance: d, score, fighter: selectedFighter,
     best, maxCombo, pickups, gameTimestamp: Date.now(),
   };
-  // Арт выбранного атлета, если он есть (см. assets/game) — иначе без картинки.
+  // Тот же векторный атлет, что и на карточке выбора (см. fighterPortrait).
   const art = document.getElementById('result-art');
-  art.style.display = 'none';
-  art.onload = () => { art.style.display = 'block'; };
-  art.onerror = () => { art.style.display = 'none'; };
-  art.src = 'assets/game/' + selectedFighter + '.jpg';
+  art.src = fighterPortrait(selectedFighter, 208).toDataURL();
+  art.style.display = 'block';
   document.getElementById('result-score').textContent = d + ' ' + tr('unit') + ' · 🥤 ' + score;
   document.getElementById('result-stats').textContent =
     tr('resultStats') + maxCombo + tr('resultStatsPickups') + pickups;
@@ -1617,10 +1636,8 @@ function winRun() {
     best, maxCombo, pickups, gameTimestamp: Date.now(), won: true,
   };
   const art = document.getElementById('win-art');
-  art.style.display = 'none';
-  art.onload = () => { art.style.display = 'block'; };
-  art.onerror = () => { art.style.display = 'none'; };
-  art.src = 'assets/game/' + selectedFighter + '.jpg';
+  art.src = fighterPortrait(selectedFighter, 208).toDataURL();
+  art.style.display = 'block';
   document.getElementById('win-score').textContent = d + ' ' + tr('unit') + ' · 🥤 ' + score;
   document.getElementById('win-stats').textContent =
     tr('resultStats') + maxCombo + tr('resultStatsPickups') + pickups;
