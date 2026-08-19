@@ -1,4 +1,4 @@
-from seed_data import EXERCISE_TEMPLATES, MUSCLE_GROUP_PRESETS
+from seed_data import BODYWEIGHT_TEMPLATES, EXERCISE_TEMPLATES, MUSCLE_GROUP_PRESETS
 
 # asyncio_mode=auto (pytest.ini) runs the async tests below without an explicit
 # marker, and leaves the pure-data sync tests alone — no module-level asyncio mark.
@@ -125,3 +125,28 @@ async def test_sync_leaves_user_exercises_untouched(fresh_db, user_id):
     assert await db.count_user_exercises(user_id) == before
     assert await db.get_exercise(own_id) is not None
     assert await db.get_exercise(forked_id) is not None
+
+
+async def test_bodyweight_flags_reach_the_seeded_catalog(fresh_db):
+    """Каждая строка BODYWEIGHT_TEMPLATES доезжает до глобального шаблона.
+
+    Список и каталог — два разных места, и упражнение с собственным весом,
+    заведённое только в EXERCISE_TEMPLATES, тоннаж считать не начнёт: тест
+    ловит именно этот разъезд, а не работу самого пересчёта.
+    """
+    db = fresh_db
+    rows = await (
+        await db._conn.execute(
+            "SELECT name, bodyweight_load, bodyweight_factor "
+            "FROM exercises WHERE user_id IS NULL"
+        )
+    ).fetchall()
+    by_name = {r["name"]: r for r in rows}
+
+    assert len(by_name) == len(EXERCISE_TEMPLATES)
+    for name, (load, factor) in BODYWEIGHT_TEMPLATES.items():
+        assert by_name[name]["bodyweight_load"] == load, name
+        assert by_name[name]["bodyweight_factor"] == factor, name
+    for name, row in by_name.items():
+        if name not in BODYWEIGHT_TEMPLATES:
+            assert row["bodyweight_load"] == "none", name

@@ -215,6 +215,13 @@ EXERCISE_DESCRIPTIONS: dict[str, str] = {
         "вдоль корпуса.\n"
         "3. На выдохе выжми себя вверх усилием трицепса."
     ),
+    "Обратные отжимания от скамьи": (
+        "1. Упрись руками в край скамьи за спиной, кисти на ширине плеч, "
+        "ноги вытяни вперёд — исходное положение.\n"
+        "2. На вдохе согни локти и опустись чуть ниже прямого угла, локти "
+        "держи близко к корпусу.\n"
+        "3. На выдохе выжми себя трицепсом обратно вверх."
+    ),
     # ---------- Бицепс ----------
     "Подъём штанги на бицепс": (
         "1. Встань прямо, возьми штангу хватом снизу на ширине плеч, "
@@ -379,6 +386,14 @@ EXERCISE_DESCRIPTIONS: dict[str, str] = {
         "локти слегка согнуты.\n"
         "3. Сделай паузу и медленно верни руки в исходное положение."
     ),
+    "Тяга к лицу": (
+        "1. Поставь канат на верхний блок примерно на высоту лица, возьми "
+        "за концы и отойди на шаг — руки вытянуты, трос натянут.\n"
+        "2. На выдохе тяни канат к лицу, разводя руки в стороны; плечи "
+        "держи параллельно полу.\n"
+        "3. В крайней точке на секунду сведи лопатки, на вдохе медленно "
+        "верни руки вперёд."
+    ),
     # ---------- Спина ----------
     "Подтягивания": (
         "1. Возьмись за перекладину прямым хватом шире плеч, руки "
@@ -496,6 +511,30 @@ EXERCISE_DESCRIPTIONS: dict[str, str] = {
         "2. На вдохе опусти гантель дугой за голову до растяжения груди "
         "и широчайших.\n"
         "3. На выдохе верни гантель в исходное положение той же дугой."
+    ),
+    "Тяга с плинтов": (
+        "1. Выставь гриф в раме на упоры чуть ниже колен и встань к нему "
+        "как на становую: стопы под тазом, хват на ширине плеч, спина "
+        "прогнута.\n"
+        "2. На выдохе разогни таз и колени, тяни штангу вверх до полного "
+        "выпрямления и в конце разведи плечи назад.\n"
+        "3. На вдохе верни штангу на упоры — положи, а не сбрось."
+    ),
+    "Пулловер на верхнем блоке": (
+        "1. Возьми рукоять верхнего блока прямым хватом чуть шире плеч, "
+        "отойди на шаг и наклони корпус вперёд градусов на тридцать; руки "
+        "прямые.\n"
+        "2. На выдохе, не сгибая локти, тяни рукоять вниз широчайшими до "
+        "бёдер.\n"
+        "3. На вдохе медленно верни руки вверх, до растяжения под "
+        "лопатками."
+    ),
+    "Тяга двух гантелей в наклоне": (
+        "1. Возьми гантели в обе руки, слегка согни колени и наклонись "
+        "почти параллельно полу; спина прямая, гантели висят под грудью.\n"
+        "2. На выдохе тяни гантели к поясу, локти вдоль корпуса, в верхней "
+        "точке на секунду сожми лопатки.\n"
+        "3. На вдохе медленно опусти гантели, корпус не поднимай."
     ),
     # ---------- Ноги ----------
     "Присед со штангой": (
@@ -648,6 +687,70 @@ EXERCISE_DESCRIPTIONS: dict[str, str] = {
         "3. На выдохе поднимись на носки как можно выше, задержавшись "
         "на секунду."
     ),
+    "Гудморнинг": (
+        "1. Положи штангу на верх спины, как в приседе, стопы на ширине "
+        "плеч, колени чуть согнуты, лопатки сведены.\n"
+        "2. На вдохе отведи таз назад и наклонись вперёд почти до параллели "
+        "с полом, спину держи прогнутой.\n"
+        "3. На выдохе разогнись за счёт ягодиц и задней поверхности бедра. "
+        "Вес здесь берут скромный — это работа на технику, а не на рекорд."
+    ),
+    "Хип-траст со штангой": (
+        "1. Сядь на пол спиной к скамье, закати штангу на бёдра — под гриф "
+        "подложи валик — и упрись лопатками в скамью.\n"
+        "2. На выдохе упрись стопами в пол и подними таз до прямой линии от "
+        "плеч до колен, сжав ягодицы.\n"
+        "3. На вдохе медленно опусти таз, штангу на бёдра не роняй."
+    ),
+    "Присед с гирей у груди": (
+        "1. Возьми гирю за рога и держи у груди, стопы на ширине плеч.\n"
+        "2. На вдохе присядь глубоко между ног; спина прямая, грудь и "
+        "голова смотрят вперёд.\n"
+        "3. В нижней точке разведи колени локтями, на выдохе встань."
+    ),
+    "Приседания без веса": (
+        "1. Стопы на ширине плеч, руки перед собой или за головой.\n"
+        "2. На вдохе отведи таз назад и присядь так глубоко, как держит "
+        "техника; колени разводи, грудь не заваливай.\n"
+        "3. На выдохе встань, в верхней точке поясницу не проваливай."
+    ),
+    "Выпады в ходьбе со штангой": (
+        "1. Положи штангу на верх спины, стопы на ширине плеч.\n"
+        "2. Шагни вперёд и опустись, пока заднее колено почти не коснётся "
+        "пола; корпус вертикально, переднее колено над стопой.\n"
+        "3. На выдохе оттолкнись пяткой передней ноги и выпрямись, затем "
+        "шагни задней ногой и повтори на другую сторону."
+    ),
+    "Сгибание ног стоя": (
+        "1. Настрой тренажёр по росту, встань, упри валик под заднюю "
+        "поверхность одной ноги и возьмись за рукояти.\n"
+        "2. На выдохе согни ногу, подводя пятку к ягодице; бедро от упора "
+        "не отрывай, в крайней точке задержись на секунду.\n"
+        "3. На вдохе медленно выпрями ногу. Столько же повторов на вторую."
+    ),
+    "Обратная гиперэкстензия": (
+        "1. Ляг животом на верхнюю подушку тренажёра, таз за краем, ноги "
+        "висят свободно, держись за рукояти.\n"
+        "2. На выдохе подними ноги назад до прямой линии с корпусом — выше "
+        "не надо, поясницу не переразгибай.\n"
+        "3. На вдохе медленно опусти ноги вниз."
+    ),
+    "Жим носками в тренажёре": (
+        "1. Сядь в тренажёр для жима ногами, поставь носки на нижний край "
+        "платформы, пятки свободны, ноги почти выпрямлены.\n"
+        "2. На выдохе выжми платформу носками как можно выше и на секунду "
+        "задержись в сжатых икрах.\n"
+        "3. На вдохе медленно опусти пятки до растяжения. Колени всё время "
+        "неподвижны."
+    ),
+    "Свинги с гирей одной рукой": (
+        "1. Поставь гирю на пол перед собой, стопы шире плеч, наклонись с "
+        "прогнутой спиной и возьми её одной рукой.\n"
+        "2. Качни гирю между ног назад, а на выдохе резко разогни таз — "
+        "гиря сама вылетает вперёд до груди, руками её не поднимай.\n"
+        "3. На вдохе дай гире вернуться между ног и сразу повтори. Половину "
+        "повторов сделай другой рукой."
+    ),
     # ---------- Другое (пресс, кор, предплечья, трапеции) ----------
     "Скручивания": (
         "1. Ляг на спину, колени согнуты, стопы на полу, руки за головой "
@@ -751,6 +854,53 @@ EXERCISE_DESCRIPTIONS: dict[str, str] = {
         "исходное положение.\n"
         "2. На вдохе опусти гриф вниз, сгибая запястья.\n"
         "3. На выдохе разогни запястья, поднимая гриф как можно выше."
+    ),
+    "Обратные скручивания": (
+        "1. Ляг на спину, руки вдоль корпуса ладонями в пол, бёдра подними "
+        "вертикально, голени параллельно полу.\n"
+        "2. На вдохе подтяни колени к груди, скручивая таз и отрывая его от "
+        "пола.\n"
+        "3. Задержись на секунду и на выдохе медленно опусти таз обратно. "
+        "Руками не помогай."
+    ),
+    "Пресс в тренажёре": (
+        "1. Сядь в тренажёр, поставь ноги под валики, возьмись за рукояти, "
+        "локти на подушках.\n"
+        "2. На выдохе скрути корпус вниз, одновременно подтягивая колени; "
+        "работай прессом, а не руками.\n"
+        "3. На вдохе медленно вернись назад, вес рывком не отпускай."
+    ),
+    "Жим Палоффа": (
+        "1. Поставь рукоять блока на высоту груди, встань боком, возьми её "
+        "двумя руками и отойди на длину рук — трос натянут.\n"
+        "2. На выдохе выжми руки от груди вперёд до конца и держи корпус "
+        "так, чтобы трос тебя не развернул.\n"
+        "3. Задержись пару секунд и на вдохе верни руки к груди. Столько же "
+        "повторов другим боком."
+    ),
+    "Дровосек в кроссовере": (
+        "1. Поставь рукоять на верхний блок, встань боком, возьми её двумя "
+        "руками и отойди на длину рук.\n"
+        "2. На выдохе тяни рукоять по диагонали вниз к колену, разворачивая "
+        "корпус; руки прямые, задняя стопа доворачивается.\n"
+        "3. На вдохе медленно вернись в исходное. Столько же повторов "
+        "другим боком."
+    ),
+    "Наклоны в сторону с гантелью": (
+        "1. Встань прямо, гантель в одной руке у бедра, вторая рука на "
+        "поясе, стопы на ширине плеч.\n"
+        "2. На вдохе наклонись в сторону гантели настолько, насколько "
+        "тянется бок; остальное тело неподвижно.\n"
+        "3. На выдохе выпрямись. Переложи гантель и сделай столько же в "
+        "другую сторону."
+    ),
+    "Мёртвый жук": (
+        "1. Ляг на спину, руки вытяни вверх, бёдра и колени согни под "
+        "прямым углом.\n"
+        "2. Выдохни, прижми поясницу к полу и держи её прижатой всё "
+        "упражнение — это исходное положение.\n"
+        "3. Выпрями одну ногу почти до пола, не давая пояснице оторваться, "
+        "вернись и повтори с другой."
     ),
 }
 
@@ -935,6 +1085,14 @@ EXERCISE_DESCRIPTIONS_EN: dict[str, str] = {
         "floor, elbows tracking along your body.\n"
         "3. Exhale and press back up with your triceps."
     ),
+    "Обратные отжимания от скамьи": (
+        "1. Set your hands on the edge of a bench behind you, "
+        "shoulder-width apart, legs stretched out in front — starting "
+        "position.\n"
+        "2. Inhale and bend your elbows to lower yourself just past a right "
+        "angle, keeping your elbows close to your body.\n"
+        "3. Exhale and press yourself back up with your triceps."
+    ),
     # ---------- Biceps ----------
     "Подъём штанги на бицепс": (
         "1. Stand tall, take the bar with an underhand grip at shoulder-"
@@ -1099,6 +1257,14 @@ EXERCISE_DESCRIPTIONS_EN: dict[str, str] = {
         "delts, elbows slightly bent.\n"
         "3. Pause, then return your arms slowly to the starting position."
     ),
+    "Тяга к лицу": (
+        "1. Set a rope on the high pulley at about face height, grab both "
+        "ends and step back — arms out, cable tight.\n"
+        "2. Exhale and pull the rope to your face, spreading your hands "
+        "apart; keep your upper arms parallel to the floor.\n"
+        "3. Squeeze your shoulder blades for a second, then inhale and let "
+        "your arms travel back out slowly."
+    ),
     # ---------- Back ----------
     "Подтягивания": (
         "1. Grab the bar with an overhand grip wider than shoulder-width, "
@@ -1220,6 +1386,32 @@ EXERCISE_DESCRIPTIONS_EN: dict[str, str] = {
         "2. Inhale and lower the dumbbell in an arc behind your head until "
         "you feel a stretch in your chest and lats.\n"
         "3. Exhale and bring it back up the same arc."
+    ),
+    "Тяга с плинтов": (
+        "1. Set the bar on the rack pins just below your knees and stand to "
+        "it like a deadlift: feet under your hips, grip shoulder-width, "
+        "back arched.\n"
+        "2. Exhale and extend your hips and knees, pulling the bar up to a "
+        "full lockout, pulling your shoulders back at the top.\n"
+        "3. Inhale and return the bar to the pins — set it down, don't drop "
+        "it."
+    ),
+    "Пулловер на верхнем блоке": (
+        "1. Take the high-pulley bar with an overhand grip a bit wider than "
+        "shoulder-width, step back and bend your torso forward about 30 "
+        "degrees; arms straight.\n"
+        "2. Exhale and pull the bar down to your thighs with your lats, "
+        "keeping your elbows locked out.\n"
+        "3. Inhale and let your arms travel back up slowly until you feel "
+        "the stretch under your shoulder blades."
+    ),
+    "Тяга двух гантелей в наклоне": (
+        "1. Hold a dumbbell in each hand, bend your knees slightly and "
+        "hinge over until your torso is nearly parallel to the floor; back "
+        "flat, dumbbells hanging under your chest.\n"
+        "2. Exhale and row the dumbbells to your waist, elbows along your "
+        "body, squeezing your shoulder blades for a second at the top.\n"
+        "3. Inhale and lower them slowly, keeping your torso still."
     ),
     # ---------- Legs ----------
     "Присед со штангой": (
@@ -1373,6 +1565,80 @@ EXERCISE_DESCRIPTIONS_EN: dict[str, str] = {
         "3. Exhale and rise onto your toes as high as you can, holding for "
         "a second."
     ),
+    "Гудморнинг": (
+        "1. Rack the bar across your upper back like a squat, feet "
+        "shoulder-width, knees slightly bent, shoulder blades pinched.\n"
+        "2. Inhale, push your hips back and bend forward to near parallel "
+        "with the floor, keeping your back arched.\n"
+        "3. Exhale and extend through your glutes and hamstrings. Keep the "
+        "weight modest here — this one is about form, not records."
+    ),
+    "Хип-траст со штангой": (
+        "1. Sit on the floor with a bench behind you, roll the bar onto "
+        "your hips — use a pad — and lean your shoulder blades onto the "
+        "bench.\n"
+        "2. Exhale, drive through your feet and lift your hips to a "
+        "straight line from shoulders to knees, squeezing your glutes.\n"
+        "3. Inhale and lower your hips slowly; don't drop the bar onto your "
+        "hips."
+    ),
+    "Присед с гирей у груди": (
+        "1. Hold a kettlebell by the horns at your chest, feet "
+        "shoulder-width apart.\n"
+        "2. Inhale and squat deep between your legs; back flat, chest and "
+        "head up.\n"
+        "3. At the bottom push your knees out with your elbows, then exhale "
+        "and stand up."
+    ),
+    "Приседания без веса": (
+        "1. Feet shoulder-width apart, hands in front of you or behind your "
+        "head.\n"
+        "2. Inhale, push your hips back and squat as deep as your form "
+        "holds; push your knees out and keep your chest up.\n"
+        "3. Exhale and stand back up without letting your lower back sag at "
+        "the top."
+    ),
+    "Выпады в ходьбе со штангой": (
+        "1. Rack the bar across your upper back, feet shoulder-width apart.\n"
+        "2. Step forward and drop until your rear knee nearly touches the "
+        "floor; torso upright, front knee over the foot.\n"
+        "3. Exhale, drive through the heel of the front foot to stand up, "
+        "then step through with the rear leg and repeat on the other side."
+    ),
+    "Сгибание ног стоя": (
+        "1. Set the machine to your height, stand up, tuck the pad against "
+        "the back of one leg and hold the handles.\n"
+        "2. Exhale and curl that leg, bringing your heel toward your glute "
+        "without lifting your thigh off the pad; hold for a second at the "
+        "top.\n"
+        "3. Inhale and straighten the leg slowly. Same number of reps on "
+        "the other side."
+    ),
+    "Обратная гиперэкстензия": (
+        "1. Lie face down on the top pad with your hips off the edge, legs "
+        "hanging free, holding the handles.\n"
+        "2. Exhale and lift your legs back to a straight line with your "
+        "torso — no higher, don't hyperextend your lower back.\n"
+        "3. Inhale and lower your legs slowly."
+    ),
+    "Жим носками в тренажёре": (
+        "1. Sit in the leg press, set the balls of your feet on the bottom "
+        "edge of the platform with your heels off it, legs almost straight.\n"
+        "2. Exhale and press the platform up as high as your toes go, "
+        "holding the squeeze in your calves for a second.\n"
+        "3. Inhale and lower your heels slowly into the stretch. Keep your "
+        "knees locked in place the whole time."
+    ),
+    "Свинги с гирей одной рукой": (
+        "1. Set the kettlebell on the floor in front of you, feet wider "
+        "than your shoulders, hinge over with a flat back and grab it with "
+        "one hand.\n"
+        "2. Swing the bell back between your legs, then exhale and snap "
+        "your hips open — the bell flies up to chest height on its own, "
+        "don't lift it with your arm.\n"
+        "3. Inhale, let it swing back between your legs and go again. Do "
+        "half the reps with the other hand."
+    ),
     # ---------- Other (abs, core, forearms, traps) ----------
     "Скручивания": (
         "1. Lie on your back, knees bent, feet on the floor, hands behind "
@@ -1479,6 +1745,52 @@ EXERCISE_DESCRIPTIONS_EN: dict[str, str] = {
         "2. Inhale and lower the bar, bending your wrists.\n"
         "3. Exhale and extend your wrists to raise the bar as high as you "
         "can."
+    ),
+    "Обратные скручивания": (
+        "1. Lie on your back, arms along your body palms down, thighs "
+        "vertical and shins parallel to the floor.\n"
+        "2. Inhale and pull your knees toward your chest, rolling your "
+        "pelvis up off the floor.\n"
+        "3. Hold for a second, then exhale and lower your hips back down "
+        "slowly. No help from your arms."
+    ),
+    "Пресс в тренажёре": (
+        "1. Sit in the machine, feet under the pads, hands on the handles, "
+        "elbows on the pads.\n"
+        "2. Exhale and crunch your torso down while pulling your knees up; "
+        "move the weight with your abs, not your arms.\n"
+        "3. Inhale and return slowly — don't let the weight snap back."
+    ),
+    "Жим Палоффа": (
+        "1. Set the handle at chest height, stand side-on to the tower, "
+        "take it in both hands and step out to arm's length — cable tight.\n"
+        "2. Exhale and press your hands straight out from your chest, "
+        "holding your torso so the cable can't twist you.\n"
+        "3. Hold for a couple of seconds, then inhale and bring your hands "
+        "back to your chest. Same reps facing the other way."
+    ),
+    "Дровосек в кроссовере": (
+        "1. Set the handle on the top pulley, stand side-on, take it in "
+        "both hands and step out to arm's length.\n"
+        "2. Exhale and pull the handle down across your body to your front "
+        "knee, rotating your torso; arms straight, back foot pivoting.\n"
+        "3. Inhale and return slowly. Same reps on the other side."
+    ),
+    "Наклоны в сторону с гантелью": (
+        "1. Stand tall with a dumbbell in one hand at your thigh, the other "
+        "hand on your waist, feet shoulder-width apart.\n"
+        "2. Inhale and bend toward the dumbbell as far as the side of your "
+        "torso stretches; the rest of your body stays still.\n"
+        "3. Exhale and straighten up. Swap the dumbbell over and do the "
+        "same on the other side."
+    ),
+    "Мёртвый жук": (
+        "1. Lie on your back with your arms reaching up, hips and knees "
+        "bent to right angles.\n"
+        "2. Exhale, press your lower back into the floor and keep it there "
+        "for the whole set — that's your starting position.\n"
+        "3. Extend one leg down to just above the floor without letting "
+        "your back arch, bring it back and repeat with the other."
     ),
 }
 
