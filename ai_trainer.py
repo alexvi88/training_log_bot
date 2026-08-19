@@ -48,9 +48,10 @@ import config
 import db
 import formatting
 import i18n
+import seed_data
 import timeutil
 import view_builder
-from seed_data import EXERCISE_TEMPLATES
+from seed_data import EXERCISE_TEMPLATES, canonical_muscle_group_name
 
 logger = logging.getLogger(__name__)
 
@@ -3138,13 +3139,26 @@ async def _weekly_volume(user_id: int) -> dict[str, Any]:
     start = today - dt.timedelta(days=analytics.VOLUME_WINDOW_DAYS - 1)
     counts = await db.weekly_volume_by_group(user_id, start.isoformat(), today.isoformat())
     groups = await db.list_muscle_groups(user_id)
+    # Имена групп — на языке атлета: эти строки тренер называет ему в ответе
+    # («по спине мало»), а в базе имя группы русское навсегда. Тот же порядок,
+    # что и у _weekly_sets_by_group: считаем по идентичности, показываем
+    # локализованное.
+    lang = i18n.get_lang()
     rows = []
     for g in groups:
         c = counts.get(g["id"], 0)
-        rows.append({"group": g["name"], "sets": c, "status": analytics.classify_weekly_volume(c)})
+        rows.append({
+            "group": seed_data.localized_muscle_group_name(g["name"], lang),
+            "sets": c,
+            "status": analytics.classify_weekly_volume(c),
+        })
     ungrouped = counts.get(None, 0)
     if ungrouped:
-        rows.append({"group": "Без группы", "sets": ungrouped, "status": analytics.classify_weekly_volume(ungrouped)})
+        rows.append({
+            "group": i18n.t("view.no_group"),
+            "sets": ungrouped,
+            "status": analytics.classify_weekly_volume(ungrouped),
+        })
     return {
         "window": f"{start.isoformat()}..{today.isoformat()}",
         "window_days": analytics.VOLUME_WINDOW_DAYS,
@@ -4005,8 +4019,20 @@ async def _no_such_exercise(user_id: int, name: str) -> dict[str, Any]:
 
 
 async def _resolve_group_id(user_id: int, name: str) -> Optional[int]:
+    """Группа по имени — как дали, или как ПОКАЗАННОЕ имя.
+
+    Имя группы в базе русское навсегда (группы глобальные, не форкаются), а
+    модель видит их на языке атлета — из get_training_overview и из наших же
+    экранов. Пока обратного хода не было, тренер звал create_exercise с
+    group="Chest", получал «такой группы нет» со списком русских имён, а потом
+    называл по-русски и само упражнение: так у англоязычного и появлялись
+    «Приседания с собственным весом».
+    """
+    wanted = name.strip().casefold()
+    canonical = canonical_muscle_group_name(name)
     for group in await db.list_muscle_groups(user_id):
-        if group["name"].strip().lower() == name.strip().lower():
+        own = group["name"].strip()
+        if own.casefold() == wanted or (canonical and own == canonical):
             return group["id"]
     return None
 
@@ -4534,9 +4560,15 @@ async def _weekly_sets_by_group(user_id: int, days: list[dict[str, Any]]) -> dic
     По всем дням сразу — это и есть недельный объём, с которым сравнивают норму
     6-12. Не считаются упражнения без группы (её не нашлось ни у своих, ни у
     шаблонов) и без числа подходов — лучше не назвать объём, чем назвать неверный.
+
+    Ключи — имена групп на языке атлета: числа отсюда тренер называет ему прямо
+    в ответе (промпт это прямо предписывает), а идентичность группы в базе
+    русская навсегда. Считаем по идентичности, показываем локализованное — то же
+    правило, что и у названий упражнений.
     """
     totals: dict[str, int] = {}
     cache: dict[str, Optional[str]] = {}
+    lang = i18n.get_lang()
     for day in days:
         for item in day["items"]:
             if item.get("sets") is None:
@@ -4546,7 +4578,8 @@ async def _weekly_sets_by_group(user_id: int, days: list[dict[str, Any]]) -> dic
                 cache[name] = await db.exercise_group_name(user_id, name)
             group = cache[name]
             if group:
-                totals[group] = totals.get(group, 0) + int(item["sets"])
+                shown = seed_data.localized_muscle_group_name(group, lang)
+                totals[shown] = totals.get(shown, 0) + int(item["sets"])
     return totals
 
 

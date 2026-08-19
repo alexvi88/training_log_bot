@@ -34,6 +34,7 @@ from seed_data import (
     BODYWEIGHT_TEMPLATES,
     EXERCISE_TEMPLATES,
     MUSCLE_GROUP_PRESETS,
+    canonical_exercise_name,
     localized_exercise_name,
 )
 
@@ -5393,16 +5394,37 @@ async def delete_program(user_id: int, program_name: str) -> None:
 
 
 async def _find_global_template_by_name(name: str) -> Optional[aiosqlite.Row]:
-    """Case-insensitive (Cyrillic-safe, ё=е) match of a global template by its bare name."""
+    """Case-insensitive (Cyrillic-safe, ё=е) match of a global template by its bare name.
+
+    Имя шаблона в базе — русская идентичность навсегда (`_sync_exercise_templates`),
+    а англоязычному атлету бот показывает перевод. Поэтому сначала пробуем как
+    есть, а потом — как ПОКАЗАННОЕ имя, переведя его обратно в идентичность
+    (`seed_data.canonical_exercise_name`). Без второго шага английское имя из
+    нашего же каталога не резолвилось никуда: в состав программы оно не
+    попадало, а недельный объём по группам считался только по своим
+    упражнениям, и тренер называл атлету заниженное число.
+    """
     cur = await conn().execute(
         "SELECT * FROM exercises WHERE is_template = 1 AND user_id IS NULL"
     )
     rows = await cur.fetchall()
-    needle = _fold_exercise_name(name)
-    for r in rows:
-        if _fold_exercise_name(r["name"] or "") == needle:
-            return r
+    for needle in _exercise_name_candidates(name):
+        for r in rows:
+            if _fold_exercise_name(r["name"] or "") == needle:
+                return r
     return None
+
+
+def _exercise_name_candidates(name: str) -> list[str]:
+    """Свёрнутые имена, под которыми стоит искать шаблон: как дали и как
+    идентичность, если дали показанное (переведённое) имя."""
+    candidates = [_fold_exercise_name(name)]
+    canonical = canonical_exercise_name(name)
+    if canonical is not None:
+        folded = _fold_exercise_name(canonical)
+        if folded not in candidates:
+            candidates.append(folded)
+    return candidates
 
 
 async def get_or_create_user_exercise_by_name(user_id: int, name: str) -> Optional[int]:
