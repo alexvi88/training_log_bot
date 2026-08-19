@@ -125,7 +125,8 @@ if (window.THREE) {
   }
   .result-score { font-size: 20px; color: #ffd700; }
   #result-art {
-    width: 104px; height: 104px; object-fit: cover; border-radius: 12px;
+    width: 104px; height: 104px; object-fit: contain; border-radius: 12px;
+    background: rgba(255,255,255,0.05);
     border: 2px solid rgba(255,215,0,0.4); display: none; margin: 0 auto;
   }
   .result-stats { font-size: 12px; color: #aaa; }
@@ -791,24 +792,47 @@ function setFormationStepsFromGeometries(geoMap) {
   STEP_Z = (d * CHAR_SCALE * (1 + FORM_GAP_RATIO_Z)) / FOLLOWER_Z_SCALE;
 }
 let formCols = 2, formRows = 1, formScale = 1;
-// Насколько широко (в долях TRACK_HALF3, при formScale=1) строю разрешено
-// расползтись вбок, прежде чем фигуры начинают агрессивно мельчать — иначе
-// с широким телом и до 16 колонок толпа выезжает за стены дорожки и на
-// воротах закрывает створки. Нижний потолок формScale опущен с 0.55 до 0.14 —
-// при сотнях бойцов тело мельче старого предела быть ОБЯЗАНО, иначе оно не
-// влезает в кадр целиком (см. camera).
-const FORM_TARGET_HALF_WIDTH = 0.60;
-const FORM_SCALE_MIN = 0.14;
+// Насколько широко (в долях TRACK_HALF3) строю разрешено расползтись вбок:
+// дальше начинаются стены дорожки, а отряд ещё и ходит влево-вправо (см.
+// squadWorldX, ±0.95) — при полной ширине блок вылезал бы за дорожку.
+const FORM_TARGET_HALF_WIDTH = 0.82;
+// РАЗМЕР ФИГУРЫ И ШИРИНА СТРОЯ — ДВЕ РАЗНЫЕ ВЕЛИЧИНЫ, И ЭТО БЫЛО ПЕРЕПУТАНО.
+// Раньше formScale считался от того, на сколько колонок расползся строй, а
+// колонки — от численности с жёстким потолком 16. Итого две беды сразу:
+//   • пока колонок мало (любой отряд меньше ~шестидесяти), деления не
+//     происходило вовсе и фигура рисовалась в ПОЛНЫЙ рост — одиночка выглядел
+//     в разы КРУПНЕЕ бойца в толпе из двухсот;
+//   • упёршись в 16 колонок, строй мог расти только вглубь — семь сотен
+//     превращались в 44 ряда, то есть в длинную кишку «все друг за другом»,
+//     уезжающую за камеру.
+// Теперь правило одно: ПЛОЩАДЬ СТРОЯ НА ПОЛУ ПОСТОЯННА. Масштаб фигуры —
+// корень из численности (formScale ∝ 1/√n), поэтому n фигур площадью s²
+// занимают один и тот же пятак пола при любом n: и двадцать бойцов, и девять
+// сотен стоят одинаковым по габаритам блоком, просто разной «зернистости».
+// Побочный, но важный эффект: глубина блока перестаёт расти с численностью,
+// поэтому кишки за камеру больше не бывает, а камере не нужно всё сильнее
+// отъезжать (см. updateCamera).
+const FORM_SCALE_MAX = 0.36;
+// Численность, на которой фигура ещё полного размера: до неё блок просто
+// меньше, после — начинает мельчать, сохраняя площадь.
+const FORM_SCALE_REF_N = 240;
+// Нижняя клипса — предохранитель (при SQUAD_CAP=999 закон площади до него не
+// доходит), чтобы никакая будущая правка потолка отряда не растворила толпу.
+const FORM_SCALE_MIN = 0.15;
 function updateFormation() {
   const n = followers.length + 1;
-  formCols = clamp(Math.round(Math.sqrt(n * 1.7)), 2, 16);
+  formScale = clamp(FORM_SCALE_MAX * Math.sqrt(FORM_SCALE_REF_N / Math.max(FORM_SCALE_REF_N, n)),
+    FORM_SCALE_MIN, FORM_SCALE_MAX);
+  // Колонки — из ФАКТИЧЕСКОЙ ширины тела при этом масштабе (STEP_X мерится по
+  // геометрии фигуры, см. setFormationStepsFromGeometries), а не из числа на
+  // глаз: строй сначала заполняет разрешённую ширину дорожки и только потом
+  // растёт вглубь. Коэффициент 1.05 при корне делает блок чуть шире, чем
+  // глубже, — камера смотрит вдоль дорожки, и широкий строй читается как строй,
+  // а глубокий как очередь.
+  const stepX = STEP_X * formScale;
+  const colsMax = Math.max(2, Math.floor(1 + 2 * FORM_TARGET_HALF_WIDTH / Math.max(1e-6, stepX)));
+  formCols = clamp(Math.round(1.05 * Math.sqrt(n)), 2, colsMax);
   formRows = Math.ceil(n / formCols);
-  // При n=1 формула колонок всё равно даёт 2 (сетка считается «на будущее»),
-  // но реально занята только одна ячейка — не даём это ложно сжимать одиночного
-  // лидера, поэтому берём фактически занятые колонки, а не формCols целиком.
-  const colsUsed = Math.min(formCols, n);
-  const rawHalfWidth = STEP_X * (colsUsed - 1) / 2;
-  formScale = clamp(rawHalfWidth > 0 ? FORM_TARGET_HALF_WIDTH / rawHalfWidth : 1, FORM_SCALE_MIN, 1);
 }
 function slotFor(i) {
   const row = Math.floor(i / formCols) + 1;
@@ -1271,10 +1295,17 @@ function mkGroup(type, count) {
   // count теперь считается ОТ hp (см. попадание пули в update()), а не
   // наоборот — так цифра над толпой реально тикает по мере того, как отряд
   // её прожигает.
-  const hp = count * hpUnit * hpScale(dist);
+  // hpPerHead — сколько прочности стоит ОДНА голова этой группы здесь и сейчас
+  // (с учётом hpScale от дистанции). Пересчёт видимого числа голов от hp обязан
+  // делиться именно на него: раньше делили на голый hpUnit, и цифра над толпой
+  // стояла на месте всё время, пока hp падал с count*hpUnit*hpScale до
+  // count*hpUnit, — на поздних дистанциях (hpScale до 2.6) это две трети
+  // расстрела «в бетон», и только потом счётчик начинал тикать.
+  const hpPerHead = hpUnit * hpScale(dist);
+  const hp = count * hpPerHead;
   // seed — стабильный на весь забег группы разброс размера особей (см.
   // syncEnemyCrowd): толпа не должна выглядеть клонами одного роста.
-  return { type, count, countMax: count, hp, hpMax: hp, z: ZFAR + rnd(-0.05, 0.05), fireTimer: rnd(0.7, 1.3), seed: rnd(0, 1000) };
+  return { type, count, countMax: count, hp, hpMax: hp, hpPerHead, z: ZFAR + rnd(-0.05, 0.05), fireTimer: rnd(0.7, 1.3), seed: rnd(0, 1000) };
 }
 function spawnWave() {
   // Волна растёт от дистанции, но подпирается мягким потолком от размера
@@ -2520,26 +2551,27 @@ function flash(color, ms) {
   setTimeout(() => { el.style.opacity = 0; }, ms || 200);
 }
 
+// Портрет качка — тот же векторный атлет, что и в раннере. Раньше поверх него
+// подгружалась фотореалистичная картинка из assets/game/<key>.jpg, и в игре
+// жили ДВА разных персонажа: «под фото» на карточке выбора и на экране итога,
+// минималистичная фигура — на дорожке. Теперь один силуэт везде.
+function fighterPortrait(key, px) {
+  const c = document.createElement('canvas');
+  c.width = px; c.height = px;
+  const cc = c.getContext('2d');
+  // Кадрирование: фигура по центру, стопы чуть выше нижнего края, над головой
+  // остаётся воздух — иначе на маленькой карточке подошвы и макушка режутся
+  // рамкой (высота отрисовки атлета ≈ 75px * scale вверх от точки опоры).
+  cc.translate(px * 0.47, px * 0.9);
+  drawAthlete(cc, key, { idle: true, scale: 1.6 * px / 160 });
+  return c;
+}
 (function buildFighterCards() {
   const row = document.getElementById('fighters-row');
   Object.entries(FIGHTERS).forEach(([key, f]) => {
     const card = document.createElement('div');
     card.className = 'fighter-card';
-    const c = document.createElement('canvas');
-    c.width = 160; c.height = 160;
-    const cc = c.getContext('2d');
-    cc.translate(74, 152);
-    drawAthlete(cc, key, { idle: true, scale: 1.85 });
-    const img = new Image();
-    // Абсолютный путь — страница отдаётся с /game/squad, и относительный
-    // 'assets/game/…' резолвился бы в /game/assets/game/… (мимо реального
-    // роута /assets/game/…) — картинки молча падали в 404 и в векторный
-    // фолбэк. Относительный путь оставлен запасным для локального открытия
-    // файла с диска, где своего сервера с роутом /game/squad нет.
-    img.onerror = () => { img.onerror = null; img.src = 'assets/game/' + key + '.jpg'; };
-    img.src = '/assets/game/' + key + '.jpg';
-    img.onload = () => { card.replaceChild(img, c); };
-    card.appendChild(c);
+    card.appendChild(fighterPortrait(key, 200));
     const nm = document.createElement('div');
     nm.className = 'fighter-name'; nm.textContent = f.name;
     card.appendChild(nm);
@@ -2581,16 +2613,10 @@ function die() {
   }, 1000);
 }
 function finishToResult(d, sc, sq) {
+  // Тот же векторный атлет, что и на карточке выбора (см. fighterPortrait).
   const art = document.getElementById('result-art');
-  art.style.display = 'none';
-  art.onload = () => { art.style.display = 'block'; };
-  // Тот же абсолютный путь, что и на карточках выбора (см. buildFighterCards) —
-  // страница живёт на /game/squad, относительный путь резолвился мимо роута.
-  art.onerror = () => {
-    if (art.src.startsWith(location.origin + '/assets/game/')) art.src = 'assets/game/' + selectedFighter + '.jpg';
-    else art.style.display = 'none';
-  };
-  art.src = '/assets/game/' + selectedFighter + '.jpg';
+  art.src = fighterPortrait(selectedFighter, 208).toDataURL();
+  art.style.display = 'block';
   document.getElementById('result-score').textContent = d + ' ' + tr('unit') + ' · 🥤 ' + sc;
   document.getElementById('result-stats').textContent = tr('resultStats') + sq;
   document.getElementById('result-quip').textContent = tr('greeting') + sq + pick(QUIPS);
@@ -2749,7 +2775,11 @@ function update(dt) {
           // видимое число голов пересчитывается от него — так тяжеловес и
           // вожак реально держат несколько секунд огня, а не тают от щелчка.
           hitFg.hp = Math.max(0, hitFg.hp - dmgInt);
-          hitFg.count = Math.min(hitFg.countMax, Math.ceil(hitFg.hp / (def.hpUnit || 1)));
+          // Делим на цену ОДНОЙ головы этой группы (см. hpPerHead в mkGroup),
+          // не на голый hpUnit — иначе счётчик голов не двигается, пока не
+          // сожжён весь множитель живучести от дистанции.
+          const perHead = hitFg.hpPerHead || (def.hpUnit || 1);
+          hitFg.count = Math.min(hitFg.countMax, Math.ceil(hitFg.hp / perHead));
         } else {
           target.hp = Math.max(0, target.hp - dmgInt);
         }
@@ -3028,6 +3058,12 @@ function syncBullets() {
 
 // ── КАМЕРА (сзади-сверху над лидером, лёгкий доворот и толчок на ударах) ────
 let camYaw = 0, camFov = 58;
+// Насколько сильно камера отъезжает именно от ГЛУБИНЫ строя. Единица (столько
+// было) держала в кадре только передние ряды: строй растёт НА камеру, поэтому
+// отъезд обязан опережать глубину, а не идти с ней ноздря в ноздрю — задние
+// ряды иначе срезаются нижним краем кадра. 1.5 проверено на 700 бойцах: блок
+// целиком в кадре с запасом.
+const CAM_DEPTH_FIT = 1.5;
 const FOV_BASE = 58, FOV_GAIN = 5; // "пара градусов" на разгоне — дёшево и заметно
 function updateCamera(dt) {
   const leadX = worldX3(squadWorldX);
@@ -3046,7 +3082,7 @@ function updateCamera(dt) {
   // перспективы уже вертикального при широком экране) и от него считает отъезд.
   const depth = formRows * STEP_Z * FOLLOWER_Z_SCALE * formScale;
   const halfWidth = (formCols - 1) / 2 * STEP_X * TRACK_HALF3 * formScale;
-  const spread = Math.max(depth, halfWidth * 1.7);
+  const spread = Math.max(depth * CAM_DEPTH_FIT, halfWidth * 1.7);
   // Точка взгляда поднята и толпа держится ближе к центру кадра (фигуры
   // выросли ~в полтора раза, см. CHAR_SCALE/STEP_X/STEP_Z) — раньше отряд
   // жался к нижнему краю экрана.
