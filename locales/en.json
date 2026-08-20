@@ -815,6 +815,7 @@
   "program.removed_day": "➖ removing day <b>{name}</b>",
   "program.replaces_tail": "I'll replace your program \"{name}\" with this — its old days get deleted.",
   "program.shared_kind_everywhere": "⤴️ Across the board — {kind}",
+  "program.progression_shared_default": "⤴️ Unless noted under an exercise — {kind}",
   "program.split3.day.0.name": "Chest + Triceps",
   "program.split3.day.1.name": "Back + Biceps",
   "program.split3.day.2.name": "Legs + Shoulders",

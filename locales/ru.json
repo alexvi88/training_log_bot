@@ -815,6 +815,7 @@
   "program.removed_day": "➖ убираю день <b>{name}</b>",
   "program.replaces_tail": "Заменю этим твою программу «{name}» — старая версия её дней удалится.",
   "program.shared_kind_everywhere": "⤴️ Везде {kind}",
+  "program.progression_shared_default": "⤴️ Если под упражнением не сказано иначе — {kind}",
   "program.split3.day.0.name": "Грудь + трицепс",
   "program.split3.day.1.name": "Спина + бицепс",
   "program.split3.day.2.name": "Ноги + плечи",

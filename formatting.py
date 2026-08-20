@@ -6,6 +6,7 @@ are responsible for turning DB rows into the small view dataclasses below.
 
 import datetime as dt
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 from html import escape
 from typing import Callable, Literal, Optional
@@ -1173,18 +1174,42 @@ _PROGRESSION_KIND_KEYS = {
 }
 
 
-def progression_kind_line(days: list[dict]) -> str:
-    """Одна строка про прогрессию на всю программу — или пусто.
+def progression_summary(days: list[dict]) -> tuple[str, Optional[str]]:
+    """(общая строка про прогрессию, тип правила большинства) — или ("", None).
 
-    Пусто в двух случаях: правила разного типа (тогда их печатают поштучно, см.
-    build_ai_program_preview) и одно-единственное упражнение — там повторять
-    нечего, и точная строка со своим шагом полезнее общих слов.
+    Прогрессия — общий принцип программы, а не свойство каждой строки. Шага в
+    превью нет вовсе: «прибавь 2.5кг» под каждым из восьми упражнений — это
+    восемь почти одинаковых строк, в которых тонет сам состав, а конкретный шаг
+    человек всё равно увидит в тренировке, на карточке упражнения.
+
+    Раньше общая строка появлялась только при ПОЛНОМ совпадении типов правил, и
+    одно упражнение с другим типом рушило всё: в живой программе на восемь
+    упражнений семь двойных прогрессий и одна линейная давали семь повторов
+    одной и той же фразы. Теперь берём самый частый тип, пишем его один раз
+    наверху, а под упражнением строка остаётся только у исключений — тех, у кого
+    тип ДРУГОЙ.
+
+    Пусто, когда правило всего одно (повторять нечего) или когда самый частый
+    тип встречается один раз — общая строка тогда не экономит ничего.
     """
-    rules = [(item.get("progression") or {}).get("rule") for day in days for item in day["items"]]
-    if len(rules) < 2 or len(set(rules)) != 1:
-        return ""
-    key = _PROGRESSION_KIND_KEYS.get(rules[0])
-    return i18n.t(key) if key else ""
+    kinds = [
+        (item.get("progression") or {}).get("rule") for day in days for item in day["items"]
+    ]
+    present = [kind for kind in kinds if kind in _PROGRESSION_KIND_KEYS]
+    if len(present) < 2:
+        return "", None
+    top_kind, top_count = Counter(present).most_common(1)[0]
+    if top_count < 2:
+        return "", None
+    kind_text = i18n.t(_PROGRESSION_KIND_KEYS[top_kind])
+    # «Везде» — только когда это правда везде: у всех до единого упражнения тот
+    # же тип. Иначе формулировка честная, её перебивает строка под упражнением.
+    key = (
+        "program.shared_kind_everywhere"
+        if top_count == len(kinds)
+        else "program.progression_shared_default"
+    )
+    return i18n.t(key, kind=kind_text), top_kind
 
 
 def build_program_changes(
@@ -1379,10 +1404,10 @@ def build_ai_program_preview(
     ]
 
     # Прогрессия — общий принцип программы, а не свойство каждой строки: одна
-    # фраза сверху вместо семнадцати почти одинаковых под упражнениями.
-    shared_kind = progression_kind_line(days)
-    if shared_kind:
-        lines.append(i18n.t("program.shared_kind_everywhere", kind=escape(shared_kind)))
+    # фраза сверху вместо восьми почти одинаковых под упражнениями.
+    shared_progression, shared_kind = progression_summary(days)
+    if shared_progression:
+        lines.append(escape(shared_progression))
 
     composition: list[str] = []
     for day in days:
@@ -1391,11 +1416,17 @@ def build_ai_program_preview(
             target = item.get("target")
             suffix = f" — {escape(target)}" if target else ""
             composition.append(f"{i}. {escape(item['name'])}{suffix}")
-            # Поштучно — только когда общей фразы нет: правила разного типа.
-            if not shared_kind:
+            kind = (item.get("progression") or {}).get("rule")
+            if shared_kind is None:
+                # Общей фразы нет — правил в программе одно-два, повторов не
+                # будет, и точная строка со своим шагом полезнее общих слов.
                 prog_note = format_progression_rule(item.get("progression"), unit)
                 if prog_note:
                     composition.append(f"   ⤴️ {escape(prog_note)}")
+            elif kind != shared_kind and kind in _PROGRESSION_KIND_KEYS:
+                # Исключение из общей фразы — тип правила, без шага: шаг человек
+                # увидит в тренировке, а здесь он превращает состав в простыню.
+                composition.append(f"   ⤴️ {escape(i18n.t(_PROGRESSION_KIND_KEYS[kind]))}")
 
     tail = ["", DIVIDER]
     if replaces:
