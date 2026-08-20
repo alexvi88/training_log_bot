@@ -9,6 +9,7 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 from aiogram.enums import ContentType
 from aiogram.types import CallbackQuery
 
@@ -76,6 +77,24 @@ async def test_a_set_typed_with_no_active_workout_points_at_starting_one(fresh_d
     text = reply[0]
     assert "подход" in text.lower()
     kb = kwargs["reply_markup"]
+    assert kb.inline_keyboard[0][0].callback_data == "menu:start_workout"
+
+
+@pytest.mark.parametrize("text", ["15 kg / 90 reps", "10 Kg x 4", "100 кг 8 раз"])
+async def test_a_set_with_unit_words_also_points_at_starting_one(fresh_db, user_id, text):
+    """Живой лог 19.08: англоязычные новички писали подход со словами единиц, и
+    это уходило в поиск упражнений («ничего не нашлось») вместо подсказки —
+    самый массовый тупик первого действия."""
+    message = MagicMock()
+    message.from_user = SimpleNamespace(id=user_id, language_code=None)
+    message.text = text
+    message.content_type = ContentType.TEXT
+    message.reply = AsyncMock()
+
+    await fallback.unhandled_text(message)
+
+    message.reply.assert_awaited_once()
+    kb = message.reply.await_args.kwargs["reply_markup"]
     assert kb.inline_keyboard[0][0].callback_data == "menu:start_workout"
 
 
