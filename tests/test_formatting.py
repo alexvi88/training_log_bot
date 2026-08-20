@@ -1274,9 +1274,10 @@ def test_progression_is_stated_once_even_when_steps_differ():
     assert "прибавь 5" not in text
 
 
-def test_mixed_rule_kinds_still_print_per_exercise():
-    """Общей фразы нет — значит правила разного типа, и каждое стоит рядом со
-    своим упражнением: иначе про одно из них человек не узнает вовсе."""
+def test_two_rule_kinds_each_stand_by_their_own_exercise():
+    """Правил всего два и по одному на упражнение — общая фраза не экономит
+    ничего, и каждое стоит рядом со своим, целиком, вместе с шагом: иначе про
+    одно из них человек не узнает вовсе."""
     days = [
         {"name": "День 1", "items": [
             {"name": "Тяга", "target": "4x3-5",
@@ -1291,6 +1292,31 @@ def test_mixed_rule_kinds_still_print_per_exercise():
     assert "Везде" not in text
     assert "дошёл до 5 повторов — прибавь 2.5кг" in text
     assert "+2.5кг каждую тренировку" in text
+
+
+def test_one_odd_rule_does_not_bring_back_eight_identical_lines():
+    """Живая программа со скриншота: семь двойных прогрессий и одна линейная —
+    и семь повторов одной фразы под упражнениями, потому что общая появлялась
+    только при полном совпадении типов. Теперь общая фраза про большинство, а
+    строка под упражнением — только у исключения."""
+    items = [
+        {"name": "Становая", "target": "3x3-5",
+         "progression": {"rule": "linear_load", "step": 2.5}},
+    ] + [
+        {"name": f"Упражнение {i}", "target": "3x6-12",
+         "progression": {"rule": "double_progression", "reps_top": 12, "step": 2.5 if i % 2 else 5}}
+        for i in range(1, 8)
+    ]
+
+    text = formatting.build_ai_program_preview("Ноги + спина", [{"name": "Ноги", "items": items}], unit="kg")
+
+    assert text.count("двойная прогрессия") == 1
+    assert text.count("линейная прогрессия") == 1
+    # «Везде» тут было бы враньём: одно упражнение живёт по другому правилу.
+    assert "Везде" not in text
+    # Никаких шагов в превью — их человек увидит в самой тренировке.
+    assert "прибавь 2.5" not in text
+    assert "прибавь 5" not in text
 
 
 # ---------- знак у стрелки, лишний ноль, число подходов ----------
