@@ -116,6 +116,42 @@ async def unhandled_text(message: Message) -> None:
     await message.reply(i18n.t("fallback.generic", ai_btn=i18n.t("btn.persistent.ai")))
 
 
+# Кнопки живого трекера. Все они стоят под StateFilter (logging_set/idle), а
+# состояние теряется от любого потока со своим: импорт CSV, мини-игра, опросник
+# тренера. Тренировка при этом жива в базе — и человек, вернувшийся к своему же
+# экрану и нажавший «✅ Закончить упражнение», попадал сюда: тост «кнопка
+# устарела» и главное меню, то есть ровно то, что читается как «тренировку
+# потеряли». Так это и выглядело в логе 19.08 (💀 live:finish_exercise).
+_LIVE_PREFIX = "live:"
+
+
+async def _recover_live_workout(callback: CallbackQuery, state: FSMContext) -> bool:
+    """Кнопка трекера без состояния, но с живой тренировкой — вернуть трекер.
+
+    True — разобрались здесь, общий ответ про устаревшую кнопку не нужен. Экран
+    пересобирается тем же `_enter_live`, что и «Продолжить тренировку»: он
+    поднимает открытые упражнения и остаток плана из базы, когда в FSM их уже
+    нет. Само действие не выполняем — какое упражнение было активным, после
+    потери состояния известно лишь по догадке из базы; человеку возвращается
+    рабочий экран, и второй тап делает то, что он хотел.
+    """
+    if not (callback.data or "").startswith(_LIVE_PREFIX):
+        return False
+    message = getattr(callback, "message", None)
+    # InaccessibleMessage (слишком старое или удалённое сообщение) не умеет
+    # `answer`, а `_enter_live` отправляет через него новый экран.
+    if message is None or not hasattr(message, "answer"):
+        return False
+    workout = await db.get_active_workout(callback.from_user.id)
+    if workout is None:
+        return False
+    from handlers.workout import _enter_live
+
+    await callback.answer(i18n.t("fallback.workout_recovered"))
+    await _enter_live(callback, state, workout["id"], delete_message=False)
+    return True
+
+
 @router.callback_query()
 async def unhandled_callback(callback: CallbackQuery, state: FSMContext) -> None:
     """Кнопка с экрана, чей поток уже закончился.
@@ -137,6 +173,8 @@ async def unhandled_callback(callback: CallbackQuery, state: FSMContext) -> None
         await activity_log.record_unhandled_callback(callback)
     except Exception:
         logger.exception("Failed to log unhandled callback")
+    if await _recover_live_workout(callback, state):
+        return
     await callback.answer(i18n.t("fallback.stale_button"))
     if callback.message is None:  # pragma: no cover — Telegram всегда даёт message
         return
