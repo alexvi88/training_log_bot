@@ -666,6 +666,7 @@
   "import.uploading": "⏳ Загружаю тренировки, момент...",
   "import.wrong_extension": "Пришли файл с расширением .csv",
   "input.bodyweight_invalid": "Не понял вес. Напиши число, например 80 или 80.5",
+  "input.bodyweight_wrong_unit": "{unit, select, lb {Твои единицы — фунты. Напиши вес в lb} other {Твои единицы — килограммы. Напиши вес в кг}} — или переключи их в настройках.",
   "input.bodyweight_out_of_range": "Странный вес — напиши реальное число в кг/lb",
   "input.bodyweight_warning_big": "Подозрительно большой вес — лишний ноль?",
   "input.bodyweight_warning_small": "Подозрительно маленький вес — лишний ноль?",

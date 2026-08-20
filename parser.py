@@ -29,6 +29,11 @@ class ParsedSet:
     reps: int
     weight_omitted: bool = False  # bare reps, e.g. "8" — caller may fill weight from the previous set
     rpe: float | None = None  # optional "@9" suffix; applies to every set produced by the token
+    # Человек сам назвал единицы («15 kg / 90 reps», «8 повторов»), то есть роли
+    # чисел он указал словами, а не порядком. Вопрос «не перепутаны ли вес и
+    # повторы» после такого ввода отвечает на вопрос, которого не было — см.
+    # handlers.workout._weight_confirm_prompt.
+    unit_explicit: bool = False
 
 
 _SEP = r"[xXхХ*/-]"
@@ -129,6 +134,7 @@ def parse_single_token(token: str) -> list[ParsedSet]:
     этот токен проходит и живой трекер, и правка подхода, и разбор строки с
     несколькими подходами.
     """
+    unit_explicit = bool(_UNIT_WORDS_RE.search(token))
     text = strip_unit_words(token)
     if not text:
         raise ParseError(examples_hint())
@@ -141,7 +147,12 @@ def parse_single_token(token: str) -> list[ParsedSet]:
         if reps > MAX_REPS:
             raise ParseError(i18n.t("input.reps_too_many", max=MAX_REPS))
         rpe = _parse_rpe(bw_match.group("rpe"))
-        return [ParsedSet(weight=0.0, reps=reps, weight_omitted=True, rpe=rpe)]
+        return [
+            ParsedSet(
+                weight=0.0, reps=reps, weight_omitted=True, rpe=rpe,
+                unit_explicit=unit_explicit,
+            )
+        ]
 
     match = _X_SEP_RE.match(text) or _SPACE_SEP_RE.match(text)
     if not match:
@@ -161,7 +172,10 @@ def parse_single_token(token: str) -> list[ParsedSet]:
     if not (0 < count <= MAX_SETS_PER_TOKEN):
         raise ParseError(i18n.t("input.set_count_range", max=MAX_SETS_PER_TOKEN))
 
-    return [ParsedSet(weight=weight, reps=reps, rpe=rpe) for _ in range(count)]
+    return [
+        ParsedSet(weight=weight, reps=reps, rpe=rpe, unit_explicit=unit_explicit)
+        for _ in range(count)
+    ]
 
 
 # "2: 100 8" — replace the 2nd already-logged set of the active exercise.
@@ -239,16 +253,41 @@ def parse_bodyweight(text: str) -> float:
     return weight
 
 
+# Слова единиц веса по коду единицы аккаунта — отдельно от общего
+# _UNIT_WORDS_RE: в дневнике веса важно не просто срезать слово, а понять, СВОЯ
+# единица названа или чужая.
+_BODYWEIGHT_UNIT_WORDS = {
+    "kg": rf"(?<!{_LETTER})(?:kgs?|kilo|kilos|kilograms?|кг|килограмм\w*)(?!{_LETTER})\.?",
+    "lb": rf"(?<!{_LETTER})(?:lbs?|pounds?|фунт\w*)(?!{_LETTER})\.?",
+}
+_BODYWEIGHT_UNIT_RES = {
+    unit: re.compile(pattern, re.IGNORECASE) for unit, pattern in _BODYWEIGHT_UNIT_WORDS.items()
+}
+
+
 def parse_bodyweight_entry(
-    text: str, today: dt.date | None = None
+    text: str, today: dt.date | None = None, unit: str = "kg"
 ) -> tuple[float, dt.date | None]:
-    """Вес и, если он указан, день взвешивания: «82.5» или «82.5 01.08.2026».
+    """Вес и, если он указан, день взвешивания: «82.5», «82.5 kg», «82.5 01.08.2026».
 
     Дневник веса — про динамику, а начать её можно было только с сегодняшнего
     дня: всё, что человек взвешивал до бота, внести было нельзя. Дата
     необязательна и стоит после числа — обычный ввод не меняется.
+
+    `unit` — единица аккаунта. «82 kg» у человека с килограммами это тот же
+    самый вес, и отказывать тут не за что: раньше «kg» уходило в разбор даты, и
+    на ввод веса бот отвечал «не понял дату, пиши ДД.ММ.ГГГГ» — ответ на вопрос,
+    которого никто не задавал. А вот ЧУЖАЯ единица («180 lbs» при килограммах) —
+    это отказ с прямым текстом: молча записать 180 кг нельзя, и никакая проверка
+    правдоподобия этого не поймает (180 внутри человеческого диапазона).
     """
     raw = text.strip()
+    for other, pattern in _BODYWEIGHT_UNIT_RES.items():
+        if other != unit and pattern.search(raw):
+            raise ParseError(i18n.t("input.bodyweight_wrong_unit", unit=unit))
+    own = _BODYWEIGHT_UNIT_RES.get(unit)
+    if own is not None:
+        raw = " ".join(own.sub(" ", raw).split())
     parts = raw.split(maxsplit=1)
     if len(parts) == 2:
         return parse_bodyweight(parts[0]), parse_ru_date(parts[1], today=today)
