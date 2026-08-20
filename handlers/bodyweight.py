@@ -248,7 +248,9 @@ def _logged_at_for(date: dt.date | None) -> str | None:
 async def bw_weight_entered(message: Message, state: FSMContext):
     user = await db.get_user(message.from_user.id)
     try:
-        weight, date = parse_bodyweight_entry(message.text, today=timeutil.user_today(user))
+        weight, date = parse_bodyweight_entry(
+            message.text, today=timeutil.user_today(user), unit=user["unit"]
+        )
     except ParseError as e:
         await ui.reply_transient(message, e.message)
         return

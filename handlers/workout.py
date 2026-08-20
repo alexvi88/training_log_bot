@@ -1822,13 +1822,19 @@ async def _recovery_line(user_id: int, groups, as_of: dt.date | None = None) -> 
         day, sets_done = entry
         percent = analytics.recovery_percent(dt.date.fromisoformat(day), sets_done, today)
         if percent < _RECOVERY_MENTION_BELOW:
+            # Имя группы кладём идентичностью, локализуем на рендере ниже:
+            # сравнение со _RECOVERY_SKIP_GROUPS выше идёт по ней же.
             spent.append((percent, group["name"]))
     if not spent:
         return ""
     spent.sort()
     shown = spent[:_RECOVERY_MAX_MENTIONS]
     lines = "\n".join(
-        i18n.t("workout.recovery_line_item", name=escape(name.lower()), percent=percent)
+        i18n.t(
+            "workout.recovery_line_item",
+            name=escape(formatting.format_group_lower(name)),
+            percent=percent,
+        )
         for percent, name in shown
     )
     return f"{i18n.t('workout.recovery_header')}\n{lines}"
@@ -2430,7 +2436,11 @@ def _resolve_parsed_weights(data: dict, active: int, parsed: list[ParsedSet]) ->
     resolved: list[ParsedSet] = []
     for ps in parsed:
         weight = prev_weight if (ps.weight_omitted and prev_weight) else ps.weight
-        resolved.append(ParsedSet(weight=weight, reps=ps.reps, rpe=ps.rpe))
+        resolved.append(
+            ParsedSet(
+                weight=weight, reps=ps.reps, rpe=ps.rpe, unit_explicit=ps.unit_explicit
+            )
+        )
         prev_weight = weight
     return resolved
 
@@ -2502,6 +2512,14 @@ def _weight_confirm_prompt(
         warning = _suspicious_weight_warning(last_session, [*done_today, (ps.weight, ps.reps)], unit)
         if warning:
             return warning
+        # Вопрос про повторы — про перепутанные местами числа, и он уместен, пока
+        # роли чисел заданы порядком. «15 kg / 90 reps» задаёт их словами:
+        # спрашивать «не перепутал ли вес и повторы» у человека, который только
+        # что написал, где вес и где повторы, — отвечать на незаданный вопрос
+        # (живой QA поймал это на первом же вводе). Проверка веса остаётся: она
+        # про величину на фоне истории, а не про порядок чисел.
+        if ps.unit_explicit:
+            continue
         warning = _suspicious_reps_warning(ps.weight, ps.reps)
         if warning:
             return warning

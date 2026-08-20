@@ -666,6 +666,7 @@
   "import.uploading": "⏳ Uploading workouts, one moment...",
   "import.wrong_extension": "Send a file with a .csv extension",
   "input.bodyweight_invalid": "Didn't catch the weight. Write a number, like 80 or 80.5",
+  "input.bodyweight_wrong_unit": "{unit, select, lb {Your unit is pounds. Write the weight in lb} other {Your unit is kilograms. Write the weight in kg}} — or switch it in Settings.",
   "input.bodyweight_out_of_range": "That weight looks off — write a real number in kg/lb.",
   "input.bodyweight_warning_big": "That's a big body weight — extra zero?",
   "input.bodyweight_warning_small": "That's a small body weight — missing a digit?",
