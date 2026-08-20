@@ -6,6 +6,7 @@ import datetime as dt
 import json
 import logging
 import secrets
+import time
 from contextlib import suppress
 from html import escape
 from typing import Any, Callable, Optional, Sequence
@@ -2329,8 +2330,20 @@ async def _handle_question(
         running_task = asyncio.create_task(
             display.cycle_idle() if display else progress_ui.run_progress(placeholder, ask_task, progress_stages)
         )
-        answer = await ask_task
+        # Дедлайн на весь ход, а не на вызов модели: у каждого вызова свои 90
+        # секунд (config.AI_REQUEST_TIMEOUT_SECONDS), но раундов с инструментами
+        # до MAX_TOOL_ROUNDS+1, и арифметика разрешала молчать минутами. Живой
+        # прогон 20.08 поймал именно это: «GOT THE QUESTION», крутящийся
+        # placeholder и ни ответа, ни ошибки. wait_for снимает задачу, а
+        # обработчик ниже показывает честное «не смог» с клавиатурой.
+        started_at = time.monotonic()
+        answer = await asyncio.wait_for(ask_task, timeout=config.AI_TOTAL_ANSWER_SECONDS)
+        logger.info(
+            "AI trainer answered user %s in %.1fs", user_id, time.monotonic() - started_at
+        )
     except Exception:
+        # Время в лог и на таймауте: без него «почему молчал» не разобрать по
+        # логам вообще никак — а это первое, что спрашивают после жалобы.
         logger.exception("AI trainer request failed for user %s", user_id)
         error_text = i18n.t("ai.screen.answer_failed")
         error_kb = await ai_keyboard(user_id)

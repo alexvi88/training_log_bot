@@ -2218,3 +2218,43 @@ async def test_a_link_to_a_different_program_still_shows_up(fresh_db, user_id):
     )
 
     assert any(cb.startswith("rt:prg:") for cb in _callbacks(kb))
+
+
+# ---------- дедлайн на весь ответ (находка 44 живого прогона) ----------
+
+
+async def test_a_hanging_model_ends_with_an_honest_message_not_silence(
+    fresh_db, user_id, monkeypatch
+):
+    """Живой прогон 20.08: «GOT THE QUESTION», крутящийся placeholder и ни
+    ответа, ни ошибки — дольше двух минут. У вызова модели таймаут свой, а у
+    ХОДА не было никакого: раундов с инструментами до семи, и арифметика
+    разрешала молчать десять минут."""
+    import config
+    import ui
+
+    monkeypatch.setattr(ai_trainer.ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(ui.chat_bottom, "is_at_bottom", lambda *a, **k: False)
+    monkeypatch.setattr(config, "AI_TOTAL_ANSWER_SECONDS", 0.05)
+
+    async def never_answers(uid, question, history, **kwargs):
+        await asyncio.sleep(60)
+        return "так и не пришло"
+
+    monkeypatch.setattr(ai_trainer.ai_trainer, "ask", never_answers)
+
+    state = await _make_state(user_id)
+    callback = _make_buildprog_callback(user_id)
+
+    await ai_trainer.ai_build_program(callback, state)
+
+    # Экран «думаю…» — это ответ intro-экрана (см. _make_buildprog_callback),
+    # и именно его правят честным «не смог».
+    intro = callback.message.answer.return_value
+    edited = intro.answer.return_value.edit_text.await_args
+    assert "⚠️" in edited.args[0]
+    assert edited.kwargs["reply_markup"] is not None
+    # Бронь снята — следующий вопрос не упирается в «ещё думаю».
+    assert user_id not in ai_trainer._busy
+    # Вопрос не списан: сорвавшийся ход не должен стоить человеку квоты.
+    assert await fresh_db.get_ai_question_count_today(user_id) == 0
