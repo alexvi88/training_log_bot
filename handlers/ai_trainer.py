@@ -1644,9 +1644,18 @@ async def _announce_saved(
         # отдельных (см. A8: старый текст обещал поведение, которого никогда
         # не было).
         text = i18n.t("ai.screen.saved.added_multi", name=escape(name), days=day_count)
+    # День, с которого начинать: у свежей программы это первый, у правки
+    # существующей — тот, до которого дошла очередь (db.next_program_day).
+    next_day = await db.next_program_day(program_id)
     with suppress(TelegramBadRequest):
         await callback.message.edit_text(
-            text, parse_mode="HTML", reply_markup=keyboards.ai_program_saved_keyboard(program_id)
+            text,
+            parse_mode="HTML",
+            reply_markup=keyboards.ai_program_saved_keyboard(
+                program_id,
+                start_routine_id=next_day["id"] if next_day is not None else None,
+                start_day_name=next_day["name"] if next_day is not None and day_count > 1 else None,
+            ),
         )
     await callback.answer(i18n.t("ai.screen.saved.done"))
 

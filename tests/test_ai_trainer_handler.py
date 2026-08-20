@@ -1751,9 +1751,11 @@ async def test_program_gone_alert_does_not_ask_to_rebuild_a_saved_program():
     assert "🗂 Программы" in ai_trainer._PROGRAM_GONE
 
 
-async def test_saved_announcement_offers_opening_the_program(fresh_db, user_id):
-    """Текст говорил «ищи в «🗂 Программы»», хотя бот и так знает, что только
-    что сохранил — первая кнопка открывает программу напрямую."""
+async def test_saved_announcement_starts_the_first_day_right_away(fresh_db, user_id):
+    """Программу заказывают, чтобы по ней пойти, а до первого подхода было три
+    тапа (открыть программу → выбрать день → начать). Первая кнопка — сразу
+    тренировка по дню, до которого дошла очередь; открыть программу можно
+    второй."""
     state = await _make_state(user_id)
     await state.update_data(ai_program_draft=_draft(days=2))
     callback = _make_callback(user_id, "ai:prog:save:1")
@@ -1761,10 +1763,30 @@ async def test_saved_announcement_offers_opening_the_program(fresh_db, user_id):
     await ai_trainer.ai_program_save(callback, state)
 
     (program,) = await fresh_db.list_programs(user_id)
+    days = await fresh_db.list_program_days_by_id(program["id"])
     kb = callback.message.edit_text.await_args.kwargs["reply_markup"]
     callbacks = _callbacks(kb)
-    assert callbacks[0] == f"rt:prg:{program['id']}"
+    assert callbacks[0] == f"rt:start:{days[0]['id']}"
+    # На многодневке кнопка называет день: «▶️ Начать» на сплите из четырёх дней
+    # не говорит, какой из них откроется.
+    assert days[0]["name"] in kb.inline_keyboard[0][0].text
+    assert callbacks[1] == f"rt:prg:{program['id']}"
     assert "rt:manage" in callbacks
+
+
+async def test_single_day_program_starts_without_naming_the_day(fresh_db, user_id):
+    """У однодневной имя дня на кнопке — шум: выбирать не из чего."""
+    state = await _make_state(user_id)
+    await state.update_data(ai_program_draft=_draft(days=1))
+    callback = _make_callback(user_id, "ai:prog:save:1")
+
+    await ai_trainer.ai_program_save(callback, state)
+
+    (program,) = await fresh_db.list_programs(user_id)
+    (day,) = await fresh_db.list_program_days_by_id(program["id"])
+    kb = callback.message.edit_text.await_args.kwargs["reply_markup"]
+    assert _callbacks(kb)[0] == f"rt:start:{day['id']}"
+    assert day["name"] not in kb.inline_keyboard[0][0].text
 
 
 async def test_saving_a_single_day_does_not_promise_any_of_the_days(fresh_db, user_id):

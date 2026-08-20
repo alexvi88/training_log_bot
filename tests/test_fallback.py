@@ -9,6 +9,7 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 from aiogram.enums import ContentType
 from aiogram.types import CallbackQuery
 
@@ -76,6 +77,24 @@ async def test_a_set_typed_with_no_active_workout_points_at_starting_one(fresh_d
     text = reply[0]
     assert "подход" in text.lower()
     kb = kwargs["reply_markup"]
+    assert kb.inline_keyboard[0][0].callback_data == "menu:start_workout"
+
+
+@pytest.mark.parametrize("text", ["15 kg / 90 reps", "10 Kg x 4", "100 кг 8 раз"])
+async def test_a_set_with_unit_words_also_points_at_starting_one(fresh_db, user_id, text):
+    """Живой лог 19.08: англоязычные новички писали подход со словами единиц, и
+    это уходило в поиск упражнений («ничего не нашлось») вместо подсказки —
+    самый массовый тупик первого действия."""
+    message = MagicMock()
+    message.from_user = SimpleNamespace(id=user_id, language_code=None)
+    message.text = text
+    message.content_type = ContentType.TEXT
+    message.reply = AsyncMock()
+
+    await fallback.unhandled_text(message)
+
+    message.reply.assert_awaited_once()
+    kb = message.reply.await_args.kwargs["reply_markup"]
     assert kb.inline_keyboard[0][0].callback_data == "menu:start_workout"
 
 
@@ -203,3 +222,77 @@ async def test_service_messages_get_no_answer_at_all():
     await fallback.unhandled_text(message)
 
     message.reply.assert_not_awaited()
+
+
+# ---------- живая тренировка не теряется от мёртвой кнопки трекера ----------
+#
+# Все кнопки трекера стоят под StateFilter, а состояние теряется от любого
+# потока со своим: импорт CSV, мини-игра, опросник тренера. Тренировка при этом
+# жива в базе, и человек, нажавший на своём же экране «✅ Закончить упражнение»,
+# получал тост «кнопка устарела» и главное меню — то есть ровно то, что читается
+# как «тренировку потеряли». В логе 19.08 это 💀 live:finish_exercise.
+
+
+async def _live_state(user_id: int):
+    from aiogram.fsm.context import FSMContext
+    from aiogram.fsm.storage.base import StorageKey
+    from aiogram.fsm.storage.memory import MemoryStorage
+
+    return FSMContext(
+        storage=MemoryStorage(), key=StorageKey(bot_id=1, chat_id=user_id, user_id=user_id)
+    )
+
+
+async def test_tracker_button_without_state_brings_the_workout_back(fresh_db, user_id):
+    group_id = await fresh_db.create_muscle_group(user_id, "Грудь")
+    ex_id = await fresh_db.create_exercise(user_id, "Жим лёжа", group_id)
+    workout_id = await fresh_db.create_workout(user_id)
+    block_id = await fresh_db.create_block(workout_id, "single")
+    await fresh_db.add_block_exercise(block_id, ex_id, 0)
+    await fresh_db.add_set(block_id, ex_id, 1, 0, 100.0, 8)
+
+    callback = _callback(user_id, "live:finish_exercise")
+    # `_enter_live` отправляет новый экран через `message.answer` — ответ должен
+    # выглядеть как настоящее сообщение (у него читают chat.id и message_id).
+    callback.message.answer = AsyncMock(
+        return_value=SimpleNamespace(message_id=11, chat=SimpleNamespace(id=user_id))
+    )
+    callback.bot = AsyncMock()
+    callback.bot.send_message = AsyncMock(
+        return_value=SimpleNamespace(message_id=12, chat=SimpleNamespace(id=user_id))
+    )
+    state = await _live_state(user_id)
+
+    await fallback.unhandled_callback(callback, state)
+
+    # Экран трекера пересобран, и состояние снова знает про тренировку.
+    data = await state.get_data()
+    assert data["workout_id"] == workout_id
+    assert data["open_exercises"] == [ex_id]
+    # Тост — про возвращённую тренировку, а не про устаревшую кнопку.
+    toast = callback.answer.await_args.args[0]
+    assert "устарел" not in toast.lower()
+
+
+async def test_tracker_button_without_a_workout_still_opens_the_menu(fresh_db, user_id):
+    """Тренировки нет — восстанавливать нечего, остаётся прежний ответ."""
+    callback = _callback(user_id, "live:finish_exercise")
+    state = await _live_state(user_id)
+
+    await fallback.unhandled_callback(callback, state)
+
+    assert (await state.get_data()).get("workout_id") is None
+    callback.answer.assert_awaited_once()
+
+
+async def test_recovery_is_only_for_tracker_buttons(fresh_db, user_id):
+    """Кнопка не из трекера при живой тренировке ведёт себя как раньше: у
+    протухших экранов сотни префиксов, и подменять им всем ответ на «вернул
+    тренировку» значило бы врать про то, куда человек нажал."""
+    await fresh_db.create_workout(user_id)
+    callback = _callback(user_id, "pick:grp:7")
+    state = await _live_state(user_id)
+
+    await fallback.unhandled_callback(callback, state)
+
+    assert (await state.get_data()).get("workout_id") is None

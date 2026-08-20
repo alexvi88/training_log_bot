@@ -5,6 +5,7 @@ import re
 
 import pytest
 
+import parser
 from parser import (
     MAX_REPS,
     MAX_SETS_PER_LINE,
@@ -370,3 +371,52 @@ def test_set_edit_rejects_a_count_suffix():
 def test_set_edit_propagates_bad_token_errors():
     with pytest.raises(ParseError, match=_HINT_RE):
         parse_set_edit("2: not a set")
+
+
+# ---------- слова-единицы в свободном вводе ----------
+#
+# Живой лог за 19.08: у англоязычных новичков это самый массовый тупик. «15 kg /
+# 90 reps» разбор не понимал, строка уходила в поиск упражнений и возвращалась
+# «ничего не нашлось» — а `_looks_like_a_set` спрашивает тот же разбор, поэтому
+# не показывалась даже подсказка «сначала выбери упражнение».
+
+@pytest.mark.parametrize(
+    "text,weight,reps",
+    [
+        ("15 kg / 90 reps", 15.0, 90),
+        ("10 Kg x 4", 10.0, 4),
+        ("15kg 90", 15.0, 90),
+        ("100 кг 8 раз", 100.0, 8),
+        ("60 lbs x 12", 60.0, 12),
+        ("80 kilograms 5", 80.0, 5),
+    ],
+)
+def test_unit_words_do_not_break_a_set(text, weight, reps):
+    (parsed,) = parse_sets_line(text)
+    assert (parsed.weight, parsed.reps) == (weight, reps)
+    assert parsed.weight_omitted is False
+
+
+@pytest.mark.parametrize("text,reps", [("90 reps", 90), ("8 повторов", 8), ("12 раз", 12)])
+def test_bare_reps_survive_their_own_label(text, reps):
+    """«8 повторов» — это свой вес на 8 повторов, а не вес 8."""
+    (parsed,) = parse_sets_line(text)
+    assert (parsed.reps, parsed.weight_omitted) == (reps, True)
+
+
+@pytest.mark.parametrize("text", ["3 sets x 10", "3 подхода по 10", "kg", "reps"])
+def test_ambiguous_or_empty_stays_an_honest_error(text):
+    """«sets»/«подходов» не срезаем: «3 sets x 10» превратилось бы в «3 x 10» —
+    три килограмма на десять повторов. Молча неверная запись хуже отказа."""
+    with pytest.raises(ParseError):
+        parse_sets_line(text)
+
+
+def test_unit_words_are_not_cut_out_of_real_words():
+    assert parser.strip_unit_words("kgb 100 8") == "kgb 100 8"
+    assert parser.strip_unit_words("прораз 100 8") == "прораз 100 8"
+
+
+def test_unit_stripping_leaves_every_old_form_alone():
+    for text in ("100 8", "100x8x3", "+20 8@9", "102,5 8", "8"):
+        assert parser.strip_unit_words(text) == text

@@ -413,15 +413,36 @@ def ai_setup_question_keyboard(
     return b.as_markup()
 
 
-def ai_program_saved_keyboard(program_id: int) -> InlineKeyboardMarkup:
-    """После сохранения программы — прямая дорога в неё саму и в общий список.
+def ai_program_saved_keyboard(
+    program_id: int,
+    start_routine_id: int | None = None,
+    start_day_name: str | None = None,
+) -> InlineKeyboardMarkup:
+    """После сохранения программы — сразу тренироваться, открыть её или в список.
 
-    «Открыть программу» первой: текст над клавиатурой говорит «ищи в
+    «Начать» первой и до всего остального: программу заказывают, чтобы по ней
+    пойти, а дорога к первому подходу была в три тапа (открыть программу →
+    выбрать день → начать). В логе это видно как обрыв ровно на сохранении:
+    программу забрали, тренировку не начал никто.
+
+    `start_day_name` — имя дня, с которого начинать (db.next_program_day). У
+    многодневки оно на кнопке: «▶️ Начать» без имени на сплите из четырёх дней
+    не говорит, какой из них откроется. У однодневной имя — это шум, там
+    обычное «▶️ Начать тренировку».
+
+    «Открыть программу» второй: текст над клавиатурой говорит «ищи в
     «🗂 Программы»», но искать там нечего — бот и так знает, что только что
-    сохранил. rt:prg: живёт без StateFilter, так что срабатывает и из
+    сохранил. rt:start:/rt:prg: живут без StateFilter, так что срабатывают и из
     состояния чата с тренером.
     """
     b = InlineKeyboardBuilder()
+    if start_routine_id is not None:
+        label = (
+            i18n.t("btn.start_program_day", day=suggest_button_label(start_day_name))
+            if start_day_name
+            else i18n.t("btn.start_workout")
+        )
+        b.button(text=label, callback_data=f"rt:start:{start_routine_id}")
     b.button(text=i18n.t("btn.open_program"), callback_data=f"rt:prg:{program_id}")
     b.button(text=i18n.t("btn.to_programs"), callback_data="rt:manage")
     b.adjust(1)
