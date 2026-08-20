@@ -159,6 +159,15 @@ GROK_BASE_URL = os.getenv("GROK_BASE_URL", "https://api.x.ai/v1")
 # cycling the whole time, so it doesn't even look broken.
 AI_REQUEST_TIMEOUT_SECONDS = float(os.getenv("AI_REQUEST_TIMEOUT_SECONDS", "90"))
 
+# Потолок на ВЕСЬ ответ, а не на один вызов. Один вопрос — это до
+# MAX_TOOL_ROUNDS+1 обращений к модели, у каждого свои 90 секунд, плюс живой
+# поиск со своим таймаутом: арифметика разрешает молчать десять минут, и живой
+# прогон это поймал — placeholder крутился, ответа не было, человек ушёл.
+# Отдельный дедлайн на весь ход превращает бесконечное молчание в честное
+# «не смог» с кнопками. Щедрый нарочно: сборка программы с поиском реально
+# бывает долгой, и убивать её на 90 секундах нельзя.
+AI_TOTAL_ANSWER_SECONDS = float(os.getenv("AI_TOTAL_ANSWER_SECONDS", "300"))
+
 # Как часто накопленный текст ответа уходит в черновик во время стриминга
 # (см. ai_trainer._completion_round). Не на каждый токен: каждый флаш — это
 # запрос sendMessageDraft, а у Telegram свои лимиты на частоту. Мельче шаг —
