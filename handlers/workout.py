@@ -1583,10 +1583,15 @@ async def _reopen_exercises(
             last = current_sets[-1]
             last_by_exercise[ex_id] = (last["weight"], last["reps"])
         else:
-            history = await db.list_sets_for_exercise(ex_id)
-            if history:
-                last = history[-1]
-                last_by_exercise[ex_id] = (last["weight"], last["reps"])
+            # Первый подход прошлой тренировки, не последний — тем же правилом,
+            # что и ряд «тот же вес» (_reps_row_basis): последний подход прошлого
+            # раза уже скидка от усталости, предлагать её стартовым весом для
+            # bare-reps ввода («9» без веса) значило бы звать начать слабее, чем
+            # человек начал в прошлый раз.
+            prev_session = last_session_sets.get(ex_id)
+            if prev_session:
+                weight, reps, _rpe = prev_session[0]
+                last_by_exercise[ex_id] = (weight, reps)
     return open_exercises, open_blocks, last_session_sets, last_by_exercise, weight_steps
 
 
@@ -2300,11 +2305,15 @@ async def pick_longname_declined(callback: CallbackQuery, state: FSMContext):
 
 
 async def _seed_last_value(data: dict, ex_id: int) -> dict:
-    history = await db.list_sets_for_exercise(ex_id)
+    # Первый подход прошлой тренировки, не последний — та же причина, что и в
+    # _reopen_exercises и в _reps_row_basis: последний подход прошлого раза уже
+    # скидка от усталости, а bare-reps ввод («9» без веса) должен подхватывать
+    # рабочий вес, с которым подходят к снаряду, а не откатный.
+    last_session, _step = await _exercise_history(ex_id)
     last_by = dict(data.get("last_by_exercise") or {})
-    if history:
-        last = history[-1]
-        last_by[ex_id] = (last["weight"], last["reps"])
+    if last_session:
+        weight, reps, _rpe = last_session[0]
+        last_by[ex_id] = (weight, reps)
     return last_by
 
 
