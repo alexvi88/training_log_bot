@@ -168,12 +168,26 @@ async def unhandled_callback(callback: CallbackQuery, state: FSMContext) -> None
     # обработчика (сам callback в dp.errors не попадает), и по которому можно
     # отличить редкую протухшую кнопку от вспышки одного префикса — регресса
     # роутинга (см. db.count_unhandled_callbacks_by_prefix).
-    logger.info("Unhandled callback %s from user %s", callback.data, callback.from_user.id)
+    # Сначала выясняем, вернём ли мы тренировку: от этого зависит и вид события
+    # в логе. Под общим «протухшая кнопка» восстановленный тап навсегда выглядел
+    # бы регрессом роутинга — в /activity, в утреннем разборе и в счётчике
+    # префиксов (db.count_unhandled_callbacks_by_prefix), — хотя человек получил
+    # рабочий экран.
+    recovered = await _recover_live_workout(callback, state)
+    logger.info(
+        "%s callback %s from user %s",
+        "Recovered" if recovered else "Unhandled",
+        callback.data,
+        callback.from_user.id,
+    )
     try:
-        await activity_log.record_unhandled_callback(callback)
+        if recovered:
+            await activity_log.record_recovered_callback(callback)
+        else:
+            await activity_log.record_unhandled_callback(callback)
     except Exception:
-        logger.exception("Failed to log unhandled callback")
-    if await _recover_live_workout(callback, state):
+        logger.exception("Failed to log callback")
+    if recovered:
         return
     await callback.answer(i18n.t("fallback.stale_button"))
     if callback.message is None:  # pragma: no cover — Telegram всегда даёт message

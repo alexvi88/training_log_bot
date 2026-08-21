@@ -13,6 +13,7 @@ import pytest
 from aiogram.enums import ContentType
 from aiogram.types import CallbackQuery
 
+import activity_log
 from handlers import fallback
 
 
@@ -272,10 +273,19 @@ async def test_tracker_button_without_state_brings_the_workout_back(fresh_db, us
     # Тост — про возвращённую тренировку, а не про устаревшую кнопку.
     toast = callback.answer.await_args.args[0]
     assert "устарел" not in toast.lower()
+    # И в логе это своё событие, а не «протухшая кнопка»: под общим видом
+    # спасённый тап навсегда читался бы как регресс роутинга — и в /activity, и
+    # в утреннем разборе (он два дня подряд подавал это как баг).
+    (event,) = await fresh_db.list_user_events(user_id, limit=10)
+    assert event["kind"] == activity_log.KIND_CALLBACK_RECOVERED
+    assert event["content"] == "live:finish_exercise"
+    assert await fresh_db.count_unhandled_callbacks_by_prefix("2000-01-01") == []
 
 
 async def test_tracker_button_without_a_workout_still_opens_the_menu(fresh_db, user_id):
-    """Тренировки нет — восстанавливать нечего, остаётся прежний ответ."""
+    """Тренировки нет — восстанавливать нечего, остаётся прежний ответ. И в логе
+    это по-прежнему протухшая кнопка: счётчик префиксов ловит регресс роутинга
+    ровно по таким событиям, и прятать их нельзя."""
     callback = _callback(user_id, "live:finish_exercise")
     state = await _live_state(user_id)
 
@@ -283,6 +293,10 @@ async def test_tracker_button_without_a_workout_still_opens_the_menu(fresh_db, u
 
     assert (await state.get_data()).get("workout_id") is None
     callback.answer.assert_awaited_once()
+    (event,) = await fresh_db.list_user_events(user_id, limit=10)
+    assert event["kind"] == activity_log.KIND_CALLBACK_UNHANDLED
+    counted = await fresh_db.count_unhandled_callbacks_by_prefix("2000-01-01")
+    assert [(r["prefix"], r["n"]) for r in counted] == [("live:finish_exercise", 1)]
 
 
 async def test_recovery_is_only_for_tracker_buttons(fresh_db, user_id):

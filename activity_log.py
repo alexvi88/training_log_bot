@@ -41,6 +41,12 @@ KIND_CALLBACK = "callback"
 # ответил между ними — только в /ai_dialogs, отдельным экраном и без окружающих
 # действий. Понять по такой ленте, ПОЧЕМУ человек нажал то, что нажал, нельзя.
 KIND_AI_REPLY = "ai_reply"
+# Тап по кнопке трекера, у которой не осталось состояния, но тренировка жива:
+# фолбэк вернул экран (см. handlers/fallback._recover_live_workout). Отдельный
+# вид, а не KIND_CALLBACK_UNHANDLED: под тем же видом это навсегда выглядело бы
+# регрессом роутинга — и в /activity, и в утреннем разборе, и в счётчике
+# протухших префиксов, — хотя человеку вернули рабочий экран.
+KIND_CALLBACK_RECOVERED = "callback_recovered"
 # Отдельный вид — для нажатий, до которых не дотянулся ни один обработчик
 # (handlers/fallback.py). Обычная запись KIND_CALLBACK пишется для любого
 # нажатия одинаково, живого или протухшего, поэтому по ней не отличить
@@ -144,6 +150,16 @@ async def record_ai_reply(user_id: int, text: str) -> None:
     события, а это исходящее.
     """
     await db.log_user_event(user_id, KIND_AI_REPLY, _truncate(text))
+
+
+async def record_recovered_callback(callback: CallbackQuery) -> None:
+    """Кнопка трекера без состояния, но с живой тренировкой — экран вернули."""
+    if callback.from_user is None:
+        return
+    data = callback.data or ""
+    await db.log_user_event(
+        callback.from_user.id, KIND_CALLBACK_RECOVERED, callback_prefix(data), data or None
+    )
 
 
 class LogIncomingMessages(BaseMiddleware):

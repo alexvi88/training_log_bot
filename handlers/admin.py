@@ -343,6 +343,9 @@ _ACTIVITY_MARKERS = {
     activity_log.KIND_CALLBACK: "👉",
     activity_log.KIND_CALLBACK_UNHANDLED: "👉",
     activity_log.KIND_AI_REPLY: "🤖",
+    # Не 💀: тренировку вернули, и в ленте это должно читаться как спасённый
+    # тап, а не как мёртвая кнопка.
+    activity_log.KIND_CALLBACK_RECOVERED: "🔁",
 }
 
 
