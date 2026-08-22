@@ -62,3 +62,14 @@ async def test_long_coach_reply_is_truncated_like_any_other_event(fresh_db):
     (row,) = await fresh_db.list_user_events(111, limit=10)
     assert len(row["content"]) == activity_log.MAX_CONTENT_LEN
     assert row["content"].endswith("…")
+
+
+def test_bottom_keyboard_tap_reads_as_a_tap_not_as_typed_text(monkeypatch):
+    """Нижняя клавиатура шлёт нажатие обычным сообщением, и в ленте «Workout»
+    выглядел набранным словом. Утренний разбор два дня подряд делал из этого
+    вывод «свободный текст не мапится на мастер тренировки» — хотя это кнопка,
+    и persistent_menu.py ловит её на обоих языках."""
+    monkeypatch.setattr(config, "ADMIN_TZ_OFFSET", 0)
+    row = _row(activity_log.KIND_REPLY_BUTTON, "Workout", "2026-08-21T09:00:00")
+
+    assert admin._activity_line(row).endswith("👉 Workout")

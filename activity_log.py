@@ -53,6 +53,12 @@ KIND_CALLBACK_RECOVERED = "callback_recovered"
 # редкую устаревшую кнопку от вспышки одного и того же префикса — то есть
 # от регресса роутинга. См. record_unhandled_callback.
 KIND_CALLBACK_UNHANDLED = "callback_unhandled"
+# Нажатие нижней (reply) клавиатуры. Telegram шлёт его обычным сообщением с
+# текстом подписи, и в ленте оно было неотличимо от набранного руками слова:
+# утренний разбор два дня подряд читал «Workout»/«Тренировка» как свободный
+# текст и делал вывод, что бот его никуда не мапит, — хотя это кнопка, и
+# handlers/persistent_menu.py ловит её на обоих языках.
+KIND_REPLY_BUTTON = "reply_button"
 
 # Нетекстовые сообщения: сам файл не хранится, но факт «прислал голосовое» —
 # ровно та часть картины, которой иначе не видно.
@@ -108,8 +114,30 @@ def button_label(callback: CallbackQuery) -> str | None:
     return None
 
 
+def _reply_button_label(message: Message) -> str | None:
+    """Подпись нижней кнопки, если сообщение — это её нажатие.
+
+    Сравнение идёт через keyboards.BTN_* , которые понимают обе локали сразу
+    (см. _ReplyButtonMatch): у человека, только что переключившего язык, внизу
+    ещё лежит клавиатура на прежнем.
+    """
+    text = (message.text or "").strip()
+    if not text:
+        return None
+    import keyboards
+
+    for button in (keyboards.BTN_WORKOUT, keyboards.BTN_MENU, keyboards.BTN_AI):
+        if button == text:
+            return text
+    return None
+
+
 async def record_message(message: Message) -> None:
     if message.from_user is None:
+        return
+    label = _reply_button_label(message)
+    if label is not None:
+        await db.log_user_event(message.from_user.id, KIND_REPLY_BUTTON, label)
         return
     await db.log_user_event(message.from_user.id, KIND_MESSAGE, describe_message(message))
 
