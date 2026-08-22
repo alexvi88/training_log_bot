@@ -2533,12 +2533,17 @@ TOOLS: list[dict[str, Any]] = [
             "description": (
                 "Записать вес тела в дневник («кстати, 78.4 сегодня»). ДЕЛАЕТ СРАЗУ, под "
                 "ответом появится кнопка отката — скажи, что записал, и упомяни её. "
-                "Число в единицах пользователя (unit из сводки), без конвертации."
+                "Число в единицах пользователя (unit из сводки), без конвертации. "
+                "Прошедший день («вчера 85.2») — передай date, по вызову на день."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "weight": {"type": "number", "description": "Вес в единицах пользователя"},
+                    "date": {
+                        "type": "string",
+                        "description": "День взвешивания ГГГГ-ММ-ДД. Без него — сегодня",
+                    },
                 },
                 "required": ["weight"],
             },
@@ -4275,11 +4280,27 @@ async def _log_bodyweight(
     # Дневник веса хранит число в единицах пользователя, как его и вводят
     # руками (см. handlers/bodyweight) — конвертировать нечего.
     user = await db.get_user(user_id)
-    log_id = await db.add_bodyweight_log(user_id, weight)
+    today = timeutil.user_today(user)
+    raw_date = tool_input.get("date")
+    date = None
+    if raw_date:
+        try:
+            date = dt.date.fromisoformat(str(raw_date).strip())
+        except ValueError:
+            return {"error": "date должен быть в формате ГГГГ-ММ-ДД"}, None
+        if date > today:
+            return {"error": "будущим днём взвеситься нельзя"}, None
+        if date == today:
+            date = None
+    log_id = await db.add_bodyweight_log(user_id, weight, timeutil.logged_at_for_date(date))
     return (
         {
             "ok": True,
-            "logged": {"weight": weight, "unit": user["unit"]},
+            "logged": {
+                "weight": weight,
+                "unit": user["unit"],
+                "date": (date or today).isoformat(),
+            },
             "note": _UNDO_NOTE,
         },
         {

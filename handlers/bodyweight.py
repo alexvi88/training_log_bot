@@ -236,12 +236,9 @@ async def bw_delete_record(callback: CallbackQuery, state: FSMContext):
 
 
 def _logged_at_for(date: dt.date | None) -> str | None:
-    """Метка времени для взвешивания задним числом. Полдень, а не полночь: экран
-    и график режут записи по дате, и середина дня не свалится в соседние сутки
-    ни при каком часовом поясе."""
-    if date is None:
-        return None
-    return dt.datetime.combine(date, dt.time(12, 0)).isoformat()
+    """Метка времени для взвешивания задним числом — общая с AI-тренером,
+    который тоже умеет писать вес прошедшим днём (см. timeutil)."""
+    return timeutil.logged_at_for_date(date)
 
 
 @router.message(StateFilter(BodyweightFlow.viewing), F.text)

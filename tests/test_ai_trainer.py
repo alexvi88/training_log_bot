@@ -1,5 +1,6 @@
 """AI-тренер: tool-executor'ы поверх реальной БД и агентный цикл с фейковым Grok-клиентом."""
 
+import datetime as dt
 import json
 import logging
 from types import SimpleNamespace
@@ -37,7 +38,10 @@ _GATE_NO_SEARCH = '{"search": false, "data": true}'
 # экран программы человек открывает перед каждой тренировкой. Часть добора
 # отыграна там же — «опиши программу словами: логику сплита…» в описании
 # инструмента сократилось, эту работу теперь делает само поле.
-_TOOL_SCHEMA_CHAR_BUDGET = 21_400
+# Поднят с 21_400 под date у log_bodyweight (~130 символов): «запиши за вчера
+# 85.2, а за сегодня 85.6» ложилось двумя записями сегодняшним днём, и тренер
+# честно отвечал, что даты у него в инструменте нет.
+_TOOL_SCHEMA_CHAR_BUDGET = 21_600
 
 
 async def test_tool_schemas_stay_within_their_character_budget():
@@ -1959,3 +1963,51 @@ async def test_prompt_requires_the_users_language_for_names_that_stay_forever():
     # И причина рядом: каталог отдаёт модели русские ключи, а человек видит их
     # переведёнными — без этого правило выглядит произволом.
     assert "внутренние ключи" in prompt
+
+
+async def test_bodyweight_can_be_logged_for_a_past_day(fresh_db, user_id, monkeypatch):
+    """«Запиши вес за вчера 85,2, а за сегодня 85,6»: раньше у инструмента не
+    было даты, и оба числа ложились сегодняшним днём — тренер так и говорил,
+    отправляя человека править руками в ⚖️ Дневник веса."""
+    monkeypatch.setattr(timeutil, "user_today", lambda user: dt.date(2026, 8, 22))
+
+    for weight, date in ((85.2, "2026-08-21"), (85.6, None)):
+        payload = {"weight": weight}
+        if date:
+            payload["date"] = date
+        result = json.loads(await ai_trainer.execute_tool(user_id, "log_bodyweight", payload))
+        assert result["ok"] is True
+
+    logs = await fresh_db.list_bodyweight_logs(user_id)
+    assert [(row["weight"], row["logged_at"][:10]) for row in logs] == [
+        (85.2, "2026-08-21"),
+        (85.6, "2026-08-22"),
+    ]
+
+
+async def test_bodyweight_refuses_a_day_that_has_not_happened(fresh_db, user_id, monkeypatch):
+    """Взвеситься завтра нельзя: такая запись портит и график, и «последний вес»."""
+    monkeypatch.setattr(timeutil, "user_today", lambda user: dt.date(2026, 8, 22))
+
+    result = json.loads(
+        await ai_trainer.execute_tool(
+            user_id, "log_bodyweight", {"weight": 85.6, "date": "2026-08-23"}
+        )
+    )
+
+    assert "error" in result
+    assert await fresh_db.list_bodyweight_logs(user_id) == []
+
+
+async def test_bodyweight_says_which_day_it_wrote_to(fresh_db, user_id, monkeypatch):
+    """Тренер обязан сказать, каким днём записал, — иначе «записал 85.2» ничем
+    не отличается от вчерашней записи, уехавшей на сегодня."""
+    monkeypatch.setattr(timeutil, "user_today", lambda user: dt.date(2026, 8, 22))
+
+    result = json.loads(
+        await ai_trainer.execute_tool(
+            user_id, "log_bodyweight", {"weight": 85.2, "date": "2026-08-21"}
+        )
+    )
+
+    assert result["logged"]["date"] == "2026-08-21"
