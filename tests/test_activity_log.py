@@ -103,6 +103,32 @@ async def test_a_photo_caption_is_kept_next_to_the_photo_mark(fresh_db, user_id)
     assert "фото" in row["content"] and "обед" in row["content"]
 
 
+async def test_a_bottom_keyboard_press_is_logged_as_a_button_not_as_typed_text(
+    fresh_db, user_id
+):
+    """«Workout»/«Тренировка» приходят обычным сообщением — это нажатие нижней
+    клавиатуры, а не набранное слово. Под видом обычного текста утренний разбор
+    два дня подряд выводил из них несуществующий баг «свободный текст не
+    мапится на мастер тренировки»."""
+    for text in ("Workout", "Тренировка", "Меню", "AI Coach"):
+        await activity_log.LogIncomingMessages()(_pass_through, _message(user_id, text=text), {})
+
+    rows = await db.list_user_events(user_id)
+    assert {row["kind"] for row in rows} == {activity_log.KIND_REPLY_BUTTON}
+    assert {row["content"] for row in rows} == {"Workout", "Тренировка", "Меню", "AI Coach"}
+
+
+async def test_text_that_merely_mentions_a_button_stays_a_message(fresh_db, user_id):
+    """Совпадать должна ВСЯ подпись: «workout tomorrow» — это фраза человеку,
+    а не тап."""
+    await activity_log.LogIncomingMessages()(
+        _pass_through, _message(user_id, text="workout tomorrow"), {}
+    )
+
+    (row,) = await db.list_user_events(user_id)
+    assert row["kind"] == activity_log.KIND_MESSAGE
+
+
 async def test_a_tap_is_stored_as_the_label_the_user_saw(fresh_db, user_id):
     """callback_data вроде `wo:finish` — это про бота. Что нажал человек,
     отвечает надпись на кнопке, поэтому в ленте она, а данные — рядом."""
