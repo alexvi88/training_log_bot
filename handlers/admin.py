@@ -349,6 +349,7 @@ _ACTIVITY_MARKERS = {
     # Нажатие нижней клавиатуры — такой же тап, как инлайновый, и читаться в
     # ленте должно тапом, а не набранным словом.
     activity_log.KIND_REPLY_BUTTON: "👉",
+    activity_log.KIND_AI_FAILED: "⚠️",
 }
 
 

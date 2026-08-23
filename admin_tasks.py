@@ -290,6 +290,7 @@ _BEHAVIOUR_MARKERS = {
     activity_log.KIND_CALLBACK_RECOVERED: "🔁",
     activity_log.KIND_AI_REPLY: "🤖",
     activity_log.KIND_REPLY_BUTTON: "👉",
+    activity_log.KIND_AI_FAILED: "⚠️",
 }
 
 

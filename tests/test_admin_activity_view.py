@@ -73,3 +73,13 @@ def test_bottom_keyboard_tap_reads_as_a_tap_not_as_typed_text(monkeypatch):
     row = _row(activity_log.KIND_REPLY_BUTTON, "Workout", "2026-08-21T09:00:00")
 
     assert admin._activity_line(row).endswith("👉 Workout")
+
+
+def test_a_turn_that_died_is_visible_in_the_feed(monkeypatch):
+    """Тренер не ответил — в ленте это должно быть видно строкой, а не тишиной
+    после вопроса: тишина читается ровно как удавшийся ответ, после которого
+    человек ушёл, и утренний разбор делал из неё выводы про опросник."""
+    monkeypatch.setattr(config, "ADMIN_TZ_OFFSET", 0)
+    row = _row(activity_log.KIND_AI_FAILED, "тренер не ответил: таймаут", "2026-08-22T18:17:00")
+
+    assert admin._activity_line(row).endswith("⚠️ тренер не ответил: таймаут")

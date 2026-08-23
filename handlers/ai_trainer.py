@@ -2341,10 +2341,14 @@ async def _handle_question(
         logger.info(
             "AI trainer answered user %s in %.1fs", user_id, time.monotonic() - started_at
         )
-    except Exception:
+    except Exception as exc:
         # Время в лог и на таймауте: без него «почему молчал» не разобрать по
         # логам вообще никак — а это первое, что спрашивают после жалобы.
         logger.exception("AI trainer request failed for user %s", user_id)
+        # И в ленту действий: иначе ход выглядит вопросом без ответа, то есть
+        # так же, как удавшийся ответ, после которого человек просто ушёл.
+        with suppress(Exception):
+            await activity_log.record_ai_failure(user_id, exc)
         error_text = i18n.t("ai.screen.answer_failed")
         error_kb = await ai_keyboard(user_id)
         try:
