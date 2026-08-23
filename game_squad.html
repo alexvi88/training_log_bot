@@ -567,11 +567,11 @@ function updateSegment() {
 // частоту/густоту встречных волн — единственные точки, где сегмент вообще
 // на что-то влияет.
 const SEGMENT_EVENT_MUL = {
-  gates:    { gate: 1.9, plate: 0.8, bonus: 0.9, crate: 1.0 },
+  gates:    { gate: 1.5, plate: 0.9, bonus: 0.9, crate: 1.0 },
   swarm:    { gate: 0.55, plate: 1.1, bonus: 0.85, crate: 0.9 },
   breather: { gate: 0.8, plate: 0.7, bonus: 1.8, crate: 1.6 },
 };
-const SEGMENT_WAVE_GAP_MUL = { gates: 1.45, swarm: 0.55, breather: 2.6 };
+const SEGMENT_WAVE_GAP_MUL = { gates: 1.15, swarm: 0.5, breather: 2.0 };
 let fireTimer = 0;
 let lastResult = null;
 
@@ -586,8 +586,8 @@ let lastResult = null;
 function weightsFor(d) {
   const p = clamp(d / 900, 0, 1);
   const base = {
-    gate: 0.36 - p * 0.06, plate: 0.24 - p * 0.05,
-    bonus: 0.24 - p * 0.08, crate: 0.16 - p * 0.01,
+    gate: 0.27 - p * 0.05, plate: 0.27 - p * 0.05,
+    bonus: 0.26 - p * 0.08, crate: 0.20 - p * 0.01,
   };
   const mul = SEGMENT_EVENT_MUL[segment] || SEGMENT_EVENT_MUL.gates;
   Object.keys(base).forEach(k => { base[k] *= mul[k] ?? 1; });
@@ -705,14 +705,15 @@ function resetGame() {
   // ниже подобраны так, чтобы на дорожке почти всегда что-то было).
   nextEventAt = rnd(2, 4); eventHistory.length = 0; lastEventWorldX = 0;
   firstGateDone = false;
-  // Первая волна раньше приходила через 4-8 метров — на стартовой скорости
-  // это меньше секунды, то есть бой начинался почти сразу после первых ворот,
-  // а не после честных 15-20 секунд разгона. Сдвинуто дальше — дорожка эти
-  // секунды не пустая (первые ворота и рядовые блины/бонусы уже идут по
-  // своему потоку), но настоящая встречная толпа не набегает, пока отряд не
-  // успел подрасти хотя бы на одних воротах.
-  nextWaveAt = rnd(60, 80);
-  segment = 'gates'; segmentEndAt = rnd(160, 240); segmentHistory.length = 0;
+  // Первая волна — сразу после первых ворот. Прежние 60-80 метров означали
+  // почти минуту забега, в которой из событий были только ворота: игра
+  // открывалась чередой «+5 ×2 +8» без единого врага и читалась как экран
+  // бустов, а не как бой. Отряд успевает подрасти на одних воротах — этого
+  // достаточно, чтобы встретить первую (маленькую, см. spawnWave) толпу.
+  nextWaveAt = rnd(20, 28);
+  // Вступительный сегмент ворот тоже был на четверть километра — теперь это
+  // короткий разгон, а дальше сегменты чередуются как обычно.
+  segment = 'gates'; segmentEndAt = rnd(55, 80); segmentHistory.length = 0;
   fireTimer = 0; combo = 0; weaponLevel = 0; weaponTimer = 0;
   obstacles.length = 0; bonuses.length = 0; crates.length = 0; bullets.length = 0;
   parts.length = 0; toasts.length = 0;
@@ -1549,21 +1550,50 @@ function syncObstacleMeshes() {
 }
 
 // ── HUD-ЛЕЙБЛЫ НАД ОБЪЕКТАМИ (числа рисуем на 2D-слое, не в 3D) ─────────────
+function chipRect(label, x, y, fs) {
+  hctx.font = "900 " + fs + "px 'Courier New', monospace";
+  const tw = hctx.measureText(label).width;
+  return { x0: x - tw / 2 - 6, y0: y - fs / 2 - 3, x1: x + tw / 2 + 6, y1: y + fs / 2 + 3 };
+}
+// Таблички рисуются в перспективе, а размер у них с потолком снизу (иначе
+// дальнюю цифру не прочесть) — поэтому две штуки, стоящие на дорожке одна за
+// другой, легко наезжают друг на друга: на живом прогоне «+5+8 / ×2+4 / +4+5»
+// слипались в нечитаемую кашу из трёх пар ворот сразу. Кадр разбирается по
+// приоритету: ближняя табличка рисуется всегда, каждая следующая — только
+// если её прямоугольник ни с чем уже нарисованным не пересекается.
+const drawnChips = [];
+function chipFits(r) {
+  for (const d of drawnChips) {
+    if (r.x0 < d.x1 && r.x1 > d.x0 && r.y0 < d.y1 && r.y1 > d.y0) return false;
+  }
+  return true;
+}
 function textChip(label, x, y, fs, fillColor, strokeK, bgColor) {
+  const r = chipRect(label, x, y, fs);
   hctx.font = "900 " + fs + "px 'Courier New', monospace";
   hctx.textAlign = 'center'; hctx.textBaseline = 'middle';
-  const tw = hctx.measureText(label).width;
   hctx.fillStyle = bgColor || 'rgba(10,8,6,0.55)';
-  hctx.beginPath(); hctx.roundRect(x - tw / 2 - 6, y - fs / 2 - 3, tw + 12, fs + 6, 6); hctx.fill();
+  hctx.beginPath(); hctx.roundRect(r.x0, r.y0, r.x1 - r.x0, r.y1 - r.y0, 6); hctx.fill();
   hctx.lineWidth = Math.max(2.5, fs * (strokeK ?? 0.2)); hctx.strokeStyle = '#14110f';
   hctx.strokeText(label, x, y + 1);
   hctx.fillStyle = fillColor; hctx.fillText(label, x, y + 1);
+  drawnChips.push(r);
 }
 function drawObstacleLabels() {
-  obstacles.forEach(o => {
+  // Ближнее — важнее: сортируем по глубине, чтобы приоритет при разборе
+  // наложений (см. chipFits) доставался тому, по чему игрок решает прямо
+  // сейчас, а не дальней паре ворот на горизонте.
+  drawnChips.length = 0;
+  // Ворота идут первыми при любой глубине: створки — это ЕДИНСТВЕННОЕ решение
+  // игрока, и цифра на них важнее счётчика голов у волны, даже если волна
+  // ближе. Внутри каждой группы — от ближнего к дальнему.
+  const byNear = obstacles.slice().sort((a, b) =>
+    (a.kind === 'gate' ? 0 : 1) - (b.kind === 'gate' ? 0 : 1) || (a.z ?? 0) - (b.z ?? 0));
+  byNear.forEach(o => {
     if (o.kind === 'plate') {
       const p = projectPoint(o.worldX, o.z, 1.35);
-      textChip(fmt(o.hp), p.x, p.y, Math.max(15, 26 * fakeScale(o.z)), CHALK);
+      const fs = Math.max(15, 26 * fakeScale(o.z));
+      if (chipFits(chipRect(fmt(o.hp), p.x, p.y, fs))) textChip(fmt(o.hp), p.x, p.y, fs, CHALK);
     } else if (o.kind === 'gate') {
       // Главное решение в игре — цифры обязаны читаться издалека и мгновенно,
       // как в рекламных роликах жанра: огромные, с толстой тёмной обводкой,
@@ -1580,8 +1610,13 @@ function drawObstacleLabels() {
       // во весь экран: цифра должна доминировать, но не подменять собой игру.
       const fs = clamp(128 * fakeScale(o.z), 38, 72);
       const bgGood = 'rgba(20,110,58,0.72)', bgBad = 'rgba(120,20,20,0.72)';
-      textChip(label, (near.x + mid.x) / 2, near.y, fs, '#ffffff', 0.28, leftGood ? bgGood : bgBad);
-      textChip(label2, (mid.x + farE.x) / 2, mid.y, fs, '#ffffff', 0.28, rightGood ? bgGood : bgBad);
+      const lx = (near.x + mid.x) / 2, rx2 = (mid.x + farE.x) / 2;
+      // Ворота подписываются ЦЕЛИКОМ или никак: одна створка с числом и вторая
+      // без — хуже, чем обе без чисел, выбор становится нечитаемым.
+      if (chipFits(chipRect(label, lx, near.y, fs)) && chipFits(chipRect(label2, rx2, mid.y, fs))) {
+        textChip(label, lx, near.y, fs, '#ffffff', 0.28, leftGood ? bgGood : bgBad);
+        textChip(label2, rx2, mid.y, fs, '#ffffff', 0.28, rightGood ? bgGood : bgBad);
+      }
     } else if (o.kind === 'wave') {
       // Каждый живой тип в волне — свой цвет и своя цифра над головой, чтобы
       // отличать их в бою на глаз, не только по силуэту. Цифра всегда — живой
@@ -1608,7 +1643,7 @@ function drawObstacleLabels() {
         }
         const fs = Math.max(13, (def.isLeader ? 30 : 23) * fakeScale(g.z));
         const col = def.isLeader ? C_GOLD : (def.ranged ? '#e6a6ff' : (def.hpUnit >= 6 ? '#bfe0ff' : '#bfe89a'));
-        textChip(fmt(g.count), p.x, p.y, fs, col);
+        if (chipFits(chipRect(fmt(g.count), p.x, p.y, fs))) textChip(fmt(g.count), p.x, p.y, fs, col);
       });
     } else if (o.kind === 'boss' && o.phase === 'press') {
       const bw = W * 0.7, bx0 = W / 2 - bw / 2, by = H * 0.10;
@@ -2729,7 +2764,11 @@ function update(dt) {
     else if (kind === 'gate') spawnGate();
     else if (kind === 'bonus') spawnBonus();
     else if (kind === 'crate') spawnCrate();
-    nextEventAt = dist + rnd(11, 19);
+    // После ворот интервал заметно длиннее рядового: две пары створок,
+    // стоящие в 11 метрах друг от друга, оказываются на экране одновременно и
+    // наезжают табличками (см. chipFits — там это разбирается уже на отрисовке,
+    // но лучше не создавать такую кашу вовсе).
+    nextEventAt = dist + (kind === 'gate' ? rnd(24, 34) : rnd(11, 19));
   }
   // Волны — свой, не пересыхающий поток: дорожка не бывает пустой подолгу,
   // и к концу враги идут гуще. Но «не пересыхающий» — не значит «без передышки
@@ -2740,10 +2779,17 @@ function update(dt) {
   // заметна, а не размывалась в шесть метров отсрочки.
   if (state === 'game' && dist >= nextWaveAt) {
     const activeWaves = obstacles.filter(o => o.kind === 'wave' && waveTotalCount(o) > 0).length;
-    if (activeWaves < 1) {
+    // Строго одна волна за раз — правило первых метров, пока отряд мал. Дальше
+    // разрешаем вторую: к этой дистанции у игрока сотни бойцов и оружие, и
+    // одиночные набеги перестают читаться как давление.
+    if (activeWaves < (dist > 260 ? 2 : 1)) {
       spawnWave();
       const gapMul = SEGMENT_WAVE_GAP_MUL[segment] || 1;
-      const gap = clamp(78 - dist / 12, 34, 78) * gapMul;
+      // Интервал между волнами сокращён: 78-34 метров давали дорожку, на
+      // которой врагов ждёшь дольше, чем дерёшься. Мясо игры — встречная
+      // толпа, поэтому пауза осталась заметной, но перестала быть основным
+      // содержанием забега.
+      const gap = clamp(50 - dist / 14, 20, 50) * gapMul;
       nextWaveAt = dist + rnd(gap * 0.75, gap);
     } else {
       nextWaveAt = dist + 8; // прошлая волна ещё жива — коротко отложим и проверим снова
