@@ -21,6 +21,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from aiogram import BaseMiddleware
@@ -59,6 +60,12 @@ KIND_CALLBACK_UNHANDLED = "callback_unhandled"
 # текст и делал вывод, что бот его никуда не мапит, — хотя это кнопка, и
 # handlers/persistent_menu.py ловит её на обоих языках.
 KIND_REPLY_BUTTON = "reply_button"
+# Тренер не ответил: таймаут хода, обрыв стрима, упавший провайдер. Человек в
+# этот момент видит «не смог», а в логе оставался один вопрос без ответа —
+# ровно то же, что и «ответил, а человек ушёл». Утренний разбор из такой тишины
+# делал вывод про лишний круг вопросов в опроснике, хотя круга не было: сборка
+# программы просто не доехала.
+KIND_AI_FAILED = "ai_failed"
 
 # Нетекстовые сообщения: сам файл не хранится, но факт «прислал голосовое» —
 # ровно та часть картины, которой иначе не видно.
@@ -178,6 +185,18 @@ async def record_ai_reply(user_id: int, text: str) -> None:
     события, а это исходящее.
     """
     await db.log_user_event(user_id, KIND_AI_REPLY, _truncate(text))
+
+
+async def record_ai_failure(user_id: int, exc: BaseException) -> None:
+    """Ход тренера, кончившийся ничем, — с причиной, а не просто «пусто».
+
+    Причину складываем ЗДЕСЬ, а не на месте вызова: строка админская, и в
+    handlers/ai_trainer (модуль объявлен переведённым) русский литерал ронял бы
+    храповик i18n — по делу, потому что отличить там админскую строку от
+    пользовательской нельзя.
+    """
+    reason = "таймаут" if isinstance(exc, asyncio.TimeoutError) else type(exc).__name__
+    await db.log_user_event(user_id, KIND_AI_FAILED, _truncate(f"тренер не ответил: {reason}"))
 
 
 async def record_recovered_callback(callback: CallbackQuery) -> None:

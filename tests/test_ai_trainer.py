@@ -1979,10 +1979,12 @@ async def test_bodyweight_can_be_logged_for_a_past_day(fresh_db, user_id, monkey
         assert result["ok"] is True
 
     logs = await fresh_db.list_bodyweight_logs(user_id)
-    assert [(row["weight"], row["logged_at"][:10]) for row in logs] == [
-        (85.2, "2026-08-21"),
-        (85.6, "2026-08-22"),
-    ]
+    # Вчерашняя запись — ровно указанным днём; сегодняшняя, как и раньше, идёт
+    # временем самой записи (часами сервера), поэтому сверяем её не с датой из
+    # monkeypatch, а с тем, что дни РАЗНЫЕ: иначе тест зелен только 22 августа.
+    assert [row["weight"] for row in logs] == [85.2, 85.6]
+    assert logs[0]["logged_at"][:10] == "2026-08-21"
+    assert logs[1]["logged_at"][:10] != "2026-08-21"
 
 
 async def test_bodyweight_refuses_a_day_that_has_not_happened(fresh_db, user_id, monkeypatch):

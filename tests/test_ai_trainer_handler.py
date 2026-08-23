@@ -11,6 +11,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
 
+import activity_log
 import config
 from handlers import ai_trainer
 
@@ -2258,3 +2259,10 @@ async def test_a_hanging_model_ends_with_an_honest_message_not_silence(
     assert user_id not in ai_trainer._busy
     # Вопрос не списан: сорвавшийся ход не должен стоить человеку квоты.
     assert await fresh_db.get_ai_question_count_today(user_id) == 0
+    # И в ленте действий сорвавшийся ход виден строкой с причиной: без неё он
+    # выглядит вопросом без ответа, то есть так же, как удавшийся ответ, после
+    # которого человек ушёл (утренний разбор на этом уже спотыкался).
+    events = await fresh_db.list_user_events(user_id)
+    failures = [row for row in events if row["kind"] == activity_log.KIND_AI_FAILED]
+    assert len(failures) == 1
+    assert "таймаут" in failures[0]["content"]
