@@ -31,6 +31,7 @@ import formatting
 import i18n
 import i18n_coverage
 import keyboards
+import seed_data
 import view_builder
 from handlers import edit_workout, exercises, history, routines, workout
 
@@ -503,6 +504,25 @@ async def _screen_routines_manage_empty(db, user_id: int) -> str:
     return callback.message.answer.await_args.args[0]
 
 
+async def _screen_catalog_program_card(db, user_id: int) -> str:
+    """Карточка каталожной программы, уже добавленной себе
+    (handlers.routines._show_program).
+
+    Экран собирает текст из ДВУХ источников: имена дней и описание — снимок из
+    базы на языке добавления, а строка «кому это и как часто» (meta) в базе не
+    лежит вовсе и берётся из seed_data по ключу. Ровно она и приезжала
+    по-русски на английском аккаунте — единственная кириллица на экране, где
+    всё остальное перевелось.
+    """
+    program_id = await routines._instantiate_catalog_program(
+        user_id, "ppl", seed_data.localized_program_name("ppl", i18n.get_lang())
+    )
+    callback = _make_fake_callback(user_id, f"rt:prg:{program_id}")
+    state = FSMContext(storage=MemoryStorage(), key=StorageKey(bot_id=1, chat_id=user_id, user_id=user_id))
+    await routines._show_program(callback, state, program_id)
+    return callback.message.answer.await_args.args[0]
+
+
 async def _screen_routine_source_empty(db, user_id: int) -> str:
     """Экран «Из какой тренировки создать программу?» без единой завершённой
     тренировки (handlers.routines._show_routine_source_picker) — своё пустое
@@ -706,6 +726,7 @@ SCREENS: list[tuple[str, object]] = [
     ("exercises_templates", _screen_exercises_templates),
     ("routines_manage_empty", _screen_routines_manage_empty),
     ("routine_source_empty", _screen_routine_source_empty),
+    ("catalog_program_card", _screen_catalog_program_card),
     ("settings_profile", _screen_settings_profile),
     ("mcp_access_disabled", _screen_mcp_access_disabled),
     ("community_intro", _screen_community_intro),

@@ -276,7 +276,12 @@ async def _show_program(event, state: FSMContext, program_id: int) -> None:
     if total:
         subtitle.append(i18n.t("routine.program.workouts_count", n=total))
     if catalog is not None:
-        subtitle.append(escape(catalog["meta"]))
+        # Через локализатор, а не catalog["meta"] напрямую: в самом словаре
+        # meta лежит по-русски (seed_data держит русскую сторону литералами, а
+        # остальные языки — в каталоге локалей), и на английском аккаунте эта
+        # строка была единственной кириллицей на всём экране. Соседние экраны —
+        # список каталога и превью — локализатор зовут с самого начала.
+        subtitle.append(escape(seed_data.localized_program_meta(catalog["key"], i18n.get_lang())))
     if subtitle:
         header.append(f"<i>{' · '.join(subtitle)}</i>")
     # Экран программы состоял из одних списков упражнений: зачем эта программа
@@ -284,7 +289,10 @@ async def _show_program(event, state: FSMContext, program_id: int) -> None:
     # пишется при создании (programs.description) всеми дверьми сразу; у
     # каталожных программ, добавленных до этой колонки, оно берётся из
     # seed_data по ключу — там оно и так было.
-    description = program["description"] or (catalog["description"] if catalog else None)
+    description = program["description"] or (
+        seed_data.localized_program_description(catalog["key"], i18n.get_lang())
+        if catalog else None
+    )
     if description:
         header.append(f"\n{escape(description)}")
     tail = (
