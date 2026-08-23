@@ -2640,6 +2640,34 @@ TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "get_stalled_lifts",
+            "description": (
+                "Что встало и ПОЧЕМУ, по всем упражнениям сразу. verdict: dead_end — "
+                "вес и повторы стоят, тупик; double_progression — вес стоит, повторы "
+                "растут, схема РАБОТАЕТ, менять нечего; growing; regressing. Плюс "
+                "наклон e1RM в неделю, рабочий вес, сколько недель он не двигался, "
+                "повторы на нём первая→последняя, ready_to_add_weight (добрал верх "
+                "диапазона — пора прибавить вес), avg_top_rpe: 6-7 — недогруз, 9-10 — "
+                "усталость или техника. Вызывай на «что встало», «почему не растёт», "
+                "«плато», «что менять в программе». Меньше min_sessions сессий в окне — "
+                "упражнение не попадает: на трёх точках застоя не видно."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "weeks": {
+                        "type": "integer",
+                        "minimum": 4,
+                        "maximum": 26,
+                        "description": "Окно в неделях, по умолчанию 8",
+                    },
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_program_adherence",
             "description": (
                 "Насколько реально ходят по каждой сохранённой многодневной программе — "
@@ -2864,6 +2892,10 @@ TOOL_STATUS_TEXTS: dict[str, list[str]] = {
     "compare_periods": [
         "📈 сравниваю два периода по всем упражнениям...",
         "🔍 смотрю, что сдвинулось за это время...",
+    ],
+    "get_stalled_lifts": [
+        "🧮 считаю, где вес стоит, а где повторы всё-таки ползут...",
+        "🔍 ищу, что встало по-настоящему...",
     ],
     "get_program_adherence": [
         "📊 смотрю, как ты реально ходишь по программе...",
@@ -4513,6 +4545,74 @@ MAX_FOOD_ITEMS = 6
 _COMPARE_TOP = 8
 
 
+# Сколько упражнений отдаём в разборе застоя. Двадцать пять: у человека с
+# долгой историей их бывает под сотню, а отвечать надо про то, что он делает
+# СЕЙЧАС — окно уже отрезало заброшенное, и остаток сортирован тупиками вперёд.
+STALLED_LIFTS_LIMIT = 25
+
+
+async def _stalled_lifts(user_id: int, tool_input: dict[str, Any]) -> dict[str, Any]:
+    """«Что у меня встало» — по всем упражнениям сразу, с разбором ПОЧЕМУ.
+
+    Три случая снаружи выглядят одинаково, а лечатся по-разному, и различить их
+    модели было нечем: get_exercise_progress отвечает про одно упражнение, а
+    раундов у хода шесть — обойти пятнадцать движений нельзя, и «встало»
+    решалось на глаз по двум. Считает analytics.classify_stall, тут — только
+    сборка и порядок выдачи.
+
+    Тупики идут первыми: на вопрос «что чинить» первым абзацем должно быть то,
+    что действительно стоит, а не то, что просто оказалось выше по алфавиту.
+    """
+    weeks = _clean_int(tool_input.get("weeks"), 4, 26) or analytics.STALL_WINDOW_WEEKS
+    user = await db.get_user(user_id)
+    today = timeutil.user_today(user)
+    formula = user["e1rm_formula"]
+    # Запрашиваем шире окна: classify_stall режет по своему окну сам, а лишние
+    # сессии нужны, чтобы «вес прибавился на прошлой неделе» не выглядело
+    # прибавкой с самого первого дня выборки.
+    since = (today - dt.timedelta(weeks=weeks + 4)).isoformat()
+    rows = await db.list_sets_by_exercise_since(user_id, since)
+
+    by_exercise: dict[int, list] = {}
+    names: dict[int, tuple[str, Optional[str]]] = {}
+    for r in rows:
+        by_exercise.setdefault(r["exercise_id"], []).append(
+            analytics.SetRow(r["weight"], r["reps"], r["workout_id"], r["started_at"], r["rpe"])
+        )
+        names[r["exercise_id"]] = (r["display_name"], r["group_name"])
+
+    order = {"dead_end": 0, "regressing": 1, "double_progression": 2, "growing": 3}
+    found = []
+    for ex_id, set_rows in by_exercise.items():
+        sessions = analytics.group_sets_by_session(set_rows)
+        for session in sessions:
+            session.formula = formula
+        verdict = analytics.classify_stall(sessions, today, window_weeks=weeks)
+        if verdict is None:
+            continue
+        name, group = names[ex_id]
+        found.append({
+            "exercise": name,
+            "muscle_group": group,
+            "verdict": verdict.kind,
+            "sessions_in_window": verdict.sessions_in_window,
+            "e1rm_slope_per_week": verdict.e1rm_slope_per_week,
+            "top_weight": verdict.top_weight,
+            "weeks_weight_flat": verdict.weeks_weight_flat,
+            "reps_at_top_weight": f"{verdict.reps_at_top_first}→{verdict.reps_at_top_last}",
+            "ready_to_add_weight": verdict.ready_to_add_weight,
+            "avg_top_rpe": verdict.avg_top_rpe,
+        })
+    found.sort(key=lambda f: (order.get(f["verdict"], 9), -(f["sessions_in_window"])))
+    return {
+        "unit": user["unit"],
+        "window_weeks": weeks,
+        "min_sessions": analytics.STALL_MIN_SESSIONS,
+        "lifts": found[:STALLED_LIFTS_LIMIT],
+        "skipped_too_few_sessions": len(by_exercise) - len(found),
+    }
+
+
 async def _compare_periods(user_id: int, tool_input: dict[str, Any]) -> dict[str, Any]:
     """«Что изменилось за N дней» по всем упражнениям разом.
 
@@ -5187,6 +5287,8 @@ async def execute_tool(
     elif name == "save_athlete_profile":
         # Единственная запись без кнопки под ответом: см. _save_athlete_profile.
         payload, _ = await _save_athlete_profile(user_id, tool_input)
+    elif name == "get_stalled_lifts":
+        payload = await _stalled_lifts(user_id, tool_input)
     elif name == "compare_periods":
         payload = await _compare_periods(user_id, tool_input)
     elif name in _ACTION_TOOLS or name in _UNDOABLE_TOOLS:

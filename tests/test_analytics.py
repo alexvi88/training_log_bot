@@ -364,3 +364,110 @@ def test_is_seasoned_ignores_workouts_just_outside_the_window():
 
 def test_is_seasoned_empty_history_is_false():
     assert analytics.is_seasoned([], dt.date(2026, 6, 15)) is False
+
+
+# ---------- застой: три случая, которые снаружи выглядят одинаково ----------
+
+_TODAY = dt.date(2026, 8, 23)
+
+
+def _weekly_sessions(sets_per_session: list[list[SetRow]]):
+    """Сессии раз в неделю, последняя — вчера. Одна на неделю: это ритм, при
+    котором «вес стоит четыре недели» и «сессий в окне четыре» — одно и то же."""
+    n = len(sets_per_session)
+    out = []
+    for i, sets in enumerate(sets_per_session):
+        day = _TODAY - dt.timedelta(days=1 + 7 * (n - 1 - i))
+        out.append(SessionStats(i + 1, f"{day.isoformat()}T10:00:00", sets))
+    return out
+
+
+def test_flat_weight_and_flat_reps_is_a_dead_end():
+    """Настоящий тупик: и вес, и повторы стоят пять недель."""
+    sessions = _weekly_sessions([[SetRow(100, 8)] for _ in range(5)])
+
+    verdict = analytics.classify_stall(sessions, _TODAY)
+
+    assert verdict.kind == "dead_end"
+    assert verdict.weeks_weight_flat >= analytics.STALL_WEEKS_FLAT
+    assert (verdict.reps_at_top_first, verdict.reps_at_top_last) == (8, 8)
+    assert verdict.ready_to_add_weight is False
+
+
+def test_flat_weight_with_rising_reps_is_double_progression_not_a_stall():
+    """Вес стоит, а повторы ползут — схема РАБОТАЕТ, и звать это застоем нельзя:
+    следующим шагом вес прибавится сам. Именно эти два случая модель и путала."""
+    sessions = _weekly_sessions([[SetRow(100, r)] for r in (6, 7, 8, 9, 10)])
+
+    verdict = analytics.classify_stall(sessions, _TODAY)
+
+    assert verdict.kind == "double_progression"
+    assert (verdict.reps_at_top_first, verdict.reps_at_top_last) == (6, 10)
+
+
+def test_reps_at_the_top_of_the_range_flag_the_weight_bump():
+    """Добрал 12 — по методике это сигнал прибавить вес, и правило в промпте
+    было, а применить его проактивно было нечем."""
+    sessions = _weekly_sessions([[SetRow(100, r)] for r in (9, 10, 11, 12)])
+
+    verdict = analytics.classify_stall(sessions, _TODAY)
+
+    assert verdict.ready_to_add_weight is True
+
+
+def test_growing_e1rm_is_not_a_stall_even_with_a_flat_last_session():
+    sessions = _weekly_sessions([[SetRow(w, 5)] for w in (100, 105, 110, 115, 115)])
+
+    verdict = analytics.classify_stall(sessions, _TODAY)
+
+    assert verdict.kind == "growing"
+    assert verdict.e1rm_slope_per_week > 0
+
+
+def test_falling_e1rm_reads_as_regressing():
+    sessions = _weekly_sessions([[SetRow(w, 5)] for w in (120, 115, 110, 100)])
+
+    verdict = analytics.classify_stall(sessions, _TODAY)
+
+    assert verdict.kind == "regressing"
+
+
+def test_too_few_sessions_in_the_window_is_not_a_verdict():
+    """Три точки складываются в любой наклон: «встало» на них означает только
+    «мало данных», и в выдаче такому упражнению не место."""
+    sessions = _weekly_sessions([[SetRow(100, 8)] for _ in range(3)])
+
+    assert analytics.classify_stall(sessions, _TODAY) is None
+
+
+def test_an_abandoned_exercise_is_not_stalled_it_is_abandoned():
+    """Окно считается от сегодня, а не от последней сессии: брошенное полгода
+    назад упражнение не «встало» — его просто не делают."""
+    sessions = [
+        SessionStats(i, f"{(dt.date(2026, 1, 5) + dt.timedelta(days=7 * i)).isoformat()}T10:00:00",
+                     [SetRow(100, 8)])
+        for i in range(6)
+    ]
+
+    assert analytics.classify_stall(sessions, _TODAY) is None
+
+
+def test_rpe_of_the_top_set_comes_back_averaged():
+    """Стоит на RPE 6-7 — недогруз, на 9-10 — усталость или техника: без этого
+    разреза оба лечатся одинаково и неверно."""
+    sessions = _weekly_sessions([[SetRow(100, 8, rpe=rpe)] for rpe in (6, 6.5, 7, 6.5)])
+
+    verdict = analytics.classify_stall(sessions, _TODAY)
+
+    assert verdict.avg_top_rpe == pytest.approx(6.5, abs=0.05)
+
+
+def test_bodyweight_exercise_is_judged_by_reps_alone():
+    """У отжиманий рабочего веса нет вовсе, и «вес не двигался» про них не
+    говорит ничего: вся прогрессия там в повторах."""
+    sessions = _weekly_sessions([[SetRow(0, r)] for r in (20, 22, 25, 28)])
+
+    verdict = analytics.classify_stall(sessions, _TODAY)
+
+    assert verdict.kind == "double_progression"
+    assert verdict.weeks_weight_flat is None

@@ -41,7 +41,12 @@ _GATE_NO_SEARCH = '{"search": false, "data": true}'
 # Поднят с 21_400 под date у log_bodyweight (~130 символов): «запиши за вчера
 # 85.2, а за сегодня 85.6» ложилось двумя записями сегодняшним днём, и тренер
 # честно отвечал, что даты у него в инструменте нет.
-_TOOL_SCHEMA_CHAR_BUDGET = 21_600
+# Поднят с 21_600 под get_stalled_lifts (~700 символов): «что у меня встало»
+# модель решала на глаз по одному-двум упражнениям (get_exercise_progress —
+# вызов на упражнение, а раундов шесть) и путала настоящий тупик с работающей
+# двойной прогрессией. Описание длинное потому, что в нём и лежит вся польза:
+# четыре вердикта и чтение RPE — то, чего из одних чисел не вывести.
+_TOOL_SCHEMA_CHAR_BUDGET = 22_400
 
 
 async def test_tool_schemas_stay_within_their_character_budget():
@@ -2013,3 +2018,88 @@ async def test_bodyweight_says_which_day_it_wrote_to(fresh_db, user_id, monkeypa
     )
 
     assert result["logged"]["date"] == "2026-08-21"
+
+
+# ---------- get_stalled_lifts ----------
+
+
+async def _seed_weekly(db, user_id: int, name: str, group_id: int, series, today: dt.date):
+    """Раз в неделю по одному подходу: series — (вес, повторы) или (вес, повторы, rpe)."""
+    ex_id = await db.create_exercise(user_id, name, group_id)
+    n = len(series)
+    for i, entry in enumerate(series):
+        weight, reps = entry[0], entry[1]
+        rpe = entry[2] if len(entry) > 2 else None
+        day = today - dt.timedelta(days=1 + 7 * (n - 1 - i))
+        workout_id = await db.create_finished_workout(
+            user_id, started_at=f"{day.isoformat()}T10:00:00",
+            finished_at=f"{day.isoformat()}T10:30:00",
+        )
+        block_id = await db.create_block(workout_id, "single")
+        await db.add_block_exercise(block_id, ex_id, 0)
+        await db.add_set(
+            block_id, ex_id, round_index=1, order_in_round=0,
+            weight=weight, reps=reps, rpe=rpe,
+        )
+    return ex_id
+
+
+async def test_stalled_lifts_separates_a_dead_end_from_working_double_progression(
+    fresh_db, user_id, monkeypatch
+):
+    """Главное, зачем инструмент нужен: снаружи оба случая — «вес не растёт», а
+    лечатся они противоположно. Раньше это решалось интуицией модели по одному-
+    двум упражнениям: get_exercise_progress отвечает про одно движение, а
+    раундов у хода шесть."""
+    today = dt.date(2026, 8, 23)
+    monkeypatch.setattr(timeutil, "user_today", lambda user: today)
+    group_id = await fresh_db.create_muscle_group(user_id, "Грудь")
+    await _seed_weekly(fresh_db, user_id, "Жим лёжа", group_id,
+                       [(100, 8), (100, 8), (100, 8), (100, 8), (100, 8)], today)
+    await _seed_weekly(fresh_db, user_id, "Тяга штанги", group_id,
+                       [(80, 6), (80, 7), (80, 8), (80, 9), (80, 10)], today)
+
+    payload = json.loads(await ai_trainer.execute_tool(user_id, "get_stalled_lifts", {}))
+
+    by_name = {lift["exercise"]: lift for lift in payload["lifts"]}
+    assert by_name["Жим лёжа"]["verdict"] == "dead_end"
+    assert by_name["Тяга штанги"]["verdict"] == "double_progression"
+    assert by_name["Тяга штанги"]["reps_at_top_weight"] == "6→10"
+    # Тупик — первым: на вопрос «что чинить» первым абзацем должно быть то, что
+    # действительно стоит.
+    assert payload["lifts"][0]["exercise"] == "Жим лёжа"
+
+
+async def test_stalled_lifts_reports_the_rpe_the_stall_sits_at(fresh_db, user_id, monkeypatch):
+    """Стоит на RPE 6-7 — недогруз, на 9-10 — усталость или техника. Без этого
+    разреза оба лечатся одинаково и неверно."""
+    today = dt.date(2026, 8, 23)
+    monkeypatch.setattr(timeutil, "user_today", lambda user: today)
+    group_id = await fresh_db.create_muscle_group(user_id, "Ноги")
+    await _seed_weekly(fresh_db, user_id, "Присед", group_id,
+                       [(140, 5, 9.5), (140, 5, 10), (140, 5, 9.5), (140, 5, 10)], today)
+
+    payload = json.loads(await ai_trainer.execute_tool(user_id, "get_stalled_lifts", {}))
+
+    (lift,) = payload["lifts"]
+    assert lift["verdict"] == "dead_end"
+    assert lift["avg_top_rpe"] == 9.8  # округление до десятой, как в выдаче
+
+
+async def test_stalled_lifts_skips_what_there_is_too_little_data_about(
+    fresh_db, user_id, monkeypatch
+):
+    """Две сессии — не застой, а «мало данных»; заброшенное полгода назад — не
+    застой, а заброшенное. И то и другое в выдаче только мешает."""
+    today = dt.date(2026, 8, 23)
+    monkeypatch.setattr(timeutil, "user_today", lambda user: today)
+    group_id = await fresh_db.create_muscle_group(user_id, "Плечи")
+    await _seed_weekly(fresh_db, user_id, "Жим над головой", group_id,
+                       [(50, 8), (50, 8)], today)
+    await _seed_weekly(fresh_db, user_id, "Разведения", group_id,
+                       [(12, 12)] * 5, today - dt.timedelta(weeks=30))
+
+    payload = json.loads(await ai_trainer.execute_tool(user_id, "get_stalled_lifts", {}))
+
+    assert payload["lifts"] == []
+    assert payload["skipped_too_few_sessions"] == 1  # заброшенное вне окна выборки вовсе

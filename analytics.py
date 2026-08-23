@@ -747,3 +747,145 @@ def is_seasoned(workout_dates: Iterable[dt.date], today: dt.date) -> bool:
     cutoff = today - dt.timedelta(days=RECENT_TRAINING_WINDOW_DAYS - 1)
     recent = sum(1 for d in workout_dates if cutoff <= d <= today)
     return recent >= RECENT_TRAINING_THRESHOLD
+
+
+# ---------- застой: почему вес стоит ----------
+#
+# Три случая, которые снаружи выглядят одинаково («вес не растёт»), а лечатся
+# по-разному, и модель их путала, потому что различать ей было нечем: она
+# смотрела на историю одного-двух упражнений (get_exercise_progress — один
+# вызов на упражнение, а раундов у хода всего шесть) и решала на глаз.
+#
+#   - вес стоит и повторы стоят — настоящий тупик, что-то менять надо;
+#   - вес стоит, а повторы растут — двойная прогрессия РАБОТАЕТ, трогать
+#     нельзя: следующим шагом вес прибавится сам (см. suggest_progression);
+#   - e1RM растёт — застоя нет вовсе, как бы ни выглядел последний подход.
+
+# Сессий в окне меньше этого — судить не о чем: две-три точки складываются в
+# любой наклон, и «встало» на них означает только «мало данных».
+STALL_MIN_SESSIONS = 4
+
+# Окно, за которое смотрим. Восемь недель: на меньшем окне нормальная
+# разгрузочная неделя читается застоем, на большем — застой позапрошлого
+# месяца, из которого человек уже вылез.
+STALL_WINDOW_WEEKS = 8
+
+# Наклон e1RM, ниже которого рост считаем шумом, кг в неделю. 0.25 кг/нед —
+# это килограмм в месяц: меньше — колебания формы, а не прогресс.
+STALL_SLOPE_EPS = 0.25
+
+# Столько недель без прибавки веса — уже «стоит». Три, а не одна: на двойной
+# прогрессии вес по определению держится пару недель, пока набираются повторы.
+STALL_WEEKS_FLAT = 3
+
+
+@dataclass
+class StallVerdict:
+    """Чем именно «встало» это упражнение — и встало ли вообще."""
+    kind: str  # "growing" | "double_progression" | "dead_end" | "regressing"
+    sessions_in_window: int
+    e1rm_slope_per_week: Optional[float]
+    top_weight: float
+    weeks_weight_flat: Optional[float]
+    reps_at_top_first: int
+    reps_at_top_last: int
+    # Верхний подход добрал верх диапазона — по методике это сигнал прибавить
+    # вес, и его некому было применить проактивно.
+    ready_to_add_weight: bool
+    avg_top_rpe: Optional[float]
+
+
+def _session_top_weight(session: SessionStats) -> float:
+    return max((s.weight for s in session.sets), default=0.0)
+
+
+def classify_stall(
+    sessions: list[SessionStats],
+    today: dt.date,
+    *,
+    window_weeks: int = STALL_WINDOW_WEEKS,
+    min_sessions: int = STALL_MIN_SESSIONS,
+) -> Optional[StallVerdict]:
+    """Разбор одного упражнения. None — данных в окне не хватает.
+
+    Окно считается от СЕГОДНЯ, а не от последней сессии: упражнение, брошенное
+    два месяца назад, не «встало» — его просто не делают, и в выдаче ему не
+    место (иначе на вопрос «что у меня встало» приезжает список заброшенного).
+    """
+    since = today - dt.timedelta(weeks=window_weeks)
+    window = [
+        s for s in sessions
+        if dt.datetime.fromisoformat(s.started_at).date() >= since
+    ]
+    if len(window) < min_sessions:
+        return None
+
+    points = [(dt.datetime.fromisoformat(s.started_at), s.top_e1rm) for s in window]
+    trend = linear_trend(points)
+    slope = trend.slope_per_week if trend else None
+
+    bodyweight_only = all(s.is_bodyweight_mode for s in window)
+    top_weight = _session_top_weight(window[-1])
+
+    # Когда вес последний раз прибавился: последняя сессия, чей рабочий вес
+    # выше всего, что было в окне до неё. Именно рекорд окна, а не «больше, чем
+    # в прошлый раз»: пила 100 → 95 → 100 иначе каждую вторую сессию читалась
+    # бы как прибавка.
+    weeks_flat: Optional[float] = None
+    if not bodyweight_only:
+        best_before = _session_top_weight(window[0])
+        last_bump_at = dt.datetime.fromisoformat(window[0].started_at).date()
+        for s in window[1:]:
+            w = _session_top_weight(s)
+            if w > best_before:
+                best_before = w
+                last_bump_at = dt.datetime.fromisoformat(s.started_at).date()
+        weeks_flat = round((today - last_bump_at).days / 7, 1)
+
+    # Повторы на текущем рабочем весе: первая и последняя сессия, где он стоял.
+    # Для веса тела «текущий вес» нулевой и условие ловит все сессии — как раз
+    # то, что нужно: там вся прогрессия и есть в повторах.
+    at_top = [
+        s for s in window
+        if bodyweight_only or _session_top_weight(s) == top_weight
+    ]
+    reps_first = at_top[0].max_reps_in_set if at_top else 0
+    reps_last = at_top[-1].max_reps_in_set if at_top else 0
+
+    rpes = [
+        s.top_set.rpe for s in window
+        if s.top_set is not None and s.top_set.rpe is not None
+    ]
+    avg_rpe = round(sum(rpes) / len(rpes), 1) if rpes else None
+
+    weight_flat = bodyweight_only or (
+        weeks_flat is not None and weeks_flat >= STALL_WEEKS_FLAT
+    )
+    if slope is not None and slope <= -STALL_SLOPE_EPS:
+        kind = "regressing"
+    elif weight_flat and reps_last > reps_first:
+        # Повторы ползут на том же весе — работающая двойная прогрессия, и это
+        # ПЕРВАЯ проверка, а не последняя: наклон e1RM тут тоже положительный
+        # (лишний повтор поднимает e1RM), так что «growing» забрал бы этот
+        # случай себе — и ответ снова стал бы «растёшь», хотя вопрос был
+        # «почему вес стоит». Ровно те два случая, которые модель и путала.
+        kind = "double_progression"
+    elif (slope is not None and slope >= STALL_SLOPE_EPS) or not weight_flat:
+        # Второе условие — про вес, прибавленный только что: пары сессий на
+        # новом весе мало, чтобы наклон успел стать заметным, а застоем это
+        # называть уже нельзя.
+        kind = "growing"
+    else:
+        kind = "dead_end"
+
+    return StallVerdict(
+        kind=kind,
+        sessions_in_window=len(window),
+        e1rm_slope_per_week=round(slope, 2) if slope is not None else None,
+        top_weight=top_weight,
+        weeks_weight_flat=weeks_flat,
+        reps_at_top_first=reps_first,
+        reps_at_top_last=reps_last,
+        ready_to_add_weight=reps_last >= REP_RANGE_MAX,
+        avg_top_rpe=avg_rpe,
+    )
