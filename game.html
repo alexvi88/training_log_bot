@@ -367,7 +367,12 @@ const sDie = () => { thud(200, 44, .38, .085); setTimeout(() => thud(150, 36, .5
 // крупная и читаемая, но над головой остаётся воздух, а препятствие целиком
 // влезает в кадр. Клипсы — чтобы на очень низком (ландшафт) и очень высоком
 // экране мир не выходил за пределы, под которые подобран баланс.
-const SK = Math.max(1.15, Math.min(1.75, H * 0.12 / 58));
+// Ограничение по ШИРИНЕ здесь такое же обязательное, как по высоте: Telegram
+// Desktop открывает мини-приложение узкой колонкой (~400px при высоте под
+// 800), и масштаб, посчитанный только от высоты, снова раздувал стойку почти
+// на весь кадр. 280 — ширина самого широкого препятствия (стойка: o.w + 104)
+// в единицах мира, делённая на долю кадра, которую ему разрешено занимать.
+const SK = Math.max(1.05, Math.min(1.75, Math.min(H * 0.12 / 58, W / 280)));
 // Прыжок — величина ФИКСИРОВАННОЙ длительности (v0/g не меняются от скорости
 // бега), поэтому его горизонтальный охват = speed*flightTime не растёт с SK.
 // Если прыжковые препятствия (гантель/гиря/скамья/блин/вышибала) масштабировать
@@ -406,10 +411,38 @@ function addShake(v) { shakeT = Math.min(SHAKE_MAX, Math.max(shakeT, v)); }
 let hitStopT = 0;
 function addHitStop(v) { hitStopT = Math.max(hitStopT, v); }
 // Комбо: серия подборов без столкновений растит множитель очков (×1…×5).
-// Скорость: старт 400 — уже бодрый бег, а не разминка; разгон +6.5/с заметен
-// на глаз; потолок 820 — предел, на котором ещё честно тянет человек, а не
-// только бот (прогонялось playwright-ботом, см. отчёт).
-const SPEED_START = 400, SPEED_RAMP = 6.5, SPEED_CAP = 820;
+// СКОРОСТЬ ЗАДАЁТСЯ НЕ ПИКСЕЛЯМИ, А ВРЕМЕНЕМ НА РЕАКЦИЮ.
+// Препятствие видно с правого края кадра, и до атлета ему ехать RUNWAY
+// пикселей — вся реакция игрока умещается в RUNWAY/speed секунд. Пока
+// скорость была абсолютным числом (400..820 px/с), это время зависело от
+// ширины окна: на телефоне 0.35-0.7 с, а в узкой колонке Telegram Desktop
+// ещё меньше — препятствие буквально «появлялось резко», среагировать было
+// физически нельзя. Теперь наоборот: сначала фиксируем, сколько секунд игрок
+// видит препятствие, и уже из этого считаем пиксели в секунду. На любом
+// экране запас одинаковый.
+// Гравитация мира. Время полёта T = 2*v0/g от масштаба не зависит (v0 и g
+// оба на SK), а вот горизонтальный охват прыжка — это speed*T, и он упал
+// вместе со скоростью. Чтобы прыжок по-прежнему уверенно перекрывал самое
+// широкое прыжковое препятствие (скамья), полёт стал длиннее: 2350 → 2050.
+const GRAV = 2050;
+const PLAYER_X_FRAC = 0.18;
+const REACT_START = 1.6, REACT_CAP = 0.9;
+const RUNWAY = W * (1 - PLAYER_X_FRAC);
+const SPEED_START = RUNWAY / REACT_START, SPEED_CAP = RUNWAY / REACT_CAP;
+// Время разгона от старта до потолка сохранено прежним (~65 с), поменялись
+// только сами скорости.
+const SPEED_RAMP = (SPEED_CAP - SPEED_START) / 65;
+// Метры в секунду оставляем теми же, что и до перевода скорости на время
+// реакции (старт 400 px/с давал 57 м/с): иначе и рекорды игроков, и длина
+// забега до FINISH_DIST разъехались бы вместе с шириной окна. Делитель растёт
+// ровно во столько же раз, во сколько упала скорость, — метр остаётся метром
+// на любом экране.
+const M_DIV = 7 * (SPEED_START / 400);
+// Насколько мир медленнее прежних абсолютных 400 px/с. Тем же множителем
+// масштабируются все ВСТРЕЧНЫЕ скорости (катящийся блин, вышибала, босс):
+// иначе они остались бы прежними и на фоне замедлившегося мира стали бы
+// вдвое опаснее, чем задумано.
+const VX_K = SPEED_START / 400;
 // Доля разгона 0..1 — тянем на неё альфу/контраст мелких фоновых паттернов,
 // чтобы на высокой скорости они не рябили стробоскопом (см. drawBasement/
 // drawNeon/drawStreet/drawLocker).
@@ -473,7 +506,7 @@ function resetGame() {
   t = 0; dist = 0; speed = SPEED_START; score = 0; shakeT = 0; hitStopT = 0;
   combo = 0; maxCombo = 0; pickups = 0; lastMile = 0; rivalWarned = false;
   finished = false; bossSpawned = false; finalStretchAnnounced = false;
-  P.x = W * 0.26; P.y = GROUND(); P.vy = 0; P.onGround = true; P.jumps = 0; P.slideT = 0;
+  P.x = W * PLAYER_X_FRAC; P.y = GROUND(); P.vy = 0; P.onGround = true; P.jumps = 0; P.slideT = 0;
   P.shield = false; P.rageT = 0; P.magnetT = 0; P.runPhase = 0;
   obstacles.length = 0; items.length = 0; parts.length = 0; toasts.length = 0;
   nextObsAt = 70; nextItemAt = 45;
@@ -817,7 +850,7 @@ function spawnObstacle() {
   if (kind === 'kettle') { o.w = 36 * SKW; o.h = 40 * SKW; }
   if (kind === 'bench') { o.w = 110 * SKW; o.h = 34 * SKW; }
   if (kind === 'rack') { o.w = 26 * SK; o.h = 0; o.gap = 64 * SK; }
-  if (kind === 'plate') { o.w = 44 * SKW; o.h = 44 * SKW; o.vx = 120 + speed * 0.12; o.rot = 0; }
+  if (kind === 'plate') { o.w = 44 * SKW; o.h = 44 * SKW; o.vx = 120 * VX_K + speed * 0.12; o.rot = 0; }
   // Груша — свисает с потолка на цепи, покачивается из стороны в сторону
   // (чисто визуально, на просвет не влияет). Просвет фиксированный, как у rack,
   // но силуэт совсем другой — цилиндр на цепи, а не перекладина на стойках.
@@ -833,7 +866,7 @@ function spawnObstacle() {
     // o.w/o.h тут чисто визуальные (коробка столкновения — от o.gap и фиксированных
     // отступов, см. obstacleBox), поэтому масштаб как у обычного plate — SKW,
     // без всякого ограничения по охвату прыжка (эти хазарды не перепрыгиваются).
-    o.w = 44 * SKW; o.h = 44 * SKW; o.gap = 58 * SK; o.rot = 0; o.vx = 60 + speed * 0.1;
+    o.w = 44 * SKW; o.h = 44 * SKW; o.gap = 58 * SK; o.rot = 0; o.vx = 60 * VX_K + speed * 0.1;
     o.age = 0; o.floatPhase = rnd(0, Math.PI * 2);
   }
   if (kind === 'rival') {
@@ -841,7 +874,7 @@ function spawnObstacle() {
     // подкатиться под него нельзя — коробка достаёт до пола (см. obstacleBox).
     // Сближение быстрее обычного препятствия — к скорости бега прибавляется
     // собственный бег вышибалы навстречу (o.vx), как у катящегося блина, но заметнее.
-    o.w = 34 * SKW; o.h = 64 * SKW; o.vx = 90 + speed * 0.18; o.runPhase = 0;
+    o.w = 34 * SKW; o.h = 64 * SKW; o.vx = 90 * VX_K + speed * 0.18; o.runPhase = 0;
     if (!rivalWarned) { rivalWarned = true; toast(tr('rivalWarn'), C_RAGE); }
   }
   obstacles.push(o);
@@ -862,7 +895,7 @@ function spawnObstacle() {
   // рассчитан подкат, и убивали честно сыгранный забег. Плюс/минус здесь
   // маленький и односторонне безопасный.
   const gapSeconds = rnd(1.3, 2.0) + speedFrac * 0.9 + (1 - paceFactor()) * 0.7 - paceFactor() * 0.15;
-  nextObsAt = dist + gapSeconds * (speed / 7);
+  nextObsAt = dist + gapSeconds * (speed / M_DIV);
 }
 
 // Кульминация забега: усиленный вышибала перед самой линией финиша — тот же
@@ -870,7 +903,7 @@ function spawnObstacle() {
 // у обычного 'rival', но крупнее, шире и быстрее сближается — решающий момент
 // должен быть заметно опаснее рядового столкновения, а не легче него.
 function spawnBoss() {
-  const o = { kind: 'boss', x: W + 90 * SK, w: 44 * SKW, h: 92 * SKW, vx: 140 + speed * 0.22, runPhase: 0 };
+  const o = { kind: 'boss', x: W + 90 * SK, w: 44 * SKW, h: 92 * SKW, vx: 140 * VX_K + speed * 0.22, runPhase: 0 };
   obstacles.push(o);
   bigPop(tr('bossWarn'), C_RAGE, W / 2, H * 0.32);
   addShake(0.3); addHitStop(0.05);
@@ -937,25 +970,54 @@ function obstacleHalo(cx, cy, rx, ry) {
 // Слайд (подкат) — рюмкой отличаются только rack/bag/cable/flyplate (та же
 // группа, что в obstacleBox отвечает за «коробка тянется вверх, прыжок не
 // спасает»); всё остальное — прыжковые. Цена ошибки — смерть, поэтому
-// направление действия помечено маркером-стрелкой (см. drawHazardArrow), а не
-// только цветом.
+// нужное действие размечено на полу (см. hazardTape), а не только цветом.
 function isSlideKind(kind) {
   return kind === 'rack' || kind === 'bag' || kind === 'cable' || kind === 'flyplate';
 }
-// Маркер-стрелка над препятствием: вершина смотрит в сторону нужного действия —
-// вниз-остриём «подкатись» под хазард, вверх-остриём «прыгай» через него. Форма
-// и направление читаются мгновенно и не нуждаются в переводе — намеренно без
-// текста (см. правило «лучше обойтись без текста» в задаче на этот патч).
-function drawHazardArrow(cx, cy, slide) {
-  const s = 10 * SK;
-  ctx.save(); ctx.translate(cx, cy);
+// РАЗМЕТКА НА ПОЛУ вместо парящего треугольника. Красный треугольник в
+// воздухе — значок из интерфейса, а не из зала: он висел над препятствием и
+// читался как элемент HUD, наклеенный поверх картинки. В зале опасные места
+// размечают лентой на полу, поэтому подсказка «что делать» теперь лежит
+// ровно там, где действие происходит: перед прыжковым препятствием — полоса
+// отталкивания, под подкатным — полоса, по которой надо проехать. Ореол
+// самого хазарда (obstacleHalo) остаётся и отвечает за «опасно», лента — за
+// «как пройти», и цвет у них разный: тёплый — прыжок, холодный — подкат.
+function hazardTape(x0, x1, y, slide) {
+  const h = 9 * SK;
+  const pulse = 0.72 + 0.28 * Math.sin(t * 6);
+  ctx.save();
+  ctx.beginPath(); ctx.roundRect(x0, y - h / 2, x1 - x0, h, h * 0.45);
+  ctx.fillStyle = slide ? 'rgba(120,220,255,0.15)' : 'rgba(255,150,40,0.16)';
+  ctx.fill();
+  ctx.clip();
+  // Диагональная штриховка, бегущая вместе с полом: лента живая, а не наклейка.
+  const step = 13 * SK, off = (dist * 6) % (step * 2);
+  ctx.lineWidth = step * 0.5;
+  ctx.strokeStyle = slide
+    ? 'rgba(150,230,255,' + (0.5 * pulse).toFixed(2) + ')'
+    : 'rgba(255,170,60,' + (0.55 * pulse).toFixed(2) + ')';
   ctx.beginPath();
-  if (slide) { ctx.moveTo(-s, -s * 0.55); ctx.lineTo(s, -s * 0.55); ctx.lineTo(0, s * 0.85); }
-  else { ctx.moveTo(-s, s * 0.55); ctx.lineTo(s, s * 0.55); ctx.lineTo(0, -s * 0.85); }
-  ctx.closePath();
-  ctx.fillStyle = '#ff5a28'; ctx.fill();
-  ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(20,10,5,0.9)'; ctx.stroke();
+  for (let x = x0 - h * 2 - off; x < x1 + h * 2; x += step * 2) {
+    ctx.moveTo(x, y + h); ctx.lineTo(x + h * 1.4, y - h);
+  }
+  ctx.stroke();
   ctx.restore();
+  // Светящаяся кромка — лента обязана читаться на любом полу (см. drawStreet/
+  // drawBasement: покрытие у зон разное, от тёмного бетона до неона).
+  ctx.save();
+  ctx.beginPath(); ctx.roundRect(x0, y - h / 2, x1 - x0, h, h * 0.45);
+  ctx.lineWidth = 1.6 * Math.sqrt(SK);
+  ctx.strokeStyle = slide ? 'rgba(180,240,255,0.8)' : 'rgba(255,195,95,0.8)';
+  ctx.stroke(); ctx.restore();
+}
+// Лента прыжкового препятствия лежит ПЕРЕД ним (место отталкивания), лента
+// подкатного — ПОД ним (место, где надо оказаться лёжа). Габариты берём от
+// того же ореола, что и раньше у стрелки, — разметка не разъезжается с
+// хазардом ни на одном виде препятствия.
+function drawActionTape(cx, rx, gy, slide) {
+  const y = gy - 3 * SK;
+  if (slide) hazardTape(cx - rx * 0.8, cx + rx * 0.8, y, true);
+  else { const x1 = cx - rx * 0.65; hazardTape(x1 - 58 * SK, x1, y, false); }
 }
 // Ореол босса — отдельный от общего obstacleHalo: тот же смысл («опасно,
 // действуй»), но пульсирующее золото вместо тёплого красно-оранжевого —
@@ -982,13 +1044,13 @@ function drawObstacleHalo(o, gy) {
   else if (o.kind === 'rival') { cx = o.w / 2; cy = gy - o.h * 0.55; rx = o.w * 0.9; ry = o.h * 0.62; }
   else if (o.kind === 'boss') {
     cx = o.w / 2; cy = gy - o.h * 0.55; rx = o.w * 1.15; ry = o.h * 0.7;
-    bossHalo(cx, cy, rx, ry); drawHazardArrow(cx, cy - ry - 16 * SK, false); return;
+    bossHalo(cx, cy, rx, ry); drawActionTape(cx, rx, gy, false); return;
   }
   else if (o.kind === 'bag') { cx = o.w / 2; cy = gy - o.gap - 65 * SK; rx = o.w * 0.7; ry = 75 * SK; }
   else if (o.kind === 'cable') { cx = o.w / 2; cy = gy - o.gap; rx = o.w / 2 + 12 * SK; ry = 22 * SK; }
   else return;
   obstacleHalo(cx, cy, rx, ry);
-  drawHazardArrow(cx, cy - ry - 14 * SK, slide);
+  drawActionTape(cx, rx, gy, slide);
 }
 function drawObstacle(o) {
   const gy = GROUND();
@@ -1511,7 +1573,7 @@ function slide() {
   // Длительность от скорости, а не константа: подкат должен покрывать длину
   // стойки (масштабированной на SK) на любой скорости. С фиксированными 0.62 с на
   // стартовой скорости игрок вставал ровно под перекладиной — гарантированная смерть.
-  if (P.onGround) P.slideT = Math.min(1.05, Math.max(0.5, 330 * SK / Math.max(120, speed)));
+  if (P.onGround) P.slideT = Math.min(1.5, Math.max(0.5, 330 * SK / Math.max(120, speed)));
   else { P.vy = Math.max(P.vy, 900 * SK); P.slideT = 0.5; }
 }
 let touchY = null, touchT = 0, touchJumped = false;
@@ -1711,7 +1773,7 @@ function update(dt) {
 
   const rage = P.rageT > 0;
   const spd = speed * (rage ? 1.55 : 1);
-  dist += spd * dt / 7;
+  dist += spd * dt / M_DIV;
   speed = Math.min(SPEED_CAP, speed + SPEED_RAMP * dt);
   // Милстоны: каждые 500 м — отметка, чтобы у забега были заметные этапы.
   // На финальном отрезке этот же счётчик подряд задел бы FINISH_DIST — не
@@ -1740,7 +1802,7 @@ function update(dt) {
   P.runPhase += dt * (spd / 340);
 
   if (!P.onGround) {
-    P.vy += 2350 * SK * dt; P.y += P.vy * dt;
+    P.vy += GRAV * SK * dt; P.y += P.vy * dt;
     if (P.y >= GROUND()) {
       P.y = GROUND(); P.vy = 0; P.onGround = true; P.jumps = 0;
       // Пыль на приземлении — заметный, но короткий всплеск у ног.
