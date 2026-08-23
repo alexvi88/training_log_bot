@@ -525,6 +525,9 @@ let meterSpeed = 0, depthSpeed = 0;
 let lastMile = 0, nextBossMile = 1000;
 let nextEventAt = 0, lastEventWorldX = 0;
 let nextWaveAt = 0; // отдельный таймер волн — дорожка не бывает пустой
+// Ритм «набор → трата»: сколько ворот прошло с прошлой волны и на какой
+// дистанции она была (см. условие выпуска волны в update).
+let gatesSinceWave = 0, lastWaveDist = 0;
 const eventHistory = []; // последние 1-2 типа событий — против серий подряд
 
 // ── РИТМ ЗАБЕГА: макро-сегменты поверх честного рандома ─────────────────────
@@ -711,6 +714,7 @@ function resetGame() {
   // бустов, а не как бой. Отряд успевает подрасти на одних воротах — этого
   // достаточно, чтобы встретить первую (маленькую, см. spawnWave) толпу.
   nextWaveAt = rnd(20, 28);
+  gatesSinceWave = 0; lastWaveDist = 0;
   // Вступительный сегмент ворот тоже был на четверть километра — теперь это
   // короткий разгон, а дальше сегменты чередуются как обычно.
   segment = 'gates'; segmentEndAt = rnd(55, 80); segmentHistory.length = 0;
@@ -1180,7 +1184,7 @@ function spawnGate() {
   // — тем он злее (в пул добавляются жёсткие варианты). Если отряд почти
   // выкошен — «милосердные» ворота: обе стороны снова плюс.
   const early = dist < 90;
-  const mercy = squad <= 4 && !early;
+  const mercy = squad <= 6 && !early;
   const hard = dist > 500;
   let buff = pickGateBuff(), debuff = pickGateDebuff(hard);
   let bothGood = early || mercy;
@@ -1202,6 +1206,7 @@ function spawnGate() {
     debuff = { ...debuff, val, label: (debuff.type === 'sub' ? '−' : '+') + fmt(val) };
   }
   const buffLeft = Math.random() < 0.5;
+  gatesSinceWave++;
   obstacles.push({ kind: 'gate', z: ZFAR, buff, debuff, buffLeft, bothGood, bothBad, glow: 0 });
 }
 // ── БОСС-ШТАНГА ──────────────────────────────────────────────────────────────
@@ -1333,9 +1338,14 @@ function spawnWave() {
   // волна физически не может быть больше горстки бойцов, даже если игроку
   // не повезло с воротами.
   const raw = 4 + Math.pow(Math.max(0, dist) / 150, 1.65) * 18 + rnd(-2, 5);
-  const softCap = dist < 130 ? Math.max(5, squad * 1.5)
-                : dist < 500 ? Math.max(9, squad * 2.2)
-                : Math.max(16, squad * 3.2);
+  // Абсолютные полы (5/9/16) — то, из-за чего просевший отряд не мог
+  // выкарабкаться: тройка встречала девятерых, в ближнем бою размен считался
+  // по clash = min(squad, count), и остаток врага гарантированно добивал
+  // отряд. Пол теперь тоже привязан к отряду: волна всегда чуть больше того,
+  // что у игрока на руках, — давит, но оставляет выход.
+  const softCap = dist < 130 ? Math.max(4, squad * 1.5)
+                : dist < 500 ? Math.max(squad + 3, squad * 2.2)
+                : Math.max(squad + 5, squad * 3.2);
   const total = Math.round(clamp(raw, 3, softCap));
   // Пул форм тот же, только вес смещается сегментом — 'swarm' чаще берёт
   // «стену»/«рассыпуху» (гуще и хаотичнее на глаз), 'gates'/'breather' не
@@ -1374,6 +1384,7 @@ function spawnWave() {
   if (!hasGiant && dist >= 420 && Math.random() < clamp((dist - 420) / 900, 0, 0.16)) {
     groups.push(mkGroup('giant', 1));
   }
+  gatesSinceWave = 0; lastWaveDist = dist;
   obstacles.push({
     kind: 'wave', worldX: spreadX(0.55), groups, formation, jitter,
     speedMult: rnd(0.9, 1.15),
@@ -2779,17 +2790,28 @@ function update(dt) {
   // заметна, а не размывалась в шесть метров отсрочки.
   if (state === 'game' && dist >= nextWaveAt) {
     const activeWaves = obstacles.filter(o => o.kind === 'wave' && waveTotalCount(o) > 0).length;
-    // Строго одна волна за раз — правило первых метров, пока отряд мал. Дальше
-    // разрешаем вторую: к этой дистанции у игрока сотни бойцов и оружие, и
-    // одиночные набеги перестают читаться как давление.
-    if (activeWaves < (dist > 260 ? 2 : 1)) {
+    // РИТМ ЖАНРА: набор → трата → награда. Волна — это «трата», и перед ней
+    // игрок обязан получить возможность набрать: пока с прошлого боя не
+    // проехали ни одних ворот, новая волна не выходит. Без этого правила
+    // забег скатывается в конвейер боёв, в котором отряд из трёх человек
+    // встречает волну за волной и уже никогда не растёт (ровно это и
+    // произошло на живом прогоне: 311 метров, отряд 3, пять групп на
+    // дорожке). Страховка от пустой дорожки — принудительный выпуск, если
+    // ворота долго не выпадали.
+    const fedByGate = gatesSinceWave > 0 || dist - lastWaveDist > 90 || dist < 40;
+    // Две волны разом — только когда отряд реально большой: для маленького
+    // это не «давление», а гарантированная смерть.
+    if (activeWaves < (dist > 400 && squad >= 80 ? 2 : 1) && fedByGate) {
       spawnWave();
       const gapMul = SEGMENT_WAVE_GAP_MUL[segment] || 1;
       // Интервал между волнами сокращён: 78-34 метров давали дорожку, на
       // которой врагов ждёшь дольше, чем дерёшься. Мясо игры — встречная
       // толпа, поэтому пауза осталась заметной, но перестала быть основным
       // содержанием забега.
-      const gap = clamp(50 - dist / 14, 20, 50) * gapMul;
+      // Интервал между волнами. 50→20 (пробовал) оказалось конвейером,
+      // 78→34 (было до того) — дорожкой, на которой врагов ждёшь дольше, чем
+      // дерёшься. Середина: пауза заметна, но не пустая.
+      const gap = clamp(62 - dist / 13, 26, 62) * gapMul;
       nextWaveAt = dist + rnd(gap * 0.75, gap);
     } else {
       nextWaveAt = dist + 8; // прошлая волна ещё жива — коротко отложим и проверим снова
