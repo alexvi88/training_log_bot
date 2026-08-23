@@ -4060,6 +4060,35 @@ async def list_all_sets_by_exercise(user_id: int) -> list[aiosqlite.Row]:
     return await cur.fetchall()
 
 
+async def list_sets_by_exercise_since(user_id: int, since: str) -> list[aiosqlite.Row]:
+    """Подходы за последние недели, по всем упражнениям сразу, старые первыми —
+    с именем упражнения, группой и RPE.
+
+    Одним запросом, а не по упражнению: разбор застоя смотрит ВСЕ упражнения
+    (ai_trainer._stalled_lifts), а раунд инструментов у хода один, и тридцать
+    round-trip'ов внутри него — то же самое, что и на экране зала славы (см.
+    list_all_sets_by_exercise), только под таймаутом ответа тренера.
+
+    RPE тут есть, в отличие от list_all_sets_by_exercise: «стоит на RPE 6-7»
+    (недогруз) и «стоит на 9-10» (усталость или техника) — разные диагнозы, и
+    без этой колонки они неразличимы.
+    """
+    cur = await conn().execute(
+        f"SELECT {LOAD_WEIGHT_SQL} AS weight, s.reps, s.rpe, e.id AS exercise_id, "
+        "       e.display_name, g.name AS group_name, w.id AS workout_id, w.started_at "
+        "FROM sets s "
+        "JOIN workout_blocks b ON b.id = s.block_id "
+        "JOIN workouts w ON w.id = b.workout_id "
+        "JOIN exercises e ON e.id = s.exercise_id "
+        "LEFT JOIN muscle_groups g ON g.id = e.primary_group_id "
+        "WHERE w.user_id = ? AND w.status = 'finished' AND w.started_at >= ? "
+        "  AND e.is_archived = 0 AND e.is_template = 0 "
+        "ORDER BY e.id, w.started_at, s.id",
+        (user_id, since),
+    )
+    return await cur.fetchall()
+
+
 async def list_sets_for_workout_exercise(workout_id: int, exercise_id: int) -> list[aiosqlite.Row]:
     """Every set of one exercise in one workout, in the order the tracker shows
     them.
