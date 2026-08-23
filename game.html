@@ -71,20 +71,8 @@
     font-size: 30px; font-weight: bold; text-transform: uppercase;
     letter-spacing: 3px; color: #ff4444; text-shadow: 0 0 20px #ff4444;
   }
-  .result-title.win {
-    color: #ffd700; text-shadow: 0 0 24px #ffd700cc, 0 0 46px #ffd70066;
-    font-size: 36px; animation: winPulse 1.7s ease-in-out infinite;
-  }
-  @keyframes winPulse {
-    0%, 100% { transform: scale(1); text-shadow: 0 0 24px #ffd700cc, 0 0 46px #ffd70066; }
-    50% { transform: scale(1.06); text-shadow: 0 0 34px #ffd700ee, 0 0 64px #ffd70099; }
-  }
-  /* Победный экран — самый сочный в игре: тёплое сияние вокруг, а не просто
-     тёмная подложка, как у экрана провала. */
-  #screen-win { background: radial-gradient(circle at 50% 30%, rgba(255,215,0,0.22), rgba(20,17,15,0) 62%); }
-  #win-art { box-shadow: 0 0 44px rgba(255,215,0,0.55), 0 0 0 2px rgba(255,215,0,0.4); }
   .result-score { font-size: 20px; color: #ffd700; }
-  #result-art, #win-art {
+  #result-art {
     width: 104px; height: 104px; object-fit: contain; border-radius: 12px;
     background: rgba(255,255,255,0.05);
     border: 2px solid rgba(255,215,0,0.4); display: none; margin: 0 auto;
@@ -104,7 +92,7 @@
   .result-btn.retry:hover { background: rgba(0,200,80,0.25); }
   .result-btn.continue { border-color: #ffd700; color: #ffd700; background: rgba(255,215,0,0.15); }
   .result-btn.continue:hover { background: rgba(255,215,0,0.3); }
-  #result-status, #win-status { color: #aaa; font-size: 13px; min-height: 16px; }
+  #result-status { color: #aaa; font-size: 13px; min-height: 16px; }
 
   #flash { position: fixed; inset: 0; pointer-events: none; opacity: 0; transition: opacity 0.15s; }
   #flash.red { background: rgba(255,40,40,0.35); }
@@ -141,22 +129,6 @@
     <button class="result-btn retry" onclick="restartGame()" data-i18n="retryBtn">🔄 Ещё подход</button>
     <button class="result-btn" onclick="submitAndClose()" data-i18n="closeBtn">❌ Закрыть</button>
     <div id="result-status"></div>
-  </div>
-</div>
-
-<!-- ЭКРАН 4: результат (финиш забега) -->
-<div id="screen-win" class="screen">
-  <div class="screen-inner">
-    <div class="result-title win" data-i18n="winTitle">Финиш!</div>
-    <img id="win-art" src="" alt="">
-    <div class="result-score" id="win-score">0 м · 🥤 0</div>
-    <div class="result-stats" id="win-stats"></div>
-    <div class="result-quip" id="win-quip"></div>
-    <div class="result-best" id="win-best"></div>
-    <button class="result-btn continue" onclick="continueRun()" data-i18n="continueBtn">🏃 Бежать дальше</button>
-    <button class="result-btn retry" onclick="restartGame()" data-i18n="newRunBtn">🔄 Новый забег</button>
-    <button class="result-btn" onclick="submitAndClose('win-status')" data-i18n="closeBtn">❌ Закрыть</button>
-    <div id="win-status"></div>
   </div>
 </div>
 
@@ -243,12 +215,9 @@ const STR = {
   zoneStreet: ['УЛИЦА', 'STREET'],
   zoneRoof: ['КРЫША', 'ROOFTOP'],
   zoneLocker: ['РАЗДЕВАЛКА', 'LOCKER ROOM'],
-  zoneFinal: ['ФИНИШНАЯ ПРЯМАЯ', 'FINAL STRETCH'],
+  zoneBoss: ['ИДЁТ ВЫШИБАЛА', 'ENFORCER INCOMING'],
   bossWarn: ['ГЛАВНЫЙ ВЫШИБАЛА!', 'BOSS ENFORCER!'],
   bossDown: ['ВЫШИБАЛА ПОВЕРЖЕН!', 'ENFORCER DOWN!'],
-  winTitle: ['Финиш!', 'Finish!'],
-  continueBtn: ['🏃 Бежать дальше', '🏃 Keep running'],
-  newRunBtn: ['🔄 Новый забег', '🔄 New run'],
 };
 function tr(key) {
   const pair = STR[key];
@@ -424,7 +393,20 @@ function addHitStop(v) { hitStopT = Math.max(hitStopT, v); }
 // оба на SK), а вот горизонтальный охват прыжка — это speed*T, и он упал
 // вместе со скоростью. Чтобы прыжок по-прежнему уверенно перекрывал самое
 // широкое прыжковое препятствие (скамья), полёт стал длиннее: 2350 → 2050.
-const GRAV = 2050;
+// ВЫСОТА ПРЫЖКА И ВРЕМЯ ПОЛЁТА — РАЗНЫЕ РУЧКИ, И ЭТО СПАСАЕТ БАЛАНС.
+// Время полёта T = 2*v0/g (от него зависит горизонтальный охват прыжка =
+// speed*T, то есть проходимость широких препятствий), высота апекса =
+// v0²/(2g). Если умножить И v0, И g на одно и то же число, T не меняется
+// вообще, а апекс меняется во столько же раз. Поэтому дугу можно опустить,
+// ничего не сломав в проходимости.
+// Так и сделано: прежние 870/760/2350 давали двойной прыжок на 455 px вверх —
+// выше отметки, с которой отрисовка перестаёт следовать за игроком (см.
+// PLAYER_VISUAL_MIN_Y), и фигура на полсекунды буквально зависала в воздухе.
+// Все три импульса и гравитация умножены на 0.72: охват прыжка тот же, апекс
+// одиночного ≈ 190 px, двойного ≈ 335 px — обе дуги с запасом ниже HUD и с
+// запасом выше самого высокого прыжкового препятствия (босс, 92*SKW).
+const GRAV = 1476;
+const JUMP_V0 = 626, JUMP_V0_DOUBLE = 547, SLIDE_DROP_V = 648;
 const PLAYER_X_FRAC = 0.18;
 const REACT_START = 1.6, REACT_CAP = 0.9;
 const RUNWAY = W * (1 - PLAYER_X_FRAC);
@@ -455,26 +437,23 @@ let rivalWarned = false;
 // не с первой секунды, а когда игрок уже разогнался и освоился.
 const RIVAL_MIN_DIST = 480;
 
-// ── ФИНИШ ЗАБЕГА ─────────────────────────────────────────────────────────────
-// Раньше забег был чисто бесконечным — заказчик много раз жаловался на «бегу
-// просто без конца». Теперь у забега есть цель: FINISH_DIST метров, и
-// заметный ФИНАЛЬНЫЙ ОТРЕЗОК перед ней (свой свет, свой ярлык в HUD вместо
-// имени зоны) с кульминацией — усиленным вышибалой (см. RIVAL_MIN_DIST/pool
-// в spawnObstacle: это тот же персонаж и тот же принцип «перепрыгнуть можно,
-// подкатиться нельзя», просто крупнее, шире и быстрее — не отдельный второй
-// механизм). Дистанцию подобрали так, чтобы обычный забег на средней скорости
-// (разгон SPEED_START→SPEED_CAP) укладывался примерно в 60-90 секунд активной
-// игры — не заявка на рекорд, а один полный подход.
-const FINISH_DIST = 5000;
-const FINAL_STRETCH_LEN = 550;
-const FINAL_STRETCH_START = FINISH_DIST - FINAL_STRETCH_LEN;
-// Босс выходит не в начале отрезка, а незадолго до линии — так забег не
-// становится легче (сложность продолжает расти как обычно всю дистанцию),
-// а получает ОДИН явный решающий момент прямо перед финишем.
-const BOSS_TRIGGER_DIST = FINISH_DIST - 300;
-let finished = false, bossSpawned = false, finalStretchAnnounced = false;
-// Два варианта светового грейда финального отрезка — выбор на весь забег
-// (см. resetGame), чтобы соседние подходы не выглядели одним клипом.
+// ── РУБЕЖИ ЗАБЕГА ────────────────────────────────────────────────────────────
+// Забег БЕСКОНЕЧНЫЙ: он заканчивается только столкновением. Пробовали финишную
+// линию на 5000 м с победным экраном — забракована: раннер этого жанра живёт
+// рекордом и «ещё один заход», а не прохождением. Чтобы бесконечность не была
+// ровной кашей, у неё есть ритм рубежей: каждые BOSS_EVERY метров навстречу
+// выходит усиленный вышибала (тот же персонаж и тот же принцип «перепрыгнуть
+// можно, подкатиться нельзя», просто крупнее и быстрее), а перед ним —
+// заметный отрезок со своим светом и своей меткой в HUD вместо имени зоны.
+// То есть кульминация никуда не делась, просто повторяется, а не завершает
+// забег.
+const BOSS_EVERY = 1200;
+const BOSS_STRETCH_LEN = 400;
+let nextBossAt = BOSS_EVERY, bossStretchAnnounced = false;
+// Начало текущего «жаркого» отрезка перед рубежом.
+function bossStretchStart() { return nextBossAt - BOSS_STRETCH_LEN; }
+// Два варианта светового грейда отрезка — выбор на весь забег (см. resetGame),
+// чтобы соседние подходы не выглядели одним клипом.
 const FINALE_PALETTES = [
   { tint: '255,90,54', accent: '#ffb347' },
   { tint: '255,45,140', accent: '#ff7ad1' },
@@ -507,7 +486,7 @@ const P = {
 function resetGame() {
   t = 0; dist = 0; speed = SPEED_START; score = 0; shakeT = 0; hitStopT = 0;
   combo = 0; maxCombo = 0; pickups = 0; lastMile = 0; rivalWarned = false;
-  finished = false; bossSpawned = false; finalStretchAnnounced = false;
+  nextBossAt = BOSS_EVERY; bossStretchAnnounced = false;
   P.x = W * PLAYER_X_FRAC; P.y = GROUND(); P.vy = 0; P.onGround = true; P.jumps = 0; P.slideT = 0;
   P.shield = false; P.rageT = 0; P.magnetT = 0; P.runPhase = 0;
   obstacles.length = 0; items.length = 0; parts.length = 0; toasts.length = 0;
@@ -541,20 +520,6 @@ const QUIPS = LANG === 'en' ? [
   ' м. Протеин сам себя не соберёт — ещё подход.',
   ' м записал. Дальше — больше.',
   ' м. Видел, как ты за предтреником тянулся, — в следующий раз возьмёшь.',
-];
-
-// Победные реплики — забег закрыт целиком, вышибалу на финише прошёл. Это
-// успех, поэтому без подколок, только поддержка (см. TONE_OF_VOICE.md).
-const WIN_QUIPS = LANG === 'en' ? [
-  " m — the run's yours. Clean finish.",
-  ' m — you made it to the end, no question.',
-  " m. Finish's closed — keep running for the record, or start a fresh run.",
-  ' m — full distance, done. Respect.',
-] : [
-  ' м — забег твой. Взял финиш чисто.',
-  ' м — дошёл до конца, никаких вопросов.',
-  ' м. Финиш закрыл — беги дальше на рекорд или начинай новый заход.',
-  ' м — сделал всю дистанцию. Уважаю.',
 ];
 
 // ── ЛОКАЦИИ ──────────────────────────────────────────────────────────────────
@@ -862,7 +827,12 @@ function spawnObstacle() {
   // подстраивается под текущую скорость живьём, узкого места здесь нет.
   if (kind === 'dumb') { o.w = 52 * SKW; o.h = 30 * SKW; }
   if (kind === 'kettle') { o.w = 36 * SKW; o.h = 40 * SKW; }
-  if (kind === 'bench') { o.w = 110 * SKW; o.h = 34 * SKW; }
+  // Скамья — самое ДЛИННОЕ прыжковое препятствие, и именно её ширина упирается
+  // в горизонтальный охват прыжка (speed*времяПолёта). После перевода скорости
+  // на время реакции охват стал короче в абсолютных пикселях, поэтому прежние
+  // 110 давали запас в считанные пиксели: бот-автопилот честно прыгал и всё
+  // равно цеплял её хвостом.
+  if (kind === 'bench') { o.w = 96 * SKW; o.h = 34 * SKW; }
   if (kind === 'rack') { o.w = 26 * SK; o.h = 0; o.gap = 64 * SK; }
   if (kind === 'plate') { o.w = 44 * SKW; o.h = 44 * SKW; o.vx = 120 * VX_K + speed * 0.12; o.rot = 0; }
   // Груша — свисает с потолка на цепи, покачивается из стороны в сторону
@@ -1099,7 +1069,7 @@ function drawObstacle(o) {
     // Тот же drawAthlete, что и для игрока — просто чужая палитра (RIVAL_SKIN) и
     // зеркальный разворот, чтобы бежал НАВСТРЕЧУ (лицом влево, к игроку).
     ctx.translate(o.w / 2, gy); ctx.scale(-1, 1);
-    drawAthlete(ctx, RIVAL_SKIN, { run: Math.sin(o.runPhase * 14), rage: true, scale: 1.08 * SK, outline: true });
+    drawAthlete(ctx, RIVAL_SKIN, { run: Math.sin(o.runPhase * 14), scale: 1.08 * SK, outline: true });
   }
   if (o.kind === 'boss') {
     // Решающая встреча забега: тот же вышибала, что и рядовой 'rival' (см.
@@ -1109,7 +1079,7 @@ function drawObstacle(o) {
     ctx.translate(o.w / 2, gy); ctx.scale(-1, 1);
     ctx.save();
     ctx.shadowColor = 'rgba(255,190,40,0.9)'; ctx.shadowBlur = 10;
-    drawAthlete(ctx, RIVAL_SKIN, { run: Math.sin(o.runPhase * 14), rage: true, scale: 1.42 * SK, outline: true });
+    drawAthlete(ctx, RIVAL_SKIN, { run: Math.sin(o.runPhase * 14), scale: 1.42 * SK, outline: true });
     ctx.restore();
   }
   if (o.kind === 'bag') {
@@ -1182,7 +1152,14 @@ function obstacleBox(o) {
   }
   // Прыжковые (dumb/kettle/bench/plate/rival) — их o.w/o.h в масштабе SKW
   // (см. spawnObstacle), поэтому и отступ по ширине свой, поменьше.
-  return { x: o.x + mw, y: gy - o.h + m, w: o.w - 2 * mw, h: o.h - m };
+  // Вышибала и его усиленная версия — самые ВЫСОКИЕ прыжковые (64 и 92 против
+  // 30-44 у железа), и после того как дуга прыжка стала ниже, их макушка
+  // съедала почти половину апекса: честно взятый прыжок цеплялся хвостом.
+  // Коробке срезан верх — приём стандартный для раннеров (прощающий хитбокс:
+  // видимая макушка чуть выше того, что реально убивает), силуэт при этом не
+  // меняется.
+  const topCut = (o.kind === 'rival' || o.kind === 'boss') ? o.h * 0.12 : 0;
+  return { x: o.x + mw, y: gy - o.h + m + topCut, w: o.w - 2 * mw, h: o.h - m - topCut };
 }
 
 // ── СПОРТПИТ ─────────────────────────────────────────────────────────────────
@@ -1401,8 +1378,17 @@ function drawAthlete(c, fighter, opts) {
   // при таком смещении и цвете складывается в контур вокруг фигуры целиком.
   if (outline) { c.shadowColor = 'rgba(10,7,5,0.9)'; c.shadowBlur = 5; c.shadowOffsetX = 0; c.shadowOffsetY = 0; }
   if (rage) {
-    c.fillStyle = 'rgba(255,90,54,0.22)';
-    for (let i = 1; i <= 3; i++) c.fillRect(-17 - i * 14, -58 + i * 5, 34, 52 - i * 8);
+    // Шлейф ярости — именно ШТРИХИ СКОРОСТИ, а не три полупрозрачных
+    // прямоугольника, как было: у вышибалы (он всегда рисовался с rage) это
+    // читалось как красная клякса, приклеенная к спине, а не как движение.
+    // Узкие скруглённые полосы разной длины, бледнеющие к хвосту.
+    c.lineCap = 'round';
+    for (let i = 1; i <= 3; i++) {
+      c.strokeStyle = 'rgba(255,90,54,' + (0.3 - i * 0.07).toFixed(2) + ')';
+      c.lineWidth = 4.5 - i * 0.9;
+      const y = -46 + i * 11, len = 26 - i * 4;
+      c.beginPath(); c.moveTo(-14 - i * 9, y); c.lineTo(-14 - i * 9 - len, y); c.stroke();
+    }
   }
   if (sliding) {
     // подкат: корпус откинут назад, ноги вперёд
@@ -1516,10 +1502,12 @@ function drawAthlete(c, fighter, opts) {
 // ниже отметки, отрисовка плавно (без скачка) продолжает следовать за ним.
 // Обычный одиночный и типичный двойной прыжок до этой отметки не долетают —
 // подрезка касается только редкого «прыжка на пике прыжка».
-// Считаем от высоты кадра, а не абсолютным числом: 275px были подобраны под
-// один конкретный экран и под прежний (более крупный) SK, на низком экране эта
-// линия оказывалась ниже верхушки обычного прыжка.
-const PLAYER_VISUAL_MIN_Y = Math.max(120, H * 0.34);
+// Считаем от высоты кадра, а не абсолютным числом. И держим ЗАМЕТНО выше
+// верхушки обычного двойного прыжка: эта отсечка — аварийная (чтобы фигура
+// физически не залезла в HUD), а не рабочая. Пока она стояла на 0.34 высоты
+// кадра, в неё упирался КАЖДЫЙ двойной прыжок, и атлет на полсекунды зависал
+// в воздухе — отрисовка стояла, пока настоящий P.y уходил выше и возвращался.
+const PLAYER_VISUAL_MIN_Y = Math.max(80, H * 0.14);
 function playerRenderY() { return Math.max(P.y, PLAYER_VISUAL_MIN_Y); }
 function drawPlayer() {
   const ry = playerRenderY();
@@ -1557,8 +1545,8 @@ function jump() {
   // vy и гравитация (см. update()) масштабированы одним и тем же SK — апекс
   // прыжка растёт в SK раз, а время полёта не меняется (v/g тот же), поэтому
   // горизонтальный охват прыжка и синхронизация с препятствиями не сбились.
-  if (P.onGround) { P.vy = -870 * SK; P.onGround = false; P.jumps = 1; sJump(); }
-  else if (P.jumps < 2) { P.vy = -760 * SK; P.jumps = 2; sDouble(); burst(P.x, P.y - 10, 'rgba(242,237,227,0.8)', 6, 120); }
+  if (P.onGround) { P.vy = -JUMP_V0 * SK; P.onGround = false; P.jumps = 1; sJump(); }
+  else if (P.jumps < 2) { P.vy = -JUMP_V0_DOUBLE * SK; P.jumps = 2; sDouble(); burst(P.x, P.y - 10, 'rgba(242,237,227,0.8)', 6, 120); }
 }
 function slide() {
   if (!running) return;
@@ -1566,7 +1554,7 @@ function slide() {
   // стойки (масштабированной на SK) на любой скорости. С фиксированными 0.62 с на
   // стартовой скорости игрок вставал ровно под перекладиной — гарантированная смерть.
   if (P.onGround) P.slideT = Math.min(1.5, Math.max(0.5, 330 * SK / Math.max(120, speed)));
-  else { P.vy = Math.max(P.vy, 900 * SK); P.slideT = 0.5; }
+  else { P.vy = Math.max(P.vy, SLIDE_DROP_V * SK); P.slideT = 0.5; }
 }
 let touchY = null, touchT = 0, touchJumped = false;
 cv.addEventListener('pointerdown', e => {
@@ -1672,46 +1660,6 @@ function die() {
   setTimeout(() => showScreen('screen-result'), 900);
 }
 
-// Забег выигран: дистанция дошла до FINISH_DIST живым — не рядовая смерть,
-// самый сочный момент в игре, поэтому отдача заметно крупнее обычного
-// столкновения (см. die()): золотой залп партиклов, полновесный хит-стоп,
-// вспышка и большой попап прямо на канвасе, ДО перехода на победный экран.
-function winRun() {
-  if (finished) return;
-  finished = true; running = false;
-  sPower(); addShake(SHAKE_MAX); addHitStop(0.16); flash('gold');
-  bigPop(tr('winTitle'), C_GOLD, W / 2, H * 0.36);
-  for (let k = 0; k < 3; k++) burst(P.x + k * 10, P.y - 30 * SK - k * 20, C_GOLD, 34, 420);
-  burst(P.x, P.y - 60 * SK, '#fff6d8', 20, 300);
-  const d = Math.floor(dist);
-  if (d > best) { best = d; localStorage.setItem('gymrun_best', best); }
-  lastResult = {
-    distance: d, score, fighter: selectedFighter,
-    best, maxCombo, pickups, gameTimestamp: Date.now(), won: true,
-  };
-  const art = document.getElementById('win-art');
-  art.src = fighterPortrait(selectedFighter, 208).toDataURL();
-  art.style.display = 'block';
-  document.getElementById('win-score').textContent = d + ' ' + tr('unit') + ' · 🥤 ' + score;
-  document.getElementById('win-stats').textContent =
-    tr('resultStats') + maxCombo + tr('resultStatsPickups') + pickups;
-  // «ПРИВЕТ АТЛЕТ! »/«HEY ATHLETE! » — брендовая формула, имя не подставляем (см. TONE_OF_VOICE.md)
-  document.getElementById('win-quip').textContent = tr('greeting') + d + pick(WIN_QUIPS);
-  document.getElementById('win-best').textContent = tr('resultBest') + best + ' ' + tr('unit');
-  document.getElementById('win-status').textContent = '';
-  setTimeout(() => showScreen('screen-win'), 850);
-}
-
-// «Бежать дальше»: рекордсмену не обязательно начинать заново — забег
-// продолжается тем же подходом на ещё бо́льшую дистанцию, за FINISH_DIST
-// (эндлесс-хвост). finished остаётся true, поэтому winRun() второй раз не
-// сработает и не откроет тот же экран заново.
-function continueRun() {
-  showScreen('game');
-  running = true;
-  last = performance.now();
-}
-
 // «Ещё раз»/«Новый забег»: рестарт локальный — вопросы качать не надо, результат шлём фоном
 function restartGame() {
   if (lastResult) submitResult(lastResult); // fire-and-forget, как submit в restartGame совы
@@ -1737,8 +1685,8 @@ async function submitResult(result) {
   }
 }
 
-// statusElId — «Отказ» и «Финиш» экраны показывают статус отправки в разных
-// плашках (#result-status / #win-status), логика отправки одна и та же.
+// statusElId — экран итога показывает статус отправки в своей плашке
+// (#result-status); параметр оставлен на случай второго экрана.
 async function submitAndClose(statusElId) {
   const statusEl = document.getElementById(statusElId || 'result-status');
   if (!window.Telegram?.WebApp) {
@@ -1767,26 +1715,27 @@ function update(dt) {
   const spd = speed * (rage ? 1.55 : 1);
   dist += spd * dt / M_DIV;
   speed = Math.min(SPEED_CAP, speed + SPEED_RAMP * dt);
-  // Милстоны: каждые 500 м — отметка, чтобы у забега были заметные этапы.
-  // На финальном отрезке этот же счётчик подряд задел бы FINISH_DIST — не
-  // дублируем событие, у финиша своя, более крупная реплика (см. winRun).
-  if (!finished && Math.floor(dist / 500) > lastMile && dist < FINAL_STRETCH_START) {
+  // Милстоны: каждые 500 м — отметка, чтобы у бесконечного забега были
+  // заметные этапы. Рядом с рубежом молчим: там своя, более крупная реплика.
+  if (Math.floor(dist / 500) > lastMile && dist < bossStretchStart()) {
     lastMile = Math.floor(dist / 500);
     bigPop(lastMile * 500 + ' ' + tr('unit') + '!', C_GOLD, W / 2, H * 0.3);
     burst(W / 2, H * 0.3, C_GOLD, 10, 160);
   }
-  // Финальный отрезок: заметно другой свет вместо очередной зоны (см. render —
-  // finaleGlow) и решающая встреча с усиленным вышибалой прямо перед линией
-  // (см. spawnBoss) — не смягчаем сложность, а даём забегу видимую цель и
-  // кульминацию, как договаривались с заказчиком.
-  if (!finished && !finalStretchAnnounced && dist >= FINAL_STRETCH_START) {
-    finalStretchAnnounced = true;
-    bigPop(tr('zoneFinal'), C_GOLD, W / 2, H * 0.3);
+  // Отрезок перед рубежом: заметно другой свет вместо очередной зоны (см.
+  // render — finaleGlow) и встреча с усиленным вышибалой в конце.
+  if (!bossStretchAnnounced && dist >= bossStretchStart()) {
+    bossStretchAnnounced = true;
+    bigPop(tr('zoneBoss'), C_GOLD, W / 2, H * 0.3);
     addShake(0.22); addHitStop(0.1);
   }
-  if (!finished && !bossSpawned && dist >= BOSS_TRIGGER_DIST) {
-    bossSpawned = true;
+  if (dist >= nextBossAt) {
     spawnBoss();
+    nextBossAt += BOSS_EVERY;
+    bossStretchAnnounced = false;
+    // Милстоны продолжаются с текущего места, без «догоняющей» серии попапов
+    // за отрезок, который мы пропустили молча.
+    lastMile = Math.floor(dist / 500);
   }
   if (P.rageT > 0) P.rageT -= dt;
   if (P.magnetT > 0) P.magnetT -= dt;
@@ -1886,10 +1835,6 @@ function update(dt) {
   toasts.forEach(ts => { ts.t += dt; ts.y -= 30 * dt; });
   for (let i = toasts.length - 1; i >= 0; i--) if (toasts[i].t > (toasts[i].life || 1.2)) toasts.splice(i, 1);
 
-  // Линия финиша — проверяем последней: столкновение с боссом в этом же кадре
-  // (die(), выше) уже вышло бы из update() раньше и до победы дело не дошло
-  // бы — забег до конца нужно ДОБЕЖАТЬ живым, а не просто отмотать дистанцию.
-  if (!finished && dist >= FINISH_DIST) { winRun(); return; }
 }
 
 // ── РЕНДЕР ──────────────────────────────────────────────────────────────────
@@ -1993,13 +1938,13 @@ function render() {
   if (!cv.classList.contains('active')) return;
   ctx.save();
   if (shakeT > 0) ctx.translate(rnd(-9, 9) * shakeT, rnd(-9, 9) * shakeT);
-  // Финальный отрезок обязан ЧИТАТЬСЯ финалом, а не ещё одной зоной: свой
+  // Отрезок перед рубежом обязан ЧИТАТЬСЯ особым, а не ещё одной зоной: свой
   // цветовой грейд поверх обычной зоны (не подменяет её рисунок, а красит
-  // сверху — работает при любой из пяти локаций) и нарастание к линии финиша.
+  // сверху — работает при любой из пяти локаций) и нарастание к самой встрече.
   // finalePalette — один из двух вариантов на забег (см. resetGame), чтобы
   // соседние подходы не выглядели одним и тем же клипом.
-  const inFinale = !finished && dist >= FINAL_STRETCH_START;
-  const finaleP = inFinale ? Math.min(1, (dist - FINAL_STRETCH_START) / FINAL_STRETCH_LEN) : 0;
+  const inFinale = dist >= bossStretchStart();
+  const finaleP = inFinale ? Math.min(1, (dist - bossStretchStart()) / BOSS_STRETCH_LEN) : 0;
   const zi = zoneIndex(), zb = zoneBlend();
   const z = ZONES[zi], zn = ZONES[nextZoneIndex()];
 
@@ -2127,10 +2072,10 @@ function render() {
   if (P.shield) { ctx.textAlign = 'right'; ctx.font = "800 12px 'Courier New', monospace"; ctx.fillStyle = '#7ea8ff'; ctx.fillText(tr('hudShield'), W - 20, iy); iy += 22; }
 
   // Плашка с названием зоны — своя тёмная подложка, поэтому что бы ни было под
-  // ней, надпись остаётся читаемой. На финальном отрезке она заметно другая:
-  // золотая, пульсирующая, с меткой «ФИНИШНАЯ ПРЯМАЯ» вместо имени зоны — сам
-  // HUD подтверждает, что это уже не рядовая локация.
-  const labelText = inFinale ? tr('zoneFinal') : z.name;
+  // ней, надпись остаётся читаемой. На отрезке перед рубежом она заметно
+  // другая: золотая, пульсирующая, с меткой про вышибалу вместо имени зоны —
+  // сам HUD подтверждает, что это уже не рядовая локация.
+  const labelText = inFinale ? tr('zoneBoss') : z.name;
   ctx.font = "800 11px 'Courier New', monospace";
   const zoneW = ctx.measureText(labelText).width + 24;
   ctx.fillStyle = inFinale ? 'rgba(60,26,8,0.55)' : 'rgba(10,10,14,0.45)';
