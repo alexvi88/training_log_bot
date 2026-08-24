@@ -350,6 +350,7 @@ _ACTIVITY_MARKERS = {
     # ленте должно тапом, а не набранным словом.
     activity_log.KIND_REPLY_BUTTON: "👉",
     activity_log.KIND_AI_FAILED: "⚠️",
+    activity_log.KIND_AI_PROGRAM_OFFERED: "🗂",
 }
 
 

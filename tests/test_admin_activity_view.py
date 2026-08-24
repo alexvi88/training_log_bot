@@ -83,3 +83,17 @@ def test_a_turn_that_died_is_visible_in_the_feed(monkeypatch):
     row = _row(activity_log.KIND_AI_FAILED, "тренер не ответил: таймаут", "2026-08-22T18:17:00")
 
     assert admin._activity_line(row).endswith("⚠️ тренер не ответил: таймаут")
+
+
+def test_an_offered_program_is_its_own_line(monkeypatch):
+    """«Предложил программу, а человек не нажал» и «наговорил план текстом, а
+    кнопки не было» — разные поломки: первая про кнопку, вторая про то, что
+    модель не вызвала propose_program. В ленте они выглядели одинаково."""
+    monkeypatch.setattr(config, "ADMIN_TZ_OFFSET", 0)
+    row = _row(
+        activity_log.KIND_AI_PROGRAM_OFFERED,
+        "предложил программу: Верх/низ 3×",
+        "2026-08-23T05:04:00",
+    )
+
+    assert admin._activity_line(row).endswith("🗂 предложил программу: Верх/низ 3×")

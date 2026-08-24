@@ -2266,3 +2266,48 @@ async def test_a_hanging_model_ends_with_an_honest_message_not_silence(
     failures = [row for row in events if row["kind"] == activity_log.KIND_AI_FAILED]
     assert len(failures) == 1
     assert "таймаут" in failures[0]["content"]
+
+
+async def test_a_reply_carrying_a_program_leaves_its_own_trace(fresh_db, user_id, monkeypatch):
+    """Утренний разбор 23.08: «саммари программы есть, Add в логе нет» — и по
+    ленте не понять, была ли под ответом кнопка вообще. Это разные поломки:
+    кнопка была и человек не нажал (работа над CTA) против модель наговорила
+    план текстом, не вызвав propose_program (работа над промптом)."""
+    draft = {
+        "name": "Верх/низ 3×",
+        "days": [{"name": "День 1", "items": [{"name": "Жим", "target": "3×8", "source": "own"}]}],
+    }
+
+    async def ask_with_program(uid, question, history, **kwargs):
+        on_program = kwargs.get("on_program")
+        if on_program is not None:
+            await on_program(draft)
+        return "Собрал тебе верх/низ."
+
+    monkeypatch.setattr(ai_trainer.ai_trainer, "ask", ask_with_program)
+
+    state = await _make_state(user_id)
+    await state.set_state("AITrainerFlow:chatting")
+    await ai_trainer.ai_question(_make_chat_message(user_id, "собери мне программу"), state)
+
+    kinds = [row["kind"] for row in await fresh_db.list_user_events(user_id)]
+    assert activity_log.KIND_AI_PROGRAM_OFFERED in kinds
+    offered = [
+        row for row in await fresh_db.list_user_events(user_id)
+        if row["kind"] == activity_log.KIND_AI_PROGRAM_OFFERED
+    ]
+    assert "Верх/низ 3×" in offered[0]["content"]
+
+
+async def test_a_plain_answer_leaves_no_program_trace(fresh_db, user_id, monkeypatch):
+    """Обычный ответ отметки не оставляет — иначе 🗂 в ленте перестанет что-либо
+    значить."""
+    monkeypatch.setattr(ai_trainer.ai_trainer, "ask", AsyncMock(return_value="Отдыхай 2-3 минуты."))
+
+    state = await _make_state(user_id)
+    await state.set_state("AITrainerFlow:chatting")
+    await ai_trainer.ai_question(_make_chat_message(user_id, "сколько отдыхать?"), state)
+
+    kinds = [row["kind"] for row in await fresh_db.list_user_events(user_id)]
+    assert activity_log.KIND_AI_PROGRAM_OFFERED not in kinds
+    assert activity_log.KIND_AI_REPLY in kinds

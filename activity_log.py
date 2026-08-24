@@ -66,6 +66,12 @@ KIND_REPLY_BUTTON = "reply_button"
 # делал вывод про лишний круг вопросов в опроснике, хотя круга не было: сборка
 # программы просто не доехала.
 KIND_AI_FAILED = "ai_failed"
+# Ответ тренера, под которым появилось превью программы с кнопкой «Добавить
+# себе». Отдельно от KIND_AI_REPLY, потому что по ленте «предложил программу, а
+# человек не нажал» и «наговорил план текстом, кнопки не было» выглядели
+# одинаково — а это разные поломки: первая про кнопку, вторая про то, что
+# модель не вызвала propose_program.
+KIND_AI_PROGRAM_OFFERED = "ai_program_offered"
 
 # Нетекстовые сообщения: сам файл не хранится, но факт «прислал голосовое» —
 # ровно та часть картины, которой иначе не видно.
@@ -197,6 +203,21 @@ async def record_ai_failure(user_id: int, exc: BaseException) -> None:
     """
     reason = "таймаут" if isinstance(exc, asyncio.TimeoutError) else type(exc).__name__
     await db.log_user_event(user_id, KIND_AI_FAILED, _truncate(f"тренер не ответил: {reason}"))
+
+
+async def record_ai_program_offered(user_id: int, title: str) -> None:
+    """Под ответом встала программа — с её названием, чтобы в ленте было видно
+    ЧТО предложили, а не только что предложили.
+
+    Заглушка для безымянной лежит здесь, а не на месте вызова: строка
+    админская, а handlers/ai_trainer объявлен переведённым — русский литерал
+    там роняет храповик i18n, и по делу (см. record_ai_failure).
+    """
+    await db.log_user_event(
+        user_id,
+        KIND_AI_PROGRAM_OFFERED,
+        _truncate(f"предложил программу: {title.strip() or 'без названия'}"),
+    )
 
 
 async def record_recovered_callback(callback: CallbackQuery) -> None:
