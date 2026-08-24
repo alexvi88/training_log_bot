@@ -2458,6 +2458,13 @@ async def _handle_question(
     # цепочка «спросил → нажал» читалась без середины.
     with suppress(Exception):
         await activity_log.record_ai_reply(user_id, answer)
+        # Отдельной строкой — что под ответом встала программа с кнопкой. Иначе
+        # «предложил, а человек не нажал» и «наговорил план текстом, кнопки не
+        # было» читаются в ленте одинаково, а чинить их надо в разных местах.
+        if program_draft:
+            await activity_log.record_ai_program_offered(
+                user_id, str(program_draft.get("name") or "")
+            )
 
     reply_markup = await ai_keyboard(
         user_id,
