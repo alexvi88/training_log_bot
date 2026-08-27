@@ -1944,8 +1944,14 @@ async def _picker_screen_groups(
         hint = i18n.t("workout.currently_open", names=", ".join(names)) + "\n" + hint
         active = data.get("active_exercise_id")
         if active is not None:
+            # exclude_ids must cover the whole workout, not just the still-open
+            # tabs in open_ids — an exercise finished and closed earlier today
+            # is exactly the kind of "haven't you already done this" suggestion
+            # a superset partner button shouldn't make.
+            already_done = await db.list_opened_exercise_ids_for_workout(data["workout_id"])
             partners = await db.list_superset_partners(
-                callback.from_user.id, active, limit=2, exclude_ids=tuple(open_ids)
+                callback.from_user.id, active, limit=2,
+                exclude_ids=tuple(set(open_ids) | set(already_done)),
             )
             partner_buttons = [(p["id"], p["display_name"]) for p in partners]
 
@@ -3637,11 +3643,17 @@ async def workout_card_note_entered(message: Message, state: FSMContext):
     text = message.text.strip()
     note = None if text == "-" else text
     await db.update_workout_note(workout_id, note)
+    # Заметка меняет то, что видит AI-тренер (build_workout_summary читает её из
+    # БД), а старый комментарий — уже сгенерированный по прежнему тексту — иначе
+    # остался бы висеть, будто заметки и не было. Сбрасываем кэш и, если
+    # комментарии автоматические, сразу пересчитываем.
+    await db.set_workout_ai_comment(workout_id, None)
     await _leave_note_flow(state)
 
     workout = await db.get_workout(workout_id)
     user = await db.get_user(message.from_user.id)
-    full_text = await _finished_workout_card_text(workout, user, note)
+    comment = await ai_trainer.ensure_workout_comment(user, workout_id)
+    full_text = await _finished_workout_card_text(workout, user, note, comment=comment)
     card_kb = keyboards.workout_card_keyboard(
         workout_id, show_ai_button=_finished_workout_ai_button_visible(workout, user)
     )
