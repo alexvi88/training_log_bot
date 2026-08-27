@@ -9,10 +9,17 @@ after the other, start to finish, are not a superset even though they
 share a workout_id.
 """
 import datetime as dt
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.storage.base import StorageKey
+from aiogram.fsm.storage.memory import MemoryStorage
 
 import keyboards
+from fsm import WorkoutFlow
+from handlers import workout
 
 
 async def _log_set_at(db, block_id, exercise_id, when: dt.datetime):
@@ -98,6 +105,73 @@ async def test_partners_empty_with_no_history(fresh_db, user_id):
 
     partners = await db.list_superset_partners(user_id, pulldown, limit=2)
     assert partners == []
+
+
+def _make_callback(user_id: int, data: str):
+    bot = MagicMock()
+    bot.delete_message = AsyncMock()
+    bot.send_message = AsyncMock(return_value=SimpleNamespace(message_id=999))
+    callback = MagicMock()
+    callback.from_user = SimpleNamespace(id=user_id, language_code=None)
+    callback.bot = bot
+    callback.data = data
+    callback.answer = AsyncMock()
+    return callback
+
+
+async def _make_state(user_id: int, **extra_data) -> FSMContext:
+    storage = MemoryStorage()
+    key = StorageKey(bot_id=1, chat_id=user_id, user_id=user_id)
+    state = FSMContext(storage=storage, key=key)
+    await state.set_state(WorkoutFlow.picking_group)
+    await state.update_data(**extra_data)
+    return state
+
+
+@pytest.mark.asyncio
+async def test_partner_shortcut_hides_an_exercise_already_closed_today(
+    fresh_db, user_id, monkeypatch
+):
+    """A superset partner button offering an exercise you already logged and
+    closed earlier in THIS SAME workout reads as "do the thing you just did
+    again" — db.list_superset_partners only ever gets told to exclude the
+    still-open tabs (state's open_exercises), not exercises finished earlier
+    in the same session, so the picker screen must widen exclude_ids itself
+    with db.list_opened_exercise_ids_for_workout."""
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Спина")
+    pulldown = await db.create_exercise(user_id, "Pull down", group_id)
+    row = await db.create_exercise(user_id, "Seated row", group_id)
+
+    # Past workouts where pulldown and row were genuinely worked as a
+    # superset, so list_superset_partners would otherwise offer row.
+    for i in range(3):
+        w = await db.create_workout(user_id)
+        await _superset(db, w, pulldown, row, dt.datetime(2026, 1, 1 + i, 10, 0))
+
+    # Today's workout: row was already done and its tab closed, pulldown is
+    # the one currently open.
+    workout_id = await db.create_workout(user_id)
+    row_block = await db.create_block(workout_id, "single")
+    await db.add_block_exercise(row_block, row, 0)
+    await _log_set_at(db, row_block, row, dt.datetime(2026, 2, 1, 10, 0))
+
+    captured = {}
+
+    async def fake_refresh_live(bot, state, user, wid, hint, kb):
+        captured["kb"] = kb
+
+    monkeypatch.setattr(workout, "_refresh_live", fake_refresh_live)
+
+    state = await _make_state(
+        user_id, workout_id=workout_id, open_exercises=[pulldown], active_exercise_id=pulldown,
+    )
+    await workout._picker_screen_groups(
+        _make_callback(user_id, ""), state, show_program_button=False
+    )
+
+    callback_datas = [b.callback_data for row_ in captured["kb"].inline_keyboard for b in row_]
+    assert f"pick:partner:{row}" not in callback_datas
 
 
 def test_groups_keyboard_omits_partner_row_when_none():
