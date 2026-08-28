@@ -376,15 +376,15 @@ async def test_idle_view_offers_recent_exercises_excluding_suggested(fresh_db, u
 
 
 async def test_idle_view_skips_exercises_done_within_the_cooldown(fresh_db, user_id):
-    """Something logged two days ago shouldn't come back as a one-tap
-    shortcut — recommending what the user only just did reads as not having
-    paid attention, not as a helpful memory."""
+    """Something logged yesterday shouldn't come back as a one-tap shortcut —
+    recommending what the user only just did reads as not having paid
+    attention, not as a helpful memory."""
     from handlers import workout
 
     group_id = await fresh_db.create_muscle_group(user_id, "Плечи")
     press = await fresh_db.create_exercise(user_id, "Overhead press", group_id)
     curls = await fresh_db.create_exercise(user_id, "Hammer curls", group_id)
-    recent_cutoff = (dt.datetime.now() - dt.timedelta(days=2)).isoformat(timespec="seconds")
+    recent_cutoff = (dt.datetime.now() - dt.timedelta(days=1)).isoformat(timespec="seconds")
     old_enough = (dt.datetime.now() - dt.timedelta(days=10)).isoformat(timespec="seconds")
     await fresh_db.conn().execute(
         "UPDATE exercises SET last_used_at = ? WHERE id = ?", (recent_cutoff, press)
