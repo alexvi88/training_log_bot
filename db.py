@@ -5856,6 +5856,20 @@ async def daily_workout_stats(date_str: str) -> dict[str, int]:
     return {"users": users, "workouts": workouts}
 
 
+async def daily_trained_users(date_str: str) -> list[dict]:
+    """Кто именно закрыл тренировку в этот календарный день — для суточного
+    отчёта админу: одних цифр недостаточно, чтобы узнать своих людей в лицо."""
+    cur = await conn().execute(
+        "SELECT u.telegram_id AS telegram_id, u.username AS username, "
+        "COUNT(*) AS workouts "
+        "FROM workouts w JOIN users u ON u.telegram_id = w.user_id "
+        "WHERE w.status = 'finished' AND date(w.finished_at) = ? "
+        "GROUP BY u.telegram_id ORDER BY workouts DESC, u.telegram_id",
+        (date_str,),
+    )
+    return await cur.fetchall()
+
+
 async def count_finished_workouts_between(since: str, until: str) -> tuple[int, int]:
     """(тренировок, людей) — сколько закрыли за отрезок и сколько человек их закрыло.
 

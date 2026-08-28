@@ -107,6 +107,23 @@ def test_llm_cost_prices_by_model_with_default_fallback():
     assert tokens == 4000
 
 
+async def test_daily_trained_users_lists_who_and_how_many(fresh_db, user_id):
+    db = fresh_db
+    other = await db.get_or_create_user(telegram_id=222, username=None)
+    today = db.now_iso()[:10]
+    started = f"{today}T09:00:00"
+    finished = f"{today}T10:00:00"
+    await db.create_finished_workout(user_id, started, finished)
+    await db.create_finished_workout(user_id, started, finished)
+    await db.create_finished_workout(other["telegram_id"], started, finished)
+
+    rows = await db.daily_trained_users(today)
+
+    report = admin_tasks._format_trained_users(rows)
+    assert "@tester (2)" in report
+    assert "└ 222\n" in report or report.endswith("└ 222")
+
+
 async def test_build_cost_report_includes_llm_and_transcription_lines(fresh_db, user_id):
     db = fresh_db
     today = db.now_iso()[:10]
