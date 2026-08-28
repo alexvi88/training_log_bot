@@ -1296,6 +1296,7 @@
   "workout.suspicious_reps_warning": "⚠️ {set}? That many reps under weight looks like a mix-up — check you didn't swap the weight and reps.",
   "workout.suspicious_weight_warning": "⚠️ {weight}{u}? {since} {baseline}{u}",
   "workout.target_line": "📋 Plan: {target}",
+  "workout.template_confirm_add": "Add it?",
   "workout.template_not_found": "Template not found",
   "workout.templates_hint": "Templates — pick one:",
   "workout.undo_done": "Deleted {set}",

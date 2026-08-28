@@ -599,9 +599,19 @@ def templates_keyboard(templates, prefix: str, back_cb: str = "back") -> InlineK
     return b.as_markup()
 
 
-def template_preview_keyboard(template_id: int, prefix: str = "exm", back_cb: str | None = None) -> InlineKeyboardMarkup:
+def template_preview_keyboard(
+    template_id: int, prefix: str = "exm", back_cb: str | None = None, as_question: bool = False
+) -> InlineKeyboardMarkup:
+    """as_question: the media-group branch of _send_template_preview sends the
+    pair of photos with no caption and this keyboard on a second, otherwise
+    bare message — repeating the exercise name there just to justify
+    "➕ Добавить"/"⬅️ Назад" read as a second, disconnected card. That message's
+    text is "Добавить?" instead (see _send_template_preview), so the buttons
+    answer it plainly — "Да"/"Назад" — rather than re-naming the action.
+    """
     b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text=i18n.t("btn.add"), callback_data=f"{prefix}:tpladd:{template_id}"))
+    add_text = i18n.t("btn.yes") if as_question else i18n.t("btn.add")
+    b.row(InlineKeyboardButton(text=add_text, callback_data=f"{prefix}:tpladd:{template_id}"))
     b.row(InlineKeyboardButton(text=i18n.t("btn.back"), callback_data=back_cb or f"{prefix}:templates"))
     return b.as_markup()
 
