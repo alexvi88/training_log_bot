@@ -224,17 +224,33 @@ async def _repair_stale_backup(bot: Bot, age: float) -> None:
         await bot.send_message(chat_id=config.ADMIN_ID, text=text)
 
 
+def _format_trained_users(rows) -> str:
+    """Список тех, кто закрыл тренировку — под цифрой в суточном отчёте:
+    сколько человек тренировалось само по себе не говорит, кто именно."""
+    if not rows:
+        return ""
+    lines = [""]
+    for row in rows:
+        who = f"@{row['username']}" if row["username"] else str(row["telegram_id"])
+        count = row["workouts"]
+        lines.append(f"  └ {who}" + (f" ({count})" if count > 1 else ""))
+    return "\n".join(lines)
+
+
 async def _send_daily_report(bot: Bot, backup_path: Optional[str]) -> None:
     yesterday = dt.date.today() - dt.timedelta(days=1)
     yesterday_str = yesterday.isoformat()
     stats = await db.daily_workout_stats(yesterday_str)
+    trained = await db.daily_trained_users(yesterday_str)
     cost_report = await _build_cost_report(yesterday_str)
+    who_report = _format_trained_users(trained)
     await bot.send_message(
         chat_id=config.ADMIN_ID,
         text=(
             f"📊 Статистика за {yesterday.strftime('%d.%m.%Y')}\n"
             f"Потренировалось пользователей: {stats['users']}\n"
             f"Завершено тренировок: {stats['workouts']}"
+            f"{who_report}"
             f"{cost_report}"
         ),
     )
