@@ -1,4 +1,5 @@
 import asyncio
+import datetime as dt
 
 import pytest
 
@@ -337,7 +338,12 @@ async def test_idle_view_falls_back_to_recent_when_no_established_followup(fresh
     group_id = await fresh_db.create_muscle_group(user_id, "Спина")
     pulldown = await fresh_db.create_exercise(user_id, "Pull down", group_id)
     row = await fresh_db.create_exercise(user_id, "Seated row", group_id)
-    await fresh_db.touch_exercise_last_used(row)
+    # Backdated past the suggestion cooldown (see workout._SUGGEST_COOLDOWN_DAYS) —
+    # touch_exercise_last_used would stamp "now", which the cooldown excludes.
+    await fresh_db.conn().execute(
+        "UPDATE exercises SET last_used_at = ? WHERE id = ?", ("2026-01-01T10:00:00", row)
+    )
+    await fresh_db.conn().commit()
 
     hint, kb = await workout._idle_view(
         {"last_finished_exercise_id": pulldown}, user_id, is_empty=False
@@ -367,6 +373,31 @@ async def test_idle_view_offers_recent_exercises_excluding_suggested(fresh_db, u
     texts = [b.text for r in kb.inline_keyboard for b in r]
     assert "Seated row" in texts
     assert "Pull down" in texts
+
+
+async def test_idle_view_skips_exercises_done_within_the_cooldown(fresh_db, user_id):
+    """Something logged two days ago shouldn't come back as a one-tap
+    shortcut — recommending what the user only just did reads as not having
+    paid attention, not as a helpful memory."""
+    from handlers import workout
+
+    group_id = await fresh_db.create_muscle_group(user_id, "Плечи")
+    press = await fresh_db.create_exercise(user_id, "Overhead press", group_id)
+    curls = await fresh_db.create_exercise(user_id, "Hammer curls", group_id)
+    recent_cutoff = (dt.datetime.now() - dt.timedelta(days=2)).isoformat(timespec="seconds")
+    old_enough = (dt.datetime.now() - dt.timedelta(days=10)).isoformat(timespec="seconds")
+    await fresh_db.conn().execute(
+        "UPDATE exercises SET last_used_at = ? WHERE id = ?", (recent_cutoff, press)
+    )
+    await fresh_db.conn().execute(
+        "UPDATE exercises SET last_used_at = ? WHERE id = ?", (old_enough, curls)
+    )
+    await fresh_db.conn().commit()
+
+    hint, kb = await workout._idle_view({}, user_id, is_empty=False)
+    texts = [b.text for r in kb.inline_keyboard for b in r]
+    assert "Overhead press" not in texts
+    assert "Hammer curls" in texts
 
 
 # ---------- concurrent set logging ----------

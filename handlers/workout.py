@@ -273,6 +273,11 @@ async def _suggested_next_exercise(user_id: int, last_finished_id: int | None, d
 
 _IDLE_RECENT_EXERCISES = 2
 
+# Ниже этого срока подсказка "обычно за этим следует X" / "недавнее" не
+# предлагается: упражнение, сделанное позавчера, — это не то, что стоит
+# подсовывать одним тапом сегодня, каким бы частым ни была пара в истории.
+_SUGGEST_COOLDOWN_DAYS = 3
+
 
 async def _idle_view(
     data: dict, user_id: int, is_empty: bool = False, done_ids: tuple[int, ...] = ()
@@ -292,18 +297,23 @@ async def _idle_view(
         # Skip the already-offered "suggested" exercise and anything already
         # logged this workout so the shortcuts never repeat today's own list.
         exclude = done_ids + ((suggested[0],) if suggested else ())
+        cooldown = (
+            dt.datetime.now() - dt.timedelta(days=_SUGGEST_COOLDOWN_DAYS)
+        ).isoformat(timespec="seconds")
         last_finished = data.get("last_finished_exercise_id")
         rows = []
         if last_finished is not None:
             rows = await db.list_common_followups(
-                user_id, last_finished, limit=_IDLE_RECENT_EXERCISES, exclude_ids=exclude
+                user_id, last_finished, limit=_IDLE_RECENT_EXERCISES, exclude_ids=exclude,
+                not_used_since=cooldown,
             )
         # No established pairing after this exercise (list_common_followups now
         # ignores one-off ones) — fall back to plain recency rather than leaving
         # the shortcut row empty.
         if not rows:
             rows = await db.list_recent_exercises(
-                user_id, limit=_IDLE_RECENT_EXERCISES, exclude_ids=exclude
+                user_id, limit=_IDLE_RECENT_EXERCISES, exclude_ids=exclude,
+                not_used_since=cooldown,
             )
         recent = [(r["id"], r["display_name"]) for r in rows]
     kb = keyboards.exercise_picker_entry_keyboard(
@@ -2201,13 +2211,14 @@ async def pick_template_preview(callback: CallbackQuery, state: FSMContext):
         return
     text = _exercise_info_text(template, with_created=False)
     kb = keyboards.template_preview_keyboard(template_id, prefix="pick")
+    confirm_kb = keyboards.template_preview_keyboard(template_id, prefix="pick", as_question=True)
     images = exercise_media.get_images(template["name"])
     # Обе позиции, а не images[0]: пара кадров — начальное и конечное положение,
     # и по одному не видно самого движения. Помощник общий с экраном каталога,
     # там же и разбор, почему клавиатура едет отдельным сообщением.
     from handlers.exercises import _send_template_preview
 
-    await _send_template_preview(callback.message, template, text, kb, images)
+    await _send_template_preview(callback.message, template, text, kb, images, confirm_kb)
     await callback.answer()
 
 

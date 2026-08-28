@@ -2009,12 +2009,17 @@ async def list_user_exercises(
 
 
 async def list_recent_exercises(
-    user_id: int, limit: int, exclude_ids: tuple[int, ...] = ()
+    user_id: int, limit: int, exclude_ids: tuple[int, ...] = (), not_used_since: str | None = None
 ) -> list[aiosqlite.Row]:
     """The user's most recently logged exercises, strictly by recency (unlike
     list_user_exercises, which ranks by usage_count first) — for a one-tap
     shortcut row so re-opening what was just done doesn't need the
     group-then-list picker.
+
+    `not_used_since`: an ISO timestamp cutoff — exercises last logged at or
+    after it are skipped. The shortcut is meant to save a trip to the picker
+    for something worth doing again soon, not to re-offer what's already on
+    the last couple of days' workouts (see handlers.workout._idle_view).
     """
     sql = (
         "SELECT * FROM exercises e WHERE e.user_id = ? "
@@ -2025,6 +2030,9 @@ async def list_recent_exercises(
     if exclude_ids:
         sql += f"AND e.id NOT IN ({','.join('?' * len(exclude_ids))}) "
         params.extend(exclude_ids)
+    if not_used_since:
+        sql += "AND e.last_used_at < ? "
+        params.append(not_used_since)
     sql += "ORDER BY e.last_used_at DESC LIMIT ?"
     params.append(limit)
     cur = await conn().execute(sql, params)
@@ -2070,7 +2078,8 @@ _FOLLOWUP_MIN_WORKOUTS = 2
 
 
 async def list_common_followups(
-    user_id: int, exercise_id: int, limit: int, exclude_ids: tuple[int, ...] = ()
+    user_id: int, exercise_id: int, limit: int, exclude_ids: tuple[int, ...] = (),
+    not_used_since: str | None = None,
 ) -> list[aiosqlite.Row]:
     """Exercises most often logged *after* `exercise_id` within the same past
     workout (by block order), ranked by how many distinct workouts followed it
@@ -2084,6 +2093,11 @@ async def list_common_followups(
     _FOLLOWUP_MIN_WORKOUTS distinct workouts to be offered at all, and equally
     frequent ones are broken by recency rather than by name. The caller gets an
     empty list when nothing qualifies (see handlers.workout._idle_view).
+
+    `not_used_since`: an ISO timestamp cutoff — an exercise last logged at or
+    after it is skipped, however often it followed this one historically: a
+    "usually comes next" suggestion is dead weight when the user already did
+    it a couple of days ago.
     """
     sql = (
         "SELECT e.*, COUNT(DISTINCT wb2.workout_id) AS followup_count "
@@ -2099,6 +2113,9 @@ async def list_common_followups(
     if exclude_ids:
         sql += f"AND e.id NOT IN ({','.join('?' * len(exclude_ids))}) "
         params.extend(exclude_ids)
+    if not_used_since:
+        sql += "AND (e.last_used_at IS NULL OR e.last_used_at < ?) "
+        params.append(not_used_since)
     sql += (
         "GROUP BY e.id HAVING followup_count >= ? "
         "ORDER BY followup_count DESC, e.last_used_at DESC LIMIT ?"

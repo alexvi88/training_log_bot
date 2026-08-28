@@ -1297,6 +1297,7 @@
   "workout.suspicious_reps_warning": "⚠️ {set}? Столько повторов под весом похоже на промах — проверь, не перепутаны ли вес и повторы.",
   "workout.suspicious_weight_warning": "⚠️ {weight}{u}? {since} {baseline}{u}",
   "workout.target_line": "📋 План: {target}",
+  "workout.template_confirm_add": "Добавить?",
   "workout.template_not_found": "Шаблон не найден",
   "workout.templates_hint": "Шаблоны — выбери подходящий:",
   "workout.undo_done": "Удалил {set}",

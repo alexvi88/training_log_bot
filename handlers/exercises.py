@@ -245,6 +245,7 @@ async def exm_preview_template(callback: CallbackQuery, state: FSMContext):
         return
     text = _exercise_info_text(_localized_template_row(template), with_created=False)
     kb = keyboards.template_preview_keyboard(template_id)
+    confirm_kb = keyboards.template_preview_keyboard(template_id, as_question=True)
     # Media lookup stays on the raw (Russian) template name — that's the
     # catalog key `exercise_media` is built on, not what gets shown.
     images = exercise_media.get_images(template["name"])
@@ -255,7 +256,9 @@ async def exm_preview_template(callback: CallbackQuery, state: FSMContext):
     # прогон: Telegram Web принимает отправку без ошибки, но фото молча
     # не показывает — хуже старого поведения, а не деградирует к нему,
     # и это никаким try/except на стороне бота не поймать. Откатили.
-    await _send_template_preview(callback.message, _localized_template_row(template), text, kb, images)
+    await _send_template_preview(
+        callback.message, _localized_template_row(template), text, kb, images, confirm_kb
+    )
     await callback.answer()
 
 
@@ -451,7 +454,9 @@ async def _exercise_group_name(ex) -> str | None:
     return group["name"] if group else None
 
 
-async def _send_template_preview(message, template, text: str, kb, images: list[str]) -> None:
+async def _send_template_preview(
+    message, template, text: str, kb, images: list[str], confirm_kb=None
+) -> None:
     """Предпросмотр шаблона: ОБЕ позиции упражнения плюс кнопки.
 
     Раньше отправлялось images[0] — одна картинка из двух, вторая молча
@@ -463,9 +468,12 @@ async def _send_template_preview(message, template, text: str, kb, images: list[
 
     Решение то же, каким уже сделана карточка упражнения (см.
     _send_exercise_images и _render_exercise_card): картинки уходят
-    медиагруппой с описанием в подписи, а кнопки — следующим сообщением, где
-    остаётся только название. Название там не для красоты: фото уезжает вверх
-    при прокрутке, и голое «Управление» не говорит, к чему кнопки.
+    медиагруппой с описанием в подписи (она уже есть на первом кадре), а
+    кнопки — следующим сообщением. Там раньше дублировалось название
+    упражнения — читалось как вторая, не связанная карточка. Вместо этого
+    короткий вопрос «Добавить?», и `confirm_kb` (см. keyboards.
+    template_preview_keyboard(as_question=True)) отвечает ему кнопками
+    «Да»/«Назад», а не переспрашивает названием действия.
     """
     # Клип, когда он снят, ещё и снимает саму развилку: у анимации, в отличие
     # от медиагруппы, клавиатура своя, поэтому предпросмотр снова умещается
@@ -499,7 +507,7 @@ async def _send_template_preview(message, template, text: str, kb, images: list[
     ]
     await message.answer_media_group(media)
     await message.answer(
-        f"<b>{escape(template['display_name'])}</b>", reply_markup=kb, parse_mode="HTML"
+        i18n.t("workout.template_confirm_add"), reply_markup=confirm_kb or kb, parse_mode="HTML"
     )
 
 
