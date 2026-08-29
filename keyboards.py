@@ -1085,7 +1085,7 @@ def programs_catalog_keyboard(programs) -> InlineKeyboardMarkup:
             text=seed_data.localized_program_name(p["key"], i18n.get_lang()),
             callback_data=f"rt:prog:{p['key']}",
         )
-    b.button(text=i18n.t("btn.to_programs"), callback_data="rt:manage")
+    b.button(text=i18n.t("btn.back"), callback_data="rt:manage")
     b.adjust(1)
     return b.as_markup()
 
@@ -1093,7 +1093,7 @@ def programs_catalog_keyboard(programs) -> InlineKeyboardMarkup:
 def program_detail_keyboard(program_key: str) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(text=i18n.t("btn.add_for_myself_plus"), callback_data=f"rt:progadd:{program_key}")
-    b.button(text=i18n.t("btn.to_catalog"), callback_data="rt:programs")
+    b.button(text=i18n.t("btn.back"), callback_data="rt:programs")
     b.adjust(1)
     return b.as_markup()
 
