@@ -243,6 +243,24 @@ def test_bodyweight_keyboard_hides_the_records_list_without_logs():
     assert "bw:list:0" not in cbs
 
 
+def test_bodyweight_keyboard_hides_the_history_toggle_when_it_all_fits():
+    kb = keyboards.bodyweight_keyboard(has_logs=True, has_more=False)
+    cbs = [b.callback_data for row in kb.inline_keyboard for b in row]
+    assert "bw:hist:more" not in cbs and "bw:hist:less" not in cbs
+
+
+def test_bodyweight_keyboard_offers_the_history_toggle_when_collapsed():
+    kb = keyboards.bodyweight_keyboard(has_logs=True, has_more=True, expanded=False)
+    cbs = [b.callback_data for row in kb.inline_keyboard for b in row]
+    assert "bw:hist:more" in cbs
+
+
+def test_bodyweight_keyboard_offers_collapse_once_expanded():
+    kb = keyboards.bodyweight_keyboard(has_logs=True, has_more=True, expanded=True)
+    cbs = [b.callback_data for row in kb.inline_keyboard for b in row]
+    assert "bw:hist:less" in cbs
+
+
 def test_bodyweight_list_keyboard_numbers_delete_buttons_and_pages():
     kb = keyboards.bodyweight_list_keyboard([101, 102, 103], page=1, has_next=True)
     texts = _button_texts(kb)

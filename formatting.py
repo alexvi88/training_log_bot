@@ -2362,13 +2362,30 @@ def _bodyweight_days(logs: list) -> list[tuple[dt.date, float]]:
     return sorted(by_date.items())
 
 
-def build_bodyweight_screen(logs: list, unit: str = "kg", period_logs: list | None = None) -> str:
+# Свёрнутый вид по умолчанию — не полотно из полутора десятков дат, а горстка
+# последних, как справка в handlers.workout (см. help_keyboard). Полная
+# история — за тем же тогглом, что и там (bw:hist:more / bw:hist:less).
+BODYWEIGHT_COLLAPSED_ROWS = 5
+
+
+def bodyweight_entries_count(logs: list) -> int:
+    """Число различных дней взвешивания — то же схлопывание одного дня в
+    одну строку, что и в build_bodyweight_screen, для решения показывать ли
+    кнопку тоггла (handlers.bodyweight._render)."""
+    return len(_bodyweight_days(logs))
+
+
+def build_bodyweight_screen(
+    logs: list, unit: str = "kg", period_logs: list | None = None, expanded: bool = False
+) -> str:
     """Text for the ⚖️ Вес тела screen: latest value, entry count, and a
     date - weight list for the selected period.
 
     logs: all rows with `weight` and `logged_at`, ascending by date (as
     db.list_bodyweight_logs returns). period_logs: the subset to list
     (defaults to `logs`) — the caller windows this by the selected period.
+    expanded=False (default) shows only the last BODYWEIGHT_COLLAPSED_ROWS
+    days, behind the bw:hist toggle; expanded=True lists everything.
 
     The entry list is trimmed to fit CAPTION_LIMIT: this text is sent as a photo
     caption, and an over-long one doesn't truncate — safe_edit_photo has already
@@ -2402,7 +2419,7 @@ def build_bodyweight_screen(logs: list, unit: str = "kg", period_logs: list | No
         lines.append(i18n.t("bodyweight.prompt"))
         return "\n".join(lines)
 
-    kept = rendered
+    kept = rendered if expanded else rendered[:BODYWEIGHT_COLLAPSED_ROWS]
     text = assemble(kept)
     while len(kept) > 1 and telegram_length(text) > CAPTION_LIMIT:
         kept = kept[:-1]  # oldest first — the recent entries are the interesting ones
