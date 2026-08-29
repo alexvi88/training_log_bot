@@ -125,12 +125,18 @@ async def _render(event, state: FSMContext, user_id: int | None = None) -> None:
     logs = await db.list_bodyweight_logs(user_id)
     data = await state.get_data()
     weeks = data.get("bw_weeks", keyboards.DEFAULT_BODYWEIGHT_WEEKS)
+    expanded = data.get("bw_expanded", False)
     await state.set_state(BodyweightFlow.viewing)
     await state.update_data(bw_weeks=weeks)
     chart_logs = _window(logs, weeks, timeutil.user_today(user))
-    text = formatting.build_bodyweight_screen(logs, user["unit"], period_logs=chart_logs)
+    text = formatting.build_bodyweight_screen(
+        logs, user["unit"], period_logs=chart_logs, expanded=expanded
+    )
     show_periods = len(logs) >= 2
-    kb = keyboards.bodyweight_keyboard(has_logs=bool(logs), weeks=weeks, show_periods=show_periods)
+    has_more = formatting.bodyweight_entries_count(chart_logs) > formatting.BODYWEIGHT_COLLAPSED_ROWS
+    kb = keyboards.bodyweight_keyboard(
+        has_logs=bool(logs), weeks=weeks, show_periods=show_periods, expanded=expanded, has_more=has_more
+    )
 
     png = None
     points = _daily_average_points(chart_logs)
@@ -188,6 +194,15 @@ async def bw_menu(callback: CallbackQuery, state: FSMContext):
 async def bw_period(callback: CallbackQuery, state: FSMContext):
     weeks = int(callback.data.split(":")[2])
     await state.update_data(bw_weeks=weeks)
+    await _render(callback, state)
+    await callback.answer()
+
+
+@router.callback_query(F.data.in_({"bw:hist:more", "bw:hist:less"}))
+async def bw_history_toggle(callback: CallbackQuery, state: FSMContext):
+    """Разворачивает/сворачивает список взвешиваний на самом экране — тот же
+    приём, что и у справки (handlers.workout.help_toggle)."""
+    await state.update_data(bw_expanded=callback.data == "bw:hist:more")
     await _render(callback, state)
     await callback.answer()
 

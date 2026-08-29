@@ -470,7 +470,7 @@ def test_bodyweight_screen_fits_the_caption_cap_on_a_long_history():
         }
         for i in range(120)
     ]
-    text = formatting.build_bodyweight_screen(logs)
+    text = formatting.build_bodyweight_screen(logs, expanded=True)
 
     assert formatting.telegram_length(text) <= formatting.CAPTION_LIMIT
     assert "Показано" in text  # and it says the list was cut
@@ -487,7 +487,7 @@ def test_bodyweight_screen_keeps_the_most_recent_entries():
         {"weight": 80.0 + i * 0.1, "logged_at": f"{start + dt.timedelta(days=i)}T08:00:00"}
         for i in range(60)
     ]
-    text = formatting.build_bodyweight_screen(logs)
+    text = formatting.build_bodyweight_screen(logs, expanded=True)
 
     assert "01.03.2026" in text  # newest entry (day 60) kept
     assert "01.01.2026" not in text  # oldest trimmed away
@@ -501,6 +501,42 @@ def test_bodyweight_screen_short_history_lists_everything():
     text = formatting.build_bodyweight_screen(logs)
 
     assert "01.01.2026" in text and "02.01.2026" in text
+    assert "Показано" not in text
+
+
+def test_bodyweight_screen_collapsed_by_default_shows_only_recent_days():
+    """Полотно из всех взвешиваний спрятано за тогглом (bw:hist:more) —
+    без него на экране только последние BODYWEIGHT_COLLAPSED_ROWS дней."""
+    import datetime as dt
+
+    import formatting
+
+    start = dt.date(2026, 1, 1)
+    logs = [
+        {"weight": 80.0 + i * 0.1, "logged_at": f"{start + dt.timedelta(days=i)}T08:00:00"}
+        for i in range(10)
+    ]
+    text = formatting.build_bodyweight_screen(logs)
+
+    assert "10.01.2026" in text  # newest day kept
+    assert "01.01.2026" not in text  # oldest hidden behind the toggle
+    assert "Показано 5 из 10" in text
+    assert formatting.bodyweight_entries_count(logs) == 10
+
+
+def test_bodyweight_screen_expanded_lists_everything():
+    import datetime as dt
+
+    import formatting
+
+    start = dt.date(2026, 1, 1)
+    logs = [
+        {"weight": 80.0 + i * 0.1, "logged_at": f"{start + dt.timedelta(days=i)}T08:00:00"}
+        for i in range(10)
+    ]
+    text = formatting.build_bodyweight_screen(logs, expanded=True)
+
+    assert "01.01.2026" in text and "10.01.2026" in text
     assert "Показано" not in text
 
 
