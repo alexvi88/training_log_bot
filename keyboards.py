@@ -1799,24 +1799,8 @@ BODYWEIGHT_PERIODS = [(10, _lazy("btn.weeks_n", n=10)), (20, _lazy("btn.weeks_n"
 DEFAULT_BODYWEIGHT_WEEKS = 20
 
 
-def bodyweight_keyboard(
-    has_logs: bool,
-    weeks: int = 0,
-    show_periods: bool = False,
-    expanded: bool = False,
-    has_more: bool = False,
-) -> InlineKeyboardMarkup:
-    """has_more: the date-weight list on the screen was cut down to
-    formatting.BODYWEIGHT_COLLAPSED_ROWS — offer the toggle to see the rest,
-    same shape as help_keyboard's more/less."""
+def bodyweight_keyboard(has_logs: bool, weeks: int = 0, show_periods: bool = False) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    if has_more:
-        b.row(
-            InlineKeyboardButton(
-                text=i18n.t("btn.collapse") if expanded else i18n.t("btn.more_history"),
-                callback_data="bw:hist:less" if expanded else "bw:hist:more",
-            )
-        )
     if has_logs:
         b.row(InlineKeyboardButton(text=i18n.t("btn.entries"), callback_data="bw:list:0"))
     if show_periods:
