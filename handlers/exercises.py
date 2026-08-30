@@ -475,19 +475,19 @@ async def _send_template_preview(
     template_preview_keyboard(as_question=True)) отвечает ему кнопками
     «Да»/«Назад», а не переспрашивает названием действия.
     """
-    # Клип, когда он снят, ещё и снимает саму развилку: у анимации, в отличие
-    # от медиагруппы, клавиатура своя, поэтому предпросмотр снова умещается
-    # в одно сообщение — как было до пары кадров.
-    clip = exercise_media.get_animation(exercise_media.catalog_key(template))
-    if clip:
-        sent = await message.answer_animation(
-            exercise_media.cached_file_id(clip) or FSInputFile(clip),
+    # Коллаж, когда он нарисован, ещё и снимает саму развилку: у одиночного
+    # фото, в отличие от медиагруппы, клавиатура своя, поэтому предпросмотр
+    # снова умещается в одно сообщение — как было до пары кадров.
+    collage = exercise_media.get_collage(exercise_media.catalog_key(template))
+    if collage:
+        sent = await message.answer_photo(
+            exercise_media.cached_file_id(collage) or FSInputFile(collage),
             caption=formatting.clamp_caption(text),
             reply_markup=kb,
             parse_mode="HTML",
         )
-        animation = getattr(sent, "animation", None)
-        exercise_media.remember_file_id(clip, getattr(animation, "file_id", None))
+        photos = getattr(sent, "photo", None)
+        exercise_media.remember_file_id(collage, photos[-1].file_id if photos else None)
         return
     if not images:
         await message.answer(text, reply_markup=kb, parse_mode="HTML")
@@ -611,15 +611,15 @@ async def _send_exercise_images(message: Message, ex, state: FSMContext) -> bool
         )
         await state.update_data(exm_media_msg_ids=[sent.message_id])
         return True
-    clip = exercise_media.get_animation_for(ex)
-    if clip:
-        sent = await message.answer_animation(
-            exercise_media.cached_file_id(clip) or FSInputFile(clip),
+    collage = exercise_media.get_collage_for(ex)
+    if collage:
+        sent = await message.answer_photo(
+            exercise_media.cached_file_id(collage) or FSInputFile(collage),
             caption=formatting.clamp_caption(_exercise_info_text(ex, group_name=group_name)),
             parse_mode="HTML",
         )
-        animation = getattr(sent, "animation", None)
-        exercise_media.remember_file_id(clip, getattr(animation, "file_id", None))
+        photos = getattr(sent, "photo", None)
+        exercise_media.remember_file_id(collage, photos[-1].file_id if photos else None)
         await state.update_data(exm_media_msg_ids=[sent.message_id])
         return True
     images = exercise_media.get_images_for(ex)
