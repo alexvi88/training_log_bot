@@ -1,5 +1,7 @@
 """DB-layer plumbing for pushes: logging, dedup, tonnage."""
 
+import datetime as dt
+
 import pytest
 
 pytestmark = pytest.mark.asyncio
@@ -42,8 +44,11 @@ async def test_has_push_today_excludes_named_categories(fresh_db, user_id):
 
 async def test_prune_old_pushes_keeps_recent_and_protected_categories(fresh_db, user_id):
     db = fresh_db
+    # Relative to "now", not a fixed calendar date — prune_old_pushes's cutoff
+    # is `now() - retention_days`, so a hardcoded "recent" date eventually
+    # ages past that cutoff and starts getting pruned too.
     old_date = "2020-01-01T00:00:00"
-    recent_date = "2026-08-01T00:00:00"
+    recent_date = (dt.datetime.now() - dt.timedelta(days=5)).isoformat(timespec="seconds")
     await db.conn().execute(
         "INSERT INTO pushes (telegram_id, category, text, sent_at, sent_on) VALUES (?, ?, ?, ?, ?)",
         (user_id, "skip_3", "старый", old_date, "2020-01-01"),
