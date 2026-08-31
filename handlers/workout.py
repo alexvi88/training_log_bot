@@ -203,7 +203,10 @@ async def _send_sticky_photo(bot, chat_id: int, ex) -> list[int]:
         return [sent.message_id]
     images = exercise_media.get_images_for(ex)
     if not images:
-        return []
+        if not exercise_descriptions.effective_description(ex):
+            return []
+        sent = await bot.send_message(chat_id=chat_id, text=caption, parse_mode="HTML")
+        return [sent.message_id]
     media = [
         InputMediaPhoto(
             media=exercise_media.cached_file_id(path) or FSInputFile(path),
