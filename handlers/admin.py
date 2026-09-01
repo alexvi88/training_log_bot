@@ -575,34 +575,114 @@ async def admin_activity_all(callback: CallbackQuery, state: FSMContext):
 BROADCAST_SEND_DELAY = 0.05  # seconds between sends — stays under Telegram's rate limit
 
 
-@router.message(Command("broadcast"))
-async def cmd_broadcast(message: Message, state: FSMContext):
-    if not _is_admin(message.from_user.id):
-        return
-    await state.clear()
-    await state.set_state(AdminFlow.broadcast_awaiting_message)
-    await message.answer(
-        "📢 Пришли сообщение для рассылки всем пользователям — текст, фото, что угодно, "
-        "уйдёт как есть. Любая другая команда отменит рассылку."
-    )
+def _broadcast_lang_keyboard():
+    b = InlineKeyboardBuilder()
+    b.button(text="🇷🇺 Только русским", callback_data="admin:bc:lang:ru")
+    b.button(text="🇬🇧 Только англоязычным", callback_data="admin:bc:lang:en")
+    b.button(text="🌍 Обоим, два текста", callback_data="admin:bc:lang:both")
+    b.button(text="Отмена", callback_data="admin:bc:no")
+    b.adjust(1)
+    return b.as_markup()
 
 
-@router.message(StateFilter(AdminFlow.broadcast_awaiting_message))
-async def broadcast_receive(message: Message, state: FSMContext):
-    if not _is_admin(message.from_user.id):
-        return
-    total = await db.count_users()
-    await state.update_data(broadcast_chat_id=message.chat.id, broadcast_message_id=message.message_id)
+async def _broadcast_audience(mode: str) -> dict[str, list[int]]:
+    """Кому уйдёт рассылка — по языку интерфейса (`users.lang`).
+
+    Русский текст не должен приезжать тому, у кого бот говорит по-английски, и
+    наоборот: поэтому получатели всегда режутся по языку, а не берутся списком
+    всех. В режиме «both» это два непересекающихся списка и два разных
+    сообщения — по одному на язык.
+    """
+    langs = i18n.SUPPORTED if mode == "both" else (mode,)
+    return {lang: await db.list_telegram_ids_by_lang(lang) for lang in langs}
+
+
+async def _broadcast_confirm(message: Message, state: FSMContext, mode: str) -> None:
+    audience = await _broadcast_audience(mode)
+    who = ", ".join(f"{lang.upper()} — {len(ids)}" for lang, ids in audience.items())
     await state.set_state(AdminFlow.broadcast_confirming)
     await message.reply(
-        f"Отправить это сообщение всем пользователям ({total})?",
+        f"Отправить рассылку? Получатели по языку: {who}.",
         reply_markup=keyboards.yes_no_keyboard(
             "admin:bc:yes", "admin:bc:no", yes_text="📢 Отправить", no_text="Отмена",
         ),
     )
 
 
-@router.callback_query(StateFilter(AdminFlow.broadcast_confirming), F.data == "admin:bc:no")
+@router.message(Command("broadcast"))
+async def cmd_broadcast(message: Message, state: FSMContext):
+    if not _is_admin(message.from_user.id):
+        return
+    await state.clear()
+    await state.set_state(AdminFlow.broadcast_choosing_lang)
+    await message.answer(
+        "📢 Кому шлём? Рассылка режется по языку интерфейса, "
+        "так что русский текст не уедет англоязычным.",
+        reply_markup=_broadcast_lang_keyboard(),
+    )
+
+
+@router.callback_query(
+    StateFilter(AdminFlow.broadcast_choosing_lang), F.data.startswith("admin:bc:lang:")
+)
+async def broadcast_choose_lang(callback: CallbackQuery, state: FSMContext):
+    if not _is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    mode = callback.data.split(":")[3]
+    if mode not in (*i18n.SUPPORTED, "both"):
+        await callback.answer("Не понял язык, начни заново через /broadcast", show_alert=True)
+        return
+    await state.update_data(broadcast_mode=mode)
+    await state.set_state(AdminFlow.broadcast_awaiting_message)
+    what = "русское сообщение" if mode in ("ru", "both") else "английское сообщение"
+    tail = " Следом попрошу английское." if mode == "both" else ""
+    await ui.safe_edit(
+        callback,
+        f"📢 Пришли {what} — текст, фото, что угодно, уйдёт как есть.{tail} "
+        "Любая другая команда отменит рассылку.",
+    )
+    await callback.answer()
+
+
+@router.message(StateFilter(AdminFlow.broadcast_awaiting_message))
+async def broadcast_receive(message: Message, state: FSMContext):
+    if not _is_admin(message.from_user.id):
+        return
+    data = await state.get_data()
+    mode = data.get("broadcast_mode", "ru")
+    # В режиме «both» первым приходит русский текст, английский — следующим
+    # сообщением; в одноязычных режимах пришедшее и есть текст этого языка.
+    lang = "en" if mode == "en" else "ru"
+    await state.update_data(
+        **{
+            f"broadcast_{lang}_chat_id": message.chat.id,
+            f"broadcast_{lang}_message_id": message.message_id,
+        }
+    )
+    if mode == "both":
+        await state.set_state(AdminFlow.broadcast_awaiting_message_en)
+        await message.reply(
+            "Принял русское. Теперь пришли английское — уйдёт тем, у кого бот говорит по-английски."
+        )
+        return
+    await _broadcast_confirm(message, state, mode)
+
+
+@router.message(StateFilter(AdminFlow.broadcast_awaiting_message_en))
+async def broadcast_receive_en(message: Message, state: FSMContext):
+    if not _is_admin(message.from_user.id):
+        return
+    await state.update_data(
+        broadcast_en_chat_id=message.chat.id, broadcast_en_message_id=message.message_id
+    )
+    await _broadcast_confirm(message, state, "both")
+
+
+@router.callback_query(
+    StateFilter(AdminFlow.broadcast_choosing_lang, AdminFlow.broadcast_confirming),
+    F.data == "admin:bc:no",
+)
 async def broadcast_cancel(callback: CallbackQuery, state: FSMContext):
     if not _is_admin(callback.from_user.id):
         await callback.answer()
@@ -618,29 +698,36 @@ async def broadcast_send(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
         return
     data = await state.get_data()
-    src_chat_id = data.get("broadcast_chat_id")
-    src_message_id = data.get("broadcast_message_id")
+    mode = data.get("broadcast_mode", "ru")
+    audience = await _broadcast_audience(mode)
+    # По одному источнику на язык: у каждой группы своё сообщение, и копируется
+    # человеку именно оно.
+    sources = {
+        lang: (data.get(f"broadcast_{lang}_chat_id"), data.get(f"broadcast_{lang}_message_id"))
+        for lang in audience
+    }
     await state.clear()
-    if src_chat_id is None or src_message_id is None:
+    if any(chat_id is None or message_id is None for chat_id, message_id in sources.values()):
         await callback.answer("Сообщение потерялось, начни заново через /broadcast", show_alert=True)
         return
 
     await callback.answer("Рассылка запущена…")
     await ui.safe_edit(callback, "📢 Рассылка запущена, отчитаюсь по завершении…")
 
-    user_ids = await db.list_all_telegram_ids()
     sent = blocked = failed = 0
-    for telegram_id in user_ids:
-        try:
-            await callback.bot.copy_message(
-                chat_id=telegram_id, from_chat_id=src_chat_id, message_id=src_message_id,
-            )
-            sent += 1
-        except TelegramForbiddenError:
-            blocked += 1
-        except TelegramAPIError:
-            failed += 1
-        await asyncio.sleep(BROADCAST_SEND_DELAY)
+    for lang, telegram_ids in audience.items():
+        src_chat_id, src_message_id = sources[lang]
+        for telegram_id in telegram_ids:
+            try:
+                await callback.bot.copy_message(
+                    chat_id=telegram_id, from_chat_id=src_chat_id, message_id=src_message_id,
+                )
+                sent += 1
+            except TelegramForbiddenError:
+                blocked += 1
+            except TelegramAPIError:
+                failed += 1
+            await asyncio.sleep(BROADCAST_SEND_DELAY)
 
     await callback.message.answer(
         f"✅ Рассылка завершена: {sent} доставлено, {blocked} заблокировали бота, {failed} ошибок."
@@ -672,7 +759,7 @@ async def cmd_announce(message: Message):
             await message.answer(f"Релиз «{ann.key}» рассылаю прямо сейчас.")
             continue
         status = await db.get_announcement_status(ann.key)
-        pending = await db.count_announcement_recipients(ann.key)
+        pending = await db.count_announcement_recipients(ann.key, ann.lang)
         if status == announcements.STATUS_APPROVED and not pending:
             await message.answer(f"Релиз «{ann.key}» разослан целиком.")
             continue

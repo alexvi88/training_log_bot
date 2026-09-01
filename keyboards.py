@@ -2046,10 +2046,16 @@ def announcement_keyboard(buttons: Sequence[tuple[str, str]]) -> InlineKeyboardM
     По одной в строку: в анонсе их обычно две, и каждая — вход в свою фичу, а
     не «да/нет». Две кнопки в ряд читаются как выбор из одного, а тут можно и
     то, и другое.
+
+    Цель — либо callback внутрь бота, либо ссылка наружу: анонс бывает и про то,
+    что живёт не в боте (каталог, канал), а туда callback'ом не попасть.
     """
     b = InlineKeyboardBuilder()
-    for text, callback_data in buttons:
-        b.button(text=text, callback_data=callback_data)
+    for text, target in buttons:
+        if target.startswith("https://") or target.startswith("http://"):
+            b.button(text=text, url=target)
+        else:
+            b.button(text=text, callback_data=target)
     b.adjust(1)
     return b.as_markup()
 

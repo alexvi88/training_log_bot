@@ -59,14 +59,14 @@ async def test_non_admin_cannot_start_broadcast(fresh_db, monkeypatch):
     message.answer.assert_not_awaited()
 
 
-async def test_broadcast_command_prompts_and_sets_state(fresh_db, monkeypatch):
+async def test_broadcast_command_asks_which_language(fresh_db, monkeypatch):
     monkeypatch.setattr(config, "ADMIN_ID", ADMIN_ID)
     message = _make_message(ADMIN_ID)
     state = await _make_state(ADMIN_ID)
 
     await admin.cmd_broadcast(message, state)
 
-    assert await state.get_state() == AdminFlow.broadcast_awaiting_message.state
+    assert await state.get_state() == AdminFlow.broadcast_choosing_lang.state
     message.answer.assert_awaited_once()
 
 
@@ -77,15 +77,85 @@ async def test_broadcast_receive_asks_for_confirmation(fresh_db, monkeypatch):
     message = _make_message(ADMIN_ID, message_id=42)
     state = await _make_state(ADMIN_ID)
     await state.set_state(AdminFlow.broadcast_awaiting_message)
+    await state.update_data(broadcast_mode="ru")
 
     await admin.broadcast_receive(message, state)
 
     assert await state.get_state() == AdminFlow.broadcast_confirming.state
     data = await state.get_data()
-    assert data["broadcast_chat_id"] == ADMIN_ID
-    assert data["broadcast_message_id"] == 42
+    assert data["broadcast_ru_chat_id"] == ADMIN_ID
+    assert data["broadcast_ru_message_id"] == 42
     message.reply.assert_awaited_once()
-    assert "2" in message.reply.await_args.args[0]
+    assert "RU — 2" in message.reply.await_args.args[0]
+
+
+async def test_choosing_both_languages_asks_for_the_english_text_too(fresh_db, monkeypatch):
+    monkeypatch.setattr(config, "ADMIN_ID", ADMIN_ID)
+    await fresh_db.get_or_create_user(telegram_id=111, username="a")
+    state = await _make_state(ADMIN_ID)
+    await state.set_state(AdminFlow.broadcast_choosing_lang)
+
+    callback = _make_callback(ADMIN_ID, "admin:bc:lang:both")
+    await admin.broadcast_choose_lang(callback, state)
+    assert await state.get_state() == AdminFlow.broadcast_awaiting_message.state
+
+    await admin.broadcast_receive(_make_message(ADMIN_ID, message_id=42), state)
+    assert await state.get_state() == AdminFlow.broadcast_awaiting_message_en.state
+
+    await admin.broadcast_receive_en(_make_message(ADMIN_ID, message_id=43), state)
+    assert await state.get_state() == AdminFlow.broadcast_confirming.state
+    data = await state.get_data()
+    assert data["broadcast_ru_message_id"] == 42
+    assert data["broadcast_en_message_id"] == 43
+
+
+async def test_broadcast_goes_only_to_users_with_that_language(fresh_db, monkeypatch):
+    monkeypatch.setattr(config, "ADMIN_ID", ADMIN_ID)
+    monkeypatch.setattr(admin, "BROADCAST_SEND_DELAY", 0)
+    await fresh_db.get_or_create_user(telegram_id=111, username="ru-user")
+    await fresh_db.get_or_create_user(telegram_id=222, username="en-user")
+    await fresh_db.update_user(222, lang="en")
+
+    callback = _make_callback(ADMIN_ID, "admin:bc:yes")
+    callback.bot.copy_message = AsyncMock(return_value=SimpleNamespace(message_id=1))
+    state = await _make_state(ADMIN_ID)
+    await state.set_state(AdminFlow.broadcast_confirming)
+    await state.update_data(
+        broadcast_mode="en", broadcast_en_chat_id=ADMIN_ID, broadcast_en_message_id=43
+    )
+
+    await admin.broadcast_send(callback, state)
+
+    recipients = [c.kwargs["chat_id"] for c in callback.bot.copy_message.await_args_list]
+    assert recipients == [222]
+
+
+async def test_both_languages_send_each_group_its_own_message(fresh_db, monkeypatch):
+    monkeypatch.setattr(config, "ADMIN_ID", ADMIN_ID)
+    monkeypatch.setattr(admin, "BROADCAST_SEND_DELAY", 0)
+    await fresh_db.get_or_create_user(telegram_id=111, username="ru-user")
+    await fresh_db.get_or_create_user(telegram_id=222, username="en-user")
+    await fresh_db.update_user(222, lang="en")
+
+    callback = _make_callback(ADMIN_ID, "admin:bc:yes")
+    callback.bot.copy_message = AsyncMock(return_value=SimpleNamespace(message_id=1))
+    state = await _make_state(ADMIN_ID)
+    await state.set_state(AdminFlow.broadcast_confirming)
+    await state.update_data(
+        broadcast_mode="both",
+        broadcast_ru_chat_id=ADMIN_ID,
+        broadcast_ru_message_id=42,
+        broadcast_en_chat_id=ADMIN_ID,
+        broadcast_en_message_id=43,
+    )
+
+    await admin.broadcast_send(callback, state)
+
+    by_user = {
+        c.kwargs["chat_id"]: c.kwargs["message_id"]
+        for c in callback.bot.copy_message.await_args_list
+    }
+    assert by_user == {111: 42, 222: 43}
 
 
 async def test_broadcast_cancel_clears_state(fresh_db, monkeypatch):
@@ -118,7 +188,9 @@ async def test_broadcast_send_copies_to_every_user_and_reports_summary(fresh_db,
 
     state = await _make_state(ADMIN_ID)
     await state.set_state(AdminFlow.broadcast_confirming)
-    await state.update_data(broadcast_chat_id=ADMIN_ID, broadcast_message_id=42)
+    await state.update_data(
+        broadcast_mode="ru", broadcast_ru_chat_id=ADMIN_ID, broadcast_ru_message_id=42
+    )
 
     await admin.broadcast_send(callback, state)
 

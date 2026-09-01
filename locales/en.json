@@ -336,7 +336,7 @@
   "donate.precheckout.disabled": "Donations are off right now. Not charging any Stars.",
   "donate.precheckout.not_yours": "This invoice was issued to someone else. Open donate from your own account.",
   "donate.precheckout.parse_error": "Couldn't make sense of the payment. Not charging any Stars — try again from the menu.",
-  "donate.screen": "❤️ <b>SUPPORT THE PROJECT</b>\n\nThe log is free and stays that way for everyone — donating doesn't unlock anything and doesn't count questions to the coach any differently. You're just helping me cover the gear: the server, image storage, model bills.\n\nTelegram Stars, any of the presets — you decide the rest.",
+  "donate.screen": "❤️ <b>SUPPORT THE PROJECT</b>\n\nThe log is free and stays that way for everyone — donating doesn't unlock anything and doesn't count questions to the coach any differently. You're just helping me cover the gear: the server, image storage, model bills.\n\nTelegram Stars, any of the presets — you decide the rest.\n\nThere's a free way to help too — <a href=\"https://t.me/BotsArchive/3941\">rate the bot 5 stars in the catalog</a> if it's working for you.",
   "donate.thanks": "🔥 {stars} ⭐ — got it! That's what I'm talking about, respect. All going toward the gear.",
   "error.generic": "⚠️ Something broke — happens to champions too. Hit Menu below and let's keep going.",
   "exercise.ab_crunch_machine.name": "Ab Crunch Machine",
