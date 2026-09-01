@@ -1741,6 +1741,13 @@ async def list_all_telegram_ids() -> list[int]:
     return [row["telegram_id"] for row in await cur.fetchall()]
 
 
+async def list_telegram_ids_by_lang(lang: str) -> list[int]:
+    """Ids of everyone whose interface language is `lang` — for a broadcast
+    that goes out in one language only (see handlers/admin.py)."""
+    cur = await conn().execute("SELECT telegram_id FROM users WHERE lang = ?", (lang,))
+    return [row["telegram_id"] for row in await cur.fetchall()]
+
+
 async def update_user(telegram_id: int, **fields: Any) -> None:
     if not fields:
         return
@@ -7001,21 +7008,22 @@ async def has_announcement_push(telegram_id: int, category: str) -> bool:
     return await cur.fetchone() is not None
 
 
-async def count_announcement_recipients(category: str) -> int:
+async def count_announcement_recipients(category: str, lang: str | None = None) -> int:
     cur = await conn().execute(
         "SELECT COUNT(*) FROM users "
         "WHERE pushes_enabled = 1 "
         "AND telegram_id NOT IN (SELECT telegram_id FROM pushes WHERE category = ?) "
         "AND created_at <= COALESCE("
         "  (SELECT updated_at FROM announcement_state WHERE key = ? AND status = 'approved'),"
-        "  created_at)",
-        (category, category),
+        "  created_at)"
+        + (" AND lang = ?" if lang else ""),
+        (category, category, *((lang,) if lang else ())),
     )
     (count,) = await cur.fetchone()
     return count
 
 
-async def list_announcement_recipients(category: str) -> list[int]:
+async def list_announcement_recipients(category: str, lang: str | None = None) -> list[int]:
     """Кому ещё не уходила разовая рассылка `category` (см. announcements.py).
 
     Отметка о доставке — строка в `pushes`, то есть та же таблица, что и у
@@ -7039,8 +7047,9 @@ async def list_announcement_recipients(category: str) -> list[int]:
         "AND created_at <= COALESCE("
         "  (SELECT updated_at FROM announcement_state WHERE key = ? AND status = 'approved'),"
         "  created_at) "
-        "ORDER BY telegram_id",
-        (category, category),
+        + (" AND lang = ? " if lang else "")
+        + "ORDER BY telegram_id",
+        (category, category, *((lang,) if lang else ())),
     )
     return [row["telegram_id"] for row in await cur.fetchall()]
 

@@ -81,6 +81,11 @@ class Announcement:
     `available` — рассылка ждёт, пока фича реально включена в этом развороте.
     Пуш обязан быть правдой (TONE_OF_VOICE.md): обещать разбор видео там, где
     он не подключён, нельзя.
+
+    `lang` — кому уйдёт: `None` значит всем, иначе только тем, у кого интерфейс
+    на этом языке. Текст здесь один на рассылку, поэтому двуязычный анонс — это
+    две записи с разными `key` и своим `lang` у каждой, а не одна с двумя
+    текстами: ключ и так уже единица дедупликации доставки.
     """
 
     key: str
@@ -89,6 +94,7 @@ class Announcement:
     image: str | None = None
     available: Callable[[], bool] = lambda: True
     parse_mode: str | None = "HTML"
+    lang: str | None = None
     _file_id: list[str] = field(default_factory=list, repr=False)
 
 
@@ -133,9 +139,42 @@ RELEASE_AI_TRAINER_ACTIONS = Announcement(
     buttons=[("🤖 Спросить тренера", "menu:ai")],
 )
 
+# Каталог ботов, где у дневника карточка с оценкой: просьба поставить звёзды
+# ведёт ровно туда, кнопкой-ссылкой.
+BOTS_ARCHIVE_URL = "https://t.me/BotsArchive/3941"
+
+RATE_BOTS_ARCHIVE_RU = Announcement(
+    key="rate_bots_archive_ru",
+    lang="ru",
+    text=(
+        "ПРИВЕТ АТЛЕТ! Просьба не по железу, а по самому боту.\n\n"
+        "Если дневник тебе зашёл — поставь ему 5 звёзд в каталоге ботов. "
+        "Так его находят другие, и мне легче тянуть проект дальше.\n\n"
+        "Полминуты твоего времени — и обратно к штанге."
+    ),
+    buttons=[("⭐ Оценить в каталоге", BOTS_ARCHIVE_URL)],
+)
+
+RATE_BOTS_ARCHIVE_EN = Announcement(
+    key="rate_bots_archive_en",
+    lang="en",
+    text=(
+        "HEY ATHLETE! A favour that's not about the iron — it's about the bot.\n\n"
+        "If the log works for you, give it 5 stars in the bot catalog. "
+        "That's how other people find it, and it keeps the project going.\n\n"
+        "Half a minute, then back to the bar."
+    ),
+    buttons=[("⭐ Rate it in the catalog", BOTS_ARCHIVE_URL)],
+)
+
 # Что ещё не разослано. Отправленную рассылку отсюда убираем — база помнит её
 # и без этого списка.
-ANNOUNCEMENTS: list[Announcement] = [RELEASE_AI_PROGRAMS_AND_VIDEO, RELEASE_AI_TRAINER_ACTIONS]
+ANNOUNCEMENTS: list[Announcement] = [
+    RELEASE_AI_PROGRAMS_AND_VIDEO,
+    RELEASE_AI_TRAINER_ACTIONS,
+    RATE_BOTS_ARCHIVE_RU,
+    RATE_BOTS_ARCHIVE_EN,
+]
 
 # Ключи рассылок, которые прямо сейчас разносятся этим процессом. Раньше этот
 # же по смыслу набор жил только в handlers/admin.py и охранял лишь путь через
@@ -222,7 +261,7 @@ async def send_preview(bot: Bot, ann: Announcement) -> bool:
     # (/announce) новой отметки не пишет — она уже стоит.
     if not await db.has_announcement_push(config.ADMIN_ID, ann.key):
         await db.record_push(config.ADMIN_ID, ann.key, ann.text, dt.date.today().isoformat())
-    pending = await db.count_announcement_recipients(ann.key)
+    pending = await db.count_announcement_recipients(ann.key, ann.lang)
     try:
         await bot.send_message(
             config.ADMIN_ID,
@@ -259,7 +298,7 @@ async def send_announcement(bot: Bot, ann: Announcement) -> tuple[int, int, int]
     исключение наружу означало бы, что все, кто стоял в очереди после
     удалённого чата, не получат релиз вообще — до следующего деплоя.
     """
-    recipients = await db.list_announcement_recipients(ann.key)
+    recipients = await db.list_announcement_recipients(ann.key, ann.lang)
     if not recipients:
         return 0, 0, 0
     logger.info("Announcement %s: %s recipients pending", ann.key, len(recipients))

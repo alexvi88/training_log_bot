@@ -232,6 +232,26 @@ async def test_concurrent_deliveries_do_not_double_send(fresh_db, monkeypatch):
     assert (0, 0, 0) in results
 
 
+async def test_announcement_with_a_language_skips_everyone_else(fresh_db, monkeypatch):
+    """Англоязычный анонс уходит только тем, у кого бот говорит по-английски."""
+    await _users(fresh_db, ADMIN_ID, 1, 2)
+    await fresh_db.update_user(2, lang="en")
+    ann = announcements.Announcement(
+        key="test_release_en",
+        text="HEY ATHLETE! A new thing.",
+        buttons=[("⭐ Rate it", "https://t.me/BotsArchive/3941")],
+        image=None,
+        lang="en",
+    )
+    monkeypatch.setattr(announcements, "ANNOUNCEMENTS", [ann])
+    bot = FakeBot()
+    await announcements.send_preview(bot, ann)
+
+    await announcements.send_announcement(bot, ann)
+
+    assert [chat_id for chat_id, _ in bot.sent if chat_id != ADMIN_ID] == [2]
+
+
 async def test_restart_mid_broadcast_finishes_the_rest(fresh_db, monkeypatch):
     """Одобренная рассылка после перезапуска идёт дальше, а не с начала."""
     await _users(fresh_db, ADMIN_ID, 1, 2)

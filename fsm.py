@@ -72,7 +72,9 @@ class AdminFlow(StatesGroup):
     browsing_activity_users = State()
     browsing_activity = State()
     browsing_activity_all = State()
+    broadcast_choosing_lang = State()
     broadcast_awaiting_message = State()
+    broadcast_awaiting_message_en = State()
     broadcast_confirming = State()
 
 
