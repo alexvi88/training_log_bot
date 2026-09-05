@@ -107,22 +107,9 @@ BTN_AI = _ReplyButtonMatch("btn.persistent.ai")
 # before the fix landed, and those users' version was already current.
 PERSISTENT_MENU_VERSION = 5
 
-# Порог, после которого статичная подсказка формата ввода (input_field_
-# placeholder) прячется НАВСЕГДА — см. users.input_hint_hidden и
-# main.RefreshPersistentMenuMiddleware. Однонаправленно: раз спрятанная,
-# больше не возвращается, даже если атлет надолго пропадёт — иначе клавиатура
-# мигала бы туда-сюда после каждой паузы в тренировках. Свой порог, а не
-# analytics.RECENT_TRAINING_THRESHOLD/WINDOW_DAYS: то число про другую
-# подсказку (формат "вес повторы" на экране трекера, см. analytics.
-# is_seasoned) и трогать его здесь нельзя — общий счётчик на два разных повода
-# однажды разойдётся, если пороги когда-нибудь захотят поменять порознь.
-INPUT_HINT_HIDE_WINDOW_DAYS = 14
-INPUT_HINT_HIDE_THRESHOLD = 2
 
-
-def persistent_menu(show_hint: bool = True) -> ReplyKeyboardMarkup:
-    """Нижний ряд плюс, по умолчанию, подсказка в пустом поле ввода
-    (input_field_placeholder).
+def persistent_menu() -> ReplyKeyboardMarkup:
+    """Нижний ряд плюс подсказка в пустом поле ввода (input_field_placeholder).
 
     Подсказка статичная и одна на все экраны — нарочно. Reply-клавиатура живёт
     на сообщении-носителе, и клиенты на TDLib (Android, iOS, Desktop) сбрасывают
@@ -133,12 +120,6 @@ def persistent_menu(show_hint: bool = True) -> ReplyKeyboardMarkup:
     который никто не трогает, — тот, что шлёт attach_silently / middleware
     обновления меню, поэтому подсказка едет только на нём и меняется только
     через PERSISTENT_MENU_VERSION (v4 — её появление, v5 — короткая формулировка).
-
-    `show_hint=False` — для того же самого носителя, но у атлета, который уже
-    перерос формат ввода (см. INPUT_HINT_HIDE_*): набор кнопок не меняется,
-    подсказки под полем ввода просто нет. Каждый вызывающий обязан передавать
-    `not user["input_hint_hidden"]`, а не звать без аргумента — иначе версия
-    карусели когда-нибудь бампнется и вернёт уже спрятанную подсказку.
     """
     return ReplyKeyboardMarkup(
         keyboard=[
@@ -150,9 +131,7 @@ def persistent_menu(show_hint: bool = True) -> ReplyKeyboardMarkup:
         ],
         resize_keyboard=True,
         is_persistent=True,
-        input_field_placeholder=(
-            i18n.t("persistent_menu.input_placeholder") if show_hint else None
-        ),
+        input_field_placeholder=i18n.t("persistent_menu.input_placeholder"),
     )
 
 
