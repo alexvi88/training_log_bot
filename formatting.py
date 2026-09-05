@@ -1942,10 +1942,19 @@ def format_new_achievements(new_codes: list[str]) -> str | None:
     return "\n".join(lines)
 
 
-def format_badge_progress(bp) -> str:  # achievements.BadgeProgress
+def _remaining_in_unit(remaining_kg: float, unit: str) -> str:
+    """Остаток до порога — в единицах атлета. Пороги значков считаются в кг
+    (achievement_sync нормализует веса через to_kg), а показывать «ещё 40 кг»
+    человеку, у которого весь экран в фунтах, — разнобой единиц на одном экране.
+    """
+    value = remaining_kg * config.LB_PER_KG if unit == "lb" else remaining_kg
+    return f"{value:.0f}{unit_label(unit)}"
+
+
+def format_badge_progress(bp, unit: str = "kg") -> str:  # achievements.BadgeProgress
     """Одна строка блока «Ближайшие» — значок плюс расстояние до цели словами
     тренера, семейство в семейство ровно как format_rank_gap: числа считает
-    achievements.nearest_progress, согласование — здесь.
+    achievements.nearest_progress (в кг), согласование и единицы — здесь.
     """
     import achievements
 
@@ -1953,7 +1962,7 @@ def format_badge_progress(bp) -> str:  # achievements.BadgeProgress
     family = achievements.FAMILY_BY_CODE[bp.code]
     label = f"{a.emoji} <b>{escape(a.title)}</b>"
     if family == "weight":
-        return f"{label} — {i18n.t('achievements.nearest_kg', kg=f'{bp.remaining:.0f}')}"
+        return f"{label} — {i18n.t('achievements.nearest_weight', w=_remaining_in_unit(bp.remaining, unit))}"
     if family == "tonnage":
         # Тот же порог округления, что у format_rank_gap: меньше центнера
         # остатка — "0.0 т" читалось бы как "уже всё", поэтому договариваем
@@ -1961,7 +1970,7 @@ def format_badge_progress(bp) -> str:  # achievements.BadgeProgress
         if bp.remaining >= 100:
             tons = f"{round(bp.remaining / 1000, 1):g}"
             return f"{label} — {i18n.t('achievements.nearest_tons', tons=tons)}"
-        return f"{label} — {i18n.t('achievements.nearest_tons_kg', kg=f'{bp.remaining:.0f}')}"
+        return f"{label} — {i18n.t('achievements.nearest_tons_weight', w=_remaining_in_unit(bp.remaining, unit))}"
     if family == "weeks":
         return f"{label} — {i18n.t('achievements.nearest_of', current=int(bp.current), target=int(bp.target))}"
     # "workouts"
@@ -1971,6 +1980,7 @@ def format_badge_progress(bp) -> str:  # achievements.BadgeProgress
 def build_achievements_screen(
     earned: set[str],
     ctx=None,  # achievements.AchievementContext | None
+    unit: str = "kg",
 ) -> str:
     """The full 🏅 badge grid: nearest-3 progress, everything unlocked, then
     everything still locked.
@@ -1995,7 +2005,7 @@ def build_achievements_screen(
         if nearest:
             lines.append("")
             lines.append(i18n.t("achievements.nearest_header"))
-            lines.append("\n".join(format_badge_progress(bp) for bp in nearest))
+            lines.append("\n".join(format_badge_progress(bp, unit) for bp in nearest))
             lines.append("")
 
     if got:

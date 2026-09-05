@@ -112,7 +112,7 @@ def test_tonnage_family_phrasing_falls_back_to_kg_under_a_hundred():
     bp = _bp("ton10", current=9_950, target=10_000)  # 50кг — меньше центнера
     with i18n.use_lang("ru"):
         line = formatting.format_badge_progress(bp)
-        assert i18n.t("achievements.nearest_tons_kg", kg="50") in line
+        assert i18n.t("achievements.nearest_tons_weight", w="50кг") in line
         assert "50 т" not in line  # not misread as tons
 
 
@@ -149,3 +149,15 @@ def test_screen_has_no_nearest_block_for_empty_user():
     ctx = _ctx()  # всё по нулям — свежий /start
     text = formatting.build_achievements_screen(set(), ctx)
     assert i18n.t("achievements.nearest_header") not in text
+
+
+def test_weight_family_remaining_is_shown_in_the_athlete_unit():
+    """Пороги клубов считаются в кг, но остаток показывается в единицах атлета:
+    у фунтового «Клуб 140 — ещё 40 кг» рядом с «220.5×90» — разнобой."""
+    import formatting
+    bp = _bp("club140", current=100.0, target=140.0)  # 40 кг ≈ 88 lb
+    with i18n.use_lang("ru"):
+        assert "ещё 40кг" in formatting.format_badge_progress(bp, "kg")
+        assert "ещё 88lb" in formatting.format_badge_progress(bp, "lb")
+    with i18n.use_lang("en"):
+        assert "88lb to go" in formatting.format_badge_progress(bp, "lb")

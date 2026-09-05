@@ -14,6 +14,7 @@ from aiogram.enums import ContentType
 from aiogram.types import CallbackQuery
 
 import activity_log
+import i18n
 from handlers import fallback
 
 
@@ -309,6 +310,24 @@ async def test_tap_ask_trainer_with_stale_pending_opens_trainer_normally(fresh_d
     toast = callback.answer.await_args.args[0]
     assert toast  # непустой тост, а не молчание
     open_ai_trainer.assert_awaited_once()
+
+
+async def test_second_tap_while_trainer_is_busy_says_busy_not_stale(fresh_db, user_id, monkeypatch):
+    """Двойной тап по «Спросить тренера»: первый забрал текст и думает, второй
+    должен сказать «ещё думаю», а не «вопрос потерян»."""
+    monkeypatch.setattr(fallback.ai_trainer, "is_configured", lambda: True)
+    open_ai_trainer = AsyncMock()
+    monkeypatch.setattr(fallback.persistent_menu, "_open_ai_trainer", open_ai_trainer)
+    state = await _live_state(user_id)  # текст уже забран первым тапом
+    callback = _callback(user_id, data="fb:ask")
+    fallback.ai_trainer_handlers._busy.add(user_id)
+    try:
+        await fallback.ask_trainer(callback, state)
+    finally:
+        fallback.ai_trainer_handlers._busy.discard(user_id)
+
+    assert callback.answer.await_args.args[0] == i18n.t("ai.screen.busy")
+    open_ai_trainer.assert_not_awaited()
 
 
 async def test_tap_ask_trainer_falls_back_when_ai_not_configured(fresh_db, user_id, monkeypatch):

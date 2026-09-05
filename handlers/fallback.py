@@ -255,6 +255,13 @@ async def ask_trainer(callback: CallbackQuery, state: FSMContext) -> None:
     question = (data.get(_ASK_PENDING_KEY) or "").strip()
     message = callback.message
 
+    if callback.from_user.id in ai_trainer_handlers._busy:
+        # Второй тап по той же кнопке, пока первый ещё думает: текст из FSM уже
+        # забран первым тапом, и без этой ветки человек получал бы тост «вопрос
+        # потерян», хотя ничего не потерялось — тренер отвечает.
+        await callback.answer(i18n.t("ai.screen.busy"))
+        return
+
     if not question:
         # Пока думал — переписался (перезапуск, другое сообщение): вопрос
         # потерян, честно говорим об этом тостом и открываем тренера как
