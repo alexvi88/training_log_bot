@@ -29,7 +29,7 @@ from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, Message, ReactionTypeEmoji
 
 import ai_limits
 import ai_trainer
@@ -272,6 +272,17 @@ async def _analyze_and_show(
     if not ai_trainer.is_configured():
         await message.reply(i18n.t("food.not_configured"))
         return
+
+    # Мгновенное «вижу» на само сообщение — до "🤔 Разбираю…" и до квоты, у
+    # обоих есть сетевой круг до Telegram и обратно. Плейсхолдер не убираем: он
+    # остаётся тем же сообщением, что превратится в карточку (edit_text ниже,
+    # см. _show_estimate) — реакция и текст отвечают на разные вопросы
+    # («заметил» и «что именно происходит сейчас»), а не дублируют друг друга.
+    with suppress(TelegramBadRequest):
+        await message.bot.set_message_reaction(
+            chat_id=message.chat.id, message_id=message.message_id,
+            reaction=[ReactionTypeEmoji(emoji="👀")],
+        )
 
     # Единственная платная поверхность бота, которая раньше не считалась вовсе:
     # вопросы, видео и поиск свои квоты имели, а фотографировать тарелку можно

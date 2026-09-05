@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -213,10 +214,14 @@ async def test_ai_voice_question_checks_quota_before_transcribing(fresh_db, user
 def _make_message(user_id: int, text: str):
     message = MagicMock()
     message.text = text
+    message.chat = SimpleNamespace(id=user_id)
+    message.message_id = 1
     message.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     message.reply = AsyncMock()
     message.answer = AsyncMock(return_value=SimpleNamespace(chat=SimpleNamespace(id=user_id), message_id=9))
-    message.bot = MagicMock()
+    # AsyncMock, not MagicMock: _handle_question now awaits
+    # bot.set_message_reaction (the 👀 acknowledgement) on every question.
+    message.bot = AsyncMock()
     return message
 
 
@@ -289,6 +294,56 @@ async def test_successful_question_spends_exactly_one(fresh_db, user_id, monkeyp
     await ai_trainer.ai_question(message, state)
 
     assert await fresh_db.get_ai_question_count_today(user_id) == 1
+
+
+async def test_question_reacts_to_the_message_immediately(fresh_db, user_id, monkeypatch):
+    """👀 lands on the user's own question right away — instant "заметил",
+    independent of the "думаю…" placeholder/draft (see _handle_question)."""
+    monkeypatch.setattr(ai_trainer.ai_trainer, "ask", AsyncMock(return_value="растёт"))
+
+    state = await _make_state(user_id)
+    await state.set_state("AITrainerFlow:chatting")
+    message = _make_chat_message(user_id, "как жим?")
+
+    await ai_trainer.ai_question(message, state)
+
+    message.bot.set_message_reaction.assert_awaited_once()
+    kwargs = message.bot.set_message_reaction.await_args.kwargs
+    assert kwargs["chat_id"] == message.chat.id
+    assert kwargs["message_id"] == message.message_id
+    assert kwargs["reaction"][0].emoji == "👀"
+
+
+async def test_question_reaction_failure_does_not_break_the_answer(fresh_db, user_id, monkeypatch):
+    """Reactions can be unavailable in some chats — a TelegramBadRequest from
+    set_message_reaction must not stop the question from being answered."""
+    monkeypatch.setattr(ai_trainer.ai_trainer, "ask", AsyncMock(return_value="растёт"))
+
+    state = await _make_state(user_id)
+    await state.set_state("AITrainerFlow:chatting")
+    message = _make_chat_message(user_id, "как жим?")
+    message.bot.set_message_reaction = AsyncMock(
+        side_effect=TelegramBadRequest(method=MagicMock(), message="reactions not available")
+    )
+
+    await ai_trainer.ai_question(message, state)
+
+    assert await fresh_db.get_ai_question_count_today(user_id) == 1
+
+
+async def test_bot_screen_question_is_not_reacted_to(fresh_db, user_id, monkeypatch):
+    """user_id passed explicitly means `message` is a bot's own screen (see
+    ai_build_program), not the user's tap — nothing to react to there."""
+    monkeypatch.setattr(ai_trainer.ai_trainer, "ask", AsyncMock(return_value="растёт"))
+
+    state = await _make_state(user_id)
+    screen = _make_chat_message(user_id, "seed")
+
+    await ai_trainer._handle_question(
+        screen, state, "seed", history_question="seed", user_id=user_id,
+    )
+
+    screen.bot.set_message_reaction.assert_not_awaited()
 
 
 # ---------- rich answers (Bot API 10.1) ----------

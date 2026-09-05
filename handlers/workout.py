@@ -2603,31 +2603,27 @@ async def _finalize_voice_sets(bot, state: FSMContext, user, data: dict, active:
                                logged: list[tuple[float, int]], chat_id: int, message_id: int,
                                message: Message | None = None) -> None:
     """Same tail as `_finalize_logged_sets`, for voice input: the voice message
-    stays in the chat (there is nothing to re-read in it) and gets a spoken-back
-    "записал" so a misheard number is still catchable after the fact.
+    stays in the chat (there is nothing to re-read in it) and gets a reaction
+    instead of a spoken-back "Записал" reply.
 
-    The sets are already written by the time this runs, so a reply that can't
-    land (the voice message was deleted mid-transcription, or is otherwise
-    unreachable) must not raise — it falls back to a plain send_message rather
-    than surfacing "что-то пошло не так" for a save that actually succeeded.
+    A separate confirmation message used to sit below the voice note, which
+    pushed the live tracker off the bottom of the chat (chat_bottom.py) and
+    cost the next redraw a delete+resend flicker instead of a cheap edit. The
+    tracker re-rendered right after this (`_render_logging_screen`) already
+    lists every logged set of the active exercise on its own bullet line
+    (formatting.build_live_session_text), so a misheard "100×8, 100×8" is just
+    as catchable there as it was in the old reply — the reaction only needs to
+    say "got it", not repeat the numbers.
+
+    A record still wins: 🔥 instead of ✅, exactly like typed sets — a message
+    carries only one reaction, and the record deserves the louder one.
     """
-    sets_str = ", ".join(formatting.format_set(w, r) for w, r in logged)
-    text = i18n.t("workout.voice_logged", sets=sets_str)
-    if message is not None:
-        try:
-            await message.reply(text)
-        except TelegramBadRequest:
-            await bot.send_message(chat_id=chat_id, text=text)
-    else:
-        try:
-            await bot.send_message(chat_id=chat_id, text=text, reply_to_message_id=message_id)
-        except TelegramBadRequest:
-            await bot.send_message(chat_id=chat_id, text=text)
-    if await _sets_beat_record(active, data["workout_id"], logged, user["e1rm_formula"]):
-        with suppress(TelegramBadRequest):
-            await bot.set_message_reaction(
-                chat_id=chat_id, message_id=message_id, reaction=[ReactionTypeEmoji(emoji="🔥")],
-            )
+    is_record = await _sets_beat_record(active, data["workout_id"], logged, user["e1rm_formula"])
+    emoji = "🔥" if is_record else "✅"
+    with suppress(TelegramBadRequest):
+        await bot.set_message_reaction(
+            chat_id=chat_id, message_id=message_id, reaction=[ReactionTypeEmoji(emoji=emoji)],
+        )
     # Уже нашёл голос сам — подсказку про него больше показывать незачем.
     await db.mark_voice_hint_shown(user["telegram_id"])
     await _render_logging_screen(bot, state, user)
