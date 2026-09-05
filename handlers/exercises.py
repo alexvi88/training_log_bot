@@ -55,7 +55,7 @@ async def show_exercise_groups(callback: CallbackQuery, state: FSMContext):
     # Entering the exercises menu properly means any exercise card opened from
     # now on belongs to this flow again, not to wherever "⬅️ Назад" pointed
     # while jumping in from the AI-тренер chat (see send_exercise_card).
-    await state.update_data(exm_from_ai=False)
+    await state.update_data(exm_from_ai=False, exm_from_progress=None)
     await state.set_state(ExerciseManage.picking_group)
     text, kb = await _groups_payload(callback.from_user.id)
     await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML")
@@ -514,9 +514,18 @@ async def _send_template_preview(
 async def _exercise_detail_payload(ex, state: FSMContext, with_info: bool = True):
     """_exercise_detail_view with the exercise's group name looked up for it and
     "⬅️ Назад" pointed wherever this card was actually reached from: closing it
-    to reveal the AI-тренер reply underneath, rather than the exercises list."""
+    to reveal the AI-тренер reply underneath (from the AI chat), returning to
+    that exercise's progress chart (opened via "📋 Карточка упражнения" on a
+    progress screen — exm_from_progress carries that screen's origin token),
+    or the exercises list otherwise."""
     data = await state.get_data()
-    back_cb = "ai:closecard" if data.get("exm_from_ai") else "exm:backlist"
+    progress_origin = data.get("exm_from_progress")
+    if data.get("exm_from_ai"):
+        back_cb = "ai:closecard"
+    elif progress_origin is not None:
+        back_cb = f"prog:ex:{ex['id']}:{progress_origin}"
+    else:
+        back_cb = "exm:backlist"
     return _exercise_detail_view(
         ex, with_info=with_info, group_name=await _exercise_group_name(ex), back_cb=back_cb
     )
@@ -849,9 +858,16 @@ async def prog_show_exercise_card(callback: CallbackQuery, state: FSMContext):
     „Назад" должно просто закрыть её, обнажив ответ». После захода в прогресс
     ответа тренера рядом уже нет, а флаг оставался — и «Назад» удаляло
     сообщение, не открывая взамен ничего.
+
+    `exm_from_progress` — обратный маршрут: карточка открыта с экрана
+    прогресса, и «Назад» должно вернуть именно туда (тот же origin, что и у
+    прогресса), а не в список упражнений — старое поведение теряло человека
+    из контекста, в котором он смотрел график.
     """
-    ex_id = int(callback.data.split(":")[2])
-    await state.update_data(exm_from_ai=False)
+    parts = callback.data.split(":")
+    ex_id = int(parts[2])
+    progress_origin = parts[3] if len(parts) > 3 else "all"
+    await state.update_data(exm_from_ai=False, exm_from_progress=progress_origin)
     await state.set_state(ExerciseManage.picking_exercise)
     await _render_exercise_card(callback, state, ex_id)
 

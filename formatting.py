@@ -2257,6 +2257,7 @@ def format_progress_screen(
     unit: str = "kg",
     session_notes: dict[int, str] | None = None,  # {workout_id: note}
     golds=None,  # analytics.GoldBook | None
+    single_session_hint: bool = False,  # only one session in the metric the chart plots — no chart, so nudge instead
 ) -> str:
     u = unit_label(unit)
     lines = [f"📈 <b>{escape(exercise_name)}</b>", ""]
@@ -2281,6 +2282,8 @@ def format_progress_screen(
         else:
             delta = last.top_e1rm - first.top_e1rm
             lines.append(i18n.t("progress.e1rm_delta", delta=format_delta(delta, unit), since=since))
+    elif single_session_hint:
+        lines.append(i18n.t("progress.need_second_session"))
 
     # compute_personal_records honestly tracks both metrics independently of
     # session mode (max_e1rm from weighted sets, max_reps_at_weight from every

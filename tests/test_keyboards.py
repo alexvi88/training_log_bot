@@ -217,6 +217,26 @@ def test_edit_exercise_keyboard_lists_sets_and_a_way_back():
     assert "editw:top" in cbs
 
 
+def test_progress_period_labels_say_workouts_not_bare_numbers():
+    """Bare "10"/"20" read as unlabeled numbers next to bodyweight's "10 нед" —
+    both period pickers should say what they're counting."""
+    kb = keyboards.progress_chart_keyboard(exercise_id=1, limit=20, origin="all")
+    texts = _button_texts(kb)
+    assert "10 трен." in texts
+    assert "• 20 трен. •" in texts  # active period marked
+    assert "Все" in texts
+
+
+def test_progress_card_and_back_buttons_carry_the_origin():
+    """"📋 Карточка упражнения" must remember where the progress screen itself
+    was opened from, so its own "⬅️ Назад" can return there instead of the
+    exercises list (see handlers/exercises.py._exercise_detail_payload)."""
+    kb = keyboards.progress_chart_keyboard(exercise_id=1, limit=20, origin="7")
+    cbs = _callback_datas(kb)
+    assert "prog:card:1:7" in cbs
+    assert "prog:grp:7" in cbs
+
+
 def test_bodyweight_periods_match_the_progress_chart_shape():
     """Both period pickers offer the same 10/20/all shape, and neither defaults
     to the narrowest window."""
@@ -228,7 +248,7 @@ def test_bodyweight_keyboard_marks_the_active_period():
     kb = keyboards.bodyweight_keyboard(has_logs=True, weeks=20, show_periods=True)
     texts = _button_texts(kb)
     assert "• 20 нед •" in texts
-    assert "10 нед" in texts and "Всё" in texts
+    assert "10 нед" in texts and "Все" in texts
 
 
 def test_bodyweight_keyboard_offers_the_records_list_when_there_are_logs():
