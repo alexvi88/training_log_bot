@@ -25,9 +25,15 @@ import view_builder
 logger = logging.getLogger(__name__)
 
 
-async def _aggregate_context(user_id: int) -> achievements.AchievementContext:
+async def aggregate_context(user_id: int) -> achievements.AchievementContext:
     """Lifetime totals only — the per-workout fields stay None so a caller can
     fill them in for whichever workout it is evaluating.
+
+    Public (no leading underscore) because it has a second caller besides this
+    module: the achievements screen reuses it to know "current value" for the
+    «Ближайшие» block (achievements.nearest_progress) — the same lifetime
+    numbers that decide which badges are earned also say how close the locked
+    ones are.
 
     Weights are normalized to kilograms here. The thresholds behind "🏅 Клуб 220"
     and the tonnage badges are in kg (as the field names say), but the DB stores
@@ -80,7 +86,7 @@ async def evaluate_after_finish(
     reason to break saving the workout.
     """
     try:
-        ctx = await _aggregate_context(user_id)
+        ctx = await aggregate_context(user_id)
         user = await db.get_user(user_id)
         # started_at is the server clock (UTC) — shifted to the user's local
         # wall clock before reading hour/date, the same shift list_finished_
@@ -101,7 +107,7 @@ async def _earned_now(user_id: int) -> set[str]:
     """Every code the user's current history qualifies for, recomputed from
     scratch: lifetime aggregates plus the one-off codes any single workout can
     unlock (early bird / night owl / marathon / 1 января)."""
-    ctx = await _aggregate_context(user_id)
+    ctx = await aggregate_context(user_id)
     user = await db.get_user(user_id)
     codes = achievements.earned_codes(ctx)
     for workout in await db.list_finished_workouts_meta(user_id):
