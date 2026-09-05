@@ -398,13 +398,6 @@ async def _screen_history_item_card(db, user_id: int) -> str:
     return callback.message.answer.await_args.args[0]
 
 
-async def _screen_weekly_summary(db, user_id: int) -> str:
-    """Недельная сводка (formatting.build_weekly_summary) — текстовый фолбэк
-    для клиентов без rich-таблиц, тот же экран, что и build_weekly_table."""
-    rows = [formatting.WeeklyRow(name="Squat", top_weight=100.0, tonnage=1500.0, sets_count=5)]
-    return formatting.build_weekly_summary(rows, workouts=3, total_tonnage=4200.0, period="Aug 11-17")
-
-
 async def _screen_achievements(db, user_id: int) -> str:
     """Экран «🏅 Достижения» (formatting.build_achievements_screen) — сетка
     открытых и запертых бейджей."""
@@ -774,7 +767,6 @@ SCREENS: list[tuple[str, object]] = [
     ("history_calendar_day_list", _screen_history_calendar_day_list),
     ("workout_summary_card", _screen_workout_summary),
     ("dashboard_menu", _screen_dashboard_menu),
-    ("weekly_summary", _screen_weekly_summary),
     ("achievements", _screen_achievements),
     ("hall_of_fame", _screen_hall_of_fame),
     ("progress_screen", _screen_progress_screen),

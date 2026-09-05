@@ -6,7 +6,7 @@ from contextlib import suppress
 from html import escape
 
 from aiogram import F, Router
-from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import (
@@ -294,71 +294,6 @@ async def build_hall_of_fame_text(user_id: int, max_chars: int | None = None) ->
     )
 
 
-@router.callback_query(F.data == "prog:week")
-async def prog_week(callback: CallbackQuery, state: FSMContext):
-    """Недельная сводка: настоящей таблицей там, где Telegram её умеет.
-
-    Rich-сообщения появились в Bot API 10.1, поэтому таблица — попытка, а не
-    гарантия: если сервер или клиент её не знает, тот же самый набор чисел
-    уходит обычным текстом. Текстовая версия не «урезанная», она полная —
-    таблица лишь читается с одного взгляда.
-    """
-    user_id = callback.from_user.id
-    user = await db.get_user(user_id)
-    today = timeutil.user_today(user)
-    monday = today - dt.timedelta(days=today.weekday())
-    since = f"{monday.isoformat()}T00:00:00"
-
-    rows = [
-        formatting.WeeklyRow(
-            name=r["name"], top_weight=r["top_weight"],
-            tonnage=r["tonnage"], sets_count=r["sets_count"],
-        )
-        for r in await db.weekly_exercise_rollup(user_id, since)
-    ]
-    dates = [dt.date.fromisoformat(d) for d in await db.list_finished_workout_dates(user_id)]
-    workouts = sum(1 for d in dates if d >= monday)
-    # По всем упражнениям недели, а не по показанным: сводка сама режет список
-    # до formatting.WEEKLY_ROWS_LIMIT строк, и итог, посчитанный по обрезку, был
-    # меньше правды и расходился с плиткой тоннажа на дашборде.
-    total = sum(r.tonnage for r in rows)
-    period = f"{monday.strftime('%d.%m')}–{(monday + dt.timedelta(days=6)).strftime('%d.%m')}"
-    text = formatting.build_weekly_summary(
-        rows, workouts, total, period, unit=user["unit"]
-    )
-    kb = keyboards.back_keyboard("menu:progress")
-
-    table = formatting.build_weekly_table(rows, unit=user["unit"])
-    if table is not None and await _send_rich_weekly(callback, text, table, kb):
-        await callback.answer()
-        return
-    await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML")
-    await callback.answer()
-
-
-async def _send_rich_weekly(callback: CallbackQuery, text: str, table, kb) -> bool:
-    """Попробовать отправить сводку rich-сообщением. False — значит не вышло, и
-    вызывающая сторона шлёт текст."""
-    from aiogram.types import InputRichBlockParagraph, InputRichMessage
-
-    # Блоки несут обычный текст, не HTML-разметку: заголовок для них чистится
-    # от тегов, которые нужны только текстовому фолбэку.
-    heading = formatting.strip_tags(text.partition("\n\n")[0])
-    try:
-        await callback.message.answer_rich(
-            rich_message=InputRichMessage(
-                blocks=[InputRichBlockParagraph(text=heading), table]
-            ),
-            reply_markup=kb,
-        )
-    except (TelegramAPIError, AttributeError, TypeError):
-        # Сервер/клиент ниже 10.1, старый aiogram — что угодно: молча уходим в текст.
-        return False
-    with suppress(TelegramBadRequest):
-        await callback.message.delete()
-    return True
-
-
 @router.callback_query(F.data.startswith("menu:achievements"))
 async def menu_achievements(callback: CallbackQuery, state: FSMContext):
     """'🏆 Достижения' — экран зала славы и значков одним куском.
@@ -643,7 +578,6 @@ async def show_progress_entry(callback: CallbackQuery, state: FSMContext):
     kb = keyboards.groups_keyboard(
         groups, prefix="prog",
         extra_buttons=[
-            (i18n.t("history.week_button"), "prog:week"),
             (i18n.t("btn.achievements"), "menu:achievements:prog"),
             (i18n.t("btn.back"), "prog:back"),
         ],
