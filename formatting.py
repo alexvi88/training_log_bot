@@ -1667,12 +1667,12 @@ def menu_headline(dashboard) -> str:
 
 def menu_tiles(
     dashboard, tonnage: float, records: int, unit: str = "kg", total_workouts: int | None = None,
-) -> list[tuple[str, str]]:
+) -> list[tuple]:
     """Плитки под заголовком: всего/за 30 дней одной плиткой, тоннаж, рекорды
-    или неделя.
+    или неделя. Плитка — (подпись, число) или (подпись, число, приписка).
 
-    «Всего» и «за 30 дней» делят одну плитку через дробь («148/14»), а не две
-    подряд: «ВСЕГО ТРЕНИРОВОК» и «ТРЕНИРОВОК ЗА 30 ДНЕЙ» рядом — тот же счётчик
+    «Всего» и «за 30 дней» делят одну плитку («148» и мелко «14 за 30 дней»), а
+    не две подряд: «ВСЕГО ТРЕНИРОВОК» и «ТРЕНИРОВОК ЗА 30 ДНЕЙ» рядом — тот же счётчик
     дважды, просто с разным окном. total_workouts передаётся отдельно (не из
     dashboard), потому что dashboard считает окна, а не итог; None — плитка
     остаётся прежней, с одним числом за 30 дней (старые вызовы и экраны без
@@ -1697,10 +1697,17 @@ def menu_tiles(
     tonnes = f"{total_kg / 1000:.1f}"
     weight = f"{tonnes} {i18n.t('unit.ton_short')}" if total_kg >= 1000 else f"{tonnage:.0f} {u}"
     if total_workouts is not None:
-        workouts_tile = (i18n.t("dashboard.tile_total"), f"{total_workouts}/{dashboard.last_30_days}")
+        # Тройка: подпись, крупное число, мелкая приписка справа от числа.
+        # «ТРЕНИРОВОК ВСЕГО / ЗА 30 ДНЕЙ» одной строкой не влезало в плитку —
+        # окно ушло в приписку («14 за 30 дней»), подпись осталась одним словом.
+        workouts_tile = (
+            i18n.t("dashboard.tile_total"),
+            str(total_workouts),
+            i18n.t("dashboard.tile_total_sub", n=dashboard.last_30_days),
+        )
     else:
         workouts_tile = (i18n.t("dashboard.tile_workouts", window=days_window_label(30)), str(dashboard.last_30_days))
-    tiles: list[tuple[str, str]] = [
+    tiles: list[tuple] = [
         workouts_tile,
         (i18n.t("dashboard.tile_tonnage", window=days_window_label(VOLUME_WINDOW_DAYS)), weight),
     ]
