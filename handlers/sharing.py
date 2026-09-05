@@ -342,7 +342,7 @@ async def _send_program_card(callback: CallbackQuery, program_id: int, program_n
 
 @router.callback_query(F.data.startswith("share:prg:"))
 async def share_program(callback: CallbackQuery, state: FSMContext):
-    """«📤 Поделиться» на экране «⚙️ Изменить программу»: одна визитка на всю
+    """«📤 Поделиться» на экране «✏️ Изменить программу»: одна визитка на всю
     многодневку, а не по дню за раз (см. share_routine).
 
     В callback'е — id программы (`programs.id`). Ручка раньше читала это число
@@ -440,7 +440,7 @@ def _accept_keyboard(token: str, kind: str) -> InlineKeyboardMarkup:
     label = i18n.t("share.add_exercise_button") if kind == "exercise" else i18n.t("share.add_program_button")
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=label, callback_data=f"share:add:{token}")],
-        [InlineKeyboardButton(text=i18n.t("share.to_menu_button"), callback_data="share:skip")],
+        [InlineKeyboardButton(text=i18n.t("btn.home_menu"), callback_data="share:skip")],
     ])
 
 

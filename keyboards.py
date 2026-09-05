@@ -369,7 +369,7 @@ def ai_program_preview_keyboard(
     """
     b = InlineKeyboardBuilder()
     if can_train_now and not replacing:
-        b.button(text=i18n.t("btn.start_with_it"), callback_data=f"ai:prog:train:{draft_id}")
+        b.button(text=i18n.t("btn.start_workout"), callback_data=f"ai:prog:train:{draft_id}")
     b.button(
         text=i18n.t("btn.update_program") if replacing else i18n.t("btn.add_for_myself_check"),
         callback_data=f"ai:prog:save:{draft_id}",
@@ -449,6 +449,12 @@ def ai_program_saved_keyboard(
     return b.as_markup()
 
 
+# Two-column row (adjust(2)): half the width of a full-row button, and the
+# built-in presets never come close, but a custom group name is the user's own
+# data and unbounded — long ones (emoji, a whole phrase) blew up the row.
+_GROUP_LABEL_MAX = 18
+
+
 def groups_keyboard(
     groups,
     prefix: str,
@@ -467,7 +473,10 @@ def groups_keyboard(
     day of a running split is the likelier intent than picking a muscle group."""
     b = InlineKeyboardBuilder()
     for g in groups:
-        b.button(text=formatting.format_group(g["name"]), callback_data=f"{prefix}:grp:{g['id']}")
+        b.button(
+            text=_shorten_label(formatting.format_group(g["name"]), _GROUP_LABEL_MAX),
+            callback_data=f"{prefix}:grp:{g['id']}",
+        )
     if show_all:
         b.button(text=i18n.t("btn.all_templates"), callback_data=f"{prefix}:grp:all")
     b.adjust(2)
@@ -631,7 +640,7 @@ def weight_confirm_keyboard() -> InlineKeyboardMarkup:
     written (see handlers.workout._weight_confirm_prompt). "Нет" throws the
     input away so the set can simply be retyped."""
     return yes_no_keyboard(
-        "live:wconf:yes", "live:wconf:no", yes_text=i18n.t("btn.yes_record"), no_text=i18n.t("btn.fix"),
+        "live:wconf:yes", "live:wconf:no", yes_text=i18n.t("btn.yes_record"), no_text=i18n.t("btn.correct_it"),
     )
 
 
@@ -640,7 +649,7 @@ def bodyweight_confirm_keyboard() -> InlineKeyboardMarkup:
     for a bodyweight entry outside the plausible range (see
     parser.bodyweight_warning, handlers.bodyweight.bw_weight_entered)."""
     return yes_no_keyboard(
-        "bw:wconf:yes", "bw:wconf:no", yes_text=i18n.t("btn.yes_record"), no_text=i18n.t("btn.fix"),
+        "bw:wconf:yes", "bw:wconf:no", yes_text=i18n.t("btn.yes_record"), no_text=i18n.t("btn.correct_it"),
     )
 
 
@@ -932,7 +941,7 @@ def program_days_keyboard(
     сообщения про очередь говорит по тому же условию (см.
     handlers.routines.show_program).
 
-    Всё, что меняет программу, уехало за «⚙️ Изменить программу» (см.
+    Всё, что меняет программу, уехало за «✏️ Изменить программу» (см.
     program_edit_keyboard). Шесть кнопок редактирования стояли ровно на пути
     «пойти потренироваться» — а между тренировками программу правят примерно
     никогда, зато открывают её каждый раз. На двухдневной программе экран был из
@@ -955,7 +964,7 @@ def program_days_keyboard(
 
 
 def program_edit_keyboard(days, program_id: int) -> InlineKeyboardMarkup:
-    """«⚙️ Изменить программу»: всё, что меняет саму программу, одним экраном.
+    """«✏️ Изменить программу»: всё, что меняет саму программу, одним экраном.
 
     Подписи без слова «программу» — заголовок экрана её и так называет, а
     короткие подписи встают по две в ряд, так что четыре действия занимают две
@@ -1021,11 +1030,11 @@ def program_day_order_keyboard(days, program_id: int) -> InlineKeyboardMarkup:
             ),
             InlineKeyboardButton(text="⬆️", callback_data=f"rt:daymv:{d['id']}:up"),
         )
-    # Назад — на шаг, откуда пришли («⚙️ Изменить программу»), а не сразу на
+    # Назад — на шаг, откуда пришли («✏️ Изменить программу»), а не сразу на
     # экран программы: порядок дней меняют в связке с остальными правками, и
     # выбрасывать человека из редактора после каждой значит заставлять его
     # заходить туда заново.
-    b.row(InlineKeyboardButton(text=i18n.t("btn.done_back"), callback_data=f"rt:pgmedit:{program_id}"))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.back"), callback_data=f"rt:pgmedit:{program_id}"))
     return b.as_markup()
 
 
@@ -1039,7 +1048,7 @@ def program_day_source_keyboard(program_id: int, days) -> InlineKeyboardMarkup:
     # тренировок с листалкой, а «прошлая» читается как «последняя» — будто выбора
     # нет. Тем же словом эта кнопка названа и в списке программ («➕ Из
     # тренировки»), и ведут они в один и тот же экран.
-    b.button(text=i18n.t("btn.from_workout_dumbbell"), callback_data=f"rt:daypickw:{program_id}:0")
+    b.button(text=i18n.t("btn.from_workout"), callback_data=f"rt:daypickw:{program_id}:0")
     for d in days:
         b.button(text=i18n.t("btn.day_copy", name=d['name']), callback_data=f"rt:daycopy:{d['id']}")
     b.button(text=i18n.t("btn.back"), callback_data=f"rt:prg:{program_id}")
@@ -1201,7 +1210,7 @@ def routine_edit_keyboard(
             remove_button,
         )
     b.row(InlineKeyboardButton(text=i18n.t("btn.add_exercise"), callback_data=f"rt:addex:{routine_id}"))
-    b.row(InlineKeyboardButton(text=i18n.t("btn.done_back"), callback_data=f"rt:view:{routine_id}"))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.back"), callback_data=f"rt:view:{routine_id}"))
     return b.as_markup()
 
 
@@ -1901,7 +1910,7 @@ def food_confirm_keyboard() -> InlineKeyboardMarkup:
     b.row(InlineKeyboardButton(text=i18n.t("btn.confirm_correct"), callback_data="fd:ok"))
     b.row(
         InlineKeyboardButton(text=i18n.t("btn.correct_it"), callback_data="fd:fix"),
-        InlineKeyboardButton(text=i18n.t("btn.cancel_verb"), callback_data="fd:cancel"),
+        InlineKeyboardButton(text=i18n.t("btn.cancel"), callback_data="fd:cancel"),
     )
     return b.as_markup()
 
