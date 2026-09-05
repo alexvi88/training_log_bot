@@ -57,7 +57,7 @@ async def show_history_list(callback: CallbackQuery, state: FSMContext, page: in
         items.append({"id": w["id"], "label": formatting.format_date_ru(started)})
         entries.append((started, names, set_count))
     has_next = (page + 1) * HISTORY_PAGE_SIZE < total
-    kb = keyboards.history_list_keyboard(items, page, has_next)
+    kb = keyboards.history_list_keyboard(items, page, has_next, is_empty=total == 0)
     await ui.safe_edit(
         callback, formatting.build_history_list(entries), reply_markup=kb, parse_mode="HTML"
     )
@@ -143,6 +143,91 @@ async def hist_back(callback: CallbackQuery, state: FSMContext):
 async def hist_to_menu(callback: CallbackQuery, state: FSMContext):
     from handlers.workout import _show_main_menu
     await _show_main_menu(callback, state)
+    await callback.answer()
+
+
+# ---------- history: month calendar ----------
+#
+# «📅 По месяцам» on the list screen — 30 workouts back is 4 taps on the
+# paged list (8/page), one tap on the calendar. Cells come from
+# db.list_finished_workouts_by_day_in_month; a marked cell opens straight to
+# the workout (or, with 2+ that day, a day list); an unmarked cell can't be
+# tapped into anything, so it answers with a toast instead of pretending
+# there's a screen behind it. Callback prefix is "hist:cal" (calendar_keyboard
+# turns that into hist:cal:date:/hist:cal:cal:/hist:cal:noop), kept distinct
+# from backfill's "bf" prefix on the same keyboard builder.
+
+async def _show_history_calendar(callback: CallbackQuery, state: FSMContext, year: int, month: int):
+    await state.set_state(HistoryFlow.browsing)
+    user = await db.get_user(callback.from_user.id)
+    today = timeutil.user_today(user)
+    marked = await db.list_finished_workouts_by_day_in_month(callback.from_user.id, year, month)
+    kb = keyboards.calendar_keyboard(
+        "hist:cal", year, month, today=today,
+        marked=set(marked.keys()), show_quick_dates=False,
+        back_text=i18n.t("btn.to_list"), back_cb="hist:back",
+    )
+    await ui.safe_edit(callback, i18n.t("history.calendar_header"), reply_markup=kb, parse_mode="HTML")
+
+
+@router.callback_query(F.data == "hist:cal")
+async def hist_calendar_open(callback: CallbackQuery, state: FSMContext):
+    today = timeutil.user_today(await db.get_user(callback.from_user.id))
+    await _show_history_calendar(callback, state, today.year, today.month)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("hist:cal:cal:"))
+async def hist_calendar_nav(callback: CallbackQuery, state: FSMContext):
+    year, month = (int(x) for x in callback.data.split(":")[3].split("-"))
+    await _show_history_calendar(callback, state, year, month)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "hist:cal:noop")
+async def hist_calendar_noop(callback: CallbackQuery):
+    await callback.answer()
+
+
+async def _show_calendar_day_list(callback: CallbackQuery, date: dt.date, workout_ids: list[int]):
+    """2+ finished workouts on one local day — same list body as the paged
+    history screen, filtered to just this day, buttons labelled by time of day
+    since the date is already the screen's own header."""
+    contents = await db.list_workout_contents(workout_ids)
+    entries = []
+    items = []
+    for wid in workout_ids:
+        workout = await db.get_workout(wid)
+        started = dt.datetime.fromisoformat(workout["started_at"])
+        names, set_count = contents.get(wid, ([], 0))
+        entries.append((started, names, set_count))
+        items.append((wid, started.strftime("%H:%M")))
+    text = formatting.build_history_list(
+        entries,
+        header=i18n.t("history.calendar_day_header", date=formatting.format_date_ru(entries[0][0])),
+        footer="",
+    )
+    b = InlineKeyboardBuilder()
+    for wid, label in items:
+        b.row(InlineKeyboardButton(text=f"🕒 {label}", callback_data=f"hist:item:{wid}"))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.back"), callback_data=f"hist:cal:cal:{date.year}-{date.month}"))
+    await ui.safe_edit(callback, text, reply_markup=b.as_markup(), parse_mode="HTML")
+
+
+@router.callback_query(F.data.startswith("hist:cal:date:"))
+async def hist_calendar_day(callback: CallbackQuery, state: FSMContext):
+    iso = callback.data.split(":", 3)[3]
+    date = dt.date.fromisoformat(iso)
+    by_day = await db.list_finished_workouts_by_day_in_month(callback.from_user.id, date.year, date.month)
+    ids = by_day.get(iso, [])
+    if not ids:
+        await callback.answer(i18n.t("history.calendar_day_empty"))
+        return
+    if len(ids) == 1:
+        if await show_history_item(callback, ids[0]):
+            await callback.answer()
+        return
+    await _show_calendar_day_list(callback, date, ids)
     await callback.answer()
 
 

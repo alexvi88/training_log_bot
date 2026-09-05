@@ -1299,10 +1299,16 @@ def progress_chart_keyboard(exercise_id: int, limit: int, origin: str = "all") -
     return b.as_markup()
 
 
-def history_list_keyboard(workouts, page: int, has_next: bool) -> InlineKeyboardMarkup:
+def history_list_keyboard(workouts, page: int, has_next: bool, is_empty: bool = False) -> InlineKeyboardMarkup:
     """Dates only, two per row — what each session contained is spelled out in the
     message body (formatting.build_history_list), so these are just tap targets
-    and don't need the full width."""
+    and don't need the full width.
+
+    is_empty: no workouts at all yet (history.empty is showing) — a calendar
+    with nothing marked on it isn't a useful escape hatch here, so it's
+    replaced by the same "start a workout" way out the progress screen's own
+    empty state uses (history.start_workout_button).
+    """
     b = InlineKeyboardBuilder()
     for w in workouts:
         b.button(text=w["label"], callback_data=f"hist:item:{w['id']}")
@@ -1314,6 +1320,10 @@ def history_list_keyboard(workouts, page: int, has_next: bool) -> InlineKeyboard
     b.adjust(2)
     if nav:
         b.row(*nav)
+    if is_empty:
+        b.row(InlineKeyboardButton(text=i18n.t("history.start_workout_button"), callback_data="menu:start_workout"))
+    else:
+        b.row(InlineKeyboardButton(text=i18n.t("btn.by_month"), callback_data="hist:cal"))
     b.row(InlineKeyboardButton(text=i18n.t("btn.add_past_workouts"), callback_data="menu:backfill_workout"))
     b.row(InlineKeyboardButton(text=i18n.t("btn.home_menu"), callback_data="hist:menu"))
     return b.as_markup()
@@ -2140,16 +2150,35 @@ def _cal_month_name(month: int) -> str:
     return i18n.t(f"btn.cal.month_{month}")
 
 
-def calendar_keyboard(prefix: str, year: int, month: int, today: dt.date | None = None) -> InlineKeyboardMarkup:
+def calendar_keyboard(
+    prefix: str,
+    year: int,
+    month: int,
+    today: dt.date | None = None,
+    marked: set[str] | None = None,
+    show_quick_dates: bool = True,
+    back_text: str | None = None,
+    back_cb: str | None = None,
+) -> InlineKeyboardMarkup:
     """Month grid for picking a past date without typing дд.мм.гггг.
 
     Day taps emit ``{prefix}:date:{iso}`` — the same callback the quick buttons
     already use, so existing per-flow date handlers catch calendar picks for
     free. Month arrows emit ``{prefix}:cal:{year}-{month}`` (re-render only),
     blanks and labels emit ``{prefix}:noop``. Future days and future months are
-    not selectable — a past workout can't be dated ahead of today.
+    not selectable — a past workout can't be dated ahead of today, and history
+    can't have a workout in the future either.
+
+    marked: ISO dates (YYYY-MM-DD) to mark with a bullet — used by the history
+    calendar (handlers/history.py) to show which days actually have a workout;
+    unset for backfill, where every past day is a valid destination and none
+    needs to stand out. show_quick_dates hides the "Сегодня/Вчера" row for that
+    same screen — picking a date to log wants the shortcut, browsing history
+    doesn't. back_text/back_cb override the trailing button's label and target
+    (default: btn.cancel / ``{prefix}:cancel``, backfill's own "отмена").
     """
     today = today or dt.date.today()
+    marked = marked or set()
     b = InlineKeyboardBuilder()
 
     first = dt.date(year, month, 1)
@@ -2173,19 +2202,26 @@ def calendar_keyboard(prefix: str, year: int, month: int, today: dt.date | None 
         if date > today:
             cells.append(InlineKeyboardButton(text="·", callback_data=f"{prefix}:noop"))
         else:
-            label = f"·{d}·" if date == today else str(d)
+            mark = "•" if date.isoformat() in marked else ""
+            label = f"·{d}{mark}·" if date == today else f"{d}{mark}"
             cells.append(InlineKeyboardButton(text=label, callback_data=f"{prefix}:date:{date.isoformat()}"))
     while len(cells) % 7:
         cells.append(InlineKeyboardButton(text=" ", callback_data=f"{prefix}:noop"))
     for i in range(0, len(cells), 7):
         b.row(*cells[i : i + 7])
 
-    yesterday = today - dt.timedelta(days=1)
+    if show_quick_dates:
+        yesterday = today - dt.timedelta(days=1)
+        b.row(
+            InlineKeyboardButton(text=i18n.t("btn.today_plain"), callback_data=f"{prefix}:date:{today.isoformat()}"),
+            InlineKeyboardButton(text=i18n.t("btn.yesterday"), callback_data=f"{prefix}:date:{yesterday.isoformat()}"),
+        )
     b.row(
-        InlineKeyboardButton(text=i18n.t("btn.today_plain"), callback_data=f"{prefix}:date:{today.isoformat()}"),
-        InlineKeyboardButton(text=i18n.t("btn.yesterday"), callback_data=f"{prefix}:date:{yesterday.isoformat()}"),
+        InlineKeyboardButton(
+            text=back_text if back_text is not None else i18n.t("btn.cancel"),
+            callback_data=back_cb if back_cb is not None else f"{prefix}:cancel",
+        )
     )
-    b.row(InlineKeyboardButton(text=i18n.t("btn.cancel"), callback_data=f"{prefix}:cancel"))
     return b.as_markup()
 
 

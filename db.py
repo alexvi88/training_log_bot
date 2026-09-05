@@ -3211,6 +3211,29 @@ async def list_finished_workout_dates(
     return [r["d"] for r in await cur.fetchall()]
 
 
+async def list_finished_workouts_by_day_in_month(
+    user_id: int, year: int, month: int, *, tz_offset: Optional[int] = None
+) -> dict[str, list[int]]:
+    """Calendar date (YYYY-MM-DD) → finished workout ids that day, for one month —
+    marks the history calendar (keyboards.calendar_keyboard): which cells are
+    tappable, and whether a day needs the multi-workout list instead of opening
+    straight to a card. Same local-day rule as list_finished_workout_dates.
+    """
+    day = _local_day("started_at", await _tz_offset_of(user_id, tz_offset))
+    start = dt.date(year, month, 1)
+    next_first = dt.date(year + 1, 1, 1) if month == 12 else dt.date(year, month + 1, 1)
+    cur = await conn().execute(
+        f"SELECT id, {day} AS d FROM workouts "
+        "WHERE user_id = ? AND status = 'finished' AND "
+        f"{day} >= ? AND {day} < ? ORDER BY started_at",
+        (user_id, start.isoformat(), next_first.isoformat()),
+    )
+    out: dict[str, list[int]] = {}
+    for r in await cur.fetchall():
+        out.setdefault(r["d"], []).append(r["id"])
+    return out
+
+
 async def list_finished_workout_exercise_ids_by_date(
     user_id: int, *, tz_offset: Optional[int] = None
 ) -> dict[str, set[int]]:
