@@ -105,21 +105,17 @@ BTN_AI = _ReplyButtonMatch("btn.persistent.ai")
 # them. That's what forced v3: the carrier-delete bug (see
 # handlers/persistent_menu.py) had already wiped the keyboard on Android
 # before the fix landed, and those users' version was already current.
-PERSISTENT_MENU_VERSION = 5
+PERSISTENT_MENU_VERSION = 6
 
 
 def persistent_menu() -> ReplyKeyboardMarkup:
-    """Нижний ряд плюс подсказка в пустом поле ввода (input_field_placeholder).
+    """Нижний ряд без подсказки в поле ввода.
 
-    Подсказка статичная и одна на все экраны — нарочно. Reply-клавиатура живёт
-    на сообщении-носителе, и клиенты на TDLib (Android, iOS, Desktop) сбрасывают
-    нижний ряд, как только носитель удаляется или редактируется в сообщение с
-    инлайн-кнопками. Первая версия вешала контекстную подсказку на «Тренировка
-    начата» — сообщение, которое тем же ходом превращается в живой трекер, — и
-    подсказка пропадала вместе с риском потерять весь ряд. Единственный носитель,
-    который никто не трогает, — тот, что шлёт attach_silently / middleware
-    обновления меню, поэтому подсказка едет только на нём и меняется только
-    через PERSISTENT_MENU_VERSION (v4 — её появление, v5 — короткая формулировка).
+    Подсказку (input_field_placeholder) пробовали в v4–v5 и сняли в v6:
+    reply-клавиатура одна на чат и едет только прицепом к сообщению-носителю,
+    поэтому подсказка висела на каждом экране, включая меню без тренировки, а
+    любая её смена стоила лишнего сообщения в чате. Формат ввода объясняет
+    подсказка в самом трекере (handlers.workout._logging_hint).
     """
     return ReplyKeyboardMarkup(
         keyboard=[
@@ -131,7 +127,6 @@ def persistent_menu() -> ReplyKeyboardMarkup:
         ],
         resize_keyboard=True,
         is_persistent=True,
-        input_field_placeholder=i18n.t("persistent_menu.input_placeholder"),
     )
 
 
