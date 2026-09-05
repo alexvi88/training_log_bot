@@ -140,6 +140,7 @@ def main_menu(
     show_import_button: bool = False,
     community_url: str | None = None,
     show_donate: bool = False,
+    show_summary_button: bool = False,
 ) -> InlineKeyboardMarkup:
     """show_import_button: offered while the diary is still empty (same condition
     that used to gate the now-removed "✍️ Записать прошлую тренировку" quick-log
@@ -155,16 +156,25 @@ def main_menu(
     show_donate: config.DONATIONS_ENABLED — «❤️ Поддержать проект» самой
     последней строкой (см. handlers/donate.py). Ниже AI-тренера и чата
     сообщества нарочно: это не функция дневника, а отдельная, необязательная
-    просьба, и ей не место среди рабочих экранов."""
+    просьба, и ей не место среди рабочих экранов.
+
+    show_summary_button: то же условие, что и «не show_import_button» — есть
+    ли хоть одна законченная тренировка, — но отдельным флагом (см.
+    handlers.workout._main_menu_kb): картинка дашборда существует ровно тогда,
+    и «📊 Сводка» вызывает её по требованию (menu:summary), а не только на
+    первый вход в меню за сутки."""
     b = InlineKeyboardBuilder()
     if has_active_workout:
         b.button(text=i18n.t("btn.resume_workout_caps"), callback_data="menu:resume_workout")
     else:
         b.button(text=i18n.t("btn.start_workout_caps"), callback_data="menu:start_workout")
-    # Тот же callback, что и «📥 Импорт CSV» в настройках (settings:import,
-    # см. handlers/csv_import.py) — второй вход в один и тот же флоу, не новый.
+    # Тот же флоу, что и «📥 Импорт CSV» в настройках (settings:import, см.
+    # handlers/csv_import.py) — второй вход, не новый. Суффикс ":menu" —
+    # чтобы «Отмена» внутри флоу знала, куда вернуться (import_cancel).
     if show_import_button:
-        b.button(text=i18n.t("btn.import_history"), callback_data="settings:import")
+        b.button(text=i18n.t("btn.import_history"), callback_data="settings:import:menu")
+    if show_summary_button:
+        b.button(text=i18n.t("btn.summary"), callback_data="menu:summary")
     b.button(text=i18n.t("btn.progress"), callback_data="menu:progress")
     b.button(text=i18n.t("btn.history"), callback_data="menu:history")
     b.button(text=i18n.t("btn.exercises"), callback_data="menu:exercises")
@@ -178,12 +188,14 @@ def main_menu(
         b.button(text=i18n.t("btn.community_chat"), url=community_url)
     if show_donate:
         b.button(text=i18n.t("btn.donate"), callback_data="menu:donate")
-    # start/resume and the import button (if shown) full width, then pairs:
-    # Прогресс·История, Упражнения·Программы, Дневник веса·Дневник еды,
-    # Достижения·Настройки, then AI-тренер full width at the very bottom,
-    # под ним — чат сообщества (если заведён), и под всем — донат (если включён).
+    # start/resume and the import button (if shown) full width, then the
+    # summary button (if shown) full width, then pairs: Прогресс·История,
+    # Упражнения·Программы, Дневник веса·Дневник еды, Достижения·Настройки,
+    # then AI-тренер full width at the very bottom, под ним — чат сообщества
+    # (если заведён), и под всем — донат (если включён).
     b.adjust(
-        *([1, 1] if show_import_button else [1]), 2, 2, 2, 2, 1,
+        *([1, 1] if show_import_button else [1]), *([1] if show_summary_button else []),
+        2, 2, 2, 2, 1,
         *([1] if community_url else []), *([1] if show_donate else []),
     )
     return b.as_markup()
@@ -1272,25 +1284,33 @@ def finish_date_mismatch_keyboard() -> InlineKeyboardMarkup:
 def _progress_back_cb(exercise_id: int, origin: str) -> str:
     """Where "⬅️ Назад" from a progress screen should go.
 
-    `origin` is either "m" (opened from the exercise-detail card in "⚙️
-    Упражнения" — back should return to that same card) or a group token
-    ("all" or a muscle-group id, as produced by prog:grp:) — back should
-    return to that group's exercise list, not all the way up to the
-    muscle-group picker.
+    `origin` is "m" (opened from the exercise-detail card in "⚙️ Упражнения" —
+    back should return to that same card), "top" (opened from one of the
+    entry screen's top-3-frequent-exercise shortcuts, which skip the group
+    list entirely — back should return to that entry screen, not to a group
+    list the user never saw), or a group token ("all" or a muscle-group id, as
+    produced by prog:grp:) — back should return to that group's exercise list,
+    not all the way up to the muscle-group picker.
     """
     if origin == "m":
         return f"exm:ex:{exercise_id}"
+    if origin == "top":
+        return "prog:groups"
     return f"prog:grp:{origin}"
 
 
 def progress_back_keyboard(exercise_id: int = 0, origin: str = "all") -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text=i18n.t("btn.exercise_card"), callback_data=f"prog:card:{exercise_id}"))
+    b.row(InlineKeyboardButton(
+        text=i18n.t("btn.exercise_card"), callback_data=f"prog:card:{exercise_id}:{origin}"
+    ))
     b.row(InlineKeyboardButton(text=i18n.t("btn.back"), callback_data=_progress_back_cb(exercise_id, origin)))
     return b.as_markup()
 
 
-PROGRESS_PERIODS = [(10, "10"), (20, "20"), (9999, _lazy("btn.all_periods"))]
+PROGRESS_PERIODS = [
+    (10, _lazy("btn.workouts_n", n=10)), (20, _lazy("btn.workouts_n", n=20)), (9999, _lazy("btn.all_periods")),
+]
 DEFAULT_PROGRESS_LIMIT = 20
 
 
@@ -1300,15 +1320,23 @@ def progress_chart_keyboard(exercise_id: int, limit: int, origin: str = "all") -
         text = f"• {label} •" if value == limit else str(label)
         b.button(text=text, callback_data=f"prog:per:{exercise_id}:{value}:{origin}")
     b.adjust(len(PROGRESS_PERIODS))
-    b.row(InlineKeyboardButton(text=i18n.t("btn.exercise_card"), callback_data=f"prog:card:{exercise_id}"))
+    b.row(InlineKeyboardButton(
+        text=i18n.t("btn.exercise_card"), callback_data=f"prog:card:{exercise_id}:{origin}"
+    ))
     b.row(InlineKeyboardButton(text=i18n.t("btn.back"), callback_data=_progress_back_cb(exercise_id, origin)))
     return b.as_markup()
 
 
-def history_list_keyboard(workouts, page: int, has_next: bool) -> InlineKeyboardMarkup:
+def history_list_keyboard(workouts, page: int, has_next: bool, is_empty: bool = False) -> InlineKeyboardMarkup:
     """Dates only, two per row — what each session contained is spelled out in the
     message body (formatting.build_history_list), so these are just tap targets
-    and don't need the full width."""
+    and don't need the full width.
+
+    is_empty: no workouts at all yet (history.empty is showing) — a calendar
+    with nothing marked on it isn't a useful escape hatch here, so it's
+    replaced by the same "start a workout" way out the progress screen's own
+    empty state uses (history.start_workout_button).
+    """
     b = InlineKeyboardBuilder()
     for w in workouts:
         b.button(text=w["label"], callback_data=f"hist:item:{w['id']}")
@@ -1320,6 +1348,10 @@ def history_list_keyboard(workouts, page: int, has_next: bool) -> InlineKeyboard
     b.adjust(2)
     if nav:
         b.row(*nav)
+    if is_empty:
+        b.row(InlineKeyboardButton(text=i18n.t("history.start_workout_button"), callback_data="menu:start_workout"))
+    else:
+        b.row(InlineKeyboardButton(text=i18n.t("btn.by_month"), callback_data="hist:cal"))
     b.row(InlineKeyboardButton(text=i18n.t("btn.add_past_workouts"), callback_data="menu:backfill_workout"))
     b.row(InlineKeyboardButton(text=i18n.t("btn.home_menu"), callback_data="hist:menu"))
     return b.as_markup()
@@ -1622,16 +1654,22 @@ def settings_keyboard(
     show_extra_stats: bool = True,
     show_mcp: bool = False,
     lang: str = "ru",
+    show_feedback: bool = False,
 ) -> InlineKeyboardMarkup:
+    """Три визуальных блока — «Профиль», «Как разговариваю», «Данные» — их
+    заголовки живут в тексте экрана (settings.screen.section.*, см.
+    handlers.settings.show_settings), а порядок кнопок здесь просто следует
+    тому же порядку, чтобы человек не гадал, какая кнопка из какого блока.
+
+    Первый блок парами по 2 в ряд: все четыре подписи короткие («Единицы: кг»,
+    «Часовой пояс: +03:00», ...) и умещаются рядом. Тумблеры — по одному в
+    ряд намеренно: с полным текстом «<label>: <глагол>» ни одна пара не
+    укладывается вместе в ширину кнопки, не обрезаясь визуально.
+    """
     b = InlineKeyboardBuilder()
+
+    # --- Профиль: единицы · часовой пояс · язык · формула e1RM ---
     b.button(text=f"⚖️ {i18n.t('btn.units')}: {UNIT_NAMES.get(unit, unit)}", callback_data="settings:unit")
-    # "e1RM", not "1ПМ": every card, chart and record in the bot is labelled
-    # e1RM, and a setting that names the metric differently reads as a setting
-    # for something else entirely.
-    b.button(
-        text=f"📐 {i18n.t('btn.formula_label')}: {FORMULA_NAMES.get(formula, formula)}",
-        callback_data="settings:formula",
-    )
     b.button(text=f"🕒 {i18n.t('btn.timezone_label')}: {format_utc_offset(tz_offset)}", callback_data="settings:tz")
     # Единственная подпись на этом экране, которая уже переведена: остальные
     # настройки локализуются отдельной фазой, но дорога к смене языка обязана
@@ -1641,6 +1679,15 @@ def settings_keyboard(
         text=f"🌐 {i18n.t_in(lang, 'screen.language.button')}: {LANG_NAMES.get(lang, lang)}",
         callback_data="settings:lang",
     )
+    # "e1RM", not "1ПМ": every card, chart and record in the bot is labelled
+    # e1RM, and a setting that names the metric differently reads as a setting
+    # for something else entirely.
+    b.button(
+        text=f"📐 {i18n.t('btn.formula_label')}: {FORMULA_NAMES.get(formula, formula)}",
+        callback_data="settings:formula",
+    )
+
+    # --- Как разговариваю: пять тумблеров ---
     # Все тумблеры ниже — одна конструкция: «<label>: <глагол от первого
     # лица>» / «<label>: <его отрицание>» — раньше формы расходились
     # («вкл»/«выкл», «включены»/«выключены», «считаю»/«не считаю»,
@@ -1668,6 +1715,8 @@ def settings_keyboard(
         i18n.t("btn.card_detail_on") if show_extra_stats else i18n.t("btn.card_detail_off")
     )
     b.button(text=card_label, callback_data="settings:card_detail")
+
+    # --- Данные: что тренер знает · экспорт · импорт · MCP · отзыв ---
     # Профиль тренирующегося пишет AI-тренер (ai_trainer.save_athlete_profile),
     # и до появления этого экрана посмотреть, что он там про тебя записал, было
     # нельзя нигде — при том что от этих полей зависит, какую программу он
@@ -1679,8 +1728,20 @@ def settings_keyboard(
     # тогда физически не к чему (см. config.mcp_available).
     if show_mcp:
         b.button(text=i18n.t("btn.connect_mcp"), callback_data="settings:mcp")
+    # Скрыт без ADMIN_ID: отзыву было бы некуда лететь (см. config.feedback_available,
+    # handlers.feedback.feedback_message).
+    if show_feedback:
+        b.button(text=i18n.t("btn.feedback_open"), callback_data="feedback:open")
+
+    # Добавлена в конец списка нарочно — экран настроек не раз перестраивался,
+    # и лишняя кнопка в конце безопаснее вставки посередине.
+    b.button(text=i18n.t("btn.invite_friend"), callback_data="invite:show")
     b.button(text=i18n.t("btn.home_menu"), callback_data="settings:back")
-    b.adjust(1)
+    # 2+2 для блока «Профиль» (все подписи короткие), дальше — по одной кнопке
+    # в ряд для тумблеров, блока «Данные» и «Меню»: adjust повторяет последний
+    # размер на хвост, так что явно перечислять единицы для каждой из
+    # оставшихся кнопок не нужно.
+    b.adjust(2, 2, 1)
     return b.as_markup()
 
 
@@ -1891,20 +1952,20 @@ def bodyweight_keyboard(has_logs: bool, weeks: int = 0, show_periods: bool = Fal
 BODYWEIGHT_LIST_PAGE_SIZE = 10
 
 
-def bodyweight_list_keyboard(entry_ids: Sequence[int], page: int, has_next: bool) -> InlineKeyboardMarkup:
-    """Экран «✏️ Записи»: удаление любой записи (не только последней), страницами.
+def bodyweight_list_keyboard(rows: Sequence, unit: str, page: int, has_next: bool) -> InlineKeyboardMarkup:
+    """Экран «✏️ Записи»: правка и удаление любой записи, страницами.
 
-    Кнопка удаления — по номеру строки («🗑 3»), как в food_day_keyboard: сам
-    вес и дата уже расписаны в тексте экрана, а в кнопку не влезают.
+    Каждая запись — своя строка: «14.03 · 82.5» открывает правку веса, 🗑
+    рядом удаляет. rows — страница bodyweight_logs (id, logged_at, weight),
+    как возвращает db.list_bodyweight_logs_page.
     """
     b = InlineKeyboardBuilder()
-    if entry_ids:
+    u = formatting.unit_label(unit)
+    for r in rows:
+        label = f"{dt.datetime.fromisoformat(r['logged_at']).strftime('%d.%m')} · {formatting.format_weight(r['weight'])}{u}"
         b.row(
-            *[
-                InlineKeyboardButton(text=f"🗑 {i}", callback_data=f"bw:delrec:{entry_id}:{page}")
-                for i, entry_id in enumerate(entry_ids, start=1)
-            ],
-            width=5,
+            InlineKeyboardButton(text=label, callback_data=f"bw:editrec:{r['id']}:{page}"),
+            InlineKeyboardButton(text="🗑", callback_data=f"bw:delrec:{r['id']}:{page}"),
         )
     nav = []
     if page > 0:
@@ -1953,8 +2014,9 @@ def food_day_keyboard(date: dt.date, entry_ids: Sequence[int], today: dt.date) -
         b.row(InlineKeyboardButton(text=i18n.t("btn.today"), callback_data=f"fd:day:{today.isoformat()}"))
     b.row(
         InlineKeyboardButton(text=i18n.t("btn.history"), callback_data="fd:history:0"),
-        InlineKeyboardButton(text=i18n.t("btn.home_menu"), callback_data="fd:menu"),
+        InlineKeyboardButton(text=i18n.t("btn.kcal_goal"), callback_data="fd:goal"),
     )
+    b.row(InlineKeyboardButton(text=i18n.t("btn.home_menu"), callback_data="fd:menu"))
     return b.as_markup()
 
 
@@ -2146,16 +2208,35 @@ def _cal_month_name(month: int) -> str:
     return i18n.t(f"btn.cal.month_{month}")
 
 
-def calendar_keyboard(prefix: str, year: int, month: int, today: dt.date | None = None) -> InlineKeyboardMarkup:
+def calendar_keyboard(
+    prefix: str,
+    year: int,
+    month: int,
+    today: dt.date | None = None,
+    marked: set[str] | None = None,
+    show_quick_dates: bool = True,
+    back_text: str | None = None,
+    back_cb: str | None = None,
+) -> InlineKeyboardMarkup:
     """Month grid for picking a past date without typing дд.мм.гггг.
 
     Day taps emit ``{prefix}:date:{iso}`` — the same callback the quick buttons
     already use, so existing per-flow date handlers catch calendar picks for
     free. Month arrows emit ``{prefix}:cal:{year}-{month}`` (re-render only),
     blanks and labels emit ``{prefix}:noop``. Future days and future months are
-    not selectable — a past workout can't be dated ahead of today.
+    not selectable — a past workout can't be dated ahead of today, and history
+    can't have a workout in the future either.
+
+    marked: ISO dates (YYYY-MM-DD) to mark with a bullet — used by the history
+    calendar (handlers/history.py) to show which days actually have a workout;
+    unset for backfill, where every past day is a valid destination and none
+    needs to stand out. show_quick_dates hides the "Сегодня/Вчера" row for that
+    same screen — picking a date to log wants the shortcut, browsing history
+    doesn't. back_text/back_cb override the trailing button's label and target
+    (default: btn.cancel / ``{prefix}:cancel``, backfill's own "отмена").
     """
     today = today or dt.date.today()
+    marked = marked or set()
     b = InlineKeyboardBuilder()
 
     first = dt.date(year, month, 1)
@@ -2179,19 +2260,26 @@ def calendar_keyboard(prefix: str, year: int, month: int, today: dt.date | None 
         if date > today:
             cells.append(InlineKeyboardButton(text="·", callback_data=f"{prefix}:noop"))
         else:
-            label = f"·{d}·" if date == today else str(d)
+            mark = "•" if date.isoformat() in marked else ""
+            label = f"·{d}{mark}·" if date == today else f"{d}{mark}"
             cells.append(InlineKeyboardButton(text=label, callback_data=f"{prefix}:date:{date.isoformat()}"))
     while len(cells) % 7:
         cells.append(InlineKeyboardButton(text=" ", callback_data=f"{prefix}:noop"))
     for i in range(0, len(cells), 7):
         b.row(*cells[i : i + 7])
 
-    yesterday = today - dt.timedelta(days=1)
+    if show_quick_dates:
+        yesterday = today - dt.timedelta(days=1)
+        b.row(
+            InlineKeyboardButton(text=i18n.t("btn.today_plain"), callback_data=f"{prefix}:date:{today.isoformat()}"),
+            InlineKeyboardButton(text=i18n.t("btn.yesterday"), callback_data=f"{prefix}:date:{yesterday.isoformat()}"),
+        )
     b.row(
-        InlineKeyboardButton(text=i18n.t("btn.today_plain"), callback_data=f"{prefix}:date:{today.isoformat()}"),
-        InlineKeyboardButton(text=i18n.t("btn.yesterday"), callback_data=f"{prefix}:date:{yesterday.isoformat()}"),
+        InlineKeyboardButton(
+            text=back_text if back_text is not None else i18n.t("btn.cancel"),
+            callback_data=back_cb if back_cb is not None else f"{prefix}:cancel",
+        )
     )
-    b.row(InlineKeyboardButton(text=i18n.t("btn.cancel"), callback_data=f"{prefix}:cancel"))
     return b.as_markup()
 
 

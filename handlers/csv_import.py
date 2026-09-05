@@ -134,9 +134,13 @@ def _normalize_header(text: str) -> str:
     return _HEADER_UNITS_RE.sub("", text.strip().lower()).strip()
 
 
-@router.callback_query(F.data == "settings:import")
+@router.callback_query(F.data.in_({"settings:import", "settings:import:menu"}))
 async def import_start(callback: CallbackQuery, state: FSMContext):
+    # Запомнить, откуда зашли (пустое главное меню или ⚙️ Настройки) — «Отмена»
+    # в конце флоу (import_cancel) возвращает туда же, а не всегда в настройки.
+    origin = "menu" if callback.data.endswith(":menu") else "settings"
     await state.set_state(ImportFlow.awaiting_file)
+    await state.update_data(import_origin=origin)
     await ui.safe_edit(
         callback,
         i18n.t("import.intro"),
@@ -844,9 +848,17 @@ async def _do_import_save(callback: CallbackQuery, state: FSMContext) -> None:
 
 @router.callback_query(F.data == "imp:cancel")
 async def import_cancel(callback: CallbackQuery, state: FSMContext):
+    # Откуда зашли — до сброса состояния, иначе clear_state_keep_workout
+    # унесёт import_origin вместе со всем остальным.
+    data = await state.get_data()
+    origin = data.get("import_origin", "settings")
     # Отмена импорта не должна отменять и незакрытую тренировку, из которой
     # сюда зашли, — см. комментарий в import_save.
     await clear_state_keep_workout(state)
+    await callback.answer(i18n.t("import.cancelled_toast"))
+    if origin == "menu":
+        from handlers.workout import _show_main_menu
+        await _show_main_menu(callback, state)
+        return
     from handlers.settings import show_settings
     await show_settings(callback, state)
-    await callback.answer(i18n.t("import.cancelled_toast"))

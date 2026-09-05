@@ -1736,6 +1736,36 @@ def menu_lift_tiles(
     return tiles
 
 
+def build_menu_summary_text(
+    greeting: str,
+    headline: str,
+    tiles: list[tuple[str, str]],
+    lift_tiles: list[tuple[str, str, str]] = (),
+    lifts_title: str = "",
+) -> str:
+    """Текст главного меню атлета с историей: приветствие плюс те же
+    заголовок/плитки/рост e1RM, что раньше жили только внутри картинки
+    (charts.render_menu_dashboard). Картинка теперь приходит отдельным
+    сообщением не на каждый вход в меню (см. handlers.workout._show_main_menu
+    и её daily-гейт), а текст — это то, что видно на каждом открытии, так что
+    цифры дублируются сюда, а не пропадают в дни без картинки.
+
+    Лимит текста вчетверо больше подписи к фото (ui.TEXT_LIMIT против
+    ui.CAPTION_LIMIT), так что резать тут заранее незачем — обрежет, если
+    вообще понадобится, тот же общий ui.fit_to_limit, что режет любой другой
+    экран.
+    """
+    lines = [greeting, "", f"<b>{escape(headline)}</b>"]
+    for label, value in tiles:
+        lines.append(f"{escape(label)}: <b>{escape(value)}</b>")
+    if lift_tiles:
+        lines.append("")
+        lines.append(f"<b>{escape(lifts_title)}</b>")
+        for name, pct, abs_str in lift_tiles:
+            lines.append(f"{escape(name)}: {escape(pct)} ({escape(abs_str)})")
+    return "\n".join(lines)
+
+
 def build_workout_card(
     started_at: dt.datetime,
     blocks: list[BlockView],
@@ -1928,19 +1958,62 @@ def format_new_achievements(new_codes: list[str]) -> str | None:
     return "\n".join(lines)
 
 
-def build_achievements_screen(earned: set[str]) -> str:
-    """The full 🏅 badge grid: everything unlocked, then everything still locked.
+def format_badge_progress(bp) -> str:  # achievements.BadgeProgress
+    """Одна строка блока «Ближайшие» — значок плюс расстояние до цели словами
+    тренера, семейство в семейство ровно как format_rank_gap: числа считает
+    achievements.nearest_progress, согласование — здесь.
+    """
+    import achievements
 
-    Both halves always fold on this screen specifically, short lists included:
+    a = achievements.BY_CODE[bp.code]
+    family = achievements.FAMILY_BY_CODE[bp.code]
+    label = f"{a.emoji} <b>{escape(a.title)}</b>"
+    if family == "weight":
+        return f"{label} — {i18n.t('achievements.nearest_kg', kg=f'{bp.remaining:.0f}')}"
+    if family == "tonnage":
+        # Тот же порог округления, что у format_rank_gap: меньше центнера
+        # остатка — "0.0 т" читалось бы как "уже всё", поэтому договариваем
+        # килограммами; выше — тоннами с одним знаком после запятой.
+        if bp.remaining >= 100:
+            tons = f"{round(bp.remaining / 1000, 1):g}"
+            return f"{label} — {i18n.t('achievements.nearest_tons', tons=tons)}"
+        return f"{label} — {i18n.t('achievements.nearest_tons_kg', kg=f'{bp.remaining:.0f}')}"
+    if family == "weeks":
+        return f"{label} — {i18n.t('achievements.nearest_of', current=int(bp.current), target=int(bp.target))}"
+    # "workouts"
+    return f"{label} — {i18n.t('achievements.nearest_count', n=int(bp.remaining))}"
+
+
+def build_achievements_screen(
+    earned: set[str],
+    ctx=None,  # achievements.AchievementContext | None
+) -> str:
+    """The full 🏅 badge grid: nearest-3 progress, everything unlocked, then
+    everything still locked.
+
+    Both lists always fold on this screen specifically, short ones included:
     it's reached from Progress purely to check a number or brag about a single
     badge, so the header count (11/23) is the answer most taps are actually
-    after — the two lists are supporting detail, not the point of the tap.
+    after — the lists are supporting detail, not the point of the tap.
+
+    `ctx` is optional so every existing caller/test that only has the earned
+    set keeps working; without it there is nothing to compute "how close" from,
+    so the «Ближайшие» block is simply skipped rather than guessed.
     """
     import achievements
 
     got = [a for a in achievements.CATALOG if a.code in earned]
     locked = [a for a in achievements.CATALOG if a.code not in earned]
     lines = [i18n.t("achievements.screen_header", got=len(got), total=len(achievements.CATALOG))]
+
+    if ctx is not None:
+        nearest = achievements.nearest_progress(ctx, earned)
+        if nearest:
+            lines.append("")
+            lines.append(i18n.t("achievements.nearest_header"))
+            lines.append("\n".join(format_badge_progress(bp) for bp in nearest))
+            lines.append("")
+
     if got:
         lines.append(
             collapsible(
@@ -2262,6 +2335,7 @@ def format_progress_screen(
     unit: str = "kg",
     session_notes: dict[int, str] | None = None,  # {workout_id: note}
     golds=None,  # analytics.GoldBook | None
+    single_session_hint: bool = False,  # only one session in the metric the chart plots — no chart, so nudge instead
 ) -> str:
     u = unit_label(unit)
     lines = [f"📈 <b>{escape(exercise_name)}</b>", ""]
@@ -2286,6 +2360,8 @@ def format_progress_screen(
         else:
             delta = last.top_e1rm - first.top_e1rm
             lines.append(i18n.t("progress.e1rm_delta", delta=format_delta(delta, unit), since=since))
+    elif single_session_hint:
+        lines.append(i18n.t("progress.need_second_session"))
 
     # compute_personal_records honestly tracks both metrics independently of
     # session mode (max_e1rm from weighted sets, max_reps_at_weight from every
@@ -2579,11 +2655,27 @@ def build_food_estimate_text(
     return "\n".join(lines)
 
 
-def build_food_day_screen(date: dt.date, entries: list[FoodEntryView]) -> str:
+def _goal_line(kcal_goal: Optional[int], total_kcal: Optional[float]) -> str:
+    """«Цель 2200 · осталось 640» / «Цель 2200 · перебор 150» — только когда и
+    цель задана, и за день известно хоть сколько-то калорий (см. tone: об
+    данных пользователя говорим, только когда они это подтверждают)."""
+    if kcal_goal is None or total_kcal is None:
+        return ""
+    left = kcal_goal - total_kcal
+    if left >= 0:
+        return i18n.t("food.goal_remaining", goal=kcal_goal, left=round(left))
+    return i18n.t("food.goal_over", goal=kcal_goal, over=round(-left))
+
+
+def build_food_day_screen(
+    date: dt.date, entries: list[FoodEntryView], kcal_goal: Optional[int] = None
+) -> str:
     """One day of the diary: every meal with its per-item КБЖУ, then the day's total."""
     head = i18n.t("food.day_header", date=format_date_ru(dt.datetime.combine(date, dt.time())))
     if not entries:
-        return i18n.t("food.day_empty", head=head)
+        text = i18n.t("food.day_empty", head=head)
+        goal_line = _goal_line(kcal_goal, 0.0)
+        return f"{text}\n\n{goal_line}" if goal_line else text
 
     def render_entry(i: int, e: FoodEntryView) -> list[str]:
         out = []
@@ -2620,7 +2712,7 @@ def build_food_day_screen(date: dt.date, entries: list[FoodEntryView]) -> str:
                 # быть не должно, последний приём должен идти к ней вплотную.
                 lines.append("")
             lines.extend(block)
-        lines.append(_food_day_footer(entries))
+        lines.append(_food_day_footer(entries, kcal_goal))
         return "\n".join(lines)
 
     # Итоги дня считаются по всем записям, даже если часть не поместилась на
@@ -2634,7 +2726,7 @@ def build_food_day_screen(date: dt.date, entries: list[FoodEntryView]) -> str:
     return text
 
 
-def _food_day_footer(entries: list[FoodEntryView]) -> str:
+def _food_day_footer(entries: list[FoodEntryView], kcal_goal: Optional[int] = None) -> str:
     """Итоговая строка дня плюс подсказка — то, что идёт под списком приёмов."""
     lines: list[str] = []
     known = [e.calories for e in entries if e.calories is not None]
@@ -2654,6 +2746,12 @@ def _food_day_footer(entries: list[FoodEntryView]) -> str:
     if known and len(known) < len(entries):
         total_line += i18n.t("food.without_calories", n=len(entries) - len(known))
     lines.append(total_line)
+    # «Итого» считается только по записям с известными калориями (см. выше) —
+    # цель сверяется с тем же частичным итогом, а не молчит из-за пары
+    # записей без числа.
+    goal_line = _goal_line(kcal_goal, sum(known) if known else None)
+    if goal_line:
+        lines.append(goal_line)
     lines.append("")
     lines.append(i18n.t("food.add_more_hint"))
     return "\n".join(lines)

@@ -95,6 +95,78 @@ _TONNAGE_TIERS = [
     (500_000, "ton500"), (1_000_000, "ton1000"),
 ]
 
+# Семейство → (порог, код) для каждого числового значка, у которого есть
+# осмысленное "текущее значение / порог" (см. BadgeProgress ниже). Значки вне
+# этих четырёх семейств — булевы или "разовые" (суперсет когда-то случился,
+# тренировка началась до 7 утра) — у них нет расстояния до цели, поэтому в
+# «Ближайшие» они не участвуют.
+_TIERS_BY_FAMILY: dict[str, list[tuple[float, str]]] = {
+    "workouts": _WORKOUT_TIERS,
+    "weeks": _STREAK_TIERS,
+    "weight": _WEIGHT_TIERS,
+    "tonnage": _TONNAGE_TIERS,
+}
+
+# code → семейство, нужно formatting.py: там живёт русское/английское
+# согласование фразы ("ещё N кг" / "X из Y" / "осталось N т").
+FAMILY_BY_CODE: dict[str, str] = {
+    code: family for family, tiers in _TIERS_BY_FAMILY.items() for _, code in tiers
+}
+
+
+@dataclass(frozen=True)
+class BadgeProgress:
+    """Текущее значение и порог одного ещё не открытого значка. Числа, а не
+    готовая фраза — ровно как analytics.RankGap: "ещё 15 кг" требует русского
+    согласования, которое живёт в formatting, не здесь."""
+    code: str
+    current: float
+    target: float
+
+    @property
+    def remaining(self) -> float:
+        return max(self.target - self.current, 0.0)
+
+
+def _current_value(ctx: "AchievementContext", family: str) -> float:
+    if family == "workouts":
+        return ctx.total_workouts
+    if family == "weeks":
+        return ctx.best_week_streak
+    if family == "weight":
+        return ctx.max_weight_kg
+    if family == "tonnage":
+        return ctx.lifetime_tonnage_kg
+    raise ValueError(f"unknown badge-progress family: {family!r}")  # pragma: no cover
+
+
+def nearest_progress(
+    ctx: "AchievementContext", earned: set[str], limit: int = 3
+) -> list[BadgeProgress]:
+    """Незаработанные пороговые значки, ближайшие к цели — для блока «Ближайшие».
+
+    Ранжирование — по доле current/target (как analytics.rank_gap ранжирует
+    оси звания): так "40 из 50 тренировок" не проигрывает "5 из 100кг" только
+    потому, что до второго меньше в абсолютных цифрах.
+
+    Значок без цифры вообще (current <= 0) исключается целиком: это не "0 из
+    10", это отсутствие данных, а утверждать что-либо о данных пользователя
+    можно только когда они это подтверждают.
+    """
+    scored: list[tuple[float, BadgeProgress]] = []
+    for family, tiers in _TIERS_BY_FAMILY.items():
+        current = _current_value(ctx, family)
+        if current <= 0:
+            continue
+        for target, code in tiers:
+            if code in earned or current >= target:
+                continue
+            scored.append((current / target, BadgeProgress(code, current, target)))
+    # По ключу, а не по кортежу целиком — при равных долях сравнение иначе
+    # уезжает на BadgeProgress, у которого нет порядка сравнения.
+    scored.sort(key=lambda t: t[0], reverse=True)
+    return [bp for _, bp in scored[:limit]]
+
 
 @dataclass
 class AchievementContext:

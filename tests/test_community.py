@@ -87,6 +87,20 @@ async def test_cmd_community_replies_with_link(fresh_db, user_id, monkeypatch):
     assert "ЧАТ АТЛЕТОВ" in message.answer.await_args.args[0]
 
 
+async def test_cmd_community_screen_is_not_a_dead_end(fresh_db, user_id, monkeypatch):
+    """Экран не должен быть тупиком: под приглашением есть «🏠 Меню» — тот же
+    live:back_to_menu, что и на карточке законченной тренировки."""
+    monkeypatch.setattr(config, "COMMUNITY_CHAT_URL", CHAT_URL)
+    message = _make_message(user_id)
+
+    await community.cmd_community(message)
+
+    markup = message.answer.await_args.kwargs["reply_markup"]
+    (button,) = markup.inline_keyboard[-1]
+    assert button.text == "🏠 Меню"
+    assert button.callback_data == "live:back_to_menu"
+
+
 async def test_cmd_community_without_url_says_so(fresh_db, user_id, monkeypatch):
     monkeypatch.setattr(config, "COMMUNITY_CHAT_URL", "")
     message = _make_message(user_id)

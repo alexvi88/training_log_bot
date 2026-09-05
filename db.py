@@ -970,6 +970,11 @@ async def _migrate_schema() -> None:
         # дефолт 'ru': вся живая база русскоязычная, молча переключать на
         # угаданный язык нельзя.
         await _conn.execute("ALTER TABLE users ADD COLUMN lang TEXT NOT NULL DEFAULT 'ru'")
+    if "kcal_goal" not in user_cols:
+        # Дневная цель по калориям для дневника питания (handlers/food_diary.py) —
+        # NULL значит «не задана», и строка «Цель N · осталось M» на экране дня
+        # просто не показывается, а не подставляет угаданное число.
+        await _conn.execute("ALTER TABLE users ADD COLUMN kcal_goal INTEGER")
 
     set_cols = await _column_names("sets")
     if "is_warmup" in set_cols:
@@ -1589,6 +1594,18 @@ async def set_user_lang(telegram_id: int, lang: str) -> None:
         await conn().execute(
             "UPDATE users SET lang = ? WHERE telegram_id = ?",
             (lang, telegram_id),
+        )
+        await conn().commit()
+
+
+async def set_kcal_goal(telegram_id: int, goal: Optional[int]) -> None:
+    """Дневная цель по калориям для дневника питания (кнопка «🎯 Цель ккал» и
+    ai_trainer.save_athlete_profile). None снимает цель — экран дня перестаёт
+    показывать строку «Цель N · осталось M»."""
+    async with _write_lock:
+        await conn().execute(
+            "UPDATE users SET kcal_goal = ? WHERE telegram_id = ?",
+            (goal, telegram_id),
         )
         await conn().commit()
 
@@ -3209,6 +3226,29 @@ async def list_finished_workout_dates(
         (user_id,),
     )
     return [r["d"] for r in await cur.fetchall()]
+
+
+async def list_finished_workouts_by_day_in_month(
+    user_id: int, year: int, month: int, *, tz_offset: Optional[int] = None
+) -> dict[str, list[int]]:
+    """Calendar date (YYYY-MM-DD) → finished workout ids that day, for one month —
+    marks the history calendar (keyboards.calendar_keyboard): which cells are
+    tappable, and whether a day needs the multi-workout list instead of opening
+    straight to a card. Same local-day rule as list_finished_workout_dates.
+    """
+    day = _local_day("started_at", await _tz_offset_of(user_id, tz_offset))
+    start = dt.date(year, month, 1)
+    next_first = dt.date(year + 1, 1, 1) if month == 12 else dt.date(year, month + 1, 1)
+    cur = await conn().execute(
+        f"SELECT id, {day} AS d FROM workouts "
+        "WHERE user_id = ? AND status = 'finished' AND "
+        f"{day} >= ? AND {day} < ? ORDER BY started_at",
+        (user_id, start.isoformat(), next_first.isoformat()),
+    )
+    out: dict[str, list[int]] = {}
+    for r in await cur.fetchall():
+        out.setdefault(r["d"], []).append(r["id"])
+    return out
 
 
 async def list_finished_workout_exercise_ids_by_date(
@@ -6747,6 +6787,20 @@ async def get_latest_bodyweight(telegram_id: int) -> Optional[aiosqlite.Row]:
         (telegram_id,),
     )
     return await cur.fetchone()
+
+
+async def update_bodyweight_log(log_id: int, telegram_id: int, weight: float) -> bool:
+    """Переписать вес у уже существующей записи — экран «✏️ Записи»
+    (handlers/bodyweight.py:bw_edit_weight_entered). Дата и время взвешивания
+    не трогаются: правят опечатку в весе, а не переносят запись на другой день.
+    """
+    async with _write_lock:
+        cur = await conn().execute(
+            "UPDATE bodyweight_logs SET weight = ? WHERE id = ? AND telegram_id = ?",
+            (weight, log_id, telegram_id),
+        )
+        await conn().commit()
+        return cur.rowcount > 0
 
 
 async def delete_bodyweight_log(log_id: int, telegram_id: int) -> bool:

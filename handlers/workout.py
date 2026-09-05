@@ -17,6 +17,7 @@ from aiogram.types import (
     BufferedInputFile,
     CallbackQuery,
     FSInputFile,
+    InaccessibleMessage,
     InlineKeyboardMarkup,
     InputMediaPhoto,
     Message,
@@ -980,26 +981,58 @@ async def _menu_view(user_id: int) -> tuple[str, bytes | None]:
         today, len(dates), max(dates), headline, rank.level, tuple(tiles),
         tuple(volume_rows), volume_title, tuple(lift_tiles),
     )
+    # Текст меню — не только приветствие, а те же цифры, что раньше жили
+    # только в подписи-картинке (см. formatting.build_menu_summary_text):
+    # картинка теперь показывается не на каждый вход, а текст — на каждый, так
+    # что он больше не может быть просто приветствием без цифр.
+    lifts_title = formatting.menu_lifts_title(lift_window_weeks) if lift_tiles else ""
+    text = formatting.build_menu_summary_text(_greeting(), headline, tiles, lift_tiles, lifts_title)
+
     cached = _heatmap_cache.get(user_id)
     if cached is not None and cached[0] == cache_key:
-        return _greeting(), cached[1]
+        return text, cached[1]
 
     png = await asyncio.to_thread(
         charts.render_menu_dashboard,
         headline, rank.name.upper(), tiles, volume_rows, volume_title, lift_tiles,
-        formatting.menu_lifts_title(lift_window_weeks) if lift_tiles else "", formatting.MENU_LIFTS_NOTE,
+        lifts_title, formatting.MENU_LIFTS_NOTE,
     )
     _heatmap_cache[user_id] = (cache_key, png)
-    return _greeting(), png
+    return text, png
 
 
-async def _send_menu(message: Message, text: str, png: bytes | None, keyboard) -> Message:
+# Раз в сутки — тот же приём, что у STALE_WORKOUT_WARNING_KIND выше по файлу:
+# отметка «уже показывал сегодня» лежит в общей таблице разовых расписок
+# (db.has_limit_ack/record_limit_ack), просто под своим kind, а не собственной
+# колонкой в users: заводить хранилище под ещё одну «раз в сутки» отметку
+# незачем, оно уже есть.
+MENU_SUMMARY_SHOWN_KIND = "menu_summary_shown"
+
+
+async def _summary_shown_today(user_id: int) -> bool:
+    user = await db.get_user(user_id)
+    today = timeutil.user_today(user).isoformat()
+    return await db.has_limit_ack(user_id, MENU_SUMMARY_SHOWN_KIND, today)
+
+
+async def _mark_summary_shown_today(user_id: int) -> None:
+    user = await db.get_user(user_id)
+    today = timeutil.user_today(user).isoformat()
+    await db.record_limit_ack(user_id, MENU_SUMMARY_SHOWN_KIND, today)
+
+
+async def _maybe_send_summary_photo(user_id: int, png: bytes | None, sender, *, force: bool = False) -> None:
+    """Дашборд дня — раз в сутки на первый вход в меню, или в любой момент по
+    «📊 Сводка» (force=True). `sender` действительно отправляет `png`; вызывать
+    его тут, а не заранее, — чтобы при уже показанной сегодня картинке не
+    трогать Bot API вовсе.
+    """
     if png is None:
-        return await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
-    return await message.answer_photo(
-        BufferedInputFile(png, filename="year.png"),
-        caption=text, reply_markup=keyboard, parse_mode="HTML",
-    )
+        return
+    if not force and await _summary_shown_today(user_id):
+        return
+    await sender()
+    await _mark_summary_shown_today(user_id)
 
 
 async def _main_menu_kb(user_id: int, active) -> InlineKeyboardMarkup:
@@ -1007,15 +1040,26 @@ async def _main_menu_kb(user_id: int, active) -> InlineKeyboardMarkup:
     # real history, the normal logging flows are better (they know the
     # exercises, the targets and the progression) — importing on top of that
     # would just risk duplicate entries.
-    has_history = await db.count_workouts(user_id) > 0
+    finished_count = await db.count_workouts(user_id)
+    has_history = finished_count > 0
+    # Кнопка "💬 Чат атлетов" появляется в главном меню только после
+    # config.COMMUNITY_MIN_FINISHED_WORKOUTS законченных тренировок — до этого
+    # человек ещё не видел, что такое тренировка в боте, и звать его в чат, где
+    # обсуждают именно это, рано (см. config.COMMUNITY_MIN_FINISHED_WORKOUTS).
+    # /community при этом отвечает всем одинаково — та команда без порога, см.
+    # handlers/community.py.
+    show_community = (
+        config.community_available()
+        and finished_count >= config.COMMUNITY_MIN_FINISHED_WORKOUTS
+    )
     return keyboards.main_menu(
         bool(active),
         show_import_button=not has_history,
-        # Кнопка "💬 Чат атлетов" временно снята с главного меню (не с
-        # /community — та команда работает как раньше), пока чат не готов
-        # показывать всем.
-        community_url=None,
+        community_url=config.COMMUNITY_CHAT_URL if show_community else None,
         show_donate=config.DONATIONS_ENABLED,
+        # Картинка (дашборд) существует ровно при том же условии, что и
+        # has_history выше — оба смотрят на db.count_workouts(status="finished").
+        show_summary_button=has_history,
     )
 
 
@@ -1152,7 +1196,16 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject 
         return
     active = await db.get_active_workout(message.from_user.id)
     text, png = await _menu_view(message.from_user.id)
-    await _send_menu(message, text, png, await _main_menu_kb(message.from_user.id, active))
+    kb = await _main_menu_kb(message.from_user.id, active)
+    # Картинка дня — отдельным сообщением ПЕРЕД текстом меню, и только на
+    # первый вход за сутки (см. _maybe_send_summary_photo): раньше она
+    # уходила подписью к фото на каждый /start, и «🏠 Меню» с текстового
+    # экрана всегда сносило и пересылало её заново — вот этот фликер и убираем.
+    await _maybe_send_summary_photo(
+        message.from_user.id, png,
+        lambda: message.answer_photo(BufferedInputFile(png, filename="year.png"), parse_mode="HTML"),
+    )
+    await message.answer(text, reply_markup=kb, parse_mode="HTML")
     if active:
         started = dt.datetime.fromisoformat(active["started_at"])
         if (dt.datetime.now() - started).total_seconds() > config.STALE_WORKOUT_HOURS * 3600:
@@ -1337,7 +1390,23 @@ async def stale_delete_cancel(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-async def _show_main_menu(callback: CallbackQuery, state: FSMContext, delete_current: bool = True):
+async def _send_summary_photo(callback: CallbackQuery, png: bytes) -> None:
+    """Дашборд дня как отдельное сообщение — до Bot API InaccessibleMessage
+    не умеет ни `answer_photo`, ни даже собственного chat_id-независимого пути,
+    так что для него зовём bot.send_photo напрямую (тот же приём, что и в
+    ui.safe_edit_photo для InaccessibleMessage)."""
+    message = callback.message
+    photo = BufferedInputFile(png, filename="year.png")
+    if isinstance(message, InaccessibleMessage):
+        await callback.bot.send_photo(message.chat.id, photo, parse_mode="HTML")
+        return
+    with suppress(TelegramBadRequest):
+        await message.answer_photo(photo, parse_mode="HTML")
+
+
+async def _show_main_menu(
+    callback: CallbackQuery, state: FSMContext, delete_current: bool = True, force_photo: bool = False
+):
     # delete_current=False when reached from the AI-trainer chat's "🏠 Меню"
     # button — that message is part of the user's conversation with the
     # AI-тренер, not a disposable menu screen, so it should stay in the chat
@@ -1346,12 +1415,15 @@ async def _show_main_menu(callback: CallbackQuery, state: FSMContext, delete_cur
     active = await db.get_active_workout(callback.from_user.id)
     text, png = await _menu_view(callback.from_user.id)
     kb = await _main_menu_kb(callback.from_user.id, active)
-    if png is None:
-        await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML", delete=delete_current)
-    else:
-        await ui.safe_edit_photo(
-            callback, png, "year.png", text, reply_markup=kb, parse_mode="HTML", delete=delete_current
-        )
+    # Картинка — своим сообщением ПЕРЕД текстом меню (см. _maybe_send_summary_photo),
+    # раз в сутки или по «📊 Сводка» (force_photo=True из menu_summary ниже). Раз
+    # она уходит новым сообщением, callback.message больше не дно чата, так что
+    # ui.safe_edit сам решит удалить-и-переслать текст меню, а не редактировать
+    # экран под уже отправленной картинкой на месте.
+    await _maybe_send_summary_photo(
+        callback.from_user.id, png, lambda: _send_summary_photo(callback, png), force=force_photo
+    )
+    await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML", delete=delete_current)
 
 
 @router.callback_query(F.data == "live:back_to_menu")
@@ -1394,6 +1466,14 @@ async def menu_exercises(callback: CallbackQuery, state: FSMContext):
 async def menu_settings(callback: CallbackQuery, state: FSMContext):
     from handlers.settings import show_settings
     await show_settings(callback, state)
+
+
+@router.callback_query(F.data == "menu:summary")
+async def menu_summary(callback: CallbackQuery, state: FSMContext):
+    """«📊 Сводка» — дашборд дня по требованию, а не только на первый вход за
+    сутки (force_photo=True в _show_main_menu пропускает дневной гейт)."""
+    await _show_main_menu(callback, state, force_photo=True)
+    await callback.answer()
 
 
 # ---------- start / resume workout ----------

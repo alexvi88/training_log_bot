@@ -236,6 +236,83 @@ async def test_profile_button_is_on_the_settings_screen():
     assert "settings:profile" in callbacks
 
 
+async def test_settings_keyboard_groups_into_three_blocks():
+    """Три визуальных блока — «Профиль», «Как разговариваю», «Данные» — и
+    порядок кнопок следует ровно этому порядку (см. заголовки в тексте экрана,
+    handlers.settings.show_settings)."""
+    import keyboards
+
+    kb = keyboards.settings_keyboard(
+        "kg", "epley", True, True, True, show_mcp=True, show_feedback=True
+    )
+    rows = [[b.callback_data for b in row] for row in kb.inline_keyboard]
+
+    # Профиль: единицы+пояс, язык+формула — парами по 2, короткие подписи.
+    assert rows[0] == ["settings:unit", "settings:tz"]
+    assert rows[1] == ["settings:lang", "settings:formula"]
+    # Как разговариваю: пять тумблеров, по одному в ряд — длинные подписи.
+    assert rows[2] == ["settings:progression"]
+    assert rows[3] == ["settings:pushes"]
+    assert rows[4] == ["settings:ai_comments"]
+    assert rows[5] == ["settings:food_macros"]
+    assert rows[6] == ["settings:card_detail"]
+    # Данные: что тренер знает, экспорт, импорт, MCP, отзыв — тоже по одному.
+    assert rows[7] == ["settings:profile"]
+    assert rows[8] == ["settings:export"]
+    assert rows[9] == ["settings:import"]
+    assert rows[10] == ["settings:mcp"]
+    assert rows[11] == ["feedback:open"]
+    assert rows[12] == ["invite:show"]
+    assert rows[13] == ["settings:back"]
+
+
+async def test_settings_keyboard_hides_feedback_button_without_admin():
+    import keyboards
+
+    kb_with = keyboards.settings_keyboard("kg", "epley", True, True, True, show_feedback=True)
+    kb_without = keyboards.settings_keyboard("kg", "epley", True, True, True, show_feedback=False)
+
+    callbacks_with = [b.callback_data for row in kb_with.inline_keyboard for b in row]
+    callbacks_without = [b.callback_data for row in kb_without.inline_keyboard for b in row]
+
+    assert "feedback:open" in callbacks_with
+    assert "feedback:open" not in callbacks_without
+
+
+async def test_show_settings_passes_feedback_availability(fresh_db, user_id, monkeypatch):
+    """show_settings скрывает «💬 Отзыв» ровно тогда же, когда его прячет ошибка
+    последнего рубежа (config.feedback_available), — один и тот же выключатель."""
+    import config
+
+    callback = _make_callback(user_id, "menu:settings")
+    state = await _make_state(user_id)
+
+    monkeypatch.setattr(config, "ADMIN_ID", 123456)
+    await settings.show_settings(callback, state)
+    kb = callback.message.answer.call_args.kwargs["reply_markup"]
+    assert "feedback:open" in [b.callback_data for row in kb.inline_keyboard for b in row]
+
+    monkeypatch.setattr(config, "ADMIN_ID", None)
+    await settings.show_settings(callback, state)
+    kb = callback.message.answer.call_args.kwargs["reply_markup"]
+    assert "feedback:open" not in [b.callback_data for row in kb.inline_keyboard for b in row]
+
+
+async def test_show_settings_screen_has_three_section_headers(fresh_db, user_id):
+    """Текст экрана несёт заголовки трёх блоков — жирными строками, в том же
+    порядке, в каком идут блоки кнопок."""
+    callback = _make_callback(user_id, "menu:settings")
+    state = await _make_state(user_id)
+
+    await settings.show_settings(callback, state)
+
+    text = callback.message.answer.call_args.args[0]
+    profile_pos = text.index("Профиль")
+    voice_pos = text.index("Как разговариваю")
+    data_pos = text.index("Данные")
+    assert profile_pos < voice_pos < data_pos
+
+
 async def test_toggle_labels_share_one_first_person_verb_construction():
     """Раньше у четырёх тумблеров были разные формы («вкл»/«выкл»,
     «включены»/«выключены», «считаю»/«не считаю», «подробно»/«компактно») —

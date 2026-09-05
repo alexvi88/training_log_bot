@@ -57,7 +57,7 @@ async def show_history_list(callback: CallbackQuery, state: FSMContext, page: in
         items.append({"id": w["id"], "label": formatting.format_date_ru(started)})
         entries.append((started, names, set_count))
     has_next = (page + 1) * HISTORY_PAGE_SIZE < total
-    kb = keyboards.history_list_keyboard(items, page, has_next)
+    kb = keyboards.history_list_keyboard(items, page, has_next, is_empty=total == 0)
     await ui.safe_edit(
         callback, formatting.build_history_list(entries), reply_markup=kb, parse_mode="HTML"
     )
@@ -143,6 +143,91 @@ async def hist_back(callback: CallbackQuery, state: FSMContext):
 async def hist_to_menu(callback: CallbackQuery, state: FSMContext):
     from handlers.workout import _show_main_menu
     await _show_main_menu(callback, state)
+    await callback.answer()
+
+
+# ---------- history: month calendar ----------
+#
+# «📅 По месяцам» on the list screen — 30 workouts back is 4 taps on the
+# paged list (8/page), one tap on the calendar. Cells come from
+# db.list_finished_workouts_by_day_in_month; a marked cell opens straight to
+# the workout (or, with 2+ that day, a day list); an unmarked cell can't be
+# tapped into anything, so it answers with a toast instead of pretending
+# there's a screen behind it. Callback prefix is "hist:cal" (calendar_keyboard
+# turns that into hist:cal:date:/hist:cal:cal:/hist:cal:noop), kept distinct
+# from backfill's "bf" prefix on the same keyboard builder.
+
+async def _show_history_calendar(callback: CallbackQuery, state: FSMContext, year: int, month: int):
+    await state.set_state(HistoryFlow.browsing)
+    user = await db.get_user(callback.from_user.id)
+    today = timeutil.user_today(user)
+    marked = await db.list_finished_workouts_by_day_in_month(callback.from_user.id, year, month)
+    kb = keyboards.calendar_keyboard(
+        "hist:cal", year, month, today=today,
+        marked=set(marked.keys()), show_quick_dates=False,
+        back_text=i18n.t("btn.to_list"), back_cb="hist:back",
+    )
+    await ui.safe_edit(callback, i18n.t("history.calendar_header"), reply_markup=kb, parse_mode="HTML")
+
+
+@router.callback_query(F.data == "hist:cal")
+async def hist_calendar_open(callback: CallbackQuery, state: FSMContext):
+    today = timeutil.user_today(await db.get_user(callback.from_user.id))
+    await _show_history_calendar(callback, state, today.year, today.month)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("hist:cal:cal:"))
+async def hist_calendar_nav(callback: CallbackQuery, state: FSMContext):
+    year, month = (int(x) for x in callback.data.split(":")[3].split("-"))
+    await _show_history_calendar(callback, state, year, month)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "hist:cal:noop")
+async def hist_calendar_noop(callback: CallbackQuery):
+    await callback.answer()
+
+
+async def _show_calendar_day_list(callback: CallbackQuery, date: dt.date, workout_ids: list[int]):
+    """2+ finished workouts on one local day — same list body as the paged
+    history screen, filtered to just this day, buttons labelled by time of day
+    since the date is already the screen's own header."""
+    contents = await db.list_workout_contents(workout_ids)
+    entries = []
+    items = []
+    for wid in workout_ids:
+        workout = await db.get_workout(wid)
+        started = dt.datetime.fromisoformat(workout["started_at"])
+        names, set_count = contents.get(wid, ([], 0))
+        entries.append((started, names, set_count))
+        items.append((wid, started.strftime("%H:%M")))
+    text = formatting.build_history_list(
+        entries,
+        header=i18n.t("history.calendar_day_header", date=formatting.format_date_ru(entries[0][0])),
+        footer="",
+    )
+    b = InlineKeyboardBuilder()
+    for wid, label in items:
+        b.row(InlineKeyboardButton(text=f"🕒 {label}", callback_data=f"hist:item:{wid}"))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.back"), callback_data=f"hist:cal:cal:{date.year}-{date.month}"))
+    await ui.safe_edit(callback, text, reply_markup=b.as_markup(), parse_mode="HTML")
+
+
+@router.callback_query(F.data.startswith("hist:cal:date:"))
+async def hist_calendar_day(callback: CallbackQuery, state: FSMContext):
+    iso = callback.data.split(":", 3)[3]
+    date = dt.date.fromisoformat(iso)
+    by_day = await db.list_finished_workouts_by_day_in_month(callback.from_user.id, date.year, date.month)
+    ids = by_day.get(iso, [])
+    if not ids:
+        await callback.answer(i18n.t("history.calendar_day_empty"))
+        return
+    if len(ids) == 1:
+        if await show_history_item(callback, ids[0]):
+            await callback.answer()
+        return
+    await _show_calendar_day_list(callback, date, ids)
     await callback.answer()
 
 
@@ -292,7 +377,8 @@ async def menu_achievements(callback: CallbackQuery, state: FSMContext):
     # (and gives up entirely after ~10s).
     await callback.answer()
     earned = await db.list_achievement_codes(callback.from_user.id)
-    ach_text = formatting.build_achievements_screen(earned)
+    ctx = await achievement_sync.aggregate_context(callback.from_user.id)
+    ach_text = formatting.build_achievements_screen(earned, ctx)
     # Records and badges share one message, and the record list is the open-ended
     # half (one line per exercise ever logged), so it gets whatever room the fixed
     # badge grid leaves — otherwise a long-time user's screen overflows the 4096
@@ -308,6 +394,7 @@ async def menu_achievements(callback: CallbackQuery, state: FSMContext):
     from_card = callback.data.endswith(":card")
     kb = InlineKeyboardBuilder()
     kb.button(text=i18n.t("history.ranks_button"), callback_data="rank:ladder" + (":prog" if from_progress else ""))
+    kb.button(text=i18n.t("btn.invite_friend"), callback_data="invite:show")
     # hist:menu — существующая ручка «в главное меню» (hist_to_menu ниже зовёт
     # _show_main_menu); отдельной заводить незачем, а свежая строка вроде
     # «menu:back» была бы кнопкой, которую никто не слушает.
@@ -316,6 +403,25 @@ async def menu_achievements(callback: CallbackQuery, state: FSMContext):
     await ui.safe_edit(
         callback, text, reply_markup=kb.as_markup(), parse_mode="HTML", delete=not from_card
     )
+
+
+@router.callback_query(F.data == "invite:show")
+async def invite_show(callback: CallbackQuery, state: FSMContext):
+    """«🤝 Пригласить» — та же ссылка, что уже едет под карточкой тренировки
+    (acquisition.referral_link), только с отдельным входом: раньше её было не
+    позвать нигде, кроме шаринга уже готовой карточки — то есть только после
+    того, как тренировка закончена.
+    """
+    await state_scaffold.clear_state_keep_workout(state)
+    link = acquisition.referral_link(
+        await sharing.get_bot_username(callback.bot), callback.from_user.id
+    )
+    text = i18n.t("invite.screen", link=escape(link))
+    kb = InlineKeyboardBuilder()
+    kb.button(text=i18n.t("btn.home_menu"), callback_data="hist:menu")
+    kb.adjust(1)
+    await ui.safe_edit(callback, text, reply_markup=kb.as_markup(), parse_mode="HTML")
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("rank:ladder"))
@@ -520,6 +626,18 @@ async def show_progress_entry(callback: CallbackQuery, state: FSMContext):
         )
         await callback.answer()
         return
+    user = await db.get_user(callback.from_user.id)
+    # Group → exercise → chart is 3 taps for the typical "how's my bench
+    # doing" check. Same top-3-by-frequency query as the main-menu dashboard's
+    # lift tiles (db.top_exercises_by_frequency), all-time window, so a
+    # shortcut only shows up once an exercise has actually earned it (≥2
+    # sessions — a single logged set isn't "frequent" yet). Origin "top" so
+    # "⬅️ Назад" from that chart returns here, not to a group list the user
+    # never opened (see keyboards._progress_back_cb).
+    top = await db.top_exercises_by_frequency(
+        callback.from_user.id, "2000-01-01", timeutil.user_today(user).isoformat()
+    )
+    top_buttons = [(ex["display_name"], f"prog:ex:{ex['id']}:top") for ex in top]
     groups = await db.list_muscle_groups(callback.from_user.id)
     kb = keyboards.groups_keyboard(
         groups, prefix="prog",
@@ -529,6 +647,7 @@ async def show_progress_entry(callback: CallbackQuery, state: FSMContext):
             (i18n.t("btn.back"), "prog:back"),
         ],
         show_all=True,
+        top_buttons=top_buttons,
     )
     text = i18n.t("history.progress_intro")
     await ui.safe_edit(callback, text, reply_markup=kb)
@@ -695,10 +814,15 @@ async def _render_progress_view(ex_id: int, user, limit: int, origin: str = "all
             ex["display_name"], sessions, comparison, records, limit=limit, unit=user["unit"],
             session_notes=session_notes,
             golds=analytics.gold_book(sessions, user["e1rm_formula"]),
+            single_session_hint=len(points) == 1,
         )
 
         png = None
-        if points:
+        # A one-point "chart" is just a dot — same threshold bodyweight already
+        # uses (handlers/bodyweight.py._render). The stats lines above already
+        # cover a single session; format_progress_screen adds the "log it once
+        # more" nudge instead of the delta line when single_session_hint is set.
+        if len(points) >= 2:
             # Уезжает в пиксели графика (charts.render_metric_over_sessions рисует
             # заголовок/ось matplotlib'ом, никакой текстовый тест кириллицу там не
             # увидит) — переводим явно, а не полагаемся на formatting.plural_ru.

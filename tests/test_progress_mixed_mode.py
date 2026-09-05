@@ -87,7 +87,11 @@ async def test_chart_plots_one_metric_and_skips_the_other_mode(fresh_db, user_id
     """График остаётся про одну величину. Килограммы e1RM и голые повторы на
     одной оси читаются как обвал силы (110 и 12 рядом), а раньше сессии с весом
     вообще подписывались как «повторы». Сессии другого режима просто не
-    попадают на график — оба рекорда всё равно показаны текстом выше."""
+    попадают на график — оба рекорда всё равно показаны текстом выше.
+
+    Две сессии своим весом (а не одна), чтобы график вообще рисовался: с одной
+    точкой прогресс теперь не рисует картинку вовсе (см.
+    test_progress_handlers.test_single_session_shows_hint_instead_of_a_chart)."""
     from handlers import history
 
     db = fresh_db
@@ -99,10 +103,15 @@ async def test_chart_plots_one_metric_and_skips_the_other_mode(fresh_db, user_id
     await db.add_block_exercise(block1, ex_id, 0)
     await db.add_set(block1, ex_id, round_index=1, order_in_round=0, weight=100.0, reps=5)
 
-    bw_workout = await db.create_finished_workout(user_id, "2026-02-01T10:00:00", "2026-02-01T10:30:00")
-    block2 = await db.create_block(bw_workout, "single")
+    bw_workout1 = await db.create_finished_workout(user_id, "2026-02-01T10:00:00", "2026-02-01T10:30:00")
+    block2 = await db.create_block(bw_workout1, "single")
     await db.add_block_exercise(block2, ex_id, 0)
     await db.add_set(block2, ex_id, round_index=1, order_in_round=0, weight=0.0, reps=12)
+
+    bw_workout2 = await db.create_finished_workout(user_id, "2026-02-08T10:00:00", "2026-02-08T10:30:00")
+    block3 = await db.create_block(bw_workout2, "single")
+    await db.add_block_exercise(block3, ex_id, 0)
+    await db.add_set(block3, ex_id, round_index=1, order_in_round=0, weight=0.0, reps=14)
 
     user = await db.get_user(user_id)
 
@@ -112,6 +121,6 @@ async def test_chart_plots_one_metric_and_skips_the_other_mode(fresh_db, user_id
 
     points = real_render.call_args.args[0]
     # Последняя тренировка — своим весом, значит график про повторы, и тяжёлая
-    # сессия в него не идёт: её 116.7 кг рядом с 12 повторами были бы обрывом.
-    assert [p[1] for p in points] == [12.0]
+    # сессия в него не идёт: её 116.7 кг рядом с 12/14 повторами были бы обрывом.
+    assert [p[1] for p in points] == [12.0, 14.0]
     assert real_render.call_args.args[2] == "повторы"

@@ -15,7 +15,9 @@ def test_import_button_shown_on_empty_diary():
     (button,) = [
         b for row in markup.inline_keyboard for b in row if "Перенести историю" in b.text
     ]
-    assert button.callback_data == "settings:import"
+    # ":menu" — «Отмена» внутри флоу (handlers/csv_import.py:import_cancel)
+    # различает, откуда зашли, и возвращает туда же, а не всегда в настройки.
+    assert button.callback_data == "settings:import:menu"
 
 
 def test_import_button_hidden_with_history():

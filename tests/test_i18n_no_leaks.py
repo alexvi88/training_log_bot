@@ -275,6 +275,7 @@ async def _screen_main_menu(db, user_id: int) -> str:
         show_import_button=True,
         community_url="https://t.me/example",
         show_donate=True,
+        show_summary_button=True,
     )
     return "\n".join(button.text for row in kb.inline_keyboard for button in row)
 
@@ -321,6 +322,36 @@ async def _screen_history_list(db, user_id: int) -> str:
     return "\n".join(button.text for row in kb.inline_keyboard for button in row)
 
 
+async def _screen_history_list_empty(db, user_id: int) -> str:
+    """Пустая история (is_empty=True) — свой набор кнопок: «Начать тренировку»
+    вместо «По месяцам», раз отмечать в календаре ещё нечего."""
+    kb = keyboards.history_list_keyboard(workouts=[], page=0, has_next=False, is_empty=True)
+    return "\n".join(button.text for row in kb.inline_keyboard for button in row)
+
+
+async def _screen_history_calendar(db, user_id: int) -> str:
+    """«📅 По месяцам»: заголовок экрана плюс сетка календаря с одним отмеченным
+    днём (keyboards.calendar_keyboard, marked=...) — покрывает и intro-текст,
+    и кнопку «⬅️ К списку», которой у обычного bf-календаря нет."""
+    header = i18n.t("history.calendar_header")
+    kb = keyboards.calendar_keyboard(
+        "hist:cal", 2026, 8, today=dt.date(2026, 8, 17), marked={"2026-08-10"},
+        show_quick_dates=False, back_text=i18n.t("btn.to_list"), back_cb="hist:back",
+    )
+    buttons = "\n".join(button.text for row in kb.inline_keyboard for button in row)
+    return f"{header}\n{buttons}"
+
+
+async def _screen_history_calendar_day_list(db, user_id: int) -> str:
+    """День с 2+ тренировками — тот же build_history_list, что у обычного
+    списка, но с заголовком history.calendar_day_header."""
+    return formatting.build_history_list(
+        [(dt.datetime(2026, 8, 10, 9, 0), ["Squat"], 3), (dt.datetime(2026, 8, 10, 18, 0), [], 0)],
+        header=i18n.t("history.calendar_day_header", date=formatting.format_date_ru(dt.datetime(2026, 8, 10))),
+        footer="",
+    )
+
+
 async def _screen_workout_summary(db, user_id: int) -> str:
     """Карточка завершённой тренировки (formatting.build_workout_summary) —
     самый частый экран в продукте, целиком хардкод по-русски сегодня."""
@@ -347,6 +378,25 @@ async def _screen_dashboard_menu(db, user_id: int) -> str:
     tiles = formatting.menu_tiles(dashboard, tonnage=1234.0, records=2, unit="kg")
     tiles_text = "\n".join(f"{title} {value}" for title, value in tiles)
     return f"{headline}\n{tiles_text}"
+
+
+async def _screen_menu_summary_text(db, user_id: int) -> str:
+    """Текстовое главное меню атлета с историей (formatting.build_menu_summary_text,
+    handlers.workout._menu_view) — то же самое, что раньше жило только внутри
+    подписи-картинки, теперь на каждом открытии меню."""
+    import analytics
+
+    dashboard = analytics.compute_dashboard(
+        [dt.date(2026, 8, 10), dt.date(2026, 8, 12), dt.date(2026, 8, 15)],
+        dt.date(2026, 8, 17),
+    )
+    headline = formatting.menu_headline(dashboard)
+    tiles = formatting.menu_tiles(dashboard, tonnage=1234.0, records=2, unit="kg")
+    lift_tiles = formatting.menu_lift_tiles([("Squat", 100.0, 120.0)])
+    lifts_title = formatting.menu_lifts_title(8)
+    return formatting.build_menu_summary_text(
+        i18n.t("onboarding.greeting"), headline, tiles, lift_tiles, lifts_title
+    )
 
 
 async def _screen_history_item_card(db, user_id: int) -> str:
@@ -700,6 +750,15 @@ async def _screen_factcheck(db, user_id: int) -> str:
     return f"{busy}\n{failed}\n{pool}"
 
 
+async def _screen_invite(db, user_id: int) -> str:
+    """«🤝 Пригласить» (handlers/history.py:invite_show) — ссылка в <pre>
+    плюс короткая реплика тренера."""
+    import acquisition
+
+    link = acquisition.referral_link("testbot", user_id)
+    return i18n.t("invite.screen", link=link)
+
+
 def _strip_autonyms(text: str) -> str:
     """Тот же вырез, что и в test_en_catalog_has_no_cyrillic: автоним «Русский»
     в подписи кнопки языка — законная кириллица даже на английском экране."""
@@ -730,8 +789,12 @@ SCREENS: list[tuple[str, object]] = [
     ("programs", _screen_programs),
     ("food_diary", _screen_food_diary),
     ("history_list", _screen_history_list),
+    ("history_list_empty", _screen_history_list_empty),
+    ("history_calendar", _screen_history_calendar),
+    ("history_calendar_day_list", _screen_history_calendar_day_list),
     ("workout_summary_card", _screen_workout_summary),
     ("dashboard_menu", _screen_dashboard_menu),
+    ("menu_summary_text", _screen_menu_summary_text),
     ("weekly_summary", _screen_weekly_summary),
     ("achievements", _screen_achievements),
     ("hall_of_fame", _screen_hall_of_fame),
@@ -761,6 +824,7 @@ SCREENS: list[tuple[str, object]] = [
     ("ai_trainer_setup_question", _screen_ai_trainer_setup_question),
     ("ai_trainer_thinking_pools", _screen_ai_trainer_thinking_pools),
     ("factcheck_screen", _screen_factcheck),
+    ("invite_screen", _screen_invite),
 ]
 
 # Экраны, которые всё ещё протекают кириллицей мимо каталога. Список

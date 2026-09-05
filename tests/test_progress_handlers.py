@@ -123,6 +123,19 @@ async def test_prog_change_period_resends_when_something_landed_below(fresh_db, 
     callback.message.answer_photo.assert_awaited_once()
 
 
+async def test_single_session_shows_hint_instead_of_a_chart(fresh_db, user_id):
+    """A single logged session used to still draw a one-point PNG (just a dot).
+    Now it matches bodyweight's own ≥2-points threshold: no picture, and the
+    text nudges toward logging it again instead."""
+    ex_id = await _seed_exercise_with_sessions(fresh_db, user_id, 1)
+    user = await fresh_db.get_user(user_id)
+
+    text, png, _ = await history._render_progress_view(ex_id, user, 20)
+
+    assert png is None
+    assert "Второй заход в это упражнение — и нарисую график" in text
+
+
 async def test_prog_change_period_all_shows_every_session(fresh_db, user_id):
     ex_id = await _seed_exercise_with_sessions(fresh_db, user_id, 10)
     user = await fresh_db.get_user(user_id)
@@ -199,10 +212,11 @@ async def test_render_progress_view_does_not_leak_cache_across_exercises(fresh_d
     ex_a = await _seed_exercise_with_sessions(fresh_db, user_id, 3)
     group_id = await fresh_db.create_muscle_group(user_id, "Спина")
     ex_b = await fresh_db.create_exercise(user_id, "Тяга", group_id)
-    workout = await fresh_db.create_finished_workout(user_id, "2026-02-01T10:00:00", "2026-02-01T10:30:00")
-    block = await fresh_db.create_block(workout, "single")
-    await fresh_db.add_block_exercise(block, ex_b, 0)
-    await fresh_db.add_set(block, ex_b, round_index=1, order_in_round=0, weight=50.0, reps=10)
+    for d in ("2026-02-01", "2026-02-08"):  # ≥2 sessions — a single one no longer renders a chart at all
+        workout = await fresh_db.create_finished_workout(user_id, f"{d}T10:00:00", f"{d}T10:30:00")
+        block = await fresh_db.create_block(workout, "single")
+        await fresh_db.add_block_exercise(block, ex_b, 0)
+        await fresh_db.add_set(block, ex_b, round_index=1, order_in_round=0, weight=50.0, reps=10)
     user = await fresh_db.get_user(user_id)
 
     calls = 0
@@ -300,7 +314,7 @@ async def test_prog_show_exercise_has_card_button_regardless_of_origin(fresh_db,
     await history.prog_show_exercise(callback, state)
 
     kb = callback.message.answer.await_args.kwargs["reply_markup"]
-    assert _has_button_cb(kb, f"prog:card:{ex_id}")
+    assert _has_button_cb(kb, f"prog:card:{ex_id}:{group_id}")
 
 
 async def test_prog_card_button_shows_exercise_card_from_any_state(fresh_db, user_id):
@@ -318,6 +332,77 @@ async def test_prog_card_button_shows_exercise_card_from_any_state(fresh_db, use
     callback.message.delete.assert_awaited_once()
     text = callback.message.answer.await_args.args[0]
     assert "Жим лёжа" in text
+
+
+async def test_prog_card_back_returns_to_the_originating_progress_screen(fresh_db, user_id):
+    """«📋 Карточка упражнения» с экрана прогресса, а потом «⬅️ Назад» с
+    карточки должны вернуть на тот же прогресс, а не в список упражнений
+    (старое поведение: карточка всегда открывалась из «⚙️ Упражнения», и
+    «Назад» с неё вело туда же, даже если реально её открыли из прогресса)."""
+    from handlers import exercises
+
+    group_id = await fresh_db.create_muscle_group(user_id, "Грудь")
+    ex_id = await fresh_db.create_exercise(user_id, "Жим лёжа", group_id)
+    state = await _make_state(user_id)
+
+    callback = _make_callback(user_id, f"prog:card:{ex_id}:{group_id}")
+    await exercises.prog_show_exercise_card(callback, state)
+
+    kb = callback.message.answer.await_args.kwargs["reply_markup"]
+    cbs = [b.callback_data for row in kb.inline_keyboard for b in row if "Назад" in b.text]
+    assert cbs == [f"prog:ex:{ex_id}:{group_id}"]
+
+
+async def test_prog_card_back_returns_to_progress_entry_for_top_shortcut(fresh_db, user_id):
+    """Same, but the progress screen was reached via one of the entry screen's
+    top-3-frequent-exercise shortcuts (origin "top"): back from the card goes
+    to that exercise's progress screen (which itself, one more "Назад" later,
+    returns to the entry screen — see keyboards._progress_back_cb), not to a
+    group list that was never shown."""
+    from handlers import exercises
+
+    group_id = await fresh_db.create_muscle_group(user_id, "Грудь")
+    ex_id = await fresh_db.create_exercise(user_id, "Жим лёжа", group_id)
+    state = await _make_state(user_id)
+
+    callback = _make_callback(user_id, f"prog:card:{ex_id}:top")
+    await exercises.prog_show_exercise_card(callback, state)
+
+    kb = callback.message.answer.await_args.kwargs["reply_markup"]
+    cbs = [b.callback_data for row in kb.inline_keyboard for b in row if "Назад" in b.text]
+    assert cbs == [f"prog:ex:{ex_id}:top"]
+
+
+async def test_progress_entry_offers_top_frequent_exercises_as_a_shortcut(fresh_db, user_id):
+    """The common case (checking a lift you actually train) should be 2 taps,
+    not 3: the entry screen offers the user's most-trained exercises directly,
+    above the group list."""
+    db = fresh_db
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    frequent_id = await db.create_exercise(user_id, "Жим лёжа", group_id)
+    rare_id = await db.create_exercise(user_id, "Разводка", group_id)
+    for i in range(1, 4):
+        workout_id = await db.create_finished_workout(
+            user_id, f"2026-01-{i:02d}T10:00:00", f"2026-01-{i:02d}T10:30:00"
+        )
+        block_id = await db.create_block(workout_id, "single")
+        await db.add_block_exercise(block_id, frequent_id, 0)
+        await db.add_set(block_id, frequent_id, round_index=1, order_in_round=0, weight=100.0, reps=8)
+    # Only ever done once — must not show up as a shortcut (min_sessions=2).
+    workout_id = await db.create_finished_workout(user_id, "2026-01-05T10:00:00", "2026-01-05T10:30:00")
+    block_id = await db.create_block(workout_id, "single")
+    await db.add_block_exercise(block_id, rare_id, 0)
+    await db.add_set(block_id, rare_id, round_index=1, order_in_round=0, weight=20.0, reps=12)
+
+    state = await _make_state(user_id)
+    callback = _make_callback(user_id, "menu:progress")
+
+    await history.show_progress_entry(callback, state)
+
+    kb = callback.message.answer.await_args.kwargs["reply_markup"]
+    cbs = [b.callback_data for row in kb.inline_keyboard for b in row]
+    assert f"prog:ex:{frequent_id}:top" in cbs
+    assert f"prog:ex:{rare_id}:top" not in cbs
 
 
 # ---------- progress entry with no workout history yet ----------

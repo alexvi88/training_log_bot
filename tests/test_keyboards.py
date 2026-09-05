@@ -227,6 +227,26 @@ def test_edit_exercise_keyboard_lists_sets_and_a_way_back():
     assert "editw:top" in cbs
 
 
+def test_progress_period_labels_say_workouts_not_bare_numbers():
+    """Bare "10"/"20" read as unlabeled numbers next to bodyweight's "10 нед" —
+    both period pickers should say what they're counting."""
+    kb = keyboards.progress_chart_keyboard(exercise_id=1, limit=20, origin="all")
+    texts = _button_texts(kb)
+    assert "10 трен." in texts
+    assert "• 20 трен. •" in texts  # active period marked
+    assert "Все" in texts
+
+
+def test_progress_card_and_back_buttons_carry_the_origin():
+    """"📋 Карточка упражнения" must remember where the progress screen itself
+    was opened from, so its own "⬅️ Назад" can return there instead of the
+    exercises list (see handlers/exercises.py._exercise_detail_payload)."""
+    kb = keyboards.progress_chart_keyboard(exercise_id=1, limit=20, origin="7")
+    cbs = _callback_datas(kb)
+    assert "prog:card:1:7" in cbs
+    assert "prog:grp:7" in cbs
+
+
 def test_bodyweight_periods_match_the_progress_chart_shape():
     """Both period pickers offer the same 10/20/all shape, and neither defaults
     to the narrowest window."""
@@ -238,7 +258,7 @@ def test_bodyweight_keyboard_marks_the_active_period():
     kb = keyboards.bodyweight_keyboard(has_logs=True, weeks=20, show_periods=True)
     texts = _button_texts(kb)
     assert "• 20 нед •" in texts
-    assert "10 нед" in texts and "Всё" in texts
+    assert "10 нед" in texts and "Все" in texts
 
 
 def test_bodyweight_keyboard_offers_the_records_list_when_there_are_logs():
@@ -253,11 +273,17 @@ def test_bodyweight_keyboard_hides_the_records_list_without_logs():
     assert "bw:list:0" not in cbs
 
 
+def _bw_rows(*ids):
+    return [{"id": i, "logged_at": "2026-03-14T09:00:00", "weight": 82.5} for i in ids]
+
+
 def test_bodyweight_list_keyboard_numbers_delete_buttons_and_pages():
-    kb = keyboards.bodyweight_list_keyboard([101, 102, 103], page=1, has_next=True)
+    kb = keyboards.bodyweight_list_keyboard(_bw_rows(101, 102, 103), "kg", page=1, has_next=True)
     texts = _button_texts(kb)
     cbs = [b.callback_data for row in kb.inline_keyboard for b in row]
-    assert "🗑 1" in texts and "🗑 2" in texts and "🗑 3" in texts
+    assert any("14.03" in t for t in texts)
+    assert "🗑" in texts
+    assert "bw:editrec:101:1" in cbs
     assert "bw:delrec:101:1" in cbs
     assert "bw:list:0" in cbs  # предыдущая страница
     assert "bw:list:2" in cbs  # следующая страница
@@ -265,6 +291,6 @@ def test_bodyweight_list_keyboard_numbers_delete_buttons_and_pages():
 
 
 def test_bodyweight_list_keyboard_no_delete_row_when_empty():
-    kb = keyboards.bodyweight_list_keyboard([], page=0, has_next=False)
+    kb = keyboards.bodyweight_list_keyboard([], "kg", page=0, has_next=False)
     texts = _button_texts(kb)
     assert not any(t.startswith("🗑") for t in texts)

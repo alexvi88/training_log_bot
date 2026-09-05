@@ -9,6 +9,7 @@ import config
 import i18n
 import keyboards
 import state_scaffold
+import ui
 from fsm import FeedbackFlow
 
 router = Router(name="feedback")
@@ -62,21 +63,35 @@ class DropFeedbackStateOnCommand(BaseMiddleware):
 router.message.outer_middleware(DropFeedbackStateOnCommand())
 
 
+def _feedback_prompt_keyboard():
+    # «❌ Отмена» рядом с «✅ Готово» — как в остальных экранах ввода: выход
+    # без отправки должен быть виден, а не угадываться.
+    return keyboards.yes_no_keyboard(
+        yes_cb="feedback:done", no_cb="feedback:cancel",
+        yes_text=i18n.t("btn.done_check"), no_text=i18n.t("btn.cancel"),
+    )
+
+
 @router.message(Command("feedback"))
 async def cmd_feedback(message: Message, state: FSMContext):
     # Отзыв оставляют и в перерыве между подходами, так что каркас незакрытой
     # тренировки должен пережить вход сюда.
     await state_scaffold.clear_state_keep_workout(state)
     await state.set_state(FeedbackFlow.awaiting_message)
-    await message.answer(
-        i18n.t("feedback.prompt"),
-        # «❌ Отмена» рядом с «✅ Готово» — как в остальных экранах ввода: выход
-        # без отправки должен быть виден, а не угадываться.
-        reply_markup=keyboards.yes_no_keyboard(
-            yes_cb="feedback:done", no_cb="feedback:cancel",
-            yes_text=i18n.t("btn.done_check"), no_text=i18n.t("btn.cancel"),
-        ),
-    )
+    await message.answer(i18n.t("feedback.prompt"), reply_markup=_feedback_prompt_keyboard())
+
+
+@router.callback_query(F.data == "feedback:open")
+async def feedback_open(callback: CallbackQuery, state: FSMContext):
+    """Тот же вход, что у /feedback, но с кнопки — «💬 Отзыв» в настройках и
+    «Сообщить о проблеме» под общей ошибкой (main._back_to_menu_markup). Обе
+    скрыты без ADMIN_ID (config.feedback_available), так что сюда попадают
+    только когда получателю есть куда лететь.
+    """
+    await state_scaffold.clear_state_keep_workout(state)
+    await state.set_state(FeedbackFlow.awaiting_message)
+    await ui.safe_edit(callback, i18n.t("feedback.prompt"), reply_markup=_feedback_prompt_keyboard())
+    await callback.answer()
 
 
 @router.message(StateFilter(FeedbackFlow.awaiting_message), _NOT_A_COMMAND)

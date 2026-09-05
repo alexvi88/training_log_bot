@@ -54,8 +54,20 @@ async def show_settings(
         show_extra_stats=bool(user["show_extra_stats"]),
         show_mcp=config.mcp_available(),
         lang=user["lang"],
+        show_feedback=config.feedback_available(),
     )
-    await ui.safe_edit(callback, i18n.t("settings.screen.title"), reply_markup=kb)
+    # Заголовки блоков говорят самим текстом экрана — жирной строкой перед
+    # каждой группой кнопок, в том же порядке, в каком идут кнопки ниже (см.
+    # keyboards.settings_keyboard): «Профиль» → единицы/пояс/язык/формула,
+    # «Как разговариваю» → пять тумблеров, «Данные» → профиль тренера,
+    # экспорт/импорт/MCP/отзыв.
+    text = (
+        f"{i18n.t('settings.screen.title')}\n\n"
+        f"<b>{i18n.t('settings.screen.section.profile')}</b>\n"
+        f"<b>{i18n.t('settings.screen.section.voice')}</b>\n"
+        f"<b>{i18n.t('settings.screen.section.data')}</b>"
+    )
+    await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML")
     if alert:
         await callback.answer(alert, show_alert=show_alert)
     else:
