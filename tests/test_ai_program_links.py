@@ -225,7 +225,7 @@ async def test_archive_refuses_someone_elses_exercise(fresh_db, user_id):
     cb = _make_callback(user_id, f"ai:exarchyes:{theirs}")
     await handler.ai_exercise_archive(cb, await _state(user_id))
 
-    cb.answer.assert_awaited_once_with("Упражнение не найдено", show_alert=True)
+    cb.answer.assert_awaited_once_with("Не нашёл это упражнение — экран устарел. Вернись назад и открой заново", show_alert=True)
     assert (await dbmod.get_exercise(theirs))["is_archived"] == 0
 
 

@@ -171,7 +171,7 @@ def test_bodyweight_screen_lists_only_period_logs_when_given():
 
 def test_bodyweight_list_screen_empty():
     text = formatting.build_bodyweight_list_screen([], "kg", page=0, page_size=10, total=0)
-    assert "Записей нет" in text
+    assert "Записей пока нет" in text
 
 
 def test_bodyweight_list_screen_numbers_rows_and_shows_time():
@@ -414,7 +414,7 @@ async def test_bw_delete_record_someone_elses_entry_reports_not_found(fresh_db, 
     callback = _make_bw_confirm_callback(user_id + 1, f"bw:delrec:{log_id}:0")
     await bw.bw_delete_record(callback, state)
 
-    callback.answer.assert_awaited_once_with("Запись не найдена")
+    callback.answer.assert_awaited_once_with("Такой записи уже нет — открой ⚖️ Вес и посмотри актуальный список")
     assert len(await dbmod.list_bodyweight_logs(user_id)) == 1
 
 

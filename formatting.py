@@ -2166,7 +2166,12 @@ def format_rank_gap(gap) -> str:  # analytics.RankGap
         if gap.value >= 100:
             return i18n.t("rank.gap_tonnage_tons", tons=f"{round(tons, 1):g}")
         return i18n.t("rank.gap_tonnage_kg", kg=f"{gap.value:.0f}")
-    return i18n.t("rank.gap_frequency", per_week=f"{gap.value:g}")
+    # Дробная частота («1.5 раза в неделю») берёт ту же форму, что и «2»
+    # («тренировки»), — по-русски дробные числа всегда идут с этой формой
+    # независимо от целой части (см. ту же уловку в format_tonnage).
+    per_week = gap.value
+    plural_n = int(per_week) if per_week == int(per_week) else 2
+    return i18n.t("rank.gap_frequency", per_week=f"{per_week:g}", n=plural_n)
 
 
 def format_rank_line(rank, gap=None) -> str:  # gap: analytics.RankGap | None

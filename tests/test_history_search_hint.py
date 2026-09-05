@@ -43,7 +43,7 @@ def _make_message(user_id: int, text: str):
 async def test_history_list_header_invites_search():
     text = formatting.build_history_list([])
     # Пустая история — про поиск говорить рано, там просто нечего искать.
-    assert text == "Пока нет завершённых тренировок."
+    assert text == formatting.i18n.t("history.empty")
 
 
 async def test_history_list_with_entries_announces_search_up_top():

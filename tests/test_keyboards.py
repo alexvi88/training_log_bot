@@ -52,7 +52,7 @@ def test_csv_import_page_keyboard_names_the_count_when_some_are_duplicates():
     число обязано остаться, иначе непонятно, сколько загрузится «как обычно»."""
     kb = keyboards.csv_import_page_keyboard(page=0, total_pages=1, new_count=2, dup_count=1)
     assert "✅ Загрузить новые (2)" in _button_texts(kb)
-    assert "⚠️ Загрузить всё (3), включая дубли" in _button_texts(kb)
+    assert "⚠️ Загрузить всё (3), с дублями" in _button_texts(kb)
 
 
 def test_csv_import_page_keyboard_paginates_by_page_not_by_workout():

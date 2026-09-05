@@ -322,7 +322,7 @@ async def rt_program(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("rt:pgmedit:"))
 async def rt_program_edit(callback: CallbackQuery, state: FSMContext):
-    """«⚙️ Изменить программу» — отдельный экран под все правки.
+    """«✏️ Изменить программу» — отдельный экран под все правки.
 
     Состав дней показывается и здесь: раньше экран сводился к имени и числу
     дней, и человек выбирал, какой день переименовать или куда добавить
@@ -809,7 +809,7 @@ async def rt_name_entered(message: Message, state: FSMContext):
             i18n.t("routine.suggest_multiday"),
             reply_markup=keyboards.yes_no_keyboard(
                 yes_cb=f"rt:tomulti:{routine_id}", no_cb="rt:manage",
-                yes_text=i18n.t("routine.btn.build_program"), no_text=i18n.t("routine.btn.no_thanks"),
+                yes_text=i18n.t("routine.btn.build_program"), no_text=i18n.t("btn.no"),
             ),
         )
 

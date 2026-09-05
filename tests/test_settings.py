@@ -105,7 +105,7 @@ async def test_formula_switch_asks_before_rewriting_every_e1rm(fresh_db, user_id
     # Русское название формулы, а не сырой код "brzycki" — та же логика, что и
     # у тоста после подтверждения (test_confirming_the_formula_switch_is_a_toast_not_a_modal).
     assert "Бжицки" in text
-    assert "пересчитаются" in text
+    assert "Пересчитаю" in text
 
 
 async def test_confirming_the_formula_switch_applies_it(fresh_db, user_id):
@@ -332,10 +332,10 @@ async def test_toggle_labels_share_one_first_person_verb_construction():
     assert "🎯 Подсказки прогрессии: молчу" in off_texts
     assert "🔔 Пуши: шлю" in on_texts
     assert "🔕 Пуши: молчу" in off_texts
-    assert "🤖 Комментарии AI-тренера: комментирую" in on_texts
-    assert "🤖 Комментарии AI-тренера: молчу" in off_texts
-    assert "🔢 КБЖУ в дневнике питания: считаю" in on_texts
-    assert "📝 КБЖУ в дневнике питания: не считаю" in off_texts
+    assert "🤖 Комментарии тренера: комментирую" in on_texts
+    assert "🤖 Комментарии тренера: молчу" in off_texts
+    assert "🔢 КБЖУ: считаю" in on_texts
+    assert "📝 КБЖУ: не считаю" in off_texts
     # Раньше «Карточка тренировки: подробно/компактно» не говорило, что именно
     # переключается — это строка e1RM на итоговой карточке.
     assert "📊 e1RM на карточке: показываю" in on_texts

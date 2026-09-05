@@ -78,7 +78,7 @@ async def test_ai_resume_workout_alerts_when_no_active_workout(fresh_db, user_id
     await ai_trainer.ai_resume_workout(callback, state)
 
     callback.message.delete.assert_not_awaited()
-    callback.answer.assert_awaited_once_with("Нет активной тренировки", show_alert=True)
+    callback.answer.assert_awaited_once_with("Открытой тренировки нет — жми 🏋️ Начать тренировку", show_alert=True)
 
 
 # ---------- voice input (ai_voice_question) ----------
@@ -168,7 +168,7 @@ async def test_ai_voice_question_rejects_empty_transcription(fresh_db, user_id, 
     await ai_trainer.ai_voice_question(message, state)
 
     message.reply.assert_awaited_once()
-    assert "разобрать" in message.reply.await_args.args[0]
+    assert "Не разобрал" in message.reply.await_args.args[0]
 
 
 async def test_ai_voice_question_forwards_transcribed_text_as_question(fresh_db, user_id, monkeypatch):
@@ -635,7 +635,7 @@ async def test_exercise_card_button_rejects_someone_elses_exercise(fresh_db, use
 
     await ai_trainer.ai_exercise_card(callback, state)
 
-    callback.answer.assert_awaited_once_with("Упражнение не найдено", show_alert=True)
+    callback.answer.assert_awaited_once_with("Не нашёл это упражнение — экран устарел. Вернись назад и открой заново", show_alert=True)
 
 
 # ---------- paging through mentions (ai:mpage:) ----------

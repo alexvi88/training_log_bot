@@ -166,7 +166,7 @@ async def test_addnote_rejects_other_users_workout(fresh_db, user_id):
 
     await workout.workout_card_note_prompt(callback, state)
 
-    callback.answer.assert_awaited_once_with("Тренировка не найдена", show_alert=True)
+    callback.answer.assert_awaited_once_with("Не нашёл эту тренировку — экран устарел. Вернись назад и открой заново", show_alert=True)
     assert await state.get_state() is None
 
 

@@ -240,7 +240,7 @@ async def test_cannot_share_someone_elses_routine(fresh_db, user_id):
     await sharing.share_routine(callback, await _state(stranger))
 
     callback.message.answer.assert_not_awaited()
-    assert "не найдена" in callback.answer.await_args.args[0]
+    assert "Не нашёл эту программу" in callback.answer.await_args.args[0]
 
 
 # ---------- превью у получателя ----------
@@ -722,7 +722,7 @@ async def test_a_standalone_routine_id_never_turns_into_someone_elses_program(fr
     for data in (f"share:prg:{routine_id}", f"share:pgm:{routine_id}"):
         callback = await _tap(user_id, data)
         callback.message.answer.assert_not_awaited()
-        assert "не найдена" in callback.answer.await_args.args[0], data
+        assert "Не нашёл эту программу" in callback.answer.await_args.args[0], data
 
 
 # ---------- программа, которая не уехала целиком ----------

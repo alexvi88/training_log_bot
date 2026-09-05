@@ -92,7 +92,7 @@ async def test_gap_speaks_full_words_not_system_abbreviations():
     assert formatting.format_rank_gap(analytics.RankGap("tonnage", 12_000)) == "ещё 12 т"
     assert formatting.format_rank_gap(analytics.RankGap("tonnage", 12_500)) == "ещё 12.5 т"
     # Остаток меньше центнера не округляем до «0.0 т» — это читалось бы как «всё».
-    assert formatting.format_rank_gap(analytics.RankGap("tonnage", 40)) == "ещё 40 кг"
+    assert formatting.format_rank_gap(analytics.RankGap("tonnage", 40)) == "ещё 40кг"
     assert "в неделю" in formatting.format_rank_gap(analytics.RankGap("frequency", 1.5))
 
 
