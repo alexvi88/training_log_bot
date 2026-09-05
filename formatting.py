@@ -2650,11 +2650,27 @@ def build_food_estimate_text(
     return "\n".join(lines)
 
 
-def build_food_day_screen(date: dt.date, entries: list[FoodEntryView]) -> str:
+def _goal_line(kcal_goal: Optional[int], total_kcal: Optional[float]) -> str:
+    """«Цель 2200 · осталось 640» / «Цель 2200 · перебор 150» — только когда и
+    цель задана, и за день известно хоть сколько-то калорий (см. tone: об
+    данных пользователя говорим, только когда они это подтверждают)."""
+    if kcal_goal is None or total_kcal is None:
+        return ""
+    left = kcal_goal - total_kcal
+    if left >= 0:
+        return i18n.t("food.goal_remaining", goal=kcal_goal, left=round(left))
+    return i18n.t("food.goal_over", goal=kcal_goal, over=round(-left))
+
+
+def build_food_day_screen(
+    date: dt.date, entries: list[FoodEntryView], kcal_goal: Optional[int] = None
+) -> str:
     """One day of the diary: every meal with its per-item КБЖУ, then the day's total."""
     head = i18n.t("food.day_header", date=format_date_ru(dt.datetime.combine(date, dt.time())))
     if not entries:
-        return i18n.t("food.day_empty", head=head)
+        text = i18n.t("food.day_empty", head=head)
+        goal_line = _goal_line(kcal_goal, 0.0)
+        return f"{text}\n\n{goal_line}" if goal_line else text
 
     def render_entry(i: int, e: FoodEntryView) -> list[str]:
         out = []
@@ -2691,7 +2707,7 @@ def build_food_day_screen(date: dt.date, entries: list[FoodEntryView]) -> str:
                 # быть не должно, последний приём должен идти к ней вплотную.
                 lines.append("")
             lines.extend(block)
-        lines.append(_food_day_footer(entries))
+        lines.append(_food_day_footer(entries, kcal_goal))
         return "\n".join(lines)
 
     # Итоги дня считаются по всем записям, даже если часть не поместилась на
@@ -2705,7 +2721,7 @@ def build_food_day_screen(date: dt.date, entries: list[FoodEntryView]) -> str:
     return text
 
 
-def _food_day_footer(entries: list[FoodEntryView]) -> str:
+def _food_day_footer(entries: list[FoodEntryView], kcal_goal: Optional[int] = None) -> str:
     """Итоговая строка дня плюс подсказка — то, что идёт под списком приёмов."""
     lines: list[str] = []
     known = [e.calories for e in entries if e.calories is not None]
@@ -2725,6 +2741,12 @@ def _food_day_footer(entries: list[FoodEntryView]) -> str:
     if known and len(known) < len(entries):
         total_line += i18n.t("food.without_calories", n=len(entries) - len(known))
     lines.append(total_line)
+    # «Итого» считается только по записям с известными калориями (см. выше) —
+    # цель сверяется с тем же частичным итогом, а не молчит из-за пары
+    # записей без числа.
+    goal_line = _goal_line(kcal_goal, sum(known) if known else None)
+    if goal_line:
+        lines.append(goal_line)
     lines.append("")
     lines.append(i18n.t("food.add_more_hint"))
     return "\n".join(lines)

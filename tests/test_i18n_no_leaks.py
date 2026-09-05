@@ -750,6 +750,15 @@ async def _screen_factcheck(db, user_id: int) -> str:
     return f"{busy}\n{failed}\n{pool}"
 
 
+async def _screen_invite(db, user_id: int) -> str:
+    """«🤝 Пригласить» (handlers/history.py:invite_show) — ссылка в <pre>
+    плюс короткая реплика тренера."""
+    import acquisition
+
+    link = acquisition.referral_link("testbot", user_id)
+    return i18n.t("invite.screen", link=link)
+
+
 def _strip_autonyms(text: str) -> str:
     """Тот же вырез, что и в test_en_catalog_has_no_cyrillic: автоним «Русский»
     в подписи кнопки языка — законная кириллица даже на английском экране."""
@@ -815,6 +824,7 @@ SCREENS: list[tuple[str, object]] = [
     ("ai_trainer_setup_question", _screen_ai_trainer_setup_question),
     ("ai_trainer_thinking_pools", _screen_ai_trainer_thinking_pools),
     ("factcheck_screen", _screen_factcheck),
+    ("invite_screen", _screen_invite),
 ]
 
 # Экраны, которые всё ещё протекают кириллицей мимо каталога. Список

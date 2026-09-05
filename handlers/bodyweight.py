@@ -24,7 +24,7 @@ import keyboards
 import timeutil
 import ui
 from fsm import BodyweightFlow
-from parser import ParseError, bodyweight_warning, parse_bodyweight_entry
+from parser import ParseError, bodyweight_warning, parse_bodyweight, parse_bodyweight_entry
 
 router = Router(name="bodyweight")
 
@@ -201,7 +201,7 @@ async def _render_list(callback: CallbackQuery, state: FSMContext, page: int) ->
     rows = await db.list_bodyweight_logs_page(user_id, limit=size, offset=page * size)
     text = formatting.build_bodyweight_list_screen(rows, user["unit"], page, size, total)
     kb = keyboards.bodyweight_list_keyboard(
-        [r["id"] for r in rows], page, has_next=(page + 1) * size < total
+        rows, user["unit"], page, has_next=(page + 1) * size < total
     )
     await state.set_state(BodyweightFlow.browsing)
     await ui.safe_edit(callback, text, reply_markup=kb, parse_mode="HTML")
@@ -233,6 +233,57 @@ async def bw_delete_record(callback: CallbackQuery, state: FSMContext):
     if page > 0 and page * size >= total:
         page -= 1
     await _render_list(callback, state, page)
+
+
+@router.callback_query(F.data.startswith("bw:editrec:"))
+async def bw_edit_record(callback: CallbackQuery, state: FSMContext):
+    """Открыть правку веса одной записи — тапнули по строке «14.03 · 82.5».
+
+    Без StateFilter, как и bw:delrec: экран «✏️ Записи» может пролежать в
+    чате сколько угодно.
+    """
+    _, _, log_id_s, page_s = callback.data.split(":")
+    log_id, page = int(log_id_s), int(page_s)
+    log = await db.get_bodyweight_log(log_id)
+    if log is None or log["telegram_id"] != callback.from_user.id:
+        await callback.answer(i18n.t("bodyweight.entry_not_found"))
+        await _render_list(callback, state, page)
+        return
+    await state.set_state(BodyweightFlow.editing)
+    await state.update_data(bw_edit_log_id=log_id, bw_edit_page=page)
+    await ui.safe_edit(
+        callback,
+        i18n.t("bodyweight.edit_prompt"),
+        reply_markup=keyboards.cancel_keyboard(f"bw:list:{page}"),
+    )
+    await callback.answer()
+
+
+@router.message(StateFilter(BodyweightFlow.editing), F.text)
+async def bw_edit_weight_entered(message: Message, state: FSMContext):
+    user = await db.get_user(message.from_user.id)
+    try:
+        weight = parse_bodyweight(message.text)
+    except ParseError as e:
+        await ui.reply_transient(message, e.message)
+        return
+    data = await state.get_data()
+    log_id = data.get("bw_edit_log_id")
+    page = data.get("bw_edit_page", 0)
+    updated = await db.update_bodyweight_log(log_id, message.from_user.id, weight)
+    await state.set_state(BodyweightFlow.browsing)
+    if updated:
+        await message.reply(
+            i18n.t("bodyweight.entry_updated", weight=formatting.format_weight(weight), u=formatting.unit_label(user["unit"]))
+        )
+    else:
+        await message.reply(i18n.t("bodyweight.entry_not_found"))
+    size = keyboards.BODYWEIGHT_LIST_PAGE_SIZE
+    total = await db.count_bodyweight_logs(message.from_user.id)
+    rows = await db.list_bodyweight_logs_page(message.from_user.id, limit=size, offset=page * size)
+    text = formatting.build_bodyweight_list_screen(rows, user["unit"], page, size, total)
+    kb = keyboards.bodyweight_list_keyboard(rows, user["unit"], page, has_next=(page + 1) * size < total)
+    await message.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
 def _logged_at_for(date: dt.date | None) -> str | None:

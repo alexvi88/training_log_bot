@@ -464,3 +464,119 @@ async def test_recovery_is_only_for_tracker_buttons(fresh_db, user_id):
     await fallback.unhandled_callback(callback, state)
 
     assert (await state.get_data()).get("workout_id") is None
+
+
+# ---------- голос/фото вне ожидающего состояния — «🤖 Спросить тренера про это» ----------
+
+
+async def _fb_state(user_id: int):
+    from aiogram.fsm.context import FSMContext
+    from aiogram.fsm.storage.base import StorageKey
+    from aiogram.fsm.storage.memory import MemoryStorage
+
+    return FSMContext(
+        storage=MemoryStorage(), key=StorageKey(bot_id=1, chat_id=user_id, user_id=user_id)
+    )
+
+
+async def test_voice_with_no_state_offers_ask_coach_button(user_id):
+    message = MagicMock()
+    message.from_user = SimpleNamespace(id=user_id, language_code=None)
+    message.content_type = ContentType.VOICE
+    message.voice = SimpleNamespace(file_id="voice123", file_size=5000, duration=7)
+    message.message_id = 77
+    message.reply = AsyncMock()
+    state = await _fb_state(user_id)
+
+    await fallback.unhandled_text(message, state)
+
+    message.reply.assert_awaited_once()
+    text, kwargs = message.reply.await_args.args[0], message.reply.await_args.kwargs
+    assert "Не понял" in text
+    kb = kwargs["reply_markup"]
+    assert kb.inline_keyboard[0][0].callback_data == "fb:ask_coach"
+    data = await state.get_data()
+    assert data["fb_media_kind"] == "voice"
+    assert data["fb_file_id"] == "voice123"
+    assert data["fb_file_size"] == 5000
+    assert data["fb_duration"] == 7
+
+
+async def test_photo_with_no_state_offers_ask_coach_button(user_id):
+    message = MagicMock()
+    message.from_user = SimpleNamespace(id=user_id, language_code=None)
+    message.content_type = ContentType.PHOTO
+    message.photo = [SimpleNamespace(file_id="photo123", file_size=9000)]
+    message.caption = "жим лёжа"
+    message.message_id = 78
+    message.reply = AsyncMock()
+    state = await _fb_state(user_id)
+
+    await fallback.unhandled_text(message, state)
+
+    message.reply.assert_awaited_once()
+    data = await state.get_data()
+    assert data["fb_media_kind"] == "photo"
+    assert data["fb_file_id"] == "photo123"
+    assert data["fb_caption"] == "жим лёжа"
+
+
+async def test_fb_ask_coach_dispatches_stored_voice_to_the_ai_handler(user_id, monkeypatch):
+    from fsm import AITrainerFlow
+
+    state = await _fb_state(user_id)
+    await state.update_data(
+        fb_media_kind="voice", fb_file_id="voice123", fb_file_size=5000,
+        fb_duration=7, fb_caption=None, fb_message_id=77,
+    )
+    callback = _callback(user_id, "fb:ask_coach")
+    callback.message.edit_reply_markup = AsyncMock()
+
+    called = {}
+
+    async def fake_ai_voice_question(msg, st):
+        called["file_id"] = msg.voice.file_id
+        called["file_size"] = msg.voice.file_size
+        called["duration"] = msg.voice.duration
+
+    monkeypatch.setattr("handlers.ai_trainer.ai_voice_question", fake_ai_voice_question)
+
+    await fallback.fb_ask_coach(callback, state)
+
+    assert called == {"file_id": "voice123", "file_size": 5000, "duration": 7}
+    assert await state.get_state() == AITrainerFlow.chatting.state
+    # Данные разово потрачены, повторный тап той же кнопки не сработает молча.
+    assert (await state.get_data()).get("fb_file_id") is None
+
+
+async def test_fb_ask_coach_dispatches_stored_photo_to_the_ai_handler(user_id, monkeypatch):
+    state = await _fb_state(user_id)
+    await state.update_data(
+        fb_media_kind="photo", fb_file_id="photo123", fb_file_size=9000,
+        fb_duration=None, fb_caption="жим лёжа", fb_message_id=78,
+    )
+    callback = _callback(user_id, "fb:ask_coach")
+    callback.message.edit_reply_markup = AsyncMock()
+
+    called = {}
+
+    async def fake_ai_photo_question(msg, st):
+        called["file_id"] = msg.photo[-1].file_id
+        called["caption"] = msg.caption
+
+    monkeypatch.setattr("handlers.ai_trainer.ai_photo_question", fake_ai_photo_question)
+
+    await fallback.fb_ask_coach(callback, state)
+
+    assert called == {"file_id": "photo123", "caption": "жим лёжа"}
+
+
+async def test_fb_ask_coach_without_stored_media_answers_expired():
+    callback = _callback(1, "fb:ask_coach")
+    state = MagicMock()
+    state.get_data = AsyncMock(return_value={})
+
+    await fallback.fb_ask_coach(callback, state)
+
+    callback.answer.assert_awaited_once()
+    assert callback.answer.await_args.kwargs.get("show_alert") is True
