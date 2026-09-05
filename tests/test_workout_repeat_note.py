@@ -233,16 +233,49 @@ async def test_voice_logs_a_set(fresh_db, user_id, monkeypatch):
 
     sets = await db.list_sets_for_block(block_id)
     assert (sets[-1]["weight"], sets[-1]["reps"]) == (100.0, 8)
-    assert "Записал" in message.reply.await_args.args[0]
+    # No separate "Записал" message any more — a ✅ reaction on the voice
+    # message itself is the acknowledgement (see _finalize_voice_sets); the
+    # numbers are readable in the re-rendered tracker instead.
+    message.reply.assert_not_awaited()
+    message.bot.set_message_reaction.assert_awaited_once()
+    react = message.bot.set_message_reaction.await_args.kwargs["reaction"]
+    assert react[0].emoji == "✅"
+    assert message.bot.set_message_reaction.await_args.kwargs["chat_id"] == message.chat.id
+    assert message.bot.set_message_reaction.await_args.kwargs["message_id"] == message.message_id
 
 
 @pytest.mark.asyncio
-async def test_voice_reply_target_gone_still_confirms_the_saved_set(fresh_db, user_id, monkeypatch):
-    """Находка 5: if the voice message was deleted mid-transcription, `reply`
-    (and a reply_to send_message) raise TelegramBadRequest — but the sets are
-    already written by then, so the user must still get "Записал", via a
-    plain send_message, instead of an unhandled crash reading as "что-то
-    пошло не так" for a save that actually worked."""
+async def test_voice_record_set_reacts_with_fire(fresh_db, user_id, monkeypatch):
+    """A record beats an ordinary ✅ the same way it does for typed sets: 🔥
+    wins, a message carries only one reaction (see _finalize_voice_sets)."""
+    db = fresh_db
+    state, ex_id, block_id, _ = await _setup_logging(db, user_id)
+    await _finished_baseline(db, user_id, ex_id, 50.0, 5)
+
+    monkeypatch.setattr(ai_trainer, "is_voice_configured", lambda: True)
+
+    async def _fake_transcribe(buf, uid):
+        return "сто на восемь"  # clear e1RM record over the 50x5 baseline
+
+    monkeypatch.setattr(ai_trainer, "transcribe_voice", _fake_transcribe)
+
+    message = _make_message(user_id, text=None)
+    message.voice = SimpleNamespace(file_id="v1", duration=2, file_size=1000)
+    message.bot.download = AsyncMock(return_value=SimpleNamespace(name=""))
+
+    await workout.log_set_voice(message, state)
+
+    message.bot.set_message_reaction.assert_awaited_once()
+    react = message.bot.set_message_reaction.await_args.kwargs["reaction"]
+    assert react[0].emoji == "🔥"
+
+
+@pytest.mark.asyncio
+async def test_voice_reaction_failure_does_not_break_logging(fresh_db, user_id, monkeypatch):
+    """Reactions can be unavailable in some chats — a TelegramBadRequest from
+    set_message_reaction must not stop the set from being saved or the
+    tracker from re-rendering (suppress(TelegramBadRequest) in
+    _finalize_voice_sets)."""
     db = fresh_db
     state, ex_id, block_id, _ = await _setup_logging(db, user_id)
 
@@ -256,23 +289,14 @@ async def test_voice_reply_target_gone_still_confirms_the_saved_set(fresh_db, us
     message = _make_message(user_id, text=None)
     message.voice = SimpleNamespace(file_id="v1", duration=2, file_size=1000)
     message.bot.download = AsyncMock(return_value=SimpleNamespace(name=""))
-    message.reply = AsyncMock(
-        side_effect=TelegramBadRequest(method=MagicMock(), message="message to reply not found")
+    message.bot.set_message_reaction = AsyncMock(
+        side_effect=TelegramBadRequest(method=MagicMock(), message="reactions not available")
     )
 
     await workout.log_set_voice(message, state)
 
     sets = await db.list_sets_for_block(block_id)
     assert (sets[-1]["weight"], sets[-1]["reps"]) == (100.0, 8)  # the set was saved
-    message.reply.assert_awaited()
-    # Fell back to a plain send_message instead of raising (the tracker
-    # re-render sends its own message too, so scan every call rather than
-    # assuming this is the last one).
-    texts = [
-        call.kwargs.get("text") or (call.args[1] if len(call.args) > 1 else None)
-        for call in message.bot.send_message.await_args_list
-    ]
-    assert any(t and "Записал" in t for t in texts)
 
 
 @pytest.mark.asyncio

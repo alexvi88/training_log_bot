@@ -87,3 +87,21 @@ async def test_hist_card_carries_referral_link(fresh_db, user_id):
     kb = callback.message.answer_photo.await_args.kwargs["reply_markup"]
     urls = [b.url for row in kb.inline_keyboard for b in row if b.url]
     assert urls == [acquisition.referral_link(BOT_USERNAME, user_id)]
+
+
+async def test_hist_card_also_carries_a_copy_button_for_the_same_link(fresh_db, user_id):
+    """Картинку не всегда пересылают тапом по URL-кнопке — иногда её несут в чат,
+    где ссылку удобнее вставить самому (заметки себе, чат без превью). Кнопка
+    копии обязана нести ровно ту же ссылку, что и URL-кнопка рядом."""
+    db = fresh_db
+    workout_id = await _finished_workout_with_set(db, user_id)
+    callback = _make_callback(user_id, f"hist:card:{workout_id}")
+
+    await history.hist_card(callback, await _make_state(user_id))
+
+    kb = callback.message.answer_photo.await_args.kwargs["reply_markup"]
+    copies = [b.copy_text.text for row in kb.inline_keyboard for b in row if b.copy_text]
+    link = acquisition.referral_link(BOT_USERNAME, user_id)
+    assert copies == [link]
+    # Лимит Bot API на copy_text — 256 символов; ссылка обязана в него влезать.
+    assert len(link) <= 256

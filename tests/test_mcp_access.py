@@ -88,6 +88,8 @@ async def test_issue_shows_the_whole_token(fresh_db, user_id):
 
     token = (await fresh_db.get_mcp_token(user_id))["token"]
     assert token in _sent_text(callback)
+    # Кнопка-копия несёт тот же токен, что и в <pre> — не обрезанный и не чужой.
+    assert _copy_values(callback.message.answer.call_args.kwargs["reply_markup"]) == [token]
 
 
 async def test_reissue_replaces_the_old_token_on_screen(fresh_db, user_id):
@@ -103,6 +105,9 @@ async def test_reissue_replaces_the_old_token_on_screen(fresh_db, user_id):
     text = _sent_text(again)
     assert second in text
     assert first not in text
+    # Кнопка-копия перерисовывается вместе с текстом: несёт новый токен, а не
+    # прежний, который только что умер.
+    assert _copy_values(again.message.answer.call_args.kwargs["reply_markup"]) == [second]
     # Про смерть прежнего токена человеку говорят явно — иначе он не поймёт,
     # почему настроенный вчера клиент вдруг отвалился.
     assert again.answer.call_args.kwargs.get("show_alert") is True
@@ -156,6 +161,23 @@ def _rows(kb) -> list[list[str]]:
     return [[b.callback_data for b in row] for row in kb.inline_keyboard]
 
 
+def _copy_values(kb) -> list[str]:
+    """Значения за кнопками-копиями (Bot API `copy_text`), в порядке появления —
+    те же кнопки не несут `callback_data`, поэтому `_buttons`/`_rows` их не видят."""
+    return [
+        b.copy_text.text
+        for row in kb.inline_keyboard
+        for b in row
+        if b.copy_text is not None
+    ]
+
+
+def _nav_buttons(kb) -> list[str]:
+    """Только кнопки навигации (с `callback_data`) — без кнопок-копий, у которых
+    его нет вовсе."""
+    return [b.callback_data for row in kb.inline_keyboard for b in row if b.callback_data is not None]
+
+
 def test_connector_path_is_offered_without_any_token():
     """Коннектор доступен сразу и всем: код связывания и инструкции под Claude с
     ChatGPT токена не требуют, и прятать их за «сначала выдай токен» значило бы
@@ -199,6 +221,15 @@ def test_the_screen_is_grouped_into_rows_not_one_long_column():
     assert max(len(row) for row in rows) == 2
 
 
+def test_the_token_copy_button_carries_the_token_and_only_appears_with_one():
+    """Кнопка-копия — под самим токеном: без него (has_token=False) копировать
+    нечего, а без значения (token=None) кнопку не рисуем даже при has_token=True
+    — вызывающий код мог его ещё не подгрузить."""
+    assert _copy_values(keyboards.mcp_keyboard(False)) == []
+    assert _copy_values(keyboards.mcp_keyboard(True)) == []
+    assert _copy_values(keyboards.mcp_keyboard(True, token="abc123")) == ["abc123"]
+
+
 def test_connected_apps_appear_only_when_there_is_something_to_disconnect():
     assert "mcp:apps" not in _buttons(keyboards.mcp_keyboard(True, False))
     assert "mcp:apps" in _buttons(keyboards.mcp_keyboard(True, True))
@@ -220,10 +251,13 @@ async def test_the_terminal_guide_still_offers_the_token_when_there_is_one(fresh
     text = _sent_text(callback)
     assert token in text
     assert "https://training-log.example.com/mcp" in text
-    assert _buttons(callback.message.answer.call_args.kwargs["reply_markup"]) == [
-        "mcp:how:claude_code:new",
-        "mcp:open",
-    ]
+    kb = callback.message.answer.call_args.kwargs["reply_markup"]
+    assert _nav_buttons(kb) == ["mcp:how:claude_code:new", "mcp:open"]
+    # Claude Code показывает адрес только внутри команды для терминала — своей
+    # кнопки-копии под голый адрес тут нет, только под код связывания.
+    cur = await fresh_db.conn().execute("SELECT code FROM oauth_link_codes WHERE user_id = ?", (user_id,))
+    code = (await cur.fetchone())["code"]
+    assert _copy_values(kb) == [code]
 
 
 @pytest.mark.parametrize("kind", sorted(mcp_access.OAUTH_GUIDES))
@@ -245,11 +279,14 @@ async def test_connector_guide_carries_the_code_on_the_same_screen(fresh_db, use
     code = (await cur.fetchone())["code"]
     assert code in text
     assert "https://training-log.example.com/mcp" in text
+    kb = callback.message.answer.call_args.kwargs["reply_markup"]
     # «Новый код» перерисовывает эту же инструкцию, а не уводит на третий экран.
-    assert _buttons(callback.message.answer.call_args.kwargs["reply_markup"]) == [
-        f"mcp:how:{kind}:new",
-        "mcp:open",
-    ]
+    assert _nav_buttons(kb) == [f"mcp:how:{kind}:new", "mcp:open"]
+    # Копии — тем же значениям, что показаны в <pre>: адрес есть у всех, кроме
+    # Claude Code (там он только внутри команды для терминала), код — у всех.
+    expected_copies = [] if kind == "claude_code" else ["https://training-log.example.com/mcp"]
+    expected_copies.append(code)
+    assert _copy_values(kb) == expected_copies
 
 
 @pytest.mark.parametrize("kind", sorted(mcp_access.OAUTH_GUIDES))
@@ -353,6 +390,10 @@ async def test_the_link_code_screen_shows_six_digits_and_the_address(fresh_db, u
     # Срок берётся из константы, а не вписан числом: разъехавшийся с кодом текст
     # обманывает человека ровно в тот момент, когда он ждёт «ещё успею».
     assert mcp_access._code_ttl() in text
+    # Обе кнопки-копии несут те же значения, что в <pre> — код впереди адреса,
+    # как в самом тексте экрана.
+    kb = callback.message.answer.call_args.kwargs["reply_markup"]
+    assert _copy_values(kb) == [code, "https://training-log.example.com/mcp"]
 
 
 async def test_a_new_code_button_replaces_the_previous_code(fresh_db, user_id):

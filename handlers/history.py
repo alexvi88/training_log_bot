@@ -9,7 +9,13 @@ from aiogram import F, Router
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton, Message
+from aiogram.types import (
+    BufferedInputFile,
+    CallbackQuery,
+    CopyTextButton,
+    InlineKeyboardButton,
+    Message,
+)
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import achievement_sync
@@ -398,12 +404,12 @@ async def hist_card(callback: CallbackQuery, state: FSMContext):
     # (тот же приём, что у визиток, см. handlers/sharing.py). Картинку уносят в
     # чат с друзьями, и там она перестаёт быть просто картинкой: по ссылке в ней
     # видно, кто привёл человека (acquisition.SOURCE_REFERRAL).
-    kb.button(
-        text=i18n.t("history.share_card_cta"),
-        url=acquisition.referral_link(
-            await sharing.get_bot_username(callback.bot), callback.from_user.id
-        ),
-    )
+    link = acquisition.referral_link(await sharing.get_bot_username(callback.bot), callback.from_user.id)
+    kb.button(text=i18n.t("history.share_card_cta"), url=link)
+    # Вторая кнопка — та же ссылка, но копией: картинку пересылают куда угодно,
+    # не только тапом по URL-кнопке — в чат, где ссылки превью не разворачивают,
+    # или в заметки себе, — и там её нужно вставить самому.
+    kb.button(text=i18n.t("history.share_card_copy"), copy_text=CopyTextButton(text=link))
     kb.button(text=i18n.t("history.back_to_workout_button"), callback_data=f"hist:item:{workout_id}")
     kb.adjust(1)
     await callback.message.answer_photo(

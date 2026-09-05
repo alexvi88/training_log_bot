@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -695,6 +696,64 @@ async def test_typed_food_goes_to_model_and_shows_confirmation(user_id, monkeypa
     # вопрос "Всё верно?" отдельной строкой убран — кнопки под карточкой сами
     # спрашивают то же самое
     assert "Всё верно?" not in placeholder.edit_text.call_args.args[0]
+
+
+async def test_typed_food_reacts_to_the_message_immediately(user_id, monkeypatch):
+    """👀 lands on the user's own message right away — an instant "заметил",
+    independent of the "🤔 Разбираю…" placeholder that still turns into the
+    card by editing (see _analyze_and_show)."""
+    monkeypatch.setattr(food_diary.timeutil, "user_today", lambda user: dt.date(2026, 7, 20))
+    monkeypatch.setattr(food_diary.ai_trainer, "is_configured", lambda: True)
+
+    async def fake_analyze(uid, text="", image_data_url=None, previous=None, correction="", with_macros=True):
+        return {
+            "description": "Овсянка", "items": [], "calories": 300,
+            "protein": 9, "fat": 6, "carbs": 62, "comment": "",
+        }
+
+    monkeypatch.setattr(food_diary.ai_trainer, "analyze_food", fake_analyze)
+
+    state = await _make_state(user_id)
+    await state.set_state(FoodDiaryFlow.viewing)
+    await state.update_data(fd_date="2026-07-20", fd_screen_id=999)
+    message = _make_message(user_id, text="овсянка")
+
+    await food_diary.fd_text_entry(message, state)
+
+    message.bot.set_message_reaction.assert_awaited_once()
+    kwargs = message.bot.set_message_reaction.await_args.kwargs
+    assert kwargs["chat_id"] == message.chat.id
+    assert kwargs["message_id"] == message.message_id
+    assert kwargs["reaction"][0].emoji == "👀"
+
+
+async def test_reaction_failure_does_not_break_food_analysis(user_id, monkeypatch):
+    """Reactions can be unavailable in some chats — a TelegramBadRequest from
+    set_message_reaction must not stop the analysis or the confirmation card."""
+    monkeypatch.setattr(food_diary.timeutil, "user_today", lambda user: dt.date(2026, 7, 20))
+    monkeypatch.setattr(food_diary.ai_trainer, "is_configured", lambda: True)
+
+    async def fake_analyze(uid, text="", image_data_url=None, previous=None, correction="", with_macros=True):
+        return {
+            "description": "Овсянка", "items": [], "calories": 300,
+            "protein": 9, "fat": 6, "carbs": 62, "comment": "",
+        }
+
+    monkeypatch.setattr(food_diary.ai_trainer, "analyze_food", fake_analyze)
+
+    state = await _make_state(user_id)
+    await state.set_state(FoodDiaryFlow.viewing)
+    await state.update_data(fd_date="2026-07-20", fd_screen_id=999)
+    message = _make_message(user_id, text="овсянка")
+    message.bot.set_message_reaction = AsyncMock(
+        side_effect=TelegramBadRequest(method=MagicMock(), message="reactions not available")
+    )
+
+    await food_diary.fd_text_entry(message, state)
+
+    assert await state.get_state() == FoodDiaryFlow.confirming.state
+    placeholder = message.answer.return_value
+    assert "Овсянка" in placeholder.edit_text.call_args.args[0]
 
 
 async def test_model_failure_keeps_the_diary_usable(user_id, monkeypatch):

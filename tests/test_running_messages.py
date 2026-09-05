@@ -168,6 +168,8 @@ async def _make_state(user_id: int) -> FSMContext:
 def _make_chat_message(user_id: int, text: str):
     message = MagicMock()
     message.text = text
+    message.chat = SimpleNamespace(id=user_id)
+    message.message_id = 1
     message.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
     message.reply = AsyncMock()
     placeholder = MagicMock()
@@ -175,7 +177,9 @@ def _make_chat_message(user_id: int, text: str):
     placeholder.chat = SimpleNamespace(id=user_id)
     placeholder.message_id = 9
     message.answer = AsyncMock(return_value=placeholder)
-    message.bot = MagicMock()
+    # AsyncMock, not MagicMock: _handle_question awaits bot.set_message_reaction
+    # (the 👀 acknowledgement) on every question.
+    message.bot = AsyncMock()
     return message
 
 

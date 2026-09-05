@@ -1,6 +1,20 @@
 import keyboards
 
 
+def test_persistent_menu_has_no_placeholder_by_default():
+    kb = keyboards.persistent_menu()
+    assert kb.input_field_placeholder is None
+
+
+def test_persistent_menu_placeholder_does_not_change_the_button_set():
+    """The hint lives in input_field_placeholder, not in a fourth button — the
+    button set (and PERSISTENT_MENU_VERSION) must stay identical either way."""
+    plain = keyboards.persistent_menu()
+    hinted = keyboards.persistent_menu(placeholder="100 8 — вес и повторы")
+    assert hinted.input_field_placeholder == "100 8 — вес и повторы"
+    assert hinted.keyboard == plain.keyboard
+
+
 def test_ai_trainer_keyboard_default_layout():
     kb = keyboards.ai_trainer_keyboard()
     rows = kb.inline_keyboard
