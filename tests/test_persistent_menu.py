@@ -216,7 +216,16 @@ async def test_workout_button_starts_immediately_and_interrupts_state(fresh_db, 
     assert active is not None
     assert await state.get_state() == WorkoutFlow.picking_group.state
     assert message.delete.await_count == 1
-    assert "Тренировка начата" in message.answer.await_args.args[0]
+    started_call = message.answer.await_args
+    assert "Тренировка начата" in started_call.args[0]
+    # The "Тренировка начата" send is also where the input-field hint for
+    # logging a set ("100 8 — вес и повторы") gets attached — this is the one
+    # message that becomes the live tracker and is edited in place from here
+    # on, never deleted+resent within this same turn (see
+    # keyboards.persistent_menu's docstring).
+    kb = started_call.kwargs["reply_markup"]
+    assert isinstance(kb, ReplyKeyboardMarkup)
+    assert kb.input_field_placeholder == "100 8 — вес и повторы"
 
 
 async def test_workout_button_resumes_existing_workout(fresh_db, user_id):
@@ -230,6 +239,51 @@ async def test_workout_button_resumes_existing_workout(fresh_db, user_id):
 
     data = await state.get_data()
     assert data["workout_id"] == workout_id
+
+
+async def test_resuming_active_workout_with_an_open_exercise_reattaches_the_placeholder(
+    fresh_db, user_id
+):
+    """Resuming into a workout that still has an open exercise (_enter_live's
+    logging_set branch) re-sends the same "100 8" hint as starting fresh —
+    it's the same carrier message (see keyboards.persistent_menu)."""
+    workout_id = await fresh_db.create_workout(user_id)
+    group_id = await fresh_db.create_muscle_group(user_id, "Грудь")
+    ex_id = await fresh_db.create_exercise(user_id, "Жим лёжа", group_id)
+    block_id = await fresh_db.create_block(workout_id, "single")
+    await fresh_db.add_block_exercise(block_id, ex_id, 0)
+
+    message = _make_message(user_id)
+    message.text = keyboards.BTN_WORKOUT
+    message.bot.edit_message_text = AsyncMock()
+    state = await _make_state(user_id)
+
+    await persistent_menu.persistent_workout_button(message, state)
+
+    placeholder_calls = [
+        call for call in message.answer.await_args_list
+        if isinstance(call.kwargs.get("reply_markup"), ReplyKeyboardMarkup)
+    ]
+    assert len(placeholder_calls) == 1
+    assert placeholder_calls[0].kwargs["reply_markup"].input_field_placeholder == "100 8 — вес и повторы"
+
+
+async def test_resuming_an_empty_workout_does_not_hint_at_the_idle_picker(fresh_db, user_id):
+    """No exercise open yet (still picking one) — the "100 8" hint would be
+    premature, so the carrier is re-sent without a placeholder."""
+    await fresh_db.create_workout(user_id)
+    message = _make_message(user_id)
+    message.text = keyboards.BTN_WORKOUT
+    state = await _make_state(user_id)
+
+    await persistent_menu.persistent_workout_button(message, state)
+
+    placeholder_calls = [
+        call for call in message.answer.await_args_list
+        if isinstance(call.kwargs.get("reply_markup"), ReplyKeyboardMarkup)
+    ]
+    assert len(placeholder_calls) == 1
+    assert placeholder_calls[0].kwargs["reply_markup"].input_field_placeholder is None
 
 
 async def test_ai_button_opens_ai_trainer_when_configured(fresh_db, user_id):

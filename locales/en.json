@@ -1288,6 +1288,7 @@
   "workout.set_added": "➕ {set}",
   "workout.set_deleted": "Deleted the set",
   "workout.set_index_not_found": "No set #{index} — there are only {total} logged so far.",
+  "workout.set_input_placeholder": "100 8 — weight and reps",
   "workout.set_not_found": "Set not found",
   "workout.since_last_time": "last time it was",
   "workout.since_today": "today it was",

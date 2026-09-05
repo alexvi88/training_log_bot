@@ -108,7 +108,22 @@ BTN_AI = _ReplyButtonMatch("btn.persistent.ai")
 PERSISTENT_MENU_VERSION = 3
 
 
-def persistent_menu() -> ReplyKeyboardMarkup:
+def persistent_menu(placeholder: str | None = None) -> ReplyKeyboardMarkup:
+    """placeholder: a contextual hint shown INSIDE the empty input field (Telegram's
+    `input_field_placeholder`, 1-64 chars) — not a chat message, so it costs nothing
+    and disappears the moment the user starts typing. None keeps Telegram's own
+    default (no hint), which is what every non-contextual call site wants: the
+    button set below is identical either way, so this never touches
+    PERSISTENT_MENU_VERSION.
+
+    Only pass one from a spot that is ALREADY sending a fresh message and is
+    never itself deleted afterward by our own code — see the callers in
+    handlers/workout.py for why the live tracker's very first send qualifies
+    while its own later redraws don't. Attaching this to a message that later
+    gets programmatically deleted risks the exact Android carrier-delete bug
+    described above PERSISTENT_MENU_VERSION: re-sending the reply keyboard is
+    only safe on a carrier that survives.
+    """
     return ReplyKeyboardMarkup(
         keyboard=[
             [
@@ -119,6 +134,7 @@ def persistent_menu() -> ReplyKeyboardMarkup:
         ],
         resize_keyboard=True,
         is_persistent=True,
+        input_field_placeholder=placeholder,
     )
 
 

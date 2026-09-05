@@ -1289,6 +1289,7 @@
   "workout.set_added": "➕ {set}",
   "workout.set_deleted": "Удалил подход",
   "workout.set_index_not_found": "Нет подхода №{index} — в дневнике их пока {total}.",
+  "workout.set_input_placeholder": "100 8 — вес и повторы",
   "workout.set_not_found": "Подход не найден",
   "workout.since_last_time": "в прошлый раз",
   "workout.since_today": "сегодня",
