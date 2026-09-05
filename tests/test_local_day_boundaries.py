@@ -185,8 +185,6 @@ async def test_tonnage_since_counts_from_the_local_boundary(fresh_db, user_id):
     await _session(db, user_id, "2026-07-19T22:00:00", [(bench, 100, 5, 1)])  # 20 июля местных
 
     assert await db.tonnage_since(user_id, "2026-07-20") == 500.0
-    rollup = await db.weekly_exercise_rollup(user_id, "2026-07-20")
-    assert [r["sets_count"] for r in rollup] == [1]
 
 
 async def test_recent_programs_window_starts_at_a_local_day(fresh_db, user_id):

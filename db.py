@@ -6317,37 +6317,6 @@ async def backup_to_file(dest_path: str) -> None:
 
 # ---------- push notifications ----------
 
-async def weekly_exercise_rollup(
-    user_id: int, since_date: str, *, tz_offset: Optional[int] = None
-) -> list[aiosqlite.Row]:
-    """Per exercise since `since_date`: best set, its reps, total tonnage and
-    set count — one row per exercise, heaviest tonnage first.
-
-    Feeds the weekly summary table (see formatting.build_weekly_summary), so
-    it's one query rather than a walk over every workout of the week.
-
-    `since_date` — граница суток по местному времени (дата или дата с T00:00:00),
-    поэтому сравнение идёт по местному дню тренировки: иначе тренировка вечера
-    понедельника не попадала в таблицу той недели, которую сама же и открывала,
-    хотя в счётчике тренировок рядом уже была.
-    """
-    day = _local_day("w.started_at", await _tz_offset_of(user_id, tz_offset))
-    cur = await conn().execute(
-        "SELECT e.display_name AS name, "
-        f"       MAX({LOAD_WEIGHT_SQL}) AS top_weight, "
-        "       SUM(COALESCE(s.load_weight, s.weight) * s.reps) AS tonnage, "
-        "       COUNT(s.id) AS sets_count "
-        "FROM sets s "
-        "JOIN workout_blocks b ON b.id = s.block_id "
-        "JOIN workouts w ON w.id = b.workout_id "
-        "JOIN exercises e ON e.id = s.exercise_id "
-        f"WHERE w.user_id = ? AND w.status = 'finished' AND {day} >= date(?) AND s.reps > 0 "
-        "GROUP BY e.id ORDER BY tonnage DESC",
-        (user_id, since_date),
-    )
-    return await cur.fetchall()
-
-
 async def exercise_history_spans(
     user_id: int, *, tz_offset: Optional[int] = None
 ) -> list[aiosqlite.Row]:
