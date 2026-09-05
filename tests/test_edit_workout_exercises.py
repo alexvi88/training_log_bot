@@ -111,7 +111,7 @@ async def test_removing_someone_elses_exercise_is_rejected(fresh_db, user_id):
     callback = _make_callback(user_id, f"editw:rmex:{block_id}")
     await edit_workout.editw_remove_exercise(callback, state)
 
-    callback.answer.assert_awaited_once_with("Упражнение не найдено", show_alert=True)
+    callback.answer.assert_awaited_once_with("Не нашёл это упражнение — экран устарел. Вернись назад и открой заново", show_alert=True)
     assert len(await db.list_sets_for_block(block_id)) == 1  # untouched
 
 

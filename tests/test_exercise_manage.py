@@ -544,7 +544,7 @@ async def test_card_layout_is_prog_edit_share_archive_back():
     _text, kb = exercises._exercise_detail_view(ex, with_info=False)
     rows = kb.inline_keyboard
     assert [b.text for b in rows[0]] == ["📈 Прогресс", "✏️ Редактировать"]
-    assert [b.text for b in rows[1]] == ["📤 Поделиться", "🗑 Архивировать"]
+    assert [b.text for b in rows[1]] == ["📤 Поделиться", "🗄 Архивировать"]
     assert [b.text for row in rows[2:] for b in row] == ["⬅️ Назад"]
 
 

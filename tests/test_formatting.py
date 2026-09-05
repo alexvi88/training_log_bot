@@ -624,7 +624,7 @@ def _weighted_session(workout_id, started_at, sets):
 
 def test_format_progress_screen_no_sessions():
     text = formatting.format_progress_screen("Жим лёжа", [], None, analytics.PersonalRecords())
-    assert "Пока нет завершённых тренировок" in text
+    assert "тренировок пока нет" in text
 
 
 def test_format_progress_screen_shows_each_sessions_own_note():
@@ -945,14 +945,14 @@ def test_history_list_keeps_a_full_page_well_inside_the_message_cap():
 
 
 def test_history_list_empty_state():
-    assert formatting.build_history_list([]) == "Пока нет завершённых тренировок."
+    assert "пока пусто" in formatting.build_history_list([])
     assert formatting.build_history_list([], empty="ничего") == "ничего"
 
 
 def test_history_list_marks_a_workout_with_no_exercises():
     entries = [(dt.datetime(2026, 7, 26, 13), [], 0)]
     text = formatting.build_history_list(entries)
-    assert "пусто" in text
+    assert "без упражнений" in text
     assert "сет" not in text  # no set count when there are none
 
 
