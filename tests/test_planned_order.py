@@ -198,7 +198,7 @@ async def test_plan_screen_lists_everything_left_by_name_only(fresh_db, user_id)
     cb = _make_callback(user_id, "live:plan")
     await workout.live_plan(cb, state)
     kb = _last_keyboard(cb)
-    assert _button_texts(kb) == ["Разводка", "Брусья", "✕ Убрать из плана", "⬅️ Назад"]
+    assert _button_texts(kb) == ["Разводка", "Брусья", "🗑 Убрать из плана", "⬅️ Назад"]
     assert _callback_datas(kb) == [
         "live:plan:pick:0", "live:plan:pick:1", "live:plan:rm", "live:plan:back",
     ]

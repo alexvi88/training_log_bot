@@ -255,10 +255,10 @@ async def test_toggle_labels_share_one_first_person_verb_construction():
     assert "🎯 Подсказки прогрессии: молчу" in off_texts
     assert "🔔 Пуши: шлю" in on_texts
     assert "🔕 Пуши: молчу" in off_texts
-    assert "🤖 Комментарии AI-тренера: комментирую" in on_texts
-    assert "🤖 Комментарии AI-тренера: молчу" in off_texts
-    assert "🔢 КБЖУ в дневнике питания: считаю" in on_texts
-    assert "📝 КБЖУ в дневнике питания: не считаю" in off_texts
+    assert "🤖 Комментарии тренера: комментирую" in on_texts
+    assert "🤖 Комментарии тренера: молчу" in off_texts
+    assert "🔢 КБЖУ: считаю" in on_texts
+    assert "📝 КБЖУ: не считаю" in off_texts
     # Раньше «Карточка тренировки: подробно/компактно» не говорило, что именно
     # переключается — это строка e1RM на итоговой карточке.
     assert "📊 e1RM на карточке: показываю" in on_texts
