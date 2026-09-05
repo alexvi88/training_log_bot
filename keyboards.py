@@ -3,7 +3,13 @@
 import datetime as dt
 from typing import Any, Optional, Sequence
 
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
+from aiogram.types import (
+    CopyTextButton,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardMarkup,
+)
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import formatting
@@ -1694,7 +1700,9 @@ MCP_SECOND_ROW_CLIENTS = [
 MCP_CLIENTS = MCP_OAUTH_CLIENTS + MCP_SECOND_ROW_CLIENTS
 
 
-def mcp_keyboard(has_token: bool, has_connections: bool = False) -> InlineKeyboardMarkup:
+def mcp_keyboard(
+    has_token: bool, has_connections: bool = False, token: str | None = None
+) -> InlineKeyboardMarkup:
     """Экран /mcp: сверху простой путь, ниже — токен для терминала.
 
     Порядок ровно такой, потому что подключение коннектором доступно всем и
@@ -1706,6 +1714,11 @@ def mcp_keyboard(has_token: bool, has_connections: bool = False) -> InlineKeyboa
     Кнопки разложены по рядам, а не столбиком: девять штук в одну колонку — это
     простыня, в которой глазу не за что зацепиться, хотя группы очевидны
     (клиенты / код и приложения / токен). Парами они читаются как три раздела.
+
+    `token` — значение для кнопки-копирования: экран показывает токен целиком в
+    `<pre>`, но копия одним тапом (Bot API `copy_text`) надёжнее выделения
+    мышью или тапа по блоку кода. Без значения (токена ещё не выдали) кнопки
+    нет — копировать нечего.
     """
     b = InlineKeyboardBuilder()
     # Claude один на браузер и приложение — путь там ровно один и тот же, и второй
@@ -1739,6 +1752,12 @@ def mcp_keyboard(has_token: bool, has_connections: bool = False) -> InlineKeyboa
             InlineKeyboardButton(text=i18n.t("btn.reissue"), callback_data="mcp:issue"),
             InlineKeyboardButton(text=i18n.t("btn.revoke"), callback_data="mcp:revoke"),
         )
+        if token:
+            b.row(
+                InlineKeyboardButton(
+                    text=i18n.t("btn.copy_token"), copy_text=CopyTextButton(text=token)
+                )
+            )
     else:
         b.row(
             InlineKeyboardButton(
@@ -1749,30 +1768,61 @@ def mcp_keyboard(has_token: bool, has_connections: bool = False) -> InlineKeyboa
     return b.as_markup()
 
 
-def mcp_guide_keyboard(code_kind: str | None = None) -> InlineKeyboardMarkup:
-    """Экран инструкции: назад к списку клиентов.
+def mcp_guide_keyboard(
+    code_kind: str | None = None, *, address: str | None = None, code: str | None = None
+) -> InlineKeyboardMarkup:
+    """Экран инструкции: копии значений из `<pre>`, потом назад к списку клиентов.
 
     `code_kind` — вид инструкции, на которой показан код связывания. Тогда сверху
     появляется «🔄 Новый код», и он перерисовывает эту же инструкцию: истёкший код
     — обычный исход, и лечиться он должен на месте, а не походом на другой экран.
+
+    `address`/`code` — значения, которые на этом экране показаны как отдельный
+    `<pre>`-блок (а не спрятаны внутри команды для терминала): у Claude Code
+    адрес есть только внутри `claude mcp add ...`, и отдельной кнопки под него
+    поэтому нет — копия всей команды и так на месте, во встроенной кнопке блока
+    кода.
     """
     b = InlineKeyboardBuilder()
+    # Порядок копий — как в тексте самой инструкции: адрес называют раньше кода.
+    if address:
+        b.row(
+            InlineKeyboardButton(
+                text=i18n.t("btn.copy_address"), copy_text=CopyTextButton(text=address)
+            )
+        )
+    if code:
+        b.row(
+            InlineKeyboardButton(
+                text=i18n.t("btn.copy_code"), copy_text=CopyTextButton(text=code)
+            )
+        )
     if code_kind:
         # Суффикс :new — чтобы просто вернуться на этот экран можно было, не
         # трогая код: человек мог его уже скопировать и зайти перечитать шаг.
-        b.button(text=i18n.t("btn.new_code"), callback_data=f"mcp:how:{code_kind}:new")
-    b.button(text=i18n.t("btn.to_connection"), callback_data="mcp:open")
-    b.adjust(1)
+        b.row(InlineKeyboardButton(text=i18n.t("btn.new_code"), callback_data=f"mcp:how:{code_kind}:new"))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.to_connection"), callback_data="mcp:open"))
     return b.as_markup()
 
 
-def mcp_code_keyboard() -> InlineKeyboardMarkup:
+def mcp_code_keyboard(*, address: str | None = None, code: str | None = None) -> InlineKeyboardMarkup:
     """Экран кода без инструкции — для тех, у кого страница подтверждения уже
     открыта. «Новый код» тут же: код живёт минуты."""
     b = InlineKeyboardBuilder()
-    b.button(text=i18n.t("btn.new_code"), callback_data="mcp:code")
-    b.button(text=i18n.t("btn.to_connection"), callback_data="mcp:open")
-    b.adjust(1)
+    if code:
+        b.row(
+            InlineKeyboardButton(
+                text=i18n.t("btn.copy_code"), copy_text=CopyTextButton(text=code)
+            )
+        )
+    if address:
+        b.row(
+            InlineKeyboardButton(
+                text=i18n.t("btn.copy_address"), copy_text=CopyTextButton(text=address)
+            )
+        )
+    b.row(InlineKeyboardButton(text=i18n.t("btn.new_code"), callback_data="mcp:code"))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.to_connection"), callback_data="mcp:open"))
     return b.as_markup()
 
 

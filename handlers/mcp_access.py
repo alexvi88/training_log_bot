@@ -224,7 +224,7 @@ async def _show(target, state: FSMContext, alert: str | None = None) -> None:
     # Профиль нужен ровно за таймзоной: даты в базе серверные, а сверяет их
     # человек со своими часами.
     text = _screen_text(row, connections, await db.get_user(user.id))
-    kb = keyboards.mcp_keyboard(row is not None, bool(connections))
+    kb = keyboards.mcp_keyboard(row is not None, bool(connections), token=row["token"] if row else None)
     if is_callback:
         await ui.safe_edit(target, text, reply_markup=kb, parse_mode="HTML")
         await target.answer(alert, show_alert=bool(alert))
@@ -277,10 +277,14 @@ async def mcp_guide(callback: CallbackQuery, state: FSMContext):
     # ломается, он нужен только в хвосте про скрипты и облачные сессии.
     row = await db.get_mcp_token(callback.from_user.id)
     token = row["token"] if row else None
+    # Адрес отдельной кнопкой — только там, где он показан отдельным блоком, а не
+    # спрятан внутри команды для терминала: у Claude Code адрес есть только
+    # внутри `claude mcp add ...` (см. keyboards.mcp_guide_keyboard).
+    address = _server_url() if kind != "claude_code" else None
     await ui.safe_edit(
         callback,
         guide[1](token, code),
-        reply_markup=keyboards.mcp_guide_keyboard(kind if code else None),
+        reply_markup=keyboards.mcp_guide_keyboard(kind if code else None, address=address, code=code),
         parse_mode="HTML",
     )
     await callback.answer()
@@ -302,7 +306,7 @@ async def mcp_code(callback: CallbackQuery, state: FSMContext):
             "mcp.code_screen",
             code=_copyable(code), ttl=_code_ttl(), address=_copyable(_server_url()),
         ),
-        reply_markup=keyboards.mcp_code_keyboard(),
+        reply_markup=keyboards.mcp_code_keyboard(address=_server_url(), code=code),
         parse_mode="HTML",
     )
     await callback.answer()
