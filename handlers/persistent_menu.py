@@ -56,7 +56,15 @@ async def attach_silently(message: Message, user_id: int) -> None:
     поднята к моменту СЛЕДУЮЩЕГО апдейта. Отложить вызов на один тап (например,
     за кнопку в онбординге) — значит получить «⌨️ Обновил меню» на этом тапе,
     ровно там, где его быть не должно.
+
+    Читает input_hint_hidden из базы сама, а не берёт булев параметр: не все
+    вызывающие (например, settings_language_set — смена языка УЖЕ заведённым
+    атлетом) держат под рукой свежую строку пользователя, а версия карусели
+    не должна вернуть подсказку тому, кто её уже перерос (см. keyboards.
+    persistent_menu).
     """
+    user = await db.get_user(user_id)
+    show_hint = not (user and user["input_hint_hidden"])
     with suppress(TelegramBadRequest):
         # Подставляем те же три подписи, что и на самой клавиатуре
         # (keyboards.BTN_WORKOUT/BTN_MENU/BTN_AI), а не переписываем их здесь
@@ -69,7 +77,7 @@ async def attach_silently(message: Message, user_id: int) -> None:
                 menu=i18n.t("btn.persistent.menu"),
                 ai=i18n.t("btn.persistent.ai"),
             ),
-            reply_markup=keyboards.persistent_menu(),
+            reply_markup=keyboards.persistent_menu(show_hint=show_hint),
         )
     await db.update_user(user_id, reply_keyboard_version=keyboards.PERSISTENT_MENU_VERSION)
 

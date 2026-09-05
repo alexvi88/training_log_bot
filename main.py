@@ -1,4 +1,5 @@
 import asyncio
+import datetime as dt
 import logging
 from contextlib import suppress
 
@@ -26,6 +27,7 @@ import db
 import engagement
 import i18n
 import keyboards
+import timeutil
 from fsm_storage import JSONFileStorage
 from handlers import (
     admin,
@@ -258,10 +260,20 @@ class RefreshPersistentMenuMiddleware(BaseMiddleware):
     the notice first keeps the handler's own reply as the last word, exactly
     like on every other tap.
 
-    Once a user is confirmed current, their id is cached in memory so later
-    taps skip the db.get_user round-trip entirely — the same instance is
+    Once a user is confirmed current on BOTH fronts — button-row version and
+    the once-and-for-all input hint below — their id is cached in memory so
+    later taps skip the db.get_user round-trip entirely; the same instance is
     registered for both messages and callbacks (see main()) so the cache is
     shared across both.
+
+    Второй фронт — прятать статичную подсказку формата ввода
+    (persistent_menu.input_placeholder) НАВСЕГДА, как только атлет наберёт
+    keyboards.INPUT_HINT_HIDE_THRESHOLD законченных тренировок за последние
+    INPUT_HINT_HIDE_WINDOW_DAYS дней (см. users.input_hint_hidden). Прячется
+    один раз тем же носителем — карусель PERSISTENT_MENU_VERSION при этом НЕ
+    бампается, так что новичкам подсказка не трогается вовсе, а уже
+    скрывшим её тут больше делать нечего (одностороннее правило: скрыл — и
+    навсегда, без обратного мигания после паузы).
     """
 
     def __init__(self) -> None:
@@ -280,15 +292,32 @@ class RefreshPersistentMenuMiddleware(BaseMiddleware):
         user = await db.get_user(user_id)
         if user is None:
             return
-        if user["reply_keyboard_version"] >= keyboards.PERSISTENT_MENU_VERSION:
+        version_current = user["reply_keyboard_version"] >= keyboards.PERSISTENT_MENU_VERSION
+        # Дорогой запрос по тренировкам — только пока подсказка ещё не спрятана
+        # НАВСЕГДА (см. докстринг класса): у большинства апдейтов её уже нет,
+        # и это условие держит проверку дешёвой на каждый тап.
+        hint_now_hidden = False
+        if not user["input_hint_hidden"]:
+            since = timeutil.user_today(user) - dt.timedelta(
+                days=keyboards.INPUT_HINT_HIDE_WINDOW_DAYS - 1
+            )
+            recent = await db.count_finished_workouts_since(user_id, since, tz_offset=user["tz_offset"])
+            hint_now_hidden = recent >= keyboards.INPUT_HINT_HIDE_THRESHOLD
+        if version_current and not hint_now_hidden:
             self._up_to_date_ids.add(user_id)
             return
+        show_hint = not (user["input_hint_hidden"] or hint_now_hidden)
         with suppress(TelegramBadRequest):
             await target.answer(
                 i18n.t("main.persistent_menu_refreshed"),
-                reply_markup=keyboards.persistent_menu(),
+                reply_markup=keyboards.persistent_menu(show_hint=show_hint),
             )
-        await db.update_user(user_id, reply_keyboard_version=keyboards.PERSISTENT_MENU_VERSION)
+        fields: dict[str, int] = {}
+        if not version_current:
+            fields["reply_keyboard_version"] = keyboards.PERSISTENT_MENU_VERSION
+        if hint_now_hidden:
+            fields["input_hint_hidden"] = 1
+        await db.update_user(user_id, **fields)
         self._up_to_date_ids.add(user_id)
 
 
