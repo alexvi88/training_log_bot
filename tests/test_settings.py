@@ -262,7 +262,8 @@ async def test_settings_keyboard_groups_into_three_blocks():
     assert rows[9] == ["settings:import"]
     assert rows[10] == ["settings:mcp"]
     assert rows[11] == ["feedback:open"]
-    assert rows[12] == ["settings:back"]
+    assert rows[12] == ["invite:show"]
+    assert rows[13] == ["settings:back"]
 
 
 async def test_settings_keyboard_hides_feedback_button_without_admin():
