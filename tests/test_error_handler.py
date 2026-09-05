@@ -72,6 +72,36 @@ async def test_offers_a_way_back_to_the_menu():
     assert markup.inline_keyboard[0][0].callback_data == "live:back_to_menu"
 
 
+async def test_offers_a_way_to_report_the_problem_when_feedback_is_configured(monkeypatch):
+    """Вторая кнопка — тот же вход, что и «💬 Отзыв» в настройках
+    (handlers.feedback.feedback_open, feedback:open) — и скрыта без ADMIN_ID."""
+    import config
+
+    monkeypatch.setattr(config, "ADMIN_ID", 424242)
+    message = _make_message()
+    bot = _make_bot()
+    event = _make_event(message=message)
+
+    await main.on_unhandled_error(event, bot)
+
+    markup = bot.send_message.await_args.kwargs["reply_markup"]
+    assert markup.inline_keyboard[1][0].callback_data == "feedback:open"
+
+
+async def test_hides_the_report_button_without_a_feedback_recipient(monkeypatch):
+    import config
+
+    monkeypatch.setattr(config, "ADMIN_ID", None)
+    message = _make_message()
+    bot = _make_bot()
+    event = _make_event(message=message)
+
+    await main.on_unhandled_error(event, bot)
+
+    markup = bot.send_message.await_args.kwargs["reply_markup"]
+    assert len(markup.inline_keyboard) == 1
+
+
 async def test_writes_to_the_chat_even_when_the_screen_is_already_deleted():
     """ui.safe_edit удаляет старый экран прямо перед отправкой нового, так что
     «сообщения уже нет» — обычный расклад: reply в нём падает сам, и человек не

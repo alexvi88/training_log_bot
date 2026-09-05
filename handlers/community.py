@@ -20,10 +20,20 @@ import i18n
 router = Router(name="community")
 
 
+def _home_menu_button() -> InlineKeyboardButton:
+    # Тот же `live:back_to_menu`, что и на карточке законченной тренировки —
+    # открывает меню, не требуя своего обработчика (см. handlers/workout.py).
+    # Экран /community доходит и до тех, у кого кнопки чата ещё нет в главном
+    # меню (handlers.workout._main_menu_kb, порог — 3 законченные
+    # тренировки), так что без неё это был бы тупик.
+    return InlineKeyboardButton(text=i18n.t("btn.home_menu"), callback_data="live:back_to_menu")
+
+
 def community_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text=i18n.t("community.btn.enter"), url=config.COMMUNITY_CHAT_URL)]
+            [InlineKeyboardButton(text=i18n.t("community.btn.enter"), url=config.COMMUNITY_CHAT_URL)],
+            [_home_menu_button()],
         ]
     )
 

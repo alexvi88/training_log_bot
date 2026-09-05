@@ -146,6 +146,27 @@ async def test_feedback_cancel_ends_the_flow(fresh_db, user_id, monkeypatch):
     callback.bot.send_message.assert_not_awaited()
 
 
+async def test_feedback_open_starts_the_same_flow_as_the_command(fresh_db, user_id):
+    """«💬 Отзыв» в настройках и «Сообщить о проблеме» под общей ошибкой
+    (main._back_to_menu_markup) открывают этот же колбэк — тот же экран, что
+    и /feedback, только правкой сообщения, а не новым."""
+    callback = _make_callback(user_id, "feedback:open")
+    state = await _make_state(user_id)
+
+    await feedback.feedback_open(callback, state)
+
+    assert await state.get_state() == FeedbackFlow.awaiting_message.state
+    assert _screen_shown(callback)
+    callback.answer.assert_awaited_once()
+    if callback.message.edit_text.await_count:
+        kwargs = callback.message.edit_text.await_args.kwargs
+    else:
+        kwargs = callback.message.answer.await_args.kwargs
+    buttons = [b.callback_data for row in kwargs["reply_markup"].inline_keyboard for b in row]
+    assert "feedback:done" in buttons
+    assert "feedback:cancel" in buttons
+
+
 async def test_command_does_not_become_feedback_text(user_id, monkeypatch):
     """Команда в состоянии отзыва не проходит фильтр «ловлю всё» — апдейт уходит
     следующему роутеру, к настоящему хендлеру команды."""

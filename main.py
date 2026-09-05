@@ -133,6 +133,7 @@ class IgnoreStaleCallbackMiddleware(BaseMiddleware):
 # спиннером и вообще без единой подсказки — см. _generic_error_text ниже.
 _FALLBACK_ERROR_TEXT = "⚠️ Что-то пошло не так — бывает даже у чемпионов. Жми «Меню» внизу — и погнали дальше."
 _FALLBACK_MENU_BUTTON_TEXT = "🏠 Меню"
+_FALLBACK_FEEDBACK_BUTTON_TEXT = "Сообщить о проблеме"
 
 
 def _generic_error_text() -> str:
@@ -166,15 +167,29 @@ def _back_to_menu_markup() -> InlineKeyboardMarkup:
     законченной тренировки (handlers/workout.py) — он открывает меню, не
     трогая сообщение, с которого пришли, так что подходит и здесь без своего
     отдельного обработчика.
+
+    Вторая кнопка — «Сообщить о проблеме», тот же вход, что у «💬 Отзыв» в
+    настройках (handlers.feedback.feedback_open, колбэк `feedback:open`):
+    человек только что увидел ошибку, и написать о ней тут же — короче, чем
+    искать /feedback самому. Скрыта без ADMIN_ID (config.feedback_available) —
+    без него отзыву некуда лететь.
     """
     try:
         label = i18n.t("btn.home_menu")
     except Exception:
         logger.exception("i18n.t упал при подписи кнопки последнего рубежа — беру запасную подпись")
         label = _FALLBACK_MENU_BUTTON_TEXT
-    return InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text=label, callback_data="live:back_to_menu")]]
-    )
+    rows = [[InlineKeyboardButton(text=label, callback_data="live:back_to_menu")]]
+    if config.feedback_available():
+        try:
+            feedback_label = i18n.t("btn.report_problem")
+        except Exception:
+            logger.exception(
+                "i18n.t упал при подписи кнопки отзыва последнего рубежа — беру запасную подпись"
+            )
+            feedback_label = _FALLBACK_FEEDBACK_BUTTON_TEXT
+        rows.append([InlineKeyboardButton(text=feedback_label, callback_data="feedback:open")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def _error_chat_id(update) -> int | None:

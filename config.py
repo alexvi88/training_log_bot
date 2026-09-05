@@ -11,6 +11,16 @@ FSM_STORAGE_PATH = os.getenv("FSM_STORAGE_PATH", "/data/fsm_storage.json")
 # Telegram user id that receives the daily stats report + DB backup. Unset disables the job.
 ADMIN_ID = int(os.getenv("ADMIN_ID")) if os.getenv("ADMIN_ID") else None
 
+
+def feedback_available() -> bool:
+    """Показывать ли вход в отзыв (кнопка в настройках, кнопка под общей ошибкой).
+
+    Без ADMIN_ID отзыву некуда лететь (handlers.feedback.feedback_message шлёт
+    его именно туда) — кнопка в никуда хуже отсутствующей кнопки, тот же
+    принцип, что у mcp_available/community_available ниже.
+    """
+    return ADMIN_ID is not None
+
 # UTC hour (0-23) at which the daily admin report/backup job runs.
 # Deployment clock is UTC (see timeutil.py); 7 UTC == 10:00 MSK (UTC+3).
 ADMIN_REPORT_HOUR = int(os.getenv("ADMIN_REPORT_HOUR", "7"))
@@ -739,3 +749,12 @@ COMMUNITY_CHAT_URL = os.getenv("COMMUNITY_CHAT_URL", "").strip()
 def community_available() -> bool:
     """Показывать ли вход в общий чат."""
     return COMMUNITY_CHAT_URL.startswith(("https://t.me/", "http://t.me/", "tg://"))
+
+
+# Кнопка в главном меню (в отличие от команды /community — та отвечает
+# одинаково всем, см. handlers/community.py) показывается не сразу: с пустым
+# дневником в общем чате взрослых атлетов человеку почти нечего сказать, а
+# рекламировать чат тем, кто до сих пор не открыл дневник, — рано. Порог
+# грубый и намеренно невысокий — не «докажи вовлечённость», а «уже видел, что
+# такое тренировка в этом боте».
+COMMUNITY_MIN_FINISHED_WORKOUTS = 3

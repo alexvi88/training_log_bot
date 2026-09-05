@@ -1040,14 +1040,22 @@ async def _main_menu_kb(user_id: int, active) -> InlineKeyboardMarkup:
     # real history, the normal logging flows are better (they know the
     # exercises, the targets and the progression) — importing on top of that
     # would just risk duplicate entries.
-    has_history = await db.count_workouts(user_id) > 0
+    finished_count = await db.count_workouts(user_id)
+    has_history = finished_count > 0
+    # Кнопка "💬 Чат атлетов" появляется в главном меню только после
+    # config.COMMUNITY_MIN_FINISHED_WORKOUTS законченных тренировок — до этого
+    # человек ещё не видел, что такое тренировка в боте, и звать его в чат, где
+    # обсуждают именно это, рано (см. config.COMMUNITY_MIN_FINISHED_WORKOUTS).
+    # /community при этом отвечает всем одинаково — та команда без порога, см.
+    # handlers/community.py.
+    show_community = (
+        config.community_available()
+        and finished_count >= config.COMMUNITY_MIN_FINISHED_WORKOUTS
+    )
     return keyboards.main_menu(
         bool(active),
         show_import_button=not has_history,
-        # Кнопка "💬 Чат атлетов" временно снята с главного меню (не с
-        # /community — та команда работает как раньше), пока чат не готов
-        # показывать всем.
-        community_url=None,
+        community_url=config.COMMUNITY_CHAT_URL if show_community else None,
         show_donate=config.DONATIONS_ENABLED,
         # Картинка (дашборд) существует ровно при том же условии, что и
         # has_history выше — оба смотрят на db.count_workouts(status="finished").
