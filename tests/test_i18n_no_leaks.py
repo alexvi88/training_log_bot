@@ -321,6 +321,36 @@ async def _screen_history_list(db, user_id: int) -> str:
     return "\n".join(button.text for row in kb.inline_keyboard for button in row)
 
 
+async def _screen_history_list_empty(db, user_id: int) -> str:
+    """Пустая история (is_empty=True) — свой набор кнопок: «Начать тренировку»
+    вместо «По месяцам», раз отмечать в календаре ещё нечего."""
+    kb = keyboards.history_list_keyboard(workouts=[], page=0, has_next=False, is_empty=True)
+    return "\n".join(button.text for row in kb.inline_keyboard for button in row)
+
+
+async def _screen_history_calendar(db, user_id: int) -> str:
+    """«📅 По месяцам»: заголовок экрана плюс сетка календаря с одним отмеченным
+    днём (keyboards.calendar_keyboard, marked=...) — покрывает и intro-текст,
+    и кнопку «⬅️ К списку», которой у обычного bf-календаря нет."""
+    header = i18n.t("history.calendar_header")
+    kb = keyboards.calendar_keyboard(
+        "hist:cal", 2026, 8, today=dt.date(2026, 8, 17), marked={"2026-08-10"},
+        show_quick_dates=False, back_text=i18n.t("btn.to_list"), back_cb="hist:back",
+    )
+    buttons = "\n".join(button.text for row in kb.inline_keyboard for button in row)
+    return f"{header}\n{buttons}"
+
+
+async def _screen_history_calendar_day_list(db, user_id: int) -> str:
+    """День с 2+ тренировками — тот же build_history_list, что у обычного
+    списка, но с заголовком history.calendar_day_header."""
+    return formatting.build_history_list(
+        [(dt.datetime(2026, 8, 10, 9, 0), ["Squat"], 3), (dt.datetime(2026, 8, 10, 18, 0), [], 0)],
+        header=i18n.t("history.calendar_day_header", date=formatting.format_date_ru(dt.datetime(2026, 8, 10))),
+        footer="",
+    )
+
+
 async def _screen_workout_summary(db, user_id: int) -> str:
     """Карточка завершённой тренировки (formatting.build_workout_summary) —
     самый частый экран в продукте, целиком хардкод по-русски сегодня."""
@@ -709,6 +739,9 @@ SCREENS: list[tuple[str, object]] = [
     ("programs", _screen_programs),
     ("food_diary", _screen_food_diary),
     ("history_list", _screen_history_list),
+    ("history_list_empty", _screen_history_list_empty),
+    ("history_calendar", _screen_history_calendar),
+    ("history_calendar_day_list", _screen_history_calendar_day_list),
     ("workout_summary_card", _screen_workout_summary),
     ("dashboard_menu", _screen_dashboard_menu),
     ("weekly_summary", _screen_weekly_summary),
