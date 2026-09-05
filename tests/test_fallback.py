@@ -17,6 +17,16 @@ import activity_log
 from handlers import fallback
 
 
+async def _live_state(user_id: int):
+    from aiogram.fsm.context import FSMContext
+    from aiogram.fsm.storage.base import StorageKey
+    from aiogram.fsm.storage.memory import MemoryStorage
+
+    return FSMContext(
+        storage=MemoryStorage(), key=StorageKey(bot_id=1, chat_id=user_id, user_id=user_id)
+    )
+
+
 def _callback(user_id: int = 1, data: str = "pick:grp:7", *, inaccessible: bool = False):
     """Кнопка, нажатая на экране, который уже никем не обслуживается.
 
@@ -48,8 +58,9 @@ async def test_unhandled_text_points_to_ai_trainer_and_start(fresh_db, user_id):
     message.text = "составь мне программу"
     message.content_type = ContentType.TEXT
     message.reply = AsyncMock()
+    state = await _live_state(user_id)
 
-    await fallback.unhandled_text(message)
+    await fallback.unhandled_text(message, state)
 
     message.reply.assert_awaited_once()
     reply = message.reply.await_args.args[0]
@@ -70,8 +81,9 @@ async def test_a_set_typed_with_no_active_workout_points_at_starting_one(fresh_d
     message.text = "100 8"
     message.content_type = ContentType.TEXT
     message.reply = AsyncMock()
+    state = await _live_state(user_id)
 
-    await fallback.unhandled_text(message)
+    await fallback.unhandled_text(message, state)
 
     message.reply.assert_awaited_once()
     reply, kwargs = message.reply.await_args.args, message.reply.await_args.kwargs
@@ -91,8 +103,9 @@ async def test_a_set_with_unit_words_also_points_at_starting_one(fresh_db, user_
     message.text = text
     message.content_type = ContentType.TEXT
     message.reply = AsyncMock()
+    state = await _live_state(user_id)
 
-    await fallback.unhandled_text(message)
+    await fallback.unhandled_text(message, state)
 
     message.reply.assert_awaited_once()
     kb = message.reply.await_args.kwargs["reply_markup"]
@@ -106,8 +119,9 @@ async def test_pure_weight_x_reps_form_also_points_at_starting_one(fresh_db, use
     message.text = "100x8x3"
     message.content_type = ContentType.TEXT
     message.reply = AsyncMock()
+    state = await _live_state(user_id)
 
-    await fallback.unhandled_text(message)
+    await fallback.unhandled_text(message, state)
 
     message.reply.assert_awaited_once()
     kb = message.reply.await_args.kwargs["reply_markup"]
@@ -122,8 +136,9 @@ async def test_typing_a_known_exercise_name_offers_its_card(fresh_db, user_id):
     message.text = "жим"
     message.content_type = ContentType.TEXT
     message.reply = AsyncMock()
+    state = await _live_state(user_id)
 
-    await fallback.unhandled_text(message)
+    await fallback.unhandled_text(message, state)
 
     message.reply.assert_awaited_once()
     text = message.reply.await_args.args[0]
@@ -138,8 +153,9 @@ async def test_unknown_exercise_name_still_falls_back_to_the_generic_reply(fresh
     message.text = "совсем незнакомое упражнение зюзюка"
     message.content_type = ContentType.TEXT
     message.reply = AsyncMock()
+    state = await _live_state(user_id)
 
-    await fallback.unhandled_text(message)
+    await fallback.unhandled_text(message, state)
 
     message.reply.assert_awaited_once()
     text = message.reply.await_args.args[0]
@@ -154,12 +170,160 @@ async def test_a_command_never_goes_through_the_new_routes(fresh_db, user_id):
     message.text = "/xyz"
     message.content_type = ContentType.TEXT
     message.reply = AsyncMock()
+    state = await _live_state(user_id)
 
-    await fallback.unhandled_text(message)
+    await fallback.unhandled_text(message, state)
 
     message.reply.assert_awaited_once()
     text = message.reply.await_args.args[0]
     assert "Не понял" in text
+
+
+# ---------- длинный непонятый текст — кнопка «Спросить тренера» ----------
+#
+# Вопрос тренеру, напечатанный из главного меню («объясни, как приседать»),
+# длиннее «жим» или «100 8» и не подход, и не название упражнения — вместо
+# общего «Не понял» бот предлагает передать текст как есть одной кнопкой,
+# без единого платного вызова до тапа (см. docstring handlers.fallback.ask_trainer).
+
+
+async def test_long_unmatched_text_offers_to_ask_the_trainer(fresh_db, user_id, monkeypatch):
+    monkeypatch.setattr(fallback.ai_trainer, "is_configured", lambda: True)
+    message = MagicMock()
+    message.from_user = SimpleNamespace(id=user_id, language_code=None)
+    message.text = "объясни, пожалуйста, как правильно приседать со штангой"
+    message.content_type = ContentType.TEXT
+    message.reply = AsyncMock()
+    state = await _live_state(user_id)
+
+    await fallback.unhandled_text(message, state)
+
+    message.reply.assert_awaited_once()
+    text = message.reply.await_args.args[0]
+    kb = message.reply.await_args.kwargs["reply_markup"]
+    assert "Не понял" not in text
+    assert kb.inline_keyboard[0][0].callback_data == "fb:ask"
+    data = await state.get_data()
+    assert data["fb_ask_pending"] == message.text
+
+
+async def test_short_text_keeps_the_old_generic_reply_even_when_ai_is_configured(fresh_db, user_id, monkeypatch):
+    monkeypatch.setattr(fallback.ai_trainer, "is_configured", lambda: True)
+    message = MagicMock()
+    message.from_user = SimpleNamespace(id=user_id, language_code=None)
+    message.text = "странный текст"  # короче порога — старый общий ответ
+    message.content_type = ContentType.TEXT
+    message.reply = AsyncMock()
+    state = await _live_state(user_id)
+
+    await fallback.unhandled_text(message, state)
+
+    text = message.reply.await_args.args[0]
+    assert "Не понял" in text
+
+
+async def test_ai_not_configured_keeps_the_old_generic_reply_for_long_text(fresh_db, user_id, monkeypatch):
+    monkeypatch.setattr(fallback.ai_trainer, "is_configured", lambda: False)
+    message = MagicMock()
+    message.from_user = SimpleNamespace(id=user_id, language_code=None)
+    message.text = "составь мне длинную программу тренировок на месяц"
+    message.content_type = ContentType.TEXT
+    message.reply = AsyncMock()
+    state = await _live_state(user_id)
+
+    await fallback.unhandled_text(message, state)
+
+    text = message.reply.await_args.args[0]
+    assert "Не понял" in text
+
+
+async def test_exercise_match_wins_over_the_ask_button_even_when_long(fresh_db, user_id, monkeypatch):
+    """Найденное упражнение важнее кнопки тренера — found_exercise не уступает."""
+    monkeypatch.setattr(fallback.ai_trainer, "is_configured", lambda: True)
+    group_id = await fresh_db.create_muscle_group(user_id, "Грудь")
+    ex_id = await fresh_db.create_exercise(user_id, "Жим штанги лёжа узким хватом", group_id)
+    message = MagicMock()
+    message.from_user = SimpleNamespace(id=user_id, language_code=None)
+    message.text = "жим штанги лёжа узким хватом"
+    message.content_type = ContentType.TEXT
+    message.reply = AsyncMock()
+    state = await _live_state(user_id)
+
+    await fallback.unhandled_text(message, state)
+
+    kb = message.reply.await_args.kwargs["reply_markup"]
+    assert kb.inline_keyboard[0][0].callback_data == f"prog:card:{ex_id}"
+
+
+async def test_set_like_text_wins_over_the_ask_button_even_when_long(fresh_db, user_id, monkeypatch):
+    monkeypatch.setattr(fallback.ai_trainer, "is_configured", lambda: True)
+    message = MagicMock()
+    message.from_user = SimpleNamespace(id=user_id, language_code=None)
+    message.text = "100 8\n90 8\n80 8\n70 8"  # длинно, но по-прежнему подход
+    message.content_type = ContentType.TEXT
+    message.reply = AsyncMock()
+    state = await _live_state(user_id)
+
+    await fallback.unhandled_text(message, state)
+
+    kb = message.reply.await_args.kwargs["reply_markup"]
+    assert kb.inline_keyboard[0][0].callback_data == "menu:start_workout"
+
+
+async def test_tap_ask_trainer_sends_the_pending_text_as_a_question(fresh_db, user_id, monkeypatch):
+    """Тап передаёт ровно тот текст, что уже лежал в FSM, тем же ходом, что и
+    обычный вопрос из чата тренера — `_handle_question`."""
+    question = "объясни, пожалуйста, как правильно приседать со штангой"
+    monkeypatch.setattr(fallback.ai_trainer, "is_configured", lambda: True)
+    handle_question = AsyncMock()
+    monkeypatch.setattr(fallback.ai_trainer_handlers, "_handle_question", handle_question)
+    state = await _live_state(user_id)
+    await state.update_data(fb_ask_pending=question)
+    callback = _callback(user_id, data="fb:ask")
+
+    await fallback.ask_trainer(callback, state)
+
+    callback.answer.assert_awaited_once()
+    handle_question.assert_awaited_once()
+    _, kwargs = handle_question.await_args
+    assert handle_question.await_args.args[2] == question
+    assert kwargs["history_question"] == question
+    assert kwargs["user_id"] == user_id
+    assert await state.get_state() == fallback.AITrainerFlow.chatting.state
+    assert (await state.get_data()).get("fb_ask_pending") is None
+
+
+async def test_tap_ask_trainer_with_stale_pending_opens_trainer_normally(fresh_db, user_id, monkeypatch):
+    """Пока думал — переписался (перезапуск, другое сообщение): текст в FSM уже
+    потерян, и правильный ответ — честный тост плюс обычный вход в AI-тренера,
+    а не молчание или угадывание, о чём был вопрос."""
+    monkeypatch.setattr(fallback.ai_trainer, "is_configured", lambda: True)
+    open_ai_trainer = AsyncMock()
+    monkeypatch.setattr(fallback.persistent_menu, "_open_ai_trainer", open_ai_trainer)
+    state = await _live_state(user_id)  # fb_ask_pending отсутствует
+    callback = _callback(user_id, data="fb:ask")
+
+    await fallback.ask_trainer(callback, state)
+
+    callback.answer.assert_awaited_once()
+    toast = callback.answer.await_args.args[0]
+    assert toast  # непустой тост, а не молчание
+    open_ai_trainer.assert_awaited_once()
+
+
+async def test_tap_ask_trainer_falls_back_when_ai_not_configured(fresh_db, user_id, monkeypatch):
+    """Конфигурация выключилась между показом кнопки и тапом — тот же
+    генеральный ответ, что видел бы обычный атлет с самого начала."""
+    monkeypatch.setattr(fallback.ai_trainer, "is_configured", lambda: False)
+    state = await _live_state(user_id)
+    await state.update_data(fb_ask_pending="объясни, пожалуйста, как правильно приседать")
+    callback = _callback(user_id, data="fb:ask")
+
+    await fallback.ask_trainer(callback, state)
+
+    callback.message.answer.assert_awaited_once()
+    text = callback.message.answer.await_args.args[0]
+    assert "Не понял" not in text
 
 
 async def test_an_unhandled_button_answers_and_opens_the_menu(fresh_db, user_id):
@@ -220,7 +384,7 @@ async def test_service_messages_get_no_answer_at_all():
     message.content_type = ContentType.PINNED_MESSAGE
     message.reply = AsyncMock()
 
-    await fallback.unhandled_text(message)
+    await fallback.unhandled_text(message, MagicMock())
 
     message.reply.assert_not_awaited()
 
@@ -232,16 +396,6 @@ async def test_service_messages_get_no_answer_at_all():
 # жива в базе, и человек, нажавший на своём же экране «✅ Закончить упражнение»,
 # получал тост «кнопка устарела» и главное меню — то есть ровно то, что читается
 # как «тренировку потеряли». В логе 19.08 это 💀 live:finish_exercise.
-
-
-async def _live_state(user_id: int):
-    from aiogram.fsm.context import FSMContext
-    from aiogram.fsm.storage.base import StorageKey
-    from aiogram.fsm.storage.memory import MemoryStorage
-
-    return FSMContext(
-        storage=MemoryStorage(), key=StorageKey(bot_id=1, chat_id=user_id, user_id=user_id)
-    )
 
 
 async def test_tracker_button_without_state_brings_the_workout_back(fresh_db, user_id):

@@ -612,7 +612,25 @@ async def _screen_backfill_prompt(db, user_id: int) -> str:
 
 
 async def _screen_fallback_generic(db, user_id: int) -> str:
-    """Единый ответ на непонятый текст (handlers.fallback.unhandled_text)."""
+    """Единый ответ на непонятый текст (handlers.fallback.unhandled_text) —
+    короткий текст, где кнопка «Спросить тренера» ещё не появляется."""
+    from aiogram.enums import ContentType
+
+    from handlers import fallback
+
+    message = MagicMock()
+    message.from_user = SimpleNamespace(id=user_id, username="tester", language_code=None)
+    message.content_type = ContentType.TEXT
+    message.text = "бред"
+    message.reply = AsyncMock(return_value=SimpleNamespace(message_id=2))
+    state = FSMContext(storage=MemoryStorage(), key=StorageKey(bot_id=1, chat_id=user_id, user_id=user_id))
+    await fallback.unhandled_text(message, state)
+    return message.reply.await_args.args[0]
+
+
+async def _screen_fallback_ask_trainer(db, user_id: int) -> str:
+    """Длинный непонятый текст — кнопка «🤖 Спросить тренера» вместо общего
+    ответа (handlers.fallback.unhandled_text, AI-тренер настроен)."""
     from aiogram.enums import ContentType
 
     from handlers import fallback
@@ -622,7 +640,10 @@ async def _screen_fallback_generic(db, user_id: int) -> str:
     message.content_type = ContentType.TEXT
     message.text = "непонятная бессвязная фраза без числа и без названия"
     message.reply = AsyncMock(return_value=SimpleNamespace(message_id=2))
-    await fallback.unhandled_text(message)
+    state = FSMContext(storage=MemoryStorage(), key=StorageKey(bot_id=1, chat_id=user_id, user_id=user_id))
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(fallback.ai_trainer, "is_configured", lambda: True)
+        await fallback.unhandled_text(message, state)
     return message.reply.await_args.args[0]
 
 
@@ -734,6 +755,7 @@ SCREENS: list[tuple[str, object]] = [
     ("game_intro", _screen_game_intro),
     ("backfill_prompt", _screen_backfill_prompt),
     ("fallback_generic", _screen_fallback_generic),
+    ("fallback_ask_trainer", _screen_fallback_ask_trainer),
     ("main_error_fallback", _screen_main_error_fallback),
     ("ai_trainer_intro", _screen_ai_trainer_intro),
     ("ai_trainer_setup_question", _screen_ai_trainer_setup_question),
