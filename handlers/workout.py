@@ -1510,20 +1510,7 @@ async def _start_workout(callback: CallbackQuery, state: FSMContext, delete_mess
     await _reset_new_workout_scaffold(state)
     if delete_message:
         await _delete_message(callback.message)
-    # reply_markup here re-sends the persistent keyboard with a contextual input
-    # hint ("100 8 — вес и повторы") — safe only because THIS message is the one
-    # that's about to become the live tracker, edited in place from here on (see
-    # _refresh_live): an edit only ever touches the tracker's own inline
-    # keyboard, never the reply keyboard this send attaches. Don't copy this
-    # onto a message that gets deleted+resent later (see keyboards.persistent_menu's
-    # docstring on the Android carrier-delete bug) — that's exactly what
-    # _refresh_live's own delete+resend fallback does to this same message on the
-    # rare turn something landed below it, so the hint (and, on Android,
-    # possibly the whole bottom row) can be lost on that path.
-    sent = await callback.message.answer(
-        i18n.t("workout.started"),
-        reply_markup=keyboards.persistent_menu(placeholder=i18n.t("workout.set_input_placeholder")),
-    )
+    sent = await callback.message.answer(i18n.t("workout.started"))
     await state.update_data(
         workout_id=workout_id, live_chat_id=sent.chat.id, live_message_id=sent.message_id,
         last_by_exercise={},
@@ -1868,16 +1855,7 @@ async def _enter_live(
             extra["planned_blocks"] = None
     if delete_message:
         await _delete_message(callback.message)
-    # Same carrier-safety reasoning as _start_workout's own "workout.started"
-    # send (see the comment there) — this message becomes the live tracker too.
-    # Placeholder only when re-entering straight into logging (there's already
-    # an open exercise to add sets to); the idle picker below doesn't want a
-    # "100 8" hint sitting in the input field while nothing is open yet.
-    resume_placeholder = i18n.t("workout.set_input_placeholder") if open_exercises else None
-    sent = await callback.message.answer(
-        i18n.t("workout.slot_placeholder"),
-        reply_markup=keyboards.persistent_menu(placeholder=resume_placeholder),
-    )
+    sent = await callback.message.answer(i18n.t("workout.slot_placeholder"))
     await state.set_state(WorkoutFlow.logging_set if open_exercises else WorkoutFlow.idle)
     await state.update_data(
         workout_id=workout_id, live_chat_id=sent.chat.id, live_message_id=sent.message_id,

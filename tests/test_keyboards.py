@@ -1,18 +1,14 @@
 import keyboards
 
 
-def test_persistent_menu_has_no_placeholder_by_default():
+def test_persistent_menu_carries_a_static_input_placeholder():
+    """Подсказка живёт в input_field_placeholder носителя, а не четвёртой
+    кнопкой, и укладывается в лимит Telegram (64 символа)."""
     kb = keyboards.persistent_menu()
-    assert kb.input_field_placeholder is None
-
-
-def test_persistent_menu_placeholder_does_not_change_the_button_set():
-    """The hint lives in input_field_placeholder, not in a fourth button — the
-    button set (and PERSISTENT_MENU_VERSION) must stay identical either way."""
-    plain = keyboards.persistent_menu()
-    hinted = keyboards.persistent_menu(placeholder="100 8 — вес и повторы")
-    assert hinted.input_field_placeholder == "100 8 — вес и повторы"
-    assert hinted.keyboard == plain.keyboard
+    assert kb.input_field_placeholder
+    assert "100 8" in kb.input_field_placeholder
+    assert len(kb.input_field_placeholder) <= 64
+    assert len(kb.keyboard) == 1 and len(kb.keyboard[0]) == 3
 
 
 def test_ai_trainer_keyboard_default_layout():
