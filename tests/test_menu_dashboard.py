@@ -606,12 +606,13 @@ async def test_history_younger_than_the_fallback_window_gets_no_lift_tiles(fresh
     assert captured["lifts_title"] == ""
 
 
-def test_the_total_tile_comes_first_and_only_when_asked():
-    """«ВСЕГО ТРЕНИРОВОК» — первая плитка и единственная без окна; без
-    total_workouts набор плиток прежний (три штуки)."""
-    with_total = formatting.menu_tiles(_dashboard(), 5000, 2, total_workouts=148)
-    without = formatting.menu_tiles(_dashboard(), 5000, 2)
+def test_the_total_merges_into_the_30_day_tile():
+    """«ВСЕГО / ЗА 30Д» — одна плитка на двоих через дробь, а не «ВСЕГО
+    ТРЕНИРОВОК» и «ТРЕНИРОВОК ЗА 30 ДНЕЙ» подряд: без total_workouts число
+    плиток и остальные плитки не меняются."""
+    with_total = formatting.menu_tiles(_dashboard(last_30_days=14), 5000, 2, total_workouts=148)
+    without = formatting.menu_tiles(_dashboard(last_30_days=14), 5000, 2)
 
-    assert with_total[0] == ("ВСЕГО ТРЕНИРОВОК", "148")
-    assert with_total[1:] == without
-    assert len(with_total) == 4
+    assert with_total[0] == ("ВСЕГО / ЗА 30Д", "148/14")
+    assert with_total[1:] == without[1:]
+    assert len(with_total) == len(without) == 3
