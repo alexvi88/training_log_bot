@@ -2211,7 +2211,7 @@ def calendar_keyboard(
     not selectable — a past workout can't be dated ahead of today, and history
     can't have a workout in the future either.
 
-    marked: ISO dates (YYYY-MM-DD) to mark with a bullet — used by the history
+    marked: ISO dates (YYYY-MM-DD) to mark with the workout icon — used by the history
     calendar (handlers/history.py) to show which days actually have a workout;
     unset for backfill, where every past day is a valid destination and none
     needs to stand out. show_quick_dates hides the "Сегодня/Вчера" row for that
@@ -2244,8 +2244,16 @@ def calendar_keyboard(
         if date > today:
             cells.append(InlineKeyboardButton(text="·", callback_data=f"{prefix}:noop"))
         else:
-            mark = "•" if date.isoformat() in marked else ""
-            label = f"·{d}{mark}·" if date == today else f"{d}{mark}"
+            # День с тренировкой — с иконкой тренировки из словаря эмодзи: точка
+            # рядом с числом на телефоне терялась, а жирным кнопку не сделать.
+            # Сегодня без тренировки — в точках, как в бэкфилле; с тренировкой
+            # иконка важнее, вторую рамку не рисуем.
+            if date.isoformat() in marked:
+                label = f"🏋️{d}"
+            elif date == today:
+                label = f"·{d}·"
+            else:
+                label = str(d)
             cells.append(InlineKeyboardButton(text=label, callback_data=f"{prefix}:date:{date.isoformat()}"))
     while len(cells) % 7:
         cells.append(InlineKeyboardButton(text=" ", callback_data=f"{prefix}:noop"))
