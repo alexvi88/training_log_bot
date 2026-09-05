@@ -606,6 +606,18 @@ async def show_progress_entry(callback: CallbackQuery, state: FSMContext):
         )
         await callback.answer()
         return
+    user = await db.get_user(callback.from_user.id)
+    # Group → exercise → chart is 3 taps for the typical "how's my bench
+    # doing" check. Same top-3-by-frequency query as the main-menu dashboard's
+    # lift tiles (db.top_exercises_by_frequency), all-time window, so a
+    # shortcut only shows up once an exercise has actually earned it (≥2
+    # sessions — a single logged set isn't "frequent" yet). Origin "top" so
+    # "⬅️ Назад" from that chart returns here, not to a group list the user
+    # never opened (see keyboards._progress_back_cb).
+    top = await db.top_exercises_by_frequency(
+        callback.from_user.id, "2000-01-01", timeutil.user_today(user).isoformat()
+    )
+    top_buttons = [(ex["display_name"], f"prog:ex:{ex['id']}:top") for ex in top]
     groups = await db.list_muscle_groups(callback.from_user.id)
     kb = keyboards.groups_keyboard(
         groups, prefix="prog",
@@ -615,6 +627,7 @@ async def show_progress_entry(callback: CallbackQuery, state: FSMContext):
             (i18n.t("btn.back"), "prog:back"),
         ],
         show_all=True,
+        top_buttons=top_buttons,
     )
     text = i18n.t("history.progress_intro")
     await ui.safe_edit(callback, text, reply_markup=kb)
@@ -781,10 +794,15 @@ async def _render_progress_view(ex_id: int, user, limit: int, origin: str = "all
             ex["display_name"], sessions, comparison, records, limit=limit, unit=user["unit"],
             session_notes=session_notes,
             golds=analytics.gold_book(sessions, user["e1rm_formula"]),
+            single_session_hint=len(points) == 1,
         )
 
         png = None
-        if points:
+        # A one-point "chart" is just a dot — same threshold bodyweight already
+        # uses (handlers/bodyweight.py._render). The stats lines above already
+        # cover a single session; format_progress_screen adds the "log it once
+        # more" nudge instead of the delta line when single_session_hint is set.
+        if len(points) >= 2:
             # Уезжает в пиксели графика (charts.render_metric_over_sessions рисует
             # заголовок/ось matplotlib'ом, никакой текстовый тест кириллицу там не
             # увидит) — переводим явно, а не полагаемся на formatting.plural_ru.

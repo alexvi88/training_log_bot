@@ -1277,25 +1277,33 @@ def finish_date_mismatch_keyboard() -> InlineKeyboardMarkup:
 def _progress_back_cb(exercise_id: int, origin: str) -> str:
     """Where "⬅️ Назад" from a progress screen should go.
 
-    `origin` is either "m" (opened from the exercise-detail card in "⚙️
-    Упражнения" — back should return to that same card) or a group token
-    ("all" or a muscle-group id, as produced by prog:grp:) — back should
-    return to that group's exercise list, not all the way up to the
-    muscle-group picker.
+    `origin` is "m" (opened from the exercise-detail card in "⚙️ Упражнения" —
+    back should return to that same card), "top" (opened from one of the
+    entry screen's top-3-frequent-exercise shortcuts, which skip the group
+    list entirely — back should return to that entry screen, not to a group
+    list the user never saw), or a group token ("all" or a muscle-group id, as
+    produced by prog:grp:) — back should return to that group's exercise list,
+    not all the way up to the muscle-group picker.
     """
     if origin == "m":
         return f"exm:ex:{exercise_id}"
+    if origin == "top":
+        return "prog:groups"
     return f"prog:grp:{origin}"
 
 
 def progress_back_keyboard(exercise_id: int = 0, origin: str = "all") -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text=i18n.t("btn.exercise_card"), callback_data=f"prog:card:{exercise_id}"))
+    b.row(InlineKeyboardButton(
+        text=i18n.t("btn.exercise_card"), callback_data=f"prog:card:{exercise_id}:{origin}"
+    ))
     b.row(InlineKeyboardButton(text=i18n.t("btn.back"), callback_data=_progress_back_cb(exercise_id, origin)))
     return b.as_markup()
 
 
-PROGRESS_PERIODS = [(10, "10"), (20, "20"), (9999, _lazy("btn.all_periods"))]
+PROGRESS_PERIODS = [
+    (10, _lazy("btn.workouts_n", n=10)), (20, _lazy("btn.workouts_n", n=20)), (9999, _lazy("btn.all_periods")),
+]
 DEFAULT_PROGRESS_LIMIT = 20
 
 
@@ -1305,7 +1313,9 @@ def progress_chart_keyboard(exercise_id: int, limit: int, origin: str = "all") -
         text = f"• {label} •" if value == limit else str(label)
         b.button(text=text, callback_data=f"prog:per:{exercise_id}:{value}:{origin}")
     b.adjust(len(PROGRESS_PERIODS))
-    b.row(InlineKeyboardButton(text=i18n.t("btn.exercise_card"), callback_data=f"prog:card:{exercise_id}"))
+    b.row(InlineKeyboardButton(
+        text=i18n.t("btn.exercise_card"), callback_data=f"prog:card:{exercise_id}:{origin}"
+    ))
     b.row(InlineKeyboardButton(text=i18n.t("btn.back"), callback_data=_progress_back_cb(exercise_id, origin)))
     return b.as_markup()
 
