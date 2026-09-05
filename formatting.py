@@ -1665,8 +1665,15 @@ def menu_headline(dashboard) -> str:
     return i18n.t("dashboard.headline_month", n=dashboard.last_30_days)
 
 
-def menu_tiles(dashboard, tonnage: float, records: int, unit: str = "kg") -> list[tuple[str, str]]:
-    """Три плитки под заголовком: месяц, работа за неделю и рекорды.
+def menu_tiles(
+    dashboard, tonnage: float, records: int, unit: str = "kg", total_workouts: int | None = None,
+) -> list[tuple[str, str]]:
+    """Плитки под заголовком: всего тренировок, месяц, работа за неделю и рекорды.
+
+    «Всего» — первая плитка и единственная без окна: счётчик за всю историю,
+    ради которого человек и ведёт дневник. Передаётся отдельно (не из
+    dashboard), потому что dashboard считает окна, а не итог; None — плитки
+    нет (старые вызовы и экраны без итога).
 
     Рекордов может не быть, и тогда плитка отдаёт место текущей неделе:
     «РЕКОРДОВ 0» — это не факт, а укор, причём за неделю, в которую человек мог
@@ -1686,7 +1693,10 @@ def menu_tiles(dashboard, tonnage: float, records: int, unit: str = "kg") -> lis
     total_kg = to_kg(tonnage, unit)
     tonnes = f"{total_kg / 1000:.1f}"
     weight = f"{tonnes} {i18n.t('unit.ton_short')}" if total_kg >= 1000 else f"{tonnage:.0f} {u}"
-    tiles = [
+    tiles: list[tuple[str, str]] = []
+    if total_workouts is not None:
+        tiles.append((i18n.t("dashboard.tile_total"), str(total_workouts)))
+    tiles += [
         (i18n.t("dashboard.tile_workouts", window=days_window_label(30)), str(dashboard.last_30_days)),
         (i18n.t("dashboard.tile_tonnage", window=days_window_label(VOLUME_WINDOW_DAYS)), weight),
     ]
@@ -1734,36 +1744,6 @@ def menu_lift_tiles(
         abs_str = f"{window:.0f}{u} vs {before:.0f}{u}"
         tiles.append((name.upper(), f"+{pct:.0f}%", abs_str))
     return tiles
-
-
-def build_menu_summary_text(
-    greeting: str,
-    headline: str,
-    tiles: list[tuple[str, str]],
-    lift_tiles: list[tuple[str, str, str]] = (),
-    lifts_title: str = "",
-) -> str:
-    """Текст главного меню атлета с историей: приветствие плюс те же
-    заголовок/плитки/рост e1RM, что раньше жили только внутри картинки
-    (charts.render_menu_dashboard). Картинка теперь приходит отдельным
-    сообщением не на каждый вход в меню (см. handlers.workout._show_main_menu
-    и её daily-гейт), а текст — это то, что видно на каждом открытии, так что
-    цифры дублируются сюда, а не пропадают в дни без картинки.
-
-    Лимит текста вчетверо больше подписи к фото (ui.TEXT_LIMIT против
-    ui.CAPTION_LIMIT), так что резать тут заранее незачем — обрежет, если
-    вообще понадобится, тот же общий ui.fit_to_limit, что режет любой другой
-    экран.
-    """
-    lines = [greeting, "", f"<b>{escape(headline)}</b>"]
-    for label, value in tiles:
-        lines.append(f"{escape(label)}: <b>{escape(value)}</b>")
-    if lift_tiles:
-        lines.append("")
-        lines.append(f"<b>{escape(lifts_title)}</b>")
-        for name, pct, abs_str in lift_tiles:
-            lines.append(f"{escape(name)}: {escape(pct)} ({escape(abs_str)})")
-    return "\n".join(lines)
 
 
 def build_workout_card(
