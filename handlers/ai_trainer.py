@@ -14,7 +14,7 @@ from typing import Any, Callable, Optional, Sequence
 from aiogram import F, Router
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramRetryAfter
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message, ReactionTypeEmoji
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import activity_log
@@ -2204,6 +2204,17 @@ async def _handle_question(
     any await, released in the caller's `finally`) — this function assumes the
     reservation is already held and never touches `_busy` itself.
     """
+    # user_id передан явно только там, где message — это экран бота, а не
+    # реплика пользователя (см. докстроку выше и ai_build_program): в этом
+    # случае реагировать 👀 не на что — сообщение не пользовательское, и
+    # никто не ждёт подтверждения именно по нему.
+    is_user_message = user_id is None
+    if is_user_message:
+        with suppress(TelegramBadRequest):
+            await message.bot.set_message_reaction(
+                chat_id=message.chat.id, message_id=message.message_id,
+                reaction=[ReactionTypeEmoji(emoji="👀")],
+            )
     user_id = user_id if user_id is not None else message.from_user.id
     asked_today = await db.get_ai_question_count_today(user_id)
     # Дневная квота вопросов и суточный стоп по деньгам — одной проверкой (см.

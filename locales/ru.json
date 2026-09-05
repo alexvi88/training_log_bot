@@ -1302,7 +1302,6 @@
   "workout.undo_done": "Удалил {set}",
   "workout.voice_heard": " (услышал: «{transcript}»)",
   "workout.voice_hint": "🎙 Кстати, можно голосом: скажи «сто на восемь» — запишу.",
-  "workout.voice_logged": "🎙 Записал: {sets}",
   "workout.voice_not_configured": "Голосовой ввод пока не настроен, напиши подход текстом.",
   "workout.voice_parse_failed": "Не понял вес и повторы из голосового{heard}. Скажи, например, «сто на восемь».",
   "workout.voice_single_set_only": "Записал один подход. Если их несколько — продиктуй каждый отдельно.",
