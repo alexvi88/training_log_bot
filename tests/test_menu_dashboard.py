@@ -604,3 +604,14 @@ async def test_history_younger_than_the_fallback_window_gets_no_lift_tiles(fresh
 
     assert captured["lift_tiles"] == []
     assert captured["lifts_title"] == ""
+
+
+def test_the_total_tile_comes_first_and_only_when_asked():
+    """«ВСЕГО ТРЕНИРОВОК» — первая плитка и единственная без окна; без
+    total_workouts набор плиток прежний (три штуки)."""
+    with_total = formatting.menu_tiles(_dashboard(), 5000, 2, total_workouts=148)
+    without = formatting.menu_tiles(_dashboard(), 5000, 2)
+
+    assert with_total[0] == ("ВСЕГО ТРЕНИРОВОК", "148")
+    assert with_total[1:] == without
+    assert len(with_total) == 4

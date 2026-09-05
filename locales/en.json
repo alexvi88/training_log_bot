@@ -330,6 +330,7 @@
   "dashboard.lifts_note": "e1RM — ESTIMATED MAX",
   "dashboard.lifts_title": "e1RM GROWTH OVER {weeks} {n, plural, one{WEEK} other{WEEKS}}",
   "dashboard.tile_records": "RECORDS {window}",
+  "dashboard.tile_total": "TOTAL WORKOUTS",
   "dashboard.tile_tonnage": "TONNAGE {window}",
   "dashboard.tile_workouts": "WORKOUTS {window}",
   "dashboard.tile_workouts_week": "WORKOUTS THIS WEEK",

@@ -1665,8 +1665,15 @@ def menu_headline(dashboard) -> str:
     return i18n.t("dashboard.headline_month", n=dashboard.last_30_days)
 
 
-def menu_tiles(dashboard, tonnage: float, records: int, unit: str = "kg") -> list[tuple[str, str]]:
-    """Три плитки под заголовком: месяц, работа за неделю и рекорды.
+def menu_tiles(
+    dashboard, tonnage: float, records: int, unit: str = "kg", total_workouts: int | None = None,
+) -> list[tuple[str, str]]:
+    """Плитки под заголовком: всего тренировок, месяц, работа за неделю и рекорды.
+
+    «Всего» — первая плитка и единственная без окна: счётчик за всю историю,
+    ради которого человек и ведёт дневник. Передаётся отдельно (не из
+    dashboard), потому что dashboard считает окна, а не итог; None — плитки
+    нет (старые вызовы и экраны без итога).
 
     Рекордов может не быть, и тогда плитка отдаёт место текущей неделе:
     «РЕКОРДОВ 0» — это не факт, а укор, причём за неделю, в которую человек мог
@@ -1686,7 +1693,10 @@ def menu_tiles(dashboard, tonnage: float, records: int, unit: str = "kg") -> lis
     total_kg = to_kg(tonnage, unit)
     tonnes = f"{total_kg / 1000:.1f}"
     weight = f"{tonnes} {i18n.t('unit.ton_short')}" if total_kg >= 1000 else f"{tonnage:.0f} {u}"
-    tiles = [
+    tiles: list[tuple[str, str]] = []
+    if total_workouts is not None:
+        tiles.append((i18n.t("dashboard.tile_total"), str(total_workouts)))
+    tiles += [
         (i18n.t("dashboard.tile_workouts", window=days_window_label(30)), str(dashboard.last_30_days)),
         (i18n.t("dashboard.tile_tonnage", window=days_window_label(VOLUME_WINDOW_DAYS)), weight),
     ]

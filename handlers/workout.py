@@ -966,7 +966,7 @@ async def _menu_view(user_id: int) -> tuple[str, bytes | None]:
         analytics.workouts_per_week(dates, today),
     )
     headline = formatting.menu_headline(dashboard)
-    tiles = formatting.menu_tiles(dashboard, tonnage, records, user["unit"])
+    tiles = formatting.menu_tiles(dashboard, tonnage, records, user["unit"], total_workouts=len(dates))
     lift_tiles = formatting.menu_lift_tiles(growth, user["unit"])
 
     # Ключ кэша собран из того, что реально нарисуется, а не из «даты и числа
@@ -1009,20 +1009,12 @@ async def _main_menu_kb(user_id: int, active) -> InlineKeyboardMarkup:
     # would just risk duplicate entries.
     finished_count = await db.count_workouts(user_id)
     has_history = finished_count > 0
-    # Кнопка "💬 Чат атлетов" появляется в главном меню только после
-    # config.COMMUNITY_MIN_FINISHED_WORKOUTS законченных тренировок — до этого
-    # человек ещё не видел, что такое тренировка в боте, и звать его в чат, где
-    # обсуждают именно это, рано (см. config.COMMUNITY_MIN_FINISHED_WORKOUTS).
-    # /community при этом отвечает всем одинаково — та команда без порога, см.
-    # handlers/community.py.
-    show_community = (
-        config.community_available()
-        and finished_count >= config.COMMUNITY_MIN_FINISHED_WORKOUTS
-    )
+    # Кнопки «💬 Чат атлетов» в главном меню нет: чат живёт за командой
+    # /community (handlers/community.py), а меню — про дневник.
     return keyboards.main_menu(
         bool(active),
         show_import_button=not has_history,
-        community_url=config.COMMUNITY_CHAT_URL if show_community else None,
+        community_url=None,
         show_donate=config.DONATIONS_ENABLED,
     )
 

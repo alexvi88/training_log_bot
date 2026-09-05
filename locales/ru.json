@@ -330,6 +330,7 @@
   "dashboard.lifts_note": "e1RM — РАСЧЁТНЫЙ МАКСИМУМ",
   "dashboard.lifts_title": "РОСТ e1RM ЗА {weeks} {n, plural, one{НЕДЕЛЮ} few{НЕДЕЛИ} many{НЕДЕЛЬ} other{НЕДЕЛИ}}",
   "dashboard.tile_records": "РЕКОРДОВ {window}",
+  "dashboard.tile_total": "ВСЕГО ТРЕНИРОВОК",
   "dashboard.tile_tonnage": "ТОННАЖ {window}",
   "dashboard.tile_workouts": "ТРЕНИРОВОК {window}",
   "dashboard.tile_workouts_week": "ТРЕНИРОВОК ЗА НЕДЕЛЮ",
