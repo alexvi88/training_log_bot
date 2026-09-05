@@ -1594,16 +1594,22 @@ def settings_keyboard(
     show_extra_stats: bool = True,
     show_mcp: bool = False,
     lang: str = "ru",
+    show_feedback: bool = False,
 ) -> InlineKeyboardMarkup:
+    """Три визуальных блока — «Профиль», «Как разговариваю», «Данные» — их
+    заголовки живут в тексте экрана (settings.screen.section.*, см.
+    handlers.settings.show_settings), а порядок кнопок здесь просто следует
+    тому же порядку, чтобы человек не гадал, какая кнопка из какого блока.
+
+    Первый блок парами по 2 в ряд: все четыре подписи короткие («Единицы: кг»,
+    «Часовой пояс: +03:00», ...) и умещаются рядом. Тумблеры — по одному в
+    ряд намеренно: с полным текстом «<label>: <глагол>» ни одна пара не
+    укладывается вместе в ширину кнопки, не обрезаясь визуально.
+    """
     b = InlineKeyboardBuilder()
+
+    # --- Профиль: единицы · часовой пояс · язык · формула e1RM ---
     b.button(text=f"⚖️ {i18n.t('btn.units')}: {UNIT_NAMES.get(unit, unit)}", callback_data="settings:unit")
-    # "e1RM", not "1ПМ": every card, chart and record in the bot is labelled
-    # e1RM, and a setting that names the metric differently reads as a setting
-    # for something else entirely.
-    b.button(
-        text=f"📐 {i18n.t('btn.formula_label')}: {FORMULA_NAMES.get(formula, formula)}",
-        callback_data="settings:formula",
-    )
     b.button(text=f"🕒 {i18n.t('btn.timezone_label')}: {format_utc_offset(tz_offset)}", callback_data="settings:tz")
     # Единственная подпись на этом экране, которая уже переведена: остальные
     # настройки локализуются отдельной фазой, но дорога к смене языка обязана
@@ -1613,6 +1619,15 @@ def settings_keyboard(
         text=f"🌐 {i18n.t_in(lang, 'screen.language.button')}: {LANG_NAMES.get(lang, lang)}",
         callback_data="settings:lang",
     )
+    # "e1RM", not "1ПМ": every card, chart and record in the bot is labelled
+    # e1RM, and a setting that names the metric differently reads as a setting
+    # for something else entirely.
+    b.button(
+        text=f"📐 {i18n.t('btn.formula_label')}: {FORMULA_NAMES.get(formula, formula)}",
+        callback_data="settings:formula",
+    )
+
+    # --- Как разговариваю: пять тумблеров ---
     # Все тумблеры ниже — одна конструкция: «<label>: <глагол от первого
     # лица>» / «<label>: <его отрицание>» — раньше формы расходились
     # («вкл»/«выкл», «включены»/«выключены», «считаю»/«не считаю»,
@@ -1640,6 +1655,8 @@ def settings_keyboard(
         i18n.t("btn.card_detail_on") if show_extra_stats else i18n.t("btn.card_detail_off")
     )
     b.button(text=card_label, callback_data="settings:card_detail")
+
+    # --- Данные: что тренер знает · экспорт · импорт · MCP · отзыв ---
     # Профиль тренирующегося пишет AI-тренер (ai_trainer.save_athlete_profile),
     # и до появления этого экрана посмотреть, что он там про тебя записал, было
     # нельзя нигде — при том что от этих полей зависит, какую программу он
@@ -1651,8 +1668,17 @@ def settings_keyboard(
     # тогда физически не к чему (см. config.mcp_available).
     if show_mcp:
         b.button(text=i18n.t("btn.connect_mcp"), callback_data="settings:mcp")
+    # Скрыт без ADMIN_ID: отзыву было бы некуда лететь (см. config.feedback_available,
+    # handlers.feedback.feedback_message).
+    if show_feedback:
+        b.button(text=i18n.t("btn.feedback_open"), callback_data="feedback:open")
+
     b.button(text=i18n.t("btn.home_menu"), callback_data="settings:back")
-    b.adjust(1)
+    # 2+2 для блока «Профиль» (все подписи короткие), дальше — по одной кнопке
+    # в ряд для тумблеров, блока «Данные» и «Меню»: adjust повторяет последний
+    # размер на хвост, так что явно перечислять единицы для каждой из
+    # оставшихся кнопок не нужно.
+    b.adjust(2, 2, 1)
     return b.as_markup()
 
 
