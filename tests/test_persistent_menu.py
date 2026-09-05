@@ -2,6 +2,7 @@
 'AI-тренер'. They must always work, even mid-flow, and the keyboard itself should
 stay in sync for every user via RefreshPersistentMenuMiddleware.
 """
+import datetime as dt
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -11,10 +12,15 @@ from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import Message, ReplyKeyboardMarkup
 
+import i18n
 import keyboards
 from fsm import AITrainerFlow, WorkoutFlow
 from handlers import persistent_menu
 from main import RefreshPersistentMenuMiddleware
+
+
+def _placeholder() -> str:
+    return i18n.t("persistent_menu.input_placeholder")
 
 pytestmark = pytest.mark.asyncio
 
@@ -294,3 +300,132 @@ async def test_ai_trainer_command_reuses_same_flow(fresh_db, user_id):
         await persistent_menu.cmd_ai_trainer(message, state)
 
     assert await state.get_state() == AITrainerFlow.chatting.state
+
+
+# ---------- input_field_placeholder исчезает НАВСЕГДА (см. keyboards.
+# INPUT_HINT_HIDE_*, users.input_hint_hidden) ----------
+
+
+async def _add_finished_workouts(db, user_id: int, days_ago: list[int]) -> None:
+    """Законченная тренировка на каждый день из `days_ago` (0 — сегодня)."""
+    today = dt.date.today()
+    for offset in days_ago:
+        day = today - dt.timedelta(days=offset)
+        workout_id = await db.create_workout(user_id, started_at=f"{day.isoformat()}T12:00:00")
+        await db.finish_workout(workout_id, finished_at=f"{day.isoformat()}T12:30:00")
+
+
+def _keyboard_calls(message):
+    return [
+        call for call in message.answer.await_args_list
+        if isinstance(call.kwargs.get("reply_markup"), ReplyKeyboardMarkup)
+    ]
+
+
+async def test_newcomer_keeps_the_hint(fresh_db, user_id):
+    await fresh_db.update_user(user_id, reply_keyboard_version=0)
+    message = _make_message(user_id)
+    message.text = "100 8"
+    handler = AsyncMock(return_value="handled")
+    middleware = RefreshPersistentMenuMiddleware()
+
+    await middleware(handler, message, {})
+
+    kb_calls = _keyboard_calls(message)
+    assert len(kb_calls) == 1
+    assert kb_calls[0].kwargs["reply_markup"].input_field_placeholder == _placeholder()
+    user = await fresh_db.get_user(user_id)
+    assert user["input_hint_hidden"] == 0
+
+
+async def test_seasoned_user_gets_one_resend_without_placeholder_and_flag_set(fresh_db, user_id):
+    """Two finished workouts within the 14-day window (today inclusive) cross
+    keyboards.INPUT_HINT_HIDE_THRESHOLD — one silent-notice re-send, no
+    placeholder, and the flag flips for good."""
+    await fresh_db.update_user(user_id, reply_keyboard_version=keyboards.PERSISTENT_MENU_VERSION)
+    await _add_finished_workouts(fresh_db, user_id, days_ago=[0, 5])
+    message = _make_message(user_id)
+    message.text = "100 8"
+    handler = AsyncMock(return_value="handled")
+    middleware = RefreshPersistentMenuMiddleware()
+
+    await middleware(handler, message, {})
+
+    kb_calls = _keyboard_calls(message)
+    assert len(kb_calls) == 1
+    assert kb_calls[0].kwargs["reply_markup"].input_field_placeholder is None
+    user = await fresh_db.get_user(user_id)
+    assert user["input_hint_hidden"] == 1
+
+    # Ровно один раз: следующий тап того же пользователя молчит.
+    message2 = _make_message(user_id)
+    message2.text = "100 8"
+    handler2 = AsyncMock(return_value="handled")
+    await middleware(handler2, message2, {})
+    assert _keyboard_calls(message2) == []
+
+
+async def test_already_hidden_user_gets_no_resend_after_a_long_pause(fresh_db, user_id):
+    await fresh_db.update_user(
+        user_id,
+        reply_keyboard_version=keyboards.PERSISTENT_MENU_VERSION,
+        input_hint_hidden=1,
+    )
+    # Три недели без тренировок — правило одностороннее, подсказка не должна
+    # вернуться.
+    message = _make_message(user_id)
+    message.text = "100 8"
+    handler = AsyncMock(return_value="handled")
+    middleware = RefreshPersistentMenuMiddleware()
+
+    await middleware(handler, message, {})
+
+    assert _keyboard_calls(message) == []
+
+
+async def test_already_hidden_user_version_bump_resends_without_placeholder(fresh_db, user_id):
+    """A later PERSISTENT_MENU_VERSION bump still re-sends the carrier (that
+    part is unrelated to the hint), but for a user who already hid the hint
+    the re-sent keyboard must not bring the placeholder back."""
+    await fresh_db.update_user(
+        user_id, reply_keyboard_version=0, input_hint_hidden=1,
+    )
+    message = _make_message(user_id)
+    message.text = "100 8"
+    handler = AsyncMock(return_value="handled")
+    middleware = RefreshPersistentMenuMiddleware()
+
+    await middleware(handler, message, {})
+
+    kb_calls = _keyboard_calls(message)
+    assert len(kb_calls) == 1
+    assert kb_calls[0].kwargs["reply_markup"].input_field_placeholder is None
+    user = await fresh_db.get_user(user_id)
+    assert user["reply_keyboard_version"] == keyboards.PERSISTENT_MENU_VERSION
+    assert user["input_hint_hidden"] == 1
+
+
+async def test_one_workout_older_than_window_keeps_the_hint(fresh_db, user_id):
+    """Two workouts, but one of them older than the 14-day window — only one
+    counts, threshold not reached, hint stays."""
+    await fresh_db.update_user(user_id, reply_keyboard_version=keyboards.PERSISTENT_MENU_VERSION)
+    await _add_finished_workouts(
+        fresh_db, user_id, days_ago=[0, keyboards.INPUT_HINT_HIDE_WINDOW_DAYS]
+    )
+    message = _make_message(user_id)
+    message.text = "100 8"
+    handler = AsyncMock(return_value="handled")
+    middleware = RefreshPersistentMenuMiddleware()
+
+    await middleware(handler, message, {})
+
+    assert _keyboard_calls(message) == []
+    user = await fresh_db.get_user(user_id)
+    assert user["input_hint_hidden"] == 0
+
+
+async def test_keyboards_persistent_menu_show_hint_false_omits_placeholder():
+    kb = keyboards.persistent_menu(show_hint=False)
+    assert kb.input_field_placeholder is None
+    kb_default = keyboards.persistent_menu()
+    assert kb_default.input_field_placeholder == _placeholder()

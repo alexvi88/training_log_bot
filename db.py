@@ -975,6 +975,15 @@ async def _migrate_schema() -> None:
         # NULL значит «не задана», и строка «Цель N · осталось M» на экране дня
         # просто не показывается, а не подставляет угаданное число.
         await _conn.execute("ALTER TABLE users ADD COLUMN kcal_goal INTEGER")
+    if "input_hint_hidden" not in user_cols:
+        # Скрыта ли статичная подсказка формата ввода (persistent_menu.
+        # input_placeholder) — НАВСЕГДА: один раз выставленная в 1 никогда не
+        # возвращается к 0 (см. main.RefreshPersistentMenuMiddleware и
+        # keyboards.INPUT_HINT_HIDE_*), иначе клавиатура мигала бы подсказкой
+        # обратно после паузы в тренировках, хотя атлет её уже перерос.
+        await _conn.execute(
+            "ALTER TABLE users ADD COLUMN input_hint_hidden INTEGER NOT NULL DEFAULT 0"
+        )
 
     set_cols = await _column_names("sets")
     if "is_warmup" in set_cols:
@@ -3226,6 +3235,27 @@ async def list_finished_workout_dates(
         (user_id,),
     )
     return [r["d"] for r in await cur.fetchall()]
+
+
+async def count_finished_workouts_since(
+    user_id: int, since: dt.date, *, tz_offset: Optional[int] = None
+) -> int:
+    """Cheap COUNT of finished workouts whose local calendar day falls on or
+    after `since` (today inclusive, when `since` is today).
+
+    Заводился специально для main.RefreshPersistentMenuMiddleware — решить,
+    пора ли навсегда спрятать статичную подсказку формата ввода
+    (keyboards.INPUT_HINT_HIDE_*), не таская на каждый апдейт всю историю дат,
+    как list_finished_workout_dates выше делает для полной сводки.
+    """
+    day = _local_day("started_at", await _tz_offset_of(user_id, tz_offset))
+    cur = await conn().execute(
+        f"SELECT COUNT(*) AS c FROM workouts "
+        f"WHERE user_id = ? AND status = 'finished' AND {day} >= ?",
+        (user_id, since.isoformat()),
+    )
+    row = await cur.fetchone()
+    return row["c"] if row else 0
 
 
 async def list_finished_workouts_by_day_in_month(
