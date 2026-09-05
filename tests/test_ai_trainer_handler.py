@@ -168,7 +168,7 @@ async def test_ai_voice_question_rejects_empty_transcription(fresh_db, user_id, 
     await ai_trainer.ai_voice_question(message, state)
 
     message.reply.assert_awaited_once()
-    assert "разобрать" in message.reply.await_args.args[0]
+    assert "Не разобрал" in message.reply.await_args.args[0]
 
 
 async def test_ai_voice_question_forwards_transcribed_text_as_question(fresh_db, user_id, monkeypatch):

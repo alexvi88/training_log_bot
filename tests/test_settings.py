@@ -105,7 +105,7 @@ async def test_formula_switch_asks_before_rewriting_every_e1rm(fresh_db, user_id
     # Русское название формулы, а не сырой код "brzycki" — та же логика, что и
     # у тоста после подтверждения (test_confirming_the_formula_switch_is_a_toast_not_a_modal).
     assert "Бжицки" in text
-    assert "пересчитаются" in text
+    assert "Пересчитаю" in text
 
 
 async def test_confirming_the_formula_switch_applies_it(fresh_db, user_id):

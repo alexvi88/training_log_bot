@@ -358,7 +358,7 @@ def test_set_edit_does_not_collide_with_a_decimal_weight():
 
 
 def test_set_edit_rejects_zero_or_negative_index():
-    with pytest.raises(ParseError, match="больше 0"):
+    with pytest.raises(ParseError, match="нумерую с 1"):
         parse_set_edit("0: 100 8")
 
 
