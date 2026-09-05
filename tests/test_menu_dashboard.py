@@ -607,12 +607,12 @@ async def test_history_younger_than_the_fallback_window_gets_no_lift_tiles(fresh
 
 
 def test_the_total_merges_into_the_30_day_tile():
-    """«ТРЕНИРОВОК ВСЕГО / ЗА 30 ДНЕЙ» — одна плитка на двоих через дробь, а не
-    «ВСЕГО ТРЕНИРОВОК» и «ТРЕНИРОВОК ЗА 30 ДНЕЙ» подряд: без total_workouts
-    число плиток и остальные плитки не меняются."""
+    """«ТРЕНИРОВОК 148  14 за 30 дней» — одна плитка на двоих: короткая подпись,
+    крупное «всего» и мелкая приписка с окном, а не длинная подпись, вылезающая
+    за плитку. Без total_workouts число плиток и остальные плитки не меняются."""
     with_total = formatting.menu_tiles(_dashboard(last_30_days=14), 5000, 2, total_workouts=148)
     without = formatting.menu_tiles(_dashboard(last_30_days=14), 5000, 2)
 
-    assert with_total[0] == ("ТРЕНИРОВОК ВСЕГО / ЗА 30 ДНЕЙ", "148/14")
+    assert with_total[0] == ("ТРЕНИРОВОК", "148", "14 за 30 дней")
     assert with_total[1:] == without[1:]
     assert len(with_total) == len(without) == 3

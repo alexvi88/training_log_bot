@@ -436,12 +436,27 @@ def render_menu_dashboard(
         ax = band("tiles")
         ax.set_ylim(1, 0)
         tile_w = (DASH_RIGHT - DASH_LEFT - 0.02 * (len(tiles) - 1)) / len(tiles)
-        for i, (label, value) in enumerate(tiles):
+        fig_px = fig.get_figwidth() * fig.dpi
+        renderer = fig.canvas.get_renderer()
+        for i, tile in enumerate(tiles):
+            label, value, *rest = tile
+            sub = rest[0] if rest else ""
             x = DASH_LEFT + i * (tile_w + 0.02)
+            inner = tile_w - 2 * 0.022
             _dash_card(ax, x, 0.10, tile_w, 0.80)
-            ax.text(x + 0.022, 0.34, label, color=DIM, fontsize=DASH_FS_CAPTION, va="center")
-            ax.text(x + 0.022, 0.66, value, color=FG, fontsize=DASH_FS_VALUE,
-                    fontweight="bold", va="center")
+            label_txt = ax.text(x + 0.022, 0.34, label, color=DIM, fontsize=DASH_FS_CAPTION, va="center")
+            # Подпись не должна вылезать за плитку ни на одном языке: ширина
+            # известна только шрифту, поэтому ужимаем по рендереру, как шапку.
+            _shrink_to_fit(fig, label_txt, inner, min_size=5.5)
+            value_txt = ax.text(x + 0.022, 0.66, value, color=FG, fontsize=DASH_FS_VALUE,
+                                fontweight="bold", va="center")
+            if sub:
+                # Приписка мелко и приглушённо сразу за числом, по базовой линии
+                # числа — «43  14 за 30 дней» читается как одно целое.
+                value_w = value_txt.get_window_extent(renderer).width / fig_px
+                sub_txt = ax.text(x + 0.022 + value_w + 0.012, 0.69, sub, color=DIM,
+                                  fontsize=DASH_FS_CAPTION, va="center")
+                _shrink_to_fit(fig, sub_txt, inner - value_w - 0.012, min_size=5.0)
 
     if rows:
         ax = band("vol")
