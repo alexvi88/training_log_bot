@@ -105,7 +105,7 @@ BTN_AI = _ReplyButtonMatch("btn.persistent.ai")
 # them. That's what forced v3: the carrier-delete bug (see
 # handlers/persistent_menu.py) had already wiped the keyboard on Android
 # before the fix landed, and those users' version was already current.
-PERSISTENT_MENU_VERSION = 4
+PERSISTENT_MENU_VERSION = 5
 
 
 def persistent_menu() -> ReplyKeyboardMarkup:
@@ -119,7 +119,7 @@ def persistent_menu() -> ReplyKeyboardMarkup:
     подсказка пропадала вместе с риском потерять весь ряд. Единственный носитель,
     который никто не трогает, — тот, что шлёт attach_silently / middleware
     обновления меню, поэтому подсказка едет только на нём и меняется только
-    через PERSISTENT_MENU_VERSION (v4 — как раз её появление).
+    через PERSISTENT_MENU_VERSION (v4 — её появление, v5 — короткая формулировка).
     """
     return ReplyKeyboardMarkup(
         keyboard=[
