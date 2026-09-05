@@ -888,7 +888,7 @@ async def test_delete_asks_reports_missing_entry(user_id, monkeypatch):
 
     await food_diary.fd_delete_ask(callback, state)
 
-    assert callback.answer.call_args.args[0] == "Запись не найдена"
+    assert callback.answer.call_args.args[0] == "Такой записи уже нет — открой 🍽 Еда и посмотри актуальный список"
 
 
 async def test_delete_removes_only_the_owner_entry(user_id, monkeypatch):
@@ -905,7 +905,7 @@ async def test_delete_removes_only_the_owner_entry(user_id, monkeypatch):
     callback = _make_callback(user_id, f"fd:del:{other_id}")
     await food_diary.fd_delete(callback, state)
     assert await dbmod.get_food_entry(other_id) is not None  # чужая запись цела
-    assert callback.answer.call_args.args[0] == "Запись не найдена"
+    assert callback.answer.call_args.args[0] == "Такой записи уже нет — открой 🍽 Еда и посмотри актуальный список"
 
 
 async def test_history_lists_logged_days(user_id, monkeypatch):

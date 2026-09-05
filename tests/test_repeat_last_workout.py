@@ -133,7 +133,7 @@ async def test_repeat_last_without_history_is_gentle(fresh_db, user_id):
 
     await workout.pick_repeat_last(callback, state)
 
-    callback.answer.assert_any_await("Нет прошлой тренировки для повтора", show_alert=True)
+    callback.answer.assert_any_await("Повторять нечего — тренировок в дневнике пока нет. Заверши первую", show_alert=True)
 
 
 @pytest.mark.asyncio

@@ -112,7 +112,7 @@ async def test_repeat_with_no_sets_is_a_noop(fresh_db, user_id):
     await workout.live_repeat_set(callback, state)
 
     assert await db.list_sets_for_block(block_id) == []
-    callback.answer.assert_awaited_with("Нет подхода для повтора")
+    callback.answer.assert_awaited_with("Повторять нечего — подходов в этом упражнении пока ноль")
 
 
 @pytest.mark.asyncio
