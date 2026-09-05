@@ -626,7 +626,7 @@
   "history.back_to_workout_button": "⬅️ Назад к тренировке",
   "history.calendar_day_empty": "В этот день не тренировался",
   "history.calendar_day_header": "📅 <b>Тренировки — {date}</b>",
-  "history.calendar_header": "📅 <b>История по месяцам</b>\n<i>Тренировка была — день с меткой. Жми на него.</i>",
+  "history.calendar_header": "📅 <b>История по месяцам</b>\n<i>🏋️ — день с тренировкой. Жми на него.</i>",
   "history.chart_metric_reps": "повторы",
   "history.day_empty": "без упражнений",
   "history.delete_confirm_title": "Удалить тренировку",

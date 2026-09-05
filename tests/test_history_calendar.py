@@ -55,17 +55,17 @@ def test_marked_day_gets_a_bullet_unmarked_does_not():
         "hist:cal", 2026, 9, today=today, marked={"2026-09-03"}, show_quick_dates=False
     )
     labels = {b.callback_data: b.text for b in _all_buttons(kb)}
-    assert labels["hist:cal:date:2026-09-03"] == "3•"
+    assert labels["hist:cal:date:2026-09-03"] == "🏋️3"
     assert labels["hist:cal:date:2026-09-04"] == "4"
 
 
-def test_marked_today_keeps_the_today_dot_and_adds_the_bullet():
+def test_marked_today_shows_the_icon_instead_of_the_today_dots():
     today = dt.date(2026, 9, 5)
     kb = keyboards.calendar_keyboard(
         "hist:cal", 2026, 9, today=today, marked={"2026-09-05"}, show_quick_dates=False
     )
     labels = {b.callback_data: b.text for b in _all_buttons(kb)}
-    assert labels["hist:cal:date:2026-09-05"] == "·5•·"
+    assert labels["hist:cal:date:2026-09-05"] == "🏋️5"
 
 
 def test_show_quick_dates_false_hides_today_yesterday_row():
@@ -211,7 +211,7 @@ async def test_calendar_open_shows_current_month_and_marks(fresh_db, user_id, mo
     )
     cbs = [b.callback_data for row_ in kb.inline_keyboard for b in row_]
     labels = {b.callback_data: b.text for row_ in kb.inline_keyboard for b in row_}
-    assert labels["hist:cal:date:2026-09-03"] == "3•"
+    assert labels["hist:cal:date:2026-09-03"] == "🏋️3"
     assert "hist:back" in cbs  # "⬅️ К списку" replaces the generic cancel
 
 
@@ -228,4 +228,4 @@ async def test_calendar_nav_moves_month_and_keeps_marks(fresh_db, user_id):
         callback.message.edit_text.await_args.kwargs.get("reply_markup")
     )
     labels = {b.callback_data: b.text for row_ in kb.inline_keyboard for b in row_}
-    assert labels["hist:cal:date:2026-08-15"] == "15•"
+    assert labels["hist:cal:date:2026-08-15"] == "🏋️15"
