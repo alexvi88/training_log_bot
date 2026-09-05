@@ -302,6 +302,7 @@ async def menu_achievements(callback: CallbackQuery, state: FSMContext):
     from_card = callback.data.endswith(":card")
     kb = InlineKeyboardBuilder()
     kb.button(text=i18n.t("history.ranks_button"), callback_data="rank:ladder" + (":prog" if from_progress else ""))
+    kb.button(text=i18n.t("btn.invite_friend"), callback_data="invite:show")
     # hist:menu — существующая ручка «в главное меню» (hist_to_menu ниже зовёт
     # _show_main_menu); отдельной заводить незачем, а свежая строка вроде
     # «menu:back» была бы кнопкой, которую никто не слушает.
@@ -310,6 +311,25 @@ async def menu_achievements(callback: CallbackQuery, state: FSMContext):
     await ui.safe_edit(
         callback, text, reply_markup=kb.as_markup(), parse_mode="HTML", delete=not from_card
     )
+
+
+@router.callback_query(F.data == "invite:show")
+async def invite_show(callback: CallbackQuery, state: FSMContext):
+    """«🤝 Пригласить» — та же ссылка, что уже едет под карточкой тренировки
+    (acquisition.referral_link), только с отдельным входом: раньше её было не
+    позвать нигде, кроме шаринга уже готовой карточки — то есть только после
+    того, как тренировка закончена.
+    """
+    await state_scaffold.clear_state_keep_workout(state)
+    link = acquisition.referral_link(
+        await sharing.get_bot_username(callback.bot), callback.from_user.id
+    )
+    text = i18n.t("invite.screen", link=escape(link))
+    kb = InlineKeyboardBuilder()
+    kb.button(text=i18n.t("btn.home_menu"), callback_data="hist:menu")
+    kb.adjust(1)
+    await ui.safe_edit(callback, text, reply_markup=kb.as_markup(), parse_mode="HTML")
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("rank:ladder"))

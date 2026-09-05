@@ -139,9 +139,10 @@ async def _clear_previous_screen(message: Message, state: FSMContext) -> None:
 async def _show_day(event, state: FSMContext, date: dt.date) -> None:
     """Отрисовать экран одного дня и встать в состояние его просмотра."""
     user_id = event.from_user.id
+    user = await db.get_user(user_id)
     rows = await db.list_food_entries(user_id, date.isoformat())
     entries = _entry_views(rows)
-    text = formatting.build_food_day_screen(date, entries)
+    text = formatting.build_food_day_screen(date, entries, kcal_goal=user["kcal_goal"])
     kb = keyboards.food_day_keyboard(date, [e.id for e in entries], today=await _today(user_id))
 
     await state.set_state(FoodDiaryFlow.viewing)
@@ -202,6 +203,41 @@ async def fd_menu(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "fd:noop")
 async def fd_noop(callback: CallbackQuery):
     await callback.answer()
+
+
+# Разумные границы дневной цели — просто чтобы не записать в базу опечатку
+# («22000» вместо «2200»), а не диетологический лимит.
+KCAL_GOAL_MIN = 500
+KCAL_GOAL_MAX = 10000
+
+
+@router.callback_query(F.data == "fd:goal")
+async def fd_goal_prompt(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    date = data.get("fd_date")
+    await state.set_state(FoodDiaryFlow.setting_goal)
+    back_cb = f"fd:day:{date}" if date else "fd:menu"
+    await ui.safe_edit(
+        callback, i18n.t("food.goal_prompt"), reply_markup=keyboards.cancel_keyboard(back_cb)
+    )
+    await callback.answer()
+
+
+@router.message(StateFilter(FoodDiaryFlow.setting_goal), F.text)
+async def fd_goal_entered(message: Message, state: FSMContext):
+    raw = message.text.strip().replace(" ", "")
+    if not raw.isdigit():
+        await ui.reply_transient(message, i18n.t("food.goal_invalid"))
+        return
+    goal = int(raw)
+    if not (KCAL_GOAL_MIN <= goal <= KCAL_GOAL_MAX):
+        await ui.reply_transient(message, i18n.t("food.goal_out_of_range", max=KCAL_GOAL_MAX))
+        return
+    await db.set_kcal_goal(message.from_user.id, goal)
+    await message.reply(i18n.t("food.goal_saved", goal=goal))
+    data = await state.get_data()
+    date = dt.date.fromisoformat(data["fd_date"]) if data.get("fd_date") else await _today(message.from_user.id)
+    await _show_day(message, state, date)
 
 
 # ---------- распознавание еды ----------

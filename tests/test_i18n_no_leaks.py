@@ -622,7 +622,7 @@ async def _screen_fallback_generic(db, user_id: int) -> str:
     message.content_type = ContentType.TEXT
     message.text = "непонятная бессвязная фраза без числа и без названия"
     message.reply = AsyncMock(return_value=SimpleNamespace(message_id=2))
-    await fallback.unhandled_text(message)
+    await fallback.unhandled_text(message, MagicMock())
     return message.reply.await_args.args[0]
 
 
@@ -677,6 +677,15 @@ async def _screen_factcheck(db, user_id: int) -> str:
     failed = i18n.t("factcheck.failed")
     pool = "\n".join(running_texts.fact_check_pool())
     return f"{busy}\n{failed}\n{pool}"
+
+
+async def _screen_invite(db, user_id: int) -> str:
+    """«🤝 Пригласить» (handlers/history.py:invite_show) — ссылка в <pre>
+    плюс короткая реплика тренера."""
+    import acquisition
+
+    link = acquisition.referral_link("testbot", user_id)
+    return i18n.t("invite.screen", link=link)
 
 
 def _strip_autonyms(text: str) -> str:
@@ -739,6 +748,7 @@ SCREENS: list[tuple[str, object]] = [
     ("ai_trainer_setup_question", _screen_ai_trainer_setup_question),
     ("ai_trainer_thinking_pools", _screen_ai_trainer_thinking_pools),
     ("factcheck_screen", _screen_factcheck),
+    ("invite_screen", _screen_invite),
 ]
 
 # Экраны, которые всё ещё протекают кириллицей мимо каталога. Список

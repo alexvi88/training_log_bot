@@ -142,10 +142,11 @@ def main_menu(
         b.button(text=i18n.t("btn.resume_workout_caps"), callback_data="menu:resume_workout")
     else:
         b.button(text=i18n.t("btn.start_workout_caps"), callback_data="menu:start_workout")
-    # Тот же callback, что и «📥 Импорт CSV» в настройках (settings:import,
-    # см. handlers/csv_import.py) — второй вход в один и тот же флоу, не новый.
+    # Тот же флоу, что и «📥 Импорт CSV» в настройках (settings:import, см.
+    # handlers/csv_import.py) — второй вход, не новый. Суффикс ":menu" —
+    # чтобы «Отмена» внутри флоу знала, куда вернуться (import_cancel).
     if show_import_button:
-        b.button(text=i18n.t("btn.import_history"), callback_data="settings:import")
+        b.button(text=i18n.t("btn.import_history"), callback_data="settings:import:menu")
     b.button(text=i18n.t("btn.progress"), callback_data="menu:progress")
     b.button(text=i18n.t("btn.history"), callback_data="menu:history")
     b.button(text=i18n.t("btn.exercises"), callback_data="menu:exercises")
@@ -1651,6 +1652,9 @@ def settings_keyboard(
     # тогда физически не к чему (см. config.mcp_available).
     if show_mcp:
         b.button(text=i18n.t("btn.connect_mcp"), callback_data="settings:mcp")
+    # Добавлена в конец списка нарочно — экран настроек не раз перестраивался,
+    # и лишняя кнопка в конце безопаснее вставки посередине.
+    b.button(text=i18n.t("btn.invite_friend"), callback_data="invite:show")
     b.button(text=i18n.t("btn.home_menu"), callback_data="settings:back")
     b.adjust(1)
     return b.as_markup()
@@ -1819,20 +1823,20 @@ def bodyweight_keyboard(has_logs: bool, weeks: int = 0, show_periods: bool = Fal
 BODYWEIGHT_LIST_PAGE_SIZE = 10
 
 
-def bodyweight_list_keyboard(entry_ids: Sequence[int], page: int, has_next: bool) -> InlineKeyboardMarkup:
-    """Экран «✏️ Записи»: удаление любой записи (не только последней), страницами.
+def bodyweight_list_keyboard(rows: Sequence, unit: str, page: int, has_next: bool) -> InlineKeyboardMarkup:
+    """Экран «✏️ Записи»: правка и удаление любой записи, страницами.
 
-    Кнопка удаления — по номеру строки («🗑 3»), как в food_day_keyboard: сам
-    вес и дата уже расписаны в тексте экрана, а в кнопку не влезают.
+    Каждая запись — своя строка: «14.03 · 82.5» открывает правку веса, 🗑
+    рядом удаляет. rows — страница bodyweight_logs (id, logged_at, weight),
+    как возвращает db.list_bodyweight_logs_page.
     """
     b = InlineKeyboardBuilder()
-    if entry_ids:
+    u = formatting.unit_label(unit)
+    for r in rows:
+        label = f"{dt.datetime.fromisoformat(r['logged_at']).strftime('%d.%m')} · {formatting.format_weight(r['weight'])}{u}"
         b.row(
-            *[
-                InlineKeyboardButton(text=f"🗑 {i}", callback_data=f"bw:delrec:{entry_id}:{page}")
-                for i, entry_id in enumerate(entry_ids, start=1)
-            ],
-            width=5,
+            InlineKeyboardButton(text=label, callback_data=f"bw:editrec:{r['id']}:{page}"),
+            InlineKeyboardButton(text="🗑", callback_data=f"bw:delrec:{r['id']}:{page}"),
         )
     nav = []
     if page > 0:
@@ -1881,8 +1885,9 @@ def food_day_keyboard(date: dt.date, entry_ids: Sequence[int], today: dt.date) -
         b.row(InlineKeyboardButton(text=i18n.t("btn.today"), callback_data=f"fd:day:{today.isoformat()}"))
     b.row(
         InlineKeyboardButton(text=i18n.t("btn.history"), callback_data="fd:history:0"),
-        InlineKeyboardButton(text=i18n.t("btn.home_menu"), callback_data="fd:menu"),
+        InlineKeyboardButton(text=i18n.t("btn.kcal_goal"), callback_data="fd:goal"),
     )
+    b.row(InlineKeyboardButton(text=i18n.t("btn.home_menu"), callback_data="fd:menu"))
     return b.as_markup()
 
 

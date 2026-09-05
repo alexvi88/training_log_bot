@@ -85,6 +85,7 @@ class AITrainerFlow(StatesGroup):
 class BodyweightFlow(StatesGroup):
     viewing = State()
     browsing = State()  # экран «✏️ Записи» — список с удалением любой записи
+    editing = State()   # правка веса одной записи из «✏️ Записи»
 
 
 class RoutineFlow(StatesGroup):
@@ -114,3 +115,4 @@ class FoodDiaryFlow(StatesGroup):
     confirming = State()       # model's guess is on screen, awaiting подтверждение/правку
     correcting = State()       # user is typing what the model got wrong
     browsing_history = State()
+    setting_goal = State()     # «🎯 Цель ккал» — ждём число цели

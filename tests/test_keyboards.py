@@ -243,11 +243,17 @@ def test_bodyweight_keyboard_hides_the_records_list_without_logs():
     assert "bw:list:0" not in cbs
 
 
+def _bw_rows(*ids):
+    return [{"id": i, "logged_at": "2026-03-14T09:00:00", "weight": 82.5} for i in ids]
+
+
 def test_bodyweight_list_keyboard_numbers_delete_buttons_and_pages():
-    kb = keyboards.bodyweight_list_keyboard([101, 102, 103], page=1, has_next=True)
+    kb = keyboards.bodyweight_list_keyboard(_bw_rows(101, 102, 103), "kg", page=1, has_next=True)
     texts = _button_texts(kb)
     cbs = [b.callback_data for row in kb.inline_keyboard for b in row]
-    assert "🗑 1" in texts and "🗑 2" in texts and "🗑 3" in texts
+    assert any("14.03" in t for t in texts)
+    assert "🗑" in texts
+    assert "bw:editrec:101:1" in cbs
     assert "bw:delrec:101:1" in cbs
     assert "bw:list:0" in cbs  # предыдущая страница
     assert "bw:list:2" in cbs  # следующая страница
@@ -255,6 +261,6 @@ def test_bodyweight_list_keyboard_numbers_delete_buttons_and_pages():
 
 
 def test_bodyweight_list_keyboard_no_delete_row_when_empty():
-    kb = keyboards.bodyweight_list_keyboard([], page=0, has_next=False)
+    kb = keyboards.bodyweight_list_keyboard([], "kg", page=0, has_next=False)
     texts = _button_texts(kb)
     assert not any(t.startswith("🗑") for t in texts)

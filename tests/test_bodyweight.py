@@ -576,3 +576,94 @@ def test_parse_bodyweight_entry_rejects_a_future_date():
 
     with pytest.raises(ParseError):
         parse_bodyweight_entry("82.5 01.09.2026", today=dt.date(2026, 8, 7))
+
+
+# ---------- «✏️ Записи»: правка веса ----------
+
+
+@pytest.mark.asyncio
+async def test_db_update_bodyweight_log_changes_the_weight(user_id):
+    log_id = await dbmod.add_bodyweight_log(user_id, 80.0, logged_at="2026-01-01T10:00:00")
+    updated = await dbmod.update_bodyweight_log(log_id, user_id, 81.5)
+    assert updated is True
+    log = await dbmod.get_bodyweight_log(log_id)
+    assert log["weight"] == 81.5
+
+
+@pytest.mark.asyncio
+async def test_db_update_bodyweight_log_refuses_someone_elses_row(user_id):
+    log_id = await dbmod.add_bodyweight_log(user_id, 80.0, logged_at="2026-01-01T10:00:00")
+    updated = await dbmod.update_bodyweight_log(log_id, user_id + 1, 90.0)
+    assert updated is False
+    log = await dbmod.get_bodyweight_log(log_id)
+    assert log["weight"] == 80.0
+
+
+def test_bodyweight_list_keyboard_has_one_row_per_entry_with_edit_and_delete():
+    import keyboards
+
+    rows = [
+        {"id": 5, "logged_at": "2026-03-14T09:00:00", "weight": 82.5},
+        {"id": 6, "logged_at": "2026-03-15T09:00:00", "weight": 82.0},
+    ]
+    kb = keyboards.bodyweight_list_keyboard(rows, "kg", page=0, has_next=False)
+    entry_rows = [row for row in kb.inline_keyboard if len(row) == 2 and row[1].text == "🗑"]
+    assert len(entry_rows) == 2
+    assert entry_rows[0][0].callback_data == "bw:editrec:5:0"
+    assert entry_rows[0][1].callback_data == "bw:delrec:5:0"
+    assert "14.03" in entry_rows[0][0].text and "82.5" in entry_rows[0][0].text
+
+
+@pytest.mark.asyncio
+async def test_bw_edit_record_asks_for_a_new_weight(fresh_db, user_id):
+    import handlers.bodyweight as bw
+    from fsm import BodyweightFlow
+
+    log_id = await dbmod.add_bodyweight_log(user_id, 80.0, logged_at="2026-01-01T10:00:00")
+    state = await _make_state(user_id)
+
+    callback = _make_bw_confirm_callback(user_id, f"bw:editrec:{log_id}:0")
+    await bw.bw_edit_record(callback, state)
+
+    assert await state.get_state() == BodyweightFlow.editing.state
+    data = await state.get_data()
+    assert data["bw_edit_log_id"] == log_id
+    assert data["bw_edit_page"] == 0
+
+
+@pytest.mark.asyncio
+async def test_bw_edit_weight_entered_updates_the_record(fresh_db, user_id):
+    import handlers.bodyweight as bw
+    from fsm import BodyweightFlow
+
+    log_id = await dbmod.add_bodyweight_log(user_id, 80.0, logged_at="2026-01-01T10:00:00")
+    state = await _make_state(user_id)
+    await state.set_state(BodyweightFlow.editing)
+    await state.update_data(bw_edit_log_id=log_id, bw_edit_page=0)
+
+    message = _make_message(user_id, "83.5")
+    await bw.bw_edit_weight_entered(message, state)
+
+    log = await dbmod.get_bodyweight_log(log_id)
+    assert log["weight"] == 83.5
+    assert await state.get_state() == BodyweightFlow.browsing.state
+    message.reply.assert_awaited()
+    assert "83.5" in message.reply.await_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_bw_edit_weight_entered_rejects_garbage(fresh_db, user_id):
+    import handlers.bodyweight as bw
+    from fsm import BodyweightFlow
+
+    log_id = await dbmod.add_bodyweight_log(user_id, 80.0, logged_at="2026-01-01T10:00:00")
+    state = await _make_state(user_id)
+    await state.set_state(BodyweightFlow.editing)
+    await state.update_data(bw_edit_log_id=log_id, bw_edit_page=0)
+
+    message = _make_message(user_id, "не число")
+    await bw.bw_edit_weight_entered(message, state)
+
+    log = await dbmod.get_bodyweight_log(log_id)
+    assert log["weight"] == 80.0
+    assert await state.get_state() == BodyweightFlow.editing.state

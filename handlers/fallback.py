@@ -14,9 +14,13 @@ main menu, group pickers) ends up here instead of being silently dropped.
 """
 
 import logging
+from contextlib import suppress
+from types import SimpleNamespace
+from typing import Optional
 
-from aiogram import Router
+from aiogram import F, Router
 from aiogram.enums import ContentType
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
@@ -80,9 +84,102 @@ _HUMAN_CONTENT = frozenset({
 # не наше дело.
 
 
+async def _offer_ask_coach(message: Message, state: FSMContext) -> None:
+    """Голосовое или фото без ожидающего состояния (голос иначе разбирается
+    только в подходе и в чате с AI-тренером, см. handlers/ai_trainer.py) —
+    вместо огульного «Не понял» предлагаем спросить тренера тем же разбором,
+    что и в чате (ai_voice_question/ai_photo_question). Разбор не платный сам
+    по себе (см. fb_ask_coach) — уходит только по тапу, а не на каждое
+    случайно попавшее фото.
+    """
+    if message.content_type == ContentType.VOICE:
+        kind, file_id = "voice", message.voice.file_id
+        file_size, duration, caption = message.voice.file_size, message.voice.duration, ""
+    else:
+        kind = "photo"
+        photo = message.photo[-1]
+        file_id, file_size, duration = photo.file_id, photo.file_size, None
+        caption = message.caption or ""
+    await state.update_data(
+        fb_media_kind=kind, fb_file_id=file_id, fb_file_size=file_size,
+        fb_duration=duration, fb_caption=caption, fb_message_id=message.message_id,
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text=i18n.t("btn.ask_coach_about_this"), callback_data="fb:ask_coach")
+    ]])
+    await message.reply(
+        i18n.t("fallback.media_unclear", btn=i18n.t("btn.ask_coach_about_this")),
+        reply_markup=kb,
+    )
+
+
+class _ReplayedMedia:
+    """Голосовое/фото, вызванное по кнопке «🤖 Спросить тренера про это», в
+    форме, которой ждут ai_voice_question/ai_photo_question (handlers/ai_trainer.py)
+    — тех же атрибутов, что у исходного Message, только собранных заново из
+    FSM: у Bot API нет способа получить старое сообщение по id, а гонять сам
+    объект Message через FSM (JSON) нельзя.
+    """
+
+    def __init__(
+        self, callback: CallbackQuery, *, kind: str, file_id: str,
+        file_size: Optional[int], duration: Optional[int], caption: str,
+    ):
+        self._bot = callback.bot
+        self._chat_id = callback.message.chat.id
+        self.bot = callback.bot
+        self.from_user = callback.from_user
+        self.chat = callback.message.chat
+        self.caption = caption or None
+        if kind == "voice":
+            self.voice = SimpleNamespace(file_id=file_id, file_size=file_size, duration=duration)
+            self.photo = None
+        else:
+            self.photo = [SimpleNamespace(file_id=file_id, file_size=file_size)]
+            self.voice = None
+
+    async def reply(self, text: str, **kwargs):
+        return await self._bot.send_message(self._chat_id, text, **kwargs)
+
+    async def answer(self, text: str, **kwargs):
+        return await self._bot.send_message(self._chat_id, text, **kwargs)
+
+
+@router.callback_query(F.data == "fb:ask_coach")
+async def fb_ask_coach(callback: CallbackQuery, state: FSMContext) -> None:
+    from fsm import AITrainerFlow
+    from handlers.ai_trainer import ai_photo_question, ai_voice_question
+
+    data = await state.get_data()
+    kind, file_id = data.get("fb_media_kind"), data.get("fb_file_id")
+    if not kind or not file_id:
+        await callback.answer(i18n.t("fallback.ask_coach_expired"), show_alert=True)
+        return
+    wrapper = _ReplayedMedia(
+        callback, kind=kind, file_id=file_id,
+        file_size=data.get("fb_file_size"), duration=data.get("fb_duration"),
+        caption=data.get("fb_caption") or "",
+    )
+    with suppress(TelegramBadRequest):
+        await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.answer()
+    await state.set_state(AITrainerFlow.chatting)
+    await state.update_data(
+        fb_media_kind=None, fb_file_id=None, fb_file_size=None,
+        fb_duration=None, fb_caption=None, fb_message_id=None,
+    )
+    if kind == "voice":
+        await ai_voice_question(wrapper, state)
+    else:
+        await ai_photo_question(wrapper, state)
+
+
 @router.message()
-async def unhandled_text(message: Message) -> None:
+async def unhandled_text(message: Message, state: FSMContext) -> None:
     if message.content_type not in _HUMAN_CONTENT:
+        return
+    if message.content_type in (ContentType.VOICE, ContentType.PHOTO):
+        await _offer_ask_coach(message, state)
         return
     text = (message.text or "").strip() if message.content_type == ContentType.TEXT else ""
     if text and not text.startswith("/"):

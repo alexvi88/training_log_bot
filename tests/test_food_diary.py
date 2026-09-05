@@ -564,11 +564,13 @@ def test_day_keyboard_has_delete_per_entry_and_day_steps():
     assert "fd:history:0" in cbs
 
 
-def test_day_keyboard_history_and_menu_share_a_row():
+def test_day_keyboard_history_and_goal_share_a_row():
     kb = keyboards.food_day_keyboard(dt.date(2026, 7, 20), [], today=dt.date(2026, 7, 20))
-    last_row = kb.inline_keyboard[-1]
-    assert [b.callback_data for b in last_row] == ["fd:history:0", "fd:menu"]
-    assert last_row[1].text == "🏠 Меню"
+    rows = kb.inline_keyboard
+    history_row = [row for row in rows if row[0].callback_data == "fd:history:0"][0]
+    assert [b.callback_data for b in history_row] == ["fd:history:0", "fd:goal"]
+    assert rows[-1][0].callback_data == "fd:menu"
+    assert rows[-1][0].text == "🏠 Меню"
 
 
 def test_day_keyboard_hides_step_into_the_future():
@@ -1070,3 +1072,91 @@ def test_plausible_macros_pass_through_untouched():
     assert ai_trainer._as_macro("~15 г", ai_trainer.MAX_FOOD_GRAMS) == 15.0
     assert ai_trainer._as_macro(0, ai_trainer.MAX_FOOD_KCAL) == 0.0
     assert ai_trainer._as_macro(None, ai_trainer.MAX_FOOD_KCAL) is None
+
+
+# ---------- «🎯 Цель ккал» ----------
+
+
+def test_goal_line_shows_remaining_when_under():
+    entries = [formatting.FoodEntryView(id=1, description="Обед", calories=1560.0)]
+    text = formatting.build_food_day_screen(dt.date(2026, 7, 20), entries, kcal_goal=2200)
+    assert "Цель 2200 · осталось 640" in text
+
+
+def test_goal_line_shows_over_when_over():
+    entries = [formatting.FoodEntryView(id=1, description="Обед", calories=2350.0)]
+    text = formatting.build_food_day_screen(dt.date(2026, 7, 20), entries, kcal_goal=2200)
+    assert "Цель 2200 · перебор 150" in text
+
+
+def test_goal_line_absent_without_a_goal():
+    entries = [formatting.FoodEntryView(id=1, description="Обед", calories=1560.0)]
+    text = formatting.build_food_day_screen(dt.date(2026, 7, 20), entries, kcal_goal=None)
+    assert "Цель" not in text
+
+
+def test_goal_line_absent_when_calories_unknown():
+    """Данные не подтверждают остаток — строка не показывается вовсе, а не
+    врёт нулём (см. tone: утверждение о данных только когда они его подтверждают)."""
+    entries = [formatting.FoodEntryView(id=1, description="Обед", calories=None)]
+    text = formatting.build_food_day_screen(dt.date(2026, 7, 20), entries, kcal_goal=2200)
+    assert "Цель" not in text
+
+
+async def test_kcal_goal_setter_roundtrip(user_id):
+    await dbmod.set_kcal_goal(user_id, 2200)
+    user = await dbmod.get_user(user_id)
+    assert user["kcal_goal"] == 2200
+    await dbmod.set_kcal_goal(user_id, None)
+    user = await dbmod.get_user(user_id)
+    assert user["kcal_goal"] is None
+
+
+async def test_fd_goal_prompt_asks_for_a_number(user_id):
+    state = await _make_state(user_id)
+    await state.update_data(fd_date="2026-07-20")
+    callback = _make_callback(user_id, "fd:goal")
+
+    await food_diary.fd_goal_prompt(callback, state)
+
+    assert await state.get_state() == FoodDiaryFlow.setting_goal.state
+    callback.answer.assert_awaited_once()
+
+
+async def test_fd_goal_entered_saves_and_returns_to_the_day(user_id, monkeypatch):
+    monkeypatch.setattr(food_diary.timeutil, "user_today", lambda user: dt.date(2026, 7, 20))
+    state = await _make_state(user_id)
+    await state.set_state(FoodDiaryFlow.setting_goal)
+    await state.update_data(fd_date="2026-07-20")
+
+    message = _make_message(user_id, "2200")
+    await food_diary.fd_goal_entered(message, state)
+
+    user = await dbmod.get_user(user_id)
+    assert user["kcal_goal"] == 2200
+    message.reply.assert_awaited()
+    assert "2200" in message.reply.await_args.args[0]
+
+
+async def test_fd_goal_entered_rejects_non_numeric(user_id):
+    state = await _make_state(user_id)
+    await state.set_state(FoodDiaryFlow.setting_goal)
+    await state.update_data(fd_date="2026-07-20")
+
+    message = _make_message(user_id, "много")
+    await food_diary.fd_goal_entered(message, state)
+
+    user = await dbmod.get_user(user_id)
+    assert user["kcal_goal"] is None
+
+
+async def test_fd_goal_entered_rejects_out_of_range(user_id):
+    state = await _make_state(user_id)
+    await state.set_state(FoodDiaryFlow.setting_goal)
+    await state.update_data(fd_date="2026-07-20")
+
+    message = _make_message(user_id, "50000")
+    await food_diary.fd_goal_entered(message, state)
+
+    user = await dbmod.get_user(user_id)
+    assert user["kcal_goal"] is None
