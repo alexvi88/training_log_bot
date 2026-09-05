@@ -105,40 +105,17 @@ BTN_AI = _ReplyButtonMatch("btn.persistent.ai")
 # them. That's what forced v3: the carrier-delete bug (see
 # handlers/persistent_menu.py) had already wiped the keyboard on Android
 # before the fix landed, and those users' version was already current.
-PERSISTENT_MENU_VERSION = 5
-
-# Порог, после которого статичная подсказка формата ввода (input_field_
-# placeholder) прячется НАВСЕГДА — см. users.input_hint_hidden и
-# main.RefreshPersistentMenuMiddleware. Однонаправленно: раз спрятанная,
-# больше не возвращается, даже если атлет надолго пропадёт — иначе клавиатура
-# мигала бы туда-сюда после каждой паузы в тренировках. Свой порог, а не
-# analytics.RECENT_TRAINING_THRESHOLD/WINDOW_DAYS: то число про другую
-# подсказку (формат "вес повторы" на экране трекера, см. analytics.
-# is_seasoned) и трогать его здесь нельзя — общий счётчик на два разных повода
-# однажды разойдётся, если пороги когда-нибудь захотят поменять порознь.
-INPUT_HINT_HIDE_WINDOW_DAYS = 14
-INPUT_HINT_HIDE_THRESHOLD = 2
+PERSISTENT_MENU_VERSION = 6
 
 
-def persistent_menu(show_hint: bool = True) -> ReplyKeyboardMarkup:
-    """Нижний ряд плюс, по умолчанию, подсказка в пустом поле ввода
-    (input_field_placeholder).
+def persistent_menu() -> ReplyKeyboardMarkup:
+    """Нижний ряд без подсказки в поле ввода.
 
-    Подсказка статичная и одна на все экраны — нарочно. Reply-клавиатура живёт
-    на сообщении-носителе, и клиенты на TDLib (Android, iOS, Desktop) сбрасывают
-    нижний ряд, как только носитель удаляется или редактируется в сообщение с
-    инлайн-кнопками. Первая версия вешала контекстную подсказку на «Тренировка
-    начата» — сообщение, которое тем же ходом превращается в живой трекер, — и
-    подсказка пропадала вместе с риском потерять весь ряд. Единственный носитель,
-    который никто не трогает, — тот, что шлёт attach_silently / middleware
-    обновления меню, поэтому подсказка едет только на нём и меняется только
-    через PERSISTENT_MENU_VERSION (v4 — её появление, v5 — короткая формулировка).
-
-    `show_hint=False` — для того же самого носителя, но у атлета, который уже
-    перерос формат ввода (см. INPUT_HINT_HIDE_*): набор кнопок не меняется,
-    подсказки под полем ввода просто нет. Каждый вызывающий обязан передавать
-    `not user["input_hint_hidden"]`, а не звать без аргумента — иначе версия
-    карусели когда-нибудь бампнется и вернёт уже спрятанную подсказку.
+    Подсказку (input_field_placeholder) пробовали в v4–v5 и сняли в v6:
+    reply-клавиатура одна на чат и едет только прицепом к сообщению-носителю,
+    поэтому подсказка висела на каждом экране, включая меню без тренировки, а
+    любая её смена стоила лишнего сообщения в чате. Формат ввода объясняет
+    подсказка в самом трекере (handlers.workout._logging_hint).
     """
     return ReplyKeyboardMarkup(
         keyboard=[
@@ -150,9 +127,6 @@ def persistent_menu(show_hint: bool = True) -> ReplyKeyboardMarkup:
         ],
         resize_keyboard=True,
         is_persistent=True,
-        input_field_placeholder=(
-            i18n.t("persistent_menu.input_placeholder") if show_hint else None
-        ),
     )
 
 

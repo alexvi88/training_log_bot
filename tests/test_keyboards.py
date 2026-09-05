@@ -1,13 +1,11 @@
 import keyboards
 
 
-def test_persistent_menu_carries_a_static_input_placeholder():
-    """Подсказка живёт в input_field_placeholder носителя, а не четвёртой
-    кнопкой, и укладывается в лимит Telegram (64 символа)."""
+def test_persistent_menu_has_no_input_placeholder():
+    """Подсказку в поле ввода сняли (v6): она висела на каждом экране, включая
+    меню без тренировки. Три кнопки — и ничего в поле."""
     kb = keyboards.persistent_menu()
-    assert kb.input_field_placeholder
-    assert "100 8" in kb.input_field_placeholder
-    assert len(kb.input_field_placeholder) <= 64
+    assert kb.input_field_placeholder is None
     assert len(kb.keyboard) == 1 and len(kb.keyboard[0]) == 3
 
 
