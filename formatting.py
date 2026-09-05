@@ -1736,36 +1736,6 @@ def menu_lift_tiles(
     return tiles
 
 
-def build_menu_summary_text(
-    greeting: str,
-    headline: str,
-    tiles: list[tuple[str, str]],
-    lift_tiles: list[tuple[str, str, str]] = (),
-    lifts_title: str = "",
-) -> str:
-    """Текст главного меню атлета с историей: приветствие плюс те же
-    заголовок/плитки/рост e1RM, что раньше жили только внутри картинки
-    (charts.render_menu_dashboard). Картинка теперь приходит отдельным
-    сообщением не на каждый вход в меню (см. handlers.workout._show_main_menu
-    и её daily-гейт), а текст — это то, что видно на каждом открытии, так что
-    цифры дублируются сюда, а не пропадают в дни без картинки.
-
-    Лимит текста вчетверо больше подписи к фото (ui.TEXT_LIMIT против
-    ui.CAPTION_LIMIT), так что резать тут заранее незачем — обрежет, если
-    вообще понадобится, тот же общий ui.fit_to_limit, что режет любой другой
-    экран.
-    """
-    lines = [greeting, "", f"<b>{escape(headline)}</b>"]
-    for label, value in tiles:
-        lines.append(f"{escape(label)}: <b>{escape(value)}</b>")
-    if lift_tiles:
-        lines.append("")
-        lines.append(f"<b>{escape(lifts_title)}</b>")
-        for name, pct, abs_str in lift_tiles:
-            lines.append(f"{escape(name)}: {escape(pct)} ({escape(abs_str)})")
-    return "\n".join(lines)
-
-
 def build_workout_card(
     started_at: dt.datetime,
     blocks: list[BlockView],
