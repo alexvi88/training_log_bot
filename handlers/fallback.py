@@ -15,14 +15,22 @@ main menu, group pickers) ends up here instead of being silently dropped.
 
 import logging
 
-from aiogram import Router
+from aiogram import F, Router
 from aiogram.enums import ContentType
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 import activity_log
+import ai_trainer
 import db
 import i18n
+from fsm import AITrainerFlow
+
+# Функции, а не текстовые константы — см. комментарий над импортом
+# ai_trainer_handlers в handlers/persistent_menu.py: константа, взятая по
+# имени на верхнем уровне, замораживает язык на дефолте навсегда.
+from handlers import ai_trainer as ai_trainer_handlers
+from handlers import persistent_menu
 
 router = Router(name="fallback")
 
@@ -79,9 +87,20 @@ _HUMAN_CONTENT = frozenset({
 # что и раньше — если команда не опознана нигде выше, разбираться в ней тут
 # не наше дело.
 
+# Порог, начиная с которого непонятый текст выглядит как вопрос тренеру, а не
+# как случайная опечатка или обрывок слова — «жим», «100» короче него.
+_ASK_TRAINER_MIN_LENGTH = 15
+
+# Кнопка «🤖 Спросить тренера» под длинным непонятым текстом. Сам текст в
+# callback_data не кладём (лимит Telegram — 64 байта, а вопрос может быть
+# длинным) — он едет в FSM (`_ASK_PENDING_KEY`), кнопка только просит его
+# оттуда забрать.
+_ASK_CALLBACK = "fb:ask"
+_ASK_PENDING_KEY = "fb_ask_pending"
+
 
 @router.message()
-async def unhandled_text(message: Message) -> None:
+async def unhandled_text(message: Message, state: FSMContext) -> None:
     if message.content_type not in _HUMAN_CONTENT:
         return
     text = (message.text or "").strip() if message.content_type == ContentType.TEXT else ""
@@ -110,10 +129,73 @@ async def unhandled_text(message: Message) -> None:
                 reply_markup=kb,
             )
             return
-    # Сюда чаще всего прилетает вопрос тренеру, напечатанный из главного меню
-    # («составь мне программу»), — подсказываем дорогу к AI-тренеру, а не только
-    # /start. Без детекции по словам: любой непонятый текст получает один ответ.
+        # Длинный непонятый текст, не подход и не название упражнения — почти
+        # наверняка вопрос тренеру, напечатанный из главного меню («составь
+        # мне программу»). Без единого платного вызова: квота и вся логика
+        # AI-тренера тратятся только по тапу на кнопку, см. ask_trainer ниже.
+        if len(text) > _ASK_TRAINER_MIN_LENGTH and ai_trainer.is_configured():
+            await state.update_data(**{_ASK_PENDING_KEY: text})
+            kb = InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text=i18n.t("btn.ask_trainer"), callback_data=_ASK_CALLBACK)
+            ]])
+            await message.reply(i18n.t("fallback.ask_prompt"), reply_markup=kb)
+            return
+    # Короткий непонятый текст (или AI-тренер не настроен) — прежний общий
+    # ответ, подсказывающий дорогу к AI-тренеру через нижнюю клавиатуру.
     await message.reply(i18n.t("fallback.generic", ai_btn=i18n.t("btn.persistent.ai")))
+
+
+@router.callback_query(F.data == _ASK_CALLBACK)
+async def ask_trainer(callback: CallbackQuery, state: FSMContext) -> None:
+    """Тап по «🤖 Спросить тренера» под непонятым текстом из главного меню.
+
+    Отправляет ровно тот текст, что человек уже напечатал, тем же ходом, что
+    и обычный вопрос из чата тренера (`ai_trainer.ai_question` →
+    `_handle_question`) — лимиты и квоты проверяются там же, ни разу не своей
+    проверкой на месте.
+    """
+    data = await state.get_data()
+    question = (data.get(_ASK_PENDING_KEY) or "").strip()
+    message = callback.message
+
+    if not question:
+        # Пока думал — переписался (перезапуск, другое сообщение): вопрос
+        # потерян, честно говорим об этом тостом и открываем тренера как
+        # обычно, а не молчим и не гадаем, что имелось в виду.
+        await callback.answer(i18n.t("fallback.ask_stale"))
+        if message is not None and hasattr(message, "answer"):
+            await persistent_menu._open_ai_trainer(message, state)
+        return
+
+    await state.update_data(**{_ASK_PENDING_KEY: None})
+
+    if not ai_trainer.is_configured() or message is None or not hasattr(message, "answer"):
+        # Конфигурация выключилась между показом кнопки и тапом — тот же
+        # генеральный ответ, что видел бы обычный атлет с самого начала.
+        await callback.answer()
+        if message is not None and hasattr(message, "answer"):
+            await message.answer(i18n.t("persistent_menu.ai_not_configured"))
+        return
+
+    await callback.answer()
+    await db.get_or_create_user(
+        callback.from_user.id, callback.from_user.username, callback.from_user.language_code
+    )
+    from handlers.workout import _clear_state_keep_workout
+
+    await _clear_state_keep_workout(state)
+    await state.set_state(AITrainerFlow.chatting)
+
+    user_id = callback.from_user.id
+    if not ai_trainer_handlers._try_claim_busy(user_id):
+        await message.answer(i18n.t("ai.screen.busy"))
+        return
+    try:
+        await ai_trainer_handlers._handle_question(
+            message, state, question, history_question=question, user_id=user_id
+        )
+    finally:
+        ai_trainer_handlers._busy.discard(user_id)
 
 
 # Кнопки живого трекера. Все они стоят под StateFilter (logging_set/idle), а
