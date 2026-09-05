@@ -292,7 +292,8 @@ async def menu_achievements(callback: CallbackQuery, state: FSMContext):
     # (and gives up entirely after ~10s).
     await callback.answer()
     earned = await db.list_achievement_codes(callback.from_user.id)
-    ach_text = formatting.build_achievements_screen(earned)
+    ctx = await achievement_sync.aggregate_context(callback.from_user.id)
+    ach_text = formatting.build_achievements_screen(earned, ctx)
     # Records and badges share one message, and the record list is the open-ended
     # half (one line per exercise ever logged), so it gets whatever room the fixed
     # badge grid leaves — otherwise a long-time user's screen overflows the 4096

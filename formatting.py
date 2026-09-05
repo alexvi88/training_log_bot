@@ -1928,19 +1928,62 @@ def format_new_achievements(new_codes: list[str]) -> str | None:
     return "\n".join(lines)
 
 
-def build_achievements_screen(earned: set[str]) -> str:
-    """The full 🏅 badge grid: everything unlocked, then everything still locked.
+def format_badge_progress(bp) -> str:  # achievements.BadgeProgress
+    """Одна строка блока «Ближайшие» — значок плюс расстояние до цели словами
+    тренера, семейство в семейство ровно как format_rank_gap: числа считает
+    achievements.nearest_progress, согласование — здесь.
+    """
+    import achievements
 
-    Both halves always fold on this screen specifically, short lists included:
+    a = achievements.BY_CODE[bp.code]
+    family = achievements.FAMILY_BY_CODE[bp.code]
+    label = f"{a.emoji} <b>{escape(a.title)}</b>"
+    if family == "weight":
+        return f"{label} — {i18n.t('achievements.nearest_kg', kg=f'{bp.remaining:.0f}')}"
+    if family == "tonnage":
+        # Тот же порог округления, что у format_rank_gap: меньше центнера
+        # остатка — "0.0 т" читалось бы как "уже всё", поэтому договариваем
+        # килограммами; выше — тоннами с одним знаком после запятой.
+        if bp.remaining >= 100:
+            tons = f"{round(bp.remaining / 1000, 1):g}"
+            return f"{label} — {i18n.t('achievements.nearest_tons', tons=tons)}"
+        return f"{label} — {i18n.t('achievements.nearest_tons_kg', kg=f'{bp.remaining:.0f}')}"
+    if family == "weeks":
+        return f"{label} — {i18n.t('achievements.nearest_of', current=int(bp.current), target=int(bp.target))}"
+    # "workouts"
+    return f"{label} — {i18n.t('achievements.nearest_count', n=int(bp.remaining))}"
+
+
+def build_achievements_screen(
+    earned: set[str],
+    ctx=None,  # achievements.AchievementContext | None
+) -> str:
+    """The full 🏅 badge grid: nearest-3 progress, everything unlocked, then
+    everything still locked.
+
+    Both lists always fold on this screen specifically, short ones included:
     it's reached from Progress purely to check a number or brag about a single
     badge, so the header count (11/23) is the answer most taps are actually
-    after — the two lists are supporting detail, not the point of the tap.
+    after — the lists are supporting detail, not the point of the tap.
+
+    `ctx` is optional so every existing caller/test that only has the earned
+    set keeps working; without it there is nothing to compute "how close" from,
+    so the «Ближайшие» block is simply skipped rather than guessed.
     """
     import achievements
 
     got = [a for a in achievements.CATALOG if a.code in earned]
     locked = [a for a in achievements.CATALOG if a.code not in earned]
     lines = [i18n.t("achievements.screen_header", got=len(got), total=len(achievements.CATALOG))]
+
+    if ctx is not None:
+        nearest = achievements.nearest_progress(ctx, earned)
+        if nearest:
+            lines.append("")
+            lines.append(i18n.t("achievements.nearest_header"))
+            lines.append("\n".join(format_badge_progress(bp) for bp in nearest))
+            lines.append("")
+
     if got:
         lines.append(
             collapsible(
