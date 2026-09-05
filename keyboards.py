@@ -143,6 +143,7 @@ def main_menu(
     show_import_button: bool = False,
     community_url: str | None = None,
     show_donate: bool = False,
+    show_summary_button: bool = False,
 ) -> InlineKeyboardMarkup:
     """show_import_button: offered while the diary is still empty (same condition
     that used to gate the now-removed "✍️ Записать прошлую тренировку" quick-log
@@ -158,7 +159,13 @@ def main_menu(
     show_donate: config.DONATIONS_ENABLED — «❤️ Поддержать проект» самой
     последней строкой (см. handlers/donate.py). Ниже AI-тренера и чата
     сообщества нарочно: это не функция дневника, а отдельная, необязательная
-    просьба, и ей не место среди рабочих экранов."""
+    просьба, и ей не место среди рабочих экранов.
+
+    show_summary_button: то же условие, что и «не show_import_button» — есть
+    ли хоть одна законченная тренировка, — но отдельным флагом (см.
+    handlers.workout._main_menu_kb): картинка дашборда существует ровно тогда,
+    и «📊 Сводка» вызывает её по требованию (menu:summary), а не только на
+    первый вход в меню за сутки."""
     b = InlineKeyboardBuilder()
     if has_active_workout:
         b.button(text=i18n.t("btn.resume_workout_caps"), callback_data="menu:resume_workout")
@@ -168,6 +175,8 @@ def main_menu(
     # см. handlers/csv_import.py) — второй вход в один и тот же флоу, не новый.
     if show_import_button:
         b.button(text=i18n.t("btn.import_history"), callback_data="settings:import")
+    if show_summary_button:
+        b.button(text=i18n.t("btn.summary"), callback_data="menu:summary")
     b.button(text=i18n.t("btn.progress"), callback_data="menu:progress")
     b.button(text=i18n.t("btn.history"), callback_data="menu:history")
     b.button(text=i18n.t("btn.exercises"), callback_data="menu:exercises")
@@ -181,12 +190,14 @@ def main_menu(
         b.button(text=i18n.t("btn.community_chat"), url=community_url)
     if show_donate:
         b.button(text=i18n.t("btn.donate"), callback_data="menu:donate")
-    # start/resume and the import button (if shown) full width, then pairs:
-    # Прогресс·История, Упражнения·Программы, Дневник веса·Дневник еды,
-    # Достижения·Настройки, then AI-тренер full width at the very bottom,
-    # под ним — чат сообщества (если заведён), и под всем — донат (если включён).
+    # start/resume and the import button (if shown) full width, then the
+    # summary button (if shown) full width, then pairs: Прогресс·История,
+    # Упражнения·Программы, Дневник веса·Дневник еды, Достижения·Настройки,
+    # then AI-тренер full width at the very bottom, под ним — чат сообщества
+    # (если заведён), и под всем — донат (если включён).
     b.adjust(
-        *([1, 1] if show_import_button else [1]), 2, 2, 2, 2, 1,
+        *([1, 1] if show_import_button else [1]), *([1] if show_summary_button else []),
+        2, 2, 2, 2, 1,
         *([1] if community_url else []), *([1] if show_donate else []),
     )
     return b.as_markup()

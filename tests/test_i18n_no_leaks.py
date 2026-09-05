@@ -275,6 +275,7 @@ async def _screen_main_menu(db, user_id: int) -> str:
         show_import_button=True,
         community_url="https://t.me/example",
         show_donate=True,
+        show_summary_button=True,
     )
     return "\n".join(button.text for row in kb.inline_keyboard for button in row)
 
@@ -377,6 +378,25 @@ async def _screen_dashboard_menu(db, user_id: int) -> str:
     tiles = formatting.menu_tiles(dashboard, tonnage=1234.0, records=2, unit="kg")
     tiles_text = "\n".join(f"{title} {value}" for title, value in tiles)
     return f"{headline}\n{tiles_text}"
+
+
+async def _screen_menu_summary_text(db, user_id: int) -> str:
+    """Текстовое главное меню атлета с историей (formatting.build_menu_summary_text,
+    handlers.workout._menu_view) — то же самое, что раньше жило только внутри
+    подписи-картинки, теперь на каждом открытии меню."""
+    import analytics
+
+    dashboard = analytics.compute_dashboard(
+        [dt.date(2026, 8, 10), dt.date(2026, 8, 12), dt.date(2026, 8, 15)],
+        dt.date(2026, 8, 17),
+    )
+    headline = formatting.menu_headline(dashboard)
+    tiles = formatting.menu_tiles(dashboard, tonnage=1234.0, records=2, unit="kg")
+    lift_tiles = formatting.menu_lift_tiles([("Squat", 100.0, 120.0)])
+    lifts_title = formatting.menu_lifts_title(8)
+    return formatting.build_menu_summary_text(
+        i18n.t("onboarding.greeting"), headline, tiles, lift_tiles, lifts_title
+    )
 
 
 async def _screen_history_item_card(db, user_id: int) -> str:
@@ -765,6 +785,7 @@ SCREENS: list[tuple[str, object]] = [
     ("history_calendar_day_list", _screen_history_calendar_day_list),
     ("workout_summary_card", _screen_workout_summary),
     ("dashboard_menu", _screen_dashboard_menu),
+    ("menu_summary_text", _screen_menu_summary_text),
     ("weekly_summary", _screen_weekly_summary),
     ("achievements", _screen_achievements),
     ("hall_of_fame", _screen_hall_of_fame),
