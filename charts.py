@@ -454,8 +454,8 @@ def render_menu_dashboard(
                 # Приписка мелко и приглушённо сразу за числом, по базовой линии
                 # числа — «43  14 за 30 дней» читается как одно целое.
                 value_w = value_txt.get_window_extent(renderer).width / fig_px
-                sub_txt = ax.text(x + 0.022 + value_w + 0.012, 0.69, sub, color=DIM,
-                                  fontsize=DASH_FS_CAPTION, va="center")
+                sub_txt = ax.text(x + 0.022 + value_w + 0.012, 0.69, sub, color=MUTED,
+                                  fontsize=DASH_FS_LABEL, va="center")
                 _shrink_to_fit(fig, sub_txt, inner - value_w - 0.012, min_size=5.0)
 
     if rows:
