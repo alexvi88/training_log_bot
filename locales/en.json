@@ -793,7 +793,7 @@
   "onboarding.greeting": "<b>HEY ATHLETE. READY TO TRAIN?</b>",
   "onboarding.text": "<b>HEY ATHLETE! 💪</b>\n\nOne rule: log a set in one line — <b><code>100 8</code></b>. Weight and reps. Logged.\nRecords, volume, progress — that's on me. The iron's on you.\n\nNot sure what to do today? Tell the 🤖 <b>AI coach</b> what you want — it'll build a program and split it into days. It's seen your whole history too: ask \"am I stronger than 3 months ago?\" and it'll answer with numbers, not vibes.\n\nHit 🏋️ and let's go 👇",
   "persistent_menu.ai_not_configured": "AI Coach isn't connected yet — check back later.",
-  "persistent_menu.input_placeholder": "Set: 100 8",
+  "persistent_menu.input_placeholder": "For example: 100 8",
   "persistent_menu.attach_hint": "⌨️ Down below — quick buttons: {workout}, {menu}, {ai}.",
   "program.add_multi_tail": "I'll add \"{name}\" as a program with {days} {d, plural, one{day} other{days}} — starting a workout from any of them is one tap.",
   "program.add_single_tail": "I'll add it as a program — starting a workout from it is one tap.",
