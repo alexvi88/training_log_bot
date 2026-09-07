@@ -168,24 +168,29 @@ def get_images_for(ex) -> list[str]:
     return get_images(catalog_key(ex))
 
 
-# Зацикленная демонстрация повтора: тот же тренер, что в пушах, вместо
-# случайного человека из открытой базы (TONE_OF_VOICE.md, «Стиль картинок» —
-# персонаж один на весь продукт). Собирается офлайн, scripts/gen_exercise_demos.py;
-# бот только отдаёт готовый файл. Клипы появляются по одному, поэтому это не
-# замена фото, а верхняя ступень: есть клип — идёт клип, нет — прежняя пара
-# кадров, и покрытие не проседает ни на одном шаге раскатки.
-def get_animation(exercise_name: str) -> str | None:
-    """Путь к зацикленному клипу упражнения, или None если его ещё не сняли."""
+# Демонстрация движения одной картинкой: четыре фазы повтора сеткой 2×2, и на
+# всех четырёх — тот же тренер, что в пушах, вместо случайного человека из
+# открытой базы (TONE_OF_VOICE.md, «Стиль картинок» — персонаж один на весь
+# продукт). Рисуется офлайн, scripts/gen_exercise_demos.py; бот только отдаёт
+# готовый файл.
+#
+# Против прежней пары фото выигрывает дважды: одно сообщение вместо медиагруппы
+# (значит, под ним живёт клавиатура) и видно не только начало с концом, но и
+# как между ними двигаться. Картинки появляются по одной, поэтому это верхняя
+# ступень, а не замена: есть коллаж — идёт коллаж, нет — прежняя пара кадров,
+# и покрытие не проседает ни на одном шаге раскатки.
+def get_collage(exercise_name: str) -> str | None:
+    """Путь к картинке с фазами движения, или None если её ещё не нарисовали."""
     slug = EXERCISE_IMAGE_SLUGS.get(exercise_name)
     if slug is None:
         return None
-    path = os.path.join(MEDIA_DIR, f"{slug}_demo.mp4")
+    path = os.path.join(MEDIA_DIR, f"{slug}_demo.jpg")
     return path if os.path.exists(path) else None
 
 
-def get_animation_for(ex) -> str | None:
-    """get_animation for an exercise row, keyed the rename-proof way."""
-    return get_animation(catalog_key(ex))
+def get_collage_for(ex) -> str | None:
+    """get_collage for an exercise row, keyed the rename-proof way."""
+    return get_collage(catalog_key(ex))
 
 
 # Telegram hands back a file_id for every uploaded photo, and re-sending that id
