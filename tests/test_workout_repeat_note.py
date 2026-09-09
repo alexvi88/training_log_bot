@@ -535,7 +535,7 @@ def test_reps_window_slides_up_instead_of_shrinking_near_one():
 def test_reps_window_first_set_skews_up_instead_of_down():
     """На первом подходе (basis — прошлая тренировка, усталости ещё нет) окно
     смотрит вверх, к цели прогрессии, а не вниз, к усталостной скидке."""
-    assert keyboards.reps_window(7, is_first_set=True) == [6, 7, 8, 9, 10, 11]
+    assert keyboards.reps_window(7, is_first_set=True) == [5, 6, 7, 8, 9, 10]
     assert keyboards.reps_window(7, is_first_set=False) == [4, 5, 6, 7, 8, 9]
 
 
@@ -544,7 +544,7 @@ def test_reps_row_first_set_uses_the_upward_window():
         [(1, "Bench")], active_id=1, has_sets=False, last_reps=7, is_first_set=True
     )
     rows = [[b.callback_data for b in row] for row in kb.inline_keyboard]
-    assert rows[0] == [f"live:reps:{n}" for n in (6, 7, 8, 9, 10, 11)]
+    assert rows[0] == [f"live:reps:{n}" for n in (5, 6, 7, 8, 9, 10)]
 
 
 def test_reps_row_appears_above_the_other_controls():
