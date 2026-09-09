@@ -705,16 +705,30 @@ def _tab_label(name: str, limit: int) -> str:
 _REPS_BELOW = 3
 _REPS_ABOVE = 2
 
+# Тот же ряд, но для ПЕРВОГО подхода упражнения (basis — первый подход прошлой
+# тренировки, см. handlers/workout._reps_row_basis). Здесь усталости ещё нет —
+# человек только подошёл к снаряду свежим, и цель этого подхода не «столько же,
+# сколько в прошлый раз», а прогрессия. Запас вниз меньше, чем в подходах внутри
+# упражнения (сорваться ниже прошлого раза на свежую голову — редкость), а вверх
+# — больше, туда же обычно и метит цель прогрессии (analytics.suggest_progression).
+_REPS_BELOW_FIRST_SET = 2
+_REPS_ABOVE_FIRST_SET = 3
 
-def reps_window(last_reps: int) -> list[int]:
+
+def reps_window(last_reps: int, is_first_set: bool = False) -> list[int]:
     """Какие повторы предложить кнопками после подхода на last_reps.
+
+    is_first_set — basis взят с прошлой тренировки (первый подход этого же
+    упражнения), а не с сегодняшнего последнего: окно смещается вверх вместо
+    вниз (см. _REPS_BELOW_FIRST_SET).
 
     Ноль и отрицательные повторы не бывают, поэтому окно у самого низа
     сдвигается вверх, а не обрезается: после двойки нужны «1 2 3 4 5 6», а не
     «1 2 3 4», иначе у тех, кто работает в силовом диапазоне, кнопок почти нет.
     """
-    start = max(1, last_reps - _REPS_BELOW)
-    return list(range(start, start + _REPS_BELOW + _REPS_ABOVE + 1))
+    below, above = (_REPS_BELOW_FIRST_SET, _REPS_ABOVE_FIRST_SET) if is_first_set else (_REPS_BELOW, _REPS_ABOVE)
+    start = max(1, last_reps - below)
+    return list(range(start, start + below + above + 1))
 
 
 def logging_keyboard(
@@ -722,6 +736,7 @@ def logging_keyboard(
     active_id: int | None,
     has_sets: bool = True,
     last_reps: int | None = None,
+    is_first_set: bool = False,
 ) -> InlineKeyboardMarkup:
     """Set-logging keyboard: tabs to switch between exercises open in parallel, plus controls.
 
@@ -758,7 +773,7 @@ def logging_keyboard(
     if last_reps:
         b.row(*[
             InlineKeyboardButton(text=str(n), callback_data=f"live:reps:{n}")
-            for n in reps_window(last_reps)
+            for n in reps_window(last_reps, is_first_set=is_first_set)
         ])
     if len(open_items) > 1:
         # One tab per row, whatever the size of the superset. Two half-width tabs

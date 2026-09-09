@@ -785,6 +785,7 @@ async def _render_logging_screen(bot, state: FSMContext, user):
     kb = keyboards.logging_keyboard(
         open_items, active, has_sets,
         last_reps=reps_basis[1] if reps_basis else None,
+        is_first_set=not today_sets,
     )
     await _sync_sticky_photo(bot, state, active)
     await _refresh_live(bot, state, user, data["workout_id"], hint, kb, note=active_note)
