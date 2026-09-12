@@ -22,6 +22,7 @@ import json
 import logging
 import os
 import secrets
+import sqlite3
 import time
 from typing import Any, Optional
 
@@ -6310,9 +6311,33 @@ async def prune_old_user_events(retention_days: int) -> int:
 
 
 async def backup_to_file(dest_path: str) -> None:
-    """Write a consistent snapshot of the live database to dest_path (must not already exist)."""
-    async with _write_lock:
-        await conn().execute("VACUUM INTO ?", (dest_path,))
+    """Write a consistent snapshot of the live database to dest_path (must not already exist).
+
+    `VACUUM INTO` refuses to run while the connection has any unfinished
+    statement registered on it — not just a concurrent writer (those already
+    queue behind `_write_lock`), but a reader's cursor that hasn't been fully
+    drained yet. On the single shared connection that's a timing accident,
+    not a real conflict: the offending cursor is normally done a beat later.
+    Hit exactly this in prod (2026-09-12, 07:00:00 UTC) — the daily backup
+    job collided with something mid-read and lost the day's disk copy until
+    the hourly staleness check patched it 26h later. A few short retries
+    turn that into a same-second recovery instead.
+    """
+    last_error: Optional[sqlite3.OperationalError] = None
+    for attempt in range(5):
+        if attempt:
+            await asyncio.sleep(0.2 * attempt)
+        try:
+            async with _write_lock:
+                await conn().execute("VACUUM INTO ?", (dest_path,))
+            return
+        except sqlite3.OperationalError as exc:
+            if "statements in progress" not in str(exc):
+                raise
+            last_error = exc
+            logger.warning("backup_to_file: VACUUM INTO collided with a live statement, retrying (%s)", exc)
+    assert last_error is not None
+    raise last_error
 
 
 # ---------- push notifications ----------
