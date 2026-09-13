@@ -4,6 +4,7 @@ import datetime as dt
 
 import analytics
 import formatting
+import i18n
 from formatting import ExerciseBlockView
 
 # ---------- low-level formatters ----------
@@ -723,11 +724,35 @@ def test_format_progress_screen_newest_session_first():
     assert text.index("03.06.2026") < text.index("02.06.2026") < text.index("01.06.2026")
 
 
-def test_format_progress_screen_shows_count_when_history_exceeds_limit():
+def test_format_progress_screen_count_is_about_the_selected_period():
+    """Знаменатель — выбранный период, а не вся история: нажав «20 трен.» при
+    23 тренировках в базе, человек читал «Показано 13 из 23» — числа, которого
+    нет ни на экране, ни на нажатой кнопке."""
+    sessions = [
+        _weighted_session(i, f"2026-06-{i % 28 + 1:02d}T10:00:00", [(100.0 + i, 8), (95.0 + i, 10), (90.0 + i, 12)])
+        for i in range(1, 24)
+    ]
+    records = analytics.PersonalRecords()
+    text = formatting.format_progress_screen("Жим лёжа", sessions, None, records, limit=20)
+    assert "из 20 тренировок" in text
+    assert "из 23" not in text
+    # и подпись стоит внутри тоггла, а не отдельной строкой под ним
+    assert text.index("Показано") < text.index("</blockquote>")
+
+
+def test_format_progress_screen_count_line_uses_genitive_after_iz():
+    """«из 23 тренировок», не «из 23 тренировки»: после предлога нужен
+    родительный падеж, а не счётная форма именительного (23 попадает в
+    ICU-ветку few, 21 — в one, и на них форма расходилась)."""
+    for total, expected in ((23, "из 23 тренировок"), (21, "из 21 тренировки"), (2, "из 2 тренировок")):
+        assert expected in i18n.t("progress.shown_of", kept=1, total=total, n=total)
+
+
+def test_format_progress_screen_no_count_line_when_whole_period_fits():
     sessions = [_weighted_session(i, f"2026-06-{i:02d}T10:00:00", [(100.0, 8)]) for i in range(1, 11)]
     records = analytics.PersonalRecords()
     text = formatting.format_progress_screen("Жим лёжа", sessions, None, records, limit=2)
-    assert "Показано 2 из 10 тренировок" in text
+    assert "Показано" not in text
 
 
 def test_format_progress_screen_no_count_line_when_history_fits():

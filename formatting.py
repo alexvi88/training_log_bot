@@ -2311,11 +2311,24 @@ def format_progress_screen(
     sep = "\n\n"
 
     def assemble(keep: list[str]) -> str:
+        body = sep.join(keep)
+        # «Показано N из M» — подпись к самому списку, поэтому живёт внизу
+        # тоггла, а не отдельной строкой основного текста: пока блок свёрнут,
+        # она ни о чём не говорит, а нужна ровно тогда, когда человек развернул
+        # историю и дошёл до её конца — «дальше не влезло».
+        #
+        # Знаменатель — выбранный период (candidates), а не вся история
+        # (window). Человек жмёт «20 трен.», значит и «показано N из M»
+        # отвечает про эти 20: раньше здесь стоял len(window), и на кнопке
+        # «20 трен.» при истории в 23 тренировки хвост писал «13 из 23» —
+        # число, которого ни на экране, ни в выбранном периоде нет.
+        if len(candidates) > len(keep):
+            body += sep + i18n.t(
+                "progress.shown_of", kept=len(keep), total=len(candidates), n=len(candidates)
+            )
         # Пустая строка перед тогглом: шапка с золотой книгой и свёрнутый
         # список тренировок — разные блоки, слипшиеся они читались как один.
-        parts = [f"{header}\n\n{collapsible_if_long(sep.join(keep))}"]
-        if len(window) > len(keep):
-            parts.append(i18n.t("progress.shown_of", kept=len(keep), total=len(window), n=len(window)))
+        parts = [f"{header}\n\n{collapsible_if_long(body)}"]
         if footer:
             parts.append(footer)
         return "\n\n".join(parts).rstrip()
