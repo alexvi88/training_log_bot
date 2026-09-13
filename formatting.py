@@ -2314,8 +2314,13 @@ def format_progress_screen(
         # Пустая строка перед тогглом: шапка с золотой книгой и свёрнутый
         # список тренировок — разные блоки, слипшиеся они читались как один.
         parts = [f"{header}\n\n{collapsible_if_long(sep.join(keep))}"]
-        if len(window) > len(keep):
-            parts.append(i18n.t("progress.shown_of", kept=len(keep), total=len(window), n=len(window)))
+        # Знаменатель — выбранный период (candidates), а не вся история
+        # (window). Пользователь жмёт «20 трен.», значит и «показано N из M»
+        # отвечает про эти 20: раньше здесь стоял len(window), и на кнопке
+        # «20 трен.» при истории в 23 тренировки хвост писал «13 из 23» —
+        # число, которого ни на экране, ни в выбранном периоде нет.
+        if len(candidates) > len(keep):
+            parts.append(i18n.t("progress.shown_of", kept=len(keep), total=len(candidates), n=len(candidates)))
         if footer:
             parts.append(footer)
         return "\n\n".join(parts).rstrip()
