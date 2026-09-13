@@ -870,7 +870,7 @@
   "progress.record_e1rm": "Рекорд: {set} · e1RM {value}{u}",
   "progress.record_reps": "Рекорд повторов в подходе: {n}",
   "progress.reps_delta": "Повторы: {delta} {since}",
-  "progress.shown_of": "Показано {kept} из {total} {n, plural, one{тренировки} few{тренировок} many{тренировок} other{тренировок}}",
+  "progress.shown_of": "<i>Показано {kept} из {total} {n, plural, one{тренировки} few{тренировок} many{тренировок} other{тренировок}}</i>",
   "progress.since_first": "с первой тренировки",
   "progress.since_period": "за период",
   "progress.total_reps": "всего повторов {n}",

@@ -736,6 +736,8 @@ def test_format_progress_screen_count_is_about_the_selected_period():
     text = formatting.format_progress_screen("Жим лёжа", sessions, None, records, limit=20)
     assert "из 20 тренировок" in text
     assert "из 23" not in text
+    # и подпись стоит внутри тоггла, а не отдельной строкой под ним
+    assert text.index("Показано") < text.index("</blockquote>")
 
 
 def test_format_progress_screen_count_line_uses_genitive_after_iz():

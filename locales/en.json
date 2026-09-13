@@ -870,7 +870,7 @@
   "progress.record_e1rm": "Record: {set} · e1RM {value}{u}",
   "progress.record_reps": "Best reps in a set: {n}",
   "progress.reps_delta": "Reps: {delta} {since}",
-  "progress.shown_of": "Showing {kept} of {total} {n, plural, one{workout} other{workouts}}",
+  "progress.shown_of": "<i>Showing {kept} of {total} {n, plural, one{workout} other{workouts}}</i>",
   "progress.since_first": "since the first workout",
   "progress.since_period": "over this period",
   "progress.total_reps": "total reps {n}",
