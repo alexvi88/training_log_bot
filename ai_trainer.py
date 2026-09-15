@@ -3388,7 +3388,8 @@ async def _exercise_progress(user_id: int, exercise_name: str) -> dict[str, Any]
     user = await db.get_user(user_id)
     rows = await db.list_sets_for_exercise(ex["id"])
     set_rows = [
-        analytics.SetRow(db.load_of(r), r["reps"], r["workout_id"], r["started_at"]) for r in rows
+        analytics.SetRow(db.load_of(r), r["reps"], r["workout_id"], r["started_at"], r["rpe"])
+        for r in rows
     ]
     sessions = analytics.group_sets_by_session(set_rows)
     for s in sessions:
@@ -4654,9 +4655,17 @@ async def _compare_periods(user_id: int, tool_input: dict[str, Any]) -> dict[str
         for row in await db.list_sets_for_exercise(ex["id"]):
             day = dt.datetime.fromisoformat(row["started_at"]).date()
             if day >= recent_from:
-                windows["after"].append(analytics.SetRow(db.load_of(row), row["reps"], row["workout_id"], row["started_at"]))
+                windows["after"].append(
+                    analytics.SetRow(
+                        db.load_of(row), row["reps"], row["workout_id"], row["started_at"], row["rpe"]
+                    )
+                )
             elif day >= prior_from:
-                windows["before"].append(analytics.SetRow(db.load_of(row), row["reps"], row["workout_id"], row["started_at"]))
+                windows["before"].append(
+                    analytics.SetRow(
+                        db.load_of(row), row["reps"], row["workout_id"], row["started_at"], row["rpe"]
+                    )
+                )
         if not windows["after"] and not windows["before"]:
             continue
 

@@ -10,11 +10,34 @@ from typing import Any, Iterable, Optional
 
 import i18n
 
+# RPE говорит, сколько повторов осталось в запасе: @9 — ещё один, @8 — два.
+# Подход «110×8 @9» по усилию — это подход на 9 повторов, и считать его наравне
+# с отказным 110×8 значит терять ровно ту разницу, ради которой RPE и пишется.
+# Поэтому в формулу уходят не записанные повторы, а повторы до отказа
+# (effective_reps). Где RPE не проставлен — считается как раньше, по записанным.
+#
+# Потолок на запас: парсер пускает любой RPE из (0, 10], а @2 на разминке дал бы
+# +8 повторов и e1RM выше рабочего максимума. Дальше пятёрки оценка «сколько я
+# ещё смог бы» перестаёт быть оценкой, так что запас режется здесь.
+RIR_CAP = 5.0
 
-def epley_e1rm(weight: float, reps: int) -> float:
-    if reps <= 1:
+
+def reps_in_reserve(rpe: Optional[float]) -> float:
+    if rpe is None:
+        return 0.0
+    return min(max(10.0 - rpe, 0.0), RIR_CAP)
+
+
+def effective_reps(reps: int, rpe: Optional[float] = None) -> float:
+    """Повторы до отказа: записанные плюс запас из RPE."""
+    return reps + reps_in_reserve(rpe)
+
+
+def epley_e1rm(weight: float, reps: int, rpe: Optional[float] = None) -> float:
+    eff = effective_reps(reps, rpe)
+    if eff <= 1:
         return weight
-    return weight * (1 + reps / 30)
+    return weight * (1 + eff / 30)
 
 
 # Brzycki is only meaningful in the low-rep range it was fitted on. Its
@@ -27,18 +50,21 @@ def epley_e1rm(weight: float, reps: int) -> float:
 BRZYCKI_MAX_REPS = 10
 
 
-def brzycki_e1rm(weight: float, reps: int) -> float:
-    if reps <= 1:
+def brzycki_e1rm(weight: float, reps: int, rpe: Optional[float] = None) -> float:
+    eff = effective_reps(reps, rpe)
+    if eff <= 1:
         return weight
-    if reps > BRZYCKI_MAX_REPS:
-        return epley_e1rm(weight, reps)
-    return weight * 36 / (37 - reps)
+    if eff > BRZYCKI_MAX_REPS:
+        return epley_e1rm(weight, reps, rpe)
+    return weight * 36 / (37 - eff)
 
 
-def e1rm(weight: float, reps: int, formula: str = "epley") -> float:
+def e1rm(
+    weight: float, reps: int, formula: str = "epley", rpe: Optional[float] = None
+) -> float:
     if formula == "brzycki":
-        return brzycki_e1rm(weight, reps)
-    return epley_e1rm(weight, reps)
+        return brzycki_e1rm(weight, reps, rpe)
+    return epley_e1rm(weight, reps, rpe)
 
 
 @dataclass
@@ -47,7 +73,7 @@ class SetRow:
     reps: int
     workout_id: Optional[int] = None
     started_at: Optional[str] = None
-    rpe: Optional[float] = None  # display-only; never enters e1RM/PR/trend math
+    rpe: Optional[float] = None  # запас повторов для e1RM (см. effective_reps)
 
 
 @dataclass
@@ -75,14 +101,30 @@ class SessionStats:
             return None
         if self.is_bodyweight_mode:
             return max(self.sets, key=lambda s: s.reps)
-        return max(self.sets, key=lambda s: e1rm(s.weight, s.reps, self.formula))
+        return max(self.sets, key=lambda s: e1rm(s.weight, s.reps, self.formula, s.rpe))
 
     @property
     def top_e1rm(self) -> float:
         ts = self.top_set
         if ts is None:
             return 0.0
-        return e1rm(ts.weight, ts.reps, self.formula)
+        return e1rm(ts.weight, ts.reps, self.formula, ts.rpe)
+
+    @property
+    def top_e1rm_ignoring_rpe(self) -> float:
+        """Лучший e1RM сессии по ЗАПИСАННЫМ повторам, без запаса из RPE.
+
+        Нужен там, где смотрят на НАКЛОН по нескольким сессиям. RPE —
+        самооценка с шагом в полбалла, и на одинаковой работе она гуляет: четыре
+        сессии 140×5 с RPE 9.5 / 10 / 9.5 / 10 дают пилу ±1.2 кг, а метод
+        наименьших квадратов на такой пиле выдаёт −0.5 кг/нед — больше порога
+        STALL_SLOPE_EPS, то есть «регрессируешь» на неизменных числах. Для
+        вердикта у RPE свой канал (StallVerdict.avg_top_rpe), и наклону он не
+        нужен. В показе, рекордах и сравнении двух сессий остаётся top_e1rm.
+        """
+        if not self.sets:
+            return 0.0
+        return max(e1rm(s.weight, s.reps, self.formula) for s in self.sets)
 
     @property
     def max_reps_in_set(self) -> int:
@@ -308,7 +350,7 @@ def gold_book(sessions: list[SessionStats], formula: str = "epley") -> Optional[
             if row.reps <= 0:
                 continue
             found = True
-            score = e1rm(row.weight, row.reps, formula)
+            score = e1rm(row.weight, row.reps, formula, row.rpe)
             if score > book.best_e1rm:
                 book.best_e1rm = score
                 book.best_e1rm_weight, book.best_e1rm_reps = row.weight, row.reps
@@ -342,7 +384,7 @@ def compute_personal_records(sessions: list[SessionStats]) -> PersonalRecords:
         for s in session.sets:
             if s.weight > pr.max_weight:
                 pr.max_weight = s.weight
-            val = e1rm(s.weight, s.reps, session.formula)
+            val = e1rm(s.weight, s.reps, session.formula, s.rpe)
             if val > pr.max_e1rm:
                 pr.max_e1rm = val
                 pr.best_e1rm_weight = s.weight
@@ -530,6 +572,11 @@ def _reps_holding_e1rm(
     can't (the last session ran well past the range — the weight bump is still
     the right call, just not a reason to hand back reps).
     """
+    # Без RPE, с обеих сторон сравнения: цель — это план на будущее, и RPE у неё
+    # нет по определению. Подставить сюда RPE прошлого подхода значило бы
+    # сравнивать его повторы до отказа с записанными повторами цели и требовать
+    # на выходе лишний повтор — то есть отдавать человеку в план ту самую работу
+    # «в отказ», от которой запас его и уберёг.
     low, high = rep_range or (REP_RANGE_MIN, REP_RANGE_MAX)
     reference = e1rm(last_weight, last_reps, formula) * E1RM_HOLD_TOLERANCE
     for reps in range(low, high):
@@ -820,7 +867,11 @@ def classify_stall(
     if len(window) < min_sessions:
         return None
 
-    points = [(dt.datetime.fromisoformat(s.started_at), s.top_e1rm) for s in window]
+    # Без RPE — см. SessionStats.top_e1rm_ignoring_rpe: иначе полбалла
+    # самооценки решают, «встал» человек или «регрессирует».
+    points = [
+        (dt.datetime.fromisoformat(s.started_at), s.top_e1rm_ignoring_rpe) for s in window
+    ]
     trend = linear_trend(points)
     slope = trend.slope_per_week if trend else None
 
