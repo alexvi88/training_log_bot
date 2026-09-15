@@ -628,7 +628,7 @@ def _logging_hint(
 
 
 async def _sets_beat_record(
-    ex_id: int, workout_id: int, logged: list[tuple[float, int]], formula: str
+    ex_id: int, workout_id: int, logged: list[tuple[float, int, float | None]], formula: str
 ) -> bool:
     """True if any of the sets just logged is a genuine all-time record for this
     exercise — a new best e1RM or a new heaviest weight (or, for bodyweight moves,
@@ -641,7 +641,7 @@ async def _sets_beat_record(
     started = workout["started_at"]
     history_rows = await db.list_sets_for_exercise(ex_id, exclude_workout_id=workout_id)
     history_set_rows = [
-        analytics.SetRow(db.load_of(r), r["reps"], r["workout_id"], r["started_at"])
+        analytics.SetRow(db.load_of(r), r["reps"], r["workout_id"], r["started_at"], r["rpe"])
         for r in history_rows
         if r["started_at"] < started
     ]
@@ -651,14 +651,14 @@ async def _sets_beat_record(
     if not prior_sessions:
         return False  # first-ever session with this exercise — nothing to beat yet
     prior = analytics.compute_personal_records(prior_sessions)
-    is_bodyweight = all(w == 0 for w, _ in logged)
+    is_bodyweight = all(w == 0 for w, _r, _rpe in logged)
     if is_bodyweight:
         prior_best_reps = max(prior.max_reps_at_weight.values(), default=0)
-        return any(r > prior_best_reps for w, r in logged)
-    for weight, reps in logged:
+        return any(r > prior_best_reps for _w, r, _rpe in logged)
+    for weight, reps, rpe in logged:
         if weight > prior.max_weight:
             return True
-        if analytics.e1rm(weight, reps, formula) > prior.max_e1rm:
+        if analytics.e1rm(weight, reps, formula, rpe) > prior.max_e1rm:
             return True
     return False
 
@@ -2440,17 +2440,22 @@ async def live_note_entered(message: Message, state: FSMContext):
     await _render_logging_screen(message.bot, state, user)
 
 
-async def _store_parsed_sets(state: FSMContext, data: dict, active: int, parsed) -> list[tuple[float, int]]:
+async def _store_parsed_sets(
+    state: FSMContext, data: dict, active: int, parsed
+) -> list[tuple[float, int, float | None]]:
     """Write the parsed sets to the active block, carrying weight forward for bare
-    reps, and update last_by_exercise. Returns the (weight, reps) actually logged."""
+    reps, and update last_by_exercise. Returns the (weight, reps, rpe) actually
+    logged — RPE едет дальше, потому что рекорд по e1RM считается по повторам до
+    отказа (analytics.effective_reps), и без него 🔥 на подходе разошлось бы с 🥇,
+    которое трекер рисует на том же подходе (view_builder._best_gold_index)."""
     block_id = (data.get("open_blocks") or {}).get(active)
     last_by = dict(data.get("last_by_exercise") or {})
     prev_weight, _ = last_by.get(active) or (0.0, 0)
-    logged: list[tuple[float, int]] = []
+    logged: list[tuple[float, int, float | None]] = []
     for ps in parsed:
         weight = prev_weight if (ps.weight_omitted and prev_weight) else ps.weight
         await _log_one(block_id, active, weight, ps.reps, ps.rpe)
-        logged.append((weight, ps.reps))
+        logged.append((weight, ps.reps, ps.rpe))
         prev_weight = weight
     last_by[active] = (prev_weight, parsed[-1].reps)
     await state.update_data(last_by_exercise=last_by)
@@ -2571,7 +2576,8 @@ async def _maybe_show_voice_hint(bot, data: dict, user_id: int, chat_id: int, se
 
 
 async def _finalize_logged_sets(bot, state: FSMContext, user, data: dict, active: int,
-                                logged: list[tuple[float, int]], chat_id: int, message_id: int,
+                                logged: list[tuple[float, int, float | None]],
+                                chat_id: int, message_id: int,
                                 message: Message | None = None) -> None:
     """Shared tail of logging typed sets: celebrate a record on the message that
     carried it, otherwise tidy the message away, then redraw the tracker.
@@ -2601,7 +2607,8 @@ async def _finalize_logged_sets(bot, state: FSMContext, user, data: dict, active
 
 
 async def _finalize_voice_sets(bot, state: FSMContext, user, data: dict, active: int,
-                               logged: list[tuple[float, int]], chat_id: int, message_id: int,
+                               logged: list[tuple[float, int, float | None]],
+                               chat_id: int, message_id: int,
                                message: Message | None = None) -> None:
     """Same tail as `_finalize_logged_sets`, for voice input: the voice message
     stays in the chat (there is nothing to re-read in it) and gets a reaction

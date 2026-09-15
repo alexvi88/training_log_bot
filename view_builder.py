@@ -83,8 +83,10 @@ async def build_block_views(
         if workout is not None:
             gold_index = _best_gold_index(
                 [
-                    (load, reps)
-                    for load, (_w, reps) in zip(entry["loads"], entry["sets"], strict=True)
+                    (load, reps, rpe)
+                    for load, (_w, reps), rpe in zip(
+                        entry["loads"], entry["sets"], entry["rpes"], strict=True
+                    )
                 ],
                 await db.max_e1rm_before_workout(
                     workout["user_id"], ex_id, workout_id, formula
@@ -111,9 +113,11 @@ async def build_block_views(
                         workout_id=workout_id,
                         started_at=workout["started_at"],
                         sets=[
-                            analytics.SetRow(load, reps, workout_id, workout["started_at"])
-                            for load, (_w, reps) in zip(
-                                entry["loads"], entry["sets"], strict=True
+                            analytics.SetRow(
+                                load, reps, workout_id, workout["started_at"], rpe
+                            )
+                            for load, (_w, reps), rpe in zip(
+                                entry["loads"], entry["sets"], entry["rpes"], strict=True
                             )
                         ],
                         formula=formula,
@@ -142,7 +146,7 @@ async def build_block_views(
 
 
 def _best_gold_index(
-    loaded_sets: list[tuple[float, int]], previous_best: float, formula: str
+    loaded_sets: list[tuple[float, int, float | None]], previous_best: float, formula: str
 ) -> int | None:
     """Index of the session's best set, if it clears the exercise's all-time
     best e1RM. Only the best one is marked: two 🥇 in one exercise would read
@@ -155,10 +159,10 @@ def _best_gold_index(
     """
     best_index = None
     best_score = previous_best
-    for i, (load, reps) in enumerate(loaded_sets):
+    for i, (load, reps, rpe) in enumerate(loaded_sets):
         if reps <= 0:
             continue
-        score = analytics.e1rm(load, reps, formula)
+        score = analytics.e1rm(load, reps, formula, rpe)
         if score > best_score:
             best_score, best_index = score, i
     return best_index

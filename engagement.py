@@ -246,7 +246,8 @@ async def _find_plateau_exercise(telegram_id: int) -> Optional[str]:
         if len(rows) < PLATEAU_SESSIONS:
             continue
         set_rows = [
-            analytics.SetRow(db.load_of(r), r["reps"], r["workout_id"], r["started_at"]) for r in rows
+            analytics.SetRow(db.load_of(r), r["reps"], r["workout_id"], r["started_at"], r["rpe"])
+            for r in rows
         ]
         sessions = analytics.group_sets_by_session(set_rows)
         if is_plateau(sessions):

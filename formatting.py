@@ -477,7 +477,8 @@ class ExerciseBlockView:
         if not self.sets:
             return 0.0
         return max(
-            e1rm(self.load_for(i), r, self.formula) for i, (_w, r) in enumerate(self.sets)
+            e1rm(self.load_for(i), r, self.formula, self.rpe_for(i))
+            for i, (_w, r) in enumerate(self.sets)
         )
 
     @property
@@ -486,7 +487,10 @@ class ExerciseBlockView:
         # дельта «vs прошлая» сравнима с top_e1rm выше.
         if not self.prev_sets:
             return 0.0
-        return max(e1rm(w, r, self.formula) for w, r in self.prev_sets)
+        return max(
+            e1rm(w, r, self.formula, self.prev_rpe_for(i))
+            for i, (w, r) in enumerate(self.prev_sets)
+        )
 
 
 # A workout is rendered as a flat list of exercise blocks. (Exercises logged in

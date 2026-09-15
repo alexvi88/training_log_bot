@@ -3277,18 +3277,30 @@ async def list_finished_workout_exercise_ids_by_date(
     return result
 
 
+# Повторы до отказа — SQL-зеркало analytics.effective_reps: записанные плюс
+# запас из RPE (10 - rpe), обрезанный по analytics.RIR_CAP. NULL в rpe — ноль
+# запаса, то есть прежний расчёт по записанным повторам.
+_EFF_REPS_SQL = (
+    "(s.reps + MIN(MAX(10.0 - COALESCE(s.rpe, 10.0), 0.0), 5.0))"
+)
+
+
 def _e1rm_sql(formula: str) -> str:
-    """SQL mirror of analytics.e1rm — reps<=1 is the weight itself; brzycki
-    falls back to epley above BRZYCKI_MAX_REPS (10), exactly like the Python."""
+    """SQL mirror of analytics.e1rm — считает по повторам до отказа
+    (_EFF_REPS_SQL, он же analytics.effective_reps): reps<=1 is the weight
+    itself; brzycki falls back to epley above BRZYCKI_MAX_REPS (10), exactly
+    like the Python. Расходиться нельзя: по этой планке ставится живое 🥇, а
+    считает его Python — один и тот же подход дал бы два разных ответа."""
     w = LOAD_WEIGHT_SQL
-    epley = f"{w} * (1 + s.reps / 30.0)"
+    r = _EFF_REPS_SQL
+    epley = f"{w} * (1 + {r} / 30.0)"
     if formula == "brzycki":
         return (
-            f"CASE WHEN s.reps <= 1 THEN {w} "
-            f"WHEN s.reps > 10 THEN {epley} "
-            f"ELSE {w} * 36.0 / (37 - s.reps) END"
+            f"CASE WHEN {r} <= 1 THEN {w} "
+            f"WHEN {r} > 10 THEN {epley} "
+            f"ELSE {w} * 36.0 / (37 - {r}) END"
         )
-    return f"CASE WHEN s.reps <= 1 THEN {w} ELSE {epley} END"
+    return f"CASE WHEN {r} <= 1 THEN {w} ELSE {epley} END"
 
 
 async def max_e1rm_before_workout(
@@ -4111,7 +4123,7 @@ async def list_all_sets_by_exercise(user_id: int) -> list[aiosqlite.Row]:
     account is slow enough for the tapped button's callback to time out.
     """
     cur = await conn().execute(
-        f"SELECT {LOAD_WEIGHT_SQL} AS weight, s.reps, e.id AS exercise_id, e.display_name, "
+        f"SELECT {LOAD_WEIGHT_SQL} AS weight, s.reps, s.rpe, e.id AS exercise_id, e.display_name, "
         "       w.id AS workout_id, w.started_at "
         "FROM sets s "
         "JOIN workout_blocks b ON b.id = s.block_id "
