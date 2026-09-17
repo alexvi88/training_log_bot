@@ -55,6 +55,22 @@ async def test_auth_link_issues_token_and_consumes_code(fresh_db, client_factory
 
 
 @pytest.mark.asyncio
+async def test_auth_link_rate_limits_repeated_bad_codes(fresh_db, client_factory):
+    """6-8 цифр — перебираемо без лимита попыток; после mcp_oauth.CONSENT_FAILURE_LIMIT_PER_IP
+    неудач подряд дальнейшие попытки должны запираться, а не пробовать код."""
+    import mcp_oauth
+
+    client = client_factory()
+    for _ in range(mcp_oauth.CONSENT_FAILURE_LIMIT_PER_IP):
+        resp = await client.post("/auth/link", json={"code": "00000000"})
+        assert resp.status_code == 400
+
+    resp = await client.post("/auth/link", json={"code": "00000000"})
+    assert resp.status_code == 429
+    assert resp.json()["error"] == "rate_limited"
+
+
+@pytest.mark.asyncio
 async def test_me_requires_bearer_token(fresh_db, client_factory):
     client = client_factory()
     resp = await client.get("/me")

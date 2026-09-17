@@ -4441,28 +4441,63 @@ async def resolve_api_token(token: str) -> Optional[int]:
     return row["user_id"]
 
 
-async def consume_link_code(code: str) -> Optional[int]:
-    """Код связывания (issue_oauth_link_code) → user_id, гасит код при успехе.
+async def consume_link_code(
+    code: str,
+    *,
+    client_ip: Optional[str] = None,
+    window_seconds: float = 0.0,
+    window_limit_per_ip: int = 0,
+    window_limit_total: int = 0,
+) -> tuple[str, Optional[int]]:
+    """Код связывания (issue_oauth_link_code) → («ok», user_id) при успехе,
+    иначе («rate_limited», None) или («bad_code», None). Гасит код при успехе.
 
-    В отличие от verify_oauth_link_code, здесь нет заявки на согласие и лимита
-    попыток: код вводит не веб-страница, а сам клиент, которому его продиктовал
-    владелец аккаунта — счётчик неудач тут защищать нечего, а короткий TTL кода
-    и так ограничивает окно перебора.
+    В отличие от verify_oauth_link_code, здесь нет заявки на согласие — код
+    вводит не веб-страница, а сам клиент, которому его продиктовал владелец
+    аккаунта, — но перебор всё равно нужно запирать: код всего 6-8 цифр, а
+    короткий TTL сам по себе не мешает скрипту перебрать весь диапазон за
+    считаные секунды без лимита на попытки. Окна те же, что у
+    verify_oauth_link_code (см. mcp_oauth.CONSENT_FAILURE_*), и через ту же
+    таблицу неудач — это тот же по сути перебор, просто без заявки на согласие
+    вокруг него.
     """
     if not code:
-        return None
+        return "bad_code", None
     now = time.time()
     async with _write_lock:
+        if window_seconds > 0:
+            await conn().execute(
+                "DELETE FROM oauth_consent_failures WHERE at < ?", (now - window_seconds,)
+            )
+            cur = await conn().execute(
+                "SELECT COUNT(*) AS total, "
+                "SUM(CASE WHEN client_ip IS ? THEN 1 ELSE 0 END) AS same_ip "
+                "FROM oauth_consent_failures WHERE at >= ?",
+                (client_ip, now - window_seconds),
+            )
+            seen = await cur.fetchone()
+            too_many_here = (
+                window_limit_per_ip > 0 and (seen["same_ip"] or 0) >= window_limit_per_ip
+            )
+            too_many_anywhere = window_limit_total > 0 and seen["total"] >= window_limit_total
+            if too_many_here or too_many_anywhere:
+                await conn().commit()
+                return "rate_limited", None
         cur = await conn().execute(
             "SELECT user_id FROM oauth_link_codes WHERE code = ? AND expires_at > ?",
             (code, now),
         )
         row = await cur.fetchone()
         if row is None:
-            return None
+            await conn().execute(
+                "INSERT INTO oauth_consent_failures (at, client_ip) VALUES (?, ?)",
+                (now, client_ip),
+            )
+            await conn().commit()
+            return "bad_code", None
         await conn().execute("DELETE FROM oauth_link_codes WHERE code = ?", (code,))
         await conn().commit()
-        return row["user_id"]
+        return "ok", row["user_id"]
 
 
 # ---------- MCP OAuth (см. mcp_oauth.py) ----------

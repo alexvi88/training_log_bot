@@ -28,6 +28,7 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 import db
+import mcp_oauth
 
 logger = logging.getLogger(__name__)
 
@@ -120,11 +121,25 @@ def _workout_json(row) -> dict[str, Any]:
 # ---------- auth ----------
 
 async def auth_link(request: Request) -> JSONResponse:
-    """Обменять код связывания (показал бот) на токен доступа к /v1."""
+    """Обменять код связывания (показал бот) на токен доступа к /v1.
+
+    Лимит попыток — теми же окнами, что у OAuth-страницы согласия
+    (mcp_oauth.CONSENT_FAILURE_*): код всего 6-8 цифр, и без лимита скрипт
+    перебрал бы весь диапазон за секунды, пока код ещё не истёк.
+    """
     body = await _json_body(request)
     code = str(_require(body, "code", str)).strip()
-    user_id = await db.consume_link_code(code)
-    if user_id is None:
+    client_ip = request.client.host if request.client else None
+    status, user_id = await db.consume_link_code(
+        code,
+        client_ip=client_ip,
+        window_seconds=mcp_oauth.CONSENT_FAILURE_WINDOW,
+        window_limit_per_ip=mcp_oauth.CONSENT_FAILURE_LIMIT_PER_IP,
+        window_limit_total=mcp_oauth.CONSENT_FAILURE_LIMIT_TOTAL,
+    )
+    if status == "rate_limited":
+        raise ApiError(429, "rate_limited", "too many attempts, try again later")
+    if status != "ok" or user_id is None:
         raise ApiError(400, "invalid_code", "code is invalid or expired")
     token = await db.issue_api_token(user_id)
     user = await db.get_user(user_id)
