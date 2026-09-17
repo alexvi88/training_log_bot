@@ -94,7 +94,7 @@ async def test_mcp_available_adds_mcp_and_game_to_default_scope(monkeypatch):
     )
     commands = default_call.args[0]
     assert [c.command for c in commands] == [
-        "start", "help", "ai_trainer", "food_diary", "feedback", "mcp", "game",
+        "start", "help", "ai_trainer", "food_diary", "feedback", "mcp", "game", "ios",
     ]
 
 

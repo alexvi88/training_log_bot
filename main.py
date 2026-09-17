@@ -44,6 +44,7 @@ from handlers import (
     food_diary,
     game,
     history,
+    ios_link,
     mcp_access,
     persistent_menu,
     routines,
@@ -310,6 +311,7 @@ def setup_routers(dp: Dispatcher) -> None:
     # Same reason: /mcp and its own callbacks must reach this router even when
     # the user is parked in some flow's catch-all message handler.
     dp.include_router(mcp_access.router)
+    dp.include_router(ios_link.router)
     # Same reason: /game — одна команда без состояний, и она должна долетать
     # из любого сценария.
     dp.include_router(game.router)
@@ -366,6 +368,9 @@ def _public_commands(lang: str) -> list[BotCommand]:
     if config.mcp_available():
         commands.append(BotCommand(command="mcp", description=i18n.t_in(lang, "bot.commands.mcp")))
         commands.append(BotCommand(command="game", description=i18n.t_in(lang, "bot.commands.game")))
+        # /ios живёт на том же публичном адресе, что и /mcp (api_v1.py
+        # монтируется рядом с MCP на одном порту) — без него звать некуда.
+        commands.append(BotCommand(command="ios", description=i18n.t_in(lang, "bot.commands.ios")))
     # Та же логика: команда обещает работающий вход, а без адреса группы вести
     # некуда (см. handlers/community.py).
     if config.community_available():

@@ -121,6 +121,7 @@
   "bot.commands.game": "Mini-games",
   "bot.commands.help": "How to log a set",
   "bot.commands.mcp": "Connect your data to Claude and ChatGPT",
+  "bot.commands.ios": "Code for the iOS app",
   "bot.commands.start": "Open the main menu",
   "bot.description": "HEY ATHLETE! READY TO TRAIN?\n\nWorkout diary, records, a program, a breakdown of your history — all on me.\nThe iron's on you.",
   "bot.short_description": "Workout diary with an AI coach: sets, records, programs. I keep the log — you lift.",
@@ -1697,5 +1698,6 @@
   "ui.workout_not_found": "Can't find that workout — the screen is stale. Open 📚 History again",
   "view.no_group": "no group",
   "oauth.too_many_registrations": "Too many sign-ups. Try again later.",
-  "bot.name": "ATHLETE DIARY"
+  "bot.name": "ATHLETE DIARY",
+  "ios_link.screen": "📱 <b>Code for the iOS app</b>\n\n{code}\nEnter it on the sign-in screen in the app — it links your phone to this account. One-time code, valid for {ttl}."
 }

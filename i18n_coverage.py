@@ -191,6 +191,7 @@ LOCALIZED: list[str] = [
     "handlers/game.py",
     "handlers/backfill.py",
     "handlers/mcp_access.py",
+    "handlers/ios_link.py",
     "search_terms.py",
     "exercise_mentions.py",
     "program_mentions.py",
@@ -430,6 +431,11 @@ NEVER_LOCALIZED: dict[str, str] = {
     "mcp_server.py": (
         "описания инструментов MCP одноязычно английские: один экземпляр сервера "
         "на процесс, схема забирается один раз, request-scoped языка нет"
+    ),
+    "api_v1.py": (
+        "REST-слой для iOS-клиента отдаёт только JSON — числа, id, машинные коды "
+        "ошибок (invalid_code, not_found); человеческий текст под них рисует сам "
+        "клиент на своей стороне, сюда он не долетает"
     ),
 }
 
