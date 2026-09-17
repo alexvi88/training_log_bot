@@ -182,9 +182,19 @@ async def list_muscle_groups(request: Request) -> JSONResponse:
 
 
 async def list_exercises(request: Request) -> JSONResponse:
+    """Три режима, как в боте: по группе мышц (обзор для тех, кто не помнит
+    точное название), текстовым поиском, или весь каталог. group_id и query
+    вместе не имеют смысла — group_id побеждает, раз пришёл."""
     user_id = await _authed_user_id(request)
+    group_id_param = request.query_params.get("group_id")
     query = request.query_params.get("query")
-    if query:
+    if group_id_param:
+        try:
+            group_id = int(group_id_param)
+        except ValueError as exc:
+            raise ApiError(400, "bad_request", "group_id must be int") from exc
+        rows = await db.list_user_exercises_in_group(user_id, group_id)
+    elif query:
         rows = await db.search_exercises(user_id, query, limit=50)
     else:
         rows = await db.list_user_exercises(user_id)
