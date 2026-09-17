@@ -152,6 +152,51 @@ async def test_full_workout_flow(fresh_db, client_factory):
 
 
 @pytest.mark.asyncio
+async def test_delete_last_set(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    exercise_id = (await client.post("/exercises", json={"name": "Присед"})).json()["id"]
+    workout_id = (await client.post("/workouts/active")).json()["id"]
+
+    missing = await client.delete(f"/workouts/{workout_id}/exercises/{exercise_id}/last-set")
+    assert missing.status_code == 404
+
+    await client.post(
+        f"/workouts/{workout_id}/sets", json={"exercise_id": exercise_id, "weight": 100, "reps": 5}
+    )
+    second = await client.post(
+        f"/workouts/{workout_id}/sets", json={"exercise_id": exercise_id, "weight": 110, "reps": 3}
+    )
+    assert second.status_code == 201
+
+    deleted = await client.delete(f"/workouts/{workout_id}/exercises/{exercise_id}/last-set")
+    assert deleted.status_code == 200
+    assert deleted.json()["weight"] == 110
+
+    active = await client.get("/workouts/active")
+    sets = active.json()["blocks"][0]["exercises"][0]["sets"]
+    assert len(sets) == 1
+    assert sets[0]["weight"] == 100
+
+
+@pytest.mark.asyncio
+async def test_discard_active_workout(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+
+    missing = await client.delete("/workouts/active")
+    assert missing.status_code == 404
+
+    workout_id = (await client.post("/workouts/active")).json()["id"]
+    discarded = await client.delete("/workouts/active")
+    assert discarded.status_code == 200
+    assert discarded.json()["discarded"] is True
+
+    assert (await client.get("/workouts/active")).json() is None
+    # gone for good, not just unlinked from "active"
+    history = await client.get("/workouts")
+    assert all(item["id"] != workout_id for item in history.json())
+
+
+@pytest.mark.asyncio
 async def test_set_logging_rejects_another_users_exercise(fresh_db, client_factory):
     client_a = await _linked_client(fresh_db, client_factory, telegram_id=111)
     client_b = await _linked_client(fresh_db, client_factory, telegram_id=222)
