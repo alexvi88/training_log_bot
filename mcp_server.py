@@ -47,6 +47,7 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 
 import ai_trainer
+import api_v1
 import config
 import db
 import game_server
@@ -405,7 +406,7 @@ def build_app():
     request still needs a secret that a random page doesn't have.
     """
     mcp = build_server()
-    app = mcp.streamable_http_app(
+    mcp_app = mcp.streamable_http_app(
         streamable_http_path=MCP_PATH,
         stateless_http=True,
         json_response=True,
@@ -415,7 +416,44 @@ def build_app():
     # (see TrainingLogOAuthProvider.register_client / db.OAUTH_CLIENT_METADATA_LIMIT),
     # not request frequency — an anonymous flood can grow oauth_clients for hours
     # before the once-a-day prune catches up.
-    return mcp_oauth.RegisterRateLimitMiddleware(app)
+    mcp_app = mcp_oauth.RegisterRateLimitMiddleware(mcp_app)
+    # /v1 — REST API for the iOS client (api_v1.py), on the same port: there's
+    # already one uvicorn running here for MCP + OAuth, and a second process
+    # would need its own port and its own restart-on-crash story for free.
+    #
+    # Not a Starlette Mount: Router.lifespan() only runs Starlette's own
+    # lifespan_context and never forwards "lifespan" scope events into a
+    # mounted sub-app, so wrapping mcp_app in Mount("/", ...) would silently
+    # skip the startup that sets up its streamable-http session manager (the
+    # first request would then fail with "Task group is not initialized").
+    # A plain path-prefix dispatcher sidesteps that: lifespan always goes to
+    # mcp_app, the only one of the two with startup/shutdown state.
+    return _PrefixDispatch(prefix="/v1", prefix_app=api_v1.build_app(), default_app=mcp_app)
+
+
+class _PrefixDispatch:
+    """Route by path prefix, and send lifespan only to `default_app`.
+
+    See build_app() for why this exists instead of starlette.routing.Mount.
+    """
+
+    def __init__(self, *, prefix: str, prefix_app, default_app):
+        self._prefix = prefix
+        self._prefix_app = prefix_app
+        self._default_app = default_app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "lifespan":
+            await self._default_app(scope, receive, send)
+            return
+        path = scope.get("path", "")
+        if path == self._prefix or path.startswith(self._prefix + "/"):
+            scope = dict(scope)
+            scope["path"] = path[len(self._prefix):] or "/"
+            scope["root_path"] = scope.get("root_path", "") + self._prefix
+            await self._prefix_app(scope, receive, send)
+            return
+        await self._default_app(scope, receive, send)
 
 
 async def serve() -> None:

@@ -1,0 +1,372 @@
+"""REST-слой `/v1` для iOS-клиента (training_log_bot_ios).
+
+Тот же приём, что у mcp_server.py: это транспорт поверх db.py, а не вторая
+реализация бизнес-логики. Отличие от MCP — пишущих эндпоинтов тут много
+(логирование подхода — основной сценарий приложения), поэтому у каждого
+свой маршрут, а не общий execute_tool.
+
+Аутентификация — отдельный токен (`db.api_tokens`), не mcp_tokens: это разные
+клиенты одного человека, и перевыпуск одного не должен разлогинивать другой.
+Связка аккаунта делается кодом, который бот показывает по запросу
+(`db.issue_oauth_link_code`) — тот же код связывания, что и у OAuth, только
+без веб-страницы согласия: клиент обменивает его на токен напрямую
+(`db.consume_link_code`).
+
+Транспорт — Starlette (уже тянется как зависимость mcp), без lifespan: у
+приложения нет собственного состояния для запуска/остановки, соединение с
+базой держит db.py.
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+from starlette.applications import Starlette
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+from starlette.routing import Route
+
+import db
+
+logger = logging.getLogger(__name__)
+
+
+class ApiError(Exception):
+    def __init__(self, status_code: int, code: str, message: str):
+        self.status_code = status_code
+        self.code = code
+        self.message = message
+
+
+async def _api_error_handler(request: Request, exc: ApiError) -> JSONResponse:
+    return JSONResponse({"error": exc.code, "message": exc.message}, status_code=exc.status_code)
+
+
+async def _unhandled_error_handler(request: Request, exc: Exception) -> JSONResponse:
+    logger.exception("api_v1: unhandled error on %s %s", request.method, request.url.path)
+    return JSONResponse({"error": "internal_error", "message": "internal error"}, status_code=500)
+
+
+async def _authed_user_id(request: Request) -> int:
+    """Bearer-токен → telegram_id, либо ApiError(401)."""
+    auth = request.headers.get("authorization", "")
+    if not auth.lower().startswith("bearer "):
+        raise ApiError(401, "unauthorized", "missing bearer token")
+    token = auth[len("bearer "):].strip()
+    user_id = await db.resolve_api_token(token)
+    if user_id is None:
+        raise ApiError(401, "unauthorized", "invalid or revoked token")
+    return user_id
+
+
+async def _json_body(request: Request) -> dict[str, Any]:
+    try:
+        body = await request.json()
+    except Exception as exc:
+        raise ApiError(400, "bad_request", "invalid JSON body") from exc
+    if not isinstance(body, dict):
+        raise ApiError(400, "bad_request", "JSON object expected")
+    return body
+
+
+def _require(body: dict[str, Any], key: str, expected_type: type) -> Any:
+    if key not in body:
+        raise ApiError(400, "bad_request", f"missing field: {key}")
+    value = body[key]
+    if not isinstance(value, expected_type) or isinstance(value, bool) and expected_type is not bool:
+        raise ApiError(400, "bad_request", f"field {key} must be {expected_type.__name__}")
+    return value
+
+
+# ---------- сериализация ----------
+
+def _exercise_json(row) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "display_name": row["display_name"],
+        "original_name": row["original_name"],
+        "primary_group_id": row["primary_group_id"],
+        "equipment": row["equipment"],
+        "unilateral": bool(row["unilateral"]),
+        "attachment": row["attachment"],
+        "bodyweight_load": row["bodyweight_load"],
+    }
+
+
+def _set_json(row) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "exercise_id": row["exercise_id"],
+        "round_index": row["round_index"],
+        "weight": row["weight"],
+        "reps": row["reps"],
+        "rpe": row["rpe"],
+        "load_weight": row["load_weight"] if row["load_weight"] is not None else row["weight"],
+        "created_at": row["created_at"],
+    }
+
+
+def _workout_json(row) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "status": row["status"],
+        "started_at": row["started_at"],
+        "finished_at": row["finished_at"],
+        "note": row["note"],
+    }
+
+
+# ---------- auth ----------
+
+async def auth_link(request: Request) -> JSONResponse:
+    """Обменять код связывания (показал бот) на токен доступа к /v1."""
+    body = await _json_body(request)
+    code = str(_require(body, "code", str)).strip()
+    user_id = await db.consume_link_code(code)
+    if user_id is None:
+        raise ApiError(400, "invalid_code", "code is invalid or expired")
+    token = await db.issue_api_token(user_id)
+    user = await db.get_user(user_id)
+    return JSONResponse(
+        {
+            "token": token,
+            "user_id": user_id,
+            "unit": user["unit"] if user else "kg",
+            "lang": user["lang"] if user else "ru",
+        }
+    )
+
+
+async def me(request: Request) -> JSONResponse:
+    user_id = await _authed_user_id(request)
+    user = await db.get_user(user_id)
+    if user is None:
+        raise ApiError(404, "not_found", "user not found")
+    return JSONResponse(
+        {
+            "user_id": user_id,
+            "username": user["username"],
+            "unit": user["unit"],
+            "lang": user["lang"],
+        }
+    )
+
+
+# ---------- каталог ----------
+
+async def list_muscle_groups(request: Request) -> JSONResponse:
+    user_id = await _authed_user_id(request)
+    groups = await db.list_muscle_groups(user_id, order_by_usage=True)
+    return JSONResponse(
+        [
+            {"id": g["id"], "name": g["name"], "emoji": g["emoji"]}
+            for g in groups
+        ]
+    )
+
+
+async def list_exercises(request: Request) -> JSONResponse:
+    user_id = await _authed_user_id(request)
+    query = request.query_params.get("query")
+    if query:
+        rows = await db.search_exercises(user_id, query, limit=50)
+    else:
+        rows = await db.list_user_exercises(user_id)
+    return JSONResponse([_exercise_json(r) for r in rows])
+
+
+async def create_exercise(request: Request) -> JSONResponse:
+    user_id = await _authed_user_id(request)
+    body = await _json_body(request)
+    name = str(_require(body, "name", str)).strip()
+    if not name:
+        raise ApiError(400, "bad_request", "name must not be empty")
+    group_id = body.get("group_id")
+    if group_id is not None and not isinstance(group_id, int):
+        raise ApiError(400, "bad_request", "group_id must be int")
+    exercise_id = await db.create_exercise(user_id, name, group_id)
+    row = await db.get_exercise(exercise_id)
+    return JSONResponse(_exercise_json(row), status_code=201)
+
+
+# ---------- тренировки ----------
+
+async def _owned_workout(workout_id: int, user_id: int):
+    workout = await db.get_workout(workout_id)
+    if workout is None or workout["user_id"] != user_id:
+        raise ApiError(404, "not_found", "workout not found")
+    return workout
+
+
+async def _owned_exercise(exercise_id: int, user_id: int):
+    exercise = await db.get_exercise(exercise_id)
+    if exercise is None or exercise["user_id"] != user_id:
+        raise ApiError(404, "not_found", "exercise not found")
+    return exercise
+
+
+async def _block_for_exercise(workout_id: int, exercise_id: int) -> int:
+    """Блок этого упражнения в тренировке — существующий (первый попавшийся,
+    без суперсетов на этом этапе) или новый одиночный."""
+    for block in await db.list_blocks_for_workout(workout_id):
+        for be in await db.get_block_exercises(block["id"]):
+            if be["exercise_id"] == exercise_id:
+                return block["id"]
+    block_id = await db.create_block(workout_id, "single")
+    await db.add_block_exercise(block_id, exercise_id, 0)
+    return block_id
+
+
+async def active_workout(request: Request) -> JSONResponse:
+    user_id = await _authed_user_id(request)
+    workout = await db.get_active_workout(user_id)
+    if workout is None:
+        return JSONResponse(None)
+    return JSONResponse(await _workout_detail_json(workout))
+
+
+async def start_workout(request: Request) -> JSONResponse:
+    user_id = await _authed_user_id(request)
+    workout_id, created = await db.get_or_create_active_workout(user_id)
+    workout = await db.get_workout(workout_id)
+    return JSONResponse(_workout_json(workout), status_code=201 if created else 200)
+
+
+async def log_set(request: Request) -> JSONResponse:
+    user_id = await _authed_user_id(request)
+    workout_id = int(request.path_params["workout_id"])
+    workout = await _owned_workout(workout_id, user_id)
+    if workout["status"] != "active":
+        raise ApiError(409, "workout_finished", "workout is already finished")
+    body = await _json_body(request)
+    exercise_id = _require(body, "exercise_id", int)
+    weight = float(_require(body, "weight", (int, float)))
+    reps = _require(body, "reps", int)
+    rpe = body.get("rpe")
+    if rpe is not None:
+        rpe = float(rpe)
+    await _owned_exercise(exercise_id, user_id)
+    block_id = await _block_for_exercise(workout_id, exercise_id)
+    set_id = await db.append_set(block_id, exercise_id, 0, weight, reps, rpe)
+    cur = await db.conn().execute("SELECT * FROM sets WHERE id = ?", (set_id,))
+    row = await cur.fetchone()
+    return JSONResponse(_set_json(row), status_code=201)
+
+
+async def finish_workout(request: Request) -> JSONResponse:
+    user_id = await _authed_user_id(request)
+    workout_id = int(request.path_params["workout_id"])
+    workout = await _owned_workout(workout_id, user_id)
+    if workout["status"] != "active":
+        raise ApiError(409, "workout_finished", "workout is already finished")
+    body = await _json_body(request) if await request.body() else {}
+    note = body.get("note")
+    await db.finish_workout(workout_id, note=note)
+    workout = await db.get_workout(workout_id)
+    return JSONResponse(_workout_json(workout))
+
+
+async def _workout_detail_json(workout) -> dict[str, Any]:
+    data = _workout_json(workout)
+    blocks_json = []
+    for block in await db.list_blocks_for_workout(workout["id"]):
+        exercises_json = []
+        for be in await db.get_block_exercises(block["id"]):
+            sets = await db.list_sets_for_block(block["id"])
+            own_sets = [s for s in sets if s["exercise_id"] == be["exercise_id"]]
+            exercises_json.append(
+                {
+                    "exercise_id": be["exercise_id"],
+                    "display_name": be["display_name"],
+                    "sets": [_set_json(s) for s in own_sets],
+                }
+            )
+        blocks_json.append({"id": block["id"], "type": block["type"], "exercises": exercises_json})
+    data["blocks"] = blocks_json
+    return data
+
+
+async def get_workout(request: Request) -> JSONResponse:
+    user_id = await _authed_user_id(request)
+    workout_id = int(request.path_params["workout_id"])
+    workout = await _owned_workout(workout_id, user_id)
+    return JSONResponse(await _workout_detail_json(workout))
+
+
+async def list_workouts(request: Request) -> JSONResponse:
+    user_id = await _authed_user_id(request)
+    limit = min(int(request.query_params.get("limit", 20)), 100)
+    offset = max(int(request.query_params.get("offset", 0)), 0)
+    workouts = await db.list_workouts(user_id, limit=limit, offset=offset, status="finished")
+    contents = await db.list_workout_contents([w["id"] for w in workouts])
+    items = []
+    for w in workouts:
+        exercise_names, set_count = contents.get(w["id"], ([], 0))
+        item = _workout_json(w)
+        item["exercise_names"] = exercise_names
+        item["set_count"] = set_count
+        items.append(item)
+    return JSONResponse(items)
+
+
+# ---------- вес тела ----------
+
+async def list_bodyweight(request: Request) -> JSONResponse:
+    user_id = await _authed_user_id(request)
+    limit = request.query_params.get("limit")
+    rows = await db.list_bodyweight_logs(user_id, limit=int(limit) if limit else None)
+    return JSONResponse(
+        [{"id": r["id"], "weight": r["weight"], "logged_at": r["logged_at"]} for r in rows]
+    )
+
+
+async def add_bodyweight(request: Request) -> JSONResponse:
+    user_id = await _authed_user_id(request)
+    body = await _json_body(request)
+    weight = float(_require(body, "weight", (int, float)))
+    logged_at = body.get("logged_at")
+    log_id = await db.add_bodyweight_log(user_id, weight, logged_at)
+    return JSONResponse({"id": log_id, "weight": weight}, status_code=201)
+
+
+async def delete_bodyweight(request: Request) -> JSONResponse:
+    user_id = await _authed_user_id(request)
+    log_id = int(request.path_params["log_id"])
+    deleted = await db.delete_bodyweight_log(log_id, user_id)
+    if not deleted:
+        raise ApiError(404, "not_found", "bodyweight entry not found")
+    return JSONResponse({"deleted": True})
+
+
+async def health(request: Request) -> JSONResponse:
+    return JSONResponse({"status": "ok"})
+
+
+routes = [
+    Route("/health", health, methods=["GET"]),
+    Route("/auth/link", auth_link, methods=["POST"]),
+    Route("/me", me, methods=["GET"]),
+    Route("/muscle-groups", list_muscle_groups, methods=["GET"]),
+    Route("/exercises", list_exercises, methods=["GET"]),
+    Route("/exercises", create_exercise, methods=["POST"]),
+    Route("/workouts/active", active_workout, methods=["GET"]),
+    Route("/workouts/active", start_workout, methods=["POST"]),
+    Route("/workouts", list_workouts, methods=["GET"]),
+    Route("/workouts/{workout_id:int}", get_workout, methods=["GET"]),
+    Route("/workouts/{workout_id:int}/sets", log_set, methods=["POST"]),
+    Route("/workouts/{workout_id:int}/finish", finish_workout, methods=["POST"]),
+    Route("/bodyweight", list_bodyweight, methods=["GET"]),
+    Route("/bodyweight", add_bodyweight, methods=["POST"]),
+    Route("/bodyweight/{log_id:int}", delete_bodyweight, methods=["DELETE"]),
+]
+
+
+def build_app() -> Starlette:
+    return Starlette(
+        routes=routes,
+        exception_handlers={
+            ApiError: _api_error_handler,
+            Exception: _unhandled_error_handler,
+        },
+    )

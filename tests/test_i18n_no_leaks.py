@@ -732,6 +732,13 @@ async def _screen_invite(db, user_id: int) -> str:
     return i18n.t("invite.screen", link=link)
 
 
+async def _screen_ios_link(db, user_id: int) -> str:
+    """/ios (handlers/ios_link.py) — код связки для iOS-приложения."""
+    from handlers import ios_link
+
+    return ios_link._ios_link_text("12345678")
+
+
 def _strip_autonyms(text: str) -> str:
     """Тот же вырез, что и в test_en_catalog_has_no_cyrillic: автоним «Русский»
     в подписи кнопки языка — законная кириллица даже на английском экране."""
@@ -796,6 +803,7 @@ SCREENS: list[tuple[str, object]] = [
     ("ai_trainer_thinking_pools", _screen_ai_trainer_thinking_pools),
     ("factcheck_screen", _screen_factcheck),
     ("invite_screen", _screen_invite),
+    ("ios_link_screen", _screen_ios_link),
 ]
 
 # Экраны, которые всё ещё протекают кириллицей мимо каталога. Список

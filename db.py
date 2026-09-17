@@ -539,6 +539,16 @@ CREATE TABLE IF NOT EXISTS mcp_tokens (
     last_used_at TEXT
 );
 
+-- Токен доступа iOS-клиента к /v1 (см. api_v1.py) — та же форма, что у
+-- mcp_tokens, но отдельная таблица: это другой клиент того же человека, и его
+-- перевыпуск не должен трогать MCP-токен.
+CREATE TABLE IF NOT EXISTS api_tokens (
+    token TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL UNIQUE,
+    created_at TEXT NOT NULL,
+    last_used_at TEXT
+);
+
 -- OAuth к тому же доступу (см. mcp_oauth.py). Статический токен выше умеют
 -- слать только клиенты, где заголовок можно вписать руками; браузерный
 -- claude.ai, нативные коннекторы Claude Desktop и ChatGPT принимают
@@ -4384,6 +4394,75 @@ async def resolve_mcp_token(token: str) -> Optional[int]:
         )
         await conn().commit()
     return row["user_id"]
+
+
+# ---------- API-токены iOS-клиента (см. api_v1.py) ----------
+#
+# Отдельная таблица от mcp_tokens: это разные клиенты одного человека, и
+# перевыпуск одного не должен гасить другой — иначе получить новый MCP-токен
+# разлогинивало бы телефон, и наоборот.
+
+async def issue_api_token(user_id: int) -> str:
+    """Выдать iOS-клиенту новый токен доступа, погасив прежний (см.
+    issue_mcp_token — тот же приём: перевыпуск и есть отзыв)."""
+    token = secrets.token_urlsafe(32)
+    async with _write_lock:
+        await conn().execute("DELETE FROM api_tokens WHERE user_id = ?", (user_id,))
+        await conn().execute(
+            "INSERT INTO api_tokens (token, user_id, created_at) VALUES (?, ?, ?)",
+            (token, user_id, now_iso()),
+        )
+        await conn().commit()
+    return token
+
+
+async def revoke_api_token(user_id: int) -> bool:
+    """True, если токен был и его удалили."""
+    async with _write_lock:
+        cur = await conn().execute("DELETE FROM api_tokens WHERE user_id = ?", (user_id,))
+        await conn().commit()
+        return cur.rowcount > 0
+
+
+async def resolve_api_token(token: str) -> Optional[int]:
+    """Токен → telegram_id владельца, или None. Обновляет отметку последнего
+    использования, как resolve_mcp_token."""
+    if not token:
+        return None
+    cur = await conn().execute("SELECT user_id FROM api_tokens WHERE token = ?", (token,))
+    row = await cur.fetchone()
+    if row is None:
+        return None
+    async with _write_lock:
+        await conn().execute(
+            "UPDATE api_tokens SET last_used_at = ? WHERE token = ?", (now_iso(), token)
+        )
+        await conn().commit()
+    return row["user_id"]
+
+
+async def consume_link_code(code: str) -> Optional[int]:
+    """Код связывания (issue_oauth_link_code) → user_id, гасит код при успехе.
+
+    В отличие от verify_oauth_link_code, здесь нет заявки на согласие и лимита
+    попыток: код вводит не веб-страница, а сам клиент, которому его продиктовал
+    владелец аккаунта — счётчик неудач тут защищать нечего, а короткий TTL кода
+    и так ограничивает окно перебора.
+    """
+    if not code:
+        return None
+    now = time.time()
+    async with _write_lock:
+        cur = await conn().execute(
+            "SELECT user_id FROM oauth_link_codes WHERE code = ? AND expires_at > ?",
+            (code, now),
+        )
+        row = await cur.fetchone()
+        if row is None:
+            return None
+        await conn().execute("DELETE FROM oauth_link_codes WHERE code = ?", (code,))
+        await conn().commit()
+        return row["user_id"]
 
 
 # ---------- MCP OAuth (см. mcp_oauth.py) ----------
