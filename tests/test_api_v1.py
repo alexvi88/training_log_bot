@@ -215,6 +215,24 @@ async def test_set_logging_rejects_another_users_exercise(fresh_db, client_facto
 
 
 @pytest.mark.asyncio
+async def test_list_exercises_filters_by_group(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    legs_id = await fresh_db.create_muscle_group(111, "Ноги", "🦵")
+    chest_id = await fresh_db.create_muscle_group(111, "Грудь", "💪")
+    await client.post("/exercises", json={"name": "Присед", "group_id": legs_id})
+    await client.post("/exercises", json={"name": "Жим лёжа", "group_id": chest_id})
+    await client.post("/exercises", json={"name": "Без группы"})
+
+    resp = await client.get(f"/exercises?group_id={legs_id}")
+    assert resp.status_code == 200
+    names = [e["display_name"] for e in resp.json()]
+    assert names == ["Присед"]
+
+    bad = await client.get("/exercises?group_id=not-a-number")
+    assert bad.status_code == 400
+
+
+@pytest.mark.asyncio
 async def test_bodyweight_crud(fresh_db, client_factory):
     client = await _linked_client(fresh_db, client_factory)
 
