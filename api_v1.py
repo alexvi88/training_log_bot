@@ -20,7 +20,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Optional
 
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -221,13 +221,20 @@ async def _owned_exercise(exercise_id: int, user_id: int):
     return exercise
 
 
-async def _block_for_exercise(workout_id: int, exercise_id: int) -> int:
-    """Блок этого упражнения в тренировке — существующий (первый попавшийся,
-    без суперсетов на этом этапе) или новый одиночный."""
+async def _find_block_for_exercise(workout_id: int, exercise_id: int) -> Optional[int]:
     for block in await db.list_blocks_for_workout(workout_id):
         for be in await db.get_block_exercises(block["id"]):
             if be["exercise_id"] == exercise_id:
                 return block["id"]
+    return None
+
+
+async def _block_for_exercise(workout_id: int, exercise_id: int) -> int:
+    """Блок этого упражнения в тренировке — существующий (первый попавшийся,
+    без суперсетов на этом этапе) или новый одиночный."""
+    existing = await _find_block_for_exercise(workout_id, exercise_id)
+    if existing is not None:
+        return existing
     block_id = await db.create_block(workout_id, "single")
     await db.add_block_exercise(block_id, exercise_id, 0)
     return block_id
@@ -246,6 +253,18 @@ async def start_workout(request: Request) -> JSONResponse:
     workout_id, created = await db.get_or_create_active_workout(user_id)
     workout = await db.get_workout(workout_id)
     return JSONResponse(_workout_json(workout), status_code=201 if created else 200)
+
+
+async def discard_active_workout(request: Request) -> JSONResponse:
+    """Снести активную тренировку целиком — «начал по ошибке» или «передумал».
+    Законченную так не тронуть: у неё уже есть история, отменять нечего, это
+    правит только finish_workout (заметка) или ничего вовсе."""
+    user_id = await _authed_user_id(request)
+    workout = await db.get_active_workout(user_id)
+    if workout is None:
+        raise ApiError(404, "not_found", "no active workout")
+    await db.discard_workout(workout["id"])
+    return JSONResponse({"discarded": True})
 
 
 async def log_set(request: Request) -> JSONResponse:
@@ -267,6 +286,24 @@ async def log_set(request: Request) -> JSONResponse:
     cur = await db.conn().execute("SELECT * FROM sets WHERE id = ?", (set_id,))
     row = await cur.fetchone()
     return JSONResponse(_set_json(row), status_code=201)
+
+
+async def delete_last_set(request: Request) -> JSONResponse:
+    """Убрать последний подход этого упражнения — правка опечатки веса/повторов
+    сразу после записи, тем же приёмом, что «↩️ Отменить» в боте."""
+    user_id = await _authed_user_id(request)
+    workout_id = int(request.path_params["workout_id"])
+    exercise_id = int(request.path_params["exercise_id"])
+    workout = await _owned_workout(workout_id, user_id)
+    if workout["status"] != "active":
+        raise ApiError(409, "workout_finished", "workout is already finished")
+    block_id = await _find_block_for_exercise(workout_id, exercise_id)
+    if block_id is None:
+        raise ApiError(404, "not_found", "exercise has no sets in this workout")
+    deleted = await db.delete_last_set_in_block(block_id)
+    if deleted is None:
+        raise ApiError(404, "not_found", "exercise has no sets in this workout")
+    return JSONResponse(_set_json(deleted))
 
 
 async def finish_workout(request: Request) -> JSONResponse:
@@ -367,9 +404,14 @@ routes = [
     Route("/exercises", create_exercise, methods=["POST"]),
     Route("/workouts/active", active_workout, methods=["GET"]),
     Route("/workouts/active", start_workout, methods=["POST"]),
+    Route("/workouts/active", discard_active_workout, methods=["DELETE"]),
     Route("/workouts", list_workouts, methods=["GET"]),
     Route("/workouts/{workout_id:int}", get_workout, methods=["GET"]),
     Route("/workouts/{workout_id:int}/sets", log_set, methods=["POST"]),
+    Route(
+        "/workouts/{workout_id:int}/exercises/{exercise_id:int}/last-set",
+        delete_last_set, methods=["DELETE"],
+    ),
     Route("/workouts/{workout_id:int}/finish", finish_workout, methods=["POST"]),
     Route("/bodyweight", list_bodyweight, methods=["GET"]),
     Route("/bodyweight", add_bodyweight, methods=["POST"]),
