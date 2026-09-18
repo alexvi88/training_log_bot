@@ -160,6 +160,52 @@ async def test_full_workout_flow(fresh_db, client_factory):
 
 
 @pytest.mark.asyncio
+async def test_finish_without_note_preserves_note_set_earlier(fresh_db, client_factory):
+    """finish без "note" в теле — не "очисти её": iOS зовёт finish после того,
+    как заметку уже поставили через PATCH /note, и раньше finish молча стирал
+    её в NULL."""
+    client = await _linked_client(fresh_db, client_factory)
+    workout_id = (await client.post("/workouts/active")).json()["id"]
+
+    await client.patch(f"/workouts/{workout_id}/note", json={"note": "заметка до финиша"})
+
+    finish_resp = await client.post(f"/workouts/{workout_id}/finish", json={})
+    assert finish_resp.status_code == 200
+    assert finish_resp.json()["note"] == "заметка до финиша"
+
+
+@pytest.mark.asyncio
+async def test_finish_with_explicit_note_overrides_earlier_one(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    workout_id = (await client.post("/workouts/active")).json()["id"]
+
+    await client.patch(f"/workouts/{workout_id}/note", json={"note": "старая"})
+    finish_resp = await client.post(f"/workouts/{workout_id}/finish", json={"note": "новая"})
+    assert finish_resp.status_code == 200
+    assert finish_resp.json()["note"] == "новая"
+
+
+@pytest.mark.asyncio
+async def test_finish_and_update_note_responses_include_blocks(fresh_db, client_factory):
+    """iOS перезаписывает весь Workout ответом finish/PATCH note — если в нём
+    нет "blocks", список упражнений на экране молча пропадает."""
+    client = await _linked_client(fresh_db, client_factory)
+    exercise_id = (await client.post("/exercises", json={"name": "Жим лёжа"})).json()["id"]
+    workout_id = (await client.post("/workouts/active")).json()["id"]
+    await client.post(
+        f"/workouts/{workout_id}/sets", json={"exercise_id": exercise_id, "weight": 80, "reps": 5}
+    )
+
+    finish_resp = await client.post(f"/workouts/{workout_id}/finish", json={})
+    assert finish_resp.status_code == 200
+    assert len(finish_resp.json()["blocks"]) == 1
+
+    note_resp = await client.patch(f"/workouts/{workout_id}/note", json={"note": "готово"})
+    assert note_resp.status_code == 200
+    assert len(note_resp.json()["blocks"]) == 1
+
+
+@pytest.mark.asyncio
 async def test_update_note_rejects_another_users_workout(fresh_db, client_factory):
     client_a = await _linked_client(fresh_db, client_factory, telegram_id=111)
     client_b = await _linked_client(fresh_db, client_factory, telegram_id=222)
@@ -251,6 +297,33 @@ async def test_list_exercises_filters_by_group(fresh_db, client_factory):
 
 
 @pytest.mark.asyncio
+async def test_create_exercise_rejects_another_users_group(fresh_db, client_factory):
+    """group_id угадываемый — без проверки чужая личная группа мышц молча
+    подставилась бы в упражнение другого пользователя."""
+    await _linked_client(fresh_db, client_factory, telegram_id=111)
+    client_b = await _linked_client(fresh_db, client_factory, telegram_id=222)
+    own_group_id = await fresh_db.create_muscle_group(111, "Своя группа A")
+
+    resp = await client_b.post("/exercises", json={"name": "Присед", "group_id": own_group_id})
+    assert resp.status_code == 404
+
+    unknown = await client_b.post("/exercises", json={"name": "Присед 2", "group_id": 999999})
+    assert unknown.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_create_exercise_accepts_global_group(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    global_groups = await fresh_db.list_muscle_groups(None, global_only=True)
+    assert global_groups, "ожидается непустой глобальный каталог групп мышц"
+    group_id = global_groups[0]["id"]
+
+    resp = await client.post("/exercises", json={"name": "Присед", "group_id": group_id})
+    assert resp.status_code == 201
+    assert resp.json()["primary_group_id"] == group_id
+
+
+@pytest.mark.asyncio
 async def test_create_muscle_group(fresh_db, client_factory):
     client = await _linked_client(fresh_db, client_factory)
 
@@ -307,6 +380,9 @@ async def test_bodyweight_crud(fresh_db, client_factory):
 
     add_resp = await client.post("/bodyweight", json={"weight": 82.5})
     assert add_resp.status_code == 201
+    # iOS decodes this response straight into BodyweightEntry, whose loggedAt
+    # is non-optional — a response missing it throws on every single log.
+    assert add_resp.json()["logged_at"]
     log_id = add_resp.json()["id"]
 
     list_resp = await client.get("/bodyweight")
