@@ -430,6 +430,19 @@ async def add_bodyweight(request: Request) -> JSONResponse:
     return JSONResponse({"id": log_id, "weight": weight}, status_code=201)
 
 
+async def update_bodyweight(request: Request) -> JSONResponse:
+    """Поправить опечатку в весе, не трогая дату/время взвешивания — тот же
+    приём, что у «✏️ Записи» в боте."""
+    user_id = await _authed_user_id(request)
+    log_id = int(request.path_params["log_id"])
+    body = await _json_body(request)
+    weight = float(_require(body, "weight", (int, float)))
+    updated = await db.update_bodyweight_log(log_id, user_id, weight)
+    if not updated:
+        raise ApiError(404, "not_found", "bodyweight entry not found")
+    return JSONResponse({"id": log_id, "weight": weight})
+
+
 async def delete_bodyweight(request: Request) -> JSONResponse:
     user_id = await _authed_user_id(request)
     log_id = int(request.path_params["log_id"])
@@ -465,6 +478,7 @@ routes = [
     Route("/workouts/{workout_id:int}/note", update_note, methods=["PATCH"]),
     Route("/bodyweight", list_bodyweight, methods=["GET"]),
     Route("/bodyweight", add_bodyweight, methods=["POST"]),
+    Route("/bodyweight/{log_id:int}", update_bodyweight, methods=["PATCH"]),
     Route("/bodyweight/{log_id:int}", delete_bodyweight, methods=["DELETE"]),
 ]
 
