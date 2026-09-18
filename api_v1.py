@@ -224,8 +224,15 @@ async def create_exercise(request: Request) -> JSONResponse:
     if not name:
         raise ApiError(400, "bad_request", "name must not be empty")
     group_id = body.get("group_id")
-    if group_id is not None and not isinstance(group_id, int):
-        raise ApiError(400, "bad_request", "group_id must be int")
+    if group_id is not None:
+        if not isinstance(group_id, int):
+            raise ApiError(400, "bad_request", "group_id must be int")
+        group = await db.get_muscle_group(group_id)
+        # Группа либо глобальная (user_id IS NULL, каталог бота), либо своя —
+        # чужую личную группу подставить нельзя: id угадывается, и без этой
+        # проверки чужое упражнение молча привязалось бы к чужому разбиению.
+        if group is None or (group["user_id"] is not None and group["user_id"] != user_id):
+            raise ApiError(404, "not_found", "muscle group not found")
     exercise_id = await db.create_exercise(user_id, name, group_id)
     row = await db.get_exercise(exercise_id)
     return JSONResponse(_exercise_json(row), status_code=201)
@@ -361,10 +368,13 @@ async def finish_workout(request: Request) -> JSONResponse:
     if workout["status"] != "active":
         raise ApiError(409, "workout_finished", "workout is already finished")
     body = await _json_body(request) if await request.body() else {}
-    note = body.get("note")
+    # "note" отсутствует в теле — не значит "очисти её": iOS зовёт finish без
+    # note, когда её уже поставили раньше через PATCH /note, и молчаливая
+    # перезапись на NULL стёрла бы то, что пользователь только что написал.
+    note = body["note"] if "note" in body else workout["note"]
     await db.finish_workout(workout_id, note=note)
     workout = await db.get_workout(workout_id)
-    return JSONResponse(_workout_json(workout))
+    return JSONResponse(await _workout_detail_json(workout))
 
 
 async def update_note(request: Request) -> JSONResponse:
@@ -380,7 +390,7 @@ async def update_note(request: Request) -> JSONResponse:
         raise ApiError(400, "bad_request", "note must be a string or null")
     await db.update_workout_note(workout_id, note)
     workout = await db.get_workout(workout_id)
-    return JSONResponse(_workout_json(workout))
+    return JSONResponse(await _workout_detail_json(workout))
 
 
 async def _workout_detail_json(workout) -> dict[str, Any]:
@@ -441,9 +451,9 @@ async def add_bodyweight(request: Request) -> JSONResponse:
     user_id = await _authed_user_id(request)
     body = await _json_body(request)
     weight = float(_require(body, "weight", (int, float)))
-    logged_at = body.get("logged_at")
+    logged_at = body.get("logged_at") or db.now_iso()
     log_id = await db.add_bodyweight_log(user_id, weight, logged_at)
-    return JSONResponse({"id": log_id, "weight": weight}, status_code=201)
+    return JSONResponse({"id": log_id, "weight": weight, "logged_at": logged_at}, status_code=201)
 
 
 async def update_bodyweight(request: Request) -> JSONResponse:
