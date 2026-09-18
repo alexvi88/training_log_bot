@@ -233,6 +233,40 @@ async def test_list_exercises_filters_by_group(fresh_db, client_factory):
 
 
 @pytest.mark.asyncio
+async def test_exercise_progress_lists_sets_from_finished_workouts_only(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    exercise_id = (await client.post("/exercises", json={"name": "Жим лёжа"})).json()["id"]
+
+    workout_id = (await client.post("/workouts/active")).json()["id"]
+    await client.post(
+        f"/workouts/{workout_id}/sets", json={"exercise_id": exercise_id, "weight": 80, "reps": 5}
+    )
+    # a set logged in the still-active workout shouldn't show up in progress yet
+    empty = await client.get(f"/exercises/{exercise_id}/progress")
+    assert empty.status_code == 200
+    assert empty.json() == []
+
+    await client.post(f"/workouts/{workout_id}/finish", json={})
+    progress = await client.get(f"/exercises/{exercise_id}/progress")
+    assert progress.status_code == 200
+    entries = progress.json()
+    assert len(entries) == 1
+    assert entries[0]["workout_id"] == workout_id
+    assert entries[0]["weight"] == 80
+    assert entries[0]["reps"] == 5
+
+
+@pytest.mark.asyncio
+async def test_exercise_progress_rejects_another_users_exercise(fresh_db, client_factory):
+    client_a = await _linked_client(fresh_db, client_factory, telegram_id=111)
+    client_b = await _linked_client(fresh_db, client_factory, telegram_id=222)
+    exercise_id = (await client_a.post("/exercises", json={"name": "Присед"})).json()["id"]
+
+    resp = await client_b.get(f"/exercises/{exercise_id}/progress")
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_bodyweight_crud(fresh_db, client_factory):
     client = await _linked_client(fresh_db, client_factory)
 
