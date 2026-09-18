@@ -296,9 +296,27 @@ async def test_bodyweight_crud(fresh_db, client_factory):
     assert list_resp.status_code == 200
     assert list_resp.json()[0]["weight"] == 82.5
 
+    edit_resp = await client.patch(f"/bodyweight/{log_id}", json={"weight": 83.0})
+    assert edit_resp.status_code == 200
+    assert edit_resp.json()["weight"] == 83.0
+    assert (await client.get("/bodyweight")).json()[0]["weight"] == 83.0
+
     delete_resp = await client.delete(f"/bodyweight/{log_id}")
     assert delete_resp.status_code == 200
     assert (await client.get("/bodyweight")).json() == []
 
     missing = await client.delete(f"/bodyweight/{log_id}")
     assert missing.status_code == 404
+
+    missing_edit = await client.patch(f"/bodyweight/{log_id}", json={"weight": 90})
+    assert missing_edit.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_update_bodyweight_rejects_another_users_entry(fresh_db, client_factory):
+    client_a = await _linked_client(fresh_db, client_factory, telegram_id=111)
+    client_b = await _linked_client(fresh_db, client_factory, telegram_id=222)
+    log_id = (await client_a.post("/bodyweight", json={"weight": 80})).json()["id"]
+
+    resp = await client_b.patch(f"/bodyweight/{log_id}", json={"weight": 999})
+    assert resp.status_code == 404
