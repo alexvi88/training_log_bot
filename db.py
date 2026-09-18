@@ -4012,6 +4012,26 @@ async def delete_last_set_in_block(block_id: int) -> Optional[aiosqlite.Row]:
     return row
 
 
+async def delete_last_set_for_exercise_in_block(
+    block_id: int, exercise_id: int
+) -> Optional[aiosqlite.Row]:
+    """Same as delete_last_set_in_block, but scoped to one exercise — for a
+    superset block, "undo the last set of THIS exercise" (api_v1's per-exercise
+    undo button) must not remove the other exercise's most recent set just
+    because it happened to be logged after it."""
+    cur = await conn().execute(
+        "SELECT * FROM sets WHERE block_id = ? AND exercise_id = ? ORDER BY id DESC LIMIT 1",
+        (block_id, exercise_id),
+    )
+    row = await cur.fetchone()
+    if row is None:
+        return None
+    async with _write_lock:
+        await conn().execute("DELETE FROM sets WHERE id = ?", (row["id"],))
+        await conn().commit()
+    return row
+
+
 async def delete_block(block_id: int) -> None:
     async with _write_lock:
         await conn().execute("DELETE FROM block_exercises WHERE block_id = ?", (block_id,))
