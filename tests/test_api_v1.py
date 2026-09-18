@@ -243,6 +243,37 @@ async def test_delete_last_set(fresh_db, client_factory):
 
 
 @pytest.mark.asyncio
+async def test_delete_last_set_in_superset_targets_right_exercise(fresh_db, client_factory):
+    """Суперсет заводит только бот (api_v1 создаёт лишь одиночные блоки), но
+    workout может смешивать оба клиента — API обязана уметь его читать.
+    delete_last_set не должна сносить последний подход ЧУЖОГО упражнения в
+    том же блоке, даже если его залогировали позже."""
+    client = await _linked_client(fresh_db, client_factory)
+    exercise_a = (await client.post("/exercises", json={"name": "Жим лёжа"})).json()["id"]
+    exercise_b = (await client.post("/exercises", json={"name": "Тяга штанги"})).json()["id"]
+    workout_id = (await client.post("/workouts/active")).json()["id"]
+
+    block_id = await fresh_db.create_block(workout_id, "superset")
+    await fresh_db.add_block_exercise(block_id, exercise_a, 0)
+    await fresh_db.add_block_exercise(block_id, exercise_b, 1)
+
+    await client.post(f"/workouts/{workout_id}/sets", json={"exercise_id": exercise_a, "weight": 80, "reps": 5})
+    # b logged after a — a naive "last set in block" delete would remove this one
+    await client.post(f"/workouts/{workout_id}/sets", json={"exercise_id": exercise_b, "weight": 60, "reps": 8})
+
+    deleted = await client.delete(f"/workouts/{workout_id}/exercises/{exercise_a}/last-set")
+    assert deleted.status_code == 200
+    assert deleted.json()["exercise_id"] == exercise_a
+    assert deleted.json()["weight"] == 80
+
+    active = await client.get("/workouts/active")
+    block = active.json()["blocks"][0]
+    exercises_by_id = {e["exercise_id"]: e for e in block["exercises"]}
+    assert exercises_by_id[exercise_a]["sets"] == []
+    assert len(exercises_by_id[exercise_b]["sets"]) == 1
+
+
+@pytest.mark.asyncio
 async def test_discard_active_workout(fresh_db, client_factory):
     client = await _linked_client(fresh_db, client_factory)
 

@@ -355,7 +355,10 @@ async def delete_last_set(request: Request) -> JSONResponse:
     block_id = await _find_block_for_exercise(workout_id, exercise_id)
     if block_id is None:
         raise ApiError(404, "not_found", "exercise has no sets in this workout")
-    deleted = await db.delete_last_set_in_block(block_id)
+    # Не delete_last_set_in_block: в суперсете это снесло бы последний подход
+    # ЛЮБОГО упражнения блока, если его логировали позже — здесь нужен именно
+    # последний подход exercise_id.
+    deleted = await db.delete_last_set_for_exercise_in_block(block_id, exercise_id)
     if deleted is None:
         raise ApiError(404, "not_found", "exercise has no sets in this workout")
     return JSONResponse(_set_json(deleted))
