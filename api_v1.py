@@ -215,6 +215,28 @@ async def create_exercise(request: Request) -> JSONResponse:
     return JSONResponse(_exercise_json(row), status_code=201)
 
 
+async def exercise_progress(request: Request) -> JSONResponse:
+    """Все подходы по упражнению за всё время, старые сначала — для графика
+    прогресса. Тот же db.list_sets_for_exercise, что у аналитики бота."""
+    user_id = await _authed_user_id(request)
+    exercise_id = int(request.path_params["exercise_id"])
+    await _owned_exercise(exercise_id, user_id)
+    rows = await db.list_sets_for_exercise(exercise_id)
+    return JSONResponse(
+        [
+            {
+                "workout_id": r["workout_id"],
+                "started_at": r["started_at"],
+                "weight": r["weight"],
+                "reps": r["reps"],
+                "rpe": r["rpe"],
+                "load_weight": r["load_weight"] if r["load_weight"] is not None else r["weight"],
+            }
+            for r in rows
+        ]
+    )
+
+
 # ---------- тренировки ----------
 
 async def _owned_workout(workout_id: int, user_id: int):
@@ -412,6 +434,7 @@ routes = [
     Route("/muscle-groups", list_muscle_groups, methods=["GET"]),
     Route("/exercises", list_exercises, methods=["GET"]),
     Route("/exercises", create_exercise, methods=["POST"]),
+    Route("/exercises/{exercise_id:int}/progress", exercise_progress, methods=["GET"]),
     Route("/workouts/active", active_workout, methods=["GET"]),
     Route("/workouts/active", start_workout, methods=["POST"]),
     Route("/workouts/active", discard_active_workout, methods=["DELETE"]),
