@@ -329,6 +329,22 @@ async def finish_workout(request: Request) -> JSONResponse:
     return JSONResponse(_workout_json(workout))
 
 
+async def update_note(request: Request) -> JSONResponse:
+    """Правка заметки уже сохранённой тренировки — «📝 Заметка» на карточке
+    завершения в боте работает так же: заметку можно поставить или переписать
+    и после финиша, не только в момент его."""
+    user_id = await _authed_user_id(request)
+    workout_id = int(request.path_params["workout_id"])
+    await _owned_workout(workout_id, user_id)
+    body = await _json_body(request)
+    note = body.get("note")
+    if note is not None and not isinstance(note, str):
+        raise ApiError(400, "bad_request", "note must be a string or null")
+    await db.update_workout_note(workout_id, note)
+    workout = await db.get_workout(workout_id)
+    return JSONResponse(_workout_json(workout))
+
+
 async def _workout_detail_json(workout) -> dict[str, Any]:
     data = _workout_json(workout)
     blocks_json = []
@@ -423,6 +439,7 @@ routes = [
         delete_last_set, methods=["DELETE"],
     ),
     Route("/workouts/{workout_id:int}/finish", finish_workout, methods=["POST"]),
+    Route("/workouts/{workout_id:int}/note", update_note, methods=["PATCH"]),
     Route("/bodyweight", list_bodyweight, methods=["GET"]),
     Route("/bodyweight", add_bodyweight, methods=["POST"]),
     Route("/bodyweight/{log_id:int}", delete_bodyweight, methods=["DELETE"]),

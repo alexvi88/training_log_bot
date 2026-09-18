@@ -150,6 +150,24 @@ async def test_full_workout_flow(fresh_db, client_factory):
     assert detail.status_code == 200
     assert detail.json()["note"] == "норм"
 
+    edited = await client.patch(f"/workouts/{workout_id}/note", json={"note": "переписал"})
+    assert edited.status_code == 200
+    assert edited.json()["note"] == "переписал"
+
+    cleared = await client.patch(f"/workouts/{workout_id}/note", json={"note": None})
+    assert cleared.status_code == 200
+    assert cleared.json()["note"] is None
+
+
+@pytest.mark.asyncio
+async def test_update_note_rejects_another_users_workout(fresh_db, client_factory):
+    client_a = await _linked_client(fresh_db, client_factory, telegram_id=111)
+    client_b = await _linked_client(fresh_db, client_factory, telegram_id=222)
+    workout_id = (await client_a.post("/workouts/active")).json()["id"]
+
+    resp = await client_b.patch(f"/workouts/{workout_id}/note", json={"note": "чужое"})
+    assert resp.status_code == 404
+
 
 @pytest.mark.asyncio
 async def test_delete_last_set(fresh_db, client_factory):
