@@ -181,6 +181,22 @@ async def list_muscle_groups(request: Request) -> JSONResponse:
     )
 
 
+async def create_muscle_group(request: Request) -> JSONResponse:
+    """Своя группа мышц — не у всех каталог бота совпадает с тем, как
+    называют группы в конкретном зале."""
+    user_id = await _authed_user_id(request)
+    body = await _json_body(request)
+    name = str(_require(body, "name", str)).strip()
+    if not name:
+        raise ApiError(400, "bad_request", "name must not be empty")
+    emoji = body.get("emoji")
+    if emoji is not None and not isinstance(emoji, str):
+        raise ApiError(400, "bad_request", "emoji must be a string")
+    group_id = await db.create_muscle_group(user_id, name, emoji)
+    group = await db.get_muscle_group(group_id)
+    return JSONResponse({"id": group["id"], "name": group["name"], "emoji": group["emoji"]}, status_code=201)
+
+
 async def list_exercises(request: Request) -> JSONResponse:
     """Три режима, как в боте: по группе мышц (обзор для тех, кто не помнит
     точное название), текстовым поиском, или весь каталог. group_id и query
@@ -461,6 +477,7 @@ routes = [
     Route("/auth/link", auth_link, methods=["POST"]),
     Route("/me", me, methods=["GET"]),
     Route("/muscle-groups", list_muscle_groups, methods=["GET"]),
+    Route("/muscle-groups", create_muscle_group, methods=["POST"]),
     Route("/exercises", list_exercises, methods=["GET"]),
     Route("/exercises", create_exercise, methods=["POST"]),
     Route("/exercises/{exercise_id:int}/progress", exercise_progress, methods=["GET"]),

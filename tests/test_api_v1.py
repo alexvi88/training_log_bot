@@ -251,6 +251,23 @@ async def test_list_exercises_filters_by_group(fresh_db, client_factory):
 
 
 @pytest.mark.asyncio
+async def test_create_muscle_group(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+
+    resp = await client.post("/muscle-groups", json={"name": "Кор", "emoji": "🔥"})
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["name"] == "Кор"
+    assert body["emoji"] == "🔥"
+
+    groups = await client.get("/muscle-groups")
+    assert any(g["id"] == body["id"] for g in groups.json())
+
+    empty_name = await client.post("/muscle-groups", json={"name": "  "})
+    assert empty_name.status_code == 400
+
+
+@pytest.mark.asyncio
 async def test_exercise_progress_lists_sets_from_finished_workouts_only(fresh_db, client_factory):
     client = await _linked_client(fresh_db, client_factory)
     exercise_id = (await client.post("/exercises", json={"name": "Жим лёжа"})).json()["id"]
