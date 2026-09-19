@@ -921,12 +921,23 @@ def planned_plan_keyboard(
 
 
 def routines_manage_keyboard(
-    programs, routines, has_workouts: bool, back_to_picker: bool = False
+    programs,
+    routines,
+    has_workouts: bool,
+    back_to_picker: bool = False,
+    page: int = 0,
+    has_next: bool = False,
 ) -> InlineKeyboardMarkup:
     """`programs` — многодневки одной строкой каждая (см. db.list_programs): их
     дни лежат за вторым экраном, иначе трёхдневный сплит занимает три кнопки и
     список перестаёт читаться. `routines` — одиночные программы, у них второго
     уровня нет и они ведут сразу в карточку.
+
+    Обе пачки уже нарезаны на страницу вызывающим (как у history_list_keyboard
+    и repeat_list_keyboard), стрелки — те же. Без страниц экран не просто
+    становился длинным: на сотне одиночных дней (потолок теперь 500, см.
+    config.MAX_ROUTINES_PER_USER) клавиатура упиралась в лимит Telegram на
+    число строк, и экран не открывался ВООБЩЕ.
 
     `back_to_picker` — сюда попали с экрана выбора группы мышц уже начатой
     тренировки («🗂 Выбрать программу»): последняя кнопка ведёт назад туда же,
@@ -939,21 +950,36 @@ def routines_manage_keyboard(
         )
     for r in routines:
         b.button(text=r["name"], callback_data=f"rt:view:{r['id']}")
+    b.adjust(1)
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text=PAGE_PREV_TEXT(), callback_data=f"rt:mpage:{page - 1}"))
+    if has_next:
+        nav.append(InlineKeyboardButton(text=PAGE_NEXT_TEXT(), callback_data=f"rt:mpage:{page + 1}"))
+    if nav:
+        b.row(*nav)
     # Каталог первым и с эмодзи-акцентом: у человека без единой тренировки
     # верный ответ почти всегда «возьми готовую» — это мгновенно и бесплатно,
     # тогда как AI-путь требует переписки. Три равнозначные кнопки заставляли
     # выбирать способ раньше, чем он понял, что вообще выбирает.
-    b.button(text=i18n.t("btn.ready_programs"), callback_data="rt:programs")
-    b.button(text=i18n.t("btn.build_with_coach"), callback_data="ai:buildprog")
+    b.row(InlineKeyboardButton(text=i18n.t("btn.ready_programs"), callback_data="rt:programs"))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.build_with_coach"), callback_data="ai:buildprog"))
     if has_workouts:
-        b.button(text=i18n.t("btn.from_workout"), callback_data="rt:pickw:page:0")
-    b.button(text=i18n.t("btn.back") if back_to_picker else i18n.t("btn.home_menu"), callback_data="rt:menu")
-    b.adjust(1)
+        b.row(InlineKeyboardButton(text=i18n.t("btn.from_workout"), callback_data="rt:pickw:page:0"))
+    b.row(InlineKeyboardButton(
+        text=i18n.t("btn.back") if back_to_picker else i18n.t("btn.home_menu"),
+        callback_data="rt:menu",
+    ))
     return b.as_markup()
 
 
 def program_days_keyboard(
-    days, program_id: int, next_day_id: int | None = None, trained_before: bool = False
+    days,
+    program_id: int,
+    next_day_id: int | None = None,
+    trained_before: bool = False,
+    page: int = 0,
+    has_next: bool = False,
 ) -> InlineKeyboardMarkup:
     """Экран программы: до какого дня дошла очередь, остальные ниже, и одна
     кнопка правок.
@@ -971,6 +997,15 @@ def program_days_keyboard(
     сообщения про очередь говорит по тому же условию (см.
     handlers.routines.show_program).
 
+    `days` — уже одна страница (см. handlers.routines._show_program), стрелки те
+    же, что в остальных списках. Страницы тут не про длину, а про то, что текст
+    экрана режется по лимиту Telegram (ui.fit_to_limit, 4096 символов), а
+    клавиатура не резалась вовсе: на паре десятков дней кнопки оставались от
+    дней, которых в тексте уже не было, а на сотне (потолок теперь 500) экран
+    упирался бы в лимит на число строк и не открывался. «Следующий день» поднят
+    наверх на КАЖДОЙ странице: это главное действие экрана, и оно не должно
+    пропадать оттого, что человек листает состав.
+
     Всё, что меняет программу, уехало за «✏️ Изменить программу» (см.
     program_edit_keyboard). Шесть кнопок редактирования стояли ровно на пути
     «пойти потренироваться» — а между тренировками программу правят примерно
@@ -987,9 +1022,20 @@ def program_days_keyboard(
         if hoisted is not None and d["id"] == hoisted["id"]:
             continue
         b.button(text=d["name"], callback_data=f"rt:view:{d['id']}")
-    b.button(text=i18n.t("btn.edit_program"), callback_data=f"rt:pgmedit:{program_id}")
-    b.button(text=i18n.t("btn.back"), callback_data="rt:manage")
     b.adjust(1)
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(
+            text=PAGE_PREV_TEXT(), callback_data=f"rt:prg:{program_id}:{page - 1}"
+        ))
+    if has_next:
+        nav.append(InlineKeyboardButton(
+            text=PAGE_NEXT_TEXT(), callback_data=f"rt:prg:{program_id}:{page + 1}"
+        ))
+    if nav:
+        b.row(*nav)
+    b.row(InlineKeyboardButton(text=i18n.t("btn.edit_program"), callback_data=f"rt:pgmedit:{program_id}"))
+    b.row(InlineKeyboardButton(text=i18n.t("btn.back"), callback_data="rt:manage"))
     return b.as_markup()
 
 

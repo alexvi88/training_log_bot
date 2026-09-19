@@ -222,6 +222,70 @@ async def test_own_program_screen_survives_a_non_catalog_source(fresh_db, user_i
     assert "Из чата" in _last_text(callback)
 
 
+# ---------- страницы: список программ и дни одной программы ----------
+
+
+async def test_programs_list_is_paged_instead_of_growing_past_telegram_limit(fresh_db, user_id):
+    """Сотня одиночных дней (потолок теперь 500) раскладывалась по кнопке на
+    каждый: экран упирался в лимит Telegram на число строк и не открывался
+    вовсе. Страницы — те же, что в истории и в «повторить тренировку»."""
+    db = fresh_db
+    for i in range(routines.MANAGE_PAGE_SIZE * 2 + 1):
+        await db.create_routine(user_id, f"День {i}")
+    state = await _state(user_id)
+
+    callback = _make_callback(user_id, "rt:manage")
+    await routines.rt_manage(callback, state)
+
+    first = [cb for _t, cb in _buttons(callback)]
+    assert len([cb for cb in first if cb.startswith("rt:view:")]) == routines.MANAGE_PAGE_SIZE
+    assert "rt:mpage:1" in first
+    assert not any(cb == "rt:mpage:-1" for cb in first)
+
+    # Вторая страница — новые дни, и стрелка назад.
+    nxt = _make_callback(user_id, "rt:mpage:1")
+    await routines.rt_manage_page(nxt, state)
+    second = [cb for _t, cb in _buttons(nxt)]
+    assert "rt:mpage:0" in second and "rt:mpage:2" in second
+    assert not set(cb for cb in second if cb.startswith("rt:view:")) & set(first)
+
+
+async def test_programs_list_page_past_the_end_falls_back_to_the_last_one(fresh_db, user_id):
+    """Экран с чужой страницы (программы удалили, пока он висел в чате) должен
+    показать последнюю существующую, а не пустоту."""
+    await fresh_db.create_routine(user_id, "Единственный день")
+
+    callback = _make_callback(user_id, "rt:mpage:7")
+    await routines.rt_manage_page(callback, await _state(user_id))
+
+    buttons = [cb for _t, cb in _buttons(callback)]
+    assert any(cb.startswith("rt:view:") for cb in buttons)
+    assert not any(cb.startswith("rt:mpage:") for cb in buttons)
+
+
+async def test_program_days_screen_pages_text_and_buttons_together(fresh_db, user_id):
+    """Текст экрана резался по лимиту Telegram, а кнопки не резались: на паре
+    десятков дней бот предлагал нажать на день, которого в тексте уже нет."""
+    db = fresh_db
+    days = tuple(f"День {i}" for i in range(routines.PROGRAM_DAYS_PAGE_SIZE + 2))
+    program_id = await _program(db, user_id, name="Длинная", days=days)
+    state = await _state(user_id)
+
+    callback = _make_callback(user_id, f"rt:prg:{program_id}")
+    await routines.rt_program(callback, state)
+
+    text = _last_text(callback)
+    buttons = [cb for _t, cb in _buttons(callback)]
+    assert len([cb for cb in buttons if cb.startswith("rt:view:")]) == routines.PROGRAM_DAYS_PAGE_SIZE
+    assert f"rt:prg:{program_id}:1" in buttons
+    assert days[-1] not in text
+
+    nxt = _make_callback(user_id, f"rt:prg:{program_id}:1")
+    await routines.rt_program(nxt, state)
+    assert days[-1] in _last_text(nxt)
+    assert f"rt:prg:{program_id}:0" in [cb for _t, cb in _buttons(nxt)]
+
+
 # ---------- дни: добавить, скопировать, переставить, вынести ----------
 
 

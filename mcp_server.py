@@ -306,9 +306,12 @@ def build_server() -> MCPServer:
         return await _call("get_food_diary", days=max(1, min(int(days), 90)))
 
     @mcp.tool()
-    async def get_saved_programs() -> str:
-        """The user's saved programs: days, exercises, and set schemes."""
-        return await _call("get_saved_programs")
+    async def get_saved_programs(name: str = "") -> str:
+        """The user's saved programs. Without `name` — the list: program names, kind
+        (multi-day program or standalone day) and how many days each has. With `name`
+        — that one program in full: every day, its exercises, set schemes and
+        progression rules. Ask for the list first, then the program by its exact name."""
+        return await _call("get_saved_programs", name=name.strip() or None)
 
     @mcp.tool()
     async def compare_periods(days: int = 90) -> str:
