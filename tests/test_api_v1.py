@@ -871,3 +871,78 @@ async def test_a_workout_with_sets_still_finishes_normally(fresh_db, client_fact
     body = (await client.post(f"/workouts/{workout_id}/finish", json={})).json()
     assert body["status"] == "finished"
     assert len(await fresh_db.list_workouts(111)) == 1
+
+
+# ---------- POST /workouts/active с routine_id ----------
+#
+# Приложение раньше заводило тренировку без привязки к дню программы — из-за
+# этого db.next_program_day навсегда залипал на первом дне (у него нет своего
+# курсора, только история workouts.routine_id, см. db.next_program_day).
+# Тесты ниже — про починку именно этого; test_next_day_advances_after_a_workout_started_via_routine_id
+# главный, ради него всё и делалось.
+
+@pytest.mark.asyncio
+async def test_start_workout_with_routine_id_links_it(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    program_id = (await client.post("/programs", json={"name": "PPL"})).json()["id"]
+    day_id = (await client.post(f"/programs/{program_id}/days", json={"name": "Push"})).json()["id"]
+
+    resp = await client.post("/workouts/active", json={"routine_id": day_id})
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["routine_id"] == day_id
+
+    stored = await fresh_db.get_workout(resp.json()["id"])
+    assert stored["routine_id"] == day_id
+    assert stored["program_id"] == program_id
+
+
+@pytest.mark.asyncio
+async def test_start_workout_with_foreign_routine_id_is_404(fresh_db, client_factory):
+    owner = await _linked_client(fresh_db, client_factory, telegram_id=111)
+    intruder = await _linked_client(fresh_db, client_factory, telegram_id=222)
+    program_id = (await owner.post("/programs", json={"name": "PPL"})).json()["id"]
+    day_id = (await owner.post(f"/programs/{program_id}/days", json={"name": "Push"})).json()["id"]
+
+    resp = await intruder.post("/workouts/active", json={"routine_id": day_id})
+    assert resp.status_code == 404
+
+    # чужой routine_id не должен и завести тренировку "с нуля" по ошибке
+    assert (await intruder.get("/workouts/active")).json() is None
+
+
+@pytest.mark.asyncio
+async def test_start_workout_without_routine_id_behaves_as_before(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    resp = await client.post("/workouts/active")
+    assert resp.status_code == 201
+    assert resp.json()["routine_id"] is None
+
+    stored = await fresh_db.get_workout(resp.json()["id"])
+    assert stored["routine_id"] is None
+    assert stored["program_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_next_day_advances_after_a_workout_started_via_routine_id(fresh_db, client_factory):
+    """Главный тест: тренировка, начатая приложением с routine_id, должна
+    продвигать next-day ровно как тренировка, начатая ботом."""
+    client = await _linked_client(fresh_db, client_factory)
+    exercise_id = (await client.post("/exercises", json={"name": "Жим лёжа"})).json()["id"]
+    program_id = (await client.post("/programs", json={"name": "PPL"})).json()["id"]
+    push_id = (await client.post(f"/programs/{program_id}/days", json={"name": "Push"})).json()["id"]
+    pull_id = (await client.post(f"/programs/{program_id}/days", json={"name": "Pull"})).json()["id"]
+
+    # программа ни разу не пройдена — следующий день первый по порядку
+    assert (await client.get(f"/programs/{program_id}/next-day")).json()["id"] == push_id
+
+    workout_id = (await client.post("/workouts/active", json={"routine_id": push_id})).json()["id"]
+    await client.post(
+        f"/workouts/{workout_id}/sets", json={"exercise_id": exercise_id, "weight": 80, "reps": 5}
+    )
+    finish_resp = await client.post(f"/workouts/{workout_id}/finish", json={})
+    assert finish_resp.status_code == 200
+    assert finish_resp.json()["status"] == "finished"
+
+    next_day = await client.get(f"/programs/{program_id}/next-day")
+    assert next_day.status_code == 200
+    assert next_day.json()["id"] == pull_id
