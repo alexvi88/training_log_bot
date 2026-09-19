@@ -239,10 +239,41 @@ async def import_share(request: Request) -> JSONResponse:
     return JSONResponse({"kind": "exercise", "exercise_id": ex_id, "name": payload["name"]}, status_code=201)
 
 
+# ---------- владелец: отзыв визитки ----------
+
+async def revoke_share(request: Request) -> JSONResponse:
+    """«🚫 Отозвать ссылку» из владельческой визитки бота (handlers.sharing.
+    share_revoke) — до сих пор из приложения ссылка не отзывалась никак, то
+    есть отданный снапшот тренировок жил вечно.
+
+    Отзыв — это удаление строки, а не флаг: ровно как в боте (db.
+    delete_shared_item). Поэтому все уже разосланные копии ссылки умирают
+    разом, а get_share_preview/import_share выше начинают отвечать своим
+    404 "broken or revoked" — отдельного «отозвано» получателю не показываем,
+    у бота он тоже видит просто «ссылка устарела».
+
+    Чужой токен — те же 404 not_found, что и битый: в боте это два разных
+    текста («не твоя визитка» против «отзывать нечего»), но там отвечают
+    владельцу на его же кнопку, а здесь ответ разделил бы для постороннего
+    существующие токены и несуществующие, чего угадывать по HTTP не нужно.
+
+    taken_count отдаём потому, что бот о нём говорит в момент отзыва
+    (share.link_revoked_with_taken): «отозвал, но N уже забрали» — это
+    единственный шанс человека узнать, что копии всё же разошлись.
+    """
+    user_id = await _authed_user_id(request)
+    token = request.path_params["token"]
+    row = await db.get_shared_item(token)
+    if row is None or not await db.delete_shared_item(token, user_id):
+        raise ApiError(404, "not_found", "share link is broken or revoked")
+    return JSONResponse({"revoked": True, "kind": row["kind"], "taken_count": row["taken_count"]})
+
+
 routes = [
     Route("/share/programs/{program_id:int}", share_program, methods=["POST"]),
     Route("/share/routines/{routine_id:int}", share_routine, methods=["POST"]),
     Route("/share/exercises/{exercise_id:int}", share_exercise, methods=["POST"]),
     Route("/share/{token}", get_share_preview, methods=["GET"]),
+    Route("/share/{token}", revoke_share, methods=["DELETE"]),
     Route("/share/{token}/import", import_share, methods=["POST"]),
 ]

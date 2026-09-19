@@ -370,3 +370,82 @@ async def test_import_respects_routine_budget(fresh_db, client_factory, monkeypa
     assert resp.status_code == 403
     assert resp.json()["error"] == "routine_limit_reached"
     assert (await recipient.get("/programs")).json() == []
+
+
+# ---------- владелец: отзыв визитки ----------
+
+@pytest.mark.asyncio
+async def test_owner_revokes_own_card(fresh_db, client_factory):
+    owner = await _linked_client(fresh_db, client_factory, 111)
+    program_id, _ = await _program_with_one_day(111)
+    token = (await owner.post(f"/share/programs/{program_id}")).json()["token"]
+
+    resp = await owner.delete(f"/share/{token}")
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"revoked": True, "kind": "program", "taken_count": 0}
+
+
+@pytest.mark.asyncio
+async def test_revoking_someone_elses_card_is_404(fresh_db, client_factory):
+    owner = await _linked_client(fresh_db, client_factory, 111)
+    other = await _linked_client(fresh_db, client_factory, 222)
+    program_id, _ = await _program_with_one_day(111)
+    token = (await owner.post(f"/share/programs/{program_id}")).json()["token"]
+
+    resp = await other.delete(f"/share/{token}")
+    assert resp.status_code == 404
+    # Отказ не должен быть половинчатым: чужая ссылка после 404 обязана
+    # остаться рабочей, иначе «отзыв» становился бы оружием против автора.
+    assert (await other.get(f"/share/{token}")).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_revoked_card_stops_opening(fresh_db, client_factory):
+    owner = await _linked_client(fresh_db, client_factory, 111)
+    recipient = await _linked_client(fresh_db, client_factory, 222)
+    program_id, _ = await _program_with_one_day(111)
+    token = (await owner.post(f"/share/programs/{program_id}")).json()["token"]
+    assert (await recipient.get(f"/share/{token}")).status_code == 200
+
+    await owner.delete(f"/share/{token}")
+
+    assert (await recipient.get(f"/share/{token}")).status_code == 404
+    assert (await recipient.post(f"/share/{token}/import")).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_revoke_reports_how_many_already_took_it(fresh_db, client_factory):
+    owner = await _linked_client(fresh_db, client_factory, 111)
+    recipient = await _linked_client(fresh_db, client_factory, 222)
+    program_id, _ = await _program_with_one_day(111)
+    token = (await owner.post(f"/share/programs/{program_id}")).json()["token"]
+    assert (await recipient.post(f"/share/{token}/import")).status_code == 201
+
+    resp = await owner.delete(f"/share/{token}")
+    assert resp.json()["taken_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_second_revoke_is_404(fresh_db, client_factory):
+    owner = await _linked_client(fresh_db, client_factory, 111)
+    program_id, _ = await _program_with_one_day(111)
+    token = (await owner.post(f"/share/programs/{program_id}")).json()["token"]
+    assert (await owner.delete(f"/share/{token}")).status_code == 200
+
+    resp = await owner.delete(f"/share/{token}")
+    assert resp.status_code == 404
+    assert resp.json()["error"] == "not_found"
+
+
+@pytest.mark.asyncio
+async def test_revoke_broken_token_is_404(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory, 111)
+    resp = await client.delete("/share/does-not-exist")
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_revoke_requires_auth(fresh_db, client_factory):
+    client = client_factory()
+    resp = await client.delete("/share/whatever")
+    assert resp.status_code == 401
