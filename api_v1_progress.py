@@ -40,6 +40,7 @@ import formatting
 import i18n
 import keyboards
 import progress_data
+import progression_data
 from api_v1_common import ApiError, authed_user_id, query_int
 
 # Потолок `limit`. Бот под кнопкой «все» шлёт 9999 (keyboards.progress_chart_keyboard),
@@ -203,10 +204,43 @@ async def exercise_progress_sessions(request: Request) -> JSONResponse:
     return JSONResponse(payload)
 
 
+async def next_target(request: Request) -> JSONResponse:
+    """Подсказка прогрессии для упражнения в идущей тренировке.
+
+    `{"hint": null}` — это разом «тумблер выключен», «истории нет» и
+    «предлагать нечего»: клиенту во всех трёх случаях нужно одно и то же —
+    не рисовать строку, — а различать их значило бы выставить наружу
+    внутренности расчёта. У занесения задним числом подсказки нет по тому же
+    правилу, что и в боте.
+
+    Считает `progression_data` — тот же модуль, из которого берёт строку
+    экран записи подхода в боте. Второго мнения о весе на штанге у одного
+    человека быть не должно.
+    """
+    user_id = await authed_user_id(request)
+    user = await db.get_user(user_id)
+    if user is None:
+        raise ApiError(404, "not_found", "user not found")
+    workout_id = int(request.path_params["workout_id"])
+    workout = await db.get_workout(workout_id)
+    if workout is None or workout["user_id"] != user_id:
+        raise ApiError(404, "not_found", "workout not found")
+    exercise_id = int(request.path_params["exercise_id"])
+    await _owned_exercise(exercise_id, user_id)
+    return JSONResponse(
+        {"hint": await progression_data.hint_for_workout(workout_id, exercise_id, user)}
+    )
+
+
 routes = [
     Route(
         "/exercises/{exercise_id:int}/progress/sessions",
         exercise_progress_sessions,
+        methods=["GET"],
+    ),
+    Route(
+        "/workouts/{workout_id:int}/exercises/{exercise_id:int}/next-target",
+        next_target,
         methods=["GET"],
     ),
 ]
