@@ -12,6 +12,8 @@ import httpx
 import pytest
 
 import api_v1
+import db
+import timeutil
 import view_builder
 
 
@@ -219,19 +221,34 @@ async def test_live_set_still_accepts_plausible_values(fresh_db, client_factory)
 
 # ---------- 5-6. «завтра» не бывает ----------
 
+async def _user_dates(telegram_id: int = 111) -> tuple[dt.date, dt.date]:
+    """«Сегодня» и «завтра» глазами сервера, а не контейнера.
+
+    Сервер отбивает будущее по часовому поясу пользователя
+    (`timeutil.user_today`), а тест раньше брал `dt.date.today()` машины. Пока
+    часовые пояса совпадали, разницы не было, но у раннера UTC, и каждый вечер
+    после определённого часа «завтра по UTC» оказывалось сегодняшним днём для
+    пользователя — тест краснел по часам, а не по коду.
+    """
+    user = await db.get_user(telegram_id)
+    today = timeutil.user_today(user)
+    return today, today + dt.timedelta(days=1)
+
+
+
 @pytest.mark.asyncio
 async def test_patch_workout_date_rejects_future(fresh_db, client_factory):
     """POST /workouts/backfill будущее отвергает, а перенос даты принимал."""
     client = await _linked_client(fresh_db, client_factory)
     workout_id = (await client.post("/workouts/active")).json()["id"]
-    tomorrow = dt.date.today() + dt.timedelta(days=1)
+    today_date, tomorrow = await _user_dates()
 
     resp = await client.patch(f"/workouts/{workout_id}/date", json={"date": tomorrow.isoformat()})
     assert resp.status_code == 400, resp.text
     assert resp.json()["message"] == "date is in the future"
 
     today = await client.patch(
-        f"/workouts/{workout_id}/date", json={"date": dt.date.today().isoformat()}
+        f"/workouts/{workout_id}/date", json={"date": today_date.isoformat()}
     )
     assert today.status_code == 200
 
@@ -239,7 +256,7 @@ async def test_patch_workout_date_rejects_future(fresh_db, client_factory):
 @pytest.mark.asyncio
 async def test_add_food_entry_rejects_future_date(fresh_db, client_factory):
     client = await _linked_client(fresh_db, client_factory)
-    tomorrow = dt.date.today() + dt.timedelta(days=1)
+    _, tomorrow = await _user_dates()
 
     resp = await client.post(
         "/food", json={"name": "Овсянка", "kcal": 300, "eaten_on": tomorrow.isoformat()}
