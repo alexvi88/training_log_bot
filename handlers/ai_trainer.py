@@ -3,7 +3,6 @@
 import asyncio
 import base64
 import datetime as dt
-import json
 import logging
 import secrets
 import time
@@ -19,6 +18,8 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import activity_log
 import ai_limits
+import ai_program_actions
+import ai_setup_flow
 import ai_trainer
 import config
 import db
@@ -1599,34 +1600,6 @@ def _name_conflict_keyboard(draft_id: str, program_name: str) -> InlineKeyboardM
     return b.as_markup()
 
 
-async def _create_program_day(user_id: int, day: dict, program_id: int) -> int:
-    """Создать один день программы и, если тренер задал прогрессию хоть на одно
-    упражнение, записать её (5.6/3.2 — db.set_routine_exercise_progression).
-
-    Порядок routine_exercises после create_routine_from_program совпадает с
-    порядком day["items"] (тот же список, без пропусков — дубли и нерезолвнутые
-    имена уже отфильтрованы в ai_trainer._propose_program), поэтому сверяем по
-    display_name, а не по позиции — устойчивее, если это когда-нибудь перестанет
-    быть так.
-    """
-    routine_id = await db.create_routine_from_program(
-        user_id, day["name"],
-        [(item["name"], item.get("target")) for item in day["items"]],
-        program_id=program_id,
-    )
-    progressions = {
-        item["name"]: item["progression"] for item in day["items"] if item.get("progression")
-    }
-    if progressions:
-        for re_row in await db.list_routine_exercises(routine_id):
-            progression = progressions.get(re_row["display_name"])
-            if progression:
-                await db.set_routine_exercise_progression(
-                    re_row["id"], json.dumps(progression, ensure_ascii=False)
-                )
-    return routine_id
-
-
 async def _announce_saved(
     callback: CallbackQuery, name: str, day_count: int, replacing: bool, program_id: int
 ) -> None:
@@ -1661,102 +1634,21 @@ async def _announce_saved(
     await callback.answer(i18n.t("ai.screen.saved.done"))
 
 
-async def _save_into_existing_program(
-    callback: CallbackQuery,
-    state: FSMContext,
-    user_id: int,
-    draft: dict,
-    program: Any,
-    outcome: Optional[dict] = None,
-) -> None:
-    """A7: правка уже сохранённой программы, резолвится по id заново прямо
-    здесь — в момент тапа, а не по снимку, сделанному при предложении.
-
-    Дни программы перечитываются из БД сейчас (а не берутся из
-    replaces["routine_ids"], зафиксированных на момент propose_program) — день,
-    который пользователь успел добавить руками между предложением и тапом,
-    раньше переживал замену и вылезал в списке первым; теперь заменяется весь
-    текущий набор дней программы, как и обещает промпт тренера ("что не
-    прислал — то из программы пропадёт"). Имя программы меняется, только если
-    тренер прислал другое: старое поведение (запись новых дней под draft["name"]
-    отдельной строкой) молча откатывало переименование, сделанное пользователем
-    между предложением и тапом.
+async def _handle_save_result(callback: CallbackQuery, state: FSMContext, draft: dict, result: dict) -> None:
+    """Экран поверх результата ai_program_actions — той же записи, что и у
+    REST (`POST /ai/program/save`, см. api_v1_ai.py): alert с текстом лимита,
+    экран конфликта имени с кнопками замены/копии, карточка «Сохранено» со
+    своей клавиатурой.
     """
-    days = draft["days"]
-    old_days = await db.list_program_days_by_id(program["id"])
-    budget_msg = await db.routine_budget(user_id, adding=len(days), freeing=len(old_days))
-    if budget_msg:
+    if result.get("error") == "budget":
         await state.update_data(ai_program_draft=draft)
-        await callback.answer(budget_msg, show_alert=True)
+        await callback.answer(result["message"], show_alert=True)
         return
-
-    # Переименование — если draft["name"] отличается от имени, которое тренер
-    # РЕЗОЛВИЛ при предложении (replaces["name"] — то, что видела модель,
-    # снятое в момент propose_program), а не от текущего живого имени
-    # программы: сравнение с live-именем спутало бы «модель хочет
-    # переименовать» с «пользователь успел переименовать руками между
-    # предложением и тапом» — второе не должно откатываться так, как раньше
-    # (новые дни писались под draft["name"] отдельной строкой, стирая ручное
-    # переименование молча).
-    resolved_name = (draft.get("replaces") or {}).get("name") or program["name"]
-    target_name = program["name"]
-    renamed_by_trainer = draft["name"].strip().lower() != resolved_name.strip().lower()
-    # Если имя занято другой программой, rename вернёт False — просто оставляем
-    # текущее: это правка состава, а не переименования, отказывать из-за него незачем.
-    if renamed_by_trainer and await db.rename_program_by_id(program["id"], draft["name"]):
-        target_name = draft["name"]
-    # Правка меняет и описание — но только если тренер его прислал: пустое поле
-    # в новом предложении значит «не сказал», а не «сотри то, что было».
-    if draft.get("description"):
-        await db.set_program_description(program["id"], draft["description"])
-
-    # Дальше начинается запись в ЧУЖУЮ для черновика программу — при падении
-    # её нельзя удалять как обрубок (см. _run_program_save), там старые дни
-    # пользователя.
-    if outcome is not None:
-        outcome["into_existing"] = True
-    # Сначала новые дни, потом удаление старых (A6): падение посередине
-    # оставляет пользователя с лишними новыми днями рядом со старой
-    # программой — хуже, чем идеально, но старая версия цела и есть с чем
-    # попробовать снова, а не пусто с обеих сторон.
-    for day in days:
-        await _create_program_day(user_id, day, program_id=program["id"])
-    for old in old_days:
-        await db.delete_routine(old["id"])
-
-    final_days = await db.list_program_days_by_id(program["id"])
-    await _announce_saved(callback, target_name, len(final_days), replacing=True, program_id=program["id"])
-
-
-async def _save_as_new_program(
-    callback: CallbackQuery,
-    state: FSMContext,
-    user_id: int,
-    draft: dict,
-    freeing_routine_id: Optional[int] = None,
-    outcome: Optional[dict] = None,
-) -> None:
-    """Новая программа — включая случай, когда предложение заменяло одиночную
-    (однодневную) программу: у неё нет program_id, поэтому под неё заводится
-    новая программа, а старый день удаляется отдельно (`freeing_routine_id`).
-
-    A2: если имя уже занято другой сохранённой программой пользователя, это
-    больше не решается угадыванием (см. db.create_program — коллизия теперь
-    None, а не молчаливый merge внутри существующей программы) — пользователь
-    выбирает сам через _name_conflict_keyboard.
-    """
-    days = draft["days"]
-    freed = 1 if freeing_routine_id else 0
-    budget_msg = await db.routine_budget(user_id, adding=len(days), freeing=freed)
-    if budget_msg:
-        await state.update_data(ai_program_draft=draft)
-        await callback.answer(budget_msg, show_alert=True)
-        return
-
-    program_id = await db.create_program(
-        user_id, draft["name"], source="ai", description=draft.get("description")
-    )
-    if program_id is None:
+    if result.get("error") == "name_conflict":
+        # A2: имя уже занято другой сохранённой программой пользователя — это
+        # больше не решается угадыванием (см. db.create_program — коллизия
+        # теперь None, а не молчаливый merge внутри существующей программы),
+        # пользователь выбирает сам через _name_conflict_keyboard.
         await state.update_data(ai_program_draft=draft)
         with suppress(TelegramBadRequest):
             await callback.message.edit_text(
@@ -1766,47 +1658,9 @@ async def _save_as_new_program(
             )
         await callback.answer()
         return
-
-    # Свежесозданная программа: если запись дней ниже упадёт, её нужно убрать
-    # целиком (см. _run_program_save) — иначе в «🗂 Программы» остаётся
-    # обрубок с частью дней, а create_program+дни не транзакция.
-    if outcome is not None:
-        outcome["created_program_id"] = program_id
-
-    for day in days:
-        await _create_program_day(user_id, day, program_id=program_id)
-    if freeing_routine_id is not None:
-        await db.delete_routine(freeing_routine_id)
-    await _announce_saved(callback, draft["name"], len(days), replacing=False, program_id=program_id)
-
-
-async def _finalize_program_save(
-    callback: CallbackQuery, state: FSMContext, user_id: int, draft: dict, outcome: Optional[dict] = None
-) -> None:
-    """Все пути сохранения черновика после того, как он атомарно забран из FSM.
-
-    Правка сохранённой многодневки идёт в _save_into_existing_program; всё
-    остальное (новая программа, замена одиночной программы, конфликт имени
-    из ai:prog:replace/copy) — в _save_as_new_program.
-    """
-    replaces = draft.get("replaces")
-    if replaces and replaces.get("kind") == "program":
-        program = await db.get_program(replaces["id"])
-        if program is not None and program["user_id"] == user_id:
-            await _save_into_existing_program(callback, state, user_id, draft, program, outcome=outcome)
-            return
-        # Программу удалили (или это был чужой id) между предложением и тапом —
-        # заменять нечего, значит просто добавляем (см. тест A6/A7 fallback).
-        replaces = None
-
-    freeing_routine_id = None
-    if replaces and replaces.get("kind") == "routine":
-        routine = await db.get_routine(replaces["id"])
-        if routine is not None and routine["user_id"] == user_id:
-            freeing_routine_id = routine["id"]
-
-    await _save_as_new_program(
-        callback, state, user_id, draft, freeing_routine_id=freeing_routine_id, outcome=outcome
+    await _announce_saved(
+        callback, result["name"], result["day_count"],
+        replacing=result["replacing"], program_id=result["program_id"],
     )
 
 
@@ -1821,7 +1675,8 @@ def _save_failed_replace_text() -> str:
 
 
 async def _run_program_save(
-    callback: CallbackQuery, state: FSMContext, user_id: int, draft: dict, action: Callable
+    callback: CallbackQuery, state: FSMContext, user_id: int, draft: dict,
+    replacing: bool, action: Callable[[], Any],
 ) -> None:
     """Предохранитель всех путей сохранения черновика.
 
@@ -1829,37 +1684,29 @@ async def _run_program_save(
     см. ai_program_save), поэтому необработанное исключение раньше означало
     сразу две потери: кнопка «Добавить себе» навсегда отвечала «уже
     неактуально», а в «🗂 Программы» мог остаться обрубок — программа без части
-    дней (create_program и дни пишутся отдельными запросами, не транзакцией).
-
-    Здесь при любом падении: черновик возвращается в FSM (кнопка снова живая),
-    свежесозданный обрубок удаляется, человеку — честное сообщение вместо
-    тишины. Для replace-пути обрубок не удаляется — там живёт старая программа
-    пользователя, и лишние новые дни рядом с ней лучше пустоты; поэтому текст
-    у него свой. Re-raise не нужен: наружу падение не скажет ничего, чего не
-    скажет лог, а сообщение пользователю уже отправлено.
+    дней. Обрубок теперь убирает сам ai_program_actions.save_as_new_program
+    (общим кодом с REST — см. его докстринг), поэтому здесь только возврат
+    черновика в FSM и честное сообщение вместо тишины. Для replace-пути
+    обрубок никогда не убирался и раньше: там живёт старая программа
+    пользователя, и лишние новые дни рядом с ней лучше пустоты; поэтому у
+    него свой текст (см. `replacing`, известный вызывающему заранее — до
+    того, как ai_program_actions успеет решить это внутри себя).
     """
-    outcome = {"created_program_id": None, "into_existing": False}
     try:
-        await action(outcome)
+        result = await action()
     except Exception:
         logger.exception("AI program save failed for user %s", user_id)
         await state.update_data(ai_program_draft=draft)
-        if outcome["created_program_id"] is not None:
-            # Удаление лучших усилий: если и оно упало (например, лежит БД),
-            # обрубок переживёт до ручной чистки — но сообщение ниже всё равно
-            # должно дойти.
-            with suppress(Exception):
-                await db.delete_program_by_id(outcome["created_program_id"])
-        text = _save_failed_replace_text() if outcome["into_existing"] else _save_failed_new_text()
+        text = _save_failed_replace_text() if replacing else _save_failed_new_text()
         with suppress(TelegramBadRequest, TelegramAPIError):
             await callback.message.answer(
                 text,
-                reply_markup=keyboards.ai_program_preview_keyboard(
-                    replacing=outcome["into_existing"], draft_id=str(draft["id"])
-                ),
+                reply_markup=keyboards.ai_program_preview_keyboard(replacing=replacing, draft_id=str(draft["id"])),
             )
         with suppress(TelegramBadRequest):
             await callback.answer()
+        return
+    await _handle_save_result(callback, state, draft, result)
 
 
 @router.callback_query(F.data.startswith("ai:prog:save:"))
@@ -1881,11 +1728,12 @@ async def ai_program_save(callback: CallbackQuery, state: FSMContext):
     # вместо повторного сохранения (см. A3).
     await state.update_data(ai_program_draft=None)
     user_id = callback.from_user.id
+    replacing = await ai_program_actions.resolve_replace_target(user_id, draft) is not None
 
-    async def action(outcome: dict) -> None:
-        await _finalize_program_save(callback, state, user_id, draft, outcome=outcome)
-
-    await _run_program_save(callback, state, user_id, draft, action)
+    await _run_program_save(
+        callback, state, user_id, draft, replacing,
+        lambda: ai_program_actions.finalize_program_save(user_id, draft),
+    )
 
 
 @router.callback_query(F.data.startswith("ai:prog:replace:"))
@@ -1897,17 +1745,16 @@ async def ai_program_replace_conflict(callback: CallbackQuery, state: FSMContext
         return
     await state.update_data(ai_program_draft=None)
     user_id = callback.from_user.id
+    existing = await db.find_program_by_name(user_id, draft["name"])
 
-    async def action(outcome: dict) -> None:
-        existing = await db.find_program_by_name(user_id, draft["name"])
+    async def action() -> dict:
         if existing is None:
             # Программу с этим именем успели удалить между вопросом и тапом —
             # заменять уже нечего, просто добавляем как новую.
-            await _save_as_new_program(callback, state, user_id, draft, outcome=outcome)
-            return
-        await _save_into_existing_program(callback, state, user_id, draft, existing, outcome=outcome)
+            return await ai_program_actions.save_as_new_program(user_id, draft)
+        return await ai_program_actions.save_into_existing_program(user_id, draft, existing)
 
-    await _run_program_save(callback, state, user_id, draft, action)
+    await _run_program_save(callback, state, user_id, draft, existing is not None, action)
 
 
 @router.callback_query(F.data.startswith("ai:prog:copy:"))
@@ -1921,16 +1768,16 @@ async def ai_program_copy_conflict(callback: CallbackQuery, state: FSMContext):
         return
     await state.update_data(ai_program_draft=None)
     user_id = callback.from_user.id
+    alt_name = await db.unique_program_name(user_id, draft["name"], suffix="2")
+    renamed = dict(draft)
+    renamed["name"] = alt_name
 
-    async def action(outcome: dict) -> None:
-        alt_name = await db.unique_program_name(user_id, draft["name"], suffix="2")
-        renamed = dict(draft)
-        renamed["name"] = alt_name
-        await _save_as_new_program(callback, state, user_id, renamed, outcome=outcome)
+    async def action() -> dict:
+        return await ai_program_actions.save_as_new_program(user_id, renamed)
 
     # При падении в FSM возвращается исходный черновик (с исходным именем):
     # свободное имя всё равно пересчитывается заново на каждом тапе.
-    await _run_program_save(callback, state, user_id, draft, action)
+    await _run_program_save(callback, state, user_id, draft, False, action)
 
 
 @router.callback_query(F.data.startswith("ai:prog:drop:"))
@@ -2511,54 +2358,14 @@ async def _handle_question(
 
 
 # ---------- опросник перед сборкой программы (ask_setup_questions) ----------
-
-# Сколько кругов уточнений подряд разрешаем одной просьбе. Второй круг нужен по
-# делу: увидев в ответах встречный вопрос или «хз», тренер вправе ответить и
-# переспросить то, что осталось открытым. А вот без потолка он способен гонять
-# уточнения по кругу, и человек не увидит программу никогда — поэтому на третий
-# заход опросник уже не показывается, а тренеру уходит прямое «собирай на
-# дефолтах» (см. _deliver_setup).
-SETUP_MAX_ROUNDS = 2
-
-# Вопрос про цель бот задаёт сам, а не полагается на модель. Цель была одним
-# пунктом промпта среди пяти, а слотов в опроснике меньше, чем тем, — и она
-# регулярно проигрывала дням, времени, травмам и сплиту: человек отвечал на
-# четыре вопроса и получал программу, ни разу не сказав, ЗАЧЕМ он тренируется.
-# Это единственная вводная, без которой программа собирается наугад, поэтому
-# она идёт первой и не зависит от того, вспомнит ли о ней модель.
 #
-# Варианты — четыре ходовые цели (потолок SETUP_MAX_CHOICES тоже четыре).
-# Кнопками ответ не запирается: под вопросом с вариантами стоит
-# _setup_hint_with_choices() — «жми вариант или напиши свой», и текстовый ответ
-# обрабатывается ровно так же (см. _record_setup_answer).
-def _setup_goal_question() -> dict:
-    return {
-        "question": i18n.t("ai.screen.setup_goal.question"),
-        "choices": [
-            i18n.t("ai.screen.setup_goal.choice_mass"),
-            i18n.t("ai.screen.setup_goal.choice_strength"),
-            i18n.t("ai.screen.setup_goal.choice_lose"),
-            i18n.t("ai.screen.setup_goal.choice_comeback"),
-        ],
-    }
-
-
-# По этим кускам узнаём вопрос про цель, который модель всё-таки задала сама
-# (промпт запрещает, но запрет — не гарантия). Совпало — свой не подставляем:
-# два вопроса про одно подряд читаются как поломка. Смешивает оба языка сразу
-# (см. running_texts._TOPIC_STEMS — тот же приём): язык ответа модели зависит
-# от языка пользователя, а не от языка этого файла, так что маркер обязан
-# ловить обе версии вопроса о цели. Кириллица тут — не текст экрана, а
-# сравнение с текстом модели (см. i18n_coverage.ALLOWED_CYRILLIC).
-SETUP_GOAL_MARKERS = (
-    "цел", "чего хочешь", "чего ждёшь", "зачем тренир", "какой результат",
-    # Голое "goal" ловило обычные тренерские вопросы не про цель тренировок
-    # вовсе ("What's your rep goal for this exercise?", "any weight goal for
-    # this month?") — и защёлкивало "цель уже спросили" раньше, чем реальный
-    # вопрос вообще звучал. Фразы ниже — так же специфичны, как русские выше.
-    "your goal", "training goal", "what do you want", "what are you after",
-    "why train", "why do you train", "what result",
-)
+# Решение «сколько кругов терпеть», «спросить ли цель первым вопросом» и
+# «как собрать ответы в одно сообщение модели» — общее с REST `/v1`
+# (api_v1_ai.py) и живёт в ai_setup_flow.py; здесь остаётся только экранная
+# часть (FSM, отправка вопроса отдельным сообщением, кнопки).
+SETUP_MAX_ROUNDS = ai_setup_flow.SETUP_MAX_ROUNDS
+_setup_goal_question = ai_setup_flow.setup_goal_question
+SETUP_GOAL_MARKERS = ai_setup_flow.SETUP_GOAL_MARKERS
 
 # Подсказка под вопросом. Про «не знаю» сказано прямо и намеренно: без этого
 # человек, который не может ответить, либо выдумывает число, либо застревает —
@@ -2586,7 +2393,8 @@ def _setup_answers_frame() -> str:
     return i18n.t("ai.screen.setup_answers_frame")
 
 
-# Уходит модели вместо третьего круга уточнений подряд.
+# Уходит модели вместо третьего круга уточнений подряд (ai_setup_flow.setup_enough_text
+# добавляет к этой рамке исходную цель, если она известна).
 def _setup_enough_frame() -> str:
     return i18n.t("ai.screen.setup_enough_frame")
 
@@ -2667,62 +2475,13 @@ async def _close_setup_question(bot, chat_id: int, setup: dict, tail: str) -> No
         )
 
 
-def _setup_answers_text(setup: dict) -> str:
-    """Одно сообщение модели со всеми ответами разом — и исходной задачей.
-
-    Пропущенные («⏭ Собирай так» на середине) названы прямо: иначе тренер
-    решит, что вопрос просто потерялся, и переспросит его ещё раз.
-    """
-    questions = setup.get("questions") or []
-    answers = setup.get("answers") or []
-    lines = [i18n.t("ai.screen.setup_answers_header")]
-    skipped = False
-    for idx, question in enumerate(questions):
-        if idx < len(answers) and answers[idx] is not None:
-            lines.append(i18n.t("ai.screen.setup_line_answered", question=question["question"], answer=answers[idx]))
-        else:
-            skipped = True
-            lines.append(i18n.t("ai.screen.setup_line_skipped", question=question["question"]))
-    goal = setup.get("goal")
-    if goal:
-        lines.append(i18n.t("ai.screen.setup_original_goal", goal=goal))
-    if skipped:
-        lines.append(i18n.t("ai.screen.setup_skipped_note"))
-    lines.append(_setup_answers_frame())
-    return "\n".join(lines)
+# Сборка ответов в одно сообщение модели — общая с REST `/v1` (см.
+# ai_setup_flow.setup_answers_text, вызывается и оттуда, и из _finish_setup ниже).
+_setup_answers_text = ai_setup_flow.setup_answers_text
 
 
-async def _questions_with_goal(
-    user_id: int, questions: list[dict], previous: dict
-) -> tuple[list[dict], bool]:
-    """Поставить вопрос про цель первым — если её ещё никто не спросил.
-
-    Возвращает (вопросы, «цель закрыта»). Второе переживает круги уточнений в
-    `ai_setup`: профиль между кругами не меняется (модель сохранит цель только
-    в финальной сборке), так что без флага второй круг задал бы тот же вопрос
-    ещё раз.
-    """
-    if previous.get("goal_asked"):
-        return questions, True
-    asked_by_model = any(
-        marker in (question.get("question") or "").lower()
-        for question in questions
-        for marker in SETUP_GOAL_MARKERS
-    )
-    if asked_by_model:
-        return questions, True
-    user = await db.get_user(user_id)
-    if user is not None and (user["goal"] or "").strip():
-        # Цель уже записана с его слов — переспрашивать то, что бот показывает
-        # на экране «Обо мне», значит признаваться, что он этого не помнит.
-        return questions, True
-    goal_question = {
-        "question": _setup_goal_question()["question"],
-        "choices": list(_setup_goal_question()["choices"]),
-    }
-    # Срезаем с хвоста: свой вопрос идёт первым, а лишним оказывается последний
-    # вопрос модели — он же и наименее важный, вопросы она ставит по убыванию.
-    return ([goal_question] + questions)[: ai_trainer.SETUP_MAX_QUESTIONS], True
+# Постановка вопроса о цели первым — общая с REST `/v1` (ai_setup_flow.questions_with_goal).
+_questions_with_goal = ai_setup_flow.questions_with_goal
 
 
 async def _deliver_setup(
