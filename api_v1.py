@@ -982,6 +982,34 @@ async def get_ai_comment(request: Request) -> JSONResponse:
     return JSONResponse({"comment": workout["ai_comment"]})
 
 
+async def update_exercise_note(request: Request) -> JSONResponse:
+    """Заметка к одному упражнению ВНУТРИ тренировки («📝 Заметка» на живом
+    экране, live:note в handlers/workout.py) — не путать с PATCH .../note
+    выше, которая правит заметку ко всей тренировке. Ключ — пара
+    (workout_id, exercise_id), хранилище то же самое, что у бота
+    (db.set_workout_exercise_note/exercise_notes), поэтому запись из
+    приложения сразу видна в живом трекере бота и наоборот.
+
+    Тренировку можно уже закончить — заметка техники относится к прошедшей
+    сессии не хуже, чем к идущей, и `_require_open` здесь нарочно не зовётся,
+    ровно как у update_note для заметки всей тренировки."""
+    user_id = await _authed_user_id(request)
+    workout_id = int(request.path_params["workout_id"])
+    exercise_id = int(request.path_params["exercise_id"])
+    await _owned_workout(workout_id, user_id)
+    await _owned_exercise(exercise_id, user_id)
+    body = await _json_body(request)
+    note = body.get("note")
+    if note is not None and not isinstance(note, str):
+        raise ApiError(400, "bad_request", "note must be a string or null")
+    await db.set_workout_exercise_note(workout_id, exercise_id, note)
+    # Пустая строка чистит заметку так же, как None (см. db.set_workout_
+    # exercise_note) — перечитываем сохранённое, а не отдаём эхо тела запроса,
+    # чтобы "" в ответе не выглядело действующей заметкой.
+    saved = await db.get_workout_exercise_note(workout_id, exercise_id)
+    return JSONResponse({"exercise_id": exercise_id, "note": saved})
+
+
 async def update_note(request: Request) -> JSONResponse:
     """Правка заметки уже сохранённой тренировки — «📝 Заметка» на карточке
     завершения в боте работает так же: заметку можно поставить или переписать
@@ -1044,6 +1072,9 @@ async def _workout_detail_json(workout, user=None) -> dict[str, Any]:
             sets = await db.list_sets_for_block(block["id"])
             own_sets = [s for s in sets if s["exercise_id"] == be["exercise_id"]]
             record_text = record_by_exercise.get(be["exercise_id"])
+            # Заметка к упражнению в ЭТОЙ тренировке (live:note бота) — новое
+            # поле, не ломает старых клиентов: они его просто не читают.
+            exercise_note = await db.get_workout_exercise_note(workout["id"], be["exercise_id"])
             exercises_json.append(
                 {
                     "exercise_id": be["exercise_id"],
@@ -1051,6 +1082,7 @@ async def _workout_detail_json(workout, user=None) -> dict[str, Any]:
                     "sets": [_set_json(s) for s in own_sets],
                     "record_text": record_text,
                     "has_record": record_text is not None,
+                    "note": exercise_note,
                 }
             )
         blocks_json.append({"id": block["id"], "type": block["type"], "exercises": exercises_json})
@@ -1201,6 +1233,10 @@ routes = [
     Route(
         "/workouts/{workout_id:int}/exercises/{exercise_id:int}/last-set",
         delete_last_set, methods=["DELETE"],
+    ),
+    Route(
+        "/workouts/{workout_id:int}/exercises/{exercise_id:int}/note",
+        update_exercise_note, methods=["PATCH"],
     ),
     Route("/workouts/{workout_id:int}/finish", finish_workout, methods=["POST"]),
     Route("/workouts/{workout_id:int}/ai-comment", get_ai_comment, methods=["GET"]),

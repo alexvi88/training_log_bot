@@ -43,6 +43,10 @@ class HallOfFame:
     unit: str = "kg"
     rank: "analytics.Rank | None" = None
     rank_gap: "analytics.RankGap | None" = None
+    #: тренировок в неделю за analytics.RANK_FREQUENCY_WEEKS — та же частота,
+    #: что уже определила rank выше; хранится отдельным полем, чтобы лестница
+    #: званий (api_v1_hall_of_fame.get_rank_ladder) не считала её заново.
+    per_week: float = 0.0
 
 
 async def _top_lifts(user_id: int, formula: str) -> list[tuple[str, float, int, float]]:
@@ -116,4 +120,5 @@ async def collect(user_id: int) -> HallOfFame:
         unit=unit,
         rank=rank,
         rank_gap=analytics.rank_gap(rank, total_workouts, tonnage_kg, per_week),
+        per_week=per_week,
     )

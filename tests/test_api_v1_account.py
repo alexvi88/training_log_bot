@@ -540,3 +540,75 @@ async def test_update_workout_date_resyncs_achievements(fresh_db, client_factory
     resp = await client.patch(f"/workouts/{workout_id}/date", json={"date": "2024-03-05"})
     assert resp.status_code == 200
     assert "__never_earned__" not in await db.list_achievement_codes(user_id)
+
+
+@pytest.mark.asyncio
+async def test_athlete_profile_reads_fields_ai_trainer_writes(fresh_db, client_factory):
+    """GET /profile — то же самое, что видит человек на экране «🤖 Что тренер
+    про тебя знает»: поля пишет ai_trainer.save_athlete_profile напрямую в
+    users.*, здесь только чтение той же строки."""
+    user_id = 111
+    client = await _linked_client(fresh_db, client_factory, telegram_id=user_id)
+    await db.update_user(
+        user_id,
+        experience="год в зале",
+        goal="набрать массу",
+        equipment='["штанга", "гантели"]',
+        limitations="болит плечо",
+    )
+
+    resp = await client.get("/profile")
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "experience": "год в зале",
+        "goal": "набрать массу",
+        "equipment": ["штанга", "гантели"],
+        "limitations": "болит плечо",
+    }
+
+
+@pytest.mark.asyncio
+async def test_athlete_profile_empty_by_default(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    resp = await client.get("/profile")
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "experience": None,
+        "goal": None,
+        "equipment": None,
+        "limitations": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_clear_athlete_profile_resets_all_fields(fresh_db, client_factory):
+    """DELETE /profile — то же самое, что «🗑 Очистить» в боте
+    (handlers.settings.settings_profile_clear): все поля памяти разом,
+    включая days_per_week, которую сам экран профиля не показывает."""
+    user_id = 111
+    client = await _linked_client(fresh_db, client_factory, telegram_id=user_id)
+    await db.update_user(
+        user_id,
+        days_per_week=3, experience="опыт", goal="цель",
+        equipment='["гантели"]', limitations="колено",
+    )
+
+    resp = await client.delete("/profile")
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "experience": None,
+        "goal": None,
+        "equipment": None,
+        "limitations": None,
+    }
+    user = await db.get_user(user_id)
+    assert user["days_per_week"] is None
+
+
+@pytest.mark.asyncio
+async def test_athlete_profile_requires_auth(fresh_db, client_factory):
+    client = client_factory()
+    resp = await client.get("/profile")
+    assert resp.status_code == 401
+    resp = await client.delete("/profile")
+    assert resp.status_code == 401
