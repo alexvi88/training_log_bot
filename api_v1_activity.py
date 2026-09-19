@@ -112,6 +112,7 @@ class LogApiActions(BaseHTTPMiddleware):
 
     async def dispatch(self, request, call_next):
         response = await call_next(request)
+        self._log_failure(request, response)
         try:
             await self._record(request, response)
         except Exception:
@@ -119,6 +120,34 @@ class LogApiActions(BaseHTTPMiddleware):
             # повод, чтобы человеку не засчиталась тренировка.
             logger.exception("Failed to log api action")
         return response
+
+    def _log_failure(self, request, response) -> None:
+        """Неуспешный ответ — строкой в журнал сервиса, каким бы ни был метод.
+
+        Лента (`_record` ниже) намеренно знает только про POST/PATCH/DELETE:
+        одно открытие приложения — это десяток GET'ов, и они утопили бы в себе
+        настоящие действия. Но у этого правила оказалась цена: когда экран в
+        приложении показывал пустоту вместо данных, в журнале не было НИ ОДНОЙ
+        строки про тот запрос, и отличить «сервер ответил пусто» от «сервер
+        ответил 404» было нечем — ни с телефона, ни из логов.
+
+        Поэтому отказы пишутся всегда и всеми методами: их мало по определению,
+        засорить журнал они не могут, зато сразу видно, какой маршрут и каким
+        кодом ответил. Успешные GET'ы по-прежнему молчат.
+        """
+        if response.status_code < 400:
+            return
+        template = self._templates.get(request.scope.get("endpoint"), request.url.path)
+        user_id = getattr(request.state, "user_id", None)
+        who = f"user={user_id}" if user_id is not None else "anon"
+        logger.warning(
+            "[ios] %s | %s %s | %s | %s",
+            who,
+            request.method.upper(),
+            request.url.path,
+            template,
+            response.status_code,
+        )
 
     async def _record(self, request, response) -> None:
         method = request.method.upper()
