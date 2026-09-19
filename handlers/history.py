@@ -26,6 +26,8 @@ import charts
 import config
 import db
 import formatting
+import hall_of_fame_data
+import history_search_data
 import i18n
 import keyboards
 import progress_data
@@ -71,24 +73,28 @@ HISTORY_SEARCH_PAGE_SIZE = 20
 async def _render_search_page(user_id: int, query: str, page: int):
     """Одна страница поиска по истории — общий кусок для первого показа и
     перелистывания (hist:spage:N), чтобы старые тренировки частого упражнения
-    оставались достижимы, а не терялись за первыми 20 совпадениями."""
+    оставались достижимы, а не терялись за первыми 20 совпадениями.
+
+    Сам запрос и постраничная математика — history_search_data.search, тот же
+    расчёт, что и у REST-эндпоинта поиска в api_v1_achievements (домен
+    достижений вообще не при чём, но это тот же приём, что history.hall of
+    fame vs /v1: одна реализация на бота и на приложение)."""
     offset = page * HISTORY_SEARCH_PAGE_SIZE
-    workouts = await db.search_workouts_by_exercise(
+    result = await history_search_data.search(
         user_id, query, limit=HISTORY_SEARCH_PAGE_SIZE, offset=offset
     )
-    contents = await db.list_workout_contents([w["id"] for w in workouts])
     items = []
     entries = []
-    for w in workouts:
-        started = dt.datetime.fromisoformat(w["started_at"])
-        names, set_count = contents.get(w["id"], ([], 0))
-        items.append({"id": w["id"], "label": formatting.format_date_ru(started)})
-        entries.append((started, names, set_count))
-    total = await db.count_workouts_by_exercise(user_id, query)
+    for item in result.items:
+        started = dt.datetime.fromisoformat(item.started_at)
+        items.append({"id": item.id, "label": formatting.format_date_ru(started)})
+        entries.append((started, item.exercise_names, item.set_count))
     shown_so_far = offset + len(entries)
-    has_next = shown_so_far < total
-    count_label = str(total) if shown_so_far >= total else i18n.t("history.shown_of_total", shown=shown_so_far, total=total)
-    kb = keyboards.history_search_keyboard(items, page, has_next)
+    count_label = (
+        str(result.total) if shown_so_far >= result.total
+        else i18n.t("history.shown_of_total", shown=shown_so_far, total=result.total)
+    )
+    kb = keyboards.history_search_keyboard(items, page, result.has_next)
     text = formatting.build_history_list(
         entries,
         header=i18n.t("history.search_header", query=escape(query), count=count_label),
@@ -232,69 +238,22 @@ async def hist_calendar_day(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-async def _top_lifts(user_id: int, formula: str) -> list[tuple[str, float, int, float]]:
-    """Best working set per exercise, strongest first — for the Hall of Fame.
-
-    Every exercise the user has ever logged gets a line, including bodyweight
-    ones: those have no load to rank by, so their record is the best set of reps
-    and they follow the weighted lifts (weight 0 marks them for the formatter).
-    The list isn't capped here — build_hall_of_fame folds it and trims whatever
-    doesn't fit the message.
-    """
-    weighted: list[tuple[str, float, int, float]] = []
-    bodyweight: list[tuple[str, float, int, float]] = []
-
-    # One query for every set the user owns, then grouped here — the per-exercise
-    # version cost a round-trip per exercise ever created (see list_all_sets_by_exercise).
-    by_exercise: dict[int, tuple[str, list[analytics.SetRow]]] = {}
-    for r in await db.list_all_sets_by_exercise(user_id):
-        entry = by_exercise.get(r["exercise_id"])
-        if entry is None:
-            entry = by_exercise[r["exercise_id"]] = (r["display_name"], [])
-        entry[1].append(
-            analytics.SetRow(
-                db.load_of(r), r["reps"], r["workout_id"], r["started_at"], r["rpe"]
-            )
-        )
-
-    for display_name, set_rows in by_exercise.values():
-        sessions = analytics.group_sets_by_session(set_rows)
-        for s in sessions:
-            s.formula = formula
-        pr = analytics.compute_personal_records(sessions)
-        if pr.max_e1rm > 0 and pr.best_e1rm_weight > 0:
-            weighted.append((display_name, pr.best_e1rm_weight, pr.best_e1rm_reps, pr.max_e1rm))
-        elif pr.max_reps_at_weight:
-            best_reps = max(pr.max_reps_at_weight.values())
-            bodyweight.append((display_name, 0.0, best_reps, 0.0))
-    weighted.sort(key=lambda t: t[3], reverse=True)
-    bodyweight.sort(key=lambda t: t[2], reverse=True)
-    return weighted + bodyweight
-
-
 async def build_hall_of_fame_text(user_id: int, max_chars: int | None = None) -> str:
-    user = await db.get_user(user_id)
-    formula = user["e1rm_formula"] if user else config.DEFAULT_E1RM_FORMULA
-    unit = user["unit"] if user else "kg"
-    total_workouts = await db.count_workouts(user_id)
-    agg = await db.hall_of_fame_aggregates(user_id)
-    dates = [dt.date.fromisoformat(d) for d in await db.list_finished_workout_dates(user_id)]
-    best_streak = analytics.max_week_streak(dates)
-    top = await _top_lifts(user_id, formula)
-    equivalent = formatting.format_tonnage_equivalent(agg["tonnage"], seed=user_id, unit=unit)
-    tonnage_kg = formatting.to_kg(agg["tonnage"], unit)
-    per_week = analytics.workouts_per_week(dates, timeutil.user_today(user))
-    rank = analytics.rank_for(total_workouts, tonnage_kg, per_week)
+    """Текст зала славы для экрана «🏆 Достижения» — обёртка над
+    hall_of_fame_data.collect, тем же приёмом, что и у /v1: расчёт один на
+    бота и на REST-эндпоинт api_v1_achievements.hall_of_fame, здесь остаётся
+    только рендер текста."""
+    hof = await hall_of_fame_data.collect(user_id)
     return formatting.build_hall_of_fame(
-        total_workouts=total_workouts,
-        tonnage_kg=agg["tonnage"],
-        tonnage_equivalent=equivalent,
-        best_week_streak=best_streak,
-        longest_workout_seconds=await view_builder.longest_workout_seconds(user_id),
-        top_lifts=top,
-        unit=unit,
-        rank=rank,
-        rank_gap=analytics.rank_gap(rank, total_workouts, tonnage_kg, per_week),
+        total_workouts=hof.total_workouts,
+        tonnage_kg=hof.tonnage_kg,
+        tonnage_equivalent=hof.tonnage_equivalent,
+        best_week_streak=hof.best_week_streak,
+        longest_workout_seconds=hof.longest_workout_seconds,
+        top_lifts=hof.top_lifts,
+        unit=hof.unit,
+        rank=hof.rank,
+        rank_gap=hof.rank_gap,
         max_chars=max_chars,
     )
 
