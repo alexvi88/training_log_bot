@@ -3971,6 +3971,50 @@ async def add_block_exercise(block_id: int, exercise_id: int, order_in_block: in
         await conn().commit()
 
 
+async def get_or_create_single_block_for_exercise(workout_id: int, exercise_id: int) -> int:
+    """Блок этого упражнения в тренировке — существующий (первый по порядку)
+    или новый одиночный, заведённый прямо здесь, под общим `_write_lock`.
+
+    Именно одной функцией, а не парой «найти, потом создать» в вызывающем
+    коде: между двумя такими вызовами есть await, и пять параллельных запросов
+    «запиши подход» с одним exercise_id (приложение шлёт их пачкой, когда
+    связь вернулась) успевали все пятеро не найти блок и завести по своему.
+    Упражнение разваливалось в карточке на пять блоков по одному подходу, и
+    round_index у всех был 1 — сам append_set свой round_index выбирает под
+    этим же замком и с такой гонкой уже справляется, а создание блока нет.
+    """
+    async with _write_lock:
+        database = conn()
+        cur = await database.execute(
+            "SELECT b.id AS id FROM workout_blocks b "
+            "JOIN block_exercises be ON be.block_id = b.id "
+            "WHERE b.workout_id = ? AND be.exercise_id = ? "
+            "ORDER BY b.order_index, b.id LIMIT 1",
+            (workout_id, exercise_id),
+        )
+        row = await cur.fetchone()
+        if row is not None:
+            return row["id"]
+        try:
+            cur = await database.execute(
+                "INSERT INTO workout_blocks (workout_id, order_index, type) "
+                "SELECT ?, COALESCE(MAX(order_index), -1) + 1, 'single' "
+                "FROM workout_blocks WHERE workout_id = ?",
+                (workout_id, workout_id),
+            )
+            block_id = cur.lastrowid
+            await database.execute(
+                "INSERT INTO block_exercises (block_id, exercise_id, order_in_block) "
+                "VALUES (?, ?, 0)",
+                (block_id, exercise_id),
+            )
+            await database.commit()
+        except Exception:
+            await database.rollback()
+            raise
+        return block_id
+
+
 async def get_block(block_id: int) -> Optional[aiosqlite.Row]:
     cur = await conn().execute("SELECT * FROM workout_blocks WHERE id = ?", (block_id,))
     return await cur.fetchone()

@@ -102,6 +102,9 @@ async def add_entry(request: Request) -> JSONResponse:
             raise ApiError(400, "bad_request", f"{field_name} must be a number")
     eaten_on_raw = common.optional_str(body, "eaten_on")
     eaten_on = _parse_date(eaten_on_raw, user)
+    # Съесть что-то завтра нельзя — та же проверка, что у занесения
+    # тренировки задним числом (POST /workouts/backfill).
+    await common.reject_future_date(eaten_on, user_id, field="eaten_on")
     entry_id = await db.add_food_entry(
         user_id,
         eaten_on.isoformat(),
