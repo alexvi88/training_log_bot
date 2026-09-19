@@ -120,9 +120,13 @@ async def test_adding_a_second_copy_on_purpose_gets_a_free_name(fresh_db, user_i
     assert names == sorted([original, f"{original} (2)"])
 
 
-async def test_catalog_add_respects_the_day_budget(fresh_db, user_id):
-    """Лимит знал только AI-путь; каталог, импорт и «из тренировки» шли мимо."""
+async def test_catalog_add_respects_the_day_budget(fresh_db, user_id, monkeypatch):
+    """Лимит знал только AI-путь; каталог, импорт и «из тренировки» шли мимо.
+
+    Потолок занижен монкипатчем — важно, что каталог его спрашивает, а не то,
+    сколько именно дней в него влезает."""
     db = fresh_db
+    monkeypatch.setattr(config, "MAX_ROUTINES_PER_USER", 3)
     for i in range(config.MAX_ROUTINES_PER_USER):
         await db.create_routine(user_id, f"День {i}")
 
@@ -281,8 +285,9 @@ async def test_a_day_can_be_taken_out_of_its_program(fresh_db, user_id):
     assert [r["name"] for r in await db.list_standalone_routines(user_id)] == ["Толкай"]
 
 
-async def test_adding_a_day_respects_the_budget(fresh_db, user_id):
+async def test_adding_a_day_respects_the_budget(fresh_db, user_id, monkeypatch):
     db = fresh_db
+    monkeypatch.setattr(config, "MAX_ROUTINES_PER_USER", 3)
     program_id = await _program(db, user_id, days=("Толкай",))
     for i in range(config.MAX_ROUTINES_PER_USER - 1):
         await db.create_routine(user_id, f"Лишний {i}")
@@ -604,8 +609,9 @@ async def test_a_program_can_be_duplicated_whole(fresh_db, user_id):
     assert len(await db.list_routine_exercises(day["id"])) == 1
 
 
-async def test_duplicating_respects_the_day_budget(fresh_db, user_id):
+async def test_duplicating_respects_the_day_budget(fresh_db, user_id, monkeypatch):
     db = fresh_db
+    monkeypatch.setattr(config, "MAX_ROUTINES_PER_USER", 4)
     program_id = await _program(db, user_id, days=("Толкай", "Тяни"))
     for i in range(config.MAX_ROUTINES_PER_USER - 2):
         await db.create_routine(user_id, f"Лишний {i}")

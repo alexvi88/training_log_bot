@@ -101,12 +101,6 @@ PROGRESSION_RULES = ("double_progression", "linear_load")
 PROGRESSION_MIN_STEP = 0.25
 PROGRESSION_MAX_STEP = 25.0
 
-# Сколько всего программ разрешаем держать пользователю: список программ —
-# плоский экран без пагинации, и полсотни строк в нём никто не разгребёт.
-# Живёт в config теперь (см. db.routine_budget) — алиас оставлен, потому что
-# тесты и часть кода всё ещё читают его отсюда как ai_trainer.MAX_ROUTINES_PER_USER.
-MAX_ROUTINES_PER_USER = config.MAX_ROUTINES_PER_USER
-
 _client: Optional[AsyncOpenAI] = None
 
 
@@ -5007,9 +5001,9 @@ async def _propose_program(
     # Заменяемые дни освобождают свои места — правка программы того же размера
     # не должна упираться в лимит только потому, что старая версия ещё цела.
     freed = len(replaces["routine_ids"]) if replaces else 0
-    if existing - freed + len(days) > MAX_ROUTINES_PER_USER:
+    if existing - freed + len(days) > config.MAX_ROUTINES_PER_USER:
         payload["warning"] = (
-            f"у пользователя уже {existing} программ при лимите {MAX_ROUTINES_PER_USER} — "
+            f"у пользователя уже {existing} программ при лимите {config.MAX_ROUTINES_PER_USER} — "
             "при сохранении поместятся не все, предупреди его, что старые стоит удалить"
         )
 

@@ -997,14 +997,17 @@ async def test_concurrent_saves_do_not_duplicate_the_program(fresh_db, user_id):
     assert len(await fresh_db.list_routines(user_id)) == 2
 
 
-async def test_concurrent_saves_do_not_bypass_the_routine_cap(fresh_db, user_id):
-    """Repro from the bug report: 28 existing routines + a 2-day draft, two
-    concurrent taps used to produce 32 routines, blowing past
-    MAX_ROUTINES_PER_USER (30). With the draft claimed atomically, only one of
-    the two taps gets to save."""
-    import ai_trainer as ai_trainer_module
+async def test_concurrent_saves_do_not_bypass_the_routine_cap(fresh_db, user_id, monkeypatch):
+    """Repro from the bug report: with the cap all but reached, a 2-day draft
+    and two concurrent taps used to save both drafts and step over
+    config.MAX_ROUTINES_PER_USER. With the draft claimed atomically, only one
+    of the two taps gets to save.
 
-    for i in range(ai_trainer_module.MAX_ROUTINES_PER_USER - 2):
+    Потолок тут занижен монкипатчем, а не набит вставками: настоящий — 500,
+    и набивать его в тесте значило бы полтысячи запросов ради одной проверки."""
+    monkeypatch.setattr(config, "MAX_ROUTINES_PER_USER", 4)
+
+    for i in range(config.MAX_ROUTINES_PER_USER - 2):
         await fresh_db.create_routine(user_id, f"Программа {i}")
     state = await _make_state(user_id)
     await state.update_data(ai_program_draft=_draft(days=2))
@@ -1014,7 +1017,7 @@ async def test_concurrent_saves_do_not_bypass_the_routine_cap(fresh_db, user_id)
         ai_trainer.ai_program_save(_make_callback(user_id, "ai:prog:save:1"), state),
     )
 
-    assert len(await fresh_db.list_routines(user_id)) == ai_trainer_module.MAX_ROUTINES_PER_USER
+    assert len(await fresh_db.list_routines(user_id)) == config.MAX_ROUTINES_PER_USER
 
 
 async def test_partial_save_failure_keeps_the_old_program_intact(fresh_db, user_id, monkeypatch):
@@ -1190,10 +1193,12 @@ async def test_program_draft_survives_a_trip_to_the_menu(fresh_db, user_id):
     assert callback.answer.await_args.kwargs.get("show_alert") is not True
 
 
-async def test_saving_over_the_routine_cap_is_refused(fresh_db, user_id):
-    import ai_trainer as ai_trainer_module
+async def test_saving_over_the_routine_cap_is_refused(fresh_db, user_id, monkeypatch):
+    # Потолок занижен монкипатчем: проверяем, что путь вообще спрашивает
+    # db.routine_budget, а не что в базу влезет ровно config.MAX_ROUTINES_PER_USER.
+    monkeypatch.setattr(config, "MAX_ROUTINES_PER_USER", 2)
 
-    for i in range(ai_trainer_module.MAX_ROUTINES_PER_USER):
+    for i in range(config.MAX_ROUTINES_PER_USER):
         await fresh_db.create_routine(user_id, f"Программа {i}")
     state = await _make_state(user_id)
     await state.update_data(ai_program_draft=_draft(days=1))
@@ -1201,7 +1206,7 @@ async def test_saving_over_the_routine_cap_is_refused(fresh_db, user_id):
 
     await ai_trainer.ai_program_save(callback, state)
 
-    assert len(await fresh_db.list_routines(user_id)) == ai_trainer_module.MAX_ROUTINES_PER_USER
+    assert len(await fresh_db.list_routines(user_id)) == config.MAX_ROUTINES_PER_USER
     assert callback.answer.await_args.kwargs.get("show_alert") is True
 
 

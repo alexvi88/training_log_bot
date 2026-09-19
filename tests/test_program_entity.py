@@ -306,9 +306,12 @@ async def test_programs_are_listed_by_when_they_were_last_trained(fresh_db, user
 # ---------- бюджет дней ----------
 
 
-async def test_routine_budget_is_one_rule_for_every_creation_path(fresh_db, user_id):
+async def test_routine_budget_is_one_rule_for_every_creation_path(fresh_db, user_id, monkeypatch):
     db = fresh_db
     assert await db.routine_budget(user_id, 5) is None
+    # Потолок занижаем монкипатчем: настоящий (500) набивать вставками — это
+    # полтысячи запросов ради проверки одного сравнения.
+    monkeypatch.setattr(config, "MAX_ROUTINES_PER_USER", 6)
     for i in range(config.MAX_ROUTINES_PER_USER):
         await db.create_routine(user_id, f"День {i}")
     assert await db.routine_budget(user_id, 1) is not None
@@ -329,10 +332,11 @@ async def test_routine_budget_message_declines_day_count(fresh_db, user_id, monk
     assert "2 дня в программах" in message
 
 
-async def test_replacing_days_does_not_count_them_twice(fresh_db, user_id):
+async def test_replacing_days_does_not_count_them_twice(fresh_db, user_id, monkeypatch):
     """Правка программы того же размера упиралась бы в потолок только потому,
     что старая версия ещё цела."""
     db = fresh_db
+    monkeypatch.setattr(config, "MAX_ROUTINES_PER_USER", 6)
     for i in range(config.MAX_ROUTINES_PER_USER):
         await db.create_routine(user_id, f"День {i}")
     assert await db.routine_budget(user_id, adding=3, freeing=3) is None
