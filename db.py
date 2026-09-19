@@ -29,6 +29,7 @@ from typing import Any, Optional
 import aiosqlite
 
 import config
+import exercise_photos
 import i18n
 import search_terms
 from seed_data import (
@@ -132,7 +133,14 @@ CREATE TABLE IF NOT EXISTS exercises (
     -- отжиманий от пола это около двух третей, у подтягиваний — всё.
     bodyweight_load TEXT NOT NULL DEFAULT 'none',
     bodyweight_factor REAL NOT NULL DEFAULT 1.0,
+    -- Своё фото упражнения хранится ДВУМЯ колонками сразу, и обе нужны:
+    -- file_id — ссылка внутрь Telegram (живёт ровно до смены токена бота,
+    -- зато переотправка по ней бесплатна, и бот шлёт фото в чат именно так),
+    -- path — имя файла в config.EXERCISE_PHOTO_DIR, наша единственная
+    -- собственная копия и единственное, что умеет отдать REST `/v1`.
+    -- Подробно — в докстринге exercise_photos.py.
     custom_photo_file_id TEXT,
+    custom_photo_path TEXT,
     description TEXT,
     FOREIGN KEY (primary_group_id) REFERENCES muscle_groups (id)
 );
@@ -956,6 +964,11 @@ async def _migrate_schema() -> None:
         )
     if "custom_photo_file_id" not in exercise_cols:
         await _conn.execute("ALTER TABLE exercises ADD COLUMN custom_photo_file_id TEXT")
+    if "custom_photo_path" not in exercise_cols:
+        # Заполнять нечем: файлы уже сохранённых фото лежат у Telegram, и
+        # забрать их можно только через Bot API — этим занимается
+        # exercise_photos.backfill_from_telegram на старте бота.
+        await _conn.execute("ALTER TABLE exercises ADD COLUMN custom_photo_path TEXT")
     if "description" not in exercise_cols:
         await _conn.execute("ALTER TABLE exercises ADD COLUMN description TEXT")
 
@@ -2089,6 +2102,15 @@ async def wipe_user_account(telegram_id: int) -> None:
     хендлера (админ и явный выбор из двух аккаунтов).
     """
     scoped = await _user_scoped_tables()
+    # Имена файлов снимаем ДО сноса строк: после удаления спросить, какие фото
+    # принадлежали этому человеку, будет уже не у кого, и они остались бы
+    # лежать на диске после «стёр всё».
+    cur = await conn().execute(
+        "SELECT custom_photo_path FROM exercises "
+        "WHERE user_id = ? AND custom_photo_path IS NOT NULL",
+        (telegram_id,),
+    )
+    photo_names = [row[0] for row in await cur.fetchall()]
     async with _write_lock:
         db = conn()
         try:
@@ -2100,6 +2122,8 @@ async def wipe_user_account(telegram_id: int) -> None:
         except Exception:
             await db.rollback()
             raise
+    for name in photo_names:
+        exercise_photos.delete(name)
 
 
 # ---------- muscle groups ----------
@@ -2788,9 +2812,54 @@ async def list_archived_exercises(user_id: int) -> list[aiosqlite.Row]:
     return await cur.fetchall()
 
 
-async def set_exercise_photo(exercise_id: int, file_id: str) -> None:
-    """Store a user-uploaded reference photo (Telegram file_id) for an exercise,
-    replacing whatever custom photo it had before."""
+async def set_exercise_photo(
+    exercise_id: int, file_id: Optional[str], local_name: Optional[str] = None
+) -> None:
+    """Store a user-uploaded reference photo for an exercise, replacing whatever
+    custom photo it had before.
+
+    Обе колонки пишутся одной операцией и всегда про ОДНО фото: `file_id` —
+    ссылка в Telegram, `local_name` — имя файла в config.EXERCISE_PHOTO_DIR
+    (см. exercise_photos.py). Из бота приезжают оба (фото пришло в чат и тут
+    же легло на диск), из приложения — только `local_name`: file_id у нас
+    взяться неоткуда, и записать старый было бы враньём — он показывал бы
+    в Telegram ПРЕЖНЮЮ картинку. Бот в этом случае отправит файл с диска и
+    сам положит новый file_id обратно (set_exercise_photo_file_id).
+
+    Файл прошлого фото сносится здесь же: замена не должна оставлять на
+    диске картинку, на которую больше никто не ссылается.
+    """
+    previous = await get_exercise(exercise_id)
+    previous_name = exercise_photos.stored_name(previous) if previous else None
+    async with _write_lock:
+        await conn().execute(
+            "UPDATE exercises SET custom_photo_file_id = ?, custom_photo_path = ? WHERE id = ?",
+            (file_id, local_name, exercise_id),
+        )
+        await conn().commit()
+    if previous_name and previous_name != local_name:
+        exercise_photos.delete(previous_name)
+
+
+async def set_exercise_photo_path(exercise_id: int, local_name: str) -> None:
+    """Дописать локальный файл к фото, у которого пока есть только ссылка в
+    Telegram — перенос старых фото (exercise_photos.backfill_from_telegram).
+    `custom_photo_file_id` сознательно не трогаем: это та же самая картинка,
+    и дешёвая переотправка по ссылке остаётся рабочей."""
+    async with _write_lock:
+        await conn().execute(
+            "UPDATE exercises SET custom_photo_path = ? WHERE id = ?", (local_name, exercise_id)
+        )
+        await conn().commit()
+
+
+async def set_exercise_photo_file_id(exercise_id: int, file_id: str) -> None:
+    """Запомнить file_id, который Telegram вернул на отправку файла с диска.
+
+    Обратная сторона set_exercise_photo: фото, приехавшее из приложения (или
+    пережившее смену токена), бот отправляет файлом ровно один раз, а дальше
+    — снова ссылкой. Локальный файл при этом остаётся на месте: он источник
+    правды, а не кэш."""
     async with _write_lock:
         await conn().execute(
             "UPDATE exercises SET custom_photo_file_id = ? WHERE id = ?", (file_id, exercise_id)
@@ -2798,13 +2867,31 @@ async def set_exercise_photo(exercise_id: int, file_id: str) -> None:
         await conn().commit()
 
 
+async def list_exercises_with_unsaved_photo() -> list[aiosqlite.Row]:
+    """Упражнения, у которых фото есть только ссылкой в Telegram — вход для
+    переноса на свой диск. Только id и file_id: остальные поля переносу не
+    нужны, а строк тут может быть много."""
+    cur = await conn().execute(
+        "SELECT id, custom_photo_file_id FROM exercises "
+        "WHERE custom_photo_file_id IS NOT NULL AND custom_photo_path IS NULL"
+    )
+    return await cur.fetchall()
+
+
 async def delete_exercise_photo(exercise_id: int) -> None:
-    """Remove a user-uploaded reference photo, falling back to any bundled demo photos."""
+    """Remove a user-uploaded reference photo, falling back to any bundled demo photos.
+
+    Чистим обе колонки и сам файл: «удалил фото» не должно означать «файл
+    остался лежать, просто на него больше не смотрят»."""
+    exercise = await get_exercise(exercise_id)
+    local_name = exercise_photos.stored_name(exercise) if exercise else None
     async with _write_lock:
         await conn().execute(
-            "UPDATE exercises SET custom_photo_file_id = NULL WHERE id = ?", (exercise_id,)
+            "UPDATE exercises SET custom_photo_file_id = NULL, custom_photo_path = NULL WHERE id = ?",
+            (exercise_id,),
         )
         await conn().commit()
+    exercise_photos.delete(local_name)
 
 
 async def set_workout_exercise_note(workout_id: int, exercise_id: int, note: Optional[str]) -> None:
@@ -2988,11 +3075,21 @@ async def merge_exercises(user_id: int, keep_id: int, drop_id: int) -> str:
                 await db.execute(
                     "UPDATE exercises SET description = ? WHERE id = ?", (drop["description"], keep_id)
                 )
-            if not keep["custom_photo_file_id"] and drop["custom_photo_file_id"]:
+            # Фото переезжает ПАРОЙ колонок: ссылка в Telegram и файл на
+            # диске — это одна и та же картинка, и разошедшаяся пара показала
+            # бы в боте одно, а в приложении другое. Поэтому условие одно на
+            # обе: своё фото у оставшегося упражнения есть — оно и остаётся,
+            # нет — забираем целиком у того, которое сносим.
+            if not exercise_photos.has_photo(keep) and exercise_photos.has_photo(drop):
                 await db.execute(
-                    "UPDATE exercises SET custom_photo_file_id = ? WHERE id = ?",
-                    (drop["custom_photo_file_id"], keep_id),
+                    "UPDATE exercises SET custom_photo_file_id = ?, custom_photo_path = ? WHERE id = ?",
+                    (drop["custom_photo_file_id"], exercise_photos.stored_name(drop), keep_id),
                 )
+                dropped_photo_name = None
+            else:
+                # Фото сносимого упражнения не пригодилось — его файл иначе
+                # остался бы на диске без единой ссылки из базы.
+                dropped_photo_name = exercise_photos.stored_name(drop)
             if not keep["notes"] and drop["notes"]:
                 await db.execute(
                     "UPDATE exercises SET notes = ? WHERE id = ?", (drop["notes"], keep_id)
@@ -3002,6 +3099,9 @@ async def merge_exercises(user_id: int, keep_id: int, drop_id: int) -> str:
         except Exception:
             await db.rollback()
             raise
+    # Файл сносим только после успешного коммита: откат вернул бы строку с
+    # именем файла, которого уже нет.
+    exercise_photos.delete(dropped_photo_name)
     return MERGE_OK
 
 
@@ -7778,6 +7878,8 @@ async def delete_exercise_if_unused(exercise_id: int, user_id: int) -> bool:
         db = conn()
         await db.execute("DELETE FROM exercises WHERE id = ?", (exercise_id,))
         await db.commit()
+    # Строки больше нет — значит, и её фото на диске больше некому показать.
+    exercise_photos.delete(exercise_photos.stored_name(exercise))
     return True
 
 

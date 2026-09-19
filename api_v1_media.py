@@ -5,7 +5,13 @@
 Здесь то же самое, только по HTTP: файл со старта/конца, зацикленный клип
 (если уже снят) и текстовая инструкция для карточки упражнения в приложении.
 
-Ключ поиска — не id упражнения, а имя шаблона (exercise_media.catalog_key,
+Здесь же — СВОЁ фото упражнения (GET/POST/DELETE `/exercises/{id}/photo`),
+и вот оно как раз про конкретное упражнение конкретного человека: хранится
+файлом на нашем диске (exercise_photos.py, колонка `exercises.custom_photo_path`),
+отдаётся только владельцу и, в отличие от каталожных ассетов, может меняться —
+поэтому у него своя проверка владения и свой заголовок кэша, см. ниже.
+
+Ключ поиска для каталожной части — не id упражнения, а имя шаблона (exercise_media.catalog_key,
 т.е. `original_name`): один и тот же каталог фото и текста общий для всех,
 кто форкнул один и тот же шаблон, и не зависит от того, как пользователь
 переименовал свою копию. Резолв путей и текста целиком переиспользует
@@ -24,10 +30,14 @@ from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse
 from starlette.routing import Route
 
+import api_v1_ai
 import api_v1_common as common
 import db
 import exercise_descriptions
 import exercise_media
+import exercise_photos
+import i18n
+from handlers.ai_trainer import MAX_IMAGE_BYTES
 
 ApiError = common.ApiError
 
@@ -38,6 +48,11 @@ _CONTENT_TYPES = {
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
     ".mp4": "video/mp4",
+    # png/webp — только у своих фото: их присылает человек из приложения, и
+    # набор форматов тут тот же, что у остальных фото в `/v1`
+    # (api_v1_ai.IMAGE_EXTENSION_BY_MIME).
+    ".png": "image/png",
+    ".webp": "image/webp",
 }
 
 # Файлы каталога — иммутабельные ассеты free-exercise-db под фиксированными
@@ -45,6 +60,14 @@ _CONTENT_TYPES = {
 # кладёт заново под тем же слагом): раз имя не меняется, кэшировать можно
 # навсегда.
 _CACHE_CONTROL = "public, max-age=31536000, immutable"
+
+# Своё фото — ровно наоборот. Оно приватное (это данные конкретного человека,
+# а не открытая база) и может смениться в любой момент: тот же URL завтра
+# отдаст другую картинку, так что `immutable` тут прямо противопоказан — после
+# замены фото клиент показывал бы старое, пока не кончится год. `must-revalidate`
+# при нулевом возрасте означает «спроси сервер», а сам ответ дешёвый: FileResponse
+# отдаёт ETag/Last-Modified, и неизменившееся фото вернётся 304-м без тела.
+_PHOTO_CACHE_CONTROL = "private, max-age=0, must-revalidate"
 
 
 async def _owned_exercise(exercise_id: int, user_id: int):
@@ -144,8 +167,87 @@ async def get_media_file(request: Request) -> Any:
     )
 
 
+
+# ---------- своё фото упражнения ----------
+
+
+async def get_exercise_photo(request: Request) -> Any:
+    """Само фото байтами, а не ссылкой на него.
+
+    Почему не отдельный публичный URL, как у каталожных картинок (см.
+    get_media_file ниже): то — общая открытая база, одинаковая для всех, а это
+    фотография конкретного человека, и открывать её любому, кто угадает имя
+    файла, нельзя. Значит, нужен Bearer-токен, значит, `AsyncImage(url:)`
+    отпадает и приложение всё равно грузит байты своим запросом — при таком
+    раскладе промежуточный JSON со ссылкой не даёт ничего, кроме второго
+    похода на сервер.
+
+    Фото нет — 404, тем же кодом и текстом, каким `/v1` отвечает на «нет
+    описания»: отсутствие фото это нормальный ответ, а не поломка.
+    """
+    user_id = await common.authed_user_id(request)
+    exercise_id = int(request.path_params["exercise_id"])
+    exercise = await _owned_exercise(exercise_id, user_id)
+
+    path = exercise_photos.path_for_exercise(exercise)
+    if path is None:
+        raise ApiError(404, "not_found", "no photo for this exercise")
+
+    ext = os.path.splitext(path)[1].lower()
+    content_type = _CONTENT_TYPES.get(ext) or mimetypes.guess_type(path)[0] or "application/octet-stream"
+    return FileResponse(path, media_type=content_type, headers={"Cache-Control": _PHOTO_CACHE_CONTROL})
+
+
+async def upload_exercise_photo(request: Request) -> JSONResponse:
+    """Загрузить своё фото упражнения — `{"image_data_url": "data:image/jpeg;base64,..."}`.
+
+    Формат тела и лимиты — общие с остальными фото в `/v1` (api_v1_ai:
+    IMAGE_EXTENSION_BY_MIME и MAX_IMAGE_BYTES, разбор — common.decode_data_url):
+    своих чисел и своего набора форматов здесь нет намеренно, иначе одно и то
+    же фото прошло бы в вопросе тренеру и не прошло бы тут.
+
+    `custom_photo_file_id` при этом обнуляется (db.set_exercise_photo с одним
+    только именем файла): старая ссылка ведёт на ПРЕЖНЮЮ картинку, и оставить
+    её значило бы показывать в Telegram одно фото, а в приложении другое. Бот
+    отправит новое файлом с диска и сам запомнит свежий file_id.
+    """
+    user_id = await common.authed_user_id(request)
+    exercise_id = int(request.path_params["exercise_id"])
+    await _owned_exercise(exercise_id, user_id)
+
+    body = await common.json_body(request)
+    data_url = common.require(body, "image_data_url", str)
+    raw, _mime, ext = common.decode_data_url(
+        data_url, api_v1_ai.IMAGE_EXTENSION_BY_MIME, field="image_data_url"
+    )
+    if len(raw) > MAX_IMAGE_BYTES:
+        raise ApiError(
+            400, "photo_too_big", i18n.t("ai.screen.photo_too_big", mb=MAX_IMAGE_BYTES // (1024 * 1024))
+        )
+
+    name = exercise_photos.save(exercise_id, raw, ext)
+    await db.set_exercise_photo(exercise_id, None, name)
+    return JSONResponse({"has_photo": True}, status_code=201)
+
+
+async def delete_exercise_photo(request: Request) -> JSONResponse:
+    """Убрать своё фото — карточка упражнения возвращается к каталожным
+    картинкам, если они для него есть. Нет фото — 404, как и у GET: удалять
+    нечего, и молчаливое «удалил» тут врало бы."""
+    user_id = await common.authed_user_id(request)
+    exercise_id = int(request.path_params["exercise_id"])
+    exercise = await _owned_exercise(exercise_id, user_id)
+    if not exercise_photos.has_photo(exercise):
+        raise ApiError(404, "not_found", "no photo for this exercise")
+    await db.delete_exercise_photo(exercise_id)
+    return JSONResponse({"deleted": True})
+
+
 routes = [
     Route("/exercises/{exercise_id:int}/media", get_exercise_media, methods=["GET"]),
     Route("/exercises/{exercise_id:int}/description", get_exercise_description, methods=["GET"]),
+    Route("/exercises/{exercise_id:int}/photo", get_exercise_photo, methods=["GET"]),
+    Route("/exercises/{exercise_id:int}/photo", upload_exercise_photo, methods=["POST"]),
+    Route("/exercises/{exercise_id:int}/photo", delete_exercise_photo, methods=["DELETE"]),
     Route("/media/exercises/{name:path}", get_media_file, methods=["GET"]),
 ]

@@ -503,6 +503,7 @@
   "exercises.btn.own_description": "✏️ Своё описание",
   "exercises.btn.photo": "✏️ Фото",
   "exercises.btn.progress": "📈 Прогресс",
+  "exercises.btn.replace_photo": "✏️ Заменить фото",
   "exercises.btn.retype": "✏️ Написать заново",
   "exercises.btn.share": "📤 Поделиться",
   "exercises.description.current": "\n\nТекущее описание:\n<i>{text}</i>",
