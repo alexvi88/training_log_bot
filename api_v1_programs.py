@@ -313,6 +313,34 @@ async def delete_routine(request: Request) -> JSONResponse:
     return JSONResponse({"deleted": True})
 
 
+def _reorder_direction(body: dict[str, Any]) -> str:
+    """"up"/"down" — то же значение, которым бот шлёт rt:daymv/rt:mvex
+    (см. handlers/routines.py). Третьего значения нет ни там, ни здесь."""
+    direction = _require(body, "direction", str)
+    if direction not in ("up", "down"):
+        raise ApiError(400, "bad_request", "direction must be 'up' or 'down'")
+    return direction
+
+
+async def reorder_program_day(request: Request) -> JSONResponse:
+    """«🔀 Порядок дней» (rt:daymv) — переставить день программы относительно
+    соседа. Сама перестановка и защита от гонки двух параллельных «вверх» —
+    в db.reorder_program_day (общий _write_lock), здесь только владение и
+    разбор direction."""
+    user_id = await _authed_user_id(request)
+    routine_id = int(request.path_params["routine_id"])
+    routine = await _owned_routine(routine_id, user_id)
+    if routine["program_id"] is None:
+        # Одиночный день переставлять не относительно чего — как и в боте,
+        # где rt:daymv доступен только внутри программы.
+        raise ApiError(400, "not_in_program", "day is not part of a program")
+    body = await _json_body(request)
+    direction = _reorder_direction(body)
+    await db.reorder_program_day(routine_id, direction)
+    days = await db.list_program_days_by_id(routine["program_id"])
+    return JSONResponse({"days": [_routine_list_json(d) for d in days]})
+
+
 # ---------- упражнения дня ----------
 
 async def add_routine_exercise(request: Request) -> JSONResponse:
@@ -361,6 +389,20 @@ async def delete_routine_exercise(request: Request) -> JSONResponse:
     await _owned_routine_exercise(item_id, user_id)
     await db.remove_routine_exercise(item_id)
     return JSONResponse({"deleted": True})
+
+
+async def reorder_routine_exercise(request: Request) -> JSONResponse:
+    """rt:mvex — переставить упражнение дня относительно соседа. Как и у
+    дней программы, сама перестановка и защита от гонки — в
+    db.reorder_routine_exercise, здесь только владение и разбор тела."""
+    user_id = await _authed_user_id(request)
+    item_id = int(request.path_params["item_id"])
+    entry = await _owned_routine_exercise(item_id, user_id)
+    body = await _json_body(request)
+    direction = _reorder_direction(body)
+    await db.reorder_routine_exercise(item_id, direction)
+    exercises = await db.list_routine_exercises(entry["routine_id"])
+    return JSONResponse({"exercises": [_routine_exercise_json(e) for e in exercises]})
 
 
 # ---------- готовые программы (каталог) ----------
@@ -472,8 +514,10 @@ routes = [
     Route("/routines/{routine_id:int}", get_routine, methods=["GET"]),
     Route("/routines/{routine_id:int}", update_routine, methods=["PATCH"]),
     Route("/routines/{routine_id:int}", delete_routine, methods=["DELETE"]),
+    Route("/routines/{routine_id:int}/reorder", reorder_program_day, methods=["POST"]),
     Route("/routines/{routine_id:int}/exercises", add_routine_exercise, methods=["POST"]),
     Route("/routine-exercises/{item_id:int}", update_routine_exercise, methods=["PATCH"]),
     Route("/routine-exercises/{item_id:int}", delete_routine_exercise, methods=["DELETE"]),
+    Route("/routine-exercises/{item_id:int}/reorder", reorder_routine_exercise, methods=["POST"]),
     Route("/workouts/{workout_id:int}/routines", create_routine_from_workout, methods=["POST"]),
 ]

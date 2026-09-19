@@ -453,6 +453,95 @@ async def test_routine_exercise_not_found(fresh_db, client_factory):
     assert resp2.status_code == 404
 
 
+# ---------- порядок дней программы («🔀 Порядок дней» у бота) ----------
+
+@pytest.mark.asyncio
+async def test_reorder_program_day_swaps_neighbours(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    program_id = (await client.post("/programs", json={"name": "PPL"})).json()["id"]
+    push = (await client.post(f"/programs/{program_id}/days", json={"name": "Push"})).json()
+    pull = (await client.post(f"/programs/{program_id}/days", json={"name": "Pull"})).json()
+
+    resp = await client.post(f"/routines/{pull['id']}/reorder", json={"direction": "up"})
+    assert resp.status_code == 200, resp.text
+    assert [d["name"] for d in resp.json()["days"]] == ["Pull", "Push"]
+
+    fetched = await client.get(f"/programs/{program_id}")
+    assert [d["name"] for d in fetched.json()["days"]] == ["Pull", "Push"]
+    assert [d["id"] for d in fetched.json()["days"]] == [pull["id"], push["id"]]
+
+
+@pytest.mark.asyncio
+async def test_reorder_program_day_rejects_bad_direction(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    program_id = (await client.post("/programs", json={"name": "PPL"})).json()["id"]
+    day = (await client.post(f"/programs/{program_id}/days", json={"name": "Push"})).json()
+
+    resp = await client.post(f"/routines/{day['id']}/reorder", json={"direction": "sideways"})
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "bad_request"
+
+
+@pytest.mark.asyncio
+async def test_reorder_standalone_routine_is_rejected(fresh_db, client_factory):
+    """Одиночный день (program_id=None) переставлять не относительно чего —
+    ровно как rt:daymv в боте доступен только внутри программы."""
+    client = await _linked_client(fresh_db, client_factory)
+    routine_id = (await client.post("/routines", json={"name": "Push day"})).json()["id"]
+
+    resp = await client.post(f"/routines/{routine_id}/reorder", json={"direction": "up"})
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "not_in_program"
+
+
+@pytest.mark.asyncio
+async def test_reorder_program_day_foreign_is_404(fresh_db, client_factory):
+    owner = await _linked_client(fresh_db, client_factory, telegram_id=111)
+    intruder = await _linked_client(fresh_db, client_factory, telegram_id=222)
+    program_id = (await owner.post("/programs", json={"name": "PPL"})).json()["id"]
+    day = (await owner.post(f"/programs/{program_id}/days", json={"name": "Push"})).json()
+
+    resp = await intruder.post(f"/routines/{day['id']}/reorder", json={"direction": "up"})
+    assert resp.status_code == 404
+
+
+# ---------- порядок упражнений дня (rt:mvex у бота) ----------
+
+@pytest.mark.asyncio
+async def test_reorder_routine_exercise_swaps_neighbours(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    routine_id = (await client.post("/routines", json={"name": "Push day"})).json()["id"]
+    ex1 = await _make_exercise(fresh_db, 111, "Bench press")
+    ex2 = await _make_exercise(fresh_db, 111, "Overhead press")
+    item1 = (
+        await client.post(f"/routines/{routine_id}/exercises", json={"exercise_id": ex1})
+    ).json()
+    item2 = (
+        await client.post(f"/routines/{routine_id}/exercises", json={"exercise_id": ex2})
+    ).json()
+
+    resp = await client.post(f"/routine-exercises/{item2['id']}/reorder", json={"direction": "up"})
+    assert resp.status_code == 200, resp.text
+    assert [e["exercise_id"] for e in resp.json()["exercises"]] == [ex2, ex1]
+
+    fetched = await client.get(f"/routines/{routine_id}")
+    assert [e["id"] for e in fetched.json()["exercises"]] == [item2["id"], item1["id"]]
+
+
+@pytest.mark.asyncio
+async def test_reorder_routine_exercise_foreign_is_404(fresh_db, client_factory):
+    owner = await _linked_client(fresh_db, client_factory, telegram_id=111)
+    intruder = await _linked_client(fresh_db, client_factory, telegram_id=222)
+    routine_id = (await owner.post("/routines", json={"name": "Push day"})).json()["id"]
+    exercise_id = await _make_exercise(fresh_db, 111)
+    item = (
+        await owner.post(f"/routines/{routine_id}/exercises", json={"exercise_id": exercise_id})
+    ).json()
+
+    resp = await intruder.post(f"/routine-exercises/{item['id']}/reorder", json={"direction": "up"})
+    assert resp.status_code == 404
+
+
 # ---------- 401 без токена ----------
 
 @pytest.mark.asyncio
@@ -473,9 +562,11 @@ async def test_routine_exercise_not_found(fresh_db, client_factory):
         ("GET", "/routines/1"),
         ("PATCH", "/routines/1"),
         ("DELETE", "/routines/1"),
+        ("POST", "/routines/1/reorder"),
         ("POST", "/routines/1/exercises"),
         ("PATCH", "/routine-exercises/1"),
         ("DELETE", "/routine-exercises/1"),
+        ("POST", "/routine-exercises/1/reorder"),
         ("POST", "/workouts/1/routines"),
     ],
 )

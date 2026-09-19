@@ -56,9 +56,19 @@ async def _owned_exercise(exercise_id: int, user_id: int):
     return exercise
 
 
-def _url_for(path: str) -> str:
-    """Абсолютный путь диска -> относительный URL раздачи /media/exercises/<name>."""
+def media_file_url(path: str) -> str:
+    """Абсолютный путь диска -> относительный URL раздачи /media/exercises/<name>.
+
+    Публичная (без подчёркивания): тот же формат URL нужен и превью каталожного
+    шаблона в api_v1_templates.py — маршрут `/media/exercises/{name}` ниже общий
+    для своих упражнений и ещё не форкнутых шаблонов, второй раздачи для
+    шаблонов заводить незачем."""
     return f"/media/exercises/{os.path.basename(path)}"
+
+
+# Старое приватное имя — как было до того, как понадобилось использовать его
+# из другого модуля.
+_url_for = media_file_url
 
 
 async def get_exercise_media(request: Request) -> JSONResponse:
