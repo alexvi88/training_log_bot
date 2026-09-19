@@ -32,10 +32,14 @@ import api_v1_achievements
 import api_v1_ai
 import api_v1_common as common
 import api_v1_food
+import api_v1_import
 import api_v1_programs
+import api_v1_sharing
 import apple_signin
 import db
+import i18n
 import mcp_oauth
+import parser
 
 logger = logging.getLogger(__name__)
 
@@ -380,6 +384,68 @@ async def log_set(request: Request) -> JSONResponse:
     return JSONResponse(_set_json(row), status_code=201)
 
 
+async def log_sets_from_text(request: Request) -> JSONResponse:
+    """Подход (или несколько) одной строкой — «100 8», «100 8, 100 7, 95 8»,
+    «100x8x3», «8», «100 8 @9», «80 кг 8 раз».
+
+    Это главный способ записи в боте, и он не переносится в три числовых поля:
+    строка умеет то, чего поля не умеют физически — несколько подходов за один
+    ввод, повтор веса с прошлого подхода голыми повторами, RPE суффиксом,
+    единицы словами. Поэтому разбор живёт на сервере и ровно тот же
+    (`parser.parse_sets_line`), что у бота: два разных разбора одной и той же
+    строки разъехались бы на первой же правке грамматики.
+
+    Ошибка разбора отдаётся 400 с текстом ИЗ ИСКЛЮЧЕНИЯ, а не машинным кодом:
+    `ParseError.message` уже локализован и написан голосом тренера («Не понял
+    вес. Напиши число, например 80»), и клиенту его надо показать дословно.
+    Единственное место в `/v1`, где сервер отдаёт человеческий текст ошибки, —
+    и поэтому язык берём явно из users.lang через `i18n.use_lang`: без него
+    сообщение приедет на языке того, кто первым дёрнул модуль в этом процессе
+    (ловушка описана в CLAUDE.md).
+
+    Бот на подозрительном вводе ещё и переспрашивает («не перепутаны ли вес и
+    повторы», handlers.workout._weight_confirm_prompt). Здесь переспросить
+    некому: HTTP-ответ не диалог. Подход пишется как разобран, а исправляется
+    правкой или отменой последнего — оба маршрута уже есть.
+    """
+    user_id = await _authed_user_id(request)
+    workout_id = int(request.path_params["workout_id"])
+    workout = await _owned_workout(workout_id, user_id)
+    if workout["status"] != "active":
+        raise ApiError(409, "workout_finished", "workout is already finished")
+    body = await _json_body(request)
+    exercise_id = _require(body, "exercise_id", int)
+    text = str(_require(body, "text", str)).strip()
+    if not text:
+        raise ApiError(400, "bad_request", "text must not be empty")
+    await _owned_exercise(exercise_id, user_id)
+
+    user = await db.get_user(user_id)
+    with i18n.use_lang(user["lang"] if user else "ru"):
+        try:
+            parsed = parser.parse_sets_line(text)
+        except parser.ParseError as exc:
+            # Машинный код всё равно есть — клиенту иногда надо отличить
+            # «не разобрал» от «сервер лёг», — но показывать он должен message.
+            raise ApiError(400, "unparsed_input", exc.message) from exc
+
+    # Голые повторы («8») означают «тот же вес, что в прошлом подходе». Какой
+    # это вес, знает сервер, а не клиент: иначе приложение считало бы
+    # предыдущий подход само и расходилось бы с ботом на суперсетах.
+    previous = await db.list_sets_for_workout_exercise(workout_id, exercise_id)
+    prev_weight = previous[-1]["weight"] if previous else 0.0
+
+    block_id = await _block_for_exercise(workout_id, exercise_id)
+    created = []
+    for item in parsed:
+        weight = prev_weight if (item.weight_omitted and prev_weight) else item.weight
+        set_id = await db.append_set(block_id, exercise_id, 0, weight, item.reps, item.rpe)
+        prev_weight = weight
+        cur = await db.conn().execute("SELECT * FROM sets WHERE id = ?", (set_id,))
+        created.append(_set_json(await cur.fetchone()))
+    return JSONResponse({"sets": created}, status_code=201)
+
+
 async def delete_last_set(request: Request) -> JSONResponse:
     """Убрать последний подход этого упражнения — правка опечатки веса/повторов
     сразу после записи, тем же приёмом, что «↩️ Отменить» в боте."""
@@ -540,6 +606,7 @@ routes = [
     Route("/workouts", list_workouts, methods=["GET"]),
     Route("/workouts/{workout_id:int}", get_workout, methods=["GET"]),
     Route("/workouts/{workout_id:int}/sets", log_set, methods=["POST"]),
+    Route("/workouts/{workout_id:int}/sets/parse", log_sets_from_text, methods=["POST"]),
     Route(
         "/workouts/{workout_id:int}/exercises/{exercise_id:int}/last-set",
         delete_last_set, methods=["DELETE"],
@@ -561,6 +628,8 @@ routes += (
     + api_v1_achievements.routes
     + api_v1_ai.routes
     + api_v1_account.routes
+    + api_v1_import.routes
+    + api_v1_sharing.routes
 )
 
 

@@ -66,7 +66,7 @@ MAX_DESCRIPTION_LEN = config.MAX_EXERCISE_DESCRIPTION_LENGTH
 #
 # v2 добавил "total_days": сколько дней было в программе до обрезки. У визиток
 # v0/v1 этого числа нет и восстановить его нечем (снапшот уже обрезан), поэтому
-# по ним считаем, что уехало всё — см. _program_days_totals.
+# по ним считаем, что уехало всё — см. program_days_totals.
 #
 # v3 добавил "empty_days": сколько дней не уехало из-за пустоты. Причин
 # недобора две — пустой день и предел визитки, — а поля было одно, и причину
@@ -115,7 +115,7 @@ def _days_phrase(n: int) -> str:
     return i18n.t("btn.program_days", n=n)
 
 
-def _program_days_totals(payload: dict[str, Any]) -> tuple[int, int]:
+def program_days_totals(payload: dict[str, Any]) -> tuple[int, int]:
     """(сколько дней реально в визитке, сколько было в программе).
 
     Второе число — из "total_days" (payload v2+). У визиток постарше поля нет, и
@@ -135,7 +135,7 @@ def _omitted_days_note(payload: dict[str, Any]) -> Optional[str]:
     пятью днями, отправителю бот говорил «Визитка готова», получателю — «5
     дней», и обе стороны считали, что передали программу целиком.
     """
-    in_card, total = _program_days_totals(payload)
+    in_card, total = program_days_totals(payload)
     if in_card >= total:
         return None
     return i18n.t(
@@ -148,7 +148,7 @@ def _omitted_reason(payload: dict[str, Any]) -> str:
     из одного счётчика по правилу «ровно MAX_SHARED_DAYS в визитке — значит
     лимит». Шесть рабочих дней и два пустых уезжали со всем содержимым, а
     человек читал «больше не влезает» — про потерю, которой не было."""
-    in_card, total = _program_days_totals(payload)
+    in_card, total = program_days_totals(payload)
     empty = int(payload.get("empty_days", 0))
     # v0–v2 счётчика пустых дней не несут, и восстановить его нечем — там
     # называем факт без причины, а не выдумываем её.
@@ -234,6 +234,21 @@ def _share_card_keyboard(url: str, label: str, token: str) -> InlineKeyboardMark
     )
 
 
+def build_routine_payload(name: str, exercises) -> dict[str, Any]:
+    """Снапшот одного дня/шаблона — общая часть визитки и REST `/share/programs`
+    (день без родителя-программы едет тем же payload'ом, что и «Поделиться» на
+    экране одиночной программы). Вынесено из share_routine, чтобы REST-слой не
+    заводил вторую копию правил обрезки (MAX_SHARED_EXERCISES/MAX_NAME_LEN)."""
+    return {
+        "v": PAYLOAD_VERSION,
+        "name": name[:MAX_PROGRAM_NAME_LEN],
+        "exercises": [
+            {"name": ex["display_name"][:MAX_NAME_LEN], "target": ex["target"]}
+            for ex in exercises[:MAX_SHARED_EXERCISES]
+        ],
+    }
+
+
 @router.callback_query(F.data.startswith("share:rt:"))
 async def share_routine(callback: CallbackQuery, state: FSMContext):
     """«📤 Поделиться» на экране программы: отдельное сообщение-визитка,
@@ -248,14 +263,7 @@ async def share_routine(callback: CallbackQuery, state: FSMContext):
         await callback.answer(i18n.t("share.program_empty"), show_alert=True)
         return
 
-    payload = {
-        "v": PAYLOAD_VERSION,
-        "name": routine["name"][:MAX_PROGRAM_NAME_LEN],
-        "exercises": [
-            {"name": ex["display_name"][:MAX_NAME_LEN], "target": ex["target"]}
-            for ex in exercises[:MAX_SHARED_EXERCISES]
-        ],
-    }
+    payload = build_routine_payload(routine["name"], exercises)
     token = await db.create_shared_item(callback.from_user.id, "routine", json.dumps(payload, ensure_ascii=False))
     url = _deep_link(await get_bot_username(callback.bot), token)
 
@@ -269,9 +277,11 @@ async def share_routine(callback: CallbackQuery, state: FSMContext):
     await callback.answer(i18n.t("share.card_ready"))
 
 
-async def _send_program_card(callback: CallbackQuery, program_id: int, program_name: str) -> None:
-    """Собрать снапшот программы и отдать владельцу визитку — общее тело обеих
-    ручек ниже (адресованной id программы и старой, адресованной днём).
+async def build_program_payload(program_id: int, program_name: str) -> Optional[dict[str, Any]]:
+    """Снапшот многодневки — тело визитки и общая точка для REST `/share/programs`.
+
+    None значит «делиться нечем» (ни одного непустого дня) — вызывающая сторона
+    сама решает, как об этом сказать (тост в боте, 400 в REST).
 
     Дни добираются до MAX_SHARED_DAYS *непустых*: пустой день получателю ничего
     не сообщает, но и место в лимите занимать не должен — иначе восьмидневная
@@ -297,14 +307,13 @@ async def _send_program_card(callback: CallbackQuery, program_id: int, program_n
             }
         )
     if not day_payloads:
-        await callback.answer(i18n.t("share.program_empty"), show_alert=True)
-        return
+        return None
 
     # Описание уезжает вместе с составом: получателю оно нужнее, чем автору —
     # он-то видит чужую программу впервые. Старые снапшоты (v3) его не несут,
     # поэтому на импорте читается через .get.
     program = await db.get_program(program_id)
-    payload = {
+    return {
         "v": PAYLOAD_VERSION,
         "name": program_name[:MAX_PROGRAM_NAME_LEN],
         "description": program["description"] if program else None,
@@ -316,6 +325,15 @@ async def _send_program_card(callback: CallbackQuery, program_id: int, program_n
         # угадывать по счётчику, и она угадывалась неверно (см. PAYLOAD_VERSION).
         "empty_days": len(days) - non_empty_days,
     }
+
+
+async def _send_program_card(callback: CallbackQuery, program_id: int, program_name: str) -> None:
+    """Собрать снапшот программы и отдать владельцу визитку — общее тело обеих
+    ручек ниже (адресованной id программы и старой, адресованной днём)."""
+    payload = await build_program_payload(program_id, program_name)
+    if payload is None:
+        await callback.answer(i18n.t("share.program_empty"), show_alert=True)
+        return
     token = await db.create_shared_item(callback.from_user.id, "program", json.dumps(payload, ensure_ascii=False))
     url = _deep_link(await get_bot_username(callback.bot), token)
 
@@ -334,7 +352,7 @@ async def _send_program_card(callback: CallbackQuery, program_id: int, program_n
         return
     # Тост — чтобы человек заметил потерю сразу, а не отправив визитку другу;
     # то же самое написано в самой визитке, тост её только не даёт проскочить.
-    in_card, total = _program_days_totals(payload)
+    in_card, total = program_days_totals(payload)
     await callback.answer(
         i18n.t("share.card_ready_partial", days=_days_phrase(in_card), total=total), show_alert=True
     )
@@ -375,6 +393,19 @@ async def share_program_legacy(callback: CallbackQuery, state: FSMContext):
     await _send_program_card(callback, anchor["program_id"], anchor["program_name"])
 
 
+def build_exercise_payload(ex, group) -> dict[str, Any]:
+    """Снапшот упражнения — общая часть визитки и REST `/share/exercises`."""
+    description = (ex["description"] or "")[:MAX_DESCRIPTION_LEN] or None
+    return {
+        "v": PAYLOAD_VERSION,
+        "name": ex["display_name"][:MAX_NAME_LEN],
+        "group": group["name"] if group else None,
+        "description": description,
+        # file_id живёт в рамках одного бота — у получателя фото откроется.
+        "photo_file_id": ex["custom_photo_file_id"],
+    }
+
+
 @router.callback_query(F.data.startswith("share:ex:"))
 async def share_exercise(callback: CallbackQuery, state: FSMContext):
     ex_id = int(callback.data.split(":")[2])
@@ -383,16 +414,8 @@ async def share_exercise(callback: CallbackQuery, state: FSMContext):
         await callback.answer(i18n.t("share.exercise_not_found"), show_alert=True)
         return
     group = await db.get_muscle_group(ex["primary_group_id"]) if ex["primary_group_id"] else None
-    description = (ex["description"] or "")[:MAX_DESCRIPTION_LEN] or None
-
-    payload = {
-        "v": PAYLOAD_VERSION,
-        "name": ex["display_name"][:MAX_NAME_LEN],
-        "group": group["name"] if group else None,
-        "description": description,
-        # file_id живёт в рамках одного бота — у получателя фото откроется.
-        "photo_file_id": ex["custom_photo_file_id"],
-    }
+    payload = build_exercise_payload(ex, group)
+    description = payload["description"]
     token = await db.create_shared_item(callback.from_user.id, "exercise", json.dumps(payload, ensure_ascii=False))
     url = _deep_link(await get_bot_username(callback.bot), token)
 
@@ -512,7 +535,7 @@ async def open_shared(message: Message, command: CommandObject, state: FSMContex
         # «N дней» — про то, что реально лежит в визитке, и «из M», если у
         # отправителя было больше: получатель должен видеть, что забирает часть,
         # до того как решит забрать (раньше про урезку не говорили вообще).
-        n, total = _program_days_totals(payload)
+        n, total = program_days_totals(payload)
         out_of = "" if n >= total else i18n.t("share.out_of", total=total)
         head = i18n.t("share.received_program_head", from_=from_whom, days=_days_phrase(n), out_of=out_of)
         note = _omitted_days_note(payload)
@@ -605,6 +628,77 @@ async def _resolve_exercise(user_id: int, name: str) -> int:
     return await db.create_exercise(user_id, name, await _fallback_group_id(user_id))
 
 
+def incoming_days_count(kind: str, payload: dict[str, Any]) -> int:
+    """Сколько строк в db.routine_budget займёт импорт этого снапшота — общая
+    точка для бота и REST, чтобы бюджет считался одинаково в обоих."""
+    return len(payload["days"]) if kind == "program" else 1
+
+
+async def import_program(user_id: int, payload: dict[str, Any], owner_username: Optional[str]) -> tuple[int, str]:
+    """DB-часть импорта многодневки: имя без коллизий, сама программа, дни и
+    упражнения по ним. Возвращает (program_id, итоговое_имя).
+
+    Вынесено из share_add, чтобы REST `/share/{token}/import` не заводил
+    вторую копию резолва имён/упражнений — только сообщения о результате
+    (тост, отредактированная клавиатура) остаются в хендлере."""
+    program_name = await _dedupe_program_name(user_id, payload["name"], owner_username)
+    program_id = await db.create_program(
+        user_id, program_name, source="import",
+        source_ref=f"@{owner_username}" if owner_username else None,
+        description=payload.get("description"),
+    )
+    for day in payload["days"]:
+        routine_id = await db.create_routine(user_id, day["name"], program_id=program_id)
+        order = 0
+        seen: set[int] = set()
+        for ex in day["exercises"]:
+            ex_id = await _resolve_exercise(user_id, ex["name"])
+            if ex_id in seen:
+                continue
+            seen.add(ex_id)
+            await db.add_routine_exercise(routine_id, ex_id, order, ex.get("target"))
+            order += 1
+    return program_id, program_name
+
+
+async def import_routine(user_id: int, payload: dict[str, Any]) -> int:
+    """DB-часть импорта одного дня/шаблона. Возвращает id новой программы."""
+    routine_id = await db.create_routine(user_id, payload["name"])
+    order = 0
+    seen: set[int] = set()
+    for ex in payload["exercises"]:
+        ex_id = await _resolve_exercise(user_id, ex["name"])
+        if ex_id in seen:
+            continue
+        seen.add(ex_id)
+        await db.add_routine_exercise(routine_id, ex_id, order, ex.get("target"))
+        order += 1
+    return routine_id
+
+
+async def import_exercise(user_id: int, payload: dict[str, Any]) -> tuple[int, bool]:
+    """DB-часть импорта упражнения. Возвращает (exercise_id, already_existed) —
+    при already_existed=True ex_id указывает на уже существовавшее упражнение,
+    и ничего нового не создано (как и в боте: совпадение по имени — не ошибка,
+    но и не повод завести дубликат)."""
+    # Под лимиты ручного ввода: визитки со старым общим лимитом (80 на имя,
+    # 1500 на описание) уже разосланы, и по ним приезжает то, что сам человек
+    # у себя завести бы не смог.
+    name = payload["name"].strip()[: config.MAX_EXERCISE_NAME_LENGTH].rstrip()
+    existing = await db.find_exercise_by_name(user_id, name)
+    if existing:
+        return existing["id"], True
+    group_id = await _resolve_group_id(user_id, payload.get("group"))
+    ex_id = await db.create_exercise(user_id, name, group_id)
+    if payload.get("description"):
+        await db.set_exercise_description(
+            ex_id, payload["description"][: config.MAX_EXERCISE_DESCRIPTION_LENGTH]
+        )
+    if payload.get("photo_file_id"):
+        await db.set_exercise_photo(ex_id, payload["photo_file_id"])
+    return ex_id, False
+
+
 @router.callback_query(F.data.startswith("share:add:"))
 async def share_add(callback: CallbackQuery, state: FSMContext):
     token = callback.data.split(":", 2)[2]
@@ -627,7 +721,7 @@ async def share_add(callback: CallbackQuery, state: FSMContext):
     # единственная, где количество дней задаёт кто-то другой. Лимит проверяем
     # тем же общим бюджетом, что и остальные три (см. db.routine_budget):
     # раньше присланной программой на 40 дней его можно было просто перешагнуть.
-    incoming = len(payload["days"]) if row["kind"] == "program" else 1
+    incoming = incoming_days_count(row["kind"], payload)
     over_budget = await db.routine_budget(user_id, incoming)
     if over_budget:
         await callback.answer(over_budget, show_alert=True)
@@ -636,23 +730,7 @@ async def share_add(callback: CallbackQuery, state: FSMContext):
     if row["kind"] == "program":
         owner = await db.get_user(row["owner_id"])
         owner_name = owner["username"] if owner else None
-        program_name = await _dedupe_program_name(user_id, payload["name"], owner_name)
-        program_id = await db.create_program(
-            user_id, program_name, source="import",
-            source_ref=f"@{owner_name}" if owner_name else None,
-            description=payload.get("description"),
-        )
-        for day in payload["days"]:
-            routine_id = await db.create_routine(user_id, day["name"], program_id=program_id)
-            order = 0
-            seen: set[int] = set()
-            for ex in day["exercises"]:
-                ex_id = await _resolve_exercise(user_id, ex["name"])
-                if ex_id in seen:
-                    continue
-                seen.add(ex_id)
-                await db.add_routine_exercise(routine_id, ex_id, order, ex.get("target"))
-                order += 1
+        program_id, program_name = await import_program(user_id, payload, owner_name)
         # Кнопку убираем: второй тап по «Добавить» иначе плодит дубликаты.
         await callback.message.edit_reply_markup(reply_markup=None)
         await callback.message.answer(
@@ -667,16 +745,7 @@ async def share_add(callback: CallbackQuery, state: FSMContext):
         return
 
     if row["kind"] == "routine":
-        routine_id = await db.create_routine(user_id, payload["name"])
-        order = 0
-        seen: set[int] = set()
-        for ex in payload["exercises"]:
-            ex_id = await _resolve_exercise(user_id, ex["name"])
-            if ex_id in seen:
-                continue
-            seen.add(ex_id)
-            await db.add_routine_exercise(routine_id, ex_id, order, ex.get("target"))
-            order += 1
+        await import_routine(user_id, payload)
         # Кнопку убираем: второй тап по «Добавить» иначе плодит дубликаты.
         await callback.message.edit_reply_markup(reply_markup=None)
         await callback.message.answer(
@@ -691,23 +760,12 @@ async def share_add(callback: CallbackQuery, state: FSMContext):
         return
 
     # kind == "exercise"
-    # Под лимиты ручного ввода: визитки со старым общим лимитом (80 на имя,
-    # 1500 на описание) уже разосланы, и по ним приезжает то, что сам человек
-    # у себя завести бы не смог.
     name = payload["name"].strip()[: config.MAX_EXERCISE_NAME_LENGTH].rstrip()
-    existing = await db.find_exercise_by_name(user_id, name)
-    if existing:
+    ex_id, already_existed = await import_exercise(user_id, payload)
+    if already_existed:
         await callback.message.edit_reply_markup(reply_markup=None)
         await callback.answer(i18n.t("share.exercise_exists", name=name), show_alert=True)
         return
-    group_id = await _resolve_group_id(user_id, payload.get("group"))
-    ex_id = await db.create_exercise(user_id, name, group_id)
-    if payload.get("description"):
-        await db.set_exercise_description(
-            ex_id, payload["description"][: config.MAX_EXERCISE_DESCRIPTION_LENGTH]
-        )
-    if payload.get("photo_file_id"):
-        await db.set_exercise_photo(ex_id, payload["photo_file_id"])
     await callback.message.edit_reply_markup(reply_markup=None)
     await callback.message.answer(i18n.t("share.exercise_added", name=escape(name)), parse_mode="HTML")
     await db.mark_shared_item_taken(token)

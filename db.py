@@ -302,6 +302,32 @@ CREATE TABLE IF NOT EXISTS ai_chat_messages (
 );
 CREATE INDEX IF NOT EXISTS idx_ai_chat_messages_user ON ai_chat_messages (telegram_id, id);
 
+-- Персистентный аналог ai_history из aiogram FSM (handlers/ai_trainer.py) —
+-- для /v1, у которого никакого FSM нет. Одна строка = один ход (вопрос →
+-- финальный ответ), а не одно сообщение: wire-формат хода (см.
+-- ai_trainer.ask's on_wire) — это не пара «вопрос-ответ», а целый список
+-- сообщений модели вместе с её tool-calls и их результатами за этот ход, и
+-- резать его на отдельные строки-сообщения означало бы либо дробить один
+-- INSERT на десяток, либо хранить в одной строке кусок чужого хода — оба
+-- варианта усложняют и трим, и чтение. wire_json хранит СНИМОК ходов целиком
+-- (то, что on_wire отдал после этого хода — то есть весь префикс, что реально
+-- уехал модели, уже обрезанный ai_trainer'ом по символам, см.
+-- config.AI_WIRE_HISTORY_MAX_CHARS), а не дельту: чтобы отдать модели историю
+-- для следующего вопроса, достаточно взять wire_json у последней строки
+-- пользователя — им не нужно склеивать несколько строк. question/answer —
+-- отдельно, обычным текстом: это то, что отдаёт GET /ai/history экрану чата,
+-- и незачем заставлять клиента разбирать wire-формат с tool-calls ради двух
+-- реплик, которые он и так должен показать.
+CREATE TABLE IF NOT EXISTS ai_conversation_turns (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    telegram_id INTEGER NOT NULL,
+    question TEXT NOT NULL,
+    answer TEXT NOT NULL,
+    wire_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ai_conversation_turns_user ON ai_conversation_turns (telegram_id, id);
+
 CREATE TABLE IF NOT EXISTS bodyweight_logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     telegram_id INTEGER NOT NULL,
@@ -6979,6 +7005,95 @@ async def get_ai_chat_history(telegram_id: int, limit: int = MAX_AI_CHAT_HISTORY
     )
     rows = await cur.fetchall()
     return list(reversed(rows))
+
+
+# ---------- AI trainer: persistent /v1 conversation (see api_v1_ai.py) ----------
+#
+# Тот же смысл, что у ai_history в FSM бота, но переживает рестарт процесса и
+# не привязан к одному конкретному чату Telegram — ради него и заведён (см.
+# ai_conversation_turns в SCHEMA выше). НЕ путать с ai_chat_messages чуть выше:
+# та таблица — вечный лог для инструмента модели get_full_chat_history
+# (текст-в-текст, без tool-calls, никогда не режется), а эта — рабочее окно
+# контекста, которое ПОДАЁТСЯ модели на вход следующего вопроса и поэтому
+# обязано быть маленьким и в wire-формате.
+
+# Сколько последних ходов держим на пользователя. Бесконечный диалог — это
+# бесконечно растущий промпт: даже с обрезкой по символам внутри ai_trainer
+# (config.AI_WIRE_HISTORY_MAX_CHARS) каждый лишний старый ход в БД — это лишняя
+# строка, которую придётся один раз перечитать и тут же выбросить. 20 ходов —
+# с запасом больше, чем помещается в один экран чата на телефоне, и не такая
+# зона, где всерьёз потребуется история на сотни сообщений назад (для этого
+# есть get_full_chat_history — поиск по вечному логу, а не окно контекста).
+MAX_AI_CONVERSATION_TURNS = 20
+
+
+async def get_ai_conversation_wire_history(telegram_id: int) -> list[dict[str, Any]]:
+    """wire-формат для ai_trainer.ask(..., history=...): всё, что реально
+    уехало модели на последнем ходу этого пользователя (уже обрезано по
+    символам внутри ai_trainer — см. wire_json в SCHEMA). Пусто у нового
+    разговора или после clear_ai_conversation_history."""
+    cur = await conn().execute(
+        "SELECT wire_json FROM ai_conversation_turns WHERE telegram_id = ? "
+        "ORDER BY id DESC LIMIT 1",
+        (telegram_id,),
+    )
+    row = await cur.fetchone()
+    if row is None:
+        return []
+    try:
+        return json.loads(row["wire_json"])
+    except (TypeError, ValueError):
+        # Битая строка (не должна случаться, но лучше пустая история, чем
+        # 500 на каждом следующем вопросе).
+        logger.exception("corrupt ai_conversation_turns.wire_json for user %s", telegram_id)
+        return []
+
+
+async def get_ai_conversation_history(
+    telegram_id: int, limit: int = MAX_AI_CONVERSATION_TURNS
+) -> list[aiosqlite.Row]:
+    """Последние ходы для экрана чата (GET /ai/history) — только то, что
+    нужно отрисовать: вопрос, ответ, когда. Без wire_json — тащить в HTTP
+    tool-calls клиенту нечего показывать, и это лишний трафик."""
+    cur = await conn().execute(
+        "SELECT question, answer, created_at FROM ai_conversation_turns "
+        "WHERE telegram_id = ? ORDER BY id DESC LIMIT ?",
+        (telegram_id, limit),
+    )
+    rows = await cur.fetchall()
+    return list(reversed(rows))
+
+
+async def add_ai_conversation_turn(
+    telegram_id: int, question: str, answer: str, wire_messages: list[dict[str, Any]]
+) -> None:
+    """Записать ход и тут же подрезать историю пользователя до
+    MAX_AI_CONVERSATION_TURNS — подрезаем ПРИ ЗАПИСИ, а не при чтении, чтобы
+    таблица не росла между вопросами одного и того же человека бесконечно."""
+    async with _write_lock:
+        await conn().execute(
+            "INSERT INTO ai_conversation_turns (telegram_id, question, answer, wire_json, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (telegram_id, question, answer, json.dumps(wire_messages, ensure_ascii=False), now_iso()),
+        )
+        await conn().execute(
+            "DELETE FROM ai_conversation_turns WHERE telegram_id = ? AND id NOT IN ("
+            "SELECT id FROM ai_conversation_turns WHERE telegram_id = ? "
+            "ORDER BY id DESC LIMIT ?)",
+            (telegram_id, telegram_id, MAX_AI_CONVERSATION_TURNS),
+        )
+        await conn().commit()
+
+
+async def clear_ai_conversation_history(telegram_id: int) -> None:
+    """«Начать разговор заново» — DELETE /ai/history. Без этого испорченный
+    контекст (модель зацепилась не за то) нечем починить, кроме как ждать,
+    пока он сам не вытеснится новыми ходами."""
+    async with _write_lock:
+        await conn().execute(
+            "DELETE FROM ai_conversation_turns WHERE telegram_id = ?", (telegram_id,)
+        )
+        await conn().commit()
 
 
 # ---------- bodyweight log ----------

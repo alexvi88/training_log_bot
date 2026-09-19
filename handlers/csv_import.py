@@ -588,15 +588,8 @@ async def _finish_mapping(event, state: FSMContext) -> None:
 
     await state.update_data(imp_workouts=workouts, imp_resolved={})
     all_names = [entry["name"] for w in workouts for entry in w["entries"]]
-    resolved: dict[str, int] = {}
-    unresolved: list[str] = []
     user_id = event.from_user.id
-    for name in dict.fromkeys(all_names):
-        ex = await db.find_exercise_by_name(user_id, name)
-        if ex:
-            resolved[name] = ex["id"]
-        else:
-            unresolved.append(name)
+    resolved, unresolved = await resolve_exercise_names_exact(user_id, all_names)
 
     # Импорт часто приносит чужие названия (Hevy пишет по-английски: "Bench
     # Press (Barbell)"), которые не совпадут с русским каталогом ни разу — но
@@ -615,16 +608,8 @@ async def _finish_mapping(event, state: FSMContext) -> None:
             await event.message.answer(progress_text)
         else:
             await event.answer(progress_text)
-        aliases = await ai_trainer.match_exercise_names_to_catalog(user_id, unresolved)
-        for name, catalog_name in aliases.items():
-            ex_id = await db.create_exercise_matching_catalog_name(user_id, name, catalog_name)
-            if ex_id is not None:
-                resolved[name] = ex_id
-        # Не "not in aliases": catalog_name может не найтись ни одним шаблоном
-        # (create_exercise_matching_catalog_name вернёт None) — тогда имя есть
-        # в aliases, но resolved для него не заполнен, и не отфильтрованное
-        # отсюда имя тихо пропадает — не резолвится, не уходит на ручное
-        # разрешение, а потом валит import_save с KeyError на resolved[name].
+        ai_resolved = await resolve_exercise_names_via_ai(user_id, unresolved)
+        resolved.update(ai_resolved)
         unresolved = [n for n in unresolved if n not in resolved]
 
     await state.update_data(imp_resolved=resolved)
@@ -634,6 +619,47 @@ async def _finish_mapping(event, state: FSMContext) -> None:
         await start_resolve(event, state, unresolved)
     else:
         await show_confirmation(event, state)
+
+
+async def resolve_exercise_names_exact(
+    user_id: int, names: list[str]
+) -> tuple[dict[str, int], list[str]]:
+    """Точное совпадение имени упражнения с каталогом пользователя (id →
+    существующее упражнение), без сети и без записи в базу — вынесено из
+    _finish_mapping, чтобы REST-превью (api_v1_import.py) могло показать
+    «есть у меня / будет создано», не запуская модель и не создавая
+    упражнения, как это делает следующий шаг, resolve_exercise_names_via_ai.
+    """
+    resolved: dict[str, int] = {}
+    unresolved: list[str] = []
+    for name in dict.fromkeys(names):
+        ex = await db.find_exercise_by_name(user_id, name)
+        if ex:
+            resolved[name] = ex["id"]
+        else:
+            unresolved.append(name)
+    return resolved, unresolved
+
+
+async def resolve_exercise_names_via_ai(user_id: int, unresolved: list[str]) -> dict[str, int]:
+    """Неразрешённые модель сопоставляет с шаблонами каталога, а совпавшее
+    заводится под ИСХОДНЫМ именем из файла (фото и техника подтягиваются от
+    шаблона) — см. комментарий у вызова в _finish_mapping. В отличие от
+    resolve_exercise_names_exact эта функция пишет в базу (создаёт
+    упражнения), поэтому REST-превью её не зовёт, а только настоящий импорт.
+    """
+    aliases = await ai_trainer.match_exercise_names_to_catalog(user_id, unresolved)
+    resolved: dict[str, int] = {}
+    for name, catalog_name in aliases.items():
+        ex_id = await db.create_exercise_matching_catalog_name(user_id, name, catalog_name)
+        if ex_id is not None:
+            resolved[name] = ex_id
+    # Не "not in aliases": catalog_name может не найтись ни одним шаблоном
+    # (create_exercise_matching_catalog_name вернёт None) — тогда имя есть
+    # в aliases, но resolved для него не заполнен, и не отфильтрованное
+    # отсюда имя тихо пропадает — не резолвится, не уходит на ручное
+    # разрешение, а потом валит import_save с KeyError на resolved[name].
+    return resolved
 
 
 async def on_exercises_resolved(event, state: FSMContext) -> None:
@@ -674,6 +700,57 @@ async def _duplicate_dates(
         if any(resolved.get(entry["name"]) in existing for entry in w["entries"]):
             dup.add(w["date"])
     return dup
+
+
+async def apply_import(
+    user_id: int, workouts: list[dict], resolved: dict[str, int]
+) -> tuple[int, int]:
+    """Записать разобранные тренировки в базу — тело цикла из
+    _do_import_save, вынесенное сюда, чтобы REST (api_v1_import.py) не
+    заводило вторую копию того же кода записи.
+
+    Каждая тренировка — своя попытка (см. комментарий у прежнего места
+    вызова): подходы коммитятся по одному, и исключение посреди одной
+    тренировки не портит уже записанные соседние и не оставляет эту
+    наполовину записанной. achievement_sync запускается тем же поводом, что
+    и у истории/правки прошлого. AI-обзор истории (_attach_import_overview)
+    сюда нарочно не входит — это отдельное фоновое сообщение в чат бота, и
+    решать, слать ли его, должен вызывающий код (у REST для него нет чата).
+
+    Возвращает (сколько тренировок записано, сколько сорвалось).
+    """
+    # Дата тренировки в файле — календарная, местная для пользователя, а
+    # started_at хранится в UTC и местный день восстанавливается прибавлением
+    # tz_offset (db._local_day). «Безопасный полдень» без поправки на офсет
+    # ловит верхнюю границу пикера часовых поясов (UTC+12,
+    # keyboards.py:1183): 12:00 + 12 часов перекатывается на полночь
+    # следующих суток. Сдвигаем полдень назад на величину офсета — тогда
+    # 12:00 + tz_offset - tz_offset снова даёт исходную дату при любом
+    # значении из диапазона пикера (-1…+12).
+    tz_offset = await db.user_tz_offset(user_id)
+    imported = 0
+    failed = 0
+    for w in workouts:
+        local_noon = dt.datetime.fromisoformat(f"{w['date']}T12:00:00")
+        started_at = (local_noon - dt.timedelta(hours=tz_offset)).isoformat()
+        workout_id = await db.create_finished_workout(user_id, started_at, started_at, source="import")
+        try:
+            for entry in w["entries"]:
+                ex_id = resolved[entry["name"]]
+                block_id = await db.create_block(workout_id, "single")
+                await db.add_block_exercise(block_id, ex_id, 0)
+                await db.touch_exercise_last_used(ex_id)
+                for idx, (weight, reps, rpe) in enumerate(entry["sets"], start=1):
+                    await db.add_set(block_id, ex_id, idx, 0, weight, reps, rpe)
+        except Exception:
+            await db.discard_workout(workout_id)
+            failed += 1
+            continue
+        imported += 1
+
+    if imported:
+        await achievement_sync.resync(user_id)
+    return imported, failed
 
 
 IMPORT_PAGE_SIZE = 8
@@ -776,47 +853,12 @@ async def _do_import_save(callback: CallbackQuery, state: FSMContext) -> None:
     # не показывала, что вообще что-то происходит.
     await ui.safe_edit(callback, i18n.t("import.uploading"), reply_markup=None)
 
-    # Дата тренировки в файле — календарная, местная для пользователя, а
-    # started_at хранится в UTC и местный день восстанавливается прибавлением
-    # tz_offset (db._local_day). «Безопасный полдень» без поправки на офсет
-    # ловит верхнюю границу пикера часовых поясов (UTC+12,
-    # keyboards.py:1183): 12:00 + 12 часов перекатывается на полночь
-    # следующих суток. Сдвигаем полдень назад на величину офсета — тогда
-    # 12:00 + tz_offset - tz_offset снова даёт исходную дату при любом
-    # значении из диапазона пикера (-1…+12).
-    tz_offset = await db.user_tz_offset(user_id)
-    imported = 0
-    failed = 0
-    for w in to_import:
-        # Каждая тренировка своей попыткой: подходы коммитятся по одному
-        # (db._write_lock — на отдельный statement, не на всю пачку), так что
-        # исключение посреди записи одной тренировки не должно портить уже
-        # успешно записанные соседние и не должно оставлять эту наполовину
-        # записанной — следующий "Загрузить" молча принял бы такую дату за уже
-        # импортированную (см. _duplicate_dates) и не долил бы остаток.
-        local_noon = dt.datetime.fromisoformat(f"{w['date']}T12:00:00")
-        started_at = (local_noon - dt.timedelta(hours=tz_offset)).isoformat()
-        workout_id = await db.create_finished_workout(user_id, started_at, started_at, source="import")
-        try:
-            for entry in w["entries"]:
-                ex_id = resolved[entry["name"]]
-                block_id = await db.create_block(workout_id, "single")
-                await db.add_block_exercise(block_id, ex_id, 0)
-                await db.touch_exercise_last_used(ex_id)
-                for idx, (weight, reps, rpe) in enumerate(entry["sets"], start=1):
-                    await db.add_set(block_id, ex_id, idx, 0, weight, reps, rpe)
-        except Exception:
-            await db.discard_workout(workout_id)
-            failed += 1
-            continue
-        imported += 1
+    # Сама запись (тренировка за тренировкой, подход за подходом, плюс
+    # пересчёт ачивок) вынесена в apply_import — тот же код, что теперь зовёт
+    # REST-импорт (api_v1_import.py), не вторая его копия.
+    imported, failed = await apply_import(user_id, to_import, resolved)
 
-    # A year of imported history can complete streaks, weight clubs and tonnage
-    # badges all at once. Without this the grid stays empty until the next live
-    # workout happens to trigger an evaluation — the same resync the history and
-    # edit screens already run after changing the past.
     if imported:
-        await achievement_sync.resync(user_id)
         # Момент, когда перебежчик из другого приложения решает, оставаться
         # ли, — и сейчас после импорта тишина. Фоном, чтобы не держать
         # человека перед «⏳ Загружаю тренировки»: экран уходит в настройки
