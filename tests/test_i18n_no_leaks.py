@@ -537,7 +537,7 @@ async def _screen_catalog_program_card(db, user_id: int) -> str:
     по-русски на английском аккаунте — единственная кириллица на экране, где
     всё остальное перевелось.
     """
-    program_id = await routines._instantiate_catalog_program(
+    program_id = await seed_data.instantiate_program(
         user_id, "ppl", seed_data.localized_program_name("ppl", i18n.get_lang())
     )
     callback = _make_fake_callback(user_id, f"rt:prg:{program_id}")

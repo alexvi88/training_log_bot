@@ -22,6 +22,7 @@ from starlette.routing import Route
 import ai_limits
 import ai_trainer
 import api_v1_common as common
+import config
 import db
 import timeutil
 
@@ -215,11 +216,37 @@ async def parse_food(request: Request) -> JSONResponse:
     return JSONResponse(estimate)
 
 
+async def set_goal(request: Request) -> JSONResponse:
+    """«🎯 Цель ккал» (handlers/food_diary.py fd_goal_entered) — тот же
+    db.set_kcal_goal и те же границы (config.KCAL_GOAL_MIN/MAX), иначе
+    в приложении можно было бы поставить цель, которую бот считает опечаткой.
+
+    `goal: null` снимает цель — как и пустая история кнопки в боте нет, но
+    GET /food её уже отдаёт как kcal_goal: null, симметрично."""
+    user_id = await common.authed_user_id(request)
+    body = await common.json_body(request)
+    if "goal" not in body:
+        raise ApiError(400, "bad_request", "missing field: goal")
+    goal = body["goal"]
+    if goal is not None:
+        if not isinstance(goal, int) or isinstance(goal, bool):
+            raise ApiError(400, "bad_request", "goal must be an int or null")
+        if not (config.KCAL_GOAL_MIN <= goal <= config.KCAL_GOAL_MAX):
+            raise ApiError(
+                400,
+                "out_of_range",
+                f"goal must be between {config.KCAL_GOAL_MIN} and {config.KCAL_GOAL_MAX}",
+            )
+    await db.set_kcal_goal(user_id, goal)
+    return JSONResponse({"kcal_goal": goal})
+
+
 routes = [
     Route("/food", get_day, methods=["GET"]),
     Route("/food", add_entry, methods=["POST"]),
     Route("/food/days", list_days, methods=["GET"]),
     Route("/food/parse", parse_food, methods=["POST"]),
+    Route("/food/goal", set_goal, methods=["POST"]),
     Route("/food/{entry_id:int}", get_entry, methods=["GET"]),
     Route("/food/{entry_id:int}", delete_entry, methods=["DELETE"]),
 ]

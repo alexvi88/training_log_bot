@@ -33,6 +33,7 @@ from aiogram.types import CallbackQuery, Message, ReactionTypeEmoji
 
 import ai_limits
 import ai_trainer
+import config
 import db
 import formatting
 import i18n
@@ -205,10 +206,10 @@ async def fd_noop(callback: CallbackQuery):
     await callback.answer()
 
 
-# Разумные границы дневной цели — просто чтобы не записать в базу опечатку
-# («22000» вместо «2200»), а не диетологический лимит.
-KCAL_GOAL_MIN = 500
-KCAL_GOAL_MAX = 10000
+# Границы вынесены в config.py — их же использует POST /food/goal в REST API,
+# чтобы предел не разъехался между ботом и приложением.
+KCAL_GOAL_MIN = config.KCAL_GOAL_MIN
+KCAL_GOAL_MAX = config.KCAL_GOAL_MAX
 
 
 @router.callback_query(F.data == "fd:goal")

@@ -224,6 +224,62 @@ async def test_parse_returns_model_estimate_without_saving(fresh_db, client_fact
     assert day.json()["entries"] == []
 
 
+# ---------- цель по калориям ----------
+
+@pytest.mark.asyncio
+async def test_set_kcal_goal_saved_and_visible_on_day(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+
+    resp = await client.post("/food/goal", json={"goal": 2200})
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"kcal_goal": 2200}
+
+    # GET /food уже читал цель — теперь есть чем её туда положить.
+    day = await client.get("/food")
+    assert day.json()["kcal_goal"] == 2200
+
+
+@pytest.mark.asyncio
+async def test_set_kcal_goal_can_be_cleared(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    await client.post("/food/goal", json={"goal": 2200})
+
+    resp = await client.post("/food/goal", json={"goal": None})
+    assert resp.status_code == 200
+    assert resp.json() == {"kcal_goal": None}
+    assert (await client.get("/food")).json()["kcal_goal"] is None
+
+
+@pytest.mark.asyncio
+async def test_set_kcal_goal_rejects_out_of_range(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+
+    too_low = await client.post("/food/goal", json={"goal": config.KCAL_GOAL_MIN - 1})
+    assert too_low.status_code == 400
+    assert too_low.json()["error"] == "out_of_range"
+
+    too_high = await client.post("/food/goal", json={"goal": config.KCAL_GOAL_MAX + 1})
+    assert too_high.status_code == 400
+    assert too_high.json()["error"] == "out_of_range"
+
+    # Цель не должна была поменяться ни одной из отклонённых попыток.
+    assert (await client.get("/food")).json()["kcal_goal"] is None
+
+
+@pytest.mark.asyncio
+async def test_set_kcal_goal_rejects_non_int(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    resp = await client.post("/food/goal", json={"goal": "2200"})
+    assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_set_kcal_goal_requires_auth(client_factory):
+    client = client_factory()
+    resp = await client.post("/food/goal", json={"goal": 2200})
+    assert resp.status_code == 401
+
+
 @pytest.mark.asyncio
 async def test_parse_respects_daily_limit(fresh_db, client_factory, monkeypatch):
     monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
