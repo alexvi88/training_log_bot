@@ -35,6 +35,7 @@ import state_scaffold
 import timeutil
 import ui
 import view_builder
+import workout_card
 from fsm import HistoryFlow, ProgressFlow
 from handlers import sharing
 
@@ -397,14 +398,10 @@ async def hist_card(callback: CallbackQuery, state: FSMContext):
         await ui.alert_workout_not_found(callback)
         return
     user = await db.get_user(callback.from_user.id)
-    blocks = await view_builder.build_block_views(
-        workout_id, user["e1rm_formula"], mark_records=True
-    )
-    started = dt.datetime.fromisoformat(workout["started_at"])
-    title, body, footer, note = formatting.build_workout_card(
-        started, blocks, workout["note"], unit=user["unit"]
-    )
-    png = await asyncio.to_thread(charts.render_workout_card, title, body, footer, note)
+    card = await workout_card.build(workout_id, user)
+    if card is None:
+        await ui.alert_workout_not_found(callback)
+        return
     kb = InlineKeyboardBuilder()
     # URL-кнопка стоит первой и переживает пересылку — в отличие от callback'ов
     # (тот же приём, что у визиток, см. handlers/sharing.py). Картинку уносят в
@@ -419,8 +416,8 @@ async def hist_card(callback: CallbackQuery, state: FSMContext):
     kb.button(text=i18n.t("history.back_to_workout_button"), callback_data=f"hist:item:{workout_id}")
     kb.adjust(1)
     await callback.message.answer_photo(
-        BufferedInputFile(png, filename="workout.png"),
-        caption=f"{title} · {footer}",
+        BufferedInputFile(card.png, filename="workout.png"),
+        caption=f"{card.title} · {card.footer}",
         reply_markup=kb.as_markup(),
     )
     await callback.answer()
