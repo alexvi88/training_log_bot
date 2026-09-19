@@ -37,6 +37,7 @@ import exercise_media
 import formatting
 import i18n
 import keyboards
+import progression_data
 import timeutil
 import ui
 import view_builder
@@ -597,17 +598,21 @@ def _logging_hint(
         if target_line:
             lines.append(target_line)
         if show_progression:
-            wr_only = [(w, r) for w, r, _ in last_session]
-            suggestion = analytics.suggest_progression(
-                wr_only, unit=unit, inferred_step=inferred_step, formula=formula,
-                rule=progression_rule, planned_reps=formatting.planned_rep_range(target),
+            # Расчёт живёт в progression_data — там же, откуда его берёт
+            # приложение. Здесь остаётся только положить готовую строку в
+            # общий список: два мнения о весе на штанге у одного человека
+            # быть не должно.
+            nudge = progression_data.hint(
+                last_session,
+                today_sets or [],
+                unit=unit,
+                formula=formula,
+                inferred_step=inferred_step,
+                rule=progression_rule,
+                target=target,
             )
-            if suggestion is not None:
-                achieved = any(
-                    w >= suggestion.target_weight and r >= suggestion.target_reps
-                    for w, r in (today_sets or [])
-                )
-                lines.append(formatting.format_progression_hint(suggestion, achieved))
+            if nudge is not None:
+                lines.append(nudge["text"])
         info = "\n".join(lines)
         body = f"{lead}<i>{info}</i>\n\n{base}" if base else f"{lead}<i>{info}</i>"
     elif target_line:
