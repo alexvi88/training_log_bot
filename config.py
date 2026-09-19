@@ -120,6 +120,12 @@ MAX_ROUTINES_PER_USER = 30
 # можно переименовать обратно.
 MAX_PROGRAM_NAME_LENGTH = 48
 
+# Разумные границы дневной цели по калориям («🎯 Цель ккал» и REST
+# POST /food/goal) — просто чтобы не записать в базу опечатку («22000» вместо
+# «2200»), а не диетологический лимит. Общие для бота и API, чтобы не разъехались.
+KCAL_GOAL_MIN = 500
+KCAL_GOAL_MAX = 10000
+
 # Engagement pushes (streaks, skip reminders, plateau nudges, weekly digest — see
 # PUSH_IDEAS.md). On by default; set ENGAGEMENT_ENABLED=false in the environment
 # to silence the daily job entirely without touching per-user opt-outs.

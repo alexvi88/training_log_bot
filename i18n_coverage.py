@@ -175,6 +175,11 @@ LOCALIZED: list[str] = [
     # только числа и машинные коды — они в NEVER_LOCALIZED.
     "api_v1_achievements.py",
     "api_v1_dashboard.py",
+    # Зал славы: тот же приём, что у api_v1_achievements/api_v1_dashboard —
+    # текст (шутка-эквивалент тоннажа, «ещё N тренировок до звания») собран
+    # уже готовым внутри use_lang(users.lang), собственных строк модуль не
+    # держит, всё через formatting.*/i18n.t.
+    "api_v1_hall_of_fame.py",
     # Экран прогресса упражнения: подпись метрики и строка дельты («e1RM: ↑12.5кг
     # с первой тренировки») собираются через i18n.t внутри use_lang(users.lang).
     "api_v1_progress.py",
@@ -194,6 +199,16 @@ LOCALIZED: list[str] = [
     # Сбор сводки для обоих потребителей — бота и /dashboard. Своих литералов
     # не держит: весь текст собирают formatting.menu_* по текущему языку.
     "dashboard_data.py",
+    # Сбор зала славы для обоих потребителей — бота (handlers/history.py) и
+    # /v1 (api_v1_hall_of_fame.py). Своих литералов не держит: текст собирают
+    # formatting.build_hall_of_fame/format_tonnage_equivalent по текущему языку.
+    "hall_of_fame_data.py",
+    # Поиск по истории упражнения для обоих потребителей — бота
+    # (handlers/history.py.hist_search) и /v1 (api_v1.search_workouts). Своих
+    # литералов не держит: это db-запрос плюс постраничная арифметика, текст
+    # собирает тот, кто показывает (i18n.t в handlers/history.py, голые числа
+    # в JSON).
+    "history_search_data.py",
     "keyboards.py",
     "handlers/workout.py",
     "handlers/edit_workout.py",

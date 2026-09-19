@@ -2991,7 +2991,20 @@ async def get_backfill_workout(user_id: int) -> Optional[aiosqlite.Row]:
     return await cur.fetchone()
 
 
-async def get_or_create_active_workout(user_id: int) -> tuple[int, bool]:
+async def _program_id_for_routine(routine_id: Optional[int]) -> Optional[int]:
+    """Программа дня на момент старта тренировки — общий кусок для
+    create_workout и get_or_create_active_workout, чтобы привязка к дню
+    программы не расходилась в двух местах (находка 22 про program_id
+    объяснена в create_workout)."""
+    if routine_id is None:
+        return None
+    routine = await get_routine(routine_id)
+    return routine["program_id"] if routine else None
+
+
+async def get_or_create_active_workout(
+    user_id: int, routine_id: Optional[int] = None
+) -> tuple[int, bool]:
     """The user's active workout, starting one if there isn't one. Returns
     (workout_id, created).
 
@@ -3000,6 +3013,11 @@ async def get_or_create_active_workout(user_id: int) -> tuple[int, bool]:
     no active workout and create one each. The loser became a permanent ghost —
     an empty active workout that "Продолжить" might open instead of the real
     one, and that resurfaces later as a stale-workout warning.
+
+    `routine_id` — то же, что в create_workout: привязка к дню программы,
+    от которой зависит next_program_day. Учитывается только когда тренировку
+    правда заводят — у уже существующей активной тренировки её не меняют,
+    ровно как бот не подменяет routine_id на лету.
     """
     async with _write_lock:
         db = conn()
@@ -3010,9 +3028,11 @@ async def get_or_create_active_workout(user_id: int) -> tuple[int, bool]:
         row = await cur.fetchone()
         if row is not None:
             return row["id"], False
+        program_id = await _program_id_for_routine(routine_id)
         cur = await db.execute(
-            "INSERT INTO workouts (user_id, started_at, status) VALUES (?, ?, 'active')",
-            (user_id, now_iso()),
+            "INSERT INTO workouts (user_id, started_at, status, routine_id, program_id) "
+            "VALUES (?, ?, 'active', ?, ?)",
+            (user_id, now_iso(), routine_id, program_id),
         )
         await db.commit()
         return cur.lastrowid, True
@@ -3032,10 +3052,7 @@ async def create_workout(
     строку routines), routine_id повиснет без пары, а program_id останется и
     даст программе честно посчитать «N тренировок по ней» даже по дням,
     которых больше нет (находка 22)."""
-    program_id = None
-    if routine_id is not None:
-        routine = await get_routine(routine_id)
-        program_id = routine["program_id"] if routine else None
+    program_id = await _program_id_for_routine(routine_id)
     async with _write_lock:
         cur = await conn().execute(
             "INSERT INTO workouts (user_id, started_at, status, routine_id, program_id) "
