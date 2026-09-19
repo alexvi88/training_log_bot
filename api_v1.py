@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import logging
 from typing import Any, Optional
 
@@ -27,6 +28,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
+import achievement_sync
 import api_v1_account
 import api_v1_achievements
 import api_v1_ai
@@ -42,6 +44,7 @@ import db
 import i18n
 import mcp_oauth
 import parser
+import timeutil
 
 logger = logging.getLogger(__name__)
 
@@ -368,6 +371,16 @@ async def _block_for_exercise(workout_id: int, exercise_id: int) -> int:
     return block_id
 
 
+def _require_open(workout) -> None:
+    """Писать подходы можно в незаконченную тренировку — и в живую, и в
+    заносимую задним числом. Статусов ровно три (`active`, `backfill`,
+    `finished`), поэтому проверяется именно `finished`, а не равенство
+    `active`: иначе занесение задним числом отвергалось бы как «уже
+    закончена», хотя закончена она не была."""
+    if workout["status"] == "finished":
+        raise ApiError(409, "workout_finished", "workout is already finished")
+
+
 async def active_workout(request: Request) -> JSONResponse:
     user_id = await _authed_user_id(request)
     workout = await db.get_active_workout(user_id)
@@ -395,12 +408,81 @@ async def discard_active_workout(request: Request) -> JSONResponse:
     return JSONResponse({"discarded": True})
 
 
+BACKFILL_HOUR = "T12:00:00"
+"""Полдень — то же время, что ставит бот (handlers.backfill._date_chosen).
+
+Не полночь: тренировка, записанная на 00:00, у пользователя с отрицательным
+офсетом попадает по местному времени во вчера, и день в истории разъезжается
+с тем, который человек выбрал в календаре. Полдень таких сдвигов не даёт ни
+при одном обитаемом офсете (UTC-11 … UTC+14)."""
+
+
+def _parse_date(raw: Any) -> dt.date:
+    if not isinstance(raw, str):
+        raise ApiError(400, "bad_request", "date must be a string YYYY-MM-DD")
+    try:
+        return dt.date.fromisoformat(raw)
+    except ValueError as exc:
+        raise ApiError(400, "bad_request", "date must be YYYY-MM-DD") from exc
+
+
+async def backfill_workout(request: Request) -> JSONResponse:
+    """Открытая тренировка, заносимая задним числом, или `null`.
+
+    Отдельно от `/workouts/active`: у них разные статусы и разный смысл на
+    экране. Живая тренировка идёт прямо сейчас и показывает таймер, занесение
+    задним числом — это форма за прошлый день, и подсовывать её под кнопку
+    «Продолжить тренировку» значило бы врать про то, что происходит.
+    """
+    user_id = await _authed_user_id(request)
+    workout = await db.get_backfill_workout(user_id)
+    if workout is None:
+        return JSONResponse(None)
+    return JSONResponse(await _workout_detail_json(workout))
+
+
+async def start_backfill_workout(request: Request) -> JSONResponse:
+    """Начать занесение тренировки за прошедший день.
+
+    Незаконченное занесение уже есть — отдаём его, а не заводим второе: две
+    открытые формы за разные дни человек различить не сможет, а брошенная
+    останется в базе навсегда (у неё нет ни таймера, ни экрана, который о ней
+    напомнит). Хочется другой день — сначала это, кнопкой «Отменить».
+    """
+    user_id = await _authed_user_id(request)
+    body = await _json_body(request)
+    date = _parse_date(_require(body, "date", str))
+    # Будущим днём тренировки не бывает: это занесение того, что уже сделано.
+    # Сегодня — по часовому поясу пользователя, а не по UTC сервера.
+    user = await db.get_user(user_id)
+    if date > timeutil.user_today(user):
+        raise ApiError(400, "bad_request", "date is in the future")
+
+    existing = await db.get_backfill_workout(user_id)
+    if existing is not None:
+        return JSONResponse(await _workout_detail_json(existing), status_code=200)
+
+    workout_id = await db.create_workout(
+        user_id, started_at=f"{date.isoformat()}{BACKFILL_HOUR}", status="backfill"
+    )
+    workout = await db.get_workout(workout_id)
+    return JSONResponse(await _workout_detail_json(workout), status_code=201)
+
+
+async def discard_backfill_workout(request: Request) -> JSONResponse:
+    user_id = await _authed_user_id(request)
+    workout = await db.get_backfill_workout(user_id)
+    if workout is None:
+        raise ApiError(404, "not_found", "no backfill workout")
+    await db.discard_workout(workout["id"])
+    return JSONResponse({"discarded": True})
+
+
 async def log_set(request: Request) -> JSONResponse:
     user_id = await _authed_user_id(request)
     workout_id = int(request.path_params["workout_id"])
     workout = await _owned_workout(workout_id, user_id)
-    if workout["status"] != "active":
-        raise ApiError(409, "workout_finished", "workout is already finished")
+    _require_open(workout)
     body = await _json_body(request)
     exercise_id = _require(body, "exercise_id", int)
     weight = float(_require(body, "weight", (int, float)))
@@ -443,8 +525,7 @@ async def log_sets_from_text(request: Request) -> JSONResponse:
     user_id = await _authed_user_id(request)
     workout_id = int(request.path_params["workout_id"])
     workout = await _owned_workout(workout_id, user_id)
-    if workout["status"] != "active":
-        raise ApiError(409, "workout_finished", "workout is already finished")
+    _require_open(workout)
     body = await _json_body(request)
     exercise_id = _require(body, "exercise_id", int)
     text = str(_require(body, "text", str)).strip()
@@ -485,8 +566,7 @@ async def delete_last_set(request: Request) -> JSONResponse:
     workout_id = int(request.path_params["workout_id"])
     exercise_id = int(request.path_params["exercise_id"])
     workout = await _owned_workout(workout_id, user_id)
-    if workout["status"] != "active":
-        raise ApiError(409, "workout_finished", "workout is already finished")
+    _require_open(workout)
     block_id = await _find_block_for_exercise(workout_id, exercise_id)
     if block_id is None:
         raise ApiError(404, "not_found", "exercise has no sets in this workout")
@@ -503,14 +583,40 @@ async def finish_workout(request: Request) -> JSONResponse:
     user_id = await _authed_user_id(request)
     workout_id = int(request.path_params["workout_id"])
     workout = await _owned_workout(workout_id, user_id)
-    if workout["status"] != "active":
-        raise ApiError(409, "workout_finished", "workout is already finished")
+    _require_open(workout)
     body = await _json_body(request) if await request.body() else {}
     # "note" отсутствует в теле — не значит "очисти её": iOS зовёт finish без
     # note, когда её уже поставили раньше через PATCH /note, и молчаливая
     # перезапись на NULL стёрла бы то, что пользователь только что написал.
     note = body["note"] if "note" in body else workout["note"]
-    await db.finish_workout(workout_id, note=note)
+    # У занесения задним числом время окончания берётся из его же даты, а не
+    # с часов сервера: иначе тренировка за прошлый вторник закончилась бы
+    # сегодня и растянулась в истории на неделю.
+    started_at = dt.datetime.fromisoformat(workout["started_at"])
+    finished_at = (
+        f"{started_at.date().isoformat()}{BACKFILL_HOUR}"
+        if workout["status"] == "backfill"
+        else None
+    )
+    await db.delete_empty_blocks(workout_id)
+    if not await db.finish_workout(workout_id, note=note, finished_at=finished_at):
+        # Тренировку успели закончить с другого клиента, пока шёл этот запрос.
+        raise ApiError(409, "workout_finished", "workout is already finished")
+    # Значки присваиваются здесь, а не при чтении экрана достижений: тем же
+    # вызовом, что и в боте (handlers.workout), с теми же агрегатами. Без него
+    # у человека, который пользуется только приложением, сетка достижений не
+    # заполнилась бы никогда.
+    #
+    # Длительности у занесения задним числом нет и быть не может — форму
+    # заполняют потом, — поэтому `None`: значки «за длинную тренировку»
+    # такая запись честно не получает, ровно как в боте.
+    duration_seconds = None
+    if workout["status"] == "active" and workout["started_at"]:
+        finished = dt.datetime.fromisoformat((await db.get_workout(workout_id))["finished_at"])
+        duration_seconds = (finished - started_at).total_seconds()
+    await achievement_sync.evaluate_after_finish(
+        user_id, workout_id, started_at, duration_seconds
+    )
     workout = await db.get_workout(workout_id)
     return JSONResponse(await _workout_detail_json(workout))
 
@@ -636,6 +742,9 @@ routes = [
     Route("/workouts/active", active_workout, methods=["GET"]),
     Route("/workouts/active", start_workout, methods=["POST"]),
     Route("/workouts/active", discard_active_workout, methods=["DELETE"]),
+    Route("/workouts/backfill", backfill_workout, methods=["GET"]),
+    Route("/workouts/backfill", start_backfill_workout, methods=["POST"]),
+    Route("/workouts/backfill", discard_backfill_workout, methods=["DELETE"]),
     Route("/workouts", list_workouts, methods=["GET"]),
     Route("/workouts/{workout_id:int}", get_workout, methods=["GET"]),
     Route("/workouts/{workout_id:int}/sets", log_set, methods=["POST"]),

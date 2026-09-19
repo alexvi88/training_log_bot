@@ -11,6 +11,7 @@ UPDATE (пересчёт весов при смене единиц, ресинк
 
 from __future__ import annotations
 
+import datetime as dt
 from typing import Any, Optional
 
 from starlette.requests import Request
@@ -290,6 +291,55 @@ async def delete_workout(request: Request) -> JSONResponse:
     return JSONResponse({"deleted": True})
 
 
+async def update_workout_date(request: Request) -> JSONResponse:
+    """Перенести уже записанную тренировку на другой день — «📅 Дата» на экране
+    правки в боте (handlers.edit_workout).
+
+    Нужно чаще, чем кажется: тренировку заносят вечером следующего дня и
+    получают её в истории не тем числом. Без переноса единственный выход —
+    снести и записать заново.
+
+    После переноса значки пересчитываются целиком (`resync`, а не
+    `evaluate_after_finish`): сдвиг даты работает в обе стороны — может и
+    достроить серию, и разорвать уже засчитанную, — а начисляющий путь умеет
+    только добавлять.
+    """
+    user_id = await _authed_user_id(request)
+    workout_id = int(request.path_params["workout_id"])
+    workout = await _owned_workout(workout_id, user_id)
+    body = await _json_body(request)
+    raw = body.get("date")
+    if not isinstance(raw, str):
+        raise ApiError(400, "bad_request", "date must be a string YYYY-MM-DD")
+    try:
+        date = dt.date.fromisoformat(raw)
+    except ValueError as exc:
+        raise ApiError(400, "bad_request", "date must be YYYY-MM-DD") from exc
+
+    # Время суток и длительность сохраняются: переносится день, а не «когда
+    # именно тренировался». Иначе правка даты тихо стирала бы утреннюю
+    # тренировку в полдень и ломала значки за ранний подъём.
+    started = dt.datetime.fromisoformat(workout["started_at"])
+    new_started = started.replace(year=date.year, month=date.month, day=date.day)
+    new_finished = None
+    if workout["finished_at"]:
+        finished = dt.datetime.fromisoformat(workout["finished_at"])
+        new_finished = (finished + (new_started - started)).isoformat()
+
+    await db.update_workout_date(workout_id, new_started.isoformat(), new_finished)
+    await achievement_sync.resync(user_id)
+    workout = await db.get_workout(workout_id)
+    return JSONResponse(
+        {
+            "id": workout["id"],
+            "status": workout["status"],
+            "started_at": workout["started_at"],
+            "finished_at": workout["finished_at"],
+            "note": workout["note"],
+        }
+    )
+
+
 async def repeat_workout(request: Request) -> JSONResponse:
     """Начать новую тренировку по составу этой — «🔁 Повторить тренировку» в
     боте (handlers.workout.pick_repeat_use), только без промежуточного показа
@@ -335,5 +385,6 @@ routes = [
     Route("/workouts/{workout_id:int}/sets/{set_id:int}", update_workout_set, methods=["PATCH"]),
     Route("/workouts/{workout_id:int}/sets/{set_id:int}", delete_workout_set, methods=["DELETE"]),
     Route("/workouts/{workout_id:int}", delete_workout, methods=["DELETE"]),
+    Route("/workouts/{workout_id:int}/date", update_workout_date, methods=["PATCH"]),
     Route("/workouts/{workout_id:int}/repeat", repeat_workout, methods=["POST"]),
 ]
