@@ -150,10 +150,13 @@ async def test_ask_returns_model_answer_and_charges_quota(fresh_db, client_facto
 
     async def fake_ask(user_id, question, history, **kwargs):
         assert question == "Как мой прогресс?"
+        # У нового пользователя персистентная история ещё пуста.
         assert history == []
-        # Колбэки под инлайн-кнопки бота (программа/действие/опросник/стрим) не
-        # подключены с HTTP-стороны — их сюда никто не передаёт.
-        assert kwargs == {}
+        # on_wire подключён — им сохраняется история; on_program/on_action/
+        # on_questions/on_chunk (заготовки под инлайн-кнопки и стрим бота) по-прежнему
+        # не подключены с HTTP-стороны.
+        assert set(kwargs) == {"on_wire"}
+        assert callable(kwargs["on_wire"])
         return "Ты молодец, продолжай в том же духе!"
 
     monkeypatch.setattr(ai_trainer, "ask", fake_ask)
@@ -228,3 +231,173 @@ async def test_ask_times_out_without_hanging(fresh_db, client_factory, monkeypat
     assert resp.json()["error"] == "timeout"
     # Таймаут — не ответ, счётчик не движется.
     assert await fresh_db.get_ai_question_count_today(111) == 0
+
+
+# ---------- персистентная история диалога (ai_conversation_turns) ----------
+
+
+def _fake_ask_with_wire():
+    """fake ai_trainer.ask, ведущий себя как настоящий: дописывает вопрос и
+    ответ к переданной history и отдаёт получившийся wire через on_wire —
+    ровно так, как это делает _ask_plain в ai_trainer.py."""
+
+    async def fake_ask(user_id, question, history, on_wire=None, **kwargs):
+        answer = f"ответ на: {question}"
+        if on_wire is not None:
+            await on_wire(
+                history
+                + [
+                    {"role": "user", "content": question},
+                    {"role": "assistant", "content": answer},
+                ]
+            )
+        return answer
+
+    return fake_ask
+
+
+@pytest.mark.asyncio
+async def test_history_requires_auth(client_factory):
+    client = client_factory()
+    resp = await client.get("/ai/history")
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_history_delete_requires_auth(client_factory):
+    client = client_factory()
+    resp = await client.delete("/ai/history")
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_history_empty_for_new_user(fresh_db, client_factory, monkeypatch):
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    client = await _linked_client(fresh_db, client_factory)
+
+    resp = await client.get("/ai/history")
+    assert resp.status_code == 200
+    assert resp.json()["messages"] == []
+
+
+@pytest.mark.asyncio
+async def test_history_has_two_turns_in_order_after_two_questions(fresh_db, client_factory, monkeypatch):
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(ai_trainer, "ask", _fake_ask_with_wire())
+    client = await _linked_client(fresh_db, client_factory)
+
+    resp1 = await client.post("/ai/ask", json={"question": "первый вопрос"})
+    resp2 = await client.post("/ai/ask", json={"question": "второй вопрос"})
+    assert resp1.status_code == 200 and resp2.status_code == 200
+
+    resp = await client.get("/ai/history")
+    assert resp.status_code == 200
+    messages = resp.json()["messages"]
+    # Роль/текст ровно как их нужно отрисовать чатом — без tool-calls и
+    # прочего wire-формата (см. докстринг api_v1_ai.get_history).
+    assert [(m["role"], m["text"]) for m in messages] == [
+        ("user", "первый вопрос"),
+        ("assistant", "ответ на: первый вопрос"),
+        ("user", "второй вопрос"),
+        ("assistant", "ответ на: второй вопрос"),
+    ]
+    assert all("created_at" in m for m in messages)
+
+
+@pytest.mark.asyncio
+async def test_ask_second_call_receives_nonempty_history(fresh_db, client_factory, monkeypatch):
+    """Второй вопрос должен получить в ask(..., history=...) то, что уехало
+    первым ходом — иначе персистентность истории не даёт памяти диалога."""
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    seen_histories: list[list] = []
+
+    async def fake_ask(user_id, question, history, on_wire=None, **kwargs):
+        seen_histories.append(history)
+        answer = f"ответ на: {question}"
+        if on_wire is not None:
+            await on_wire(
+                history
+                + [
+                    {"role": "user", "content": question},
+                    {"role": "assistant", "content": answer},
+                ]
+            )
+        return answer
+
+    monkeypatch.setattr(ai_trainer, "ask", fake_ask)
+    client = await _linked_client(fresh_db, client_factory)
+
+    await client.post("/ai/ask", json={"question": "первый вопрос"})
+    await client.post("/ai/ask", json={"question": "второй вопрос"})
+
+    assert seen_histories[0] == []
+    assert seen_histories[1] != []
+    assert {"role": "user", "content": "первый вопрос"} in seen_histories[1]
+    assert {"role": "assistant", "content": "ответ на: первый вопрос"} in seen_histories[1]
+
+
+@pytest.mark.asyncio
+async def test_history_trims_to_max_turns(fresh_db, client_factory, monkeypatch):
+    """Держим только последние MAX_AI_CONVERSATION_TURNS ходов — иначе
+    бесконечный диалог означает бесконечно растущий промпт (см. db.py)."""
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    client = await _linked_client(fresh_db, client_factory)
+
+    total = fresh_db.MAX_AI_CONVERSATION_TURNS + 5
+    for i in range(total):
+        await fresh_db.add_ai_conversation_turn(
+            111, f"q{i}", f"a{i}", [{"role": "user", "content": f"q{i}"}]
+        )
+
+    resp = await client.get("/ai/history")
+    assert resp.status_code == 200
+    messages = resp.json()["messages"]
+    assert len(messages) == fresh_db.MAX_AI_CONVERSATION_TURNS * 2
+    # Срезаны самые старые, остались последние по порядку.
+    kept_first_question = f"q{total - fresh_db.MAX_AI_CONVERSATION_TURNS}"
+    assert messages[0]["text"] == kept_first_question
+    assert messages[-1]["text"] == f"a{total - 1}"
+
+    # Персистентный wire для следующего вопроса тоже берётся из невытесненного
+    # хода — там реально хранится не больше MAX_AI_CONVERSATION_TURNS строк.
+    rows = await fresh_db.get_ai_conversation_history(111, limit=1000)
+    assert len(rows) == fresh_db.MAX_AI_CONVERSATION_TURNS
+
+
+@pytest.mark.asyncio
+async def test_history_delete_clears_it(fresh_db, client_factory, monkeypatch):
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(ai_trainer, "ask", _fake_ask_with_wire())
+    client = await _linked_client(fresh_db, client_factory)
+
+    await client.post("/ai/ask", json={"question": "вопрос"})
+    resp = await client.get("/ai/history")
+    assert resp.json()["messages"] != []
+
+    resp = await client.delete("/ai/history")
+    assert resp.status_code == 200
+    assert resp.json()["cleared"] is True
+
+    resp = await client.get("/ai/history")
+    assert resp.json()["messages"] == []
+
+    # И wire для следующего вопроса снова пуст — «начать разговор заново»
+    # должно очищать именно то, что подаётся в ask(..., history=...).
+    assert await fresh_db.get_ai_conversation_wire_history(111) == []
+
+
+@pytest.mark.asyncio
+async def test_history_is_private_per_user(fresh_db, client_factory, monkeypatch):
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(ai_trainer, "ask", _fake_ask_with_wire())
+
+    client_a = await _linked_client(fresh_db, client_factory, telegram_id=111)
+    client_b = await _linked_client(fresh_db, client_factory, telegram_id=222)
+
+    await client_a.post("/ai/ask", json={"question": "секретный вопрос A"})
+
+    resp_a = await client_a.get("/ai/history")
+    assert len(resp_a.json()["messages"]) == 2
+
+    resp_b = await client_b.get("/ai/history")
+    assert resp_b.json()["messages"] == []

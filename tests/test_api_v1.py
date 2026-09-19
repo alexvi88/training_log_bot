@@ -523,3 +523,103 @@ async def test_update_bodyweight_rejects_another_users_entry(fresh_db, client_fa
 
     resp = await client_b.patch(f"/bodyweight/{log_id}", json={"weight": 999})
     assert resp.status_code == 404
+
+
+# --- подход строкой (POST /workouts/{id}/sets/parse) ------------------------
+#
+# Главный способ записи в боте. Тесты проверяют не парсер (он свой набор имеет),
+# а что REST даёт ровно то же поведение: несколько подходов одной строкой, вес
+# с прошлого подхода на голых повторах, и человеческий текст ошибки разбора.
+
+
+async def _active_workout_with_exercise(fresh_db, client, name="Жим лёжа"):
+    resp = await client.post("/workouts/active")
+    workout_id = resp.json()["id"]
+    resp = await client.post("/exercises", json={"name": name})
+    return workout_id, resp.json()["id"]
+
+
+@pytest.mark.asyncio
+async def test_parse_line_logs_several_sets_at_once(fresh_db, client_factory):
+    """«100 8, 100 7, 95 8» — три подхода одним вводом. Ради этого строка и
+    нужна: тремя числовыми полями это три захода с клавиатурой."""
+    client = await _linked_client(fresh_db, client_factory)
+    workout_id, exercise_id = await _active_workout_with_exercise(fresh_db, client)
+
+    resp = await client.post(
+        f"/workouts/{workout_id}/sets/parse",
+        json={"exercise_id": exercise_id, "text": "100 8, 100 7, 95 8"},
+    )
+    assert resp.status_code == 201, resp.text
+    sets = resp.json()["sets"]
+    assert [(s["weight"], s["reps"]) for s in sets] == [(100.0, 8), (100.0, 7), (95.0, 8)]
+
+
+@pytest.mark.asyncio
+async def test_parse_line_repeats_weight_for_bare_reps(fresh_db, client_factory):
+    """«8» после «100 8» — это 100×8, а не 0×8. Вес подставляет сервер: клиент
+    не должен знать, какой подход считается предыдущим."""
+    client = await _linked_client(fresh_db, client_factory)
+    workout_id, exercise_id = await _active_workout_with_exercise(fresh_db, client)
+
+    await client.post(
+        f"/workouts/{workout_id}/sets/parse",
+        json={"exercise_id": exercise_id, "text": "100 8"},
+    )
+    resp = await client.post(
+        f"/workouts/{workout_id}/sets/parse",
+        json={"exercise_id": exercise_id, "text": "7"},
+    )
+    assert resp.status_code == 201, resp.text
+    (logged,) = resp.json()["sets"]
+    assert (logged["weight"], logged["reps"]) == (100.0, 7)
+
+
+@pytest.mark.asyncio
+async def test_parse_line_understands_counts_and_rpe(fresh_db, client_factory):
+    """«100x8x3» — три одинаковых подхода, «@9» — RPE суффиксом, без отдельного поля."""
+    client = await _linked_client(fresh_db, client_factory)
+    workout_id, exercise_id = await _active_workout_with_exercise(fresh_db, client)
+
+    resp = await client.post(
+        f"/workouts/{workout_id}/sets/parse",
+        json={"exercise_id": exercise_id, "text": "100x8x3 @9"},
+    )
+    assert resp.status_code == 201, resp.text
+    sets = resp.json()["sets"]
+    assert len(sets) == 3
+    assert all(s["rpe"] == 9 and s["weight"] == 100.0 and s["reps"] == 8 for s in sets)
+
+
+@pytest.mark.asyncio
+async def test_parse_line_returns_human_message_on_bad_input(fresh_db, client_factory):
+    """Единственное место в /v1, где текст ошибки человеческий: ParseError.message
+    уже написан голосом тренера, и клиент показывает его дословно."""
+    client = await _linked_client(fresh_db, client_factory)
+    workout_id, exercise_id = await _active_workout_with_exercise(fresh_db, client)
+
+    resp = await client.post(
+        f"/workouts/{workout_id}/sets/parse",
+        json={"exercise_id": exercise_id, "text": "как-то так"},
+    )
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["error"] == "unparsed_input"
+    assert body["message"].strip()
+
+
+@pytest.mark.asyncio
+async def test_parse_line_rejects_someone_elses_exercise(fresh_db, client_factory):
+    """exercise_id угадывается — чужое упражнение писать в свою тренировку нельзя."""
+    owner = await _linked_client(fresh_db, client_factory, telegram_id=555)
+    stranger = await _linked_client(fresh_db, client_factory, telegram_id=666)
+    resp = await stranger.post("/exercises", json={"name": "Чужое упражнение"})
+    stranger_exercise_id = resp.json()["id"]
+
+    resp = await owner.post("/workouts/active")
+    workout_id = resp.json()["id"]
+    resp = await owner.post(
+        f"/workouts/{workout_id}/sets/parse",
+        json={"exercise_id": stranger_exercise_id, "text": "100 8"},
+    )
+    assert resp.status_code == 404
