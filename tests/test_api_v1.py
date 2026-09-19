@@ -1131,3 +1131,68 @@ async def test_next_day_advances_after_a_workout_started_via_routine_id(fresh_db
     next_day = await client.get(f"/programs/{program_id}/next-day")
     assert next_day.status_code == 200
     assert next_day.json()["id"] == pull_id
+
+
+@pytest.mark.asyncio
+async def test_set_with_non_numeric_weight_is_a_400_not_a_500(fresh_db, client_factory):
+    """Вес строкой («100» вместо 100) — обычная ошибка клиента, и ответом на
+    неё должно быть внятное 400, а не «internal error»: проверка типа в
+    api_v1_common.require срабатывала верно, но падала сама, собирая текст
+    ошибки (у кортежа (int, float) нет __name__)."""
+    client = await _linked_client(fresh_db, client_factory)
+    exercise_id = (await client.post("/exercises", json={"name": "Жим лёжа"})).json()["id"]
+    workout_id = (await client.post("/workouts/active", json={})).json()["id"]
+
+    resp = await client.post(
+        f"/workouts/{workout_id}/sets",
+        json={"exercise_id": exercise_id, "weight": "100", "reps": 8},
+    )
+    assert resp.status_code == 400, resp.text
+    assert resp.json()["error"] == "bad_request"
+    assert "weight" in resp.json()["message"]
+
+    # тот же кортеж используется весом тела — и там тоже 400, а не 500
+    resp = await client.post("/bodyweight", json={"weight": "80"})
+    assert resp.status_code == 400, resp.text
+    assert resp.json()["error"] == "bad_request"
+
+
+@pytest.mark.asyncio
+async def test_set_with_non_numeric_rpe_is_a_400_not_a_500(fresh_db, client_factory):
+    """RPE строкой — 400, как и в api_v1_account.add_workout_set: голый
+    float("нет") на пути записи подхода ронял запрос пятисоткой."""
+    client = await _linked_client(fresh_db, client_factory)
+    exercise_id = (await client.post("/exercises", json={"name": "Жим лёжа"})).json()["id"]
+    workout_id = (await client.post("/workouts/active", json={})).json()["id"]
+
+    resp = await client.post(
+        f"/workouts/{workout_id}/sets",
+        json={"exercise_id": exercise_id, "weight": 100, "reps": 8, "rpe": "нет"},
+    )
+    assert resp.status_code == 400, resp.text
+    assert resp.json()["error"] == "bad_request"
+
+    # число по-прежнему принимается
+    ok = await client.post(
+        f"/workouts/{workout_id}/sets",
+        json={"exercise_id": exercise_id, "weight": 100, "reps": 8, "rpe": 9.5},
+    )
+    assert ok.status_code == 201, ok.text
+    assert ok.json()["rpe"] == 9.5
+
+
+@pytest.mark.asyncio
+async def test_list_query_params_reject_garbage_with_400(fresh_db, client_factory):
+    """«?limit=abc» — кривая ссылка, а не поломка сервера: списки тренировок и
+    веса тела разбирали параметр голым int() и отвечали 500."""
+    client = await _linked_client(fresh_db, client_factory)
+
+    for url in ("/workouts?limit=abc", "/workouts?offset=abc", "/bodyweight?limit=abc"):
+        resp = await client.get(url)
+        assert resp.status_code == 400, (url, resp.text)
+        assert resp.json()["error"] == "bad_request"
+
+    # рабочие значения по-прежнему работают, а без параметра — как раньше
+    assert (await client.get("/workouts?limit=5&offset=0")).status_code == 200
+    assert (await client.get("/bodyweight")).status_code == 200
+    assert (await client.get("/bodyweight?limit=5")).status_code == 200

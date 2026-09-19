@@ -605,6 +605,10 @@ async def log_set(request: Request) -> JSONResponse:
     reps = _require(body, "reps", int)
     rpe = body.get("rpe")
     if rpe is not None:
+        # Тем же правилом, что и в api_v1_account.add_workout_set: голый
+        # float() на чужой строке — это 500 вместо внятного 400.
+        if not isinstance(rpe, (int, float)) or isinstance(rpe, bool):
+            raise ApiError(400, "bad_request", "rpe must be a number or null")
         rpe = float(rpe)
     await _owned_exercise(exercise_id, user_id)
     block_id = await _block_for_exercise(workout_id, exercise_id)
@@ -1069,8 +1073,11 @@ async def get_workout(request: Request) -> JSONResponse:
 
 async def list_workouts(request: Request) -> JSONResponse:
     user_id = await _authed_user_id(request)
-    limit = min(int(request.query_params.get("limit", 20)), 100)
-    offset = max(int(request.query_params.get("offset", 0)), 0)
+    # common.query_int, а не голый int(): «?limit=abc» из кривой ссылки
+    # роняло список тренировок пятисоткой вместо внятного 400 — остальные
+    # списки (/workouts/search, /food/days) давно разбирают параметры им.
+    limit = common.query_int(request, "limit", 20, minimum=1, maximum=100)
+    offset = common.query_int(request, "offset", 0, minimum=0)
     workouts = await db.list_workouts(user_id, limit=limit, offset=offset, status="finished")
     contents = await db.list_workout_contents([w["id"] for w in workouts])
     items = []
@@ -1118,8 +1125,15 @@ async def search_workouts(request: Request) -> JSONResponse:
 
 async def list_bodyweight(request: Request) -> JSONResponse:
     user_id = await _authed_user_id(request)
-    limit = request.query_params.get("limit")
-    rows = await db.list_bodyweight_logs(user_id, limit=int(limit) if limit else None)
+    # Без параметра — вся история (limit=None), с параметром — разобранное
+    # число, а не int() над чем попало: «?limit=abc» отвечало 500.
+    raw_limit = request.query_params.get("limit")
+    limit = (
+        common.query_int(request, "limit", 20, minimum=1, maximum=1000)
+        if raw_limit
+        else None
+    )
+    rows = await db.list_bodyweight_logs(user_id, limit=limit)
     return JSONResponse(
         [{"id": r["id"], "weight": r["weight"], "logged_at": r["logged_at"]} for r in rows]
     )
