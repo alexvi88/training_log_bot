@@ -989,14 +989,12 @@ async def update_exercise_note(request: Request) -> JSONResponse:
     exercise_id = int(request.path_params["exercise_id"])
     await _owned_workout(workout_id, user_id)
     await _owned_exercise(exercise_id, user_id)
-    # Оба объекта свои — но этого мало: заметка ключуется парой, и если
-    # упражнения в этой тренировке не было, запись осядет в exercise_notes
-    # навсегда невидимой (детали тренировки собираются по блокам, а не по
-    # таблице заметок). Соседняя delete_last_set проверяет ровно это же и
-    # тем же способом; расходиться в инвариантах двум ручкам одного экрана
-    # незачем.
-    if await _find_block_for_exercise(workout_id, exercise_id) is None:
-        raise ApiError(404, "not_found", "exercise is not in this workout")
+    # Требовать, чтобы упражнение уже было в тренировке, нельзя: заметку
+    # пишут РАНЬШЕ первого подхода — «болит плечо, следи за локтями»
+    # появляется до того, как заведён блок. Проверка «есть блок» ломала бы
+    # ровно тот случай, ради которого заметка и нужна, поэтому её здесь нет,
+    # в отличие от delete_last_set: там блок обязан существовать по смыслу
+    # операции.
     body = await _json_body(request)
     note = body.get("note")
     if note is not None and not isinstance(note, str):
