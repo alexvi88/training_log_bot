@@ -85,6 +85,8 @@ def _exercise_json(row) -> dict[str, Any]:
         "unilateral": bool(row["unilateral"]),
         "attachment": row["attachment"],
         "bodyweight_load": row["bodyweight_load"],
+        "description": row["description"],
+        "is_archived": bool(row["is_archived"]),
     }
 
 
@@ -287,13 +289,18 @@ async def create_muscle_group(request: Request) -> JSONResponse:
 
 
 async def list_exercises(request: Request) -> JSONResponse:
-    """Три режима, как в боте: по группе мышц (обзор для тех, кто не помнит
-    точное название), текстовым поиском, или весь каталог. group_id и query
-    вместе не имеют смысла — group_id побеждает, раз пришёл."""
+    """Четыре режима, как в боте: архив (отдельный список, как «🗄 Архив» в
+    меню — обычный каталог его никогда не подмешивает), по группе мышц (обзор
+    для тех, кто не помнит точное название), текстовым поиском, или весь
+    каталог. Параметры не комбинируются — archived, затем group_id, затем
+    query побеждают в этом порядке, раз пришли."""
     user_id = await _authed_user_id(request)
+    archived_param = request.query_params.get("archived")
     group_id_param = request.query_params.get("group_id")
     query = request.query_params.get("query")
-    if group_id_param:
+    if archived_param and archived_param.lower() in ("1", "true", "yes"):
+        rows = await db.list_archived_exercises(user_id)
+    elif group_id_param:
         try:
             group_id = int(group_id_param)
         except ValueError as exc:
@@ -325,6 +332,87 @@ async def create_exercise(request: Request) -> JSONResponse:
     exercise_id = await db.create_exercise(user_id, name, group_id)
     row = await db.get_exercise(exercise_id)
     return JSONResponse(_exercise_json(row), status_code=201)
+
+
+async def update_exercise(request: Request) -> JSONResponse:
+    """PATCH — частичное обновление, как /settings: только присланные поля
+    меняются. То же самое меню бота (handlers/exercises.py), только без
+    диалога — переименование, смена группы мышц и описание техники."""
+    user_id = await _authed_user_id(request)
+    exercise_id = int(request.path_params["exercise_id"])
+    await _owned_exercise(exercise_id, user_id)
+    body = await _json_body(request)
+
+    if "name" in body:
+        name = str(_require(body, "name", str)).strip()
+        if not name:
+            raise ApiError(400, "bad_request", "name must not be empty")
+        # Клэш по display_name — та же ловушка, что update_exercise_name
+        # разбирает в docstring: переименование в уже занятое имя должно
+        # остаться отдельным ответом, а не молча слиться с чужой историей.
+        if not await db.update_exercise_name(exercise_id, name):
+            raise ApiError(409, "name_taken", "another exercise already has this name")
+
+    if "group_id" in body:
+        group_id = body["group_id"]
+        if not isinstance(group_id, int) or isinstance(group_id, bool):
+            raise ApiError(400, "bad_request", "group_id must be int")
+        group = await db.get_muscle_group(group_id)
+        if group is None or (group["user_id"] is not None and group["user_id"] != user_id):
+            raise ApiError(404, "not_found", "muscle group not found")
+        await db.update_exercise_group(exercise_id, group_id)
+
+    if "description" in body:
+        description = common.optional_str(body, "description")
+        await db.set_exercise_description(exercise_id, description)
+
+    row = await db.get_exercise(exercise_id)
+    return JSONResponse(_exercise_json(row))
+
+
+async def archive_exercise(request: Request) -> JSONResponse:
+    user_id = await _authed_user_id(request)
+    exercise_id = int(request.path_params["exercise_id"])
+    await _owned_exercise(exercise_id, user_id)
+    await db.archive_exercise(exercise_id)
+    row = await db.get_exercise(exercise_id)
+    return JSONResponse(_exercise_json(row))
+
+
+async def unarchive_exercise(request: Request) -> JSONResponse:
+    user_id = await _authed_user_id(request)
+    exercise_id = int(request.path_params["exercise_id"])
+    await _owned_exercise(exercise_id, user_id)
+    await db.unarchive_exercise(exercise_id)
+    row = await db.get_exercise(exercise_id)
+    return JSONResponse(_exercise_json(row))
+
+
+async def merge_exercises(request: Request) -> JSONResponse:
+    """Слить дубликат в целевое упражнение — самое ценное из всей карточки:
+    «Жим лёжа» и «жим штанги лёжа», занесённые порознь, иначе делят историю и
+    график пополам. `target_id` — тот, что остаётся (его история, фото,
+    описание побеждают при конфликте), `source_id` — тот, что удаляется;
+    вся бизнес-логика и проверки (не своё, цель в архиве, открытая тренировка)
+    уже в db.merge_exercises, ровно как у кнопки «Объединить» в боте."""
+    user_id = await _authed_user_id(request)
+    body = await _json_body(request)
+    target_id = _require(body, "target_id", int)
+    source_id = _require(body, "source_id", int)
+    # 404 раньше вызова db.merge_exercises: та под "invalid" склеивает и чужое,
+    # и несуществующее, и совпадение id — снаружи это должно выглядеть как
+    # обычное отсутствие ресурса, а не как единая проверка позже.
+    await _owned_exercise(target_id, user_id)
+    await _owned_exercise(source_id, user_id)
+    outcome = await db.merge_exercises(user_id, keep_id=target_id, drop_id=source_id)
+    if outcome != db.MERGE_OK:
+        code, message = {
+            db.MERGE_TARGET_ARCHIVED: ("target_archived", "target exercise is archived"),
+            db.MERGE_IN_ACTIVE_WORKOUT: ("active_workout", "one of the exercises is in the active workout"),
+        }.get(outcome, ("bad_request", "cannot merge these exercises"))
+        raise ApiError(409, code, message)
+    row = await db.get_exercise(target_id)
+    return JSONResponse(_exercise_json(row))
 
 
 async def exercise_progress(request: Request) -> JSONResponse:
@@ -928,6 +1016,10 @@ routes = [
     Route("/muscle-groups", create_muscle_group, methods=["POST"]),
     Route("/exercises", list_exercises, methods=["GET"]),
     Route("/exercises", create_exercise, methods=["POST"]),
+    Route("/exercises/merge", merge_exercises, methods=["POST"]),
+    Route("/exercises/{exercise_id:int}", update_exercise, methods=["PATCH"]),
+    Route("/exercises/{exercise_id:int}/archive", archive_exercise, methods=["POST"]),
+    Route("/exercises/{exercise_id:int}/unarchive", unarchive_exercise, methods=["POST"]),
     Route("/exercises/{exercise_id:int}/progress", exercise_progress, methods=["GET"]),
     Route("/workouts/active", active_workout, methods=["GET"]),
     Route("/workouts/active", start_workout, methods=["POST"]),
