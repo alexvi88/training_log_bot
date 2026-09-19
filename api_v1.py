@@ -989,6 +989,14 @@ async def update_exercise_note(request: Request) -> JSONResponse:
     exercise_id = int(request.path_params["exercise_id"])
     await _owned_workout(workout_id, user_id)
     await _owned_exercise(exercise_id, user_id)
+    # Оба объекта свои — но этого мало: заметка ключуется парой, и если
+    # упражнения в этой тренировке не было, запись осядет в exercise_notes
+    # навсегда невидимой (детали тренировки собираются по блокам, а не по
+    # таблице заметок). Соседняя delete_last_set проверяет ровно это же и
+    # тем же способом; расходиться в инвариантах двум ручкам одного экрана
+    # незачем.
+    if await _find_block_for_exercise(workout_id, exercise_id) is None:
+        raise ApiError(404, "not_found", "exercise is not in this workout")
     body = await _json_body(request)
     note = body.get("note")
     if note is not None and not isinstance(note, str):
