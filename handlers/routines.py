@@ -175,7 +175,7 @@ async def rt_manage(callback: CallbackQuery, state: FSMContext):
 def _catalog_source(program):
     """Каталожная карточка, из которой выросла эта программа, или None.
 
-    Ключ каталога лежит в programs.source_ref (_instantiate_catalog_program),
+    Ключ каталога лежит в programs.source_ref (seed_data.instantiate_program),
     и по нему берутся две вещи: строка meta («кому это и как часто»), которой в
     базе нет вовсе, и описание для программ, добавленных до появления колонки
     programs.description. Программа могла прийти и из чужого экспорта
@@ -452,34 +452,6 @@ async def rt_program_detail(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-async def _instantiate_catalog_program(user_id: int, key: str, name: str) -> int:
-    """Каталожная программа → своя копия в аккаунте пользователя.
-
-    Имена дней и описание пишутся В БАЗУ на языке, который активен сейчас, —
-    это снимок, как и у названия сфорканного упражнения, и потом он не
-    перепереводится: дальше это данные пользователя, он их сам переименовывает.
-    Состав дней передаётся КАНОНИЧЕСКИМИ именами шаблонов, а не переведёнными:
-    db.create_routine_from_program по ним ищет упражнение и форкает шаблон, и
-    английское имя он бы не нашёл.
-    """
-    lang = i18n.get_lang()
-    program_id = await db.create_program(
-        user_id, name, source="catalog", source_ref=key,
-        description=seed_data.localized_program_description(key, lang),
-    )
-    for i, (_day_name, exercises) in enumerate(PROGRAM_BY_KEY[key]["days"]):
-        localized_exercises = [
-            (ex, seed_data.localized_target(target, lang)) for ex, target in exercises
-        ]
-        await db.create_routine_from_program(
-            user_id,
-            seed_data.localized_program_day_name(key, i, lang),
-            localized_exercises,
-            program_id=program_id,
-        )
-    return program_id
-
-
 @router.callback_query(F.data.startswith("rt:progadd:"))
 async def rt_program_add(callback: CallbackQuery, state: FSMContext):
     """«➕ Добавить себе» на каталожной программе.
@@ -501,7 +473,7 @@ async def rt_program_add(callback: CallbackQuery, state: FSMContext):
         return
 
     # Имя ищем и показываем локализованное: в базу при добавлении легло именно
-    # оно (см. _instantiate_catalog_program), и проверка занятости по русскому
+    # оно (см. seed_data.instantiate_program), и проверка занятости по русскому
     # имени у англоязычного не нашла бы его собственную программу.
     program_name = seed_data.localized_program_name(key, i18n.get_lang())
     existing = await db.find_program_by_name(user_id, program_name)
@@ -517,7 +489,7 @@ async def rt_program_add(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
         return
 
-    program_id = await _instantiate_catalog_program(user_id, key, program_name)
+    program_id = await seed_data.instantiate_program(user_id, key, program_name)
     await callback.answer(i18n.t("routine.program.added", days=i18n.t("btn.program_days", n=len(program["days"]))))
     await _show_program(callback, state, program_id)
 
@@ -541,7 +513,7 @@ async def rt_program_add_copy(callback: CallbackQuery, state: FSMContext):
     name = await db.unique_program_name(
         user_id, seed_data.localized_program_name(key, i18n.get_lang())
     )
-    program_id = await _instantiate_catalog_program(user_id, key, name)
+    program_id = await seed_data.instantiate_program(user_id, key, name)
     await callback.answer(i18n.t("routine.program.added_as", name=name))
     await _show_program(callback, state, program_id)
 

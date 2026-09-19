@@ -44,6 +44,7 @@ import api_v1_common as common
 import api_v1_dashboard
 import api_v1_feedback
 import api_v1_food
+import api_v1_hall_of_fame
 import api_v1_import
 import api_v1_media
 import api_v1_programs
@@ -53,6 +54,7 @@ import apple_signin
 import dashboard_data
 import db
 import formatting
+import history_search_data
 import i18n
 import mcp_oauth
 import parser
@@ -110,6 +112,7 @@ def _workout_json(row) -> dict[str, Any]:
         "started_at": row["started_at"],
         "finished_at": row["finished_at"],
         "note": row["note"],
+        "routine_id": row["routine_id"],
     }
 
 
@@ -491,8 +494,17 @@ async def active_workout(request: Request) -> JSONResponse:
 
 
 async def start_workout(request: Request) -> JSONResponse:
+    """`routine_id` в теле — необязательный: старое приложение шлёт пустое
+    тело и получает тренировку «с нуля», как раньше. Без привязки к дню
+    программы `db.next_program_day` не может продвинуться дальше первого
+    дня — ровно то, что уже делает бот в _begin_routine_workout, здесь тот
+    же db.create_workout(routine_id=...) через get_or_create_active_workout."""
     user_id = await _authed_user_id(request)
-    workout_id, created = await db.get_or_create_active_workout(user_id)
+    body = await _json_body(request) if await request.body() else {}
+    routine_id = common.optional_int(body, "routine_id")
+    if routine_id is not None:
+        await api_v1_programs._owned_routine(routine_id, user_id)
+    workout_id, created = await db.get_or_create_active_workout(user_id, routine_id=routine_id)
     workout = await db.get_workout(workout_id)
     return JSONResponse(_workout_json(workout), status_code=201 if created else 200)
 
@@ -958,6 +970,37 @@ async def list_workouts(request: Request) -> JSONResponse:
     return JSONResponse(items)
 
 
+async def search_workouts(request: Request) -> JSONResponse:
+    """Тренировки, где встречается упражнение из `exercise` — «в какой
+    тренировке был жим», которое дата-only GET /workouts не отвечает.
+
+    Отдельный маршрут, а не параметр у GET /workouts: у того ответ — голый
+    массив (нет места для `total`), а постраничный поиск без общего числа
+    совпадений не может ни показать «показано N из M», ни решить, есть ли
+    следующая страница, — старые тренировки частого упражнения были бы
+    физически недостижимы после первых `limit` штук.
+
+    Расчёт — history_search_data.search, тот же, что и у бота
+    (handlers.history._render_search_page поверх него же): второй запрос с
+    той же парой db.search_workouts_by_exercise/count_workouts_by_exercise
+    разъехался бы с первым при первой же правке.
+    """
+    user_id = await _authed_user_id(request)
+    query = request.query_params.get("exercise", "").strip()
+    if not query:
+        raise ApiError(400, "bad_request", "exercise must not be empty")
+    limit = common.query_int(request, "limit", 20, minimum=1, maximum=100)
+    offset = common.query_int(request, "offset", 0, minimum=0)
+    page = await history_search_data.search(user_id, query, limit=limit, offset=offset)
+    items = []
+    for it in page.items:
+        item = {"id": it.id, "started_at": it.started_at}
+        item["exercise_names"] = it.exercise_names
+        item["set_count"] = it.set_count
+        items.append(item)
+    return JSONResponse({"items": items, "total": page.total})
+
+
 # ---------- вес тела ----------
 
 async def list_bodyweight(request: Request) -> JSONResponse:
@@ -1028,6 +1071,7 @@ routes = [
     Route("/workouts/backfill", start_backfill_workout, methods=["POST"]),
     Route("/workouts/backfill", discard_backfill_workout, methods=["DELETE"]),
     Route("/workouts", list_workouts, methods=["GET"]),
+    Route("/workouts/search", search_workouts, methods=["GET"]),
     Route("/workouts/{workout_id:int}", get_workout, methods=["GET"]),
     Route("/workouts/{workout_id:int}/sets", log_set, methods=["POST"]),
     Route("/workouts/{workout_id:int}/sets/parse", log_sets_from_text, methods=["POST"]),
@@ -1059,6 +1103,7 @@ routes += (
     + api_v1_feedback.routes
     + api_v1_dashboard.routes
     + api_v1_progress.routes
+    + api_v1_hall_of_fame.routes
 )
 
 
