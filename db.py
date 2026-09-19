@@ -528,12 +528,16 @@ CREATE INDEX IF NOT EXISTS idx_cost_events_created ON cost_events (created_at);
 -- базу. payload у кнопок — её callback_data, то есть чем нажатие было для бота.
 -- Живёт не вечно: prune_old_user_events чистит по ACTIVITY_RETENTION_DAYS в том
 -- же суточном джобе, что и cost_events.
+-- source — откуда пришло действие: 'tg' (бот) или 'ios' (REST-слой /v1). Лента
+-- одна на оба клиента, и без этой пометки «начал тренировку» из приложения
+-- неотличимо от того же из бота.
 CREATE TABLE IF NOT EXISTS user_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     telegram_id INTEGER NOT NULL,
     kind TEXT NOT NULL,
     content TEXT NOT NULL,
     payload TEXT,
+    source TEXT NOT NULL DEFAULT 'tg',
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_user_events_user ON user_events (telegram_id, id);
@@ -1124,6 +1128,16 @@ async def _migrate_schema() -> None:
     # the executescript SCHEMA so an existing on-disk DB (already past the
     # CREATE TABLE IF NOT EXISTS) picks it up too.
     await _conn.execute("CREATE INDEX IF NOT EXISTS idx_pushes_category ON pushes (category)")
+
+    # Лента действий стала общей для бота и iOS-приложения: до этого в
+    # user_events попадали только события из Telegram, и отличить их было не от
+    # чего. Дефолт 'tg' — не заглушка: всё, что накоплено до этой миграции,
+    # пришло из бота, и разметить задним числом это можно только так.
+    user_event_cols = await _column_names("user_events")
+    if "source" not in user_event_cols:
+        await _conn.execute(
+            "ALTER TABLE user_events ADD COLUMN source TEXT NOT NULL DEFAULT 'tg'"
+        )
 
     game_cols = await _column_names("game_results")
     if "game" not in game_cols:
@@ -6652,13 +6666,23 @@ async def prune_old_cost_events(retention_days: int) -> int:
 
 
 async def log_user_event(
-    telegram_id: int, kind: str, content: str, payload: Optional[str] = None
+    telegram_id: int,
+    kind: str,
+    content: str,
+    payload: Optional[str] = None,
+    source: str = "tg",
 ) -> None:
+    """Одно действие человека в ленту. source — 'tg' (бот) или 'ios' (/v1).
+
+    Умолчание стоит здесь, а не на местах вызова, ровно чтобы не трогать
+    десятки уже написанных вызовов из бота: из Telegram приходит всё, что не
+    сказало обратного, а сказать обратное есть кому только REST-слою /v1.
+    """
     async with _write_lock:
         await conn().execute(
-            "INSERT INTO user_events (telegram_id, kind, content, payload, created_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (telegram_id, kind, content, payload, now_iso()),
+            "INSERT INTO user_events (telegram_id, kind, content, payload, source, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (telegram_id, kind, content, payload, source, now_iso()),
         )
         await conn().commit()
 
@@ -6704,7 +6728,7 @@ async def count_user_events(telegram_id: int) -> int:
 async def list_user_events(telegram_id: int, limit: int = 30, offset: int = 0) -> list[aiosqlite.Row]:
     """Действия одного пользователя, свежие сверху."""
     cur = await conn().execute(
-        "SELECT id, kind, content, payload, created_at FROM user_events "
+        "SELECT id, kind, content, payload, source, created_at FROM user_events "
         "WHERE telegram_id = ? ORDER BY id DESC LIMIT ? OFFSET ?",
         (telegram_id, limit, offset),
     )
@@ -6720,7 +6744,8 @@ async def count_all_events() -> int:
 async def list_all_events(limit: int = 30, offset: int = 0) -> list[aiosqlite.Row]:
     """Действия всех пользователей вперемешку, свежие сверху."""
     cur = await conn().execute(
-        "SELECT e.id, e.telegram_id, u.username, e.kind, e.content, e.payload, e.created_at "
+        "SELECT e.id, e.telegram_id, u.username, e.kind, e.content, e.payload, e.source, "
+        "e.created_at "
         "FROM user_events e LEFT JOIN users u ON u.telegram_id = e.telegram_id "
         "ORDER BY e.id DESC LIMIT ? OFFSET ?",
         (limit, offset),

@@ -20,6 +20,7 @@ import acquisition
 import activity_log
 import ai_limits
 import announcements
+import api_v1_activity
 import config
 import db
 import formatting
@@ -351,11 +352,30 @@ _ACTIVITY_MARKERS = {
     activity_log.KIND_REPLY_BUTTON: "👉",
     activity_log.KIND_AI_FAILED: "⚠️",
     activity_log.KIND_AI_PROGRAM_OFFERED: "🗂",
+    # Действие из iOS-приложения (api_v1_activity). Маркер тот же, что у тапа:
+    # это ровно тот же «человек что-то сделал», а чем именно сделал — уже
+    # сказано пометкой источника слева.
+    api_v1_activity.KIND_API_ACTION: "👉",
 }
 
 
 def _activity_marker(kind: str) -> str:
     return _ACTIVITY_MARKERS.get(kind, "💬")
+
+
+def _activity_source(row) -> str:
+    """Пометка источника: `[tg]` или `[ios]`.
+
+    Читаем колонку защитно, а не `row["source"]`: строки такой формы собирают не
+    только выборки ленты (aiosqlite.Row на незнакомый ключ бросает IndexError,
+    dict — KeyError), и падать на экране из-за отсутствующей пометки нечестно.
+    Нет колонки — значит Telegram: до появления источников оттуда приходило всё.
+    """
+    try:
+        source = row["source"] or activity_log.SOURCE_TG
+    except (KeyError, IndexError):
+        source = activity_log.SOURCE_TG
+    return f"[{source}]"
 
 
 def _activity_content(row) -> str:
@@ -367,7 +387,10 @@ def _activity_content(row) -> str:
 
 def _activity_line(row) -> str:
     at = admin_time(row["created_at"])
-    return f"{at.strftime('%d.%m %H:%M')} {_activity_marker(row['kind'])} {_activity_content(row)}"
+    return (
+        f"{at.strftime('%d.%m %H:%M')} {_activity_source(row)} "
+        f"{_activity_marker(row['kind'])} {_activity_content(row)}"
+    )
 
 
 def _activity_line_all(row) -> str:
@@ -376,7 +399,7 @@ def _activity_line_all(row) -> str:
     at = admin_time(row["created_at"])
     who = f"@{row['username']}" if row["username"] else str(row["telegram_id"])
     return (
-        f"{at.strftime('%d.%m %H:%M')} {_activity_marker(row['kind'])} "
+        f"{at.strftime('%d.%m %H:%M')} {_activity_source(row)} {_activity_marker(row['kind'])} "
         f"{escape(_activity_content(row))} — <b>{escape(who)}</b>"
     )
 

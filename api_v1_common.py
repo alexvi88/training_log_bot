@@ -38,7 +38,16 @@ async def unhandled_error_handler(request: Request, exc: Exception) -> JSONRespo
 
 
 async def authed_user_id(request: Request) -> int:
-    """Bearer-токен → telegram_id, либо ApiError(401)."""
+    """Bearer-токен → telegram_id, либо ApiError(401).
+
+    Разрезолвленный id кладётся в `request.state.user_id` — оттуда его берёт
+    middleware лога действий (`api_v1_activity`), которая работает уже ПОСЛЕ
+    обработчика и сама токен не разбирает. Иначе за каждый запрос было бы два
+    похода в базу за одним и тем же ответом, а на запрос без токена — ещё и
+    лишний. Заодно это единственное место, где «кто это» вообще выясняется:
+    любой новый обработчик получает пометку в ленте просто потому, что зовёт
+    эту функцию.
+    """
     auth = request.headers.get("authorization", "")
     if not auth.lower().startswith("bearer "):
         raise ApiError(401, "unauthorized", "missing bearer token")
@@ -46,6 +55,7 @@ async def authed_user_id(request: Request) -> int:
     user_id = await db.resolve_api_token(token)
     if user_id is None:
         raise ApiError(401, "unauthorized", "invalid or revoked token")
+    request.state.user_id = user_id
     return user_id
 
 

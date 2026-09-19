@@ -13,6 +13,12 @@
 увидеть в логе, а не то, что должно из него исчезнуть. Ошибка самой записи
 глотается — лог действий не тот повод, чтобы ронять человеку тренировку.
 
+Лента одна на оба клиента. Действия из iOS-приложения пишет сюда же
+REST-слой `/v1` (`api_v1_activity.py`), помечая их `source="ios"`; всё, что
+пришло из Telegram, помечено `source="tg"`. Двух лент нет нарочно: вопрос «как
+пользуются» задаётся про человека, а не про клиент, и один и тот же атлет за
+день успевает и записать подход в приложении, и нажать кнопку в боте.
+
 Что именно пишется: текст сообщения (или подпись к фото), для нетекстовых —
 пометка типа («🎤 голосовое»), для нажатия — надпись на кнопке, которую человек
 видел, и её callback_data. Файлы и фото сами по себе не сохраняются — только то,
@@ -34,6 +40,26 @@ logger = logging.getLogger(__name__)
 # Простыня из буфера обмена (импорт CSV, длинная простыня для AI-тренера) не
 # должна раздувать базу — для «что человек ввёл» начала хватает с запасом.
 MAX_CONTENT_LEN = 1000
+
+# Откуда пришло действие. Лента одна на оба клиента (см. db.user_events.source и
+# api_v1_activity.py): без пометки «начал тренировку» из приложения неотличимо
+# от того же из бота, и владелец продукта, глядя на ленту, видел только половину
+# происходящего — ту, что из Telegram.
+SOURCE_TG = "tg"
+SOURCE_IOS = "ios"
+
+
+def process_log_line(
+    source: str, telegram_id: int, action: str, detail: str, outcome: str
+) -> str:
+    """Одна строка про действие в обычный лог процесса (stdout сервера).
+
+    Формат ОДИН на оба источника нарочно: владелец смотрит stdout, а не только
+    /activity, и `grep "| записал подход |"` должен находить и телеграмные
+    строки, и айосные. Разные формы записи у бота и у REST-слоя превратили бы
+    такой греп в два разных грепа, а сравнение источников — в ручную работу.
+    """
+    return f"[{source}] user={telegram_id} | {action} | {detail} | {outcome}"
 
 KIND_MESSAGE = "message"
 KIND_CALLBACK = "callback"
@@ -237,6 +263,16 @@ class LogIncomingMessages(BaseMiddleware):
         if isinstance(event, Message):
             try:
                 await record_message(event)
+                logger.info(
+                    "%s",
+                    process_log_line(
+                        SOURCE_TG,
+                        event.from_user.id if event.from_user else 0,
+                        describe_message(event),
+                        KIND_MESSAGE,
+                        "ok",
+                    ),
+                )
             except Exception:
                 logger.exception("Failed to log user message")
         return await handler(event, data)
@@ -249,6 +285,16 @@ class LogCallbackQueries(BaseMiddleware):
         if isinstance(event, CallbackQuery):
             try:
                 await record_callback(event)
+                logger.info(
+                    "%s",
+                    process_log_line(
+                        SOURCE_TG,
+                        event.from_user.id if event.from_user else 0,
+                        button_label(event) or event.data or "(кнопка)",
+                        f"{KIND_CALLBACK} {event.data or ''}".strip(),
+                        "ok",
+                    ),
+                )
             except Exception:
                 logger.exception("Failed to log user callback")
         return await handler(event, data)
