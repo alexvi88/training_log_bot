@@ -2964,6 +2964,19 @@ async def get_active_workout(user_id: int) -> Optional[aiosqlite.Row]:
     return await cur.fetchone()
 
 
+async def get_backfill_workout(user_id: int) -> Optional[aiosqlite.Row]:
+    """The user's open backfill workout (a past day being entered by hand), if
+    any. Same shape as get_active_workout, and deliberately a separate query:
+    a backfill row must never surface as "the active workout" — it has no
+    timer and belongs to another day.
+    """
+    cur = await conn().execute(
+        "SELECT * FROM workouts WHERE user_id = ? AND status = 'backfill' ORDER BY id LIMIT 1",
+        (user_id,),
+    )
+    return await cur.fetchone()
+
+
 async def get_or_create_active_workout(user_id: int) -> tuple[int, bool]:
     """The user's active workout, starting one if there isn't one. Returns
     (workout_id, created).

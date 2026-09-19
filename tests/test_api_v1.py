@@ -698,3 +698,122 @@ async def test_parse_line_rejects_someone_elses_exercise(fresh_db, client_factor
         json={"exercise_id": stranger_exercise_id, "text": "100 8"},
     )
     assert resp.status_code == 404
+
+
+# ---------- тренировка задним числом ----------
+
+
+@pytest.mark.asyncio
+async def test_backfill_is_not_the_active_workout(fresh_db, client_factory):
+    """Занесение за прошлый день не должно всплывать как «идёт тренировка»:
+    у него нет ни таймера, ни сегодняшней даты, и показать его под кнопкой
+    «Продолжить» значило бы соврать про то, что происходит прямо сейчас."""
+    client = await _linked_client(fresh_db, client_factory)
+    created = await client.post("/workouts/backfill", json={"date": "2026-09-10"})
+    assert created.status_code == 201, created.text
+    assert created.json()["started_at"].startswith("2026-09-10")
+
+    assert (await client.get("/workouts/active")).json() is None
+    assert (await client.get("/workouts/backfill")).json()["id"] == created.json()["id"]
+
+
+@pytest.mark.asyncio
+async def test_backfill_twice_returns_the_same_one(fresh_db, client_factory):
+    """Второй POST не заводит вторую форму: две открытые за разные дни человек
+    не различит, а брошенная осталась бы в базе навсегда — напомнить о ней
+    нечему."""
+    client = await _linked_client(fresh_db, client_factory)
+    first = await client.post("/workouts/backfill", json={"date": "2026-09-10"})
+    second = await client.post("/workouts/backfill", json={"date": "2026-09-11"})
+    assert second.status_code == 200
+    assert second.json()["id"] == first.json()["id"]
+    assert second.json()["started_at"].startswith("2026-09-10")
+
+
+@pytest.mark.asyncio
+async def test_backfill_rejects_a_future_date(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    resp = await client.post("/workouts/backfill", json={"date": "2099-01-01"})
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "bad_request"
+
+
+@pytest.mark.asyncio
+async def test_backfill_accepts_sets_and_finishes_on_its_own_date(fresh_db, client_factory):
+    """Главное здесь — finished_at. Если бы он брался с часов сервера,
+    тренировка за прошлую неделю «закончилась» бы сегодня и растянулась
+    в истории на неделю."""
+    client = await _linked_client(fresh_db, client_factory)
+    exercise_id = (await client.post("/exercises", json={"name": "Жим лёжа"})).json()["id"]
+    workout_id = (await client.post("/workouts/backfill", json={"date": "2026-09-10"})).json()["id"]
+
+    logged = await client.post(
+        f"/workouts/{workout_id}/sets", json={"exercise_id": exercise_id, "weight": 80, "reps": 5}
+    )
+    assert logged.status_code == 201, logged.text
+
+    finished = await client.post(f"/workouts/{workout_id}/finish", json={})
+    assert finished.status_code == 200, finished.text
+    body = finished.json()
+    assert body["status"] == "finished"
+    assert body["started_at"].startswith("2026-09-10")
+    assert body["finished_at"].startswith("2026-09-10")
+
+    # Форма закрыта — следующее занесение начинается с чистого листа.
+    assert (await client.get("/workouts/backfill")).json() is None
+
+
+@pytest.mark.asyncio
+async def test_backfill_accepts_a_set_written_as_text(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    exercise_id = (await client.post("/exercises", json={"name": "Присед"})).json()["id"]
+    workout_id = (await client.post("/workouts/backfill", json={"date": "2026-09-10"})).json()["id"]
+    resp = await client.post(
+        f"/workouts/{workout_id}/sets/parse",
+        json={"exercise_id": exercise_id, "text": "100 8, 95 8"},
+    )
+    assert resp.status_code == 201, resp.text
+    assert len(resp.json()["sets"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_backfill_can_be_discarded(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    await client.post("/workouts/backfill", json={"date": "2026-09-10"})
+    assert (await client.delete("/workouts/backfill")).status_code == 200
+    assert (await client.get("/workouts/backfill")).json() is None
+    assert (await client.delete("/workouts/backfill")).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_finished_workout_still_refuses_new_sets(fresh_db, client_factory):
+    """Ослабление проверки под занесение задним числом не должно было открыть
+    запись в уже законченную тренировку."""
+    client = await _linked_client(fresh_db, client_factory)
+    exercise_id = (await client.post("/exercises", json={"name": "Жим лёжа"})).json()["id"]
+    workout_id = (await client.post("/workouts/active")).json()["id"]
+    await client.post(
+        f"/workouts/{workout_id}/sets", json={"exercise_id": exercise_id, "weight": 80, "reps": 5}
+    )
+    await client.post(f"/workouts/{workout_id}/finish", json={})
+    late = await client.post(
+        f"/workouts/{workout_id}/sets", json={"exercise_id": exercise_id, "weight": 80, "reps": 5}
+    )
+    assert late.status_code == 409
+    assert late.json()["error"] == "workout_finished"
+
+
+@pytest.mark.asyncio
+async def test_finishing_through_the_api_awards_achievements(fresh_db, client_factory):
+    """Значки присваивались только в боте: у человека, который пользуется
+    одним приложением, сетка достижений не заполнялась бы никогда."""
+    client = await _linked_client(fresh_db, client_factory)
+    exercise_id = (await client.post("/exercises", json={"name": "Жим лёжа"})).json()["id"]
+    workout_id = (await client.post("/workouts/active")).json()["id"]
+    await client.post(
+        f"/workouts/{workout_id}/sets", json={"exercise_id": exercise_id, "weight": 80, "reps": 5}
+    )
+    assert await fresh_db.list_achievement_codes(111) == set()
+
+    await client.post(f"/workouts/{workout_id}/finish", json={})
+    assert await fresh_db.list_achievement_codes(111), "первая тренировка не дала ни одного значка"

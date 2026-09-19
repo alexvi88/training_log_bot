@@ -475,3 +475,68 @@ async def test_repeat_workout_requires_auth(fresh_db, client_factory):
     anon = client_factory()
     resp = await anon.post(f"/workouts/{workout_id}/repeat")
     assert resp.status_code == 401
+
+
+# ---------- перенос тренировки на другой день ----------
+
+
+@pytest.mark.asyncio
+async def test_update_workout_date_keeps_time_of_day_and_duration(fresh_db, client_factory):
+    """Переносится день, а не «когда именно тренировался»: стирать утро в
+    полдень нельзя — на времени старта стоят значки за ранний подъём, а на
+    разнице start/finish — за длинную тренировку."""
+    user_id = 111
+    client = await _linked_client(fresh_db, client_factory, telegram_id=user_id)
+    ex_id = await db.create_exercise(user_id, "Жим лёжа", None)
+    workout_id = await _make_finished_workout(user_id, [ex_id])
+
+    resp = await client.patch(f"/workouts/{workout_id}/date", json={"date": "2024-03-05"})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["started_at"] == "2024-03-05T10:00:00"
+    assert body["finished_at"] == "2024-03-05T11:00:00"
+
+
+@pytest.mark.asyncio
+async def test_update_workout_date_rejects_garbage(fresh_db, client_factory):
+    user_id = 111
+    client = await _linked_client(fresh_db, client_factory, telegram_id=user_id)
+    ex_id = await db.create_exercise(user_id, "Присед", None)
+    workout_id = await _make_finished_workout(user_id, [ex_id])
+
+    for bad in ("05.03.2024", "2024-13-40", 20240305, None):
+        resp = await client.patch(f"/workouts/{workout_id}/date", json={"date": bad})
+        assert resp.status_code == 400, bad
+        assert resp.json()["error"] == "bad_request"
+
+    unchanged = await db.get_workout(workout_id)
+    assert unchanged["started_at"] == "2024-01-01T10:00:00"
+
+
+@pytest.mark.asyncio
+async def test_update_workout_date_does_not_touch_someone_elses(fresh_db, client_factory):
+    owner_id, intruder_id = 111, 222
+    await _linked_client(fresh_db, client_factory, telegram_id=owner_id)
+    ex_id = await db.create_exercise(owner_id, "Тяга", None)
+    workout_id = await _make_finished_workout(owner_id, [ex_id])
+
+    intruder = await _linked_client(fresh_db, client_factory, telegram_id=intruder_id)
+    resp = await intruder.patch(f"/workouts/{workout_id}/date", json={"date": "2024-03-05"})
+    assert resp.status_code == 404
+    assert (await db.get_workout(workout_id))["started_at"] == "2024-01-01T10:00:00"
+
+
+@pytest.mark.asyncio
+async def test_update_workout_date_resyncs_achievements(fresh_db, client_factory):
+    """Сдвиг даты работает в обе стороны — может и достроить серию, и разорвать
+    уже засчитанную, — поэтому пересчёт целиком, а не только начисление."""
+    user_id = 111
+    client = await _linked_client(fresh_db, client_factory, telegram_id=user_id)
+    ex_id = await db.create_exercise(user_id, "Жим лёжа", None)
+    workout_id = await _make_finished_workout(user_id, [ex_id])
+    await db.award_achievements(user_id, {"__never_earned__"})
+    assert "__never_earned__" in await db.list_achievement_codes(user_id)
+
+    resp = await client.patch(f"/workouts/{workout_id}/date", json={"date": "2024-03-05"})
+    assert resp.status_code == 200
+    assert "__never_earned__" not in await db.list_achievement_codes(user_id)
