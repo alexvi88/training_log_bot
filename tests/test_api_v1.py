@@ -1179,3 +1179,20 @@ async def test_set_with_non_numeric_rpe_is_a_400_not_a_500(fresh_db, client_fact
     )
     assert ok.status_code == 201, ok.text
     assert ok.json()["rpe"] == 9.5
+
+
+@pytest.mark.asyncio
+async def test_list_query_params_reject_garbage_with_400(fresh_db, client_factory):
+    """«?limit=abc» — кривая ссылка, а не поломка сервера: списки тренировок и
+    веса тела разбирали параметр голым int() и отвечали 500."""
+    client = await _linked_client(fresh_db, client_factory)
+
+    for url in ("/workouts?limit=abc", "/workouts?offset=abc", "/bodyweight?limit=abc"):
+        resp = await client.get(url)
+        assert resp.status_code == 400, (url, resp.text)
+        assert resp.json()["error"] == "bad_request"
+
+    # рабочие значения по-прежнему работают, а без параметра — как раньше
+    assert (await client.get("/workouts?limit=5&offset=0")).status_code == 200
+    assert (await client.get("/bodyweight")).status_code == 200
+    assert (await client.get("/bodyweight?limit=5")).status_code == 200
