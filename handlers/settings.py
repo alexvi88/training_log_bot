@@ -1,6 +1,7 @@
-"""User settings: units, e1RM formula, CSV export."""
+"""User settings: units, e1RM formula, CSV export, account deletion."""
 
 import json
+import logging
 from html import escape
 from typing import Optional
 
@@ -8,6 +9,7 @@ from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import BufferedInputFile, CallbackQuery, Message
 
+import account_deletion
 import achievement_sync
 import config
 import csv_export
@@ -18,6 +20,7 @@ import ui
 from fsm import AITrainerFlow, SettingsFlow
 
 router = Router(name="settings")
+logger = logging.getLogger(__name__)
 
 
 # Guards "settings:unityes" against a double tap: two callbacks from the same
@@ -477,4 +480,42 @@ async def settings_export(callback: CallbackQuery, state: FSMContext):
     await callback.message.answer_document(
         BufferedInputFile(data, filename="training_log.csv"), caption=i18n.t("settings.export.caption")
     )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "settings:delete")
+async def settings_delete_confirm(callback: CallbackQuery, state: FSMContext):
+    """Экран подтверждения. Текст обязан назвать обе поверхности: аккаунт один
+    на бота и на приложение, и человек, нажавший «удалить» в приложении, иначе
+    снесёт год истории, думая, что отвязывает приложение (то же требование к
+    клиенту у DELETE /v1/account — см. api_v1_account.delete_account)."""
+    kb = keyboards.yes_no_keyboard(
+        yes_cb="settings:deleteyes", no_cb="settings:menu",
+        yes_text=i18n.t("settings.delete.yes"), no_text=i18n.t("btn.cancel"),
+    )
+    await ui.safe_edit(callback, i18n.t("settings.delete.confirm"), reply_markup=kb)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "settings:deleteyes")
+async def settings_delete_go(callback: CallbackQuery, state: FSMContext):
+    uid = callback.from_user.id
+    try:
+        left = await account_deletion.delete_account(uid, getattr(state, "storage", None))
+    except Exception:
+        # Снос идёт одной транзакцией: упало — значит не снеслось ничего, и
+        # аккаунт на месте целиком. Сказать это прямо: «удалил» и «не удалил»
+        # не имеют права выглядеть одинаково.
+        logger.exception("account deletion failed for %s (self-service)", uid)
+        await ui.safe_edit(callback, i18n.t("settings.delete.failed"))
+        await callback.answer()
+        return
+    if left:
+        logger.error("account %s not fully deleted, left: %s", uid, left)
+        await ui.safe_edit(callback, i18n.t("settings.delete.partial"))
+        await callback.answer()
+        return
+    # Без клавиатуры намеренно: любая кнопка тут вела бы в экран несуществующего
+    # аккаунта, а состояние диалога только что стёрли вместе с ним.
+    await ui.safe_edit(callback, i18n.t("settings.delete.done"))
     await callback.answer()

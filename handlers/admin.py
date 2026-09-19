@@ -16,6 +16,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+import account_deletion
 import acquisition
 import activity_log
 import ai_limits
@@ -908,28 +909,6 @@ async def admin_wipe_cancel(callback: CallbackQuery):
     await callback.answer()
 
 
-async def _forget_user_outside_db(state: FSMContext, uid: int) -> None:
-    """Всё, что помнит про атлета не база: файл состояния и кэши в памяти.
-
-    База — не единственное место, где живут его данные, и после «снёс целиком»
-    остальные места договаривать обязаны: черновик программы в FSM возвращался
-    первым же тапом по висящей в чате кнопке, а снимок экрана из кэша мог
-    показать тренировки, которых уже нет.
-    """
-    storage = getattr(state, "storage", None)
-    drop_user = getattr(storage, "drop_user", None)
-    if drop_user is not None:
-        await drop_user(uid)
-    from handlers import history as history_handlers
-    from handlers import workout as workout_handlers
-
-    history_handlers._progress_view_cache.pop(uid, None)
-    workout_handlers._heatmap_cache.pop(uid, None)
-    # Суточный расход — общий на всех, но в нём была и доля снесённого; пусть
-    # пересчитается по тому, что осталось.
-    ai_limits.reset_cache()
-
-
 @router.callback_query(F.data.startswith("admin:wipe:go:"))
 async def admin_wipe_go(callback: CallbackQuery, state: FSMContext):
     if not _is_admin(callback.from_user.id):
@@ -940,7 +919,7 @@ async def admin_wipe_go(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Сносить можно только TEST_USER_ID", show_alert=True)
         return
     try:
-        await db.wipe_user_account(uid)
+        left = await account_deletion.delete_account(uid, getattr(state, "storage", None))
     except Exception:
         # Снос идёт одной транзакцией: упало — значит не снеслось ничего. Молчать
         # тут нельзя, иначе «снёс» и «на месте» выглядят одинаково.
@@ -951,8 +930,6 @@ async def admin_wipe_go(callback: CallbackQuery, state: FSMContext):
         )
         await callback.answer("Не вышло", show_alert=True)
         return
-    await _forget_user_outside_db(state, uid)
-    left = await db.user_data_left(uid)
     if left:
         tail = ", ".join(f"{table}: {count}" for table, count in sorted(left.items()))
         await ui.safe_edit(callback, f"Снёс {uid}, но кое-что уцелело — {tail}. Разбирайся.")

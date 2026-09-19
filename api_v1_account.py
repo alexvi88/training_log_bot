@@ -11,18 +11,22 @@ UPDATE (пересчёт весов при смене единиц, ресинк
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Optional
 
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
+import account_deletion
 import achievement_sync
 import api_v1_common as common
 import config
 import db
 import i18n
 from workout_edit_data import move_workout_to_date, on_workout_edited
+
+logger = logging.getLogger(__name__)
 
 ApiError = common.ApiError
 _authed_user_id = common.authed_user_id
@@ -78,6 +82,44 @@ async def get_settings(request: Request) -> JSONResponse:
     if user is None:
         raise ApiError(404, "not_found", "user not found")
     return JSONResponse(_settings_json(user))
+
+
+async def delete_account(request: Request) -> JSONResponse:
+    """Снести аккаунт целиком — требование Apple 5.1.1(v): путь «удалить
+    аккаунт» обязан быть внутри приложения, а не в письме в поддержку.
+
+    Сносится ВЕСЬ аккаунт, а не данные приложения: аккаунт у нас один на две
+    поверхности, значит вместе с приложением исчезает и история в боте. Так и
+    должно быть по требованию, но клиент обязан сказать это на экране
+    подтверждения дословно — человек, который думает, что отвязывает
+    приложение, иначе снесёт год тренировок.
+
+    Подтверждение спрашивается ещё раз здесь, параметром `?confirm=delete`, и
+    это не дубль экрана клиента: голый DELETE слишком легко получить случайно —
+    повтор запроса из офлайн-очереди, чужой скрипт с утёкшим токеном, опечатка
+    в пути. Операция необратимая и единственная такая во всём `/v1`, так что
+    цена лишнего параметра — ноль, а цена его отсутствия — история, которую не
+    вернуть. Параметром, а не телом: тело у DELETE по дороге теряют и прокси, и
+    половина HTTP-клиентов, и «подтверждение пропало» превратилось бы в 400 на
+    ровном месте.
+
+    Ответ 200 отдаётся только когда в базе действительно ничего не осталось:
+    `account_deletion.delete_account` возвращает уцелевшее, и непустой остаток
+    — это 500, а не успех. Токен, которым пришёл запрос, к этому моменту уже
+    снесён вместе с остальными строками аккаунта.
+    """
+    user_id = await _authed_user_id(request)
+    if request.query_params.get("confirm") != "delete":
+        raise ApiError(400, "bad_request", "expected ?confirm=delete")
+
+    left = await account_deletion.delete_account(user_id)
+    if left:
+        # Снос идёт одной транзакцией, так что сюда можно попасть только если
+        # часть данных лежит вне неё — знать об этом надо по логу, а не по
+        # жалобе «удалил аккаунт, а история осталась».
+        logger.error("DELETE /v1/account: %s not fully deleted, left: %s", user_id, left)
+        raise ApiError(500, "internal_error", "account was not fully deleted")
+    return JSONResponse({"deleted": True})
 
 
 async def _apply_unit_change(user_id: int, new_unit: str) -> None:
@@ -452,6 +494,9 @@ async def repeat_workout(request: Request) -> JSONResponse:
 routes = [
     Route("/settings", get_settings, methods=["GET"]),
     Route("/settings", update_settings, methods=["PATCH"]),
+    # Живёт рядом с настройками намеренно: в боте «Удалить аккаунт» — кнопка
+    # блока «Данные» на экране настроек, и в приложении ей место там же.
+    Route("/account", delete_account, methods=["DELETE"]),
     Route("/workouts/{workout_id:int}/sets/{set_id:int}", update_workout_set, methods=["PATCH"]),
     Route("/workouts/{workout_id:int}/sets/{set_id:int}", delete_workout_set, methods=["DELETE"]),
     Route(

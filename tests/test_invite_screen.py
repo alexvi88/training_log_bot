@@ -77,10 +77,10 @@ def test_achievements_keyboard_offers_invite_button():
     assert "invite:show" in cbs
 
 
-def test_settings_keyboard_ends_with_invite_then_menu():
+def test_settings_keyboard_ends_with_invite_delete_then_menu():
     kb = keyboards.settings_keyboard(
         unit="kg", formula="epley", pushes_enabled=True, ai_comments_enabled=True,
         progression_enabled=True,
     )
     cbs = [b.callback_data for row in kb.inline_keyboard for b in row]
-    assert cbs[-2:] == ["invite:show", "settings:back"]
+    assert cbs[-3:] == ["invite:show", "settings:delete", "settings:back"]

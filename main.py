@@ -16,6 +16,7 @@ from aiogram.types import (
     Message,
 )
 
+import account_deletion
 import activity_log
 import admin_tasks
 import announcements
@@ -432,6 +433,12 @@ async def main() -> None:
     await _setup_commands(bot)
     await bot_profile.sync_bot_profile(bot)
     dp = Dispatcher(storage=JSONFileStorage(config.FSM_STORAGE_PATH))
+    # Снос аккаунта из приложения (DELETE /v1/account) обязан стереть и
+    # черновики диалога, а REST-слой живёт в этом же процессе, но до
+    # диспетчера не достаёт. Второй JSONFileStorage поверх того же файла завести
+    # нельзя — затрёт состояние всех, кто говорит с ботом прямо сейчас, — так
+    # что отдаём единственный (см. account_deletion.set_fsm_storage).
+    account_deletion.set_fsm_storage(dp.storage)
     dp.errors.register(on_unhandled_error)
     # Первой из всех outer_middleware: она только выставляет i18n.set_lang и
     # никогда не шлёт текст сама, а все следующие middleware (RefreshPersistent
