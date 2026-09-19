@@ -47,6 +47,13 @@ async def _owned_program(program_id: int, user_id: int):
     return program
 
 
+async def _owned_routine(routine_id: int, user_id: int):
+    routine = await db.get_routine(routine_id)
+    if routine is None or routine["user_id"] != user_id:
+        raise ApiError(404, "not_found", "routine not found")
+    return routine
+
+
 async def _owned_exercise(exercise_id: int, user_id: int):
     exercise = await db.get_exercise(exercise_id)
     if exercise is None or exercise["user_id"] != user_id:
@@ -130,6 +137,23 @@ async def share_program(request: Request) -> JSONResponse:
         raise ApiError(400, "empty_program", "program has no exercises to share")
     token = await db.create_shared_item(user_id, "program", json.dumps(payload, ensure_ascii=False))
     return _share_created_json(token, "program")
+
+
+async def share_routine(request: Request) -> JSONResponse:
+    """Снапшот одного дня (share:rt: в handlers/sharing.py) — «📤 Поделиться»
+    на экране одного дня программы, в отличие от share_program выше (вся
+    многодневка). Приём такой визитки уже есть в import_share ниже: снапшот
+    несёт kind="routine", и sharing.import_routine его давно умеет —
+    отдельного эндпоинта на приём заводить не нужно."""
+    user_id = await _authed_user_id(request)
+    routine_id = int(request.path_params["routine_id"])
+    routine = await _owned_routine(routine_id, user_id)
+    exercises = await db.list_routine_exercises(routine_id)
+    if not exercises:
+        raise ApiError(400, "empty_routine", "day has no exercises to share")
+    payload = sharing.build_routine_payload(routine["name"], exercises)
+    token = await db.create_shared_item(user_id, "routine", json.dumps(payload, ensure_ascii=False))
+    return _share_created_json(token, "routine")
 
 
 async def share_exercise(request: Request) -> JSONResponse:
@@ -217,6 +241,7 @@ async def import_share(request: Request) -> JSONResponse:
 
 routes = [
     Route("/share/programs/{program_id:int}", share_program, methods=["POST"]),
+    Route("/share/routines/{routine_id:int}", share_routine, methods=["POST"]),
     Route("/share/exercises/{exercise_id:int}", share_exercise, methods=["POST"]),
     Route("/share/{token}", get_share_preview, methods=["GET"]),
     Route("/share/{token}/import", import_share, methods=["POST"]),

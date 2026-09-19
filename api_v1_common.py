@@ -116,6 +116,24 @@ def optional_int(body: dict[str, Any], key: str) -> int | None:
     return value
 
 
+def exercise_json(row) -> dict[str, Any]:
+    """Сериализация упражнения — общая для api_v1.py (CRUD своих упражнений)
+    и api_v1_templates.py (форк каталожного шаблона возвращает уже свою
+    заведённую копию тем же форматом, каким её потом отдаст GET /exercises)."""
+    return {
+        "id": row["id"],
+        "display_name": row["display_name"],
+        "original_name": row["original_name"],
+        "primary_group_id": row["primary_group_id"],
+        "equipment": row["equipment"],
+        "unilateral": bool(row["unilateral"]),
+        "attachment": row["attachment"],
+        "bodyweight_load": row["bodyweight_load"],
+        "description": row["description"],
+        "is_archived": bool(row["is_archived"]),
+    }
+
+
 def query_int(request: Request, key: str, default: int, *, minimum: int = 0, maximum: int | None = None) -> int:
     """Числовой query-параметр с потолком. Потолок обязателен там, где
     параметр управляет размером выборки: `?limit=1000000` иначе тянет из

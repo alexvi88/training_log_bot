@@ -82,6 +82,69 @@ async def test_share_empty_program_is_rejected(fresh_db, client_factory):
 
 
 @pytest.mark.asyncio
+async def test_share_routine_returns_token(fresh_db, client_factory):
+    owner = await _linked_client(fresh_db, client_factory, 111)
+    group_id = await db.create_muscle_group(111, "Грудь")
+    bench = await db.create_exercise(111, "Жим лёжа", group_id)
+    routine_id = await db.create_routine(111, "День 1")
+    await db.add_routine_exercise(routine_id, bench, 0, "4x6-8")
+
+    resp = await owner.post(f"/share/routines/{routine_id}")
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["kind"] == "routine"
+    assert body["token"]
+
+
+@pytest.mark.asyncio
+async def test_share_empty_routine_is_rejected(fresh_db, client_factory):
+    owner = await _linked_client(fresh_db, client_factory, 111)
+    routine_id = await db.create_routine(111, "Пустой день")
+
+    resp = await owner.post(f"/share/routines/{routine_id}")
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "empty_routine"
+
+
+@pytest.mark.asyncio
+async def test_share_someone_elses_routine_is_404(fresh_db, client_factory):
+    routine_id = await db.create_routine(111, "День 1")
+    other = await _linked_client(fresh_db, client_factory, 222)
+
+    resp = await other.post(f"/share/routines/{routine_id}")
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_recipient_imports_routine_as_standalone_day(fresh_db, client_factory):
+    """Тело того же снапшота, что и program["days"][i] — import_share уже умеет
+    kind="routine" (см. handlers.sharing.import_routine), новая ручка только
+    выпускает такой token со стороны владельца."""
+    owner = await _linked_client(fresh_db, client_factory, 111)
+    recipient = await _linked_client(fresh_db, client_factory, 222)
+    group_id = await db.create_muscle_group(111, "Грудь")
+    bench = await db.create_exercise(111, "Жим лёжа", group_id)
+    routine_id = await db.create_routine(111, "День 1")
+    await db.add_routine_exercise(routine_id, bench, 0, "4x6-8")
+    token = (await owner.post(f"/share/routines/{routine_id}")).json()["token"]
+
+    preview = await recipient.get(f"/share/{token}")
+    assert preview.status_code == 200
+    assert preview.json()["kind"] == "routine"
+    assert preview.json()["routine"]["name"] == "День 1"
+
+    imported = await recipient.post(f"/share/{token}/import")
+    assert imported.status_code == 201, imported.text
+    body = imported.json()
+    assert body["kind"] == "routine"
+    assert body["name"] == "День 1"
+
+    listed = (await recipient.get("/routines")).json()
+    assert len(listed) == 1
+    assert listed[0]["id"] == body["routine_id"]
+
+
+@pytest.mark.asyncio
 async def test_share_exercise_returns_token(fresh_db, client_factory):
     owner = await _linked_client(fresh_db, client_factory, 111)
     group_id = await db.create_muscle_group(111, "Спина")

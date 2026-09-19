@@ -51,6 +51,7 @@ import api_v1_media
 import api_v1_programs
 import api_v1_progress
 import api_v1_sharing
+import api_v1_templates
 import api_v1_voice
 import apple_signin
 import dashboard_data
@@ -80,19 +81,9 @@ _require = common.require
 
 # ---------- сериализация ----------
 
-def _exercise_json(row) -> dict[str, Any]:
-    return {
-        "id": row["id"],
-        "display_name": row["display_name"],
-        "original_name": row["original_name"],
-        "primary_group_id": row["primary_group_id"],
-        "equipment": row["equipment"],
-        "unilateral": bool(row["unilateral"]),
-        "attachment": row["attachment"],
-        "bodyweight_load": row["bodyweight_load"],
-        "description": row["description"],
-        "is_archived": bool(row["is_archived"]),
-    }
+# Сериализация упражнения переехала в api_v1_common.exercise_json — на неё же
+# теперь опирается api_v1_templates.py (форк шаблона отдаёт тот же формат).
+_exercise_json = common.exercise_json
 
 
 def _set_json(row) -> dict[str, Any]:
@@ -1264,6 +1255,7 @@ routes += (
     + api_v1_progress.routes
     + api_v1_hall_of_fame.routes
     + api_v1_history.routes
+    + api_v1_templates.routes
 )
 
 

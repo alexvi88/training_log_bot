@@ -566,6 +566,12 @@ NEVER_LOCALIZED: dict[str, str] = {
         "workout_card.py под i18n.use_lang), календарь машинными датами/id и "
         "CSV с латинскими заголовками колонок — своего текста модуль не имеет"
     ),
+    "api_v1_templates.py": (
+        "REST-слой каталога упражнений: имена шаблонов и описания приходят "
+        "уже локализованными от seed_data/exercise_descriptions под "
+        "i18n.use_lang, как и /programs/catalog в api_v1_programs.py — своего "
+        "текста модуль не заводит"
+    ),
     "api_v1_voice.py": (
         "общая расшифровка голоса для /ai/voice и /workouts/.../sets/voice: "
         "тексты ошибок получает уже готовыми строками от вызывающих "
