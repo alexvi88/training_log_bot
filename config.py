@@ -113,12 +113,20 @@ MAX_EXERCISE_NAME_LENGTH = 60
 # фото после длинного описания падала при каждом открытии.
 MAX_EXERCISE_DESCRIPTION_LENGTH = 700
 
-# How many training days one user may keep across all their programs. Lives here
-# rather than in ai_trainer.py, where it used to: the cap has nothing to do with
-# the AI, and while it sat there only the AI-trainer path enforced it — the
-# catalog, the importer and "save from a workout" walked straight past, and then
-# the AI path started refusing on a total it hadn't created. See db.routine_budget.
-MAX_ROUTINES_PER_USER = 30
+# Сколько тренировочных дней человек может держать во всех своих программах
+# суммарно. Константа живёт здесь, а не в ai_trainer.py, где была раньше: потолок
+# не имеет отношения к AI, а пока он лежал там, его соблюдал один AI-тренер —
+# каталог, импорт и «сохранить из тренировки» шли мимо, и AI-путь начинал
+# отказывать по сумме, которую сам не набирал. См. db.routine_budget, который
+# зовут все двери создания дней.
+#
+# Почему 500, а не тридцать: технической причины у потолка нет — упереться в него
+# мешает только свалка в списке программ, а это дело самого человека. Прежние
+# тридцать не были обоснованы ничем и резали живые сценарии (мезоцикл на год —
+# это уже полсотни дней). 500 выбрано как число, недостижимое в реальном
+# использовании, но всё ещё конечное: зациклившийся импорт или клиент в цикле
+# упрётся в него и не забьёт базу.
+MAX_ROUTINES_PER_USER = 500
 
 # Названия программ и дней, которые вводит пользователь. Тот же потолок, по
 # которому AI-тренер режет предложенные им имена: длинное имя едет в подпись

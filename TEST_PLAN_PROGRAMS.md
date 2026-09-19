@@ -6,7 +6,7 @@
 то есть самое ценное для ручного прогона. Отметки: `[x]` пройдено,
 находки — в `BUGS_LIVE_TESTING.md`.
 
-Константы для сверки арифметики: `MAX_ROUTINES_PER_USER = 30`,
+Константы для сверки арифметики: `MAX_ROUTINES_PER_USER = 500`,
 `MAX_PROGRAM_NAME_LENGTH = 48`, `MAX_SHARED_DAYS = 6`,
 `MAX_SHARED_EXERCISES = 30`, `ROUTINE_SOURCE_PAGE_SIZE = 6`,
 `RECENT_EXERCISES_LIMIT = 8`, `_PLAN_LABEL_MAX = 44`,

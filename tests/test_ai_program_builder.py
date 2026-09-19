@@ -8,6 +8,7 @@
 import json
 
 import ai_trainer
+import config
 import formatting
 import keyboards
 
@@ -469,8 +470,11 @@ async def test_saving_a_draft_persists_the_progression_rule(fresh_db, user_id, m
     assert json.loads(row["progression"]) == {"rule": "double_progression", "reps_top": 8, "step": 2.5}
 
 
-async def test_warns_the_model_when_the_routine_cap_would_overflow(fresh_db, user_id):
-    for i in range(ai_trainer.MAX_ROUTINES_PER_USER):
+async def test_warns_the_model_when_the_routine_cap_would_overflow(fresh_db, user_id, monkeypatch):
+    # Потолок занижен монкипатчем: превью должно предупреждать модель о том, что
+    # программа не влезет, а не ждать, пока в базе окажется 500 дней.
+    monkeypatch.setattr(config, "MAX_ROUTINES_PER_USER", 3)
+    for i in range(config.MAX_ROUTINES_PER_USER):
         await fresh_db.create_routine(user_id, f"Программа {i}")
 
     payload, _ = await _propose(
