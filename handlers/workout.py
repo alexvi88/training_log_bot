@@ -3479,23 +3479,12 @@ def _finished_workout_ai_button_visible(workout, user) -> bool:
 async def _rank_promotion(user_id: int, user) -> "analytics.Rank | None":
     """Звание, если оно только что выросло, иначе None.
 
-    Само звание считается на лету (analytics.rank_for), поэтому «объявлено ли
-    оно уже» приходится помнить отдельно — users.rank_level_seen. Понижение
-    (перерыв стоит одной ступени) молча опускает и отметку: вернувшись к темпу,
-    человек получит объявление снова — это возвращение, и оно того стоит.
+    Сам расчёт переехал в dashboard_data.rank_promotion: то же повышение теперь
+    объявляет и ответ POST /v1/workouts/{id}/finish (api_v1.py), а две копии
+    этих семи строк разъехались бы молча. Имя здесь оставлено — на него
+    ссылаются тесты (tests/test_ranks.py) и остальной файл.
     """
-    dates = [dt.date.fromisoformat(d) for d in await db.list_finished_workout_dates(user_id)]
-    agg = await db.hall_of_fame_aggregates(user_id)
-    rank = analytics.rank_for(
-        len(dates),
-        formatting.to_kg(agg["tonnage"], user["unit"]),
-        analytics.workouts_per_week(dates, timeutil.user_today(user)),
-    )
-    seen = user["rank_level_seen"]
-    if rank.level == seen:
-        return None
-    await db.update_user(user_id, rank_level_seen=rank.level)
-    return rank if rank.level > seen else None
+    return await dashboard_data.rank_promotion(user_id, user)
 
 
 async def _finished_workout_card_text(workout, user, note: str | None, comment=_UNSET) -> str:
