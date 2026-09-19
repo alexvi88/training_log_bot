@@ -20,6 +20,7 @@ import timeutil
 import ui
 from fsm import EditWorkoutFlow
 from parser import ParseError, parse_ru_date, parse_sets_line, parse_single_token
+from workout_edit_data import on_workout_edited as _on_workout_edited
 
 router = Router(name="edit_workout")
 
@@ -27,26 +28,6 @@ router = Router(name="edit_workout")
 async def _delete_message(message: Message):
     with suppress(TelegramBadRequest):
         await message.delete()
-
-
-async def _on_workout_edited(workout_id: int, keep_block_id: int | None = None) -> None:
-    """Common housekeeping after any change to a past workout's sets or date:
-    drop blocks a delete_set/rmex left with no sets (they'd otherwise linger
-    as a "подходов нет" row forever, since delete_empty_blocks is normally
-    only run once, at the moment a workout finishes), and drop the cached
-    AI-trainer comment — it describes numbers that just changed underneath it.
-    keep_block_id spares the block the user is currently on, so deleting a
-    last set keeps the exercise screen open (its own empty state handles the
-    display) instead of reaping the block out from under them.
-    """
-    await db.delete_empty_blocks(workout_id, keep_block_id=keep_block_id)
-    await db.set_workout_ai_comment(workout_id, None)
-    # Badges are derived from the sets: fixing a mistyped 500кг down to 50кг (or
-    # deleting that set) has to take back the weight-club/tonnage badges it
-    # unlocked, and a corrected date can just as well complete a streak.
-    workout = await db.get_workout(workout_id)
-    if workout is not None:
-        await achievement_sync.resync(workout["user_id"])
 
 
 async def _edit_screen_payload(workout_id: int) -> tuple[str, InlineKeyboardMarkup]:
