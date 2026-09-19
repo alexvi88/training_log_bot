@@ -294,3 +294,76 @@ async def test_parse_respects_daily_limit(fresh_db, client_factory, monkeypatch)
     resp = await client.post("/food/parse", json={"text": "что угодно"})
     assert resp.status_code == 429
     assert resp.json()["error"] == "food_limit_exceeded"
+
+
+@pytest.mark.asyncio
+async def test_parse_food_releases_busy_after_analysis_fails(fresh_db, client_factory, monkeypatch):
+    """Сбой analyze_food не должен оставлять человека заблокированным до конца
+    суток — `finally` обязан снять `_busy` при любом исходе, включая
+    исключение внутри try (см. api_v1_food.parse_food)."""
+    import api_v1_food
+
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+
+    async def fails(user_id, **kwargs):
+        raise RuntimeError("provider exploded")
+
+    monkeypatch.setattr(ai_trainer, "analyze_food", fails)
+    client = await _linked_client(fresh_db, client_factory)
+
+    resp = await client.post("/food/parse", json={"text": "тарелка риса"})
+    assert resp.status_code == 502
+    assert resp.json()["error"] == "analysis_failed"
+    assert 111 not in api_v1_food._busy
+
+    # Следующий, нормальный запрос после сбоя не натыкается на "занято".
+    async def fake_analyze_food(user_id, **kwargs):
+        return {"is_food": True, "description": "Рис", "items": [], "calories": 250}
+
+    monkeypatch.setattr(ai_trainer, "analyze_food", fake_analyze_food)
+    resp = await client.post("/food/parse", json={"text": "тарелка риса"})
+    assert resp.status_code == 200, resp.text
+
+
+@pytest.mark.asyncio
+async def test_concurrent_food_parses_pay_the_model_only_once(fresh_db, client_factory, monkeypatch):
+    """Два одновременных POST /food/parse одного человека (двойной тап на
+    фото тарелки) — без замка оба читают ЕЩЁ не увеличенный счётчик, оба
+    проходят ai_limits.check и оба уходят в модель. Настоящая гонка: обе
+    корутины реально стартуют и обе доходят до analyze_food одновременно, если
+    бы не busy-замок."""
+    import asyncio
+
+    import api_v1_food
+
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+
+    calls = 0
+    release = asyncio.Event()
+
+    async def slow_analyze(user_id, **kwargs):
+        nonlocal calls
+        calls += 1
+        await release.wait()
+        return {"is_food": True, "description": "Рис", "items": [], "calories": 250}
+
+    monkeypatch.setattr(ai_trainer, "analyze_food", slow_analyze)
+    client = await _linked_client(fresh_db, client_factory)
+
+    async def fire():
+        return await client.post("/food/parse", json={"text": "тарелка риса"})
+
+    first_task = asyncio.ensure_future(fire())
+    await asyncio.sleep(0.05)
+    second_task = asyncio.ensure_future(fire())
+    await asyncio.sleep(0.05)
+    release.set()
+    first_resp, second_resp = await asyncio.gather(first_task, second_task)
+
+    statuses = sorted([first_resp.status_code, second_resp.status_code])
+    assert statuses == [200, 429]
+    busy_resp = first_resp if first_resp.status_code == 429 else second_resp
+    assert busy_resp.json()["error"] == "busy"
+    assert calls == 1
+    assert await fresh_db.get_ai_food_count_today(111) == 1
+    assert 111 not in api_v1_food._busy

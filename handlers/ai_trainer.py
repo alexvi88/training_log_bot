@@ -21,6 +21,7 @@ import ai_limits
 import ai_program_actions
 import ai_setup_flow
 import ai_trainer
+import busy_lock
 import config
 import db
 import exercise_mentions
@@ -1894,11 +1895,18 @@ def _try_claim_busy(user_id: int) -> bool:
     reached the model — double the Grok cost, and the daily-question limit
     (charged only after a successful answer) could be exceeded by however many
     requests raced through the gap.
+
+    The actual check-and-reserve now lives in `busy_lock.try_claim` — the
+    REST layer (`/v1`, api_v1_ai.py/api_v1_food.py) has the exact same gap
+    for its own paid calls and needs the exact same one-process primitive.
+    `_busy` stays a plain module-level `set[int]` here on purpose (not a
+    wrapper object): tests reach into it directly (`ai_trainer._busy.add(...)`,
+    `user_id not in ai_trainer._busy`), and callers below still call
+    `_busy.discard(user_id)` — rewriting all of that to a new type would be
+    exactly the "rewrite half of this file" this shared primitive is meant to
+    avoid.
     """
-    if user_id in _busy:
-        return False
-    _busy.add(user_id)
-    return True
+    return busy_lock.try_claim(_busy, user_id)
 
 
 def _rich(markdown: str):

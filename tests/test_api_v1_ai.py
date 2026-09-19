@@ -242,6 +242,64 @@ async def test_ask_times_out_without_hanging(fresh_db, client_factory, monkeypat
     assert resp.json()["error"] == "timeout"
     # Таймаут — не ответ, счётчик не движется.
     assert await fresh_db.get_ai_question_count_today(111) == 0
+    # И бронь `_busy` снята — иначе после первого же таймаута человек был бы
+    # заблокирован до конца жизни процесса (см. api_v1_ai._claim_turn_or_429).
+    import api_v1_ai
+
+    assert 111 not in api_v1_ai._busy
+
+
+# ---------- гонка двух параллельных запросов (двойной платёж) ----------
+
+
+@pytest.mark.asyncio
+async def test_concurrent_asks_pay_the_model_only_once(fresh_db, client_factory, monkeypatch):
+    """Два одновременных POST /ai/ask одного человека (двойной тап, ретрай) —
+    раньше оба проходили ai_limits.check до того, как первый успевал
+    отметиться (инкремент идёт только после ответа модели), и оба уходили в
+    модель. Настоящая гонка, не единичный вызов: обе корутины реально стартуют
+    и обе доходят до `ai_trainer.ask` одновременно, если бы не busy-замок."""
+    import asyncio
+
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+
+    calls = 0
+    release = asyncio.Event()
+
+    async def slow_ask(user_id, question, history, **kwargs):
+        nonlocal calls
+        calls += 1
+        await release.wait()
+        return "ответ"
+
+    monkeypatch.setattr(ai_trainer, "ask", slow_ask)
+
+    client = await _linked_client(fresh_db, client_factory)
+
+    async def fire():
+        return await client.post("/ai/ask", json={"question": "Как мой прогресс?"})
+
+    first_task = asyncio.ensure_future(fire())
+    # Дать первой корутине реально дойти до `ask` и повиснуть на release,
+    # прежде чем стартует вторая — иначе обе могут оказаться ещё до захвата
+    # замка и тест ничего не докажет про сам захват.
+    await asyncio.sleep(0.05)
+    second_task = asyncio.ensure_future(fire())
+    await asyncio.sleep(0.05)
+    release.set()
+    first_resp, second_resp = await asyncio.gather(first_task, second_task)
+
+    statuses = sorted([first_resp.status_code, second_resp.status_code])
+    assert statuses == [200, 429]
+    busy_resp = first_resp if first_resp.status_code == 429 else second_resp
+    assert busy_resp.json()["error"] == "busy"
+    # Модель реально позвана ровно один раз — не два, как до защиты.
+    assert calls == 1
+    assert await fresh_db.get_ai_question_count_today(111) == 1
+
+    import api_v1_ai
+
+    assert 111 not in api_v1_ai._busy
 
 
 # ---------- персистентная история диалога (ai_conversation_turns) ----------
@@ -876,6 +934,91 @@ async def test_ask_video_respects_video_daily_limit(fresh_db, client_factory, mo
     resp = await client.post("/ai/video", json={"video_data_url": _video_data_url()})
     assert resp.status_code == 429
     assert resp.json()["error"] == "video_limit_exceeded"
+
+
+@pytest.mark.asyncio
+async def test_ask_video_releases_busy_after_analysis_fails(fresh_db, client_factory, monkeypatch):
+    """Провалившийся разбор (see test_ask_video_returns_502_when_analysis_fails)
+    не должен оставлять человека заблокированным до конца суток — `finally`
+    обязан снять `_busy` на любом исходе, включая исключение внутри try."""
+    import api_v1_ai
+
+    monkeypatch.setattr(config, "video_analysis_available", lambda: True)
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+
+    async def fails(video_bytes, user_id, mime_type="video/mp4", exercise_hint=None):
+        raise RuntimeError("Qwen3-VL is down")
+
+    monkeypatch.setattr(video_analysis, "analyze", fails)
+    client = await _linked_client(fresh_db, client_factory)
+
+    # RuntimeError внутри try не перехватывается кодом ask_video — Starlette's
+    # ServerErrorMiddleware отдаёт клиенту 500 (см. api_v1_common
+    # .unhandled_error_handler), но ASGITransport по умолчанию (raise_app_exceptions)
+    # пробрасывает исходное исключение и в тестовый httpx-клиент. Статус тут
+    # не главное — важно, что бронь всё равно снята.
+    with pytest.raises(RuntimeError, match="Qwen3-VL is down"):
+        await client.post("/ai/video", json={"video_data_url": _video_data_url()})
+    assert 111 not in api_v1_ai._busy
+
+    # И следующий, нормальный запрос после сбоя не натыкается на "занято".
+    async def fake_analyze(video_bytes, user_id, mime_type="video/mp4", exercise_hint=None):
+        return _fake_analysis()
+
+    async def fake_ask(user_id, question, history, **kwargs):
+        return "ответ после сбоя"
+
+    monkeypatch.setattr(video_analysis, "analyze", fake_analyze)
+    monkeypatch.setattr(ai_trainer, "ask", fake_ask)
+
+    resp = await client.post("/ai/video", json={"video_data_url": _video_data_url()})
+    assert resp.status_code == 200, resp.text
+
+
+@pytest.mark.asyncio
+async def test_concurrent_video_asks_pay_for_analysis_only_once(fresh_db, client_factory, monkeypatch):
+    """Тот же двойной-тап-сценарий, что у /ai/ask, но для /ai/video: без замка
+    оба параллельных запроса дошли бы до Qwen3-VL (video_analysis.analyze) и
+    до Grok (ai_trainer.ask) — двойной платёж за оба платных шага сразу."""
+    import asyncio
+
+    import api_v1_ai
+
+    monkeypatch.setattr(config, "video_analysis_available", lambda: True)
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+
+    analyze_calls = 0
+    release = asyncio.Event()
+
+    async def slow_analyze(video_bytes, user_id, mime_type="video/mp4", exercise_hint=None):
+        nonlocal analyze_calls
+        analyze_calls += 1
+        await release.wait()
+        return _fake_analysis()
+
+    async def fake_ask(user_id, question, history, **kwargs):
+        return "ответ"
+
+    monkeypatch.setattr(video_analysis, "analyze", slow_analyze)
+    monkeypatch.setattr(ai_trainer, "ask", fake_ask)
+
+    client = await _linked_client(fresh_db, client_factory)
+
+    async def fire():
+        return await client.post("/ai/video", json={"video_data_url": _video_data_url()})
+
+    first_task = asyncio.ensure_future(fire())
+    await asyncio.sleep(0.05)
+    second_task = asyncio.ensure_future(fire())
+    await asyncio.sleep(0.05)
+    release.set()
+    first_resp, second_resp = await asyncio.gather(first_task, second_task)
+
+    statuses = sorted([first_resp.status_code, second_resp.status_code])
+    assert statuses == [200, 429]
+    assert analyze_calls == 1
+    assert await fresh_db.get_ai_video_count_today(111) == 1
+    assert 111 not in api_v1_ai._busy
 
 
 # ---------- GET /ai/thinking ----------
