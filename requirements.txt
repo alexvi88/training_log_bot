@@ -5,3 +5,4 @@ xai-sdk==1.11.0
 matplotlib==3.11.0
 mcp==2.0.0
 python-dotenv==1.2.2
+PyJWT[crypto]==2.14.0

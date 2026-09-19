@@ -27,6 +27,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
+import apple_signin
 import db
 import mcp_oauth
 
@@ -141,6 +142,10 @@ async def auth_link(request: Request) -> JSONResponse:
         raise ApiError(429, "rate_limited", "too many attempts, try again later")
     if status != "ok" or user_id is None:
         raise ApiError(400, "invalid_code", "code is invalid or expired")
+    return await _issue_token_response(user_id)
+
+
+async def _issue_token_response(user_id: int) -> JSONResponse:
     token = await db.issue_api_token(user_id)
     user = await db.get_user(user_id)
     return JSONResponse(
@@ -151,6 +156,46 @@ async def auth_link(request: Request) -> JSONResponse:
             "lang": user["lang"] if user else "ru",
         }
     )
+
+
+async def auth_apple(request: Request) -> JSONResponse:
+    """Sign In with Apple — не вторая личность, а быстрая пересвязка уже
+    существующего (telegram-привязанного) аккаунта, см. db.auth_identities.
+
+    Тело всегда несёт `identity_token`. Если этот Apple ID уже привязан
+    (обычно так — человек включил Face ID вместо кода раньше), пересылка
+    `link_code` не нужна: `resolve_auth_identity` сам находит владельца. Если
+    это первый раз, нужен ещё и `link_code` — тот же код, что выдаёт `/ios` в
+    боте, — он подтверждает, чей это аккаунт, и Apple ID запоминается на
+    будущее.
+    """
+    body = await _json_body(request)
+    identity_token = str(_require(body, "identity_token", str))
+    try:
+        identity = apple_signin.verify_identity_token(identity_token)
+    except apple_signin.AppleTokenError as exc:
+        raise ApiError(401, "invalid_apple_token", str(exc)) from exc
+
+    user_id = await db.resolve_auth_identity("apple", identity.apple_user_id)
+    if user_id is None:
+        link_code = body.get("link_code")
+        if not link_code or not isinstance(link_code, str):
+            raise ApiError(404, "apple_identity_unknown", "link with the bot code first")
+        status, code_user_id = await db.consume_link_code(
+            link_code.strip(),
+            client_ip=request.client.host if request.client else None,
+            window_seconds=mcp_oauth.CONSENT_FAILURE_WINDOW,
+            window_limit_per_ip=mcp_oauth.CONSENT_FAILURE_LIMIT_PER_IP,
+            window_limit_total=mcp_oauth.CONSENT_FAILURE_LIMIT_TOTAL,
+        )
+        if status == "rate_limited":
+            raise ApiError(429, "rate_limited", "too many attempts, try again later")
+        if status != "ok" or code_user_id is None:
+            raise ApiError(400, "invalid_code", "code is invalid or expired")
+        user_id = code_user_id
+        await db.link_auth_identity(user_id, "apple", identity.apple_user_id, identity.email)
+
+    return await _issue_token_response(user_id)
 
 
 async def me(request: Request) -> JSONResponse:
@@ -488,6 +533,7 @@ async def health(request: Request) -> JSONResponse:
 routes = [
     Route("/health", health, methods=["GET"]),
     Route("/auth/link", auth_link, methods=["POST"]),
+    Route("/auth/apple", auth_apple, methods=["POST"]),
     Route("/me", me, methods=["GET"]),
     Route("/muscle-groups", list_muscle_groups, methods=["GET"]),
     Route("/muscle-groups", create_muscle_group, methods=["POST"]),

@@ -736,6 +736,13 @@ def mcp_available() -> bool:
     return MCP_ENABLED and bool(MCP_PUBLIC_URL)
 
 
+# Bundle id iOS-приложения (training_log_bot_ios/project.yml,
+# PRODUCT_BUNDLE_IDENTIFIER) — он же "audience" в identity token от Sign In
+# with Apple: без сверки с ним чужой токен, выпущенный Apple для другого
+# приложения, прошёл бы верификацию подписи и был принят как свой.
+APPLE_BUNDLE_ID = os.getenv("APPLE_BUNDLE_ID", "com.trainingdiary.ios")
+
+
 # --- Общий чат сообщества --------------------------------------------------
 #
 # Обычная телеграм-группа, где атлеты разговаривают друг с другом. Бот в неё не

@@ -549,6 +549,24 @@ CREATE TABLE IF NOT EXISTS api_tokens (
     last_used_at TEXT
 );
 
+-- Второй способ получить api_tokens-токен без кода из бота — Sign In with
+-- Apple. Не отдельная личность, а быстрая пересвязка УЖЕ существующего
+-- аккаунта (единственная личность в продукте всё ещё telegram_id: тут вся
+-- история тренировок, и заводить пользователя "с нуля" через Apple значило
+-- бы дать ему пустой аккаунт без данных). Первый раз всё равно нужен код
+-- бота (`/ios`) — этим он привязывает apple_user_id к своему user_id;
+-- дальше на этом или новом устройстве можно молча получить токен по Face ID,
+-- не переписывая код из Telegram каждую неделю.
+CREATE TABLE IF NOT EXISTS auth_identities (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    provider TEXT NOT NULL,           -- 'apple' пока единственный
+    provider_user_id TEXT NOT NULL,   -- Apple: стабильный "sub" из identity token
+    email TEXT,                       -- Apple отдаёт email только при первом входе
+    created_at TEXT NOT NULL,
+    UNIQUE(provider, provider_user_id)
+);
+
 -- OAuth к тому же доступу (см. mcp_oauth.py). Статический токен выше умеют
 -- слать только клиенты, где заголовок можно вписать руками; браузерный
 -- claude.ai, нативные коннекторы Claude Desktop и ChatGPT принимают
@@ -4459,6 +4477,44 @@ async def resolve_api_token(token: str) -> Optional[int]:
         )
         await conn().commit()
     return row["user_id"]
+
+
+# ---------- сторонние identity-провайдеры (Sign In with Apple) ----------
+#
+# Не вторая личность рядом с telegram_id — быстрая пересвязка уже существующего
+# аккаунта. link_auth_identity вызывается ПОСЛЕ обычной привязки кодом бота,
+# когда человек включает Face ID/Apple ID вместо кода; resolve_auth_identity —
+# при следующих входах тем же Apple ID, без похода в бота за новым кодом.
+
+async def link_auth_identity(
+    user_id: int, provider: str, provider_user_id: str, email: Optional[str] = None
+) -> None:
+    """Привязать сторонний identity к уже известному user_id. ON CONFLICT —
+    Apple ID может переехать на другой telegram-аккаунт (человек связал не тот
+    код и пересвязался) — тогда переписываем владельца, а не плодим дубликаты
+    по UNIQUE(provider, provider_user_id)."""
+    async with _write_lock:
+        await conn().execute(
+            "INSERT INTO auth_identities (user_id, provider, provider_user_id, email, created_at) "
+            "VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(provider, provider_user_id) DO UPDATE SET "
+            "user_id = excluded.user_id, "
+            "email = COALESCE(excluded.email, auth_identities.email)",
+            (user_id, provider, provider_user_id, email, now_iso()),
+        )
+        await conn().commit()
+
+
+async def resolve_auth_identity(provider: str, provider_user_id: str) -> Optional[int]:
+    """provider_user_id (Apple: "sub" из identity token) → user_id, если эта
+    личность уже привязана к чьему-то аккаунту, иначе None — тогда клиент
+    должен предложить обычную привязку кодом бота."""
+    cur = await conn().execute(
+        "SELECT user_id FROM auth_identities WHERE provider = ? AND provider_user_id = ?",
+        (provider, provider_user_id),
+    )
+    row = await cur.fetchone()
+    return row["user_id"] if row else None
 
 
 async def consume_link_code(
