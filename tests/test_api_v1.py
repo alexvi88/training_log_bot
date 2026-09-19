@@ -71,6 +71,58 @@ async def test_auth_link_rate_limits_repeated_bad_codes(fresh_db, client_factory
 
 
 @pytest.mark.asyncio
+async def test_auth_apple_requires_link_code_on_first_use(fresh_db, client_factory, monkeypatch):
+    """Apple ID, о котором сервер ещё не знает, должен требовать код бота —
+    иначе сам факт наличия Apple ID создавал бы доступ к чужому аккаунту."""
+    import apple_signin
+
+    monkeypatch.setattr(
+        apple_signin, "verify_identity_token",
+        lambda token: apple_signin.AppleIdentity(apple_user_id="apple-1", email="a@example.com"),
+    )
+    client = client_factory()
+    resp = await client.post("/auth/apple", json={"identity_token": "whatever"})
+    assert resp.status_code == 404
+    assert resp.json()["error"] == "apple_identity_unknown"
+
+
+@pytest.mark.asyncio
+async def test_auth_apple_links_with_code_then_reauths_without_it(fresh_db, client_factory, monkeypatch):
+    import apple_signin
+
+    monkeypatch.setattr(
+        apple_signin, "verify_identity_token",
+        lambda token: apple_signin.AppleIdentity(apple_user_id="apple-2", email="b@example.com"),
+    )
+    await fresh_db.get_or_create_user(telegram_id=111, username="tester")
+    code = await fresh_db.issue_oauth_link_code(111, ttl_seconds=600, digits=8)
+
+    client = client_factory()
+    first = await client.post("/auth/apple", json={"identity_token": "t1", "link_code": code})
+    assert first.status_code == 200, first.text
+    assert first.json()["user_id"] == 111
+
+    # a used link_code doesn't matter the second time — the Apple identity is now known
+    second = await client.post("/auth/apple", json={"identity_token": "t2"})
+    assert second.status_code == 200
+    assert second.json()["user_id"] == 111
+
+
+@pytest.mark.asyncio
+async def test_auth_apple_rejects_invalid_token(fresh_db, client_factory, monkeypatch):
+    import apple_signin
+
+    def _raise(token):
+        raise apple_signin.AppleTokenError("bad signature")
+
+    monkeypatch.setattr(apple_signin, "verify_identity_token", _raise)
+    client = client_factory()
+    resp = await client.post("/auth/apple", json={"identity_token": "garbage"})
+    assert resp.status_code == 401
+    assert resp.json()["error"] == "invalid_apple_token"
+
+
+@pytest.mark.asyncio
 async def test_me_requires_bearer_token(fresh_db, client_factory):
     client = client_factory()
     resp = await client.get("/me")
