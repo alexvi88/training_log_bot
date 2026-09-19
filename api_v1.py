@@ -108,6 +108,7 @@ def _workout_json(row) -> dict[str, Any]:
         "started_at": row["started_at"],
         "finished_at": row["finished_at"],
         "note": row["note"],
+        "routine_id": row["routine_id"],
     }
 
 
@@ -403,8 +404,17 @@ async def active_workout(request: Request) -> JSONResponse:
 
 
 async def start_workout(request: Request) -> JSONResponse:
+    """`routine_id` в теле — необязательный: старое приложение шлёт пустое
+    тело и получает тренировку «с нуля», как раньше. Без привязки к дню
+    программы `db.next_program_day` не может продвинуться дальше первого
+    дня — ровно то, что уже делает бот в _begin_routine_workout, здесь тот
+    же db.create_workout(routine_id=...) через get_or_create_active_workout."""
     user_id = await _authed_user_id(request)
-    workout_id, created = await db.get_or_create_active_workout(user_id)
+    body = await _json_body(request) if await request.body() else {}
+    routine_id = common.optional_int(body, "routine_id")
+    if routine_id is not None:
+        await api_v1_programs._owned_routine(routine_id, user_id)
+    workout_id, created = await db.get_or_create_active_workout(user_id, routine_id=routine_id)
     workout = await db.get_workout(workout_id)
     return JSONResponse(_workout_json(workout), status_code=201 if created else 200)
 
