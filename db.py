@@ -567,6 +567,23 @@ CREATE TABLE IF NOT EXISTS auth_identities (
     UNIQUE(provider, provider_user_id)
 );
 
+-- Device token для APNs (см. README iOS-репозитория). Один активный на
+-- (user_id, platform) — переустановка или новый телефон получает новый
+-- токен, слать пуш на мёртвый старый незачем. Само отправление ещё не
+-- реализовано: ждёт .p8-ключа APNs, который выпускается только в платном
+-- Apple Developer Program, и решения, какие из существующих пушей
+-- (engagement.py) вообще дублировать на это устройство. Таблица и приём
+-- токена готовы заранее, чтобы включить рассылку одним шагом позже, без
+-- обновления приложения.
+CREATE TABLE IF NOT EXISTS push_tokens (
+    user_id INTEGER NOT NULL,
+    platform TEXT NOT NULL,        -- 'ios' пока единственная
+    device_token TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (user_id, platform)
+);
+
 -- OAuth к тому же доступу (см. mcp_oauth.py). Статический токен выше умеют
 -- слать только клиенты, где заголовок можно вписать руками; браузерный
 -- claude.ai, нативные коннекторы Claude Desktop и ChatGPT принимают
@@ -4515,6 +4532,31 @@ async def resolve_auth_identity(provider: str, provider_user_id: str) -> Optiona
     )
     row = await cur.fetchone()
     return row["user_id"] if row else None
+
+
+# ---------- device tokens для APNs (см. push_tokens выше) ----------
+
+async def register_push_token(user_id: int, platform: str, device_token: str) -> None:
+    async with _write_lock:
+        await conn().execute(
+            "INSERT INTO push_tokens (user_id, platform, device_token, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(user_id, platform) DO UPDATE SET "
+            "device_token = excluded.device_token, updated_at = excluded.updated_at",
+            (user_id, platform, device_token, now_iso(), now_iso()),
+        )
+        await conn().commit()
+
+
+async def unregister_push_token(user_id: int, platform: str) -> bool:
+    """True, если токен был и его удалили — вызывается при отвязке аккаунта
+    в приложении, чтобы не копить мёртвые токены после логаута."""
+    async with _write_lock:
+        cur = await conn().execute(
+            "DELETE FROM push_tokens WHERE user_id = ? AND platform = ?", (user_id, platform)
+        )
+        await conn().commit()
+        return cur.rowcount > 0
 
 
 async def consume_link_code(

@@ -213,6 +213,28 @@ async def me(request: Request) -> JSONResponse:
     )
 
 
+# ---------- push-уведомления (APNs) ----------
+#
+# Только приём и хранение device token — само отправление пушей ждёт
+# .p8-ключа APNs (платный Apple Developer Program) и решения, что вообще
+# слать. См. db.push_tokens.
+
+async def register_push_token(request: Request) -> JSONResponse:
+    user_id = await _authed_user_id(request)
+    body = await _json_body(request)
+    device_token = str(_require(body, "device_token", str)).strip()
+    if not device_token:
+        raise ApiError(400, "bad_request", "device_token must not be empty")
+    await db.register_push_token(user_id, "ios", device_token)
+    return JSONResponse({"registered": True}, status_code=201)
+
+
+async def unregister_push_token(request: Request) -> JSONResponse:
+    user_id = await _authed_user_id(request)
+    await db.unregister_push_token(user_id, "ios")
+    return JSONResponse({"unregistered": True})
+
+
 # ---------- каталог ----------
 
 async def list_muscle_groups(request: Request) -> JSONResponse:
@@ -535,6 +557,8 @@ routes = [
     Route("/auth/link", auth_link, methods=["POST"]),
     Route("/auth/apple", auth_apple, methods=["POST"]),
     Route("/me", me, methods=["GET"]),
+    Route("/push/register", register_push_token, methods=["POST"]),
+    Route("/push/register", unregister_push_token, methods=["DELETE"]),
     Route("/muscle-groups", list_muscle_groups, methods=["GET"]),
     Route("/muscle-groups", create_muscle_group, methods=["POST"]),
     Route("/exercises", list_exercises, methods=["GET"]),

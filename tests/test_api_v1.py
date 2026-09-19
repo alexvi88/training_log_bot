@@ -138,6 +138,33 @@ async def test_me_returns_linked_user(fresh_db, client_factory):
 
 
 @pytest.mark.asyncio
+async def test_register_push_token_requires_auth(fresh_db, client_factory):
+    client = client_factory()
+    resp = await client.post("/push/register", json={"device_token": "abc"})
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_register_and_unregister_push_token(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+
+    empty = await client.post("/push/register", json={"device_token": "   "})
+    assert empty.status_code == 400
+
+    resp = await client.post("/push/register", json={"device_token": "abc123"})
+    assert resp.status_code == 201
+    assert resp.json()["registered"] is True
+
+    # re-registering (new device token after reinstall) overwrites, not duplicates
+    resp2 = await client.post("/push/register", json={"device_token": "def456"})
+    assert resp2.status_code == 201
+
+    unregistered = await client.delete("/push/register")
+    assert unregistered.status_code == 200
+    assert unregistered.json()["unregistered"] is True
+
+
+@pytest.mark.asyncio
 async def test_linking_ios_does_not_revoke_mcp_token(fresh_db, client_factory):
     await fresh_db.get_or_create_user(telegram_id=111, username="tester")
     mcp_token = await fresh_db.issue_mcp_token(111)
