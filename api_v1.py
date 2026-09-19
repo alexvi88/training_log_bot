@@ -794,8 +794,8 @@ async def finish_workout(request: Request) -> JSONResponse:
     )
     was_backfill = workout["status"] == "backfill"
     workout = await db.get_workout(workout_id)
-    payload = await _workout_detail_json(workout)
     user = await db.get_user(user_id)
+    payload = await _workout_detail_json(workout, user)
     payload["rewards"] = await _finish_rewards_json(workout, user, new_codes, was_backfill)
     _spawn_ai_comment(user_id, workout_id, user, workout)
     return JSONResponse(payload)
@@ -839,19 +839,59 @@ async def update_note(request: Request) -> JSONResponse:
     return JSONResponse(await _workout_detail_json(workout))
 
 
-async def _workout_detail_json(workout) -> dict[str, Any]:
+async def _record_text_by_exercise(workout, user) -> dict[int, str]:
+    """Готовая строка рекорда 🔥 на упражнение — тем же путём, что карточка
+    бота: view_builder.build_block_views(mark_records=True) считает рекорд,
+    formatting.format_block_record превращает его в готовый локализованный
+    текст. Второй раз эта фраза нигде не собирается — она живёт в
+    locales/*.json одним экземпляром (formatting.format_block_record).
+
+    `show_extra=user["show_extra_stats"]` — та же тонкость, что у бота: рекорд
+    e1RM молчит при выключенных доп. цифрах, а рекорд повторов виден всегда
+    (см. докстринг format_block_record). Приложение обязано вести себя так же,
+    иначе человек с выключенными доп. цифрами увидел бы в iOS то, что бот ему
+    принципиально не показывает.
+
+    Считается только для законченной тренировки: `previous_before` берёт
+    прошлую сессию упражнения строго ДО этой (handlers.workout._finished_summary
+    делает так же), а для ещё идущей тренировки сравнивать не с чем.
+    """
+    with i18n.use_lang(user["lang"]):
+        blocks = await view_builder.build_block_views(
+            workout["id"],
+            user["e1rm_formula"],
+            previous_before=workout["started_at"],
+            mark_records=True,
+        )
+        show_extra = bool(user["show_extra_stats"])
+        return {
+            block.exercise_id: text
+            for block in blocks
+            if (text := formatting.format_block_record(block, user["unit"], show_extra)) is not None
+        }
+
+
+async def _workout_detail_json(workout, user=None) -> dict[str, Any]:
+    """`user` задан у GET /workouts/{id} и у ответа finish — тогда каждое
+    упражнение получает `record_text`/`has_record` (см. _record_text_by_exercise).
+    У прочих ручек (активная/бэкофилл-тренировка, правка заметки) `user`
+    не передаётся: тренировка ещё не завершена, и полям рекорда взяться неоткуда."""
     data = _workout_json(workout)
+    record_by_exercise = await _record_text_by_exercise(workout, user) if user is not None else {}
     blocks_json = []
     for block in await db.list_blocks_for_workout(workout["id"]):
         exercises_json = []
         for be in await db.get_block_exercises(block["id"]):
             sets = await db.list_sets_for_block(block["id"])
             own_sets = [s for s in sets if s["exercise_id"] == be["exercise_id"]]
+            record_text = record_by_exercise.get(be["exercise_id"])
             exercises_json.append(
                 {
                     "exercise_id": be["exercise_id"],
                     "display_name": be["display_name"],
                     "sets": [_set_json(s) for s in own_sets],
+                    "record_text": record_text,
+                    "has_record": record_text is not None,
                 }
             )
         blocks_json.append({"id": block["id"], "type": block["type"], "exercises": exercises_json})
@@ -863,7 +903,8 @@ async def get_workout(request: Request) -> JSONResponse:
     user_id = await _authed_user_id(request)
     workout_id = int(request.path_params["workout_id"])
     workout = await _owned_workout(workout_id, user_id)
-    return JSONResponse(await _workout_detail_json(workout))
+    user = await db.get_user(user_id)
+    return JSONResponse(await _workout_detail_json(workout, user))
 
 
 async def list_workouts(request: Request) -> JSONResponse:
