@@ -23,6 +23,7 @@ import api_v1_common as common
 import config
 import db
 import i18n
+from workout_edit_data import on_workout_edited
 
 ApiError = common.ApiError
 _authed_user_id = common.authed_user_id
@@ -253,8 +254,7 @@ async def update_workout_set(request: Request) -> JSONResponse:
     # Тот же хвост, что у handlers.edit_workout._on_workout_edited: закешированный
     # AI-комментарий описывает числа, которых уже нет, а значки (например,
     # весовой клуб) могли зависеть именно от этого подхода.
-    await db.set_workout_ai_comment(workout_id, None)
-    await achievement_sync.resync(user_id)
+    await on_workout_edited(workout_id)
     updated = await db.get_set(set_id)
     return JSONResponse(_set_json(updated))
 
@@ -267,9 +267,104 @@ async def delete_workout_set(request: Request) -> JSONResponse:
     await _owned_workout(workout_id, user_id)
     await _owned_set_in_workout(workout_id, set_id, user_id)
     await db.delete_set(set_id)
-    await db.delete_empty_blocks(workout_id)
-    await db.set_workout_ai_comment(workout_id, None)
-    await achievement_sync.resync(user_id)
+    await on_workout_edited(workout_id)
+    return JSONResponse({"deleted": True})
+
+
+async def _find_block_for_exercise(workout_id: int, exercise_id: int) -> Optional[int]:
+    for block in await db.list_blocks_for_workout(workout_id):
+        for be in await db.get_block_exercises(block["id"]):
+            if be["exercise_id"] == exercise_id:
+                return block["id"]
+    return None
+
+
+def _require_finished(workout) -> None:
+    """Эти три ручки — ровно то, что в боте живёт под «✏️ Правка» уже
+    завершённой тренировки (handlers.edit_workout). Для активной/заносимой
+    задним числом тренировки есть свой путь записи — POST /workouts/{id}/sets
+    (api_v1.log_set) — со своей семантикой (например, автосоздание блока без
+    подтверждения). Держать их разделёнными, а не одной веткой на все статусы,
+    — чтобы не плодить неочевидные условные ветки в двух разных местах ради
+    одного и того же эндпоинта."""
+    if workout["status"] != "finished":
+        raise ApiError(409, "workout_active", "only a finished workout can be edited this way")
+
+
+async def add_workout_set(request: Request) -> JSONResponse:
+    """Добавить подход в уже завершённую тренировку — «➕ Добавить подход» /
+    «➕ Новое упражнение» на экране правки в боте (handlers.edit_workout:
+    editw_addset_prompt → editw_addset_entered, editw_new_exercise_start →
+    ..._editwex_finish). Один эндпоинт закрывает оба случая бота: если у
+    упражнения в этой тренировке ещё нет блока, он заводится тут же, тем же
+    способом, каким его завёл бы первый подход нового упражнения.
+
+    Основной сценарий, ради которого это вообще пишется: нажал «Завершить»,
+    вспомнил про забытый подход (или целое упражнение) — раньше это можно было
+    поправить только в боте, приложение такого не умело."""
+    user_id = await _authed_user_id(request)
+    workout_id = int(request.path_params["workout_id"])
+    exercise_id = int(request.path_params["exercise_id"])
+    workout = await _owned_workout(workout_id, user_id)
+    _require_finished(workout)
+    exercise = await db.get_exercise(exercise_id)
+    if exercise is None or exercise["user_id"] != user_id:
+        raise ApiError(404, "not_found", "exercise not found")
+
+    body = await _json_body(request)
+    if "weight" not in body:
+        raise ApiError(400, "bad_request", "missing field: weight")
+    weight = body["weight"]
+    if not isinstance(weight, (int, float)) or isinstance(weight, bool):
+        raise ApiError(400, "bad_request", "weight must be a number")
+    weight = float(weight)
+    reps = common.require(body, "reps", int)
+    if reps <= 0:
+        raise ApiError(400, "bad_request", "reps must be a positive int")
+    rpe = body.get("rpe")
+    if rpe is not None:
+        if not isinstance(rpe, (int, float)) or isinstance(rpe, bool):
+            raise ApiError(400, "bad_request", "rpe must be a number or null")
+        rpe = float(rpe)
+
+    block_id = await _find_block_for_exercise(workout_id, exercise_id)
+    if block_id is None:
+        # Новое для этой тренировки упражнение — блок заводится только сейчас,
+        # на первый настоящий подход, тем же порядком, что и
+        # editw_addset_entered: отменённый ввод не оставляет за собой пустого
+        # упражнения.
+        block_id = await db.create_block(workout_id, "single")
+        await db.add_block_exercise(block_id, exercise_id, 0)
+        await db.touch_exercise_last_used(exercise_id)
+        order_in_round = 0
+    else:
+        block_exs = await db.get_block_exercises(block_id)
+        order_in_round = next(
+            (be["order_in_block"] for be in block_exs if be["exercise_id"] == exercise_id), 0
+        )
+
+    set_id = await db.append_set(block_id, exercise_id, order_in_round, weight, reps, rpe)
+    await on_workout_edited(workout_id)
+    created = await db.get_set(set_id)
+    return JSONResponse(_set_json(created), status_code=201)
+
+
+async def remove_workout_exercise(request: Request) -> JSONResponse:
+    """Убрать упражнение из уже завершённой тренировки целиком, вместе со всеми
+    его подходами — «🗑 Удалить упражнение» → подтверждение на экране правки в
+    боте (handlers.edit_workout.editw_remove_exercise). Подтверждение — дело
+    клиентского UI (это необратимо и может унести не один подход), сам эндпоинт
+    его не переспрашивает."""
+    user_id = await _authed_user_id(request)
+    workout_id = int(request.path_params["workout_id"])
+    exercise_id = int(request.path_params["exercise_id"])
+    workout = await _owned_workout(workout_id, user_id)
+    _require_finished(workout)
+    block_id = await _find_block_for_exercise(workout_id, exercise_id)
+    if block_id is None:
+        raise ApiError(404, "not_found", "exercise not found in this workout")
+    await db.delete_block_and_sets(block_id)
+    await on_workout_edited(workout_id)
     return JSONResponse({"deleted": True})
 
 
@@ -384,6 +479,14 @@ routes = [
     Route("/settings", update_settings, methods=["PATCH"]),
     Route("/workouts/{workout_id:int}/sets/{set_id:int}", update_workout_set, methods=["PATCH"]),
     Route("/workouts/{workout_id:int}/sets/{set_id:int}", delete_workout_set, methods=["DELETE"]),
+    Route(
+        "/workouts/{workout_id:int}/exercises/{exercise_id:int}/sets",
+        add_workout_set, methods=["POST"],
+    ),
+    Route(
+        "/workouts/{workout_id:int}/exercises/{exercise_id:int}",
+        remove_workout_exercise, methods=["DELETE"],
+    ),
     Route("/workouts/{workout_id:int}", delete_workout, methods=["DELETE"]),
     Route("/workouts/{workout_id:int}/date", update_workout_date, methods=["PATCH"]),
     Route("/workouts/{workout_id:int}/repeat", repeat_workout, methods=["POST"]),
