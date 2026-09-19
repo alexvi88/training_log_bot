@@ -169,11 +169,15 @@ def discover_modules() -> list[str]:
 # `factcheck.thinking.<n>`) — раньше английский пул жил рядом с русским прямо
 # в модуле, теперь оба каталога проходят те же три слоя test_i18n_no_leaks.py.
 LOCALIZED: list[str] = [
-    # Единственный модуль REST-слоя с человеческим текстом: у достижений есть
-    # название и описание, и они рендерятся через i18n.use_lang(users.lang).
-    # Остальные api_v1_* отдают только числа и машинные коды — они в
-    # NEVER_LOCALIZED.
+    # Модули REST-слоя с человеческим текстом: у достижений есть название и
+    # описание, у сводки — заголовок, звание и подписи плиток; и те, и другие
+    # рендерятся через i18n.use_lang(users.lang). Остальные api_v1_* отдают
+    # только числа и машинные коды — они в NEVER_LOCALIZED.
     "api_v1_achievements.py",
+    "api_v1_dashboard.py",
+    # Сбор сводки для обоих потребителей — бота и /dashboard. Своих литералов
+    # не держит: весь текст собирают formatting.menu_* по текущему языку.
+    "dashboard_data.py",
     "keyboards.py",
     "handlers/workout.py",
     "handlers/edit_workout.py",
