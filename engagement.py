@@ -22,6 +22,15 @@ once a week and never competes with the Sunday analytics slot.
 Every push is delivered as a photo (the same fixed "coach" image) with the
 push text as its caption.
 
+Whoever also has an iOS device linked (`db.push_tokens`, platform "ios") gets
+the SAME signal a second time, over APNs (`apns.py`), with a short (title,
+body) pair sized for a banner instead of the long Telegram caption
+(`push_ios.py` — see its module docstring for why that's a separate short
+catalog, not a trim of the Telegram text). See `_send_apns_push`/`_deliver`:
+the two channels are independent sends, each with its own try/except, and
+the iOS send never bypasses the quiet-hours/opt-in/one-per-day gates that
+already decided whether we get to `_deliver` at all.
+
 A separate track, `build_newbie_push`, walks a disjoint pool: users who signed
 up but never finished a single workout. Since these users have no last-workout
 date, none of the five signals above apply to them (they all key off workout
@@ -32,7 +41,7 @@ import asyncio
 import datetime as dt
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 from aiogram import Bot
@@ -42,11 +51,13 @@ from aiogram.types import FSInputFile
 import acquisition
 import ai_trainer
 import analytics
+import apns
 import config
 import db
 import formatting
 import i18n
 import keyboards
+import push_ios
 import push_texts
 
 logger = logging.getLogger(__name__)
@@ -94,6 +105,14 @@ class PushDecision:
     category: str
     text: str
     with_cta: bool = True
+    # Параметры для короткой iOS-версии этого же пуша (push_ios.ios_alert) —
+    # те же значения, что уже подставлены в длинный текст `text` через
+    # push_texts.pick_text (weeks/days_left/rank/missing/exercise/tonnage/
+    # week_count), просто пронесённые дальше вместо того, чтобы разбирать их
+    # обратно из готовой строки. Категории без плейсхолдеров (skip_*,
+    # win_back, newbie_nudge) оставляют его пустым — их push.ios.* тексты
+    # тоже без параметров.
+    ios_params: dict = field(default_factory=dict)
 
 
 # Кнопка — последняя строка пуша, и она должна договаривать реплику тренера,
@@ -269,19 +288,19 @@ async def build_daily_push(telegram_id: int, today: dt.date) -> Optional[PushDec
 
     milestone_weeks = streak_milestone(dashboard, today)
     if milestone_weeks is not None:
-        text = await push_texts.pick_text(
-            telegram_id, push_texts.STREAK_MILESTONE, weeks=_weeks_phrase(milestone_weeks)
-        )
-        return PushDecision(push_texts.STREAK_MILESTONE, text)
+        weeks_phrase = _weeks_phrase(milestone_weeks)
+        text = await push_texts.pick_text(telegram_id, push_texts.STREAK_MILESTONE, weeks=weeks_phrase)
+        return PushDecision(push_texts.STREAK_MILESTONE, text, ios_params={"weeks": weeks_phrase})
 
     if is_streak_at_risk(dashboard, today):
+        weeks_phrase = _weeks_phrase(dashboard.week_streak)
+        days_left = i18n.t("push.days_left.weekend" if today.weekday() == 5 else "push.days_left.default")
         text = await push_texts.pick_text(
-            telegram_id,
-            push_texts.STREAK_AT_RISK,
-            weeks=_weeks_phrase(dashboard.week_streak),
-            days_left=i18n.t("push.days_left.weekend" if today.weekday() == 5 else "push.days_left.default"),
+            telegram_id, push_texts.STREAK_AT_RISK, weeks=weeks_phrase, days_left=days_left,
         )
-        return PushDecision(push_texts.STREAK_AT_RISK, text)
+        return PushDecision(
+            push_texts.STREAK_AT_RISK, text, ios_params={"weeks": weeks_phrase, "days_left": days_left}
+        )
 
     milestone_day = skip_milestone(dashboard.days_since_last)
     if milestone_day is not None:
@@ -297,30 +316,41 @@ async def build_daily_push(telegram_id: int, today: dt.date) -> Optional[PushDec
         near = await _find_rank_near(telegram_id, dashboard.total_workouts, dates, today)
         if near is not None:
             missing, nxt = near
+            rank_label = f"{nxt.emoji} {nxt.name}"
+            missing_phrase = _workouts_phrase(missing)
             text = await push_texts.pick_text(
-                telegram_id,
-                push_texts.RANK_NEAR,
-                rank=f"{nxt.emoji} {nxt.name}",
-                missing=_workouts_phrase(missing),
+                telegram_id, push_texts.RANK_NEAR, rank=rank_label, missing=missing_phrase,
             )
-            return PushDecision(push_texts.RANK_NEAR, text)
+            return PushDecision(
+                push_texts.RANK_NEAR, text, ios_params={"rank": rank_label, "missing": missing_phrase}
+            )
 
     if today.weekday() == 6:  # Sunday
         exercise_name = await _find_plateau_exercise(telegram_id)
         if exercise_name:
             text = await push_texts.pick_text(telegram_id, push_texts.PLATEAU, exercise=exercise_name)
-            return PushDecision(push_texts.PLATEAU, text)
+            return PushDecision(push_texts.PLATEAU, text, ios_params={"exercise": exercise_name})
 
         since = (today - dt.timedelta(days=DIGEST_LOOKBACK_DAYS)).isoformat()
         tonnage = await db.tonnage_since(telegram_id, since)
         if tonnage > 0:
+            # Общие для обеих веток ниже (AI и статической) — короткая iOS-версия
+            # этого воскресного слота обходится без best_day/whale (см.
+            # push_ios.py: у push.ios.weekly_digest.* нет таких плейсхолдеров
+            # вовсе, ей хватает того, что есть всегда), так что считать их можно
+            # один раз здесь, а не дублировать в каждой ветке.
+            digest_ios_params = {
+                "tonnage": format_tonnage(tonnage), "week_count": _workouts_phrase(dashboard.this_week),
+            }
             ai_text = await _ai_weekly_digest_text(telegram_id)
             if ai_text:
                 # with_cta=False — как у статического дайджеста ниже: это один и
                 # тот же воскресный слот, и кнопка «начать тренировку» под
                 # аналитикой то появлялась, то нет — в зависимости от того,
                 # ответила ли модель.
-                return PushDecision(push_texts.AI_WEEKLY, ai_text, with_cta=False)
+                return PushDecision(
+                    push_texts.AI_WEEKLY, ai_text, with_cta=False, ios_params=digest_ios_params
+                )
             # None when no weekday clearly stands out — pick_text then drops the
             # variant that would have claimed one, instead of asserting a habit
             # the history doesn't show.
@@ -340,7 +370,9 @@ async def build_daily_push(telegram_id: int, today: dt.date) -> Optional[PushDec
                 ),
                 whale=i18n.t("push.phrase.whale") if tonnage_kg >= push_texts.WHALE_MIN_TONNAGE_KG else None,
             )
-            return PushDecision(push_texts.WEEKLY_DIGEST, text, with_cta=False)
+            return PushDecision(
+                push_texts.WEEKLY_DIGEST, text, with_cta=False, ios_params=digest_ios_params
+            )
 
     return None
 
@@ -401,6 +433,40 @@ def _should_show_tz_hint(user) -> bool:
     return not user["tz_set_by_user"] and not user["tz_push_hint_shown"]
 
 
+async def _ios_device_token(telegram_id: int) -> Optional[str]:
+    """Активный iOS device token пользователя, если он привязывал приложение
+    (db.register_push_token) — прямой SELECT, а не новая функция в db.py: эта
+    задача сознательно не трогает db.py (см. её постановку), а таблица
+    push_tokens и её схема там уже есть. Тот же приём прямого запроса через
+    db.conn(), которым уже пользуются тесты этого репозитория."""
+    cur = await db.conn().execute(
+        "SELECT device_token FROM push_tokens WHERE user_id = ? AND platform = 'ios'",
+        (telegram_id,),
+    )
+    row = await cur.fetchone()
+    return row["device_token"] if row is not None else None
+
+
+async def _send_apns_push(telegram_id: int, decision: PushDecision) -> None:
+    """Тот же сигнал, что уже ушёл (или вот-вот уйдёт) в Telegram — короткой
+    iOS-версией через push_ios, только тем, у кого есть привязанный iOS-токен.
+
+    Ничего не делает молча, если: APNs не настроен (apns.is_configured()),
+    устройство не привязано, или короткого текста для этой категории нет
+    (тогда push_ios сам бросает исключение при импорте, а не здесь — см. его
+    докстринг; до прода это дойти не должно).
+    """
+    if not apns.is_configured():
+        return
+    device_token = await _ios_device_token(telegram_id)
+    if device_token is None:
+        return
+    title, body = await push_ios.ios_alert(
+        telegram_id, decision.category, i18n.get_lang(), **decision.ios_params
+    )
+    await apns.send_alert(telegram_id, device_token, title, body, category=decision.category)
+
+
 async def _deliver(
     bot: Bot, telegram_id: int, decision: PushDecision, local_date: dt.date
 ) -> None:
@@ -431,6 +497,35 @@ async def _deliver(
     # Клавиатура теперь есть у любого пуша: у дайджеста своей CTA нет, но и
     # тупиком он быть не должен — там встаёт «🏠 Меню» (см. push_cta_keyboard).
     kb = keyboards.push_cta_keyboard(cta_key, with_tz_hint=show_tz_hint)
+
+    # APNs — независимый от Telegram канал: свой try/except, чтобы сбой
+    # одного не трогал другой (см. _send_apns_push и apns.send_alert, которая
+    # сама никогда не бросает — этот try/except тут на случай ошибки уже по
+    # ЭТУ сторону, например в push_ios.ios_alert). Идёт ДО телеграмной
+    # отправки: у Telegram ниже есть свои `return` на TelegramForbiddenError/
+    # TelegramAPIError, и если бы APNs стоял после них, чужая телеграмная
+    # ошибка молча съедала бы попытку показать баннер на iOS тому же человеку.
+    #
+    # Тихие часы, согласие на пуши и дневной лимит уже применены выше по
+    # стеку — has_push_today (build_daily_push/build_newbie_push) и
+    # should_send_now (_send_daily_pushes) решают, попадём ли мы сюда вообще,
+    # и это решение общее для обоих каналов: iOS-баннер не обходит ни одно из
+    # них, он просто едет вторым транспортом для того же самого решения.
+    try:
+        await _send_apns_push(telegram_id, decision)
+    except Exception:
+        logger.exception("Failed to build/send the iOS push for user %s", telegram_id)
+
+    # Аккаунт, заведённый из приложения (Apple ID без Telegram), чата с ботом
+    # не имеет — отправка ушла бы в несуществующий чат, Telegram ответил бы
+    # ошибкой, и в логах оседал бы шум на каждого такого человека каждый день.
+    # iOS-баннер выше ему уже ушёл, а запись о пуше нужна ровно так же, как
+    # при телеграмной отправке: без неё has_push_today не сработает и баннер
+    # уедет повторно на следующем тике того же дня.
+    if user is not None and not user["telegram_linked"]:
+        await db.record_push(telegram_id, decision.category, decision.text, local_date.isoformat())
+        return
+
     try:
         message = await _send_push_photo(bot, telegram_id, decision, kb)
     except TelegramForbiddenError:

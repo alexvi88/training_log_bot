@@ -71,9 +71,11 @@ async def test_auth_link_rate_limits_repeated_bad_codes(fresh_db, client_factory
 
 
 @pytest.mark.asyncio
-async def test_auth_apple_requires_link_code_on_first_use(fresh_db, client_factory, monkeypatch):
-    """Apple ID, о котором сервер ещё не знает, должен требовать код бота —
-    иначе сам факт наличия Apple ID создавал бы доступ к чужому аккаунту."""
+async def test_auth_apple_without_code_creates_app_only_account(fresh_db, client_factory, monkeypatch):
+    """Apple ID, о котором сервер ещё не знает, и без link_code — не 404, а
+    новый аккаунт без Telegram: App Review не пропускает приложения, которые
+    нельзя завести без стороннего мессенджера. Второй вход тем же Apple ID
+    должен попасть в тот же аккаунт, а не завести второй."""
     import apple_signin
 
     monkeypatch.setattr(
@@ -82,8 +84,36 @@ async def test_auth_apple_requires_link_code_on_first_use(fresh_db, client_facto
     )
     client = client_factory()
     resp = await client.post("/auth/apple", json={"identity_token": "whatever"})
-    assert resp.status_code == 404
-    assert resp.json()["error"] == "apple_identity_unknown"
+    assert resp.status_code == 200, resp.text
+    user_id = resp.json()["user_id"]
+    assert user_id < 0, "app-only аккаунт обязан получить синтетический отрицательный id"
+
+    user_row = await fresh_db.get_user(user_id)
+    assert user_row is not None
+    assert user_row["telegram_linked"] == 0
+
+    second = await client.post("/auth/apple", json={"identity_token": "t2"})
+    assert second.status_code == 200
+    assert second.json()["user_id"] == user_id
+
+
+@pytest.mark.asyncio
+async def test_auth_apple_without_code_distinct_apple_ids_get_distinct_accounts(
+    fresh_db, client_factory, monkeypatch
+):
+    """Два разных Apple ID без кода — два разных app-only аккаунта, не один на двоих."""
+    import apple_signin
+
+    ids = iter(["apple-a", "apple-b"])
+    monkeypatch.setattr(
+        apple_signin, "verify_identity_token",
+        lambda token: apple_signin.AppleIdentity(apple_user_id=next(ids), email=None),
+    )
+    client = client_factory()
+    first = await client.post("/auth/apple", json={"identity_token": "t1"})
+    second = await client.post("/auth/apple", json={"identity_token": "t2"})
+    assert first.status_code == 200 and second.status_code == 200
+    assert first.json()["user_id"] != second.json()["user_id"]
 
 
 @pytest.mark.asyncio
@@ -127,6 +157,51 @@ async def test_me_requires_bearer_token(fresh_db, client_factory):
     client = client_factory()
     resp = await client.get("/me")
     assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_me_reports_telegram_linked(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    resp = await client.get("/me")
+    assert resp.status_code == 200
+    assert resp.json()["telegram_linked"] is True
+
+
+@pytest.mark.asyncio
+async def test_request_telegram_link_code_for_app_only_account(fresh_db, client_factory, monkeypatch):
+    """Аккаунт без Telegram может попросить код и передать его боту — обратное
+    направление к /auth/link (см. handlers/ios_link.cmd_link_app)."""
+    import apple_signin
+
+    monkeypatch.setattr(
+        apple_signin, "verify_identity_token",
+        lambda token: apple_signin.AppleIdentity(apple_user_id="apple-x", email=None),
+    )
+    client = client_factory()
+    signup = await client.post("/auth/apple", json={"identity_token": "t"})
+    token = signup.json()["token"]
+    client.headers["Authorization"] = f"Bearer {token}"
+
+    resp = await client.post("/account/telegram-link-code")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert isinstance(body["code"], str) and body["code"]
+
+    # this code is the same currency as /auth/link — consume_link_code
+    # resolves it back to the app-only account, the bot side just merges
+    # afterwards (see tests/test_account_linking.py)
+    user_id = signup.json()["user_id"]
+    status, code_user_id = await fresh_db.consume_link_code(body["code"])
+    assert status == "ok"
+    assert code_user_id == user_id
+
+
+@pytest.mark.asyncio
+async def test_request_telegram_link_code_rejects_already_linked_account(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    resp = await client.post("/account/telegram-link-code")
+    assert resp.status_code == 409
+    assert resp.json()["error"] == "already_linked"
 
 
 @pytest.mark.asyncio
