@@ -10,7 +10,6 @@ from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 
-import achievement_sync
 import config
 import db
 import formatting
@@ -20,6 +19,7 @@ import timeutil
 import ui
 from fsm import EditWorkoutFlow
 from parser import ParseError, parse_ru_date, parse_sets_line, parse_single_token
+from workout_edit_data import move_workout_to_date
 from workout_edit_data import on_workout_edited as _on_workout_edited
 
 router = Router(name="edit_workout")
@@ -578,27 +578,10 @@ async def editw_date_cancel(callback: CallbackQuery, state: FSMContext):
 
 async def _apply_edit_workout_date(workout_id: int, new_date: dt.date) -> None:
     """Move a finished workout to a new calendar day, preserving its start time
-    and duration."""
-    workout = await db.get_workout(workout_id)
-    started = dt.datetime.fromisoformat(workout["started_at"])
-    finished = dt.datetime.fromisoformat(workout["finished_at"]) if workout["finished_at"] else started
-    delta = finished - started
-    new_started = dt.datetime.combine(new_date, started.time())
-    new_finished = new_started + delta
-    await db.update_workout_date(
-        workout_id, new_started.isoformat(timespec="seconds"), new_finished.isoformat(timespec="seconds")
-    )
-    # Метки подходов едут следом: длительность на карточке считается по их
-    # разбегу, и оставшись на старом дне они целиком выпадали за границу
-    # «не позже finished_at» — тренировка молча теряла свои «· 32 мин».
-    await db.shift_workout_set_timestamps(workout_id, (new_started - started).total_seconds())
-    # The date shift changes which prior session counts as "previous" for every
-    # exercise in the workout, so a cached AI comment describing the old
-    # comparison would go stale.
-    await db.set_workout_ai_comment(workout_id, None)
-    # Streaks and the "1 января" badge are read off the calendar day, so moving
-    # a workout can win or lose either one.
-    await achievement_sync.resync(workout["user_id"])
+    and duration. Сам перенос (сдвиг меток подходов, сброс AI-комментария,
+    ресинк значков) живёт в workout_edit_data — той же функцией его делает
+    PATCH /v1/workouts/{id}/date."""
+    await move_workout_to_date(workout_id, new_date)
 
 
 @router.callback_query(StateFilter(EditWorkoutFlow.awaiting_date), F.data.startswith("editwd:date:"))

@@ -10,13 +10,16 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import logging
-from typing import Any
+from typing import Any, Optional
 
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 import db
+import parser
+import timeutil
 
 logger = logging.getLogger(__name__)
 
@@ -129,3 +132,72 @@ def query_int(request: Request, key: str, default: int, *, minimum: int = 0, max
     if maximum is not None and value > maximum:
         return maximum
     return value
+
+
+# ---------- даты ----------
+
+def parse_date(raw: Any, field: str = "date") -> dt.date:
+    """YYYY-MM-DD → date, иначе 400. Один разбор на весь `/v1`: строки ошибок
+    у одинаковых полей должны совпадать между ручками."""
+    if not isinstance(raw, str):
+        raise ApiError(400, "bad_request", f"{field} must be a string YYYY-MM-DD")
+    try:
+        return dt.date.fromisoformat(raw)
+    except ValueError as exc:
+        raise ApiError(400, "bad_request", f"{field} must be YYYY-MM-DD") from exc
+
+
+async def reject_future_date(date: dt.date, user_id: int, field: str = "date") -> None:
+    """«Завтра» не бывает ни у тренировки, ни у съеденного: и то и другое —
+    запись о том, что УЖЕ произошло. Проверка одна на все такие ручки
+    (backfill, перенос даты тренировки, запись еды), иначе одна из них
+    неизбежно останется без неё.
+
+    Сегодня — по часовому поясу пользователя, а не по UTC сервера: вечером в
+    UTC+3 серверное «завтра» наступает на три часа раньше человеческого, и
+    честная запись за сегодня отлетала бы с 400.
+    """
+    user = await db.get_user(user_id)
+    if date > timeutil.user_today(user):
+        raise ApiError(400, "bad_request", f"{field} is in the future")
+
+
+# ---------- числа подхода ----------
+#
+# Границы — те же, что у parser.py, которым разбирается строка «100 8» и в
+# боте, и в /v1 (POST /workouts/{id}/sets/text). Своих чисел здесь нет
+# намеренно: живая запись, принимающая reps=1000000000, и её же редактор,
+# отвергающий то же самое, — это один и тот же подход, который клиент может
+# записать, но не может поправить.
+
+def set_weight(value: Any, field: str = "weight") -> float:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        raise ApiError(400, "bad_request", f"{field} must be a number")
+    weight = float(value)
+    # 0 — это не «пусто», а честный вес собственного тела (подтягивания).
+    if weight < 0:
+        raise ApiError(400, "bad_request", f"{field} must not be negative")
+    if weight > parser.MAX_WEIGHT:
+        raise ApiError(400, "bad_request", f"{field} must be at most {parser.MAX_WEIGHT:.0f}")
+    return weight
+
+
+def set_reps(value: Any, field: str = "reps") -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        raise ApiError(400, "bad_request", f"{field} must be a positive int")
+    if value > parser.MAX_REPS:
+        raise ApiError(400, "bad_request", f"{field} must be at most {parser.MAX_REPS}")
+    return value
+
+
+def set_rpe(value: Any, field: str = "rpe") -> Optional[float]:
+    if value is None:
+        return None
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        raise ApiError(400, "bad_request", f"{field} must be a number or null")
+    rpe = float(value)
+    # Та же шкала, что у parser._parse_rpe: RPE — это 0…10, «99» означает
+    # опечатку, а не невероятное усилие.
+    if not (0 < rpe <= 10):
+        raise ApiError(400, "bad_request", f"{field} must be between 0 and 10")
+    return rpe

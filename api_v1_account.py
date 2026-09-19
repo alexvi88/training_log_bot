@@ -11,7 +11,6 @@ UPDATE (пересчёт весов при смене единиц, ресинк
 
 from __future__ import annotations
 
-import datetime as dt
 from typing import Any, Optional
 
 from starlette.requests import Request
@@ -23,7 +22,7 @@ import api_v1_common as common
 import config
 import db
 import i18n
-from workout_edit_data import on_workout_edited
+from workout_edit_data import move_workout_to_date, on_workout_edited
 
 ApiError = common.ApiError
 _authed_user_id = common.authed_user_id
@@ -227,28 +226,18 @@ async def update_workout_set(request: Request) -> JSONResponse:
     if not body:
         raise ApiError(400, "bad_request", "at least one of weight, reps, rpe is required")
 
+    # Границы — общие с живой записью и с разбором строки (см. api_v1_common).
     weight = set_row["weight"]
     if "weight" in body:
-        weight = body["weight"]
-        if not isinstance(weight, (int, float)) or isinstance(weight, bool):
-            raise ApiError(400, "bad_request", "weight must be a number")
-        weight = float(weight)
+        weight = common.set_weight(body["weight"])
 
     reps = set_row["reps"]
     if "reps" in body:
-        reps = body["reps"]
-        if not isinstance(reps, int) or isinstance(reps, bool) or reps <= 0:
-            raise ApiError(400, "bad_request", "reps must be a positive int")
+        reps = common.set_reps(body["reps"])
 
     rpe = set_row["rpe"]
     if "rpe" in body:
-        raw_rpe = body["rpe"]
-        if raw_rpe is None:
-            rpe = None
-        else:
-            if not isinstance(raw_rpe, (int, float)) or isinstance(raw_rpe, bool):
-                raise ApiError(400, "bad_request", "rpe must be a number or null")
-            rpe = float(raw_rpe)
+        rpe = common.set_rpe(body["rpe"])
 
     await db.update_set(set_id, weight, reps, rpe)
     # Тот же хвост, что у handlers.edit_workout._on_workout_edited: закешированный
@@ -314,18 +303,9 @@ async def add_workout_set(request: Request) -> JSONResponse:
     body = await _json_body(request)
     if "weight" not in body:
         raise ApiError(400, "bad_request", "missing field: weight")
-    weight = body["weight"]
-    if not isinstance(weight, (int, float)) or isinstance(weight, bool):
-        raise ApiError(400, "bad_request", "weight must be a number")
-    weight = float(weight)
-    reps = common.require(body, "reps", int)
-    if reps <= 0:
-        raise ApiError(400, "bad_request", "reps must be a positive int")
-    rpe = body.get("rpe")
-    if rpe is not None:
-        if not isinstance(rpe, (int, float)) or isinstance(rpe, bool):
-            raise ApiError(400, "bad_request", "rpe must be a number or null")
-        rpe = float(rpe)
+    weight = common.set_weight(body["weight"])
+    reps = common.set_reps(common.require(body, "reps", int))
+    rpe = common.set_rpe(body.get("rpe"))
 
     block_id = await _find_block_for_exercise(workout_id, exercise_id)
     if block_id is None:
@@ -401,28 +381,23 @@ async def update_workout_date(request: Request) -> JSONResponse:
     """
     user_id = await _authed_user_id(request)
     workout_id = int(request.path_params["workout_id"])
-    workout = await _owned_workout(workout_id, user_id)
+    await _owned_workout(workout_id, user_id)
     body = await _json_body(request)
     raw = body.get("date")
     if not isinstance(raw, str):
         raise ApiError(400, "bad_request", "date must be a string YYYY-MM-DD")
-    try:
-        date = dt.date.fromisoformat(raw)
-    except ValueError as exc:
-        raise ApiError(400, "bad_request", "date must be YYYY-MM-DD") from exc
+    date = common.parse_date(raw)
+    # Будущим днём тренировки не бывает — ровно та же проверка, что у
+    # POST /workouts/backfill: перенести уже сделанное в завтра нельзя.
+    await common.reject_future_date(date, user_id)
 
     # Время суток и длительность сохраняются: переносится день, а не «когда
     # именно тренировался». Иначе правка даты тихо стирала бы утреннюю
-    # тренировку в полдень и ломала значки за ранний подъём.
-    started = dt.datetime.fromisoformat(workout["started_at"])
-    new_started = started.replace(year=date.year, month=date.month, day=date.day)
-    new_finished = None
-    if workout["finished_at"]:
-        finished = dt.datetime.fromisoformat(workout["finished_at"])
-        new_finished = (finished + (new_started - started)).isoformat()
-
-    await db.update_workout_date(workout_id, new_started.isoformat(), new_finished)
-    await achievement_sync.resync(user_id)
+    # тренировку в полдень и ломала значки за ранний подъём. Сам перенос —
+    # общая с ботом workout_edit_data.move_workout_to_date: кроме UPDATE он
+    # двигает следом метки подходов (без этого карточка теряет длительность),
+    # сбрасывает AI-комментарий и пересчитывает значки.
+    await move_workout_to_date(workout_id, date)
     workout = await db.get_workout(workout_id)
     return JSONResponse(
         {

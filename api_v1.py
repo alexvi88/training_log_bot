@@ -60,9 +60,9 @@ import history_search_data
 import i18n
 import mcp_oauth
 import parser
-import timeutil
 import view_builder
 import voice_parse
+from workout_edit_data import on_workout_edited
 
 logger = logging.getLogger(__name__)
 
@@ -469,13 +469,13 @@ async def _find_block_for_exercise(workout_id: int, exercise_id: int) -> Optiona
 
 async def _block_for_exercise(workout_id: int, exercise_id: int) -> int:
     """Блок этого упражнения в тренировке — существующий (первый попавшийся,
-    без суперсетов на этом этапе) или новый одиночный."""
-    existing = await _find_block_for_exercise(workout_id, exercise_id)
-    if existing is not None:
-        return existing
-    block_id = await db.create_block(workout_id, "single")
-    await db.add_block_exercise(block_id, exercise_id, 0)
-    return block_id
+    без суперсетов на этом этапе) или новый одиночный.
+
+    Поиск и создание — одним вызовом db, под её `_write_lock`: делать это
+    двумя вызовами отсюда нельзя, между ними параллельные запросы «запиши
+    подход» успевали завести по блоку каждый (см. докстринг
+    db.get_or_create_single_block_for_exercise)."""
+    return await db.get_or_create_single_block_for_exercise(workout_id, exercise_id)
 
 
 def _require_open(workout) -> None:
@@ -533,15 +533,6 @@ BACKFILL_HOUR = "T12:00:00"
 при одном обитаемом офсете (UTC-11 … UTC+14)."""
 
 
-def _parse_date(raw: Any) -> dt.date:
-    if not isinstance(raw, str):
-        raise ApiError(400, "bad_request", "date must be a string YYYY-MM-DD")
-    try:
-        return dt.date.fromisoformat(raw)
-    except ValueError as exc:
-        raise ApiError(400, "bad_request", "date must be YYYY-MM-DD") from exc
-
-
 async def backfill_workout(request: Request) -> JSONResponse:
     """Открытая тренировка, заносимая задним числом, или `null`.
 
@@ -567,12 +558,10 @@ async def start_backfill_workout(request: Request) -> JSONResponse:
     """
     user_id = await _authed_user_id(request)
     body = await _json_body(request)
-    date = _parse_date(_require(body, "date", str))
+    date = common.parse_date(_require(body, "date", str))
     # Будущим днём тренировки не бывает: это занесение того, что уже сделано.
     # Сегодня — по часовому поясу пользователя, а не по UTC сервера.
-    user = await db.get_user(user_id)
-    if date > timeutil.user_today(user):
-        raise ApiError(400, "bad_request", "date is in the future")
+    await common.reject_future_date(date, user_id)
 
     existing = await db.get_backfill_workout(user_id)
     if existing is not None:
@@ -601,15 +590,16 @@ async def log_set(request: Request) -> JSONResponse:
     _require_open(workout)
     body = await _json_body(request)
     exercise_id = _require(body, "exercise_id", int)
-    weight = float(_require(body, "weight", (int, float)))
-    reps = _require(body, "reps", int)
-    rpe = body.get("rpe")
-    if rpe is not None:
-        # Тем же правилом, что и в api_v1_account.add_workout_set: голый
-        # float() на чужой строке — это 500 вместо внятного 400.
-        if not isinstance(rpe, (int, float)) or isinstance(rpe, bool):
-            raise ApiError(400, "bad_request", "rpe must be a number or null")
-        rpe = float(rpe)
+    # Те же границы, что у parser.py и у правки уже записанного подхода
+    # (api_v1_account): живая запись не должна принимать вес -100 и 10^9
+    # повторов, которые её же редактор отвергает с 400.
+    if "weight" not in body:
+        raise ApiError(400, "bad_request", "missing field: weight")
+    weight = common.set_weight(body["weight"])
+    if "reps" not in body:
+        raise ApiError(400, "bad_request", "missing field: reps")
+    reps = common.set_reps(body["reps"])
+    rpe = common.set_rpe(body.get("rpe"))
     await _owned_exercise(exercise_id, user_id)
     block_id = await _block_for_exercise(workout_id, exercise_id)
     set_id = await db.append_set(block_id, exercise_id, 0, weight, reps, rpe)
@@ -765,6 +755,11 @@ async def delete_last_set(request: Request) -> JSONResponse:
     deleted = await db.delete_last_set_for_exercise_in_block(block_id, exercise_id)
     if deleted is None:
         raise ApiError(404, "not_found", "exercise has no sets in this workout")
+    # Тот же хвост, что у DELETE /workouts/{id}/sets/{set_id}: снятый
+    # последний подход не должен оставлять за собой блок-призрак
+    # («упражнение есть, подходов нет»). Два способа отменить подход обязаны
+    # давать один и тот же экран.
+    await on_workout_edited(workout_id)
     return JSONResponse(_set_json(deleted))
 
 
