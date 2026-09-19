@@ -44,6 +44,7 @@ import api_v1_common as common
 import api_v1_dashboard
 import api_v1_feedback
 import api_v1_food
+import api_v1_history
 import api_v1_import
 import api_v1_media
 import api_v1_programs
@@ -967,6 +968,7 @@ routes += (
     + api_v1_feedback.routes
     + api_v1_dashboard.routes
     + api_v1_progress.routes
+    + api_v1_history.routes
 )
 
 

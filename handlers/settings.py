@@ -1,7 +1,5 @@
 """User settings: units, e1RM formula, CSV export."""
 
-import csv
-import io
 import json
 from html import escape
 from typing import Optional
@@ -12,8 +10,8 @@ from aiogram.types import BufferedInputFile, CallbackQuery, Message
 
 import achievement_sync
 import config
+import csv_export
 import db
-import formatting
 import i18n
 import keyboards
 import ui
@@ -475,16 +473,7 @@ async def settings_food_macros(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "settings:export")
 async def settings_export(callback: CallbackQuery, state: FSMContext):
-    rows = await db.export_rows_for_user(callback.from_user.id)
-    buf = io.StringIO()
-    writer = csv.writer(buf)
-    writer.writerow(["started_at", "exercise", "round_index", "weight", "reps", "rpe"])
-    for r in rows:
-        writer.writerow([
-            r["started_at"], r["exercise"], r["round_index"], r["weight"], r["reps"],
-            "" if r["rpe"] is None else formatting.format_weight(r["rpe"]),
-        ])
-    data = buf.getvalue().encode("utf-8-sig")
+    data = await csv_export.build_csv(callback.from_user.id)
     await callback.message.answer_document(
         BufferedInputFile(data, filename="training_log.csv"), caption=i18n.t("settings.export.caption")
     )
