@@ -402,6 +402,7 @@ async def add_workout_set(request: Request) -> JSONResponse:
     weight = common.set_weight(body["weight"])
     reps = common.set_reps(common.require(body, "reps", int))
     rpe = common.set_rpe(body.get("rpe"))
+    idempotency_key = common.optional_str(body, "idempotency_key")
 
     block_id = await _find_block_for_exercise(workout_id, exercise_id)
     if block_id is None:
@@ -419,7 +420,10 @@ async def add_workout_set(request: Request) -> JSONResponse:
             (be["order_in_block"] for be in block_exs if be["exercise_id"] == exercise_id), 0
         )
 
-    set_id = await db.append_set(block_id, exercise_id, order_in_round, weight, reps, rpe)
+    set_id = await db.append_set(
+        block_id, exercise_id, order_in_round, weight, reps, rpe,
+        user_id=user_id, idempotency_key=idempotency_key,
+    )
     await on_workout_edited(workout_id)
     created = await db.get_set(set_id)
     return JSONResponse(_set_json(created), status_code=201)
