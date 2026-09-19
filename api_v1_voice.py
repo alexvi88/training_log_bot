@@ -55,9 +55,7 @@ HTTP-загрузки его взять неоткуда: в проекте не
 
 from __future__ import annotations
 
-import base64
 import io
-import re
 from typing import Optional
 
 import ai_trainer
@@ -65,8 +63,6 @@ import api_v1_common as common
 from handlers.ai_trainer import MAX_VOICE_BYTES, MAX_VOICE_SECONDS
 
 ApiError = common.ApiError
-
-_DATA_URL_RE = re.compile(r"^data:([^;,]+);base64,(.+)$", re.DOTALL)
 
 AUDIO_EXTENSION_BY_MIME = {
     "audio/mp4": "mp4",
@@ -85,22 +81,9 @@ AUDIO_EXTENSION_BY_MIME = {
 
 
 def _decode_audio_data_url(data_url: str) -> tuple[bytes, str]:
-    match = _DATA_URL_RE.match((data_url or "").strip())
-    if not match:
-        raise ApiError(400, "bad_request", "audio_data_url must be a data: URL")
-    mime = match.group(1).strip().lower()
-    ext = AUDIO_EXTENSION_BY_MIME.get(mime)
-    if ext is None:
-        allowed = ", ".join(sorted(set(AUDIO_EXTENSION_BY_MIME.values())))
-        raise ApiError(
-            415,
-            "unsupported_media_type",
-            f"unsupported audio format {mime!r}; allowed extensions: {allowed}",
-        )
-    try:
-        raw = base64.b64decode(match.group(2), validate=True)
-    except Exception as exc:
-        raise ApiError(400, "bad_request", "invalid base64 audio payload") from exc
+    # Разбор data: URL общий для всех вложений `/v1` — см. common.decode_data_url
+    # (голос был первым и единственным до фото/видео вопроса тренеру, api_v1_ai.py).
+    raw, _mime, ext = common.decode_data_url(data_url, AUDIO_EXTENSION_BY_MIME, field="audio_data_url")
     return raw, ext
 
 

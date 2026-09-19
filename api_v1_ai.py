@@ -17,10 +17,19 @@
   принимает голые `user_id`/`question`/`history` без объекта телеграм-сообщения
   — aiogram в ai_trainer.py не импортируется вовсе, — так что рефакторинг
   самого ai_trainer.py не понадобился (тот же приём уже применён в
-  api_v1_food.py для `analyze_food`).
+  api_v1_food.py для `analyze_food`). Необязательный `image_data_url` в теле —
+  тот же приём, что фото-вопрос в боте (`ai_photo_question`): `question` можно
+  не присылать вовсе (как пустую подпись к фото), тогда уходит тот же
+  дефолтный вопрос, что и в боте (`ai.screen.default_photo_question`).
 - `POST /ai/voice` — голос → расшифрованный текст вопроса, без ответа модели
   (см. докстринг `transcribe_voice`). Транскрипция и лимиты — `api_v1_voice`,
   общий модуль с `POST /workouts/{id}/sets/voice`.
+- `POST /ai/video` — ролик подхода → разбор техники (Qwen3-VL,
+  `video_analysis.analyze`) и сразу ответ тренера по нему, одним вызовом (см.
+  докстринг `ask_video`, чем это отличается от двух платных шагов в боте).
+  Упражнение — своим `exercise_id` (владение проверяется, как и везде в
+  `/v1`) или угаданное из `caption` тем же `handlers.ai_trainer._exercise_from_caption`,
+  что и у бота.
 - `POST /ai/program/save` — забрать предложенный черновик программы
   (`program.draft_id` из ответа `/ai/ask`) точно так же, как кнопка «Забрать»
   в боте: запись идёт через ai_program_actions.finalize_program_save — тот же
@@ -109,6 +118,9 @@ import db
 import exercise_mentions
 import i18n
 import program_mentions
+import video_analysis
+from handlers import ai_trainer as ai_trainer_handlers
+from handlers.ai_trainer import MAX_IMAGE_BYTES
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +132,26 @@ ApiError = common.ApiError
 # один вопрос на десятки тысяч символов стоит как полноценный разговор и в
 # токенах, и в деньгах, а отвечать на него всё равно нечем осмысленным.
 MAX_QUESTION_LENGTH = 4000
+
+# Фото к вопросу тренеру: те же MIME, что реально бывают на телефоне (JPEG с
+# камеры/из галереи, PNG со скриншота, WebP из некоторых галерей). Бот такого
+# списка не заводит — Telegram сам ужимает photo в JPEG до того, как файл
+# доедет до бота, — а HTTP-клиент шлёт то, что реально лежит на диске.
+IMAGE_EXTENSION_BY_MIME = {
+    "image/jpeg": "jpg",
+    "image/jpg": "jpg",
+    "image/png": "png",
+    "image/webp": "webp",
+}
+
+# Видео разбора техники: то же самое, что реально пишут телефоны — MP4
+# (Android, и то, что после экспорта пишет iOS) и QuickTime/.mov (сырой формат
+# камеры iPhone, если приложение не перекодирует перед отправкой).
+VIDEO_EXTENSION_BY_MIME = {
+    "video/mp4": "mp4",
+    "video/quicktime": "mov",
+    "video/webm": "webm",
+}
 
 
 async def _limits_json(user_id: int) -> dict[str, Any]:
@@ -160,11 +192,24 @@ async def get_limits(request: Request) -> JSONResponse:
 # ---------- один ход к модели: /ai/ask и финал /ai/questions/answer ----------
 
 
-async def _run_turn(user_id: int, question: str, history: list) -> dict[str, Any]:
+async def _run_turn(
+    user_id: int,
+    question: str,
+    history: list,
+    *,
+    image_data_url: Optional[str] = None,
+    video_context: Optional[str] = None,
+) -> dict[str, Any]:
     """Один вызов ai_trainer.ask() с полным набором колбэков — общее ядро для
-    /ai/ask и для «опросник закончился, идём собирать программу»
+    /ai/ask, /ai/video и для «опросник закончился, идём собирать программу»
     (/ai/questions/answer). Ровно та же точка входа и та же квота, что у
     _handle_question в боте, разница только в экране, которого тут нет.
+
+    image_data_url/video_context — опциональные вложения текущего хода (фото
+    к вопросу или наблюдения по видео, см. ai_trainer.ask). Передаются в
+    ask() только когда заданы, а не всегда голым None: test_api_v1_ai.py
+    проверяет ТОЧНЫЙ набор колбэков в kwargs у обычного текстового вопроса, и
+    лишний ключ там — уже другой контракт.
 
     Проверка лимита — здесь, а не в вызывающих: это ЕДИНСТВЕННОЕ место, где
     HTTP-слой реально идёт к модели, и `ai_limits.check` обязан стоять перед
@@ -196,12 +241,19 @@ async def _run_turn(user_id: int, question: str, history: list) -> dict[str, Any
     async def collect_wire(messages: list) -> None:
         wire_cell["messages"] = messages
 
+    ask_kwargs: dict[str, Any] = {}
+    if image_data_url is not None:
+        ask_kwargs["image_data_url"] = image_data_url
+    if video_context is not None:
+        ask_kwargs["video_context"] = video_context
+
     try:
         answer = await asyncio.wait_for(
             ai_trainer.ask(
                 user_id, question, history=history,
                 on_program=collect_program, on_action=collect_action,
                 on_questions=collect_questions, on_wire=collect_wire,
+                **ask_kwargs,
             ),
             timeout=config.AI_TOTAL_ANSWER_SECONDS,
         )
@@ -400,6 +452,17 @@ async def _turn_response(user_id: int, turn: dict[str, Any], goal: str) -> dict[
     }
 
 
+def _validate_image_data_url(data_url: str, *, too_big_message: str) -> None:
+    """Проверить формат и настоящий размер фото-вложения (см.
+    common.decode_data_url и докстринг api_v1_voice.py — тот же приём: JSON +
+    data: URL, а не multipart). Саму строку возвращать незачем — она уходит
+    ai_trainer.ask() как есть, декодируем только чтобы измерить честные байты
+    после base64, а не поверить длине JSON-поля."""
+    raw, _mime, _ext = common.decode_data_url(data_url, IMAGE_EXTENSION_BY_MIME, field="image_data_url")
+    if len(raw) > MAX_IMAGE_BYTES:
+        raise ApiError(400, "photo_too_big", too_big_message)
+
+
 async def ask_question(request: Request) -> JSONResponse:
     """Один вопрос тренеру → ответ плюс черновик программы/опросник/упоминания
     (см. `_turn_response`). Порядок ровно как в handlers/ai_trainer.py
@@ -407,15 +470,34 @@ async def ask_question(request: Request) -> JSONResponse:
     счётчик двигаем ПОСЛЕ успешного ответа. Таймаут на весь ход (а не на один
     вызов модели — внутри `ask()` бывает несколько раундов tool-calls) — тот
     же, что у бота: `config.AI_TOTAL_ANSWER_SECONDS`.
+
+    `image_data_url` — необязательное фото к вопросу, тот же сценарий, что
+    `ai_photo_question` в боте («что это за тренажёр», «посмотри на мою
+    технику»). При фото без текста `question` можно не присылать вовсе —
+    как пустая подпись к фото в Telegram, — тогда уходит тот же дефолтный
+    вопрос, что и у бота.
     """
     user_id = await common.authed_user_id(request)
     if not ai_trainer.is_configured():
         raise ApiError(503, "not_configured", "ai trainer is not configured")
 
     body = await common.json_body(request)
-    question = str(common.require(body, "question", str)).strip()
-    if not question:
-        raise ApiError(400, "bad_request", "question must not be empty")
+    image_data_url = common.optional_str(body, "image_data_url")
+    user = await db.get_user(user_id)
+    lang = user["lang"] if user is not None else "ru"
+
+    with i18n.use_lang(lang):
+        if image_data_url is not None:
+            _validate_image_data_url(
+                image_data_url,
+                too_big_message=i18n.t("ai.screen.photo_too_big", mb=MAX_IMAGE_BYTES // (1024 * 1024)),
+            )
+        question = common.optional_str(body, "question") or ""
+        if not question:
+            if image_data_url is None:
+                raise ApiError(400, "bad_request", "question must not be empty")
+            # Фото без подписи — ровно как ai_photo_question в боте.
+            question = i18n.t("ai.screen.default_photo_question")
     if len(question) > MAX_QUESTION_LENGTH:
         raise ApiError(400, "bad_request", f"question must be at most {MAX_QUESTION_LENGTH} characters")
 
@@ -424,7 +506,7 @@ async def ask_question(request: Request) -> JSONResponse:
     # db.ai_conversation_turns и докстринг модуля). Пусто у нового разговора
     # или сразу после DELETE /ai/history.
     history = await db.get_ai_conversation_wire_history(user_id)
-    turn = await _run_turn(user_id, question, history)
+    turn = await _run_turn(user_id, question, history, image_data_url=image_data_url)
     return JSONResponse(await _turn_response(user_id, turn, goal=question))
 
 
@@ -556,6 +638,125 @@ async def transcribe_voice(request: Request) -> JSONResponse:
     return JSONResponse({"question": transcript})
 
 
+def _decode_video_data_url(data_url: str, *, too_big_message: str) -> tuple[bytes, str]:
+    """Формат и настоящий размер видео-вложения — тот же приём, что у фото
+    выше и у голоса (api_v1_voice), см. common.decode_data_url. В отличие от
+    фото, video_analysis.analyze() хочет сырые байты и mime отдельно (не
+    целую data: URL), поэтому раскодированное и возвращаем."""
+    raw, mime, _ext = common.decode_data_url(data_url, VIDEO_EXTENSION_BY_MIME, field="video_data_url")
+    if len(raw) > config.MAX_VIDEO_BYTES:
+        raise ApiError(400, "video_too_heavy", too_big_message)
+    return raw, mime
+
+
+async def _resolve_video_exercise_hint(user_id: int, body: dict[str, Any]) -> Optional[str]:
+    """Какое упражнение подсказать разбору — то же решение, что в боте, двумя
+    путями (см. handlers/ai_trainer.py::ai_video_exercise_chosen/_exercise_from_caption):
+
+    - `exercise_id` — явный выбор своим упражнением (HTTP-аналог тапа по
+      кнопке `aivid:ex:` в боте). Проверка владения обязательна: id угадывается,
+      а разбор чужим упражнением-подсказкой был бы утечкой чужого каталога.
+    - `caption` — угадывается из подписи по каталогу ЭТОГО пользователя той же
+      функцией, что и у бота, а не своей копией: правило «подпись это не
+      обязательно название упражнения» (см. её докстринг) иначе разъедется
+      между ботом и API при следующей правке одного из них.
+    """
+    exercise_id = common.optional_int(body, "exercise_id")
+    if exercise_id is not None:
+        exercise = await db.get_exercise(exercise_id)
+        if exercise is None or exercise["user_id"] != user_id:
+            raise ApiError(404, "not_found", "exercise not found")
+        return exercise["display_name"]
+    caption = common.optional_str(body, "caption")
+    if caption:
+        return await ai_trainer_handlers._exercise_from_caption(user_id, caption)
+    return None
+
+
+async def ask_video(request: Request) -> JSONResponse:
+    """Видео подхода → разбор техники и сразу ответ тренера по нему.
+
+    В боте это два платных шага одного сценария: `video_analysis.analyze`
+    (глаза, Qwen3-VL) и затем `ai_trainer.ask` с `video_context` (голос,
+    Grok) — см. `handlers/ai_trainer.py::_analyze_video_and_answer`. Здесь оба
+    шага за один HTTP-запрос, а не два отдельных маршрута, как у голоса: у
+    голоса разделение окупается — расшифровку можно поправить ДО того, как
+    потрачен вопрос из квоты (см. докстринг `transcribe_voice`). Результат
+    разбора видео клиент не редактирует и вообще не видит как текст, значит
+    разделение только развело бы во времени два списания квоты (video и
+    question) без единой пользы взамен.
+
+    Квоты — video, потом question, ДО единого байта разбора: тот же порядок,
+    что в `ai_video_question` в боте (см. её докстринг) — платный разбор не
+    должен стартовать ради ответа, который квота вопросов всё равно не
+    пропустит. preview (свои аккаунты в режиме предупреждений) здесь не
+    отличается от настоящего блока: у API нет экрана, куда показать
+    предупреждение и всё равно пропустить шаг (тот же выбор, что и у
+    `_run_turn`/`_limits_json` для вопросов, см. докстринг модуля).
+    """
+    user_id = await common.authed_user_id(request)
+    user = await db.get_user(user_id)
+    lang = user["lang"] if user is not None else "ru"
+
+    if not config.video_analysis_available():
+        with i18n.use_lang(lang):
+            raise ApiError(503, "not_configured", i18n.t("ai.screen.video_not_available_text"))
+    if not ai_trainer.is_configured():
+        raise ApiError(503, "not_configured", "ai trainer is not configured")
+
+    body = await common.json_body(request)
+
+    with i18n.use_lang(lang):
+        duration = body.get("duration_seconds")
+        if duration is not None:
+            if not isinstance(duration, (int, float)) or isinstance(duration, bool):
+                raise ApiError(400, "bad_request", "duration_seconds must be a number")
+            if duration > config.MAX_VIDEO_SECONDS:
+                raise ApiError(
+                    400, "video_too_long",
+                    i18n.t("ai.screen.video_too_long", seconds=config.MAX_VIDEO_SECONDS),
+                )
+
+        data_url = common.require(body, "video_data_url", str)
+        raw, mime = _decode_video_data_url(
+            data_url,
+            too_big_message=i18n.t(
+                "ai.screen.video_too_heavy", mb=config.MAX_VIDEO_BYTES // (1024 * 1024)
+            ),
+        )
+
+    block = await ai_limits.check(user_id, ai_limits.KIND_VIDEO)
+    if block is not None:
+        raise ApiError(429, "video_limit_exceeded", "daily video analysis limit reached")
+    block = await ai_limits.check(user_id, ai_limits.KIND_QUESTION)
+    if block is not None:
+        raise ApiError(429, "question_limit_exceeded", "daily question limit reached")
+
+    exercise_hint = await _resolve_video_exercise_hint(user_id, body)
+    caption = common.optional_str(body, "caption") or ""
+
+    analysis = await video_analysis.analyze(raw, user_id, mime_type=mime, exercise_hint=exercise_hint)
+    if analysis is None:
+        with i18n.use_lang(lang):
+            raise ApiError(502, "video_analysis_failed", i18n.t("ai.screen.video_analysis_failed"))
+
+    # Квота видео тратится за состоявшийся разбор — как и в боте
+    # (db.increment_ai_video_count сразу после успешного analyze, до вопроса
+    # тренеру, см. _analyze_video_and_answer). Сбой уже вернул бы 502 выше.
+    await db.increment_ai_video_count(user_id)
+
+    with i18n.use_lang(lang):
+        asked = caption or (i18n.t("ai.screen.analyze_technique", hint=exercise_hint) if exercise_hint else "")
+        question = asked or i18n.t("ai.screen.default_video_question")
+
+    history = await db.get_ai_conversation_wire_history(user_id)
+    turn = await _run_turn(
+        user_id, question, history,
+        video_context=video_analysis.to_context_block(analysis),
+    )
+    return JSONResponse(await _turn_response(user_id, turn, goal=question))
+
+
 async def get_history(request: Request) -> JSONResponse:
     """История для отрисовки чата: только видимая часть (роль/текст/время),
     без wire-формата — клиенту нечего делать с tool-calls модели, и тащить их
@@ -593,6 +794,7 @@ routes = [
     Route("/ai/limits", get_limits, methods=["GET"]),
     Route("/ai/ask", ask_question, methods=["POST"]),
     Route("/ai/voice", transcribe_voice, methods=["POST"]),
+    Route("/ai/video", ask_video, methods=["POST"]),
     Route("/ai/questions/answer", answer_setup_question, methods=["POST"]),
     Route("/ai/program/save", save_program, methods=["POST"]),
     Route("/ai/history", get_history, methods=["GET"]),

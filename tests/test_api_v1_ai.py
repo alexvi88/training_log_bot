@@ -8,6 +8,8 @@
 входа `/ai/ask` — мокировать нужно именно её, а не HTTP-клиент x.ai глубже.
 """
 
+import base64
+
 import httpx
 import pytest
 
@@ -15,6 +17,7 @@ import ai_limits
 import ai_trainer
 import api_v1
 import config
+import video_analysis
 
 # Из глобального каталога (seed_data.EXERCISE_TEMPLATES) — резолвится у любого
 # пользователя, даже пустого, тем же путём, что и в tests/test_ai_program_builder.py.
@@ -622,3 +625,253 @@ async def test_questions_answer_requires_auth(client_factory):
     client = client_factory()
     resp = await client.post("/ai/questions/answer", json={"question_index": 0, "answer": "x"})
     assert resp.status_code == 401
+
+
+# ---------- фото к вопросу (POST /ai/ask, image_data_url) ----------
+
+
+def _image_data_url(mime="image/jpeg", payload=b"not-really-a-jpeg-but-fine-its-mocked"):
+    return f"data:{mime};base64,{base64.b64encode(payload).decode()}"
+
+
+@pytest.mark.asyncio
+async def test_ask_with_photo_passes_image_to_model(fresh_db, client_factory, monkeypatch):
+    """Тот же сценарий, что ai_photo_question в боте: фото уходит в ask()
+    отдельным аргументом, а вопрос без подписи заменяется дефолтным."""
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    data_url = _image_data_url()
+
+    async def fake_ask(user_id, question, history, **kwargs):
+        assert question == "Посмотри на фото и прокомментируй."
+        assert kwargs["image_data_url"] == data_url
+        return "Это тренажёр Смита."
+
+    monkeypatch.setattr(ai_trainer, "ask", fake_ask)
+    client = await _linked_client(fresh_db, client_factory)
+
+    resp = await client.post("/ai/ask", json={"image_data_url": data_url})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["answer"] == "Это тренажёр Смита."
+
+
+@pytest.mark.asyncio
+async def test_ask_with_photo_and_caption_uses_caption_as_question(fresh_db, client_factory, monkeypatch):
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    data_url = _image_data_url()
+
+    async def fake_ask(user_id, question, history, **kwargs):
+        assert question == "Что это за тренажёр?"
+        assert kwargs["image_data_url"] == data_url
+        return "Тренажёр для разгибания ног."
+
+    monkeypatch.setattr(ai_trainer, "ask", fake_ask)
+    client = await _linked_client(fresh_db, client_factory)
+
+    resp = await client.post(
+        "/ai/ask", json={"question": "Что это за тренажёр?", "image_data_url": data_url}
+    )
+    assert resp.status_code == 200, resp.text
+
+
+@pytest.mark.asyncio
+async def test_ask_rejects_too_big_photo(fresh_db, client_factory, monkeypatch):
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    from handlers import ai_trainer as ai_trainer_handlers
+
+    monkeypatch.setattr(ai_trainer_handlers, "MAX_IMAGE_BYTES", 4)
+    import api_v1_ai
+
+    monkeypatch.setattr(api_v1_ai, "MAX_IMAGE_BYTES", 4)
+    client = await _linked_client(fresh_db, client_factory)
+
+    resp = await client.post("/ai/ask", json={"image_data_url": _image_data_url()})
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "photo_too_big"
+
+
+@pytest.mark.asyncio
+async def test_ask_rejects_unsupported_photo_format(fresh_db, client_factory, monkeypatch):
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    client = await _linked_client(fresh_db, client_factory)
+
+    resp = await client.post(
+        "/ai/ask", json={"image_data_url": _image_data_url(mime="application/pdf")}
+    )
+    assert resp.status_code == 415
+    assert resp.json()["error"] == "unsupported_media_type"
+
+
+# ---------- POST /ai/video ----------
+
+
+def _video_data_url(mime="video/mp4", payload=b"not-really-a-video-but-fine-its-mocked"):
+    return f"data:{mime};base64,{base64.b64encode(payload).decode()}"
+
+
+def _fake_analysis(view=None):
+    return {"view": view or {}, "exercise_confidence": "высокая", "checklist": []}
+
+
+@pytest.mark.asyncio
+async def test_ask_video_requires_auth(client_factory):
+    client = client_factory()
+    resp = await client.post("/ai/video", json={"video_data_url": _video_data_url()})
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_ask_video_returns_503_when_not_available(fresh_db, client_factory, monkeypatch):
+    monkeypatch.setattr(config, "video_analysis_available", lambda: False)
+    client = await _linked_client(fresh_db, client_factory)
+
+    resp = await client.post("/ai/video", json={"video_data_url": _video_data_url()})
+    assert resp.status_code == 503
+    assert resp.json()["error"] == "not_configured"
+
+
+@pytest.mark.asyncio
+async def test_ask_video_full_scenario_with_own_exercise(fresh_db, client_factory, monkeypatch):
+    """Полный сценарий: свой exercise_id → разбор → ответ тренера, обе квоты
+    (video и question) списаны один раз."""
+    monkeypatch.setattr(config, "video_analysis_available", lambda: True)
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+
+    async def fake_analyze(video_bytes, user_id, mime_type="video/mp4", exercise_hint=None):
+        assert exercise_hint == "Присед со штангой"
+        assert mime_type == "video/mp4"
+        return _fake_analysis()
+
+    monkeypatch.setattr(video_analysis, "analyze", fake_analyze)
+
+    async def fake_ask(user_id, question, history, **kwargs):
+        assert "video_context" in kwargs
+        assert question == "Разбери технику: Присед со штангой."
+        return "Спина ровная, колени не заваливаются — норм."
+
+    monkeypatch.setattr(ai_trainer, "ask", fake_ask)
+
+    client = await _linked_client(fresh_db, client_factory)
+    created = await client.post("/exercises", json={"name": "Присед со штангой"})
+    exercise_id = created.json()["id"]
+
+    resp = await client.post(
+        "/ai/video",
+        json={"video_data_url": _video_data_url(), "exercise_id": exercise_id, "duration_seconds": 12},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["answer"] == "Спина ровная, колени не заваливаются — норм."
+    assert await fresh_db.get_ai_video_count_today(111) == 1
+    assert await fresh_db.get_ai_question_count_today(111) == 1
+
+
+@pytest.mark.asyncio
+async def test_ask_video_resolves_exercise_from_caption(fresh_db, client_factory, monkeypatch):
+    monkeypatch.setattr(config, "video_analysis_available", lambda: True)
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    client = await _linked_client(fresh_db, client_factory)
+    await client.post("/exercises", json={"name": "Румынская тяга со штангой"})
+
+    async def fake_analyze(video_bytes, user_id, mime_type="video/mp4", exercise_hint=None):
+        assert exercise_hint == "Румынская тяга со штангой"
+        return _fake_analysis()
+
+    monkeypatch.setattr(video_analysis, "analyze", fake_analyze)
+
+    async def fake_ask(user_id, question, history, **kwargs):
+        return "ответ"
+
+    monkeypatch.setattr(ai_trainer, "ask", fake_ask)
+
+    resp = await client.post(
+        "/ai/video",
+        json={"video_data_url": _video_data_url(), "caption": "румынская тяга"},
+    )
+    assert resp.status_code == 200, resp.text
+
+
+@pytest.mark.asyncio
+async def test_ask_video_rejects_someone_elses_exercise(fresh_db, client_factory, monkeypatch):
+    monkeypatch.setattr(config, "video_analysis_available", lambda: True)
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    owner = await _linked_client(fresh_db, client_factory, telegram_id=111)
+    stranger = await _linked_client(fresh_db, client_factory, telegram_id=222)
+    created = await stranger.post("/exercises", json={"name": "Чужое упражнение"})
+    stranger_exercise_id = created.json()["id"]
+
+    resp = await owner.post(
+        "/ai/video",
+        json={"video_data_url": _video_data_url(), "exercise_id": stranger_exercise_id},
+    )
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_ask_video_rejects_too_big_payload(fresh_db, client_factory, monkeypatch):
+    monkeypatch.setattr(config, "video_analysis_available", lambda: True)
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(config, "MAX_VIDEO_BYTES", 4)
+    client = await _linked_client(fresh_db, client_factory)
+
+    resp = await client.post("/ai/video", json={"video_data_url": _video_data_url()})
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "video_too_heavy"
+
+
+@pytest.mark.asyncio
+async def test_ask_video_rejects_too_long_duration(fresh_db, client_factory, monkeypatch):
+    monkeypatch.setattr(config, "video_analysis_available", lambda: True)
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(config, "MAX_VIDEO_SECONDS", 5)
+    client = await _linked_client(fresh_db, client_factory)
+
+    resp = await client.post(
+        "/ai/video", json={"video_data_url": _video_data_url(), "duration_seconds": 30}
+    )
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "video_too_long"
+
+
+@pytest.mark.asyncio
+async def test_ask_video_rejects_unsupported_format(fresh_db, client_factory, monkeypatch):
+    monkeypatch.setattr(config, "video_analysis_available", lambda: True)
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    client = await _linked_client(fresh_db, client_factory)
+
+    resp = await client.post(
+        "/ai/video", json={"video_data_url": _video_data_url(mime="application/zip")}
+    )
+    assert resp.status_code == 415
+    assert resp.json()["error"] == "unsupported_media_type"
+
+
+@pytest.mark.asyncio
+async def test_ask_video_returns_502_when_analysis_fails(fresh_db, client_factory, monkeypatch):
+    monkeypatch.setattr(config, "video_analysis_available", lambda: True)
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+
+    async def fake_analyze(video_bytes, user_id, mime_type="video/mp4", exercise_hint=None):
+        return None
+
+    monkeypatch.setattr(video_analysis, "analyze", fake_analyze)
+    client = await _linked_client(fresh_db, client_factory)
+
+    resp = await client.post("/ai/video", json={"video_data_url": _video_data_url()})
+    assert resp.status_code == 502
+    assert resp.json()["error"] == "video_analysis_failed"
+    # Квота видео не должна списаться за неудавшийся разбор.
+    assert await fresh_db.get_ai_video_count_today(111) == 0
+
+
+@pytest.mark.asyncio
+async def test_ask_video_respects_video_daily_limit(fresh_db, client_factory, monkeypatch):
+    monkeypatch.setattr(config, "video_analysis_available", lambda: True)
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(config, "AI_VIDEO_DAILY_LIMIT", 1)
+    ai_limits.reset_cache()
+    client = await _linked_client(fresh_db, client_factory)
+    await fresh_db.increment_ai_video_count(111)
+
+    resp = await client.post("/ai/video", json={"video_data_url": _video_data_url()})
+    assert resp.status_code == 429
+    assert resp.json()["error"] == "video_limit_exceeded"
