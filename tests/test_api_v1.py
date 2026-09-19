@@ -871,3 +871,263 @@ async def test_a_workout_with_sets_still_finishes_normally(fresh_db, client_fact
     body = (await client.post(f"/workouts/{workout_id}/finish", json={})).json()
     assert body["status"] == "finished"
     assert len(await fresh_db.list_workouts(111)) == 1
+
+
+# ---------- управление упражнением (PATCH/архив/объединение) ----------
+
+@pytest.mark.asyncio
+async def test_update_exercise_renames(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    exercise_id = (await client.post("/exercises", json={"name": "Жим лёжа"})).json()["id"]
+
+    resp = await client.patch(f"/exercises/{exercise_id}", json={"name": "Жим штанги лёжа"})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["display_name"] == "Жим штанги лёжа"
+
+    ex = await fresh_db.get_exercise(exercise_id)
+    assert ex["display_name"] == "Жим штанги лёжа"
+
+
+@pytest.mark.asyncio
+async def test_update_exercise_rename_clash_is_conflict(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    await client.post("/exercises", json={"name": "Присед"})
+    exercise_id = (await client.post("/exercises", json={"name": "Жим лёжа"})).json()["id"]
+
+    resp = await client.patch(f"/exercises/{exercise_id}", json={"name": "Присед"})
+    assert resp.status_code == 409
+    assert resp.json()["error"] == "name_taken"
+
+
+@pytest.mark.asyncio
+async def test_update_exercise_changes_group(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    group_id = (await fresh_db.create_muscle_group(111, "Ноги"))
+    exercise_id = (await client.post("/exercises", json={"name": "Присед"})).json()["id"]
+
+    resp = await client.patch(f"/exercises/{exercise_id}", json={"group_id": group_id})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["primary_group_id"] == group_id
+
+
+@pytest.mark.asyncio
+async def test_update_exercise_rejects_another_users_group(fresh_db, client_factory):
+    client_a = await _linked_client(fresh_db, client_factory, telegram_id=201)
+    await _linked_client(fresh_db, client_factory, telegram_id=202)
+    own_group_id = await fresh_db.create_muscle_group(202, "Своя группа")
+    exercise_id = (await client_a.post("/exercises", json={"name": "Присед"})).json()["id"]
+
+    resp = await client_a.patch(f"/exercises/{exercise_id}", json={"group_id": own_group_id})
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_update_exercise_sets_and_clears_description(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    exercise_id = (await client.post("/exercises", json={"name": "Присед"})).json()["id"]
+
+    resp = await client.patch(f"/exercises/{exercise_id}", json={"description": "Спина прямая"})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["description"] == "Спина прямая"
+
+    resp2 = await client.patch(f"/exercises/{exercise_id}", json={"description": None})
+    assert resp2.status_code == 200
+    assert resp2.json()["description"] is None
+
+
+@pytest.mark.asyncio
+async def test_update_exercise_rejects_another_users_exercise(fresh_db, client_factory):
+    client_a = await _linked_client(fresh_db, client_factory, telegram_id=301)
+    client_b = await _linked_client(fresh_db, client_factory, telegram_id=302)
+    exercise_id = (await client_a.post("/exercises", json={"name": "Присед"})).json()["id"]
+
+    resp = await client_b.patch(f"/exercises/{exercise_id}", json={"name": "Чужое"})
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_update_exercise_requires_auth(fresh_db, client_factory):
+    client = client_factory()
+    resp = await client.patch("/exercises/1", json={"name": "Присед"})
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_archive_and_unarchive_exercise(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    exercise_id = (await client.post("/exercises", json={"name": "Присед"})).json()["id"]
+
+    resp = await client.post(f"/exercises/{exercise_id}/archive")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["is_archived"] is True
+
+    # архив не должен подмешиваться в обычный список
+    listing = await client.get("/exercises")
+    assert exercise_id not in [e["id"] for e in listing.json()]
+
+    archived_listing = await client.get("/exercises?archived=true")
+    assert [e["id"] for e in archived_listing.json()] == [exercise_id]
+
+    resp2 = await client.post(f"/exercises/{exercise_id}/unarchive")
+    assert resp2.status_code == 200
+    assert resp2.json()["is_archived"] is False
+
+    listing2 = await client.get("/exercises")
+    assert exercise_id in [e["id"] for e in listing2.json()]
+
+
+@pytest.mark.asyncio
+async def test_archive_rejects_another_users_exercise(fresh_db, client_factory):
+    client_a = await _linked_client(fresh_db, client_factory, telegram_id=401)
+    client_b = await _linked_client(fresh_db, client_factory, telegram_id=402)
+    exercise_id = (await client_a.post("/exercises", json={"name": "Присед"})).json()["id"]
+
+    resp = await client_b.post(f"/exercises/{exercise_id}/archive")
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_archive_exercise_requires_auth(fresh_db, client_factory):
+    client = client_factory()
+    resp = await client.post("/exercises/1/archive")
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_merge_exercises_combines_history_under_target(fresh_db, client_factory):
+    """«Жим лёжа» и «жим штанги лёжа» — тот самый случай из задачи: после
+    объединения обе истории должны читаться под одним id."""
+    client = await _linked_client(fresh_db, client_factory)
+    target_id = (await client.post("/exercises", json={"name": "Жим лёжа"})).json()["id"]
+    source_id = (await client.post("/exercises", json={"name": "жим штанги лёжа"})).json()["id"]
+
+    workout1_id = (await client.post("/workouts/active")).json()["id"]
+    await client.post(
+        f"/workouts/{workout1_id}/sets", json={"exercise_id": target_id, "weight": 80, "reps": 5}
+    )
+    await client.post(f"/workouts/{workout1_id}/finish", json={})
+
+    workout2_id = (await client.post("/workouts/active")).json()["id"]
+    await client.post(
+        f"/workouts/{workout2_id}/sets", json={"exercise_id": source_id, "weight": 82.5, "reps": 5}
+    )
+    await client.post(f"/workouts/{workout2_id}/finish", json={})
+
+    resp = await client.post("/exercises/merge", json={"target_id": target_id, "source_id": source_id})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["id"] == target_id
+
+    progress = await client.get(f"/exercises/{target_id}/progress")
+    assert progress.status_code == 200
+    weights = sorted(e["weight"] for e in progress.json())
+    assert weights == [80, 82.5]
+
+    # упражнение-дубликат больше не существует отдельной строкой
+    assert await fresh_db.get_exercise(source_id) is None
+    listing = await client.get("/exercises")
+    assert [e["id"] for e in listing.json()] == [target_id]
+
+
+@pytest.mark.asyncio
+async def test_merge_exercises_rejects_archived_target(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    target_id = (await client.post("/exercises", json={"name": "Жим лёжа"})).json()["id"]
+    source_id = (await client.post("/exercises", json={"name": "жим штанги лёжа"})).json()["id"]
+    await client.post(f"/exercises/{target_id}/archive")
+
+    resp = await client.post("/exercises/merge", json={"target_id": target_id, "source_id": source_id})
+    assert resp.status_code == 409
+    assert resp.json()["error"] == "target_archived"
+
+
+@pytest.mark.asyncio
+async def test_merge_exercises_rejects_another_users_exercise(fresh_db, client_factory):
+    client_a = await _linked_client(fresh_db, client_factory, telegram_id=501)
+    client_b = await _linked_client(fresh_db, client_factory, telegram_id=502)
+    own_id = (await client_a.post("/exercises", json={"name": "Присед"})).json()["id"]
+    stranger_id = (await client_b.post("/exercises", json={"name": "Тяга"})).json()["id"]
+
+    resp = await client_a.post("/exercises/merge", json={"target_id": own_id, "source_id": stranger_id})
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_merge_exercises_requires_auth(fresh_db, client_factory):
+    client = client_factory()
+    resp = await client.post("/exercises/merge", json={"target_id": 1, "source_id": 2})
+    assert resp.status_code == 401
+
+
+# ---------- POST /workouts/active с routine_id ----------
+#
+# Приложение раньше заводило тренировку без привязки к дню программы — из-за
+# этого db.next_program_day навсегда залипал на первом дне (у него нет своего
+# курсора, только история workouts.routine_id, см. db.next_program_day).
+# Тесты ниже — про починку именно этого; test_next_day_advances_after_a_workout_started_via_routine_id
+# главный, ради него всё и делалось.
+
+@pytest.mark.asyncio
+async def test_start_workout_with_routine_id_links_it(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    program_id = (await client.post("/programs", json={"name": "PPL"})).json()["id"]
+    day_id = (await client.post(f"/programs/{program_id}/days", json={"name": "Push"})).json()["id"]
+
+    resp = await client.post("/workouts/active", json={"routine_id": day_id})
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["routine_id"] == day_id
+
+    stored = await fresh_db.get_workout(resp.json()["id"])
+    assert stored["routine_id"] == day_id
+    assert stored["program_id"] == program_id
+
+
+@pytest.mark.asyncio
+async def test_start_workout_with_foreign_routine_id_is_404(fresh_db, client_factory):
+    owner = await _linked_client(fresh_db, client_factory, telegram_id=111)
+    intruder = await _linked_client(fresh_db, client_factory, telegram_id=222)
+    program_id = (await owner.post("/programs", json={"name": "PPL"})).json()["id"]
+    day_id = (await owner.post(f"/programs/{program_id}/days", json={"name": "Push"})).json()["id"]
+
+    resp = await intruder.post("/workouts/active", json={"routine_id": day_id})
+    assert resp.status_code == 404
+
+    # чужой routine_id не должен и завести тренировку "с нуля" по ошибке
+    assert (await intruder.get("/workouts/active")).json() is None
+
+
+@pytest.mark.asyncio
+async def test_start_workout_without_routine_id_behaves_as_before(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    resp = await client.post("/workouts/active")
+    assert resp.status_code == 201
+    assert resp.json()["routine_id"] is None
+
+    stored = await fresh_db.get_workout(resp.json()["id"])
+    assert stored["routine_id"] is None
+    assert stored["program_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_next_day_advances_after_a_workout_started_via_routine_id(fresh_db, client_factory):
+    """Главный тест: тренировка, начатая приложением с routine_id, должна
+    продвигать next-day ровно как тренировка, начатая ботом."""
+    client = await _linked_client(fresh_db, client_factory)
+    exercise_id = (await client.post("/exercises", json={"name": "Жим лёжа"})).json()["id"]
+    program_id = (await client.post("/programs", json={"name": "PPL"})).json()["id"]
+    push_id = (await client.post(f"/programs/{program_id}/days", json={"name": "Push"})).json()["id"]
+    pull_id = (await client.post(f"/programs/{program_id}/days", json={"name": "Pull"})).json()["id"]
+
+    # программа ни разу не пройдена — следующий день первый по порядку
+    assert (await client.get(f"/programs/{program_id}/next-day")).json()["id"] == push_id
+
+    workout_id = (await client.post("/workouts/active", json={"routine_id": push_id})).json()["id"]
+    await client.post(
+        f"/workouts/{workout_id}/sets", json={"exercise_id": exercise_id, "weight": 80, "reps": 5}
+    )
+    finish_resp = await client.post(f"/workouts/{workout_id}/finish", json={})
+    assert finish_resp.status_code == 200
+    assert finish_resp.json()["status"] == "finished"
+
+    next_day = await client.get(f"/programs/{program_id}/next-day")
+    assert next_day.status_code == 200
+    assert next_day.json()["id"] == pull_id

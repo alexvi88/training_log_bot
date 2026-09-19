@@ -44,6 +44,8 @@ import api_v1_common as common
 import api_v1_dashboard
 import api_v1_feedback
 import api_v1_food
+import api_v1_hall_of_fame
+import api_v1_history
 import api_v1_import
 import api_v1_media
 import api_v1_programs
@@ -53,6 +55,7 @@ import apple_signin
 import dashboard_data
 import db
 import formatting
+import history_search_data
 import i18n
 import mcp_oauth
 import parser
@@ -85,6 +88,8 @@ def _exercise_json(row) -> dict[str, Any]:
         "unilateral": bool(row["unilateral"]),
         "attachment": row["attachment"],
         "bodyweight_load": row["bodyweight_load"],
+        "description": row["description"],
+        "is_archived": bool(row["is_archived"]),
     }
 
 
@@ -108,6 +113,7 @@ def _workout_json(row) -> dict[str, Any]:
         "started_at": row["started_at"],
         "finished_at": row["finished_at"],
         "note": row["note"],
+        "routine_id": row["routine_id"],
     }
 
 
@@ -287,13 +293,18 @@ async def create_muscle_group(request: Request) -> JSONResponse:
 
 
 async def list_exercises(request: Request) -> JSONResponse:
-    """Три режима, как в боте: по группе мышц (обзор для тех, кто не помнит
-    точное название), текстовым поиском, или весь каталог. group_id и query
-    вместе не имеют смысла — group_id побеждает, раз пришёл."""
+    """Четыре режима, как в боте: архив (отдельный список, как «🗄 Архив» в
+    меню — обычный каталог его никогда не подмешивает), по группе мышц (обзор
+    для тех, кто не помнит точное название), текстовым поиском, или весь
+    каталог. Параметры не комбинируются — archived, затем group_id, затем
+    query побеждают в этом порядке, раз пришли."""
     user_id = await _authed_user_id(request)
+    archived_param = request.query_params.get("archived")
     group_id_param = request.query_params.get("group_id")
     query = request.query_params.get("query")
-    if group_id_param:
+    if archived_param and archived_param.lower() in ("1", "true", "yes"):
+        rows = await db.list_archived_exercises(user_id)
+    elif group_id_param:
         try:
             group_id = int(group_id_param)
         except ValueError as exc:
@@ -325,6 +336,87 @@ async def create_exercise(request: Request) -> JSONResponse:
     exercise_id = await db.create_exercise(user_id, name, group_id)
     row = await db.get_exercise(exercise_id)
     return JSONResponse(_exercise_json(row), status_code=201)
+
+
+async def update_exercise(request: Request) -> JSONResponse:
+    """PATCH — частичное обновление, как /settings: только присланные поля
+    меняются. То же самое меню бота (handlers/exercises.py), только без
+    диалога — переименование, смена группы мышц и описание техники."""
+    user_id = await _authed_user_id(request)
+    exercise_id = int(request.path_params["exercise_id"])
+    await _owned_exercise(exercise_id, user_id)
+    body = await _json_body(request)
+
+    if "name" in body:
+        name = str(_require(body, "name", str)).strip()
+        if not name:
+            raise ApiError(400, "bad_request", "name must not be empty")
+        # Клэш по display_name — та же ловушка, что update_exercise_name
+        # разбирает в docstring: переименование в уже занятое имя должно
+        # остаться отдельным ответом, а не молча слиться с чужой историей.
+        if not await db.update_exercise_name(exercise_id, name):
+            raise ApiError(409, "name_taken", "another exercise already has this name")
+
+    if "group_id" in body:
+        group_id = body["group_id"]
+        if not isinstance(group_id, int) or isinstance(group_id, bool):
+            raise ApiError(400, "bad_request", "group_id must be int")
+        group = await db.get_muscle_group(group_id)
+        if group is None or (group["user_id"] is not None and group["user_id"] != user_id):
+            raise ApiError(404, "not_found", "muscle group not found")
+        await db.update_exercise_group(exercise_id, group_id)
+
+    if "description" in body:
+        description = common.optional_str(body, "description")
+        await db.set_exercise_description(exercise_id, description)
+
+    row = await db.get_exercise(exercise_id)
+    return JSONResponse(_exercise_json(row))
+
+
+async def archive_exercise(request: Request) -> JSONResponse:
+    user_id = await _authed_user_id(request)
+    exercise_id = int(request.path_params["exercise_id"])
+    await _owned_exercise(exercise_id, user_id)
+    await db.archive_exercise(exercise_id)
+    row = await db.get_exercise(exercise_id)
+    return JSONResponse(_exercise_json(row))
+
+
+async def unarchive_exercise(request: Request) -> JSONResponse:
+    user_id = await _authed_user_id(request)
+    exercise_id = int(request.path_params["exercise_id"])
+    await _owned_exercise(exercise_id, user_id)
+    await db.unarchive_exercise(exercise_id)
+    row = await db.get_exercise(exercise_id)
+    return JSONResponse(_exercise_json(row))
+
+
+async def merge_exercises(request: Request) -> JSONResponse:
+    """Слить дубликат в целевое упражнение — самое ценное из всей карточки:
+    «Жим лёжа» и «жим штанги лёжа», занесённые порознь, иначе делят историю и
+    график пополам. `target_id` — тот, что остаётся (его история, фото,
+    описание побеждают при конфликте), `source_id` — тот, что удаляется;
+    вся бизнес-логика и проверки (не своё, цель в архиве, открытая тренировка)
+    уже в db.merge_exercises, ровно как у кнопки «Объединить» в боте."""
+    user_id = await _authed_user_id(request)
+    body = await _json_body(request)
+    target_id = _require(body, "target_id", int)
+    source_id = _require(body, "source_id", int)
+    # 404 раньше вызова db.merge_exercises: та под "invalid" склеивает и чужое,
+    # и несуществующее, и совпадение id — снаружи это должно выглядеть как
+    # обычное отсутствие ресурса, а не как единая проверка позже.
+    await _owned_exercise(target_id, user_id)
+    await _owned_exercise(source_id, user_id)
+    outcome = await db.merge_exercises(user_id, keep_id=target_id, drop_id=source_id)
+    if outcome != db.MERGE_OK:
+        code, message = {
+            db.MERGE_TARGET_ARCHIVED: ("target_archived", "target exercise is archived"),
+            db.MERGE_IN_ACTIVE_WORKOUT: ("active_workout", "one of the exercises is in the active workout"),
+        }.get(outcome, ("bad_request", "cannot merge these exercises"))
+        raise ApiError(409, code, message)
+    row = await db.get_exercise(target_id)
+    return JSONResponse(_exercise_json(row))
 
 
 async def exercise_progress(request: Request) -> JSONResponse:
@@ -403,8 +495,17 @@ async def active_workout(request: Request) -> JSONResponse:
 
 
 async def start_workout(request: Request) -> JSONResponse:
+    """`routine_id` в теле — необязательный: старое приложение шлёт пустое
+    тело и получает тренировку «с нуля», как раньше. Без привязки к дню
+    программы `db.next_program_day` не может продвинуться дальше первого
+    дня — ровно то, что уже делает бот в _begin_routine_workout, здесь тот
+    же db.create_workout(routine_id=...) через get_or_create_active_workout."""
     user_id = await _authed_user_id(request)
-    workout_id, created = await db.get_or_create_active_workout(user_id)
+    body = await _json_body(request) if await request.body() else {}
+    routine_id = common.optional_int(body, "routine_id")
+    if routine_id is not None:
+        await api_v1_programs._owned_routine(routine_id, user_id)
+    workout_id, created = await db.get_or_create_active_workout(user_id, routine_id=routine_id)
     workout = await db.get_workout(workout_id)
     return JSONResponse(_workout_json(workout), status_code=201 if created else 200)
 
@@ -782,8 +883,8 @@ async def finish_workout(request: Request) -> JSONResponse:
     )
     was_backfill = workout["status"] == "backfill"
     workout = await db.get_workout(workout_id)
-    payload = await _workout_detail_json(workout)
     user = await db.get_user(user_id)
+    payload = await _workout_detail_json(workout, user)
     payload["rewards"] = await _finish_rewards_json(workout, user, new_codes, was_backfill)
     _spawn_ai_comment(user_id, workout_id, user, workout)
     return JSONResponse(payload)
@@ -827,19 +928,59 @@ async def update_note(request: Request) -> JSONResponse:
     return JSONResponse(await _workout_detail_json(workout))
 
 
-async def _workout_detail_json(workout) -> dict[str, Any]:
+async def _record_text_by_exercise(workout, user) -> dict[int, str]:
+    """Готовая строка рекорда 🔥 на упражнение — тем же путём, что карточка
+    бота: view_builder.build_block_views(mark_records=True) считает рекорд,
+    formatting.format_block_record превращает его в готовый локализованный
+    текст. Второй раз эта фраза нигде не собирается — она живёт в
+    locales/*.json одним экземпляром (formatting.format_block_record).
+
+    `show_extra=user["show_extra_stats"]` — та же тонкость, что у бота: рекорд
+    e1RM молчит при выключенных доп. цифрах, а рекорд повторов виден всегда
+    (см. докстринг format_block_record). Приложение обязано вести себя так же,
+    иначе человек с выключенными доп. цифрами увидел бы в iOS то, что бот ему
+    принципиально не показывает.
+
+    Считается только для законченной тренировки: `previous_before` берёт
+    прошлую сессию упражнения строго ДО этой (handlers.workout._finished_summary
+    делает так же), а для ещё идущей тренировки сравнивать не с чем.
+    """
+    with i18n.use_lang(user["lang"]):
+        blocks = await view_builder.build_block_views(
+            workout["id"],
+            user["e1rm_formula"],
+            previous_before=workout["started_at"],
+            mark_records=True,
+        )
+        show_extra = bool(user["show_extra_stats"])
+        return {
+            block.exercise_id: text
+            for block in blocks
+            if (text := formatting.format_block_record(block, user["unit"], show_extra)) is not None
+        }
+
+
+async def _workout_detail_json(workout, user=None) -> dict[str, Any]:
+    """`user` задан у GET /workouts/{id} и у ответа finish — тогда каждое
+    упражнение получает `record_text`/`has_record` (см. _record_text_by_exercise).
+    У прочих ручек (активная/бэкофилл-тренировка, правка заметки) `user`
+    не передаётся: тренировка ещё не завершена, и полям рекорда взяться неоткуда."""
     data = _workout_json(workout)
+    record_by_exercise = await _record_text_by_exercise(workout, user) if user is not None else {}
     blocks_json = []
     for block in await db.list_blocks_for_workout(workout["id"]):
         exercises_json = []
         for be in await db.get_block_exercises(block["id"]):
             sets = await db.list_sets_for_block(block["id"])
             own_sets = [s for s in sets if s["exercise_id"] == be["exercise_id"]]
+            record_text = record_by_exercise.get(be["exercise_id"])
             exercises_json.append(
                 {
                     "exercise_id": be["exercise_id"],
                     "display_name": be["display_name"],
                     "sets": [_set_json(s) for s in own_sets],
+                    "record_text": record_text,
+                    "has_record": record_text is not None,
                 }
             )
         blocks_json.append({"id": block["id"], "type": block["type"], "exercises": exercises_json})
@@ -851,7 +992,8 @@ async def get_workout(request: Request) -> JSONResponse:
     user_id = await _authed_user_id(request)
     workout_id = int(request.path_params["workout_id"])
     workout = await _owned_workout(workout_id, user_id)
-    return JSONResponse(await _workout_detail_json(workout))
+    user = await db.get_user(user_id)
+    return JSONResponse(await _workout_detail_json(workout, user))
 
 
 async def list_workouts(request: Request) -> JSONResponse:
@@ -868,6 +1010,37 @@ async def list_workouts(request: Request) -> JSONResponse:
         item["set_count"] = set_count
         items.append(item)
     return JSONResponse(items)
+
+
+async def search_workouts(request: Request) -> JSONResponse:
+    """Тренировки, где встречается упражнение из `exercise` — «в какой
+    тренировке был жим», которое дата-only GET /workouts не отвечает.
+
+    Отдельный маршрут, а не параметр у GET /workouts: у того ответ — голый
+    массив (нет места для `total`), а постраничный поиск без общего числа
+    совпадений не может ни показать «показано N из M», ни решить, есть ли
+    следующая страница, — старые тренировки частого упражнения были бы
+    физически недостижимы после первых `limit` штук.
+
+    Расчёт — history_search_data.search, тот же, что и у бота
+    (handlers.history._render_search_page поверх него же): второй запрос с
+    той же парой db.search_workouts_by_exercise/count_workouts_by_exercise
+    разъехался бы с первым при первой же правке.
+    """
+    user_id = await _authed_user_id(request)
+    query = request.query_params.get("exercise", "").strip()
+    if not query:
+        raise ApiError(400, "bad_request", "exercise must not be empty")
+    limit = common.query_int(request, "limit", 20, minimum=1, maximum=100)
+    offset = common.query_int(request, "offset", 0, minimum=0)
+    page = await history_search_data.search(user_id, query, limit=limit, offset=offset)
+    items = []
+    for it in page.items:
+        item = {"id": it.id, "started_at": it.started_at}
+        item["exercise_names"] = it.exercise_names
+        item["set_count"] = it.set_count
+        items.append(item)
+    return JSONResponse({"items": items, "total": page.total})
 
 
 # ---------- вес тела ----------
@@ -928,6 +1101,10 @@ routes = [
     Route("/muscle-groups", create_muscle_group, methods=["POST"]),
     Route("/exercises", list_exercises, methods=["GET"]),
     Route("/exercises", create_exercise, methods=["POST"]),
+    Route("/exercises/merge", merge_exercises, methods=["POST"]),
+    Route("/exercises/{exercise_id:int}", update_exercise, methods=["PATCH"]),
+    Route("/exercises/{exercise_id:int}/archive", archive_exercise, methods=["POST"]),
+    Route("/exercises/{exercise_id:int}/unarchive", unarchive_exercise, methods=["POST"]),
     Route("/exercises/{exercise_id:int}/progress", exercise_progress, methods=["GET"]),
     Route("/workouts/active", active_workout, methods=["GET"]),
     Route("/workouts/active", start_workout, methods=["POST"]),
@@ -936,6 +1113,7 @@ routes = [
     Route("/workouts/backfill", start_backfill_workout, methods=["POST"]),
     Route("/workouts/backfill", discard_backfill_workout, methods=["DELETE"]),
     Route("/workouts", list_workouts, methods=["GET"]),
+    Route("/workouts/search", search_workouts, methods=["GET"]),
     Route("/workouts/{workout_id:int}", get_workout, methods=["GET"]),
     Route("/workouts/{workout_id:int}/sets", log_set, methods=["POST"]),
     Route("/workouts/{workout_id:int}/sets/parse", log_sets_from_text, methods=["POST"]),
@@ -967,6 +1145,8 @@ routes += (
     + api_v1_feedback.routes
     + api_v1_dashboard.routes
     + api_v1_progress.routes
+    + api_v1_hall_of_fame.routes
+    + api_v1_history.routes
 )
 
 

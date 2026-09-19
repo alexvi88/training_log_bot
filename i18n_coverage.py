@@ -175,6 +175,11 @@ LOCALIZED: list[str] = [
     # только числа и машинные коды — они в NEVER_LOCALIZED.
     "api_v1_achievements.py",
     "api_v1_dashboard.py",
+    # Зал славы: тот же приём, что у api_v1_achievements/api_v1_dashboard —
+    # текст (шутка-эквивалент тоннажа, «ещё N тренировок до звания») собран
+    # уже готовым внутри use_lang(users.lang), собственных строк модуль не
+    # держит, всё через formatting.*/i18n.t.
+    "api_v1_hall_of_fame.py",
     # Экран прогресса упражнения: подпись метрики и строка дельты («e1RM: ↑12.5кг
     # с первой тренировки») собираются через i18n.t внутри use_lang(users.lang).
     "api_v1_progress.py",
@@ -192,9 +197,27 @@ LOCALIZED: list[str] = [
     # кнопок (label черновика программы, skip_label опросника) идут тем же
     # i18n.t внутри use_lang(users.lang), что и здесь.
     "api_v1_ai.py",
+    # Картинка-визитка тренировки для бота и /v1 (api_v1_history.py): своих
+    # литералов не держит — подписи собирает formatting.build_workout_card под
+    # i18n.use_lang(users.lang), этот модуль только зовёт её и рисует растр.
+    "workout_card.py",
+    # Экспорт CSV для бота и /v1: заголовки колонок машинные, кириллицы не
+    # держит вовсе (см. NEVER_LOCALIZED у api_v1_import.py — тот же случай
+    # с другой стороны, импорт вместо экспорта).
+    "csv_export.py",
     # Сбор сводки для обоих потребителей — бота и /dashboard. Своих литералов
     # не держит: весь текст собирают formatting.menu_* по текущему языку.
     "dashboard_data.py",
+    # Сбор зала славы для обоих потребителей — бота (handlers/history.py) и
+    # /v1 (api_v1_hall_of_fame.py). Своих литералов не держит: текст собирают
+    # formatting.build_hall_of_fame/format_tonnage_equivalent по текущему языку.
+    "hall_of_fame_data.py",
+    # Поиск по истории упражнения для обоих потребителей — бота
+    # (handlers/history.py.hist_search) и /v1 (api_v1.search_workouts). Своих
+    # литералов не держит: это db-запрос плюс постраничная арифметика, текст
+    # собирает тот, кто показывает (i18n.t в handlers/history.py, голые числа
+    # в JSON).
+    "history_search_data.py",
     "keyboards.py",
     "handlers/workout.py",
     "handlers/edit_workout.py",
@@ -452,6 +475,10 @@ NEVER_LOCALIZED: dict[str, str] = {
         "`/v1`) — только запись дней/упражнений и машинные коды исхода "
         "(budget/name_conflict), текст под них рисует вызывающий экран"
     ),
+    "workout_edit_data.py": (
+        "общий хвост правки завершённой тренировки для бота и /v1 — только вызовы "
+        "db.*/achievement_sync.resync, своего текста не формирует"
+    ),
     "chat_bottom.py": "учёт последнего сообщения в чате, не формирует текст",
     "config.py": "загрузка/валидация конфигурации при старте — лог для деплоя, не для чата",
     "fsm.py": "перечисление FSM-состояний (StatesGroup), текста не содержит",
@@ -528,6 +555,11 @@ NEVER_LOCALIZED: dict[str, str] = {
         "REST-слой шаринга программ/упражнений: JSON со снапшотом (имена, ввёл "
         "пользователь) и машинными кодами ошибок — своего текста не имеет, "
         "превью рисует клиент"
+    ),
+    "api_v1_history.py": (
+        "REST-слой истории: PNG-карточка (текст внутри неё собирает "
+        "workout_card.py под i18n.use_lang), календарь машинными датами/id и "
+        "CSV с латинскими заголовками колонок — своего текста модуль не имеет"
     ),
 }
 

@@ -29,6 +29,8 @@ import api_v1_common as common
 import config
 import db
 import formatting
+import i18n
+import seed_data
 
 ApiError = common.ApiError
 _authed_user_id = common.authed_user_id
@@ -91,6 +93,16 @@ async def _check_routine_budget(user_id: int, adding: int) -> None:
     over_budget = await db.routine_budget(user_id, adding)
     if over_budget:
         raise ApiError(403, "routine_limit_reached", over_budget)
+
+
+async def _owned_workout(workout_id: int, user_id: int):
+    """Тот же паттерн владения, что и у остальных id из URL (см. докстринг
+    модуля) — своя копия, а не импорт api_v1_account._owned_workout, чтобы не
+    заводить связь между доменными модулями ради одной проверки в четыре строки."""
+    workout = await db.get_workout(workout_id)
+    if workout is None or workout["user_id"] != user_id:
+        raise ApiError(404, "not_found", "workout not found")
+    return workout
 
 
 # ---------- сериализация ----------
@@ -351,9 +363,105 @@ async def delete_routine_exercise(request: Request) -> JSONResponse:
     return JSONResponse({"deleted": True})
 
 
+# ---------- готовые программы (каталог) ----------
+#
+# WORKOUT_PROGRAMS (seed_data.py) — тот же read-only каталог, что бот
+# показывает под «✨ Готовые программы». Текст в каталоге живёт на русском и
+# переводится на рендере (seed_data.localized_*), поэтому здесь, как и у
+# api_v1_achievements, ответ собирается под i18n.use_lang(user["lang"]) — без
+# этого англоязычный увидел бы русские названия программ.
+
+def _catalog_program_json(program: dict, lang: str) -> dict[str, Any]:
+    key = program["key"]
+    return {
+        "key": key,
+        "name": seed_data.localized_program_name(key, lang),
+        "meta": seed_data.localized_program_meta(key, lang),
+        "description": seed_data.localized_program_description(key, lang),
+        "days": [
+            {
+                "name": seed_data.localized_program_day_name(key, i, lang),
+                "exercises": [
+                    {
+                        "name": seed_data.localized_exercise_name(ex, lang),
+                        "target": seed_data.localized_target(target, lang),
+                    }
+                    for ex, target in exercises
+                ],
+            }
+            for i, (_day_name, exercises) in enumerate(program["days"])
+        ],
+    }
+
+
+async def list_program_catalog(request: Request) -> JSONResponse:
+    user_id = await _authed_user_id(request)
+    user = await db.get_user(user_id)
+    lang = user["lang"] if user else i18n.DEFAULT_LANG
+    with i18n.use_lang(lang):
+        payload = [_catalog_program_json(p, lang) for p in seed_data.WORKOUT_PROGRAMS]
+    return JSONResponse(payload)
+
+
+async def add_catalog_program(request: Request) -> JSONResponse:
+    """«➕ Добавить себе» на каталожной программе (handlers/routines.py
+    rt_program_add) — тот же seed_data.instantiate_program, чтобы не заводить
+    вторую версию каталога. В отличие от бота (который на занятое имя
+    показывает выбор «открыть/добавить копией»), API одним ответом отдаёт
+    409 — как и обычный create_program: у клиента для этого уже есть экран
+    конфликта имени, тот же самый, что при ручном создании программы."""
+    user_id = await _authed_user_id(request)
+    program = seed_data.PROGRAM_BY_KEY.get(request.path_params["key"])
+    if program is None:
+        raise ApiError(404, "not_found", "catalog program not found")
+    user = await db.get_user(user_id)
+    if user is None:
+        raise ApiError(404, "not_found", "user not found")
+    lang = user["lang"]
+    body = await request.body()
+    fields = await _json_body(request) if body else {}
+    with i18n.use_lang(lang):
+        name = _optional_str(fields, "name") or seed_data.localized_program_name(program["key"], lang)
+        name = _clean_name(name)
+        await _check_routine_budget(user_id, len(program["days"]))
+        existing = await db.find_program_by_name(user_id, name)
+        if existing is not None:
+            raise ApiError(409, "name_taken", "a program with this name already exists")
+        program_id = await seed_data.instantiate_program(user_id, program["key"], name)
+    days = await db.list_program_days_by_id(program_id)
+    result = await _owned_program(program_id, user_id)
+    return JSONResponse(_program_detail_json(result, days), status_code=201)
+
+
+# ---------- программа/день из уже сделанной тренировки ----------
+#
+# handlers/routines.py «➕ Из тренировки» (rt_pickw_use → rt_name_entered):
+# снимок состава прошлой тренировки (упражнения + фактически сделанные
+# подходы как target) становится либо новым самостоятельным днём
+# (program_id не передан — ровно как «Из тренировки» без открытой
+# программы), либо днём уже существующей программы. Логика — тот же
+# db.create_routine_from_workout, никакой второй реализации.
+
+async def create_routine_from_workout(request: Request) -> JSONResponse:
+    user_id = await _authed_user_id(request)
+    workout_id = int(request.path_params["workout_id"])
+    await _owned_workout(workout_id, user_id)
+    body = await _json_body(request)
+    name = _clean_name(str(_require(body, "name", str)))
+    program_id = common.optional_int(body, "program_id")
+    if program_id is not None:
+        await _owned_program(program_id, user_id)
+    await _check_routine_budget(user_id, 1)
+    routine_id = await db.create_routine_from_workout(user_id, workout_id, name, program_id=program_id)
+    routine = await db.get_routine(routine_id)
+    return JSONResponse(await _routine_detail_json(routine), status_code=201)
+
+
 routes = [
     Route("/programs", list_programs, methods=["GET"]),
     Route("/programs", create_program, methods=["POST"]),
+    Route("/programs/catalog", list_program_catalog, methods=["GET"]),
+    Route("/programs/catalog/{key}", add_catalog_program, methods=["POST"]),
     Route("/programs/{program_id:int}", get_program, methods=["GET"]),
     Route("/programs/{program_id:int}", update_program, methods=["PATCH"]),
     Route("/programs/{program_id:int}", delete_program, methods=["DELETE"]),
@@ -367,4 +475,5 @@ routes = [
     Route("/routines/{routine_id:int}/exercises", add_routine_exercise, methods=["POST"]),
     Route("/routine-exercises/{item_id:int}", update_routine_exercise, methods=["PATCH"]),
     Route("/routine-exercises/{item_id:int}", delete_routine_exercise, methods=["DELETE"]),
+    Route("/workouts/{workout_id:int}/routines", create_routine_from_workout, methods=["POST"]),
 ]
