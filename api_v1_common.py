@@ -10,8 +10,10 @@
 
 from __future__ import annotations
 
+import base64
 import datetime as dt
 import logging
+import re
 from typing import Any, Optional
 
 from starlette.requests import Request
@@ -114,6 +116,46 @@ def optional_int(body: dict[str, Any], key: str) -> int | None:
     if not isinstance(value, int) or isinstance(value, bool):
         raise ApiError(400, "bad_request", f"field {key} must be int")
     return value
+
+
+# ---------- медиавложения (data: URL) ----------
+#
+# Разбор общий для всех вложений `/v1`: голоса (api_v1_voice.py, POST /ai/voice
+# и POST /workouts/{id}/sets/voice), фото и видео вопроса тренеру (api_v1_ai.py,
+# POST /ai/ask и POST /ai/video). Формат один и тот же — `data:<mime>;base64,...`
+# в обычном JSON-теле, без multipart (см. докстринг api_v1_voice.py, почему).
+# Разрешённый список MIME и потолок байт у каждого вложения свои, поэтому
+# здесь только разбор строки и base64, а не готовое решение «слишком большое».
+_DATA_URL_RE = re.compile(r"^data:([^;,]+);base64,(.+)$", re.DOTALL)
+
+
+def decode_data_url(
+    data_url: str, extension_by_mime: dict[str, str], *, field: str = "data_url"
+) -> tuple[bytes, str, str]:
+    """`data:<mime>;base64,<payload>` → (сырые байты, mime, расширение по списку).
+
+    `extension_by_mime` — что вызывающий готов принять; MIME не из списка —
+    415, а не 400: тело запроса синтаксически валидно, просто формат вложения
+    не поддержан. `field` — только для текста ошибки, чтобы «фото» и «видео»
+    не путались в одном логе.
+    """
+    match = _DATA_URL_RE.match((data_url or "").strip())
+    if not match:
+        raise ApiError(400, "bad_request", f"{field} must be a data: URL")
+    mime = match.group(1).strip().lower()
+    ext = extension_by_mime.get(mime)
+    if ext is None:
+        allowed = ", ".join(sorted(set(extension_by_mime.values())))
+        raise ApiError(
+            415,
+            "unsupported_media_type",
+            f"unsupported format {mime!r} in {field}; allowed extensions: {allowed}",
+        )
+    try:
+        raw = base64.b64decode(match.group(2), validate=True)
+    except Exception as exc:
+        raise ApiError(400, "bad_request", f"invalid base64 payload in {field}") from exc
+    return raw, mime, ext
 
 
 def exercise_json(row) -> dict[str, Any]:
