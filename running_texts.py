@@ -242,6 +242,16 @@ def pool_for(text: str) -> list[str]:
     return _POOLS_BY_LANG.get(i18n.get_lang(), POOLS)[topic]
 
 
+# Интервал ротации placeholder-текста, секунды. Живёт здесь, рядом с пулами, а
+# не в handlers/ai_trainer.py (где он раньше и стоял): период ротации — часть
+# того же контракта «тренер думает», что и сами фразы, а его теперь спрашивает
+# и REST (`GET /v1/ai/thinking` в api_v1_ai.py). Тянуть ради одного числа
+# handlers/ai_trainer.py в REST-слой нельзя — за ним приедет весь aiogram, а
+# скопировать число значит завести второй источник правды, который разъедется с
+# ботом при первой же правке. В handlers/ai_trainer.py осталось имя-алиас.
+RUNNING_INTERVAL = 2.8
+
+
 def pick(pool: list[str]) -> str:
     return random.choice(pool)
 

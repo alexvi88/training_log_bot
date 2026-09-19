@@ -46,6 +46,10 @@
   Сырой wire-формат остаётся только в БД, для самой модели.
 - `DELETE /ai/history` — «начать разговор заново». Без него испорченный
   контекст (модель зацепилась не за то в старом ходу) нечем починить.
+- `GET /ai/thinking` — фразы для плейсхолдера «тренер думает», пока идёт
+  `/ai/ask`: тот же пул, что крутится в боте, подобранный под тему вопроса
+  (`running_texts.pool_for`), плюс период ротации. Классификация темы остаётся
+  на сервере — клиенту незачем знать про стемы и темы (см. `get_thinking`).
 
 Персистентная история — отдельная таблица `ai_conversation_turns` (см.
 db.py), НЕ переиспользует `ai_chat_messages`: та — вечный лог для
@@ -118,6 +122,7 @@ import db
 import exercise_mentions
 import i18n
 import program_mentions
+import running_texts
 import video_analysis
 from handlers import ai_trainer as ai_trainer_handlers
 from handlers.ai_trainer import MAX_IMAGE_BYTES
@@ -790,6 +795,42 @@ async def delete_history(request: Request) -> JSONResponse:
     return JSONResponse({"cleared": True})
 
 
+async def get_thinking(request: Request) -> JSONResponse:
+    """Фразы для плейсхолдера «тренер думает», пока клиент ждёт `/ai/ask`.
+
+    В боте эти фразы крутятся в placeholder-сообщении (handlers/ai_trainer.py,
+    `_RunningDisplay.cycle_idle`), а приложение показывало статичное «тренер
+    печатает…» — и на длинном вопросе с tool-calls это выглядело зависшим.
+
+    Тему угадываем здесь же (`running_texts.classify` через `pool_for`), а не на
+    клиенте: стемы тем живут в одном месте и правятся вместе с пулами, дублировать
+    их в приложении значило бы разъехаться с ботом на первой же новой теме. Отдаём
+    ВЕСЬ пул темы в порядке каталога и интервал — тасует и крутит клиент сам,
+    каждый запрос к модели не стоит отдельного похода за фразой.
+
+    Язык — как у остальных ручек модуля: из users.lang под `i18n.use_lang`, а не
+    из языка самого вопроса и не из Accept-Language (вопрос может быть на любом
+    языке, плейсхолдер должен звучать на языке интерфейса — см. докстринг
+    running_texts.pool_for).
+    """
+    user_id = await common.authed_user_id(request)
+    question = request.query_params.get("q") or ""
+    user = await db.get_user(user_id)
+    lang = user["lang"] if user is not None else "ru"
+
+    # classify язык не смотрит (стемы обоих языков в одном списке), а pool_for —
+    # смотрит, отсюда и use_lang вокруг него.
+    topic = running_texts.classify(question)
+    with i18n.use_lang(lang):
+        texts = running_texts.pool_for(question)
+
+    return JSONResponse({
+        "topic": topic,
+        "texts": texts,
+        "interval_seconds": running_texts.RUNNING_INTERVAL,
+    })
+
+
 routes = [
     Route("/ai/limits", get_limits, methods=["GET"]),
     Route("/ai/ask", ask_question, methods=["POST"]),
@@ -799,4 +840,5 @@ routes = [
     Route("/ai/program/save", save_program, methods=["POST"]),
     Route("/ai/history", get_history, methods=["GET"]),
     Route("/ai/history", delete_history, methods=["DELETE"]),
+    Route("/ai/thinking", get_thinking, methods=["GET"]),
 ]

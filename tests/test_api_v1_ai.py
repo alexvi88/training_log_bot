@@ -17,6 +17,7 @@ import ai_limits
 import ai_trainer
 import api_v1
 import config
+import running_texts
 import video_analysis
 
 # Из глобального каталога (seed_data.EXERCISE_TEMPLATES) — резолвится у любого
@@ -875,3 +876,68 @@ async def test_ask_video_respects_video_daily_limit(fresh_db, client_factory, mo
     resp = await client.post("/ai/video", json={"video_data_url": _video_data_url()})
     assert resp.status_code == 429
     assert resp.json()["error"] == "video_limit_exceeded"
+
+
+# ---------- GET /ai/thinking ----------
+
+
+@pytest.mark.asyncio
+async def test_thinking_requires_auth(client_factory):
+    client = client_factory()
+    resp = await client.get("/ai/thinking")
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_thinking_picks_topic_by_question(fresh_db, client_factory):
+    """Тему угадывает сервер — в этом весь смысл ручки: клиент присылает голый
+    текст вопроса и не знает ни про стемы, ни про список тем."""
+    client = await _linked_client(fresh_db, client_factory)
+
+    resp = await client.get("/ai/thinking", params={"q": "сколько белка мне нужно в день"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["topic"] == running_texts.NUTRITION
+    assert body["texts"] == running_texts.POOLS[running_texts.NUTRITION]
+    assert body["texts"]
+
+
+@pytest.mark.asyncio
+async def test_thinking_without_question_falls_back_to_default_topic(fresh_db, client_factory):
+    """Пустой/отсутствующий q — ровно то же, что classify(""): у приложения
+    экран тренера открывается и без набранного вопроса."""
+    client = await _linked_client(fresh_db, client_factory)
+
+    for params in ({}, {"q": ""}):
+        resp = await client.get("/ai/thinking", params=params)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["topic"] == running_texts.DEFAULT_TOPIC
+        assert body["texts"] == running_texts.POOLS[running_texts.DEFAULT_TOPIC]
+
+
+@pytest.mark.asyncio
+async def test_thinking_speaks_the_users_language(fresh_db, client_factory):
+    """Язык — из users.lang, как у остальных ручек: вопрос может быть на любом
+    языке, а плейсхолдер обязан звучать на языке интерфейса."""
+    client = await _linked_client(fresh_db, client_factory)
+    await fresh_db.set_user_lang(111, "en")
+
+    resp = await client.get("/ai/thinking", params={"q": "how much protein do i need"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["topic"] == running_texts.NUTRITION
+    assert body["texts"] == running_texts.POOLS_EN[running_texts.NUTRITION]
+
+
+@pytest.mark.asyncio
+async def test_thinking_interval_matches_the_bot(fresh_db, client_factory):
+    """Период ротации — один на бота и приложение, иначе плейсхолдер в двух
+    клиентах живёт своей жизнью и правка в одном месте молча теряется."""
+    from handlers import ai_trainer as ai_trainer_handlers
+
+    client = await _linked_client(fresh_db, client_factory)
+
+    resp = await client.get("/ai/thinking")
+    assert resp.status_code == 200
+    assert resp.json()["interval_seconds"] == ai_trainer_handlers.RUNNING_INTERVAL

@@ -289,8 +289,11 @@ _busy: set[int] = set()
 # Сами пулы фраз и подбор темы по вопросу — в running_texts.py: там же объяснено,
 # почему это важно (первая фраза видна ещё до единого tool-call).
 
-# Интервал ротации placeholder-текста, секунды.
-RUNNING_INTERVAL = 2.8
+# Интервал ротации placeholder-текста, секунды. Само число переехало в
+# running_texts.py, к пулам фраз: его же отдаёт приложению `GET /v1/ai/thinking`,
+# а REST-слою нельзя импортировать этот модуль (за ним приедет aiogram). Здесь
+# остаётся привычное имя, чтобы не переписывать вызовы ниже.
+RUNNING_INTERVAL = running_texts.RUNNING_INTERVAL
 
 
 class _RunningDisplay:
