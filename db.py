@@ -3479,6 +3479,16 @@ async def list_achievement_codes(user_id: int) -> set[str]:
     return {r["code"] for r in await cur.fetchall()}
 
 
+async def list_achievement_dates(user_id: int) -> dict[str, str]:
+    """code → когда получено. Боту хватает одних кодов (экран прогресса
+    показывает значок, а не дату), а REST-клиенту нужна ещё и дата — «получено
+    три дня назад» на карточке достижения."""
+    cur = await conn().execute(
+        "SELECT code, earned_at FROM achievements WHERE user_id = ?", (user_id,)
+    )
+    return {r["code"]: r["earned_at"] for r in await cur.fetchall()}
+
+
 async def award_achievements(user_id: int, codes: set[str]) -> list[str]:
     """Record any of `codes` the user doesn't already hold; return the newly added
     ones (in a stable sorted order) so the caller can celebrate just those."""
