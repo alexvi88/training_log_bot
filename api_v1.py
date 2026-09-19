@@ -24,6 +24,7 @@ import logging
 from typing import Any, Optional
 
 from starlette.applications import Starlette
+from starlette.middleware import Middleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
@@ -31,6 +32,7 @@ from starlette.routing import Route
 import achievement_sync
 import api_v1_account
 import api_v1_achievements
+import api_v1_activity
 import api_v1_ai
 import api_v1_common as common
 import api_v1_feedback
@@ -780,6 +782,12 @@ routes += (
 def build_app() -> Starlette:
     return Starlette(
         routes=routes,
+        # Лог действий — одной middleware поверх всех маршрутов, а не записью в
+        # каждом обработчике: их под сотню, и строку, которую надо не забыть
+        # дописать в новый, забывают на первом же. Список маршрутов передаём
+        # внутрь, чтобы middleware знала ШАБЛОН пути, а не только сам путь с
+        # id (см. api_v1_activity).
+        middleware=[Middleware(api_v1_activity.LogApiActions, routes=routes)],
         exception_handlers={
             ApiError: _api_error_handler,
             Exception: _unhandled_error_handler,
