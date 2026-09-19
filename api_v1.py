@@ -19,8 +19,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
+import html
 import logging
+import re
 from typing import Any, Optional
 
 from starlette.applications import Starlette
@@ -30,6 +33,9 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 import achievement_sync
+import achievements
+import ai_trainer
+import analytics
 import api_v1_account
 import api_v1_achievements
 import api_v1_activity
@@ -43,11 +49,14 @@ import api_v1_media
 import api_v1_programs
 import api_v1_sharing
 import apple_signin
+import dashboard_data
 import db
+import formatting
 import i18n
 import mcp_oauth
 import parser
 import timeutil
+import view_builder
 
 logger = logging.getLogger(__name__)
 
@@ -582,7 +591,149 @@ async def delete_last_set(request: Request) -> JSONResponse:
     return JSONResponse(_set_json(deleted))
 
 
+# ---------- награды за завершённую тренировку ----------
+
+_ai_comment_tasks: set[asyncio.Task] = set()
+"""Живые ссылки на фоновые задачи генерации комментария.
+
+asyncio держит задачу только слабой ссылкой: без этого множества сборщик
+мусора вправе убить её на середине запроса к модели, и комментарий не
+появится никогда — молча, без единой строки в логе.
+"""
+
+
+async def _write_ai_comment(user_id: int, workout_id: int) -> None:
+    """Та же пара шагов, что делает бот в фоне после финиша
+    (handlers.workout._attach_ai_comment): спросить модель и положить ответ в
+    workouts.ai_comment. Правки сообщения, которая есть у бота, здесь нет —
+    приложение забирает готовое через GET /workouts/{id}/ai-comment.
+
+    Любое исключение гасится здесь: задача уже отвязана от запроса, ронять ей
+    нечего, а необработанное исключение в задаче видно только под конец
+    процесса строкой «Task exception was never retrieved».
+    """
+    try:
+        comment = await ai_trainer.comment_on_workout(user_id, workout_id)
+        await db.set_workout_ai_comment(workout_id, comment)
+    except Exception:
+        logger.exception("AI trainer workout comment failed for workout %s", workout_id)
+
+
+def _spawn_ai_comment(user_id: int, workout_id: int, user, workout) -> None:
+    """Запустить генерацию комментария в фоне — если он нужен и возможен.
+
+    Условия ровно те же, что у бота (`needs_ai_comment` в
+    handlers.workout._finalize_workout): комментария ещё нет, тумблер
+    `ai_comments_enabled` включён и провайдер настроен. Без проверки
+    is_configured каждая тренировка заводила бы задачу, которая сразу падает.
+
+    Сам запуск обёрнут в try/except: ответ finish — это карточка итога, ради
+    которой человек и жал кнопку, и уронить её из-за необязательного
+    комментария нельзя ни при каком состоянии event loop.
+    """
+    if workout["ai_comment"] is not None:
+        return
+    if not user["ai_comments_enabled"] or not ai_trainer.is_configured():
+        return
+    try:
+        task = asyncio.create_task(_write_ai_comment(user_id, workout_id))
+    except Exception:
+        logger.exception("failed to spawn AI comment task for workout %s", workout_id)
+        return
+    _ai_comment_tasks.add(task)
+    task.add_done_callback(_ai_comment_tasks.discard)
+
+
+_HTML_TAG = re.compile(r"<[^>]+>")
+
+
+def _plain(text: Optional[str]) -> Optional[str]:
+    """Убрать телеграмную разметку из готовой строки.
+
+    Часть формулировок в locales/ несёт <b> — они писались для карточки бота,
+    где разметка и есть оформление. Приложение рисует текст само, и тег в нём
+    показался бы как есть, буквами. Разбирать HTML нечем и незачем: в этих
+    строках он ровно один уровень простых тегов без атрибутов, зато сущности
+    (&amp; в названии упражнения) раскрыть обязательно — иначе человек увидит
+    «&amp;» вместо «&».
+    """
+    if text is None:
+        return None
+    return html.unescape(_HTML_TAG.sub("", text)).strip()
+
+
+async def _finish_rewards_json(
+    workout, user, new_codes: list[str], was_backfill: bool
+) -> dict[str, Any]:
+    """Итоги только что завершённой тренировки — то же, что бот собирает на
+    карточке завершения (handlers.workout._finalize_workout).
+
+    Отдаётся ключом `rewards` рядом с прежними полями тренировки, а не вместо
+    них: у ответа finish уже есть потребители, читающие блоки и подходы.
+
+    Тексты приходят готовыми и локализованными (тоннаж, «это как два
+    холодильника», названия значков), числа — числами, по тем же доводам, что
+    в api_v1_achievements: формулировки живут в locales/*.json одним
+    экземпляром, а не ещё раз внутри старой версии приложения. Поэтому весь
+    сбор идёт под i18n.use_lang(user["lang"]) — без него язык ответа был бы
+    тем, который первым дёрнул модуль в этом процессе (CLAUDE.md, «Ловушка,
+    встретившаяся шесть раз»).
+
+    Тоннаж считается по нагрузке (BlockView.load_tonnage), а не по записанному
+    весу: подтягивания «0×12» — это не ноль тонн, и зал славы считает их так же.
+
+    `was_backfill` — статус тренировки ДО финиша (после него он у всех
+    `finished`). У занесения задним числом милестоун «N-я тренировка» не
+    показывается, как и в боте: такие записи вносятся не по порядку, и счётчик
+    по ним сообщал бы не то, что человек подумает.
+    """
+    blocks = await view_builder.build_block_views(workout["id"], user["e1rm_formula"])
+    tonnage = sum(block.load_tonnage for block in blocks)
+    with i18n.use_lang(user["lang"]):
+        milestone = None
+        if not was_backfill:
+            total_finished = await db.count_workouts(workout["user_id"])
+            if analytics.is_workout_milestone(total_finished):
+                milestone = _plain(formatting.format_milestone_line(total_finished))
+        promotion = await dashboard_data.rank_promotion(workout["user_id"], user)
+        return {
+            "sets": sum(len(block.sets) for block in blocks),
+            "exercises": len(blocks),
+            "tonnage": _plain(formatting.format_tonnage(tonnage, user["unit"])),
+            "tonnage_equivalent": _plain(
+                formatting.format_tonnage_equivalent(
+                    tonnage, seed=workout["id"], unit=user["unit"]
+                )
+            ),
+            "new_achievements": [
+                {
+                    "code": achievements.BY_CODE[code].code,
+                    "name": _plain(achievements.BY_CODE[code].title),
+                    "description": _plain(achievements.BY_CODE[code].description),
+                }
+                for code in new_codes
+                if code in achievements.BY_CODE
+            ],
+            "rank_promotion": (
+                None if promotion is None
+                else {"name": _plain(promotion.name), "level": promotion.level}
+            ),
+            "milestone": milestone,
+        }
+
+
 async def finish_workout(request: Request) -> JSONResponse:
+    """Завершить тренировку и вернуть её же — плюс `rewards` с итогами сессии.
+
+    Итоги отдаются тут, а не отдельным чтением, потому что завершение — лучший
+    момент сессии, и приложение строит карточку сразу: тоннаж «как N слонов»,
+    новые значки, повышение звания, милестоун. Второй запрос за ними означал бы
+    пустую карточку на время его полёта.
+
+    Исключение — комментарий AI-тренера: он приходит от модели и к моменту
+    ответа существовать не может. Генерация запускается отсюда в фон
+    (_spawn_ai_comment), а забирается отдельным GET /workouts/{id}/ai-comment.
+    """
     user_id = await _authed_user_id(request)
     workout_id = int(request.path_params["workout_id"])
     workout = await _owned_workout(workout_id, user_id)
@@ -625,11 +776,38 @@ async def finish_workout(request: Request) -> JSONResponse:
     if workout["status"] == "active" and workout["started_at"]:
         finished = dt.datetime.fromisoformat((await db.get_workout(workout_id))["finished_at"])
         duration_seconds = (finished - started_at).total_seconds()
-    await achievement_sync.evaluate_after_finish(
+    new_codes = await achievement_sync.evaluate_after_finish(
         user_id, workout_id, started_at, duration_seconds
     )
+    was_backfill = workout["status"] == "backfill"
     workout = await db.get_workout(workout_id)
-    return JSONResponse(await _workout_detail_json(workout))
+    payload = await _workout_detail_json(workout)
+    user = await db.get_user(user_id)
+    payload["rewards"] = await _finish_rewards_json(workout, user, new_codes, was_backfill)
+    _spawn_ai_comment(user_id, workout_id, user, workout)
+    return JSONResponse(payload)
+
+
+async def get_ai_comment(request: Request) -> JSONResponse:
+    """Комментарий AI-тренера к тренировке — `{"comment": ...}` или `null` в нём.
+
+    Отдельным чтением, а не полем в ответе finish: комментарий генерирует
+    модель, это секунды, и ждать их финишем значило бы держать человека на
+    крутилке ровно в тот момент, ради которого он и жал «Завершить». Бот решает
+    то же самое так же — отправляет карточку сразу и дописывает комментарий
+    правкой сообщения позже (handlers.workout._attach_ai_comment). Приложению
+    редактировать нечего, поэтому оно опрашивает этот адрес через несколько
+    секунд после финиша.
+
+    `null` — это три разных состояния разом: ещё генерируется, генерация
+    сорвалась, комментарии выключены (тумблером или отсутствующим ключом
+    провайдера). Клиенту от них нужно одно и то же — не показывать блок, — а
+    различать их значило бы выставить наружу внутренности AI-слоя.
+    """
+    user_id = await _authed_user_id(request)
+    workout_id = int(request.path_params["workout_id"])
+    workout = await _owned_workout(workout_id, user_id)
+    return JSONResponse({"comment": workout["ai_comment"]})
 
 
 async def update_note(request: Request) -> JSONResponse:
@@ -765,6 +943,7 @@ routes = [
         delete_last_set, methods=["DELETE"],
     ),
     Route("/workouts/{workout_id:int}/finish", finish_workout, methods=["POST"]),
+    Route("/workouts/{workout_id:int}/ai-comment", get_ai_comment, methods=["GET"]),
     Route("/workouts/{workout_id:int}/note", update_note, methods=["PATCH"]),
     Route("/bodyweight", list_bodyweight, methods=["GET"]),
     Route("/bodyweight", add_bodyweight, methods=["POST"]),

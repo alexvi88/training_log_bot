@@ -116,3 +116,32 @@ async def collect(user_id: int) -> Optional[MenuDashboard]:
         lifts_title=formatting.menu_lifts_title(lift_window_weeks) if lift_tiles else "",
         lifts_note=formatting.MENU_LIFTS_NOTE,
     )
+
+
+async def rank_promotion(user_id: int, user) -> "analytics.Rank | None":
+    """Звание, если оно только что выросло, иначе None.
+
+    Само звание считается на лету (analytics.rank_for), поэтому «объявлено ли
+    оно уже» приходится помнить отдельно — users.rank_level_seen. Понижение
+    (перерыв стоит одной ступени) молча опускает и отметку: вернувшись к темпу,
+    человек получит объявление снова — это возвращение, и оно того стоит.
+
+    Живёт здесь, а не в handlers/workout.py, по той же причине, что и collect:
+    объявление повышения нужно обоим потребителям — карточке завершения в боте
+    и ответу finish в REST, — а вторая копия этих семи строк разъезжалась бы с
+    первой молча. Вызов ОДНОРАЗОВЫЙ по смыслу: он же и ставит отметку
+    «объявлено», поэтому второй вызов подряд вернёт None, и звать его на чтение
+    экрана нельзя — повышение будет съедено и человек его не увидит.
+    """
+    dates = [dt.date.fromisoformat(d) for d in await db.list_finished_workout_dates(user_id)]
+    agg = await db.hall_of_fame_aggregates(user_id)
+    rank = analytics.rank_for(
+        len(dates),
+        formatting.to_kg(agg["tonnage"], user["unit"]),
+        analytics.workouts_per_week(dates, timeutil.user_today(user)),
+    )
+    seen = user["rank_level_seen"]
+    if rank.level == seen:
+        return None
+    await db.update_user(user_id, rank_level_seen=rank.level)
+    return rank if rank.level > seen else None
