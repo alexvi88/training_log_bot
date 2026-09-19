@@ -51,6 +51,7 @@ import api_v1_media
 import api_v1_programs
 import api_v1_progress
 import api_v1_sharing
+import api_v1_voice
 import apple_signin
 import dashboard_data
 import db
@@ -61,6 +62,7 @@ import mcp_oauth
 import parser
 import timeutil
 import view_builder
+import voice_parse
 
 logger = logging.getLogger(__name__)
 
@@ -656,6 +658,19 @@ async def log_sets_from_text(request: Request) -> JSONResponse:
             # «не разобрал» от «сервер лёг», — но показывать он должен message.
             raise ApiError(400, "unparsed_input", exc.message) from exc
 
+    created = await _store_parsed_sets(workout_id, exercise_id, parsed)
+    return JSONResponse({"sets": created}, status_code=201)
+
+
+async def _store_parsed_sets(workout_id: int, exercise_id: int, parsed) -> list[dict[str, Any]]:
+    """Общий хвост log_sets_from_text и log_set_from_voice: `parser.parse_sets_line`
+    (или голос → та же структура через voice_parse) уже дал список подходов —
+    остаётся разнести голые повторы по весу прошлого подхода и записать блок.
+
+    Вынесено при добавлении голосового ввода (`log_set_from_voice`), чтобы у
+    двух источников одной и той же строки (текст и расшифрованный голос) не
+    завелось двух копий этой логики.
+    """
     # Голые повторы («8») означают «тот же вес, что в прошлом подходе». Какой
     # это вес, знает сервер, а не клиент: иначе приложение считало бы
     # предыдущий подход само и расходилось бы с ботом на суперсетах.
@@ -670,7 +685,63 @@ async def log_sets_from_text(request: Request) -> JSONResponse:
         prev_weight = weight
         cur = await db.conn().execute("SELECT * FROM sets WHERE id = ?", (set_id,))
         created.append(_set_json(await cur.fetchone()))
-    return JSONResponse({"sets": created}, status_code=201)
+    return created
+
+
+async def log_set_from_voice(request: Request) -> JSONResponse:
+    """Тот же подход, что `log_sets_from_text`, только голосом («сто на
+    восемь» вместо «100 8») — HTTP-версия `handlers/workout.py::log_set_voice`.
+
+    Три шага ровно как у бота, никаких новых:
+    1. расшифровка (`api_v1_voice.transcribe` → `ai_trainer.transcribe_voice`,
+       та же функция, что зовёт бот — лимиты размера/длительности и формат
+       см. в докстринге `api_v1_voice`);
+    2. текст расшифровки → числа (`voice_parse.transcript_to_sets_line_with_hint`,
+       тот же парсер слов-чисел, что у бота, — распознаёт "сто на восемь" в
+       "100 8" и отдельно сигналит про отброшенное число подходов, см. его
+       докстринг);
+    3. "100 8" → подходы (`parser.parse_sets_line` + `_store_parsed_sets`) —
+       то же самое, что делает `log_sets_from_text` с введённым текстом.
+
+    Неразобранное (пустая расшифровка ИЛИ расшифровка без узнаваемых чисел) —
+    один и тот же 400 `unparsed_input`, как и у бота (`workout.voice_parse_failed`
+    не различает эти два случая, см. `handlers/workout.py::log_set_voice`).
+    """
+    user_id = await _authed_user_id(request)
+    workout_id = int(request.path_params["workout_id"])
+    workout = await _owned_workout(workout_id, user_id)
+    _require_open(workout)
+    body = await _json_body(request)
+    exercise_id = _require(body, "exercise_id", int)
+    await _owned_exercise(exercise_id, user_id)
+
+    user = await db.get_user(user_id)
+    with i18n.use_lang(user["lang"] if user else "ru"):
+        transcript = await api_v1_voice.transcribe(
+            body,
+            user_id,
+            not_configured_message=i18n.t("ai.screen.voice_not_configured"),
+            too_long_message=i18n.t("ai.screen.voice_too_long"),
+            too_big_message=i18n.t(
+                "ai.screen.voice_too_big", mb=api_v1_voice.MAX_VOICE_BYTES // (1024 * 1024)
+            ),
+            transcribe_failed_message=i18n.t("ai.screen.voice_transcribe_failed"),
+        )
+        line, dropped_sets = voice_parse.transcript_to_sets_line_with_hint(transcript)
+        parsed = None
+        if line:
+            try:
+                parsed = parser.parse_sets_line(line)
+            except parser.ParseError:
+                parsed = None
+        if not parsed:
+            raise ApiError(400, "unparsed_input", i18n.t("ai.screen.voice_empty"))
+
+    created = await _store_parsed_sets(workout_id, exercise_id, parsed)
+    return JSONResponse(
+        {"sets": created, "transcript": transcript, "dropped_sets": dropped_sets},
+        status_code=201,
+    )
 
 
 async def delete_last_set(request: Request) -> JSONResponse:
@@ -1117,6 +1188,7 @@ routes = [
     Route("/workouts/{workout_id:int}", get_workout, methods=["GET"]),
     Route("/workouts/{workout_id:int}/sets", log_set, methods=["POST"]),
     Route("/workouts/{workout_id:int}/sets/parse", log_sets_from_text, methods=["POST"]),
+    Route("/workouts/{workout_id:int}/sets/voice", log_set_from_voice, methods=["POST"]),
     Route(
         "/workouts/{workout_id:int}/exercises/{exercise_id:int}/last-set",
         delete_last_set, methods=["DELETE"],

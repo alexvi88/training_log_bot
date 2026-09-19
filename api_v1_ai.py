@@ -18,6 +18,9 @@
   — aiogram в ai_trainer.py не импортируется вовсе, — так что рефакторинг
   самого ai_trainer.py не понадобился (тот же приём уже применён в
   api_v1_food.py для `analyze_food`).
+- `POST /ai/voice` — голос → расшифрованный текст вопроса, без ответа модели
+  (см. докстринг `transcribe_voice`). Транскрипция и лимиты — `api_v1_voice`,
+  общий модуль с `POST /workouts/{id}/sets/voice`.
 - `POST /ai/program/save` — забрать предложенный черновик программы
   (`program.draft_id` из ответа `/ai/ask`) точно так же, как кнопка «Забрать»
   в боте: запись идёт через ai_program_actions.finalize_program_save — тот же
@@ -100,6 +103,7 @@ import ai_program_actions
 import ai_setup_flow
 import ai_trainer
 import api_v1_common as common
+import api_v1_voice
 import config
 import db
 import exercise_mentions
@@ -514,6 +518,44 @@ async def save_program(request: Request) -> JSONResponse:
     })
 
 
+async def transcribe_voice(request: Request) -> JSONResponse:
+    """Голосовой вопрос тренеру → расшифрованный текст, БЕЗ самого ответа.
+
+    Отдельно от `POST /ai/ask`, а не «голос → сразу готовый ответ» одним
+    вызовом: бот тоже сперва показывает, что расслышал («🎙 <i>{question}</i>»,
+    handlers/ai_trainer.py::ai_voice_question), и лишь потом задаёт вопрос
+    модели — так неверно распознанное слово видно и поправимо ДО того, как на
+    него потрачен вопрос из дневной квоты. В HTTP-варианте это разделение
+    получается бесплатно: клиент показывает расшифровку, даёт её поправить и
+    только тогда шлёт обычный `POST /ai/ask` с готовым текстом — без второго
+    протокола памяти разговора и без права входа в квоту вопросов мимо
+    `/ai/ask` (она проверяется и тратится там же, где и для текстовых
+    вопросов, а не здесь).
+
+    Транскрипция, лимиты размера/длительности и формат данных — все в
+    `api_v1_voice.transcribe` (общей и с `POST /workouts/{id}/sets/voice»),
+    сама расшифровка — `ai_trainer.transcribe_voice`, та же функция, что
+    зовёт бот.
+    """
+    user_id = await common.authed_user_id(request)
+    user = await db.get_user(user_id)
+    body = await common.json_body(request)
+    with i18n.use_lang(user["lang"] if user else "ru"):
+        transcript = await api_v1_voice.transcribe(
+            body,
+            user_id,
+            not_configured_message=i18n.t("ai.screen.voice_not_configured"),
+            too_long_message=i18n.t("ai.screen.voice_too_long"),
+            too_big_message=i18n.t(
+                "ai.screen.voice_too_big", mb=api_v1_voice.MAX_VOICE_BYTES // (1024 * 1024)
+            ),
+            transcribe_failed_message=i18n.t("ai.screen.voice_transcribe_failed"),
+        )
+        if not transcript:
+            raise ApiError(422, "voice_empty", i18n.t("ai.screen.voice_empty"))
+    return JSONResponse({"question": transcript})
+
+
 async def get_history(request: Request) -> JSONResponse:
     """История для отрисовки чата: только видимая часть (роль/текст/время),
     без wire-формата — клиенту нечего делать с tool-calls модели, и тащить их
@@ -550,6 +592,7 @@ async def delete_history(request: Request) -> JSONResponse:
 routes = [
     Route("/ai/limits", get_limits, methods=["GET"]),
     Route("/ai/ask", ask_question, methods=["POST"]),
+    Route("/ai/voice", transcribe_voice, methods=["POST"]),
     Route("/ai/questions/answer", answer_setup_question, methods=["POST"]),
     Route("/ai/program/save", save_program, methods=["POST"]),
     Route("/ai/history", get_history, methods=["GET"]),
