@@ -41,6 +41,7 @@ from __future__ import annotations
 
 from typing import Optional
 
+import db
 import exercise_media
 import i18n
 
@@ -645,3 +646,36 @@ def localized_target(target: str | None, lang: str) -> str | None:
         base = target[: -len(_TARGET_SECONDS_SUFFIX)]
         return f"{base} {i18n.t_in(lang, 'program.target.seconds')}"
     return target
+
+
+async def instantiate_program(user_id: int, key: str, name: str) -> int:
+    """Каталожная программа → своя копия в аккаунте пользователя.
+
+    Общая для бота (handlers/routines.py, «➕ Добавить себе») и REST `/v1`
+    (api_v1_programs.add_catalog_program) — вторая реализация каталога
+    развелась бы точно так же, как чуть не развелись переводы упражнений.
+
+    Имена дней и описание пишутся В БАЗУ на языке, который активен сейчас
+    (i18n.get_lang() — ContextVar, выставленный вызывающей стороной), — это
+    снимок, как и у названия сфорканного упражнения, и потом он не
+    перепереводится: дальше это данные пользователя, он их сам переименовывает.
+    Состав дней передаётся КАНОНИЧЕСКИМИ именами шаблонов, а не переведёнными:
+    db.create_routine_from_program по ним ищет упражнение и форкает шаблон, и
+    английское имя он бы не нашёл.
+    """
+    lang = i18n.get_lang()
+    program_id = await db.create_program(
+        user_id, name, source="catalog", source_ref=key,
+        description=localized_program_description(key, lang),
+    )
+    for i, (_day_name, exercises) in enumerate(PROGRAM_BY_KEY[key]["days"]):
+        localized_exercises = [
+            (ex, localized_target(target, lang)) for ex, target in exercises
+        ]
+        await db.create_routine_from_program(
+            user_id,
+            localized_program_day_name(key, i, lang),
+            localized_exercises,
+            program_id=program_id,
+        )
+    return program_id

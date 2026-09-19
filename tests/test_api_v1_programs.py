@@ -11,6 +11,8 @@ import pytest
 
 import api_v1
 import config
+import db
+import seed_data
 
 
 @pytest.fixture
@@ -233,6 +235,154 @@ async def test_program_day_budget_enforced(fresh_db, client_factory, monkeypatch
     assert second.json()["error"] == "routine_limit_reached"
 
 
+# ---------- готовые программы (каталог) ----------
+
+@pytest.mark.asyncio
+async def test_catalog_is_returned(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    resp = await client.get("/programs/catalog")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert len(body) == len(seed_data.WORKOUT_PROGRAMS)
+    ppl = next(p for p in body if p["key"] == "ppl")
+    # Названия/дни/упражнения — данные каталога на языке пользователя (ru по
+    # умолчанию), а не голые ключи.
+    assert ppl["name"] == seed_data.localized_program_name("ppl", "ru")
+    assert len(ppl["days"]) == len(seed_data.PROGRAM_BY_KEY["ppl"]["days"])
+    assert ppl["days"][0]["exercises"][0]["name"]
+
+
+@pytest.mark.asyncio
+async def test_catalog_add_creates_program_with_days_and_exercises(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    key = seed_data.WORKOUT_PROGRAMS[0]["key"]
+    catalog_program = seed_data.PROGRAM_BY_KEY[key]
+
+    resp = await client.post(f"/programs/catalog/{key}")
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["source"] == "catalog"
+    assert body["source_ref"] == key
+    assert len(body["days"]) == len(catalog_program["days"])
+
+    first_day = await client.get(f"/routines/{body['days'][0]['id']}")
+    assert first_day.status_code == 200
+    expected_exercise_count = len(catalog_program["days"][0][1])
+    assert first_day.json()["exercise_count"] == expected_exercise_count
+
+
+@pytest.mark.asyncio
+async def test_catalog_add_rejects_duplicate_name(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    key = seed_data.WORKOUT_PROGRAMS[0]["key"]
+
+    first = await client.post(f"/programs/catalog/{key}")
+    assert first.status_code == 201
+    second = await client.post(f"/programs/catalog/{key}")
+    assert second.status_code == 409
+    assert second.json()["error"] == "name_taken"
+
+
+@pytest.mark.asyncio
+async def test_catalog_add_unknown_key_is_404(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    resp = await client.post("/programs/catalog/does-not-exist")
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_catalog_add_respects_routine_budget(fresh_db, client_factory, monkeypatch):
+    monkeypatch.setattr(config, "MAX_ROUTINES_PER_USER", 0)
+    client = await _linked_client(fresh_db, client_factory)
+    key = seed_data.WORKOUT_PROGRAMS[0]["key"]
+    resp = await client.post(f"/programs/catalog/{key}")
+    assert resp.status_code == 403
+    assert resp.json()["error"] == "routine_limit_reached"
+
+
+# ---------- программа/день из уже сделанной тренировки ----------
+
+async def _make_finished_workout(user_id: int, exercise_ids: list[int]) -> int:
+    """Тот же приём, что и в tests/test_api_v1_account.py (не переиспользуем
+    напрямую — разные тестовые файлы, каждый заводит помощник у себя)."""
+    workout_id = await db.create_finished_workout(
+        user_id, started_at="2024-01-01T10:00:00", finished_at="2024-01-01T11:00:00"
+    )
+    for ex_id in exercise_ids:
+        block_id = await db.create_block(workout_id, "single")
+        await db.add_block_exercise(block_id, ex_id, 0)
+        await db.append_set(block_id, ex_id, 0, 50.0, 8, rpe=7.0)
+    return workout_id
+
+
+@pytest.mark.asyncio
+async def test_routine_from_workout_repeats_its_composition(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    ex1 = await _make_exercise(fresh_db, 111, "Bench press")
+    ex2 = await _make_exercise(fresh_db, 111, "Squat")
+    workout_id = await _make_finished_workout(111, [ex1, ex2])
+
+    resp = await client.post(f"/workouts/{workout_id}/routines", json={"name": "Snapshot day"})
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["program_id"] is None
+    assert body["exercise_count"] == 2
+    exercise_ids = {e["exercise_id"] for e in body["exercises"]}
+    assert exercise_ids == {ex1, ex2}
+    # Схема подходов подтягивается из фактически сделанного (workout_exercise_targets).
+    assert all(e["target"] == "1×8" for e in body["exercises"])
+
+
+@pytest.mark.asyncio
+async def test_routine_from_workout_can_become_a_program_day(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    program_id = (await client.post("/programs", json={"name": "PPL"})).json()["id"]
+    ex1 = await _make_exercise(fresh_db, 111, "Deadlift")
+    workout_id = await _make_finished_workout(111, [ex1])
+
+    resp = await client.post(
+        f"/workouts/{workout_id}/routines", json={"name": "Pull", "program_id": program_id}
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["program_id"] == program_id
+
+    program = await client.get(f"/programs/{program_id}")
+    assert [d["name"] for d in program.json()["days"]] == ["Pull"]
+
+
+@pytest.mark.asyncio
+async def test_routine_from_foreign_workout_is_404(fresh_db, client_factory):
+    await _linked_client(fresh_db, client_factory, telegram_id=111)
+    intruder = await _linked_client(fresh_db, client_factory, telegram_id=222)
+    ex1 = await _make_exercise(fresh_db, 111, "Bench press")
+    workout_id = await _make_finished_workout(111, [ex1])
+
+    resp = await intruder.post(f"/workouts/{workout_id}/routines", json={"name": "Stolen"})
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_routine_from_workout_rejects_foreign_program(fresh_db, client_factory):
+    owner = await _linked_client(fresh_db, client_factory, telegram_id=111)
+    intruder = await _linked_client(fresh_db, client_factory, telegram_id=222)
+    foreign_program_id = (await owner.post("/programs", json={"name": "PPL"})).json()["id"]
+
+    ex1 = await _make_exercise(fresh_db, 222, "Bench press")
+    workout_id = await _make_finished_workout(222, [ex1])
+
+    resp = await intruder.post(
+        f"/workouts/{workout_id}/routines", json={"name": "Day", "program_id": foreign_program_id}
+    )
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_routine_from_workout_unknown_workout_is_404(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    resp = await client.post("/workouts/999999/routines", json={"name": "Day"})
+    assert resp.status_code == 404
+
+
 # ---------- упражнения дня ----------
 
 async def _make_exercise(fresh_db, user_id: int, name: str = "Bench press") -> int:
@@ -311,6 +461,8 @@ async def test_routine_exercise_not_found(fresh_db, client_factory):
     [
         ("GET", "/programs"),
         ("POST", "/programs"),
+        ("GET", "/programs/catalog"),
+        ("POST", "/programs/catalog/ppl"),
         ("GET", "/programs/1"),
         ("PATCH", "/programs/1"),
         ("DELETE", "/programs/1"),
@@ -324,6 +476,7 @@ async def test_routine_exercise_not_found(fresh_db, client_factory):
         ("POST", "/routines/1/exercises"),
         ("PATCH", "/routine-exercises/1"),
         ("DELETE", "/routine-exercises/1"),
+        ("POST", "/workouts/1/routines"),
     ],
 )
 async def test_requires_auth(fresh_db, client_factory, method, path):
