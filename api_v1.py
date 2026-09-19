@@ -27,6 +27,12 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
+import api_v1_account
+import api_v1_achievements
+import api_v1_ai
+import api_v1_common as common
+import api_v1_food
+import api_v1_programs
 import apple_signin
 import db
 import mcp_oauth
@@ -34,51 +40,15 @@ import mcp_oauth
 logger = logging.getLogger(__name__)
 
 
-class ApiError(Exception):
-    def __init__(self, status_code: int, code: str, message: str):
-        self.status_code = status_code
-        self.code = code
-        self.message = message
-
-
-async def _api_error_handler(request: Request, exc: ApiError) -> JSONResponse:
-    return JSONResponse({"error": exc.code, "message": exc.message}, status_code=exc.status_code)
-
-
-async def _unhandled_error_handler(request: Request, exc: Exception) -> JSONResponse:
-    logger.exception("api_v1: unhandled error on %s %s", request.method, request.url.path)
-    return JSONResponse({"error": "internal_error", "message": "internal error"}, status_code=500)
-
-
-async def _authed_user_id(request: Request) -> int:
-    """Bearer-токен → telegram_id, либо ApiError(401)."""
-    auth = request.headers.get("authorization", "")
-    if not auth.lower().startswith("bearer "):
-        raise ApiError(401, "unauthorized", "missing bearer token")
-    token = auth[len("bearer "):].strip()
-    user_id = await db.resolve_api_token(token)
-    if user_id is None:
-        raise ApiError(401, "unauthorized", "invalid or revoked token")
-    return user_id
-
-
-async def _json_body(request: Request) -> dict[str, Any]:
-    try:
-        body = await request.json()
-    except Exception as exc:
-        raise ApiError(400, "bad_request", "invalid JSON body") from exc
-    if not isinstance(body, dict):
-        raise ApiError(400, "bad_request", "JSON object expected")
-    return body
-
-
-def _require(body: dict[str, Any], key: str, expected_type: type) -> Any:
-    if key not in body:
-        raise ApiError(400, "bad_request", f"missing field: {key}")
-    value = body[key]
-    if not isinstance(value, expected_type) or isinstance(value, bool) and expected_type is not bool:
-        raise ApiError(400, "bad_request", f"field {key} must be {expected_type.__name__}")
-    return value
+# Общие помощники живут в api_v1_common — их же импортируют модули доменов
+# (api_v1_programs и соседи). Имена ниже оставлены прежними: на них ссылается
+# весь файл и тесты, а переименование ради переезда ничего не улучшает.
+ApiError = common.ApiError
+_api_error_handler = common.api_error_handler
+_unhandled_error_handler = common.unhandled_error_handler
+_authed_user_id = common.authed_user_id
+_json_body = common.json_body
+_require = common.require
 
 
 # ---------- сериализация ----------
@@ -581,6 +551,17 @@ routes = [
     Route("/bodyweight/{log_id:int}", update_bodyweight, methods=["PATCH"]),
     Route("/bodyweight/{log_id:int}", delete_bodyweight, methods=["DELETE"]),
 ]
+
+# Домены, выросшие из дневника: программы, еда, достижения, AI-тренер. Каждый
+# живёт своим модулем — в одном файле это были бы полторы тысячи строк, где
+# правка в еде соседствует с правкой в программах.
+routes += (
+    api_v1_programs.routes
+    + api_v1_food.routes
+    + api_v1_achievements.routes
+    + api_v1_ai.routes
+    + api_v1_account.routes
+)
 
 
 def build_app() -> Starlette:
