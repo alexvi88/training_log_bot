@@ -31,8 +31,10 @@ import api_v1_account
 import api_v1_achievements
 import api_v1_ai
 import api_v1_common as common
+import api_v1_feedback
 import api_v1_food
 import api_v1_import
+import api_v1_media
 import api_v1_programs
 import api_v1_sharing
 import apple_signin
@@ -133,15 +135,20 @@ async def _issue_token_response(user_id: int) -> JSONResponse:
 
 
 async def auth_apple(request: Request) -> JSONResponse:
-    """Sign In with Apple — не вторая личность, а быстрая пересвязка уже
-    существующего (telegram-привязанного) аккаунта, см. db.auth_identities.
+    """Sign In with Apple.
 
     Тело всегда несёт `identity_token`. Если этот Apple ID уже привязан
     (обычно так — человек включил Face ID вместо кода раньше), пересылка
-    `link_code` не нужна: `resolve_auth_identity` сам находит владельца. Если
-    это первый раз, нужен ещё и `link_code` — тот же код, что выдаёт `/ios` в
-    боте, — он подтверждает, чей это аккаунт, и Apple ID запоминается на
-    будущее.
+    `link_code` не нужна: `resolve_auth_identity` сам находит владельца.
+
+    Если это первый раз для этого Apple ID, есть два пути:
+      - пришёл `link_code` (тот же код, что выдаёт `/ios` в боте) — это
+        пересвязка уже существующего telegram-аккаунта, ровно как раньше;
+      - `link_code` не пришёл — App Review заворачивает приложения, которые
+        нельзя завести без стороннего мессенджера, так что без кода из бота
+        заводим НОВЫЙ аккаунт без Telegram (см. db.create_app_only_user) и
+        сразу выдаём токен. Telegram к нему можно привязать позже — см.
+        request_telegram_link_code ниже и handlers/ios_link.cmd_link_app.
     """
     body = await _json_body(request)
     identity_token = str(_require(body, "identity_token", str))
@@ -153,23 +160,47 @@ async def auth_apple(request: Request) -> JSONResponse:
     user_id = await db.resolve_auth_identity("apple", identity.apple_user_id)
     if user_id is None:
         link_code = body.get("link_code")
-        if not link_code or not isinstance(link_code, str):
-            raise ApiError(404, "apple_identity_unknown", "link with the bot code first")
-        status, code_user_id = await db.consume_link_code(
-            link_code.strip(),
-            client_ip=request.client.host if request.client else None,
-            window_seconds=mcp_oauth.CONSENT_FAILURE_WINDOW,
-            window_limit_per_ip=mcp_oauth.CONSENT_FAILURE_LIMIT_PER_IP,
-            window_limit_total=mcp_oauth.CONSENT_FAILURE_LIMIT_TOTAL,
-        )
-        if status == "rate_limited":
-            raise ApiError(429, "rate_limited", "too many attempts, try again later")
-        if status != "ok" or code_user_id is None:
-            raise ApiError(400, "invalid_code", "code is invalid or expired")
-        user_id = code_user_id
+        if link_code and isinstance(link_code, str):
+            status, code_user_id = await db.consume_link_code(
+                link_code.strip(),
+                client_ip=request.client.host if request.client else None,
+                window_seconds=mcp_oauth.CONSENT_FAILURE_WINDOW,
+                window_limit_per_ip=mcp_oauth.CONSENT_FAILURE_LIMIT_PER_IP,
+                window_limit_total=mcp_oauth.CONSENT_FAILURE_LIMIT_TOTAL,
+            )
+            if status == "rate_limited":
+                raise ApiError(429, "rate_limited", "too many attempts, try again later")
+            if status != "ok" or code_user_id is None:
+                raise ApiError(400, "invalid_code", "code is invalid or expired")
+            user_id = code_user_id
+        else:
+            new_user = await db.create_app_only_user()
+            user_id = new_user["telegram_id"]
         await db.link_auth_identity(user_id, "apple", identity.apple_user_id, identity.email)
 
     return await _issue_token_response(user_id)
+
+
+async def request_telegram_link_code(request: Request) -> JSONResponse:
+    """Код, которым app-only аккаунт (заведён Apple ID без Telegram) связывает
+    себя с настоящим Telegram — направление, обратное `/auth/link`: там код
+    показывает бот, а вводит приложение, тут код выдаёт приложение (этот
+    эндпоинт), а вводит его человек боту (`handlers.ios_link.cmd_link_app`),
+    потому что у app-only аккаунта нет чата, куда бот мог бы что-то прислать
+    сам.
+
+    Код и хранилище те же (db.issue_oauth_link_code / db.oauth_link_codes),
+    что и у обычной привязки — это тот же приём «докажи владение», направление
+    роли на него не влияет.
+    """
+    user_id = await _authed_user_id(request)
+    user = await db.get_user(user_id)
+    if user is None:
+        raise ApiError(404, "not_found", "user not found")
+    if user["telegram_linked"]:
+        raise ApiError(409, "already_linked", "account is already linked to Telegram")
+    code = await mcp_oauth.link_code(user_id, force_new=True)
+    return JSONResponse({"code": code, "ttl_minutes": mcp_oauth.LINK_CODE_TTL_MINUTES})
 
 
 async def me(request: Request) -> JSONResponse:
@@ -183,6 +214,7 @@ async def me(request: Request) -> JSONResponse:
             "username": user["username"],
             "unit": user["unit"],
             "lang": user["lang"],
+            "telegram_linked": bool(user["telegram_linked"]),
         }
     )
 
@@ -592,6 +624,7 @@ routes = [
     Route("/health", health, methods=["GET"]),
     Route("/auth/link", auth_link, methods=["POST"]),
     Route("/auth/apple", auth_apple, methods=["POST"]),
+    Route("/account/telegram-link-code", request_telegram_link_code, methods=["POST"]),
     Route("/me", me, methods=["GET"]),
     Route("/push/register", register_push_token, methods=["POST"]),
     Route("/push/register", unregister_push_token, methods=["DELETE"]),
@@ -630,6 +663,8 @@ routes += (
     + api_v1_account.routes
     + api_v1_import.routes
     + api_v1_sharing.routes
+    + api_v1_media.routes
+    + api_v1_feedback.routes
 )
 
 

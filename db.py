@@ -89,7 +89,15 @@ CREATE TABLE IF NOT EXISTS users (
     -- отвечает, но и умеет сам записать вес, завести упражнение, посчитать еду
     -- (см. handlers.ai_trainer.ACTIONS_HINT_TEXT). Один раз за жизнь аккаунта —
     -- дальше молчим: занос данных через модель платный, промоутить его нельзя.
-    ai_actions_hint_shown INTEGER NOT NULL DEFAULT 0
+    ai_actions_hint_shown INTEGER NOT NULL DEFAULT 0,
+    -- 0 у аккаунта, заведённого в приложении через Sign in with Apple без
+    -- кода из бота (см. create_app_only_user) — у него telegram_id
+    -- синтетический отрицательный, а не настоящий чат, и всему коду,
+    -- который иначе попытался бы написать человеку в Telegram (пуши,
+    -- рассылки, admin_tasks), нужно это проверять. 1 — обычный путь и
+    -- дефолт для всех, кто пришёл через бота: там telegram_id всегда
+    -- настоящий с первой же строки.
+    telegram_linked INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS muscle_groups (
@@ -1047,6 +1055,13 @@ async def _migrate_schema() -> None:
         # NULL значит «не задана», и строка «Цель N · осталось M» на экране дня
         # просто не показывается, а не подставляет угаданное число.
         await _conn.execute("ALTER TABLE users ADD COLUMN kcal_goal INTEGER")
+    if "telegram_linked" not in user_cols:
+        # Дефолт 1 — верный ответ и для новой колонки на старой базе: каждая
+        # существующая строка заведена настоящим /start, синтетических
+        # app-only аккаунтов до этой миграции не существовало.
+        await _conn.execute(
+            "ALTER TABLE users ADD COLUMN telegram_linked INTEGER NOT NULL DEFAULT 1"
+        )
 
     set_cols = await _column_names("sets")
     if "is_warmup" in set_cols:
@@ -1626,6 +1641,67 @@ async def get_or_create_user(
 async def get_user(telegram_id: int) -> Optional[aiosqlite.Row]:
     cur = await conn().execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,))
     return await cur.fetchone()
+
+
+# ---------- аккаунты без Telegram (Sign in with Apple прямо в приложении) ----------
+#
+# App Review заворачивает приложения, которые нельзя завести без стороннего
+# мессенджера — а вся личность в продукте до сих пор telegram_id, первичный
+# ключ `users` и ключ ещё примерно в сорока таблицах. Переводить базу на
+# суррогатный ключ ради этого — недели работы и риск живых данных; вместо
+# этого app-only аккаунт получает telegram_id из отрицательного диапазона,
+# который Telegram настоящим пользователям никогда не выдаёт, — и живёт в той
+# же колонке, тем же кодом, что и обычный пользователь. `telegram_linked = 0`
+# отличает его от обычного — этим и только этим пользуется код, которому иначе
+# было бы куда писать в Telegram, а некуда (см. schema выше).
+
+# С этого числа вниз, а не с -1: под рукой её проще узнать в логе/дампе, чем
+# -1, -2, -3 — тем более что -1 уже кто-то использовал бы как "нет пользователя"
+# в другом месте кода по привычке.
+SYNTHETIC_TELEGRAM_ID_START = -1_000_000_000
+
+
+async def _next_synthetic_telegram_id(db: aiosqlite.Connection) -> int:
+    """Следующий свободный отрицательный id. Вызывать только под _write_lock —
+    атомарность выбора и вставки держит он же, а не эта функция сама по себе."""
+    cur = await db.execute(
+        "SELECT MIN(telegram_id) FROM users WHERE telegram_id < 0"
+    )
+    row = await cur.fetchone()
+    current_min = row[0]
+    return (current_min - 1) if current_min is not None else SYNTHETIC_TELEGRAM_ID_START
+
+
+async def create_app_only_user(language_code: Optional[str] = None) -> aiosqlite.Row:
+    """Завести аккаунт из приложения, без единого сообщения в Telegram — вход
+    через Sign in with Apple, когда этот Apple ID ещё никому не известен и
+    код бота никто не присылал (см. api_v1.auth_apple).
+
+    Выбор id и вставка строки — одна и та же критическая секция под
+    `_write_lock`: иначе два параллельных запроса на регистрацию успели бы
+    прочитать один и тот же MIN(telegram_id) и попытаться завести двух
+    пользователей с одинаковым синтетическим id.
+    """
+    db = conn()
+    async with _write_lock:
+        new_id = await _next_synthetic_telegram_id(db)
+        await db.execute(
+            "INSERT INTO users "
+            "(telegram_id, username, created_at, unit, e1rm_formula, tz_offset, lang, "
+            "telegram_linked) "
+            "VALUES (?, NULL, ?, ?, ?, ?, ?, 0)",
+            (
+                new_id,
+                now_iso(),
+                config.DEFAULT_UNIT,
+                config.DEFAULT_E1RM_FORMULA,
+                config.DEFAULT_TZ_OFFSET,
+                i18n.normalize(language_code),
+            ),
+        )
+        await db.commit()
+        cur = await db.execute("SELECT * FROM users WHERE telegram_id = ?", (new_id,))
+        return await cur.fetchone()
 
 
 async def set_user_source(
@@ -4568,6 +4644,139 @@ async def resolve_auth_identity(provider: str, provider_user_id: str) -> Optiona
     )
     row = await cur.fetchone()
     return row["user_id"] if row else None
+
+
+# ---------- связка app-only аккаунта с реальным Telegram (слияние) ----------
+#
+# Обратное направление к issue_oauth_link_code/consume_link_code выше: там код
+# показывает бот, а вводит приложение; тут код выдаёт /v1 app-only аккаунту
+# (у него нет чата, куда бот мог бы что-то прислать), а вводит его человек
+# самому боту командой (см. handlers/ios_link.cmd_link_app). Код и таблица —
+# те же (oauth_link_codes), это ровно тот же приём «докажи, что один код
+# видели оба конца», направление роли не меняет.
+#
+# Слияние — самое опасное место во всей задаче: перепутать чей id главный,
+# затереть чужую историю или упасть на середине с половиной перенесённых
+# таблиц значит необратимо испортить данные живого человека. Поэтому три
+# строгих правила:
+#  1. Список таблиц для переноса — не руками, а из _user_scoped_tables(): та
+#     же функция, что и у wipe_user_account, читает его из схемы базы, и
+#     новая колонка user_id/telegram_id/owner_id попадает под перенос сама.
+#  2. Если у ОБОИХ аккаунтов есть содержательные данные — перенос не
+#     начинается вообще, ни одной строки не трогаем. Слияние двух историй
+#     (дубли тренировок за один день, одинаковые имена упражнений) — отдельная
+#     операция со своими правилами, наугад её не делают.
+#  3. Всё внутри одной транзакции (_write_lock + commit/rollback) — не
+#     бывает состояния «часть таблиц перенесли, часть нет».
+
+# Технические таблицы (токены, привязка identity, коды) не в счёт при проверке
+# «есть ли у аккаунта данные» — сам факт того, что кто-то когда-то получил
+# токен, не история тренировок. Но перенести их всё равно надо (тест
+# проверяет доступность токена под новым id) — поэтому исключены только из
+# проверки "есть контент", не из переноса.
+_MERGE_CONTENT_EXCLUDE_TABLES = frozenset({
+    "api_tokens", "mcp_tokens", "auth_identities",
+    "push_tokens", "oauth_auth_codes", "oauth_tokens", "oauth_link_codes",
+})
+
+# У этих таблиц уникальность на владельца (UNIQUE user_id или составной
+# PRIMARY KEY, включающий его) — если у аккаунта-приёмника уже есть своя
+# строка (старый токен, зарегистрированный push-token), простой
+# `UPDATE ... SET user_id = приёмник` упадёт на UNIQUE. Слияние разрешено
+# только когда СОДЕРЖАТЕЛЬНЫХ данных с двух сторон нет одновременно (см.
+# выше), а строка токена содержательными данными не считается — так что чужую
+# по этим трём таблицам просто гасим перед переносом: свежий токен всё равно
+# переиздаёт вызывающий код после успешного слияния.
+_MERGE_UNIQUE_PER_OWNER_TABLES = frozenset({"api_tokens", "mcp_tokens", "push_tokens"})
+
+
+async def _has_content_data(telegram_id: int) -> bool:
+    """Есть ли у аккаунта что-то, кроме токенов и служебных привязок —
+    тренировка, подход, еда, вес, программа, достижение и т.п. Ровно та же
+    проверка, что различает случаи «пустой telegram-аккаунт» и «с историей»."""
+    db = conn()
+    for table, column in await _user_scoped_tables():
+        if table == "users" or table in _MERGE_CONTENT_EXCLUDE_TABLES:
+            continue
+        cur = await db.execute(f"SELECT 1 FROM {table} WHERE {column} = ? LIMIT 1", (telegram_id,))
+        if await cur.fetchone():
+            return True
+    return False
+
+
+async def link_telegram_to_app_account(
+    app_user_id: int, telegram_id: int, username: Optional[str] = None
+) -> str:
+    """Слить app-only аккаунт (`app_user_id`, отрицательный) с настоящим
+    telegram_id — human прислал боту код, который до этого выдал app-only
+    аккаунт (см. issue_oauth_link_code/consume_link_code).
+
+    Возвращает:
+      - "ok" — слито, `app_user_id` больше не существует, все данные под
+        `telegram_id`;
+      - "not_app_account" — `app_user_id` не найден или это не app-only
+        аккаунт (telegram_linked уже 1) — код подделан или использован дважды;
+      - "both_accounts_have_data" — у обоих есть содержательные данные, НИЧЕГО
+        не тронуто, разбираться нужно руками.
+    """
+    db = conn()
+    async with _write_lock:
+        try:
+            app_cur = await db.execute(
+                "SELECT * FROM users WHERE telegram_id = ?", (app_user_id,)
+            )
+            app_row = await app_cur.fetchone()
+            if app_row is None or app_row["telegram_linked"]:
+                return "not_app_account"
+
+            target_cur = await db.execute(
+                "SELECT * FROM users WHERE telegram_id = ?", (telegram_id,)
+            )
+            target_row = await target_cur.fetchone()
+
+            if target_row is not None:
+                target_has_data = await _has_content_data(telegram_id)
+                if target_has_data and await _has_content_data(app_user_id):
+                    return "both_accounts_have_data"
+
+            scoped = await _user_scoped_tables()
+            # Сначала гасим на стороне приёмника то, что упало бы на UNIQUE —
+            # до того, как туда начнёт переезжать содержимое app-аккаунта.
+            for table, column in scoped:
+                if table in _MERGE_UNIQUE_PER_OWNER_TABLES:
+                    await db.execute(f"DELETE FROM {table} WHERE {column} = ?", (telegram_id,))
+            for table, column in scoped:
+                if table == "users":
+                    continue
+                await db.execute(
+                    f"UPDATE {table} SET {column} = ? WHERE {column} = ?",
+                    (telegram_id, app_user_id),
+                )
+
+            if target_row is None:
+                # Самый частый случай: телеграм-аккаунта ещё нет вообще —
+                # просто переписываем id строки app-only аккаунта на настоящий.
+                await db.execute(
+                    "UPDATE users SET telegram_id = ?, telegram_linked = 1, "
+                    "username = COALESCE(?, username) WHERE telegram_id = ?",
+                    (telegram_id, username, app_user_id),
+                )
+            else:
+                # Телеграм-аккаунт уже есть (пустой — иначе была бы ошибка
+                # выше) — он и остаётся канонической строкой, app-only строку
+                # сносим: две строки с одинаковым telegram_id после переноса
+                # выше и так не нужны, а PRIMARY KEY второй не даст завести.
+                await db.execute("DELETE FROM users WHERE telegram_id = ?", (app_user_id,))
+                await db.execute(
+                    "UPDATE users SET telegram_linked = 1, username = COALESCE(?, username) "
+                    "WHERE telegram_id = ?",
+                    (username, telegram_id),
+                )
+            await db.commit()
+            return "ok"
+        except Exception:
+            await db.rollback()
+            raise
 
 
 # ---------- device tokens для APNs (см. push_tokens выше) ----------

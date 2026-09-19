@@ -371,6 +371,12 @@ def _public_commands(lang: str) -> list[BotCommand]:
         # /ios живёт на том же публичном адресе, что и /mcp (api_v1.py
         # монтируется рядом с MCP на одном порту) — без него звать некуда.
         commands.append(BotCommand(command="ios", description=i18n.t_in(lang, "bot.commands.ios")))
+        # Обратное направление к /ios: код там показывает приложение, вводит
+        # его тут человек (см. handlers/ios_link.cmd_link_app) — та же
+        # зависимость от публичного адреса, тот же api_v1.py.
+        commands.append(
+            BotCommand(command="link_app", description=i18n.t_in(lang, "bot.commands.link_app"))
+        )
     # Та же логика: команда обещает работающий вход, а без адреса группы вести
     # некуда (см. handlers/community.py).
     if config.community_available():

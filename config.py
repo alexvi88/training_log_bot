@@ -758,3 +758,33 @@ def community_available() -> bool:
     return COMMUNITY_CHAT_URL.startswith(("https://t.me/", "http://t.me/", "tg://"))
 
 
+# --- APNs: пуши на iOS (см. apns.py) ----------------------------------------
+#
+# Ключ .p8 хранится ЦЕЛИКОМ в переменной окружения (не путём до файла): деплой
+# на Amvera прокидывает переменные окружения, а не произвольные файлы, а
+# .p8-файл — это обычный PEM-текст, который прекрасно живёт в одной строке
+# окружения (переносы строк передаются как есть через тот же механизм, что
+# уже используется для многострочных секретов в этом деплое).
+APNS_KEY_P8 = os.getenv("APNS_KEY_P8", "")
+
+# "kid" в заголовке provider-токена (JWT) — id ключа .p8 из App Store Connect.
+APNS_KEY_ID = os.getenv("APNS_KEY_ID", "")
+
+# "iss" в теле provider-токена — Team ID аккаунта разработчика Apple.
+APNS_TEAM_ID = os.getenv("APNS_TEAM_ID", "")
+
+# "apns-topic" — bundle id приложения, которому адресован пуш. Тот же дефолт,
+# что у APPLE_BUNDLE_ID выше (project.yml приложения), но отдельная
+# переменная: APPLE_BUNDLE_ID — это audience Sign In with Apple, а эта —
+# адресат APNs; в проде это одно и то же значение, но смысл разный, и один
+# переименованный bundle id в будущем не должен тихо сломать оба разом.
+APNS_BUNDLE_ID = os.getenv("APNS_BUNDLE_ID", "com.trainingdiary.ios")
+
+# "sandbox" (APNs-песочница, для сборок из Xcode) или "production" (сборка из
+# App Store/TestFlight). Sandbox по умолчанию — деплой без явной настройки не
+# должен молча долбить прод-APNs токенами, выпущенными для отладочной сборки
+# (тот и другой сервер принимают только свои токены, но дефолт стоит выбрать
+# осторожный, а не самый частый).
+APNS_ENV = os.getenv("APNS_ENV", "sandbox")
+
+

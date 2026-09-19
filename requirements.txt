@@ -6,3 +6,5 @@ matplotlib==3.11.0
 mcp==2.0.0
 python-dotenv==1.2.2
 PyJWT[crypto]==2.14.0
+# HTTP/2 для httpx: APNs принимает только его, без h2 пуши не уходят вовсе
+h2==4.4.1
