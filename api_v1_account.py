@@ -11,6 +11,7 @@ UPDATE (пересчёт весов при смене единиц, ресинк
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any, Optional
 
@@ -82,6 +83,59 @@ async def get_settings(request: Request) -> JSONResponse:
     if user is None:
         raise ApiError(404, "not_found", "user not found")
     return JSONResponse(_settings_json(user))
+
+
+def _equipment_list(user) -> Optional[list[str]]:
+    """users.equipment хранится строкой JSON (ai_trainer._save_athlete_profile
+    пишет её через json.dumps) — тот же разбор, что и у handlers.settings.
+    profile_rows, только результат отдаётся списком, а не готовой строкой
+    через запятую: клиент сам решает, как рисовать список инвентаря."""
+    raw = user["equipment"]
+    if not raw:
+        return None
+    try:
+        items = json.loads(raw)
+    except (TypeError, ValueError):
+        # Могла приехать и старая запись не-списком — показать как одну
+        # строку лучше, чем уронить эндпоинт.
+        return [str(raw)]
+    return [str(x) for x in items] if isinstance(items, list) else [str(items)]
+
+
+def _profile_json(user) -> dict[str, Any]:
+    """Профиль атлета, который AI-тренер копит через save_athlete_profile
+    («🤖 Что тренер про тебя знает» в боте) — те же четыре поля и те же
+    имена колонок users.*, что читает handlers.settings.profile_rows.
+    `days_per_week` сюда не входит: колонка в базе осталась, но её больше
+    никто не пишет и не читает (см. docstring profile_rows)."""
+    return {
+        "experience": user["experience"],
+        "goal": user["goal"],
+        "equipment": _equipment_list(user),
+        "limitations": user["limitations"],
+    }
+
+
+async def get_athlete_profile(request: Request) -> JSONResponse:
+    user_id = await _authed_user_id(request)
+    user = await db.get_user(user_id)
+    if user is None:
+        raise ApiError(404, "not_found", "user not found")
+    return JSONResponse(_profile_json(user))
+
+
+async def clear_athlete_profile(request: Request) -> JSONResponse:
+    """«🗑 Очистить» на экране профиля — та же запись, что и у бота
+    (handlers.settings.settings_profile_clear): все поля памяти разом,
+    включая уже неиспользуемый days_per_week, чтобы не оставлять в базе
+    осколок старого значения."""
+    user_id = await _authed_user_id(request)
+    await db.update_user(
+        user_id,
+        days_per_week=None, experience=None, goal=None, equipment=None, limitations=None,
+    )
+    user = await db.get_user(user_id)
+    return JSONResponse(_profile_json(user))
 
 
 async def delete_account(request: Request) -> JSONResponse:
@@ -497,6 +551,11 @@ routes = [
     # Живёт рядом с настройками намеренно: в боте «Удалить аккаунт» — кнопка
     # блока «Данные» на экране настроек, и в приложении ей место там же.
     Route("/account", delete_account, methods=["DELETE"]),
+    # Профиль, который AI-тренер копит сам (save_athlete_profile) — экран
+    # «🤖 Что тренер про тебя знает» в боте. Пишет его только модель через
+    # диалог, поэтому тут только чтение и очистка целиком, без PATCH полей.
+    Route("/profile", get_athlete_profile, methods=["GET"]),
+    Route("/profile", clear_athlete_profile, methods=["DELETE"]),
     Route("/workouts/{workout_id:int}/sets/{set_id:int}", update_workout_set, methods=["PATCH"]),
     Route("/workouts/{workout_id:int}/sets/{set_id:int}", delete_workout_set, methods=["DELETE"]),
     Route(

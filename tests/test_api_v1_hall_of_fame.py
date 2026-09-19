@@ -8,8 +8,10 @@
 import httpx
 import pytest
 
+import analytics
 import api_v1
 import db
+import hall_of_fame_data
 
 pytestmark = pytest.mark.asyncio
 
@@ -118,3 +120,51 @@ async def test_rank_and_tonnage_equivalent_are_present_and_localized(fresh_db, c
     # Может быть None на очень маленьком тоннаже — эквивалент подбирается по
     # порогам, но само поле обязано присутствовать, а не отсутствовать.
     assert "equivalent" in body["tonnage"]
+
+
+async def test_rank_ladder_requires_auth(fresh_db, client_factory):
+    client = client_factory()
+    resp = await client.get("/hall-of-fame/rank-ladder")
+    assert resp.status_code == 401
+
+
+async def test_rank_ladder_shows_starting_rung_with_empty_history(fresh_db, client_factory):
+    """В отличие от GET /hall-of-fame ладдер не отдаёт `null` на пустой
+    истории — стартовая ступень (level 0) должна быть видна с первого дня."""
+    client = await _linked_client(fresh_db, client_factory)
+    resp = await client.get("/hall-of-fame/rank-ladder")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["current_level"] == 0
+    assert body["per_week"] == 0.0
+    assert len(body["ranks"]) == len(analytics.RANKS)
+
+
+async def test_rank_ladder_thresholds_come_from_analytics_ranks(fresh_db, client_factory):
+    """Пороги — те же числа, что и analytics.RANKS, без дублирования на
+    сервере, не говоря уже о клиенте."""
+    client = await _linked_client(fresh_db, client_factory)
+    resp = await client.get("/hall-of-fame/rank-ladder")
+    body = resp.json()
+    for rung, rank in zip(body["ranks"], analytics.RANKS, strict=True):
+        assert rung["level"] == rank.level
+        assert rung["emoji"] == rank.emoji
+        assert rung["name"] == rank.name
+        assert rung["min_workouts"] == rank.min_workouts
+        assert rung["min_tonnage_kg"] == rank.min_tonnage_kg
+        assert rung["min_per_week"] == rank.min_per_week
+
+
+async def test_rank_ladder_reflects_current_level_and_frequency(fresh_db, client_factory):
+    user_id = 111
+    client = await _linked_client(fresh_db, client_factory, telegram_id=user_id)
+    group_id = await db.create_muscle_group(user_id, "Ноги")
+    ex_id = await db.create_exercise(user_id, "Присед", group_id)
+    for day in (1, 3, 5, 8, 10):
+        await _log_session(user_id, ex_id, day=day, sets=[(100.0, 5), (100.0, 5)])
+
+    resp = await client.get("/hall-of-fame/rank-ladder")
+    body = resp.json()
+    hof = await hall_of_fame_data.collect(user_id)
+    assert body["current_level"] == hof.rank.level
+    assert body["per_week"] == round(hof.per_week, 2)
