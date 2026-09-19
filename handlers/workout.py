@@ -30,6 +30,7 @@ import analytics
 import charts
 import chat_bottom
 import config
+import dashboard_data
 import db
 import exercise_descriptions
 import exercise_media
@@ -894,92 +895,40 @@ def _try_claim_weight_confirm(user_id: int) -> bool:
     return True
 
 
-# Окно, за которое ищутся частые движения и считается их рост e1RM. Восемь
-# недель — то же окно, по которому считается звание (analytics.RANK_FREQUENCY_WEEKS):
-# «что я сейчас делаю», а не «что делал когда-то».
-_LIFT_WINDOW_WEEKS = 8
-# У истории моложе восьми недель «рост за 8 недель» врёт: вся история и так
-# лежит внутри окна, базы ДО него нет (exercise_e1rm_growth), и плиток не
-# бывает вовсе — не потому что роста не было, а потому что не с чем сравнивать.
-# Короткое окно даёт этим свежим аккаунтам шанс увидеть плитку до восьмой
-# недели. Моложе самого фолбэка (_LIFT_FALLBACK_WINDOW_WEEKS) плиток по-прежнему
-# не будет — это честно: сравнивать нечего, и выдумывать базу не стоит.
-_LIFT_FALLBACK_WINDOW_WEEKS = 4
-# Кандидатов на плитки роста берётся больше, чем плиток в сводке: рост считается
-# честно (максимум ДО окна против максимума ВНУТРИ), и у многих частых движений
-# он окажется нулевым или отрицательным — их форматтер потом отбросит. Без
-# запаса сводка часто оставалась бы вовсе без плиток, хотя настоящий прогресс
-# у человека где-то в его пятом-шестом по частоте движении и был.
-_LIFT_CANDIDATES = 12
+# Окно роста e1RM и число кандидатов переехали в dashboard_data вместе со
+# сбором сводки. Здесь остаются алиасы: на эти имена ссылаются и код, и
+# комментарии (formatting.menu_lifts_title), и ломать их переездом незачем —
+# значение по-прежнему одно на обоих потребителей сводки, бота и REST.
+_LIFT_WINDOW_WEEKS = dashboard_data.LIFT_WINDOW_WEEKS
+_LIFT_FALLBACK_WINDOW_WEEKS = dashboard_data.LIFT_FALLBACK_WINDOW_WEEKS
+_LIFT_CANDIDATES = dashboard_data.LIFT_CANDIDATES
 
 
 async def _menu_view(user_id: int) -> tuple[str, bytes | None]:
     """Greeting, plus the summary image — headline, tiles, weekly volume per
     muscle group and the athlete's most-frequent movements with their e1RM
     growth — once they have any finished workouts.
+
+    Сами числа считает dashboard_data.collect: ту же сводку отдаёт приложению
+    REST (`GET /dashboard`), и вторая реализация здесь разошлась бы с первой
+    молча — расхождение видно только глазами, картинка против JSON. Этому
+    экрану остаётся кэш тяжёлой отрисовки и сам вызов matplotlib.
     """
-    user = await db.get_user(user_id)
-    today = timeutil.user_today(user)
-    dates = [dt.date.fromisoformat(d) for d in await db.list_finished_workout_dates(user_id)]
-    if not dates:
+    data = await dashboard_data.collect(user_id)
+    if data is None:
         return _onboarding(), None
-
-    window_start = today - dt.timedelta(days=analytics.VOLUME_WINDOW_DAYS - 1)
-    volume_title, volume_rows = formatting.weekly_volume_panel(
-        await db.weekly_volume_by_group(user_id, window_start.isoformat(), today.isoformat()),
-        await db.list_muscle_groups(user_id),
-    )
-    formula = user["e1rm_formula"]
-    tonnage = sum(
-        (await db.daily_tonnage(user_id, window_start.isoformat(), today.isoformat())).values()
-    )
-    records = await db.e1rm_record_count(user_id, window_start.isoformat(), formula)
-    dashboard = analytics.compute_dashboard(dates, today)
-
-    # Движения — самые частые за окно, по числу тренировок. Не «базовые»: типа
-    # движения в базе нет, и выбирать жим/присед/тягу пришлось бы по каталожным
-    # именам, а у человека со своими названиями список оказался бы пустым.
-    # Кандидатов берётся с запасом (_LIFT_CANDIDATES) — формула роста ниже
-    # отбросит те, что не выросли, и без запаса плиток часто не осталось бы
-    # вовсе.
-    #
-    # У истории моложе восьми недель окно короче (см. _LIFT_FALLBACK_WINDOW_WEEKS):
-    # иначе вся история лежит внутри окна, базы ДО него нет, и секция плиток
-    # пропадает целиком на первые два месяца в боте — самое время видеть прогресс.
-    history_age_weeks = (today - min(dates)).days / 7
-    lift_window_weeks = (
-        _LIFT_FALLBACK_WINDOW_WEEKS if history_age_weeks < _LIFT_WINDOW_WEEKS else _LIFT_WINDOW_WEEKS
-    )
-    lift_start = today - dt.timedelta(weeks=lift_window_weeks)
-    growth: list[tuple[str, float, float]] = []
-    for row in await db.top_exercises_by_frequency(
-        user_id, lift_start.isoformat(), today.isoformat(), limit=_LIFT_CANDIDATES
-    ):
-        before_max, window_max = await db.exercise_e1rm_growth(
-            user_id, row["id"], lift_start.isoformat(), formula
-        )
-        growth.append((row["display_name"], before_max, window_max))
-
-    agg = await db.hall_of_fame_aggregates(user_id)
-    rank = analytics.rank_for(
-        len(dates),
-        formatting.to_kg(agg["tonnage"], user["unit"]),
-        analytics.workouts_per_week(dates, today),
-    )
-    headline = formatting.menu_headline(dashboard)
-    tiles = formatting.menu_tiles(dashboard, tonnage, records, user["unit"], total_workouts=len(dates))
-    lift_tiles = formatting.menu_lift_tiles(growth, user["unit"])
 
     # Ключ кэша собран из того, что реально нарисуется, а не из «даты и числа
     # тренировок»: объём, тоннаж и e1RM меняются от подходов, поэтому по прежнему
     # ключу картинка застывала — дописал четыре подхода в уже закрытую
-    # тренировку, а на экране всё прежнее. Окно роста (lift_window_weeks) в ключ
-    # отдельно не идёт: смена окна (4→8 недель по мере взросления истории) меняет
-    # состав growth, а он уже целиком в tuple(lift_tiles) — второго слепка того
-    # же самого не нужно.
+    # тренировку, а на экране всё прежнее. Здесь это ровно набор аргументов
+    # render_menu_dashboard: картинка — их чистая функция, так что совпал ключ —
+    # совпадут и пиксели. Окно роста (4 или 8 недель) отдельной позиции не
+    # требует: смена окна меняет и состав lift_tiles, и lifts_title, а они в
+    # ключе целиком.
     cache_key = (
-        today, len(dates), max(dates), headline, rank.level, tuple(tiles),
-        tuple(volume_rows), volume_title, tuple(lift_tiles),
+        data.headline, data.rank_name, tuple(data.tiles), tuple(data.volume_rows),
+        data.volume_title, tuple(data.lift_tiles), data.lifts_title, data.lifts_note,
     )
     cached = _heatmap_cache.get(user_id)
     if cached is not None and cached[0] == cache_key:
@@ -987,8 +936,8 @@ async def _menu_view(user_id: int) -> tuple[str, bytes | None]:
 
     png = await asyncio.to_thread(
         charts.render_menu_dashboard,
-        headline, rank.name.upper(), tiles, volume_rows, volume_title, lift_tiles,
-        formatting.menu_lifts_title(lift_window_weeks) if lift_tiles else "", formatting.MENU_LIFTS_NOTE,
+        data.headline, data.rank_name.upper(), data.tiles, data.volume_rows,
+        data.volume_title, data.lift_tiles, data.lifts_title, data.lifts_note,
     )
     _heatmap_cache[user_id] = (cache_key, png)
     return _greeting(), png

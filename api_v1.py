@@ -35,6 +35,7 @@ import api_v1_achievements
 import api_v1_activity
 import api_v1_ai
 import api_v1_common as common
+import api_v1_dashboard
 import api_v1_feedback
 import api_v1_food
 import api_v1_import
@@ -776,6 +777,7 @@ routes += (
     + api_v1_sharing.routes
     + api_v1_media.routes
     + api_v1_feedback.routes
+    + api_v1_dashboard.routes
 )
 
 
