@@ -28,6 +28,7 @@ import db
 import formatting
 import i18n
 import keyboards
+import progress_data
 import state_scaffold
 import timeutil
 import ui
@@ -680,18 +681,6 @@ async def prog_search_text(message: Message, state: FSMContext):
     await message.answer(text, reply_markup=b.as_markup(), parse_mode="HTML")
 
 
-async def _load_sessions(exercise_id: int, formula: str) -> list[analytics.SessionStats]:
-    rows = await db.list_sets_for_exercise(exercise_id)
-    set_rows = [
-        analytics.SetRow(db.load_of(r), r["reps"], r["workout_id"], r["started_at"], r["rpe"])
-        for r in rows
-    ]
-    sessions = analytics.group_sets_by_session(set_rows)
-    for s in sessions:
-        s.formula = formula
-    return sessions
-
-
 # Cached (text, png) per period for whatever exercise a user is currently
 # looking at — one entry per user, not one per (user, exercise), so rapidly
 # flipping 8 -> 20 -> 8 back and forth skips the matplotlib re-render and
@@ -713,7 +702,7 @@ async def _render_progress_view(ex_id: int, user, limit: int, origin: str = "all
     with what's actually plotted.
     """
     ex = await db.get_exercise(ex_id)
-    sessions = await _load_sessions(ex_id, user["e1rm_formula"])
+    sessions = await progress_data.load_sessions(ex_id, user["e1rm_formula"])
     session_notes = await db.list_workout_notes_for_exercise(ex_id)
     fingerprint = (
         tuple(
@@ -731,21 +720,13 @@ async def _render_progress_view(ex_id: int, user, limit: int, origin: str = "all
     if cached is not None:
         text, png = cached
     else:
-        # У упражнения, сменившего режим (подтягивания с весом → своим весом),
-        # в истории живут две несопоставимые величины: килограммы e1RM и голые
-        # повторы. На одной оси они читаются как обвал силы — 110 и 12 рядом.
-        # Поэтому график остаётся про одну величину, а сессии другого режима в
-        # него просто не попадают: рекорды обоих режимов всё равно показаны
-        # текстом выше (formatting.format_progress_screen).
-        chart_is_bw = sessions[-1].is_bodyweight_mode if sessions else False
-        plotted = [s for s in sessions if s.is_bodyweight_mode == chart_is_bw]
-        points: list[tuple[dt.datetime, float]] = [
-            (
-                dt.datetime.fromisoformat(s.started_at),
-                float(s.max_reps_in_set if chart_is_bw else s.top_e1rm),
-            )
-            for s in plotted
-        ]
+        # Точка на ТРЕНИРОВКУ (не на подход), значение — e1RM лучшего подхода,
+        # и только сессии одного режима: вся эта арифметика живёт в
+        # progress_data.chart_series (там же объяснено, почему именно так),
+        # потому что ровно её же отдаёт приложению /v1 — см. api_v1_progress.
+        series = progress_data.chart_series(sessions)
+        chart_is_bw = series.is_bodyweight
+        points: list[tuple[dt.datetime, float]] = series.points
         comparison = analytics.compare_to_previous_session(sessions)
         records = analytics.compute_personal_records(sessions)
 
