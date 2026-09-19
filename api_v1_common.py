@@ -69,12 +69,25 @@ async def json_body(request: Request) -> dict[str, Any]:
     return body
 
 
-def require(body: dict[str, Any], key: str, expected_type: type) -> Any:
+def _type_name(expected_type: type | tuple[type, ...]) -> str:
+    """Имя типа для текста ошибки — и для кортежа тоже.
+
+    `require(body, "weight", (int, float))` — обычный вызов (вес приходит и
+    целым, и дробным), а у кортежа нет `__name__`: до этого хелпера строка
+    собиралась прямо в f-строке, и запрос со строковым весом падал 500-й,
+    хотя проверка типа как раз сработала правильно.
+    """
+    if isinstance(expected_type, tuple):
+        return " or ".join(t.__name__ for t in expected_type)
+    return expected_type.__name__
+
+
+def require(body: dict[str, Any], key: str, expected_type: type | tuple[type, ...]) -> Any:
     if key not in body:
         raise ApiError(400, "bad_request", f"missing field: {key}")
     value = body[key]
     if not isinstance(value, expected_type) or isinstance(value, bool) and expected_type is not bool:
-        raise ApiError(400, "bad_request", f"field {key} must be {expected_type.__name__}")
+        raise ApiError(400, "bad_request", f"field {key} must be {_type_name(expected_type)}")
     return value
 
 

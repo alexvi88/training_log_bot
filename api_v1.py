@@ -603,6 +603,10 @@ async def log_set(request: Request) -> JSONResponse:
     reps = _require(body, "reps", int)
     rpe = body.get("rpe")
     if rpe is not None:
+        # Тем же правилом, что и в api_v1_account.add_workout_set: голый
+        # float() на чужой строке — это 500 вместо внятного 400.
+        if not isinstance(rpe, (int, float)) or isinstance(rpe, bool):
+            raise ApiError(400, "bad_request", "rpe must be a number or null")
         rpe = float(rpe)
     await _owned_exercise(exercise_id, user_id)
     block_id = await _block_for_exercise(workout_id, exercise_id)
