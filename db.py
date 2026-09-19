@@ -336,6 +336,24 @@ CREATE TABLE IF NOT EXISTS ai_conversation_turns (
 );
 CREATE INDEX IF NOT EXISTS idx_ai_conversation_turns_user ON ai_conversation_turns (telegram_id, id);
 
+-- Черновик программы, предложенный тренером через /ai/ask (см. api_v1_ai.py),
+-- и активный опросник перед его сборкой — HTTP-аналог того, что бот держит в
+-- aiogram FSM (ai_program_draft/ai_setup). Один ряд на пользователя (PRIMARY
+-- KEY = telegram_id, INSERT OR REPLACE при записи), ровно как в FSM: новое
+-- предложение тренера затирает старое, а не копится рядом с ним.
+CREATE TABLE IF NOT EXISTS ai_program_drafts (
+    telegram_id INTEGER PRIMARY KEY,
+    draft_id TEXT NOT NULL,
+    draft_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS ai_setup_states (
+    telegram_id INTEGER PRIMARY KEY,
+    state_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS bodyweight_logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     telegram_id INTEGER NOT NULL,
@@ -7357,6 +7375,77 @@ async def clear_ai_conversation_history(telegram_id: int) -> None:
         await conn().execute(
             "DELETE FROM ai_conversation_turns WHERE telegram_id = ?", (telegram_id,)
         )
+        await conn().commit()
+
+
+# ---------- AI trainer: HTTP-аналог ai_program_draft/ai_setup из FSM ----------
+#
+# Бот держит черновик программы и активный опросник в aiogram FSM — состоянии,
+# привязанном к чату. У /ai/ask такого чата нет, поэтому то же самое (ровно
+# один черновик/опросник на пользователя, новый затирает старый) лежит здесь.
+
+async def set_ai_program_draft(telegram_id: int, draft_id: str, draft: dict[str, Any]) -> None:
+    async with _write_lock:
+        await conn().execute(
+            "INSERT INTO ai_program_drafts (telegram_id, draft_id, draft_json, created_at) "
+            "VALUES (?, ?, ?, ?) ON CONFLICT(telegram_id) DO UPDATE SET "
+            "draft_id = excluded.draft_id, draft_json = excluded.draft_json, created_at = excluded.created_at",
+            (telegram_id, draft_id, json.dumps(draft, ensure_ascii=False), now_iso()),
+        )
+        await conn().commit()
+
+
+async def get_ai_program_draft(telegram_id: int) -> Optional[dict[str, Any]]:
+    """Черновик как есть в FSM бота: `{"id": ..., "name": ..., "days": [...], ...}`."""
+    cur = await conn().execute(
+        "SELECT draft_id, draft_json FROM ai_program_drafts WHERE telegram_id = ?",
+        (telegram_id,),
+    )
+    row = await cur.fetchone()
+    if row is None:
+        return None
+    try:
+        draft = json.loads(row["draft_json"])
+    except (TypeError, ValueError):
+        logger.exception("corrupt ai_program_drafts.draft_json for user %s", telegram_id)
+        return None
+    draft["id"] = row["draft_id"]
+    return draft
+
+
+async def clear_ai_program_draft(telegram_id: int) -> None:
+    async with _write_lock:
+        await conn().execute("DELETE FROM ai_program_drafts WHERE telegram_id = ?", (telegram_id,))
+        await conn().commit()
+
+
+async def set_ai_setup_state(telegram_id: int, state: dict[str, Any]) -> None:
+    async with _write_lock:
+        await conn().execute(
+            "INSERT INTO ai_setup_states (telegram_id, state_json, created_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(telegram_id) DO UPDATE SET state_json = excluded.state_json, created_at = excluded.created_at",
+            (telegram_id, json.dumps(state, ensure_ascii=False), now_iso()),
+        )
+        await conn().commit()
+
+
+async def get_ai_setup_state(telegram_id: int) -> Optional[dict[str, Any]]:
+    cur = await conn().execute(
+        "SELECT state_json FROM ai_setup_states WHERE telegram_id = ?", (telegram_id,)
+    )
+    row = await cur.fetchone()
+    if row is None:
+        return None
+    try:
+        return json.loads(row["state_json"])
+    except (TypeError, ValueError):
+        logger.exception("corrupt ai_setup_states.state_json for user %s", telegram_id)
+        return None
+
+
+async def clear_ai_setup_state(telegram_id: int) -> None:
+    async with _write_lock:
+        await conn().execute("DELETE FROM ai_setup_states WHERE telegram_id = ?", (telegram_id,))
         await conn().commit()
 
 

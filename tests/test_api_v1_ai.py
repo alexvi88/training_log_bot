@@ -16,6 +16,11 @@ import ai_trainer
 import api_v1
 import config
 
+# Из глобального каталога (seed_data.EXERCISE_TEMPLATES) — резолвится у любого
+# пользователя, даже пустого, тем же путём, что и в tests/test_ai_program_builder.py.
+TEMPLATE_A = "Жим штанги лёжа"
+TEMPLATE_B = "Присед со штангой"
+
 
 @pytest.fixture
 def client_factory():
@@ -152,11 +157,13 @@ async def test_ask_returns_model_answer_and_charges_quota(fresh_db, client_facto
         assert question == "Как мой прогресс?"
         # У нового пользователя персистентная история ещё пуста.
         assert history == []
-        # on_wire подключён — им сохраняется история; on_program/on_action/
-        # on_questions/on_chunk (заготовки под инлайн-кнопки и стрим бота) по-прежнему
-        # не подключены с HTTP-стороны.
-        assert set(kwargs) == {"on_wire"}
-        assert callable(kwargs["on_wire"])
+        # on_program/on_action/on_questions/on_wire подключены (см. _run_turn в
+        # api_v1_ai.py) — черновик программы, действия и опросник теперь
+        # доезжают до ответа /ai/ask; on_chunk (стрим бота) остаётся
+        # телеграм-специфичным и не подключён.
+        assert set(kwargs) == {"on_program", "on_action", "on_questions", "on_wire"}
+        for cb in kwargs.values():
+            assert callable(cb)
         return "Ты молодец, продолжай в том же духе!"
 
     monkeypatch.setattr(ai_trainer, "ask", fake_ask)
@@ -401,3 +408,217 @@ async def test_history_is_private_per_user(fresh_db, client_factory, monkeypatch
 
     resp_b = await client_b.get("/ai/history")
     assert resp_b.json()["messages"] == []
+
+
+# ---------- черновик программы (POST /ai/ask → program, POST /ai/program/save) ----------
+
+
+def _fake_ask_proposing_program(name: str = "Фуллбоди"):
+    """Как настоящий ask(): реально резолвит упражнения через propose_program
+    (execute_tool), а не выдумывает форму черновика руками."""
+
+    async def fake_ask(user_id, question, history, on_program=None, **kwargs):
+        tool_input = {
+            "name": name,
+            "days": [
+                {"name": "День 1", "exercises": [
+                    {"name": TEMPLATE_A, "sets": 3, "reps_min": 5, "reps_max": 8},
+                    {"name": TEMPLATE_B, "sets": 4, "reps_min": 6, "reps_max": 10},
+                ]},
+            ],
+            "description": "Простая база на всё тело.",
+        }
+        await ai_trainer.execute_tool(user_id, "propose_program", tool_input, on_program=on_program)
+        return "Собрал программу — жми кнопку под ответом."
+
+    return fake_ask
+
+
+@pytest.mark.asyncio
+async def test_ask_returns_program_draft_with_composition(fresh_db, client_factory, monkeypatch):
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(ai_trainer, "ask", _fake_ask_proposing_program())
+    client = await _linked_client(fresh_db, client_factory)
+
+    resp = await client.post("/ai/ask", json={"question": "Собери мне программу"})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+
+    program = body["program"]
+    assert program is not None
+    assert program["name"] == "Фуллбоди"
+    assert program["description"] == "Простая база на всё тело."
+    # Один день — это тренировка, а не программа: по ней можно пойти прямо
+    # сейчас, ничего себе не заводя (см. keyboards.ai_program_preview_keyboard).
+    assert program["can_train_now"] is True
+    assert program["replacing"] is False
+    assert program["label"]  # локализованная подпись кнопки "Забрать: ..."
+    assert len(program["days"]) == 1
+    day = program["days"][0]
+    assert day["name"] == "День 1"
+    exercise_names = {item["name"] for item in day["items"]}
+    assert exercise_names == {TEMPLATE_A, TEMPLATE_B}
+    # Опросника в этом же ходе быть не должно — программа и опросник
+    # взаимоисключающи (см. api_v1_ai._turn_response).
+    assert body["questions"] is None
+
+
+@pytest.mark.asyncio
+async def test_save_program_creates_routine_with_days_and_exercises(fresh_db, client_factory, monkeypatch):
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(ai_trainer, "ask", _fake_ask_proposing_program())
+    client = await _linked_client(fresh_db, client_factory)
+
+    ask_resp = await client.post("/ai/ask", json={"question": "Собери мне программу"})
+    draft_id = ask_resp.json()["program"]["draft_id"]
+
+    resp = await client.post("/ai/program/save", json={"draft_id": draft_id})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["day_count"] == 1
+    assert body["replacing"] is False
+
+    routines = await fresh_db.list_routines(111)
+    assert len(routines) == 1
+    assert routines[0]["program_name"] == "Фуллбоди"
+    exercises = await fresh_db.list_routine_exercises(routines[0]["id"])
+    assert {ex["display_name"] for ex in exercises} == {TEMPLATE_A, TEMPLATE_B}
+
+
+@pytest.mark.asyncio
+async def test_save_program_requires_auth(client_factory):
+    client = client_factory()
+    resp = await client.post("/ai/program/save", json={"draft_id": "whatever"})
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_save_program_rejects_missing_draft(fresh_db, client_factory, monkeypatch):
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    client = await _linked_client(fresh_db, client_factory)
+
+    resp = await client.post("/ai/program/save", json={"draft_id": "does-not-exist"})
+    assert resp.status_code == 404
+    assert resp.json()["error"] == "draft_not_found"
+
+
+@pytest.mark.asyncio
+async def test_save_program_does_not_save_someone_elses_draft(fresh_db, client_factory, monkeypatch):
+    """Черновик пользователя A не виден и не сохраняем пользователем B —
+    ai_program_drafts ключуется по telegram_id из его же токена."""
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(ai_trainer, "ask", _fake_ask_proposing_program())
+
+    client_a = await _linked_client(fresh_db, client_factory, telegram_id=111)
+    client_b = await _linked_client(fresh_db, client_factory, telegram_id=222)
+
+    ask_resp = await client_a.post("/ai/ask", json={"question": "Собери мне программу"})
+    draft_id = ask_resp.json()["program"]["draft_id"]
+
+    resp = await client_b.post("/ai/program/save", json={"draft_id": draft_id})
+    assert resp.status_code == 404
+
+    # У пользователя A черновик тем временем остаётся на месте и сохраняется как обычно.
+    resp_a = await client_a.post("/ai/program/save", json={"draft_id": draft_id})
+    assert resp_a.status_code == 200, resp_a.text
+    assert await fresh_db.list_routines(111) != []
+    assert await fresh_db.list_routines(222) == []
+
+
+@pytest.mark.asyncio
+async def test_ask_returns_mentioned_exercises_and_programs(fresh_db, client_factory, monkeypatch):
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    await fresh_db.get_or_create_user_exercise_by_name(111, TEMPLATE_A)
+
+    async def fake_ask(user_id, question, history, **kwargs):
+        return f"Продолжай делать {TEMPLATE_A} — это твоё упражнение."
+
+    monkeypatch.setattr(ai_trainer, "ask", fake_ask)
+    client = await _linked_client(fresh_db, client_factory)
+
+    resp = await client.post("/ai/ask", json={"question": "Что мне делать?"})
+    assert resp.status_code == 200, resp.text
+    mentions = resp.json()["mentions"]
+    assert any(ex["display_name"] == TEMPLATE_A for ex in mentions["exercises"])
+
+
+# ---------- опросник перед сборкой программы (POST /ai/questions/answer) ----------
+
+
+def _fake_ask_with_questions(*question_texts: str):
+    async def fake_ask(user_id, question, history, on_questions=None, **kwargs):
+        if on_questions is not None:
+            await on_questions([{"question": text, "choices": []} for text in question_texts])
+        return "Уточню пару вещей, прежде чем собрать план."
+
+    return fake_ask
+
+
+@pytest.mark.asyncio
+async def test_ask_returns_setup_questions(fresh_db, client_factory, monkeypatch):
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(ai_trainer, "ask", _fake_ask_with_questions("Сколько дней в неделю?"))
+    client = await _linked_client(fresh_db, client_factory)
+    # Профиль с уже заполненной целью — иначе первым вопросом всегда встаёт
+    # вопрос о цели (ai_setup_flow.questions_with_goal), и тест зависел бы от
+    # текста, которого сам не задавал.
+    await fresh_db.update_user(111, goal="набор массы")
+
+    resp = await client.post("/ai/ask", json={"question": "Собери программу"})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["program"] is None
+    questions = body["questions"]
+    assert questions is not None
+    assert questions["index"] == 0
+    assert questions["total"] == 1
+    assert questions["question"] == "Сколько дней в неделю?"
+    assert questions["skip_label"]
+
+
+@pytest.mark.asyncio
+async def test_questions_answer_advances_and_then_finishes(fresh_db, client_factory, monkeypatch):
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(
+        ai_trainer, "ask", _fake_ask_with_questions("Сколько дней в неделю?", "Есть травмы?")
+    )
+    client = await _linked_client(fresh_db, client_factory)
+    await fresh_db.update_user(111, goal="набор массы")
+
+    ask_resp = await client.post("/ai/ask", json={"question": "Собери программу"})
+    assert ask_resp.json()["questions"]["total"] == 2
+
+    # Первый ответ — просто продвигает опросник дальше, модель ещё не зовётся.
+    resp1 = await client.post("/ai/questions/answer", json={"question_index": 0, "answer": "3 дня"})
+    assert resp1.status_code == 200, resp1.text
+    body1 = resp1.json()
+    assert body1["questions"]["index"] == 1
+    assert body1["answer"] is None
+
+    # Второй (последний) ответ уходит собирать план — model.ask() вызывается снова.
+    monkeypatch.setattr(ai_trainer, "ask", _fake_ask_proposing_program("Программа после опроса"))
+    resp2 = await client.post("/ai/questions/answer", json={"question_index": 1, "answer": None})
+    assert resp2.status_code == 200, resp2.text
+    body2 = resp2.json()
+    assert body2["questions"] is None
+    assert body2["program"]["name"] == "Программа после опроса"
+
+
+@pytest.mark.asyncio
+async def test_questions_answer_rejects_wrong_index(fresh_db, client_factory, monkeypatch):
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(ai_trainer, "ask", _fake_ask_with_questions("Сколько дней в неделю?"))
+    client = await _linked_client(fresh_db, client_factory)
+    await fresh_db.update_user(111, goal="набор массы")
+
+    await client.post("/ai/ask", json={"question": "Собери программу"})
+    resp = await client.post("/ai/questions/answer", json={"question_index": 5, "answer": "что угодно"})
+    assert resp.status_code == 409
+    assert resp.json()["error"] == "setup_stale"
+
+
+@pytest.mark.asyncio
+async def test_questions_answer_requires_auth(client_factory):
+    client = client_factory()
+    resp = await client.post("/ai/questions/answer", json={"question_index": 0, "answer": "x"})
+    assert resp.status_code == 401
