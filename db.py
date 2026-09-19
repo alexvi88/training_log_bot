@@ -5657,28 +5657,36 @@ async def reorder_program_day(routine_id: int, direction: str) -> None:
     первому месту, а сдвинуть его можно было бы только подняв по очереди все
     остальные.
     """
-    routine = await get_routine(routine_id)
-    if routine is None or routine["program_id"] is None:
-        return
-    days = await list_program_days_by_id(routine["program_id"])
-    ids = [d["id"] for d in days]
-    if routine_id not in ids or len(ids) < 2:
-        return
-    idx = ids.index(routine_id)
-    neighbour = (idx - 1 if direction == "up" else idx + 1) % len(ids)
-    if neighbour == idx:
-        return
-    a = days[idx]
-    if abs(neighbour - idx) == 1:
-        b = days[neighbour]
-        pairs = [(a["id"], b["day_order"]), (b["id"], a["day_order"])]
-    else:
-        # Перенос через край: остальные сдвигаются на одну позицию, иначе обмен
-        # первого с последним перетасовал бы весь список, а не сдвинул на шаг.
-        rest = [d for d in days if d["id"] != a["id"]]
-        order = [*rest, a] if direction == "up" else [a, *rest]
-        pairs = [(d["id"], i) for i, d in enumerate(order)]
+    # Под замком ВСЯ операция, а не только записи. Порядок считается по
+    # прочитанному списку, поэтому чтение и запись обязаны быть неделимы:
+    # иначе два одновременных «вверх» и «вниз» читают один и тот же список,
+    # каждый решает по нему, и второй пишет позиции, посчитанные по уже
+    # устаревшему состоянию — в программе появляется и дубль day_order, и
+    # дыра на освободившемся месте. С двумя клиентами (бот и приложение) это
+    # уже не теоретический сценарий.
     async with _write_lock:
+        routine = await get_routine(routine_id)
+        if routine is None or routine["program_id"] is None:
+            return
+        days = await list_program_days_by_id(routine["program_id"])
+        ids = [d["id"] for d in days]
+        if routine_id not in ids or len(ids) < 2:
+            return
+        idx = ids.index(routine_id)
+        neighbour = (idx - 1 if direction == "up" else idx + 1) % len(ids)
+        if neighbour == idx:
+            return
+        a = days[idx]
+        if abs(neighbour - idx) == 1:
+            b = days[neighbour]
+            pairs = [(a["id"], b["day_order"]), (b["id"], a["day_order"])]
+        else:
+            # Перенос через край: остальные сдвигаются на одну позицию, иначе
+            # обмен первого с последним перетасовал бы весь список, а не
+            # сдвинул на шаг.
+            rest = [d for d in days if d["id"] != a["id"]]
+            order = [*rest, a] if direction == "up" else [a, *rest]
+            pairs = [(d["id"], i) for i, d in enumerate(order)]
         for day_id, day_order in pairs:
             await conn().execute(
                 "UPDATE routines SET day_order = ? WHERE id = ?", (day_order, day_id)
@@ -5774,30 +5782,35 @@ async def reorder_routine_exercise(routine_exercise_id: int, direction: str) -> 
     первое упражнение было бы намертво приколочено к первому месту, а сдвинуть
     его можно было бы только подняв по очереди все остальные.
     """
-    entry = await get_routine_exercise(routine_exercise_id)
-    if entry is None:
-        return
-    exercises = await list_routine_exercises(entry["routine_id"])
-    ids = [ex["id"] for ex in exercises]
-    if routine_exercise_id not in ids:
-        return
-    idx = ids.index(routine_exercise_id)
-    if len(ids) < 2:
-        return
-    neighbor_idx = (idx - 1 if direction == "up" else idx + 1) % len(ids)
-    if neighbor_idx == idx:
-        return
-    a, b = exercises[idx], exercises[neighbor_idx]
-    if abs(neighbor_idx - idx) == 1:
-        # Обычный шаг — меняем местами с соседом.
-        pairs = [(a["id"], b["order_index"]), (b["id"], a["order_index"])]
-    else:
-        # Перенос через край: остальные сдвигаются на одну позицию, иначе обмен
-        # первого с последним перетасовал бы весь список, а не сдвинул на шаг.
-        rest = [ex for ex in exercises if ex["id"] != a["id"]]
-        order = [*rest, a] if direction == "up" else [a, *rest]
-        pairs = [(ex["id"], i) for i, ex in enumerate(order)]
+    # Под замком ВСЯ операция — по той же причине, что в reorder_program_day
+    # выше: порядок считается по прочитанному списку, и чтение, отделённое от
+    # записи, даёт при двух одновременных перестановках дубль order_index и
+    # дыру на его месте.
     async with _write_lock:
+        entry = await get_routine_exercise(routine_exercise_id)
+        if entry is None:
+            return
+        exercises = await list_routine_exercises(entry["routine_id"])
+        ids = [ex["id"] for ex in exercises]
+        if routine_exercise_id not in ids:
+            return
+        idx = ids.index(routine_exercise_id)
+        if len(ids) < 2:
+            return
+        neighbor_idx = (idx - 1 if direction == "up" else idx + 1) % len(ids)
+        if neighbor_idx == idx:
+            return
+        a, b = exercises[idx], exercises[neighbor_idx]
+        if abs(neighbor_idx - idx) == 1:
+            # Обычный шаг — меняем местами с соседом.
+            pairs = [(a["id"], b["order_index"]), (b["id"], a["order_index"])]
+        else:
+            # Перенос через край: остальные сдвигаются на одну позицию, иначе
+            # обмен первого с последним перетасовал бы весь список, а не
+            # сдвинул на шаг.
+            rest = [ex for ex in exercises if ex["id"] != a["id"]]
+            order = [*rest, a] if direction == "up" else [a, *rest]
+            pairs = [(ex["id"], i) for i, ex in enumerate(order)]
         for ex_id, order_index in pairs:
             await conn().execute(
                 "UPDATE routine_exercises SET order_index = ? WHERE id = ?", (order_index, ex_id)

@@ -6,6 +6,8 @@
 должен быть виден и правим по чужому токену.
 """
 
+import asyncio
+
 import httpx
 import pytest
 
@@ -629,3 +631,62 @@ async def test_foreign_routine_exercise_is_hidden(fresh_db, client_factory):
     # владелец по-прежнему может это делать — строка не тронута чужим токеном
     still_there = await owner.get(f"/routines/{routine_id}")
     assert len(still_there.json()["exercises"]) == 1
+
+
+async def test_concurrent_reorder_keeps_day_order_intact(fresh_db, client_factory):
+    """Две одновременные перестановки не дают ни дубля, ни дыры в порядке.
+
+    Сценарий не выдуманный: у одного человека две поверхности (бот и
+    приложение), плюс двойной тап по стрелке с повтором запроса. Пока чтение
+    списка было вне `_write_lock`, оба запроса читали одно состояние, каждый
+    считал позиции по нему, и второй записывал числа, посчитанные по уже
+    устаревшему списку — день получал чужой day_order, а освободившееся место
+    оставалось пустым.
+
+    Проверяется инвариант, а не конкретный итоговый порядок: кто из двух
+    запросов лёг первым — дело планировщика, и требовать от него
+    определённости значило бы проверять не то.
+    """
+    client = await _linked_client(fresh_db, client_factory)
+    user_id = 111
+    program_id = await db.create_program(user_id, "Сплит")
+    day_ids = [
+        await db.create_routine(user_id, name, program_id=program_id)
+        for name in ("Грудь", "Спина", "Ноги")
+    ]
+
+    await asyncio.gather(
+        client.post(f"/routines/{day_ids[0]}/reorder", json={"direction": "up"}),
+        client.post(f"/routines/{day_ids[1]}/reorder", json={"direction": "down"}),
+    )
+
+    days = await db.list_program_days_by_id(program_id)
+    orders = sorted(d["day_order"] for d in days)
+    assert orders == list(range(len(day_ids))), (
+        f"порядок дней разъехался: {[(d['name'], d['day_order']) for d in days]}"
+    )
+
+
+async def test_concurrent_reorder_keeps_exercise_order_intact(fresh_db, client_factory):
+    """То же для упражнений внутри дня — та же функция, та же гонка."""
+    client = await _linked_client(fresh_db, client_factory)
+    user_id = 111
+    routine_id = await db.create_routine(user_id, "День")
+    group_id = await db.create_muscle_group(user_id, "Грудь")
+    for index, name in enumerate(("Жим", "Разводка", "Отжимания")):
+        exercise_id = await db.create_exercise(user_id, name, group_id)
+        await db.add_routine_exercise(routine_id, exercise_id, index)
+    # Идентификаторы строк дня заводит сама вставка — перечитываем их, а не
+    # угадываем по порядку создания.
+    item_ids = [item["id"] for item in await db.list_routine_exercises(routine_id)]
+
+    await asyncio.gather(
+        client.post(f"/routine-exercises/{item_ids[0]}/reorder", json={"direction": "up"}),
+        client.post(f"/routine-exercises/{item_ids[1]}/reorder", json={"direction": "down"}),
+    )
+
+    items = await db.list_routine_exercises(routine_id)
+    orders = sorted(item["order_index"] for item in items)
+    assert orders == list(range(len(item_ids))), (
+        f"порядок упражнений разъехался: {[(i['id'], i['order_index']) for i in items]}"
+    )
