@@ -44,6 +44,22 @@
   (роль, текст, время), без wire-формата с tool-calls — клиенту нечего с
   ними делать, а тащить внутренности модели в JSON лишним трафиком незачем.
   Сырой wire-формат остаётся только в БД, для самой модели.
+- `GET /ai/pending` — незавершённое состояние разговора: черновик программы
+  (`program`, тем же JSON, что и в ответе `/ai/ask` — с `draft_id`, чтобы
+  «Забрать себе» было чем вызвать) и/или текущий неотвеченный вопрос
+  опросника (`questions`, тем же JSON, что и там же). Оба уже лежат в БД
+  (`ai_program_drafts`/`ai_setup_states`) ради `/ai/program/save` и
+  `/ai/questions/answer` — этой ручки не хватало только чтобы клиент мог их
+  ПРОЧИТАТЬ, а не только записать ответ на них. Отдельная ручка, а не поле в
+  `GET /ai/history`: у истории свой контракт («роль/текст/время» реплик, см.
+  выше) и свои читатели (бесконечная лента чата) — вклинивать в неё разовое
+  состояние «что сейчас висит под последней репликой» означало бы менять её
+  форму всем, кому нужен только текст, ради потребности одного конкретного
+  экрана. Упоминания (`mentions` из `/ai/ask`) сюда сознательно не попадают:
+  это ссылки на слова уже видимого текста ответа, а не отдельное состояние
+  сервера, и без текста, из которого их искать (find_in_text), взять их
+  неоткуда — раз текст уже виден в истории, потерянные при уходе с экрана
+  кликабельные ссылки на него не стоят отдельной ручки.
 - `DELETE /ai/history` — «начать разговор заново». Без него испорченный
   контекст (модель зацепилась не за то в старом ходу) нечем починить.
 - `GET /ai/thinking` — фразы для плейсхолдера «тренер думает», пока идёт
@@ -855,6 +871,40 @@ async def ask_video(request: Request) -> JSONResponse:
         _busy.discard(user_id)
 
 
+async def get_pending_state(request: Request) -> JSONResponse:
+    """Незавершённое состояние разговора — то, что должно висеть карточкой под
+    последней репликой тренера, но само по себе не текст и потому не попадает
+    в `GET /ai/history` (см. докстринг модуля). Ушёл с экрана и вернулся —
+    ровно это клиент и должен перерисовать поверх подтянутой истории.
+
+    Черновик и опросник взаимоисключающи и в БД (см. `_turn_response`: конец
+    хода с программой чистит `ai_setup_states`, и наоборот) — но здесь это не
+    проверяется отдельно, а просто отдаётся оба поля как есть: если оба вдруг
+    пусты, ответ — `{"program": None, "questions": None}`, и это не ошибка, а
+    нормальное «сейчас ничего не висит» (у бота в этом случае под последним
+    сообщением просто нет клавиатуры).
+    """
+    user_id = await common.authed_user_id(request)
+    user = await db.get_user(user_id)
+    lang = user["lang"] if user is not None else "ru"
+
+    draft = await db.get_ai_program_draft(user_id)
+    setup_state = await db.get_ai_setup_state(user_id)
+
+    with i18n.use_lang(lang):
+        program_json = _program_json(draft["id"], draft) if draft else None
+        # Пустой список вопросов — теоретически невозможное, но не проверяемое
+        # здесь состояние БД (см. _next_setup_step): не рисовать несуществующий
+        # вопрос лучше, чем упасть на IndexError из _question_json.
+        questions_json = (
+            _question_json(setup_state)
+            if setup_state and setup_state.get("questions")
+            else None
+        )
+
+    return JSONResponse({"program": program_json, "questions": questions_json})
+
+
 async def get_history(request: Request) -> JSONResponse:
     """История для отрисовки чата: только видимая часть (роль/текст/время),
     без wire-формата — клиенту нечего делать с tool-calls модели, и тащить их
@@ -931,6 +981,7 @@ routes = [
     Route("/ai/video", ask_video, methods=["POST"]),
     Route("/ai/questions/answer", answer_setup_question, methods=["POST"]),
     Route("/ai/program/save", save_program, methods=["POST"]),
+    Route("/ai/pending", get_pending_state, methods=["GET"]),
     Route("/ai/history", get_history, methods=["GET"]),
     Route("/ai/history", delete_history, methods=["DELETE"]),
     Route("/ai/thinking", get_thinking, methods=["GET"]),
