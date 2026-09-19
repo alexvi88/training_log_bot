@@ -686,6 +686,93 @@ async def test_questions_answer_requires_auth(client_factory):
     assert resp.status_code == 401
 
 
+# ---------- незавершённое состояние разговора (GET /ai/pending) ----------
+
+
+@pytest.mark.asyncio
+async def test_pending_requires_auth(client_factory):
+    client = client_factory()
+    resp = await client.get("/ai/pending")
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_pending_empty_when_nothing_hangs(fresh_db, client_factory, monkeypatch):
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    client = await _linked_client(fresh_db, client_factory)
+
+    resp = await client.get("/ai/pending")
+    assert resp.status_code == 200
+    assert resp.json() == {"program": None, "questions": None}
+
+
+@pytest.mark.asyncio
+async def test_pending_returns_program_draft_after_reload(fresh_db, client_factory, monkeypatch):
+    """Тот самый сценарий из жалобы: тренер собрал программу, экран
+    перезагрузили (новый GET, как будто вернулись в чат) — карточка должна
+    восстановиться с настоящим draft_id, которым реально можно вызвать
+    POST /ai/program/save."""
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(ai_trainer, "ask", _fake_ask_proposing_program())
+    client = await _linked_client(fresh_db, client_factory)
+
+    ask_resp = await client.post("/ai/ask", json={"question": "Собери мне программу"})
+    draft_id = ask_resp.json()["program"]["draft_id"]
+
+    resp = await client.get("/ai/pending")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["questions"] is None
+    assert body["program"]["draft_id"] == draft_id
+    assert body["program"]["name"] == "Фуллбоди"
+    assert body["program"]["label"]
+
+    # И этим draft_id реально можно забрать программу — не бутафорский id.
+    save_resp = await client.post("/ai/program/save", json={"draft_id": body["program"]["draft_id"]})
+    assert save_resp.status_code == 200, save_resp.text
+
+
+@pytest.mark.asyncio
+async def test_pending_returns_current_setup_question_after_reload(fresh_db, client_factory, monkeypatch):
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(
+        ai_trainer, "ask", _fake_ask_with_questions("Сколько дней в неделю?", "Есть травмы?")
+    )
+    client = await _linked_client(fresh_db, client_factory)
+    await fresh_db.update_user(111, goal="набор массы")
+
+    await client.post("/ai/ask", json={"question": "Собери программу"})
+    await client.post("/ai/questions/answer", json={"question_index": 0, "answer": "3 дня"})
+
+    resp = await client.get("/ai/pending")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["program"] is None
+    assert body["questions"]["index"] == 1
+    assert body["questions"]["total"] == 2
+    assert body["questions"]["question"] == "Есть травмы?"
+    assert body["questions"]["skip_label"]
+
+
+@pytest.mark.asyncio
+async def test_pending_is_private_per_user(fresh_db, client_factory, monkeypatch):
+    """Черновик и опросник пользователя A не видны пользователю B — та же
+    гарантия, что и у /ai/program/save (ключуется по telegram_id из токена)."""
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    monkeypatch.setattr(ai_trainer, "ask", _fake_ask_proposing_program())
+
+    client_a = await _linked_client(fresh_db, client_factory, telegram_id=111)
+    client_b = await _linked_client(fresh_db, client_factory, telegram_id=222)
+
+    await client_a.post("/ai/ask", json={"question": "Собери мне программу"})
+
+    resp_a = await client_a.get("/ai/pending")
+    assert resp_a.json()["program"] is not None
+
+    resp_b = await client_b.get("/ai/pending")
+    assert resp_b.json() == {"program": None, "questions": None}
+
+
 # ---------- фото к вопросу (POST /ai/ask, image_data_url) ----------
 
 
