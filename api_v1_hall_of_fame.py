@@ -21,6 +21,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
+import analytics
 import db
 import formatting
 import hall_of_fame_data
@@ -94,6 +95,48 @@ async def get_hall_of_fame(request: Request) -> JSONResponse:
         return JSONResponse(_hall_of_fame_json(hof))
 
 
+def _rank_rung_json(rank: "analytics.Rank") -> dict[str, Any]:
+    """Одна ступень лестницы («🎖 Звания», rank:ladder в handlers/history.py) —
+    пороги отдаём числами из analytics.RANKS, а не текстом: дублировать их на
+    клиенте нельзя (задача аудита), и клиент сам решает, как подписать «ещё
+    N тренировок» на своём языке форматирования чисел."""
+    return {
+        "level": rank.level,
+        "emoji": rank.emoji,
+        "name": rank.name,
+        "min_workouts": rank.min_workouts,
+        "min_tonnage_kg": rank.min_tonnage_kg,
+        "min_per_week": rank.min_per_week,
+    }
+
+
+async def get_rank_ladder(request: Request) -> JSONResponse:
+    """Вся лестница званий («🎖 Звания» в боте) — пороги analytics.RANKS,
+    текущая ступень и текущая частота тренировок.
+
+    В отличие от GET /hall-of-fame эта ручка не отдаёт `null` на пустой
+    истории: лестница и стартовая ступень («🚪», level 0) видны с первого дня —
+    именно на ней и стоит новичок, и это единственное место, где он вообще
+    может её увидеть."""
+    user_id = await authed_user_id(request)
+    user = await db.get_user(user_id)
+    if user is None:
+        raise ApiError(404, "not_found", "user not found")
+    with i18n.use_lang(user["lang"]):
+        # Тот же сбор, что и у /hall-of-fame — level и per_week уже посчитаны
+        # там одним расчётом (analytics.rank_for/workouts_per_week), второй раз
+        # считать их здесь незачем.
+        hof = await hall_of_fame_data.collect(user_id)
+        return JSONResponse(
+            {
+                "ranks": [_rank_rung_json(rank) for rank in analytics.RANKS],
+                "current_level": hof.rank.level,
+                "per_week": round(hof.per_week, 2),
+            }
+        )
+
+
 routes = [
     Route("/hall-of-fame", get_hall_of_fame, methods=["GET"]),
+    Route("/hall-of-fame/rank-ladder", get_rank_ladder, methods=["GET"]),
 ]

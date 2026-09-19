@@ -380,6 +380,70 @@ async def test_update_note_rejects_another_users_workout(fresh_db, client_factor
 
 
 @pytest.mark.asyncio
+async def test_exercise_note_is_separate_from_workout_note(fresh_db, client_factory):
+    """PATCH .../exercises/{id}/note — заметка к упражнению В ЭТОЙ тренировке
+    (live:note бота), а не к тренировке целиком (PATCH .../note): у них разные
+    ключи хранения, и запись в один не должна трогать другой."""
+    client = await _linked_client(fresh_db, client_factory)
+    exercise_id = (await client.post("/exercises", json={"name": "Присед"})).json()["id"]
+    workout_id = (await client.post("/workouts/active")).json()["id"]
+    await client.post(
+        f"/workouts/{workout_id}/sets", json={"exercise_id": exercise_id, "weight": 100, "reps": 5}
+    )
+
+    resp = await client.patch(
+        f"/workouts/{workout_id}/exercises/{exercise_id}/note",
+        json={"note": "болит колено"},
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {"exercise_id": exercise_id, "note": "болит колено"}
+
+    detail = await client.get(f"/workouts/{workout_id}")
+    assert detail.status_code == 200
+    exercise_json = detail.json()["blocks"][0]["exercises"][0]
+    assert exercise_json["note"] == "болит колено"
+    # Заметка ко всей тренировке остаётся отдельным полем и осталась пустой.
+    assert detail.json()["note"] is None
+
+
+@pytest.mark.asyncio
+async def test_exercise_note_empty_string_clears_it(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    exercise_id = (await client.post("/exercises", json={"name": "Тяга"})).json()["id"]
+    workout_id = (await client.post("/workouts/active")).json()["id"]
+    await client.patch(
+        f"/workouts/{workout_id}/exercises/{exercise_id}/note", json={"note": "тест"}
+    )
+
+    cleared = await client.patch(
+        f"/workouts/{workout_id}/exercises/{exercise_id}/note", json={"note": ""}
+    )
+    assert cleared.status_code == 200
+    assert cleared.json()["note"] is None
+
+
+@pytest.mark.asyncio
+async def test_exercise_note_rejects_another_users_workout_or_exercise(fresh_db, client_factory):
+    client_a = await _linked_client(fresh_db, client_factory, telegram_id=111)
+    client_b = await _linked_client(fresh_db, client_factory, telegram_id=222)
+    exercise_id = (await client_a.post("/exercises", json={"name": "Жим"})).json()["id"]
+    workout_id = (await client_a.post("/workouts/active")).json()["id"]
+
+    # Чужая тренировка.
+    resp = await client_b.patch(
+        f"/workouts/{workout_id}/exercises/{exercise_id}/note", json={"note": "чужое"}
+    )
+    assert resp.status_code == 404
+
+    # Своя тренировка, но чужое упражнение.
+    other_workout_id = (await client_b.post("/workouts/active")).json()["id"]
+    resp = await client_b.patch(
+        f"/workouts/{other_workout_id}/exercises/{exercise_id}/note", json={"note": "чужое"}
+    )
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_delete_last_set(fresh_db, client_factory):
     client = await _linked_client(fresh_db, client_factory)
     exercise_id = (await client.post("/exercises", json={"name": "Присед"})).json()["id"]
