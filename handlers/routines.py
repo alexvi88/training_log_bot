@@ -113,7 +113,13 @@ class DropInputStateOnExit(BaseMiddleware):
 router.callback_query.middleware(DropInputStateOnExit())
 
 
-async def show_manage(event, state: FSMContext) -> None:
+# Размер страницы списка «🗂 Программы». Восемь — как у истории тренировок
+# (handlers.history.HISTORY_PAGE_SIZE): столько же строк-целей, а ниже стоят
+# ещё четыре постоянные кнопки, так что экран остаётся одним касанием прокрутки.
+MANAGE_PAGE_SIZE = 8
+
+
+async def show_manage(event, state: FSMContext, page: int = 0) -> None:
     user_id = event.from_user.id
     # Черновик «➕ Добавить день» живёт в data, а не в состоянии, поэтому
     # middleware выше его не снимает — а уйти из него можно ровно сюда, в список
@@ -126,6 +132,17 @@ async def show_manage(event, state: FSMContext) -> None:
     # (rt_program_days): иначе один добавленный сплит занимает три-четыре кнопки.
     programs = await db.list_programs(user_id)
     routines = await db.list_standalone_routines(user_id)
+    # Страницу режем по СКЛЕЙКЕ многодневок и одиночных дней: это один список
+    # для человека, и разрывать его на «страницы программ» и «страницы дней»
+    # значило бы объяснять ему внутреннее устройство базы.
+    total = len(programs) + len(routines)
+    page = max(0, min(page, max(0, (total - 1) // MANAGE_PAGE_SIZE)))
+    start = page * MANAGE_PAGE_SIZE
+    items = [("program", row) for row in programs] + [("routine", row) for row in routines]
+    shown = items[start : start + MANAGE_PAGE_SIZE]
+    page_programs = [row for kind, row in shown if kind == "program"]
+    page_routines = [row for kind, row in shown if kind == "routine"]
+    has_next = start + MANAGE_PAGE_SIZE < total
     has_workouts = await db.count_workouts(user_id) > 0
     if programs or routines:
         text = i18n.t("routine.manage.header") + i18n.t("routine.manage.intro")
@@ -141,7 +158,12 @@ async def show_manage(event, state: FSMContext) -> None:
     # ровно там, откуда пришли.
     back_to_picker = bool((await state.get_data()).get("rt_manage_from_picker"))
     kb = keyboards.routines_manage_keyboard(
-        programs, routines, has_workouts=has_workouts, back_to_picker=back_to_picker
+        page_programs,
+        page_routines,
+        has_workouts=has_workouts,
+        back_to_picker=back_to_picker,
+        page=page,
+        has_next=has_next,
     )
     if isinstance(event, CallbackQuery):
         await ui.safe_edit(event, text, reply_markup=kb, parse_mode="HTML")
@@ -156,6 +178,16 @@ async def rt_noop(callback: CallbackQuery):
     Клавиатур с такими кнопками больше не собирается — стрелка везде одна и
     ходит по кругу, — но экраны с ними висят в чатах и тапабельны вечно, а без
     обработчика тап улетел бы в фолбэк и выкинул человека в главное меню."""
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("rt:mpage:"))
+async def rt_manage_page(callback: CallbackQuery, state: FSMContext):
+    """Листание списка программ. Экран пересобирается заново, а не хранит
+    страницу в состоянии: между тапами программу могли удалить или добавить с
+    другого экрана, и страница, посчитанная по старому списку, показала бы
+    пустоту (show_manage поэтому же прижимает номер к последней существующей)."""
+    await show_manage(callback, state, page=int(callback.data.split(":")[2]))
     await callback.answer()
 
 
@@ -245,7 +277,14 @@ async def _day_composition_blocks(days, *, history=None, today=None) -> list[str
     return blocks
 
 
-async def _show_program(event, state: FSMContext, program_id: int) -> None:
+# Дней на странице экрана одной программы. Меньше, чем в списке программ: тут
+# под каждым днём ещё и его состав в тексте, а текст режется по лимиту Telegram
+# (ui.fit_to_limit) — шесть дней со своими упражнениями в 4096 символов влезают
+# с запасом, и подписи под кнопками совпадают с тем, что написано выше.
+PROGRAM_DAYS_PAGE_SIZE = 6
+
+
+async def _show_program(event, state: FSMContext, program_id: int, page: int = 0) -> None:
     """Экран одной программы: что в ней, какой день сегодня и когда что делалось.
 
     Раньше это был просто список одинаковых кнопок с именами дней: какой из них
@@ -262,7 +301,15 @@ async def _show_program(event, state: FSMContext, program_id: int) -> None:
     today = timeutil.user_today(await db.get_user(event.from_user.id))
     next_day = await db.next_program_day(program_id)
 
-    day_blocks = await _day_composition_blocks(days, history=history, today=today)
+    # Одна страница дней — и в тексте, и на кнопках: раньше текст резался по
+    # лимиту Telegram, а кнопки не резались, и на двух-трёх десятках дней экран
+    # предлагал нажать на день, которого в тексте уже не было.
+    page = max(0, min(page, max(0, (len(days) - 1) // PROGRAM_DAYS_PAGE_SIZE)))
+    start = page * PROGRAM_DAYS_PAGE_SIZE
+    page_days = days[start : start + PROGRAM_DAYS_PAGE_SIZE]
+    has_next = start + PROGRAM_DAYS_PAGE_SIZE < len(days)
+
+    day_blocks = await _day_composition_blocks(page_days, history=history, today=today)
 
     header = [f"🗂 <b>{escape(program['name'])}</b>"]
     # По workouts.program_id, а не sum() по дням из program_day_history — дни
@@ -301,12 +348,21 @@ async def _show_program(event, state: FSMContext, program_id: int) -> None:
         else i18n.t("routine.program.pick_day")
     )
     text = "\n\n".join(["\n".join(header), "\n\n".join(day_blocks) or i18n.t("routine.program.no_days"), tail])
+    # Кнопка «следующий день» поднята наверх на каждой странице — это главное
+    # действие экрана. Клавиатура ищет этот день среди переданных, поэтому на
+    # чужой странице его дописываем в начало: в общий список кнопок он не
+    # попадёт, program_days_keyboard пропускает поднятый день.
+    kb_days = list(page_days)
+    if next_day is not None and all(d["id"] != next_day["id"] for d in kb_days):
+        kb_days = [next_day, *kb_days]
     kb = keyboards.program_days_keyboard(
-        days, program_id, next_day_id=next_day["id"] if next_day else None,
+        kb_days, program_id, next_day_id=next_day["id"] if next_day else None,
         # По истории, а не по факту наличия дня: очередь есть только у той
         # программы, по которой уже ходили. Иначе кнопка называла «сегодняшним»
         # просто первый день списка.
         trained_before=bool(history),
+        page=page,
+        has_next=has_next,
     )
     if isinstance(event, CallbackQuery):
         await ui.safe_edit(event, text, reply_markup=kb, parse_mode="HTML")
@@ -316,7 +372,12 @@ async def _show_program(event, state: FSMContext, program_id: int) -> None:
 
 @router.callback_query(F.data.startswith("rt:prg:"))
 async def rt_program(callback: CallbackQuery, state: FSMContext):
-    await _show_program(callback, state, int(callback.data.split(":")[2]))
+    # Номер страницы — необязательный четвёртый кусок: кнопки «rt:prg:<id>» без
+    # него висят в старых чатах и в упоминаниях тренера, и тап по ним должен
+    # открывать первую страницу, а не падать в фолбэк главного меню.
+    parts = callback.data.split(":")
+    page = int(parts[3]) if len(parts) > 3 else 0
+    await _show_program(callback, state, int(parts[2]), page=page)
     await callback.answer()
 
 
