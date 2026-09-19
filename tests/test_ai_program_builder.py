@@ -686,17 +686,71 @@ async def _saved_two_day_program(db, user_id: int) -> None:
 
 async def test_saved_programs_tool_shows_days_and_composition(fresh_db, user_id):
     """Без этого инструмента тренеру нечем править: он не видит, что у человека
-    сохранено и из чего оно состоит."""
+    сохранено и из чего оно состоит. Состав приходит по точному имени."""
     await _saved_two_day_program(fresh_db, user_id)
 
-    payload = json.loads(await ai_trainer.execute_tool(user_id, "get_saved_programs", {}))
+    payload = json.loads(
+        await ai_trainer.execute_tool(user_id, "get_saved_programs", {"name": "Верх/низ"})
+    )
 
-    (program,) = payload["programs"]
+    program = payload["program"]
     assert program["name"] == "Верх/низ"
     assert [d["name"] for d in program["days"]] == ["Низ", "Верх"]
     assert program["days"][0]["exercises"] == [
         {"name": TEMPLATE_B, "target": "3×5", "progression": None}
     ]
+
+
+async def test_saved_programs_list_is_cheap_and_points_at_the_next_call(fresh_db, user_id):
+    """Список без состава — ради него инструмент и развели на два шага: полная
+    выдача всех дней всех программ уезжала в каждое обращение к модели."""
+    await _saved_two_day_program(fresh_db, user_id)
+
+    payload = json.loads(await ai_trainer.execute_tool(user_id, "get_saved_programs", {}))
+
+    (program,) = payload["programs"]
+    assert program == {"name": "Верх/низ", "kind": "program", "day_count": 2}
+    assert "name" in payload["note"]
+
+
+async def test_saved_programs_says_plainly_when_there_is_no_such_program(fresh_db, user_id):
+    """Промах по имени должен быть слышен: на молчание модель досочиняла состав
+    по памяти, а propose_program стирает всё, чего в нём не прислали."""
+    await _saved_two_day_program(fresh_db, user_id)
+
+    payload = json.loads(
+        await ai_trainer.execute_tool(user_id, "get_saved_programs", {"name": "Пушпул"})
+    )
+
+    assert "Пушпул" in payload["error"]
+    assert payload["saved_programs"] == ["Верх/низ"]
+
+
+async def test_saved_programs_detail_resolves_a_standalone_day_by_name(fresh_db, user_id):
+    """Одиночный день — тоже программа для пользователя: по имени должен
+    приходить его состав, а не ошибка «такой программы нет»."""
+    await fresh_db.create_routine_from_program(user_id, "Одиночная", [(TEMPLATE_A, "3×8")])
+
+    payload = json.loads(
+        await ai_trainer.execute_tool(user_id, "get_saved_programs", {"name": "  одиночная "})
+    )
+
+    assert payload["program"]["kind"] == "routine"
+    assert payload["program"]["days"][0]["exercises"][0]["name"] == TEMPLATE_A
+
+
+async def test_saved_programs_list_says_when_it_does_not_fit(fresh_db, user_id, monkeypatch):
+    """Программ больше потолка выгрузки: молча отдать кусок нельзя — по огрызку
+    модель рассуждала бы про «все программы» пользователя."""
+    monkeypatch.setattr(config, "AI_SAVED_PROGRAMS_LIMIT", 3)
+    for i in range(5):
+        await fresh_db.create_routine(user_id, f"День {i}")
+
+    payload = json.loads(await ai_trainer.execute_tool(user_id, "get_saved_programs", {}))
+
+    assert len(payload["programs"]) == 3
+    assert payload["programs_total"] == 5
+    assert "5" in payload["truncated_programs"]
 
 
 async def test_saved_programs_tool_shows_the_stored_progression_rule(fresh_db, user_id):
@@ -714,10 +768,11 @@ async def test_saved_programs_tool_shows_the_stored_progression_rule(fresh_db, u
         entry["id"], json.dumps({"rule": "double_progression", "reps_top": 10, "step": 2.5})
     )
 
-    payload = json.loads(await ai_trainer.execute_tool(user_id, "get_saved_programs", {}))
+    payload = json.loads(
+        await ai_trainer.execute_tool(user_id, "get_saved_programs", {"name": "Верх/низ"})
+    )
 
-    (program,) = payload["programs"]
-    (exercise,) = program["days"][0]["exercises"]
+    (exercise,) = payload["program"]["days"][0]["exercises"]
     assert exercise["progression"] == {
         "rule": "double_progression", "reps_top": 10, "step": 2.5,
     }

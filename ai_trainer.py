@@ -726,14 +726,15 @@ propose_program и только потом описывай словами, чт
 
 Ты умеешь править и те программы, которые у пользователя УЖЕ сохранены, — не
 только что-то предлагать заново. Порядок такой:
-- сначала get_saved_programs — посмотреть, что у него есть, с точным именем
-  программы и составом каждого дня (выдумывать состав по памяти нельзя);
+- сначала get_saved_programs без аргументов — увидеть список с точными именами;
+  потом его же с name = точное имя нужной программы — увидеть её состав
+  (выдумывать состав по памяти нельзя, и список состава не показывает);
 - потом propose_program, где в replaces_program стоит точное имя той программы,
   а сама программа прислана ЦЕЛИКОМ: все дни и все упражнения, включая
   нетронутые. Чего не прислал — того в программе не останется. При правке
   переноси в propose_program и progression каждого нетронутого упражнения (как
-  оно лежит в get_saved_programs) — что не пришлёшь, у него сотрётся, включая
-  правило прогрессии.
+  оно лежит в get_saved_programs с name) — что не пришлёшь, у него сотрётся,
+  включая правило прогрессии.
 Пользователь увидит превью правки и подтвердит её кнопкой; до тапа ничего не
 меняется, так что не пиши «поправил» — пиши, что правка ждёт подтверждения.
 Если человек просит не поправить, а собрать ещё одну программу вдобавок —
@@ -789,7 +790,7 @@ archive_exercises). Если из фразы не ясно — спроси, а 
 
 Прежде чем судить о сохранённой программе («она у меня рабочая?», «может,
 поменять программу?», предлагать замену) — посмотри get_program_adherence, а
-не только состав из get_saved_programs. Состав может быть отличным, а человек
+не только состав из get_saved_programs (с name). Состав может быть отличным, а человек
 по нему не тренируется или методично сливает один день: «программа хорошая, но
 ты по ней не ходишь» — честный и полезный ответ, если данные это показывают, а
 не повод придумывать, что не так с самой программой.
@@ -2125,14 +2126,18 @@ TOOLS: list[dict[str, Any]] = [
         "function": {
             "name": "get_saved_programs",
             "description": (
-                "Сохранённые программы пользователя с составом каждого дня (упражнения "
-                "и схема подходов). Вызывай, когда речь о том, что у него есть («что у "
-                "меня за программа», «добавь жим в день ног», «поменяй программу»), и "
-                "перед ЛЮБОЙ правкой существующей программы — нужны её точное имя и "
-                "текущий состав. Просят поправить, а ты не смотрел — сначала посмотри, "
-                "а не выдумывай состав."
+                "Сохранённые программы. Без аргументов — список: имена, вид "
+                "(многодневка/одиночный день), сколько дней. С name — эта программа "
+                "целиком: дни, упражнения, схемы, прогрессии. «Что у меня за "
+                "программа», «добавь жим в день ног», «поменяй программу» — сначала "
+                "список, потом состав по точному имени; выдумывать состав нельзя."
             ),
-            "parameters": {"type": "object", "properties": {}},
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Точное имя из списка"}
+                },
+            },
         },
     },
     {
@@ -2680,7 +2685,7 @@ TOOLS: list[dict[str, Any]] = [
             "name": "get_program_adherence",
             "description": (
                 "Насколько реально ходят по каждой сохранённой многодневной программе — "
-                "чего get_saved_programs не знает, там только состав. По программе: "
+                "чего get_saved_programs не знает, там только список и состав. По программе: "
                 "сколько тренировок проведено; по каждому дню — сколько раз и сколько "
                 "дней с последнего (null — ни разу). Вызывай перед тем, как судить о "
                 "программе («хорошая ли», «стоит ли менять»): состав может быть "
@@ -3123,24 +3128,35 @@ def _stored_progression(raw: Any) -> Optional[dict[str, Any]]:
     return value if isinstance(value, dict) else None
 
 
-async def _saved_programs(user_id: int) -> dict[str, Any]:
-    """Сохранённые программы пользователя с составом каждого дня.
+async def _saved_programs(
+    user_id: int, name: Optional[str] = None
+) -> dict[str, Any]:
+    """Сохранённые программы пользователя: без `name` — только список, с `name`
+    — одна программа с полным составом каждого дня.
 
     Нужны, чтобы тренер мог править то, что у человека уже есть, а не только
     предлагать новое: без этого «убери сведения из дня ног» ему просто не по
     чему выполнить. `id` дней здесь не отдаём — правка идёт по имени программы
     (см. propose_program.replaces_program), а имена пользователю и видны.
 
+    Два шага, а не один, — из-за потолка дней: config.MAX_ROUTINES_PER_USER
+    подняли с 30 до 500, и полная выдача (все программы × все дни × все
+    упражнения с правилами прогрессии) превратилась в тысячи строк в КАЖДОМ
+    обращении к модели, включая вопрос про белок. Полный состав нужен ровно у
+    одной программы — той, которую правят прямо сейчас, — поэтому список
+    дешёвый (имя, kind, сколько дней и упражнений), а состав приходит адресно.
+
     `kind` — "program" (многодневка) или "routine" (одиночная программа из
     одного дня): без этой пометки список был плоским, а _resolve_replaced_program
     сначала проверял многодневки, потом одиночные — при совпадении имён между
     ними правилась не та программа, на которую рассчитывал пользователь, и по
-    превью это было не понять (см. PROGRAMS_DEEP_DIVE §5.4).
+    превью это было не понять (см. PROGRAMS_DEEP_DIVE §5.4). По нему же модель
+    видит, какую из двух одноимённых просить по имени.
 
-    `progression` у каждого упражнения обязательна в выдаче: правка идёт через
-    propose_program «программа ЦЕЛИКОМ», и всё, чего модель не пришлёт,
-    стирается — пока она не видела сохранённые правила прогрессии, ей нечем
-    было их перенести, и «замени приседания на жим ногами» молча сносил
+    `progression` у каждого упражнения обязательна в выдаче состава: правка
+    идёт через propose_program «программа ЦЕЛИКОМ», и всё, чего модель не
+    пришлёт, стирается — пока она не видела сохранённые правила прогрессии, ей
+    нечем было их перенести, и «замени приседания на жим ногами» молча сносил
     double_progression на нетронутом жиме лёжа.
     """
 
@@ -3154,33 +3170,115 @@ async def _saved_programs(user_id: int) -> dict[str, Any]:
             for ex in await db.list_routine_exercises(routine_id)
         ]
 
+    if name is not None and str(name).strip():
+        return await _saved_program_detail(user_id, str(name).strip(), _exercises)
+
+    # Список. Счётчики берём из тех же запросов, что и экран «🗂 Программы»
+    # (day_count/exercise_count уже посчитаны в SQL), чтобы список не стоил
+    # запроса на каждую программу.
     programs: list[dict[str, Any]] = []
     for row in await db.list_programs(user_id):
-        days = []
-        for day in await db.list_program_days_by_id(row["id"]):
-            days.append({"name": day["name"], "exercises": await _exercises(day["id"])})
-        programs.append({"name": row["program_name"], "kind": "program", "days": days})
+        programs.append(
+            {
+                "name": row["program_name"],
+                "kind": "program",
+                "day_count": row["day_count"],
+            }
+        )
     for routine in await db.list_standalone_routines(user_id):
         programs.append(
             {
                 "name": routine["name"],
                 "kind": "routine",
-                "days": [
-                    {"name": routine["name"], "exercises": await _exercises(routine["id"])}
-                ],
+                "day_count": 1,
+                "exercise_count": routine["exercise_count"],
             }
         )
+
+    total = len(programs)
+    truncated = total > config.AI_SAVED_PROGRAMS_LIMIT
+    payload: dict[str, Any] = {"programs": programs[: config.AI_SAVED_PROGRAMS_LIMIT]}
+    if not total:
+        payload["note"] = "У пользователя пока нет сохранённых программ."
+        return payload
+    payload["note"] = (
+        "Это СПИСОК, без состава. Чтобы увидеть упражнения и правила прогрессии "
+        "одной программы, вызови get_saved_programs ещё раз с её точным именем в "
+        "name — и только потом propose_program. Править вслепую, по памяти, нельзя."
+    )
+    if truncated:
+        # Молча отдать кусок нельзя: по огрызку модель рассуждала бы про «все
+        # программы» и уверенно говорила, что чего-то у человека нет.
+        payload["truncated_programs"] = (
+            f"показаны первые {config.AI_SAVED_PROGRAMS_LIMIT} из {total} "
+            "(сверху те, по которым он тренировался недавно) — список НЕПОЛНЫЙ. "
+            "Не говори пользователю, что у него нет какой-то программы, и не "
+            "считай их по этому списку: если нужной тут нет, спроси её точное "
+            "имя и запроси по имени."
+        )
+        payload["programs_total"] = total
+    return payload
+
+
+async def _saved_program_detail(
+    user_id: int, name: str, exercises: Any
+) -> dict[str, Any]:
+    """Одна программа целиком — по точному имени (с точностью до регистра и
+    пробелов), той же свёрткой, что и резолвер замены (db.find_program_by_name).
+
+    Промах отвечаем ошибкой, а не пустотой и не «похожей» программой: модель
+    после молчания досочиняла состав по памяти, а propose_program стирает всё,
+    чего в нём не прислали.
+    """
+    program = await db.find_program_by_name(user_id, name)
+    if program is not None and program["user_id"] == user_id:
+        days = []
+        for day in await db.list_program_days_by_id(program["id"]):
+            days.append({"name": day["name"], "exercises": await exercises(day["id"])})
+        return _program_detail_payload(
+            {"name": program["name"], "kind": "program", "days": days}
+        )
+    for routine in await db.list_standalone_routines(user_id):
+        if routine["name"].strip().lower() == name.lower():
+            return _program_detail_payload(
+                {
+                    "name": routine["name"],
+                    "kind": "routine",
+                    "days": [
+                        {
+                            "name": routine["name"],
+                            "exercises": await exercises(routine["id"]),
+                        }
+                    ],
+                }
+            )
+    listing = await _saved_programs(user_id)
     return {
-        "programs": programs,
+        "error": f"программы «{name}» у пользователя нет — ничего не показано",
+        "saved_programs": [p["name"] for p in listing["programs"]],
         "note": (
-            "Это то, что у пользователя уже сохранено. Чтобы поправить одну из "
-            "этих программ, вызови propose_program целиком (со всеми днями, "
+            "Возьми точное имя из этого списка и вызови ещё раз."
+            if listing["programs"]
+            else "Сохранённых программ нет вообще."
+        ),
+        **(
+            {"truncated_programs": listing["truncated_programs"]}
+            if "truncated_programs" in listing
+            else {}
+        ),
+    }
+
+
+def _program_detail_payload(program: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "program": program,
+        "note": (
+            "Это то, что у пользователя уже сохранено. Чтобы поправить эту "
+            "программу, вызови propose_program целиком (со всеми днями, "
             "включая нетронутые) и передай её точное имя в replaces_program. "
             "Правила progression нетронутых упражнений тоже переноси как есть — "
             "чего не пришлёшь, у того сотрётся."
-        )
-        if programs
-        else "У пользователя пока нет сохранённых программ.",
+        ),
     }
 
 
@@ -5296,7 +5394,7 @@ async def execute_tool(
     elif name == "get_full_chat_history":
         payload = await _full_chat_history(user_id)
     elif name == "get_saved_programs":
-        payload = await _saved_programs(user_id)
+        payload = await _saved_programs(user_id, tool_input.get("name"))
     elif name == "get_program_adherence":
         payload = await _program_adherence(user_id)
     elif name == "ask_setup_questions":
