@@ -779,6 +779,87 @@ async def test_model_failure_keeps_the_diary_usable(user_id, monkeypatch):
     # экран дня цел — ни разу не удалялся и не перерисовывался
     message.bot.delete_message.assert_not_called()
     assert (await state.get_data())["fd_screen_id"] == 999
+    # Сбой не должен оставлять человека заблокированным до конца суток —
+    # `finally` обязан снять `_busy` при любом исходе (см. `_analyze_and_show`).
+    assert user_id not in food_diary._busy
+
+
+async def test_food_analysis_refuses_a_double_tap(user_id, monkeypatch):
+    """Без busy-замка два быстрых фото/сообщения одного человека оба проходят
+    ai_limits.check и оба уходят в модель — двойной платёж. С замком второй
+    получает тот же отказ, что и у чата тренера (`ai.screen.busy`), а
+    analyze_food не зовётся вовсе."""
+    monkeypatch.setattr(food_diary.timeutil, "user_today", lambda user: dt.date(2026, 7, 20))
+    monkeypatch.setattr(food_diary.ai_trainer, "is_configured", lambda: True)
+
+    called = False
+
+    async def fail_if_called(*args, **kwargs):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(food_diary.ai_trainer, "analyze_food", fail_if_called)
+
+    state = await _make_state(user_id)
+    await state.set_state(FoodDiaryFlow.viewing)
+    await state.update_data(fd_date="2026-07-20")
+    message = _make_message(user_id, text="овсянка")
+
+    food_diary._busy.add(user_id)
+    try:
+        await food_diary.fd_text_entry(message, state)
+    finally:
+        food_diary._busy.discard(user_id)
+
+    assert not called
+    message.reply.assert_awaited_once_with(i18n.t("ai.screen.busy"))
+    assert await dbmod.get_ai_food_count_today(user_id) == 0
+
+
+async def test_concurrent_food_messages_pay_the_model_only_once(user_id, monkeypatch):
+    """Настоящая гонка, не единичный вызов с предзаявленной бронью: обе
+    корутины реально стартуют и обе доходят до analyze_food одновременно, если
+    бы не busy-замок (тот же инцидент, что уже был у вопросов тренеру, см.
+    ai_trainer._try_claim_busy)."""
+    import asyncio
+
+    monkeypatch.setattr(food_diary.timeutil, "user_today", lambda user: dt.date(2026, 7, 20))
+    monkeypatch.setattr(food_diary.ai_trainer, "is_configured", lambda: True)
+
+    calls = 0
+    release = asyncio.Event()
+
+    async def slow_analyze(uid, text="", image_data_url=None, previous=None, correction="", with_macros=True):
+        nonlocal calls
+        calls += 1
+        await release.wait()
+        return {"description": "Овсянка", "items": [], "calories": 300, "comment": ""}
+
+    monkeypatch.setattr(food_diary.ai_trainer, "analyze_food", slow_analyze)
+
+    state = await _make_state(user_id)
+    await state.set_state(FoodDiaryFlow.viewing)
+    await state.update_data(fd_date="2026-07-20")
+
+    async def fire():
+        message = _make_message(user_id, text="овсянка")
+        await food_diary.fd_text_entry(message, state)
+        return message
+
+    first_task = asyncio.ensure_future(fire())
+    await asyncio.sleep(0.05)
+    second_task = asyncio.ensure_future(fire())
+    await asyncio.sleep(0.05)
+    release.set()
+    first_message, second_message = await asyncio.gather(first_task, second_task)
+
+    assert calls == 1
+    # Один из двух получил отказ "занято" вместо разбора.
+    replies = [m.reply.await_args for m in (first_message, second_message) if m.reply.await_args]
+    assert len(replies) == 1
+    assert replies[0].args[0] == i18n.t("ai.screen.busy")
+    assert await dbmod.get_ai_food_count_today(user_id) == 1
+    assert user_id not in food_diary._busy
 
 
 async def test_confirm_saves_straight_into_the_viewed_day(user_id, monkeypatch):

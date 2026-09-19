@@ -370,6 +370,28 @@ async def test_try_increment_search_global_unlimited_when_limit_is_zero_or_less(
     assert await dbmod.get_ai_search_count_global() == 4
 
 
+# db.increment_ai_food_count был безусловным инкрементом без "WHERE count <
+# limit" — единственным из четырёх счётчиков (question/search/video/food),
+# который так и не получил атомарной версии, хотя доступен теми же двумя
+# путями (бот и REST) с той же гонкой. try_increment_ai_food_count чинит это
+# тем же приёмом, что и у вопросов.
+
+
+async def test_try_increment_food_count_stops_exactly_at_the_limit(user_id):
+    for _ in range(3):
+        assert await dbmod.try_increment_ai_food_count(user_id, limit=3) is True
+    assert await dbmod.try_increment_ai_food_count(user_id, limit=3) is False
+    assert await dbmod.get_ai_food_count_today(user_id) == 3
+
+
+async def test_try_increment_food_count_unlimited_when_limit_is_zero_or_less(fresh_db):
+    for limit in (0, -1):
+        user_id = 556_000 + limit
+        for _ in range(5):
+            assert await dbmod.try_increment_ai_food_count(user_id, limit=limit) is True
+        assert await dbmod.get_ai_food_count_today(user_id) == 5
+
+
 async def test_try_increment_search_global_survives_a_burst_of_concurrent_callers(fresh_db):
     """То самое: N «параллельных» вызовов (тут — конкурентных корутин на одном
     event loop, что и создавало реальную гонку в проде между чтением и

@@ -7271,6 +7271,47 @@ async def increment_ai_food_count(telegram_id: int) -> None:
         await conn().commit()
 
 
+async def try_increment_ai_food_count(telegram_id: int, limit: int) -> bool:
+    """Атомарно списать один разбор еды из дневной квоты — тот же приём, что
+    `try_increment_ai_question_count` (см. её докстринг про то, почему это
+    ОДИН `UPDATE ... WHERE count < limit`, а не «прочитать — увеличить»
+    двумя обращениями к базе).
+
+    В отличие от вопросов, до этой правки `increment_ai_food_count` был
+    обычным безусловным инкрементом без `WHERE count < limit` — единственная
+    защита от превышения квоты держалась целиком на busy-замке вызывающей
+    стороны (`_busy` в api_v1_food.py и handlers/food_diary.py), который не
+    даёт ОДНОМУ пользователю иметь два разбора еды в полёте одновременно.
+    Здесь та же вторая линия обороны, что и у вопросов: если busy-замок
+    когда-нибудь ослабят или обойдут, счётчик всё равно не сможет
+    перескочить свой потолок больше чем на действие, которое строго
+    единственным успело в него попасть.
+
+    limit <= 0 — квота снята, обычный инкремент без ограничения.
+    """
+    today = await _quota_day(telegram_id)
+    async with _write_lock:
+        await conn().execute(
+            "INSERT INTO ai_food_usage (telegram_id, date, count) VALUES (?, ?, 0) "
+            "ON CONFLICT (telegram_id, date) DO NOTHING",
+            (telegram_id, today),
+        )
+        if limit > 0:
+            cur = await conn().execute(
+                "UPDATE ai_food_usage SET count = count + 1 "
+                "WHERE telegram_id = ? AND date = ? AND count < ?",
+                (telegram_id, today, limit),
+            )
+        else:
+            cur = await conn().execute(
+                "UPDATE ai_food_usage SET count = count + 1 "
+                "WHERE telegram_id = ? AND date = ?",
+                (telegram_id, today),
+            )
+        await conn().commit()
+        return cur.rowcount > 0
+
+
 # ---------- «Понятно» на предупреждении о лимите (см. ai_limits.py) ----------
 
 
