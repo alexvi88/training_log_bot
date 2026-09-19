@@ -319,7 +319,13 @@ async def test_finish_without_note_preserves_note_set_earlier(fresh_db, client_f
     как заметку уже поставили через PATCH /note, и раньше finish молча стирал
     её в NULL."""
     client = await _linked_client(fresh_db, client_factory)
+    exercise_id = (await client.post("/exercises", json={"name": "Жим лёжа"})).json()["id"]
     workout_id = (await client.post("/workouts/active")).json()["id"]
+    # Подход обязателен: пустую тренировку финиш теперь удаляет, а не
+    # сохраняет (как и бот), и заметку на ней проверять не на чем.
+    await client.post(
+        f"/workouts/{workout_id}/sets", json={"exercise_id": exercise_id, "weight": 80, "reps": 5}
+    )
 
     await client.patch(f"/workouts/{workout_id}/note", json={"note": "заметка до финиша"})
 
@@ -331,7 +337,11 @@ async def test_finish_without_note_preserves_note_set_earlier(fresh_db, client_f
 @pytest.mark.asyncio
 async def test_finish_with_explicit_note_overrides_earlier_one(fresh_db, client_factory):
     client = await _linked_client(fresh_db, client_factory)
+    exercise_id = (await client.post("/exercises", json={"name": "Присед"})).json()["id"]
     workout_id = (await client.post("/workouts/active")).json()["id"]
+    await client.post(
+        f"/workouts/{workout_id}/sets", json={"exercise_id": exercise_id, "weight": 100, "reps": 5}
+    )
 
     await client.patch(f"/workouts/{workout_id}/note", json={"note": "старая"})
     finish_resp = await client.post(f"/workouts/{workout_id}/finish", json={"note": "новая"})
@@ -817,3 +827,47 @@ async def test_finishing_through_the_api_awards_achievements(fresh_db, client_fa
 
     await client.post(f"/workouts/{workout_id}/finish", json={})
     assert await fresh_db.list_achievement_codes(111), "первая тренировка не дала ни одного значка"
+
+
+@pytest.mark.asyncio
+async def test_finishing_an_empty_workout_deletes_it(fresh_db, client_factory):
+    """Пустая тренировка не должна сохраняться: строка «Без упражнений · 0
+    подходов» в истории не сообщает ничего, кроме того, что человек открыл
+    экран и передумал, а портит она и список, и все счётчики тренировок.
+    Бот в этом случае тренировку удаляет (workout.empty_deleted)."""
+    client = await _linked_client(fresh_db, client_factory)
+    workout_id = (await client.post("/workouts/active")).json()["id"]
+
+    resp = await client.post(f"/workouts/{workout_id}/finish", json={})
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"discarded": True, "reason": "empty"}
+
+    assert await fresh_db.get_workout(workout_id) is None
+    assert (await client.get("/workouts/active")).json() is None
+    assert (await client.get("/workouts")).json() == []
+
+
+@pytest.mark.asyncio
+async def test_finishing_an_empty_backfill_deletes_it_too(fresh_db, client_factory):
+    client = await _linked_client(fresh_db, client_factory)
+    workout_id = (await client.post("/workouts/backfill", json={"date": "2026-09-10"})).json()["id"]
+
+    resp = await client.post(f"/workouts/{workout_id}/finish", json={})
+    assert resp.status_code == 200
+    assert resp.json()["discarded"] is True
+    assert (await client.get("/workouts/backfill")).json() is None
+
+
+@pytest.mark.asyncio
+async def test_a_workout_with_sets_still_finishes_normally(fresh_db, client_factory):
+    """Проверка, что защита от пустой тренировки не съела обычный путь."""
+    client = await _linked_client(fresh_db, client_factory)
+    exercise_id = (await client.post("/exercises", json={"name": "Жим лёжа"})).json()["id"]
+    workout_id = (await client.post("/workouts/active")).json()["id"]
+    await client.post(
+        f"/workouts/{workout_id}/sets", json={"exercise_id": exercise_id, "weight": 80, "reps": 5}
+    )
+
+    body = (await client.post(f"/workouts/{workout_id}/finish", json={})).json()
+    assert body["status"] == "finished"
+    assert len(await fresh_db.list_workouts(111)) == 1
