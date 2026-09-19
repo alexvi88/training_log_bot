@@ -26,6 +26,7 @@ from aiogram.types import Message
 
 import ai_limits
 import ai_trainer
+import busy_lock
 import config
 import db
 import formatting
@@ -64,11 +65,12 @@ def _try_claim_busy(user_id: int) -> bool:
     дождался ответа модели → увеличил» — а пачка пересланных постов подряд
     (человек форвардит несколько сообщений из канала одно за другим) успевала
     пройти проверку квоты хором, до того как первый из форвардов её увеличил.
+
+    Сама проверка-и-бронь — общий примитив `busy_lock.try_claim` (см. его
+    докстринг): та же атомарность нужна и REST-слою `/v1`, поэтому код теперь
+    один на всех, а не третья копия одного и того же `if`/`.add()`.
     """
-    if user_id in _busy:
-        return False
-    _busy.add(user_id)
-    return True
+    return busy_lock.try_claim(_busy, user_id)
 
 
 def _post_text(message: Message) -> Optional[str]:

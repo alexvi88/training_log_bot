@@ -94,6 +94,19 @@ aiogram FSM (`ai_history` в state) — это отдельное окно ко�
 ответа (см. `_run_turn` — тот же приём, что в handlers/ai_trainer.py и в
 api_v1_food.py.parse_food: сорвавшийся у провайдера запрос не должен стоить
 человеку вопроса).
+
+**Двойной платёж от параллельных запросов.** Этот порядок (проверка лимита
+ДО ответа модели, счётчик ПОСЛЕ) сам по себе не защищает от гонки: два
+одновременных `POST /ai/ask` (двойной тап на клиенте, ретрай при плохой
+сети) оба читают ЕЩЁ не увеличенный счётчик, оба проходят `ai_limits.check`
+и оба уходят в модель — двойной платёж, а дневная квота вопросов может быть
+превышена на число проскочивших так запросов. Ровно этот инцидент уже был у
+бота (см. `handlers/ai_trainer._try_claim_busy`), и защита от него — тот же
+приём: неблокирующий busy-замок на пользователя (`_busy` в этом модуле,
+общий примитив в busy_lock.py), застолбленный ДО обращения к модели и снятый
+в `finally` при любом исходе. Второй параллельный запрос получает не 5xx и
+не тихий сбой, а тот же самый отказ, что видит атлет в боте при двойном тапе
+(`ai.screen.busy`, здесь — 429 `busy`).
 """
 
 from __future__ import annotations
@@ -113,6 +126,7 @@ import ai_setup_flow
 import ai_trainer
 import api_v1_common as common
 import api_v1_voice
+import busy_lock
 import config
 import db
 import exercise_mentions
@@ -125,6 +139,33 @@ from handlers.ai_trainer import MAX_IMAGE_BYTES
 logger = logging.getLogger(__name__)
 
 ApiError = common.ApiError
+
+# Тот же замок, что у бота — один платный AI-шаг на пользователя в этом
+# модуле одновременно (см. busy_lock.py и handlers/ai_trainer._busy, у
+# которого тот же набор один на весь чат тренера — текст, фото, голос,
+# выбор упражнения для видео). Раньше HTTP-слой был единственным местом, где
+# `ai_limits.check` читал счётчик, ещё не знающий о текущем запросе, а
+# инкремент (`db.try_increment_ai_question_count`/`db.increment_ai_video_count`)
+# шёл ПОСЛЕ ответа модели: N параллельных `POST /ai/ask`/`/ai/video`/
+# `/ai/questions/answer` (двойной тап, ретрай клиента — без всякого злого
+# умысла) означали N настоящих платежей, и дневной лимит их не останавливал,
+# ровно как в инциденте у бота.
+#
+# Один набор на все три маршрута (не отдельный на `/ai/video`) — по той же
+# причине, что и у бота: `/ai/video` заканчивается ровно тем же ходом к
+# модели, что и `/ai/ask` (см. `_run_turn`), только начинается с ещё одного
+# платного шага (Qwen3-VL) перед ним, а `/ai/questions/answer` в своей
+# последней реплике — это тот же `_run_turn` без разбора видео. Разводить их
+# по разным замкам означало бы, что видео-разбор и текстовый вопрос одного и
+# того же человека могут идти параллельно, хотя оба тратят один и тот же
+# дневной счётчик вопросов.
+#
+# Своя, отдельная от бота копия набора (не `ai_trainer_handlers._busy`) — у
+# HTTP и Telegram уже разные окна разговора и разные хранилища черновика/
+# опросника (см. докстринг модуля выше, «Два разговора одного человека»):
+# логично, что и in-flight-бронь у них раздельная, а не блокирует один канал
+# из-за активности в другом.
+_busy: set[int] = set()
 
 # Вопрос через HTTP не режется телеграмным лимитом сообщения (4096 символов,
 # см. handlers/ai_trainer.py DRAFT_TEXT_LIMIT) — клиент может прислать что
@@ -463,6 +504,26 @@ def _validate_image_data_url(data_url: str, *, too_big_message: str) -> None:
         raise ApiError(400, "photo_too_big", too_big_message)
 
 
+def _claim_turn_or_429(user_id: int, lang: str) -> None:
+    """Застолбить `_busy` для этого хода к модели или честно отказать —
+    HTTP-аналог `ai.screen.busy` у бота ("Секунду, ещё думаю над прошлым
+    вопросом"), тем же текстом и той же мыслью: второй платный вызов того же
+    человека, пришедший, пока первый ещё летит, не должен состояться вообще,
+    а не просто не засчитаться в квоту (см. `_busy` выше).
+
+    429, а не 409: с точки зрения HTTP это тот же "слишком часто, попробуй
+    чуть позже" смысл, что и у прочих дневных лимитов этого модуля
+    (question_limit_exceeded/video_limit_exceeded), а не конфликт состояния.
+
+    Вызывающая сторона обязана снять бронь в `finally`
+    (`_busy.discard(user_id)`) при любом исходе — исключении, таймауте или
+    обычном успехе, иначе один упавший запрос блокирует человеку весь день
+    (см. busy_lock.py)."""
+    if not busy_lock.try_claim(_busy, user_id):
+        with i18n.use_lang(lang):
+            raise ApiError(429, "busy", i18n.t("ai.screen.busy"))
+
+
 async def ask_question(request: Request) -> JSONResponse:
     """Один вопрос тренеру → ответ плюс черновик программы/опросник/упоминания
     (см. `_turn_response`). Порядок ровно как в handlers/ai_trainer.py
@@ -501,13 +562,17 @@ async def ask_question(request: Request) -> JSONResponse:
     if len(question) > MAX_QUESTION_LENGTH:
         raise ApiError(400, "bad_request", f"question must be at most {MAX_QUESTION_LENGTH} characters")
 
-    # Последний сохранённый wire-снимок разговора этого пользователя — то же
-    # самое, что бот держит в ai_history в FSM, только персистентно (см.
-    # db.ai_conversation_turns и докстринг модуля). Пусто у нового разговора
-    # или сразу после DELETE /ai/history.
-    history = await db.get_ai_conversation_wire_history(user_id)
-    turn = await _run_turn(user_id, question, history, image_data_url=image_data_url)
-    return JSONResponse(await _turn_response(user_id, turn, goal=question))
+    _claim_turn_or_429(user_id, lang)
+    try:
+        # Последний сохранённый wire-снимок разговора этого пользователя — то
+        # же самое, что бот держит в ai_history в FSM, только персистентно
+        # (см. db.ai_conversation_turns и докстринг модуля). Пусто у нового
+        # разговора или сразу после DELETE /ai/history.
+        history = await db.get_ai_conversation_wire_history(user_id)
+        turn = await _run_turn(user_id, question, history, image_data_url=image_data_url)
+        return JSONResponse(await _turn_response(user_id, turn, goal=question))
+    finally:
+        _busy.discard(user_id)
 
 
 async def answer_setup_question(request: Request) -> JSONResponse:
@@ -544,14 +609,22 @@ async def answer_setup_question(request: Request) -> JSONResponse:
         })
 
     # Опросник закончился — уходим за программой одним обычным вызовом модели,
-    # ровно как _finish_setup в боте.
+    # ровно как _finish_setup в боте. Тот же платный ход, что у /ai/ask —
+    # значит и та же бронь `_busy` вокруг него (см. `_claim_turn_or_429`):
+    # опросник заканчивается ровно одним ответом модели, отличается только
+    # тем, каким текстом его попросили.
     user = await db.get_user(user_id)
-    with i18n.use_lang(user["lang"] if user is not None else "ru"):
+    lang = user["lang"] if user is not None else "ru"
+    with i18n.use_lang(lang):
         text = ai_setup_flow.setup_answers_text(state)
     await db.clear_ai_setup_state(user_id)
-    history = await db.get_ai_conversation_wire_history(user_id)
-    turn = await _run_turn(user_id, text, history)
-    return JSONResponse(await _turn_response(user_id, turn, goal=state.get("goal") or text))
+    _claim_turn_or_429(user_id, lang)
+    try:
+        history = await db.get_ai_conversation_wire_history(user_id)
+        turn = await _run_turn(user_id, text, history)
+        return JSONResponse(await _turn_response(user_id, turn, goal=state.get("goal") or text))
+    finally:
+        _busy.discard(user_id)
 
 
 async def save_program(request: Request) -> JSONResponse:
@@ -617,25 +690,33 @@ async def transcribe_voice(request: Request) -> JSONResponse:
     Транскрипция, лимиты размера/длительности и формат данных — все в
     `api_v1_voice.transcribe` (общей и с `POST /workouts/{id}/sets/voice»),
     сама расшифровка — `ai_trainer.transcribe_voice`, та же функция, что
-    зовёт бот.
+    зовёт бот. Whisper берёт деньги за саму расшифровку независимо от того,
+    дойдёт ли дело до `/ai/ask` — значит и это платный шаг, и на него та же
+    бронь `_busy`, что и на сам вопрос: два параллельных `POST /ai/voice`
+    одного человека иначе оба уходят в Whisper одновременно.
     """
     user_id = await common.authed_user_id(request)
     user = await db.get_user(user_id)
+    lang = user["lang"] if user else "ru"
     body = await common.json_body(request)
-    with i18n.use_lang(user["lang"] if user else "ru"):
-        transcript = await api_v1_voice.transcribe(
-            body,
-            user_id,
-            not_configured_message=i18n.t("ai.screen.voice_not_configured"),
-            too_long_message=i18n.t("ai.screen.voice_too_long"),
-            too_big_message=i18n.t(
-                "ai.screen.voice_too_big", mb=api_v1_voice.MAX_VOICE_BYTES // (1024 * 1024)
-            ),
-            transcribe_failed_message=i18n.t("ai.screen.voice_transcribe_failed"),
-        )
-        if not transcript:
-            raise ApiError(422, "voice_empty", i18n.t("ai.screen.voice_empty"))
-    return JSONResponse({"question": transcript})
+    _claim_turn_or_429(user_id, lang)
+    try:
+        with i18n.use_lang(lang):
+            transcript = await api_v1_voice.transcribe(
+                body,
+                user_id,
+                not_configured_message=i18n.t("ai.screen.voice_not_configured"),
+                too_long_message=i18n.t("ai.screen.voice_too_long"),
+                too_big_message=i18n.t(
+                    "ai.screen.voice_too_big", mb=api_v1_voice.MAX_VOICE_BYTES // (1024 * 1024)
+                ),
+                transcribe_failed_message=i18n.t("ai.screen.voice_transcribe_failed"),
+            )
+            if not transcript:
+                raise ApiError(422, "voice_empty", i18n.t("ai.screen.voice_empty"))
+        return JSONResponse({"question": transcript})
+    finally:
+        _busy.discard(user_id)
 
 
 def _decode_video_data_url(data_url: str, *, too_big_message: str) -> tuple[bytes, str]:
@@ -725,36 +806,48 @@ async def ask_video(request: Request) -> JSONResponse:
             ),
         )
 
-    block = await ai_limits.check(user_id, ai_limits.KIND_VIDEO)
-    if block is not None:
-        raise ApiError(429, "video_limit_exceeded", "daily video analysis limit reached")
-    block = await ai_limits.check(user_id, ai_limits.KIND_QUESTION)
-    if block is not None:
-        raise ApiError(429, "question_limit_exceeded", "daily question limit reached")
+    # Бронь — ДО обеих проверок лимита и уж тем более до самого разбора: два
+    # параллельных запроса с одним и тем же видео (двойной тап, ретрай) иначе
+    # оба прошли бы `ai_limits.check` (он читает счётчик, ещё не знающий о
+    # текущем запросе) и оба заплатили бы за Qwen3-VL и за Grok — ровно та
+    # гонка, что описана у `_busy` выше.
+    _claim_turn_or_429(user_id, lang)
+    try:
+        block = await ai_limits.check(user_id, ai_limits.KIND_VIDEO)
+        if block is not None:
+            raise ApiError(429, "video_limit_exceeded", "daily video analysis limit reached")
+        block = await ai_limits.check(user_id, ai_limits.KIND_QUESTION)
+        if block is not None:
+            raise ApiError(429, "question_limit_exceeded", "daily question limit reached")
 
-    exercise_hint = await _resolve_video_exercise_hint(user_id, body)
-    caption = common.optional_str(body, "caption") or ""
+        exercise_hint = await _resolve_video_exercise_hint(user_id, body)
+        caption = common.optional_str(body, "caption") or ""
 
-    analysis = await video_analysis.analyze(raw, user_id, mime_type=mime, exercise_hint=exercise_hint)
-    if analysis is None:
+        analysis = await video_analysis.analyze(raw, user_id, mime_type=mime, exercise_hint=exercise_hint)
+        if analysis is None:
+            with i18n.use_lang(lang):
+                raise ApiError(502, "video_analysis_failed", i18n.t("ai.screen.video_analysis_failed"))
+
+        # Квота видео тратится за состоявшийся разбор — как и в боте
+        # (db.increment_ai_video_count сразу после успешного analyze, до
+        # вопроса тренеру, см. _analyze_video_and_answer). Сбой уже вернул бы
+        # 502 выше.
+        await db.increment_ai_video_count(user_id)
+
         with i18n.use_lang(lang):
-            raise ApiError(502, "video_analysis_failed", i18n.t("ai.screen.video_analysis_failed"))
+            asked = caption or (
+                i18n.t("ai.screen.analyze_technique", hint=exercise_hint) if exercise_hint else ""
+            )
+            question = asked or i18n.t("ai.screen.default_video_question")
 
-    # Квота видео тратится за состоявшийся разбор — как и в боте
-    # (db.increment_ai_video_count сразу после успешного analyze, до вопроса
-    # тренеру, см. _analyze_video_and_answer). Сбой уже вернул бы 502 выше.
-    await db.increment_ai_video_count(user_id)
-
-    with i18n.use_lang(lang):
-        asked = caption or (i18n.t("ai.screen.analyze_technique", hint=exercise_hint) if exercise_hint else "")
-        question = asked or i18n.t("ai.screen.default_video_question")
-
-    history = await db.get_ai_conversation_wire_history(user_id)
-    turn = await _run_turn(
-        user_id, question, history,
-        video_context=video_analysis.to_context_block(analysis),
-    )
-    return JSONResponse(await _turn_response(user_id, turn, goal=question))
+        history = await db.get_ai_conversation_wire_history(user_id)
+        turn = await _run_turn(
+            user_id, question, history,
+            video_context=video_analysis.to_context_block(analysis),
+        )
+        return JSONResponse(await _turn_response(user_id, turn, goal=question))
+    finally:
+        _busy.discard(user_id)
 
 
 async def get_history(request: Request) -> JSONResponse:

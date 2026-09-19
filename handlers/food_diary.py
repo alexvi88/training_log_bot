@@ -33,6 +33,7 @@ from aiogram.types import CallbackQuery, Message, ReactionTypeEmoji
 
 import ai_limits
 import ai_trainer
+import busy_lock
 import config
 import db
 import formatting
@@ -59,10 +60,18 @@ def _try_claim_confirming(user_id: int) -> bool:
     """Atomically check-and-reserve `_confirming` for this user — no `await`
     between the membership check and the `.add()`, same reasoning as
     ai_trainer._try_claim_busy."""
-    if user_id in _confirming:
-        return False
-    _confirming.add(user_id)
-    return True
+    return busy_lock.try_claim(_confirming, user_id)
+
+
+# Разбор еды (_analyze_and_show ниже) сюда сходится тремя входами — фото,
+# текст, правка «✏️ Поправить», — и был единственной платёжной поверхностью
+# бота вовсе без замка от гонки: два быстрых фото тарелки подряд оба проходят
+# `ai_limits.check` до того, как первое успевает списаться
+# (`db.increment_ai_food_count` — только ПОСЛЕ ответа модели), и оба уходят в
+# модель — тот же инцидент, что уже был у вопросов тренеру (см.
+# `ai_trainer._try_claim_busy`). Свой набор, не общий с `ai_trainer._busy`:
+# разбор еды и чат тренера — разные деньги и разные экраны.
+_busy: set[int] = set()
 
 # Телеграмовское фото и так пережато, но подпирать base64-раздутым мегабайтником
 # запрос к модели незачем — тот же порог, что у фото-вопросов AI-тренеру.
@@ -310,104 +319,123 @@ async def _analyze_and_show(
         await message.reply(i18n.t("food.not_configured"))
         return
 
-    # Мгновенное «вижу» на само сообщение — до "🤔 Разбираю…" и до квоты, у
-    # обоих есть сетевой круг до Telegram и обратно. Плейсхолдер не убираем: он
-    # остаётся тем же сообщением, что превратится в карточку (edit_text ниже,
-    # см. _show_estimate) — реакция и текст отвечают на разные вопросы
-    # («заметил» и «что именно происходит сейчас»), а не дублируют друг друга.
-    with suppress(TelegramBadRequest):
-        await message.bot.set_message_reaction(
-            chat_id=message.chat.id, message_id=message.message_id,
-            reaction=[ReactionTypeEmoji(emoji="👀")],
+    # Бронь — до квоты и уж тем более до самого разбора: два быстрых фото
+    # тарелки подряд иначе оба проходят `ai_limits.check` (см. `_busy` выше)
+    # до того, как первое успевает списаться, и оба уходят в модель. Тап,
+    # который не успел застолбить место, получает тот же отказ, что и любой
+    # другой "занято" в боте (`ai.screen.busy`), а не тихо теряется в очереди.
+    user_id = message.from_user.id
+    if not busy_lock.try_claim(_busy, user_id):
+        await message.reply(i18n.t("ai.screen.busy"))
+        return
+    try:
+        # Мгновенное «вижу» на само сообщение — до "🤔 Разбираю…" и до квоты, у
+        # обоих есть сетевой круг до Telegram и обратно. Плейсхолдер не убираем:
+        # он остаётся тем же сообщением, что превратится в карточку (edit_text
+        # ниже, см. _show_estimate) — реакция и текст отвечают на разные
+        # вопросы («заметил» и «что именно происходит сейчас»), а не дублируют
+        # друг друга.
+        with suppress(TelegramBadRequest):
+            await message.bot.set_message_reaction(
+                chat_id=message.chat.id, message_id=message.message_id,
+                reaction=[ReactionTypeEmoji(emoji="👀")],
+            )
+
+        # Единственная платная поверхность бота, которая раньше не считалась
+        # вовсе: вопросы, видео и поиск свои квоты имели, а фотографировать
+        # тарелку можно было бесконечно. Проверяем здесь, потому что сюда
+        # сходятся все три входа — фото, текст и правка «✏️ Поправить».
+        block = await ai_limits.check(user_id, ai_limits.KIND_FOOD)
+        if block is not None:
+            logger.info("food analysis blocked for user %s: %s", user_id, block.log)
+            await ai_limits.reply(message, block)
+            # preview — свой аккаунт, ещё не нажавший «Понятно» сегодня: разбор
+            # всё равно идёт, предупреждение не отменяет то, что его вызвало.
+            if not block.preview:
+                await state.set_state(FoodDiaryFlow.viewing)
+                return
+
+        # Модели отдаём только пищевую часть прошлой догадки: file_id
+        # фотографии, признак источника и вердикт is_food ей ни о чём не
+        # говорят, а место в промпте занимают. Само фото при правке заново не
+        # пересылается — держать base64 картинки в FSM (а он пишется на диск)
+        # дороже, чем пересчитать оценку по прошлой раскладке плюс правке
+        # пользователя.
+        model_previous = (
+            {k: v for k, v in previous.items() if k not in ("photo_file_id", "source", "is_food")}
+            if previous
+            else None
         )
 
-    # Единственная платная поверхность бота, которая раньше не считалась вовсе:
-    # вопросы, видео и поиск свои квоты имели, а фотографировать тарелку можно
-    # было бесконечно. Проверяем здесь, потому что сюда сходятся все три входа —
-    # фото, текст и правка «✏️ Поправить».
-    block = await ai_limits.check(message.from_user.id, ai_limits.KIND_FOOD)
-    if block is not None:
-        logger.info("food analysis blocked for user %s: %s", message.from_user.id, block.log)
-        await ai_limits.reply(message, block)
-        # preview — свой аккаунт, ещё не нажавший «Понятно» сегодня: разбор
-        # всё равно идёт, предупреждение не отменяет то, что его вызвало.
-        if not block.preview:
+        user = await db.get_user(user_id)
+        with_macros = bool(user["food_macros_enabled"])
+
+        # Экран дня (с подсказкой «напиши, что съел») намеренно не удаляется —
+        # разбор идёт отдельным сообщением ниже, а не заменяет собой то, на
+        # что человек только что ответил.
+        placeholder = await message.answer(i18n.t("food.thinking"))
+        try:
+            estimate = await asyncio.wait_for(
+                ai_trainer.analyze_food(
+                    user_id,
+                    text=text,
+                    image_data_url=image_data_url,
+                    previous=model_previous,
+                    correction=correction,
+                    with_macros=with_macros,
+                ),
+                timeout=90,
+            )
+        except Exception:
+            logger.exception("food analysis failed for user %s", user_id)
+            with suppress(TelegramBadRequest):
+                await placeholder.edit_text(i18n.t("food.analysis_failed"))
+            # Возвращаемся в режим просмотра дня, не трогая сам экран дня — он
+            # не удалялся и не менялся, перерисовывать (и тем более удалять)
+            # нечего.
             await state.set_state(FoodDiaryFlow.viewing)
+            await state.update_data(fd_pending=None)
             return
 
-    # Модели отдаём только пищевую часть прошлой догадки: file_id фотографии,
-    # признак источника и вердикт is_food ей ни о чём не говорят, а место в
-    # промпте занимают. Само фото при правке заново не пересылается — держать
-    # base64 картинки в FSM (а он пишется на диск) дороже, чем пересчитать
-    # оценку по прошлой раскладке плюс правке пользователя.
-    model_previous = (
-        {k: v for k, v in previous.items() if k not in ("photo_file_id", "source", "is_food")}
-        if previous
-        else None
-    )
+        # Квота тратится за состоявшийся разбор — как и у вопросов с видео:
+        # сбой провайдера не должен стоить человеку попытки. Списывается и за
+        # «это не еда», и за правку: платный вызов уже сделан, и деньгам всё
+        # равно, чем он кончился. Атомарный UPDATE ... WHERE count < limit —
+        # вторая линия обороны на случай, если busy-замок выше когда-нибудь
+        # ослабят (см. db.try_increment_ai_food_count).
+        await db.try_increment_ai_food_count(user_id, config.AI_FOOD_DAILY_LIMIT)
 
-    user = await db.get_user(message.from_user.id)
-    with_macros = bool(user["food_macros_enabled"])
+        if not estimate.get("is_food", True):
+            # Модель уверенно говорит, что это не еда — не подсовываем «Всё
+            # верно?» с нечем подтверждать: карточка на пустом месте только
+            # злит (см. отчёт пользователя про «нахуя мне заносить»). Просто
+            # объясняем и возвращаем экран дня, ничего не сохраняя.
+            comment = estimate.get("comment", "").strip()
+            not_food_text = i18n.t("food.not_food_detected") + (f": {escape(comment)}" if comment else ".")
+            not_food_text += f"\n{i18n.t('food.not_food_hint')}"
+            with suppress(TelegramBadRequest):
+                await placeholder.edit_text(not_food_text)
+            await state.set_state(FoodDiaryFlow.viewing)
+            await state.update_data(fd_pending=None)
+            return
 
-    # Экран дня (с подсказкой «напиши, что съел») намеренно не удаляется —
-    # разбор идёт отдельным сообщением ниже, а не заменяет собой то, на что
-    # человек только что ответил.
-    placeholder = await message.answer(i18n.t("food.thinking"))
-    try:
-        estimate = await asyncio.wait_for(
-            ai_trainer.analyze_food(
-                message.from_user.id,
-                text=text,
-                image_data_url=image_data_url,
-                previous=model_previous,
-                correction=correction,
-                with_macros=with_macros,
-            ),
-            timeout=90,
+        if not estimate.get("description"):
+            # Модель не поняла, что на фото/в тексте — подставляем то, что
+            # написал человек, чтобы запись всё равно можно было сохранить
+            # своими словами.
+            estimate["description"] = text.strip() or i18n.t("food.default_meal_name")
+
+        # Фото не уходит в БД целиком: file_id хватает, чтобы показать 📷 в
+        # дневнике и (позже) переслать снимок, а картинки Telegram хранит у
+        # себя.
+        estimate["photo_file_id"] = photo_file_id or (previous or {}).get("photo_file_id")
+        estimate["source"] = (
+            "photo_text" if estimate["photo_file_id"] and text else
+            "photo" if estimate["photo_file_id"] else "text"
         )
-    except Exception:
-        logger.exception("food analysis failed for user %s", message.from_user.id)
-        with suppress(TelegramBadRequest):
-            await placeholder.edit_text(i18n.t("food.analysis_failed"))
-        # Возвращаемся в режим просмотра дня, не трогая сам экран дня — он не
-        # удалялся и не менялся, перерисовывать (и тем более удалять) нечего.
-        await state.set_state(FoodDiaryFlow.viewing)
-        await state.update_data(fd_pending=None)
-        return
-
-    # Квота тратится за состоявшийся разбор — как и у вопросов с видео: сбой
-    # провайдера не должен стоить человеку попытки. Списывается и за «это не
-    # еда», и за правку: платный вызов уже сделан, и деньгам всё равно, чем он
-    # кончился.
-    await db.increment_ai_food_count(message.from_user.id)
-
-    if not estimate.get("is_food", True):
-        # Модель уверенно говорит, что это не еда — не подсовываем «Всё верно?»
-        # с нечем подтверждать: карточка на пустом месте только злит (см. отчёт
-        # пользователя про «нахуя мне заносить»). Просто объясняем и возвращаем
-        # экран дня, ничего не сохраняя.
-        comment = estimate.get("comment", "").strip()
-        not_food_text = i18n.t("food.not_food_detected") + (f": {escape(comment)}" if comment else ".")
-        not_food_text += f"\n{i18n.t('food.not_food_hint')}"
-        with suppress(TelegramBadRequest):
-            await placeholder.edit_text(not_food_text)
-        await state.set_state(FoodDiaryFlow.viewing)
-        await state.update_data(fd_pending=None)
-        return
-
-    if not estimate.get("description"):
-        # Модель не поняла, что на фото/в тексте — подставляем то, что написал
-        # человек, чтобы запись всё равно можно было сохранить своими словами.
-        estimate["description"] = text.strip() or i18n.t("food.default_meal_name")
-
-    # Фото не уходит в БД целиком: file_id хватает, чтобы показать 📷 в дневнике
-    # и (позже) переслать снимок, а картинки Telegram хранит у себя.
-    estimate["photo_file_id"] = photo_file_id or (previous or {}).get("photo_file_id")
-    estimate["source"] = (
-        "photo_text" if estimate["photo_file_id"] and text else
-        "photo" if estimate["photo_file_id"] else "text"
-    )
-    await _show_estimate(message, state, estimate, placeholder=placeholder)
+        await _show_estimate(message, state, estimate, placeholder=placeholder)
+    finally:
+        _busy.discard(user_id)
 
 
 @router.message(StateFilter(FoodDiaryFlow.viewing), F.photo)

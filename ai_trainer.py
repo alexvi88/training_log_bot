@@ -4439,7 +4439,12 @@ async def _log_food(
         block = await ai_limits.check(user_id, ai_limits.KIND_FOOD)
         if block is None:
             estimated = await _estimate_missing_macros(user_id, description, entry, source=source)
-            await db.increment_ai_food_count(user_id)
+            # Атомарный UPDATE ... WHERE count < limit, как и у экрана
+            # дневника (см. db.try_increment_ai_food_count) — этот путь уже
+            # защищён от гонки busy-замком чата тренера (ai_trainer._busy
+            # держит один платный ход на пользователя всегда), но счётчику не
+            # повредит та же вторая линия обороны.
+            await db.try_increment_ai_food_count(user_id, config.AI_FOOD_DAILY_LIMIT)
         else:
             logger.info("food macro estimate blocked (ai_chat/mcp) for user %s: %s", user_id, block.log)
     eaten_on = timeutil.user_today(user).isoformat()

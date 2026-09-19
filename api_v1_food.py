@@ -22,11 +22,23 @@ from starlette.routing import Route
 import ai_limits
 import ai_trainer
 import api_v1_common as common
+import busy_lock
 import config
 import db
+import i18n
 import timeutil
 
 ApiError = common.ApiError
+
+# Тот же замок, что у бота (busy_lock.py, handlers/ai_trainer._busy) — один
+# разбор еды на пользователя одновременно. Без него два быстрых фото тарелки
+# подряд (двойной тап, ретрай) оба проходят `ai_limits.check` до того, как
+# первое успевает отметиться (`db.increment_ai_food_count` — только ПОСЛЕ
+# ответа модели), и оба уходят в модель — двойной платёж, а дневная квота
+# может быть превышена на число проскочивших так запросов. Свой набор, не
+# общий с api_v1_ai.py: разбор еды и вопрос тренеру — разные деньги и разные
+# экраны, один не должен блокировать другой.
+_busy: set[int] = set()
 
 
 def _parse_date(raw: Optional[str], user) -> dt.date:
@@ -190,33 +202,50 @@ async def parse_food(request: Request) -> JSONResponse:
     if not text and not image_data_url:
         raise ApiError(400, "bad_request", "text or image_data_url required")
 
-    # preview-режим (свои аккаунты без "Понятно" за сегодня) в боте пропускает
-    # шаг вместе с предупреждением — у API нет экрана, куда это предупреждение
-    # показать, так что здесь любой Block, включая preview, значит «квота
-    # исчерпана» и отдаётся как 429, без «показать и всё равно выполнить».
-    block = await ai_limits.check(user_id, ai_limits.KIND_FOOD)
-    if block is not None:
-        raise ApiError(429, "food_limit_exceeded", "daily food analysis limit reached")
-
     user = await db.get_user(user_id)
-    with_macros = bool(user["food_macros_enabled"]) if user else True
-    try:
-        estimate = await ai_trainer.analyze_food(
-            user_id,
-            text=text,
-            image_data_url=image_data_url,
-            previous=previous,
-            correction=correction,
-            with_macros=with_macros,
-            source="ios",
-        )
-    except Exception as exc:
-        raise ApiError(502, "analysis_failed", "food analysis failed") from exc
+    lang = user["lang"] if user is not None else "ru"
 
-    # Квота тратится за состоявшийся разбор, как и в боте — сбой уже
-    # произошёл бы раньше (см. except выше) и до сюда не дошёл.
-    await db.increment_ai_food_count(user_id)
-    return JSONResponse(estimate)
+    # Бронь — ДО проверки лимита: два параллельных запроса иначе оба читают
+    # ЕЩЁ не увеличенный счётчик, оба проходят `ai_limits.check` и оба уходят
+    # в модель (см. `_busy` выше). Второй получает не 5xx, а тот же самый
+    # отказ, что видит атлет в боте при двойном тапе (`ai.screen.busy`).
+    if not busy_lock.try_claim(_busy, user_id):
+        with i18n.use_lang(lang):
+            raise ApiError(429, "busy", i18n.t("ai.screen.busy"))
+    try:
+        # preview-режим (свои аккаунты без "Понятно" за сегодня) в боте
+        # пропускает шаг вместе с предупреждением — у API нет экрана, куда это
+        # предупреждение показать, так что здесь любой Block, включая preview,
+        # значит «квота исчерпана» и отдаётся как 429, без «показать и всё
+        # равно выполнить».
+        block = await ai_limits.check(user_id, ai_limits.KIND_FOOD)
+        if block is not None:
+            raise ApiError(429, "food_limit_exceeded", "daily food analysis limit reached")
+
+        with_macros = bool(user["food_macros_enabled"]) if user else True
+        try:
+            estimate = await ai_trainer.analyze_food(
+                user_id,
+                text=text,
+                image_data_url=image_data_url,
+                previous=previous,
+                correction=correction,
+                with_macros=with_macros,
+                source="ios",
+            )
+        except Exception as exc:
+            raise ApiError(502, "analysis_failed", "food analysis failed") from exc
+
+        # Квота тратится за состоявшийся разбор, как и в боте — сбой уже
+        # произошёл бы раньше (см. except выше) и до сюда не дошёл. Атомарный
+        # UPDATE ... WHERE count < limit (db.try_increment_ai_food_count) —
+        # вторая линия обороны на случай, если этот busy-замок когда-нибудь
+        # ослабят: сам счётчик больше не может перескочить свой потолок
+        # (см. докстринг db.try_increment_ai_food_count).
+        await db.try_increment_ai_food_count(user_id, config.AI_FOOD_DAILY_LIMIT)
+        return JSONResponse(estimate)
+    finally:
+        _busy.discard(user_id)
 
 
 async def set_goal(request: Request) -> JSONResponse:
