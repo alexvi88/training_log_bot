@@ -19,9 +19,9 @@ import pytest
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 
+import account_deletion
 import ai_trainer
 from fsm_storage import JSONFileStorage
-from handlers import admin
 from handlers import ai_trainer as ai_handler
 
 pytestmark = pytest.mark.asyncio
@@ -92,8 +92,7 @@ async def test_card_saves_the_program_while_the_account_is_alive(fresh_db, user_
 async def test_stale_card_resurrects_nothing_after_the_wipe(fresh_db, user_id, tmp_path):
     state, _ = await _draft_in_state(user_id, tmp_path)
 
-    await fresh_db.wipe_user_account(user_id)
-    await admin._forget_user_outside_db(state, user_id)
+    await account_deletion.delete_account(user_id, state.storage)
 
     callback = _card_tap(user_id)
     await ai_handler.ai_program_save(callback, state)
@@ -111,8 +110,7 @@ async def test_wipe_empties_the_draft_on_disk_too(fresh_db, user_id, tmp_path):
     state, _ = await _draft_in_state(user_id, tmp_path)
     assert json.loads(path.read_text())  # черновик там был
 
-    await fresh_db.wipe_user_account(user_id)
-    await admin._forget_user_outside_db(state, user_id)
+    await account_deletion.delete_account(user_id, state.storage)
 
     assert json.loads(path.read_text()) == {}
     assert await state.get_data() == {}

@@ -263,7 +263,10 @@ async def test_settings_keyboard_groups_into_three_blocks():
     assert rows[10] == ["settings:mcp"]
     assert rows[11] == ["feedback:open"]
     assert rows[12] == ["invite:show"]
-    assert rows[13] == ["settings:back"]
+    # Снос аккаунта — последним в блоке и отдельной строкой: единственная
+    # необратимая кнопка экрана, промахиваться по ней нельзя (Apple 5.1.1(v)).
+    assert rows[13] == ["settings:delete"]
+    assert rows[14] == ["settings:back"]
 
 
 async def test_settings_keyboard_hides_feedback_button_without_admin():
