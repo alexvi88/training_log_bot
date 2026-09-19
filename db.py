@@ -216,6 +216,27 @@ CREATE TABLE IF NOT EXISTS sets (
 CREATE INDEX IF NOT EXISTS idx_sets_exercise ON sets (exercise_id);
 CREATE INDEX IF NOT EXISTS idx_sets_block ON sets (block_id);
 
+-- Идемпотентность записи подхода по HTTP: клиент присылает свой ключ попытки
+-- (заведённый в момент нажатия кнопки, а не отправки — см. iOS PendingSet),
+-- повтор с тем же ключом отдаёт уже записанный подход вместо второй вставки.
+-- Отдельная таблица, а не колонка у sets: ключ — свойство ПОПЫТКИ записать,
+-- а не самого подхода (у одной строки "100 8, 100 7" из log_sets_from_text
+-- один ключ может покрывать сразу несколько подходов — отсюда position), и
+-- у большинства строк sets ключа не будет вовсе (боту он не нужен, только
+-- HTTP от приложения) — не раздувать самую частую таблицу колонкой, которая
+-- почти всегда NULL. user_id — свой, а не через sets->block->workout: только
+-- он даёт "уникально в пределах пользователя", а не глобально, одним индексом
+-- на месте, без JOIN на каждую проверку.
+CREATE TABLE IF NOT EXISTS set_write_attempts (
+    user_id INTEGER NOT NULL,
+    idempotency_key TEXT NOT NULL,
+    position INTEGER NOT NULL DEFAULT 0,
+    set_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (user_id, idempotency_key, position),
+    FOREIGN KEY (set_id) REFERENCES sets (id)
+);
+
 -- sent_on is the recipient's *own* calendar date, which is what the
 -- one-push-per-day rule is about; sent_at stays server time, for the admin log.
 -- They disagree whenever the user's send hour falls on the other side of the
@@ -4225,6 +4246,9 @@ async def append_set(
     weight: float,
     reps: int,
     rpe: Optional[float] = None,
+    *,
+    user_id: Optional[int] = None,
+    idempotency_key: Optional[str] = None,
 ) -> int:
     """Insert a set with the next round_index, choosing it under the write lock.
 
@@ -4232,11 +4256,30 @@ async def append_set(
     (a typed set racing the "=" repeat, say) could both read the same
     next_round_index and insert with it. The INSERT itself does the SELECT, so
     there's no window between them.
+
+    user_id/idempotency_key — необязательная идемпотентность для HTTP-записи
+    (см. set_write_attempts в SCHEMA). Бот их не передаёт, поэтому его путь —
+    буквально тот же код, что и раньше: обе проверки на idempotency_key ниже
+    просто не выполняются, ни одного лишнего запроса к БД. Ключ проверяется и
+    пишется под тем же взятием _write_lock, что и сама вставка: это одна
+    критическая секция, а не "проверить, потом вставить" — иначе два
+    одновременных повтора с одним ключом (двойная отправка из очереди
+    приложения после мнимого обрыва) оба прошли бы проверку до того, как
+    другой успеет записать результат, и оба бы вставили подход.
     """
     load_weight = await _load_weight_for(
         exercise_id, weight, await _workout_date_of_block(block_id)
     )
     async with _write_lock:
+        if idempotency_key:
+            cur = await conn().execute(
+                "SELECT set_id FROM set_write_attempts "
+                "WHERE user_id = ? AND idempotency_key = ? AND position = 0",
+                (user_id, idempotency_key),
+            )
+            existing = await cur.fetchone()
+            if existing is not None:
+                return existing["set_id"]
         cur = await conn().execute(
             "INSERT INTO sets "
             "(block_id, exercise_id, round_index, order_in_round, weight, reps, rpe, "
@@ -4248,8 +4291,85 @@ async def append_set(
                 block_id, exercise_id,
             ),
         )
+        set_id = cur.lastrowid
+        if idempotency_key:
+            await conn().execute(
+                "INSERT INTO set_write_attempts "
+                "(user_id, idempotency_key, position, set_id, created_at) VALUES (?, ?, 0, ?, ?)",
+                (user_id, idempotency_key, set_id, now_iso()),
+            )
         await conn().commit()
-        return cur.lastrowid
+        return set_id
+
+
+async def store_parsed_sets(
+    workout_id: int,
+    block_id: int,
+    exercise_id: int,
+    items: list[tuple[bool, float, int, Optional[float]]],
+    *,
+    user_id: Optional[int] = None,
+    idempotency_key: Optional[str] = None,
+) -> list[int]:
+    """Записать пачку разобранных подходов одной строки/голосом (общий хвост
+    api_v1.log_sets_from_text и log_set_from_voice) — голые повторы разносятся
+    по весу прошлого подхода, как раньше, только теперь ещё и одним взятием
+    _write_lock на всю пачку, а не по одному на подход, как у append_set.
+
+    items — (weight_omitted, weight, reps, rpe) в порядке ввода.
+
+    Пачка на одну строку "100 8, 100 7" — один ключ попытки, а не N: приложение
+    отправляет одну HTTP-попытку на всю строку, и повтор той же попытки должен
+    вернуть все её подходы, а не только первый. Отсюда — position: одна и та
+    же критическая секция проверяет и пишет все N строк set_write_attempts
+    разом, поэтому два одновременных повтора с одним ключом не смогут
+    перемежать свои вставки (второй просто ждёт лока, пока первый допишет
+    всю пачку, и увидит уже готовый результат целиком, а не половину).
+
+    Без ключа (бот, или клиент, ещё не обновлённый до отправки ключа) — тот
+    же код, только шаги с set_write_attempts не выполняются: поведение старых
+    клиентов не меняется ни на йоту.
+    """
+    async with _write_lock:
+        if idempotency_key:
+            cur = await conn().execute(
+                "SELECT position, set_id FROM set_write_attempts "
+                "WHERE user_id = ? AND idempotency_key = ? ORDER BY position",
+                (user_id, idempotency_key),
+            )
+            existing = await cur.fetchall()
+            if existing:
+                return [row["set_id"] for row in existing]
+
+        previous = await list_sets_for_workout_exercise(workout_id, exercise_id)
+        prev_weight = previous[-1]["weight"] if previous else 0.0
+        created_ids: list[int] = []
+        workout_date = await _workout_date_of_block(block_id)
+        for position, (weight_omitted, weight, reps, rpe) in enumerate(items):
+            actual_weight = prev_weight if (weight_omitted and prev_weight) else weight
+            load_weight = await _load_weight_for(exercise_id, actual_weight, workout_date)
+            cur = await conn().execute(
+                "INSERT INTO sets "
+                "(block_id, exercise_id, round_index, order_in_round, weight, reps, rpe, "
+                " load_weight, created_at) "
+                "SELECT ?, ?, COALESCE(MAX(round_index), 0) + 1, 0, ?, ?, ?, ?, ? "
+                "FROM sets WHERE block_id = ? AND exercise_id = ?",
+                (
+                    block_id, exercise_id, actual_weight, reps, rpe, load_weight, now_iso(),
+                    block_id, exercise_id,
+                ),
+            )
+            set_id = cur.lastrowid
+            created_ids.append(set_id)
+            prev_weight = actual_weight
+            if idempotency_key:
+                await conn().execute(
+                    "INSERT INTO set_write_attempts "
+                    "(user_id, idempotency_key, position, set_id, created_at) VALUES (?, ?, ?, ?, ?)",
+                    (user_id, idempotency_key, position, set_id, now_iso()),
+                )
+        await conn().commit()
+        return created_ids
 
 
 async def delete_last_set_in_block(block_id: int) -> Optional[aiosqlite.Row]:

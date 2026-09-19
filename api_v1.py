@@ -591,9 +591,18 @@ async def log_set(request: Request) -> JSONResponse:
         raise ApiError(400, "bad_request", "missing field: reps")
     reps = common.set_reps(body["reps"])
     rpe = common.set_rpe(body.get("rpe"))
+    # Ключ попытки — необязательный: старые сборки приложения его не шлют, и
+    # тогда append_set работает буквально как раньше (см. её докстринг). Когда
+    # он есть, это ключ, заведённый в момент нажатия кнопки на телефоне (а не
+    # в момент отправки) — так повтор из офлайн-очереди после отвалившегося
+    # интернета несёт тот же ключ и не заводит второй подход.
+    idempotency_key = common.optional_str(body, "idempotency_key")
     await _owned_exercise(exercise_id, user_id)
     block_id = await _block_for_exercise(workout_id, exercise_id)
-    set_id = await db.append_set(block_id, exercise_id, 0, weight, reps, rpe)
+    set_id = await db.append_set(
+        block_id, exercise_id, 0, weight, reps, rpe,
+        user_id=user_id, idempotency_key=idempotency_key,
+    )
     cur = await db.conn().execute("SELECT * FROM sets WHERE id = ?", (set_id,))
     row = await cur.fetchone()
     return JSONResponse(_set_json(row), status_code=201)
@@ -632,6 +641,7 @@ async def log_sets_from_text(request: Request) -> JSONResponse:
     text = str(_require(body, "text", str)).strip()
     if not text:
         raise ApiError(400, "bad_request", "text must not be empty")
+    idempotency_key = common.optional_str(body, "idempotency_key")
     await _owned_exercise(exercise_id, user_id)
 
     user = await db.get_user(user_id)
@@ -643,11 +653,20 @@ async def log_sets_from_text(request: Request) -> JSONResponse:
             # «не разобрал» от «сервер лёг», — но показывать он должен message.
             raise ApiError(400, "unparsed_input", exc.message) from exc
 
-    created = await _store_parsed_sets(workout_id, exercise_id, parsed)
+    created = await _store_parsed_sets(
+        workout_id, exercise_id, parsed, user_id=user_id, idempotency_key=idempotency_key
+    )
     return JSONResponse({"sets": created}, status_code=201)
 
 
-async def _store_parsed_sets(workout_id: int, exercise_id: int, parsed) -> list[dict[str, Any]]:
+async def _store_parsed_sets(
+    workout_id: int,
+    exercise_id: int,
+    parsed,
+    *,
+    user_id: Optional[int] = None,
+    idempotency_key: Optional[str] = None,
+) -> list[dict[str, Any]]:
     """Общий хвост log_sets_from_text и log_set_from_voice: `parser.parse_sets_line`
     (или голос → та же структура через voice_parse) уже дал список подходов —
     остаётся разнести голые повторы по весу прошлого подхода и записать блок.
@@ -655,21 +674,21 @@ async def _store_parsed_sets(workout_id: int, exercise_id: int, parsed) -> list[
     Вынесено при добавлении голосового ввода (`log_set_from_voice`), чтобы у
     двух источников одной и той же строки (текст и расшифрованный голос) не
     завелось двух копий этой логики.
-    """
-    # Голые повторы («8») означают «тот же вес, что в прошлом подходе». Какой
-    # это вес, знает сервер, а не клиент: иначе приложение считало бы
-    # предыдущий подход само и расходилось бы с ботом на суперсетах.
-    previous = await db.list_sets_for_workout_exercise(workout_id, exercise_id)
-    prev_weight = previous[-1]["weight"] if previous else 0.0
 
+    Сама запись и разнесение голых повторов теперь в db.store_parsed_sets: это
+    даёт одну строку одному ключу попытки, а не по подходу, и всей пачке —
+    одну атомарную критическую секцию (см. её докстринг).
+    """
     block_id = await _block_for_exercise(workout_id, exercise_id)
+    items = [(p.weight_omitted, p.weight, p.reps, p.rpe) for p in parsed]
+    set_ids = await db.store_parsed_sets(
+        workout_id, block_id, exercise_id, items,
+        user_id=user_id, idempotency_key=idempotency_key,
+    )
     created = []
-    for item in parsed:
-        weight = prev_weight if (item.weight_omitted and prev_weight) else item.weight
-        set_id = await db.append_set(block_id, exercise_id, 0, weight, item.reps, item.rpe)
-        prev_weight = weight
-        cur = await db.conn().execute("SELECT * FROM sets WHERE id = ?", (set_id,))
-        created.append(_set_json(await cur.fetchone()))
+    for set_id in set_ids:
+        row = await db.get_set(set_id)
+        created.append(_set_json(row))
     return created
 
 
@@ -698,6 +717,7 @@ async def log_set_from_voice(request: Request) -> JSONResponse:
     _require_open(workout)
     body = await _json_body(request)
     exercise_id = _require(body, "exercise_id", int)
+    idempotency_key = common.optional_str(body, "idempotency_key")
     await _owned_exercise(exercise_id, user_id)
 
     user = await db.get_user(user_id)
@@ -722,7 +742,9 @@ async def log_set_from_voice(request: Request) -> JSONResponse:
         if not parsed:
             raise ApiError(400, "unparsed_input", i18n.t("ai.screen.voice_empty"))
 
-    created = await _store_parsed_sets(workout_id, exercise_id, parsed)
+    created = await _store_parsed_sets(
+        workout_id, exercise_id, parsed, user_id=user_id, idempotency_key=idempotency_key
+    )
     return JSONResponse(
         {"sets": created, "transcript": transcript, "dropped_sets": dropped_sets},
         status_code=201,
