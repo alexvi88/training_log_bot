@@ -602,6 +602,14 @@ async def finish_workout(request: Request) -> JSONResponse:
         else None
     )
     await db.delete_empty_blocks(workout_id)
+    # Пустая тренировка не сохраняется — она удаляется, ровно как в боте
+    # (handlers.workout, сообщение workout.empty_deleted). Строка «Без
+    # упражнений · 0 подходов» в истории не сообщает ничего, кроме того, что
+    # человек открыл экран и передумал, а портит она и список, и все счётчики,
+    # которые считают тренировки, — включая серию недель и звание.
+    if not await db.list_exercise_ids_for_workout(workout_id):
+        await db.discard_workout(workout_id)
+        return JSONResponse({"discarded": True, "reason": "empty"})
     if not await db.finish_workout(workout_id, note=note, finished_at=finished_at):
         # Тренировку успели закончить с другого клиента, пока шёл этот запрос.
         raise ApiError(409, "workout_finished", "workout is already finished")
