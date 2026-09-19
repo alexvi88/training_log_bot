@@ -503,6 +503,7 @@
   "exercises.btn.own_description": "✏️ Your own description",
   "exercises.btn.photo": "✏️ Photo",
   "exercises.btn.progress": "📈 Progress",
+  "exercises.btn.replace_photo": "✏️ Replace photo",
   "exercises.btn.retype": "✏️ Retype it",
   "exercises.btn.share": "📤 Share",
   "exercises.description.current": "\n\nCurrent description:\n<i>{text}</i>",

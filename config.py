@@ -8,6 +8,12 @@ DB_PATH = os.getenv("DB_PATH", "/data/training_log.db")
 # FSM state survives restarts by persisting to this file instead of memory.
 FSM_STORAGE_PATH = os.getenv("FSM_STORAGE_PATH", "/data/fsm_storage.json")
 
+# Свои фото упражнений (exercise_photos.py). Каталог лежит рядом с базой, на
+# том же постоянном томе, а НЕ в media/exercises рядом с кодом: там ассеты
+# free-exercise-db, которые приезжают с каждым деплоем и деплоем же
+# переписываются — пользовательское фото пропало бы при первой же выкладке.
+EXERCISE_PHOTO_DIR = os.getenv("EXERCISE_PHOTO_DIR", "/data/media/exercise_photos")
+
 # Telegram user id that receives the daily stats report + DB backup. Unset disables the job.
 ADMIN_ID = int(os.getenv("ADMIN_ID")) if os.getenv("ADMIN_ID") else None
 

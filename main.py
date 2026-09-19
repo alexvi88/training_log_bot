@@ -25,6 +25,7 @@ import chat_bottom
 import config
 import db
 import engagement
+import exercise_photos
 import i18n
 import keyboards
 from fsm_storage import JSONFileStorage
@@ -480,6 +481,11 @@ async def main() -> None:
     # Разовые релизные рассылки: уходят сами после разворота, один раз на
     # человека (отметка о доставке — в базе, см. announcements.py).
     background.append(asyncio.create_task(announcements.run_pending_announcements(bot)))
+    # Разовый перенос уже приложенных фото упражнений из Telegram к нам на
+    # диск (см. exercise_photos.backfill_from_telegram — там же, почему это
+    # фоновая задача старта, а не скрипт руками). Идемпотентно: на втором
+    # старте брать нечего.
+    background.append(asyncio.create_task(exercise_photos.backfill_from_telegram(bot)))
     # Прополка OAuth не зависит ни от ADMIN_ID, ни от того, дошёл ли отчёт: она
     # чистит коды и заявки, которые копятся от каждой брошенной попытки
     # подключения (см. admin_tasks.run_oauth_purge_job).

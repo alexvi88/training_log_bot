@@ -1,6 +1,7 @@
 """CRUD/browsing for muscle groups and exercises (the "⚙️ Упражнения" menu)."""
 
 import datetime as dt
+import logging
 from contextlib import suppress
 from html import escape
 
@@ -22,12 +23,15 @@ import config
 import db
 import exercise_descriptions
 import exercise_media
+import exercise_photos
 import formatting
 import i18n
 import keyboards
 import seed_data
 import ui
 from fsm import ExerciseManage
+
+logger = logging.getLogger(__name__)
 
 router = Router(name="exercises")
 
@@ -572,7 +576,9 @@ def _exercise_edit_menu_keyboard(ex) -> InlineKeyboardMarkup:
     b.button(text=description_label, callback_data=f"exm:editdesc:{ex['id']}")
     b.button(text=i18n.t("exercises.btn.photo"), callback_data=f"exm:addphoto:{ex['id']}")
     b.button(text=i18n.t("exercises.btn.merge"), callback_data=f"exm:mergestart:{ex['id']}")
-    if ex["custom_photo_file_id"]:
+    # Не по одной колонке, а «есть ли фото вообще» (exercise_photos.has_photo):
+    # у фото, приехавшего из приложения, file_id пустой, но удалять там есть что.
+    if exercise_photos.has_photo(ex):
         b.button(text=i18n.t("exercises.btn.delete_photo"), callback_data=f"exm:delphotoask:{ex['id']}")
         b.button(text=i18n.t("btn.back"), callback_data=f"exm:ex:{ex['id']}")
         b.adjust(2, 2, 1, 1, 1)
@@ -612,12 +618,18 @@ async def _send_exercise_images(message: Message, ex, state: FSMContext) -> bool
     demo photos. Returns whether any were sent."""
     await _clear_exercise_media(message.bot, message.chat.id, state)
     group_name = await _exercise_group_name(ex)
-    if ex["custom_photo_file_id"]:
+    # Ссылка в Telegram, а если её нет — файл с диска (exercise_photos.
+    # telegram_input): фото могло приехать из приложения или пережить смену
+    # токена бота. Полученный file_id запоминаем, чтобы заливка файла была
+    # ровно одна на фото.
+    custom_photo = exercise_photos.telegram_input(ex)
+    if custom_photo is not None:
         sent = await message.answer_photo(
-            ex["custom_photo_file_id"],
+            custom_photo,
             caption=formatting.clamp_caption(_exercise_info_text(ex, group_name=group_name)),
             parse_mode="HTML",
         )
+        await exercise_photos.remember_sent_file_id(ex, sent)
         await state.update_data(exm_media_msg_ids=[sent.message_id])
         return True
     clip = exercise_media.get_animation_for(ex)
@@ -715,7 +727,19 @@ async def exm_photo_entered(message: Message, state: FSMContext):
         return
     data = await state.get_data()
     ex_id = data["exm_exercise_id"]
-    await db.set_exercise_photo(ex_id, message.photo[-1].file_id)
+    file_id = message.photo[-1].file_id
+    # Кроме ссылки сохраняем сам файл: ссылка живёт до смены токена бота, и
+    # приложению она вообще ни о чём не говорит (см. exercise_photos.py).
+    # Скачивание могло не дойти — тогда остаётся хотя бы ссылка, и перенос
+    # доделает backfill_from_telegram на следующем старте: фото в боте важнее,
+    # чем фото в приложении прямо сейчас.
+    local_name = None
+    try:
+        buf = await message.bot.download(file_id)
+        local_name = exercise_photos.save(ex_id, buf.read(), exercise_photos.TELEGRAM_EXTENSION)
+    except Exception:
+        logger.warning("failed to store exercise %s photo on disk", ex_id, exc_info=True)
+    await db.set_exercise_photo(ex_id, file_id, local_name)
     await state.set_state(ExerciseManage.picking_exercise)
     ex = await db.get_exercise(ex_id)
     has_images = await _send_exercise_images(message, ex, state)
@@ -727,7 +751,7 @@ async def exm_photo_entered(message: Message, state: FSMContext):
 async def exm_delete_photo_confirm(callback: CallbackQuery, state: FSMContext):
     ex_id = int(callback.data.split(":")[2])
     ex = await db.get_exercise(ex_id)
-    if ex is None or ex["user_id"] != callback.from_user.id or not ex["custom_photo_file_id"]:
+    if ex is None or ex["user_id"] != callback.from_user.id or not exercise_photos.has_photo(ex):
         await ui.alert_exercise_not_found(callback)
         return
     kb = keyboards.yes_no_keyboard(

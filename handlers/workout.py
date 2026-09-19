@@ -34,6 +34,7 @@ import dashboard_data
 import db
 import exercise_descriptions
 import exercise_media
+import exercise_photos
 import formatting
 import i18n
 import keyboards
@@ -187,10 +188,14 @@ async def _send_sticky_photo(bot, chat_id: int, ex) -> list[int]:
     """Send the active exercise's reference photo(s); returns the sent message ids
     ([] when the exercise has no photo at all)."""
     caption = _sticky_photo_caption(ex)
-    if ex["custom_photo_file_id"]:
+    # То же, что в карточке упражнения: ссылка в Telegram, а нет её — файл с
+    # диска, и полученный file_id сразу запоминается (exercise_photos.py).
+    custom_photo = exercise_photos.telegram_input(ex)
+    if custom_photo is not None:
         sent = await bot.send_photo(
-            chat_id=chat_id, photo=ex["custom_photo_file_id"], caption=caption, parse_mode="HTML"
+            chat_id=chat_id, photo=custom_photo, caption=caption, parse_mode="HTML"
         )
+        await exercise_photos.remember_sent_file_id(ex, sent)
         return [sent.message_id]
     clip = exercise_media.get_animation_for(ex)
     if clip:
