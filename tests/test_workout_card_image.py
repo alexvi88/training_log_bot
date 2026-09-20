@@ -71,3 +71,29 @@ def test_every_rendered_row_fits_the_card_width():
     for line in body:
         for chunk in charts._wrap_card_line(line):
             assert len(chunk) <= charts._CARD_BODY_WIDTH
+
+
+def test_card_theme_defaults_to_bot():
+    """Бот не передаёт theme вовсе — дефолт обязан остаться тёмным, как был
+    всегда: смена палитры без явного запроса поменяла бы карточки в
+    Telegram у всех, кто ничего не менял."""
+    blocks = [ExerciseBlockView(group_name="ноги", exercise_name="присед", sets=[(100.0, 5)])]
+    title, body, footer, note = formatting.build_workout_card(dt.datetime(2026, 7, 26, 13), blocks)
+
+    png_default = charts.render_workout_card(title, body, footer, note)
+    png_bot = charts.render_workout_card(title, body, footer, note, theme="bot")
+
+    assert png_default[:8] == b"\x89PNG\r\n\x1a\n"
+    assert png_default == png_bot
+
+
+def test_card_renders_with_app_theme():
+    """theme="app" — светлая палитра iOS-приложения (api_v1_history.py),
+    рисует другой (не бот-тёмный) растр тем же набором строк."""
+    blocks = [ExerciseBlockView(group_name="ноги", exercise_name="присед", sets=[(100.0, 5)])]
+    title, body, footer, note = formatting.build_workout_card(dt.datetime(2026, 7, 26, 13), blocks)
+
+    png_app = charts.render_workout_card(title, body, footer, note, theme="app")
+
+    assert png_app[:8] == b"\x89PNG\r\n\x1a\n"
+    assert png_app != charts.render_workout_card(title, body, footer, note, theme="bot")
