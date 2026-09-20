@@ -3317,6 +3317,10 @@ async def discard_workout(workout_id: int) -> None:
     rollback: частичное удаление, оставленное в открытой транзакции,
     закоммитит первый же следующий (чужой) commit на этом соединении — и
     тренировка останется в базе выпотрошенной, без подходов, но со статусом.
+
+    Порядок удаления проверен regression-тестом
+    (tests/test_discard_workout_idempotency_fk.py), который воспроизводит
+    именно этот constraint на реальных данных с idempotency-записью подхода.
     """
     async with _write_lock:
         db = conn()
