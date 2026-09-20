@@ -81,7 +81,7 @@ async def build_block_views(
         gname = await group_info(ex["primary_group_id"])
         gold_index = None
         if workout is not None:
-            gold_index = _best_gold_index(
+            gold_index = best_gold_index(
                 [
                     (load, reps, rpe)
                     for load, (_w, reps), rpe in zip(
@@ -145,7 +145,7 @@ async def build_block_views(
     return views
 
 
-def _best_gold_index(
+def best_gold_index(
     loaded_sets: list[tuple[float, int, float | None]], previous_best: float, formula: str
 ) -> int | None:
     """Index of the session's best set, if it clears the exercise's all-time
@@ -279,3 +279,45 @@ def _session_record(
         return None, (best if best > prev_best else None)
     delta = new_session.top_e1rm - prior_pr.max_e1rm
     return (delta if delta > 0 else None), None
+
+
+async def sets_beat_record(
+    ex_id: int, workout_id: int, logged: list[tuple[float, int, float | None]], formula: str
+) -> bool:
+    """True if any of the sets just logged is a genuine all-time record for this
+    exercise — a new best e1RM or a new heaviest weight (or, for bodyweight moves,
+    the most reps in a set). Compared against every prior finished session, so
+    the current workout's own earlier sets are excluded.
+
+    Live, per-set signal — different from `_session_record` above, which
+    compares the whole SESSION's best set against the best prior session and
+    only makes sense once the session (or exercise block) is done. This one
+    answers "does the bot's 🔥 reaction fire right now", the same question the
+    HTTP API needs answered for the app's live feed (see api_v1.log_set).
+    """
+    workout = await db.get_workout(workout_id)
+    if workout is None:
+        return False
+    started = workout["started_at"]
+    history_rows = await db.list_sets_for_exercise(ex_id, exclude_workout_id=workout_id)
+    history_set_rows = [
+        analytics.SetRow(db.load_of(r), r["reps"], r["workout_id"], r["started_at"], r["rpe"])
+        for r in history_rows
+        if r["started_at"] < started
+    ]
+    prior_sessions = analytics.group_sets_by_session(history_set_rows)
+    for s in prior_sessions:
+        s.formula = formula
+    if not prior_sessions:
+        return False  # first-ever session with this exercise — nothing to beat yet
+    prior = analytics.compute_personal_records(prior_sessions)
+    is_bodyweight = all(w == 0 for w, _r, _rpe in logged)
+    if is_bodyweight:
+        prior_best_reps = max(prior.max_reps_at_weight.values(), default=0)
+        return any(r > prior_best_reps for _w, r, _rpe in logged)
+    for weight, reps, rpe in logged:
+        if weight > prior.max_weight:
+            return True
+        if analytics.e1rm(weight, reps, formula, rpe) > prior.max_e1rm:
+            return True
+    return False

@@ -638,40 +638,10 @@ def _logging_hint(
     return body
 
 
-async def _sets_beat_record(
-    ex_id: int, workout_id: int, logged: list[tuple[float, int, float | None]], formula: str
-) -> bool:
-    """True if any of the sets just logged is a genuine all-time record for this
-    exercise — a new best e1RM or a new heaviest weight (or, for bodyweight moves,
-    the most reps in a set). Compared against every prior finished session, so
-    the current workout's own earlier sets are excluded.
-    """
-    workout = await db.get_workout(workout_id)
-    if workout is None:
-        return False
-    started = workout["started_at"]
-    history_rows = await db.list_sets_for_exercise(ex_id, exclude_workout_id=workout_id)
-    history_set_rows = [
-        analytics.SetRow(db.load_of(r), r["reps"], r["workout_id"], r["started_at"], r["rpe"])
-        for r in history_rows
-        if r["started_at"] < started
-    ]
-    prior_sessions = analytics.group_sets_by_session(history_set_rows)
-    for s in prior_sessions:
-        s.formula = formula
-    if not prior_sessions:
-        return False  # first-ever session with this exercise — nothing to beat yet
-    prior = analytics.compute_personal_records(prior_sessions)
-    is_bodyweight = all(w == 0 for w, _r, _rpe in logged)
-    if is_bodyweight:
-        prior_best_reps = max(prior.max_reps_at_weight.values(), default=0)
-        return any(r > prior_best_reps for _w, r, _rpe in logged)
-    for weight, reps, rpe in logged:
-        if weight > prior.max_weight:
-            return True
-        if analytics.e1rm(weight, reps, formula, rpe) > prior.max_e1rm:
-            return True
-    return False
+# Перенесена в view_builder.sets_beat_record — тот же вопрос («бьёт ли этот
+# подход рекорд прямо сейчас») нужен и HTTP API для живой ленты приложения
+# (api_v1.log_set), а handlers/workout.py тянуть в api_v1 нельзя (aiogram).
+_sets_beat_record = view_builder.sets_beat_record
 
 
 async def _evaluate_achievements(
