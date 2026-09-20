@@ -133,11 +133,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import secrets
 from typing import Any, Optional
 
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import FileResponse, JSONResponse
 from starlette.routing import Route
 
 import ai_limits
@@ -147,6 +148,7 @@ import ai_trainer
 import api_v1_common as common
 import api_v1_voice
 import busy_lock
+import chat_attachments
 import config
 import db
 import exercise_mentions
@@ -215,6 +217,17 @@ VIDEO_EXTENSION_BY_MIME = {
     "video/webm": "webm",
 }
 
+# Content-Type для вложений истории чата (chat_attachments.py) по
+# расширению файла на диске — свой маленький словарь, а не общесистемный
+# mimetypes.guess_type, ровно как у api_v1_media._CONTENT_TYPES: набор
+# расширений тут фиксирован (IMAGE_EXTENSION_BY_MIME + FRAME_EXTENSION).
+_IMAGE_CONTENT_TYPES = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+}
+
 
 async def _limits_json(user_id: int) -> dict[str, Any]:
     """Квота вопросов + можно ли прямо сейчас спросить.
@@ -261,6 +274,7 @@ async def _run_turn(
     *,
     image_data_url: Optional[str] = None,
     video_context: Optional[str] = None,
+    saved_image_path: Optional[str] = None,
 ) -> dict[str, Any]:
     """Один вызов ai_trainer.ask() с полным набором колбэков — общее ядро для
     /ai/ask, /ai/video и для «опросник закончился, идём собирать программу»
@@ -272,6 +286,12 @@ async def _run_turn(
     ask() только когда заданы, а не всегда голым None: test_api_v1_ai.py
     проверяет ТОЧНЫЙ набор колбэков в kwargs у обычного текстового вопроса, и
     лишний ключ там — уже другой контракт.
+
+    saved_image_path — имя файла в config.AI_CHAT_MEDIA_DIR (см.
+    chat_attachments.py), которое уходит в db.add_ai_conversation_turn вместе
+    с этим ходом, чтобы GET /ai/history мог отдать картинку. Не то же самое,
+    что image_data_url: этот параметр только записывается в историю, самой
+    модели ничего из него не уходит (для этого image_data_url).
 
     Проверка лимита — здесь, а не в вызывающих: это ЕДИНСТВЕННОЕ место, где
     HTTP-слой реально идёт к модели, и `ai_limits.check` обязан стоять перед
@@ -331,7 +351,7 @@ async def _run_turn(
 
     wire_messages = wire_cell.get("messages")
     if wire_messages is not None:
-        await db.add_ai_conversation_turn(user_id, question, answer, wire_messages)
+        await db.add_ai_conversation_turn(user_id, question, answer, wire_messages, image_path=saved_image_path)
     else:
         # on_wire не сработал (не должно случаться — ask() зовёт его перед
         # каждым успешным возвратом текста, см. ai_trainer.py), но история
@@ -342,7 +362,7 @@ async def _run_turn(
             {"role": "user", "content": question},
             {"role": "assistant", "content": answer},
         ]
-        await db.add_ai_conversation_turn(user_id, question, answer, fallback_wire)
+        await db.add_ai_conversation_turn(user_id, question, answer, fallback_wire, image_path=saved_image_path)
 
     return {"answer": answer, "draft": dict(draft_cell) if draft_cell else None, "questions": questions_cell}
 
@@ -514,15 +534,18 @@ async def _turn_response(user_id: int, turn: dict[str, Any], goal: str) -> dict[
     }
 
 
-def _validate_image_data_url(data_url: str, *, too_big_message: str) -> None:
+def _validate_image_data_url(data_url: str, *, too_big_message: str) -> tuple[bytes, str]:
     """Проверить формат и настоящий размер фото-вложения (см.
     common.decode_data_url и докстринг api_v1_voice.py — тот же приём: JSON +
-    data: URL, а не multipart). Саму строку возвращать незачем — она уходит
-    ai_trainer.ask() как есть, декодируем только чтобы измерить честные байты
-    после base64, а не поверить длине JSON-поля."""
-    raw, _mime, _ext = common.decode_data_url(data_url, IMAGE_EXTENSION_BY_MIME, field="image_data_url")
+    data: URL, а не multipart) и вернуть (байты, расширение) — их сохраняет
+    вызывающий в chat_attachments.save_photo, чтобы фото пережило уход с
+    экрана чата (см. докстринг chat_attachments.py). Строка самой data: URL
+    уходит ai_trainer.ask() отдельно, как и раньше — этот разбор только
+    измеряет честные байты после base64, а не поверить длине JSON-поля."""
+    raw, _mime, ext = common.decode_data_url(data_url, IMAGE_EXTENSION_BY_MIME, field="image_data_url")
     if len(raw) > MAX_IMAGE_BYTES:
         raise ApiError(400, "photo_too_big", too_big_message)
+    return raw, ext
 
 
 def _claim_turn_or_429(user_id: int, lang: str) -> None:
@@ -568,12 +591,26 @@ async def ask_question(request: Request) -> JSONResponse:
     user = await db.get_user(user_id)
     lang = user["lang"] if user is not None else "ru"
 
+    # Сохраняем ДО обращения к модели, не после: если ask() упадёт или
+    # ответ не уложится в таймаут, до db.add_ai_conversation_turn дело не
+    # дойдёт вовсе (см. _run_turn), а файл на диске — мелкая, отдельная от
+    # хода операция, которой нет смысла зависеть от исхода вопроса тренеру.
+    #
+    # Сбой самого сохранения (диск, права, ФС только для чтения) — тоже не
+    # повод не отвечать: картинка в истории чата — удобство сверху, а не
+    # то, ради чего вопрос вообще задают. Молча остаёмся без неё, как и при
+    # неудачной вытяжке кадра из видео (chat_attachments.save_video_frame).
+    saved_image_path: Optional[str] = None
     with i18n.use_lang(lang):
         if image_data_url is not None:
-            _validate_image_data_url(
+            raw, ext = _validate_image_data_url(
                 image_data_url,
                 too_big_message=i18n.t("ai.screen.photo_too_big", mb=MAX_IMAGE_BYTES // (1024 * 1024)),
             )
+            try:
+                saved_image_path = chat_attachments.save_photo(user_id, raw, ext)
+            except Exception:
+                logger.exception("chat photo save failed for user %s", user_id)
         question = common.optional_str(body, "question") or ""
         if not question:
             if image_data_url is None:
@@ -590,8 +627,19 @@ async def ask_question(request: Request) -> JSONResponse:
         # (см. db.ai_conversation_turns и докстринг модуля). Пусто у нового
         # разговора или сразу после DELETE /ai/history.
         history = await db.get_ai_conversation_wire_history(user_id)
-        turn = await _run_turn(user_id, question, history, image_data_url=image_data_url)
+        turn = await _run_turn(
+            user_id, question, history,
+            image_data_url=image_data_url, saved_image_path=saved_image_path,
+        )
         return JSONResponse(await _turn_response(user_id, turn, goal=question))
+    except Exception:
+        # Ход не состоялся (лимит, таймаут, сбой модели) — до
+        # db.add_ai_conversation_turn дело не дошло, и файл на диске никто
+        # не будет знать по имени: сносим сами, иначе это утечка на каждый
+        # неудачный фото-вопрос.
+        if saved_image_path is not None:
+            chat_attachments.delete(saved_image_path)
+        raise
     finally:
         _busy.discard(user_id)
 
@@ -833,6 +881,7 @@ async def ask_video(request: Request) -> JSONResponse:
     # текущем запросе) и оба заплатили бы за Qwen3-VL и за Grok — ровно та
     # гонка, что описана у `_busy` выше.
     _claim_turn_or_429(user_id, lang)
+    saved_image_path: Optional[str] = None
     try:
         block = await ai_limits.check(user_id, ai_limits.KIND_VIDEO)
         if block is not None:
@@ -855,6 +904,13 @@ async def ask_video(request: Request) -> JSONResponse:
         # 502 выше.
         await db.increment_ai_video_count(user_id)
 
+        # Кадр-превью для истории чата (см. chat_attachments.py) — само видео
+        # не хранится. Через to_thread: ffmpeg-процесс синхронный и держал
+        # бы event loop, пока разбирает файл. Неудача (битый кодек, ffmpeg
+        # не смог) не должна ронять ответ тренера — разбор уже состоялся и
+        # оплачен, история просто останется без картинки.
+        saved_image_path = await asyncio.to_thread(chat_attachments.save_video_frame, user_id, raw)
+
         with i18n.use_lang(lang):
             asked = caption or (
                 i18n.t("ai.screen.analyze_technique", hint=exercise_hint) if exercise_hint else ""
@@ -865,8 +921,17 @@ async def ask_video(request: Request) -> JSONResponse:
         turn = await _run_turn(
             user_id, question, history,
             video_context=video_analysis.to_context_block(analysis),
+            saved_image_path=saved_image_path,
         )
         return JSONResponse(await _turn_response(user_id, turn, goal=question))
+    except Exception:
+        # Тот же случай, что и в ask_question: ход не состоялся уже ПОСЛЕ
+        # того, как кадр лёг на диск (например, вопрос тренеру не уложился
+        # в таймаут) — до db.add_ai_conversation_turn дело не дошло, и файл
+        # без строки в БД просто утечка.
+        if saved_image_path is not None:
+            chat_attachments.delete(saved_image_path)
+        raise
     finally:
         _busy.discard(user_id)
 
@@ -911,6 +976,15 @@ async def get_history(request: Request) -> JSONResponse:
     в JSON было бы лишним трафиком и утечкой внутренностей (см. докстринг
     модуля). `limit` считает ХОДЫ (вопрос+ответ), а не отдельные сообщения —
     так же, как хранит их db.ai_conversation_turns.
+
+    `image_url` — у реплики пользователя, если к вопросу было приложено фото
+    или видео (у видео — кадр-превью, см. chat_attachments.py). Путь вида
+    `/ai/history/{id}/image` — БЕЗ префикса `/v1` (его перед каждым relative-
+    URL сама подставляет APIClient.request на клиенте, см. её докстринг), а
+    не ссылка на файл напрямую: у файла нет колонки владельца, и раздавать
+    его можно только сверив id хода с автором токена (см. get_history_image
+    ниже) — то же самое, чем /exercises/{id}/photo защищает своё фото
+    упражнения.
     """
     user_id = await common.authed_user_id(request)
     limit = common.query_int(
@@ -920,9 +994,42 @@ async def get_history(request: Request) -> JSONResponse:
     turns = await db.get_ai_conversation_history(user_id, limit=limit)
     messages: list[dict[str, Any]] = []
     for row in turns:
-        messages.append({"role": "user", "text": row["question"], "created_at": row["created_at"]})
+        user_message: dict[str, Any] = {
+            "role": "user", "text": row["question"], "created_at": row["created_at"],
+        }
+        if row["image_path"]:
+            user_message["image_url"] = f"/ai/history/{row['id']}/image"
+        messages.append(user_message)
         messages.append({"role": "assistant", "text": row["answer"], "created_at": row["created_at"]})
     return JSONResponse({"messages": messages})
+
+
+async def get_history_image(request: Request) -> Any:
+    """Само вложение (фото к вопросу или кадр-превью видео) байтами — тот же
+    приём, что и у своего фото упражнения (api_v1_media.get_exercise_photo):
+    приватный файл, Bearer-токен обязателен, отдаём владельцу хода, а не по
+    голому имени файла.
+
+    `turn_id`, а не имя файла в URL: имя ничего не говорит о владельце, а
+    db.get_ai_conversation_turn проверяет telegram_id хода против токена —
+    чужой id (угаданный или подсмотренный) получает тот же 404, что и
+    отсутствующий вовсе."""
+    user_id = await common.authed_user_id(request)
+    turn_id = int(request.path_params["turn_id"])
+    turn = await db.get_ai_conversation_turn(user_id, turn_id)
+    if turn is None or not turn["image_path"]:
+        raise ApiError(404, "not_found", "no image for this turn")
+    path = chat_attachments.path_for(turn["image_path"])
+    if path is None:
+        raise ApiError(404, "not_found", "no image for this turn")
+
+    ext = os.path.splitext(path)[1].lower()
+    content_type = _IMAGE_CONTENT_TYPES.get(ext, "application/octet-stream")
+    # Та же логика кэша, что и у своего фото упражнения: приватное и может
+    # смениться никогда (вложение хода не переписывается), но `immutable`
+    # всё равно ни к чему — снесённый вместе с вытесненным ходом файл потом
+    # должен запрашиваться заново, а не отдаваться из кэша браузера как 200.
+    return FileResponse(path, media_type=content_type, headers={"Cache-Control": "private, max-age=0, must-revalidate"})
 
 
 async def delete_history(request: Request) -> JSONResponse:
@@ -984,5 +1091,6 @@ routes = [
     Route("/ai/pending", get_pending_state, methods=["GET"]),
     Route("/ai/history", get_history, methods=["GET"]),
     Route("/ai/history", delete_history, methods=["DELETE"]),
+    Route("/ai/history/{turn_id:int}/image", get_history_image, methods=["GET"]),
     Route("/ai/thinking", get_thinking, methods=["GET"]),
 ]

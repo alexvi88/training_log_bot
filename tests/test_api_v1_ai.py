@@ -847,6 +847,126 @@ async def test_ask_rejects_unsupported_photo_format(fresh_db, client_factory, mo
     assert resp.json()["error"] == "unsupported_media_type"
 
 
+# ---------- фото сохраняется на диск и видно в GET /ai/history ----------
+#
+# chat_attachments.py: раньше и фото, и видео к вопросу уходили только в
+# модель, а в истории оставался текстовый маркер. Эти тесты проверяют
+# ровно то, чего не было — что фото переживает уход с экрана.
+
+
+@pytest.fixture
+def chat_media_dir(tmp_path, monkeypatch):
+    path = tmp_path / "ai_chat"
+    monkeypatch.setattr(config, "AI_CHAT_MEDIA_DIR", str(path))
+    return path
+
+
+@pytest.mark.asyncio
+async def test_ask_with_photo_saves_it_and_history_links_to_it(
+    fresh_db, client_factory, monkeypatch, chat_media_dir
+):
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    payload = b"\xff\xd8\xff-jpeg-ish-bytes-for-the-test"
+    data_url = _image_data_url(payload=payload)
+
+    async def fake_ask(user_id, question, history, **kwargs):
+        return "Это тренажёр Смита."
+
+    monkeypatch.setattr(ai_trainer, "ask", fake_ask)
+    client = await _linked_client(fresh_db, client_factory)
+
+    resp = await client.post("/ai/ask", json={"image_data_url": data_url})
+    assert resp.status_code == 200, resp.text
+
+    # Файл реально лёг на диск — не только имя в БД.
+    saved = list(chat_media_dir.glob("u111_*.jpg"))
+    assert len(saved) == 1
+    assert saved[0].read_bytes() == payload
+
+    hist = await client.get("/ai/history")
+    assert hist.status_code == 200
+    messages = hist.json()["messages"]
+    user_message = next(m for m in messages if m["role"] == "user")
+    assert user_message["image_url"].startswith("/ai/history/")
+    assert user_message["image_url"].endswith("/image")
+
+    turn_id = user_message["image_url"].split("/")[3]
+    image_resp = await client.get(f"/ai/history/{turn_id}/image")
+    assert image_resp.status_code == 200
+    assert image_resp.content == payload
+    assert image_resp.headers["content-type"] == "image/jpeg"
+
+
+@pytest.mark.asyncio
+async def test_history_image_requires_auth(fresh_db, client_factory, monkeypatch, chat_media_dir):
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+
+    async def fake_ask(user_id, question, history, **kwargs):
+        return "ответ"
+
+    monkeypatch.setattr(ai_trainer, "ask", fake_ask)
+    client = await _linked_client(fresh_db, client_factory)
+    await client.post("/ai/ask", json={"image_data_url": _image_data_url()})
+
+    hist = await client.get("/ai/history")
+    turn_id = next(m for m in hist.json()["messages"] if m["role"] == "user")["image_url"].split("/")[3]
+
+    anon = client_factory()
+    resp = await anon.get(f"/ai/history/{turn_id}/image")
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_history_image_not_visible_to_other_user(
+    fresh_db, client_factory, monkeypatch, chat_media_dir
+):
+    """Чужой ход по угаданному id — 404, не чужая картинка."""
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+
+    async def fake_ask(user_id, question, history, **kwargs):
+        return "ответ"
+
+    monkeypatch.setattr(ai_trainer, "ask", fake_ask)
+    owner = await _linked_client(fresh_db, client_factory)
+    await owner.post("/ai/ask", json={"image_data_url": _image_data_url()})
+    hist = await owner.get("/ai/history")
+    turn_id = next(m for m in hist.json()["messages"] if m["role"] == "user")["image_url"].split("/")[3]
+
+    intruder = await _linked_client(fresh_db, client_factory, telegram_id=222)
+    resp = await intruder.get(f"/ai/history/{turn_id}/image")
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_ask_photo_save_failure_does_not_block_the_answer(
+    fresh_db, client_factory, monkeypatch, chat_media_dir
+):
+    """Диск недоступен/save упал — вопрос тренеру всё равно должен ответить,
+    просто без картинки в истории. Само хранение — не то, ради чего люди
+    сюда пишут."""
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+
+    async def fake_ask(user_id, question, history, **kwargs):
+        return "Это тренажёр Смита."
+
+    monkeypatch.setattr(ai_trainer, "ask", fake_ask)
+    import chat_attachments
+
+    def boom(*args, **kwargs):
+        raise OSError("disk is on fire")
+
+    monkeypatch.setattr(chat_attachments, "save_photo", boom)
+    client = await _linked_client(fresh_db, client_factory)
+
+    resp = await client.post("/ai/ask", json={"image_data_url": _image_data_url()})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["answer"] == "Это тренажёр Смита."
+
+    hist = await client.get("/ai/history")
+    user_message = next(m for m in hist.json()["messages"] if m["role"] == "user")
+    assert "image_url" not in user_message
+
+
 # ---------- POST /ai/video ----------
 
 
@@ -934,6 +1054,77 @@ async def test_ask_video_resolves_exercise_from_caption(fresh_db, client_factory
         json={"video_data_url": _video_data_url(), "caption": "румынская тяга"},
     )
     assert resp.status_code == 200, resp.text
+
+
+@pytest.mark.asyncio
+async def test_ask_video_saves_frame_and_history_links_to_it(
+    fresh_db, client_factory, monkeypatch, chat_media_dir
+):
+    """Сам ролик НЕ хранится — только кадр-превью, тем же путём в истории,
+    что и у фото-вопроса (см. chat_attachments.save_video_frame)."""
+    monkeypatch.setattr(config, "video_analysis_available", lambda: True)
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    async def fake_analyze(*a, **k):
+        return _fake_analysis()
+
+    monkeypatch.setattr(video_analysis, "analyze", fake_analyze)
+
+    import chat_attachments
+
+    frame_bytes = b"\xff\xd8\xff-a-jpeg-frame"
+
+    def fake_save_frame(user_id, video_bytes):
+        assert video_bytes  # сырые байты ролика дошли, а не подпись/что-то ещё
+        return chat_attachments.save_photo(user_id, frame_bytes, "jpg")
+
+    monkeypatch.setattr(chat_attachments, "save_video_frame", fake_save_frame)
+
+    async def fake_ask(user_id, question, history, **kwargs):
+        return "Разбор готов."
+
+    monkeypatch.setattr(ai_trainer, "ask", fake_ask)
+    client = await _linked_client(fresh_db, client_factory)
+
+    resp = await client.post("/ai/video", json={"video_data_url": _video_data_url()})
+    assert resp.status_code == 200, resp.text
+
+    hist = await client.get("/ai/history")
+    user_message = next(m for m in hist.json()["messages"] if m["role"] == "user")
+    turn_id = user_message["image_url"].split("/")[3]
+
+    image_resp = await client.get(f"/ai/history/{turn_id}/image")
+    assert image_resp.status_code == 200
+    assert image_resp.content == frame_bytes
+
+
+@pytest.mark.asyncio
+async def test_ask_video_frame_extraction_failure_does_not_block_the_answer(
+    fresh_db, client_factory, monkeypatch, chat_media_dir
+):
+    """ffmpeg не смог достать кадр (битый файл, кодек) — тренер всё равно
+    отвечает, просто без картинки в истории (см. save_video_frame → None)."""
+    monkeypatch.setattr(config, "video_analysis_available", lambda: True)
+    monkeypatch.setattr(ai_trainer, "is_configured", lambda: True)
+    async def fake_analyze(*a, **k):
+        return _fake_analysis()
+
+    monkeypatch.setattr(video_analysis, "analyze", fake_analyze)
+
+    async def fake_ask(user_id, question, history, **kwargs):
+        return "Разбор готов."
+
+    monkeypatch.setattr(ai_trainer, "ask", fake_ask)
+    client = await _linked_client(fresh_db, client_factory)
+
+    # _video_data_url() кладёт заведомо не-видео байты — реальный ffmpeg
+    # (chat_attachments.save_video_frame не подменяется здесь) честно не
+    # достанет из них кадр и вернёт None.
+    resp = await client.post("/ai/video", json={"video_data_url": _video_data_url()})
+    assert resp.status_code == 200, resp.text
+
+    hist = await client.get("/ai/history")
+    user_message = next(m for m in hist.json()["messages"] if m["role"] == "user")
+    assert "image_url" not in user_message
 
 
 @pytest.mark.asyncio

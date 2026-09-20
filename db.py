@@ -355,12 +355,17 @@ CREATE INDEX IF NOT EXISTS idx_ai_chat_messages_user ON ai_chat_messages (telegr
 -- отдельно, обычным текстом: это то, что отдаёт GET /ai/history экрану чата,
 -- и незачем заставлять клиента разбирать wire-формат с tool-calls ради двух
 -- реплик, которые он и так должен показать.
+-- image_path — вложение к ЭТОМУ вопросу для экрана чата (см. chat_attachments.py):
+-- имя файла в config.AI_CHAT_MEDIA_DIR, само фото или кадр-превью присланного
+-- видео (видео целиком не хранится — см. докстринг chat_attachments.py). NULL
+-- у обычных текстовых вопросов и у ходов, записанных до этой колонки.
 CREATE TABLE IF NOT EXISTS ai_conversation_turns (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     telegram_id INTEGER NOT NULL,
     question TEXT NOT NULL,
     answer TEXT NOT NULL,
     wire_json TEXT NOT NULL,
+    image_path TEXT,
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_ai_conversation_turns_user ON ai_conversation_turns (telegram_id, id);
@@ -1190,6 +1195,13 @@ async def _migrate_schema() -> None:
         await _conn.execute(
             "ALTER TABLE user_events ADD COLUMN source TEXT NOT NULL DEFAULT 'tg'"
         )
+
+    conversation_cols = await _column_names("ai_conversation_turns")
+    if "image_path" not in conversation_cols:
+        # Заполнять нечем: ходы, записанные до этой колонки, шли без
+        # вложения вообще (фото/видео уезжали в модель и терялись, см.
+        # докстринг chat_attachments.py) — им и остаться NULL.
+        await _conn.execute("ALTER TABLE ai_conversation_turns ADD COLUMN image_path TEXT")
 
     game_cols = await _column_names("game_results")
     if "game" not in game_cols:
@@ -7653,10 +7665,10 @@ async def get_ai_conversation_history(
     telegram_id: int, limit: int = MAX_AI_CONVERSATION_TURNS
 ) -> list[aiosqlite.Row]:
     """Последние ходы для экрана чата (GET /ai/history) — только то, что
-    нужно отрисовать: вопрос, ответ, когда. Без wire_json — тащить в HTTP
-    tool-calls клиенту нечего показывать, и это лишний трафик."""
+    нужно отрисовать: вопрос, ответ, когда, вложение. Без wire_json — тащить
+    в HTTP tool-calls клиенту нечего показывать, и это лишний трафик."""
     cur = await conn().execute(
-        "SELECT question, answer, created_at FROM ai_conversation_turns "
+        "SELECT id, question, answer, image_path, created_at FROM ai_conversation_turns "
         "WHERE telegram_id = ? ORDER BY id DESC LIMIT ?",
         (telegram_id, limit),
     )
@@ -7664,18 +7676,50 @@ async def get_ai_conversation_history(
     return list(reversed(rows))
 
 
+async def get_ai_conversation_turn(telegram_id: int, turn_id: int) -> Optional[aiosqlite.Row]:
+    """Один ход по id — для отдачи файла вложения (GET /ai/history/{id}/image,
+    api_v1_ai.py): проверка владения телом, а не только числом в URL."""
+    cur = await conn().execute(
+        "SELECT id, image_path FROM ai_conversation_turns WHERE id = ? AND telegram_id = ?",
+        (turn_id, telegram_id),
+    )
+    return await cur.fetchone()
+
+
 async def add_ai_conversation_turn(
-    telegram_id: int, question: str, answer: str, wire_messages: list[dict[str, Any]]
+    telegram_id: int,
+    question: str,
+    answer: str,
+    wire_messages: list[dict[str, Any]],
+    image_path: Optional[str] = None,
 ) -> None:
     """Записать ход и тут же подрезать историю пользователя до
     MAX_AI_CONVERSATION_TURNS — подрезаем ПРИ ЗАПИСИ, а не при чтении, чтобы
-    таблица не росла между вопросами одного и того же человека бесконечно."""
+    таблица не росла между вопросами одного и того же человека бесконечно.
+
+    Файлы вложений вытесненных ходов удаляются с диска тем же вызовом —
+    иначе за MAX_AI_CONVERSATION_TURNS ходов накопление файлов в
+    config.AI_CHAT_MEDIA_DIR не прекращалось бы никогда, хотя строки под
+    них давно вычищены."""
+    import chat_attachments
+
     async with _write_lock:
         await conn().execute(
-            "INSERT INTO ai_conversation_turns (telegram_id, question, answer, wire_json, created_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (telegram_id, question, answer, json.dumps(wire_messages, ensure_ascii=False), now_iso()),
+            "INSERT INTO ai_conversation_turns "
+            "(telegram_id, question, answer, wire_json, image_path, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                telegram_id, question, answer,
+                json.dumps(wire_messages, ensure_ascii=False), image_path, now_iso(),
+            ),
         )
+        cur = await conn().execute(
+            "SELECT image_path FROM ai_conversation_turns WHERE telegram_id = ? AND id NOT IN ("
+            "SELECT id FROM ai_conversation_turns WHERE telegram_id = ? "
+            "ORDER BY id DESC LIMIT ?) AND image_path IS NOT NULL",
+            (telegram_id, telegram_id, MAX_AI_CONVERSATION_TURNS),
+        )
+        evicted = [row["image_path"] for row in await cur.fetchall()]
         await conn().execute(
             "DELETE FROM ai_conversation_turns WHERE telegram_id = ? AND id NOT IN ("
             "SELECT id FROM ai_conversation_turns WHERE telegram_id = ? "
@@ -7683,17 +7727,31 @@ async def add_ai_conversation_turn(
             (telegram_id, telegram_id, MAX_AI_CONVERSATION_TURNS),
         )
         await conn().commit()
+    for name in evicted:
+        chat_attachments.delete(name)
 
 
 async def clear_ai_conversation_history(telegram_id: int) -> None:
     """«Начать разговор заново» — DELETE /ai/history. Без этого испорченный
     контекст (модель зацепилась не за то) нечем починить, кроме как ждать,
-    пока он сам не вытеснится новыми ходами."""
+    пока он сам не вытеснится новыми ходами. Вложения удаляемых ходов
+    сносятся с диска тем же вызовом — та же причина, что и в
+    add_ai_conversation_turn."""
+    import chat_attachments
+
     async with _write_lock:
+        cur = await conn().execute(
+            "SELECT image_path FROM ai_conversation_turns "
+            "WHERE telegram_id = ? AND image_path IS NOT NULL",
+            (telegram_id,),
+        )
+        attachments = [row["image_path"] for row in await cur.fetchall()]
         await conn().execute(
             "DELETE FROM ai_conversation_turns WHERE telegram_id = ?", (telegram_id,)
         )
         await conn().commit()
+    for name in attachments:
+        chat_attachments.delete(name)
 
 
 # ---------- AI trainer: HTTP-аналог ai_program_draft/ai_setup из FSM ----------
