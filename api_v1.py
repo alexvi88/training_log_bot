@@ -1117,12 +1117,19 @@ async def update_note(request: Request) -> JSONResponse:
     return JSONResponse(await _workout_detail_json(workout))
 
 
-async def _record_text_by_exercise(workout, user) -> dict[int, str]:
-    """Готовая строка рекорда 🔥 на упражнение — тем же путём, что карточка
-    бота: view_builder.build_block_views(mark_records=True) считает рекорд,
-    formatting.format_block_record превращает его в готовый локализованный
-    текст. Второй раз эта фраза нигде не собирается — она живёт в
-    locales/*.json одним экземпляром (formatting.format_block_record).
+async def _history_extras_by_exercise(workout, user) -> dict[int, dict[str, Any]]:
+    """Готовая строка рекорда 🔥 и подходы прошлой сессии на упражнение — тем
+    же путём, что карточка бота: view_builder.build_block_views(mark_records=True)
+    с previous_before уже считает и то, и другое за один проход, и
+    _workout_detail_json раньше выбрасывал вторую половину (`prev_sets`),
+    хотя история бота её печатает под каждым упражнением («[прошлая: …]»).
+
+    `record_text` собирается formatting.format_block_record — второй раз эта
+    фраза нигде не пишется, она живёт в locales/*.json одним экземпляром.
+    `previous_sets_text` — то же самое форматирование подхода
+    (formatting.format_set), что и у самой строки записанных сегодня: без
+    обёртки «[прошлая: …]» бота (там это часть иконки-тегом всего блока),
+    здесь клиент подписывает её своей меткой в интерфейсе.
 
     `show_extra=user["show_extra_stats"]` — та же тонкость, что у бота: рекорд
     e1RM молчит при выключенных доп. цифрах, а рекорд повторов виден всегда
@@ -1142,27 +1149,39 @@ async def _record_text_by_exercise(workout, user) -> dict[int, str]:
             mark_records=True,
         )
         show_extra = bool(user["show_extra_stats"])
-        return {
-            block.exercise_id: text
-            for block in blocks
-            if (text := formatting.format_block_record(block, user["unit"], show_extra)) is not None
-        }
+        extras: dict[int, dict[str, Any]] = {}
+        for block in blocks:
+            previous_sets_text = None
+            if block.prev_sets:
+                formatted = [
+                    formatting.format_set(w, r, block.prev_rpe_for(i))
+                    for i, (w, r) in enumerate(block.prev_sets)
+                ]
+                previous_sets_text = ", ".join(formatted)
+            extras[block.exercise_id] = {
+                "record_text": formatting.format_block_record(block, user["unit"], show_extra),
+                "previous_sets_text": previous_sets_text,
+            }
+        return extras
 
 
 async def _workout_detail_json(workout, user=None) -> dict[str, Any]:
     """`user` задан у GET /workouts/{id} и у ответа finish — тогда каждое
-    упражнение получает `record_text`/`has_record` (см. _record_text_by_exercise).
-    У прочих ручек (активная/бэкофилл-тренировка, правка заметки) `user`
-    не передаётся: тренировка ещё не завершена, и полям рекорда взяться неоткуда."""
+    упражнение получает `record_text`/`has_record`/`previous_sets_text`
+    (см. _history_extras_by_exercise). У прочих ручек (активная/бэкофилл-
+    тренировка, правка заметки) `user` не передаётся: тренировка ещё не
+    завершена, и этим полям взяться неоткуда — прошлое сравнивается только
+    с уже закрытой сессией."""
     data = _workout_json(workout)
-    record_by_exercise = await _record_text_by_exercise(workout, user) if user is not None else {}
+    extras_by_exercise = await _history_extras_by_exercise(workout, user) if user is not None else {}
     blocks_json = []
     for block in await db.list_blocks_for_workout(workout["id"]):
         exercises_json = []
         for be in await db.get_block_exercises(block["id"]):
             sets = await db.list_sets_for_block(block["id"])
             own_sets = [s for s in sets if s["exercise_id"] == be["exercise_id"]]
-            record_text = record_by_exercise.get(be["exercise_id"])
+            extras = extras_by_exercise.get(be["exercise_id"], {})
+            record_text = extras.get("record_text")
             # Заметка к упражнению в ЭТОЙ тренировке (live:note бота) — новое
             # поле, не ломает старых клиентов: они его просто не читают.
             exercise_note = await db.get_workout_exercise_note(workout["id"], be["exercise_id"])
@@ -1174,6 +1193,7 @@ async def _workout_detail_json(workout, user=None) -> dict[str, Any]:
                     "record_text": record_text,
                     "has_record": record_text is not None,
                     "note": exercise_note,
+                    "previous_sets_text": extras.get("previous_sets_text"),
                 }
             )
         blocks_json.append({"id": block["id"], "type": block["type"], "exercises": exercises_json})

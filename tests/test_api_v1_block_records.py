@@ -157,3 +157,46 @@ async def test_record_text_speaks_users_language(fresh_db, client_factory):
     entry = _exercise_entry(body, bodyweight)
     assert entry["record_text"]
     assert not _CYRILLIC.search(entry["record_text"]), entry["record_text"]
+
+
+# ---------- previous_sets_text ----------
+
+
+@pytest.mark.asyncio
+async def test_previous_sets_text_shows_last_sessions_sets(fresh_db, client_factory):
+    """Второй сеанс того же упражнения получает подходы первого — тот же
+    формат (formatting.format_set), что бот печатает под блоком «[прошлая: …]»."""
+    client = await _linked_client(fresh_db, client_factory)
+    exercise_id = (await client.post("/exercises", json={"name": "Жим лёжа"})).json()["id"]
+
+    first = (
+        await client.post("/workouts/backfill", json={"date": "2024-01-01"})
+    ).json()["id"]
+    await _log_set(client, first, exercise_id, 80, 5)
+    await _log_set(client, first, exercise_id, 80, 4)
+    await client.post(f"/workouts/{first}/finish", json={})
+
+    second = (await client.post("/workouts/active")).json()["id"]
+    await _log_set(client, second, exercise_id, 82.5, 5)
+    body = (await client.post(f"/workouts/{second}/finish", json={})).json()
+
+    entry = _exercise_entry(body, exercise_id)
+    assert entry["previous_sets_text"] == "80×5, 80×4"
+
+    # Тот же ответ отдаёт и обычный GET тренировки, не только finish.
+    get_body = (await client.get(f"/workouts/{second}")).json()
+    assert _exercise_entry(get_body, exercise_id)["previous_sets_text"] == "80×5, 80×4"
+
+
+@pytest.mark.asyncio
+async def test_previous_sets_text_null_on_first_ever_session(fresh_db, client_factory):
+    """Первая в жизни сессия упражнения — сравнивать не с чем, `null`, а не
+    пустая строка или падение."""
+    client = await _linked_client(fresh_db, client_factory)
+    exercise_id = (await client.post("/exercises", json={"name": "Присед"})).json()["id"]
+    workout_id = (await client.post("/workouts/active")).json()["id"]
+    await _log_set(client, workout_id, exercise_id, 80, 5)
+
+    body = (await client.post(f"/workouts/{workout_id}/finish", json={})).json()
+    entry = _exercise_entry(body, exercise_id)
+    assert entry["previous_sets_text"] is None
